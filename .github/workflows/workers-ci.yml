@@ -62,12 +62,17 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends ${{ matrix.packages }}
-          ffmpeg -hide_banner -version | head -1
+          # head 대신 sed로 첫 줄만 찍는다. 기본 셸이 pipefail이라 head가 먼저 끝나면 ffmpeg가 SIGPIPE로
+          # 죽어 단계가 실패할 수 있다(sed는 끝까지 읽는다).
+          ffmpeg -hide_banner -version | sed -n 1p
 
       - name: 자막 태우기(libass) 확인
         if: matrix.burns-subtitles
         run: |
-          if ! ffmpeg -hide_banner -filters | grep -q ' subtitles '; then
+          # 목록을 먼저 다 받고 나서 찾는다. 파이프로 grep -q에 바로 넘기면 grep이 먼저 끝날 때 ffmpeg가
+          # SIGPIPE로 죽고, pipefail 때문에 필터가 있는데도 「없다」로 갈린다.
+          filters=$(ffmpeg -hide_banner -filters)
+          if ! grep -q ' subtitles ' <<<"$filters"; then
             echo "이 ffmpeg에는 subtitles 필터(libass)가 없다. 렌더 시험이 자막을 안 태우는 갈래로 초록이 된다." >&2
             exit 1
           fi
