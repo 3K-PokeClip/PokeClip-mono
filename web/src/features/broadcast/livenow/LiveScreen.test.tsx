@@ -322,6 +322,8 @@ const server = vi.hoisted(() => ({
   failLive: false,
   relation: 'OWNER',
   hidden: new Set<number>(),
+  /** 놓은 카드(POK-338) — 목록에서 집은 사람이 빈다 */
+  released: new Set<number>(),
   chatPaged: false,
   /** 출입증: 'off'는 서명 재료 없음(503), 'grant'는 10분짜리, 'fail'은 500 */
   playback: 'off' as 'off' | 'grant' | 'fail',
@@ -576,7 +578,11 @@ function handle(url: string, init?: RequestInit): Response | Promise<Response> {
   if (path.endsWith('/jump-cards')) {
     // 숨긴 카드는 includeHidden일 때만 hidden:true로 온다(서버 기본은 뺀다)
     const withHidden = u.searchParams.get('includeHidden') === 'true';
-    const cards = CARDS.map((c) => ({ ...c, hidden: server.hidden.has(c.id) }));
+    const cards = CARDS.map((c) => ({
+      ...c,
+      hidden: server.hidden.has(c.id),
+      claimedBy: server.released.has(c.id) ? null : c.claimedBy,
+    }));
     return jsonResponse(200, { cards: withHidden ? cards : cards.filter((c) => !c.hidden) });
   }
   if (path.endsWith('/chat-chart') && server.chartRecentGate) {
@@ -660,10 +666,15 @@ function handle(url: string, init?: RequestInit): Response | Promise<Response> {
       profileImageUrl: null,
     });
   if (path.endsWith('/hide')) {
-    server.hidden.add(Number(path.split('/')[4]));
+    const id = Number(path.split('/')[4]);
+    if (init?.method === 'DELETE') server.hidden.delete(id);
+    else server.hidden.add(id);
     return new Response(null, { status: 204 });
   }
-  if (path.endsWith('/claim')) return new Response(null, { status: 204 });
+  if (path.endsWith('/claim')) {
+    if (init?.method === 'DELETE') server.released.add(Number(path.split('/')[4]));
+    return new Response(null, { status: 204 });
+  }
   return jsonResponse(404, { error: 'unexpected_call' });
 }
 
@@ -730,6 +741,7 @@ beforeEach(() => {
   server.failLive = false;
   server.relation = 'OWNER';
   server.hidden = new Set();
+  server.released = new Set();
   server.chatPaged = false;
   server.playback = 'off';
   notFound.mockClear();
@@ -1085,8 +1097,7 @@ describe('LiveScreen — 하이라이트 카드', () => {
     await renderLive();
     expect(screen.getByText('채팅이 튄 순간 #8')).toBeInTheDocument();
 
-    fireEvent.click(screen.getAllByRole('button', { name: '이 카드 숨기기' })[0] as HTMLElement);
-    await settle();
+    await 숨긴다('하이라이트 아님');
     await act(async () => {
       await vi.advanceTimersByTimeAsync(3_000);
     });
@@ -1094,18 +1105,86 @@ describe('LiveScreen — 하이라이트 카드', () => {
     expect(screen.queryByText('채팅이 튄 순간 #8')).not.toBeInTheDocument();
   });
 
-  it('숨기기를 누르면 clip에 숨김을 보낸다', async () => {
+  it('숨기기는 이유를 고르게 하고 고른 이유를 실어 보낸다 (POK-338)', async () => {
     await renderLive();
 
     fireEvent.click(screen.getAllByRole('button', { name: '이 카드 숨기기' })[0] as HTMLElement);
+    expect(screen.getByRole('menuitem', { name: '하이라이트 아님' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: '기타' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('menuitem', { name: '중복' }));
+    await settle();
+
+    const sent = fetchSpy.mock.calls.find(
+      ([url, init]) => url === '/api/clip/jump-cards/8/hide' && init?.method === 'POST',
+    );
+    expect(sent).toBeDefined();
+    expect(JSON.parse(String(sent?.[1]?.body))).toEqual({ reason: 'duplicate' });
+  });
+
+  it('숨긴 카드는 「숨김」 칩에 모이고 거기서 되돌린다 (POK-338)', async () => {
+    await renderLive();
+    expect(screen.getByRole('button', { name: '숨김 0' })).toBeInTheDocument();
+
+    await 숨긴다('하이라이트 아님');
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3_000);
+    });
+    await settle();
+    fireEvent.click(screen.getByRole('button', { name: '숨김 1' }));
+    expect(screen.getByText('채팅이 튄 순간 #8')).toBeInTheDocument();
+    // 숨긴 카드에는 편집·숨기기가 없고 되돌리기만 있다
+    expect(screen.queryByRole('link', { name: '편집' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '숨김 되돌리기' }));
     await settle();
     expect(
       fetchSpy.mock.calls.some(
-        ([url, init]) => url === '/api/clip/jump-cards/8/hide' && init?.method === 'POST',
+        ([url, init]) => url === '/api/clip/jump-cards/8/hide' && init?.method === 'DELETE',
+      ),
+    ).toBe(true);
+  });
+
+  it('「놓기」는 내가 집은 카드에만 있고 누르면 집기를 푼다 (POK-338)', async () => {
+    await renderLive();
+
+    // 내가 집은 카드는 5번 하나뿐이다(6번은 남이 집었다)
+    const releases = screen.getAllByRole('button', { name: '놓기' });
+    expect(releases).toHaveLength(1);
+    fireEvent.click(releases[0] as HTMLElement);
+    await settle();
+    expect(
+      fetchSpy.mock.calls.some(
+        ([url, init]) => url === '/api/clip/jump-cards/5/claim' && init?.method === 'DELETE',
       ),
     ).toBe(true);
   });
 });
+
+describe('LiveScreen — 끝난 방송의 카드 동작 (POK-338)', () => {
+  it('놓기·숨김 되돌리기는 다음 목록 주기를 기다리지 않고 바로 반영된다', async () => {
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    await renderLive();
+
+    // 시계를 움직이지 않는다(settle은 0초) — 주기 읽기가 아니라 동작 뒤 다시 읽기만 반영할 수 있다
+    fireEvent.click(screen.getByRole('button', { name: '놓기' }));
+    await settle();
+    expect(screen.queryByRole('button', { name: '놓기' })).not.toBeInTheDocument();
+
+    await 숨긴다('중복');
+    expect(screen.getByRole('button', { name: '숨김 1' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '숨김 1' }));
+    fireEvent.click(screen.getByRole('button', { name: '숨김 되돌리기' }));
+    await settle();
+    expect(screen.getByRole('button', { name: '숨김 0' })).toBeInTheDocument();
+  });
+});
+
+/** 맨 앞 카드(8번)를 고른 이유로 숨긴다: 숨기기는 이유 메뉴를 거친다(POK-338) */
+async function 숨긴다(이유: string) {
+  fireEvent.click(screen.getAllByRole('button', { name: '이 카드 숨기기' })[0] as HTMLElement);
+  fireEvent.click(screen.getByRole('menuitem', { name: 이유 }));
+  await settle();
+}
 
 describe('LiveScreen: 라이브 문구', () => {
   it('방송 중에는 라이브 문구 그대로다: 실시간 채팅·실시간 통계·자동 감지 중·그래프 끝 「지금」', async () => {
@@ -1279,8 +1358,7 @@ describe('LiveScreen — 실시간 통계', () => {
     await renderLive();
     expect(screen.getByText('자동 6 · 수동 2')).toBeInTheDocument();
 
-    fireEvent.click(screen.getAllByRole('button', { name: '이 카드 숨기기' })[0] as HTMLElement);
-    await settle();
+    await 숨긴다('하이라이트 아님');
     await act(async () => {
       await vi.advanceTimersByTimeAsync(3_000);
     });

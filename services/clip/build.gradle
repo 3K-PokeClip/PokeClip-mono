@@ -62,3 +62,11 @@ dependencies {
     // LogCaptor. 경고가 실제로 찍히는지 로그에서 직접 확인한다(auth·chat-collector와 같은 방식).
     testImplementation testFixtures(project(':web-support'))
 }
+
+// CardMetricsQueryTest가 services/README.md의 집계 SQL을 읽는다(POK-338). 입력으로 알리지 않으면 README만 고친 판에서
+// 시험이 UP-TO-DATE로 건너뛰어져 낡은 SQL이 초록으로 남는다(주입으로 확인했다).
+tasks.named('test') {
+    inputs.file(rootProject.file('README.md'))
+            .withPropertyName('servicesReadme')
+            .withPathSensitivity(PathSensitivity.RELATIVE)
+}
