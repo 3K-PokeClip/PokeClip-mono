@@ -78,12 +78,12 @@ web/                     # 단일 Next.js 앱 (App Router + TanStack Query + Zus
 | `/home` `/broadcast` `/clips` `/settings`                                                                 | 독 4개 — `(dock)` 그룹 공유 셸(AuthGuard + 하단 Dock)                                 |
 | `/broadcast`                                                                                              | `/broadcast/livenow` 리다이렉트 — 방송 그룹은 좌측 `Side`를 갖는다                    |
 | `/broadcast/livenow`                                                                                      | 라이브 대시보드                                                                       |
-| `/broadcast/vod`                                                                                          | 지난 방송 목록 목업 (시안 1f) — VOD 뷰어 진입 관문 · 60일 D-day                       |
+| `/broadcast/vod`                                                                                          | 지난 방송 목록 (시안 1f) — VOD 뷰어 진입 관문 · 60일 D-day                            |
 | `/broadcast/vod/[streamId]`                                                                               | 지난 방송 상세: 라이브 대시보드와 같은 화면(다시보기). `?card=`면 그 카드 시점부터    |
 | `/clips`                                                                                                  | `/clips/library` 리다이렉트 — 클립 그룹도 좌측 `Side`를 갖는다 (편집기는 그 밖)       |
-| `/clips/library`                                                                                          | 보관함 목업 (시안 1g) — 9:16 편집본 그리드 · 상세 패널 액션 7종 · 시점은 훅 값        |
+| `/clips/library`                                                                                          | 보관함 (시안 1g) — 편집본 그리드 · 상세 패널 액션                                     |
 | `/clips/editor`                                                                                           | 클립 편집기 진입 — 기본 모드로 리다이렉트 (간편/정밀 설정은 이후 티켓)                |
-| `/clips/editor/studio`                                                                                    | 클립 편집기 스튜디오형 목업 (시안 1d-a) — `(fullscreen)` 그룹, 독 없음                |
+| `/clips/editor/studio`                                                                                    | 클립 편집기 스튜디오형 (시안 1d-a) — `(fullscreen)` 그룹, 독 없음                     |
 | `/settings`                                                                                               | `/settings/plugin` 리다이렉트 — 설정 그룹도 좌측 `Side`를 갖는다                      |
 | `/settings/channels` `/settings/editors` `/settings/plugin` `/settings/notifications` `/settings/account` | 채널 연동 · 편집자 관리 · 플러그인 · 알림 설정 · 계정 (구독·결제, 도움말은 별도 티켓) |
 | `/goodbye`                                                                                                | 탈퇴 완료 안내 (셸 없음) — 토큰이 빈 직후라 `(dock)` 안에서는 못 뜬다                 |
@@ -95,7 +95,7 @@ web/                     # 단일 Next.js 앱 (App Router + TanStack Query + Zus
 
 **전체 화면 계약.** 클립 편집기는 `(dock)`이 아니라 `(fullscreen)` 그룹에 둔다 — 시안 1d는 하단 독 없이 타임라인이 화면 바닥에 붙는 작업 화면이다. 두 그룹의 차이는 Dock 하나뿐이라 로그인 가드는 `(fullscreen)/layout.tsx`가 똑같이 덮는다. 독이 없으니 **나가는 길은 화면이 직접 내야 한다** — 편집기 헤더의 「보관함으로」가 그 자리다. `/clips`는 `(dock)`에, `/clips/editor`는 `(fullscreen)`에 있지만 URL 경로가 겹치지 않아 충돌하지 않는다.
 
-**탈퇴 완료 계약.** `/goodbye`도 `(dock)` **밖**에 둔다 — `AuthGuard`는 refresh 토큰이 비는 순간 `/login`으로 보내므로, 탈퇴 직후 상태인 이 화면은 가드 안에서는 뜰 틈이 없다. 탈퇴 확정은 `markIntentionalLogout()`을 먼저 찍어 이 경로가 복원 경로로 남지 않게 한다 (POK-206). ⚠ 탈퇴 백엔드(`DELETE /api/auth/me`, POK-171)는 생겼지만 웹 배선은 아직이라(별도 티켓) 실제로 지워지는 것은 없다.
+**탈퇴 완료 계약.** `/goodbye`도 `(dock)` **밖**에 둔다 — `AuthGuard`는 refresh 토큰이 비는 순간 `/login`으로 보내므로, 탈퇴 직후 상태인 이 화면은 가드 안에서는 뜰 틈이 없다. 탈퇴 확정은 `markIntentionalLogout()`을 먼저 찍어 이 경로가 복원 경로로 남지 않게 한다 (POK-206). 탈퇴 확정은 실제 `DELETE /api/auth/me`다(POK-171, 방송 기록까지 지우는 것은 POK-256).
 
 **계정 화면 계약.** 표시 이름·프로필 사진은 auth 서버에 저장된다(`PATCH /api/auth/me` · `PUT /api/auth/me/photo`, POK-208 ← 서버 POK-207). 두 응답이 `GET /api/auth/me`와 같은 모양이라 `['auth','me']` 캐시를 통째로 덮는다 — 헤더·사이드바가 재조회 없이 따라온다. **로컬·CI에서 사진 업로드는 503(`PHOTO_STORAGE_DISABLED`)이 정상이다** — auth의 `PROFILE_PHOTO_*` env가 비면 사진 기능만 꺼진다(`services/README.md` 「사진 창고 다섯」). 배선 버그가 아니다. 사진 주소(`profileImageUrl`)는 서버가 준 것을 그대로 쓴다 — `token` 쿼리가 서명값이라 조립하지 않으며, `null`이면 이니셜을 그린다. 사진 모달의 단계는 시안 1p(선택→업로드→크롭)와 달리 **선택→크롭→업로드**다 — 서버가 잘라낸 최종 그림만 받는다.
 
