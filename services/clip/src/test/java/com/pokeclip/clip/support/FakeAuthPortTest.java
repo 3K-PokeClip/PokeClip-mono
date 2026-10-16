@@ -14,6 +14,7 @@ import java.net.ServerSocket;
 import java.nio.charset.StandardCharsets;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assumptions.assumeFalse;
 
 /**
  * 🔴 <b>{@link FakeAuth}가 잡은 포트를 남이 가로챌 수 없다.</b>
@@ -127,6 +128,10 @@ class FakeAuthPortTest {
      */
     @Test
     void 대조_와일드카드로_띄우면_실제로_가로채진다() throws IOException {
+        // 리눅스 커널은 와일드카드가 듣고 있는 번호를 127.0.0.1로 다시 못 잡게 한다(CI 러너에서 확인, POK-330).
+        // 그 기계에서는 가로채기 자체가 안 일어나 위 시험들이 지킬 것이 없다. macOS·Windows에서는 그대로 잰다.
+        assumeFalse(System.getProperty("os.name").startsWith("Linux"),
+                "리눅스 커널은 와일드카드가 듣는 번호를 루프백으로 다시 못 잡게 해 가로채기가 안 일어난다");
         assertThat(new ServerSocket().getReuseAddress())
                 .as("도둑 소켓의 SO_REUSEADDR 기본값이 꺼졌다 — 이 환경에서는 가로채기가 안 되고, "
                         + "그러면 위 시험들이 아무것도 안 지키면서 초록이 된다")
