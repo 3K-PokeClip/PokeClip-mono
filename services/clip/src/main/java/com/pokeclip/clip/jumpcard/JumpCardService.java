@@ -116,6 +116,9 @@ public class JumpCardService {
             // 행은 있는데 못 잡았다 = 남이 잡고 있다. 「없는 카드」는 위 orElseThrow가 이미 갈랐다.
             throw new ClaimedByOtherException(snapshot(card));
         }
+        // 본인 재호출(연장)도 남긴다 — 편집기로 다시 들어간 것이다. 열람 기록을 집기로 갈음했다(POK-338).
+        cards.recordAction(id, "claim", userId, null);
+        log.info("jumpcard.claimed cardId={} by={}", id, userId);
         JumpCardSnapshot snapshot = snapshot(card);
         publishAfterCommit(snapshot);
         return snapshot;
@@ -143,6 +146,10 @@ public class JumpCardService {
             if (after.getClaimedBy() != null) {
                 throw new NotClaimOwnerException(id);
             }
+        } else {
+            // 실제로 놓은 경우만 남긴다. 아무도 안 잡은 카드를 놓는 멱등 성공은 바뀐 것이 없다.
+            cards.recordAction(id, "release", userId, null);
+            log.info("jumpcard.released cardId={} by={}", id, userId);
         }
         publishAfterCommit(snapshot(cards.findById(id).orElseThrow()));
     }
@@ -157,12 +164,13 @@ public class JumpCardService {
         HideReason parsed = HideReason.parseNullable(reason);
         requireViewableCard(id, userId);
         String dbReason = parsed == null ? null : parsed.dbValue();
-        return transactions.execute(status -> toggleHidden(id, () -> cards.hide(id, userId, dbReason)));
+        return transactions.execute(status -> toggleHidden(id, "hide", userId, dbReason,
+                () -> cards.hide(id, userId, dbReason)));
     }
 
     public JumpCardSnapshot unhide(long id, String userId) {
         requireViewableCard(id, userId);
-        return transactions.execute(status -> toggleHidden(id, () -> cards.unhide(id)));
+        return transactions.execute(status -> toggleHidden(id, "unhide", userId, null, () -> cards.unhide(id)));
     }
 
     /**
@@ -213,11 +221,14 @@ public class JumpCardService {
      * <p>안 바뀌었으면 <b>발행하지 않는다</b>. 안 그러면 아무것도 안 바뀐 카드가 통로로 나가
      * 화면이 헛돈다(감사가 {@code unhide}에서 지적한 자리).
      */
-    private JumpCardSnapshot toggleHidden(long id, IntSupplier write) {
+    private JumpCardSnapshot toggleHidden(long id, String action, String userId, String reason, IntSupplier write) {
         int updated = write.getAsInt();
         JumpCard card = cards.findById(id).orElseThrow(() -> new JumpCardNotFoundException(id));
         JumpCardSnapshot snapshot = snapshot(card);
         if (updated == 1) {
+            // 발행과 같은 조건이다 — 안 바뀐 호출을 남기면 단추를 두 번 누른 것이 「두 번 숨겼다」로 세진다(POK-338).
+            cards.recordAction(id, action, userId, reason);
+            log.info("jumpcard.{} cardId={} by={} reason={}", action, id, userId, reason);
             publishAfterCommit(snapshot);
         }
         return snapshot;
