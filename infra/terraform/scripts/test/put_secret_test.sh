@@ -18,7 +18,10 @@
 # 닫힌 로컬 주소(AWS_ENDPOINT_URL=http://127.0.0.1:9)로 스크립트를 끝까지 돌려,
 # CLI 가 값 넘기는 법을 받아들이는지(ParamValidation 없이 네트워크 단계까지
 # 가는지) 본다. 127.0.0.1:9 는 이 기계 안의 닫힌 포트라 요청이 AWS 에 닿지
-# 않는다. 진짜 aws 가 없으면 skip 으로 센다.
+# 않는다. 둘째 울타리로 프록시도 같은 닫힌 주소로 두고 NO_PROXY 는 127.0.0.1
+# 만이라, AWS_ENDPOINT_URL 을 읽지 않는 CLI(2.13 미만)의 요청도 이 기계 안에서
+# 끊긴다. 스크립트가 엔드포인트를 바꾸는 토큰을 쓰지 않는지는 소스로 본다. 진짜
+# aws 가 없으면 skip 으로 센다.
 #
 # 키 꼴 입력은 시험 중 임시 디렉터리에 printf 로 만든다 — 머리 · 꼬리 줄과 가짜
 # 본문뿐이고 실제 키가 아니다. 임시 디렉터리는 한 뿌리($TMPDIR/put_secret_test.*)
@@ -68,7 +71,7 @@ EXPECTED_ARGV_HEAD+=' --output json --no-cli-auto-prompt --secret-id'
 readonly EXPECTED_ARGV_HEAD
 readonly EXPECTED_ARGV_TAIL='--secret-string file:///dev/stdin'
 # 사례 수(ok · skip 줄의 수). 사례를 더하거나 빼면 함께 고친다.
-readonly EXPECTED_CASES=48
+readonly EXPECTED_CASES=49
 
 failures=0
 passes=0
@@ -691,8 +694,11 @@ test_quiet_shells() {
 
 #######################################
 # 실물 CLI 계약: 진짜 aws 가 값 넘기는 법을 받아들여 네트워크 단계까지 가는지
-# 본다. 닫힌 로컬 주소(127.0.0.1:9) · 가짜 자격 · 빈 설정 · 격리 HOME 이고
-# 프록시 환경을 지워 요청이 AWS 에 닿지 않는다. 진짜 aws 가 없으면 skip.
+# 본다. 가짜 자격 · 빈 설정 · 격리 HOME 이고 울타리는 둘이다 — 엔드포인트
+# (AWS_ENDPOINT_URL)를 닫힌 로컬 주소 127.0.0.1:9 로 두고, 프록시도 같은
+# 주소로 두되 NO_PROXY 는 127.0.0.1 만이다. 엔드포인트 설정을 읽지 않는 CLI 의
+# 요청도 닫힌 로컬 프록시에서 끊겨 AWS 에 닿지 않는다. 진짜 aws 가 없으면
+# skip.
 # Globals:
 #   case_dir, input, out, err, status
 #######################################
@@ -718,7 +724,10 @@ test_real_cli_contract() {
         http_proxy | https_proxy | all_proxy) unset "${var}" ;;
       esac
     done
-    export NO_PROXY='*' no_proxy='*'
+    # 둘째 울타리: 127.0.0.1 밖으로 가는 요청은 닫힌 로컬 프록시로 간다.
+    export HTTPS_PROXY=http://127.0.0.1:9 https_proxy=http://127.0.0.1:9
+    export HTTP_PROXY=http://127.0.0.1:9 http_proxy=http://127.0.0.1:9
+    export NO_PROXY=127.0.0.1 no_proxy=127.0.0.1
     export HOME="${case_dir}/cli-home" TMPDIR="${case_dir}/tmp"
     export AWS_ACCESS_KEY_ID=testing AWS_SECRET_ACCESS_KEY=testing
     export AWS_CONFIG_FILE=/dev/null AWS_SHARED_CREDENTIALS_FILE=/dev/null
@@ -794,6 +803,34 @@ test_no_external_commands() {
     done
   done <"${PUT}"
   pass "no-external-commands → 0건"
+}
+
+#######################################
+# 스크립트가 엔드포인트를 바꾸지 않는지 소스로 본다 — --endpoint-url ·
+# AWS_ENDPOINT_URL* · AWS_IGNORE_CONFIGURED_ENDPOINT_URLS · 설정 endpoint_url
+# 을 쓰면 실물 CLI 사례의 닫힌 로컬 주소를 비켜 갈 수 있다. 주석 줄도 보고
+# 대소문자는 가리지 않는다.
+#######################################
+test_no_endpoint_override() {
+  local line number=0 found=0
+  if [[ ! -r "${PUT}" ]]; then
+    fail "no-endpoint-override: 스크립트를 읽을 수 없음 — ${PUT}"
+    return
+  fi
+  shopt -s nocasematch
+  while IFS= read -r line; do
+    number=$((number + 1))
+    if [[ "${line}" == *endpoint[-_]url* ]]; then
+      found="${number}"
+      break
+    fi
+  done <"${PUT}"
+  shopt -u nocasematch
+  if ((found > 0)); then
+    fail "no-endpoint-override: ${found}행에 endpoint-url · endpoint_url 꼴"
+    return
+  fi
+  pass "no-endpoint-override → 0건"
 }
 
 #######################################
@@ -941,6 +978,7 @@ main() {
   test_no_heredoc
   test_no_external_commands
   test_no_file_writes
+  test_no_endpoint_override
 
   remove_tmp_root
   if [[ -e "${tmp_root}" ]]; then
