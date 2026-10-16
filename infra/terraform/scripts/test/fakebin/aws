@@ -1,19 +1,29 @@
-#!/usr/bin/env bash
+#!/bin/bash
 #
 # put_secret_test.sh 의 가짜 aws. AWS 에 접속하지 않는다.
 #
-# 받은 인자(한 줄에 하나) · 환경 · 표준 입력을 FAKE_AWS_DIR 에 적고, 부를
-# 때마다 calls 에 한 줄을 더한다. FAKE_AWS_MODE 에 따라 실제 CLI 의 응답 꼴을
-# 흉내 낸다. 오류 꼴은 일부러 받은 요청 JSON 을 그대로 되울린다 — 실제 CLI 의
-# 「JSON received: …」 처럼 원문이 값을 품는 최악의 경우에도 스크립트가 원문을
+# 받은 인자(한 줄에 하나) · 환경 · 받은 값을 FAKE_AWS_DIR 에 적고, 부를 때마다
+# calls 에 한 줄을 더한다. 시험은 PATH 에 fakebin 만 두므로 셸 내장과 절대
+# 경로(/usr/bin/env)만 쓴다.
+#
+# 값을 받는 방식은 aws-cli 2.36.7 의 실제 거동을 따른다(2026-10-17 실측):
+#   --secret-string file:///dev/stdin  표준 입력을 한 번 읽는다(정상 경로).
+#   --cli-input-json file://<경로>     CLI 처럼 그 경로를 두 번 읽는다. 파이프는
+#                                      둘째 읽기가 비어 ParamValidation(252).
+#   그 밖의 값 넘기기                  violation 에 이유를 적고 실패한다(값이
+#                                      인자 · 다른 파일로 지나감 — 시험이 잡음).
+# 오류 꼴은 2.36.7 의 「aws: [ERROR]: …」 다. denied · denied-short · error 는
+# 일부러 받은 값을 되울린다 — 원문이 값을 품는 최악의 경우에도 스크립트가 원문을
 # 내보내지 않는지 보려고. ARN 의 계정 ID 는 AWS 문서의 예시 값이다.
 #
 # FAKE_AWS_MODE:
-#   ok          성공 응답(ARN · Name · VersionId), 종료 0
-#   no-version  VersionId 없는 응답, 종료 0
-#   denied      AccessDeniedException(SCP 명시 거부), 종료 254
-#   error       ResourceNotFoundException, 종료 254
-#   unparsed    오류 코드 없는 CLI 오류(파싱 실패 꼴), 종료 252
+#   ok            성공 응답(ARN · Name · VersionId), 종료 0
+#   no-version    VersionId 없는 응답, 종료 0
+#   denied        AccessDeniedException(SCP 명시 거부), 종료 254
+#   denied-short  AccessDenied(Exception 없는 꼴), 종료 254
+#   error         ResourceNotFoundException, 종료 254
+#   endpoint      네트워크 단계 실패(Read timeout on endpoint URL), 종료 255
+#   unparsed      오류 코드 · endpoint URL 이 없는 실패(SSL 검증), 종료 255
 
 set -uo pipefail
 
@@ -24,13 +34,99 @@ fi
 
 printf 'call\n' >>"${FAKE_AWS_DIR}/calls"
 printf '%s\n' "$@" >"${FAKE_AWS_DIR}/argv"
-env >"${FAKE_AWS_DIR}/env"
-request="$(cat)"
-printf '%s' "${request}" >"${FAKE_AWS_DIR}/stdin.json"
+/usr/bin/env >"${FAKE_AWS_DIR}/env"
 
 readonly ACCOUNT='123456789012'
 readonly ARN="arn:aws:secretsmanager:ap-northeast-2:${ACCOUNT}:secret:x-AbCdEf"
 readonly USER_ARN="arn:aws:iam::${ACCOUNT}:user/example"
+readonly ENDPOINT='https://secretsmanager.ap-northeast-2.amazonaws.com/'
+
+value=""
+
+#######################################
+# 값 넘기기 규칙을 어긴 호출을 적고 끝낸다. 이유에 값을 넣지 않는다.
+# Arguments:
+#   이유.
+#######################################
+violation() {
+  printf '%s\n' "$*" >>"${FAKE_AWS_DIR}/violation"
+  printf 'fake aws: %s\n' "$*" >&2
+  exit 99
+}
+
+#######################################
+# 파일(/dev/stdin 포함)을 끝까지 읽어 value 에 담는다. 셸 내장만 쓴다 — read
+# -d '' 는 파일 끝에서 1 을 내지만 읽은 내용은 담긴다.
+# Globals:
+#   value
+# Arguments:
+#   경로.
+#######################################
+read_all() {
+  value=""
+  IFS= read -r -d '' value <"$1"
+  return 0
+}
+
+#######################################
+# 인자에서 값을 받는다. 받은 값은 FAKE_AWS_DIR/stdin 에 적는다.
+# Globals:
+#   value
+# Arguments:
+#   aws 가 받은 인자들.
+#######################################
+receive_value() {
+  local secret_string="" cli_input="" path second
+  local has_secret_string=false has_cli_input=false
+  while (($# > 0)); do
+    case "$1" in
+      --secret-string)
+        has_secret_string=true
+        secret_string="${2-}"
+        shift
+        ;;
+      --cli-input-json)
+        has_cli_input=true
+        cli_input="${2-}"
+        shift
+        ;;
+      --secret-string=* | --cli-input-json=*)
+        violation "값 인자를 = 꼴로 받음"
+        ;;
+    esac
+    shift
+  done
+  if [[ "${has_cli_input}" == true ]]; then
+    path="${cli_input#file://}"
+    [[ "${path}" != "${cli_input}" ]] ||
+      violation "--cli-input-json 이 file:// 이 아님(값이 인자로 옴)"
+    read_all "${path}"
+    printf '%s' "${value}" >"${FAKE_AWS_DIR}/stdin"
+    second=""
+    IFS= read -r -d '' second <"${path}"
+    if [[ -z "${second}" ]]; then
+      printf '\naws: [ERROR]: An error occurred (ParamValidation): %s\n' \
+        "Error parsing parameter 'cli-input-json': Invalid JSON received." >&2
+      exit 252
+    fi
+    violation "--cli-input-json 은 이 시험이 받지 않음"
+  fi
+  [[ "${has_secret_string}" == true ]] || violation "--secret-string 이 없음"
+  case "${secret_string}" in
+    file:///dev/stdin)
+      read_all /dev/stdin
+      printf '%s' "${value}" >"${FAKE_AWS_DIR}/stdin"
+      ;;
+    file://*)
+      read_all "${secret_string#file://}"
+      printf '%s' "${value}" >"${FAKE_AWS_DIR}/stdin"
+      violation "--secret-string 이 /dev/stdin 이 아닌 파일"
+      ;;
+    *) violation "--secret-string 이 file:// 이 아님(값이 인자로 옴)" ;;
+  esac
+}
+
+receive_value "$@"
 
 case "${FAKE_AWS_MODE:-ok}" in
   ok)
@@ -41,24 +137,32 @@ case "${FAKE_AWS_MODE:-ok}" in
   no-version)
     printf '{\n    "ARN": "%s",\n    "Name": "example"\n}\n' "${ARN}"
     ;;
-  denied)
-    printf '\nAn error occurred (AccessDeniedException) when calling the %s' \
-      "PutSecretValue operation: User: ${USER_ARN} is not authorized to" >&2
-    printf ' perform: secretsmanager:PutSecretValue on resource: %s %s\n' \
-      "${ARN}" "with an explicit deny in a service control policy" >&2
-    printf 'request: %s\n' "${request}" >&2
+  denied | denied-short)
+    code=AccessDeniedException
+    [[ "${FAKE_AWS_MODE}" == denied ]] || code=AccessDenied
+    printf '\naws: [ERROR]: An error occurred (%s) when calling the %s' \
+      "${code}" "PutSecretValue operation: User: ${USER_ARN} is not" >&2
+    printf ' authorized to perform: secretsmanager:PutSecretValue on %s %s\n' \
+      "resource: ${ARN}" "with an explicit deny in a service control policy" >&2
+    printf 'received: %s\n' "${value}" >&2
     exit 254
     ;;
   error)
-    printf '\nAn error occurred (ResourceNotFoundException) when calling %s\n' \
+    printf '\naws: [ERROR]: An error occurred (%s) when calling %s\n' \
+      ResourceNotFoundException \
       "the PutSecretValue operation: ${ARN} not found" >&2
-    printf 'request: %s\n' "${request}" >&2
+    printf 'received: %s\n' "${value}" >&2
     exit 254
     ;;
+  endpoint)
+    printf '\naws: [ERROR]: Read timeout on endpoint URL: "%s"\n' \
+      "${ENDPOINT}" >&2
+    exit 255
+    ;;
   unparsed)
-    printf "\nError parsing parameter 'cli-input-json': Invalid JSON: %s\n" \
-      "JSON received: ${request}" >&2
-    exit 252
+    printf '\naws: [ERROR]: SSL validation failed for %s %s\n' "${ENDPOINT}" \
+      "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed" >&2
+    exit 255
     ;;
   *)
     printf 'fake aws: 모르는 FAKE_AWS_MODE: %s\n' "${FAKE_AWS_MODE}" >&2
