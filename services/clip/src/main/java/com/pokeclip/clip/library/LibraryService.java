@@ -18,6 +18,7 @@ import com.pokeclip.clip.render.RenderJob;
 import com.pokeclip.clip.render.RenderJobRepository;
 import com.pokeclip.clip.render.RenderRequestService;
 import com.pokeclip.clip.thumbnail.ThumbnailUrls;
+import com.pokeclip.clip.upload.LiveUpload;
 import com.pokeclip.clip.upload.UploadRequestBrief;
 import com.pokeclip.clip.upload.UploadRequestService;
 import com.pokeclip.clip.upload.UploadRequestStore;
@@ -176,7 +177,7 @@ public class LibraryService {
                 .toList();
     }
 
-    /** 줄들을 응답 모양으로. 편집본·영상·주문을 <b>각각 한 번씩</b> 읽는다 — 줄마다 묻지 않는다. 순서는 줄 순서 그대로. */
+    /** 줄들을 응답 모양으로. 편집본·영상·주문·업로드를 <b>각각 한 번씩</b> 읽는다 — 줄마다 묻지 않는다. 순서는 줄 순서 그대로. */
     private List<LibraryEntry> assemble(List<LibraryRow> rows) {
         Map<Long, Recipe> recipeById = recipes.findAllById(rows.stream().map(LibraryRow::recipeId).toList()).stream()
                 .collect(Collectors.toMap(Recipe::getId, Function.identity()));
@@ -192,6 +193,8 @@ public class LibraryService {
         recipeById.values().forEach(r -> keys.add(new UploadRequestStore.Key(r.getId(), r.getRecipeVersion())));
         clipById.values().forEach(c -> keys.add(new UploadRequestStore.Key(c.getRecipeId(), c.getRecipeVersion())));
         Map<UploadRequestStore.Key, UploadRequestBrief> briefs = uploadRequests.briefs(keys);
+        // 모든 판의 살아 있는 업로드(POK-334): 새 판을 주문해도 옛 판으로 올린 영상이 남게. 이것도 한 번에 읽는다.
+        Map<Long, List<LiveUpload>> aliveByRecipeId = uploads.aliveFor(recipeById.keySet());
 
         List<LibraryEntry> entries = new ArrayList<>(rows.size());
         for (LibraryRow row : rows) {
@@ -208,7 +211,8 @@ public class LibraryService {
                     recipe.getRecipeVersion(), cut, row.status(),
                     new BroadcastSummary(row.broadcastStatus(), row.startedAt(), row.endedAt(), row.vodExpiresAt()),
                     latest, recipe.getCreatedAt(), recipe.getUpdatedAt(), null,
-                    briefs.get(new UploadRequestStore.Key(recipe.getId(), recipe.getRecipeVersion()))));
+                    briefs.get(new UploadRequestStore.Key(recipe.getId(), recipe.getRecipeVersion())),
+                    aliveByRecipeId.getOrDefault(recipe.getId(), List.of())));
         }
         return entries;
     }

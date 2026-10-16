@@ -2359,7 +2359,11 @@ UploadInfo = {"title":"필수","description":null,"tags":["…"],"privacyStatus"
 
 **줄 한 개** — `{"recipeId","streamId","creatorId","recipeVersion","cut":{"inAtMs","outAtMs"}|null,"status",
 "broadcast":{"status","startedAt","endedAt","vodExpiresAt"},"latestClip":<주문 문의 봉투 그대로>|null,"createdAt","updatedAt","thumbnailUrl"|null,
-"uploadRequest":{"title","privacyStatus","thumbnailSource"}|null}`.
+"uploadRequest":{"title","privacyStatus","thumbnailSource"}|null,"liveUploads":[{"id","clipId","recipeVersion","outputId","title","status","videoId","createdAt","updatedAt"}]}`.
+`liveUploads`는 이 편집본 **모든 판**의 살아 있는 업로드(실패만 빼고 `queued`·`uploading`·`checking`·`uploaded`), 최근 것이 앞이고 없으면 빈 목록이다(POK-334).
+새 판 영상을 주문하면 `latestClip`이 그 영상으로 바뀌어 옛 판의 업로드가 `latestClip.upload`에서 빠지는데, 여기에는 남는다. `clipId`는 그 업로드가 올린
+**옛 영상 번호**라 영상 조회 문(`GET /api/clip/broadcasts/{streamId}/clips/{clipId}`)의 열쇠가 된다. `status`·`latestClip`의 뜻과 「발행됨」(`?status=uploaded`) 거르기는 그대로다(목록 칸으로만 보인다).
+한 장의 업로드를 질의 하나로 묶어 읽는다(줄마다 안 묻는다). 「살아 있다」의 기준은 「판 하나는 채널에 하나」 판정(`findActiveForVersion`)과 같다.
 `uploadRequest`는 이 편집본 **지금 판**의 「렌더 뒤 업로드」 의도 요약이다(POK-291). 업로드 줄이 아직 없을 때 화면이 이 제목을 보인다.
 `thumbnailUrl`은 `latestClip`의 사진(POK-277, 「썸네일」 절).
 `latestClip`은 **지금 판으로 만든 영상 중 가장 최근 것**(주문·완성·실패 가리지 않고)이고, 지금 판 것이 없으면 옛 판의 가장 최근 것, 한 번도
