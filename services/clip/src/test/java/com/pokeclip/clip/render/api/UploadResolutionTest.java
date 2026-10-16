@@ -333,10 +333,37 @@ class UploadResolutionTest extends RenderUploadTestSupport {
                 .andExpect(jsonPath("$.status").value("uploaded"));
         assertThat(썸네일(줄[1])).isEqualTo("set:null");
 
-        // 그 뒤 재전송(FAILED)은 덮지 못한다: 이제 확정 결과다.
+        // 그 뒤 재전송(FAILED)은 덮지 못한다: 이제 확정 결과다(같은 보고가 두 번 와도 결과가 같다).
         일꾼_올림(줄[1], ",\"thumbnailOutcome\":\"FAILED\",\"thumbnailErrorCode\":\"THUMBNAIL_FORBIDDEN\"")
                 .andExpect(status().isOk());
         assertThat(썸네일(줄[1])).isEqualTo("set:null");
+    }
+
+    /** 사람이 적은 번호와 다른 영상의 늦은 보고는 썸네일도 안 건드린다(WARN만, 위 시험). 영상 상태도 그대로다. */
+    @Test
+    void 다른_영상의_늦은_썸네일_결과는_적지_않는다() throws Exception {
+        long[] 줄 = 확인_필요_업로드();
+        풀기(줄, "{\"result\":\"uploaded\",\"videoId\":\"zzzZZZ99999\"}").andExpect(status().isOk());
+
+        일꾼_올림(줄[1], ",\"thumbnailOutcome\":\"SET\"").andExpect(status().isConflict());
+        assertThat(썸네일(줄[1])).isEqualTo("failed:THUMBNAIL_UNCONFIRMED");
+        assertThat(상태(줄[1])).isEqualTo("uploaded:null");
+    }
+
+    /**
+     * 일꾼이 스스로 「썸네일 확인 못 함」으로 끝낸 줄(사람이 안 푼 줄)에 같은 끝 보고가 다시 오면 처음 값이 이긴다(재전송 규칙 그대로).
+     * 늦은 썸네일 결과를 적는 것은 사람이 푼 줄뿐이다.
+     */
+    @Test
+    void 일꾼이_끝낸_줄의_재전송은_썸네일을_덮지_않는다() throws Exception {
+        long[] 줄 = 확인_필요_업로드();
+        jdbc.update("""
+                UPDATE clip_uploads SET status = 'uploaded', youtube_video_id = ?, error_code = NULL,
+                       thumbnail_status = 'failed', thumbnail_error_code = 'THUMBNAIL_UNCONFIRMED' WHERE id = ?""",
+                영상번호, 줄[1]);
+
+        일꾼_올림(줄[1], ",\"thumbnailOutcome\":\"SET\"").andExpect(status().isOk());
+        assertThat(썸네일(줄[1])).isEqualTo("failed:THUMBNAIL_UNCONFIRMED");
     }
 
     // ── 도우미 ──────────────────────────────────────────────────
