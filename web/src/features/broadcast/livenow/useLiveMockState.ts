@@ -130,12 +130,8 @@ export interface CardActionResult {
 /** 카드 집기·놓기·숨기기·되돌리기. 실패도 값으로 돌려준다: 카드가 사유(409 already_claimed 등)를 토스트로 보인다 */
 async function cardCall(method: string, path: string, body?: object): Promise<CardActionResult> {
   try {
-    const r = await apiFetch(
-      path,
-      body
-        ? { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
-        : { method },
-    );
+    // 문자열 본문이면 apiFetch가 Content-Type을 JSON으로 붙인다
+    const r = await apiFetch(path, body ? { method, body: JSON.stringify(body) } : { method });
     return { ok: true, status: r.status, text: '' };
   } catch (e) {
     if (e instanceof ApiError) return { ok: false, status: e.status, text: e.code ?? e.message };
