@@ -3,8 +3,8 @@
 #
 # AI 크롤러: 학습용은 막고, 검색·답변용은 연다 — AI 답변이 PokeClip을 찾아 랜딩을 출처로 인용하게.
 # 열린 쪽(아래 * 묶음): Googlebot·bingbot·Yeti, OAI-SearchBot·ChatGPT-User, PerplexityBot·Perplexity-User,
-# Claude-SearchBot·Claude-User, Applebot, Google-Extended(Gemini 학습·grounding — 검색 노출과는 무관, 2026-10-15 결정으로 연다).
-# 이름은 각 사 문서로 확인했다(2026-10-15). ChatGPT-User·Perplexity-User는 사용자 요청이라 robots.txt를 따르지 않을 수 있다.
+# Claude-SearchBot·Claude-User, Applebot, Google-Extended(Gemini 학습·grounding — 검색 노출과는 무관).
+# ChatGPT-User·Perplexity-User는 사용자 요청이라 robots.txt를 따르지 않을 수 있다.
 
 # 학습용 — 막는다
 User-agent: GPTBot

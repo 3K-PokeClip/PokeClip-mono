@@ -1,4 +1,4 @@
-// PokeClip 랜딩 시안 — P1: 크롬·단계 전환·그래프·파형 등 GSAP 없이 도는 기본 동작.
+// PokeClip 랜딩 — P1: 크롬·단계 전환·그래프·파형 등 GSAP 없이 도는 기본 동작.
 // P2에서 GSAP + ScrollTrigger + Lenis 타임라인이 이 위에 얹힌다 (window.PC_LP로 노출).
 (() => {
   const $ = (s, r = document) => r.querySelector(s);
