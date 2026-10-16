@@ -1,7 +1,7 @@
 # 소비 루트와의 계약(설계 3-2) — 이름을 바꾸지 않는다.
 
 output "public_key_id" {
-  description = "CloudFront 서명 공개키 id — edge 의 키 그룹."
+  description = "CloudFront 서명 공개키 id — edge 의 키 그룹 · platform 의 clip CLOUDFRONT_KEY_PAIR_ID."
   value       = module.cloudfront_public_key.public_key_id
 }
 
