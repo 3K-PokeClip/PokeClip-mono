@@ -32,35 +32,41 @@ describe('LibraryScreen — 헤더·칩', () => {
     expect(screen.getByRole('combobox', { name: '정렬' })).toHaveTextContent('최근 편집순');
   });
 
-  it('스트리머 칩 4개가 수를 달고 있다 — 전체 8 · 작업 중 4 · 업로드 대기 2 · 발행됨 2', () => {
+  it('스트리머 칩 4개가 수를 달고 있다 — 전체 8 · 작업 중 3 · 업로드 대기 3 · 발행됨 2', () => {
     renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} />);
 
     const chips = chipGroup().getAllByRole('button');
     expect(chips.map((chip) => chip.textContent)).toEqual([
       '전체 8',
-      '작업 중 4',
-      '업로드 대기 2',
+      '작업 중 3',
+      '업로드 대기 3',
       '발행됨 2',
     ]);
     expect(chips[0]).toHaveAttribute('aria-pressed', 'true');
     expect(chipGroup().queryByRole('button', { name: /반려됨/ })).toBeNull();
   });
 
-  it('스트리머에겐 승인 대기 배너가 승인 대기함으로 간다', () => {
-    renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} />);
+  // 업로드 승인 게이트가 없다(POK-236 폐기): 어느 시점에서도 승인 대기·반려를 말하는 칩·배지·배너·링크가 없다
+  it.each(['streamer', 'editor'] as const)(
+    '%s 시점에 승인 대기·반려 칩·배지·배너가 없다',
+    (role) => {
+      const { container } = renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} role={role} />);
 
-    const banner = screen.getByRole('link', { name: /승인 대기 1건/ });
-    expect(banner).toHaveAttribute('href', '/clips/approvals');
-    expect(banner).toHaveTextContent('편집자 요청은 승인 대기함에서 검토해요');
-  });
+      expect(chipGroup().queryByRole('button', { name: /반려|승인/ })).toBeNull();
+      expect(screen.queryByText(/승인 대기|반려/)).toBeNull();
+      expect(screen.queryByRole('link', { name: /승인 대기/ })).toBeNull();
+      expect(container.querySelector('a[href="/clips/approvals"]')).toBeNull();
+      for (const card of cards()) expect(card).not.toHaveAccessibleName(/승인 대기|반려/);
+    },
+  );
 
   it('칩을 누르면 목록이 좁혀지고 눌림이 옮겨 간다', async () => {
     const user = userEvent.setup();
     renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} />);
 
-    await user.click(chipGroup().getByRole('button', { name: '업로드 대기 2' }));
-    expect(cards()).toHaveLength(2);
-    expect(chipGroup().getByRole('button', { name: '업로드 대기 2' })).toHaveAttribute(
+    await user.click(chipGroup().getByRole('button', { name: '업로드 대기 3' }));
+    expect(cards()).toHaveLength(3);
+    expect(chipGroup().getByRole('button', { name: '업로드 대기 3' })).toHaveAttribute(
       'aria-pressed',
       'true',
     );
@@ -102,7 +108,7 @@ describe('LibraryScreen — 카드', () => {
     ).toBeInTheDocument();
     expect(
       screen.getByRole('button', {
-        name: '시청자 도네 반응 모음 · 승인 대기 · 길이 0:44 · 편집자 감자대장',
+        name: '시청자 도네 반응 모음 · 업로드 대기 · 길이 0:44 · 편집자 감자대장',
       }),
     ).toBeInTheDocument();
   });
@@ -212,7 +218,7 @@ describe('LibraryScreen — 선택·상세 패널', () => {
   });
 });
 
-describe('LibraryScreen — 상태별 액션 7종', () => {
+describe('LibraryScreen — 상태별 액션', () => {
   it('편집 중 — 이어서 편집 링크 · 보조는 다운로드·삭제뿐', () => {
     renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} selectedId="lib2-1" />);
     const inside = within(panel());
@@ -239,46 +245,12 @@ describe('LibraryScreen — 상태별 액션 7종', () => {
     expect(inside.getByRole('button', { name: '다운로드' })).toBeInTheDocument();
   });
 
-  it('승인 대기 — 승인 대기함으로 가는 링크만 · 편집 잠금 · 안내문', () => {
-    renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} selectedId="lib2-3" />);
-    const inside = within(panel());
-
-    expect(inside.getByRole('link', { name: '승인 대기함에서 검토' })).toHaveAttribute(
-      'href',
-      '/clips/approvals',
-    );
-    expect(inside.queryByRole('link', { name: /편집/ })).toBeNull();
-    expect(inside.getByText(/승인 · 반려는 승인 대기함에서 처리해요/)).toBeInTheDocument();
-    expect(inside.getByRole('button', { name: '다운로드' })).toBeInTheDocument();
-  });
-
-  it('승인 대기는 제목도 잠근다 — 안내문이 편집이 잠겼다고 말한 것을 지킨다', async () => {
-    const user = userEvent.setup();
-    renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} selectedId="lib2-3" />);
-    const input = within(panel()).getByRole('textbox', { name: '클립 제목' });
-
-    expect(input).toHaveAttribute('readonly');
-    await user.type(input, '바꿔보기');
-    expect(input).toHaveValue('시청자 도네 반응 모음');
-  });
-
-  it('승인 대기가 아니면 제목은 잠기지 않는다', () => {
+  it('목업의 편집 중 편집본은 제목이 잠기지 않는다', () => {
     renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} selectedId="lib2-1" />);
 
     expect(within(panel()).getByRole('textbox', { name: '클립 제목' })).not.toHaveAttribute(
       'readonly',
     );
-  });
-
-  it('반려됨 — 수정하기 링크 · 반려 사유 카드', () => {
-    renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} selectedId="lib2-5" />);
-    const inside = within(panel());
-
-    expect(inside.getByRole('link', { name: '수정하기' })).toHaveAttribute('href', '/clips/editor');
-    expect(inside.getByText('반려 사유')).toBeInTheDocument();
-    expect(inside.getByText('어제 21:32')).toBeInTheDocument();
-    expect(inside.getByText('앞부분 20초 컷')).toBeInTheDocument();
-    expect(inside.queryByRole('link', { name: /이어서 편집/ })).toBeNull();
   });
 
   it('발행됨 — 유튜브 보기(새 창) · 새 버전으로 편집', () => {
@@ -384,15 +356,16 @@ describe('LibraryScreen — 목업 전이', () => {
     expect(inside.getByRole('link', { name: '새 버전으로 편집' })).toBeInTheDocument();
   });
 
-  it('업로드로 주 동작이 갈려도 포커스가 조작부에 남는다 — 버튼이 링크로 바뀌는 자리다', async () => {
+  it('업로드로 주 동작이 비활성이 돼도 포커스가 조작부에 남는다', async () => {
     const user = userEvent.setup();
     renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} role="editor" selectedId="lib2-2" />);
 
-    await user.click(within(panel()).getByRole('button', { name: '업로드 요청' }));
+    await user.click(within(panel()).getByRole('button', { name: '업로드' }));
 
-    // ready → pending이라 button이 anchor로 교체된다. 포커스가 body로 떨어지면 안 된다.
-    const moved = within(panel()).getByRole('link', { name: '내 요청 보기' });
-    expect(moved).toHaveFocus();
+    // ready → published인데 목업 줄은 유튜브 주소가 없어 주 동작이 비활성이다. 포커스가 body로 떨어지지 않고
+    // 다음 조작부(새 버전으로 편집)로 옮겨 간다.
+    expect(within(panel()).getByRole('button', { name: '유튜브 보기' })).toBeDisabled();
+    expect(within(panel()).getByRole('link', { name: '새 버전으로 편집' })).toHaveFocus();
   });
 
   it('상태 배지는 낭독 영역이라 바뀐 상태가 알려진다', async () => {
@@ -404,19 +377,15 @@ describe('LibraryScreen — 목업 전이', () => {
     expect(within(panel()).getByRole('status')).toHaveTextContent('업로드 대기');
   });
 
-  it('편집자가 업로드 요청을 누르면 승인 대기가 된다', async () => {
+  it('편집자도 업로드를 누르면 바로 발행된다 — 승인 게이트가 없다', async () => {
     const user = userEvent.setup();
     renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} role="editor" selectedId="lib2-2" />);
     const inside = within(panel());
 
-    await user.click(inside.getByRole('button', { name: '업로드 요청' }));
+    await user.click(inside.getByRole('button', { name: '업로드' }));
 
-    expect(inside.getByText('승인 대기')).toBeInTheDocument();
-    expect(inside.getByRole('link', { name: '내 요청 보기' })).toHaveAttribute(
-      'href',
-      '/clips/approvals',
-    );
-    expect(inside.getByText(/승인 대기 중에는 편집이 잠겨요/)).toBeInTheDocument();
+    expect(inside.getByText('업로드됨')).toBeInTheDocument();
+    expect(inside.getByRole('link', { name: '새 버전으로 편집' })).toBeInTheDocument();
   });
 
   it('렌더 재시도는 업로드 대기로 돌린다 — 길이는 여전히 모른다', async () => {
@@ -507,30 +476,20 @@ describe('LibraryScreen — 목업 전이', () => {
 });
 
 describe('LibraryScreen — 편집자 시점', () => {
-  it('칩이 5개다 — 작업 중 3 · 반려됨 1 — 그리고 배너가 없다', () => {
+  it('칩은 스트리머와 같은 넷이다 — 전체 8 · 작업 중 3 · 업로드 대기 3 · 발행됨 2', () => {
     renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} role="editor" />);
 
     expect(
       chipGroup()
         .getAllByRole('button')
         .map((chip) => chip.textContent),
-    ).toEqual(['전체 8', '작업 중 3', '업로드 대기 2', '반려됨 1', '발행됨 2']);
-    expect(screen.queryByRole('link', { name: /승인 대기 1건/ })).toBeNull();
+    ).toEqual(['전체 8', '작업 중 3', '업로드 대기 3', '발행됨 2']);
   });
 
-  it('업로드 대기의 주 동작이 「업로드 요청」이고 승인 대기는 「내 요청 보기」다', () => {
-    const ready = renderWithProviders(
-      <LibraryScreen {...LIBRARY_FIXTURE} role="editor" selectedId="lib2-2" />,
-    );
-    expect(within(panel()).getByRole('button', { name: '업로드 요청' })).toBeInTheDocument();
-    ready.unmount();
-
-    renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} role="editor" selectedId="lib2-3" />);
-    expect(within(panel()).getByRole('link', { name: '내 요청 보기' })).toHaveAttribute(
-      'href',
-      '/clips/approvals',
-    );
-    expect(within(panel()).getByText(/승인 대기 중에는 편집이 잠겨요/)).toBeInTheDocument();
+  it('업로드 대기의 주 동작이 「업로드」다 — 편집자도 바로 올린다', () => {
+    renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} role="editor" selectedId="lib2-2" />);
+    expect(within(panel()).getByRole('button', { name: '업로드' })).toBeInTheDocument();
+    expect(within(panel()).queryByRole('button', { name: '업로드 요청' })).toBeNull();
   });
 });
 
@@ -568,7 +527,7 @@ describe('LibraryScreen — 접근성', () => {
     });
   });
 
-  it('패널이 열린 상태(반려 카드)에도 위반이 없다', async () => {
+  it('패널이 열린 상태(남의 편집 중 카드)에도 위반이 없다', async () => {
     const { container } = renderWithProviders(
       <LibraryScreen {...LIBRARY_FIXTURE} selectedId="lib2-5" />,
     );

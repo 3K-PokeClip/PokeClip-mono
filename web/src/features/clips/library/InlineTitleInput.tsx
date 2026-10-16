@@ -17,7 +17,7 @@ export function InlineTitleInput({
 }: {
   value: string;
   onChange: (title: string) => void;
-  /** 편집이 잠긴 상태(승인 대기) — 읽을 수는 있어야 하므로 감추지 않고 readOnly로 둔다 */
+  /** 편집이 잠긴 상태(만드는 중·올리는 중 등) — 읽을 수는 있어야 하므로 감추지 않고 readOnly로 둔다 */
   readOnly?: boolean;
 }) {
   return (

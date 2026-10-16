@@ -1,6 +1,5 @@
 'use client';
 
-import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
 import { FolderOpen } from 'lucide-react';
 import { EmptyState, Input, Select } from '@/ui';
@@ -35,7 +34,6 @@ export function LibraryScreen(options: LibraryOptions = {}) {
     clips,
     totalCount,
     counts,
-    pendingCount,
     chip,
     setChip,
     query,
@@ -143,15 +141,6 @@ export function LibraryScreen(options: LibraryOptions = {}) {
         {totalCount > 0 ? (
           <div className={styles.chipRow}>
             <LibraryFilterChips role={role} chip={chip} counts={counts} onChange={setChip} />
-            {/* 스트리머에겐 승인 대기 칩이 없다 — 검토는 승인 대기함의 일이라 배너로 보낸다(시안 1g ⑤) */}
-            {role === 'streamer' && pendingCount > 0 ? (
-              <Link href="/clips/approvals" className={styles.pendingBanner}>
-                <span className={styles.pendingDot} aria-hidden="true" />
-                승인 대기 {pendingCount}건{' '}
-                <span className={styles.pendingHint}>편집자 요청은 승인 대기함에서 검토해요</span>{' '}
-                <span className={styles.pendingHint}>열기 →</span>
-              </Link>
-            ) : null}
           </div>
         ) : null}
 

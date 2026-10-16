@@ -7,7 +7,6 @@ import { Badge, Button, IconButton, LinkButton, VisuallyHidden, useToast } from 
 import { ddayFor } from '@/features/broadcast/vod/vodListView';
 import { InlineTitleInput } from './InlineTitleInput';
 import {
-  dayTimeLabel,
   detailViewForClip,
   durationLabel,
   noteText,
@@ -247,24 +246,6 @@ export function ClipDetailPanel({
               ))}
             </dl>
           </section>
-        </>
-      ) : null}
-
-      {view.showRejection && clip.rejection ? (
-        <>
-          <hr className={styles.divider} />
-          <div className={styles.reject}>
-            <div className={styles.rejectHead}>
-              <span className={styles.rejectTitle}>반려 사유</span>
-              <time className={styles.rejectTime} dateTime={clip.rejection.at}>
-                {dayTimeLabel(clip.rejection.at, now)}
-              </time>
-            </div>
-            <div className={styles.rejectBody}>
-              <span className={styles.rejectRule} aria-hidden="true" />
-              <p className={styles.rejectReason}>{clip.rejection.reason}</p>
-            </div>
-          </div>
         </>
       ) : null}
     </>

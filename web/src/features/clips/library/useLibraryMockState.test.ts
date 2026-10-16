@@ -40,29 +40,16 @@ describe('useLibraryMockState', () => {
     ]);
   });
 
-  it('칩 수를 시점별로 센다 — 스트리머 작업 중 4 · 업로드 대기 2 · 발행됨 2 / 편집자 작업 중 3 · 반려됨 1', () => {
-    const streamer = renderLibrary();
-    expect(streamer.result.current.counts).toEqual({
-      all: 8,
-      working: 4,
-      ready: 2,
-      rejected: 0,
-      published: 2,
-    });
-
-    const editor = renderLibrary({ role: 'editor' });
-    expect(editor.result.current.counts).toEqual({
-      all: 8,
-      working: 3,
-      ready: 2,
-      rejected: 1,
-      published: 2,
-    });
-  });
-
-  it('승인 대기 수를 배너용으로 준다', () => {
-    const { result } = renderLibrary();
-    expect(result.current.pendingCount).toBe(1);
+  it('칩 수는 시점과 무관하다 — 작업 중 3 · 업로드 대기 3 · 발행됨 2', () => {
+    for (const role of ['streamer', 'editor'] as const) {
+      const { result } = renderLibrary({ role });
+      expect(result.current.counts).toEqual({
+        all: 8,
+        working: 3,
+        ready: 3,
+        published: 2,
+      });
+    }
   });
 
   it('같은 카드를 두 번 고르면 해제된다', () => {
@@ -87,7 +74,7 @@ describe('useLibraryMockState', () => {
     expect(result.current.selectedId).toBeNull();
   });
 
-  it('업로드는 스트리머면 발행됨, 편집자면 승인 대기로 옮긴다', () => {
+  it('업로드는 시점과 무관하게 발행됨으로 옮긴다 — 승인 게이트가 없다', () => {
     const streamer = renderLibrary({ selectedId: 'lib2-2' });
     act(() => streamer.result.current.upload('lib2-2'));
     expect(streamer.result.current.selectedClip?.status).toBe('published');
@@ -96,8 +83,7 @@ describe('useLibraryMockState', () => {
 
     const editor = renderLibrary({ role: 'editor', selectedId: 'lib2-2' });
     act(() => editor.result.current.upload('lib2-2'));
-    expect(editor.result.current.selectedClip?.status).toBe('pending');
-    expect(editor.result.current.pendingCount).toBe(2);
+    expect(editor.result.current.selectedClip?.status).toBe('published');
   });
 
   it('업로드 대기가 아닌 편집본은 업로드해도 그대로다', () => {
@@ -124,7 +110,7 @@ describe('useLibraryMockState', () => {
     expect(result.current.totalCount).toBe(7);
     expect(ids(result)).not.toContain('lib2-2');
     expect(result.current.selectedId).toBeNull();
-    expect(result.current.counts.ready).toBe(1);
+    expect(result.current.counts.ready).toBe(2);
   });
 
   it('다른 편집본을 지우면 선택은 남는다', () => {
@@ -169,7 +155,6 @@ describe('useLibraryMockState', () => {
     const { result } = renderLibrary({ clips: [] });
     expect(result.current.totalCount).toBe(0);
     expect(result.current.clips).toEqual([]);
-    expect(result.current.pendingCount).toBe(0);
   });
 });
 

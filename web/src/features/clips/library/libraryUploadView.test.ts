@@ -274,11 +274,11 @@ describe('detailViewForClip — 서버 업로드 상태가 패널 주 동작을 
     );
   });
 
-  it('목업 줄은 시안 규칙 그대로다 — 편집자는 「업로드 요청」', () => {
+  it('목업 줄도 편집자의 주 동작은 「업로드」다 — 승인 게이트가 없다', () => {
     const clip = { ...toLibraryClip(entry('rendered'), '9'), entry: undefined };
     expect(detailViewForClip(clip, 'ready', 'editor').primary).toEqual({
       kind: 'action',
-      label: '업로드 요청',
+      label: '업로드',
       action: 'upload',
     });
   });

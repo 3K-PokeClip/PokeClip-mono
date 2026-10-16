@@ -20,7 +20,6 @@ import {
   filterByQuery,
   shownUploadOf,
   sortClips,
-  statusFor,
   uploadErrorMessage,
   uploadsFromIntent,
   uploadTitleProblem,
@@ -36,8 +35,8 @@ import { PRIVACY_LABEL } from '@/features/clips/editor/uploadInfo';
 // 시안이 그리는 칸이라 서버 줄을 여기서 옮긴다(toLibraryClip). 서버가 아직 안 주는 칸은 지어내지
 // 않는다 — 제목은 업로드 제목이 없으면 「편집본 #번호」, 만든 사람은 회원 번호.
 //
-// 화면 상태는 시안 1g의 7종에 진행 단계 넷을 더했다(POK-291): 만드는 중 · 올리는 중 · 확인 필요 · 업로드 실패. 승인 대기·반려는
-// 승인 게이트가 없어 서버 줄에는 쓰지 않는다. 업로드 실패는 서버 상태가 아니다: 서버는 완성(rendered)으로 돌려주고, 웹이
+// 화면 상태는 시안 1g의 상태에서 승인 대기·반려를 뺀 다섯(업로드 승인 게이트가 없다, POK-236 폐기)에 진행 단계 넷을
+// 더했다(POK-291): 만드는 중 · 올리는 중 · 확인 필요 · 업로드 실패. 업로드 실패는 서버 상태가 아니다: 서버는 완성(rendered)으로 돌려주고, 웹이
 // 「가장 최근 업로드가 실패」로 만든다(서버 상태를 늘리면 clip 규칙·웹 규칙을 같이 바꿔야 한다).
 //
 // 동작은 줄마다 갈린다: 서버에서 온 줄(`entry`가 있다)은 실제 문으로 가고, 시험·스토리북이 주입한 목업 줄은
@@ -52,7 +51,7 @@ const STABLE_REFRESH_MS = 5 * 60_000;
 export type LibraryRole = 'streamer' | 'editor';
 
 /**
- * 시안 1g ④의 7종 + 진행 단계 넷(POK-291: rendering 만드는 중 · uploading 올리는 중 · checking 확인 필요 · uploadFailed 업로드
+ * 시안 1g ④에서 승인 대기·반려를 뺀 다섯 + 진행 단계 넷(POK-291: rendering 만드는 중 · uploading 올리는 중 · checking 확인 필요 · uploadFailed 업로드
  * 실패). expired는 발행됨 중 원본 VOD 보관이 지난 것이다(ADR-004 60일)
  */
 export type ClipStatus =
@@ -62,8 +61,6 @@ export type ClipStatus =
   | 'uploading'
   | 'checking'
   | 'uploadFailed'
-  | 'pending'
-  | 'rejected'
   | 'published'
   | 'expired'
   | 'failed';
@@ -88,8 +85,6 @@ export interface LibraryClip {
   createdAt: string;
   /** ISO — 최근 편집순 */
   editedAt: string;
-  /** 반려됨만 — 사유와 반려 시각 */
-  rejection?: { reason: string; at: string };
   /** 발행됨·원본 만료만. 목업 업로드로 발행된 것은 갈 곳이 없어 비워 둔다 */
   youtubeUrl?: string;
   /** 편집기로 다시 여는 주소 — 저장된 편집본을 ?recipe= 로 연다. 시험 주입에는 없다 */
@@ -217,8 +212,6 @@ export interface LibraryMockState {
   totalCount: number;
   /** 칩별 수 — 검색어와 무관하게 전체에서 센다(칩은 재고이고 검색은 그 위의 돋보기다) */
   counts: Record<LibraryChip, number>;
-  /** 스트리머 배너의 「승인 대기 N건」 */
-  pendingCount: number;
   chip: LibraryChip;
   setChip: (chip: LibraryChip) => void;
   query: string;
@@ -235,7 +228,7 @@ export interface LibraryMockState {
   /**
    * 서버 줄: 유튜브 업로드를 주문한다. 업로드 줄이 없고 그 판의 업로드 정보가 있으면 다시 시도 문으로 그 정보(제목·설명·태그·
    * 공개 범위·아동용·썸네일)대로 올리고(POK-291), 없으면 패널의 제목으로 옛 문을 탄다(POK-111, 창 없이 만든 옛 영상의 길이라 비공개).
-   * 목업 줄: 업로드 대기 → 발행됨(스트리머) / 승인 대기(편집자). 그 밖의 상태는 무시
+   * 목업 줄: 업로드 대기 → 발행됨(시점과 무관하다: 승인 게이트가 없다). 그 밖의 상태는 무시
    */
   upload: (id: string) => void;
   /** 업로드 실패한 서버 줄을 저장된 정보 그대로 다시 올린다(POK-291, 창 없이). 그 밖의 줄은 무시 */
@@ -404,13 +397,9 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
           .finally(() => setSendingFlag(id, false));
         return;
       }
-      patch(id, (clip) =>
-        clip.status === 'ready'
-          ? { ...clip, status: role === 'editor' ? 'pending' : 'published' }
-          : clip,
-      );
+      patch(id, (clip) => (clip.status === 'ready' ? { ...clip, status: 'published' } : clip));
     },
-    [clips, patch, role, setSendingFlag, toast],
+    [clips, patch, setSendingFlag, toast],
   );
 
   // 업로드 다시 시도(POK-291) = 실패한 업로드의 칸(제목·설명·태그·공개 범위·썸네일·출력)을 서버가 복사해 새로 올린다.
@@ -574,10 +563,6 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
     () => sortClips(filterByChip(filterByQuery(clips, query), chip, role, now), sort, now),
     [clips, query, chip, role, sort, now],
   );
-  const pendingCount = useMemo(
-    () => clips.filter((clip) => statusFor(clip, now) === 'pending').length,
-    [clips, now],
-  );
   const selectedClip = useMemo(
     () => clips.find((clip) => clip.id === selectedId) ?? null,
     [clips, selectedId],
@@ -592,7 +577,6 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
     clips: visible,
     totalCount: clips.length,
     counts,
-    pendingCount,
     chip,
     setChip,
     query,
