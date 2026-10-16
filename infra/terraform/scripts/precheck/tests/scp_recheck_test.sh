@@ -912,7 +912,11 @@ expect_unverifiable_cases() {
     'broken-bundle FAKE_AWS_SIM=ok broken' \
     'dup-bundle FAKE_AWS_SIM=ok dup' \
     'collapsed-bundle FAKE_AWS_SIM=ok collapsed'; do
-    read -r name env_arg bundle <<<"${spec}"
+    # 「이름 환경 묶음」 세 낱말 — here-string 대신 매개변수 확장으로 나눈다.
+    name="${spec%% *}"
+    bundle="${spec##* }"
+    env_arg="${spec#* }"
+    env_arg="${env_arg%% *}"
     run_recheck "${case_dir}" "${name}" "${env_arg}" "${bundle}"
     expect_unverifiable "${name}" || return
   done

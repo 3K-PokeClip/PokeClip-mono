@@ -46,11 +46,16 @@ readonly EVENT_NAMES="${SCRIPT_DIR}/data/event_names.txt"
 readonly SINCE_PATTERN='^[0-9]{4}(-[0-9]{2}){2}T[0-9]{2}(:[0-9]{2}){2}Z$'
 readonly SOURCE_PATTERN='^[a-z0-9.-]+\.amazonaws\.com$'
 readonly NAME_PATTERN='^[A-Za-z0-9]+$'
-# 조회 응답의 이벤트 ID(CloudTrail — UUID 꼴)와 시각. 시각은 aws CLI 가 낼 수
-# 있는 꼴 둘 — ISO 8601(cli_timestamp_format = iso8601, 기본) · epoch 초
-# (none).
+# 조회 응답의 이벤트 ID 와 시각(문자열 전체를 맞춘다). ID 는 CloudTrail 서비스
+# 모델에 꼴이 없는 문자열이라(실제로는 UUID) 글자만 묶는다. 시각은 aws CLI
+# 가 낼 수 있는 꼴 둘이다(awscli customizations/timestampformat.py) — ISO
+# 8601(cli_timestamp_format = iso8601, 기본 — datetime.isoformat() 이라 로컬
+# 오프셋 ±HH:MM · 소수 초가 붙을 수 있다) · epoch 초(wire — CloudTrail 은
+# JSON 프로토콜이라 받은 그대로가 epoch 초).
 readonly EVENT_ID_PATTERN='^[A-Za-z0-9-]+$'
-readonly ISO_TIME_PATTERN='^[0-9]{4}(-[0-9]{2}){2}T[0-9]{2}(:[0-9]{2}){2}'
+ISO_TIME_PATTERN='^[0-9]{4}(-[0-9]{2}){2}T[0-9]{2}(:[0-9]{2}){2}'
+ISO_TIME_PATTERN+='(\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$'
+readonly ISO_TIME_PATTERN
 readonly EPOCH_TIME_PATTERN='^[0-9]+(\.[0-9]+)?$'
 readonly REGION_PATTERN='^[a-z]{2}(-[a-z]+)+-[0-9]$'
 LOOKUP_QUERY='Events[].[EventId,EventSource,EventName,EventTime,'
@@ -110,7 +115,10 @@ load_names() {
   while IFS= read -r line || [[ -n "${line}" ]]; do
     [[ -z "${line}" || "${line}" == '#'* ]] && continue
     tsv_ok "${line}" 3 || die "event_names.txt 의 행 꼴이 틀림: ${line}"
-    IFS=$'\t' read -r source name region <<<"${line}"
+    source="${line%%$'\t'*}"
+    region="${line##*$'\t'}"
+    name="${line#*$'\t'}"
+    name="${name%%$'\t'*}"
     if ! [[ "${source}" =~ ${SOURCE_PATTERN} &&
       "${name}" =~ ${NAME_PATTERN} && "${region}" =~ ${REGION_PATTERN} ]]; then
       die "event_names.txt 의 행 꼴이 틀림: ${line}"
@@ -147,10 +155,12 @@ is_role_assumption() {
 
 #######################################
 # 조회 응답 줄 하나(ID · 출처 · 이름 · 시각 · 주체)의 꼴을 본다. 칸 수를
-# 먼저 세고(빈 칸 접힘), 칸마다 꼴을 본다. 주체 칸은 비어 있지 않기만 하면
-# 된다(없으면 aws CLI 가 None 으로 적음). here-string 대신 매개변수 확장으로
-# 나눈다 — bash 3.2 의 here-string 은 임시 파일을 써서 원본이 증거 디렉터리
-# 밖에 잠시라도 남기 때문이다.
+# 먼저 세고(빈 칸 접힘 · 빈 ID), 칸마다 꼴을 본다. ID · 이름이 aws CLI text
+# 출력의 결측 표기 None 이면 받지 않는다(이름이 None 이면 조용히 세지 않게
+# 된다). 주체 칸은 비어 있지 않기만 하면 된다 — 주체가 없는 이벤트는 aws
+# CLI 가 None 으로 적고, 세는 데 쓰지 않는다. here-string 대신 매개변수
+# 확장으로 나눈다 — bash 3.2 의 here-string 은 임시 파일을 써서 원본이 증거
+# 디렉터리 밖에 잠시라도 남기 때문이다.
 # Arguments:
 #   응답 줄.
 # Outputs:
@@ -168,8 +178,9 @@ lookup_fields() {
   name="${rest%%$'\t'*}"
   rest="${rest#*$'\t'}"
   time="${rest%%$'\t'*}"
-  [[ "${id}" =~ ${EVENT_ID_PATTERN} && "${source}" =~ ${SOURCE_PATTERN} &&
-    "${name}" =~ ${NAME_PATTERN} ]] || return 1
+  [[ "${id}" =~ ${EVENT_ID_PATTERN} && "${id}" != None &&
+    "${source}" =~ ${SOURCE_PATTERN} && "${name}" =~ ${NAME_PATTERN} &&
+    "${name}" != None ]] || return 1
   [[ "${time}" =~ ${ISO_TIME_PATTERN} ||
     "${time}" =~ ${EPOCH_TIME_PATTERN} ]] || return 1
   printf '%s\t%s\t%s\n' "${id}" "${source}" "${name}"
@@ -225,17 +236,27 @@ lookup_row() {
 #   「EVENTS <전체> (권한 변경 <a> · 역할 받기 <b>)」.
 #######################################
 report_counts() {
-  local dir="$1" id perm=0 role=0 ids=""
-  while IFS= read -r id; do
-    [[ -n "${id}" ]] || continue
+  local dir="$1" rest id perm=0 role=0 ids=""
+  # 목록은 「\n<ID>\n<ID>\n…」 꼴이다. 매개변수 확장으로 한 줄씩 떼어 낸다 —
+  # here-string 은 ID 를 증거 디렉터리 밖 임시 파일에 쓰고, 그 파일을 만들지
+  # 못하면 읽기가 조용히 실패해 건수가 0 으로 보였다(거짓 0).
+  rest="${PERM_IDS#$'\n'}"
+  while [[ -n "${rest}" ]]; do
+    id="${rest%%$'\n'*}"
+    rest="${rest#"${id}"}"
+    rest="${rest#$'\n'}"
     perm=$((perm + 1))
     ids+="${id}"$'\t'"권한 변경"$'\n'
-  done <<<"${PERM_IDS}"
-  while IFS= read -r id; do
-    [[ -n "${id}" && "${PERM_IDS}" != *$'\n'"${id}"$'\n'* ]] || continue
+  done
+  rest="${ROLE_IDS#$'\n'}"
+  while [[ -n "${rest}" ]]; do
+    id="${rest%%$'\n'*}"
+    rest="${rest#"${id}"}"
+    rest="${rest#$'\n'}"
+    [[ "${PERM_IDS}" != *$'\n'"${id}"$'\n'* ]] || continue
     role=$((role + 1))
     ids+="${id}"$'\t'"역할 받기"$'\n'
-  done <<<"${ROLE_IDS}"
+  done
   printf '%s' "${ids}" >"${dir}/event_ids.txt" || die "증거를 쓰지 못함"
   printf 'EVENTS %s (권한 변경 %s · 역할 받기 %s)\n' "$((perm + role))" \
     "${perm}" "${role}"

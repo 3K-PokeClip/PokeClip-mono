@@ -28,7 +28,9 @@ readonly WANT_EVENTS='EVENTS 4 (권한 변경 2 · 역할 받기 2)'
 #   온다. AddPermission 은 SNS 행만 있고, 가짜 표는 Lambda 출처(ev-3)도
 #   돌려준다. AttachUserPolicy 는 us-east-1 행만 있어 서울의 ev-6 은 조회
 #   밖이다. 기대 건수 = ev-1 · ev-2 · ev-4 · ev-5 = 4 — 권한 변경(SNS ·
-#   IAM 행) 2 · 역할 받기(STS 행) 2.
+#   IAM 행) 2 · 역할 받기(STS 행) 2. 시각은 aws CLI 가 낼 수 있는 꼴을 모두
+#   담고(Z · 서울 오프셋과 소수 초 · +00:00 · epoch 초), ev-5 의 주체는 결측
+#   표기 None 이다(주체 칸은 None 도 받는다).
 # Arguments:
 #   사례 디렉터리.
 # Returns:
@@ -50,25 +52,27 @@ setup_tree() {
   {
     event_row us-east-1 AssumeRole ev-1 sts
     event_row ap-northeast-2 AssumeRole ev-1 sts
-    event_row ap-northeast-2 AssumeRole ev-2 sts
+    event_row ap-northeast-2 AssumeRole ev-2 sts \
+      '2026-10-13T12:00:00.250000+09:00'
     event_row ap-northeast-2 AddPermission ev-3 lambda
     event_row ap-northeast-2 AddPermission ev-4 sns '2026-10-13T05:30:00+00:00'
-    event_row us-east-1 AttachUserPolicy ev-5 iam '1791874800.0'
+    event_row us-east-1 AttachUserPolicy ev-5 iam '1791874800.0' None
     event_row ap-northeast-2 AttachUserPolicy ev-6 iam
   } >"${case_dir}/in/events.tsv"
 }
 
 #######################################
-# 가짜 이벤트 표의 행 하나(주체는 가짜 사용자 이름). 시각은 aws CLI 가 낼 수
-# 있는 꼴 — ISO 8601(Z · +00:00) 또는 epoch 초.
+# 가짜 이벤트 표의 행 하나. 시각은 aws CLI 가 낼 수 있는 꼴 — ISO 8601(Z ·
+# ±HH:MM 오프셋 · 소수 초) 또는 epoch 초.
 # Arguments:
-#   리전, 이벤트 이름, 이벤트 ID, 서비스(출처 앞부분), [시각].
+#   리전, 이벤트 이름, 이벤트 ID, 서비스(출처 앞부분), [시각], [주체 —
+#   없으면 가짜 사용자 이름].
 # Outputs:
 #   리전 · 이름 · ID · 출처 · 시각 · 주체(탭 구분).
 #######################################
 event_row() {
   testlib::tsv "$1" "$2" "$3" "$4.amazonaws.com" \
-    "${5:-2026-10-13T03:00:00Z}" "${FAKE_USER}"
+    "${5:-2026-10-13T03:00:00Z}" "${6:-${FAKE_USER}}"
 }
 
 #######################################
@@ -245,35 +249,53 @@ expect_no_leak() {
 }
 
 #######################################
-# 장부 r1 #5: 조회 응답의 꼴이 깨지면(빈 칸 접힘 · 칸 모자람 · 칸 남음 · 이벤트 ID ·
-# 출처 · 이름 · 시각 꼴) 0건으로 넘기지 않고 종료 2. 마지막 줄 뒤에
-# 줄바꿈이 없어도 그 이벤트를 센다.
+# 장부 r1 #5 · r2 #2: 조회 응답의 꼴이 깨지면 0건으로 넘기지 않고 종료 2 —
+# 빈 칸 접힘 · 칸 모자람 · 칸 남음, 이벤트 ID(꼴 밖 · 빔 · 결측 표기 None),
+# 출처(꼴 밖 · None), 이름(꼴 밖 · None), 시각(꼴 밖 · 초 · 오프셋 · epoch
+# 뒤에 덧붙은 글 · None). 마지막 줄 뒤에 줄바꿈이 없어도 그 이벤트를 센다.
 #######################################
 expect_malformed_lookup_rejected() {
-  local case_dir kind env_arg leaked
-  for kind in empty-source bad-id bad-source bad-time short extra-field \
-    bad-name; do
+  local case_dir kind env_arg leaked events
+  for kind in empty-source bad-id none-id empty-id bad-source none-source \
+    bad-time suffix-time suffix-zone suffix-epoch none-time short \
+    extra-field bad-name none-name; do
     case_dir="$(new_tree_case)" || {
       testlib::fail "lookup-${kind}: 시험 준비 실패"
       return
     }
+    events="${case_dir}/in/events.tsv"
     env_arg=FAKE_AWS_LOOKUP=ok
     case "${kind}" in
       empty-source)
         testlib::tsv us-east-1 AssumeRole ev-9 '' 2026-10-13T03:00:00Z \
-          "${FAKE_USER}" >>"${case_dir}/in/events.tsv"
+          "${FAKE_USER}" >>"${events}"
         ;;
-      bad-id)
-        event_row us-east-1 AssumeRole 'ev/9' sts >>"${case_dir}/in/events.tsv"
-        ;;
+      bad-id) event_row us-east-1 AssumeRole 'ev/9' sts >>"${events}" ;;
+      none-id) event_row us-east-1 AssumeRole None sts >>"${events}" ;;
       bad-source)
         testlib::tsv us-east-1 AssumeRole ev-9 sts.example.com \
-          2026-10-13T03:00:00Z "${FAKE_USER}" >>"${case_dir}/in/events.tsv"
+          2026-10-13T03:00:00Z "${FAKE_USER}" >>"${events}"
+        ;;
+      none-source)
+        testlib::tsv us-east-1 AssumeRole ev-9 None 2026-10-13T03:00:00Z \
+          "${FAKE_USER}" >>"${events}"
         ;;
       bad-time)
-        event_row us-east-1 AssumeRole ev-9 sts yesterday \
-          >>"${case_dir}/in/events.tsv"
+        event_row us-east-1 AssumeRole ev-9 sts yesterday >>"${events}"
         ;;
+      suffix-time)
+        event_row us-east-1 AssumeRole ev-9 sts '2026-10-13T03:00:00garbage' \
+          >>"${events}"
+        ;;
+      suffix-zone)
+        # 꼴이 맞는 오프셋 뒤에 덧붙은 글 — 끝 앵커만 잡는다.
+        event_row us-east-1 AssumeRole ev-9 sts '2026-10-13T03:00:00Zgarbage' \
+          >>"${events}"
+        ;;
+      suffix-epoch)
+        event_row us-east-1 AssumeRole ev-9 sts '1791874800.0x' >>"${events}"
+        ;;
+      none-time) event_row us-east-1 AssumeRole ev-9 sts None >>"${events}" ;;
       *) env_arg="FAKE_AWS_LOOKUP=${kind}" ;;
     esac
     run_events "${case_dir}" "${kind}" "${env_arg}" --since "$(now_utc)"
@@ -298,7 +320,7 @@ expect_malformed_lookup_rejected() {
       "${run_status} · $(cat -- "${run_out}.stdout")"
     return
   fi
-  testlib::ok "lookup-format → 깨진 응답 7종 종료 2 · 줄바꿈 없는 마지막 줄도 셈"
+  testlib::ok "lookup-format → 깨진 응답 15종 종료 2 · 줄바꿈 없는 마지막 줄도 셈"
 }
 
 #######################################

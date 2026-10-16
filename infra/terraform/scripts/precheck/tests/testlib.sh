@@ -15,6 +15,15 @@
 # 가짜 계정 ID 는 12자리, 가짜 사용자 이름은 임시 경로 · 저장소 경로에
 # 나올 수 없는 문자열이다 — 유출 단언(사례 5)이 경로 때문에 거짓 양성을 내지
 # 않게.
+#
+# 시험(이 파일 · *_test.sh)은 점검 도구와 달리 프로세스 치환 · mktemp 를
+# 쓴다(장부 r2 #1 부류 — 남긴 이유). 다루는 것은 고정 입력 · 가짜 값뿐이고
+# 모두 TMPDIR 아래 시험 뿌리 안이다. bash 는 프로세스 치환을 /dev/fd 로
+# 잇고(임시 파일 없음), 생산자가 통째로 실패해 입력이 비면 그 루프의
+# 단언(행 수 · 조회 수 · 필수 이름 · 디렉터리 있음)이 실패한다. mktemp 는
+# 시험 뿌리와 사례 디렉터리(임시 HOME)를 만든다. here-string · here-doc 은
+# 쓰지 않는다 — 임시 파일을 만들지 못해 읽기가 실패하면 「없음」 단언이
+# 거짓으로 통과할 수 있어서다.
 
 TESTS_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly TESTS_DIR
@@ -259,11 +268,16 @@ testlib::count() {
 # Arguments:
 #   사례 디렉터리.
 # Outputs:
-#   걸린 파일 경로(없으면 빈 출력).
+#   걸린 파일 경로(없으면 빈 출력). 훑을 디렉터리가 없으면 그 사실 한 줄.
 #######################################
 testlib::leaks_outside_evidence() {
   local case_dir="$1" file
   local root="${case_dir}/home/.pokeclip-precheck"
+  # 훑을 디렉터리가 없으면 아무것도 못 찾은 것을 「유출 0」 으로 내지 않는다.
+  if [[ ! -d "${case_dir}/home" || ! -d "${case_dir}/out" ]]; then
+    printf '%s\n' "(훑을 사례 디렉터리가 없음)"
+    return
+  fi
   while IFS= read -r -d '' file; do
     case "${file}" in
       "${root}"/*) continue ;;

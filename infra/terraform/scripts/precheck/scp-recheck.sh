@@ -177,7 +177,10 @@ load_bundle() {
   while IFS= read -r line || [[ -n "${line}" ]]; do
     [[ -z "${line}" || "${line}" == '#'* ]] && continue
     tsv_ok "${line}" 3 || die "묶음 ${bundle} 의 행 꼴이 틀림: ${line}"
-    IFS=$'\t' read -r action region resource <<<"${line}"
+    action="${line%%$'\t'*}"
+    resource="${line#*$'\t'}"
+    region="${resource%%$'\t'*}"
+    resource="${resource#*$'\t'}"
     if ! [[ "${action}" =~ ${ACTION_PATTERN} &&
       "${region}" =~ ${REGION_PATTERN} ]] || ! is_plain "${resource}"; then
       die "묶음 ${bundle} 의 행 꼴이 틀림: ${line}"
@@ -255,7 +258,7 @@ latest_dir() {
 #   증거 디렉터리.
 #######################################
 read_result_reference() {
-  local file="$1/result.tsv" line action region decision sim orgs
+  local file="$1/result.tsv" line action region decision sim orgs rest
   local seen=$'\n'
   evidence::check_file "${file}" || exit 2
   REFERENCE=""
@@ -263,7 +266,14 @@ read_result_reference() {
   RESULT_DENIED=0
   while IFS= read -r line || [[ -n "${line}" ]]; do
     tsv_ok "${line}" 5 || die "결과 파일의 꼴이 틀림(${1##*/}/result.tsv)"
-    IFS=$'\t' read -r action region decision sim orgs <<<"${line}"
+    action="${line%%$'\t'*}"
+    rest="${line#*$'\t'}"
+    region="${rest%%$'\t'*}"
+    rest="${rest#*$'\t'}"
+    decision="${rest%%$'\t'*}"
+    rest="${rest#*$'\t'}"
+    sim="${rest%%$'\t'*}"
+    orgs="${rest#*$'\t'}"
     if ! [[ "${action}" =~ ${ACTION_PATTERN} &&
       "${region}" =~ ${REGION_PATTERN} ]] ||
       [[ "${decision}:${sim}" != allow:allowed &&
@@ -325,7 +335,10 @@ check_acceptance() {
   if [[ "${line}" == *$'\n'* ]] || ! tsv_ok "${line}" 3; then
     die "승인 기록의 꼴이 틀림(${dir##*/}/accepted.tsv)"
   fi
-  IFS=$'\t' read -r at sum reason <<<"${line}"
+  at="${line%%$'\t'*}"
+  reason="${line#*$'\t'}"
+  sum="${reason%%$'\t'*}"
+  reason="${reason#*$'\t'}"
   if ! [[ "${at}" =~ ${UTC_PATTERN} && "${sum}" =~ ${SHA256_PATTERN} ]] ||
     [[ "${reason}" == *[[:cntrl:]]* ]]; then
     die "승인 기록의 꼴이 틀림(${dir##*/}/accepted.tsv)"
@@ -343,12 +356,18 @@ check_acceptance() {
 #   묶음 이름.
 #######################################
 read_baseline_reference() {
-  local bundle="$1" line name action region decision
+  local bundle="$1" line name action region decision rest
   [[ -f "${BASELINE}" && ! -L "${BASELINE}" ]] || die "baseline.tsv 가 없음"
   while IFS= read -r line || [[ -n "${line}" ]]; do
     [[ -z "${line}" || "${line}" == '#'* ]] && continue
     tsv_ok "${line}" 5 || die "baseline.tsv 의 행 꼴이 틀림: ${line}"
-    IFS=$'\t' read -r name action region decision _ <<<"${line}"
+    name="${line%%$'\t'*}"
+    rest="${line#*$'\t'}"
+    action="${rest%%$'\t'*}"
+    rest="${rest#*$'\t'}"
+    region="${rest%%$'\t'*}"
+    rest="${rest#*$'\t'}"
+    decision="${rest%%$'\t'*}"
     if [[ "${decision}" != allow && "${decision}" != deny ]]; then
       die "baseline.tsv 의 행 꼴이 틀림: ${line}"
     fi
@@ -485,7 +504,10 @@ judge_row() {
   if [[ "${out}" == *$'\n'* ]] || ! tsv_ok "${out}" 3; then
     die "시뮬레이터 응답의 꼴이 다름(res-${n}.txt)"
   fi
-  IFS=$'\t' read -r got_action decision rest <<<"${out}"
+  got_action="${out%%$'\t'*}"
+  rest="${out#*$'\t'}"
+  decision="${rest%%$'\t'*}"
+  rest="${rest#*$'\t'}"
   [[ "${got_action}" == "${action}" ]] ||
     die "시뮬레이터 응답의 꼴이 다름(res-${n}.txt)"
   case "${decision}" in

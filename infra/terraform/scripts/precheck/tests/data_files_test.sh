@@ -75,6 +75,19 @@ data_rows() {
 }
 
 #######################################
+# 줄 목록에 그 줄이 그대로 있는지 본다 — here-string 으로 grep 에 넘기지
+# 않는다(임시 파일을 만들지 못해 읽기가 실패하면 「없음」 단언이 거짓으로
+# 통과하므로).
+# Arguments:
+#   줄 목록(줄바꿈 구분), 줄.
+# Returns:
+#   있으면 0.
+#######################################
+has_line() {
+  [[ $'\n'"$1"$'\n' == *$'\n'"$2"$'\n'* ]]
+}
+
+#######################################
 # 묶음 파일의 동작 열을 낸다.
 # Arguments:
 #   묶음 이름.
@@ -112,7 +125,7 @@ expect_bundle_set() {
 # 없음을 본다.
 #######################################
 expect_bundle_rows_wellformed() {
-  local bundle file row action region resource rest seen count
+  local bundle file action region resource rest seen count
   for bundle in "${BUNDLES[@]}"; do
     file="${STAGE_DIR}/${bundle}.tsv"
     if [[ ! -f "${file}" ]] || ! grep -q '^# 출처:' -- "${file}"; then
@@ -121,13 +134,13 @@ expect_bundle_rows_wellformed() {
     fi
     seen=$'\n'
     count=0
-    while IFS= read -r row; do
-      IFS=$'\t' read -r action region resource rest <<<"${row}"
+    while IFS=$'\t' read -r action region resource rest; do
       if [[ -n "${rest}" || -z "${resource}" ]] ||
         ! [[ "${action}" =~ ${ACTION_PATTERN} ]] ||
         ! [[ "${region}" =~ ${REGION_PATTERN} ]] ||
         [[ "${resource}" == *[\"\\]* ]]; then
-        testlib::fail "rows: ${bundle} 의 행 꼴이 틀림 — ${row}"
+        testlib::fail "rows: ${bundle} 의 행 꼴이 틀림 — ${action} ${region}" \
+          "${resource} ${rest}"
         return
       fi
       if [[ "${seen}" == *$'\n'"${action} ${region}"$'\n'* ]]; then
@@ -187,13 +200,13 @@ expect_stop_point_split() {
   fi
   for bundle in "${BUNDLES[@]}"; do
     actions="$(bundle_actions "${bundle}")"
-    if [[ "${bundle}" != O7f-stop2 ]] &&
-      grep -q '^cloudfront-keyvaluestore:' <<<"${actions}"; then
+    if [[ "${bundle}" != O7f-stop2 &&
+      $'\n'"${actions}" == *$'\n'cloudfront-keyvaluestore:* ]]; then
       testlib::fail "split: ${bundle} 에 cloudfront-keyvaluestore 값 동작"
       return
     fi
     if [[ "${bundle}" != O7e-stop1 ]] &&
-      grep -qxF -- 'rds-db:connect' <<<"${actions}"; then
+      has_line "${actions}" 'rds-db:connect'; then
       testlib::fail "split: ${bundle} 에 rds-db:connect"
       return
     fi
@@ -211,7 +224,7 @@ expect_judge_reads() {
   for bundle in "${JUDGED_BUNDLES[@]}"; do
     actions="$(bundle_actions "${bundle}")"
     for action in "${JUDGE_READS[@]}"; do
-      if ! grep -qxF -- "${action}" <<<"${actions}"; then
+      if ! has_line "${actions}" "${action}"; then
         testlib::fail "judge-reads: ${bundle} 에 ${action} 없음"
         return
       fi
@@ -220,7 +233,7 @@ expect_judge_reads() {
   for bundle in "${UNJUDGED_BUNDLES[@]}"; do
     actions="$(bundle_actions "${bundle}")"
     for action in "${JUDGE_READS[@]}"; do
-      if grep -qxF -- "${action}" <<<"${actions}"; then
+      if has_line "${actions}" "${action}"; then
         testlib::fail "judge-reads: 2-3 판정이 없는 ${bundle} 에 ${action}"
         return
       fi
@@ -240,13 +253,13 @@ expect_judge_reads() {
 # 묶음 파일에 실제로 있는지 본다.
 #######################################
 expect_baseline_rows_exist() {
-  local row bundle action region decision judged_at rest count=0
-  while IFS= read -r row; do
-    IFS=$'\t' read -r bundle action region decision judged_at rest <<<"${row}"
+  local bundle action region decision judged_at rest count=0
+  while IFS=$'\t' read -r bundle action region decision judged_at rest; do
     if [[ -n "${rest}" || ! -f "${STAGE_DIR}/${bundle}.tsv" ]] ||
       [[ "${decision}" != allow && "${decision}" != deny ]] ||
       ! [[ "${judged_at}" =~ ${JUDGED_AT_PATTERN} ]]; then
-      testlib::fail "baseline: 행 꼴이 틀림 — ${row}"
+      testlib::fail "baseline: 행 꼴이 틀림 — ${bundle} ${action} ${region}" \
+        "${decision} ${judged_at} ${rest}"
       return
     fi
     if ! data_rows "${STAGE_DIR}/${bundle}.tsv" | cut -f 1,2 |
@@ -287,12 +300,16 @@ expected_regions() {
 #   리전(공백 구분 · 끝에 공백, 없으면 빈 출력).
 #######################################
 regions_of() {
-  local all="$1" source="$2" name="$3" line regions=""
-  while IFS= read -r line; do
+  local rest="$1" source="$2" name="$3" line regions=""
+  # 매개변수 확장으로 한 줄씩 떼어 낸다(here-string 은 임시 파일을 쓴다).
+  while [[ -n "${rest}" ]]; do
+    line="${rest%%$'\n'*}"
+    rest="${rest#"${line}"}"
+    rest="${rest#$'\n'}"
     if [[ "${line% *}" == "${source} ${name}" ]]; then
       regions+="${line##* }"$'\n'
     fi
-  done <<<"${all}"
+  done
   printf '%s' "${regions}" | LC_ALL=C sort | tr '\n' ' '
 }
 
@@ -300,14 +317,14 @@ regions_of() {
 # 사례 4(데이터 몫): event_names.txt 의 꼴 · 리전 규칙 · 꼭 있어야 할 이름.
 #######################################
 expect_event_names() {
-  local row source name region rest pair want got
+  local source name region rest pair want got
   local all=""
-  while IFS= read -r row; do
-    IFS=$'\t' read -r source name region rest <<<"${row}"
+  while IFS=$'\t' read -r source name region rest; do
     if [[ -n "${rest}" ]] || ! [[ "${source}" =~ ${SOURCE_PATTERN} ]] ||
       ! [[ "${name}" =~ ^[A-Za-z0-9]+$ ]] ||
       ! [[ "${region}" =~ ${REGION_PATTERN} ]]; then
-      testlib::fail "event-names: 행 꼴이 틀림 — ${row}"
+      testlib::fail "event-names: 행 꼴이 틀림 — ${source} ${name} ${region}" \
+        "${rest}"
       return
     fi
     all+="${source} ${name} ${region}"$'\n'
@@ -354,7 +371,7 @@ expect_event_names() {
 # 그 리전으로 한 번씩 조회한다.
 #######################################
 expect_real_scripts_accept_data() {
-  local case_dir bundle row source name region calls rows
+  local case_dir bundle source name region calls rows
   case_dir="$(testlib::new_case)" || {
     testlib::fail "real-scripts: 시험 준비 실패"
     return
@@ -376,8 +393,7 @@ expect_real_scripts_accept_data() {
     return
   fi
   rows=0
-  while IFS= read -r row; do
-    IFS=$'\t' read -r source name region <<<"${row}"
+  while IFS=$'\t' read -r source name region; do
     calls="$(grep -E -- "AttributeValue=${name}( |$)" \
       "${case_dir}/out/aws.log" | grep -cE -- "--region ${region}( |$)")"
     if [[ "${calls}" -lt 1 ]]; then

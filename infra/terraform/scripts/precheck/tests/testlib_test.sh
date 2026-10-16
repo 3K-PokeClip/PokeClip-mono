@@ -9,6 +9,8 @@
 #     파일을 /dev/null 로, 인스턴스 메타데이터 조회를 끈 채로 돌린다.
 #   - testlib::run_limited: 제한 시간을 넘긴 명령은 자손까지 끝내고 124 를
 #     남긴다(장부 r2 #10 — FIFO 에서 걸리는 회귀가 시험을 멈추지 않게).
+#   - testlib::leaks_outside_evidence: 훑을 디렉터리가 없으면 「유출 0」 을
+#     내지 않는다(장부 r2 #1 부류 — 생산자 실패가 통과로 보이지 않게).
 #
 # 사용: bash infra/terraform/scripts/precheck/tests/testlib_test.sh
 # 종료 코드: 0 전부 통과 / 1 하나라도 실패
@@ -121,11 +123,26 @@ expect_run_limited() {
     "자손까지 끝냄"
 }
 
+#######################################
+# 유출 훑기(testlib::leaks_outside_evidence)는 훑을 디렉터리가 없을 때 빈
+# 출력(「유출 0」)을 내지 않는다 — 생산자(find)의 실패가 통과로 보이지 않게.
+#######################################
+expect_leak_check_needs_dirs() {
+  local found
+  found="$(testlib::leaks_outside_evidence "${tmp_root}/no-such-case")"
+  if [[ -z "${found}" ]]; then
+    testlib::fail "leak-check: 없는 사례 디렉터리를 「유출 0」 으로 냄"
+    return
+  fi
+  testlib::ok "leak-check → 훑을 디렉터리가 없으면 유출 0 으로 내지 않음"
+}
+
 main() {
   testlib::init testlib_test
   expect_fakebin_required
   expect_aws_env_isolated
   expect_run_limited
+  expect_leak_check_needs_dirs
   testlib::finish testlib_test
 }
 

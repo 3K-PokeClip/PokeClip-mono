@@ -4,7 +4,9 @@
 #
 # 고정 루트는 $HOME/.pokeclip-precheck 이다. 사례마다 임시 디렉터리를 HOME
 # 으로 주고, 함수를 새 bash 에서 불러(source) 돌린다. 거부 사례는 종료 2 ·
-# 표준 오류 「EVIDENCE PATH REJECTED」 · 출력 파일 0 을 함께 본다.
+# 표준 오류 「EVIDENCE PATH REJECTED」 · 출력 파일 0 을 함께 본다. 끝으로
+# 점검 도구가 증거 디렉터리 밖에 임시 파일을 만드는 구문을 쓰지 않는지
+# 소스에서 본다(원본은 증거 디렉터리에만 — 이 lib 의 계약).
 #
 # 사용: bash infra/terraform/scripts/precheck/tests/evidence_path_test.sh
 # 종료 코드: 0 전부 통과 / 1 하나라도 실패
@@ -20,6 +22,12 @@ readonly REJECTED='EVIDENCE PATH REJECTED'
 readonly TILDE='~'
 # 증거 디렉터리 이름: <묶음>-<UTC 시각>[-<2 ~ 9>].
 readonly DIR_PATTERN='^alpha-[0-9]{8}T[0-9]{6}Z(-[2-9])?$'
+# 이 lib 으로 원본을 쓰는 점검 도구(PRECHECK_DIR 기준).
+CHECK_TOOLS=(scp-recheck.sh events.sh lib/evidence.sh)
+readonly CHECK_TOOLS
+# 임시 파일을 만드는 구문 — bash 3.2 의 here-string · here-doc(둘 다 임시
+# 파일에 내용을 쓴다) · 프로세스 치환 · mktemp.
+readonly TEMP_FILE_SYNTAX='<<|<\(|>\(|mktemp'
 
 #######################################
 # 증거 함수 하나를 새 bash 에서 돌린다.
@@ -340,6 +348,30 @@ expect_relative_home_rejected() {
   testlib::ok "relative-home → 종료 2"
 }
 
+#######################################
+# 장부 r2 #1: 점검 도구는 증거 디렉터리 밖에 임시 파일을 만드는 구문을 쓰지
+# 않는다. bash 3.2 의 here-string · here-doc 은 내용을 TMPDIR 의 임시 파일에
+# 쓰고, 그 파일을 만들지 못하면 읽기가 조용히 실패해 건수가 0 으로 보일 수
+# 있다(거짓 0). 프로세스 치환은 생산자의 실패가 빈 입력으로 보인다.
+#######################################
+expect_tools_make_no_temp_files() {
+  local tool found status
+  for tool in "${CHECK_TOOLS[@]}"; do
+    found="$(grep -nE -- "${TEMP_FILE_SYNTAX}" "${PRECHECK_DIR}/${tool}")"
+    status=$?
+    if [[ "${status}" -gt 1 ]]; then
+      testlib::fail "no-temp-files: ${tool} 을 읽지 못함"
+      return
+    fi
+    if [[ -n "${found}" ]]; then
+      testlib::fail "no-temp-files: ${tool} 에 임시 파일 구문 — ${found}"
+      return
+    fi
+  done
+  testlib::ok "no-temp-files → 점검 도구 셋에 here-string · here-doc ·" \
+    "프로세스 치환 · mktemp 0"
+}
+
 main() {
   testlib::init evidence_path_test
   expect_new_dir_ok
@@ -352,6 +384,7 @@ main() {
   expect_mode_rejected
   expect_check_file
   expect_relative_home_rejected
+  expect_tools_make_no_temp_files
   testlib::finish evidence_path_test
 }
 
