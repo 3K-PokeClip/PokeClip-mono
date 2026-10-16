@@ -2,6 +2,8 @@ package com.pokeclip.clip.upload.api;
 
 import com.pokeclip.clip.support.NotFoundFloor;
 import com.pokeclip.clip.upload.UploadRequest;
+import com.pokeclip.clip.upload.UploadResolution;
+import com.pokeclip.clip.upload.UploadResolutionService;
 import com.pokeclip.clip.upload.UploadRequestService;
 import com.pokeclip.clip.upload.UploadRequestService.Requested;
 import com.pokeclip.clip.upload.UploadSnapshot;
@@ -23,9 +25,11 @@ import org.springframework.web.bind.annotation.RestController;
 public class UploadController {
 
     private final UploadRequestService service;
+    private final UploadResolutionService resolutions;
 
-    UploadController(UploadRequestService service) {
+    UploadController(UploadRequestService service, UploadResolutionService resolutions) {
         this.service = service;
+        this.resolutions = resolutions;
     }
 
     @PostMapping("/api/clip/broadcasts/{streamId}/clips/{clipId}/uploads")
@@ -51,5 +55,20 @@ public class UploadController {
         NotFoundFloor.mark(request);
         Requested requested = service.retry(jwt.getSubject(), streamId, clipId);
         return ResponseEntity.status(requested.created() ? HttpStatus.CREATED : HttpStatus.OK).body(requested.upload());
+    }
+
+    /**
+     * 「확인 필요」 업로드를 사람이 채널에서 본 결과로 푼다(POK-333). 200 푼 업로드(같은 결과의 재전송도 200) · 400 {@code result}·
+     * {@code videoId} · 404 방송 · 영상 · 업로드 · 409 {@code upload_not_checking} · {@code resolution_too_early}.
+     */
+    @PostMapping("/api/clip/broadcasts/{streamId}/clips/{clipId}/uploads/{uploadId}/resolution")
+    public UploadSnapshot resolve(@PathVariable String streamId,
+                                  @PathVariable long clipId,
+                                  @PathVariable long uploadId,
+                                  @RequestBody(required = false) UploadResolution body,
+                                  @AuthenticationPrincipal Jwt jwt,
+                                  HttpServletRequest request) {
+        NotFoundFloor.mark(request);
+        return resolutions.resolve(jwt.getSubject(), streamId, clipId, uploadId, body);
     }
 }

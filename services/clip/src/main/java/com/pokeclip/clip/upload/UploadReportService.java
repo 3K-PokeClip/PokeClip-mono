@@ -148,6 +148,13 @@ public class UploadReportService {
             if (current.settled()) {
                 boolean same = current == effective
                         && (effective != UploadStatus.UPLOADED || videoId.equals(upload.getYoutubeVideoId()));
+                if (!same && effective == UploadStatus.UPLOADED && current == UploadStatus.FAILED
+                        && ClipUpload.CONFIRMED_NOT_UPLOADED.equals(upload.getErrorCode())) {
+                    // 사람이 「안 올라갔다」고 푼 뒤 영상이 올라갔다는 보고가 왔다(POK-333): 채널에 그 영상이 있고, 다시 올렸으면 둘이다.
+                    // 줄은 안 바꾼다(새 상태 없음, 다시 올린 줄이 이미 자리를 쥐었을 수 있다). 사람이 찾을 수 있게 번호를 남긴다.
+                    log.warn("clip.upload.uploaded_after_resolved_not_uploaded uploadId={} clipId={} videoId={} resolvedBy={}",
+                            uploadId, upload.getClipId(), videoId, upload.getResolvedBy());
+                }
                 return same ? ok(upload) : conflict("TERMINAL");
             }
             if (current != UploadStatus.UPLOADING) {

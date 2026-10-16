@@ -311,7 +311,23 @@ public class JumpCardExceptionHandler {
         return json(HttpStatus.CONFLICT, error("nothing_to_retry"));
     }
 
-    /** 404(일꾼 문). 모르는 업로드 번호. 바닥을 안 탄다: 서버 간 토큰이다. */
+    /** 409. 「확인 필요」가 아닌 업로드를 풀려고 했다(POK-333). 지금 상태를 싣는다. */
+    @ExceptionHandler(UploadErrors.UploadNotCheckingException.class)
+    ResponseEntity<Map<String, Object>> uploadNotChecking(UploadErrors.UploadNotCheckingException e) {
+        Map<String, Object> body = error("upload_not_checking");
+        body.put("status", e.status());
+        return json(HttpStatus.CONFLICT, body);
+    }
+
+    /** 409. 「안 올라갔다」를 아직 못 받는다(POK-333). 다시 누를 수 있는 시각을 싣는다. */
+    @ExceptionHandler(UploadErrors.ResolutionTooEarlyException.class)
+    ResponseEntity<Map<String, Object>> resolutionTooEarly(UploadErrors.ResolutionTooEarlyException e) {
+        Map<String, Object> body = error("resolution_too_early");
+        body.put("allowedAt", e.allowedAt().toString());
+        return json(HttpStatus.CONFLICT, body);
+    }
+
+    /** 404. 모르는 업로드 번호. 일꾼 문은 바닥을 안 탄다(서버 간 토큰). 사람 문(POK-333)은 컨트롤러가 바닥을 건다. */
     @ExceptionHandler(UploadErrors.UploadNotFoundException.class)
     ResponseEntity<Map<String, Object>> uploadNotFound(UploadErrors.UploadNotFoundException e) {
         return json(HttpStatus.NOT_FOUND, error("upload_not_found"));

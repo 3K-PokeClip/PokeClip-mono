@@ -21,6 +21,9 @@ import java.util.List;
 @Table(name = "clip_uploads")
 public class ClipUpload {
 
+    /** 「안 올라갔다」로 푼 줄의 오류 코드. 늦게 온 올림 보고를 가려 내는 데도 쓴다. */
+    static final String CONFIRMED_NOT_UPLOADED = "CONFIRMED_NOT_UPLOADED";
+
     @Id
     private Long id;
 
@@ -105,6 +108,13 @@ public class ClipUpload {
     @Column(name = "thumbnail_error_code", length = 32)
     private String thumbnailErrorCode;
 
+    /** 「확인 필요」를 사람이 풀었을 때만(POK-333). 일꾼이 끝낸 줄은 둘 다 {@code null}이다. */
+    @Column(name = "resolved_by", length = 128)
+    private String resolvedBy;
+
+    @Column(name = "resolved_at")
+    private Instant resolvedAt;
+
     protected ClipUpload() {
     }
 
@@ -155,6 +165,30 @@ public class ClipUpload {
             this.thumbnailStatus = "failed";
             this.thumbnailErrorCode = "THUMBNAIL_NOT_REPORTED";
         }
+    }
+
+    /**
+     * 사람이 채널에서 영상을 보고 「올라갔다」고 적었다(POK-333). 썸네일이 결과를 기다리던 줄이면 「확인 못 함」으로 닫는다: 붙었는지는
+     * 일꾼만 아는데 그 보고가 안 왔다(재배달로 모르는 경우와 같은 코드).
+     */
+    void resolvedUploaded(String videoId, String by) {
+        uploaded(videoId);
+        if ("pending".equals(this.thumbnailStatus)) {
+            this.thumbnailStatus = "failed";
+            this.thumbnailErrorCode = "THUMBNAIL_UNCONFIRMED";
+        }
+        resolvedBy(by);
+    }
+
+    /** 사람이 채널에서 영상이 없는 것을 보고 「안 올라갔다」고 적었다(POK-333). 자리를 비워 다시 올릴 수 있다. */
+    void resolvedNotUploaded(String by) {
+        failed(CONFIRMED_NOT_UPLOADED, null);
+        resolvedBy(by);
+    }
+
+    private void resolvedBy(String by) {
+        this.resolvedBy = by;
+        this.resolvedAt = this.updatedAt;
     }
 
     void failed(String code, String message) {
@@ -238,6 +272,14 @@ public class ClipUpload {
 
     public Instant getUpdatedAt() {
         return updatedAt;
+    }
+
+    public String getResolvedBy() {
+        return resolvedBy;
+    }
+
+    public Instant getResolvedAt() {
+        return resolvedAt;
     }
 
     public List<String> getTags() {
