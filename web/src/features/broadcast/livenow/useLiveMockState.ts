@@ -342,7 +342,6 @@ export function useLiveMockState(pastRoute: boolean): LiveMockState {
     let listReadAt = 0;
 
     const loadList = async () => {
-      if (rangeRef.current.status === 'ended' && Date.now() - listReadAt < ENDED_LIST_MS) return;
       listReadAt = Date.now();
       try {
         // 끝까지 넘기고 숨긴 카드도 받는다 — 숨김이 목록에 반영돼야 한다(통로가 끊겨 폴링이 대신할 때도).
@@ -554,7 +553,11 @@ export function useLiveMockState(pastRoute: boolean): LiveMockState {
     void loadInfo();
     void sseLoop();
     cardChangeListeners.add(loadList);
-    const t1 = setInterval(loadList, 3000);
+    // 끝난 방송이면 주기 읽기만 1분에 한 번이다. 그 밖에서 부르는 읽기(카드 동작 뒤 등)는 막지 않는다
+    const t1 = setInterval(() => {
+      if (rangeRef.current.status === 'ended' && Date.now() - listReadAt < ENDED_LIST_MS) return;
+      void loadList();
+    }, 3000);
     const t2 = setInterval(loadChart, 10_000);
     const t3 = setInterval(loadInfo, 10_000);
     return () => {
