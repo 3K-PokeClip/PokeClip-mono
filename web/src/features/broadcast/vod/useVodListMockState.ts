@@ -9,12 +9,17 @@ import {
 
 /** 지난 방송 목록을 다시 읽는 간격 — 끝난 방송이라 자주 볼 까닭이 없다 */
 const LIST_POLL_MS = 60_000;
+/**
+ * 기억한 카드 수를 다시 세는 간격(POK-254). 끝난 뒤에도 카드는 늦게 뜨거나 숨겨진다. 방금 끝난 방송은 주기마다,
+ * 나머지는 이만큼 지나면 센다: 주기마다 전체 이력을 세면 계정이 오래될수록 요청이 끝없이 는다(PR #200 codex).
+ */
+const CARD_COUNT_TTL_MS = 10 * 60_000;
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useToast } from '@/ui';
 import { fetchRecordingSpans, playbackConfigured } from '@/api/mediaPlayback';
 import { recordingTimeline } from '@/features/player/recordingTimeline';
 import { recordingSearchFrom } from '@/features/broadcast/endedWindow';
-import { excludeLive, filterByPeriod } from './vodListView';
+import { excludeLive, filterByPeriod, isJustEnded } from './vodListView';
 
 // 시안 1f 지난 방송 목록의 상태. 목록은 clip `GET /api/clip/broadcasts`(POK-174·ADR-055)에서 온다(POK-251).
 // VOD 준비 상태를 줄 백엔드(B5)가 아직 없어, 녹화 재생 서버가 설정된 곳에서만 끝난 방송을 「다시 보기 가능」으로 본다.
@@ -167,7 +172,9 @@ export function useVodListMockState(options: VodListOptions = {}): VodListMockSt
   const [loaded, setLoaded] = useState(false);
   const [fetchedVisuals, setFetchedVisuals] = useState<Record<string, VodRowVisual>>({});
   const [now, setNow] = useState(() => new Date());
-  const rowCache = useRef(new Map<string, { cardCount: number; recorded: boolean }>());
+  const rowCache = useRef(
+    new Map<string, { cardCount: number; countedAt: number; recorded: boolean }>(),
+  );
 
   useEffect(() => {
     if (options.broadcasts) return;
@@ -178,9 +185,17 @@ export function useVodListMockState(options: VodListOptions = {}): VodListMockSt
         // 실패하면 바깥 catch가 받아 지금 목록을 그대로 두고 다음 주기에 다시 한다
         const all: WireBroadcast[] = await fetchAllBroadcasts('past');
         if (stopped) return;
-        // 방송마다 카드 수·녹화 여부는 한 번만 재서 기억한다 — 끝난 방송은 바뀌지 않는데, 주기마다 전체 이력에
-        // 카드 목록을 부르면 계정이 오래될수록 요청이 끝없이 는다(PR #200 codex)
+        // 방송마다 카드 수·녹화 여부는 재서 기억한다. 카드 수는 낡으면(countStale) 다시 센다
         const cache = rowCache.current;
+        const nowMs = Date.now();
+        const countStale = (b: WireBroadcast) => {
+          const known = cache.get(b.streamId);
+          return (
+            known === undefined ||
+            isJustEnded(b.endedAt, new Date(nowMs)) ||
+            nowMs - known.countedAt >= CARD_COUNT_TTL_MS
+          );
+        };
         const checkRecording = (b: WireBroadcast) =>
           b.status === 'ended' && playbackConfigured() && cache.get(b.streamId)?.recorded !== true;
         // 녹화 목록은 영상 경로 전체라 같은 키를 나눠 쓰는 방송들이 같은 답을 받는다(POK-233) — 한 번 불러올 때 키마다
@@ -196,11 +211,12 @@ export function useVodListMockState(options: VodListOptions = {}): VodListMockSt
         };
         await Promise.all(
           all
-            .filter((b) => !cache.has(b.streamId) || checkRecording(b))
+            .filter((b) => countStale(b) || checkRecording(b))
             .map(async (b) => {
               const known = cache.get(b.streamId);
+              const recount = countStale(b);
               const [cardCount, spans] = await Promise.all([
-                known !== undefined
+                known !== undefined && !recount
                   ? Promise.resolve(known.cardCount)
                   : fetchAllJumpCards(b.streamId).then(
                       (cards) => cards.length,
@@ -215,6 +231,7 @@ export function useVodListMockState(options: VodListOptions = {}): VodListMockSt
               if (cardCount !== null)
                 cache.set(b.streamId, {
                   cardCount,
+                  countedAt: known !== undefined && !recount ? known.countedAt : nowMs,
                   // 녹화 목록은 영상 경로 전체라 같은 키를 나눠 쓰는 다른 방송의 녹화도 섞여 온다(POK-233) — 다시보기와 같은
                   // 규칙(방송 시간과 겹치는 구간, 시작 시각을 모르면 끝 12시간)으로 거른다. 안 거르면 녹화 없는 방송이 「다시 보기
                   // 가능」으로 올라 열면 빈 화면이다(리뷰 6라운드: 다시보기만 하한을 좁혀 둘이 갈렸다)

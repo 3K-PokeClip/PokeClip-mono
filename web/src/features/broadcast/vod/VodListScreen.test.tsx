@@ -365,7 +365,53 @@ describe('VodListScreen — 서버 목록', () => {
     expect(screen.queryByText('아직 지난 방송이 없어요')).toBeNull();
   });
 
-  it('방송마다 카드 수는 한 번만 센다 — 다시 읽을 때 전체 이력의 카드를 또 부르지 않는다', async () => {
+  it('카드 수는 낡으면 다시 센다: 끝난 지 한 시간 안이면 주기마다, 그 밖은 10분마다(POK-254)', async () => {
+    // 끝난 뒤에도 카드는 늦게 뜨거나 숨겨진다. 처음 잰 수를 영영 쓰면 목록이 실제와 갈린다
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const at = (ms: number) => new Date(Date.now() + ms).toISOString();
+    const row = (streamId: string, endedAt: string) => ({
+      streamId,
+      status: 'vod_ready',
+      relation: 'OWNER',
+      startedAt: endedAt,
+      endedAt,
+      vodExpiresAt: null,
+      title: streamId,
+    });
+    const rows = [row('fresh', at(-10 * 60_000)), row('old', at(-3 * 86_400_000))];
+    let cards = [{ id: 1 }];
+    const spy = stubFetch((url) =>
+      url.startsWith('/api/clip/broadcasts?')
+        ? jsonResponse(200, { broadcasts: rows, nextCursor: null })
+        : jsonResponse(200, { cards, nextCursor: null }),
+    );
+    const calls = (id: string) =>
+      spy.mock.calls.filter(([url]) => String(url).includes(`/${id}/jump-cards`)).length;
+    const countOf = (title: string) =>
+      within(screen.getByText(title).closest('li')!).getByText(/^카드 \d+개$/).textContent;
+
+    renderWithProviders(<VodListScreen />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100);
+    });
+    expect([calls('fresh'), calls('old')]).toEqual([1, 1]);
+
+    cards = [{ id: 1 }, { id: 2 }];
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect([calls('fresh'), calls('old')]).toEqual([2, 1]);
+    expect(countOf('fresh')).toBe('카드 2개');
+    expect(countOf('old')).toBe('카드 1개');
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(9 * 60_000);
+    });
+    expect(calls('old')).toBe(2);
+    expect(countOf('old')).toBe('카드 2개');
+  });
+
+  it('오래 끝난 방송의 카드 수는 10분 안에 다시 세지 않는다 — 다시 읽을 때 전체 이력의 카드를 또 부르지 않는다', async () => {
     // 주기마다 방송마다 카드 목록을 부르면 계정이 오래될수록 요청이 끝없이 는다(PR #200 codex)
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const row = (streamId: string) => ({
