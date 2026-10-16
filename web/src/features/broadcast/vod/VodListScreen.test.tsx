@@ -1,11 +1,12 @@
 import { act } from 'react';
-import { fireEvent, screen, within } from '@testing-library/react';
+import { fireEvent, renderHook, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
-import { renderWithProviders } from '@/test/testProviders';
+import { renderWithProviders, withToastProvider } from '@/test/testProviders';
 import { VodListScreen } from './VodListScreen';
+import { useVodListMockState } from './useVodListMockState';
 import { VOD_LIST_FIXTURE } from './vodListFixture';
 
 function rows() {
@@ -448,6 +449,7 @@ describe('VodListScreen — 서버 목록', () => {
   });
 
   it('다시 세는 차례는 가장 오래전에 센 방송부터라 뒤쪽 방송도 결국 센다: 방송이 많아도 앞쪽이 차례를 독차지하지 않는다(PR #256 codex)', async () => {
+    // 화면 대신 훅만 띄운다: 재는 것은 다시 세는 차례이고, 250줄을 26번 그리면 CI에서 5초 시한을 넘었다(PR #261 CI).
     // 한 주기 20개 × 10분이면 200개다. 고정 순서로 고르면 201번째부터는 앞쪽이 다시 낡아 영영 차례가 안 온다
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const endedAt = new Date(Date.now() - 3 * 86_400_000).toISOString();
@@ -467,7 +469,7 @@ describe('VodListScreen — 서버 목록', () => {
     const callsOf = (id: string) =>
       spy.mock.calls.filter(([url]) => String(url).includes(`/${id}/jump-cards`)).length;
 
-    renderWithProviders(<VodListScreen />);
+    renderHook(() => useVodListMockState(), { wrapper: withToastProvider });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(100);
     });
