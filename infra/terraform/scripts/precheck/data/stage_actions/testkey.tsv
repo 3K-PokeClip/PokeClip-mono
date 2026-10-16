@@ -1,0 +1,9 @@
+# 단계 묶음 — 열: 동작 · 리전 · 자원 패턴(탭 구분). 「#」 줄은 주석, 빈 줄은
+# 건너뜀. 계정 자리는 ${ACCOUNT} 뿐(판정 때 caller identity 의 계정 ID).
+# 같은 (동작, 리전)은 한 행. 자원 패턴을 계획이 주지 않으면 *.
+# 출처: 계획 M10 O7f 8 · 3절 「부분 진행」 · 설계 5-4 의 11(시험 키를 시험 키
+# 그릇에 입력).
+
+# 시험 키 그릇 입력
+secretsmanager:PutSecretValue	ap-northeast-2	arn:aws:secretsmanager:ap-northeast-2:${ACCOUNT}:secret:pokeclip/prod/*
+secretsmanager:DescribeSecret	ap-northeast-2	arn:aws:secretsmanager:ap-northeast-2:${ACCOUNT}:secret:pokeclip/prod/*

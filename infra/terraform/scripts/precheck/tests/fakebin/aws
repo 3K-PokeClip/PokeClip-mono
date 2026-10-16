@@ -1,0 +1,288 @@
+#!/usr/bin/env bash
+#
+# 단계 직전 점검 시험용 가짜 aws. 시험이 PATH 앞에 둔다 — 진짜 AWS 를 부르지
+# 않는다. 받은 argv 를 FAKE_AWS_LOG 에 호출마다 한 줄로 남기고(사례 4 · 5 가
+# 단언), 시나리오는 환경 변수로 고른다.
+#
+# 흉내 내는 호출은 셋이다. 진짜 aws CLI 가 --query · --output text 를 적용한
+# 뒤의 꼴(탭 구분 줄)로 답한다.
+#   sts get-caller-identity   「ARN<탭>계정 ID」 한 줄.
+#   iam simulate-principal-policy
+#       --cli-input-json file://<요청 파일> 을 읽어 요청이 계약대로인지 본 뒤
+#       「동작<탭>판정<탭>AllowedByOrganizations」 한 줄.
+#   cloudtrail lookup-events  FAKE_AWS_EVENTS 표에서 그 리전 · 이름의 줄을
+#       「ID<탭>출처<탭>이름<탭>시각<탭>주체」 꼴로.
+#
+# 환경 변수:
+#   FAKE_AWS_LOG            argv 기록 파일(필수).
+#   FAKE_AWS_ACCOUNT        가짜 계정 ID(12자리).
+#   FAKE_AWS_USER           가짜 IAM 사용자 이름.
+#   FAKE_AWS_IDENTITY       user(기본) · role(역할 세션 ARN) · fail.
+#   FAKE_AWS_SIM            ok(기본) · fail · denied-call(호출 자체의
+#                           AccessDenied) · empty(빈 출력) · bad-action(다른
+#                           동작 이름으로 답함) · two-lines(같은 줄 두 번) ·
+#                           short(동작 · 판정 두 칸만).
+#   FAKE_AWS_DENY           implicitDeny 로 답할 「동작@리전」 목록(공백 구분).
+#   FAKE_AWS_EXPLICIT_DENY  explicitDeny 로 답할 목록(같은 꼴).
+#   FAKE_AWS_ORGS           AllowedByOrganizations 칸을 바꿔 답할
+#                           「동작@리전=값」 목록(공백 구분 — 예
+#                           rds-db:connect@ap-northeast-2=None).
+#   FAKE_AWS_EVENTS         lookup-events 응답 표(리전 · 이름 · ID · 출처 ·
+#                           시각 · 주체, 탭 구분).
+#   FAKE_AWS_LOOKUP         ok(기본) · fail · denied-call · short(ID · 출처 ·
+#                           이름 세 칸만) · extra-field(여섯째 칸이 붙음) ·
+#                           bad-name(이름 칸이 꼴 밖) · empty-id(ID 칸이
+#                           빔) · none-name(이름 칸이 결측 표기 None) ·
+#                           no-final-newline(마지막 줄 뒤 줄바꿈 없음).
+# 실패 응답의 표준 오류에는 일부러 가짜 계정 ID · 사용자 이름을 넣는다 —
+# 호출하는 스크립트가 그것을 옮겨 적지 않는지 시험이 본다.
+
+set -uo pipefail
+
+readonly ACCOUNT="${FAKE_AWS_ACCOUNT:-000000000000}"
+readonly USER_NAME="${FAKE_AWS_USER:-fake-user}"
+readonly USER_ARN="arn:aws:iam::${ACCOUNT}:user/${USER_NAME}"
+# 요청의 리전 문맥(문자열 형 aws:RequestedRegion 하나).
+REGION_CONTEXT_PATTERN='"ContextKeyName":"aws:RequestedRegion",'
+REGION_CONTEXT_PATTERN+='"ContextKeyValues":\["([^"]*)"\],'
+REGION_CONTEXT_PATTERN+='"ContextKeyType":"string"'
+readonly REGION_CONTEXT_PATTERN
+
+#######################################
+# 옵션 값을 찾는다(「--이름 값」 꼴).
+# Arguments:
+#   옵션 이름, 그 뒤로 받은 argv 전체.
+# Outputs:
+#   값(없으면 빈 줄).
+#######################################
+option_value() {
+  local name="$1"
+  shift
+  while [[ "$#" -gt 0 ]]; do
+    if [[ "$1" == "${name}" && "$#" -ge 2 ]]; then
+      printf '%s\n' "$2"
+      return 0
+    fi
+    shift
+  done
+  printf '\n'
+}
+
+#######################################
+# 진짜 CLI 가 text 출력일 때만 이 꼴로 답하므로, --output text 가 없으면
+# 실패한다.
+# Arguments:
+#   받은 argv 전체.
+#######################################
+require_text_output() {
+  if [[ "$(option_value --output "$@")" != text ]]; then
+    printf 'fake aws: --output text 없음\n' >&2
+    exit 252
+  fi
+}
+
+#######################################
+# 호출 자체가 거부된 것처럼 답한다(진짜 메시지처럼 주체 ARN 을 담는다).
+# Globals:
+#   USER_ARN
+# Arguments:
+#   API 이름.
+#######################################
+access_denied() {
+  local who="User: ${USER_ARN} is not authorized to perform this action"
+  printf 'An error occurred (AccessDenied) when calling the %s %s: %s\n' "$1" \
+    operation "${who}" >&2
+  exit 254
+}
+
+#######################################
+# 연결 실패처럼 답한다(표준 오류에 계정 ID · 사용자 이름).
+# Globals:
+#   USER_ARN, ACCOUNT
+#######################################
+call_failed() {
+  printf 'Could not connect to the endpoint URL (caller %s, account %s)\n' \
+    "${USER_ARN}" "${ACCOUNT}" >&2
+  exit 255
+}
+
+#######################################
+# sts get-caller-identity.
+# Globals:
+#   FAKE_AWS_IDENTITY, USER_ARN, ACCOUNT, USER_NAME
+# Arguments:
+#   받은 argv 전체.
+#######################################
+caller_identity() {
+  require_text_output "$@"
+  case "${FAKE_AWS_IDENTITY:-user}" in
+    user) printf '%s\t%s\n' "${USER_ARN}" "${ACCOUNT}" ;;
+    role)
+      printf 'arn:aws:sts::%s:assumed-role/fake-role/%s\t%s\n' "${ACCOUNT}" \
+        "${USER_NAME}" "${ACCOUNT}"
+      ;;
+    *) call_failed ;;
+  esac
+}
+
+#######################################
+# 요청 파일의 JSON 에서 정규식 첫 묶음을 꺼낸다.
+# Arguments:
+#   요청 JSON, 정규식.
+# Outputs:
+#   첫 묶음.
+# Returns:
+#   맞지 않으면 1.
+#######################################
+json_capture() {
+  local json="$1" pattern="$2"
+  [[ "${json}" =~ ${pattern} ]] || return 1
+  printf '%s\n' "${BASH_REMATCH[1]}"
+}
+
+#######################################
+# 요청이 계약과 다르면 진짜 API 처럼 입력 오류로 끝낸다.
+# Arguments:
+#   설명.
+#######################################
+invalid_request() {
+  printf 'An error occurred (InvalidInput): %s\n' "$1" >&2
+  exit 252
+}
+
+#######################################
+# iam simulate-principal-policy.
+# Globals:
+#   FAKE_AWS_SIM, USER_ARN, REGION_CONTEXT_PATTERN, FAKE_AWS_DENY,
+#   FAKE_AWS_EXPLICIT_DENY, FAKE_AWS_ORGS
+# Arguments:
+#   받은 argv 전체.
+#######################################
+simulate() {
+  local input path request action resource region decision orgs rest
+  require_text_output "$@"
+  case "${FAKE_AWS_SIM:-ok}" in
+    fail) call_failed ;;
+    denied-call) access_denied SimulatePrincipalPolicy ;;
+    empty) exit 0 ;;
+    *) ;;
+  esac
+  input="$(option_value --cli-input-json "$@")"
+  [[ "${input}" == file://* ]] ||
+    invalid_request "--cli-input-json 이 file:// 아님"
+  path="${input#file://}"
+  [[ -f "${path}" ]] || invalid_request "요청 파일 없음"
+  request="$(<"${path}")"
+  [[ "$(json_capture "${request}" '"PolicySourceArn":"([^"]*)"')" == \
+    "${USER_ARN}" ]] || invalid_request "PolicySourceArn 이 호출 주체가 아님"
+  action="$(json_capture "${request}" '"ActionNames":\["([^"]*)"\]')" ||
+    invalid_request "ActionNames 없음"
+  resource="$(json_capture "${request}" '"ResourceArns":\["([^"]*)"\]')" ||
+    invalid_request "ResourceArns 없음"
+  # shellcheck disable=SC2016 # 「${」 는 펼치지 않는 글자 그대로다.
+  [[ "${resource}" != *'${'* ]] || invalid_request "ResourceArns 에 자리표시자"
+  region="$(json_capture "${request}" "${REGION_CONTEXT_PATTERN}")" ||
+    invalid_request "aws:RequestedRegion 문맥 없음"
+  decision=allowed
+  orgs=True
+  if [[ " ${FAKE_AWS_DENY:-} " == *" ${action}@${region} "* ]]; then
+    decision=implicitDeny
+    orgs=False
+  elif [[ " ${FAKE_AWS_EXPLICIT_DENY:-} " == *" ${action}@${region} "* ]]; then
+    decision=explicitDeny
+    orgs=False
+  fi
+  if [[ " ${FAKE_AWS_ORGS:-} " == *" ${action}@${region}="* ]]; then
+    rest="${FAKE_AWS_ORGS#*"${action}@${region}="}"
+    orgs="${rest%% *}"
+  fi
+  case "${FAKE_AWS_SIM:-ok}" in
+    bad-action) action="iam:SomethingElse" ;;
+    two-lines) printf '%s\t%s\t%s\n' "${action}" "${decision}" "${orgs}" ;;
+    short)
+      printf '%s\t%s\n' "${action}" "${decision}"
+      return 0
+      ;;
+    *) ;;
+  esac
+  printf '%s\t%s\t%s\n' "${action}" "${decision}" "${orgs}"
+}
+
+#######################################
+# cloudtrail lookup-events.
+# Globals:
+#   FAKE_AWS_LOOKUP, FAKE_AWS_EVENTS
+# Arguments:
+#   받은 argv 전체.
+#######################################
+lookup_events() {
+  local attribute name region row_region row_name id source time user
+  local out=""
+  require_text_output "$@"
+  case "${FAKE_AWS_LOOKUP:-ok}" in
+    fail) call_failed ;;
+    denied-call) access_denied LookupEvents ;;
+    *) ;;
+  esac
+  attribute="$(option_value --lookup-attributes "$@")"
+  name="${attribute#AttributeKey=EventName,AttributeValue=}"
+  region="$(option_value --region "$@")"
+  [[ -n "${FAKE_AWS_EVENTS:-}" ]] || exit 0
+  while IFS=$'\t' read -r row_region row_name id source time user ||
+    [[ -n "${row_region}" ]]; do
+    [[ "${row_region}" == "${region}" && "${row_name}" == "${name}" ]] ||
+      continue
+    case "${FAKE_AWS_LOOKUP:-ok}" in
+      short) out+="${id}"$'\t'"${source}"$'\t'"${name}"$'\n' ;;
+      extra-field)
+        out+="${id}"$'\t'"${source}"$'\t'"${name}"$'\t'"${time}"
+        out+=$'\t'"${user}"$'\t'"extra"$'\n'
+        ;;
+      bad-name)
+        out+="${id}"$'\t'"${source}"$'\t'"Bad Name!"$'\t'"${time}"
+        out+=$'\t'"${user}"$'\n'
+        ;;
+      empty-id)
+        out+=$'\t'"${source}"$'\t'"${name}"$'\t'"${time}"$'\t'"${user}"$'\n'
+        ;;
+      none-name)
+        out+="${id}"$'\t'"${source}"$'\t'None$'\t'"${time}"$'\t'"${user}"$'\n'
+        ;;
+      *)
+        out+="${id}"$'\t'"${source}"$'\t'"${name}"$'\t'"${time}"
+        out+=$'\t'"${user}"$'\n'
+        ;;
+    esac
+  done <"${FAKE_AWS_EVENTS}"
+  if [[ "${FAKE_AWS_LOOKUP:-ok}" == no-final-newline ]]; then
+    printf '%s' "${out%$'\n'}"
+  else
+    printf '%s' "${out}"
+  fi
+}
+
+#######################################
+# argv 를 기록하고 흉내 낼 호출로 보낸다(모르는 호출은 실패).
+# Globals:
+#   FAKE_AWS_LOG
+# Arguments:
+#   받은 argv 전체.
+#######################################
+main() {
+  [[ -n "${FAKE_AWS_LOG:-}" ]] || {
+    printf 'fake aws: FAKE_AWS_LOG 없음\n' >&2
+    exit 252
+  }
+  printf '%s\n' "$*" >>"${FAKE_AWS_LOG}"
+  case "${1:-} ${2:-}" in
+    "sts get-caller-identity") caller_identity "$@" ;;
+    "iam simulate-principal-policy") simulate "$@" ;;
+    "cloudtrail lookup-events") lookup_events "$@" ;;
+    *)
+      printf 'fake aws: 모르는 호출: %s %s\n' "${1:-}" "${2:-}" >&2
+      exit 252
+      ;;
+  esac
+}
+
+main "$@"

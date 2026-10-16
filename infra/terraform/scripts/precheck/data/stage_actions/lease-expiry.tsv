@@ -1,0 +1,18 @@
+# 단계 묶음 — 열: 동작 · 리전 · 자원 패턴(탭 구분). 「#」 줄은 주석, 빈 줄은
+# 건너뜀. 계정 자리는 ${ACCOUNT} 뿐(판정 때 caller identity 의 계정 ID).
+# 같은 (동작, 리전)은 한 행. 자원 패턴을 계획이 주지 않으면 *.
+# 출처: 계획 M17a 「데이터」 lease-expiry · M18 · 설계 9-2(kty 43 · 44차).
+# M18 이 쓰는 동작만 둔다 — 2-3 판정 대상이 아니라 그 읽기는 없다. M18 c3
+# 이 확정한다.
+
+# 공개 존 찾기 · 레코드 목록 보관 · NS 확인(us-east-1)
+route53:ListHostedZonesByName	us-east-1	*
+route53:GetHostedZone	us-east-1	*
+route53:ListResourceRecordSets	us-east-1	*
+
+# 진행 중 방송 목록 기록(운영 중일 때만 — 9-2-9)
+ssm:SendCommand	ap-northeast-2	*
+ssm:GetCommandInvocation	ap-northeast-2	*
+
+# 예산 읽기(점검 4 — Budgets 는 전역 · us-east-1 엔드포인트)
+budgets:ViewBudget	us-east-1	*

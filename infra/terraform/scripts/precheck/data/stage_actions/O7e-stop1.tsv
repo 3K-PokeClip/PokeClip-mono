@@ -1,0 +1,9 @@
+# 단계 묶음 — 열: 동작 · 리전 · 자원 패턴(탭 구분). 「#」 줄은 주석, 빈 줄은
+# 건너뜀. 계정 자리는 ${ACCOUNT} 뿐(판정 때 caller identity 의 계정 ID).
+# 같은 (동작, 리전)은 한 행. 자원 패턴을 계획이 주지 않으면 *.
+# 출처: 계획 3절 「부분 진행」 ① · M9 「O7e 선행 0」 · 설계 8절 멈춤 자리 ① ·
+# 13-1(10-13 10:59 허용). 멈춤 자리 동작만 둔다. 같은 (동작, 리전)은 한
+# 행이라 DB 사용자 media_indexer 하나로 판정한다.
+
+# 사이드카 DB 연결
+rds-db:connect	ap-northeast-2	arn:aws:rds-db:ap-northeast-2:${ACCOUNT}:dbuser:*/media_indexer
