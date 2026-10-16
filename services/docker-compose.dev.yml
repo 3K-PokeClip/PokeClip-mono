@@ -171,6 +171,11 @@ services:
       UPLOAD_QUEUE_URL: ${UPLOAD_QUEUE_URL:-}
       UPLOAD_DLQ_URL: ${UPLOAD_DLQ_URL:-}
       UPLOAD_RECONCILE_INTERVAL: ${UPLOAD_RECONCILE_INTERVAL:-PT1M}
+      # 썸네일 주문(POK-277). 켜면 줄 주소가 필수다(비면 부팅 거부). 사진 창고는 위 CLIPS_BUCKET. 자격증명은 EC2 역할이고, 그 역할에 이 줄의 SQS 권한이 있어야 한다.
+      # 이 줄들이 없을 때는 호스트 .env 에 값을 넣어도 컨테이너에 안 가서 dev 썸네일이 늘 꺼져 있었다(POK-331).
+      THUMBNAIL_ENABLED: ${THUMBNAIL_ENABLED:-false}
+      THUMBNAIL_QUEUE_URL: ${THUMBNAIL_QUEUE_URL:-}
+      THUMBNAIL_INTERVAL: ${THUMBNAIL_INTERVAL:-PT1M}
       # 채팅 되감기 문 셋이 물어보는 수집기 주소(POK-234). 위 AUTH_BASE_URL 과 달리
       # 비어도 부팅은 산다 — 그 셋만 503 이고 카드 편집·목록·통로는 그대로 돈다.
       # 그래도 여기 넣는 이유는 「표에만 적혀 있고 compose 가 안 넘겨」 그 기능만 조용히
