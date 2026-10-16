@@ -2436,6 +2436,35 @@ describe('LiveScreen: 지난 방송 채팅 다시 보기(POK-324)', () => {
 });
 
 describe('LiveScreen — 지난 방송 상세', () => {
+  it('끝난 방송은 차트·방송 정보를 한 번 읽으면 멈추고, 카드 목록은 1분마다 읽고, 통로는 다시 붙지 않는다(POK-254)', async () => {
+    // 전에는 끝난 방송도 카드 3초·차트 10초·방송 정보 10초마다 다시 읽었다(12시간 방송이면 탭 하나에 분당 차트 72건)
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    await renderLive();
+    const vodCalls = (part: string) =>
+      fetchSpy.mock.calls
+        .map(([url]) => new URL(String(url), 'http://localhost'))
+        .filter((u) => u.pathname === `/api/clip/broadcasts/${VOD_ID}/${part}`).length;
+    const before = {
+      chart: vodCalls('chat-chart'),
+      info: vodCalls('broadcast-info'),
+      cards: vodCalls('jump-cards'),
+      events: vodCalls('events'),
+    };
+    expect(before.chart).toBeGreaterThan(0);
+    expect(screen.getAllByText('끝날 때 1,842명 시청').length).toBeGreaterThan(0);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(125_000);
+    });
+    await settle();
+
+    expect(vodCalls('chat-chart')).toBe(before.chart);
+    expect(vodCalls('broadcast-info')).toBe(before.info);
+    // 다른 편집자의 집기·숨김과 50분짜리 사진 주소는 바뀌므로 카드 목록은 1분마다 읽는다
+    expect(vodCalls('jump-cards') - before.cards).toBe(2);
+    expect(vodCalls('events')).toBe(before.events);
+  });
+
   it('명부에 없는 방송이면 404 화면으로 보낸다 — 빈 대시보드를 보이지 않는다', async () => {
     window.history.pushState({}, '', '/broadcast/vod/nope');
     await renderLive();
