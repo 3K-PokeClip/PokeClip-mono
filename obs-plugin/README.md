@@ -23,7 +23,7 @@
 | 핫키 마킹 (A4) | 단축키(기본 Ctrl+Shift+M)·독 버튼으로 「지금 이 순간」을 표시하면 누른 시각을 서버로 보낸다(재시도·중복 방지 포함). **받는 서버 창구는 아직 없다** — 아래 「핫키 마킹」 |
 | 종료 신호 (A3·4D) | 스트리머가 본방을 끝내면(OBS 「방송 종료」·방송 중 OBS 닫기) 우리 SRT 출력이 실제로 멈춘 직후 Media에 `POST /api/ingest/end-signal`을 1회 보낸다 — Media가 그 회차를 바로 닫고 뒤 송출을 새 회차로 연다(보장 시간 300초를 기다리지 않는다). 오류·끊김·「재시도 중지」·포기·본방 자력 종료에는 보내지 않는다. **받는 Media 수신부는 아직 없다(1번 M6)** — 아래 「종료 신호」 |
 
-**아직 안 되는 것** — 종료 신호를 받는 Media 수신부(1번 M6 — 플러그인 쪽만 있다), 마크를 받는 서버 창구(POK-119 — 플러그인 쪽만 있다), SRT RTT 통계(A6), 설치 파일·서명(A7), 오디오 소스를 앱 단위(디스코드·게임·크롬)로 가르기(POK-290 — 지금은 OBS 소스 타입 6종류로만 가른다).
+**아직 안 되는 것** — 종료 신호를 받는 Media 수신부(1번 M6 — 플러그인 쪽만 있다), 마크를 받는 서버 창구(POK-119 — 플러그인 쪽만 있다), SRT RTT 통계(A6), OS가 믿는 코드 서명·macOS 공증(A7 — 설치 파일은 있다, 공인 서명은 POK-360), 오디오 소스를 앱 단위(디스코드·게임·크롬)로 가르기(POK-290 — 지금은 OBS 소스 타입 6종류로만 가른다).
 
 ## 구조
 
@@ -72,8 +72,8 @@ pnpm build       # tsc + vite build → ../data/ui
 
 | 잡 | 산출물 |
 |---|---|
-| `windows` | `pokeclip-obs-0.2.0-windows-x64.zip` — `obs-plugins/64bit/pokeclip-obs.dll` + `data/obs-plugins/pokeclip-obs/{locale,ui}` |
-| `macos` | `pokeclip-obs-0.2.0-macos-universal.*` (미서명) |
+| `windows` | `pokeclip-obs-0.2.0-windows-x64-installer.exe` — Inno Setup 설치 파일(`cmake/windows/resources/installer-Windows.iss.in`, 같은 잡에서 `Test-WindowsInstaller.ps1`로 무인 설치·제거 시험) · `pokeclip-obs-0.2.0-windows-x64.zip` — `obs-plugins/64bit/pokeclip-obs.dll` + `data/obs-plugins/pokeclip-obs/{locale,ui}` (미서명) |
+| `macos` | `pokeclip-obs-0.2.0-macos-universal.pkg` — `cmake --install`의 `create-package.cmake`(pkgbuild + productbuild)가 만든다, 같은 잡에서 `installer -target CurrentUserHomeDirectory`로 설치 시험 (pkg 미서명, 플러그인 ad-hoc) |
 
 **받는 곳**
 
@@ -131,10 +131,30 @@ cmake -S obs-plugin/tests -B obs-plugin/build_tests && cmake --build obs-plugin/
 
 ## 설치
 
-| OS | 위치 |
-|---|---|
-| Windows | zip을 `C:\Program Files\obs-studio\`에 풀면 `obs-plugins\64bit\pokeclip-obs.dll` + `data\obs-plugins\pokeclip-obs\` 가 된다 |
-| macOS | `pokeclip-obs.plugin`을 `~/Library/Application Support/obs-studio/plugins/`에 둔다 |
+[GitHub Releases](https://github.com/3K-PokeClip/PokeClip-mono/releases)에서 설치 파일을 받는다. **OBS를 끈 뒤** 설치한다.
+
+| OS | 파일 | 설치되는 곳 | 제거 |
+|---|---|---|---|
+| Windows (OBS 32 이상) | `pokeclip-obs-<판>-windows-x64-installer.exe` | `%ProgramData%\obs-studio\plugins\pokeclip-obs\{bin\64bit, data}` | 설정 › 앱 › 「PokeClip for OBS」 |
+| macOS | `pokeclip-obs-<판>-macos-universal.pkg` | `~/Library/Application Support/obs-studio/plugins/pokeclip-obs.plugin` | 그 `.plugin`을 지우고 `pkgutil --forget com.pokeclip.obs-plugin` |
+
+**Windows 설치 파일**
+
+- OBS가 켜져 있으면 닫으라고 하고 멈춘다(방송 중일 수 있어 OBS를 대신 끄지 않는다).
+- OBS 설치 폴더를 묻지 않는다 — OBS 32가 플러그인을 읽는 `%ProgramData%\obs-studio\plugins`에 넣는다. OBS가 없거나(레지스트리 `HKLM\SOFTWARE\OBS Studio`) 32 미만이면 경고만 하고 계속할지 묻는다.
+- 예전처럼 zip을 OBS 폴더에 풀어 둔 사본(`<OBS>\obs-plugins\64bit\pokeclip-obs.dll`·`<OBS>\data\obs-plugins\pokeclip-obs\`)이 있으면 지운다 — 남아 있으면 OBS가 플러그인을 두 번 잡는다.
+- 제거는 이 플러그인 폴더만 지운다. 페어링·설정(`%APPDATA%\obs-studio\plugin_config\pokeclip-obs`)과 다른 플러그인은 남는다.
+- 무인 설치: `…-installer.exe /VERYSILENT /SUPPRESSMSGBOXES`(경고는 「계속」으로 넘어간다).
+
+**포터블 OBS·수동 설치** — 포터블 OBS는 `%ProgramData%`를 읽지 않는다. zip(`pokeclip-obs-<판>-windows-x64.zip`)을 OBS 폴더에 풀면 `obs-plugins\64bit\pokeclip-obs.dll` + `data\obs-plugins\pokeclip-obs\`가 된다. 설치 파일과 함께 쓰지 않는다(두 벌).
+
+**서명 경고** — 아직 OS가 믿는 서명이 없다(공인 서명은 [POK-360](https://xodbs9810.atlassian.net/browse/POK-360)). 그동안은 경고를 한 번 넘긴다.
+
+| 어디서 | 경고 | 넘기는 법 |
+|---|---|---|
+| Chrome | 「위험한 파일」로 다운로드 차단 | `chrome://downloads` › 「⋮」 › 「위험한 파일 다운로드」 |
+| Windows | SmartScreen 「Windows의 PC 보호」 · UAC 「알 수 없는 게시자」 | 「추가 정보」 › 「실행」 · 「예」 |
+| macOS | 「확인되지 않은 개발자」로 pkg가 안 열림 | 시스템 설정 › 개인정보 보호 및 보안 › 「그래도 열기」 |
 
 처음 실행하면 **PokeClip 독이 한 번 펼쳐진다** (새 플러그인 독은 OBS가 숨긴 채 등록하므로). 이후 위치는 OBS가 기억한다. 메뉴 「도킹 › PokeClip」.
 
