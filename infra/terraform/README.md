@@ -151,6 +151,19 @@ shellcheck -x infra/terraform/scripts/precheck/*.sh \
   infra/terraform/scripts/precheck/tests/fakebin/aws
 ```
 
+이 트리를 고친 PR 에서는 `.github/workflows/infra-ci.yml`(infra-ci)이 위
+명령을 모두 돌립니다. 도구(terraform 1.16.4 · conftest 0.71.1 ·
+shellcheck 0.11.0)는 sha256 을 고정해 내려받습니다. 필수 체크가 아니므로
+결과는 PR 화면의 체크 목록에서 머지 전에 확인합니다. CI 의 한계는 다음과
+같습니다.
+
+*   러너의 bash 는 5.2 입니다. 스크립트가 지키는 macOS bash 3.2 제약은
+    로컬에서 돌려야 드러납니다.
+*   guard_test 의 `config-first-folded` 사례(ſ 를 s 로 접는 파일 시스템)는
+    러너(ext4)에서 건너뜁니다. APFS 에서 도는 로컬이 맡습니다.
+*   `modules/` 는 lock 을 추적하지 않아 aws provider 최신판으로 돕니다.
+    쓰인 판은 init 로그에 남습니다.
+
 ### 단언 방식
 
 `terraform test` 는 `mock_provider` 로 AWS 에 접속하지 않고 plan 을 만든 뒤
@@ -211,9 +224,8 @@ CI 자동 푸시를 켜는 후속 PR(40차)이 더합니다.
 
 ### 설치와 실행
 
-*   로컬: `brew install conftest`. CI 는 계획의 M-CI(infra-ci)에서 conftest
-    0.71.1 을 체크섬 고정으로 내려받아 붙습니다. 그 전까지는 PR 마다 아래 셋을
-    손으로 돌립니다.
+*   로컬: `brew install conftest`. CI(infra-ci)는 conftest 0.71.1 을 sha256
+    고정으로 내려받아 PR 마다 아래 셋을 돌립니다(「검증」 절).
 
 ```
 conftest verify -c infra/terraform/scripts/guard-data/empty-config.toml \
