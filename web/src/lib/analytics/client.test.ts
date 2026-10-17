@@ -10,10 +10,11 @@ const posthog = vi.hoisted(() => ({
 }));
 vi.mock('posthog-js', () => ({ default: posthog }));
 
-async function load(key: string, host: string) {
+async function load(key: string, host: string, replay = '') {
   vi.resetModules();
   vi.stubEnv('NEXT_PUBLIC_POSTHOG_KEY', key);
   vi.stubEnv('NEXT_PUBLIC_POSTHOG_HOST', host);
+  vi.stubEnv('NEXT_PUBLIC_POSTHOG_REPLAY', replay);
   const client = await import('./client');
   const { useAuthStore } = await import('@/stores/auth');
   return { client, useAuthStore };
@@ -73,6 +74,41 @@ describe('initAnalytics — 키가 없으면 꺼진다(POK-356)', () => {
     // 원격 설정까지 막는 옵션은 쓰지 않는다 — 녹화가 원격 설정을 요구한다
     expect(config).not.toHaveProperty('advanced_disable_flags');
     expect(typeof config.before_send).toBe('function');
+  });
+
+  it.each([
+    ['', true],
+    ['true', true],
+    ['on', false],
+  ])(
+    '녹화는 NEXT_PUBLIC_POSTHOG_REPLAY=%j 일 때 끔=%s — 정확히 on일 때만 켠다(POK-358)',
+    async (replay, off) => {
+      const { client } = await load('phc_test', 'https://us.i.posthog.com', replay);
+      client.initAnalytics();
+      await client.whenAnalyticsLoaded();
+      const [, config] = posthog.init.mock.calls[0] ?? [];
+      expect(config.disable_session_recording).toBe(off);
+    },
+  );
+
+  it('녹화 설정은 켜든 끄든 늘 가리기를 싣는다 — 글자·입력 전부, 이미지·영상 차단, 헤더·본문 미기록', async () => {
+    const { client } = await load('phc_test', 'https://us.i.posthog.com', 'on');
+    client.initAnalytics();
+    await client.whenAnalyticsLoaded();
+    const [, config] = posthog.init.mock.calls[0] ?? [];
+    expect(config.session_recording).toMatchObject({
+      maskAllInputs: true,
+      maskTextSelector: '*',
+      blockSelector: expect.stringContaining('img'),
+      recordHeaders: false,
+      recordBody: false,
+      streamNetworkBody: false,
+    });
+    expect(config.session_recording.blockSelector).toContain('video');
+    expect(config.session_recording.maskAttributeFn('href', '/x?stream=S-1')).toBe('/x');
+    expect(
+      config.session_recording.maskCapturedNetworkRequestFn({ name: '/auth/callback?code=c' }),
+    ).toEqual({ name: '/auth/callback' });
   });
 
   it('SDK가 붙기 전에 들어온 식별은 대기열에 두었다가 붙자마자 보낸다', async () => {

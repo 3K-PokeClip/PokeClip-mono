@@ -1,6 +1,6 @@
 import type { PostHog, PostHogConfig } from 'posthog-js';
 import { useAuthStore } from '@/stores/auth';
-import { scrubEvent } from './scrub';
+import { scrubAttribute, scrubEvent, scrubUrl } from './scrub';
 
 // 사용 통계(PostHog) 연결 (POK-354·356). 결정은 POK-354 코멘트와 위키 ADR — US 지역, 정당한 이익 + 처리방침 고지
 // (동의 창 없음, 추적 금지 존중), 랜딩과 같은 프로젝트(.pokeclip.com 쿠키 공유), 프록시 없음.
@@ -13,6 +13,17 @@ import { scrubEvent } from './scrub';
 
 const KEY = process.env.NEXT_PUBLIC_POSTHOG_KEY ?? '';
 const HOST = process.env.NEXT_PUBLIC_POSTHOG_HOST ?? '';
+/**
+ * 세션 녹화는 `on`일 때만 켠다 (POK-358). 켜도 PostHog 프로젝트의 「Record user sessions」가 꺼져 있으면 시작하지 않는다 —
+ * SDK가 원격 설정의 녹화 켜짐을 요구한다. 그래서 운영에서 켜고 끄는 스위치는 둘(이 env와 콘솔)이다
+ */
+const REPLAY = process.env.NEXT_PUBLIC_POSTHOG_REPLAY === 'on';
+
+/**
+ * 이 클래스를 단 요소는 세션 녹화에서 통째로 빠진다(크기만 남는다, SDK 기본 blockClass) (POK-358).
+ * 글자는 이미 전부 가리지만, 채팅 줄 수·후원 표시·코드 자릿수 같은 구조까지 남기지 않을 곳에 단다
+ */
+export const REPLAY_BLOCK_CLASS = 'ph-no-capture';
 /** 로딩이 끝나기 전에 쌓을 수 있는 일의 수 — 첫 화면의 식별과 이벤트 몇 개면 충분하다. */
 const MAX_PENDING = 50;
 
@@ -46,8 +57,24 @@ export const ANALYTICS_CONFIG: Partial<PostHogConfig> = {
   capture_heatmaps: false,
   capture_exceptions: false,
   capture_performance: false,
-  // 세션 녹화는 가리기를 확인한 뒤 켠다(POK-358)
-  disable_session_recording: true,
+  // 세션 녹화 (POK-358) — 화면을 다시 그릴 수 있을 만큼만 담고 사람·비밀값은 담지 않는다(처리방침 2절
+  // 「화면의 글자와 입력 내용을 가린 채」). 랜딩은 녹화하지 않는다. 로그인·OAuth 콜백·탈퇴 화면은 콘솔의 URL 차단 목록에서 뺀다
+  disable_session_recording: !REPLAY,
+  session_recording: {
+    // 모든 글자와 입력값을 가린다 — 채팅·채널 이름·이메일·업로드 제목·페어링 코드가 다 글자다
+    maskAllInputs: true,
+    maskTextSelector: '*',
+    // 이미지·영상·캔버스는 통째로 뺀다(크기만 남는다) — 사진 주소의 서명 토큰, 방송 화면의 얼굴
+    blockSelector: 'img, picture, video, canvas, iframe',
+    // 링크·이미지 주소의 ?stream=·?card= 와 /broadcast/vod/<번호> — 예전 방송 번호는 스트림 키와 같다
+    maskAttributeFn: scrubAttribute,
+    // 네트워크 기록은 주소만 정제해 남기고 헤더·본문은 담지 않는다
+    recordHeaders: false,
+    recordBody: false,
+    streamNetworkBody: false,
+    recordCrossOriginIframes: false,
+    maskCapturedNetworkRequestFn: (request) => ({ ...request, name: scrubUrl(request.name) }),
+  },
   disable_surveys: true,
   disable_product_tours: true,
   disable_conversations: true,

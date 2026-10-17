@@ -18,17 +18,18 @@
 | IP           | **저장 안 함**(콘솔 설정 — US는 기본이 저장이라 꼭 끈다)                                                                                                                                                                                                                                                                   | 2절                                           |
 | 자동 수집    | **끔**. 행동은 `track()`으로만(POK-357)                                                                                                                                                                                                                                                                                    | 2절 「누른 단추」                             |
 | 사람 프로필  | 로그인한 회원만(`person_profiles: 'identified_only'`), 식별자는 **회원 번호**                                                                                                                                                                                                                                              | 2절                                           |
-| 세션 녹화    | 꺼 둠. 가리기를 확인한 뒤 켠다(POK-358), 보존 30일                                                                                                                                                                                                                                                                         | 2·3절                                         |
+| 세션 녹화    | 대시보드만, 글자·입력 전부 가림·이미지와 영상 차단(POK-358). 스위치는 둘 — env `NEXT_PUBLIC_POSTHOG_REPLAY=on`과 콘솔 「Record user sessions」. 보존 30일(무료). 아래 「세션 녹화」                                                                                                                                        | 2·3절                                         |
 | 이벤트 보존  | 무료 플랜 1년(조회 기간)                                                                                                                                                                                                                                                                                                   | 3절 — 물리 삭제 보장은 `landing/README.md` 🔴 |
 | 프록시       | 안 씀                                                                                                                                                                                                                                                                                                                      | —                                             |
 | 탈퇴 시 삭제 | **운영자 수동**, 7일 안 — 아래 절차                                                                                                                                                                                                                                                                                        | 3·4절                                         |
 
 ## 켜는 법 · 꺼짐 조건
 
-| 곳                            | 켜는 값                                                | 비어 있으면                                                                        |
-| ----------------------------- | ------------------------------------------------------ | ---------------------------------------------------------------------------------- |
-| 대시보드 (`web/`)             | `NEXT_PUBLIC_POSTHOG_KEY` + `NEXT_PUBLIC_POSTHOG_HOST` | `posthog-js`를 import조차 하지 않는다(로컬·CI·dev 기본)                            |
-| 랜딩 (`landing/analytics.js`) | 파일 안의 `KEY`                                        | SDK를 내려받지 않는다. 키가 있어도 `pokeclip.com`·`www.pokeclip.com`이 아니면 끈다 |
+| 곳                            | 켜는 값                                                                 | 비어 있으면                                                                        |
+| ----------------------------- | ----------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| 대시보드 (`web/`)             | `NEXT_PUBLIC_POSTHOG_KEY` + `NEXT_PUBLIC_POSTHOG_HOST`                  | `posthog-js`를 import조차 하지 않는다(로컬·CI·dev 기본)                            |
+| 랜딩 (`landing/analytics.js`) | 파일 안의 `KEY`                                                         | SDK를 내려받지 않는다. 키가 있어도 `pokeclip.com`·`www.pokeclip.com`이 아니면 끈다 |
+| 대시보드 세션 녹화            | 위 둘 + `NEXT_PUBLIC_POSTHOG_REPLAY=on` + 콘솔 「Record user sessions」 | 녹화하지 않는다. env는 정확히 `on`일 때만(`true` 아님)                             |
 
 - `NEXT_PUBLIC_*`는 **빌드 때 굳는다.** 운영 값을 바꾸면 다시 빌드한다.
 - 프로젝트 키(`phc_…`)는 공개 키다 — 브라우저에 실려도 된다. **개인 API 키(`phx_…`)는 절대 코드·env에 넣지 않는다.**
@@ -41,7 +42,7 @@
 | ---------------------------------------- | -------------------------------------------------------------------------------------------- |
 | `src/instrumentation-client.ts`          | hydration 전에 `initAnalytics()` 한 번                                                       |
 | `src/lib/analytics/client.ts`            | 설정(`ANALYTICS_CONFIG`), 동적 import·대기열(`withAnalytics`), 식별·초기화, auth 스토어 구독 |
-| `src/lib/analytics/scrub.ts`             | `before_send` — 주소 정제                                                                    |
+| `src/lib/analytics/scrub.ts`             | `before_send` — 주소 정제(녹화 메타 주소 포함), 녹화 속 요소 속성 가리기(`scrubAttribute`)   |
 | `src/lib/analytics/index.ts`             | 화면 코드가 가져다 쓰는 곳. 화면은 `posthog-js`를 직접 import하지 않는다                     |
 | `src/components/app-shell/AuthGuard.tsx` | 보호 화면 진입 때 `identifyUser(me.id)`                                                      |
 | `landing/analytics.js`                   | 랜딩 세 페이지의 같은 설정                                                                   |
@@ -88,6 +89,32 @@ SDK는 동적 import라 hydration 뒤에 붙을 수 있다(Next 16 `instrumentat
 - `login_completed`는 식별 전에 익명으로 나간다. 다음 화면의 `AuthGuard`가 `identify`하면 그 회원에게 합쳐진다.
 - **브라우저가 모르는 일**(플러그인 연결 완료·첫 송출·하이라이트 생성·YouTube 업로드 성공)은 보내지 않는다 — DB 숫자로 본다. 서버 SDK는 이번 범위 밖이다.
 
+## 세션 녹화 (POK-358)
+
+편집기 같은 화면에서 사용자가 어디서 헤매는지 본다. 녹화는 화면을 다시 그릴 만큼만 담고 **사람과 비밀값은 담지 않는다**(처리방침 2절 「화면의 글자와 입력 내용을 가린 채」). 랜딩은 녹화하지 않는다.
+
+| 대상                                                         | 처리                                                                            | 설정                                                                                    |
+| ------------------------------------------------------------ | ------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| 모든 글자                                                    | `*`로 가림(글자 수만 남음) — 채팅·채널 이름·이메일·업로드 제목·코드가 다 글자다 | `maskTextSelector: '*'`                                                                 |
+| 모든 입력값                                                  | 가림(입력 중인 값도)                                                            | `maskAllInputs: true`                                                                   |
+| 이미지·영상·캔버스·iframe                                    | 통째로 뺌(크기만 남음) — 사진 주소의 서명 토큰, 방송 화면의 얼굴                | `blockSelector`                                                                         |
+| 링크·이미지 주소 속성(`href`·`src` 등)                       | 쿼리 제거, `/broadcast/vod/<번호>` → `_`                                        | `maskAttributeFn` = `scrubAttribute`                                                    |
+| 글 속성(`aria-label`·`title`·`alt`·`placeholder`·`value` 등) | `*`로 가림 — 글자 가리기는 속성을 안 건드리는데 채널·회원 이름이 실린다         | `maskAttributeFn` = `scrubAttribute`                                                    |
+| 녹화 시작 페이지 주소(rrweb 메타)                            | 쿼리 제거                                                                       | `before_send`(`$snapshot`)                                                              |
+| 네트워크 요청                                                | 헤더·본문을 담지 않고 주소만 정제                                               | `recordHeaders`·`recordBody`·`streamNetworkBody: false`, `maskCapturedNetworkRequestFn` |
+| 채팅 패널·영상 위 채팅·페어링 코드 상자                      | 통째로 뺌(구조·자릿수도 안 남김)                                                | `REPLAY_BLOCK_CLASS`(`ph-no-capture`)                                                   |
+
+**켜는 순서** — 처리방침(POK-355) 머지·시행 뒤에.
+
+1. 콘솔 Replay 설정: **URL 차단 목록**에 `/login`·`/auth/callback`·`/oauth/`·`/goodbye`를 넣는다(로그인·탈퇴 화면은 녹화하지 않는다). 보존 기간 **30일**(처리방침 3절). 표본 비율·최소 길이는 첫 주 사용량을 보고 정한다(무료 월 5천 건).
+2. 콘솔에서 「Record user sessions」를 켠다.
+3. 대시보드 운영 빌드 env에 `NEXT_PUBLIC_POSTHOG_REPLAY=on`을 넣고 다시 빌드한다.
+4. 첫 녹화 몇 개를 재생해 글자·사진·채팅이 안 보이는지 눈으로 확인한다. 하나라도 보이면 env를 비우고 다시 빌드한다(콘솔 토글만 꺼도 새 녹화는 멈춘다).
+
+**새 화면을 만들 때** — 글자·입력·이미지는 저절로 가려진다. 사람 정보가 **글자 아닌 모양**(배지 색·개수, 목록 줄 수)으로 드러나는 영역이면 `REPLAY_BLOCK_CLASS`를 단다. 사람 정보를 `data-*` 속성에 넣지 않는다(가리지 않는다).
+
+**녹화는 원격 설정이 있어야 켜진다** — SDK가 원격 설정의 「녹화 켜짐」을 요구해서, 피처 플래그는 평가만 끄고(`advanced_disable_feature_flags`) 원격 설정은 받는다. `advanced_disable_flags`로 바꾸면 녹화가 영영 시작되지 않는다.
+
 ## 탈퇴한 회원의 기록 삭제 (운영자, 7일 안)
 
 처리방침 3·4절은 「탈퇴하면 7일 안에 분석 도구의 그 회원 기록(이벤트·녹화)을 지운다」고 약속한다. 자동 연동은 없다(2026-10-17 결정). **주 2회 이상** 다음을 한다.
@@ -108,7 +135,7 @@ SDK는 동적 import라 hydration 뒤에 붙을 수 있다(Next 16 `instrumentat
 
 - [ ] 조직·프로젝트를 **US**로 만든다(지역은 나중에 못 바꾼다)
 - [ ] Settings › Project › Privacy — **IP 저장 끄기**. 끈 뒤 국가(`$geoip_country_code`)가 채워지는지 Live events로 확인한다(안 채워지면 처리방침 2절 「접속 국가」를 뺀다)
-- [ ] Autocapture·Heatmaps·Surveys·Session replay 토글 끄기(코드와 같게)
+- [ ] Autocapture·Heatmaps·Surveys 토글 끄기(코드와 같게). Session replay는 꺼 둔 채로 시작해 「세션 녹화 · 켜는 순서」대로 켠다
 - [ ] app.posthog.com/legal에서 DPA 서명(처리방침 6·7절 위탁 근거)
 - [ ] 무료 한도(월 이벤트 100만·녹화 5천) 알림 메일 받는 사람 확인
 - [ ] 프로젝트 키를 대시보드 운영 빌드 env와 `landing/analytics.js`에 넣는다

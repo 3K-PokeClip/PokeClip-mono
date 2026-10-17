@@ -4,6 +4,7 @@ import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 
 import clsx from 'clsx';
 import { MessageSquare, PanelRightClose } from 'lucide-react';
 import { Badge, IconButton, Tag, VisuallyHidden } from '@/ui';
+import { REPLAY_BLOCK_CLASS } from '@/lib/analytics';
 import { formatPerMinute } from './liveDataStore';
 import styles from './LiveScreen.module.css';
 import type { ChatPanelMessage, ChatSurge } from './useChatPanelMockState';
@@ -152,7 +153,8 @@ export const ChatPanel = memo(function ChatPanel({
   const heading = mode === 'ended' ? '채팅 기록' : '실시간 채팅';
 
   return (
-    <aside className={styles.chatPanel} aria-label={heading}>
+    // 시청자 채팅·후원은 제3자 개인정보라 세션 녹화에서 통째로 뺀다 (POK-358)
+    <aside className={`${styles.chatPanel} ${REPLAY_BLOCK_CLASS}`} aria-label={heading}>
       <div className={styles.chatHeader}>
         <MessageSquare size={15} aria-hidden className={styles.chatHeaderIcon} />
         <span className={styles.chatHeading}>{heading}</span>
