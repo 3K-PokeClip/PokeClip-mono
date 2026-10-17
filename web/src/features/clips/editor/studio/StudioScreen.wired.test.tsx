@@ -30,6 +30,12 @@ vi.mock('next/navigation', async () => {
   };
 });
 
+// 사용 통계(POK-357) — 편집기 진입·영상 만들기 이벤트를 잰다
+const { track } = vi.hoisted(() => ({ track: vi.fn() }));
+vi.mock('@/lib/analytics', () => ({ track, identifyUser: vi.fn() }));
+const tracked = (name: string) =>
+  track.mock.calls.filter(([n]) => n === name).map(([, props]) => props as Record<string, unknown>);
+
 // 녹화 목록을 어느 키로 물었는지 잰다(POK-233) — 실제 구현을 그대로 부른다(재생 서버 주소가 없어 빈 목록이다)
 const spansAsked = vi.hoisted(() => [] as string[]);
 vi.mock('@/api/mediaPlayback', async (importOriginal) => {
@@ -209,6 +215,7 @@ function handle(url: string, init?: RequestInit) {
 let fetchSpy: ReturnType<typeof stubFetch>;
 
 beforeEach(() => {
+  track.mockClear();
   server.cardWindow = { startMs: 60_000, endMs: 72_400 };
   server.savedTracks = [{ trackId: 0, gain: 1 }];
   server.savedSchema = 2;
@@ -404,6 +411,16 @@ describe('StudioScreen — 카드로 연 실제 편집기', () => {
     expect(saveAt).toBeLessThan(renderAt);
     // 헤더 상태 문구와 토스트 둘 다 말한다
     expect((await screen.findAllByText(/영상 #77 주문됨/)).length).toBeGreaterThan(0);
+    // 사용 통계 — 진입은 한 번(첫 저장으로 주소가 ?recipe= 로 바뀌어도 다시 세지 않는다), 주문은 서버가 받은 뒤
+    // 한 번이고 열거형 속성만 싣는다(제목·설명·태그 없음)
+    expect(tracked('clip_editor_opened')).toEqual([{ source: 'card' }]);
+    const orders = tracked('video_render_requested');
+    expect(orders).toHaveLength(1);
+    expect(Object.keys(orders[0] ?? {}).sort()).toEqual([
+      'made_for_kids',
+      'privacy_status',
+      'thumbnail_source',
+    ]);
   });
 
   it('저장 뒤 또 고치면 새 판으로 저장하고 주문한다 — 고치지 않았으면 다시 저장하지 않는다', async () => {
@@ -505,6 +522,7 @@ describe('StudioScreen — 편집본으로 다시 연 실제 편집기', () => {
       ).toBe(true),
     );
     expect(bodiesOf('PUT', `/api/clip/broadcasts/${STREAM_ID}/recipes/31`)).toHaveLength(0);
+    expect(tracked('clip_editor_opened')).toEqual([{ source: 'recipe' }]);
   });
 
   it('100%를 넘는 저장된 볼륨은 손대지 않으면 그대로 다시 저장된다', async () => {

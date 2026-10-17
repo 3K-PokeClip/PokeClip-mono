@@ -1,0 +1,39 @@
+import type { PrivacyStatus, ThumbnailSource } from '@/api/clipEditor';
+import { withAnalytics } from './client';
+
+// 행동 이벤트 목록 (POK-357). 이름은 「대상_동사」 snake_case, 속성은 열거형·boolean·number만 —
+// 자유 문자열(이메일·채널 이름·채팅·제목·토큰·페어링 코드)이 들어갈 자리를 타입으로 없앤다(처리방침 2절).
+// 새 이벤트는 docs/ANALYTICS.md 「이벤트」 표부터 고친다. 성공한 뒤에만 보낸다(실패·취소는 세지 않는다).
+export interface AnalyticsEvents {
+  /** Google 로그인 콜백 성공. 처음 가입인지는 모른다 — 사람별 첫 이벤트로 센다 */
+  login_completed: Record<string, never>;
+  platform_linked: { platform: 'chzzk' | 'youtube' };
+  platform_unlinked: { platform: 'chzzk' | 'youtube' };
+  /** 플러그인 페어링 코드 발급(처음·재발급 모두) */
+  pairing_code_issued: Record<string, never>;
+  /**
+   * 처음 사용 안내가 끝남. completed=마지막 단계에서 「다음」, skipped=「건너뛰기」,
+   * auto=가리킬 화면 요소가 없어 저절로 끝남, later=환영 창의 「나중에 볼게요」(안내를 시작하지 않음)
+   */
+  onboarding_tour_finished: { outcome: 'completed' | 'skipped' | 'auto' | 'later' };
+  /** 편집기 진입. card=하이라이트 카드에서, recipe=보관함의 저장된 편집본에서 */
+  clip_editor_opened: { source: 'card' | 'recipe' };
+  /** 「영상 만들기」 주문을 서버가 받음. 렌더·업로드 성공이 아니다 */
+  video_render_requested: {
+    privacy_status: PrivacyStatus;
+    thumbnail_source: ThumbnailSource;
+    made_for_kids: boolean;
+  };
+  /** 편집자 초대(기한 연장 재초대 포함) */
+  editor_invited: Record<string, never>;
+}
+
+/** 행동 이벤트를 보낸다. 분석이 꺼져 있으면(키 없음·SDK 차단) 아무 일도 하지 않는다. */
+export function track<K extends keyof AnalyticsEvents>(
+  name: K,
+  properties: AnalyticsEvents[K],
+): void {
+  withAnalytics((posthog) => {
+    posthog.capture(name, { ...properties });
+  });
+}

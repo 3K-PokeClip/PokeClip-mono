@@ -72,4 +72,16 @@
     });
   };
   document.head.appendChild(script);
+
+  // 시작 버튼(data-cta="위치") 클릭 — 곧 대시보드로 넘어가므로 기다리지 않고 비콘으로 바로 보낸다.
+  // SDK가 아직 안 붙었으면 버린다(이동을 막지 않는다)
+  document.addEventListener('click', function (event) {
+    var link = event.target && event.target.closest ? event.target.closest('a[data-cta]') : null;
+    if (!link || !window.posthog || !window.posthog.__loaded) return;
+    window.posthog.capture(
+      'landing_cta_clicked',
+      { position: link.getAttribute('data-cta') },
+      { send_instantly: true, transport: 'sendBeacon' },
+    );
+  });
 })();
