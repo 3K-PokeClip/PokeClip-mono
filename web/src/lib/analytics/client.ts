@@ -52,10 +52,11 @@ export const ANALYTICS_CONFIG: Partial<PostHogConfig> = {
   disable_product_tours: true,
   disable_conversations: true,
   disable_web_experiments: true,
-  // 피처 플래그 요청(/flags)을 끈다. 그 본문은 before_send를 거치지 않고 첫 방문 주소($initial_current_url)를
-  // 쿼리째 싣는다 — 실측(2026-10-17)에서 ?email= 이 그대로 나갔다. 플래그·설문·실험은 쓰지 않는다.
-  // 원격 설정도 함께 안 받으므로 쓸 기능은 위처럼 여기서 정한다
-  advanced_disable_flags: true,
+  // 피처 플래그 평가를 끈다 — /flags 요청이 나가지 않는다. 그 본문은 before_send를 거치지 않고 첫 방문 주소
+  // ($initial_current_url)를 쿼리째 싣는다(실측 2026-10-17: ?email= 이 그대로 나갔다). 플래그·설문·실험은 쓰지 않는다.
+  // advanced_disable_flags는 원격 설정(토큰만 싣는 GET)까지 막아서 쓰지 않는다 — 세션 녹화는 원격 설정의
+  // 「녹화 켜짐」이 있어야 시작한다(POK-358). identify·reset 뒤에도 /flags가 나가지 않는 것을 실측으로 확인했다
+  advanced_disable_feature_flags: true,
   before_send: scrubEvent,
 };
 

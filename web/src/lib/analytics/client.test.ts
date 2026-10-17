@@ -67,9 +67,11 @@ describe('initAnalytics — 키가 없으면 꺼진다(POK-356)', () => {
       respect_dnt: true,
       autocapture: false,
       disable_session_recording: true,
-      // /flags 본문은 before_send를 거치지 않고 첫 방문 주소를 쿼리째 싣는다(실측)
-      advanced_disable_flags: true,
+      // /flags 본문은 before_send를 거치지 않고 첫 방문 주소를 쿼리째 싣는다(실측) — 평가를 꺼 요청을 없앤다
+      advanced_disable_feature_flags: true,
     });
+    // 원격 설정까지 막는 옵션은 쓰지 않는다 — 녹화가 원격 설정을 요구한다
+    expect(config).not.toHaveProperty('advanced_disable_flags');
     expect(typeof config.before_send).toBe('function');
   });
 
