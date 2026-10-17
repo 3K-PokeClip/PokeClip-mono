@@ -10,6 +10,13 @@ const push = vi.fn();
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push }),
 }));
+const { track } = vi.hoisted(() => ({ track: vi.fn() }));
+vi.mock('@/lib/analytics', () => ({ track, identifyUser: vi.fn() }));
+/** 사용 통계로 나간 안내 종료 이벤트(POK-357) */
+const finished = () =>
+  track.mock.calls
+    .filter(([name]) => name === 'onboarding_tour_finished')
+    .map(([, props]) => props);
 
 // jsdom에는 scrollIntoView가 없다 — 스포트라이트 진입 시 호출되므로 스텁한다.
 beforeAll(() => {
@@ -64,6 +71,7 @@ describe('OnboardingController', () => {
   beforeEach(() => {
     window.localStorage.clear();
     push.mockClear();
+    track.mockClear();
     resetStore();
     stubFetch(homeServer);
   });
@@ -88,6 +96,7 @@ describe('OnboardingController', () => {
 
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: '둘러보기' })).toBeInTheDocument();
+    expect(finished()).toEqual([{ outcome: 'later' }]);
   });
 
   it('둘러보기 시작 — 1/6 채널 연동 카드가 뜨고 CTA가 채널 연동 화면으로 간다 (DoD)', async () => {
@@ -140,6 +149,7 @@ describe('OnboardingController', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: '둘러보기' })).toBeInTheDocument();
     expect(useOnboardingStore.getState().tourDone).toBe(true);
+    expect(finished()).toEqual([{ outcome: 'completed' }]);
   });
 
   it('건너뛰기는 어느 스텝에서든 투어를 끝낸다', async () => {
@@ -150,6 +160,7 @@ describe('OnboardingController', () => {
 
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(useOnboardingStore.getState().tourDone).toBe(true);
+    expect(finished()).toEqual([{ outcome: 'skipped' }]);
   });
 
   it('스포트라이트 타깃이 하나도 없으면 3단계 진입 시 자동 완료된다', async () => {
@@ -162,6 +173,8 @@ describe('OnboardingController', () => {
 
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(useOnboardingStore.getState().tourDone).toBe(true);
+    // 보이는 마지막 단계에서 「다음」을 눌렀으니 완료로 센다 — 이어지는 백스탑 이펙트가 한 번 더 세지 않는다
+    expect(finished()).toEqual([{ outcome: 'completed' }]);
   });
 
   // axe는 다이얼로그 요소로 스코프한다 — 테스트 스캐폴딩(landmark 없는 body 직속 렌더)이

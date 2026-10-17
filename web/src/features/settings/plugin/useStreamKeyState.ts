@@ -9,6 +9,7 @@ import {
   streamKeyStatusQueryOptions,
   type StreamKeyStatus,
 } from '@/api/streamKeys';
+import { track } from '@/lib/analytics';
 import { useOnboardingStore } from '@/stores/onboarding';
 import { useToast } from '@/ui';
 
@@ -78,6 +79,7 @@ export function useStreamKeyState(): StreamKeyState {
       }));
       // 코드 발급 = 온보딩 2단계(플러그인) 완료 (POK-113 시작 가이드 체크)
       markPluginLinked();
+      track('pairing_code_issued', {}); // 코드 값은 싣지 않는다 (POK-357)
     },
     onError: (e) => {
       if (e instanceof ApiError && e.status === 429) {

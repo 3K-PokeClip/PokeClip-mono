@@ -7,6 +7,7 @@ import { LinkButton, Spinner } from '@/ui';
 import { ReplaceLink } from '@/components/ReplaceLink';
 import { loginWithGoogle } from '@/api/auth';
 import { ApiError } from '@/api/client';
+import { track } from '@/lib/analytics';
 import { useAuthStore } from '@/stores/auth';
 import { consumeOAuthState } from './googleOAuth';
 import styles from './OAuthCallbackScreen.module.css';
@@ -87,6 +88,8 @@ export function OAuthCallbackScreen() {
         // me 캐시가 새 로그인에 새지 않도록, 토큰을 심기 전에 여기서 비운다. (리뷰 #72)
         queryClient.clear();
         useAuthStore.getState().setTokens(pair);
+        // 아직 익명으로 나간다 — 다음 화면의 AuthGuard가 회원 번호로 식별하면 그 사람에게 합쳐진다 (POK-357)
+        track('login_completed', {});
         router.replace(sanitizeReturnTo(stored.returnTo));
       })
       .catch((e: unknown) => {

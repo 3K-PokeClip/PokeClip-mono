@@ -66,7 +66,27 @@ SDK는 동적 import라 hydration 뒤에 붙을 수 있다(Next 16 `instrumentat
 
 ## 이벤트
 
-행동 이벤트 목록은 POK-357에서 이 절에 채운다. 규칙: 이름은 `대상_동사`(snake_case), 속성은 열거형·boolean·number만 — 이메일·채널 이름·채팅·토큰·스트림 키·페어링 코드·업로드 제목·설명은 넣지 않는다.
+페이지 조회(`$pageview`)·유입·기기는 SDK가 자동으로 모은다. 그 밖의 행동은 아래 이벤트만 보낸다(POK-357). 정본은 `src/lib/analytics/events.ts`의 `AnalyticsEvents` 타입이고, **새 이벤트는 이 표부터 고친다.**
+
+- 이름은 `대상_동사`(snake_case). 속성은 **열거형·boolean·number만** — 이메일·채널 이름·채팅·토큰·스트림 키·페어링 코드·업로드 제목·설명·태그는 넣을 자리가 없다(타입이 막는다).
+- **성공한 뒤에만** 보낸다(토스트 옆). 실패·취소는 세지 않는다.
+- 화면 코드는 `track(이름, 속성)`만 부른다. 분석이 꺼져 있으면 아무 일도 하지 않는다.
+
+| 이벤트                     | 언제                                                                                          | 보내는 곳                                                      | 속성                                                                                                                                       |
+| -------------------------- | --------------------------------------------------------------------------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `landing_cta_clicked`      | 랜딩 시작 버튼 7곳 클릭(비콘으로 바로)                                                        | `landing/analytics.js`(`a[data-cta]`)                          | `position`: `nav`·`sheet`(모바일 메뉴)·`hero`·`pricing_streamer`·`pricing_editor`·`final`·`bar`(하단 고정 바)                              |
+| `login_completed`          | Google 로그인 교환 성공                                                                       | `features/auth/OAuthCallbackScreen.tsx`                        | 없음                                                                                                                                       |
+| `platform_linked`          | 치지직·YouTube 연동 성공                                                                      | `features/settings/channels/{Chzzk,Youtube}CallbackScreen.tsx` | `platform`: `chzzk`·`youtube`                                                                                                              |
+| `platform_unlinked`        | 연동 해제 성공                                                                                | `features/settings/channels/use{Chzzk,Youtube}LinkState.ts`    | `platform`                                                                                                                                 |
+| `pairing_code_issued`      | 페어링 코드 발급 성공(처음·재발급)                                                            | `features/settings/plugin/useStreamKeyState.ts`                | 없음                                                                                                                                       |
+| `onboarding_tour_finished` | 처음 사용 안내가 끝남(한 번만)                                                                | `features/onboarding/TourOverlay.tsx`·`WelcomeDialog.tsx`      | `outcome`: `completed`(보이는 마지막 단계에서 「다음」)·`skipped`·`auto`(가리킬 요소가 없어 저절로)·`later`(환영 창 「나중에 볼게요」·ESC) |
+| `clip_editor_opened`       | 편집기 진입(편집 대상 마운트당 한 번 — 첫 저장 뒤 `?recipe=` 로 주소만 바뀌는 것은 세지 않음) | `features/clips/editor/studio/StudioScreen.tsx`                | `source`: `card`·`recipe`                                                                                                                  |
+| `video_render_requested`   | 「영상 만들기」 주문을 **서버가 받음**(렌더·업로드 성공 아님)                                 | `StudioScreen.tsx`의 `submitUpload`                            | `privacy_status`: `private`·`unlisted`·`public`, `thumbnail_source`: `none`·`scene`·`file`, `made_for_kids`                                |
+| `editor_invited`           | 편집자 초대 성공(기한 연장 재초대 포함)                                                       | `features/settings/editors/useEditorSettingsState.ts`          | 없음                                                                                                                                       |
+
+- **「가입」은 사람별 첫 `login_completed`** 로 센다(PostHog 「First time for user」). 로그인 응답에 신규 가입 표시가 없어서다. PostHog를 붙이기 전에 가입한 회원도 처음 로그인할 때 「첫」으로 잡히므로, 화면 이름은 「첫 로그인(PostHog 기준)」으로 쓴다.
+- `login_completed`는 식별 전에 익명으로 나간다. 다음 화면의 `AuthGuard`가 `identify`하면 그 회원에게 합쳐진다.
+- **브라우저가 모르는 일**(플러그인 연결 완료·첫 송출·하이라이트 생성·YouTube 업로드 성공)은 보내지 않는다 — DB 숫자로 본다. 서버 SDK는 이번 범위 밖이다.
 
 ## 탈퇴한 회원의 기록 삭제 (운영자, 7일 안)
 

@@ -8,6 +8,7 @@ import {
   unlinkYoutube,
   type YoutubeLinkState,
 } from '@/api/youtubeLink';
+import { track } from '@/lib/analytics';
 import { useToast } from '@/ui';
 import {
   assertYoutubeConsentUrl,
@@ -89,6 +90,7 @@ export function useYoutubeLinkState(): YoutubeLinkViewState {
       queryClient.setQueryData<YoutubeLinkState>(youtubeLinkQueryOptions.queryKey, {
         linked: false,
       });
+      track('platform_unlinked', { platform: 'youtube' });
       // destructive 표식이 undo를 컴파일 단계에서 막는다 (ADR-044). 실제로 되돌릴 수 없다 —
       // 서버가 토큰 원문을 secrets에서 지운다. 다만 구글에 revoke는 안 보내므로(ADR-052:
       // 계정 단위라 남의 연동까지 끊는다) 구글 쪽 권한은 남는다 — 그 사실과 지울 곳을

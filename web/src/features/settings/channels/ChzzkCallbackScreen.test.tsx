@@ -9,10 +9,13 @@ import { jsonResponse, stubFetch } from '@/test/mockFetch';
 import { createTestQueryClient } from '@/test/testProviders';
 import { ToastProvider } from '@/ui';
 
-const { replace, searchRef } = vi.hoisted(() => ({
+const { replace, searchRef, track } = vi.hoisted(() => ({
   replace: vi.fn(),
   searchRef: { current: new URLSearchParams() },
+  track: vi.fn(),
 }));
+
+vi.mock('@/lib/analytics', () => ({ track, identifyUser: vi.fn() }));
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ replace }),
@@ -49,6 +52,7 @@ beforeEach(() => {
   window.sessionStorage.clear();
   window.localStorage.clear();
   replace.mockReset();
+  track.mockReset();
   searchRef.current = new URLSearchParams('code=code-1&state=state-1');
   useAuthStore.setState({ accessToken: 'access-1', refreshToken: 'refresh-1', hydrated: true });
 });
@@ -75,6 +79,8 @@ describe('ChzzkCallbackScreen', () => {
     // 이전 계정 채널을 되살리지 않게, 비워서 목적지가 처음부터 읽게 한다
     expect(queryClient.getQueryData(chzzkLinkQueryOptions.queryKey)).toBeUndefined();
     expect(document.body.innerHTML).not.toContain('chan-secret-1');
+    // 사용 통계 — 플랫폼만, 채널 ID·이름은 싣지 않는다(POK-357)
+    expect(track.mock.calls).toEqual([['platform_linked', { platform: 'chzzk' }]]);
   });
 
   it('StrictMode 이중 마운트에도 교환은 정확히 한 번이다 — code는 1회용이다', async () => {
@@ -108,6 +114,7 @@ describe('ChzzkCallbackScreen', () => {
     await waitFor(() => expect(replace).toHaveBeenCalledWith('/settings/channels'));
     // 서버 reason 원문이 화면에 새지 않는다
     expect(document.body.textContent).not.toContain(reason);
+    expect(track).not.toHaveBeenCalled(); // 실패는 세지 않는다
   });
 
   it('5xx는 도달 실패 문구로 — 연동을 다시 시작하라고 알린다 (POK-217)', async () => {

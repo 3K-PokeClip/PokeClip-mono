@@ -14,6 +14,7 @@ import {
   type EditorInviteMessage,
   type SentInvitation,
 } from '@/api/editors';
+import { track } from '@/lib/analytics';
 import { useToast } from '@/ui';
 
 // 편집자 관리 실상태 훅 (POK-208) — useChzzkLinkState와 같은 규약이다: 상태 판단은
@@ -82,6 +83,7 @@ export function useEditorSettingsState(): EditorSettingsViewState {
     mutationFn: inviteEditor,
     onSuccess: () => {
       setInviteOpen(false);
+      track('editor_invited', {}); // 상대 이메일은 싣지 않는다 (POK-357)
       // 기한 연장(재초대)도 같은 201·같은 문구다 — 사용자 입장에서 결과는 "초대가 살아 있다"로 같다.
       toast({
         tone: 'success',
