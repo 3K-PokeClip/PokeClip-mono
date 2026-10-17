@@ -114,8 +114,8 @@ jobs:
           echo "TF_PLUGIN_CACHE_DIR=${RUNNER_TEMP}/terraform-plugin-cache" >>"${GITHUB_ENV}"
 
       # sha256 출처: tflint v0.64.0 릴리스의 checksums.txt 중 tflint_linux_amd64.zip 줄(2026-10-17 —
-      # 그 파일의 gh attestation · cosign keyless 서명도 확인, 주체는 그 저장소의
-      # release.yml@refs/tags/v0.64.0 · 발급자는 GitHub Actions OIDC).
+      # 그 파일을 gh attestation verify --signer-workflow로 확인, 서명 워크플로는 그 저장소의
+      # release.yml · ref는 refs/tags/v0.64.0 · 발급자는 GitHub Actions OIDC).
       # 판을 올리는 법은 머리 주석.
       - name: tflint 0.64.0 설치(sha256 고정)
         run: |
@@ -268,7 +268,8 @@ jobs:
           persist-credentials: false
 
       # sha256 출처: conftest v0.71.1 릴리스의 checksums.txt 중 Linux_x86_64.tar.gz 줄(2026-10-17 —
-      # 그 파일의 gh attestation도 확인, 주체는 그 저장소의 release.yaml@refs/tags/v0.71.1).
+      # 그 파일을 gh attestation verify --signer-workflow로 확인, 서명 워크플로는 그 저장소의
+      # release.yaml · ref는 refs/tags/v0.71.1).
       # 판을 올리는 법은 머리 주석. guard.sh는 conftest 출력 형식에 기대므로 판을 올릴 때는
       # guard_test를 함께 본다(README 한계).
       - name: conftest 0.71.1 설치(sha256 고정)
