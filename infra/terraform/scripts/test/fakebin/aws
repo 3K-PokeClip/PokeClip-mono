@@ -2,9 +2,9 @@
 #
 # put_secret_test.sh 의 가짜 aws. AWS 에 접속하지 않는다.
 #
-# 받은 인자(한 줄에 하나) · 환경 · 받은 값을 FAKE_AWS_DIR 에 적고, 부를 때마다
-# calls 에 한 줄을 더한다. 시험은 PATH 에 fakebin 만 두므로 셸 내장과 절대
-# 경로(/usr/bin/env)만 쓴다.
+# 받은 인자(한 줄에 하나) · 환경(시험이 보는 이름만 — record_env) · 받은 값을
+# FAKE_AWS_DIR 에 적고, 부를 때마다 calls 에 한 줄을 더한다. 시험은 PATH 에
+# fakebin 만 두므로 셸 내장만 쓴다.
 #
 # 값을 받는 방식은 aws-cli 2.36.7 의 실제 거동을 따른다(2026-10-17 실측):
 #   --secret-string file:///dev/stdin  표준 입력을 한 번 읽는다(정상 경로).
@@ -118,6 +118,25 @@ receive_value() {
 }
 
 #######################################
+# 받은 환경 중 시험이 보는 이름만 「이름=값」 줄로 FAKE_AWS_DIR/env 에 적는다:
+# AWS_* · HOME · TMPDIR · SHELL · LC_ALL · PATH · SHELLOPTS · secret_value
+# (스크립트의 값 변수 — export 된 채 오면 값 0건 검사가 잡는다). 호출자 셸의
+# 다른 환경(살아 있는 토큰 변수 등)은 사례 파일에 옮기지 않는다.
+# Globals:
+#   FAKE_AWS_DIR
+#######################################
+record_env() {
+  local name
+  for name in $(compgen -e); do
+    case "${name}" in
+      AWS_* | HOME | TMPDIR | SHELL | LC_ALL | PATH | SHELLOPTS | secret_value)
+        printf '%s=%s\n' "${name}" "${!name-}"
+        ;;
+    esac
+  done >"${FAKE_AWS_DIR}/env"
+}
+
+#######################################
 # FAKE_AWS_MODE 에 맞는 응답(표준 출력 · 표준 오류)을 내고, 실패 모드면 그
 # 종료 코드로 끝낸다.
 # Globals:
@@ -178,7 +197,7 @@ main() {
   fi
   printf 'call\n' >>"${FAKE_AWS_DIR}/calls"
   printf '%s\n' "$@" >"${FAKE_AWS_DIR}/argv"
-  /usr/bin/env >"${FAKE_AWS_DIR}/env"
+  record_env
   receive_value "$@"
   respond
 }

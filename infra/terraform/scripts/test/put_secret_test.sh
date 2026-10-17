@@ -13,6 +13,8 @@
 # 본다. 거부 · 실패 사례에서는 표준 오류가 정해진 줄과 바이트 그대로 같은지(끝
 # 줄바꿈 · 빈 줄 포함) 보고, aws 호출이 거부는 0회 · aws 실패는 1회인지 본다.
 # 추적(bash -x · SHELLOPTS)이나 allexport 를 켠 호출도 값을 내지 않는지 본다.
+# 호출자 셸의 환경(살아 있는 토큰 변수 등)은 사례 파일에 옮기지 않는다 — 가짜
+# aws 는 환경 중 시험이 보는 이름만 적고, 시험은 표지 변수가 남지 않는지 본다.
 # 사례 밖으로 쓰는 길(파일 대상 리다이렉션 · 다른 명령 · 셸)은 소스로 본다.
 #
 # 정적 검사(no-file-writes · no-external-commands · no-endpoint-override ·
@@ -78,6 +80,11 @@ readonly EXPECTED_ARGV_HEAD
 readonly EXPECTED_ARGV_TAIL='--secret-string file:///dev/stdin'
 # 사례 수(ok · skip 줄의 수). 사례를 더하거나 빼면 함께 고친다.
 readonly EXPECTED_CASES=49
+# 호출자 환경의 표지 변수(셸에 살아 있는 토큰 변수를 흉내 낸 가짜 값). 사례
+# 디렉터리 어디에도 남지 않아야 한다 — 가짜 aws 는 환경 중 시험이 보는
+# 이름만 적는다.
+readonly PUT_SECRET_TEST_CANARY='PutSecretTestCallerCanary'
+export PUT_SECRET_TEST_CANARY
 
 failures=0
 passes=0
@@ -417,10 +424,10 @@ expect_usage() {
 #######################################
 # 성공 경로를 본다: 종료 0 · 이름 + VersionId 한 줄 · aws 1회 · 인자 · 받은
 # 값 · AWS_PAGER · 고정한 로캘(LC_ALL — 시험 로캘이 실제로 걸렸는지) · 사례
-# HOME · TMPDIR · SHELL(격리가 실제로 걸렸는지) · 값과 계정 ID 0건 · 남은 것
-# 없음.
+# HOME · TMPDIR · SHELL(격리가 실제로 걸렸는지) · 호출자 환경의 표지 변수가
+# 사례 디렉터리에 없음 · 값과 계정 ID 0건 · 남은 것 없음.
 # Globals:
-#   case_dir, input, out, err, status, utf8_locale
+#   case_dir, input, out, err, status, utf8_locale, PUT_SECRET_TEST_CANARY
 # Arguments:
 #   사례 이름, 종류, 기대값이 든 파일, 값 표지.
 #######################################
@@ -461,6 +468,11 @@ expect_put() {
     "${env}" != *$'\nSHELL=/nonexistent/put-secret-test\n'* ]]; then
     fail "${name}: aws 환경의 HOME · TMPDIR · SHELL 이 사례 값이 아님(격리" \
       "안 됨)"
+    return
+  fi
+  if grep -rqF -- "${PUT_SECRET_TEST_CANARY}" "${case_dir}"; then
+    fail "${name}: 호출자 환경의 표지 변수가 사례 디렉터리에 남음(가짜 aws" \
+      "환경 기록이 허용 목록 밖을 적음)"
     return
   fi
   if ! cmp -s -- "${case_dir}/aws/stdin" "${expected}"; then
