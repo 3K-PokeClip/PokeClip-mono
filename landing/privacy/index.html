@@ -279,7 +279,8 @@
       <section id="ai" aria-labelledby="ai-title">
         <h2 id="ai-title">12. 인공지능 관련 처리</h2>
         <div class="legal-body">
-          <p>현재 서비스에는 생성형 인공지능 기능이 없습니다. 회원 콘텐츠와 채팅 데이터를 인공지능 모델 학습에 쓰지 않습니다. 인공지능 기능을 도입하면 그 용도, 처리하는 정보, 학습 활용 여부를 이 방침에 추가하고 미리 알립니다.</p>
+          <p>현재 서비스에는 생성형 인공지능 기능이 없습니다. 하이라이트 후보는 채팅량 통계로 찾고(11절), 사람의 얼굴·목소리·모습을 인공지능으로 생성하거나 바꾸지 않습니다. 클립은 스트리머의 방송 영상과 음성을 잘라 편집해 만듭니다. 회원 콘텐츠와 채팅 데이터를 인공지능 모델 학습에 쓰지 않습니다. 인공지능 기능을 도입하면 그 용도, 처리하는 정보, 학습 활용 여부를 이 방침에 추가하고 미리 알립니다.</p>
+          <p><strong>서비스는 Google API와 Google 사용자 데이터를 당사자 동의 없이 인공지능으로 만든 성적 이미지·영상(AI-generated Non-Consensual Intimate Imagery, AI NCII)이나 그 밖의 성적으로 노골적인 콘텐츠를 만들거나 요청하거나 퍼뜨리는 데 쓰지 않습니다.</strong></p>
         </div>
       </section>
 
@@ -289,13 +290,20 @@
           <ul>
             <li>서비스는 <strong>YouTube API 서비스</strong>를 사용합니다.</li>
             <li>접근하는 정보: 연동을 확인하는 YouTube 채널 ID와 채널 이름, 서비스가 올린 영상의 ID와 처리 상태, 동영상 업로드 권한(youtube.upload)과 채널 조회 권한(youtube.readonly).</li>
+            <li>권한별 용도: 서비스는 아래 권한만 요청하고, 각 권한을 적힌 용도에만 씁니다.
+              <ul>
+                <li>Google 로그인(openid·email·profile): Google 계정 고유 식별자·이메일·이름·프로필 사진 주소를 받아 1절의 목적(회원 가입, 본인 식별, 로그인 유지, 서비스 알림)에만 씁니다.</li>
+                <li>동영상 업로드 권한(youtube.upload): 회원이 「영상 만들기」로 요청한 클립 영상과 업로드 정보를 연동한 스트리머의 채널에 올리고, 고른 썸네일을 그 영상에 붙이는 데만 씁니다.</li>
+                <li>채널 조회 권한(youtube.readonly): 연동할 때 고른 YouTube 채널의 ID와 이름을 확인해 화면에 보여 주고, 아래 「저장」에 적은 대로 그 정보와 올린 영상이 아직 있는지 다시 확인하는 데만 씁니다.</li>
+              </ul>
+            </li>
             <li>이용 방법: 스트리머나 스트리머가 위임한 편집자가 편집기의 「영상 만들기」에서 업로드 정보(제목·설명·태그·공개 범위·아동용 여부·썸네일)를 정하면, 영상이 완성되는 즉시 그 정보대로 스트리머의 채널에 올립니다. 완성된 영상을 따로 확인하는 단계는 없습니다. <strong>공개 범위를 「공개」로 고르면 올라가는 즉시 누구나 볼 수 있고, 구독자에게 알림이 갈 수 있습니다.</strong> 썸네일은 영상이 올라간 뒤 따로 붙입니다. 업로드 정보를 정해 요청하지 않은 영상은 올리지 않으며, 올린 뒤의 공개 범위 변경과 삭제는 스트리머가 YouTube에서 할 수 있습니다.</li>
             <li>공유: 5절과 7절에 적은 경우 말고는 공유하지 않습니다.</li>
             <li>쿠키와 분석 도구: 서비스는 9절의 쿠키와 브라우저 저장소를 쓰고, 분석 도구(PostHog)가 방문자의 브라우저에서 이용 분석 정보를 수집합니다(2절·7절). Google에서 받은 사용자 데이터(YouTube 채널 ID·채널 이름, 영상 정보)는 분석 도구에 보내지 않습니다.</li>
             <li>저장: 접근 토큰은 암호화해 두고 연동 해제나 탈퇴 때 바로 지웁니다. YouTube에서 받은 채널 ID·채널 이름과 업로드한 영상의 ID는 연동 중에는 30일마다 YouTube에서 다시 확인해 갱신하고, 서비스에서 연동을 해제하거나 탈퇴하면 7일 안에, Google에서 권한을 철회했거나 접근 토큰을 갱신할 수 없게 되면 30일 안에 지웁니다.</li>
             <li>권한 철회: 서비스에서 연동을 해제하면 Google에도 권한 취소를 바로 요청합니다. <a href="https://security.google.com/settings/security/permissions" target="_blank" rel="noopener noreferrer">Google 보안 설정 페이지</a>에서도 언제든 서비스의 접근 권한을 철회할 수 있습니다.</li>
             <li>Google의 개인정보 처리는 <a href="http://www.google.com/policies/privacy" target="_blank" rel="noopener noreferrer">Google 개인정보처리방침</a>을 따릅니다.</li>
-            <li>PokeClip이 Google API로 받은 정보를 쓰고 다른 앱으로 보내는 방식은 제한적 사용(Limited Use) 요건을 포함한 <a href="https://developers.google.com/terms/api-services-user-data-policy" target="_blank" rel="noopener noreferrer">Google API 서비스 사용자 데이터 정책</a>을 따릅니다. Google 사용자 데이터를 광고나 인공지능 모델 학습에 쓰지 않습니다.</li>
+            <li>PokeClip이 Google API로 받은 정보를 쓰고 다른 앱으로 보내는 방식은 제한적 사용(Limited Use) 요건을 포함한 <a href="https://developers.google.com/terms/api-services-user-data-policy" target="_blank" rel="noopener noreferrer">Google API 서비스 사용자 데이터 정책</a>을 따릅니다. Google 사용자 데이터를 광고나 인공지능 모델 학습에 쓰지 않고, AI NCII나 성적 콘텐츠를 만드는 데에도 쓰지 않습니다(12절).</li>
             <li>문의: <a href="mailto:3k.pokeclip@gmail.com">3k.pokeclip@gmail.com</a></li>
           </ul>
         </div>
