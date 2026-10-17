@@ -5,14 +5,15 @@
 #
 # PATH 를 가짜 aws 디렉터리 하나로 두고(스크립트가 aws 밖의 외부 명령을 부르면
 # 실패한다), AWS 프로필 · 키 환경을 지운 하위 셸에서 스크립트를 돌린다. 사례마다
-# TMPDIR · HOME 은 빈 디렉터리로 주고, 로캘은 UTF-8 로 고정한다(없으면 skip). 가짜
-# aws 는 aws-cli 2.36.7 처럼 값을 받고(fakebin/aws 머리 주석), 받은 인자 · 환경 ·
-# 값을 사례 디렉터리에 적는다. 시험은 인자(비밀 이름 · 값 넘기는 법)와 받은 값을
-# 대조하고, 값이 가짜 aws 의 인자 · 환경, 스크립트의 표준 출력 · 표준 오류, 사례
-# 디렉터리의 다른 파일 어디에도 없는지 본다. 거부 사례에서는 aws 호출이 0회이고
-# 표준 오류가 거부 한 줄뿐인지 본다. 추적(bash -x · SHELLOPTS)이나 allexport 를
-# 켠 호출도 값을 내지 않는지 본다. 사례 밖으로 쓰는 길(파일 대상 리다이렉션 ·
-# 다른 명령 · 셸)은 소스로 본다.
+# TMPDIR · HOME 은 빈 디렉터리로, SHELL 은 없는 경로로 주고, 로캘은 UTF-8 로
+# 고정한다(없으면 skip). 가짜 aws 는 aws-cli 2.36.7 처럼 값을 받고(fakebin/aws
+# 머리 주석), 받은 인자 · 환경 · 값을 사례 디렉터리에 적는다. 시험은 인자(비밀
+# 이름 · 값 넘기는 법)와 받은 값을 대조하고, 값이 가짜 aws 의 인자 · 환경,
+# 스크립트의 표준 출력 · 표준 오류, 사례 디렉터리의 다른 파일 어디에도 없는지
+# 본다. 거부 · 실패 사례에서는 표준 오류가 정해진 줄과 바이트 그대로 같은지(끝
+# 줄바꿈 · 빈 줄 포함) 보고, aws 호출이 거부는 0회 · aws 실패는 1회인지 본다.
+# 추적(bash -x · SHELLOPTS)이나 allexport 를 켠 호출도 값을 내지 않는지 본다.
+# 사례 밖으로 쓰는 길(파일 대상 리다이렉션 · 다른 명령 · 셸)은 소스로 본다.
 #
 # 실물 CLI 계약: PATH 에 진짜 aws 가 있으면 가짜 자격 · 빈 설정 · 격리 HOME ·
 # 닫힌 로컬 주소(AWS_ENDPOINT_URL=http://127.0.0.1:9)로 스크립트를 끝까지 돌려,
@@ -177,7 +178,8 @@ write_pem() {
 #######################################
 # put-secret-from-file.sh 를 돌린다. AWS 자격 증명 환경을 지운 하위 셸에서,
 # PATH 는 가짜 aws 디렉터리 하나 · TMPDIR 과 HOME 은 사례의 빈 디렉터리 ·
-# 로캘은 UTF-8(있으면) · 표준 입력은 /dev/null 로.
+# SHELL 은 없는 경로(스크립트가 "${SHELL}" -c 로 값을 다른 셸의 인자에 넘기면
+# 깨지게) · 로캘은 UTF-8(있으면) · 표준 입력은 /dev/null 로.
 # Globals:
 #   case_dir, out, err, status, utf8_locale
 # Arguments:
@@ -199,6 +201,7 @@ run_put_as() {
     export AWS_EC2_METADATA_DISABLED=true
     export FAKE_AWS_DIR="${case_dir}/aws" FAKE_AWS_MODE="${mode}"
     export TMPDIR="${case_dir}/tmp" HOME="${case_dir}/home"
+    export SHELL=/nonexistent/put-secret-test
     if [[ -n "${utf8_locale}" ]]; then
       export LC_ALL="${utf8_locale}"
     fi
@@ -260,6 +263,27 @@ contents_of() {
   if [[ -f "$1" ]]; then
     printf '%s' "$(<"$1")"
   fi
+}
+
+#######################################
+# 스크립트의 표준 오류가 주어진 줄들(줄마다 끝 줄바꿈 하나)과 바이트 그대로
+# 같은지 본다 — 덧붙은 줄 · 빈 줄 · 끝 줄바꿈 차이도 다르다고 본다. 명령 치환은
+# 끝 줄바꿈을 지우므로 파일을 read -d '' 로 끝까지 읽는다(NUL 에서 멈추면 0 을
+# 내므로 다르다고 본다).
+# Globals:
+#   case_dir
+# Arguments:
+#   기대 줄들.
+# Returns:
+#   다르면 1.
+#######################################
+stderr_is() {
+  local actual="" expected
+  if IFS= read -r -d '' actual <"${case_dir}/stderr"; then
+    return 1
+  fi
+  printf -v expected '%s\n' "$@"
+  [[ "${actual}" == "${expected}" ]]
 }
 
 #######################################
@@ -335,9 +359,9 @@ expect_no_violation() {
 }
 
 #######################################
-# 입력을 넣기 전에 거부하는지 본다: 종료 3 · 표준 오류가 거부 한 줄뿐 · aws
-# 호출 0 · 출력에 값 없음. 이유를 완전한 문자열로 대조해, 이유에 값 조각이
-# 덧붙으면 잡는다.
+# 입력을 넣기 전에 거부하는지 본다: 종료 3 · 표준 오류가 거부 한 줄과 바이트
+# 그대로 같음 · aws 호출 0 · 출력에 값 없음. 이유를 완전한 문자열로 대조해,
+# 이유에 값 조각이나 빈 줄이 덧붙으면 잡는다.
 # Globals:
 #   input, out, err, status
 # Arguments:
@@ -350,7 +374,7 @@ expect_rejected() {
     fail "${name}: 종료 ${EXIT_REJECTED} 를 기대했으나 ${status} — ${err}"
     return
   fi
-  if [[ "${err}" != "SECRET PUT REJECTED: ${reason}" ]]; then
+  if ! stderr_is "SECRET PUT REJECTED: ${reason}"; then
     fail "${name}: 표준 오류가 「SECRET PUT REJECTED: ${reason}」 한 줄이" \
       "아님 — ${err}"
     return
@@ -387,8 +411,9 @@ expect_usage() {
 
 #######################################
 # 성공 경로를 본다: 종료 0 · 이름 + VersionId 한 줄 · aws 1회 · 인자 · 받은
-# 값 · AWS_PAGER · 고정한 로캘(LC_ALL — 시험 로캘이 실제로 걸렸는지) · 값과
-# 계정 ID 0건 · 남은 것 없음.
+# 값 · AWS_PAGER · 고정한 로캘(LC_ALL — 시험 로캘이 실제로 걸렸는지) · 사례
+# HOME · TMPDIR · SHELL(격리가 실제로 걸렸는지) · 값과 계정 ID 0건 · 남은 것
+# 없음.
 # Globals:
 #   case_dir, input, out, err, status, utf8_locale
 # Arguments:
@@ -426,6 +451,13 @@ expect_put() {
     fail "${name}: aws 환경에 LC_ALL=${utf8_locale} 가 없음(로캘 고정 안 됨)"
     return
   fi
+  if [[ "${env}" != *$'\n'"HOME=${case_dir}/home"$'\n'* ||
+    "${env}" != *$'\n'"TMPDIR=${case_dir}/tmp"$'\n'* ||
+    "${env}" != *$'\nSHELL=/nonexistent/put-secret-test\n'* ]]; then
+    fail "${name}: aws 환경의 HOME · TMPDIR · SHELL 이 사례 값이 아님(격리" \
+      "안 됨)"
+    return
+  fi
   if ! cmp -s -- "${case_dir}/aws/stdin" "${expected}"; then
     fail "${name}: aws 가 받은 값이 기대와 다름"
     return
@@ -459,23 +491,25 @@ expect_put_quiet() {
 }
 
 #######################################
-# aws 가 실패할 때를 본다: 종료 코드 · 고정 줄 · aws 1회(다시 시도 안 함) ·
-# 값 · 계정 ID · ARN 0건.
+# aws 가 실패할 때를 본다: 종료 코드 · 표준 오류가 고정 줄들과 바이트 그대로
+# 같음(값 조각 · 빈 줄이 덧붙으면 잡음) · aws 1회(다시 시도 안 함) · 값 · 계정
+# ID · ARN 0건.
 # Globals:
 #   input, out, err, status
 # Arguments:
-#   사례 이름, 가짜 aws 모드, 기대 종료 코드, 표준 오류의 기대 줄.
+#   사례 이름, 가짜 aws 모드, 기대 종료 코드, 표준 오류의 기대 줄들.
 #######################################
 expect_aws_failure() {
-  local name="$1" mode="$2" code="$3" line="$4"
+  local name="$1" mode="$2" code="$3"
+  shift 3
   run_put "${mode}" cdn-secret "${input}"
   expect_no_violation "${name}" || return
   if [[ "${status}" -ne "${code}" ]]; then
     fail "${name}: 종료 ${code} 를 기대했으나 ${status} — ${err}"
     return
   fi
-  if [[ $'\n'"${err}"$'\n' != *$'\n'"${line}"$'\n'* || -n "${out}" ]]; then
-    fail "${name}: 표준 오류에 「${line}」 줄이 없거나 표준 출력이 있음 — ${err}"
+  if ! stderr_is "$@" || [[ -n "${out}" ]]; then
+    fail "${name}: 표준 오류가 「$*」 와 같지 않거나 표준 출력이 있음 — ${err}"
     return
   fi
   if [[ "$(aws_calls)" -ne 1 ]]; then
@@ -487,7 +521,7 @@ expect_aws_failure() {
   expect_absent "${name}" "${FAKE_ACCOUNT}" || return
   expect_absent "${name}" "arn:aws" || return
   expect_no_leftovers "${name}" "${ONE_LINE_MARKER}" || return
-  pass "${name} → ${line}"
+  pass "${name} → $1"
 }
 
 #######################################
@@ -633,13 +667,16 @@ test_one_line() {
 # 때도 실패.
 #######################################
 test_aws_failures() {
+  local denied_note="SCP 멈춤 규칙 — 다시 시도하지 말고 kty 에게 보고"
+  local no_version_note="응답에 VersionId 가 없음 — describe-secret 으로 버전 확인"
   new_case || return
   write_input '%s\n' "${ONE_LINE_VALUE}"
-  expect_aws_failure denied denied "${EXIT_DENIED}" "SECRET PUT DENIED"
+  expect_aws_failure denied denied "${EXIT_DENIED}" "SECRET PUT DENIED" \
+    "${denied_note}"
   new_case || return
   write_input '%s\n' "${ONE_LINE_VALUE}"
   expect_aws_failure denied-short denied-short "${EXIT_DENIED}" \
-    "SECRET PUT DENIED"
+    "SECRET PUT DENIED" "${denied_note}"
   new_case || return
   write_input '%s\n' "${ONE_LINE_VALUE}"
   expect_aws_failure other-error error "${EXIT_FAILED}" \
@@ -655,13 +692,14 @@ test_aws_failures() {
   new_case || return
   write_input '%s\n' "${ONE_LINE_VALUE}"
   expect_aws_failure no-version-id no-version "${EXIT_FAILED}" \
-    "SECRET PUT FAILED UNKNOWN"
+    "SECRET PUT FAILED UNKNOWN" "${no_version_note}"
   test_aws_missing
 }
 
 #######################################
-# PATH 에 aws 가 없으면 검사를 통과한 뒤 실패(종료 5)하고 값은 안 나온다. 다른
-# 사례와 같이 격리한 셸(run_put_as)에서 돌리고 남은 것도 본다.
+# PATH 에 aws 가 없으면 검사를 통과한 뒤 실패(종료 5)하고 값은 안 나온다 —
+# 표준 오류는 고정 두 줄과 바이트 그대로 같다. 다른 사례와 같이 격리한
+# 셸(run_put_as)에서 돌리고 남은 것도 본다.
 # Globals:
 #   input, err, status
 #######################################
@@ -669,8 +707,9 @@ test_aws_missing() {
   new_case || return
   write_input '%s\n' "${ONE_LINE_VALUE}"
   run_put_as no-aws ok cdn-secret "${input}"
-  if [[ "${status}" -ne "${EXIT_FAILED}" || "${err}" != *"aws CLI"* ]]; then
-    fail "aws-missing: 종료 ${EXIT_FAILED} · aws CLI 안내를 기대했으나" \
+  if [[ "${status}" -ne "${EXIT_FAILED}" ]] ||
+    ! stderr_is "SECRET PUT FAILED UNKNOWN" "aws CLI 가 PATH 에 없음"; then
+    fail "aws-missing: 종료 ${EXIT_FAILED} · aws CLI 안내 두 줄을 기대했으나" \
       "${status} — ${err}"
     return
   fi
@@ -697,8 +736,9 @@ test_quiet_shells() {
 # 본다. 가짜 자격 · 빈 설정 · 격리 HOME 이고 울타리는 둘이다 — 엔드포인트
 # (AWS_ENDPOINT_URL)를 닫힌 로컬 주소 127.0.0.1:9 로 두고, 프록시도 같은
 # 주소로 두되 NO_PROXY 는 127.0.0.1 만이다. 엔드포인트 설정을 읽지 않는 CLI 의
-# 요청도 닫힌 로컬 프록시에서 끊겨 AWS 에 닿지 않는다. 진짜 aws 가 없으면
-# skip.
+# 요청도 닫힌 로컬 프록시에서 끊겨 AWS 에 닿지 않는다. SHELL 도 가짜 사례처럼
+# 없는 경로로 둔다(진짜 aws 가 SHELL 없이 도는지도 함께 본다). 진짜 aws 가
+# 없으면 skip.
 # Globals:
 #   case_dir, input, out, err, status
 #######################################
@@ -729,6 +769,7 @@ test_real_cli_contract() {
     export HTTP_PROXY=http://127.0.0.1:9 http_proxy=http://127.0.0.1:9
     export NO_PROXY=127.0.0.1 no_proxy=127.0.0.1
     export HOME="${case_dir}/cli-home" TMPDIR="${case_dir}/tmp"
+    export SHELL=/nonexistent/put-secret-test
     export AWS_ACCESS_KEY_ID=testing AWS_SECRET_ACCESS_KEY=testing
     export AWS_CONFIG_FILE=/dev/null AWS_SHARED_CREDENTIALS_FILE=/dev/null
     export AWS_EC2_METADATA_DISABLED=true AWS_MAX_ATTEMPTS=1
@@ -745,8 +786,8 @@ test_real_cli_contract() {
     fail "real-cli-contract(${version}): CLI 가 값 넘기는 법을 거부 — ${err}"
     return
   fi
-  if [[ "${status}" -ne "${EXIT_FAILED}" || -n "${out}" ||
-    "${err}" != "SECRET PUT FAILED ENDPOINT" ]]; then
+  if [[ "${status}" -ne "${EXIT_FAILED}" || -n "${out}" ]] ||
+    ! stderr_is "SECRET PUT FAILED ENDPOINT"; then
     fail "real-cli-contract(${version}): 종료 ${EXIT_FAILED} · ENDPOINT 를" \
       "기대했으나 ${status} — ${err}"
     return
