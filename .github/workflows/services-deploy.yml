@@ -5,16 +5,20 @@
 # 레지스트리를 넣으면 리포지토리·수명주기 정책·pull 권한이 함께 늘기 때문이다.
 # 빌드가 EC2 를 넘어서는 날 ECR 로 옮긴다 — 그때 바뀌는 것은 이 파일뿐이다.
 #
-# 자격증명은 액세스 키다. OIDC 를 먼저 붙였는데 이 계정에서 거부됐다 —
-# sub·audience·인증서 지문이 전부 일치하고 IAM 전파도 기다렸는데
-# "Not authorized to perform sts:AssumeRoleWithWebIdentity" 가 났다.
-# 이 계정은 상위 조직의 멤버 계정이고(Organizations API 가 권한 거부) SCP 가
-# 외부 신원 페더레이션을 막는 것으로 보이나 확증은 못 했다.
-#
-# 대신 키의 권한을 "dev EC2 한 대에 셸 보내기" 하나로 묶었다
-# (IAM 사용자 pokeclip-dev-deployer). 키가 새더라도 그 이상은 못 한다.
-# SCP 가 풀리는 날 이 잡의 자격증명 스텝만 role-to-assume 으로 되돌리면 된다 —
-# 역할 pokeclip-dev-deploy 와 OIDC 공급자는 지우지 않고 남겨 뒀다.
+# 자격증명은 GitHub OIDC 로 받는 역할 pokeclip-dev-deploy 다. 역할 권한은 둘뿐이다 —
+# 명령 실행은 dev EC2 한 대에만(SendCommand), 결과 읽기는 GetCommandInvocation 하나다.
+# 결과 읽기의 대상은 * 라 명령 ID 와 인스턴스 ID 를 알면 다른 명령의 결과도 읽힌다
+# (ID 를 찾는 목록 조회 ListCommandInvocations 는 주지 않는다).
+# 2026-08-19 에 OIDC 가 거부돼 한동안 액세스 키로 우회했다. 원인은 SCP 가 아니라
+# 신뢰 정책의 sub 형식이었다 — 이 저장소 토큰의 sub 는 GitHub 고정 subject
+# (repo:소유자@ID/저장소@ID:…)인데 신뢰 정책은 옛 이름 형식만 받았다.
+# 신뢰 조건은 그 형식의 environment dev-deploy 단위로 묶인다(POK-367). environment 의
+# 배포 브랜치는 develop 하나라, develop 밖 브랜치와 이 environment 를 쓰지 않는 잡은
+# 이 역할로 로그인하지 못한다. 그러니 다른 워크플로가 같은 environment 를 쓰지 않게 둔다.
+# 옮기는 동안(POK-367 2단계 전)은 신뢰 조건이 옛 develop 브랜치 sub 도 받는다 — 그동안은
+# develop 에서 도는 다른 OIDC 잡도 로그인될 수 있다. 2단계에서 옛 값을 빼고 이 줄을 지운다.
+# 잡의 environment 를 바꾸거나 빼면 토큰의 sub 가 바뀐다 — 신뢰 조건도 같은 걸음에서
+# 바꿔야 로그인된다.
 name: services-deploy
 
 on:
@@ -24,8 +28,8 @@ on:
       - 'services/**'
       - '.github/workflows/services-deploy.yml' # 이 파일을 고치는 커밋은 이 파일로 검증한다
 
-# 액세스 키를 쓰므로 id-token 은 필요 없다. contents 는 checkout 용이 아니라
-# (이 잡은 체크아웃하지 않는다) 기본값을 좁히기 위해 명시한다.
+# contents 는 checkout 용이 아니라(이 잡은 체크아웃하지 않는다) 기본값을 좁히기 위해
+# 명시한다. OIDC 토큰 권한(id-token)은 잡 deploy 에만 준다.
 permissions:
   contents: read
 
@@ -38,14 +42,23 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    # 역할 신뢰 조건이 이 environment 단위다(맨 위 주석).
+    environment: dev-deploy
+    # 잡에 permissions 를 주면 맨 위 값을 물려받지 않으므로 contents 도 다시 적는다.
+    # id-token 은 OIDC 토큰을 받는 데 쓴다.
+    permissions:
+      contents: read
+      id-token: write
     # 아래 기다리기(195회 × 15초 = 약 49분)와 https 확인(최대 400초)을 담는다. 서버 넷을 같은 상자에서
     # 하나씩 구우므로 둘만 굽던 때(30분)보다 길다. 첫 배포에서 잰 시간을 보고 줄인다(POK-331).
     timeout-minutes: 60
     steps:
       - uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          # 역할 최대 세션 1시간 · 잡 60분(timeout-minutes). 잡을 60분 넘게 늘리면
+          # 뒤쪽 aws 호출이 세션 만료로 실패한다.
+          role-duration-seconds: 3600
           aws-region: ap-northeast-2
 
       - name: dev 서버를 최신 develop 으로 갱신한다
