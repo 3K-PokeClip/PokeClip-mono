@@ -184,17 +184,22 @@ PR 리뷰가 막습니다 — 실제 누출 방어는 실행 시험(실물 CLI �
 
 `infra/terraform/**` · `infra/media-host/**` 를 고친 PR 에서는
 `.github/workflows/infra-ci.yml`(infra-ci)이 위 명령을 모두 돌립니다.
-도구(terraform 1.16.4 · conftest 0.71.1 · shellcheck 0.11.0)는 sha256 을
-고정해 내려받습니다. 필수 체크가 아니므로 머지 전에 PR 화면의 체크 목록에서
-infra-ci 의 세 체크(terraform · guard · shell)가 초록인지 확인합니다.
-**체크가 목록에 없으면 통과가 아니라 돌지 않은 것입니다** — 위 명령을 손으로
-돌리고 결과를 PR 에 적습니다. CI 의 한계는 다음과 같습니다.
+도구(terraform 1.16.4 · tflint 0.64.0 · conftest 0.71.1 · shellcheck
+0.11.0)는 sha256 을 고정해 내려받습니다. 필수 체크가 아니므로 머지 전에 PR
+화면의 체크 목록에서 infra-ci 의 세 체크(terraform · guard · shell)가
+초록인지 확인합니다. **체크가 목록에 없으면 통과가 아니라 돌지 않은
+것입니다** — 위 명령을 손으로 돌리고 결과를 PR 에 적습니다. CI 의 한계는
+다음과 같습니다.
 
 *   변경 파일이 3,000개를 넘는 PR 에서는 paths 필터가 뒤쪽 파일을 보지
     못해 워크플로가 아예 돌지 않을 수 있습니다. 그런 PR 은 쪼개거나 위
     명령을 손으로 돌립니다.
 *   저장소가 공개라 CI 로그도 공개입니다. 시험에는 가짜 계정 ID · 가짜
     이름만 씁니다.
+*   `put_secret_test.sh` 의 실물 CLI 계약 사례는 러너 이미지의 AWS CLI 에
+    기댑니다(위 닫힌 로컬 주소 · 가짜 자격으로만 부름). CI 는
+    `scripts/test/` 시험이 하나라도 skip 하면 실패로 봅니다 — 러너에서
+    AWS CLI 가 빠지면 이 사례가 skip 되어 빨개집니다.
 *   러너의 bash 는 5.2 입니다. 스크립트가 지키는 macOS bash 3.2 제약은
     로컬에서 돌려야 드러납니다.
 *   guard_test 의 `config-first-folded` 사례(ſ 를 s 로 접는 파일 시스템)는
