@@ -27,15 +27,6 @@
 
 set -uo pipefail
 
-if [[ -z "${FAKE_AWS_DIR:-}" || ! -d "${FAKE_AWS_DIR}" ]]; then
-  printf '%s\n' "fake aws: FAKE_AWS_DIR 가 없음" >&2
-  exit 99
-fi
-
-printf 'call\n' >>"${FAKE_AWS_DIR}/calls"
-printf '%s\n' "$@" >"${FAKE_AWS_DIR}/argv"
-/usr/bin/env >"${FAKE_AWS_DIR}/env"
-
 readonly ACCOUNT='123456789012'
 readonly ARN="arn:aws:secretsmanager:ap-northeast-2:${ACCOUNT}:secret:x-AbCdEf"
 readonly USER_ARN="arn:aws:iam::${ACCOUNT}:user/example"
@@ -126,46 +117,70 @@ receive_value() {
   esac
 }
 
-receive_value "$@"
+#######################################
+# FAKE_AWS_MODE 에 맞는 응답(표준 출력 · 표준 오류)을 내고, 실패 모드면 그
+# 종료 코드로 끝낸다.
+# Globals:
+#   FAKE_AWS_MODE, value
+# Outputs:
+#   aws-cli 2.36.7 꼴의 응답(표준 출력) · 오류 원문(표준 오류).
+#######################################
+respond() {
+  local code
+  case "${FAKE_AWS_MODE:-ok}" in
+    ok)
+      printf '{\n    "ARN": "%s",\n    "Name": "example",\n' "${ARN}"
+      printf '    "VersionId": "a1b2c3d4-5678-90ab-cdef-EXAMPLE11111",\n'
+      printf '    "VersionStages": [\n        "AWSCURRENT"\n    ]\n}\n'
+      ;;
+    no-version)
+      printf '{\n    "ARN": "%s",\n    "Name": "example"\n}\n' "${ARN}"
+      ;;
+    denied | denied-short)
+      code=AccessDeniedException
+      [[ "${FAKE_AWS_MODE}" == denied ]] || code=AccessDenied
+      printf '\naws: [ERROR]: An error occurred (%s) when calling the %s' \
+        "${code}" "PutSecretValue operation: User: ${USER_ARN} is not" >&2
+      printf ' authorized to perform: %s on resource: %s %s\n' \
+        secretsmanager:PutSecretValue "${ARN}" \
+        "with an explicit deny in a service control policy" >&2
+      printf 'received: %s\n' "${value}" >&2
+      exit 254
+      ;;
+    error)
+      printf '\naws: [ERROR]: An error occurred (%s) when calling %s\n' \
+        ResourceNotFoundException \
+        "the PutSecretValue operation: ${ARN} not found" >&2
+      printf 'received: %s\n' "${value}" >&2
+      exit 254
+      ;;
+    endpoint)
+      printf '\naws: [ERROR]: Read timeout on endpoint URL: "%s"\n' \
+        "${ENDPOINT}" >&2
+      exit 255
+      ;;
+    unparsed)
+      printf '\naws: [ERROR]: SSL validation failed for %s %s\n' "${ENDPOINT}" \
+        "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed" >&2
+      exit 255
+      ;;
+    *)
+      printf 'fake aws: 모르는 FAKE_AWS_MODE: %s\n' "${FAKE_AWS_MODE}" >&2
+      exit 99
+      ;;
+  esac
+}
 
-case "${FAKE_AWS_MODE:-ok}" in
-  ok)
-    printf '{\n    "ARN": "%s",\n    "Name": "example",\n' "${ARN}"
-    printf '    "VersionId": "a1b2c3d4-5678-90ab-cdef-EXAMPLE11111",\n'
-    printf '    "VersionStages": [\n        "AWSCURRENT"\n    ]\n}\n'
-    ;;
-  no-version)
-    printf '{\n    "ARN": "%s",\n    "Name": "example"\n}\n' "${ARN}"
-    ;;
-  denied | denied-short)
-    code=AccessDeniedException
-    [[ "${FAKE_AWS_MODE}" == denied ]] || code=AccessDenied
-    printf '\naws: [ERROR]: An error occurred (%s) when calling the %s' \
-      "${code}" "PutSecretValue operation: User: ${USER_ARN} is not" >&2
-    printf ' authorized to perform: secretsmanager:PutSecretValue on %s %s\n' \
-      "resource: ${ARN}" "with an explicit deny in a service control policy" >&2
-    printf 'received: %s\n' "${value}" >&2
-    exit 254
-    ;;
-  error)
-    printf '\naws: [ERROR]: An error occurred (%s) when calling %s\n' \
-      ResourceNotFoundException \
-      "the PutSecretValue operation: ${ARN} not found" >&2
-    printf 'received: %s\n' "${value}" >&2
-    exit 254
-    ;;
-  endpoint)
-    printf '\naws: [ERROR]: Read timeout on endpoint URL: "%s"\n' \
-      "${ENDPOINT}" >&2
-    exit 255
-    ;;
-  unparsed)
-    printf '\naws: [ERROR]: SSL validation failed for %s %s\n' "${ENDPOINT}" \
-      "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed" >&2
-    exit 255
-    ;;
-  *)
-    printf 'fake aws: 모르는 FAKE_AWS_MODE: %s\n' "${FAKE_AWS_MODE}" >&2
+main() {
+  if [[ -z "${FAKE_AWS_DIR:-}" || ! -d "${FAKE_AWS_DIR}" ]]; then
+    printf '%s\n' "fake aws: FAKE_AWS_DIR 가 없음" >&2
     exit 99
-    ;;
-esac
+  fi
+  printf 'call\n' >>"${FAKE_AWS_DIR}/calls"
+  printf '%s\n' "$@" >"${FAKE_AWS_DIR}/argv"
+  /usr/bin/env >"${FAKE_AWS_DIR}/env"
+  receive_value "$@"
+  respond
+}
+
+main "$@"
