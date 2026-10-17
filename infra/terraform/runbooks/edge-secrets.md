@@ -118,6 +118,15 @@ bash infra/terraform/scripts/put-secret-from-file.sh <종류> <파일>
 *   `bash -x` 로 스크립트 다시 돌리기(값이 든 줄이 추적 출력에 찍힙니다).
 *   값이 든 인자 — `--secret-string "$(cat …)"` 같은 꼴과
     `--cli-input-json '{…}'` 인라인 JSON.
+*   값을 보려고 `aws secretsmanager get-secret-value` 부르기(값이 화면 ·
+    스크롤백에 남습니다). 새 버전이 들어갔는지는 아래처럼 값 없이 봅니다.
+    출력(VersionId · 단계)은 화면에서만 확인하고 보고 · 채팅에는 옮기지
+    않습니다. 다른 비밀이면 이름만 바꿉니다.
+
+    ```shell
+    aws secretsmanager describe-secret --region ap-northeast-2 \
+      --secret-id pokeclip/prod/signing-key --query VersionIdsToStages
+    ```
 
 입력은 `AWS_ENDPOINT_URL` 류(`AWS_ENDPOINT_URL*` 환경 변수 · 프로필의
 `endpoint_url`)가 설정된 셸에서 하지 않습니다 — 값이 그 엔드포인트(예: 로컬
@@ -157,6 +166,12 @@ aws sts get-caller-identity
       printf 'CLI HISTORY OK\n'
     fi
     ```
+
+    aws-cli 판도 봅니다. `aws --version` 이 `aws-cli/2.36.7` 이 아니면
+    `bash infra/terraform/scripts/test/put_secret_test.sh` 를 돌려
+    `ok: real-cli-contract` 줄이 나오는지 본 뒤 진행합니다 — 그 줄이
+    아니면(skip · FAIL) 시작하지 않습니다(아래 「확인하지 못한 것」 첫
+    항목). 두 명령 모두 값을 내지 않습니다.
 
 1.  **prod/bootstrap**: `infra/terraform/prod/bootstrap` 디렉터리에서
     [prod/bootstrap 2단 절차](/infra/terraform/prod/bootstrap/README.md)로 상태
@@ -324,6 +339,21 @@ aws sts get-caller-identity
         만들지 않습니다**(3 이후 안 함). 승인 지점 A1 에서 kty 가 갈래를
         고릅니다. 재개 조건은 계획 3절 「부분 진행」 표 ① 과 M10 뒤 「O7f
         실행표」 입니다.
+
+    CDN 비밀을 넣기 전이라 「O5」 의 선행 0 과 같이 AWS CLI 명령 기록과
+    aws-cli 판을 봅니다. 아래 블록이 `CLI HISTORY OK` 가 아니면 기록을 끈 뒤
+    다시 보고, `aws --version` 이 `aws-cli/2.36.7` 이 아니면
+    `bash infra/terraform/scripts/test/put_secret_test.sh` 의
+    `ok: real-cli-contract` 줄을 본 뒤 진행합니다.
+
+    ```shell
+    if [ "$(aws configure get cli_history)" = enabled ]; then
+      printf 'CLI HISTORY ENABLED\n'
+    else
+      printf 'CLI HISTORY OK\n'
+    fi
+    ```
+
 1.  **media apply**(이 런북 밖).
 1.  **T9a 관찰**: Media 가 미기동인지 봅니다. CDN 비밀 값이 아직 없으므로
     시작 스크립트가 다음 고정 문자열로 멈춰야 합니다(문자열 정본 — M2 머지 뒤
@@ -370,6 +400,20 @@ aws sts get-caller-identity
 받은 키는 명령문에 쓰지 않고 셸 내장 `read` · `printf` 로만 파일에 옮깁니다 —
 화면 · 셸 기록 · 프로세스 목록에 값이 남지 않습니다. 명령은 저장소 뿌리에서
 돌립니다.
+
+1.  키를 넣기 전에 「O5」 의 선행 0 과 같이 AWS CLI 명령 기록과 aws-cli 판을
+    봅니다. 아래 블록이 `CLI HISTORY OK` 가 아니면 기록을 끈 뒤 다시 보고,
+    `aws --version` 이 `aws-cli/2.36.7` 이 아니면
+    `bash infra/terraform/scripts/test/put_secret_test.sh` 의
+    `ok: real-cli-contract` 줄을 본 뒤 진행합니다.
+
+    ```shell
+    if [ "$(aws configure get cli_history)" = enabled ]; then
+      printf 'CLI HISTORY ENABLED\n'
+    else
+      printf 'CLI HISTORY OK\n'
+    fi
+    ```
 
 1.  스크래치를 만듭니다.
 
@@ -517,9 +561,10 @@ T6a(비밀 불일치 → 원본 302/401)와 T9b(clip 빈 서명 키 기동)는 p
     2.36.7 은 2026-10-17 실측으로 확인했습니다(일회용 그릇 · aws-cli 2.36.7 ·
     가짜 값 · 그릇은 강제 삭제). 새 버전이 `AWSCURRENT` 가 되고, 값은 바이트
     그대로 저장되며(한 줄 비밀은 끝 줄바꿈 하나만 떼고, PEM 은 끝 줄바꿈까지
-    그대로), 다시 넣으면 옛 버전이 `AWSPREVIOUS` 로 남습니다. O5 전에
-    `aws --version` 이 2.36.7 이 아니면 `put_secret_test.sh` 를 다시 돌려 실물
-    CLI 계약 사례를 봅니다. 계약 사례는 파싱 · 네트워크 단계까지만 봅니다 —
+    그대로), 다시 넣으면 옛 버전이 `AWSPREVIOUS` 로 남습니다. 다른 판이면
+    값을 넣는 걸음 앞(「O5」 · 「O7e」 의 선행 0, 「시험용 스트림 키 넣기」 의
+    1)에서 실물 CLI 계약 사례(`real-cli-contract`)를 봅니다. 계약 사례는
+    파싱 · 네트워크 단계까지만 봅니다 —
     요청 본문의 SecretString 이 파일과 바이트 단위로 같은지는 2026-10-17
     aws-cli 2.36.7 루프백 실측(M4 종결 r2)과, 실제 Secrets Manager 저장값의
     sha256 · 길이 대조(2026-10-17 일회용 그릇 실측)로 확인했습니다.
