@@ -9,8 +9,15 @@
 # 돌고, 단계 직전 점검 시험이 부르는 aws는 가짜(precheck/tests/fakebin/aws)다.
 #
 # 도구 셋(terraform · conftest · shellcheck)은 제3자 액션 없이 배포처에서 직접 받아 아래에 적은
-# sha256과 맞을 때만 쓴다. 판은 로컬에서 쓰는 판과 같다(2026-10-17 확인). 도구마다 RUNNER_TEMP
-# 아래 제 디렉터리에 두고 GITHUB_PATH로 PATH 앞에 붙인다.
+# sha256과 맞을 때만 쓴다. 내려받기는 https만 따르고(리다이렉트 포함) 시간 상한을 둔다. 판은
+# 로컬에서 쓰는 판과 같다(2026-10-17 확인). 도구마다 RUNNER_TEMP 아래 제 디렉터리에 두고
+# GITHUB_PATH로 PATH 앞에 붙인다.
+#
+# 판을 올릴 때는 그 도구의 단계 이름 · version · sha256 · 단계 위 출처 주석 · README 「검증」
+# 절의 판 표기를 함께 바꾼다. sha256은 받은 파일을 재서 적지 않고 출처의 공식 값을 옮긴다 —
+# terraform은 SHA256SUMS의 linux_amd64 줄(그 파일의 .sig를 HashiCorp 공개 키로 확인한 뒤),
+# conftest는 릴리스 checksums.txt의 Linux_x86_64 줄, shellcheck는 체크섬 파일이 없어 GitHub
+# 릴리스 자산 digest(API)다.
 #
 # 저장소가 공개라 이 로그도 공개다. 시험은 가짜 계정 ID · 가짜 이름만 쓴다.
 #
@@ -18,7 +25,8 @@
 #   - 러너의 bash는 5.2다. 스크립트가 지키는 macOS bash 3.2 제약은 여기서 검사되지 않는다(로컬 몫).
 #   - guard_test의 config-first-folded 사례(ſ를 s로 접는 파일 시스템)는 ext4가 접지 않아 건너뛴다.
 #     그 위협이 러너에는 없고, APFS에서의 그 사례는 로컬이 돌린다.
-#   - modules/는 lock을 추적하지 않아 aws provider 최신판으로 돈다. 쓰인 판은 init 로그에 남는다.
+#   - modules/는 lock을 추적하지 않아(.gitignore — lock 면제) aws provider 최신판으로 돈다.
+#     쓰인 판은 init 로그에 남는다.
 name: infra-ci
 
 on:
@@ -61,14 +69,15 @@ jobs:
           persist-credentials: false
 
       # sha256 출처: releases.hashicorp.com의 terraform_1.16.4_SHA256SUMS 중 linux_amd64 줄
-      # (2026-10-17 — 그 파일의 HashiCorp 서명도 확인). 판을 올릴 때는 두 값을 함께 바꾼다.
+      # (2026-10-17 — 그 파일의 HashiCorp 서명도 확인). 판을 올리는 법은 머리 주석.
       - name: terraform 1.16.4 설치(sha256 고정)
         run: |
           version=1.16.4
           sha256=dc94af0eef1147718ad7c8daea792ed199e3e0492eec180d0adafa2a65a879df
           archive="${RUNNER_TEMP}/terraform.zip"
           bin="${RUNNER_TEMP}/terraform-bin"
-          curl -fsSL --retry 3 -o "${archive}" \
+          curl -fsSL --proto '=https' --tlsv1.2 --retry 3 --connect-timeout 20 --max-time 300 \
+            -o "${archive}" \
             "https://releases.hashicorp.com/terraform/${version}/terraform_${version}_linux_amd64.zip"
           echo "${sha256}  ${archive}" | sha256sum --check --strict
           mkdir -p -- "${bin}"
@@ -85,43 +94,78 @@ jobs:
 
       # 루트 · 모듈은 목록으로 적지 않고 찾는다(.tf가 든 디렉터리). 새 루트가 생기면 저절로 들어온다.
       # scripts/ 아래는 guard fixture라 뺀다. 하나도 못 찾으면 찾는 식이 깨진 것이라 실패로 본다.
-      # lock을 추적하는 루트는 -lockfile=readonly로 init한다 — lock과 다른 provider가 필요하면
-      # lock을 고쳐 쓰지 않고 실패한다(PR에 실린 lock이 기준이다).
+      # infra/terraform/modules/ 밖은 모두 루트라 lock을 추적해야 한다(README 「버전 고정」 — 모듈만
+      # .gitignore로 면제). lock이 없는 루트가 있으면 init 전에 모두 적고 실패한다. 루트는
+      # -lockfile=readonly로 init한다 — lock과 다른 provider가 필요하면 lock을 고쳐 쓰지 않고
+      # 실패한다(PR에 실린 lock이 기준이다).
+      # 루프는 배열을 돈다(본문 명령이 목록을 stdin으로 삼키지 못하게). 끝에 처리 수 = 발견 수를 본다.
       - name: init · validate
         run: |
-          dirs="$(find infra/terraform -path infra/terraform/scripts -prune \
+          is_module() { [[ "$1" == infra/terraform/modules/* ]]; }
+          dirs_text="$(find infra/terraform -path infra/terraform/scripts -prune \
             -o -name .terraform -prune -o -type f -name '*.tf' -printf '%h\n' | sort -u)"
-          if [[ -z "${dirs}" ]]; then
+          dirs=()
+          if [[ -n "${dirs_text}" ]]; then
+            mapfile -t dirs <<<"${dirs_text}"
+          fi
+          if [[ "${#dirs[@]}" -eq 0 ]]; then
             echo "init · validate 할 디렉터리가 0개다 — 찾는 식이나 경로가 깨졌다" >&2
             exit 1
           fi
-          while IFS= read -r dir; do
+          missing=()
+          for dir in "${dirs[@]}"; do
+            if ! is_module "${dir}" && [[ ! -f "${dir}/.terraform.lock.hcl" ]]; then
+              missing+=("${dir}")
+            fi
+          done
+          if [[ "${#missing[@]}" -ne 0 ]]; then
+            printf '::error::lock이 없는 루트: %s — 로컬 init으로 만든 .terraform.lock.hcl을 함께 올린다\n' \
+              "${missing[@]}" >&2
+            exit 1
+          fi
+          done_count=0
+          for dir in "${dirs[@]}"; do
             echo "::group::${dir}"
             lockfile=()
-            if [[ -f "${dir}/.terraform.lock.hcl" ]]; then
+            if ! is_module "${dir}"; then
               lockfile=(-lockfile=readonly)
             fi
-            terraform -chdir="${dir}" init -backend=false -input=false "${lockfile[@]}"
-            terraform -chdir="${dir}" validate
+            terraform -chdir="${dir}" init -backend=false -input=false "${lockfile[@]}" </dev/null
+            terraform -chdir="${dir}" validate </dev/null
             echo "::endgroup::"
-          done <<<"${dirs}"
+            done_count=$((done_count + 1))
+          done
+          if [[ "${done_count}" -ne "${#dirs[@]}" ]]; then
+            echo "init · validate 를 ${#dirs[@]}개 중 ${done_count}개만 돌았다" >&2
+            exit 1
+          fi
 
       # mock provider로 plan만 만들어 assert를 본다. mock이어도 provider 스키마가 필요해 위 init이
-      # 먼저다. 시험 파일(*.tftest.hcl)이 든 루트 · 모듈을 찾고, 0개면 실패로 본다.
+      # 먼저다. 시험 파일(*.tftest.hcl)이 든 루트 · 모듈을 찾고, 0개면 실패로 본다. 루프는 위와 같다.
       - name: terraform test
         run: |
-          dirs="$(find infra/terraform -path infra/terraform/scripts -prune \
+          dirs_text="$(find infra/terraform -path infra/terraform/scripts -prune \
             -o -name .terraform -prune -o -type f -name '*.tftest.hcl' -printf '%h\n' |
             sed 's#/tests$##' | sort -u)"
-          if [[ -z "${dirs}" ]]; then
+          dirs=()
+          if [[ -n "${dirs_text}" ]]; then
+            mapfile -t dirs <<<"${dirs_text}"
+          fi
+          if [[ "${#dirs[@]}" -eq 0 ]]; then
             echo "terraform test 할 디렉터리가 0개다 — 찾는 식이나 경로가 깨졌다" >&2
             exit 1
           fi
-          while IFS= read -r dir; do
+          done_count=0
+          for dir in "${dirs[@]}"; do
             echo "::group::${dir}"
-            terraform -chdir="${dir}" test
+            terraform -chdir="${dir}" test </dev/null
             echo "::endgroup::"
-          done <<<"${dirs}"
+            done_count=$((done_count + 1))
+          done
+          if [[ "${done_count}" -ne "${#dirs[@]}" ]]; then
+            echo "terraform test 를 ${#dirs[@]}개 중 ${done_count}개만 돌았다" >&2
+            exit 1
+          fi
 
   guard:
     runs-on: ubuntu-24.04
@@ -132,7 +176,8 @@ jobs:
           persist-credentials: false
 
       # sha256 출처: conftest v0.71.1 릴리스의 checksums.txt 중 Linux_x86_64.tar.gz 줄(2026-10-17).
-      # guard.sh는 conftest 출력 형식에 기대므로 판을 올릴 때는 guard_test를 함께 본다(README 한계).
+      # 판을 올리는 법은 머리 주석. guard.sh는 conftest 출력 형식에 기대므로 판을 올릴 때는
+      # guard_test를 함께 본다(README 한계).
       - name: conftest 0.71.1 설치(sha256 고정)
         run: |
           version=0.71.1
@@ -141,7 +186,8 @@ jobs:
           # 이 디렉터리에는 conftest 하나만 둔다. guard_test의 no-conftest 사례는 PATH에서
           # conftest가 든 디렉터리를 통째로 빼고 돌기 때문이다(다른 도구가 섞여 있으면 함께 빠진다).
           bin="${RUNNER_TEMP}/conftest-bin"
-          curl -fsSL --retry 3 -o "${archive}" \
+          curl -fsSL --proto '=https' --tlsv1.2 --retry 3 --connect-timeout 20 --max-time 300 \
+            -o "${archive}" \
             "https://github.com/open-policy-agent/conftest/releases/download/v${version}/conftest_${version}_Linux_x86_64.tar.gz"
           echo "${sha256}  ${archive}" | sha256sum --check --strict
           mkdir -p -- "${bin}"
@@ -157,13 +203,16 @@ jobs:
       # 건너뛴 사례도 판정한다. 이 러너(ext4 · 비root · conftest는 제 디렉터리에만)에서 건너뛰는
       # 사례는 config-first-folded 하나뿐이어야 한다. 다른 사례가 건너뛰면(예: 러너 이미지에
       # conftest가 따로 깔려 no-conftest가 빠짐) 초록이어도 덜 잰 것이라 실패로 본다.
+      # 「skip:」이 든 줄은 대소문자 · 들여쓰기 · 괄호 유무와 상관없이 모두 모은다. 그런 줄이 정확히
+      # 하나이고 그 줄이 「skip: config-first-folded(」로 시작할 때만 통과한다(꼴을 모르는 줄도 실패).
       - name: guard_test(fixture 끝에서 끝까지)
         run: |
           log="${RUNNER_TEMP}/guard_test.log"
           bash infra/terraform/scripts/guard_test.sh 2>&1 | tee "${log}"
-          skipped="$(sed -n 's/^skip: \([^(]*\)(.*/\1/p' "${log}")"
-          if [[ "${skipped}" != 'config-first-folded' ]]; then
-            echo "건너뛴 사례가 config-first-folded 하나가 아니다: ${skipped:-(없음)}" >&2
+          skips="$(sed -nE '/skip[[:space:]]*:/Ip' "${log}")"
+          if [[ "${skips}" != 'skip: config-first-folded('* || "${skips}" == *$'\n'* ]]; then
+            echo "건너뛴 사례가 config-first-folded 하나가 아니다:" >&2
+            echo "${skips:-(없음)}" >&2
             exit 1
           fi
 
@@ -178,16 +227,17 @@ jobs:
         with:
           persist-credentials: false
 
-      # 공식 체크섬 파일이 없다. sha256은 GitHub이 v0.11.0 릴리스 자산에 붙인 digest이고
-      # (API · 2026-10-17), 받은 파일을 두 번(shasum · openssl) 재어 같은 값임을 확인했다.
-      # 러너에 깔린 apt 판(0.9.0)은 경고 집합이 달라 쓰지 않는다 — 이 판이 PATH 앞에 선다.
+      # sha256은 GitHub이 v0.11.0 릴리스 자산에 붙인 digest다(API · 2026-10-17 — 공식 체크섬 파일이
+      # 없다). 받은 파일을 두 번(shasum · openssl) 재어 같은 값임도 확인했다. 판을 올리는 법은
+      # 머리 주석. 러너에 깔린 apt 판(0.9.0)은 경고 집합이 달라 쓰지 않는다 — 이 판이 PATH 앞에 선다.
       - name: shellcheck 0.11.0 설치(sha256 고정)
         run: |
           version=v0.11.0
           sha256=b7af85e41cc99489dcc21d66c6d5f3685138f06d34651e6d34b42ec6d54fe6f6
           archive="${RUNNER_TEMP}/shellcheck.tar.gz"
           bin="${RUNNER_TEMP}/shellcheck-bin"
-          curl -fsSL --retry 3 -o "${archive}" \
+          curl -fsSL --proto '=https' --tlsv1.2 --retry 3 --connect-timeout 20 --max-time 300 \
+            -o "${archive}" \
             "https://github.com/koalaman/shellcheck/releases/download/${version}/shellcheck-${version}.linux.x86_64.tar.gz"
           echo "${sha256}  ${archive}" | sha256sum --check --strict
           mkdir -p -- "${bin}"
@@ -205,43 +255,57 @@ jobs:
             infra/terraform/scripts/precheck/tests/fakebin/aws
 
       # README의 루프는 실패를 적기만 하고 종료 0이라 그대로 쓰지 않는다. 하나가 실패해도 끝까지
-      # 돌린 뒤 단계를 실패시키고, 시험이 0개여도 실패로 본다(글롭이 깨져 아무것도 안 돈 것을
-      # 초록으로 내지 않게). 시험은 사례마다 임시 HOME을 쓴다(testlib::run). TMPDIR를 체크아웃
-      # 안으로 바꾸지 않는다 — 증거 경로 검사가 조상의 .git을 거부해 시험이 깨진다.
+      # 돌린 뒤 단계를 실패시키고, 시험이 0개이거나 돈 수가 찾은 수와 다르면 실패로 본다(글롭이
+      # 깨져 아무것도 안 돈 것을 초록으로 내지 않게). 시험의 stdin은 /dev/null이다. 시험은 사례마다
+      # 임시 HOME을 쓴다(testlib::run). TMPDIR를 체크아웃 안으로 바꾸지 않는다 — 증거 경로 검사가
+      # 조상의 .git을 거부해 시험이 깨진다.
+      # 증거 루트 이름은 증거 경로 함수(lib/evidence.sh)의 상수를 읽어 쓴다(이름이 바뀌어도 이 확인이
+      # 옛 이름을 보며 헛돌지 않게 — 못 읽으면 실패). 그 경로는 다음 단계에 넘긴다.
       # testlib_test의 실행 비트 사례는 PATH에 실행 가능한 aws가 따로 있어야 통과한다(bash의
       # command -v는 실행 가능한 것이 없으면 실행 비트 없는 파일을 내준다). 러너 이미지의 AWS CLI가
       # 그 자리다 — 이미지에서 빠지면 이 단계가 빨개진다.
       - name: 단계 직전 점검 시험
         run: |
-          if [[ -e "${HOME}/.pokeclip-precheck" ]]; then
-            echo "시험 전부터 러너 HOME에 .pokeclip-precheck가 있다 — 무접촉을 판정할 수 없다" >&2
+          # shellcheck source=infra/terraform/scripts/precheck/lib/evidence.sh
+          if ! root_name="$(source infra/terraform/scripts/precheck/lib/evidence.sh &&
+            printf '%s' "${EVIDENCE_ROOT_NAME-}")" || [[ -z "${root_name}" || "${root_name}" == */* ]]; then
+            echo "증거 루트 이름(lib/evidence.sh 의 EVIDENCE_ROOT_NAME)을 읽지 못했다" >&2
             exit 1
           fi
-          count=0
-          failed=0
-          for test_file in infra/terraform/scripts/precheck/tests/*_test.sh; do
-            [[ -f "${test_file}" ]] || continue
-            count=$((count + 1))
-            if ! bash "${test_file}"; then
-              echo "FAIL ${test_file}" >&2
-              failed=$((failed + 1))
-            fi
-          done
-          echo "시험 ${count}개 · 실패 ${failed}개"
-          if [[ "${count}" -eq 0 ]]; then
+          evidence_root="${HOME}/${root_name}"
+          if [[ -e "${evidence_root}" || -L "${evidence_root}" ]]; then
+            echo "시험 전부터 러너 HOME에 ${root_name}가 있다 — 무접촉을 판정할 수 없다" >&2
+            exit 1
+          fi
+          echo "PRECHECK_EVIDENCE_ROOT=${evidence_root}" >>"${GITHUB_ENV}"
+          shopt -s nullglob
+          tests=(infra/terraform/scripts/precheck/tests/*_test.sh)
+          shopt -u nullglob
+          if [[ "${#tests[@]}" -eq 0 ]]; then
             echo "시험이 하나도 없다 — 글롭이나 경로가 깨졌다" >&2
             exit 1
           fi
-          if [[ "${failed}" -ne 0 ]]; then
+          ran=0
+          failed=0
+          for test_file in "${tests[@]}"; do
+            if ! bash "${test_file}" </dev/null; then
+              echo "FAIL ${test_file}" >&2
+              failed=$((failed + 1))
+            fi
+            ran=$((ran + 1))
+          done
+          echo "시험 ${#tests[@]}개 중 ${ran}개 돌림 · 실패 ${failed}개"
+          if [[ "${ran}" -ne "${#tests[@]}" || "${failed}" -ne 0 ]]; then
             exit 1
           fi
 
-      # 시험은 러너의 실제 HOME을 건드리지 않아야 한다. 증거 루트($HOME/.pokeclip-precheck)가
-      # 여기 생겼으면 testlib::run의 HOME 격리가 깨진 것이다.
+      # 시험은 러너의 실제 HOME을 건드리지 않아야 한다. 증거 루트가 여기 생겼으면(끊어진 링크도)
+      # testlib::run의 HOME 격리가 깨진 것이다.
       - name: 러너 HOME 무접촉 확인
         run: |
-          if [[ -e "${HOME}/.pokeclip-precheck" ]]; then
-            echo "시험이 러너 HOME에 .pokeclip-precheck를 만들었다 — HOME 격리가 깨졌다" >&2
+          evidence_root="${PRECHECK_EVIDENCE_ROOT:?앞 단계가 증거 루트 경로를 넘기지 않았다}"
+          if [[ -e "${evidence_root}" || -L "${evidence_root}" ]]; then
+            echo "시험이 러너 HOME에 ${evidence_root##*/}를 만들었다 — HOME 격리가 깨졌다" >&2
             exit 1
           fi
-          echo "러너 HOME에 .pokeclip-precheck 없음"
+          echo "러너 HOME에 ${evidence_root##*/} 없음"
