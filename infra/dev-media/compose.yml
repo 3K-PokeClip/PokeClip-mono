@@ -1,15 +1,24 @@
-# 멘토 데모용 임시 media 서버 (기한부: 2026-08-24 만료, README.md 참조)
-# 팀 공용 로컬 환경(docker-compose.yml · infra/compose/)과 별개다 — 이 파일은 데모 상자에서만 쓴다.
+# dev-media 계정별 방송 서버 (README.md 참조)
+# 팀 공용 로컬 환경(docker-compose.yml · infra/compose/)과 별개다 — 이 파일은 dev-media 상자에서만 쓴다.
 #
-# 기동:  sudo docker compose --env-file "$DEMO_HOME/.env" -f infra/dev-media/compose.yml up -d
-# 확인:  같은 명령의 up -d 자리에 config — 포트에 8890/udp 가 찍히는지, bind source 가 절대경로인지 눈으로 본다.
-#
-# ${DEMO_HOME} 은 반드시 절대경로다(render.sh 가드 5, 총 6종). 상대경로면 bind 가 딴 디렉토리나 named volume 이 된다.
+# 반영:  빌드 · 디렉터리 준비 · 렌더 · 기동 순서(응답기 healthy 뒤 MediaMTX)는 RUNBOOK 「반영」 절이 정본이다 — 맨 up -d 만 치지 않는다.
+# 확인:  config 출력은 .env 의 비밀을 그대로 내므로 통째로 찍지 않는다. RUNBOOK 의 compose 명령(--env-file · -f)에 config --quiet(검증만)를 돌리고,
+#        포트 · bind 는 config | grep -E '^ +(source|target|published|protocol|read_only|ipv4_address):' 로만 본다.
+# ${DEMO_HOME} 은 반드시 절대경로다(render.sh 가드 1). 상대경로면 bind 가 딴 디렉토리나 named volume 이 된다.
+
+networks:
+  # MediaMTX 제어면(인증 훅 · Control API) 전용. 밖으로 나가지 않고(internal) edge 는 붙이지 않는다.
+  # 대역은 VPC(172.31.0.0/16)와 겹치지 않는다. 고정 주소 둘은 템플릿의 apiAddress · authHTTPAddress 와 같아야 한다.
+  mtx-control:
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.250.0.0/29
 
 services:
   mediamtx:
     image: ghcr.io/xodbs1021/mediamtx:v1.21.1-pokeclip.2@sha256:8b5318ceee0b4a3638ce3a8fe8cfa5afbfaea71413ffaa330b601f1cc6264dc8 # dev-media(서버) 핀 — 서버가 필요로 할 때 서버 기준으로 올린다. 제품 핀(media/Dockerfile.mtxhook FROM — 팀 로컬)과 같을 필요는 없다(ADR-040 2026-10-12 추기)
-    user: "10002:10002" # 비특권 실행 승계(ADR-039). 이 이미지를 UID 지정으로 돌려도 정상임은 실측됨(2026-10-05 로컬 기동)
+    user: "10002:10002" # 비특권 실행 승계(ADR-039). .2 를 UID 지정으로 돌린 설정 검사는 로컬에서 통과(2026-10-17 --validate-conf). 기동은 상자 반영 뒤 다시 잰다
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
@@ -18,16 +27,81 @@ services:
     ports:
       # SRT 인제스트 — OBS 가 컨테이너에 직접 닿아야 하므로 반드시 publish 한다(빠지면 송출 전면 실패).
       - "8890:8890/udp"
-      # HLS 8888 은 publish 하지 않는다 — edge(nginx)만 내부 네트워크로 접근한다(결정 1).
+      # HLS 8888 은 publish 하지 않는다 — edge(nginx)만 내부 네트워크로 접근한다(결정 1). Control API 9997 도 publish 하지 않는다.
     volumes:
       - ${DEMO_HOME}/mediamtx.demo.yml:/mediamtx.yml:ro # render.sh 산출물(root:10002 0640 — 컨테이너는 그룹 읽기만)
       - ${DEMO_HOME}/dvr:/dvr # LL-HLS 세그먼트 디스크 오프로드
+    networks:
+      default: {}
+      mtx-control:
+        ipv4_address: 10.250.0.2
+    # 시작 순서만 맞춘다(응답기 먼저). 건강 조건은 걸지 않는다 — 응답기가 unhealthy 여도 MediaMTX 는 떠 있어야 한다(설계 3-8).
+    depends_on:
+      - ingest-auth
+
+  # 연결마다 MediaMTX 의 HTTP 인증에 답하는 응답기 — 4C(auth)로 토큰을 풀어 그 계정의 passphrase 를 돌려준다.
+  ingest-auth:
+    build:
+      context: ../../media
+      dockerfile: Dockerfile.ingest-auth
+    # 이미지의 USER(Dockerfile.ingest-auth — 10003:10003)와 같은 값을 여기서도 못박는다. 바이너리는 이미지 안에서 root 소유라
+    # 이 계정이 덮어쓰지 못한다. 빌드한 이미지의 실제 User · 소유는 반영 때 RUNBOOK 이 다시 본다.
+    user: "10003:10003"
+    read_only: true
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    # 비root 실행이라 쓰는 권한이 없다 — 남은 기본 권한을 모두 걷는다. 로컬 실측(2026-10-17)에서
+    # 이 꼴로 기동 · healthcheck 통과. 상자 기동은 반영(R5) 때 다시 본다.
+    cap_drop:
+      - ALL
+    environment:
+      INGEST_AUTH_LISTEN: "10.250.0.3:8080"
+      INGEST_AUTH_CALLER_IP: "10.250.0.2"
+      MTX_API_URL: "http://10.250.0.2:9997"
+      MTX_API_USER: "ingest-auth"
+      MTX_API_PASS: "${MTX_API_PASS:?}"
+      STREAM_KEY_RESOLVE_URL: "${STREAM_KEY_RESOLVE_URL:?}"
+      STREAM_KEY_RESOLVE_TOKEN: "${STREAM_KEY_RESOLVE_TOKEN:?}"
+      # debug · info · warn · error. 바꾸려면 이 줄을 고치고 응답기만 다시 만든다.
+      LOG_LEVEL: "info"
+    volumes:
+      # 거부 목록 — 디렉터리를 마운트한다(이름을 바꿔 끼우는 편집이 컨테이너에 닿게). 긴 꼴 bind 로 호스트 경로를 만들지 않는다 —
+      # 디렉터리가 없으면 빈 디렉터리(= 거부 목록 없음)로 뜨지 않고 기동이 실패한다.
+      - type: bind
+        source: ${DEMO_HOME:?}/ingest-auth/deny
+        target: /etc/ingest-auth
+        read_only: true
+        bind:
+          create_host_path: false
+      - ${DEMO_HOME:?}/ingest-auth/state:/var/lib/ingest-auth # 허용 연결 기록(10003:10003 0700)
+    networks:
+      default: {}
+      mtx-control:
+        ipv4_address: 10.250.0.3
+    healthcheck:
+      test: ["CMD", "/ingest-auth", "healthcheck"]
+      interval: 30s
+      retries: 3
+      start_period: 10s
 
   edge:
     image: nginx:1-alpine
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
+    # 기본 권한을 모두 걷고 nginx 가 쓰는 셋만 돌려준다 — 마스터(root)가 임시 디렉터리를 워커
+    # 계정 소유로 바꾸고(CHOWN) 워커를 nginx 계정으로 내린다(SETGID · SETUID). 8888 은 1024 위라
+    # NET_BIND_SERVICE 는 필요 없다. NET_RAW 를 걷어 기본 망에서 패킷을 짜 넣는 길을 닫는다.
+    # 로컬 실측(2026-10-17): CHOWN 이 없으면 마스터가 chown(client_temp) EPERM 으로 기동 실패,
+    # SETGID · SETUID 가 없으면 워커가 setgid EPERM 으로 죽어 응답 없음, 셋이면 200. 상자 기동은
+    # 반영(R6) 때 다시 본다.
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
     environment:
       TZ: UTC
     ports:
@@ -35,7 +109,10 @@ services:
     volumes:
       - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
       - ./player.html:/www/player.html:ro
-      # hls.js 셀프호스팅(필수) — RUNBOOK 2-3 대로 ./hls.min.js 를 내려받은 뒤 기동한다(2026-08-18 실측: 동봉본 의존 폐기)
+      # hls.js 셀프호스팅(필수) — RUNBOOK 「반영」 절의 전제대로 ./hls.min.js 를 내려받은 뒤 기동한다(2026-08-18 실측: 동봉본 의존 폐기)
       - ./hls.min.js:/www/hls.min.js:ro
+    # 기본 망에만 붙는다 — 제어망(mtx-control)에 붙이면 Control API · 응답기에 닿는다.
+    networks:
+      default: {}
     depends_on:
       - mediamtx
