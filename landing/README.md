@@ -130,6 +130,18 @@ ChatGPT 검색·Perplexity·Google AI 개요·네이버 AI 브리핑 같은 엔�
 - `llms.txt`는 제안 단계 표준이고 주요 AI 검색 가운데 쓴다고 밝힌 곳이 없습니다. 비용이 작아 사실 요약과 주소만 둡니다.
 - 측정: 같은 질문을 ChatGPT·Perplexity·Google·네이버에 던져 언급·인용·설명 정확성을 공개 전과 공개 4주 뒤에 POK-350 댓글로 남깁니다.
 
+## 사용 통계 (POK-356)
+
+`analytics.js`가 소개 페이지와 약관·처리방침 페이지에서 PostHog를 켭니다. 대시보드와 **한 프로젝트·같은 설정**이라 소개 페이지에서 대시보드로 넘어간 방문이 한 사람으로 이어집니다(`.pokeclip.com` 쿠키 공유). 설정·결정·운영 절차의 정본은 [`web/docs/ANALYTICS.md`](../web/docs/ANALYTICS.md)입니다.
+
+- **켜는 조건**: 파일 안 `KEY`(PostHog 프로젝트 공개 키 `phc_…`)가 있고, 주소가 `pokeclip.com`·`www.pokeclip.com`일 때만. 그 밖(로컬 `http.server`·미리보기)에서는 SDK를 내려받지도 않습니다. 키는 2026-10-17에 넣었습니다(US 프로젝트 — `us-assets.i.posthog.com/array/<키>/config`가 200, EU는 404로 확인). 공개 키라 코드에 둡니다. 개인 API 키(`phx_…`)는 절대 넣지 않습니다.
+- **SDK는 jsDelivr의 `posthog-js@1.435.8/dist/array.js`를 무결성 해시(SRI)와 함께** 불러옵니다. 다른 외부 스크립트와 같은 규칙입니다. 대시보드의 `posthog-js`와 같은 판을 쓰고, 올릴 때는 둘을 함께 올린 뒤 해시를 다시 계산합니다.
+  ```bash
+  curl -sL https://cdn.jsdelivr.net/npm/posthog-js@<판>/dist/array.js | openssl dgst -sha384 -binary | openssl base64 -A
+  ```
+- 자동 수집·녹화는 끄고, 주소의 쿼리·해시는 보내기 전에 뗍니다(`before_send`). 홍보 링크의 `utm_*`는 SDK가 먼저 따로 뽑아 두므로 남습니다.
+- **설정을 바꾸면 처리방침 2·7·9절을 먼저 고칩니다.** 처리방침이 실제 동작과 다르면 위반입니다(아래 「문서 쓰는 원칙」).
+
 ## 이용약관 · 개인정보 처리방침
 
 랜딩(pokeclip.com)이 문서의 **원본**입니다. 대시보드(app.pokeclip.com)는 문서를 갖지 않고 `https://pokeclip.com/terms/`·`/privacy/`로 잇기만 합니다(`web/src/features/legal/legalInfo.ts`). Google OAuth 동의 화면의 처리방침 주소도 여기입니다. 랜딩을 SSG로 옮길 때 두 문서와 검사 스크립트를 함께 옮깁니다.
@@ -196,7 +208,6 @@ HTML 주석도 소스 보기로 그대로 보이므로 문서 안에는 내부 �
 | 처리방침 14절 | 치지직 연동을 해제하면 그 채널 정보를 더 받지 않음 | 해제 뒤 진행 중 수집이 멈추는 것은 치지직의 `revoked` 이벤트에 기댑니다(미확인) | 처리방침 14절 |
 | 처리방침 3·14절 | SOOP 해제·동의 철회·탈퇴 시 지체 없이 파기, 받은 정보는 SOOP이 승낙한 범위에서 보관(받은 지 60일) | SOOP 연동 코드가 없습니다(SOOP API 심사 제출용 문장). 연동을 붙일 때 철회 확인·지체 없는 파기를 구현하고, 심사(제휴 제안)에서 보관 승낙(채팅 받은 지 60일)을 받아야 합니다 | SOOP 제11조 ③ · ⑭ · ⑰ |
 | 처리방침 3절 · 약관 제8조 | 다시보기·클립·썸네일로 올린 이미지를 60일 뒤 삭제 | 코드는 조회만 막고(`vod_expires_at`) 파일 삭제는 창고 수명 규칙에 맡깁니다. 지금 수명 규칙은 dev 창고 `pokeclip-clips-2557`(버킷 전체 60일, 썸네일 이미지 포함)뿐이고 운영 창고는 아직 없습니다. 운영 창고를 만들 때 녹화 조각·채팅 원본(`chat/`)까지 같은 규칙을 걸어야 합니다 | 처리방침 3절 |
-| 처리방침 1·2·6·7·9·13절 | 소개 페이지·대시보드에서 PostHog로 이용 분석 정보를 모음(US, IP 저장 안 함, 브라우저 추적 금지 존중) | 분석 SDK가 아직 없습니다. SDK를 붙이는 하위 작업(POK-356)이 머지되면 이 행을 지웁니다. 그 전에 SDK가 운영에 나가면 안 됩니다 | 개인정보 보호법 제30조 |
-| 처리방침 3·4절 | 탈퇴하면 7일 안에 PostHog의 그 회원 기록(이벤트·녹화)을 삭제 | 운영 절차가 아직 없습니다. `web/docs/ANALYTICS.md`에 「탈퇴자 확인 → Persons에서 회원 번호로 찾기 → Delete person(이벤트·녹화 함께)」 절차와 확인 주기를 적어야 합니다(POK-356) | 처리방침 4절 |
+| 처리방침 1·2·6·7·9·13절 | 소개 페이지·대시보드에서 PostHog로 이용 분석 정보를 모음(US, IP 저장 안 함, 브라우저 추적 금지 존중) | 랜딩은 키를 넣었습니다(2026-10-17, US 프로젝트). **대시보드는 운영 빌드 env(`NEXT_PUBLIC_POSTHOG_KEY`·`NEXT_PUBLIC_POSTHOG_HOST`)가 아직 없어 수집하지 않습니다** — 운영 빌드 자리(app.pokeclip.com)가 생기면 넣습니다. 콘솔의 **IP 저장 끄기**도 확인 전입니다(원격 설정으로는 보이지 않음). 둘 다 되면 이 행을 지웁니다 | 개인정보 보호법 제30조 |
 | 처리방침 3절 | 이용 분석 기록을 수집한 날부터 1년 뒤 삭제 | PostHog 무료 플랜의 1년은 **조회 기간**이고, 그 뒤 실제로 지워진다는 보장은 문서에 없습니다(「retention is not a deletion tool」, [events retention](https://posthog.com/docs/data/events-retention)). privacy@posthog.com에 물리 삭제 여부를 확인하고, 보장이 없으면 1년 지난 기록을 지우는 운영 절차를 정합니다 | 개인정보 보호법 제21조 |
 | 두 문서 | 〈 〉 자리표시(법인명·대표자명·보호책임자·담당자·시행일) | `check-legal.mjs --release`가 실패합니다 | — |
