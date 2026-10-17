@@ -12,8 +12,12 @@ prod 환경의 Terraform 상태 버킷 `pokeclip-tfstate-prod-apne2` 를 만드�
 `use_lockfile = true` 입니다.
 
 provider 의 `default_tags` 네 키(`Project` · `Environment` · `ManagedBy` ·
-`TerraformRoot = prod/bootstrap`)가 자원마다 붙습니다. mock 시험은 이것을
-보지 못하므로 plan 의 `tags_all` 로 확인합니다.
+`TerraformRoot = prod/bootstrap`)는 태그를 받는 자원인 버킷 `aws_s3_bucket`
+에만 붙습니다. 버킷 설정 자원 여섯(`aws_s3_bucket_` 뒤가 `versioning` ·
+`server_side_encryption_configuration` · `public_access_block` ·
+`ownership_controls` · `policy` · `lifecycle_configuration`)은 태그 속성이
+없습니다(aws provider 6.68.0 스키마). mock 시험은 태그를 보지 못하므로 plan
+에서 버킷의 `tags_all` 로 확인합니다.
 
 ## 2단 절차(운영 O5 의 1 — kty 승인)
 
@@ -32,16 +36,21 @@ provider 의 `default_tags` 네 키(`Project` · `Environment` · `ManagedBy` ·
     ```
 
 1.  **로컬 상태로 생성합니다.** `backend.tf` 의 s3 백엔드를 덮는 override
-    파일을 잠시 둡니다(Terraform 표준 override 파일 · 추적하지 않음).
+    파일을 잠시 둡니다(Terraform 표준 override 파일 · 추적하지 않음). 앞에
+    남은 plan 파일은 먼저 지웁니다 — 새 plan 이 실패했을 때 옛 파일을 apply
+    하지 않게 합니다.
 
     ```shell
     printf 'terraform {\n  backend "local" {}\n}\n' > backend_override.tf
+    rm -f bootstrap.tfplan
     terraform init
     terraform plan -out=bootstrap.tfplan
     ```
 
-    plan 이 생성 7 · 그 밖 0 이고, 자원마다 `tags_all` 에 네 키가 있는지
-    확인한 뒤 적용합니다.
+    plan 이 생성 7 · 그 밖 0 이고, 버킷(`aws_s3_bucket`)의 `tags_all` 에 네
+    키가 있는지 확인한 뒤 적용합니다. 버킷 설정 자원 여섯은 태그 속성이 없어
+    보지 않습니다. plan 이 오류로 끝났거나 생성 7 이 아니면 apply 하지
+    않습니다.
 
     ```shell
     terraform apply bootstrap.tfplan

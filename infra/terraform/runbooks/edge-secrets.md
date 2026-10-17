@@ -216,8 +216,11 @@ aws sts get-caller-identity
             (`Plan: 4 to add, 0 to change, 0 to destroy`). 재개 때(2 부터 새
             키 쌍)는 공개키 교체 1 과 아직 없는 자원의 생성만 있습니다 —
             교체는 키 그룹 전까지만 됩니다(아래 「공개키 PEM 넘기기」).
-        *   자원마다 `tags_all` 에 네 키(`Project` · `Environment` ·
-            `ManagedBy` · `TerraformRoot = prod/secrets`)가 있습니다.
+        *   비밀 그릇 셋(`aws_secretsmanager_secret`)의 `tags_all` 에 네
+            키(`Project` · `Environment` · `ManagedBy` ·
+            `TerraformRoot = prod/secrets`)가 있습니다.
+            공개키(`aws_cloudfront_public_key`)는 태그 속성이 없어 보지
+            않습니다(aws provider 6.68.0 스키마).
         *   `aws_secretsmanager_secret_version` 자원이 0 입니다.
 
     1.  **apply**: 승인받은 plan 파일만 적용하고 지웁니다. 저장된 plan 의
