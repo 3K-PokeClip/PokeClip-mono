@@ -236,6 +236,11 @@ func TestShutdownDeferRegistrationOrder(t *testing.T) {
 		}
 		prev = at
 	}
+	// 루프의 ctx 가 곧 차선 ctx 다(7c 판단 7 · 검수 C7c-2) — run ctx 를 넘기면 루프가 오류로 끝나도 run ctx 가 살아 있어
+	// rewind.stop 이 차선 작업을 끊지 못하고 기다림에 매달린다.
+	if !strings.Contains(text, "loop(laneCtx, deps)") || strings.Contains(text, "loop(ctx, deps)") {
+		t.Error("loop 에 차선 ctx(laneCtx)가 아닌 ctx 를 넘긴다 — 오류 종료 때 rewind.stop 이 차선 작업을 끊지 못한다")
+	}
 }
 
 // 업로더가 붙으면서 루프에 두 신호가 늘었다. 둘 다 **같은 select** 에서 처리돼야 한다 —

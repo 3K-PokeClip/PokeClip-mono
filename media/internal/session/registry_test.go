@@ -553,6 +553,36 @@ func TestOpenDecisionCarriesEndingSessionOnlyForTDSplit(t *testing.T) {
 	}
 }
 
+// 재접속 계승 개시의 TD 는 max(6, 직전 회차 TD, round(첫 조각))이다(kty K1 · 계획 2.3 registry 행 ⑶). 잡는 결함: 직전 TD
+// 항이 빠지면 접두로 실린 직전 회차 조각이 목록 TD 를 넘고(뮤테이션 93), round(첫 조각) 항이 빠지면(TD 를 직전 회차 값으로
+// 덮음) 이 회차 첫 조각이 목록 TD 를 넘는다 — 둘 다 발행 전 검사가 막는다(6b 검수 C6b-6 (a)).
+func TestOpenDecisionInheritTargetDurationIsMaxOfThree(t *testing.T) {
+	tests := []struct {
+		name       string
+		prevTD     int32
+		durationMS int32
+		want       int32
+	}{
+		{"직전_TD_가_큼", 8, 4000, 8},
+		{"첫_조각이_큼", 6, 8000, 8},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			in := Input{StreamID: "demo", Seq: 42, StartWallUTC: wall.Add(time.Minute), DurationMS: tt.durationMS, Op: OpenOrCurrent}
+			prev := &previousSession{id: "S-prev", state: "ending", endReason: "offline", lastEnd: wall, targetDuration: tt.prevTD}
+
+			d := openDecision(in, nil, prev)
+
+			if d.plan == nil {
+				t.Fatal("openDecision 이 개시 재료(plan) 없이 돌아왔다")
+			}
+			if got := d.plan.targetDuration; got != tt.want {
+				t.Errorf("openDecision(첫 조각 %dms, 직전 TD %d) TD = %d, want %d", tt.durationMS, tt.prevTD, got, tt.want)
+			}
+		})
+	}
+}
+
 // s4_signal_grades·s4_signal_present(M3 몫) — 두 신호는 **WARN** 이고 조치에 필요한
 // 라벨을 달고 나온다.
 //

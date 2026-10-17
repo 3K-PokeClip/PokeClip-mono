@@ -192,6 +192,40 @@ func TestWatchFailureSkipsReconcileAbsentAndForget(t *testing.T) {
 	}
 }
 
+// 드리프트 대조 배선(watchDone 의 「성공」 행 · 설계 4.1 (a) · 판단 J39) — 감시 결과의 드리프트 재료를 캐시 AuditDrift 에 넘긴다.
+// 같은 스트림이 연속 두 감시에서 어긋나면 적재를 요구하고 다음 holdTick 이 그 적재를 낸다. 적재가 끝나면 cache_drift_repaired
+// 한 줄이다. 커밋 8 뮤테이션 정식 실행의 생존 뮤턴트(드리프트 대조 제거)가 드러낸 빈자리다 — 루프 층 시험이 드리프트 재료를
+// 싣지 않았다.
+func TestWatchDriftTwiceDemandsRepairLoad(t *testing.T) {
+	f := newPublishLoop(t)
+	f.watchEveryHold()
+	f.put("s1", liveLedger("s1", "S", 3, 3))
+	f.work.ledgers["s1"] = liveLedger("s1", "S", 3, 3)
+	f.work.watchFn = func([]index.WatchProbe) publish.WatchOutcome {
+		// DB 컷오프(1)가 캐시 컷오프(0)와 다르다.
+		return publish.WatchOutcome{RewindWatch: index.RewindWatch{Drift: []index.WatchDrift{
+			{StreamID: "s1", HasCutoff: true, CutoffSeq: 1},
+		}}}
+	}
+
+	f.hold(loopBase)
+	f.settleWatch(loopBase, 1)
+	if n := len(f.work.loadCalls()); n != 0 {
+		t.Fatalf("첫 어긋남 뒤 적재 %d번, want 0 — 연속 두 번째 어긋남에서 요구한다", n)
+	}
+	f.hold(loopBase.Add(30 * time.Second))
+	f.settleWatch(loopBase.Add(30*time.Second), 2)
+	f.hold(loopBase.Add(31 * time.Second)) // 요구 발사
+	f.settle(loopBase.Add(31 * time.Second))
+
+	if loads := f.work.loadCalls(); len(loads) != 1 || loads[0].StreamID != "s1" {
+		t.Errorf("적재 = %+v, want s1 한 번", loads)
+	}
+	if n := f.logs.count("cache_drift_repaired"); n != 1 {
+		t.Errorf("cache_drift_repaired %d줄, want 1", n)
+	}
+}
+
 // 적재 뒤 틱(체크리스트 474 B-3 34 · 계획 4.5 A3 결정 2 〔r42〕 · 뮤테이션 122) — 적재가 끝난 스트림에는 새 원소 없이도 틱을 한 번
 // 낸다(적재 중에 Ack 한 원소는 발행을 부르지 못했다).
 func TestPublishResumesAfterLoadWithoutNewEvent(t *testing.T) {

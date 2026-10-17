@@ -21,6 +21,20 @@ import (
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/rewind"
 )
 
+// 로그 이름 셋은 설계 관측 신호의 글자다(계획 5절 · 커밋 4 검수 R5-1 · kty qa #80 ②) — 경보 · 수집은 이 글자로 찾는다.
+// 다른 시험은 같은 상수로 로그를 거르므로 글자가 바뀌어도 통과한다. 여기서만 리터럴로 고정한다.
+func TestSignalLogNamesAreFixed(t *testing.T) {
+	for _, c := range []struct{ got, want string }{
+		{stallLog, "rewind_publish_stall_seconds"},
+		{gapPublishedLog, "rewind_gap_published_total"},
+		{abortedLog, "rewind_publish_aborted"},
+	} {
+		if c.got != c.want {
+			t.Errorf("로그 이름 = %q, want %q", c.got, c.want)
+		}
+	}
+}
+
 // 목록 객체 키(커밋 2 리뷰 인계 · 보안 확인 S-3) — 성분을 검증하는 생성기다. Store 는 키를 검증하지 않고 SDK 는
 // 점 구간(`..`)을 정규화하지 않고 보내므로, 성분에 경로 구분자나 상위 참조가 들어오면 다른 객체를 가리킨다.
 // 규칙은 playback 의 조각 · init 키 성분 검사(`playback/key.go:25-33`)와 같다.

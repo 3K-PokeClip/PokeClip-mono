@@ -162,7 +162,8 @@ func (a *assembly) assembleOrFatal(t *testing.T, cfg config.Config) *pgxpool.Poo
 }
 
 // assertDegraded 는 발행 몫이 통째로 강등된 형상을 본다(판단 J77 · 7b 검수 cc C) — 풀 · 캐시 · 차선 · Dirty 가 없고 ERROR 한
-// 줄이며 켜짐 줄은 없다. 업로더는 그대로다(강등은 발행 몫만이다 — 통지 채널이 살아 있다).
+// 줄이며 켜짐 줄은 없다. 업로더는 그대로다(강등은 발행 몫만이다 — 통지 채널이 살아 있다). 강등 줄에도 자격증명이 실리지 않는다
+// (7c 보안 참고 2 — 강등 갈래 전부가 회귀 그물이 된다).
 func assertDegraded(t *testing.T, a *assembly, pool *pgxpool.Pool) {
 	t.Helper()
 	r := a.rewind
@@ -182,6 +183,7 @@ func assertDegraded(t *testing.T, a *assembly, pool *pgxpool.Pool) {
 	if n := a.logs.count("rewind_publish_started"); n != 0 {
 		t.Errorf("rewind_publish_started = %d줄, want 0", n)
 	}
+	assertNoSecretsLogged(t, a.logs)
 }
 
 // assertNoSecretsLogged 는 남은 로그의 어느 속성에도 시험용 자격증명 값이 없는지 본다(G14 — provider 이름만 싣는다).
@@ -247,6 +249,58 @@ func TestAssemblePublishingDegradesOnPlainHTTPEndpoint(t *testing.T) {
 	assertDegraded(t, a, pool)
 	if n := s3.heads.Load(); n != 0 {
 		t.Errorf("평문 엔드포인트로 HEAD %d번, want 0", n)
+	}
+}
+
+// 7c 검수 C7c-1 · 보안 L-1 — https 검사는 설정값이 아니라 조립된 클라이언트의 실효 엔드포인트를 본다. S3_ENDPOINT 가 비어도
+// SDK 표준 설정(AWS_ENDPOINT_URL_S3 등)이 엔드포인트를 고른다. 평문이면 버킷 확인을 보내지 않고 강등한다. userinfo 가 든 값도
+// 강등하고 원문을 로그에 싣지 않는다(S3_ENDPOINT · 7a B-9 규칙 — 행의 userinfo 는 시험용 자격증명이라 assertNoSecretsLogged 가
+// 잡는다). 켜짐 · 강등 줄의 endpoint 는 userinfo 를 뗀 실효 값이다.
+func TestAssemblePublishingChecksEffectiveEndpoint(t *testing.T) {
+	for _, c := range []struct {
+		name          string
+		tls           bool
+		userinfo      bool
+		wantAssembled bool
+		wantHeads     int32
+	}{
+		{name: "평문", wantHeads: 0},
+		{name: "https_userinfo", tls: true, userinfo: true, wantHeads: 0},
+		{name: "https", tls: true, wantAssembled: true, wantHeads: 1},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			assemblyCredentialsEnv(t)
+			s3 := startFakeS3(t, http.StatusOK, httptest.NewServer)
+			if c.tls {
+				s3 = newFakeS3(t, http.StatusOK)
+			}
+			endpoint := s3.srv.URL
+			if c.userinfo {
+				endpoint = strings.Replace(endpoint, "https://", "https://"+assemblyAccessKey+":"+assemblySecretKey+"@", 1)
+			}
+			t.Setenv("AWS_ENDPOINT_URL_S3", endpoint)
+			cfg := assemblyCfg(t, "")
+			a := newAssembly(t, cfg, &fakeStore{})
+
+			pool := a.assemble(t, cfg)
+
+			msg := "rewind_publish_degraded"
+			if c.wantAssembled {
+				msg = "rewind_publish_started"
+				if pool == nil {
+					t.Fatalf("assemblePublishing = nil — 조립이 강등됐다: %v", a.logs.attrs("rewind_publish_degraded"))
+				}
+			} else {
+				assertDegraded(t, a, pool)
+			}
+			if got, _ := a.logs.attrs(msg)["endpoint"].(string); got != s3.srv.URL {
+				t.Errorf("%s endpoint = %q, want %q", msg, got, s3.srv.URL)
+			}
+			if n := s3.heads.Load(); n != c.wantHeads {
+				t.Errorf("HEAD %d번, want %d", n, c.wantHeads)
+			}
+			assertNoSecretsLogged(t, a.logs)
+		})
 	}
 }
 

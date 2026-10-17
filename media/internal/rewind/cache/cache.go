@@ -43,7 +43,7 @@ type Cache struct {
 
 // Options 는 적재의 튜너블 셋이다(계획 4.5 A3 결정 3 · 판단 J43 — r40 산정값). 칸이 영값이면 그 칸의 기본값을
 // 쓴다 — 캐시는 영값으로 쓰는 타입이라, 규칙이 없으면 LoadPushBuffer 0 에서 적재 중 push 한 번에 넘쳐 스스로
-// 다시 연다(장부 421 P-10). 0 을 「제한 없음」으로 읽지 않는다. 값을 넣는 조립은 커밋 7 이다.
+// 다시 연다(장부 421 P-10). 0 을 「제한 없음」으로 읽지 않는다. 조립은 영값(= 기본값)을 넘긴다(판단 J87 ⑶).
 type Options struct {
 	// LedgerLookback 은 적재의 되짚기 길이다(기본 2 × boundary.WindowMS = 두 시간).
 	LedgerLookback time.Duration

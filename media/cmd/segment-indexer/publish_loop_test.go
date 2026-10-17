@@ -394,3 +394,51 @@ func TestDiscontinuitySequenceIsAbsoluteWithPrevAndOwnerBaseWithout(t *testing.T
 		t.Errorf("목록 행 = %v · %v, want [2 3] · [3 4]", rowSeqs(calls[0]), rowSeqs(calls[1]))
 	}
 }
+
+// 절대식은 한 번 축출한 뒤에도 P 의 DISC-SEQ 에서 센다(계획 4.5 A1 결정 1 · 뮤테이션 66) — 바로 위 시험의 셋째 틱이다. 둘째
+// 목록에서 표시 하나가 빠져 P 의 DISC-SEQ 가 캐시 base 5 보다 큰 6 이 됐다. 셋째 창 4..5 에서는 빠지는 표시가 없어 6 그대로다.
+// 캐시 base 에 이번 축출 수만 더하는 증분식이면 5 로 되돌아가 발행 전 검사 S2(DISC-SEQ 비감소)가 멈춘다. 위 시험은 P 의
+// DISC-SEQ 가 캐시 base 와 같은 국면만 재서 증분식을 가르지 못했다(커밋 8 뮤테이션 정식 실행의 생존 뮤턴트).
+func TestDiscontinuitySequenceAccumulatesFromPrevAfterEviction(t *testing.T) {
+	f := newPublishLoop(t)
+	l := index.RewindLedger{HasCutoff: true, Sessions: []index.RewindSession{
+		{SessionID: "P", State: "ending", InitUploaded: true, TargetDuration: 6, DiscontinuityBase: 5},
+		{SessionID: "S", State: "live", InitUploaded: true, TargetDuration: 6, DiscontinuityBase: 5, InheritsSession: "P", MinSeq: 2},
+	}}
+	for seq := int64(0); seq <= 5; seq++ {
+		sid := "P"
+		if seq >= 2 {
+			sid = "S"
+		}
+		r := segRow("s1", sid, seq, seq <= 3)
+		r.DurationMS = 30 * 60 * 1000
+		l.Rows = append(l.Rows, r)
+	}
+	f.put("s1", l)
+
+	f.uploaded("s1", "S", 3)
+	f.hold(loopBase)
+	f.settle(loopBase)
+	for i, seq := range []int64{4, 5} {
+		at := loopBase.Add(time.Duration(i+1) * time.Second)
+		f.cache.ApplyPlaybackUploaded("s1", seq)
+		f.uploaded("s1", "S", seq)
+		f.hold(at)
+		f.settle(at)
+	}
+
+	calls := f.work.tickCalls()
+	if len(calls) != 3 {
+		t.Fatalf("틱 = %d번, want 3", len(calls))
+	}
+	var got []int64
+	for _, c := range calls {
+		got = append(got, c.in.DiscontinuitySequence)
+	}
+	if !slices.Equal(got, []int64{5, 6, 6}) {
+		t.Errorf("DISC-SEQ = %v, want [5 6 6] — 셋째는 P(6) + 빠진 표시 0", got)
+	}
+	if !slices.Equal(rowSeqs(calls[2]), []int64{4, 5}) {
+		t.Errorf("셋째 목록 행 = %v, want [4 5]", rowSeqs(calls[2]))
+	}
+}

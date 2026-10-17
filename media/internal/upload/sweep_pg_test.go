@@ -33,13 +33,23 @@ import (
 
 // TestMain 은 릴리스 게이트용 스위치다(index/testdb_test.go 와 같은 이디엄). 이 파일의 케이스는
 // PG_DSN 이 없으면 skip 되는데 skip 은 성공으로 집계된다 — REQUIRE_PG=1 이면 그 상황을 실패로 바꾼다.
+// S3 LIST 금지의 동적 그물(계획 6.5 ⑵)도 여기서 닫는다 — 가짜 Putter 의 목록 함정이 한 번이라도 불렸으면 시험이 모두
+// 통과했어도 패키지를 실패로 바꾸고 부른 자리를 적는다.
 func TestMain(m *testing.M) {
 	if os.Getenv("REQUIRE_PG") == "1" && os.Getenv("PG_DSN") == "" {
 		fmt.Fprintln(os.Stderr,
 			"REQUIRE_PG=1 인데 PG_DSN 이 비어 있다 — 스위퍼 PG 통합 케이스가 전량 skip 된다. 게이트 실패.")
 		os.Exit(1)
 	}
-	os.Exit(m.Run())
+	code := m.Run()
+	if calls := takeListTrapCalls(); len(calls) > 0 {
+		fmt.Fprintf(os.Stderr, "S3 LIST 금지 위반: 가짜 Putter 의 목록 연산이 %d번 불렸다 — 객체가 있는지는 인덱스 upload_state 로만 판단한다(프로필 4절)\n", len(calls))
+		for _, c := range calls {
+			fmt.Fprintln(os.Stderr, c)
+		}
+		code = 1
+	}
+	os.Exit(code)
 }
 
 // newSweepPool 은 이 패키지 전용 테스트 DB 에 붙은 풀이다. 접미 upload 로 가른다 — 패키지 테스트

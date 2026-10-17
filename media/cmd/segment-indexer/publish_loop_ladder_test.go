@@ -4,6 +4,7 @@ package main
 // 〔r51〕 〔r51a〕). 픽스처는 publish_loop_fixture_test.go 다.
 
 import (
+	"errors"
 	"log/slog"
 	"slices"
 	"testing"
@@ -247,6 +248,44 @@ func TestLazyRenewWaitsForIntervalAndIdleLane(t *testing.T) {
 			t.Errorf("갱신 %d번 · 틱 %d번, want 0 · 2 — 도는 틱에 lazy 를 병합하지 않는다", r, n)
 		}
 	})
+}
+
+// lazy 갱신은 틱을 내는 소유 회차(ShouldTick)에만 낸다(renewFences 문서 · 체크리스트 474 A-4 6) — ending 이 된 회차는 fence 를
+// 쥐었어도 틱이 없으니 lease 를 늘리지 않는다. 늘리면 Forget 까지 3.5초마다 갱신 왕복이 남는다. 커밋 8 뮤테이션 정식 실행의
+// 생존 뮤턴트(lazy 가 게이트를 보지 않음)가 드러낸 빈자리다.
+func TestLazyRenewSkipsOwnerThatDoesNotTick(t *testing.T) {
+	f := newPublishLoop(t)
+	f.put("s1", liveLedger("s1", "S", 3, 3))
+	f.publishOnce("s1", "S", 3, loopBase) // fence 를 쥐고 lease 갱신 시각 loopBase
+	f.cache.ApplySessionEnding("s1", "S")
+
+	f.hold(loopBase.Add(4 * time.Second)) // lazy 간격(3.5초)이 지났다
+	f.settle(loopBase.Add(4 * time.Second))
+
+	if n := len(f.work.renewCalls()); n != 0 {
+		t.Errorf("ending 회차의 lazy 갱신 = %d번, want 0", n)
+	}
+}
+
+// lazy 갱신의 실패는 재발행 표지를 세우지 않는다(publishDone 의 「틱 실패」 행 · 판단 J80 ⑶) — 실패로 세는 것은 틱 작업뿐이다.
+// lazy 실패에 표지를 세우면 새 조각 없이 틱이 한 번 더 나간다. 커밋 8 뮤테이션 정식 실행의 생존 뮤턴트(lazy 실패도 재발행)가
+// 드러낸 빈자리다.
+func TestLazyRenewFailureDoesNotRepublish(t *testing.T) {
+	f := newPublishLoop(t)
+	f.put("s1", liveLedger("s1", "S", 3, 3))
+	f.publishOnce("s1", "S", 3, loopBase)
+	f.work.renewFn = func(st publish.State, _ string) publish.Outcome {
+		return publish.Outcome{State: st, Err: errors.New("publish: fence 갱신 실패")}
+	}
+
+	f.hold(loopBase.Add(4 * time.Second)) // lazy 갱신이 실패한다
+	f.settle(loopBase.Add(4 * time.Second))
+	f.hold(loopBase.Add(5 * time.Second)) // 새 원소가 없는 holdTick
+	f.settle(loopBase.Add(5 * time.Second))
+
+	if r, n := len(f.work.renewCalls()), len(f.work.tickCalls()); r == 0 || n != 1 {
+		t.Errorf("갱신 %d번 · 틱 %d번, want 1번 이상 · 1(lazy 실패 뒤 재발행 틱 없음)", r, n)
+	}
 }
 
 // publishOnceStart 는 원소 하나로 틱을 내되 결과를 받지 않는다(도는 틱을 만든다).

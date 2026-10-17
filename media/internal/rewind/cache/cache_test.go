@@ -530,7 +530,7 @@ func TestReloadKeepsOnlyTheRunFromTheCutoff(t *testing.T) {
 	}
 }
 
-// 캐시를 조립하지 않은 프로세스(운영 인덱서 — 조립은 커밋 7)에서는 nil 이다. nil 이면 모든 메서드가
+// 캐시를 조립하지 않은 프로세스(S3_BUCKET 이 빈 형상 · 발행 몫이 강등된 형상의 인덱서)에서만 nil 이다. nil 이면 모든 메서드가
 // 아무것도 하지 않는다 — 인덱서가 INSERT 마다 부르므로 여기서 멈추면 장부 기록이 멈춘다(upload.Dirty
 // 와 같은 nil 규약). 커밋 5 가 더한 메서드(적재 · 요구 · 회차 push 셋 · 잘라내기 · 버리기 · 감시)와 커밋 7 이 더한
 // 읽기 둘(소유 회차 · 스트림 전부 — 발행 몫이 없는 프로세스의 루프도 부른다)도 같다.
@@ -636,6 +636,10 @@ func TestOwnerIsTheLatestOpenedSession(t *testing.T) {
 // 중인 스트림을 모두 스트림 순으로 돌려준다. 루프는 이것으로 스트림을 돌며 Forget 을 판정한다 — 부정 표식 스트림도 버려야
 // 하므로 뷰만 내주는 DriftProbes 로는 모자란다. 셋의 구분은 Loading · Snapshot 의 컷오프 · Owner 가 한다. 버린 스트림은
 // 빠진다.
+//
+// 스트림은 이름의 역순으로 넣고 그 뒤로 지우지 않는다 — 정렬을 빼는 변이(7a 검수 C7a-10)를 맵 순서 운에 기대지 않고 죽이는
+// 전제다. 원소가 8개 이하인 맵은 넣은 순서대로 칸을 채우고, 순회는 무작위 칸에서 시작해 칸 순서로 한 바퀴 돈다(런타임
+// internal/runtime/maps). 셋 이상을 역순으로 넣은 맵은 어느 칸에서 시작해도 오름차순이 나오지 않는다.
 func TestStreamsListsViewTombstoneAndLoadingStreams(t *testing.T) {
 	c := &cache.Cache{}
 	load(t, c, "e-view", openedAt40())

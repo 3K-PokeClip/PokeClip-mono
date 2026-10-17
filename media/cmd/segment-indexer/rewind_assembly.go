@@ -47,10 +47,10 @@ func assemblePublishing(ctx context.Context, cfg config.Config, up *upload.Uploa
 	// SEED_ALARM_AFTER 는 재스캔 주기의 두 배 이상이어야 한다(점멸 방지 — 판단 J85 ⑵ · ArmFallback 산식 선례). 재스캔 주기는 env 로
 	// 바뀌고 설계값(10분)은 기본 재스캔 5분의 두 배다.
 	opt.SeedAlarmAfter = max(opt.SeedAlarmAfter, 2*cfg.Watcher.RescanEvery)
-	pub, pool, err := newPublisher(ctx, cfg, opt)
+	pub, pool, endpoint, err := newPublisher(ctx, cfg, opt)
 	if err != nil {
 		r.log.Error("rewind_publish_degraded", "bucket", cfg.S3.Bucket, "region", cfg.S3.Region,
-			"endpoint", cfg.S3.Endpoint, "err", err,
+			"endpoint", endpoint, "err", err,
 			"note", "되감기 발행 몫만 강등된다 — 업로드 · 인덱싱은 계속되고 회복은 재기동이다")
 		return nil
 	}
@@ -67,16 +67,14 @@ func assemblePublishing(ctx context.Context, cfg config.Config, up *upload.Uploa
 	return pool
 }
 
-// newPublisher 는 opt 로 도는 발행자와 그 풀을 만든다(판단 J76 · J77) — https 검사 → S3 클라이언트(업로더와 따로) → 부팅 버킷
-// 확인 → 발행자 풀(인덱서 풀과 따로) → 발행자. 실패하면 만든 풀을 닫고 오류를 돌려준다(재시도 없음 — 재기동이 회복한다). S3
-// 클라이언트에는 닫는 손잡이가 없다 — 버킷 확인이 남긴 유휴 연결은 SDK 전송의 유휴 시한이 닫는다. 성공하면 INFO
-// rewind_publish_started 한 줄이다: 자격증명은 provider 이름만 싣고(G14), 베이스 URL 을 함께 싣는다 — 루프백 기본값이 운영에
-// 실리면 시청자 브라우저가 자기 컴퓨터를 부르므로 기동 로그로 바로 보이게 한다. writer 는 이 프로세스의 fence 토큰이다(DB 의
-// writer_fence 와 맞춰 볼 수 있게).
-func newPublisher(ctx context.Context, cfg config.Config, opt publish.Options) (*publish.Publisher, *pgxpool.Pool, error) {
-	if err := requireHTTPS(cfg.S3.Endpoint); err != nil {
-		return nil, nil, err
-	}
+// newPublisher 는 opt 로 도는 발행자와 그 풀을 만든다(판단 J76 · J77) — S3 클라이언트(업로더와 따로) → https 검사(실효
+// 엔드포인트) → 부팅 버킷 확인 → 발행자 풀(인덱서 풀과 따로) → 발행자. 실패하면 만든 풀을 닫고 오류를 돌려준다(재시도 없음 —
+// 재기동이 회복한다). S3 클라이언트에는 닫는 손잡이가 없다 — 버킷 확인이 남긴 유휴 연결은 SDK 전송의 유휴 시한이 닫는다. 성공하면
+// INFO rewind_publish_started 한 줄이다: 자격증명은 provider 이름만 싣고(G14), 베이스 URL 을 함께 싣는다 — 루프백 기본값이
+// 운영에 실리면 시청자 브라우저가 자기 컴퓨터를 부르므로 기동 로그로 바로 보이게 한다. writer 는 이 프로세스의 fence 토큰이다
+// (DB 의 writer_fence 와 맞춰 볼 수 있게). 셋째 반환값은 켜짐 · 강등 줄의 endpoint 칸이다 — 클라이언트의 실효 엔드포인트에서
+// userinfo 를 뗀 값이고(7c 검수 C7c-1), 클라이언트를 만들기 전에 실패하면 설정값이다.
+func newPublisher(ctx context.Context, cfg config.Config, opt publish.Options) (*publish.Publisher, *pgxpool.Pool, string, error) {
 	loadOpts := []func(*awsconfig.LoadOptions) error{
 		awsconfig.WithRegion(cfg.S3.Region),
 		awsconfig.WithRetryMaxAttempts(1), // 버킷 확인은 한 번이다 — 목록 요청의 시도 수는 S3Store 가 요청마다 고정한다
@@ -86,41 +84,64 @@ func newPublisher(ctx context.Context, cfg config.Config, opt publish.Options) (
 	}
 	awsCfg, err := awsconfig.LoadDefaultConfig(ctx, loadOpts...)
 	if err != nil {
-		return nil, nil, fmt.Errorf("AWS 설정 적재 실패: %w", err)
+		return nil, nil, cfg.S3.Endpoint, fmt.Errorf("AWS 설정 적재 실패: %w", err)
 	}
 	client := s3.NewFromConfig(awsCfg, func(o *s3.Options) { o.UsePathStyle = cfg.S3.ForcePathStyle })
+	ep := aws.ToString(client.Options().BaseEndpoint)
+	endpoint := endpointForLog(ep)
+	if err := requireHTTPS(ep); err != nil {
+		return nil, nil, endpoint, err
+	}
 	provider, err := checkBucket(ctx, awsCfg, client, cfg.S3.Bucket, opt.PublishTimeout)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, endpoint, err
 	}
 	// 발행자 풀은 인덱서 풀과 따로다(판단 J76) — 문장마다 락을 최대 10초 기다리는 동안 연결을 잡으므로 인덱싱 · 4.1 전이와 연결을
 	// 다투지 않게 한다. pgx 기본값(MaxConns · Deadline 처리기 · CancelRequest)은 그대로다 — 되돌림 뒤 잠금 해제가 거기에 기댄다.
 	pool, err := pgxpool.New(ctx, cfg.PGDSN)
 	if err != nil {
 		// DSN 에는 비밀번호가 들어 있으므로 에러에 싣지 않는다(인덱서 풀과 같은 규칙).
-		return nil, nil, fmt.Errorf("발행자 DB 연결 풀 생성 실패: %w", err)
+		return nil, nil, endpoint, fmt.Errorf("발행자 DB 연결 풀 생성 실패: %w", err)
 	}
 	pub, err := publish.New(pool, publish.NewS3Store(client, cfg.S3.Bucket), opt)
 	if err != nil {
 		pool.Close()
-		return nil, nil, err
+		return nil, nil, endpoint, err
 	}
 	opt.Log.Info("rewind_publish_started", "bucket", cfg.S3.Bucket, "region", cfg.S3.Region,
-		"endpoint", cfg.S3.Endpoint, "provider", provider, "base_url", opt.BaseURL, "writer", opt.Writer)
-	return pub, pool, nil
+		"endpoint", endpoint, "provider", provider, "base_url", opt.BaseURL, "writer", opt.Writer)
+	return pub, pool, endpoint, nil
 }
 
-// requireHTTPS 는 발행용 S3 엔드포인트가 https 인지 본다(판단 J77 ⑵ · 계획 커밋 순서 7 〔r50〕 ②) — 비었으면 SDK 기본(AWS S3 ·
+// requireHTTPS 는 발행용 S3 클라이언트의 실효 엔드포인트(client.Options().BaseEndpoint)가 https 인지 본다(판단 J77 ⑵ · 계획
+// 커밋 순서 7 〔r50〕 ② · 7c 검수 C7c-1). 실효 값은 S3_ENDPOINT 만이 아니라 SDK 표준 설정(AWS_ENDPOINT_URL_S3 ·
+// AWS_ENDPOINT_URL · 공유 설정 endpoint_url)에서도 온다 — 설정값만 보면 그 길로 평문이 들어온다. 비었으면 SDK 기본(AWS S3 ·
 // https)이라 통과다. 설정은 http 도 받는다(업로더의 MinIO 리그) — 목록 쓰기만 막는다: 쓰기 울타리가 서버의 조건부 쓰기에만
-// 기대므로 목록 요청을 평문 경로에 두지 않는다.
+// 기대므로 목록 요청을 평문 경로에 두지 않는다. userinfo 가 든 값도 막는다 — S3_ENDPOINT 는 config 가 거르지만 SDK 표준
+// 설정은 거르지 않는다(7a B-9 규칙 — 오류 문구에 원문을 싣지 않는다).
 func requireHTTPS(endpoint string) error {
 	if endpoint == "" {
 		return nil
 	}
-	if u, err := url.Parse(endpoint); err != nil || u.Scheme != "https" {
-		return errors.New("S3_ENDPOINT 가 https 가 아니다 — 발행용 S3 클라이언트는 https 로만 조립한다")
+	u, err := url.Parse(endpoint)
+	if err != nil || u.Scheme != "https" {
+		return errors.New("발행용 S3 엔드포인트가 https 가 아니다 — 발행용 S3 클라이언트는 https 로만 조립한다")
+	}
+	if u.User != nil {
+		return errors.New("발행용 S3 엔드포인트에 자격증명(user:pass@)이 들어 있다 — 자격증명은 AWS_ACCESS_KEY_ID 등 env 로 전달하라")
 	}
 	return nil
+}
+
+// endpointForLog 는 실효 엔드포인트를 로그 칸에 싣는 꼴이다 — userinfo 를 뗀다(S3_ENDPOINT · 7a B-9 규칙). URL 로 읽지
+// 못하는 값은 원문 대신 표식이다.
+func endpointForLog(endpoint string) string {
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return "(URL 로 읽지 못함)"
+	}
+	u.User = nil
+	return u.String()
 }
 
 // checkBucket 은 부팅 때 버킷을 한 번 확인하고 자격증명 provider 이름을 돌려준다(판단 J77 ⑶ · R4-9 처방 3). 시한은 timeout 하나다

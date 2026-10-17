@@ -70,6 +70,24 @@ func TestValidateInheritedTDSplitPrefixHaltsOnS5(t *testing.T) {
 	wantVerdict(t, err, "S5")
 }
 
+// S5 의 TD 상한은 소유 회차의 TD 로 잰다 — 목록의 줄이 모두 계승 접두 회차의 것이어도 그렇다(뮤테이션 94 · README ⓑ→ⓒ
+// 5행 VB-LASTROW). 입력은 쓰기 규칙(K1) 밖이다: 규칙대로면 S 가 TD 8 이상으로 열려 두 회차의 TD 가 같아지고, 이 조항이
+// 어느 회차의 TD 를 읽는지 가를 수 없다. 목록은 바로 위 시험의 S 가 첫 조각을 아직 settled 로 만들지 못한 동안의 것이다
+// (P8 접두 300..303 만). 마지막 줄 회차 P8 의 TD 8 로 재면 7,600ms 조각이 통과하고, 소유 회차 S 의 TD 6 으로 재면 그
+// 조각이 렌더가 쓴 TARGETDURATION:6 을 넘어 S5 로 멈춘다.
+func TestValidateTDIsOwnerSessionsOutsideWriteRule(t *testing.T) {
+	p8 := rewind.Session{ID: "P8", TargetDuration: 8, MinSeq: 300, InitUploaded: true}
+	s := rewind.Session{ID: "S", InheritsSession: "P8", TargetDuration: 6, MinSeq: 304, InitUploaded: true}
+	p := playlist("S", []rewind.Session{p8, s},
+		[]boundary.Row{row("P8", 300, day, 7600)},
+		run("P8", 301, 303, day.Add(7600*time.Millisecond)),
+	)
+
+	err := validate(t, p, 1, nil)
+
+	wantVerdict(t, err, "S5")
+}
+
 // S5 머리 대조는 소유 회차의 TD·base 로 한다 — 목록 첫 줄이 계승 접두 회차의 것이어도 그렇다(렌더 머리와
 // 같은 규칙 — TestRenderHeaderComesFromOwnerSession). 두 회차의 TD 가 다른 계승 목록으로 잰다: 바로 위
 // TestValidateInheritedTDSplitPrefixHaltsOnS5 의 S 가 한 시간 남짓 송출해 P8 의 긴 첫 조각이 창에서
@@ -119,6 +137,41 @@ func TestValidatePrefixOnlyPlaylistHeaderComesFromOwnerSession(t *testing.T) {
 	p.Rows = p.Rows[:3]
 
 	err := validate(t, p, 1, nil)
+
+	wantVerdict(t, err, "")
+}
+
+// 머리 DISC-SEQ 도 소유 회차의 base 다 — 접두 회차와 소유 회차의 base 가 갈린 계승 목록으로 잰다(뮤테이션 76 ·
+// VH-FIRSTROW-BASE · 계획 4.5 F 와 「ⓑ 에서 ⓒ 로 넘긴 것」 6행 — 위 두 시험은 두 회차의 base 가 같아 가르지 못했다).
+// 쓰기 규칙 안이다(O←P←S · 발행 모형 A0).
+//
+//	P  O 를 계승해 seq 40 에서 열린 회차(base 0) — 40..42 를 쓰고 끝났다. 40 은 계승 회차의 첫 조각이라 끊김
+//	   표시가 있다. P 는 ending 이 되어 제 목록을 더 내지 않았으니 40 을 축출한 적이 없고 base 는 0 그대로다
+//	S  P 를 계승해 seq 43 에서 열렸다(P 의 base 0 복사). S 의 창이 한 시간을 채워 40 을 축출했다 — 발행자가
+//	   소유 회차 자리에 적는 DISC-SEQ 는 0 + 1 = 1 이다(A1 결정 1 절대식)
+//
+// 목록 = P 접두 41..42 + S 43..940(900 × 4초 = 한 시간 — S3). 렌더는 머리에 소유 회차의 1 을 쓴다. 첫 줄 회차
+// P 의 base 0 으로 대조하면 어긋나 멈춘다.
+func TestValidateHeaderUsesOwnerBaseAfterPrefixEviction(t *testing.T) {
+	p := rewind.Session{ID: "P", InheritsSession: "O", TargetDuration: 6, MinSeq: 40, InitUploaded: true}
+	s := rewind.Session{ID: "S", InheritsSession: "P", DiscontinuityBase: 1, TargetDuration: 6, MinSeq: 43, InitUploaded: true}
+	pl := playlist("S", []rewind.Session{p, s}, run("P", 41, 42, day.Add(4*time.Second)), run("S", 43, 940, day.Add(time.Minute)))
+
+	err := validate(t, pl, 1, nil)
+
+	wantVerdict(t, err, "")
+}
+
+// 접두만 실린 목록도 머리 DISC-SEQ 는 소유 회차의 base 다(뮤테이션 77 · VH-LASTROW-BASE). 바로 위 시험의 P 가 한
+// 시간 넘게 송출했지만 ③ 가 밀려 제 목록의 머리가 40 근처에 멈춘 채 ending 이 됐다(base 0 그대로). S 가 P 를 계승해
+// seq 941 에서 열렸고(base 0 복사) 941 은 아직 settled 가 아니다. 밀렸던 P 의 ③ 가 올라가며 S 의 창이 P 접두로만
+// 한 시간을 채워 40 을 축출했다 — S 의 DISC-SEQ 는 1 이다. 목록 = P 41..940 이라 마지막 줄 회차도 P(base 0)다.
+func TestValidateHeaderUsesOwnerBaseOnPrefixOnlyList(t *testing.T) {
+	p := rewind.Session{ID: "P", InheritsSession: "O", TargetDuration: 6, MinSeq: 40, InitUploaded: true}
+	s := rewind.Session{ID: "S", InheritsSession: "P", DiscontinuityBase: 1, TargetDuration: 6, MinSeq: 941, InitUploaded: true}
+	pl := playlist("S", []rewind.Session{p, s}, run("P", 41, 940, day.Add(4*time.Second)))
+
+	err := validate(t, pl, 1, nil)
 
 	wantVerdict(t, err, "")
 }
