@@ -6,9 +6,11 @@
 #
 # AWS에 닿지 않는다. secrets를 하나도 참조하지 않고 id-token 권한도 없어(OIDC로 역할을 받을 수
 # 없다) 러너에 AWS 자격 증명이 생길 길이 없다. terraform은 -backend=false와 mock provider로만
-# 돌고, 단계 직전 점검 시험이 부르는 aws는 가짜(precheck/tests/fakebin/aws)다. put_secret_test의
-# 실물 CLI 계약 사례만 러너의 진짜 aws를 부르는데, 가짜 자격 · 빈 설정 · 메타데이터 조회 끔 ·
-# 닫힌 로컬 주소(엔드포인트와 프록시 모두 127.0.0.1:9)로 불러 요청이 러너 밖으로 나가지 않는다.
+# 돌고, 단계 직전 점검 시험이 부르는 aws는 가짜(precheck/tests/fakebin/aws)다. 러너의 진짜 aws에
+# 기대는 시험은 둘이다. put_secret_test의 실물 CLI 계약 사례는 진짜 aws를 부르되 가짜 자격 · 빈
+# 설정 · 메타데이터 조회 끔 · 닫힌 로컬 주소(엔드포인트와 프록시 모두 127.0.0.1:9)로 불러 요청이
+# 러너 밖으로 나가지 않는다. precheck testlib_test의 실행 비트 사례는 진짜 aws를 부르지 않고 PATH
+# 에서 이름만 푼다(shell 잡 「단계 직전 점검 시험」 주석).
 #
 # 도구 넷(terraform · tflint · conftest · shellcheck)은 제3자 액션 없이 배포처에서 직접 받아 아래에 적은
 # sha256과 맞을 때만 쓴다. 내려받기는 https만 따르고(리다이렉트 포함) 시간 상한을 둔다. 판은
@@ -26,14 +28,15 @@
 #                   C874011F0AB405110D02105534365D9472D7468F — HashiCorp가 공표한 지문과 다시
 #                   대조)로 확인한다.
 #       tflint      릴리스 checksums.txt의 tflint_linux_amd64.zip 줄.
-#                   gh attestation verify checksums.txt -R terraform-linters/tflint 로 확인하고,
-#                   주체가 …/terraform-linters/tflint/.github/workflows/release.yml@refs/tags/<판>,
-#                   발급자가 https://token.actions.githubusercontent.com 인지 본다(tflint의 cosign
+#                   gh attestation verify checksums.txt -R terraform-linters/tflint
+#                     --signer-workflow terraform-linters/tflint/.github/workflows/release.yml
+#                   로 서명 워크플로까지 기계로 확인하고, 주체의 ref가 refs/tags/<판>, 발급자가
+#                   https://token.actions.githubusercontent.com 인지 본다(tflint의 cosign
 #                   keyless 서명 파일은 그 프로젝트가 deprecated로 둔 경로다).
 #       conftest    릴리스 checksums.txt의 conftest_<판>_Linux_x86_64.tar.gz 줄.
-#                   gh attestation verify checksums.txt -R open-policy-agent/conftest 로 확인하고,
-#                   주체가 …/open-policy-agent/conftest/.github/workflows/release.yaml@refs/tags/v<판>,
-#                   발급자가 위와 같은지 본다.
+#                   gh attestation verify checksums.txt -R open-policy-agent/conftest
+#                     --signer-workflow open-policy-agent/conftest/.github/workflows/release.yaml
+#                   로 확인하고, 주체의 ref가 refs/tags/v<판>, 발급자가 위와 같은지 본다.
 #       shellcheck  체크섬 파일이 없다. GitHub 릴리스 자산 shellcheck-<판>.linux.x86_64.tar.gz의
 #                   digest(API)다.
 #
