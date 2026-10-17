@@ -8,9 +8,10 @@
 **서버에서 실행하는 명령은 전부 root 다.** `.env` 가 `root:root 0600` 이라서, `sudo` 를
 빼면 render.sh 는 `.env` 읽기 검사에서 중단되고, compose 는 변수 보간에 실패한다.
 
-**docker 그룹 = 비밀 열람권이다.** 응답기의 비밀 둘(resolve 출입증 · Control API 비번)은
-컨테이너 환경 변수라 `docker inspect` 로 보인다. 상자에서 docker 그룹에 사람을 더하지
-않는다.
+**docker 그룹 = 상자 root 다(비밀 열람 포함).** docker 그룹은 `docker run -v /:/host`
+로 상자 파일을 root 로 읽고 쓸 수 있다. 응답기의 비밀 둘(resolve 출입증 · Control API
+비번)도 컨테이너 환경 변수라 `docker inspect` 로 보인다. 상자에서 docker 그룹에 사람을
+더하지 않는다.
 
 **이 저장소는 public 이다 — 실제 AWS 자원 ID · 공인 IP · 사설 IP 를 이 문서에 적지
 않는다**(git 히스토리에 영구히 남는다). 아래 셸 변수를 세션 시작 시 채워서 쓴다. 값은 AWS
@@ -207,7 +208,9 @@ nc -z -w3 media-dev.pokeclip.com 22 && echo "22 열림 — 즉시 조사" || ech
 # chown/chmod --reference) · GNU tar(--compare) · sudo · docker compose v2.
 # 종료 코드: 0 통과 · 1 일치 없음(기록 · 기대와 다르다) · 2 검사 실패(목록 · 조회 · 도구가
 # 돌지 못했다 · 인자가 틀렸다). 일치 없음은 명령 치환 · 파이프 밖에서만 낸다 — 안에서
-# 내면 바깥의 ERR 덫이 검사 실패로 바꿔 찍는다.
+# 내면 바깥의 ERR 덫이 검사 실패로 바꿔 찍는다. 파일은 "$(cat -- …)" 로 읽는다 —
+# "$(< …)" 는 파일이 없을 때 ERR 덫을 거치지 않고 종료 1 이다.
+# 상자 파일을 쓰거나 지우는 블록은 첫머리에서 assert_demo_dir_safe 를 부른다.
 # 자리는 상자 값이 기본이다. 로컬 리허설은 환경 변수(DEMO_HOME · DEMO_REPO ·
 # COMPOSE_PROJECT_NAME)로만 바꾼다 — 블록의 바이트는 그대로다(0절).
 set -euo pipefail
@@ -242,6 +245,43 @@ mismatch() {
 check_failed() {
   echo "검사 실패: $*" >&2
   exit 2
+}
+
+# assert_demo_dir_safe 는 DEMO_DIR · ${DEMO_DIR}/ingest-auth · DENY_DIR 이 root
+# 소유 · 링크 아님 · 그룹 · 기타 쓰기 없음인지 본다. 남이 쓸 수 있으면 예측할 수 있는 이름에
+# 링크를 심어 root 의 cp · shred · > 를 딴 파일로 돌릴 수 있다. 뒤의 둘은 첫 반영(R5)
+# 전에는 없으므로 있을 때만 본다. 어긋나면 일치 없음이다.
+assert_demo_dir_safe() {
+  local dir info uid mode
+  for dir in "${DEMO_DIR}" "${DEMO_DIR}/ingest-auth" "${DENY_DIR}"; do
+    if [[ "${dir}" != "${DEMO_DIR}" && ! -e "${dir}" && ! -L "${dir}" ]]; then
+      continue
+    fi
+    [[ -d "${dir}" && ! -L "${dir}" ]] \
+      || mismatch "${dir} 가 없거나 디렉터리가 아니다(링크 포함)"
+    info="$(stat -c '%u %a' -- "${dir}")"
+    read -r uid mode <<< "${info}"
+    [[ "${uid}" == 0 ]] || mismatch "${dir} 가 root 소유가 아니다(${uid})"
+    (( (8#${mode} & 8#022) == 0 )) \
+      || mismatch "${dir} 에 root 밖의 쓰기 권한이 있다(${mode})"
+  done
+}
+
+# remove_box_file 은 상자 파일 $2 를 지운다 — $1 이 shred 면 shred -u, rm 이면 rm 이다.
+# 없으면 그대로 두고, 일반 파일이 아니거나 링크면 지우지 않고 일치 없음이다(shred 와
+# [[ -e ]] 는 링크를 따라가 그 대상을 덮어쓴다).
+remove_box_file() {
+  local -r how="$1" path="$2"
+  if [[ ! -e "${path}" && ! -L "${path}" ]]; then
+    return 0
+  fi
+  [[ -f "${path}" && ! -L "${path}" ]] \
+    || mismatch "일반 파일이 아니거나 링크다 — 지우지 않는다: ${path}"
+  case "${how}" in
+    shred) shred -u -- "${path}" ;;
+    rm) rm -f -- "${path}" ;;
+    *) check_failed "지우는 법은 shred · rm 가운데 하나다: ${how}" ;;
+  esac
 }
 
 # owner_git 은 체크아웃 소유자 신원으로 git 을 부른다.
@@ -357,12 +397,19 @@ live_compose() {
 # container_id 는 이 compose 프로젝트에서 서비스 $1 의 컨테이너 id 하나를 변수 $2 에
 # 넣는다. 없거나 둘 이상이면 일치 없음이다.
 container_id() {
+  container_id_or_none "$1" "$2"
+  [[ -n "${!2}" ]] || mismatch "$1 컨테이너가 없다"
+}
+
+# container_id_or_none 은 container_id 와 같되, 컨테이너가 없으면 변수 $2 를 비운다(접힌
+# 뒤 · 첫 반영 전). 둘 이상이면 일치 없음이다.
+container_id_or_none() {
   local -a ids
   docker ps -a -q --filter "label=com.docker.compose.project=${PROJECT}" \
     --filter "label=com.docker.compose.service=$1" > "${WORK}/id.$1"
   mapfile -t ids < "${WORK}/id.$1"
-  (( ${#ids[@]} == 1 )) || mismatch "$1 컨테이너가 하나가 아니다(${#ids[@]}개)"
-  printf -v "$2" '%s' "${ids[0]}"
+  (( ${#ids[@]} <= 1 )) || mismatch "$1 컨테이너가 둘 이상이다(${#ids[@]}개)"
+  printf -v "$2" '%s' "${ids[0]:-}"
 }
 
 # restore_head_shape 는 HEAD 형태를 기록대로 맞춘다. 기록이 브랜치이고 그 브랜치가 아직
@@ -488,26 +535,70 @@ t_backup_names() {
   done < "${WORK}/names"
 }
 
-# dispose_t_backups 는 T 백업 아홉과 그 .part 를 있는 것만 지운다 — 비밀 둘(resolve 토큰 ·
-# API 비번 · 잠금값)은 shred -u(이름 제거 + 최선 노력 — 11-7), 나머지 일곱은 rm. 끝에 T
-# 백업 이름 0 을 단언한다. 롤백 E-2 와 T 백업 처분 블록이 이 함수 하나를 부른다(첫머리
-# 단언은 각 블록에 있다).
+# stray_secret_names 는 끊긴 R1 · 렌더가 남길 수 있는 비밀 임시 파일(.env.next — resolve
+# 출입증 · API 비번, mediamtx.demo.yml.tmp.* — 잠금값)의 이름을 한 줄에 하나씩 낸다.
+stray_secret_names() {
+  local name
+  ls -1A -- "${DEMO_DIR}" > "${WORK}/stray-names"   # 못 받으면 검사 실패
+  while IFS= read -r name; do
+    case "${name}" in
+      .env.next | mediamtx.demo.yml.tmp.*) printf '%s\n' "${name}" ;;
+    esac
+  done < "${WORK}/stray-names"
+}
+
+# dispose_stray_secrets 는 stray_secret_names 의 파일을 shred -u 로 지운다(링크면 멈춘다).
+# T 백업 처분 · E-2 · 반영 전 비밀 파기가 부른다 — 셋 다 반영 · 렌더가 돌지 않는 안정
+# 상태를 첫머리에서 단언한 뒤다.
+dispose_stray_secrets() {
+  local name
+  stray_secret_names > "${WORK}/stray"
+  while IFS= read -r name; do
+    remove_box_file shred "${DEMO_DIR}/${name}"
+  done < "${WORK}/stray"
+}
+
+# dispose_t_backups 는 T 백업 아홉과 그 .part 를 있는 것만 지운다 — 비밀 둘(.env.T.bak —
+# resolve 출입증 · API 비번, 렌더 산출물 백업 — 잠금값)은 shred -u(이름 제거 + 최선 노력
+# — 11-7), 나머지 일곱은 rm. 끊긴 R1 · 렌더의 비밀 임시 파일도 shred -u 로 지운다. 링크 ·
+# 일반 파일 아닌 것은 지우지 않고 멈춘다. 끝에 그 이름 0 을 단언한다. 롤백 E-2 와 T 백업
+# 처분 블록이 이 함수 하나를 부른다(첫머리 단언은 각 블록에 있다).
 dispose_t_backups() {
-  local name path
+  local name
   for name in .env.T.bak mediamtx.demo.yml.T.bak; do
-    for path in "${DEMO_DIR}/${name}" "${DEMO_DIR}/${name}.part"; do
-      if [[ -e "${path}" ]]; then
-        shred -u -- "${path}"
-      fi
-    done
+    remove_box_file shred "${DEMO_DIR}/${name}"
+    remove_box_file shred "${DEMO_DIR}/${name}.part"
   done
   for name in T.sha T.head T.status T.worktree.patch T.untracked.z \
     T.untracked.tgz T.docker; do
-    rm -f -- "${DEMO_DIR}/${name}" "${DEMO_DIR}/${name}.part"
+    remove_box_file rm "${DEMO_DIR}/${name}"
+    remove_box_file rm "${DEMO_DIR}/${name}.part"
   done
+  dispose_stray_secrets
   t_backup_names > "${WORK}/t-left"
+  stray_secret_names >> "${WORK}/t-left"
   [[ ! -s "${WORK}/t-left" ]] \
-    || mismatch "T 백업 잔여: $(tr '\n' ' ' < "${WORK}/t-left")"
+    || mismatch "T 백업 · 비밀 임시 파일 잔여: $(tr '\n' ' ' < "${WORK}/t-left")"
+}
+
+# assert_backups_whole 은 상태 $1(pre-T · T)의 백업 아홉이 다 있는지 본다. 비면 안 되는
+# 여섯(.env · 렌더 산출물 · SHA · HEAD 형태 · 컨테이너 · 망 이름 · 묶음)은 크기까지, 비어
+# 있을 수 있는 셋(status · 손 수정 패치 · 추적 밖 목록)은 있음만 본다. 없으면 일치
+# 없음이다. 묶음은 tar -tzf 로 읽혀야 한다(못 읽으면 검사 실패).
+assert_backups_whole() {
+  local -r state="$1"
+  local name
+  for name in ".env.${state}.bak" "mediamtx.demo.yml.${state}.bak" \
+    "${state}.sha" "${state}.head" "${state}.docker" \
+    "${state}.untracked.tgz"; do
+    [[ -s "${DEMO_DIR}/${name}" ]] \
+      || mismatch "${state} 백업이 없거나 비었다: ${name}"
+  done
+  for name in status worktree.patch untracked.z; do
+    [[ -e "${DEMO_DIR}/${state}.${name}" ]] \
+      || mismatch "${state} 백업이 없다: ${state}.${name}"
+  done
+  tar -tzf "${DEMO_DIR}/${state}.untracked.tgz" > /dev/null
 }
 
 # deny_scan 은 거부 목록 파일 $1 을 줄 문법(응답기 DenyList 와 같은 규칙)으로 읽는다.
@@ -517,11 +608,12 @@ dispose_t_backups() {
 #   $2.tokens  유효 토큰 집합(바이트 순 · 한 줄에 하나 · 같은 토큰은 하나)
 #   $2.bad     틀린 줄 수(십진수 한 줄)
 #   $2.kept    $3 이 있으면 값이 $3 인 줄을, 없으면 틀린 줄을 뺀 나머지 줄(원래 차례 ·
-#              바이트, 줄마다 줄바꿈). NUL 이 든 줄은 늘 뺀다.
+#              바이트 — 끝 줄바꿈이 없던 마지막 줄은 그대로 없이). NUL 이 든 줄은 늘
+#              뺀다.
 deny_scan() {
   local -r file="$1" out="$2" drop="${3:-}"
   local line value flag
-  local -i n=0 bad=0
+  local -i n=0 bad=0 eof=0
   local -A nul_lines=()
   local -a tokens=()
   # bash 의 read 는 NUL 을 버린다 — NUL 이 든 줄의 번호를 먼저 따로 받는다
@@ -534,7 +626,8 @@ deny_scan() {
   done < "${WORK}/nul-flags"
   n=0
   : > "${out}.kept"
-  while IFS= read -r line || [[ -n "${line}" ]]; do
+  # read 가 실패하면(끝 줄바꿈 없는 마지막 줄 · 파일 끝) eof 를 세운다
+  while IFS= read -r line || { eof=1; [[ -n "${line}" ]]; }; do
     n+=1
     if [[ -n "${nul_lines[${n}]:-}" ]]; then
       continue   # 틀린 줄 — 아래에서 nul_lines 로 센다
@@ -555,7 +648,11 @@ deny_scan() {
         continue
       fi
     fi
-    printf '%s\n' "${line}" >> "${out}.kept"
+    if (( eof )); then
+      printf '%s' "${line}" >> "${out}.kept"   # 원래 끝 줄바꿈이 없다
+    else
+      printf '%s\n' "${line}" >> "${out}.kept"
+    fi
   done < "${file}"
   bad+=${#nul_lines[@]}
   if (( ${#tokens[@]} > 0 )); then
@@ -584,23 +681,34 @@ assert_responder_may() {
     || mismatch "응답기가 ${path} 에 권한 ${want} 이 없다(${uid}:${gid} ${mode})"
 }
 
+# assert_deny_file_shape 는 $1 이 응답기가 읽을 수 있는 거부 목록 꼴인지 본다 — 일반
+# 파일(링크 아님) · 64 KiB 이하 · 응답기가 읽음. 넘거나 일반 파일이 아니면 응답기는 읽기
+# 실패로 다룬다(새 연결 전부 거부 · cut 은 아무것도 끊지 않는다 — 7-4). 어긋나면 일치
+# 없음이다.
+assert_deny_file_shape() {
+  local size
+  [[ -f "$1" && ! -L "$1" ]] \
+    || mismatch "거부 목록 파일이 없거나 일반 파일이 아니다(7-4): $1"
+  size="$(stat -c '%s' -- "$1")"
+  (( size <= DENY_MAX_BYTES )) \
+    || mismatch "거부 목록이 64 KiB 를 넘는다(${size} 바이트): $1"
+  assert_responder_may "$1" 4
+}
+
 # assert_ready_to_start_ingest_auth 는 응답기를 (다시) 띄우기 전에 그 입력을 본다(7-4 —
 # kty 106차). 거부 목록 파일이 없으면 응답기는 빈 목록으로 떠 거부했던 토큰이 신호 없이
 # 다시 붙으므로 멈춘다. 거부 목록은 일반 파일 · 64 KiB 이하 · 응답기가 읽음 · 틀린 줄 0,
-# 상태 디렉터리는 10003 소유 · 응답기가 쓸 수 있음을 본다.
+# 상태 디렉터리는 10003 소유 · 응답기가 쓸 수 있음을 본다. 인자 $1 이 있으면 살아 있는
+# 파일 대신 그 파일(끼울 후보 — 해제 · 되돌림 적용)을 본다.
 assert_ready_to_start_ingest_auth() {
-  local size bad owner
+  local -r file="${1:-${DENY_FILE}}"
+  local bad owner
   [[ -d "${DENY_DIR}" && ! -L "${DENY_DIR}" ]] \
     || mismatch "거부 목록 디렉터리가 없다: ${DENY_DIR}"
-  [[ -f "${DENY_FILE}" && ! -L "${DENY_FILE}" ]] \
-    || mismatch "거부 목록 파일이 없거나 일반 파일이 아니다(7-4): ${DENY_FILE}"
-  size="$(stat -c '%s' -- "${DENY_FILE}")"
-  (( size <= DENY_MAX_BYTES )) \
-    || mismatch "거부 목록이 64 KiB 를 넘는다(${size} 바이트)"
+  assert_deny_file_shape "${file}"
   assert_responder_may "${DENY_DIR}" 1
-  assert_responder_may "${DENY_FILE}" 4
-  deny_scan "${DENY_FILE}" "${WORK}/ready"
-  bad="$(< "${WORK}/ready.bad")"
+  deny_scan "${file}" "${WORK}/ready"
+  bad="$(cat -- "${WORK}/ready.bad")"
   [[ "${bad}" == 0 ]] \
     || mismatch "거부 목록에 틀린 줄이 ${bad}개 — 틀린 줄 걷기(10절)가 먼저다"
   [[ -d "${STATE_DIR}" && ! -L "${STATE_DIR}" ]] \
@@ -615,17 +723,18 @@ assert_ready_to_start_ingest_auth() {
 # 하나를 부른다. 인자는 사본 · 새 파일 · 대상 토큰 · 단계(plain — 주석 전, commented —
 # 절단 사유 주석 한 줄을 붙인 최종 새 파일)다. 대상이 사본의 집합에 있다 · 새 파일의 집합 =
 # 사본의 집합 − {대상} · 두 파일에 틀린 줄 0 · 대상의 줄 밖의 줄은 차례 · 바이트까지
-# 같다(commented 면 그 뒤에 '#' 로 시작하는 한 줄만 더 있다) · 새 파일을 응답기가 읽는다.
-# 어긋나면 일치 없음이고 아무것도 바꾸지 않는다.
+# 같다(commented 면 그 뒤에 '#' 로 시작하는 한 줄만 더 있다 — 사본의 마지막 줄에 끝
+# 줄바꿈이 없었으면 그 사이에 줄바꿈 하나) · 새 파일이 64 KiB 이하 일반 파일이고 응답기가
+# 읽는다. 어긋나면 일치 없음이고 아무것도 바꾸지 않는다.
 assert_unblock_files() {
   local -r copy="$1" new="$2" target="$3" stage="$4"
   local t bad size lines last first
   local -i found=0
   deny_scan "${copy}" "${WORK}/copy" "${target}"
   deny_scan "${new}" "${WORK}/new"
-  bad="$(< "${WORK}/copy.bad")"
+  bad="$(cat -- "${WORK}/copy.bad")"
   [[ "${bad}" == 0 ]] || mismatch "사본에 틀린 줄이 ${bad}개 — 틀린 줄 걷기(10절) 뒤 준비부터"
-  bad="$(< "${WORK}/new.bad")"
+  bad="$(cat -- "${WORK}/new.bad")"
   [[ "${bad}" == 0 ]] || mismatch "새 파일에 틀린 줄이 ${bad}개"
   : > "${WORK}/want.tokens"
   while IFS= read -r t; do
@@ -643,9 +752,11 @@ assert_unblock_files() {
       assert_same "${WORK}/copy.kept" "${new}" '대상의 줄 밖의 줄이 사본과 다르다'
       ;;
     commented)
-      size="$(stat -c '%s' -- "${WORK}/copy.kept")"
+      cp -- "${WORK}/copy.kept" "${WORK}/want.head"
+      end_with_newline "${WORK}/want.head"   # 주석은 따로 한 줄이다
+      size="$(stat -c '%s' -- "${WORK}/want.head")"
       head -c "${size}" -- "${new}" > "${WORK}/new.head"
-      assert_same "${WORK}/copy.kept" "${WORK}/new.head" \
+      assert_same "${WORK}/want.head" "${WORK}/new.head" \
         '대상의 줄 밖의 줄이 사본과 다르다'
       tail -c "+$(( size + 1 ))" -- "${new}" > "${WORK}/new.tail"
       lines="$(wc -l < "${WORK}/new.tail")"
@@ -657,7 +768,7 @@ assert_unblock_files() {
       ;;
     *) check_failed "단계는 plain · commented 가운데 하나다: ${stage}" ;;
   esac
-  assert_responder_may "${new}" 4
+  assert_deny_file_shape "${new}"
 }
 
 # assert_walk_files 는 틀린 줄 걷기의 단언이다. 사본 $1 과 새 파일 $2 의 유효 토큰 집합이
@@ -668,7 +779,7 @@ assert_walk_files() {
   local bad
   deny_scan "${copy}" "${WORK}/walk-copy"
   deny_scan "${new}" "${WORK}/walk-new"
-  bad="$(< "${WORK}/walk-new.bad")"
+  bad="$(cat -- "${WORK}/walk-new.bad")"
   [[ "${bad}" == 0 ]] || mismatch "새 파일에 틀린 줄이 ${bad}개"
   assert_same "${WORK}/walk-copy.tokens" "${WORK}/walk-new.tokens" \
     '유효 토큰 집합이 사본과 다르다'
@@ -678,14 +789,14 @@ assert_walk_files() {
 
 # assert_revert_file 은 사본 되돌림의 단언이다. 되돌릴 파일 $3 의 유효 토큰 집합 = 사본
 # $1 의 집합 ∪ 덧붙은 줄 $2 의 집합 · 틀린 줄 0 · 사본의 바이트가 그대로 앞에 있다 ·
-# 응답기가 읽는다. 어긋나면 일치 없음이다.
+# 64 KiB 이하 일반 파일이고 응답기가 읽는다. 어긋나면 일치 없음이다.
 assert_revert_file() {
   local -r copy="$1" added="$2" revert="$3"
   local bad size
   deny_scan "${copy}" "${WORK}/rv-copy"
   deny_scan "${added}" "${WORK}/rv-added"
   deny_scan "${revert}" "${WORK}/rv"
-  bad="$(< "${WORK}/rv.bad")"
+  bad="$(cat -- "${WORK}/rv.bad")"
   [[ "${bad}" == 0 ]] || mismatch "되돌릴 파일에 틀린 줄이 ${bad}개"
   sort -u -- "${WORK}/rv-copy.tokens" "${WORK}/rv-added.tokens" \
     > "${WORK}/rv.want"
@@ -694,7 +805,27 @@ assert_revert_file() {
   size="$(stat -c '%s' -- "${copy}")"
   head -c "${size}" -- "${revert}" > "${WORK}/rv.head"
   assert_same "${copy}" "${WORK}/rv.head" '되돌릴 파일이 사본으로 시작하지 않는다'
-  assert_responder_may "${revert}" 4
+  assert_deny_file_shape "${revert}"
+}
+
+# end_with_newline 은 파일 $1 이 비지 않았고 끝 줄바꿈이 없으면 줄바꿈 하나를 붙인다 —
+# 뒤에 덧붙일 줄이 끝 줄바꿈 없는 마지막 줄에 붙지 않게.
+end_with_newline() {
+  if [[ -s "$1" && -n "$(tail -c 1 -- "$1")" ]]; then
+    printf '\n' >> "$1"
+  fi
+}
+
+# deny_name_stamp 는 파일 이름 $1 이 ${DENY_FILE}.$2.<시각> 꼴인지 보고 그 시각을 변수
+# $3 에 넣는다. 시각은 준비 블록이 쓰는 꼴(YYYYMMDDTHHMMSSZ)이라 / · .. 가 들 수 없다.
+# 꼴이 아니면 검사 실패(인자가 틀렸다)다. 준비가 낸 짝인지는 두 시각이 같은지로 본다.
+deny_name_stamp() {
+  local -r path="$1" kind="$2"
+  local -r stamp="${path#"${DENY_FILE}.${kind}."}"
+  [[ "${path}" == "${DENY_FILE}.${kind}.${stamp}" \
+    && "${stamp}" =~ ^[0-9]{8}T[0-9]{6}Z$ ]] \
+    || check_failed "이름이 ${DENY_FILE}.${kind}.<시각> 꼴이 아니다: ${path}"
+  printf -v "$3" '%s' "${stamp}"
 }
 
 # swap_deny_file 은 $1 을 거부 목록(살아 있는 파일)으로 끼운다 — 같은 디렉터리에 cp -p 로
@@ -786,7 +917,10 @@ unset HISTFILE
 umask 077
 DEMO_DIR=/opt/pokeclip-demo
 read -r URL        # http://<dev EC2 사설 주소>:8082 를 친다(비밀 아님 · 저장소에 적지 않음)
-if [[ -s "${DEMO_DIR}/.env.pre-T.bak" ]]; then
+INFO="$(stat -c '%u %a' -- "${DEMO_DIR}")"   # root 소유 · 그룹 · 기타 쓰기 없음(2-2)
+if [[ -L "${DEMO_DIR}" || ! "${INFO}" =~ ^0\ [0-7]?[0-7][0145][0145]$ ]]; then
+  echo "멈춤: ${DEMO_DIR} 가 root 전용 디렉터리가 아니다(${INFO})"
+elif [[ -s "${DEMO_DIR}/.env.pre-T.bak" ]]; then
   {
     grep -E '^(DEMO_HOME|STREAM_KEY_RESOLVE_TOKEN)=' "${DEMO_DIR}/.env"
     printf 'STREAM_KEY_RESOLVE_URL=%s\n' "${URL}"
@@ -798,7 +932,7 @@ if [[ -s "${DEMO_DIR}/.env.pre-T.bak" ]]; then
 else
   echo '멈춤: 반영 전 보존(R0)이 먼저다'
 fi
-unset URL
+unset URL INFO
 exit
 ```
 
@@ -807,7 +941,8 @@ exit
 - `MTX_API_PASS` 는 `printf` 내장 명령이 받아 파일에만 쓴다 — 화면 · 명령 인자에 나오지
   않는다.
 - `.env.next` 를 다 쓴 뒤 이름 바꾸기로 끼우므로 세션이 끊겨도 반쪽 `.env` 가 생기지
-  않는다(남은 `.env.next` 는 지우고 다시 친다).
+  않는다. 남은 `.env.next` 는 비밀(출입증 · API 비번)이 든 파일이라 같은 세션에서
+  `shred -u -- "${DEMO_DIR}/.env.next"` 로 지우고 다시 친다.
 
 이어서 꼴을 단언한다(값은 내지 않는다).
 
@@ -907,6 +1042,7 @@ main "$@"
 # 때는 T 백업 처분(11절)이 먼저다.
 main() {
   (( $# == 0 )) || check_failed '사용법: 인자 없음'
+  assert_demo_dir_safe
   t_backup_names > "${WORK}/t-left"
   [[ ! -s "${WORK}/t-left" ]] \
     || mismatch "T 백업이 남아 있다 — T 백업 처분이 먼저다:" \
@@ -925,6 +1061,7 @@ main() {
   (( $# == 1 )) || check_failed '사용법: <T SHA>'
   local -r t_sha="$1"
   local name pre_sha head_sha tracked
+  assert_demo_dir_safe
   [[ "${t_sha}" =~ ^[0-9a-f]{40}$ ]] || check_failed 'T SHA 는 40자 소문자 hex 다'
   for name in .env.pre-T.bak mediamtx.demo.yml.pre-T.bak pre-T.sha pre-T.head \
     pre-T.docker pre-T.untracked.tgz; do
@@ -933,7 +1070,7 @@ main() {
   for name in pre-T.status pre-T.worktree.patch pre-T.untracked.z; do
     [[ -e "${DEMO_DIR}/${name}" ]] || mismatch "반영 전 백업이 없다: ${name} — R0 부터"
   done
-  pre_sha="$(< "${DEMO_DIR}/pre-T.sha")"
+  pre_sha="$(cat -- "${DEMO_DIR}/pre-T.sha")"
   head_sha="$(owner_git rev-parse HEAD)"
   [[ "${head_sha}" == "${pre_sha}" ]] \
     || mismatch 'HEAD 가 반영 전 SHA 가 아니다 — 이미 체크아웃했거나 기록과 다르다'
@@ -960,7 +1097,7 @@ main "$@"
 main() {
   (( $# == 0 )) || check_failed '사용법: 인자 없음'
   local pre_sha head_sha user
-  pre_sha="$(< "${DEMO_DIR}/pre-T.sha")"
+  pre_sha="$(cat -- "${DEMO_DIR}/pre-T.sha")"
   head_sha="$(owner_git rev-parse HEAD)"
   [[ "${head_sha}" != "${pre_sha}" ]] || mismatch 'HEAD 가 반영 전이다 — R2 가 먼저다'
   live_compose build ingest-auth
@@ -980,13 +1117,9 @@ main "$@"
 main() {
   (( $# == 0 )) || check_failed '사용법: 인자 없음'
   local -r out="${DEMO_DIR}/mediamtx.demo.yml"
-  local info uid mode
+  local info
   # 렌더 자리에 남이 쓸 수 없다 — root 소유 · 그룹 · 기타 쓰기 없음
-  info="$(stat -c '%u %a' -- "${DEMO_DIR}")"
-  read -r uid mode <<< "${info}"
-  [[ "${uid}" == 0 ]] || mismatch "${DEMO_DIR} 가 root 소유가 아니다(${uid})"
-  (( (8#${mode} & 8#022) == 0 )) \
-    || mismatch "${DEMO_DIR} 에 root 밖의 쓰기 권한이 있다(${mode})"
+  assert_demo_dir_safe
   env DEMO_HOME="${DEMO_DIR}" "${REPO}/infra/dev-media/render.sh"
   chown root:10002 -- "${out}"
   chmod 0640 -- "${out}"
@@ -1004,6 +1137,7 @@ main "$@"
 # 띄워 healthy 를 기다린다. MediaMTX 는 아직 옛 컨테이너다.
 main() {
   (( $# == 0 )) || check_failed '사용법: 인자 없음'
+  assert_demo_dir_safe
   if [[ ! -e "${DEMO_DIR}/ingest-auth" ]]; then
     # 첫 반영 — 빈 거부 목록은 「거부할 토큰 없음」이다
     install -d -m 0750 -o root -g root -- "${DEMO_DIR}/ingest-auth"
@@ -1087,7 +1221,7 @@ main "$@"
 
 | # | 멈춘 자리 | 그때 상태(HEAD · 트리 · `.env` · 렌더 산출물 · 컨테이너) | 복구 진입점 |
 |---|---|---|---|
-| F0 | R0 보존 | 반영 전 그대로 · 만든 백업만 | 다시 돌리면 이어진다. 첫머리 단언(T 백업 남음)에서 멈췄으면 접은 뒤 처분을 빠뜨렸다 — T 백업 처분(11절) 뒤 다시. 보존 단언이 어긋나면(종료 1) 반영 전 상태가 이미 바뀌었다 — 반영을 멈추고 kty |
+| F0 | R0 보존 | 반영 전 그대로 · 만든 백업만 | 다시 돌리면 이어진다. 첫머리 단언(T 백업 남음)에서 멈췄으면 접은 뒤 처분을 빠뜨렸다 — T 백업 처분(11절) 뒤 다시(T 가 도는 리허설 뒤면 E-1 → E-2). 보존 단언이 어긋나면(종료 1) 원인이 둘이다 — 남은 반영 전 기록(`pre-T.*`)이 직전 반영 주기의 것이거나(T 가 정착한 뒤의 다음 반영 — 롤백 창을 닫고 반영 전 일곱을 옮긴 뒤 다시, 11-7 ③ · kty 승인), 이번 보존 도중 반영 전 상태가 바뀌었다(반영을 멈추고 kty). 어느 쪽인지는 `pre-T.sha` 와 지금 HEAD 로 가린다 |
 | F1 | R1 값 투입(세션 도중 끊김 · 꼴 단언 실패) | HEAD · 트리 · 렌더 · 컨테이너 = 반영 전(옛 판이 그대로 돈다 — 옛 compose 는 `${DEMO_HOME}` 하나만 보간하고 옛 MediaMTX 는 `.env` 를 다시 읽지 않는다). `.env` = 반영 전 또는 T | 반영 취소 ⓐ → ⓒ. 또는 값을 고쳐 다시 넣고 R2 로 |
 | F2 | R2 체크아웃 — git 이 거부(추적 밖 파일과 겹침) | HEAD = 반영 전 · 손 수정은 버려짐(패치에 있다) · `.env` T · 렌더 · 컨테이너 반영 전 | 반영 취소 ⓑ → ⓐ → ⓒ. 겹친 파일은 kty 가 정한 뒤(옮김) R2 를 다시 |
 | F2′ | R2 체크아웃 도중 끊김(프로세스가 죽음) | 트리 일부만 T · `.git/index.lock` 이 남을 수 있다 · HEAD 는 대개 반영 전(추론) | kty — 남은 lock · 트리 상태를 보고 정한다(lock 지움은 승인). HEAD 가 T 면 F3 행 |
@@ -1110,7 +1244,8 @@ F1–F4 — HEAD 가 반영 전이거나, T 라도 컨테이너를 아직 바꾸
 main() {
   (( $# == 0 )) || check_failed '사용법: 인자 없음'
   local pre_sha head_sha tracked
-  pre_sha="$(< "${DEMO_DIR}/pre-T.sha")"
+  assert_demo_dir_safe
+  pre_sha="$(cat -- "${DEMO_DIR}/pre-T.sha")"
   head_sha="$(owner_git rev-parse HEAD)"
   [[ "${head_sha}" != "${pre_sha}" ]] \
     || mismatch 'HEAD 가 이미 반영 전이다 — ⓓ 를 지났다(5-3)'
@@ -1140,7 +1275,8 @@ main "$@"
 main() {
   (( $# == 0 )) || check_failed '사용법: 인자 없음'
   local pre_sha head_sha
-  pre_sha="$(< "${DEMO_DIR}/pre-T.sha")"
+  assert_demo_dir_safe
+  pre_sha="$(cat -- "${DEMO_DIR}/pre-T.sha")"
   head_sha="$(owner_git rev-parse HEAD)"
   [[ "${head_sha}" == "${pre_sha}" ]] \
     || mismatch 'HEAD 가 반영 전 SHA 가 아니다 — HEAD 가 T 면 ⓓ 가 먼저다'
@@ -1159,6 +1295,7 @@ main "$@"
 # ── 블록: 반영 취소 ⓐ — 머리 + 이 본문. 인자 없음. .env 되돌림 ──
 main() {
   (( $# == 0 )) || check_failed '사용법: 인자 없음'
+  assert_demo_dir_safe
   cp -p -- "${DEMO_DIR}/.env.pre-T.bak" "${DEMO_DIR}/.env"
   assert_same "${DEMO_DIR}/.env.pre-T.bak" "${DEMO_DIR}/.env"
   echo 'ⓐ 끝 — 다음은 ⓒ'
@@ -1171,7 +1308,7 @@ main "$@"
 # 복귀 확인 함수 하나(롤백 단계 C 와 같다)로 반영 전 기록과 견준다.
 main() {
   (( $# == 0 )) || check_failed '사용법: 인자 없음'
-  PRE_SHA="$(< "${DEMO_DIR}/pre-T.sha")"
+  PRE_SHA="$(cat -- "${DEMO_DIR}/pre-T.sha")"
   readonly PRE_SHA
   assert_back_to_pre_t
   echo 'ⓒ 끝 — 반영 전 기록과 같다'
@@ -1262,12 +1399,15 @@ main "$@"
 
 - **MediaMTX 를 (다시) 띄우기 전에 응답기가 healthy 인지 본다.** 응답기가 없으면
   MediaMTX 의 인증 요청 하나가 약 3–10초를 붙잡아 줄이 쌓인다.
-- **응답기 고장은 응답기를 먼저 살려 푼다**(7-2 「응답기 살리기」). MediaMTX 재시작으로
+- **응답기 고장은 응답기를 먼저 살려 푼다**(7-2 — 컨테이너가 없거나 멈췄으면 「응답기
+  살리기」, 떠 있는데 고장이면 「응답기 다시 시작」). MediaMTX 재시작으로
   풀지 않는다 — 진행 중 송출까지 끊겨 한꺼번에 다시 붙으며 같은 줄을 스스로 만든다.
 - **MediaMTX 재시작은 최후 수단이고 한 번만 쓴다(되풀이 금지).** 진행 중 송출이 모두
   끊긴다(플러그인 재시도가 5초 뒤 다시 붙인다). 쓰는 때는 8-3 의 갈래가 가리킬 때뿐이다.
 - **응답기를 다시 띄우기 전에 거부 목록 파일을 확인한다**(7-4). 응답기를 띄우거나 다시
-  시작하는 블록은 모두 `assert_ready_to_start_ingest_auth` 를 먼저 부른다.
+  시작하는 블록은 모두 `assert_ready_to_start_ingest_auth` 를 먼저 부른다. 파일을 바꿔
+  끼우고 다시 시작하는 해제 적용 · 되돌림 적용은 끼울 후보 파일을 본다(64 KiB 이하 ·
+  일반 파일 · 응답기가 읽음 · 틀린 줄 0, 그리고 상태 디렉터리).
 - `compose.yml` 의 `depends_on` 은 `up` 의 시작 순서(응답기 먼저)만 맞춘다. 상자
   재부팅 때는 Docker 가 컨테이너를 따로 올려 순서가 보장되지 않는다 — 재부팅 뒤에는
   응답기 healthy 와 거부 목록 파일을 먼저 본다.
@@ -1280,7 +1420,8 @@ main "$@"
 
 ```bash
 # ── 블록: 응답기 살리기 — 머리 + 이 본문. 인자 없음 ──
-# 응답기가 죽었거나 없을 때(api_auth · 부재). 입력을 확인한 뒤 up -d ingest-auth → healthy.
+# 응답기 컨테이너가 없거나 멈췄을 때. 입력을 확인한 뒤 up -d ingest-auth → healthy. 떠
+# 있는 컨테이너에는 아무것도 하지 않는다 — 떠 있는데 고장이면 「응답기 다시 시작」이다.
 main() {
   (( $# == 0 )) || check_failed '사용법: 인자 없음'
   assert_ready_to_start_ingest_auth
@@ -1364,18 +1505,24 @@ sudo docker compose -p dev-media --env-file /opt/pokeclip-demo/.env \
 **MediaMTX 판을 올릴 때 — 두 404 꼴 대조.** cut 은 Control API 의 404 두 꼴을 가른다 —
 연결 없음(Control API 의 JSON 에러 꼴 — 「이미 없음」으로 센다)과 경로 없음(gin 기본
 404 — `api_incompatible`). 판을 올리면 새 판에서 두 꼴이 그대로인지 응답기의 망에서 본다.
-비번은 `.env` 에서 컨테이너 안으로만 들어가고 curl 은 표준 입력의 설정으로 받는다.
+컨테이너에는 `.env` 를 넘기지 않는다 — Control API 비번 한 줄의 값만 표준 입력으로 들어가고
+(출입증은 들어가지 않는다), curl 은 그 값을 표준 입력의 설정(`-K -`)으로 받는다. 응답기의
+망은 기본 망으로 밖에 나갈 수 있으므로 curl 이미지는 digest 로 고정한다(2026-10-17 —
+`docker buildx imagetools inspect` 의 다중 아치 목록 digest).
 
 ```bash
 AUTH_ID="$(sudo docker ps -q \
   --filter label=com.docker.compose.project=dev-media \
   --filter label=com.docker.compose.service=ingest-auth)"
-sudo docker run --rm --env-file /opt/pokeclip-demo/.env \
-  --network "container:${AUTH_ID}" curlimages/curl:8.10.1 sh -c '
+CURL_IMAGE='curlimages/curl:8.10.1@sha256:d9b4541e214bcd85196d6e92e2753ac6d0ea699f0af5741f8c6cccbfcf00ef4b'
+sudo sed -n 's/^MTX_API_PASS=//p' /opt/pokeclip-demo/.env \
+  | sudo docker run --rm -i --network "container:${AUTH_ID}" "${CURL_IMAGE}" \
+    sh -c '
+  IFS= read -r pass
   api=http://10.250.0.2:9997/v3
-  printf "user = \"ingest-auth:%s\"\n" "${MTX_API_PASS}" > /tmp/cfg
   for p in srtconns/get/00000000-0000-0000-0000-000000000000 no-such-route; do
-    curl -sS -K /tmp/cfg -w " — HTTP %{http_code}\n" "${api}/${p}"
+    printf "user = \"ingest-auth:%s\"\n" "${pass}" \
+      | curl -sS -K - -w " — HTTP %{http_code}\n" "${api}/${p}"
   done'
 ```
 
@@ -1388,9 +1535,11 @@ sudo docker run --rm --env-file /opt/pokeclip-demo/.env \
   `/etc/ingest-auth/deny-tokens` — 디렉터리 마운트라 이름 바꾸기로 끼운 파일이 닿는다).
   한 줄에 토큰 하나, `#` 뒤는 주석, 빈 줄 허용. 모드는 응답기(UID 10003)가 읽게 둔다 —
   첫 반영이 `root:10003 0640` 으로 만든다. 못 읽으면 새 연결이 모두 거부된다.
-- **일반 파일 · 64 KiB 이하.** 넘거나 일반 파일이 아니면(링크 · FIFO 등) 응답기는 읽기
-  실패로 다룬다 — 새 연결이 모두 거부되고, **cut 도 아무것도 끊지 않는다**
-  (`denylist_unreadable`).
+- **일반 파일 · 64 KiB 이하.** 넘거나 일반 파일이 아니면(FIFO · 디렉터리 등) 응답기는
+  읽기 실패로 다룬다 — 새 연결이 모두 거부되고, **cut 도 아무것도 끊지 않는다**
+  (`denylist_unreadable`). 응답기는 심볼릭 링크를 따라간다 — 끝이 일반 파일이면 그것을
+  읽고, 끊긴 링크는 파일 없음과 같아 빈 목록이다(아래 「파일이 없으면」). 블록의
+  단언(`assert_ready_to_start_ingest_auth` · 덧붙이기)은 더 엄격해 링크를 거부한다.
 - **손으로 편집하지 않는다.** 덧붙이기는 8-1 블록(꼴 검사), 빼기는 해제(9절), 틀린 줄은
   틀린 줄 걷기(10절)로만 한다. 손 편집이 다른 줄을 잃어도 합집합이 재시작 때까지 가려
   드러나지 않고, 그 뒤 재시작에서 조용히 풀린다.
@@ -1433,21 +1582,47 @@ sudo docker run --rm --env-file /opt/pokeclip-demo/.env \
 인자로 준다 — 블록이 `# ` 를 붙인 주석 줄을 토큰 줄 앞에 쓴다. 효과는 곧바로 난다(응답기가
 publish 인증마다 파일을 다시 읽는다).
 
+덧붙이면 64 KiB 를 넘을 때도 덧붙이지 않고 종료 2 다 — 넘으면 응답기가 파일을 못 읽어 새
+연결이 모두 거부되고 cut 도 아무것도 끊지 않는다(7-4). 그때는 kty 가 줄일 것(해제할
+토큰 · 주석)을 정한다.
+
+- **종료 2 「토큰 꼴(…)이 아니다」이고 붙인 것이 비밀이면** 그 값은 SSM 명령 기록에
+  남는다 — 그 계정 키를 교체한다(9-7 의 수단) · kty.
+- **종료 1 이면 덧붙이지 않았다** — 상자 디렉터리(`${DEMO_HOME}` · `ingest-auth` ·
+  `deny`)가 root 소유가 아니거나 · 링크이거나 · 남이 쓸 수 있다(2-2
+  `assert_demo_dir_safe`), 또는 거부 목록 파일이 없다(7-4). 그 토큰이 목록에 없어 cut 도
+  아무것도 끊지 않으므로(`not_denied`) 긴급 절단이 통째로 막힌 것이다 — 곧바로 kty. 그
+  자리의 낯선 링크 · 파일을 보고, 권한 복구는 kty 가 정한 뒤 덧붙이기부터 다시 돌린다.
+
 ```bash
 # ── 블록: 덧붙이기 — 머리 + 이 본문. 인자: <토큰> ['<설명 한 줄>'] ──
-# 꼴이 아니면 덧붙이지 않고 종료 2 다. 파일을 지웠다가 다시 만드는 편집은 쓰지 않는다.
+# 꼴이 아니거나 덧붙이면 64 KiB 를 넘으면 덧붙이지 않고 종료 2 다. 파일을 지웠다가 다시
+# 만드는 편집은 쓰지 않는다.
 main() {
   (( $# == 1 || $# == 2 )) || check_failed "사용법: <토큰> ['<설명>']"
   local -r token="$1" note="${2:-}"
+  local -i size add
+  assert_demo_dir_safe
   # 값은 메시지에 싣지 않는다 — 토큰 자리에 비밀을 잘못 붙였을 수 있다
   [[ "${token}" =~ ${TOKEN_RE} ]] \
     || check_failed '토큰 꼴(26자 · 0-9A-HJKMNP-TV-Z)이 아니다 — 덧붙이지 않았다'
   [[ "${note}" != *$'\n'* ]] || check_failed '설명은 한 줄이다 — 덧붙이지 않았다'
   [[ -f "${DENY_FILE}" && ! -L "${DENY_FILE}" ]] \
     || mismatch "거부 목록 파일이 없다(7-4): ${DENY_FILE}"
-  if [[ -s "${DENY_FILE}" && -n "$(tail -c 1 -- "${DENY_FILE}")" ]]; then
-    printf '\n' >> "${DENY_FILE}"   # 끝 줄바꿈 없는 마지막 줄에 붙지 않게
+  # 덧붙인 뒤 크기 — 줄바꿈 하나(끝 줄바꿈이 없으면) + 설명 줄 + 토큰 줄. 넘으면 응답기가
+  # 파일을 못 읽어 새 연결이 모두 거부되고 cut 도 아무것도 끊지 않는다(7-4)
+  size="$(stat -c '%s' -- "${DENY_FILE}")"
+  add=$(( ${#token} + 1 ))
+  if [[ -n "${note}" ]]; then
+    add+=$(( ${#note} + 3 ))
   fi
+  if [[ -s "${DENY_FILE}" && -n "$(tail -c 1 -- "${DENY_FILE}")" ]]; then
+    add+=1
+  fi
+  (( size + add <= DENY_MAX_BYTES )) \
+    || check_failed "덧붙이면 64 KiB 를 넘는다(${size} + ${add} 바이트) — 덧붙이지" \
+      '않았다. kty'
+  end_with_newline "${DENY_FILE}"   # 끝 줄바꿈 없는 마지막 줄에 붙지 않게
   if [[ -n "${note}" ]]; then
     printf '# %s\n%s\n' "${note}" "${token}" >> "${DENY_FILE}"
   else
@@ -1476,6 +1651,7 @@ sudo docker compose -p dev-media --env-file /opt/pokeclip-demo/.env \
 | 0 | 끝까지 끊었다 — 남은 연결 0 · 두 판독 모두 기록 밖 30초 안 연결 0 |
 | 1 | 미완 — 출력의 `reason` 으로 8-3 의 갈래를 탄다 |
 | 2 | 시작하지 않았다 — 거부 목록에 그 토큰이 없다(`not_denied`) · 사용법 · 설정. 끊은 것 없음 |
+| 출력 줄 없음 | cut 이 돌지 않았다 — 응답기 컨테이너가 없거나 멈췄다(compose 의 오류 문구만 나오고 종료 코드는 compose 의 것이다). 「응답기 살리기」(7-2) 뒤 cut 을 다시 돌린다. 접혀 있는 동안이면 cut 은 효력이 없다(11-1) — 살리기로 가지 않는다(옛 판에는 응답기가 없다). kty |
 
 출력 필드의 뜻.
 
@@ -1500,11 +1676,11 @@ sudo docker compose -p dev-media --env-file /opt/pokeclip-demo/.env \
 | `connlog_window_short` | 기록 밖이면서 30초가 안 된 판독 중 연결이 있다. 30초 뒤 cut 을 다시 돌린다. 기록이 처음 열린 뒤 30초 안(상태 디렉터리를 새로 만든 직후)에만 생긴다 |
 | `denylist_unreadable` | 거부 목록을 못 읽었다 — **아무것도 끊지 않았다.** 파일의 권한 · 마운트 · 꼴(일반 파일 · 64 KiB — 7-4)을 고친 뒤 다시 돌린다. 그동안 새 연결은 모두 거부된다. 틀린 줄은 읽기 실패가 아니다 — 판정에서 건너뛰고 healthz 만 실패한다(10절). 해제 적용 뒤라면 살아 있는 파일의 모드가 틀린 것이다 — 사본 되돌림(9-6) 뒤 다시 돌린다 |
 | `connlog_unreadable` | 기록 디렉터리를 못 읽었거나 줄이 하나도 없다 — 목록 갈래(등록된 연결)는 이미 끊었다. 권한 · 마운트를 고친 뒤 다시 돌린다. 줄이 하나도 없으면(시작 표시도 없음) 상태 디렉터리가 지워진 것이다 — 「응답기 다시 시작」(7-2)으로 새 세대와 시작 표시를 만든 뒤 다시 돌린다. 그동안 새 연결은 기록 쓰기 실패로 거부된다 |
-| `api_auth` | Control API 가 401 이다 — MediaMTX 가 api 인증을 응답기에 묻다 실패했다. 응답기 로그 `ingestauth_api_denied` 와 MediaMTX 로그를 본다(7-3). ① `api_denied` 0 ∧ MediaMTX 로그에 `cannot assign requested address` → MediaMTX 쪽 임시 포트 고갈이다(큰 cut 직후 · 토큰 꼴 송출 시도가 몰릴 때). 60초 뒤 cut 을 한 번 다시 돌린다 → 또 나면 MediaMTX 최후 재시작(되풀이 금지) → cut 으로 확인. 커널 값은 조정하지 않는다(kty 106차). ② `api_denied` 가 0 이 아니면 그 `ip` 를 compose 의 `INGEST_AUTH_LISTEN` 주소와 견준다 — 다르면 출발지 설정이 틀렸다(kty). ③ 둘 다 아니면 응답기 부재 · 고장이다 — 「응답기 살리기」(7-2) 뒤 cut 을 다시 돌린다. MediaMTX 재시작으로 풀지 않는다 |
-| `api_unreachable` | Control API 와의 왕복이 실패했다 — 무응답 · 전송 실패 · 401 · 404 밖의 HTTP 상태(500 등). 먼저 응답기가 healthy 인지 본다 — 아니면 응답기를 살린 뒤 **cut 부터 다시** 돌린다. 그다음 출력의 `kicked` · `already_gone` 과 stderr 줄(`ingest-auth: cut api_unreachable: mtxctl: <list·get·kick> — <까닭>`)의 까닭으로 가른다. ① `timeout`(또는 stderr 가 `context deadline exceeded` — 끊은 뒤 확인 단계에서 시한에 걸림)이고 `kicked + already_gone` 이 0 보다 크다 — cut 자신의 시한(2분)에 걸린 큰 cut 이다. Control API 인증은 돌고 있었다 — cut 을 한 번 더 돌린다. ② `timeout` 이고 0 이거나 `unreachable`(연결 거부 등) — Control API 가 답하지 않는다. MediaMTX 고장이다 — 응답기 healthy 를 확인한 뒤 MediaMTX 최후 재시작(되풀이 금지) → cut 으로 확인. ③ `HTTP <상태>`(500 등) — Control API 는 답했지만 처리하지 못했다. cut 을 한 번 다시 돌린다 → 같으면 `kicked` 를 보고 응답기 healthy 를 확인한 뒤 MediaMTX 최후 재시작 1회(되풀이 금지) → cut 으로 확인하고 kty 에 보고한다. 어느 갈래든 재시작 뒤 그 토큰의 재접속은 거부 목록이 막는다. ①–③ 밖의 꼴이면 멈추고 kty |
+| `api_auth` | Control API 가 401 이다 — MediaMTX 가 api 인증을 응답기에 묻다 실패했다. 응답기 로그 `ingestauth_api_denied` 와 MediaMTX 로그를 본다(7-3). ① `api_denied` 0 ∧ MediaMTX 로그에 `cannot assign requested address` → MediaMTX 쪽 임시 포트 고갈이다(큰 cut 직후 · 토큰 꼴 송출 시도가 몰릴 때). 60초 뒤 cut 을 한 번 다시 돌린다 → 또 나면 MediaMTX 최후 재시작(되풀이 금지) → cut 으로 확인. 커널 값은 조정하지 않는다(kty 106차). ② `api_denied` 가 0 이 아니면 그 `ip` 를 compose 의 `INGEST_AUTH_LISTEN` 주소와 견준다 — 다르면 출발지 설정이 틀렸다(kty). ③ 둘 다 아니면 응답기 고장이다. cut 이 이 줄을 냈으면 응답기 컨테이너는 떠 있다 — 「응답기 다시 시작」(7-2) 뒤 cut 을 다시 돌린다(컨테이너가 없거나 멈췄으면 「응답기 살리기」). 그래도 같으면 kty. MediaMTX 재시작으로 풀지 않는다 |
+| `api_unreachable` | Control API 와의 왕복이 실패했다 — 무응답 · 전송 실패 · 401 · 404 밖의 HTTP 상태(500 등). 먼저 응답기가 healthy 인지 본다 — 아니면 「응답기 다시 시작」(7-2 — 컨테이너는 떠 있다. 없거나 멈췄으면 「응답기 살리기」) 뒤 **cut 부터 다시** 돌린다. 다시 시작해도 healthy 가 아니면 kty. 그다음 출력의 `kicked` · `already_gone` 과 stderr 줄(`ingest-auth: cut api_unreachable: mtxctl: <list·get·kick> — <까닭>`)의 까닭으로 가른다. ① `timeout`(또는 stderr 가 `context deadline exceeded` — 끊은 뒤 확인 단계에서 시한에 걸림)이고 `kicked + already_gone` 이 0 보다 크다 — cut 자신의 시한(2분)에 걸린 큰 cut 이다. Control API 인증은 돌고 있었다 — cut 을 한 번 더 돌린다. ② `timeout` 이고 0 이거나 `unreachable`(연결 거부 등) — Control API 가 답하지 않는다. MediaMTX 고장이다 — 응답기 healthy 를 확인한 뒤 MediaMTX 최후 재시작(되풀이 금지) → cut 으로 확인. ③ `HTTP <상태>`(500 등) — Control API 는 답했지만 처리하지 못했다. cut 을 한 번 다시 돌린다 → 같으면 `kicked` 를 보고 응답기 healthy 를 확인한 뒤 MediaMTX 최후 재시작 1회(되풀이 금지) → cut 으로 확인하고 kty 에 보고한다. 어느 갈래든 재시작 뒤 그 토큰의 재접속은 거부 목록이 막는다. ①–③ 밖의 꼴이면 멈추고 kty |
 | `api_incompatible` | cut 이 아는 꼴이 아닌 Control API 응답이다(경로 없음 404 · 해석 실패 · 여러 페이지). **끊었는지 모른다 — 출력의 `kicked` 를 본다**(kick 한 뒤에도 날 수 있다). 응답기 healthy 를 확인한 뒤 MediaMTX 최후 재시작 1회(되풀이 금지) → MediaMTX 판 · 경로 호환을 고친 뒤(7-3 두 404 꼴) cut 으로 확인한다 |
 | `internal_error` | cut 의 내부 오류(분류 밖 결과)다. `api_incompatible` 과 같은 처방(`kicked` 확인 → 응답기 healthy → MediaMTX 최후 재시작 1회)에 kty 보고를 더한다 |
-| 종료 2 `not_denied` | 거부 목록에 그 토큰이 없다 — 아무것도 끊지 않았다. 덧붙이기(8-1) 뒤 다시 돌린다. 덧붙였는데 이것이면 해제 · 되돌림 적용의 교체 구간에 줄이 사라진 것이다 — 다시 덧붙인다 |
+| 종료 2 `not_denied` | 거부 목록에 그 토큰이 없다 — 아무것도 끊지 않았다. 덧붙이기(8-1) 뒤 다시 돌린다. 덧붙였는데 이것이면 해제 · 되돌림 적용 · 틀린 줄 걷기의 교체 구간에 줄이 사라진 것이다 — 다시 덧붙인다 |
 
 - 플러그인 재시도 뒤에는 MediaMTX 재시작이 「전 방송 종료」가 아니다 — 전 방송이 끊기고
   5초 뒤 일제히 다시 붙는다. 상자의 HLS 창(DVR)은 송출이 끊기면 처음부터 다시 쌓여
@@ -1554,6 +1730,7 @@ main() {
   (( $# == 2 )) || check_failed "사용법: <대상 토큰> '<사유>'"
   local -r target="$1" reason="$2"
   local stamp copy new
+  assert_demo_dir_safe
   [[ "${target}" =~ ${TOKEN_RE} ]] || check_failed '대상이 토큰 꼴이 아니다'
   [[ -n "${reason}" && "${reason}" != *$'\n'* ]] \
     || check_failed '사유는 비지 않은 한 줄이다'
@@ -1571,7 +1748,8 @@ main() {
   printf '사본: %s\n새 파일: %s\n' "${copy}" "${new}"
   # 3 집합 단언(주석 전)
   assert_unblock_files "${copy}" "${new}" "${target}" plain
-  # 4 절단 사유 주석 한 줄
+  # 4 절단 사유 주석 한 줄 — 새 파일의 마지막 줄에 끝 줄바꿈이 없으면 붙지 않게 하나 먼저
+  end_with_newline "${new}"
   printf '# 해제 %s · %s · %s\n' "${target}" "${reason}" "${stamp}" >> "${new}"
   # 5 최종 새 파일에 다시 단언
   assert_unblock_files "${copy}" "${new}" "${target}" commented
@@ -1597,27 +1775,38 @@ main "$@"
 cut 이 그 순간이 지난 뒤에 돌면 첫 확인이 종료 2(`not_denied` — 8-3)로 드러낸다. 그러나
 덧붙이기와 cut 이 둘 다 그 순간 안에 끝나면 cut 은 옛 파일을 보고 종료 0 이라 드러나지
 않는다. 그래서 **이 블록이 도는 동안 긴급 절단을 했으면 블록이 끝난 뒤 그 토큰으로 cut 을
-한 번 더 돌린다** — 블록이 끝나면 새 파일만 보이므로, 줄이 사라졌으면 반드시 종료 2 다.
-종료 2 면 다시 덧붙이고 cut 을 다시 돌린다. 그 전까지(재시작부터 다시 돈 cut 까지 — 수
-초에서 2분) 그 토큰이 다시 붙을 수 있다 — 한계로 둔다(kty 107차). 이름 바꾸기 뒤에
+한 번 더 돌린다** — 블록이 교체까지 갔으면 새 파일만 보이므로, 줄이 사라졌으면 반드시
+종료 2 다. 종료 2 면 다시 덧붙이고 cut 을 다시 돌린다. 블록이 7 의 재확인에서 멈췄으면(종료
+1) 교체가 없어 옛 파일과 그 줄이 그대로라 cut 은 종료 0 이다 — 그 줄은 남아 있고, 해제는
+준비부터 다시 한다. 재시작부터 다시 돈 cut 까지는 그 토큰이 다시 붙을 수 있다 — 한계로
+둔다(kty 107차). 그 창은 블록 안의 재시작 · healthy 대기(최대 120초)에 블록이 끝난 것을
+보고 cut 을 다시 돌리기까지의 운영자 시간(확인 · 승인 · SSM 지연)이 더해진 것이라 정해진
+상한이 없다 — 블록이 끝나면 곧바로 다시 돌린다. 이름 바꾸기 뒤에
 덧붙인 줄은 새 파일에 남고, healthy 에 실패해 사본 되돌림(9-6)으로 가면 되돌림이 그 줄을
 옮겨 붙인다.
 
-7. 살아 있는 파일이 사본과 바이트까지 같은지 다시 본다(그사이 덧붙은 줄이 없다). 최종 새
-   파일에 5 의 단언을 한 번 더 건다. 새 파일을 이름 바꾸기로 끼우고 `ingest-auth` 하나만
-   다시 시작한다 — MediaMTX 는 건드리지 않는다.
+7. 사본 · 새 파일이 한 번의 준비가 낸 짝인지 본다(이름 끝 시각이 같다 — 다르면 종료 2).
+   끼울 새 파일과 상태 디렉터리를 기동 입력으로 본다(7-1). 살아 있는 파일이 사본과
+   바이트까지 같은지 다시 본다(그사이 덧붙은 줄이 없다). 최종 새 파일에 5 의 단언을 한 번
+   더 건다. 새 파일을 이름 바꾸기로 끼우고 `ingest-auth` 하나만 다시 시작한다 —
+   MediaMTX 는 건드리지 않는다.
 8. 120초 안에 healthy 인지 본다. 넘기면 9-6 이다.
 
 ```bash
 # ── 블록: 해제 적용 — 머리 + 이 본문. 인자: <대상 토큰> <사본> <새 파일> ──
-# 사본 · 새 파일은 해제 준비가 낸 이름이다. 실행 직전 kty 승인.
+# 사본 · 새 파일은 한 번의 해제 준비가 낸 짝이다(시각 꼬리가 같다). 실행 직전 kty 승인.
 main() {
   (( $# == 3 )) || check_failed '사용법: <대상 토큰> <사본> <새 파일>'
   local -r target="$1" copy="$2" new="$3"
+  local copy_at='' new_at=''
+  assert_demo_dir_safe
   [[ "${target}" =~ ${TOKEN_RE} ]] || check_failed '대상이 토큰 꼴이 아니다'
-  [[ "${copy}" == "${DENY_FILE}".copy.* \
-    && "${new}" == "${DENY_FILE}".unblock.* ]] \
-    || check_failed '사본 · 새 파일은 해제 준비가 낸 이름이다'
+  deny_name_stamp "${copy}" copy copy_at
+  deny_name_stamp "${new}" unblock new_at
+  [[ "${copy_at}" == "${new_at}" ]] \
+    || check_failed '사본 · 새 파일의 시각이 다르다 — 한 번의 해제 준비가 낸 짝이다'
+  # 다시 시작할 입력 — 끼울 새 파일(64 KiB · 일반 파일 · 틀린 줄 0)과 상태 디렉터리
+  assert_ready_to_start_ingest_auth "${new}"
   # 7 재확인 — 그사이 덧붙은 줄(긴급 절단)이 있으면 멈춘다
   assert_same "${DENY_FILE}" "${copy}" \
     '살아 있는 파일이 사본과 다르다 — 그사이 덧붙은 줄이 있다. 준비부터 다시'
@@ -1660,8 +1849,8 @@ unhealthy).
 - 그동안의 긴급 절단도 덧붙이기 → cut 차례 그대로다. 덧붙이기는 곧바로 효과가 있다(응답기가
   뜰 때 읽는다 — 재시작 창에는 새 연결이 응답기 부재로 모두 거부된다). **cut 은 먼저
   시도한다** — healthz 만 실패하는 unhealthy 에서는 api 인증이 돈다. 종료 1 이면 8-3 으로
-  가른다 — `api_auth` 면 응답기를 살린 뒤, `denylist_unreadable`(살아 있는 파일의 모드가
-  틀림)이면 사본 되돌림 뒤 다시 돌린다.
+  가른다 — `api_auth` 면 8-3 의 그 행대로 응답기를 다시 시작한(없으면 살린) 뒤,
+  `denylist_unreadable`(살아 있는 파일의 모드가 틀림)이면 사본 되돌림 뒤 다시 돌린다.
 
 | 실패 | 처방 |
 |---|---|
@@ -1673,23 +1862,32 @@ unhealthy).
 끼면 그 줄이 교체와 함께 사라지고, 재시작이 합집합을 파일에서 새로 쌓아 그 토큰이 다시
 허용되기 때문이다. 덧붙은 줄을 옮기지 않고 사본만 끼우면 그 절단이 조용히 풀린다.
 
-1. **되돌림 준비 — 모음.** 살아 있는 파일을 `deny-tokens.gathered.<시각>` 으로 남긴다(모은
-   시점의 사본). 그것이 최종 새 파일로 시작하는지 본다 — 아니면 멈추고 kty.
+1. **되돌림 준비 — 모음.** 인자는 해제 준비가 낸 사본 · 새 파일의 짝이다(이름 끝 시각이
+   같다 — 다르거나 그 꼴이 아니면 종료 2). 살아 있는 파일을
+   `deny-tokens.gathered.<시각>` 으로 남긴다(모은 시점의 사본). 그것이 최종 새 파일로
+   시작하는지 본다 — 아니면 멈추고 kty.
 1. **되돌릴 파일.** 사본을 `cp -p` 로 `deny-tokens.revert.<시각>` 에 만들고, 모은 사본에서
    최종 새 파일 뒤에 덧붙은 줄(재시작 창의 긴급 절단)을 그 끝에 옮겨 붙인다.
 1. **단언.** 되돌릴 파일의 집합 = 사본의 집합 ∪ 덧붙은 토큰 · 틀린 줄 0 · 사본의 줄은
-   차례 · 바이트까지 같다 · 응답기가 읽는다.
-1. **되돌림 적용(실행 직전 승인).** 살아 있는 파일이 모은 사본과 바이트까지 같은지 다시
-   본다 — 다르면 종료 1 이고 아무것도 바꾸지 않는다(그사이 덧붙은 줄이 있다 — 1 부터 다시,
+   차례 · 바이트까지 같다 · 64 KiB 이하 일반 파일이고 응답기가 읽는다.
+1. **되돌림 적용(실행 직전 승인).** 모은 사본 · 되돌릴 파일이 한 번의 되돌림 준비가 낸
+   짝인지 본다(이름 끝 시각이 같다 — 낡은 되돌릴 파일에는 그 뒤 덧붙은 줄이 없다. 다르면
+   종료 2). 되돌릴 파일과 상태 디렉터리를 기동 입력으로 본다(7-1). 살아 있는 파일이 모은
+   사본과 바이트까지 같은지 다시 본다 — 다르면 종료 1 이고 아무것도 바꾸지 않는다(그사이 덧붙은 줄이 있다 — 1 부터 다시,
    새 모음이 그 줄을 담는다). 같으면 끼우고 `ingest-auth` 하나만 다시 시작 → healthy.
 
 ```bash
-# ── 블록: 되돌림 준비 — 머리 + 이 본문. 인자: <사본> <새 파일>(해제 준비가 낸 이름) ──
+# ── 블록: 되돌림 준비 — 머리 + 이 본문. 인자: <사본> <새 파일>(해제 준비가 낸 짝) ──
 # 살아 있는 파일은 바꾸지 않는다. 모은 사본과 되돌릴 파일의 이름을 낸다 — 되돌림 적용의 인자다.
 main() {
   (( $# == 2 )) || check_failed '사용법: <사본> <새 파일>'
   local -r copy="$1" new="$2"
-  local stamp gather revert size
+  local stamp gather revert size copy_at='' new_at=''
+  assert_demo_dir_safe
+  deny_name_stamp "${copy}" copy copy_at
+  deny_name_stamp "${new}" unblock new_at
+  [[ "${copy_at}" == "${new_at}" ]] \
+    || check_failed '사본 · 새 파일의 시각이 다르다 — 한 번의 해제 준비가 낸 짝이다'
   stamp="$(date -u '+%Y%m%dT%H%M%SZ')"
   gather="${DENY_FILE}.gathered.${stamp}"
   revert="${DENY_FILE}.revert.${stamp}"
@@ -1704,9 +1902,7 @@ main() {
   tail -c "+$(( size + 1 ))" -- "${gather}" > "${WORK}/added"
   # 2 되돌릴 파일 — 사본 + 덧붙은 줄. 모드 · 소유는 사본과 같다
   cp -p -- "${copy}" "${revert}"
-  if [[ -s "${copy}" && -n "$(tail -c 1 -- "${copy}")" ]]; then
-    printf '\n' >> "${revert}"   # 사본의 끝 줄바꿈이 없으면 덧붙은 첫 줄이 붙지 않게
-  fi
+  end_with_newline "${revert}"   # 사본의 끝 줄바꿈이 없으면 덧붙은 첫 줄이 붙지 않게
   cat -- "${WORK}/added" >> "${revert}"
   printf '되돌릴 파일: %s\n' "${revert}"
   # 3 단언
@@ -1718,21 +1914,22 @@ main "$@"
 
 ```bash
 # ── 블록: 되돌림 적용 — 머리 + 이 본문. 인자: <모은 사본> <되돌릴 파일> ──
-# 두 이름은 되돌림 준비가 낸 것이다. 실행 직전 kty 승인.
+# 두 이름은 한 번의 되돌림 준비가 낸 짝이다(시각 꼬리가 같다). 실행 직전 kty 승인.
 main() {
   (( $# == 2 )) || check_failed '사용법: <모은 사본> <되돌릴 파일>'
   local -r gather="$1" revert="$2"
-  local bad
-  [[ "${gather}" == "${DENY_FILE}".gathered.* \
-    && "${revert}" == "${DENY_FILE}".revert.* ]] \
-    || check_failed '모은 사본 · 되돌릴 파일은 되돌림 준비가 낸 이름이다'
+  local gather_at='' revert_at=''
+  assert_demo_dir_safe
+  deny_name_stamp "${gather}" gathered gather_at
+  deny_name_stamp "${revert}" revert revert_at
+  [[ "${gather_at}" == "${revert_at}" ]] \
+    || check_failed '모은 사본 · 되돌릴 파일의 시각이 다르다 — 한 번의 되돌림 준비가 낸 짝이다'
+  # 다시 시작할 입력 — 끼울 되돌릴 파일(64 KiB · 일반 파일 · 틀린 줄 0)과 상태 디렉터리.
+  # 살아 있는 파일의 모드가 틀렸어도(9-6) 되돌림이 막히지 않게 후보를 본다
+  assert_ready_to_start_ingest_auth "${revert}"
   # 4 재확인 — 그사이 덧붙은 줄이 있으면 멈춘다
   assert_same "${DENY_FILE}" "${gather}" \
     '살아 있는 파일이 모은 사본과 다르다 — 그사이 덧붙은 줄이 있다. 준비부터 다시'
-  deny_scan "${revert}" "${WORK}/apply"
-  bad="$(< "${WORK}/apply.bad")"
-  [[ "${bad}" == 0 ]] || mismatch "되돌릴 파일에 틀린 줄이 ${bad}개"
-  assert_responder_may "${revert}" 4
   swap_deny_file "${revert}"
   restart_ingest_auth_only
   echo '되돌림 적용 끝 — 사본의 토큰 · 덧붙은 토큰이 모두 거부되는지 시도한다'
@@ -1772,10 +1969,21 @@ MediaMTX 최후 재시작)이 모두 멈추고, 해제 준비의 집합 단언�
    1 — 1 부터 다시, 새 사본이 그 줄을 담는다). 같으면 이름 바꾸기로 끼운다.
 1. **재시작하지 않는다.** 유효 집합이 같아 합집합이 그대로다. healthz 는 다음 확인(30초
    주기)에서 파일을 지금 다시 읽는다 — 「걷기 확인」 블록으로 healthy 로 돌아왔는지와
-   응답기 시작 시각이 그대로인지 본다. healthy 까지 걸린 시간을 적는다.
+   응답기 시작 시각이 그대로인지 본다. healthy 까지 걸린 시간을 적는다. 응답기 컨테이너가
+   없으면(접힌 뒤 · 첫 반영 전 — R5 · 응답기 살리기 · 롤백 D 의 기동 입력 확인이 이 절로
+   보낸 경우) 끼우기만 하고 시각은 「없음」이다. 걷기 확인은 돌지 않고, 보낸 블록을 다시
+   돌린다(그 블록이 거부 목록을 다시 본다).
 
-- 1–4 는 한 블록(수 초)이고 실행 직전 승인이다. 그동안만 거부 목록을 쓰지 않는다. 긴급
-  절단은 미루지 않는다 — 블록 앞에서 끼면 4 의 재확인이 종료 1 로 멈춘다.
+- 1–4 는 한 블록(수 초)이고 실행 직전 승인이다. 긴급 절단은 미루지 않는다 — 블록 앞에서
+  끼면 4 의 재확인이 종료 1 로 멈춘다. 덧붙인 줄을 잃는 것은 재확인부터 이름 바꾸기까지의
+  순간뿐인데, 덧붙이기와 cut 이 둘 다 그 순간 안에 끝나면 cut 은 옛 파일을 보고 종료 0
+  이다. 이 블록은 응답기를 다시 시작하지 않지만, 응답기가 그 사이 그 토큰을 한 번도 읽지
+  않았으면 합집합에도 없어 재접속이 허용된다. 그래서 **이 블록이 도는 동안 긴급 절단을
+  했으면 블록이 끝난 뒤 그 토큰으로 cut 을 한 번 더 돌린다** — 종료 2 면 다시 덧붙이고
+  cut 을 다시 돌린다(9-4 와 같다 — kty 107차). 교체부터 다시 돈 cut 까지는 그 토큰이 다시
+  붙을 수 있다 — 한계로 둔다. 그 창에는 블록이 끝난 것을 보고 cut 을 다시 돌리기까지의
+  운영자 시간(확인 · 승인 · SSM 지연)이 들어 정해진 상한이 없다 — 블록이 끝나면 곧바로
+  다시 돌린다.
 - 걷은 줄은 사본에 남는다. 그 줄이 막으려던 토큰이 있었으면(예: 소문자로 옮긴 값) 꼴을
   고쳐 덧붙이기(8-1)와 cut 으로 다시 막는다.
 - **멈춤 안내가 이 절을 가리킨다** — 해제 준비의 집합 단언이 사본의 틀린 줄로 멈출 때,
@@ -1784,10 +1992,12 @@ MediaMTX 최후 재시작)이 모두 멈추고, 해제 준비의 집합 단언�
 
 ```bash
 # ── 블록: 틀린 줄 걷기 — 머리 + 이 본문. 인자 없음. 응답기를 다시 시작하지 않는다 ──
-# 실행 직전 kty 승인. 끝에 응답기 시작 시각을 낸다 — 걷기 확인의 인자다.
+# 실행 직전 kty 승인. 끝에 응답기 시작 시각을 낸다 — 걷기 확인의 인자다. 응답기
+# 컨테이너가 없으면(접힌 뒤 · 첫 반영 전) 끼우기만 하고 시각은 「없음」이다.
 main() {
   (( $# == 0 )) || check_failed '사용법: 인자 없음'
   local stamp copy new bad auth_id='' started
+  assert_demo_dir_safe
   stamp="$(date -u '+%Y%m%dT%H%M%SZ')"
   copy="${DENY_FILE}.walk-copy.${stamp}"
   new="${DENY_FILE}.walk.${stamp}"
@@ -1796,7 +2006,7 @@ main() {
   cp -p -- "${DENY_FILE}" "${copy}"
   # 2 새 파일 — 틀린 줄만 뺀다. 모드 · 소유는 원본(사본)과 같게 지정한다
   deny_scan "${copy}" "${WORK}/walk"
-  bad="$(< "${WORK}/walk.bad")"
+  bad="$(cat -- "${WORK}/walk.bad")"
   [[ "${bad}" != 0 ]] || mismatch '틀린 줄이 없다 — 걷을 것이 없다'
   cp -- "${WORK}/walk.kept" "${new}"
   chown --reference="${copy}" -- "${new}"
@@ -1804,11 +2014,15 @@ main() {
   printf '사본: %s\n새 파일: %s\n' "${copy}" "${new}"
   # 3 단언
   assert_walk_files "${copy}" "${new}"
+  # 응답기 시작 시각 — 컨테이너가 없으면 걷기 확인이 없다(다음 기동 블록이 파일을 본다)
+  container_id_or_none ingest-auth auth_id
+  started='없음 — 응답기 컨테이너가 없다'
+  if [[ -n "${auth_id}" ]]; then
+    started="$(docker inspect -f '{{.State.StartedAt}}' "${auth_id}")"
+  fi
   # 4 재확인 → 끼우기
   assert_same "${DENY_FILE}" "${copy}" \
     '살아 있는 파일이 사본과 다르다 — 그사이 덧붙은 줄이 있다. 다시 돌린다'
-  container_id ingest-auth auth_id
-  started="$(docker inspect -f '{{.State.StartedAt}}' "${auth_id}")"
   swap_deny_file "${new}"
   printf '걷은 줄: %s개\n응답기 시작 시각: %s\n' "${bad}" "${started}"
 }
@@ -1826,7 +2040,7 @@ main() {
   [[ "${started}" == "$1" ]] \
     || mismatch '응답기가 다시 시작됐다 — 걷기는 재시작 없이 끝나야 한다'
   deny_scan "${DENY_FILE}" "${WORK}/now"
-  bad="$(< "${WORK}/now.bad")"
+  bad="$(cat -- "${WORK}/now.bad")"
   [[ "${bad}" == 0 ]] || mismatch "거부 목록에 틀린 줄이 ${bad}개"
   echo "healthy · 시작 시각 그대로 · 틀린 줄 0 — $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 }
@@ -1856,13 +2070,13 @@ T 구성 → 옛 판(반영 전 기록) → (리허설이면) T 로 다시. 블�
 |---|---|---|---|
 | 0 | 롤백 0 | 사전 확인(읽기만) | — |
 | A | 롤백 A | ① T 상태 보존 — T 백업 아홉 | — |
-| B | 롤백 B | ② 내리고 반영 전 SHA 로 · ③ 손 수정 패치 · ④ 추적 밖 정리 · ⑤ 되살리고 올림 · `.env` 는 마지막 | 있음 |
+| B | 롤백 B | T 백업 아홉 확인 → ② 내리고 반영 전 SHA 로 · ③ 손 수정 패치 · ④ 추적 밖 정리 · ⑤ 되살리고 올림 · `.env` 는 마지막 | 있음 |
 | C | 롤백 C | ⑥ 복귀 확인(읽기만 — 11-4) | — |
 | D | 롤백 D | **리허설에서만** — T 로 다시 올림 | 있음 |
 | E-1 | 롤백 E-1 | 리허설 뒤 T 상태 단언(읽기만) | — |
-| E-2 | 롤백 E-2 | 리허설 뒤 T 백업 아홉 지움 · 잔여 0 | 있음 |
-| — | T 백업 처분 | 접힌 뒤 T 백업 아홉 지움 · 잔여 0(11-6) | 있음 |
-| — | 반영 전 비밀 파기 | 롤백 창 닫기 — 반영 전 비밀 둘 지움(11-7) | 있음 |
+| E-2 | 롤백 E-2 | 리허설 뒤(T 가 돎) T 백업 아홉 · 비밀 임시 파일 지움 · 잔여 0 | 있음 |
+| — | T 백업 처분 | 접힌 뒤 T 백업 아홉 · 비밀 임시 파일 지움 · 잔여 0(11-6) | 있음 |
+| — | 반영 전 비밀 파기 | 롤백 창 닫기 — 접힌 끝 · T 정착에서만 반영 전 비밀 둘 · 비밀 임시 파일 지움(11-7) | 있음 |
 
 **D 는 리허설(실측 8)에서만 쓴다(kty 81차).** 실제 롤백 · 최초 반영 실패 · 실측 실패로
 0 → A → B → C 를 돌다 B · C 에서 막혀도 D 로 돌아가지 않는다. kty 판단으로 막힌 원인을
@@ -1875,9 +2089,19 @@ T 구성 → 옛 판(반영 전 기록) → (리허설이면) T 로 다시. 블�
 - A 와 B 는 그 사이에 아무것도 손대지 않도록 한 자리에서 잇달아 승인받는다. B ④ 의
   지우기 전 대조는 이름만 본다 — 내용은 A(보존)와 C · E-1 이 본다.
 - D 의 승인 문장에는 리허설(실측 8)임을 적는다. 리허설이 아니면 D 를 승인하지 않는다.
+- 반영 전 비밀 파기의 승인 문장에는 「실측 통과 · 첫 팀 실사용 방송 무사」를 적는다. 블록의
+  첫머리는 접힌 끝 · T 정착(MediaMTX 까지 R6 이 다시 만든 T 의 컨테이너) 둘 가운데
+  하나인지만 본다 — 반영 도중(R1–R6 — R5 끝 · R6 앞 포함) · 접는 도중은 블록이 멈춘다. T 가
+  다 떠 있는 채 실측이 실패한 자리(F6 · F7)는 T 정착과 상태가 같아 블록이 가르지 못하고, 이
+  문장이 가른다.
 
 **멈춤.** 어느 블록이든 종료 1(일치 없음) · 2(검사 실패)면 그 자리에서 멈추고 11-5 의
 그 행을 따른다. 지우는 쪽으로 밀어붙이지 않는다.
+
+**접혀 있는 동안.** B 가 응답기를 내리고 옛 판이 공용 passphrase 하나로 송출을 받는다.
+그동안 거부 목록과 긴급 절단(cut)은 효력이 없다 — cut 은 응답기 컨테이너가 없어 돌지 않고,
+송출 통제는 옛 passphrase 하나뿐이다. 거부 목록 파일은 그대로 둔다 — 다시 T 로 갈 때 R5 ·
+D 가 응답기를 띄우기 전에 다시 읽는다.
 
 ### 11-2. 왜 이 차례인가
 
@@ -1902,20 +2126,11 @@ T 구성 → 옛 판(반영 전 기록) → (리허설이면) T 로 다시. 블�
 # 하나라도 어긋나면 롤백을 시작하지 않는다.
 main() {
   (( $# == 0 )) || check_failed '사용법: 인자 없음'
-  local name head_sha
+  local head_sha
   # 체크아웃 소유자로 git 이 돈다(소유자 검사로 멈추면 여기서 안다)
   owner_git status --porcelain > /dev/null
-  for name in .env.pre-T.bak mediamtx.demo.yml.pre-T.bak pre-T.sha pre-T.head \
-    pre-T.docker pre-T.untracked.tgz; do
-    [[ -s "${DEMO_DIR}/${name}" ]] \
-      || mismatch "반영 전 백업이 없거나 비었다: ${name}"
-  done
-  # 손 수정 · 추적 밖이 없으면 비어 있을 수 있다
-  for name in pre-T.status pre-T.worktree.patch pre-T.untracked.z; do
-    [[ -e "${DEMO_DIR}/${name}" ]] || mismatch "반영 전 백업이 없다: ${name}"
-  done
-  tar -tzf "${DEMO_DIR}/pre-T.untracked.tgz" > /dev/null
-  PRE_SHA="$(< "${DEMO_DIR}/pre-T.sha")"
+  assert_backups_whole 'pre-T'
+  PRE_SHA="$(cat -- "${DEMO_DIR}/pre-T.sha")"
   readonly PRE_SHA
   # 반영 전 커밋이 체크아웃에 있다(얕은 클론)
   owner_git cat-file -e "${PRE_SHA}^{commit}"
@@ -1934,7 +2149,8 @@ main "$@"
 main() {
   (( $# == 0 )) || check_failed '사용법: 인자 없음'
   local pre_sha head_sha
-  pre_sha="$(< "${DEMO_DIR}/pre-T.sha")"
+  assert_demo_dir_safe
+  pre_sha="$(cat -- "${DEMO_DIR}/pre-T.sha")"
   head_sha="$(owner_git rev-parse HEAD)"
   [[ "${head_sha}" != "${pre_sha}" ]] || mismatch 'HEAD 가 반영 전과 같다'
   preserve_state 'T'
@@ -1949,8 +2165,12 @@ main "$@"
 main() {
   (( $# == 0 )) || check_failed '사용법: 인자 없음'
   local head_sha tracked
-  PRE_SHA="$(< "${DEMO_DIR}/pre-T.sha")"
-  T_SHA="$(< "${DEMO_DIR}/T.sha")"
+  assert_demo_dir_safe
+  # 지우기 전에 A 의 T 백업 아홉이 다 있고 묶음이 읽히는지 본다 — 끊긴 A 뒤에 B 가 돌면
+  # ④ 가 묶음 없는 T 의 추적 밖 파일을 지운다
+  assert_backups_whole 'T'
+  PRE_SHA="$(cat -- "${DEMO_DIR}/pre-T.sha")"
+  T_SHA="$(cat -- "${DEMO_DIR}/T.sha")"
   readonly PRE_SHA T_SHA
   [[ "${PRE_SHA}" != "${T_SHA}" ]] || mismatch 'T 와 반영 전 SHA 가 같다'
   # ② 내리고(env 는 HEAD 로 고른다), 반영 전 SHA 의 깨끗한 작업 트리를 만든다. 추적
@@ -2004,7 +2224,7 @@ main "$@"
 # 반영 취소 ⓒ · T 백업 처분의 첫머리와 같은 함수 하나로 반영 전 기록과 견준다(11-4).
 main() {
   (( $# == 0 )) || check_failed '사용법: 인자 없음'
-  PRE_SHA="$(< "${DEMO_DIR}/pre-T.sha")"
+  PRE_SHA="$(cat -- "${DEMO_DIR}/pre-T.sha")"
   readonly PRE_SHA
   assert_back_to_pre_t
   echo '복귀 확인 끝 — 반영 전 기록과 같다. 사람이 볼 것은 11-4'
@@ -2021,8 +2241,9 @@ main "$@"
 main() {
   (( $# == 0 )) || check_failed '사용법: 인자 없음'
   local head_sha tracked
-  PRE_SHA="$(< "${DEMO_DIR}/pre-T.sha")"
-  T_SHA="$(< "${DEMO_DIR}/T.sha")"
+  assert_demo_dir_safe
+  PRE_SHA="$(cat -- "${DEMO_DIR}/pre-T.sha")"
+  T_SHA="$(cat -- "${DEMO_DIR}/T.sha")"
   readonly PRE_SHA T_SHA
   [[ "${PRE_SHA}" != "${T_SHA}" ]] || mismatch 'T 와 반영 전 SHA 가 같다'
   # 응답기를 다시 띄우므로 거부 목록 파일부터 본다(7-4) — 어긋나면 바꾼 것 없이 멈춘다
@@ -2075,7 +2296,7 @@ main "$@"
 main() {
   (( $# == 0 )) || check_failed '사용법: 인자 없음'
   local t_sha head_sha
-  t_sha="$(< "${DEMO_DIR}/T.sha")"
+  t_sha="$(cat -- "${DEMO_DIR}/T.sha")"
   head_sha="$(owner_git rev-parse HEAD)"
   [[ "${head_sha}" == "${t_sha}" ]] || mismatch 'HEAD 가 T SHA 가 아니다'
   owner_git status --porcelain > "${WORK}/status"
@@ -2111,13 +2332,19 @@ main "$@"
 main() {
   (( $# == 0 )) || check_failed '사용법: 인자 없음'
   local t_sha head_sha
-  # E-1 을 건너뛰어도 T 비밀의 마지막 사본을 단언 없이 지우지 않는다 — T 가 돌고
-  # .env 가 그 사본과 같을 때만 지운다
+  assert_demo_dir_safe
+  # E-1 을 건너뛰어도 T 비밀의 마지막 사본을 단언 없이 지우지 않는다 — HEAD = T · 도는
+  # 서비스가 셋(T 가 돈다) · .env 가 그 사본과 같을 때만 지운다. B ② 에서 멈춘 상태(HEAD ·
+  # .env 는 T, 컨테이너는 내려감)는 둘째에서 멈춘다
   if [[ -e "${DEMO_DIR}/.env.T.bak" ]]; then
-    t_sha="$(< "${DEMO_DIR}/T.sha")"
+    t_sha="$(cat -- "${DEMO_DIR}/T.sha")"
     head_sha="$(owner_git rev-parse HEAD)"
     [[ "${head_sha}" == "${t_sha}" ]] \
       || mismatch 'HEAD 가 T SHA 가 아니다 — 접힌 뒤면 T 백업 처분(11-6)'
+    list_running_services > "${WORK}/running"
+    printf '%s\n' edge ingest-auth mediamtx > "${WORK}/running.want"
+    assert_same "${WORK}/running" "${WORK}/running.want" \
+      '도는 서비스가 edge · ingest-auth · mediamtx 가 아니다 — B · D 도중이면 그 블록부터'
     assert_same "${DEMO_DIR}/.env.T.bak" "${DEMO_DIR}/.env" \
       '.env 가 T 백업과 다르다 — D 를 다시 돈 뒤 E-1 → E-2'
   fi
@@ -2161,9 +2388,10 @@ B · D 는 처음부터 다시 돌려도 이어진다 — 명령과 명령 사�
 
 | 멈춘 자리 | 상태 | 그 자리에서 다시 돌리면 | 다른 길 |
 |---|---|---|---|
-| R0(반영 전 보존) | 5-1 F0 | 5-1 F0 | 첫머리(T 백업 남음)에서 멈췄으면 T 백업 처분(11-6) 뒤 다시 |
+| R0(반영 전 보존) | 5-1 F0 | 5-1 F0 | 첫머리(T 백업 남음)에서 멈췄으면 접힌 뒤는 T 백업 처분(11-6), T 가 도는 리허설 뒤(E-2 를 빠뜨림)는 E-1 → E-2 뒤 다시. 보존 단언이 어긋났고(종료 1) 남은 반영 전 기록이 직전 반영 주기의 것이면(T 가 정착한 뒤의 다음 반영) 롤백 창을 닫고 반영 전 일곱을 옮긴 뒤 다시(11-7 ③ — kty 승인) |
 | 단계 0 | 바뀐 것 없음 — T 가 돈다 | 원인(신원 · 백업 · 도구 판)을 고친 뒤 이어진다 | HEAD 가 반영 전이면 롤백이 아니다 — 반영 도중이면 반영 취소(5-3) |
 | 단계 A | T 가 돈다. T 백업 일부만 있다(반쪽은 `.part`) | 이어진다 — 있는 백업은 지금 상태와 같은지 단언하고 그대로 쓴다 | 단언이 어긋나면(종료 1) 지금 상태가 T 기록과 다르다 — A 를 B 뒤에 돌린 경우 · 끊긴 A 뒤 추적 밖 내용이 바뀐 경우 · 접은 뒤 처분 없이 다시 반영한 경우(옛 반영의 T 백업 — R0 첫머리가 먼저 막는다) 등. 덮어쓰지 않았으므로 그 자리에 맞는 아래 행으로 간다 |
+| B 첫머리 — T 백업 확인(종료 1 · 2) | 바뀐 것 없음 — T 가 돈다 | 같은 자리에서 다시 멈춘다 | T 백업 아홉 가운데 없는 것이 있으면(종료 1) A 가 끝나지 않았다 — A 를 다시 돌려 이은 뒤 B. 묶음이 읽히지 않으면(종료 2) kty |
 | B ② `down` 앞 | 바뀐 것 없음 | 이어진다 | — |
 | B ② `down` 뒤 – `checkout` 앞 | 컨테이너 내려감. HEAD = T. `.env` T | 이어진다 — 첫 `down` 은 T compose + `.env.T.bak` | 리허설이면 D 로 T 에 돌아가도 된다. 실제 롤백은 B 를 다시 돌려 끝낸다 |
 | B ② `checkout` 이 멈춤(추적 밖 파일과 겹침) | 컨테이너 내려감. HEAD = T, 추적 파일 깨끗(`reset` 뒤). 아무것도 지우지 않았다 | 같은 자리에서 다시 멈춘다(종료 2 — git 이 이름을 알린다) | 그 파일은 T 묶음에 있다. kty 가 정한 뒤(옮김) B 를 다시 돌리면 이어진다. 리허설이면 D 로 T 에 돌아가도 된다 — 실제 롤백은 D 를 쓰지 않는다 |
@@ -2174,13 +2402,13 @@ B · D 는 처음부터 다시 돌려도 이어진다 — 명령과 명령 사�
 | B ⑤ HEAD 형태 · 렌더 산출물 복원 – `up` | 옛 판 트리 · 옛 렌더. 컨테이너 내려감 또는 일부. `.env` T | 이어진다. `config --quiet` 가 실패하면(종료 2) 옛 compose 가 `.env.pre-T.bak` 으로 풀리지 않는다 — 다시 돌려도 같은 자리, kty 가 원인을 고친 뒤 B 를 다시 | 리허설이면 D |
 | B ⑤ `.env` 복원 앞(띄운 뒤) | 옛 판이 돈다. `.env` 만 T | 이어진다(한 번 더 내렸다 올린다) | 리허설이면 D |
 | 단계 C | B 의 끝 상태. C 는 읽기만 | 같은 결과다 | 어긋남(종료 1)은 B 의 끝 상태가 반영 전 기록과 다르다는 뜻 — 추적 밖 이름 · 내용 포함. B 가 끝나지 않았으면 B 를 다시. 그 밖은 차분을 보고 kty 가 원인을 고친 뒤 B → C 를 다시 돈다 — 실제 롤백은 그다음 T 백업 처분 → R0 다. 리허설이면 D 로 T 에 돌아가도 된다 |
-| D 첫머리 — 거부 목록 확인(종료 1) | 바뀐 것 없음 | 같은 자리에서 다시 멈춘다 | 7-4 — 파일이 없으면 되살릴 내용을 kty 가 정한다. 틀린 줄이면 kty — 틀린 줄 걷기(10절)는 응답기 컨테이너가 있어야 돈다 |
+| D 첫머리 — 거부 목록 확인(종료 1) | 바뀐 것 없음 | 같은 자리에서 다시 멈춘다 | 7-4 — 파일이 없으면 되살릴 내용을 kty 가 정한다. 틀린 줄이면 틀린 줄 걷기(10절 — 응답기 컨테이너가 없으면 끼우기만 한다) 뒤 D 를 다시 돌린다 |
 | D 어디서든(명령 사이) | HEAD 는 반영 전 또는 T. `.env` 는 옛 판(단계 끝에서만 바뀐다) | 이어진다 — 첫 `down` 은 HEAD 로 고른 짝이다. T 체크아웃 뒤 · `.env` 복원 앞에서 멈췄어도 T compose + `.env.T.bak` 이다 | ④ 목록 대조 실패는 B ④ 행과 같다. ⑤ 상태 대조 실패는 kty |
 | D 의 healthy 시한 초과 | `ingest-auth` 만 떠 있고 MediaMTX 는 띄우지 않았다(운영 순서). `.env` 옛 판 | 원인(응답기 로그)을 고친 뒤 이어진다. 거부 목록의 틀린 줄이면 손으로 고치지 않고 틀린 줄 걷기(10절 — 재시작 없음)를 돈다 | — |
 | 단계 E-1 | 바뀐 것 없음(읽기만) | 같은 결과다 | 어긋남(종료 1)은 T 가 A 의 기록대로 돌아오지 않았다는 뜻 — 추적 밖 이름 · 내용 포함. 아무것도 지우지 않았다. kty |
-| 단계 E-2 | T 백업 일부가 지워졌다 | 이어진다 — 있는 것만 지운다. `.env.T.bak` 이 남아 있으면 먼저 HEAD = T · `.env` = `.env.T.bak` 을 본다. 어긋나면(D 가 `.env` 복원 앞에서 멈춘 채 E-1 을 건너뜀 · 접힌 뒤) 아무것도 지우지 않고 멈춘다(종료 1). 잔여가 남으면(종료 1) 그 이름을 보이고 kty | `.env` 가 다르면 D 를 다시 돌린 뒤 E-1 → E-2. 접힌 뒤면 T 백업 처분 |
+| 단계 E-2 | T 백업 일부가 지워졌다 | 이어진다 — 있는 것만 지운다. `.env.T.bak` 이 남아 있으면 먼저 HEAD = T · 도는 서비스가 edge · ingest-auth · mediamtx · `.env` = `.env.T.bak` 을 본다. 어긋나면(B ② 에서 멈춤 — 컨테이너 내려감 · D 가 `.env` 복원 앞에서 멈춘 채 E-1 을 건너뜀 · 접힌 뒤) 아무것도 지우지 않고 멈춘다(종료 1). 링크 · 일반 파일이 아닌 이름이나 잔여가 남으면(종료 1) 그 이름을 보이고 kty | B ② 에서 멈췄으면 그 행대로 B 를 끝내거나 D 로 T 에 돌아간 뒤 E-1 → E-2. `.env` 가 다르면 D 를 다시 돌린 뒤 E-1 → E-2. 접힌 뒤면 T 백업 처분 |
 | T 백업 처분 | 첫머리 단언에서 멈췄으면 지운 것이 없다. 지우는 중에 멈췄으면 T 백업 일부가 지워졌다 — 반영 전 상태는 그대로 | 이어진다 — 있는 것만 지운다. 첫머리(HEAD = 반영 전 · `.env` = `.env.pre-T.bak` · 복귀 확인)가 어긋나면(종료 1) 아무것도 지우지 않는다 — T 가 돌거나 B 가 끝나지 않았거나 접힌 끝 상태가 반영 전 기록과 다르다. `.env.pre-T.bak` 이 없으면 검사 실패(종료 2)다 | B 가 끝나지 않았으면 B 를 다시 돌린 뒤 C → 처분. 복귀 확인이 어긋나면 단계 C 행과 같다(kty). T 가 돌면 처분하지 않는다 — 그 T 백업은 롤백의 길이다. 반영 전 비밀을 먼저 지웠으면 이 블록은 돌지 못한다(11-7) |
-| 반영 전 비밀 파기 | 첫머리(T 백업 남음)에서 멈췄으면 지운 것이 없다. 지우는 중에 멈췄으면 비밀 하나만 지워졌을 수 있다 | 이어진다 — 있는 것만 지운다 | T 백업이 남았으면 접힌 뒤는 T 백업 처분, T 가 도는 리허설 뒤는 E-1 → E-2 가 먼저다 |
+| 반영 전 비밀 파기 | 첫머리(T 백업 남음 · 안정 상태 아님)에서 멈췄으면 지운 것이 없다. 지우는 중에 멈췄으면 비밀 하나만 지워졌을 수 있다 — `.env.pre-T.bak` 을 맨 먼저 지운다 | 이어진다 — 있는 것만 지운다. `.env.pre-T.bak` 이 이미 없으면 롤백 길이 이미 없어 안정 상태 단언을 건너뛴다 | T 백업이 남았으면 접힌 뒤는 T 백업 처분, T 가 도는 리허설 뒤는 E-1 → E-2 가 먼저다. 안정 상태(접힌 끝 · T 정착)가 아니면 반영 도중 · 접는 도중이다 — 반영(4절) · 반영 실패 복구(5절) · 롤백을 그 행대로 끝낸 뒤 다시. 「MediaMTX 가 제어망에 붙어 있지 않다」면 R5 끝 · R6 앞이다(반영은 R6 부터 잇는다). 링크 · 일반 파일이 아닌 이름으로 멈췄으면 kty |
 | 명령 도중 끊김(프로세스가 죽음 — 상자 재부팅 · 명령 시한 등) | 트리 일부만 바뀌었거나 `.git/index.lock` 이 남았다. HEAD 는 옛 값일 수 있다 | `apply` · `clean` · `tar` 풀기 도중이면 이어질 것으로 본다(추론 — 남은 이름이 두 목록 안이고 `reset` · `clean` · `tar` 가 다시 맞춘다). `reset` · `checkout` 도중이면 지우기 전에 멈춘다(종료 2) — `reset` 이 남은 lock 에서, 또는 첫 `down` 이 HEAD 로 고른 env 와 판이 어긋난 compose 의 `:?` 에서 | kty — 남은 lock · 트리 상태를 보고 정한다(lock 을 지우는 것은 승인). 블록은 RunShellScript 로 보내 세션 끊김으로는 이 행에 오지 않는다 |
 
 ### 11-6. 접은 뒤 다시 T 로
@@ -2211,7 +2439,8 @@ B · D 는 처음부터 다시 돌려도 이어진다 — 명령과 명령 사�
 main() {
   (( $# == 0 )) || check_failed '사용법: 인자 없음'
   local head_sha
-  PRE_SHA="$(< "${DEMO_DIR}/pre-T.sha")"
+  assert_demo_dir_safe
+  PRE_SHA="$(cat -- "${DEMO_DIR}/pre-T.sha")"
   readonly PRE_SHA
   head_sha="$(owner_git rev-parse HEAD)"
   [[ "${head_sha}" == "${PRE_SHA}" ]] \
@@ -2233,9 +2462,19 @@ main "$@"
   합집합 · 기록 세대). 롤백 창을 닫을 때 이미지를 지우고, 디렉터리는 기록이 든 것이라
   지우기 전에 kty 에게 묻는다.
 - **리허설의 T 백업**은 E-2 가 곧바로 지운다.
+- **auth 출입증은 되돌리지 않는다.** 이 롤백이 되돌리는 범위는 상자의 설정 · 코드뿐이다.
+  resolve 출입증은 반영 전 `.env` 에도 있어(3절 — 반영 전에 이미 들어갔다) 롤백한 뒤에도
+  살아 있는 `.env` 에 남는다 — T 백업 · 반영 전 비밀을 지워도 상자에서 사라지지 않는다.
+  옛 구성은 그 출입증을 쓰지 않는다. 롤백한 채 창을 닫으면 그 출입증의 처분(줄을 남김 ·
+  뺌 · auth 쪽 창구 닫기 — 값 삭제 → auth 재생성)은 kty 가 정한다.
 - **`shred -u` 는 이름 제거 + 최선 노력이다.** 저널링 파일 시스템 · EBS 에서는 덮어쓴
-  자리가 옛 블록과 같다는 보장이 없다 — 지운 비밀이 디스크 블록에 남을 수 있다. 끝까지
-  없애는 것은 상자 철거(12절 7 — 인스턴스 종료로 볼륨이 지워진다)다.
+  자리가 옛 블록과 같다는 보장이 없다 — 지운 비밀이 디스크 블록에 남을 수 있다.
+- **shred 를 거치지 않고 놓이는 비밀의 옛 판도 있다.** R1 의 이름 바꾸기(반영 전
+  `.env`) · render.sh 의 이름 바꾸기(옛 렌더 산출물) · 반영 취소 ⓐ · B ⑤ · D 의 `cp -p`
+  덮어쓰기(`.env` · 렌더 산출물의 옛 내용) · `compose down`(응답기 컨테이너 설정의 환경
+  변수 — 비밀 둘)은 옛 내용을 지우지 않고 놓아 준다. 그 블록도 디스크에 남을 수 있다.
+- **끝까지 없애는 것은 상자 철거다**(12절 7 — 인스턴스 종료로 볼륨이 지워진다). 그것도
+  이 볼륨의 스냅숏 · 이 인스턴스로 만든 AMI 가 없을 때만이다 — 철거 때 함께 본다(12절 6).
 
 **롤백 창 닫기(12단계 — 실측 통과 뒤 첫 팀 실사용 방송이 무사하면).** 차례가 있다.
 
@@ -2243,43 +2482,106 @@ main "$@"
     첫머리가 `.env.pre-T.bak` 을 보므로 반영 전 비밀보다 먼저다. 거꾸로 하면 처분 블록이
     검사 실패(종료 2)로 돌지 못하고, 남은 T 일곱이 다음 반영의 R0 첫머리를 막는다. 접은
     뒤 다시 반영했으면 처분이 그 전에 지웠고, 리허설 뒤면 E-2 가 지웠다.
-1.  그다음 아래 「반영 전 비밀 파기」로 반영 전 비밀 둘(`.env.pre-T.bak` ·
-    `mediamtx.demo.yml.pre-T.bak` — 옛 passphrase · 옛 렌더 산출물)과 그 `.part` 를
-    지운다. 이 블록은 T 백업이 하나라도 남아 있으면 지우지 않고 멈춘다 — 위 차례를
-    블록이 지킨다.
+1.  그다음 아래 「반영 전 비밀 파기」로 반영 전 비밀 둘(`.env.pre-T.bak` — 옛
+    passphrase · resolve 출입증(T 와 같은 값), `mediamtx.demo.yml.pre-T.bak` — 옛 렌더
+    산출물)과 그 `.part`, 끊긴 R1 · 렌더가 남긴 비밀 임시 파일(`.env.next` ·
+    `mediamtx.demo.yml.tmp.*`)을 지운다. 이 블록은 T 백업이 하나라도 남아 있거나 안정
+    상태(접힌 끝 · T 정착)가 아니면 지우지 않고 멈춘다 — 위 차례와 반영 · 접기 도중이
+    아님을 블록이 지킨다. T 가 다 떠 있는 채 실측이 실패한 자리(F6 · F7)는 블록이 가르지
+    못해 승인 문장(11-1)이 가른다.
 1.  반영 전의 나머지 일곱(`.sha` · `.head` · `.status` · `.worktree.patch` ·
     `.untracked.z` · `.untracked.tgz` · `.docker`)은 비밀이 아니라 남겨도 된다. 반영 전
-    비밀을 지운 뒤에는 이 판으로 롤백할 수 없다.
+    비밀을 지운 뒤에는 이 판으로 롤백할 수 없다. 다만 T 가 정착한 채 창을 닫았으면 남은
+    일곱은 끝난 반영 주기의 기록이라, 다음 반영(T → 다음 판)의 R0 가 지금 상태와 견줘
+    「일치 없음」으로 멈춘다(5-1 F0). 다음 반영 전에 그 일곱을 보관할 곳으로 옮긴다 —
+    옮길 곳과 실행은 kty 승인이다(블록을 두지 않는다).
 1.  반영 전에 상자에 남아 있던 `compose.yml.bak-*` 둘과 롤백용 옛 이미지의 처분도 그때
     kty 에게 묻는다.
 
 ```bash
 # ── 블록: 반영 전 비밀 파기 — 머리 + 이 본문. 인자 없음. 롤백 창 닫기 2. 지운다 ──
-# 실행 직전 kty 승인. T 백업이 하나라도 남아 있으면 아무것도 지우지 않고 멈춘다(종료 1)
-# — T 백업 처분(접힌 뒤) · E-2(리허설 뒤)가 먼저다. 지운 뒤에는 이 판으로 롤백할 수 없다.
+# 실행 직전 kty 승인(승인 문장 — 11-1). 첫머리 단언 셋 가운데 하나라도 어긋나면 아무것도
+# 지우지 않고 멈춘다(종료 1). ① 상자 디렉터리. ② T 백업이 하나도 없다 — T 백업 처분(접힌
+# 뒤) · E-2(리허설 뒤)가 먼저다. ③ 반영 전 .env 백업이 남아 있으면 안정 상태 둘 가운데
+# 하나다(assert_settled_for_pre_t_disposal). 지운 뒤에는 이 판으로 롤백할 수 없다.
+
+# assert_mediamtx_on_control_net 은 도는 MediaMTX 가 T 의 컨테이너인지 본다 — 제어망
+# (mtx-control)은 T 의 compose 에만 있어, R6 이 다시 만든 MediaMTX 만 그 망에 붙는다. R5 는
+# 응답기만 띄우므로 R5 끝 · R6 앞에는 옛 MediaMTX(기본 망만)가 돈다. 붙어 있지 않으면 일치
+# 없음이다.
+assert_mediamtx_on_control_net() {
+  docker ps -q --filter "label=com.docker.compose.project=${PROJECT}" \
+    --filter "label=com.docker.compose.service=mediamtx" \
+    --filter "network=${PROJECT}_mtx-control" > "${WORK}/mtx.on-control"
+  [[ -s "${WORK}/mtx.on-control" ]] \
+    || mismatch "MediaMTX 가 제어망(${PROJECT}_mtx-control)에 붙어 있지 않다 —" \
+      'R5 끝 · R6 앞(옛 MediaMTX)이다'
+}
+
+# assert_settled_for_pre_t_disposal 은 반영 전 비밀을 지워도 되는 안정 상태인지 본다 —
+# 접힌 끝(HEAD = 반영 전 · .env = .env.pre-T.bak · 복귀 확인) 또는 T 정착(HEAD ≠ 반영 전 ·
+# 도는 서비스가 edge · ingest-auth · mediamtx · MediaMTX 가 제어망에 붙음 · 응답기 healthy ·
+# .env ≠ .env.pre-T.bak). 반영 도중(R1–R6 — R5 끝 · R6 앞의 옛 MediaMTX 포함)과 접는 도중은
+# 둘 다 아니라 멈춘다. F6 · F7(T 가 다 떠 있는 채 실패)은 상태로 가를 수 없어 승인 문장이
+# 가른다(11-1).
+assert_settled_for_pre_t_disposal() {
+  local head_sha
+  local -i rc=0
+  PRE_SHA="$(cat -- "${DEMO_DIR}/pre-T.sha")"
+  readonly PRE_SHA
+  head_sha="$(owner_git rev-parse HEAD)"
+  if [[ "${head_sha}" == "${PRE_SHA}" ]]; then
+    assert_same "${DEMO_DIR}/.env.pre-T.bak" "${DEMO_DIR}/.env" \
+      '.env 가 반영 전이 아니다 — 접힌 끝이 아니다(반영 R1 뒤 · B 도중)'
+    assert_back_to_pre_t
+    return 0
+  fi
+  list_running_services > "${WORK}/running"
+  printf '%s\n' edge ingest-auth mediamtx > "${WORK}/running.want"
+  assert_same "${WORK}/running" "${WORK}/running.want" \
+    '도는 서비스가 edge · ingest-auth · mediamtx 가 아니다 — 반영 · 접기 도중이다'
+  assert_mediamtx_on_control_net
+  wait_ingest_auth_healthy
+  cmp -s -- "${DEMO_DIR}/.env.pre-T.bak" "${DEMO_DIR}/.env" || rc=$?
+  case "${rc}" in
+    0) mismatch '.env 가 반영 전과 같다 — T 가 정착하지 않았다' ;;
+    1) ;;
+    *) check_failed "cmp ${rc}: .env.pre-T.bak · .env" ;;
+  esac
+}
+
 main() {
   (( $# == 0 )) || check_failed '사용법: 인자 없음'
-  local name path left=''
+  local -r pre_env="${DEMO_DIR}/.env.pre-T.bak"
+  local name left=''
+  assert_demo_dir_safe
   t_backup_names > "${WORK}/t-left"
   [[ ! -s "${WORK}/t-left" ]] \
     || mismatch 'T 백업이 남아 있다 — T 백업 처분 · E-2 가 먼저다:' \
       "$(tr '\n' ' ' < "${WORK}/t-left")"
+  # 반영 전 .env 백업을 이미 지웠으면(끊긴 파기를 다시 돌림) 롤백 길이 이미 없다 — ③ 을
+  # 건너뛰고 남은 것만 지운다. 그래서 .env.pre-T.bak 을 맨 먼저 지운다
+  if [[ -e "${pre_env}" || -L "${pre_env}" ]]; then
+    assert_settled_for_pre_t_disposal
+  fi
   for name in .env.pre-T.bak mediamtx.demo.yml.pre-T.bak; do
-    for path in "${DEMO_DIR}/${name}" "${DEMO_DIR}/${name}.part"; do
-      if [[ -e "${path}" ]]; then
-        shred -u -- "${path}"
-      fi
-    done
+    remove_box_file shred "${DEMO_DIR}/${name}"
+    remove_box_file shred "${DEMO_DIR}/${name}.part"
   done
+  # 끊긴 R1 · 렌더가 남긴 비밀 임시 파일(.env.next · mediamtx.demo.yml.tmp.*)
+  dispose_stray_secrets
   # 비밀이 아닌 일곱은 남긴다. 끊긴 보존이 남긴 그 .part 만 지운다
   for name in sha head status worktree.patch untracked.z untracked.tgz \
     docker; do
-    rm -f -- "${DEMO_DIR}/pre-T.${name}.part"
+    remove_box_file rm "${DEMO_DIR}/pre-T.${name}.part"
   done
   ls -1A -- "${DEMO_DIR}" > "${WORK}/names"   # 목록을 먼저 받는다 — 못 받으면 검사 실패
   while IFS= read -r name; do
     case "${name}" in
-      *.pre-T.bak | *.pre-T.bak.part | pre-T.*.part) left+="${name} " ;;
+      *.pre-T.bak | *.pre-T.bak.part | pre-T.*.part | .env.next \
+        | mediamtx.demo.yml.tmp.*)
+        left+="${name} "
+        ;;
     esac
   done < "${WORK}/names"
   [[ -z "${left}" ]] || mismatch "반영 전 비밀 잔여: ${left}"
@@ -2314,7 +2616,25 @@ IID=$(aws ec2 describe-instances --filters Name=tag:Name,Values=pokeclip-media-d
 4. `aws ec2 delete-security-group --group-id "$SG"` → describe 0건
 5. A 레코드 `DELETE`(1-3의 change-batch에서 Action 만 바꾼다) → `dig` 응답 없음
 6. 계정 훑기: `describe-instances` · `describe-volumes` · `describe-addresses` 에 demo 태그 잔여 0건
-7. 상자의 비밀 파기 — `.env` · 반영 전 · T `.bak`(인스턴스 종료로 자동이지만 명시한다)
+   — 이 볼륨의 스냅숏 · 이 인스턴스로 만든 AMI 도 0건이어야 볼륨의 비밀이 끝난다(11-7).
+   계정 전체가 아니라 1 에서 적은 볼륨 · 인스턴스 ID 와 demo 태그로 좁혀 본다 — 넷 다 빈
+   출력이어야 한다. `source-instance-id` 는 CreateImage 로 만든 AMI 만 잡으므로 태그로도 본다.
+   ```bash
+   aws ec2 describe-snapshots --owner-ids self \
+     --filters Name=volume-id,Values=<vol-id> \
+     --query 'Snapshots[].SnapshotId' --output text
+   aws ec2 describe-snapshots --owner-ids self \
+     --filters Name=tag:Name,Values=pokeclip-media-demo \
+     --query 'Snapshots[].SnapshotId' --output text
+   aws ec2 describe-images --owners self \
+     --filters Name=source-instance-id,Values=<instance-id> \
+     --query 'Images[].ImageId' --output text
+   aws ec2 describe-images --owners self \
+     --filters Name=tag:Name,Values=pokeclip-media-demo \
+     --query 'Images[].ImageId' --output text
+   ```
+7. 상자의 비밀 파기 — `.env` · 반영 전 · T `.bak` · 끊긴 R1 · 렌더가 남긴 `.env.next` ·
+   `mediamtx.demo.yml.tmp.*`(인스턴스 종료로 자동이지만 명시한다)
 8. 노트북의 로컬 리허설 디렉터리(`.env` · 렌더물) 삭제 + **클립보드 비우기**
 9. OBS 플러그인 — 시험 계정의 연결을 해제한다
 10. 저장소 정리 PR — `infra/dev-media/` 와 그 포인터를 지울지 kty 가 정한다

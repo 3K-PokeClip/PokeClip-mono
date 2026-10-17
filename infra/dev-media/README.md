@@ -23,7 +23,7 @@ auth 서비스에 물어 판정하고, 받은 방송을 LL-HLS 로 되감기 1�
 
 ## 구성도
 
-```
+```text
  OBS (가입한 스트리머)
    │  SRT udp/8890   streamid=#!::r=<토큰>,m=publish · 그 계정의 passphrase
    ▼
@@ -229,7 +229,7 @@ auth 서비스에 물어 판정하고, 받은 방송을 LL-HLS 로 되감기 1�
 [^token]: 여기서 「토큰」은 비밀 자격이 아니라 공개 식별자다. 계정마다 하나인
     26자 값으로 streamid 의 `r` 값이자 경로 이름이다. 비밀은 passphrase 쪽이다.
 [^healthy]: Docker healthcheck 가 통과한 상태. 응답기는 30초마다
-    `/ingest-auth healthcheck` 로 auth 와 무관한 자기 상태(거부 목록 · 기록
-    디렉터리)를 본다.
+    `/ingest-auth healthcheck` 로 auth 와 무관한 자기 상태(인증 리스너 수신 · 거부
+    목록 · 기록 디렉터리)를 본다.
 [^union]: 합집합 — 응답기가 떠 있는 동안 한 번이라도 읽은 토큰을 모두 거부
     대상으로 기억한다는 뜻이다. 그래서 파일에서 줄이 빠져도 곧바로 풀리지 않는다.
