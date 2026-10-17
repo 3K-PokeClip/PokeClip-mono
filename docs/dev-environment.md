@@ -204,7 +204,9 @@ cd media && go test ./internal/index/ -v
   `media-ci`의 postgres 서비스 컨테이너는 잡마다 뜨고 잡과 함께 사라져 공유가 없으므로 고정 이름을 쓴다.
   **규약을 완화한 것이 아니라 적용 조건(PG를 공유하는 실행의 존재)을 드러낸 것이다.**
 - `ddl.go`를 바꾼 뒤에는 전용 DB가 옛 스키마를 유지한다(`CREATE TABLE IF NOT EXISTS`).
-  `DROP DATABASE pokeclip_uploadtest` 후 다시 돌린다.
+  전용 DB는 패키지마다 하나씩이라(`pokeclip_uploadtest`와 접미 DB 일곱)
+  `pokeclip_uploadtest` 하나만 지우면 나머지 패키지가 옛 스키마로 실패한다. 접미 DB
+  전부를 지우는 루프는 [`media/README.md`](../media/README.md)의 「테스트」 절에 있다.
 
 ### 스트림 이름 제약
 
@@ -292,7 +294,20 @@ docker compose up -d --no-deps segment-indexer   # 사이드카만 재기동. Me
 **기본 상태는 업로더 꺼짐이다.** `S3_BUCKET`이 비어 있으면 사이드카는 인덱싱만 하고
 (`uploader_disabled` INFO 1줄), S3·AWS 자격증명이 전혀 필요 없다 — 2·3번은 이 절을 건너뛰면 된다.
 
-1번이 실버킷 업로드까지 확인하려면:
+1번이 실버킷 업로드까지 확인하려면 아래를 따른다. **버킷을 주면 되감기 목록
+발행(M4 ⓒ)도 함께 켜진다.**
+
+*   override 의 `REWIND_PUBLIC_BASE_URL` 이 필수다. 버킷이 있는데 비면 사이드카가
+    기동을 거부하고 인덱싱 · 업로드도 함께 멈춘다. 예시 파일의 기본값
+    `http://127.0.0.1:8090` 은 로컬 실측용이다.
+*   켜짐 확인 줄은 `rewind_publish_started` 다(조립이 실패하면
+    `rewind_publish_degraded` ERROR 한 줄 — 업로드 · 인덱싱은 계속 돈다).
+*   목록은 같은 버킷의 `dvr/{스트림}/{회차}/index.m3u8` 에 쌓인다. **`dvr/`
+    객체를 지우는 코드는 없다** — 실험 뒤에는 직접 지운다.
+*   머지로 사이드카 코드가 바뀌었으면 아래 2) 의 `up` 에 `--build` 를 더한다 —
+    `--force-recreate` 는 컨테이너만 다시 만들고 이미지는 다시 빌드하지 않는다.
+*   macOS 기본 셸 zsh 에 붙여 넣을 때 아래 블록의 `#` 주석 줄이 명령으로 읽히면
+    `setopt interactivecomments` 를 먼저 친다.
 
 ```bash
 # 1) 개인 override 를 만든다 (커밋 금지 — .gitignore 등재됨)
@@ -301,7 +316,7 @@ cp docker-compose.override.yml.example docker-compose.override.yml
 # 2) 같은 셸에 임시 자격증명을 내보내고 재기동한다
 eval "$(aws configure export-credentials --format env)"
 docker compose up -d --force-recreate segment-indexer
-docker compose logs segment-indexer | grep -E 'uploader_started|credentials_ok'
+docker compose logs segment-indexer | grep -E 'uploader_started|credentials_ok|rewind_publish_started'
 
 # 3) 위 "세그먼트 인덱싱 확인" 절차로 송출한 뒤, 장부가 uploaded 로 차는지 본다
 docker compose exec -T -e Q="SELECT upload_state, count(*) FROM stream_segments WHERE stream_id='$STREAM' GROUP BY 1;" \
@@ -309,11 +324,17 @@ docker compose exec -T -e Q="SELECT upload_state, count(*) FROM stream_segments 
 ```
 
 끌 때는 override를 **제외**하고 재기동한다 — `unset S3_BUCKET`은 무효다
-(override의 `${S3_BUCKET:-…}`가 미설정·빈값을 둘 다 실버킷으로 치환한다):
+(override의 `${S3_BUCKET-…}`는 미설정이면 실버킷으로 채운다). `S3_BUCKET=` 를
+따로 한 줄로 쳐도 무효다 — 내보내지(export) 않은 변수는 compose 에 닿지 않는다.
+빈 값은 명령 앞에 붙여야 닿고(`S3_BUCKET= docker compose up …`), 그 꼴도 새 예시
+사본에서만 통한다 — 옛 사본의 `${S3_BUCKET:-…}` 는 빈 값도 실버킷으로 채우므로 그
+줄을 예시 파일대로 고친다. 버킷을 빼면 업로더와 되감기 목록 발행이 함께 꺼지고
+확인 줄도 둘이다:
 
 ```bash
 docker compose -f docker-compose.yml up -d --force-recreate segment-indexer
 docker compose -f docker-compose.yml logs segment-indexer | grep -c uploader_disabled   # 1
+docker compose -f docker-compose.yml logs segment-indexer | grep -c rewind_publish_disabled   # 1
 ```
 
 주의: `AWS_PROFILE`을 override에 넣는 것은 `~/.aws` 마운트 폴백을 켤 때만 —

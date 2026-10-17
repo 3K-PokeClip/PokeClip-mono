@@ -156,7 +156,9 @@ func (ix *Indexer) requestPlayback(t *index.UploadTarget, isTail bool) {
 //
 // 계승 게이트 입력(물려받은 회차 · 그 회차 첫 조각 경로 — 계획 4.5 B #19)은 개시 행의 결과에서만 뜻이 있다. 이
 // 프로세스가 그 회차의 개시 행을 봤으면 그 값을 싣는다 — 거부 뒤 다음 행의 재요청도 같다(판단 J64). 못 봤으면
-// (재기동 뒤 이어지는 회차) 비어 가서 업로더가 계승 후보가 아닌 것으로 읽는다 — 알려진 공백이다(kty 회부 대상).
+// 비어 가서 업로더가 계승 후보가 아닌 것으로 읽는다 — 알려진 공백이다. 못 보는 길은 둘이다: 재기동 뒤 이어지는 회차,
+// 그리고 같은 프로세스에서 개시 행의 COMMIT 응답을 잃은 경우(서버는 커밋했는데 재시도가 경로 중복으로 끝나 advance 를
+// 지나지 않는다). kty 결정(2026-09-30)으로 코드 그대로다 — 플러그인이 송출 규격을 잠가 우리 송출에서는 닿지 않는다.
 func (ix *Indexer) requestInit(streamID, sessionID string, tail *index.TailRow) bool {
 	t := index.UploadTarget{
 		StreamID: streamID, Axis: index.AxisInit, SessionID: sessionID,

@@ -621,8 +621,8 @@ func TestObservationWindowsReachTheIndexer(t *testing.T) {
 	}
 }
 
-// MTX_API_URL="" 은 즉시 롤백 스위치다 — 관측이 사라지면 ⓐ2 만 fail-closed 되고
-// 인덱싱은 그대로 돈다. withDefault 를 쓰면 그 스위치가 고장난다.
+// MTX_API_URL="" 은 즉시 롤백 스위치다 — 관측이 사라지면 ⓐ2 가 fail-closed 되고 4.1 종료
+// 전이도 서지 않지만 인덱싱은 그대로 돈다. withDefault 를 쓰면 그 스위치가 고장난다.
 func TestEmptyMTXAPIURLStaysEmpty(t *testing.T) {
 	env := minimalEnv()
 	env["MTX_API_URL"] = ""
@@ -688,8 +688,9 @@ func TestObservationDurationsRejectZeroAndNegative(t *testing.T) {
 	}
 }
 
-// 교차 검증 4 — 폴 주기가 신선도 창 이상이면 관측이 태어나자마자 낡아 ⓐ2 가 영구 불성립이다.
-// 그 상태는 로그로 드러나지 않는다(폴은 성공하고 주조만 안 된다) — 기동 때 잡는다.
+// 교차 검증 4 — 폴 주기가 신선도 창 이상이면 관측이 태어나자마자 낡아 ⓐ2 가 영구 불성립이고,
+// 4.1 종료 판정의 기다림도 관측이 끊길 때마다 지워져 종료 전이가 늦거나 서지 않을 수 있다.
+// 둘 다 로그로 드러나지 않는다(폴은 성공한다) — 기동 때 잡는다.
 func TestLoadRejectsPollIntervalNotBelowFresh(t *testing.T) {
 	for _, poll := range []string{"30s", "45s"} {
 		t.Run("OBS_POLL="+poll, func(t *testing.T) {
@@ -712,7 +713,8 @@ func TestLoadRejectsPollIntervalNotBelowFresh(t *testing.T) {
 func TestLoadRejectsMalformedMTXAPIURL(t *testing.T) {
 	// 뒤 여섯은 query·fragment 갈래다 — poller 가 베이스 URL 뒤에 "/v3/paths/list" 를
 	// 문자열로 붙이므로 `#typo` 는 경로를 "/" 로 잘라내고 `?x=1` 은 경로를 쿼리 안으로
-	// 밀어 넣는다. 둘 다 폴이 영구 실패하고 증상은 "스캔 유입(ⓐ2)의 되감기가 안 된다"뿐이다.
+	// 밀어 넣는다. 둘 다 폴이 영구 실패하고 증상은 "스캔 유입(ⓐ2)의 되감기가 안 된다" ·
+	// "회차가 끝나지 않는다"(4.1 종료 전이도 신선한 관측을 요구한다)뿐이다.
 	// 값 없는 `#`·`?` 만 붙은 형태도 같은 고장이다 — 특히 빈 fragment 는 url.Parse 가
 	// Fragment="" 로 삼키므로 파싱 결과가 아니라 원문으로만 잡힌다(r5 cx 지적).
 	for _, bad := range []string{

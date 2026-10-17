@@ -19,8 +19,9 @@ import "fmt"
 // 회차의 목록 양쪽에 실리는데, 어느 목록에서 축출되든 discontinuity_base 에 같은 값이 더해져야
 // 하기 때문이다. 그래서 렌더와 축출 증분(EvictedDiscontinuityTags)이 이 함수 하나를 부른다 —
 // 둘이 갈리면 축출 뒤 DISCONTINUITY-SEQUENCE 가 실제 표시 수와 어긋난다. 회차 첫 조각을 컷오프로
-// 자르는 것도 같은 이유다: 부팅 재구성은 seq ≥ cutoff 인 행만 다시 싣는다. 컷오프 아래 행으로
-// 판정하면 재기동 전후로 같은 행의 판정이 갈려, 이미 나간 목록 머리 앞에 표시가 새로 선다.
+// 자르는 것은 표시를 목록에 실릴 수 있는 첫 조각에 두기 위해서다 — 컷오프 아래 행은 어느 목록의
+// 범위에도 들지 않는다. 술어의 재료(회차 최소 seq · 컷오프)는 적재 하한과 무관한 장부 값이라(계획
+// 4.5 A3 결정 3 · A1 E1) 재기동 전후로 같은 행이 같은 판정을 받는다.
 func HasDiscontinuityTag(seq int64, s Session, cutoff int64) bool {
 	return s.InheritsSession != "" && seq == s.firstSeq(cutoff)
 }

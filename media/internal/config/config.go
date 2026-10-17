@@ -57,9 +57,10 @@ type Config struct {
 
 	// MTXState 는 MediaMTX Control API 관측 폴러의 설정이다(POK-195 M3).
 	//
-	// **APIURL 이 비면 폴러를 만들지 않는다** — 관측이 없으면 상태 방증 ⓐ2 가
-	// fail-closed 되어 스캔 유입(ⓐ2) 주조만 멈추고 인덱싱·업로드는 그대로 돈다.
-	// HOOK_SPOOL_PATH 와 같은 형태의 즉시 롤백 스위치다.
+	// **APIURL 이 비면 폴러를 만들지 않는다** — 관측이 없으면 두 가지가 멈추고
+	// 인덱싱·업로드는 그대로 돈다. 상태 방증 ⓐ2 가 fail-closed 되어 스캔 유입(ⓐ2) 주조가
+	// 멈추고, 종료 판정이 신선한 관측을 요구하므로 4.1 종료 전이(M4 ⓒ)도 서지 않아 같은
+	// 스트림의 연속 방송이 한 회차로 이어진다. HOOK_SPOOL_PATH 와 같은 형태의 즉시 롤백 스위치다.
 	MTXState mtxstate.Options
 	// ObsFresh·ObsBackfill 은 상태 방증 ⓐ2 의 시간 항이다(설계 6.5.2):
 	// 관측이 이보다 낡으면 방증으로 쓰지 않고(ObsFresh), 관측 시점보다 이보다 더 과거인
@@ -308,8 +309,9 @@ func Load(env func(string) string) (Config, error) {
 	// 조립 지점(cmd/segment-indexer/main.go 의 validateObservationWindow)이 그 검증을 진다.
 	//
 	// 교차 검증 4 — 폴 주기가 신선도 창 이상이면 다음 관측이 오기 전에 직전 관측이 만료돼
-	// 신선한 관측이 끊기지 않고 존재할 수 없다. 폴은 성공하고 스캔 유입(ⓐ2) 주조만 안 되므로 로그에도
-	// 드러나지 않는다. **역은 성립하지 않는다** — 짧다고 신선이 보장되지는 않는다.
+	// 신선한 관측이 끊기지 않고 존재할 수 없다. 폴은 성공하는데 스캔 유입(ⓐ2) 주조가 안 되고,
+	// 4.1 종료 판정의 기다림도 관측이 끊길 때마다 지워져 종료 전이가 늦거나 서지 않을 수 있다.
+	// 둘 다 로그에 드러나지 않는다. **역은 성립하지 않는다** — 짧다고 신선이 보장되지는 않는다.
 	if mtx.PollInterval >= obsFresh {
 		return Config{}, fmt.Errorf(
 			"OBS_POLL(%v)은 OBS_FRESH(%v)보다 짧아야 한다 — 같거나 길면 다음 관측이 오기 전에 직전 "+

@@ -51,7 +51,8 @@ type UploadTarget struct {
 	// SeedResult 가, 스위퍼 작업은 init 조회가 싣는다. 다른 축에서는 비어 있다.
 
 	// InheritsSession 은 그 회차가 계승 후보면 물려받은 직전 회차다. 게이트의 판별은 이 칸 하나다(B #3) — 빈 값이면
-	// 계승 후보가 아니라 워커가 지문을 뜨지 않고 비호환 거짓을 넘긴다.
+	// 계승 후보가 아닌 것으로 읽어 워커가 지문을 뜨지 않고 비호환 거짓을 넘긴다. 실시간 작업은 개시 행을 못 본 회차(재기동
+	// 뒤 이어지는 회차 · 개시 행의 COMMIT 응답을 잃은 경우)면 후보여도 빈 값이다 — 알려진 공백(indexer requestInit).
 	InheritsSession string
 	// PrevFirstLocalPath 는 물려받은 직전 회차의 첫 조각 local_path 다 — 새 회차 조각과 stsd 지문을 견줄 상대다.
 	// 계승 후보인데 빈 값이면(직전 회차에 조각이 없다) 워커가 비호환으로 판정한다(fail-closed).

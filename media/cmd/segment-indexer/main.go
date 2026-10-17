@@ -289,8 +289,9 @@ func assembleWatcher(ctx context.Context, opt recording.WatcherOptions) (*record
 
 // startObserver 는 관측 폴러를 띄우고 첫 관측까지 기다린다(설계 6.5.3 ⑶ 1~2단계).
 //
-// 돌려주는 관측자가 nil 이면 인덱서가 널 오브젝트로 편다 — 그 상태의 관측은
-// EpochKnown=false 라 ⓐ2(상태 방증)만 닫히고 인덱싱·업로드는 그대로 돈다.
+// 돌려주는 관측자가 nil 이면 인덱서가 널 오브젝트로 편다 — 그 상태의 관측은 영값
+// (EpochKnown=false · 관측 시각 없음)이라 ⓐ2(상태 방증)가 닫히고 4.1 종료 전이도 서지 않는다
+// (같은 스트림의 연속 방송이 한 회차로 이어진다). 인덱싱·업로드는 그대로 돈다.
 //
 // **실패 처분이 워처·훅과 같다**: 조립 실패도 관측 실패도 강등이지 사망이 아니다.
 // 관측은 주조 자격의 보강재일 뿐이고, 없으면 방향은 언제나 비주조(안전)다(설계 S3).
@@ -302,7 +303,8 @@ func startObserver(ctx context.Context, opt mtxstate.Options, log *slog.Logger) 
 	noop := func() {}
 	if opt.APIURL == "" {
 		// 즉시 롤백 스위치(HOOK_SPOOL_PATH 와 같은 형태). 무징후로 두지 않는다 —
-		// 이 상태에서는 스캔 유입이 영영 주조되지 않는데 증상은 "되감기가 안 된다"뿐이다.
+		// 이 상태에서는 스캔 유입이 영영 주조되지 않고 회차도 끝나지 않는데, 증상은 "되감기가
+		// 안 된다" · "회차가 이어진다"뿐이다.
 		log.Info("mtxstate_disabled",
 			"note", "MTX_API_URL 이 비어 있다. ⓐ2(상태 방증)가 fail-closed 되고 스캔 유입은 주조하지 않는다")
 		return nil, noop
