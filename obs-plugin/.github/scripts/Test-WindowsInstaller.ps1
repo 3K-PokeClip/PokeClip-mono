@@ -79,7 +79,7 @@ function Get-UninstallEntry {
 
 function Invoke-Uninstall {
     param( [string] $Name )
-    $Uninstaller = Join-Path -Path $PluginDir -ChildPath 'uninstall\unins000.exe'
+    $Uninstaller = Join-Path -Path $PluginDir -ChildPath 'unins000.exe'
     Assert-That (Test-Path -Path $Uninstaller -PathType Leaf) "uninstaller exists (${Name})"
     # 제거 프로그램은 임시 폴더로 자신을 복사해 2단계로 돈다 — 종료 코드 뒤 폴더가 사라질 때까지 기다린다.
     $ExitCode = Invoke-Setup -Exe $Uninstaller -Name $Name
@@ -109,13 +109,15 @@ try {
         $Mutex.Dispose()
     }
     Assert-That ($ExitCode -ne 0) 'setup refuses while OBSStudioCore mutex exists'
+    $RunningLog = Join-Path -Path $LogDir -ChildPath 'install-while-obs-running.log'
+    Assert-That (Select-String -Path $RunningLog -Pattern 'OBS Studio is currently running' -SimpleMatch -Quiet) 'refusal message names OBS Studio (not the plugin)'
     Assert-That (! ( Test-Path -Path $PluginDir )) 'nothing installed while OBS is running'
     Assert-That (Test-Path -Path $OldDll) 'old manual copy untouched while OBS is running'
 
     # 2. 설치
     $ExitCode = Invoke-Setup -Exe $Installer -Name 'install'
     Assert-That ($ExitCode -eq 0) 'install exits 0'
-    foreach( $Relative in @("bin\64bit\${ProductName}.dll", 'data\locale\en-US.ini', 'data\ui\index.html', 'LICENSE.txt', 'uninstall\unins000.exe') ) {
+    foreach( $Relative in @("bin\64bit\${ProductName}.dll", 'data\locale\en-US.ini', 'data\ui\index.html', 'LICENSE.txt', 'unins000.exe') ) {
         Assert-That (Test-Path -Path (Join-Path -Path $PluginDir -ChildPath $Relative) -PathType Leaf) "installed ${Relative}"
     }
     Assert-That (@(Get-ChildItem -Path (Join-Path -Path $PluginDir -ChildPath 'bin\64bit') -Filter '*.pdb').Count -eq 0) 'no pdb in installer payload'

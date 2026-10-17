@@ -38,7 +38,8 @@ DisableDirPage=yes
 DisableProgramGroupPage=yes
 UsePreviousAppDir=no
 DirExistsWarning=no
-UninstallFilesDir={app}\uninstall
+; 제거 프로그램은 기본 자리({app})에 둔다 — 하위 폴더에 두면 Inno가 {app}을 먼저 지우려다 실패하고 빈 폴더가 남는다.
+; OBS는 bin\64bit만 훑으므로 {app}\unins000.exe는 모듈로 잡히지 않는다.
 UninstallDisplayName={#MyAppName}
 PrivilegesRequired=admin
 ArchitecturesAllowed=x64compatible
@@ -54,6 +55,15 @@ SolidCompression=yes
 Name: "english"; MessagesFile: "compiler:Default.isl"
 #if HaveKorean
 Name: "korean"; MessagesFile: "compiler:Languages\Korean.isl"
+#endif
+
+[Messages]
+; AppMutex 안내의 기본 문구는 %1에 AppName(이 플러그인)을 넣는다 — 닫아야 하는 건 OBS Studio다.
+english.SetupAppRunningError=Setup has detected that OBS Studio is currently running.%n%nPlease close OBS Studio now, then click OK to continue, or Cancel to exit.
+english.UninstallAppRunningError=Uninstall has detected that OBS Studio is currently running.%n%nPlease close OBS Studio now, then click OK to continue, or Cancel to exit.
+#if HaveKorean
+korean.SetupAppRunningError=OBS Studio가 실행 중입니다.%n%nOBS Studio를 닫은 뒤 확인을 누르세요. 설치를 그만두려면 취소를 누르세요.
+korean.UninstallAppRunningError=OBS Studio가 실행 중입니다.%n%nOBS Studio를 닫은 뒤 확인을 누르세요. 제거를 그만두려면 취소를 누르세요.
 #endif
 
 [CustomMessages]
