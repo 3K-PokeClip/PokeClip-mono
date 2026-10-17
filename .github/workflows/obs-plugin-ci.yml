@@ -4,7 +4,8 @@
 # 잡:
 #  - unit-tests  OBS 없이 도는 C++ 테스트 (페어링 코드·keyint 옵션·streamid·브리지 보안 규칙·SSE)
 #  - dock-ui     브라우저 독 페이지 테스트·타입체크·빌드 → 산출물(data/ui)을 다음 잡에 넘긴다
-#  - windows / macos  obs-plugintemplate 경로로 실제 플러그인 빌드 → 설치용 아티팩트 (미서명)
+#  - windows / macos  obs-plugintemplate 경로로 실제 플러그인 빌드 → 설치 파일(exe · pkg)과 zip 아티팩트 (미서명).
+#                     설치 파일은 같은 잡에서 무인 설치·제거 시험을 거친다.
 #
 # push에도 돈다 — Windows 실기 검증용 zip을 PR 없이 받기 위해서다 (로컬에 Windows 툴체인이 없다).
 # develop push도 돈다 — 머지된 판의 산출물을 남긴다(30일). main은 태그로만 배포하므로 뺀다.
@@ -94,12 +95,16 @@ jobs:
           key: windows-deps-${{ hashFiles('obs-plugin/buildspec.json') }}
       - name: Build
         run: .github/scripts/Build-Windows.ps1 -Target x64 -Configuration RelWithDebInfo
-      - name: Package (zip — obs-plugins/64bit + data/obs-plugins/pokeclip-obs)
-        run: .github/scripts/Package-Windows.ps1 -Target x64 -Configuration RelWithDebInfo
+      - name: Package (zip — obs-plugins/64bit + data/obs-plugins/pokeclip-obs · 설치 파일 — %ProgramData%\obs-studio\plugins\pokeclip-obs)
+        run: .github/scripts/Package-Windows.ps1 -Target x64 -Configuration RelWithDebInfo -BuildInstaller
+      - name: 설치 파일 무인 시험 (OBS 실행 중 거절 · 설치 · 옛 사본 정리 · 재설치 · 제거 · 보존 범위)
+        run: .github/scripts/Test-WindowsInstaller.ps1 -Installer (Get-Item -Path release/pokeclip-obs-*-windows-x64-installer.exe).FullName
       - uses: actions/upload-artifact@v4
         with:
           name: pokeclip-obs-windows-x64-${{ github.sha }}
-          path: obs-plugin/release/pokeclip-obs-*-windows-x64.zip
+          path: |
+            obs-plugin/release/pokeclip-obs-*-windows-x64-installer.exe
+            obs-plugin/release/pokeclip-obs-*-windows-x64.zip
           if-no-files-found: error
           retention-days: ${{ github.ref == 'refs/heads/develop' && 30 || 14 }}
 
@@ -131,8 +136,25 @@ jobs:
         env:
           CODESIGN_IDENT: '-'
         run: .github/scripts/build-macos --config RelWithDebInfo
-      - name: Package
-        run: .github/scripts/package-macos --config RelWithDebInfo
+      # cmake --install이 create-package.cmake(pkgbuild+productbuild)로 만든 pkg를 산출물로 낸다 — tar.xz는 더 안 만든다.
+      - name: Package (pkg → ~/Library/Application Support/obs-studio/plugins)
+        run: .github/scripts/package-macos --config RelWithDebInfo --package
+      - name: 설치 파일 시험 (pkg → 현재 사용자 홈)
+        run: |
+          pkgs=(release/pokeclip-obs-*-macos-universal.pkg)
+          (( ${#pkgs} == 1 ))
+          pkgutil --check-signature "${pkgs[1]}" || print '서명 없음 — 공인 서명(POK-360) 전까지 정상'
+          pkgutil --expand "${pkgs[1]}" "${RUNNER_TEMP}/pkg-expand"
+          cat "${RUNNER_TEMP}"/pkg-expand/*.pkg/PackageInfo
+          installer -pkg "${pkgs[1]}" -target CurrentUserHomeDirectory
+          plugin="${HOME}/Library/Application Support/obs-studio/plugins/pokeclip-obs.plugin"
+          test -d "${plugin}"
+          archs="$(lipo -archs "${plugin}/Contents/MacOS/pokeclip-obs")"
+          print "archs: ${archs}"
+          [[ ${archs} == *arm64* && ${archs} == *x86_64* ]]
+          test -f "${plugin}/Contents/Resources/ui/index.html"
+          test -f "${plugin}/Contents/Resources/locale/en-US.ini"
+          codesign -dv "${plugin}" 2>&1 | sed -n '1,6p'
       - uses: actions/upload-artifact@v4
         with:
           name: pokeclip-obs-macos-universal-${{ github.sha }}
