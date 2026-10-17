@@ -6,7 +6,7 @@
   'use strict';
 
   // PostHog 프로젝트 공개 키(phc_…). 비어 있으면 켜지 않는다 — README 「사용 통계」
-  var KEY = '';
+  var KEY = 'phc_pvpFknL2AmFADNjtTQ8ftB7dCabfsmVGczkvJZbpLkfw';
   var HOST = 'https://us.i.posthog.com';
   // 대시보드의 posthog-js와 같은 판을 고정하고 무결성 해시를 단다(다른 외부 스크립트와 같은 규칙)
   var SDK = 'https://cdn.jsdelivr.net/npm/posthog-js@1.435.8/dist/array.js';
