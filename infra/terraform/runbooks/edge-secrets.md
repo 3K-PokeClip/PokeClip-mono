@@ -512,13 +512,16 @@ T6a(비밀 불일치 → 원본 302/401)와 T9b(clip 빈 서명 키 기동)는 p
 
 ## 확인하지 못한 것
 
-*   Secrets Manager 가 `--secret-string file:///dev/stdin` 으로 받은 값을 새
-    버전으로 넣는지 — 시험은 aws-cli 2.36.7 이 이 꼴을 받아 네트워크 단계까지
-    가는 것(닫힌 로컬 주소)까지만 봤습니다. O5 서명 키 입력에서 실증합니다.
-    O5 전에 `aws --version` 이 2.36.7 이 아니면 `put_secret_test.sh` 를 다시
-    돌려 실물 CLI 계약 사례를 봅니다. 계약 사례는 파싱 · 네트워크 단계까지만
-    봅니다 — 요청 본문의 SecretString 이 파일과 바이트 단위로 같은지는
-    2026-10-17 aws-cli 2.36.7 루프백 실측(M4 종결 r2)입니다.
+*   aws-cli 2.36.7 밖의 판에서도 Secrets Manager 가
+    `--secret-string file:///dev/stdin` 으로 받은 값을 새 버전으로 넣는지 —
+    2.36.7 은 2026-10-17 실측으로 확인했습니다(일회용 그릇 · aws-cli 2.36.7 ·
+    가짜 값 · 그릇은 강제 삭제). 새 버전이 `AWSCURRENT` 가 되고, 값은 바이트
+    그대로 저장되며(한 줄 비밀은 끝 줄바꿈 하나만 떼고, PEM 은 끝 줄바꿈까지
+    그대로), 다시 넣으면 옛 버전이 `AWSPREVIOUS` 로 남습니다. O5 전에
+    `aws --version` 이 2.36.7 이 아니면 `put_secret_test.sh` 를 다시 돌려 실물
+    CLI 계약 사례를 봅니다. 계약 사례는 파싱 · 네트워크 단계까지만 봅니다 —
+    요청 본문의 SecretString 이 파일과 바이트 단위로 같은지는 2026-10-17
+    aws-cli 2.36.7 루프백 실측(M4 종결 r2)입니다.
 *   CloudFront 가 `encoded_key` 의 끝 줄바꿈을 어떻게 저장 · 반환하는지 —
     「O5」 의 3 의 적용 확인(apply 뒤 `plan -detailed-exitcode` 종료 0)으로
     확인합니다.
