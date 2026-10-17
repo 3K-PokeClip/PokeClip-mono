@@ -1,0 +1,113 @@
+# 앞단 프록시 계약 시험 compose — proxy_contract.sh 가 띄운다(사례 13 · 14 · 16 · 17 은
+# bin/start-media.sh 가 MEDIA_COMPOSE_FILE 로 이 파일을 받아 띄운다).
+#
+# 서비스 이름 · 망 칸 · 재시작 정책 · 볼륨 읽기 전용 여부는 prod 템플릿
+# (compose.yml.tmpl)과 같게 둔다 — 드리프트 단언(render_test)이 이름이 같은 서비스끼리
+# 비교한다. 다른 점은 이미지뿐이다: mediamtx · sidecar 자리에는 에코(test/echo)가 선다.
+#
+# 값은 모두 실행하는 쪽이 넣는다(빈 값이면 compose 가 멈춘다):
+#   - PCBENCH_ECHO_IMAGE.
+#   - PCBENCH_NGINX_IMAGE — render_vars.json 의 nginx_image_digest.
+#   - PCBENCH_NGINX_CONF — 렌더한 nginx 설정.
+#   - PCBENCH_*_PORT — render_vars.json 의 proxy_*_port.
+#   - PCBENCH_ECHO_CONTROL_PORT · PCBENCH_ECHO_ADMIN_PORT.
+#   - PCBENCH_SIDECAR_EXIT_DELAY.
+#   - RUNTIME_DIR — start-media.sh 가 mediamtx.yml 을 렌더하는 자리. 시험이
+#     직접 띄울 때는 비밀 없는 자리 파일을 둔다.
+#
+# 실험 식별: 프로젝트 pcbench-edge-proxy · 라벨 com.pokeclip.bench=edge-proxy(컨테이너 ·
+# 망 · 볼륨). 호스트 게시는 127.0.0.1 만이다.
+name: pcbench-edge-proxy
+
+x-bench-labels: &bench-labels
+  com.pokeclip.bench: edge-proxy
+
+services:
+  # 망 칸 주인 — prod 의 MediaMTX 자리. 에코가 127.0.0.1 에만 8888(HLS) · 9996(재생 서버)
+  # · 9997(관리 API) · 제어면 상류 · 에코 관리 포트를 연다. 공개 포트는 이 서비스에서만
+  # 연다(nginx 의 듣기 포트를 이 망 칸에서 게시한다).
+  mediamtx:
+    image: ${PCBENCH_ECHO_IMAGE:?proxy_contract.sh 가 넣는다}
+    pull_policy: never
+    command:
+      - serve
+      - -bind=127.0.0.1
+      - -listen_ports=8888,9996,9997,${PCBENCH_ECHO_CONTROL_PORT:?}
+      - -admin_port=${PCBENCH_ECHO_ADMIN_PORT:?}
+    restart: "no"
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - 127.0.0.1:${PCBENCH_LIVE_PORT:?}:${PCBENCH_LIVE_PORT:?}
+      - 127.0.0.1:${PCBENCH_PLAYBACK_PORT:?}:${PCBENCH_PLAYBACK_PORT:?}
+      - 127.0.0.1:${PCBENCH_CONTROL_PORT:?}:${PCBENCH_CONTROL_PORT:?}
+      - 127.0.0.1:${PCBENCH_HEALTH_PORT:?}:${PCBENCH_HEALTH_PORT:?}
+    volumes:
+      - recordings:/recordings
+      - hooks:/hooks
+      - dvr:/dvr
+      - ${RUNTIME_DIR:?}/mediamtx.yml:/mediamtx.yml:ro
+    labels: *bench-labels
+
+  # 앞단 프록시 — prod 와 같은 공식 이미지 · 같은 렌더 함수로 만든 설정.
+  nginx:
+    image: ${PCBENCH_NGINX_IMAGE:?proxy_contract.sh 가 render_vars.json 에서 넣는다}
+    network_mode: "service:mediamtx"
+    depends_on:
+      mediamtx:
+        condition: service_started
+        restart: true
+    restart: "no"
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - ${PCBENCH_NGINX_CONF:?}:/etc/nginx/nginx.conf:ro
+    labels: *bench-labels
+
+  # 비부착 서비스 자리 — 시작마다 표식 · 주인 루프백 접속 결과를 내고, 지연 뒤 종료 1.
+  # 엔진 재시작 정책으로 다시 떠 같은 망 칸에 붙는지(사례 16)를 본다.
+  sidecar:
+    image: ${PCBENCH_ECHO_IMAGE:?}
+    pull_policy: never
+    command:
+      - sidecar
+      - -owner_addr=127.0.0.1:8888
+      - -exit_delay=${PCBENCH_SIDECAR_EXIT_DELAY:?}
+    network_mode: "service:mediamtx"
+    depends_on:
+      mediamtx:
+        condition: service_started
+        restart: true
+    restart: on-failure
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - recordings:/recordings:ro
+      - hooks:/hooks:ro
+    labels: *bench-labels
+
+  # 다른 bridge 컨테이너 자리(사례 12) — `docker compose run --rm probe …` 로만 쓴다.
+  # 기본 망에 붙고 망 칸을 공유하지 않는다. profiles 라 up 에는 뜨지 않는다.
+  probe:
+    image: ${PCBENCH_ECHO_IMAGE:?}
+    pull_policy: never
+    profiles:
+      - probe
+    command:
+      - probe
+      - mediamtx:8888
+    security_opt:
+      - no-new-privileges:true
+    labels: *bench-labels
+
+networks:
+  default:
+    labels: *bench-labels
+
+volumes:
+  recordings:
+    labels: *bench-labels
+  hooks:
+    labels: *bench-labels
+  dvr:
+    labels: *bench-labels
