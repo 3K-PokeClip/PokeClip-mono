@@ -111,7 +111,7 @@ main "$@"
 ```bash
 MYIP=$(curl -s https://checkip.amazonaws.com)          # 현재 공인 IP 를 그때그때 산출 (상수로 적지 않는다)
 SG=$(aws ec2 create-security-group --group-name pokeclip-media-demo-sg \
-      --description "temp mentor demo (expires 2026-08-24)" \
+      --description "dev-media per-account broadcast server (always-on)" \
       --vpc-id "$VPC_ID" --query GroupId --output text)
 aws ec2 authorize-security-group-ingress --group-id "$SG" --protocol udp --port 8890 --cidr "$MYIP/32"
 aws ec2 authorize-security-group-ingress --group-id "$SG" --protocol tcp --port 8888 --cidr "$MYIP/32"
@@ -148,11 +148,14 @@ aws ec2 run-instances --image-id "$AMI_ID" --instance-type t3.small \
   --metadata-options 'HttpTokens=required,HttpEndpoint=enabled' \
   --block-device-mappings 'DeviceName=/dev/xvda,Ebs={VolumeSize=20,VolumeType=gp3,DeleteOnTermination=true}' \
   --associate-public-ip-address --user-data file:///tmp/userdata.sh \
-  --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=pokeclip-media-demo},{Key=expires,Value=2026-08-24}]'
+  --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=pokeclip-media-demo}]'
 ```
 
 - `$AMI_ID` 가 비었거나 만료됐으면 최신 AL2023으로 채운다:
   `export AMI_ID=$(aws ssm get-parameter --name /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64 --query Parameter.Value --output text)`
+- 상시 서버라 만료 태그를 달지 않는다. 이름(`pokeclip-media-demo` — 보안그룹은
+  `pokeclip-media-demo-sg`)은 12절 철거가 자원을 다시 집는 열쇠라 그대로 둔다. 옛 임시
+  데모 때 만든 자원에는 `expires` 태그가 남아 있을 수 있다 — 그 날짜로 지우지 않는다.
 - **EIP는 할당하지 않는다.** 대신 **인스턴스를 stop 하지 않는다** — stop 하면 퍼블릭 IP가 바뀐다.
 - 검증(부팅 후): `sudo docker compose version` 이 v2.x 를 출력한다.
 
@@ -915,6 +918,11 @@ aws ssm get-document --name SSM-SessionManagerRunShell \
 aws ssm start-session --target <instance-id>
 ```
 
+**`STREAM_KEY_RESOLVE_URL` 에 넣는 주소는 눈으로 확인한다** — 같은 VPC 의 사설 주소(dev EC2
+사설 IP)여야 한다. 공인 · 오타 주소면 응답기가 연결마다 조회 토큰을 평문 HTTP 로 그 주소에
+보낸다. 아래 R1 값 단언 블록은 아무 IPv4 나 받는다(10단계 반영 전 작업에서 좁힌다 — kty
+109차).
+
 세션 **안에서**(반영 전 보존 R0 이 끝난 뒤):
 
 ```bash
@@ -1010,13 +1018,41 @@ main "$@"
   디스크 · 시계 · 보안 그룹(SRT 인바운드가 팀 IP/32 만) · dev auth 의 resolve 200.
 - **hls.js 가 compose.yml 옆에 있다.** 재생 페이지는 hls.js 를 같은 오리진
   `/hls.min.js` 에서 받는다(MediaMTX 동봉본 의존은 실측에서 실패해 폐기). compose 가
-  `./hls.min.js` 를 마운트하므로 없으면 내려받는다.
+  `./hls.min.js` 를 마운트하므로 없으면 내려받는다. 판은 1.7.3 으로 고정하고, 받은 뒤
+  sha384 를 단언한다 — `FAILED` 면 그 파일을 지우고(승인) 멈추고 kty. 해시는 2026-10-17
+  23:24 KST 에 jsDelivr 에서 받아 셈했다(jsDelivr 목록의 sha256 · npm 묶음 `hls.js-1.7.3.tgz`
+  의 같은 파일과 바이트 대조). 판을 올릴 때는 새 판을 받아 해시를 다시 셈하고 두 줄을 함께
+  고친다.
 
   ```bash
   sudo curl -fsSL -o /opt/pokeclip-demo/repo/infra/dev-media/hls.min.js \
-    https://cdn.jsdelivr.net/npm/hls.js@1/dist/hls.min.js
+    https://cdn.jsdelivr.net/npm/hls.js@1.7.3/dist/hls.min.js
+  echo '71c889d338bc775b8c282db325dee3bcf6381d0b7b5b8072508fc594c925b6f062df5696eb5adca55061a665bcfcdc17  /opt/pokeclip-demo/repo/infra/dev-media/hls.min.js' \
+    | sha384sum -c -
   sudo chown 10002:10002 /opt/pokeclip-demo/repo/infra/dev-media/hls.min.js
   ```
+
+- **체크아웃의 세 칸을 반영 전에 본다(읽기).** 블록은 이 셋을 보지 않는다 — 어긋나면
+  반영하지 않고 멈추고 kty. 소유자는 아래 첫 명령의 `%U` 다.
+
+  ```bash
+  sudo stat -c '%U:%G' /opt/pokeclip-demo/repo
+  sudo -u <체크아웃 소유자> git -C /opt/pokeclip-demo/repo status --porcelain
+  sudo -u <체크아웃 소유자> git -C /opt/pokeclip-demo/repo diff --cached --stat
+  sudo stat -c '%a %U:%G %n' /opt/pokeclip-demo/repo/infra/dev-media/player.html \
+    /opt/pokeclip-demo/repo/infra/dev-media/hls.min.js
+  ```
+
+  - **소유자 · 통째 추적 밖 디렉터리** — 소유자가 root 가 아니고 `status` 에 `/` 로 끝나는
+    `??` 줄(안의 파일이 모두 추적 밖인 디렉터리)이 있으면 멈춘다. 롤백 B · D 가 그 디렉터리를
+    `root:root 0755` 로 다시 만들어 다음 B · D 의 `git clean` 이 권한 실패로 멈춘다(11-5
+    머리의 알려진 예외).
+  - **스테이징** — `diff --cached --stat` 출력이 비어 있지 않으면 멈춘다. 롤백 B ③ 이 이유
+    문구 없이 「일치 없음」으로 멈추고, 다시 돌리면 `already exists` 로 멈춘다(로컬 실측
+    S7-7 L9).
+  - **edge 가 읽는 파일의 기타 읽기 비트** — `%a` 의 마지막 자리가 4 · 5 · 6 · 7 이 아니면
+    멈춘다. edge 가 읽지 못해 재생 페이지가 403 이다(로컬 실측 S7-4 — 0640 root:root 에서
+    403).
 
 - 지금 서비스 사용자가 없어 시각 제약은 없다. 반영 중 송출 끊김 길이는 기록만 한다.
 
@@ -1700,7 +1736,7 @@ sudo docker compose -p dev-media --env-file /opt/pokeclip-demo/.env \
 | reason | 대응 |
 |---|---|
 | `verify_timeout` · 남은 연결 | cut 을 한 번 더 돌린다 |
-| `connlog_window_short` | 기록 밖이면서 30초가 안 된 판독 중 연결이 있다. 30초 뒤 cut 을 다시 돌린다. 기록이 처음 열린 뒤 30초 안(상태 디렉터리를 새로 만든 직후)에만 생긴다 |
+| `connlog_window_short` | 기록 밖이면서 30초가 안 된 판독 중 연결이 있다. 30초 뒤 cut 을 다시 돌린다. 그 연결의 허용 줄이 기록(지금 세대 · 직전 세대 `.1` 둘)에 없을 때 생긴다 — 기록이 처음 열린 뒤 30초 안(상태 디렉터리를 새로 만든 직후)이거나, 운영 중 연결이 몰려 기록이 30초 안에 두 번 회전해(세대마다 1 MiB) 그 줄이 밀려났을 때다(`media/internal/ingestauth/cut_race_test.go` 회전 경합 시험) |
 | `denylist_unreadable` | 거부 목록을 못 읽었다 — **아무것도 끊지 않았다.** 파일의 권한 · 마운트 · 꼴(일반 파일 · 64 KiB — 7-4)을 고친 뒤 다시 돌린다. 그동안 새 연결은 모두 거부된다. 틀린 줄은 읽기 실패가 아니다 — 판정에서 건너뛰고 healthz 만 실패한다(10절). 해제 적용 뒤라면 살아 있는 파일의 모드가 틀린 것이다 — 사본 되돌림(9-6) 뒤 다시 돌린다 |
 | `connlog_unreadable` | 기록 디렉터리를 못 읽었거나 줄이 하나도 없다 — 목록 갈래(등록된 연결)는 이미 끊었다. 권한 · 마운트를 고친 뒤 다시 돌린다. 줄이 하나도 없으면(시작 표시도 없음) 상태 디렉터리가 지워진 것이다 — 「응답기 다시 시작」(7-2)으로 새 세대와 시작 표시를 만든 뒤 다시 돌린다. 그동안 새 연결은 기록 쓰기 실패로 거부된다 |
 | `api_auth` | Control API 가 401 이다 — MediaMTX 가 api 인증을 응답기에 묻다 실패했다. 응답기 로그 `ingestauth_api_denied` 와 MediaMTX 로그를 본다(7-3). ① `api_denied` 0 ∧ MediaMTX 로그에 `cannot assign requested address` → MediaMTX 쪽 임시 포트 고갈이다(큰 cut 직후 · 토큰 꼴 송출 시도가 몰릴 때). 60초 뒤 cut 을 한 번 다시 돌린다 → 또 나면 MediaMTX 최후 재시작(되풀이 금지) → cut 으로 확인. 커널 값은 조정하지 않는다(kty 106차). ② `api_denied` 가 0 이 아니면 그 `ip` 를 compose 의 `INGEST_AUTH_LISTEN` 주소와 견준다 — 다르면 출발지 설정이 틀렸다(kty). ③ 둘 다 아니면 응답기 고장이다. cut 이 이 줄을 냈으면 응답기 컨테이너는 떠 있다 — 「응답기 다시 시작」(7-2) 뒤 cut 을 다시 돌린다(컨테이너가 없거나 멈췄으면 「응답기 살리기」). 그래도 같으면 kty. MediaMTX 재시작으로 풀지 않는다 |
@@ -2418,6 +2454,13 @@ B · D 는 처음부터 다시 돌려도 이어진다 — 명령과 명령 사�
 결과이며(`down` · `reset` · `checkout` · 패치는 `reset` 뒤에 다시 대고 · `clean` 은 두
 목록 안의 이름만 지우고 · `tar` 는 덮어쓴다), `.env` 는 단계 끝에서만 바뀐다. 다시
 돌려도 같은 자리에서 멈추는 것은 결정이 필요한 어긋남뿐이다.
+
+**알려진 예외 — 체크아웃 소유자가 root 가 아니고 통째 추적 밖 디렉터리가 있을 때.** B · D 의
+묶음 풀기(root)가 그 디렉터리를 `root:root 0755` 로 다시 만든다. 그래서 두 번째 B · D 의
+`git clean` 이 권한 실패(`failed to remove … Permission denied`)로 `down` 뒤 종료 2 로
+멈춘다 — 컨테이너가 모두 내려간 채다. 그 디렉터리의 소유 · 모드를 반영 전 기록대로 손으로
+되돌린 뒤(승인) 다시 돌린다. 이어진 블록이 다시 바꾸므로 다음 B · D 마다 되풀이한다(로컬
+실측 S7-7 결함 1 · kty 2026-10-17 한계로 둠). 4-1 의 확인이 이 조건을 반영 전에 거른다.
 
 반영 R4 뒤 · R6 앞에 옛 MediaMTX 가 새 렌더로 기동을 되풀이하는 채(전 송출 중단 · 로그
 `bind: cannot assign requested address` — 4-2) 접을 때도 0 → A → B → C 가 그대로 이어진다.
