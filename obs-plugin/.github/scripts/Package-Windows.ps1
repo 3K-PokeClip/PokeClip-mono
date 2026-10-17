@@ -3,7 +3,9 @@ param(
     [ValidateSet('x64')]
     [string] $Target = 'x64',
     [ValidateSet('Debug', 'RelWithDebInfo', 'Release', 'MinSizeRel')]
-    [string] $Configuration = 'RelWithDebInfo'
+    [string] $Configuration = 'RelWithDebInfo',
+    # Inno Setup 설치 파일도 만든다 — build_<Target>/installer-Windows.generated.iss (cmake/windows/helpers.cmake)
+    [switch] $BuildInstaller = $false
 )
 
 $ErrorActionPreference = 'Stop'
@@ -48,15 +50,29 @@ function Package {
     $ProductVersion = $BuildSpec.version
 
     $OutputName = "${ProductName}-${ProductVersion}-windows-${Target}"
+    $StageDir = "${ProjectRoot}/release/${Configuration}/${ProductName}"
 
     $RemoveArgs = @{
         ErrorAction = 'SilentlyContinue'
         Path = @(
             "${ProjectRoot}/release/${ProductName}-*-windows-*.zip"
+            "${ProjectRoot}/release/${ProductName}-*-windows-*-installer.exe"
         )
     }
 
     Remove-Item @RemoveArgs
+
+    # 빠진 파일이 있는 채로 zip·설치 파일을 내지 않는다 — 독 페이지(data/ui)는 dock-ui 잡 산출물이다.
+    $RequiredFiles = @(
+        "${StageDir}/bin/64bit/${ProductName}.dll"
+        "${StageDir}/data/locale/en-US.ini"
+        "${StageDir}/data/ui/index.html"
+    )
+    foreach( $RequiredFile in $RequiredFiles ) {
+        if ( ! ( Test-Path -Path $RequiredFile -PathType Leaf ) ) {
+            throw "Missing file for packaging: ${RequiredFile}"
+        }
+    }
 
     Log-Group "Archiving ${ProductName}..."
     # $CompressArgs = @{
@@ -89,11 +105,31 @@ function Package {
             }
         }
     }
-    AddDirectory "obs-plugins/64bit" "${ProjectRoot}/release/${Configuration}/${ProductName}/bin/64bit"
-    AddDirectory "data/obs-plugins/${ProductName}" "${ProjectRoot}/release/${Configuration}/${ProductName}/data"
+    AddDirectory "obs-plugins/64bit" "${StageDir}/bin/64bit"
+    AddDirectory "data/obs-plugins/${ProductName}" "${StageDir}/data"
     $zipf.Dispose()
     Log-Group
 
+    if ( $BuildInstaller ) {
+        $IssFile = "${ProjectRoot}/build_${Target}/installer-Windows.generated.iss"
+        if ( ! ( Test-Path -Path $IssFile -PathType Leaf ) ) {
+            throw "InnoSetup install script not found: ${IssFile}. Run the build script first."
+        }
+
+        $Iscc = (Get-Command -Name 'iscc' -ErrorAction SilentlyContinue).Source
+        if ( ! $Iscc ) {
+            $Iscc = Join-Path -Path ${env:ProgramFiles(x86)} -ChildPath 'Inno Setup 6/ISCC.exe'
+        }
+        if ( ! ( Test-Path -Path $Iscc -PathType Leaf ) ) {
+            throw "InnoSetup compiler (iscc) not found."
+        }
+
+        Log-Group "Building ${ProductName} installer..."
+        $StageDirNative = (Resolve-Path -Path $StageDir).Path
+        $ReleaseDirNative = (Resolve-Path -Path "${ProjectRoot}/release").Path
+        Invoke-External $Iscc "/DStageDir=${StageDirNative}" "/O${ReleaseDirNative}" "/F${OutputName}-installer" $IssFile
+        Log-Group
+    }
 }
 
 Package
