@@ -14,15 +14,18 @@ Terraform 코드입니다. 설계 정본은 「HTTPS · 엣지 인프라 설계�
 
 루트 하나가 상태 하나입니다. 의존은 위에서 아래 한쪽으로만 흐릅니다.
 `prod/*` · `nonprod/*` 는 같은 리스 계정 안의 환경입니다(설계 3-1).
-아래는 **목표 구조**입니다 — 지금(M1) 있는 것은 `modules/state_bucket` ·
-`policy/guard` · `scripts` · `runbooks` · `nonprod/{bootstrap,dev,dns-legacy}`
-뿐이고, 나머지 루트는 계획의 후속 PR 이 더합니다.
+아래는 **목표 구조**입니다 — 지금 있는 것은
+`modules/{state_bucket,secret_shells,cloudfront_public_key}` · `policy/guard` ·
+`scripts` · `runbooks` · `nonprod/{bootstrap,dev,dns-legacy}` ·
+`prod/{bootstrap,secrets}` 뿐이고, 나머지 루트는 계획의 후속 PR 이 더합니다.
 
 ```
 infra/terraform/
 ├── modules/                       # 루트들이 쓰는 부품
 ├── policy/guard/                  # 금지 규약 Rego 정책(conftest) · 단위 시험
 ├── scripts/                       # guard.sh(금지 규약 검사 실행기) · guard_test.sh · precheck/(단계 직전 점검)
+│   ├── put-secret-from-file.sh    # prod 엣지 비밀 값 입력(runbooks/edge-secrets.md)
+│   └── test/                      # put-secret-from-file.sh 시험 · 가짜 aws(fakebin/)
 ├── runbooks/                      # 운영 단계 절차(kty 승인) — org-ct.md 등
 ├── mgmt/                          # (보류 — 결정 46 · 재개 키트)
 │   ├── bootstrap/                 # ① 상태 버킷
@@ -33,8 +36,8 @@ infra/terraform/
 │   ├── dns-legacy/                # ③ 공개 존 영구 소유(리스 기간) — 존 prevent_destroy(R12)
 │   └── dns-dev/                   # ④ dev 자식 존 + apex A + 옛 존의 dev 하위 레코드(보류 — 결정 46 · 재개 키트)
 └── prod/
-    ├── bootstrap/                 # ① 상태 버킷
-    ├── secrets/                   # ② CloudFront 공개키 · 엣지 비밀 그릇(값 없음)
+    ├── bootstrap/                 # ① 상태 버킷 pokeclip-tfstate-prod-apne2(같은 계정 안 별도 버킷)
+    ├── secrets/                   # ② CloudFront 공개키 · 엣지 비밀 그릇 3개(값 · 리소스 정책 없음)
     ├── dns/                       # ③ 새 존 · 이전용 레코드 복사본 · dev 위임 NS(보류 — 결정 46 · 재개 키트)
     ├── network/                   # ④ VPC · 서브넷 · NAT · S3 Gateway EP
     ├── certs/                     # ⑥ ACM 서울 · us-east-1
@@ -49,6 +52,9 @@ infra/terraform/
 OU · 운영 측 역할)과 기존 수동 자원(IAM 사용자 · dev 자동 주체 · GitHub OIDC
 공급자)은 이 트리가 소유하지 않습니다. `infra/dev-media/` 는 이 트리 밖이며
 건드리지 않습니다.
+
+prod 엣지 비밀의 값 입력 · 교체 절차는 [엣지 비밀 런북](runbooks/edge-secrets.md)
+입니다.
 
 운영 단계 절차는 `runbooks/` 에 있습니다 —
 [조직 · CT 도입(보류 — 결정 46)](runbooks/org-ct.md).
@@ -130,6 +136,12 @@ import 루트(`nonprod/dev` · `nonprod/dns-legacy`)의 선언은 실물에 대�
     `aws_cloudfrontkeyvaluestore_key*` 는 쓰지 않습니다(guard R1 · R2).
 *   비밀은 그릇(`aws_secretsmanager_secret`)만 만들고, 값은 운영 단계에서
     Terraform 밖으로 넣습니다.
+*   비밀 그릇 모듈(`modules/secret_shells`)에는 리소스 정책(별도 자원 ·
+    인라인 `policy` 인자)과 `names` 밖의 입력을 두지 않습니다(guard R6). 읽기
+    권한은 읽는 쪽 루트가 자기 역할 정책으로 붙입니다.
+*   prod 값은 `scripts/put-secret-from-file.sh` 로 파일에서 넣습니다 — 값이
+    명령 인자 · 환경 변수 · 임시 파일 · 출력에 남지 않습니다(절차 ·
+    종료 코드는 [엣지 비밀 런북](runbooks/edge-secrets.md)).
 
 ## 검증
 
@@ -144,6 +156,11 @@ conftest verify -c infra/terraform/scripts/guard-data/empty-config.toml \
   --policy infra/terraform/policy/guard --namespace main
 bash infra/terraform/scripts/guard_test.sh
 bash infra/terraform/scripts/guard.sh
+bash infra/terraform/scripts/test/put_secret_test.sh
+shellcheck infra/terraform/scripts/test/*.sh \
+  infra/terraform/scripts/test/fakebin/aws
+for d in infra/terraform/modules/*/ infra/terraform/nonprod/*/ \
+  infra/terraform/prod/*/; do tflint --chdir="$d" || printf 'FAIL %s\n' "$d"; done
 shellcheck infra/terraform/scripts/*.sh
 for t in infra/terraform/scripts/precheck/tests/*_test.sh; do bash "$t" || printf 'FAIL %s\n' "$t"; done
 shellcheck -x infra/terraform/scripts/precheck/*.sh \
@@ -151,6 +168,19 @@ shellcheck -x infra/terraform/scripts/precheck/*.sh \
   infra/terraform/scripts/precheck/tests/*.sh \
   infra/terraform/scripts/precheck/tests/fakebin/aws
 ```
+
+tflint(`brew install terraform-linters/tap/tflint` · 설정 파일 없음 — 기본
+terraform 규칙 묶음)는 루트 · 모듈마다 돌립니다. `--recursive` 는
+`scripts/testdata` 의 guard fixture 까지 읽어 늘 실패합니다.
+`put_secret_test.sh` 는 PATH 에 진짜 aws 가 있으면
+닫힌 로컬 주소(`127.0.0.1:9`) · 가짜 자격으로 실물 CLI 계약 사례를 돌리고(AWS
+에 닿지 않음), 없으면 skip 으로 셉니다.
+
+`put_secret_test.sh` 의 정적 검사(`no-file-writes` · `no-external-commands` ·
+`no-endpoint-override` · `no-heredoc`)는 흔한 회귀를 잡는 울타리입니다. 일부러
+숨긴 꼴(문자열 안 명령 치환 · 공백 변형 · 리디렉션 없는 쓰기 내장 명령 등)은
+PR 리뷰가 막습니다 — 실제 누출 방어는 실행 시험(실물 CLI 계약 · 잔여 검사 ·
+출력 완전 일치)입니다.
 
 `infra/terraform/**` · `infra/media-host/**` 를 고친 PR 에서는
 `.github/workflows/infra-ci.yml`(infra-ci)이 위 명령을 모두 돌립니다.
@@ -206,6 +236,7 @@ guard 는 Terraform 트리의 금지 규약을 검사합니다. 규칙 R1 ~ R13 
 | R2 | 전체 | `resource` · `data` 유형이 `aws_cloudfrontkeyvaluestore_key` 로 시작 |
 | R3 | 전체 | `aws_security_group` 자원 안 `ingress` · `egress`(블록 · 속성 · `dynamic "ingress"` · `dynamic "egress"`) |
 | R4 | `modules/state_bucket/` | `aws_s3_bucket` 자원 없음, 또는 그 자원 중 `lifecycle { prevent_destroy = true }`(리터럴 `true`)가 없는 것 |
+| R6 | `modules/secret_shells/` | `aws_secretsmanager_secret_policy` 선언(`count = 0` 이어도) · `aws_secretsmanager_secret` 자원의 인라인 `policy` 인자(값과 무관 — kty 61차) · 이름이 `names` 가 아닌 `variable`(읽기 역할 등 다른 입력). 대상 경로에 `.tf` 가 없으면 건너뜀. 모듈 밖(다른 루트가 출력 ARN 으로 비밀에 정책을 붙이는 것)은 보지 않음 — 리뷰가 막음 |
 | R11 | `nonprod/dev/` | `aws_instance` · `aws_eip` · `aws_security_group` 중 없는 유형이 있음, 또는 그 자원 중 리터럴 `prevent_destroy = true` 가 없는 것 |
 | R12 | `nonprod/dns-legacy/` | 운영 트리: ① 그 루트 바로 아래 `.tf` 없음 ② 주소가 정확히 `aws_route53_zone.legacy` 인 선언 없음 ③ 그 루트의 `aws_route53_zone` 중 리터럴 `prevent_destroy = true` 가 없는 것. fixture 트리는 ① · ② 의 부재만 건너뜀(③ 은 그대로) |
 | R13 | 전체(`.tf` 만 — `*.example` · 시험 파일 · 주석은 리뷰) | 문자열 · 숫자 리터럴(맵 키 포함) 안의 계정 ID 꼴 숫자열 — 12자리 · 4-4-4 대시 표기(앞뒤가 숫자가 아님 — ARN 속 계정 ID 포함) · 이름을 소문자로 바꾸고 `-` · `_` 를 뺐을 때 `accountid` 가 드는 `variable`(`accountId` · `account-id` 포함). 위반 메시지는 그 숫자열을 가림 |
@@ -226,7 +257,7 @@ dev SG 규칙 자원은 M12 가 8082 규칙을 지우므로 R11 대상이 아닙
 건너뛰고, 표지가 없거나 모르는 값이면 운영 트리로 봅니다. 루트를 옮기거나 존
 주소를 바꾸는 PR 은 R12 도 같은 PR 에서 고쳐야 통과합니다.
 
-R6 · R8 ~ R10 은 계획이 번호를 정해 둔 규칙이라, 그 규칙이 지키는 루트 ·
+R8 ~ R10 은 계획이 번호를 정해 둔 규칙이라, 그 규칙이 지키는 루트 ·
 모듈과 같은 PR 에서 그 번호로 `policy/guard/` 에 더합니다(정책 · `_test.rego` ·
 fixture 를 함께). R5 · R7 은 **보류**입니다 — R5 는 재개 키트(결정 46), R7 은
 CI 자동 푸시를 켜는 후속 PR(40차)이 더합니다.

@@ -124,6 +124,22 @@ expect(
   '처리방침 13절에 YouTube 데이터의 30일 갱신과 해제·탈퇴 7일 삭제가 없다',
 );
 
+// Google OAuth 브랜드 확인이 Google API 이용약관 위반 의심(AI NCII)으로 반려됐다(2026-10-17). 기준은 공개되지 않았고,
+// 같은 사유로 반려된 앱들은 Google API를 AI NCII에 쓰지 않는다는 문장과 권한별 용도를 적어 대응했다
+expect(
+  text(pages.privacy).includes(
+    '서비스는 Google API와 Google 사용자 데이터를 당사자 동의 없이 인공지능으로 만든 성적 이미지·영상(AI-generated Non-Consensual Intimate Imagery, AI NCII)',
+  ),
+  '처리방침 12절에 Google API를 AI NCII에 쓰지 않는다는 문장이 없다',
+);
+for (const scope of [
+  'Google 로그인(openid·email·profile):',
+  '동영상 업로드 권한(youtube.upload):',
+  '채널 조회 권한(youtube.readonly):',
+]) {
+  expect(text(pages.privacy).includes(scope), `처리방침 13절 권한별 용도에 「${scope}」가 없다`);
+}
+
 // 분석 도구(PostHog) — 수탁자·국외 이전(개인정보 보호법 제26조·제28조의8 ②)과 거부 방법, YouTube 정책 III.A.2.g
 // (기기에 쿠키를 두고 정보를 모으면 알린다). 도구를 빼거나 바꾸면 이 문장들이 먼저 걸린다
 expect(text(pages.privacy).includes('PostHog Inc.서비스 이용 분석'), '처리방침 6절에 PostHog 위탁이 없다');
