@@ -1,4 +1,5 @@
 # obs-plugin 배포 — obs-plugin-v<X.Y.Z>[-<접미사>] 태그를 밀면 GitHub Release에 설치 산출물을 붙인다 (POK-284).
+# 자산: Windows 설치 파일(exe)·zip, macOS pkg, SHA256SUMS.txt (설치 파일은 POK-361).
 #
 # 잡:
 #  - version  태그 모양 · buildspec.json 판 번호 · 태그 커밋 출처(develop 또는 main에 머지된 커밋) 검사
@@ -92,15 +93,16 @@ jobs:
             echo
             echo "| OS | 파일 | 설치 |"
             echo "| --- | --- | --- |"
-            echo "| Windows | \`pokeclip-obs-*-windows-x64.zip\` | 압축을 OBS 설치 폴더(기본 \`C:\\Program Files\\obs-studio\\\`)에 푼다 |"
-            echo "| macOS | \`pokeclip-obs-*-macos-universal.tar.xz\` | 안의 \`pokeclip-obs.plugin\`을 \`~/Library/Application Support/obs-studio/plugins/\`에 둔다 |"
+            echo "| Windows | \`pokeclip-obs-*-windows-x64-installer.exe\` | 실행 → \`%ProgramData%\\obs-studio\\plugins\\pokeclip-obs\` · 제거는 설정 › 앱 |"
+            echo "| Windows (포터블 OBS·수동) | \`pokeclip-obs-*-windows-x64.zip\` | 압축을 OBS 폴더에 푼다 — 설치 파일과 함께 쓰지 않는다 |"
+            echo "| macOS | \`pokeclip-obs-*-macos-universal.pkg\` | 더블클릭 → \`~/Library/Application Support/obs-studio/plugins\` |"
             echo
-            echo "자세한 절차는 [README 「설치」](https://github.com/${REPO}/blob/${TAG}/obs-plugin/README.md#설치)."
+            echo "OBS를 끈 뒤 설치한다. 자세한 절차는 [README 「설치」](https://github.com/${REPO}/blob/${TAG}/obs-plugin/README.md#설치)."
             echo
             echo "## 서명 상태"
             echo
-            echo "- Windows: 서명 없음 — Chrome·SmartScreen이 경고할 수 있다."
-            echo "- macOS: ad-hoc 서명(Apple 공증 없음) — 브라우저로 받았으면 \`xattr -dr com.apple.quarantine <pokeclip-obs.plugin>\`이 필요할 수 있다."
+            echo "- Windows: 서명 없음 — Chrome·SmartScreen이 경고할 수 있다(SmartScreen은 「추가 정보 → 실행」)."
+            echo "- macOS: pkg 서명·Apple 공증 없음 — 처음 열면 막히면 시스템 설정 › 개인정보 보호 및 보안 › 「그래도 열기」."
             echo
             echo "## 받은 파일 확인"
             echo

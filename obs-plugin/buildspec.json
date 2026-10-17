@@ -36,6 +36,9 @@
             "bundleId": "com.pokeclip.obs-plugin"
         }
     },
+    "uuids": {
+        "windowsApp": "3A1EA955-8A2A-4BCF-BA83-A243FDEBB1E8"
+    },
     "name": "pokeclip-obs",
     "displayName": "PokeClip for OBS",
     "version": "0.2.0",

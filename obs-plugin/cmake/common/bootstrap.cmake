@@ -46,17 +46,22 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/common")
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/buildspec.json" buildspec)
 
 string(JSON _name GET ${buildspec} name)
+string(JSON _displayName GET ${buildspec} displayName)
 string(JSON _website GET ${buildspec} website)
 string(JSON _author GET ${buildspec} author)
 string(JSON _email GET ${buildspec} email)
 string(JSON _version GET ${buildspec} version)
 string(JSON _bundleId GET ${buildspec} platformConfig macos bundleId)
+# Windows 설치 파일 AppId — 배포한 뒤 바꾸면 덮어쓰기 설치·제거가 끊긴다(바꾸지 않는다).
+string(JSON _windowsAppUUID GET ${buildspec} uuids windowsApp)
 
+set(PLUGIN_DISPLAY_NAME ${_displayName})
 set(PLUGIN_AUTHOR ${_author})
 set(PLUGIN_WEBSITE ${_website})
 set(PLUGIN_EMAIL ${_email})
 set(PLUGIN_VERSION ${_version})
 set(MACOS_BUNDLEID ${_bundleId})
+set(UUID_APP ${_windowsAppUUID})
 
 string(REPLACE "." ";" _version_canonical "${_version}")
 list(GET _version_canonical 0 PLUGIN_VERSION_MAJOR)
