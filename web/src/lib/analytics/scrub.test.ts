@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { CaptureResult } from 'posthog-js';
-import { scrubEvent, scrubUrl } from './scrub';
+import { scrubAttribute, scrubEvent, scrubUrl } from './scrub';
 
 function event(
   name: string,
@@ -96,5 +96,49 @@ describe('scrubEvent — PostHog before_send', () => {
 
   it('null은 null로 돌려준다(앞선 before_send가 이미 버린 이벤트)', () => {
     expect(scrubEvent(null)).toBeNull();
+  });
+});
+
+describe('세션 녹화 정제(POK-358)', () => {
+  it('녹화 이벤트의 rrweb 메타(시작 페이지 주소)에서 쿼리와 방송 번호를 뗀다', () => {
+    const out = scrubEvent(
+      event('$snapshot', {
+        $snapshot_data: [
+          {
+            type: 4,
+            data: { href: 'https://app.pokeclip.com/auth/callback?code=secret', width: 1 },
+          },
+          { type: 4, data: { href: 'https://app.pokeclip.com/broadcast/vod/S-1?stream=S-1' } },
+          { type: 3, data: { source: 0, adds: [] } },
+        ],
+      }),
+    );
+    expect(JSON.stringify(out)).not.toMatch(/secret|S-1/);
+    expect(out?.properties.$snapshot_data[0].data).toEqual({
+      href: 'https://app.pokeclip.com/auth/callback',
+      width: 1,
+    });
+  });
+
+  it('요소 주소 속성(href·src 등)은 쿼리와 방송 번호를 뗀다', () => {
+    expect(scrubAttribute('href', '/clips/editor/studio?stream=S-1&card=5')).toBe(
+      '/clips/editor/studio',
+    );
+    expect(scrubAttribute('src', 'https://app.pokeclip.com/api/profile-photos/7?token=t')).toBe(
+      'https://app.pokeclip.com/api/profile-photos/7',
+    );
+    expect(scrubAttribute('href', '/broadcast/vod/S-1')).toBe('/broadcast/vod/_');
+  });
+
+  it('글 속성(aria-label·title·alt·placeholder 등)은 글자 수만 남긴다 — 채널·회원 이름이 실린다', () => {
+    expect(scrubAttribute('aria-label', '게임하는너구리 연동 해제')).toBe('*'.repeat(13));
+    expect(scrubAttribute('title', 'a@b.c')).toBe('*****');
+    expect(scrubAttribute('alt', '프로필')).toBe('***');
+    expect(scrubAttribute('placeholder', '이메일')).toBe('***');
+  });
+
+  it('그 밖의 속성(class·role·data-*)은 그대로 둔다 — 화면을 다시 그리는 데 필요하다', () => {
+    expect(scrubAttribute('class', 'chip ?x')).toBe('chip ?x');
+    expect(scrubAttribute('role', 'dialog')).toBe('dialog');
   });
 });

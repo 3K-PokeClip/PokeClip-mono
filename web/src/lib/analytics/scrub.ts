@@ -56,6 +56,20 @@ function pathOf(properties: Properties): string | null {
   }
 }
 
+/** rrweb 메타 이벤트(type 4)는 녹화가 시작된 페이지 주소를 쿼리째 싣는다 (POK-358) */
+const RRWEB_META = 4;
+
+function scrubSnapshots(properties: Properties): void {
+  const snapshots: unknown = properties.$snapshot_data;
+  if (!Array.isArray(snapshots)) return;
+  for (const item of snapshots) {
+    const data = (item as { type?: unknown; data?: { href?: unknown } } | null)?.data;
+    if ((item as { type?: unknown }).type === RRWEB_META && typeof data?.href === 'string') {
+      data.href = scrubUrl(data.href);
+    }
+  }
+}
+
 /** PostHog `before_send` — 보낼 이벤트를 고쳐 돌려주거나, 보내지 않을 이벤트면 null. */
 export function scrubEvent(event: CaptureResult | null): CaptureResult | null {
   if (event === null) return null;
@@ -67,5 +81,29 @@ export function scrubEvent(event: CaptureResult | null): CaptureResult | null {
   scrubProperties(properties);
   scrubProperties(event.$set);
   scrubProperties(event.$set_once);
+  if (event.event === '$snapshot') scrubSnapshots(properties);
   return event;
+}
+
+const URL_ATTRIBUTES = new Set(['href', 'src', 'srcset', 'poster', 'action', 'formaction']);
+/** 사람이 읽는 글을 담는 속성 — 글자 가리기(maskTextSelector)는 속성을 건드리지 않는다. 채널 이름·회원 이름이 여기 실린다 */
+const TEXT_ATTRIBUTES = new Set([
+  'aria-label',
+  'aria-description',
+  'aria-valuetext',
+  'aria-placeholder',
+  'title',
+  'alt',
+  'placeholder',
+  'value',
+]);
+
+/**
+ * 녹화 속 요소 속성을 가린다 — `session_recording.maskAttributeFn`.
+ * 링크·이미지 주소는 쿼리와 방송 번호를 떼고(?stream=·?card=, /broadcast/vod/<번호>), 글 속성은 글자 수만 남긴다.
+ */
+export function scrubAttribute(name: string, value: string): string {
+  if (URL_ATTRIBUTES.has(name)) return scrubUrl(value);
+  if (TEXT_ATTRIBUTES.has(name)) return '*'.repeat(value.length);
+  return value;
 }
