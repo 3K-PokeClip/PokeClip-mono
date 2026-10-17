@@ -50,6 +50,7 @@ import {
 } from '@/api/audioTracks';
 import { fetchDelegationsAsEditor } from '@/api/editors';
 import { fetchRecordingSpans } from '@/api/mediaPlayback';
+import { track } from '@/lib/analytics';
 import {
   rebaseTimeline,
   recordingTimeline,
@@ -528,6 +529,16 @@ function WiredStudio({
   const router = useRouter();
   const { streamId, card, broadcast, window, saved, latestClip, trackLabels, recording } = data;
   const startedAt = broadcast.startedAt!;
+
+  // 편집기 진입을 센다 (POK-357). 편집 대상마다 새로 마운트되므로 마운트당 한 번 —
+  // StrictMode의 이중 이펙트와 첫 저장 뒤 ?recipe= 로 주소만 바뀌는 것은 세지 않는다
+  const openedTracked = useRef(false);
+  const openedFrom = card ? 'card' : 'recipe';
+  useEffect(() => {
+    if (openedTracked.current) return;
+    openedTracked.current = true;
+    track('clip_editor_opened', { source: openedFrom });
+  }, [openedFrom]);
   // 🔴 카드·조각 ms의 0초 = 시각 기준점(서버 → 녹화 재생 서버 → 방송 시작, POK-255). 저장·다시 열기가 같은 값을 써야 제자리다.
   //    방송 시작 편지 시각과 수십 초 갈리고, 조각 장부의 위치 값은 방송을 넘어 이어지므로 녹화 시작과도 갈릴 수 있다
   const base = timelineBaseMs(broadcast, recording?.startMs ?? null);
@@ -757,6 +768,12 @@ function WiredStudio({
             label: `편집본 #${s.recipeId} v${s.version} · ${clipLabel(clip)}`,
           }));
           setPending(null);
+          // 서버가 주문을 받은 뒤에 센다 — 거절된 제출은 세지 않아 DB 숫자와 맞는다. 제목·설명·태그는 싣지 않는다 (POK-357)
+          track('video_render_requested', {
+            privacy_status: draft.privacyStatus,
+            thumbnail_source: draft.thumbnailSource,
+            made_for_kids: draft.madeForKids,
+          });
           // 200은 새 주문이 아니다: 같은 판이 만드는 중이면 끝난 뒤 이 정보로, 이미 만들어져 있으면 지금 올린다
           toast({
             tone: 'success',

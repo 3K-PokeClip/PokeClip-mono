@@ -1,9 +1,10 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useCallback, useEffect } from 'react';
 import Image from 'next/image';
 import { Check } from 'lucide-react';
 import { Button, FocusScope, Portal, VisuallyHidden, useScrollLock } from '@/ui';
+import { track } from '@/lib/analytics';
 import { useOnboardingStore } from '@/stores/onboarding';
 import { WELCOME_STEPS, stepDone } from './tourSteps';
 import styles from './Onboarding.module.css';
@@ -19,13 +20,21 @@ export function WelcomeDialog() {
 
   useScrollLock(true);
 
+  // 안내를 시작하지 않고 닫음 — 한 번만 센다(이미 본 창이면 보내지 않는다) (POK-357)
+  const later = useCallback(() => {
+    if (!useOnboardingStore.getState().welcomeSeen) {
+      track('onboarding_tour_finished', { outcome: 'later' });
+    }
+    dismissWelcome();
+  }, [dismissWelcome]);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') dismissWelcome();
+      if (e.key === 'Escape') later();
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [dismissWelcome]);
+  }, [later]);
 
   return (
     <Portal>
@@ -68,7 +77,7 @@ export function WelcomeDialog() {
               })}
             </ol>
             <div className={styles.welcomeActions}>
-              <Button variant="ghost" size="sm" onClick={dismissWelcome}>
+              <Button variant="ghost" size="sm" onClick={later}>
                 나중에 볼게요
               </Button>
               <span className={styles.welcomeStart}>

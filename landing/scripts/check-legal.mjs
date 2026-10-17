@@ -124,11 +124,33 @@ expect(
   '처리방침 13절에 YouTube 데이터의 30일 갱신과 해제·탈퇴 7일 삭제가 없다',
 );
 
-// 바뀐 약속의 옛 문장이 남지 않는다 — 탈퇴 유예(ADR-090), 확인 뒤 업로드(ADR-091), 해제해도 남는 Google 권한(III.D.2.c)
+// 분석 도구(PostHog) — 수탁자·국외 이전(개인정보 보호법 제26조·제28조의8 ②)과 거부 방법, YouTube 정책 III.A.2.g
+// (기기에 쿠키를 두고 정보를 모으면 알린다). 도구를 빼거나 바꾸면 이 문장들이 먼저 걸린다
+expect(text(pages.privacy).includes('PostHog Inc.서비스 이용 분석'), '처리방침 6절에 PostHog 위탁이 없다');
+expect(
+  text(pages.privacy).includes('이전받는 자PostHog Inc.'),
+  '처리방침 7절에 PostHog 국외 이전이 없다',
+);
+expect(href(pages.privacy, 'https://posthog.com/privacy'), '처리방침에 PostHog 개인정보처리방침 링크가 없다');
+expect(
+  text(pages.privacy).includes('이용 분석만 거부하려면 브라우저의 추적 금지(Do Not Track) 설정을 켜거나'),
+  '처리방침 9절에 이용 분석 거부 방법이 없다',
+);
+expect(
+  text(pages.privacy).includes(
+    'Google에서 받은 사용자 데이터(YouTube 채널 ID·채널 이름, 영상 정보)는 분석 도구에 보내지 않습니다.',
+  ),
+  '처리방침 13절에 Google 사용자 데이터를 분석 도구에 보내지 않는다는 문장이 없다',
+);
+
+// 바뀐 약속의 옛 문장이 남지 않는다 — 탈퇴 유예(ADR-090), 확인 뒤 업로드(ADR-091), 해제해도 남는 Google 권한(III.D.2.c),
+// 분석 도구를 쓰지 않는다던 9절(PostHog 도입)
 for (const [doc, phrase] of [
   ['privacy', '탈퇴 후 5일 이내'],
   ['privacy', '확인하고 업로드를 요청하면'],
   ['privacy', 'Google 쪽 권한은 남을 수 있으니'],
+  ['privacy', '쿠키와 브라우저 저장소를 쓰지 않습니다'],
+  ['privacy', '방문 분석, 광고, 행태정보 수집을 위한 쿠키나 도구는 쓰지 않습니다'],
   ['terms', '서비스에서 확인하고 요청한 클립'],
   ['terms', 'Google 쪽에 남는 접근 권한은'],
 ]) {
