@@ -27,16 +27,22 @@
 #   unparsed      오류 코드 · endpoint URL 이 없는 실패(SSL 검증), 종료 255
 
 set -uo pipefail
-# 물려받은 allexport 를 끈다(SHELLOPTS) — 켜져 있으면 가짜 aws 자신의 변수
-# (value 등)도 export 되어 record_env_hits 가 그 이름을 잡는다.
-set +o allexport
+# 물려받은 allexport · 추적 · verbose 를 끈다(SHELLOPTS). allexport 가 켜져
+# 있으면 가짜 aws 자신의 변수도 export 되어 record_env_hits 가 그 이름을 잡고,
+# 추적이 켜져 있으면 대조 줄의 추적이 export 변수 값(호출자의 토큰 등)을 표준
+# 오류로 낸다.
+set +o allexport +o xtrace +o verbose
 
-readonly ACCOUNT='123456789012'
-readonly ARN="arn:aws:secretsmanager:ap-northeast-2:${ACCOUNT}:secret:x-AbCdEf"
-readonly USER_ARN="arn:aws:iam::${ACCOUNT}:user/example"
-readonly ENDPOINT='https://secretsmanager.ap-northeast-2.amazonaws.com/'
+# 가짜 aws 가 만드는 전역 이름은 모두 STUB_ · stub_ 로 시작한다 — 물려받은
+# 같은 이름의 값을 record_env_hits 의 대조 전에 덮지 않게.
+readonly STUB_ACCOUNT='123456789012'
+STUB_ARN="arn:aws:secretsmanager:ap-northeast-2:${STUB_ACCOUNT}:secret"
+STUB_ARN+=':x-AbCdEf'
+readonly STUB_ARN
+readonly STUB_USER_ARN="arn:aws:iam::${STUB_ACCOUNT}:user/example"
+readonly STUB_ENDPOINT='https://secretsmanager.ap-northeast-2.amazonaws.com/'
 
-value=""
+stub_value=""
 
 #######################################
 # 값 넘기기 규칙을 어긴 호출을 적고 끝낸다. 이유에 값을 넣지 않는다.
@@ -50,23 +56,23 @@ violation() {
 }
 
 #######################################
-# 파일(/dev/stdin 포함)을 끝까지 읽어 value 에 담는다. 셸 내장만 쓴다 — read
-# -d '' 는 파일 끝에서 1 을 내지만 읽은 내용은 담긴다.
+# 파일(/dev/stdin 포함)을 끝까지 읽어 stub_value 에 담는다. 셸 내장만 쓴다 —
+# read -d '' 는 파일 끝에서 1 을 내지만 읽은 내용은 담긴다.
 # Globals:
-#   value
+#   stub_value
 # Arguments:
 #   경로.
 #######################################
 read_all() {
-  value=""
-  IFS= read -r -d '' value <"$1"
+  stub_value=""
+  IFS= read -r -d '' stub_value <"$1"
   return 0
 }
 
 #######################################
 # 인자에서 값을 받는다. 받은 값은 FAKE_AWS_DIR/stdin 에 적는다.
 # Globals:
-#   value
+#   stub_value
 # Arguments:
 #   aws 가 받은 인자들.
 #######################################
@@ -96,7 +102,7 @@ receive_value() {
     [[ "${path}" != "${cli_input}" ]] ||
       violation "--cli-input-json 이 file:// 이 아님(값이 인자로 옴)"
     read_all "${path}"
-    printf '%s' "${value}" >"${FAKE_AWS_DIR}/stdin"
+    printf '%s' "${stub_value}" >"${FAKE_AWS_DIR}/stdin"
     second=""
     IFS= read -r -d '' second <"${path}"
     if [[ -z "${second}" ]]; then
@@ -110,11 +116,11 @@ receive_value() {
   case "${secret_string}" in
     file:///dev/stdin)
       read_all /dev/stdin
-      printf '%s' "${value}" >"${FAKE_AWS_DIR}/stdin"
+      printf '%s' "${stub_value}" >"${FAKE_AWS_DIR}/stdin"
       ;;
     file://*)
       read_all "${secret_string#file://}"
-      printf '%s' "${value}" >"${FAKE_AWS_DIR}/stdin"
+      printf '%s' "${stub_value}" >"${FAKE_AWS_DIR}/stdin"
       violation "--secret-string 이 /dev/stdin 이 아닌 파일"
       ;;
     *) violation "--secret-string 이 file:// 이 아님(값이 인자로 옴)" ;;
@@ -147,24 +153,40 @@ record_env() {
 }
 
 #######################################
-# 받은 값이 든 export 변수의 이름만 FAKE_AWS_DIR/env-hits 에 한 줄씩 적는다.
-# 대조는 메모리 안에서만 하고(부분 문자열 포함) 값은 어떤 파일에도 쓰지
-# 않는다. 끝 줄바꿈을 뗀 값으로 대조한다 — 명령 치환으로 옮긴 사본도 잡게.
-# 그렇게 뗀 값이 비면 모든 변수에 「들어 있다」 가 되므로 보지 않는다(빈 값 ·
-# 공백만은 스크립트가 aws 를 부르기 전에 거부한다).
+# 받은 값이나 시험의 표지가 든 export 변수의 이름만 FAKE_AWS_DIR/env-hits 에 한
+# 줄씩 적는다. 대조는 메모리 안에서만(부분 문자열 포함) 하고, 값은 어떤
+# 파일에도 쓰지 않는다.
+#   값 전체: 끝 줄바꿈을 뗀 값 — 명령 치환으로 옮긴 사본도 잡게. 뗀 값이
+#     비면 대조하지 않는다(빈 값 · 공백만은 스크립트가 aws 전에 거부한다).
+#   표지: 시험이 FAKE_AWS_DIR/markers 에 한 줄에 하나 적은 값의 일부. 앞
+#     토막 · 끝 한 글자 뗌 · JSON 이스케이프 같은 일부 · 변형 사본도 표지를
+#     통째로 품으면 잡는다. 표지를 품지 않는 조각(예: PEM 머리 줄만)은 못
+#     잡는다. 표지는 환경 변수로 받지 않는다 — 그 변수 자신이 걸린다.
+# 볼 수 없는 이름(사각): 가짜 aws 가 만드는 STUB_ · stub_ 이름과, bash 가
+# 시작할 때 자기 값으로 다시 쓰는 이름(SHELLOPTS · SHLVL · PWD 등).
 # Globals:
-#   FAKE_AWS_DIR, value
+#   FAKE_AWS_DIR, stub_value
 #######################################
 record_env_hits() {
-  local needle="${value}" name
-  while [[ "${needle}" == *$'\n' ]]; do
-    needle="${needle%$'\n'}"
+  local stub_needle="${stub_value}" stub_name stub_marker
+  local -a stub_markers=()
+  while [[ "${stub_needle}" == *$'\n' ]]; do
+    stub_needle="${stub_needle%$'\n'}"
   done
-  [[ -n "${needle}" ]] || return 0
-  for name in $(compgen -e); do
-    if [[ "${!name-}" == *"${needle}"* ]]; then
-      printf '%s\n' "${name}" >>"${FAKE_AWS_DIR}/env-hits"
-    fi
+  [[ -z "${stub_needle}" ]] || stub_markers=("${stub_needle}")
+  if [[ -f "${FAKE_AWS_DIR}/markers" ]]; then
+    while IFS= read -r stub_marker; do
+      [[ -z "${stub_marker}" ]] || stub_markers+=("${stub_marker}")
+    done <"${FAKE_AWS_DIR}/markers"
+  fi
+  ((${#stub_markers[@]} > 0)) || return 0
+  for stub_name in $(compgen -e); do
+    for stub_marker in "${stub_markers[@]}"; do
+      if [[ "${!stub_name-}" == *"${stub_marker}"* ]]; then
+        printf '%s\n' "${stub_name}" >>"${FAKE_AWS_DIR}/env-hits"
+        break
+      fi
+    done
   done
 }
 
@@ -172,7 +194,7 @@ record_env_hits() {
 # FAKE_AWS_MODE 에 맞는 응답(표준 출력 · 표준 오류)을 내고, 실패 모드면 그
 # 종료 코드로 끝낸다.
 # Globals:
-#   FAKE_AWS_MODE, value
+#   FAKE_AWS_MODE, stub_value
 # Outputs:
 #   aws-cli 2.36.7 꼴의 응답(표준 출력) · 오류 원문(표준 오류).
 #######################################
@@ -180,38 +202,39 @@ respond() {
   local code
   case "${FAKE_AWS_MODE:-ok}" in
     ok)
-      printf '{\n    "ARN": "%s",\n    "Name": "example",\n' "${ARN}"
+      printf '{\n    "ARN": "%s",\n    "Name": "example",\n' "${STUB_ARN}"
       printf '    "VersionId": "a1b2c3d4-5678-90ab-cdef-EXAMPLE11111",\n'
       printf '    "VersionStages": [\n        "AWSCURRENT"\n    ]\n}\n'
       ;;
     no-version)
-      printf '{\n    "ARN": "%s",\n    "Name": "example"\n}\n' "${ARN}"
+      printf '{\n    "ARN": "%s",\n    "Name": "example"\n}\n' "${STUB_ARN}"
       ;;
     denied | denied-short)
       code=AccessDeniedException
       [[ "${FAKE_AWS_MODE}" == denied ]] || code=AccessDenied
       printf '\naws: [ERROR]: An error occurred (%s) when calling the %s' \
-        "${code}" "PutSecretValue operation: User: ${USER_ARN} is not" >&2
+        "${code}" "PutSecretValue operation: User: ${STUB_USER_ARN} is not" >&2
       printf ' authorized to perform: %s on resource: %s %s\n' \
-        secretsmanager:PutSecretValue "${ARN}" \
+        secretsmanager:PutSecretValue "${STUB_ARN}" \
         "with an explicit deny in a service control policy" >&2
-      printf 'received: %s\n' "${value}" >&2
+      printf 'received: %s\n' "${stub_value}" >&2
       exit 254
       ;;
     error)
       printf '\naws: [ERROR]: An error occurred (%s) when calling %s\n' \
         ResourceNotFoundException \
-        "the PutSecretValue operation: ${ARN} not found" >&2
-      printf 'received: %s\n' "${value}" >&2
+        "the PutSecretValue operation: ${STUB_ARN} not found" >&2
+      printf 'received: %s\n' "${stub_value}" >&2
       exit 254
       ;;
     endpoint)
       printf '\naws: [ERROR]: Read timeout on endpoint URL: "%s"\n' \
-        "${ENDPOINT}" >&2
+        "${STUB_ENDPOINT}" >&2
       exit 255
       ;;
     unparsed)
-      printf '\naws: [ERROR]: SSL validation failed for %s %s\n' "${ENDPOINT}" \
+      printf '\naws: [ERROR]: SSL validation failed for %s %s\n' \
+        "${STUB_ENDPOINT}" \
         "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed" >&2
       exit 255
       ;;

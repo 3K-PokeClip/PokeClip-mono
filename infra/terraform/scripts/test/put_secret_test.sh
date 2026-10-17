@@ -9,12 +9,13 @@
 # TMPDIR · HOME 은 빈 디렉터리로, SHELL 은 없는 경로로 주고, 로캘은 UTF-8 로
 # 고정한다(없으면 skip). 가짜 aws 는 aws-cli 2.36.7 처럼 값을 받고(fakebin/aws
 # 머리 주석), 받은 인자 · 환경 · 값을 사례 디렉터리에 적는다. 시험은 인자(비밀
-# 이름 · 값 넘기는 법)와 받은 값을 대조하고, 값이 가짜 aws 의 인자 · 환경 변수
-# (이름과 상관없이 — 가짜 aws 가 모든 export 변수를 값과 메모리에서 대조해 걸린
-# 이름만 env-hits 에 적음), 스크립트의 표준 출력 · 표준 오류, 사례 디렉터리의
-# 다른 파일 어디에도 없는지 본다. 거부 · 실패 사례에서는 표준 오류가 정해진
-# 줄과 바이트 그대로 같은지(끝 줄바꿈 · 빈 줄 포함) 보고, aws 호출이 거부는
-# 0회 · aws 실패는 1회인지 본다.
+# 이름 · 값 넘기는 법)와 받은 값을 대조하고, 값이 가짜 aws 의 인자 · 환경 변수,
+# 스크립트의 표준 출력 · 표준 오류, 사례 디렉터리의 다른 파일 어디에도 없는지
+# 본다. 환경 변수는 이름과 상관없이 보되, 값 전체와 값 표지(한 줄 비밀의 앞
+# 토막 · PEM 본문 줄)를 품은 것만 잡는다 — 표지를 품지 않는 조각은 못 잡는다
+# (가짜 aws 가 메모리에서 대조해 걸린 이름만 env-hits 에 적음). 거부 · 실패
+# 사례에서는 표준 오류가 정해진 줄과 바이트 그대로 같은지(끝 줄바꿈 · 빈 줄
+# 포함) 보고, aws 호출이 거부는 0회 · aws 실패는 1회인지 본다.
 # 추적(bash -x · SHELLOPTS)이나 allexport 를 켠 호출도 값을 내지 않는지 본다.
 # 호출자 셸의 환경(살아 있는 토큰 변수 등)은 사례 파일에 옮기지 않는다 — 가짜
 # aws 는 환경 중 시험이 보는 값만 적고(그 밖의 AWS_ 는 이름만), 시험은 표지
@@ -83,7 +84,7 @@ EXPECTED_ARGV_HEAD+=' --output json --no-cli-auto-prompt --secret-id'
 readonly EXPECTED_ARGV_HEAD
 readonly EXPECTED_ARGV_TAIL='--secret-string file:///dev/stdin'
 # 사례 수(ok · skip 줄의 수). 사례를 더하거나 빼면 함께 고친다.
-readonly EXPECTED_CASES=50
+readonly EXPECTED_CASES=51
 # 호출자 환경의 표지 변수(셸에 살아 있는 토큰 변수를 흉내 낸 가짜 값). 사례
 # 디렉터리 어디에도 남지 않아야 한다 — 가짜 aws 는 환경 중 시험이 보는
 # 이름만 적는다.
@@ -153,16 +154,20 @@ skip() {
 
 #######################################
 # 사례 디렉터리(입력 in/ · 가짜 aws 기록 aws/ · 빈 TMPDIR tmp/ · 빈 HOME
-# home/)를 새로 만든다. 못 만들면 실패로 센다.
+# home/)를 새로 만들고, 가짜 aws 가 환경 변수와 대조할 값 표지 목록
+# (aws/markers — 한 줄 비밀의 앞 토막 · PEM 본문 줄)을 적는다. 못 만들면
+# 실패로 센다.
 # Globals:
-#   tmp_root, case_dir
+#   tmp_root, case_dir, ONE_LINE_MARKER, FAKE_KEY_BODY
 # Returns:
 #   만들지 못하면 1.
 #######################################
 new_case() {
   if case_dir="$(mktemp -d "${tmp_root}/case.XXXXXX")" &&
     mkdir -- "${case_dir}/in" "${case_dir}/aws" "${case_dir}/tmp" \
-      "${case_dir}/home"; then
+      "${case_dir}/home" &&
+    printf '%s\n' "${ONE_LINE_MARKER}" "${FAKE_KEY_BODY}" \
+      >"${case_dir}/aws/markers"; then
     return 0
   fi
   fail "사례 디렉터리를 만들지 못함"
@@ -352,7 +357,7 @@ expect_no_leftovers() {
   [[ -n "${marker}" ]] || return 0
   while IFS= read -r file; do
     case "${file#"${case_dir}/"}" in
-      in/value | aws/stdin | expected) ;;
+      in/value | aws/stdin | aws/markers | expected) ;;
       *)
         fail "${name}: 값이 ${file#"${case_dir}/"} 에 남음"
         return 1
@@ -378,9 +383,10 @@ expect_no_violation() {
 }
 
 #######################################
-# 가짜 aws 가 받은 환경 변수 어디에도 받은 값이 없었는지 본다. 가짜 aws 는
-# 이름과 상관없이 모든 export 변수를 값과 대조해 걸린 이름만 env-hits 에
-# 적는다(값은 적지 않음). 실패 출력은 이름 · 개수만 낸다.
+# 가짜 aws 가 받은 환경 변수 어디에도 받은 값 · 값 표지가 없었는지 본다. 가짜
+# aws 는 이름과 상관없이 모든 export 변수를 값 전체 · 표지(aws/markers)와
+# 대조해 걸린 이름만 env-hits 에 적는다(값은 적지 않음). 실패 출력은 이름 ·
+# 개수만 낸다.
 # Globals:
 #   case_dir
 # Arguments:
@@ -831,6 +837,40 @@ test_caller_aws_env() {
 }
 
 #######################################
+# 가짜 aws 는 추적(xtrace)을 물려받아도 추적을 내지 않는다 — 켜진 채면 대조
+# 줄의 추적이 export 변수 값(호출자의 토큰 등)을 표준 오류로 낸다. SHELLOPTS
+# 의 xtrace 를 export 한 하위 셸에서 가짜 aws 를 바로 부르고, 호출자 표지
+# (PUT_SECRET_TEST_CANARY)와 값 표지가 표준 오류에 있는지만 본다(값은 내지
+# 않음).
+# Globals:
+#   case_dir, input, FAKEBIN, PUT_SECRET_TEST_CANARY, ONE_LINE_MARKER
+#######################################
+test_fake_aws_no_trace() {
+  new_case || return
+  write_input '%s\n' "${ONE_LINE_VALUE}"
+  # 환경은 이 하위 셸 안에서만 바꾼다(의도).
+  # shellcheck disable=SC2030,SC2031
+  (
+    export FAKE_AWS_DIR="${case_dir}/aws" FAKE_AWS_MODE=ok
+    set -o xtrace
+    export SHELLOPTS
+    exec "${FAKEBIN}/aws" secretsmanager put-secret-value \
+      --secret-string file:///dev/stdin
+  ) <"${input}" >"${case_dir}/stdout" 2>"${case_dir}/stderr"
+  if [[ ! -s "${case_dir}/aws/calls" ]]; then
+    fail "fake-aws-no-trace: 가짜 aws 가 불리지 않음"
+    return
+  fi
+  if grep -qF -- "${PUT_SECRET_TEST_CANARY}" "${case_dir}/stderr" ||
+    grep -qF -- "${ONE_LINE_MARKER}" "${case_dir}/stderr"; then
+    fail "fake-aws-no-trace: 가짜 aws 의 표준 오류에 호출자 표지 · 값이 나옴" \
+      "(추적)"
+    return
+  fi
+  pass "fake-aws-no-trace → 추적 0건"
+}
+
+#######################################
 # 실물 CLI 계약: 진짜 aws 가 값 넘기는 법을 받아들여 네트워크 단계까지 가는지
 # 본다. 가짜 자격 · 빈 설정 · 격리 HOME 이고 울타리는 둘이다 — 엔드포인트
 # (AWS_ENDPOINT_URL)를 닫힌 로컬 주소 127.0.0.1:9 로 두고, 프록시도 같은
@@ -1120,6 +1160,7 @@ main() {
   test_one_line
   test_quiet_shells
   test_caller_aws_env
+  test_fake_aws_no_trace
   test_aws_failures
   test_real_cli_contract
   test_no_heredoc
