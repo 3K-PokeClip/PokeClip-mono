@@ -9,13 +9,16 @@
 # TMPDIR · HOME 은 빈 디렉터리로, SHELL 은 없는 경로로 주고, 로캘은 UTF-8 로
 # 고정한다(없으면 skip). 가짜 aws 는 aws-cli 2.36.7 처럼 값을 받고(fakebin/aws
 # 머리 주석), 받은 인자 · 환경 · 값을 사례 디렉터리에 적는다. 시험은 인자(비밀
-# 이름 · 값 넘기는 법)와 받은 값을 대조하고, 값이 가짜 aws 의 인자 · 환경,
-# 스크립트의 표준 출력 · 표준 오류, 사례 디렉터리의 다른 파일 어디에도 없는지
-# 본다. 거부 · 실패 사례에서는 표준 오류가 정해진 줄과 바이트 그대로 같은지(끝
-# 줄바꿈 · 빈 줄 포함) 보고, aws 호출이 거부는 0회 · aws 실패는 1회인지 본다.
+# 이름 · 값 넘기는 법)와 받은 값을 대조하고, 값이 가짜 aws 의 인자 · 환경 변수
+# (이름과 상관없이 — 가짜 aws 가 모든 export 변수를 값과 메모리에서 대조해 걸린
+# 이름만 env-hits 에 적음), 스크립트의 표준 출력 · 표준 오류, 사례 디렉터리의
+# 다른 파일 어디에도 없는지 본다. 거부 · 실패 사례에서는 표준 오류가 정해진
+# 줄과 바이트 그대로 같은지(끝 줄바꿈 · 빈 줄 포함) 보고, aws 호출이 거부는
+# 0회 · aws 실패는 1회인지 본다.
 # 추적(bash -x · SHELLOPTS)이나 allexport 를 켠 호출도 값을 내지 않는지 본다.
 # 호출자 셸의 환경(살아 있는 토큰 변수 등)은 사례 파일에 옮기지 않는다 — 가짜
-# aws 는 환경 중 시험이 보는 이름만 적고, 시험은 표지 변수가 남지 않는지 본다.
+# aws 는 환경 중 시험이 보는 값만 적고(그 밖의 AWS_ 는 이름만), 시험은 표지
+# 변수가 남지 않는지 본다.
 # 사례 밖으로 쓰는 길(파일 대상 리다이렉션 · 다른 명령 · 셸)은 소스로 본다.
 #
 # 정적 검사(no-file-writes · no-external-commands · no-endpoint-override ·
@@ -375,6 +378,28 @@ expect_no_violation() {
 }
 
 #######################################
+# 가짜 aws 가 받은 환경 변수 어디에도 받은 값이 없었는지 본다. 가짜 aws 는
+# 이름과 상관없이 모든 export 변수를 값과 대조해 걸린 이름만 env-hits 에
+# 적는다(값은 적지 않음). 실패 출력은 이름 · 개수만 낸다.
+# Globals:
+#   case_dir
+# Arguments:
+#   사례 이름.
+# Returns:
+#   값이 든 환경 변수가 있으면 1.
+#######################################
+expect_no_env_hits() {
+  local hit names="" count=0
+  [[ -s "${case_dir}/aws/env-hits" ]] || return 0
+  while IFS= read -r hit; do
+    names+=" ${hit}"
+    count=$((count + 1))
+  done <"${case_dir}/aws/env-hits"
+  fail "$1: aws 가 받은 환경 변수 ${count}개에 값이 있음 —${names}"
+  return 1
+}
+
+#######################################
 # 입력을 넣기 전에 거부하는지 본다: 종료 3 · 표준 오류가 거부 한 줄과 바이트
 # 그대로 같음 · aws 호출 0 · 출력에 값 없음. 이유를 완전한 문자열로 대조해,
 # 이유에 값 조각이나 빈 줄이 덧붙으면 잡는다.
@@ -440,6 +465,7 @@ expect_put() {
   local secret_id="pokeclip/prod/${kind}" argv env
   run_put ok "${kind}" "${input}"
   expect_no_violation "${name}" || return
+  expect_no_env_hits "${name}" || return
   if [[ "${status}" -ne 0 ]]; then
     fail "${name}: 종료 0 을 기대했으나 ${status} — ${err}"
     return
@@ -501,6 +527,7 @@ expect_put_quiet() {
   local name="$1" shell_mode="$2" marker="$3"
   run_put_as "${shell_mode}" ok cdn-secret "${input}"
   expect_no_violation "${name}" || return
+  expect_no_env_hits "${name}" || return
   if [[ "${status}" -ne 0 ||
     "${out}" != "SECRET PUT OK pokeclip/prod/cdn-secret ${VERSION_ID}" ]]; then
     fail "${name}: 종료 0 · 성공 줄을 기대했으나 ${status} — ${out}"
@@ -525,6 +552,7 @@ expect_aws_failure() {
   shift 3
   run_put "${mode}" cdn-secret "${input}"
   expect_no_violation "${name}" || return
+  expect_no_env_hits "${name}" || return
   if [[ "${status}" -ne "${code}" ]]; then
     fail "${name}: 종료 ${code} 를 기대했으나 ${status} — ${err}"
     return
@@ -761,7 +789,8 @@ test_quiet_shells() {
 # 셸 변수에만 두고 사례가 끝나면 지운다. 표지가 든 파일은 사례 디렉터리와
 # 함께 EXIT 트랩이 지운다. 실패 출력은 개수 · 이름만 낸다.
 # Globals:
-#   case_dir, input, out, err, status
+#   case_dir, input, out, err, status, AWS_BEARER_TOKEN_BEDROCK(export 뒤
+#   unset), AWS_CONTAINER_AUTHORIZATION_TOKEN(export 뒤 unset)
 #######################################
 test_caller_aws_env() {
   local bedrock="PutSecretTestAwsA${RANDOM}${RANDOM}${RANDOM}"
@@ -777,6 +806,7 @@ test_caller_aws_env() {
     fail "caller-aws-env: 종료 0 을 기대했으나 ${status}"
     return
   fi
+  expect_no_env_hits caller-aws-env || return
   for marker in "${bedrock}" "${container}"; do
     if grep -rqF -- "${marker}" "${case_dir}" ||
       [[ "${out}${err}" == *"${marker}"* ]]; then
@@ -784,7 +814,7 @@ test_caller_aws_env() {
     fi
   done
   while IFS= read -r line; do
-    [[ "${line}" == AWS_*=* ]] || continue
+    [[ "${line}" == AWS_* ]] || continue
     name="${line%%=*}"
     case "${name}" in
       AWS_PAGER | AWS_CONFIG_FILE | AWS_SHARED_CREDENTIALS_FILE) ;;

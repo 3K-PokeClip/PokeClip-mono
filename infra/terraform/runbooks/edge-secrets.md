@@ -344,7 +344,8 @@ aws sts get-caller-identity
     aws-cli 판을 봅니다. 아래 블록이 `CLI HISTORY OK` 가 아니면 기록을 끈 뒤
     다시 보고, `aws --version` 이 `aws-cli/2.36.7` 이 아니면
     `bash infra/terraform/scripts/test/put_secret_test.sh` 의
-    `ok: real-cli-contract` 줄을 본 뒤 진행합니다.
+    `ok: real-cli-contract` 줄을 본 뒤 진행합니다 — 그 줄이 아니면(skip ·
+    FAIL) 시작하지 않습니다.
 
     ```shell
     if [ "$(aws configure get cli_history)" = enabled ]; then
@@ -405,7 +406,8 @@ aws sts get-caller-identity
     봅니다. 아래 블록이 `CLI HISTORY OK` 가 아니면 기록을 끈 뒤 다시 보고,
     `aws --version` 이 `aws-cli/2.36.7` 이 아니면
     `bash infra/terraform/scripts/test/put_secret_test.sh` 의
-    `ok: real-cli-contract` 줄을 본 뒤 진행합니다.
+    `ok: real-cli-contract` 줄을 본 뒤 진행합니다 — 그 줄이 아니면(skip ·
+    FAIL) 시작하지 않습니다.
 
     ```shell
     if [ "$(aws configure get cli_history)" = enabled ]; then

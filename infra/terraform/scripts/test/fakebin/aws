@@ -2,9 +2,10 @@
 #
 # put_secret_test.sh 의 가짜 aws. AWS 에 접속하지 않는다.
 #
-# 받은 인자(한 줄에 하나) · 환경(시험이 보는 이름만 — record_env) · 받은 값을
-# FAKE_AWS_DIR 에 적고, 부를 때마다 calls 에 한 줄을 더한다. 시험은 PATH 에
-# fakebin 만 두므로 셸 내장만 쓴다.
+# 받은 인자(한 줄에 하나) · 환경(시험이 보는 값만 — record_env) · 받은 값 ·
+# 받은 값이 든 환경 변수의 이름(env-hits — record_env_hits)을 FAKE_AWS_DIR 에
+# 적고, 부를 때마다 calls 에 한 줄을 더한다. 시험은 PATH 에 fakebin 만 두므로
+# 셸 내장만 쓴다.
 #
 # 값을 받는 방식은 aws-cli 2.36.7 의 실제 거동을 따른다(2026-10-17 실측):
 #   --secret-string file:///dev/stdin  표준 입력을 한 번 읽는다(정상 경로).
@@ -26,6 +27,9 @@
 #   unparsed      오류 코드 · endpoint URL 이 없는 실패(SSL 검증), 종료 255
 
 set -uo pipefail
+# 물려받은 allexport 를 끈다(SHELLOPTS) — 켜져 있으면 가짜 aws 자신의 변수
+# (value 등)도 export 되어 record_env_hits 가 그 이름을 잡는다.
+set +o allexport
 
 readonly ACCOUNT='123456789012'
 readonly ARN="arn:aws:secretsmanager:ap-northeast-2:${ACCOUNT}:secret:x-AbCdEf"
@@ -118,10 +122,13 @@ receive_value() {
 }
 
 #######################################
-# 받은 환경 중 시험이 보는 이름만 「이름=값」 줄로 FAKE_AWS_DIR/env 에 적는다:
-# AWS_* · HOME · TMPDIR · SHELL · LC_ALL · PATH · SHELLOPTS · secret_value
-# (스크립트의 값 변수 — export 된 채 오면 값 0건 검사가 잡는다). 호출자 셸의
-# 다른 환경(살아 있는 토큰 변수 등)은 사례 파일에 옮기지 않는다.
+# 받은 환경 중 시험이 값을 보는 이름만 「이름=값」 줄로 FAKE_AWS_DIR/env 에
+# 적는다: AWS_PAGER · AWS_CONFIG_FILE · AWS_SHARED_CREDENTIALS_FILE ·
+# AWS_EC2_METADATA_DISABLED · HOME · TMPDIR · SHELL · LC_ALL · PATH ·
+# SHELLOPTS. 그 밖의 AWS_ 는 이름만 적는다(시험이 이름을 대조). 호출자 셸의
+# 다른 환경(살아 있는 토큰 변수 등)은 사례 파일에 옮기지 않는다. 값이 환경으로
+# 새는지는 이름과 상관없이 record_env_hits 가 보므로, 스크립트의 값 변수
+# (secret_value)도 여기 적지 않는다.
 # Globals:
 #   FAKE_AWS_DIR
 #######################################
@@ -129,11 +136,36 @@ record_env() {
   local name
   for name in $(compgen -e); do
     case "${name}" in
-      AWS_* | HOME | TMPDIR | SHELL | LC_ALL | PATH | SHELLOPTS | secret_value)
+      AWS_PAGER | AWS_CONFIG_FILE | AWS_SHARED_CREDENTIALS_FILE | \
+        AWS_EC2_METADATA_DISABLED | HOME | TMPDIR | SHELL | LC_ALL | PATH | \
+        SHELLOPTS)
         printf '%s=%s\n' "${name}" "${!name-}"
         ;;
+      AWS_*) printf '%s\n' "${name}" ;;
     esac
   done >"${FAKE_AWS_DIR}/env"
+}
+
+#######################################
+# 받은 값이 든 export 변수의 이름만 FAKE_AWS_DIR/env-hits 에 한 줄씩 적는다.
+# 대조는 메모리 안에서만 하고(부분 문자열 포함) 값은 어떤 파일에도 쓰지
+# 않는다. 끝 줄바꿈을 뗀 값으로 대조한다 — 명령 치환으로 옮긴 사본도 잡게.
+# 그렇게 뗀 값이 비면 모든 변수에 「들어 있다」 가 되므로 보지 않는다(빈 값 ·
+# 공백만은 스크립트가 aws 를 부르기 전에 거부한다).
+# Globals:
+#   FAKE_AWS_DIR, value
+#######################################
+record_env_hits() {
+  local needle="${value}" name
+  while [[ "${needle}" == *$'\n' ]]; do
+    needle="${needle%$'\n'}"
+  done
+  [[ -n "${needle}" ]] || return 0
+  for name in $(compgen -e); do
+    if [[ "${!name-}" == *"${needle}"* ]]; then
+      printf '%s\n' "${name}" >>"${FAKE_AWS_DIR}/env-hits"
+    fi
+  done
 }
 
 #######################################
@@ -199,6 +231,7 @@ main() {
   printf '%s\n' "$@" >"${FAKE_AWS_DIR}/argv"
   record_env
   receive_value "$@"
+  record_env_hits
   respond
 }
 
