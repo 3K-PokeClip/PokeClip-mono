@@ -1018,18 +1018,23 @@ main "$@"
   디스크 · 시계 · 보안 그룹(SRT 인바운드가 팀 IP/32 만) · dev auth 의 resolve 200.
 - **hls.js 가 compose.yml 옆에 있다.** 재생 페이지는 hls.js 를 같은 오리진
   `/hls.min.js` 에서 받는다(MediaMTX 동봉본 의존은 실측에서 실패해 폐기). compose 가
-  `./hls.min.js` 를 마운트하므로 없으면 내려받는다. 판은 1.7.3 으로 고정하고, 받은 뒤
-  sha384 를 단언한다 — `FAILED` 면 그 파일을 지우고(승인) 멈추고 kty. 해시는 2026-10-17
+  `./hls.min.js` 를 마운트하므로 없으면 내려받는다. 판은 1.7.3 으로 고정한다. 받기와
+  확인을 나눈다 — 받기는 파일이 없을 때만 돌고, 확인(sha384 단언)은 파일이 이미 있어도 돈다.
+  확인이 `FAILED` 면 `&&` 뒤의 `chown` 이 돌지 않는다 — 그 자리에서 멈추고, 그 파일을
+  지울지(승인 — 이미 있던 파일이면 다른 판일 수 있다) kty 가 정한다. 해시는 2026-10-17
   23:24 KST 에 jsDelivr 에서 받아 셈했다(jsDelivr 목록의 sha256 · npm 묶음 `hls.js-1.7.3.tgz`
-  의 같은 파일과 바이트 대조). 판을 올릴 때는 새 판을 받아 해시를 다시 셈하고 두 줄을 함께
-  고친다.
+  의 같은 파일과 바이트 대조). 판을 올릴 때는 새 판을 받아 해시를 다시 셈하고 받기 · 확인
+  두 줄을 함께 고친다.
 
   ```bash
-  sudo curl -fsSL -o /opt/pokeclip-demo/repo/infra/dev-media/hls.min.js \
-    https://cdn.jsdelivr.net/npm/hls.js@1.7.3/dist/hls.min.js
+  # 받기 — 파일이 없을 때만
+  sudo test -e /opt/pokeclip-demo/repo/infra/dev-media/hls.min.js \
+    || sudo curl -fsSL -o /opt/pokeclip-demo/repo/infra/dev-media/hls.min.js \
+      https://cdn.jsdelivr.net/npm/hls.js@1.7.3/dist/hls.min.js
+  # 확인 — 있든 받았든. FAILED 면 chown 으로 넘어가지 않는다
   echo '71c889d338bc775b8c282db325dee3bcf6381d0b7b5b8072508fc594c925b6f062df5696eb5adca55061a665bcfcdc17  /opt/pokeclip-demo/repo/infra/dev-media/hls.min.js' \
-    | sha384sum -c -
-  sudo chown 10002:10002 /opt/pokeclip-demo/repo/infra/dev-media/hls.min.js
+    | sudo sha384sum -c - \
+    && sudo chown 10002:10002 /opt/pokeclip-demo/repo/infra/dev-media/hls.min.js
   ```
 
 - **체크아웃의 세 칸을 반영 전에 본다(읽기).** 블록은 이 셋을 보지 않는다 — 어긋나면
@@ -1037,7 +1042,12 @@ main "$@"
 
   ```bash
   sudo stat -c '%U:%G' /opt/pokeclip-demo/repo
-  sudo -u <체크아웃 소유자> git -C /opt/pokeclip-demo/repo status --porcelain
+  sudo -u <체크아웃 소유자> git -C /opt/pokeclip-demo/repo status --porcelain \
+    --untracked-files=normal
+  # 통째 추적 밖 디렉터리의 소유 · 모드 기록 — 출력을 반영 기록에 남긴다(11-5 알려진 예외)
+  sudo -u <체크아웃 소유자> git -C /opt/pokeclip-demo/repo status --porcelain \
+    --untracked-files=normal | sed -n 's|^?? \(.*\)/$|\1|p' \
+    | while IFS= read -r d; do sudo stat -c '%U:%G %a %n' "/opt/pokeclip-demo/repo/${d}"; done
   sudo -u <체크아웃 소유자> git -C /opt/pokeclip-demo/repo diff --cached --stat
   sudo stat -c '%a %U:%G %n' /opt/pokeclip-demo/repo/infra/dev-media/player.html \
     /opt/pokeclip-demo/repo/infra/dev-media/hls.min.js
@@ -1046,7 +1056,11 @@ main "$@"
   - **소유자 · 통째 추적 밖 디렉터리** — 소유자가 root 가 아니고 `status` 에 `/` 로 끝나는
     `??` 줄(안의 파일이 모두 추적 밖인 디렉터리)이 있으면 멈춘다. 롤백 B · D 가 그 디렉터리를
     `root:root 0755` 로 다시 만들어 다음 B · D 의 `git clean` 이 권한 실패로 멈춘다(11-5
-    머리의 알려진 예외).
+    머리의 알려진 예외). `--untracked-files=normal` 은 체크아웃 설정
+    (`status.showUntrackedFiles` 가 `all` · `no`)과 무관하게 그 줄을 내게 한다. 「기록」
+    주석 아래 명령의 `stat` 출력(소유 · 모드)은 소유자와 무관하게 반영 기록에 남긴다 —
+    11-5 예외에서 되돌릴 기준이다. 이름에 특수 문자가 있어 `git` 이 따옴표로 감싼 줄은
+    `stat` 이 실패한다 — 그 줄은 손으로 본다.
   - **스테이징** — `diff --cached --stat` 출력이 비어 있지 않으면 멈춘다. 롤백 B ③ 이 이유
     문구 없이 「일치 없음」으로 멈추고, 다시 돌리면 `already exists` 로 멈춘다(로컬 실측
     S7-7 L9).
@@ -2458,9 +2472,10 @@ B · D 는 처음부터 다시 돌려도 이어진다 — 명령과 명령 사�
 **알려진 예외 — 체크아웃 소유자가 root 가 아니고 통째 추적 밖 디렉터리가 있을 때.** B · D 의
 묶음 풀기(root)가 그 디렉터리를 `root:root 0755` 로 다시 만든다. 그래서 두 번째 B · D 의
 `git clean` 이 권한 실패(`failed to remove … Permission denied`)로 `down` 뒤 종료 2 로
-멈춘다 — 컨테이너가 모두 내려간 채다. 그 디렉터리의 소유 · 모드를 반영 전 기록대로 손으로
-되돌린 뒤(승인) 다시 돌린다. 이어진 블록이 다시 바꾸므로 다음 B · D 마다 되풀이한다(로컬
-실측 S7-7 결함 1 · kty 2026-10-17 한계로 둠). 4-1 의 확인이 이 조건을 반영 전에 거른다.
+멈춘다 — 컨테이너가 모두 내려간 채다. 그 디렉터리의 소유 · 모드를 반영 전 기록(4-1
+확인에서 남긴 `stat -c '%U:%G %a %n'` 출력)대로 손으로 되돌린 뒤(승인) 다시 돌린다. 이어진
+블록이 다시 바꾸므로 다음 B · D 마다 되풀이한다(로컬 실측 S7-7 결함 1 · kty 2026-10-17 한계로
+둠). 4-1 의 확인이 이 조건을 반영 전에 거른다.
 
 반영 R4 뒤 · R6 앞에 옛 MediaMTX 가 새 렌더로 기동을 되풀이하는 채(전 송출 중단 · 로그
 `bind: cannot assign requested address` — 4-2) 접을 때도 0 → A → B → C 가 그대로 이어진다.
