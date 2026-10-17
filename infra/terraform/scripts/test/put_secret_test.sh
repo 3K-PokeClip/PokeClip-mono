@@ -15,6 +15,11 @@
 # 추적(bash -x · SHELLOPTS)이나 allexport 를 켠 호출도 값을 내지 않는지 본다.
 # 사례 밖으로 쓰는 길(파일 대상 리다이렉션 · 다른 명령 · 셸)은 소스로 본다.
 #
+# 정적 검사(no-file-writes · no-external-commands · no-endpoint-override ·
+# no-heredoc)는 흔한 회귀를 잡는 울타리다. 일부러 숨긴 꼴(문자열 안 명령
+# 치환 · 공백 변형 · 리디렉션 없는 쓰기 내장 명령 등)은 PR 리뷰가 막는다 —
+# 실제 누출 방어는 실행 시험(실물 CLI 계약 · 잔여 검사 · 출력 완전 일치)이다.
+#
 # 실물 CLI 계약: PATH 에 진짜 aws 가 있으면 가짜 자격 · 빈 설정 · 격리 HOME ·
 # 닫힌 로컬 주소(AWS_ENDPOINT_URL=http://127.0.0.1:9)로 스크립트를 끝까지 돌려,
 # CLI 가 값 넘기는 법을 받아들이는지(ParamValidation 없이 네트워크 단계까지
@@ -939,12 +944,14 @@ code_only_line() {
 # 것)의 > · >> 대상은 fd 복제(&1 · &2)와 /dev/null 만 허용한다. 리터럴
 # /tmp · "${HOME}/…" 같은 파일 대상은 사례 디렉터리 밖에 남을 수 있어 실행
 # 뒤 검사로는 다 보지 못한다. 문자열 · 괄호 짝이 끝까지 맞지 않으면(검사기가
-# 코드를 문자열로 잘못 읽었을 수 있음) 실패로 센다.
+# 코드를 문자열로 잘못 읽었을 수 있음) 실패로 센다. 검사기는 백틱 명령 치환을
+# 읽지 못하므로, 주석 아닌 줄에 백틱이 하나라도 있으면 실패로 센다(스크립트는
+# $( ) 만 씀 — shellguide Command Substitution).
 # Globals:
 #   code_stack, code_line
 #######################################
 test_no_file_writes() {
-  local line number=0 rest
+  local line number=0 rest comment_re='^[[:space:]]*#'
   local allowed_re='^(.*[^0-9>])?[0-9]*>>?[[:space:]]*(&[12]|/dev/null)'
   allowed_re+='([^[:alnum:]_./-].*)?$'
   if [[ ! -r "${PUT}" ]]; then
@@ -954,6 +961,10 @@ test_no_file_writes() {
   code_stack=""
   while IFS= read -r line; do
     number=$((number + 1))
+    if [[ ! "${line}" =~ ${comment_re} && "${line}" == *'`'* ]]; then
+      fail "no-file-writes: ${number}행에 백틱 — 검사기가 읽지 못하는 꼴"
+      return
+    fi
     code_only_line "${line}"
     rest="${code_line}"
     while [[ "${rest}" =~ ${allowed_re} ]]; do

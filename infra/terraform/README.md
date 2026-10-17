@@ -175,6 +175,12 @@ terraform 규칙 묶음)는 루트 · 모듈마다 돌립니다. `--recursive` �
 닫힌 로컬 주소(`127.0.0.1:9`) · 가짜 자격으로 실물 CLI 계약 사례를 돌리고(AWS
 에 닿지 않음), 없으면 skip 으로 셉니다.
 
+`put_secret_test.sh` 의 정적 검사(`no-file-writes` · `no-external-commands` ·
+`no-endpoint-override` · `no-heredoc`)는 흔한 회귀를 잡는 울타리입니다. 일부러
+숨긴 꼴(문자열 안 명령 치환 · 공백 변형 · 리디렉션 없는 쓰기 내장 명령 등)은
+PR 리뷰가 막습니다 — 실제 누출 방어는 실행 시험(실물 CLI 계약 · 잔여 검사 ·
+출력 완전 일치)입니다.
+
 ### 단언 방식
 
 `terraform test` 는 `mock_provider` 로 AWS 에 접속하지 않고 plan 을 만든 뒤
