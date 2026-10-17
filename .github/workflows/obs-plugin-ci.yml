@@ -7,6 +7,8 @@
 #  - windows / macos  obs-plugintemplate 경로로 실제 플러그인 빌드 → 설치용 아티팩트 (미서명)
 #
 # push에도 돈다 — Windows 실기 검증용 zip을 PR 없이 받기 위해서다 (로컬에 Windows 툴체인이 없다).
+# develop push도 돈다 — 머지된 판의 산출물을 남긴다(30일). main은 태그로만 배포하므로 뺀다.
+# 태그 배포는 obs-plugin-release.yml이 이 워크플로를 workflow_call로 불러 같은 잡으로 빌드한다.
 name: obs-plugin-ci
 
 on:
@@ -20,16 +22,21 @@ on:
   push:
     branches-ignore:
       - main
-      - develop
-    paths:
+    paths: # pull_request와 같은 목록
       - 'obs-plugin/**'
+      - 'web/src/ui/styles/**'
+      - 'web/src/ui/assets/fonts/**'
+      - 'web/public/brand/pokeclip-symbol.svg'
       - '.github/workflows/obs-plugin-ci.yml'
+  workflow_call: {}
 
 permissions:
   contents: read
 
+# 호출된 워크플로 안의 github.workflow는 호출자 이름이라 그룹 이름에 쓰지 않는다(릴리스 워크플로 그룹과 겹친다).
+# develop은 커밋마다 그룹을 나눠 연달아 머지돼도 앞 커밋 빌드가 취소되지 않게 한다.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: obs-plugin-ci-${{ github.ref == 'refs/heads/develop' && github.sha || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -94,7 +101,7 @@ jobs:
           name: pokeclip-obs-windows-x64-${{ github.sha }}
           path: obs-plugin/release/pokeclip-obs-*-windows-x64.zip
           if-no-files-found: error
-          retention-days: 14
+          retention-days: ${{ github.ref == 'refs/heads/develop' && 30 || 14 }}
 
   macos:
     runs-on: macos-26
@@ -131,4 +138,4 @@ jobs:
           name: pokeclip-obs-macos-universal-${{ github.sha }}
           path: obs-plugin/release/pokeclip-obs-*-macos-universal.*
           if-no-files-found: error
-          retention-days: 14
+          retention-days: ${{ github.ref == 'refs/heads/develop' && 30 || 14 }}

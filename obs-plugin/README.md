@@ -68,12 +68,30 @@ pnpm build       # tsc + vite build → ../data/ui
 
 ### 2. 배포 빌드 — Windows · macOS (CI)
 
-`.github/workflows/obs-plugin-ci.yml`이 obs-plugintemplate 경로로 빌드한다. `obs-plugin/**`를 건드린 PR과 브랜치 push에서 돈다.
+`.github/workflows/obs-plugin-ci.yml`이 obs-plugintemplate 경로로 빌드한다. `obs-plugin/**`(와 독이 쓰는 `web/` 스타일·폰트·심볼)를 건드린 PR, main을 뺀 브랜치 push(develop 포함)에서 돈다.
 
 | 잡 | 산출물 |
 |---|---|
 | `windows` | `pokeclip-obs-0.2.0-windows-x64.zip` — `obs-plugins/64bit/pokeclip-obs.dll` + `data/obs-plugins/pokeclip-obs/{locale,ui}` |
 | `macos` | `pokeclip-obs-0.2.0-macos-universal.*` (미서명) |
+
+**받는 곳**
+
+| 무엇 | 어디서 | 보관 |
+|---|---|---|
+| 배포판 | [GitHub Releases](https://github.com/3K-PokeClip/PokeClip-mono/releases) — 태그마다 zip·macOS 산출물·`SHA256SUMS.txt` | 계속 |
+| develop에 머지된 판 | Actions › `obs-plugin-ci` › develop 실행의 아티팩트 `pokeclip-obs-{windows-x64,macos-universal}-<커밋>` | 30일 |
+| PR·기능 브랜치 판 | 같은 워크플로의 PR·브랜치 실행 아티팩트 | 14일 |
+
+Chrome이 아티팩트를 「위험한 파일」로 막으면 `gh run download <실행 번호> --repo 3K-PokeClip/PokeClip-mono -n <아티팩트 이름> -D <폴더>`로 받는다(macOS 격리 속성도 붙지 않는다).
+
+**배포판 내기 (태그)** — `.github/workflows/obs-plugin-release.yml`
+
+1. 판 번호를 올릴 때는 `buildspec.json`의 `version`(`X.Y.Z`만 — `resource.rc`가 `.`으로 쪼갠다)을 고친 커밋을 먼저 머지한다.
+2. develop 또는 main에 머지된 그 커밋에 `obs-plugin-v<X.Y.Z>[-<접미사>]` 태그를 민다 — `git tag obs-plugin-v0.2.0-test.1 origin/develop && git push origin obs-plugin-v0.2.0-test.1`.
+3. 워크플로가 ① 태그의 `X.Y.Z` = `buildspec.json` ② 태그 커밋이 origin/develop·main에 있음을 확인하고, CI와 같은 잡으로 빌드한 뒤 draft Release에 자산·`SHA256SUMS.txt`를 올리고 개수를 확인해 공개한다.
+4. 접미사(`-test.1`·`-rc.1` …)가 있으면 prerelease다. 이미 공개된 Release는 덮어쓰지 않는다 — 다시 내려면 접미사나 판 번호를 바꾼다. 실패로 draft만 남았으면 같은 태그로 실행을 다시 돌리면 draft를 지우고 새로 만든다.
+5. 시험 Release는 `gh release delete <태그> --repo 3K-PokeClip/PokeClip-mono --cleanup-tag --yes`로 태그째 지운다.
 
 로컬에서 템플릿 경로를 쓰려면 Windows는 Visual Studio 2022 + `cmake --preset windows-x64`, macOS는 **Xcode 16+** + `cmake --preset macos`다 (buildspec.json이 OBS 32.2.1 소스·obs-deps·Qt6를 `.deps/`에 받는다).
 
