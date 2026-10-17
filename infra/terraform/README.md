@@ -196,10 +196,12 @@ PR 리뷰가 막습니다 — 실제 누출 방어는 실행 시험(실물 CLI �
     명령을 손으로 돌립니다.
 *   저장소가 공개라 CI 로그도 공개입니다. 시험에는 가짜 계정 ID · 가짜
     이름만 씁니다.
-*   `put_secret_test.sh` 의 실물 CLI 계약 사례는 러너 이미지의 AWS CLI 에
-    기댑니다(위 닫힌 로컬 주소 · 가짜 자격으로만 부름). CI 는
-    `scripts/test/` 시험이 하나라도 skip 하면 실패로 봅니다 — 러너에서
-    AWS CLI 가 빠지면 이 사례가 skip 되어 빨개집니다.
+*   두 시험이 러너 이미지의 AWS CLI 에 기댑니다. `put_secret_test.sh` 의
+    실물 CLI 계약 사례(위 닫힌 로컬 주소 · 가짜 자격으로만 부름)와 precheck
+    `testlib_test.sh` 의 실행 비트 사례(PATH 에 실행 가능한 aws 가 따로
+    있어야 뜻이 있음 — fakebin · init-message)입니다. CI 는 `scripts/test/`
+    시험이 하나라도 skip 하면 실패로 봅니다. 러너에서 AWS CLI 가 빠지면 두
+    단계가 함께 빨개집니다.
 *   러너의 bash 는 5.2 입니다. 스크립트가 지키는 macOS bash 3.2 제약은
     로컬에서 돌려야 드러납니다.
 *   guard_test 의 `config-first-folded` 사례(ſ 를 s 로 접는 파일 시스템)는
@@ -207,6 +209,11 @@ PR 리뷰가 막습니다 — 실제 누출 방어는 실행 시험(실물 CLI �
 *   `modules/` 는 lock 면제입니다(`.gitignore` 가 모듈의 lock 을 뺍니다).
     그래서 CI 에서 aws provider 최신판으로 돌고, 쓰인 판은 init 로그에
     남습니다. 그 밖의 루트는 lock 이 없으면 CI 가 실패합니다.
+*   CI 는 루트를 `-lockfile=readonly` 로 init 합니다. 루트에 provider 를 새로
+    더하면 로컬 `terraform init` 은 lock 에 조용히 적어 넣지만, CI 는 lock 을
+    고쳐 쓰지 않으므로 실패합니다 — 갱신된 lock 을 함께 올립니다. 잠긴 판을
+    그대로 만족하는 제약 변경은 양쪽 모두 통과하고, 잠긴 판을 벗어나는 제약은
+    로컬에서도 `init -upgrade` 가 필요합니다.
 
 ### 단언 방식
 
