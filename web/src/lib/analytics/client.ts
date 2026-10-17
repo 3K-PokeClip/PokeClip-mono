@@ -60,6 +60,9 @@ export const ANALYTICS_CONFIG: Partial<PostHogConfig> = {
   // 세션 녹화 (POK-358) — 화면을 다시 그릴 수 있을 만큼만 담고 사람·비밀값은 담지 않는다(처리방침 2절
   // 「화면의 글자와 입력 내용을 가린 채」). 랜딩은 녹화하지 않는다. 로그인·OAuth 콜백·탈퇴 화면은 콘솔의 URL 차단 목록에서 뺀다
   disable_session_recording: !REPLAY,
+  // 녹화에 브라우저 콘솔 로그를 담지 않는다. 정하지 않으면 원격 설정을 따르는데, 새 프로젝트는 콘솔 로그 녹화가
+  // 켜져 있다(2026-10-17 원격 설정 확인) — 로그에 주소·응답이 찍힐 수 있다
+  enable_recording_console_log: false,
   session_recording: {
     // 모든 글자와 입력값을 가린다 — 채팅·채널 이름·이메일·업로드 제목·페어링 코드가 다 글자다
     maskAllInputs: true,

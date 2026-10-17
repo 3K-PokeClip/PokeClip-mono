@@ -102,6 +102,7 @@ SDK는 동적 import라 hydration 뒤에 붙을 수 있다(Next 16 `instrumentat
 | 글 속성(`aria-label`·`title`·`alt`·`placeholder`·`value` 등) | `*`로 가림 — 글자 가리기는 속성을 안 건드리는데 채널·회원 이름이 실린다         | `maskAttributeFn` = `scrubAttribute`                                                    |
 | 녹화 시작 페이지 주소(rrweb 메타)                            | 쿼리 제거                                                                       | `before_send`(`$snapshot`)                                                              |
 | 네트워크 요청                                                | 헤더·본문을 담지 않고 주소만 정제                                               | `recordHeaders`·`recordBody`·`streamNetworkBody: false`, `maskCapturedNetworkRequestFn` |
+| 브라우저 콘솔 로그                                           | 담지 않음 — 새 프로젝트는 원격 설정에서 켜져 있어(2026-10-17 확인) 코드로 끈다  | `enable_recording_console_log: false`                                                   |
 | 채팅 패널·영상 위 채팅·페어링 코드 상자                      | 통째로 뺌(구조·자릿수도 안 남김)                                                | `REPLAY_BLOCK_CLASS`(`ph-no-capture`)                                                   |
 
 **켜는 순서** — 처리방침(POK-355) 머지·시행 뒤에.

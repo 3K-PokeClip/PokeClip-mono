@@ -105,6 +105,8 @@ describe('initAnalytics — 키가 없으면 꺼진다(POK-356)', () => {
       streamNetworkBody: false,
     });
     expect(config.session_recording.blockSelector).toContain('video');
+    // 콘솔 로그는 원격 설정(새 프로젝트는 켜짐)을 따르지 않고 늘 끈다
+    expect(config.enable_recording_console_log).toBe(false);
     expect(config.session_recording.maskAttributeFn('href', '/x?stream=S-1')).toBe('/x');
     expect(
       config.session_recording.maskCapturedNetworkRequestFn({ name: '/auth/callback?code=c' }),
