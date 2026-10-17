@@ -7,10 +7,13 @@ import { useAuthStore } from '@/stores/auth';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
 import { createTestQueryClient } from '@/test/testProviders';
 
-const { replace, searchRef } = vi.hoisted(() => ({
+const { replace, searchRef, track } = vi.hoisted(() => ({
   replace: vi.fn(),
   searchRef: { current: new URLSearchParams() },
+  track: vi.fn(),
 }));
+
+vi.mock('@/lib/analytics', () => ({ track, identifyUser: vi.fn() }));
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ replace }),
@@ -44,6 +47,7 @@ beforeEach(() => {
   window.sessionStorage.clear();
   window.localStorage.clear();
   replace.mockReset();
+  track.mockReset();
   useAuthStore.setState({ accessToken: null, refreshToken: null, hydrated: false });
 });
 
@@ -77,6 +81,8 @@ describe('OAuthCallbackScreen', () => {
     expect(spy.mock.calls.filter(([url]) => url === '/api/auth/google')).toHaveLength(1);
     expect(useAuthStore.getState().accessToken).toBe('access-1');
     expect(queryClient.getQueryData(['auth', 'me'])).toBeUndefined();
+    // 사용 통계 — 이중 마운트에도 한 번, 속성 없음(POK-357)
+    expect(track.mock.calls).toEqual([['login_completed', {}]]);
   });
 
   it.each([
@@ -135,6 +141,7 @@ describe('OAuthCallbackScreen', () => {
     renderWithClient(<OAuthCallbackScreen />);
 
     expect(await screen.findByText('로그인에 실패했어요')).toBeInTheDocument();
+    expect(track).not.toHaveBeenCalled(); // 실패는 세지 않는다
     // 버튼이 아니라 링크여야 한다 — 가운데 클릭·새 탭이 살아 있고, JS 없이도 간다.
     const link = screen.getByRole('link', { name: '로그인 화면으로' });
     expect(link).toHaveAttribute('href', '/login');

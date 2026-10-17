@@ -1,6 +1,8 @@
 # 단일 프로젝트 — packages 키 없음. pnpm 설정 파일로만 사용한다.
 allowBuilds:
   '@parcel/watcher': true
+  # posthog-js가 끌어온다. postinstall은 후원 안내 배너만 찍는다
+  core-js: false
   esbuild: true
   sharp: true
   unrs-resolver: true

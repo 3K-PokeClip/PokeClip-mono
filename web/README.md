@@ -313,6 +313,9 @@ web/                     # 단일 Next.js 앱 (App Router + TanStack Query + Zus
 | `NEXT_PUBLIC_MEDIA_STUB_URL`          | 스텁 m3u8 주소             | 플레이어 개발용 정적 세그먼트 ([`infra/compose/stub/`](../infra/compose/stub/)) |
 | `NEXT_PUBLIC_MEDIA_LIVE_BASE_URL`     | LL-HLS 베이스              | 진짜 미디어 서버 (`{base}/{영상 경로 키}/index.m3u8`, POK-233)                  |
 | `NEXT_PUBLIC_MEDIA_PLAYBACK_BASE_URL` | 녹화 재생 서버 (비워도 됨) | 끝난 방송 다시보기·편집기 미리보기 (`{base}/list`·`{base}/get`, POK-251)        |
+| `NEXT_PUBLIC_POSTHOG_KEY`             | 비움                       | 사용 통계(PostHog) 프로젝트 공개 키 — 비면 SDK를 불러오지 않음 (POK-356)        |
+| `NEXT_PUBLIC_POSTHOG_HOST`            | 비움                       | PostHog 수집 주소(운영 `https://us.i.posthog.com`) — 규칙은 `docs/ANALYTICS.md` |
+| `NEXT_PUBLIC_POSTHOG_REPLAY`          | 비움                       | `on`일 때만 세션 녹화(POK-358) — 콘솔 녹화 토글도 켜야 시작                     |
 
 서버 주소는 **코드에 하드코딩하지 않는다** — env 참조만. env가 없으면 해당 rewrites가
 아예 걸리지 않으므로 백엔드 없이도 **기동·빌드는 된다**. 다만 env가 있는데 백엔드가 안

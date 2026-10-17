@@ -4,6 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { useRouter } from 'next/navigation';
 import { Check } from 'lucide-react';
 import { Badge, Button, FocusScope, Portal, useScrollLock } from '@/ui';
+import { track } from '@/lib/analytics';
 import { useOnboardingStore } from '@/stores/onboarding';
 import {
   TOUR_STEPS,
@@ -20,6 +21,15 @@ import styles from './Onboarding.module.css';
 // 1·2단계는 중앙 카드(전체 딤), 3~6단계는 스포트라이트 — 링 하나가 transition으로
 // 다음 대상까지 미끄러진다. 배경 클릭·ESC는 잠금(디자인 "배경 클릭 잠금") — 종료는 건너뛰기·완료만.
 // CTA는 router.push로 설정 화면에 다녀온다 — tourStep이 스토어 메모리에 남아 홈 복귀 시 같은 스텝 재개.
+
+/**
+ * 안내가 끝난 것을 한 번만 센다 (POK-357). 측정·백스탑 이펙트가 잇달아(StrictMode는 두 번) 끝낼 수 있어서
+ * 이미 끝났으면(tourDone) 보내지 않는다. 스토어의 completeTour는 자동 종료와 마지막 단계를 가르지 못해 여기서 가른다.
+ */
+function trackTourFinished(outcome: 'completed' | 'skipped' | 'auto') {
+  if (useOnboardingStore.getState().tourDone) return;
+  track('onboarding_tour_finished', { outcome });
+}
 
 function hasTargetInDom(targetId: string): boolean {
   return document.querySelector(`[data-tour-id="${targetId}"]`) !== null;
@@ -50,8 +60,10 @@ export function TourOverlay({ stepIndex }: { stepIndex: number }) {
     const el = document.querySelector(`[data-tour-id="${step.targetId}"]`);
     if (!el) {
       const next = nextVisibleStep(stepIndex, 1, hasTargetInDom);
-      if (next === null) completeTour();
-      else setTourStep(next);
+      if (next === null) {
+        trackTourFinished('auto');
+        completeTour();
+      } else setTourStep(next);
       return;
     }
     const r = el.getBoundingClientRect();
@@ -103,14 +115,22 @@ export function TourOverlay({ stepIndex }: { stepIndex: number }) {
 
   // 스텝 인덱스가 범위를 벗어나면 종료 (백스탑).
   useEffect(() => {
-    if (!step) completeTour();
+    if (step) return;
+    trackTourFinished('auto');
+    completeTour();
   }, [step, completeTour]);
   if (!step) return null;
 
   const goNext = () => {
     const next = nextVisibleStep(stepIndex, 1, hasTargetInDom);
-    if (next === null) completeTour();
-    else setTourStep(next);
+    if (next === null) {
+      trackTourFinished('completed');
+      completeTour();
+    } else setTourStep(next);
+  };
+  const skip = () => {
+    trackTourFinished('skipped');
+    skipTour();
   };
   const goPrev = () => {
     const prev = nextVisibleStep(stepIndex, -1, hasTargetInDom);
@@ -130,7 +150,9 @@ export function TourOverlay({ stepIndex }: { stepIndex: number }) {
         aria-modal="true"
         aria-label={`시작 가이드 ${stepIndex + 1}/${TOUR_STEPS.length} — ${step.title}`}
         className={
-          spotlight ? `${styles.tourCard} ${styles.spotCard}` : `${styles.tourCard} ${styles.centeredCard}`
+          spotlight
+            ? `${styles.tourCard} ${styles.spotCard}`
+            : `${styles.tourCard} ${styles.centeredCard}`
         }
         style={spotlight && cardPos ? { top: cardPos.top, left: cardPos.left } : undefined}
         data-pending={spotlight && !cardPos ? true : undefined}
@@ -156,7 +178,7 @@ export function TourOverlay({ stepIndex }: { stepIndex: number }) {
             ))}
           </span>
           <span className={styles.cardActions}>
-            <Button variant="ghost" size="sm" onClick={skipTour}>
+            <Button variant="ghost" size="sm" onClick={skip}>
               건너뛰기
             </Button>
             {stepIndex > 0 && (

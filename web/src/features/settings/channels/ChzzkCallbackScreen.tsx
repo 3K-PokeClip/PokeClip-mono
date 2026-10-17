@@ -8,6 +8,7 @@ import { ApiError } from '@/api/client';
 import { chzzkLinkFailureMessage, chzzkLinkQueryOptions, completeChzzkLink } from '@/api/chzzkLink';
 import { ReplaceLink } from '@/components/ReplaceLink';
 import { restoreReturnPath } from '@/components/app-shell/AuthGuard';
+import { track } from '@/lib/analytics';
 import { useAuthHydration, useAuthStore } from '@/stores/auth';
 import { CHANNEL_SETTINGS_PATH } from './chzzkOAuth';
 import styles from './ChzzkCallbackScreen.module.css';
@@ -71,6 +72,7 @@ export function ChzzkCallbackScreen() {
         // 목적지가 처음부터 다시 읽게 한다(스켈레톤 한 번). 남은 옛 값을 그냥 두면
         // 성공 토스트 직후에 「미연동」이 잠깐 스치므로 invalidate가 아니라 remove다.
         queryClient.removeQueries({ queryKey: chzzkLinkQueryOptions.queryKey });
+        track('platform_linked', { platform: 'chzzk' }); // 채널 이름은 싣지 않는다 (POK-357)
         // 온보딩 플래그는 여기서 건드리지 않는다 — 필자는 useChzzkLinkState의 미러링
         // 이펙트 하나뿐이고, 목적지 화면이 마운트되며 서버 진실로 반영한다.
         toast({

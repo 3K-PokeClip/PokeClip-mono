@@ -8,6 +8,7 @@ import {
   unlinkChzzk,
   type ChzzkLinkState,
 } from '@/api/chzzkLink';
+import { track } from '@/lib/analytics';
 import { useOnboardingHydration, useOnboardingStore } from '@/stores/onboarding';
 import { useToast } from '@/ui';
 import { assertChzzkConsentUrl, goToChzzkConsent, warnIfCallbackMismatch } from './chzzkOAuth';
@@ -84,6 +85,7 @@ export function useChzzkLinkState(): ChzzkLinkViewState {
     onSuccess: () => {
       // 재조회가 끝나기 전에도 행이 미연동으로 서게 캐시를 먼저 갱신한다.
       queryClient.setQueryData<ChzzkLinkState>(chzzkLinkQueryOptions.queryKey, { linked: false });
+      track('platform_unlinked', { platform: 'chzzk' });
       // destructive 표식이 undo를 컴파일 단계에서 막는다 (ADR-044). 실제로 되돌릴 수 없다 —
       // 서버가 옛 토큰을 secrets에서 지우고 치지직에 revoke까지 던진다.
       toast({

@@ -3,6 +3,7 @@
 import { useEffect, type ReactNode } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { useMe } from '@/features/auth/useSession';
+import { identifyUser } from '@/lib/analytics';
 import { useAuthHydration, useAuthStore } from '@/stores/auth';
 
 // 보호 라우트 가드 (POK-101) — 독 4개 라우트를 (dock)/layout.tsx에서 한 번에 덮는다.
@@ -48,7 +49,14 @@ export function AuthGuard({ children }: { children: ReactNode }) {
   // 세션 부트스트랩 — 화면은 낙관적으로 즉시 그리고(첫 페인트를 네트워크에 잡히지 않게),
   // me가 최종 401이면(내부의 refresh 회전 실패 = 만료·도난 감지) apiFetch가 clearTokens를
   // 부르고 아래 이펙트가 /login으로 보낸다. 완료조건 "만료·도난 시 자연 복귀"가 이 경로다.
-  useMe();
+  const me = useMe();
+  const userId = me.data?.id;
+
+  // 사용 통계(PostHog)의 사람 식별 — 보호 화면은 전부 이 가드를 지나므로 여기 한 곳에서 한다 (POK-356).
+  // 회원 번호만 넘긴다. 로그아웃 때의 초기화는 lib/analytics가 auth 스토어를 구독해 한다.
+  useEffect(() => {
+    if (userId !== undefined) identifyUser(userId);
+  }, [userId]);
 
   useEffect(() => {
     if (!hydrated || refreshToken !== null) return;

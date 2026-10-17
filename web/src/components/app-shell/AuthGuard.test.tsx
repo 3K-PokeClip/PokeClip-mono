@@ -5,12 +5,13 @@ import { useAuthStore } from '@/stores/auth';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
 import { renderWithProviders } from '@/test/testProviders';
 
-const { replace } = vi.hoisted(() => ({ replace: vi.fn() }));
+const { replace, identifyUser } = vi.hoisted(() => ({ replace: vi.fn(), identifyUser: vi.fn() }));
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ replace }),
   usePathname: () => '/home',
 }));
+vi.mock('@/lib/analytics', () => ({ identifyUser }));
 
 const ME = { id: 1, email: 'raccoon@example.com', name: '게임하는너구리', profileImageUrl: '' };
 
@@ -18,6 +19,7 @@ beforeEach(() => {
   window.localStorage.clear();
   window.sessionStorage.clear();
   replace.mockReset();
+  identifyUser.mockReset();
   useAuthStore.setState({ accessToken: null, refreshToken: null, hydrated: false });
 });
 
@@ -38,6 +40,7 @@ describe('AuthGuard', () => {
     await waitFor(() => expect(replace).toHaveBeenCalledWith('/login'));
     expect(screen.queryByText('보호 콘텐츠')).not.toBeInTheDocument();
     expect(window.sessionStorage.getItem('pc-auth-return')).toBe('/home');
+    expect(identifyUser).not.toHaveBeenCalled();
   });
 
   it('의도적 로그아웃 직후에는 로그아웃한 화면을 복원 경로로 남기지 않는다', async () => {
@@ -79,6 +82,9 @@ describe('AuthGuard', () => {
     await waitFor(() => expect(useAuthStore.getState().refreshToken).toBe('boot-refresh'));
     expect(spy.mock.calls.some(([url]) => url === '/api/auth/me')).toBe(true);
     expect(replace).not.toHaveBeenCalled();
+    // 사용 통계는 회원 번호로만 식별한다 — 이메일·이름은 넘기지 않는다(POK-356)
+    await waitFor(() => expect(identifyUser).toHaveBeenCalledWith(1));
+    expect(identifyUser.mock.calls.flat()).toEqual([1]);
   });
 
   it('refresh까지 401이면(만료·도난 감지) 세션을 접고 /login으로 보낸다', async () => {

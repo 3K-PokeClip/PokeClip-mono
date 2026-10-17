@@ -18,6 +18,7 @@
   <link rel="stylesheet" href="/styles.css" />
   <link rel="stylesheet" href="/legal.css" />
   <script src="/legal.js" defer></script>
+  <script src="/analytics.js" defer></script>
 </head>
 <!-- 개인정보 처리방침 -->
 <body class="legal-page">
@@ -80,6 +81,7 @@
             <li>치지직·SOOP·YouTube 연동과 그 유지</li>
             <li>서비스 알림과 중요한 고지 발송(서비스 안 알림과 이메일): 작업 결과, 초대, 약관·처리방침 변경, 보안 관련 안내</li>
             <li>부정 이용 방지와 보안(스트림 키·페어링 남용 차단)</li>
+            <li>서비스 이용 통계와 개선: 어디서 들어왔는지, 어떤 기기로 썼는지, 어느 단계에서 멈췄는지 분석(광고에 쓰지 않음)</li>
             <li>문의와 권리 행사 요청에 대한 응대</li>
           </ul>
           <p>광고성 정보는 보내지 않습니다. 앞으로 보내게 되면 이 방침을 바꾸고, 원하는 회원에게만 따로 동의를 받습니다.</p>
@@ -89,7 +91,7 @@
       <section id="items" aria-labelledby="items-title">
         <h2 id="items-title">2. 처리하는 개인정보 항목과 처리 근거</h2>
         <div class="legal-body">
-          <p>서비스 제공에 꼭 필요한 정보는 「개인정보 보호법」 제15조 제1항 제4호(계약의 이행)에 따라 동의 없이 처리합니다. 회원이 아닌 시청자의 정보는 같은 항 제6호(정당한 이익)에 따라, 공개된 채팅을 하이라이트 분석과 편집에 쓰는 범위에서만 처리합니다.</p>
+          <p>서비스 제공에 꼭 필요한 정보는 「개인정보 보호법」 제15조 제1항 제4호(계약의 이행)에 따라 동의 없이 처리합니다. 회원이 아닌 시청자의 정보는 같은 항 제6호(정당한 이익)에 따라, 공개된 채팅을 하이라이트 분석과 편집에 쓰는 범위에서만 처리합니다. 서비스 이용 통계를 위한 이용 분석 정보도 같은 호(정당한 이익)에 따라 처리하고, 9절의 방법으로 언제든 거부할 수 있습니다.</p>
           <div class="legal-table" role="region" aria-label="처리하는 개인정보 항목" tabindex="0">
             <table>
               <thead><tr><th scope="col">구분</th><th scope="col">항목</th><th scope="col">수집 방법</th><th scope="col">처리 근거</th></tr></thead>
@@ -103,6 +105,7 @@
                 <tr><td>편집·업로드 기록</td><td>편집본(구간, 트랙 선택, 자막 텍스트), 업로드 정보(제목·설명·태그·공개 범위·아동용 여부·썸네일로 고른 장면 또는 올린 이미지), 업로드한 YouTube 영상 ID와 업로드 상태, 요청한 회원</td><td>회원 입력, YouTube API(영상 ID)</td><td>계약 이행</td></tr>
                 <tr><td>시청자 정보(회원 아님)</td><td>치지직 채널 ID 또는 SOOP 아이디, 닉네임, 배지·구독 같은 채팅 표시 정보, 채팅 내용, 후원자의 ID·닉네임·후원 종류와 금액(개수)·후원 메시지 — 플랫폼별 항목은 14절</td><td>스트리머가 연동한 치지직·SOOP 채널에서 각 플랫폼의 공식 API·SDK로 수신</td><td>정당한 이익</td></tr>
                 <tr><td>자동 생성 정보</td><td>접속 IP의 해시값(페어링 시도 횟수 제한), 서비스 이용 기록</td><td>서비스 이용 중 자동 생성</td><td>계약 이행, 정당한 이익</td></tr>
+                <tr><td>이용 분석 정보</td><td>브라우저에 두는 익명 방문 식별자, 로그인한 회원의 회원 번호, 본 화면과 누른 단추, 유입 경로(직전 페이지 주소, 홍보 링크의 표시값), 기기·운영체제·브라우저 종류와 화면 크기, 접속 국가(접속 IP로 추정하고 IP는 저장하지 않음), 대시보드 화면 조작 기록(세션 녹화 — 화면의 글자와 입력 내용을 가린 채 일부 방문에서 수집할 수 있음)</td><td>분석 도구(PostHog)로 자동 수집(9절)</td><td>정당한 이익</td></tr>
               </tbody>
             </table>
           </div>
@@ -125,6 +128,8 @@
                 <tr><td>SOOP 아이디·방송국 정보</td><td>연동을 해제하거나 동의를 철회하거나 탈퇴하면 지체 없이 삭제(14절)</td></tr>
                 <tr><td>로그인 유지 토큰(해시)</td><td>만료되거나 폐기된 뒤 14일</td></tr>
                 <tr><td>접속 IP 해시</td><td>1시간</td></tr>
+                <tr><td>이용 분석 기록(방문·행동 기록)</td><td>수집한 날부터 1년. 회원이 탈퇴하면 분석 도구에 있는 그 회원의 기록을 7일 안에 삭제(4절)</td></tr>
+                <tr><td>대시보드 화면 조작 기록(세션 녹화)</td><td>녹화한 날부터 30일. 회원이 탈퇴하면 7일 안에 함께 삭제</td></tr>
                 <tr><td>페어링 코드(해시)</td><td>만료된 뒤 1시간</td></tr>
                 <tr><td>되감기 영상</td><td>방송 중 최근 1시간</td></tr>
                 <tr><td>다시보기(VOD) 영상</td><td>방송 종료 후 60일</td></tr>
@@ -148,6 +153,7 @@
           <ul>
             <li>보유 기간이 지나거나 처리 목적을 이루면 5일 이내에 파기합니다. 3절에 따로 정한 기한이 있으면 그 기한을 따릅니다.</li>
             <li>회원이 탈퇴하면 그 회원의 정보와 콘텐츠는 유예 없이 바로 파기를 시작합니다. 장애로 지우지 못한 것은 다시 시도해 지웁니다.</li>
+            <li>분석 도구(PostHog)에 있는 탈퇴한 회원의 이용 분석 기록과 화면 조작 기록은 운영자가 탈퇴 뒤 7일 안에 그 도구의 삭제 기능으로 지웁니다. 삭제는 요청한 뒤 분석 도구 안에서 차례로 처리됩니다.</li>
             <li>전자 파일은 복구할 수 없는 방법으로 삭제합니다.</li>
             <li>편집자 위임 이력처럼 지우면 다른 정보주체의 권리를 해치는 기록은 누구인지 알아볼 수 없게 바꿔(익명화) 남깁니다.</li>
             <li>이미 YouTube 등 연동 플랫폼에 게시된 영상은 운영자가 지울 수 없습니다. 회원이 그 플랫폼에서 직접 지워야 합니다.</li>
@@ -173,7 +179,10 @@
           <div class="legal-table" role="region" aria-label="개인정보 처리 위탁 표" tabindex="0">
             <table>
               <thead><tr><th scope="col">수탁자</th><th scope="col">위탁 업무</th><th scope="col">처리 위치</th></tr></thead>
-              <tbody><tr><td>Amazon Web Services</td><td>서버·데이터베이스·파일 저장소 운영, 영상 전송</td><td>대한민국(서울 리전)</td></tr></tbody>
+              <tbody>
+                <tr><td>Amazon Web Services</td><td>서버·데이터베이스·파일 저장소 운영, 영상 전송</td><td>대한민국(서울 리전)</td></tr>
+                <tr><td>PostHog Inc.</td><td>서비스 이용 분석(이용 분석 정보의 수집·보관·통계 처리)</td><td>미국(7절)</td></tr>
+              </tbody>
             </table>
           </div>
           <p>이메일 발송을 업체에 맡기게 되면 수탁자를 이 표에 추가하고, 바뀐 처리방침을 시행 7일 전에 공지합니다.</p>
@@ -183,8 +192,9 @@
       <section id="overseas" aria-labelledby="overseas-title">
         <h2 id="overseas-title">7. 개인정보의 국외 이전</h2>
         <div class="legal-body">
-          <p>스트리머(또는 스트리머가 위임한 편집자)가 YouTube 업로드를 요청하면 다음과 같이 개인정보가 국외로 이전됩니다. 업로드라는 서비스 계약을 이행하는 데 필요한 이전입니다.</p>
-          <div class="legal-table" role="region" aria-label="개인정보의 국외 이전 표" tabindex="0">
+          <p>다음 두 경우에 개인정보가 국외로 이전됩니다.</p>
+          <p><strong>① YouTube 업로드</strong> — 스트리머(또는 스트리머가 위임한 편집자)가 YouTube 업로드를 요청하면 다음과 같이 이전됩니다. 업로드라는 서비스 계약을 이행하는 데 필요한 이전입니다.</p>
+          <div class="legal-table" role="region" aria-label="YouTube 업로드에 따른 국외 이전 표" tabindex="0">
             <table>
               <thead><tr><th scope="col">항목</th><th scope="col">내용</th></tr></thead>
               <tbody>
@@ -195,6 +205,21 @@
                 <tr><td>이전 목적</td><td>스트리머의 YouTube 채널에 업로드</td></tr>
                 <tr><td>보유 기간</td><td>Google 정책에 따름. 영상은 스트리머가 YouTube에서 지울 때까지</td></tr>
                 <tr><td>거부 방법과 효과</td><td>업로드를 요청하지 않거나 YouTube 연동을 해제하면 이전되지 않습니다. 이 경우 YouTube 업로드를 쓸 수 없습니다.</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p><strong>② 서비스 이용 분석</strong> — 서비스 소개 페이지와 대시보드를 이용하는 동안 이용 분석 정보가 분석 도구를 운영하는 업체로 이전됩니다(6절의 처리 위탁).</p>
+          <div class="legal-table" role="region" aria-label="서비스 이용 분석에 따른 국외 이전 표" tabindex="0">
+            <table>
+              <thead><tr><th scope="col">항목</th><th scope="col">내용</th></tr></thead>
+              <tbody>
+                <tr><td>이전받는 자</td><td>PostHog Inc. (연락처: <a href="mailto:privacy@posthog.com">privacy@posthog.com</a>, <a href="https://posthog.com/privacy" target="_blank" rel="noopener noreferrer">PostHog 개인정보처리방침</a>)</td></tr>
+                <tr><td>이전 국가</td><td>미국</td></tr>
+                <tr><td>이전 시기와 방법</td><td>서비스 소개 페이지(pokeclip.com)와 대시보드를 이용하는 동안 브라우저에서 PostHog 서버로 네트워크 전송</td></tr>
+                <tr><td>이전 항목</td><td>2절의 이용 분석 정보</td></tr>
+                <tr><td>이전 목적</td><td>서비스 이용 통계와 개선(1절)</td></tr>
+                <tr><td>보유 기간</td><td>이용 분석 기록은 수집한 날부터 1년, 화면 조작 기록은 녹화한 날부터 30일(3절)</td></tr>
+                <tr><td>거부 방법과 효과</td><td>브라우저의 추적 금지(Do Not Track) 설정을 켜거나 분석 스크립트를 차단하면 이전되지 않습니다(9절). 거부해도 서비스는 그대로 쓸 수 있습니다. 이미 이전된 기록의 삭제는 10절의 방법으로 요구할 수 있습니다.</td></tr>
               </tbody>
             </table>
           </div>
@@ -221,12 +246,13 @@
         <h2 id="cookies-title">9. 자동 수집 장치의 설치·운영과 거부</h2>
         <div class="legal-body">
           <ul>
-            <li><strong>쿠키:</strong> 대시보드(app.pokeclip.com)에서 영상 재생 권한을 확인하는 쿠키 한 종류만 씁니다(유효 1시간).</li>
+            <li><strong>쿠키:</strong> 대시보드(app.pokeclip.com)는 영상 재생 권한을 확인하는 쿠키를 씁니다(유효 1시간). 이 밖의 쿠키는 아래 분석 도구의 쿠키뿐입니다.</li>
             <li><strong>브라우저 저장소:</strong> 대시보드는 로그인 유지 정보(최대 14일), 화면 테마, 처음 사용 안내 진행 상태, 편집기 패널 위치를 브라우저에 저장합니다.</li>
-            <li>서비스 소개 페이지(pokeclip.com)는 쿠키와 브라우저 저장소를 쓰지 않습니다.</li>
-            <li>방문 분석, 광고, 행태정보 수집을 위한 쿠키나 도구는 쓰지 않습니다.</li>
+            <li><strong>분석 도구(PostHog):</strong> 서비스 소개 페이지(pokeclip.com)와 대시보드는 서비스 이용 통계(1절)를 위해 PostHog의 쿠키 두 개(이름이 ph_로 시작해 _posthog와 _posthog_cpm으로 끝남, 유효 1년)와 브라우저 저장소를 씁니다. 하나는 익명 방문 식별자를, 다른 하나는 두 주소가 같은 식별자를 쓰는지 맞춰 보는 표시만 담습니다. 이 쿠키는 pokeclip.com과 그 하위 주소가 함께 읽어, 소개 페이지에서 대시보드로 넘어온 방문을 한 방문자로 이어 봅니다.</li>
+            <li>광고를 위한 쿠키나 도구는 쓰지 않고, 이용 분석 정보를 광고에 쓰지 않습니다.</li>
           </ul>
           <p>브라우저 설정에서 쿠키와 사이트 데이터를 막을 수 있습니다. 막으면 로그인 유지와 영상 재생을 쓸 수 없습니다.</p>
+          <p>이용 분석만 거부하려면 브라우저의 추적 금지(Do Not Track) 설정을 켜거나 분석 스크립트를 차단하세요. 그러면 분석 도구로 정보를 보내지 않고, 서비스는 그대로 쓸 수 있습니다.</p>
         </div>
       </section>
 
@@ -265,6 +291,7 @@
             <li>접근하는 정보: 연동을 확인하는 YouTube 채널 ID와 채널 이름, 서비스가 올린 영상의 ID와 처리 상태, 동영상 업로드 권한(youtube.upload)과 채널 조회 권한(youtube.readonly).</li>
             <li>이용 방법: 스트리머나 스트리머가 위임한 편집자가 편집기의 「영상 만들기」에서 업로드 정보(제목·설명·태그·공개 범위·아동용 여부·썸네일)를 정하면, 영상이 완성되는 즉시 그 정보대로 스트리머의 채널에 올립니다. 완성된 영상을 따로 확인하는 단계는 없습니다. <strong>공개 범위를 「공개」로 고르면 올라가는 즉시 누구나 볼 수 있고, 구독자에게 알림이 갈 수 있습니다.</strong> 썸네일은 영상이 올라간 뒤 따로 붙입니다. 업로드 정보를 정해 요청하지 않은 영상은 올리지 않으며, 올린 뒤의 공개 범위 변경과 삭제는 스트리머가 YouTube에서 할 수 있습니다.</li>
             <li>공유: 5절과 7절에 적은 경우 말고는 공유하지 않습니다.</li>
+            <li>쿠키와 분석 도구: 서비스는 9절의 쿠키와 브라우저 저장소를 쓰고, 분석 도구(PostHog)가 방문자의 브라우저에서 이용 분석 정보를 수집합니다(2절·7절). Google에서 받은 사용자 데이터(YouTube 채널 ID·채널 이름, 영상 정보)는 분석 도구에 보내지 않습니다.</li>
             <li>저장: 접근 토큰은 암호화해 두고 연동 해제나 탈퇴 때 바로 지웁니다. YouTube에서 받은 채널 ID·채널 이름과 업로드한 영상의 ID는 연동 중에는 30일마다 YouTube에서 다시 확인해 갱신하고, 서비스에서 연동을 해제하거나 탈퇴하면 7일 안에, Google에서 권한을 철회했거나 접근 토큰을 갱신할 수 없게 되면 30일 안에 지웁니다.</li>
             <li>권한 철회: 서비스에서 연동을 해제하면 Google에도 권한 취소를 바로 요청합니다. <a href="https://security.google.com/settings/security/permissions" target="_blank" rel="noopener noreferrer">Google 보안 설정 페이지</a>에서도 언제든 서비스의 접근 권한을 철회할 수 있습니다.</li>
             <li>Google의 개인정보 처리는 <a href="http://www.google.com/policies/privacy" target="_blank" rel="noopener noreferrer">Google 개인정보처리방침</a>을 따릅니다.</li>

@@ -12,6 +12,7 @@ import {
 } from '@/api/youtubeLink';
 import { ReplaceLink } from '@/components/ReplaceLink';
 import { restoreReturnPath } from '@/components/app-shell/AuthGuard';
+import { track } from '@/lib/analytics';
 import { useAuthHydration, useAuthStore } from '@/stores/auth';
 import { CHANNEL_SETTINGS_PATH } from './youtubeOAuth';
 import styles from './YoutubeCallbackScreen.module.css';
@@ -76,6 +77,7 @@ export function YoutubeCallbackScreen() {
         // 목적지가 처음부터 다시 읽게 한다(스켈레톤 한 번). 남은 옛 값을 그냥 두면
         // 성공 토스트 직후에 「미연동」이 잠깐 스치므로 invalidate가 아니라 remove다.
         queryClient.removeQueries({ queryKey: youtubeLinkQueryOptions.queryKey });
+        track('platform_linked', { platform: 'youtube' }); // 채널 이름은 싣지 않는다 (POK-357)
         toast({
           tone: 'success',
           title: '유튜브 채널을 연동했어요',
