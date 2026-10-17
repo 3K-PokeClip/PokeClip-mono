@@ -4,7 +4,8 @@
 # 않는다.
 #
 # PATH 를 가짜 aws 디렉터리 하나로 두고(스크립트가 aws 밖의 외부 명령을 부르면
-# 실패한다), AWS 프로필 · 키 환경을 지운 하위 셸에서 스크립트를 돌린다. 사례마다
+# 실패한다), 호출자의 AWS_ 환경 변수를 이름과 상관없이 모두 지운 하위 셸에서
+# 스크립트를 돌린다. 사례마다
 # TMPDIR · HOME 은 빈 디렉터리로, SHELL 은 없는 경로로 주고, 로캘은 UTF-8 로
 # 고정한다(없으면 skip). 가짜 aws 는 aws-cli 2.36.7 처럼 값을 받고(fakebin/aws
 # 머리 주석), 받은 인자 · 환경 · 값을 사례 디렉터리에 적는다. 시험은 인자(비밀
@@ -79,7 +80,7 @@ EXPECTED_ARGV_HEAD+=' --output json --no-cli-auto-prompt --secret-id'
 readonly EXPECTED_ARGV_HEAD
 readonly EXPECTED_ARGV_TAIL='--secret-string file:///dev/stdin'
 # 사례 수(ok · skip 줄의 수). 사례를 더하거나 빼면 함께 고친다.
-readonly EXPECTED_CASES=49
+readonly EXPECTED_CASES=50
 # 호출자 환경의 표지 변수(셸에 살아 있는 토큰 변수를 흉내 낸 가짜 값). 사례
 # 디렉터리 어디에도 남지 않아야 한다 — 가짜 aws 는 환경 중 시험이 보는
 # 이름만 적는다.
@@ -188,7 +189,8 @@ write_pem() {
 }
 
 #######################################
-# put-secret-from-file.sh 를 돌린다. AWS 자격 증명 환경을 지운 하위 셸에서,
+# put-secret-from-file.sh 를 돌린다. 호출자의 AWS_ 변수를 이름과 상관없이
+# 모두 지운 하위 셸에서(실물 CLI 사례와 같은 꼴),
 # PATH 는 가짜 aws 디렉터리 하나 · TMPDIR 과 HOME 은 사례의 빈 디렉터리 ·
 # SHELL 은 없는 경로(스크립트가 "${SHELL}" -c 로 값을 다른 셸의 인자에 넘기면
 # 깨지게) · 로캘은 UTF-8(있으면) · 표준 입력은 /dev/null 로.
@@ -200,14 +202,16 @@ write_pem() {
 #   aws 모드, 스크립트 인자들.
 #######################################
 run_put_as() {
-  local shell_mode="$1" mode="$2"
+  local shell_mode="$1" mode="$2" var
   shift 2
   # 환경은 이 하위 셸 안에서만 바꾼다(의도).
   # shellcheck disable=SC2030,SC2031
   (
-    unset AWS_PROFILE AWS_DEFAULT_PROFILE AWS_ACCESS_KEY_ID \
-      AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_ROLE_ARN \
-      AWS_WEB_IDENTITY_TOKEN_FILE
+    for var in $(compgen -e); do
+      case "${var}" in
+        AWS_*) unset "${var}" ;;
+      esac
+    done
     export AWS_CONFIG_FILE=/nonexistent/put-secret-test
     export AWS_SHARED_CREDENTIALS_FILE=/nonexistent/put-secret-test
     export AWS_EC2_METADATA_DISABLED=true
@@ -749,6 +753,54 @@ test_quiet_shells() {
 }
 
 #######################################
+# 호출자 셸의 AWS_ 변수는 이름과 상관없이 스크립트 · aws 에 가지 않는다.
+# 흔한 자격 이름(AWS_ACCESS_KEY_ID 등) 밖의 토큰 이름 둘에 시험 중에 만든
+# 무작위 표지를 넣고 성공 경로를 돈다 — 표지가 사례 디렉터리(표준 출력 ·
+# 표준 오류 파일 포함)와 출력에 0회이고, 가짜 aws 가 받은 AWS_ 이름이 시험이
+# 넣은 것뿐인지 본다(이름만 대조 — 호출자의 다른 AWS_ 변수도 잡는다). 표지는
+# 셸 변수에만 두고 사례가 끝나면 지운다. 표지가 든 파일은 사례 디렉터리와
+# 함께 EXIT 트랩이 지운다. 실패 출력은 개수 · 이름만 낸다.
+# Globals:
+#   case_dir, input, out, err, status
+#######################################
+test_caller_aws_env() {
+  local bedrock="PutSecretTestAwsA${RANDOM}${RANDOM}${RANDOM}"
+  local container="PutSecretTestAwsB${RANDOM}${RANDOM}${RANDOM}"
+  local marker hits=0 line name extra=""
+  new_case || return
+  write_input '%s\n' "${ONE_LINE_VALUE}"
+  export AWS_BEARER_TOKEN_BEDROCK="${bedrock}"
+  export AWS_CONTAINER_AUTHORIZATION_TOKEN="${container}"
+  run_put ok cdn-secret "${input}"
+  unset AWS_BEARER_TOKEN_BEDROCK AWS_CONTAINER_AUTHORIZATION_TOKEN
+  if [[ "${status}" -ne 0 ]]; then
+    fail "caller-aws-env: 종료 0 을 기대했으나 ${status}"
+    return
+  fi
+  for marker in "${bedrock}" "${container}"; do
+    if grep -rqF -- "${marker}" "${case_dir}" ||
+      [[ "${out}${err}" == *"${marker}"* ]]; then
+      hits=$((hits + 1))
+    fi
+  done
+  while IFS= read -r line; do
+    [[ "${line}" == AWS_*=* ]] || continue
+    name="${line%%=*}"
+    case "${name}" in
+      AWS_PAGER | AWS_CONFIG_FILE | AWS_SHARED_CREDENTIALS_FILE) ;;
+      AWS_EC2_METADATA_DISABLED) ;;
+      *) extra+=" ${name}" ;;
+    esac
+  done <"${case_dir}/aws/env"
+  if ((hits > 0)) || [[ -n "${extra}" ]]; then
+    fail "caller-aws-env: 호출자 AWS_ 표지 ${hits}/2 개가 남음 · 시험 밖 AWS_" \
+      "이름:${extra:- 없음}"
+    return
+  fi
+  pass "caller-aws-env → 호출자 AWS_ 변수 0건"
+}
+
+#######################################
 # 실물 CLI 계약: 진짜 aws 가 값 넘기는 법을 받아들여 네트워크 단계까지 가는지
 # 본다. 가짜 자격 · 빈 설정 · 격리 HOME 이고 울타리는 둘이다 — 엔드포인트
 # (AWS_ENDPOINT_URL)를 닫힌 로컬 주소 127.0.0.1:9 로 두고, 프록시도 같은
@@ -1037,6 +1089,7 @@ main() {
   test_signing_key
   test_one_line
   test_quiet_shells
+  test_caller_aws_env
   test_aws_failures
   test_real_cli_contract
   test_no_heredoc
