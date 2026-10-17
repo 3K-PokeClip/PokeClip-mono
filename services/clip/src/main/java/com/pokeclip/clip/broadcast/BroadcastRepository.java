@@ -44,6 +44,13 @@ public interface BroadcastRepository extends JpaRepository<Broadcast, Long> {
     Optional<String> findStreamerIdByStreamId(@Param("streamId") String streamId);
 
     /**
+     * 조각 장부·녹화 경로를 찾는 물리 키(POK-233). {@link Broadcast#ingestKey()}와 같은 규칙을 SQL로 쓴 것이다.
+     * 엔티티를 안 올리는 이유는 {@link #findStreamerIdByStreamId}와 같다(같은 트랜잭션의 재조회가 낡은 인스턴스를 받는다).
+     */
+    @Query("select coalesce(b.ingestStreamId, b.streamId) from Broadcast b where b.streamId = :streamId")
+    Optional<String> findIngestKeyByStreamId(@Param("streamId") String streamId);
+
+    /**
      * 같은 방송 줄을 고치는 동안 다른 처리를 세운다. FIFO 큐가 같은 그룹을 동시에
      * 주지 않으므로 드물지만, 그것은 큐의 보장이지 우리 코드의 보장이 아니다.
      */
@@ -97,7 +104,8 @@ public interface BroadcastRepository extends JpaRepository<Broadcast, Long> {
      * 붙고 색인이 통째로 버려진다(계획 검증 실측: 버퍼 9 → 1,428).
      */
     @Query(value = """
-            SELECT stream_id AS streamId, streamer_id AS streamerId, started_at AS startedAt
+            SELECT stream_id AS streamId, streamer_id AS streamerId, started_at AS startedAt,
+                   COALESCE(ingest_stream_id, stream_id) AS ingestStreamId
               FROM broadcasts
              WHERE status = 'live'
              ORDER BY started_at DESC NULLS LAST

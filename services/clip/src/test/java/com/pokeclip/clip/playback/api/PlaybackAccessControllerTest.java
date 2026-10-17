@@ -181,6 +181,24 @@ class PlaybackAccessControllerTest extends IntegrationTestSupport {
     }
 
     /**
+     * 미디어 주소의 {@code {streamId}} 자리는 <b>물리 키</b>다(계약3·계약9, POK-233). 방송 번호가 회차 번호가 되면 그 이름의 경로가
+     * 없어, 방송 번호로 서명하면 브라우저가 쿠키를 안 붙이고 CDN이 403이다. 응답의 {@code streamId}는 방송 번호 그대로다.
+     */
+    @Test
+    void 회차_번호_방송은_물리_키_경로로_서명한다() throws Exception {
+        방송을_넣는다("S-20260930-010000-key-p-1");
+        jdbc.update("UPDATE broadcasts SET ingest_stream_id = 'key-p' WHERE stream_id = 'S-20260930-010000-key-p-1'");
+        볼_수_있다("OWNER");
+
+        HttpResponse<String> 응답 = 부른다("S-20260930-010000-key-p-1");
+
+        assertThat(응답.statusCode()).isEqualTo(200);
+        assertThat(경로별_쿠키(응답).keySet()).containsExactly("/live/key-p", "/dvr/key-p", "/vod/key-p");
+        assertThat(응답.body()).contains("\"streamId\":\"S-20260930-010000-key-p-1\"")
+                .contains("/live/key-p/*");
+    }
+
+    /**
      * 🔴 <b>이 카드가 막는 것: 로그인만 하면 남의 방송 영상을 받는 것.</b> 404 본문이 「없는 방송」과
      * 같고 <b>쿠키가 한 개도 안 나간다</b> — 404인데 쿠키가 실리면 상태 코드만 거절이다.
      */

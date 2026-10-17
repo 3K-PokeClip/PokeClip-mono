@@ -185,15 +185,111 @@ class ReattacherTest extends IntegrationTestSupport {
         verify(client).list();
     }
 
-    /** 포기 메모가 있으면 안 붙는다(PRD 결정). 같은 토큰이면 또 401이고 여는 트리거도 없다. */
+    /**
+     * 연동과 무관한 사유로 포기한 메모가 있으면 안 붙는다(PRD 결정). 다시 연동해도 안 풀리는 사유라
+     * 1분마다 두드려 얻을 것이 없다: 24시간 치우기가 지울 때까지 건너뛴다.
+     *
+     * <p>🔴 <b>auth는 회원 7에게 열쇠를 준다.</b> 그래서 「연동 문제 포기」 갈래로 잘못 흘리면 이 검사가
+     * 실제로 붙어서 빨간불이 된다: 사유로 가르는 거름망을 재는 자리다(POK-342).
+     */
     @Test
     @Timeout(30)
-    void 포기_기록이_있는_방송은_건너뛴다() {
-        store.rememberStopped(A001, StopReason.LINK_UNAVAILABLE.name(),
+    void 연동과_무관한_포기_기록이_있는_방송은_건너뛴다() {
+        store.rememberStopped(A001, StopReason.SEND_MISUSE.name(),
                 Instant.parse("2026-08-31T03:00:00Z"));
         returns(live(A001, "7", 시작));
 
         메모가_있으면_안_붙는다();
+    }
+
+    // ── 연동 문제로 포기한 방송 (POK-342) ─────────────────────────────────
+
+    /**
+     * 방송 중에 연동이 끊겨 포기했는데 스트리머가 다시 연동했다: <b>다음 회차에 붙고 포기 메모를 지운다.</b>
+     * 지우지 않으면 그 세션이 나중에 끝나도 창구가 그 메모를 근거로 「연동을 다시 하세요」를 답하고,
+     * 프로세스가 재시작된 뒤엔 같은 방송을 또 이 갈래로 두드린다.
+     *
+     * <p>문항 6: 「붙었다」(등록부)와 「문을 두드렸다」를 같이 본다.
+     */
+    @Test
+    @Timeout(30)
+    void 연동_문제로_포기한_방송은_다시_연동되면_붙고_포기_기록을_지운다() {
+        store.rememberStopped(A001, StopReason.SUBSCRIBE_REJECTED.name(),
+                Instant.parse("2026-08-31T04:05:00Z"));
+        returns(live(A001, "7", 시작));
+
+        try (LogCaptor captor = new LogCaptor()) {
+            newReattacher(lanes).sweep();
+
+            assertThat(lanes.awaitIdle(IDLE_BUDGET)).isTrue();
+            assertThat(sessions.started()).containsExactly(A001);
+            assertThat(registry.currentStreamIdOf(7L)).isEqualTo(A001);
+            assertThat(store.find(A001)).as("붙은 뒤 포기 메모").isEmpty();
+            assertThat(captor.messages()).anyMatch(line -> line.startsWith("chat.reattach.relinked")
+                    && line.contains("stream=" + A001) && line.contains("reason=SUBSCRIBE_REJECTED"));
+            assertThat(captor.messages()).anyMatch(line -> line.startsWith("chat.reattach.swept")
+                    && line.contains("submitted=1") && line.contains("relink=1"));
+        }
+    }
+
+    /**
+     * 연동이 아직 끊겨 있으면 안 붙고 <b>메모를 그대로 둔다</b>: 화면은 계속 「연동을 다시 하세요」다.
+     * 다음 회차가 다시 묻는다(두 번째 회차까지 돌려 「한 번 묻고 마는」 구현을 막는다).
+     *
+     * <p>메모의 남긴 시각이 안 바뀌는 것까지 본다: 바뀌면 창구의 {@code since}가 매분 「방금」으로 밀린다.
+     */
+    @Test
+    @Timeout(30)
+    void 연동이_아직_끊겨_있으면_안_붙고_포기_기록을_남긴_채_다음_회차에_다시_묻는다() {
+        Instant 포기 = Instant.parse("2026-08-31T04:05:00Z");
+        store.rememberStopped(C001, StopReason.LINK_UNAVAILABLE.name(), 포기);
+        returns(live(C001, "9", 시작));
+        Reattacher reattacher = newReattacher(lanes);
+
+        reattacher.sweep();
+        assertThat(lanes.awaitIdle(IDLE_BUDGET)).isTrue();
+        reattacher.sweep();
+        assertThat(lanes.awaitIdle(IDLE_BUDGET)).isTrue();
+
+        assertThat(sessions.started()).containsExactly(C001, C001);
+        assertThat(registry.currentStreamIdOf(9L)).isNull();
+        EndedStream memo = store.find(C001).orElseThrow();
+        assertThat(memo.stopReason()).isEqualTo(StopReason.LINK_UNAVAILABLE.name());
+        assertThat(memo.createdAt()).isEqualTo(포기);
+    }
+
+    /**
+     * 목록을 받은 뒤 줄에 들어가기 전에 <b>종료 편지가 그 포기 메모를 「끝남」으로 바꿨다</b>
+     * ({@code remember}가 {@code stop_reason}을 비운다). 끝난 방송에 붙으면 닫을 트리거가 없다:
+     * 줄 안에서 다시 보고 건너뛴다.
+     */
+    @Test
+    @Timeout(30)
+    void 연동_문제_포기_메모가_그_사이_종료로_바뀌면_안_붙는다() throws Exception {
+        store.rememberStopped(A001, StopReason.REVOKED.name(), Instant.parse("2026-08-31T04:05:00Z"));
+        CountDownLatch 잡았다 = new CountDownLatch(1);
+        CountDownLatch 놓는다 = new CountDownLatch(1);
+        lanes.submit(LaneKey.of("7"), () -> {
+            잡았다.countDown();
+            await(놓는다);
+            store.remember(A001, 9, Instant.parse("2026-08-31T04:06:00Z"));
+        });
+        assertThat(잡았다.await(5, TimeUnit.SECONDS)).isTrue();
+        returns(live(A001, "7", 시작));
+
+        try (LogCaptor captor = new LogCaptor()) {
+            newReattacher(lanes).sweep();
+
+            assertThat(lanes.inFlight()).as("재부착이 실제로 제출됐다").isEqualTo(2);
+            놓는다.countDown();
+            assertThat(lanes.awaitIdle(IDLE_BUDGET)).isTrue();
+            assertThat(sessions.started()).isEmpty();
+            assertThat(captor.messages()).anyMatch(line ->
+                    line.startsWith("chat.reattach.skipped_late")
+                            && line.contains("stream=" + A001)
+                            && line.contains("reason=MEMO_APPEARED"));
+        }
+        assertThat(store.find(A001).orElseThrow().stopped()).as("종료 메모는 남는다").isFalse();
     }
 
     /** clip이 종료 알림을 놓쳐 「방송 중」으로 남긴 줄이다. 우리는 끝난 것을 안다. */
@@ -334,7 +430,7 @@ class ReattacherTest extends IntegrationTestSupport {
      *
      * <p><b>두 번째 회차를 같이 돌리는 것이 이 검사의 이빨이다.</b> 메모 표만 보면
      * 「이 검사가 쓰는 문에 레코더가 안 물려 있어서」도 초록이다 — 다음 회차가 실제로
-     * 문을 다시 두드리는 것까지 봐야 <b>거름망({@code sweepOnce}의 {@code findAllIds})이
+     * 문을 다시 두드리는 것까지 봐야 <b>거름망({@code sweepOnce}의 {@code findAll})이
      * 그 방송을 안 걸렀다</b>가 재어진다.
      */
     @Test

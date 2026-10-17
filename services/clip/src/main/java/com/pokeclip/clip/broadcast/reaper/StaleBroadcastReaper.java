@@ -60,20 +60,39 @@ public class StaleBroadcastReaper {
      * 회차 비용이 방송 수에 비례한다. {@code seq}는 단조 증가라 최신 조각과 같다.
      *
      * <p>{@code status}는 리터럴이다({@code BroadcastRepository.findLive}와 같은 이유).
-     * 🔴 <b>장부의 열쇠는 {@code broadcasts.stream_id}다</b> — 세그먼트 조회({@code StreamSegmentReader})와
-     * 같은 축(물리 축)이고, POK-233이 회차 좌표로 갈아탈 때 둘을 같이 옮겨야 한다.
+     * 🔴 <b>장부의 열쇠는 방송의 물리 키다</b>(POK-233) — 세그먼트 조회({@code StreamSegmentReader})와 같은 축이다.
+     * {@code stream_id}는 회차 번호가 되어 장부에 없는 이름이라, 그것으로 찾으면 조각이 늘 없어 <b>살아있는 방송을 닫는다</b>.
+     *
+     * <p>🔴 <b>같은 물리 키로 더 늦게 시작한 방송이 있으면 그 시작 앞 조각만 센다.</b> 물리 키는 스트리머마다 사실상
+     * 고정이라 방송 여럿이 나눠 쓴다. 종료 편지를 놓친 방송 뒤에 같은 키로 새 방송이 켜지면, 이 경계 없이는 새 방송 조각이
+     * 옛 방송의 신호가 되어 새 방송이 끝날 때까지 옛 방송이 안 닫히고 수집기가 치지직 자리를 둘 붙잡는다. 경계가 걸리면
+     * 뒤에서부터 새 방송 조각을 건너뛰며 읽는다. 그 일이 드물어 색인을 따로 두지 않았다.
+     * 한계: 경계는 새 방송의 <b>시작 편지</b> 시각이라, 녹화기가 편지보다 먼저 만든 새 방송 조각(편지 지연만큼)은 옛 방송 신호로
+     * 센다. 옛 방송의 종료 시각이 그만큼 늦게 찍히고 닫히는 것도 그만큼 늦다. 경계를 앞당기면 반대로 옛 방송의 진짜 마지막 조각을
+     * 잘라 먹어 대가가 같은 크기다(로컬 리뷰 1라운드).
      */
+    private static final String LAST_SEGMENT_LATERAL = """
+            SELECT start_wall_utc FROM stream_segments s
+             WHERE s.stream_id = COALESCE(b.ingest_stream_id, b.stream_id)
+               AND s.start_wall_utc < COALESCE(
+                       (SELECT MIN(n.started_at) FROM broadcasts n
+                         WHERE COALESCE(n.ingest_stream_id, n.stream_id) = COALESCE(b.ingest_stream_id, b.stream_id)
+                           AND n.started_at > b.started_at),
+                       'infinity'::timestamptz)
+             ORDER BY s.seq DESC LIMIT 1""";
+
     static final String LIVE_WITH_LAST_SEGMENT = """
             SELECT b.stream_id, b.started_at, b.created_at, s.start_wall_utc AS last_segment_at
               FROM broadcasts b
-              LEFT JOIN LATERAL (SELECT start_wall_utc FROM stream_segments s
-                                  WHERE s.stream_id = b.stream_id
-                                  ORDER BY seq DESC LIMIT 1) s ON true
-             WHERE b.status = 'live'""";
+              LEFT JOIN LATERAL (%s) s ON true
+             WHERE b.status = 'live'""".formatted(LAST_SEGMENT_LATERAL);
 
-    /** 락을 잡은 뒤 다시 읽는 한 줄 — 후보를 고른 뒤 락을 잡기 전에 들어온 조각을 본다. */
+    /** 락을 잡은 뒤 다시 읽는 한 줄 — 후보를 고른 뒤 락을 잡기 전에 들어온 조각을 본다. 경계는 위와 같다. */
     static final String LAST_SEGMENT_OF = """
-            SELECT start_wall_utc FROM stream_segments WHERE stream_id = ? ORDER BY seq DESC LIMIT 1""";
+            SELECT s.start_wall_utc
+              FROM broadcasts b
+              CROSS JOIN LATERAL (%s) s
+             WHERE b.stream_id = ?""".formatted(LAST_SEGMENT_LATERAL);
 
     private final JdbcTemplate jdbc;
     private final BroadcastRepository broadcasts;

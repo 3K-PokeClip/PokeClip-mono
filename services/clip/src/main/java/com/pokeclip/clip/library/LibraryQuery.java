@@ -38,6 +38,8 @@ class LibraryQuery {
     private static final String STATUS_CASE = """
             CASE WHEN c.id IS NULL OR c.recipe_version <> r.recipe_version THEN 'editing'
                  WHEN c.status IN ('queued', 'rendering') THEN 'rendering'
+                 WHEN c.status = 'rendered' AND u.status IN ('queued', 'uploading') THEN 'uploading'
+                 WHEN c.status = 'rendered' AND u.status IN ('checking', 'uploaded') THEN u.status
                  ELSE c.status END""";
 
     private static final String SELECT = """
@@ -49,6 +51,10 @@ class LibraryQuery {
               LEFT JOIN LATERAL (SELECT id, recipe_version, status FROM clips
                                   WHERE recipe_id = r.id
                                   ORDER BY (recipe_version = r.recipe_version) DESC, id DESC LIMIT 1) c ON TRUE
+              -- 그 영상의 가장 최근 업로드(POK-220). 실패한 업로드는 영상 상태(rendered = 업로드 대기)로 돌아간다.
+              LEFT JOIN LATERAL (SELECT status FROM clip_uploads
+                                  WHERE clip_id = c.id
+                                  ORDER BY id DESC LIMIT 1) u ON TRUE
             """;
 
     private static final RowMapper<LibraryRow> ROW = (rs, i) -> new LibraryRow(

@@ -84,7 +84,7 @@ class EndedRejectionTest extends IntegrationTestSupport {
 
     @Test
     void 큐가_차서_ended를_못_보내면_자리를_바로_회수한다() throws Exception {
-        broadcasts.save(Broadcast.startedNow("s-full", TestIds.STREAMER, 1L, Instant.now(), null));
+        broadcasts.save(Broadcast.startedNow("s-full", TestIds.STREAMER, null, 1L, Instant.now(), null));
         String big = "x".repeat(20_000);
 
         try (LogCaptor logs = new LogCaptor();
@@ -93,8 +93,10 @@ class EndedRejectionTest extends IntegrationTestSupport {
             awaitUntil(() -> registry.connectionCount() == 1, Duration.ofSeconds(3),
                     "연결이 명부에 안 올랐다");
 
-            // 전송 스레드를 소켓 쓰기에 세우고 큐(5)를 넘치게 만든다.
-            for (int i = 0; i < 60; i++) {
+            // 전송 스레드를 소켓 쓰기에 세우고 큐(5)를 넘치게 만든다. 소켓 버퍼가 얼마나 받아 주는지는 기계마다
+            // 다르다(리눅스 루프백은 1.2MB를 다 받아 60번으로는 쓰기가 안 막혔다, POK-330). 그래서 횟수가 아니라
+            // 「거부가 날 때까지」 넣는다. 600번(약 12MB)을 넣고도 안 나면 아래 단언이 실패한다.
+            for (int i = 0; i < 600 && 거부_건수(logs) == 0; i++) {
                 service.record("s-full", auto("evt-fill-" + i, 1_000_000L + i * 100_000L, big));
                 Thread.sleep(10);
             }
@@ -124,7 +126,7 @@ class EndedRejectionTest extends IntegrationTestSupport {
     /** 대조군 — 같은 설정에서 큐에 자리가 있으면 실제로 보내고 닫는다. 「항상 빼는 것」이 아니다. */
     @Test
     void 큐에_자리가_있으면_ended가_실제로_가고_닫힌다() {
-        broadcasts.save(Broadcast.startedNow("s-room", TestIds.STREAMER, 1L, Instant.now(), null));
+        broadcasts.save(Broadcast.startedNow("s-room", TestIds.STREAMER, null, 1L, Instant.now(), null));
 
         try (LogCaptor logs = new LogCaptor();
              SseReader reader = new SseReader("http://localhost:" + port + "/api/clip/broadcasts/s-room/events",

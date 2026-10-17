@@ -4,8 +4,11 @@ import com.pokeclip.clip.library.LibraryEntry.BroadcastSummary;
 import com.pokeclip.clip.recipe.RecipeDocument;
 import com.pokeclip.clip.recipe.RecipeDocument.Cut;
 import com.pokeclip.clip.render.ClipSnapshot;
+import com.pokeclip.clip.upload.LiveUpload;
+import com.pokeclip.clip.upload.UploadRequestBrief;
 
 import java.time.Instant;
+import java.util.List;
 
 /**
  * 보관함 상세 — {@link LibraryEntry}의 칸 전부 + 편집본 본문({@code recipe}, 계약6 JSON 그대로).
@@ -21,10 +24,25 @@ public record LibraryDetail(long recipeId,
                             ClipSnapshot latestClip,
                             Instant createdAt,
                             Instant updatedAt,
+                            String thumbnailUrl,
+                            UploadRequestBrief uploadRequest,
+                            List<LiveUpload> liveUploads,
                             RecipeDocument recipe) {
 
     static LibraryDetail of(LibraryEntry entry, RecipeDocument recipe) {
         return new LibraryDetail(entry.recipeId(), entry.streamId(), entry.creatorId(), entry.recipeVersion(), entry.cut(),
-                entry.status(), entry.broadcast(), entry.latestClip(), entry.createdAt(), entry.updatedAt(), recipe);
+                entry.status(), entry.broadcast(), entry.latestClip(), entry.createdAt(), entry.updatedAt(), entry.thumbnailUrl(),
+                entry.uploadRequest(), entry.liveUploads(), recipe);
+    }
+
+    /** 목록 줄과 같은 칸을 되돌린다(사진만 트랜잭션 밖에서 붙이려고). */
+    LibraryEntry entry() {
+        return new LibraryEntry(recipeId, streamId, creatorId, recipeVersion, cut, status, broadcast, latestClip, createdAt,
+                updatedAt, thumbnailUrl, uploadRequest, liveUploads);
+    }
+
+    LibraryDetail withThumbnailUrl(String url) {
+        return new LibraryDetail(recipeId, streamId, creatorId, recipeVersion, cut, status, broadcast, latestClip, createdAt,
+                updatedAt, url, uploadRequest, liveUploads, recipe);
     }
 }

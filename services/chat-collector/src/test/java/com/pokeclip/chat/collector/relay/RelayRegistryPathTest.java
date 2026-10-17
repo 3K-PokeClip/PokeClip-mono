@@ -498,6 +498,25 @@ class RelayRegistryPathTest extends IntegrationTestSupport {
         return jdbc.queryForObject("SELECT count(*) FROM " + table + " WHERE stream_id = ?", Long.class, streamId);
     }
 
+    /**
+     * 탈퇴(POK-256): 그 채널을 걷는 세션을 붙었든 붙는 중이든 닫되, 탈퇴 시각 뒤에 시작한 세션(같은 채널을 새로 연동한 계정)과
+     * 다른 채널은 남긴다(PR #220 codex 2판).
+     */
+    @Test
+    void 탈퇴_채널의_세션만_탈퇴_시각_전_것만_닫는다() throws Exception {
+        RelayBuffer buffer = startRelay(recordingClient());
+        givenRegistry(buffer);
+        Instant cutoff = Instant.parse("2026-10-08T00:00:00Z");
+        registry.open(new SessionKey("relay-purge-old", 81L, "CH-gone", cutoff.minusSeconds(60)), "tok-81");
+        registry.open(new SessionKey("relay-purge-new", 82L, "CH-gone", cutoff.plusSeconds(60)), "tok-82");
+        registry.open(new SessionKey("relay-purge-other", 83L, "CH-other", cutoff.minusSeconds(60)), "tok-83");
+
+        assertThat(registry.closeChannel("CH-gone", cutoff)).isEqualTo(1);
+
+        assertThat(registry.activeStreamIds()).contains("relay-purge-new", "relay-purge-other")
+                .doesNotContain("relay-purge-old");
+    }
+
     private static SessionKey key(String streamId, long streamerId) {
         return new SessionKey(streamId, streamerId, "CH", Instant.EPOCH.plusSeconds(KEY_SEQ.incrementAndGet()));
     }

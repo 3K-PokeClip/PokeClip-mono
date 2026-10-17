@@ -1,5 +1,6 @@
 package com.pokeclip.clip.broadcast;
 
+import com.pokeclip.clip.purge.StreamerPurgeStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -28,14 +29,28 @@ public class BroadcastEventProcessor {
 
     private final BroadcastRepository broadcasts;
     private final BroadcastEventRepository events;
+    private final StreamerPurgeStore purges;
 
-    public BroadcastEventProcessor(BroadcastRepository broadcasts, BroadcastEventRepository events) {
+    public BroadcastEventProcessor(BroadcastRepository broadcasts, BroadcastEventRepository events,
+                                   StreamerPurgeStore purges) {
         this.broadcasts = broadcasts;
         this.events = events;
+        this.purges = purges;
     }
 
     @Transactional
     public ProcessResult process(LifecycleEnvelope envelope) {
+        // 탈퇴한 스트리머의 편지는 버린다(POK-256). 지운 뒤 늦게 온 시작·종료 편지가 방송 줄을 되살린다.
+        // 편지 기록(broadcast_events)도 안 남긴다: 그 표도 탈퇴 때 지운 것이다.
+        if (purges.isPurged(envelope.streamerId())) {
+            // 편지의 물리 키는 남긴다. 영상 서버가 이미 그 키로 조각을 적었는데 정리가 방송 줄을 못 봤으면, 이 키 말고는
+            // 그 조각을 찾을 길이 없다(PR #220 codex 3판). 명부를 다시 열어 정리기가 그 조각을 지우게 한다.
+            purges.rememberSegmentKey(envelope.streamerId(),
+                    envelope.ingestStreamId() != null ? envelope.ingestStreamId() : envelope.streamId());
+            log.info("broadcast.event.purged_streamer_dropped eventId={} streamId={} type={}",
+                    envelope.eventId(), envelope.streamId(), envelope.eventType());
+            return ProcessResult.IGNORED_PURGED;
+        }
         int inserted = events.insertIfAbsent(envelope.eventId(), envelope.streamId(),
                 envelope.type().name(), envelope.sequence(), Instant.now());
         if (inserted == 0) {
@@ -54,14 +69,14 @@ public class BroadcastEventProcessor {
             // 진 쪽은 트랜잭션이 통째로 되감긴 뒤 재전송으로 다시 온다.
             Broadcast created = switch (envelope.type()) {
                 case BROADCAST_STARTED -> Broadcast.startedNow(envelope.streamId(),
-                        envelope.streamerId(), envelope.sequence(), envelope.occurredAt(),
+                        envelope.streamerId(), envelope.ingestStreamId(), envelope.sequence(), envelope.occurredAt(),
                         envelope.trackManifestJson());
                 case BROADCAST_ENDED -> {
                     // ADR-016의 ended placeholder. 서버를 죽이지 않고 흔적을 남긴다.
                     log.warn("broadcast.ended_before_started streamId={} eventId={} sequence={}",
                             envelope.streamId(), envelope.eventId(), envelope.sequence());
                     yield Broadcast.endedPlaceholder(envelope.streamId(), envelope.streamerId(),
-                            envelope.sequence(), envelope.occurredAt());
+                            envelope.ingestStreamId(), envelope.sequence(), envelope.occurredAt());
                 }
             };
             broadcasts.save(created);
@@ -69,6 +84,8 @@ public class BroadcastEventProcessor {
         }
 
         Broadcast broadcast = existing.get();
+        // 순서와 무관하게 채운다. 낡은 편지라도 같은 회차의 경로를 싣고, 빈 칸으로 두면 조각을 streamId로 찾아 못 찾는다
+        broadcast.fillIngestStreamId(envelope.ingestStreamId());
         boolean applied = switch (envelope.type()) {
             case BROADCAST_STARTED -> broadcast.applyStarted(envelope.sequence(),
                     envelope.occurredAt(), envelope.trackManifestJson());
@@ -76,6 +93,14 @@ public class BroadcastEventProcessor {
         };
 
         if (!applied) {
+            // 낡은 시작이라도 종료가 먼저 와 빈 시작 시각은 채운다(POK-327). 상태·순서 번호는 그대로다
+            if (envelope.type() == LifecycleEventType.BROADCAST_STARTED
+                    && broadcast.fillStartOfPlaceholder(envelope.occurredAt(), envelope.trackManifestJson())) {
+                log.info("broadcast.placeholder.started_filled streamId={} eventId={} sequence={} lastSequence={} startedAt={}",
+                        envelope.streamId(), envelope.eventId(), envelope.sequence(),
+                        broadcast.getLastSequence(), envelope.occurredAt());
+                return ProcessResult.PROCESSED;
+            }
             log.warn("broadcast.event.stale_ignored streamId={} eventId={} sequence={} lastSequence={}",
                     envelope.streamId(), envelope.eventId(), envelope.sequence(),
                     broadcast.getLastSequence());

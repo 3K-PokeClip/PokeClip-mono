@@ -1,6 +1,8 @@
 package com.pokeclip.clip.broadcast.api;
 
 import ch.qos.logback.classic.Level;
+import com.pokeclip.clip.broadcast.BroadcastEventProcessor;
+import com.pokeclip.clip.broadcast.Envelopes;
 import com.pokeclip.clip.support.IntegrationTestSupport;
 import com.pokeclip.clip.support.TestIds;
 import com.pokeclip.clip.support.TestTokens;
@@ -45,6 +47,9 @@ class BroadcastListControllerTest extends IntegrationTestSupport {
 
     private static final String ACCESSIBLE = "/internal/editor-delegations/accessible";
 
+    /** 수집기의 「여러 방송의 마지막 제목」 창구(POK-259). */
+    private static final String TITLES = "/internal/broadcast-info/latest";
+
     /** JWT {@code sub}. 방송 픽스처의 스트리머 번호와 <b>다른 사람</b>이다. */
     private static final String 요청자 = "4174";
 
@@ -58,10 +63,12 @@ class BroadcastListControllerTest extends IntegrationTestSupport {
 
     private final MockMvc mvc;
     private final JdbcTemplate jdbc;
+    private final BroadcastEventProcessor processor;
 
-    BroadcastListControllerTest(MockMvc mvc, JdbcTemplate jdbc) {
+    BroadcastListControllerTest(MockMvc mvc, JdbcTemplate jdbc, BroadcastEventProcessor processor) {
         this.mvc = mvc;
         this.jdbc = jdbc;
+        this.processor = processor;
     }
 
     @BeforeEach
@@ -434,6 +441,254 @@ class BroadcastListControllerTest extends IntegrationTestSupport {
                 .andExpect(jsonPath("$.broadcasts[0].endedAt").value(지난_기한.minus(육십일).toString()));
     }
 
+    // ── 시각 기준점(POK-255) ───────────────────────────────────────
+
+    /**
+     * 기준점 = 첫 조각의 절대 시각 − 그 조각의 {@code start_pts_ms}. 첫 조각이 방송 시작 편지보다 <b>32초 늦게</b>
+     * 시작한 방송(2026-09-17 실측과 같은 모양)이면 기준점이 시작 편지가 아니라 첫 조각 쪽이어야 한다 — 웹이 이 값에 카드 ms를
+     * 더해 컷을 만들고, 시작 편지로 대신하면 편집 구간이 32초 어긋난다.
+     */
+    @Test
+    void 시각_기준점은_첫_조각의_절대_시각에서_pts를_뺀_값이다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("s-origin", TestIds.STREAMER, "live");
+        Instant 첫_조각 = 시작_시각.plusSeconds(32);
+        // 조각 셋: pts 1500부터(녹화기가 앞을 잘랐다), playback_pdt는 조각 길이만큼 이어진다. 벽시계는 흔들린다
+        조각을_넣는다("s-origin", 1, 1_500, 첫_조각.plusMillis(1_500), 첫_조각.plusMillis(1_500 + 120));
+        조각을_넣는다("s-origin", 2, 5_500, 첫_조각.plusMillis(5_500), 첫_조각.plusMillis(5_500 - 80));
+        조각을_넣는다("s-origin", 3, 9_500, 첫_조각.plusMillis(9_500), 첫_조각.plusMillis(9_500 + 40));
+
+        목록("?state=live")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.broadcasts[0].timelineOriginAt").value(첫_조각.toString()));
+    }
+
+    /**
+     * 방송 번호가 회차 번호가 되면(POK-233) 같은 스트리머의 방송 둘이 <b>한 물리 키</b>를 나눠 쓴다. 조각은 물리 키로 찾고, 기준점은
+     * 방송 번호 자리에 실린다 — 맵을 물리 키로 채우면 목록이 방송 번호로 꺼내다 못 찾아 둘 다 빈다. 영상 주소용 물리 키도 싣는다.
+     */
+    @Test
+    void 물리_키를_나눠_쓰는_방송_둘은_각자_제_시간의_조각으로_기준점을_잰다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        Instant 어제 = 시작_시각.minusSeconds(86_400);
+        방송을_넣는다("S-old-1", TestIds.STREAMER, "ended", 어제, 어제.plusSeconds(3_600), 어제.plusSeconds(86_400 * 60L));
+        방송을_넣는다("S-new-2", TestIds.STREAMER, "live");
+        jdbc.update("UPDATE broadcasts SET ingest_stream_id = 'key-shared'");
+        조각을_넣는다("key-shared", 1, 0, 어제.plusSeconds(7), 어제.plusSeconds(7));
+        조각을_넣는다("key-shared", 900, 3_600_000, 시작_시각.plusSeconds(11), 시작_시각.plusSeconds(11));
+
+        목록("?state=live")
+                .andExpect(jsonPath("$.broadcasts[0].streamId").value("S-new-2"))
+                .andExpect(jsonPath("$.broadcasts[0].ingestStreamId").value("key-shared"))
+                .andExpect(jsonPath("$.broadcasts[0].timelineOriginAt")
+                        .value(시작_시각.plusSeconds(11).minusMillis(3_600_000).toString()));
+        목록("?state=past")
+                .andExpect(jsonPath("$.broadcasts[0].streamId").value("S-old-1"))
+                .andExpect(jsonPath("$.broadcasts[0].timelineOriginAt").value(어제.plusSeconds(7).toString()));
+    }
+
+    /** 물리 키가 빈 옛 줄은 방송 번호가 곧 영상 주소의 키다 — 칸을 비우면 화면이 주소를 못 만든다. */
+    @Test
+    void 물리_키가_빈_옛_줄은_방송_번호를_물리_키로_싣는다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("old-key", TestIds.STREAMER, "live");
+
+        목록("?state=live").andExpect(jsonPath("$.broadcasts[0].ingestStreamId").value("old-key"));
+    }
+
+    /** 재생 시각({@code playback_pdt})이 아직 빈 조각은 벽시계로 잰다 — 렌더 주문의 조각 찾기와 같은 축이다. */
+    @Test
+    void 재생_시각이_빈_조각은_벽시계로_잰다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("s-wall", TestIds.STREAMER, "live");
+        조각을_넣는다("s-wall", 1, 0, null, 시작_시각.plusSeconds(10));
+
+        목록("?state=live").andExpect(jsonPath("$.broadcasts[0].timelineOriginAt")
+                .value(시작_시각.plusSeconds(10).toString()));
+    }
+
+    /**
+     * 장부의 {@code stream_id}는 물리 키(오늘은 스트림키)라 <b>같은 이름으로 다른 방송의 조각</b>도 쌓인다. 방송 시간
+     * 밖(시작 10분 전보다 이른) 조각은 안 본다 — 보면 지난 방송의 기준점이 나온다.
+     */
+    @Test
+    void 방송_시간_밖의_조각은_안_본다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("s-reuse", TestIds.STREAMER, "live");
+        // 하루 전 방송의 조각(pts 0) — 가장 작은 pts지만 방송 밖이다
+        조각을_넣는다("s-reuse", 1, 0, 시작_시각.minusSeconds(86_400), 시작_시각.minusSeconds(86_400));
+        조각을_넣는다("s-reuse", 2, 0, 시작_시각.plusSeconds(5), 시작_시각.plusSeconds(5));
+
+        목록("?state=live").andExpect(jsonPath("$.broadcasts[0].timelineOriginAt")
+                .value(시작_시각.plusSeconds(5).toString()));
+    }
+
+    /**
+     * 장부의 {@code start_pts_ms}는 방송을 넘어 이어진다(media가 마지막 행에서 이어 받는다). 그래서 시작 몇 분 전에 끝난 앞 방송
+     * 꼬리 조각은 pts가 <b>더 작다</b> — 「가장 작은 pts」로 고르면 그 조각이 뽑혀 앞 회차의 기준점이 나온다(로컬 리뷰 1라운드).
+     */
+    @Test
+    void 시작_몇_분_전의_앞_방송_꼬리_조각은_안_섞인다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("s-tail", TestIds.STREAMER, "live");
+        // 앞 회차 꼬리: 5분 전, pts 100,000 · 재생 시각이 벽시계보다 3초 앞서 있다(회차 안에서 쌓인 차)
+        조각을_넣는다("s-tail", 10, 100_000, 시작_시각.minusSeconds(300 - 3), 시작_시각.minusSeconds(300));
+        // 이번 회차 첫 조각: pts는 이어서 104,000 · 재생 시각은 벽시계로 다시 맞춰졌다
+        조각을_넣는다("s-tail", 11, 104_000, 시작_시각.plusSeconds(5), 시작_시각.plusSeconds(5));
+
+        목록("?state=live").andExpect(jsonPath("$.broadcasts[0].timelineOriginAt")
+                .value(시작_시각.plusSeconds(5).minusMillis(104_000).toString()));
+    }
+
+    /** 기준점은 부가 칸이다 — 장부 표를 못 읽어도 목록은 나가고 기준점만 빈다(여기서 500이면 홈·라이브가 통째로 죽는다). */
+    @Test
+    void 조각_장부를_못_읽어도_목록은_나가고_기준점만_빈다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("s-noledger", TestIds.STREAMER, "live");
+        jdbc.execute("ALTER TABLE stream_segments RENAME TO stream_segments_hidden");
+        try {
+            목록("?state=live")
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.broadcasts[0].streamId").value("s-noledger"))
+                    .andExpect(jsonPath("$.broadcasts[0].timelineOriginAt").value(nullValue()));
+        } finally {
+            jdbc.execute("ALTER TABLE stream_segments_hidden RENAME TO stream_segments");
+        }
+    }
+
+    /** 조각이 없으면 기준점도 없다 — 지어내지 않는다. 칸은 빼지 않고 null로 싣는다(화면이 「모름」을 안다). */
+    @Test
+    void 조각이_없으면_기준점은_null이다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("s-empty", TestIds.STREAMER, "live");
+
+        String 본문 = 본문(목록("?state=live").andExpect(status().isOk()));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> 한_줄 = ((java.util.List<Map<String, Object>>) 맵(본문).get("broadcasts")).get(0);
+        assertThat(한_줄).containsKey("timelineOriginAt");
+        assertThat(한_줄.get("timelineOriginAt")).isNull();
+    }
+
+    /**
+     * 종료 편지가 먼저 와 시작 시각을 모르는 방송은 기준점을 안 잰다. 아래 경계가 없으면 같은 키의 <b>앞 방송 조각</b>이 첫 조각으로
+     * 뽑혀 남의 회차 기준점이 나간다(PR #202 codex).
+     */
+    @Test
+    void 시작_시각을_모르는_방송은_기준점을_안_잰다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("s-placeholder", TestIds.STREAMER, "ended", null, 시작_시각, 시작_시각.plus(육십일));
+        // 하루 전 방송의 조각 — 종료 편지보다 앞이라 위 경계에는 안 걸린다
+        조각을_넣는다("s-placeholder", 1, 0, 시작_시각.minusSeconds(86_400), 시작_시각.minusSeconds(86_400));
+
+        String 본문 = 본문(목록("?state=past").andExpect(status().isOk()));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> 한_줄 = ((java.util.List<Map<String, Object>>) 맵(본문).get("broadcasts")).get(0);
+        assertThat(한_줄).containsKey("timelineOriginAt");
+        assertThat(한_줄.get("timelineOriginAt")).isNull();
+    }
+
+    /**
+     * 종료 편지가 먼저 와 생긴 방송도 시작 편지가 늦게 오면 목록에 그 시작 시각이 실리고, 기준점도 <b>그 회차의</b> 조각으로 잰다
+     * (POK-327). 웹은 시작 시각이 있으면 [시작, 끝] 창을 타서 웹 코드를 안 바꾼다. 같은 물리 키로 세 시간 전에 한 앞 회차 조각은
+     * 시작 2분 전 경계에 걸려 안 섞인다. 시작을 모르던 때는 웹이 끝 12시간 창으로 읽어 그 회차 녹화까지 틀 수 있었다.
+     */
+    @Test
+    void 종료가_먼저_온_방송도_늦게_온_시작_편지로_시작_시각과_기준점이_실린다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        Instant 끝 = 시작_시각.plusSeconds(3_600);
+        processor.process(Envelopes.ended("e-end", "S-late", "key-shared", 2L, 끝));
+        processor.process(Envelopes.started("e-start", "S-late", "key-shared", 1L, 시작_시각));
+        // 같은 물리 키의 앞 회차 조각(세 시간 전)과 이 회차 첫 조각(32초 뒤). pts는 회차를 넘어 이어진다
+        조각을_넣는다("key-shared", 1, 0, 시작_시각.minusSeconds(10_800), 시작_시각.minusSeconds(10_800));
+        Instant 첫_조각 = 시작_시각.plusSeconds(32);
+        조각을_넣는다("key-shared", 2, 3_600_000, 첫_조각, 첫_조각);
+
+        목록("?state=past")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.broadcasts.length()").value(1))
+                .andExpect(jsonPath("$.broadcasts[0].streamId").value("S-late"))
+                .andExpect(jsonPath("$.broadcasts[0].status").value("ended"))
+                .andExpect(jsonPath("$.broadcasts[0].startedAt").value(시작_시각.toString()))
+                .andExpect(jsonPath("$.broadcasts[0].endedAt").value(끝.toString()))
+                .andExpect(jsonPath("$.broadcasts[0].timelineOriginAt").value(첫_조각.minusMillis(3_600_000).toString()));
+    }
+
+    // ── 방송 제목(POK-259) ───────────────────────────────────────
+
+    /**
+     * 수집기가 준 방송마다의 마지막 제목·카테고리가 실린다. <b>한 장을 한 번에 묻는다</b>는 것(방송 수만큼 왕복하지 않는다)과 물은
+     * 방송 번호를 같이 잰다.
+     */
+    @Test
+    void 수집기가_준_제목과_카테고리가_방송마다_실린다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("s-a", TestIds.STREAMER, "live");
+        방송을_넣는다("s-b", TestIds.STREAMER, "live");
+        COLLECTOR.respondWith(TITLES, 200, """
+                {"titles":{"s-a":{"title":"새 제목","category":"League of Legends"},"s-b":{"title":"다른 방송","category":null}}}""");
+
+        목록("?state=live")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.broadcasts[0].streamId").value("s-b"))
+                .andExpect(jsonPath("$.broadcasts[0].title").value("다른 방송"))
+                .andExpect(jsonPath("$.broadcasts[0].category").value(nullValue()))
+                .andExpect(jsonPath("$.broadcasts[1].streamId").value("s-a"))
+                .andExpect(jsonPath("$.broadcasts[1].title").value("새 제목"))
+                .andExpect(jsonPath("$.broadcasts[1].category").value("League of Legends"));
+
+        assertThat(COLLECTOR.callCount()).as("방송마다 묻지 않고 한 장을 한 번에 묻는다").isEqualTo(1);
+        assertThat(COLLECTOR.lastPath()).isEqualTo(TITLES);
+        // 주소가 아니라 본문에 싣는다(128자 번호 100개면 주소가 톰캣 한도 8KB를 넘는다, PR #214 codex)
+        assertThat(COLLECTOR.lastMethod()).isEqualTo("POST");
+        assertThat(COLLECTOR.lastQuery()).isEmpty();
+        assertThat(COLLECTOR.lastBody()).isEqualTo("{\"streamIds\":[\"s-b\",\"s-a\"]}");
+    }
+
+    /** 수집기가 제목을 모르는 방송(관측이 아직 없다)은 칸을 빼지 않고 null로 싣는다. 화면은 그때 방송 번호를 보인다. */
+    @Test
+    void 수집기가_모르는_방송은_제목이_null이다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("s-noinfo", TestIds.STREAMER, "live");
+        COLLECTOR.respondWith(TITLES, 200, "{\"titles\":{}}");
+
+        String 본문 = 본문(목록("?state=live").andExpect(status().isOk()));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> 한_줄 = ((java.util.List<Map<String, Object>>) 맵(본문).get("broadcasts")).get(0);
+        assertThat(한_줄).containsKey("title").containsKey("category");
+        assertThat(한_줄.get("title")).isNull();
+        assertThat(한_줄.get("category")).isNull();
+    }
+
+    /**
+     * 제목은 부가 칸이다. 수집기가 죽었거나(5xx) 모르는 모양을 주거나 400을 줘도 목록은 나가고 제목만 빈다. 다른 부가 칸(기준점)은
+     * 그대로 실린다. 여기서 500이면 홈·지난 방송·라이브가 통째로 죽는다.
+     */
+    @Test
+    void 수집기가_아프면_목록은_나가고_제목만_빈다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("s-sick", TestIds.STREAMER, "live");
+        조각을_넣는다("s-sick", 1, 0, 시작_시각.plusSeconds(5), 시작_시각.plusSeconds(5));
+
+        for (String[] 수집기 : new String[][] {{"503", ""}, {"200", "제목 아님"}, {"400", "{\"error\":\"too_many\"}"},
+                {"200", "{\"titles\":{\"s-sick\":{\"title\":7}}}"}, {"200", ""}, {"200", "   "}, {"200", "[]"}}) {
+            COLLECTOR.respondWith(TITLES, Integer.parseInt(수집기[0]), 수집기[1]);
+            목록("?state=live")
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.broadcasts[0].streamId").value("s-sick"))
+                    .andExpect(jsonPath("$.broadcasts[0].title").value(nullValue()))
+                    .andExpect(jsonPath("$.broadcasts[0].timelineOriginAt").value(시작_시각.plusSeconds(5).toString()));
+        }
+    }
+
+    /** 볼 방송이 없으면 수집기를 안 부른다(빈 목록에 왕복 하나를 태울 이유가 없다). */
+    @Test
+    void 방송이_없으면_수집기를_안_부른다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+
+        목록("?state=live").andExpect(status().isOk()).andExpect(jsonPath("$.broadcasts.length()").value(0));
+        assertThat(COLLECTOR.callCount()).isZero();
+    }
+
     /**
      * 협상에 실패하면 상태 코드가 <b>500으로 둔갑한다</b> — POK-118이 이 자리에서 실제로 덴
      * 사고다. 세 갈래를 한 번에 보는 것은 {@code json} 하나가 셋의 공통 출구여서다.
@@ -498,5 +753,15 @@ class BroadcastListControllerTest extends IntegrationTestSupport {
                 startedAt == null ? null : OffsetDateTime.ofInstant(startedAt, ZoneOffset.UTC),
                 endedAt == null ? null : OffsetDateTime.ofInstant(endedAt, ZoneOffset.UTC),
                 vodExpiresAt == null ? null : OffsetDateTime.ofInstant(vodExpiresAt, ZoneOffset.UTC));
+    }
+
+    private void 조각을_넣는다(String streamId, long seq, long startPtsMs, Instant playbackPdt, Instant wall) {
+        jdbc.update("""
+                        INSERT INTO stream_segments
+                            (stream_id, seq, start_pts_ms, start_wall_utc, playback_pdt, duration_ms, s3_key, upload_state)
+                        VALUES (?, ?, ?, ?, ?, 4000, ?, 'uploaded')""",
+                streamId, seq, startPtsMs, OffsetDateTime.ofInstant(wall, ZoneOffset.UTC),
+                playbackPdt == null ? null : OffsetDateTime.ofInstant(playbackPdt, ZoneOffset.UTC),
+                "streams/" + streamId + "/seg_" + seq + ".m4s");
     }
 }

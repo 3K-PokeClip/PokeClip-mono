@@ -26,7 +26,7 @@ public final class RenderCommands {
     public static final String CONCAT_LIST = "concat.txt";
     public static final String BURN_SRT = "burn.srt";
 
-    /** 번인 글꼴. 크기·여백은 libass의 기준 높이(288) 단위라 출력 해상도를 따라 커진다. */
+    /** 번인 글꼴. 크기·여백은 libass의 기준 높이(288) 단위라 출력 해상도를 따라 커진다. 자리가 없는 v1 자막(SRT)의 모양이다. */
     static final String BURN_STYLE = "FontName=Noto Sans CJK KR,FontSize=13,Outline=1,Shadow=0,MarginV=60";
 
     private RenderCommands() {
@@ -71,22 +71,29 @@ public final class RenderCommands {
     }
 
     /**
-     * @param crop         {@link CropGeometry#toPixels}의 결과
+     * @param video        {@link Composition#plan}의 결과. 그림은 부르는 쪽이 작업 폴더에 먼저 써 둔다
      * @param loudnessFix  {@link Loudness#correctFilter}의 결과. null이면 평준화 없음(무음)
-     * @param burn         번인 자막 파일({@link #BURN_SRT})을 쓸지
+     * @param burnFile     번인할 자막 파일. {@link #BURN_SRT}면 예전 모양({@link #BURN_STYLE})을 입히고, ASS({@link AssWriter})는
+     *                     파일이 모양을 다 갖고 있다. null이면 번인하지 않는다
      */
-    public static List<String> render(String ffmpeg, long offsetMs, long durationMs, CropGeometry.Pixels crop,
-                                      Aspect aspect, List<AudioTrack> tracks, String loudnessFix, boolean burn,
+    public static List<String> render(String ffmpeg, long offsetMs, long durationMs, Composition.Plan video,
+                                      List<AudioTrack> tracks, String loudnessFix, String burnFile,
                                       String fontsDir, String outputFile) {
-        String video = "[0:v:0]setsar=1," + crop.filter() + ",scale=" + aspect.width() + ":" + aspect.height()
-                + ":flags=lanczos,setsar=1";
-        if (burn) {
-            video += ",subtitles=" + BURN_SRT
+        String chain = video.graph();
+        if (burnFile != null) {
+            chain += ",subtitles=" + burnFile
                     + (fontsDir == null || fontsDir.isBlank() ? "" : ":fontsdir=" + fontsDir)
-                    + ":force_style='" + BURN_STYLE + "'";
+                    + (burnFile.equals(BURN_SRT) ? ":force_style='" + BURN_STYLE + "'" : "");
         }
-        String graph = video + "[vout];" + audioGraph(tracks, loudnessFix);
-        List<String> cmd = new ArrayList<>(seek(ffmpeg, offsetMs, durationMs));
+        String graph = chain + "[vout];" + audioGraph(tracks, loudnessFix);
+        // 꾸밈 그림은 원본 뒤 입력으로 넣고 영상 내내 되풀이한다. 길이(-t)는 그 뒤에 둬야 출력 쪽 옵션이 된다 —
+        // 그림 앞에 두면 ffmpeg가 그것을 다음 입력(그림)의 길이로 읽는다.
+        List<String> cmd = new ArrayList<>(List.of(ffmpeg, "-hide_banner", "-nostdin", "-ss", seconds(offsetMs), "-i",
+                SOURCE));
+        for (Composition.Image image : video.images()) {
+            cmd.addAll(List.of("-loop", "1", "-i", image.name()));
+        }
+        cmd.addAll(List.of("-t", seconds(durationMs)));
         cmd.addAll(List.of("-filter_complex", graph, "-map", "[vout]", "-map", "[aout]",
                 "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
                 "-c:a", "aac", "-b:a", "160k",

@@ -1,0 +1,5 @@
+# R1: 따옴표 없는 유형 라벨도 같은 선언이다.
+resource aws_secretsmanager_secret_version real {
+  secret_id     = "example"
+  secret_string = "example"
+}

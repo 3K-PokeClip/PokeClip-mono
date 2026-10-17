@@ -2,16 +2,37 @@
 
 import Link from 'next/link';
 
-import { Bookmark } from 'lucide-react';
+import { Bookmark, EyeOff } from 'lucide-react';
 import clsx from 'clsx';
-import { Badge, Button, IconButton, LinkButton, Progress, Spinner, VisuallyHidden } from '@/ui';
+import {
+  Badge,
+  Button,
+  DropdownMenu,
+  IconButton,
+  LinkButton,
+  Progress,
+  Spinner,
+  VisuallyHidden,
+  useToast,
+} from '@/ui';
 import styles from './LiveScreen.module.css';
 import { cardViewFor, cardVisualFor } from './highlightCardView';
 import type { CardVisual } from './useLiveDetailsMockState';
 import type { LiveHighlight, LiveStream } from './useLiveMockState';
+import type { HideReason } from './useLiveMockState';
+import { claimCard, hideCard, releaseCard, unhideCard } from './useLiveMockState';
+import { ThumbnailImage } from '@/features/thumbnail/ThumbnailImage';
+import { useLiveData } from './liveDataStore';
 
 // 하이라이트 카드(시안 1b) — 세로 목록의 한 행이던 것을 가로로 넘기는 카드로 바꿨다.
 // 표시 규칙은 전부 highlightCardView가 정한다: 이 파일은 그 결과를 그리기만 한다.
+
+/** 숨기기 메뉴(POK-338). 시안이 없어 기존 메뉴로 둔다: 시안이 나오면 모양만 바꾼다 */
+const HIDE_REASONS: ReadonlyArray<{ value: HideReason; label: string }> = [
+  { value: 'not_highlight', label: '하이라이트 아님' },
+  { value: 'duplicate', label: '중복' },
+  { value: 'other', label: '기타' },
+];
 
 /** 미니 파형 뷰박스 — 진폭 0..1을 여기 맞춰 편다 */
 const SPARK_WIDTH = 100;
@@ -39,9 +60,13 @@ export function HighlightCard({
   visuals: Record<string, CardVisual>;
   onSeek: (timestamp: string) => void;
 }) {
+  const { toast } = useToast();
   const view = cardViewFor(highlight);
   const visual = cardVisualFor(highlight, stream, visuals);
   const processing = view.state === 'processing';
+  // 편집기는 방송 번호와 카드 번호(`card-23` → 23)로 클립을 연다
+  const { streamId } = useLiveData();
+  const editorHref = `/clips/editor?stream=${encodeURIComponent(streamId)}&card=${highlight.id.replace(/^card-/, '')}`;
 
   return (
     <article
@@ -58,9 +83,14 @@ export function HighlightCard({
         onClick={() => onSeek(highlight.timestamp)}
         aria-label={`${highlight.timestamp} 시점으로 이동`}
       >
-        <span className={styles.cardThumbLabel} aria-hidden>
-          하이라이트 장면
-        </span>
+        <ThumbnailImage
+          src={highlight.thumbnailUrl}
+          fallback={
+            <span className={styles.cardThumbLabel} aria-hidden>
+              하이라이트 장면
+            </span>
+          }
+        />
         {visual.spark ? (
           <svg
             className={styles.cardSpark}
@@ -122,20 +152,83 @@ export function HighlightCard({
             <span className={styles.cardProgressValue}>{visual.progress}%</span>
           </div>
         ) : null}
-        {view.showActions ? (
-          // 「편집」은 편집기 목업으로 들어간다 — 어느 카드를 눌러도 같은 목업이 뜬다.
-          // 카드별 클립을 실제로 여는 것은 레시피 배선(POK-107) 몫이라 아직 id를 싣지 않는다.
+        {highlight.hidden ? (
+          // 숨긴 카드는 되돌리기만 한다. 되돌리기는 누구나 한다(숨긴 사람이 자리를 비워도 막히지 않게, 서버와 같은 규칙)
+          <div className={styles.cardActions}>
+            <Button
+              variant="soft"
+              size="sm"
+              onClick={() => {
+                void unhideCard(highlight.id).then((r) => {
+                  if (!r.ok) toast({ tone: 'error', title: '숨김을 되돌리지 못했어요' });
+                });
+              }}
+            >
+              숨김 되돌리기
+            </Button>
+          </div>
+        ) : view.showActions ? (
+          // 「편집」은 이 카드의 방송·카드 번호를 싣고 편집기로 들어간다.
           // 업로드·보관함 저장은 각자 라우트가 설 때까지 비활성으로 둔다.
           <div className={styles.cardActions}>
-            <LinkButton as={Link} href="/clips/editor" variant="soft" size="sm">
+            {/* 「편집」을 누르는 것이 곧 「이 카드는 내가 집었다」다(clip claim) — 다른 편집자 화면에 「○○ 편집 중」이 뜬다.
+                이미 남이 집은 카드면 서버가 거절하지만 들어가 보는 것까지 막지는 않는다. */}
+            {/* 카드는 전부 서버 카드(card-N)다. 화면에만 세우던 수동 마킹 카드(marked-…)는 없어졌다(QA 2026-10-11) */}
+            <LinkButton
+              as={Link}
+              href={editorHref}
+              variant="soft"
+              size="sm"
+              onClick={() => {
+                void claimCard(highlight.id);
+              }}
+            >
               편집
             </LinkButton>
+            {/* 놓기(clip claim 해제, POK-338): 편집을 그만두면 다른 편집자가 집을 수 있다. 내가 집은 카드에만 */}
+            {highlight.claimedByMe ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  void releaseCard(highlight.id).then((r) => {
+                    if (!r.ok) toast({ tone: 'error', title: '카드를 놓지 못했어요' });
+                  });
+                }}
+              >
+                놓기
+              </Button>
+            ) : null}
             <Button variant="solid" size="sm" disabled>
               원클릭 업로드
             </Button>
             <IconButton variant="ghost" size="sm" aria-label="보관함에 저장" disabled>
               <Bookmark size={15} aria-hidden />
             </IconButton>
+            {/* 숨기기(clip hide): 시안에는 카드별 단추가 없어 같은 줄의 작은 아이콘 하나로 둔다. 숨긴 카드는 패널의 「숨김」 칩이 모은다.
+                이유를 고르게 한다(POK-338): 「하이라이트 아님」 비율이 자동 감지의 거짓양성률이다 */}
+            <DropdownMenu>
+              <DropdownMenu.Trigger>
+                <IconButton variant="ghost" size="sm" aria-label="이 카드 숨기기">
+                  <EyeOff size={15} aria-hidden />
+                </IconButton>
+              </DropdownMenu.Trigger>
+              <DropdownMenu.Content align="end">
+                <DropdownMenu.Label>숨기는 이유</DropdownMenu.Label>
+                {HIDE_REASONS.map(({ value, label }) => (
+                  <DropdownMenu.Item
+                    key={value}
+                    onSelect={() => {
+                      void hideCard(highlight.id, value).then((r) => {
+                        if (!r.ok) toast({ tone: 'error', title: '카드를 숨기지 못했어요' });
+                      });
+                    }}
+                  >
+                    {label}
+                  </DropdownMenu.Item>
+                ))}
+              </DropdownMenu.Content>
+            </DropdownMenu>
           </div>
         ) : null}
       </div>

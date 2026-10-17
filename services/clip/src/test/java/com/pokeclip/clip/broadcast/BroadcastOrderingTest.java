@@ -7,6 +7,11 @@ import org.junit.jupiter.api.BeforeEach;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.junit.jupiter.api.Test;
 
+import java.time.Instant;
+import java.util.Arrays;
+import java.util.List;
+import java.util.function.Function;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 class BroadcastOrderingTest extends IntegrationTestSupport {
@@ -70,19 +75,114 @@ class BroadcastOrderingTest extends IntegrationTestSupport {
                 });
     }
 
+    /**
+     * 종료가 먼저 와 생긴 자리표시에 낮은 번호의 시작이 늦게 오면(실패 편지함을 되돌린 경우) <b>시작 시각만</b> 채운다(POK-327).
+     * 상태·순서 번호·보관 기한은 그대로다. 전에는 이 편지를 통째로 버려 시작 시각이 영영 비었고, 화면은 끝 12시간 창으로만 읽어
+     * 같은 키로 한 앞 회차 녹화가 섞일 수 있었다.
+     */
     @Test
-    void 종료_뒤에_낮은_번호의_시작이_와도_되돌아가지_않는다() {
-        processor.process(Envelopes.ended("e1", "s3", 5L));
+    void 종료_뒤에_낮은_번호의_시작이_오면_시작_시각만_채우고_되돌아가지_않는다() {
+        Instant 시작 = Instant.parse("2026-08-18T00:00:00Z");
+        Instant 끝 = Instant.parse("2026-08-18T01:00:00Z");
+        processor.process(Envelopes.ended("e1", "s3", null, 5L, 끝));
+        Instant 기한 = broadcasts.findByStreamId("s3").orElseThrow().getVodExpiresAt();
 
-        assertThat(processor.process(Envelopes.started("e2", "s3", 3L)))
-                .isEqualTo(ProcessResult.IGNORED_STALE);
+        try (LogCaptor captor = new LogCaptor()) {
+            assertThat(processor.process(Envelopes.started("e2", "s3", null, 3L, 시작)))
+                    .as("빈 칸을 채웠으니 반영이다")
+                    .isEqualTo(ProcessResult.PROCESSED);
+            assertThat(captor.messages()).anyMatch(m -> m.contains("broadcast.placeholder.started_filled"));
+            assertThat(captor.messages()).noneMatch(m -> m.contains("stale_ignored"));
+        }
 
         assertThat(broadcasts.findByStreamId("s3")).get()
                 .satisfies(b -> {
-                    assertThat(b.getStatus()).isEqualTo(BroadcastStatus.ENDED);
-                    assertThat(b.getStartedAt()).isNull();
+                    assertThat(b.getStatus()).as("끝난 방송이 다시 LIVE가 되면 안 된다").isEqualTo(BroadcastStatus.ENDED);
+                    assertThat(b.getStartedAt()).isEqualTo(시작);
+                    assertThat(b.getEndedAt()).isEqualTo(끝);
+                    assertThat(b.getVodExpiresAt()).as("보관 기한은 종료 시각에서만 나온다").isEqualTo(기한);
                     assertThat(b.getLastSequence()).as("낮은 번호로 덮이지 않는다").isEqualTo(5L);
                 });
+    }
+
+    /**
+     * 채우는 것은 <b>빈 칸</b>뿐이다. 순서대로 받은 시작 시각을 낡은 편지가 바꾸면 기준점·녹화 창이 그 편지 쪽으로 옮겨 간다.
+     * 놓친 방송 치우개가 닫은 줄(시작 시각이 있다)에 뒤늦게 온 낮은 번호의 시작도 이 갈래다(POK-244).
+     */
+    @Test
+    void 시작_시각이_이미_있으면_낮은_번호의_시작이_덮지_않는다() {
+        Instant 시작 = Instant.parse("2026-08-18T00:00:00Z");
+        processor.process(Envelopes.started("e1", "s8", null, 1L, 시작));
+        processor.process(Envelopes.ended("e2", "s8", null, 2L, 시작.plusSeconds(3_600)));
+
+        assertThat(processor.process(Envelopes.started("e3", "s8", null, 1L, 시작.plusSeconds(600))))
+                .isEqualTo(ProcessResult.IGNORED_STALE);
+
+        assertThat(broadcasts.findByStreamId("s8")).get()
+                .satisfies(b -> assertThat(b.getStartedAt()).isEqualTo(시작));
+    }
+
+    /**
+     * 끝보다 늦은 시작으로는 안 채운다. 받으면 화면이 [시작, 끝] 창을 거꾸로 잡아 녹화도 그래프도 비고, 시작을 모를 때(끝 12시간
+     * 창)보다 나빠진다. 편지 시각이 보낸 때인 로컬 스크립트로 종료를 먼저, 시작을 나중에 보내면 이 모양이 된다.
+     */
+    @Test
+    void 끝보다_늦은_시작으로는_시작_시각을_채우지_않는다() {
+        Instant 끝 = Instant.parse("2026-08-18T01:00:00Z");
+        processor.process(Envelopes.ended("e1", "s9", null, 5L, 끝));
+
+        assertThat(processor.process(Envelopes.started("e2", "s9", null, 3L, 끝.plusSeconds(1))))
+                .isEqualTo(ProcessResult.IGNORED_STALE);
+
+        assertThat(broadcasts.findByStreamId("s9")).get()
+                .satisfies(b -> assertThat(b.getStartedAt()).isNull());
+    }
+
+    /**
+     * 늦게 온 낮은 번호의 시작도 빈 트랙 정보를 채운다(PR #234 codex). 렌더 주문서가 이 값을 그대로 실으므로, 비워 두면
+     * 순서대로 받은 방송과 달리 되돌린 방송만 트랙 대응 없이 영상을 만든다.
+     */
+    @Test
+    void 낮은_번호로_늦게_온_시작도_빈_트랙_정보를_채운다() {
+        processor.process(Envelopes.ended("e1", "s11", 5L));
+
+        assertThat(processor.process(Envelopes.startedWithManifest("e2", "s11", 3L)))
+                .isEqualTo(ProcessResult.PROCESSED);
+
+        assertThat(broadcasts.findByStreamId("s11")).get()
+                .satisfies(b -> assertThat(b.getTrackManifest()).contains("manifestVersion"));
+    }
+
+    /** 채우는 재료는 시작 편지의 시각뿐이다. 낡은 종료 편지의 시각은 그 방송이 시작한 때가 아니다. */
+    @Test
+    void 낮은_번호의_종료로는_시작_시각을_채우지_않는다() {
+        Instant 끝 = Instant.parse("2026-08-18T01:00:00Z");
+        processor.process(Envelopes.ended("e1", "s10", null, 5L, 끝));
+
+        assertThat(processor.process(Envelopes.ended("e2", "s10", null, 3L, 끝.minusSeconds(1_800))))
+                .isEqualTo(ProcessResult.IGNORED_STALE);
+
+        assertThat(broadcasts.findByStreamId("s10")).get()
+                .satisfies(b -> assertThat(b.getStartedAt()).isNull());
+    }
+
+    /**
+     * 시작→종료로 받은 방송과 종료→시작으로 받은 방송의 마지막 줄이 같다. 같은 방송 안에서는 큐가 순서를 지키지만 실패 편지함을
+     * 거치면 뒤집힌다. 소비 결과가 도착 순서에 기대지 않아야 재전송·되돌리기를 마음 놓고 쓴다.
+     */
+    @Test
+    void 시작과_종료가_어느_순서로_와도_마지막_줄이_같다() {
+        Instant 시작 = Instant.parse("2026-08-18T00:00:00Z");
+        Instant 끝 = 시작.plusSeconds(3_600);
+        processor.process(Envelopes.started("a1", "s-in-order", "key-a", 1L, 시작));
+        processor.process(Envelopes.ended("a2", "s-in-order", "key-a", 2L, 끝));
+        processor.process(Envelopes.ended("b2", "s-reversed", "key-a", 2L, 끝));
+        processor.process(Envelopes.started("b1", "s-reversed", "key-a", 1L, 시작));
+
+        Function<Broadcast, List<Object>> 마지막_줄 = b -> Arrays.asList(b.getStatus(), b.getStartedAt(),
+                b.getEndedAt(), b.getVodExpiresAt(), b.getLastSequence(), b.ingestKey());
+        assertThat(마지막_줄.apply(broadcasts.findByStreamId("s-reversed").orElseThrow()))
+                .isEqualTo(마지막_줄.apply(broadcasts.findByStreamId("s-in-order").orElseThrow()));
     }
 
     /**

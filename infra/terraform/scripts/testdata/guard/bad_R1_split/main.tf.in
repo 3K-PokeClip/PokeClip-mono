@@ -1,0 +1,7 @@
+# R1: 여러 줄 블록 주석이 선언 머리를 나눠도 같은 선언이다(Terraform 이 받는 꼴).
+resource /*
+  주석
+*/ "aws_secretsmanager_secret_version" "split" {
+  secret_id     = "example"
+  secret_string = "example"
+}

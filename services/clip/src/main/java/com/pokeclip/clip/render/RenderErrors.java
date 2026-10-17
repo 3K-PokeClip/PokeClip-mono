@@ -48,6 +48,13 @@ public final class RenderErrors {
         }
     }
 
+    /** 409. 영상이 아직 완성되지 않았다(만드는 중이거나 실패): 줄 파일이 없다. */
+    public static class ClipNotRenderedException extends RuntimeException {
+        public ClipNotRenderedException(long id) {
+            super("완성되지 않은 영상이다: " + id);
+        }
+    }
+
     /** 404(내부 문). 모르는 jobId. 일꾼은 중단하고 메시지를 지운다(계약1). */
     public static class JobNotFoundException extends RuntimeException {
         public JobNotFoundException(String jobId) {

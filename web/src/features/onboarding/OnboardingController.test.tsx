@@ -1,14 +1,22 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { axe } from 'jest-axe';
-import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { HomeScreen } from '@/features/home/HomeScreen';
 import { OnboardingController } from '@/features/onboarding/OnboardingController';
 import { useOnboardingStore } from '@/stores/onboarding';
+import { jsonResponse, stubFetch } from '@/test/mockFetch';
 
 const push = vi.fn();
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push }),
 }));
+const { track } = vi.hoisted(() => ({ track: vi.fn() }));
+vi.mock('@/lib/analytics', () => ({ track, identifyUser: vi.fn() }));
+/** 사용 통계로 나간 안내 종료 이벤트(POK-357) */
+const finished = () =>
+  track.mock.calls
+    .filter(([name]) => name === 'onboarding_tour_finished')
+    .map(([, props]) => props);
 
 // jsdom에는 scrollIntoView가 없다 — 스포트라이트 진입 시 호출되므로 스텁한다.
 beforeAll(() => {
@@ -26,6 +34,29 @@ function resetStore() {
   });
 }
 
+// 홈은 마운트 뒤 clip·auth를 부른다. 투어 6단계는 「이어서 편집」 배너를 가리키므로 편집 중인 편집본을
+// 하나 둔다 — 배너는 그런 편집본이 있을 때만 선다(POK-251).
+const EDITING_ENTRY = {
+  recipeId: 12,
+  streamId: 'stream-1',
+  creatorId: '1',
+  recipeVersion: 3,
+  cut: null,
+  status: 'editing',
+  broadcast: { status: 'ended', startedAt: null, endedAt: null, vodExpiresAt: null },
+  latestClip: null,
+  createdAt: '2026-09-26T10:00:00Z',
+  updatedAt: '2026-09-26T11:00:00Z',
+};
+
+function homeServer(url: string) {
+  if (url.startsWith('/api/clip/library'))
+    return jsonResponse(200, { items: [EDITING_ENTRY], nextCursor: null });
+  if (url.startsWith('/api/clip/broadcasts'))
+    return jsonResponse(200, { broadcasts: [], nextCursor: null });
+  return jsonResponse(200, { id: 1, email: 'me@example.com', name: null, profileImageUrl: null });
+}
+
 /** 홈과 함께 렌더 — 스포트라이트 타깃(data-tour-id)이 실제로 존재하는 환경. */
 function renderWithHome() {
   return render(
@@ -40,7 +71,13 @@ describe('OnboardingController', () => {
   beforeEach(() => {
     window.localStorage.clear();
     push.mockClear();
+    track.mockClear();
     resetStore();
+    stubFetch(homeServer);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it('신규 계정 첫 진입 — 웰컴 다이얼로그가 뜬다', async () => {
@@ -59,6 +96,7 @@ describe('OnboardingController', () => {
 
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: '둘러보기' })).toBeInTheDocument();
+    expect(finished()).toEqual([{ outcome: 'later' }]);
   });
 
   it('둘러보기 시작 — 1/6 채널 연동 카드가 뜨고 CTA가 채널 연동 화면으로 간다 (DoD)', async () => {
@@ -111,6 +149,7 @@ describe('OnboardingController', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: '둘러보기' })).toBeInTheDocument();
     expect(useOnboardingStore.getState().tourDone).toBe(true);
+    expect(finished()).toEqual([{ outcome: 'completed' }]);
   });
 
   it('건너뛰기는 어느 스텝에서든 투어를 끝낸다', async () => {
@@ -121,6 +160,7 @@ describe('OnboardingController', () => {
 
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(useOnboardingStore.getState().tourDone).toBe(true);
+    expect(finished()).toEqual([{ outcome: 'skipped' }]);
   });
 
   it('스포트라이트 타깃이 하나도 없으면 3단계 진입 시 자동 완료된다', async () => {
@@ -133,6 +173,8 @@ describe('OnboardingController', () => {
 
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(useOnboardingStore.getState().tourDone).toBe(true);
+    // 보이는 마지막 단계에서 「다음」을 눌렀으니 완료로 센다 — 이어지는 백스탑 이펙트가 한 번 더 세지 않는다
+    expect(finished()).toEqual([{ outcome: 'completed' }]);
   });
 
   // axe는 다이얼로그 요소로 스코프한다 — 테스트 스캐폴딩(landmark 없는 body 직속 렌더)이

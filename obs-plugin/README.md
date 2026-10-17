@@ -1,30 +1,403 @@
-# obs-plugin — OBS 이원 송출 플러그인
+# obs-plugin — PokeClip for OBS
 
-**담당: 1번 (`@xodbs1021`)**
+**담당: 2번 (`@jaehwan-space`) — 2026-09-26 1번에서 이관([11_역할분담](https://github.com/3K-PokeClip/PokeClip-LLM-WIKI/blob/main/specs/11_Pokeclip_%EC%97%AD%ED%95%A0%EB%B6%84%EB%8B%B4.md))** · 티켓 [POK-169](https://xodbs9810.atlassian.net/browse/POK-169) (에픽 [POK-5](https://xodbs9810.atlassian.net/browse/POK-5))
 
-## 무엇이 들어가나
+스트리머 PC의 OBS에 설치하는 C++ 플러그인(libobs)이다. 본방(치지직 RTMP)을 켜면 **같은 인코더로** 우리 서버에 SRT+MPEG-TS를 함께 보낸다 (ADR-001·ADR-002).
 
-스트리머 PC의 OBS에 설치하는 C++ 플러그인 (libobs).
+## 지금 되는 것 (A1·A2·A3·A4·A5 플러그인 쪽)
 
 | 기능 | 내용 |
 |---|---|
-| 이원 송출 | 본방(치지직·SOOP)과 동시에 우리 서버로 SRT 송출. 비디오 인코더를 공유해 추가 인코딩 0 |
-| 멀티오디오 | 오디오 6트랙 — 트랙0은 최종 믹스(시청용), 1~5는 소스별(편집용) |
-| 핫키 프리롤 | 스트리머가 "지금 이 순간" 표시 |
-| 자동 재연결 | 회선이 끊겨도 스스로 복구 |
+| 동시 송출 | 본방 스트리밍 시작(`STREAMING_STARTING`)에 맞춰 `ffmpeg_mpegts_muxer` + `rtmp_custom`(srt://) 출력을 띄우고, 본방이 멈추면 같이 멈춘다 |
+| 인코더 공유 | 본방 출력의 비디오 인코더와 오디오 트랙 1 인코더를 그대로 붙인다 — **추가 영상 인코딩 0** |
+| 오디오 6트랙 (A2) | 트랙 1 = 최종 믹스(본방 인코더 공유), 트랙 2~6 = 소스별 스템(플러그인이 AAC 128 kbps 인코더 5개를 만든다). 소스가 없는 트랙은 무음이 계속 나간다 (ADR-017) |
+| 소스 자동 배정 (A2) | 소리 나는 소스를 트랙 2~6에 하나씩 자동으로 앉히고 설정 파일에 기억한다. 자리가 모자라면 같은 종류끼리 한 트랙에 묶는다. 앱 캡처는 **어느 앱인지 알아보고**(설정의 실행 파일·번들 ID, POK-290) 같은 앱끼리 한 트랙, 다른 앱은 자리가 남는 한 따로. **기본은 꺼짐** — 페어링 뒤 독이 한 번 묻는다 — 아래 「오디오 트랙」 |
+| 손 배정 (POK-266) | 독·폴백 패널에서 소스를 트랙 2~6 사이로 옮기거나(찬 트랙이면 묶인다) 트랙에서 뺀다. 플러그인은 새 소스만 자동으로 앉히고 그 뒤는 고친 대로 둔다. 트랙에 없는 소스는 경고. 방송 중에도 즉시 반영 — 아래 「오디오 트랙」 10번 |
+| GOP 2s 강제 | 시작 직전 방송 비디오 인코더 `keyint_sec`를 2로 바꾸고 `x264opts`/`opts`의 keyint 계열 토큰을 걷는다 (ADR-020). 동기화가 켜져 있으면 페어링 전이어도 적용한다 — 인코더가 돌기 시작한 뒤에는 못 바꾸므로, 방송 중에 페어링해도 이어 보낼 수 있게 미리 해 둔다. 이때 독은 「연결되지 않아…」 토스트에 「키프레임 간격은 2초로 맞춰 뒀어요.」를 붙여 알린다 |
+| 해상도 점검 | 방송 인코더 출력이 1920×1080이 아니면 독 「송출 점검」·Qt 폴백 패널에 경고와 「1080p를 권장해요. 다른 해상도여도 전송을 막지 않아요.」를 띄우고 **그대로 보낸다**(점검값은 다음 본방 시작까지 남으므로 전송 중을 단정하는 말은 쓰지 않는다). 1080p는 권장값이다(ADR-020, POK-268) — 인코더를 본방과 공유해 우리 출력만 다른 해상도로 보낼 수 없으므로 막지 않는다. 송출 중 해상도·FPS 변경은 OBS가 막는다(출력이 도는 동안 `obs_reset_video`가 거절하고 설정 창 비디오 탭이 잠긴다) |
+| 페어링 | 독에 8자리 코드 → `POST /api/stream-keys/pairing-codes/exchange` → streamid·passphrase 저장 (ADR-019) |
+| 서버 환경 (POK-267) | 배포 빌드는 운영(`api.pokeclip.com` · `media.pokeclip.com`), 개발 빌드는 개발(`dev.pokeclip.com` · `media-dev.pokeclip.com`)을 기본으로 쓴다. 페어링·마크 주소와 SRT 수신은 늘 같은 환경 짝이다(종료 신호는 짝 밖 — 운영 고정). 독 숨은 스위치로 바꾸면 연결이 해제된다 — 아래 「2. 배포 빌드」·「설정 파일」 |
+| 브라우저 독 | obs-browser(CEF) 패널에 `ui/` 페이지. 상태·전송 시간·비트레이트·송출 점검·연결 해제 확인·고급 설정. 화면은 claude.ai/design 시안 「PokeClip Plugin UI」 기준이고, web 디자인 토큰·브랜드 심볼을 그대로 쓴다 |
+| Qt 폴백 | obs-browser가 없거나(일부 Linux·Wayland) 페이지가 붙지 않으면 최소 Qt 패널 — 기능은 같다 |
+| 자동 재연결 (A5) | 우리 SRT가 송출 중에 끊기거나 처음부터 붙지 못하면 플러그인이 정책 표(300초 안 5초 → 30초 → 60초, 65분에 포기)대로 다시 붙인다. 본방은 그대로다. 독에 「M초 뒤 다시 시도해요 · N번째」와 「다시 시도」·「재시도 중지」·「다시 연결」 — 아래 「자동 재연결」 |
+| 핫키 마킹 (A4) | 단축키(기본 Ctrl+Shift+M)·독 버튼으로 「지금 이 순간」을 표시하면 누른 시각을 서버로 보낸다(재시도·중복 방지 포함). **받는 서버 창구는 아직 없다** — 아래 「핫키 마킹」 |
+| 종료 신호 (A3·4D) | 스트리머가 본방을 끝내면(OBS 「방송 종료」·방송 중 OBS 닫기) 우리 SRT 출력이 실제로 멈춘 직후 Media에 `POST /api/ingest/end-signal`을 1회 보낸다 — Media가 그 회차를 바로 닫고 뒤 송출을 새 회차로 연다(보장 시간 300초를 기다리지 않는다). 오류·끊김·「재시도 중지」·포기·본방 자력 종료에는 보내지 않는다. **받는 Media 수신부는 아직 없다(1번 M6)** — 아래 「종료 신호」 |
 
-## 왜 직접 만드나
+**아직 안 되는 것** — 종료 신호를 받는 Media 수신부(1번 M6 — 플러그인 쪽만 있다), 마크를 받는 서버 창구(POK-119 — 플러그인 쪽만 있다), SRT RTT 통계(A6), OS가 믿는 코드 서명·macOS 공증(A7 — 설치 파일은 있다, 공인 서명은 POK-360), 오디오 소스를 앱 단위(디스코드·게임·크롬)로 가르기(POK-290 — 지금은 OBS 소스 타입 6종류로만 가른다).
 
-OBS 내장 출력(Custom FFmpeg Output)으로는 핫키·자동 재연결·컨트롤 채널·무설정 UX를 못 채운다.
-오디오 6트랙 자체는 내장 출력으로도 되지만, 나머지가 안 된다.
+## 구조
 
-상세는 `PokeClip-LLM-WIKI`의 ADR-002를 본다.
+```
+obs-plugin/
+  src/                C++ — plugin-main(이벤트·독 등록) · stream-target(출력 수명·오디오 6트랙·재시도 감독) · gop-guard · pairing
+                      · stream-control(송출 시작 창구 — 본방 시작·「다시 연결」) · retry-policy(재시도 규칙, OBS 무관)
+                      · audio-assign(배정 규칙, OBS 무관) · audio-router(소스 열거·트랙 비트·기억)
+                      · mark-policy(마크 규칙, OBS 무관) · mark-sender(대기열·전송 스레드) · mark-hotkey(단축키 등록·바인딩)
+                      · bridge-server(루프백 HTTP) · dock-host(CEF/폴백) · app-state(단일 상태) · config
+                      · server-env(서버 환경 짝·기본값 이관, OBS 무관)
+  ui/                 브라우저 독 페이지 (Vite + Preact + TS). 빌드 산출물 → data/ui (gitignore)
+  data/locale         en-US · ko-KR (폴백 패널·독 제목)
+  tests/              OBS 없이 도는 C++ 테스트 (독립 CMake 프로젝트)
+  third_party/        cpp-httplib 0.56.0 · obs-browser panel/browser-panel.hpp (OBS 32.2.1 서브모듈 3f0a2cd)
+  cmake/ .github/     obs-plugintemplate 모듈·빌드 스크립트 (obs-multi-rtmp 0.7.4.3 판)
+  cmake/local/        macOS 개발 빌드 — 설치된 OBS.app에 링크 (Xcode 불필요)
+```
 
-## 왜 미디어 서버와 같은 사람이 맡나
+```
+OBS 본방 시작 ─ STREAMING_STARTING ─▶ GopGuard(keyint 2) ─▶ StreamTarget.Start
+                                                            ├ 본방 비디오 인코더 · 트랙 1 오디오 공유
+                                                            ├ 트랙 2~6 AAC 5개 (pokeclip-audio-2..6)
+                                                            └ srt://ingest?latency&pkt_size  (key=streamid, password=passphrase)
+독 페이지(CEF) ⇄ http://127.0.0.1:<임의 포트>  (Bearer 토큰 · Host/Origin 검사 · SSE /api/events)
+```
 
-**송신(플러그인)과 수신(Media Origin)은 같은 프로토콜의 양끝이다.**
-한 사람이 쥐어야 디버깅이 안에서 끝난다.
+베이스는 [sorayuki/obs-multi-rtmp](https://github.com/sorayuki/obs-multi-rtmp) 0.7.4.3이다. 범용 다중 타깃 UI(edit-widget·obs-properties-widget·nlohmann-json·NSIS·Flatpak)는 걷고, 출력 생성·인코더 참조·해제 순서만 이식했다. 이식한 파일 머리에 원저작자 고지를 남겼다.
 
-## 상태
+## 빌드
 
-**아직 비어 있다.**
+### 1. 독 페이지 (모든 빌드의 선행)
+
+```bash
+cd obs-plugin/ui
+pnpm install
+pnpm test        # 포맷터·SSE 파서·사유 문구·상태 카드 판정·브리지 클라이언트
+pnpm build       # tsc + vite build → ../data/ui
+```
+
+`pnpm dev` 후 `http://localhost:5178/dev/preview.html` 에서 목 브리지 시나리오(미연결·대기·전송·재연결·연결 재시도·키 확인 안내(재시도 중·중지 뒤·포기 뒤)·포기·방송 중 페어링·오류·인코더 점유·키 없음·오디오·마크·라이트 테마)를 독 폭으로 나란히 본다. 목록은 `ui/src/lib/bridge-mock.ts` 머리 주석. (Vite가 `localhost`에만 묶여 `127.0.0.1`로는 안 열릴 수 있다.)
+
+### 2. 배포 빌드 — Windows · macOS (CI)
+
+`.github/workflows/obs-plugin-ci.yml`이 obs-plugintemplate 경로로 빌드한다. `obs-plugin/**`(와 독이 쓰는 `web/` 스타일·폰트·심볼)를 건드린 PR, main을 뺀 브랜치 push(develop 포함)에서 돈다.
+
+| 잡 | 산출물 |
+|---|---|
+| `windows` | `pokeclip-obs-0.2.0-windows-x64-installer.exe` — Inno Setup 설치 파일(`cmake/windows/resources/installer-Windows.iss.in`, 같은 잡에서 `Test-WindowsInstaller.ps1`로 무인 설치·제거 시험) · `pokeclip-obs-0.2.0-windows-x64.zip` — `obs-plugins/64bit/pokeclip-obs.dll` + `data/obs-plugins/pokeclip-obs/{locale,ui}` (미서명) |
+| `macos` | `pokeclip-obs-0.2.0-macos-universal.pkg` — `cmake --install`의 `create-package.cmake`(pkgbuild + productbuild)가 만든다, 같은 잡에서 `installer -target CurrentUserHomeDirectory`로 설치 시험 (pkg 미서명, 플러그인 ad-hoc) |
+
+**받는 곳**
+
+| 무엇 | 어디서 | 보관 |
+|---|---|---|
+| 배포판 | [GitHub Releases](https://github.com/3K-PokeClip/PokeClip-mono/releases) — 태그마다 zip·macOS 산출물·`SHA256SUMS.txt` | 계속 |
+| develop에 머지된 판 | Actions › `obs-plugin-ci` › develop 실행의 아티팩트 `pokeclip-obs-{windows-x64,macos-universal}-<커밋>` | 30일 |
+| PR·기능 브랜치 판 | 같은 워크플로의 PR·브랜치 실행 아티팩트 | 14일 |
+
+Chrome이 아티팩트를 「위험한 파일」로 막으면 `gh run download <실행 번호> --repo 3K-PokeClip/PokeClip-mono -n <아티팩트 이름> -D <폴더>`로 받는다(macOS 격리 속성도 붙지 않는다).
+
+**배포판 내기 (태그)** — `.github/workflows/obs-plugin-release.yml`
+
+1. 판 번호를 올릴 때는 `buildspec.json`의 `version`(`X.Y.Z`만 — `resource.rc`가 `.`으로 쪼갠다)을 고친 커밋을 먼저 머지한다.
+2. develop 또는 main에 머지된 그 커밋에 `obs-plugin-v<X.Y.Z>[-<접미사>]` 태그를 민다 — `git tag obs-plugin-v0.2.0-test.1 origin/develop && git push origin obs-plugin-v0.2.0-test.1`.
+3. 워크플로가 ① 태그의 `X.Y.Z` = `buildspec.json` ② 태그 커밋이 origin/develop·main에 있음을 확인하고, CI와 같은 잡으로 빌드한 뒤 draft Release에 자산·`SHA256SUMS.txt`를 올리고 개수를 확인해 공개한다.
+4. 접미사(`-test.1`·`-rc.1` …)가 있으면 prerelease다. 이미 공개된 Release는 덮어쓰지 않는다 — 다시 내려면 접미사나 판 번호를 바꾼다. 실패로 draft만 남았으면 같은 태그로 실행을 다시 돌리면 draft를 지우고 새로 만든다.
+5. 시험 Release는 `gh release delete <태그> --repo 3K-PokeClip/PokeClip-mono --cleanup-tag --yes`로 태그째 지운다.
+
+로컬에서 템플릿 경로를 쓰려면 Windows는 Visual Studio 2022 + `cmake --preset windows-x64`, macOS는 **Xcode 16+** + `cmake --preset macos`다 (buildspec.json이 OBS 32.2.1 소스·obs-deps·Qt6를 `.deps/`에 받는다).
+
+**배포 빌드의 기본 서버는 운영이다** (POK-267, `src/constants.hpp`). 설정 파일에 `server_env`가 없을 때 빌드가 고르는 짝이다.
+
+| 환경 | `api_base` (페어링·마크) | SRT 수신 | 기본인 빌드 |
+|---|---|---|---|
+| `prod` 운영 | `https://api.pokeclip.com` | `media.pokeclip.com:8890` | 배포 빌드(CI 템플릿 경로) |
+| `dev` 개발 | `https://dev.pokeclip.com` | `media-dev.pokeclip.com:8890` | 개발 빌드(`macos-local`) |
+
+- 운영 이름은 엣지 8단계([POK-300](https://xodbs9810.atlassian.net/browse/POK-300))에서 한 이름씩 열린다. 그 전에 배포 빌드로 시험하려면 **독 로고를 3초 안에 5번 눌러** 「고급 설정 › 개발 서버 사용 (관리자)」을 켠다. 바꾸면 연결이 해제되므로 그 서버에서 새 코드를 받아 다시 연결한다.
+- 🔴 운영 SRT 수신 호스트 `media.pokeclip.com`은 2026-10-14 결정이다. ADR-020·021과 POK-300은 `ingest.pokeclip.com`(NLB)이라 1번 확인을 기다린다. 운영 포트도 위키에 아직 정해지지 않았다(8890은 로컬 compose·dev-media 값).
+- `media-dev.pokeclip.com`은 팀 공인 IP에서만 받는다(ADR-040).
+- **종료 신호(A3·4D)는 이 짝 밖이다.** 기준 주소는 환경과 무관하게 운영 `https://media.pokeclip.com`이고 루프백만 덮어쓸 수 있다(「설정 파일」 `end_signal_base`, 규약 「개발 빌드만 루프백」). 그래서 개발 환경에서 방송을 끝내도 신호는 운영으로 가고(dev 키라 거절된다) dev 수신부에는 닿지 않는다. 받는 수신부가 아직 없어(1번 M6) 지금은 영향이 없다 — 개발 환경에서 보내지 않을지, dev 기준 주소를 둘지는 M6 때 정한다.
+
+### 3. macOS 개발 빌드 — Xcode 없이 (OBS.app 링크)
+
+```bash
+brew install cmake ninja qtbase simde
+git clone --depth 1 --branch 32.2.1 https://github.com/obsproject/obs-studio ~/src/obs-studio   # 헤더만 쓴다
+export OBS_SOURCE_DIR=~/src/obs-studio
+cd obs-plugin
+cmake --preset macos-local
+cmake --build --preset macos-local --target install-local   # ~/Library/Application Support/obs-studio/plugins/pokeclip-obs.plugin
+```
+
+- 설치된 **OBS.app과 Homebrew qtbase의 부 버전이 같아야 한다** (OBS 32.2.2 = Qt 6.11.1, brew 6.11.2 → 확인됨). 빌드 후 `cmake/local/relink-qt-to-obs.sh`가 Qt 링크를 `@rpath`(OBS.app 안의 Qt)로 바꾼다 — 안 바꾸면 Qt가 두 벌 로드돼 죽는다.
+- 이 프리셋은 `POKECLIP_DEV_LOG_DOCK_URL`을 켠다: OBS 로그에 `[dev] dock url: http://127.0.0.1:…/#token=…`가 찍혀 **브라우저에서 같은 독 페이지를 열어** 볼 수 있다. 배포 빌드에는 없다.
+- `POKECLIP_DEV_SERVERS`도 켠다: 설정 파일에 `server_env`가 없으면 개발 서버(`https://dev.pokeclip.com` · `media-dev.pokeclip.com:8890`)로 시작한다. 운영 기본값으로 확인하려면 `cmake --preset macos-local -B build_macos_local_prod -DPOKECLIP_DEV_SERVERS=OFF`처럼 다른 빌드 디렉터리를 쓴다(옵션 값이 캐시에 남는다). 배포 빌드에는 없다.
+- `POKECLIP_DEV_RETRY_SCALE`도 켠다: 환경 변수 `POKECLIP_RETRY_SCALE=<배수>`로 재시도 정책의 시간을 빨리 감는다(60이면 65분 표가 65초 — `open --env POKECLIP_RETRY_SCALE=60 -a OBS`). 포기까지 실측할 때만 쓴다. 배포 빌드에는 없다.
+
+### 4. 테스트 (OBS 불필요)
+
+```bash
+cmake -S obs-plugin/tests -B obs-plugin/build_tests && cmake --build obs-plugin/build_tests && ctest --test-dir obs-plugin/build_tests --output-on-failure
+```
+
+## 설치
+
+[GitHub Releases](https://github.com/3K-PokeClip/PokeClip-mono/releases)에서 설치 파일을 받는다. **OBS를 끈 뒤** 설치한다.
+
+| OS | 파일 | 설치되는 곳 | 제거 |
+|---|---|---|---|
+| Windows (OBS 32 이상) | `pokeclip-obs-<판>-windows-x64-installer.exe` | `%ProgramData%\obs-studio\plugins\pokeclip-obs\{bin\64bit, data}` | 설정 › 앱 › 「PokeClip for OBS」 |
+| macOS | `pokeclip-obs-<판>-macos-universal.pkg` | `~/Library/Application Support/obs-studio/plugins/pokeclip-obs.plugin` | 그 `.plugin`을 지우고 `pkgutil --forget com.pokeclip.obs-plugin` |
+
+**Windows 설치 파일**
+
+- OBS가 켜져 있으면 닫으라고 하고 멈춘다(방송 중일 수 있어 OBS를 대신 끄지 않는다).
+- OBS 설치 폴더를 묻지 않는다 — OBS 32가 플러그인을 읽는 `%ProgramData%\obs-studio\plugins`에 넣는다. OBS가 없거나(레지스트리 `HKLM\SOFTWARE\OBS Studio`) 32 미만이면 경고만 하고 계속할지 묻는다.
+- 예전처럼 zip을 OBS 폴더에 풀어 둔 사본(`<OBS>\obs-plugins\64bit\pokeclip-obs.dll`·`<OBS>\data\obs-plugins\pokeclip-obs\`)이 있으면 지운다 — 남아 있으면 OBS가 플러그인을 두 번 잡는다.
+- 제거는 이 플러그인 폴더만 지운다. 페어링·설정(`%APPDATA%\obs-studio\plugin_config\pokeclip-obs`)과 다른 플러그인은 남는다.
+- 무인 설치: `…-installer.exe /VERYSILENT /SUPPRESSMSGBOXES`(경고는 「계속」으로 넘어간다).
+
+**포터블 OBS·수동 설치** — 포터블 OBS는 `%ProgramData%`를 읽지 않는다. zip(`pokeclip-obs-<판>-windows-x64.zip`)을 OBS 폴더에 풀면 `obs-plugins\64bit\pokeclip-obs.dll` + `data\obs-plugins\pokeclip-obs\`가 된다. 설치 파일과 함께 쓰지 않는다(두 벌).
+
+**서명 경고** — 아직 OS가 믿는 서명이 없다(공인 서명은 [POK-360](https://xodbs9810.atlassian.net/browse/POK-360)). 그동안은 경고를 한 번 넘긴다.
+
+| 어디서 | 경고 | 넘기는 법 |
+|---|---|---|
+| Chrome | 「위험한 파일」로 다운로드 차단 | `chrome://downloads` › 「⋮」 › 「위험한 파일 다운로드」 |
+| Windows | SmartScreen 「Windows의 PC 보호」 · UAC 「알 수 없는 게시자」 | 「추가 정보」 › 「실행」 · 「예」 |
+| macOS | 「확인되지 않은 개발자」로 pkg가 안 열림 | 시스템 설정 › 개인정보 보호 및 보안 › 「그래도 열기」 |
+
+처음 실행하면 **PokeClip 독이 한 번 펼쳐진다** (새 플러그인 독은 OBS가 숨긴 채 등록하므로). 이후 위치는 OBS가 기억한다. 메뉴 「도킹 › PokeClip」.
+
+## 설정 파일
+
+`plugin_config/pokeclip-obs/pokeclip.json` (macOS `~/Library/Application Support/obs-studio/`, Windows `%APPDATA%\obs-studio\`) — 계정 단위라 OBS 프로필과 무관하다. POSIX에서는 처음부터 권한 0600으로 쓴다(`.tmp`에 쓰고 rename, 이전 판은 `.bak`도 0600). 키가 빠져 있으면 그 키만 기본값을 쓴다. 본 파일을 못 읽으면 libobs가 `.bak`을 읽는다. 그래서 연결 해제 저장(서버 환경 전환 포함)은 `.bak`에도 새 판(키 없음)을 먼저 쓰고 본 파일을 바꾼다 — 직전 판(키 포함)을 남기면 지운 키가 되살아난다(POK-285).
+
+| 키 | 기본값 | 뜻 |
+|---|---|---|
+| `server_env` | 배포 빌드 `prod` · 개발 빌드 `dev` | 서버 환경(POK-267). `api_base`·수신 주소의 짝과 스트림 키가 이 환경에 속한다. 독 숨은 스위치나 브리지 `PUT`으로 바꾸면 **연결이 해제된다**. 이 키가 없는 옛 파일은 `api_base`로 짐작한다 — `https://dev.pokeclip.com`(옛 `http://…` 포함)이면 `dev`라서 dev 키로 페어링된 설치는 배포 빌드로 올려도 그대로 이어진다 |
+| `api_base` | 운영 `https://api.pokeclip.com` · 개발 `https://dev.pokeclip.com` | 페어링 교환·마크 API (로컬 auth 직결: `http://localhost:8082`). **알려진 기본값**(두 환경 값·옛 `http://dev.pokeclip.com`)이면 읽을 때 `server_env`의 값으로 맞춘다. 직접 적은 값은 그대로 둔다 |
+| `ingest_host` · `ingest_port` | 운영 `media.pokeclip.com` · 개발 `media-dev.pokeclip.com` · `8890` | SRT 수신부. 알려진 기본 호스트(두 환경 값·옛 `ingest.pokeclip.com`)면 `api_base`처럼 맞춘다(포트는 8890일 때만) — 읽을 때와 독에서 저장할 때 모두. 그래서 다른 환경의 기본 호스트를 적어 저장하면 지금 환경의 호스트로 바뀐다(환경은 숨은 스위치로 바꾼다). 호스트는 이름·IPv4 또는 `[IPv6]` — 포트는 `ingest_port`로만(`host:포트`는 400) |
+| `streamid` · `passphrase` | — | 페어링이 채운다. **passphrase는 로그·브리지 응답에 싣지 않는다** |
+| `send_passphrase` | `true` | 로컬 compose MediaMTX는 passphrase 미설정이라 `false`여야 붙는다 (암호가 서로 안 맞으면 서버가 거절하고, 독에는 `connect_failed`로 보인다) |
+| `latency_ms` | `1000` | SRT latency. URL에는 마이크로초로 들어간다 |
+| `sync_start` | `true` | **본 방송과 송출 동기화** — 본방 시작·정지에 맞춰 함께 전송·정지한다. 본방이 잠시 끊겨 재연결 중일 땐 우리 송출을 유지한다(녹화 구멍 방지). 본방 송출 중에 켜면 그 자리에서 시작한다(이미 돌던 인코더는 keyint를 못 바꿔 `encoder_active`로 거절 — 본방을 다시 켠다) |
+| `force_fallback` | `false` | 브라우저 독 대신 Qt 폴백 패널 |
+| `dock_intro_shown` | `false` | 첫 실행 독 펼치기 여부 (내부용) |
+| `audio_auto_assign` | `false` | 오디오 소스를 트랙 2~6에 자동 배정. 끄면 OBS 고급 오디오 설정의 트랙 체크를 그대로 보낸다. 기본은 꺼짐 — 스트리머가 짜 둔 트랙을 동의 없이 바꾸지 않는다(2026-10-01 결정) |
+| `audio_assign_prompted` | `false` | 페어링 뒤 「오디오 트랙을 소스별로 나눌까요?」에 답했는지(켜기·나중에, 또는 스위치를 직접 바꿈) — 다시 묻지 않는다 |
+| `audio_track_map` | — | 소스별로 기억한 트랙(내부용, 최대 64개 — 넘으면 지금 없는 소스 것부터 지운다). `slot: 0`은 독에서 트랙에서 뺀 소스. `app`은 앉을 때의 앱(`""` = 몰랐다, 키가 없으면 POK-290 전 기억) — 아래 규칙 3. 배정을 처음부터 다시 하려면 OBS를 끄고 이 키를 지운다 |
+| `audio_mixer_backup` | — | 자동 배정이 처음 쓰기 전의 트랙 체크(내부용, 소스별 최대 128개 — 전역 장치는 `ch:N@<컬렉션>`)와 소스마다 맞춰 둔 본방 트랙 — 아래 규칙 9 |
+| `clip_api_base` | 빈 값(= `api_base`) | 마크를 보낼 Clip API 주소. 개발용 — 독 화면에는 없다. **https이거나 이 PC 안(localhost·127.x·[::1])의 http만** 마크를 보낸다(`mark_insecure`) — 스트림 키에서 만든 파생 값(자격증명)을 Bearer로 싣기 때문이다 |
+| `end_signal_base` | 빈 값(= `https://media.pokeclip.com`) | 종료 신호(A3·4D) 기준 주소 덮어쓰기. **루프백(localhost·127.x·[::1])일 때만 인정**하고 아니면 운영 주소로 간다 — 규약 「개발 빌드만 루프백」을 빌드 플래그 없이 지킨다. 개발용(목 수신부) — 독 화면·브리지에 없다 |
+| `mark_hotkey` | — | 마지막으로 쓴 단축키 사본 `{"bindings":[…]}`(내부용). 프로필에 단축키가 없을 때 쓴다 |
+
+독 「고급 설정」에서는 수신 호스트·포트·SRT 지연과 스위치 넷(본방 동기·오디오 자동 배정·암호 사용·기본 패널)만 바꾼다 (송출 중에는 잠김 — 자동 재시도 중에도 잠기므로 「재시도 중지」 뒤에 바꾼다). `api_base`·`clip_api_base`·`end_signal_base`는 스트리머가 바꿀 값이 아니라 화면에 없고, **브리지 `PUT /api/config`로도 바꿀 수 없다** — 마크가 스트림 키 파생 값을 싣고 가는 곳이라 브리지 토큰만으로 목적지를 바꾸게 두지 않는다. 개발 중에는 설정 파일로 바꾼다(OBS를 끄고 고친다).
+
+**서버 환경만 독에서 바꿀 수 있다.** 로고를 3초 안에 5번 누르면 고급 설정에 「개발 서버 사용 (관리자)」 스위치가 보인다(그 독 세션 동안. 이미 개발 환경이면 늘 보인다). 확인 창을 거쳐 `PUT /api/config {"server_env": …}`를 보내고, 머리에 「개발 서버」 표시가 붙는다. 목적지는 컴파일된 두 짝 중 하나뿐이고 바꾸면 키를 지우므로, 브리지 토큰만으로 스트림 키나 그 파생 값을 다른 곳에 보내게 할 수 없다. 코드를 넣고 교환 응답을 기다리는 사이(최대 15초) 환경이 바뀌면 받은 키는 버리고 `server_changed`로 답한다 — 옛 환경의 키를 새 짝에 붙이지 않는다. Qt 폴백 패널에는 이 스위치가 없다 — 설정 파일의 `server_env`를 고치고 `streamid`·`passphrase`도 지운다(OBS를 끄고 고친다).
+
+## 오디오 트랙 (A2)
+
+OBS 트랙 1~6이 그대로 서버의 6트랙이 된다 (ADR-017, 계약9 `audio1`~`audio6`, 편집기 `trackId` 0~5).
+
+| OBS 트랙 | 믹서 | 내용 | 인코더 |
+|---|---|---|---|
+| 1 | 본방 믹서(보통 0) | 최종 믹스(시청용) — 본방과 같은 소리 | 본방 오디오 인코더 공유 — 고급 출력에서 방송 트랙을 2~6으로 바꿨어도 그 믹스를 보낸다. 본방이 AAC가 아니면 같은 믹서로 AAC를 하나 더 만든다 |
+| 2~6 | 1~5 | 소스별 스템(편집용) | `pokeclip-audio-2..6` AAC 128 kbps. 방송이 멈추면 놓는다 |
+
+독 비트레이트는 출력 전체라 스템 5개 몫(약 640 kbps)이 더해진 값이다.
+
+**켜는 법 — 기본은 꺼짐.** 페어링하면 독에 한 번 「오디오 트랙을 소스별로 나눌까요?」 카드가 뜬다: 소스마다 트랙을 나누면 PokeClip 웹 편집기에서 소리를 따로 켜고 끌 수 있다는 설명, 그리고 트랙 2~6에 직접 짜 둔 구성이 있으면(어떤 소스든 그 트랙들이 OBS 기본인 「전부 켜짐」이 아니면) 「켜면 PokeClip 배정으로 바꾸고, 끄면 원래대로 되돌린다」는 경고와 「덮어쓰고 켜기」 버튼. 「나중에」를 고르면 다시 묻지 않고 독 「고급 설정 › 오디오 트랙 자동 배정」 스위치로 켠다. Qt 폴백 패널은 「오디오 트랙 자동 배정 켜기…」 버튼이 같은 내용의 확인 창을 띄우고, 켜진 뒤에는 같은 자리의 「끄기」 버튼으로 되돌린다.
+
+**자동 배정 규칙** (`src/audio-assign.cpp`, 페어링된 OBS에서 켰을 때만 동작)
+
+1. **후보** = 오디오를 믹스로 넘기는 소스. 오디오를 넘기지 않는 브라우저 소스(채팅창 등)는 자리를 안 차지한다. 모니터 전용은 믹스에 안 들어가 제외하고 독에 표시만 한다(모니터링을 바꾸면 곧바로 다시 계산한다).
+   **새 자리는 지금 방송 화면(프로그램)에 나오는 소스만 받는다** — libobs는 모든 소스를 「오디오를 넘김」 상태로 시작하므로, 이 조건이 없으면 다른 장면에만 있는 인트로·엔딩 영상이 트랙을 먼저 채운다. 한 번 앉은 소스는 화면에서 빠져도 자리를 지킨다(장면을 바꿀 때마다 트랙 주인이 바뀌면 트랙 이름이 무의미해진다).
+2. **자리가 남는 동안은 한 트랙에 한 소스**(모자라면 6번대로 묶는다). 트랙 1 체크는 건드리지 않는다. **본방 트랙도 건드리지 않는다** — 고급 출력에서 방송 오디오 트랙을 2~6으로 바꿨거나 Twitch VOD 트랙을 켰으면 그 트랙은 시청자가 듣는 스트리머의 믹스라 자리로 쓰지 않고 체크도 그대로 둔다(독에 「본방 트랙」). 판정은 프로필 출력 설정(OBS가 방송 시작 때 쓰는 값)과, 방송 중이면 실제로 붙은 인코더의 믹서다.
+3. **기억대로** — 설정 파일(`audio_track_map`)에 기억한 트랙대로 앉힌다. 방송이 바뀌어도 같은 소스는 같은 트랙이다. 같은 트랙을 기억하는 소스는 함께 앉는다(묶음) — 플러그인이 가르지 않는다. 설정›오디오의 전역 장치(데스크탑·마이크)는 채널 번호로 기억해, 장치를 끄고 켜도 트랙이 유지된다.
+   기억에는 그때의 **앱**(6번 표)도 적는다(`app`). 속성에서 **대상 앱이 정해지거나 다른 앱으로 바뀐 소스는 그 소스만 새 소스처럼 다시 앉는다**(POK-290) — OBS 「소스 추가」는 빈 설정으로 소스를 장면에 넣은 뒤 속성 창을 열기 때문에, 처음 앉을 때는 앱을 모르고 고른 뒤에야 안다. 같은 앱 트랙이 있으면 그리로 옮기고, 없으면 혼자 있던 소스는 제자리, 묶여 있던 소스는 빈 트랙으로 나온다 — 빈 트랙이 없으면 6번 순서(같은 종류의 첫 트랙 → 우선순위가 가장 낮은 트랙)라, 그 트랙이 지금 묶음이면 그대로 남고 앱만 적는다. 대상을 비우는 변경(앱 → 없음)은 옮기지 않는다. OBS 속성 창은 값을 고를 때마다 바로 적용하고 「취소」하면 창을 열 때의 값으로 되돌린다(속성 창이 닫히는 때를 플러그인이 알 수 없다). 그래서 다른 앱을 잡던 소스는 대상 앱을 골랐다가 취소하면 따라 옮겨졌다가 돌아온다. 대상이 비어 있던 소스(「소스 추가」 직후)는 취소하면 대상을 비우는 변경이라 고른 앱 트랙에 남는다 — 소리는 나지 않고, 다음에 다른 앱을 고르면 그때 다시 앉는다. 독에서 뺀 소스(`slot 0`)는 뺀 채 둔다. POK-290 전의 기억(`app` 없음)은 처음 볼 때 지금 앱을 적기만 한다 — 플러그인을 올렸다고 자리가 바뀌지 않는다(이미 따로 앉은 같은 앱은 독에서 옮긴다). 그래서 올릴 때 앱을 몰랐던 소스(대상 없는 캡처·데스크탑 모드)는 나중에 대상을 정해도 앱만 적고 옮기지 않는다 — 기억이 「몰랐다」(`""`)인지 「적기 전」인지 가를 수 없어서다. 그런 소스는 독에서 한 번 옮기면 그 뒤로는 이 규칙대로 움직인다.
+4. **새 소스는 우선순위대로 가장 낮은 빈 트랙에** — 마이크 → 데스크탑 → 앱·게임 → 미디어 → 브라우저 → 기타. 빈 트랙 가운데서도 아무 기억도 없는 트랙을 먼저 쓴다(지금 없는 소스가 돌아올 자리를 비워 둔다). **같은 앱이 이미 앉은 트랙이 있으면 빈 트랙이 있어도 거기에 앉는다** — 앱 오디오 캡처는 프로세스(Windows)·번들(macOS) 단위라 같은 앱 둘은 같은 소리다. **플러그인이 자리를 정하는 때는 새 소스가 처음 화면에 나올 때, 기억한 자리가 본방 트랙이 됐을 때, 대상 앱을 바꿨을 때(3번)뿐이다** — 그 밖에는 10번의 손 배정대로 두고 재정렬하지 않는다.
+5. **지금 없는 소스의 기억은 자리를 잡지 않는다** — 소스를 지우면 그 트랙이 빈다. 기억은 남아서(상한 64를 넘으면 오래 안 본 것부터 지운다) 돌아오면 기억대로 앉는다 — 그 사이 들어온 소스와 같은 트랙을 쓰게 될 수 있고, 독이 보여 주니 옮기면 된다.
+6. **자리가 모자라면**(소리 나는 소스 6개 이상, 본방 트랙이 있으면 그보다 적어도) 트랙을 늘리는 대신 **비슷한 소스를 한 트랙에 묶는다**. 묶음의 단위는 **종류**, 앱을 알아본 앱 캡처는 **종류 + 앱**이다(POK-290 — 디스코드·게임·크롬이 「앱」 한 트랙에 섞이지 않게). 아직 자리가 없는 묶음이 우선순위대로 먼저 빈 트랙을 받고, 같은 묶음이 이미 앉은 소스는 그 트랙에 합류한다(마이크 2 → 마이크 트랙, 게임 음성 → 같은 게임 트랙). 빈 트랙이 없으면 **같은 앱 → 같은 종류의 첫 트랙 → 우선순위가 가장 낮은 소스들이 있는 트랙** 순이다. 묶음이 5개를 넘으면 우선순위 낮은 것끼리 섞인다(예: 마이크·데스크탑·디스코드·게임·BGM·알림이면 T4 디스코드 · T5 게임 · T6 BGM+알림). 빈 트랙이 다시 생겨도 묶음을 저절로 풀지 않는다 — 독에서 옮긴다. 믹스 전용으로 밀리는 경우는 트랙 2~6이 전부 본방 트랙일 때뿐이다.
+
+   **앱을 알아보는 소스** (소스 설정의 캡처 대상 — 사용자가 붙인 소스 이름은 보지 않는다)
+
+   | 소스 | 앱으로 보는 때 | 앱 ID |
+   |---|---|---|
+   | 응용 프로그램 오디오 캡처 `wasapi_process_output_capture` (Windows) | 대상 창이 정해져 있다 | `window`(`제목:클래스:실행파일`)의 실행 파일, ASCII 소문자 (`discord.exe`) |
+   | 창 캡처 `window_capture` (Windows) | 같음 | 같음 |
+   | 게임 캡처 `game_capture` (Windows) | **특정 창 캡처 모드**일 때만 | 같음 |
+   | macOS 오디오 캡처 `sck_audio_capture` | 「응용 프로그램」 모드(`type 1`)에 앱을 골랐다 | `application` 번들 ID (`com.hnc.Discord`) |
+   | macOS 화면 캡처 `screen_capture` | 「응용 프로그램」 모드(`type 2`)에 앱을 골랐다 | 같음 |
+
+   그 밖은 앱을 모른다고 보고 **종류 규칙 그대로** 앉힌다 — 전역 장치, 모르는 타입, 대상이 빈 캡처, 전체 화면·핫키 모드 게임 캡처(가장 흔한 설정 — 후킹한 뒤에야 창을 안다), macOS 데스크탑·디스플레이·창 모드(모드를 바꿔도 지난 `application` 값이 설정에 남지만 쓰지 않는다). 로그 `audio routing` 줄은 앱을 아는 소스를 `Discord(app:discord.exe)`로 찍는다(독 화면에는 아직 앱을 보이지 않는다). 같은 실행 파일 이름을 쓰는 다른 프로그램은 같은 앱으로 본다 — 독에서 옮기면 기억이 지킨다.
+7. **방송·녹화·리플레이 버퍼 중에는** 지금 트랙에서 나가고 있는 소스를 옮기지 않는다 — 플러그인이 스스로 옮기는 일은 본방 트랙이 바뀔 때뿐이고 방송 중엔 바뀌지 않는다. 새 소스만 빈 트랙(없으면 6번대로 묶임)에 들어간다(트랙 체크만 바뀌고 인코더 설정은 그대로라 송출에 영향 없음). 손 배정(10번)과, 속성에서 대상 앱을 바꾼 그 소스(3번)는 예외다 — 둘 다 스트리머의 조작이고 그 소스 하나만 옮긴다. 방송 중에 다른 앱을 잡던 소스의 대상 앱을 골랐다가 「취소」해도 그 소스는 따라 옮겨졌다가 돌아온다(3번) — 그 사이 편집용 스템이 잠깐 갈라진다. **방송·녹화 중에 자동 배정이 새로 켜지면**(스위치·페어링) 처음 적용은 모든 소스를 다시 쓰므로 끝날 때까지 미룬다 — 독에 「자동 배정 대기」, 그동안은 OBS 설정 그대로.
+8. 자동 배정이 켜져 있으면 트랙 2~6 체크(본방 트랙 제외)는 플러그인이 맡는다 — OBS 고급 오디오 속성에서 바꿔도 되돌아간다. 소스를 특정 트랙에 두고 싶으면 10번의 손 배정을, 트랙 체크 전체를 직접 짜려면 독 「고급 설정」에서 끈다.
+9. **원래 체크는 되돌린다** — 소스마다 처음 쓰기 전의 트랙 2~6 체크를 `audio_mixer_backup`에 남기고, 자동 배정을 끄거나 연결을 해제하면 그 값으로 되돌린다(방송·녹화·리플레이 버퍼 중이면 끝난 뒤). 어떤 트랙이 새로 본방 트랙이 되면 그 트랙 체크도 곧바로 되돌린다 — 자동 배정이 스템으로 바꿔 놓은 채면 시청자가 소스 하나만 듣는다. 본방에서 빠지는 트랙은 그동안 스트리머가 짠 체크를 원래 값으로 옮겨 둔다. **모두 소스 단위**다 — 다른 장면 컬렉션의 소스는 그 컬렉션을 열 때 맞추고, 끄기로 지우는 기억도 되돌린 소스 것뿐이다. 전역 장치(데스크탑·마이크)는 컬렉션마다 따로 저장되므로 백업도 컬렉션별로 나눈다(컬렉션 이름을 바꾸면 백업도 새 이름으로 옮긴다). 자동 배정 중에 새로 만든 소스는 원래 체크가 없어(OBS 기본은 전부 켜짐) 믹스만으로 돌아간다.
+10. **손 배정 (POK-266)** — 플러그인은 새 소스만 자동으로 앉히고, 그 뒤는 독에서 고친 대로 둔다(「자동」과 「고정」의 구분이 없다 — 기억이 곧 배정이다). 독 「오디오 트랙」의 트랙 행 끝 「+」로 소스를 그 트랙으로 **옮긴다** — 찬 트랙을 골라도 밀어내지 않고 **묶인다**. 칩의 ×로 **트랙에서 뺀다** — 어느 트랙에도 없이 본방 믹스(트랙 1)에만 남고(`audio_track_map[].slot = 0`), 독·폴백이 「트랙 없음」 경고로 알린다(행 끝 +로 다시 넣는다 — 다른 장면에만 있는 소스도 뺀 동안은 목록에 남아 그 장면을 띄우지 않고 되돌릴 수 있다). **방송·녹화 중에도 즉시 적용**(스트리머가 고른 것이라 7번의 예외 — 독·폴백은 「지금 나가는 트랙이 바뀌어요」를 한 번 묻는다). 옮긴 자리가 본방 트랙이 되면 새 자리를 받는다. 자동 배정이 **적용 중일 때만** 고칠 수 있다(꺼짐·대기면 「+」·× 비활성 — 플러그인이 트랙을 맡는 모드가 아니면 백업·복원 뜻이 깨진다). 본방 트랙은 고를 수 없다. Qt 폴백 패널은 트랙마다 「넣기: <소스>」·「빼기: <소스>」 콤보, 제목 아래 「트랙 없음: …」.
+
+🔴 **스트리머의 녹화 트랙도 같은 체크를 쓴다.** 고급 출력 녹화에서 트랙 2~6을 쓰면 녹화 내용도 이 배정을 따른다. 본방·VOD 트랙은 위 2번대로 건드리지 않지만, 녹화 전용으로 쓰는 트랙은 구분할 수 없다 — 그런 스트리머는 자동 배정을 끈다.
+
+## 핫키 마킹 (A4)
+
+방송 중 「지금 이 순간」을 표시하면 편집자 화면의 그 지점에 점프카드가 뜨게 하는 기능이다(ADR-002). 채팅 자동 탐지(2A)가 못 잡는 장면이나 채팅 수집이 멈췄을 때의 대안이다. **플러그인 쪽만 있다** — 받는 서버는 아래 선행 조건.
+
+- **누르는 곳** — OBS 단축키 「PokeClip: 순간 표시」(기본 **Ctrl+Shift+M**, macOS도 Control 키) · 독 상태 카드의 「순간 표시」 버튼 · Qt 폴백 패널 버튼. 셋이 같은 대기열로 간다.
+- **언제** — 우리 송출이 `전송 중`·`재연결 중`일 때만. 아니면 독에 「PokeClip으로 전송 중일 때만 표시할 수 있어요」. 2초 안의 연타는 한 번으로 친다.
+- **보내는 것**(규격 정본 = 위키 [계약4](https://github.com/3K-PokeClip/PokeClip-LLM-WIKI/blob/main/contracts/%EA%B3%84%EC%95%BD4-OBS-Control-API.md) 2B절) — `POST {clip_api_base}/api/clip/marks`, `Authorization: Bearer <HMAC-SHA256(passphrase, "pokeclip-4b-v1") 소문자 hex 64자>`(passphrase 원문은 보내지 않는다 — 종료 신호 4D와 같은 방식이고 메시지만 다르다), `Idempotency-Key: <eventId>`, 본문 `{"streamid":"<SRT에 쓴 그 값>","eventId":"<UUID v4>","pressedAt":<epoch ms>,"sentAt":<epoch ms>}`. 방송은 경로가 아니라 본문 `streamid`로 가리킨다(4C·4D와 같다). 누른 순간 시각을 찍고, 다시 보낼 때는 `sentAt`만 새로 붙인다(`eventId`·`Idempotency-Key`는 그대로). 시계 어긋남 보정(`pressedAt + (서버 수신 − sentAt)`)·녹화 기준점 환산(POK-255 `TimelineOriginReader`)·카드 창 [T−30s, T+10s]은 서버 몫이다.
+- **다시 보내기** — 전용 작업 스레드가 보낸다. 네트워크 오류·5xx·429·`503 timeline_not_ready`·`404 broadcast_not_found`는 1·2·4·8…초(최대 30초, `Retry-After`가 더 길면 그것 — 최대 60초) 뒤 **같은 `eventId`로** 다시 보내고, 누른 지 10분이 지나면 버린다(대기열에서 밀려도 보내기 직전에 다시 확인한다). 대기열은 100개까지 — 넘치면 가장 먼저 누른 것부터 버린다. 응답 본문은 16KB까지만 읽는다(넘쳐도 상태 코드로 판정). 방송이 끝나도 남은 마크는 계속 보낸다. OBS를 끄면 못 보낸 마크는 버린다(로그에 개수만).
+- **바로 버리는 것** — `400`, `401 invalid_stream_key`. **사유 없는 401·404·405**는 「서버에 마크 창구가 아직 없다」(`mark_unsupported`)로 본다 — 지금 Clip은 `/api/clip/**` 전부에 JWT를 요구해 JWT가 아닌 Bearer에 본문 없는 401을 준다(2026-09-30 develop `SecurityConfig`).
+- **단축키 저장** — OBS 설정 › 단축키에서 바꾸면 OBS가 프로필 `basic.ini`의 `[Hotkeys] PokeClip.MarkMoment`에 적는다(프론트엔드 단축키만). OBS는 플러그인 단축키를 다시 읽어 주지 않으므로 플러그인이 시작·프로필 전환 때 읽는다: 프로필 값 → `pokeclip.json`의 `mark_hotkey` 사본(마지막으로 쓴 키) → 기본 Ctrl+Shift+M. 지운 키(빈 목록)는 그대로 둔다.
+- **macOS 권한** — OBS가 뒤에 있을 때도 단축키를 받으려면 OBS에 「입력 모니터링」 권한이 있어야 한다(오래된 설치는 「손쉬운 사용」). OBS 앞에서는 권한 없이도 된다.
+- **독 표기** — 키 이름으로 적는다(macOS `⌃⇧M` · 그 밖 `Ctrl+Shift+M`). OBS 자체 표기는 macOS 입력 소스를 따라, 한글 자판이면 M을 「ㅡ」로 보여준다.
+- ⚠️ **다른 앱과 겹칠 수 있다** — OBS 단축키는 기본 설정(설정 › 고급 › 단축키 포커스 동작)에서 OBS가 뒤에 있어도 받는다. 다른 앱에서 같은 조합을 쓰면(Windows Discord 음소거 토글 기본값이 Ctrl+Shift+M인 것으로 안다 — 미확인) 방송 중 그 앱에서 누를 때마다 마크가 간다. 겹치면 OBS 설정 › 단축키에서 바꾼다. 기본 키는 2026-09-30 결정대로 둔다.
+
+🔴 **서버 선행 조건** — 지금은 받는 곳이 없다. ① Clip 창구(POK-119 — 규격은 계약4 2B절, 경로를 JWT 체인 밖으로 열고 4C resolve로 받은 passphrase로 같은 파생 값을 만들어 대조) ② 카드가 붙을 방송 명부 행을 만드는 1번의 `broadcast.started` 발행(계약9). 그 전에 dev로 보내면 `mark_unsupported`가 정상이다. 로컬에서는 계약대로 201·200(같은 eventId)·401·404·503을 돌려주는 목 서버를 띄우고 `clip_api_base`를 그쪽으로 둔다.
+
+## 자동 재연결 (A5)
+
+우리 SRT 출력이 송출 중에 끊기거나 **처음부터 붙지 못하면**(수신 서버가 꺼져 있음·주소를 못 찾음) 플러그인이 스스로 다시 붙인다. 본방은 건드리지 않는다. libobs 내장 재연결은 끈다(`obs_output_set_reconnect_settings(…, 0, 0)`) — 간격이 약 1.5배씩 늘어(2·3·4.5…초, 한 번 최대 900초) 끊긴 지 4~5분쯤에는 다음 시도까지 1~2분이 비고, 처음 접속 실패는 아예 다시 시도하지 않기 때문이다.
+
+**정책 표** (`src/retry-policy.hpp`) — 기준은 끊긴 순간(한 번도 못 붙었으면 첫 시도를 시작한 순간)부터 지난 시간이고, 간격은 「실패한 시각 → 다음 시도 시작」이다.
+
+| 끊긴 뒤 | 간격 | 왜 |
+|---|---|---|
+| 0 ~ 300초 | 5초 | 같은 키로 300초 안에 돌아오면 Media가 같은 회차로 잇는다(계약9) |
+| ~ 35분 | 30초 | 창을 넘기면 어차피 새 회차다 — 남은 방송을 살리려고 이어 간다 |
+| ~ 65분 | 60초 | |
+| 65분 이후 | 포기 | 독에 원인과 「다시 연결」 |
+
+- 서버가 응답하지 않으면 시도 하나가 SRT 접속 타임아웃(3초)을 다 쓰므로 실제 주기는 간격 + 3초다.
+- **다시 시도하는 정지 코드** — `disconnected` · `connect_failed` · `bad_path` · `timeout` · `output_error`. 그 밖(`encode_error` · `invalid_stream` 등)과 그 자리 실패(`no_shared_encoder` 등)는 다시 해도 같아 멈춘다.
+- **그만두는 때** — 본방 정지 · 프로필 전환 · OBS 종료 · 독 「재시도 중지」 · 65분 경과. 붙으면 시도 수와 시계를 처음으로 되돌린다. 본방 정지로 그만두면 접속 중이던 시도가 실패로 끝나도 오류를 남기지 않는다(방송이 끝났다).
+- 시도마다 출력과 스템 인코더 5개를 새로 만든다(끊긴 출력은 실제로 멈춘 뒤 푼다).
+
+**독 표시와 버튼**
+
+- 재시도 중 — 「재연결 중」(붙었다 끊김) 또는 「연결 재시도 중」(처음부터 못 붙음), 원인 상자 안에 원인과 「M초 뒤 다시 시도해요 · N번째」(접속 중이면 「다시 연결하는 중이에요」). 플러그인은 다음 시도 시각만 주고 초는 독이 센다.
+  - **「다시 시도」** — 기다림만 건너뛴다.
+  - **「재시도 중지」** — 자동 재시도를 그만두고 마지막 원인을 남긴다. 수신 주소·페어링은 송출 단계(재시도 포함)에서 잠기므로, 주소가 틀렸거나 키가 폐기됐으면 **중지한 뒤에** 고치고 「다시 연결」을 누른다.
+- 멈춰 있고 본방이 나가는 중(오류로 멈춤 · 포기 · 방송 중에 페어링함) — **「다시 연결」**. 키·GOP 확인과 출력 시작만 한다. 본방 시작 때 하는 오디오 재배정·마크 카운터 초기화·본방 시작 감시는 다시 하지 않는다. 본방을 다시 켜야 풀리는 사유(`encoder_active` · `keyint_not_applied` · `multitrack_video`)와 동기화를 꺼 둔 경우에는 버튼이 없다. 저장된 키가 올바르지 않을 때(`invalid_key`)도 없다 — 연결을 해제하고 새 코드를 넣으면 다시 뜬다.
+- **키 확인 안내** — 1초 안에 돌아온 `connect_failed`가 3회 이어지면(서버는 살아 있는데 거절한다) 원인 문구 자리에 「수신 서버가 계속 거절해요. 스트림 키 문제일 수 있어요. 웹에서 확인하세요.」를 대신 보여 준다(문단을 더 쌓지 않는다). 실패마다 다시 판정하므로 1초를 넘긴 실패가 한 번 끼면 안내가 내려간다. 키가 바뀌었으면 「재시도 중지」 → 「연결 해제」 → 새 코드 입력 순서다. 안내는 재시도를 중지하거나 포기한 뒤에도 남고(포기는 마지막 실패까지 본 판정), 그때 대안 문장 「키가 맞는데도 계속 거절되면 PokeClip 쪽 문제일 수 있어요.」를 붙인다 — 독은 설명줄 맨 앞(포기면 「65분 동안 붙지 못해 멈췄어요.」 다음), Qt 폴백은 원인 문구의 안내 뒤. 연결을 해제하거나 새로 페어링하면 지워진다. 키 폐기·암호 오류·경로 없음은 플러그인에서 서로 가를 수 없어 확정이 아니라 안내다. 서버에 키 상태를 묻는 창구는 두지 않았다(POK-281 — 보류).
+  - **늦게 오는 거절은 일부러 세지 않는다(POK-287)** — 계정별 방송에서 키가 폐기됐거나 그 서버에 없는 키면 MediaMTX가 인증 실패에 0~4초 무작위 지연을 붙여 거절한다(mediamtx `internal/auth/log_and_delay_error.go`). 1초 판정에 거의 걸리지 않고, 3초 접속 시한을 넘기면 서버 꺼짐과 같은 모양이라 **안내가 늦거나 끝내 안 뜬다**(로컬 재현 78회 중 1초 미만 13% · 1~3초 42% · 시한 3.0초 45%, 9분 동안 한 번도 안 뜸). auth 장애·몰림 보호·운영자 차단도 같은 401 · 같은 지연이라 시간으로는 키 문제와 가를 수 없고 재페어링으로 풀리지도 않는다 — 운영에서 늦은 거절은 대부분 이쪽이라, 판정을 넓히면 틀린 안내만 늘어 그대로 둔다. 곧바로 거절되는 암호 오류·설정에 없는 경로는 지금처럼 3번째 실패(약 10초)에 안내가 뜬다. 안내가 없다고 키가 맞다는 뜻은 아니다.
+
+🔴 **접속 중 해제 대기** — 접속 중인 출력은 결과가 날 때까지 풀 수 없어, 그 순간의 OBS 종료·프로필 전환은 UI 스레드가 접속 타임아웃(3초, 상한 10초)만큼 기다린다. 재시도는 앞 출력이 멈춘 뒤에만 예약하고 본방 정지는 기다리지 않지만(기다리던 중이면 예약만 버리고, 접속 중이면 깃발만 세운다), 수신 서버가 죽어 있는 동안은 재시도 접속이 주기의 3/8쯤을 차지하므로 종료·프로필 전환이 그 구간에 걸릴 수 있다.
+
+**종료 신호(A3·계약4 4D)와의 접점** — libobs 재연결을 껐으므로 끊길 때마다 출력의 `stop` 신호(코드 −5)가 난다. 그래서 종료 신호는 `stop` 코드가 아니라 본방 정지 이벤트(`STREAMING_STOPPING`)로 스트리머 조작을 가르고, 「재시도 중지」·포기·오류 멈춤에는 보내지 않는다 — 아래 「종료 신호」.
+
+## 종료 신호 (A3·계약4 4D)
+
+스트리머가 우리 SRT 송출을 **멈추는 조작**을 하면, 우리 출력이 실제로 멈춘 직후(출력의 `stop` 신호) Media에 `POST /api/ingest/end-signal`을 1회 보낸다. Media는 그 회차(계약9)를 멈춘 순간에 끝내고 뒤 송출을 새 회차로 시작한다 — 연결 끊김 보장 시간 300초를 기다리지 않는다. 신호가 없으면 방송을 끝내고 300초 안에 같은 키로 다시 켠 방송이 앞 회차에 합쳐진다(VOD·클립 회차가 섞인다). 규격 정본은 위키 계약4 3절(2026-09-26 발행, POK-249). **받는 쪽(Media 수신부)은 1번 M6에서 만든다** — 지금은 수신부가 없어 운영 주소로는 연결 실패(3회 뒤 포기)나 404(1회)로 끝나며 해는 없다.
+
+**보내는 때 / 보내지 않는 때** — 판정은 `StreamTarget::DecideEndSignal`(한 방송 구간에 한 번), 규칙은 `src/end-signal-policy.hpp`.
+
+| 상황 | 신호 | 로그 trigger |
+|---|---|---|
+| OBS 「방송 종료」(`STREAMING_STOPPING` → `STOPPED`) | 보낸다 | `main_stop` |
+| 자동 재연결 중에 「방송 종료」 | 보낸다 — 마지막 연결은 끊긴 그 연결 | `main_stop` |
+| 방송 중 OBS 닫기 | 보낸다(보낼 수 있을 때만 — 언로드가 진행 중 전송을 끊는다) | `obs_exit` |
+| 「방송 종료」 뒤 우리 출력이 다 멈추기 전에 본방을 다시 켬 | 보낸다 — 새 구간을 시작하기 전에 앞 구간 몫을 정한다(멈춘 순간은 그 시각으로 어림). 안 그러면 새 출력이 앞 출력의 신호를 끊어 판정이 사라진다 | `restart_before_stop` |
+| 정지가 접속 중에 들어왔는데 접속이 성공함 | 붙은 것으로 세고 곧바로 멈춘다 — 보낸다(지속 시간 ≈ 0) | `main_stop` |
+| 본방이 스스로 끊겨 끝남(`STOPPING` 없이 `STOPPED`) | 안 보낸다(`not_intentional`) | `main_stop` |
+| 오류 코드로 멈춤(다시 해도 같은 오류) | 안 보낸다 | `output_error` |
+| 독 「재시도 중지」 | 그때는 안 보낸다 — 본방은 살아 있고 마지막 연결은 이미 끊겼다(보내면 키를 고쳐 다시 붙는 송출이 새 회차가 돼 되감기를 잃는다). 구간은 열어 두고, 뒤에 「방송 종료」·OBS 닫기가 오면 그때 마지막 연결(끊긴 그 연결) 기준으로 보낸다. 「다시 연결」로 새 구간을 시작하면 잊는다 | 로그 `deferred on stop_retry` → 뒤의 `main_stop`·`obs_exit` |
+| 공유 인코더 실패로 libobs가 두 출력을 강제로 멈춤(본방 `STOPPING`이 나도) | 안 보낸다 — 우리 출력이 있으면 그 `stopping`이 UI 스레드 밖(인코더 스레드)에서 난 것으로, 없으면(재시도 대기·「재시도 중지」 뒤) 판정을 `STOPPED`로 미뤄 본방 stop 코드(`ENCODE_ERROR`)로 가른다 | `internal_stop` · 로그 `intent deferred to main STOPPED` |
+| 65분 포기 · 재시도 시작 실패 | 안 보낸다 | `gave_up` · `retry_start_failed` |
+| 본방 시작 실패로 같이 멈춤 | 안 보낸다 | `stopped_with_reason` |
+| 그 송출에서 연결이 한 번도 성립하지 않음 | 안 보낸다(`never_connected`) | — |
+
+스트리머 조작인지는 우리 출력의 `stop` 코드가 아니라 **본방 정지 이벤트로 가른다** — `OBS_FRONTEND_EVENT_STREAMING_STOPPING`은 `obs_output_stop` 안에서만 동기로 오고(버튼·websocket), 본방이 스스로 끊기면(재연결 소진) `STOPPED`만 온다(2026-10-08 실측). 본방이 재연결 중일 때 「방송 종료」를 눌러도 `obs_output_force_stop`이 `stopping`을 내므로 `STOPPING`이 온다(libobs 32.2.1 `obs-output.c` 대조). A5가 libobs 재연결을 꺼서 끊길 때마다 우리 출력의 `stop`(−5)이 나므로 코드로는 가를 수 없다. 예외가 하나 있다 — 공유 인코더가 실패하면 libobs `full_stop`이 **인코더 스레드에서** 본방·우리 출력을 `obs_output_force_stop`(stop_code 0)하고, 본방의 그 `stopping`으로 `STREAMING_STOPPING`까지 난다. 우리가 부르는 정지는 모두 UI 스레드에서 나므로, 우리 출력의 `stopping`이 다른 스레드에서 났으면(`stopInternal_`) 조작으로 보지 않는다. 이 신호는 큐에 넣는 STOPPING·HandleStop보다 먼저 돌아 순서가 보장된다. 우리 출력이 없는 동안(재시도 대기·「재시도 중지」 뒤)에 STOPPING이 오면 가를 수단이 없어 판정을 `STREAMING_STOPPED`로 미루고, 그때 본방 출력의 stop 코드(`OnMainOutputStop`이 받아 둔다)가 0이면 조작, `ENCODE_ERROR`면 오류로 본다. 본방 출력의 `stopping` 스레드로 가르지 않는 이유는 「방송 강제 종료」 단축키가 핫키 스레드에서 직접 `force_stop`을 불러 조작인데도 UI 스레드 밖에서 나기 때문이다(OBS 32.2.1 `OBSBasic_Hotkeys.cpp`).
+
+**요청** — `Authorization: Bearer <HMAC-SHA256(passphrase, "pokeclip-4d-v1") 소문자 hex 64자>`(passphrase 원문은 보내지 않는다), `Content-Type: application/json`, 본문 `{"streamid": "<SRT에 쓴 그 값>", "elapsedSinceStopMs": …, "connectionDurationMs": …}`. 두 시간 값의 기준은 **우리 출력이 실제로 멈춘 순간**이다 — 일반 멈춤은 `stop` 신호 시각, 재시도 대기 중의 정지(출력 없음)는 정지 요청 시각, 강제 멈춤(OBS 종료)은 멈춘 직후. `connectionDurationMs`는 마지막 연결의 `start` 신호(SRT 핸드셰이크를 마친 뒤) 시각부터, 붙어 있었으면 멈춘 순간까지, 끊겨 있었으면 끊김을 안 순간(그 출력의 `stop`)까지다. 우리 출력에 방송 지연은 걸지 않는다. HMAC·SHA-256은 의존성 없이 직접 구현했다(`src/end-signal-policy.cpp` — OBS deps에 OpenSSL 헤더가 없고, Qt는 OBS 없는 테스트 프로젝트에 못 묶는다. RFC 4231·FIPS 벡터와 계약 시험 벡터로 검증).
+
+**응답·재시도** — `202`면 끝(그 밖 2xx도 끝). 3xx·4xx는 무엇이든 끝, 재시도 없음(리다이렉트를 따르지 않는다). 5xx·연결 실패·시간 초과만 최대 3회(1초·2초 뒤, 시도당 5초 — 최악 약 18초). 멈춘 뒤 60초가 지나면 첫 시도든 재시도든 보내지 않는다. 전송은 작업 스레드(`src/end-signal-sender.cpp`)에서 하고 OBS 화면을 막지 않는다. OBS가 닫히면 진행 중이거나 막 큐에 들어간 첫 시도를 **최대 2초** 기다린 뒤 끊고(운영 HTTPS는 TLS 접속만으로 수백 ms라 곧바로 끊으면 대개 비게 된다 — 규약 「종료를 늦추지 않는다」와의 절충), 재시도 대기는 하지 않으며 남은 시도는 버린다 — 저장했다 나중에 보내지 않는다. 끊긴 시도는 `aborted by OBS exit — not sent`, 버린 재시도는 `retry dropped at exit`로 남긴다. 재시도 중 새 송출이 시작돼도 남은 시도는 이어 간다. TLS 1.2+·인증서 검증은 curl 기본값 그대로다.
+
+**로그** — 신호마다 마지막 결과 한 줄: `end-signal (key …XXXX): http 202 after 1 attempt(s) — accepted` · `… http 400 after 1 attempt(s) — bad_request, not retrying` · `… giving up after 3 attempt(s) — server_error (http 503)` · `… not sent — 61234 ms after stop (limit 60000)`. 보내지 않기로 하면 `end-signal: not sent on <trigger> (<이유>)`. **`Authorization`·파생 값·passphrase는 어떤 로그에도 남기지 않는다**(curl verbose도 켜지 않는다). CloudFront 층에서 막힌 신호는 Media에 흔적이 없어 이 줄이 유일한 단서다. 독에는 아직 표시하지 않는다.
+
+**로컬 검증** — `end_signal_base`를 루프백 목 수신부로 돌린다(「설정 파일」). 2026-10-08 실측(macOS, OBS 32.2.2, 로컬 compose media, 파이썬 목 수신부가 파생 값을 대조): 보내는 3경우(방송 종료 · 재연결 중 종료 · OBS 닫기) 각 1회 202(`auth=ok`), 안 보내는 5경우(수신부 다운 중 본방 유지 · 「재시도 중지」 · 한 번도 안 붙음 · 포기 · 본방 자력 종료) 0회, 503은 멈춘 뒤 0·1004·3009 ms에 3회 보내고 포기, 400은 1회. `connectionDurationMs`는 OBS 로그의 `SRT output started`/`stopped` 시각 차와 일치했고 재시도 사이에 변하지 않았다.
+
+## 브리지 프로토콜 (독 페이지 ↔ 플러그인)
+
+`127.0.0.1:<임의 포트>`. 토큰(64 hex)은 독 URL 조각 `#token=`으로만 넘기고 페이지가 읽은 즉시 주소창에서 지운다.
+
+| 경로 | 인증 | 내용 |
+|---|---|---|
+| `GET /` `/assets/*` | Host 검사 | `data/ui` 정적 파일. CSP `default-src 'self'` |
+| `GET /api/hello` | Bearer | 버전·현재 상태. 첫 호출이 독 워치독을 해제한다 |
+| `GET /api/events` | Bearer | SSE `event: state` (상태가 바뀔 때, 15초 keep-alive). EventSource는 헤더를 못 붙여 페이지는 fetch 스트리밍으로 읽는다 |
+| `POST /api/pair` `{code}` | Bearer | 200 / 400 invalid_format / 404 not_found / 410 expired / 409 already_used·streaming·server_changed(기다리는 사이 서버 환경이 바뀜) / 429 rate_limited / 502 network·server_error |
+| `POST /api/unpair` | Bearer | 송출 중이면 409 |
+| `POST /api/audio/assign` `{key, track}` | Bearer | 독 손 배정 — `track` 2~6은 그 트랙으로 옮긴다(찬 트랙이면 묶인다), 없으면 트랙에서 뺀다(본방 믹스에만). 200 적용됨(결과는 상태 `audio`로 온다 — 소스마다 `key`, 트랙에 없는 소스는 `mixOnly`) / 202 UI 스레드가 1.5초 안에 답하지 않음(결과는 상태로) / 409 audio_off(자동 배정이 적용 중이 아님)·main_stream_track / 404 unknown_source / 400 bad_track / 500 save_failed(설정 파일을 못 써 기억도 되돌렸다). 방송 중에도 받는다 |
+| `GET·PUT /api/config` | Bearer | 위 설정 표의 비밀 아닌 키. PUT은 `api_base`·`clip_api_base`를 무시한다. `server_env`(`prod`·`dev`)가 지금과 다르면 알려진 기본 주소를 그 짝으로 바꾸고 **연결을 해제한다** — 같은 본문의 `ingest_host`·`ingest_port`는 무시하고, 그 밖의 값은 400 invalid_server_env. 전환이 아니면 알려진 기본 호스트를 지금 짝으로 맞춰 저장한다(다른 환경의 기본 호스트·낡은 초안). 요청 값은 잠금 아래 지금 설정에 얹는다 — 그사이 바뀐 환경·키를 되살리지 않는다. 송출 중이면 409 streaming — 단 `audio_auto_assign`·`audio_assign_prompted`만 바뀐 요청은 받는다(배정은 방송·녹화가 끝난 뒤 적용) |
+| `POST /api/mark` | Bearer | 독 「순간 표시」 — 202 받음 / 409 mark_not_live·no_key·invalid_key·mark_insecure(거절도 상태 `marks`로 온다) / 429 mark_too_soon. 보낸 결과는 상태 `marks`로 온다 |
+| `POST /api/send-now` | Bearer | 독 「다시 연결」·「다시 시도」 — 202 받음(붙었는지는 상태로 온다) / 409 main_not_live·no_key·send_unavailable |
+| `POST /api/stop-retry` | Bearer | 독 「재시도 중지」 — 202 / 409 not_retrying |
+
+상태(`/api/hello`·`/api/events`)에는 A5용으로 `retry{attempt, nextAt, gaveUp, keySuspect}` · `canSendNow` · `syncStart`가, POK-267용으로 `serverEnv`(`prod`·`dev`)가 실린다. `attempt`가 0이면 재시도 중이 아니고, `nextAt`은 다음 시도 시각(UTC epoch ms)이며 0이면 지금 접속 중이다.
+
+Host가 `127.0.0.1:<포트>`가 아니거나 `Origin`이 다른 오리진이면 403, 토큰이 없거나 틀리면 401, 본문 16KB 초과 413.
+
+## 로컬 검증 (치지직 없이)
+
+```
+OBS 본방  → rtmp://127.0.0.1:1935  key=main          (compose MediaMTX RTMP — 치지직 대역)
+플러그인  → srt://127.0.0.1:8890   #!::r=<token>,m=publish  (같은 MediaMTX SRT)
+```
+
+1. `docker compose up -d postgres redis media` · auth `./gradlew :auth:bootRun` · web `pnpm dev`
+2. `pokeclip.json`에 `api_base=http://localhost:8082`, `ingest_host=127.0.0.1`, `send_passphrase=false` — 기본값이 원격 서버라 반드시 바꾼다. 직접 적은 주소는 `server_env`와 무관하게 그대로 쓴다
+3. 웹 설정 › 플러그인에서 코드 발급 → 독에 입력
+4. OBS 방송 시작 → OBS 로그 `[pokeclip-obs] stream encoder … keyint_sec 0 -> 2` · `SRT output started`
+5. 녹화 조각의 키프레임: `docker cp pokeclip-media-1:/recordings/<token> ./rec` 후
+   `ffprobe -v error -select_streams v:0 -skip_frame nokey -show_entries frame=pts_time -of csv=p=0 <조각>.mp4` → 조각마다 `0.07 · 2.07` 두 개
+6. 오디오 6트랙: `ffprobe -v error -select_streams a -show_entries stream=index,codec_name,sample_rate,channels -of csv=p=0 <조각>.mp4` → `aac` 6줄.
+   `curl -s http://127.0.0.1:8888/<token>/index.m3u8 | grep -c EXT-X-MEDIA` → 6
+7. 스템 분리: 미디어 소스로 테스트 톤(`ffmpeg -f lavfi -i "sine=frequency=1000:duration=300" sine.wav`)을 넣고 독에서 트랙 번호를 본 뒤,
+   `for i in 0 1 2 3 4 5; do ffmpeg -v error -i <조각>.mp4 -map 0:a:$i -af volumedetect -f null - 2>&1 | grep mean_volume; done`
+   → 톤 트랙과 `a:0`(믹스)만 소리가 있고 나머지는 무음(-91 dB).
+   손 배정: 독에서 다른 트랙 행의 「+」로 톤 소스를 고르면(방송 중이면 확인 창) 다음 조각부터 그 `a:N`으로 옮겨 가고, 칩의 ×로 빼면 `a:1`에만 남는다. `pokeclip.json`의 `audio_track_map`에 `slot`으로 남아 OBS를 다시 켜도 그대로다.
+
+8. 재연결: 본방을 다른 RTMP 싱크(예: `ffmpeg -listen 1 -i rtmp://127.0.0.1:1936/live/main -f null -`)로 보내 두면 수신부만 멈출 수 있다. `docker compose pause media`(무응답 회선) · `stop media`(즉시 닫힘) 뒤 다시 켜고 OBS 로그의 `SRT output: retry N in … ms` · `SRT output started` 시각을 본다. 거절은 `srtPublishPassphrase`를 건 경로 하나만 둔 임시 MediaMTX를 다른 포트에 띄워 재현한다(추적 파일 `infra/compose/mediamtx.yml`은 모든 경로를 받는다). 계정별 방송의 늦은 거절은 그 임시 MediaMTX에 `authMethod: http` · `authHTTPAddress: http://host.docker.internal:<포트>/auth`를 주고 401을 돌려주는 작은 인증 목을 붙여 재현한다 — 틀린 passphrase는 목이 2xx일 때만 나온다(인증을 먼저 본다). 「재시도 중지」 → 「다시 연결」은 재시도 셈과 300초 창을 처음부터 다시 시작하므로 OBS를 다시 켜지 않고 시나리오를 바꿀 수 있다.
+
+**2026-09-13 macOS 실측 (OBS 32.2.2, x264 1080p30, 로컬 compose)** — 결과는 PR 본문에 원문으로 남긴다.
+
+**2026-10-06 macOS 재연결 실측 (OBS 32.2.2, x264 720p30, 로컬 compose)** — 원문은 PR 본문.
+
+- 수신부를 끈 채 본방 시작 → 3초 접속 시도 뒤 `connect_failed`, 5초 뒤 재시도 반복 → 수신부를 켠 뒤 다음 시도에 붙음
+- 송출 중 `pause` 60초 → 5초 뒤 끊김 감지(`disconnected`) → 풀자 1초 안에 재접속 / `stop` 280초 → 즉시 감지 → 다시 켠 지 5초 뒤 재접속(끊긴 지 286초)
+- 없는 호스트는 `bad_path`(0.4초) · 틀린 passphrase와 없는 경로는 둘 다 `connect_failed`(약 30ms, MediaMTX 로그는 `invalid passphrase` · `path … is not configured`) → 3회째에 키 확인 안내
+- 시간 배율 60으로 포기까지 진행 → 「다시 연결」로 본방을 둔 채 재접속, 마크 카운터 그대로 · 재시도 중 OBS 종료 `Number of memory leaks: 0`
+
+**2026-10-08 macOS 해상도 실측 (OBS 32.2.2, x264, 로컬 compose)** — 원문은 PR 본문.
+
+- 1080p30 · 720p30 본방 모두 `SRT output started` → 독 「전송 중」. 720p는 송출 점검에 경고와 권장 안내가 뜨고(문구는 리뷰 뒤 「다른 해상도여도 전송을 막지 않아요」로 바꿨다), 녹화 조각은 1280×720 · 키프레임 2.000초 간격 · 약 4.07초다
+- 29.97fps는 `keyint_sec=2`가 59프레임이라 키프레임 간격이 1.969초고, 녹화 조각이 4초가 아니라 약 5.96초(GOP 3개)로 잘린다 — 프레임레이트 허용값은 ADR-020 미확정이다(1번)
+
+**2026-10-14 macOS 늦은 거절 실측 (POK-287, OBS 32.2.2, MediaMTX v1.21.1-pokeclip.2 + 401 인증 목)** — 원문은 PR 본문·POK-287.
+
+- 인증 목 401(키 폐기·없는 키 = auth 장애·몰림 보호와 같은 구성) 78회: 116ms~3.05초, 1초 미만 13% · 1~3초 42% · 시한 3.0초 45% → 9분 동안 키 확인 안내 없음
+- 목이 3초 뒤 401(시한을 넘긴 거절) · 목 무응답 · 서버 꺼짐: 모두 `connect_failed` 3.02~3.05초, 안내 없음 — 셋은 플러그인에서 같은 모양
+- 틀린 passphrase(목 200) 29~48ms · 설정에 없는 경로 29~35ms(목에 요청이 가지 않음): 3번째 실패에 안내(시작 뒤 약 10초)
+
+**2026-10-15 macOS 앱 단위 묶기 실측 (POK-290, OBS 32.2.2, 방송 없이 배정만)** — 원문은 PR 본문. 앱 ID는 설정에서 읽으므로 앱이 떠 있거나 화면 기록 권한이 있을 필요는 없다(소리 분리 녹화는 이번에 보지 않았다). 시험 컬렉션은 디스크로 만들고 소스 추가·대상 변경은 obs-websocket `CreateInput`(빈 설정) · `SetInputSettings`로 했다.
+
+- 처음 배정: `T2 마이크 · T3 Slack A, Slack B, Slack 화면(app:com.tinyspeck.slackmacgap) · T4 Webex(app:Cisco-Systems.Spark) · T5 디스플레이(app) · T6 데스크탑 sck(app)` — 같은 번들의 오디오 캡처와 앱 모드 화면 캡처가 한 트랙, 디스플레이·데스크탑 모드는 남은 `application` 값을 쓰지 않았다
+- 빈 설정으로 추가한 「macOS 오디오 캡처」는 앱 없이 T3(앱 종류의 첫 트랙)에 앉고, 속성에서 Webex를 고르자 `source updated` 한 번에 T4, Slack으로 바꾸자 T3, 데스크탑 모드로 바꾸자 T3에 남았다(기억의 `app`은 Slack 그대로)
+- `app`을 지운 옛 형식 기억 + Slack B를 T6에 기억: 다시 켜자 Slack B는 T6에 남고 `app`만 채워졌다. 종료 `Number of memory leaks: 0`
+
+## 문제 해결 (독 사유 코드)
+
+| 코드 | 뜻 · 조치 |
+|---|---|
+| `no_key` | 페어링 안 됨 — 본방만 나간다 |
+| `encoder_active` | 방송 인코더가 이미 돌고 있어 GOP를 못 바꿈(x264는 실행 중 변경 불가) — 녹화가 방송 인코더를 공유하거나, 본방 송출 중에 동기화를 켠 경우. 녹화를 멈추거나 본방을 다시 켠다 |
+| `multitrack_video` | 설정 › 방송의 멀티트랙 비디오를 끈다 |
+| `bad_path` | 수신 주소를 찾지 못함(DNS)·URL 형식 — 인터넷 연결과 `ingest_host` 확인. 자동으로 다시 시도한다. passphrase 불일치는 이 코드가 아니다 |
+| `connect_failed` | 수신 서버 무응답 **또는** 거절(키 폐기·passphrase 불일치·경로 없음 — 플러그인에서 서로 구분되지 않는다). 호스트·포트·방화벽(UDP)을 보고, 거절이 이어지면(독의 키 확인 안내) 웹에서 키 상태를 본다 — 키가 맞는데도 그대로면 PokeClip 쪽(auth 장애·운영자 차단)이다. 계정별 방송에서 키가 폐기된 거절은 늦게 와서 안내 없이 이 문구만 나올 수 있다(「자동 재연결」의 키 확인 안내). 로컬 compose면 `send_passphrase=false`. 자동으로 다시 시도한다 |
+| `timeout` | 우리 URL로는 거의 나오지 않는다 — 무응답은 `connect_failed`로 온다 |
+| `disconnected` · `output_error` | 송출 중 끊김 — 자동으로 다시 붙는다(「자동 재연결」). 65분 동안 못 붙으면 멈추고 독에 「다시 연결」이 뜬다 |
+| `main_not_live` · `send_unavailable` · `not_retrying` | 「다시 연결」·「재시도 중지」를 누르는 사이 상태가 바뀌었다(본방이 끝남 · 이미 붙음 · 재시도 중이 아님) |
+| `main_stream_failed` | 본방 출력이 뜨지 않아 같이 멈춤 |
+| `output_no_multitrack` | 이 OBS의 MPEG-TS 출력이 다중 오디오 트랙을 받지 않는다 — OBS 버전 확인(32.x 기준) |
+| `audio_encoder_failed` | AAC 인코더를 만들지 못함 — OBS 로그의 인코더 id 확인 (`ffmpeg_aac`가 기본 대체) |
+| `audio_track_attach_failed` | 6트랙 중 일부가 출력에 안 붙음 — 반쯤 붙은 채 보내지 않고 시작을 멈춘다 |
+| `audio_off` · `main_stream_track` · `unknown_source` | 손 배정 거절 — 자동 배정이 적용 중이 아님(켜거나 방송·녹화가 끝나길 기다린다) · 본방 트랙(OBS에서 고른다) · 그 소스가 지금 없음 |
+| `mark_not_live` · `mark_too_soon` | 우리 송출 중이 아님 · 2초 안에 또 누름 |
+| `mark_unsupported` | 서버에 마크 창구가 아직 없다(사유 없는 401·404) — 위 「서버 선행 조건」 |
+| `mark_unauthorized` · `mark_rejected` | 서버가 스트림 키를 거절(다시 페어링) · 본문을 거절 |
+| `mark_no_broadcast` · `mark_not_ready` · `mark_rate_limited` | 서버가 아직 이 방송을 모름 · 첫 조각 전 · 서버가 잠시 거절(429) — 자동으로 다시 보낸다 |
+| `mark_expired` | 10분 동안 못 보내 버림 |
+| `mark_insecure` | 마크 주소(`clip_api_base`·`api_base`)가 루프백 아닌 평문 http — https로 바꾼다 |
+
+## 라이선스
+
+GPL-2.0 (`LICENSE`). 서드파티 고지는 `THIRD_PARTY_NOTICES.md`.

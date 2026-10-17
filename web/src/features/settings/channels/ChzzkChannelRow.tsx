@@ -62,7 +62,7 @@ function metaOf(view: ChzzkLinkViewState['view'], channelName: string | undefine
     case 'expired':
       return `${channelName ?? '치지직 채널'} · 연동이 만료돼 하이라이트 감지가 멈출 수 있어요`;
     case 'broken':
-      return `${channelName ?? '치지직 채널'} · 치지직에서 연동이 끊겼어요. 다시 연동해 주세요`;
+      return `${channelName ?? '치지직 채널'} · 치지직에서 연동이 끊겼어요.`;
     default:
       return '연동하면 치지직 방송에서 하이라이트를 감지해요';
   }

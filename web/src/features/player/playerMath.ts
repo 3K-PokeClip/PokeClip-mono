@@ -36,20 +36,51 @@ function pad2(n: number): string {
 
 /**
  * 되감기 창 정규화 — 비율 계산의 분모라 여기서 한 번만 방어하고 아래 두 함수는 결과만 믿는다.
- * 0·음수·NaN이면 0(되감을 곳 없음), 상한은 계약3의 1시간으로 자른다.
+ * 0·음수·NaN이면 0(되감을 곳 없음).
+ *
+ * 🔴 1시간 상한은 여기서 자르지 않는다 — 창을 만드는 쪽이 자른다(라이브: dvrWindow.rewindWindowSeconds · 시뮬레이션).
+ * 여기서 자르면 1시간 넘는 녹화 다시보기의 시크바가 마지막 1시간만 이동한다(POK-253, PR #200 codex P1).
  */
 function usableWindow(windowSeconds: number): number {
   if (!Number.isFinite(windowSeconds) || windowSeconds <= 0) return 0;
-  return Math.min(LIVE_WINDOW_SECONDS, windowSeconds);
+  return windowSeconds;
 }
 
 /**
- * 라이브 엣지 대비 시차 표기 — 계약3 4절: `-01:23` 형태(분 2자리), 상한 `-1:00:00`.
+ * 오른쪽 끝을 부르는 말. 라이브는 실시간이고, 녹화 다시보기는 녹화 끝이다(QA 2026-10-11). 버튼 글자·이름과 시크바 낭독이
+ * 이 표 하나를 쓴다: 따로 적으면 한쪽만 바뀌어 화면과 화면 낭독기가 다른 말을 한다
+ */
+const EDGE_WORDS = {
+  live: {
+    atEdge: '실시간',
+    goTo: '실시간으로',
+    goToLabel: '실시간으로 이동',
+    seekLabel: '라이브 탐색',
+    fromEdge: '실시간에서',
+  },
+  replay: {
+    atEdge: '녹화 끝',
+    goTo: '끝으로',
+    goToLabel: '녹화 끝으로 이동',
+    seekLabel: '다시보기 탐색',
+    fromEdge: '녹화 끝에서',
+  },
+} as const;
+
+export function edgeWords(replay: boolean): (typeof EDGE_WORDS)[keyof typeof EDGE_WORDS] {
+  return replay ? EDGE_WORDS.replay : EDGE_WORDS.live;
+}
+
+/**
+ * 라이브 엣지 대비 시차 표기 — 계약3 4절: `-01:23` 형태(분 2자리), 1시간부터 `-1:00:00`.
  * 시안 프로토타입의 `-1:23` 표기 대신 티켓·계약 표기를 따른다.
+ * 라이브는 창이 1시간이라 `-1:00:00`을 넘지 않고, 1시간 넘는 녹화 다시보기는 `-1:23:45`까지 간다(POK-253).
  */
 export function formatBehind(seconds: number): string {
-  const s = Math.min(LIVE_WINDOW_SECONDS, Math.max(0, Math.round(seconds)));
-  if (s >= LIVE_WINDOW_SECONDS) return '-1:00:00';
+  const s = Math.max(0, Math.round(seconds));
+  if (s >= LIVE_WINDOW_SECONDS) {
+    return `-${Math.floor(s / 3600)}:${pad2(Math.floor((s % 3600) / 60))}:${pad2(s % 60)}`;
+  }
   return `-${pad2(Math.floor(s / 60))}:${pad2(s % 60)}`;
 }
 

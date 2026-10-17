@@ -11,6 +11,11 @@ public enum AuthFailure {
     GOOGLE_TOKEN_EXCHANGE_FAILED,
     GOOGLE_RESPONSE_MISSING_ID_TOKEN,
     GOOGLE_ID_TOKEN_INVALID,
+    /**
+     * 구글 계정의 이메일 인증을 안 마쳤다(POK-256). 이메일이 편집자 초대의 열쇠라 미인증 주소는 받지 않는다.
+     * {@link #EMAIL_ALREADY_REGISTERED}처럼 이유를 알려 준다(403): 사용자가 구글에서 직접 풀어야 하는 상태다.
+     */
+    GOOGLE_EMAIL_UNVERIFIED,
 
     REFRESH_TOKEN_UNKNOWN,
     /** 유예 창 안의 중복 회전. 정상 동작이라 INFO다. */

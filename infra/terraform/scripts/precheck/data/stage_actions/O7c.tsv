@@ -1,0 +1,47 @@
+# 단계 묶음 — 열: 동작 · 리전 · 자원 패턴(탭 구분). 「#」 줄은 주석, 빈 줄은
+# 건너뜀. 계정 자리는 ${ACCOUNT} 뿐(판정 때 caller identity 의 계정 ID).
+# 같은 (동작, 리전)은 한 행. 자원 패턴을 계획이 주지 않으면 *.
+# 출처: 계획 M7 O7c(「ecr 토큰 · 푸시」 — kty 로컬 이미지 푸시 · Terraform
+# 없음) · M7 c5 런북.
+
+# ECR 로그인 토큰
+ecr:GetAuthorizationToken	ap-northeast-2	*
+
+# 이미지 푸시 · 다이제스트 기록
+ecr:BatchCheckLayerAvailability	ap-northeast-2	arn:aws:ecr:ap-northeast-2:${ACCOUNT}:repository/pokeclip-prod/*
+ecr:InitiateLayerUpload	ap-northeast-2	arn:aws:ecr:ap-northeast-2:${ACCOUNT}:repository/pokeclip-prod/*
+ecr:UploadLayerPart	ap-northeast-2	arn:aws:ecr:ap-northeast-2:${ACCOUNT}:repository/pokeclip-prod/*
+ecr:CompleteLayerUpload	ap-northeast-2	arn:aws:ecr:ap-northeast-2:${ACCOUNT}:repository/pokeclip-prod/*
+ecr:PutImage	ap-northeast-2	arn:aws:ecr:ap-northeast-2:${ACCOUNT}:repository/pokeclip-prod/*
+ecr:BatchGetImage	ap-northeast-2	arn:aws:ecr:ap-northeast-2:${ACCOUNT}:repository/pokeclip-prod/*
+ecr:DescribeImages	ap-northeast-2	arn:aws:ecr:ap-northeast-2:${ACCOUNT}:repository/pokeclip-prod/*
+
+# 2-3 판정 · 이벤트 조회의 읽기(설계 11-5 의 2-3-7 · 2-3-8 · 계획 M17a
+# 「데이터」). 열거 읽기의 리전은 M17a 가 정한 두 리전(서울 · us-east-1 —
+# M17b 착수 때 collect.sh 가 실제로 부르는 리전과 확인)이다.
+# ec2:DescribeRegions 는 넣지 않는다(kty 45차). iam:SimulatePrincipalPolicy 는
+# 이 도구 자신의 호출이라 그것이 거부되면 종료 2 로 드러난다.
+iam:GetAccountAuthorizationDetails	us-east-1	*
+iam:GetContextKeysForPrincipalPolicy	us-east-1	*
+iam:SimulateCustomPolicy	us-east-1	*
+iam:GetInstanceProfile	us-east-1	*
+iam:ListAccessKeys	us-east-1	*
+s3:GetBucketPolicy	ap-northeast-2	*
+secretsmanager:GetResourcePolicy	ap-northeast-2	*
+ecr:GetRepositoryPolicy	ap-northeast-2	*
+sns:GetTopicAttributes	ap-northeast-2	*
+sqs:GetQueueAttributes	ap-northeast-2	*
+ec2:DescribeInstances	ap-northeast-2	*
+ec2:DescribeInstances	us-east-1	*
+lambda:ListFunctions	ap-northeast-2	*
+lambda:ListFunctions	us-east-1	*
+ecs:ListTaskDefinitions	ap-northeast-2	*
+ecs:ListTaskDefinitions	us-east-1	*
+ecs:DescribeTaskDefinition	ap-northeast-2	*
+ecs:DescribeTaskDefinition	us-east-1	*
+cloudtrail:LookupEvents	ap-northeast-2	*
+cloudtrail:LookupEvents	us-east-1	*
+tag:GetTagKeys	ap-northeast-2	*
+tag:GetTagKeys	us-east-1	*
+tag:GetResources	ap-northeast-2	*
+tag:GetResources	us-east-1	*

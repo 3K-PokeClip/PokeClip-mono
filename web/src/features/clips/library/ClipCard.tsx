@@ -11,6 +11,7 @@ import {
   ownerInitial,
 } from './libraryView';
 import type { ClipStatus, LibraryClip } from './useLibraryMockState';
+import { ThumbnailImage } from '@/features/thumbnail/ThumbnailImage';
 import styles from './LibraryScreen.module.css';
 
 // 시안 1g 9:16 썸네일 카드. 카드 전체가 토글 버튼 하나다 — 안에 링크·버튼을 두지 않는다
@@ -48,9 +49,9 @@ export function ClipCard({
         aria-label={cardName(clip, status, duration)}
         onClick={() => onToggle(clip.id)}
       >
-        {/* 실이미지가 생기면 이 자리만 next/image로 바뀐다 — 오버레이는 그대로(home Thumb 선례) */}
+        {/* 사진(POK-277)이 있으면 칸을 채우고 없으면 9:16 자리표시. 오버레이는 그대로 위에 얹힌다(home Thumb 선례) */}
         <span className={styles.cardThumb} aria-hidden="true">
-          9:16
+          <ThumbnailImage src={clip.thumbnailUrl} fallback="9:16" />
         </span>
         <span className={styles.cardBadge} aria-hidden="true">
           <Badge tone={badge.tone} variant="solid" size="sm">

@@ -66,7 +66,7 @@ class JumpCardServiceTest extends IntegrationTestSupport {
     void 정리() {
         jdbc.update("DELETE FROM jump_cards");
         broadcasts.deleteAllInBatch();
-        broadcasts.save(Broadcast.startedNow("s-1", TestIds.STREAMER, 1L, Instant.now(), null));
+        broadcasts.save(Broadcast.startedNow("s-1", TestIds.STREAMER, null, 1L, Instant.now(), null));
         AUTH.respondWith(RESOLVE, 200, "{\"relation\":\"OWNER\"}");
     }
 
@@ -123,7 +123,7 @@ class JumpCardServiceTest extends IntegrationTestSupport {
     /** 종료 이벤트가 먼저 도착해도 판별기의 마지막 카드가 버려지면 안 된다. */
     @Test
     void 끝난_방송에도_들어간다() {
-        broadcasts.save(Broadcast.endedPlaceholder("s-ended", TestIds.STREAMER, 9L, Instant.now()));
+        broadcasts.save(Broadcast.endedPlaceholder("s-ended", TestIds.STREAMER, null, 9L, Instant.now()));
 
         assertThat(service.record("s-ended", auto("e", 1_000L)).created()).isTrue();
     }
@@ -237,7 +237,7 @@ class JumpCardServiceTest extends IntegrationTestSupport {
     void 숨기고_되돌린다_누가_숨겼는지_남는다() {
         long id = 카드();
 
-        JumpCardSnapshot hidden = service.hide(id, "1201");
+        JumpCardSnapshot hidden = service.hide(id, "1201", null);
         assertThat(hidden.hidden()).isTrue();
         assertThat(hidden.hiddenBy()).isEqualTo("1201");
 
@@ -315,9 +315,9 @@ class JumpCardServiceTest extends IntegrationTestSupport {
     @Test
     void 이미_숨긴_카드를_다시_숨겨도_숨긴_사람이_안_바뀐다() {
         long id = 카드();
-        JumpCardSnapshot first = service.hide(id, "1201");
+        JumpCardSnapshot first = service.hide(id, "1201", null);
 
-        JumpCardSnapshot again = service.hide(id, "1202");
+        JumpCardSnapshot again = service.hide(id, "1202", null);
 
         assertThat(again.hidden()).as("이미 숨김이어도 성공이다(멱등)").isTrue();
         assertThat(again.hiddenBy()).as("추적 대상이 마지막에 누른 사람으로 바뀌었다").isEqualTo("1201");

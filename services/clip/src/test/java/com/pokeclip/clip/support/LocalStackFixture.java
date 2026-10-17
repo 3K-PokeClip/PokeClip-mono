@@ -2,7 +2,9 @@ package com.pokeclip.clip.support;
 
 import org.testcontainers.localstack.LocalStackContainer;
 import software.amazon.awssdk.http.urlconnection.UrlConnectionHttpClient;
+import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.regions.Region;
+import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.sqs.SqsClient;
 import software.amazon.awssdk.services.sqs.model.CreateQueueRequest;
 import software.amazon.awssdk.services.sqs.model.GetQueueAttributesRequest;
@@ -29,9 +31,12 @@ import java.util.Map;
 public final class LocalStackFixture {
 
     private static final LocalStackContainer LOCALSTACK =
-            new LocalStackContainer("localstack/localstack:4.14.0").withServices("sqs");
+            new LocalStackContainer("localstack/localstack:4.14.0").withServices("sqs", "s3")
+                    // 기본값은 미리서명 주소의 서명을 안 본다: 그러면 위조 주소도 200이라 「주소가 출입증」을 못 잰다(POK-247 실측).
+                    .withEnv("S3_SKIP_SIGNATURE_VALIDATION", "0");
 
     private static final SqsClient SQS;
+    private static final S3Client S3;
 
     static {
         LOCALSTACK.start();
@@ -46,6 +51,15 @@ public final class LocalStackFixture {
                         .socketTimeout(Duration.ofSeconds(30))
                         .build())
                 .build();
+        // 완성 영상 창고(POK-247). LocalStack은 가상 호스트 주소를 못 풀어 경로 방식이다(운영 코드도 주소를 덮으면 그렇게 한다).
+        S3 = S3Client.builder()
+                .region(Region.of(LOCALSTACK.getRegion()))
+                .endpointOverride(LOCALSTACK.getEndpoint())
+                .forcePathStyle(true)
+                .httpClient(UrlConnectionHttpClient.builder()
+                        .socketTimeout(Duration.ofSeconds(30))
+                        .build())
+                .build();
     }
 
     private LocalStackFixture() {
@@ -56,12 +70,30 @@ public final class LocalStackFixture {
         return SQS;
     }
 
+    /** S3 대조·준비용 클라이언트. 탈퇴 정리 시험(POK-256)이 지운 뒤 창고에 무엇이 남았나 센다. */
+    public static S3Client s3() {
+        return S3;
+    }
+
     public static String region() {
         return LOCALSTACK.getRegion();
     }
 
     public static String endpoint() {
         return LOCALSTACK.getEndpoint().toString();
+    }
+
+    /** 창고를 만들고(있으면 그대로) 파일 하나를 놓는다. 완성 영상 주소 시험이 「그 주소로 진짜 받아지나」를 잰다. */
+    public static void putObject(String bucket, String key, byte[] body, String contentType) {
+        ensureBucket(bucket);
+        S3.putObject(b -> b.bucket(bucket).key(key).contentType(contentType), RequestBody.fromBytes(body));
+    }
+
+    /** 창고가 없으면 만든다. 썸네일 그림 시험(POK-291)이 운영 코드의 putObject 앞에 부른다. */
+    public static synchronized void ensureBucket(String bucket) {
+        if (S3.listBuckets().buckets().stream().noneMatch(b -> b.name().equals(bucket))) {
+            S3.createBucket(b -> b.bucket(bucket));
+        }
     }
 
     /** 표준 큐 + 전용 실패 큐(POK-125 렌더 주문줄 모양). {@code maxReceiveCount}를 넘으면 실패 큐로 옮긴다. */

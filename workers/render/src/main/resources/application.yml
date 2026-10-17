@@ -25,6 +25,13 @@ pokeclip:
     poll-wait: 20s
     report-retry-delays: 5s,15s,45s
     fonts-dir: ${RENDER_FONTS_DIR:}
+  thumbnail:
+    # 사진 주문줄(POK-277, clip이 1분마다 낸다). 비면 이 줄을 안 본다. 렌더 줄과 따로라 긴 렌더 뒤에 줄을 서지 않는다.
+    queue-url: ${THUMBNAIL_QUEUE_URL:}
+    # 받기·뽑기·올리기·보고 전부. 조각 하나(수 MB)나 완성 영상 하나를 받아 한 장면을 뽑는 일이라 보통 수 초다.
+    timeout: ${THUMBNAIL_JOB_TIMEOUT:60s}
+    # 큐 설정과 같아야 한다. 상한(60초)보다 길어야 일하는 도중 메시지가 다시 보이지 않는다.
+    visibility-timeout: ${THUMBNAIL_VISIBILITY_TIMEOUT:120s}
 
 logging:
   level:

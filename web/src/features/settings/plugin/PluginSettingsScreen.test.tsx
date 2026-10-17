@@ -66,7 +66,9 @@ describe('PluginSettingsScreen', () => {
     stubStreamKeyFetch();
     renderWithProviders(<PluginSettingsScreen />);
 
-    expect(screen.getByRole('region', { name: '플러그인 연결 상태' })).toHaveTextContent('연결됨');
+    expect(screen.getByRole('region', { name: '플러그인 연결 상태' })).toHaveTextContent(
+      '연결 안 됨',
+    );
     expect(screen.getByRole('heading', { name: '연동 코드' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '플러그인 다운로드' })).toBeInTheDocument();
     // 라벨은 "최초 발급일" — 서버가 주는 시각이 키 생성일뿐이라 재발급 후에도 참말이다 (리뷰 #74)

@@ -535,6 +535,28 @@ public class SessionRegistry {
     }
 
     /**
+     * 이 채널을 걷는 세션을 <b>상태와 무관하게</b> 닫는다(탈퇴, POK-256). 수립 중인 세션도 닫는다: 붙은 세션만 보면
+     * 탈퇴 순간 붙는 중이던 세션이 정리 뒤에 붙어 계속 적는다(PR #220 codex).
+     *
+     * <p>{@code startedBefore}(탈퇴 시각) 뒤에 시작한 세션은 남긴다. 알림이 늦게 오는 사이 같은 채널을 다른 계정이 연동해
+     * 새 방송을 걷고 있을 수 있다. 옛 경로 세션은 채널 번호가 없어 고를 수 없다(개발용).
+     *
+     * @return 닫은 세션 수
+     */
+    public int closeChannel(String channelId, Instant startedBefore) {
+        int closed = 0;
+        for (Map.Entry<Long, Entry> slot : sessions.entrySet()) {
+            SessionKey key = slot.getValue().session().key();
+            if (channelId.equals(key.channelId()) && key.startedAt().isBefore(startedBefore)
+                    && sessions.remove(slot.getKey(), slot.getValue())) {
+                closeEntry(key.streamId(), slot.getValue());
+                closed++;
+            }
+        }
+        return closed;
+    }
+
+    /**
      * 살아 있는 세션을 <b>나란히</b> 닫는다.
      *
      * <p><b>순차로 닫으면 (반납 + 소켓 닫기) × 세션 수다.</b> 실측 기준 세션당 약 1.07초

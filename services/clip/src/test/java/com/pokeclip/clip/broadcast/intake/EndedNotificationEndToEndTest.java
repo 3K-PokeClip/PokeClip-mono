@@ -71,7 +71,7 @@ class EndedNotificationEndToEndTest extends IntegrationTestSupport {
         jdbc.update("DELETE FROM jump_cards");
         events.deleteAllInBatch();
         broadcasts.deleteAllInBatch();
-        broadcasts.save(Broadcast.startedNow("s-queue", TestIds.STREAMER, 1L, Instant.now(), null));
+        broadcasts.save(Broadcast.startedNow("s-queue", TestIds.STREAMER, null, 1L, Instant.now(), null));
         AUTH.respondWith(RESOLVE, 200, "{\"relation\":\"OWNER\"}");
     }
 

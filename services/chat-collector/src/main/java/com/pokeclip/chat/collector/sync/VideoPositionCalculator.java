@@ -1,5 +1,6 @@
 package com.pokeclip.chat.collector.sync;
 
+import com.pokeclip.chat.collector.broadcast.IngestKeyStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -72,10 +73,12 @@ public class VideoPositionCalculator {
     private static final Logger log = LoggerFactory.getLogger(VideoPositionCalculator.class);
 
     private final SegmentLedger ledger;
+    private final IngestKeyStore ingestKeys;
     private final SyncProperties properties;
 
-    public VideoPositionCalculator(SegmentLedger ledger, SyncProperties properties) {
+    public VideoPositionCalculator(SegmentLedger ledger, IngestKeyStore ingestKeys, SyncProperties properties) {
         this.ledger = ledger;
+        this.ingestKeys = ingestKeys;
         this.properties = properties;
     }
 
@@ -84,14 +87,17 @@ public class VideoPositionCalculator {
      */
     public VideoPosition locate(String streamId, String channelId, Instant messageTime) {
         long offset = properties.offsetFor(channelId);
+        // 장부는 물리 키로 찾는다(POK-233). 부르는 쪽(판별기)은 방송 번호를 주고, 그것은 회차 번호라 장부에 없는 이름이다.
+        // 로그에는 방송 번호를 그대로 남긴다(어느 방송이 아픈지가 진단이다)
+        String ledgerKey = ingestKeys.keyOf(streamId);
         // 음수 보정이면 미래로 간다 — minusMillis가 그것을 그대로 처리한다.
         Instant adjusted = messageTime.minusMillis(offset);
 
-        Optional<LedgerFloor> found = ledger.floorByWallClock(streamId, adjusted);
+        Optional<LedgerFloor> found = ledger.floorByWallClock(ledgerKey, adjusted);
         if (found.isEmpty()) {
             // 「이 시각보다 이른 조각이 없다」와 「조각이 하나도 없다」는 다른 상태다.
             // 앞은 첫 조각 이전(영영 없음), 뒤는 장부가 아직(다시 물으면 됨).
-            if (!ledger.hasAnySegment(streamId)) {
+            if (!ledger.hasAnySegment(ledgerKey)) {
                 return VideoPosition.notYetIndexed(offset);
             }
             // 🔴 여기서 곧장 NO_FOOTAGE를 답하면 안 된다. 위 두 왕복 「사이」에 이 방송의 첫
@@ -104,7 +110,7 @@ public class VideoPositionCalculator {
             // (장부는 INSERT만 되므로 그 사실은 뒤집히지 않는다), 잡히면 그것이 더 최신이라
             // 더 정확하다. 존재 확인을 floor보다 「먼저」 묻는 순서로도 닫히지만, 그러면
             // 변환되는 경로 전부가 왕복 하나를 더 쓴다 — 판별기(POK-59)가 채팅마다 부른다.
-            found = ledger.floorByWallClock(streamId, adjusted);
+            found = ledger.floorByWallClock(ledgerKey, adjusted);
             if (found.isEmpty()) {
                 return VideoPosition.noFootage(offset);
             }
@@ -121,7 +127,7 @@ public class VideoPositionCalculator {
 
         LedgerSegment segment = floor.segment();
         long delta = adjusted.toEpochMilli() - segment.startWallUtc().toEpochMilli();
-        Optional<LedgerSegment> next = ledger.nextAfterSeq(streamId, segment.seq());
+        Optional<LedgerSegment> next = ledger.nextAfterSeq(ledgerKey, segment.seq());
 
         // 다음 조각이 이어져 있으면 이 조각의 끝은 그 조각의 시작이다 — 사이에 빈 곳이 없으므로
         // floor 정의상 delta가 길이를 넘어도 그 시각은 여전히 이 조각의 몫이다(미세 어긋남 연장).

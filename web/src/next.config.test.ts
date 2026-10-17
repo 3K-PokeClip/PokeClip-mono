@@ -41,6 +41,15 @@ describe('next.config rewrites', () => {
         source: '/api/youtube-link/:path*',
         destination: 'http://auth.internal:8082/api/youtube-link/:path*',
       },
+      // 편집자가 읽는 스트리머 오디오 트랙 이름(POK-240)과 프로필 사진도 auth 서버 소유 (POK-251)
+      {
+        source: '/api/streamers/:path*',
+        destination: 'http://auth.internal:8082/api/streamers/:path*',
+      },
+      {
+        source: '/api/profile-photos/:path*',
+        destination: 'http://auth.internal:8082/api/profile-photos/:path*',
+      },
       { source: '/api/clip/:path*', destination: 'http://clip.internal:8081/api/clip/:path*' },
     ]);
   });

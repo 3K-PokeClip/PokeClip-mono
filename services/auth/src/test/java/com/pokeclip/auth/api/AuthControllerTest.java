@@ -278,4 +278,25 @@ class AuthControllerTest extends IntegrationTestSupport {
         assertThat(body).doesNotContain(email);
         assertThat(userRepository.count()).isEqualTo(1);
     }
+
+    /**
+     * 이메일 인증을 안 마친 구글 계정은 403으로 이유를 알려 주고 회원을 만들지 않는다(POK-256).
+     * 401로 접으면 사용자는 무엇을 고칠지 모른 채 다시 누르기만 한다.
+     */
+    @Test
+    void 이메일_인증을_안_마친_계정은_403이고_회원을_안_만든다() throws Exception {
+        given(googleTokenClient.exchangeCodeForIdToken("code-unverified")).willReturn("id-unverified");
+        willThrow(new AuthException(AuthFailure.GOOGLE_EMAIL_UNVERIFIED, "미인증"))
+                .given(googleIdTokenVerifier).verify("id-unverified");
+
+        mockMvc.perform(post("/api/auth/google")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                 {"code":"code-unverified"}
+                                 """))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.reason").value("GOOGLE_EMAIL_UNVERIFIED"));
+
+        assertThat(userRepository.count()).isZero();
+    }
 }

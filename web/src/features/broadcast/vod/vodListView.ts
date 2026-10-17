@@ -14,6 +14,19 @@ import type {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+/**
+ * 「방금 종료」의 한도(POK-254). 녹화는 방송 중에 쌓이므로 녹화가 있는 방송은 끝난 뒤 첫 확인(1분)에서 「다시 보기 가능」이
+ * 된다. 한 시간이 지나도록 안 잡혔으면 기다려도 오지 않는다: 전에는 며칠 지난 방송도 「방금 종료」라고 했다.
+ * 홈 「준비 중」 배지도 이 값을 쓴다.
+ */
+export const JUST_ENDED_MS = 60 * 60 * 1000;
+
+/** 끝난 지 한도 안인가. 끝난 시각을 모르면 「방금」이라 하지 않는다 */
+export function isJustEnded(endedAt: string | null, now: Date): boolean {
+  const ended = endedAt ? Date.parse(endedAt) : Number.NaN;
+  return Number.isFinite(ended) && now.getTime() - ended < JUST_ENDED_MS;
+}
+
 /** 만료 임박 경계 — 홈 ExpiringVod의 「D-3 이하 붉은 배지」(useHomeMockState)와 같은 값이다 */
 export const VOD_EXPIRY_URGENT_DAYS = 3;
 
@@ -60,8 +73,10 @@ export function durationLabel(durationSec: number | null): string | null {
 
 /** 시안 1f 행이 아는 상태 — 계약의 status·보관 기한·내려받기 상태가 여기로 접힌다 */
 export type VodRowView =
-  /** 방금 종료 — VOD가 아직 없어 열 수 없다 */
-  | { kind: 'preparing' }
+  /** VOD가 아직 없어 열 수 없다. 끝난 지 한 시간 안이면 「방금 종료」다 */
+  | { kind: 'preparing'; justEnded: boolean }
+  /** 끝난 지 한 시간이 지났는데 녹화가 없다고 확인됐다. 영상은 없어도 카드·채팅은 지난 방송 화면에서 본다 */
+  | { kind: 'noRecording' }
   /** 보관 기한이 지나 지워진 것 — 줄은 남지만 열 것이 없다 */
   | { kind: 'expired' }
   /** 풀 VOD 저장 중 — 썸네일이 진행률로 덮인다 (B5 미구현이라 목업 전용 상태다) */
@@ -83,12 +98,22 @@ const VIEW_BY_STATUS: Record<VodBroadcast['status'], 'preparing' | 'ready'> = {
  * 던지게 돼 있지만(README 404 계약) 그것은 목록이 낡았을 때의 그물이고, 만료를 이미 아는
  * 자리에서까지 열리는 척할 이유는 아니다.
  */
-export function rowViewFor(item: VodBroadcast, download: VodDownloadState, now: Date): VodRowView {
+export function rowViewFor(
+  item: VodBroadcast,
+  download: VodDownloadState,
+  now: Date,
+  /** 녹화 재생 서버에 물어 이 방송의 녹화가 없다고 확인됐다(물을 수 없으면 false) */
+  recordingMissing = false,
+): VodRowView {
   // 만료를 상태보다 먼저 본다. 뒤집으면 기한이 지나도록 `ended`에 머문 방송이 「준비 중」으로
   // 접히는데, 화면은 만료 배지를 따로 계산하므로 한 줄이 「곧 준비돼요」와 「이미 지워졌어요」를
   // 동시에 말한다. 기한이 지났으면 무엇을 기다리든 오지 않는다.
   if (ddayFor(item.vodExpiresAt, now).kind === 'expired') return { kind: 'expired' };
-  if (VIEW_BY_STATUS[item.status] === 'preparing') return { kind: 'preparing' };
+  if (VIEW_BY_STATUS[item.status] === 'preparing') {
+    const justEnded = isJustEnded(item.endedAt, now);
+    if (recordingMissing && !justEnded && item.endedAt !== null) return { kind: 'noRecording' };
+    return { kind: 'preparing', justEnded };
+  }
   if (download.kind === 'downloading') return { kind: 'downloading', progress: download.progress };
   if (download.kind === 'done') return { kind: 'done' };
   return { kind: 'ready' };
@@ -96,7 +121,12 @@ export function rowViewFor(item: VodBroadcast, download: VodDownloadState, now: 
 
 /** 뷰어로 들어갈 수 있는 행인지 — 링크·체브런을 함께 가른다 */
 export function isOpenable(view: VodRowView): boolean {
-  return view.kind === 'ready' || view.kind === 'downloading' || view.kind === 'done';
+  return (
+    view.kind === 'ready' ||
+    view.kind === 'downloading' ||
+    view.kind === 'done' ||
+    view.kind === 'noRecording'
+  );
 }
 
 /**

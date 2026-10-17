@@ -103,7 +103,7 @@ class StreamOpenWindowTest extends IntegrationTestSupport {
      */
     @Test
     void 열기_전_카드는_안_오고_창에_커밋된_카드는_그대로_온다() {
-        broadcasts.save(Broadcast.startedNow("s-win-card", TestIds.STREAMER, 701L, Instant.now(), null));
+        broadcasts.save(Broadcast.startedNow("s-win-card", TestIds.STREAMER, null, 701L, Instant.now(), null));
         post2A("s-win-card", "evt-before", 1_000_000L);
 
         AtomicInteger inWindowStatus = new AtomicInteger();
@@ -130,7 +130,7 @@ class StreamOpenWindowTest extends IntegrationTestSupport {
     /** {@code ended} 갈래는 POK-174에서 뜻이 안 바뀐다 — 초기 전송에서 살아남은 것이 이것이다. */
     @Test
     void 상태를_읽은_뒤_연결이_열리는_사이에_방송이_끝나도_ended를_받는다() {
-        broadcasts.save(Broadcast.startedNow("s-win-end", TestIds.STREAMER, 702L, Instant.now(), null));
+        broadcasts.save(Broadcast.startedNow("s-win-end", TestIds.STREAMER, null, 702L, Instant.now(), null));
         post2A("s-win-end", "evt-1", 1_000_000L);
 
         열린_창에서("s-win-end", () -> {
@@ -173,7 +173,7 @@ class StreamOpenWindowTest extends IntegrationTestSupport {
      */
     @Test
     void 창에서_방송이_끝나고_알림이_지나가도_재조회가_ended를_잡는다() {
-        broadcasts.save(Broadcast.startedNow("s-win-stale", TestIds.STREAMER, 703L, Instant.now(), null));
+        broadcasts.save(Broadcast.startedNow("s-win-stale", TestIds.STREAMER, null, 703L, Instant.now(), null));
         post2A("s-win-stale", "evt-1", 1_000_000L);
 
         조회_직전에("s-win-stale", () -> {

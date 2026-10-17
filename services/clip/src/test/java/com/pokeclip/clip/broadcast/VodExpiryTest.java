@@ -186,11 +186,11 @@ class VodExpiryTest extends IntegrationTestSupport {
 
     private static LifecycleEnvelope started(String streamId, long sequence) {
         return new LifecycleEnvelope(1, streamId + "-" + sequence, "broadcast.started",
-                STARTED_AT, streamId, TestIds.STREAMER, sequence, "trace-vod", MAPPER.createObjectNode());
+                STARTED_AT, streamId, TestIds.STREAMER, null, sequence, "trace-vod", MAPPER.createObjectNode());
     }
 
     private static LifecycleEnvelope ended(String streamId, long sequence, Instant at) {
         return new LifecycleEnvelope(1, streamId + "-" + sequence, "broadcast.ended",
-                at, streamId, TestIds.STREAMER, sequence, "trace-vod", MAPPER.createObjectNode());
+                at, streamId, TestIds.STREAMER, null, sequence, "trace-vod", MAPPER.createObjectNode());
     }
 }

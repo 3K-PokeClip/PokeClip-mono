@@ -1,50 +1,705 @@
 import { act } from 'react';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { HomeScreen } from '@/features/home/HomeScreen';
 import { LiveNowBand } from '@/features/home/LiveNowBand';
 import type { LiveNow } from '@/features/home/useHomeMockState';
 
 const LIVE: LiveNow = {
-  title: '새벽 랭크 올리기 — 다이아 승급전 가보자',
+  streamId: 'stream-1',
+  title: 'stream-1',
   platform: '치지직',
-  startedNote: '오후 7:12 시작 · 편집자 1명 접속 중',
+  startedNote: '오후 7:12 시작',
   uptimeLabel: '1:24:03',
-  viewers: '1,842',
+  viewers: null,
   detectedCards: 8,
-  completedClips: 3,
+  completedClips: null,
 };
 
+// 홈은 마운트 뒤 clip·auth를 부른다 — 시험에서는 빈 응답으로 막고, 보관함에만 편집 중인 편집본 하나를 둔다.
+const EDITING_ENTRY = {
+  recipeId: 12,
+  streamId: 'stream-1',
+  creatorId: '1',
+  recipeVersion: 3,
+  cut: null,
+  status: 'editing',
+  broadcast: { status: 'ended', startedAt: null, endedAt: null, vodExpiresAt: null },
+  latestClip: null,
+  createdAt: '2026-09-26T10:00:00Z',
+  updatedAt: '2026-09-26T11:00:00Z',
+};
+
+function emptyJson(path: string): Response {
+  const body = path.startsWith('/api/clip/library')
+    ? { items: [EDITING_ENTRY], nextCursor: null }
+    : path.includes('/broadcasts?')
+      ? { broadcasts: [], nextCursor: null }
+      : path.endsWith('/jump-cards')
+        ? { cards: [] }
+        : path.endsWith('/broadcast-info')
+          ? { latest: null, series: [] }
+          : { id: 1, email: 'demo@example.com', name: null, profileImageUrl: null };
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
+
 describe('HomeScreen', () => {
-  it('인사말·발행 현황·만료 임박 카드를 렌더한다', () => {
+  beforeEach(() => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => Promise.resolve(emptyJson(String(input)))),
+    );
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('인사말·발행 현황·만료 임박 카드를 렌더한다', async () => {
     render(<HomeScreen />);
 
-    expect(
-      screen.getByRole('heading', { name: /좋은 저녁이에요, 게임하는너구리님/ }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1 })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: '발행 현황' })).toBeInTheDocument();
-    expect(screen.getByText('업로드 중')).toBeInTheDocument();
+    expect(await screen.findByText('아직 유튜브에 올린 영상이 없어요')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: '만료 임박 VOD' })).toBeInTheDocument();
   });
 
-  it('이어서 편집 배너가 클립 편집기로 간다', () => {
+  it('발행 현황은 보관함의 유튜브 업로드를 최근 순으로 보인다 — 실패는 빼고 확인 필요는 따로', async () => {
+    const upload = (id: number, title: string, status: string, updatedAt: string) => ({
+      id,
+      clipId: id,
+      outputId: 'o1',
+      title,
+      status,
+      videoId: status === 'uploaded' ? 'v' : null,
+      error: null,
+      requestedBy: '1',
+      createdAt: updatedAt,
+      updatedAt,
+    });
+    const entry = (recipeId: number, status: string, up: ReturnType<typeof upload>) => ({
+      ...EDITING_ENTRY,
+      recipeId,
+      status,
+      latestClip: {
+        id: recipeId,
+        streamId: 'stream-1',
+        recipeId,
+        recipeVersion: 3,
+        requestedBy: '1',
+        status: 'rendered',
+        progress: null,
+        outputs: [],
+        error: null,
+        createdAt: '2026-09-26T10:00:00Z',
+        updatedAt: '2026-09-26T10:00:00Z',
+        upload: up,
+      },
+    });
+    const items = [
+      entry(1, 'uploaded', upload(1, '옛 영상', 'uploaded', '2026-09-26T10:00:00Z')),
+      entry(2, 'uploading', upload(2, '올리는 영상', 'uploading', '2026-09-26T12:00:00Z')),
+      entry(3, 'checking', upload(3, '모르는 영상', 'checking', '2026-09-26T11:00:00Z')),
+      entry(4, 'rendered', upload(4, '실패한 영상', 'failed', '2026-09-26T13:00:00Z')),
+      // 올린 뒤 새 판을 저장하면 편집본은 「편집 중」이지만 올린 영상은 그대로 유튜브에 있다
+      entry(5, 'editing', upload(5, '새 판 저장한 영상', 'uploaded', '2026-09-26T09:00:00Z')),
+    ];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) =>
+        Promise.resolve(
+          String(input).startsWith('/api/clip/library')
+            ? new Response(JSON.stringify({ items, nextCursor: null }), { status: 200 })
+            : emptyJson(String(input)),
+        ),
+      ),
+    );
     render(<HomeScreen />);
 
-    expect(screen.getByRole('link', { name: '이어서 편집' })).toHaveAttribute(
-      'href',
-      '/clips/editor',
+    const card = (await screen.findByText('올리는 영상')).closest('ul');
+    expect(card).not.toBeNull();
+    const rows = Array.from(card?.querySelectorAll('li') ?? []).map((li) => li.textContent);
+    expect(rows).toEqual([
+      '올리는 영상업로드 중',
+      '모르는 영상확인 필요',
+      '옛 영상발행됨',
+      '새 판 저장한 영상발행됨',
+    ]);
+  });
+
+  it('방송 번호 대신 치지직 제목을 보이고, 제목이 없는 방송만 번호다(POK-259)', async () => {
+    const at = (min: number) => new Date(Date.now() - min * 60_000).toISOString();
+    const liveRow = {
+      streamId: 'S-live-1',
+      status: 'live',
+      relation: 'OWNER',
+      startedAt: at(30),
+      endedAt: null,
+      vodExpiresAt: null,
+      title: '롤 마스터 승급전',
+      category: 'League of Legends',
+    };
+    const pastRows = [
+      {
+        streamId: 'S-past-1',
+        status: 'vod_ready',
+        relation: 'OWNER',
+        startedAt: at(3000),
+        endedAt: at(2900),
+        vodExpiresAt: new Date(Date.now() + 2 * 86_400_000).toISOString(),
+        title: '  새벽 랭크  ',
+        category: null,
+      },
+      {
+        streamId: 'S-past-2',
+        status: 'vod_ready',
+        relation: 'OWNER',
+        startedAt: at(6000),
+        endedAt: at(5900),
+        vodExpiresAt: null,
+        title: null,
+      },
+    ];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        const list = url.includes('state=live')
+          ? [liveRow]
+          : url.includes('state=past')
+            ? pastRows
+            : null;
+        if (list) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ broadcasts: list, nextCursor: null }), { status: 200 }),
+          );
+        }
+        // 방송 정보 관측은 있는데 그 회차에 제목을 못 얻었다 — 목록 제목으로 대신한다
+        if (url.endsWith('/broadcast-info')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                latest: { title: null, tags: [], category: null, viewers: 12 },
+                series: [],
+              }),
+              { status: 200 },
+            ),
+          );
+        }
+        return Promise.resolve(emptyJson(url));
+      }),
     );
+    render(<HomeScreen />);
+
+    expect(await screen.findByText('롤 마스터 승급전')).toBeInTheDocument();
+    expect(await screen.findAllByText('새벽 랭크')).not.toHaveLength(0);
+    expect(screen.getByText('새벽 랭크 · 카드 0개')).toBeInTheDocument();
+    expect(screen.getAllByText('S-past-2')).not.toHaveLength(0);
+    expect(screen.queryByText('S-live-1')).toBeNull();
+    expect(screen.queryByText('S-past-1')).toBeNull();
+  });
+
+  it('라이브 띠의 클립 완료는 그 방송에서 영상까지 만든 편집본 수다', async () => {
+    const liveRow = {
+      streamId: 'stream-1',
+      status: 'live',
+      relation: 'OWNER',
+      startedAt: new Date(Date.now() - 60_000).toISOString(),
+      endedAt: null,
+      vodExpiresAt: null,
+    };
+    const renderedClip = {
+      id: 1,
+      streamId: 'stream-1',
+      recipeId: 13,
+      recipeVersion: 3,
+      requestedBy: '1',
+      status: 'rendered',
+      progress: null,
+      outputs: [],
+      error: null,
+      createdAt: '2026-09-26T10:00:00Z',
+      updatedAt: '2026-09-26T10:00:00Z',
+      upload: null,
+    };
+    const items = [
+      EDITING_ENTRY,
+      // 영상을 만든 뒤 새 판을 저장만 한 편집본 — 만든 영상은 그대로 있다
+      { ...EDITING_ENTRY, recipeId: 17, status: 'editing', latestClip: renderedClip },
+      { ...EDITING_ENTRY, recipeId: 13, status: 'rendered', latestClip: renderedClip },
+      { ...EDITING_ENTRY, recipeId: 14, status: 'uploaded', latestClip: renderedClip },
+      { ...EDITING_ENTRY, recipeId: 15, status: 'failed' },
+      {
+        ...EDITING_ENTRY,
+        recipeId: 16,
+        status: 'rendered',
+        streamId: 'other',
+        latestClip: renderedClip,
+      },
+    ];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.startsWith('/api/clip/library')) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ items, nextCursor: null }), { status: 200 }),
+          );
+        }
+        if (url.includes('state=live')) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ broadcasts: [liveRow], nextCursor: null }), {
+              status: 200,
+            }),
+          );
+        }
+        return Promise.resolve(emptyJson(url));
+      }),
+    );
+    render(<HomeScreen />);
+
+    expect(
+      await screen.findByText((_, el) => el?.textContent === '감지된 카드 0 · 클립 완료 3'),
+    ).toBeInTheDocument();
+  });
+
+  it('새 판 영상을 주문해도 옛 판 업로드가 발행 현황에 남는다: 업로드마다 한 줄(POK-334)', async () => {
+    const live = (
+      id: number,
+      recipeVersion: number,
+      title: string,
+      status: string,
+      updatedAt: string,
+    ) => ({
+      id,
+      clipId: id,
+      recipeVersion,
+      outputId: 'o1',
+      title,
+      status,
+      videoId: status === 'uploaded' ? 'v' : null,
+      createdAt: updatedAt,
+      updatedAt,
+    });
+    const items = [
+      {
+        ...EDITING_ENTRY,
+        status: 'rendering',
+        // 지금 판 영상은 만드는 중이라 latestClip에는 업로드가 없다
+        latestClip: {
+          id: 20,
+          streamId: 'stream-1',
+          recipeId: 12,
+          recipeVersion: 3,
+          requestedBy: '1',
+          status: 'rendering',
+          progress: null,
+          outputs: null,
+          error: null,
+          createdAt: '2026-09-26T12:00:00Z',
+          updatedAt: '2026-09-26T12:00:00Z',
+          upload: null,
+        },
+        liveUploads: [
+          live(31, 2, '둘째 판', 'queued', '2026-09-26T11:00:00Z'),
+          live(30, 1, '첫 판', 'uploaded', '2026-09-26T10:00:00Z'),
+        ],
+      },
+    ];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) =>
+        Promise.resolve(
+          String(input).startsWith('/api/clip/library')
+            ? new Response(JSON.stringify({ items, nextCursor: null }), { status: 200 })
+            : emptyJson(String(input)),
+        ),
+      ),
+    );
+    render(<HomeScreen />);
+
+    const card = (await screen.findByText('첫 판')).closest('ul');
+    const rows = Array.from(card?.querySelectorAll('li') ?? []).map((li) => li.textContent);
+    expect(rows).toEqual(['둘째 판업로드 중', '첫 판발행됨']);
+  });
+
+  it('겹친 폴링에서 먼저 떠나 늦게 온 보관함 답이 더 새 발행 현황을 덮지 않는다', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const row = (status: string) => ({
+      ...EDITING_ENTRY,
+      recipeId: 21,
+      status,
+      latestClip: {
+        id: 21,
+        streamId: 'stream-1',
+        recipeId: 21,
+        recipeVersion: 3,
+        requestedBy: '1',
+        status: 'rendered',
+        progress: null,
+        outputs: [],
+        error: null,
+        createdAt: '2026-09-26T10:00:00Z',
+        updatedAt: '2026-09-26T10:00:00Z',
+        upload: {
+          id: 21,
+          clipId: 21,
+          outputId: 'o1',
+          title: '겹친 영상',
+          status,
+          videoId: status === 'uploaded' ? 'v' : null,
+          error: null,
+          requestedBy: '1',
+          createdAt: '2026-09-26T10:00:00Z',
+          updatedAt: '2026-09-26T10:00:00Z',
+        },
+      },
+    });
+    const body = (status: string) =>
+      new Response(JSON.stringify({ items: [row(status)], nextCursor: null }), { status: 200 });
+    let libraryCalls = 0;
+    let slow: () => void = () => {};
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (!url.startsWith('/api/clip/library')) return Promise.resolve(emptyJson(url));
+        libraryCalls += 1;
+        if (libraryCalls === 1) return Promise.resolve(body('uploading'));
+        if (libraryCalls === 2)
+          return new Promise<Response>((r) => (slow = () => r(body('uploading'))));
+        return Promise.resolve(body('uploaded'));
+      }),
+    );
+    try {
+      render(<HomeScreen />);
+      expect(await screen.findByText('업로드 중')).toBeInTheDocument();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000); // 둘째 읽기: 늦게 온다
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000); // 셋째 읽기: 올림
+      });
+      expect(await screen.findByText('발행됨')).toBeInTheDocument();
+
+      await act(async () => slow());
+      await act(async () => {});
+      expect(screen.getByText('발행됨')).toBeInTheDocument();
+      expect(screen.queryByText('업로드 중')).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('보관함을 못 읽었으면 「올린 영상이 없다」고 하지 않는다', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) =>
+        Promise.resolve(
+          String(input).startsWith('/api/clip/library')
+            ? new Response(JSON.stringify({ error: 'unavailable' }), { status: 503 })
+            : emptyJson(String(input)),
+        ),
+      ),
+    );
+    render(<HomeScreen />);
+
+    expect(await screen.findByText('발행 현황을 불러오지 못했어요')).toBeInTheDocument();
+    expect(screen.queryByText('아직 유튜브에 올린 영상이 없어요')).not.toBeInTheDocument();
+  });
+
+  it('보관함 답이 오기 전에는 불러오는 중이다', () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => new Promise<Response>(() => {})),
+    );
+    render(<HomeScreen />);
+    expect(screen.getByText('발행 현황을 불러오는 중…')).toBeInTheDocument();
+  });
+
+  it('이어서 편집 배너가 가장 최근에 고친 편집본을 편집기로 연다', async () => {
+    render(<HomeScreen />);
+
+    expect(await screen.findByRole('link', { name: '이어서 편집' })).toHaveAttribute(
+      'href',
+      '/clips/editor/studio?recipe=12',
+    );
+  });
+
+  it('편집 중인 편집본이 없으면 배너가 없다', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) =>
+        Promise.resolve(
+          String(input).startsWith('/api/clip/library')
+            ? new Response(JSON.stringify({ items: [], nextCursor: null }), { status: 200 })
+            : emptyJson(String(input)),
+        ),
+      ),
+    );
+    render(<HomeScreen />);
+
+    expect(await screen.findByText('지금 방송 중인 채널이 없어요.')).toBeInTheDocument();
+    expect(screen.queryByLabelText('이어서 편집')).not.toBeInTheDocument();
   });
 
   it('이어서 편집 배너를 닫을 수 있다', async () => {
     const user = userEvent.setup();
     render(<HomeScreen />);
 
-    expect(screen.getByText(/편집하던 클립이 있어요/)).toBeInTheDocument();
+    expect(await screen.findByLabelText('이어서 편집')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: '배너 닫기' }));
-    expect(screen.queryByText(/편집하던 클립이 있어요/)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('이어서 편집')).not.toBeInTheDocument();
+  });
+
+  it('곧 만료될 방송이 지난 방송 목록의 둘째 쪽에 있어도 만료 임박에 뜬다', async () => {
+    // 곧 만료될 방송은 가장 오래된 것이라 목록 끝에 있다 — 한 쪽만 읽으면 빠진다(POK-251 리뷰 2라운드)
+    const inTwoDays = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000 - 60 * 60 * 1000).toISOString();
+    const row = (streamId: string, vodExpiresAt: string | null) => ({
+      streamId,
+      status: 'vod_ready',
+      relation: 'OWNER',
+      startedAt: '2026-08-01T10:00:00Z',
+      endedAt: '2026-08-01T12:00:00Z',
+      vodExpiresAt,
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes('state=past')) {
+          const body = url.includes('cursor=p2')
+            ? { broadcasts: [row('old-expiring', inTwoDays)], nextCursor: null }
+            : { broadcasts: [row('recent', null)], nextCursor: 'p2' };
+          return Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
+        }
+        return Promise.resolve(emptyJson(url));
+      }),
+    );
+    render(<HomeScreen />);
+
+    // 만료 임박 줄은 「방송 · 카드 n개」로 선다(지난 방송 격자에도 D-2 배지가 같이 선다)
+    expect(await screen.findByText('old-expiring · 카드 0개')).toBeInTheDocument();
+    expect(screen.getAllByText('D-2').length).toBeGreaterThan(0);
+  });
+
+  it('최근 하이라이트 카드 칸은 없다: 지난 방송 카드의 「카드 N개」만 남는다(POK-254)', async () => {
+    const card = {
+      id: 35,
+      streamId: 'past-1',
+      source: 'auto',
+      streamTimestampMs: 1_009_000,
+      window: { startMs: 990_000, endMs: 1_030_000 },
+      score: 80,
+      evidence: null,
+      claimedBy: null,
+      hidden: false,
+      eventSeq: 1,
+      createdAt: '2026-10-08T05:50:00Z',
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes('state=past')) {
+          const body = {
+            broadcasts: [
+              {
+                streamId: 'past-1',
+                status: 'vod_ready',
+                relation: 'OWNER',
+                startedAt: '2026-10-08T05:41:00Z',
+                endedAt: '2026-10-08T06:07:00Z',
+                vodExpiresAt: null,
+              },
+            ],
+            nextCursor: null,
+          };
+          return Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
+        }
+        if (url.includes('/past-1/jump-cards'))
+          return Promise.resolve(
+            new Response(JSON.stringify({ cards: [card], nextCursor: null }), { status: 200 }),
+          );
+        return Promise.resolve(emptyJson(url));
+      }),
+    );
+    render(<HomeScreen />);
+
+    expect(await screen.findByText('10월 8일 · 카드 1개')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: '최근 하이라이트 카드' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'past-1 · 0:16:49' })).not.toBeInTheDocument();
+  });
+
+  it('이미 만료된 방송은 만료 임박에 넣지 않는다 — D-0으로 쌓이지 않는다', async () => {
+    const past = (days: number) => new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
+    const row = (streamId: string, vodExpiresAt: string) => ({
+      streamId,
+      status: 'vod_ready',
+      relation: 'OWNER',
+      startedAt: '2026-07-01T10:00:00Z',
+      endedAt: '2026-07-01T12:00:00Z',
+      vodExpiresAt,
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes('state=past')) {
+          const body = {
+            broadcasts: [row('gone', past(-3)), row('soon', past(2))],
+            nextCursor: null,
+          };
+          return Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
+        }
+        return Promise.resolve(emptyJson(url));
+      }),
+    );
+    render(<HomeScreen />);
+
+    expect(await screen.findByText('soon · 카드 0개')).toBeInTheDocument();
+    expect(screen.queryByText('gone · 카드 0개')).not.toBeInTheDocument();
+    expect(screen.queryByText('D-0')).not.toBeInTheDocument();
+  });
+
+  it('지난 방송 격자: 만료된 방송은 열리지 않고 「보관 만료」, 「준비 중」은 끝난 지 한 시간 안만(POK-254)', async () => {
+    const at = (ms: number) => new Date(Date.now() + ms).toISOString();
+    const HOUR = 3_600_000;
+    const row = (
+      streamId: string,
+      status: string,
+      endedAt: string,
+      vodExpiresAt: string | null,
+    ) => ({
+      streamId,
+      status,
+      relation: 'OWNER',
+      startedAt: endedAt,
+      endedAt,
+      vodExpiresAt,
+      title: streamId,
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes('state=past')) {
+          const body = {
+            broadcasts: [
+              row('fresh', 'ended', at(-HOUR / 2), null),
+              row('stale', 'ended', at(-2 * HOUR), null),
+              row('gone', 'vod_ready', at(-61 * 24 * HOUR), at(-HOUR)),
+            ],
+            nextCursor: null,
+          };
+          return Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
+        }
+        return Promise.resolve(emptyJson(url));
+      }),
+    );
+    render(<HomeScreen />);
+
+    const grid = await screen.findByRole('region', { name: '지난 방송 · VOD' });
+    await screen.findByText('gone');
+    const card = (title: string) => screen.getByText(title).closest('li')!;
+    // 썸네일 자리표시 「썸네일 준비 중」과 가르려고 배지 글자만 정확히 찾는다
+    expect(within(card('fresh')).getByText('준비 중')).toBeInTheDocument();
+    expect(within(card('stale')).queryByText('준비 중')).toBeNull();
+    expect(within(card('gone')).getByText('보관 만료')).toBeInTheDocument();
+    expect(card('gone').querySelector('a')).toBeNull();
+    expect(card('fresh').querySelector('a')).not.toBeNull();
+    expect(grid).toBeInTheDocument();
+  });
+
+  it('방송 목록을 잠깐 못 읽어도 지난 화면을 지우지 않는다 — 라이브 띠가 그대로다', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let failing = false;
+    const liveRow = {
+      streamId: 'live-1',
+      status: 'live',
+      relation: 'OWNER',
+      startedAt: new Date(Date.now() - 60_000).toISOString(),
+      endedAt: null,
+      vodExpiresAt: null,
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.startsWith('/api/clip/broadcasts?') && failing) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ error: 'unavailable' }), { status: 503 }),
+          );
+        }
+        if (url.includes('state=live')) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ broadcasts: [liveRow], nextCursor: null }), {
+              status: 200,
+            }),
+          );
+        }
+        return Promise.resolve(emptyJson(url));
+      }),
+    );
+    render(<HomeScreen />);
+    expect(await screen.findByRole('link', { name: '대시보드 열기' })).toBeInTheDocument();
+
+    failing = true;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(screen.getByRole('link', { name: '대시보드 열기' })).toBeInTheDocument();
+    expect(screen.queryByText('지금 방송 중인 채널이 없어요.')).not.toBeInTheDocument();
+    vi.useRealTimers();
+  });
+
+  it('라이브 띠는 카드를 둘째 쪽까지 세고, 수집된 시청자 수를 보인다', async () => {
+    // 카드 목록은 50장씩 오래된 것부터 온다 — 첫 쪽만 세면 50에서 잘린다(PR #200 codex)
+    const liveRow = {
+      streamId: 'live-1',
+      status: 'live',
+      relation: 'OWNER',
+      startedAt: new Date(Date.now() - 60_000).toISOString(),
+      endedAt: null,
+      vodExpiresAt: null,
+    };
+    const cardOf = (id: number) => ({
+      id,
+      source: 'chat-surge',
+      streamTimestampMs: id * 1000,
+      score: 80,
+      hidden: false,
+      createdAt: new Date().toISOString(),
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        const ok = (body: unknown) =>
+          Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
+        if (url.includes('state=live')) return ok({ broadcasts: [liveRow], nextCursor: null });
+        if (url.includes('/live-1/jump-cards'))
+          return ok(
+            url.includes('cursor=c2')
+              ? { cards: [cardOf(2), cardOf(3)], nextCursor: null }
+              : { cards: [cardOf(1)], nextCursor: 'c2' },
+          );
+        if (url.includes('/live-1/broadcast-info'))
+          return ok({
+            latest: { title: '방송', tags: [], category: null, viewers: 1842 },
+            series: [],
+          });
+        return Promise.resolve(emptyJson(url));
+      }),
+    );
+    render(<HomeScreen />);
+
+    expect(await screen.findByText('시청자 1,842')).toBeInTheDocument();
+    expect(screen.getByText('3')).toBeInTheDocument();
   });
 
   it('접근성 위반이 없다', async () => {
@@ -57,18 +712,30 @@ describe('HomeScreen', () => {
 });
 
 describe('LiveNowBand', () => {
+  it('라이브 사진이 있으면 칸을 채우고, 없으면 자리표시를 보인다(POK-277)', () => {
+    const src =
+      'http://localhost:4566/clips-local/thumbnails/live/stream-1.jpg?X-Amz-Date=20261004T101500Z';
+    const { container, rerender } = render(<LiveNowBand live={{ ...LIVE, thumbnailUrl: src }} />);
+    expect(container.querySelector('img')).toHaveAttribute('src', src);
+    expect(screen.queryByText('라이브 방송 화면')).not.toBeInTheDocument();
+
+    rerender(<LiveNowBand live={LIVE} />);
+    expect(container.querySelector('img')).toBeNull();
+    expect(screen.getByText('라이브 방송 화면')).toBeInTheDocument();
+  });
+
   it('방송 정보와 라이브 대시보드 진입 링크를 렌더한다', () => {
     render(<LiveNowBand live={LIVE} />);
 
     expect(screen.getByText('LIVE 1:24:03')).toBeInTheDocument();
-    expect(screen.getByText(LIVE.title)).toBeInTheDocument();
+    expect(screen.getByText('시청자 준비 중')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: '대시보드 열기' })).toHaveAttribute(
       'href',
-      '/broadcast/livenow',
+      '/broadcast/livenow?stream=stream-1',
     );
     expect(screen.getByRole('link', { name: '카드 검토' })).toHaveAttribute(
       'href',
-      '/broadcast/livenow',
+      '/broadcast/livenow?stream=stream-1',
     );
   });
 });

@@ -15,6 +15,7 @@ import com.pokeclip.clip.paging.InvalidListParamException;
 import com.pokeclip.clip.playback.PlaybackErrors;
 import com.pokeclip.clip.recipe.RecipeErrors;
 import com.pokeclip.clip.render.RenderErrors;
+import com.pokeclip.clip.upload.UploadErrors;
 import com.pokeclip.clip.support.NotFoundFloor;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
@@ -27,6 +28,8 @@ import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
+import org.springframework.web.multipart.support.MissingServletRequestPartException;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -234,6 +237,100 @@ public class JumpCardExceptionHandler {
     @ExceptionHandler(RenderErrors.SourceNotReadyException.class)
     ResponseEntity<Map<String, Object>> sourceNotReady(RenderErrors.SourceNotReadyException e) {
         return json(HttpStatus.CONFLICT, error("source_not_ready"));
+    }
+
+    /** 409. 완성 전 영상의 주소를 달라고 했다(POK-247). 빈 목록 200으로 접지 않는다: 화면이 「파일 없는 영상」으로 읽는다. */
+    @ExceptionHandler(RenderErrors.ClipNotRenderedException.class)
+    ResponseEntity<Map<String, Object>> clipNotRendered(RenderErrors.ClipNotRenderedException e) {
+        return json(HttpStatus.CONFLICT, error("clip_not_rendered"));
+    }
+
+    // ── POK-220: 유튜브 업로드 주문·일꾼 보고 문이 쓰는 갈래 ──────────
+
+    /** 503. 업로드 주문줄이 꺼져 있다. */
+    @ExceptionHandler(UploadErrors.UploadUnavailableException.class)
+    ResponseEntity<Map<String, Object>> uploadUnavailable(UploadErrors.UploadUnavailableException e) {
+        return json(HttpStatus.SERVICE_UNAVAILABLE, error("upload_unavailable"));
+    }
+
+    /** 400. 제목·설명·벌 번호(사람 문) 또는 보고 모양(일꾼 문)이 규칙에 안 맞는다. 값은 안 싣는다. */
+    @ExceptionHandler(UploadErrors.InvalidUploadRequestException.class)
+    ResponseEntity<Map<String, Object>> invalidUpload(UploadErrors.InvalidUploadRequestException e) {
+        return json(HttpStatus.BAD_REQUEST, field(e.field()));
+    }
+
+    // ── POK-291: 영상 만들기 + 유튜브 바로 올리기가 더한 갈래 ──────────
+
+    /**
+     * 413. 썸네일 그림이 상한(10MB)을 넘는다. 서블릿 층이 바이트를 다 받기 전에 끊고 여기로 온다(컨트롤러에 안 닿는다).
+     * 이 처리기가 없으면 스프링 기본 봉투로 나가 화면이 「무엇이 너무 큰지」를 못 가른다.
+     */
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    ResponseEntity<Map<String, Object>> payloadTooLarge(MaxUploadSizeExceededException e) {
+        return json(HttpStatus.CONTENT_TOO_LARGE, error("payload_too_large"));
+    }
+
+    /** 400. multipart에 필수 파트({@code request})가 없다. 스프링 기본 봉투로 나가지 않게 같은 400 모양으로 낸다. */
+    @ExceptionHandler(MissingServletRequestPartException.class)
+    ResponseEntity<Map<String, Object>> missingPart(MissingServletRequestPartException e) {
+        return json(HttpStatus.BAD_REQUEST, field(e.getRequestPartName()));
+    }
+
+    /** 415. JPEG·PNG가 아니다(첫 바이트 판정). */
+    @ExceptionHandler(UploadErrors.UnsupportedImageException.class)
+    ResponseEntity<Map<String, Object>> unsupportedImage(UploadErrors.UnsupportedImageException e) {
+        return json(HttpStatus.UNSUPPORTED_MEDIA_TYPE, error("unsupported_image"));
+    }
+
+    /** 503. 그림을 창고에 못 뒀다. 렌더를 주문하기 전이다: 다시 누르면 된다. */
+    @ExceptionHandler(UploadErrors.ThumbnailStoreUnavailableException.class)
+    ResponseEntity<Map<String, Object>> thumbnailStoreUnavailable(UploadErrors.ThumbnailStoreUnavailableException e) {
+        log.warn("clip.upload.thumbnail_store_failed cause={}", e.getCause() == null ? "none" : e.getCause().getClass().getSimpleName());
+        return json(HttpStatus.SERVICE_UNAVAILABLE, error("thumbnail_store_unavailable"));
+    }
+
+    /** 409. 스트리머의 유튜브 채널이 연결돼 있지 않다. {@code reason}은 auth 판정 낱말(NOT_LINKED·UNLINKED·BROKEN)이다. */
+    @ExceptionHandler(UploadErrors.YoutubeNotLinkedException.class)
+    ResponseEntity<Map<String, Object>> youtubeNotLinked(UploadErrors.YoutubeNotLinkedException e) {
+        Map<String, Object> body = error("youtube_not_linked");
+        body.put("reason", e.reason());
+        return json(HttpStatus.CONFLICT, body);
+    }
+
+    /** 409. 같은 편집본 같은 판이 이미 올라갔거나 올라가는 중이다. 그 업로드 번호를 싣는다. */
+    @ExceptionHandler(UploadErrors.AlreadyUploadedException.class)
+    ResponseEntity<Map<String, Object>> alreadyUploaded(UploadErrors.AlreadyUploadedException e) {
+        Map<String, Object> body = error("already_uploaded");
+        body.put("uploadId", e.uploadId());
+        return json(HttpStatus.CONFLICT, body);
+    }
+
+    /** 409. 다시 시도할 업로드가 없다. */
+    @ExceptionHandler(UploadErrors.NothingToRetryException.class)
+    ResponseEntity<Map<String, Object>> nothingToRetry(UploadErrors.NothingToRetryException e) {
+        return json(HttpStatus.CONFLICT, error("nothing_to_retry"));
+    }
+
+    /** 409. 「확인 필요」가 아닌 업로드를 풀려고 했다(POK-333). 지금 상태를 싣는다. */
+    @ExceptionHandler(UploadErrors.UploadNotCheckingException.class)
+    ResponseEntity<Map<String, Object>> uploadNotChecking(UploadErrors.UploadNotCheckingException e) {
+        Map<String, Object> body = error("upload_not_checking");
+        body.put("status", e.status());
+        return json(HttpStatus.CONFLICT, body);
+    }
+
+    /** 409. 「안 올라갔다」를 아직 못 받는다(POK-333). 다시 누를 수 있는 시각을 싣는다. */
+    @ExceptionHandler(UploadErrors.ResolutionTooEarlyException.class)
+    ResponseEntity<Map<String, Object>> resolutionTooEarly(UploadErrors.ResolutionTooEarlyException e) {
+        Map<String, Object> body = error("resolution_too_early");
+        body.put("allowedAt", e.allowedAt().toString());
+        return json(HttpStatus.CONFLICT, body);
+    }
+
+    /** 404. 모르는 업로드 번호. 일꾼 문은 바닥을 안 탄다(서버 간 토큰). 사람 문(POK-333)은 컨트롤러가 바닥을 건다. */
+    @ExceptionHandler(UploadErrors.UploadNotFoundException.class)
+    ResponseEntity<Map<String, Object>> uploadNotFound(UploadErrors.UploadNotFoundException e) {
+        return json(HttpStatus.NOT_FOUND, error("upload_not_found"));
     }
 
     /** 422. 주문서가 큐 상한을 넘는다(계약1 2절 {@code MESSAGE_TOO_LARGE} — 발행 API 축의 코드). */

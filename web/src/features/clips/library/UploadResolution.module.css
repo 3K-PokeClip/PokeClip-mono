@@ -1,0 +1,31 @@
+/* 「확인 필요」 업로드 풀기(POK-333). 2번 시안 없이 기존 확인 창 · 입력 컴포넌트를 쓴다: 모양은 편집자 초대 창과 같은 값 */
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(6 * var(--pc-u));
+}
+
+.dialog.dialog {
+  max-width: calc(410 * var(--pc-u));
+}
+
+.title.title {
+  font-size: calc(15 * var(--pc-u));
+  font-weight: 750;
+  margin: 0 0 calc(5 * var(--pc-u));
+}
+
+.lead.lead {
+  font-size: calc(12 * var(--pc-u));
+  color: var(--pc-color-text-secondary);
+  line-height: 1.55;
+  margin: 0 0 calc(18 * var(--pc-u));
+}
+
+.dialogActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: calc(10 * var(--pc-u));
+  margin-top: calc(18 * var(--pc-u));
+}

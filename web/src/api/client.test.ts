@@ -393,6 +393,33 @@ describe('apiFetch', () => {
     expect(spy.mock.calls.some(([url]) => url === '/api/auth/refresh')).toBe(false);
   });
 
+  it('clip의 거절 사유 코드({error, field})를 ApiError에 싣는다 — 화면이 409 source_not_ready 같은 갈래를 가른다', async () => {
+    stubFetch(() => jsonResponse(409, { error: 'source_not_ready', field: 'cut' }));
+
+    const err = await apiFetch('/api/clip/broadcasts/s1/recipes/1/renders', {
+      method: 'POST',
+    }).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).status).toBe(409);
+    expect((err as ApiError).code).toBe('source_not_ready');
+    expect((err as ApiError).field).toBe('cut');
+    // 문구가 없으면 코드로 문구를 만든다 — 빈 문구로 토스트가 뜨지 않게
+    expect((err as ApiError).message).toBe('409 source_not_ready (cut)');
+  });
+
+  it('문구가 있으면 문구를 쓰고, 사유 코드가 없으면 null이다', async () => {
+    stubFetch(() => jsonResponse(400, { message: '이름이 너무 길어요' }));
+
+    const err = (await apiFetch('/api/auth/me', { method: 'PATCH' }).catch(
+      (e: unknown) => e,
+    )) as ApiError;
+
+    expect(err.message).toBe('이름이 너무 길어요');
+    expect(err.code).toBeNull();
+    expect(err.field).toBeNull();
+  });
+
   it('문자열 본문에는 application/json을 기본으로 붙인다', async () => {
     const spy = stubFetch(() => jsonResponse(200, { ok: true }));
 

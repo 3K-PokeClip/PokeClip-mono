@@ -247,6 +247,6 @@ class LiveStartedAtNeverNullTest extends IntegrationTestSupport {
     private static LifecycleEnvelope startedEnvelope(String eventId, String streamId,
                                                      long sequence, Instant occurredAt) {
         return new LifecycleEnvelope(1, eventId, "broadcast.started", occurredAt, streamId,
-                TestIds.STREAMER, sequence, "trace-1", MAPPER.createObjectNode());
+                TestIds.STREAMER, null, sequence, "trace-1", MAPPER.createObjectNode());
     }
 }

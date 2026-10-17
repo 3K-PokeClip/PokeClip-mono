@@ -17,9 +17,8 @@ import styles from './AccountDeletedScreen.module.css';
 // 보내 이 화면이 뜨지 못한다 — 가드 밖으로 나온 지금이 접을 수 있는 첫 지점이다.
 // 자세한 사정은 withdrawHandoff.ts에 적어 뒀다.
 //
-// ⚠ 아래 문구는 시안 1p ④ 그대로다. 탈퇴 백엔드(POK-171)가 아직 「할 일」이라 실제로는
-// 계정도 보관함도 삭제되지 않았고 세션만 접힌 상태다 — 같은 계정으로 다시 로그인하면
-// 데이터가 그대로 돌아온다. POK-171이 붙기 전까지 이 문장은 사실이 아니다.
+// 아래 문구는 시안 1p ④ 그대로다. 탈퇴 확정은 실제 `DELETE /api/auth/me`이고(POK-171), 방송 기록까지
+// 서버가 지운다(POK-256).
 export function AccountDeletedScreen() {
   const router = useRouter();
   const queryClient = useQueryClient();

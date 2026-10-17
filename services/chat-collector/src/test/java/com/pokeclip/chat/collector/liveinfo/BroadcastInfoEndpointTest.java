@@ -43,6 +43,7 @@ class BroadcastInfoEndpointTest extends IntegrationTestSupport {
     @BeforeEach
     void 내_방송만_비운다() {
         jdbc.update("DELETE FROM broadcast_info WHERE stream_id LIKE 'api-bi-%'");
+        jdbc.update("DELETE FROM broadcast_info WHERE stream_id LIKE 'api-bt-%'");
     }
 
     private HttpResponse<String> 물어본다(String query, String token) throws Exception {
@@ -126,6 +127,64 @@ class BroadcastInfoEndpointTest extends IntegrationTestSupport {
 
         assertThat(body).contains("\"viewers\":7").doesNotContain("\"viewers\":9");
         assertThat(body).as("최신 한 줄은 구간과 무관하다").contains("\"title\":\"안쪽\"");
+    }
+
+    // ── 여러 방송의 마지막 제목(POK-259) ─────────────────────────
+
+    private HttpResponse<String> 제목을_묻는다(String body, String token) throws Exception {
+        HttpRequest.Builder request = HttpRequest.newBuilder(URI.create(
+                "http://localhost:" + port + "/internal/broadcast-info/latest"))
+                .header("Content-Type", "application/json");
+        if (token != null) request.header("X-Internal-Token", token);
+        return HttpClient.newHttpClient().send(request.POST(HttpRequest.BodyPublishers.ofString(body)).build(),
+                HttpResponse.BodyHandlers.ofString());
+    }
+
+    private static String 본문(List<String> streamIds) {
+        return streamIds.stream().map(id -> "\"" + id + "\"")
+                .collect(java.util.stream.Collectors.joining(",", "{\"streamIds\":[", "]}"));
+    }
+
+    /** 칸 이름은 clip과의 계약이라 글자로 못박는다. 쉼표가 든 번호도 하나로 다룬다(주소에 이어 붙이던 첫 판은 쪼갰다). */
+    @Test
+    void 여러_방송의_마지막_제목을_계약된_칸_이름으로_준다() throws Exception {
+        store.insert(new BroadcastInfo("api-bt-1", "CH", T, "제목1", List.of(), "LoL", 3));
+        store.insert(new BroadcastInfo("api-bt-2", "CH", T, "제목2", List.of(), null, null));
+
+        HttpResponse<String> joined = 제목을_묻는다(본문(List.of("api-bt-1", "api-bt-2", "api-bt-none")), TOKEN);
+        assertThat(joined.statusCode()).as(joined.body()).isEqualTo(200);
+        assertThat(joined.body())
+                .contains("\"titles\":{")
+                .contains("\"api-bt-1\":{\"title\":\"제목1\",\"category\":\"LoL\"}")
+                .contains("\"api-bt-2\":{\"title\":\"제목2\",\"category\":null}")
+                .as("관측이 없는 방송은 키가 없다").doesNotContain("api-bt-none");
+
+        assertThat(제목을_묻는다("{}", TOKEN).body()).isEqualTo("{\"titles\":{}}");
+
+        store.insert(new BroadcastInfo("api-bt-a,b", "CH", T, "쉼표 방송", List.of(), null, null));
+        assertThat(제목을_묻는다(본문(List.of("api-bt-a,b")), TOKEN).body()).contains("\"api-bt-a,b\":{\"title\":\"쉼표 방송\"");
+    }
+
+    /** 상한을 넘으면 잘라 주지 않고 400이다. 잘라 주면 부르는 쪽은 뒤 방송 제목이 「없다」로 보인다. 상한 그 자체는 통과(양성 대조). */
+    @Test
+    void 방송을_백_개_넘게_물으면_400이다() throws Exception {
+        // 128자 번호 100개. 주소에 이으면 13KB라 톰캣 요청 줄 한도(8KB)에 걸리던 크기다(PR #214 codex)
+        List<String> hundred = java.util.stream.IntStream.range(0, BroadcastInfoController.MAX_STREAMS)
+                .mapToObj(i -> ("api-bt-x" + i + "-").repeat(20).substring(0, 128)).toList();
+        HttpResponse<String> full = 제목을_묻는다(본문(hundred), TOKEN);
+        assertThat(full.statusCode()).as(full.body()).isEqualTo(200);
+
+        List<String> over101 = new java.util.ArrayList<>(hundred);
+        over101.add("api-bt-over");
+        HttpResponse<String> over = 제목을_묻는다(본문(over101), TOKEN);
+        assertThat(over.statusCode()).isEqualTo(400);
+        assertThat(over.body()).isEqualTo("{\"error\":\"too_many\"}");
+    }
+
+    @Test
+    void 제목_창구도_토큰이_없거나_틀리면_401이다() throws Exception {
+        assertThat(제목을_묻는다(본문(List.of("api-bt-1")), null).statusCode()).isEqualTo(401);
+        assertThat(제목을_묻는다(본문(List.of("api-bt-1")), "wrong").statusCode()).isEqualTo(401);
     }
 
     @Test

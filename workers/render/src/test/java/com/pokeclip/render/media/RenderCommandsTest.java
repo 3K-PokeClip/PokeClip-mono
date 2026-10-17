@@ -1,8 +1,12 @@
 package com.pokeclip.render.media;
 
+import com.pokeclip.render.recipe.Recipe.Aspect;
 import com.pokeclip.render.recipe.Recipe.AudioTrack;
+import com.pokeclip.render.recipe.Recipe.Crop;
+import com.pokeclip.render.recipe.Recipe.Output;
 import org.junit.jupiter.api.Test;
 
+import java.awt.image.BufferedImage;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -33,12 +37,31 @@ class RenderCommandsTest {
     @Test
     void 자르기는_입력_쪽_seek이다() {
         List<String> cmd = RenderCommands.render("ffmpeg", 1_234, 10_000,
-                new CropGeometry.Pixels(0, 0, 606, 1080), com.pokeclip.render.recipe.Recipe.Aspect.VERT_9_16,
-                List.of(new AudioTrack(0, 1.0)), null, true, null, "o1.mp4");
+                Composition.plan(Output.single("o1", Aspect.VERT_9_16, new Crop(0, 0, 0.31640625, 1)), 1920, 1080, "o1_"),
+                List.of(new AudioTrack(0, 1.0)), null, RenderCommands.BURN_SRT, null, "o1.mp4");
         assertThat(cmd.subList(0, 9)).containsExactly("ffmpeg", "-hide_banner", "-nostdin", "-ss", "1.234", "-i",
                 "source.mp4", "-t", "10.000");
         assertThat(cmd.get(cmd.indexOf("-filter_complex") + 1))
-                .startsWith("[0:v:0]setsar=1,crop=606:1080:0:0,scale=1080:1920:flags=lanczos,setsar=1,subtitles=burn.srt:")
+                .startsWith("[0:v:0]setsar=1,crop=606:1080:1:0,scale=1080:1920:flags=lanczos,setsar=1,subtitles=burn.srt:")
                 .contains("[vout];");
+    }
+
+    @Test
+    void 꾸밈_그림은_원본_뒤_입력이고_길이는_그_뒤에_둔다() {
+        Composition.Plan plan = new Composition.Plan("[0:v:0]null", List.of(
+                new Composition.Image("a.png", new BufferedImage(2, 2, BufferedImage.TYPE_INT_ARGB)),
+                new Composition.Image("b.png", new BufferedImage(2, 2, BufferedImage.TYPE_INT_ARGB))));
+        List<String> cmd = RenderCommands.render("ffmpeg", 0, 5_000, plan, List.of(new AudioTrack(0, 1.0)), null, null,
+                null, "o1.mp4");
+        assertThat(cmd.subList(0, 17)).containsExactly("ffmpeg", "-hide_banner", "-nostdin", "-ss", "0.000", "-i",
+                "source.mp4", "-loop", "1", "-i", "a.png", "-loop", "1", "-i", "b.png", "-t", "5.000");
+        assertThat(cmd.get(cmd.indexOf("-filter_complex") + 1)).startsWith("[0:v:0]null[vout];");
+    }
+
+    @Test
+    void ASS_자막은_모양을_덧입히지_않는다() {
+        List<String> cmd = RenderCommands.render("ffmpeg", 0, 5_000, new Composition.Plan("[0:v:0]null", List.of()),
+                List.of(new AudioTrack(0, 1.0)), null, "o1.ass", null, "o1.mp4");
+        assertThat(cmd.get(cmd.indexOf("-filter_complex") + 1)).startsWith("[0:v:0]null,subtitles=o1.ass[vout];");
     }
 }

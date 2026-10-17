@@ -27,9 +27,9 @@ class LiveInfoWiringTest extends IntegrationTestSupport {
     @Autowired ApplicationContext context;
 
     @Test
-    void 켜면_수집기와_스케줄러가_뜨고_스케줄러_풀은_셋이다() {
+    void 켜면_수집기와_스케줄러가_뜨고_스케줄러_풀은_다섯이다() {
         assertThat(context.getBeansOfType(BroadcastInfoCollector.class)).hasSize(1);
         assertThat(context.getBeansOfType(LiveInfoConfiguration.Scheduler.class)).hasSize(1);
-        assertThat(context.getEnvironment().getProperty("spring.task.scheduling.pool.size")).isEqualTo("3");
+        assertThat(context.getEnvironment().getProperty("spring.task.scheduling.pool.size")).isEqualTo("5");
     }
 }

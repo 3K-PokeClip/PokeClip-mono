@@ -76,7 +76,8 @@ class DeploymentEnvVarsTest {
      * 빠지면 세 시험이 전부 초록인 채 dev auth 컨테이너만 안 뜬다(주입으로 확인).
      */
     private static final Set<String> DEFAULTED_DEPLOY_VARS = Set.of(
-            "PROFILE_PHOTO_S3_FORCE_PATH_STYLE", "FORWARD_HEADERS_STRATEGY", "GOOGLE_REDIRECT_URI");
+            "PROFILE_PHOTO_S3_FORCE_PATH_STYLE", "FORWARD_HEADERS_STRATEGY", "GOOGLE_REDIRECT_URI",
+            "STREAM_KEY_SECRET_STORE_TYPE", "STREAM_KEY_SECRET_RETIRE_FROM", "STREAM_KEY_SECRET_REF_PREFIX");
 
     /**
      * 셋째 파일(yml)도 본다 — 명부는 상수라 yml 쪽 변수 이름을 오타 내면(`FORWARD_HEADER_STRATEGY`) compose·예시에
@@ -93,6 +94,39 @@ class DeploymentEnvVarsTest {
             assertThat(composeAuthBlock).as("%s가 dev compose의 auth 블록에 없다", name).contains(name + ":");
             assertThat(example).as("%s가 .env.dev.example에 없다", name).contains(name + "=");
         });
+    }
+
+    /** compose가 호스트에서 읽는 이름. {@code $${VAR}}는 컨테이너 셸이 푸는 글자라 뺀다(postgres healthcheck). */
+    private static final Pattern COMPOSE_HOST_VAR = Pattern.compile("(?<!\\$)\\$\\{([A-Z][A-Z0-9_]*)");
+
+    private static final Pattern EXAMPLE_NAME = Pattern.compile("^([A-Z][A-Z0-9_]*)=", Pattern.MULTILINE);
+
+    /**
+     * 위 셋은 auth 블록과 auth yml만 본다. 그래서 기본값이 있는 다른 서버의 변수(clip {@code PLAYBACK_ACCESS_TTL} ·
+     * 수집기 {@code CHAT_RELAY_ENABLED} 등 일곱)가 예시 파일에서 빠져 있어도 초록이었다(POK-331). 빠지면 부팅은 되지만
+     * 운영자가 그 이름을 몰라 <b>dev에서 켤 수단이 없다.</b> 그래서 반대 끝에서 잰다: compose가 호스트에서 읽는 이름은
+     * 서버를 가리지 않고 전부 예시 파일에 자리가 있어야 한다.
+     */
+    @Test
+    void dev_compose가_읽는_변수는_전부_env_dev_example에_자리가_있다() throws IOException {
+        String compose = withoutComments(Files.readString(SERVICES.resolve("docker-compose.dev.yml")));
+        String example = withoutComments(Files.readString(SERVICES.resolve(".env.dev.example")));
+
+        Set<String> composeNames = new LinkedHashSet<>();
+        Matcher c = COMPOSE_HOST_VAR.matcher(compose);
+        while (c.find()) {
+            composeNames.add(c.group(1));
+        }
+        Set<String> exampleNames = new LinkedHashSet<>();
+        Matcher e = EXAMPLE_NAME.matcher(example);
+        while (e.find()) {
+            exampleNames.add(e.group(1));
+        }
+
+        assertThat(composeNames).as("compose에서 변수를 하나도 못 찾았다 — 정규식이 낡았다").isNotEmpty();
+        assertThat(composeNames)
+                .as("dev compose가 읽는데 .env.dev.example에 자리가 없는 이름 — 운영자가 dev에서 켤 수단이 없다")
+                .isSubsetOf(exampleNames);
     }
 
     /**

@@ -47,15 +47,15 @@ public class GoogleIdTokenVerifier {
             throw new AuthException(AuthFailure.GOOGLE_ID_TOKEN_INVALID, "구글 id_token 검증 실패", e);
         }
 
-        // email_verified를 보지 않는다. 계정 식별은 sub로만 한다.
+        // 🔴 이메일 인증을 마친 계정만 받는다(POK-256, auth/CLAUDE.md 알려진 구멍 0번을 갚는다).
+        // 이메일이 편집자 초대의 열쇠라(POK-57), 미인증 주소로 가입하면 남에게 갈 초대를 대신 받을 수 있었다.
+        // 구글은 이 값을 대개 불리언으로, 옛 발급분은 문자열 "true"로 싣는다. 둘 다 참으로 읽고 나머지(빠짐 포함)는 막는다.
         //
-        // POK-57(2026-08-18)로 이메일이 편집자 초대의 열쇠가 됐는데도 이 검사를 넣지
-        // 않았다 — 사용자 결정으로 보류했다. 그래서 지금은 미인증 이메일로 가입한 계정이
-        // 남에게 갈 초대를 대신 받을 수 있다. 운영 전에 갚는다(auth/CLAUDE.md 알려진 구멍).
-        //
-        // 같은 POK-57에서 users.email에 유일 제약이 생겨, 같은 주소를 다른 sub가 들고 오면
-        // 409로 거절된다(AuthFailure.EMAIL_ALREADY_REGISTERED). 그건 주소를 나눠 갖는 것을
-        // 막을 뿐이고, 미인증 주소로 먼저 선점하는 위 경로는 그대로 열려 있다.
+        // users.email의 유일 제약(POK-57, 같은 주소를 다른 sub가 들고 오면 409)은 그대로다.
+        Object emailVerified = jwt.getClaim("email_verified");
+        if (!Boolean.TRUE.equals(emailVerified) && !"true".equals(emailVerified)) {
+            throw new AuthException(AuthFailure.GOOGLE_EMAIL_UNVERIFIED, "이메일 인증을 안 마친 구글 계정");
+        }
         return new GoogleUser(
                 jwt.getSubject(),
                 jwt.getClaimAsString("email"),

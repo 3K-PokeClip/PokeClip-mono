@@ -3,12 +3,14 @@ package com.pokeclip.clip.collector;
 import com.pokeclip.clip.config.InternalApiProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
 
 import java.util.Map;
+import java.util.function.Supplier;
 
 /**
  * 수집기(chat-collector)의 {@code /internal/streams/…} 창구를 부른다.
@@ -83,24 +85,48 @@ public class CollectorClient {
             // 「수집기 주소가 비었다」는 설정을 보면 알 수 있고, 화면에는 503이 나간다.
             throw new CollectorErrors.CollectorUnavailableException("disabled");
         }
+        return send(() -> restClient.get()
+                .uri(builder -> {
+                    // 🔴 경로 탈출을 막는 것은 이 조립이 아니라 <b>자격 판정</b>이다.
+                    // DefaultUriBuilderFactory.path는 공백만 인코딩하고 `/`·`..`는 그대로
+                    // 통과시킨다(실측: "../../actuator/health"가 글자 그대로 나간다).
+                    // 실제로 막는 것은 부르기 전의 guard.requireViewable이다 — broadcasts
+                    // 명부에 있는 방송 번호만 여기까지 온다. 그래서 판정을 이 호출보다
+                    // 뒤로 옮기면 그 방어가 통째로 사라진다.
+                    builder.path(path);
+                    query.forEach(builder::queryParam);
+                    return builder.build();
+                }));
+    }
+
+    /**
+     * 본문(JSON)을 실어 부른다(POK-259 제목 창구). 경로는 <b>고정 문자열</b>만 넘긴다(사람 입력이 안 들어간다).
+     * 상태 코드 처리는 {@link #get}과 같다.
+     *
+     * @throws CollectorErrors.CollectorUnavailableException 5xx·못 닿음·시한·꺼짐
+     */
+    public CollectorResponse postJson(String path, String json) {
+        if (!enabled) {
+            throw new CollectorErrors.CollectorUnavailableException("disabled");
+        }
+        return send(() -> restClient.post()
+                .uri(builder -> builder.path(path).build())
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(json));
+    }
+
+    /**
+     * {@link #get}·{@link #postJson}이 같이 쓰는 보내기·상태 처리. 이유는 클래스 javadoc.
+     * 요청을 <b>여기 try 안에서</b> 조립한다. 주소 조립이 던지는 것(쿼리 값의 {@code {}} 같은 템플릿 글자)도 503으로 접혀야 한다.
+     */
+    private CollectorResponse send(Supplier<RestClient.RequestHeadersSpec<?>> request) {
         try {
-            ResponseEntity<String> response = restClient.get()
-                    .uri(builder -> {
-                        // 🔴 경로 탈출을 막는 것은 이 조립이 아니라 <b>자격 판정</b>이다.
-                        // DefaultUriBuilderFactory.path는 공백만 인코딩하고 `/`·`..`는 그대로
-                        // 통과시킨다(실측: "../../actuator/health"가 글자 그대로 나간다).
-                        // 실제로 막는 것은 부르기 전의 guard.requireViewable이다 — broadcasts
-                        // 명부에 있는 방송 번호만 여기까지 온다. 그래서 판정을 이 호출보다
-                        // 뒤로 옮기면 그 방어가 통째로 사라진다.
-                        builder.path(path);
-                        query.forEach(builder::queryParam);
-                        return builder.build();
-                    })
+            ResponseEntity<String> response = request.get()
                     .header(INTERNAL_TOKEN_HEADER, internalToken)
                     .retrieve()
                     // 400만 예외로 안 바꾼다(핸들러를 비우는 것이 그 뜻이다). 나머지 4xx는
                     // 기본 핸들러가 던지고 아래 catch가 503으로 접는다 — 이유는 클래스 javadoc.
-                    .onStatus(status -> status.value() == 400, (request, res) -> {
+                    .onStatus(status -> status.value() == 400, (req, res) -> {
                     })
                     .toEntity(String.class);
             return new CollectorResponse(response.getStatusCode().value(), response.getBody());

@@ -65,6 +65,32 @@ public final class Fixtures {
         return r;
     }
 
+    /**
+     * v2 레시피(계약6 7절). 편집기의 「크롭」 레이아웃 모양이다 — 흐린 바탕 위에 원본 세로 한 장을 꽉 채우고, 그 위에 4:3 작은 화면을
+     * 테두리·둥근 모서리·그림자와 함께 얹는다. 가운데 구분선 하나, 자막은 아래 붙임.
+     */
+    public static ObjectNode recipeV2(String streamId) {
+        ObjectNode r = recipe(streamId);
+        r.put("schemaVersion", 2);
+        ArrayNode outputs = r.putArray("outputs");
+        ObjectNode o = outputs.addObject();
+        o.put("outputId", "o1");
+        o.put("aspect", "VERT_9_16");
+        o.putObject("background").put("kind", "BLUR").put("strength", 60);
+        ArrayNode layers = o.putArray("layers");
+        ObjectNode main = layers.addObject();
+        main.putObject("crop").put("x", 0.341796875).put("y", 0.0).put("w", 0.31640625).put("h", 1.0);
+        main.putObject("box").put("x", 0.0).put("y", 0.0).put("w", 1.0).put("h", 1.0);
+        ObjectNode pip = layers.addObject();
+        // 결과 1080x1920에서 0.64x0.27 = 691.2x518.4px = 4:3 → 640x360 원본에서 높이 0.5(180px)면 폭 240px = 0.375
+        pip.putObject("crop").put("x", 0.6).put("y", 0.1).put("w", 0.375).put("h", 0.5);
+        pip.putObject("box").put("x", 0.18).put("y", 0.5).put("w", 0.64).put("h", 0.27);
+        pip.putObject("frame").put("width", 0.004).put("color", "#ffffff").put("radius", 0.016).put("shadow", true);
+        o.putArray("dividers").addObject().put("y", 0.25).put("thickness", 0.008).put("color", "#586fc4");
+        ((ObjectNode) r.get("subtitles")).putObject("position").put("anchor", "BOTTOM").put("y", 0.97);
+        return r;
+    }
+
     public static ObjectNode envelope(UUID jobId, ObjectNode recipe) {
         ObjectNode e = MAPPER.createObjectNode();
         e.put("schemaVersion", 1);

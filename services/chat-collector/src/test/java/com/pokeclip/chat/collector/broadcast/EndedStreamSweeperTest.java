@@ -110,9 +110,11 @@ class EndedStreamSweeperTest extends IntegrationTestSupport {
      */
     @Test
     void 예약_실행이_켜져_있다() {
-        var tasks = context.getBean(ScheduledAnnotationBeanPostProcessor.class).getScheduledTasks();
+        // 탈퇴 정리기 둘(POK-256)도 같은 컨텍스트에 산다. 이 정리기의 태스크만 골라 본다.
+        var tasks = context.getBean(ScheduledAnnotationBeanPostProcessor.class).getScheduledTasks().stream()
+                .filter(t -> t.toString().contains("EndedStreamSweeper.sweep")).toList();
         assertThat(tasks).hasSize(1);
-        FixedDelayTask task = (FixedDelayTask) tasks.iterator().next().getTask();
+        FixedDelayTask task = (FixedDelayTask) tasks.getFirst().getTask();
         assertThat(task.getIntervalDuration()).isEqualTo(Duration.ofHours(24));
         assertThat(task.getInitialDelayDuration()).isEqualTo(Duration.ofHours(24));
     }

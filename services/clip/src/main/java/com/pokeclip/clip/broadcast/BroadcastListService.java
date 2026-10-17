@@ -1,5 +1,6 @@
 package com.pokeclip.clip.broadcast;
 
+import com.pokeclip.clip.collector.BroadcastTitleClient;
 import com.pokeclip.clip.delegation.AccessErrors;
 import com.pokeclip.clip.delegation.AccessibleResult;
 import com.pokeclip.clip.delegation.DelegationResolveClient;
@@ -7,10 +8,14 @@ import com.pokeclip.clip.delegation.ResolveResult;
 import com.pokeclip.clip.paging.CursorCodec;
 import com.pokeclip.clip.paging.InvalidListParamException;
 import com.pokeclip.clip.paging.ListLimit;
+import com.pokeclip.clip.segment.TimelineOriginReader;
+import com.pokeclip.clip.thumbnail.ThumbnailUrls;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataAccessException;
 import org.springframework.stereotype.Service;
 
+import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -75,10 +80,17 @@ public class BroadcastListService {
 
     private final BroadcastRepository broadcasts;
     private final DelegationResolveClient delegation;
+    private final TimelineOriginReader origins;
+    private final ThumbnailUrls thumbnails;
+    private final BroadcastTitleClient titles;
 
-    BroadcastListService(BroadcastRepository broadcasts, DelegationResolveClient delegation) {
+    BroadcastListService(BroadcastRepository broadcasts, DelegationResolveClient delegation,
+                         TimelineOriginReader origins, ThumbnailUrls thumbnails, BroadcastTitleClient titles) {
         this.broadcasts = broadcasts;
         this.delegation = delegation;
+        this.origins = origins;
+        this.thumbnails = thumbnails;
+        this.titles = titles;
     }
 
     /**
@@ -127,7 +139,16 @@ public class BroadcastListService {
         String next = hasMore
                 ? CursorCodec.encode(CursorCodec.Kind.BROADCAST, page.get(page.size() - 1).getId())
                 : null;
-        return new BroadcastPage(page, relations, next);
+        // 시각 기준점은 잘라 낸 한 장만 잰다(POK-255) — 「다음 장이 있나」를 보려고 더 받은 한 줄은 안 나간다
+        return new BroadcastPage(page, relations, next, originsOrEmpty(page), thumbnailsOf(page),
+                titles.titlesOf(page.stream().map(Broadcast::getStreamId).toList()));
+    }
+
+    /** 사진 주소(POK-277). 방송 중이면 최신 화면, 끝났으면 최고 점수 카드 장면. 부가 칸이라 못 읽으면 비운다({@link ThumbnailUrls}). */
+    private Map<String, String> thumbnailsOf(List<Broadcast> page) {
+        List<String> live = page.stream().filter(b -> b.getStatus() == BroadcastStatus.LIVE).map(Broadcast::getStreamId).toList();
+        List<String> ended = page.stream().filter(b -> b.getStatus() != BroadcastStatus.LIVE).map(Broadcast::getStreamId).toList();
+        return thumbnails.ofBroadcasts(live, ended);
     }
 
     /**
@@ -161,6 +182,19 @@ public class BroadcastListService {
         } catch (NumberFormatException e) {
             log.error("clip.list.identity_not_numeric reason=subject_not_numeric");
             throw new AccessErrors.NotViewableException("subject_not_numeric");
+        }
+    }
+
+    /**
+     * 기준점은 부가 칸이다. 못 재면(장부 표가 없거나 옛 모양) 칸만 비우고 목록은 낸다. 여기서 던지면 홈·라이브·다시보기가
+     * 전부 500이 된다(로컬 리뷰 1라운드). 비면 화면은 방송 시작 시각으로 대신한다.
+     */
+    private Map<String, Instant> originsOrEmpty(List<Broadcast> page) {
+        try {
+            return origins.originsOf(page);
+        } catch (DataAccessException e) {
+            log.warn("broadcast.timeline_origin_failed rows={} reason={}", page.size(), e.getClass().getSimpleName());
+            return Map.of();
         }
     }
 }

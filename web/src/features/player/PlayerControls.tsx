@@ -13,7 +13,7 @@ import {
 import type { Ref } from 'react';
 import clsx from 'clsx';
 import styles from './GlassPlayer.module.css';
-import { formatBehind } from './playerMath';
+import { edgeWords, formatBehind } from './playerMath';
 import { PlayerSettingsPopover } from './PlayerSettingsPopover';
 import type { PlayerSimulation } from './usePlayerSimulation';
 
@@ -45,6 +45,7 @@ export function PlayerControls({
   /** 설정 팝오버 열림 알림 — 열려 있는 동안 GlassPlayer가 컨트롤 숨김을 유보한다 */
   onSettingsOpenChange?: (open: boolean) => void;
 }) {
+  const edge = edgeWords(sim.replay);
   return (
     <div className={styles.buttonRow}>
       <div className={styles.buttonGroup}>
@@ -83,11 +84,11 @@ export function PlayerControls({
         <button
           type="button"
           className={styles.livePillBtn}
-          aria-label="실시간으로 이동"
+          aria-label={edge.goToLabel}
           onClick={sim.returnToLive}
         >
           <span className={styles.livePillDot} data-at-edge={sim.atEdge || undefined} aria-hidden />
-          {sim.atEdge ? '실시간' : `${formatBehind(sim.behindSeconds)} · 실시간으로`}
+          {sim.atEdge ? edge.atEdge : `${formatBehind(sim.behindSeconds)} · ${edge.goTo}`}
         </button>
       </div>
       <div className={styles.buttonGroup}>
@@ -114,13 +115,16 @@ export function PlayerControls({
         >
           <PictureInPicture2 size={19} aria-hidden />
         </button>
-        <PlayerSettingsPopover
-          quality={sim.quality}
-          onQualityChange={sim.setQuality}
-          lowLatency={sim.lowLatency}
-          onToggleLowLatency={sim.toggleLowLatency}
-          onOpenChange={onSettingsOpenChange}
-        />
+        {/* 실재생은 고를 화질이 없다(렌디션 하나) — 거짓 선택지를 안 보인다(POK-253) */}
+        {sim.settingsMenu && (
+          <PlayerSettingsPopover
+            quality={sim.quality}
+            onQualityChange={sim.setQuality}
+            lowLatency={sim.lowLatency}
+            onToggleLowLatency={sim.toggleLowLatency}
+            onOpenChange={onSettingsOpenChange}
+          />
+        )}
         <button
           ref={fullscreenButtonRef}
           type="button"

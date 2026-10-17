@@ -389,6 +389,10 @@ class SqsIntakeRunner {
         if (streamerId != null) {
             return streamerId;
         }
+        // 물리 키는 없어도 받는다(1번이 소비자 배포 뒤에 싣기 시작한다, LifecycleEnvelope 참고). 있는데 길면 위 칸들과 같은 갈래다
+        if (envelope.ingestStreamId() != null && envelope.ingestStreamId().length() > MAX_IDENTIFIER_LENGTH) {
+            return new FieldRejection("ingestStreamId", "too_long");
+        }
         if (envelope.occurredAt() == null) {
             return new FieldRejection("occurredAt", "missing");
         }

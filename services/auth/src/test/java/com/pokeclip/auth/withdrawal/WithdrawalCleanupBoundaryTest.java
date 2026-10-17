@@ -6,6 +6,7 @@ import com.pokeclip.auth.profile.PhotoStorage;
 import com.pokeclip.auth.profile.StoredPhoto;
 import com.pokeclip.auth.streamkey.StreamKeyService;
 import com.pokeclip.auth.streamkey.secret.SecretStore;
+import com.pokeclip.auth.streamkey.secret.StreamKeySecretRetirer;
 import com.pokeclip.auth.token.TokenService;
 import com.pokeclip.auth.user.User;
 import com.pokeclip.auth.user.UserService;
@@ -196,10 +197,19 @@ class WithdrawalCleanupBoundaryTest extends WithdrawalTestSupport {
             return new ProgrammableStorage();
         }
 
+        /**
+         * 탈퇴 정리는 저장소가 아니라 폐기 정리기를 부른다(POK-272). 가짜 보관소를 정리기에 끼운다.
+         * 보관소 자체는 {@code @Primary}로 두지 않는다. 유튜브·치지직이 받는 기본 저장소(PG)와 겹친다.
+         */
         @Bean
-        @Primary
         ProgrammableSecretStore programmableSecretStore() {
             return new ProgrammableSecretStore();
+        }
+
+        @Bean
+        @Primary
+        StreamKeySecretRetirer programmableRetirer(ProgrammableSecretStore secrets) {
+            return new StreamKeySecretRetirer(List.of(secrets), "pokeclip/local/stream-key/");
         }
     }
 

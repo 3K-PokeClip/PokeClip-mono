@@ -17,10 +17,11 @@ import styles from './GlassPlayer.module.css';
 import { PlayerChatOverlay } from './PlayerChatOverlay';
 import { PlayerControls } from './PlayerControls';
 import { PlayerSeekBar } from './PlayerSeekBar';
-import { PlayerTopOverlay } from './PlayerTopOverlay';
+import { PlayerTopOverlay, type PlayerBroadcastStatus } from './PlayerTopOverlay';
 import { seekIntentForKey } from './playerKeys';
 import { progressFraction } from './playerMath';
-import { useHlsPlayback } from './useHlsPlayback';
+import { useHlsPlayback, type LivePosition } from './useHlsPlayback';
+import { useRecordedPlayback, type RecordedSource } from './useRecordedPlayback';
 import {
   usePlayerSimulation,
   type PlayerSimulation,
@@ -29,25 +30,66 @@ import {
 import { useSimulatedChat } from './useSimulatedChat';
 
 // 리퀴드 글래스 라이브 플레이어 (시안 "영상 플레이어 글래스").
-// src가 있으면 hls.js 실재생(useHlsPlayback), 없으면 목업(usePlayerSimulation) —
+// 고르는 순서: recorded(끝난 방송 녹화) → src(hls.js 실재생, useHlsPlayback) → simulate(목업,
+// usePlayerSimulation — 스토리북·시험용) → 그 밖엔 「영상 신호 없음」 자리 표시(NoSignalGlassPlayer).
+// 실제 화면에서 영상이 없을 때 흐르는 진행바·시간·채팅을 지어내지 않는다(POK-251).
 // 훅 규칙상 조건부 호출이 안 되므로 컴포넌트 단위로 갈라 태운다. Body는 어느 쪽인지 모른다.
 //
 // 플레이어 안 채팅(오버레이·토글)은 전체 화면 전용이다 — 시안은 항상 그리지만 제품 결정으로
 // 다르게 간다(POK-239). 기본 상태에선 옆 채팅 패널이 채팅을 맡고, 전체 화면에선 그 패널이
-// 안 보이니 그때만 오버레이가 선다. 바깥 패널을 다시 여는 버튼(상단 오버레이 우측)은 별개다 —
+// 안 보이니 그때만 오버레이가 선다. 오버레이 채팅은 아직 흉내(useSimulatedChat)뿐이라 목업
+// 모드(simulate)에서만 선다 — 실재생 위에 가짜 채팅을 얹지 않는다. 바깥 패널을 다시 여는 버튼(상단 오버레이 우측)은 별개다 —
 // 패널이 접혀 있는 동안 플레이어 안에 남는 유일한 복귀 통로다.
 /** 바깥에서 플레이어에 내리는 명령 — sim이 Body 안에서 생겨 상태로는 끌어올릴 수 없다 */
 export interface GlassPlayerController {
-  /** 방송 경과 시각(초)으로 이동 — 되감기 창 밖은 가장 오래된 지점으로 클램프 */
-  seekToUptime: (uptimeSeconds: number) => void;
+  /**
+   * 방송 경과 시각(초)으로 이동 — 되감기 창 밖은 가장 오래된 지점으로 클램프. 옮길 영상이 없거나(자리 표시) 아직 되감을
+   * 구간이 없으면(라이브 영상이 목록을 받기 전) false를 돌려준다: 녹화를 찾는 중일 수도, 아예 없을 수도 있어 무엇을 말할지는
+   * 부른 쪽이 정한다(QA 2026-10-11 리뷰)
+   */
+  seekToUptime: (uptimeSeconds: number) => boolean;
+  /**
+   * 실제 시각(epoch ms)으로 이동: 라이브 실재생만 있다(조각의 시각 표시(PDT)로 셈한다, POK-326). 목록에 시각 표시가 없으면 false라
+   * 부른 쪽이 seekToUptime으로 옮긴다. 방송 경과 시계로 옮기면 숨은 탭에서 그 시계가 밀려 카드보다 늦은 자리로 갔다
+   */
+  seekToTime?: (epochMs: number) => boolean;
 }
 
 export interface GlassPlayerProps {
   channelName: string;
   /** 상단 필의 아래 줄 — 라이브는 「1,842명 시청 중」 (시안은 여기에 제목을 두지 않는다) */
   viewersNote: string;
-  /** HLS 재생 소스(m3u8) — 없으면 목업 시뮬레이션으로 동작한다 */
+  /** HLS 재생 소스(m3u8) — 없으면 simulate에 따라 목업이나 「영상 신호 없음」이다 */
   src?: string | null;
+  /** 끝난 방송의 녹화(재생 서버) — 있으면 HLS 대신 이것으로 다시보기를 튼다 */
+  recorded?: RecordedSource | null;
+  /** 녹화 다시보기를 이 자리(방송 기준 초)부터 튼다. 녹화 플레이어가 설 때 한 번만 읽는다(useRecordedPlayback) */
+  startAtSeconds?: number | null;
+  /**
+   * 녹화 다시보기의 재생 위치(방송 기준 초, 내림)가 바뀔 때마다 알린다. 지난 방송 채팅이 그 시각까지의 줄만 보인다(POK-324).
+   * 녹화를 틀 때만 부른다: 라이브 재생기의 자리는 onLivePosition이 알린다(POK-326)
+   */
+  onPlaybackPosition?: (seconds: number) => void;
+  /**
+   * 녹화 다시보기에서 사람이 옮겼다(시크바·키(화살표·PageUp·PageDown·Home)·끝으로·카드·다 본 뒤 처음부터). 재생으로 흐르거나 녹화 틈을 넘을 때는 부르지
+   * 않는다: 녹화가 옮긴 자리는 지난 방송 채팅이 이것으로만 따라간다(영상 없이 누른 카드는 화면이 따로 알린다). 라이브 재생기도
+   * 사람이 옮기면(실시간으로 포함) 부른다: 라이브 채팅도 맨 아래(되감은 자리, 실시간이면 최신)로 간다(POK-326)
+   */
+  onSeek?: () => void;
+  /**
+   * 라이브 재생기의 자리(실제 시각·실시간에서 몇 초 뒤)가 바뀔 때마다 알린다. 영상 목록에 시각 표시(PDT)가 없으면 null이다. 라이브
+   * 채팅이 되감은 자리를 따른다(POK-326). 방송이 끝나면 채팅은 이 값을 보지 않는다(지난 방송은 녹화의 재생 위치를 따른다)
+   */
+  onLivePosition?: (position: LivePosition | null) => void;
+  /** 소스가 없을 때 목업 재생으로 시안 동작을 보인다 — 스토리북·시험 전용. 실제 화면은 끈다 */
+  simulate?: boolean;
+  /** clip의 방송 명부가 말하는 상태 — 상단 배지(LIVE·종료·확인 중)의 근거. 없으면 LIVE */
+  broadcastStatus?: PlayerBroadcastStatus;
+  /**
+   * 영상이 없을 때 자리 표시의 아랫줄. 없으면 상태에 따른 기본 말이다. 끝난 방송은 녹화를 찾는 중인지, 찾았는데 없는지를
+   * 바깥(녹화를 찾는 쪽)이 안다
+   */
+  noSignalNote?: string;
   /** 화면 안에 꽉 채워 넣는 모드 — 라운드·외곽 여백 제거 (1b 라이브 대시보드) */
   embed?: boolean;
   /** 테스트용 시뮬레이션 초기값 */
@@ -68,21 +110,97 @@ export interface GlassPlayerProps {
 }
 
 export function GlassPlayer(props: GlassPlayerProps) {
-  return props.src ? (
-    <HlsGlassPlayer {...props} src={props.src} />
-  ) : (
-    <SimulatedGlassPlayer {...props} />
-  );
+  if (props.recorded) return <RecordedGlassPlayer {...props} recorded={props.recorded} />;
+  if (props.src) return <HlsGlassPlayer {...props} src={props.src} />;
+  return props.simulate ? <SimulatedGlassPlayer {...props} /> : <NoSignalGlassPlayer {...props} />;
 }
 
 function SimulatedGlassPlayer(props: GlassPlayerProps) {
   const sim = usePlayerSimulation(props.simulationOptions);
   return <GlassPlayerBody {...props} sim={sim} videoNode={null} />;
 }
+/**
+ * media 서버가 없을 때의 플레이어 — 같은 프레임 안에 사실만 적는다.
+ * 움직이는 진행바·재생 버튼·시간 표기가 없다(지어낼 수 없다). 시점 이동 명령은 false로 거절한다(알릴지는 부르는 쪽이 정한다).
+ */
+function NoSignalGlassPlayer({
+  channelName,
+  viewersNote,
+  broadcastStatus,
+  noSignalNote,
+  embed = false,
+  chatPanelOpen,
+  onToggleChatPanel,
+  controllerRef,
+}: GlassPlayerProps) {
+  useImperativeHandle(controllerRef, () => ({ seekToUptime: () => false }), []);
+  return (
+    <div className={clsx(styles.player, embed && styles.embed)} data-controls="visible">
+      <div className={styles.videoSlot} role="status">
+        <div className={styles.noSignal}>
+          <span className={styles.noSignalTitle}>
+            {broadcastStatus === 'offline'
+              ? '지금 방송 중이 아니에요'
+              : broadcastStatus === 'ended'
+                ? '지난 방송 영상'
+                : '영상 신호 없음'}
+          </span>
+          <span className={styles.noSignalSub}>
+            {noSignalNote ??
+              (broadcastStatus === 'offline'
+                ? '방송을 시작하면 여기에 나타나요'
+                : '영상 서버에 아직 연결되지 않았어요')}
+          </span>
+        </div>
+      </div>
+      <PlayerTopOverlay
+        channelName={channelName}
+        viewersNote={viewersNote}
+        status={broadcastStatus}
+        chatPanelOpen={chatPanelOpen}
+        onToggleChatPanel={onToggleChatPanel}
+      />
+    </div>
+  );
+}
+
+/** 끝난 방송 다시보기 — 같은 몸통(컨트롤·시크바)에 녹화 재생 훅을 끼운다 */
+function RecordedGlassPlayer(props: GlassPlayerProps & { recorded: RecordedSource }) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const sim = useRecordedPlayback(
+    videoRef,
+    props.recorded,
+    props.startAtSeconds ?? 0,
+    props.onSeek,
+  );
+  // 초가 바뀔 때만 알린다: timeupdate는 1초에 네 번쯤 온다. 내린다: 영상 시각을 넘는 줄은 보이지 않는다. 카드는 그 시각에
+  // 정확히 서므로(seekToPosition) 카드와 같은 초다
+  const second = Math.floor(sim.positionSeconds);
+  const { onPlaybackPosition } = props;
+  useEffect(() => {
+    onPlaybackPosition?.(second);
+  }, [second, onPlaybackPosition]);
+  return (
+    <GlassPlayerBody
+      {...props}
+      sim={sim}
+      videoNode={<video ref={videoRef} className={styles.video} playsInline muted />}
+    />
+  );
+}
 
 function HlsGlassPlayer(props: GlassPlayerProps & { src: string }) {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const sim = useHlsPlayback(videoRef, props.src, props.simulationOptions);
+  const sim = useHlsPlayback(videoRef, props.src, props.simulationOptions, props.onSeek);
+  // 초가 바뀌거나 시차가 바뀔 때만 알린다(재생기가 초로 내리고, 같은 값이면 같은 객체를 둔다)
+  const { onLivePosition } = props;
+  const { livePosition } = sim;
+  useEffect(() => {
+    onLivePosition?.(livePosition);
+  }, [livePosition, onLivePosition]);
+  // 내려갈 때 지운다: 방송이 끝나 녹화로 바뀌면 라이브에서 되감은 자리가 저장소에 남는다. 같은 방송이 다시 라이브가 되면 새
+  // 재생기가 자리를 알리기 전 그림이 옛 자리로 채팅을 읽었다(리뷰 1라운드)
+  useEffect(() => () => onLivePosition?.(null), [onLivePosition]);
   return (
     <GlassPlayerBody
       {...props}
@@ -101,6 +219,8 @@ interface GlassPlayerBodyProps extends GlassPlayerProps {
 function GlassPlayerBody({
   channelName,
   viewersNote,
+  broadcastStatus,
+  simulate = false,
   embed = false,
   chatPanelOpen,
   onToggleChatPanel,
@@ -121,7 +241,9 @@ function GlassPlayerBody({
   // 같은 방식으로 드래그 동안 숨김을 유보한다.
   const [seeking, setSeeking] = useState(false);
   // 안 보일 땐 시뮬레이션 티커도 돌리지 않는다
-  const chat = useSimulatedChat(fullscreen && chatOn);
+  // 오버레이 채팅은 흉내뿐이라 목업 모드에서만 돈다(파일 머리 주석)
+  const overlayChat = simulate;
+  const chat = useSimulatedChat(overlayChat && fullscreen && chatOn);
   const { toast } = useToast();
   const containerRef = useRef<HTMLDivElement>(null);
   const chatToggleRef = useRef<HTMLButtonElement>(null);
@@ -165,10 +287,15 @@ function GlassPlayerBody({
 
   const controlsShown = sim.controlsVisible || !sim.playing || settingsOpen || seeking;
 
+  // 🔴 서버로 보내는 길이 아직 없다 — 전에는 시크바에 표시만 찍고 「저장되었습니다」를 띄워 거짓 성공이었다(POK-253).
+  // 수동 마킹이 서버로 가기 전까지(POK-257) 준비 중이라고만 알린다. 자동 하이라이트 카드는 채팅 급증으로 따로 생긴다
   const handleClip = useCallback(() => {
-    sim.markClip();
-    toast({ tone: 'success', title: '최근 30초 클립이 저장되었습니다' });
-  }, [sim, toast]);
+    toast({
+      tone: 'info',
+      title: '클립 만들기는 준비 중이에요',
+      description: '채팅이 터진 순간은 하이라이트 카드로 자동으로 잡혀요.',
+    });
+  }, [toast]);
 
   const handlePip = useCallback(() => {
     toast({ tone: 'info', title: '미니 플레이어는 준비 중이에요' });
@@ -185,9 +312,22 @@ function GlassPlayerBody({
     controllerRef,
     () => ({
       seekToUptime: (target: number) => {
-        const behind = Math.min(sim.windowSeconds, Math.max(0, sim.uptimeSeconds - target));
-        sim.seekToFraction(progressFraction(behind, sim.windowSeconds));
+        // 옮겼다고 하면 고른 시점이 알림도 없이 사라진다(리뷰 2라운드)
+        if (sim.windowSeconds <= 0) return false;
+        // 녹화 다시보기는 그 자리로 바로 간다. 비율을 거치면 시차를 초 단위로 반올림해 카드보다 1초 안쪽 앞에 섰다(POK-324)
+        if (sim.seekToPosition) sim.seekToPosition(target);
+        else {
+          const behind = Math.min(sim.windowSeconds, Math.max(0, sim.uptimeSeconds - target));
+          sim.seekToFraction(progressFraction(behind, sim.windowSeconds));
+        }
         sim.wake();
+        return true;
+      },
+      seekToTime: (epochMs: number) => {
+        // seekToUptime과 같은 막이: 되감을 구간이 없으면 옮길 곳이 없다(리뷰 2라운드)
+        if (sim.windowSeconds <= 0 || !sim.seekToDate?.(epochMs)) return false;
+        sim.wake();
+        return true;
       },
     }),
     [sim],
@@ -279,10 +419,11 @@ function GlassPlayerBody({
       <PlayerTopOverlay
         channelName={channelName}
         viewersNote={viewersNote}
+        status={broadcastStatus}
         chatPanelOpen={chatPanelOpen}
         onToggleChatPanel={fullscreen ? undefined : onToggleChatPanel}
       />
-      {fullscreen && chatOn ? <PlayerChatOverlay messages={chat} /> : null}
+      {overlayChat && fullscreen && chatOn ? <PlayerChatOverlay messages={chat} /> : null}
       <div className={styles.controls}>
         <PlayerSeekBar
           behindSeconds={sim.behindSeconds}
@@ -292,11 +433,12 @@ function GlassPlayerBody({
           onSeekBy={sim.seekBy}
           onReturnToLive={sim.returnToLive}
           onSeekingChange={setSeeking}
+          replay={sim.replay}
         />
         <PlayerControls
           sim={sim}
           chatToggle={
-            fullscreen
+            overlayChat && fullscreen
               ? { on: chatOn, onToggle: () => setChatOn((on) => !on), ref: chatToggleRef }
               : undefined
           }

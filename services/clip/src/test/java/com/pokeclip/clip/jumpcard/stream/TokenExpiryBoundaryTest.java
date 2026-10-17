@@ -76,7 +76,7 @@ class TokenExpiryBoundaryTest extends IntegrationTestSupport {
     @BeforeEach
     void 정리() {
         방송과_카드를_비운다(jdbc);
-        broadcasts.save(Broadcast.startedNow("s-1", TestIds.STREAMER, 1L, Instant.now(), null));
+        broadcasts.save(Broadcast.startedNow("s-1", TestIds.STREAMER, null, 1L, Instant.now(), null));
         // 답을 안 걸면 자격 판정이 503이라 시한 가드에 닿지 못한다 — 이 클래스는 시한만 잰다.
         AUTH.respondWith(RESOLVE, 200, "{\"relation\":\"OWNER\"}");
     }

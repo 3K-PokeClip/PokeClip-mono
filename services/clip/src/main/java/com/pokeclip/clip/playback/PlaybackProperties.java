@@ -26,6 +26,10 @@ import java.util.Base64;
  * 넣을 수 있게 리터럴 {@code \n}은 개행으로 읽는다. {@code BEGIN RSA PRIVATE KEY}(PKCS#1)는
  * JDK가 못 읽으므로 <b>부팅에서 변환 명령까지 적어 거부한다</b> — 운영에서 첫 발급 때 500으로
  * 드러나게 두지 않는다.
+ *
+ * <p><b>{@code required}가 켜졌으면 「꺼짐」도 거부한다</b>(POK-321, 엣지 T9b 대체). prod에서 셋을 통째로
+ * 빠뜨려도 부팅 확인이 초록이면 재생만 조용히 503이다. 기본값은 꺼짐 허용이라 prod 런타임 변수에
+ * {@code PLAYBACK_REQUIRED=true}를 넣어야 이 막이 선다. 빠뜨리면 지금처럼 재생이 꺼진 채 조용히 뜬다.
  */
 @ConfigurationProperties(prefix = "pokeclip.playback")
 public class PlaybackProperties {
@@ -35,6 +39,7 @@ public class PlaybackProperties {
     private final String resourceBaseUrl;
     private final String cookieDomain;
     private final Duration ttl;
+    private final boolean required;
 
     /** PEM 표식. 조립해 두는 이유는 저장소의 시크릿 검사가 이 헤더 <b>모양</b>을 잡기 때문이다 — 값이 아니라 헤더뿐이라도 커밋이 막힌다. */
     static final String PKCS8_BEGIN = "-----BEGIN " + "PRIVATE KEY-----";
@@ -47,12 +52,14 @@ public class PlaybackProperties {
                               String privateKeyPem,
                               String resourceBaseUrl,
                               String cookieDomain,
-                              @DefaultValue("PT60M") Duration ttl) {
+                              @DefaultValue("PT60M") Duration ttl,
+                              @DefaultValue("false") boolean required) {
         this.keyPairId = blankToNull(keyPairId);
         this.privateKeyPem = blankToNull(privateKeyPem);
         this.resourceBaseUrl = blankToNull(resourceBaseUrl);
         this.cookieDomain = blankToNull(cookieDomain);
         this.ttl = ttl;
+        this.required = required;
     }
 
     @PostConstruct
@@ -62,6 +69,11 @@ public class PlaybackProperties {
         }
         int filled = (keyPairId != null ? 1 : 0) + (privateKeyPem != null ? 1 : 0) + (resourceBaseUrl != null ? 1 : 0);
         if (filled == 0) {
+            if (required) {
+                throw new IllegalStateException("pokeclip.playback.required=true인데 서명 설정 셋이 다 비었다:"
+                        + " key-pair-id(CLOUDFRONT_KEY_PAIR_ID) · private-key-pem(CLOUDFRONT_PRIVATE_KEY_PEM)"
+                        + " · resource-base-url(MEDIA_BASE_URL)");
+            }
             return; // 꺼짐. 로그는 서명기가 남긴다(부팅 로그 한 줄).
         }
         if (filled != 3) {

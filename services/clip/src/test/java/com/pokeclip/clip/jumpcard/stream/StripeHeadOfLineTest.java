@@ -78,8 +78,8 @@ class StripeHeadOfLineTest extends IntegrationTestSupport {
     @Test
     void 한_방송에_카드_300장이_몰아쳐도_같은_줄의_다른_연결이_3초_안에_받는다() {
         AUTH.respondWith(RESOLVE, 200, "{\"relation\":\"OWNER\"}");
-        broadcasts.save(Broadcast.startedNow("s-hol-big", TestIds.STREAMER, 801L, Instant.now(), null));
-        broadcasts.save(Broadcast.startedNow("s-hol-small", TestIds.STREAMER, 802L, Instant.now(), null));
+        broadcasts.save(Broadcast.startedNow("s-hol-big", TestIds.STREAMER, null, 801L, Instant.now(), null));
+        broadcasts.save(Broadcast.startedNow("s-hol-small", TestIds.STREAMER, null, 802L, Instant.now(), null));
         카드를_심는다("s-hol-big", BURST_CARDS);
         카드를_심는다("s-hol-small", 1);
         // 재는 동안 DB를 안 읽는다 — 무엇 때문에 늦었는지가 갈리지 않는다.

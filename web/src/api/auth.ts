@@ -29,6 +29,17 @@ export async function loginWithGoogle(code: string): Promise<TokenPair> {
   });
   if (!res.ok) {
     // 401은 사유를 알려주지 않는 계약 — 문구를 일반화한다.
+    // 403(구글 이메일 미인증, POK-256)·409(이메일이 다른 계정에 있음)만 서버가 사유와 문구를 준다.
+    // 사용자가 직접 풀어야 하는 상태라 그 문구를 그대로 보여 준다.
+    if (res.status === 403 || res.status === 409) {
+      const body = (await res.json().catch(() => null)) as {
+        message?: string;
+        reason?: string;
+      } | null;
+      if (body?.reason && body.message) {
+        throw new ApiError(res.status, body.message, body.reason);
+      }
+    }
     throw new ApiError(res.status, '로그인에 실패했어요');
   }
   return res.json() as Promise<TokenPair>;

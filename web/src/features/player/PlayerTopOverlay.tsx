@@ -8,15 +8,28 @@ import styles from './GlassPlayer.module.css';
 // 필의 둘째 줄은 시청자 수만이다. 시안이 라이브에서 제목을 안 쓰고(제목 줄은 VOD 변형의 것),
 // 1b에선 영상 바로 아래 방송 정보 바가 제목과 경과 시간을 이미 말한다 — 여기 두면 같은 값이
 // 한 화면에 두 번 선다.
+
+/** 배지는 clip의 방송 명부가 말하는 상태를 그대로 옮긴다 — 모르면 「확인 중」. 안 주면 LIVE(시안 기본) */
+export type PlayerBroadcastStatus = 'live' | 'ended' | 'offline' | 'unknown';
+
+const BADGE_LABEL: Record<PlayerBroadcastStatus, string> = {
+  live: 'LIVE',
+  ended: '종료',
+  offline: '오프라인',
+  unknown: '확인 중',
+};
+
 export function PlayerTopOverlay({
   channelName,
   viewersNote,
+  status = 'live',
   chatPanelOpen,
   onToggleChatPanel,
 }: {
   channelName: string;
   /** 필 아래 줄 — 라이브는 「1,842명 시청 중」 */
   viewersNote: string;
+  status?: PlayerBroadcastStatus;
   /** 바깥 채팅 패널이 열려 있는가 — 닫혀 있을 때만 여는 버튼이 뜬다 */
   chatPanelOpen?: boolean;
   onToggleChatPanel?: () => void;
@@ -28,9 +41,9 @@ export function PlayerTopOverlay({
         <div className={styles.channelText}>
           <div className={styles.channelRow}>
             <span className={styles.channelName}>{channelName}</span>
-            <span className={styles.liveBadge}>
+            <span className={styles.liveBadge} data-status={status}>
               <span className={styles.liveBadgeDot} aria-hidden />
-              LIVE
+              {BADGE_LABEL[status]}
             </span>
           </div>
           <div className={styles.channelSub}>{viewersNote}</div>

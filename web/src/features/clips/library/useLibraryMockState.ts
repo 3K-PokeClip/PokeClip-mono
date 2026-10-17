@@ -1,41 +1,68 @@
 'use client';
 
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useToast } from '@/ui';
+import {
+  fetchLibraryAll,
+  fetchLibraryDetail,
+  fetchMeLoose,
+  requestFileAccess,
+  requestRender,
+  requestUpload,
+  retryUpload as requestUploadRetry,
+  resolveUpload as requestUploadResolution,
+  liveUploadsOf,
+  ClipApiError,
+  type LibraryEntry,
+  type UploadResolution,
+  type UploadSnapshot,
+} from '@/api/clipEditor';
 import {
   countByChip,
   filterByChip,
   filterByQuery,
+  shownUploadOf,
   sortClips,
-  statusFor,
+  resolveErrorMessage,
+  uploadErrorMessage,
+  uploadsFromIntent,
+  uploadTitleProblem,
   type LibraryChip,
   type LibrarySort,
 } from './libraryView';
+import { PRIVACY_LABEL } from '@/features/clips/editor/uploadInfo';
 
-// 시안 1g 보관함의 목업 상태.
+// 시안 1g 보관함의 상태 (POK-251 — 실제 값).
 //
-// 편집본 목록·상태를 줄 백엔드가 아직 없다 — 목록 문은 방송·점프카드뿐이고(POK-174·ADR-055)
-// 렌더·업로드 잡(POK-125 계열)은 미착수라 데이터와 동작이 전부 목업이다. 연동 티켓에서
-// 이 훅 내부만 useQuery/뮤테이션으로 갈아끼우면 화면은 그대로 쓴다(useVodListMockState 선례).
+// 목록은 clip `GET /api/clip/library`(POK-243)에서 온다 — 내가 볼 수 있는 방송들의 편집본 전부와
+// 편집본마다의 상태(editing·rendering·rendered·failed + 업로드 셋)·가장 최근 영상. 화면 타입 LibraryClip은
+// 시안이 그리는 칸이라 서버 줄을 여기서 옮긴다(toLibraryClip). 서버가 아직 안 주는 칸은 지어내지
+// 않는다 — 제목은 업로드 제목이 없으면 「편집본 #번호」, 만든 사람은 회원 번호.
 //
-// ⚠ LibraryClip은 계약 미러가 아니다 — 편집본 문의 계약이 아직 없어(status.md 열린 미결)
-// 시안이 그리는 칸을 그대로 옮긴 화면 모양이다. 계약이 생기면 이 타입이 그쪽에 맞춰지고
-// 화면은 여기서 나가는 값만 본다.
+// 화면 상태는 시안 1g의 상태에서 승인 대기·반려를 뺀 다섯(업로드 승인 게이트가 없다, POK-236 폐기)에 진행 단계 넷을
+// 더했다(POK-291): 만드는 중 · 올리는 중 · 확인 필요 · 업로드 실패. 업로드 실패는 서버 상태가 아니다: 서버는 완성(rendered)으로 돌려주고, 웹이
+// 「가장 최근 업로드가 실패」로 만든다(서버 상태를 늘리면 clip 규칙·웹 규칙을 같이 바꿔야 한다).
 //
-// 시점(role)은 훅 값이다 — 시안의 스트리머/편집자 토글은 핸드오프용이라 제품 UI에 두지 않는다.
-// 실제 신호(계정 권한·화면 모드, ADR-032)는 아직 없다. 편집자 시점의 업로드 요청·승인 대기·
-// 반려됨 흐름은 권한 등급 미결에 딸린 가정(시안 2등급)이다 — 등급이 「없음」으로 정해지면
-// 편집자도 스트리머와 같은 「업로드」가 되고 이 흐름은 사라진다.
-//
-// 화면 컴포넌트에는 목업 값을 두지 않는다 — 언젠가 서버가 내려줄 값은 전부 여기서 나오고,
-// 화면에는 구조 라벨('보관함' 같은 고정 문구)만 남는다.
+// 동작은 줄마다 갈린다: 서버에서 온 줄(`entry`가 있다)은 실제 문으로 가고, 시험·스토리북이 주입한 목업 줄은
+// 상태 전이만 흉내 낸다(예전 목업 그대로 — 화면 흐름을 시험이 계속 잴 수 있게).
 
-/** 화면 모드(ADR-032) — 계정 속성이 아니다 */
-export type LibraryRole = 'streamer' | 'editor';
+/** 만드는 중·올리는 중이 없을 때 목록을 다시 읽는 간격. 썸네일 서명(60분)이 만료되기 전에 새 주소를 받으려고 */
+const STABLE_REFRESH_MS = 5 * 60_000;
 
-/** 시안 1g ④의 7종. expired는 발행됨 중 원본 VOD 보관이 지난 것이다(ADR-004 60일) */
+/**
+ * 시안 1g ④에서 승인 대기·반려를 뺀 다섯 + 진행 단계 넷(POK-291: rendering 만드는 중 · uploading 올리는 중 · checking 확인 필요 · uploadFailed 업로드
+ * 실패). expired는 발행됨 중 원본 VOD 보관이 지난 것이다(ADR-004 60일)
+ */
 export type ClipStatus =
-  'editing' | 'ready' | 'pending' | 'rejected' | 'published' | 'expired' | 'failed';
+  | 'editing'
+  | 'rendering'
+  | 'ready'
+  | 'uploading'
+  | 'checking'
+  | 'uploadFailed'
+  | 'published'
+  | 'expired'
+  | 'failed';
 
 export interface LibraryClip {
   id: string;
@@ -51,36 +78,137 @@ export interface LibraryClip {
   sourceExpiresAt: string | null;
   templateLabel: string;
   subtitleLabel: string;
+  /** 서버 줄의 진행 한 줄(만드는 중 N% · 올리는 중 · 렌더 실패 사유). 패널이 배지 아래 안내 자리에 그린다. 목업 줄에는 없다 */
+  progressLabel?: string | null;
   /** ISO — 생성순 */
   createdAt: string;
   /** ISO — 최근 편집순 */
   editedAt: string;
-  /** 반려됨만 — 사유와 반려 시각 */
-  rejection?: { reason: string; at: string };
   /** 발행됨·원본 만료만. 목업 업로드로 발행된 것은 갈 곳이 없어 비워 둔다 */
   youtubeUrl?: string;
+  /** 편집기로 다시 여는 주소 — 저장된 편집본을 ?recipe= 로 연다. 시험 주입에는 없다 */
+  editHref?: string;
+  /** 서버 줄 그대로 — 상세 패널이 영상 상태·파일 키를 보여 줄 때 쓴다. 시험 주입에는 없다 */
+  entry?: LibraryEntry;
+  /** 최근 영상의 사진(POK-277). 없으면 자리표시 */
+  thumbnailUrl?: string | null;
 }
 
-/** 테스트 주입 — 빈 상태·시점·경계 케이스를 화면 밖에서 만든다 (VodListOptions 선례) */
+function sourceLabelOf(entry: LibraryEntry): string {
+  const at = entry.broadcast.startedAt ?? entry.createdAt;
+  const d = new Date(at);
+  return Number.isNaN(d.getTime())
+    ? `방송 ${entry.streamId}`
+    : `${d.getMonth() + 1}월 ${d.getDate()}일 ${entry.broadcast.status === 'live' ? '라이브' : '방송'}`;
+}
+
+/**
+ * 진행 한 줄(POK-291). 예전에는 패널의 「자막」 칸에 들어갔는데 그 칸은 자막 정보 자리라 떼어 냈다. 배지가 이미 말하는
+ * 상태(완성·확인 필요·업로드됨)는 되풀이하지 않는다: 확인 필요는 안내문이, 업로드 실패는 사유 문구가 말한다.
+ */
+function progressLabelOf(entry: LibraryEntry): string | null {
+  const clip = entry.latestClip;
+  switch (entry.status) {
+    case 'editing':
+      return clip === null
+        ? null
+        : `v${clip.recipeVersion} 영상 있음 · 지금은 v${entry.recipeVersion}`;
+    case 'rendering': {
+      const step =
+        clip?.status === 'rendering'
+          ? `영상 만드는 중 ${clip.progress?.percent ?? 0}%`
+          : '영상 주문됨 · 차례 기다리는 중';
+      return entry.uploadRequest ? `${step} · 끝나면 유튜브에 올려요` : step;
+    }
+    case 'failed':
+      return `렌더 실패 · ${clip?.error?.code ?? '?'}`;
+    case 'uploading':
+      return '유튜브에 올리는 중';
+    case 'rendered':
+    case 'checking':
+    case 'uploaded':
+      return null;
+  }
+}
+
+function youtubeUrlOf(entry: LibraryEntry): string | undefined {
+  const upload = shownUploadOf(entry);
+  return upload?.status === 'uploaded' && upload.videoId
+    ? `https://youtu.be/${upload.videoId}`
+    : undefined;
+}
+
+/**
+ * 서버 줄 → 화면 칸. 서버 상태 일곱이 화면 상태로 하나씩 간다(POK-291): 만드는 중·올리는 중·확인 필요가 제 배지를 갖고,
+ * 올림은 발행됨(배지 「업로드됨」)이다. 업로드 실패는 아래 toLibraryClip이 만든다.
+ */
+const SCREEN_STATUS: Record<LibraryEntry['status'], ClipStatus> = {
+  editing: 'editing',
+  rendering: 'rendering',
+  rendered: 'ready',
+  failed: 'failed',
+  uploading: 'uploading',
+  checking: 'checking',
+  uploaded: 'published',
+};
+
+/** 화면 상태. 완성인데 가장 최근 업로드가 실패면 「업로드 실패」다(서버는 다시 올릴 수 있게 완성으로 돌려준다) */
+function screenStatusOf(entry: LibraryEntry): ClipStatus {
+  if (entry.status === 'rendered' && entry.latestClip?.upload?.status === 'failed')
+    return 'uploadFailed';
+  return SCREEN_STATUS[entry.status];
+}
+
+export function toLibraryClip(entry: LibraryEntry, meId: string | null): LibraryClip {
+  const status: ClipStatus = screenStatusOf(entry);
+  const mine = meId !== null && String(entry.creatorId) === meId;
+  return {
+    id: String(entry.recipeId),
+    // 제목 칸이 서버에 있는 곳은 유튜브 업로드(POK-220)와 업로드 정보(POK-291)뿐이다: 올린 적이 있으면 그 제목,
+    // 아직 업로드 줄이 없으면(만드는 중) 창에서 적은 제목을 보인다
+    title:
+      entry.latestClip?.upload?.title ?? entry.uploadRequest?.title ?? `편집본 #${entry.recipeId}`,
+    status,
+    durationSec: entry.cut ? Math.round((entry.cut.outAtMs - entry.cut.inAtMs) / 1000) : null,
+    owner: { name: mine ? '나' : `편집자 ${entry.creatorId}`, me: mine },
+    sourceLabel: sourceLabelOf(entry),
+    sourceExpiresAt: entry.broadcast.vodExpiresAt,
+    templateLabel: '세로 쇼츠 1벌',
+    // 자막 정보는 목록에 없다: 지어내지 않는다
+    subtitleLabel: '—',
+    progressLabel: progressLabelOf(entry),
+    createdAt: entry.createdAt,
+    editedAt: entry.updatedAt,
+    youtubeUrl: youtubeUrlOf(entry),
+    editHref: `/clips/editor/studio?recipe=${entry.recipeId}`,
+    entry,
+    thumbnailUrl: entry.thumbnailUrl ?? null,
+  };
+}
+
+/** 테스트 주입 — 빈 상태·경계 케이스를 화면 밖에서 만든다 (VodListOptions 선례) */
 export interface LibraryOptions {
-  role?: LibraryRole;
   clips?: LibraryClip[];
   /** 처음부터 열어 둘 편집본 — 기본은 미선택 */
   selectedId?: string | null;
+  /** D-day·「어제」 계산의 기준 시각 — 시험이 얼린다. 없으면 지금 */
+  now?: Date;
 }
 
 export interface LibraryMockState {
   /** 모든 D-day·「어제」 계산의 기준 시각 */
   now: Date;
-  role: LibraryRole;
+  /** 첫 응답 전 true — 빈 목록을 「없다」로 그리지 않기 위해 */
+  loading: boolean;
+  /** 목록을 못 읽었을 때의 사유 */
+  error: string | null;
+  refresh: () => void;
   /** 검색 → 칩 → 정렬을 거친 목록 */
   clips: LibraryClip[];
   /** 필터와 무관한 전체 수 — 「아직 없다」와 「조건에 없다」를 가른다 */
   totalCount: number;
   /** 칩별 수 — 검색어와 무관하게 전체에서 센다(칩은 재고이고 검색은 그 위의 돋보기다) */
   counts: Record<LibraryChip, number>;
-  /** 스트리머 배너의 「승인 대기 N건」 */
-  pendingCount: number;
   chip: LibraryChip;
   setChip: (chip: LibraryChip) => void;
   query: string;
@@ -94,234 +222,402 @@ export interface LibraryMockState {
   deselect: () => void;
   /** 제목 인라인 편집 — 입력마다 저장한다(시안 1g ③) */
   renameClip: (id: string, title: string) => void;
-  /** 업로드 대기 → 발행됨(스트리머) / 승인 대기(편집자). 그 밖의 상태는 무시 */
+  /**
+   * 서버 줄: 유튜브 업로드를 주문한다. 업로드 줄이 없고 그 판의 업로드 정보가 있으면 다시 시도 문으로 그 정보(제목·설명·태그·
+   * 공개 범위·아동용·썸네일)대로 올리고(POK-291), 없으면 패널의 제목으로 옛 문을 탄다(POK-111, 창 없이 만든 옛 영상의 길이라 비공개).
+   * 목업 줄: 업로드 대기 → 발행됨(승인 게이트가 없다). 그 밖의 상태는 무시
+   */
   upload: (id: string) => void;
+  /** 업로드 실패한 서버 줄을 저장된 정보 그대로 다시 올린다(POK-291, 창 없이). 그 밖의 줄은 무시 */
+  retryUpload: (id: string) => void;
+  /**
+   * 「확인 필요」 업로드를 채널에서 본 결과로 푼다(POK-333). 그 편집본의 살아 있는 업로드 중 하나(옛 판 포함)다. 받아들여졌으면
+   * true, 거절이면 사유를 토스트로 알리고 false. 어느 쪽이든 목록을 다시 읽는다(다른 사람이 먼저 풀었을 수 있다)
+   */
+  resolveUpload: (id: string, uploadId: number, resolution: UploadResolution) => Promise<boolean>;
+  /** 업로드 주문·다시 시도를 보내고 답을 기다리는 편집본: 두 번 눌러 두 번 보내지 않게 패널이 단추를 잠근다 */
+  sendingIds: ReadonlySet<string>;
   /** 렌더 실패 → 업로드 대기. 결과를 토스트로 흉내 내지 않는다 */
   retryRender: (id: string) => void;
-  /** 받을 파일이 아직 없다 — 「준비 중」만 알린다 */
+  /** 서버 줄: 완성 영상 파일을 내려받는다(60분짜리 서명 주소). 목업 줄은 받을 파일이 없어 「준비 중」만 알린다 */
   download: (id: string) => void;
+  /** 미리보기로 틀 완성 영상 주소. 영상이 없거나 못 받으면 null(사유는 토스트) */
+  previewUrl: (id: string) => Promise<string | null>;
   /** 목록에서 뺀다. 선택 중이면 해제 — 확인은 화면(ConfirmDialog)이 먼저 받는다 */
   remove: (id: string) => void;
 }
 
-// 「지금」을 고정한다. 클라이언트 시계로 계산하면 하이드레이션이 어긋나고(MOCK_GREETING 선례),
-// 목업 날짜와 함께 얼면 D-day가 결정적이라 테스트가 시계를 조작할 필요도 없다.
-// 시안의 「오늘 라이브 · D-60」「8월 31일 · D-58」을 역산하면 9월 2일 저녁이다.
-const MOCK_NOW = new Date('2026-09-02T20:00:00+09:00');
-
-/** 시안의 시점 토글 대신 — 편집자 시점 확인은 이 값을 로컬에서 바꿔 본다(커밋하지 않는다) */
-const MOCK_ROLE: LibraryRole = 'streamer';
-
-const DAY_MS = 24 * 60 * 60 * 1000;
-const VOD_RETENTION_DAYS = 60;
-
-/** 보관 만료는 원본 방송 종료 + 60일이다(ADR-004) — D-day가 저절로 편집본마다 달라진다 */
-function expiresFrom(endedAt: string): string {
-  return new Date(new Date(endedAt).getTime() + VOD_RETENTION_DAYS * DAY_MS).toISOString();
-}
-
-const ME = { name: '게임하는너구리', me: true };
-const GAMJA = { name: '감자대장', me: false };
-
-// 시안 1g 스크립트(libVals)의 8건 그대로 — 상태 7종이 한 화면에 다 보이도록 심어 뒀다.
-// D-day는 시안의 손글씨(7월 22일 → D-19)가 아니라 종료 + 60일에서 계산된다(vod 목업 선례).
-const MOCK_CLIPS: LibraryClip[] = [
-  {
-    id: 'lib2-1',
-    title: '보스 막타 · 역전 순간',
-    status: 'editing',
-    durationSec: 82,
-    owner: ME,
-    sourceLabel: '8월 31일 라이브',
-    sourceExpiresAt: expiresFrom('2026-08-31T18:00:00+09:00'),
-    templateLabel: '기본 쇼츠',
-    subtitleLabel: '자동 자막 12줄 · 수정 중',
-    createdAt: '2026-08-31T22:40:00+09:00',
-    editedAt: '2026-09-02T14:20:00+09:00',
-  },
-  {
-    id: 'lib2-2',
-    title: '채팅 폭발 · 3연속 클러치',
-    status: 'ready',
-    durationSec: 65,
-    owner: ME,
-    sourceLabel: '9월 2일 라이브',
-    sourceExpiresAt: expiresFrom('2026-09-02T18:00:00+09:00'),
-    templateLabel: '기본 쇼츠',
-    subtitleLabel: '자동 자막 9줄',
-    createdAt: '2026-09-02T14:31:00+09:00',
-    editedAt: '2026-09-02T15:02:00+09:00',
-  },
-  {
-    id: 'lib2-3',
-    title: '시청자 도네 반응 모음',
-    status: 'pending',
-    durationSec: 44,
-    owner: GAMJA,
-    sourceLabel: '8월 30일 라이브',
-    sourceExpiresAt: expiresFrom('2026-08-30T18:00:00+09:00'),
-    templateLabel: '리액션 컷',
-    subtitleLabel: '자동 자막 7줄',
-    createdAt: '2026-08-30T20:10:00+09:00',
-    editedAt: '2026-09-02T18:00:00+09:00',
-  },
-  {
-    id: 'lib2-4',
-    title: '스크림 에이스 장면',
-    status: 'published',
-    durationSec: 51,
-    owner: ME,
-    sourceLabel: '7월 22일 라이브',
-    sourceExpiresAt: expiresFrom('2026-07-22T18:00:00+09:00'),
-    templateLabel: '기본 쇼츠',
-    subtitleLabel: '자동 자막 10줄',
-    createdAt: '2026-07-22T23:05:00+09:00',
-    editedAt: '2026-07-23T10:12:00+09:00',
-    youtubeUrl: 'https://www.youtube.com/shorts/pokeclip-mock-2604',
-  },
-  {
-    id: 'lib2-5',
-    title: '고민상담 레전드 사연',
-    status: 'rejected',
-    durationSec: 100,
-    owner: GAMJA,
-    sourceLabel: '8월 28일 라이브',
-    sourceExpiresAt: expiresFrom('2026-08-28T18:00:00+09:00'),
-    templateLabel: '토크 컷',
-    subtitleLabel: '자동 자막 24줄',
-    createdAt: '2026-08-28T22:00:00+09:00',
-    editedAt: '2026-09-01T21:32:00+09:00',
-    rejection: { reason: '앞부분 20초 컷', at: '2026-09-01T21:32:00+09:00' },
-  },
-  {
-    id: 'lib2-6',
-    title: '5월 이벤트 · 시참 레전드',
-    status: 'expired',
-    durationSec: 38,
-    owner: ME,
-    sourceLabel: '5월 12일 라이브',
-    sourceExpiresAt: expiresFrom('2026-05-12T18:00:00+09:00'),
-    templateLabel: '기본 쇼츠',
-    subtitleLabel: '자동 자막 8줄',
-    createdAt: '2026-05-13T11:00:00+09:00',
-    editedAt: '2026-05-14T09:30:00+09:00',
-    youtubeUrl: 'https://www.youtube.com/shorts/pokeclip-mock-2512',
-  },
-  {
-    id: 'lib2-7',
-    title: '새벽 랭크 · 승급 확정',
-    status: 'ready',
-    durationSec: 58,
-    owner: ME,
-    sourceLabel: '9월 2일 라이브',
-    sourceExpiresAt: expiresFrom('2026-09-02T18:00:00+09:00'),
-    templateLabel: '기본 쇼츠',
-    subtitleLabel: '자동 자막 6줄',
-    createdAt: '2026-09-02T15:40:00+09:00',
-    editedAt: '2026-09-02T15:40:00+09:00',
-  },
-  {
-    id: 'lib2-8',
-    title: '팀원 미스 · 웃참 실패',
-    status: 'failed',
-    durationSec: null,
-    owner: ME,
-    sourceLabel: '8월 29일 라이브',
-    sourceExpiresAt: expiresFrom('2026-08-29T18:00:00+09:00'),
-    templateLabel: '리액션 컷',
-    subtitleLabel: '—',
-    createdAt: '2026-08-29T21:00:00+09:00',
-    editedAt: '2026-08-29T21:04:00+09:00',
-  },
-];
-
 export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockState {
   const { toast } = useToast();
-  const role = options.role ?? MOCK_ROLE;
-  const [clips, setClips] = useState<LibraryClip[]>(() => options.clips ?? MOCK_CLIPS);
+  const [clips, setClips] = useState<LibraryClip[]>(() => options.clips ?? []);
+  const [loading, setLoading] = useState(options.clips === undefined);
+  const [error, setError] = useState<string | null>(null);
+  const [tick, setTick] = useState(0);
+  const refresh = useCallback(() => setTick((t) => t + 1), []);
+  // 「지금」은 마운트 뒤 클라이언트 시계 — 서버 렌더와 어긋나지 않게 초기값은 고정.
+  const [clock, setClock] = useState(() => new Date(0));
+  const now = options.now ?? clock;
   const [chip, setChip] = useState<LibraryChip>('all');
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState<LibrarySort>('edited');
   const [selectedId, setSelectedId] = useState<string | null>(options.selectedId ?? null);
+  const [sendingIds, setSendingIds] = useState<ReadonlySet<string>>(() => new Set());
+  // 상태 갱신은 다음 렌더에야 보여서 같은 틱의 두 번째 클릭을 못 막는다 — 보내는 중 표시는 ref가 정본이다
+  const sending = useRef(new Set<string>());
+  // 패널에서 고친 제목(업로드 제목의 초안). 다시 읽기(10초 폴링)가 서버 줄로 덮어도 남아야 한다
+  const titleDrafts = useRef(new Map<string, string>());
+  const meIdRef = useRef<string | null>(null);
+  // 목록 읽기 세대. 업로드 답을 반영할 때 올려서, 그 전에 떠난 읽기가 늦게 와 「올리는 중」을 옛 줄로 덮지 못하게 한다
+  const listGeneration = useRef(0);
 
-  const patch = useCallback((id: string, update: (clip: LibraryClip) => LibraryClip) => {
-    setClips((prev) => prev.map((clip) => (clip.id === id ? update(clip) : clip)));
-  }, []);
+  useEffect(() => {
+    setClock(new Date());
+    if (options.clips !== undefined) return undefined;
+    let alive = true;
+    const generation = listGeneration.current;
+    (async () => {
+      try {
+        const [entries, me] = await Promise.all([fetchLibraryAll(), fetchMeLoose()]);
+        if (!alive || generation !== listGeneration.current) return;
+        const meId = me === null ? null : String(me.id);
+        meIdRef.current = meId;
+        setClips(
+          entries.map((entry) => withDraft(toLibraryClip(entry, meId), titleDrafts.current)),
+        );
+        setError(null);
+      } catch (e) {
+        if (!alive) return;
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        if (alive) setLoading(false);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [options.clips, tick]);
+
+  // 만드는 중·올리는 중인 편집본이 있으면 10초마다 다시 읽는다 — 일꾼의 보고가 상태를 바꾼다.
+  // 확인 중(checking)은 사람이 채널을 봐야 풀리므로 기다리지 않는다
+  const anyInProgress = clips.some(
+    (clip) => clip.entry?.status === 'rendering' || clip.entry?.status === 'uploading',
+  );
+  // 만드는 중이 없어도 5분마다는 다시 읽는다. 썸네일 주소(POK-277)가 60분짜리 서명이라, 처음 받은 주소만 쥐고 있으면
+  // 만료 뒤 늦게 보이는 사진(lazy)이나 한 번 실패한 사진이 새 주소를 못 받는다(PR #213 codex). 화면은 50분이 지나야
+  // 새 주소로 바꾸므로 5분 간격이면 만료 전에 바뀐다
+  useEffect(() => {
+    const t = window.setInterval(refresh, anyInProgress ? 10_000 : STABLE_REFRESH_MS);
+    return () => window.clearInterval(t);
+  }, [anyInProgress, refresh]);
 
   const select = useCallback((id: string) => {
     setSelectedId((prev) => (prev === id ? null : id));
   }, []);
   const deselect = useCallback(() => setSelectedId(null), []);
 
-  const renameClip = useCallback(
-    (id: string, title: string) => patch(id, (clip) => ({ ...clip, title })),
-    [patch],
-  );
-
-  // 상태 전이만 흉내 낸다 — 업로드 모달(1e)·승인 요청 문은 별도 티켓이고 성공 토스트는
-  // 결과를 지어내는 일이라 띄우지 않는다.
-  const upload = useCallback(
-    (id: string) =>
-      patch(id, (clip) =>
-        clip.status === 'ready'
-          ? { ...clip, status: role === 'editor' ? 'pending' : 'published' }
-          : clip,
-      ),
-    [patch, role],
-  );
-
-  const retryRender = useCallback(
-    (id: string) =>
-      patch(id, (clip) => (clip.status === 'failed' ? { ...clip, status: 'ready' } : clip)),
-    [patch],
-  );
-
-  // 받기를 실제로 시작하지 않는다 — 편집본 파일을 줄 문이 계약에 없다.
-  // 받는 척하고 멈춰 있느니 준비 중이라고 말하는 편이 낫다(ADR-044의 「거짓말 금지」).
-  //
-  // id를 받고도 쓰지 않는 것은 일부러다 — 실연동 때 이 자리가 「어느 편집본을 받는가」를
-  // 채워야 할 곳임을 시그니처로 남긴다.
-  const download = useCallback(
-    (_id: string) => {
-      toast({
-        tone: 'info',
-        title: '준비 중인 기능이에요',
-        description: '편집본 내려받기는 아직 준비 중이에요. 준비되면 알려드릴게요.',
-      });
-    },
-    [toast],
-  );
-
-  const remove = useCallback((id: string) => {
-    setClips((prev) => prev.filter((clip) => clip.id !== id));
-    setSelectedId((prev) => (prev === id ? null : prev));
+  // 편집본에는 제목 칸이 없다(계약6). 여기서 고친 제목은 업로드 제목의 초안이고, 올리면 업로드 줄(POK-220)에 남는다.
+  // 올리기 전에 새로고침하면 돌아온다.
+  const renameClip = useCallback((id: string, title: string) => {
+    titleDrafts.current.set(id, title);
+    setClips((prev) => prev.map((clip) => (clip.id === id ? { ...clip, title } : clip)));
   }, []);
 
-  // 걸러내기·정렬은 순수 함수에 맡긴다 — 연동 때 이 계산이 서버 질의 조건으로 옮겨가더라도
-  // 화면은 클라에서 걸렀는지 서버가 걸러 줬는지 몰라야 한다.
-  const counts = useMemo(() => countByChip(clips, role, MOCK_NOW), [clips, role]);
-  const visible = useMemo(
-    () =>
-      sortClips(filterByChip(filterByQuery(clips, query), chip, role, MOCK_NOW), sort, MOCK_NOW),
-    [clips, query, chip, role, sort],
+  const patch = useCallback((id: string, update: (clip: LibraryClip) => LibraryClip) => {
+    setClips((prev) => prev.map((clip) => (clip.id === id ? update(clip) : clip)));
+  }, []);
+
+  const setSendingFlag = useCallback((id: string, on: boolean) => {
+    if (on) sending.current.add(id);
+    else sending.current.delete(id);
+    setSendingIds(new Set(sending.current));
+  }, []);
+
+  // 서버 줄은 가장 최근 영상을 올린다: 그 판의 업로드 정보가 있으면 그 정보로, 없으면 패널 제목으로(아래 fromIntent).
+  // 서버가 같은 영상·출력의 살아 있는 업로드를 돌려주므로(200)
+  // 겹쳐 눌러도 두 번 올라가지 않지만, 보내는 중에는 단추를 잠가 헛요청도 안 보낸다.
+  // 목업 줄은 상태 전이만 흉내 낸다 — 성공 토스트는 결과를 지어내는 일이라 띄우지 않는다.
+  const upload = useCallback(
+    (id: string) => {
+      const clip = clips.find((c) => c.id === id);
+      const entry = clip?.entry;
+      if (clip !== undefined && entry !== undefined) {
+        const clipId = entry.latestClip?.id;
+        if (entry.status !== 'rendered' || clipId === undefined) return;
+        // 영상 만들기 창에서 고른 업로드 정보가 있는데 자동 업로드가 안 붙었으면(업로드가 꺼져 있었거나 서버 경합) 옛 문은
+        // 제목만 실어 설명·태그·공개 범위·썸네일이 빠진다. 다시 시도 문은 업로드 줄이 없으면 그 판의 정보로 올린다(POK-291)
+        const fromIntent = uploadsFromIntent(entry);
+        if (!fromIntent) {
+          const problem = uploadTitleProblem(clip.title);
+          if (problem !== null) {
+            toast({ tone: 'error', title: '제목을 고쳐 주세요', description: problem });
+            return;
+          }
+        }
+        if (sending.current.has(id)) return;
+        setSendingFlag(id, true);
+        const title = clip.title.trim();
+        (fromIntent
+          ? requestUploadRetry(entry.streamId, clipId)
+          : videoOutputOf(entry).then((outputId) =>
+              requestUpload(entry.streamId, clipId, outputId ? { title, outputId } : { title }),
+            )
+        )
+          .then(({ created, upload: snap }) => {
+            titleDrafts.current.delete(id);
+            listGeneration.current += 1;
+            // 다음 읽기(폴링)를 기다리지 않고 받은 업로드로 바로 옮긴다 — 그사이 단추가 다시 「업로드」로 돌아오지 않게.
+            // 🔴 그사이 읽은 것이 더 새로우면 그대로 둔다(PR #203 codex): 이미 올리는 중·올림이면 답의 queued가 되돌리고,
+            // 다른 영상이 최신이 됐으면 옛 영상의 업로드가 새 영상에 붙는다. 「아직 올릴 수 있는 같은 영상」일 때만 얹는다
+            setClips((prev) =>
+              prev.map((c) =>
+                c.id === id &&
+                c.entry !== undefined &&
+                c.entry.status === 'rendered' &&
+                c.entry.latestClip?.id === snap.clipId
+                  ? toLibraryClip(withUpload(c.entry, snap), meIdRef.current)
+                  : c,
+              ),
+            );
+            toast(
+              created
+                ? {
+                    tone: 'success',
+                    title: '유튜브 업로드를 시작했어요',
+                    description: `스트리머 채널에 ${PRIVACY_LABEL[snap.privacyStatus ?? 'private']}로 올라가요. 끝나면 여기 상태가 바뀌어요.`,
+                  }
+                : {
+                    tone: 'info',
+                    title: '이미 주문된 업로드가 있어요',
+                    description: `같은 영상이 「${snap.title}」 제목으로 먼저 주문돼 있어요.`,
+                  },
+            );
+          })
+          .catch((e: unknown) => {
+            toast({ tone: 'error', title: '업로드 주문 실패', description: uploadErrorMessage(e) });
+          })
+          .finally(() => setSendingFlag(id, false));
+        return;
+      }
+      patch(id, (clip) => (clip.status === 'ready' ? { ...clip, status: 'published' } : clip));
+    },
+    [clips, patch, setSendingFlag, toast],
   );
-  const pendingCount = useMemo(
-    () => clips.filter((clip) => statusFor(clip, MOCK_NOW) === 'pending').length,
+
+  // 업로드 다시 시도(POK-291) = 실패한 업로드의 칸(제목·설명·태그·공개 범위·썸네일·출력)을 서버가 복사해 새로 올린다.
+  // 웹은 그 칸들을 들고 있지 않아(목록이 무거워진다) 본문 없이 부른다. 늦은 답 막기는 업로드 주문과 같은 두 장치다
+  // (ADR-080 6번): 목록 읽기 세대를 올려 그 전에 떠난 읽기를 버리고, 답은 「아직 실패한 같은 영상」일 때만 얹는다.
+  const retryUpload = useCallback(
+    (id: string) => {
+      const entry = clips.find((c) => c.id === id)?.entry;
+      const clipId = entry?.latestClip?.id;
+      if (
+        entry === undefined ||
+        clipId === undefined ||
+        entry.status !== 'rendered' ||
+        entry.latestClip?.upload?.status !== 'failed'
+      )
+        return;
+      if (sending.current.has(id)) return;
+      setSendingFlag(id, true);
+      requestUploadRetry(entry.streamId, clipId)
+        .then(({ created, upload: snap }) => {
+          listGeneration.current += 1;
+          // 🔴 그사이 읽은 것이 더 새로우면 그대로 둔다: 다른 탭에서 다시 시도해 올리는 중·올림이 됐거나 다른 영상이 최신이
+          // 됐으면 이 답(queued)이 그것을 되돌린다. 「아직 실패한 같은 영상」일 때만 얹는다
+          setClips((prev) =>
+            prev.map((c) =>
+              c.id === id &&
+              c.entry !== undefined &&
+              c.entry.status === 'rendered' &&
+              c.entry.latestClip?.id === snap.clipId &&
+              c.entry.latestClip?.upload?.status === 'failed'
+                ? toLibraryClip(withUpload(c.entry, snap), meIdRef.current)
+                : c,
+            ),
+          );
+          toast(
+            created
+              ? {
+                  tone: 'success',
+                  title: '다시 올리기 시작했어요',
+                  description: `저장된 정보 그대로 스트리머 채널에 ${PRIVACY_LABEL[snap.privacyStatus ?? 'private']}로 올려요. 끝나면 여기 상태가 바뀌어요.`,
+                }
+              : {
+                  tone: 'info',
+                  title: '이미 올리는 중인 업로드가 있어요',
+                  description: '다른 곳에서 먼저 다시 올렸어요.',
+                },
+          );
+        })
+        .catch((e: unknown) => {
+          toast({ tone: 'error', title: '다시 시도 실패', description: uploadErrorMessage(e) });
+        })
+        .finally(() => setSendingFlag(id, false));
+    },
+    [clips, setSendingFlag, toast],
+  );
+
+  // 「확인 필요」 풀기(POK-333). 답을 줄에 직접 얹지 않고 목록을 다시 읽는다: 푼 업로드가 latestClip의 것일 수도 옛 판의 것일
+  // 수도 있고, 편집본 상태(STATUS_CASE)는 서버가 정한다. 읽기 세대를 올려 그 전에 떠난 읽기(아직 확인 필요)가 덮지 않게 한다.
+  const resolveUpload = useCallback(
+    async (id: string, uploadId: number, resolution: UploadResolution): Promise<boolean> => {
+      const entry = clips.find((c) => c.id === id)?.entry;
+      const target =
+        entry === undefined ? undefined : liveUploadsOf(entry).find((u) => u.id === uploadId);
+      if (entry === undefined || target === undefined || sending.current.has(id)) return false;
+      setSendingFlag(id, true);
+      try {
+        await requestUploadResolution(entry.streamId, target.clipId, uploadId, resolution);
+        // 다시 시도 단추는 지금 영상(latestClip)에만 있다: 옛 판 업로드를 닫았으면 다시 올릴 길을 약속하지 않는다(PR #261 codex)
+        const current = target.clipId === entry.latestClip?.id;
+        toast(
+          resolution.result === 'uploaded'
+            ? { tone: 'success', title: '발행됨으로 바꿨어요' }
+            : {
+                tone: 'success',
+                title: '안 올라간 것으로 닫았어요',
+                description: current
+                  ? '이제 다시 시도하거나 영상 만들기로 다시 올릴 수 있어요.'
+                  : '이전 판 업로드라 이 화면에서 다시 올리지는 않아요.',
+              },
+        );
+        return true;
+      } catch (e) {
+        toast({
+          tone: 'error',
+          title: '결과를 적지 못했어요',
+          description: resolveErrorMessage(e),
+        });
+        return false;
+      } finally {
+        listGeneration.current += 1;
+        refresh();
+        setSendingFlag(id, false);
+      }
+    },
+    [clips, refresh, setSendingFlag, toast],
+  );
+
+  // 렌더 재시도 = 같은 편집본을 다시 주문한다(POK-125: 끝난 영상은 자리를 비워 다시 주문할 수 있다).
+  // 그 판의 업로드 정보가 서버에 남아 있으면 렌더가 끝나는 대로 clip이 이어서 올린다(POK-291).
+  const retryRender = useCallback(
+    (id: string) => {
+      const entry = clips.find((c) => c.id === id)?.entry;
+      if (entry === undefined) {
+        patch(id, (clip) => (clip.status === 'failed' ? { ...clip, status: 'ready' } : clip));
+        return;
+      }
+      requestRender(entry.streamId, entry.recipeId)
+        .then(({ clip: snap }) => {
+          toast({ tone: 'success', title: `영상 #${snap.id} 다시 주문됨` });
+          refresh();
+        })
+        .catch((e: unknown) => {
+          const message =
+            e instanceof ClipApiError && e.code === 'source_not_ready'
+              ? '영상 조각이 아직 다 안 올라왔어요'
+              : e instanceof Error
+                ? e.message
+                : String(e);
+          toast({ tone: 'error', title: '다시 주문 실패', description: message });
+        });
+    },
+    [clips, patch, refresh, toast],
+  );
+
+  // 완성 영상의 서명 주소를 그때그때 받는다(60분이라 목록에 싣지 않는다). 영상이 없는 편집본은 받는 척하지 않는다.
+  const videoUrlOf = useCallback(
+    async (id: string, action: '내려받기' | '미리보기'): Promise<string | null> => {
+      const clip = clips.find((c) => c.id === id);
+      const latest = clip?.entry?.latestClip;
+      if (clip?.entry === undefined || latest?.status !== 'rendered') {
+        toast({
+          tone: 'info',
+          title: '아직 완성된 영상이 없어요',
+          description: '영상을 만들고 나면 받을 수 있어요.',
+        });
+        return null;
+      }
+      try {
+        const [access, outputId] = await Promise.all([
+          requestFileAccess(clip.entry.streamId, latest.id),
+          videoOutputOf(clip.entry),
+        ]);
+        const video =
+          access.files.find((f) => f.kind === 'video' && f.outputId === outputId) ??
+          access.files.find((f) => f.kind === 'video');
+        if (video === undefined) throw new Error('영상 파일이 없어요');
+        return video.url;
+      } catch (e) {
+        const message =
+          e instanceof ClipApiError && e.code === 'clip_not_rendered'
+            ? '영상이 아직 완성되지 않았어요.'
+            : e instanceof Error
+              ? e.message
+              : String(e);
+        toast({ tone: 'error', title: `${action} 실패`, description: message });
+        return null;
+      }
+    },
+    [clips, toast],
+  );
+
+  // 목업 줄은 받을 파일이 없다 — 받는 척하고 멈춰 있느니 준비 중이라고 말한다(ADR-044의 「거짓말 금지」).
+  // 서버 주소는 내려받기로 저장돼(Content-Disposition: attachment) 링크를 눌러 주기만 하면 된다.
+  const download = useCallback(
+    (id: string) => {
+      if (clips.find((c) => c.id === id)?.entry === undefined) {
+        toast({
+          tone: 'info',
+          title: '준비 중인 기능이에요',
+          description: '편집본 내려받기는 아직 준비 중이에요. 준비되면 알려드릴게요.',
+        });
+        return;
+      }
+      void videoUrlOf(id, '내려받기').then((url) => {
+        if (url === null) return;
+        const a = document.createElement('a');
+        a.href = url;
+        a.rel = 'noopener';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      });
+    },
+    [clips, toast, videoUrlOf],
+  );
+
+  const previewUrl = useCallback((id: string) => videoUrlOf(id, '미리보기'), [videoUrlOf]);
+
+  // 편집본은 영구 보존이라 지우는 문이 없다(POK-124). 서버 줄은 지우지 않는다 — 화면에서만 빼면 다음 읽기에
+  // 되살아나 「지웠다」가 거짓이 된다(PR #200 codex). 상세 패널이 삭제 단추를 잠근다. 목업 줄만 흉내 낸다
+  const remove = useCallback(
+    (id: string) => {
+      if (clips.find((c) => c.id === id)?.entry !== undefined) return;
+      setClips((prev) => prev.filter((clip) => clip.id !== id));
+      setSelectedId((prev) => (prev === id ? null : prev));
+    },
     [clips],
   );
-  // 칩을 바꿔 선택한 카드가 목록에서 빠져도 선택은 남긴다 — 패널은 카드가 아니라 편집본에 대한 것이다
+
+  const counts = useMemo(() => countByChip(clips, now), [clips, now]);
+  const visible = useMemo(
+    () => sortClips(filterByChip(filterByQuery(clips, query), chip, now), sort, now),
+    [clips, query, chip, sort, now],
+  );
   const selectedClip = useMemo(
     () => clips.find((clip) => clip.id === selectedId) ?? null,
     [clips, selectedId],
   );
 
   return {
-    now: MOCK_NOW,
-    role,
+    now,
+    loading,
+    error,
+    refresh,
     clips: visible,
     totalCount: clips.length,
     counts,
-    pendingCount,
     chip,
     setChip,
     query,
@@ -334,8 +630,70 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
     deselect,
     renameClip,
     upload,
+    retryUpload,
+    resolveUpload,
+    sendingIds,
     retryRender,
     download,
+    previewUrl,
     remove,
   };
+}
+
+/**
+ * 고친 제목(초안)을 다시 읽은 줄에 얹는다. 올릴 수 있는(완성) 편집본에만 — 그 밖의 상태는 제목이 잠겨 있고, 다른 기기에서
+ * 올렸으면 서버의 업로드 제목이 정본이다(초안을 얹으면 유튜브에 없는 제목이 보인다).
+ */
+function withDraft(clip: LibraryClip, drafts: Map<string, string>): LibraryClip {
+  const draft = drafts.get(clip.id);
+  if (draft !== undefined && clip.entry?.status !== 'rendered') {
+    drafts.delete(clip.id);
+    return clip;
+  }
+  return draft === undefined ? clip : { ...clip, title: draft };
+}
+
+/** 업로드 주문의 답을 서버 줄에 얹는다 — 보관함 상태는 clip이 업로드 상태로 정하는 규칙(POK-220)을 그대로 따른다 */
+function withUpload(entry: LibraryEntry, upload: UploadSnapshot): LibraryEntry {
+  const status: LibraryEntry['status'] =
+    upload.status === 'uploaded'
+      ? 'uploaded'
+      : upload.status === 'checking'
+        ? 'checking'
+        : upload.status === 'failed'
+          ? 'rendered'
+          : 'uploading';
+  return {
+    ...entry,
+    status,
+    latestClip: entry.latestClip === null ? null : { ...entry.latestClip, upload },
+  };
+}
+
+/**
+ * 이 편집본의 영상 출력(outputId) — 업로드·미리보기·내려받기가 같은 파일을 가리키게 한다. 하나면 그것, 이미 올린 것이 있으면
+ * 그것, 여럿이면 편집기가 고치는 세로(VERT_9_16) 출력이다. 편집기는 저장된 다른 비율 출력을 남겨 두므로(outputsFor)
+ * 첫 번째 영상이 세로라는 보장이 없다(PR #203 codex). 보관함 목록에는 출력의 비율이 없어 상세를 한 번 더 읽는다.
+ */
+const ASPECT_LABEL = { VERT_9_16: '9:16', SQUARE_1_1: '1:1' } as const;
+
+/**
+ * 상세 패널의 「비율」 = 레시피 출력의 비율(POK-254, 전에는 고정 글자 「9:16 · 1080×1920」). 목록에는 출력의 비율이 없어 상세를
+ * 한 번 더 읽는다. 해상도는 서버에 칸이 없어 지어내지 않는다
+ */
+export async function aspectLabelOf(entry: LibraryEntry): Promise<string | null> {
+  const detail = await fetchLibraryDetail(entry.recipeId);
+  const labels = [...new Set(detail.recipe.outputs.map((o) => ASPECT_LABEL[o.aspect]))];
+  return labels.length === 0 ? null : labels.join(' · ');
+}
+
+async function videoOutputOf(entry: LibraryEntry): Promise<string | null> {
+  const videos = (entry.latestClip?.outputs ?? []).filter((o) => o.kind === 'video');
+  if (videos.length <= 1) return videos[0]?.outputId ?? null;
+  const has = (id: string | undefined) => id !== undefined && videos.some((v) => v.outputId === id);
+  const uploaded = entry.latestClip?.upload?.outputId;
+  if (has(uploaded)) return uploaded ?? null;
+  const detail = await fetchLibraryDetail(entry.recipeId);
+  const vertical = detail.recipe.outputs.find((o) => o.aspect === 'VERT_9_16')?.outputId;
+  return has(vertical) ? (vertical ?? null) : (videos[0]?.outputId ?? null);
 }

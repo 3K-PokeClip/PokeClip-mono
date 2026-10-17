@@ -66,6 +66,10 @@ public class JumpCard {
     @Column(name = "hidden_by", length = 128)
     private String hiddenBy;
 
+    /** 숨긴 이유(POK-338). not_highlight · duplicate · other, 이유 없이 숨겼거나 안 숨겼으면 NULL. */
+    @Column(name = "hidden_reason", length = 16)
+    private String hiddenReason;
+
     @Column(name = "event_seq", nullable = false)
     private long eventSeq;
 
@@ -128,6 +132,10 @@ public class JumpCard {
 
     public String getHiddenBy() {
         return hiddenBy;
+    }
+
+    public String getHiddenReason() {
+        return hiddenReason;
     }
 
     public long getEventSeq() {

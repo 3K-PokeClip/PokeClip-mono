@@ -7,10 +7,13 @@ import { useAuthStore } from '@/stores/auth';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
 import { createTestQueryClient } from '@/test/testProviders';
 
-const { replace, searchRef } = vi.hoisted(() => ({
+const { replace, searchRef, track } = vi.hoisted(() => ({
   replace: vi.fn(),
   searchRef: { current: new URLSearchParams() },
+  track: vi.fn(),
 }));
+
+vi.mock('@/lib/analytics', () => ({ track, identifyUser: vi.fn() }));
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ replace }),
@@ -44,6 +47,7 @@ beforeEach(() => {
   window.sessionStorage.clear();
   window.localStorage.clear();
   replace.mockReset();
+  track.mockReset();
   useAuthStore.setState({ accessToken: null, refreshToken: null, hydrated: false });
 });
 
@@ -77,6 +81,8 @@ describe('OAuthCallbackScreen', () => {
     expect(spy.mock.calls.filter(([url]) => url === '/api/auth/google')).toHaveLength(1);
     expect(useAuthStore.getState().accessToken).toBe('access-1');
     expect(queryClient.getQueryData(['auth', 'me'])).toBeUndefined();
+    // 사용 통계 — 이중 마운트에도 한 번, 속성 없음(POK-357)
+    expect(track.mock.calls).toEqual([['login_completed', {}]]);
   });
 
   it.each([
@@ -135,10 +141,30 @@ describe('OAuthCallbackScreen', () => {
     renderWithClient(<OAuthCallbackScreen />);
 
     expect(await screen.findByText('로그인에 실패했어요')).toBeInTheDocument();
+    expect(track).not.toHaveBeenCalled(); // 실패는 세지 않는다
     // 버튼이 아니라 링크여야 한다 — 가운데 클릭·새 탭이 살아 있고, JS 없이도 간다.
     const link = screen.getByRole('link', { name: '로그인 화면으로' });
     expect(link).toHaveAttribute('href', '/login');
     // 히스토리를 남기면 뒤로 가기가 소모된 state의 콜백 URL로 돌아간다.
     expect(link).toHaveAttribute('data-replace');
+  });
+
+  it('구글 이메일 인증을 안 마친 계정(403)은 서버 문구로 할 일을 알려 준다', async () => {
+    window.sessionStorage.setItem(STATE_KEY, JSON.stringify({ state: 'state-1', returnTo: null }));
+    searchRef.current = new URLSearchParams('code=code-1&state=state-1');
+    stubFetch(() =>
+      jsonResponse(403, {
+        message: '구글 계정의 이메일 인증을 마친 뒤 다시 로그인해 주세요',
+        reason: 'GOOGLE_EMAIL_UNVERIFIED',
+      }),
+    );
+
+    renderWithClient(<OAuthCallbackScreen />);
+
+    expect(await screen.findByText('로그인할 수 없는 계정이에요')).toBeInTheDocument();
+    expect(
+      screen.getByText('구글 계정의 이메일 인증을 마친 뒤 다시 로그인해 주세요'),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: '로그인 화면으로' })).toHaveAttribute('href', '/login');
   });
 });

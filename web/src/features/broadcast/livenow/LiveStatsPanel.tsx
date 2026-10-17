@@ -45,6 +45,7 @@ export const LiveStatsPanel = memo(function LiveStatsPanel({
   categorySegments,
   metrics,
   highlightSummary,
+  ended = false,
 }: {
   chatVolume: ChatVolumeSeries;
   viewerLine: readonly Point[];
@@ -53,15 +54,18 @@ export const LiveStatsPanel = memo(function LiveStatsPanel({
   metrics: LiveMetric[];
   /** 카드 목록에서 센 값 — 목업에 박으면 필터 표기와 어긋난다 */
   highlightSummary: { total: number; auto: number; manual: number };
+  /** 끝난 방송: 실시간이 아니라 그 방송의 통계다(QA 2026-10-11) */
+  ended?: boolean;
 }) {
   const chatLine = chatVolumeLine(chatVolume);
+  const heading = ended ? '방송 통계' : '실시간 통계';
   const markers = highlightMarkers(chatVolume);
 
   return (
-    <section className={styles.statsPanel} aria-label="실시간 통계">
+    <section className={styles.statsPanel} aria-label={heading}>
       <div className={styles.statsHeader}>
         <ChartLine size={15} aria-hidden className={styles.statsHeaderIcon} />
-        <h2 className={styles.statsHeading}>실시간 통계</h2>
+        <h2 className={styles.statsHeading}>{heading}</h2>
         <div className={styles.statsLegend}>
           {LEGEND.map(({ label, className }) => (
             <span key={label} className={styles.legendItem}>
@@ -104,12 +108,10 @@ export const LiveStatsPanel = memo(function LiveStatsPanel({
                 className={styles.statsNow}
               />
             </svg>
-            {markers.map((point) => (
-              <span
-                key={`hl-${point[0]}-${point[1]}`}
-                className={styles.statsHighlight}
-                style={markerStyle(point)}
-              />
+            {/* 자리로 묶는다. 카드는 차트 칸 자리에 찍혀 같은 칸의 카드 둘은 좌표가 같다: 좌표로 묶으면 key가 겹쳐
+                차트를 다시 읽을 때마다 옛 점이 남는다(리뷰 2라운드) */}
+            {markers.map((point, index) => (
+              <span key={index} className={styles.statsHighlight} style={markerStyle(point)} />
             ))}
             {donations.map((point) => (
               <span
@@ -131,8 +133,9 @@ export const LiveStatsPanel = memo(function LiveStatsPanel({
             ))}
           </div>
           <div className={styles.statsAxis}>
-            {chatVolume.timeLabels.map((label) => (
-              <span key={label}>{label}</span>
+            {/* 눈금은 자리가 고정된 넷이라 자리로 묶는다. 짧은 방송은 시:분 글자가 겹친다(QA 2026-10-11 리뷰) */}
+            {chatVolume.timeLabels.map((label, index) => (
+              <span key={index}>{label}</span>
             ))}
           </div>
         </div>

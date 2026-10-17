@@ -30,4 +30,7 @@ public interface LiveBroadcastRow {
      * 러너의 봉투 검증 <b>한 줄뿐</b>이다. 그래서 쿼리가 {@code NULLS LAST}로 한 번 더 받친다.
      */
     Instant getStartedAt();
+
+    /** 물리 키(POK-233). 빈 줄이면 {@code streamId}다(쿼리의 COALESCE). 수집기가 영상 시점을 찾는 키다 */
+    String getIngestStreamId();
 }

@@ -56,7 +56,7 @@ export function EditorHeader({
           편집본 저장
         </Button>
         <Button variant="solid" size="sm" onClick={state.requestUpload}>
-          업로드
+          {state.uploadLabel}
         </Button>
       </div>
     </header>

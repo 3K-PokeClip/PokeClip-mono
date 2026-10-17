@@ -140,7 +140,7 @@ class SqsIntakeEndToEndTest extends IntegrationTestSupport {
         private final Set<String> failOnce;
 
         FailOnceProcessor(BroadcastEventProcessor delegate, String... eventIds) {
-            super(null, null);
+            super(null, null, null);
             this.delegate = delegate;
             this.failOnce = new HashSet<>(Set.of(eventIds));
         }

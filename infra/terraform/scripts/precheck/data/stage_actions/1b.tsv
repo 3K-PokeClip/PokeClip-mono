@@ -1,0 +1,17 @@
+# 단계 묶음 — 열: 동작 · 리전 · 자원 패턴(탭 구분). 「#」 줄은 주석, 빈 줄은
+# 건너뜀. 계정 자리는 ${ACCOUNT} 뿐(판정 때 caller identity 의 계정 ID).
+# 같은 (동작, 리전)은 한 행. 자원 패턴을 계획이 주지 않으면 *.
+# 출처: 계획 M12 운영 · 「M12 운영 선행」(dev SG 공개 8082 규칙 삭제 ·
+# media-dev 8082 규칙 생성) · 5절 1 ⓑ. 2-3 판정 대상이 아니다(설계 원칙 10).
+
+# nonprod/dev SG 규칙
+ec2:RevokeSecurityGroupIngress	ap-northeast-2	*
+ec2:AuthorizeSecurityGroupIngress	ap-northeast-2	*
+ec2:DescribeSecurityGroups	ap-northeast-2	*
+ec2:DescribeSecurityGroupRules	ap-northeast-2	*
+
+# 상태 버킷(계획 3절 백엔드 · use_lockfile — 읽기 · 쓰기 · 잠금 파일)
+s3:ListBucket	ap-northeast-2	*
+s3:GetObject	ap-northeast-2	*
+s3:PutObject	ap-northeast-2	*
+s3:DeleteObject	ap-northeast-2	*

@@ -7,6 +7,7 @@ import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assumptions.assumeFalse;
 
 /**
  * <b>가짜 서버가 루프백에 못박혀 있는가.</b>
@@ -43,6 +44,10 @@ class FakeServerBindingTest {
     /** 대조 — 와일드카드로 띄우면 실제로 잡힌다. 이것이 초록이면 위 검사가 아무것도 안 재는 것이다. */
     @Test
     void 주소를_안_정하면_실제로_가로채진다() throws Exception {
+        // 리눅스 커널은 와일드카드가 듣고 있는 번호를 127.0.0.1로 다시 못 잡게 한다(CI 러너에서 확인, POK-330).
+        // 그 기계에서는 가로채기 자체가 안 일어나 위 검사가 지킬 것이 없다. macOS·Windows에서는 그대로 잰다.
+        assumeFalse(System.getProperty("os.name").startsWith("Linux"),
+                "리눅스 커널은 와일드카드가 듣는 번호를 루프백으로 다시 못 잡게 해 가로채기가 안 일어난다");
         try (var wildcard = new ServerSocket()) {
             wildcard.setReuseAddress(true);
             wildcard.bind(new InetSocketAddress(0));   // 지금 고친 자리들이 쓰던 방식

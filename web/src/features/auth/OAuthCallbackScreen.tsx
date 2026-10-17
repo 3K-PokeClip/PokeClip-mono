@@ -6,6 +6,8 @@ import { useQueryClient } from '@tanstack/react-query';
 import { LinkButton, Spinner } from '@/ui';
 import { ReplaceLink } from '@/components/ReplaceLink';
 import { loginWithGoogle } from '@/api/auth';
+import { ApiError } from '@/api/client';
+import { track } from '@/lib/analytics';
 import { useAuthStore } from '@/stores/auth';
 import { consumeOAuthState } from './googleOAuth';
 import styles from './OAuthCallbackScreen.module.css';
@@ -86,9 +88,16 @@ export function OAuthCallbackScreen() {
         // me 캐시가 새 로그인에 새지 않도록, 토큰을 심기 전에 여기서 비운다. (리뷰 #72)
         queryClient.clear();
         useAuthStore.getState().setTokens(pair);
+        // 아직 익명으로 나간다 — 다음 화면의 AuthGuard가 회원 번호로 식별하면 그 사람에게 합쳐진다 (POK-357)
+        track('login_completed', {});
         router.replace(sanitizeReturnTo(stored.returnTo));
       })
-      .catch(() => {
+      .catch((e: unknown) => {
+        // 사유가 실려 온 거절(403 이메일 미인증 · 409 이메일 중복)은 서버 문구로 무엇을 할지 알려 준다.
+        if (e instanceof ApiError && e.code !== null) {
+          setPhase({ kind: 'error', title: '로그인할 수 없는 계정이에요', description: e.message });
+          return;
+        }
         // 401 사유 미공개 계약 + 네트워크 실패 — 문구를 나누지 않는다.
         setPhase({
           kind: 'error',

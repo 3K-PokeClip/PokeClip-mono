@@ -38,11 +38,18 @@ public class Broadcast {
     @Column(name = "streamer_id", nullable = false, length = 128)
     private String streamerId;
 
+    /**
+     * 물리 키(POK-233, 계약9 {@code ingestStreamId}). 조각 장부·녹화 경로의 {@code stream_id}다. null이면 이 칸을 안 실은
+     * 편지로 만든 줄이고, 그때는 {@code streamId}가 곧 물리 키다({@link #ingestKey()}).
+     */
+    @Column(name = "ingest_stream_id", length = 128)
+    private String ingestStreamId;
+
     @Convert(converter = BroadcastStatusConverter.class)
     @Column(name = "status", nullable = false, length = 16)
     private BroadcastStatus status;
 
-    /** 종료 선도착 placeholder는 null이다. */
+    /** 종료 선도착 placeholder는 null이다. 낮은 순서의 시작 편지가 늦게 오면 그 시각으로 찬다({@link #fillStartOfPlaceholder}). */
     @Column(name = "started_at")
     private Instant startedAt;
 
@@ -73,10 +80,11 @@ public class Broadcast {
     protected Broadcast() {
     }
 
-    private Broadcast(String streamId, String streamerId, BroadcastStatus status,
+    private Broadcast(String streamId, String streamerId, String ingestStreamId, BroadcastStatus status,
                       Instant startedAt, Instant endedAt, String trackManifest, long lastSequence) {
         this.streamId = streamId;
         this.streamerId = streamerId;
+        this.ingestStreamId = blankToNull(ingestStreamId);
         this.status = status;
         this.startedAt = startedAt;
         this.endedAt = endedAt;
@@ -85,16 +93,16 @@ public class Broadcast {
         this.updatedAt = Instant.now();
     }
 
-    public static Broadcast startedNow(String streamId, String streamerId, long sequence,
+    public static Broadcast startedNow(String streamId, String streamerId, String ingestStreamId, long sequence,
                                        Instant startedAt, String trackManifest) {
-        return new Broadcast(streamId, streamerId, BroadcastStatus.LIVE,
+        return new Broadcast(streamId, streamerId, ingestStreamId, BroadcastStatus.LIVE,
                 startedAt, null, trackManifest, sequence);
     }
 
     /** ADR-016의 ended placeholder — 시작을 못 본 채 끝을 먼저 받은 줄. */
-    public static Broadcast endedPlaceholder(String streamId, String streamerId,
+    public static Broadcast endedPlaceholder(String streamId, String streamerId, String ingestStreamId,
                                              long sequence, Instant endedAt) {
-        Broadcast placeholder = new Broadcast(streamId, streamerId, BroadcastStatus.ENDED,
+        Broadcast placeholder = new Broadcast(streamId, streamerId, ingestStreamId, BroadcastStatus.ENDED,
                 null, endedAt, null, sequence);
         // 생성자에 칸을 더하지 않고 여기서 채운다 — startedNow는 endedAt이 null이라
         // 같은 식을 태울 수 없고, 생성자에 기한을 받는 칸을 열면 두 팩토리가 서로
@@ -108,7 +116,7 @@ public class Broadcast {
      * 않고 false를 돌려준다 — <b>순서를 바로잡는 것이 아니라 견디는 것</b>이 목표다.
      *
      * <p>이미 ENDED인 줄에 시작이 와도 상태를 되돌리지 않는다. 순서 번호가 더
-     * 높다면 시작 시각만 채운다(placeholder였던 줄이 뒤늦게 시작 정보를 얻는 경우).
+     * 높다면 시작 시각만 채운다. 낮은 순서로 늦게 온 시작은 {@link #fillStartOfPlaceholder}가 받는다.
      */
     boolean applyStarted(long sequence, Instant at, String trackManifest) {
         if (sequence <= this.lastSequence) {
@@ -126,6 +134,35 @@ public class Broadcast {
             this.trackManifest = trackManifest;
         }
         this.lastSequence = sequence;
+        this.updatedAt = Instant.now();
+        return true;
+    }
+
+    /**
+     * 종료가 먼저 와 시작 시각을 모르는 줄(placeholder)에, 순서 번호가 낮아 {@link #applyStarted}가 거른 시작 편지의
+     * 시각만 채운다(POK-327). 같은 방송 안에서는 큐가 순서를 지키므로 이 편지는 대개 처리에 거듭 실패해 실패 편지함으로 갔다가
+     * 되돌려진 것이다. 버리면 시작 시각이 영영 비고, 화면은 끝 12시간 창으로만 읽어 같은 물리 키로 한 앞 회차 녹화가 섞인다.
+     *
+     * <p>상태·순서 번호·보관 기한은 안 바꾼다. 끝난 방송은 끝난 채로 두고(ADR-016 「더 낮은 sequence의 started는 무시한다」)
+     * 비어 있던 사실 하나만 받는다. 물리 키({@link #fillIngestStreamId})와 같은 규칙이다: 빈 칸은 낡은 편지로도 채우고 있는 값은 안 바꾼다.
+     * 그래서 정상 순서로 받은 시작 시각을 낡은 편지가 옮기지 못하고, 시작·종료가 어느 순서로 와도 마지막 줄이 같다.
+     * 시각이 없거나 끝보다 늦으면 안 채운다. 받으면 화면이 [시작, 끝] 창을 거꾸로 잡아 시각을 모를 때보다 나빠진다.
+     * 트랙 정보도 비어 있으면 같이 채운다: 렌더 주문서가 이 값을 싣는다(PR #234 codex).
+     *
+     * <p><b>「어느 순서로 와도 같다」는 회차당 시작 편지가 하나라는 계약에 기댄다</b>(계약9 6절 게이트 ④). 둘 이상 오면 되돌린 쪽은
+     * 먼저 온 편지의 시각이, 순서대로 받은 쪽은 번호가 높은 편지의 시각이 남아 갈린다. 그 계약이 바뀌면 채운 편지의 순서 번호를
+     * 따로 저장해 더 높은 번호로 덮어야 한다(칸이 하나 는다, PR #234 codex).
+     *
+     * @return 채웠으면 true
+     */
+    boolean fillStartOfPlaceholder(Instant at, String trackManifest) {
+        if (this.startedAt != null || this.endedAt == null || at == null || at.isAfter(this.endedAt)) {
+            return false;
+        }
+        this.startedAt = at;
+        if (this.trackManifest == null) {
+            this.trackManifest = trackManifest;
+        }
         this.updatedAt = Instant.now();
         return true;
     }
@@ -166,6 +203,28 @@ public class Broadcast {
 
     public String getStreamerId() {
         return streamerId;
+    }
+
+    /**
+     * 조각 장부·녹화 경로를 찾는 키. 편지가 물리 키를 실었으면 그 값, 아니면 {@code streamId}다(옛 줄·지금 1번 편지).
+     * 식별·자격·로그에는 쓰지 않는다. 그것은 {@code streamId}다.
+     */
+    public String ingestKey() {
+        return ingestStreamId != null ? ingestStreamId : streamId;
+    }
+
+    /**
+     * 물리 키가 빈 줄이면 뒤 편지의 값으로 채운다. 이미 있으면 안 바꾼다. 한 회차의 편지 둘은 같은 경로를 싣는다(계약9)
+     * 그래서 다른 값이 오면 발행 쪽 결함이고, 먼저 저장한 키로 조각을 계속 찾는 편이 방송 도중 키가 바뀌는 것보다 낫다.
+     */
+    void fillIngestStreamId(String ingestStreamId) {
+        if (this.ingestStreamId == null) {
+            this.ingestStreamId = blankToNull(ingestStreamId);
+        }
+    }
+
+    private static String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value;
     }
 
     public BroadcastStatus getStatus() {

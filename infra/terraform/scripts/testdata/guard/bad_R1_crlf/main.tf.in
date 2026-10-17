@@ -1,0 +1,13 @@
+# R1: CRLF 줄끝도 같은 선언이다.
+resource "aws_ssm_parameter" "doc" {
+  name  = "example"
+  type  = "String"
+  value = <<-DOC-TEXT
+    /* not a comment
+  DOC-TEXT
+}
+
+resource "aws_secretsmanager_secret_version" "crlf" {
+  secret_id     = "example"
+  secret_string = "example"
+}

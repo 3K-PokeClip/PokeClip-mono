@@ -7,13 +7,17 @@
 //
 // 화면 컴포넌트에는 목업 값을 두지 않는다 — 언젠가 서버가 내려줄 값(제목·트랙·자막·추천)은
 // 전부 여기서 나오고, 화면에는 구조 라벨('레이아웃' 같은 고정 문구)만 남는다.
+//
+// 실제 모드(POK-251): `source`를 주면 실제 카드·편집본으로 여는 것이다(studio/StudioScreen이 조립한다).
+// 그때는 목업 자막·제목 추천·이미지·BGM·효과음과 재생 흉내를 쓰지 않는다 — 줄 백엔드가 없는 칸은 비고,
+// 누르면 「준비 중」이라고만 말한다. 저장·주문은 `actions`가 실제 서버로 보낸다.
+// `source`가 없으면 지금까지의 목업이다(시험·스토리북).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useToast } from '@/ui';
 import {
   cropRectOf,
   maxCropSize,
-  minZoomOf,
   moveCropWindow,
   pointerDeltaToCrop,
   resizeCropWindow,
@@ -31,6 +35,7 @@ import {
   LAYOUT_OPTIONS,
   PIP_BORDER_PRESETS,
   PIP_BORDER_WIDTHS,
+  SOURCE_SIZE,
   SPLIT_RATIOS,
   defaultRegionWindow,
   layoutRegions,
@@ -48,6 +53,7 @@ import {
   type PipBox,
 } from './editorLayout';
 import type { EditorPlayback } from './editorPlayback';
+import { regionCropsOf, type EditorLook } from './recipeLook';
 import { useEditorPlaybackSimulation } from './useEditorPlaybackSimulation';
 import {
   canRedo as historyCanRedo,
@@ -72,6 +78,24 @@ import {
   type ClipRange,
   type TimelineView,
 } from './timelineMath';
+
+/** 실제 모드에서 줄 백엔드가 없는 동작에 붙는 안내 */
+const NOT_AVAILABLE = '준비 중';
+
+function noop() {}
+
+/** 실제 모드인데 재생 어댑터가 없을 때의 자리 — 아무것도 흐르지 않는다(가짜 시계를 쓰지 않는다) */
+const NO_PLAYBACK: EditorPlayback = {
+  playing: false,
+  currentSeconds: 0,
+  durationSeconds: 0,
+  error: null,
+  togglePlay: noop,
+  seekTo: noop,
+  seekBy: noop,
+  setRate: noop,
+  setBounds: noop,
+};
 
 /**
  * 목업 자막 생성 지연. 화면에 적히는 "약 20초"는 실제 서비스 추정치고,
@@ -196,7 +220,7 @@ export type SubtitleState =
  * 되돌리기 대상 — ADR-009의 레시피(구간·크롭·트랙·볼륨·자막 스타일·제목)와 같은 범위다.
  * 재생 위치·활성 도구·줌은 "보는 방식"이라 여기 없다.
  */
-interface EditorRecipe {
+export interface EditorRecipe {
   range: ClipRange;
   layout: EditorLayout;
   /** 분할 상단 지분(%) — 시안 칩 50 / 60 / 70 */
@@ -229,9 +253,9 @@ const MOCK_SOURCE = {
   subtitleFontLabel: 'Pretendard ExtraBold',
   /** 1:24:03 방송 */
   durationSeconds: 5043,
-  /** 가짜 방송의 해상도 — 크롭 사각형의 경계·종횡비를 재는 데 쓴다 (계약6은 픽셀 기준) */
-  width: 1920,
-  height: 1080,
+  /** 방송의 해상도 — 크롭 사각형의 경계·종횡비를 재는 데 쓴다 (계약6은 픽셀 기준) */
+  width: SOURCE_SIZE.width,
+  height: SOURCE_SIZE.height,
   /** 1:22:14 — 시안 트랜스포트 표기 */
   playheadSeconds: 4934,
   /** 1:22:08.4 – 1:22:20.8 = 12.4초 */
@@ -304,6 +328,13 @@ const MOCK_SFX_PRESETS = ['띠용', '박수', '두둥'] as const;
 
 const MOCK_BGM_LABEL = 'Neon Drive.mp3';
 
+/** 실제 모드의 빈 콘텐츠 — 줄 백엔드가 없다(파일 머리 주석) */
+const NO_SUBTITLES: readonly SubtitleItem[] = [];
+const NO_TRACKS: readonly EditorTrack[] = [];
+const NO_TITLE_SUGGESTIONS: readonly TitleSuggestion[] = [];
+const NO_IMAGES: readonly EditorImageItem[] = [];
+const NO_SFX_PRESETS: readonly string[] = [];
+
 /**
  * 고를 수 있는 값의 목록도 데이터다 — 화면에 배열을 박아두면
  * 자막 모드가 늘어날 때 화면을 고쳐야 한다(레시피 항목이라 서버가 알게 될 값이다).
@@ -325,9 +356,13 @@ export const TOOL_OPTIONS: readonly { value: EditorTool; label: string }[] = [
   { value: 'image', label: '이미지' },
 ];
 
-function initialRecipe(): EditorRecipe {
+function initialRecipe(
+  range: ClipRange,
+  trackMuted: Readonly<Record<string, boolean>> = {},
+  trackVolumes: Readonly<Record<string, number>> = {},
+): EditorRecipe {
   return {
-    range: MOCK_SOURCE.range,
+    range,
     // 시안 갱신분의 기본값은 분할이다 (splitVals: sm ?? 'split')
     layout: 'split',
     splitRatio: DEFAULT_SPLIT_RATIO,
@@ -340,14 +375,58 @@ function initialRecipe(): EditorRecipe {
     crops: {},
     // 초기값은 비워 둔다 — 트랙마다의 기본 볼륨은 트랙 정의가 갖고 있고, 여기 복사해 두면
     // 소스가 준 트랙(목업에 없는 id)의 볼륨이 빠진다
-    trackVolumes: {},
-    trackMuted: {},
+    trackVolumes,
+    trackMuted,
     subtitleMode: 'burn-cc',
     selectedTitleId: null,
   };
 }
 
+/** 실제 카드·편집본에서 온 소스 좌표. 마운트 때 한 번 읽는다 — 바뀌면 컴포넌트를 갈아 끼운다(key). */
+export interface EditorSource {
+  clipTitle: string;
+  sourceLabel: string;
+  /** 구간을 잡을 수 있는 오른쪽 끝(초) — 방송 길이이거나, 하이라이트 주변으로 좁힌 상한 */
+  durationSeconds: number;
+  /**
+   * 구간을 잡을 수 있는 왼쪽 끝(초). 없으면 0(방송 처음).
+   * 편집기는 하이라이트 하나를 다듬는 자리다 — 핸들이 방송 전체를 돌아다니면 다른 장면을 자르게 된다.
+   */
+  minSeconds?: number;
+  /** 처음 구간(방송 시작 기준 초) */
+  range: ClipRange;
+}
+
+/** 저장·주문을 실제 서버에 잇는 자리 */
+export interface EditorActions {
+  saveDraft?: (recipe: EditorRecipe) => void;
+  requestUpload?: (recipe: EditorRecipe) => void;
+}
+
 export interface ClipEditorOptions {
+  /** 실제 소스 — 주면 실제 모드다(파일 머리 주석) */
+  source?: EditorSource;
+  /** 미리보기에 그릴 실제 영상 노드(재생 어댑터가 쥔 것). 없으면 자리 표시 문구를 그린다 */
+  previewVideo?: HTMLVideoElement | null;
+  /** 오디오 트랙(스트리머가 적어 둔 트랙 이름, POK-240). 없으면 목업 트랙(실제 모드면 빈 목록) */
+  tracks?: readonly EditorTrack[];
+  /**
+   * 「최종 믹스」 트랙 id — 주면 스위치가 계약6 규칙을 지킨다: 최종 믹스와 나머지 트랙은 함께 켤 수 없고,
+   * 마지막으로 켜진 트랙은 끌 수 없다. 저장할 때 조용히 바꾸면 화면과 다른 소리가 렌더된다(PR #200 codex P1)
+   */
+  mixTrackId?: string;
+  /** 저장된 편집본의 자막 줄(실제 모드). 마운트 값 — 있으면 자막 도구가 「생성됨」으로 열린다 */
+  initialSubtitles?: readonly SubtitleItem[];
+  /** 저장된 편집본의 모양(레이아웃·자르는 자리·자막 방식과 자리). 마운트 값 — 없는 칸은 편집기 기본값이다 */
+  initialLook?: Partial<EditorLook>;
+  /** 처음 꺼 둘 트랙·볼륨 — 저장된 편집본의 값. 마운트 값 */
+  initialTrackMuted?: Readonly<Record<string, boolean>>;
+  initialTrackVolumes?: Readonly<Record<string, number>>;
+  actions?: EditorActions;
+  /** 헤더의 저장 상태 문구 — 컨테이너가 서버 응답에 따라 바꾼다 */
+  autosaveLabel?: string;
+  /** 오른쪽 주 버튼 문구 */
+  uploadLabel?: string;
   /**
    * 자막 초기 상태. 시안 1d-a는 "생성 후"를 보여주므로 기본값이 ready다 —
    * 생성 전 → 후 전이는 idle로 마운트해 확인한다(테스트가 쓰는 문).
@@ -380,6 +459,8 @@ export interface ClipEditorMockState {
   saveTemplate: () => void;
   saveDraft: () => void;
   requestUpload: () => void;
+  uploadLabel: string;
+  previewVideo: HTMLVideoElement | null;
 
   // 트랜스포트
   playing: boolean;
@@ -556,13 +637,30 @@ export interface ClipEditorMockState {
 const SPEED_OPTIONS = [0.5, 1, 1.5, 2] as const;
 
 export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEditorMockState {
-  const { initialSubtitleStatus = 'ready', initialLayout } = options;
+  const real = options.source !== undefined;
+  // 실제 모드의 자막은 「생성 전」에서 시작한다 — 만들어 줄 백엔드가 아직 없다. 저장된 편집본에 자막 줄이 있으면
+  // 그 줄로 연다(영상에는 타는데 화면이 「미생성」이면 화면과 영상이 다르다)
+  const savedSubtitles = options.initialSubtitles ?? NO_SUBTITLES;
+  const {
+    initialSubtitleStatus = real && savedSubtitles.length === 0 ? 'idle' : 'ready',
+    initialLayout,
+    actions,
+  } = options;
   const { toast } = useToast();
+  // 소스 좌표는 마운트 값이다(재생 어댑터와 같은 규칙) — 컨테이너가 데이터를 다 읽은 뒤에만 이 훅을 마운트한다
+  const source: EditorSource = options.source ?? MOCK_SOURCE;
+  // 실제 모드에서는 목업 콘텐츠(자막·추천·이미지·BGM·효과음)를 비운다
+  const subtitles = real ? savedSubtitles : MOCK_SUBTITLES;
 
   const [history, setHistory] = useState<History<EditorRecipe>>(() => {
-    const recipe = initialRecipe();
+    const recipe = initialRecipe(
+      source.range,
+      options.initialTrackMuted,
+      options.initialTrackVolumes,
+    );
+    const withLook = { ...recipe, ...options.initialLook };
     return createHistory(
-      initialLayout === undefined ? recipe : { ...recipe, layout: initialLayout },
+      initialLayout === undefined ? withLook : { ...withLook, layout: initialLayout },
     );
   });
   const recipe = history.present;
@@ -573,7 +671,7 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     durationSeconds: MOCK_SOURCE.durationSeconds,
     initialSeconds: MOCK_SOURCE.playheadSeconds,
   });
-  const playback = options.playback ?? simulation;
+  const playback = options.playback ?? (real ? NO_PLAYBACK : simulation);
   const { playing, currentSeconds: playheadSeconds } = playback;
   const [speed, setSpeed] = useState<number>(1);
   const [loop, setLoop] = useState(true);
@@ -582,7 +680,7 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     initialSubtitleStatus,
   );
   const [selectedSubtitleId, setSelectedSubtitleId] = useState<string | null>(
-    initialSubtitleStatus === 'ready' ? (MOCK_SUBTITLES[0]?.id ?? null) : null,
+    initialSubtitleStatus === 'ready' ? (subtitles[0]?.id ?? null) : null,
   );
 
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
@@ -714,7 +812,13 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
 
   const setRangeEdge = useCallback(
     (edge: 'start' | 'end', seconds: number) => {
-      const result = resolveRangeEdge(edge, seconds, recipe.range, MOCK_SOURCE.durationSeconds);
+      // 왼쪽 끝을 먼저 막는다 — 오른쪽 끝과 길이(5초~3분)는 resolveRangeEdge 가 본다
+      const result = resolveRangeEdge(
+        edge,
+        Math.max(source.minSeconds ?? 0, seconds),
+        recipe.range,
+        source.durationSeconds,
+      );
       const rejection = result.rejection;
       // 경계 밖이면 값을 그대로 둔다 — 핸들이 거기서 멈추는 것이 곧 안내다
       // (범례가 5초~3:00을 미리 적어 둔다)
@@ -729,7 +833,7 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
       }
       commit((current) => ({ ...current, range: result.range }));
     },
-    [commit, recipe.range],
+    [commit, recipe.range, source.minSeconds, source.durationSeconds],
   );
 
   // 플레이헤드를 ref로 읽는다 — 의존성에 걸면 재생 중 100ms마다 콜백 신원이 바뀌어
@@ -741,42 +845,56 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
   const markOut = useCallback(() => setRangeEdge('end', playheadRef.current), [setRangeEdge]);
 
   const generateSubtitles = useCallback(() => {
+    // 실제 모드는 만들어 줄 백엔드(AI 자막, 2번 몫)가 아직 없다 — 상태를 바꾸지 않고 안내만 한다
+    if (real) {
+      toast({ tone: 'info', title: `AI 자막 생성 · ${NOT_AVAILABLE}` });
+      return;
+    }
     setSubtitleStatus('generating');
     if (subtitleTimer.current !== null) clearTimeout(subtitleTimer.current);
     subtitleTimer.current = setTimeout(() => {
       setSubtitleStatus('ready');
       setSelectedSubtitleId(MOCK_SUBTITLES[0]?.id ?? null);
     }, MOCK_SUBTITLE_DELAY_MS);
-  }, []);
+  }, [real, toast]);
 
   const subtitle: SubtitleState = useMemo(() => {
-    if (subtitleStatus === 'ready') return { status: 'ready', items: [...MOCK_SUBTITLES] };
+    if (subtitleStatus === 'ready') return { status: 'ready', items: [...subtitles] };
     if (subtitleStatus === 'generating') return { status: 'generating' };
-    return { status: 'idle', estimateLabel: '약 20초' };
-  }, [subtitleStatus]);
+    return { status: 'idle', estimateLabel: real ? NOT_AVAILABLE : '약 20초' };
+  }, [subtitleStatus, subtitles, real]);
 
   const tracks = useMemo(
     () =>
-      MOCK_TRACKS.map((track) => ({
+      (options.tracks ?? (real ? NO_TRACKS : MOCK_TRACKS)).map((track) => ({
         ...track,
         volume: track.volume === null ? null : (recipe.trackVolumes[track.id] ?? track.volume),
         muted: recipe.trackMuted[track.id] ?? false,
         clips: [...track.clips],
       })),
-    [recipe.trackVolumes, recipe.trackMuted],
+    [options.tracks, real, recipe.trackVolumes, recipe.trackMuted],
   );
 
-  const liveView = useMemo(
-    () =>
-      viewWindow(
-        (recipe.range.startSeconds + recipe.range.endSeconds) / 2,
-        zoom,
-        MOCK_SOURCE.durationSeconds,
-        // 구간보다 조금 넉넉하게 — 양쪽에 핸들을 끌어 넣을 여백이 남는다
-        (recipe.range.endSeconds - recipe.range.startSeconds) * 1.15,
-      ),
-    [recipe.range.startSeconds, recipe.range.endSeconds, zoom],
-  );
+  const liveView = useMemo(() => {
+    const view = viewWindow(
+      (recipe.range.startSeconds + recipe.range.endSeconds) / 2,
+      zoom,
+      source.durationSeconds,
+      // 구간보다 조금 넉넉하게 — 양쪽에 핸들을 끌어 넣을 여백이 남는다
+      (recipe.range.endSeconds - recipe.range.startSeconds) * 1.15,
+    );
+    // 잡을 수 없는 왼쪽(하이라이트 범위 밖)은 눈금자에도 안 보인다 — 창을 오른쪽으로 민다
+    const min = source.minSeconds ?? 0;
+    if (view.startSeconds >= min) return view;
+    const span = Math.min(view.endSeconds - view.startSeconds, source.durationSeconds - min);
+    return { startSeconds: min, endSeconds: min + span };
+  }, [
+    recipe.range.startSeconds,
+    recipe.range.endSeconds,
+    zoom,
+    source.durationSeconds,
+    source.minSeconds,
+  ]);
   // 제스처가 시작될 때의 창을 그대로 붙잡아 둔다
   const liveViewRef = useRef(liveView);
   liveViewRef.current = liveView;
@@ -793,28 +911,37 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
   );
 
   return {
-    clipTitle: MOCK_SOURCE.clipTitle,
-    sourceLabel: MOCK_SOURCE.sourceLabel,
-    autosaveLabel: MOCK_SOURCE.autosaveLabel,
+    clipTitle: source.clipTitle,
+    sourceLabel: source.sourceLabel,
+    autosaveLabel: options.autosaveLabel ?? (real ? '저장 전' : MOCK_SOURCE.autosaveLabel),
+    uploadLabel: options.uploadLabel ?? '업로드',
+    previewVideo: options.previewVideo ?? null,
     canUndo: historyCanUndo(history),
     canRedo: historyCanRedo(history),
     // 되돌리면 구간이 다른 값이 되므로 직전 거부 안내는 더 이상 그 구간의 이야기가 아니다
     undo: useCallback(() => setHistory(undoHistory), []),
     redo: useCallback(() => setHistory(redoHistory), []),
     saveTemplate: useCallback(
-      () => toast({ tone: 'success', title: '템플릿으로 저장했어요' }),
-      [toast],
-    ),
-    saveDraft: useCallback(() => toast({ tone: 'success', title: '편집본을 저장했어요' }), [toast]),
-    requestUpload: useCallback(
       () =>
+        real
+          ? toast({ tone: 'info', title: `템플릿 저장 · ${NOT_AVAILABLE}` })
+          : toast({ tone: 'success', title: '템플릿으로 저장했어요' }),
+      [real, toast],
+    ),
+    // 저장·주문은 컨테이너가 준 실제 동작으로 간다. 없으면 목업 안내다
+    saveDraft: useCallback(() => {
+      if (actions?.saveDraft) actions.saveDraft(presentRef.current);
+      else toast({ tone: 'success', title: '편집본을 저장했어요' });
+    }, [actions, toast]),
+    requestUpload: useCallback(() => {
+      if (actions?.requestUpload) actions.requestUpload(presentRef.current);
+      else
         toast({
           tone: 'info',
           title: '업로드는 아직 준비 중이에요',
           description: '지금은 화면만 있는 목업이에요.',
-        }),
-      [toast],
-    ),
+        });
+    }, [actions, toast]),
 
     playing,
     togglePlay: playback.togglePlay,
@@ -895,18 +1022,18 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
               ? { ...region.placement, fill: recipe.centerFill }
               : region.placement,
       }));
-      // 크롭 경계는 소스 해상도로 잰다 — 계약6이 종횡비를 픽셀 기준으로 검증하기 때문이다
-      return regions.map((region, index) => {
-        const maxSize = maxCropSize(region.aspect, MOCK_SOURCE.width, MOCK_SOURCE.height);
-        const window = recipe.crops[region.id] ?? defaultRegionWindow(recipe.layout, region.id);
-        // 판독은 그려지는 값과 같아야 한다 — 자리 모양이 바뀌어 하한이 오르면 저장된 zoom 은 그 아래일 수 있다
-        const zoom = Math.max(window.zoom, minZoomOf(maxSize));
-        return {
-          ...base[index]!,
-          crop: cropRectOf(window, maxSize),
-          cropZoom: zoom,
-        };
+      // 크롭 자리는 저장(recipeLook)과 같은 계산이다 — 화면에서 본 자리가 그대로 레시피에 실린다
+      const crops = regionCropsOf({
+        layout: recipe.layout,
+        splitRatio: recipe.splitRatio,
+        pip: recipe.pip,
+        crops: recipe.crops,
       });
+      return regions.map((_, index) => ({
+        ...base[index]!,
+        crop: crops[index]!.crop,
+        cropZoom: crops[index]!.zoom,
+      }));
     }, [
       recipe.layout,
       recipe.splitRatio,
@@ -1062,12 +1189,24 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
       [commit],
     ),
     toggleTrackMute: useCallback(
-      (trackId: string) =>
-        commit((current) => ({
-          ...current,
-          trackMuted: { ...current.trackMuted, [trackId]: !current.trackMuted[trackId] },
-        })),
-      [commit],
+      (trackId: string) => {
+        const mix = options.mixTrackId;
+        const current = presentRef.current;
+        const turningOn = current.trackMuted[trackId] ?? false;
+        const muted = { ...current.trackMuted, [trackId]: !turningOn };
+        if (mix !== undefined) {
+          const ids = (options.tracks ?? []).map((t) => t.id);
+          if (turningOn && trackId === mix) for (const id of ids) muted[id] = id !== mix;
+          else if (turningOn) muted[mix] = true;
+          else if (ids.every((id) => muted[id] ?? false)) {
+            // 소리가 하나도 없는 영상은 렌더가 거절한다 — 끄지 않고 이유를 말한다
+            toast({ tone: 'info', title: '트랙을 하나는 켜 둬야 해요' });
+            return;
+          }
+        }
+        commit((cur) => ({ ...cur, trackMuted: muted }));
+      },
+      [commit, options.mixTrackId, options.tracks, toast],
     ),
     selectedClipId,
     selectClip: setSelectedClipId,
@@ -1090,7 +1229,7 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     selectSubtitle: setSelectedSubtitleId,
 
     titlesLocked,
-    titleSuggestions: MOCK_TITLE_SUGGESTIONS,
+    titleSuggestions: real ? NO_TITLE_SUGGESTIONS : MOCK_TITLE_SUGGESTIONS,
     selectedTitleId: recipe.selectedTitleId,
     selectTitle: useCallback(
       (id: string) =>
@@ -1100,13 +1239,13 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
       [commit],
     ),
 
-    bgmLabel: MOCK_BGM_LABEL,
-    sfxPresets: MOCK_SFX_PRESETS,
-    images: MOCK_IMAGES,
+    bgmLabel: real ? null : MOCK_BGM_LABEL,
+    sfxPresets: real ? NO_SFX_PRESETS : MOCK_SFX_PRESETS,
+    images: real ? NO_IMAGES : MOCK_IMAGES,
 
     // 소스 길이의 정본은 목업 소스 하나다 — 구간 핸들 경계·타임라인 창도 같은 값을 본다.
     // 어댑터의 durationSeconds 는 어댑터 자신의 클램프용이라, 실제 소스가 오기 전엔 여기로 안 끌어온다
-    sourceDurationSeconds: MOCK_SOURCE.durationSeconds,
+    sourceDurationSeconds: source.durationSeconds,
     sourceAspect: MOCK_SOURCE.width / MOCK_SOURCE.height,
     view,
     activeTool,

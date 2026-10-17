@@ -43,8 +43,22 @@ pokeclip:
     # IllegalStateException으로 컨텍스트가 죽고, IntegrationTestSupport를 상속한
     # 테스트가 전부 같이 죽는다. 값을 바꿀 일이 있으면 `base64 -d | wc -c`로 먼저 센다.
     key: dGVzdC1vbmx5LWFlcy0yNTYta2V5LTMyYnl0ZXMhISE=
+  withdrawal-purge:
+    # 시험은 발송기를 안 돌린다. WithdrawalPurgeTest가 가짜 서버로 한 바퀴씩 손으로 부른다.
+    # 주소는 아무도 안 듣는 포트다(실수로 보내면 연결 거부로 바로 실패한다).
+    clip-base-url: http://127.0.0.1:1
+    collector-base-url: http://127.0.0.1:1
+    dispatch: false
   internal-api:
     token: test-only-internal-token-32bytes-long!!
+    # 셸에 STREAM_KEY_RESOLVE_TOKEN·STREAM_KEY_RESOLVE_ALLOWED_CIDRS가 export돼 있어도 시험은 닫힌 창구를 잰다 —
+    # 아래 forward-headers-strategy 줄과 같은 이유로 이 두 줄이 기본 yml의 placeholder 줄을 덮는다.
+    # 창구를 여는 시험의 @TestPropertySource·@DynamicPropertySource는 이것보다 위라 그쪽은 계속 열린다.
+    # 재현: export한 채 돌리면 WithoutResolveToken이 401 대신 403이었고, ForwardedHeadersNativeTest는
+    # native라 부팅 검사에 걸려 컨텍스트가 안 떴다.
+    stream-key-resolve:
+      token: ""
+      allowed-cidrs: ""
   chzzk:
     app:
       client-id: test-chzzk-client-id

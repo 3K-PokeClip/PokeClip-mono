@@ -1,0 +1,73 @@
+# 단계 묶음 — 열: 동작 · 리전 · 자원 패턴(탭 구분). 「#」 줄은 주석, 빈 줄은
+# 건너뜀. 계정 자리는 ${ACCOUNT} 뿐(판정 때 caller identity 의 계정 ID).
+# 같은 (동작, 리전)은 한 행. 자원 패턴을 계획이 주지 않으면 *.
+# 출처: 계획 M9 「O7e 선행 0」 공통 묶음(ec2 · iam 인스턴스 프로필 · elb 대상
+# 등록 · ssm · secretsmanager — rds-db:connect 는 O7e-stop1 에만) · O7e 본문
+# 1 ~ 5(media apply · T9a · CDN 비밀 입력 · 재시작).
+
+# Media EC2 · 시작 템플릿 · SG
+ec2:RunInstances	ap-northeast-2	*
+ec2:CreateLaunchTemplate	ap-northeast-2	*
+ec2:CreateSecurityGroup	ap-northeast-2	*
+ec2:AuthorizeSecurityGroupIngress	ap-northeast-2	*
+ec2:AuthorizeSecurityGroupEgress	ap-northeast-2	*
+ec2:DescribeSecurityGroups	ap-northeast-2	*
+ec2:CreateTags	ap-northeast-2	*
+
+# 인스턴스 역할 · 인스턴스 프로필(경로 /pokeclip/prod/)
+iam:CreateRole	us-east-1	arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*
+iam:PutRolePolicy	us-east-1	arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*
+iam:AttachRolePolicy	us-east-1	arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*
+iam:TagRole	us-east-1	arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*
+iam:PassRole	us-east-1	arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*
+iam:CreateInstanceProfile	us-east-1	arn:aws:iam::${ACCOUNT}:instance-profile/pokeclip/prod/*
+iam:AddRoleToInstanceProfile	us-east-1	arn:aws:iam::${ACCOUNT}:instance-profile/pokeclip/prod/*
+
+# 대상 등록
+elasticloadbalancing:RegisterTargets	ap-northeast-2	*
+elasticloadbalancing:DeregisterTargets	ap-northeast-2	*
+elasticloadbalancing:DescribeTargetHealth	ap-northeast-2	*
+
+# SSM — T9a 저널 건수 · systemctl restart
+ssm:SendCommand	ap-northeast-2	*
+ssm:GetCommandInvocation	ap-northeast-2	*
+
+# CDN 비밀 입력(put-secret-from-file.sh)
+secretsmanager:PutSecretValue	ap-northeast-2	arn:aws:secretsmanager:ap-northeast-2:${ACCOUNT}:secret:pokeclip/prod/*
+secretsmanager:DescribeSecret	ap-northeast-2	arn:aws:secretsmanager:ap-northeast-2:${ACCOUNT}:secret:pokeclip/prod/*
+
+# 상태 버킷(계획 3절 백엔드 · use_lockfile — 읽기 · 쓰기 · 잠금 파일)
+s3:ListBucket	ap-northeast-2	*
+s3:GetObject	ap-northeast-2	*
+s3:PutObject	ap-northeast-2	*
+s3:DeleteObject	ap-northeast-2	*
+
+# 2-3 판정 · 이벤트 조회의 읽기(설계 11-5 의 2-3-7 · 2-3-8 · 계획 M17a
+# 「데이터」). 열거 읽기의 리전은 M17a 가 정한 두 리전(서울 · us-east-1 —
+# M17b 착수 때 collect.sh 가 실제로 부르는 리전과 확인)이다.
+# ec2:DescribeRegions 는 넣지 않는다(kty 45차). iam:SimulatePrincipalPolicy 는
+# 이 도구 자신의 호출이라 그것이 거부되면 종료 2 로 드러난다.
+iam:GetAccountAuthorizationDetails	us-east-1	*
+iam:GetContextKeysForPrincipalPolicy	us-east-1	*
+iam:SimulateCustomPolicy	us-east-1	*
+iam:GetInstanceProfile	us-east-1	*
+iam:ListAccessKeys	us-east-1	*
+s3:GetBucketPolicy	ap-northeast-2	*
+secretsmanager:GetResourcePolicy	ap-northeast-2	*
+ecr:GetRepositoryPolicy	ap-northeast-2	*
+sns:GetTopicAttributes	ap-northeast-2	*
+sqs:GetQueueAttributes	ap-northeast-2	*
+ec2:DescribeInstances	ap-northeast-2	*
+ec2:DescribeInstances	us-east-1	*
+lambda:ListFunctions	ap-northeast-2	*
+lambda:ListFunctions	us-east-1	*
+ecs:ListTaskDefinitions	ap-northeast-2	*
+ecs:ListTaskDefinitions	us-east-1	*
+ecs:DescribeTaskDefinition	ap-northeast-2	*
+ecs:DescribeTaskDefinition	us-east-1	*
+cloudtrail:LookupEvents	ap-northeast-2	*
+cloudtrail:LookupEvents	us-east-1	*
+tag:GetTagKeys	ap-northeast-2	*
+tag:GetTagKeys	us-east-1	*
+tag:GetResources	ap-northeast-2	*
+tag:GetResources	us-east-1	*

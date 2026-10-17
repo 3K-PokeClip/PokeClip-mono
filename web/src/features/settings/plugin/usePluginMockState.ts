@@ -14,13 +14,15 @@ export interface PluginConnection {
   latency: string;
 }
 
+// 신호 API가 없는데 「연결됨」을 보이면 실제 사용자에게 거짓이 된다(POK-251) — 배너는 연결 안 됨 갈래를 그린다.
+// 연결됨 갈래의 칸(버전·기기·지연)은 신호 API가 생기면 채운다.
 const MOCK_CONNECTION: PluginConnection = {
-  connected: true,
-  version: 'v2.4.1',
-  device: 'DESKTOP-RACCOON',
-  obsVersion: '30.2',
-  lastSignal: '방금 전',
-  latency: '0.8초',
+  connected: false,
+  version: '',
+  device: '',
+  obsVersion: '',
+  lastSignal: '',
+  latency: '',
 };
 
 export interface PluginMockState {

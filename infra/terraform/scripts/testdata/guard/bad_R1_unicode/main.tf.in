@@ -1,0 +1,5 @@
+# R1: 유형 라벨을 유니코드 이스케이프(\u0076 = v)로 써도 같은 선언이다.
+resource "aws_secretsmanager_secret_\u0076ersion" "escaped" {
+  secret_id     = "example"
+  secret_string = "example"
+}

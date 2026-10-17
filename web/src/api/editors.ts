@@ -174,3 +174,56 @@ export function inviteFailureMessage(e: unknown): EditorInviteMessage {
   const failure = inviteFailureOf(e);
   return failure !== null ? FAILURE_MESSAGE[failure] : FALLBACK_MESSAGE;
 }
+
+// ── 편집자 시점(초대함) — 받은 초대에 답하고, 내가 편집자인 스트리머를 본다 (POK-57) ──
+
+/** 받은 초대 한 건. 응답할 수 있는 것(PENDING·기한 안)만 온다 — 그래서 status 칸이 없다. */
+export interface ReceivedInvitation {
+  id: number;
+  streamerId: number;
+  streamerName: string;
+  expiresAt: string;
+  createdAt: string;
+}
+
+/** 내가 편집자인 위임 한 건 — 상대가 스트리머다. 트랙 이름 조회에 번호가 필요해 여기서는 버리지 않는다. */
+export interface StreamerDelegation {
+  id: number;
+  streamerId: number;
+  streamerName: string;
+  grantedAt: string;
+}
+
+export async function fetchReceivedInvitations(): Promise<ReceivedInvitation[]> {
+  const res = await apiFetch('/api/editor-invitations/received');
+  return (await res.json()) as ReceivedInvitation[];
+}
+
+export async function acceptInvitation(id: number): Promise<void> {
+  await apiFetch(`/api/editor-invitations/${id}/accept`, { method: 'POST' });
+}
+
+export async function declineInvitation(id: number): Promise<void> {
+  await apiFetch(`/api/editor-invitations/${id}/decline`, { method: 'POST' });
+}
+
+export async function fetchDelegationsAsEditor(): Promise<StreamerDelegation[]> {
+  const res = await apiFetch('/api/editor-delegations/as-editor');
+  const wire = (await res.json()) as DelegationWire[];
+  return wire.map(({ id, counterpartId, counterpartName, grantedAt }) => ({
+    id,
+    streamerId: counterpartId,
+    streamerName: counterpartName,
+    grantedAt,
+  }));
+}
+
+export const receivedInvitationsQueryOptions = {
+  queryKey: ['editor-invitations', 'received'] as const,
+  queryFn: fetchReceivedInvitations,
+};
+
+export const delegationsAsEditorQueryOptions = {
+  queryKey: ['editor-delegations', 'as-editor'] as const,
+  queryFn: fetchDelegationsAsEditor,
+};

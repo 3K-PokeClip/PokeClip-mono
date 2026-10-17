@@ -37,6 +37,16 @@ export interface PlayerSimulation {
   uptimeSeconds: number;
   quality: PlayerQuality;
   lowLatency: boolean;
+  /**
+   * 화질·저지연 설정 메뉴를 보일까. 실재생(라이브·다시보기)은 렌디션이 하나뿐이고 저지연도 반영하지 않아 고를 것이 없는
+   * 거짓 선택지라 끈다(POK-253, 계약3 2절). 목업 재생(스토리북·시안)만 보인다
+   */
+  settingsMenu: boolean;
+  /**
+   * 끝난 방송의 녹화 다시보기인가. 오른쪽 끝이 「실시간」이 아니라 녹화 끝이고 그 끝으로 가는 동작도 녹화 재생이 정한다
+   * (ADR-081 8). 버튼·시크바 문구가 이 값으로 갈린다(QA 2026-10-11)
+   */
+  replay: boolean;
   clipMarked: boolean;
   /** 자동 숨김 상태 — 일시정지 중엔 이 값과 무관하게 컨트롤을 보여준다 */
   controlsVisible: boolean;
@@ -47,6 +57,16 @@ export interface PlayerSimulation {
   seekToFraction: (fraction: number) => void;
   /** 키보드 시킹 — 음수는 엣지 방향 */
   seekBy: (deltaSeconds: number) => void;
+  /**
+   * 녹화 다시보기만: 그 자리(방송 기준 초)로 바로 옮긴다. 카드처럼 정확한 시각으로 갈 때 쓴다: 시크바 비율을 거치면 시차를 초
+   * 단위로 반올림해 1초 안쪽 앞에 섰다(POK-324 리뷰 1라운드). 없으면 비율로 옮긴다
+   */
+  seekToPosition?: (seconds: number) => void;
+  /**
+   * 라이브 실재생만: 그 실제 시각(epoch ms)으로 옮긴다. 조각마다 그 조각의 시각 표시(PDT)로 영상 시각을 센다(계약3, POK-326).
+   * 목록에 시각 표시가 없으면 false다(부르는 쪽이 방송 경과로 옮긴다). 없으면 그 길이 없는 재생기다
+   */
+  seekToDate?: (epochMs: number) => boolean;
   /** 명시적 LIVE 복귀 (계약3 4절) */
   returnToLive: () => void;
   setQuality: (quality: PlayerQuality) => void;
@@ -139,6 +159,8 @@ export function usePlayerSimulation(options: PlayerSimulationOptions = {}): Play
     seekToFraction,
     seekBy,
     returnToLive: useCallback(() => setBehind(0), []),
+    settingsMenu: true,
+    replay: false,
     setQuality,
     toggleLowLatency: useCallback(() => setLowLatency((v) => !v), []),
     markClip,

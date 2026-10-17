@@ -1,14 +1,34 @@
 'use client';
 
-import { useCallback, useMemo, useState } from 'react';
-import { useToast } from '@/ui';
-import { excludeLive, filterByPeriod } from './vodListView';
+import {
+  broadcastTitle,
+  fetchAllBroadcasts,
+  fetchAllJumpCards,
+  mediaStreamId,
+} from '@/api/clipEditor';
 
-// 시안 1f 지난 방송 목록의 목업 상태.
-//
-// 목록 문(`GET /api/clip/broadcasts?state=past` — POK-174·ADR-055)은 이미 있지만 VOD 준비
-// 상태를 줄 백엔드(B5)가 아직 없어 전부 목업이다. 연동 티켓에서 이 훅 내부만 useQuery로
-// 갈아끼우면 화면은 그대로 쓴다(useLiveMockState가 라이브 화면에 쓴 방식과 같다).
+/** 지난 방송 목록을 다시 읽는 간격 — 끝난 방송이라 자주 볼 까닭이 없다 */
+const LIST_POLL_MS = 60_000;
+/**
+ * 기억한 카드 수를 다시 세는 간격(POK-254). 끝난 뒤에도 카드는 늦게 뜨거나 숨겨진다. 방금 끝난 방송은 주기마다,
+ * 나머지는 이만큼 지나면 센다: 주기마다 전체 이력을 세면 계정이 오래될수록 요청이 끝없이 는다(PR #200 codex).
+ */
+const CARD_COUNT_TTL_MS = 10 * 60_000;
+/**
+ * 한 주기에 다시 세는 오래된 방송 수의 상한. 처음 읽을 때 모든 방송이 같은 시각에 세어져, 상한이 없으면 10분마다 전체 이력의
+ * 카드 목록을 한꺼번에 불렀다(리뷰 1라운드). 남은 것은 다음 주기로 넘어가 흩어진다
+ */
+const CARD_RECOUNT_PER_POLL = 20;
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useToast } from '@/ui';
+import { lookupRecordingSpans, playbackConfigured } from '@/api/mediaPlayback';
+import { recordingTimeline } from '@/features/player/recordingTimeline';
+import { recordingSearchFrom } from '@/features/broadcast/endedWindow';
+import { excludeLive, filterByPeriod, isJustEnded } from './vodListView';
+
+// 시안 1f 지난 방송 목록의 상태. 목록은 clip `GET /api/clip/broadcasts`(POK-174·ADR-055)에서 온다(POK-251).
+// VOD 준비 상태를 줄 백엔드(B5)가 아직 없어, 녹화 재생 서버가 설정된 곳에서만 끝난 방송을 「다시 보기 가능」으로 본다.
+// 방송 제목도 명부에 칸이 없어 아직 방송 번호로 보인다.
 //
 // ⚠ VodBroadcast는 계약 미러다 — services/clip `BroadcastListResponse.Item`과 칸 이름·값이
 // 같다. 실연동 때 화면을 안 고치려면 이 모양을 지켜야 한다. 계약에 없는 표기값은 아래
@@ -33,6 +53,8 @@ export interface VodBroadcast {
   endedAt: string | null;
   /** 60일 보관 만료 시각. 기한이 지난 방송도 목록에 남으므로 과거일 수 있다 */
   vodExpiresAt: string | null;
+  /** 가장 크게 터진 장면 사진(POK-277). 없으면 자리표시 */
+  thumbnailUrl?: string | null;
 }
 
 /**
@@ -44,6 +66,8 @@ export interface VodRowVisual {
   /** 준비 중이라 아직 모르면 null */
   durationSec: number | null;
   cardCount: number;
+  /** 녹화 재생 서버에 물어 녹화가 없다고 확인됐다(POK-254). 물을 수 없으면 비운다 */
+  recordingMissing?: boolean;
   /** 만료 임박 행의 「저장하지 않은 카드 N개가 함께 삭제됩니다」 */
   unsavedCardCount?: number;
 }
@@ -73,6 +97,8 @@ export interface VodListOptions {
   broadcasts?: VodBroadcast[];
   visuals?: Record<string, VodRowVisual>;
   downloads?: Record<string, VodDownloadState>;
+  /** D-day·기간 계산의 기준 시각 — 시험이 얼린다. 없으면 지금 */
+  now?: Date;
 }
 
 export interface VodListMockState {
@@ -82,6 +108,11 @@ export interface VodListMockState {
   broadcasts: VodBroadcast[];
   /** 필터와 무관한 전체 수 — 「아직 없다」와 「이 기간에 없다」를 가른다 */
   totalCount: number;
+  /**
+   * 서버 목록을 아직 한 번도 못 읽었다. 그동안의 빈 목록은 「없다」가 아니라 「모른다」다(QA 2026-10-11). 첫 읽기부터
+   * 실패하면 다음 주기까지 그대로다(홈과 같은 규칙)
+   */
+  loading: boolean;
   visuals: Record<string, VodRowVisual>;
   filter: VodPeriodFilter;
   setFilter: (filter: VodPeriodFilter) => void;
@@ -98,157 +129,212 @@ export interface VodListMockState {
 // 「지금」을 고정한다. 클라이언트 시계로 계산하면 하이드레이션이 어긋나고(MOCK_GREETING 선례),
 // 목업 날짜와 함께 얼면 D-day가 결정적이라 테스트가 시계를 조작할 필요도 없다.
 // 연동 때는 서버 응답이 CSR로 오므로 이 상수가 `new Date()`가 된다 — 훅 내부만 바뀐다.
-const MOCK_NOW = new Date('2026-08-24T21:00:00+09:00');
-
-const HOUR_MS = 60 * 60 * 1000;
-const DAY_MS = 24 * HOUR_MS;
-const VOD_RETENTION_DAYS = 60;
 
 /**
  * MOCK_NOW에서 거슬러 올라간 시각. setHours 같은 지역 시간 계산을 안 쓰는 이유는 D-day가
  * 실행 환경의 시간대에 따라 하루씩 흔들리지 않게 하려는 것이다 — 「지금」을 얼렸으면
  * 배지도 얼어야 한다. 하루 안쪽으로 시간을 물리면 보관 만료가 `D-(60 - days)`로 떨어진다.
  */
-function ago(days: number, hours: number): string {
-  return new Date(MOCK_NOW.getTime() - days * DAY_MS - hours * HOUR_MS).toISOString();
-}
 
 /** 보관 만료는 종료 시각 + 60일이다(ADR-004) — D-day가 저절로 행마다 달라진다 */
-function expiresFrom(endedAt: string): string {
-  return new Date(new Date(endedAt).getTime() + VOD_RETENTION_DAYS * DAY_MS).toISOString();
-}
-
-interface MockRow {
-  streamId: string;
-  endedAt: string | null;
-  startedAt?: string | null;
-  status?: VodBroadcastStatus;
-  /** 만료 임박 행처럼 종료+60일과 다른 만료 시각을 줄 때만 */
-  vodExpiresAt?: string | null;
-  visual: VodRowVisual;
-}
 
 // 시안 1f의 네 상태를 모두 담고, 기간 칩을 눌렀을 때 목록이 눈에 띄게 달라지도록 종료일을
 // 흩어 뒀다 — 7일 이내 4개 · 30일 이내 9개 · 전체 12개.
-const MOCK_ROWS: MockRow[] = [
-  {
-    streamId: 'stream-2608',
-    status: 'ended',
-    startedAt: ago(0, 3.5),
-    endedAt: ago(0, 0.4),
-    // 준비 중 — VOD가 아직 없어 보관 기한도 안 정해졌다
-    vodExpiresAt: null,
-    visual: { title: '새벽 랭크 — 마스터 승급전', durationSec: null, cardCount: 3 },
-  },
-  {
-    streamId: 'stream-2607',
-    endedAt: ago(1, 2),
-    visual: { title: '고민상담 라디오', durationSec: 11144, cardCount: 6 },
-  },
-  {
-    streamId: 'stream-2606',
-    endedAt: ago(3, 1),
-    visual: { title: '합방 특집 — 4인 내전', durationSec: 15128, cardCount: 11 },
-  },
-  {
-    streamId: 'stream-2605',
-    endedAt: ago(6, 3),
-    visual: { title: '시청자 참여 — 밸런스 게임', durationSec: 9668, cardCount: 4 },
-  },
-  {
-    streamId: 'stream-2604',
-    endedAt: ago(9, 2),
-    visual: { title: '스크림 — 대회 연습', durationSec: 19330, cardCount: 9 },
-  },
-  {
-    streamId: 'stream-2603',
-    endedAt: ago(13, 4),
-    visual: { title: '신작 첫인상 리뷰', durationSec: 8102, cardCount: 5 },
-  },
-  {
-    streamId: 'stream-2602',
-    endedAt: ago(17, 1),
-    visual: { title: '구독자 감사 이벤트', durationSec: 12240, cardCount: 7 },
-  },
-  {
-    streamId: 'stream-2601',
-    endedAt: ago(21, 3),
-    visual: { title: '랭크 복습 — 리플레이 정주행', durationSec: 10380, cardCount: 3 },
-  },
-  {
-    streamId: 'stream-2600',
-    endedAt: ago(26, 2),
-    visual: { title: '심야 수다 — 아무 말 대잔치', durationSec: 7460, cardCount: 2 },
-  },
-  {
-    streamId: 'stream-2599',
-    endedAt: ago(34, 5),
-    visual: { title: '팬아트 리액션', durationSec: 6320, cardCount: 4 },
-  },
-  {
-    streamId: 'stream-2598',
-    // 시작 알림의 발생 시각이 비어 온 방송 — 계약이 허용하는 null을 화면이 견디는지 본다
-    startedAt: null,
-    endedAt: ago(41, 1),
-    visual: { title: '레트로 게임 마라톤', durationSec: 17880, cardCount: 6 },
-  },
-  {
-    streamId: 'stream-2597',
-    endedAt: ago(57, 2),
-    // 만료 임박 — 종료 + 60일이라 자연히 D-3이다
-    visual: {
-      title: '6월 랭크 마라톤',
-      durationSec: 21690,
-      cardCount: 9,
-      unsavedCardCount: 9,
-    },
-  },
-];
-
-const MOCK_BROADCASTS: VodBroadcast[] = MOCK_ROWS.map((row) => ({
-  streamId: row.streamId,
-  status: row.status ?? 'vod_ready',
-  relation: 'OWNER',
-  startedAt: row.startedAt !== undefined ? row.startedAt : row.endedAt,
-  endedAt: row.endedAt,
-  vodExpiresAt:
-    row.vodExpiresAt !== undefined
-      ? row.vodExpiresAt
-      : row.endedAt
-        ? expiresFrom(row.endedAt)
-        : null,
-}));
-
-const MOCK_VISUALS: Record<string, VodRowVisual> = Object.fromEntries(
-  MOCK_ROWS.map((row) => [row.streamId, row.visual]),
-);
 
 const EMPTY_RANGE: VodCustomRange = { from: null, to: null };
 
-// 시안이 그리는 세 상태를 한 화면에서 다 볼 수 있게 둘을 심어 둔다 — 받기를 눌러도
-// 지금은 「준비 중」만 뜨므로, 심지 않으면 받는 중·받기 완료 자리를 아무도 못 본다.
-const MOCK_DOWNLOADS: Record<string, VodDownloadState> = {
-  'stream-2607': { kind: 'downloading', progress: 46 },
-  'stream-2604': { kind: 'done' },
-};
+// ── clip 창구 배선(POK-251): `GET /api/clip/broadcasts?state=past|live` + 방송마다 카드 수 ──
+
+interface WireBroadcast {
+  streamId: string;
+  status: string;
+  relation: string;
+  startedAt: string | null;
+  endedAt: string | null;
+  vodExpiresAt: string | null;
+  /** 녹화 경로의 키(POK-233). 옛 서버면 빠져 온다 */
+  ingestStreamId?: string | null;
+  /** 사진 주소(POK-277). 옛 서버면 빠져 온다 */
+  thumbnailUrl?: string | null;
+  /** 치지직 방송 제목(POK-259). 없거나 옛 서버면 비어 온다 */
+  title?: string | null;
+}
+
+function isoMs(iso: string | null): number | null {
+  if (!iso) return null;
+  const t = Date.parse(iso);
+  return Number.isNaN(t) ? null : t;
+}
 
 export function useVodListMockState(options: VodListOptions = {}): VodListMockState {
   const { toast } = useToast();
   const [filter, setFilter] = useState<VodPeriodFilter>('all');
   const [customRange, setCustomRange] = useState<VodCustomRange>(EMPTY_RANGE);
   const [downloads, setDownloads] = useState<Record<string, VodDownloadState>>(
-    () => options.downloads ?? MOCK_DOWNLOADS,
+    () => options.downloads ?? {},
+  );
+  const [fetched, setFetched] = useState<VodBroadcast[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [fetchedVisuals, setFetchedVisuals] = useState<Record<string, VodRowVisual>>({});
+  const [now, setNow] = useState(() => new Date());
+  const rowCache = useRef(
+    new Map<
+      string,
+      {
+        /** 아직 한 번도 못 셌으면 null */
+        cardCount: number | null;
+        /** 마지막으로 세려고 한 시각(실패해도 넘긴다: 늘 실패하는 방송이 다시 세는 차례를 독차지하지 않게) */
+        countedAt: number;
+        recorded: boolean;
+        /** 재생 서버에 물어 녹화가 없다고 들었다(묻지 못했으면 앞 답을 둔다) */
+        missing: boolean;
+      }
+    >(),
   );
 
-  const source = options.broadcasts ?? MOCK_BROADCASTS;
-  const visuals = options.visuals ?? MOCK_VISUALS;
+  useEffect(() => {
+    if (options.broadcasts) return;
+    let stopped = false;
+    const load = async () => {
+      try {
+        // 목록을 끝까지 넘긴다 — 한 쪽만 읽으면 51번째부터 조용히 사라진다(POK-251 리뷰).
+        // 실패하면 바깥 catch가 받아 지금 목록을 그대로 두고 다음 주기에 다시 한다
+        const all: WireBroadcast[] = await fetchAllBroadcasts('past');
+        if (stopped) return;
+        // 방송마다 카드 수·녹화 여부는 재서 기억한다. 카드 수는 낡으면(countStale) 다시 센다
+        const cache = rowCache.current;
+        const nowMs = Date.now();
+        const countStale = (b: WireBroadcast) => {
+          const known = cache.get(b.streamId);
+          return (
+            known === undefined ||
+            known.cardCount === null ||
+            isJustEnded(b.endedAt, new Date(nowMs)) ||
+            nowMs - known.countedAt >= CARD_COUNT_TTL_MS
+          );
+        };
+        // 다시 셀 방송. 처음 보는 방송·못 센 방송·방금 끝난 방송은 다 세고, 오래된 방송은 가장 오래전에 센 것부터 한 주기에
+        // CARD_RECOUNT_PER_POLL개까지만. 고정 순서로 고르면 방송이 많을 때 앞쪽이 다시 낡아 뒤쪽은 영영 차례가 안 왔다(PR #256 codex)
+        const recountIds = new Set<string>();
+        const oldStale: { id: string; countedAt: number }[] = [];
+        for (const b of all) {
+          if (!countStale(b)) continue;
+          const known = cache.get(b.streamId);
+          if (
+            known !== undefined &&
+            known.cardCount !== null &&
+            !isJustEnded(b.endedAt, new Date(nowMs))
+          )
+            oldStale.push({ id: b.streamId, countedAt: known.countedAt });
+          else recountIds.add(b.streamId);
+        }
+        oldStale
+          .sort((x, y) => x.countedAt - y.countedAt)
+          .slice(0, CARD_RECOUNT_PER_POLL)
+          .forEach(({ id }) => recountIds.add(id));
+        const checkRecording = (b: WireBroadcast) =>
+          b.status === 'ended' && playbackConfigured() && cache.get(b.streamId)?.recorded !== true;
+        // 녹화 목록은 영상 경로 전체라 같은 키를 나눠 쓰는 방송들이 같은 답을 받는다(POK-233) — 한 번 불러올 때 키마다
+        // 한 번만 묻는다. 방송마다 물으면 방송이 쌓인 계정은 같은 큰 요청을 주기마다 여러 번 보낸다(PR #208 codex)
+        // 묻지 못했으면(오류·시한) null이다: 「녹화 없음」과 가른다(리뷰 1라운드)
+        const spansByKey = new Map<string, ReturnType<typeof lookupRecordingSpans>>();
+        const spansOf = (key: string) => {
+          let found = spansByKey.get(key);
+          if (found === undefined) {
+            found = lookupRecordingSpans(key);
+            spansByKey.set(key, found);
+          }
+          return found;
+        };
+        await Promise.all(
+          all
+            .filter((b) => recountIds.has(b.streamId) || checkRecording(b))
+            .map(async (b) => {
+              const known = cache.get(b.streamId);
+              const recount = known === undefined || recountIds.has(b.streamId);
+              const [fetched, spans] = await Promise.all([
+                known !== undefined && !recount
+                  ? Promise.resolve(known.cardCount)
+                  : fetchAllJumpCards(b.streamId).then(
+                      (cards) => cards.length,
+                      () => null,
+                    ),
+                // 녹화 재생 서버가 있으면 그 방송의 녹화가 실제로 있는지 본다 — 없으면 열어도 「영상 신호 없음」뿐이다
+                checkRecording(b) ? spansOf(mediaStreamId(b)) : Promise.resolve(null),
+              ]);
+              // 카드 수를 못 읽었으면 앞 수를 둔다(처음이면 null, 다음 주기에 다시 잰다). 녹화 확인 결과는 카드 수와 따로 남긴다:
+              // 카드 목록만 실패해도 녹화 없음을 버리면 그 방송은 「VOD 준비 중」에 갇혔다(PR #256 codex).
+              // 「녹화 있음」만 굳힌다: 방송 직후엔 녹화가 늦게 생기고 재생 서버가 잠깐 실패해도 빈 목록이 온다.
+              // 「없음」을 굳히면 녹화가 생겨도 이 탭은 영영 준비 중으로 남는다(PR #200 codex)
+              const recorded =
+                known?.recorded === true ||
+                (spans !== null &&
+                  recordingTimeline(
+                    spans,
+                    recordingSearchFrom(isoMs(b.startedAt), isoMs(b.endedAt)),
+                    isoMs(b.endedAt),
+                  ) !== null);
+              cache.set(b.streamId, {
+                cardCount: fetched ?? known?.cardCount ?? null,
+                countedAt: known !== undefined && !recount ? known.countedAt : nowMs,
+                // 녹화 목록은 영상 경로 전체라 같은 키를 나눠 쓰는 다른 방송의 녹화도 섞여 온다(POK-233) — 다시보기와 같은
+                // 규칙(방송 시간과 겹치는 구간, 시작 시각을 모르면 끝 12시간)으로 거른다. 안 거르면 녹화 없는 방송이 「다시 보기
+                // 가능」으로 올라 열면 빈 화면이다(리뷰 6라운드: 다시보기만 하한을 좁혀 둘이 갈렸다)
+                recorded,
+                missing: recorded ? false : spans === null ? (known?.missing ?? false) : true,
+              });
+            }),
+        );
+        const rows: VodBroadcast[] = all.map((b) => ({
+          streamId: b.streamId,
+          // 서버 상태가 정본이다. 녹화 재생 서버가 있고 그 방송의 녹화가 실제로 있을 때만 「다시 보기 가능」으로 올린다
+          status:
+            b.status === 'ended' && cache.get(b.streamId)?.recorded
+              ? 'vod_ready'
+              : ((b.status as VodBroadcastStatus) ?? 'ended'),
+          relation: b.relation === 'EDITOR' ? 'EDITOR' : 'OWNER',
+          startedAt: b.startedAt,
+          endedAt: b.endedAt,
+          vodExpiresAt: b.vodExpiresAt,
+          thumbnailUrl: b.thumbnailUrl ?? null,
+        }));
+        const titles = new Map(all.map((b) => [b.streamId, broadcastTitle(b)]));
+        const visuals: Record<string, VodRowVisual> = {};
+        for (const b of rows) {
+          const dur =
+            b.startedAt && b.endedAt
+              ? Math.max(0, Math.round((Date.parse(b.endedAt) - Date.parse(b.startedAt)) / 1000))
+              : null;
+          visuals[b.streamId] = {
+            title: titles.get(b.streamId) ?? b.streamId,
+            durationSec: dur,
+            cardCount: cache.get(b.streamId)?.cardCount ?? 0,
+            recordingMissing: b.status === 'ended' && cache.get(b.streamId)?.missing === true,
+          };
+        }
+        if (stopped) return;
+        setFetched(rows);
+        setFetchedVisuals(visuals);
+        setNow(new Date());
+        setLoaded(true);
+      } catch {
+        /* 다음 주기에 다시 */
+      }
+    };
+    void load();
+    const t = window.setInterval(load, LIST_POLL_MS);
+    return () => {
+      stopped = true;
+      window.clearInterval(t);
+    };
+  }, [options.broadcasts]);
+
+  const source = options.broadcasts ?? fetched;
+  const visuals = options.visuals ?? fetchedVisuals;
 
   const setDownload = useCallback((streamId: string, state: VodDownloadState) => {
     setDownloads((prev) => ({ ...prev, [streamId]: state }));
   }, []);
-
-  // 받기를 실제로 시작하지 않는다 — 다운로드 백엔드가 기능명세·계약에 아직 없다.
-  // 진행 중인 척하고 멈춰 있느니 준비 중이라고 말하는 편이 낫다(ADR-044의 「거짓말 금지」).
   const requestDownload = useCallback(() => {
     toast({
       tone: 'info',
@@ -256,7 +342,6 @@ export function useVodListMockState(options: VodListOptions = {}): VodListMockSt
       description: '풀 VOD 내려받기는 아직 준비 중이에요. 준비되면 알려드릴게요.',
     });
   }, [toast]);
-
   const cancelDownload = useCallback(
     (streamId: string) => setDownload(streamId, VOD_DOWNLOAD_IDLE),
     [setDownload],
@@ -266,18 +351,18 @@ export function useVodListMockState(options: VodListOptions = {}): VodListMockSt
     [setDownload],
   );
 
-  // 필터링은 순수 함수에 맡긴다 — 연동 때 이 계산이 서버 질의 조건으로 옮겨가더라도
-  // 화면은 클라에서 걸렀는지 서버가 걸러 줬는지 몰라야 한다.
   const past = useMemo(() => excludeLive(source), [source]);
+  const baseNow = options.now ?? now;
   const broadcasts = useMemo(
-    () => filterByPeriod(past, filter, customRange, MOCK_NOW),
-    [past, filter, customRange],
+    () => filterByPeriod(past, filter, customRange, baseNow),
+    [past, filter, customRange, baseNow],
   );
 
   return {
-    now: MOCK_NOW,
+    now: baseNow,
     broadcasts,
     totalCount: past.length,
+    loading: options.broadcasts === undefined && !loaded,
     visuals,
     filter,
     setFilter,

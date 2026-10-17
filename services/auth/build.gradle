@@ -21,6 +21,8 @@ dependencies {
     // url-connection-client는 넣지 않는다 — sync 구현이 둘이 되면 빌더가 SPI 순서에 갈린다.
     implementation 'software.amazon.awssdk:s3'
     implementation 'software.amazon.awssdk:apache5-client'
+    // 스트림키 암호 저장소(POK-272, ADR-018). 클라이언트는 SecretsManagerClients 한 곳에서만 만든다.
+    implementation 'software.amazon.awssdk:secretsmanager'
 
     implementation 'org.springframework.boot:spring-boot-starter-webmvc'
     implementation 'org.springframework.boot:spring-boot-starter-security'
@@ -63,5 +65,14 @@ tasks.named('test') {
     // main 소스를 입력으로 한 번 더 선언한다(컴파일 입력과 별개다).
     inputs.files(sourceSets.main.java)
             .withPropertyName('mainSourcesForDocTests')
+            .withPathSensitivity(PathSensitivity.RELATIVE)
+}
+
+// lombok.config가 @StreamKeySecrets를 생성자 매개변수로 복사한다(POK-272). Gradle은 그 파일을 컴파일 입력으로 모른다.
+// 지워도 증분 빌드가 옛 클래스를 그대로 써서 스트림키가 조용히 PG를 받는데 바인딩 시험이 초록이었다(주입으로 확인,
+// --rerun에서만 빨간불). 위 test 입력과 같은 함정이라 같은 방식으로 막는다.
+tasks.named('compileJava') {
+    inputs.file('lombok.config')
+            .withPropertyName('lombokConfig')
             .withPathSensitivity(PathSensitivity.RELATIVE)
 }

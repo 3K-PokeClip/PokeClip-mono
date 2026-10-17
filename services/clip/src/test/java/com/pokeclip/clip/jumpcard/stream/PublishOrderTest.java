@@ -78,7 +78,7 @@ class PublishOrderTest extends IntegrationTestSupport {
     @BeforeEach
     void 정리() {
         방송과_카드를_비운다(jdbc);
-        broadcasts.save(Broadcast.startedNow("s-ord", TestIds.STREAMER, 1L, Instant.now(), null));
+        broadcasts.save(Broadcast.startedNow("s-ord", TestIds.STREAMER, null, 1L, Instant.now(), null));
         AUTH.respondWith(RESOLVE, 200, "{\"relation\":\"OWNER\"}");
     }
 
@@ -199,7 +199,7 @@ class PublishOrderTest extends IntegrationTestSupport {
         return new JumpCardSnapshot(id, "s-ord", JumpCardSource.AUTO, 3_023_000L,
                 new JumpCardSnapshot.Window(3_000_000L, 3_042_000L), 97, null,
                 claimedBy, claimedBy == null ? null : now,
-                claimedBy == null ? null : now.plusSeconds(120), false, null, eventSeq, now);
+                claimedBy == null ? null : now.plusSeconds(120), false, null, null, eventSeq, now, null);
     }
 
     private HighlightRequest auto(String eventId, long start) {

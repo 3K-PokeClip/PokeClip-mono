@@ -5,6 +5,7 @@ import com.pokeclip.render.job.RenderFailure;
 import software.amazon.awssdk.core.exception.SdkException;
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.NoSuchKeyException;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
@@ -13,6 +14,7 @@ import software.amazon.awssdk.services.s3.model.S3Exception;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 
 /**
  * S3 읽고 쓰기. 일꾼이 우리 저장소에 닿는 유일한 길이다(workers/README.md: DB 직접 접속 금지).
@@ -59,6 +61,24 @@ public class S3Store {
     }
 
     /** 이미 넘겼으면 부르지 않고 바로 일시 실패. ffmpeg 시한 초과와 같은 취급이다. */
+    /**
+     * 방금 올린 파일을 지운다(POK-256). clip이 「그런 주문·대상 없음」(404)으로 답하면 그 사이 탈퇴로 기록이 지워진 것이라
+     * 우리가 올린 파일만 남는다. 실패해도 던지지 않는다: 메시지 처리는 이미 끝났고, 완성 영상 창고는 60일 수명 규칙이 있다.
+     *
+     * @return 전부 지웠으면 true
+     */
+    public boolean deleteQuietly(String bucket, List<String> keys) {
+        boolean all = true;
+        for (String key : keys) {
+            try {
+                s3.deleteObject(DeleteObjectRequest.builder().bucket(bucket).key(key).build());
+            } catch (SdkException e) {
+                all = false;
+            }
+        }
+        return all;
+    }
+
     private static Duration remaining(Instant deadline) {
         Duration left = Duration.between(Instant.now(), deadline);
         if (left.isNegative() || left.isZero()) {

@@ -30,6 +30,10 @@ public class AuthExceptionHandler {
     private static final Map<String, String> EMAIL_TAKEN_BODY =
             Map.of("message", "이 이메일 주소는 이미 다른 계정이 쓰고 있습니다", "reason", "EMAIL_ALREADY_REGISTERED");
 
+    /** 이 사유도 이유를 알려 준다(POK-256). 감출 이익이 없고, 사용자가 구글에서 이메일 인증을 마쳐야 풀린다. */
+    private static final Map<String, String> EMAIL_UNVERIFIED_BODY =
+            Map.of("message", "구글 계정의 이메일 인증을 마친 뒤 다시 로그인해 주세요", "reason", "GOOGLE_EMAIL_UNVERIFIED");
+
     /**
      * 실패 이유를 나누어 알리지 않는다. "코드가 만료됐다"와 "서명이 틀렸다"를
      * 구분해 주면 공격자에게 단서가 된다. e.getMessage()를 본문에 넣지 않는
@@ -56,6 +60,10 @@ public class AuthExceptionHandler {
             // 409: 요청 자체는 유효한데 현재 상태와 충돌한다. userId는 안 찍는다 —
             // 아직 계정이 없어서 찍을 것이 없다. 사유 코드만으로 문의를 추적할 수 있다.
             return ResponseEntity.status(HttpStatus.CONFLICT).body(EMAIL_TAKEN_BODY);
+        }
+        if (e.failure() == AuthFailure.GOOGLE_EMAIL_UNVERIFIED) {
+            // 403: 누구인지는 확인했는데(서명 검증 통과) 받을 수 없는 계정이다.
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(EMAIL_UNVERIFIED_BODY);
         }
         return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(BODY);
     }

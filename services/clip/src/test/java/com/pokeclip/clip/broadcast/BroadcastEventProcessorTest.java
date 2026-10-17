@@ -172,4 +172,55 @@ class BroadcastEventProcessorTest extends IntegrationTestSupport {
                         .as("payload를 통째로 담았다 — trackManifest 노드 안쪽만 담아야 한다")
                         .doesNotContain("trackManifest"));
     }
+
+    // ── 물리 키(POK-233) ── 편지의 streamId가 회차 번호가 되면 조각 장부·녹화 경로의 키와 갈린다
+
+    @Test
+    void 시작_편지의_물리_키를_명부에_남긴다() {
+        processor.process(Envelopes.startedWithIngest("evt-i1", "S-20260930-010000-key1-7", "key1", 1L));
+
+        Broadcast saved = broadcasts.findByStreamId("S-20260930-010000-key1-7").orElseThrow();
+        assertThat(saved.ingestKey()).as("조각은 이 키로 찾는다. 방송 번호로 찾으면 장부에 없는 이름이다").isEqualTo("key1");
+    }
+
+    @Test
+    void 물리_키가_없는_옛_편지면_방송_번호가_곧_물리_키다() {
+        processor.process(Envelopes.started("evt-i2", "old-key", 1L));
+
+        assertThat(broadcasts.findByStreamId("old-key").orElseThrow().ingestKey()).isEqualTo("old-key");
+        assertThat(jdbc.queryForObject("SELECT ingest_stream_id FROM broadcasts WHERE stream_id = 'old-key'", String.class))
+                .as("없는 값을 지어 넣지 않는다. 읽는 쪽이 방송 번호로 대신한다").isNull();
+    }
+
+    @Test
+    void 종료가_먼저_와도_물리_키를_남긴다() {
+        processor.process(Envelopes.endedWithIngest("evt-i3", "S-x-8", "key2", 2L));
+
+        assertThat(broadcasts.findByStreamId("S-x-8").orElseThrow().ingestKey()).isEqualTo("key2");
+    }
+
+    @Test
+    void 물리_키가_빈_줄은_뒤_편지가_채운다_낡은_편지여도() {
+        processor.process(Envelopes.ended("evt-i4", "S-y-9", 5L));
+        processor.process(Envelopes.startedWithIngest("evt-i5", "S-y-9", "key3", 1L));
+
+        assertThat(broadcasts.findByStreamId("S-y-9").orElseThrow().ingestKey())
+                .as("순서로는 낡은 편지지만 같은 회차의 경로를 싣는다. 비워 두면 조각을 못 찾는다").isEqualTo("key3");
+    }
+
+    @Test
+    void 이미_있는_물리_키는_다른_값으로_안_바꾼다() {
+        processor.process(Envelopes.startedWithIngest("evt-i6", "S-z-1", "key4", 1L));
+        processor.process(Envelopes.endedWithIngest("evt-i7", "S-z-1", "other", 2L));
+
+        assertThat(broadcasts.findByStreamId("S-z-1").orElseThrow().ingestKey()).isEqualTo("key4");
+    }
+
+    @Test
+    void 빈_문자열_물리_키는_없는_것으로_본다() {
+        processor.process(Envelopes.startedWithIngest("evt-i8", "S-w-2", "  ", 1L));
+
+        assertThat(broadcasts.findByStreamId("S-w-2").orElseThrow().ingestKey())
+                .as("빈 값을 키로 쓰면 조각이 영영 안 나온다").isEqualTo("S-w-2");
+    }
 }

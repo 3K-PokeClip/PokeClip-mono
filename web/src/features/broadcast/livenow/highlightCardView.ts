@@ -25,8 +25,8 @@ export interface HighlightCardView {
 /**
  * 카드가 실제로 그릴 표기값. cardVisuals에 있으면 그대로 쓰고, 없으면 계약 필드에서 만든다.
  *
- * 폴백이 필요한 이유는 둘이다: ① 수동 마킹으로 방금 생긴 카드는 목업 맵에 없다
- * ② POK-180이 실 SSE 카드를 실으면 id가 전부 낯설어진다. 어느 쪽이든 화면은 서야 한다.
+ * 폴백이 필요한 이유: 실연동 카드(card-N)는 목업 맵에 없다(POK-180·251, 맵은 지금 비어 있다). 그래도 화면은 서야 한다.
+ * (전에는 화면에서 찍은 수동 마킹 카드도 여기로 왔지만 그 카드는 없어졌다, QA 2026-10-11)
  * meta 문자열을 파싱하지 않는 것은 의도다 — 자유 서술이라 형식이 바뀌면 조용히 어긋난다.
  */
 export interface ResolvedCardVisual {
@@ -43,7 +43,13 @@ const STATE_BY_STATUS: Record<
   { state: CardViewState; tone: BadgeTone; label: string; dimmed: boolean; showActions: boolean }
 > = {
   scored: { state: 'ready', tone: 'point', label: '검토 대기', dimmed: false, showActions: true },
-  manual: { state: 'manual', tone: 'neutral', label: '수동 마킹', dimmed: false, showActions: true },
+  manual: {
+    state: 'manual',
+    tone: 'neutral',
+    label: '수동 마킹',
+    dimmed: false,
+    showActions: true,
+  },
   editing: {
     state: 'processing',
     tone: 'accent',
@@ -51,7 +57,13 @@ const STATE_BY_STATUS: Record<
     dimmed: false,
     showActions: false,
   },
-  clipped: { state: 'ready', tone: 'success', label: '클립 완료', dimmed: false, showActions: true },
+  clipped: {
+    state: 'ready',
+    tone: 'success',
+    label: '클립 완료',
+    dimmed: false,
+    showActions: true,
+  },
   unprocessed: {
     state: 'ready',
     tone: 'neutral',
@@ -63,6 +75,17 @@ const STATE_BY_STATUS: Record<
 };
 
 export function cardViewFor(highlight: LiveHighlight): HighlightCardView {
+  // 내가 집은 카드는 「편집 중」이어도 잠그지 않는다 — 잠그면 편집기에서 나온 뒤 다시 못 들어간다
+  // (2026-09-17 실방송 시험). 남이 집은 카드만 시안대로 단추를 감춘다.
+  if (highlight.status === 'editing' && highlight.claimedByMe) {
+    return {
+      state: 'ready',
+      badgeTone: 'accent',
+      badgeLabel: '내가 편집 중',
+      dimmed: false,
+      showActions: true,
+    };
+  }
   const base = STATE_BY_STATUS[highlight.status];
   return {
     state: base.state,

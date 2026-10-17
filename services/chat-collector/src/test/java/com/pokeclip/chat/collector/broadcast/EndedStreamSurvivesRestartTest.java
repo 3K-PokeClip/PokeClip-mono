@@ -135,6 +135,6 @@ class EndedStreamSurvivesRestartTest extends IntegrationTestSupport {
 
     private static LifecycleEnvelope envelope(String eventType, long sequence) {
         return new LifecycleEnvelope(1, "evt-" + eventType + "-" + STREAM_ID + "-" + sequence,
-                eventType, 종료시각, STREAM_ID, "42", sequence, "trace-restart", null);
+                eventType, 종료시각, STREAM_ID, "42", null, sequence, "trace-restart", null);
     }
 }

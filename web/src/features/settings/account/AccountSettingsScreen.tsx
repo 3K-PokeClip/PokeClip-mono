@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { LEGAL_URLS } from '@/features/legal/legalInfo';
 import { SettingsPageHeader } from '../SettingsPageHeader';
 import { LoginCard } from './LoginCard';
 import { ProfileCard } from './ProfileCard';
@@ -14,11 +15,8 @@ import { WithdrawDialog } from './WithdrawDialog';
 import styles from './AccountSettingsScreen.module.css';
 
 // 디자인 1p 설정 · 계정 (POK-206 → 실서버 배선 POK-208). 조립만 한다 — 이름·사진 저장은
-// useAccountState(실서버), 탈퇴는 useAccountMockState(아직 목업), 사진 모달의 단계·타이머는
-// useProfilePhotoState가 갖는다.
-//
-// ⚠ 탈퇴만 아직 서버로 가지 않는다 — 창구(DELETE /api/auth/me, POK-171)는 생겼지만 웹 배선은
-// 별도 티켓이다. 눌리지만 아무것도 지우지 않고 로컬 세션만 접는다.
+// useAccountState(실서버), 탈퇴는 useAccountMockState(DELETE /api/auth/me 실제 호출, 수치만 준비 중),
+// 사진 모달의 단계·타이머는 useProfilePhotoState가 갖는다.
 export function AccountSettingsScreen() {
   const account = useAccountState();
   const mock = useAccountMockState();
@@ -81,11 +79,28 @@ export function AccountSettingsScreen() {
         </button>
       </div>
 
+      {/* 로그인한 뒤에도 약관·처리방침에 닿는 자리 (POK-269). 문서는 랜딩(pokeclip.com)에 있어
+          새 탭으로 연다. 처리방침은 굵게 구분한다 */}
+      <nav aria-label="약관 및 정책" className={styles.legalLinks}>
+        <a href={LEGAL_URLS.terms} target="_blank" rel="noopener noreferrer">
+          이용약관
+        </a>
+        <a
+          href={LEGAL_URLS.privacy}
+          target="_blank"
+          rel="noopener noreferrer"
+          className={styles.privacyLink}
+        >
+          개인정보 처리방침
+        </a>
+      </nav>
+
       {/* 막힌 상태에서는 재확인 대신 이유를 보여 준다 — 두 모달이 동시에 뜨지 않는다 */}
       <WithdrawDialog
         open={withdrawOpen && !mock.blocked}
         name={name}
         facts={mock.facts}
+        busy={mock.withdrawing}
         onCancel={() => setWithdrawOpen(false)}
         onConfirm={mock.completeWithdraw}
       />

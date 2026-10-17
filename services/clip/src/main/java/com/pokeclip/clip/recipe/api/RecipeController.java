@@ -15,6 +15,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.io.IOException;
@@ -42,14 +43,20 @@ public class RecipeController {
         this.parser = parser;
     }
 
+    /**
+     * {@code sourceCardId}는 편집본이 시작된 카드다(POK-338, 측정 재료). 계약6 본문을 안 바꾸려고 쿼리로 받는다.
+     * 문자열로 받는 이유: 숫자가 아니어도 400을 내지 않고 출처만 비운다: 측정 재료 때문에 저장이 실패하면 안 된다.
+     */
     @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<RecipeSnapshot> create(@PathVariable String streamId,
+                                                 @RequestParam(required = false) String sourceCardId,
                                                  @AuthenticationPrincipal Jwt jwt,
                                                  HttpServletRequest request) throws IOException {
         // 파싱이 자격 판정보다 앞인 것은 의도다 — 파싱 실패(400)는 방송의 존재와 무관하게 나가므로 감출 것이 없다.
         // 규칙 검증(400)은 서비스 안에서 자격 판정 뒤에 돈다(RecipeService 주석).
         NotFoundFloor.mark(request);
-        RecipeSnapshot created = service.create(jwt.getSubject(), streamId, parser.parse(request.getInputStream()));
+        RecipeSnapshot created = service.create(jwt.getSubject(), streamId, sourceCardId,
+                parser.parse(request.getInputStream()));
         return ResponseEntity.status(HttpStatus.CREATED).body(created);
     }
 

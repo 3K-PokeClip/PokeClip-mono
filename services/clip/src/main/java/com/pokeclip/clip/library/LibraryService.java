@@ -17,6 +17,12 @@ import com.pokeclip.clip.render.ClipSnapshot;
 import com.pokeclip.clip.render.RenderJob;
 import com.pokeclip.clip.render.RenderJobRepository;
 import com.pokeclip.clip.render.RenderRequestService;
+import com.pokeclip.clip.thumbnail.ThumbnailUrls;
+import com.pokeclip.clip.upload.LiveUpload;
+import com.pokeclip.clip.upload.UploadRequestBrief;
+import com.pokeclip.clip.upload.UploadRequestService;
+import com.pokeclip.clip.upload.UploadRequestStore;
+import com.pokeclip.clip.upload.UploadSnapshot;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -25,7 +31,9 @@ import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.ObjectMapper;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.Map;
 import java.util.Optional;
 import java.util.function.Function;
@@ -58,20 +66,28 @@ public class LibraryService {
     private final ClipRepository clips;
     private final RenderJobRepository jobs;
     private final RenderRequestService render;
+    private final UploadRequestService uploads;
     private final DelegationResolveClient delegation;
     private final BroadcastAccessGuard guard;
     /** 읽기 전용 + REPEATABLE READ — 이유는 클래스 주석. 주입받은 템플릿(READ COMMITTED)을 그대로 쓰면 안 된다. */
     private final TransactionTemplate transactions;
     private final ObjectMapper mapper;
+    private final ThumbnailUrls thumbnails;
+    private final UploadRequestStore uploadRequests;
 
     LibraryService(LibraryQuery query, RecipeRepository recipes, ClipRepository clips, RenderJobRepository jobs,
-                   RenderRequestService render, DelegationResolveClient delegation, BroadcastAccessGuard guard,
-                   TransactionTemplate transactions, ObjectMapper mapper) {
+                   RenderRequestService render, UploadRequestService uploads, DelegationResolveClient delegation,
+                   BroadcastAccessGuard guard,
+                   TransactionTemplate transactions, ObjectMapper mapper, ThumbnailUrls thumbnails,
+                   UploadRequestStore uploadRequests) {
+        this.thumbnails = thumbnails;
+        this.uploadRequests = uploadRequests;
         this.query = query;
         this.recipes = recipes;
         this.clips = clips;
         this.jobs = jobs;
         this.render = render;
+        this.uploads = uploads;
         this.delegation = delegation;
         this.guard = guard;
         this.transactions = new TransactionTemplate(transactions.getTransactionManager());
@@ -109,7 +125,7 @@ public class LibraryService {
             return LibraryPage.empty();
         }
 
-        return transactions.execute(tx -> {
+        LibraryPage result = transactions.execute(tx -> {
             // 상한 하나를 더 받아 「다음 장이 있나」를 본다(방송 목록과 같은 수법).
             List<LibraryRow> rows = query.findPage(streamerIds, wanted, afterId, size + 1);
             boolean hasMore = rows.size() > size;
@@ -119,6 +135,7 @@ public class LibraryService {
                     : null;
             return new LibraryPage(assemble(page), next);
         });
+        return new LibraryPage(withPictures(result.items()), result.nextCursor());
     }
 
     /**
@@ -134,16 +151,33 @@ public class LibraryService {
             log.info("clip.library.not_viewable recipeId={} reason={}", recipeId, e.reason());
             throw new RecipeNotFoundException(recipeId);
         }
-        return transactions.execute(tx -> {
+        LibraryDetail detail = transactions.execute(tx -> {
             // 자격 판정 사이에 지워질 표가 없다(편집본은 영구 보존) — 그래도 다시 읽어 상태를 판정 뒤 시점으로 맞춘다.
             LibraryRow fresh = query.findOne(recipeId).orElseThrow(() -> new RecipeNotFoundException(recipeId));
             LibraryEntry entry = assemble(List.of(fresh)).get(0);
             Recipe recipe = recipes.findById(recipeId).orElseThrow(() -> new RecipeNotFoundException(recipeId));
             return LibraryDetail.of(entry, RecipeDocument.fromStored(mapper, recipe));
         });
+        return detail.withThumbnailUrl(withPictures(List.of(detail.entry())).get(0).thumbnailUrl());
     }
 
-    /** 줄들을 응답 모양으로. 편집본·영상·주문을 <b>각각 한 번씩</b> 읽는다 — 줄마다 묻지 않는다. 순서는 줄 순서 그대로. */
+    /**
+     * 사진 주소(POK-277)는 <b>트랜잭션이 끝난 뒤</b> 붙인다. 사진은 부가 칸이라 못 읽으면 비우는데({@link ThumbnailUrls}), 트랜잭션
+     * 안에서 질의가 실패하면 예외를 삼켜도 PostgreSQL이 그 트랜잭션을 깨뜨려 뒤 질의·커밋이 실패한다(로컬 리뷰 1라운드). 밖에서 읽으면
+     * 실패가 그 자리에서 끝난다.
+     */
+    private List<LibraryEntry> withPictures(List<LibraryEntry> entries) {
+        List<Long> clipIds = entries.stream()
+                .filter(entry -> entry.latestClip() != null)
+                .map(entry -> entry.latestClip().id())
+                .toList();
+        Map<Long, String> pictures = thumbnails.ofClips(clipIds);
+        return entries.stream()
+                .map(entry -> entry.latestClip() == null ? entry : entry.withThumbnailUrl(pictures.get(entry.latestClip().id())))
+                .toList();
+    }
+
+    /** 줄들을 응답 모양으로. 편집본·영상·주문·업로드를 <b>각각 한 번씩</b> 읽는다: 줄마다 묻지 않는다. 순서는 줄 순서 그대로. */
     private List<LibraryEntry> assemble(List<LibraryRow> rows) {
         Map<Long, Recipe> recipeById = recipes.findAllById(rows.stream().map(LibraryRow::recipeId).toList()).stream()
                 .collect(Collectors.toMap(Recipe::getId, Function.identity()));
@@ -152,19 +186,33 @@ public class LibraryService {
                 .collect(Collectors.toMap(Clip::getId, Function.identity()));
         Map<Long, RenderJob> jobByClipId = clipIds.isEmpty() ? Map.of() : jobs.findByClipIdIn(clipIds).stream()
                 .collect(Collectors.toMap(RenderJob::getClipId, Function.identity()));
+        Map<Long, UploadSnapshot> uploadByClipId = uploads.latestFor(clipIds).stream()
+                .collect(Collectors.toMap(UploadSnapshot::clipId, Function.identity()));
+        // 「렌더 뒤 업로드」 의도(POK-291): 줄마다 지금 판 + 최신 영상의 판. 한 번에 읽는다(줄마다 안 묻는다).
+        Set<UploadRequestStore.Key> keys = new HashSet<>();
+        recipeById.values().forEach(r -> keys.add(new UploadRequestStore.Key(r.getId(), r.getRecipeVersion())));
+        clipById.values().forEach(c -> keys.add(new UploadRequestStore.Key(c.getRecipeId(), c.getRecipeVersion())));
+        Map<UploadRequestStore.Key, UploadRequestBrief> briefs = uploadRequests.briefs(keys);
+        // 모든 판의 살아 있는 업로드(POK-334): 새 판을 주문해도 옛 판으로 올린 영상이 남게. 이것도 한 번에 읽는다.
+        Map<Long, List<LiveUpload>> aliveByRecipeId = uploads.aliveFor(recipeById.keySet());
 
         List<LibraryEntry> entries = new ArrayList<>(rows.size());
         for (LibraryRow row : rows) {
             // 질의가 준 번호는 같은 트랜잭션 안에서 읽었으니 반드시 있다 — 없으면 우리 버그라 500이 맞다.
             Recipe recipe = recipeById.get(row.recipeId());
-            ClipSnapshot latest = row.clipId() == null ? null
-                    : render.snapshot(clipById.get(row.clipId()), Optional.ofNullable(jobByClipId.get(row.clipId())));
+            Clip clip = row.clipId() == null ? null : clipById.get(row.clipId());
+            ClipSnapshot latest = clip == null ? null
+                    : render.snapshot(clip, Optional.ofNullable(jobByClipId.get(row.clipId())),
+                            Optional.ofNullable(uploadByClipId.get(row.clipId())),
+                            Optional.ofNullable(briefs.get(new UploadRequestStore.Key(clip.getRecipeId(), clip.getRecipeVersion()))));
             RecipeDocument.Cut cut = recipe.getCutInAtMs() == null ? null
                     : new RecipeDocument.Cut(recipe.getCutInAtMs(), recipe.getCutOutAtMs());
             entries.add(new LibraryEntry(recipe.getId(), recipe.getStreamId(), recipe.getCreatorId(),
                     recipe.getRecipeVersion(), cut, row.status(),
                     new BroadcastSummary(row.broadcastStatus(), row.startedAt(), row.endedAt(), row.vodExpiresAt()),
-                    latest, recipe.getCreatedAt(), recipe.getUpdatedAt()));
+                    latest, recipe.getCreatedAt(), recipe.getUpdatedAt(), null,
+                    briefs.get(new UploadRequestStore.Key(recipe.getId(), recipe.getRecipeVersion())),
+                    aliveByRecipeId.getOrDefault(recipe.getId(), List.of())));
         }
         return entries;
     }

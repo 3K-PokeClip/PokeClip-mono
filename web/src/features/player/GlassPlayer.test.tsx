@@ -1,10 +1,11 @@
 import { act, createRef, type ComponentProps } from 'react';
 import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ToastProvider } from '@/ui';
 import { GlassPlayer, type GlassPlayerController } from '@/features/player/GlassPlayer';
 import type { PlayerSimulationOptions } from '@/features/player/usePlayerSimulation';
+import { recordingTimeline } from '@/features/player/recordingTimeline';
 
 type PanelProps = Pick<
   ComponentProps<typeof GlassPlayer>,
@@ -32,6 +33,7 @@ function renderPlayer(simulationOptions?: PlayerSimulationOptions, panelProps?: 
         channelName="게임하는너구리"
         viewersNote="1,842명 시청 중"
         embed
+        simulate
         simulationOptions={simulationOptions}
         {...panelProps}
       />
@@ -175,7 +177,9 @@ describe('GlassPlayer', () => {
     renderPlayer();
 
     await user.click(screen.getByRole('button', { name: '클립 만들기' }));
-    expect(screen.getByText('최근 30초 클립이 저장되었습니다')).toBeInTheDocument();
+    // 서버로 보내는 길이 없어 저장되었다고 하지 않는다(POK-253)
+    expect(screen.getByText('클립 만들기는 준비 중이에요')).toBeInTheDocument();
+    expect(screen.queryByText(/저장되었습니다/)).toBeNull();
   });
 
   it('설정 팝오버에서 화질 4개를 고를 수 있다', async () => {
@@ -357,7 +361,9 @@ describe('GlassPlayer', () => {
     const controllerRef = createRef<GlassPlayerController>();
     renderPlayer({ initialUptimeSeconds: 5043 }, { controllerRef });
 
-    act(() => controllerRef.current?.seekToUptime(4960));
+    act(() => {
+      controllerRef.current?.seekToUptime(4960);
+    });
     expect(screen.getByRole('slider', { name: '라이브 탐색' })).toHaveAttribute(
       'aria-valuenow',
       '-83',
@@ -369,7 +375,9 @@ describe('GlassPlayer', () => {
     const controllerRef = createRef<GlassPlayerController>();
     renderPlayer({ initialUptimeSeconds: 5043 }, { controllerRef });
 
-    act(() => controllerRef.current?.seekToUptime(0));
+    act(() => {
+      controllerRef.current?.seekToUptime(0);
+    });
     expect(screen.getByRole('slider', { name: '라이브 탐색' })).toHaveAttribute(
       'aria-valuenow',
       '-3600',
@@ -393,5 +401,167 @@ describe('GlassPlayer', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('GlassPlayer: 녹화 다시보기', () => {
+  // jsdom에는 미디어 재생이 없다. 재생 요청만 받아 둔다
+  beforeEach(() => {
+    vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
+    vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => undefined);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function renderRecorded(
+    props: Partial<ComponentProps<typeof GlassPlayer>> = {},
+    durationSeconds = 444,
+  ) {
+    const T0 = Date.parse('2026-10-08T02:43:39Z');
+    const timeline = recordingTimeline([{ startMs: T0, durationSeconds }], null, null)!;
+    return render(
+      <ToastProvider>
+        <GlassPlayer
+          channelName="게임하는너구리"
+          viewersNote="시청자 수 수집 전"
+          broadcastStatus="ended"
+          embed
+          recorded={{ streamId: 'test1008a', ...timeline }}
+          {...props}
+        />
+      </ToastProvider>,
+    );
+  }
+
+  /** 영상 노드가 그 시각까지 흘렀다 */
+  function playTo(container: HTMLElement, seconds: number) {
+    const video = container.querySelector('video')!;
+    act(() => {
+      video.currentTime = seconds;
+      video.dispatchEvent(new Event('timeupdate'));
+    });
+  }
+
+  it('재생 위치가 초 단위로 바뀔 때마다 알린다: 지난 방송 채팅이 그 시각까지의 줄만 보인다(POK-324)', () => {
+    const heard = vi.fn();
+    const { container } = renderRecorded({ onPlaybackPosition: heard });
+
+    playTo(container, 12.2);
+    expect(heard).toHaveBeenLastCalledWith(12);
+    // 내린다: 영상 시각을 넘는 줄은 보이지 않는다(반올림하면 0.5초 앞 줄까지 보였다)
+    playTo(container, 12.9);
+    expect(heard).toHaveBeenLastCalledWith(12);
+    playTo(container, 13.1);
+
+    // timeupdate는 1초에 네 번쯤 온다. 같은 초면 다시 알리지 않는다
+    expect(heard.mock.calls.map(([seconds]) => seconds)).toEqual([0, 12, 13]);
+  });
+
+  it('카드처럼 정확한 시각으로 옮기면 그 초에 선다: 녹화 길이에 소수가 있어도 1초 앞에 서지 않는다', () => {
+    // 시크바 비율을 거치면 시차를 초 단위로 반올림해 600.7초 녹화에서 149초 카드가 148.7초에 섰다(리뷰 1라운드)
+    const heard = vi.fn();
+    const controllerRef = createRef<GlassPlayerController>();
+    renderRecorded({ onPlaybackPosition: heard, controllerRef }, 600.7);
+
+    act(() => {
+      controllerRef.current?.seekToUptime(149);
+    });
+    expect(heard).toHaveBeenLastCalledWith(149);
+  });
+
+  it('옮기면 옮긴 자리를 바로 알리고, 새 줄기가 붙기 전 옛 줄기의 시각으로 되돌아가지 않는다', () => {
+    vi.useFakeTimers();
+    try {
+      const heard = vi.fn();
+      const { container } = renderRecorded({ onPlaybackPosition: heard });
+      playTo(container, 30);
+      heard.mockClear();
+
+      fireEvent.click(screen.getByRole('button', { name: '녹화 끝으로 이동' }));
+      // 끝은 마지막 1초 앞이다
+      expect(heard.mock.calls.map(([seconds]) => seconds)).toEqual([443]);
+      playTo(container, 30.3);
+      act(() => {
+        vi.advanceTimersByTime(300);
+      });
+      // 새 줄기의 0초가 443초다(반올림해도 443): 옛 줄기의 기준이면 0초로 알렸다
+      playTo(container, 0.4);
+
+      expect(heard.mock.calls.map(([seconds]) => seconds)).toEqual([443]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('오른쪽 끝은 「실시간」이 아니라 녹화 끝이다: 이름만 바뀌고 누르면 녹화 끝으로 간다(ADR-081)', () => {
+    renderRecorded();
+
+    expect(screen.queryByRole('button', { name: '실시간으로 이동' })).toBeNull();
+    const pill = screen.getByRole('button', { name: '녹화 끝으로 이동' });
+    // 처음은 녹화 맨 앞이라 끝까지 7분 24초다
+    expect(pill).toHaveTextContent('-07:24 · 끝으로');
+    expect(pill).not.toHaveTextContent('실시간');
+
+    fireEvent.click(pill);
+    expect(pill).toHaveTextContent('녹화 끝');
+    expect(pill).not.toHaveTextContent('끝으로');
+  });
+
+  it('시크바도 다시보기라고 읽는다: 화면 낭독기가 「실시간에서」라고 하지 않는다', () => {
+    renderRecorded();
+
+    expect(screen.queryByRole('slider', { name: '라이브 탐색' })).toBeNull();
+    expect(screen.getByRole('slider', { name: '다시보기 탐색' })).toHaveAttribute(
+      'aria-valuetext',
+      '녹화 끝에서 -07:24',
+    );
+  });
+});
+
+describe('GlassPlayer: 바깥 이동 명령의 결과', () => {
+  it('영상이 없는 자리 플레이어는 옮기지 못했다고 돌려주고 스스로 알리지 않는다: 녹화를 찾는 중일 수 있다', () => {
+    const controllerRef = createRef<GlassPlayerController>();
+    render(
+      <ToastProvider>
+        <GlassPlayer
+          channelName="게임하는너구리"
+          viewersNote="시청자 수 수집 전"
+          broadcastStatus="ended"
+          embed
+          controllerRef={controllerRef}
+        />
+      </ToastProvider>,
+    );
+
+    let moved: boolean | undefined;
+    act(() => {
+      moved = controllerRef.current?.seekToUptime(120);
+    });
+    expect(moved).toBe(false);
+    expect(screen.queryByText(/영상은 아직 없어요/)).toBeNull();
+  });
+
+  it('되감을 구간이 아직 없으면 옮기지 못했다고 돌려준다: 라이브 영상이 목록을 받기 전이다', () => {
+    // 라이브 영상(HLS)은 목록을 받기 전에 되감을 구간이 0초라 이동을 조용히 버린다. 옮겼다고 하면 알림도 없이 사라진다(리뷰 2라운드)
+    const controllerRef = createRef<GlassPlayerController>();
+    renderPlayer({ initialUptimeSeconds: 0 }, { controllerRef });
+
+    let moved: boolean | undefined;
+    act(() => {
+      moved = controllerRef.current?.seekToUptime(10);
+    });
+    expect(moved).toBe(false);
+  });
+
+  it('재생 중인 플레이어는 옮겼다고 돌려준다', () => {
+    const controllerRef = createRef<GlassPlayerController>();
+    renderPlayer(undefined, { controllerRef });
+
+    let moved: boolean | undefined;
+    act(() => {
+      moved = controllerRef.current?.seekToUptime(10);
+    });
+    expect(moved).toBe(true);
   });
 });

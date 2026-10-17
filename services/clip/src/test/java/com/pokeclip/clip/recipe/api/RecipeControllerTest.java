@@ -125,6 +125,61 @@ class RecipeControllerTest extends IntegrationTestSupport {
         assertThat(MAPPER.readTree(다시).get("id").asLong()).isEqualTo(id);
     }
 
+    // ── 출처 카드 (POK-338) ───────────────────────────────────────
+
+    /** 쿼리로 받는다: 계약6 본문과 응답 봉투는 그대로다(보낸 것과 돌아온 recipe가 트리로 같다). */
+    @Test
+    void 카드로_연_편집본은_출처_카드가_남고_본문은_그대로다() throws Exception {
+        볼_수_있다("OWNER");
+        long card = 카드를_넣는다(내_방송);
+        JsonNode 보낸것 = 정상_레시피();
+
+        String 응답 = 본문(mvc.perform(post("/api/clip/broadcasts/" + 내_방송 + "/recipes?sourceCardId=" + card)
+                        .header("Authorization", "Bearer " + TestTokens.access(요청자))
+                        .contentType(MediaType.APPLICATION_JSON).content(보낸것.toString()))
+                .andExpect(status().isCreated()));
+        long id = MAPPER.readTree(응답).get("id").asLong();
+
+        assertThat(MAPPER.readTree(응답).get("recipe")).isEqualTo(보낸것);
+        assertThat(MAPPER.readTree(응답).has("sourceCardId")).as("응답 봉투에 칸을 늘리지 않는다").isFalse();
+        assertThat(출처(id)).isEqualTo(card);
+
+        고치기(내_방송, id, 정상_레시피()).andExpect(status().isOk());
+        assertThat(출처(id)).as("고쳐도 출처는 그대로다").isEqualTo(card);
+    }
+
+    @Test
+    void 출처_없이_저장하면_비어_있다() throws Exception {
+        볼_수_있다("OWNER");
+
+        assertThat(출처(저장된_번호(내_방송, 정상_레시피()))).isNull();
+    }
+
+    /**
+     * 측정 재료 때문에 편집자 저장이 실패하면 안 된다: 다른 방송의 카드·없는 카드·숫자가 아닌 값은
+     * 출처를 비운 채 저장한다(2026-10-16 결정).
+     */
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("맞지_않는_출처")
+    void 맞지_않는_출처는_비운_채_저장한다(String 설명, String 값) throws Exception {
+        볼_수_있다("OWNER");
+        String 출처값 = 값.equals("다른 방송 카드") ? String.valueOf(카드를_넣는다(다른_방송)) : 값;
+
+        String 응답 = 본문(mvc.perform(post("/api/clip/broadcasts/" + 내_방송 + "/recipes?sourceCardId=" + 출처값)
+                        .header("Authorization", "Bearer " + TestTokens.access(요청자))
+                        .contentType(MediaType.APPLICATION_JSON).content(정상_레시피().toString()))
+                .andExpect(status().isCreated()));
+
+        assertThat(출처(MAPPER.readTree(응답).get("id").asLong())).isNull();
+    }
+
+    static Stream<Arguments> 맞지_않는_출처() {
+        return Stream.of(
+                Arguments.of("다른 방송의 카드", "다른 방송 카드"),
+                Arguments.of("없는 카드", "999999999"),
+                Arguments.of("숫자가 아님", "abc"));
+    }
+
     @Test
     void 목록은_만든_순서다() throws Exception {
         볼_수_있다("OWNER");
@@ -349,7 +404,7 @@ class RecipeControllerTest extends IntegrationTestSupport {
                 위반("문자열 trackId", r -> 트랙(r, 0).put("trackId", "1"), "audio.tracks[0].trackId"),
                 위반("소수 trackId", r -> 트랙(r, 0).put("trackId", 1.5), "audio.tracks[0].trackId"),
                 // schemaVersion · streamId
-                위반("schemaVersion 2", r -> r.put("schemaVersion", 2), "schemaVersion"),
+                위반("schemaVersion 3", r -> r.put("schemaVersion", 3), "schemaVersion"),
                 위반("schemaVersion 없음", r -> r.remove("schemaVersion"), "schemaVersion"),
                 위반("streamId가 경로와 다름", r -> r.put("streamId", 다른_방송), "streamId"),
                 위반("streamId 없음", r -> r.remove("streamId"), "streamId"),
@@ -391,7 +446,92 @@ class RecipeControllerTest extends IntegrationTestSupport {
                 위반("segment start>=end", r -> 구간(r, 0).put("endAtMs", 1_001_200L), "subtitles"),
                 위반("segments 순서 역", r -> 구간(r, 1).put("startAtMs", 1_000_100L), "subtitles"),
                 위반("segments 겹침", r -> 구간(r, 1).put("startAtMs", 1_003_000L), "subtitles"),
-                위반("segment text 없음", r -> 구간(r, 0).remove("text"), "subtitles"));
+                위반("segment text 없음", r -> 구간(r, 0).remove("text"), "subtitles"),
+                // v1에 v2 칸 — 저장은 되는데 렌더가 모르는 칸으로 거부하는 편집본이 된다
+                위반("v1에 layers", r -> 출력(r, 0).putArray("layers"), "outputs"),
+                위반("v1에 background", r -> 출력(r, 0).putObject("background").put("kind", "BLUR").put("strength", 1), "outputs"),
+                위반("v1에 자막 자리", r -> 자막(r).putObject("position").put("anchor", "TOP").put("y", 0.1), "subtitles"),
+                // 값이 null이어도 칸 이름이 있으면 섞인 것이다 — 렌더는 이름만으로 거부한다(PR #201 codex)
+                위반("v1에 layers null", r -> 출력(r, 0).putNull("layers"), "outputs"),
+                위반("v1에 자막 자리 null", r -> 자막(r).putNull("position"), "subtitles"));
+    }
+
+    // ── 계약6 v2(7절): 층·바탕·구분선·자막 자리 ──────────────────────
+
+    /** v2도 보낸 모양 그대로 돌아온다 — 빈 칸({@code crop}·{@code frame})이 {@code null}로 붙어 나오면 렌더가 모르는 칸으로 거부한다. */
+    @Test
+    void v2도_저장하면_보낸_모양_그대로다() throws Exception {
+        볼_수_있다("OWNER");
+        ObjectNode 보낸것 = 정상_v2_레시피();
+        long id = 저장된_번호(내_방송, 보낸것);
+        JsonNode 돌아온것 = MAPPER.readTree(본문(하나(내_방송, id).andExpect(status().isOk()))).get("recipe");
+        assertThat(돌아온것).isEqualTo(보낸것);
+        assertThat(돌아온것.get("outputs").get(0).has("crop")).isFalse();
+        assertThat(돌아온것.get("outputs").get(0).get("layers").get(0).has("frame")).isFalse();
+    }
+
+    /** v1 출력에 v2 칸이 {@code null}로 붙어 나오지 않는다 — 기존 편집본을 렌더에 보낼 때 같은 복원을 쓴다. */
+    @Test
+    void v1은_v2_칸_없이_돌아온다() throws Exception {
+        볼_수_있다("OWNER");
+        long id = 저장된_번호(내_방송, 정상_레시피());
+        JsonNode 출력 = MAPPER.readTree(본문(하나(내_방송, id))).get("recipe").get("outputs").get(0);
+        assertThat(출력.has("layers") || 출력.has("background") || 출력.has("dividers")).isFalse();
+        assertThat(MAPPER.readTree(본문(하나(내_방송, id))).get("recipe").get("subtitles").has("position")).isFalse();
+    }
+
+    /** 분할 70:30은 부동소수 합이 1을 조금 넘는다(0.7 + 0.30000000000000004) — 멀쩡한 분할을 거절하면 안 된다. */
+    @Test
+    void 분할_칸의_합이_부동소수로_1을_넘어도_받는다() throws Exception {
+        볼_수_있다("OWNER");
+        ObjectNode 본문 = 정상_v2_레시피();
+        층(본문, 1).withObject("box").put("y", 0.7).put("h", 1 - 0.7);
+        층(본문, 0).withObject("box").put("h", 0.7);
+        저장(내_방송, 본문).andExpect(status().isCreated());
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("v2_규칙_위반들")
+    void 계약6_v2_규칙에_어긋나면_400이다(String 설명, Consumer<ObjectNode> 망가뜨리기, String 기대_칸) throws Exception {
+        볼_수_있다("OWNER");
+        ObjectNode 본문 = 정상_v2_레시피();
+        저장(내_방송, 본문.deepCopy()).andExpect(status().isCreated());
+        jdbc.update("DELETE FROM recipes");
+        망가뜨리기.accept(본문);
+
+        저장(내_방송, 본문).andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.field").value(기대_칸));
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM recipes", Integer.class)).as("거절했는데 저장됐다").isZero();
+    }
+
+    static Stream<Arguments> v2_규칙_위반들() {
+        return Stream.of(
+                위반("v2에 crop null", r -> 출력(r, 0).putNull("crop"), "outputs"),
+                위반("v2에 crop", r -> 출력(r, 0).putObject("crop").put("x", 0.0).put("y", 0.0).put("w", 0.5).put("h", 1.0), "outputs"),
+                위반("layers 없음", r -> 출력(r, 0).remove("layers"), "outputs"),
+                위반("layers 빈 배열", r -> 출력(r, 0).putArray("layers"), "outputs"),
+                위반("layers 다섯 장", r -> { for (int i = 0; i < 3; i++) ((ArrayNode) 출력(r, 0).get("layers")).add(층(r, 0).deepCopy()); }, "outputs"),
+                위반("층 crop 밖", r -> 층(r, 0).withObject("crop").put("x", 0.9), "outputs"),
+                위반("층 box 밖", r -> 층(r, 1).withObject("box").put("x", 0.5), "outputs"),
+                위반("층 box 너무 작음", r -> 층(r, 1).withObject("box").put("h", 0.04), "outputs"),
+                위반("층 box 없음", r -> 층(r, 1).remove("box"), "outputs"),
+                위반("층 모르는 칸", r -> 층(r, 1).put("opacity", 0.5), "outputs[0].layers[1].opacity"),
+                위반("테두리 두께 5% 넘음", r -> 층(r, 1).withObject("frame").put("width", 0.051), "outputs"),
+                위반("테두리 모서리 10% 넘음", r -> 층(r, 1).withObject("frame").put("radius", 0.11), "outputs"),
+                위반("테두리 색 이름", r -> 층(r, 1).withObject("frame").put("color", "white"), "outputs"),
+                위반("테두리 그림자 없음", r -> 층(r, 1).withObject("frame").remove("shadow"), "outputs"),
+                위반("흐림 세기 101", r -> 출력(r, 0).withObject("background").put("strength", 101), "outputs"),
+                위반("흐림에 색", r -> 출력(r, 0).withObject("background").put("color", "#000000"), "outputs"),
+                // 종류에 없는 칸은 null이어도 있는 것이다 — 렌더는 이름만으로 거부한다(PR #201 codex 3판)
+                위반("흐림에 색 null", r -> 출력(r, 0).withObject("background").putNull("color"), "outputs"),
+                위반("단색에 세기 null", r -> 출력(r, 0).putObject("background").put("kind", "COLOR").put("color", "#000000").putNull("strength"), "outputs"),
+                위반("단색에 색 없음", r -> 출력(r, 0).putObject("background").put("kind", "COLOR"), "outputs"),
+                위반("바탕 모름", r -> 출력(r, 0).withObject("background").put("kind", "GRADIENT"), "outputs"),
+                위반("구분선 y=1", r -> 구분선(r).put("y", 1.0), "outputs"),
+                위반("구분선 두께 0", r -> 구분선(r).put("thickness", 0.0), "outputs"),
+                위반("구분선 다섯 줄", r -> { for (int i = 0; i < 4; i++) ((ArrayNode) 출력(r, 0).get("dividers")).add(구분선(r).deepCopy()); }, "outputs"),
+                위반("자막 자리 모름", r -> 자막(r).withObject("position").put("anchor", "LEFT"), "subtitles"),
+                위반("자막 자리 y>1", r -> 자막(r).withObject("position").put("y", 1.1), "subtitles"));
     }
 
     /**
@@ -455,6 +595,14 @@ class RecipeControllerTest extends IntegrationTestSupport {
         return (ObjectNode) 출력(r, i).get("crop");
     }
 
+    private static ObjectNode 층(ObjectNode r, int i) {
+        return (ObjectNode) 출력(r, 0).get("layers").get(i);
+    }
+
+    private static ObjectNode 구분선(ObjectNode r) {
+        return (ObjectNode) 출력(r, 0).get("dividers").get(0);
+    }
+
     private static ObjectNode 트랙(ObjectNode r, int i) {
         return (ObjectNode) r.get("audio").get("tracks").get(i);
     }
@@ -491,6 +639,27 @@ class RecipeControllerTest extends IntegrationTestSupport {
                     ]
                   }
                 }""".formatted(streamId));
+    }
+
+    /** 계약6 7절 — 편집기 「크롭」 모양: 흐린 바탕 · 메인 층(꾸밈 없음) · 테두리 있는 작은 화면 · 구분선 · 자막 자리. */
+    private static ObjectNode 정상_v2_레시피() {
+        ObjectNode r = 정상_레시피();
+        r.put("schemaVersion", 2);
+        r.set("outputs", MAPPER.readTree("""
+                [
+                  { "outputId": "o1", "aspect": "VERT_9_16",
+                    "background": { "kind": "BLUR", "strength": 60 },
+                    "layers": [
+                      { "crop": { "x": 0.341796875, "y": 0.0, "w": 0.31640625, "h": 1.0 },
+                        "box": { "x": 0.0, "y": 0.0, "w": 1.0, "h": 1.0 } },
+                      { "crop": { "x": 0.6, "y": 0.1, "w": 0.375, "h": 0.5 },
+                        "box": { "x": 0.18, "y": 0.5, "w": 0.64, "h": 0.27 },
+                        "frame": { "width": 0.004, "color": "#ffffff", "radius": 0.016, "shadow": true } }
+                    ],
+                    "dividers": [ { "y": 0.25, "thickness": 0.008, "color": "#586fc4" } ] }
+                ]"""));
+        자막(r).putObject("position").put("anchor", "BOTTOM").put("y", 0.97);
+        return r;
     }
 
     private void 볼_수_있다(String relation) {
@@ -551,5 +720,15 @@ class RecipeControllerTest extends IntegrationTestSupport {
                         INSERT INTO broadcasts (stream_id, streamer_id, status, started_at, last_sequence)
                         VALUES (?, ?, 'live', ?, 1)""",
                 streamId, TestIds.STREAMER, OffsetDateTime.ofInstant(시작_시각, ZoneOffset.UTC));
+    }
+
+    private long 카드를_넣는다(String streamId) {
+        return jdbc.queryForObject("""
+                INSERT INTO jump_cards (stream_id, source, stream_timestamp_ms, window_start_ms, window_end_ms, event_seq)
+                VALUES (?, 'auto', 1500, 1000, 2000, 0) RETURNING id""", Long.class, streamId);
+    }
+
+    private Long 출처(long recipeId) {
+        return jdbc.queryForObject("SELECT source_card_id FROM recipes WHERE id = ?", Long.class, recipeId);
     }
 }

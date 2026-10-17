@@ -11,7 +11,9 @@ import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -56,6 +58,26 @@ public class BroadcastInfoStore {
             LIMIT ?
             """;
 
+    /**
+     * 여러 방송의 마지막 제목을 한 번에(POK-259, clip 방송 목록이 한 장에 최대 100개를 묻는다). 방송마다 색인을 최신부터 거꾸로 훑어
+     * <b>제목이 있는</b> 첫 줄 하나를 {@code LATERAL}로 고른다. 설정 조회와 라이브 목록이 둘 다 빈 회차는 제목 없이 한 줄이 남는데,
+     * 그 줄을 고르면 보이던 제목이 방송 번호로 돌아간다. 카테고리는 고른 줄 것이다(다른 시점 값을 섞지 않는다).
+     * {@code BroadcastTitlePlanTest}가 색인을 타는지 잰다.
+     *
+     * <p>한계: 「공백뿐」 판정이 PostgreSQL {@code \s}(로캘에 따라 다름)와 자바 {@code strip}에서 아주 드물게 갈린다. 제목이 자바만 공백으로
+     * 보는 글자(예: 로캘에 따라 U+3000)로만 이루어지면 그 줄이 뽑혀 빈 제목이 되고 clip이 버려 번호가 보인다(앞 관측 제목으로 안 간다).
+     */
+    static final String LATEST_TITLES = """
+            SELECT s.stream_id, i.live_title, i.category
+              FROM unnest(?::text[]) AS s(stream_id)
+              CROSS JOIN LATERAL (
+                    SELECT b.live_title, b.category
+                      FROM broadcast_info b
+                     WHERE b.stream_id = s.stream_id
+                       AND b.live_title ~ '\\S'
+                     ORDER BY b.observed_at DESC, b.id DESC
+                     LIMIT 1) i""";
+
     private static final RowMapper<BroadcastInfo> MAPPER = BroadcastInfoStore::toInfo;
 
     private final JdbcTemplate jdbc;
@@ -93,6 +115,26 @@ public class BroadcastInfoStore {
 
     public Optional<BroadcastInfo> latest(String streamId) {
         return jdbc.query(LATEST, MAPPER, streamId).stream().findFirst();
+    }
+
+    /** @return 방송 번호 → 마지막 제목. 제목이 있는 관측이 없는 방송은 맵에 없다. 제목 앞뒤 공백은 깎는다 */
+    public Map<String, Title> latestTitles(List<String> streamIds) {
+        Map<String, Title> titles = new LinkedHashMap<>();
+        if (streamIds.isEmpty()) {
+            return titles;
+        }
+        jdbc.query(connection -> {
+            java.sql.PreparedStatement ps = connection.prepareStatement(LATEST_TITLES);
+            ps.setArray(1, connection.createArrayOf("text", streamIds.toArray(String[]::new)));
+            return ps;
+        }, rs -> {
+            titles.put(rs.getString("stream_id"), new Title(rs.getString("live_title").strip(), rs.getString("category")));
+        });
+        return titles;
+    }
+
+    /** 방송 하나의 마지막 제목과 같은 관측의 카테고리. 카테고리는 비어 있을 수 있다 */
+    public record Title(String title, String category) {
     }
 
     /** @param max 이 값보다 많으면 <b>먼 과거부터</b> 잘린다(위 {@code SERIES} 주석) */

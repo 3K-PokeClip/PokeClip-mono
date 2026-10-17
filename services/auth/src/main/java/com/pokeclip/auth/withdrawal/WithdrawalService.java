@@ -3,17 +3,20 @@ package com.pokeclip.auth.withdrawal;
 import com.pokeclip.auth.AuthFailure;
 import com.pokeclip.auth.audiotrack.AudioTrackLabelRepository;
 import com.pokeclip.auth.DataInconsistencyException;
+import com.pokeclip.auth.chzzk.ChzzkChannelLinkRepository;
 import com.pokeclip.auth.chzzk.ChzzkLinkWriter;
 import com.pokeclip.auth.delegation.EditorDelegationRepository;
 import com.pokeclip.auth.delegation.EditorInvitationRepository;
 import com.pokeclip.auth.profile.PhotoStorage;
 import com.pokeclip.auth.streamkey.StreamKeyRepository;
 import com.pokeclip.auth.streamkey.pairing.PairingCodeRepository;
-import com.pokeclip.auth.streamkey.secret.SecretStore;
+import com.pokeclip.auth.streamkey.secret.StreamKeySecretRetirer;
 import com.pokeclip.auth.token.RefreshTokenRepository;
 import com.pokeclip.auth.user.User;
 import com.pokeclip.auth.user.UserRepository;
+import com.pokeclip.auth.youtube.YoutubeChannelLinkRepository;
 import com.pokeclip.auth.youtube.YoutubeLinkWriter;
+import com.pokeclip.auth.withdrawal.purge.PurgeJobRepository;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -49,12 +52,15 @@ public class WithdrawalService {
     private final PairingCodeRepository pairingCodeRepository;
     private final ChzzkLinkWriter chzzkLinkWriter;
     private final YoutubeLinkWriter youtubeLinkWriter;
+    private final ChzzkChannelLinkRepository chzzkLinks;
+    private final YoutubeChannelLinkRepository youtubeLinks;
     private final EditorDelegationRepository delegationRepository;
     private final EditorInvitationRepository invitationRepository;
     private final AudioTrackLabelRepository audioTrackLabelRepository;
-    private final SecretStore secretStore;
+    private final StreamKeySecretRetirer secretRetirer;
     private final PhotoStorage photoStorage;
     private final WithdrawalCleanupExecutor cleanup;
+    private final PurgeJobRepository purgeJobs;
 
     @Transactional
     public void withdraw(Long userId) {
@@ -99,7 +105,8 @@ public class WithdrawalService {
         streamKeyRepository.revokeAlive(userId, now);
         pairingCodeRepository.consumeAliveOfUser(userId, now);
 
-        // 🔴 채널 연동은 기존 해제 경로를 그대로 부른다 — 여기에 UPDATE를 새로 쓰지 않는다.
+        // 🔴 채널 연동은 기존 해제 경로를 그대로 부른다: 닫는 UPDATE를 여기에 새로 쓰지 않는다.
+        // (예외는 하나다: 닫은 뒤 채널 이름·번호를 비우는 줄은 해제 정책과 무관해 아래 장부 적기 뒤에 따로 둔다. POK-341)
         //
         // 표만 닫으면 절반이다. 그쪽 revoke가 커밋 뒤에 등록하는 것이 셋 더 있다:
         // 비밀값(토큰 원문) 삭제 · 정리 스레드 제출 · 치지직 토큰 무효화. 여기서 표를 직접 닫으면
@@ -152,6 +159,27 @@ public class WithdrawalService {
         // 「마이크」·「게임」이 대개지만 자유 입력이라 개인정보가 안 들어온다고 보장할 수 없다.
         // JDBC라 영속성 컨텍스트를 안 건드린다 — 아래 재조회 규칙과 무관하다.
         audioTrackLabelRepository.deleteAllOfUser(userId);
+
+        // 🔴 다른 서버의 기록(POK-256) — clip의 방송·카드·편집본·영상과 수집기의 채팅·후원. 여기서 「지울 일」을
+        // 장부에 적기만 하고 보내는 것은 발송기(PurgeDispatcher)가 받을 때까지 한다. 커밋 뒤 정리 스레드(아래)에
+        // 맡기지 않는 이유: 그쪽은 재시도가 없어 clip이 잠깐 죽어 있던 탈퇴는 기록이 영영 남는다.
+        // 이 트랜잭션에 적으므로 탈퇴가 되감기면 장부 줄도 같이 사라진다. 치지직 채널 목록을 읽으므로
+        // 위의 연동 폐기보다 뒤여야 한다(폐기된 줄도 남아 있어 읽힌다. 순서는 「다른 회원이 쥔 채널」 판정에만 걸린다).
+        // JDBC라 영속성 컨텍스트를 안 건드린다 — 아래 재조회 규칙과 무관하다.
+        purgeJobs.enqueue(userId, now);
+
+        // 🔴 두 연동 표의 채널 이름·번호를 비운다(POK-341). 치지직 채널 이름은 대개 공개 활동명이라 익명화한 회원 행
+        // 옆에 남으면 사람을 되짚을 수 있다. 행은 남긴다(V107 「행을 지우지 않는다」): 비우는 칸은 둘뿐이다.
+        //
+        // 🔴 자리가 둘 다 정해져 있다. ① 위의 연동 폐기보다 뒤: 살아 있는 행은 V115 CHECK가 비우기를 막는다.
+        // ② 바로 위의 장부 적기보다 뒤: 장부가 이 표에서 수집기에 보낼 채널 번호를 읽어 간다. 앞으로 옮기면
+        // 채널 없는 수집기 줄이 장부 CHECK(V114)에 걸려 연동이 있던 회원의 탈퇴가 통째로 500이 된다(주입으로 확인).
+        //
+        // 닫힌 옛 행(재연동·해제로 이미 닫힌 것)까지 다 비운다: 살아 있던 행만 비우면 옛 행에 이름이 남는다.
+        // clearAutomatically라 영속성 컨텍스트를 비우지만 flushAutomatically가 앞의 변경을 먼저 밀어낸다.
+        // 아래 재조회가 이것보다 뒤에 있으므로 익명화는 안 잃는다.
+        chzzkLinks.wipeChannelOfUser(userId);
+        youtubeLinks.wipeChannelOfUser(userId);
 
         // 🔴 표 밖에 남는 것 둘 — 스트림키 비밀값과 사진 파일. 여기서 지우지 않고 자리만 읽어 둔다.
         //
@@ -226,7 +254,7 @@ public class WithdrawalService {
         log.info("auth.withdrawal.cleanup.started userId={}", userId);
         RuntimeException failure = null;
         for (String ref : passphraseRefs) {
-            failure = deleteQuietly(() -> secretStore.delete(ref), failure);
+            failure = deleteQuietly(() -> secretRetirer.retire(ref), failure);
         }
         failure = deleteQuietly(() -> photoStorage.deleteAll(userId), failure);
         if (failure != null) {

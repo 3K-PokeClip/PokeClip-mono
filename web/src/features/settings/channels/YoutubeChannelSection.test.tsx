@@ -75,6 +75,26 @@ describe('YoutubeChannelSection — 연동 상태 표시', () => {
     expect(screen.queryByText(/포켓클립 게임채널/)).not.toBeInTheDocument();
   });
 
+  it('연동 지점에서 YouTube 약관·Google 처리방침·권한 철회 주소를 정책 그대로 보여 준다', async () => {
+    // YouTube API Services Developer Policies III.A (POK-269)
+    stubYtStatus({ linked: false });
+    renderWithProviders(<ChannelSettingsScreen />);
+
+    await youtube().findByRole('button', { name: '연동' });
+    expect(screen.getByRole('link', { name: 'YouTube 서비스 약관' })).toHaveAttribute(
+      'href',
+      'https://www.youtube.com/t/terms',
+    );
+    expect(screen.getByRole('link', { name: 'Google 개인정보처리방침' })).toHaveAttribute(
+      'href',
+      'http://www.google.com/policies/privacy',
+    );
+    expect(screen.getByRole('link', { name: 'Google 보안 설정' })).toHaveAttribute(
+      'href',
+      'https://security.google.com/settings/security/permissions',
+    );
+  });
+
   it('ACTIVE는 정상 배지와 채널명 한 줄을 보여준다 (1k)', async () => {
     stubYtStatus(ytLinked('ACTIVE'));
     renderWithProviders(<ChannelSettingsScreen />);
@@ -90,7 +110,7 @@ describe('YoutubeChannelSection — 연동 상태 표시', () => {
     renderWithProviders(<ChannelSettingsScreen />);
 
     expect(await youtube().findByText('연동 끊김')).toBeInTheDocument();
-    expect(youtube().getByText(/유튜브 연동이 끊겼어요/)).toBeInTheDocument();
+    expect(youtube().getByText(/유튜브 연동이 끊겼어요\.$/)).toBeInTheDocument();
     expect(youtube().getByRole('button', { name: '다시 연동' })).toBeInTheDocument();
     // BROKEN 행은 이미 닫힌 행이라 DELETE가 무동작이다 — 눌러도 안 되는 버튼을 두지 않는다
     expect(youtube().queryByRole('button', { name: '연동 해제' })).not.toBeInTheDocument();

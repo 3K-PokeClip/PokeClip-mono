@@ -42,6 +42,8 @@ public final class FakeCollector implements AutoCloseable {
     private final AtomicReference<String> lastToken = new AtomicReference<>();
     private final AtomicReference<String> lastPath = new AtomicReference<>();
     private final AtomicReference<String> lastQuery = new AtomicReference<>();
+    private final AtomicReference<String> lastMethod = new AtomicReference<>();
+    private final AtomicReference<String> lastBody = new AtomicReference<>();
 
     private volatile Response fallback = 아무_경로도_안_정했을_때;
     private volatile Duration delay = Duration.ZERO;
@@ -108,6 +110,8 @@ public final class FakeCollector implements AutoCloseable {
         lastToken.set(null);
         lastPath.set(null);
         lastQuery.set(null);
+        lastMethod.set(null);
+        lastBody.set(null);
     }
 
     /** 이름이 아니라 실제로 바인딩한 주소다({@link FakeAuth#baseUrl()}와 같은 이유). */
@@ -136,13 +140,24 @@ public final class FakeCollector implements AutoCloseable {
         return query == null ? "" : query;
     }
 
+    public String lastMethod() {
+        return lastMethod.get();
+    }
+
+    /** 마지막 요청 본문(UTF-8). 본문이 없으면 빈 문자열이다. */
+    public String lastBody() {
+        String body = lastBody.get();
+        return body == null ? "" : body;
+    }
+
     private void handle(HttpExchange exchange) throws IOException {
         calls.incrementAndGet();
         String path = exchange.getRequestURI().getPath();
         lastPath.set(path);
         lastQuery.set(exchange.getRequestURI().getRawQuery());
         lastToken.set(exchange.getRequestHeaders().getFirst("X-Internal-Token"));
-        exchange.getRequestBody().readAllBytes();
+        lastMethod.set(exchange.getRequestMethod());
+        lastBody.set(new String(exchange.getRequestBody().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8));
         if (!delay.isZero()) {
             try {
                 Thread.sleep(delay.toMillis());

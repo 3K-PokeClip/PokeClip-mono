@@ -54,7 +54,7 @@ function metaOf(view: YoutubeLinkViewState['view'], channelName: string | undefi
       // 1k은 채널명 한 줄이다 — 연동일·구독자 같은 걸 덧붙이지 않는다.
       return channelName ?? '유튜브 채널';
     case 'broken':
-      return `${channelName ?? '유튜브 채널'} · 유튜브 연동이 끊겼어요. 다시 연동해 주세요`;
+      return `${channelName ?? '유튜브 채널'} · 유튜브 연동이 끊겼어요.`;
     default:
       return '연동하면 하이라이트 클립을 유튜브에 업로드할 수 있어요';
   }

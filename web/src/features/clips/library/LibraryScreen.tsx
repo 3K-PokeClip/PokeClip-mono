@@ -1,6 +1,5 @@
 'use client';
 
-import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
 import { FolderOpen } from 'lucide-react';
 import { EmptyState, Input, Select } from '@/ui';
@@ -9,7 +8,12 @@ import { ClipDetailPanel } from './ClipDetailPanel';
 import { DeleteClipDialog } from './DeleteClipDialog';
 import { LibraryFilterChips } from './LibraryFilterChips';
 import { SORT_OPTIONS, isLibrarySort, statusFor } from './libraryView';
-import { useLibraryMockState, type LibraryClip, type LibraryOptions } from './useLibraryMockState';
+import {
+  aspectLabelOf,
+  useLibraryMockState,
+  type LibraryClip,
+  type LibraryOptions,
+} from './useLibraryMockState';
 import styles from './LibraryScreen.module.css';
 
 // 시안 1g — 보관함. 편집기(1d)가 만든 9:16 편집본을 다시 찾는 유일한 자리다(F6, P0).
@@ -20,15 +24,14 @@ import styles from './LibraryScreen.module.css';
 // 본문 폭은 가두지 않는다: 그리드가 재배치되므로 접힌 사이드바가 남긴 폭을 그대로 쓴다
 // (docs/DESIGN_SYSTEM.md 「셸 · 본문 폭」).
 //
-// 시안에 있으나 여기 없는 것: 스트리머/편집자 시점 토글(핸드오프용 — 시점은 훅 값이다).
 export function LibraryScreen(options: LibraryOptions = {}) {
   const {
     now,
-    role,
+    loading,
+    error,
     clips,
     totalCount,
     counts,
-    pendingCount,
     chip,
     setChip,
     query,
@@ -41,8 +44,12 @@ export function LibraryScreen(options: LibraryOptions = {}) {
     deselect,
     renameClip,
     upload,
+    retryUpload,
+    resolveUpload,
     retryRender,
     download,
+    previewUrl,
+    sendingIds,
     remove,
   } = useLibraryMockState(options);
   const open = selectedClip !== null;
@@ -52,6 +59,7 @@ export function LibraryScreen(options: LibraryOptions = {}) {
   const [lastClip, setLastClip] = useState<LibraryClip | null>(null);
   if (selectedClip && selectedClip !== lastClip) setLastClip(selectedClip);
   const panelClip = selectedClip ?? lastClip;
+  const panelEntry = panelClip?.entry;
 
   const [pendingDelete, setPendingDelete] = useState<LibraryClip | null>(null);
   const gridRef = useRef<HTMLUListElement>(null);
@@ -131,20 +139,19 @@ export function LibraryScreen(options: LibraryOptions = {}) {
 
         {totalCount > 0 ? (
           <div className={styles.chipRow}>
-            <LibraryFilterChips role={role} chip={chip} counts={counts} onChange={setChip} />
-            {/* 스트리머에겐 승인 대기 칩이 없다 — 검토는 승인 대기함의 일이라 배너로 보낸다(시안 1g ⑤) */}
-            {role === 'streamer' && pendingCount > 0 ? (
-              <Link href="/clips/approvals" className={styles.pendingBanner}>
-                <span className={styles.pendingDot} aria-hidden="true" />
-                승인 대기 {pendingCount}건{' '}
-                <span className={styles.pendingHint}>편집자 요청은 승인 대기함에서 검토해요</span>{' '}
-                <span className={styles.pendingHint}>열기 →</span>
-              </Link>
-            ) : null}
+            <LibraryFilterChips chip={chip} counts={counts} onChange={setChip} />
           </div>
         ) : null}
 
-        {totalCount === 0 ? (
+        {error !== null ? (
+          <p className={styles.filterEmpty} role="alert">
+            편집본 목록을 못 읽었어요: {error}
+          </p>
+        ) : loading ? (
+          <p className={styles.filterEmpty} role="status">
+            편집본을 불러오는 중…
+          </p>
+        ) : totalCount === 0 ? (
           <EmptyState
             icon={<FolderOpen size={21} />}
             title="아직 보관한 편집본이 없어요"
@@ -178,13 +185,19 @@ export function LibraryScreen(options: LibraryOptions = {}) {
             <ClipDetailPanel
               clip={panelClip}
               status={statusFor(panelClip, now)}
-              role={role}
               now={now}
               onDeselect={closePanel}
               onTitleChange={(title) => renameClip(panelClip.id, title)}
               onUpload={() => upload(panelClip.id)}
               onRetryRender={() => retryRender(panelClip.id)}
+              onRetryUpload={() => retryUpload(panelClip.id)}
+              onResolveUpload={(uploadId, resolution) =>
+                resolveUpload(panelClip.id, uploadId, resolution)
+              }
               onDownload={() => download(panelClip.id)}
+              sending={sendingIds.has(panelClip.id)}
+              loadPreview={panelClip.entry ? () => previewUrl(panelClip.id) : undefined}
+              loadAspect={panelEntry ? () => aspectLabelOf(panelEntry) : undefined}
               onDelete={() => setPendingDelete(panelClip)}
             />
           ) : null}

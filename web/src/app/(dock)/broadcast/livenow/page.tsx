@@ -8,7 +8,8 @@ export const metadata = { title: '라이브 · PokeClip' };
 //
 // 화면이 맨 위에서 useSearchParams로 오프라인 목업 토글(?mock=offline, POK-227)을 읽는다 —
 // Next는 그 훅을 쓰는 트리에 Suspense 경계를 요구하므로 화면 전체를 감싼다(settings/account 선례).
-// 플레이어 쪽(?stream=) 경계는 LiveScreen 안에 그대로 있다 — 토글이 실제 조회로 바뀌면 다시 그쪽이 가장 가깝다.
+// 플레이어 쪽(?stream=) 경계는 LiveScreen 안에 그대로 있지만, 대시보드도 ?card=를 같은 훅으로 읽어(QA 2026-10-11)
+// 토글이 실제 조회로 바뀌어도 이 경계가 가장 가깝다.
 export default function LivePage() {
   return (
     <Suspense>

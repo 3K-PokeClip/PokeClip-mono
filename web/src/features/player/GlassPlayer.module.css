@@ -145,6 +145,39 @@
   animation: pc-player-pulse 2s ease infinite;
 }
 
+/* 방송 중이 아닐 때의 배지 — 붉은 맥동 대신 회색으로 멎는다 */
+.liveBadge[data-status='ended'],
+.liveBadge[data-status='unknown'] {
+  background: rgb(148 163 184 / 0.22);
+  color: rgb(226 232 240 / 0.85);
+}
+
+.liveBadge[data-status='ended'] .liveBadgeDot,
+.liveBadge[data-status='unknown'] .liveBadgeDot {
+  background: #94a3b8;
+  animation: none;
+}
+
+/* media 서버가 없을 때 영상 자리에 서는 정직한 안내 */
+.noSignal {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: calc(4 * var(--pc-u));
+  text-align: center;
+}
+
+.noSignalTitle {
+  font-size: calc(14 * var(--pc-u));
+  font-weight: 700;
+  color: rgb(224 242 254 / 0.7);
+}
+
+.noSignalSub {
+  font-size: calc(12 * var(--pc-u));
+  color: rgb(224 242 254 / 0.45);
+}
+
 .channelSub {
   color: rgb(224 242 254 / 0.75);
   font-size: calc(12 * var(--pc-u));

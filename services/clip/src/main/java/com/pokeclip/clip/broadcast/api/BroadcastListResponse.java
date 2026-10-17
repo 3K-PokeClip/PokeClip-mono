@@ -2,6 +2,7 @@ package com.pokeclip.clip.broadcast.api;
 
 import com.pokeclip.clip.broadcast.Broadcast;
 import com.pokeclip.clip.broadcast.BroadcastPage;
+import com.pokeclip.clip.collector.BroadcastTitle;
 import com.pokeclip.clip.delegation.ResolveResult;
 
 import java.time.Instant;
@@ -20,7 +21,7 @@ public record BroadcastListResponse(List<Item> broadcasts, String nextCursor) {
      *
      * <p>🔴 <b>{@code startedAt}이 {@code null}로 나갈 수 있다</b> — 종료 선도착 placeholder는
      * 시작을 못 본 줄이다(ADR-016). <b>감추거나 지어내지 않는다</b>(PRD 성공 기준). 화면은
-     * 그것을 「시작 시각 미상」으로 그린다.
+     * 그것을 「시작 시각 미상」으로 그린다. 시작 편지가 늦게라도 오면 그 시각으로 찬다(POK-327).
      *
      * <p>{@code vodExpiresAt}을 싣는 것은 <b>기한이 지난 방송도 목록에 그대로 두기</b>
      * 때문이다 — 영상은 못 봐도 방송 기록은 남고, 화면이 「보관 만료」를 그릴 재료가 필요하다.
@@ -30,15 +31,35 @@ public record BroadcastListResponse(List<Item> broadcasts, String nextCursor) {
      * <b>{@code state}로 접지 않고 실제 상태 값을 그대로 싣는다</b> — 나중에
      * {@code ended}와 {@code vod_ready}를 화면이 구분하고 싶어질 여지를 남긴다(PRD 결정).
      *
+     * <p>{@code timelineOriginAt}은 <b>시각 기준점</b>이다(POK-255) — 이 방송의 카드·조각 ms가 0이 되는 절대 시각.
+     * 화면은 여기에 ms를 더해 편집본 컷(절대 시각)을 만든다. 조각이 아직 없으면 {@code null}이고, 그때는 방송 시작
+     * 시각으로 대신한다(수십 초 어긋날 수 있다). 계산은 {@code TimelineOriginReader}.
+     *
+     * <p>{@code ingestStreamId}는 녹화·라이브 영상 주소의 키다(POK-233). 방송을 가리키는 이름({@code streamId})과 갈릴 수
+     * 있어 화면은 영상 주소를 만들 때 이 값을 쓴다. 옛 줄은 {@code streamId}와 같다.
+     *
+     * <p>{@code thumbnailUrl}은 사진 주소다(POK-277, 수명 60분 미리서명). 방송 중이면 1분마다 바뀌는 최신 화면, 끝난 방송이면
+     * 점수가 가장 높은 카드의 장면이고 카드 사진이 없으면 마지막 라이브 화면이다. 사진이 없으면 {@code null}이다(화면은 자리표시).
+     * 목록을 다시 받을 때마다 새 주소가 오므로 덮어쓴 라이브 사진이 브라우저 캐시에 막히지 않는다.
+     *
+     * <p>{@code title}·{@code category}는 치지직 방송 제목과 카테고리다(POK-259). 수집기가 1분마다 남기는 방송 정보에서 제목이 있는
+     * 마지막 관측을 고르고, 카테고리는 같은 관측의 값이다. 관측이 없거나 수집기 표를 못 읽으면 둘 다 {@code null}이고 화면은 방송 번호를
+     * 보인다. 수집기에 한 장을 한 번에 묻는다({@code BroadcastTitleClient}).
+     *
      * <p>줄 번호는 안 싣는다 — 이어받기가 표시로 끝나므로 웹이 쓸 데가 없고,
      * 방송을 가리키는 이름은 {@code streamId}다(카드 목록 문이 그 값을 받는다).
      */
     public record Item(String streamId,
+                       String ingestStreamId,
                        String status,
                        ResolveResult relation,
                        Instant startedAt,
                        Instant endedAt,
-                       Instant vodExpiresAt) {
+                       Instant vodExpiresAt,
+                       Instant timelineOriginAt,
+                       String thumbnailUrl,
+                       String title,
+                       String category) {
     }
 
     public static BroadcastListResponse from(BroadcastPage page) {
@@ -53,11 +74,17 @@ public record BroadcastListResponse(List<Item> broadcasts, String nextCursor) {
      * 둘의 출처가 갈리는 날 이 칸이 조용히 비게 된다.
      */
     private static Item toItem(Broadcast row, BroadcastPage page) {
+        BroadcastTitle title = page.titles().get(row.getStreamId());
         return new Item(row.getStreamId(),
+                row.ingestKey(),
                 row.getStatus().dbValue(),
                 page.relations().get(row.getStreamerId()),
                 row.getStartedAt(),
                 row.getEndedAt(),
-                row.getVodExpiresAt());
+                row.getVodExpiresAt(),
+                page.origins().get(row.getStreamId()),
+                page.thumbnails().get(row.getStreamId()),
+                title == null ? null : title.title(),
+                title == null ? null : title.category());
     }
 }

@@ -3,6 +3,7 @@
 import { useRef } from 'react';
 import { CropOverlay } from './CropOverlay';
 import { CropResult } from './CropResult';
+import { VideoSurface } from './VideoSurface';
 import styles from './editorShared.module.css';
 import type { ClipEditorMockState } from './useClipEditorMockState';
 
@@ -22,10 +23,19 @@ export function PreviewCanvas({ state }: { state: ClipEditorMockState }) {
   const panelRef = useRef<HTMLDivElement>(null);
   const editingLayout = state.activeTool === 'layout';
 
+  // CC만 고르면 영상에 글자가 타지 않는다 — 번인 미리보기도 그리지 않는다(렌더와 같다)
   const subtitleText =
-    state.subtitle.status === 'ready'
+    state.subtitle.status === 'ready' && state.subtitleMode !== 'cc'
       ? (state.subtitle.items.find((item) => item.id === state.selectedSubtitleId)?.text ?? null)
       : null;
+  // 결과 설명은 결과에 실제로 들어갈 것을 말한다: 자막이 없는데 고른 방식(번인+CC)만 적으면 자막이 들어갈 것처럼
+  // 읽힌다(QA 2026-10-11)
+  const subtitleNote =
+    state.subtitle.status === 'ready' && state.subtitle.items.length > 0
+      ? state.subtitleModeLabel
+      : state.subtitle.status === 'generating'
+        ? '만드는 중'
+        : '없음';
 
   const result = (
     <div
@@ -34,7 +44,13 @@ export function PreviewCanvas({ state }: { state: ClipEditorMockState }) {
       data-border={state.layout === 'split' && state.splitBorder ? 'on' : undefined}
     >
       {state.regions.map((region) => (
-        <CropResult key={region.id} label={region.label} placement={region.placement} />
+        <CropResult
+          key={region.id}
+          label={region.label}
+          placement={region.placement}
+          video={state.previewVideo}
+          crop={region.crop ?? null}
+        />
       ))}
       {subtitleText !== null ? (
         <span
@@ -63,7 +79,11 @@ export function PreviewCanvas({ state }: { state: ClipEditorMockState }) {
               // 프레임은 판 기준 %로 놓인다 — 판이 소스와 다른 비율이면 영상 위에서 어긋난다
               style={{ ['--pc-ar' as string]: String(state.sourceAspect) }}
             >
-              <span className={styles.sourcePlaceholder}>원본 방송 화면 16:9</span>
+              {state.previewVideo ? (
+                <VideoSurface video={state.previewVideo} />
+              ) : (
+                <span className={styles.sourcePlaceholder}>원본 방송 화면 16:9</span>
+              )}
               {state.regions.map((region, index) => (
                 <CropOverlay
                   key={region.id}
@@ -85,7 +105,7 @@ export function PreviewCanvas({ state }: { state: ClipEditorMockState }) {
           {result}
           <span className={styles.stageNote}>
             {editingLayout ? '' : '미리보기 · '}
-            {state.layoutLabel} · 자막 {state.subtitleModeLabel} · {state.speed}× 배속
+            {state.layoutLabel} · 자막 {subtitleNote} · {state.speed}× 배속
           </span>
         </section>
       </div>

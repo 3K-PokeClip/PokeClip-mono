@@ -108,7 +108,7 @@
   color: var(--pc-color-text-secondary);
 }
 
-/* 1l 하단 안내 — 내보내기의 결과(승인 요청 무효)를 목록 곁에서 미리 말해 둔다.
+/* 1l 하단 안내 — 내보내기가 즉시 적용된다는 것을 목록 곁에서 미리 말해 둔다.
    목록이 갖는 22px과 합쳐 시안의 목록↓22 + 안내↑4 간격이 된다 */
 .note {
   display: flex;
@@ -258,20 +258,11 @@
   color: var(--pc-color-text-muted);
 }
 
-.compareTimed,
 .compareInstant {
   display: inline-flex;
   align-items: center;
   gap: calc(5 * var(--pc-u));
   font-size: calc(10.5 * var(--pc-u));
-}
-
-.compareTimed {
-  color: var(--pc-color-text-secondary);
-}
-
-.compareTimed svg {
-  color: var(--pc-color-text-muted);
 }
 
 .compareInstant {

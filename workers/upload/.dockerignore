@@ -1,0 +1,7 @@
+build
+.gradle
+
+# 로컬 전용 설정(application-local*). COPY src src 뒤 bootJar가 src/main/resources 안의
+# 그 파일을 jar에 실어 최종 이미지까지 간다. 컨텍스트에 아예 안 넣는다(services/.dockerignore와 같다).
+# 확장자를 묶지 않는다. 백업 꼴(.bak · ~ · .orig)도 같은 내용이라 같이 뺀다.
+**/application-local*
