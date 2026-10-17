@@ -76,13 +76,16 @@ defaults:
 
 jobs:
   terraform:
-    # 판을 고정한다. ubuntu-latest가 다음 판으로 넘어가도 도구 · 셸 판이 조용히 바뀌지 않게.
+    # OS 판(Ubuntu 24.04)만 고정한다. 같은 라벨의 이미지는 날짜 판으로 갱신되고 사전 설치 소프트웨어
+    # (bash 패치 판 · AWS CLI 등)도 함께 바뀐다 — 그 실행의 이미지 판은 Set up job 로그의 「Runner
+    # Image」에 남는다. 판정에 쓰는 도구 넷은 runs-on이 아니라 아래 설치 단계의 판 · sha256으로 고정된다.
     runs-on: ubuntu-24.04
-    # 임시 상한이다. 첫 실제 러너 실행(실행 사이 캐시 없음)의 단계별 시간으로 다시 정한다. 사전
-    # 실측(amd64 에뮬레이션 · 대상 8곳)은 init · validate 600~740초 · test 130~220초였다. 잡 안 플러그인
-    # 캐시는 그대로 두고 init을 병렬로 돌리지 않는다 — 공유 플러그인 캐시를 여러 init이 동시에
-    # 쓰는 것은 안전이 보장되지 않는다(Terraform CLI 설정 문서의 plugin_cache_dir 주의).
-    timeout-minutes: 25
+    # 실측 기준 상한이다. 첫 실제 러너 실행(2026-10-17 · 캐시 없음 · 대상 8곳)은 잡 전체 약 80초
+    # (init · validate 56초 · terraform test 16초)였다. 실행마다 provider를 새로 받으므로 내려받기가
+    # 느린 날을 위한 여유를 둔 값이 10분이다. 잡 안 플러그인 캐시는 그대로 두고 init을 병렬로 돌리지
+    # 않는다 — 공유 플러그인 캐시를 여러 init이 동시에 쓰는 것은 안전이 보장되지 않는다(Terraform CLI
+    # 설정 문서의 plugin_cache_dir 주의).
+    timeout-minutes: 10
     env:
       CHECKPOINT_DISABLE: '1'
       TF_IN_AUTOMATION: '1'

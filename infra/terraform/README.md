@@ -199,9 +199,13 @@ PR 리뷰가 막습니다 — 실제 누출 방어는 실행 시험(실물 CLI �
 *   두 시험이 러너 이미지의 AWS CLI 에 기댑니다. `put_secret_test.sh` 의
     실물 CLI 계약 사례(위 닫힌 로컬 주소 · 가짜 자격으로만 부름)와 precheck
     `testlib_test.sh` 의 실행 비트 사례(PATH 에 실행 가능한 aws 가 따로
-    있어야 뜻이 있음 — fakebin · init-message)입니다. CI 는 `scripts/test/`
-    시험이 하나라도 skip 하면 실패로 봅니다. 러너에서 AWS CLI 가 빠지면 두
-    단계가 함께 빨개집니다.
+    있어야 뜻이 있음 — fakebin · init-message)입니다. 러너 라벨
+    `ubuntu-24.04` 는 OS 판만 고정하므로, 러너 이미지가 갱신되면 AWS CLI
+    판이 바뀔 수 있습니다(그 실행의 판은 Set up job 로그 「Runner Image」).
+    CI 는 `scripts/test/` 시험이 하나라도 skip 하면 실패로 봅니다. 러너에서
+    AWS CLI 가 빠지면 shell 잡의 「단계 직전 점검 시험」 이 먼저 빨개지고,
+    뒤의 「스크립트 시험」(`put_secret_test.sh` 의 skip 판정 포함)과 그 뒤
+    단계는 건너뜁니다.
 *   러너의 bash 는 5.2 입니다. 스크립트가 지키는 macOS bash 3.2 제약은
     로컬에서 돌려야 드러납니다.
 *   guard_test 의 `config-first-folded` 사례(ſ 를 s 로 접는 파일 시스템)는
