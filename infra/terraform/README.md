@@ -66,7 +66,8 @@ prod 엣지 비밀의 값 입력 · 교체 절차는 [엣지 비밀 런북](runb
 
 *   Terraform `>= 1.11.0`(S3 백엔드 `use_lockfile` GA).
 *   aws provider `>= 6.19.0`.
-*   루트는 `.terraform.lock.hcl` 을 추적합니다.
+*   루트는 `.terraform.lock.hcl` 을 추적합니다(`modules/` 는 면제 —
+    「검증」 절).
 
 ### 백엔드 규약
 
@@ -181,6 +182,43 @@ terraform 규칙 묶음)는 루트 · 모듈마다 돌립니다. `--recursive` �
 PR 리뷰가 막습니다 — 실제 누출 방어는 실행 시험(실물 CLI 계약 · 잔여 검사 ·
 출력 완전 일치)입니다.
 
+`infra/terraform/**` · `infra/media-host/**` 를 고친 PR 에서는
+`.github/workflows/infra-ci.yml`(infra-ci)이 위 명령을 모두 돌립니다.
+도구(terraform 1.16.4 · tflint 0.64.0 · conftest 0.71.1 · shellcheck
+0.11.0)는 sha256 을 고정해 내려받습니다. 필수 체크가 아니므로 머지 전에 PR
+화면의 체크 목록에서 infra-ci 의 세 체크(terraform · guard · shell)가
+초록인지 확인합니다. **체크가 목록에 없으면 통과가 아니라 돌지 않은
+것입니다** — 위 명령을 손으로 돌리고 결과를 PR 에 적습니다. CI 의 한계는
+다음과 같습니다.
+
+*   변경 파일이 3,000개를 넘는 PR 에서는 paths 필터가 뒤쪽 파일을 보지
+    못해 워크플로가 아예 돌지 않을 수 있습니다. 그런 PR 은 쪼개거나 위
+    명령을 손으로 돌립니다.
+*   저장소가 공개라 CI 로그도 공개입니다. 시험에는 가짜 계정 ID · 가짜
+    이름만 씁니다.
+*   두 시험이 러너 이미지의 AWS CLI 에 기댑니다. `put_secret_test.sh` 의
+    실물 CLI 계약 사례(위 닫힌 로컬 주소 · 가짜 자격으로만 부름)와 precheck
+    `testlib_test.sh` 의 실행 비트 사례(PATH 에 실행 가능한 aws 가 따로
+    있어야 뜻이 있음 — fakebin · init-message)입니다. 러너 라벨
+    `ubuntu-24.04` 는 OS 판만 고정하므로, 러너 이미지가 갱신되면 AWS CLI
+    판이 바뀔 수 있습니다(그 실행의 판은 Set up job 로그 「Runner Image」).
+    CI 는 `scripts/test/` 시험이 하나라도 skip 하면 실패로 봅니다. 러너에서
+    AWS CLI 가 빠지면 shell 잡의 「단계 직전 점검 시험」 이 먼저 빨개지고,
+    뒤의 「스크립트 시험」(`put_secret_test.sh` 의 skip 판정 포함)과 그 뒤
+    단계는 건너뜁니다.
+*   러너의 bash 는 5.2 입니다. 스크립트가 지키는 macOS bash 3.2 제약은
+    로컬에서 돌려야 드러납니다.
+*   guard_test 의 `config-first-folded` 사례(ſ 를 s 로 접는 파일 시스템)는
+    러너(ext4)에서 건너뜁니다. APFS 에서 도는 로컬이 맡습니다.
+*   `modules/` 는 lock 면제입니다(`.gitignore` 가 모듈의 lock 을 뺍니다).
+    그래서 CI 에서 aws provider 최신판으로 돌고, 쓰인 판은 init 로그에
+    남습니다. 그 밖의 루트는 lock 이 없으면 CI 가 실패합니다.
+*   CI 는 루트를 `-lockfile=readonly` 로 init 합니다. 루트에 provider 를 새로
+    더하면 로컬 `terraform init` 은 lock 에 조용히 적어 넣지만, CI 는 lock 을
+    고쳐 쓰지 않으므로 실패합니다 — 갱신된 lock 을 함께 올립니다. 잠긴 판을
+    그대로 만족하는 제약 변경은 양쪽 모두 통과하고, 잠긴 판을 벗어나는 제약은
+    로컬에서도 `init -upgrade` 가 필요합니다.
+
 ### 단언 방식
 
 `terraform test` 는 `mock_provider` 로 AWS 에 접속하지 않고 plan 을 만든 뒤
@@ -242,9 +280,9 @@ CI 자동 푸시를 켜는 후속 PR(40차)이 더합니다.
 
 ### 설치와 실행
 
-*   로컬: `brew install conftest`. CI 는 계획의 M-CI(infra-ci)에서 conftest
-    0.71.1 을 체크섬 고정으로 내려받아 붙습니다. 그 전까지는 PR 마다 아래 셋을
-    손으로 돌립니다.
+*   로컬: `brew install conftest`. CI(infra-ci)는 conftest 0.71.1 을 sha256
+    고정으로 내려받아 이 트리를 고친 PR 마다 아래 셋을 돌립니다(「검증」
+    절).
 
 ```
 conftest verify -c infra/terraform/scripts/guard-data/empty-config.toml \
