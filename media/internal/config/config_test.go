@@ -45,6 +45,9 @@ func TestLoadAppliesDefaults(t *testing.T) {
 		t.Errorf("IdleTimeout 이 인덱서(%v)와 워처(%v)에서 다르다",
 			cfg.Indexer.IdleTimeout, cfg.Watcher.IdleTimeout)
 	}
+	if !cfg.Indexer.SeedEnabled {
+		t.Error("REWIND_SEED_ENABLED 미설정 = 거짓 — 기본 켜짐이어야 한다(되감기 발행과 함께 켠다)")
+	}
 }
 
 // 필수 설정 누락은 즉시 명시적 에러다. 조용히 기본값으로 때우지 않는다.
@@ -107,12 +110,16 @@ func TestLoadParsesOverrides(t *testing.T) {
 	env["SEGMENT_SETTLE_WAIT"] = "3s"
 	env["SEGMENT_FIFO_MAX_LEN"] = "128"
 	env["LOG_LEVEL"] = "debug"
+	env["REWIND_SEED_ENABLED"] = "false"
 
 	cfg, err := Load(envOf(env))
 	if err != nil {
 		t.Fatalf("예상 밖 에러: %v", err)
 	}
 
+	if cfg.Indexer.SeedEnabled {
+		t.Error("REWIND_SEED_ENABLED=false 가 반영되지 않았다 — 롤백 손잡이가 사라졌다")
+	}
 	if cfg.SegmentRoot != "/다른/경로" {
 		t.Errorf("SegmentRoot = %q", cfg.SegmentRoot)
 	}
@@ -380,6 +387,7 @@ func TestLoadParsesUploadOverrides(t *testing.T) {
 	env["SEGMENT_UPLOAD_SWEEP_EVERY"] = "5s"
 	env["SEGMENT_UPLOAD_TAIL_HOLD"] = "3s"
 	env["SEGMENT_UPLOAD_CIRCUIT_MAX"] = "0"
+	env["REWIND_PUBLIC_BASE_URL"] = "https://media.pokeclip.com" // 버킷을 쓰면 필수다(계획 B-9)
 
 	cfg, err := Load(envOf(env))
 	if err != nil {
@@ -437,6 +445,8 @@ func TestLoadRejectsInconsistentUploadSettings(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			env := minimalEnv()
+			// 버킷 사례의 오류가 빈 베이스 URL 의 기동 거부(계획 B-9)로 대신 나지 않게 유효한 값을 준다.
+			env["REWIND_PUBLIC_BASE_URL"] = "https://media.pokeclip.com"
 			for k, v := range c.env {
 				env[k] = v
 			}
@@ -476,6 +486,7 @@ func TestDisabledUploaderIgnoresOtherS3Settings(t *testing.T) {
 		"SEGMENT_UPLOAD_CIRCUIT_MAX 가 음수":     {"SEGMENT_UPLOAD_CIRCUIT_MAX": "-1"},
 		"SEGMENT_UPLOAD_RETRY_MAX 가 0":        {"SEGMENT_UPLOAD_RETRY_MAX": "0"},
 		"SEGMENT_UPLOAD_SWEEP_EVERY 가 기간이 아님": {"SEGMENT_UPLOAD_SWEEP_EVERY": "곧"},
+		"REWIND_PUBLIC_BASE_URL 이 https 가 아님": {"REWIND_PUBLIC_BASE_URL": "http://media.example.com"},
 	}
 	for name, extra := range bad {
 		t.Run(name, func(t *testing.T) {
@@ -499,6 +510,8 @@ func TestDisabledUploaderIgnoresOtherS3Settings(t *testing.T) {
 		t.Run("버킷_있음/"+name, func(t *testing.T) {
 			env := minimalEnv()
 			env["S3_BUCKET"] = "pokeclip-media-demo-2557"
+			// 거부가 빈 베이스 URL(계획 B-9) 탓이 아니라 그 값 탓이어야 한다 — 유효한 값을 깔고 덮는다.
+			env["REWIND_PUBLIC_BASE_URL"] = "https://media.pokeclip.com"
 			for k, v := range extra {
 				env[k] = v
 			}
@@ -533,6 +546,8 @@ func TestLoadRejectsMalformedBucketAndEndpoint(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			env := minimalEnv()
 			env["S3_BUCKET"] = c.bucket
+			// 오류가 빈 베이스 URL 의 기동 거부(계획 B-9)로 대신 나지 않게 유효한 값을 준다.
+			env["REWIND_PUBLIC_BASE_URL"] = "https://media.pokeclip.com"
 			if c.endpoint != "" {
 				env["S3_ENDPOINT"] = c.endpoint
 			}
@@ -715,5 +730,123 @@ func TestLoadRejectsMalformedMTXAPIURL(t *testing.T) {
 				t.Errorf("에러에 키 이름이 없다: %v", err)
 			}
 		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 되감기 발행 (POK-195 M4 PR ⓒ 커밋 7 — 계획 B-9 · 판단 J85)
+// ---------------------------------------------------------------------------
+
+// withBucket 은 버킷을 쓰는(업로더 · 되감기 발행이 켜지는) 환경이다.
+func withBucket(env map[string]string) map[string]string {
+	env["S3_BUCKET"] = "pokeclip-media-demo-2557"
+	return env
+}
+
+// 되감기 목록의 조각 · MAP URI 앞머리(REWIND_PUBLIC_BASE_URL — 계획 B-9 확정 규칙 · r40 표 · 뮤테이션 95 · 96). 버킷을
+// 쓰면 되감기 목록도 발행하고, 이 값은 목록의 URI 줄에 그대로 실려 시청자에게 간다.
+//
+//	scheme  https 만 — http 는 호스트가 루프백 IP 리터럴(127.0.0.0/8 · ::1)일 때만 받는다(hls.js 실재생 리그가
+//	        http://127.0.0.1:8090 이다). localhost 는 이름 해석을 거치므로 예외가 아니다
+//	나머지  호스트가 있어야 한다. userinfo · query · fragment · 제어 문자 · 공백 · 따옴표 · 비ASCII 는 거부한다. 끝 '/'
+//	        는 하나까지 떼어 정규화하고 둘 이상이면 거부한다. 경로는 받는다
+//	빈값    버킷이 있으면 기동을 거부한다(fail-closed). 버킷이 없으면 읽지도 검증하지도 않는다
+func TestLoadRewindPublicBaseURL(t *testing.T) {
+	for _, tt := range []struct{ raw, want string }{
+		{"https://media.pokeclip.com", "https://media.pokeclip.com"},
+		{"https://media.pokeclip.com/", "https://media.pokeclip.com"},
+		{"https://cdn.example.com:8443/base", "https://cdn.example.com:8443/base"},
+		{"http://127.0.0.1:8090", "http://127.0.0.1:8090"},
+		{"http://[::1]:8090", "http://[::1]:8090"},
+	} {
+		t.Run("수락/"+tt.raw, func(t *testing.T) {
+			env := withBucket(minimalEnv())
+			env["REWIND_PUBLIC_BASE_URL"] = tt.raw
+
+			cfg, err := Load(envOf(env))
+
+			if err != nil {
+				t.Fatalf("기동이 거부됐다: %v", err)
+			}
+			if cfg.RewindPublicBaseURL != tt.want {
+				t.Errorf("RewindPublicBaseURL = %q, want %q", cfg.RewindPublicBaseURL, tt.want)
+			}
+		})
+	}
+	for _, tt := range []struct{ name, raw string }{
+		{"스킴_없음", "media.example.com"},
+		{"ftp", "ftp://x"},
+		{"루프백_밖_http", "http://media.example.com"},
+		{"localhost_http", "http://localhost:8090"},
+		{"호스트_없음", "https://"},
+		{"userinfo", "https://u:p@h"},
+		{"query", "https://h?x=1"},
+		{"fragment", "https://h#f"},
+		{"끝_슬래시_둘", "https://h//"},
+		{"공백", "https://h/a b"},
+		{"따옴표", `https://h/a"b`},
+		{"CR", "https://h/\r"},
+		{"NUL", "https://h/\x00"},
+		{"비ASCII_U+2028", "https://h/\u2028"},
+		// r40 표 밖 — 호스트 조항만 가르는 입력이다(`https://` 는 끝 '/' 둘 조항도 잡는다).
+		{"포트만_있고_호스트_없음", "https://:8443"},
+	} {
+		t.Run("거부/"+tt.name, func(t *testing.T) {
+			env := withBucket(minimalEnv())
+			env["REWIND_PUBLIC_BASE_URL"] = tt.raw
+
+			_, err := Load(envOf(env))
+
+			if err == nil {
+				t.Fatalf("REWIND_PUBLIC_BASE_URL=%q 를 받아들였다", tt.raw)
+			}
+			if !strings.Contains(err.Error(), "REWIND_PUBLIC_BASE_URL") {
+				t.Errorf("에러에 키 이름이 없다: %v", err)
+			}
+		})
+	}
+	t.Run("빈값/버킷_있음", func(t *testing.T) {
+		if _, err := Load(envOf(withBucket(minimalEnv()))); err == nil || !strings.Contains(err.Error(), "REWIND_PUBLIC_BASE_URL") {
+			t.Errorf("에러 = %v, want 기동 거부(REWIND_PUBLIC_BASE_URL)", err)
+		}
+	})
+	t.Run("빈값/버킷_없음", func(t *testing.T) {
+		cfg, err := Load(envOf(minimalEnv()))
+		if err != nil || cfg.RewindPublicBaseURL != "" {
+			t.Errorf("(RewindPublicBaseURL, 에러) = (%q, %v), want (\"\", nil)", cfg.RewindPublicBaseURL, err)
+		}
+	})
+}
+
+// userinfo 거부 문구는 원문을 싣지 않는다(S3_ENDPOINT 선례) — 거부 사유가 「비밀이 들어 있다」다. 다른 결함이 함께 있어도
+// 원문이 오류 문자열로 새지 않는다: 끝 '/' 둘은 userinfo 판정이 먼저고, 금지 바이트(공백)와 URL 로 못 읽는 값(포트 자리의
+// 글자)은 문구에 원문을 싣지 않는다.
+func TestRewindPublicBaseURLErrorOmitsUserinfo(t *testing.T) {
+	for _, raw := range []string{
+		"https://user:secret@media.example.com",
+		"https://user:secret@media.example.com//",
+		"https://user:secret@media.example.com/a b",
+		"https://user:secret@media.example.com:x",
+	} {
+		env := withBucket(minimalEnv())
+		env["REWIND_PUBLIC_BASE_URL"] = raw
+
+		_, err := Load(envOf(env))
+
+		if err == nil || strings.Contains(err.Error(), "secret") {
+			t.Errorf("REWIND_PUBLIC_BASE_URL=%q 의 에러 = %v, want 원문 없는 거부", raw, err)
+		}
+	}
+}
+
+// 30초 감시의 주기는 env 가 없는 설계값이다(계획 5절 「30 tick 감시」 · 판단 J85 ⑴) — 발행 루프가 이 값 ÷ 보류 틱마다
+// 감시 작업을 낸다. 버킷과 무관하게 늘 채운다(ReconnectWindow 와 같은 규칙).
+func TestLoadAppliesRewindWatchPeriod(t *testing.T) {
+	cfg, err := Load(envOf(minimalEnv()))
+	if err != nil {
+		t.Fatalf("예상 밖 에러: %v", err)
+	}
+	if cfg.RewindWatchEvery != 30*time.Second {
+		t.Errorf("RewindWatchEvery = %v, want 30s", cfg.RewindWatchEvery)
 	}
 }

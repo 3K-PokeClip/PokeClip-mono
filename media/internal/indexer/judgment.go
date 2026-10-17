@@ -262,6 +262,17 @@ func ingestStopped(tail *index.TailRow, now time.Time) bool {
 	return now.Sub(tail.StartWallUTC.Add(d)) >= 3*d
 }
 
+// IngestTail 은 streamID 의 커서 꼬리(장부에 마지막으로 넣은 조각)가 끝난 시각 end(start_wall_utc + duration_ms)다. 꼬리가
+// 없으면 ok 거짓이다 — 4.1 처럼 잴 것이 없다. 발행 루프가 뷰 버리기(cache.Forget)의 lastEnd 로 쓴다(판단 J72). 읽기만
+// 한다 — 4.1 판정 상태는 읽지도 바꾸지도 않는다. loop 단일 고루틴만 부른다(D10).
+func (ix *Indexer) IngestTail(streamID string) (end time.Time, ok bool) {
+	cur := ix.cursors[streamID]
+	if cur == nil || cur.Tail == nil {
+		return time.Time{}, false
+	}
+	return cur.Tail.StartWallUTC.Add(time.Duration(cur.Tail.DurationMS) * time.Millisecond), true
+}
+
 // offlineChecked 는 ③ 점검 완주다 — (a) 가장 최근에 적용된 수집이 4.1 완주이고 since +
 // IdleTimeout 뒤에 시작했고 (b) 그 수집에 이 스트림의 점검 결손이 없고 (c) 지금 FS
 // 래치가 정상이다.

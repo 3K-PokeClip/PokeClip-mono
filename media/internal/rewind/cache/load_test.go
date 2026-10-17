@@ -6,6 +6,7 @@ package cache_test
 // 차례대로 재생한다. 뷰가 없는 스트림의 개시 · 주조 push 는 뷰를 만들지 않고 적재를 요구한다.
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -333,6 +334,76 @@ func TestTrimKeepsRowsFromLastPublishedMSN(t *testing.T) {
 	c.ApplyInsert(stream, 22, seedOf("S", 22, at(88*time.Second), 4000))
 	if got := seqsOf(c.Snapshot(stream).RowsFrom(0)); !reflect.DeepEqual(got, []int64{22}) {
 		t.Errorf("뷰 끝 너머 Trim 뒤 행 = %v, want [22](이어 붙이기 그대로)", got)
+	}
+}
+
+// heldSessions 는 회차 R0..Rn 가운데 캐시가 든 것이다(회차 순).
+func heldSessions(c *cache.Cache, n int) []string {
+	var held []string
+	for i := 0; i <= n; i++ {
+		if id := fmt.Sprintf("R%d", i); func() bool { _, ok := c.Session(stream, id); return ok }() {
+			held = append(held, id)
+		}
+	}
+	return held
+}
+
+// 짧은 송출 순환(판단 J87 ⑵ · 보안 c5 L-1 · 체크리스트 B-3 40 의 캐시 쪽) — 같은 스트림이 짧게 송출하고 끊었다가 300초 안에
+// 다시 잇기를 되풀이하면 재접속마다 계승 회차가 하나씩 열린다. Trim 은 행을 자르면서, 남은 행 · 소유 회차 · 소유 회차가 계승한
+// 접두 회차 어느 것도 가리키지 않는 회차를 함께 버린다 — 버리지 않으면 회차 항목이 순환 수만큼 쌓인다(보안 실측: 재접속
+// 5,000번 뒤 행 1개 · 회차 5,001개). 목록(Playlist)과 발행본 재구성이 읽는 회차는 이 셋뿐이다. 뷰 끝 너머까지 잘라 행이
+// 비어도 소유 회차와 그 접두는 남는다 — 다음 행이 그 회차로 이어 붙는다.
+//
+// 회차 R0 은 seq 0 에서 새로 열었고, 순환마다 직전 회차가 끝난 뒤 12초 만에 다음 회차가 직전 회차를 계승해 연다(base 0
+// 복사 · 4초 조각 둘).
+func TestTrimBoundsSessionEntriesOverShortBroadcastCycles(t *testing.T) {
+	c := &cache.Cache{}
+	r0 := index.RewindSession{SessionID: "R0", State: "live", InitUploaded: true, FirstPDT: at(0), TargetDuration: 6, MinSeq: 0}
+	load(t, c, stream, ledgerOf(0, ledgerRun("R0", 0, 1, at(0)), r0))
+	const cycles = 50
+	prev, seq := "R0", int64(2)
+	for i := 1; i <= cycles; i++ {
+		id := fmt.Sprintf("R%d", i)
+		first := at(time.Duration(seq) * 10 * time.Second)
+		c.ApplySessionEnding(stream, prev) // 송출이 끊겨 4.1 이 직전 회차를 닫았다
+		open := index.RewindSession{SessionID: id, State: "live", FirstPDT: first, InheritsSession: prev, TargetDuration: 6}
+		c.ApplyInsert(stream, seq, openingOf(open, seq, 4000))
+		c.ApplyInsert(stream, seq+1, seedOf(id, seq+1, first.Add(4*time.Second), 4000))
+		c.Trim(stream, seq, seq) // 발행 성공 — 이번 회차의 첫 행부터 남긴다
+		prev, seq = id, seq+2
+	}
+
+	want := []string{"R49", "R50"} // 소유 회차 R50(행 · 소유)과 그 접두 R49
+	if got := heldSessions(c, cycles); !reflect.DeepEqual(got, want) {
+		t.Errorf("순환 %d번 뒤 회차 항목 = %v, want %v", cycles, got, want)
+	}
+	c.Trim(stream, seq+100, seq+100) // 뷰 끝 너머 — 행이 모두 빠진다
+	if got := heldSessions(c, cycles); !reflect.DeepEqual(got, want) {
+		t.Errorf("행을 모두 자른 뒤 회차 항목 = %v, want %v(소유 회차와 접두는 남는다)", got, want)
+	}
+}
+
+// Trim 이 버리는 것은 아무것도 가리키지 않는 회차뿐이다(판단 J87 ⑵) — 남은 행의 회차는 소유 회차도 접두도 아니어도 남는다
+// (목록 창이 아직 그 행을 실을 수 있다). 끝난 회차 Q 뒤에 10분 만에 비계승으로 새로 연 회차 N(접두 없음 · base 0)이 있을 때,
+// Q 의 행이 남아 있는 동안 Q 는 남고 그 행이 잘려 나가면 Q 도 빠진다.
+func TestTrimKeepsSessionsOfRemainingRows(t *testing.T) {
+	q := index.RewindSession{SessionID: "Q", State: "ended", EndReason: "offline", InitUploaded: true, FirstPDT: at(0),
+		TargetDuration: 6, MinSeq: 0}
+	n := index.RewindSession{SessionID: "N", State: "live", InitUploaded: true, FirstPDT: at(10 * time.Minute),
+		TargetDuration: 6, MinSeq: 4}
+	c := &cache.Cache{}
+	load(t, c, stream, ledgerOf(0, append(ledgerRun("Q", 0, 3, at(0)), ledgerRun("N", 4, 5, at(10*time.Minute))...), q, n))
+
+	c.Trim(stream, 2, 2) // Q 의 2..3 이 남는다
+	if _, ok := c.Session(stream, "Q"); !ok {
+		t.Error("남은 행(2..3)의 회차 Q 를 버렸다")
+	}
+	c.Trim(stream, 4, 4) // Q 의 행이 모두 빠진다
+	if _, ok := c.Session(stream, "Q"); ok {
+		t.Error("가리키는 것이 없는 회차 Q 가 남았다")
+	}
+	if _, ok := c.Session(stream, "N"); !ok {
+		t.Error("소유 회차 N 을 버렸다")
 	}
 }
 

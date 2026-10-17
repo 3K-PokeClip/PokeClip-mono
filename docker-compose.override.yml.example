@@ -25,7 +25,8 @@ services:
       # AWS_PROFILE:           ${AWS_PROFILE:-default}
       # --- 공통 ---
       AWS_REGION:                 ${AWS_REGION:-ap-northeast-2}
-      S3_BUCKET:                  ${S3_BUCKET:-pokeclip-media-demo-2557}
+      S3_BUCKET:                  ${S3_BUCKET-pokeclip-media-demo-2557}   # :- 가 아니라 - — S3_BUCKET= 로 비우면 그대로 비어 업로더가 꺼진다
+      REWIND_PUBLIC_BASE_URL:     ${REWIND_PUBLIC_BASE_URL-http://127.0.0.1:8090}   # ★ S3_BUCKET 이 있으면 필수(비면 기동 거부)
       LOG_LEVEL:                  ${LOG_LEVEL:-info}          # ★ 없으면 DEBUG 계측이 영구 0
       SEGMENT_UPLOAD_SWEEP_EVERY: ${SEGMENT_UPLOAD_SWEEP_EVERY:-30s}
       SEGMENT_UPLOAD_CIRCUIT_MAX: ${SEGMENT_UPLOAD_CIRCUIT_MAX:-3}

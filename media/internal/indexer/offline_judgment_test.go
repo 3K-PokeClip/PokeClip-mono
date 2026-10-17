@@ -956,3 +956,27 @@ func TestOfflineTriedEndsTheWait(t *testing.T) {
 		t.Errorf("session_offline = %d건, want 2(기다림마다 한 줄)", n)
 	}
 }
+
+// 발행 루프가 읽는 유입 꼬리(판단 J72 — kty 결정 ④ A 뒤로는 끝만 · 계획 4.5 A3 결정 5 〔r44〕) — 커서 꼬리의 끝(start_wall_utc +
+// duration_ms)이다. 루프는 그것을 뷰 버리기(cache.Forget)의 lastEnd 로 쓴다. 판정 시각과 무관한 값이고(4.1 ② 의 멈춤은 싣지 않는다 —
+// 소비자가 없다), 꼬리가 없으면(커서가 없거나 꼬리 없는 커서) 없다 — 4.1 처럼 잴 것이 없다.
+func TestIngestTailReportsCursorTailEnd(t *testing.T) {
+	f := newOfflineFixture(t)
+	f.makeFile("s1", segName(offlineT0, 0), 1000) // 꼬리 = 원점 시작 · 4초(프로브 4000) → 끝 원점+4초
+	f.collectAt(offlineAt(4 * time.Second))
+
+	if end, ok := f.ix.IngestTail("s1"); !ok || !end.Equal(offlineAt(4*time.Second)) {
+		t.Errorf("IngestTail = (%v, %v), want (원점+4s, true)", end, ok)
+	}
+	if end, ok := f.ix.IngestTail("없는스트림"); ok {
+		t.Errorf("커서 없는 스트림의 IngestTail = (%v, true), want 없음", end)
+	}
+
+	g := newOfflineFixture(t)
+	g.makeFile("s1", segName(baseWall, 0), 1000)
+	g.probe.vals = []int64{0} // 유일한 조각이 길이 0 이라 장부에 못 든다 — 커서는 서되 꼬리가 없다
+	g.collectAt(offlineAt(-time.Minute))
+	if end, ok := g.ix.IngestTail("s1"); ok {
+		t.Errorf("꼬리 없는 커서의 IngestTail = (%v, true), want 없음", end)
+	}
+}

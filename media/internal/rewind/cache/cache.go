@@ -17,6 +17,7 @@
 package cache
 
 import (
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -380,7 +381,9 @@ func (c *Cache) ApplyInheritanceRevoked(streamID, sessionID string) {
 // 마지막으로 계산한 창 꼬리, publishedMSN 은 live 소유 회차 발행본의 MSN 이다. 부르는 자리는 발행 성공 뒤의
 // 루프다(커밋 7). 다음 창 계산(prevTail = 꼬리)과 발행본 재구성(A1 무결성 대조 — [P.MSN, P 끝])이 둘 다 뷰 안에서
 // 서도록 둘 가운데 앞쪽부터 남긴다. 뷰 하한 앞으로는 되돌아가지 않고 뷰 끝 너머까지 버려도 다음 행 자리는 그대로다.
-// 뷰가 없거나 적재 중이면 아무것도 하지 않는다(적재가 뷰를 갈아 끼운다).
+// 행을 자르면 남은 행 · 소유 회차 · 소유 회차가 계승한 접두 회차 어느 것도 가리키지 않는 회차도 함께 버린다(판단 J87 ⑵
+// — 재접속이 잦은 live 스트림에서 회차 항목이 재접속 수만큼 쌓이지 않게). 목록(Playlist)과 발행본 재구성이 읽는 회차는
+// 이 셋뿐이다. 뷰가 없거나 적재 중이면 아무것도 하지 않는다(적재가 뷰를 갈아 끼운다).
 func (c *Cache) Trim(streamID string, tail, publishedMSN int64) {
 	v := c.readable(streamID)
 	if v == nil {
@@ -391,6 +394,19 @@ func (c *Cache) Trim(streamID string, tail, publishedMSN int64) {
 		return
 	}
 	v.rows, v.floor = v.rowsIn(from, v.nextSeq()-1), from
+	v.dropUnreferencedSessions()
+}
+
+// dropUnreferencedSessions 는 남은 행 · 소유 회차 · 그 접두 회차 어느 것도 가리키지 않는 회차를 버린다(Trim).
+func (v *view) dropUnreferencedSessions() {
+	keep := map[string]bool{}
+	for _, r := range v.rows {
+		keep[r.SessionID] = true
+	}
+	if o, ok := v.owner(); ok {
+		keep[o.SessionID], keep[o.InheritsSession] = true, true
+	}
+	maps.DeleteFunc(v.sessions, func(id string, _ Session) bool { return !keep[id] })
 }
 
 // Forget 은 streamID 의 뷰나 부정 표식을 버린다 — live 회차가 없고 마지막 행 끝 lastEnd 가 now 보다 window
@@ -522,6 +538,41 @@ func (s snapshot) RowsFrom(from int64) []boundary.Row {
 		return nil
 	}
 	return s.v.rowsIn(from, s.v.nextSeq()-1)
+}
+
+// Owner 는 streamID 의 소유 회차다 — 뷰의 회차 가운데 가장 늦게 연 회차(회차 최소 seq 가 가장 큰 회차)다(판단 J71 ⑴ ·
+// 계획 4.5 A0 결정 3). 루프는 이 회차의 목록에만 발행 틱을 내고(publish.ShouldTick), 사다리는 이 회차가 live 가 아니어도
+// 이 회차로 평가한다(리스크 C3). 재접속 개시는 직전 회차를 ending 으로 내리지 않아 캐시가 live 두 회차를 볼 수 있는데
+// (판단 J62) 그때도 뒤 회차다. 회차 최소 seq 는 회차마다 다르다 — 회차는 제 첫 행으로 열린다. 뷰가 없거나 적재 중이면
+// 거짓이다(적재 중 읽기는 「모른다」).
+func (c *Cache) Owner(streamID string) (Session, bool) {
+	v := c.readable(streamID)
+	if v == nil {
+		return Session{}, false
+	}
+	return v.owner()
+}
+
+// owner 는 뷰의 소유 회차다(Owner). 회차가 없으면 거짓이다.
+func (v *view) owner() (Session, bool) {
+	var o Session
+	found := false
+	for _, s := range v.sessions {
+		if !found || s.MinSeq > o.MinSeq {
+			o, found = s, true
+		}
+	}
+	return o, found
+}
+
+// Streams 는 캐시가 상태를 든 스트림 전부다(스트림 순) — 뷰가 있는 스트림 · 부정 표식 스트림 · 적재 중인 스트림(판단 J71
+// ⑵). 루프는 이것으로 스트림을 돌며 버리기(Forget)를 판정한다 — 부정 표식 스트림도 버려야 하므로 뷰만 내주는 DriftProbes 로는
+// 모자란다. 셋의 구분은 Loading(적재 중) · Snapshot 의 컷오프(뷰) · Owner 가 한다.
+func (c *Cache) Streams() []string {
+	if c == nil {
+		return nil
+	}
+	return slices.Sorted(maps.Keys(c.streams))
 }
 
 // Session 은 streamID 의 회차 sessionID 다. 캐시가 모르면 거짓이다. 적재 중에도 옛 뷰의 회차를 읽는다 — 틱을

@@ -56,6 +56,80 @@ func TestSegKeyRejectsNegativeSeq(t *testing.T) {
 	}
 }
 
+// ParseSegKey 는 SegKey 의 역이다(계획 B #10) — SegKey 가 만든 키는 만든 값 그대로 풀린다(왕복). 스트림 성분은 SegKey 와
+// 같은 검사(checkComponent)를 받으므로 SegKey 가 받는 점 든 성분도 풀린다.
+func TestParseSegKeyInvertsSegKey(t *testing.T) {
+	for _, tc := range []struct {
+		streamID string
+		seq      int64
+	}{
+		{"demo-stream", 123},
+		{"s", 0},
+		{"s", 999999},
+		{"s", 1000000},
+		{"str_7a", 1297},
+		{"a.b", 7},
+	} {
+		key, err := SegKey(tc.streamID, tc.seq)
+		if err != nil {
+			t.Fatalf("SegKey(%q, %d) 가 거부됐다: %v", tc.streamID, tc.seq, err)
+		}
+		gotStream, gotSeq, err := ParseSegKey(key)
+		if err != nil || gotStream != tc.streamID || gotSeq != tc.seq {
+			t.Errorf("ParseSegKey(%q) = (%q, %d, %v), want (%q, %d, nil)", key, gotStream, gotSeq, err, tc.streamID, tc.seq)
+		}
+	}
+}
+
+// ③ 키 문법 한 벌(계획 B #10 · 〔r37〕 ⑴) — 업로드 워커의 [0] 대상 검증과 목록 발행 전 검사 S5 가 이 함수를 함께 부른다.
+// 수락 집합은 워커가 쓰던 정규식(dvr/{스트림}/seg/{십진 6자리 이상}.m4s)과 같다 — 앞자리 0 으로 늘린 seq 도 받는다. 스트림
+// 성분만 SegKey 와 같은 검사로 본다(워커는 성분을 대상의 stream_id 와 견주고, 그 값은 이미 [A-Za-z0-9_-]{1,64} 다). seq 가
+// int64 를 넘는 키는 풀 수 없어 거부한다 — SegKey 가 만들 수 없는 모양이다.
+func TestParseSegKeyAcceptsOnlyTheSegmentKeyGrammar(t *testing.T) {
+	for _, tc := range []struct {
+		key      string
+		streamID string
+		seq      int64
+	}{
+		{"dvr/demo-stream/seg/000123.m4s", "demo-stream", 123},
+		{"dvr/s/seg/000000.m4s", "s", 0},
+		{"dvr/s/seg/1000000.m4s", "s", 1000000},
+		{"dvr/s/seg/0000007.m4s", "s", 7},
+		{"dvr/s/seg/9223372036854775807.m4s", "s", 9223372036854775807},
+	} {
+		gotStream, gotSeq, err := ParseSegKey(tc.key)
+		if err != nil || gotStream != tc.streamID || gotSeq != tc.seq {
+			t.Errorf("ParseSegKey(%q) = (%q, %d, %v), want (%q, %d, nil)", tc.key, gotStream, gotSeq, err, tc.streamID, tc.seq)
+		}
+	}
+	for _, key := range []string{
+		"",
+		"dvr/s/seg/00007.m4s",               // 자릿수 다섯
+		"dvr/s/seg/000007.mp4",              // 확장자
+		"dvr/s/seg/000007.M4S",              // 확장자 대소문자
+		"dvr/s/seg/000007.m4s\n",            // 끝 개행
+		"dvr/s/seg/000007.m4s\r",            // 끝 CR
+		"dvr/s/seg/000007.m4s?x=1",          // 질의
+		"dvr/s/seg/+00007.m4s",              // 부호
+		"dvr/s/seg/-000007.m4s",             // 음수
+		"dvr/s/seg/０００００７.m4s",              // 전각 숫자
+		"dvr/s/seg/9223372036854775808.m4s", // int64 를 넘는 seq
+		"dvr/../seg/000007.m4s",             // 상위 경로 참조
+		"dvr/./seg/000007.m4s",              // 현재 경로 참조
+		"dvr//seg/000007.m4s",               // 빈 스트림
+		"dvr/a/b/seg/000007.m4s",            // 경로 구분자가 든 스트림
+		"dvr/s b/seg/000007.m4s",            // 공백
+		"dvr/s\"/seg/000007.m4s",            // 따옴표
+		"dvr/s/init/000007.m4s",             // 다른 축(init) 자리
+		"streams/s/seg/000007.m4s",          // 다른 접두
+		"/dvr/s/seg/000007.m4s",             // 앞 구분자
+	} {
+		if gotStream, gotSeq, err := ParseSegKey(key); err == nil {
+			t.Errorf("ParseSegKey(%q) = (%q, %d, nil), want 오류", key, gotStream, gotSeq)
+		}
+	}
+}
+
 // 설계 5.2·5.3ⓐ: init 은 세션 축이다 — dvr/{streamID}/init/{sessionID}.mp4.
 func TestInitKeyMatchesContractShape(t *testing.T) {
 	got, err := InitKey("demo-stream", "S-20260902-101530-demo-stream-42")

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/playback"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/recording"
 )
 
@@ -193,8 +194,16 @@ func planMark(a index.Axis, target index.UploadState) markPlan {
 // "예약 키 그대로 PUT"이 계약이라 재계산 비교는 키 포맷을 바꾸는 순간 옛 행을 전부 거부한다.
 var s3KeyRe = regexp.MustCompile(`^streams/([A-Za-z0-9_-]{1,64})/\d{4}-\d{2}-\d{2}/\d{2}/seg_(\d{6,})\.m4s$`)
 
-// playbackKeyRe 는 ③ 재생 축 키의 문법이다 — 설계 5.2 의 형상 그대로다(playback.SegKey).
-var playbackKeyRe = regexp.MustCompile(`^dvr/([A-Za-z0-9_-]{1,64})/seg/(\d{6,})\.m4s$`)
+// playbackKeyParts 는 ③ 재생 축 키를 regexp.FindStringSubmatch 모양([키, 스트림 성분, seq 십진])으로 푼다 — 문법 밖이면
+// nil 이다. 문법의 소유자는 playback.ParseSegKey 하나다(목록 발행 전 검사 S5 와 같은 한 벌 — 계획 B #10). seq 를 십진으로
+// 되돌려 두므로 식별자 대조(keyIdentityMismatch)는 다른 축과 같은 길을 간다.
+func playbackKeyParts(key string) []string {
+	stream, seq, err := playback.ParseSegKey(key)
+	if err != nil {
+		return nil
+	}
+	return []string{key, stream, strconv.FormatInt(seq, 10)}
+}
 
 // initKeyRe 는 init(MAP) 축 키의 문법이다 — 설계 5.2·5.3ⓐ(playback.InitKey).
 // **둘째 그룹이 seq 가 아니라 sessionID 인 것이 축의 차이다.**
@@ -206,16 +215,16 @@ var playbackKeyRe = regexp.MustCompile(`^dvr/([A-Za-z0-9_-]{1,64})/seg/(\d{6,})\
 // quarantine)될 길이 없고, 경로 참조가 키에 실리는 길만 닫힌다.
 var initKeyRe = regexp.MustCompile(`^dvr/([A-Za-z0-9_-]{1,64})/init/([A-Za-z0-9_-]+)\.mp4$`)
 
-// keyPatternFor 는 축의 키 문법이다(설계 5.5.4 #3 — 축별 3벌).
-// 미판정 축은 nil 이다 — 호출자가 그 자리에서 거부한다(fail-closed).
-func keyPatternFor(a index.Axis) *regexp.Regexp {
+// keyGrammarFor 는 축의 키 문법이다(설계 5.5.4 #3 — 축별 3벌). 키가 맞으면 [키, 스트림 성분, 식별자 성분]을, 아니면 nil
+// 을 돌려주는 함수다(regexp.FindStringSubmatch 모양). 미판정 축은 nil 이다 — 호출자가 그 자리에서 거부한다(fail-closed).
+func keyGrammarFor(a index.Axis) func(string) []string {
 	switch a {
 	case index.AxisArchive:
-		return s3KeyRe
+		return s3KeyRe.FindStringSubmatch
 	case index.AxisPlayback:
-		return playbackKeyRe
+		return playbackKeyParts
 	case index.AxisInit:
-		return initKeyRe
+		return initKeyRe.FindStringSubmatch
 	default:
 		return nil
 	}
@@ -258,11 +267,11 @@ func (u *Uploader) validateTarget(t index.UploadTarget, lg *slog.Logger) (string
 		return reject("bad_stream_id")
 	}
 	// 키 문법은 축이 고른다. 축을 모르면 어떤 문법으로 볼지도 정할 수 없으므로 거부한다.
-	re := keyPatternFor(t.Axis)
-	if re == nil {
+	match := keyGrammarFor(t.Axis)
+	if match == nil {
 		return reject("bad_axis")
 	}
-	m := re.FindStringSubmatch(t.S3Key)
+	m := match(t.S3Key)
 	if m == nil || m[1] != t.StreamID {
 		return reject("bad_key")
 	}

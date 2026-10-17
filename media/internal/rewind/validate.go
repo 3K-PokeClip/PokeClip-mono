@@ -415,6 +415,9 @@ func totalMS(rows []boundary.Row) int64 {
 //	(그래서 플레이어가 보는 값과 같다). 반올림이 TD 분할 판정과 같은 식이라 입력도 같은 ms 정수로
 //	둔다(roundedSeconds)
 //	MAP 도달 가능 — 회차가 바뀌는 조각마다 그 회차 init 을 가리키는 MAP 이 있고 그 init 이 올라가 있다
+//	조각 줄 — 조각마다 duration_ms > 0 이고 조각 키가 ③ 키 문법(playback.ParseSegKey — 업로드 워커와 같은 한 벌)이며
+//	첫 성분이 목록의 스트림이다(계획 B #10). 키는 URI 줄에 그대로 실리므로 CR · 따옴표 · NUL 같은 글자가 줄로 새거나
+//	다른 스트림의 객체를 가리키는 줄을 막는다 — 「본문 = 목록 값」 조항은 본문이 키를 그대로 적었는지만 본다
 //
 // 「본문 = 목록 값」 조항(조각 수 · 머리 넷 · URI · PDT · EXTINF · GAP · MAP 개수·위치)은 checkBodyMatchesRows
 // 가 빈 목록 검사 다음, S4 보다 앞서 본다.
@@ -445,7 +448,28 @@ func checkBody(p Playlist, body []byte, lines []string, segs []segmentLines) err
 			return violation("S5", "seq %d: %s", r.Seq, problem)
 		}
 	}
+	for _, r := range p.Rows {
+		if problem := p.segmentProblem(r); problem != "" {
+			return violation("S5", "seq %d: %s", r.Seq, problem)
+		}
+	}
 	return nil
+}
+
+// segmentProblem 은 행 r 을 조각 줄로 낼 수 없는 까닭이다("" = 낼 수 있다) — 길이가 0 이하이거나, 조각 키가 ③ 키
+// 문법 밖이거나 다른 스트림의 키다(checkBody 의 조각 줄 조항). 외부 값은 64자까지만 싣는다.
+func (p Playlist) segmentProblem(r boundary.Row) string {
+	if r.DurationMS <= 0 {
+		return fmt.Sprintf("길이 %dms 가 0 이하다", r.DurationMS)
+	}
+	stream, _, err := playback.ParseSegKey(r.PlaybackS3Key)
+	switch {
+	case err != nil:
+		return fmt.Sprintf("조각 키가 ③ 키 문법 밖이다 — %v", err)
+	case stream != p.StreamID:
+		return fmt.Sprintf("조각 키 %.64q 는 다른 스트림 %.64q 의 것이다(목록 스트림 %.64q)", r.PlaybackS3Key, stream, p.StreamID)
+	}
+	return ""
 }
 
 // roundedSeconds 는 ms 를 가장 가까운 초로 반올림한다 — 딱 가운데(x.5초)는 올린다(6,499ms → 6 ·

@@ -217,7 +217,7 @@ func newLoopFixture(t *testing.T, withHook bool) *loopFixture {
 		rescans:     f.rescans,
 		armSweeper:  func() {}, // 완주 판정이 나도 이 파일의 관심사가 아니다 — no-op
 		stallFactor: collectStallFactor,
-		rewind:      rewindLoop{ix: ix, root: f.root, log: log, endLive: f.ends.endLive},
+		rewind:      &rewindLoop{ix: ix, root: f.root, log: log, endLive: f.ends.endLive},
 	}
 	if withHook {
 		f.deps.hookEvents = f.hookEv

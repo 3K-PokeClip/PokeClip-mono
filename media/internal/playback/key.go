@@ -12,6 +12,7 @@ package playback
 import (
 	"fmt"
 	"regexp"
+	"strconv"
 )
 
 // urlSafe 는 키 성분이 되감기 URL 경로에 그대로 실릴 수 있는 문자만 쓰는지 본다.
@@ -50,6 +51,32 @@ func SegKey(streamID string, seq int64) (string, error) {
 		return "", fmt.Errorf("playback: seq=%d 는 키에 쓸 수 없다(장부의 seq 는 0 부터 단조)", seq)
 	}
 	return fmt.Sprintf("dvr/%s/seg/%06d.m4s", streamID, seq), nil
+}
+
+// segKeyRe 는 SegKey 가 만드는 조각 키의 모양이다 — seq 는 십진 6자리 이상이다. 스트림 성분의 글자는 여기서 보지
+// 않고 checkComponent 가 본다(SegKey 와 같은 규칙 하나).
+var segKeyRe = regexp.MustCompile(`^dvr/([^/]+)/seg/([0-9]{6,})\.m4s$`)
+
+// ParseSegKey 는 SegKey 의 역이다 — 조각 키 key 를 스트림과 seq 로 푼다.
+//
+//	dvr/{streamID}/seg/{십진 6자리 이상}.m4s
+//
+// 스트림 성분은 SegKey 와 같은 검사(checkComponent)를 받고, seq 는 int64 에 드는 값이어야 한다. 앞자리 0 으로 늘린
+// seq(0000007)도 받는다. 모양이 다르면 오류다. ③ 키 문법은 이 한 벌이다 — 업로드 워커의 대상 검증과 목록 발행 전
+// 검사 S5 가 함께 부른다(계획 B #10). 오류 문구에는 키를 64자까지만 싣는다(장부 값이라 길이 제한이 없다).
+func ParseSegKey(key string) (streamID string, seq int64, err error) {
+	m := segKeyRe.FindStringSubmatch(key)
+	if m == nil {
+		return "", 0, fmt.Errorf("playback: 조각 키 %.64q 는 dvr/{stream}/seg/{6자리 이상}.m4s 가 아니다", key)
+	}
+	if checkComponent("stream_id", m[1]) != nil {
+		return "", 0, fmt.Errorf("playback: 조각 키 %.64q 의 스트림 성분은 키에 쓸 수 없다(URL 안전 문자 [A-Za-z0-9._-] 만 · 상위 · 현재 경로 참조 금지)", key)
+	}
+	seq, err = strconv.ParseInt(m[2], 10, 64)
+	if err != nil {
+		return "", 0, fmt.Errorf("playback: 조각 키 %.64q 의 seq 가 int64 를 넘는다", key)
+	}
+	return m[1], seq, nil
 }
 
 // InitKey 는 세션 하나의 init(MAP) 키다 — 설계 5.2·5.3ⓐ.

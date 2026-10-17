@@ -605,3 +605,45 @@ func TestLanesAreIndependent(t *testing.T) {
 		t.Errorf("결과 = %v, want %v", got, want)
 	}
 }
+
+// 차선 대기(판단 J74 · 커밋 순서 7 〔r52〕 종료 순서) — 루프가 끝나면 차선 ctx 를 취소하고 Wait 로 떠 있는 작업 고루틴이 모두
+// 끝나기를 기다린 뒤에 fence 를 반납한다(Release). Wait 는 도는 작업이 돌아오고, 결과를 보내지 못한 고루틴이 ctx 취소로 끝날
+// 때까지 돌아오지 않는다 — 먼저 돌아오면 반납 뒤에 늦은 문장이 나간다. 결과를 받을 루프가 없어도(Done 을 읽지 않는다) 취소가
+// 보내지 못한 고루틴을 끝낸다.
+func TestLanesWaitReturnsAfterEveryJobGoroutineEnds(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	lanes := NewLanes()
+	release := make(chan struct{})
+	var ended atomic.Int32
+	lanes.Start(ctx, "str", func(ctx context.Context) Result { // 취소 뒤에도 문장이 끝나야 돌아오는 작업
+		<-ctx.Done()
+		<-release
+		ended.Add(1)
+		return Result{Kind: KindPublish}
+	})
+	lanes.StartProcess(ctx, func(context.Context) Result { // 끝났지만 결과를 보내지 못하는 작업
+		ended.Add(1)
+		return Result{Kind: KindWatch}
+	})
+	cancel()
+
+	waited := make(chan struct{})
+	go func() {
+		lanes.Wait()
+		close(waited)
+	}()
+	select {
+	case <-waited:
+		t.Fatal("도는 작업이 있는데 Wait 가 돌아왔다")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-waited:
+	case <-time.After(5 * time.Second):
+		t.Fatal("작업이 모두 돌아왔는데 Wait 가 돌아오지 않았다")
+	}
+	if n := ended.Load(); n != 2 {
+		t.Errorf("Wait 뒤 끝난 작업 = %d, want 2", n)
+	}
+}

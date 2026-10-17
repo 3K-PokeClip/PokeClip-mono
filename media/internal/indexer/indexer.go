@@ -142,7 +142,7 @@ type Options struct {
 	// TailGrace 처럼 "자체 모순"이 아니다.
 	ObsFresh    time.Duration
 	ObsBackfill time.Duration
-	// SeedEnabled 는 ③ 체제 플래그다(계약 6항 2단계 — REWIND_SEED_ENABLED, 기본 꺼짐).
+	// SeedEnabled 는 ③ 체제 플래그다(계약 6항 2단계 — REWIND_SEED_ENABLED, 기본 켜짐).
 	// 효력은 "컷오프 없는 스트림에 최초 컷오프를 만들 권한"뿐이다: 꺼져 있으면 주조를
 	// 시도하지 않고(구 동작 — c1) INSERT 는 그대로 돈다. 해제해도 이미 기록된 컷오프는
 	// 유효하다 — 4축 술어는 장부를 읽지 플래그를 읽지 않는다.
@@ -302,6 +302,13 @@ func (ix *Indexer) SetAdopter(a Adopter) {
 		a = noAdopter{log: ix.log}
 	}
 	ix.adopt = a
+}
+
+// SetRewindCache 는 되감기 캐시를 끼운다 — 발행 몫을 조립할 때 조립점이 한 번 부른다(계획 4.5 A3 결정 2 〔r44〕). 끼운
+// 뒤로 장부에 커밋된 행(INSERT push)과 꼬리 교정(교정 push)이 그 캐시에 닿는다. nil 은 캐시의 nil 규약 그대로다 —
+// *cache.Cache 의 nil 은 모든 메서드가 아무것도 하지 않으므로 SetAdopter 와 달리 널 오브젝트로 펴지 않는다.
+func (ix *Indexer) SetRewindCache(c *cache.Cache) {
+	ix.rewind = c
 }
 
 // New 는 인덱서를 만든다. w 에는 *recording.Watcher 를, up 에는 *upload.Uploader 를,

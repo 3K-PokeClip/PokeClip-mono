@@ -322,3 +322,65 @@ func withStream(p rewind.Playlist, streamID string) rewind.Playlist {
 	p.StreamID = streamID
 	return p
 }
+
+// S5 조각 줄 조항 — 키(계획 B #10 · 〔r37〕 ⑴ · 뮤테이션 97). 조각 키는 ③ 키 문법(playback.ParseSegKey — 업로드 워커와
+// 같은 한 벌)이어야 하고 첫 성분이 목록의 스트림이어야 한다. 키는 URI 줄에 그대로 실리므로(BaseURL + "/" + 키) 다른
+// 스트림의 객체를 가리키거나 CR · 따옴표 · NUL 같은 글자를 목록 줄로 내보낼 수 있다. 「본문 = 목록 값」 조항은 본문이 그
+// 키를 그대로 적었는지만 보므로 이것을 막지 못한다 — 개행만 줄이 어긋나 그 조항이 먼저 잡는다. 장부는 INSERT 때 SegKey
+// 로 키를 예약하므로 이런 키는 쓰기 경로 밖 입력이다(발행 직전의 심층 방어).
+//
+// 목록은 회차 N(seq 700 에서 개시 · TD 6)의 700..703 이고 seq 702 의 키만 바꾼다.
+func TestValidateRejectsForeignOrMalformedSegmentKey(t *testing.T) {
+	n := rewind.Session{ID: "N", TargetDuration: 6, MinSeq: 700, InitUploaded: true}
+	tests := []struct {
+		name string
+		key  string
+		want string
+	}{
+		{"장부_키_그대로", "dvr/str/seg/000702.m4s", ""},
+		{"다른_스트림의_키", "dvr/other/seg/000702.m4s", "S5"},
+		{"자릿수_다섯", "dvr/str/seg/00702.m4s", "S5"},
+		{"확장자", "dvr/str/seg/000702.mp4", "S5"},
+		{"상위_경로_참조", "dvr/../seg/000702.m4s", "S5"},
+		{"끝_CR", "dvr/str/seg/000702.m4s\r", "S5"},
+		{"따옴표", `dvr/str"/seg/000702.m4s`, "S5"},
+		{"NUL", "dvr/str/seg/000702.m4s\x00", "S5"},
+		{"개행", "dvr/str/seg/000702.m4s\n#EXT-X-ENDLIST", "S5"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rows := run("N", 700, 703, day)
+			rows[2].PlaybackS3Key = tt.key
+
+			err := validate(t, playlist("N", []rewind.Session{n}, rows), 1, nil)
+
+			wantVerdict(t, err, tt.want)
+		})
+	}
+}
+
+// S5 조각 줄 조항 — 길이(계획 B #10 · 〔r37〕 ⑴ · 뮤테이션 98). duration_ms 는 0 보다 커야 한다 — 0 · 음수 행은 EXTINF
+// 줄로 0.000 · -1.-500 같은 값을 내보낸다. 장부는 쓰기 경로의 폭 검증(indexer H7)이 양수만 넣으므로 이런 행도 쓰기 경로
+// 밖 입력이다. 경계 1ms 는 통과한다. 목록은 위와 같고 seq 702 의 길이만 바꾼다.
+func TestValidateRejectsNonPositiveDuration(t *testing.T) {
+	n := rewind.Session{ID: "N", TargetDuration: 6, MinSeq: 700, InitUploaded: true}
+	tests := []struct {
+		name       string
+		durationMS int32
+		want       string
+	}{
+		{"1ms", 1, ""},
+		{"0ms", 0, "S5"},
+		{"음수", -1500, "S5"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rows := run("N", 700, 703, day)
+			rows[2].DurationMS = tt.durationMS
+
+			err := validate(t, playlist("N", []rewind.Session{n}, rows), 1, nil)
+
+			wantVerdict(t, err, tt.want)
+		})
+	}
+}

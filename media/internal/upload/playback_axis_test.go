@@ -301,6 +301,48 @@ func TestUploaderHasNoDirtySetWithoutConsumer(t *testing.T) {
 	}
 }
 
+// 소비자가 붙는 국면(판단 J70 · 계획 2.1 upload.go 행 「소비자 국면에만」) — 발행 몫을 조립한 조립점이 Start 전에
+// AttachDirty 를 부르면 워커 고루틴이 ③·init 결과를 그 집합에 표시하고, 루프는 Dirty 로 읽는다. 붙이는 것은 Start 전뿐이다
+// — Start 뒤에는 워커 고루틴이 떠 있어 바꾸면 레이스라 아무것도 하지 않는다(집합 nil 그대로). Disabled 업로더도 아무것도 하지
+// 않는다(표시할 워커가 없다). 워커 고루틴을 실제로 띄우므로 -race 가 붙이기와 표시의 순서를 본다.
+func TestAttachDirtyOnlyBeforeStart(t *testing.T) {
+	t.Run("Start_전에_붙이면_워커가_표시한다", func(t *testing.T) {
+		u, _, dir := newTestUploader(t, &fakeUploadStore{}, &fakePutter{}, func(o *Options) { o.Producer = &fakeProducer{} })
+		seg := playbackTarget(t, "demo", 7, "S-1", writeSegment(t, dir, "demo", "seg7.mp4", 64), 64)
+		seg.ExpectedInitSHA = fakeInitSHA()
+
+		u.AttachDirty()
+		u.Start(context.Background())
+		defer u.Shutdown()
+
+		if !u.RequestUpload(seg) {
+			t.Fatal("RequestUpload = false, want true")
+		}
+		waitFor(t, func() bool { return len(u.Dirty().Peek()) == 1 }, "③ 결과 표시")
+		sameEvents(t, u.Dirty().Peek(), []DirtyEvent{playbackUploaded7})
+	})
+	t.Run("Start_뒤에는_붙지_않는다", func(t *testing.T) {
+		u, _, _ := newTestUploader(t, &fakeUploadStore{}, &fakePutter{}, nil)
+		u.Start(context.Background())
+		defer u.Shutdown()
+
+		u.AttachDirty()
+
+		if u.Dirty() != nil {
+			t.Error("Start 뒤 AttachDirty 가 집합을 붙였다 — 워커 고루틴과 레이스다")
+		}
+	})
+	t.Run("Disabled_는_붙지_않는다", func(t *testing.T) {
+		u := Disabled(newLogCapture().logger())
+
+		u.AttachDirty()
+
+		if u.Dirty() != nil {
+			t.Error("Disabled 의 AttachDirty 가 집합을 붙였다")
+		}
+	})
+}
+
 // ③ 산출에 실패하면 아무것도 올리지 않는다(계획 2.1 · A6 「잘린 실물 고착」 방어 · 6.4 「③ 실패
 // 주입」). 다시 읽으면 달라질 수 있는 실패 — 입력 해석 실패(쓰는 중에 잘린 입력일 수 있다)와 임의
 // 오류 — 는 재시도 사다리를 탄다: 시도마다 다시 만들고, 소진하면 ③ 을 failed 로 확정하며(재수집

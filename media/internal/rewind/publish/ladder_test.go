@@ -195,8 +195,9 @@ func TestLadderStageOneGapIgnoresStallAge(t *testing.T) {
 }
 
 // L4(설계 4.6.3 · 판단 J29 · J30) — 발행 이력이 있는 live 소유 회차의 stallAge(마지막 발행 성공을 받은 시각부터)가
-// 갱신 의무 9.0 − T_edge 1.5 = 7.5초에 닿았는데 L2 가 서지 못하면 rewind_publish_stall_seconds ERROR 한 줄이다(속성:
-// 정체 초 · L2 가 서지 못한 까닭 · 직전 틱 결과). 같은 정체에는 한 줄이고, 발행이 성공하면 다시 무장한다.
+// 갱신 의무 9.0 − T_edge 1.5 = 7.5초에 닿았는데 L2 가 서지 못하면 rewind_publish_stall_seconds 한 줄이다(속성:
+// 정체 초 · L2 가 서지 못한 까닭 · 직전 틱 결과 — 이 픽스처의 까닭은 no_row 라 WARN 이다 · kty 결정 ④ A). 같은 정체에는
+// 한 줄이고, 발행이 성공하면 다시 무장한다.
 func TestLadderAlarmsOncePerStall(t *testing.T) {
 	logs := &logRecorder{}
 	pub := newLadderPublisher(logs)
@@ -220,8 +221,8 @@ func TestLadderAlarmsOncePerStall(t *testing.T) {
 	eval(published.Add(9 * time.Second))
 
 	recs := logs.records(stallLog)
-	if len(recs) != 1 || recs[0].level != slog.LevelError {
-		t.Fatalf("%s %+v, want ERROR 한 줄(같은 정체에는 한 줄)", stallLog, recs)
+	if len(recs) != 1 || recs[0].level != slog.LevelWarn {
+		t.Fatalf("%s %+v, want WARN 한 줄(no_row · 같은 정체에는 한 줄)", stallLog, recs)
 	}
 	want := map[string]string{"stream": fxStream, "session": "S", "seconds": "7.5", "gap": "no_row", "last_abort": "gap_tx_failed"}
 	for k, v := range want {
@@ -234,6 +235,54 @@ func TestLadderAlarmsOncePerStall(t *testing.T) {
 	eval(in.PublishedAt.Add(7500 * time.Millisecond))
 	if n := len(logs.records(stallLog)); n != 2 {
 		t.Errorf("발행 성공 뒤 다시 정체한 %s %d줄, want 2", stallLog, n)
+	}
+}
+
+// L4 줄의 등급(kty 결정 ④ = A · qa #92 — 판단 J73 대체 · kty #76 ① · 계획 부기 9 · 커밋 순서 7 ⓔ) — 사다리는 등급을 이미 아는
+// 까닭 값으로 가른다: 머리 다음 행이 캐시 뷰에 없으면(no_row — 유입이 멈춘 방송 종료 구간의 모양) WARN, 그 밖의 까닭(incomplete ·
+// before_cutoff · holding · unstood)은 ERROR 다. 시각에 기대지 않는다 — 문턱(7.5초) · 정체 한 번에 한 줄 · 속성 · gap 값은 까닭과
+// 무관하게 같다.
+func TestLadderAlarmLevelFollowsBlockedReason(t *testing.T) {
+	unstood := int64(6)
+	tests := []struct {
+		name    string
+		snap    func() rowsSnapshot
+		hold    time.Duration // 행 6 의 holdAge
+		unstood *int64
+		gap     string
+		level   slog.Level
+	}{
+		{"행_없음", func() rowsSnapshot { s := stalledRows(); s.rows = s.rows[:6]; return s }, time.Hour, nil, "no_row", slog.LevelWarn},
+		{"행_불완전", func() rowsSnapshot { s := stalledRows(); s.rows[6].PlaybackPDT = time.Time{}; return s }, time.Hour, nil, "incomplete", slog.LevelError},
+		{"컷오프_아래", func() rowsSnapshot { s := stalledRows(); s.cutoff = 7; return s }, time.Minute, nil, "before_cutoff", slog.LevelError},
+		{"GAP_HOLD_앞", stalledRows, time.Second, nil, "holding", slog.LevelError},
+		{"GAP_서지_않음", stalledRows, time.Minute, &unstood, "unstood", slog.LevelError},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logs := &logRecorder{}
+			pub := newLadderPublisher(logs)
+			in := ladderInput(tt.snap(), dueOf6.Add(tt.hold))
+			published := in.Now.Add(-7499 * time.Millisecond)
+			in.PublishedAt, in.UnstoodGapSeq = published, tt.unstood
+			var st LadderState
+
+			for _, d := range []time.Duration{7499 * time.Millisecond, 7500 * time.Millisecond, 9 * time.Second} {
+				in.Now = published.Add(d)
+				st, _ = pub.EvaluateLadder(t.Context(), st, in)
+			}
+
+			recs := logs.records(stallLog)
+			if len(recs) != 1 || recs[0].level != tt.level {
+				t.Fatalf("%s %+v, want %v 한 줄(문턱 7.5초 · 정체 한 번에 한 줄)", stallLog, recs, tt.level)
+			}
+			want := map[string]string{"stream": fxStream, "session": "S", "seconds": "7.5", "gap": tt.gap, "last_abort": ""}
+			for k, v := range want {
+				if got := recs[0].attrs[k]; got != v {
+					t.Errorf("속성 %s = %q, want %q", k, got, v)
+				}
+			}
+		})
 	}
 }
 
@@ -561,9 +610,9 @@ func TestLadderVerdictIsPure(t *testing.T) {
 	st1, step1, sig1 := evaluateLadder(opt, LadderState{}, in)
 	st2, step2, sig2 := evaluateLadder(opt, LadderState{}, in)
 
-	if sig1 == nil || sig2 == nil || sig1.level != slog.LevelError || !slices.Equal(sig1.attrs, sig2.attrs) ||
+	if sig1 == nil || sig2 == nil || sig1.level != slog.LevelWarn || !slices.Equal(sig1.attrs, sig2.attrs) ||
 		st1 != st2 || step1 != step2 {
-		t.Fatalf("판정 두 번 = (%+v, %+v, %+v) · (%+v, %+v, %+v), want 같은 값 · L4 ERROR 신호", st1, step1, sig1, st2, step2, sig2)
+		t.Fatalf("판정 두 번 = (%+v, %+v, %+v) · (%+v, %+v, %+v), want 같은 값 · L4 WARN 신호(no_row)", st1, step1, sig1, st2, step2, sig2)
 	}
 	logs := &logRecorder{}
 	pub := newLadderPublisher(logs)

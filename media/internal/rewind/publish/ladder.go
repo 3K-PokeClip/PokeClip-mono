@@ -9,7 +9,8 @@ package publish
 //
 //	L1  holdAge ≥ 0.5초                                  k 의 ③ 백오프를 당긴다(upload.Uploader.Expedite)
 //	L2  holdAge ≥ GAP_HOLD ∧ 적격 ①②⑤(캐시 행)             k 로 GAP 틱(③ fence · ④ 미uploaded 는 GAP 트랜잭션이 본다)
-//	L4  stallAge ≥ 갱신 의무 − T_edge ∧ L2 가 서지 못함     rewind_publish_stall_seconds ERROR(정체 한 번에 한 줄)
+//	L4  stallAge ≥ 갱신 의무 − T_edge ∧ L2 가 서지 못함     rewind_publish_stall_seconds ERROR(정체 한 번에 한 줄) —
+//	                                                     서지 못한 까닭이 no_row(유입이 멈춘 방송 종료 구간의 모양)면 WARN
 //
 // L2 를 결정한 행의 「L2 가 서지 못함」은 사실로 받는다 — L2 를 결정한 평가는 GAP 틱에 차례를 주고 L4 를 누르고, 결과가
 // 돌아온 그 행의 GAP 틱이 서지 않았다는 사실(LadderInput.UnstoodGapSeq)이 있을 때만 누르지 않는다(gap=unstood).
@@ -28,8 +29,8 @@ import (
 )
 
 // stallLog 는 목록 발행이 멈췄다는 신호다 — 설계 관측 목록의 rewind_publish_stall_seconds(계획 5절 기정 신호)를 메트릭
-// 기반이 없어 로그 키로 남긴다. L4 경보(ERROR)와 ending 회차의 발행 정지(C3 WARN)가 같은 이름을 쓴다(리스크 C3
-// 「라벨 재사용」 · 판단 J30).
+// 기반이 없어 로그 키로 남긴다. L4 경보(ERROR — 까닭이 no_row 면 WARN · kty 결정 ④ A)와 ending 회차의 발행 정지(C3 WARN)가
+// 같은 이름을 쓴다(리스크 C3 「라벨 재사용」 · 판단 J30).
 const stallLog = "rewind_publish_stall_seconds"
 
 // L2 가 서지 못한 까닭 — L4 경보의 gap 속성 값이다(판단 J30 「귀속 판정」).
@@ -182,7 +183,8 @@ func gapIneligible(r boundary.Row, found bool, cutoff int64) string {
 // alarm 은 L4 다 — 발행 이력이 있는 live 소유 회차의 stallAge 가 갱신 의무 − T_edge 에 닿았는데 L2 가 서지 못하면
 // ERROR 신호 하나를 돌려준다(설계 4.6.3 「ERROR + 귀속 판정 기록」). 속성은 정체 초 · L2 가 서지 못한 까닭(blocked —
 // 빈 값이 아니다) · 직전 틱의 중단 사유(없으면 빈 값)다. 첫 발행 전에는 없다 — 방송 시작 지연은 다른 신호
-// 몫이다(판단 J29).
+// 몫이다(판단 J29). 까닭이 no_row(머리 다음 행이 캐시 뷰에 없다 — 유입이 멈춘 방송 종료 구간의 모양)면 등급만 WARN 이다(kty
+// 결정 ④ A · kty #76 ① — 판정은 이미 아는 까닭 값으로 하고 시각에 기대지 않는다. 문턱 · 1회 가드 · 속성은 그대로).
 func alarm(opt Options, st LadderState, in LadderInput, blocked string) (LadderState, *ladderSignal) {
 	since, ok := stallSince(in)
 	if !ok || st.alarmed.Equal(since) {
@@ -193,7 +195,11 @@ func alarm(opt Options, st LadderState, in LadderInput, blocked string) (LadderS
 		return st, nil
 	}
 	st.alarmed = since
-	return st, &ladderSignal{level: slog.LevelError, attrs: []any{"stream", in.StreamID, "session", in.Owner.SessionID,
+	level := slog.LevelError
+	if blocked == l2NoRow {
+		level = slog.LevelWarn
+	}
+	return st, &ladderSignal{level: level, attrs: []any{"stream", in.StreamID, "session", in.Owner.SessionID,
 		"seconds", stall.Seconds(), "gap", blocked, "last_abort", in.Publish.lastAbort.reason}}
 }
 

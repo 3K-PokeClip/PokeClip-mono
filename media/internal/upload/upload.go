@@ -161,7 +161,7 @@ type Uploader struct {
 	// sessions 는 회차별 메모리다(보정값 표·sessionInit·보류 목록). Disabled 업로더에는 없다(nil).
 	sessions *sessionMemory
 
-	// dirty 는 ③·init 결과 이벤트 집합이다. 소비자(되감기 발행 루프)가 붙기 전에는 nil 이라
+	// dirty 는 ③·init 결과 이벤트 집합이다. 소비자(되감기 발행 루프)가 붙기(AttachDirty) 전에는 nil 이라
 	// 표시가 no-op 이다 — 아무도 비우지 않는 원소를 쌓지 않는다(계획 6.4 「ⓐ 단독 국면 메모리 0」).
 	// 사실은 이미 장부에 있어 소비자가 붙을 때 부팅 재구성이 복원한다.
 	dirty *Dirty
@@ -260,9 +260,20 @@ func (u *Uploader) Results() <-chan Result {
 // Disabled 업로더에서는 nil 이다 — nil 집합의 메서드는 아무것도 하지 않는다(Results 와 같은 이디엄).
 func (u *Uploader) Dirty() *Dirty { return u.dirty }
 
-// ForgetSession 은 끝난 회차의 sessionInit·보류 목록을 지운다. 고루틴 안전하다. 부를 자리는 루프가
-// 세션 종료(분리·TD 분할·오프라인)를 관측하는 곳이지만 그 배선은 ⓑ/ⓒ 몫이다 — ⓐ 에는 호출자가 없고,
-// 그동안은 수명(Options.SessionTTL)이 같은 것을 치운다.
+// AttachDirty 는 ③·init 결과 이벤트 집합을 붙인다 — 소비자(되감기 발행 루프)가 붙는 국면에만, 발행 몫을 조립한 조립점이
+// Start 전에 한 번 부른다(판단 J70). 붙인 뒤로 워커가 결과마다 표시하고 루프가 Dirty 로 읽는다. Start 뒤에는 워커 고루틴이
+// 떠 있어 바꾸면 레이스라 아무것도 하지 않고, Disabled 업로더도 아무것도 하지 않는다(표시할 워커가 없다). Start 처럼 메인
+// 고루틴에서만 부른다.
+func (u *Uploader) AttachDirty() {
+	if u.off || u.state.Load() != int32(lifecycleNew) {
+		return
+	}
+	u.dirty = &Dirty{}
+}
+
+// ForgetSession 은 끝난 회차의 sessionInit·보류 목록을 지운다. 고루틴 안전하다. 부르는 자리는 루프가
+// 세션 종료(분리·오프라인)를 관측하는 곳이고, 되감기 발행 몫을 조립했을 때만 배선된다(판단 J86). 루프가
+// 관측하지 못하는 TD 분할과 배선이 없는 국면은 수명(Options.SessionTTL)이 같은 것을 치운다.
 //
 // 보정값 표는 남긴다: 정산 창(ending)의 스위퍼 재시도가 같은 보정값을 써야 한다(계획 4.2-R R3).
 // 표는 수명(Options.SessionTTL)이 치운다.

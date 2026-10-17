@@ -45,7 +45,7 @@ type offlineLoop struct {
 	ix     *indexer.Indexer
 	cache  *cache.Cache
 	ends   *fakeEndLive
-	rewind rewindLoop
+	rewind *rewindLoop
 	// t0 은 픽스처를 만든 실시계 시각이고 since 는 t0 − 15초다 — 기다림을 여는 관측 시각의 기본값.
 	t0, since time.Time
 	// last 는 마지막으로 수집을 발사한 틱의 실시계 창이다(재점검 경계용).
@@ -76,7 +76,7 @@ func newOfflineLoop(t *testing.T, edit func(*indexer.Options)) *offlineLoop {
 	}
 	log := slog.New(f.logs)
 	f.ix = indexer.New(f.store, f.probe.fn, noopAdopter{}, nil, f.obs, opt, log)
-	f.rewind = rewindLoop{ix: f.ix, root: f.root, cache: f.cache, log: log, endLive: f.ends.endLive}
+	f.rewind = &rewindLoop{ix: f.ix, root: f.root, cache: f.cache, log: log, endLive: f.ends.endLive}
 	return f
 }
 

@@ -8,9 +8,9 @@ package publish
 //
 // 차선의 작업은 셋이다 — 발행(Tick · RenewFence) · 적재(LoadLedger) · 30초 감시(Watch). 적재 · 감시의 신호는 루프가
 // 결과를 캐시에 반영한 뒤 얇은 래퍼 둘(ReportLoad · ReportWatch)로 남긴다 — 작업은 값만 돌려주고 캐시에는 로거가
-// 없다(체크리스트 419 A-7 4 · 장부 421 P-7).
+// 없다(체크리스트 419 A-7 4 · 장부 421 P-7). 작업이 표 밖 실패로 끝나면 루프가 ReportJobError 로 남긴다(판단 J78).
 //
-// 호출자는 아직 없다 — 루프 배선(rewindDone case · 입력 공급 · P 보관 · 래퍼 호출)은 커밋 7 이다.
+// 호출자는 cmd/segment-indexer 의 루프 보조 타입(rewindLoop)이다 — rewindDone case · 입력 공급 · P 보관 · 래퍼 호출을 거기서 한다(커밋 7).
 
 import (
 	"context"
@@ -22,6 +22,7 @@ import (
 	"regexp"
 	"slices"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -519,11 +520,13 @@ type laneKey struct {
 // 번 더 낸다). 병합된 요청의 작업은 돌리지 않는다 — 그 작업이 든 입력은 요청 때의 스냅숏이라 낡았다(A-6 5).
 //
 // 워커는 입력 값만 받는다 — 캐시 · Dirty 를 만지지 않는다(A-6 4). Lanes 의 메서드는 루프 고루틴 하나에서만
-// 부른다(차선 표는 잠그지 않는다). 워커 고루틴은 결과를 보내거나 작업에 준 ctx 가 끝나면 끝난다.
+// 부른다(차선 표는 잠그지 않는다). 워커 고루틴은 결과를 보내거나 작업에 준 ctx 가 끝나면 끝난다 — Wait 가 그 끝을 기다린다.
 type Lanes struct {
 	done    chan Result
 	running map[laneKey]bool
 	merged  map[laneKey]bool
+	// workers 는 떠 있는 작업 고루틴이다(Wait).
+	workers sync.WaitGroup
 }
 
 // NewLanes 는 빈 차선을 만든다. 작업을 낼 때 넘기는 ctx 는 루프 수명 ctx 여야 한다(Start 의 계약).
@@ -553,7 +556,9 @@ func (l *Lanes) start(ctx context.Context, k laneKey, job Job) bool {
 		return false
 	}
 	l.running[k] = true
+	l.workers.Add(1)
 	go func() {
+		defer l.workers.Done()
 		r := job(ctx)
 		r.lane, r.StreamID = k, k.stream
 		select {
@@ -563,6 +568,12 @@ func (l *Lanes) start(ctx context.Context, k laneKey, job Job) bool {
 	}()
 	return true
 }
+
+// Wait 는 떠 있는 작업 고루틴이 모두 끝날 때까지 기다린다(판단 J74). 종료 순서는 루프 반환 → 작업에 준 ctx 취소 → Wait →
+// fence 반납(Publisher.Release)이다 — 반납 뒤에 늦은 문장이 나가지 않게. 도는 작업은 ctx 가 끝나면 서둘러 돌아오고, 결과를
+// 보내지 못한 고루틴은 ctx 취소로 끝난다(Start 의 계약). 그래서 ctx 를 취소하지 않고 부르면 받을 이 없는 고루틴이 끝나지
+// 않아 돌아오지 않는다. Start · StartProcess 와 동시에 부르지 않는다 — 루프 고루틴이 끝난 뒤 한 번 부른다.
+func (l *Lanes) Wait() { l.workers.Wait() }
 
 // Done 은 완료 채널이다 — 루프의 select case 로만 받는다(커밋 7).
 func (l *Lanes) Done() <-chan Result { return l.done }
@@ -591,6 +602,10 @@ const (
 	driftKindInit = "init_uploaded" // 잃은 init 결과를 감시 화해가 되살렸다(A2 결정 11)
 	loadRowCap    = "row_cap"       // 적재가 행 수 상한에 닿았다(A3 결정 3)
 	loadFailed    = "load_failed"   // 적재 작업이 실패했다(판단 J46)
+
+	// loadPrevMismatch 는 적재가 아니라 틱이 낸 적재 열화 사유다 — 캐시에서 다시 뽑은 P 의 행이 P 의 자기기술과 맞지 않아
+	// 적재를 요구한다(계획 4.5 A1 결정 4 · 판단 J84).
+	loadPrevMismatch = "prev_mismatch"
 )
 
 // LoadInput 은 적재 작업 하나의 입력이다 — 루프가 캐시에서 만든 값(BeginLoad 의 토큰 · 요구의 힌트 · 캐시 튜너블)이다.
@@ -603,7 +618,8 @@ type LoadInput struct {
 }
 
 // LoadOutcome 은 적재 작업 하나의 결과다 — 토큰과 적재분 값(상한 도달 포함)이다. 루프가 cache.CompleteLoad 로 반영하고
-// ReportLoad 로 신호를 남긴다(커밋 7). Err 가 있으면 적재분은 비었다.
+// ReportLoad 로 신호를 남긴다(커밋 7). Err 가 있으면 적재분은 비었고 CompleteLoad 로 넘기지 않는다(적재 중을 두고 다시
+// 요구한다 — 판단 J46).
 type LoadOutcome struct {
 	Token uint64
 	index.RewindLedger
@@ -633,7 +649,7 @@ func (p *Publisher) Watch(ctx context.Context, probes []index.WatchProbe) WatchO
 }
 
 // ReportLoad 는 적재 결과 out 의 신호를 남기는 얇은 래퍼다(장부 421 P-7) — 판정은 없고 줄만 남긴다. 루프는 결과를
-// 캐시에 반영한 뒤(cache.CompleteLoad) 부른다(커밋 7).
+// 캐시에 반영한 뒤(cache.CompleteLoad) 부른다(커밋 7). Err 면 CompleteLoad 로 넘기지 않는다 — 반영 없이 부른다.
 //
 //	실패       ERROR rewind_ledger_load_degraded(reason=load_failed) — 시도마다 한 줄(판단 J46)
 //	상한 도달  ERROR 같은 키(reason=row_cap · 하한 · 행 수) — 적재 한 번에 한 줄(계획 4.5 A3 결정 3)
@@ -658,6 +674,42 @@ func (p *Publisher) ReportLoad(ctx context.Context, streamID string, out LoadOut
 		p.log.Log(ctx, slog.LevelWarn, driftRepairedLog, "stream", streamID, "kind", driftKindHead,
 			"cutoff", out.CutoffSeq, "floor", out.FloorSeq)
 	}
+}
+
+// ReportPrevMismatch 는 P 재구성 불일치 e(NextDiscontinuitySequence 의 *PrevMismatchError)의 신호를 남기는 얇은
+// 래퍼다(판단 J84 · 계획 4.5 A1 결정 4 · A3 결정 6 ④) — 루프가 그 스트림의 틱을 멈추고 적재를 요구할 때(힌트 e.LoadHint)
+// 부른다. 판정은 없고 줄만 남긴다.
+//
+//	ERROR rewind_ledger_load_degraded(reason=prev_mismatch · hint · mismatch) — 부를 때마다 한 줄
+//
+// 되풀이 가드는 루프의 재요구 주기다(같은 까닭의 재요구는 30초 감시 주기에만 — 판단 J79). 속성 값은 발행 층이 센 정수와
+// 그것으로 만든 진단뿐이다(외부 문자열 0). 부른 쪽 ctx(루프 수명)가 끝났으면 아무것도 남기지 않는다(stopped 관례).
+func (p *Publisher) ReportPrevMismatch(ctx context.Context, streamID string, e *PrevMismatchError) {
+	if ctx.Err() != nil {
+		return
+	}
+	p.log.Log(ctx, slog.LevelError, loadDegradedLog, "stream", streamID, "reason", loadPrevMismatch,
+		"hint", e.LoadHint, "mismatch", e.Reason)
+}
+
+// jobFailedLog 는 차선 작업 하나가 중단 · 포기 표 밖의 실패로 끝났다는 신호다(판단 J78 ⑴ ⑵ · kty 결정 ⑤) — 발행 작업의
+// Outcome.Err 와 감시 작업의 WatchOutcome.Err 가 이 키 하나를 쓰고 job 속성으로 가른다. 표 안의 실패는 abortedLog 다.
+const jobFailedLog = "rewind_job_failed"
+
+// ReportJobError 는 차선 작업 하나가 표 밖의 실패 err 로 끝났다는 신호를 남기는 얇은 래퍼다(kty 결정 ⑤ · 판단 J78) — 판정은
+// 없고 줄만 남긴다. attrs 는 그 작업을 가리키는 키 · 값 쌍이다 — 발행 작업은 job=publish · stream · session, 감시 작업은
+// job=watch · first(부팅 첫 감시인가)다.
+//
+//	ERROR rewind_job_failed(attrs · err) — 부를 때마다 한 줄
+//
+// err 는 중단 · 포기 로그와 같은 상한으로 자른다(clipErr 한 자리 — 저장소 · pgx 오류 문자열에는 외부 값이 길이 제한 없이
+// 실린다). 같은 오류의 되풀이 가드는 부르는 루프 몫이다(발행 작업은 같은 스트림의 이어지는 같은 오류에 한 줄 · 감시는 감시마다
+// 한 줄). 부른 쪽 ctx(루프 수명)가 끝났으면 아무것도 남기지 않는다 — 멈춘 작업의 context.Canceled 는 종료다(stopped 관례).
+func (p *Publisher) ReportJobError(ctx context.Context, err error, attrs ...any) {
+	if ctx.Err() != nil {
+		return
+	}
+	p.log.Log(ctx, slog.LevelError, jobFailedLog, append(slices.Clip(attrs), "err", clipErr(err.Error()))...)
 }
 
 // CutoffAbsentState 는 (c) 컷오프 부재 감시의 상태다 — 스트림마다 연속으로 부재가 보인 감시 수다(판단 J42 —

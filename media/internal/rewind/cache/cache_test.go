@@ -532,7 +532,8 @@ func TestReloadKeepsOnlyTheRunFromTheCutoff(t *testing.T) {
 
 // 캐시를 조립하지 않은 프로세스(운영 인덱서 — 조립은 커밋 7)에서는 nil 이다. nil 이면 모든 메서드가
 // 아무것도 하지 않는다 — 인덱서가 INSERT 마다 부르므로 여기서 멈추면 장부 기록이 멈춘다(upload.Dirty
-// 와 같은 nil 규약). 커밋 5 가 더한 메서드(적재 · 요구 · 회차 push 셋 · 잘라내기 · 버리기 · 감시)도 같다.
+// 와 같은 nil 규약). 커밋 5 가 더한 메서드(적재 · 요구 · 회차 push 셋 · 잘라내기 · 버리기 · 감시)와 커밋 7 이 더한
+// 읽기 둘(소유 회차 · 스트림 전부 — 발행 몫이 없는 프로세스의 루프도 부른다)도 같다.
 func TestNilCacheDoesNothing(t *testing.T) {
 	var c *cache.Cache
 
@@ -569,5 +570,87 @@ func TestNilCacheDoesNothing(t *testing.T) {
 	}
 	if _, ok := c.Playlist(stream, "O", boundary.Window{ScanFrom: 40, TailSeq: 40, HeadSeq: 41}); ok {
 		t.Error("nil 캐시가 목록을 만들었다")
+	}
+	if _, ok := c.Owner(stream); ok {
+		t.Error("nil 캐시에 소유 회차가 있다")
+	}
+	if got := c.Streams(); got != nil {
+		t.Errorf("nil 캐시의 스트림 = %v, want 없음", got)
+	}
+}
+
+// 소유 회차(판단 J71 ⑴ · 계획 4.5 A0 결정 3 · 체크리스트 363 J33 · 459 J62) — 뷰의 회차 가운데 가장 늦게 연 회차(회차 최소
+// seq 가 가장 큰 회차)다. 루프는 이 회차의 목록에만 발행 틱을 내고(publish.ShouldTick), 사다리는 이 회차가 live 가 아니어도
+// 이 회차로 평가한다(리스크 C3). 재접속 개시는 직전 회차를 ending 으로 내리지 않아(J62) 캐시가 live 두 회차를 볼 수 있는데
+// 그때도 뒤 회차이고, live 가 없으면 마지막 회차다. 개시 push 가 들어오면 그 회차가 된다. 뷰가 없으면(모르는 스트림 · 부정
+// 표식) 없고, 적재 중에도 없다 — 적재 중 뷰는 「모른다」다.
+//
+// 회차 A 는 seq 0 에서 새로 열었고(base 0) B 는 A 가 끝난 뒤 300초 안에 A 를 계승해 seq 4 에서 열었다(A 의 base 0 복사).
+func TestOwnerIsTheLatestOpenedSession(t *testing.T) {
+	a := index.RewindSession{SessionID: "A", State: "live", InitUploaded: true, FirstPDT: at(0), TargetDuration: 6, MinSeq: 0}
+	b := index.RewindSession{SessionID: "B", State: "live", InitUploaded: true, FirstPDT: at(40 * time.Second),
+		InheritsSession: "A", TargetDuration: 6, MinSeq: 4}
+	rows := append(ledgerRun("A", 0, 3, at(0)), ledgerRun("B", 4, 5, at(40*time.Second))...)
+	ended := func(s index.RewindSession) index.RewindSession {
+		s.State, s.EndReason = "ended", "offline"
+		return s
+	}
+	for _, tt := range []struct {
+		name     string
+		sessions []index.RewindSession
+	}{
+		{"live_두_회차_가운데_뒤", []index.RewindSession{a, b}},
+		{"끝난_회차_뒤의_live", []index.RewindSession{ended(a), b}},
+		{"live_없음_마지막_회차", []index.RewindSession{ended(a), ended(b)}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			c := &cache.Cache{}
+			load(t, c, stream, ledgerOf(0, rows, tt.sessions...))
+
+			if got, ok := c.Owner(stream); !ok || got.SessionID != "B" {
+				t.Errorf("Owner = (%+v, %v), want 회차 B", got.RewindSession, ok)
+			}
+		})
+	}
+
+	c := &cache.Cache{}
+	load(t, c, stream, ledgerOf(0, rows, a, b))
+	next := index.RewindSession{SessionID: "C", State: "live", FirstPDT: at(100 * time.Second), InheritsSession: "B", TargetDuration: 6}
+	c.ApplyInsert(stream, 6, openingOf(next, 6, 4000))
+	if got, ok := c.Owner(stream); !ok || got.SessionID != "C" || got.MinSeq != 6 {
+		t.Errorf("개시 push 뒤 Owner = (%+v, %v), want 회차 C(최소 seq 6)", got.RewindSession, ok)
+	}
+	c.BeginLoad(stream, nil)
+	if got, ok := c.Owner(stream); ok {
+		t.Errorf("적재 중 Owner = %+v, want 없음(적재 중 뷰는 「모른다」)", got.RewindSession)
+	}
+	load(t, c, "표식", index.RewindLedger{})
+	for _, id := range []string{"표식", "모름"} {
+		if got, ok := c.Owner(id); ok {
+			t.Errorf("뷰 없는 스트림 %s 의 Owner = %+v, want 없음", id, got.RewindSession)
+		}
+	}
+}
+
+// 캐시가 든 스트림 전부(판단 J71 ⑵ · 계획 4.5 A3 결정 5 · 보안 c6a 미확인 3) — 뷰가 있는 스트림 · 부정 표식 스트림 · 적재
+// 중인 스트림을 모두 스트림 순으로 돌려준다. 루프는 이것으로 스트림을 돌며 Forget 을 판정한다 — 부정 표식 스트림도 버려야
+// 하므로 뷰만 내주는 DriftProbes 로는 모자란다. 셋의 구분은 Loading · Snapshot 의 컷오프 · Owner 가 한다. 버린 스트림은
+// 빠진다.
+func TestStreamsListsViewTombstoneAndLoadingStreams(t *testing.T) {
+	c := &cache.Cache{}
+	load(t, c, "e-view", openedAt40())
+	load(t, c, "d-tomb", index.RewindLedger{})
+	c.BeginLoad("c-load", nil)
+	load(t, c, "b-view", openedAt40())
+	load(t, c, "a-tomb", index.RewindLedger{})
+
+	if got, want := c.Streams(), []string{"a-tomb", "b-view", "c-load", "d-tomb", "e-view"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Streams = %v, want %v", got, want)
+	}
+	if !c.Forget("a-tomb", at(0), at(time.Hour), time.Minute) {
+		t.Fatal("창 밖 부정 표식 스트림을 버리지 않았다")
+	}
+	if got, want := c.Streams(), []string{"b-view", "c-load", "d-tomb", "e-view"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("Forget 뒤 Streams = %v, want %v", got, want)
 	}
 }

@@ -143,6 +143,53 @@ func TestReportLoadSignals(t *testing.T) {
 	}
 }
 
+// P 재구성 불일치 래퍼(판단 J84 · 계획 4.5 A1 결정 4 · A3 결정 6 ④) — 루프가 캐시에서 다시 뽑은 P 의 행이 P 의 자기기술과
+// 맞지 않아(NextDiscontinuitySequence 의 *PrevMismatchError) 틱을 멈추고 적재를 요구할 때 ERROR rewind_ledger_load_degraded
+// (reason=prev_mismatch) 한 줄을 남긴다 — 속성은 스트림 · 적재 힌트(P.MSN) · 어긋난 곳이다. 키는 적재 열화와 같다(계획 B #7 —
+// 키 수 그대로). 되풀이 가드는 루프의 재요구 주기(30초 — 판단 J79)라 래퍼는 부를 때마다 한 줄이다. 부른 쪽 ctx(루프 수명)가
+// 끝났으면 멈춘 루프라 남기지 않는다.
+func TestReportPrevMismatchSignals(t *testing.T) {
+	pub, logs := reporter(t)
+	mismatch := &PrevMismatchError{LoadHint: 398, Reason: "행 수 899 ≠ pc-seg-count 900"}
+	stopped, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	pub.ReportPrevMismatch(context.Background(), fxStream, mismatch)
+	pub.ReportPrevMismatch(context.Background(), fxStream, mismatch)
+	pub.ReportPrevMismatch(stopped, fxStream, mismatch)
+
+	line := "ERROR rewind_ledger_load_degraded hint=398 mismatch=행 수 899 ≠ pc-seg-count 900 reason=prev_mismatch stream=str"
+	if got, want := lines(logs), []string{line, line}; !reflect.DeepEqual(got, want) {
+		t.Errorf("로그 = %q, want %q", got, want)
+	}
+}
+
+// 차선 작업 실패 래퍼(kty 결정 ⑤ · 판단 J78 ⑴ ⑵) — 발행 작업의 Outcome.Err 와 감시 작업의 WatchOutcome.Err 를 새 키
+// rewind_job_failed 의 ERROR 한 줄로 남긴다. 속성은 부른 쪽이 붙인 작업 표지(발행 = job · stream · session, 감시 = job · first)와
+// err 다. err 는 중단 · 포기 로그와 같은 상한(clipErr 1,024바이트)으로 자른다 — 저장소 오류 문자열에는 외부 값이 길이 제한 없이
+// 실린다. 부를 때마다 한 줄이다(같은 오류의 되풀이 가드는 루프 몫). 부른 쪽 ctx(루프 수명)가 끝났으면 멈춘 작업이라 남기지 않는다
+// — 멈춘 틱의 context.Canceled 는 종료다(stopped 관례).
+func TestReportJobErrorSignals(t *testing.T) {
+	pub, logs := reporter(t)
+	long := strings.Repeat("가", 600) // 1,800바이트 — 1,024바이트 앞 글자 경계에서 자른다
+	stopped, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	pub.ReportJobError(context.Background(), errors.New("fence 갱신 실패"), "job", "publish", "stream", fxStream, "session", "S")
+	pub.ReportJobError(context.Background(), errors.New(long), "job", "publish", "stream", fxStream, "session", "S")
+	pub.ReportJobError(context.Background(), errors.New("감시 시한"), "job", "watch", "first", true)
+	pub.ReportJobError(stopped, context.Canceled, "job", "publish", "stream", fxStream, "session", "S")
+
+	want := []string{
+		"ERROR rewind_job_failed err=fence 갱신 실패 job=publish session=S stream=str",
+		"ERROR rewind_job_failed err=" + strings.Repeat("가", 341) + "…(잘림 — 원래 1800바이트) job=publish session=S stream=str",
+		"ERROR rewind_job_failed err=감시 시한 first=true job=watch",
+	}
+	if got := lines(logs); !reflect.DeepEqual(got, want) {
+		t.Errorf("로그 =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
 // 감시 결과 래퍼(장부 421 P-7 · 계획 4.5 A2 결정 11 · 판단 J42) — 감시 화해가 돌려준 목록마다 WARN
 // cache_drift_repaired(kind=init_uploaded · revoked) 한 줄이고, (c) 판정의 전이를 rewind_cutoff_absent 로 남긴 뒤 새
 // 상태를 돌려준다(루프가 갈아 끼운다). 드리프트 재료는 여기서 로그하지 않는다 — 수리(적재 적용) 전이다(P-5).

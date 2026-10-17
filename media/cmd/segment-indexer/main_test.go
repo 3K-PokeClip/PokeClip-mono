@@ -212,6 +212,9 @@ func newLocalTarget(t *testing.T, dir, streamID string, seq int64) index.UploadT
 // run() 은 DB·워처가 있어야 돌아 단위 테스트가 불가능하다. 그래서 등록 순서 자체를
 // 소스에서 확인한다 — 이 회귀는 "누가 defer 한 줄을 위로 옮기는" 형태로 오기 때문에
 // 위치 검사만으로도 정확히 잡힌다.
+//
+// 되감기 발행 몫의 둘(체크리스트 474 A-3 3 · 판단 J74)도 같은 규칙이다 — 발행자 풀은 up.Shutdown 보다 먼저, fence
+// 반납(rewind.stop — 차선 ctx 취소 → 작업 대기 → 반납)보다 늦게 닫혀야 한다. 반납 문장이 그 풀로 나간다.
 func TestShutdownDeferRegistrationOrder(t *testing.T) {
 	src, err := os.ReadFile("main.go")
 	if err != nil {
@@ -219,7 +222,8 @@ func TestShutdownDeferRegistrationOrder(t *testing.T) {
 	}
 	text := string(src)
 
-	order := []string{"defer pool.Close()", "defer root.Close()", "defer up.Shutdown()"}
+	order := []string{"defer pool.Close()", "defer root.Close()", "defer up.Shutdown()",
+		"defer pubPool.Close()", "defer rewind.stop(ctx, cancelLanes)"}
 	prev := -1
 	for _, want := range order {
 		at := strings.Index(text, want)
@@ -227,8 +231,8 @@ func TestShutdownDeferRegistrationOrder(t *testing.T) {
 			t.Fatalf("%q 를 찾지 못했다 — 종료 절차가 사라졌거나 이름이 바뀌었다", want)
 		}
 		if at <= prev {
-			t.Fatalf("%q 의 등록 위치가 앞선다. 등록 순서는 %v 여야 하고, "+
-				"LIFO 이므로 실행은 그 역순(Shutdown -> root.Close -> pool.Close)이다", want, order)
+			t.Fatalf("%q 의 등록 위치가 앞선다. 등록 순서는 %v 여야 하고, LIFO 이므로 실행은 그 역순"+
+				"(rewind.stop -> pubPool.Close -> Shutdown -> root.Close -> pool.Close)이다", want, order)
 		}
 		prev = at
 	}
