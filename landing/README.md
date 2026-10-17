@@ -197,7 +197,7 @@ https://pokeclip.com/?utm_source=chzzk&utm_medium=profile&utm_campaign=launch_20
 | `legal-versions.json` | **판 목록의 정본입니다.** 문서별로 새 판이 맨 앞이고, 시행일 드롭다운이 이 목록을 그립니다 |
 | `scripts/legal-versions.mjs` | 모든 판의 드롭다운을 목록대로 다시 쓰고, 개정 때 지금 판을 얼려 둡니다(`archive`). 얼릴 때 그 판의 대표 주소(canonical)를 그 판 주소로 바꾸고 `noindex`를 단 **뒤** 드롭다운 블록을 뺀 본문의 sha256을 목록에 적어, 나중에 본문이 바뀌면 `--check`가 실패합니다. 회귀 테스트는 `legal-versions.test.mjs` |
 | `legal.css` · `legal.js` | 문서 레이아웃과 시행일 드롭다운입니다. `legal.js`는 바깥 클릭·Esc로 닫기만 합니다. 드롭다운은 `<details>`라 JS 없이도 열립니다 |
-| `scripts/check-legal.mjs` | 빠지면 법 위반이 되는 문장을 지킵니다. 처리방침 필수 절 17개, YouTube 정책 주소, YouTube 연동 해제 시 Google 권한 취소·30일 갱신·7일 삭제 문장, 치지직·SOOP 약관 준수, 플랫폼별 연동 해제 문장(치지직은 보관 기간대로, SOOP은 지체 없이 파기), 분석 도구(PostHog) 위탁·국외 이전·거부 방법과 13절의 「Google 사용자 데이터는 분석 도구에 보내지 않음」, 바뀐 약속의 옛 문장(탈퇴 후 5일·확인 뒤 업로드·해제해도 남는 Google 권한·분석 도구를 안 쓴다던 9절)이 없는지, 14세 제한, 고의·중과실 면책 금지, 목차 링크, 드롭다운과 목록의 일치, 본문 시행일 문장과 목록의 일치, 얼린 판의 본문 지문, HTML에 내부 메모(🔴·「목표값」)가 없는지 |
+| `scripts/check-legal.mjs` | 빠지면 법 위반이 되는 문장을 지킵니다. 처리방침 필수 절 17개, YouTube 정책 주소, YouTube 연동 해제 시 Google 권한 취소·30일 갱신·7일 삭제 문장, 12절의 「Google API를 AI NCII에 쓰지 않음」과 13절의 권한별 용도(Google 로그인·youtube.upload·youtube.readonly — Google 브랜드 확인 반려 대응), 치지직·SOOP 약관 준수, 플랫폼별 연동 해제 문장(치지직은 보관 기간대로, SOOP은 지체 없이 파기), 분석 도구(PostHog) 위탁·국외 이전·거부 방법과 13절의 「Google 사용자 데이터는 분석 도구에 보내지 않음」, 바뀐 약속의 옛 문장(탈퇴 후 5일·확인 뒤 업로드·해제해도 남는 Google 권한·분석 도구를 안 쓴다던 9절)이 없는지, 14세 제한, 고의·중과실 면책 금지, 목차 링크, 드롭다운과 목록의 일치, 본문 시행일 문장과 목록의 일치, 얼린 판의 본문 지문, HTML에 내부 메모(🔴·「목표값」)가 없는지 |
 
 ```bash
 node landing/scripts/check-legal.mjs            # 내용 검사
