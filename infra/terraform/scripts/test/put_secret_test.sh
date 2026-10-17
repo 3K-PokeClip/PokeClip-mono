@@ -703,19 +703,19 @@ test_aws_failures() {
 
 #######################################
 # PATH 에 aws 가 없으면 검사를 통과한 뒤 실패(종료 5)하고 값은 안 나온다 —
-# 표준 오류는 고정 두 줄과 바이트 그대로 같다. 다른 사례와 같이 격리한
-# 셸(run_put_as)에서 돌리고 남은 것도 본다.
+# 표준 출력 없음 · 표준 오류는 고정 두 줄과 바이트 그대로 같다. 다른 사례와
+# 같이 격리한 셸(run_put_as)에서 돌리고 남은 것도 본다.
 # Globals:
-#   input, err, status
+#   input, out, err, status
 #######################################
 test_aws_missing() {
   new_case || return
   write_input '%s\n' "${ONE_LINE_VALUE}"
   run_put_as no-aws ok cdn-secret "${input}"
-  if [[ "${status}" -ne "${EXIT_FAILED}" ]] ||
+  if [[ "${status}" -ne "${EXIT_FAILED}" || -n "${out}" ]] ||
     ! stderr_is "SECRET PUT FAILED UNKNOWN" "aws CLI 가 PATH 에 없음"; then
-    fail "aws-missing: 종료 ${EXIT_FAILED} · aws CLI 안내 두 줄을 기대했으나" \
-      "${status} — ${err}"
+    fail "aws-missing: 종료 ${EXIT_FAILED} · 표준 출력 없음 · aws CLI 안내" \
+      "두 줄을 기대했으나 ${status} — ${err}"
     return
   fi
   expect_absent aws-missing "${ONE_LINE_MARKER}" || return
@@ -742,8 +742,8 @@ test_quiet_shells() {
 # (AWS_ENDPOINT_URL)를 닫힌 로컬 주소 127.0.0.1:9 로 두고, 프록시도 같은
 # 주소로 두되 NO_PROXY 는 127.0.0.1 만이다. 엔드포인트 설정을 읽지 않는 CLI 의
 # 요청도 닫힌 로컬 프록시에서 끊겨 AWS 에 닿지 않는다. SHELL 도 가짜 사례처럼
-# 없는 경로로 둔다(진짜 aws 가 SHELL 없이 도는지도 함께 본다). 진짜 aws 가
-# 없으면 skip.
+# 없는 경로로 바꾼 채 돌린다(그 상태에서 ENDPOINT 까지 가는지가 단언이다).
+# 진짜 aws 가 없으면 skip.
 # Globals:
 #   case_dir, input, out, err, status
 #######################################
