@@ -325,7 +325,7 @@ func startObserver(ctx context.Context, opt mtxstate.Options, log *slog.Logger) 
 	poller, err := mtxstate.NewPoller(opt)
 	if err != nil {
 		log.Error("mtxstate_setup_failed", "url", opt.APIURL, "err", err,
-			"note", "관측만 강등된다. 인덱싱은 계속되고 ⓐ2 는 fail-closed 다")
+			"note", "관측만 강등된다. 인덱싱은 계속되고 ⓐ2 는 fail-closed, 4.1 회차 종료 전이(M4 ⓒ)도 서지 않는다")
 		return nil, noop
 	}
 

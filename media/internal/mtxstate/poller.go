@@ -174,7 +174,8 @@ func (p *Poller) Done() <-chan struct{} { return p.done }
 // WaitFirstObservation 은 첫 성공 관측을 BootWait 까지 기다린다(설계 6.5.3 ⑶ 2단계).
 //
 // 타임아웃이면 거짓을 돌려주고 **기동은 그대로 계속된다** — 관측 없이 뜬 상태는
-// EpochKnown=false 라 ⓐ2 가 fail-closed 될 뿐이고, 그 창의 파일은 초기 수집이 회수한다.
+// EpochKnown=false 라 ⓐ2 가 fail-closed 되고 첫 관측까지 4.1 종료 전이(M4 ⓒ)가 서지 않을
+// 뿐이고, 그 창의 파일은 초기 수집이 회수한다.
 // 상한을 인자로 받지 않는 이유: 값의 집을 Options 하나로 둔다(config 가 채운다).
 func (p *Poller) WaitFirstObservation(ctx context.Context) bool {
 	t := time.NewTimer(p.opt.BootWait)
@@ -250,7 +251,8 @@ func (p *Poller) pollOnce(ctx context.Context) {
 // **직전 스냅샷을 유지하는 것이 계약이다**(계획 3절 ⑴): 성공 이력이 있으면 그 관측이
 // OBS_FRESH 로 자연 만료되게 두고, 이력이 없으면 애초에 영값이라 EpochKnown=false 다.
 // 실패했다는 이유로 스냅샷을 비우면 30초짜리 유예가 사라져 순간 장애가 곧 ⓐ2(스캔 유입)
-// 주조 중단이 된다(ⓐ1 워처·훅 유입은 관측과 무관하다).
+// 주조 중단이자 4.1 종료 기다림(M4 ⓒ)의 초기화가 된다(ⓐ1 워처·훅 유입은 관측과 무관하다).
+// 실패가 이어져 만료된 뒤에는 관측 끔과 같다 — ⓐ2 주조와 M4 ⓒ 종료 전이가 함께 멈춘다.
 //
 // 등급은 사유가 정한다. request_failed · multi_page 는 WARN 이다 — 프로세스는 살아 있고 방향은
 // 비주조(안전)이며 다음 주기가 회복시킨다. auth_rejected 는 ERROR 다 — 다음 주기도 같은 자격으로
@@ -263,7 +265,7 @@ func (p *Poller) pollFailed(ctx context.Context, reason string, err error) {
 	}
 	p.opt.Log.Log(ctx, level, "mtxstate_poll_failed",
 		"reason", reason, "auth", p.AuthScheme(), "url", p.opt.APIURL, "err", err,
-		"note", "직전 관측을 유지한다. 만료되면 ⓐ2 가 fail-closed 된다")
+		"note", "직전 관측을 유지한다. 만료되면 ⓐ2 가 fail-closed 되고 4.1 회차 종료 전이(M4 ⓒ)도 서지 않는다")
 }
 
 // newSnapshot 은 응답 항목을 조회용 형태로 접는다.
