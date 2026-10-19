@@ -369,6 +369,48 @@ func TestValidateAgainstThePreviousPublication(t *testing.T) {
 	}
 }
 
+// S2 의 DISC-SEQ 조항(계획 4.5 A2 결정 4) — 이번 목록의 DISC-SEQ(소유 회차 base)는 직전 발행의 DISC-SEQ
+// 보다 작지 않다. 줄면 남은 조각의 Discontinuity Sequence Number 가 바뀐다(RFC 8216bis-22 6.2.2). 발행 층의
+// 절대식은 증분이 0 이상이라 줄지 않으므로(계획 4.5 A1 증명) 걸리는 것은 기준을 잘못 잡은 계산이다. 발행
+// 층은 이 갈래를 MSN 후퇴와 가려 로그 사유를 따로 적는다 — ErrDiscontinuitySequenceDecreased 로 가른다.
+//
+// 목록은 TestValidateAgainstThePreviousPublication 의 회차 N 이다. 직전 발행 = seq 1000..1899 · 세대 41 ·
+// DISC-SEQ 3 이고 이번은 한 칸 밀린 1001..1900 · 세대 42 다. 끝 경우는 MSN 도 뒤로 간 목록이다 — 조항
+// 순서가 MSN 먼저라 DISC-SEQ 갈래로 읽히지 않는다.
+func TestValidateDiscontinuitySequenceMustNotDecrease(t *testing.T) {
+	window := func(from, to int64) []boundary.Row {
+		return run("N", from, to, day.Add(time.Duration(from-1000)*4*time.Second))
+	}
+	last := &rewind.Published{Gen: 41, MediaSequence: 1000, PublishedSeq: 1899, SegmentCount: 900, DiscontinuitySequence: 3}
+	tests := []struct {
+		name         string
+		rows         []boundary.Row
+		discSeq      int64
+		prev         *rewind.Published
+		want         string
+		wantDecrease bool
+	}{
+		{"첫_발행", window(1001, 1900), 0, nil, "", false},
+		{"같은_DISC-SEQ", window(1001, 1900), 3, last, "", false},
+		{"DISC-SEQ_증가", window(1001, 1900), 4, last, "", false},
+		{"DISC-SEQ_감소", window(1001, 1900), 2, last, "S2", true},
+		{"MSN_후퇴가_먼저", window(1000, 1899), 2,
+			&rewind.Published{Gen: 41, MediaSequence: 1001, PublishedSeq: 1900, SegmentCount: 900, DiscontinuitySequence: 3}, "S2", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			n := rewind.Session{ID: "N", DiscontinuityBase: tt.discSeq, TargetDuration: 6, MinSeq: 1000, InitUploaded: true}
+
+			err := validate(t, playlist("N", []rewind.Session{n}, tt.rows), 42, tt.prev)
+
+			wantVerdict(t, err, tt.want)
+			if got := errors.Is(err, rewind.ErrDiscontinuitySequenceDecreased); got != tt.wantDecrease {
+				t.Errorf("errors.Is(%v, ErrDiscontinuitySequenceDecreased) = %v, want %v", err, got, tt.wantDecrease)
+			}
+		})
+	}
+}
+
 // S6 의 닫힘 성분 — 목록의 닫힘(ENDLIST)은 거짓→참으로만 간다. 닫힌 목록 뒤에 열린 목록을 내면 끝난
 // 목록이 다시 열린다. 이번 목록이 닫혔는지는 본문에 EXT-X-ENDLIST 줄이 있는가로 읽는다(메타
 // pc-terminal 과 같은 사실). 닫힌 목록 뒤에 닫힌 목록을 다시 내는 것은 되돌림이 아니다.

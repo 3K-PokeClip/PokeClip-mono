@@ -55,7 +55,12 @@ type fakeStore struct {
 	lastSession map[string]string
 	lastPDT     map[string]time.Time
 	lastDurMS   map[string]int32
+	// inheritance 는 회차별 재접속 계승 개시 대본이다(scriptInheritance) — 그 회차를 연 행의 결과가 싣는 두 칸이다.
+	inheritance map[string]inheritance
 }
+
+// inheritance 는 재접속 계승 개시가 개시 결과에 싣는 두 칸이다(물려받은 회차 · 그 회차 첫 조각 경로).
+type inheritance struct{ session, prevFirst string }
 
 type updateTailCall struct {
 	streamID   string
@@ -77,6 +82,7 @@ func newFakeStore() *fakeStore {
 		lastSession: map[string]string{},
 		lastPDT:     map[string]time.Time{},
 		lastDurMS:   map[string]int32{},
+		inheritance: map[string]inheritance{},
 	}
 }
 
@@ -87,11 +93,20 @@ func (s *fakeStore) scriptSessions(ids ...string) {
 	s.sessions = append(s.sessions, ids...)
 }
 
+// scriptInheritance 는 회차 sessionID 를 재접속 계승 개시로 만든다 — 그 회차를 연 행의 결과가 물려받은 회차 inherits 와
+// 그 회차 첫 조각 경로 prevFirst 를 싣는다(session 의 계승 갈래 · index 의 개시 되읽기가 하는 일의 흉내).
+func (s *fakeStore) scriptInheritance(sessionID, inherits, prevFirst string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.inheritance[sessionID] = inheritance{session: inherits, prevFirst: prevFirst}
+}
+
 // attribute 는 대본의 다음 세션으로 SeedResult 의 개시 통로 9필드를 채운다 — store.go
 // withCommitted 와 같은 뜻이다: 개시 = 직전 귀속 세션과 다른 세션, PDT = 개시면 벽시계·
 // 아니면 max(직전 PDT + 직전 길이, 벽시계)(설계 5.1.1 재귀식), 키 = playback.SegKey(실패면 NULL),
 // 개시 TD = max(6, 첫 조각 반올림 초)(session.openTargetDuration 과 같은 규칙 — TD 운반, 커밋 ④).
-// base·계승·직전 첫 조각은 ⓐ 의 개시 값(0 · "" · "")이다. s.mu 를 쥔 채로 부른다.
+// base 는 ⓐ 의 개시 값(0)이고, 계승 · 직전 첫 조각은 scriptInheritance 로 정한 회차의 개시 행만 값이다.
+// s.mu 를 쥔 채로 부른다.
 func (s *fakeStore) attribute(r index.Record, res index.SeedResult) index.SeedResult {
 	res.DurationMS = r.DurationMS
 	if len(s.sessions) == 0 {
@@ -106,6 +121,9 @@ func (s *fakeStore) attribute(r index.Record, res index.SeedResult) index.SeedRe
 	res.SessionOpened = s.lastSession[r.StreamID] != sid
 	if res.SessionOpened {
 		res.TargetDuration = max(6, int32(math.Round(float64(r.DurationMS)/1000)))
+		if in, ok := s.inheritance[sid]; ok {
+			res.InheritsSession, res.PrevFirstLocalPath = in.session, in.prevFirst
+		}
 	}
 	pdt := r.StartWallUTC.UTC()
 	if !res.SessionOpened {

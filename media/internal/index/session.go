@@ -91,7 +91,8 @@ type SessionInput struct {
 // 입력을 본다는 것을 이 왕복이 구조로 보장한다.
 type SessionPlan interface{}
 
-// SessionDecision 은 갈래와 두 세션 ID 다 — Store 가 carrier 와 기저 행 조회에 쓴다.
+// SessionDecision 은 갈래와 세션 ID 들이다 — Store 가 carrier 와 기저 행 조회에 쓰고, 개시 갈래면 두 non-key
+// 칸(EndingSessionID · PrevFirstLocalPath)을 개시 결과(SeedResult)로 옮긴다.
 type SessionDecision struct {
 	// Opens 가 참이면 Open 을 불러야 한다(새 세션 개시 · TD 분할).
 	Opens bool
@@ -102,7 +103,13 @@ type SessionDecision struct {
 	// 귀속 세션과 다를 수 있다 — 개시 갈래는 **직전 세션**에서 이어받아야
 	// 세션 경계에서 PDT 가 끊기지 않는다.
 	BaseSessionID string
-	Plan          SessionPlan
+	// EndingSessionID 는 TD 분할이 Open 에서 ending 으로 보내는 현 live 회차다(계획 4.5 B #1). 분할이 아니면
+	// "" 다. index 는 이 값으로 아무것도 쓰지 않고 커밋된 개시 결과에 싣기만 한다.
+	EndingSessionID string
+	// PrevFirstLocalPath 는 재접속 계승 개시가 물려받는 직전 회차의 첫 조각 local_path 다 — init 의 stsd 호환
+	// 게이트 입력이다(계획 2.3 registry 행 ⑵). 계승 개시가 아니면 "" 다. 이것도 결과에 싣기만 한다.
+	PrevFirstLocalPath string
+	Plan               SessionPlan
 }
 
 // PlaybackKeyFunc 는 ③ 조각 키 파생이다(설계 5.2 — playback.SegKey).
