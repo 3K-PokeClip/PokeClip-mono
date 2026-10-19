@@ -304,6 +304,30 @@ func TestAssemblePublishingChecksEffectiveEndpoint(t *testing.T) {
 	}
 }
 
+// 종결 라운드 1 CL1-1 · 보안 L-1 — `//` 가 빠진 꼴(opaque)과 빈 호스트는 url.Parse 가 User 를 비워 userinfo 검사를 비켜
+// 간다. https 검사는 호스트가 없으면 거부하고, 오류 문구와 로그 칸(endpointForLog)에 원문을 싣지 않는다 — 원문의 `pw` 가
+// 어디에도 남지 않는다. 빈 값(SDK 기본)은 그대로 통과 · 빈 칸이다.
+func TestRequireHTTPSRejectsHostlessEndpoint(t *testing.T) {
+	for _, raw := range []string{"https:user:pw@host", "https:host", "https:///x"} {
+		t.Run(raw, func(t *testing.T) {
+			err := requireHTTPS(raw)
+
+			if err == nil {
+				t.Fatalf("requireHTTPS(%q) = nil, want 거부(호스트 없음)", raw)
+			}
+			if strings.Contains(err.Error(), "pw") || strings.Contains(err.Error(), raw) {
+				t.Errorf("requireHTTPS(%q) 오류 = %q, want 원문 없음", raw, err)
+			}
+			if got := endpointForLog(raw); strings.Contains(got, "pw") || strings.Contains(got, "host") {
+				t.Errorf("endpointForLog(%q) = %q, want 원문 대신 표식", raw, got)
+			}
+		})
+	}
+	if err, got := requireHTTPS(""), endpointForLog(""); err != nil || got != "" {
+		t.Errorf("빈 엔드포인트 = (%v, %q), want (nil, \"\") — SDK 기본이다", err, got)
+	}
+}
+
 // 판단 J77 ⑶ — 부팅 버킷 확인(HeadBucket 한 번 · 시한 PublishTimeout)이 실패하면 발행 몫만 강등한다. 다시 시도하지 않는다(재기동이
 // 회복한다) — SDK 가 재시도하는 503 에도 HEAD 는 한 번이다. 자격증명을 얻지 못하면 HEAD 를 보내지 않는다.
 func TestAssemblePublishingDegradesWhenBucketCheckFails(t *testing.T) {

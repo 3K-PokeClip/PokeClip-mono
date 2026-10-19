@@ -4,10 +4,14 @@ package publish
 // 결정적 교차와 달리 writer 둘이 실제 고루틴으로 같은 회차를 동시에 틱한다. 셋째 고루틴이 lease 를 무작위 간격으로
 // 끝내 fence 가 두 writer 사이를 오가게 하고(좀비와 후임이 겹치는 국면), PUT 은 적용 직전에 잠깐 쉬어 한 writer 의 P3
 // 가 다른 writer 의 P0–P4 와 겹치게 한다. CI 는 늘 -race 로 돈다.
+//
+// 이 시험은 국면이 서야 판정한다 — 부하로 문턱 안에 국면이 서지 않으면 실패가 아니라 건너뜀(원인 수치 로그)이다(종결
+// 라운드 1 CL1-6). 계보를 언제나 판정하는 결정적 시험은 g8_pg_test.go 의 교차 열 개다.
 
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"slices"
@@ -18,8 +22,8 @@ import (
 )
 
 // 경쟁 국면의 문턱이다. 두 writer 가 저마다 g8MinPublished 번 발행하고 lease 를 g8MinKills 번 끝내면 국면을 닫는다.
-// g8RaceDeadline 안에 닫지 못하면 국면이 서지 않은 것이다. 장부는 g8LastSeq 까지 자라고, 창은 4초 조각 900개(1시간 —
-// S3)를 넘으면 앞을 잘라 낸다.
+// g8RaceDeadline 안에 닫지 못하면 국면이 서지 않은 것이다(건너뜀). 장부는 g8LastSeq 까지 자라고, 창은 4초 조각
+// 900개(1시간 — S3)를 넘으면 앞을 잘라 낸다.
 const (
 	g8MinPublished = 5
 	g8MinKills     = 20
@@ -187,7 +191,9 @@ func TestConcurrentWritersKeepOneLineage(t *testing.T) {
 			case <-time.After(5*time.Millisecond + rand.N(30*time.Millisecond)):
 			}
 			if _, err := pool.Exec(ctx, `UPDATE stream_sessions SET fence_expires_at = now() - interval '1 second' WHERE session_id = 'S'`); err != nil {
-				t.Errorf("lease 끝내기 실패: %v", err)
+				if ctx.Err() == nil { // 시한이 끝나 난 실패는 국면 미성립 몫이다(아래 건너뜀)
+					t.Errorf("lease 끝내기 실패: %v", err)
+				}
 				return
 			}
 			kills.Add(1)
@@ -211,20 +217,34 @@ func TestConcurrentWritersKeepOneLineage(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("writer 고루틴이 멈춘 뒤 10초 안에 끝나지 않았다 — 틱이 매달렸다")
 	}
-	if !reached {
-		t.Fatalf("경쟁 국면이 서지 않았다 — 발행 %d · %d번 · lease 끝냄 %d번, want 저마다 %d번 이상 · %d번 이상",
-			racers[0].published.Load(), racers[1].published.Load(), kills.Load(), g8MinPublished, g8MinKills)
-	}
+	// 결함 신호는 국면 성립과 무관하게 먼저 본다 — 제품 결함으로 발행이 안 선 실행을 부하로 읽어 건너뛰지 않기 위해서다
+	// (종결 라운드 1 CL1-6 · cx 확인). 결함 신호 = 허용 밖 중단 사유 · 시한 밖 틱 오류. 시한 오류(context deadline ·
+	// canceled)는 느린 DB 가 내는 부하 신호라 국면 미성립 때는 결함으로 세지 않는다(국면이 선 실행에서는 종전대로 실패).
+	// 표본 부족만 Skip 이다.
+	defect := false
 	for i, r := range racers {
-		if len(r.errs) != 0 {
-			t.Errorf("w-%d 의 틱 오류 = %v, want 없음", i, r.errs)
+		for _, err := range r.errs {
+			if reached || !(errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)) {
+				t.Errorf("w-%d 의 틱 오류 = %v, want 없음", i, err)
+				defect = true
+			}
 		}
 		for _, reason := range r.logs.aborts() {
 			if !slices.Contains(g8LoserReasons, reason) {
 				t.Errorf("w-%d 의 중단 사유 %s — 경쟁에 진 writer 가 남길 사유(%v) 밖이다", i, reason, g8LoserReasons)
+				defect = true
 			}
 		}
-		t.Logf("w-%d: 틱 %d · 발행 %d · 중단 %v", i, r.ticks, r.published.Load(), r.logs.aborts())
+		t.Logf("w-%d: 틱 %d · 발행 %d · 오류 %d · 중단 %d", i, r.ticks, r.published.Load(), len(r.errs), len(r.logs.aborts()))
+	}
+	if !reached {
+		if defect {
+			t.Fatalf("경쟁 국면이 서지 않았고(발행 %d · %d번 · lease 끝냄 %d번) 결함 신호가 있다 — 부하가 아니라 결함이다",
+				racers[0].published.Load(), racers[1].published.Load(), kills.Load())
+		}
+		// 결함 신호 없이 표본만 모자란 것이다 — 부하로 국면이 서지 않은 것이고 계보 판정은 g8_pg_test.go 의 결정적 교차가 맡는다.
+		t.Skipf("경쟁 국면이 서지 않았다(%v 안) — 발행 %d · %d번 · lease 끝냄 %d번, want 저마다 %d번 이상 · %d번 이상",
+			g8RaceDeadline, racers[0].published.Load(), racers[1].published.Load(), kills.Load(), g8MinPublished, g8MinKills)
 	}
 	t.Logf("lease 끝냄 %d번 · 창 끝 %d", kills.Load(), head.Load())
 

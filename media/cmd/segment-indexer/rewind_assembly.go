@@ -118,7 +118,8 @@ func newPublisher(ctx context.Context, cfg config.Config, opt publish.Options) (
 // AWS_ENDPOINT_URL · 공유 설정 endpoint_url)에서도 온다 — 설정값만 보면 그 길로 평문이 들어온다. 비었으면 SDK 기본(AWS S3 ·
 // https)이라 통과다. 설정은 http 도 받는다(업로더의 MinIO 리그) — 목록 쓰기만 막는다: 쓰기 울타리가 서버의 조건부 쓰기에만
 // 기대므로 목록 요청을 평문 경로에 두지 않는다. userinfo 가 든 값도 막는다 — S3_ENDPOINT 는 config 가 거르지만 SDK 표준
-// 설정은 거르지 않는다(7a B-9 규칙 — 오류 문구에 원문을 싣지 않는다).
+// 설정은 거르지 않는다(7a B-9 규칙 — 오류 문구에 원문을 싣지 않는다). 호스트가 없는 값도 막는다 — `//` 가 빠진 꼴
+// (`https:user:pw@host`)은 url.Parse 가 User 를 비워 userinfo 검사를 비켜 간다(종결 라운드 1 CL1-1 · 보안 L-1).
 func requireHTTPS(endpoint string) error {
 	if endpoint == "" {
 		return nil
@@ -127,6 +128,9 @@ func requireHTTPS(endpoint string) error {
 	if err != nil || u.Scheme != "https" {
 		return errors.New("발행용 S3 엔드포인트가 https 가 아니다 — 발행용 S3 클라이언트는 https 로만 조립한다")
 	}
+	if u.Hostname() == "" {
+		return errors.New("발행용 S3 엔드포인트에 호스트가 없다 — https://호스트 꼴이어야 한다")
+	}
 	if u.User != nil {
 		return errors.New("발행용 S3 엔드포인트에 자격증명(user:pass@)이 들어 있다 — 자격증명은 AWS_ACCESS_KEY_ID 등 env 로 전달하라")
 	}
@@ -134,11 +138,17 @@ func requireHTTPS(endpoint string) error {
 }
 
 // endpointForLog 는 실효 엔드포인트를 로그 칸에 싣는 꼴이다 — userinfo 를 뗀다(S3_ENDPOINT · 7a B-9 규칙). URL 로 읽지
-// 못하는 값은 원문 대신 표식이다.
+// 못하는 값과 호스트가 없는 값(opaque 꼴 — userinfo 를 뗄 수 없다)은 원문 대신 표식이다. 빈 값(SDK 기본)은 빈 칸이다.
 func endpointForLog(endpoint string) string {
+	if endpoint == "" {
+		return ""
+	}
 	u, err := url.Parse(endpoint)
 	if err != nil {
 		return "(URL 로 읽지 못함)"
+	}
+	if u.Host == "" {
+		return "(호스트 없는 URL)"
 	}
 	u.User = nil
 	return u.String()

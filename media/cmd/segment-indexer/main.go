@@ -306,7 +306,7 @@ func startObserver(ctx context.Context, opt mtxstate.Options, log *slog.Logger) 
 		// 이 상태에서는 스캔 유입이 영영 주조되지 않고 회차도 끝나지 않는데, 증상은 "되감기가
 		// 안 된다" · "회차가 이어진다"뿐이다.
 		log.Info("mtxstate_disabled",
-			"note", "MTX_API_URL 이 비어 있다. ⓐ2(상태 방증)가 fail-closed 되고 스캔 유입은 주조하지 않는다")
+			"note", "MTX_API_URL 이 비어 있다. ⓐ2(상태 방증)가 fail-closed 되고 스캔 유입은 주조하지 않는다. 4.1 회차 종료 전이도 멈춘다 — live 회차가 끝나지 않는다")
 		return nil, noop
 	}
 	opt.Log = log

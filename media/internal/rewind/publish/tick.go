@@ -23,7 +23,8 @@ import (
 // lease 를 now() + Lease 로 새로 쓰므로 갱신 전에 남은 시간은 지키는 것이 없다.
 // base 는 건드리지 않는다(A1 결정 2 — P4 · R3 가 쓴다). 돌려받는 것은
 // 틱이 쓰는 둘 — 새 세대와 manifest_etag(첫 PUT 전인가 · P3 의 최초 · 갱신 갈래 · 출처 대조)다. 설계 RETURNING
-// 의 dvr_state 는 WHERE 가 'open' 으로 고정하고 published_seq 는 M4 틱이 쓰지 않는다.
+// 의 dvr_state 는 WHERE 가 'open' 으로 고정하고 published_seq 는 P0 이 돌려받지 않는다 — 그 열은 P4 가 끝 seq 로
+// 쓴다(p4ConfirmSQL).
 const p0ReserveSQL = `
 UPDATE stream_sessions
    SET manifest_gen     = manifest_gen + 1,

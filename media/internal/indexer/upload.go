@@ -158,7 +158,8 @@ func (ix *Indexer) requestPlayback(t *index.UploadTarget, isTail bool) {
 // 프로세스가 그 회차의 개시 행을 봤으면 그 값을 싣는다 — 거부 뒤 다음 행의 재요청도 같다(판단 J64). 못 봤으면
 // 비어 가서 업로더가 계승 후보가 아닌 것으로 읽는다 — 알려진 공백이다. 못 보는 길은 둘이다: 재기동 뒤 이어지는 회차,
 // 그리고 같은 프로세스에서 개시 행의 COMMIT 응답을 잃은 경우(서버는 커밋했는데 재시도가 경로 중복으로 끝나 advance 를
-// 지나지 않는다). kty 결정(2026-09-30)으로 코드 그대로다 — 플러그인이 송출 규격을 잠가 우리 송출에서는 닿지 않는다.
+// 지나지 않는다). kty 결정(2026-09-30)으로 코드 그대로다 — 우리 송출에서도 공백은 생기지만, 플러그인이 송출 규격을
+// 잠가 stsd 가 고정이라 검문을 건너뛰어도 결과가 같다.
 func (ix *Indexer) requestInit(streamID, sessionID string, tail *index.TailRow) bool {
 	t := index.UploadTarget{
 		StreamID: streamID, Axis: index.AxisInit, SessionID: sessionID,

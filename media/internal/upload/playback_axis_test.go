@@ -254,7 +254,7 @@ func TestInitJobRecordsHashOfProducedInit(t *testing.T) {
 	}
 	want := initMarkCall{sessionID: "S-1", sha256: mustHexBytes(t, goldenInitSHA), s3Key: "dvr/demo/init/S-1.mp4", bytes: goldenInitLen}
 	if got := st.initCalls(); len(got) != 1 || !sameInitCall(got[0], want) {
-		t.Errorf("MarkInitUploaded = %+v, want 1회 %+v (ⓐ 단독 국면 incompatible=false 고정)", got, want)
+		t.Errorf("MarkInitUploaded = %+v, want 1회 %+v (계승 후보가 아닌 작업이라 incompatible=false)", got, want)
 	}
 }
 

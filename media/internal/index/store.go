@@ -562,8 +562,9 @@ RETURNING session_id`
 // 회차가 없으면 "" 이고 오류가 아니다.
 //
 // 트랜잭션은 이 함수가 BEGIN 부터 끝까지 소유한다. 첫 문장이 트랜잭션 지역 상한(lock_timeout 5초 · statement_timeout
-// 10초 — setTxnLimitsSQL)이고 ctx 시한은 트랜잭션 하나에 TxnDeadline 하나다 — 루프가 부르므로 루프 점유가 전이 한
-// 번에 TxnDeadline 을 넘지 않는다. 오류면 서버가 커밋했는지 모른다(부르는 쪽이 결과 모름으로 다룬다).
+// 10초 — setTxnLimitsSQL)이고 ctx 시한은 트랜잭션 하나에 TxnDeadline 하나다. 실패 갈래의 되돌림은 새 시한(같은
+// 길이)을 받으므로, 루프가 부르는 전이 한 번의 루프 점유는 되돌림 포함 최대 약 2 × TxnDeadline 이다. 오류면 서버가
+// 커밋했는지 모른다(부르는 쪽이 결과 모름으로 다룬다).
 func EndLive(ctx context.Context, pool *pgxpool.Pool, streamID string) (sessionID string, err error) {
 	return endLive(ctx, pool, streamID, TxnDeadline)
 }

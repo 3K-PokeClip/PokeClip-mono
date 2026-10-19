@@ -214,7 +214,7 @@ func (s *rewindStream) observeOwner(id string, now time.Time) {
 //	실패       offlineFailed 가 받고 그 틱의 남은 전이를 멈춘다.
 //
 // 워커로 내리지 않는다 — 판정과 전이 사이에 INSERT 가 끼면 판정하지 않은 회차를 닫는다. 루프 점유는 전이 한 번에
-// index.TxnDeadline 이하다(EndLive 의 대기 상한).
+// 되돌림 포함 최대 약 2 × index.TxnDeadline 이다(EndLive 의 대기 상한 — 실패 갈래의 되돌림이 새 시한을 받는다).
 func (r *rewindLoop) endOfflineSessions(ctx context.Context, now time.Time) {
 	due, collect := r.ix.OfflineDue(now)
 	if collect {

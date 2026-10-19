@@ -639,6 +639,36 @@ func TestOfflineLoopCallsDueInOrderAndPushesEndings(t *testing.T) {
 	}
 }
 
+// 0행 push 0(체크리스트 B-1 11 · 종결 라운드 1 CL1-7 (c) · C6a-2) — EndLive 가 0행이면 캐시를 건드리지 않는다. 적재 중인
+// 캐시는 push 를 로그에 담고 로그가 상한을 넘으면 적재를 스스로 다시 연다 — 그 경계(상한 1 · 이미 하나 든 로그)에서 0행
+// 전이를 돌려도 적재 토큰이 그대로 살고 요구 적재가 없다. 회차 state 만 보는 위 시험으로는 가르지 못하는 갈래다.
+func TestOfflineLoopZeroRowEndLeavesLoadingCacheUntouched(t *testing.T) {
+	f := newOfflineLoop(t, nil)
+	f.cache.Options.LoadPushBuffer = 1
+	f.boot("s1")
+	f.view("s1", "S-s1", "live")
+	token := f.cache.BeginLoad("s1", nil)
+	f.cache.ApplySessionEnding("s1", "S-other") // 로그 하나 — 다음 push 가 상한을 넘긴다
+	f.ends.result = func(context.Context, string) (string, error) { return "", nil }
+	for _, d := range []time.Duration{-20 * time.Second, -10 * time.Second} {
+		f.onAir("s1", f.at(d))
+		f.tick(f.at(d))
+	}
+	f.judge(f.at(0), "s1")
+	f.judge(f.at(10*time.Second), "s1")
+	f.judge(f.at(11*time.Second), "s1")
+
+	if got := f.ends.called(); !slices.Equal(got, []string{"s1"}) {
+		t.Fatalf("EndLive = %v, want [s1] — 준비가 어긋났다", got)
+	}
+	if got := f.cache.DemandedLoads(); len(got) != 0 {
+		t.Errorf("0행 전이 뒤 요구 적재 = %+v, want 없음(push 0)", got)
+	}
+	if applied, _ := f.cache.CompleteLoad("s1", token, index.RewindLedger{HasCutoff: true}); !applied {
+		t.Error("0행 전이 뒤 앞 적재가 적용되지 않았다 — push 가 로그를 넘겨 적재를 다시 열었다")
+	}
+}
+
 // 루프가 끝나는 중의 실패(판단 J57 · 발행 층 stopped 관례) — 부른 쪽 ctx 가 끝나 EndLive 가 실패하면 ERROR · 요구 적재 ·
 // 쉼을 남기지 않는다: ctx 가 끊은 실패는 DB 상태를 말하지 않는다. 쉼이 없으므로 같은 시각의 다음 틱이 다시 시도한다.
 func TestOfflineLoopStopsQuietlyWhenLoopContextEnds(t *testing.T) {

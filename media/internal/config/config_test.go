@@ -334,7 +334,7 @@ func TestSegmentRootIsCanonicalized(t *testing.T) {
 	}
 }
 
-// POK-30 env 8개의 기본값. 업로더는 선택 부품이므로 S3_BUCKET 이 비어 있는 것이 정상이며,
+// POK-30 env 9개의 기본값. 업로더는 선택 부품이므로 S3_BUCKET 이 비어 있는 것이 정상이며,
 // 그때는 나머지 S3 설정을 검증하지 않는다(결정 11‴).
 func TestLoadUploadDefaults(t *testing.T) {
 	cfg, err := Load(envOf(minimalEnv()))
@@ -750,8 +750,9 @@ func withBucket(env map[string]string) map[string]string {
 //
 //	scheme  https 만 — http 는 호스트가 루프백 IP 리터럴(127.0.0.0/8 · ::1)일 때만 받는다(hls.js 실재생 리그가
 //	        http://127.0.0.1:8090 이다). localhost 는 이름 해석을 거치므로 예외가 아니다
-//	나머지  호스트가 있어야 한다. userinfo · query · fragment · 제어 문자 · 공백 · 따옴표 · 비ASCII 는 거부한다. 끝 '/'
-//	        는 하나까지 떼어 정규화하고 둘 이상이면 거부한다. 경로는 받는다
+//	나머지  호스트가 있어야 한다. userinfo · query · fragment · 제어 문자 · 공백 · 따옴표 · 역슬래시 · 비ASCII 는
+//	        거부한다. 포트는 1–65535 만 받는다. 끝 '/' 는 하나까지 떼어 정규화하고 둘 이상이면 거부한다. 경로는 받되
+//	        dot 세그먼트(`.` · `..` — 퍼센트 인코딩 꼴 포함)는 거부한다
 //	빈값    버킷이 있으면 기동을 거부한다(fail-closed). 버킷이 없으면 읽지도 검증하지도 않는다
 func TestLoadRewindPublicBaseURL(t *testing.T) {
 	for _, tt := range []struct{ raw, want string }{
@@ -760,6 +761,8 @@ func TestLoadRewindPublicBaseURL(t *testing.T) {
 		{"https://cdn.example.com:8443/base", "https://cdn.example.com:8443/base"},
 		{"http://127.0.0.1:8090", "http://127.0.0.1:8090"},
 		{"http://[::1]:8090", "http://[::1]:8090"},
+		// 종결 라운드 1 CL1-3 — 포트 상한과 점이 든 세그먼트는 거부 조항 밖이다.
+		{"https://cdn.example.com:65535/v1.2/a..b", "https://cdn.example.com:65535/v1.2/a..b"},
 	} {
 		t.Run("수락/"+tt.raw, func(t *testing.T) {
 			env := withBucket(minimalEnv())
@@ -792,6 +795,18 @@ func TestLoadRewindPublicBaseURL(t *testing.T) {
 		{"비ASCII_U+2028", "https://h/\u2028"},
 		// r40 표 밖 — 호스트 조항만 가르는 입력이다(`https://` 는 끝 '/' 둘 조항도 잡는다).
 		{"포트만_있고_호스트_없음", "https://:8443"},
+		// 종결 라운드 1 CL1-3 — 표준 URL 파서가 받아 주는 꼴이다. 역슬래시는 브라우저가 '/' 로 읽어 목록 URI 의 경로가
+		// 어긋나고, 범위 밖 포트와 dot 세그먼트는 시청자 쪽에서 다른 자리를 가리킨다.
+		{"역슬래시", `https://cdn.example.com/a\b`},
+		{"포트_범위_밖", "https://cdn.example.com:99999/x"},
+		{"포트_0", "https://cdn.example.com:0/x"},
+		{"dot_세그먼트_둘", "https://cdn.example.com/a/../b"},
+		{"dot_세그먼트_하나", "https://cdn.example.com/a/./b"},
+		{"dot_세그먼트_끝", "https://cdn.example.com/a/.."},
+		{"dot_세그먼트_인코딩", "https://cdn.example.com/a/%2e%2e/b"},
+		{"dot_세그먼트_인코딩_대문자", "https://cdn.example.com/a/%2E/b"},
+		// 종결 라운드 1 CL1-7 (b) — http 예외는 루프백 IP 리터럴뿐이다(비루프백 IP 리터럴은 거부).
+		{"비루프백_IP_http", "http://10.0.0.1/x"},
 	} {
 		t.Run("거부/"+tt.name, func(t *testing.T) {
 			env := withBucket(minimalEnv())
@@ -822,20 +837,30 @@ func TestLoadRewindPublicBaseURL(t *testing.T) {
 
 // userinfo 거부 문구는 원문을 싣지 않는다(S3_ENDPOINT 선례) — 거부 사유가 「비밀이 들어 있다」다. 다른 결함이 함께 있어도
 // 원문이 오류 문자열로 새지 않는다: 끝 '/' 둘은 userinfo 판정이 먼저고, 금지 바이트(공백)와 URL 로 못 읽는 값(포트 자리의
-// 글자)은 문구에 원문을 싣지 않는다.
+// 글자)은 문구에 원문을 싣지 않는다. query · fragment 갈래와 호스트 없음 갈래(`//` 가 빠진 꼴은 url.Parse 가 User 를
+// 비운다)도 원문을 싣지 않는다 — 질의의 서명 토큰과 opaque 꼴의 비밀번호가 기동 오류 로그에 남지 않는다(종결 라운드 1
+// CL1-2 · 보안 L-2). 포트 · dot 세그먼트 · scheme · 끝 '//' 갈래도 원문을 싣지 않는다(CL1-3).
 func TestRewindPublicBaseURLErrorOmitsUserinfo(t *testing.T) {
 	for _, raw := range []string{
 		"https://user:secret@media.example.com",
 		"https://user:secret@media.example.com//",
 		"https://user:secret@media.example.com/a b",
 		"https://user:secret@media.example.com:x",
+		"https://media.example.com/?sig=SECRETQ",
+		"https:admin:SECRETPW@media.example.com",
+		// 아래 넷은 비밀이 들 자리가 없는 갈래(포트 · dot · scheme · 끝 '//')지만 문구가 원문 전체를 싣지 않음을 같은
+		// 그물로 고정한다(종결 라운드 1 CL1-3 — cx 확인 지적) — 경로 조각에 토큰 꼴 문자열을 넣어 본다.
+		"https://media.example.com:99999/SECRETPORT",
+		"https://media.example.com/SECRETDOT/../x",
+		"ftp://media.example.com/SECRETSCHEME",
+		"https://media.example.com/SECRETSLASH//",
 	} {
 		env := withBucket(minimalEnv())
 		env["REWIND_PUBLIC_BASE_URL"] = raw
 
 		_, err := Load(envOf(env))
 
-		if err == nil || strings.Contains(err.Error(), "secret") {
+		if err == nil || strings.Contains(strings.ToLower(err.Error()), "secret") {
 			t.Errorf("REWIND_PUBLIC_BASE_URL=%q 의 에러 = %v, want 원문 없는 거부", raw, err)
 		}
 	}

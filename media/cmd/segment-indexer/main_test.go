@@ -72,6 +72,20 @@ func noCredentialsEnv(t *testing.T) {
 	t.Setenv("AWS_EC2_METADATA_DISABLED", "true")
 	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", filepath.Join(t.TempDir(), "none"))
 	t.Setenv("AWS_CONFIG_FILE", filepath.Join(t.TempDir(), "none"))
+	noEndpointEnv(t)
+}
+
+// noEndpointEnv 는 바깥 셸의 SDK 엔드포인트 설정을 비운다 — 조립 시험의 실효 엔드포인트는 시험이 정한 값뿐이어야 한다
+// (종결 라운드 1 CL1-8). 예컨대 셸에 AWS_IGNORE_CONFIGURED_ENDPOINT_URLS=true 가 있으면 시험이 넣은 AWS_ENDPOINT_URL_S3 를
+// SDK 가 무시해 결과가 바뀐다. 자격증명을 막는 noCredentialsEnv 가 함께 부른다.
+func noEndpointEnv(t *testing.T) {
+	t.Helper()
+	for _, k := range []string{
+		"AWS_IGNORE_CONFIGURED_ENDPOINT_URLS", "AWS_ENDPOINT_URL", "AWS_ENDPOINT_URL_S3",
+		"AWS_USE_FIPS_ENDPOINT", "AWS_USE_DUALSTACK_ENDPOINT",
+	} {
+		t.Setenv(k, "")
+	}
 }
 
 func uploadCfg(t *testing.T, root *os.Root, dir string) config.Config {

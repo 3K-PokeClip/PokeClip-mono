@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -732,5 +733,28 @@ func TestHookSegmentPromotesHeldPredecessor(t *testing.T) {
 	}
 	if got[1].Seq != 1 || !got[1].IsTail {
 		t.Errorf("새 꼬리 = %+v, want seq 1 IsTail=true", got[1])
+	}
+}
+
+// 다른 회차의 개시 기억(종결 라운드 1 CL1-7 (d) · 판단 J64) — 인덱서가 든 개시 행의 게이트 입력은 그 회차의 init 요청에만
+// 싣는다. 개시 행을 이 프로세스가 보지 못한 회차(개시 행의 COMMIT 응답을 잃은 갈래 — 장부의 마지막 귀속 회차를 바로 그
+// 회차로 맞춰 흉내 낸다)의 init 요청에는, 앞 회차의 개시 기억이 남아 있어도 그 값을 싣지 않는다. 잡는 결함: 회차 대조를
+// 빼면 앞 회차가 물려받은 회차 · 첫 조각 경로가 엉뚱한 회차의 계승 게이트 입력으로 나간다.
+func TestInitRequestIgnoresOpeningOfOtherSession(t *testing.T) {
+	f := newFixture(t, 4000)
+	r := f.injectReads()
+	f.store.scriptSessions("S2", "S3")
+	f.store.scriptInheritance("S2", "S1", "/recordings/s1/prev-first.mp4")
+	f.row(r, 0, mtxiOf(recA, 0)) // S2 개시 — 계승 게이트 입력을 든다
+
+	f.store.mu.Lock()
+	f.store.lastSession["s1"] = "S3" // S3 의 개시 행을 이 프로세스가 보지 못했다
+	f.store.mu.Unlock()
+	s1 := f.row(r, 4*time.Second, mtxiOf(recA, 4*time.Second))
+
+	got := f.upload.targetsOf(index.AxisInit)
+	want := index.UploadTarget{StreamID: "s1", Axis: index.AxisInit, SessionID: "S3", LocalPath: s1.Path, Bytes: 1000, IsTail: true}
+	if len(got) != 2 || !reflect.DeepEqual(got[1], want) {
+		t.Errorf("init 요청 = %+v\nwant 둘째 %+v(S2 의 게이트 입력 없음)", got, want)
 	}
 }

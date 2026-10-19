@@ -747,8 +747,9 @@ type absentSignal struct {
 // judgeCutoffAbsent 는 (c) 컷오프 부재 판정이다(설계 4.1 (c) · 9.1 s4_alarm_continuous · s4_signal_grades · 판단 J42 ·
 // 장부 421 P-9) — 감시 결과의 부재 스트림 absent 와 직전 상태 st 만 보고 새 상태와 남길 신호를 돌려준다(로그 · 시계 ·
 // DB 0). 전이만 남긴다: 들어올 때 WARN(value 1) · 연속 SeedAlarmErrorTicks 번째 감시에 ERROR(value 1) · 사라질 때
-// INFO(value 0 — watcher_degraded 선례). 계속 부재인 동안은 줄이 없다(점멸 금지). 감시가 실패한 틱에는 루프가
-// 부르지 않아 세지도 풀지도 않는다. 사라진 스트림은 새 상태에 남지 않아 다시 들어오면 0 부터 센다.
+// WARN(value 0 — 들어옴과 같은 등급이라 LOG_LEVEL=warn 으로 걸러도 해소가 보인다 · 필터 대칭 · 종결 라운드 1 CL1-4).
+// 계속 부재인 동안은 줄이 없다(점멸 금지). 감시가 실패한 틱에는 루프가 부르지 않아 세지도 풀지도 않는다. 사라진
+// 스트림은 새 상태에 남지 않아 다시 들어오면 0 부터 센다.
 func judgeCutoffAbsent(opt Options, st CutoffAbsentState, absent []index.WatchAbsent) (CutoffAbsentState, []absentSignal) {
 	next := CutoffAbsentState{ticks: make(map[string]int, len(absent))}
 	var sigs []absentSignal
@@ -771,7 +772,7 @@ func judgeCutoffAbsent(opt Options, st CutoffAbsentState, absent []index.WatchAb
 	}
 	slices.Sort(gone)
 	for _, id := range gone {
-		sigs = append(sigs, absentSignal{level: slog.LevelInfo, attrs: []any{"stream", id, "ticks", st.ticks[id], "value", 0}})
+		sigs = append(sigs, absentSignal{level: slog.LevelWarn, attrs: []any{"stream", id, "ticks", st.ticks[id], "value", 0}})
 	}
 	return next, sigs
 }

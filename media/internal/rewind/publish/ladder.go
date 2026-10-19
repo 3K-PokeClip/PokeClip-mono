@@ -60,7 +60,8 @@ type LadderInput struct {
 	// 결과에 GapSeq(GAP 이 섬)도 UploadedSeq(이미 올라가 있었음)도 없다는 뜻이다 — 조건은 이것 하나라 부적격 · 출처
 	// 불일치 · P0 실패 · gap_tx_failed · Err 에 더해 준비 단계(fence 획득 0행 · 화해가 P 를 바꿈 · 화해 실패)에서 끝난
 	// 틱도 든다. 사다리는 L2 를 결정한 행 k 가 이 값일 때만 「L2 가 서지 못함」으로 읽고(gap=unstood), 아니면 L4 를
-	// 누른다 — GAP 틱의 실패를 결정의 이력으로 추측하지 않는다(c4-fix3 개정 1 · kty #77).
+	// 누른다 — GAP 틱의 실패를 결정의 이력으로 추측하지 않는다(c4-fix3 개정 1 · kty 결정 2026-09-29 — 「L2 가 서지
+	// 못함」은 루프가 싣는 사실로 받는다).
 	//
 	// 루프가 GAP 틱 결과마다 갈아 끼운다(커밋 7) — 서지 않았으면 그 후보 seq 를 다음 평가부터 싣고, GapSeq 나
 	// UploadedSeq 가 있으면 비운다(nil). 옛 값이 남아도 k 와 다르면 판정에 닿지 않는다. 단서: 준비 단계에서 끝난 틱은
@@ -184,7 +185,8 @@ func gapIneligible(r boundary.Row, found bool, cutoff int64) string {
 // ERROR 신호 하나를 돌려준다(설계 4.6.3 「ERROR + 귀속 판정 기록」). 속성은 정체 초 · L2 가 서지 못한 까닭(blocked —
 // 빈 값이 아니다) · 직전 틱의 중단 사유(없으면 빈 값)다. 첫 발행 전에는 없다 — 방송 시작 지연은 다른 신호
 // 몫이다(판단 J29). 까닭이 no_row(머리 다음 행이 캐시 뷰에 없다 — 유입이 멈춘 방송 종료 구간의 모양)면 등급만 WARN 이다(kty
-// 결정 ④ A · kty #76 ① — 판정은 이미 아는 까닭 값으로 하고 시각에 기대지 않는다. 문턱 · 1회 가드 · 속성은 그대로).
+// 결정 ④ A — 방송 종료 구간의 L4 는 WARN 이다(2026-09-28). 판정은 이미 아는 까닭 값으로 하고 시각에 기대지 않는다.
+// 문턱 · 1회 가드 · 속성은 그대로).
 func alarm(opt Options, st LadderState, in LadderInput, blocked string) (LadderState, *ladderSignal) {
 	since, ok := stallSince(in)
 	if !ok || st.alarmed.Equal(since) {

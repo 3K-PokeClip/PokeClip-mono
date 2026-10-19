@@ -184,7 +184,7 @@ func Load(env func(string) string) (Config, error) {
 			idx.SuspectBelowMS, idx.ExpectedDurationMS)
 	}
 
-	// --- POK-30 업로더 (env 8개) ---
+	// --- POK-30 업로더 (env 9개) ---
 	//
 	// Root 는 여기서 열지 않는다. 설정은 값만 읽고, 파일 시스템 손잡이는 main 이 만든다.
 	up := upload.DefaultOptions(nil, watch.Root)
@@ -350,19 +350,21 @@ func Load(env func(string) string) (Config, error) {
 // 확정 규칙). 이 값은 목록의 조각 · MAP URI 줄에 그대로 실려(앞머리 + "/" + 키) 시청자에게 가므로 문법을 좁게 본다:
 //
 //	https 만 받는다 — http 는 호스트가 루프백 IP 리터럴(127.0.0.0/8 · ::1)일 때만(hls.js 실재생 리그). localhost 는
-//	이름 해석을 거쳐 예외가 아니다. 호스트가 있어야 하고 userinfo · query · fragment · 제어 문자 · 공백 · 따옴표 · 비ASCII
-//	는 거부한다. 끝 '/' 는 하나까지만 떼고 둘 이상이면 거부한다. 경로는 받는다.
+//	이름 해석을 거쳐 예외가 아니다. 호스트가 있어야 하고 userinfo · query · fragment · 제어 문자 · 공백 · 따옴표 ·
+//	역슬래시 · 비ASCII 는 거부한다. 포트는 1–65535 만 받는다. 끝 '/' 는 하나까지만 떼고 둘 이상이면 거부한다. 경로는
+//	받되 dot 세그먼트(`.` · `..` — 퍼센트 인코딩 꼴 포함)는 거부한다 — 표준 URL 파서는 셋 다 받아 주지만 시청자 쪽에서
+//	다른 자리를 가리킨다(종결 라운드 1 CL1-3).
 //
-// 부르는 자리는 S3_BUCKET 이 있을 때뿐이라 빈 값도 오류다(fail-closed). userinfo 가 있을 수 있는 동안은 오류 문구에 원문을
-// 싣지 않는다 — 원문에 비밀이 들어 있을 수 있다(S3_ENDPOINT 선례). 요청 헤더에서 값을 만들지 않는다(사이드카에는 HTTP
-// 입력이 없다).
+// 부르는 자리는 S3_BUCKET 이 있을 때뿐이라 빈 값도 오류다(fail-closed). 원문에 비밀이 들어 있을 수 있는 갈래(userinfo ·
+// query · fragment · 호스트 없음 — `//` 가 빠진 꼴은 url.Parse 가 User 를 비운다)는 오류 문구에 원문을 싣지 않는다
+// (S3_ENDPOINT 선례 · 종결 라운드 1 CL1-2). 요청 헤더에서 값을 만들지 않는다(사이드카에는 HTTP 입력이 없다).
 func validateRewindPublicBaseURL(raw string) (string, error) {
 	if raw == "" {
 		return "", fmt.Errorf("REWIND_PUBLIC_BASE_URL 이 비었다 — S3_BUCKET 을 설정하면 되감기 목록의 조각 URI 앞머리가 있어야 한다")
 	}
 	for i := 0; i < len(raw); i++ {
-		if c := raw[i]; c <= ' ' || c == 0x7f || c == '"' || c >= 0x80 {
-			return "", fmt.Errorf("REWIND_PUBLIC_BASE_URL 의 %d번째 바이트 %#x 는 쓸 수 없다 — 제어 문자 · 공백 · 따옴표 · 비ASCII 는 목록 URI 줄에 그대로 실린다", i, c)
+		if c := raw[i]; c <= ' ' || c == 0x7f || c == '"' || c == '\\' || c >= 0x80 {
+			return "", fmt.Errorf("REWIND_PUBLIC_BASE_URL 의 %d번째 바이트 %#x 는 쓸 수 없다 — 제어 문자 · 공백 · 따옴표 · 역슬래시 · 비ASCII 는 목록 URI 줄에 그대로 실린다", i, c)
 		}
 	}
 	u, err := url.Parse(raw)
@@ -372,19 +374,45 @@ func validateRewindPublicBaseURL(raw string) (string, error) {
 	if u.User != nil {
 		return "", fmt.Errorf("REWIND_PUBLIC_BASE_URL 에 자격증명(user:pass@)을 넣을 수 없다 — 목록 URI 로 시청자에게 나간다")
 	}
-	// 아래로는 userinfo 가 없는 원문이라 문구에 싣는다. `?` · `#` 는 원문으로 본다 — 값 없는 `#` 은 url.Parse 가
-	// 삼켜 파싱 결과로는 구분되지 않는다(validateMTXAPIURL 과 같다).
+	// `?` · `#` 는 원문으로 본다 — 값 없는 `#` 은 url.Parse 가 삼켜 파싱 결과로는 구분되지 않는다(validateMTXAPIURL 과
+	// 같다). 거부 문구는 어느 갈래도 원문을 싣지 않는다(종결 라운드 1 CL1-2 · CL1-3) — 질의의 서명 토큰 · opaque 꼴의
+	// 비밀번호가 기동 오류 로그에 남을 수 있고, 운영자는 어느 변수인지와 위반 종류만 알면 고칠 수 있다. 위치를 가리킬
+	// 값은 비밀이 들 수 없는 조각(포트 · scheme)만 싣는다.
 	switch {
 	case strings.ContainsAny(raw, "?#"):
-		return "", fmt.Errorf("REWIND_PUBLIC_BASE_URL(%q)에 query(?)·fragment(#)를 넣을 수 없다 — 뒤에 \"/\" + 키가 붙는다", raw)
+		return "", fmt.Errorf("REWIND_PUBLIC_BASE_URL 에 query(?)·fragment(#)를 넣을 수 없다 — 뒤에 \"/\" + 키가 붙는다")
 	case u.Host == "" || u.Hostname() == "":
-		return "", fmt.Errorf("REWIND_PUBLIC_BASE_URL(%q)은 scheme 과 호스트를 포함한 URL 이어야 한다", raw)
+		return "", fmt.Errorf("REWIND_PUBLIC_BASE_URL 은 scheme 과 호스트를 포함한 URL(scheme://호스트)이어야 한다")
+	case !validPort(u.Port()):
+		return "", fmt.Errorf("REWIND_PUBLIC_BASE_URL 의 포트(%s)는 1–65535 여야 한다", u.Port())
+	case hasDotSegment(u.Path):
+		return "", fmt.Errorf("REWIND_PUBLIC_BASE_URL 의 경로에 dot 세그먼트(. · ..)를 넣을 수 없다 — 시청자 쪽에서 다른 경로로 풀린다")
 	case u.Scheme != "https" && !(u.Scheme == "http" && isLoopbackIP(u.Hostname())):
-		return "", fmt.Errorf("REWIND_PUBLIC_BASE_URL(%q)의 scheme 은 https 여야 한다 — http 는 루프백 IP 리터럴(127.0.0.0/8 · ::1)만 받는다", raw)
+		return "", fmt.Errorf("REWIND_PUBLIC_BASE_URL 의 scheme(%s)은 https 여야 한다 — http 는 루프백 IP 리터럴(127.0.0.0/8 · ::1)만 받는다", u.Scheme)
 	case strings.HasSuffix(raw, "//"):
-		return "", fmt.Errorf("REWIND_PUBLIC_BASE_URL(%q)이 '/' 둘 이상으로 끝난다 — 끝 '/' 는 하나까지만 뗀다", raw)
+		return "", fmt.Errorf("REWIND_PUBLIC_BASE_URL 이 '/' 둘 이상으로 끝난다 — 끝 '/' 는 하나까지만 뗀다")
 	}
 	return strings.TrimSuffix(raw, "/"), nil
+}
+
+// validPort 는 URL 의 포트 칸이 비었거나(scheme 기본) 1–65535 인가다. url.Parse 는 숫자만 보고 범위는 보지 않는다.
+func validPort(port string) bool {
+	if port == "" {
+		return true
+	}
+	n, err := strconv.Atoi(port)
+	return err == nil && n >= 1 && n <= 65535
+}
+
+// hasDotSegment 는 디코딩된 경로에 dot 세그먼트(`.` · `..`)가 있는가다 — url.Parse 가 퍼센트 인코딩(`%2e`)을 풀어 둔
+// 경로를 받으므로 인코딩 꼴도 잡힌다.
+func hasDotSegment(path string) bool {
+	for _, seg := range strings.Split(path, "/") {
+		if seg == "." || seg == ".." {
+			return true
+		}
+	}
+	return false
 }
 
 // isLoopbackIP 는 host 가 루프백 IP 리터럴(127.0.0.0/8 · ::1)인가다. 이름(localhost 등)은 해석을 거치므로 거짓이다.

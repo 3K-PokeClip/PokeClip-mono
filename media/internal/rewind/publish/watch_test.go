@@ -62,8 +62,9 @@ func signalLine(round int, s absentSignal) string {
 
 // (c) 컷오프 부재 판정(설계 4.1 (c) · 9.1 s4_alarm_continuous · s4_signal_grades · 판단 J42 · 장부 421 P-9) — 전이만
 // 남긴다: 들어올 때 WARN(value 1) · 연속 39 감시까지 줄 0 · 40번째 감시에 ERROR(value 1) 한 번 · 사라지면
-// INFO(value 0). 계속 부재인 동안 점멸하지 않는다(들어옴 WARN 한 번). 감시가 실패한 틱(부르지 않음)은 세지도
-// 풀지도 않고, 들어옴 → 사라짐 → 다시 들어옴은 0 부터 센다. 속성은 스트림 · 연속 감시 수 · 마지막 조각 시각이다.
+// WARN(value 0 — 들어옴과 같은 등급이라 warn 이상으로 걸러도 해소가 보인다 · 종결 라운드 1 CL1-4). 계속 부재인
+// 동안 점멸하지 않는다(들어옴 WARN 한 번). 감시가 실패한 틱(부르지 않음)은 세지도 풀지도 않고, 들어옴 → 사라짐 →
+// 다시 들어옴은 0 부터 센다. 속성은 스트림 · 연속 감시 수 · 마지막 조각 시각이다.
 func TestCutoffAbsentJudgment(t *testing.T) {
 	opt := DefaultOptions("w-1", fxBaseURL)
 	a := index.WatchAbsent{StreamID: "a", LastWall: fxDay}
@@ -92,7 +93,7 @@ func TestCutoffAbsentJudgment(t *testing.T) {
 		"1 WARN last_wall=" + last + " stream=a ticks=1 value=1",
 		"40 ERROR last_wall=" + last + " stream=a ticks=40 value=1",
 		"40 WARN last_wall=" + fxDay.Add(time.Minute).String() + " stream=b ticks=1 value=1",
-		"43 INFO stream=a ticks=41 value=0",
+		"43 WARN stream=a ticks=41 value=0",
 		"44 WARN last_wall=" + last + " stream=a ticks=1 value=1",
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -208,7 +209,7 @@ func TestReportWatchSignals(t *testing.T) {
 		"WARN cache_drift_repaired kind=init_uploaded revoked=true session=A stream=str",
 		"WARN cache_drift_repaired kind=init_uploaded revoked=false session=B stream=str",
 		"WARN rewind_cutoff_absent last_wall=" + fxDay.String() + " stream=a ticks=1 value=1",
-		"INFO rewind_cutoff_absent stream=a ticks=1 value=0",
+		"WARN rewind_cutoff_absent stream=a ticks=1 value=0",
 	}
 	if got := lines(logs); !reflect.DeepEqual(got, want) {
 		t.Errorf("로그 =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))

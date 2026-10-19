@@ -45,7 +45,8 @@ docker compose up -d --build
   있다. 예컨대 `recordings`만 정상이고 `hooks`가 root면 **훅 3종이 전부 `permission denied`로
   죽어 스풀이 0줄**이 되는데, 녹화는 멀쩡해서 겉으로는 정상으로 보인다.
   (이 진단이 없는 볼륨을 미리 만들어도 무해하다 — 빈 볼륨은 media 기동 시 정상적으로 채워진다.)
-- 이후에는 `git pull && docker compose up -d --build`로 평소대로 돌아간다.
+- 이후에는 `git pull && docker compose up -d --build`로 평소대로 돌아간다. 버킷을 쓰는 사람은
+  먼저 ⓒ 팀 1회 조치(`media/README.md` 「ⓒ 팀 1회 조치」 — override 사본 수정)를 한다.
 
 | 서비스 | 포트 | 용도 |
 |---|---|---|
