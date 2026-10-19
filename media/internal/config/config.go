@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/url"
 	"path/filepath"
 	"regexp"
@@ -37,6 +38,13 @@ type Config struct {
 	// Upload 는 업로더의 정책값이다. Root 는 main 이 os.OpenRoot 로 채운다 —
 	// 설정은 파일을 열지 않는다.
 	Upload upload.Options
+	// RewindPublicBaseURL 은 되감기 목록의 조각 · MAP URI 앞머리다(REWIND_PUBLIC_BASE_URL — 계획 B-9). 끝에 '/' 가 없는
+	// 절대 URL 이다(https — http 는 루프백 IP 리터럴만). S3 와 같은 블록에서만 읽는다 — S3.Bucket 이 비면 읽지 않아
+	// 빈 값이고, 버킷이 있는데 비었으면 기동을 거부한다. 발행 조립이 publish.DefaultOptions 로 넘긴다(커밋 7).
+	RewindPublicBaseURL string
+	// RewindWatchEvery 는 되감기 30초 감시(설계 4.1 (a) (c))의 주기다 — 발행 루프가 이 값 ÷ 보류 틱(Indexer.HoldTick)
+	// 마다 감시 작업을 낸다(판단 J85 ⑴). 설계값이라 env 가 없고 값의 집은 여기 하나다(ReconnectWindow 와 같은 규칙).
+	RewindWatchEvery time.Duration
 
 	// HookSpoolPath 는 MediaMTX 훅이 한 줄씩 덧붙이는 공유 파일이다.
 	//
@@ -50,9 +58,10 @@ type Config struct {
 
 	// MTXState 는 MediaMTX Control API 관측 폴러의 설정이다(POK-195 M3).
 	//
-	// **APIURL 이 비면 폴러를 만들지 않는다** — 관측이 없으면 상태 방증 ⓐ2 가
-	// fail-closed 되어 스캔 유입(ⓐ2) 주조만 멈추고 인덱싱·업로드는 그대로 돈다.
-	// HOOK_SPOOL_PATH 와 같은 형태의 즉시 롤백 스위치다.
+	// **APIURL 이 비면 폴러를 만들지 않는다** — 관측이 없으면 두 가지가 멈추고
+	// 인덱싱·업로드는 그대로 돈다. 상태 방증 ⓐ2 가 fail-closed 되어 스캔 유입(ⓐ2) 주조가
+	// 멈추고, 종료 판정이 신선한 관측을 요구하므로 4.1 종료 전이(M4 ⓒ)도 서지 않아 같은
+	// 스트림의 연속 방송이 한 회차로 이어진다. HOOK_SPOOL_PATH 와 같은 형태의 즉시 롤백 스위치다.
 	//
 	// User 는 여기서 채우고 Pass 는 비워 둔다(POK-373) — 비밀번호는 MTXAPIPassFile 의 내용이고,
 	// 설정은 파일을 열지 않으므로 main 이 읽어 채운다.
@@ -68,6 +77,10 @@ type Config struct {
 	// SessionFloorSlack 은 세션 귀속 하한의 여유다(설계 5.4.1 ⑴ — 시계 역행 방어).
 	// 판정은 session 레지스트리가 한다.
 	SessionFloorSlack time.Duration
+	// ReconnectWindow 는 재접속 계승 창이다 — 직전 회차 마지막 조각 끝에서 이 시간 안에 새 조각이
+	// 오면 새 회차가 직전 회차를 물려받는다(ADR-044 결정 3 · kty ⑷). 설계값이라 env 가 없고 값의 집은
+	// 여기 하나다. 판정은 session 레지스트리가 한다(조립점이 옮겨 담는다).
+	ReconnectWindow time.Duration
 }
 
 // 관측 축 기본값(설계 5.4.1·6.5.2). 판정 주체(indexer·session)는 이 값을 설정으로 받으며
@@ -178,11 +191,12 @@ func Load(env func(string) string) (Config, error) {
 			idx.SuspectBelowMS, idx.ExpectedDurationMS)
 	}
 
-	// --- POK-30 업로더 (env 8개) ---
+	// --- POK-30 업로더 (env 9개) ---
 	//
 	// Root 는 여기서 열지 않는다. 설정은 값만 읽고, 파일 시스템 손잡이는 main 이 만든다.
 	up := upload.DefaultOptions(nil, watch.Root)
 	s3 := upload.S3Options{Region: withDefault(env, "AWS_REGION", "ap-northeast-2")}
+	var rewindBaseURL string
 
 	// ★ 버킷 판정이 **제일 앞**이다. 비면 나머지 S3·업로드 설정은 읽지도 검증하지도 않는다.
 	//   그 값들은 전부 꺼진 부품의 것이라 쓰이지 않는데, 여기서 파싱에 실패하면 오타 하나가
@@ -208,6 +222,11 @@ func Load(env func(string) string) (Config, error) {
 		// 버킷을 쓰겠다고 했으면 이름 문법과 엔드포인트를 그 자리에서 본다.
 		// 오타를 기동 때 잡지 않으면 PUT 이 전부 404 로 실패한 뒤에야 알게 된다.
 		if err := validateS3(s3); err != nil {
+			return Config{}, err
+		}
+		// 버킷이 있으면 되감기 목록도 발행하므로 URI 앞머리가 있어야 한다(계획 B-9 — 비면 기동 거부).
+		// **TrimSpace 를 쓰지 않는다** — 끝의 CR · U+2028 을 조용히 떼면 제어 문자 · 비ASCII 거부가 무력해진다.
+		if rewindBaseURL, err = validateRewindPublicBaseURL(env("REWIND_PUBLIC_BASE_URL")); err != nil {
 			return Config{}, err
 		}
 	}
@@ -243,9 +262,10 @@ func Load(env func(string) string) (Config, error) {
 	if idx.FSOpTimeout, err = duration(env, "FS_OP_TIMEOUT", idx.FSOpTimeout); err != nil {
 		return Config{}, err
 	}
-	// ③ 체제 플래그(POK-168 M2 — ADR-062 · 계약 6항 2단계). 기본 꺼짐이 팀 원칙이다:
-	// 켜기 전까지 주조가 없고, 켠 뒤 각 스트림의 첫 주조 자격 유입이 컷오프를 만든다.
-	if idx.SeedEnabled, err = boolean(env, "REWIND_SEED_ENABLED", false); err != nil {
+	// ③ 체제 플래그(POK-168 M2 — ADR-062 · 계약 6항 2단계). 기본 켜짐이다 — 되감기 발행과 함께 켠다
+	// (kty 결정 2026-09-02): 각 스트림의 첫 주조 자격 유입이 컷오프를 만든다. 명시 false 는 그대로 받는다 —
+	// 롤백 손잡이다(끄면 새 컷오프 주조만 멈추고 이미 기록된 컷오프는 유효하다).
+	if idx.SeedEnabled, err = boolean(env, "REWIND_SEED_ENABLED", true); err != nil {
 		return Config{}, err
 	}
 	if idx.ScanCollectBudget, err = duration(env, "SCAN_COLLECT_BUDGET", idx.ScanCollectBudget); err != nil {
@@ -302,8 +322,9 @@ func Load(env func(string) string) (Config, error) {
 	// 조립 지점(cmd/segment-indexer/main.go 의 validateObservationWindow)이 그 검증을 진다.
 	//
 	// 교차 검증 4 — 폴 주기가 신선도 창 이상이면 다음 관측이 오기 전에 직전 관측이 만료돼
-	// 신선한 관측이 끊기지 않고 존재할 수 없다. 폴은 성공하고 스캔 유입(ⓐ2) 주조만 안 되므로 로그에도
-	// 드러나지 않는다. **역은 성립하지 않는다** — 짧다고 신선이 보장되지는 않는다.
+	// 신선한 관측이 끊기지 않고 존재할 수 없다. 폴은 성공하는데 스캔 유입(ⓐ2) 주조가 안 되고,
+	// 4.1 종료 판정의 기다림도 관측이 끊길 때마다 지워져 종료 전이가 늦거나 서지 않을 수 있다.
+	// 둘 다 로그에 드러나지 않는다. **역은 성립하지 않는다** — 짧다고 신선이 보장되지는 않는다.
 	if mtx.PollInterval >= obsFresh {
 		return Config{}, fmt.Errorf(
 			"OBS_POLL(%v)은 OBS_FRESH(%v)보다 짧아야 한다 — 같거나 길면 다음 관측이 오기 전에 직전 "+
@@ -330,7 +351,88 @@ func Load(env func(string) string) (Config, error) {
 		ObsFresh:          obsFresh,
 		ObsBackfill:       obsBackfill,
 		SessionFloorSlack: sessionFloorSlack,
+		// 설계값(ADR-044 결정 3 — IVS 300초 선례)이라 const 로 선언하지 않고 여기 한 자리에 적는다(계획 5절).
+		ReconnectWindow: 300 * time.Second,
+		// 설계값(계획 5절 「30 tick 감시」 · 판단 J85 ⑴)이라 같은 규칙으로 여기 한 자리에 적는다.
+		RewindWatchEvery: 30 * time.Second,
+		// S3_BUCKET 이 비면 읽지 않아 빈 값이다(계획 B-9).
+		RewindPublicBaseURL: rewindBaseURL,
 	}, nil
+}
+
+// validateRewindPublicBaseURL 은 되감기 목록의 URI 앞머리 raw 를 기동 때 보고, 끝 '/' 하나를 뗀 값을 돌려준다(계획 B-9
+// 확정 규칙). 이 값은 목록의 조각 · MAP URI 줄에 그대로 실려(앞머리 + "/" + 키) 시청자에게 가므로 문법을 좁게 본다:
+//
+//	https 만 받는다 — http 는 호스트가 루프백 IP 리터럴(127.0.0.0/8 · ::1)일 때만(hls.js 실재생 리그). localhost 는
+//	이름 해석을 거쳐 예외가 아니다. 호스트가 있어야 하고 userinfo · query · fragment · 제어 문자 · 공백 · 따옴표 ·
+//	역슬래시 · 비ASCII 는 거부한다. 포트는 1–65535 만 받는다. 끝 '/' 는 하나까지만 떼고 둘 이상이면 거부한다. 경로는
+//	받되 dot 세그먼트(`.` · `..` — 퍼센트 인코딩 꼴 포함)는 거부한다 — 표준 URL 파서는 셋 다 받아 주지만 시청자 쪽에서
+//	다른 자리를 가리킨다(종결 라운드 1 CL1-3).
+//
+// 부르는 자리는 S3_BUCKET 이 있을 때뿐이라 빈 값도 오류다(fail-closed). 원문에 비밀이 들어 있을 수 있는 갈래(userinfo ·
+// query · fragment · 호스트 없음 — `//` 가 빠진 꼴은 url.Parse 가 User 를 비운다)는 오류 문구에 원문을 싣지 않는다
+// (S3_ENDPOINT 선례 · 종결 라운드 1 CL1-2). 요청 헤더에서 값을 만들지 않는다(사이드카에는 HTTP 입력이 없다).
+func validateRewindPublicBaseURL(raw string) (string, error) {
+	if raw == "" {
+		return "", fmt.Errorf("REWIND_PUBLIC_BASE_URL 이 비었다 — S3_BUCKET 을 설정하면 되감기 목록의 조각 URI 앞머리가 있어야 한다")
+	}
+	for i := 0; i < len(raw); i++ {
+		if c := raw[i]; c <= ' ' || c == 0x7f || c == '"' || c == '\\' || c >= 0x80 {
+			return "", fmt.Errorf("REWIND_PUBLIC_BASE_URL 의 %d번째 바이트 %#x 는 쓸 수 없다 — 제어 문자 · 공백 · 따옴표 · 역슬래시 · 비ASCII 는 목록 URI 줄에 그대로 실린다", i, c)
+		}
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", fmt.Errorf("REWIND_PUBLIC_BASE_URL 을 URL 로 읽을 수 없다 — scheme 과 호스트를 포함한 절대 URL 이어야 한다")
+	}
+	if u.User != nil {
+		return "", fmt.Errorf("REWIND_PUBLIC_BASE_URL 에 자격증명(user:pass@)을 넣을 수 없다 — 목록 URI 로 시청자에게 나간다")
+	}
+	// `?` · `#` 는 원문으로 본다 — 값 없는 `#` 은 url.Parse 가 삼켜 파싱 결과로는 구분되지 않는다(validateMTXAPIURL 과
+	// 같다). 거부 문구는 어느 갈래도 원문을 싣지 않는다(종결 라운드 1 CL1-2 · CL1-3) — 질의의 서명 토큰 · opaque 꼴의
+	// 비밀번호가 기동 오류 로그에 남을 수 있고, 운영자는 어느 변수인지와 위반 종류만 알면 고칠 수 있다. 위치를 가리킬
+	// 값은 비밀이 들 수 없는 조각(포트 · scheme)만 싣는다.
+	switch {
+	case strings.ContainsAny(raw, "?#"):
+		return "", fmt.Errorf("REWIND_PUBLIC_BASE_URL 에 query(?)·fragment(#)를 넣을 수 없다 — 뒤에 \"/\" + 키가 붙는다")
+	case u.Host == "" || u.Hostname() == "":
+		return "", fmt.Errorf("REWIND_PUBLIC_BASE_URL 은 scheme 과 호스트를 포함한 URL(scheme://호스트)이어야 한다")
+	case !validPort(u.Port()):
+		return "", fmt.Errorf("REWIND_PUBLIC_BASE_URL 의 포트(%s)는 1–65535 여야 한다", u.Port())
+	case hasDotSegment(u.Path):
+		return "", fmt.Errorf("REWIND_PUBLIC_BASE_URL 의 경로에 dot 세그먼트(. · ..)를 넣을 수 없다 — 시청자 쪽에서 다른 경로로 풀린다")
+	case u.Scheme != "https" && !(u.Scheme == "http" && isLoopbackIP(u.Hostname())):
+		return "", fmt.Errorf("REWIND_PUBLIC_BASE_URL 의 scheme(%s)은 https 여야 한다 — http 는 루프백 IP 리터럴(127.0.0.0/8 · ::1)만 받는다", u.Scheme)
+	case strings.HasSuffix(raw, "//"):
+		return "", fmt.Errorf("REWIND_PUBLIC_BASE_URL 이 '/' 둘 이상으로 끝난다 — 끝 '/' 는 하나까지만 뗀다")
+	}
+	return strings.TrimSuffix(raw, "/"), nil
+}
+
+// validPort 는 URL 의 포트 칸이 비었거나(scheme 기본) 1–65535 인가다. url.Parse 는 숫자만 보고 범위는 보지 않는다.
+func validPort(port string) bool {
+	if port == "" {
+		return true
+	}
+	n, err := strconv.Atoi(port)
+	return err == nil && n >= 1 && n <= 65535
+}
+
+// hasDotSegment 는 디코딩된 경로에 dot 세그먼트(`.` · `..`)가 있는가다 — url.Parse 가 퍼센트 인코딩(`%2e`)을 풀어 둔
+// 경로를 받으므로 인코딩 꼴도 잡힌다.
+func hasDotSegment(path string) bool {
+	for _, seg := range strings.Split(path, "/") {
+		if seg == "." || seg == ".." {
+			return true
+		}
+	}
+	return false
+}
+
+// isLoopbackIP 는 host 가 루프백 IP 리터럴(127.0.0.0/8 · ::1)인가다. 이름(localhost 등)은 해석을 거치므로 거짓이다.
+func isLoopbackIP(host string) bool {
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // validateMTXAPIURL 은 관측 폴러의 베이스 URL 문법을 기동 때 보고, 통과하면 호스트(포트 · 대괄호

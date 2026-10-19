@@ -4,14 +4,39 @@
 # 않는다. 받은 argv 를 FAKE_AWS_LOG 에 호출마다 한 줄로 남기고(사례 4 · 5 가
 # 단언), 시나리오는 환경 변수로 고른다.
 #
-# 흉내 내는 호출은 셋이다. 진짜 aws CLI 가 --query · --output text 를 적용한
-# 뒤의 꼴(탭 구분 줄)로 답한다.
+# 진짜 aws CLI 가 --query · --output text 를 적용한 뒤의 꼴(탭 구분 줄)로
+# 답한다.
+#   configure get cli_history  CLI 기록 설정 값(FAKE_AWS_CLI_HISTORY).
 #   sts get-caller-identity   「ARN<탭>계정 ID」 한 줄.
 #   iam simulate-principal-policy
 #       --cli-input-json file://<요청 파일> 을 읽어 요청이 계약대로인지 본 뒤
-#       「동작<탭>판정<탭>AllowedByOrganizations」 한 줄.
+#       「동작<탭>판정<탭>AllowedByOrganizations」 한 줄(scp-recheck.sh).
+#       요청에 PolicyExclusionList 가 있으면 2-3 판정(principal-check.sh)
+#       요청으로 보고 「최상위 판정<탭>조직 판정<탭>최상위 누락 문맥<탭>자원별
+#       판정<탭>자원별 누락 문맥」 한 줄로 답한다(목록 칸은 쉼표 구분, 없으면
+#       빈 칸 · 조직 판정 칸이 없으면 None — SCP 제외 응답의 꼴). 이 꼴은
+#       SIM_QUERY 를 적용한 결과라, --query 가 그것과 다르면 거부한다.
 #   cloudtrail lookup-events  FAKE_AWS_EVENTS 표에서 그 리전 · 이름의 줄을
 #       「ID<탭>출처<탭>이름<탭>시각<탭>주체」 꼴로.
+#   2-3 판정의 읽기 호출(모두 --cli-input-json file:// 만 받음) — 답은
+#   FAKE_AWS_READS 표에서 고른다:
+#       iam get-instance-profile(InstanceProfileName) · get-role(RoleName) ·
+#       get-user(UserName) · list-roles(PathPrefix) ·
+#       list-attached-role-policies(RoleName) ·
+#       list-attached-user-policies(UserName) · list-groups-for-user(UserName) ·
+#       list-attached-group-policies(GroupName) ·
+#       resourcegroupstaggingapi get-resources(ResourceTypeFilters 의 하나 +
+#       「@<--region>」) · route53 list-hosted-zones-by-name(DNSName) ·
+#       s3api get-bucket-policy(Bucket) ·
+#       secretsmanager get-resource-policy(SecretId) ·
+#       ecr get-repository-policy(repositoryName).
+#       괄호 안은 표의 이름 칸과 맞추는 요청 칸이다. 정책 읽기 셋은 표의 정책
+#       원문을 --query <정책 칸>(Policy · ResourcePolicy · policyText)과
+#       --output text 가 오면 그대로, --query 가 다른 칸이면 진짜 CLI 처럼
+#       None, --query 가 없으면 진짜 CLI 봉투 꼴(정책이 escape 된 문자열로 든
+#       JSON)로 낸다. 존 목록은 --query 가 ZONE_QUERY 일 때만 받고, 첫 줄에
+#       「IsTruncated<탭>NextDNSName」(FAKE_AWS_ZONE_PAGE), 그 뒤에 표의 답을
+#       낸다.
 #
 # 환경 변수:
 #   FAKE_AWS_LOG            argv 기록 파일(필수).
@@ -34,8 +59,41 @@
 #                           bad-name(이름 칸이 꼴 밖) · empty-id(ID 칸이
 #                           빔) · none-name(이름 칸이 결측 표기 None) ·
 #                           no-final-newline(마지막 줄 뒤 줄바꿈 없음).
-# 실패 응답의 표준 오류에는 일부러 가짜 계정 ID · 사용자 이름을 넣는다 —
-# 호출하는 스크립트가 그것을 옮겨 적지 않는지 시험이 본다.
+#   FAKE_AWS_CLI            new(기본) · old(옛 CLI — 요청 파일의
+#                           PolicyExclusionList 를 입력 오류로 거부).
+#   FAKE_AWS_SIM_TABLE      2-3 판정 시뮬레이터 응답 표 파일. 줄마다 「키 글롭<탭>
+#                           최상위 판정<탭>조직 판정<탭>최상위 누락 문맥<탭>자원별
+#                           판정<탭>자원별 누락 문맥」 이고 맨 위에서 처음 맞는
+#                           줄을 쓴다. 키 = 「주체 이름@동작@자원 ARN@리전@
+#                           정책」(주체 이름 = PolicySourceArn 의 마지막 「/」
+#                           뒤, 정책 = --resource-policy 가 있으면 policy 아니면
+#                           -). 조직 판정 칸은 True · False · None(칸 없음) ·
+#                           그 밖(불리언 아님). 빈 칸은 「-」 로 적는다(자원별
+#                           판정이 「-」 면 최상위 판정과 같음). 맞는 줄이 없으면
+#                           implicitDeny · None · 누락 없음.
+#   FAKE_AWS_READS          읽기 호출 응답 표 파일. 줄마다 「호출<탭>이름<탭>답」
+#                           (호출 = 위 목록의 동작 이름 예 get-user, 이름 = 위
+#                           괄호의 요청 칸 값). 답은 printf %b 로 펼친다(「\t」 ·
+#                           「\n」). 「!코드」 면 그 오류 코드로 실패한다(!fail 은
+#                           연결 실패, !AccessDenied 는 호출 자체의 거부). 맞는
+#                           줄이 없으면 주체 읽기 셋은 NoSuchEntity, 버킷 정책은
+#                           NoSuchBucketPolicy, 저장소 정책은
+#                           RepositoryPolicyNotFoundException, 비밀 정책은 None,
+#                           목록은 빈 답.
+#   FAKE_AWS_POLICY_MODE    query(기본 — --query 를 따름) · envelope(--query 를
+#                           무시하고 봉투째 냄).
+#   FAKE_AWS_CLI_HISTORY    configure get cli_history 의 답. 비면 값 없음(빈 출력
+#                           · 종료 1 — 진짜 CLI), fail 이면 설정 읽기 실패(종료
+#                           255), 그 밖이면 그 값.
+#   FAKE_AWS_ZONE_PAGE      존 목록 첫 줄(printf %b 로 펼침 — 기본
+#                           「False\tNone」, 잘린 목록은 「True\t…」 등).
+#   FAKE_AWS_BLOCK_FILE     호출마다 2-3 판정 증거 디렉터리
+#                           (~/.pokeclip-precheck/principal-*)에 이 이름의
+#                           디렉터리를 만든다 — 그 증거 파일 쓰기가 실패하게.
+#   FAKE_AWS_LOCK_EVIDENCE  비지 않으면 호출마다 그 증거 디렉터리를 쓸 수
+#                           없게(0500) 바꾼다.
+# 실패 응답의 표준 오류에는 일부러 가짜 계정 ID · 사용자 이름(읽기 호출은 요청한
+# 이름도)을 넣는다 — 호출하는 스크립트가 그것을 옮겨 적지 않는지 시험이 본다.
 
 set -uo pipefail
 
@@ -47,6 +105,22 @@ REGION_CONTEXT_PATTERN='"ContextKeyName":"aws:RequestedRegion",'
 REGION_CONTEXT_PATTERN+='"ContextKeyValues":\["([^"]*)"\],'
 REGION_CONTEXT_PATTERN+='"ContextKeyType":"string"'
 readonly REGION_CONTEXT_PATTERN
+# 2-3 판정 시뮬레이터 응답 꼴의 계약(lib/principal_simulate.sh 의 SIM_QUERY
+# 와 글자까지 같아야 한다 — 다르면 이 가짜의 5칸 답이 진짜 CLI 의 답이
+# 아니다).
+SIM_QUERY='EvaluationResults[0].[EvalDecision,'
+SIM_QUERY+='OrganizationsDecisionDetail.AllowedByOrganizations,'
+# shellcheck disable=SC2016 # 역따옴표는 JMESPath 리터럴이다.
+SIM_QUERY+='join(`","`,MissingContextValues||`[]`),'
+# shellcheck disable=SC2016 # 역따옴표는 JMESPath 리터럴이다.
+SIM_QUERY+='join(`","`,ResourceSpecificResults[].EvalResourceDecision||`[]`),'
+# shellcheck disable=SC2016 # 역따옴표는 JMESPath 리터럴이다.
+SIM_QUERY+='join(`","`,ResourceSpecificResults[].MissingContextValues[]||`[]`)]'
+readonly SIM_QUERY
+# 존 목록 응답 꼴의 계약(lib/principal_resolve.sh 의 ZONE_QUERY).
+ZONE_QUERY='[IsTruncated,NextDNSName,'
+ZONE_QUERY+='HostedZones[].[Name,Id,Config.PrivateZone]]'
+readonly ZONE_QUERY
 
 #######################################
 # 옵션 값을 찾는다(「--이름 값」 꼴).
@@ -151,7 +225,7 @@ invalid_request() {
 }
 
 #######################################
-# iam simulate-principal-policy.
+# iam simulate-principal-policy(2-3 판정 요청은 principal_simulate 로).
 # Globals:
 #   FAKE_AWS_SIM, USER_ARN, REGION_CONTEXT_PATTERN, FAKE_AWS_DENY,
 #   FAKE_AWS_EXPLICIT_DENY, FAKE_AWS_ORGS
@@ -173,6 +247,10 @@ simulate() {
   path="${input#file://}"
   [[ -f "${path}" ]] || invalid_request "요청 파일 없음"
   request="$(<"${path}")"
+  if [[ "${request}" == *'"PolicyExclusionList"'* ]]; then
+    principal_simulate "${request}" "$@"
+    return
+  fi
   [[ "$(json_capture "${request}" '"PolicySourceArn":"([^"]*)"')" == \
     "${USER_ARN}" ]] || invalid_request "PolicySourceArn 이 호출 주체가 아님"
   action="$(json_capture "${request}" '"ActionNames":\["([^"]*)"\]')" ||
@@ -206,6 +284,236 @@ simulate() {
     *) ;;
   esac
   printf '%s\t%s\t%s\n' "${action}" "${decision}" "${orgs}"
+}
+
+#######################################
+# 표 파일에서 키가 맞는 첫 줄의 키 뒤 칸들을 낸다. glob 은 첫 칸을 글롭으로
+# 키와 비교하고, exact 는 줄이 「키<탭>」 으로 시작하는지 본다(키에 탭이 들
+# 수 있다). 빈 칸을 접지 않게 탭 IFS 의 read 대신 줄을 직접 나눈다.
+# Arguments:
+#   표 파일(없거나 빈 이름이면 맞는 줄 없음), 찾는 키, glob · exact.
+# Outputs:
+#   맞은 줄의 키 뒤(탭 다음부터).
+# Returns:
+#   맞는 줄이 없으면 1.
+#######################################
+table_lookup() {
+  local file="$1" key="$2" how="$3" line head
+  [[ -n "${file}" && -f "${file}" ]] || return 1
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    [[ -z "${line}" || "${line}" == '#'* ]] && continue
+    if [[ "${how}" == exact ]]; then
+      [[ "${line}" == "${key}"$'\t'* ]] || continue
+      printf '%s\n' "${line#"${key}"$'\t'}"
+      return 0
+    fi
+    [[ "${line}" == *$'\t'* ]] || continue
+    head="${line%%$'\t'*}"
+    # shellcheck disable=SC2053 # 오른쪽은 일부러 글롭이다.
+    [[ "${key}" == ${head} ]] || continue
+    printf '%s\n' "${line#*$'\t'}"
+    return 0
+  done <"${file}"
+  return 1
+}
+
+#######################################
+# 2-3 판정 시뮬레이터 요청(SCP 제외)을 검사하고 FAKE_AWS_SIM_TABLE 에서 고른
+# 답을 낸다. 옛 CLI 모드는 PolicyExclusionList 를 입력 오류로 거부한다.
+# Globals:
+#   FAKE_AWS_CLI, FAKE_AWS_SIM, FAKE_AWS_SIM_TABLE, ACCOUNT,
+#   REGION_CONTEXT_PATTERN
+# Arguments:
+#   요청 JSON, 받은 argv 전체.
+#######################################
+principal_simulate() {
+  local request="$1" source action resource region policy=- rest key
+  local top orgs top_missing resource_decisions resource_missing
+  shift
+  if [[ "${FAKE_AWS_CLI:-new}" == old ]]; then
+    printf '\nParameter validation failed:\nUnknown parameter in input: '
+    printf '"PolicyExclusionList", must be one of: PolicySourceArn, '
+    printf 'ActionNames, ResourceArns, ContextEntries\n'
+  fi >&2
+  [[ "${FAKE_AWS_CLI:-new}" != old ]] || exit 252
+  rest="${request#*'"PolicyType"'}"
+  if [[ "${request}" != *'"PolicyExclusionList":[{"PolicyType":"scp"}]'* ||
+    "${rest}" == *'"PolicyType"'* ]]; then
+    printf 'An error occurred (ValidationError): PolicyExclusionList\n' >&2
+    exit 254
+  fi
+  source="$(json_capture "${request}" '"PolicySourceArn":"([^"]*)"')" ||
+    invalid_request "PolicySourceArn 없음"
+  [[ "${source}" =~ ^arn:aws:iam::${ACCOUNT}:(user|role)/ ]] ||
+    invalid_request "PolicySourceArn 이 이 계정의 사용자 · 역할이 아님"
+  action="$(json_capture "${request}" '"ActionNames":\["([^"]*)"\]')" ||
+    invalid_request "ActionNames 가 하나가 아님"
+  resource="$(json_capture "${request}" '"ResourceArns":\["([^"]*)"\]')" ||
+    invalid_request "ResourceArns 가 하나가 아님"
+  # shellcheck disable=SC2016 # 「${」 는 펼치지 않는 글자 그대로다.
+  [[ "${resource}" != *'${'* && "${resource}" != *'*'* ]] ||
+    invalid_request "ResourceArns 에 자리표시자 · 와일드카드"
+  region="$(json_capture "${request}" "${REGION_CONTEXT_PATTERN}")" ||
+    invalid_request "aws:RequestedRegion 문맥 없음"
+  if [[ -n "$(option_value --resource-policy "$@")" ]]; then
+    [[ "$(option_value --resource-policy "$@")" == file://* ]] ||
+      invalid_request "--resource-policy 가 file:// 아님"
+    [[ "${request}" == *'"CallerArn":"'* ]] ||
+      invalid_request "자원 정책이 있는데 CallerArn 없음"
+    policy=policy
+  fi
+  [[ "$(option_value --query "$@")" == "${SIM_QUERY}" ]] ||
+    invalid_request "--query 가 응답 꼴 계약(SIM_QUERY)과 다름"
+  key="${source##*/}@${action}@${resource}@${region}@${policy}"
+  rest="$(table_lookup "${FAKE_AWS_SIM_TABLE:-}" "${key}" glob)" ||
+    rest=$'implicitDeny\tNone\t-\t-\t-'
+  top="${rest%%$'\t'*}"
+  rest="${rest#*$'\t'}"
+  orgs="${rest%%$'\t'*}"
+  rest="${rest#*$'\t'}"
+  top_missing="${rest%%$'\t'*}"
+  rest="${rest#*$'\t'}"
+  resource_decisions="${rest%%$'\t'*}"
+  resource_missing="${rest#*$'\t'}"
+  [[ "${top_missing}" != - ]] || top_missing=""
+  [[ "${resource_decisions}" != - ]] || resource_decisions="${top}"
+  [[ "${resource_missing}" != - ]] || resource_missing=""
+  if [[ "${FAKE_AWS_SIM:-ok}" == short ]]; then
+    printf '%s\t%s\n' "${top}" "${orgs}"
+    return 0
+  fi
+  printf '%s\t%s\t%s\t%s\t%s\n' "${top}" "${orgs}" "${top_missing}" \
+    "${resource_decisions}" "${resource_missing}"
+}
+
+#######################################
+# 읽기 호출이 실패한 것처럼 답한다 — 진짜 메시지처럼 요청한 이름과 계정 ID 를
+# 담는다.
+# Globals:
+#   ACCOUNT
+# Arguments:
+#   오류 코드(!fail · !AccessDenied 는 따로), API 이름, 요청한 이름.
+#######################################
+read_failed() {
+  local code="$1" api="$2" name="$3"
+  case "${code}" in
+    fail) call_failed ;;
+    AccessDenied) access_denied "${api}" ;;
+    *) ;;
+  esac
+  printf 'An error occurred (%s) when calling the %s operation: %s (%s)\n' \
+    "${code}" "${api}" "${name}" "${ACCOUNT}" >&2
+  exit 254
+}
+
+#######################################
+# 정책 원문을 진짜 CLI 처럼 낸다 — --query <정책 칸> --output text 면 원문
+# 그대로, --query 가 다른 칸이면 None(칸 없음), 봉투 모드 · --query 가
+# 없으면 정책이 escape 된 문자열로 든 JSON.
+# Globals:
+#   FAKE_AWS_POLICY_MODE
+# Arguments:
+#   정책 칸 이름, 정책 원문, 받은 argv 전체.
+#######################################
+print_policy() {
+  local field="$1" policy="$2" query escaped
+  shift 2
+  query="$(option_value --query "$@")"
+  if [[ "${FAKE_AWS_POLICY_MODE:-query}" != envelope && -n "${query}" ]]; then
+    if [[ "${query}" == "${field}" ]]; then
+      printf '%s\n' "${policy}"
+    else
+      printf 'None\n'
+    fi
+    return
+  fi
+  escaped="${policy//\\/\\\\}"
+  escaped="${escaped//\"/\\\"}"
+  printf '{\n    "%s": "%s"\n}\n' "${field}" "${escaped}"
+}
+
+#######################################
+# 2-3 판정의 읽기 호출 하나를 FAKE_AWS_READS 표로 답한다(머리 주석 목록).
+# Globals:
+#   FAKE_AWS_READS
+# Arguments:
+#   호출(동작 이름), API 이름, 요청에서 이름을 꺼낼 정규식, 받은 argv 전체.
+#######################################
+table_read() {
+  local call="$1" api="$2" pattern="$3" input path request name answer
+  shift 3
+  require_text_output "$@"
+  input="$(option_value --cli-input-json "$@")"
+  [[ "${input}" == file://* ]] ||
+    invalid_request "--cli-input-json 이 file:// 아님"
+  path="${input#file://}"
+  [[ -f "${path}" ]] || invalid_request "요청 파일 없음"
+  request="$(<"${path}")"
+  name="$(json_capture "${request}" "${pattern}")" ||
+    invalid_request "${api}: 요청 칸 없음"
+  if [[ "${call}" == get-resources ]]; then
+    [[ -n "$(option_value --region "$@")" ]] || invalid_request "--region 없음"
+    name+="@$(option_value --region "$@")"
+  fi
+  if [[ "${call}" == list-hosted-zones-by-name ]]; then
+    [[ "$(option_value --query "$@")" == "${ZONE_QUERY}" ]] ||
+      invalid_request "--query 가 존 목록 응답 꼴 계약(ZONE_QUERY)과 다름"
+  fi
+  if ! answer="$(table_lookup "${FAKE_AWS_READS:-}" \
+    "${call}"$'\t'"${name}" exact)"; then
+    case "${call}" in
+      get-instance-profile | get-role | get-user) answer='!NoSuchEntity' ;;
+      get-bucket-policy) answer='!NoSuchBucketPolicy' ;;
+      get-repository-policy) answer='!RepositoryPolicyNotFoundException' ;;
+      get-resource-policy) answer=None ;;
+      *) answer="" ;;
+    esac
+  fi
+  [[ "${answer}" != '!'* ]] || read_failed "${answer#!}" "${api}" "${name}"
+  case "${call}" in
+    get-bucket-policy) print_policy Policy "${answer}" "$@" ;;
+    get-resource-policy)
+      if [[ "${answer}" == None ]]; then
+        printf 'None\n'
+      else
+        print_policy ResourcePolicy "${answer}" "$@"
+      fi
+      ;;
+    get-repository-policy) print_policy policyText "${answer}" "$@" ;;
+    list-hosted-zones-by-name)
+      printf '%b\n' "${FAKE_AWS_ZONE_PAGE:-False\tNone}" "${answer}"
+      ;;
+    *) printf '%b\n' "${answer}" ;;
+  esac
+}
+
+#######################################
+# 2-3 판정의 읽기 호출을 고른다. 오류 문구의 API 이름은 동작 이름 그대로다.
+# Arguments:
+#   받은 argv 전체.
+# Returns:
+#   흉내 내는 호출이 아니면 1.
+#######################################
+principal_read() {
+  local field
+  case "${1:-} ${2:-}" in
+    "iam get-instance-profile") field=InstanceProfileName ;;
+    "iam get-role" | "iam list-attached-role-policies") field=RoleName ;;
+    "iam get-user" | "iam list-attached-user-policies" | \
+      "iam list-groups-for-user") field=UserName ;;
+    "iam list-attached-group-policies") field=GroupName ;;
+    "iam list-roles") field=PathPrefix ;;
+    "route53 list-hosted-zones-by-name") field=DNSName ;;
+    "s3api get-bucket-policy") field=Bucket ;;
+    "secretsmanager get-resource-policy") field=SecretId ;;
+    "ecr get-repository-policy") field=repositoryName ;;
+    "resourcegroupstaggingapi get-resources")
+      table_read get-resources "$2" '"ResourceTypeFilters":\["([^"]*)"' "$@"
+      return
+      ;;
+    *) return 1 ;;
+  esac
+  table_read "$2" "$2" "\"${field}\":\"([^\"]*)\"" "$@"
 }
 
 #######################################
@@ -262,6 +570,47 @@ lookup_events() {
 }
 
 #######################################
+# aws configure get cli_history(머리 주석의 FAKE_AWS_CLI_HISTORY).
+# Globals:
+#   FAKE_AWS_CLI_HISTORY, USER_NAME
+# Arguments:
+#   받은 argv 전체.
+#######################################
+configure_get() {
+  if [[ "${3:-}" != cli_history ]]; then
+    printf 'fake aws: 모르는 설정 키\n' >&2
+    exit 252
+  fi
+  case "${FAKE_AWS_CLI_HISTORY:-}" in
+    '') exit 1 ;;
+    fail)
+      printf 'The config profile (%s) could not be found\n' "${USER_NAME}" >&2
+      exit 255
+      ;;
+    *) printf '%s\n' "${FAKE_AWS_CLI_HISTORY}" ;;
+  esac
+}
+
+#######################################
+# 2-3 판정 증거 디렉터리의 쓰기를 막는다(FAKE_AWS_BLOCK_FILE ·
+# FAKE_AWS_LOCK_EVIDENCE). 디렉터리가 아직 없으면 아무것도 하지 않는다.
+# Globals:
+#   HOME, FAKE_AWS_BLOCK_FILE, FAKE_AWS_LOCK_EVIDENCE
+#######################################
+block_evidence() {
+  local dir
+  for dir in "${HOME}"/.pokeclip-precheck/principal-*; do
+    [[ -d "${dir}" ]] || continue
+    if [[ -n "${FAKE_AWS_BLOCK_FILE:-}" ]]; then
+      mkdir -p -- "${dir}/${FAKE_AWS_BLOCK_FILE}" 2>/dev/null
+    fi
+    if [[ -n "${FAKE_AWS_LOCK_EVIDENCE:-}" ]]; then
+      chmod 500 -- "${dir}" 2>/dev/null
+    fi
+  done
+}
+
+#######################################
 # argv 를 기록하고 흉내 낼 호출로 보낸다(모르는 호출은 실패).
 # Globals:
 #   FAKE_AWS_LOG
@@ -274,11 +623,14 @@ main() {
     exit 252
   }
   printf '%s\n' "$*" >>"${FAKE_AWS_LOG}"
+  block_evidence
   case "${1:-} ${2:-}" in
+    "configure get") configure_get "$@" ;;
     "sts get-caller-identity") caller_identity "$@" ;;
     "iam simulate-principal-policy") simulate "$@" ;;
     "cloudtrail lookup-events") lookup_events "$@" ;;
     *)
+      principal_read "$@" && exit 0
       printf 'fake aws: 모르는 호출: %s %s\n' "${1:-}" "${2:-}" >&2
       exit 252
       ;;

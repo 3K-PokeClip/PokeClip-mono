@@ -173,6 +173,33 @@ testlib::make_tree() {
 }
 
 #######################################
+# 2-3 판정 래퍼까지 든 사본 트리를 만든다 — testlib::make_tree 에 더해
+# principal-check.sh · lib/principal_*.sh · data/principal_sim/(저장소에
+# 있는 파일은 복사, 시험이 고정 입력으로 덮는다). 래퍼가 없으면 실패한다.
+# Globals:
+#   PRECHECK_DIR
+# Arguments:
+#   만들 디렉터리.
+# Returns:
+#   복사하지 못하면 1.
+#######################################
+testlib::make_principal_tree() {
+  local dest="$1" file
+  testlib::make_tree "${dest}" || return 1
+  mkdir -p -- "${dest}/data/principal_sim" || return 1
+  cp -- "${PRECHECK_DIR}/principal-check.sh" "${dest}/" || return 1
+  for file in "${PRECHECK_DIR}"/lib/principal_*.sh \
+    "${PRECHECK_DIR}"/data/principal_sim/*; do
+    [[ -e "${file}" ]] || continue
+    if [[ "${file}" == */lib/* ]]; then
+      cp -- "${file}" "${dest}/lib/" || return 1
+    else
+      cp -- "${file}" "${dest}/data/principal_sim/" || return 1
+    fi
+  done
+}
+
+#######################################
 # 사례 디렉터리의 home 을 HOME 으로, 가짜 aws 를 PATH 앞에 두고 명령을
 # 돌린다. 부르는 쪽 환경의 AWS_* 는 모두 지우고 설정 · 자격 증명 파일은
 # /dev/null, 인스턴스 메타데이터 조회는 끈다. 표준 출력 · 표준 오류는

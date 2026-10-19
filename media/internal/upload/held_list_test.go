@@ -65,7 +65,8 @@ func TestHeldListRequeueUsesStoredPos(t *testing.T) {
 }
 
 // 이미 같은 바이트로 확정된 세션(AlreadySame — 재기동·재시도)도 확정이다: sessionInit 을 채우고
-// 보류한 작업을 다시 넣는다(계획 2.1 「Success|AlreadySame → sessionInit 채움 + drain」).
+// 보류한 작업을 다시 넣는다(계획 2.1 「Success|AlreadySame → sessionInit 채움 + drain」). init 확정 사실은
+// Dirty 에 표시하지 않는다 — 앞선 확정이 계승을 풀었는지 이 호출은 모른다(계획 4.5 A2 결정 10).
 func TestInitAlreadySameAlsoConfirmsSessionInit(t *testing.T) {
 	st := &fakeUploadStore{onInitMark: func(string, []byte) (index.InitMark, error) { return index.InitMarkAlreadySame, nil }}
 	put := &fakePutter{}
@@ -82,7 +83,6 @@ func TestInitAlreadySameAlsoConfirmsSessionInit(t *testing.T) {
 		t.Errorf("③ 마킹 = %+v, want 1회 — AlreadySame 도 보류를 푼다", marked)
 	}
 	sameEvents(t, u.Dirty().Peek(), []DirtyEvent{
-		{Kind: DirtyUploaded, StreamID: "demo", Axis: index.AxisInit, SessionID: "S-1"},
 		{Kind: DirtyUploaded, StreamID: "demo", Axis: index.AxisPlayback, Seq: 7, SessionID: "S-1"},
 	})
 }

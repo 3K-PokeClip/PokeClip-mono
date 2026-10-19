@@ -179,15 +179,18 @@ MediaMTX가 이벤트마다 컨테이너 안의 작은 명령을 실행하고(`m
 | `HOOK_BREAK_GUARD` | `20ms` | 새 세션 첫 조각 판정의 하한 여유. 파일명 시각 해상도와 훅 기록 시각의 미세 차이만 흡수하며 그 이상의 의미는 없다(실측 짝짓기 오차 ±2ms의 10배). 크게 잡으면 이전 세션의 마지막 조각이 새 세션의 표시를 가로챈다. 0·음수는 기동 거부 |
 | `FS_OP_TIMEOUT` | `5s` | 개별 파일시스템 호출(stat·프로브) 하나의 상한. 멈춘 파일시스템에서 메인 루프가 이 시간 이상 붙잡히지 않게 한다 — 넘긴 파일은 건너뛰고 다음 재스캔이 회수한다 |
 | `SCAN_COLLECT_BUDGET` | `45s` | 전수 수집(디렉토리 순회)의 soft 예산. 넘기면 걷은 데까지만 처리하고 절단한다. 정지 판정(`scan_collect_stalled`)은 이 값의 배수로 따로 본다 |
-| `REWIND_SEED_ENABLED` | `false` | 되감기 컷오프 **주조** 스위치(계약 6항 2단계). 꺼져 있으면 컷오프를 새로 만들지 않고, 켜면 각 스트림의 첫 자격 유입이 컷오프 하나를 만든다. 되돌려 꺼도 **이미 기록된 컷오프는 유효하다** — 판정은 이 플래그가 아니라 장부를 읽는다 |
+| `REWIND_SEED_ENABLED` | `true` | 되감기 컷오프 **주조** 스위치(계약 6항 2단계). 켜져 있으면 각 스트림의 첫 자격 유입이 컷오프 하나를 만든다. M4 ⓒ 부터 기본 켜짐이다(kty 결정 2026-09-02 — 발행 층과 함께 켠다). **명시 `false` 가 롤백 손잡이다** — 컷오프를 새로 만들지 않는다. 빈 값은 기본값(켜짐)으로 읽힌다. 되돌려 꺼도 **이미 기록된 컷오프는 유효하고 그 스트림은 계속 발행된다** — 판정은 이 플래그가 아니라 장부를 읽는다 |
 
 **되감기 상태 관측(POK-195) — MediaMTX Control API 폴링.**
 용어: **관측**은 "지금 이 스트림이 실제로 송출 중인가"를 Control API(MediaMTX가 자기 상태를
 알려주는 HTTP 창구)에서 주기적으로 읽어 오는 것이고, **주조**는 되감기 재생의 시작점(컷오프)을
 장부에 처음 기록하는 것이다. `MTX_API_URL`이 비면 폴러를 아예 기동하지 않는다 —
-관측이 없으면 **관측 기반 주조(스캔 유입 ⓐ2)만 멈춘다**(안전한 방향으로 잠긴다).
-워처·훅 유입(ⓐ1) 주조는 계속되며 그것은 `REWIND_SEED_ENABLED`로만 멈춘다.
-인덱싱·업로드는 그대로 돈다.
+관측이 없으면 두 가지가 멈춘다(둘 다 안전한 방향으로 잠긴다). 하나는 **관측 기반
+주조(스캔 유입 ⓐ2)**다. 워처·훅 유입(ⓐ1) 주조는 계속되며 그것은
+`REWIND_SEED_ENABLED`로만 멈춘다. 다른 하나는 **회차 종료 전이**(M4 ⓒ — 방송이
+끝난 회차를 `live`에서 `ending`으로 보내는 것)다. 종료 판정이 신선한 관측을
+요구해 서지 않으므로 같은 스트림의 연속 방송이 한 회차로 이어진다(아래 「되감기
+M4 ⓒ 이관 기록」의 알려진 한계 「관측 끔」). 인덱싱·업로드는 그대로 돈다.
 
 | 이름 | 기본값 | 의미 |
 |---|---|---|
@@ -195,9 +198,9 @@ MediaMTX가 이벤트마다 컨테이너 안의 작은 명령을 실행하고(`m
 | `MTX_API_USER` | (빈 값 = 무인증) | Control API Basic 자격의 사용자 이름. `MTX_API_PASS_FILE`과 **짝**이다 — 둘 다 넣거나 둘 다 빼며, 하나만이면 기동하지 않는다. 둘 다 비면 지금처럼 무인증으로 붙는다(dev compose — MediaMTX의 `user: any` 항목). `:`·제어 문자는 넣을 수 없다(Basic은 첫 `:`에서 사용자와 비밀번호를 가른다). 응답기의 `MTX_API_PASS`(env 값)는 **읽지 않는다** — 그 값만 있으면 무인증으로 뜬다. 그것이 `auth_rejected`로 드러나는 것은 사이드카가 붙는 주소에 맞는 무인증 `api` 항목(`user: any`)이 MediaMTX에 없을 때뿐이다(표 아래 「관측 자격 파일 규칙」) |
 | `MTX_API_PASS_FILE` | (빈 값 = 무인증) | 비밀번호 파일의 **컨테이너 안 절대 경로**(예: `/run/secrets/mtx_api_pass`). 상대 경로는 기동 거부. 비밀번호를 env 값으로 받지 않는 이유: env 값은 `docker inspect`에 남는다. 파일 규칙은 표 아래. 기동 때 한 번 읽으므로 **교체 = 재기동**이다(M2 상자에서는 `systemctl restart pokeclip-media` — compose 전체 재시작). 자격이 거부되면(401) `mtxstate_poll_failed reason=auth_rejected`가 ERROR로 폴마다 나온다. 단 사이드카에 맞는 무인증 `api` 항목이 MediaMTX에 남아 있으면 틀린 자격도 거부되지 않아 이 줄이 나오지 않는다(표 아래 「관측 자격 파일 규칙」) |
 | `OBS_POLL` | `10s` | 관측 주기이자 **폴 1회의 상한**이다. 주기가 곧 재시도라 따로 재시도를 두지 않으며, 헤더조차 오지 않는 응답을 이 시간에 끊는다. `OBS_FRESH`보다 짧아야 기동한다 |
-| `OBS_FRESH` | `30s` | 관측이 이보다 낡으면 방증으로 쓰지 않는다. 주조 트랜잭션 상한(10s, `index.TxnDeadline`)보다 길어야 기동한다 — 같거나 짧으면 기동 거부 |
+| `OBS_FRESH` | `30s` | 관측이 이보다 낡으면 방증으로 쓰지 않는다. 회차 종료 전이(M4 ⓒ)도 이 값으로 관측의 신선함을 본다 — 관측 나이 상한은 이 값 하나다. 주조 트랜잭션 상한(10s, `index.TxnDeadline`)보다 길어야 기동한다 — 같거나 짧으면 기동 거부 |
 | `OBS_BACKFILL` | `60s` | 관측 시점보다 이만큼 더 과거인 조각은 밀린 백로그의 머리로 보아 주조하지 않는다 |
-| `OBS_BOOT_WAIT` | `3s` | 기동 시 첫 관측을 기다리는 상한. 타임아웃이어도 **기동은 계속된다** — 관측 없이 뜨면 그동안 **관측 기반 주조(스캔 유입 ⓐ2)만** 잠긴다(워처·훅 유입 ⓐ1 주조는 이 값과 무관하게 계속된다) |
+| `OBS_BOOT_WAIT` | `3s` | 기동 시 첫 관측을 기다리는 상한. 타임아웃이어도 **기동은 계속된다** — 관측 없이 뜨면 첫 관측이 올 때까지 **관측 기반 주조(스캔 유입 ⓐ2)와 회차 종료 전이(M4 ⓒ)가** 잠긴다(워처·훅 유입 ⓐ1 주조는 이 값과 무관하게 계속된다) |
 | `SESSION_FLOOR_SLACK` | `1s` | 세션 귀속 하한의 여유(시계 역행 방어). 세션 시작보다 이보다 더 과거인 조각은 그 세션에 귀속시키지 않는다 |
 
 **관측 자격 파일 규칙(POK-373).** 사이드카가 `MTX_API_PASS_FILE`을 읽는 규칙이다.
@@ -254,8 +257,9 @@ MediaMTX가 이벤트마다 컨테이너 안의 작은 명령을 실행하고(`m
 > compose가 보는 `media` 서비스 정의는 그대로다(설정 해시 동일 — 실측). 그래서 `up -d`는
 > `media`를 "Running"으로 두고 넘어가고, MediaMTX는 기동 때 읽은 옛 설정으로 계속 돈다.
 > 재기동하지 않으면 Control API가 없는 상태라 사이드카 호출이 실패하고, **관측 기반 주조(스캔
-> 유입 ⓐ2)만 아무 증상 없이 멈춘다**(워처·훅 유입 ⓐ1 주조는 `REWIND_SEED_ENABLED`가 켜진 한
-> 계속된다 — 위 정의와 같다). 사이드카 로그의 `mtxstate_poll_failed`만이 유일한 흔적이다.
+> 유입 ⓐ2)와 회차 종료 전이(M4 ⓒ)가 아무 증상 없이 멈춘다**(워처·훅 유입 ⓐ1 주조는
+> `REWIND_SEED_ENABLED`가 켜진 한 계속된다 — 위 정의와 같다). 사이드카 로그의
+> `mtxstate_poll_failed`만이 유일한 흔적이다.
 
 **S3 업로더(POK-30) — `S3_BUCKET`이 비어 있으면 업로더가 꺼지고 아래 값은 무시된다(단 `SEGMENT_UPLOAD_TAIL_HOLD`만 예외 — 표 안 설명 참조).**
 
@@ -269,6 +273,7 @@ MediaMTX가 이벤트마다 컨테이너 안의 작은 명령을 실행하고(`m
 | `SEGMENT_UPLOAD_SWEEP_EVERY` | `30s` | 스위퍼 회차 간격 — `pending`·`failed` 잔여를 주기 회수 |
 | `SEGMENT_UPLOAD_CIRCUIT_MAX` | `3` | 연속 실패가 이 값에 닿으면 브레이커가 열려 PUT을 멈추고 다음 회차 탐침으로 복구를 살핀다. `0`이면 브레이커 없음 |
 | `SEGMENT_UPLOAD_TAIL_HOLD` | `5s` | 꼬리(마지막) 조각을 이만큼 보류해 교정 창과의 충돌을 피한다. 꼬리 유예(2m)보다 짧고 `SEGMENT_SETTLE_WAIT` 이상이어야 기동한다. **예외: 이 값만은 버킷이 비어 있어도 항상 읽고 검증한다** — 보류 시계는 업로더가 아니라 인덱서 소유라 비활성에서도 돈다. 잘못된 값이면 버킷과 무관하게 기동이 거부된다 |
+| `REWIND_PUBLIC_BASE_URL` | (빈값) | 되감기 목록(M4 ⓒ)의 조각 · MAP URI 앞머리 — 목록 줄은 앞머리 + `/` + S3 키다. **`S3_BUCKET` 이 있으면 필수다 — 비거나 틀리면 기동을 거부해 인덱싱 · 업로드도 함께 멈춘다**(종료 코드 1). 버킷이 비면 읽지 않는다. https 만 받고 http 는 호스트가 루프백 IP 리터럴(127.0.0.0/8 · `::1`)일 때만 받는다(`localhost` 는 예외가 아니다). 호스트가 있어야 하고 userinfo · query · fragment · 공백 · 제어 문자 · 따옴표 · 역슬래시 · 비ASCII · 범위 밖 포트(1–65535 아님) · 경로의 dot 세그먼트(`.` · `..` · `%2e` 꼴)를 거부한다(역슬래시 · 범위 밖 포트 · dot 세그먼트 셋은 PR ⓒ 종결 라운드에서 더한 것 — 이런 값을 두고 있던 사본은 다음 기동에서 거부된다). 거부 문구는 URL 원문 · userinfo · query 를 싣지 않는다(위반 종류와 포트 숫자 · scheme · 금지 바이트의 위치와 값만 싣는다). 끝 `/` 하나는 떼고 둘 이상이면 거부한다. 다른 env 와 달리 앞뒤 공백을 떼지 않는다. 켜짐 로그 `rewind_publish_started` 의 `base_url` 로 확인한다. live 목록이 있는 동안에는 바꾸지 않는다(아래 「되감기 M4 ⓒ 이관 기록」) |
 
 자격증명은 SDK 기본 체인(env 3종 → 공유 프로필)을 쓴다. 로컬에서는
 `eval "$(aws configure export-credentials --format env)"` 후
@@ -276,7 +281,7 @@ MediaMTX가 이벤트마다 컨테이너 안의 작은 명령을 실행하고(`m
 `AWS_PROFILE`은 `~/.aws` 마운트 폴백을 켤 때만 함께 넣는다 — 마운트 없이 넣으면
 SDK가 존재하지 않는 프로필을 요구해 기동이 죽는다(2026-08-04 실측).
 
-위 표가 `internal/config/config.go`가 읽는 전부다(`TZ` 제외 43개). 잘못된 값(숫자 자리에 문자,
+위 표가 `internal/config/config.go`가 읽는 전부다(`TZ` 제외 44개). 잘못된 값(숫자 자리에 문자,
 음수, 파싱 불가한 기간)은 조용히 기본값으로 넘어가지 않고 기동에 실패한다.
 `SEGMENT_SUSPECT_BELOW_MS`가 `SEGMENT_EXPECTED_DURATION_MS`보다 크면 기동 단계에서 거부한다.
 
@@ -303,11 +308,13 @@ M3에서 **무엇이 들어왔고 무엇이 일부러 빠졌는지**를 적는�
   업로더의 축 구분(② 아카이브 / ③ 되감기 / init).
 - **아직 없다**: 되감기 매니페스트를 **발행**하는 코드 전체(M4). 그래서 M3만 배포해도
   시청자에게 보이는 동작은 바뀌지 않는다.
-- **플래그와 무관하게 쓰이는 것이 있다**: `REWIND_SEED_ENABLED`(기본 `false`)가 가르는 것은
-  **컷오프 주조 권한 하나**다. 세션 행·carrier 3열·init 준비는 플래그가 꺼져 있어도 쓰인다
+- **플래그와 무관하게 쓰이는 것이 있다**: `REWIND_SEED_ENABLED`(M3 당시 기본
+  `false` — M4 ⓒ 부터 기본 `true`)가 가르는 것은 **컷오프 주조 권한 하나**다.
+  세션 행·carrier 3열·init 준비는 플래그가 꺼져 있어도 쓰인다
   (설계대로이며, 계보에 구멍을 내지 않기 위해서다 — kty 확인 2026-09-02).
 - **관측 축 롤백 손잡이**: `MTX_API_URL`을 비우면 폴러를 아예 기동하지 않는다 → 관측 없음 →
-  스캔 유입은 세션을 열지 않는다(안전한 방향으로 잠긴다). 위 env 절의 **팀 1회 조치**도 함께 본다.
+  스캔 유입은 세션을 열지 않는다(안전한 방향으로 잠긴다). M4 ⓒ 부터는 회차
+  종료 전이도 멈춘다(위 env 절). 위 env 절의 **팀 1회 조치**도 함께 본다.
 
 ### M4(발행 층)로 넘어간 것
 
@@ -319,12 +326,12 @@ M3에서 **무엇이 들어왔고 무엇이 일부러 빠졌는지**를 적는�
 | `init_s3_key`·`init_sha256`·`init_bytes` 세 열의 **쓰기 경로**와 워커 배선 | 값의 유일한 생산자가 위 `Producer.Init`이다. M3는 확정 CAS 문장·계약과 픽스처까지 | **완료(PR ⓐ)** — 첫 init CAS(`internal/index/upload_store.go` `MarkInitUploaded`)가 세 열과 `init_uploaded_at` 을 한 문장으로 쓴다. 워커 배선은 `axis_body.go` `markInitUploaded` |
 | ③ 바이트 추출·③ 재수거·init 재수거 | 바이트가 없는 상태에서 수거를 켜면 없는 파일을 집어 영구 격리된다 | **완료(PR ⓐ)** — 추출은 `axis_body.go` `playbackPayload`, 재수거는 `internal/upload/sweep.go` `sweepAxes`(② → ③ → init) |
 | 스위퍼의 init 조회 · backlog 축별 집계 | 회수기가 M4라 지표만 켜면 행동 없는 신호가 된다. **M3 동안 backlog 지표는 ② 축만 보여 준다**(③·init은 프로덕션 동작이 0건이라 숨는 장애가 없다) | **완료(PR ⓐ)** — init 조회 `pendingInitUploadsSQL`, 잔량 3벌(`countArchiveBacklogSQL`·`countPlaybackBacklogSQL`·`countInitBacklogSQL`). `upload_backlog` 가 축 라벨을 단다 |
-| 발행 게이트 실물(`init_uploaded_at IS NULL` → `ready:false`)·G7 skew·`rewind_cutoff_absent` 알람·writer fence | 전부 발행 층 소유다. M3는 그 **장부 축**만 픽스처로 확인했다 | **일부(PR ⓐ·ⓑ)** — G7 완결: ⓐ 의 skew 기록(`internal/indexer/chain.go` `recordSkew`, Debug)에 ⓑ 의 S7 PDT 엄격 증가 검사(`internal/rewind/validate.go` `checkPDT`)가 더해졌다. 발행 게이트·알람·fence 는 ⓒ |
-| 세션 종료 전이(`live` → `ending` → `ended`) | M4/M6. **그래서 M3에서는 같은 스트림의 연속 방송이 첫 회차에 계속 귀속된다** — 발행 층이 없어 무해하며, 테스트가 현 동작을 문서화한다 | **일부(PR ⓐ)** — init 불일치에 의한 `live → ending(init_mismatch)` 만 들어왔다(`upload_store.go` `MarkPlaybackFailed` 결속 갈래). 송출 종료 전이는 ⓒ, `ended` 는 M6 — 그래서 연속 방송이 첫 회차에 귀속되는 동작은 ⓒ 까지 그대로다 |
-| `REWIND_SEED_ENABLED` 기본값 `true` 전환 | 발행 층이 오는 PR에서 함께 켠다(kty 결정 2026-09-02). 스위치 자체는 롤백 손잡이로 남는다 | 대기 — ⓒ |
-| `discontinuity_base` 증분 산식 | 렌더 축 값이라 소비자(M4)와 같은 커밋에서 정한다. M3는 명시적 기본값 `0`("승계 없음") | **완료(PR ⓑ)** — `rewind.EvictedDiscontinuityTags`(순수 함수 — 목록 앞에서 빠지는 끊김 표시 수 = base 에 더할 증분). 배선(발행 예약 문장 P0 에 동봉)은 ⓒ |
+| 발행 게이트 실물(`init_uploaded_at IS NULL` → `ready:false`)·G7 skew·`rewind_cutoff_absent` 알람·writer fence | 전부 발행 층 소유다. M3는 그 **장부 축**만 픽스처로 확인했다 | **완료(PR ⓐ·ⓑ·ⓒ)** — G7 완결: ⓐ 의 skew 기록(`internal/indexer/chain.go` `recordSkew`, Debug)에 ⓑ 의 S7 PDT 엄격 증가 검사(`internal/rewind/validate.go` `checkPDT`)가 더해졌다. 발행 게이트·알람·fence 는 ⓒ(ⓒ 에서 들어왔다 — 게이트 `internal/rewind/publish/gate.go` `ShouldTick` · 알람 `rewind_cutoff_absent`(30초 감시 (c)) · fence `internal/rewind/publish/fence.go`) |
+| 세션 종료 전이(`live` → `ending` → `ended`) | M4/M6. **그래서 M3에서는 같은 스트림의 연속 방송이 첫 회차에 계속 귀속된다** — 발행 층이 없어 무해하며, 테스트가 현 동작을 문서화한다 | **일부(PR ⓐ · ⓒ)** — ⓐ 가 init 불일치에 의한 `live → ending(init_mismatch)` 를 넣었고(`upload_store.go` `MarkPlaybackFailed` 결속 갈래), ⓒ 가 송출 종료 전이 `live → ending(offline)` 을 넣었다(판정 `internal/indexer/judgment.go` `OfflineDue` · 전이 `internal/index/store.go` `EndLive`). `ended` 는 M6 이다. 연속 방송이 첫 회차에 귀속되는 동작은 관측이 켜져 있으면 닫혔고, `MTX_API_URL` 을 비우면 그대로다(아래 「되감기 M4 ⓒ 이관 기록」 알려진 한계) |
+| `REWIND_SEED_ENABLED` 기본값 `true` 전환 | 발행 층이 오는 PR에서 함께 켠다(kty 결정 2026-09-02). 스위치 자체는 롤백 손잡이로 남는다 | **완료(PR ⓒ)** — `internal/config/config.go` 의 기본값이 `true` 다. 명시 `false` 가 롤백 손잡이이고 새 컷오프 주조만 멈춘다(이미 주조된 스트림은 계속 발행된다) |
+| `discontinuity_base` 증분 산식 | 렌더 축 값이라 소비자(M4)와 같은 커밋에서 정한다. M3는 명시적 기본값 `0`("승계 없음") | **완료(PR ⓑ)** — `rewind.EvictedDiscontinuityTags`(순수 함수 — 목록 앞에서 빠지는 끊김 표시 수 = base 에 더할 증분). 배선(발행 예약 문장 P0 에 동봉)은 ⓒ(ⓒ 에서 배선했다 — P0 동봉이 아니라 마지막 발행본 기준 절대식이고 base 는 P4 · 화해가 쓴다. 부기 35) |
 | 상태 관측 등급(tier) ⓘⓘ·ⓘⓘⓘ 상수 | 폴러가 실측상 ⓘ만 산출한다. 소비자가 생길 때 같이 넣는다 | 대기 — 슬레이트 유입이 착지하는 마일스톤(계획 8절) |
-| **부채** — `indexer.go`가 1228줄(M3 전 1074)이다. 판정 묶음(`observation`·`buildSeed`·`corroborates`·`withStateObs`·`sessionOp` = `:595`~`:726`, 약 130줄)을 `judgment.go`로 분리한다 | 응집이 하나(유입 → 방증 → 연산)라 지금 나눠도 읽기가 나아지지만, 그 묶음을 실제로 건드리는 것이 M4(발행 축 판정 편입)라 **그때 같은 커밋에서** 옮긴다. 지금 옮기면 M4 리뷰가 이동과 변경을 함께 읽어야 한다 | 대기 — ⓒ |
+| **부채** — `indexer.go`가 1228줄(M3 전 1074)이다. 판정 묶음(`observation`·`buildSeed`·`corroborates`·`withStateObs`·`sessionOp` = `:595`–`:726`, 약 130줄)을 `judgment.go`로 분리한다 | 응집이 하나(유입 → 방증 → 연산)라 지금 나눠도 읽기가 나아지지만, 그 묶음을 실제로 건드리는 것이 M4(발행 축 판정 편입)라 **그때 같은 커밋에서** 옮긴다. 지금 옮기면 M4 리뷰가 이동과 변경을 함께 읽어야 한다 | **완료(PR ⓒ)**(ⓒ 커밋 1 이 판정 묶음을 `internal/indexer/judgment.go` 로 옮겼다 — 부기 4. `indexer.go` 는 지금 1,135줄로 800줄 상한을 아직 넘고, 더 나눌 계획은 정하지 않았다) |
 
 ### M5(보안 강화)로 넘어간 것
 
@@ -411,7 +418,8 @@ M4(되감기 발행 층)는 PR 셋으로 나눠 들어온다 — ⓐ 생산 층 
   `init_mismatch`(M3 의 `td_exceeded` 와 같은 부류, CHECK 없는 text 열).
 
 **③ 은 플래그와 무관하게 돌고, 비용은 ⓐ 배포 시점부터 는다.**
-`REWIND_SEED_ENABLED`(기본 `false`)가 가르는 것은 컷오프 주조 권한 하나다(위 M3 절과 같다).
+`REWIND_SEED_ENABLED`(ⓐ 당시 기본 `false` — ⓒ 부터 기본 `true`)가 가르는 것은 컷오프
+주조 권한 하나다(위 M3 절과 같다).
 ③ 추출·업로드는 회차에 귀속된 조각마다, init 업로드는 회차마다 이 값과 무관하게 돈다(설계
 `c3_extract_only` — 인덱서 `internal/indexer/upload.go` `requestRowUploads` 에 플래그 검사가
 없다). 그래서 ⓐ 를 배포하는 순간부터 다음이 는다.
@@ -431,9 +439,10 @@ M4(되감기 발행 층)는 PR 셋으로 나눠 들어온다 — ⓐ 생산 층 
 
 **반면 재수거와 잔량 지표는 컷오프를 따른다.** ③ 스위퍼 조회와 ③ 잔량은 컷오프가 기록된
 스트림의 컷오프 이후 조각만 본다(계약 5-5 6항 — `internal/index/upload_store.go`
-`pendingPlaybackUploadsSQL`·`countPlaybackBacklogSQL`). 기본값(플래그 끔)에서는 새 스트림에
-컷오프가 없으므로, 실시간 ③ 이 실패한 조각은 스위퍼가 다시 집지 않고
+`pendingPlaybackUploadsSQL`·`countPlaybackBacklogSQL`). ⓐ 당시 기본값(플래그 끔)에서는 새
+스트림에 컷오프가 없으므로, 실시간 ③ 이 실패한 조각은 스위퍼가 다시 집지 않고
 `upload_backlog axis=playback` 에도 잡히지 않는다 — 실패 로그(`upload_failed` 등)로만 보인다.
+ⓒ 부터는 기본 켜짐이라 첫 자격 유입 뒤의 조각을 스위퍼가 다시 집는다(컷오프 앞 조각은 그대로다).
 init 조회는 컷오프와 무관하다.
 
 ### ③ 축은 어떻게 도나
@@ -610,10 +619,14 @@ skew(k) = (pdt(k) − pdt(k−1)) − (pos(k) − pos(k−1))
   조각을 붙이므로 동작에는 영향이 없다.
 - **긴급 정지 = 업로더 전체 끄기(`S3_BUCKET` 빈값).** ③ 만 끄는 새 env 손잡이는 만들지 않았다.
   주의가 둘이다.
-  - 권장 override 의 `${S3_BUCKET:-pokeclip-media-demo-2557}` 는 빈값을 기본 버킷으로 바꾼다.
-    셸에서 `S3_BUCKET=""` 를 줘도 꺼지지 않는다. `docker-compose.override.yml` 의 그 줄을
-    `S3_BUCKET: ""` 리터럴로 고친 뒤 `docker compose up -d --force-recreate segment-indexer`
-    한다. 예시 파일의 `:-` 를 `-` 로 바꾸는 수정은 ⓒ 에 들어간다.
+  - 예시 파일의 `S3_BUCKET` 줄은 ⓒ 에서 `${S3_BUCKET-…}` 로 고쳤다. 그 예시를 복사한
+    새 사본은 `S3_BUCKET=` 를 명령 앞에 붙여 끈다
+    (`S3_BUCKET= docker compose up -d --force-recreate segment-indexer`).
+    따로 한 줄로 치면 내보내지 않은 변수라 compose 에 닿지 않는다.
+    옛 사본의 `${S3_BUCKET:-pokeclip-media-demo-2557}` 는 빈값을 기본 버킷으로
+    바꾸므로 그 줄을 `S3_BUCKET: ""` 리터럴로 고친 뒤 같은 명령을 앞붙임 없이 친다.
+    override 를 빼고 끄는 길은 사본과 무관하다. 그 길과 확인 줄은
+    아래 「ⓒ 되돌리기와 긴급 정지」에 있다.
   - 업로더 전체가 서므로 **② 클립 소재 업로드(3번 소비자)도 멈춘다.**
 
 #### 튜너블과 고정값
@@ -677,10 +690,10 @@ kty 결정(2026-09-19): *"사이드카가 재기동 되는 경우는 고려하�
 | **재기동만 일어난 회차** — 재기동 전 조각의 업로드 실패분과 재기동 뒤 첫 행의 판독 실패는 표 줄이 없어 GAP 이 된다(도장 역행은 없다) | 그 조각들만 GAP. 실시간 경로는 영향이 없다. 컷오프가 있는 스트림이면 스위퍼가 파일이 지워질 때까지 그 행을 다시 집고 거부한다(잔량 잡음) | 표 영속화(재기동 복구 — kty 결정 B′ 로 범위 밖, 다음 버전) |
 | **모호한 커밋** — INSERT 는 커밋됐는데 드라이버 오류로 실패처럼 보여 재시도하면 `InsertDuplicatePath` 로 끝나고 사슬 전진(`advance`)이 불리지 않는다. 다음 행이 seq 충돌 재적재를 거치면 사슬이 빠진 행을 비귀속 행처럼 보고 압축한다 | 빠진 행을 스위퍼가 표 줄(보정값 0)로 재생성하면 두 조각이 그 길이만큼 겹친다(회차 안·표시 없음). 창은 극히 좁다 | `TailRow` 에 회차 정보가 없어 구분할 수 없다 — 「빠진 행」 판정을 넣으려면 장부 재조회가 필요하다(다음 버전) |
 | 재기동 뒤 이어지는 회차에서 **접수된 init 작업이 확정 없이 끝나면**(CAS DB 오류·`Missing`·산출 실패(사다리 소진·즉시 실패 3종)·PUT 사다리 소진·브레이커 거부·EMFILE·stat 실패·S3 일시 장애 등) 그 프로세스의 `sessionInit` 은 되살아나지 않는다. 루프는 접수 여부만 알고, 장부에 init 이 이미 확정된 회차는 스위퍼 init 조회도 집지 않는다 | 그 회차 실시간 ③ 은 대조 보류(회차당 64개) 뒤 스위퍼 몫이다. ⓐ 단독 국면(컷오프 없음)에서는 올라가지 않고, ⓒ 가 스위치를 켠 뒤로는 스위퍼(30초 주기)가 회차 기대값을 실어 올린다 | 워커→루프 결과 통로(`Dirty`)로 미복원을 감지해 재요청한다 — ⓒ 착지 뒤 검토 |
-| **init 잔량이 M4 동안 영구히 남을 수 있다.** M4 에는 `ended` 전이가 없어 「`ended` 제외」가 실제로 거르는 것이 없고, init 조회·잔량 조건이 `init_uploaded_at IS NULL AND state <> 'ended'` 뿐이다(보존 창·컷오프 한정 없음). M3 로 운영된 DB 의 회차(init NULL), 원본이 1일 보존을 넘긴 회차, 확정 못 한 회차가 여기 쌓인다 | 데이터·재생 영향은 없고 경보 소음이다(M6 까지). 원본이 없는 회차는 프로세스가 뜰 때마다 `upload_file_missing` WARN + 격리되고, 30건을 넘으면 스위퍼 회차(30초)마다 `upload_backlog axis=init` WARN 이 난다 | **kty 회부**(계획 부기 31 후보와 같은 축): init 조회·잔량을 원본 보존 창(`start_wall_utc > now() − SessionTTL`)으로 한정하거나, 설계 5.5.4 #2 「컷오프-인지」를 init 에도 적용 〔추기 2026-09-25 — 부기 31 은 닫혔다(위 「M4 ⓐ 로 켜진 것과 아직 없는 것」의 추기). 이 회부는 그와 별개라 아직 판단 대기다.〕 |
+| **init 잔량이 M4 동안 영구히 남을 수 있다.** M4 에는 `ended` 전이가 없어 「`ended` 제외」가 실제로 거르는 것이 없고, init 조회·잔량 조건이 `init_uploaded_at IS NULL AND state <> 'ended'` 뿐이다(보존 창·컷오프 한정 없음). M3 로 운영된 DB 의 회차(init NULL), 원본이 1일 보존을 넘긴 회차, 확정 못 한 회차가 여기 쌓인다 | 데이터·재생 영향은 없고 경보 소음이다(M6 까지). 원본이 없는 회차는 프로세스가 뜰 때마다 `upload_file_missing` WARN + 격리되고, 30건을 넘으면 스위퍼 회차(30초)마다 `upload_backlog axis=init` WARN 이 난다 | **kty 회부**(계획 부기 31 후보와 같은 축): init 조회·잔량을 원본 보존 창(`start_wall_utc > now() − SessionTTL`)으로 한정하거나, 설계 5.5.4 2번 「컷오프-인지」를 init 에도 적용 〔추기 2026-09-25 — 부기 31 은 닫혔다(위 「M4 ⓐ 로 켜진 것과 아직 없는 것」의 추기). 이 회부는 그와 별개라 아직 판단 대기다.〕 〔추기 2026-10-19 — ⓒ 에서 닫혔다: kty K3 결정으로 한계 유지 · M6 이월(아래 「M4 ⓒ 에서 M5/M6 로 넘긴 것」 표).〕 |
 | **init CAS `Mismatch` 는 S3 객체 보호가 아니다** — PUT 이 CAS 보다 먼저라, 다른 본문이 같은 키에 올라간 뒤에야 장부가 기존 해시를 지킨다 | 같은 송출 설정·같은 재포장 산출(골든)이면 오지 않는다. 다만 ⓐ 에서 회차는 방송을 넘어 이어진다(`session/registry.go` — live 회차가 있으면 TD(목표 길이) 초과가 아닌 한 계속 붙는다). 그래서 사이드카 재기동 뒤 그 회차에 처음 들어온 조각이 해상도 등 송출 설정을 바꾼(A → B) 방송의 것이면, 재기동 뒤 첫 행의 init 재요청이 이 분기에 닿는다 — B 의 init 을 먼저 PUT 하고 CAS 가 `Mismatch` 라, ERROR 1줄이 남고 그 회차 init 객체는 B 로 덮이며 그 회차 실시간 ③ 은 전부 대조 보류된다. 재포장 산출을 바꾸는 배포(골든 갱신 — 위 「포크 태그를 올릴 때」)로 재기동했으면 이어지는 모든 회차가 같은 경로에 닿는다. 송출 설정 변경 쪽은 ⓒ 의 송출 종료 전이가 회차를 끊어 원인째 닫고, 배포 쪽은 회차가 배포를 넘어 이어져 ⓒ 로도 닫히지 않으므로 오른쪽 수리안이 닫는다 | 조건부 PUT(`If-None-Match`)·내용 주소 게시 — ⓒ `publish.Store` 의 조건부 PUT 축과 함께 검토 |
 | **ⓐ 단독 국면에서 방송 사이 휴지가 24시간을 넘으면 다음 방송의 실시간 ③ 이 보류에 묶인다.** 회차가 방송을 넘어 이어지는 동안 `sessionInit`(과 보정값 표)은 수명(`SessionTTL` 24시간)으로 지워지는데, 인덱서의 `initAdmitted`(이 프로세스에서 init 요청이 접수된 회차)는 프로세스 수명 동안 남아 init 재요청이 나가지 않는다. 그래서 다음 방송의 실시간 ③ 이 전부 `init_pending` 보류로 남고 drain 으로도 풀리지 않는다(검수 탐침 2026-09-24: 25시간 휴지 뒤 둘째 방송의 ③ 마킹 0건). 실시간 경로는 재기동해야 init 재요청이 `AlreadySame` 으로 `sessionInit` 을 되살린다(휴지 중 송출 설정이 바뀌었거나 재포장 산출이 바뀐 배포로 재기동했으면 위 `Mismatch` 행 경로) | 시청자 영향 0 — ⓐ 단독 국면에는 ③ 소비자가 없고, 그 행들은 ⓒ 가 켠 컷오프보다 앞이라 등재 대상이 아니다. 컷오프가 있는 스트림이면 보류분도 보류 상한 초과분도 스위퍼가 장부 기대값으로 집어 올린다(검수 탐침: 보류 1 → 스위퍼 성공 → 보류 0) — 남는 것은 스위퍼 주기만큼의 지연과 중복 작업(실시간 시도가 보류에서 멈춘 조각을 스위퍼가 다시 처리)이다. ⓒ 에서는 송출 종료 전이가 회차를 끊어 닫는다 | 기록용(코드 무변경) |
-| **보류 재요청의 거울상 경합** — tick 이 ③ 작업을 꺼낸 뒤 재요청하기 전에 같은 조각의 스위퍼 사본이 먼저 확정되면(그 조각의 in-flight 가 이미 풀려 있다) tick 의 재요청이 그대로 접수돼, 같은 바이트를 한 번 더 PUT 하고 `upload_cas_rejected` WARN 1줄이 난다(µs 창 — ⓒ 처럼 컷오프가 있어 스위퍼가 ③ 을 집을 때만). 장부는 CAS 가 지킨다. 확정 표시(tombstone)는 반대 순서(재요청이 거부된 뒤 `claimReady` → `giveBack` 사이에 확정되는 경우)만 막는다 | 재PUT 1회·WARN 1줄, 데이터 영향 0. 확정 표시 메모리는 보류를 한 번이라도 겪은 회차에서 24시간 동안 최악 약 21,600개·약 538 KiB(검수 탐침)이고, 24시간 뒤 비운다 | 워커 PUT 직전 확정 표시 검사(다음 버전) · 기록용 |
+| **보류 재요청의 거울상 경합** — tick 이 ③ 작업을 꺼낸 뒤 재요청하기 전에 같은 조각의 스위퍼 사본이 먼저 확정되면(그 조각의 in-flight 가 이미 풀려 있다) tick 의 재요청이 그대로 접수돼, 같은 바이트를 한 번 더 PUT 하고 `upload_cas_rejected` WARN 1줄이 난다(µs 창 — ⓒ 처럼 컷오프가 있어 스위퍼가 ③ 을 집을 때만. ⓒ 에서 주조 스위치가 기본으로 켜져 이 조건이 평시다). 장부는 CAS 가 지킨다. 확정 표시(tombstone)는 반대 순서(재요청이 거부된 뒤 `claimReady` → `giveBack` 사이에 확정되는 경우)만 막는다 | 재PUT 1회·WARN 1줄, 데이터 영향 0. 확정 표시 메모리는 보류를 한 번이라도 겪은 회차에서 24시간 동안 최악 약 21,600개·약 538 KiB(검수 탐침)이고, 24시간 뒤 비운다 | 워커 PUT 직전 확정 표시 검사(다음 버전) · 기록용 |
 
 그 밖의 한계:
 
@@ -754,6 +767,7 @@ kty 결정(2026-09-19): *"사이드카가 재기동 되는 경우는 고려하�
 - init 잔량 영구 잔존의 보정(알려진 한계 여섯째 행 — 보존 창 한정 또는 컷오프-인지) — kty,
   부기 31 과 같은 축.
   〔추기 2026-09-25 — 부기 31 은 닫혔지만 이 항은 별개라 아직 판단 대기다.〕
+  〔추기 2026-10-19 — ⓒ 에서 닫혔다: kty K3 결정으로 한계 유지 · M6 이월.〕
 
 ### M4 ⓐ 출처
 
@@ -915,13 +929,16 @@ M4 의 둘째 PR(ⓑ 렌더·경계)이 **무엇을 넣었고, 무엇을 일부�
 ⓑ 가 일부러 남긴 것만 적는다. 계획 자리는 전부 계획 「ⓒ 착수 메모」 절이고, 칸에는 그 항의 개정 표식을
 적는다.
 
+〔추기 2026-10-19 — 열둘 모두 ⓒ 에서 닫혔다. 닫힌 자리는 아래 ⓒ 절의 「ⓑ 가 넘긴
+열둘이 닫힌 자리」 표다(번호가 같다).〕
+
 | # | 넘긴 것 | 한 줄 요지 | 계획 자리 |
 |---|---|---|---|
 | 1 | 축출 증분 배선 · prev 계약 · 재기동 변형 | `EvictedDiscontinuityTags(prev, nextMSN)` 의 prev 는 「소유 회차의 지금 base 를 DISC-SEQ 로 적어 렌더한 직전 목록」(발행에 실패한 시도 포함)이다. 「마지막으로 발행된 목록」으로 잡으면 PUT 실패 뒤 같은 표시를 두 번 센다. 발행 예약(P0) 커밋 뒤 PUT 전에 죽으면 그 증분의 기준 창이 어디에도 남지 않는다 — ⓒ 복구 설계의 입력 | r32 |
 | 2 | 재기동 뒤 `rewind.Published` | 직전 발행의 MSN·조각 수는 메모리에만 있다. 영값으로 넘기면 S1(줄 수)·S2(MSN 역행) 검사가 자명하게 통과한다 — 본문 GET 이나 재구성으로 채운다 | r29 |
 | 3 | 유입 정지 판정의 입력 | 오프라인 전이의 입력은 캐시가 아니라 인덱서 커서다 — 캐시는 컷오프 전 행·컷오프 없는 스트림의 행과 `start_wall_utc` 를 들지 않는다 | r31 |
 | 4 | DISC-SEQ 단조 그물 · 끊김 표시 줄 검사 · 모르는 태그 검사 | 셋 다 S1–S7 에 없다. 끊김 표시 줄 검사·모르는 태그 검사는 목록 본문을 쓰는 코드가 `Render`·`SealEndlist` 둘뿐이라 ⓑ 가 만들지 않았다(커밋 ⑥ 재판정). DISC-SEQ 단조 그물은 처음부터 ⓒ 몫이다 — DISC-SEQ 가 뒤로 가면 RFC 8216bis-22 6.2.2 MUST 위반이라, ⓒ 가 계승 취소를 영속하는 형상과 함께 정하고 앞의 둘도 그때 함께 판정한다 | r29 추기 · r33 |
-| 5 | TD 초과 접두·꼬리 교정의 S5 정지(숨은 가정 11) | TD 분할 회차를 300초 안에 계승하면 접두 조각이 새 회차 TD 를 넘고, 꼬리 교정은 TD 를 다시 재지 않는다 — 두 길 모두 목록이 S5(본문 형식·TD 검사)로 최대 1시간 멈춘다(`TestValidateInheritedTDSplitPrefixHaltsOnS5` 가 지금 동작을 고정). 처방 후보 (A) 계승 개시 TD = max(직전 TD, 첫 조각 반올림) · (B) S4 에 TD 조항 · (C) 꼬리 교정 때 TD 재판정을 kty 에 회부한다. 판별 공백 VB-LASTROW(S5 TD 조항이 마지막 줄 회차의 TD 를 읽는 뮤턴트)도 그 결론과 함께 정한다 | r29 · r32 추기 |
+| 5 | TD 초과 접두·꼬리 교정의 S5 정지(숨은 가정 11) | TD 분할 회차를 300초 안에 계승하면 접두 조각이 새 회차 TD 를 넘고, 꼬리 교정은 TD 를 다시 재지 않는다 — 두 길 모두 목록이 S5(본문 형식·TD 검사)로 최대 1시간 멈춘다(`TestValidateInheritedTDSplitPrefixHaltsOnS5` 가 지금 동작을 고정). 처방 후보 (A) 계승 개시 TD = max(직전 TD, 첫 조각 반올림) · (B) S4 에 TD 조항 · (C) 꼬리 교정 때 TD 재판정을 kty 에 회부한다. 판별 공백 VB-LASTROW(S5 TD 조항이 마지막 줄 회차의 TD 를 읽는 뮤턴트)도 그 결론과 함께 정한다(ⓒ 에서 닫혔다 — kty K1 · K2) | r29 · r32 추기 |
 | 6 | 발행 모형과 BASE 계열 뮤턴트 | 끝난 회차 목록을 창을 따라 계속 갱신할지 봉인할지(발행 모형)가 정해지지 않아, 접두 회차와 소유 회차의 base 가 갈리는 픽스처를 세울 수 없다. 그래서 머리 대조가 첫 줄·마지막 줄 회차의 base 를 읽는 뮤턴트(VH-FIRSTROW-BASE·VH-LASTROW-BASE)가 산다 — 그동안 DISC-SEQ 비기본값 대조는 f2 골든이 맡는다. 뒤 회차 행이 창 꼬리를 밀 때 앞 회차 목록이 S3(범위 검사)로 멈추는 국면도 같은 동결 순서 문제다 | r33 · r30 |
 | 7 | S4 계승 취소의 영속 | ⓑ 의 S4 는 렌더 시점 판정이라 영속하지 않는다. 다음 tick 에 접두를 다시 실으면 MSN 이 뒤로 가 S2(MSN 역행 검사)가 발행을 멈춘다 — ⓒ 가 목록 수명 동안 붙든다. 접두 회차의 계승 취소가 계승 회차 목록 발행 뒤에 오는 국면(미확인)도 같은 축이다 | r29 · r32 |
 | 8 | 소유 회차 줄의 절대 URI | S1–S7 어디에도 없다(S4 는 접두만 본다). `REWIND_PUBLIC_BASE_URL` 적재 검증이 유일한 방어다 | r29 |
@@ -955,6 +972,9 @@ M4 의 둘째 PR(ⓑ 렌더·경계)이 **무엇을 넣었고, 무엇을 일부�
 
 판단 대기 — 위 「ⓒ 로 넘긴 것」 5번(TD 초과 접두·꼬리 교정의 처방)을 ⓒ 착수 때 kty 에 회부한다.
 VB-LASTROW 판별 테스트는 그 결론을 따른다.
+〔추기 2026-10-19 — ⓒ 에서 닫혔다: 접두 길은 kty K1(계승 개시 TD), 꼬리 교정 길은
+kty K2(알려진 한계)다. VB-LASTROW 는 `TestValidateTDIsOwnerSessionsOutsideWriteRule` 이
+가른다.〕
 
 미확인:
 
@@ -1199,20 +1219,610 @@ print(f"OK 청크 {len(chunks)}개 축자 일치(VERSION 줄 = 부기 32 대체)
   (VERSION 9·6 두 번, 2026-09-24 — 작업 산출물 `126_hlsjs_parse_g6_f2.md`). 바이트 실재생·compose 실측은 ⓒ 몫이다.
 - 코드: 이 절이 인용한 파일·함수·테스트(PR ⓑ 커밋 ①–⑥ 개발 보고 · 리뷰 통합 r1–r6 과 대조).
 
+## 되감기 M4 ⓒ 이관 기록 (POK-195)
+
+M4 의 셋째 PR(ⓒ 발행)이 **무엇을 넣었고, 무엇을 M5/M6 로 넘겼고, 운영자가 무엇을
+알아야 하는지**를 적는다. ⓒ 는 ⓑ 가 만든 되감기 목록을 S3 에 올리는 발행 층과,
+방송이 끝난 회차를 닫는 종료 전이를 넣었다. 버킷(`S3_BUCKET`)을 준 환경에서는
+회차마다 목록 객체가 S3 에 생기고 조각이 실릴 때마다 갱신된다. 목록을 시청자에게
+내주는 경로(제어면 · CDN)는 M5 라서 시청자 화면은 아직 그대로다. 위 ⓐ 절이 「ⓒ 의
+M4 종합 이관 기록이 싣는다」고 미룬 설계 편차 행도 이 절이 싣는다.
+
+### M4 ⓒ 용어
+
+위 M3 · ⓐ · ⓑ 절에서 푼 말(세션 · 컷오프 · init · ③ · GAP · CAS · 렌더 · settled · 창 ·
+DISC-SEQ · base · 계승 회차 · S1–S7 · 봉인 · 읽기 뷰)은 다시 풀지 않는다.
+
+| 말 | 뜻 |
+|---|---|
+| 발행 | 검사를 지난 목록 본문을 S3 의 목록 객체 `dvr/{stream}/{session}/index.m3u8` 에 조건부 PUT 으로 올리는 것. 첫 판은 `If-None-Match: *`, 그 뒤는 직전 판의 ETag 를 건 `If-Match` 다 |
+| 틱 | 한 회차 목록을 한 번 발행하는 작업. 세대 규약 P0–P4 를 차례로 돈다 — P0 세대 예약(DB) · P1 렌더 · P2 발행 전 검사 · P3 조건부 PUT · P4 확정 기록(DB)(설계 4.4.3절) |
+| P | 그 목록 URL 에 마지막으로 발행된 판(본문 · ETag · MSN · DISC-SEQ). 다음 틱이 견주는 기준이다 |
+| writer fence | 한 회차 목록을 쓸 수 있는 프로세스를 하나로 정하는 장부 칸(`stream_sessions.writer_fence` · lease 5초). 프로세스마다 부팅 때 새 토큰을 만든다 |
+| 화해 | S3 의 현재 판을 Head(ETag · 메타 8키)로 읽어 P 와 장부를 그 판에 맞추는 것. 본문은 읽지 않는다 |
+| 메타 8키 | 목록 객체에 함께 싣는 사용자 메타 — `pc-gen` · `pc-pub-seq` · `pc-session` · `pc-terminal` · `pc-msn` · `pc-seg-count` · `pc-disc-seq` · `pc-body-sha256` |
+| 발행 억제 게이트 | 회차가 `live` 이고 그 init 이 올라갔고 그 스트림이 적재 중이 아닐 때만 틱을 내는 판정(`publish.ShouldTick`) |
+| GAP 원장 | GAP 으로 싣기로 확정한 조각의 기록 `stream_published_gaps`. `recorded` 로 들어가고, 그 GAP 을 실은 판이 P4 로 확정되면 `put_confirmed` 가 된다 |
+| 정체 사다리 | 목록이 멈췄을 때 1초마다 보는 단계 — L1 그 조각의 ③ 재시도를 당긴다(실렸어야 할 시각부터 0.5초) · L2 그 조각을 GAP 으로 싣는다(2초) · L4 경보(목록 정체 7.5초) |
+| 보류 틱 | 메인 루프의 1초 주기(`Indexer.HoldTick`). 발행 배선 · 사다리 · 종료 판정이 이 주기에 돈다 |
+| 30초 감시 | 30초마다 DB 를 한 문장 읽어 캐시와 견주는 작업 — (a) 캐시 머리 다음 행과 컷오프 대조 · (c) 컷오프 부재 알람 · 잃은 init 결과 화해 |
+| 차선 | 스트림마다 작업 하나만 도는 작업 통로(`publish.Lanes`). 루프는 작업을 내고 기다리지 않으며 결과는 되감기 완료 case 로 받는다 |
+| 적재 | 한 스트림의 캐시 뷰를 장부에서 다시 읽어 채우는 것 — ⓑ 의 부팅 재구성을 워커로 낸 형이다 |
+| 종료 전이 | 송출이 끝난 회차를 `live` 에서 `ending(offline)` 으로 보내는 것(계획 4.1). 관측이 신선한데 송출 중이 아니고, 유입이 멈췄고(마지막 조각 끝에서 그 길이의 세 배), 그 뒤에 시작한 파일 점검 수집이 결손 없이 완주했을 때다 |
+| 계승(이어받기) | 직전 회차 마지막 조각 끝에서 300초 안에 같은 스트림의 새 조각이 오면, 새 회차가 직전 회차를 잇는 것(ADR-044 · `ReconnectWindow`) |
+| stsd 지문 | 녹화 조각 머리말의 트랙별 코덱 사양(stsd 상자) 해시. 계승 회차의 첫 init 확정 때 직전 회차 첫 조각과 견줘 다르면 계승을 푼다 |
+| P2′ 계승 취소 | 첫 PUT 전에 S4(계승 접두 검사)가 걸리면 계승을 장부에서 푸는 문장. 첫 PUT 뒤의 S4 위반은 발행 중단이다 |
+| 강등 | 발행 몫 조립이 실패하면 발행 몫만 버리고 업로드 · 인덱싱은 계속 도는 것. 회복은 재기동이다 |
+| 공개 표면 | 패키지 밖에서 부를 수 있는 이름(대문자로 시작하는 타입 · 함수 · 메서드 · 칸)의 모음. 아래 「설계와 다르게 한 것」이 그 수를 센다 |
+| 드리프트 | 캐시(메모리 뷰)가 DB 장부와 어긋난 상태. 30초 감시 (a) 가 찾고 적재로 고친다. 위 ⓐ 절의 벽시계 드리프트(녹화기 시계가 벽시계와 벌어지는 것)와 다른 말이다 |
+| 재귀 CTE | SQL 의 `WITH RECURSIVE` 절 — 앞 단계 결과로 다음 단계를 다시 부르는 질의. 30초 감시가 장부의 스트림 ID 를 하나씩 건너뛰며 모으는 데 쓴다 |
+| 라이브 에지 | 라이브 재생 목록의 맨 끝(가장 최근 조각 쪽). `EXT-X-ENDLIST` 가 없는 목록이면 플레이어가 실시간으로 보려고 여기서 시작한다 |
+| ETag | S3 가 객체의 판마다 돌려주는 식별 값(HTTP 응답 헤더). 조건부 PUT 은 「내가 본 판의 ETag 그대로일 때만 덮어쓴다」를 이 값으로 건다 |
+| lease | writer fence 의 유효 기한(5초). 기한 안에 늘리지 않으면 다른 프로세스가 fence 를 가져갈 수 있다 |
+| lazy 갱신 | 마지막 갱신 뒤 3.5초(`LazyRenewAfter`)가 지났을 때만 lease 를 늘리는 보조 갱신. P0 도 같은 문장에서 lease 를 새로 쓴다 |
+
+### M4 ⓒ 로 켜진 것과 아직 없는 것
+
+*   **켜졌다 — 버킷과 무관**: 컷오프 주조 스위치 기본 켜짐(`REWIND_SEED_ENABLED`) ·
+    종료 전이 `live` → `ending(offline)` · 300초 안 재접속 계승 개시와 계승 개시 TD.
+    버킷이 비어도 종료 전이는 돈다(기동 로그 `rewind_publish_disabled` 의 문구).
+*   **켜졌다 — 버킷이 있을 때**: 목록 발행(세대 규약 · writer fence · 화해) ·
+    GAP 원장 · 정체 사다리 L1 · L2 · L4 · 30초 감시 · stsd 게이트(업로더가 돌아야
+    선다).
+*   **아직 없다**: 시청 경로(제어면 · CDN)는 M5 다. `ended` 전이 · ENDLIST 봉인
+    호출 · 동결 · L3 · VOD 는 M6 다. 끊김과 의도적 종료의 구분(계약4 4D 종료
+    신호 수신부)은 PR ⓒ 머지 뒤 별도 티켓이다(kty 결정).
+*   **설정 · 스키마**: 새 env 1(`REWIND_PUBLIC_BASE_URL`) · DDL 0 · 장부 어휘 +1
+    (`end_reason='offline'`) · 메인 루프 select case +1(되감기 완료 case) · 숫자
+    상수 +1(`offlineRetryAfter` 30초) · 인터페이스 +1(`publish.Store`) · `go.mod`
+    변화 0.
+*   **비용 — 버킷이 있을 때**: 목록 PUT 이 스트림당 시간 약 900회 는다. 조각 축과
+    합치면 약 2,700회다(② 900 · ③ 900 · 목록 900 — 계획 부기 3). DB 왕복은 상한이
+    스트림당 시간 약 2,820회다(감시 120 · P0 900 · P4 900 · lazy 갱신 900 이하 —
+    부기 41).
+*   **위 M3 이관 표에서 「ⓒ」로 남겨 둔 항목**: 발행 게이트 · `rewind_cutoff_absent`
+    알람 · writer fence 가 이 PR 에 들어왔다. `discontinuity_base` 증분은 「P0 에
+    동봉」이 아니라 「마지막 발행본 기준 절대식 — base 는 P4 · 화해가 쓴다」로
+    바뀌었다(부기 35). `indexer.go` 판정 묶음은 커밋 1 이
+    `internal/indexer/judgment.go` 로 옮겼다(부기 4). tier 상수는 여전히 대기다.
+
+### M4 ⓒ 가 넣은 것
+
+| 자리 | 무엇 |
+|---|---|
+| `internal/rewind/publish`(신설) | 발행자 — `Store`(조건부 PUT · 메타 · Head 인터페이스, 운영 구현 `S3Store`) · 틱(P0–P4 · P2′ · RC-19) · 화해(R1–R4) · writer fence(획득 · lazy 갱신 · 반납) · 발행 억제 게이트 · GAP 원장 · 정체 사다리 · 30초 감시와 컷오프 부재 판정 · 신호 래퍼 · 차선 |
+| `cmd/segment-indexer/rewind_assembly.go`(신설) | 발행 몫 조립 — 버킷이 있으면 발행용 S3 클라이언트 · https 검사(실효 엔드포인트) · 부팅 버킷 확인(HeadBucket) · 발행자 풀(인덱서 풀과 따로) · fence 토큰을 만든다. 실패하면 발행 몫만 강등한다 |
+| `cmd/segment-indexer/rewind_loop.go` · `rewind_publish.go`(신설) | 루프 보조 타입 — 보류 틱마다 Dirty 반영 · 사다리 · 틱 · 요구 적재 · lazy 갱신 · 감시를 차선으로 내고 결과를 받아 캐시 · 발행 상태에 반영한다. 종료 전이를 실행한다 |
+| `cmd/segment-indexer/main.go` | 조립을 업로더 기동 앞에 두고, 되감기 완료 case 를 더하고, 종료 순서(차선 취소 · 작업 대기 · fence 반납 → 발행자 풀 → 관측 폴러 → 업로더 → 인덱서 풀)를 defer 로 건다 |
+| `internal/indexer/judgment.go`(신설) | 판정 묶음 이동(부기 4)과 종료 판정(`OfflineDue` — 관측 · 유입 정지 · 파일 점검 완주 · 재시도 간격) |
+| `internal/indexer/collect.go` · `scan.go` | 파일 점검의 결손 기록(스트림 디렉터리 순회 오류 · 꼬리보다 늦은 미기록 파일) |
+| `internal/index/store.go` · `rewind_read.go` | `EndLive`(스트림 단위 종료 문장) · 적재 읽기(되짚기 하한 · 행 상한 · 읽기 전용 REPEATABLE READ 한 트랜잭션 · 회차 최소 seq 열) · 30초 감시 한 문장 |
+| `internal/session/registry.go` · `cmd/segment-indexer/session_wire.go` | 300초 안 재접속 계승 개시(직전 회차 조회 · 계승 개시 TD) |
+| `internal/upload` | init 확정 CTE 의 stsd 게이트 입력 · Dirty 붙이기(`AttachDirty`) · L1 손잡이(`Expedite`) · 키 문법 한 벌 |
+| `internal/playback` | `ParseSegKey`(③ 조각 키 문법) · `StsdFingerprint` |
+| `internal/rewind/cache` | 적재 토큰 · 적재 중 push 로그와 재생 · 요구 적재 · 부정 표식 · 잘라내기(`Trim`) · 쉬는 뷰 버리기(`Forget`) · 감시 대조 · 화해 · init 확정 반영 |
+| `internal/rewind/validate.go` | S2 의 DISC-SEQ 비감소 조항 · S5 의 조각 줄 조항(③ 키 문법 · 같은 스트림 · 길이 > 0) |
+| `internal/config/config.go` | `REWIND_PUBLIC_BASE_URL` 적재 · 검증 · 스위치 기본값 `true` |
+| `.github/workflows/media-ci.yml` · `docker-compose.override.yml.example` | 커버리지 게이트에 `rewind/publish` · 예시 사본에 베이스 URL 한 줄과 `S3_BUCKET` 의 `-` 치환 |
+
+#### ⓑ 가 넘긴 열둘이 닫힌 자리
+
+위 「M4 ⓑ 에서 ⓒ 로 넘긴 것」 표의 번호 그대로다.
+
+| # | 넘긴 것 | 닫힌 자리 |
+|---|---|---|
+| 1 | 축출 증분 배선 · prev 계약 · 재기동 변형 | 절대식이다 — 다음 DISC-SEQ = P 의 DISC-SEQ + P 에서 빠지는 끊김 표시 수. base 는 P4 · 화해가 쓰는 파생값이고 P0 은 건드리지 않는다(부기 35 · `rewind.EvictedDiscontinuityTags` 문서) |
+| 2 | 재기동 뒤 `rewind.Published` | 화해가 Head 의 메타 8키로 P 를 되살린다 — 본문 GET 은 하지 않는다(부기 35) |
+| 3 | 유입 정지 판정의 입력 | 인덱서 커서 꼬리다(`indexer.OfflineDue`) |
+| 4 | DISC-SEQ 단조 그물 · 끊김 표시 줄 검사 · 모르는 태그 검사 | S2 에 DISC-SEQ 비감소 조항을 넣었다(`disc_seq_decrease`). 나머지 둘은 넣지 않았다 — 목록 본문을 쓰는 코드는 여전히 `Render` · `SealEndlist` 둘뿐이다 |
+| 5 | TD 초과 접두 · 꼬리 교정의 S5 정지 | 접두 길은 계승 개시 TD = max(6, 직전 회차 TD, round(첫 조각))로 닫았다(부기 33 · kty K1). 꼬리 교정 길은 알려진 한계다(kty K2 — 아래 한계 표) |
+| 6 | 발행 모형과 BASE 계열 뮤턴트 | ending 회차는 발행을 멈춘다(부기 34). 두 뮤턴트를 죽이는 시험이 섰다(`TestValidateHeaderUsesOwnerBaseAfterPrefixEviction` · `TestValidateHeaderUsesOwnerBaseOnPrefixOnlyList`) |
+| 7 | S4 계승 취소의 영속 | 첫 PUT 전 · live 에서만 P2′ 로 장부에 영속한다. 첫 PUT 뒤 S4 위반은 발행 중단이다(부기 36) |
+| 8 | 소유 회차 줄의 절대 URI | `REWIND_PUBLIC_BASE_URL` 기동 검증과 S5 조각 줄 조항이 맡는다 |
+| 9 | 빈 창 판정 | 세션 필터 뒤 행이 0 이면 틱이 P1 에서 끝나고, 루프는 빈 목록이면 틱을 내지 않는다 |
+| 10 | 캐시 조립과 채우는 순서 | 조립이 캐시 하나를 인덱서와 루프에 끼운다. 적재는 워커가 읽고 루프가 토큰으로 반영하며, 적재 중 push 는 로그에 쌓였다가 재생된다(부기 37) |
+| 11 | 캐시가 아직 모르는 사실 | TD 분할로 끝난 옛 회차는 개시 결과(`SeedResult.EndingSessionID`)로, init 확정 · 분리는 Dirty 로 받는다. settled 대조는 30초 감시 (a) 가 맡는다(부기 43) |
+| 12 | 캐시 메모리 | 적재를 되짚기 2시간 · 1만 행으로 묶고, 발행이 성공하면 창 꼬리와 P.MSN 가운데 앞쪽 앞의 행을 잘라 낸다(`Cache.Trim`). live 회차가 없는 뷰는 재접속 창(300초)이 지나면 버린다(`Cache.Forget`) |
+
+### M4 ⓒ 운영 — 팀 1회 조치 · 되돌리기 · 튜너블 · 로그 · 실측
+
+#### ⓒ 팀 1회 조치 — 재빌드와 override 사본 두 줄
+
+pull 한 뒤 사이드카를 다시 빌드한다. 코드가 바뀌어 옛 이미지로는 ⓒ 가 돌지
+않는다. **버킷을 쓰는 사람은 빌드보다 override 사본 수정이 먼저다** — 고치기 전에
+새 이미지로 올리면 기동을 거부한다(아래).
+
+**버킷을 쓰는 사람(1번)**: ① override 사본을 고치고 자격증명을 내보낸 뒤 ② 다시
+빌드한다. 기본 compose 는 사이드카에 `S3_BUCKET` 을 넘기지 않아 발행 몫이
+꺼진다(기동 로그 `rewind_publish_disabled` 한 줄). 버킷을 쓰는 사람은 각자의
+`docker-compose.override.yml`(gitignore 된 사본)을 예시 파일과 맞춘다.
+
+*   `REWIND_PUBLIC_BASE_URL` 한 줄을 더한다(예시 파일 29행). **없으면 `S3_BUCKET`
+    이 있을 때 사이드카가 기동을 거부한다** — 업로드 · 인덱싱도 함께 멈춘다(종료
+    코드 1). 빠뜨렸으면 `docker compose logs segment-indexer` 에
+    `segment-indexer 종료: REWIND_PUBLIC_BASE_URL 이 비었다 — …` 가 찍힌다.
+*   `S3_BUCKET` 줄의 `${S3_BUCKET:-…}` 를 `${S3_BUCKET-…}` 로 바꾼다. 그래야 명령
+    앞에 붙인 `S3_BUCKET= docker compose …` 의 빈 값이 그대로 가서 업로더 · 발행이
+    꺼진다. `:-` 는 빈 값도 실버킷으로 채운다(긴급 정지는 아래 절).
+
+예시 파일의 두 줄은 아래와 같다(뒤붙임 주석은 뺐다).
+
+```yaml
+S3_BUCKET:                  ${S3_BUCKET-pokeclip-media-demo-2557}
+REWIND_PUBLIC_BASE_URL:     ${REWIND_PUBLIC_BASE_URL-http://127.0.0.1:8090}
+```
+
+고친 뒤 자격증명을 내보내고 사이드카를 다시 만든다. 켜짐 줄의 `base_url` 이
+루프백 기본값이면 로컬 실측 전용이다 — 운영에 실리면 시청자 브라우저가 자기
+컴퓨터를 부른다. macOS 기본 셸 zsh 에 이 README 의 bash 블록을 붙여 넣을 때 줄 끝
+`#` 주석이 명령 인자로 넘어가면 `setopt interactivecomments` 를 먼저 친다.
+
+```bash
+eval "$(aws configure export-credentials --format env)"
+docker compose up -d --build --force-recreate segment-indexer
+docker compose logs segment-indexer | grep -E 'rewind_publish_(started|degraded)'
+```
+
+**버킷을 쓰지 않는 사람(2 · 3번)**: override 없이 다시 빌드만 한다.
+
+```bash
+docker compose up -d --build segment-indexer
+```
+
+#### ⓒ 되돌리기와 긴급 정지
+
+*   **되돌리기는 머지의 역순(ⓒ → ⓑ → ⓐ)으로만 한다**(위 ⓐ 절과 같다). ⓒ 만
+    되돌리면 머지 커밋을 되돌린 뒤 사이드카를 다시 빌드해 반영한다.
+
+    ```bash
+    git revert -m 1 <ⓒ 머지 커밋>
+    docker compose build segment-indexer && docker compose up -d segment-indexer
+    ```
+
+*   **되돌려도 남는 것**:
+    *   장부 — 회차 행의 발행 열(`manifest_gen` · `manifest_etag` ·
+        `published_seq` · `discontinuity_base`) · `writer_fence` · 계승 행
+        (`inherits_session`) · `ending(offline)` 으로 끝난 회차 · GAP 원장 행 ·
+        기본 켜짐 동안 주조된 컷오프.
+    *   S3 — 목록 객체 `dvr/{stream}/{session}/index.m3u8`. **`dvr/` 객체를 지우는
+        코드는 없다.**
+*   **되돌린 뒤의 동작**: ⓑ 코드는 발행 열을 읽지 않는다. `ending(offline)` 회차는
+    `ending` 그대로 남는다(ⓑ 코드에는 종료 전이도 `ended` 도 없다). 이미 주조된
+    컷오프는 유효해 그 스트림의 ③ 재수거는 계속 돈다. ⓒ 가 쓴 계승 행이 남은
+    회차는 되돌린 코드가 첫 init 을 stsd 게이트 없이 확정한다(추론 · 미실측).
+*   **발행만 끄는 손잡이는 없다.** 발행 몫은 `S3_BUCKET` 하나에 묶인다 — 비우면
+    업로더와 발행이 함께 꺼지고 **② 클립 소재 업로드(3번 소비자)도 멈춘다**. 종료
+    전이는 버킷과 무관하게 계속 돈다. 끌 때는 override 를 빼고 사이드카를 다시
+    만든다. 기본 compose 는 `S3_BUCKET` 을 넘기지 않으므로 사본이 새것이든
+    옛것(`:-`)이든 통한다. 확인 줄 둘이 각각 1 이어야 꺼진 것이다.
+
+    ```bash
+    docker compose -f docker-compose.yml up -d --force-recreate segment-indexer
+    docker compose -f docker-compose.yml logs segment-indexer | grep -c uploader_disabled   # 1
+    docker compose -f docker-compose.yml logs segment-indexer | grep -c rewind_publish_disabled   # 1
+    ```
+
+    *   셸에서 `S3_BUCKET=` 를 따로 한 줄로 치고 `docker compose up` 을 하면
+        꺼지지 않는다. 내보내지(export) 않은 변수는 compose 에 닿지 않아
+        override 가 실버킷으로 채운다. 빈 값은 명령 앞에 붙여야 닿고
+        (`S3_BUCKET= docker compose up -d --force-recreate segment-indexer`), 그
+        꼴은 새 예시 사본(`${S3_BUCKET-…}`)에서만 통한다.
+    *   `-f` 없이 다시 `docker compose up` 하면 override 가 다시 실려 켜진다. 계속
+        꺼 두려면 override 의 그 줄을 `S3_BUCKET: ""` 리터럴로 고친다.
+*   **`REWIND_SEED_ENABLED=false` 는 새 컷오프 주조만 멈춘다.** 이미 주조된
+    스트림은 계속 발행된다 — 발행 경로는 이 플래그를 읽지 않는다(설계 c2 ·
+    `TestC2NoFlagRead` 가 정적으로 지킨다). 버킷이 있으면 끈 동안 최근 10분 안에
+    조각이 있고 컷오프가 없는 스트림에 `rewind_cutoff_absent` WARN 이 뜨고 40번째
+    감시(20분)에 ERROR 로 오른다. 감시가 플래그를 읽지 않아서이고 정상이다.
+*   **베이스 URL 은 live 목록이 있는 동안 바꾸지 않는다**(운영 규칙). 바꾸면 다음
+    판의 모든 조각 · MAP 줄 URI 가 바뀌는데, 발행된 목록 줄은 바꿀 수 없다
+    (RFC 8216bis-22 6.2.1).
+
+#### ⓒ 튜너블과 고정값
+
+새 env 는 하나다(`REWIND_PUBLIC_BASE_URL` — 위 env 표). 나머지는 코드에 있다.
+
+| 이름 | 값 | 자리 | 뜻 |
+|---|---|---|---|
+| `ReconnectWindow` | 300초 | `config.Load` | 재접속 계승 창 · 쉬는 뷰를 버리는 창(ADR-044 결정 3) |
+| `RewindWatchEvery` | 30초 | `config.Load` | 30초 감시 주기 · 요구 적재의 반복 제한 간격 |
+| `HoldTick` | 1초 | `indexer.Options` 기본값 | 보류 틱 — 발행 배선 · 사다리 · 종료 판정의 주기 |
+| `offlineRetryAfter` | 30초 | `internal/indexer/judgment.go` 상수 | 종료 전이 실패 뒤 쉼 · 결손 재점검 간격 |
+| `Lease` · `LazyRenewAfter` · `PublishTimeout` | 5초 · 3.5초 · 2초 | `publish.DefaultOptions` | fence lease · lazy 갱신 간격 · PUT 한 번의 예산(T_pub) |
+| `E2EBudget` · `ExpediteAfter` · `GapHold` | 2초 · 0.5초 · 2초 | 같은 곳 | 조각이 목록에 실릴 예산 · L1 문턱 · L2 문턱 |
+| `RefreshObligation` · `EdgeDelay` | 9초 · 1.5초 | 같은 곳 | 목록 갱신 의무(1.5 × TD 6) · 엣지 지연 — L4 는 정체 7.5초에 선다 |
+| `SeedAlarmAfter` · `SeedAlarmErrorTicks` | 10분 · 40 | 같은 곳 | 컷오프 부재 후보 창(조립이 `SEGMENT_RESCAN_EVERY` 의 두 배 이상으로 올린다) · ERROR 로 오르는 연속 감시 수 |
+| `LedgerLookback` · `LedgerRowCap` · `LoadPushBuffer` | 2시간 · 10,000 · 1,024 | `cache.Options` 기본값(조립은 영값을 넘긴다) | 적재 되짚기 · 적재 행 상한 · 적재 중 push 로그 상한(넘으면 적재를 다시 연다) |
+| `clipErr` 상한 | 1,024바이트 | `internal/rewind/publish/tick.go` | 로그 `err` 속성에 남기는 접두 길이 — 넘으면 접두 뒤에 잘림 표식(원래 길이)이 붙는다 |
+| `MaxBodyBytes` | 512KiB | `internal/rewind/validate.go` | 목록 본문 상한 — `S3Store.Get` 이 같은 상한까지만 읽으려고 ⓑ 의 비공개 상수를 공개로 바꿨다 |
+
+#### ⓒ 로그 변화
+
+새 이름은 열셋이다. 셈 단위가 아래 「설계와 다르게 한 것」의 「로그 키 ⓒ 8」과
+다르다 — 열셋은 계획 로그 키 ⓒ 8 에 설계가 이름 지은 신호 넷(기정 신호 둘 · 감시
+신호 둘)과 ⓐ 가 센 `session_inherit_declined` 하나를 더한 수다. 메트릭 기반이
+없어 설계가 메트릭으로 이름 지은 신호
+(`rewind_publish_stall_seconds` · `rewind_gap_published_total` ·
+`cache_drift_repaired` · `rewind_cutoff_absent`)도 로그 키로 남긴다. 발행 층 줄
+(`rewind_publish_aborted` · `rewind_ledger_load_degraded` ·
+`rewind_job_failed`)의 `err` 속성은 앞 1,024바이트만 남기고 잘림 표식(원래 길이)을
+붙인다.
+
+| 로그 | 언제 | 수준 | 속성 |
+|---|---|---|---|
+| `rewind_publish_disabled` | 기동 때 버킷이 비어 발행 몫을 조립하지 않음 — 종료 전이는 돈다 | INFO | note |
+| `rewind_publish_started` | 발행 몫 조립 성공 — 기동 한 번 | INFO | bucket · region · endpoint(userinfo 를 뗀 실효 엔드포인트, 빈 값 = AWS 기본) · provider(자격증명 출처 이름) · base_url · writer(이 프로세스의 fence 토큰 — 장부 `writer_fence` 와 견준다) |
+| `rewind_publish_degraded` | 조립 실패(AWS 설정 · https 위반 · 자격증명 · HeadBucket · 발행자 풀 · 발행자 생성) — 기동 한 번. 발행 몫만 꺼지고 회복은 재기동이다 | ERROR | bucket · region · endpoint · err · note |
+| `rewind_fence_release_failed` | 종료 때 fence 반납 실패 — 종료 한 번. 후임 writer 는 lease 가 끝난 뒤 이어 쓴다 | ERROR | err · note |
+| `rewind_publish_aborted` | 틱의 중단 · 포기 — 사유 19가지(`reason`). 같은 사유 · stage 가 이어지면 한 줄이다 | 틱만 포기하는 13 사유는 WARN. 발행이 서는 6 사유(`meta_invalid` · `meta_out_of_range` · `s4_after_publish` · `validate` · `disc_seq_decrease` · `head_failed`)는 ERROR | stream · session · reason(· stage · check · err). **`reason=gap_tx_failed` 줄에는 seq 가 없다** — GAP 트랜잭션 실패를 추적할 출처는 GAP 원장의 `recorded` 행이다 |
+| `rewind_gap_published_total` | GAP 원장에 GAP 이 새로 섬 — 트랜잭션 커밋 뒤 한 줄 | WARN | stream · session · seq · reason(`upload_stall`). **`session` 은 그 틱의 소유 회차다** — 원장 행의 회차(계승 접두면 직전 회차)와 다를 수 있고, 두 기록을 잇는 키는 (stream, seq) 다 |
+| `rewind_publish_stall_seconds` | L4 — 발행 이력이 있는 live 소유 회차의 정체가 7.5초에 닿았는데 L2 가 서지 못함(정체 한 번에 한 줄). C3 — 소유 회차가 live 가 아니게 되어 발행을 멈춤(회차마다 한 번) | L4 는 ERROR, 다만 `gap=no_row` 면 WARN(kty 결정 ④ A). C3 는 WARN | L4: stream · session · seconds · gap(`no_row` · `incomplete` · `before_cutoff` · `holding` · `unstood`) · last_abort / C3: stream · session · state · seconds |
+| `cache_drift_repaired` | 드리프트 까닭 적재가 적용됨(`kind=head`) · 잃은 init 결과를 감시가 되살림(`kind=init_uploaded`) | WARN | head: stream · cutoff · floor / init_uploaded: stream · session · revoked |
+| `rewind_cutoff_absent` | 30초 감시 (c) — 최근 10분 안에 조각이 있는데 컷오프가 없는 스트림. 전이만 남긴다 | 들어올 때 WARN(value 1) · 연속 40번째 감시에 ERROR(value 1) · 사라질 때 WARN(value 0 — 들어올 때와 같은 등급이라 `LOG_LEVEL=warn` 으로 걸러도 해소가 보인다) | stream · ticks · last_wall · value |
+| `rewind_ledger_load_degraded` | 적재 실패(`load_failed`) · 행 상한 도달(`row_cap`) · 다시 뽑은 P 의 행이 P 의 자기기술과 다름(`prev_mismatch`) | ERROR | load_failed: stream · err / row_cap: stream · floor · rows / prev_mismatch: stream · hint · mismatch |
+| `rewind_job_failed` | 차선 작업이 중단 · 포기 표 밖의 실패로 끝남 — 발행 작업은 같은 스트림의 이어지는 같은 오류에 한 줄, 감시 작업은 감시마다 한 줄 | ERROR | publish: job · stream · session · err / watch: job · first(부팅 첫 감시인가) · err |
+| `session_offline` | 종료 판정이 점검 수집을 기다림(`result=awaiting_check` — 기다림 한 번에 한 줄) · 전이 실패(`result=failed` — 결과 모름, 30초 쉼) | INFO · ERROR | awaiting_check: stream_id · seq · wait_started_at / failed: stream_id · err(**꼬리 seq 없음**) |
+| `session_inherit_declined` | 워커 — 계승 후보의 stsd 를 견줄 수 없어 비호환으로 판정(시도마다). 루프 — CAS 가 실제로 계승을 풂(회차마다 많아야 한 번). 지문이 달라 푸는 갈래는 워커 줄이 없고 루프 줄만 있다 | WARN | 워커: session_id · inherits_session · reason · prev_path(· err) / 루프: stream_id · session_id · confirmed |
+
+*   **종료 전이 성공은 로그 줄이 없다.** 장부 `stream_sessions` 의
+    `state='ending'` · `end_reason='offline'` 으로 확인한다.
+*   **`gap=no_row` 는 까닭을 가리지 않는다.** 머리 다음 행이 캐시에 없으면 방송
+    종료 구간 · 슬레이트 구간(녹화가 멈춘 끊김 — F-33 ⑴) · 녹화가 멈춘 이상이 모두
+    WARN 이다. ERROR 는 다음 행이 있는데 정착하지 못할 때만 선다.
+*   **재기동 ② 뒤의 경보**는 뒤 회차가 계승 회차인가로 갈린다 — 아래 한계 표.
+
+#### ⓒ 실측 기록
+
+*   **(c) 실 S3 발행**(2026-10-17 02:10–02:13Z · 데모 버킷 · 승인된 두 접두 ·
+    끝나고 삭제): 켜짐 줄의 writer 가 장부 `writer_fence` 와 같았다. 4–5초 간격
+    표본 일곱 번 모두 ETag 가 바뀌고 `pc-gen` · `manifest_gen` · `published_seq` 가 늘었다.
+    평시 `rewind_publish_aborted` · `rewind_cutoff_absent` 는 0 이다. 사이드카를
+    재기동해도 같은 URL 에 이어 발행했다(`pc-gen` 단조 · `pc-msn` 비역행 · 새
+    writer). 송출이 끝나자 회차가 `ending(offline)` 이 되고 ETag 가 고정됐으며 WARN
+    두 줄(L4 `gap=no_row` · C3 `state=ending`)이 났다.
+*   **M1 compose 전건**(2026-10-17 09:05–09:18Z · 전용 compose 프로젝트 · 실 S3):
+    송출 끝에서 `ending` 까지 13.7초였다. 120초 뒤 재송출은 계승했다(직전 회차
+    조각 접두 · `EXT-X-DISCONTINUITY` · 새 MAP · DISC-SEQ 0). 400초 뒤 재송출은
+    계승하지 않았다. 슬레이트 없는 대조군 스트림도 같은 전이를 거쳤다.
+    `invalid_duration` 0 · ERROR 0 이다.
+*   **M2 Content-Type**: 목록은 `application/octet-stream` 이다 — `S3Store.Put` 이
+    값을 싣지 않아 SDK 기본값이 붙는다. ③ · init 은 `video/iso.segment` 다 — 업로더
+    하드코딩이라 init `.mp4` 에도 붙는다(POK-28 이월). 값을 정할지는 M5 회부다(계획
+    7절 13).
+*   **M3 hls.js 실재생**(1.6.0 · 1.7.3 × 회차 셋): fatal 0 · seek 세 점 모두 전진.
+    계승 회차는 끊김 경계(cc 0 → 1)를 넘어 재생했고, A/V 위상 0.023초가 원본과 같다.
+*   **M4 5초 끊김 · 회차 안 끊김 경계**(2026-10-19 03:36–03:38Z · 전용 compose
+    프로젝트 · 실 S3 · 슬레이트 ON · OFF 두 경로 동시): 송출 40초 → 5초 끊김 → 같은
+    키로 40초. 두 경로 모두 **회차 하나**에 조각 20 이 귀속됐다(5초는 종료 판정 지연
+    13.7–17초보다 짧다). 목록에 `EXT-X-DISCONTINUITY` 0 · 끊김은 PDT 가 약 5초 뛰는
+    것으로만 보인다 · 경계 양쪽 조각의 첫 tfdt 차는 EXTINF 와 0.114초 안에서 이어진다
+    (도장 연속). hls.js 1.6.0 · 1.7.3 × 목록 둘 × 3회 = 12 실행에서 경계 직전 seek
+    두 점 24/24 가 경계를 넘어 전진했고 fatal 0 이다. duration 은 1.6.0 이 6회 가운데
+    5회 EXTINF 합과 같고 1회는 79.70초(−0.98초)다. 1.7.3 은 EXTINF 합보다 0.74초에서
+    1.04초 짧다. 비치명 `bufferSeekOverHole` 은 12 실행 가운데 5회(1.7.3 4/6 · 1.6.0
+    1/6) 났다(fatal 은 위대로 0). 목록이 `EXT-X-ENDLIST` 없는 라이브
+    형이라(동결은 M6) 두 판 모두 라이브 에지에서 시작하고 1.6.0 은 머리 seek 가
+    에지로 되돌아간 실행이 2/6 있다 — 끊김 경계와 무관한 라이브 동기화 동작이다.
+*   **기록 자리**: kty 실험 루트 `pokeclip-empirical/runs/2026-10-17-c8m1/record.md` ·
+    `runs/2026-10-19-c10k4/record.md`(저장소 밖) · (c) 원문은 작업 산출물
+    `c7c_c_run/`(저장소 밖 — 볼트 raw 이관 대상).
+
+### M4 ⓒ 설계와 다르게 한 것
+
+계획 부기(「이 계획이 설계와 다르게 적은 것」 표) 가운데 위 ⓐ 절(27–30)과 ⓑ 절(15 ·
+16 · 25 · 29 · 32)이 싣지 않은 행 전부다. 31 은 결번이다(kty 결정 (나)로 편차가
+사라졌다). 칸은 계획 행을 README 독자의 말로 줄여 옮겼다.
+
+| 부기 | 자리 | 설계 문언 | 구현 | 성격 |
+|---|---|---|---|---|
+| 1 | ADR-057 「정규화 선행」 | 원본 파일 제자리 재기입으로 읽힌다 | 정규화는 ③ 바이트 안의 시각 축이다(설계 r17 5.1). Go 재포장이라 「추출 뒤 재기입」 단계가 없고 도장은 재포장 때 더한다(부기 28) | 문언 정정 후보 — 설계 이탈 아님 |
+| 2 | 설계 3.3절 그림 | 정규화 → `duration_ms` 확정(INSERT 앞) | `duration_ms` 원천은 프로브이고 정규화는 ③ 축(INSERT 뒤)이다 | 그림 정정 후보 |
+| 3 | 설계 4.0절 표 | PUT 시간당 1,800회 | 조각 축만 센 값이다 — 목록 900 을 더해 총 2,700 | 산출 명시 |
+| 4 | 위 M3 이관 표의 부채 행 | 판정 묶음 이동 5개 | 같은 커밋(커밋 1)에서 옮겼고 이동은 6개다(`seedChannel` 추가) | 집합 편차 기록 |
+| 5 | clarifier 기록 | 스위치를 켜면 PUT 1,800/h · 저장 1.7배 | 그 증가는 ⓐ 배포 시점부터다(③ 추출은 플래그와 무관) | 축 정정 |
+| 6 | 설계 4.7절 · F-33 | 슬레이트 조각을 GAP 으로 싣는다 | 슬레이트는 녹화되지 않는다(ADR-050). 목록은 경계 표시 · 시각 점프만 남기고 라이브 전환은 제어면(M5) 몫이다 — M4 코드 0 | kty 확정(2026-09-04) · 설계 4.7절 갱신 후보 |
+| 7 | 설계 9절 G8 | P · F · E 세 프로토콜 | M4 = G8-P 완결 · F/E 는 M6 | 계상 분할 |
+| 8 | 설계 4.0절 · ADR-057 정규화 산식 | 원점만 정의 | 트랙별 timescale · 위상 보존 · 재접속 연속 산식을 명시했다(위 ⓐ 절 「시간 도장」) | 구체화 |
+| 9 | 설계 4.6.3절 · 4.6.5절 사다리 | L1 · L2 · L4 는 세션 상태와 무관하게 서고, 1단계는 L4 경보만 남긴다 | live 소유 회차에서만 돈다. live 가 아니게 되면 회차마다 WARN 한 번(C3). L4 의 「L2 가 서지 못함」은 루프가 싣는 사실(`LadderInput.UnstoodGapSeq`)로 받는다. `gap=no_row` 면 L4 를 WARN 으로 낮춘다 | 이탈 기록(M6 전 ENDLIST · 동결 부재) · 편차(kty 결정 ④ A — 방송 종료 구간 L4 등급) |
+| 10 | 설계 4.6.3절 L3 · 4.5.3절 phase 2 만료 | 연속 GAP 셋 이상 → ending · 정산 창 만료 = 포기 등재 | M6(종결 축) | 이연 |
+| 11 | M3 계획 · `upload.go` 주석 | `Result` 에 축 필드 = 영값 함정으로 기각 | 축 필드는 넣지 않고 ③ · init 통지는 `upload.Dirty` 가 맡는다. 주석의 「영값 = AxisArchive」 근거 문장은 사실과 달라(영값 = unknown) 한 줄 고쳤다 | 주석 사실 정정 |
+| 12 | 설계 5.3절 인용 | init 규격을 bis-16 으로 인용 | bis-22 로 갱신할 후보다(인용 네 문장은 그대로 남아 있다) | 인용 갱신 후보 |
+| 13 | 설계 5.4.1절 종료 판정 입력 | 「항목 부재」 중심 | `!Publishing`(항목 부재 또는 항목이 있되 online 거짓) — 슬레이트 ON 형상을 포함한다 | 구체화 · 설계 갱신 후보 |
+| 14 | 설계 5.3절 ⓑ init 동일성 | 산출 init 바이트 동등성(`ftyp+moov` sha256) | 원문 그대로다. 판정 · 영속은 워커 트랜잭션(`MarkPlaybackFailed(init_mismatch)`)이고 대가는 불일치 조각 하나의 GAP(4초)이다 | 편차 없음(기록) |
+| 17 | 설계 5.4.1절 · 계약9 | 종료 판정의 시간 항 미정 | 유입 정지 = 마지막 조각 실제 길이의 세 배 · 관측 = `!Publishing` · `OBS_FRESH`. 전이 앞에 파일 점검을 더한다 — 기다림 시작 + `SEGMENT_IDLE_TIMEOUT` 뒤에 시작한 완주 수집 · 결손 없음 · FS 래치 정상 | 값 확정(kty) · 설계 갱신 후보 |
+| 18 | 설계 3.3절 결과 통지 | 결과 채널 | ③ · init 은 이벤트 집합(`upload.Dirty` — Peek/Ack)이다 | 형상 대체(유실 · 워커 정지 · 조회 0 을 함께 만족) |
+| 19 | ADR-044 | 계승 창 기산점 「세션 종료 후」 · 호환 게이트 = `stsd` 지문 | 기산점 = 직전 회차 마지막 조각 끝(kty 확정) · 게이트는 `stsd` 지문 원문 그대로 · 판정 자리는 새 회차 첫 init CAS 의 CTE(원자 해제) | 기산점만 ADR-044 문언 정정 후보 |
+| 20 | 설계 5.3절 ⓒ | 미등재 → ending + phase 1 → OpenFresh | 워커 트랜잭션 하나로 ③ `failed` 와 `ending(init_mismatch)` 를 영속하고, 새 회차는 다음 유입이 연다(비계승) | 실행 형상 구체화 |
+| 21 | 제0원칙 4 · `index → session` 임포트 금지 | 세션 상태 전이 SQL 은 session 소유 | 종료 문장 셋을 index 가 소유한다(init 불일치 둘 · `EndLive`). 같은 PG 시험이 세 문장의 술어(`state='live'`)와 사유 어휘를 대조한다 | 중복 기록 |
+| 22 | 설계 3.2절 패키지 경계 | session = `stream_sessions` 정책 | 재접속 계승 판정을 위해 session 이 `stream_segments` 를 한 곳 읽는다(직전 회차 마지막 조각의 끝 시각과 첫 조각의 경로 — 코덱 지문용) — 쓰기 0 | 경계 접촉 기록 |
+| 23 | 제0원칙 2 | — | `MarkPlaybackFailed(reason=init_mismatch)` 가 조각 상태와 세션 전이를 겸한다(이름 부채) — 개명은 M5 | 이름 부채 기록 |
+| 24 | 설계 5.3절 ⓓ | 직전 회차 init 미업로드 → 계승 취소(렌더마다 평가) | 계승 취소는 첫 PUT 전 · live 에서만 하고 장부에 영속하며 되살리지 않는다(P2′). 첫 PUT 뒤 S4 위반은 발행 중단이다. 해제 자리는 init CAS CTE(`stsd` 비호환)와 P2′(S4 위반) 둘이다 | 편차 있음 — 되살리면 이미 나간 목록 앞에 접두를 넣어 MSN 이 역행한다(S2 위반). 첫 PUT 뒤 취소는 남은 조각의 표시를 지운다(RFC 8216bis-22 6.2.1 밖) |
+| 26 | 제0원칙 3 | — | `inherits_session` 쓰기자 셋(개시 · init CAS CTE 의 `stsd` 해제 · P2′) · `discontinuity_base` 쓰기자 다섯(같은 셋 · P4 · 화해 — 파생값). CTE · P2′ 는 첫 PUT 전에만 지우는 방향으로 쓰고, P4 · 화해는 fence 를 쥔 발행자만 쓴다 | 경계 기록 |
+| 33 | 설계 4.9.1절 개시 TD | 새 회차 TD = max(6, round(첫 조각)) | 재접속 계승 개시는 max(6, 직전 회차 TD, round(첫 조각)) | 편차 있음(kty K1 2026-09-25) |
+| 34 | 설계 4.5.1절 · 4.5.3절 phase 1 | 종료 개시 = 같은 문서에 ENDLIST(동결) | ending 회차는 발행을 멈춘다(P0 의 `state='live'`). ENDLIST · 동결은 M6 | 이연 — M4 에 시청 경로가 없다는 전제의 한시 편차 |
+| 35 | 설계 4.4.2절 메타 · 4.4.3절 P0 · P3 · P4 · R3 · 4.4.5절 RC-19 | 메타 4키 · If-Match 로 낡은 PUT 차단 · P0 은 base 무접촉 · 남는 창은 T_pub 안 · 갱신 412 → 화해 뒤 한 번 재시도 | 메타 8키 · DISC-SEQ = 마지막 발행본 기준 절대식 · base 는 P4 · 화해가 쓰는 파생값 · 같은 본문 재PUT 금지 · If-Match 출처(P0 의 `manifest_etag`)를 루프의 P.ETag 와 대조 · P3 마감 = P0 송신 시각 + lease − T_pub · 갱신 412 는 화해 뒤 재시도 없이 틱 포기 · If-Match 409 는 Head 로 ETag 가 그대로일 때만 한 번 · R4 「최초 생성 경로」 = 장부 `manifest_etag := NULL` | 구체화 + 설계 결손 보완(ETag 가 메타를 반영하지 않아 같은 본문 판의 좀비 쓰기가 통과한다) + 편차(RC-19 의 한 번 재시도를 뺐다 — 대가는 한 틱) |
+| 36 | 설계 4.5.5절 S4 처치 · 5.3절 ⓓ | S4 위반 = 계승 취소(렌더마다) | 계승 취소는 첫 PUT 전 · live 에서만(P2′) · 그 뒤 S4 위반 = 발행 중단 · S2 에 DISC-SEQ 비감소 · `stsd` 해제는 init 확정과 한 push · P0 에 init 하드 가드 · 잃은 init 결과는 30초 감시가 화해 | 편차 있음 — 첫 PUT 뒤 취소는 남은 조각의 표시를 지운다(RFC 8216bis-22 6.2.1 밖) |
+| 37 | 설계 4.1절 부팅 재구성 | `seq ≥ cutoff` 전량 | 하한 = 행 상한 안의 되짚기(2시간 · 1만 행) · 읽기 전용 REPEATABLE READ 한 트랜잭션 · 회차 최소 seq 열 · 적재 토큰 · 부정 표식 · 잘라내기와 쉬는 뷰 버리기 · 적재 중 push 재생 · 적재 중 스트림은 드리프트 감시에서 뺀다 | 편차 있음(보안 L3 — 메모리 · 시간 상한) |
+| 38 | 설계 3.1절 ② 교차 방송 오귀속 금지 · 5.4.1절 · 6.2절 세션 수명 · ADR-062 결정 3 | 오귀속 금지 · ending 중 도착 = 새 세션 | 종료 전이 앞에 파일 점검을 한 번 끝까지 돌린다. 방증 없는 스캔 조각이 ending 중에 오면 새 회차를 열지 못하고 비귀속이다. 재기동을 낀 오프라인은 다루지 않는다 | kty 철회 — 알려진 한계(아래 「ⓒ 한계 — 회차 경계와 재기동」) |
+| 39 | 설계 9.1절 G8 | 낡은 writer 가 최신 계보를 덮지 못한다 | G8-P 판정 = 조건부 쓰기로 증명되는 넷 — ① 어떤 writer 의 PUT 도 저장된 판 본문이 자기 P 와 같을 때만 성공 ② 저장된 판은 늘 직전 판의 검사된 후속 ③ DB 세대 단조 ④ 메모리 P 가 낡으면 다음 P3 가 412 → 화해로 맞춘다. S3 메타 `pc-gen` 은 늦은 좀비 쓰기에서 DB 세대보다 뒤처질 수 있어 판정에 쓰지 않는다 | 편차 있음(기준 명확화 — kty 확정 2026-09-26) |
+| 40 | 설계 3.2절 `session/` 행 | 「세션 수명과 fence」 | fence 코드는 `rewind/publish/fence.go` 에 둔다. 세션 수명은 `session` · `index` 그대로다 | 편차 있음(자리) |
+| 41 | 설계 4.4.3절 P0 · 6.2절 fence lazy 행 · 0.3절 비용 표 · ADR-061 | P0 에 남은 lease 2초 조건 · 평시 lazy 발화 0 · DB 왕복 약 1,920회/시간/스트림 | P0 조건 = `fence_expires_at > now()`(남은 lease 조건 삭제) · lazy 3.5초 규칙은 그대로이고 평시 틱마다 최대 한 번 돈다 · 왕복 상한 약 2,820회/시간/스트림 | 편차 있음(kty 확정) — P0 이 같은 문장에서 lease 를 새로 쓰므로 남은 시간은 지키는 것이 없다. 늦은 PUT 창은 P3 마감이, 정확성은 조건부 쓰기가 진다 |
+| 42 | 설계 4.4.3절 P0 RETURNING · P4 · 4.6.2절 stallAge | RETURNING 넷 · P4 가 쓰는 열 미기재 · stallAge = now − `published_at` | P0 RETURNING 은 `manifest_gen` · `manifest_etag` 둘이다. P4 는 `manifest_etag` · `discontinuity_base` · `published_seq` 를 쓰고 `published_at` 은 쓰지 않는다. stallAge 원천은 루프가 드는 두 시각(마지막 발행 성공 · 처음 소유 회차로 본 시각) 가운데 늦은 쪽이고, 발행 이력이 없으면 L4 · C3 가 서지 않는다 | 편차 있음(축소 · 구체화) — 동작 무영향 |
+| 43 | 설계 4.1절 정합성 감시 (a) | DB 직조회 settled 접두 ↔ 캐시 `headSeq` | 캐시 머리 다음 행 하나만 DB 에서 settled 인지 보고, 같은 문장이 DB 컷오프를 실어 캐시 컷오프와 견준다. 두 감시 연속 불일치면 요구 적재이고 WARN 은 그 적재가 성공한 뒤다 | 편차 있음(좁힘) — 뷰는 적재 하한 앞 행을 몰라 접두 전체 대조는 감시마다 오보한다 |
+
+개발 중 계획 문언과 다르게 한 세부 가운데 동작 · 관측에 닿는 것만 적는다. 시험
+파일 자리 · 문서 정정 같은 세부는 커밋별 개발 보고에 있다.
+
+*   종료 전이 실패 줄(`session_offline result=failed`)에 꼬리 seq 가 없다. 루프가
+    꼬리 seq 를 읽을 공개 통로가 없어 뺐다.
+*   `REWIND_PUBLIC_BASE_URL` 은 앞뒤 공백을 떼지 않는다(다른 env 와 다르다). 떼면
+    끝의 CR · U+2028 을 거부하는 규칙이 무력해진다.
+*   seq 가 int64 를 넘는 ③ 키는 워커 거부 사유가 `seq_mismatch` 에서 `bad_key` 로
+    바뀐다. 받는 키 집합은 그대로다.
+*   직전 발행 틱의 실패 표지는 fence 를 쥐었을 때만 화해 예약을 실패로 센다.
+    fence 를 잃은 뒤 1초마다 재발행하지 않게 하려는 것이다.
+*   빈 목록이면 루프가 틱을 내지 않는다. 병합 경로는 차선이 돌 때도 입력을 만들어
+    보고 작업을 버린다.
+*   fence 토큰을 버킷 확인보다 먼저 만든다. 버킷 확인 시한이 발행자 설정
+    (`PublishTimeout`)에서 오기 때문이다.
+*   로그 키가 계획 셈보다 다섯 늘었다 — `rewind_job_failed` 하나(커밋 7 의 둘째
+    묶음)와 `rewind_publish_disabled` · `rewind_publish_started` ·
+    `rewind_publish_degraded` · `rewind_fence_release_failed` 넷(셋째 묶음). 계획의
+    「로그 키 5(ⓐ 2 · ⓒ 3)」는 10(ⓐ 2 · ⓒ 8)이 된다.
+*   공개 표면이 계획보다 넓다(kty 2026-10-19 사후 승인). 커밋 5 의 감시 · 적재가
+    캐시에 메서드 셋(`DemandLoad` · `DriftProbes` · `AuditDrift`), index 에 공개 타입
+    일곱(`LedgerBounds` · `InitRepair` · 감시 타입 다섯 — 입력 1(`WatchProbe`) · 결과
+    4), `Cache.Options` 칸 하나를 더했고 `CompleteLoad` 는 `(applied, drift)` 둘을,
+    `ShouldTick` 은 `loading` 인자를 받는다. `cache.Session.MinSeq` 칸은 뺐다(같은
+    값을 `index.RewindSession.MinSeq` 가 든다). 공개 필드 8 → 16 · 공개 메서드
+    14 → 21 은 PR 전체 총계다 — 사전 승인 다섯(`Owner` · `Streams` · `IngestTail` ·
+    `Expedite` · `AttachDirty`)을 포함한다. 전부 `media/internal/` 안이라 부르는 곳은
+    사이드카 조립뿐이다.
+*   30초 감시는 계획과 두 군데 다르다(kty 2026-10-19 승인). 드리프트 수리 요구는
+    같은 스트림이 **연속 두 감시**에서 어긋날 때만 낸다 — 적재와 감시가 엇갈리는
+    순간의 거짓 드리프트로 적재가 적재를 부르지 않게 하려는 것이다(수리는 최대
+    30초 늦는다). 조회 셋은 재귀 CTE 한 문장이라 왕복은 1이지만 작업량이 스트림 ID
+    가짓수에 비례한다(아래 「발행과 경보」 한계 표).
+*   재접속으로 새 회차가 열릴 때 직전 회차를 캐시에서 `ending` 으로 내리지 않는다
+    (계획 2.1 표는 「TD 분할 · 재접속 공통」 — kty 2026-10-19 코드 쪽 확정). 재접속
+    개시는 직전 회차가 DB 에서 이미 `ending` · `ended` 일 때만 일어나고
+    (`inheritable`), 캐시는 4.1 종료 전이 push 로 그 `ending` 을 이미 안다 — 그래서
+    개시 때 강등 규칙을 더하지 않았다. push 를 놓친 창(결과 모름 뒤 적재 전 · init
+    불일치 분리의 Dirty 반영 전)에서만 `live` 회차 둘이 보이고, 발행 소유자는 첫 조각
+    번호가 큰 회차(`Owner`)라 뒤 회차를 고른다.
+
+### M4 ⓒ 에서 M5/M6 로 넘긴 것
+
+| 넘긴 것 | 어디로 | 까닭 · 자리 |
+|---|---|---|
+| 시청 경로 — 되감기 URL 서빙 · CDN · 제어면의 라이브 전환 | M5 | M4 는 S3 발행까지다(부기 34 의 전제) |
+| `ended` 전이 · ENDLIST 봉인 호출 · 동결 · VOD 전환 · 만료 | M6 | 종결 축이다(부기 34). `rewind.SealEndlist` 는 있지만 운영 코드에서 부르는 곳이 없다 |
+| L3(연속 GAP 셋 → ending) · 정산 창 만료 포기 · L2′ | M6 | 부기 10 |
+| G8-F · G8-E | M6 | 부기 7 |
+| 의도적 종료와 끊김의 구분(계약4 4D 종료 신호 수신) | PR ⓒ 머지 뒤 별도 티켓 | kty 결정. `internal/session/registry.go` 의 `inheritable` 에 의도적 종료 갈래가 없다 |
+| 검문 빈틈 셋(코덱 지문 · 게이트 공백 · 일시 오류) | M6 에서 다시 본다 | kty 결정(2026-09-30 — 코드 그대로). 아래 한계 표 |
+| init 잔량 영구 잔존의 보정 | M6 | kty K3 — 한계 유지(위 ⓐ 절 알려진 한계 여섯째 행) |
+| ③ 잔량의 `ended` 동기 · M6 만료 뒤 컷오프 재주조 | M6 | ⓒ 에는 `ended` 가 없다 |
+| 첫 목록 지연 경보(`rewind_ready_delayed`) | M5 | 재기동 ② 뒤 비계승 회차의 무경보(아래 한계 표) |
+| 목록 객체의 Content-Type 값 | M5 회부 | 계획 7절 13 · 위 실측 기록 |
+| 이름 부채 개명(`SeedResult` · `MarkPlaybackFailed`) | M5 | 부기 16 · 23 |
+| 계승 사슬(두 단계 이상)과 1시간 상계 | M5/M6 | 위 ⓑ 절 알려진 한계 |
+| 슬레이트 운영 프로비저닝 · 관측 등급 tier 상수 | 별도 마일스톤 | 계획 8절 kty 확정 (가) |
+| 라이브 창 설정(ADR-056 ③ 대체 예정) 28초 적용 | PR ⓒ 뒤 설정 소PR | 되감기 URL 가동 뒤 · 적용 게이트 셋을 통과한 뒤. 라이브 창은 28초(4초 × 7)로 확정됐다(kty 2026-10-19 — ADR-056 의 14초는 대체 예정). 바뀌는 값은 `hlsSegmentCount` 900 → 7 하나다 |
+| SDK 오류 본문 상한(S-1) · 운영 빌드 그래프 정적 단언(S-2) · HTTP 응답 헤더 상한 | PR ⓒ 밖 — kty 회부 | 계획 커밋 순서 7 — 선재 결함 · 범위 확장 |
+| 업로더의 https 검사를 실효 엔드포인트로 | 후속 티켓 | 발행 몫만 고쳤다(계획 2.3 표 밖 파일) — 아래 한계 표 |
+
+### M4 ⓒ 알려진 한계 (정직 서술)
+
+코드는 지금 동작 그대로다. 「발현 조건」 칸 끝에 우리 플러그인 송출 · 운영
+설정에서 생기는가를 적는다(kty 2026-09-30 규칙).
+
+#### ⓒ 한계 — 회차 경계와 재기동
+
+계획의 「README ⓒ 한계 절 행 요지」 표 여덟 행이다. 수리는 인프라로 한다 — 예컨대
+사이드카를 따로 띄우는 구성(kty).
+
+| 한계 | 발현 조건 | 영향 | 대응 · 다시 볼 조건 |
+|---|---|---|---|
+| 재기동 ① 이어 붙음 | 사이드카가 방송 B1 의 끝을 판정하기 전(재기동 창)에 다음 방송 B2 가 송출을 시작한다. 우리 송출: 배포 · 장애 재기동이 방송 끝 근처에 끼면 생긴다 | B2 가 B1 의 회차에 붙는다 — 되감기는 이어지고 두 방송이 한 회차가 된다 | 인프라. 운영 완화: 계획적 재기동(배포)은 스트림을 비운 뒤에 한다 |
+| 재기동 ② 영구 정지 | B1 의 회차가 끝난 뒤 사이드카가 내려가 있는 동안 B2 의 조각이 쌓이고, 복귀한 사이드카가 그 조각을 방증 없이 본다(B2 종료 · 첫 관측보다 60초 넘게 이른 조각 · 지금 송출의 에폭 시작보다 이른 조각 · 관측 낡음 · 첫 관측 없음). 우리 송출: 사이드카가 내려간 동안 방송이 시작되면 생긴다 | 그 조각은 회차에 붙지 않는다(`session_id` NULL). 컷오프 뒤면 그 스트림의 목록이 그 행에서 멈추고 이후 방송도 모두 멈춘다. 계승 회차면 MSN 이 오르지 않고, 비계승 새 회차면 목록이 아예 나가지 않는다 | 인프라. 생기면 운영자가 수동 복구한다(절차는 운영 문서 몫 — 미확인). 판별: `stream_segments` 의 컷오프 이후 행에 `session_id IS NULL` 이 있다 |
+| 재기동 ② 뒤의 경보 | 재기동 ② 로 생긴 NULL 행 뒤에 새 회차가 열린다. 우리 송출: 재기동 ② 가 난 뒤에만 | 뒤 회차가 계승 회차가 아니면 목록이 한 번도 나가지 않아 L4 가 없다(M4 무경보). 계승 회차면 접두로 첫 목록이 한 번 나간 뒤 멈추므로 7.5초 뒤 L4 가 뜬다 | 판별 · 복구는 재기동 ② 와 같다. 경보는 M5 `rewind_ready_delayed` |
+| 관측 끔 | `MTX_API_URL` 이 비었다(compose 기본값은 `http://media:9997`). 우리 송출: 운영 설정에서는 생기지 않는다 — 롤백 손잡이를 쓸 때만 | 종료 판정이 서지 않아 같은 스트림의 연속 방송이 한 회차로 이어진다(M3 한계의 연장) | 관측을 켠다 |
+| 종료 판정은 파일 점검 뒤 | 방송이 끝난 뒤 ⓐ FS 래치가 트립돼 있거나 가장 최근에 적용된 수집이 완주가 아니다(절단 · 순회 오류 · 래치 중단 · 수집 오류 — 트리 전체 공용이라 모든 스트림이 멈춘다) ⓑ 그 스트림 디렉터리의 순회 오류나, 그 스트림 파일을 장부에 넣지 못한 일(확인 실패 · 인계 · 측정 실패 · 길이 0 · poison)이 있다 — 그 스트림만 멈춘다. 길이 0 의 현실 원천은 MediaMTX 비정상 종료다. 우리 송출: FS 장애 · MediaMTX 비정상 종료 때 | 회차가 끝나지 않고 그동안의 재송출은 같은 회차로 이어진다(kty 수용). 원인이 영구면 파일 원인은 다음 방송이 끝날 때와 그 파일이 지워질 때(`recordDeleteAfter` 기본 1일) 가운데 이른 쪽까지, 디렉터리 원인은 원인이 사라질 때까지 닫히지 않는다 | 일시 원인은 재점검이나 다음 주기 수집(5분) 뒤 저절로 닫힌다. 영구 원인은 그 파일을 치우면 다음 주기 수집 뒤 닫힌다(절차는 운영 문서 몫 — 미확인). 신호: `fs_op_stalled` · `scan_collect_stalled` · `scan_collect_truncated` · `scan_collect_failed` · `walk_entry_failed` · `latest_stat_failed` · `unsettled_giving_up` · `stat_failed` · `invalid_duration` · `insert_poisoned` · `session_offline result=awaiting_check` |
+| init 불일치 분리 창 | 방송 중 트랙 파라미터가 바뀌어 워커가 회차를 끝낸 뒤, 다음 조각이 새 회차를 열기 전에 워처 · 훅이 놓친 조각이 방증 없이 스캔으로 들어온다. 우리 송출: **플러그인 고정 설정이면 사실상 생기지 않는다**(머리말은 트랙 파라미터만의 함수이고 OBS 는 방송 중 출력 설정을 못 바꾼다). 남는 여지는 플러그인 밖 송출기나 인코더 자체 재시작에 감시 누락이 겹칠 때다 | 재기동 ② 와 같다 | 생기면 수동 복구한다. 증상 · 판별은 재기동 ② 와 같다 |
+| 래치 트립 창 새 방송 | 직전 회차가 끝난 스트림에서 새 방송이 FS 래치 트립 동안(최대 5분) 또는 워처 강등 ∧ 훅 리더 사망 중에 시작하고, 버려진 조각을 래치를 푼 수집이 방증 없이 넣는다. 같은 결과의 계기가 둘 더 있다 — 종료 처리가 미뤄지는 동안 관측 폴 사이에 짧은 새 방송이 시작하고 끝난 경우, 새 방송 첫 조각을 수집이 훅 · 워처보다 먼저 넣은 경우(워처 · 훅이 정상이어도 생긴다). 우리 송출: FS 장애 · 감시 열화 때. 마지막 계기는 평시에도 생길 수 있다 | 재기동 ② 와 같다. 트립 한 번이 그 창에 시작한 모든 스트림에 걸린다(뒤 두 계기는 그 스트림만) | 수동 복구. 신호: `fs_degraded value=1` · `fs_latch_early_return`(변형 `watcher_degraded value=1` · `hook_reader_stopped`). 마지막 계기는 전용 신호가 없다. 고치려면 ADR-062 백로그 하한이나 ADR-063 결정 4 를 바꿔야 한다 |
+| GAP 원장 `recorded` 의 뜻 | GAP 을 실은 목록은 S3 에 올라갔는데 P4 가 실패하고, 그 뒤 P4 성공 없이 방송이 끝났다(또는 다음 P4 전에 그 행이 1시간 창에서 빠졌다). 우리 송출: DB 오류가 P4 에 겹칠 때 | 발행된 GAP 행이 `published_state='recorded'` 로 남는다 — `recorded` 는 「미발행」이 아니라 「발행됐을 수 있음」이다 | 읽는 쪽(M6)은 `recorded` 를 발행된 것으로 다룬다. 닫는 발행의 확정 CAS 가 같은 절을 실으면 거기서 확정된다 |
+
+#### ⓒ 한계 — 계승(이어받기)
+
+| 한계 | 발현 조건 | 영향 | 대응 · 다시 볼 조건 |
+|---|---|---|---|
+| 300초 안 재접속은 늘 이어받는다 | 방송을 껐다가 300초 안에 다시 켠다. 우리 송출: 평시에 생긴다 | 끊긴 것과 일부러 끈 것을 가르지 못해 둘 다 이어받고 검문(stsd 게이트)이 한 번 돈다 | M6 — 플러그인 종료 신호(계약4 4D)로 가른다. 수신부는 PR ⓒ 머지 뒤 별도 티켓이다(kty 결정) |
+| 코덱 지문은 녹화 원본의 전 트랙을 본다 | 소리 트랙 번호만 달라도 이어받기가 풀린다 — AAC 의 stsd 가 트랙 ID 를 싣는다(과잉 해제). 트랙 번호를 싣지 않는 코덱(Opus 등)에서는 소리 트랙 순서 교환을 가리지 못한다 — 산출기는 첫 영상 · 첫 소리만 남긴다. 우리 송출: **플러그인 고정 설정이면 생기지 않는다**(트랙 수 · 코덱 · 순서를 잠근다) | 과잉 해제는 접두 없는 새 목록이 된다. 순서 교환은 다른 소리 사양을 이어받는다 | 코드 그대로(kty 2026-09-30). 다시 볼 조건: 플러그인 밖 송출기를 받을 때 · M6 에서 이어받기 조건을 고칠 때 |
+| 이어받기 개시와 첫 init 확정 사이의 검문 공백 | 그 사이에 사이드카가 재기동하거나, 같은 프로세스가 개시 행의 COMMIT 응답을 잃는다(서버는 커밋). 그 회차의 실시간 init 요청이 게이트 입력 없이 나가 검문을 건너뛴다. 우리 송출: **플러그인 고정 설정이면 생기지 않는다**(stsd 가 같아 건너뛰어도 결과가 같다) | stsd 가 다른 계승이 풀리지 않는다 — 계승 목록에 코덱 사양이 다른 MAP 둘이 실린다 | 코드 그대로(kty 2026-09-30). 다시 볼 조건은 위 행과 같다 |
+| 직전 회차 첫 조각을 일시 오류로 못 열어도 이어받기가 풀린다 | 직전 회차 첫 조각을 열 때 파일 기술자 고갈(EMFILE · ENFILE) 같은 일시 오류가 난다. 우리 송출: 송출 설정과 무관하다 — 사이드카의 자원 고갈 순간에만 생긴다(빈도 미확인) | 호환 계승도 되돌릴 수 없이 풀린다 — 접두 없는 새 목록 | 코드 그대로(kty 2026-09-30). 다시 볼 조건: 위 행과 같다 |
+| 하루를 넘긴 방송 뒤 재접속은 늘 이어받기가 풀린다 | 직전 회차 첫 조각이 녹화 보존(`recordDeleteAfter` 기본 1일)을 넘겨 지워진 뒤 300초 안에 재접속한다. 우리 송출: 24시간 넘는 방송 끝의 재접속에서 생긴다 | 직전 첫 조각을 열 수 없어 계승을 푼다(fail-closed) — 접두 없는 새 목록 | 기록(보안 검수 참고) |
+
+#### ⓒ 한계 — 발행과 경보
+
+| 한계 | 발현 조건 | 영향 | 대응 · 다시 볼 조건 |
+|---|---|---|---|
+| PUT 이 실패해도 재발행하지 않는 틱 | PUT 이 표 안의 사유로 실패했는데 그 틱의 결과가 「발행 없음 · 오류 없음 · 화해 예약 없음」이다 — `put_unknown` · `create_412` · `update_412` · `update_404` 는 같은 틱의 화해가 성공했을 때, `put_conflict` 는 늘 그렇다. 우리 송출: S3 일시 장애 · 경합 때 | 다음 트리거(다음 조각 · L2 · 병합)까지 목록이 한 틱 늦다. 방송 끝에는 다음 트리거가 없어 마지막 조각이 ending 전이 때까지 실리지 않을 수 있다 — ending 뒤에는 발행이 멈춘다(M4 시청자 0) | 한계로 수용(kty 2026-10-01). 다시 볼 조건: 틱 결과에 「표 안 중단」 칸을 더할 때(왕복 상한을 다시 잰다) |
+| 재기동 뒤 적재 뒤 틱은 발행하지 않는다 | 재기동 뒤 첫 적재가 끝나고 낸 틱이 fence 획득과 화해(P 복원)의 준비 단계에서 끝난다. 우리 송출: 사이드카 재기동마다 | 목록은 다음 ③ 확정까지 그대로다 | 기록 — 위 행과 같은 부류 |
+| 적재 고리에 1초 쉼이 없는 설정 | P2′ 가 결정적으로 실패하는 설정(DB 역할 · 열 권한 · 트리거)이다. 우리 운영 설정: **현 운영 설정에는 없다**(보안 실측) | 「요구 적재 → 적재 → 적재 뒤 틱 → 요구 적재」 고리에 1초 쉼이 없어 적재가 쉬지 않고 돈다 | 코드 그대로(kty (가) 2026-10-17). 다시 볼 조건 셋: AWS DB 역할 · 3번 트리거 · M6 새 갈래 |
+| 서지 않은 GAP 틱의 DB 비용 | 정체 스트림에서 L2 가 결정됐는데 GAP 틱이 서지 않는다. 우리 송출: 송출 규약 안에서는 사실상 닿지 않는다 | 보류 틱마다 트랜잭션 하나가 P0 을 커밋해 세대를 올린다 — 정체 스트림 하나에 시간당 3,600건이고 그동안 로그는 L4 한 줄이다 | 기록(운영 비용 공시) |
+| 빈 접두 가장자리의 무음 정지 | 2시간 넘는 방송에서 적재 하한 행의 ③ 이 끝내 settled 되지 않는다. 우리 송출: ③ 업로드 실패가 적재 하한 행에 겹칠 때만 | L1 · L2 · L4 가 하나도 서지 않는다 — 목록이 멈췄는데 경보가 없다 | 기록. 다시 볼 조건: 적재 하한 규칙(되짚기 2시간)을 바꿀 때 |
+| 꼬리 교정이 TD 를 넘긴 조각 | INSERT 때 4초였던 꼬리가 교정으로 6.5초 이상이 되면 TD 6 회차에 반올림 7초 조각이 남는다 — 교정은 TD 를 다시 재지 않는다. 우리 송출: 정상 경로에서 드물게 | 그 목록이 S5(TD 검사)로 그 조각이 창에서 빠질 때까지(최대 1시간) 멈춘다 — `rewind_publish_aborted reason=validate` ERROR | 코드 0 · 한계(kty K2). 회차를 끝내는 처방은 피해를 줄일 뿐이라 넣지 않았다 |
+| 외부 메타 끝값이 장부에 남는 길 | 화해가 Head 의 메타(`pc-gen` · `pc-disc-seq`)를 장부에 옮긴다. 버킷 쓰기 권한을 가진 자 · 평문 엔드포인트의 중간자 · 비정상 호환 엔드포인트가 메타를 위조하면 그 끝값이 장부에 남는다. 우리 운영 설정: 실 S3 + https 에서는 버킷 쓰기 권한 갈래만 남는다 | 세대 끝값은 장부 한 열을 고쳐야 풀린다. DISC-SEQ 끝값은 재기동 · 화해로 풀리지만, 그 정지 창에 TD 분할이 오면 끝값 base 가 새 회차로 복사된다 | kty 회부 대기 — 근본 처방은 외부 값을 장부 값에 상대적으로 묶는 것이다 |
+| 감시 문장의 비용 축은 스트림 ID 가짓수 | 30초 감시의 한 문장(재귀 CTE)이 장부에 있는 스트림 ID 전부를 훑는다. 실측: 250만 가짓수에서 10초 시한 실패 두 번(커밋 5 보안 검수) · 1만 가짓수 39–42ms · 약 200만은 그 사이의 어림이다. 우리 운영 설정: 스트림 키 고정 · 인증 관문(dev-media `authMethod: http`)이 있는 운영에서는 가짓수가 적다(수십 — 운영 스트림 키 수). 로컬 compose 기본은 익명 publish 라 해당한다 — 이름을 바꿔 가며 송출을 받으면 가짓수가 는다 | 감시 틱이 시한에 걸려 그 틱의 드리프트 · 컷오프 부재 대조가 빠진다(`rewind_job_failed` · `job=watch`). 그 틱의 init 화해 · 쉬는 뷰 버리기(Forget)도 빠진다. 발행은 계속된다 | 익명 publish 를 허용하는 설정을 쓰게 되면 다시 본다(가짓수 상한 또는 접두 분할) |
+| Head 거짓 404 | 화해(R4)가 Head 404 만으로 장부 `manifest_etag` 를 비운다. 버킷 오설정 · 중간자 · 404 를 돌려주는 프록시가 있으면 이 일이 난다. 우리 운영 설정: 부팅 버킷 확인 · https 강제로 좁혔다 | 이미 발행한 S4 상태 회차에서 P2′ 계승 취소가 다시 열린다. 탐침에서는 거짓 404 를 거둔 뒤에도 발행 정지가 풀리지 않았다(8초 관측) | 처방 둘(PUT 404 로 부재가 확인됐을 때만 비운다 · P2′ 가 「한 번도 발행하지 않았음」을 따로 본다)은 kty 회부다. 없는 버킷 HEAD 응답의 단서는 실측하지 않았다 — 승인된 실버킷 밖 이름이 필요하다 |
+
+#### ⓒ 한계 — 조립과 설정
+
+| 한계 | 발현 조건 | 영향 | 대응 · 다시 볼 조건 |
+|---|---|---|---|
+| 부팅 때 S3 일시 장애면 그 프로세스 동안 발행이 꺼진다 | 부팅의 자격증명 · HeadBucket 단계가 503 · 시한으로 실패한다. 우리 운영 설정: S3 · 자격증명 일시 장애가 기동에 겹칠 때 | 발행 몫이 강등돼 재기동까지 목록이 갱신되지 않는다. 업로드 · 인덱싱은 돈다. 신호는 부팅 ERROR `rewind_publish_degraded` 한 줄뿐이다 | 재기동이 회복한다. 로그 수집을 붙일 때 이 줄에 경보를 건다 |
+| `credential_process` 출력이 ERROR 에 실릴 수 있다 | 자격증명 provider 가 `credential_process` 이고 그 출력이 오류 문자열에 섞인다. 우리 운영 설정: 로컬은 env 3종이라 아니다 · 운영 자격증명 방식은 IaC 때 정한다 | 강등 줄의 `err` 에 그 문자열이 그대로 실린다 | 로그 수집을 정할 때 업로더의 같은 줄과 함께 본다 |
+| HeadBucket 에는 `s3:ListBucket` 권한이 필요하다 | 운영 역할에 `s3:ListBucket` 이 없다. 우리 운영 설정: 데모 IAM 에는 있다(2026-10-17 실측) · 운영 역할은 IaC 때 | 부팅 버킷 확인이 403 으로 실패해 발행 몫이 강등된다 | IaC 때 접두 조건과 함께 정한다. 권한을 주면 LIST 금지의 실행 시점 방어선이 줄고, 금지는 정적 단언이 진다 |
+| 강등 갈래의 유휴 연결 | 버킷 확인을 한 뒤 강등된다. 우리 운영 설정: 강등 때만 | S3 클라이언트에 닫는 API 가 없어 유휴 연결 하나가 SDK 유휴 시한(90초)까지 남는다 | 기록 |
+| 엔드포인트 원문 로그 | 실효 엔드포인트에 query 가 들었다. 우리 운영 설정: 엔드포인트를 비워(AWS 기본) 두면 닿지 않는다 | 켜짐 · 강등 줄의 `endpoint` 에 query 가 그대로 실린다. `//` 없는 꼴(`https:user:pw@host`)과 빈 호스트는 ⓒ 종결 라운드에서 닫았다 — https 검사가 거부하고 `endpoint` 칸에는 원문 대신 표식 `(호스트 없는 URL)` 이 실린다 | 엔드포인트에 자격증명 · 토큰을 넣지 않는다 |
+| 업로더의 https 검사는 설정값만 본다 | SDK 표준 설정(`AWS_ENDPOINT_URL_S3` 등)으로 평문 엔드포인트가 들어온다. 우리 운영 설정: 그 설정을 쓰지 않으면 닿지 않는다 | 업로더는 기동 때 거르지 못한다 — 발행 몫은 실효 엔드포인트를 본다 | 후속 티켓(계획 2.3 표 밖 파일) |
+
+#### 위 ⓐ 절 한계 표에서 ⓒ 가 바꾼 것
+
+*   일곱째 행(init CAS `Mismatch`)의 송출 설정 변경 갈래와 여덟째 행(ⓐ 단독
+    국면의 24시간 휴지)은 ⓒ 의 종료 전이가 방송마다 회차를 끊어 닫는다. 관측 끔과
+    재기동 ① 이어 붙음에서는 남고, 재포장 산출을 바꾸는 배포 갈래도 남는다.
+*   다섯째 행(재기동 뒤 init 미복원)은 그대로다. 스위치가 켜져 컷오프가 생기므로
+    그 회차의 ③ 은 스위퍼(30초)가 회차 기대값으로 올린다. Dirty 로 미복원을 감지해
+    재요청하는 수리안은 넣지 않았다.
+*   여섯째 행(init 잔량)은 kty K3 로 한계 유지 · M6 이월이 정해졌다.
+*   아홉째 행(보류 재요청의 거울상 경합)은 ⓒ 가 주조 스위치를 기본으로 켜 컷오프가
+    평시라 평시에 닿을 수 있는 경합이 됐다. 영향(재PUT 1회 · WARN 1줄 · 데이터 영향
+    0)과 수리안은 그대로다.
+
+### M4 ⓒ 테스트 지도
+
+PR ⓒ 가 시험 함수 368개를 더했다(TestMain 제외 991 → 1,359 — develop 병합 뒤 셈 ·
+커밋 1–8 이 365 · 종결 라운드가 3). 시험 파일은 80개가 바뀌었고 그 가운데 45개가 새
+파일이다(수정 35). PG 가 필요한 시험은 아래 「테스트」 절대로 돌리고,
+`internal/rewind/publish` 의 전용 DB 접미는 `_rewindpublish` 다.
+
+| 자리 | 시험 파일 |
+|---|---|
+| `internal/rewind/publish` 단위 | `publisher_test.go` · `tick_test.go` · `ladder_test.go` · `watch_test.go` · `gate_test.go` · `s3store_test.go` · `fakestore_test.go` · `fakestore_contract_test.go` · `harness_test.go` · 정적 단언 `c2_static_test.go` · `s3list_static_test.go` |
+| `internal/rewind/publish` PG | `tick_pg_test.go` · `dsn_pg_test.go` · `gap_pg_test.go` · `gapconfirm_pg_test.go` · `gapstand_pg_test.go` · `revoke_pg_test.go` · `rc19_pg_test.go` · `fence_pg_test.go` · `worker_pg_test.go` · `abort_log_pg_test.go` · `g8_pg_test.go` · `g8_race_pg_test.go` |
+| `cmd/segment-indexer` | 루프 `publish_loop_test.go` · `publish_loop_done_test.go` · `publish_loop_ladder_test.go` · `publish_loop_watch_test.go` · `publish_loop_negative_test.go` · `publish_loop_fixture_test.go` · 종료 전이 `offline_loop_test.go` · `offline_loop_fixture_test.go` · 조립 `publish_assembly_test.go` · `publish_assembly_pg_test.go` · 통합 `publish_it_pg_test.go` · `publish_it_restart_pg_test.go` · `publish_it_fakes_pg_test.go` · `publish_it_fixture_pg_test.go` |
+| `internal/indexer` | `offline_judgment_test.go` · `offline_pg_test.go` |
+| `internal/index` | `end_live_pg_test.go` · `rewind_watch_pg_test.go` |
+| `internal/rewind/cache` | `load_test.go` · `watch_test.go` |
+| `internal/upload` | `init_gate_test.go` · `fakeputter_contract_test.go` |
+
+위 표는 새 파일 45개다. 기존 시험 파일 35개에도 행이 더해졌다 — 예컨대
+`internal/session/registry_test.go`(계승 개시 TD) · `internal/config/config_test.go`
+(베이스 URL 수락 · 거부 표) · `internal/playback/mp4box_test.go`(stsd 지문).
+
+#### ⓒ 커버리지 게이트
+
+CI(`media-ci`)의 80% 게이트는 열네 패키지다. ⓒ 가 `internal/rewind/publish` 를
+더했고, develop 의 ingest-auth 응답기가 `streamkey` · `keyresolve` · `ingestauth` ·
+`mtxctl` 넷을 더했다(병합으로 합쳐졌다). 아래 값은 커밋 8 의 CI 동일 실행(PG 켬 · `-race`) 프로파일에 CI 판정식을
+다시 돌린 것이다. 표가 열 패키지뿐인 것은 그 프로파일이 병합 전 것이라 develop 이
+더한 넷이 들어 있지 않아서다.
+
+| 패키지 | 커버리지 |
+|---|---|
+| `internal/index` | 86.8% (347/400문) |
+| `internal/upload` | 97.3% (940/966문) |
+| `internal/indexer` | 94.2% (883/937문) |
+| `internal/session` | 97.3% (108/111문) |
+| `internal/mtxstate` | 95.3% (81/85문) |
+| `internal/playback` | 95.4% (208/218문) |
+| `internal/rewind/boundary` | 100.0% (21/21문) |
+| `internal/rewind` | 100.0% (236/236문) |
+| `internal/rewind/cache` | 100.0% (277/277문) |
+| `internal/rewind/publish` | 99.4% (623/627문) |
+
+#### ⓒ 뮤테이션 정식 실행
+
+커밋 8 이 계획 6.3 표의 ⓒ 몫 · 커밋 4–7 스크래치 뮤턴트 · 커밋 8 판별 뮤턴트를 한
+번에 다시 돌렸다. 로그 428개를 같은 원래 이름으로 묶으면 고유 뮤턴트 405개다.
+
+| 묶음 | 고유 | KILLED | 생존 |
+|---|---|---|---|
+| 6.3 ⓒ 몫 · 커밋 6b 몫 | 87 | 87 | 0 |
+| 커밋 7 첫째 묶음 | 44 | 41 | 3 |
+| 커밋 7 둘째 묶음(6.3 겹침 포함) | 98 | 91 | 7 |
+| 커밋 7 셋째 묶음 | 22 | 21 | 1 |
+| 커밋 4 · 수정 넷 | 133 | 130 | 3 |
+| 커밋 8 판별 · 대조군 | 21 | 17 | 4 |
+| 합계 | 405 | 387 | 18 |
+
+*   **생존 18 의 분류**: 대조군 3(무변이라 생존이 정상) · 등가 13(앞 보고가 등가로
+    둔 5 · 이번에 등가로 둔 8) · 관측 불가 2(도달하지 않는 실패 갈래 하나 ·
+    동시 시험에서만 사는 변이 하나). 등가로 둔 `m80_no_owner_check` 는 등가가
+    아니었다(종결 라운드 1 확인) — 적재 중 보류 틱에 그 스트림의 Dirty 원소가 있으면
+    Owner 거짓 갈래에 닿아 발행 상태(P · fence)를 영값으로 되돌린다.
+    `TestLoadingDoesNotResetOwnerState` 에 그 원소를 더해 이 뮤턴트가 20/20 FAIL 한다.
+*   **고유 수의 단서**: 생존의 `D14-m9-p0-nogencas` 는 6.3 `m9_p0_no_gencas`
+    (패키지 전체에서 KILLED)를 동시 시험 하나로 좁힌 같은 변이다. 참고 행으로 빼면
+    고유 404 · 생존 17 이다.
+*   **빌드 실패의 수(정정)**: 최초 실행 요약 셋에는 빌드 실패가 13건이다(cmd 8 ·
+    그 밖 2 · 발행 3). 정의를 고친 같은 이름의 재실행이 앞 로그를 덮어 cmd 의 8건은
+    본문이 남지 않았다. 남은 로그의 빌드 실패는 5건이고 다섯 모두 고친 정의
+    (`__v2`)가 KILLED 다. 이름 없는 자기 점검을 다시 세운 EX 뮤턴트는 7개다(커밋 8
+    개발 보고의 「빌드 실패 여섯」 · 「EX 다섯」을 고친다).
+*   **결함 처분**: 생존으로 판별 공백이 드러난 여섯에는 시험을 더했고, 해당
+    뮤턴트에서 20/20 FAIL · 패키지 전체 재실행에서 KILLED 다.
+*   **자료**: 작업 산출물 `c8_dev/mut/`(저장소 밖) — `summary.txt`(로그 단위) ·
+    `final_table.txt`(고유 단위).
+
+#### ⓒ G9 s4 leaf 다섯과 G8 동시 writer
+
+| leaf | 시험 · 자리 |
+|---|---|
+| `c2_no_flag_read` | `TestC2NoFlagRead`(`internal/rewind/publish/c2_static_test.go`) — 신설 |
+| `f4_all_lost` | `TestPhaseF4AllLostDoesNotSeed`(`internal/indexer/phase_pg_test.go`) · `TestRewindWatchCutoffAbsentWithoutLiveSession`(`internal/index/rewind_watch_pg_test.go`) |
+| `s4_signal_present` | `TestDeclinedSeedIsSignalledWithItsReason`(`internal/indexer/signal_test.go`) · `TestSessionSignalsCarryWarnGradeAndActionableLabels`(`internal/session/registry_test.go`) |
+| `s4_alarm_continuous` | `TestCutoffAbsentJudgment`(`internal/rewind/publish/watch_test.go`) |
+| `s4_signal_grades` | `TestCutoffAbsentJudgment` · `TestSessionSignalsCarryWarnGradeAndActionableLabels` · `TestPollFailureSignalsAreWarnGrade`(`internal/mtxstate/state_test.go`) |
+
+*   **G8 동시 writer**: `TestConcurrentWritersKeepOneLineage`
+    (`internal/rewind/publish/g8_race_pg_test.go`)가 실 PG 에서 두 writer 를 동시에
+    돌린다. `-race` 30/30 통과 · 경합 0 이고, 30회 가운데 29회에서 조건부 쓰기 패배,
+    30회 모두에서 fence 상실이 실제로 났다. 결정적 교차 시험 10개는
+    `g8_pg_test.go` 에 있다. 판정 기준은 부기 39 다. 판정 순서는 결함 신호(허용 밖
+    중단 사유 · 시한 밖 틱 오류)와 적용된 판의 계보 검사가 먼저이고, 부하로 문턱
+    (저마다 발행 5번 · lease 끝냄 20번 · 30초) 안에 경쟁 국면이 서지 않았는데 결함
+    신호가 없으면 국면 문턱 · 정착 단계만 건너뛴다(원인 수치 로그 · 종결 라운드 1 · 2).
+    결함 신호가 있으면 국면과 무관하게 실패다(예외 하나 — 국면이 서지 않은 실행에서
+    연속한 두 판에 겹치는 조각이 0 인 것은 시험 장치의 인공물이라 미성립으로 센다 ·
+    종결 라운드 2 확인 패스). 30/30 은 조용한 기계의 값이다 — 코드는
+    부하를 재지 않고 발행 수 · lease 끝냄 수 · 시한으로만 판정하며, 부하 실행(평균 36–230
+    관측)에서는 `-race` 가 건너뜀으로 끝났다(18/18). 그때도 계보는 위 사슬 검사와
+    `g8_pg_test.go` 의 교차 열 개가 결정적으로 판정한다.
+*   **G8 시험의 변이 교정(종결 라운드 1 재실행)**: fence 조건 제거는 동시 시험
+    하나로 N/N 이 안 된다(세대 예약 제거는 현행 규칙에서 20/20 FAIL — 아래). `-count=20`(`-race` 없이 — 커밋 8 정식 실행과 같은 형)
+    에서 fence 조건 제거(P4)는 1/20 FAIL(허용 밖 중단 사유 `etag_source_mismatch` ·
+    종결 라운드 2 cc 재측정 6/20)이고, 세대 예약 제거는 종결 라운드 1 규칙(국면
+    미성립이면 건너뜀)에서 20/20 건너뜀이었으나 라운드 2 규칙(결함 신호면 실패)에서는
+    20/20 FAIL 이다(중단 사유 `meta_invalid` · `validate`). 두 변이
+    모두 같은 패키지의 결정적 시험이 죽인다 — fence 조건 제거는
+    `TestP4RefusesZombieAfterTakeover`, 세대 예약 제거는 `g8_pg_test.go` 교차 열 개를
+    비롯한 시험 64개다(패키지 PG 켬 한 번).
+
+### M4 ⓒ 출처
+
+*   설계 · ADR: 볼트 설계 r17(4.1 · 4.4 · 4.5 · 4.6 · 4.9 · 6.2 · 9.1절) ·
+    ADR-044 · ADR-061 · ADR-062 · ADR-063 · ADR-073.
+*   계약: 팀 위키 `PokeClip-LLM-WIKI` — `contracts/계약-세그먼트인덱스.md` ·
+    `contracts/계약3-LLHLS-DVR재생규약.md` 7-5(kty K4 — TD 문언 정정과 2번 통지
+    POK-249) · 계약4 4D.
+*   계획: POK-195 M4 작업 산출물 — 계획(개정 r53 까지)의 4.1 · 4.5 · 커밋 순서
+    1–9 · 「README ⓒ 한계 절 행 요지」 표 · 부기 1–43 · 7절 13 · 8절.
+*   결정: kty K1–K4(2026-09-25) · 검문 빈틈 셋 코드 그대로(2026-09-30) · L4 등급
+    결정 ④ A · 작업 오류 로그 결정 ⑤ · PUT 실패 뒤 화해 (가)(2026-10-01) · G8
+    기준(2026-09-26) · 적재 고리 (가)(2026-10-17).
+*   실측: 위 「ⓒ 실측 기록」 넷과 커밋 7 셋째 묶음의 compose 실측(2026-10-06 —
+    기본 compose 에서 컷오프 주조와 종료 전이 · 버킷만 준 override 에서 기동
+    거부).
+*   코드: 이 절이 인용한 파일 · 함수 · 시험(PR ⓒ 커밋 1–8 개발 보고 · 검수 통합과
+    대조).
+
 ## 테스트
 
 ```bash
 cd media && go test ./...
 ```
 
-`internal/index`·`internal/session`·`internal/indexer`·`cmd/segment-indexer`·`internal/upload`·`internal/rewind/cache`의 통합 테스트와
+`internal/index`·`internal/session`·`internal/indexer`·`cmd/segment-indexer`·`internal/upload`·`internal/rewind/cache`·`internal/rewind/publish`의 통합 테스트와
 `internal/pgtest`의 자기 테스트는 **실제 PostgreSQL이 필요**하다. `PG_DSN`이 없으면 해당 케이스는 전부 `skip`되고 나머지는 그대로
 돈다 — 즉 `PG_DSN` 없이 돌린 결과만으로는 DB 계층이 검증되지 않는다.
 
 ```bash
 set -a; . ../.env; set +a
 export PG_DSN="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@localhost:5432/$POSTGRES_DB"
-go test ./internal/index/ ./internal/session/ ./internal/indexer/ ./cmd/segment-indexer/ ./internal/upload/ ./internal/rewind/cache/ ./internal/pgtest/ -v
+go test ./internal/index/ ./internal/session/ ./internal/indexer/ ./cmd/segment-indexer/ ./internal/upload/ ./internal/rewind/cache/ ./internal/rewind/publish/ ./internal/pgtest/ -v
 ```
 
 이 통합 테스트들은 `PG_DSN`이 가리키는 DB에 **쓰지 않는다.** `PG_DSN`은 관리 접속으로만
@@ -1221,7 +1831,7 @@ go test ./internal/index/ ./internal/session/ ./internal/indexer/ ./cmd/segment-
 `go test ./...`는 패키지별 테스트 바이너리를 병렬로 띄우므로 한 DB를 나눠 쓰면 서로의 표를
 비운다. 실제 이름은 `PG_TEST_DB`에 패키지 접미를 붙인 것으로, `internal/index`만 무접미
 (`pokeclip_uploadtest`)이고 `internal/session`은 `_session`, `internal/indexer`는 `_indexer`,
-`cmd/segment-indexer`는 `_cmd`, `internal/upload`는 `_upload`, `internal/rewind/cache`는 `_rewindcache`, `internal/pgtest` 자기 테스트는 `_selftest`다. 그래서 개발 DB의 `stream_segments`는 오염되지 않는다(대신 `PG_DSN`
+`cmd/segment-indexer`는 `_cmd`, `internal/upload`는 `_upload`, `internal/rewind/cache`는 `_rewindcache`, `internal/rewind/publish`는 `_rewindpublish`, `internal/pgtest` 자기 테스트는 `_selftest`다. 그래서 개발 DB의 `stream_segments`는 오염되지 않는다(대신 `PG_DSN`
 롤에 `CREATEDB` 권한이 필요하고 — **로컬 compose와 CI(`media-ci`)의 postgres 서비스 컨테이너 둘 다 superuser라 이미 갖고 있다**, `PG_TEST_DB`를 개발 DB 이름과 같게
 주면 테스트가 기동 즉시 실패한다. `PG_DSN`에 DB 이름 자체를 안 적었을 때도 같은데, 단
 `PGDATABASE`가 설정된 환경에서는 그 값이 DB 이름으로 채워져 "이름이 비었다" 가드 대신 동일 이름
@@ -1238,8 +1848,8 @@ go test ./internal/index/ ./internal/session/ ./internal/indexer/ ./cmd/segment-
 `media-ci`의 postgres는 잡마다 뜨고 함께 사라져 공유가 없다 — 규약을 완화한 것이 아니라 적용
 조건을 드러낸 것이다. `ddl.go`를 바꾼 뒤에는 전용 DB가 옛 스키마를 유지하므로
 (`CREATE TABLE IF NOT EXISTS`) **접미 DB 전부**를 지운 뒤 다시 돌린다 — `pokeclip_uploadtest`
-하나만 지우면 `internal/index`는 새 스키마로 통과하고 `_session`·`_indexer`·`_cmd`·`_upload`·`_rewindcache`는 옛
-스키마 그대로라 그 다섯 패키지만 "does not exist" 계열로 실패한다.
+하나만 지우면 `internal/index`는 새 스키마로 통과하고 `_session`·`_indexer`·`_cmd`·`_upload`·`_rewindcache`·`_rewindpublish`는 옛
+스키마 그대로라 그 여섯 패키지만 "does not exist" 계열로 실패한다.
 
 **아래 루프는 소유 표식을 확인하지 않고 이름만 보고 지운다** — 밑이름이 기본 이름이거나 테스트가 새로 만든
 고유 이름일 때만 쓰고, 표식이 없어 실패한 DB는 실패 메시지대로 전용 테스트 DB가 맞는지 직접 확인한 뒤 하나씩 지운다.
@@ -1247,7 +1857,7 @@ go test ./internal/index/ ./internal/session/ ./internal/indexer/ ./cmd/segment-
 ```bash
 # PG_TEST_DB 를 바꿔 돌렸다면 그 이름이 밑이름이다 — 기본 이름만 지우면 실제 DB 는 남는다.
 base="${PG_TEST_DB:-pokeclip_uploadtest}"
-for suffix in "" _session _indexer _cmd _upload _rewindcache _selftest; do
+for suffix in "" _session _indexer _cmd _upload _rewindcache _rewindpublish _selftest; do
   psql "$PG_DSN" -c "DROP DATABASE IF EXISTS ${base}${suffix}"
 done
 ```
@@ -1258,9 +1868,13 @@ done
 `go test`만 있으면 되고 Docker는 필요 없지만, 다른 테스트보다 몇 초 더 걸린다.
 
 CI(`media-ci`)는 `go test`에 `-coverprofile`을 붙여 패키지별 커버리지를 함께 재고,
-`internal/index`·`internal/upload`·`internal/indexer`·`internal/session`·`internal/mtxstate`·`internal/playback`·`internal/rewind/boundary`·`internal/rewind`·`internal/rewind/cache`
-**아홉 패키지 중 하나라도 80% 미만이면 잡을 실패시킨다**(`session`·`mtxstate` 는 POK-195 M3에서,
-`playback` 은 M4 ⓐ 에서, `rewind/boundary`·`rewind`·`rewind/cache` 는 M4 ⓑ 에서 추가 — 되감기 판정 로직과
+`internal/index`·`internal/upload`·`internal/indexer`·`internal/session`·
+`internal/mtxstate`·`internal/playback`·`internal/rewind/boundary`·
+`internal/rewind`·`internal/rewind/cache`·`internal/rewind/publish`·
+`internal/streamkey`·`internal/keyresolve`·`internal/ingestauth`·
+`internal/mtxctl`
+**열네 패키지 중 하나라도 80% 미만이면 잡을 실패시킨다**(`session`·`mtxstate` 는 POK-195 M3에서,
+`playback` 은 M4 ⓐ 에서, `rewind/boundary`·`rewind`·`rewind/cache` 는 M4 ⓑ 에서, `rewind/publish` 는 M4 ⓒ 에서 추가 — 되감기 판정 로직과
 ③ 바이트를 만드는 층, 되감기 목록의 경계·본문·입력을 정하는 층이 그 안에 있다. 발행된 목록 줄은 고칠 수 없어
 여기서 틀린 것은 그 목록이 사는 동안 남는다). 나머지 패키지는 수치만 로그에 남고 게이트 대상이 아니다.
 

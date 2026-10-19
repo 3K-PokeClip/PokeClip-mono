@@ -1,6 +1,7 @@
 package playback_test
 
 import (
+	"encoding/hex"
 	"os"
 	"testing"
 	"time"
@@ -17,13 +18,18 @@ import (
 // 표를 쓴다. 표에 잘못 올라간 정의(예: 기존 상자 이름으로 등록)는 그쪽 판독을 조용히 바꾼다.
 // 외부 테스트 패키지로 두는 이유: playback 은 내부 패키지를 임포트하지 않는다(key.go 패키지 주석) —
 // 두 패키지를 한 바이너리에 올리는 일은 이 테스트 패키지가 한다.
+//
+// 같은 전역 표로 머리말 트랙을 걷는 stsd 지문(계승 호환 게이트 — 계획 2.1 mp4box 행 ⓒ 이월분)도 이 바이너리에서
+// 같은 값을 내는지 본다. 기대 지문은 go-mp4 를 쓰지 않는 손 파서로 구했다(moov › trak › mdia › minf › stbl ›
+// stsd 상자 바이트를 사전순으로 이어 붙인 sha256 — 트랙 2개 · 123B · 170B).
 func TestMtxiRegistrationKeepsExistingBoxParsing(t *testing.T) {
 	tests := []struct {
-		file   string
-		wantMS int64 // 녹화기가 mvhd 에 적은 길이(0x0fac · 0x07fa)
+		file     string
+		wantMS   int64  // 녹화기가 mvhd 에 적은 길이(0x0fac · 0x07fa)
+		wantStsd string // 손 파서로 구한 stsd 지문
 	}{
-		{"testdata/segment_4s.mp4", 4012},
-		{"testdata/segment_tail_2s.mp4", 2042},
+		{"testdata/segment_4s.mp4", 4012, "da5268987a653de09f355d3837f864f75e1240e6db022b85483d1b5adb84f2eb"},
+		{"testdata/segment_tail_2s.mp4", 2042, "61cc23bffa4fb84afefec3a877d461c5069df3bc155f40f1e57abf0861f87a54"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.file, func(t *testing.T) {
@@ -34,6 +40,9 @@ func TestMtxiRegistrationKeepsExistingBoxParsing(t *testing.T) {
 			defer f.Close()
 			if _, err := playback.ReadMtxi(f); err != nil {
 				t.Fatalf("등록이 이 바이너리에서 살아 있지 않다 — ReadMtxi 실패: %v", err)
+			}
+			if fp, err := playback.StsdFingerprint(f); err != nil || hex.EncodeToString(fp[:]) != tt.wantStsd {
+				t.Errorf("playback.StsdFingerprint(%q) = %x, %v; want %s, nil", tt.file, fp, err, tt.wantStsd)
 			}
 
 			got, err := fmp4meta.ProbeDurationMS(tt.file)

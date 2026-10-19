@@ -1,0 +1,61 @@
+# 2-3 판정의 핵심 prod 대상 — 열: 자원 키 · 첫 단계 · 해석 방법 · 자원 유형 ·
+# 리전 · 동작(쉼표 구분) · 정책 읽기 방법 · 추가 문맥(탭 구분). 「#」 줄은
+# 주석, 빈 줄은 건너뜀. 계정 자리는 ${ACCOUNT} 뿐. 꼴은
+# lib/principal_data.sh 머리 주석.
+# 출처: 계획 M17b r3.1 2절 (3)(b) 표 · M17b principal-check.sh.
+#
+# 첫 단계 = 그 자원을 만드는 루트를 apply 하는 단계(런북 단계 표 ·
+# stage_actions 의 출처 주석): bootstrap · secrets = 5, network = O7a,
+# certs = O7b, registry = O7c. 그 단계부터 뒤 단계마다 묻는다.
+# 상태 객체 키 = 각 루트 backend.hcl.example 의 key, 상태 버킷 이름 =
+# prod/bootstrap 의 state_bucket_name 기본값.
+# 해석 tag:<서비스>:<유형> 은 Resource Groups Tagging API 의
+# ResourceTypeFilters 값이다(Environment = prod 태그로 찾음).
+#
+# 동작 이름과 동작 × 자원 유형 짝은 서비스 승인 참조 대조 2026-10-19
+# (https://docs.aws.amazon.com/service-authorization/latest/reference/list_<prefix>.html
+# — prefix = amazons3 · awssecretsmanager · amazonelasticcontainerregistry ·
+# amazonec2 · awscertificatemanager · awsidentityandaccessmanagementiam).
+# 데이터 단언은 서비스 접두 · 계열만 본다 — 짝은 사람이 대조한다(A9).
+#
+# 두지 않는 행:
+# *   KMS — 상태 버킷은 SSE-S3, 비밀은 AWS 관리 키다. 고객 관리 키를 쓰게
+#     되면 키 행을 더한다.
+# *   SNS · SQS · Lambda · RDS · ALB · ECS · CloudFront — 그 단계 PR 이 행을
+#     더한다.
+# *   공유 공개 존의 prod 레코드(zone: · Route 53 레코드 이름 문맥) — prod
+#     레코드 이름이 저장소 Terraform 에 오르는 단계 PR 이 더한다.
+
+# 상태 버킷 · 상태 객체(루트마다 · 같은 버킷 정책을 읽는다)
+state-bucket	5	arn:arn:aws:s3:::pokeclip-tfstate-prod-apne2	bucket	ap-northeast-2	s3:ListBucket,s3:PutBucketPolicy,s3:DeleteBucketPolicy,s3:DeleteBucket	s3	-
+state-object-bootstrap	5	arn:arn:aws:s3:::pokeclip-tfstate-prod-apne2/prod/bootstrap/terraform.tfstate	object	ap-northeast-2	s3:GetObject,s3:PutObject,s3:DeleteObject	s3	-
+state-object-secrets	5	arn:arn:aws:s3:::pokeclip-tfstate-prod-apne2/prod/secrets/terraform.tfstate	object	ap-northeast-2	s3:GetObject,s3:PutObject,s3:DeleteObject	s3	-
+state-object-network	O7a	arn:arn:aws:s3:::pokeclip-tfstate-prod-apne2/prod/network/terraform.tfstate	object	ap-northeast-2	s3:GetObject,s3:PutObject,s3:DeleteObject	s3	-
+state-object-certs	O7b	arn:arn:aws:s3:::pokeclip-tfstate-prod-apne2/prod/certs/terraform.tfstate	object	ap-northeast-2	s3:GetObject,s3:PutObject,s3:DeleteObject	s3	-
+state-object-registry	O7c	arn:arn:aws:s3:::pokeclip-tfstate-prod-apne2/prod/registry/terraform.tfstate	object	ap-northeast-2	s3:GetObject,s3:PutObject,s3:DeleteObject	s3	-
+
+# 비밀 pokeclip/prod/* · ECR pokeclip-prod/*
+secrets	5	tag:secretsmanager:secret	secret	ap-northeast-2	secretsmanager:GetSecretValue,secretsmanager:PutSecretValue,secretsmanager:UpdateSecret,secretsmanager:DeleteSecret,secretsmanager:PutResourcePolicy,secretsmanager:DeleteResourcePolicy,secretsmanager:TagResource,secretsmanager:UntagResource	secretsmanager	-
+ecr-repository	O7c	tag:ecr:repository	repository	ap-northeast-2	ecr:PutImage,ecr:BatchDeleteImage,ecr:SetRepositoryPolicy,ecr:DeleteRepositoryPolicy,ecr:DeleteRepository,ecr:TagResource,ecr:UntagResource	ecr	-
+
+# prod/network — 태그 없는 기본 네트워크 자원은 범위 밖(결정 3)
+network-sg	O7a	tag:ec2:security-group	security-group	ap-northeast-2	ec2:AuthorizeSecurityGroupIngress,ec2:AuthorizeSecurityGroupEgress,ec2:RevokeSecurityGroupIngress,ec2:RevokeSecurityGroupEgress,ec2:DeleteSecurityGroup,ec2:CreateTags,ec2:DeleteTags	none	-
+network-vpc	O7a	tag:ec2:vpc	vpc	ap-northeast-2	ec2:DeleteVpc,ec2:ModifyVpcAttribute,ec2:CreateTags,ec2:DeleteTags	none	-
+network-subnet	O7a	tag:ec2:subnet	subnet	ap-northeast-2	ec2:DeleteSubnet,ec2:AssociateRouteTable,ec2:CreateTags,ec2:DeleteTags	none	-
+network-route-table	O7a	tag:ec2:route-table	route-table	ap-northeast-2	ec2:CreateRoute,ec2:DeleteRoute,ec2:ReplaceRoute,ec2:DeleteRouteTable,ec2:AssociateRouteTable,ec2:DisassociateRouteTable,ec2:CreateTags,ec2:DeleteTags	none	-
+network-igw	O7a	tag:ec2:internet-gateway	internet-gateway	ap-northeast-2	ec2:DetachInternetGateway,ec2:DeleteInternetGateway,ec2:CreateTags,ec2:DeleteTags	none	-
+network-nat	O7a	tag:ec2:natgateway	natgateway	ap-northeast-2	ec2:DeleteNatGateway,ec2:CreateTags,ec2:DeleteTags	none	-
+network-eip	O7a	tag:ec2:elastic-ip	elastic-ip	ap-northeast-2	ec2:ReleaseAddress,ec2:DisassociateAddress,ec2:CreateTags,ec2:DeleteTags	none	-
+network-s3-endpoint	O7a	tag:ec2:vpc-endpoint	vpc-endpoint	ap-northeast-2	ec2:ModifyVpcEndpoint,ec2:DeleteVpcEndpoints,ec2:CreateTags,ec2:DeleteTags	none	-
+
+# prod/certs — 인증서 두 벌(서울 · us-east-1)
+cert-apne2	O7b	tag:acm:certificate	certificate	ap-northeast-2	acm:DeleteCertificate,acm:AddTagsToCertificate,acm:RemoveTagsFromCertificate	none	-
+cert-use1	O7b	tag:acm:certificate	certificate	us-east-1	acm:DeleteCertificate,acm:AddTagsToCertificate,acm:RemoveTagsFromCertificate	none	-
+
+# 권한 변경 — 주체 자신 · 사용자의 그룹 · prod 역할(경로 /pokeclip/prod/) ·
+# 붙은 고객 관리형 정책(IAM 은 us-east-1)
+self-role	5	self:role	role	us-east-1	iam:PutRolePolicy,iam:DeleteRolePolicy,iam:AttachRolePolicy,iam:DetachRolePolicy,iam:PutRolePermissionsBoundary,iam:DeleteRolePermissionsBoundary,iam:UpdateAssumeRolePolicy,iam:TagRole,iam:UntagRole	none	-
+self-user	5	self:user	user	us-east-1	iam:PutUserPolicy,iam:DeleteUserPolicy,iam:AttachUserPolicy,iam:DetachUserPolicy,iam:PutUserPermissionsBoundary,iam:DeleteUserPermissionsBoundary,iam:TagUser,iam:UntagUser	none	-
+self-group	5	self:group	group	us-east-1	iam:PutGroupPolicy,iam:DeleteGroupPolicy,iam:AttachGroupPolicy,iam:DetachGroupPolicy	none	-
+prod-roles	5	prodrole	role	us-east-1	iam:PutRolePolicy,iam:DeleteRolePolicy,iam:AttachRolePolicy,iam:DetachRolePolicy,iam:PutRolePermissionsBoundary,iam:DeleteRolePermissionsBoundary,iam:UpdateAssumeRolePolicy,iam:TagRole,iam:UntagRole	none	-
+attached-policies	5	policy:attached	policy	us-east-1	iam:CreatePolicyVersion,iam:SetDefaultPolicyVersion	none	-

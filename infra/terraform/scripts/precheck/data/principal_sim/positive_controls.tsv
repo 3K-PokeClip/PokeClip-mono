@@ -1,0 +1,9 @@
+# 2-3 판정 PC2(주체 대조) — 열: 주체 키 · 동작 · 리전 · 자원 ARN(탭 구분).
+# 주체마다 정확히 한 행이고, 그 주체에 반드시 허용이어야 하는 dev 쪽 질문이다.
+# 허용이 아니면 그 주체의 모든 행이 POSITIVE_CONTROL_FAILED 다.
+# 출처: 계획 M17b r3.1 2절 (4) · 실측 M5(2026-10-19 — kty 가 고른 넷 모두
+# 시뮬레이터 allowed 확인).
+dev-box	s3:ListBucket	ap-northeast-2	arn:aws:s3:::pokeclip-clips-2557
+media-dev	s3:ListBucket	ap-northeast-2	arn:aws:s3:::pokeclip-clips-2557
+dev-deployer	ssm:SendCommand	ap-northeast-2	arn:aws:ssm:ap-northeast-2::document/AWS-RunShellScript
+dev-oidc	ssm:SendCommand	ap-northeast-2	arn:aws:ssm:ap-northeast-2::document/AWS-RunShellScript

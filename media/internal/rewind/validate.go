@@ -2,6 +2,7 @@ package rewind
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"math"
@@ -18,10 +19,10 @@ import (
 // headerLine 은 목록 본문의 첫 줄이다(RFC 8216bis-22 4.4.1.1).
 const headerLine = "#EXTM3U\n"
 
-// maxBodyBytes 는 목록 본문의 크기 상한이다 — 설계 4.5.5 S5 의 ≤512KB 를 1KB = 1,024B 로 읽었다.
+// MaxBodyBytes 는 목록 본문의 크기 상한이다 — 설계 4.5.5 S5 의 ≤512KB 를 1KB = 1,024B 로 읽었다.
 // 1시간 창을 4초 조각으로 채운 본문이 약 104KiB(g6_f2 106,499B)라 다섯 배쯤 여유가 있다. 조각이
 // 아주 짧아 줄이 많아지면 넘는다 — 0.79초 조각으로 1시간을 채우면 이 크기에 닿는다.
-const maxBodyBytes = 512 << 10
+const MaxBodyBytes = 512 << 10
 
 // pdtSlack 은 PDT 엄격 단조 검사(S7)가 이웃한 두 조각의 겹침으로 봐주는 폭이다 — 설계 4.5.5 S7 의
 // PDT_SLACK(1ms). S7 은 발행되는 PDT 줄(ms)로 재므로 이 폭은 발행 해상도의 한 칸이다.
@@ -39,6 +40,11 @@ var ErrHaltPublication = errors.New("rewind: 발행 중단")
 // 소유 회차의 목록은 낼 수 있으므로 발행을 멈추지 않는다.
 var ErrRevokeInheritance = errors.New("rewind: 계승 취소")
 
+// ErrDiscontinuitySequenceDecreased 는 S2 의 DISC-SEQ 조항 위반이다 — 발행 중단의 한 갈래라
+// errors.Is(err, ErrHaltPublication) 도 참이다. 발행 층이 이 갈래를 MSN 후퇴와 가려 로그 사유를 따로
+// 적는다(계획 4.5 A2 결정 4).
+var ErrDiscontinuitySequenceDecreased = fmt.Errorf("%w: DISC-SEQ 감소", ErrHaltPublication)
+
 // Violation 은 발행 전 검사 하나에 걸린 것이다. 처치는 검사가 정하고(설계 4.5.5 표의 처치 열)
 // 호출자는 errors.Is 로 가른다 — S4 는 ErrRevokeInheritance, 나머지 여섯은 ErrHaltPublication 이다.
 type Violation struct {
@@ -46,6 +52,9 @@ type Violation struct {
 	Check string
 	// Reason 은 무엇이 어긋났는지다 — 사람이 읽는 진단이다.
 	Reason string
+	// cause 는 처치를 한 갈래로 좁힌 센티널이다. 비면 검사 이름이 처치를 정한다(S2 의 DISC-SEQ 조항만
+	// ErrDiscontinuitySequenceDecreased 를 싣는다).
+	cause error
 }
 
 // Error 는 처치 · 검사 · 까닭을 한 줄로 적는다(예: "rewind: 발행 중단: S7 — …").
@@ -53,9 +62,13 @@ func (v *Violation) Error() string {
 	return fmt.Sprintf("%v: %s — %s", v.Unwrap(), v.Check, v.Reason)
 }
 
-// Unwrap 은 처치를 돌려준다 — errors.Is(err, ErrRevokeInheritance) 가 S4 위반에서만 참이 되게.
+// Unwrap 은 처치를 돌려준다 — errors.Is(err, ErrRevokeInheritance) 가 S4 위반에서만 참이 되게. 좁힌
+// 갈래(cause)가 있으면 그것을 돌려준다 — 그 센티널이 처치(ErrHaltPublication)를 감싸고 있다.
 func (v *Violation) Unwrap() error {
-	if v.Check == "S4" {
+	switch {
+	case v.cause != nil:
+		return v.cause
+	case v.Check == "S4":
 		return ErrRevokeInheritance
 	}
 	return ErrHaltPublication
@@ -68,9 +81,11 @@ func violation(check, format string, args ...any) error {
 
 // Published 는 한 목록 URL 에 이미 발행한 목록의 자기기술이다 — 설계 4.5.5 가 Prev 라 부르는 것.
 //
-// Gen · PublishedSeq · Terminal 은 발행 세대 규약이 본문 밖 메타데이터로 싣는 값(설계 4.4.2
-// pc-gen · pc-pub-seq · pc-terminal)이고, MediaSequence · SegmentCount 는 줄 수 검사(S1)와
-// MSN 검사(S2)가 읽는다.
+// 필드는 전부 발행 세대 규약이 본문 밖 메타데이터로 싣는 값이다(설계 4.4.2 넷 pc-gen · pc-pub-seq ·
+// pc-terminal · pc-session 에 계획 4.5 A1 결정 5 가 넷 pc-msn · pc-seg-count · pc-disc-seq ·
+// pc-body-sha256 을 더했다 — pc-session 은 목록 URL 이 이미 가리키므로 여기 싣지 않는다). 그래서 재기동
+// 뒤에도 본문을 읽지 않고 Head 한 번으로 되살린다. MediaSequence · SegmentCount 는 줄 수 검사(S1)와 MSN
+// 검사(S2)가, DiscontinuitySequence 는 S2 의 DISC-SEQ 조항이 읽는다.
 type Published struct {
 	// Gen 은 그 발행의 세대(manifest_gen)다.
 	Gen int64
@@ -82,6 +97,12 @@ type Published struct {
 	SegmentCount int
 	// Terminal 은 그 목록이 EXT-X-ENDLIST 로 닫혔는가다.
 	Terminal bool
+	// DiscontinuitySequence 는 그 목록의 EXT-X-DISCONTINUITY-SEQUENCE 다 — 다음 목록의 DISC-SEQ 를 세는
+	// 기준이다(계획 4.5 A1 결정 1 의 D_P).
+	DiscontinuitySequence int64
+	// BodySHA256 은 그 목록 본문의 sha256 이다 — 다시 렌더한 본문이 같으면 올리지 않는 판정의 근거다(계획
+	// 4.5 A1 결정 7).
+	BodySHA256 [sha256.Size]byte
 }
 
 // Validate 는 렌더한 목록을 발행해도 되는지 가른다 — 설계 4.5.5 발행 전 검사 S1–S7 이다. 목록을
@@ -324,9 +345,24 @@ func checkLineCount(p Playlist, prev *Published) error {
 // checkMediaSequence 는 S2 first-MSN 단조다 — MSN(첫 줄 조각의 seq)은 뒤로 가지 않는다(RFC
 // 8216bis-22 6.2.2 「MUST NOT decrease」). 뒤로 가면 플레이어가 이미 받은 MSN 에 다른 URI 를 보고
 // 재생을 멈춘다(6.3.4 — 설계 RC-9-e).
+//
+// DISC-SEQ(소유 회차 base)도 직전 발행보다 작지 않아야 한다(계획 4.5 A2 결정 4). 줄면 남은 조각의
+// Discontinuity Sequence Number 가 바뀐다(6.2.2). 이 갈래는 ErrDiscontinuitySequenceDecreased 로 푼다 —
+// 발행 층이 MSN 후퇴와 가려 적는다. 둘 다 어긋나면 MSN 쪽을 돌려준다. 소유 회차를 못 찾으면 영값이라 base
+// 0 과 견준다(렌더가 먼저 거르는 입력이다).
 func checkMediaSequence(p Playlist, prev *Published) error {
-	if prev != nil && p.Rows[0].Seq < prev.MediaSequence {
+	if prev == nil {
+		return nil
+	}
+	if p.Rows[0].Seq < prev.MediaSequence {
 		return violation("S2", "MSN %d 이 직전 발행의 %d 보다 뒤로 갔다", p.Rows[0].Seq, prev.MediaSequence)
+	}
+	if owner, _ := p.session(p.Owner); owner.DiscontinuityBase < prev.DiscontinuitySequence {
+		return &Violation{
+			Check:  "S2",
+			Reason: fmt.Sprintf("DISC-SEQ %d 이 직전 발행의 %d 보다 작다", owner.DiscontinuityBase, prev.DiscontinuitySequence),
+			cause:  ErrDiscontinuitySequenceDecreased,
+		}
 	}
 	return nil
 }
@@ -372,13 +408,16 @@ func totalMS(rows []boundary.Row) int64 {
 
 // checkBody 는 S5 본문 형식·상한이다 — 이 바이트를 그대로 올려도 되는가.
 //
-//	첫 줄 #EXTM3U(RFC 8216bis-22 4.4.1.1) · 크기 ≤ maxBodyBytes · #PC- 로 시작하는 줄 0개(우리 용도의
+//	첫 줄 #EXTM3U(RFC 8216bis-22 4.4.1.1) · 크기 ≤ MaxBodyBytes · #PC- 로 시작하는 줄 0개(우리 용도의
 //	줄 — 세대 정보는 본문 밖 메타데이터로 간다, 설계 4.4.2)
 //	TARGETDURATION ≥ 모든 조각의 반올림 길이(4.4.3.1) — TD 는 소유 회차 값, 조각 길이는 행의 duration_ms
 //	다. 본문의 TD 줄이 그 값 한 줄뿐이고 EXTINF 줄이 그 길이라는 것은 checkBodyMatchesRows 가 확인했다
 //	(그래서 플레이어가 보는 값과 같다). 반올림이 TD 분할 판정과 같은 식이라 입력도 같은 ms 정수로
 //	둔다(roundedSeconds)
 //	MAP 도달 가능 — 회차가 바뀌는 조각마다 그 회차 init 을 가리키는 MAP 이 있고 그 init 이 올라가 있다
+//	조각 줄 — 조각마다 duration_ms > 0 이고 조각 키가 ③ 키 문법(playback.ParseSegKey — 업로드 워커와 같은 한 벌)이며
+//	첫 성분이 목록의 스트림이다(계획 B #10). 키는 URI 줄에 그대로 실리므로 CR · 따옴표 · NUL 같은 글자가 줄로 새거나
+//	다른 스트림의 객체를 가리키는 줄을 막는다 — 「본문 = 목록 값」 조항은 본문이 키를 그대로 적었는지만 본다
 //
 // 「본문 = 목록 값」 조항(조각 수 · 머리 넷 · URI · PDT · EXTINF · GAP · MAP 개수·위치)은 checkBodyMatchesRows
 // 가 빈 목록 검사 다음, S4 보다 앞서 본다.
@@ -386,8 +425,8 @@ func checkBody(p Playlist, body []byte, lines []string, segs []segmentLines) err
 	switch {
 	case !bytes.HasPrefix(body, []byte(headerLine)):
 		return violation("S5", "첫 줄이 #EXTM3U 가 아니다")
-	case len(body) > maxBodyBytes:
-		return violation("S5", "본문 %d바이트가 상한 %d바이트를 넘는다", len(body), maxBodyBytes)
+	case len(body) > MaxBodyBytes:
+		return violation("S5", "본문 %d바이트가 상한 %d바이트를 넘는다", len(body), MaxBodyBytes)
 	}
 	for _, line := range lines {
 		if strings.HasPrefix(line, "#PC-") {
@@ -409,7 +448,28 @@ func checkBody(p Playlist, body []byte, lines []string, segs []segmentLines) err
 			return violation("S5", "seq %d: %s", r.Seq, problem)
 		}
 	}
+	for _, r := range p.Rows {
+		if problem := p.segmentProblem(r); problem != "" {
+			return violation("S5", "seq %d: %s", r.Seq, problem)
+		}
+	}
 	return nil
+}
+
+// segmentProblem 은 행 r 을 조각 줄로 낼 수 없는 까닭이다("" = 낼 수 있다) — 길이가 0 이하이거나, 조각 키가 ③ 키
+// 문법 밖이거나 다른 스트림의 키다(checkBody 의 조각 줄 조항). 외부 값은 64자까지만 싣는다.
+func (p Playlist) segmentProblem(r boundary.Row) string {
+	if r.DurationMS <= 0 {
+		return fmt.Sprintf("길이 %dms 가 0 이하다", r.DurationMS)
+	}
+	stream, _, err := playback.ParseSegKey(r.PlaybackS3Key)
+	switch {
+	case err != nil:
+		return fmt.Sprintf("조각 키가 ③ 키 문법 밖이다 — %v", err)
+	case stream != p.StreamID:
+		return fmt.Sprintf("조각 키 %.64q 는 다른 스트림 %.64q 의 것이다(목록 스트림 %.64q)", r.PlaybackS3Key, stream, p.StreamID)
+	}
+	return ""
 }
 
 // roundedSeconds 는 ms 를 가장 가까운 초로 반올림한다 — 딱 가운데(x.5초)는 올린다(6,499ms → 6 ·

@@ -47,12 +47,12 @@ func TestValidateTargetDurationRoundsLikeTheTDSplit(t *testing.T) {
 	}
 }
 
-// 설계 공백(착수 점검 숨은 가정 11) — 현재 동작을 고정한다. TD 분할 회차 P8(TD 8)을 300초 안에 다시
-// 연 회차 S 가 계승하면, S 의 TD 는 개시 규칙대로 max(6, round(첫 조각 4초)) = 6 인데 접두에는 P8 의
-// 7,600ms 조각이 실린다. S4(계승 접두 범위)에는 TD 조항이 없어 계승은 취소되지 않고, S5 가 발행을
-// 멈춘다 — P8 의 긴 조각이 창에서 빠질 때까지(최대 1시간) S 의 목록은 나가지 않는다. 설계에 없는
-// 조항은 더하지 않았다. 처방 후보(ⓒ 착수 때 kty 회부): (A) 계승 개시 TD = max(직전 회차 TD,
-// round(첫 조각)) · (B) S4 에 TD 호환 조항.
+// 쓰기 규칙(K1) 밖 입력에 대한 검사 방어다(착수 점검 숨은 가정 11 — kty K1 로 닫혔다). 계승 개시 TD 는
+// max(6, 직전 회차 TD, round(첫 조각))라서(계획 부기 33) TD 분할 회차 P8(TD 8)을 300초 안에 물려받은 회차
+// S 는 TD 8 이상으로 열린다 — 쓰기 쪽은 index 의 TestReconnectAfterTDSplitInheritsTargetDuration 이 잰다.
+// 그래도 장부가 아래 모양(S 의 TD 6 · 접두에 P8 의 7,600ms 조각)이면 S4(계승 접두 범위)에는 TD 조항이
+// 없어 계승은 취소되지 않고, S5 가 발행을 멈춘다 — P8 의 긴 조각이 창에서 빠질 때까지(최대 1시간) S 의
+// 목록은 나가지 않는다.
 // S 의 base 0 은 P8 에서 복사한 값이다 — P8 의 0 은 TestValidateTargetDurationRoundsLikeTheTDSplit 의
 // P8 과 같은 까닭이다. P8 은 seq 300..303(7.6초 + 4초 × 3 = 19.6초), S 는 P8 이 끝나고 40.4초 뒤
 // seq 304 부터다.
@@ -70,13 +70,32 @@ func TestValidateInheritedTDSplitPrefixHaltsOnS5(t *testing.T) {
 	wantVerdict(t, err, "S5")
 }
 
+// S5 의 TD 상한은 소유 회차의 TD 로 잰다 — 목록의 줄이 모두 계승 접두 회차의 것이어도 그렇다(뮤테이션 94 · README ⓑ→ⓒ
+// 5행 VB-LASTROW). 입력은 쓰기 규칙(K1) 밖이다: 규칙대로면 S 가 TD 8 이상으로 열려 두 회차의 TD 가 같아지고, 이 조항이
+// 어느 회차의 TD 를 읽는지 가를 수 없다. 목록은 바로 위 시험의 S 가 첫 조각을 아직 settled 로 만들지 못한 동안의 것이다
+// (P8 접두 300..303 만). 마지막 줄 회차 P8 의 TD 8 로 재면 7,600ms 조각이 통과하고, 소유 회차 S 의 TD 6 으로 재면 그
+// 조각이 렌더가 쓴 TARGETDURATION:6 을 넘어 S5 로 멈춘다.
+func TestValidateTDIsOwnerSessionsOutsideWriteRule(t *testing.T) {
+	p8 := rewind.Session{ID: "P8", TargetDuration: 8, MinSeq: 300, InitUploaded: true}
+	s := rewind.Session{ID: "S", InheritsSession: "P8", TargetDuration: 6, MinSeq: 304, InitUploaded: true}
+	p := playlist("S", []rewind.Session{p8, s},
+		[]boundary.Row{row("P8", 300, day, 7600)},
+		run("P8", 301, 303, day.Add(7600*time.Millisecond)),
+	)
+
+	err := validate(t, p, 1, nil)
+
+	wantVerdict(t, err, "S5")
+}
+
 // S5 머리 대조는 소유 회차의 TD·base 로 한다 — 목록 첫 줄이 계승 접두 회차의 것이어도 그렇다(렌더 머리와
 // 같은 규칙 — TestRenderHeaderComesFromOwnerSession). 두 회차의 TD 가 다른 계승 목록으로 잰다: 바로 위
 // TestValidateInheritedTDSplitPrefixHaltsOnS5 의 S 가 한 시간 남짓 송출해 P8 의 긴 첫 조각이 창에서
 // 빠진 뒤의 목록이다.
 //
 //	P8  seq 300 의 7,600ms 조각이 TD 분할로 연 회차(TD 8 · base 0 · 비계승) — 300..303 을 쓰고 끝났다
-//	S   P8 이 끝나고 40.4초 뒤 P8 을 계승해 seq 304 에서 열렸다(TD 6 · P8 의 base 0 복사) — 4초 조각
+//	S   P8 이 끝나고 40.4초 뒤 P8 을 계승해 seq 304 에서 열렸다(TD 6 · P8 의 base 0 복사 — TD 6 은 K1 쓰기
+//	    규칙 밖의 입력이다. 규칙대로면 8 이상이다) — 4초 조각
 //	창  머리 1199 까지는 꼬리가 300 이하라 목록에 7,600ms 조각이 실려 S5 로 멈췄다. 머리 1200 에서
 //	    꼬리가 301 로 넘어간다(301..1200 = 900 × 4초 = 한 시간) — S 의 목록이 처음 나간다(직전 발행 없음)
 //
@@ -118,6 +137,41 @@ func TestValidatePrefixOnlyPlaylistHeaderComesFromOwnerSession(t *testing.T) {
 	p.Rows = p.Rows[:3]
 
 	err := validate(t, p, 1, nil)
+
+	wantVerdict(t, err, "")
+}
+
+// 머리 DISC-SEQ 도 소유 회차의 base 다 — 접두 회차와 소유 회차의 base 가 갈린 계승 목록으로 잰다(뮤테이션 76 ·
+// VH-FIRSTROW-BASE · 계획 4.5 F 와 「ⓑ 에서 ⓒ 로 넘긴 것」 6행 — 위 두 시험은 두 회차의 base 가 같아 가르지 못했다).
+// 쓰기 규칙 안이다(O←P←S · 발행 모형 A0).
+//
+//	P  O 를 계승해 seq 40 에서 열린 회차(base 0) — 40..42 를 쓰고 끝났다. 40 은 계승 회차의 첫 조각이라 끊김
+//	   표시가 있다. P 는 ending 이 되어 제 목록을 더 내지 않았으니 40 을 축출한 적이 없고 base 는 0 그대로다
+//	S  P 를 계승해 seq 43 에서 열렸다(P 의 base 0 복사). S 의 창이 한 시간을 채워 40 을 축출했다 — 발행자가
+//	   소유 회차 자리에 적는 DISC-SEQ 는 0 + 1 = 1 이다(A1 결정 1 절대식)
+//
+// 목록 = P 접두 41..42 + S 43..940(900 × 4초 = 한 시간 — S3). 렌더는 머리에 소유 회차의 1 을 쓴다. 첫 줄 회차
+// P 의 base 0 으로 대조하면 어긋나 멈춘다.
+func TestValidateHeaderUsesOwnerBaseAfterPrefixEviction(t *testing.T) {
+	p := rewind.Session{ID: "P", InheritsSession: "O", TargetDuration: 6, MinSeq: 40, InitUploaded: true}
+	s := rewind.Session{ID: "S", InheritsSession: "P", DiscontinuityBase: 1, TargetDuration: 6, MinSeq: 43, InitUploaded: true}
+	pl := playlist("S", []rewind.Session{p, s}, run("P", 41, 42, day.Add(4*time.Second)), run("S", 43, 940, day.Add(time.Minute)))
+
+	err := validate(t, pl, 1, nil)
+
+	wantVerdict(t, err, "")
+}
+
+// 접두만 실린 목록도 머리 DISC-SEQ 는 소유 회차의 base 다(뮤테이션 77 · VH-LASTROW-BASE). 바로 위 시험의 P 가 한
+// 시간 넘게 송출했지만 ③ 가 밀려 제 목록의 머리가 40 근처에 멈춘 채 ending 이 됐다(base 0 그대로). S 가 P 를 계승해
+// seq 941 에서 열렸고(base 0 복사) 941 은 아직 settled 가 아니다. 밀렸던 P 의 ③ 가 올라가며 S 의 창이 P 접두로만
+// 한 시간을 채워 40 을 축출했다 — S 의 DISC-SEQ 는 1 이다. 목록 = P 41..940 이라 마지막 줄 회차도 P(base 0)다.
+func TestValidateHeaderUsesOwnerBaseOnPrefixOnlyList(t *testing.T) {
+	p := rewind.Session{ID: "P", InheritsSession: "O", TargetDuration: 6, MinSeq: 40, InitUploaded: true}
+	s := rewind.Session{ID: "S", InheritsSession: "P", DiscontinuityBase: 1, TargetDuration: 6, MinSeq: 941, InitUploaded: true}
+	pl := playlist("S", []rewind.Session{p, s}, run("P", 41, 940, day.Add(4*time.Second)))
+
+	err := validate(t, pl, 1, nil)
 
 	wantVerdict(t, err, "")
 }
@@ -320,4 +374,66 @@ func TestValidateMapReachable(t *testing.T) {
 func withStream(p rewind.Playlist, streamID string) rewind.Playlist {
 	p.StreamID = streamID
 	return p
+}
+
+// S5 조각 줄 조항 — 키(계획 B #10 · 〔r37〕 ⑴ · 뮤테이션 97). 조각 키는 ③ 키 문법(playback.ParseSegKey — 업로드 워커와
+// 같은 한 벌)이어야 하고 첫 성분이 목록의 스트림이어야 한다. 키는 URI 줄에 그대로 실리므로(BaseURL + "/" + 키) 다른
+// 스트림의 객체를 가리키거나 CR · 따옴표 · NUL 같은 글자를 목록 줄로 내보낼 수 있다. 「본문 = 목록 값」 조항은 본문이 그
+// 키를 그대로 적었는지만 보므로 이것을 막지 못한다 — 개행만 줄이 어긋나 그 조항이 먼저 잡는다. 장부는 INSERT 때 SegKey
+// 로 키를 예약하므로 이런 키는 쓰기 경로 밖 입력이다(발행 직전의 심층 방어).
+//
+// 목록은 회차 N(seq 700 에서 개시 · TD 6)의 700..703 이고 seq 702 의 키만 바꾼다.
+func TestValidateRejectsForeignOrMalformedSegmentKey(t *testing.T) {
+	n := rewind.Session{ID: "N", TargetDuration: 6, MinSeq: 700, InitUploaded: true}
+	tests := []struct {
+		name string
+		key  string
+		want string
+	}{
+		{"장부_키_그대로", "dvr/str/seg/000702.m4s", ""},
+		{"다른_스트림의_키", "dvr/other/seg/000702.m4s", "S5"},
+		{"자릿수_다섯", "dvr/str/seg/00702.m4s", "S5"},
+		{"확장자", "dvr/str/seg/000702.mp4", "S5"},
+		{"상위_경로_참조", "dvr/../seg/000702.m4s", "S5"},
+		{"끝_CR", "dvr/str/seg/000702.m4s\r", "S5"},
+		{"따옴표", `dvr/str"/seg/000702.m4s`, "S5"},
+		{"NUL", "dvr/str/seg/000702.m4s\x00", "S5"},
+		{"개행", "dvr/str/seg/000702.m4s\n#EXT-X-ENDLIST", "S5"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rows := run("N", 700, 703, day)
+			rows[2].PlaybackS3Key = tt.key
+
+			err := validate(t, playlist("N", []rewind.Session{n}, rows), 1, nil)
+
+			wantVerdict(t, err, tt.want)
+		})
+	}
+}
+
+// S5 조각 줄 조항 — 길이(계획 B #10 · 〔r37〕 ⑴ · 뮤테이션 98). duration_ms 는 0 보다 커야 한다 — 0 · 음수 행은 EXTINF
+// 줄로 0.000 · -1.-500 같은 값을 내보낸다. 장부는 쓰기 경로의 폭 검증(indexer H7)이 양수만 넣으므로 이런 행도 쓰기 경로
+// 밖 입력이다. 경계 1ms 는 통과한다. 목록은 위와 같고 seq 702 의 길이만 바꾼다.
+func TestValidateRejectsNonPositiveDuration(t *testing.T) {
+	n := rewind.Session{ID: "N", TargetDuration: 6, MinSeq: 700, InitUploaded: true}
+	tests := []struct {
+		name       string
+		durationMS int32
+		want       string
+	}{
+		{"1ms", 1, ""},
+		{"0ms", 0, "S5"},
+		{"음수", -1500, "S5"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rows := run("N", 700, 703, day)
+			rows[2].DurationMS = tt.durationMS
+
+			err := validate(t, playlist("N", []rewind.Session{n}, rows), 1, nil)
+
+			wantVerdict(t, err, tt.want)
+		})
+	}
 }
