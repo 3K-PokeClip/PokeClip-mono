@@ -74,6 +74,11 @@ source "${SCRIPT_DIR}/lib/evidence.sh" || {
   printf 'events: 검사 불가: 증거 경로 함수를 읽지 못함\n' >&2
   exit 2
 }
+# shellcheck source=infra/terraform/scripts/precheck/lib/precheck_common.sh
+source "${SCRIPT_DIR}/lib/precheck_common.sh" || {
+  printf 'events: 검사 불가: 공용 도우미를 읽지 못함\n' >&2
+  exit 2
+}
 
 # event_names.txt 의 행 「출처<탭>이름<탭>리전」.
 names=()
@@ -94,21 +99,6 @@ die() {
 }
 
 #######################################
-# 탭 구분 줄의 칸 수가 정확하고 빈 칸이 없는지 본다. 탭 IFS 의 read 는 빈
-# 칸을 접어 칸을 밀기 때문에, 칸을 나누기 전에 이것으로 먼저 거른다.
-# Arguments:
-#   줄, 칸 수.
-# Returns:
-#   맞으면 0.
-#######################################
-tsv_ok() {
-  local line="$1" fields="$2" tab=$'\t' tabs
-  tabs="${line//[!${tab}]/}"
-  [[ "${#tabs}" -eq $((fields - 1)) && "${line}" != "${tab}"* &&
-    "${line}" != *"${tab}" && "${line}" != *"${tab}${tab}"* ]]
-}
-
-#######################################
 # event_names.txt 를 읽어 names 에 담는다. 「#」 으로 시작하는 줄은 주석,
 # 빈 줄은 건너뛴다.
 # Globals:
@@ -120,7 +110,7 @@ load_names() {
     die "event_names.txt 가 없음"
   while IFS= read -r line || [[ -n "${line}" ]]; do
     [[ -z "${line}" || "${line}" == '#'* ]] && continue
-    tsv_ok "${line}" 3 || die "event_names.txt 의 행 꼴이 틀림: ${line}"
+    precheck::tsv_ok "${line}" 3 || die "event_names.txt 의 행 꼴이 틀림: ${line}"
     source="${line%%$'\t'*}"
     region="${line##*$'\t'}"
     name="${line#*$'\t'}"
@@ -182,7 +172,7 @@ is_role_assumption() {
 #######################################
 lookup_fields() {
   local line="$1" id source name time rest
-  tsv_ok "${line}" 5 || return 1
+  precheck::tsv_ok "${line}" 5 || return 1
   id="${line%%$'\t'*}"
   rest="${line#*$'\t'}"
   source="${rest%%$'\t'*}"

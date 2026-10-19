@@ -98,7 +98,7 @@ read_policy() {
       die "자원 정책 응답이 None(res-${req_n}.txt — 정책 칸 없음)"
     state=none
   else
-    write_evidence "${file}" '%s\n' "${call_out}"
+    precheck::write_evidence "${file}" '%s\n' "${call_out}"
     if [[ "${call_out}" != '{'* || "${call_out}" != *'"Statement"'* ]]; then
       die "정책 파일 꼴이 아님(policy-${policy_n}.json — 봉투째 · escape 저장)"
     fi
@@ -167,5 +167,5 @@ read_policies() {
     record+="${pol_file[i]##*/}"$'\t'"${pol_read[i]}"$'\t'
     record+="${pol_subject[i]}"$'\t'"${pol_state[i]}"$'\n'
   done
-  write_evidence "${evidence_dir}/policies.tsv" '%s' "${record}"
+  precheck::write_evidence "${evidence_dir}/policies.tsv" '%s' "${record}"
 }

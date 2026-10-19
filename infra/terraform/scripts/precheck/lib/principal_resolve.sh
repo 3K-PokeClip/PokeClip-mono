@@ -78,7 +78,7 @@ read_list() {
     item="${rest%%$'\n'*}"
     rest="${rest#*$'\n'}"
     [[ -n "${item}" ]] || continue
-    if ! [[ "${item}" =~ ${pattern} ]] || ! is_plain "${item}"; then
+    if ! [[ "${item}" =~ ${pattern} ]] || ! precheck::is_plain "${item}"; then
       die "읽기 응답의 꼴이 다름(res-${req_n}.txt)"
     fi
     list_items+="${item}"$'\n'
@@ -165,7 +165,7 @@ resolve_principals() {
     u_groups+=("")
     u_attached+=("")
   done
-  write_evidence "${evidence_dir}/principals.tsv" '%s' "${record}"
+  precheck::write_evidence "${evidence_dir}/principals.tsv" '%s' "${record}"
 }
 
 #######################################
@@ -207,7 +207,7 @@ resolve_zone() {
     line="${rest%%$'\n'*}"
     rest="${rest#*$'\n'}"
     [[ -n "${line}" ]] || continue
-    tsv_ok "${line}" 3 || die "존 목록 응답의 꼴이 다름(res-${req_n}.txt)"
+    precheck::tsv_ok "${line}" 3 || die "존 목록 응답의 꼴이 다름(res-${req_n}.txt)"
     name="${line%%$'\t'*}"
     private="${line##*$'\t'}"
     id="${line#*$'\t'}"
@@ -282,7 +282,7 @@ resolve_targets() {
       rest="${rest#*$'\n'}"
     done
   done
-  write_evidence "${evidence_dir}/targets.tsv" '%s' "${record}"
+  precheck::write_evidence "${evidence_dir}/targets.tsv" '%s' "${record}"
 }
 
 #######################################

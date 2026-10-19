@@ -4,8 +4,9 @@
 # shellcheck disable=SC2034,SC2154
 #
 # 2-3 판정 데이터(data/principal_sim/)를 읽고 꼴을 검사한다(계획 M17b 2절).
-# principal-check.sh 가 source 한다 — die · is_plain · tsv_ok 와 상수
-# (STAGE_ORDER · 패턴)는 부르는 쪽에 있다.
+# principal-check.sh 가 source 한다 — die 와 상수(STAGE_ORDER · 패턴)는
+# 부르는 쪽에, precheck::is_plain · precheck::tsv_ok 는
+# lib/precheck_common.sh 에 있다.
 #
 # 데이터 규약: 탭 구분, 「#」 으로 시작하는 줄은 주석, 빈 줄은 건너뜀, 계정
 # 자리는 ${ACCOUNT} 뿐.
@@ -67,7 +68,8 @@ read_data_file() {
 }
 
 #######################################
-# 탭 구분 줄을 fields 에 나눠 담는다(tsv_ok 로 칸 수를 먼저 본 줄).
+# 탭 구분 줄을 fields 에 나눠 담는다(precheck::tsv_ok 로 칸 수를 먼저 본
+# 줄).
 # Globals:
 #   fields
 # Arguments:
@@ -137,7 +139,7 @@ load_principals() {
   for entry in ${data_rows[@]+"${data_rows[@]}"}; do
     n="${entry%%$'\t'*}"
     line="${entry#*$'\t'}"
-    tsv_ok "${line}" 3 || die "dev_principals.tsv ${n}행의 칸 수가 틀림"
+    precheck::tsv_ok "${line}" 3 || die "dev_principals.tsv ${n}행의 칸 수가 틀림"
     split_tsv "${line}"
     key="${fields[0]}"
     kind="${fields[1]}"
@@ -165,7 +167,7 @@ load_principals() {
 #   맞으면 0.
 #######################################
 concrete_arn() {
-  is_plain "$1" && [[ "$1" == arn:aws:* && "$1" != *'*'* &&
+  precheck::is_plain "$1" && [[ "$1" == arn:aws:* && "$1" != *'*'* &&
     "$1" != *[[:space:]]* ]]
 }
 
@@ -180,7 +182,7 @@ load_controls() {
   for entry in ${data_rows[@]+"${data_rows[@]}"}; do
     n="${entry%%$'\t'*}"
     line="${entry#*$'\t'}"
-    tsv_ok "${line}" 4 || die "positive_controls.tsv ${n}행의 칸 수가 틀림"
+    precheck::tsv_ok "${line}" 4 || die "positive_controls.tsv ${n}행의 칸 수가 틀림"
     split_tsv "${line}"
     key="${fields[0]}"
     action="${fields[1]}"
@@ -237,7 +239,7 @@ context_entries() {
     while [[ -n "${values}" ]]; do
       value="${values%%,*}"
       values="${values#*,}"
-      is_plain "${value}" || return 1
+      precheck::is_plain "${value}" || return 1
       list+="${list:+,}\"${value}\""
     done
     context_json+=",{\"ContextKeyName\":\"${key}\",\"ContextKeyValues\":"
@@ -291,7 +293,7 @@ load_targets() {
   for entry in ${data_rows[@]+"${data_rows[@]}"}; do
     n="${entry%%$'\t'*}"
     line="${entry#*$'\t'}"
-    tsv_ok "${line}" 8 || die "prod_targets.tsv ${n}행의 칸 수가 틀림"
+    precheck::tsv_ok "${line}" 8 || die "prod_targets.tsv ${n}행의 칸 수가 틀림"
     split_tsv "${line}"
     key="${fields[0]}"
     stage="${fields[1]}"

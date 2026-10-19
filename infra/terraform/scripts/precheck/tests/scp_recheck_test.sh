@@ -935,6 +935,51 @@ expect_io_failure_hides_paths() {
 }
 
 #######################################
+# 호출 주체 증거(sts.err · sts.txt)를 쓰지 못하면 종료 2 이고, 원인은
+# 「증거를 쓰지 못함(<파일 이름>)」 한 줄이며 bash 원시 진단(절대 경로)이
+# 없다. sts.err 자리는 호출 전에 비운 파일을 먼저 만들므로 「호출 주체를
+# 확인하지 못함」 으로 가지 않는다. 쓰기 막기는 PATH 앞의 가짜 mkdir 이 증거
+# 디렉터리를 만들 때 그 이름의 디렉터리를 심어 만든다.
+# Globals:
+#   RUN_LIMIT, FAKEBIN, PATH, run_out
+#######################################
+expect_identity_write_failure() {
+  local case_dir bin target name paths
+  case_dir="$(new_tree_case)" || {
+    testlib::fail "identity-write: 시험 준비 실패"
+    return
+  }
+  bin="${case_dir}/in/mkdirbin"
+  if ! mkdir -p -- "${bin}" || ! testlib::make_blocking_mkdir "${bin}"; then
+    testlib::fail "identity-write: 시험 준비 실패"
+    return
+  fi
+  for target in sts.err sts.txt; do
+    name="identity-write-${target}"
+    testlib::run_limited "${RUN_LIMIT}" "${case_dir}" "${name}" \
+      env PATH="${bin}:${FAKEBIN}:${PATH}" FAKE_AWS_SIM=ok \
+      FAKE_BLOCK_PREFIX=scp-alpha FAKE_BLOCK_NAME="${target}" \
+      bash "${case_dir}/tree/scp-recheck.sh" alpha
+    expect_unverifiable "${name}" || return
+    testlib::expect_stderr_count "${name}" "증거를 쓰지 못함(${target})" 1 ||
+      return
+    if [[ "${target}" == sts.err ]]; then
+      testlib::expect_stderr_count "${name}" '호출 주체를 확인하지 못함' 0 ||
+        return
+    fi
+    paths="$(testlib::abs_path_lines "${run_out}.stdout")"
+    paths+="$(testlib::abs_path_lines "${run_out}.stderr")"
+    if [[ -n "${paths}" ]]; then
+      testlib::fail "${name}: 절대 경로 — ${paths}"
+      return
+    fi
+  done
+  expect_no_leak identity-write "${case_dir}" || return
+  testlib::ok "identity-write → sts.err · sts.txt 쓰기 실패는 종료 2 ·" \
+    "「증거를 쓰지 못함(<파일>)」 한 줄 · 절대 경로 0"
+}
+
+#######################################
 # 승인 기준 하나를 고친다(종류별).
 # Globals:
 #   NOT_UTC, OTHER_SHA256
@@ -1012,7 +1057,8 @@ tamper_reference() {
         us_east_1 allow allowed True
       ;;
     result-quote)
-      # 다섯째 칸(AllowedByOrganizations)에 큰따옴표 — is_plain 이 막는다.
+      # 다섯째 칸(AllowedByOrganizations)에 큰따옴표 — precheck::is_plain 이
+      # 막는다.
       rewrite_result_row "${dir}" iam:GetAccountAuthorizationDetails \
         us-east-1 allow allowed '"True"'
       ;;
@@ -1344,6 +1390,7 @@ main() {
   expect_accept_changed_result_rejected
   expect_no_record_when_time_fails
   expect_io_failure_hides_paths
+  expect_identity_write_failure
   expect_tampered_reference_rejected
   expect_result_without_final_newline
   expect_collapsed_baseline_rejected

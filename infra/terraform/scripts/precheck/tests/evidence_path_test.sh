@@ -25,7 +25,7 @@ readonly TILDE='~'
 # 시험은 규약을 강제하지 않는 lib 만 보므로 alpha 를 준다.
 readonly DIR_PATTERN='^alpha-[0-9]{8}T[0-9]{6}Z(-[2-9])?$'
 # 이 lib 으로 원본을 쓰는 점검 도구(PRECHECK_DIR 기준).
-CHECK_TOOLS=(scp-recheck.sh events.sh lib/evidence.sh)
+CHECK_TOOLS=(scp-recheck.sh events.sh lib/evidence.sh lib/precheck_common.sh)
 readonly CHECK_TOOLS
 # 임시 파일을 만드는 구문 — bash 3.2 의 here-string · here-doc(둘 다 임시
 # 파일에 내용을 쓴다) · 프로세스 치환 · mktemp.
