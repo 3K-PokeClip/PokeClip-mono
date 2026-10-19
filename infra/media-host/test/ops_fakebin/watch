@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+#
+# 감시 래퍼 — 자기 이름(grep · base64 · tr 등 링크 이름)으로 불린 argv 와
+# 환경을 기록한 뒤 진짜 명령(/usr/bin · /bin)을 그대로 실행한다. 비밀이 표준
+# 입력이 아니라 argv 로 넘어가면 기록에 드러난다.
+#
+# 시험이 주는 값: PCBENCH_FAKE_LIB · PCBENCH_FAKE_LOG_DIR.
+
+# 아래 source= 경로를 이 파일 위치 기준으로 찾게 한다.
+# shellcheck source-path=SCRIPTDIR
+
+set -euo pipefail
+
+# shellcheck source=record.sh
+source "${PCBENCH_FAKE_LIB:?감시 래퍼: PCBENCH_FAKE_LIB 없음}"
+
+main() {
+  local name dir
+  name="$(basename -- "$0")"
+  fake::record "${name}" "$@"
+  for dir in /usr/bin /bin; do
+    if [[ -x "${dir}/${name}" ]]; then
+      exec "${dir}/${name}" "$@"
+    fi
+  done
+  printf '감시 래퍼: 진짜 %s 없음\n' "${name}" >&2
+  exit 127
+}
+
+main "$@"

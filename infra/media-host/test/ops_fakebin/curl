@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+#
+# 루프백 시험(c5) 전용 가짜 curl — `curl -q --config -` 꼴만 받는다. argv · 환경과
+# 표준 입력(설정 — Bearer 가 든 유일한 통로)을 기록하고 상태 코드를 낸다.
+#
+# PCBENCH_FAKE_CURL_MODE:
+#   ok(기본)  state/sending(가짜 송출기가 도는 중)이 있으면 200, 없으면 404.
+#   never     늘 404.
+#   fail      000 을 내고 종료 7(연결 실패 흉내).
+#
+# 시험이 주는 값: PCBENCH_FAKE_LIB · PCBENCH_FAKE_LOG_DIR · PCBENCH_FAKE_STATE_DIR.
+
+# 아래 source= 경로를 이 파일 위치 기준으로 찾게 한다.
+# shellcheck source-path=SCRIPTDIR
+
+set -euo pipefail
+
+# shellcheck source=record.sh
+source "${PCBENCH_FAKE_LIB:?가짜 curl: PCBENCH_FAKE_LIB 없음}"
+
+readonly STATE="${PCBENCH_FAKE_STATE_DIR:?PCBENCH_FAKE_STATE_DIR 없음}"
+
+main() {
+  fake::record curl "$@"
+  if (( $# != 3 )) || [[ "$1" != -q || "$2" != --config || "$3" != - ]]; then
+    fake::unknown curl
+  fi
+  cat >"${PCBENCH_FAKE_LOG_DIR}/curl.${fake_record_n}.stdin"
+  case "${PCBENCH_FAKE_CURL_MODE:-ok}" in
+    ok)
+      if [[ -e "${STATE}/sending" ]]; then
+        printf '200'
+      else
+        printf '404'
+      fi
+      ;;
+    never) printf '404' ;;
+    fail)
+      printf '000'
+      exit 7
+      ;;
+    *) fake::unknown curl ;;
+  esac
+}
+
+main "$@"

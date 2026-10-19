@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+#
+# paths 시험(c5) 전용 가짜 BusyBox nc — 가짜 docker exec 가 흉내 내는 사이드카
+# 컨테이너 안에서 불린다. argv · 환경을 기록하고, 표준 입력으로 받은 HTTP 요청을
+# nc.<n>.request 에 남긴 뒤(컨테이너 안 통로 — 시험이 Basic 값을 대조한다) 심어
+# 둔 응답을 낸다.
+#
+# PCBENCH_FAKE_NC_MODE:
+#   ok(기본)  state/nc.response 를 그대로 낸다.
+#   refused   아무것도 내지 않고 종료 1(연결 거부 흉내).
+#
+# 받는 argv 는 `-w 5 127.0.0.1 9997` 하나다(그 밖은 종료 2).
+
+# 아래 source= 경로를 이 파일 위치 기준으로 찾게 한다.
+# shellcheck source-path=SCRIPTDIR
+
+set -euo pipefail
+
+# shellcheck source=record.sh
+source "${PCBENCH_FAKE_LIB:?가짜 nc: PCBENCH_FAKE_LIB 없음}"
+
+readonly STATE="${PCBENCH_FAKE_STATE_DIR:?PCBENCH_FAKE_STATE_DIR 없음}"
+
+main() {
+  fake::record nc "$@"
+  [[ "$*" == '-w 5 127.0.0.1 9997' ]] || fake::unknown nc
+  cat >"${PCBENCH_FAKE_LOG_DIR}/nc.${fake_record_n}.request"
+  case "${PCBENCH_FAKE_NC_MODE:-ok}" in
+    ok) cat -- "${STATE}/nc.response" ;;
+    refused) exit 1 ;;
+    *) fake::unknown nc ;;
+  esac
+}
+
+main "$@"
