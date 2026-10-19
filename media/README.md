@@ -243,10 +243,11 @@ M4 ⓒ 이관 기록」의 알려진 한계 「관측 끔」). 인덱싱·업로
     평문 `pass`에 영문 대소문자 · 숫자 · `! $ ( ) * + . ; < = > [ ] ^ _ - { } @ # &`
     만 받고 `:` · 공백 · `,`가 든 값은 기동 때 거부한다(상류
     `internal/conf/credential.go`, 실측 2026-10-19). 16진 난수가 가장 안전하다.
-*   MediaMTX YAML의 `pass:` 값은 **작은따옴표로 감싼다**(`pass: '…'`). 맨 앞이
-    `#`(YAML 주석)이나 `!`(YAML 태그)이면 따옴표 없이 쓸 때 값이 null, 곧 빈
-    자격이 된다. 상류 v1.21.1의 `Credential.Check`는 빈 값이면 어떤 비밀번호든
-    통과시키므로 그 사용자는 사실상 무인증이고, MediaMTX는 경고 없이 뜬다(상류
+*   MediaMTX YAML의 `user:` · `pass:` 값은 **작은따옴표로 감싼다**
+    (`pass: '…'`). 맨 앞이 `#`(YAML 주석)이나 `!`(YAML 태그)이면 따옴표 없이
+    쓸 때 값이 null, 곧 빈 자격이 된다. 상류 v1.21.1의 `Credential.Check`는 빈
+    값이면 무엇이든 통과시킨다 — `pass:`가 비면 그 사용자는 사실상 무인증이고,
+    `user:`가 비면 아무 사용자 이름이나 받는다. MediaMTX는 경고 없이 뜬다(상류
     `internal/conf/credential.go` · `internal/conf/yamlwrapper`, go-yaml
     v1.19.2 — 보안 리뷰 실측 2026-10-19).
 *   MediaMTX 쪽에는 평문 대신 `sha256:<base64>` 해시 표기를 쓸 수 있다. 솔트 없는
