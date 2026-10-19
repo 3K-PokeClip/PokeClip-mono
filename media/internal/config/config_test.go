@@ -562,6 +562,42 @@ func TestLoadRejectsMalformedBucketAndEndpoint(t *testing.T) {
 	}
 }
 
+// S3_ENDPOINT 거부 문구는 어느 갈래도 원문을 싣지 않는다(validateRewindPublicBaseURL
+// 과 같다) — opaque 꼴(`//` 가 빠지면 url.Parse 가 User 를 비운다)의 비밀번호와
+// 경로 · 질의의 토큰이 기동 오류 로그에 남지 않는다. userinfo 갈래는 원래부터 원문을
+// 싣지 않았지만 같은 그물로 고정한다.
+func TestS3EndpointErrorOmitsRaw(t *testing.T) {
+	for _, tt := range []struct{ name, raw string }{
+		{"호스트없음_opaque", "https:admin:SECRETPW@minio:9000"},
+		{"호스트없음_포트만", "http://:9000/SECRETHOST"},
+		{"호스트없음_질의", "http://:9000?token=SECRETQ"},
+		{"호스트없음_파싱실패", "https://minio:9000/%zzSECRETPARSE"},
+		{"호스트없음_opaque_minio스킴", "minio:9000/SECRETOPAQUE"},
+		{"scheme_userinfo앞", "ftp://admin:SECRETPW@minio:9000"},
+		{"userinfo", "https://admin:SECRETPW@minio:9000"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			env := withBucket(minimalEnv())
+			// 관례(버킷이 있으면 베이스 URL 필수) — 검증 순서가 바뀌어도 거부가 S3_ENDPOINT 갈래에서
+			// 나오게 유효한 값을 둔다.
+			env["REWIND_PUBLIC_BASE_URL"] = "https://media.pokeclip.com"
+			env["S3_ENDPOINT"] = tt.raw
+
+			_, err := Load(envOf(env))
+
+			if err == nil {
+				t.Fatalf("S3_ENDPOINT=%q 를 받아들였다", tt.raw)
+			}
+			if !strings.Contains(err.Error(), "S3_ENDPOINT") {
+				t.Errorf("에러에 키 이름이 없다: %v", err)
+			}
+			if strings.Contains(strings.ToLower(err.Error()), "secret") {
+				t.Errorf("S3_ENDPOINT=%q 의 에러 = %v, want 원문 없는 거부", tt.raw, err)
+			}
+		})
+	}
+}
+
 // ---------------------------------------------------------------------------
 // 관측 축 env 6종 (POK-195 M3 — 설계 5.4.1·6.5.2)
 // ---------------------------------------------------------------------------

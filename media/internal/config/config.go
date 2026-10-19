@@ -592,15 +592,17 @@ func validateS3(s3 upload.S3Options) error {
 	// Hostname() 까지 본다 — "http://:9000" 은 Host 가 ":9000" 이라 비어 있지 않지만
 	// 호스트가 없다. SDK 는 그대로 들고 가 연결 단계에서야 실패한다.
 	if err != nil || u.Host == "" || u.Hostname() == "" {
-		return fmt.Errorf("S3_ENDPOINT(%q)는 scheme 과 호스트를 포함한 URL 이어야 한다", s3.Endpoint)
+		return fmt.Errorf("S3_ENDPOINT 는 scheme 과 호스트를 포함한 URL 이어야 한다")
 	}
 	// SDK 는 이상한 scheme 을 조용히 삼킨다. 우리가 쓰는 것은 둘뿐이다.
 	if u.Scheme != "http" && u.Scheme != "https" {
-		return fmt.Errorf("S3_ENDPOINT(%q)의 scheme 은 http 또는 https 여야 한다", s3.Endpoint)
+		return fmt.Errorf("S3_ENDPOINT 의 scheme(%s)은 http 또는 https 여야 한다", u.Scheme)
 	}
-	// userinfo 거부 — endpoint 원문은 uploader_started 로그와 오류 문자열에 그대로 실린다.
-	// URL 에 자격증명을 넣으면 그 로그가 유출 경로가 된다. 자격증명 자리는 env 3종뿐이다.
-	// (이 오류 문구만은 원문을 되돌려주지 않는다 — 거부 사유 자체가 "비밀이 들어 있다"이므로.)
+	// userinfo 거부 — endpoint 원문은 uploader_started 로그와 SDK 오류 문자열에 그대로
+	// 실린다. URL 에 자격증명을 넣으면 그 로그가 유출 경로가 된다. 자격증명 자리는 env
+	// 3종뿐이다. 세 갈래의 거부 문구는 원문을 싣지 않는다(validateRewindPublicBaseURL 과
+	// 같다 — 원문을 실으면 opaque 꼴 비밀번호 · 질의 토큰이 기동 로그에 남을 수 있어
+	// 생략한다) · scheme 자리에 비밀을 넣는 운영은 없다고 본다.
 	if u.User != nil {
 		return fmt.Errorf("S3_ENDPOINT 에 자격증명(user:pass@)을 넣을 수 없다 — AWS_ACCESS_KEY_ID 등 env 로 전달하라")
 	}
