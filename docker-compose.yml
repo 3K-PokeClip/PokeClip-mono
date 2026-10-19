@@ -92,6 +92,8 @@ services:
       # 롤백 스위치 — 관측이 사라지면 스캔 유입(ⓐ2)의 되감기 컷오프 주조만 멈춘다. 워처·훅
       # 유입(ⓐ1) 주조는 계속되며 그것은 REWIND_SEED_ENABLED 로만 멈춘다. 인덱싱·업로드는 그대로 돈다.
       # 9997은 호스트에 공개하지 않으므로 이 주소는 compose 내부망에서만 유효하다.
+      # 자격(MTX_API_USER · MTX_API_PASS_FILE)은 두지 않는다 — dev MediaMTX 의 셋째 항목이
+      # `user: any` 라 무인증으로 붙는다(media/README.md).
       MTX_API_URL: http://media:9997
 
   # 정적 세그먼트 스텁 (M1 1-2) — 2번 플레이어 개발용. 먼저 infra/compose/stub/gen-segments.sh 1회 실행.
