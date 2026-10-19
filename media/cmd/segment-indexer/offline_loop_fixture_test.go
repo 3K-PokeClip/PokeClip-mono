@@ -59,7 +59,10 @@ type fireStamp struct{ before, after time.Time }
 // 크기 안정 대기만 ms 급으로 줄인다(크기가 계속 변하는 조각의 측정 포기를 빨리 보려고). edit 가 나머지를 고친다.
 func newOfflineLoop(t *testing.T, edit func(*indexer.Options)) *offlineLoop {
 	t.Helper()
-	now := time.Now()
+	// 기준 시각은 조각 파일 이름의 해상도(마이크로초 — segPath 의 %06d)로 맞춘다. 나노초 잔여를 두면 파일명에서 파싱한
+	// 시작 시각이 wall() 보다 1µs 미만 앞서, 「마지막 행 끝 + ReconnectWindow」 같은 경계 시험이 Linux(나노초 시계)에서만
+	// 한 틱 일찍 넘어간다(PR ⓒ 첫 media-ci — TestIdleStreamViewForgottenAfterReconnectWindow · macOS 는 µs 시계라 숨었다).
+	now := time.Now().Truncate(time.Microsecond)
 	f := &offlineLoop{
 		t: t, root: t.TempDir(), store: &fakeStore{}, obs: &fakeObserver{}, probe: &loopProbe{},
 		logs: &logCapture{}, cache: &cache.Cache{}, ends: &fakeEndLive{},
