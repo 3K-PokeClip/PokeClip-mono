@@ -459,19 +459,27 @@ untracked_outside_bundles() {
   comm -z -23 -- "${WORK}/now.z" "${WORK}/keep.z"
 }
 
+# paired_env_file 은 트리의 HEAD 와 짝 맞는 env 파일 이름을 변수 $1 에 넣는다(T →
+# .env.T.bak · 반영 전 → .env.pre-T.bak). 둘 다 아니면 일치 없음이다. 앞에서 PRE_SHA ·
+# T_SHA 를 readonly 로 둔다.
+paired_env_file() {
+  local head_sha
+  head_sha="$(owner_git rev-parse HEAD)"
+  if [[ "${head_sha}" == "${T_SHA}" ]]; then
+    printf -v "$1" '%s' "${DEMO_DIR}/.env.T.bak"
+  elif [[ "${head_sha}" == "${PRE_SHA}" ]]; then
+    printf -v "$1" '%s' "${DEMO_DIR}/.env.pre-T.bak"
+  else
+    mismatch "HEAD 가 T 도 반영 전도 아니다 — compose 와 짝 맞는 env 가 없다"
+  fi
+}
+
 # paired_compose 는 docker compose 를 트리의 HEAD 와 짝 맞는 env 로 부른다. 롤백의
 # docker compose 는 모두 이것으로 부르고, 출력은 파일로 받는다. 앞에서 PRE_SHA · T_SHA 를
 # readonly 로 둔다.
 paired_compose() {
-  local head_sha env_file
-  head_sha="$(owner_git rev-parse HEAD)"
-  if [[ "${head_sha}" == "${T_SHA}" ]]; then
-    env_file="${DEMO_DIR}/.env.T.bak"
-  elif [[ "${head_sha}" == "${PRE_SHA}" ]]; then
-    env_file="${DEMO_DIR}/.env.pre-T.bak"
-  else
-    mismatch "HEAD 가 T 도 반영 전도 아니다 — compose 와 짝 맞는 env 가 없다"
-  fi
+  local env_file
+  paired_env_file env_file
   docker compose -p "${PROJECT}" --env-file "${env_file}" \
     -f "${REPO}/${COMPOSE_YML}" "$@"
 }
@@ -488,16 +496,23 @@ mask_account() {
   sed -E 's/[0-9]{12}/<계정>/g' -- "$1"
 }
 
-# compose_up_masked 는 compose 함수 $1(live_compose · paired_compose)로 up 을 부른다(나머지
+# compose_up_masked 는 live_compose · paired_compose($1)와 같은 env 로 up 을 부른다(나머지
 # 인자). 도구 출력에는 이미지 좌표 전체가 찍힐 수 있어(받기 진행 · 오류) 파일로 받고, 계정
-# 번호를 가려 낸다. 실패하면 검사 실패다.
+# 번호를 가려 낸다. 실패하면 검사 실패다. env 는 받기 밖에서 고른다 — || 안의 함수는
+# set -e 가 꺼지고 일치 없음 문구가 파일로 들어가 사라지므로, 받는 것은 docker 하나뿐이다.
 compose_up_masked() {
-  local -r compose="$1"
+  local env_file
   local -i rc=0
+  case "$1" in
+    live_compose) env_file="${DEMO_DIR}/.env" ;;
+    paired_compose) paired_env_file env_file ;;
+    *) check_failed "compose_up_masked: 모르는 compose 함수다: $1" ;;
+  esac
   shift
-  "${compose}" up "$@" > "${WORK}/up.log" 2>&1 || rc=$?
+  docker compose -p "${PROJECT}" --env-file "${env_file}" \
+    -f "${REPO}/${COMPOSE_YML}" up "$@" > "${WORK}/up.log" 2>&1 || rc=$?
   mask_account "${WORK}/up.log" >&2
-  (( rc == 0 )) || check_failed "${compose} up $* 실패(종료 ${rc})"
+  (( rc == 0 )) || check_failed "docker compose up $* 실패(종료 ${rc})"
 }
 
 # container_id 는 이 compose 프로젝트에서 서비스 $1 의 컨테이너 id 하나를 변수 $2 에
@@ -664,15 +679,21 @@ stray_secret_names() {
 
 # dispose_ecr_login 은 R3′ 의 ECR 로그인 자리(LOGIN_DIR — 안에 12시간 유효한 토큰이 든
 # config.json 하나)를 치운다. config.json 은 shred -u, 디렉터리는 rmdir 이다. 없으면 그대로
-# 둔다. 링크 · 디렉터리 아닌 것이면 지우지 않고 일치 없음, 다른 파일이 들어 있으면 rmdir
-# 이 실패해 검사 실패다(모르는 것을 지우지 않는다).
+# 둔다. 링크 · 디렉터리 아닌 것이거나 config.json 밖의 파일이 들어 있으면 기대와 다른
+# 상태라 일치 없음이다 — 그 이름을 보이고 모르는 것은 지우지 않는다(config.json 은 먼저
+# 지운다).
 dispose_ecr_login() {
+  local left
   if [[ ! -e "${LOGIN_DIR}" && ! -L "${LOGIN_DIR}" ]]; then
     return 0
   fi
   [[ -d "${LOGIN_DIR}" && ! -L "${LOGIN_DIR}" ]] \
     || mismatch "디렉터리가 아니거나 링크다 — 지우지 않는다: ${LOGIN_DIR}"
   remove_box_file shred "${LOGIN_DIR}/config.json"
+  ls -1A -- "${LOGIN_DIR}" > "${WORK}/login-left"   # 못 받으면 검사 실패
+  left="$(tr '\n' ' ' < "${WORK}/login-left")"
+  [[ -z "${left}" ]] \
+    || mismatch "${LOGIN_DIR} 에 모르는 파일이 있다 — 지우지 않는다: ${left}"
   rmdir -- "${LOGIN_DIR}"
 }
 
@@ -2421,7 +2442,7 @@ T 구성 → 옛 판(반영 전 기록) → (리허설이면) T 로 다시. 블�
 |---|---|---|---|
 | 0 | 롤백 0 | 사전 확인(읽기만) | — |
 | A | 롤백 A | ① T 상태 보존 — T 백업 아홉 | — |
-| B | 롤백 B | T 백업 아홉 확인 → ② 내리고 반영 전 SHA 로 · ③ 손 수정 패치 · ④ 추적 밖 정리 · ⑤ 되살리고 올림 · `.env` 는 마지막 | 있음 |
+| B | 롤백 B | T 백업 아홉 확인 · (반영 전 판에 응답기가 있으면) 거부 목록 확인 → ② 내리고 반영 전 SHA 로 · ③ 손 수정 패치 · ④ 추적 밖 정리 · ⑤ 되살리고 올림(응답기가 있으면 응답기 먼저 · healthy 뒤 나머지) · `.env` 는 마지막 | 있음 |
 | C | 롤백 C | ⑥ 복귀 확인(읽기만 — 11-4) | — |
 | D | 롤백 D | **리허설에서만** — T 로 다시 올림 | 있음 |
 | E-1 | 롤백 E-1 | 리허설 뒤 T 상태 단언(읽기만) | — |
@@ -2453,8 +2474,11 @@ T 구성 → 옛 판(반영 전 기록) → (리허설이면) T 로 다시. 블�
 송출을 받는다. 그동안 거부 목록과 긴급 절단(cut)은 효력이 없다 — cut 은 응답기 컨테이너가
 없어 돌지 않고, 송출 통제는 옛 passphrase 하나뿐이다. 거부 목록 파일은 그대로 둔다 — 다시
 T 로 갈 때 R5 · D 가 응답기를 띄우기 전에 다시 읽는다. 계정 ECR 판을 올린 주기라면 반영 전
-판(ghcr 포크 `.2`)에도 응답기가 있어, B 가 응답기까지 반영 전 판으로 다시 올리고 거부
-목록 · cut 은 그대로 효력이 있다(복귀 확인의 도는 서비스도 셋이다 — 11-4).
+판(ghcr 포크 `.2`)에도 응답기가 있다. B 는 내리기 전에 거부 목록 파일을 보고(7-4 — 어긋나면
+바꾼 것 없이 멈춘다), 올릴 때 응답기를 먼저 띄워 healthy 를 본 뒤 나머지를 올린다. B 의
+`down` 부터 응답기가 healthy 가 될 때까지는 응답기가 없어 새 연결이 모두 거부되고 cut 도
+돌지 않는다. 그 뒤 접혀 있는 동안은 거부 목록 · cut 이 효력이 있다(복귀 확인의 도는
+서비스도 셋이다 — 11-4).
 
 ### 11-2. 왜 이 차례인가
 
@@ -2523,7 +2547,9 @@ main "$@"
 
 ```bash
 # ── 블록: 롤백 B — 머리 + 이 본문. 인자 없음. ②–⑤ 옛 판으로. 지운다 ──
-# 실행 직전 kty 승인(A 와 잇달아). 처음부터 다시 돌려도 이어진다(11-5).
+# 실행 직전 kty 승인(A 와 잇달아). 처음부터 다시 돌려도 이어진다(11-5). 반영 전 판에
+# 응답기가 있으면(계정 ECR 판을 올린 주기) 내리기 전에 거부 목록 파일을 보고(7-4), 올릴 때는
+# 응답기 먼저 · healthy 뒤 나머지다(운영 순서 — 7절). 첫 주기 판에는 응답기가 없다.
 main() {
   (( $# == 0 )) || check_failed '사용법: 인자 없음'
   local head_sha tracked
@@ -2535,6 +2561,15 @@ main() {
   T_SHA="$(cat -- "${DEMO_DIR}/T.sha")"
   readonly PRE_SHA T_SHA
   [[ "${PRE_SHA}" != "${T_SHA}" ]] || mismatch 'T 와 반영 전 SHA 가 같다'
+  # 반영 전 판 compose(반영 전 SHA 의 것 — git 에서 읽는다)의 서비스에 응답기가 있으면
+  # 응답기를 다시 띄우므로 거부 목록 파일부터 본다 — 어긋나면 바꾼 것 없이 멈춘다
+  owner_git show "${PRE_SHA}:${COMPOSE_YML}" > "${WORK}/pre-T.compose.yml"
+  docker compose -p "${PROJECT}" --env-file "${DEMO_DIR}/.env.pre-T.bak" \
+    --project-directory "${REPO}/infra/dev-media" \
+    -f "${WORK}/pre-T.compose.yml" config --services > "${WORK}/pre-T.services"
+  if [[ "$(count_lines_with "${WORK}/pre-T.services" ingest-auth)" != 0 ]]; then
+    assert_ready_to_start_ingest_auth
+  fi
   # ② 내리고(env 는 HEAD 로 고른다), 반영 전 SHA 의 깨끗한 작업 트리를 만든다. 추적
   # 파일의 손 변경은 버린다 — T 것은 T, 반영 전 것은 pre-T 의 worktree.patch 에 있다
   paired_compose down --remove-orphans
@@ -2572,8 +2607,15 @@ main() {
     "${DEMO_DIR}/mediamtx.demo.yml"
   # 옛 compose 가 짝 맞는 env 로 풀리는지(출력 없음 — 비밀을 내지 않는다)
   paired_compose config --quiet
-  # 모든 컨테이너를 새로 만들어 단일 파일 마운트도 새로 묶인다. 반영 전 판이 계정 ECR
-  # 판이면 출력에 계정 번호가 든 좌표가 찍힐 수 있다 — 가려 낸다
+  # 모든 컨테이너를 새로 만들어 단일 파일 마운트도 새로 묶인다. 되살린 트리의 compose 에
+  # 응답기가 있으면 운영 순서 — 응답기 먼저, healthy 시한을 넘기면 MediaMTX 는 띄우지
+  # 않는다. 반영 전 판이 계정 ECR 판이면 출력에 계정 번호가 든 좌표가 찍힐 수 있다 —
+  # 가려 낸다
+  paired_compose config --services > "${WORK}/services"
+  if [[ "$(count_lines_with "${WORK}/services" ingest-auth)" != 0 ]]; then
+    paired_compose up -d ingest-auth
+    wait_ingest_auth_healthy
+  fi
   compose_up_masked paired_compose -d
   cp -p -- "${DEMO_DIR}/.env.pre-T.bak" "${DEMO_DIR}/.env"
   assert_same "${DEMO_DIR}/.env.pre-T.bak" "${DEMO_DIR}/.env"
@@ -2771,6 +2813,7 @@ B 가 반영 전 렌더로 옛 판을 새로 만든다(로컬 실측 fix3 E6 접
 | 단계 0 | 바뀐 것 없음 — T 가 돈다 | 원인(신원 · 백업 · 도구 판)을 고친 뒤 이어진다 | HEAD 가 반영 전이면 롤백이 아니다 — 반영 도중이면 반영 취소(5-3) |
 | 단계 A | T 가 돈다. T 백업 일부만 있다(반쪽은 `.part`) | 이어진다 — 있는 백업은 지금 상태와 같은지 단언하고 그대로 쓴다 | 단언이 어긋나면(종료 1) 지금 상태가 T 기록과 다르다 — A 를 B 뒤에 돌린 경우 · 끊긴 A 뒤 추적 밖 내용이 바뀐 경우 · 접은 뒤 처분 없이 다시 반영한 경우(옛 반영의 T 백업 — R0 첫머리가 먼저 막는다) 등. 덮어쓰지 않았으므로 그 자리에 맞는 아래 행으로 간다 |
 | B 첫머리 — T 백업 확인(종료 1 · 2) | 바뀐 것 없음 — T 가 돈다 | 같은 자리에서 다시 멈춘다 | T 백업 아홉 가운데 없는 것이 있으면(종료 1) A 가 끝나지 않았다 — A 를 다시 돌려 이은 뒤 B. 묶음이 읽히지 않으면(종료 2) kty |
+| B 첫머리 — 거부 목록 확인(종료 1 — 반영 전 판에 응답기가 있을 때만) | 바뀐 것 없음 — T 가 돈다 | 같은 자리에서 다시 멈춘다 | D 첫머리 행과 같다(7-4 · 10절) |
 | B ② `down` 앞 | 바뀐 것 없음 | 이어진다 | — |
 | B ② `down` 뒤 – `checkout` 앞 | 컨테이너 내려감. HEAD = T. `.env` T | 이어진다 — 첫 `down` 은 T compose + `.env.T.bak` | 리허설이면 D 로 T 에 돌아가도 된다. 실제 롤백은 B 를 다시 돌려 끝낸다 |
 | B ② `checkout` 이 멈춤(추적 밖 파일과 겹침) | 컨테이너 내려감. HEAD = T, 추적 파일 깨끗(`reset` 뒤). 아무것도 지우지 않았다 | 같은 자리에서 다시 멈춘다(종료 2 — git 이 이름을 알린다) | 그 파일은 T 묶음에 있다. kty 가 정한 뒤(옮김) B 를 다시 돌리면 이어진다. 리허설이면 D 로 T 에 돌아가도 된다 — 실제 롤백은 D 를 쓰지 않는다 |
@@ -2779,15 +2822,16 @@ B 가 반영 전 렌더로 옛 판을 새로 만든다(로컬 실측 fix3 E6 접
 | B ④ `clean` 뒤 – ⑤ 상태 대조 앞 | 지금 규칙의 추적 밖이 비었다(두 묶음에 있음). 컨테이너 내려감. `.env` T | 이어진다 — 대조는 빈 목록을 통과하고 `tar` 가 되살린다 | 리허설이면 D |
 | B ⑤ 상태 대조 실패 | 작업 트리가 반영 전 기록과 다르다. 컨테이너 내려감. `.env` T | 같은 자리에서 다시 멈춘다(종료 1) | 원인 후보 — 반영 전의 스테이징 · 묶음과 트리의 차이. 띄우지 않는다. 차분을 보고 kty 가 원인을 고친 뒤 B 를 다시. 리허설이면 D 로 T 에 돌아가도 된다 — 실제 롤백은 D 를 쓰지 않는다 |
 | B ⑤ HEAD 형태 · 렌더 산출물 복원 – `up` | 옛 판 트리 · 옛 렌더. 컨테이너 내려감 또는 일부. `.env` T | 이어진다. `config --quiet` 가 실패하면(종료 2) 옛 compose 가 `.env.pre-T.bak` 으로 풀리지 않는다 — 다시 돌려도 같은 자리, kty 가 원인을 고친 뒤 B 를 다시 | 리허설이면 D |
+| B ⑤ healthy 시한 초과(반영 전 판에 응답기가 있을 때) | 옛 판 트리 · 옛 렌더. `ingest-auth` 만 떠 있고 MediaMTX 는 띄우지 않았다(운영 순서). `.env` T | 원인(응답기 로그)을 고친 뒤 이어진다. 거부 목록의 틀린 줄이면 손으로 고치지 않고 틀린 줄 걷기(10절 — 재시작 없음)를 돈다 | 리허설이면 D |
 | B ⑤ `.env` 복원 앞(띄운 뒤) | 옛 판이 돈다. `.env` 만 T | 이어진다(한 번 더 내렸다 올린다) | 리허설이면 D |
 | 단계 C | B 의 끝 상태. C 는 읽기만 | 같은 결과다 | 어긋남(종료 1)은 B 의 끝 상태가 반영 전 기록과 다르다는 뜻 — 추적 밖 이름 · 내용 포함. B 가 끝나지 않았으면 B 를 다시. 그 밖은 차분을 보고 kty 가 원인을 고친 뒤 B → C 를 다시 돈다 — 실제 롤백은 그다음 T 백업 처분 → R0 다. 리허설이면 D 로 T 에 돌아가도 된다 |
 | D 첫머리 — 거부 목록 확인(종료 1) | 바뀐 것 없음 | 같은 자리에서 다시 멈춘다 | 7-4 — 파일이 없으면 되살릴 내용을 kty 가 정한다. 틀린 줄이면 틀린 줄 걷기(10절 — 응답기 컨테이너가 없으면 끼우기만 한다) 뒤 D 를 다시 돌린다 |
 | D 어디서든(명령 사이) | HEAD 는 반영 전 또는 T. `.env` 는 옛 판(단계 끝에서만 바뀐다) | 이어진다 — 첫 `down` 은 HEAD 로 고른 짝이다. T 체크아웃 뒤 · `.env` 복원 앞에서 멈췄어도 T compose + `.env.T.bak` 이다 | ④ 목록 대조 실패는 B ④ 행과 같다. ⑤ 상태 대조 실패는 kty |
 | D 의 healthy 시한 초과 | `ingest-auth` 만 떠 있고 MediaMTX 는 띄우지 않았다(운영 순서). `.env` 옛 판 | 원인(응답기 로그)을 고친 뒤 이어진다. 거부 목록의 틀린 줄이면 손으로 고치지 않고 틀린 줄 걷기(10절 — 재시작 없음)를 돈다 | — |
 | 단계 E-1 | 바뀐 것 없음(읽기만) | 같은 결과다 | 어긋남(종료 1)은 T 가 A 의 기록대로 돌아오지 않았다는 뜻 — 추적 밖 이름 · 내용 포함. 아무것도 지우지 않았다. kty |
-| 단계 E-2 | T 백업 일부가 지워졌다 | 이어진다 — 있는 것만 지운다. `.env.T.bak` 이 남아 있으면 먼저 HEAD = T · 도는 서비스가 edge · ingest-auth · mediamtx · `.env` = `.env.T.bak` 을 본다. 어긋나면(B ② 에서 멈춤 — 컨테이너 내려감 · D 가 `.env` 복원 앞에서 멈춘 채 E-1 을 건너뜀 · 접힌 뒤) 아무것도 지우지 않고 멈춘다(종료 1). 링크 · 일반 파일이 아닌 이름이나 잔여가 남으면(종료 1) 그 이름을 보이고 kty | B ② 에서 멈췄으면 그 행대로 B 를 끝내거나 D 로 T 에 돌아간 뒤 E-1 → E-2. `.env` 가 다르면 D 를 다시 돌린 뒤 E-1 → E-2. 접힌 뒤면 T 백업 처분 |
-| T 백업 처분 | 첫머리 단언에서 멈췄으면 지운 것이 없다. 지우는 중에 멈췄으면 T 백업 일부가 지워졌다 — 반영 전 상태는 그대로 | 이어진다 — 있는 것만 지운다. 첫머리(HEAD = 반영 전 · `.env` = `.env.pre-T.bak` · 복귀 확인)가 어긋나면(종료 1) 아무것도 지우지 않는다 — T 가 돌거나 B 가 끝나지 않았거나 접힌 끝 상태가 반영 전 기록과 다르다. `.env.pre-T.bak` 이 없으면 검사 실패(종료 2)다 | B 가 끝나지 않았으면 B 를 다시 돌린 뒤 C → 처분. 복귀 확인이 어긋나면 단계 C 행과 같다(kty). T 가 돌면 처분하지 않는다 — 그 T 백업은 롤백의 길이다. 반영 전 비밀을 먼저 지웠으면 이 블록은 돌지 못한다(11-7) |
-| 반영 전 비밀 파기 | 첫머리(T 백업 남음 · 안정 상태 아님)에서 멈췄으면 지운 것이 없다. 지우는 중에 멈췄으면 비밀 하나만 지워졌을 수 있다 — `.env.pre-T.bak` 을 맨 먼저 지운다 | 이어진다 — 있는 것만 지운다. `.env.pre-T.bak` 이 이미 없으면 롤백 길이 이미 없어 안정 상태 단언을 건너뛴다 | T 백업이 남았으면 접힌 뒤는 T 백업 처분, T 가 도는 리허설 뒤는 E-1 → E-2 가 먼저다. 안정 상태(접힌 끝 · T 정착)가 아니면 반영 도중 · 접는 도중이다 — 반영(4절) · 반영 실패 복구(5절) · 롤백을 그 행대로 끝낸 뒤 다시. 「MediaMTX 가 제어망에 붙어 있지 않다」면 R5 끝 · R6 앞이다(반영은 R6 부터 잇는다). 링크 · 일반 파일이 아닌 이름으로 멈췄으면 kty |
+| 단계 E-2 | T 백업 일부가 지워졌다 | 이어진다 — 있는 것만 지운다. `.env.T.bak` 이 남아 있으면 먼저 HEAD = T · 도는 서비스가 edge · ingest-auth · mediamtx · `.env` = `.env.T.bak` 을 본다. 어긋나면(B ② 에서 멈춤 — 컨테이너 내려감 · D 가 `.env` 복원 앞에서 멈춘 채 E-1 을 건너뜀 · 접힌 뒤) 아무것도 지우지 않고 멈춘다(종료 1). 링크 · 일반 파일이 아닌 이름, `.ecr-login` 안의 모르는 파일(끊긴 R3′ 의 자리 — `config.json` 만 있어야 한다)이나 잔여가 남으면(종료 1) 그 이름을 보이고 kty | B ② 에서 멈췄으면 그 행대로 B 를 끝내거나 D 로 T 에 돌아간 뒤 E-1 → E-2. `.env` 가 다르면 D 를 다시 돌린 뒤 E-1 → E-2. 접힌 뒤면 T 백업 처분 |
+| T 백업 처분 | 첫머리 단언에서 멈췄으면 지운 것이 없다. 지우는 중에 멈췄으면 T 백업 일부가 지워졌다 — 반영 전 상태는 그대로 | 이어진다 — 있는 것만 지운다. 첫머리(HEAD = 반영 전 · `.env` = `.env.pre-T.bak` · 복귀 확인)가 어긋나면(종료 1) 아무것도 지우지 않는다 — T 가 돌거나 B 가 끝나지 않았거나 접힌 끝 상태가 반영 전 기록과 다르다. `.env.pre-T.bak` 이 없으면 검사 실패(종료 2)다. 지우는 중 링크 · 일반 파일이 아닌 이름 · `.ecr-login` 안의 모르는 파일을 만나면 그것은 지우지 않고 멈춘다(종료 1 — 그 이름을 보이고 kty) | B 가 끝나지 않았으면 B 를 다시 돌린 뒤 C → 처분. 복귀 확인이 어긋나면 단계 C 행과 같다(kty). T 가 돌면 처분하지 않는다 — 그 T 백업은 롤백의 길이다. 반영 전 비밀을 먼저 지웠으면 이 블록은 돌지 못한다(11-7) |
+| 반영 전 비밀 파기 | 첫머리(T 백업 남음 · 안정 상태 아님)에서 멈췄으면 지운 것이 없다. 지우는 중에 멈췄으면 비밀 하나만 지워졌을 수 있다 — `.env.pre-T.bak` 을 맨 먼저 지운다 | 이어진다 — 있는 것만 지운다. `.env.pre-T.bak` 이 이미 없으면 롤백 길이 이미 없어 안정 상태 단언을 건너뛴다 | T 백업이 남았으면 접힌 뒤는 T 백업 처분, T 가 도는 리허설 뒤는 E-1 → E-2 가 먼저다. 안정 상태(접힌 끝 · T 정착)가 아니면 반영 도중 · 접는 도중이다 — 반영(4절) · 반영 실패 복구(5절) · 롤백을 그 행대로 끝낸 뒤 다시. 「MediaMTX 가 제어망에 붙어 있지 않다」면 R5 끝 · R6 앞이다(반영은 R6 부터 잇는다). 링크 · 일반 파일이 아닌 이름 · `.ecr-login` 안의 모르는 파일로 멈췄으면(종료 1) 그 이름을 보고 kty |
 | 명령 도중 끊김(프로세스가 죽음 — 상자 재부팅 · 명령 시한 등) | 트리 일부만 바뀌었거나 `.git/index.lock` 이 남았다. HEAD 는 옛 값일 수 있다 | `clean` · `tar` 풀기 도중이면 이어진다(남은 이름이 두 목록 안이고 `clean` · `tar` 가 다시 맞춘다 — 끊긴 뒤 상태를 손으로 만들어 본 로컬 실측 S7-7 L10). `apply` 도중이면 손 수정 패치가 고치는 파일이 지워지거나 잘린 채일 수 있다 — 그 파일이 `compose.yml` 이면 첫 `down` 이 compose 파일을 읽지 못해 같은 자리에서 다시 멈춘다(종료 2 — `failed to parse …/compose.yml` · `compose file … is invalid`. B 는 잘리거나 없는 compose.yml 을 손으로 만들어 본 로컬 실측 S7-7 L10, D 는 추론). `reset` · `checkout` 도중이면 지우기 전에 멈춘다(종료 2) — `reset` 이 남은 lock 에서, 또는 첫 `down` 이 HEAD 로 고른 env 와 판이 어긋난 compose 의 `:?` 에서 | kty — 남은 lock · 트리 상태를 보고 정한다(lock 을 지우는 것은 승인). `compose.yml` 이 깨졌으면 `sudo -u <체크아웃 소유자> git -C /opt/pokeclip-demo/repo checkout -- infra/dev-media/compose.yml`(그때 HEAD 판으로 되돌린다 — 승인) 뒤 B · D 를 다시 돌린다(B 에서 이어짐 — 같은 로컬 실측). 블록은 RunShellScript 로 보내 세션 끊김으로는 이 행에 오지 않는다 |
 
 ### 11-6. 접은 뒤 다시 T 로
