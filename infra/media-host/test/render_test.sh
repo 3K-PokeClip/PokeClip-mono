@@ -23,7 +23,10 @@
 # 서비스는 restart · network_mode · depends_on · security_opt · cap_drop ·
 # cap_add · 볼륨 읽기 전용 여부가 렌더한 템플릿과 같아야 한다 — 실행 시험은
 # 시험 compose 를 띄우므로, 거기서만 맞는 구조가 prod 에 새지 않게 한다.
-# logging 비교는 c7 의 compose.unit.yml 몫이다(로컬 엔진에 journald 가 없다).
+# 유닛 재기동 시험 compose(test/compose.unit.yml)도 같은 항목에 logging(드라이버 ·
+# 옵션)까지 비교한다(사례 25) — 그 파일만 prod 와 같은 journald 를 쓴다(CI 엔진에는
+# journald 가 있고, 로컬 엔진에는 없어 계약 시험 compose 는 로그 설정을 두지 않는다).
+# 구성 확인(config)만 하므로 로컬에서도 돈다.
 #
 # 제품 파일(템플릿)이 없으면 사례가 FAIL 이다. 건너뛰는 갈래는 없다.
 #
@@ -57,11 +60,12 @@ readonly API_PASS_TOKEN='@@MTX_API_PASS@@'
 readonly SIDECAR_API_USER='pokeclip-sidecar'
 readonly APP_ORIGIN='https://app.pokeclip.com'
 readonly CONTRACT_COMPOSE="${TEST_DIR}/compose.contract.yml"
+readonly UNIT_COMPOSE="${TEST_DIR}/compose.unit.yml"
 readonly COMPOSE_VARIANTS='a b c d'
 readonly SAMPLE_CONTROL_UPSTREAM='127.0.0.1:28190'
 readonly MIN_READ_TIMEOUT_SECONDS=15
 readonly CONFIG_TIMEOUT=60
-readonly CASE_COUNT=24
+readonly CASE_COUNT=25
 
 # 기대값 jq 프로그램이 함께 쓰는 정의. 입력은 그 갈래의 변수 JSON 이다.
 #   services — 렌더에 있어야 할 서비스(응답기 · janitor 는 변수가 차 있을 때만).
@@ -203,16 +207,19 @@ $(harness::log_tail "$(mtx_json).err")"
 # compose 파일 하나를 `docker compose config -q` 로 검증하고, 선언 그대로의
 # 구성(정규화 없음 — 변수 · 앵커는 풀고 볼륨 · 포트는 긴 꼴)을 JSON 으로 쓴다.
 # Arguments:
-#   compose 파일, 출력 JSON 파일.
+#   compose 파일, 출력 JSON 파일, 변수 파일(없어도 됨 — --env-file).
 # Returns:
 #   0 config -q · JSON 모두 성공 / 1 실패(원인은 출력 JSON 경로 .err).
 #######################################
 compose_config() {
+  local -a env_args=()
+  [[ -z "${3:-}" ]] || env_args=(--env-file "$3")
   harness::run_bounded "${CONFIG_TIMEOUT}" "$2.err" \
-    docker compose -p "${PROJECT}" -f "$1" config -q || return 1
+    docker compose ${env_args[@]+"${env_args[@]}"} -p "${PROJECT}" -f "$1" \
+    config -q || return 1
   harness::run_bounded "${CONFIG_TIMEOUT}" "$2.raw" \
-    docker compose -p "${PROJECT}" -f "$1" config --no-normalize \
-    --format json || return 1
+    docker compose ${env_args[@]+"${env_args[@]}"} -p "${PROJECT}" -f "$1" \
+    config --no-normalize --format json || return 1
   jq -e . "$2.raw" >"$2" 2>"$2.err"
 }
 
@@ -233,6 +240,22 @@ contract_config() {
     export PCBENCH_SIDECAR_EXIT_DELAY=3600s RUNTIME_DIR="${scratch}"
     compose_config "${CONTRACT_COMPOSE}" "${scratch}/contract.json"
   )
+}
+
+#######################################
+# 유닛 시험 compose 의 구성 JSON 을 만든다. 그 파일의 변수는 유닛 시험의 env
+# 파일이 넣으므로 config 만 돌 수 있게 시험값으로 채운다(구조 비교에 쓰지 않는
+# 값이다). 값은 셸 변수가 아니라 compose 의 --env-file 로 넘긴다.
+#######################################
+unit_config() {
+  local env_file="${scratch}/unit.env"
+  printf '%s\n' \
+    'PCBENCH_ECHO_IMAGE=pcbench-edge-proxy/echo:local' \
+    'PCBENCH_NGINX_IMAGE=pcbench-edge-proxy/nginx:render-test' \
+    "PCBENCH_NGINX_CONF=${scratch}/unit-nginx.conf" \
+    'PCBENCH_HEALTH_PORT=28184' 'PCBENCH_ECHO_ADMIN_PORT=28199' \
+    'PCBENCH_SIDECAR_EXIT_DELAY=3600s' "RUNTIME_DIR=${scratch}" >"${env_file}"
+  compose_config "${UNIT_COMPOSE}" "${scratch}/unit.json" "${env_file}"
 }
 
 require_setup() {
@@ -542,7 +565,8 @@ check_case_16() {
 
 # 드리프트 비교 — 서비스마다 비교 항목을 뽑고(facts), 이름이 같은 서비스끼리
 # 다른 항목을 한 줄씩 낸다. 역할 서비스 셋이 양쪽에 다 없어도 한 줄 낸다.
-# 입력: $p = 렌더한 템플릿, $t = 시험 compose(둘 다 선언 그대로의 구성 JSON).
+# 입력: $p = 렌더한 템플릿, $t = 시험 compose(둘 다 선언 그대로의 구성 JSON),
+# $logging = logging(드라이버 · 옵션)도 비교할지(true · false).
 # shellcheck disable=SC2016 # jq 프로그램 — $ 는 jq 변수다.
 readonly DRIFT_PROGRAM='
 def facts: .services | map_values({
@@ -553,7 +577,8 @@ def facts: .services | map_values({
   cap_drop: ((.cap_drop // []) | sort),
   cap_add: ((.cap_add // []) | sort),
   read_only: ((.volumes // []) | map({(.target): (.read_only // false)})
-    | add // {})});
+    | add // {})}
+  + (if $logging then {logging: (.logging // null)} else {} end));
 ($p[0] | facts) as $pf | ($t[0] | facts) as $tf
 | [$pf | keys[] | select(. as $s | $tf | has($s))] as $shared
 | (["mediamtx", "nginx", "sidecar"] - $shared | .[]
@@ -563,16 +588,15 @@ def facts: .services | map_values({
    | "\($s).\($k): prod \($pf[$s][$k] | tojson) · 시험 \($tf[$s][$k] | tojson)")
 '
 
-check_case_17() {
+#######################################
+# 시험 compose 하나와 렌더한 템플릿(갈래 a)의 드리프트를 본다.
+# Arguments:
+#   시험 compose 구성 JSON, logging 도 비교할지(true|false).
+#######################################
+expect_no_drift() {
   local diffs
-  require_setup || return 1
-  if ! contract_config; then
-    harness::add_reason "시험 compose config 실패: \
-$(harness::log_tail "${scratch}/contract.json.err")"
-    return 1
-  fi
   if ! diffs="$(jq -n -r --slurpfile p "$(config_json a)" \
-    --slurpfile t "${scratch}/contract.json" "${DRIFT_PROGRAM}" 2>&1)"; then
+    --slurpfile t "$1" --argjson logging "$2" "${DRIFT_PROGRAM}" 2>&1)"; then
     harness::add_reason "드리프트 비교 실패: ${diffs}"
     return 1
   fi
@@ -580,6 +604,30 @@ $(harness::log_tail "${scratch}/contract.json.err")"
     harness::add_reason "드리프트: $(printf '%s' "${diffs}" | tr '\n' ';')"
     return 1
   fi
+}
+
+check_case_17() {
+  require_setup || return 1
+  if ! contract_config; then
+    harness::add_reason "시험 compose config 실패: \
+$(harness::log_tail "${scratch}/contract.json.err")"
+    return 1
+  fi
+  expect_no_drift "${scratch}/contract.json" false
+}
+
+check_case_25() {
+  require_setup || return 1
+  if [[ ! -f "${UNIT_COMPOSE}" ]]; then
+    harness::add_reason 'test/compose.unit.yml 없음'
+    return 1
+  fi
+  if ! unit_config; then
+    harness::add_reason "유닛 시험 compose config 실패: \
+$(harness::log_tail "${scratch}/unit.json.err")"
+    return 1
+  fi
+  expect_no_drift "${scratch}/unit.json" true
 }
 
 main() {
@@ -635,6 +683,8 @@ main() {
   harness::run_case 22 'mediamtx — 토큰 둘 각 1번 · 따옴표 자리' mtx_cases::check_22
   harness::run_case 23 'mediamtx — 경로 · LL-HLS · 녹화 · 훅 유지' mtx_cases::check_23
   harness::run_case 24 '사이드카 관측 자격 짝(user · 파일 · 포트)' mtx_cases::check_24
+  harness::run_case 25 \
+    '드리프트 — 유닛 시험 compose 와 템플릿 구조 · logging 일치' check_case_25
 
   if ! harness::summary "${CASE_COUNT}"; then
     exit 1
