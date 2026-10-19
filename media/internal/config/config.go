@@ -565,24 +565,25 @@ func level(env func(string) string, key string, fallback slog.Level) (slog.Level
 }
 
 // validateS3 는 교차 검증 3 이다. 버킷이 설정됐을 때만 부른다.
+// S3_BUCKET 의 거부 문구도 입력 원문을 싣지 않는다 — 버킷 이름은 공개 식별자지만 이 파일의
+// URL 변수들과 같은 형식으로 통일한다. 예약 접두·접미 값은 상수라 그대로 싣는다.
 func validateS3(s3 upload.S3Options) error {
 	if !bucketNameRe.MatchString(s3.Bucket) {
-		return fmt.Errorf(
-			"S3_BUCKET(%q)이 버킷 이름 규칙(소문자·숫자·점·하이픈 3-63자)에 맞지 않는다", s3.Bucket)
+		return fmt.Errorf("S3_BUCKET 이 버킷 이름 규칙(소문자·숫자·점·하이픈 3-63자)에 맞지 않는다")
 	}
 	// 점 두 개 연속과 IP 형식은 S3 가 거부하는 이름이다.
 	if strings.Contains(s3.Bucket, "..") || ipLikeRe.MatchString(s3.Bucket) {
-		return fmt.Errorf("S3_BUCKET(%q)은 연속된 점이나 IP 형식을 쓸 수 없다", s3.Bucket)
+		return fmt.Errorf("S3_BUCKET 은 연속된 점이나 IP 형식을 쓸 수 없다")
 	}
 	// AWS 가 예약한 접두·접미다. 통과시키면 CreateBucket 이 아니라 PUT 단계에서야 실패한다.
 	for _, p := range bucketBannedPrefixes {
 		if strings.HasPrefix(s3.Bucket, p) {
-			return fmt.Errorf("S3_BUCKET(%q)은 예약 접두 %q 를 쓸 수 없다", s3.Bucket, p)
+			return fmt.Errorf("S3_BUCKET 은 예약 접두 %q 를 쓸 수 없다", p)
 		}
 	}
 	for _, sfx := range bucketBannedSuffixes {
 		if strings.HasSuffix(s3.Bucket, sfx) {
-			return fmt.Errorf("S3_BUCKET(%q)은 예약 접미 %q 를 쓸 수 없다", s3.Bucket, sfx)
+			return fmt.Errorf("S3_BUCKET 은 예약 접미 %q 를 쓸 수 없다", sfx)
 		}
 	}
 	if s3.Endpoint == "" {
