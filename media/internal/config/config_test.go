@@ -562,6 +562,35 @@ func TestLoadRejectsMalformedBucketAndEndpoint(t *testing.T) {
 	}
 }
 
+// S3_BUCKET 거부 문구도 원문을 싣지 않는다(같은 파일의 다른 URL 변수와 같은 형식) — 버킷
+// 이름은 공개 식별자지만 부류를 하나로 닫는다. 예약 접두·접미 값은 상수라 그대로 싣는다.
+func TestS3BucketErrorOmitsRaw(t *testing.T) {
+	for _, tt := range []struct{ name, raw string }{
+		{"이름_규칙_위반", "SECRET_Bucket!"},
+		{"연속된_점", "secretpw..bucket"},
+		{"예약_접두", "xn--secretpw"},
+		{"예약_접미", "secretpw-s3alias"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			env := minimalEnv()
+			env["S3_BUCKET"] = tt.raw
+			env["REWIND_PUBLIC_BASE_URL"] = "https://media.pokeclip.com"
+
+			_, err := Load(envOf(env))
+
+			if err == nil {
+				t.Fatalf("S3_BUCKET=%q 를 받아들였다", tt.raw)
+			}
+			if !strings.Contains(err.Error(), "S3_BUCKET") {
+				t.Errorf("에러에 키 이름이 없다: %v", err)
+			}
+			if strings.Contains(strings.ToLower(err.Error()), "secret") {
+				t.Errorf("S3_BUCKET=%q 의 에러 = %v, want 원문 없는 거부", tt.raw, err)
+			}
+		})
+	}
+}
+
 // S3_ENDPOINT 거부 문구는 어느 갈래도 원문을 싣지 않는다(validateRewindPublicBaseURL
 // 과 같다) — opaque 꼴(`//` 가 빠지면 url.Parse 가 User 를 비운다)의 비밀번호와
 // 경로 · 질의의 토큰이 기동 오류 로그에 남지 않는다. userinfo 갈래는 원래부터 원문을
