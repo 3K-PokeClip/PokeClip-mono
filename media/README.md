@@ -1423,9 +1423,19 @@ docker compose up -d --build segment-indexer
     7절 13).
 *   **M3 hls.js 실재생**(1.6.0 · 1.7.3 × 회차 셋): fatal 0 · seek 세 점 모두 전진.
     계승 회차는 끊김 경계(cc 0 → 1)를 넘어 재생했고, A/V 위상 0.023초가 원본과 같다.
-*   **기록 자리**: kty 실험 루트 `pokeclip-empirical/runs/2026-10-17-c8m1/record.md`
-    (저장소 밖) · (c) 원문은 작업 산출물 `c7c_c_run/`(저장소 밖 — 볼트 raw 이관
-    대상).
+*   **M4 5초 끊김 · 회차 안 끊김 경계**(2026-10-19 03:36–03:38Z · 전용 compose
+    프로젝트 · 실 S3 · 슬레이트 ON · OFF 두 경로 동시): 송출 40초 → 5초 끊김 → 같은
+    키로 40초. 두 경로 모두 **회차 하나**에 조각 20 이 귀속됐다(5초는 종료 판정 지연
+    13.7–17초보다 짧다). 목록에 `EXT-X-DISCONTINUITY` 0 · 끊김은 PDT 가 약 5초 뛰는
+    것으로만 보인다 · 경계 양쪽 조각의 첫 tfdt 차는 EXTINF 와 0.114초 안에서 이어진다
+    (도장 연속). hls.js 1.6.0 · 1.7.3 × 목록 둘 × 3회 = 12 실행에서 경계 직전 seek
+    두 점 24/24 가 경계를 넘어 전진했고 fatal 0 이다. duration 은 1.6.0 이 EXTINF 합과
+    같고 1.7.3 은 파싱 길이(−0.8초 안팎)를 낸다. 목록이 `EXT-X-ENDLIST` 없는 라이브
+    형이라(동결은 M6) 두 판 모두 라이브 에지에서 시작하고 1.6.0 은 머리 seek 가
+    에지로 되돌아간 실행이 2/6 있다 — 끊김 경계와 무관한 라이브 동기화 동작이다.
+*   **기록 자리**: kty 실험 루트 `pokeclip-empirical/runs/2026-10-17-c8m1/record.md` ·
+    `runs/2026-10-19-c10k4/record.md`(저장소 밖) · (c) 원문은 작업 산출물
+    `c7c_c_run/`(저장소 밖 — 볼트 raw 이관 대상).
 
 ### M4 ⓒ 설계와 다르게 한 것
 
@@ -1454,7 +1464,7 @@ docker compose up -d --build segment-indexer
 | 19 | ADR-044 | 계승 창 기산점 「세션 종료 후」 · 호환 게이트 = `stsd` 지문 | 기산점 = 직전 회차 마지막 조각 끝(kty 확정) · 게이트는 `stsd` 지문 원문 그대로 · 판정 자리는 새 회차 첫 init CAS 의 CTE(원자 해제) | 기산점만 ADR-044 문언 정정 후보 |
 | 20 | 설계 5.3ⓒ | 미등재 → ending + phase 1 → OpenFresh | 워커 트랜잭션 하나로 ③ `failed` 와 `ending(init_mismatch)` 를 영속하고, 새 회차는 다음 유입이 연다(비계승) | 실행 형상 구체화 |
 | 21 | 제0원칙 4 · `index → session` 임포트 금지 | 세션 상태 전이 SQL 은 session 소유 | 종료 문장 셋을 index 가 소유한다(init 불일치 둘 · `EndLive`). 같은 PG 시험이 세 문장의 술어(`state='live'`)와 사유 어휘를 대조한다 | 중복 기록 |
-| 22 | 설계 3.2 패키지 경계 | session = `stream_sessions` 정책 | 재접속 계승 판정을 위해 session 이 `stream_segments` 를 한 곳 읽는다(직전 회차 마지막 조각) — 쓰기 0 | 경계 접촉 기록 |
+| 22 | 설계 3.2 패키지 경계 | session = `stream_sessions` 정책 | 재접속 계승 판정을 위해 session 이 `stream_segments` 를 한 곳 읽는다(직전 회차 마지막 조각의 끝 시각과 첫 조각의 경로 — 코덱 지문용) — 쓰기 0 | 경계 접촉 기록 |
 | 23 | 제0원칙 2 | — | `MarkPlaybackFailed(reason=init_mismatch)` 가 조각 상태와 세션 전이를 겸한다(이름 부채) — 개명은 M5 | 이름 부채 기록 |
 | 24 | 설계 5.3ⓓ | 직전 회차 init 미업로드 → 계승 취소(렌더마다 평가) | 계승 취소는 첫 PUT 전 · live 에서만 하고 장부에 영속하며 되살리지 않는다(P2′). 첫 PUT 뒤 S4 위반은 발행 중단이다. 해제 자리는 init CAS CTE(`stsd` 비호환)와 P2′(S4 위반) 둘이다 | 편차 있음 — 되살리면 이미 나간 목록 앞에 접두를 넣어 MSN 이 역행한다(S2 위반). 첫 PUT 뒤 취소는 남은 조각의 표시를 지운다(RFC 8216bis-22 6.2.1 밖) |
 | 26 | 제0원칙 3 | — | `inherits_session` 쓰기자 셋(개시 · init CAS CTE 의 `stsd` 해제 · P2′) · `discontinuity_base` 쓰기자 다섯(같은 셋 · P4 · 화해 — 파생값). CTE · P2′ 는 첫 PUT 전에만 지우는 방향으로 쓰고, P4 · 화해는 fence 를 쥔 발행자만 쓴다 | 경계 기록 |
@@ -1489,6 +1499,22 @@ docker compose up -d --build segment-indexer
     묶음)와 `rewind_publish_disabled` · `rewind_publish_started` ·
     `rewind_publish_degraded` · `rewind_fence_release_failed` 넷(셋째 묶음). 계획의
     「로그 키 5(ⓐ 2 · ⓒ 3)」는 10(ⓐ 2 · ⓒ 8)이 된다.
+*   공개 표면이 계획보다 넓다(kty 2026-10-19 사후 승인). 커밋 5 의 감시 · 적재가
+    캐시에 메서드 셋(`DemandLoad` · `DriftProbes` · `AuditDrift`), index 에 공개 타입
+    일곱(`LedgerBounds` · `InitRepair` · 감시 결과 다섯), `Cache.Options` 칸 하나를
+    더했고 `CompleteLoad` 는 `(applied, drift)` 둘을, `ShouldTick` 은 `loading` 인자를
+    받는다. 공개 필드 8 → 16 · 공개 메서드 14 → 21. 전부 `media/internal/` 안이라
+    부르는 곳은 사이드카 조립뿐이다.
+*   30초 감시는 계획과 두 군데 다르다(kty 2026-10-19 승인). 드리프트 수리 요구는
+    같은 스트림이 **연속 두 감시**에서 어긋날 때만 낸다 — 적재와 감시가 엇갈리는
+    순간의 거짓 드리프트로 적재가 적재를 부르지 않게 하려는 것이다(수리는 최대
+    30초 늦는다). 조회 셋은 재귀 CTE 한 문장이라 왕복은 1이지만 작업량이 스트림 ID
+    가짓수에 비례한다(아래 「발행과 경보」 한계 표).
+*   재접속으로 새 회차가 열릴 때 직전 회차를 캐시에서 `ending` 으로 내리지 않는다
+    (계획 2.1 표는 「TD 분할 · 재접속 공통」 — kty 2026-10-19 코드 쪽 확정). 내리면
+    DB 는 `live` · 캐시는 `ending` 으로 어긋나 감시가 드리프트로 잡는다. 대신 캐시가
+    `live` 회차 둘을 잠깐 함께 보고, 발행 소유자는 첫 조각 번호가 큰 회차(`Owner`)
+    하나다. 직전 회차는 4.1 종료 판정이 자기 순서에 `ending` 으로 내린다.
 
 ### M4 ⓒ 에서 M5/M6 로 넘긴 것
 
@@ -1507,7 +1533,7 @@ docker compose up -d --build segment-indexer
 | 이름 부채 개명(`SeedResult` · `MarkPlaybackFailed`) | M5 | 부기 16 · 23 |
 | 계승 사슬(두 단계 이상)과 1시간 상계 | M5/M6 | 위 ⓑ 절 알려진 한계 |
 | 슬레이트 운영 프로비저닝 · 관측 등급 tier 상수 | 별도 마일스톤 | 계획 8절 kty 확정 (가) |
-| 라이브 창 설정 ADR-056 ③(1초 · 7) 원자 적용 | PR ⓒ 뒤 설정 소PR | 되감기 URL 가동 뒤 · 적용 게이트 셋을 통과한 뒤. 라이브 창을 14초로 둘지 28초(4초 × 7)로 둘지 kty 토론 중이다 |
+| 라이브 창 설정 ADR-056 ③(4초 · 7 = 28초) 적용 | PR ⓒ 뒤 설정 소PR | 되감기 URL 가동 뒤 · 적용 게이트 셋을 통과한 뒤. 라이브 창은 28초(4초 × 7)로 확정됐다(kty 2026-10-19 — ADR-056 의 14초는 대체 예정). 바뀌는 값은 `hlsSegmentCount` 900 → 7 하나다 |
 | SDK 오류 본문 상한(S-1) · 운영 빌드 그래프 정적 단언(S-2) · HTTP 응답 헤더 상한 | PR ⓒ 밖 — kty 회부 | 계획 커밋 순서 7 — 선재 결함 · 범위 확장 |
 | 업로더의 https 검사를 실효 엔드포인트로 | 후속 티켓 | 발행 몫만 고쳤다(계획 2.3 표 밖 파일) — 아래 한계 표 |
 
@@ -1553,6 +1579,7 @@ docker compose up -d --build segment-indexer
 | 빈 접두 가장자리의 무음 정지 | 2시간 넘는 방송에서 적재 하한 행의 ③ 이 끝내 settled 되지 않는다. 우리 송출: ③ 업로드 실패가 적재 하한 행에 겹칠 때만 | L1 · L2 · L4 가 하나도 서지 않는다 — 목록이 멈췄는데 경보가 없다 | 기록. 다시 볼 조건: 적재 하한 규칙(되짚기 2시간)을 바꿀 때 |
 | 꼬리 교정이 TD 를 넘긴 조각 | INSERT 때 4초였던 꼬리가 교정으로 6.5초 이상이 되면 TD 6 회차에 반올림 7초 조각이 남는다 — 교정은 TD 를 다시 재지 않는다. 우리 송출: 정상 경로에서 드물게 | 그 목록이 S5(TD 검사)로 그 조각이 창에서 빠질 때까지(최대 1시간) 멈춘다 — `rewind_publish_aborted reason=validate` ERROR | 코드 0 · 한계(kty K2). 회차를 끝내는 처방은 피해를 줄일 뿐이라 넣지 않았다 |
 | 외부 메타 끝값이 장부에 남는 길 | 화해가 Head 의 메타(`pc-gen` · `pc-disc-seq`)를 장부에 옮긴다. 버킷 쓰기 권한을 가진 자 · 평문 엔드포인트의 중간자 · 비정상 호환 엔드포인트가 메타를 위조하면 그 끝값이 장부에 남는다. 우리 운영 설정: 실 S3 + https 에서는 버킷 쓰기 권한 갈래만 남는다 | 세대 끝값은 장부 한 열을 고쳐야 풀린다. DISC-SEQ 끝값은 재기동 · 화해로 풀리지만, 그 정지 창에 TD 분할이 오면 끝값 base 가 새 회차로 복사된다 | kty 회부 대기 — 근본 처방은 외부 값을 장부 값에 상대적으로 묶는 것이다 |
+| 감시 문장의 비용 축은 스트림 ID 가짓수 | 30초 감시의 한 문장(재귀 CTE)이 장부에 있는 스트림 ID 전부를 훑는다. 가짓수가 약 200만이면 10초 시한에 걸린다(커밋 5 보안 검수 실측). 우리 운영 설정: 생기지 않는다 — 스트림 키가 고정이고 인증 관문이 있어 가짓수가 수십이다. 익명 publish 로 이름을 바꿔 가며 송출을 받는 설정에서만 | 감시 틱이 시한에 걸려 그 틱의 드리프트 · 컷오프 부재 대조가 빠진다(`rewind_job_failed` · `job=watch`). 발행은 계속된다 | 익명 publish 를 허용하는 설정을 쓰게 되면 다시 본다(가짓수 상한 또는 접두 분할) |
 | Head 거짓 404 | 화해(R4)가 Head 404 만으로 장부 `manifest_etag` 를 비운다. 버킷 오설정 · 중간자 · 404 를 돌려주는 프록시가 있으면 이 일이 난다. 우리 운영 설정: 부팅 버킷 확인 · https 강제로 좁혔다 | 이미 발행한 S4 상태 회차에서 P2′ 계승 취소가 다시 열린다. 탐침에서는 거짓 404 를 거둔 뒤에도 발행 정지가 풀리지 않았다(8초 관측) | 처방 둘(PUT 404 로 부재가 확인됐을 때만 비운다 · P2′ 가 「한 번도 발행하지 않았음」을 따로 본다)은 kty 회부다. 없는 버킷 HEAD 응답의 단서는 실측하지 않았다 — 승인된 실버킷 밖 이름이 필요하다 |
 
 #### ⓒ 한계 — 조립과 설정
@@ -1598,8 +1625,9 @@ docker compose up -d --build segment-indexer
 
 #### ⓒ 커버리지 게이트
 
-CI(`media-ci`)의 80% 게이트는 열 패키지다. ⓒ 가 `internal/rewind/publish` 를
-더했다. 아래 값은 커밋 8 의 CI 동일 실행(PG 켬 · `-race`) 프로파일에 CI 판정식을
+CI(`media-ci`)의 80% 게이트는 열네 패키지다. ⓒ 가 `internal/rewind/publish` 를
+더했고, develop 의 ingest-auth 응답기가 `streamkey` · `keyresolve` · `ingestauth` ·
+`mtxctl` 넷을 더했다(병합으로 합쳐졌다). 아래 값은 커밋 8 의 CI 동일 실행(PG 켬 · `-race`) 프로파일에 CI 판정식을
 다시 돌린 것이다.
 
 | 패키지 | 커버리지 |
@@ -1743,8 +1771,12 @@ done
 `go test`만 있으면 되고 Docker는 필요 없지만, 다른 테스트보다 몇 초 더 걸린다.
 
 CI(`media-ci`)는 `go test`에 `-coverprofile`을 붙여 패키지별 커버리지를 함께 재고,
-`internal/index`·`internal/upload`·`internal/indexer`·`internal/session`·`internal/mtxstate`·`internal/playback`·`internal/rewind/boundary`·`internal/rewind`·`internal/rewind/cache`·`internal/rewind/publish`
-**열 패키지 중 하나라도 80% 미만이면 잡을 실패시킨다**(`session`·`mtxstate` 는 POK-195 M3에서,
+`internal/index`·`internal/upload`·`internal/indexer`·`internal/session`·
+`internal/mtxstate`·`internal/playback`·`internal/rewind/boundary`·
+`internal/rewind`·`internal/rewind/cache`·`internal/rewind/publish`·
+`internal/streamkey`·`internal/keyresolve`·`internal/ingestauth`·
+`internal/mtxctl`
+**열네 패키지 중 하나라도 80% 미만이면 잡을 실패시킨다**(`session`·`mtxstate` 는 POK-195 M3에서,
 `playback` 은 M4 ⓐ 에서, `rewind/boundary`·`rewind`·`rewind/cache` 는 M4 ⓑ 에서, `rewind/publish` 는 M4 ⓒ 에서 추가 — 되감기 판정 로직과
 ③ 바이트를 만드는 층, 되감기 목록의 경계·본문·입력을 정하는 층이 그 안에 있다. 발행된 목록 줄은 고칠 수 없어
 여기서 틀린 것은 그 목록이 사는 동안 남는다). 나머지 패키지는 수치만 로그에 남고 게이트 대상이 아니다.
