@@ -496,7 +496,7 @@ M17a 머지 전에 1 ⓑ(M12 운영)를 하게 되면, `1b` 묶음과 같은 동
 *   설계 13-1 SCP 판정 대조표 · 8절 멈춤 자리 · 11-5 의 2-3-8 · 2-3-10
 *   계획 M17b r3.1 2절(2-3 판정 절차) · 5절(이 점검이 보장하지 않는 것)
 *   스크립트: `scripts/precheck/scp-recheck.sh` · `events.sh` ·
-    `principal-check.sh` · `lib/evidence.sh` · `lib/principal_*.sh`, 데이터:
-    `scripts/precheck/data/principal_sim/`
-*   시험: `scripts/precheck/tests/`(2-3 판정은 `principal_check_test.sh` ·
+    `principal-check.sh` · `lib/evidence.sh` · `lib/precheck_common.sh` ·
+    `lib/principal_*.sh`, 데이터: `scripts/precheck/data/principal_sim/`
+*   시험: `scripts/precheck/tests/`(2-3 판정은 `principal_check_*_test.sh` ·
     `data_files_test.sh`)
