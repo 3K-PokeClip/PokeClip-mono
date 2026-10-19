@@ -8,7 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/recording"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/rewind/cache"
 )
 
 // degradedFixture 는 어댑터 없이(nil) 인덱서를 만든다 — 워처 강등 국면의 재현이다.
@@ -53,6 +55,29 @@ func TestSetAdopterNilGuard(t *testing.T) {
 	f.ix.SetAdopter(f.adopter) // 재장착(f6f 의 SetAdopter 절반)
 	if f.ix.adopt != Adopter(f.adopter) {
 		t.Fatalf("재장착이 반영되지 않았다: %T", f.ix.adopt)
+	}
+}
+
+// 되감기 캐시 주입(계획 4.5 A3 결정 2 〔r44〕 · 체크리스트 B-1 6 — m3b 형) — 조립점이 SetRewindCache 로 캐시를 끼우면 장부에
+// 커밋된 행의 push 가 그 캐시에 닿는다. nil 을 끼우면 캐시의 nil 규약(*cache.Cache 의 nil 은 모든 메서드가 no-op)대로 아무
+// 데도 넘기지 않는다 — 널 오브젝트를 따로 두지 않는다. nil 로 바꾼 뒤의 행은 옛 캐시에도 닿지 않는다: 옛 캐시의 적재를
+// 끝내도 그 행이 재생되지 않는다.
+func TestSetRewindCacheNilGuard(t *testing.T) {
+	f := newFixture(t)
+	f.store.scriptSessions("S1", "S1")
+	c := &cache.Cache{}
+
+	f.ix.SetRewindCache(c)
+	f.mustHandle(f.segment("s1", segName(baseWall, 0), 1000, recording.ReasonHook))
+	token := beginDemanded(t, c, "s1") // 뷰 없는 개시 push 가 적재를 요구했다 — 끼운 캐시에 닿았다
+
+	f.ix.SetRewindCache(nil)
+	f.mustHandle(f.segment("s1", segName(baseWall, 4*time.Second), 1000, recording.ReasonHook))
+
+	complete(t, c, "s1", token, openedS1(0, 6, index.RewindRow{Seq: 0, SessionID: "S1", DurationMS: 4000,
+		PlaybackPDT: baseWall, PlaybackS3Key: "dvr/s1/seg/000000.m4s"}))
+	if rows := c.Snapshot("s1").RowsFrom(0); len(rows) != 1 {
+		t.Errorf("nil 을 끼운 뒤 행 = %d개, want 1 — nil 뒤의 push 가 옛 캐시에 닿았다", len(rows))
 	}
 }
 

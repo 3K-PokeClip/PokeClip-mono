@@ -93,7 +93,8 @@ new_tree_case() {
 }
 
 #######################################
-# 사본 트리의 events.sh 를 돌린다. 「이름=값」 꼴 인자는 환경으로 넘긴다.
+# 사본 트리의 events.sh 를 돌린다. 「이름=값」 꼴 인자는 환경으로 넘긴다
+# (FAKE_AWS_* · AWS_CLI_HISTORY_FILE).
 # Arguments:
 #   사례 디렉터리, 결과 이름, [이름=값 …] 스크립트 인자.
 #######################################
@@ -101,7 +102,8 @@ run_events() {
   local case_dir="$1" name="$2"
   local -a envs=("FAKE_AWS_EVENTS=${case_dir}/in/events.tsv")
   shift 2
-  while [[ "$#" -gt 0 && "$1" == FAKE_AWS_*=* ]]; do
+  while [[ "$#" -gt 0 && ( "$1" == FAKE_AWS_*=* ||
+    "$1" == AWS_CLI_HISTORY_FILE=* ) ]]; do
     envs+=("$1")
     shift
   done
@@ -456,6 +458,79 @@ expect_unverifiable_cases() {
     "접힌 이름 행 모두 종료 2 · 유출 0 · --since 입력 되울림 0"
 }
 
+#######################################
+# CLI 기록 — 프로필의 cli_history 가 enabled 이거나 AWS_CLI_HISTORY_FILE 이
+# 설정돼 있으면 첫 AWS 호출 전에 종료 2(값 · 경로를 되울리지 않고 증거
+# 디렉터리도 만들지 않음), 설정 읽기 실패도 종료 2, disabled 면 정상이고
+# 설정 조회가 첫 조회보다 먼저다.
+# Globals:
+#   run_status, run_out, WANT_EVENTS
+#######################################
+expect_cli_history() {
+  local case_dir spec name log want calls dirs leaked
+  for spec in enabled file fail disabled; do
+    name="cli-history-${spec}"
+    case_dir="$(new_tree_case)" || {
+      testlib::fail "${name}: 시험 준비 실패"
+      return
+    }
+    log="${case_dir}/out/aws.log"
+    case "${spec}" in
+      file)
+        run_events "${case_dir}" "${name}" \
+          "AWS_CLI_HISTORY_FILE=${case_dir}/in/qxhistory.db" \
+          --since "$(now_utc)"
+        ;;
+      *)
+        run_events "${case_dir}" "${name}" "FAKE_AWS_CLI_HISTORY=${spec}" \
+          --since "$(now_utc)"
+        ;;
+    esac
+    if [[ "${spec}" == disabled ]]; then
+      if [[ "${run_status}" -ne 0 ||
+        "$(cat -- "${run_out}.stdout")" != "${WANT_EVENTS}" ||
+        "$(sed -n 1p -- "${log}")" != 'configure get cli_history' ||
+        "$(sed -n 2p -- "${log}")" != 'cloudtrail lookup-events'* ]]; then
+        testlib::fail "${name}: 종료 0 · 설정 조회 뒤 조회를 기대했으나" \
+          "${run_status} — $(cat -- "${run_out}.stderr" "${log}")"
+        return
+      fi
+      continue
+    fi
+    if [[ "${run_status}" -ne 2 || -s "${run_out}.stdout" ]]; then
+      testlib::fail "${name}: 종료 2 · 표준 출력 없음을 기대했으나" \
+        "${run_status} — $(cat -- "${run_out}.stdout" "${run_out}.stderr")"
+      return
+    fi
+    calls="$(testlib::count "${log}" ' ')"
+    want=1
+    [[ "${spec}" == file ]] && want=0
+    if [[ "${calls}" -ne "${want}" || ( "${want}" -eq 1 &&
+      "$(cat -- "${log}")" != 'configure get cli_history' ) ]] ||
+      grep -qF -e qxhistory -e enabled -- "${run_out}.stderr"; then
+      testlib::fail "${name}: AWS 호출 ${calls}건(기대 ${want})이거나 값 ·" \
+        "경로를 되울림 — $(cat -- "${run_out}.stderr")"
+      return
+    fi
+    if [[ "${spec}" == fail ]]; then
+      testlib::expect_stderr_count "${name}" \
+        'CLI 기록 설정(cli_history)을 읽지 못함' 1 || return
+    else
+      testlib::expect_stderr_count "${name}" \
+        'CLI 기록이 켜져 있음 — 증거 밖에 원문이 남음' 1 || return
+    fi
+    dirs="$(find "${case_dir}/home" -name 'events-*' -type d | wc -l)"
+    leaked="$(testlib::leaks_outside_evidence "${case_dir}")"
+    if [[ "${dirs}" -ne 0 || -n "${leaked}" ]]; then
+      testlib::fail "${name}: 멈췄는데 증거 디렉터리 ${dirs}개 또는 유출" \
+        "(${leaked})"
+      return
+    fi
+  done
+  testlib::ok "cli-history → enabled · 기록 파일 환경 변수 · 설정 읽기 실패는" \
+    "첫 AWS 호출 전 종료 2 · disabled 는 설정 조회 뒤 정상"
+}
+
 main() {
   testlib::init events_test
   expect_counts_and_regions
@@ -466,6 +541,7 @@ main() {
   expect_no_leak
   expect_malformed_lookup_rejected
   expect_unverifiable_cases
+  expect_cli_history
   testlib::finish events_test
 }
 

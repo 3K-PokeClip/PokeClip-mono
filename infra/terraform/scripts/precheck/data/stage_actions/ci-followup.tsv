@@ -5,6 +5,7 @@
 # 추가 apply · 거부면 edge → registry 되돌림) · 계획 5절 (후속) 행.
 # GitHub OIDC 역할 받기(sts:AssumeRoleWithWebIdentity)는 시뮬레이터로 판정할
 # 수 없어 넣지 않는다 — 설계 8절의 CI 1회 실측이 맡는다.
+# 2-3 판정 래퍼 읽기(맨 아래 덩어리): M17b principal-check.sh.
 
 # GitHub OIDC 공급자 확인 · 참조(없으면 생성)
 iam:ListOpenIDConnectProviders	us-east-1	*
@@ -13,7 +14,9 @@ iam:CreateOpenIDConnectProvider	us-east-1	*
 
 # CI 푸시 역할 · apex 업로드 역할 · 정책 · 되돌림
 iam:CreateRole	us-east-1	arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*
-iam:GetRole	us-east-1	arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*
+# iam:GetRole 은 자원을 * 로 둔다 — 이 단계의 prod 역할 경로와 2-3 판정
+# 래퍼의 dev 역할 해석(get-role) 둘 다 덮는다(같은 (동작, 리전)은 한 행).
+iam:GetRole	us-east-1	*
 iam:TagRole	us-east-1	arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*
 iam:PutRolePolicy	us-east-1	arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*
 iam:DeleteRolePolicy	us-east-1	arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*
@@ -26,8 +29,8 @@ s3:PutObject	ap-northeast-2	*
 s3:DeleteObject	ap-northeast-2	*
 
 # 2-3 판정 · 이벤트 조회의 읽기(설계 11-5 의 2-3-7 · 2-3-8 · 계획 M17a
-# 「데이터」). 열거 읽기의 리전은 M17a 가 정한 두 리전(서울 · us-east-1 —
-# M17b 착수 때 collect.sh 가 실제로 부르는 리전과 확인)이다.
+# 「데이터」). 열거 읽기의 리전은 M17a 가 정한 두 리전(서울 · us-east-1)이고,
+# principal-check.sh 가 부르는 리전과 같다(2026-10-19 확인).
 # ec2:DescribeRegions 는 넣지 않는다(kty 45차). iam:SimulatePrincipalPolicy 는
 # 이 도구 자신의 호출이라 그것이 거부되면 종료 2 로 드러난다.
 iam:GetAccountAuthorizationDetails	us-east-1	*
@@ -54,3 +57,15 @@ tag:GetTagKeys	ap-northeast-2	*
 tag:GetTagKeys	us-east-1	*
 tag:GetResources	ap-northeast-2	*
 tag:GetResources	us-east-1	*
+
+# 2-3 판정 래퍼(M17b principal-check.sh)가 더 부르는 읽기 — 주체 · 대상
+# 해석(IAM · Route 53 은 us-east-1). 인스턴스 프로필 · 태그 해석 · 자원
+# 정책 읽기는 위 덩어리에 있다. iam:GetRole 은 같은 (동작, 리전)이 한 행이라
+# 위 단계 행(자원 *)을 쓴다.
+iam:GetUser	us-east-1	*
+iam:ListRoles	us-east-1	*
+iam:ListAttachedRolePolicies	us-east-1	*
+iam:ListAttachedUserPolicies	us-east-1	*
+iam:ListGroupsForUser	us-east-1	*
+iam:ListAttachedGroupPolicies	us-east-1	*
+route53:ListHostedZonesByName	us-east-1	*

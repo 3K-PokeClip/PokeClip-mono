@@ -38,8 +38,9 @@
 #       90일보다 이르면 이벤트 기록의 보관 한계(90일)를 표준 오류로 경고하고
 #       조회는 한다.
 # 종료 코드: 0 조회 끝(건수는 표준 출력) / 2 검사 불가(사용법 · 지금보다
-#            늦은 --since · 증거 경로 · 조회 실패 · 호출 자체의
-#            AccessDenied · 응답 꼴 — 칸 수 · 이벤트 ID · 출처 · 이름 · 시각)
+#            늦은 --since · CLI 기록 켜짐(첫 조회 전) · 증거 경로 · 조회
+#            실패 · 호출 자체의 AccessDenied · 응답 꼴 — 칸 수 · 이벤트 ID ·
+#            출처 · 이름 · 시각)
 #            — 0건으로 넘어가지 않는다(fail-closed).
 
 set -uo pipefail
@@ -74,6 +75,11 @@ source "${SCRIPT_DIR}/lib/evidence.sh" || {
   printf 'events: 검사 불가: 증거 경로 함수를 읽지 못함\n' >&2
   exit 2
 }
+# shellcheck source=infra/terraform/scripts/precheck/lib/precheck_common.sh
+source "${SCRIPT_DIR}/lib/precheck_common.sh" || {
+  printf 'events: 검사 불가: 공용 도우미를 읽지 못함\n' >&2
+  exit 2
+}
 
 # event_names.txt 의 행 「출처<탭>이름<탭>리전」.
 names=()
@@ -94,21 +100,6 @@ die() {
 }
 
 #######################################
-# 탭 구분 줄의 칸 수가 정확하고 빈 칸이 없는지 본다. 탭 IFS 의 read 는 빈
-# 칸을 접어 칸을 밀기 때문에, 칸을 나누기 전에 이것으로 먼저 거른다.
-# Arguments:
-#   줄, 칸 수.
-# Returns:
-#   맞으면 0.
-#######################################
-tsv_ok() {
-  local line="$1" fields="$2" tab=$'\t' tabs
-  tabs="${line//[!${tab}]/}"
-  [[ "${#tabs}" -eq $((fields - 1)) && "${line}" != "${tab}"* &&
-    "${line}" != *"${tab}" && "${line}" != *"${tab}${tab}"* ]]
-}
-
-#######################################
 # event_names.txt 를 읽어 names 에 담는다. 「#」 으로 시작하는 줄은 주석,
 # 빈 줄은 건너뛴다.
 # Globals:
@@ -120,7 +111,7 @@ load_names() {
     die "event_names.txt 가 없음"
   while IFS= read -r line || [[ -n "${line}" ]]; do
     [[ -z "${line}" || "${line}" == '#'* ]] && continue
-    tsv_ok "${line}" 3 || die "event_names.txt 의 행 꼴이 틀림: ${line}"
+    precheck::tsv_ok "${line}" 3 || die "event_names.txt 의 행 꼴이 틀림: ${line}"
     source="${line%%$'\t'*}"
     region="${line##*$'\t'}"
     name="${line#*$'\t'}"
@@ -182,7 +173,7 @@ is_role_assumption() {
 #######################################
 lookup_fields() {
   local line="$1" id source name time rest
-  tsv_ok "${line}" 5 || return 1
+  precheck::tsv_ok "${line}" 5 || return 1
   id="${line%%$'\t'*}"
   rest="${line#*$'\t'}"
   source="${rest%%$'\t'*}"
@@ -305,6 +296,7 @@ main() {
       "이벤트 기록은 90일만 보관하므로 그보다 앞의 이벤트는 조회되지 않음" >&2
   fi
   load_names
+  precheck::check_cli_history
   dir="$(evidence::new_dir events)" || exit 2
   printf 'events: 증거 ~/%s/%s\n' "${EVIDENCE_ROOT_NAME}" "${dir##*/}" >&2
   for row in "${names[@]}"; do

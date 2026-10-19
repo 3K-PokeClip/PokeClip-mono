@@ -40,18 +40,22 @@ func TestSessionQueriesReachTheirIndexes(t *testing.T) {
 	}
 
 	for _, c := range []struct {
-		name  string
-		sql   string
-		index string
+		name    string
+		sql     string
+		indexes []string
 	}{
-		{"현_live_조회", currentLiveSQL, "stream_sessions_one_live_uq"},
-		{"직전_세션_조회", latestSessionSQL, "stream_sessions_stream_idx"},
+		{"현_live_조회", currentLiveSQL, []string{"stream_sessions_one_live_uq"}},
+		// 직전 회차 행은 세션 색인으로, 그 회차의 첫 · 마지막 조각은 조각 색인(stream_id, session_id, seq)의
+		// 앞 · 뒤 끝으로 간다(계획 2.3 registry 행 ⑴ 「재확인」 — basePDTSQL 과 같은 정렬).
+		{"직전_세션_조회", previousSessionSQL, []string{"stream_sessions_stream_idx", "stream_segments_session_idx"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Logf("비용 플랜(기록용):\n%s", explainPlan(t, pool, false, c.sql, stream))
 			got := explainPlan(t, pool, true, c.sql, stream)
-			if !strings.Contains(got, c.index) {
-				t.Fatalf("%s 에 도달하지 못했다 — 선행 컬럼 결손 의심:\n%s", c.index, got)
+			for _, index := range c.indexes {
+				if !strings.Contains(got, index) {
+					t.Errorf("%s 에 도달하지 못했다 — 선행 컬럼 결손 의심:\n%s", index, got)
+				}
 			}
 		})
 	}

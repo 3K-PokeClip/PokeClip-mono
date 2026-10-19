@@ -31,11 +31,11 @@ func liveP() index.RewindSession {
 	return p
 }
 
-// reloadP 는 컷오프 60 · 회차 p 의 60..62(③ 확정)를 재구성한 캐시다.
-func reloadP(p index.RewindSession) *cache.Cache {
+// reloadP 는 컷오프 60 · 회차 p 의 60..62(③ 확정)를 적재한 캐시다.
+func reloadP(t *testing.T, p index.RewindSession) *cache.Cache {
+	t.Helper()
 	c := &cache.Cache{}
-	c.Reload(stream, index.RewindLedger{CutoffSeq: 60, HasCutoff: true,
-		Rows: ledgerRun("P", 60, 62, at(0)), Sessions: []index.RewindSession{p}})
+	load(t, c, stream, ledgerOf(60, ledgerRun("P", 60, 62, at(0)), withMinSeq(p, 60)))
 	return c
 }
 
@@ -79,11 +79,10 @@ func sessionIDs(pl rewind.Playlist) []string {
 // 목록에서 첫 조각 60 의 표시가 빠졌다(base 1). S 는 P 가 끝나고 120초 뒤 P 를 계승해 그 1 을 옮겨
 // 받았다(첫 조각 6.6초 → TD 7). 이 패키지의 다른 회차는 규칙상 base 0 이라 base 칸의 운반은 여기서 가른다.
 func TestCacheReceivesInheritsOnOpen(t *testing.T) {
-	hourP := sessionP
+	hourP := withMinSeq(sessionP, 60)
 	hourP.DiscontinuityBase = 1
 	c := &cache.Cache{}
-	c.Reload(stream, index.RewindLedger{CutoffSeq: 60, HasCutoff: true,
-		Rows: ledgerRun("P", 60, 960, at(0)), Sessions: []index.RewindSession{hourP}})
+	load(t, c, stream, ledgerOf(60, ledgerRun("P", 60, 960, at(0)), hourP))
 	if w := window(t, c); w.TailSeq != 61 || w.HeadSeq != 960 {
 		t.Fatalf("픽스처 전제: P 의 창 = [%d, %d], want [61, 960] — 첫 조각 60 이 창 밖이어야 base 1 이 성립한다", w.TailSeq, w.HeadSeq)
 	}
@@ -138,7 +137,7 @@ func TestPlaylistOfNonInheritingSessionCarriesNoPrefix(t *testing.T) {
 		{"비계승_인접", sessionP, index.RewindSession{SessionID: "D", State: "live", FirstPDT: at(412 * time.Second), TargetDuration: 8}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			c := reloadP(tt.p)
+			c := reloadP(t, tt.p)
 			openAfterP(c, tt.next, 7600)
 
 			pl, ok := c.Playlist(stream, tt.next.SessionID, window(t, c))
@@ -164,7 +163,7 @@ func TestPlaylistPrefixIsOneStepOfTheInheritanceChain(t *testing.T) {
 		{SessionID: "S", State: "live", InitUploaded: true, FirstPDT: at(144 * time.Second), InheritsSession: "P", TargetDuration: 6},
 	}
 	rows := append(append(ledgerRun("O", 50, 52, at(0)), ledgerRun("P", 53, 55, at(72*time.Second))...), ledgerRun("S", 56, 58, at(144*time.Second))...)
-	c.Reload(stream, index.RewindLedger{CutoffSeq: 50, HasCutoff: true, Rows: rows, Sessions: sessions})
+	load(t, c, stream, ledgerOf(50, rows, sessions...))
 	w := window(t, c)
 
 	for _, tt := range []struct {
@@ -185,7 +184,7 @@ func TestPlaylistPrefixIsOneStepOfTheInheritanceChain(t *testing.T) {
 // 소유 회차의 첫 조각이 아직 settled 전이면 목록은 접두만 싣는다 — 발행 전 검사가 그대로 내는 목록이다
 // (③ 의 「접두만_실린_목록」). 소유 회차는 행이 없어도 회차 목록에 있다(머리의 TD·DISC-SEQ 가 그 값).
 func TestPlaylistOfSessionWithoutSettledRowsCarriesOnlyThePrefix(t *testing.T) {
-	c := reloadP(sessionP)
+	c := reloadP(t, sessionP)
 	c.ApplyInsert(stream, 63, openingOf(index.RewindSession{SessionID: "S", State: "live",
 		FirstPDT: at(132 * time.Second), InheritsSession: "P", TargetDuration: 7}, 63, 6600))
 
@@ -200,17 +199,16 @@ func TestPlaylistOfSessionWithoutSettledRowsCarriesOnlyThePrefix(t *testing.T) {
 }
 
 // 캐시가 회차 축을 모르면 목록을 만들지 않는다 — 머리의 TD·DISC-SEQ 와 MAP 을 정할 수 없다. 거짓은 그
-// 스트림의 뷰가 장부를 다 담지 못했다는 뜻이라 되돌림은 Reload 다. 모르는 회차가 생기는 길: 부팅 때
-// 컷오프가 없어 아무것도 싣지 않은 스트림에서, 부팅 전에 열린 회차 P 의 행이 뒤늦게 컷오프를 주조하면
-// 그 행들은 들어오지만 P 의 개시는 옛 프로세스가 봤다. 그 P 를 계승한 S 의 목록도 P 의 축이 필요하다.
+// 스트림의 뷰가 장부를 다 담지 못했다는 뜻이라 되돌림은 적재다(요구 ② — 계획 4.5 A3 결정 6).
+//
+// 〔J47〕 옛 준비는 「부팅 때 컷오프가 없어 비운 스트림에 부팅 전 회차 P 의 행이 뒤늦게 주조한다」였다 — 이제 그
+// 주조 push 는 적재를 요구하고(A3 결정 6 ⑤ · 뮤테이션 110) 적재가 P 의 축을 싣는다. 그래서 행이 참조하는 회차가
+// 적재분에 빠진 뷰(장부 불변이 깨진 입력)로 같은 거짓을 단언한다 — 적재분에 P 가 없고 S 는 P 를 계승한다.
 func TestPlaylistNeedsTheSessionAxisOfEveryRow(t *testing.T) {
 	c := &cache.Cache{}
-	c.Reload(stream, index.RewindLedger{})
-	c.ApplyInsert(stream, 70, seeded(seedOf("P", 70, at(0), 4000)))
-	pushRun(c, "P", 71, 72, at(4*time.Second))
-	c.ApplyInsert(stream, 73, openingOf(index.RewindSession{SessionID: "S", State: "live",
-		FirstPDT: at(132 * time.Second), InheritsSession: "P", TargetDuration: 6}, 73, 4000))
-	uploadRun(c, 70, 73)
+	load(t, c, stream, ledgerOf(70, append(ledgerRun("P", 70, 72, at(0)), ledgerRun("S", 73, 73, at(132*time.Second))...),
+		index.RewindSession{SessionID: "S", State: "live", FirstPDT: at(132 * time.Second), InheritsSession: "P",
+			TargetDuration: 6, MinSeq: 73}))
 	w := window(t, c)
 
 	for _, tt := range []struct {
@@ -231,7 +229,7 @@ func TestPlaylistNeedsTheSessionAxisOfEveryRow(t *testing.T) {
 // 아직 settled 가 아닌 창(머리가 62 앞에서 멈춤) · 1시간이 차서 꼬리가 앞으로 간 창 · 빈 창(머리 = 컷오프
 // − 1). 빈 창이면 행 0 인 목록이다(빈 창 판정은 발행 쪽이 필터 뒤 len(rows)==0 으로 한다 — ⓒ 착수 메모).
 func TestPlaylistStaysInsideTheWindow(t *testing.T) {
-	c := reloadP(sessionP)
+	c := reloadP(t, sessionP)
 
 	for _, tt := range []struct {
 		w    boundary.Window
@@ -253,9 +251,8 @@ func TestPlaylistStaysInsideTheWindow(t *testing.T) {
 // 뒤늦게 확정됐다.
 func TestPlaylistDoesNotShareRowsWithTheCache(t *testing.T) {
 	c := &cache.Cache{}
-	c.Reload(stream, index.RewindLedger{CutoffSeq: 60, HasCutoff: true, Sessions: []index.RewindSession{sessionP},
-		Rows: append(ledgerRun("P", 60, 61, at(0)), index.RewindRow{Seq: 62, SessionID: "P", DurationMS: 4000,
-			PlaybackPDT: at(8 * time.Second), PlaybackS3Key: key(62), IsGap: true})})
+	load(t, c, stream, ledgerOf(60, append(ledgerRun("P", 60, 61, at(0)), index.RewindRow{Seq: 62, SessionID: "P",
+		DurationMS: 4000, PlaybackPDT: at(8 * time.Second), PlaybackS3Key: key(62), IsGap: true}), withMinSeq(sessionP, 60)))
 	pl, ok := c.Playlist(stream, "P", window(t, c))
 	if !ok || len(pl.Rows) != 3 {
 		t.Fatalf("Playlist(P) = (%v, %v), want 60..62(전제)", playlistRows(pl), ok)
@@ -269,25 +266,26 @@ func TestPlaylistDoesNotShareRowsWithTheCache(t *testing.T) {
 }
 
 // render_tag_same_before_and_after_reload(계획 6.3 #63) — 같은 장부 이력을 실행 중 push 로 쌓은 캐시와
-// 재기동 뒤 재구성한 캐시가 같은 목록을 낸다. 계승 회차 S 는 컷오프(12) 전인 seq 10 에서 열렸다 —
-// push 는 S 의 MinSeq 를 10 으로, 재구성은 적재 행의 최솟값 12 로 든다. 끊김 표시의 「회차 첫 조각」은
-// 컷오프로 잘라 둘 다 12 이고, 표시는 목록 첫 조각 앞에 선다. 컷오프 아래 행으로 판정하면 재기동 전에는
-// 표시가 없다가 재기동 뒤 이미 나간 목록 머리에 표시가 새로 선다(DISC-SEQ 도 어긋난다).
-// S 의 base 는 0 이다 — 계승한 P 는 컷오프 아래라 어느 목록에도 실린 적이 없어 옮겨 받을 증분이 없다.
+// 재기동 뒤 적재한 캐시가 같은 목록을 낸다. 계승 회차 S 는 컷오프(12) 전인 seq 10 에서 열렸다 — 회차 최소
+// seq 는 장부 값 10 이다(적재 하한 · 컷오프와 무관 — A3 결정 3). 끊김 표시의 「회차 첫 조각」은 컷오프로 잘라
+// 12 이고, 표시는 목록 첫 조각 앞에 선다. 컷오프 아래 행으로 판정하면 목록에 표시가 서지 않다가 이미 나간 목록
+// 머리에 표시가 새로 선다(DISC-SEQ 도 어긋난다). S 의 base 는 0 이다 — 계승한 P 는 컷오프 아래라 어느 목록에도
+// 실린 적이 없어 옮겨 받을 증분이 없다.
+//
+// 〔J47〕 옛 「실행 중」 캐시는 빈 캐시에 개시(10) · 주조(12) push 로 뷰를 세웠다 — 이제 그 push 는 적재를 요구한다.
+// 그래서 실행 중 캐시는 주조 직후의 적재분(컷오프 12 · 행 12)에서 시작해 13 · 14 를 push 로 받고, 재기동한 캐시는
+// 12..14 를 한 번에 적재한다.
 func TestRenderTagSameBeforeAndAfterReload(t *testing.T) {
 	sessionS := index.RewindSession{SessionID: "S", State: "live", InitUploaded: true,
-		FirstPDT: at(0), InheritsSession: "P", TargetDuration: 7}
+		FirstPDT: at(0), InheritsSession: "P", TargetDuration: 7, MinSeq: 10}
 
 	live := &cache.Cache{}
-	live.ApplyInsert(stream, 10, openingOf(sessionS, 10, 6600))
-	live.ApplyInsert(stream, 11, seedOf("S", 11, at(6600*time.Millisecond), 4000))
-	live.ApplyInsert(stream, 12, seeded(seedOf("S", 12, at(10600*time.Millisecond), 4000)))
+	load(t, live, stream, ledgerOf(12, pendingRun("S", 12, 12, at(10600*time.Millisecond)), sessionS))
 	pushRun(live, "S", 13, 14, at(14600*time.Millisecond))
-	uploadRun(live, 10, 14)
+	uploadRun(live, 12, 14)
 
 	reloaded := &cache.Cache{}
-	reloaded.Reload(stream, index.RewindLedger{CutoffSeq: 12, HasCutoff: true,
-		Rows: ledgerRun("S", 12, 14, at(10600*time.Millisecond)), Sessions: []index.RewindSession{sessionS}})
+	load(t, reloaded, stream, ledgerOf(12, ledgerRun("S", 12, 14, at(10600*time.Millisecond)), sessionS))
 
 	before := render(t, live, "S", window(t, live))
 	after := render(t, reloaded, "S", window(t, reloaded))

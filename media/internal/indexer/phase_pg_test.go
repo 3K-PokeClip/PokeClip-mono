@@ -87,10 +87,12 @@ func (d phaseDecider) Decide(ctx context.Context, tx pgx.Tx, in index.SessionInp
 		return index.SessionDecision{}, err
 	}
 	return index.SessionDecision{
-		Opens:         dec.Outcome == session.OutcomeOpen || dec.Outcome == session.OutcomeOpenFresh,
-		SessionID:     dec.SessionID,
-		BaseSessionID: dec.BaseSessionID,
-		Plan:          dec,
+		Opens:              dec.Outcome == session.OutcomeOpen || dec.Outcome == session.OutcomeOpenFresh,
+		SessionID:          dec.SessionID,
+		BaseSessionID:      dec.BaseSessionID,
+		EndingSessionID:    dec.EndingSessionID,
+		PrevFirstLocalPath: dec.PrevFirstLocalPath,
+		Plan:               dec,
 	}, nil
 }
 
@@ -144,8 +146,8 @@ func newPhaseFixture(t *testing.T, name string, p phase) *phaseFixture {
 	t.Helper()
 	pool := pgtest.Pool(t, "indexer", index.EnsureSchema, resetPhaseTables)
 
-	// 정책값은 config 기본값과 같다 — SESSION_FLOOR_SLACK 1초 · OBS_FRESH 30초.
-	reg := session.New(session.Options{FloorSlack: time.Second, ObsFresh: 30 * time.Second})
+	// 정책값은 config 기본값과 같다 — SESSION_FLOOR_SLACK 1초 · OBS_FRESH 30초 · 재접속 계승 창 300초.
+	reg := session.New(session.Options{FloorSlack: time.Second, ObsFresh: 30 * time.Second, ReconnectWindow: 300 * time.Second})
 	store := index.NewPGStore(pool, phaseDecider{reg: reg}, playback.SegKey)
 
 	f := &phaseFixture{
@@ -326,16 +328,18 @@ func (f *phaseFixture) mustNotSeed(why string) {
 	}
 }
 
-// rewindWindow 는 장부를 부팅 재구성으로 다시 읽어 센 되감기 창이다(index.LoadRewindLedger
-// → cache.Reload → boundary.Compute, 직전 꼬리 없음). 컷오프가 없으면 멈춘다.
+// rewindWindow 는 장부를 적재로 다시 읽어 센 되감기 창이다(index.LoadRewindLedger → 적재(BeginLoad →
+// CompleteLoad) → boundary.Compute, 직전 꼬리 없음 · 튜너블 기본값). 컷오프가 없으면 멈춘다.
 func (f *phaseFixture) rewindWindow() boundary.Window {
 	f.t.Helper()
-	l, err := index.LoadRewindLedger(context.Background(), f.pool, f.stream)
+	o := cache.Options{}.WithDefaults()
+	l, err := index.LoadRewindLedger(context.Background(), f.pool, f.stream,
+		index.LedgerBounds{Lookback: o.LedgerLookback, RowCap: o.LedgerRowCap})
 	if err != nil {
 		f.t.Fatalf("LoadRewindLedger 실패: %v", err)
 	}
 	c := &cache.Cache{}
-	c.Reload(f.stream, l)
+	c.CompleteLoad(f.stream, c.BeginLoad(f.stream, nil), l)
 	w, ok := boundary.Compute(c.Snapshot(f.stream), 0)
 	if !ok {
 		f.t.Fatal("컷오프가 없어 되감기 창을 셀 수 없다")

@@ -336,11 +336,11 @@ func TestRequestFailureKeepsPreviousSnapshot(t *testing.T) {
 }
 
 // 200 이 아닌 응답도 request_failed 다 — 본문을 파싱해 스냅샷으로 삼지 않는다.
-// (인증 실패는 200 이 아니라 4xx 로 오고 본문은 {"error":"authentication error"} 다.)
+// (401 만은 예외다 — 자격 고장이라 auth_rejected 로 가른다. poller_auth_test.go 가 잰다.)
 func TestNon200ResponseIsRequestFailure(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusUnauthorized)
-		_, _ = w.Write([]byte(`{"status":"error","error":"authentication error"}`))
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"status":"error","error":"unavailable"}`))
 	}))
 	t.Cleanup(srv.Close)
 
@@ -348,14 +348,15 @@ func TestNon200ResponseIsRequestFailure(t *testing.T) {
 	p.pollOnce(context.Background())
 
 	if p.Latest(probeStream).EpochKnown {
-		t.Error("인증 실패인데 관측이 성립했다 — fail-closed 여야 한다")
+		t.Error("200 이 아닌 응답인데 관측이 성립했다 — fail-closed 여야 한다")
 	}
 	if n := logs.countReason("mtxstate_poll_failed", "request_failed"); n != 1 {
 		t.Errorf("mtxstate_poll_failed{reason=request_failed} = %d 건, want 1", n)
 	}
 }
 
-// 깨진 본문(파싱 실패)도 request_failed 로 합류한다 — 사유 라벨은 둘뿐이다.
+// 깨진 본문(파싱 실패)도 request_failed 로 합류한다 — 파싱 실패에 따로 라벨을 두지 않는다
+// (운영자가 할 일이 request_failed 와 같다 — 다음 주기가 고칠 수 있는 일시 실패다).
 func TestMalformedBodyIsRequestFailure(t *testing.T) {
 	srv := serve(t, `{"itemCount":1,`)
 	p, logs := newPoller(t, srv.URL, time.Second)
@@ -370,10 +371,12 @@ func TestMalformedBodyIsRequestFailure(t *testing.T) {
 	}
 }
 
-// s4_signal_grades(M3 몫) — 두 사유 모두 **WARN** 이다.
+// s4_signal_grades(M3 몫) — 일시 실패 두 사유(request_failed · multi_page)는 **WARN** 이다.
 //
 // 등급의 근거는 상태다: 프로세스는 살아 있고, 방향은 비주조(안전)이며, 다음 주기가
 // 회복시킨다. 그래서 사람을 부르는 ERROR 도, 묻히는 INFO 도 아니다.
+// 셋째 사유 auth_rejected 는 사람이 자격을 고쳐야만 낫는 설정 고장이라 ERROR 다 —
+// 그 등급은 poller_auth_test.go 의 TestUnauthorizedIsAuthRejected 가 잰다.
 // 위 사유별 케이스들은 건수·라벨만 보므로 등급이 바뀌어도 통과한다 — 그 구멍을 메운다.
 func TestPollFailureSignalsAreWarnGrade(t *testing.T) {
 	multi := `{"itemCount":2,"pageCount":2,"items":[]}`
@@ -578,7 +581,8 @@ func TestNewPollerAppliesDefaults(t *testing.T) {
 
 // 베이스 URL 끝의 슬래시는 NewPoller 가 떼어 낸다.
 // 안 떼면 요청 경로가 //v3/paths/list 가 되어 서버가 404 로 튕기고, 남는 것은
-// 사유가 request_failed 인 신호뿐이라 인증 실패·오구성과 구분되지 않는다.
+// 사유가 request_failed 인 신호뿐이라 다른 오구성(엉뚱한 주소 · 다른 서버)과 구분되지 않는다
+// (인증 실패는 401 → auth_rejected 로 따로 보인다).
 func TestTrailingSlashInAPIURLIsNormalized(t *testing.T) {
 	var mu sync.Mutex
 	var gotPath string

@@ -48,6 +48,9 @@ type payload struct {
 	size int64
 	// initSHA 는 init 산출의 해시다 — 첫 init CAS 가 기록한다(다른 축에서는 비어 있다).
 	initSHA []byte
+	// incompatible 은 첫 init CAS 의 계승 비호환 여부($5)다 — init 본문을 만들 때 연 입력에서 게이트가 정한다
+	// (inheritIncompatible · 판단 J63). 다른 축에서는 쓰지 않는다.
+	incompatible bool
 }
 
 // payloadFor 는 축이 고르는 본문이다. ok 가 false 면 이번 시도는 r 로 끝난다.
@@ -60,10 +63,65 @@ func (u *Uploader) payloadFor(j job, f *os.File, size int64, lg *slog.Logger) (p
 		if !ok {
 			return payload{}, r, false
 		}
-		return payload{body: bytes.NewReader(out.Init), size: int64(len(out.Init)), initSHA: out.InitSHA256[:]}, attemptResult{}, true
+		return payload{body: bytes.NewReader(out.Init), size: int64(len(out.Init)), initSHA: out.InitSHA256[:],
+			incompatible: u.inheritIncompatible(j.target, f, lg)}, attemptResult{}, true
 	default:
 		return payload{body: f, size: size}, attemptResult{}, true
 	}
+}
+
+// inheritIncompatible 은 첫 init CAS 에 넘길 계승 비호환 여부($5)다 — 재접속 계승의 stsd 호환 게이트(ADR-044 RC3-28 ·
+// 계획 2.3 registry 행 ⑸ⓑ · 4.5 B #3 · 판단 J63).
+//
+// 판별은 계승 후보인가 하나다: 후보가 아니면(InheritsSession 빈 값 — 첫 회차 · TD 분할 · 창 밖 재접속) 거짓이고
+// 지문도 뜨지 않는다. 후보면 이미 연 새 회차 조각 f 와 물려받은 회차 첫 조각의 stsd 지문을 견줘 다르면 참이다.
+// 어느 한쪽이라도 견줄 수 없으면(경로가 비었다 · 루트 밖이다 · 열 수 없다 · 읽을 수 없다) 참이고 WARN
+// session_inherit_declined 를 남긴다(fail-closed — 비호환 계승이 게이트를 건너뛰는 것보다 호환 계승을 잃는 쪽이
+// 안전하다). 지문이 달라 참인 갈래는 신호가 없다(계획 문언 침묵).
+//
+// 판정은 비호환 여부까지다 — 계승을 풀지는 CTE 가 같은 문장에서 정한다(후보 ∧ 참). 워커가 해제를 따로 계산하면
+// 해제 판정이 두 곳에 생긴다(계획 4.5 A2 대안 표).
+func (u *Uploader) inheritIncompatible(t index.UploadTarget, f *os.File, lg *slog.Logger) bool {
+	if t.InheritsSession == "" {
+		return false
+	}
+	prev, reason, err := u.prevFingerprint(t)
+	if reason == "" {
+		own, ownErr := playback.StsdFingerprint(f)
+		if ownErr == nil {
+			return own != prev
+		}
+		reason, err = "own_unreadable", ownErr
+	}
+	args := []any{"session_id", t.SessionID, "inherits_session", t.InheritsSession, "reason", reason,
+		"prev_path", t.PrevFirstLocalPath}
+	if err != nil {
+		args = append(args, "err", err.Error())
+	}
+	lg.Warn("session_inherit_declined", args...)
+	return true
+}
+
+// prevFingerprint 는 계승 후보가 물려받은 회차의 첫 조각 stsd 지문이다. 그 경로도 대상과 같은 루트 이탈 · 디렉토리
+// 판정(streamRel)을 지나 Root.Open 으로 연다 — 장부의 경로를 그대로 열면 루트 밖 파일이 게이트 입력이 된다(계획 2.1
+// mp4box 행 · cc 확인 r20 #4). 견줄 수 없으면 까닭(reason)과 원인 오류를 돌려준다.
+func (u *Uploader) prevFingerprint(t index.UploadTarget) (fp [32]byte, reason string, err error) {
+	if t.PrevFirstLocalPath == "" {
+		return fp, "prev_path_empty", nil
+	}
+	rel, rejected := u.streamRel(t.StreamID, t.PrevFirstLocalPath)
+	if rejected != "" {
+		return fp, "prev_" + rejected, nil
+	}
+	f, err := u.opt.Root.Open(rel)
+	if err != nil {
+		return fp, "prev_open_failed", err
+	}
+	defer f.Close()
+	if fp, err = playback.StsdFingerprint(f); err != nil {
+		return fp, "prev_unreadable", err
+	}
+	return fp, "", nil
 }
 
 // playbackPayload 는 ③ 조각 본문이다 — 도장 위치를 정해 재포장하고, 산출 init 이 세션의
@@ -255,15 +313,23 @@ func (u *Uploader) failUnproducible(j job, err error, lg *slog.Logger) attemptRe
 }
 
 // afterUploaded 는 장부가 uploaded 로 바뀐 뒤의 통지다. ② 는 결과 채널(세그먼트 커서),
-// ③·init 은 이벤트 집합이다(계획 2.1 — Result 는 ② 전용).
-func (u *Uploader) afterUploaded(j job, p payload) {
+// ③·init 은 이벤트 집합이다(계획 2.1 — Result 는 ② 전용). im 은 init 축의 CAS 판정이다(② · ③ 은 영값).
+func (u *Uploader) afterUploaded(j job, p payload, im index.InitMark) {
 	t := j.target
 	switch t.Axis {
 	case index.AxisPlayback:
 		u.dirty.markUploaded(t.StreamID, t.Axis, t.Seq, t.SessionID)
 		u.sessions.dropHeld(t.SessionID, t.Seq) // 같은 조각의 보류 사본은 이제 올릴 것이 없다(cc r4 #4)
 	case index.AxisInit:
-		u.dirty.markUploaded(t.StreamID, t.Axis, t.Seq, t.SessionID)
+		// 확정 사실은 이번 호출이 쓴 확정만 싣는다(계획 4.5 A2 결정 10) — AlreadySame 은 앞선 확정이 계승을
+		// 풀었는지 모르므로 표시하지 않는다(그 회차의 캐시 반영은 30초 감시 화해 몫 — 결정 11). 해제 거짓으로
+		// 표시하면 캐시가 「init 확정 ∧ 낡은 계승」을 얻는다.
+		switch im {
+		case index.InitMarkSuccess:
+			u.dirty.markInitConfirmed(t.StreamID, t.SessionID, false)
+		case index.InitMarkRevoked:
+			u.dirty.markInitConfirmed(t.StreamID, t.SessionID, true)
+		}
 		// 세션 init 이 확정됐다 — 기대값을 적고 기다리던 ③ 을 그 자리에서 다시 넣는다(계획 2.1).
 		u.requeueHeld(u.sessions.confirmInit(t.SessionID, p.initSHA, u.now()))
 	default:
@@ -271,19 +337,23 @@ func (u *Uploader) afterUploaded(j job, p payload) {
 	}
 }
 
-// markInitUploaded 는 세션 init 의 첫 업로드 CAS 다(설계 5.5.5 · 5.3ⓑ). 결과 4분기 중 이어가는
-// 것은 이번에 확정했거나(Success) 이미 같은 바이트로 확정된(AlreadySame — 멱등 재시도) 둘이다.
+// markInitUploaded 는 세션 init 의 첫 업로드 CAS 다(설계 5.5.5 · 5.3ⓑ). 결과 5분기 중 이어가는 것은
+// 이번에 확정했거나(Success · 같은 문장에서 계승까지 풀었으면 Revoked) 이미 같은 바이트로 확정된
+// (AlreadySame — 멱등 재시도) 셋이다. 판정을 함께 돌려준다 — 부르는 쪽(afterUploaded)이 확정 사실을
+// Dirty 에 싣는 모양을 이 판정이 가른다(계획 4.5 A2 결정 10). 이어 가지 않으면 판정이 아니다(오류면 영값).
 //
-// 계승 비호환 인자는 거짓으로 고정한다 — 계승 후보 개시가 아직 없어(SeedResult.PrevFirstLocalPath
-// 언제나 빈 값) 게이트 비적용이다(계획 2.1 「ⓐ 단독 국면 $5=false」).
-func (u *Uploader) markInitUploaded(ctx context.Context, j job, p payload, lg *slog.Logger) bool {
+// 계승 비호환 인자는 payload 가 싣는다 — init 본문을 만들 때 연 입력에서 게이트가 정했다(inheritIncompatible).
+// 판별은 계승 후보인가다(계획 4.5 B #3): 후보가 아니면 거짓이다.
+func (u *Uploader) markInitUploaded(ctx context.Context, j job, p payload, lg *slog.Logger) (bool, index.InitMark) {
 	t := j.target
-	mark, err := u.st.MarkInitUploaded(ctx, t.SessionID, p.initSHA, t.S3Key, p.size, false)
+	mark, err := u.st.MarkInitUploaded(ctx, t.SessionID, p.initSHA, t.S3Key, p.size, p.incompatible)
 	switch {
 	case err != nil:
 		lg.Error("mark_error", "target_state", "uploaded", "err", err.Error())
-	case mark == index.InitMarkSuccess || mark == index.InitMarkAlreadySame:
-		return true
+		mark = 0 // 오류와 함께 온 값은 판정이 아니다
+	case mark == index.InitMarkSuccess || mark == index.InitMarkRevoked || mark == index.InitMarkAlreadySame:
+		// Revoked 도 확정이다 — default(거부)로 떨어지면 해제된 회차의 init 이 영영 확정되지 않는다(뮤테이션 115).
+		return true, mark
 	case mark == index.InitMarkMismatch:
 		// 그 세션의 MAP 은 이미 다른 바이트로 굳었다 — 바꿀 수 없으므로 작업을 끝낸다. 분리하지
 		// 않는다: init 작업에는 조각이 없다(계획 2.1 · verify-cx-3-r6 (ㄴ)).
@@ -298,5 +368,5 @@ func (u *Uploader) markInitUploaded(ctx context.Context, j job, p payload, lg *s
 			"init_mark", mark.String())
 	}
 	u.gate.registerFailure(j.key())
-	return false
+	return false, mark
 }

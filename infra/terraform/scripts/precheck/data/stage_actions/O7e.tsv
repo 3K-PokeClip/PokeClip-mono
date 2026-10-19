@@ -4,6 +4,7 @@
 # 출처: 계획 M9 「O7e 선행 0」 공통 묶음(ec2 · iam 인스턴스 프로필 · elb 대상
 # 등록 · ssm · secretsmanager — rds-db:connect 는 O7e-stop1 에만) · O7e 본문
 # 1 ~ 5(media apply · T9a · CDN 비밀 입력 · 재시작).
+# 2-3 판정 래퍼 읽기(맨 아래 덩어리): M17b principal-check.sh.
 
 # Media EC2 · 시작 템플릿 · SG
 ec2:RunInstances	ap-northeast-2	*
@@ -43,8 +44,8 @@ s3:PutObject	ap-northeast-2	*
 s3:DeleteObject	ap-northeast-2	*
 
 # 2-3 판정 · 이벤트 조회의 읽기(설계 11-5 의 2-3-7 · 2-3-8 · 계획 M17a
-# 「데이터」). 열거 읽기의 리전은 M17a 가 정한 두 리전(서울 · us-east-1 —
-# M17b 착수 때 collect.sh 가 실제로 부르는 리전과 확인)이다.
+# 「데이터」). 열거 읽기의 리전은 M17a 가 정한 두 리전(서울 · us-east-1)이고,
+# principal-check.sh 가 부르는 리전과 같다(2026-10-19 확인).
 # ec2:DescribeRegions 는 넣지 않는다(kty 45차). iam:SimulatePrincipalPolicy 는
 # 이 도구 자신의 호출이라 그것이 거부되면 종료 2 로 드러난다.
 iam:GetAccountAuthorizationDetails	us-east-1	*
@@ -71,3 +72,15 @@ tag:GetTagKeys	ap-northeast-2	*
 tag:GetTagKeys	us-east-1	*
 tag:GetResources	ap-northeast-2	*
 tag:GetResources	us-east-1	*
+
+# 2-3 판정 래퍼(M17b principal-check.sh)가 더 부르는 읽기 — 주체 · 대상
+# 해석(IAM · Route 53 은 us-east-1). 인스턴스 프로필 · 태그 해석 · 자원
+# 정책 읽기는 위 덩어리에 있다.
+iam:GetRole	us-east-1	*
+iam:GetUser	us-east-1	*
+iam:ListRoles	us-east-1	*
+iam:ListAttachedRolePolicies	us-east-1	*
+iam:ListAttachedUserPolicies	us-east-1	*
+iam:ListGroupsForUser	us-east-1	*
+iam:ListAttachedGroupPolicies	us-east-1	*
+route53:ListHostedZonesByName	us-east-1	*

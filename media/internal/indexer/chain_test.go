@@ -691,3 +691,57 @@ func TestChainReadsRecorderMtxiThroughFsopGate(t *testing.T) {
 			got.PlaybackPos, got.StitchOffset, want, want-17_992_993_197)
 	}
 }
+
+// 실시간 init 작업은 계승 후보 개시 행이 실어 준 게이트 입력 두 칸(물려받은 회차 · 그 회차 첫 조각 경로)을 싣는다(계획
+// 4.5 B #19 · 2.3 registry 행 ⑵). 개시 행의 init 요청이 거부되면(브레이커 · 큐 포화 · 백오프) 그 회차의 다음 행이 다시
+// 요청하는데, 그 행의 결과에는 두 칸이 없으므로(개시 행에서만 뜻이 있다) 인덱서가 개시 행의 값을 들고 있다가 싣는다(판단
+// J64 — 같은 프로세스 재요청). 잡는 결함: 개시 행이 두 칸을 안 실으면 후보가 비후보로 읽혀 비호환 계승이 게이트를
+// 건너뛰고, 재요청이 두 칸을 잃으면 거부 한 번이 같은 공백을 연다.
+func TestInitRequestCarriesGateInputsOfOpeningRow(t *testing.T) {
+	const prevFirst = "/recordings/s1/prev-first.mp4"
+	f := newFixture(t, 4000)
+	r := f.injectReads()
+	f.store.scriptSessions("S2", "S2", "S2")
+	f.store.scriptInheritance("S2", "S1", prevFirst)
+
+	f.upload.accept = false // 개시 행의 init 요청이 거부된다
+	s0 := f.row(r, 0, mtxiOf(recA, 0))
+	f.upload.accept = true
+	s1 := f.row(r, 4*time.Second, mtxiOf(recA, 4*time.Second)) // 같은 회차의 다음 행이 다시 요청한다(여기서 접수)
+	f.row(r, 8*time.Second, mtxiOf(recA, 8*time.Second))
+
+	want := []index.UploadTarget{
+		{StreamID: "s1", Axis: index.AxisInit, SessionID: "S2", LocalPath: s0.Path, Bytes: 1000, IsTail: true,
+			InheritsSession: "S1", PrevFirstLocalPath: prevFirst},
+		{StreamID: "s1", Axis: index.AxisInit, SessionID: "S2", LocalPath: s1.Path, Bytes: 1000, IsTail: true,
+			InheritsSession: "S1", PrevFirstLocalPath: prevFirst},
+	}
+	if got := f.upload.targetsOf(index.AxisInit); !reflect.DeepEqual(got, want) {
+		t.Errorf("init 요청 = %+v\nwant %+v", got, want)
+	}
+}
+
+// 알려진 공백의 지금 동작을 고정한다(체크리스트 459 「kty 회부 필요 2」 · 선택지 462 — 닫는 선택은 kty 결정 대기라
+// 코드를 바꾸지 않는다). 재기동한 프로세스는 그 회차의 개시 행을 본 적이 없어, 첫 init 요청이 게이트 입력 없이 나간다 —
+// 업로더는 계승 후보가 아닌 것으로 읽어 비호환 거짓을 넘긴다. 공백을 닫는 코드가 들어오면 이 시험이 뒤집힌다.
+func TestRestartedInitRequestCarriesNoGateInputs(t *testing.T) {
+	f := newFixture(t, 4000)
+	r := f.injectReads()
+	f.store.scriptSessions("S2", "S2")
+	f.store.scriptInheritance("S2", "S1", "/recordings/s1/prev-first.mp4")
+	f.upload.accept = false
+	f.row(r, 0, mtxiOf(recA, 0)) // 옛 프로세스 — 계승 개시 행 · init 요청 거부
+
+	f.reload() // 재기동: 개시 행의 기억은 사라지고 장부는 남는다
+	r = f.injectReads()
+	f.upload.accept = true
+	before := len(f.upload.targetsOf(index.AxisInit))
+	s1 := f.row(r, 4*time.Second, mtxiOf(recA, 4*time.Second))
+
+	want := []index.UploadTarget{
+		{StreamID: "s1", Axis: index.AxisInit, SessionID: "S2", LocalPath: s1.Path, Bytes: 1000, IsTail: true},
+	}
+	if got := f.upload.targetsOf(index.AxisInit)[before:]; !reflect.DeepEqual(got, want) {
+		t.Errorf("재기동 뒤 init 요청 = %+v\nwant %+v(게이트 입력 없음 — 알려진 공백)", got, want)
+	}
+}

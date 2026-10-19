@@ -21,9 +21,9 @@ const (
 // DirtyEvent 는 Dirty 의 원소다. **같은 사실은 같은 값이다** — 값 자체가 원소 키라서 같은
 // 사실을 두 번 표시해도 한 원소로 접힌다. 종류마다 채우는 칸이 정해져 있다:
 //
-//	③ 업로드   {DirtyUploaded, stream, AxisPlayback, seq, 조각의 세션, ""}
-//	init 업로드 {DirtyUploaded, stream, AxisInit, 0, 세션, ""}  — init 축은 seq 를 쓰지 않는다
-//	분리        {DirtySplit, stream, 0, 0, 세션, 사유}           — 세션마다 하나
+//	③ 업로드   {DirtyUploaded, stream, AxisPlayback, seq, 조각의 세션, "", false}
+//	init 업로드 {DirtyUploaded, stream, AxisInit, 0, 세션, "", 해제}  — init 축은 seq 를 쓰지 않는다
+//	분리        {DirtySplit, stream, 0, 0, 세션, 사유, false}           — 세션마다 하나
 type DirtyEvent struct {
 	Kind      DirtyKind
 	StreamID  string
@@ -31,6 +31,10 @@ type DirtyEvent struct {
 	Seq       int64
 	SessionID string
 	Reason    string
+	// InheritRevoked 는 init 업로드 원소에서만 쓴다 — 그 init 확정 CAS 가 같은 문장에서 계승을 풀었는가다(계획
+	// 4.5 A2 결정 8 — init 확정과 계승 해제는 한 원소로 루프에 닿는다). CAS 는 회차마다 한 번만 성공하므로 해제
+	// 참인 원소는 회차마다 많아야 하나다.
+	InheritRevoked bool
 }
 
 // Dirty 는 ③·init 결과를 되감기 루프에 알리는 이벤트 집합이다(계획 2.1 · 부기 18 — 결과
@@ -48,12 +52,18 @@ type Dirty struct {
 	events map[DirtyEvent]struct{}
 }
 
-// markUploaded 는 "이 축의 이 대상이 uploaded 로 확정됐다"를 표시한다.
+// markUploaded 는 "이 ③ 조각이 uploaded 로 확정됐다"를 표시한다. ③ 전용이다 — init 확정은 계승 해제 여부까지 한
+// 원소에 실어야 해서 markInitConfirmed 가 따로 만든다.
 func (d *Dirty) markUploaded(streamID string, axis index.Axis, seq int64, sessionID string) {
-	if axis == index.AxisInit {
-		seq = 0 // init 의 유일성 축은 세션이다 — seq 로 갈리면 같은 사실이 두 원소가 된다
-	}
 	d.add(DirtyEvent{Kind: DirtyUploaded, StreamID: streamID, Axis: axis, Seq: seq, SessionID: sessionID})
+}
+
+// markInitConfirmed 는 "이 세션의 init 이 확정됐다"를 표시한다 — init 원소의 유일한 생성점이다(계획 4.5 A2 결정
+// 10). inheritRevoked 는 그 확정이 같은 문장에서 계승을 풀었는가다(InitMarkRevoked). seq 는 늘 0 이다 — init 의
+// 유일성 축은 세션이라 seq 로 갈리면 같은 사실이 두 원소가 된다.
+func (d *Dirty) markInitConfirmed(streamID, sessionID string, inheritRevoked bool) {
+	d.add(DirtyEvent{Kind: DirtyUploaded, StreamID: streamID, Axis: index.AxisInit, SessionID: sessionID,
+		InheritRevoked: inheritRevoked})
 }
 
 // markSplit 은 "이 세션이 끝났다"를 표시한다. 세션마다 하나이며 같은 세션의 업로드 사실이

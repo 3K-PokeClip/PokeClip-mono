@@ -77,6 +77,12 @@ func run() error {
 	if err := validateObservationWindow(cfg.ObsFresh); err != nil {
 		return err
 	}
+	// 관측 폴러의 비밀번호 파일을 여기서 읽는다 — DB 연결보다 먼저라 설정 오류가 DB 상태와 무관하게
+	// 드러난다. 실패는 기동 실패다(OpenRoot 와 같은 꼴 · ADR-063 강등의 예외 — startObserver 주석).
+	obsOpt, err := observerOptions(cfg)
+	if err != nil {
+		return err
+	}
 
 	log := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.LogLevel}))
 	cfg.Watcher.Log = log
@@ -108,7 +114,7 @@ func run() error {
 	// 장부에 협력자 둘을 끼운다(계획 4.6): 세션 결정자와 ③ 키 파생.
 	// 세션 판정 정책·키 형상은 각각 자기 패키지에 있고, 여기서 이어 붙이는 것이 전부다.
 	store := index.NewPGStore(pool,
-		newSessionDecider(cfg.SessionFloorSlack, cfg.ObsFresh, log), playback.SegKey)
+		newSessionDecider(cfg.SessionFloorSlack, cfg.ObsFresh, cfg.ReconnectWindow, log), playback.SegKey)
 
 	// 업로더가 파일을 여는 유일한 손잡이다. 루트를 못 열면 기동 실패다 —
 	// 그 상태로 진행하면 모든 PUT 이 열기 단계에서 실패한다.
@@ -133,7 +139,7 @@ func run() error {
 	// 스캔 유입이 ⓐ2 를 쓸 수 있다. 뒤로 미루면 재기동 직후 한 주기가 통째로
 	// 관측 이력 0(= EpochKnown=false) 위에서 돌아 스캔 유입은 아무것도 주조하지 못한다
 	// (ⓐ1 워처·훅 유입은 관측과 무관하게 주조한다 — 관측이 가르는 것은 스캔 유입뿐이다).
-	observer, stopObserver := startObserver(ctx, cfg.MTXState, log)
+	observer, stopObserver := startObserver(ctx, obsOpt, log)
 	defer stopObserver()
 
 	// --- 3. 워처 조립·기동 — 실패는 강등이다 ---
@@ -194,6 +200,27 @@ func run() error {
 		log.Info("hook_reader_started", "spool", cfg.HookSpoolPath, "poll", cfg.HookPollInterval)
 	}
 
+	// --- 3-2. 되감기 발행 몫 (선택) — 업로더 기동(4) 앞이다 ---
+	//
+	// 업로더 워커가 Dirty 집합을 읽으므로 그 집합은 Start 전에 붙어야 하고, 캐시는 루프가 돌기 전 이 고루틴에서 한 번만 인덱서에
+	// 끼운다(assemblePublishing). S3_BUCKET 이 비었거나 조립이 강등되면 발행 몫이 없다 — 루프 보조 타입은 4.1 종료 전이만
+	// 돈다(체크리스트 474 판단 J69 · J77). 강등도 사망이 아니다: 업로드 · 인덱싱은 그대로 돈다(ADR-063 결정 1).
+	rewind := &rewindLoop{
+		ix: ix, root: cfg.SegmentRoot, log: log,
+		endLive: func(ctx context.Context, streamID string) (string, error) {
+			return index.EndLive(ctx, pool, streamID)
+		},
+	}
+	if pubPool := assemblePublishing(ctx, cfg, up, rewind); pubPool != nil {
+		// ★ 등록 순서가 계약이다(위 up.Shutdown 주석과 같은 원리). 발행자 풀은 up.Shutdown 보다 먼저 닫히고 아래
+		//   rewind.stop(fence 반납)보다 늦게 닫힌다 — 반납 문장이 이 풀로 나간다(체크리스트 474 A-3 3).
+		defer pubPool.Close()
+	}
+	// 루프의 ctx 가 곧 차선 ctx 다(rewindLoop 문서). run ctx 에서 떼어 두어, 루프가 오류로 끝나 run ctx 가 살아 있어도
+	// rewind.stop 이 작업을 끊고 기다린 뒤 fence 를 반납한다(판단 J74).
+	laneCtx, cancelLanes := context.WithCancel(ctx)
+	defer rewind.stop(ctx, cancelLanes)
+
 	// --- 4. 업로더 기동 + 초기 수집 발사 ---
 	//
 	// 부수 효과 있는 컴포넌트의 시작은 미루지 않는다(ADR-063 결정 6): 업로더는 boot 에서
@@ -229,6 +256,7 @@ func run() error {
 		reattachWatcher: func() (*recording.Watcher, error) {
 			return assembleWatcher(ctx, cfg.Watcher)
 		},
+		rewind: rewind,
 	}
 	if w != nil {
 		deps.watcherDone, deps.watcherErr = w.Done(), w.Wait
@@ -238,7 +266,7 @@ func run() error {
 		// 성질). 재장착은 loop 의 재스캔 주기가 시도한다.
 		deps.watcherDegraded = true
 	}
-	loopErr := loop(ctx, deps)
+	loopErr := loop(laneCtx, deps)
 	if loopErr != nil {
 		return loopErr
 	}
@@ -267,11 +295,18 @@ func assembleWatcher(ctx context.Context, opt recording.WatcherOptions) (*record
 
 // startObserver 는 관측 폴러를 띄우고 첫 관측까지 기다린다(설계 6.5.3 ⑶ 1~2단계).
 //
-// 돌려주는 관측자가 nil 이면 인덱서가 널 오브젝트로 편다 — 그 상태의 관측은
-// EpochKnown=false 라 ⓐ2(상태 방증)만 닫히고 인덱싱·업로드는 그대로 돈다.
+// 돌려주는 관측자가 nil 이면 인덱서가 널 오브젝트로 편다 — 그 상태의 관측은 영값
+// (EpochKnown=false · 관측 시각 없음)이라 ⓐ2(상태 방증)가 닫히고 4.1 종료 전이도 서지 않는다
+// (같은 스트림의 연속 방송이 한 회차로 이어진다). 인덱싱·업로드는 그대로 돈다.
 //
 // **실패 처분이 워처·훅과 같다**: 조립 실패도 관측 실패도 강등이지 사망이 아니다.
 // 관측은 주조 자격의 보강재일 뿐이고, 없으면 방향은 언제나 비주조(안전)다(설계 S3).
+//
+// **예외 하나 — 자격 파일 실패는 기동 실패다**(ADR-063 「관측 실패는 강등」 의 예외, kty 2026-10-19).
+// 자격이 틀린 채 강등으로 뜨면 운영자가 끄지도 않은 관측이 조용히 사라진다. 그래서 비밀번호 파일은
+// 여기가 아니라 run 이 이 함수보다 앞(DB 연결 전)에서 observerOptions 로 읽고, 실패하면 기동을 멈춘다.
+// opt 는 그 결과라 Pass 가 이미 채워져 있다. 자격이 거부되는 것(401)은 기동 뒤의 관측 실패라 강등이고,
+// 폴러가 auth_rejected 를 ERROR 로 낸다.
 //
 // 두 번째 반환값은 폴 고루틴의 종료를 기다리는 함수다. 폴러의 소유자는 run() 이고,
 // **부모 ctx 취소에 기대지 않고 자기 ctx 를 직접 끊는다** — loop 이 에러로 빠져나오면
@@ -280,16 +315,17 @@ func startObserver(ctx context.Context, opt mtxstate.Options, log *slog.Logger) 
 	noop := func() {}
 	if opt.APIURL == "" {
 		// 즉시 롤백 스위치(HOOK_SPOOL_PATH 와 같은 형태). 무징후로 두지 않는다 —
-		// 이 상태에서는 스캔 유입이 영영 주조되지 않는데 증상은 "되감기가 안 된다"뿐이다.
+		// 이 상태에서는 스캔 유입이 영영 주조되지 않고 회차도 끝나지 않는데, 증상은 "되감기가
+		// 안 된다" · "회차가 이어진다"뿐이다.
 		log.Info("mtxstate_disabled",
-			"note", "MTX_API_URL 이 비어 있다. ⓐ2(상태 방증)가 fail-closed 되고 스캔 유입은 주조하지 않는다")
+			"note", "MTX_API_URL 이 비어 있다. ⓐ2(상태 방증)가 fail-closed 되고 스캔 유입은 주조하지 않는다. 4.1 회차 종료 전이도 멈춘다 — live 회차가 끝나지 않는다")
 		return nil, noop
 	}
 	opt.Log = log
 	poller, err := mtxstate.NewPoller(opt)
 	if err != nil {
 		log.Error("mtxstate_setup_failed", "url", opt.APIURL, "err", err,
-			"note", "관측만 강등된다. 인덱싱은 계속되고 ⓐ2 는 fail-closed 다")
+			"note", "관측만 강등된다. 인덱싱은 계속되고 ⓐ2 는 fail-closed, 4.1 회차 종료 전이(M4 ⓒ)도 서지 않는다")
 		return nil, noop
 	}
 
@@ -302,9 +338,30 @@ func startObserver(ctx context.Context, opt mtxstate.Options, log *slog.Logger) 
 	// 첫 관측을 BootWait 까지 기다린다. 못 얻어도 그대로 진행한다 — 그 창(최대 3초)에
 	// 만들어진 파일은 초기 수집이 회수한다(기존 규약).
 	observed := poller.WaitFirstObservation(ctx)
+	// auth · user 로 「자격을 싣고 붙었나」 를 기동 한 줄에서 본다. 비밀번호 · 파일 경로는 싣지 않는다.
 	log.Info("mtxstate_started",
-		"url", opt.APIURL, "poll", opt.PollInterval, "first_observation", observed)
+		"url", opt.APIURL, "poll", opt.PollInterval, "first_observation", observed,
+		"auth", poller.AuthScheme(), "user", opt.User)
 	return poller, stop
+}
+
+// observerOptions 는 관측 폴러의 설정을 완성한다 — config 가 채운 값에 비밀번호 파일의 내용을 Pass 로
+// 얹는다(POK-373). config 는 파일을 열지 않으므로(손잡이는 main 이 — SEGMENT_ROOT 의 OpenRoot 와 같은 꼴)
+// 여기서 읽는다.
+//
+// **실패는 기동 실패다** — run 이 이 에러를 그대로 돌려준다(startObserver 주석의 ADR-063 예외).
+// MTX_API_URL 이 비면(관측 끔 — 즉시 롤백 스위치) 파일을 읽지 않는다. 롤백이 파일 문제에 막히면 안 된다.
+func observerOptions(cfg config.Config) (mtxstate.Options, error) {
+	opt := cfg.MTXState
+	if opt.APIURL == "" || cfg.MTXAPIPassFile == "" {
+		return opt, nil
+	}
+	pass, err := readSecretFile("MTX_API_PASS_FILE", cfg.MTXAPIPassFile)
+	if err != nil {
+		return mtxstate.Options{}, err
+	}
+	opt.Pass = mtxstate.NewSecret(pass)
+	return opt, nil
 }
 
 // newUploader 는 설정에 따라 업로더를 고른다. 분기는 셋이고 기동을 거부하는 것은 하나뿐이다.
@@ -364,7 +421,7 @@ type loopDeps struct {
 	// 업로더가 꺼져 있으면 Results() 가 nil 을 주므로 그 case 는 영구 비활성이다 —
 	// 훅 채널과 정확히 같은 규약이다.
 	uploadResults <-chan upload.Result
-	// holdTicks 는 보류 중인 꼬리를 살펴보는 주기다. 티커의 소유자는 run 이다.
+	// holdTicks 는 보류 중인 꼬리를 살펴보고 4.1 종료 판정을 돌리는 주기다. 티커의 소유자는 run 이다.
 	holdTicks <-chan time.Time
 
 	// armSweeper 는 첫 완주 수집에서 스위퍼를 여는 손잡이다(up.ArmSweeper).
@@ -379,17 +436,20 @@ type loopDeps struct {
 	// reattachWatcher 는 재장착 손잡이다(assembleWatcher). 성공 시 loop 이 채널 넷을
 	// 갈아 끼우고 SetAdopter 를 함께 부른다 — H4·H5 되돌림이 실제 워처로 복귀한다(f6f).
 	reattachWatcher func() (*recording.Watcher, error)
+
+	// rewind 는 루프가 되감기 회차 · 캐시 · 발행을 돌보는 몫이다(holdTicks case 와 되감기 완료 case 가 부른다).
+	rewind *rewindLoop
 }
 
 // collectStallFactor 는 수집 정지 판정 계수다. soft 예산 45초 × 2 = 90초 —
 // 예산 초과(절단으로 회복)와 진짜 정지(결과 자체가 없음)를 가르는 여유다.
 const collectStallFactor = 2.0
 
-// loop 은 종료·워처사망·완성세그먼트·재스캔요청·훅이벤트·훅사망·업로드결과·보류틱을
+// loop 은 종료·워처사망·완성세그먼트·재스캔요청·훅이벤트·훅사망·업로드결과·보류틱·되감기 작업 결과를
 // 한 곳에서 받아 차례로 처리한다.
 //
-// 주석 ⓑ: Scan·Handle·HandleHook·ApplyUploadResult·ReleaseHeldTails 의 호출자는 이 루프
-// 하나뿐이다. 그래서 Indexer 에 락이 없다(D10). select 는 한 번에 하나의 case 만 실행하므로
+// 주석 ⓑ: Scan·Handle·HandleHook·ApplyUploadResult·ReleaseHeldTails·OfflineDue·OfflineTried 의 호출자는
+// 이 루프 하나뿐이다. 그래서 Indexer 에 락이 없다(D10). select 는 한 번에 하나의 case 만 실행하므로
 // 이들이 동시에 불릴 수 없다. 이 규약을 깨고 다른 고루틴에서 부르면 즉시 seq 중복이 난다.
 func loop(ctx context.Context, d loopDeps) error {
 	ticker := time.NewTicker(d.rescanEvery)
@@ -504,6 +564,14 @@ func loop(ctx context.Context, d loopDeps) error {
 					"note", "수집 결과가 오지 않고 있다. FS 정지 의심 — 프로세스는 계속 돈다")
 			}
 			d.ix.ReleaseHeldTails()
+			// 4.1 판정과 발행 갈래는 틱 채널의 값이 아니라 지금 시각으로 선다 — 루프가 밀려 틱 값이 과거가 되면
+			// 관측 신선도가 그만큼 느슨해진다(현행 두 줄도 틱 값을 쓰지 않는다).
+			d.rewind.holdTick(ctx, time.Now())
+
+		// 되감기 차선 작업(발행 · 적재 · 감시)의 결과를 반영한다. 발행 몫이 없으면 nil 채널이라 이 case 는 영구
+		// 비활성이다 — 훅 채널과 같은 규약이다(체크리스트 474 판단 J69).
+		case res := <-d.rewind.done():
+			d.rewind.complete(ctx, res, time.Now())
 		}
 	}
 }

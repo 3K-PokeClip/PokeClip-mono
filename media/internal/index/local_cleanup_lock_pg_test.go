@@ -411,7 +411,7 @@ func lcReadEverything(ctx context.Context, t *testing.T, pool *pgxpool.Pool, fix
 			return err
 		}
 	}
-	_, err = LoadRewindLedger(ctx, pool, fix.stream)
+	_, err = LoadRewindLedger(ctx, pool, fix.stream, ledgerBounds)
 	return err
 }
 
