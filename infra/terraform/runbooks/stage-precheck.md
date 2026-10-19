@@ -240,7 +240,10 @@ bash infra/terraform/scripts/precheck/principal-check.sh O7a
 *   사전 조건: 저장소 뿌리에서 kty IAM 사용자 프로필로 돌립니다(호출 주체가
     역할 세션이면 종료 2). **aws CLI 2.36.12 이상**이어야 합니다. 그보다 옛
     CLI 는 요청의 `PolicyExclusionList`(SCP 제외)를 입력 오류로 거부하고,
-    도구는 종료 2 와 「2.36.12 이상 필요」 를 냅니다.
+    도구는 종료 2 와 「2.36.12 이상 필요」 를 냅니다. CLI 기록(프로필의
+    `cli_history = enabled` 또는 환경 변수 `AWS_CLI_HISTORY_FILE`)이 켜져
+    있으면 첫 AWS 호출 전에 종료 2 입니다 — 요청 · 응답 원문이 증거 밖 기록
+    파일에도 남기 때문입니다.
 
 ### 2-3 판정의 실행 순서
 
@@ -294,6 +297,7 @@ bash infra/terraform/scripts/precheck/principal-check.sh O7a
 |---|---|---|
 | 허용 | 멈춤 | `ALLOWED` |
 | 그 자원의 정책 원문에 역할 세션 ARN(`assumed-role/`) | 판정 불가 | `SESSION_PRINCIPAL_IN_POLICY` |
+| 그 자원의 정책 원문에 JSON 이스케이프(`\/` · `\u`) — 문자열 검사를 믿을 수 없음 | 판정 불가 | `POLICY_ESCAPED` |
 | 정책 읽기 방법 `unread` | 판정 불가 | `RESOURCE_POLICY_UNREAD` |
 | 갈래 B · 역할 주체 · Allow 를 가진 자원 정책 | 판정 불가 | `RESOURCE_POLICY_UNSIMULATED` |
 | 누락 문맥이 있는 거부 | 판정 불가 | `MISSING_CONTEXT` |
@@ -301,7 +305,7 @@ bash infra/terraform/scripts/precheck/principal-check.sh O7a
 | 그 밖(우리 정책의 거부) | 통과 | — |
 
 주체 · 대상 단위 사유는 하나당 1건으로 셉니다 — 주체를 찾지 못함
-`PRINCIPAL_MISSING`, 태그 · prod 역할 해석 0건 `TARGET_NONE`.
+`PRINCIPAL_MISSING`, 태그 · 존 · prod 역할 해석 0건 `TARGET_NONE`.
 
 ### 2-3 판정의 결과와 갈래
 
@@ -318,10 +322,12 @@ bash infra/terraform/scripts/precheck/principal-check.sh O7a
 *   종료 3 의 기록: 그 실행의 증거 디렉터리에 `approvals.tsv`(시각 · 판정
     불가 · 진행/멈춤 · 이유, 탭 구분)를 kty 가 적습니다. 기록은 다음 실행에
     이어 쓰지 않습니다 — 다시 돌리면 그 실행의 판정 불가를 다시 적습니다.
-*   종료 2 는 사용법 · 모르는 단계 · 데이터 꼴 · 증거 경로 거부 · IAM 사용자
-    아닌 호출 주체 · 호출 실패 · 호출 자체의 AccessDenied · 응답 꼴 · 정책
-    파일 꼴 · 존 해석 2건 이상 · PC0 · PC1 실패 · 옛 CLI · 조직 판정 False ·
-    자원 정책 읽기의 「없음」 아닌 오류입니다.
+*   종료 2 는 사용법 · 모르는 단계 · 데이터 꼴 · CLI 기록 켜짐 · 증거 경로
+    거부 · 증거 쓰기 실패 · IAM 사용자 아닌 호출 주체 · 호출 실패 · 호출
+    자체의 AccessDenied · 응답 꼴(역할 · 사용자 ARN 이 하나가 아님 · 최상위
+    판정이 값 하나가 아님 포함) · 정책 파일 꼴 · S3 · ECR 정책 응답의 `None` ·
+    존 해석 2건 이상 · 잘린 존 목록 · PC0 · PC1 실패 · 옛 CLI · 조직 판정
+    False · 자원 정책 읽기의 「없음」 아닌 오류입니다.
 *   ⑤ 보고에는 첫 줄 · 표 행 · 증거 디렉터리 이름 · `report.txt` 의 사유별
     건수와 갈래 줄을 냅니다.
 *   증거 디렉터리 `~/.pokeclip-precheck/principal-<단계>-<UTC 시각>`:
@@ -354,7 +360,7 @@ bash infra/terraform/scripts/precheck/principal-check.sh O7a
 | A1 RCP(리소스 제어 정책) | 넓게 — 거부만 더함 | apply 중 거부는 SCP 멈춤 규칙 |
 | A2 VPC 엔드포인트 정책 · 세션 정책 | 넓게 — 허용을 줄이기만 함 | — |
 | A3 SCP 가 실제로 주는 보호(SCP 를 빼고 판정함) | 넓게 | PC0 |
-| A4 자원 정책이 역할 세션 ARN 을 지명한 허용 | 좁게 | `SESSION_PRINCIPAL_IN_POLICY` |
+| A4 자원 정책이 역할 세션 ARN 을 지명한 허용 | 좁게 | `SESSION_PRINCIPAL_IN_POLICY` · 이스케이프된 원문은 `POLICY_ESCAPED` |
 | A5 고정 문맥 밖 요청 문맥(출발지 · 요청 태그 · MFA 등)에서만 열리는 허용 | 좁게 | 드러난 키는 첫 실행에서 행에 더함 |
 | A6 자원 리전 밖의 요청 리전 값 | 좁게 | SCP 는 근거로 쓰지 않음 → 한계로 둠 |
 | A7 역할 받기 외 간접 경로(역할 넘기기 · 명령 실행 · 계산 자원 변경 등) | 좁게 | dev 상자 역할이 주체 · 권한 변경 행 |
@@ -370,6 +376,7 @@ bash infra/terraform/scripts/precheck/principal-check.sh O7a
 | A17 리스 계정의 실제 SCP 원문 | 판정 영향 없음 | PC0 · PC1 |
 | A18 「허용 + 누락 문맥」 = 허용 | 넓게 | 첫 실행에서 키를 더함 |
 | A19 `/pokeclip/prod/` 경로 밖에 만든 prod 역할 | 좁게(일부만 경로 밖이면) | 전부 빠지면 0건 → `TARGET_NONE` |
+| A20 Route 53 레코드 이름 문맥 행 | 좁게(그 행이 들기 전까지) | prod 레코드를 만드는 단계(O7b) PR 에서 더함(kty 결정) |
 
 ## 이벤트 기록
 

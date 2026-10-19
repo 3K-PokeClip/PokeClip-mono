@@ -6,6 +6,7 @@
 #
 # 진짜 aws CLI 가 --query · --output text 를 적용한 뒤의 꼴(탭 구분 줄)로
 # 답한다.
+#   configure get cli_history  CLI 기록 설정 값(FAKE_AWS_CLI_HISTORY).
 #   sts get-caller-identity   「ARN<탭>계정 ID」 한 줄.
 #   iam simulate-principal-policy
 #       --cli-input-json file://<요청 파일> 을 읽어 요청이 계약대로인지 본 뒤
@@ -13,7 +14,8 @@
 #       요청에 PolicyExclusionList 가 있으면 2-3 판정(principal-check.sh)
 #       요청으로 보고 「최상위 판정<탭>조직 판정<탭>최상위 누락 문맥<탭>자원별
 #       판정<탭>자원별 누락 문맥」 한 줄로 답한다(목록 칸은 쉼표 구분, 없으면
-#       빈 칸 · 조직 판정 칸이 없으면 None — SCP 제외 응답의 꼴).
+#       빈 칸 · 조직 판정 칸이 없으면 None — SCP 제외 응답의 꼴). 이 꼴은
+#       SIM_QUERY 를 적용한 결과라, --query 가 그것과 다르면 거부한다.
 #   cloudtrail lookup-events  FAKE_AWS_EVENTS 표에서 그 리전 · 이름의 줄을
 #       「ID<탭>출처<탭>이름<탭>시각<탭>주체」 꼴로.
 #   2-3 판정의 읽기 호출(모두 --cli-input-json file:// 만 받음) — 답은
@@ -30,8 +32,11 @@
 #       ecr get-repository-policy(repositoryName).
 #       괄호 안은 표의 이름 칸과 맞추는 요청 칸이다. 정책 읽기 셋은 표의 정책
 #       원문을 --query <정책 칸>(Policy · ResourcePolicy · policyText)과
-#       --output text 가 오면 그대로, 아니면 진짜 CLI 봉투 꼴(정책이 escape
-#       된 문자열로 든 JSON)로 낸다.
+#       --output text 가 오면 그대로, --query 가 다른 칸이면 진짜 CLI 처럼
+#       None, --query 가 없으면 진짜 CLI 봉투 꼴(정책이 escape 된 문자열로 든
+#       JSON)로 낸다. 존 목록은 --query 가 ZONE_QUERY 일 때만 받고, 첫 줄에
+#       「IsTruncated<탭>NextDNSName」(FAKE_AWS_ZONE_PAGE), 그 뒤에 표의 답을
+#       낸다.
 #
 # 환경 변수:
 #   FAKE_AWS_LOG            argv 기록 파일(필수).
@@ -77,6 +82,16 @@
 #                           목록은 빈 답.
 #   FAKE_AWS_POLICY_MODE    query(기본 — --query 를 따름) · envelope(--query 를
 #                           무시하고 봉투째 냄).
+#   FAKE_AWS_CLI_HISTORY    configure get cli_history 의 답. 비면 값 없음(빈 출력
+#                           · 종료 1 — 진짜 CLI), fail 이면 설정 읽기 실패(종료
+#                           255), 그 밖이면 그 값.
+#   FAKE_AWS_ZONE_PAGE      존 목록 첫 줄(printf %b 로 펼침 — 기본
+#                           「False\tNone」, 잘린 목록은 「True\t…」 등).
+#   FAKE_AWS_BLOCK_FILE     호출마다 2-3 판정 증거 디렉터리
+#                           (~/.pokeclip-precheck/principal-*)에 이 이름의
+#                           디렉터리를 만든다 — 그 증거 파일 쓰기가 실패하게.
+#   FAKE_AWS_LOCK_EVIDENCE  비지 않으면 호출마다 그 증거 디렉터리를 쓸 수
+#                           없게(0500) 바꾼다.
 # 실패 응답의 표준 오류에는 일부러 가짜 계정 ID · 사용자 이름(읽기 호출은 요청한
 # 이름도)을 넣는다 — 호출하는 스크립트가 그것을 옮겨 적지 않는지 시험이 본다.
 
@@ -90,6 +105,22 @@ REGION_CONTEXT_PATTERN='"ContextKeyName":"aws:RequestedRegion",'
 REGION_CONTEXT_PATTERN+='"ContextKeyValues":\["([^"]*)"\],'
 REGION_CONTEXT_PATTERN+='"ContextKeyType":"string"'
 readonly REGION_CONTEXT_PATTERN
+# 2-3 판정 시뮬레이터 응답 꼴의 계약(lib/principal_simulate.sh 의 SIM_QUERY
+# 와 글자까지 같아야 한다 — 다르면 이 가짜의 5칸 답이 진짜 CLI 의 답이
+# 아니다).
+SIM_QUERY='EvaluationResults[0].[EvalDecision,'
+SIM_QUERY+='OrganizationsDecisionDetail.AllowedByOrganizations,'
+# shellcheck disable=SC2016 # 역따옴표는 JMESPath 리터럴이다.
+SIM_QUERY+='join(`","`,MissingContextValues||`[]`),'
+# shellcheck disable=SC2016 # 역따옴표는 JMESPath 리터럴이다.
+SIM_QUERY+='join(`","`,ResourceSpecificResults[].EvalResourceDecision||`[]`),'
+# shellcheck disable=SC2016 # 역따옴표는 JMESPath 리터럴이다.
+SIM_QUERY+='join(`","`,ResourceSpecificResults[].MissingContextValues[]||`[]`)]'
+readonly SIM_QUERY
+# 존 목록 응답 꼴의 계약(lib/principal_resolve.sh 의 ZONE_QUERY).
+ZONE_QUERY='[IsTruncated,NextDNSName,'
+ZONE_QUERY+='HostedZones[].[Name,Id,Config.PrivateZone]]'
+readonly ZONE_QUERY
 
 #######################################
 # 옵션 값을 찾는다(「--이름 값」 꼴).
@@ -331,7 +362,8 @@ principal_simulate() {
       invalid_request "자원 정책이 있는데 CallerArn 없음"
     policy=policy
   fi
-  [[ -n "$(option_value --query "$@")" ]] || invalid_request "--query 없음"
+  [[ "$(option_value --query "$@")" == "${SIM_QUERY}" ]] ||
+    invalid_request "--query 가 응답 꼴 계약(SIM_QUERY)과 다름"
   key="${source##*/}@${action}@${resource}@${region}@${policy}"
   rest="$(table_lookup "${FAKE_AWS_SIM_TABLE:-}" "${key}" glob)" ||
     rest=$'implicitDeny\tNone\t-\t-\t-'
@@ -376,18 +408,23 @@ read_failed() {
 
 #######################################
 # 정책 원문을 진짜 CLI 처럼 낸다 — --query <정책 칸> --output text 면 원문
-# 그대로, 봉투 모드 · --query 가 다르면 정책이 escape 된 문자열로 든 JSON.
+# 그대로, --query 가 다른 칸이면 None(칸 없음), 봉투 모드 · --query 가
+# 없으면 정책이 escape 된 문자열로 든 JSON.
 # Globals:
 #   FAKE_AWS_POLICY_MODE
 # Arguments:
 #   정책 칸 이름, 정책 원문, 받은 argv 전체.
 #######################################
 print_policy() {
-  local field="$1" policy="$2" escaped
+  local field="$1" policy="$2" query escaped
   shift 2
-  if [[ "${FAKE_AWS_POLICY_MODE:-query}" != envelope &&
-    "$(option_value --query "$@")" == "${field}" ]]; then
-    printf '%s\n' "${policy}"
+  query="$(option_value --query "$@")"
+  if [[ "${FAKE_AWS_POLICY_MODE:-query}" != envelope && -n "${query}" ]]; then
+    if [[ "${query}" == "${field}" ]]; then
+      printf '%s\n' "${policy}"
+    else
+      printf 'None\n'
+    fi
     return
   fi
   escaped="${policy//\\/\\\\}"
@@ -418,6 +455,10 @@ table_read() {
     [[ -n "$(option_value --region "$@")" ]] || invalid_request "--region 없음"
     name+="@$(option_value --region "$@")"
   fi
+  if [[ "${call}" == list-hosted-zones-by-name ]]; then
+    [[ "$(option_value --query "$@")" == "${ZONE_QUERY}" ]] ||
+      invalid_request "--query 가 존 목록 응답 꼴 계약(ZONE_QUERY)과 다름"
+  fi
   if ! answer="$(table_lookup "${FAKE_AWS_READS:-}" \
     "${call}"$'\t'"${name}" exact)"; then
     case "${call}" in
@@ -439,6 +480,9 @@ table_read() {
       fi
       ;;
     get-repository-policy) print_policy policyText "${answer}" "$@" ;;
+    list-hosted-zones-by-name)
+      printf '%b\n' "${FAKE_AWS_ZONE_PAGE:-False\tNone}" "${answer}"
+      ;;
     *) printf '%b\n' "${answer}" ;;
   esac
 }
@@ -526,6 +570,47 @@ lookup_events() {
 }
 
 #######################################
+# aws configure get cli_history(머리 주석의 FAKE_AWS_CLI_HISTORY).
+# Globals:
+#   FAKE_AWS_CLI_HISTORY, USER_NAME
+# Arguments:
+#   받은 argv 전체.
+#######################################
+configure_get() {
+  if [[ "${3:-}" != cli_history ]]; then
+    printf 'fake aws: 모르는 설정 키\n' >&2
+    exit 252
+  fi
+  case "${FAKE_AWS_CLI_HISTORY:-}" in
+    '') exit 1 ;;
+    fail)
+      printf 'The config profile (%s) could not be found\n' "${USER_NAME}" >&2
+      exit 255
+      ;;
+    *) printf '%s\n' "${FAKE_AWS_CLI_HISTORY}" ;;
+  esac
+}
+
+#######################################
+# 2-3 판정 증거 디렉터리의 쓰기를 막는다(FAKE_AWS_BLOCK_FILE ·
+# FAKE_AWS_LOCK_EVIDENCE). 디렉터리가 아직 없으면 아무것도 하지 않는다.
+# Globals:
+#   HOME, FAKE_AWS_BLOCK_FILE, FAKE_AWS_LOCK_EVIDENCE
+#######################################
+block_evidence() {
+  local dir
+  for dir in "${HOME}"/.pokeclip-precheck/principal-*; do
+    [[ -d "${dir}" ]] || continue
+    if [[ -n "${FAKE_AWS_BLOCK_FILE:-}" ]]; then
+      mkdir -p -- "${dir}/${FAKE_AWS_BLOCK_FILE}" 2>/dev/null
+    fi
+    if [[ -n "${FAKE_AWS_LOCK_EVIDENCE:-}" ]]; then
+      chmod 500 -- "${dir}" 2>/dev/null
+    fi
+  done
+}
+
+#######################################
 # argv 를 기록하고 흉내 낼 호출로 보낸다(모르는 호출은 실패).
 # Globals:
 #   FAKE_AWS_LOG
@@ -538,7 +623,9 @@ main() {
     exit 252
   }
   printf '%s\n' "$*" >>"${FAKE_AWS_LOG}"
+  block_evidence
   case "${1:-} ${2:-}" in
+    "configure get") configure_get "$@" ;;
     "sts get-caller-identity") caller_identity "$@" ;;
     "iam simulate-principal-policy") simulate "$@" ;;
     "cloudtrail lookup-events") lookup_events "$@" ;;

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # principal-check.sh 를 시험한다 — 계획 M17b r3.1 3-1 사례 1 ~ 25(갈래 A ·
-# SCP 제외 (가) · 알림 주체 없음).
+# SCP 제외 (가) · 알림 주체 없음)와 r1 검수 지적의 사례 26 ~ 31.
 #
 # 사례마다 점검 스크립트의 사본 트리를 만들고 data/principal_sim/ 에 고정
 # 입력(주체 넷 · 양성 대조 · prod 대상 행)을 넣는다. 실제 데이터는
@@ -12,8 +12,9 @@
 # 유출 표식: 계정 ID · 호출 주체(testlib) 말고도 인스턴스 프로필 · 역할 ·
 # 사용자 · 그룹 · 고객 관리형 정책 · 버킷 · 저장소 · 비밀 · 존 이름에 서로
 # 다른 표식을 쓴다. 모든 사례가 끝에 표준 출력 · 표준 오류 · 가짜 aws argv ·
-# 증거 루트 밖 파일에 표식이 0건인지, 표준 출력 · 표준 오류에 절대 경로가
-# 0건인지 본다(사례 22).
+# 증거 루트 밖 파일(사례의 HOME · 출력 · 작업 디렉터리)에 표식이 0건인지,
+# 표준 출력 · 표준 오류에 절대 경로가 0건인지 본다(사례 22). 래퍼는 사례의
+# cwd/ 를 작업 디렉터리로 삼아 돈다.
 #
 # 사용: bash infra/terraform/scripts/precheck/tests/principal_check_test.sh
 # 종료 코드: 0 전부 통과 / 1 하나라도 실패
@@ -192,6 +193,7 @@ write_tables() {
 new_tree_case() {
   local case_dir
   case_dir="$(testlib::new_case)" || return 1
+  mkdir -- "${case_dir}/cwd" || return 1
   testlib::make_principal_tree "${case_dir}/tree" 2>/dev/null || return 1
   write_data "${case_dir}/tree/data/principal_sim" || return 1
   write_tables "${case_dir}" || return 1
@@ -211,8 +213,9 @@ prepend() {
 }
 
 #######################################
-# 사본 트리의 principal-check.sh 를 제한 시간 안에서 돌린다. 「이름=값」 꼴
-# 인자는 환경으로 넘긴다(FAKE_AWS_*). 읽기 · 시뮬레이터 표는 사례의 in/ 것.
+# 사본 트리의 principal-check.sh 를 사례의 cwd/ 에서 제한 시간 안에 돌린다.
+# 「이름=값」 꼴 인자는 환경으로 넘긴다(FAKE_AWS_* · AWS_CLI_HISTORY_FILE).
+# 읽기 · 시뮬레이터 표는 사례의 in/ 것.
 # Globals:
 #   RUN_LIMIT
 # Arguments:
@@ -223,12 +226,15 @@ run_check() {
   local -a envs=("FAKE_AWS_READS=${case_dir}/in/reads.tsv"
     "FAKE_AWS_SIM_TABLE=${case_dir}/in/sim.tsv")
   shift 2
-  while [[ "$#" -gt 0 && "$1" == FAKE_AWS_*=* ]]; do
+  while [[ "$#" -gt 0 && ( "$1" == FAKE_AWS_*=* ||
+    "$1" == AWS_CLI_HISTORY_FILE=* ) ]]; do
     envs+=("$1")
     shift
   done
+  # shellcheck disable=SC2016 # 안쪽 bash 가 펼친다.
   testlib::run_limited "${RUN_LIMIT}" "${case_dir}" "${name}" \
-    env "${envs[@]}" bash "${case_dir}/tree/principal-check.sh" "$@"
+    env "${envs[@]}" bash -c 'cd -- "$1" && shift && exec bash "$@"' _ \
+    "${case_dir}/cwd" "${case_dir}/tree/principal-check.sh" "$@"
 }
 
 #######################################
@@ -312,8 +318,9 @@ expect_rows() {
 }
 
 #######################################
-# 사례 22: 표준 출력 · 표준 오류 · 가짜 aws argv · 증거 루트 밖 파일에 유출
-# 표식이 0건이고, 표준 출력 · 표준 오류에 절대 경로가 0건인지 본다.
+# 사례 22: 표준 출력 · 표준 오류 · 가짜 aws argv · 증거 루트 밖 파일(HOME ·
+# 출력 · 작업 디렉터리)에 유출 표식이 0건이고, 표준 출력 · 표준 오류에 절대
+# 경로가 0건인지 본다.
 # Globals:
 #   FAKE_ACCOUNT, FAKE_USER, MARK_*
 # Arguments:
@@ -324,7 +331,8 @@ expect_rows() {
 expect_no_leak() {
   local name="$1" case_dir="$2" root file leaked="" paths
   root="${case_dir}/home/.pokeclip-precheck"
-  if [[ ! -d "${case_dir}/home" || ! -d "${case_dir}/out" ]]; then
+  if [[ ! -d "${case_dir}/home" || ! -d "${case_dir}/out" ||
+    ! -d "${case_dir}/cwd" ]]; then
     testlib::fail "${name}: 훑을 사례 디렉터리가 없음"
     return 1
   fi
@@ -336,7 +344,8 @@ expect_no_leak() {
       -e "${MARK_SECRET}" -e "${MARK_ZONE}" -e 'arn:aws' -- "${file}"; then
       leaked+=" ${file##*/}"
     fi
-  done < <(find "${case_dir}/home" "${case_dir}/out" -type f -print0)
+  done < <(find "${case_dir}/home" "${case_dir}/out" "${case_dir}/cwd" \
+    -type f -print0)
   if [[ -n "${leaked}" ]]; then
     testlib::fail "${name}: 증거 루트 밖에 표식 ·${leaked}"
     return 1
@@ -478,7 +487,8 @@ expect_pc0_pc1_order() {
     expect_unverifiable "${name}" || return
     log="${case_dir}/out/aws.log"
     sims="$(testlib::count "${log}" 'iam simulate-principal-policy')"
-    others="$(grep -vE -- '^sts get-caller-identity ' "${log}" |
+    others="$(grep -vE -- \
+      '^(sts get-caller-identity |configure get cli_history$)' "${log}" |
       grep -cvE -- '^iam simulate-principal-policy ')"
     # PC1 은 리전 둘(ap-northeast-2 · us-east-1) — 거부가 첫 리전이면 2회.
     if [[ "${others}" -ne 0 ]] ||
@@ -522,8 +532,8 @@ expect_request_shape() {
     testlib::fail "request-shape: 요청 계약 위반 —${problems:- 요청 없음}"
     return
   fi
-  bad="$(grep -vE -- '^sts get-caller-identity ' "${case_dir}/out/aws.log" |
-    grep -cvF -- '--cli-input-json file://')"
+  bad="$(grep -vE -- '^(sts get-caller-identity |configure get cli_history$)' \
+    "${case_dir}/out/aws.log" | grep -cvF -- '--cli-input-json file://')"
   if [[ "${bad}" -ne 0 ]]; then
     testlib::fail "request-shape: --cli-input-json file:// 아닌 호출 ${bad}건"
     return
@@ -1262,6 +1272,270 @@ expect_branch_check() {
     "ⓐ 허용 · ⓑ 거부면 갈래 B 로 판정 · report.txt 기록"
 }
 
+#######################################
+# 사례 26: CLI 기록 — 프로필의 cli_history 가 enabled 이거나
+# AWS_CLI_HISTORY_FILE 이 설정돼 있으면 AWS 호출 0건으로 종료 2(값 · 경로를
+# 되울리지 않음), 설정 읽기 실패도 종료 2, disabled 면 정상.
+# Globals:
+#   run_out
+#######################################
+expect_cli_history() {
+  local case_dir spec name calls
+  for spec in enabled file fail disabled; do
+    name="cli-history-${spec}"
+    case_dir="$(new_tree_case)" || {
+      testlib::fail "${name}: 시험 준비 실패"
+      return
+    }
+    case "${spec}" in
+      file)
+        run_check "${case_dir}" "${name}" \
+          "AWS_CLI_HISTORY_FILE=${case_dir}/in/qxhistory.db" O7a
+        ;;
+      *) run_check "${case_dir}" "${name}" "FAKE_AWS_CLI_HISTORY=${spec}" O7a ;;
+    esac
+    if [[ "${spec}" == disabled ]]; then
+      expect_result "${name}" 0 "PRINCIPAL CHECK PASS ${NORMAL_ROWS}" || return
+      continue
+    fi
+    expect_unverifiable "${name}" || return
+    calls="$(testlib::count "${case_dir}/out/aws.log" ' ')"
+    if [[ "${calls}" -gt 1 ]] ||
+      grep -qF -e qxhistory -e enabled -- "${run_out}.stderr"; then
+      testlib::fail "${name}: AWS 호출 ${calls}건이거나 값 · 경로를 되울림 —" \
+        "$(cat -- "${run_out}.stderr")"
+      return
+    fi
+    if [[ "${spec}" != fail ]]; then
+      testlib::expect_stderr_count "${name}" \
+        'CLI 기록이 켜져 있음 — 증거 밖에 원문이 남음' 1 || return
+    fi
+    expect_no_leak "${name}" "${case_dir}" || return
+  done
+  testlib::ok "26 cli-history → enabled · 기록 파일 환경 변수 · 설정 읽기 실패는" \
+    "AWS 호출 0건으로 종료 2 · disabled 는 정상"
+}
+
+#######################################
+# 사본 트리의 lib/ 파일 하나를 sed 식으로 바꾼다(계약 어긋남을 만든다).
+# Arguments:
+#   사례 디렉터리, lib/ 안의 파일 이름, sed 식.
+#######################################
+edit_lib() {
+  local file="$1/tree/lib/$2"
+  sed -e "$3" -- "${file}" >"${file}.new" && mv -- "${file}.new" "${file}"
+}
+
+#######################################
+# 사례 27: 시뮬레이터 응답 계약 — 최상위 판정이 목록 꼴이면 종료 2, 래퍼의
+# 응답 질의(SIM_QUERY)가 가짜 aws 의 계약과 다르면(칸 경로 오타) 종료 2.
+#######################################
+expect_simulator_contract() {
+  local case_dir
+  case_dir="$(new_tree_case)" || {
+    testlib::fail "top-decision: 시험 준비 실패"
+    return
+  }
+  prepend "${case_dir}/in/sim.tsv" \
+    "$(testlib::tsv "${MARK_ROLE}-oidc@ecr:PutImage@*" implicitDeny,allowed \
+      None - implicitDeny -)"
+  run_check "${case_dir}" top-decision-list O7a
+  expect_unverifiable top-decision-list || return
+  testlib::expect_stderr_count top-decision-list '시뮬레이터 판정을 모름' 1 ||
+    return
+  expect_no_leak top-decision-list "${case_dir}" || return
+  case_dir="$(new_tree_case)" || return
+  if ! edit_lib "${case_dir}" principal_simulate.sh \
+    's/OrganizationsDecisionDetail\.AllowedByOrganizations/AllowedByOrgs/'; then
+    testlib::fail "sim-query: 시험 준비 실패"
+    return
+  fi
+  run_check "${case_dir}" sim-query O7a
+  expect_unverifiable sim-query || return
+  testlib::expect_stderr_count sim-query '시뮬레이터 호출 실패' 1 || return
+  expect_no_leak sim-query "${case_dir}" || return
+  testlib::ok "27 simulator-contract → 최상위 판정 목록 꼴 · 응답 질의가 계약과" \
+    "다름은 종료 2"
+}
+
+#######################################
+# 사례 28: 해석 응답 — get-role · get-user 가 성공인데 ARN 이 없으면 종료 2
+# (PRINCIPAL_MISSING 아님), 존 목록이 잘렸으면(IsTruncated · NextDNSName)
+# 종료 2.
+#######################################
+expect_resolution_responses() {
+  local case_dir spec name
+  for spec in get-role get-user True:None False:zz-next.test.; do
+    name="empty-${spec}"
+    case_dir="$(new_tree_case)" || {
+      testlib::fail "${name}: 시험 준비 실패"
+      return
+    }
+    case "${spec}" in
+      get-role)
+        prepend "${case_dir}/in/reads.tsv" \
+          "$(testlib::tsv get-role "${MARK_ROLE}-oidc" '')"
+        run_check "${case_dir}" "${name}" O7a
+        ;;
+      get-user)
+        prepend "${case_dir}/in/reads.tsv" \
+          "$(testlib::tsv get-user "${MARK_USER}-deploy" '')"
+        run_check "${case_dir}" "${name}" O7a
+        ;;
+      *)
+        name="zone-truncated-${spec%%:*}"
+        run_check "${case_dir}" "${name}" \
+          "FAKE_AWS_ZONE_PAGE=${spec%%:*}\\t${spec#*:}" O7a
+        ;;
+    esac
+    expect_unverifiable "${name}" || return
+    if [[ "${name}" == empty-* ]]; then
+      testlib::expect_stderr_count "${name}" '주체 응답에 ARN 이 하나가 아님' \
+        1 || return
+    else
+      testlib::expect_stderr_count "${name}" '존 목록이 잘림' 1 || return
+    fi
+    expect_no_leak "${name}" "${case_dir}" || return
+  done
+  testlib::ok "28 resolution → 역할 · 사용자 빈 성공 응답 · 잘린 존 목록은 종료 2"
+}
+
+#######################################
+# ECR 저장소 정책 답을 넣는다.
+# Arguments:
+#   사례 디렉터리, 정책 원문.
+#######################################
+set_repo_policy() {
+  prepend "$1/in/reads.tsv" \
+    "$(testlib::tsv get-repository-policy "${REPO_ARN#*:repository/}" "$2")"
+}
+
+#######################################
+# 사례 29: 정책 읽기 — S3 · ECR 성공 응답의 None(칸 없음) · 정책 칸 이름
+# 오타(진짜 CLI 처럼 None)는 종료 2(None 은 비밀만 「정책 없음」), 버킷 정책
+# 읽기에 --region, ECR Allow 정책 + 갈래 B 는 역할 행 UNSIMULATED · 사용자
+# 요청에 정책 · CallerArn.
+#######################################
+expect_policy_reads() {
+  local case_dir spec policy log
+  for spec in s3-none ecr-none s3-query; do
+    case_dir="$(new_tree_case)" || {
+      testlib::fail "${spec}: 시험 준비 실패"
+      return
+    }
+    case "${spec}" in
+      s3-none) set_bucket_policy "${case_dir}" None ;;
+      ecr-none) set_repo_policy "${case_dir}" None ;;
+      *)
+        edit_lib "${case_dir}" principal_policy.sh \
+          's/--query Policy /--query Polciy /'
+        ;;
+    esac || return
+    run_check "${case_dir}" "${spec}" O7a
+    expect_unverifiable "${spec}" || return
+    testlib::expect_stderr_count "${spec}" '자원 정책 응답이 None' 1 || return
+    expect_no_leak "${spec}" "${case_dir}" || return
+  done
+  case_dir="$(new_tree_case)" || return
+  policy='{"Version":"2012-10-17","Statement":[{"Effect":"Allow",'
+  policy+="\"Principal\":{\"AWS\":\"${USER_DEPLOY}\"},"
+  policy+='"Action":"ecr:PutImage"}]}'
+  set_repo_policy "${case_dir}" "${policy}"
+  prepend "${case_dir}/in/sim.tsv" \
+    "$(testlib::tsv "${MARK_ROLE}-oidc@s3:ListBucket@${PCA_SAMPLE}@*@policy" \
+      implicitDeny None - - -)"
+  run_check "${case_dir}" ecr-allow-branch-b O7a
+  expect_result ecr-allow-branch-b 3 'PRINCIPAL CHECK UNDECIDED 2' || return
+  expect_rows ecr-allow-branch-b \
+    '| prod-ecr | ecr:PutImage | ap-northeast-2 | 판정 불가 |' 2 || return
+  expect_rows ecr-allow-branch-b 'RESOURCE_POLICY_UNSIMULATED' 2 || return
+  log="${case_dir}/out/aws.log"
+  if [[ "$(count_requests "$(evidence_dir "${case_dir}")" "${REPO_ARN}" \
+    "\"CallerArn\":\"${USER_DEPLOY}\"")" -ne 1 ]] ||
+    [[ "$(grep -c -- "--resource-policy file://.*/policy-" "${log}")" -ne 1 ]] ||
+    [[ "$(grep -c '^s3api get-bucket-policy ' "${log}")" -lt 1 ||
+    "$(grep '^s3api get-bucket-policy ' "${log}" |
+      grep -cvF -- '--region ap-northeast-2')" -ne 0 ]]; then
+    testlib::fail "ecr-allow-branch-b: 사용자 요청에 정책 · CallerArn 이 없거나" \
+      "버킷 정책 읽기에 --region 이 없음"
+    return
+  fi
+  expect_no_leak ecr-allow-branch-b "${case_dir}" || return
+  testlib::ok "29 policy-reads → S3 · ECR 의 None · 칸 이름 오타는 종료 2 ·" \
+    "버킷 정책 --region · ECR Allow + 갈래 B 는 역할 UNSIMULATED · 사용자에 정책"
+}
+
+#######################################
+# 사례 30: 이스케이프된 정책 — 「\/」(역할 세션 ARN 을 숨김) · 「\u」 만 든
+# 정책은 그 자원의 모든 주체 행이 POLICY_ESCAPED. 「\u」 Allow 정책은 갈래
+# B 에서도 사용자 요청에 정책 · CallerArn 을 붙인다(Allow 검사의 「\u」 갈래).
+#######################################
+expect_escaped_policy() {
+  local case_dir spec policy
+  for spec in slash unicode; do
+    case_dir="$(new_tree_case)" || {
+      testlib::fail "escaped-${spec}: 시험 준비 실패"
+      return
+    }
+    if [[ "${spec}" == slash ]]; then
+      policy='{"Version":"2012-10-17","Statement":[{"Effect":"Deny",'
+      policy+="\"Principal\":{\"AWS\":\"arn:aws:sts::${FAKE_ACCOUNT}:"
+      policy+="assumed-role\\/${MARK_ROLE}-x\\/s\"},\"Action\":\"s3:*\","
+    else
+      policy='{"Version":"2012-10-17","Statement":[{"Effect":"\u0041llow",'
+      policy+="\"Principal\":{\"AWS\":\"${USER_DEPLOY}\"},"
+      policy+='"Action":"s3:GetObject",'
+      prepend "${case_dir}/in/sim.tsv" \
+        "$(testlib::tsv \
+          "${MARK_ROLE}-oidc@s3:ListBucket@${PCA_SAMPLE}@*@policy" \
+          implicitDeny None - - -)"
+    fi
+    policy+="\"Resource\":\"${STATE_BUCKET}\"}]}"
+    set_bucket_policy "${case_dir}" "${policy}"
+    run_check "${case_dir}" "escaped-${spec}" O7a
+    expect_result "escaped-${spec}" 3 'PRINCIPAL CHECK UNDECIDED 9' || return
+    expect_rows "escaped-${spec}" 'POLICY_ESCAPED' 9 || return
+    if [[ "${spec}" == unicode ]] &&
+      [[ "$(count_requests "$(evidence_dir "${case_dir}")" \
+        "\"CallerArn\":\"${USER_DEPLOY}\"" \
+        "\"PolicySourceArn\":\"${USER_DEPLOY}\"")" -ne 3 ]]; then
+      testlib::fail "escaped-unicode: 「\\u」 Allow 정책이 사용자 요청에 붙지 않음"
+      return
+    fi
+    expect_no_leak "escaped-${spec}" "${case_dir}" || return
+  done
+  testlib::ok "30 escaped → 「\\/」 · 「\\u」 정책은 POLICY_ESCAPED 9 · 「\\u」" \
+    "Allow 는 사용자 요청에 정책 · CallerArn"
+}
+
+#######################################
+# 사례 31: 증거 쓰기 실패 — 증거 디렉터리를 쓸 수 없게 되거나 증거 파일
+# 자리마다 쓰기가 실패하면 종료 2 이고, 표준 오류에 bash 원시 진단(절대
+# 경로)이 없다.
+#######################################
+expect_evidence_write_failure() {
+  local case_dir spec name
+  for spec in lock sts.txt req-1.json res-1.err res-1.txt principals.tsv \
+    targets.tsv policy-1.json policies.tsv pca-policy.json result.tsv \
+    report.txt complete.txt.tmp; do
+    name="write-${spec}"
+    case_dir="$(new_tree_case)" || {
+      testlib::fail "${name}: 시험 준비 실패"
+      return
+    }
+    if [[ "${spec}" == lock ]]; then
+      run_check "${case_dir}" "${name}" FAKE_AWS_LOCK_EVIDENCE=1 O7a
+    else
+      run_check "${case_dir}" "${name}" "FAKE_AWS_BLOCK_FILE=${spec}" O7a
+    fi
+    expect_unverifiable "${name}" || return
+    testlib::expect_stderr_count "${name}" '증거를 쓰지 못함' 1 || return
+    expect_no_leak "${name}" "${case_dir}" || return
+  done
+  testlib::ok "31 evidence-write → 증거 디렉터리 잠김 · 파일 자리 12곳의 쓰기" \
+    "실패는 종료 2 · 표준 오류에 절대 경로 0"
+}
+
 main() {
   testlib::init principal_check_test
   expect_normal
@@ -1283,6 +1557,12 @@ main() {
   expect_data_shape
   expect_counting
   expect_branch_check
+  expect_cli_history
+  expect_simulator_contract
+  expect_resolution_responses
+  expect_policy_reads
+  expect_escaped_policy
+  expect_evidence_write_failure
   testlib::finish principal_check_test
 }
 

@@ -12,20 +12,25 @@
 #   secretsmanager secretsmanager get-resource-policy(SecretId)
 #                  --query ResourcePolicy(칸이 없으면 None)
 #   ecr            ecr get-repository-policy(repositoryName) --query policyText
-# 「정책 없음」 = 버킷 정책 없음 · 저장소 정책 없음 오류 코드와 비밀의 None.
-# 그 밖 오류는 종료 2 다. 「없음」 이 아닌데 파일이 「{」 로 시작하지 않거나
-# "Statement" 를 담지 않으면(봉투째 · escape 가 남은 저장) 종료 2 다.
-# 같은 대상(버킷 · 비밀 · 저장소)은 한 번만 읽는다.
+# 셋 모두 행의 리전(--region)으로 부른다. 「정책 없음」 = 버킷 정책 없음 ·
+# 저장소 정책 없음 오류 코드와 비밀의 None. None 을 「없음」 으로 받는 것은
+# 비밀뿐이다 — S3 · ECR 의 성공 응답 None(정책 칸 없음 · 칸 이름 오타)은
+# 종료 2 다. 그 밖 오류도 종료 2 다. 「없음」 이 아닌데 파일이 「{」 로
+# 시작하지 않거나 "Statement" 를 담지 않으면(봉투째 · escape 가 남은 저장)
+# 종료 2 다. 같은 대상(버킷 · 비밀 · 저장소)은 한 번만 읽는다.
 #
 # 정책 상태: none(정책 없음) · deny(Allow 없음 — 정책 없이 판정) ·
 # allow(「"Allow"」 또는 「\u」 가 있음) · session(「assumed-role/」 이 있음 —
-# 그 자원의 모든 주체 행이 SESSION_PRINCIPAL_IN_POLICY).
+# 그 자원의 모든 주체 행이 SESSION_PRINCIPAL_IN_POLICY). 따로, 원문에 JSON
+# 이스케이프(「\/」 · 「\u」)가 있으면 문자열 검사(세션 ARN · Allow)를 믿을 수
+# 없어 그 자원의 모든 주체 행이 POLICY_ESCAPED 다(pol_escaped).
 
-# 읽은 정책(같은 색인): 읽기 방법 · 대상 · 상태 · 파일.
+# 읽은 정책(같은 색인): 읽기 방법 · 대상 · 상태 · 파일 · 이스케이프 여부(1).
 pol_read=()
 pol_subject=()
 pol_state=()
 pol_file=()
+pol_escaped=()
 policy_n=0
 # policy_for 가 남기는 정책 색인(정책을 읽지 않는 행이면 빈 값).
 found_policy=""
@@ -55,20 +60,21 @@ policy_subject() {
 #######################################
 # 정책 하나를 읽어 pol_* 에 더한다.
 # Globals:
-#   pol_read, pol_subject, pol_state, pol_file, policy_n, call_out, call_err,
-#   evidence_dir, req_n
+#   pol_read, pol_subject, pol_state, pol_file, pol_escaped, policy_n,
+#   call_out, call_err, evidence_dir, req_n
 # Arguments:
 #   읽기 방법, 대상, 리전.
 #######################################
 read_policy() {
   local read="$1" subject="$2" region="$3" file state=deny absent="" status=0
+  local escaped=0
   policy_n=$((policy_n + 1))
   file="${evidence_dir}/policy-${policy_n}.json"
   case "${read}" in
     s3)
       absent='(NoSuchBucketPolicy)'
       aws_call "{\"Bucket\":\"${subject}\"}" s3api get-bucket-policy \
-        --query Policy || status=$?
+        --region "${region}" --query Policy || status=$?
       ;;
     secretsmanager)
       aws_call "{\"SecretId\":\"${subject}\"}" secretsmanager \
@@ -88,9 +94,11 @@ read_policy() {
     fi
     state=none
   elif [[ "${call_out}" == None ]]; then
+    [[ "${read}" == secretsmanager ]] ||
+      die "자원 정책 응답이 None(res-${req_n}.txt — 정책 칸 없음)"
     state=none
   else
-    printf '%s\n' "${call_out}" >"${file}" || die "증거를 쓰지 못함"
+    write_evidence "${file}" '%s\n' "${call_out}"
     if [[ "${call_out}" != '{'* || "${call_out}" != *'"Statement"'* ]]; then
       die "정책 파일 꼴이 아님(policy-${policy_n}.json — 봉투째 · escape 저장)"
     fi
@@ -99,11 +107,15 @@ read_policy() {
     elif [[ "${call_out}" == *'"Allow"'* || "${call_out}" == *'\u'* ]]; then
       state=allow
     fi
+    if [[ "${call_out}" == *'\/'* || "${call_out}" == *'\u'* ]]; then
+      escaped=1
+    fi
   fi
   pol_read+=("${read}")
   pol_subject+=("${subject}")
   pol_state+=("${state}")
   pol_file+=("${file}")
+  pol_escaped+=("${escaped}")
 }
 
 #######################################
@@ -155,6 +167,5 @@ read_policies() {
     record+="${pol_file[i]##*/}"$'\t'"${pol_read[i]}"$'\t'
     record+="${pol_subject[i]}"$'\t'"${pol_state[i]}"$'\n'
   done
-  printf '%s' "${record}" >"${evidence_dir}/policies.tsv" ||
-    die "증거를 쓰지 못함"
+  write_evidence "${evidence_dir}/policies.tsv" '%s' "${record}"
 }

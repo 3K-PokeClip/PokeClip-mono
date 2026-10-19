@@ -19,7 +19,8 @@
 # 응답은 SIM_QUERY 로 뽑은 한 줄 「최상위 판정<탭>조직 판정<탭>최상위 누락
 # 문맥<탭>자원별 판정<탭>자원별 누락 문맥」 이다(목록 칸은 쉼표 구분 · 빈 칸
 # 가능, 조직 판정 칸이 없으면 None — SCP 제외 응답의 꼴). 꼴이 다르거나,
-# 판정이 allowed · implicitDeny · explicitDeny 밖이거나, 조직 판정이 False
+# 최상위 판정이 allowed · implicitDeny · explicitDeny 가운데 정확히 하나가
+# 아니거나, 자원별 판정 목록에 그 밖의 값이 있거나, 조직 판정이 False
 # (제외가 먹지 않음) · 불리언 아님이면 종료 2 다.
 
 SIM_QUERY='EvaluationResults[0].[EvalDecision,'
@@ -122,8 +123,10 @@ read_response() {
   out="${out#*"${tab}"}"
   decisions="${out%%"${tab}"*}"
   resource_missing="${out#*"${tab}"}"
-  decisions_ok "${sim_decision}" && [[ -n "${sim_decision}" ]] ||
-    die "시뮬레이터 판정을 모름(res-${req_n}.txt)"
+  case "${sim_decision}" in
+    allowed | implicitDeny | explicitDeny) ;;
+    *) die "시뮬레이터 판정을 모름(res-${req_n}.txt)" ;;
+  esac
   decisions_ok "${decisions}" ||
     die "시뮬레이터 자원별 판정을 모름(res-${req_n}.txt)"
   case "${orgs}" in

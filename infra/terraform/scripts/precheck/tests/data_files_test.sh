@@ -792,8 +792,10 @@ expect_dev_principals() {
 }
 
 #######################################
-# 데이터 단언: PRINCIPAL_READS(동작 · 리전)가 판정 묶음 11개 모두에 있고,
-# 판정이 없는 묶음에는 그 동작이 없다(STAGE_OWN_READS 의 묶음 동작은 뺌).
+# 데이터 단언: PRINCIPAL_READS(동작 · 리전)가 판정 묶음 11개 모두에 자원
+# 「*」 로 있고(래퍼가 읽는 dev 주체 · 대상은 단계 자원 경로 밖이다 — 예 dev
+# 역할의 get-role), 판정이 없는 묶음에는 그 동작이 없다(STAGE_OWN_READS 의
+# 묶음 동작은 뺌).
 # Globals:
 #   JUDGED_BUNDLES, UNJUDGED_BUNDLES, PRINCIPAL_READS, STAGE_OWN_READS,
 #   STAGE_DIR
@@ -802,11 +804,11 @@ expect_principal_reads() {
   local bundle pairs actions read own
   own="$(printf '%s\n' "${STAGE_OWN_READS[@]}")"
   for bundle in "${JUDGED_BUNDLES[@]}"; do
-    pairs="$(data_rows "${STAGE_DIR}/${bundle}.tsv" | cut -f 1,2 |
+    pairs="$(data_rows "${STAGE_DIR}/${bundle}.tsv" | cut -f 1,2,3 |
       tr '\t' ' ')"
     for read in "${PRINCIPAL_READS[@]}"; do
-      if ! has_line "${pairs}" "${read}"; then
-        testlib::fail "principal-reads: ${bundle} 에 ${read} 없음"
+      if ! has_line "${pairs}" "${read} *"; then
+        testlib::fail "principal-reads: ${bundle} 에 ${read}(자원 *) 없음"
         return
       fi
     done
@@ -822,7 +824,7 @@ expect_principal_reads() {
       fi
     done
   done
-  testlib::ok "principal-reads → 래퍼 읽기 동작 · 리전이 판정 묶음 11개에만"
+  testlib::ok "principal-reads → 래퍼 읽기 동작 · 리전이 자원 * 로 판정 묶음 11개에만"
 }
 
 #######################################

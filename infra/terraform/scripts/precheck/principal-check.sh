@@ -4,10 +4,10 @@
 # AWS 정책 시뮬레이터로 읽기 전용 확인한다(계획 M17b r3.1 2절). 판정 엔진은
 # 짜지 않고 AWS 쓰기도 없다. 실제 접근을 시도하지 않는다.
 #
-# 순서(고정): (0) 사전 조건(단계 · 데이터 · 증거 디렉터리 · 호출 주체) →
-# (1) PC0 제외 대조 → (2) PC1 문맥 대조 → (3) 주체 · 대상 해석과 자원 정책
-# 읽기 → (4) PC2 주체 대조 → (4') PC-A 갈래 A 대조 → (5) 실제 질문 →
-# (6) 기록. PC0 · PC1 이 실패하면 (3) 이후의 호출은 0건이다.
+# 순서(고정): (0) 사전 조건(단계 · 데이터 · CLI 기록 꺼짐 · 증거 디렉터리 ·
+# 호출 주체) → (1) PC0 제외 대조 → (2) PC1 문맥 대조 → (3) 주체 · 대상
+# 해석과 자원 정책 읽기 → (4) PC2 주체 대조 → (4') PC-A 갈래 A 대조 →
+# (5) 실제 질문 → (6) 기록. PC0 · PC1 이 실패하면 (3) 이후의 호출은 0건이다.
 #
 # 모든 AWS 호출은 요청 본문을 증거의 req-<n>.json 에 쓰고
 # --cli-input-json file://… 로 넘긴다 — argv 에는 ARN · 계정 ID · 이름이
@@ -18,8 +18,13 @@
 # 묻고 allowed 가 아니면 종료 2. PC0 은 리전 값이 행의 리전이 아닌 유일한
 # 요청이다. PC1 은 이번 실행이 쓰는 리전마다 같은 질문을 묻는다.
 #
+# CLI 기록(프로필의 cli_history = enabled · 환경 변수 AWS_CLI_HISTORY_FILE)이
+# 켜져 있으면 첫 AWS 호출 전에 종료 2 다 — 요청 · 응답 원문이 증거 밖 기록
+# 파일에도 남기 때문이다.
+#
 # 행 판정(위부터): 허용 → 멈춤(ALLOWED) · 정책에 세션 ARN →
-# SESSION_PRINCIPAL_IN_POLICY · 읽기 방법 unread → RESOURCE_POLICY_UNREAD ·
+# SESSION_PRINCIPAL_IN_POLICY · 정책 원문에 JSON 이스케이프(「\/」 · 「\u」) →
+# POLICY_ESCAPED · 읽기 방법 unread → RESOURCE_POLICY_UNREAD ·
 # 갈래 B 에서 역할 주체 × Allow 를 가진 정책 → RESOURCE_POLICY_UNSIMULATED ·
 # 거부 + 누락 문맥 → MISSING_CONTEXT · 그 주체의 PC2 실패 →
 # POSITIVE_CONTROL_FAILED · 그 밖 → 통과. 주체 · 대상 단위 사유
@@ -33,10 +38,12 @@
 #   PRINCIPAL CHECK UNDECIDED <판정 불가 건수>  종료 3
 #   (첫 줄 없음 — 표준 오류에 「검사 불가」)     종료 2
 # 집계는 멈춤 > 판정 불가 > 통과. 종료 2 = 사용법 · 모르는 단계 · 데이터 꼴 ·
-# 증거 경로 거부 · IAM 사용자 아닌 호출 주체 · 호출 실패(NoSuchEntity 를 뺀
-# 주체 해석 오류 포함) · 호출 자체의 AccessDenied · 응답 꼴 · 정책 파일 꼴 ·
-# 존 해석 2건 이상 · PC0 · PC1 실패 · CLI 가 제외를 받지 않음(2.36.12 이상
-# 필요) · 조직 판정 False · 자원 정책 읽기의 「없음」 아닌 오류.
+# CLI 기록 켜짐 · 증거 경로 거부 · 증거 쓰기 실패 · IAM 사용자 아닌 호출
+# 주체 · 호출 실패(NoSuchEntity 를 뺀 주체 해석 오류 포함) · 호출 자체의
+# AccessDenied · 응답 꼴(역할 · 사용자 ARN 이 하나가 아님 · 최상위 판정이
+# 값 하나가 아님 포함) · 정책 파일 꼴 · S3 · ECR 정책 응답의 None · 존 해석
+# 2건 이상 · 잘린 존 목록 · PC0 · PC1 실패 · CLI 가 제외를 받지 않음(2.36.12
+# 이상 필요) · 조직 판정 False · 자원 정책 읽기의 「없음」 아닌 오류.
 #
 # 증거 디렉터리 ~/.pokeclip-precheck/principal-<단계>-<UTC 시각>: sts.txt ·
 # principals.tsv · targets.tsv · policies.tsv · policy-<n>.json ·
@@ -111,6 +118,20 @@ reason_counts=()
 die() {
   printf 'principal-check: 검사 불가: %s\n' "$*" >&2
   exit 2
+}
+
+#######################################
+# 증거 파일 하나를 printf 로 쓴다. 쓰지 못하면(디렉터리 권한 · 디스크 등)
+# bash 의 원시 진단(절대 경로가 든다)은 버리고 파일 이름만 적어 멈춘다.
+# Arguments:
+#   파일, printf 형식, 값들.
+#######################################
+write_evidence() {
+  local file="$1"
+  shift
+  # shellcheck disable=SC2059 # 형식은 부르는 쪽의 고정 값이다.
+  { printf "$@"; } 2>/dev/null >"${file}" ||
+    die "증거를 쓰지 못함(${file##*/})"
 }
 
 #######################################
@@ -191,12 +212,13 @@ aws_call() {
   req_n=$((req_n + 1))
   request="${evidence_dir}/req-${req_n}.json"
   call_err="${evidence_dir}/res-${req_n}.err"
-  printf '%s\n' "${body}" >"${request}" || die "증거를 쓰지 못함"
-  call_out="$(aws "$@" --cli-input-json "file://${request}" --output text \
-    2>"${call_err}")"
+  write_evidence "${request}" '%s\n' "${body}"
+  write_evidence "${call_err}" ''
+  # 바깥 2>/dev/null 은 안쪽 리다이렉션이 실패할 때의 원시 진단만 버린다.
+  call_out="$({ aws "$@" --cli-input-json "file://${request}" --output text \
+    2>"${call_err}"; } 2>/dev/null)"
   status=$?
-  printf '%s\n' "${call_out}" >"${evidence_dir}/res-${req_n}.txt" ||
-    die "증거를 쓰지 못함"
+  write_evidence "${evidence_dir}/res-${req_n}.txt" '%s\n' "${call_out}"
   return "${status}"
 }
 
@@ -223,10 +245,11 @@ fail_call() {
 #######################################
 caller_identity() {
   local out
-  out="$(aws sts get-caller-identity --query '[Arn,Account]' --output text \
-    2>"${evidence_dir}/sts.err")" ||
+  write_evidence "${evidence_dir}/sts.err" ''
+  out="$({ aws sts get-caller-identity --query '[Arn,Account]' \
+    --output text 2>"${evidence_dir}/sts.err"; } 2>/dev/null)" ||
     die "호출 주체를 확인하지 못함(증거 디렉터리의 sts.err)"
-  printf '%s\n' "${out}" >"${evidence_dir}/sts.txt" || die "증거를 쓰지 못함"
+  write_evidence "${evidence_dir}/sts.txt" '%s\n' "${out}"
   caller_arn="${out%%$'\t'*}"
   account="${out#*$'\t'}"
   if [[ "${out}" != *$'\t'* ]] || ! [[ "${account}" =~ ^[0-9]{12}$ ]]; then
@@ -348,10 +371,10 @@ ask_branch_control() {
   simulate ""
   first="${sim_class}"
   policy="${evidence_dir}/pca-policy.json"
-  printf '%s%s%s\n' '{"Version":"2012-10-17","Statement":[{"Effect":"Allow",' \
+  write_evidence "${policy}" '%s%s%s\n' \
+    '{"Version":"2012-10-17","Statement":[{"Effect":"Allow",' \
     "\"Principal\":{\"AWS\":\"${u_arn[unit]}\"},\"Action\":\"${PC_ACTION}\"," \
-    "\"Resource\":\"${PCA_SAMPLE_ARN}\"}]}" >"${policy}" ||
-    die "증거를 쓰지 못함"
+    "\"Resource\":\"${PCA_SAMPLE_ARN}\"}]}"
   ask "${u_arn[unit]}" "${PC_ACTION}" "${PCA_SAMPLE_ARN}" "${PCA_REGION}" "" \
     "${policy}"
   if [[ "${first}" != allow && "${sim_class}" == allow ]]; then
@@ -423,8 +446,8 @@ row_arns() {
 #######################################
 # (5) 실제 질문 하나를 묻고 행 판정을 기록한다(머리 주석의 순서).
 # Globals:
-#   u_*, t_*, pol_state, pol_file, found_policy, branch, context_json,
-#   sim_class, sim_decision, result, n_judged
+#   u_*, t_*, pol_state, pol_file, pol_escaped, found_policy, branch,
+#   context_json, sim_class, sim_decision, result, n_judged
 # Arguments:
 #   u_* 색인, t_* 색인, 자원 ARN, 동작.
 #######################################
@@ -444,6 +467,8 @@ judge_question() {
     verdict=STOP reason=ALLOWED
   elif [[ "${state}" == session ]]; then
     verdict=UNDECIDED reason=SESSION_PRINCIPAL_IN_POLICY
+  elif [[ -n "${found_policy}" && "${pol_escaped[found_policy]}" -eq 1 ]]; then
+    verdict=UNDECIDED reason=POLICY_ESCAPED
   elif [[ "${t_read[t]}" == unread ]]; then
     verdict=UNDECIDED reason=RESOURCE_POLICY_UNREAD
   elif [[ "${state}" == allow && -z "${file}" ]]; then
@@ -532,22 +557,39 @@ record_and_report() {
   for i in ${reason_names[@]+"${!reason_names[@]}"}; do
     reasons+="사유 ${reason_names[i]} ${reason_counts[i]}"$'\n'
   done
-  if ! printf '%s' "${result}" >"${evidence_dir}/result.tsv" ||
-    ! printf '%s\n%s%s%s\n%s' "${first}" "${table}" "${reasons}" \
-      "${branch_note}" "${notes}" >"${evidence_dir}/report.txt"; then
-    die "증거를 쓰지 못함(${evidence_dir##*/})"
-  fi
+  write_evidence "${evidence_dir}/result.tsv" '%s' "${result}"
+  write_evidence "${evidence_dir}/report.txt" '%s\n%s%s%s\n%s' "${first}" \
+    "${table}" "${reasons}" "${branch_note}" "${notes}"
   at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')" || die "완료 표지의 시각을 읽지 못함"
   sum="$(file_sha256 "${evidence_dir}/result.tsv")" ||
     die "결과 파일의 해시를 계산하지 못함(${evidence_dir##*/})"
-  if ! printf '%s\t%s\n' "${at}" "${sum}" \
-    >"${evidence_dir}/complete.txt.tmp" ||
-    ! mv -- "${evidence_dir}/complete.txt.tmp" \
-      "${evidence_dir}/complete.txt" 2>/dev/null; then
-    die "완료 표지를 쓰지 못함(${evidence_dir##*/})"
-  fi
+  write_evidence "${evidence_dir}/complete.txt.tmp" '%s\t%s\n' "${at}" "${sum}"
+  mv -- "${evidence_dir}/complete.txt.tmp" "${evidence_dir}/complete.txt" \
+    2>/dev/null || die "완료 표지를 쓰지 못함(${evidence_dir##*/})"
   printf '%s\n%s' "${first}" "${table}"
   return "${status}"
+}
+
+#######################################
+# CLI 기록이 꺼져 있는지 본다 — 켜져 있으면 요청 · 응답 원문이 증거 밖 기록
+# 파일에 남는다. 첫 AWS 호출 전에 부른다. 값 · 경로는 되울리지 않는다.
+# Globals:
+#   AWS_CLI_HISTORY_FILE
+#######################################
+check_cli_history() {
+  local value status=0
+  if [[ -n "${AWS_CLI_HISTORY_FILE+set}" ]]; then
+    die "CLI 기록이 켜져 있음 — 증거 밖에 원문이 남음(AWS_CLI_HISTORY_FILE" \
+      "설정됨)"
+  fi
+  # 값이 없으면 aws configure get 은 빈 출력 · 종료 1 이다.
+  value="$(aws configure get cli_history 2>/dev/null)" || status=$?
+  if [[ "${status}" -ne 0 && "${status}" -ne 1 ]]; then
+    die "CLI 기록 설정(cli_history)을 읽지 못함"
+  fi
+  if [[ "${value}" == enabled ]]; then
+    die "CLI 기록이 켜져 있음 — 증거 밖에 원문이 남음(프로필의 cli_history)"
+  fi
 }
 
 main() {
@@ -561,6 +603,7 @@ main() {
   load_controls
   load_targets
   mark_active
+  check_cli_history
   evidence_dir="$(evidence::new_dir "${DIR_PREFIX}-${stage}")" || exit 2
   printf 'principal-check: 증거 ~/%s/%s\n' "${EVIDENCE_ROOT_NAME}" \
     "${evidence_dir##*/}" >&2

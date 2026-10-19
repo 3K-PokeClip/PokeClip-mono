@@ -11,17 +11,25 @@
 # 주체: instance-profile → iam get-instance-profile(역할 ARN — 같은 역할이면
 # 한 단위로 합침), role → iam get-role, user → iam get-user. NoSuchEntity 와
 # 「인스턴스 프로필에 역할 0개」 만 PRINCIPAL_MISSING 이고, 그 밖 오류는 종료
-# 2 다(cc348-5).
+# 2 다(cc348-5). get-role · get-user 의 성공 응답은 ARN 이 정확히 하나여야
+# 한다(빈 출력도 종료 2).
 #
 # 대상: 단계와 무관한 해석(tag: · arn: · zone: · prodrole)은 행마다 한 번,
 # 주체에 매인 해석(self:group 의 그룹 · policy:attached 의 고객 관리형
 # 정책)은 단위마다 한 번 한다. tag: · zone: · prodrole 이 0건이면
 # TARGET_NONE 이다. zone: 은 뒤 점을 맞춘 이름이 같고 공개(PrivateZone =
-# False)인 존이 정확히 1건이어야 하고, 2건 이상이면 종료 2 다(cc348-3).
+# False)인 존이 정확히 1건이어야 하고, 2건 이상이면 종료 2 다(cc348-3). 존
+# 목록이 잘렸으면(IsTruncated True · NextDNSName 있음 — 한 번에 최대 100개)
+# 다음 쪽의 같은 이름 공개 존을 못 보므로 종료 2 다.
 
 readonly PROD_ROLE_PATH='/pokeclip/prod/'
 readonly AWS_MANAGED_POLICY='arn:aws:iam::aws:policy/'
 readonly ZONE_ID_PATTERN='^/hostedzone/[A-Z0-9]+$'
+# 존 목록 질의 — 첫 줄은 「IsTruncated<탭>NextDNSName」, 그 뒤 존마다 「이름<탭>
+# ID<탭>PrivateZone」(text 출력은 스칼라를 먼저, 목록을 줄마다 낸다).
+ZONE_QUERY='[IsTruncated,NextDNSName,'
+ZONE_QUERY+='HostedZones[].[Name,Id,Config.PrivateZone]]'
+readonly ZONE_QUERY
 
 # 주체 단위(같은 ARN 을 합친 것 — 같은 색인).
 u_arn=()
@@ -121,8 +129,10 @@ resolve_principal() {
     fail_call "주체 해석"
   fi
   read_list "${pattern}"
-  [[ "${list_items}" != *$'\n'?* ]] ||
-    die "인스턴스 프로필에 역할이 둘 이상(res-${req_n}.txt)"
+  if [[ "${list_items}" == *$'\n'?* ||
+    ( "${kind}" != instance-profile && -z "${list_items}" ) ]]; then
+    die "주체 응답에 ARN 이 하나가 아님(res-${req_n}.txt)"
+  fi
   resolved_arn="${list_items%$'\n'}"
 }
 
@@ -155,8 +165,7 @@ resolve_principals() {
     u_groups+=("")
     u_attached+=("")
   done
-  printf '%s' "${record}" >"${evidence_dir}/principals.tsv" ||
-    die "증거를 쓰지 못함"
+  write_evidence "${evidence_dir}/principals.tsv" '%s' "${record}"
 }
 
 #######################################
@@ -175,17 +184,24 @@ resolve_prod_roles() {
 
 #######################################
 # zone: 행을 존 ARN 으로 푼다(뒤 점을 맞춘 이름 일치 · 공개 · 정확히 1건).
+# 목록이 잘렸으면 멈춘다.
 # Globals:
-#   call_out, list_items, req_n, ZONE_ID_PATTERN
+#   call_out, list_items, req_n, ZONE_ID_PATTERN, ZONE_QUERY
 # Arguments:
 #   존 이름.
 #######################################
 resolve_zone() {
   local want="${1%.}." rest line name id private found=""
   aws_call "{\"DNSName\":\"${want}\"}" route53 list-hosted-zones-by-name \
-    --query 'HostedZones[].[Name,Id,Config.PrivateZone]' ||
-    fail_call "존 해석"
-  rest="${call_out}"$'\n'
+    --query "${ZONE_QUERY}" || fail_call "존 해석"
+  line="${call_out%%$'\n'*}"
+  case "${line}" in
+    $'False\tNone') ;;
+    True$'\t'* | False$'\t'?*) die "존 목록이 잘림(res-${req_n}.txt)" ;;
+    *) die "존 목록 응답의 꼴이 다름(res-${req_n}.txt)" ;;
+  esac
+  rest="${call_out#*$'\n'}"$'\n'
+  [[ "${call_out}" == *$'\n'* ]] || rest=""
   list_items=""
   while [[ -n "${rest}" ]]; do
     line="${rest%%$'\n'*}"
@@ -266,8 +282,7 @@ resolve_targets() {
       rest="${rest#*$'\n'}"
     done
   done
-  printf '%s' "${record}" >"${evidence_dir}/targets.tsv" ||
-    die "증거를 쓰지 못함"
+  write_evidence "${evidence_dir}/targets.tsv" '%s' "${record}"
 }
 
 #######################################
