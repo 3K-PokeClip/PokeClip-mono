@@ -920,8 +920,10 @@ aws ssm start-session --target <instance-id>
 
 **`STREAM_KEY_RESOLVE_URL` 에 넣는 주소는 눈으로 확인한다** — 같은 VPC 의 사설 주소(dev EC2
 사설 IP)여야 한다. 공인 · 오타 주소면 응답기가 연결마다 조회 토큰을 평문 HTTP 로 그 주소에
-보낸다. 아래 R1 값 단언 블록은 아무 IPv4 나 받는다(10단계 반영 전 작업에서 좁힌다 — kty
-109차).
+보낸다. 아래 R1 값 단언 블록은 사설 대역(10/8 · 172.16/12 · 192.168/16)의 IPv4 만
+받는다(10단계 반영 전 작업에서 좁혔다 — kty 109 · 110차). 같은 VPC 의 주소인지는 블록이
+보지 못한다 — 이웃 서브넷 · 피어링된 VPC · 도커 기본 다리(172.17.x) · 네트워크 · 방송
+주소도 사설 꼴이면 통과하므로 눈 확인은 그대로 한다.
 
 세션 **안에서**(반영 전 보존 R0 이 끝난 뒤):
 
@@ -967,6 +969,11 @@ main() {
   (( $# == 0 )) || check_failed '사용법: 인자 없음'
   local info line key
   local -A seen=()
+  # resolve 주소는 사설 IPv4(RFC 1918 — 10/8 · 172.16/12 · 192.168/16)만
+  # 받는다. 옥텟은 0–255 이고 앞자리 0 은 받지 않는다.
+  local octet='(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])'
+  local prefix="(10\.${octet}|172\.(1[6-9]|2[0-9]|3[01])|192\.168)"
+  local url_re="http://${prefix}(\.${octet}){2}:8082"
   info="$(stat -c '%u:%g %a' -- "${DEMO_DIR}/.env")"
   [[ "${info}" == '0:0 600' ]] \
     || mismatch ".env 가 root:root 0600 이 아니다(${info})"
@@ -981,8 +988,8 @@ main() {
           || mismatch "DEMO_HOME 이 ${DEMO_DIR} 가 아니다"
         ;;
       STREAM_KEY_RESOLVE_URL)
-        [[ "${line}" =~ ^STREAM_KEY_RESOLVE_URL=http://[0-9.]+:8082$ ]] \
-          || mismatch 'STREAM_KEY_RESOLVE_URL 이 http://<IPv4>:8082 꼴이 아니다'
+        [[ "${line}" =~ ^STREAM_KEY_RESOLVE_URL=${url_re}$ ]] \
+          || mismatch 'STREAM_KEY_RESOLVE_URL 이 http://<사설 IPv4>:8082 꼴이 아니다'
         ;;
       STREAM_KEY_RESOLVE_TOKEN | MTX_API_PASS)
         [[ "${line}" =~ ^[A-Z_]+=[0-9a-f]{64}$ ]] \
