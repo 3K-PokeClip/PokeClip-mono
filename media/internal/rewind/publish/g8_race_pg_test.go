@@ -5,8 +5,11 @@ package publish
 // 끝내 fence 가 두 writer 사이를 오가게 하고(좀비와 후임이 겹치는 국면), PUT 은 적용 직전에 잠깐 쉬어 한 writer 의 P3
 // 가 다른 writer 의 P0–P4 와 겹치게 한다. CI 는 늘 -race 로 돈다.
 //
-// 이 시험은 국면이 서야 판정한다 — 부하로 문턱 안에 국면이 서지 않으면 실패가 아니라 건너뜀(원인 수치 로그)이다(종결
-// 라운드 1 CL1-6). 계보를 언제나 판정하는 결정적 시험은 g8_pg_test.go 의 교차 열 개다.
+// 판정 순서 — 결함 신호(허용 밖 중단 사유 · 시한 밖 틱 오류)와 적용된 판의 계보 검사는 표본 수와 무관하게 먼저 돈다.
+// 부하로 문턱 안에 경쟁 국면이 서지 않았고 결함 신호가 없으면 국면 문턱 · 정착 단계만 건너뛴다(원인 수치 로그 — 종결
+// 라운드 1 CL1-6 · 라운드 2 CL1-21). 결함 신호가 있으면 국면과 무관하게 실패다. 예외 하나 — 국면이 서지 않은 실행에서
+// 연속한 두 판의 겹치는 조각이 0 인 것은 시험 장치의 인공물이라 미성립으로 센다(CL2F-D (가)). 계보를 언제나 판정하는
+// 결정적 시험은 g8_pg_test.go 의 교차 열 개다.
 
 import (
 	"bytes"
@@ -237,17 +240,14 @@ func TestConcurrentWritersKeepOneLineage(t *testing.T) {
 		}
 		t.Logf("w-%d: 틱 %d · 발행 %d · 오류 %d · 중단 %d", i, r.ticks, r.published.Load(), len(r.errs), len(r.logs.aborts()))
 	}
-	if !reached {
-		if defect {
-			t.Fatalf("경쟁 국면이 서지 않았고(발행 %d · %d번 · lease 끝냄 %d번) 결함 신호가 있다 — 부하가 아니라 결함이다",
-				racers[0].published.Load(), racers[1].published.Load(), kills.Load())
-		}
-		// 결함 신호 없이 표본만 모자란 것이다 — 부하로 국면이 서지 않은 것이고 계보 판정은 g8_pg_test.go 의 결정적 교차가 맡는다.
-		t.Skipf("경쟁 국면이 서지 않았다(%v 안) — 발행 %d · %d번 · lease 끝냄 %d번, want 저마다 %d번 이상 · %d번 이상",
-			g8RaceDeadline, racers[0].published.Load(), racers[1].published.Load(), kills.Load(), g8MinPublished, g8MinKills)
-	}
 	t.Logf("lease 끝냄 %d번 · 창 끝 %d", kills.Load(), head.Load())
 
+	// 계보 검사는 표본 수와 무관하게 먼저 돈다 — 적용된 판이 하나라도 있으면 사슬 · 세대 · MSN · 공통 조각 DSN 을 본다
+	// (종결 라운드 2 CL1-21). 국면 문턱과 정착 단계만 아래에서 표본 부족이면 건너뛴다.
+	// 예외 하나(종결 라운드 2 확인 패스 CL2F-D · kty 2026-10-19 (가)): 국면이 서지 않은 실행에서 연속한 두 판에 겹치는 조각이
+	// 0 이면 결함이 아니라 미성립으로 센다 — 이 시험은 머리를 1ms 타이머로 키우므로(g8LastSeq) 발행이 뜸하면 창(g8WindowRows)이
+	// 통째로 지나가는 시험 장치의 인공물이고, 제품은 실제 조각이 들어와야 머리가 움직인다. 국면이 선 실행에서는 그대로 실패다.
+	noOverlap := 0
 	store.mu.Lock()
 	applied := slices.Clone(store.applied)
 	store.mu.Unlock()
@@ -270,12 +270,27 @@ func TestConcurrentWritersKeepOneLineage(t *testing.T) {
 			if now.Gen <= was.Gen || now.PublishedSeq <= was.PublishedSeq || now.MediaSequence < was.MediaSequence {
 				t.Errorf("판 %d %+v → 판 %d %+v, want 세대 · 마지막 seq 증가 · MSN 비감소", i-1, was, i, now)
 			}
-			sameCommonDSN(t, prev.body, cur.body)
+			if reached {
+				sameCommonDSN(t, prev.body, cur.body)
+			} else if commonDSN(t, prev.body, cur.body) == 0 {
+				noOverlap++
+			}
 		}
 		prev = cur
 	}
 	if total := racers[0].published.Load() + racers[1].published.Load(); int(total) > len(chain) {
 		t.Errorf("발행 성공 %d번 > 적용된 판 %d개 — 한 판을 두 writer 가 저마다 발행했다고 셌다", total, len(chain))
+	}
+	if !reached {
+		if defect || t.Failed() {
+			t.Fatalf("경쟁 국면이 서지 않았고(발행 %d · %d번 · lease 끝냄 %d번) 결함 신호가 있다 — 부하가 아니라 결함이다",
+				racers[0].published.Load(), racers[1].published.Load(), kills.Load())
+		}
+		// 결함 신호 없이 표본만 모자란 것이다 — 부하로 국면이 서지 않은 것이고 계보 판정은 위 사슬 검사와 g8_pg_test.go 의
+		// 결정적 교차가 맡는다. 한계: 시한 오류는 느린 DB 와 락 영구 대기(예: 트랜잭션이 닫히지 않아 후임이 FOR UPDATE 에서
+		// 시한까지 기다림)를 가르지 못한다 — 후자도 여기서는 건너뜀이 된다(종결 라운드 2 CL1-22 · 결정적 교차가 받친다).
+		t.Skipf("경쟁 국면이 서지 않았다(%v 안) — 발행 %d · %d번 · lease 끝냄 %d번 · 겹침 0 인 판 경계 %d곳, want 저마다 %d번 이상 · %d번 이상",
+			g8RaceDeadline, racers[0].published.Load(), racers[1].published.Load(), kills.Load(), noOverlap, g8MinPublished, g8MinKills)
 	}
 
 	// 정착 — 경쟁을 멈춘 뒤 w-0 이 lease 를 다시 얻어 화해하고 새 창을 올린다.

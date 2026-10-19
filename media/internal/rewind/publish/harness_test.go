@@ -597,6 +597,16 @@ func dsns(t *testing.T, body []byte) map[string]int64 {
 // 함께 실린 조각이 하나도 없으면 실패다 — 견줄 것이 없는 비교는 아무것도 재지 않는다.
 func sameCommonDSN(t *testing.T, before, after []byte) {
 	t.Helper()
+	if commonDSN(t, before, after) == 0 {
+		t.Error("두 본문에 함께 실린 조각이 없다")
+	}
+}
+
+// commonDSN 은 두 본문에 함께 실린 조각 수를 돌려주고, 그 조각의 DSN 이 다르면 실패를 남긴다. 겹침 0 의 처분은
+// 부르는 쪽 몫이다 — 보통은 실패(sameCommonDSN)이고, G8 동시 시험은 경쟁 국면이 서지 않은 실행에서만 시험 장치의
+// 인공물(머리가 writer 와 무관하게 자라 창이 통째로 지나감)로 보고 미성립으로 센다.
+func commonDSN(t *testing.T, before, after []byte) int {
+	t.Helper()
 	a, b := dsns(t, before), dsns(t, after)
 	common := 0
 	for uri, d := range a {
@@ -607,7 +617,5 @@ func sameCommonDSN(t *testing.T, before, after []byte) {
 			}
 		}
 	}
-	if common == 0 {
-		t.Error("두 본문에 함께 실린 조각이 없다")
-	}
+	return common
 }
