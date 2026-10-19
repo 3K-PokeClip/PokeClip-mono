@@ -71,6 +71,9 @@ env DEMO_HOME=/abs/local DEMO_REPO=/abs/repo COMPOSE_PROJECT_NAME=p7-dev-media \
   `port is already allocated` 로 실패한다. 리허설 동안만 내리고 끝나면 되돌린다.
 - 로컬 Docker Desktop · OrbStack 은 파일 소유권을 재매핑하므로 설정 파일 모드 함정이
   재현되지 않는다(리눅스 전용). 그래서 상자에서 한 번 더 본다(R4 의 소유 단언).
+- 로컬 `.env` 에도 `MTX_IMAGE_REGISTRY` 줄이 있어야 compose 가 풀린다(`:?`). MediaMTX
+  이미지는 비공개 ECR 에 있어, R3′ · R6 은 ECR 읽기 자격이 있는 프로필로만 돈다(상자는
+  인스턴스 역할 — 1-5).
 
 **로컬 실측 표기.** 본문의 「로컬 실측 S7-4 · S7-5 · S7-7 · fix3」은 이 판의 블록을 리눅스
 dind(Docker 안에서 따로 도는 Docker 엔진) 안에서 바이트 그대로 돌린 기록이다. 기록은 이
@@ -178,6 +181,64 @@ dig +short media-dev.pokeclip.com     # 위 IP 가 나와야 한다 (네임서�
 aws ssm describe-instance-information --query "InstanceInformationList[?InstanceId=='<instance-id>'].PingStatus"  # Online
 nc -z -w3 media-dev.pokeclip.com 22 && echo "22 열림 — 즉시 조사" || echo "22 닫힘(정상)"
 ```
+
+### 1-5. 이미지 받기 권한 (ECR 읽기)
+
+MediaMTX 이미지는 계정 ECR 의 비공개 저장소 `pokeclip/mediamtx` 에 있다. 상자는 인스턴스
+역할로 로그인해 받으므로(R3′) 그 역할에 ECR 읽기 권한이 있어야 한다 — SSM 기본 정책
+(`AmazonSSMManagedInstanceCore`)에는 없다. 받기 동작 셋은 이 저장소 하나로 좁히고, 로그인
+토큰 발급(`ecr:GetAuthorizationToken`)만 자원을 좁힐 수 없어 `*` 다. 상자의 aws CLI(AL2023
+기본 포함)가 이 역할로 돈다.
+
+kty 로컬 터미널에서 돌린다 — 계정 번호가 명령 · 응답에 들어가므로 에이전트 세션 · 문서에
+붙여 넣지 않는다. 계정 번호는 손으로 적지 않고 셸에서 얻는다. 역할은 상자에서 거꾸로 집어
+팀 dev EC2 의 역할에 붙지 않게 한다.
+
+```bash
+ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
+PROFILE_ARN="$(aws ec2 describe-instances --instance-ids <instance-id> \
+  --query 'Reservations[0].Instances[0].IamInstanceProfile.Arn' --output text)"
+ROLE="$(aws iam get-instance-profile \
+  --instance-profile-name "${PROFILE_ARN##*/}" \
+  --query 'InstanceProfile.Roles[0].RoleName' --output text)"
+echo "${ROLE}"   # 상자 전용 역할인지 눈으로 본다 — 아니면 멈춘다
+aws iam put-role-policy --role-name "${ROLE}" \
+  --policy-name pokeclip-media-dev-ecr-pull --policy-document "$(cat <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "EcrLogin",
+      "Effect": "Allow",
+      "Action": "ecr:GetAuthorizationToken",
+      "Resource": "*"
+    },
+    {
+      "Sid": "PullMediaMtx",
+      "Effect": "Allow",
+      "Action": [
+        "ecr:BatchGetImage",
+        "ecr:GetDownloadUrlForLayer",
+        "ecr:BatchCheckLayerAvailability"
+      ],
+      "Resource": "arn:aws:ecr:ap-northeast-2:${ACCOUNT}:repository/pokeclip/mediamtx"
+    }
+  ]
+}
+EOF
+)"
+unset ACCOUNT PROFILE_ARN
+
+# 검증: 정책 이름이 보이고 동작이 위 넷이다(자원 — 계정 번호 — 은 찍지 않는다)
+aws iam list-role-policies --role-name "${ROLE}"
+aws iam get-role-policy --role-name "${ROLE}" \
+  --policy-name pokeclip-media-dev-ecr-pull \
+  --query 'PolicyDocument.Statement[].Action'
+```
+
+- 권한이 없거나 저장소 · 리전이 다르면 R3′ 가 로그인 · 받기에서 검사 실패(종료 2)로
+  멈춘다. 컨테이너를 바꾸기 전이라 F3 과 같다(5-1).
+- 상자를 철거하면 이 정책도 지운다(12절 11).
 
 ---
 
@@ -897,7 +958,7 @@ preserve_state() {
 
 ## 3. 값 주입
 
-`.env` 는 `root:root 0600` 이고 값 네 줄이다(`.env.example`). 컨테이너는 `.env` 를 읽지
+`.env` 는 `root:root 0600` 이고 값 다섯 줄이다(`.env.example`). 컨테이너는 `.env` 를 읽지
 않는다 — `--env-file` 은 상자의 docker CLI 가 root 로 읽는다.
 
 | 줄 | 어디서 오나 |
@@ -906,6 +967,7 @@ preserve_state() {
 | `STREAM_KEY_RESOLVE_TOKEN` | auth 의 resolve 전용 출입증. dev auth 쪽과 같은 값이 반영 전에 이미 들어가 있다(사전 확인 단계 — 그때 resolve 200 을 확인한다) |
 | `STREAM_KEY_RESOLVE_URL` | `http://<dev EC2 사설 주소>:8082` — 사설 주소여야 한다(공인 주소면 auth 출발지 잠금에 걸려 403) |
 | `MTX_API_PASS` | 응답기가 MediaMTX Control API 를 부를 때의 자격. 상자에서 새로 만든다 — 사람이 보지 않는다 |
+| `MTX_IMAGE_REGISTRY` | MediaMTX 이미지의 ECR 레지스트리 호스트(`<계정>.dkr.ecr.ap-northeast-2.amazonaws.com`). 상자에서 계정 번호를 얻어 만든다 — 손으로 적지 않고 화면 · 저장소에 내지 않는다(비밀은 아니지만 저장소가 public 이다) |
 
 **R1 — 값 투입은 SSM 대화형 세션 안에서만 한다.** `send-command` 의 인자로 값을 넘기지
 않는다 — 명령 이력이 SSM 에 남는다. 세션 로깅이 꺼져 있는지 먼저 본다(켜져 있으면 세션
@@ -934,13 +996,19 @@ umask 077
 DEMO_DIR=/opt/pokeclip-demo
 read -r URL        # http://<dev EC2 사설 주소>:8082 를 친다(비밀 아님 · 저장소에 적지 않음)
 INFO="$(stat -c '%u %a' -- "${DEMO_DIR}")"   # root 소유 · 그룹 · 기타 쓰기 없음(2-2)
+# 상자 계정 번호 — 레지스트리 호스트에 든다. 화면에 내지 않는다(저장소에 적지 않음)
+ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
 if [[ -L "${DEMO_DIR}" || ! "${INFO}" =~ ^0\ [0-7]?[0-7][0145][0145]$ ]]; then
   echo "멈춤: ${DEMO_DIR} 가 root 전용 디렉터리가 아니다(${INFO})"
+elif [[ ! "${ACCOUNT}" =~ ^[0-9]{12}$ ]]; then
+  echo '멈춤: 상자 계정 번호를 얻지 못했다(aws sts get-caller-identity)'
 elif [[ -s "${DEMO_DIR}/.env.pre-T.bak" ]]; then
   {
     grep -E '^(DEMO_HOME|STREAM_KEY_RESOLVE_TOKEN)=' "${DEMO_DIR}/.env"
     printf 'STREAM_KEY_RESOLVE_URL=%s\n' "${URL}"
     printf 'MTX_API_PASS=%s\n' "$(openssl rand -hex 32)"
+    printf 'MTX_IMAGE_REGISTRY=%s.dkr.ecr.ap-northeast-2.amazonaws.com\n' \
+      "${ACCOUNT}"
   } > "${DEMO_DIR}/.env.next"
   chown root:root "${DEMO_DIR}/.env.next"
   chmod 0600 "${DEMO_DIR}/.env.next"
@@ -948,7 +1016,7 @@ elif [[ -s "${DEMO_DIR}/.env.pre-T.bak" ]]; then
 else
   echo '멈춤: 반영 전 보존(R0)이 먼저다'
 fi
-unset URL INFO
+unset URL INFO ACCOUNT
 exit
 ```
 
@@ -956,6 +1024,9 @@ exit
   `.env.pre-T.bak` 에 있다. resolve 출입증 줄은 이미 들어간 줄을 그대로 옮긴다.
 - `MTX_API_PASS` 는 `printf` 내장 명령이 받아 파일에만 쓴다 — 화면 · 명령 인자에 나오지
   않는다.
+- `MTX_IMAGE_REGISTRY` 의 계정 번호는 상자의 인스턴스 역할로 얻는다 —
+  `aws sts get-caller-identity` 는 권한 없이 돈다. 변수와 `.env` 에만 있고 화면에
+  나오지 않는다. T `.env` 에 이미 이 줄이 있어도 옮기지 않고 다시 만든다.
 - `.env.next` 를 다 쓴 뒤 이름 바꾸기로 끼우므로 세션이 끊겨도 반쪽 `.env` 가 생기지
   않는다. 남은 `.env.next` 는 비밀(출입증 · API 비번)이 든 파일이라 같은 세션에서
   `shred -u -- "${DEMO_DIR}/.env.next"` 로 지우고 다시 친다.
@@ -964,7 +1035,7 @@ exit
 
 ```bash
 # ── 블록: R1 값 단언 — 머리 + 이 본문. 인자 없음. 읽기만 ──
-# .env 가 root:root 0600 이고 네 줄이 하나씩 꼴대로 있는지 본다. 값은 내지 않는다.
+# .env 가 root:root 0600 이고 다섯 줄이 하나씩 꼴대로 있는지 본다. 값은 내지 않는다.
 main() {
   (( $# == 0 )) || check_failed '사용법: 인자 없음'
   local info line key
@@ -974,6 +1045,8 @@ main() {
   local octet='(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])'
   local prefix="(10\.${octet}|172\.(1[6-9]|2[0-9]|3[01])|192\.168)"
   local url_re="http://${prefix}(\.${octet}){2}:8082"
+  # 레지스트리는 계정 ECR(ap-northeast-2)의 호스트 하나 — 경로 · 포트 없이
+  local registry_re='[0-9]{12}\.dkr\.ecr\.ap-northeast-2\.amazonaws\.com'
   info="$(stat -c '%u:%g %a' -- "${DEMO_DIR}/.env")"
   [[ "${info}" == '0:0 600' ]] \
     || mismatch ".env 가 root:root 0600 이 아니다(${info})"
@@ -995,12 +1068,16 @@ main() {
         [[ "${line}" =~ ^[A-Z_]+=[0-9a-f]{64}$ ]] \
           || mismatch "${key} 가 64자 소문자 hex 가 아니다"
         ;;
+      MTX_IMAGE_REGISTRY)
+        [[ "${line}" =~ ^MTX_IMAGE_REGISTRY=${registry_re}$ ]] \
+          || mismatch 'MTX_IMAGE_REGISTRY 가 계정 ECR(ap-northeast-2) 호스트 꼴이 아니다'
+        ;;
       *) mismatch '모르는 줄이 있다 — 옛 DEMO_PATH · SRT_PASSPHRASE 를 빼야 한다' ;;
     esac
     seen["${key}"]=$(( ${seen["${key}"]:-0} + 1 ))
   done < "${DEMO_DIR}/.env"
   for key in DEMO_HOME STREAM_KEY_RESOLVE_URL STREAM_KEY_RESOLVE_TOKEN \
-    MTX_API_PASS; do
+    MTX_API_PASS MTX_IMAGE_REGISTRY; do
     [[ "${seen["${key}"]:-0}" == 1 ]] \
       || mismatch "${key} 줄이 하나가 아니다(${seen["${key}"]:-0}개)"
   done
@@ -1067,6 +1144,9 @@ main "$@"
   )
   ```
 
+- **상자 역할에 ECR 읽기 권한이 있다(1-5).** R3′ 가 인스턴스 역할로 ECR 에 로그인해
+  MediaMTX 이미지를 받는다. 없으면 R3′ 가 검사 실패(종료 2)로 멈춘다(F3).
+
 - **hls.js 가 compose.yml 옆에 있다.** 재생 페이지는 hls.js 를 같은 오리진
   `/hls.min.js` 에서 받는다(MediaMTX 동봉본 의존은 실측에서 실패해 폐기). compose 가
   `./hls.min.js` 를 마운트하므로 없으면 내려받는다. 판은 1.7.3 으로 고정한다. 받기와
@@ -1130,6 +1210,7 @@ main "$@"
 | R1 | 3절 값 투입 → R1 값 단언 | T `.env` | F1 |
 | R2 | R2 T 체크아웃 | 손 수정을 버리고(패치에 있다) T SHA 로 분리 체크아웃 | F2 · F2′ |
 | R3 | R3 응답기 이미지 빌드 | `build ingest-auth` · 이미지 User 단언 | F3 |
+| R3′ | R3′ MediaMTX 이미지 받기 | ECR 로그인(블록 안 임시 자격) → `pull mediamtx` → 자격 지움 · 이미지 있음 단언 | F3 |
 | R4 | R4 렌더 | `${DEMO_HOME}` 소유 단언 → render.sh → `chown root:10002` · `chmod 0640` → 소유 · 모드 단언 | F4 |
 | R5 | R5 응답기 기동 | 디렉터리 준비 · 거부 목록 확인 → `up -d ingest-auth` → healthy(120초) | F5 |
 | R6 | R6 전체 기동 | `up -d`(MediaMTX · edge 재생성) → 판 · 아치 · 좌표 · 권한 오류 · `MTX_` 단언 | F6 |
@@ -1140,6 +1221,9 @@ main "$@"
   `.env` 로도 풀리고, T compose 는 T `.env` 가 있어야 풀린다(`:?`).
 - **빌드를 렌더 · `up` 앞에.** 빌드가 실패하면 렌더 산출물과 컨테이너를 바꾸기 전에
   멈춘다.
+- **이미지 받기도 렌더 · `up` 앞에.** R6 의 `up -d` 는 상자에 있는 이미지를 다시 받지
+  않는다. 받기를 R6 에 맡기면 로그인 없이 받다가 컨테이너를 바꾸는 도중(F6)에 실패하고,
+  그 오류에 레지스트리 호스트(계정 번호)가 찍힌다.
 - **응답기 healthy 뒤에 MediaMTX.** 운영 순서(7절)다.
 - 반영 중 옛 MediaMTX 는 옛 설정으로 돈다 — 렌더 산출물은 단일 파일 마운트라 이름
   바꾸기로 바뀐 새 파일을 옛 컨테이너가 보지 않는다(추론 — 로컬 실측에서 확인).
@@ -1227,6 +1311,55 @@ main "$@"
 ```
 
 ```bash
+# ── 블록: R3′ MediaMTX 이미지 받기 — 머리 + 이 본문. 인자 없음 ──
+# compose 가 가리키는 MediaMTX 이미지를 계정 ECR 에서 받아 둔다 — R6 의 up -d 가 받지
+# 않게. 컨테이너 · 렌더 산출물은 건드리지 않는다. 레지스트리 호스트는 compose 가 .env 의
+# MTX_IMAGE_REGISTRY 로 푼 좌표에서 읽는다. 호스트에 계정 번호가 들어 있어 내지 않는다 —
+# 도구 출력은 파일로 받고, 실패하면 12자리 숫자를 가려 낸다. 로그인 자격(12시간 유효)은
+# 이 블록의 임시 디렉터리(DOCKER_CONFIG)에만 두고 받은 뒤 shred -u 로 지운다 —
+# /root/.docker 에 남기지 않는다.
+main() {
+  (( $# == 0 )) || check_failed '사용법: 인자 없음'
+  local image='' registry tag line
+  local -i rc=0 n=0
+  local -r docker_config="${WORK}/docker-config"
+  command -v aws > /dev/null || check_failed 'aws CLI 가 없다(1-5)'
+  # mediamtx 가 기대는 서비스(ingest-auth)의 이미지도 함께 나온다 — 저장소 경로로 고른다
+  live_compose config --images mediamtx > "${WORK}/mtx.images"
+  while IFS= read -r line; do
+    if [[ "${line}" == */pokeclip/mediamtx:* ]]; then
+      image="${line}"
+      n+=1
+    fi
+  done < "${WORK}/mtx.images"
+  (( n == 1 )) || mismatch "compose 의 pokeclip/mediamtx 좌표가 하나가 아니다(${n}개)"
+  registry="${image%%/*}"
+  [[ "${registry}" =~ ^[0-9]{12}\.dkr\.ecr\.ap-northeast-2\.amazonaws\.com$ ]] \
+    || mismatch 'MediaMTX 좌표의 레지스트리가 계정 ECR(ap-northeast-2)이 아니다'
+  install -d -m 0700 -- "${docker_config}"
+  aws ecr get-login-password --region ap-northeast-2 2>> "${WORK}/pull.log" \
+    | DOCKER_CONFIG="${docker_config}" docker login --username AWS \
+      --password-stdin "${registry}" >> "${WORK}/pull.log" 2>&1 \
+    || rc=$?
+  if (( rc == 0 )); then
+    DOCKER_CONFIG="${docker_config}" live_compose pull mediamtx \
+      >> "${WORK}/pull.log" 2>&1 || rc=$?
+  fi
+  remove_box_file shred "${docker_config}/config.json"   # 성패와 무관하게 먼저
+  if (( rc != 0 )); then
+    sed -E 's/[0-9]{12}/<계정>/g' -- "${WORK}/pull.log" >&2
+    check_failed "ECR 로그인 · 받기 실패(종료 ${rc}) — 역할 권한(1-5) · 망을 본다"
+  fi
+  docker image inspect -f '{{.Id}}' "${image}" > /dev/null 2>&1 \
+    || mismatch '받은 뒤에도 MediaMTX 이미지가 상자에 없다'
+  tag="${image#*:}"
+  tag="${tag%%@*}"
+  echo "MediaMTX 이미지 받기 끝 — ${tag} · 로그인 자격 지움"
+}
+main "$@"
+```
+
+```bash
 # ── 블록: R4 렌더 — 머리 + 이 본문. 인자 없음 ──
 # render.sh 는 임시 파일 뒤 원자 교체라 실패하면 산출물을 바꾸지 않는다. 산출물은 실행 계정
 # 소유 0640 으로 생기므로 그룹 10002(MediaMTX)를 여기서 준다 — 빠뜨리면 R6 이 F6 이 된다.
@@ -1275,6 +1408,7 @@ main "$@"
 # 응답기 healthy 를 다시 본 뒤 MediaMTX · edge 를 새로 만든다. 이어서 서버가 쓰는 판을
 # 단언한다 — 기동 첫 줄의 판 · 이미지 아치 · compose 의 이미지 좌표 · 기동 로그의 권한
 # 오류 0 · 컨테이너 환경의 MTX_ 0(MTX_ 변수는 설정 파일보다 우선해 렌더 단언을 비켜 간다).
+# 이미지 좌표는 레지스트리 호스트(계정 번호)를 떼고 낸다.
 main() {
   (( $# == 0 )) || check_failed '사용법: 인자 없음'
   local mtx_id='' image tag arch line want_arch="${DEMO_ARCH:-amd64}"
@@ -1289,7 +1423,7 @@ main() {
       found=1
     fi
   done < "${WORK}/images"
-  (( found )) || mismatch "도는 이미지가 compose 의 좌표가 아니다: ${image}"
+  (( found )) || mismatch "도는 이미지가 compose 의 좌표가 아니다: ${image#*/}"
   tag="${image#*:}"
   tag="${tag%%@*}"
   arch="$(docker image inspect -f '{{.Architecture}}' "${image}")"
@@ -1341,7 +1475,7 @@ main "$@"
 | F1 | R1 값 투입(세션 도중 끊김 · 꼴 단언 실패) | HEAD · 트리 · 렌더 · 컨테이너 = 반영 전(옛 판이 그대로 돈다 — 옛 compose 는 `${DEMO_HOME}` 하나만 보간하고 옛 MediaMTX 는 `.env` 를 다시 읽지 않는다). `.env` = 반영 전 또는 T | 반영 취소 ⓐ → ⓒ. 또는 값을 고쳐 다시 넣고 R2 로 |
 | F2 | R2 체크아웃 — git 이 거부(추적 밖 파일과 겹침) | HEAD = 반영 전 · 손 수정은 버려짐(패치에 있다) · `.env` T · 렌더 · 컨테이너 반영 전 | 반영 취소 ⓑ → ⓐ → ⓒ. 겹친 파일은 kty 가 정한 뒤(옮김) R2 를 다시 |
 | F2′ | R2 체크아웃 도중 끊김(프로세스가 죽음) | 트리 일부만 T · `.git/index.lock` 이 남을 수 있다 · HEAD 는 대개 반영 전(추론) | kty — 남은 lock · 트리 상태를 보고 정한다(lock 지움은 승인). HEAD 가 T 면 F3 행 |
-| F3 | R3 빌드 실패 | HEAD · 트리 = T · `.env` T · 렌더 · 컨테이너 = 반영 전(옛 판이 돈다) | 원인(디스크 · 모듈 · GHCR · buildx 판 — `compose build requires buildx 0.17.0 or later` 면 4-1 의 buildx 칸)을 고쳐 R3 부터. 접으려면 반영 취소 ⓓ → ⓑ → ⓐ → ⓒ(컨테이너를 건드리지 않고 T 백업을 만들지 않는다). 다시 T 로 갈 때는 곧바로 R0 부터 |
+| F3 | R3 빌드 실패 · R3′ 이미지 받기 실패 | HEAD · 트리 = T · `.env` T · 렌더 · 컨테이너 = 반영 전(옛 판이 돈다) | 원인(디스크 · 모듈 · GHCR · buildx 판 — `compose build requires buildx 0.17.0 or later` 면 4-1 의 buildx 칸 · R3′ 면 ECR 권한(1-5) · 망)을 고쳐 멈춘 블록부터. 접으려면 반영 취소 ⓓ → ⓑ → ⓐ → ⓒ(컨테이너를 건드리지 않고 T 백업을 만들지 않는다). 다시 T 로 갈 때는 곧바로 R0 부터 |
 | F4 | R4 렌더 가드 실패(종료 1) · 소유 단언 실패 | F3 과 같다 — 렌더 산출물은 그대로(render.sh 가 임시 파일을 지운다) · 새 응답기 이미지는 남는다. 소유 단언에서 멈췄으면 새 산출물이 얹혔다 — `chown` · `chmod` 를 고쳐 R4 의 단언부터 | F3 과 같다 |
 | F5 | R5 healthy 시한 초과 | HEAD · 트리 · `.env` · 렌더 = T · `ingest-auth` 만 떠 있고 unhealthy · MediaMTX 는 옛 컨테이너가 옛 설정으로 돈다(추론 — 그사이 다시 시작됐으면 새 렌더로 기동을 되풀이하고 송출이 모두 끊겨 있다, 4-2) | 응답기 로그로 원인을 고쳐 R5 부터. 원인이 거부 목록의 틀린 줄이면 손으로 고치지 않고 틀린 줄 걷기(10절 — 재시작 없음) 뒤 R5 부터. 접으려면 롤백 0 → A → B → C(11절). 다시 T 로 갈 때는 T 백업 처분 → R0 부터 — D 를 쓰지 않는다. 접는 중 B · C 에서 막혀도 D 로 돌아가지 않는다 — kty 판단으로 원인을 고쳐 B · C 를 끝낸다 |
 | F6 | R6 `up -d` 실패 · MediaMTX 기동 실패 | T 가 일부 돈다 · 송출이 끊겼을 수 있다 | 롤백 0 → A → B → C. 다시 T 로 — F5 와 같다 |
@@ -2270,6 +2404,15 @@ D 가 응답기를 띄우기 전에 다시 읽는다.
 - compose 와 env 의 짝은 HEAD 로 고르고(`paired_compose`), `${DEMO_HOME}/.env` 는 단계
   끝에서만 바꾼다. 그래서 B · D 를 어디서 멈추든 처음부터 다시 돌리면 첫 `down` 이 그
   트리와 짝 맞는 env 로 풀린다.
+- MediaMTX 이미지 좌표도 그 짝을 따른다 — 롤백 좌표를 따로 지정하지 않는다. 계정 ECR
+  판(`v1.21.2-pokeclip.1`)을 올린 주기라면 반영 전 판의 compose 는 ghcr 포크 `.2` 좌표를
+  글자 그대로 들고 있어, `MTX_IMAGE_REGISTRY` 가 없는 `.env.pre-T.bak` 으로도 풀리고 B ⑤
+  는 ECR 로그인 없이 옛 이미지로 올린다. 옛 이미지가 상자에 없으면 `up` 이 ghcr 에서
+  로그인 없이 다시 받는다(공개 패키지 — 2026-10-20 익명 조회 200). 남겨 두면 받기 없이
+  올라가므로 롤백용 옛 이미지는 창을 닫을 때까지 지우지 않는다(11-7). D 는 R3′ 가 받아 둔
+  ECR 이미지를 쓴다(`down` 은 이미지를 지우지 않는다) — 리허설 중에는 지우지 않는다.
+- `config --images` 의 ECR 좌표에는 계정 번호가 있다. 사람이 볼 때는
+  `sed -E 's/[0-9]{12}/<계정>/g'` 를 거쳐 보고, 출력을 기록에 붙이지 않는다.
 
 ### 11-3. 단계 블록
 
@@ -2475,8 +2618,9 @@ main() {
 main "$@"
 ```
 
-- E-1 뒤 사람이 본다(실측 8) — `config --images` 에 포크 `.2`, 토큰 경로 송출 · 재생,
-  응답기 `publish_allowed`.
+- E-1 뒤 사람이 본다(실측 8) — `config --images` 에 T 의 MediaMTX 좌표(계정 ECR 판이면
+  `v1.21.2-pokeclip.1` — 계정 번호는 가려 본다, 11-2), 토큰 경로 송출 · 재생, 응답기
+  `publish_allowed`.
 
 ```bash
 # ── 블록: 롤백 E-2 — 머리 + 이 본문. 인자 없음. 리허설 뒤 정리 · 잔여 0. 지운다 ──
@@ -2521,9 +2665,10 @@ main "$@"
 - HEAD 형태는 견줘 알리기만 한다 — 반영 전이 브랜치였고 그 브랜치가 옮겨졌으면 B 가
   분리 HEAD 로 둔다.
 
-사람이 본다 — `config --images` 에 포크 `.1`, 옛 단일 경로 OBS 송출 · 재생(`index.m3u8`
-의 LL-HLS 마커). 롤백 목표는 반영 전에 확인한 마지막 정상 상태(반영 전 SHA + 손 수정 +
-`.1`)다.
+사람이 본다 — `config --images` 에 반영 전 판의 MediaMTX 좌표, 그 판의 OBS 송출 · 재생
+(`index.m3u8` 의 LL-HLS 마커). 첫 반영 주기는 포크 `.1` · 옛 단일 경로이고, 계정 ECR
+판을 올린 주기는 ghcr 포크 `.2` · 토큰 경로다(11-2). 롤백 목표는 반영 전에 확인한 마지막
+정상 상태(반영 전 SHA + 손 수정 + 그 판의 이미지)다.
 
 ### 11-5. 멈춘 자리별 상태
 
@@ -2771,6 +2916,7 @@ IID=$(aws ec2 describe-instances --filters Name=tag:Name,Values=pokeclip-media-d
 ```
 
 1. **terminate 전에 캡처**: 볼륨 ID와 `DeleteOnTermination` 값을 적어 둔다. `false` 면 먼저 `true` 로 바꾸거나 종료 후 볼륨을 직접 지운다.
+   상자 역할 이름도 1-5 의 `PROFILE_ARN` · `ROLE` 두 줄로 집어 둔다(11 이 쓴다).
    ```bash
    aws ec2 describe-instances --instance-ids <instance-id> \
      --query 'Reservations[0].Instances[0].BlockDeviceMappings[].Ebs.{id:VolumeId,del:DeleteOnTermination}'
@@ -2804,13 +2950,20 @@ IID=$(aws ec2 describe-instances --filters Name=tag:Name,Values=pokeclip-media-d
 8. 노트북의 로컬 리허설 디렉터리(`.env` · 렌더물) 삭제 + **클립보드 비우기**
 9. OBS 플러그인 — 시험 계정의 연결을 해제한다
 10. 저장소 정리 PR — `infra/dev-media/` 와 그 포인터를 지울지 kty 가 정한다
+11. 상자 역할의 ECR 읽기 정책(1-5) 삭제 — 1 에서 집은 `ROLE` 로 지우고
+    `list-role-policies` 에 없음을 본다.
+    ```bash
+    aws iam delete-role-policy --role-name "${ROLE}" \
+      --policy-name pokeclip-media-dev-ecr-pull
+    aws iam list-role-policies --role-name "${ROLE}"
+    ```
 
 ### 중간에 멈출 때 (역순 롤백)
 
 | 어디까지 갔나 | 되돌릴 것 | 확인 |
 |---|---|---|
-| 운영 중 | 위 1–10 전부 | 철거 체크리스트 |
-| 배포까지(4절) | A 레코드 DELETE → terminate → 볼륨 부재 → 보안그룹 삭제 | 각 describe 0건 |
+| 운영 중 | 위 1–11 전부 | 철거 체크리스트 |
+| 배포까지(4절) | A 레코드 DELETE → terminate → 볼륨 부재 → 보안그룹 삭제 → ECR 읽기 정책 삭제(11 — 역할은 terminate 전에 집는다) | 각 describe 0건 · 정책 없음 |
 | DNS까지(1-3) | A 레코드 DELETE → terminate → 보안그룹 삭제 | 위와 동일 |
 | 보안그룹만(1-1) | 보안그룹 삭제 | describe 0건 |
 
