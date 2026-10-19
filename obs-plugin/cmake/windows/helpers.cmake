@@ -56,6 +56,14 @@ function(set_target_properties_plugin target)
 
   configure_file(cmake/windows/resources/resource.rc.in "${CMAKE_CURRENT_BINARY_DIR}/${CMAKE_PROJECT_NAME}.rc")
   target_sources(${CMAKE_PROJECT_NAME} PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/${CMAKE_PROJECT_NAME}.rc")
+
+  # 설치 파일 스크립트 — Package-Windows.ps1 -BuildInstaller가 iscc로 컴파일한다(POK-361).
+  file(TO_NATIVE_PATH "${CMAKE_CURRENT_SOURCE_DIR}" PLUGIN_SOURCE_DIR_NATIVE)
+  configure_file(
+    cmake/windows/resources/installer-Windows.iss.in
+    "${CMAKE_CURRENT_BINARY_DIR}/installer-Windows.generated.iss"
+    @ONLY
+  )
 endfunction()
 
 # Helper function to add resources into bundle

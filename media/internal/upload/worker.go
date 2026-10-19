@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/playback"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/recording"
 )
 
@@ -193,8 +194,16 @@ func planMark(a index.Axis, target index.UploadState) markPlan {
 // "예약 키 그대로 PUT"이 계약이라 재계산 비교는 키 포맷을 바꾸는 순간 옛 행을 전부 거부한다.
 var s3KeyRe = regexp.MustCompile(`^streams/([A-Za-z0-9_-]{1,64})/\d{4}-\d{2}-\d{2}/\d{2}/seg_(\d{6,})\.m4s$`)
 
-// playbackKeyRe 는 ③ 재생 축 키의 문법이다 — 설계 5.2 의 형상 그대로다(playback.SegKey).
-var playbackKeyRe = regexp.MustCompile(`^dvr/([A-Za-z0-9_-]{1,64})/seg/(\d{6,})\.m4s$`)
+// playbackKeyParts 는 ③ 재생 축 키를 regexp.FindStringSubmatch 모양([키, 스트림 성분, seq 십진])으로 푼다 — 문법 밖이면
+// nil 이다. 문법의 소유자는 playback.ParseSegKey 하나다(목록 발행 전 검사 S5 와 같은 한 벌 — 계획 B #10). seq 를 십진으로
+// 되돌려 두므로 식별자 대조(keyIdentityMismatch)는 다른 축과 같은 길을 간다.
+func playbackKeyParts(key string) []string {
+	stream, seq, err := playback.ParseSegKey(key)
+	if err != nil {
+		return nil
+	}
+	return []string{key, stream, strconv.FormatInt(seq, 10)}
+}
 
 // initKeyRe 는 init(MAP) 축 키의 문법이다 — 설계 5.2·5.3ⓐ(playback.InitKey).
 // **둘째 그룹이 seq 가 아니라 sessionID 인 것이 축의 차이다.**
@@ -206,16 +215,16 @@ var playbackKeyRe = regexp.MustCompile(`^dvr/([A-Za-z0-9_-]{1,64})/seg/(\d{6,})\
 // quarantine)될 길이 없고, 경로 참조가 키에 실리는 길만 닫힌다.
 var initKeyRe = regexp.MustCompile(`^dvr/([A-Za-z0-9_-]{1,64})/init/([A-Za-z0-9_-]+)\.mp4$`)
 
-// keyPatternFor 는 축의 키 문법이다(설계 5.5.4 #3 — 축별 3벌).
-// 미판정 축은 nil 이다 — 호출자가 그 자리에서 거부한다(fail-closed).
-func keyPatternFor(a index.Axis) *regexp.Regexp {
+// keyGrammarFor 는 축의 키 문법이다(설계 5.5.4 #3 — 축별 3벌). 키가 맞으면 [키, 스트림 성분, 식별자 성분]을, 아니면 nil
+// 을 돌려주는 함수다(regexp.FindStringSubmatch 모양). 미판정 축은 nil 이다 — 호출자가 그 자리에서 거부한다(fail-closed).
+func keyGrammarFor(a index.Axis) func(string) []string {
 	switch a {
 	case index.AxisArchive:
-		return s3KeyRe
+		return s3KeyRe.FindStringSubmatch
 	case index.AxisPlayback:
-		return playbackKeyRe
+		return playbackKeyParts
 	case index.AxisInit:
-		return initKeyRe
+		return initKeyRe.FindStringSubmatch
 	default:
 		return nil
 	}
@@ -258,11 +267,11 @@ func (u *Uploader) validateTarget(t index.UploadTarget, lg *slog.Logger) (string
 		return reject("bad_stream_id")
 	}
 	// 키 문법은 축이 고른다. 축을 모르면 어떤 문법으로 볼지도 정할 수 없으므로 거부한다.
-	re := keyPatternFor(t.Axis)
-	if re == nil {
+	match := keyGrammarFor(t.Axis)
+	if match == nil {
 		return reject("bad_axis")
 	}
-	m := re.FindStringSubmatch(t.S3Key)
+	m := match(t.S3Key)
 	if m == nil || m[1] != t.StreamID {
 		return reject("bad_key")
 	}
@@ -270,12 +279,9 @@ func (u *Uploader) validateTarget(t index.UploadTarget, lg *slog.Logger) (string
 		return reject(reason)
 	}
 
-	rel, err := filepath.Rel(filepath.Clean(u.opt.SegmentRoot), filepath.Clean(t.LocalPath))
-	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return reject("root_escape")
-	}
-	if filepath.Dir(rel) != t.StreamID {
-		return reject("dir_mismatch")
+	rel, reason := u.streamRel(t.StreamID, t.LocalPath)
+	if reason != "" {
+		return reject(reason)
 	}
 	if t.Bytes <= 0 {
 		// bytes 가 없는 행은 처리 불가 데이터 오류다. coalesce 로 펴면 꼬리 대조와 CAS 가
@@ -288,6 +294,21 @@ func (u *Uploader) validateTarget(t index.UploadTarget, lg *slog.Logger) (string
 		return reject("no_session")
 	}
 	return rel, true
+}
+
+// streamRel 은 localPath 가 녹화 루트 안 그 스트림 디렉토리의 파일인지 보고, Root.Open 에 넘길 루트 기준 상대 경로를
+// 돌려준다. 어긋나면 거부 사유(root_escape · dir_mismatch)를 돌려준다 — 대상 검증(validateTarget)과 계승 게이트의
+// 직전 조각 열기(판단 J63)가 함께 쓰는 판정이다. 루트 이탈 판정이 디렉토리 일치 판정보다 앞인 순서는
+// validateTarget 의 ★ 계약 그대로다.
+func (u *Uploader) streamRel(streamID, localPath string) (rel, reason string) {
+	rel, err := filepath.Rel(filepath.Clean(u.opt.SegmentRoot), filepath.Clean(localPath))
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", "root_escape"
+	}
+	if filepath.Dir(rel) != streamID {
+		return "", "dir_mismatch"
+	}
+	return rel, ""
 }
 
 // classifyOpenError 는 Root.Open 실패를 세 갈래로 가른다.
@@ -379,15 +400,17 @@ func (u *Uploader) attemptOnce(j job, rel string, lg *slog.Logger) attemptResult
 		return attemptResult{outcome: outcomeNeutral}
 	}
 
-	// (f) 마킹 — 축 분기는 markUploadedByAxis 가 진다.
-	if !u.markUploadedByAxis(j, p, lg) {
+	// (f) 마킹 — 축 분기는 markUploadedByAxis 가 진다. init 축은 CAS 판정을 함께 돌려주고, 그 판정이
+	//     통지(afterUploaded)의 Dirty 표시를 가른다(계획 4.5 A2 결정 10).
+	ok, im := u.markUploadedByAxis(j, p, lg)
+	if !ok {
 		return attemptResult{outcome: outcomeNeutral}
 	}
 
 	lg.Info("segment_uploaded", "s3_key", t.S3Key, "bytes", p.size,
 		"elapsed_ms", elapsed.Milliseconds())
 	u.gate.clearBackoff(k)
-	u.afterUploaded(j, p)
+	u.afterUploaded(j, p, im)
 	return attemptResult{outcome: outcomeSuccess}
 }
 
@@ -435,15 +458,16 @@ func (u *Uploader) measureInput(j job, f *os.File, lg *slog.Logger) (size int64,
 }
 
 // markUploadedByAxis 는 성공 마킹의 축 분기다. 돌려주는 값은 "후처리(백오프 해제·통지)를
-// 이어가도 되는가"이며, false 면 호출자는 outcomeNeutral 로 끝낸다.
+// 이어가도 되는가"와 init 축의 CAS 판정이며, false 면 호출자는 outcomeNeutral 로 끝낸다. ② · ③ 은
+// 판정이 없어 영값이다(index.InitMark 영값은 「판정 아님」).
 //
 // 축마다 CAS 가 다르다(설계 5.5.5): ② 는 장부 크기가 앵커이고, ③ 은 산출 길이를 SET 하며,
 // init 은 산출 바이트의 해시로 첫 확정을 가른다.
-func (u *Uploader) markUploadedByAxis(j job, p payload, lg *slog.Logger) bool {
+func (u *Uploader) markUploadedByAxis(j job, p payload, lg *slog.Logger) (bool, index.InitMark) {
 	t := j.target
 	if planMark(t.Axis, index.UploadStateUploaded) != markCAS {
 		lg.Error("upload_mark_unsupported", "target_state", "uploaded", "s3_key", t.S3Key)
-		return false
+		return false, 0
 	}
 
 	// err 를 먼저 본다. (false, err) 를 CAS 거부로 오분류하면 안 된다(CX-2 ⑥).
@@ -466,13 +490,13 @@ func (u *Uploader) markUploadedByAxis(j job, p payload, lg *slog.Logger) bool {
 	case err != nil:
 		lg.Error("mark_error", "target_state", "uploaded", "err", err.Error())
 		u.gate.registerFailure(k)
-		return false
+		return false, 0
 	case !marked:
 		lg.Warn("upload_cas_rejected", "expect_bytes", t.Bytes, "target_state", "uploaded")
 		u.gate.registerFailure(k)
-		return false
+		return false, 0
 	}
-	return true
+	return true, 0
 }
 
 // markFailedByAxis 는 실패 마킹의 축 분기다. 돌려주는 값은 "후처리를 이어가도 되는가"이며,

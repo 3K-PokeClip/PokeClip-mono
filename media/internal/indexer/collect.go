@@ -15,6 +15,8 @@ package indexer
 import (
 	"context"
 	"errors"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/recording"
@@ -25,10 +27,12 @@ import (
 const reentryBacklogThreshold = 32
 
 // collectResult 는 수집 워커가 돌려주는 것 전부다. 워커는 ix 의 맵을 만지지 않는다(D10) —
-// 거부 디렉토리 경고 재료까지 결과에 실어 ApplyCollect(단일 고루틴)가 처리한다.
+// 거부 디렉토리 경고 재료와 순회 오류 경로(walkErrs — 4.1 점검 결손 재료)까지 결과에 실어
+// ApplyCollect(단일 고루틴)가 처리한다.
 type collectResult struct {
 	byStream  map[string][]recording.Segment
 	rejected  map[string]error
+	walkErrs  []string
 	truncated bool
 	elapsed   time.Duration
 	err       error
@@ -79,6 +83,10 @@ func (ix *Indexer) CollectOverdue(k float64) bool {
 // 것(DB 재시도 소진·복구 불가 seq 충돌·ctx 취소)만 그대로 올린다.
 func (ix *Indexer) ApplyCollect(ctx context.Context, root string, res collectResult) (bool, error) {
 	ix.collectInflight = false // ①
+	// 4.1 ③(a) 는 가장 최근에 적용된 수집이 4.1 완주일 때만 선다 — 이 수집이 완주로 끝나지 않으면(수집
+	// 오류 · 절단 · 래치 중단 · ctx 취소 · 루트 순회 오류) 앞 완주가 준 자격도 거둔다(fail-closed). 래치를
+	// 푼 수집이 완주가 아니면 트립 창에 버려진 조각이 장부 밖에 남을 수 있다. ⑥ 이 4.1 완주면 다시 적는다.
+	ix.completedCollectStart = time.Time{}
 
 	// f6n — 처리 점유 계측(기록 전용 · 단언 없음). 지표는 case 처리 시간이며 대기 시간을
 	// 포함하지 않는다. phase 는 이 주기에 Handle 이 불린 횟수로 가른다: idle=0 /
@@ -101,10 +109,11 @@ func (ix *Indexer) ApplyCollect(ctx context.Context, root string, res collectRes
 			"handled", handled, "threshold", reentryBacklogThreshold)
 	}()
 
-	// ② 결과 신호 — 거부 경고(워커가 못 만진 ix 맵)와 실패·절단.
+	// ② 결과 신호 — 거부 경고와 순회 오류 결손(둘 다 워커가 못 만진 ix 맵)과 실패·절단.
 	for dir, cause := range res.rejected {
 		ix.warnRejectedStream(dir, cause)
 	}
+	rootWalkFailed := ix.markWalkGaps(root, res.walkErrs)
 	if res.err != nil {
 		// 부모 ctx 소멸(취소·데드라인)은 종료 국면의 정상 중단이라 ERROR 가 아니다.
 		if !errors.Is(res.err, context.Canceled) && !errors.Is(res.err, context.DeadlineExceeded) {
@@ -144,10 +153,34 @@ func (ix *Indexer) ApplyCollect(ctx context.Context, root string, res collectRes
 		interrupted = true
 	}
 
-	// ⑥ 완주 판정 — 절단 아님 ∧ 중단 없음 ∧ 아직 첫 완주 전이면 firstComplete.
-	if res.truncated || interrupted || ctx.Err() != nil || ix.firstCollectDone {
+	// ⑥ 완주 판정 — 절단 아님 ∧ 중단 없음 ∧ ctx 살아 있음이면 완주다. 4.1 은 루트 순회 오류가
+	// 없는 완주마다 그 시작을 적고(루트를 못 읽으면 어느 스트림의 목록도 온전하지 않다),
+	// firstComplete 는 첫 완주 한 번만 참이다(스위퍼 arm 은 한 번이면 된다 — 루트 오류와 무관).
+	if res.truncated || interrupted || ctx.Err() != nil {
+		return false, nil
+	}
+	if !rootWalkFailed {
+		ix.completedCollectStart = ix.collectStart
+	}
+	if ix.firstCollectDone {
 		return false, nil
 	}
 	ix.firstCollectDone = true
 	return true, nil
+}
+
+// markWalkGaps 는 순회 오류 경로를 4.1 점검 결손으로 옮기고 루트 자체의 오류가 있었는지
+// 돌려준다. 스트림 디렉터리 안의 오류는 경로의 루트 기준 첫 요소 스트림의 결손 ⅰ 이다(그
+// 스트림의 목록이 온전하지 않다). 루트 기준 경로를 못 구하면 루트 오류로 친다(fail-closed).
+func (ix *Indexer) markWalkGaps(root string, paths []string) (rootFailed bool) {
+	for _, p := range paths {
+		rel, err := filepath.Rel(root, p)
+		if err != nil || rel == "." {
+			rootFailed = true
+			continue
+		}
+		streamID, _, _ := strings.Cut(filepath.ToSlash(rel), "/")
+		ix.markCheckGap(streamID)
+	}
+	return rootFailed
 }

@@ -147,6 +147,19 @@ func (g *gates) backoffBlocked(k targetKey) (time.Time, bool) {
 	return e.nextAt, g.now().Before(e.nextAt)
 }
 
+// expedite 는 k 의 백오프 nextAt 을 지금으로 둔다 — 항목이 없으면 할 일이 없다.
+// 실패 횟수와 연속 보류는 그대로다(다음 실패의 간격이 벌어지는 근거가 남는다).
+func (g *gates) expedite(k targetKey) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	e, ok := g.backoff[k]
+	if !ok {
+		return
+	}
+	e.nextAt = g.now()
+	g.backoff[k] = e
+}
+
 // clearBackoff 는 마킹까지 성공(marked == true)했을 때만 부른다.
 // PUT 만 성공하고 마킹이 실패한 행은 해제하지 않고 기존 failures 를 승계한다(결정 6‴).
 func (g *gates) clearBackoff(k targetKey) {
@@ -409,4 +422,15 @@ func (b *breakers) openAll(reason string) {
 	for _, brk := range b.byAxis {
 		brk.open(reason)
 	}
+}
+
+// Expedite 는 정체 사다리 L1 이다(설계 4.6.3 「L1 의 실체」 · 계획 판단 J19) — 스트림
+// streamID 의 seq 행의 ③ 축 백오프 nextAt 만 지금으로 둔다. 격리 · in-flight · 브레이커 ·
+// 실패 횟수는 건드리지 않는다. 다시 올리는 것은 스위퍼나 실시간 재요청이다 — 이 메서드는
+// 그 앞의 백오프 대기만 없앤다. 고루틴 안전하다. 부르는 쪽은 되감기 루프다(커밋 7).
+func (u *Uploader) Expedite(streamID string, seq int64) {
+	if u.off {
+		return
+	}
+	u.gate.expedite(targetKeyOf(index.UploadTarget{StreamID: streamID, Axis: index.AxisPlayback, Seq: seq}))
 }

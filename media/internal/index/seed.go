@@ -76,7 +76,7 @@ type SeedResult struct {
 	DiagErr error
 
 	// SessionOpened 는 이 조각이 새 세션을 열었는가다(비분할 개시·TD 분할 공통).
-	// 아래 네 필드는 이것이 참일 때만 뜻이 있다.
+	// 아래 다섯 필드는 이것이 참일 때만 뜻이 있다.
 	SessionOpened bool
 	// DiscontinuityBase 는 새 세션 행에 쓰인 discontinuity_base 다(TD 분할이면 승계한 값).
 	DiscontinuityBase int64
@@ -86,10 +86,14 @@ type SeedResult struct {
 	TargetDuration int32
 	// InheritsSession 은 새 세션 행의 inherits_session 이다. "" 면 NULL 이다.
 	InheritsSession string
-	// PrevFirstLocalPath 는 계승 후보 개시에서 직전 세션 첫 조각의 local_path 다
-	// (ADR-044 호환 게이트의 입력). "" 면 계승 후보가 아니므로 게이트를 적용하지 않는다.
-	// 채우는 쪽은 재접속 계승 갈래(M4 PR ⓒ)이고, 그 전에는 언제나 "" 다.
+	// PrevFirstLocalPath 는 재접속 계승 개시에서 물려받은 직전 세션 첫 조각의 local_path 다
+	// (ADR-044 호환 게이트의 입력 — 워커가 새 회차 조각과 stsd 지문을 견준다). 계승 개시가 아니면 "" 다.
+	// 게이트를 적용할지는 이 값이 아니라 InheritsSession(계승 후보인가)이 가른다(계획 4.5 B #3) —
+	// 후보인데 이 값이 비었으면 워커가 비호환으로 판정한다(fail-closed).
 	PrevFirstLocalPath string
+	// EndingSessionID 는 TD 분할 개시가 같은 트랜잭션에서 ending 으로 보낸 옛 회차다(계획 4.5 B #1) — 캐시가
+	// 그 회차를 개시 push 한 번으로 ending 으로 둔다. 비분할 개시(첫 회차 · 재접속 계승)면 "" 다.
+	EndingSessionID string
 
 	// SessionID 는 이 조각이 귀속된 세션이다. "" 면 NULL(비귀속)이다.
 	SessionID string

@@ -129,7 +129,8 @@ func TestStartObserverWaitsForFirstObservation(t *testing.T) {
 }
 
 // 관측을 못 얻어도 기동은 계속된다 — 관측 고장은 강등이지 사망이 아니다(설계 S3).
-// 그 상태의 관측은 EpochKnown=false 라 ⓐ2 만 닫힌다.
+// 그 상태의 관측은 EpochKnown=false 라 ⓐ2 가 닫히고, 신선한 관측이 없어 4.1 종료 전이도
+// 서지 않는다.
 func TestStartObserverProceedsWhenFirstObservationTimesOut(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "boom", http.StatusInternalServerError)

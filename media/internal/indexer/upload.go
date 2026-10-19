@@ -82,6 +82,9 @@ func (ix *Indexer) requestRowUploads(seg recording.Segment, prev, tail *index.Ta
 	// Mismatch — README 알려진 한계 표) CAS 가 AlreadySame 으로 업로더의 sessionInit 을
 	// 되살린다(없으면 그 회차의 실시간 ③ 이 전부 대조 보류로 새고, 스위퍼 init 벌은 이미 확정된 회차를
 	// 집지 않는다).
+	if res.SessionOpened {
+		ix.opened[seg.StreamID] = res // 개시 행에서만 뜻이 있는 계승 게이트 입력을 그 회차의 init 요청까지 든다
+	}
 	if res.SessionID != "" && ix.initAdmitted[seg.StreamID] != res.SessionID {
 		if ix.requestInit(seg.StreamID, res.SessionID, tail) {
 			ix.initAdmitted[seg.StreamID] = res.SessionID
@@ -150,11 +153,22 @@ func (ix *Indexer) requestPlayback(t *index.UploadTarget, isTail bool) {
 // 만들어도 같은 바이트다. S3Key 는 비워 보낸다: init 키는 예약값이 아니라 playback.InitKey 파생이며
 // 업로더가 스위퍼 init 행과 같은 자리에서 파생한다(계획 2.1 upload.go 행). Seq 는 init 축에서 쓰지 않는다.
 // 돌려주는 값은 접수됐는가다 — 거부면 부르는 쪽이 그 회차의 다음 행에서 다시 요청한다.
+//
+// 계승 게이트 입력(물려받은 회차 · 그 회차 첫 조각 경로 — 계획 4.5 B #19)은 개시 행의 결과에서만 뜻이 있다. 이
+// 프로세스가 그 회차의 개시 행을 봤으면 그 값을 싣는다 — 거부 뒤 다음 행의 재요청도 같다(판단 J64). 못 봤으면
+// 비어 가서 업로더가 계승 후보가 아닌 것으로 읽는다 — 알려진 공백이다. 못 보는 길은 둘이다: 재기동 뒤 이어지는 회차,
+// 그리고 같은 프로세스에서 개시 행의 COMMIT 응답을 잃은 경우(서버는 커밋했는데 재시도가 경로 중복으로 끝나 advance 를
+// 지나지 않는다). kty 결정(2026-09-30)으로 코드 그대로다 — 우리 송출에서도 공백은 생기지만, 플러그인이 송출 규격을
+// 잠가 stsd 가 고정이라 검문을 건너뛰어도 결과가 같다.
 func (ix *Indexer) requestInit(streamID, sessionID string, tail *index.TailRow) bool {
-	return ix.upload.RequestUpload(index.UploadTarget{
+	t := index.UploadTarget{
 		StreamID: streamID, Axis: index.AxisInit, SessionID: sessionID,
 		LocalPath: tail.LocalPath, Bytes: tail.Bytes, IsTail: true,
-	})
+	}
+	if o := ix.opened[streamID]; o.SessionID == sessionID {
+		t.InheritsSession, t.PrevFirstLocalPath = o.InheritsSession, o.PrevFirstLocalPath
+	}
+	return ix.upload.RequestUpload(t)
 }
 
 // holdTail 은 꼬리를 붙들어 둔다. ReasonIdle·ReasonScan 으로 확정된 꼬리는 아직 자랄 수

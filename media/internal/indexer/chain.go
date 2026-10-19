@@ -64,9 +64,9 @@ func (ix *Indexer) advanceChain(streamID string, prev *index.TailRow, rec index.
 	if !hasChain || c.sessionID != res.SessionID {
 		// 인덱서가 직전 회차의 끝(TD 분할·새 개시)을 관측하는 자리다. 업로더의 회차 상태 정리
 		// (Uploader.ForgetSession — sessionInit·보류 목록, 계획 2.1)는 여기서 부르지 않는다:
-		// 인덱서가 아는 업로더 통로는 RequestUpload 하나뿐이다(새 인터페이스 0). ⓐ 에는
-		// ForgetSession 을 부르는 자리가 없고 업로더의 수명(SessionTTL)이 치운다 — 세션 종료 관측에
-		// 잇는 배선은 ⓑ/ⓒ 몫이다. 사슬 쪽 정리는 이 교체가 전부다(보관값은 회차별 — 규칙 ⑥).
+		// 인덱서가 아는 업로더 통로는 RequestUpload 하나뿐이다(새 인터페이스 0). TD 분할은 루프가
+		// 관측하지 못해 업로더의 수명(SessionTTL)이 치운다 — 분리 · 오프라인은 루프가 부른다(판단 J86).
+		// 사슬 쪽 정리는 이 교체가 전부다(보관값은 회차별 — 규칙 ⑥).
 		return ix.startChain(streamID, rec, res, mtxi), false
 	}
 	link, pinned := ix.nextLink(c, adjacent, rec, res, mtxi)

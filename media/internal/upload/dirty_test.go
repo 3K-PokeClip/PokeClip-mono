@@ -46,7 +46,7 @@ var (
 	playbackUploaded7 = DirtyEvent{Kind: DirtyUploaded, StreamID: "demo", Axis: index.AxisPlayback, Seq: 7, SessionID: "S-1"}
 	playbackUploaded8 = DirtyEvent{Kind: DirtyUploaded, StreamID: "demo", Axis: index.AxisPlayback, Seq: 8, SessionID: "S-1"}
 	initUploadedS1    = DirtyEvent{Kind: DirtyUploaded, StreamID: "demo", Axis: index.AxisInit, SessionID: "S-1"}
-	initUploadedS2    = DirtyEvent{Kind: DirtyUploaded, StreamID: "demo", Axis: index.AxisInit, SessionID: "S-2"}
+	initRevokedS2     = DirtyEvent{Kind: DirtyUploaded, StreamID: "demo", Axis: index.AxisInit, SessionID: "S-2", InheritRevoked: true}
 	splitS1           = DirtyEvent{Kind: DirtySplit, StreamID: "demo", SessionID: "S-1", Reason: index.ReasonInitMismatch}
 )
 
@@ -88,15 +88,17 @@ func TestDirtyAckKeepsEventsMarkedAfterPeek(t *testing.T) {
 	sameEvents(t, d.Peek(), []DirtyEvent{playbackUploaded8})
 }
 
-// init 사실의 원소 키는 (stream, AxisInit, sessionID) 다(계획 뮤테이션 31). init 축은 seq 를
-// 쓰지 않으므로 seq 로 갈리면 안 되고, 세션으로는 갈려야 한다.
+// init 사실의 원소 키는 (stream, AxisInit, sessionID) 다(계획 뮤테이션 31). init 원소는 markInitConfirmed 하나가
+// 만들고 seq 를 쓰지 않는다 — 같은 세션의 확정은 한 원소로 접히고 세션으로는 갈린다. 원소는 그 확정이 계승을
+// 풀었는지(InheritRevoked — 계획 4.5 A2 결정 8)를 함께 싣는다. 잡는 결함: 해제 칸을 버리면 루프가 init 확정과
+// 계승 해제를 한 호출로 반영할 재료가 없다.
 func TestDirtyKeepsInitEventsPerSession(t *testing.T) {
 	d := &Dirty{}
-	d.markUploaded("demo", index.AxisInit, 0, "S-1")
-	d.markUploaded("demo", index.AxisInit, 5, "S-1") // 같은 세션 — seq 는 init 축에서 뜻이 없다
-	d.markUploaded("demo", index.AxisInit, 0, "S-2")
+	d.markInitConfirmed("demo", "S-1", false)
+	d.markInitConfirmed("demo", "S-1", false) // 같은 사실 — 한 원소로 접힌다
+	d.markInitConfirmed("demo", "S-2", true)
 
-	sameEvents(t, d.Peek(), []DirtyEvent{initUploadedS1, initUploadedS2})
+	sameEvents(t, d.Peek(), []DirtyEvent{initUploadedS1, initRevokedS2})
 }
 
 // split 은 세션마다 하나이고, 같은 세션의 uploaded 가 와도 지워지지 않는다(sticky).
@@ -119,6 +121,7 @@ func TestDirtySplitIsPerSessionAndSticky(t *testing.T) {
 func TestNilDirtyIsNoop(t *testing.T) {
 	var d *Dirty
 	d.markUploaded("demo", index.AxisPlayback, 7, "S-1")
+	d.markInitConfirmed("demo", "S-1", true)
 	d.markSplit("demo", "S-1", index.ReasonInitMismatch)
 	d.Ack([]DirtyEvent{playbackUploaded7})
 	if got := d.Peek(); len(got) != 0 {

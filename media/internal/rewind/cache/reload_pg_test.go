@@ -1,8 +1,9 @@
 package cache_test
 
 // 부팅 재구성을 실 PG 로 잰다(계획 PR ⓑ 검증 「PG 통합 — 부팅 재구성」 · 6.3 #34). 장부에 남은 상태를
-// index.LoadRewindLedger 로 읽어 Reload 한 캐시가 세션 축(init 게이트 · state · TD 와 나머지 다섯 열)을
-// 되찾고 목록을 고를 수 있는지 본다. SQL 자체의 행·열 대조는 index 의 rewind_read_pg_test.go 가 잰다.
+// index.LoadRewindLedger 로 읽어 적재(BeginLoad → CompleteLoad)한 캐시가 세션 축(init 게이트 · state · TD 와
+// 나머지 다섯 열 · 회차 최소 seq)을 되찾고 목록을 고를 수 있는지 본다. SQL 자체의 행·열 대조는 index 의
+// rewind_read_pg_test.go 가 잰다.
 //
 // PG_DSN 미설정이면 전량 skip 된다(REQUIRE_PG=1 인 CI 가 실주행 게이트다).
 
@@ -90,18 +91,20 @@ func TestCacheReloadRestoresSessionAxis(t *testing.T) {
 	exec(t, pool, `INSERT INTO stream_cutoffs (stream_id, cutoff_seq, seed_reason, seed_channel)
 	               VALUES ($1, 20, 'live_ingress', 'watcher')`, stream)
 
-	ledger, err := index.LoadRewindLedger(context.Background(), pool, stream)
+	o := cache.Options{}.WithDefaults()
+	ledger, err := index.LoadRewindLedger(context.Background(), pool, stream,
+		index.LedgerBounds{Lookback: o.LedgerLookback, RowCap: o.LedgerRowCap})
 	if err != nil {
 		t.Fatalf("LoadRewindLedger 실패: %v", err)
 	}
 	c := &cache.Cache{}
-	c.Reload(stream, ledger)
+	load(t, c, stream, ledger)
 
 	for _, want := range []cache.Session{
-		{MinSeq: 20, RewindSession: index.RewindSession{SessionID: "P", State: "ended", EndReason: "offline", InitUploaded: true,
-			FirstPDT: at(0), InheritsSession: "O", TargetDuration: 6}},
-		{MinSeq: 23, RewindSession: index.RewindSession{SessionID: "S", State: "live",
-			FirstPDT: at(132 * time.Second), InheritsSession: "P", TargetDuration: 7}},
+		{RewindSession: index.RewindSession{SessionID: "P", State: "ended", EndReason: "offline", InitUploaded: true,
+			FirstPDT: at(0), InheritsSession: "O", TargetDuration: 6, MinSeq: 20}},
+		{RewindSession: index.RewindSession{SessionID: "S", State: "live",
+			FirstPDT: at(132 * time.Second), InheritsSession: "P", TargetDuration: 7, MinSeq: 23}},
 	} {
 		if got, ok := c.Session(stream, want.SessionID); !ok || !reflect.DeepEqual(got, want) {
 			t.Errorf("Session(%s) = (%+v, %v), want (%+v, true)", want.SessionID, got, ok, want)

@@ -6,7 +6,7 @@
         customize="never"
         allow-external-scripts="no" />
     <domains enable_currentUserHome="true" enable_anywhere="false" enable_localSystem="false" />
-    <title>@CMAKE_PROJECT_NAME@</title>
+    <title>@PLUGIN_DISPLAY_NAME@</title>
     <choices-outline>
         <line choice="obs-plugin" />
     </choices-outline>

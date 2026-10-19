@@ -10,6 +10,8 @@
 #   stage_actions/baseline.tsv 묶음 · 동작 · 리전 · 판정(allow · deny) ·
 #                              13-1 판정 시각
 #   event_names.txt            이벤트 출처 · 이벤트 이름 · 조회 리전
+#   principal_sim/             2-3 판정 데이터 셋(계획 M17b 3-1 「데이터
+#                              단언」 — 꼴은 lib/principal_data.sh 머리 주석)
 # 끝으로 실제 스크립트를 실제 데이터로 가짜 aws 에 돌려, 파서가 데이터를
 # 받는지와 조회 argv 의 리전을 본다.
 #
@@ -58,6 +60,29 @@ readonly REGION_PATTERN='^[a-z]{2}(-[a-z]+)+-[0-9]$'
 readonly SOURCE_PATTERN='^[a-z0-9.-]+\.amazonaws\.com$'
 # 13-1 판정 시각(KST).
 readonly JUDGED_AT_PATTERN='^[0-9]{4}(-[0-9]{2}){2}T[0-9]{2}:[0-9]{2}\+09:00$'
+# 2-3 판정 래퍼와 그 데이터(계획 M17b).
+readonly WRAPPER="${PRECHECK_DIR}/principal-check.sh"
+readonly PRINCIPAL_DIR="${DATA_DIR}/principal_sim"
+# 래퍼가 부르는 읽기 동작과 그 리전(「동작<공백>리전」 — 계획 M17b 1절 4).
+# IAM · Route 53 은 us-east-1, 나머지는 서울이고, 태그 해석은 행의 리전(서울
+# · us-east-1 인증서)에서 부른다. iam:SimulatePrincipalPolicy 는 도구 자신의
+# 호출이라 넣지 않는다(거부되면 종료 2 로 드러남).
+PRINCIPAL_READS=('iam:GetInstanceProfile us-east-1' 'iam:GetRole us-east-1'
+  'iam:GetUser us-east-1' 'iam:ListRoles us-east-1'
+  'iam:ListAttachedRolePolicies us-east-1'
+  'iam:ListAttachedUserPolicies us-east-1' 'iam:ListGroupsForUser us-east-1'
+  'iam:ListAttachedGroupPolicies us-east-1' 'tag:GetResources ap-northeast-2'
+  'tag:GetResources us-east-1' 'route53:ListHostedZonesByName us-east-1'
+  's3:GetBucketPolicy ap-northeast-2'
+  'secretsmanager:GetResourcePolicy ap-northeast-2'
+  'ecr:GetRepositoryPolicy ap-northeast-2')
+readonly PRINCIPAL_READS
+# 2-3 판정이 없는 묶음이 자기 단계 동작으로 가진 PRINCIPAL_READS 동작
+# (「묶음 동작」 — lease-expiry 의 공유 존 조회).
+STAGE_OWN_READS=('lease-expiry route53:ListHostedZonesByName')
+readonly STAGE_OWN_READS
+# 자원 정책을 가지는 서비스(그 행은 정책 읽기 방법 none 을 쓸 수 없다).
+readonly POLICY_SERVICES=' s3 secretsmanager ecr sns sqs kms lambda '
 
 #######################################
 # 데이터 파일의 행(주석 · 빈 줄 뺌)을 낸다.
@@ -501,6 +526,337 @@ expect_real_scripts_accept_data() {
   testlib::ok "real-scripts → 묶음 17개 모두 판정됨 · 이벤트 ${rows}행을 그 리전에서 조회"
 }
 
+#######################################
+# 2-3 판정 데이터 파일 하나의 행(주석 · 빈 줄 뺌)을 낸다.
+# Globals:
+#   PRINCIPAL_DIR
+# Arguments:
+#   파일 이름.
+# Outputs:
+#   행(원문 그대로).
+#######################################
+principal_rows() {
+  data_rows "${PRINCIPAL_DIR}/$1"
+}
+
+#######################################
+# 데이터 단언: 2-3 판정 데이터 셋이 있고, 열 수(3 · 4 · 8)가 맞고 빈 칸이
+# 없으며, 계정 자리는 ${ACCOUNT} 뿐(12자리 숫자 0), 구체 ARN(arn: 해석 ·
+# 양성 대조 자원)에 「*」 가 없고, 첫 단계가 JUDGED_BUNDLES 안이다.
+# Globals:
+#   PRINCIPAL_DIR, JUDGED_BUNDLES
+#######################################
+expect_principal_files_wellformed() {
+  local entry name want bad others stage method arn
+  for entry in dev_principals.tsv:3 positive_controls.tsv:4 \
+    prod_targets.tsv:8; do
+    name="${entry%:*}"
+    want="${entry##*:}"
+    if [[ ! -f "${PRINCIPAL_DIR}/${name}" ]] ||
+      [[ -z "$(principal_rows "${name}")" ]]; then
+      testlib::fail "principal-files: ${name} 가 없거나 행이 없음"
+      return
+    fi
+    bad="$(principal_rows "${name}" | awk -F '\t' -v n="${want}" '{
+      ok = NF == n
+      for (i = 1; i <= NF; i++) if ($i == "") ok = 0
+      if (!ok) print NR
+    }')"
+    if [[ -n "${bad}" ]]; then
+      testlib::fail "principal-files: ${name} 의 ${want}열이 아닌 행 —" \
+        "$(printf '%s' "${bad}" | tr '\n' ' ')"
+      return
+    fi
+    # shellcheck disable=SC2016 # ${ACCOUNT} 는 펼치지 않는 글자 그대로다.
+    others="$(grep -oE -- '\$\{[^}]*\}' "${PRINCIPAL_DIR}/${name}" |
+      grep -vxF -- '${ACCOUNT}')"
+    if grep -qE -- '[0-9]{12}' "${PRINCIPAL_DIR}/${name}" ||
+      [[ -n "${others}" ]]; then
+      testlib::fail "principal-files: ${name} 에 12자리 숫자 또는 다른" \
+        "자리표시자(${others})"
+      return
+    fi
+  done
+  while IFS=$'\t' read -r _ stage method _; do
+    if [[ "${method}" == arn:* && "${method}" == *'*'* ]]; then
+      testlib::fail "principal-files: arn: 해석에 「*」 — ${method}"
+      return
+    fi
+    if ! has_line "$(printf '%s\n' "${JUDGED_BUNDLES[@]}")" "${stage}"; then
+      testlib::fail "principal-files: 첫 단계 ${stage} 가 판정 묶음 밖"
+      return
+    fi
+  done < <(principal_rows prod_targets.tsv)
+  while IFS=$'\t' read -r _ _ _ arn; do
+    if [[ "${arn}" == *'*'* ]]; then
+      testlib::fail "principal-files: 양성 대조 자원에 「*」 — ${arn}"
+      return
+    fi
+  done < <(principal_rows positive_controls.tsv)
+  testlib::ok "principal-files → 데이터 셋 3 · 4 · 8열 · 계정 자리" \
+    "\${ACCOUNT} 뿐 · 구체 ARN 에 * 0 · 첫 단계는 판정 묶음"
+}
+
+#######################################
+# 데이터 단언: 래퍼의 STAGE_ORDER 가 JUDGED_BUNDLES 와 순서까지 같다
+# (cc348-2 — 래퍼 파일의 그 줄을 읽어 대조).
+# Globals:
+#   WRAPPER, JUDGED_BUNDLES
+#######################################
+expect_stage_order_matches_wrapper() {
+  local line
+  line="$(grep -m 1 -- '^STAGE_ORDER=(' "${WRAPPER}" 2>/dev/null)"
+  if [[ "${line}" != "STAGE_ORDER=(${JUDGED_BUNDLES[*]})" ]]; then
+    testlib::fail "stage-order: 래퍼의 STAGE_ORDER 가 JUDGED_BUNDLES 와" \
+      "다름 — 「${line}」"
+    return
+  fi
+  testlib::ok "stage-order → 래퍼 STAGE_ORDER = JUDGED_BUNDLES(순서까지)"
+}
+
+#######################################
+# 서비스마다 쓸 수 있는 자원 유형(공백 구분 · 앞뒤 공백)을 낸다.
+# Arguments:
+#   서비스 접두.
+# Outputs:
+#   유형 목록(모르는 서비스면 빈 출력).
+#######################################
+service_types() {
+  case "$1" in
+    s3) printf ' bucket object \n' ;;
+    secretsmanager) printf ' secret \n' ;;
+    ecr) printf ' repository \n' ;;
+    ec2)
+      printf ' %s %s %s %s %s %s %s %s \n' security-group vpc subnet \
+        route-table internet-gateway natgateway elastic-ip vpc-endpoint
+      ;;
+    acm) printf ' certificate \n' ;;
+    route53) printf ' hostedzone \n' ;;
+    iam) printf ' role user group policy \n' ;;
+    *) ;;
+  esac
+}
+
+#######################################
+# 동작마다 글롭에 맞는지 본다.
+# Arguments:
+#   동작(쉼표 구분), 글롭.
+# Returns:
+#   모두 맞으면 0.
+#######################################
+all_actions_match() {
+  local rest="$1," action
+  while [[ -n "${rest}" ]]; do
+    action="${rest%%,*}"
+    rest="${rest#*,}"
+    # shellcheck disable=SC2053 # 둘째 인자는 글롭이다.
+    [[ "${action}" == $2 ]] || return 1
+  done
+}
+
+#######################################
+# 권한 변경 행의 유형과 동작 계열(이름에 그 낱말이 든 IAM 동작)을 본다.
+# Arguments:
+#   자원 유형, 동작(쉼표 구분), 기대 유형, 계열 낱말(Role · User · Group).
+# Outputs:
+#   틀린 까닭(맞으면 빈 출력).
+#######################################
+family_problem() {
+  if [[ "$1" != "$3" ]] || ! all_actions_match "$2" "iam:*$4*"; then
+    printf '%s 계열(*%s*) 동작 · %s 유형이 아님\n' "$4" "$4" "$3"
+  fi
+}
+
+#######################################
+# 동작이 모두 정책 버전 동작(새 버전 · 기본 버전 지정)인지 본다.
+# Arguments:
+#   동작(쉼표 구분).
+# Returns:
+#   모두 그러면 0.
+#######################################
+policy_version_actions() {
+  local rest="$1," action
+  while [[ -n "${rest}" ]]; do
+    action="${rest%%,*}"
+    rest="${rest#*,}"
+    case "${action}" in
+      iam:CreatePolicyVersion | iam:SetDefaultPolicyVersion) ;;
+      *) return 1 ;;
+    esac
+  done
+}
+
+#######################################
+# 대상 행 하나의 해석 방법이 유형 · 서비스와 맞는지 본다(동작 × 유형 짝
+# 자체는 보지 않는다 — A9, 사람이 서비스 승인 참조로 대조).
+# Arguments:
+#   서비스 접두, 해석 방법, 자원 유형, 동작(쉼표 구분).
+# Outputs:
+#   틀린 까닭(맞으면 빈 출력).
+#######################################
+method_problem() {
+  local service="$1" method="$2" type="$3" actions="$4" path
+  case "${method}" in
+    arn:*)
+      [[ "${method#arn:}" == "arn:aws:${service}:"* ]] ||
+        printf 'ARN 서비스가 동작과 다름\n'
+      path="${method#arn:arn:aws:s3:::}"
+      if [[ "${type}" == object && "${path}" != */?* ]]; then
+        printf 'object 행 ARN 에 키가 없음\n'
+      elif [[ "${type}" == bucket && "${path}" == */* ]]; then
+        printf 'bucket 행 ARN 에 키가 있음\n'
+      fi
+      ;;
+    tag:*)
+      [[ "${method}" == "tag:${service}:${type}" ]] ||
+        printf 'tag: 유형 조각이 서비스 · 유형과 다름\n'
+      ;;
+    zone:*)
+      [[ "${service}:${type}" == route53:hostedzone ]] ||
+        printf 'zone: 행이 route53 hostedzone 이 아님\n'
+      ;;
+    self:role | prodrole) family_problem "${type}" "${actions}" role Role ;;
+    self:user) family_problem "${type}" "${actions}" user User ;;
+    self:group) family_problem "${type}" "${actions}" group Group ;;
+    policy:attached)
+      if [[ "${type}" != policy ]] ||
+        ! policy_version_actions "${actions}"; then
+        printf '정책 버전 동작 · policy 유형이 아님\n'
+      fi
+      ;;
+    *) printf '모르는 해석 방법\n' ;;
+  esac
+}
+
+#######################################
+# 데이터 단언: 대상 행마다 동작이 한 서비스이고, IAM · Route 53 행의 리전은
+# us-east-1, 유형은 그 서비스의 것, 해석 방법은 서비스 · 유형 · 계열과
+# 맞고, 자원 정책을 가지는 서비스 행에 정책 읽기 none 이 없다.
+# Globals:
+#   POLICY_SERVICES
+#######################################
+expect_target_rows_consistent() {
+  local key method type region actions read service problem count=0
+  while IFS=$'\t' read -r key _ method type region actions read _; do
+    count=$((count + 1))
+    service="${actions%%:*}"
+    problem=""
+    if ! all_actions_match "${actions}" "${service}:*"; then
+      problem='동작의 서비스가 둘 이상'
+    elif [[ "${service}" == iam || "${service}" == route53 ]] &&
+      [[ "${region}" != us-east-1 ]]; then
+      problem="${service} 행의 리전이 us-east-1 이 아님"
+    elif [[ "$(service_types "${service}")" != *" ${type} "* ]]; then
+      problem="유형 ${type} 이 ${service} 의 것이 아님"
+    elif [[ "${read}" == none &&
+      "${POLICY_SERVICES}" == *" ${service} "* ]]; then
+      problem='자원 정책 서비스인데 정책 읽기 none'
+    else
+      problem="$(method_problem "${service}" "${method}" "${type}" \
+        "${actions}")"
+    fi
+    if [[ -n "${problem}" ]]; then
+      testlib::fail "targets: ${key} — ${problem}"
+      return
+    fi
+  done < <(principal_rows prod_targets.tsv)
+  if [[ "${count}" -eq 0 ]]; then
+    testlib::fail "targets: prod_targets.tsv 에 행이 없음"
+    return
+  fi
+  testlib::ok "targets → 서비스 · 리전 · 유형 · 해석 방법 · 계열 일치 ·" \
+    "자원 정책 서비스에 none 0"
+}
+
+#######################################
+# 데이터 단언: dev_principals.tsv 는 정확히 넷(instance-profile 둘 · role
+# 하나 · user 하나)이고, 넷마다 양성 대조 행이 정확히 하나다.
+#######################################
+expect_dev_principals() {
+  local kinds keys controls
+  kinds="$(principal_rows dev_principals.tsv | cut -f 2 | LC_ALL=C sort |
+    tr '\n' ' ')"
+  if [[ "${kinds}" != 'instance-profile instance-profile role user ' ]]; then
+    testlib::fail "principals: 종류가 instance-profile 둘 · role · user 가" \
+      "아님 — ${kinds}"
+    return
+  fi
+  keys="$(principal_rows dev_principals.tsv | cut -f 1 | LC_ALL=C sort)"
+  controls="$(principal_rows positive_controls.tsv | cut -f 1 | LC_ALL=C sort)"
+  if [[ "${controls}" != "${keys}" ]]; then
+    testlib::fail "principals: 양성 대조 행이 주체마다 하나가 아님 —" \
+      "$(printf '%s' "${controls}" | tr '\n' ' ')"
+    return
+  fi
+  testlib::ok "principals → 고정 넷 · 주체마다 양성 대조 한 행"
+}
+
+#######################################
+# 데이터 단언: PRINCIPAL_READS(동작 · 리전)가 판정 묶음 11개 모두에 자원
+# 「*」 로 있고(래퍼가 읽는 dev 주체 · 대상은 단계 자원 경로 밖이다 — 예 dev
+# 역할의 get-role), 판정이 없는 묶음에는 그 동작이 없다(STAGE_OWN_READS 의
+# 묶음 동작은 뺌).
+# Globals:
+#   JUDGED_BUNDLES, UNJUDGED_BUNDLES, PRINCIPAL_READS, STAGE_OWN_READS,
+#   STAGE_DIR
+#######################################
+expect_principal_reads() {
+  local bundle pairs actions read own
+  own="$(printf '%s\n' "${STAGE_OWN_READS[@]}")"
+  for bundle in "${JUDGED_BUNDLES[@]}"; do
+    pairs="$(data_rows "${STAGE_DIR}/${bundle}.tsv" | cut -f 1,2,3 |
+      tr '\t' ' ')"
+    for read in "${PRINCIPAL_READS[@]}"; do
+      if ! has_line "${pairs}" "${read} *"; then
+        testlib::fail "principal-reads: ${bundle} 에 ${read}(자원 *) 없음"
+        return
+      fi
+    done
+  done
+  for bundle in "${UNJUDGED_BUNDLES[@]}"; do
+    actions="$(bundle_actions "${bundle}")"
+    for read in "${PRINCIPAL_READS[@]}"; do
+      read="${read% *}"
+      has_line "${own}" "${bundle} ${read}" && continue
+      if has_line "${actions}" "${read}"; then
+        testlib::fail "principal-reads: 2-3 판정이 없는 ${bundle} 에 ${read}"
+        return
+      fi
+    done
+  done
+  testlib::ok "principal-reads → 래퍼 읽기 동작 · 리전이 자원 * 로 판정 묶음 11개에만"
+}
+
+#######################################
+# 실제 principal-check.sh 가 실제 데이터를 판정 단계마다 받는다(종료 2 —
+# 데이터 꼴 등 검사 불가 — 가 아님). 가짜 aws 는 호출 주체의 질문만 허용하고
+# 주체 해석은 NoSuchEntity 라, 데이터 꼴 · 첫 단계 · 해석 방법 · 추가 문맥을
+# 래퍼의 파서가 그대로 읽는지를 본다.
+# Globals:
+#   JUDGED_BUNDLES, WRAPPER, FAKE_USER, run_status, run_out
+#######################################
+expect_wrapper_accepts_data() {
+  local case_dir stage
+  case_dir="$(testlib::new_case)" || {
+    testlib::fail "wrapper-data: 시험 준비 실패"
+    return
+  }
+  testlib::tsv "${FAKE_USER}@*" allowed None - - - >"${case_dir}/in/sim.tsv"
+  for stage in "${JUDGED_BUNDLES[@]}"; do
+    testlib::run "${case_dir}" "principal-${stage}" env \
+      FAKE_AWS_SIM_TABLE="${case_dir}/in/sim.tsv" bash "${WRAPPER}" \
+      "${stage}"
+    if [[ "${run_status}" -ne 0 && "${run_status}" -ne 1 &&
+      "${run_status}" -ne 3 ]]; then
+      testlib::fail "wrapper-data: principal-check.sh ${stage} 가 종료" \
+        "${run_status} — $(cat -- "${run_out}.stderr")"
+      return
+    fi
+  done
+  testlib::ok "wrapper-data → 실제 래퍼가 실제 데이터를 판정 단계 11개 모두" \
+    "받음"
+}
+
 main() {
   testlib::init data_files_test
   expect_bundle_set
@@ -512,6 +868,12 @@ main() {
   expect_event_names
   expect_role_group_matches_code
   expect_real_scripts_accept_data
+  expect_principal_files_wellformed
+  expect_stage_order_matches_wrapper
+  expect_target_rows_consistent
+  expect_dev_principals
+  expect_principal_reads
+  expect_wrapper_accepts_data
   testlib::finish data_files_test
 }
 

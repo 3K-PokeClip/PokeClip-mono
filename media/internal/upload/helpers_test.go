@@ -3,14 +3,18 @@ package upload
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
 )
@@ -311,6 +315,82 @@ func (p *fakePutter) putCalls() []putCall {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return append([]putCall(nil), p.calls...)
+}
+
+// ListObjectsV2 를 비롯한 아래 List… 메서드 열둘은 S3 LIST 금지(프로필 4절)의 동적 그물이다 — 계획 6.5 ⑵ · 발행 쪽
+// fakeStore 와 같은 형. *s3.Client 의 목록 연산 전부다(TestFakePutterTrapsListCalls 가 SDK 실물과 대조한다). Putter 에는
+// 목록 연산이 없어 여기 닿는 길은 SDK 목록 인터페이스로의 형 단언뿐이다. 생성 자리가 백 곳이 넘어 가짜마다 t 를 넣지
+// 않는다 — 불리면 패키지 기록(listTrap)에 적고 오류를 돌려주며, TestMain 이 m.Run 뒤에 기록이 있으면 패키지를 실패로
+// 바꾼다. 워커 고루틴에서 불려도 잃지 않는다.
+func (p *fakePutter) ListObjectsV2(context.Context, *s3.ListObjectsV2Input, ...func(*s3.Options)) (*s3.ListObjectsV2Output, error) {
+	return nil, listCalled("ListObjectsV2")
+}
+
+func (p *fakePutter) ListObjects(context.Context, *s3.ListObjectsInput, ...func(*s3.Options)) (*s3.ListObjectsOutput, error) {
+	return nil, listCalled("ListObjects")
+}
+
+func (p *fakePutter) ListBuckets(context.Context, *s3.ListBucketsInput, ...func(*s3.Options)) (*s3.ListBucketsOutput, error) {
+	return nil, listCalled("ListBuckets")
+}
+
+func (p *fakePutter) ListObjectVersions(context.Context, *s3.ListObjectVersionsInput, ...func(*s3.Options)) (*s3.ListObjectVersionsOutput, error) {
+	return nil, listCalled("ListObjectVersions")
+}
+
+func (p *fakePutter) ListObjectAnnotations(context.Context, *s3.ListObjectAnnotationsInput, ...func(*s3.Options)) (*s3.ListObjectAnnotationsOutput, error) {
+	return nil, listCalled("ListObjectAnnotations")
+}
+
+func (p *fakePutter) ListBucketAnalyticsConfigurations(context.Context, *s3.ListBucketAnalyticsConfigurationsInput, ...func(*s3.Options)) (*s3.ListBucketAnalyticsConfigurationsOutput, error) {
+	return nil, listCalled("ListBucketAnalyticsConfigurations")
+}
+
+func (p *fakePutter) ListBucketIntelligentTieringConfigurations(context.Context, *s3.ListBucketIntelligentTieringConfigurationsInput, ...func(*s3.Options)) (*s3.ListBucketIntelligentTieringConfigurationsOutput, error) {
+	return nil, listCalled("ListBucketIntelligentTieringConfigurations")
+}
+
+func (p *fakePutter) ListBucketInventoryConfigurations(context.Context, *s3.ListBucketInventoryConfigurationsInput, ...func(*s3.Options)) (*s3.ListBucketInventoryConfigurationsOutput, error) {
+	return nil, listCalled("ListBucketInventoryConfigurations")
+}
+
+func (p *fakePutter) ListBucketMetricsConfigurations(context.Context, *s3.ListBucketMetricsConfigurationsInput, ...func(*s3.Options)) (*s3.ListBucketMetricsConfigurationsOutput, error) {
+	return nil, listCalled("ListBucketMetricsConfigurations")
+}
+
+func (p *fakePutter) ListDirectoryBuckets(context.Context, *s3.ListDirectoryBucketsInput, ...func(*s3.Options)) (*s3.ListDirectoryBucketsOutput, error) {
+	return nil, listCalled("ListDirectoryBuckets")
+}
+
+func (p *fakePutter) ListMultipartUploads(context.Context, *s3.ListMultipartUploadsInput, ...func(*s3.Options)) (*s3.ListMultipartUploadsOutput, error) {
+	return nil, listCalled("ListMultipartUploads")
+}
+
+func (p *fakePutter) ListParts(context.Context, *s3.ListPartsInput, ...func(*s3.Options)) (*s3.ListPartsOutput, error) {
+	return nil, listCalled("ListParts")
+}
+
+// listTrap 은 fakePutter 의 목록 함정이 불린 기록이다 — 한 건이 연산 이름과 부른 자리의 스택이다.
+var listTrap struct {
+	mu    sync.Mutex
+	calls []string
+}
+
+// listCalled 는 목록 연산 op 가 불렸다고 패키지 기록에 적고 호출자에게 돌려줄 오류를 만든다.
+func listCalled(op string) error {
+	listTrap.mu.Lock()
+	defer listTrap.mu.Unlock()
+	listTrap.calls = append(listTrap.calls, op+"\n"+string(debug.Stack()))
+	return fmt.Errorf("fakePutter: %s 는 금지된 목록 연산이다", op)
+}
+
+// takeListTrapCalls 는 쌓인 기록을 꺼내고 비운다.
+func takeListTrapCalls() []string {
+	listTrap.mu.Lock()
+	defer listTrap.mu.Unlock()
+	calls := listTrap.calls
+	listTrap.calls = nil
+	return calls
 }
 
 // --- 파일·대상 픽스처 -------------------------------------------------------
