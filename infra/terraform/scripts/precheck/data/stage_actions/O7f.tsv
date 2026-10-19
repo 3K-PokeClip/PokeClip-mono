@@ -5,6 +5,7 @@
 # VPC origin · 표준 로그 전달 · CLOUDFRONT WAF · 13-1 미판정 행 — KVS 그릇
 # 재조회 · Origin Shield · 로그 그룹 생성 · 보존 설정) · O7f 5 랜딩 업로드
 # (M7 c5). KVS 값 동작은 O7f-stop2 에만.
+# 2-3 판정 래퍼 읽기(맨 아래 덩어리): M17b principal-check.sh.
 
 # CloudFront 제어면(KVS 그릇 생성 · 재조회 포함 — 값 동작 아님)
 cloudfront:CreateDistribution	us-east-1	*
@@ -79,3 +80,15 @@ tag:GetTagKeys	ap-northeast-2	*
 tag:GetTagKeys	us-east-1	*
 tag:GetResources	ap-northeast-2	*
 tag:GetResources	us-east-1	*
+
+# 2-3 판정 래퍼(M17b principal-check.sh)가 더 부르는 읽기 — 주체 · 대상
+# 해석(IAM · Route 53 은 us-east-1). 인스턴스 프로필 · 태그 해석 · 자원
+# 정책 읽기는 위 덩어리에 있다.
+iam:GetRole	us-east-1	*
+iam:GetUser	us-east-1	*
+iam:ListRoles	us-east-1	*
+iam:ListAttachedRolePolicies	us-east-1	*
+iam:ListAttachedUserPolicies	us-east-1	*
+iam:ListGroupsForUser	us-east-1	*
+iam:ListAttachedGroupPolicies	us-east-1	*
+route53:ListHostedZonesByName	us-east-1	*

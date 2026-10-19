@@ -4,6 +4,7 @@
 # 출처: 계획 M8 「O7d 선행 0」(elb · ecs · servicediscovery · iam 역할 · wafv2
 # REGIONAL · ec2 SG 규칙) · 고유 확인(Cloud Map 사설 존 리전 조건 · ELB 한도) ·
 # 설계 13-1 미판정 행.
+# 2-3 판정 래퍼 읽기(맨 아래 덩어리): M17b principal-check.sh.
 
 # 공개 ALB · 내부 ALB · NLB · 대상 그룹 · 리스너 규칙 · 한도 읽기
 elasticloadbalancing:CreateLoadBalancer	ap-northeast-2	*
@@ -96,3 +97,15 @@ tag:GetTagKeys	ap-northeast-2	*
 tag:GetTagKeys	us-east-1	*
 tag:GetResources	ap-northeast-2	*
 tag:GetResources	us-east-1	*
+
+# 2-3 판정 래퍼(M17b principal-check.sh)가 더 부르는 읽기 — 주체 · 대상
+# 해석(IAM · Route 53 은 us-east-1). 인스턴스 프로필 · 태그 해석 · 자원
+# 정책 읽기는 위 덩어리에 있다. iam:GetRole 은 같은 (동작, 리전)이 한 행이라
+# 위 단계 행(자원 패턴 prod 역할 경로)을 쓴다.
+iam:GetUser	us-east-1	*
+iam:ListRoles	us-east-1	*
+iam:ListAttachedRolePolicies	us-east-1	*
+iam:ListAttachedUserPolicies	us-east-1	*
+iam:ListGroupsForUser	us-east-1	*
+iam:ListAttachedGroupPolicies	us-east-1	*
+route53:ListHostedZonesByName	us-east-1	*

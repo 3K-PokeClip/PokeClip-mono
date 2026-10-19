@@ -5,6 +5,7 @@
 # 추가 apply · 거부면 edge → registry 되돌림) · 계획 5절 (후속) 행.
 # GitHub OIDC 역할 받기(sts:AssumeRoleWithWebIdentity)는 시뮬레이터로 판정할
 # 수 없어 넣지 않는다 — 설계 8절의 CI 1회 실측이 맡는다.
+# 2-3 판정 래퍼 읽기(맨 아래 덩어리): M17b principal-check.sh.
 
 # GitHub OIDC 공급자 확인 · 참조(없으면 생성)
 iam:ListOpenIDConnectProviders	us-east-1	*
@@ -54,3 +55,15 @@ tag:GetTagKeys	ap-northeast-2	*
 tag:GetTagKeys	us-east-1	*
 tag:GetResources	ap-northeast-2	*
 tag:GetResources	us-east-1	*
+
+# 2-3 판정 래퍼(M17b principal-check.sh)가 더 부르는 읽기 — 주체 · 대상
+# 해석(IAM · Route 53 은 us-east-1). 인스턴스 프로필 · 태그 해석 · 자원
+# 정책 읽기는 위 덩어리에 있다. iam:GetRole 은 같은 (동작, 리전)이 한 행이라
+# 위 단계 행(자원 패턴 prod 역할 경로)을 쓴다.
+iam:GetUser	us-east-1	*
+iam:ListRoles	us-east-1	*
+iam:ListAttachedRolePolicies	us-east-1	*
+iam:ListAttachedUserPolicies	us-east-1	*
+iam:ListGroupsForUser	us-east-1	*
+iam:ListAttachedGroupPolicies	us-east-1	*
+route53:ListHostedZonesByName	us-east-1	*
