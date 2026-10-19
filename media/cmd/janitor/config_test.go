@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	sidecarconfig "github.com/3K-PokeClip/pokeclip-mono/media/internal/config"
 )
 
 // envOf 는 필수 값을 채운 환경에 over 를 덮은 getenv 다.
@@ -125,5 +127,27 @@ func TestLoadConfigAcceptsBoundaries(t *testing.T) {
 	}))
 	if err != nil {
 		t.Fatalf("경계 값(Q8 하한 · 상한) 거부: %v", err)
+	}
+}
+
+// TestReconnectWindowFloorMatchesSidecar 는 재접속 창 300초의 두 자리를 묶는 결속 시험이다(POK-372 할 일 3 ·
+// 설계 한계 L12). 사이드카(config.Load 의 ReconnectWindow — 설계값, env 없음)와 janitor 하한
+// minReconnectWindow 가 달라지면 FAIL 한다. janitor 하한이 사이드카보다 작으면 보호 ② 가 재접속 창보다 먼저
+// 풀려 계승 게이트가 열 첫 조각을 지울 수 있다. 크게 잡는 것(JANITOR_RECONNECT_WINDOW > 하한)은 더 오래
+// 지키는 쪽이라 허용한다.
+func TestReconnectWindowFloorMatchesSidecar(t *testing.T) {
+	sidecar, err := sidecarconfig.Load(func(k string) string {
+		return map[string]string{
+			"POSTGRES_USER":     "pokeclip",
+			"POSTGRES_PASSWORD": "test-only",
+			"POSTGRES_DB":       "pokeclip",
+		}[k]
+	})
+	if err != nil {
+		t.Fatalf("sidecarconfig.Load: %v", err)
+	}
+	if minReconnectWindow != sidecar.ReconnectWindow {
+		t.Fatalf("janitor minReconnectWindow = %s, 사이드카 ReconnectWindow = %s — 두 값이 같아야 한다",
+			minReconnectWindow, sidecar.ReconnectWindow)
 	}
 }

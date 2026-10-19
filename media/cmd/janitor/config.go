@@ -15,7 +15,7 @@ import (
 // 하한 · 상한(설계 2-5). 값의 근거:
 //   - maxFSOpTimeout: 잠금 트랜잭션 상한(RowLockTxnTimeout 8s) 안에 UPDATE · COMMIT 2s 를 남긴다(E3′).
 //   - minGrace: 계약 그레이스 8분(K5).
-//   - minReconnectWindow: ADR-044 재접속 창 300초가 하한이다(m4).
+//   - minReconnectWindow: ADR-044 재접속 창 300초가 하한이다(m4). 사이드카 config.Load 의 ReconnectWindow 와 같아야 한다 — 결속 시험 TestReconnectWindowFloorMatchesSidecar(POK-372 할 일 3).
 //   - minRecordDeleteAfter: 여유(1h)를 빼도 양수(2h).
 //   - minFSOpTimeout · minInterval · maxBatch · maxMaxPerCycle: 운영자 실수로 모든 삭제가 stall 이 되거나
 //     DB 를 쉬지 않고 두드리거나 한 번에 너무 많이 읽는 자기 DoS 를 막는다(t2 r1 Q8 — 보안 검수 L-1 의 예).
