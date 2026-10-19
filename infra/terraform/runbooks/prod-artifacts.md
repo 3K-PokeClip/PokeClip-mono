@@ -102,11 +102,15 @@ docker image inspect --format '{{.Os}}/{{.Architecture}}' \
   nginx@<M2 머지본의 핀 다이제스트>   # <Media 상자 플랫폼> 과 같아야 함
 docker tag nginx@<M2 머지본의 핀 다이제스트> \
   "${registry_host}/pokeclip-prod/media-nginx:<태그>"
-docker push "${registry_host}/pokeclip-prod/media-nginx:<태그>"
+docker push --platform <Media 상자 플랫폼> \
+  "${registry_host}/pokeclip-prod/media-nginx:<태그>"
 ```
 
-푸시한 것은 그 변형 하나의 매니페스트라 다이제스트가 핀과 다릅니다. 기록에는
-푸시 출력의 다이제스트를 씁니다(아래 「기록」).
+Docker 기본(classic) 이미지 저장소에서는 푸시한 것이 그 변형 하나의
+매니페스트라 다이제스트가 핀과 다릅니다. containerd 이미지 저장소를 켠 Docker 는
+인덱스를 통째로 올릴 수 있어, 위처럼 `docker push --platform` 으로 대상 플랫폼
+하나만 올립니다([docker image push](https://docs.docker.com/reference/cli/docker/image/push/)
+의 `--platform`). 기록에는 푸시 출력의 다이제스트를 씁니다(아래 「기록」).
 
 ### MediaMTX 확인
 
