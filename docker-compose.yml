@@ -95,6 +95,8 @@ services:
       # REWIND_SEED_ENABLED 로만 멈춘다. 인덱싱·업로드는 그대로 돈다. 자세히는 media/README.md
       # env 표의 MTX_API_URL 행과 그 위 되감기 상태 관측 문단.
       # 9997은 호스트에 공개하지 않으므로 이 주소는 compose 내부망에서만 유효하다.
+      # 자격(MTX_API_USER · MTX_API_PASS_FILE)은 두지 않는다 — dev MediaMTX 의 셋째 항목이
+      # `user: any` 라 무인증으로 붙는다(media/README.md).
       MTX_API_URL: http://media:9997
 
   # 정적 세그먼트 스텁 (M1 1-2) — 2번 플레이어 개발용. 먼저 infra/compose/stub/gen-segments.sh 1회 실행.

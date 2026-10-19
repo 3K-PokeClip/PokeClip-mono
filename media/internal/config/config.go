@@ -5,6 +5,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -61,7 +62,13 @@ type Config struct {
 	// 인덱싱·업로드는 그대로 돈다. 상태 방증 ⓐ2 가 fail-closed 되어 스캔 유입(ⓐ2) 주조가
 	// 멈추고, 종료 판정이 신선한 관측을 요구하므로 4.1 종료 전이(M4 ⓒ)도 서지 않아 같은
 	// 스트림의 연속 방송이 한 회차로 이어진다. HOOK_SPOOL_PATH 와 같은 형태의 즉시 롤백 스위치다.
+	//
+	// User 는 여기서 채우고 Pass 는 비워 둔다(POK-373) — 비밀번호는 MTXAPIPassFile 의 내용이고,
+	// 설정은 파일을 열지 않으므로 main 이 읽어 채운다.
 	MTXState mtxstate.Options
+	// MTXAPIPassFile 은 Control API Basic 비밀번호 파일의 절대 경로다(MTX_API_PASS_FILE). 빈 값이면
+	// 무인증이다. 경로 문자열만 검사했고 파일은 열지 않았다 — 읽기는 main 이 한다(Upload.Root 와 같은 규칙).
+	MTXAPIPassFile string
 	// ObsFresh·ObsBackfill 은 상태 방증 ⓐ2 의 시간 항이다(설계 6.5.2):
 	// 관측이 이보다 낡으면 방증으로 쓰지 않고(ObsFresh), 관측 시점보다 이보다 더 과거인
 	// 조각은 백로그 머리로 보아 주조하지 않는다(ObsBackfill). 판정은 indexer 가 한다.
@@ -269,14 +276,20 @@ func Load(env func(string) string) (Config, error) {
 	// 수집(예산 45초)이 끝나기도 전에 무조건 arm 을 돌려 원 상태를 기본 경로에서 재현한다.
 	up.ArmFallback = max(2*watch.RescanEvery, 2*idx.ScanCollectBudget)
 
-	// --- 관측 축 (POK-195 M3 — 설계 5.4.1·6.5.2, env 6종) ---
+	// --- 관측 축 (POK-195 M3 — 설계 5.4.1·6.5.2, env 6종 + 자격 env 2종 — POK-373) ---
 	//
 	// MTX_API_URL 은 **withDefault 를 쓰지 않는다**(위 필드 주석 참조). 빈 값이
 	// "관측 끔"이라는 뜻을 가진 값이므로 fallback 으로 채우면 그 스위치가 고장난다.
 	mtx := mtxstate.Options{APIURL: strings.TrimSpace(env("MTX_API_URL"))}
-	if err := validateMTXAPIURL(mtx.APIURL); err != nil {
+	mtxHost, err := validateMTXAPIURL(mtx.APIURL)
+	if err != nil {
 		return Config{}, err
 	}
+	mtxAuth, err := loadMTXAPIAuth(env, mtxHost)
+	if err != nil {
+		return Config{}, err
+	}
+	mtx.User = mtxAuth.user
 	if mtx.PollInterval, err = duration(env, "OBS_POLL", mtxstate.DefaultPollInterval); err != nil {
 		return Config{}, err
 	}
@@ -334,6 +347,7 @@ func Load(env func(string) string) (Config, error) {
 		HookPollInterval: hookPollInterval,
 
 		MTXState:          mtx,
+		MTXAPIPassFile:    mtxAuth.passFile,
 		ObsFresh:          obsFresh,
 		ObsBackfill:       obsBackfill,
 		SessionFloorSlack: sessionFloorSlack,
@@ -421,28 +435,35 @@ func isLoopbackIP(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-// validateMTXAPIURL 은 관측 폴러의 베이스 URL 문법을 기동 때 본다.
-// 빈 값은 "관측 끔"이라 통과다.
+// validateMTXAPIURL 은 관측 폴러의 베이스 URL 문법을 기동 때 보고, 통과하면 호스트(포트 · 대괄호
+// 없음)를 돌려준다 — 자격 규칙(IP 리터럴)이 그 값을 본다. 빈 값은 "관측 끔"이라 빈 호스트로 통과다.
 //
 // 여기서 안 잡으면 폴러가 매 주기 mtxstate_poll_failed 만 남기며 도는 상태가 되고,
 // 그 증상은 "스캔 유입(ⓐ2)의 되감기가 안 된다"(ⓐ1 워처·훅 유입은 계속된다)로 한참 뒤에 나타난다.
-func validateMTXAPIURL(raw string) error {
+//
+// **어느 에러에도 URL 원문을 싣지 않는다**(POK-373). 원문에 자격이 섞인 채 다른 갈래(예: `ftp://u:pw@…`
+// 의 scheme)에 걸리면 그 에러가 stderr 로 나가 자격이 샌다. url.Parse 의 에러도 원문을 담으므로 싣지
+// 않는다. 무엇이 틀렸는지만 적는다. 같은 이유로 자격 검사를 해석 직후 가장 먼저 둔다.
+func validateMTXAPIURL(raw string) (string, error) {
 	if raw == "" {
-		return nil
+		return "", nil
 	}
 	u, err := url.Parse(raw)
-	// Hostname() 까지 본다 — "http://:9997" 은 Host 가 ":9997" 이라 비어 있지 않지만
-	// 호스트가 없다(S3_ENDPOINT 와 같은 함정).
-	if err != nil || u.Host == "" || u.Hostname() == "" {
-		return fmt.Errorf("MTX_API_URL(%q)은 scheme 과 호스트를 포함한 URL 이어야 한다", raw)
-	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return fmt.Errorf("MTX_API_URL(%q)의 scheme 은 http 또는 https 여야 한다", raw)
+	if err != nil {
+		return "", errors.New("MTX_API_URL 을 URL 로 해석하지 못했다 — scheme 과 호스트를 포함한 URL 이어야 한다(예: http://127.0.0.1:9997)")
 	}
 	// URL 원문은 mtxstate_poll_failed 로그에 그대로 실린다. 자격증명을 넣으면 그 로그가
-	// 유출 경로가 된다 — 로컬 Control API 는 자격증명 없이 붙는 구성이다(compose 내부망 한정).
+	// 유출 경로가 된다 — 자격 자리는 env 두 개다.
 	if u.User != nil {
-		return fmt.Errorf("MTX_API_URL 에 자격증명(user:pass@)을 넣을 수 없다 — 관측 API 는 자격증명 없이 붙는다")
+		return "", errors.New("MTX_API_URL 에 자격증명(user:pass@)을 넣을 수 없다 — 자격은 MTX_API_USER · MTX_API_PASS_FILE 로 넣는다")
+	}
+	// Hostname() 까지 본다 — "http://:9997" 은 Host 가 ":9997" 이라 비어 있지 않지만
+	// 호스트가 없다(S3_ENDPOINT 와 같은 함정).
+	if u.Host == "" || u.Hostname() == "" {
+		return "", errors.New("MTX_API_URL 은 scheme 과 호스트를 포함한 URL 이어야 한다(예: http://127.0.0.1:9997)")
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return "", errors.New("MTX_API_URL 의 scheme 은 http 또는 https 여야 한다")
 	}
 	// 폴러는 이 값 뒤에 경로를 문자열로 잇는다(mtxstate/poller.go). 그래서 `#` 은 뒤를
 	// 통째로 fragment 로 잘라 요청 경로를 "/" 로 만들고, `?` 는 경로를 쿼리 안으로 밀어 넣는다.
@@ -451,9 +472,9 @@ func validateMTXAPIURL(raw string) error {
 	// url.Parse 가 Fragment="" 로 삼켜 파싱 결과로는 구분되지 않는다(`?` 의 ForceQuery 같은
 	// 표식이 fragment 에는 없다). 베이스 URL 원문에 두 글자 중 하나라도 있으면 그 자체가 오구성이다.
 	if strings.ContainsAny(raw, "?#") {
-		return fmt.Errorf("MTX_API_URL(%q)에 query(?)·fragment(#)를 넣을 수 없다 — 베이스 URL 뒤에 /v3/paths/list 가 붙는다", raw)
+		return "", errors.New("MTX_API_URL 에 query(?)·fragment(#)를 넣을 수 없다 — 베이스 URL 뒤에 /v3/paths/list 가 붙는다")
 	}
-	return nil
+	return u.Hostname(), nil
 }
 
 // dsn 은 사용자명과 비밀번호를 URL 인코딩해 넣는다. 특수문자가 든 비밀번호도 깨지지 않는다.

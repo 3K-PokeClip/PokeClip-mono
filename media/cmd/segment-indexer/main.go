@@ -77,6 +77,12 @@ func run() error {
 	if err := validateObservationWindow(cfg.ObsFresh); err != nil {
 		return err
 	}
+	// 관측 폴러의 비밀번호 파일을 여기서 읽는다 — DB 연결보다 먼저라 설정 오류가 DB 상태와 무관하게
+	// 드러난다. 실패는 기동 실패다(OpenRoot 와 같은 꼴 · ADR-063 강등의 예외 — startObserver 주석).
+	obsOpt, err := observerOptions(cfg)
+	if err != nil {
+		return err
+	}
 
 	log := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.LogLevel}))
 	cfg.Watcher.Log = log
@@ -133,7 +139,7 @@ func run() error {
 	// 스캔 유입이 ⓐ2 를 쓸 수 있다. 뒤로 미루면 재기동 직후 한 주기가 통째로
 	// 관측 이력 0(= EpochKnown=false) 위에서 돌아 스캔 유입은 아무것도 주조하지 못한다
 	// (ⓐ1 워처·훅 유입은 관측과 무관하게 주조한다 — 관측이 가르는 것은 스캔 유입뿐이다).
-	observer, stopObserver := startObserver(ctx, cfg.MTXState, log)
+	observer, stopObserver := startObserver(ctx, obsOpt, log)
 	defer stopObserver()
 
 	// --- 3. 워처 조립·기동 — 실패는 강등이다 ---
@@ -296,6 +302,12 @@ func assembleWatcher(ctx context.Context, opt recording.WatcherOptions) (*record
 // **실패 처분이 워처·훅과 같다**: 조립 실패도 관측 실패도 강등이지 사망이 아니다.
 // 관측은 주조 자격의 보강재일 뿐이고, 없으면 방향은 언제나 비주조(안전)다(설계 S3).
 //
+// **예외 하나 — 자격 파일 실패는 기동 실패다**(ADR-063 「관측 실패는 강등」 의 예외, kty 2026-10-19).
+// 자격이 틀린 채 강등으로 뜨면 운영자가 끄지도 않은 관측이 조용히 사라진다. 그래서 비밀번호 파일은
+// 여기가 아니라 run 이 이 함수보다 앞(DB 연결 전)에서 observerOptions 로 읽고, 실패하면 기동을 멈춘다.
+// opt 는 그 결과라 Pass 가 이미 채워져 있다. 자격이 거부되는 것(401)은 기동 뒤의 관측 실패라 강등이고,
+// 폴러가 auth_rejected 를 ERROR 로 낸다.
+//
 // 두 번째 반환값은 폴 고루틴의 종료를 기다리는 함수다. 폴러의 소유자는 run() 이고,
 // **부모 ctx 취소에 기대지 않고 자기 ctx 를 직접 끊는다** — loop 이 에러로 빠져나오면
 // 부모는 아직 살아 있어서, 취소 없이 Done 만 기다리면 그 자리에서 영원히 멈춘다.
@@ -313,7 +325,7 @@ func startObserver(ctx context.Context, opt mtxstate.Options, log *slog.Logger) 
 	poller, err := mtxstate.NewPoller(opt)
 	if err != nil {
 		log.Error("mtxstate_setup_failed", "url", opt.APIURL, "err", err,
-			"note", "관측만 강등된다. 인덱싱은 계속되고 ⓐ2 는 fail-closed 다")
+			"note", "관측만 강등된다. 인덱싱은 계속되고 ⓐ2 는 fail-closed, 4.1 회차 종료 전이(M4 ⓒ)도 서지 않는다")
 		return nil, noop
 	}
 
@@ -326,9 +338,30 @@ func startObserver(ctx context.Context, opt mtxstate.Options, log *slog.Logger) 
 	// 첫 관측을 BootWait 까지 기다린다. 못 얻어도 그대로 진행한다 — 그 창(최대 3초)에
 	// 만들어진 파일은 초기 수집이 회수한다(기존 규약).
 	observed := poller.WaitFirstObservation(ctx)
+	// auth · user 로 「자격을 싣고 붙었나」 를 기동 한 줄에서 본다. 비밀번호 · 파일 경로는 싣지 않는다.
 	log.Info("mtxstate_started",
-		"url", opt.APIURL, "poll", opt.PollInterval, "first_observation", observed)
+		"url", opt.APIURL, "poll", opt.PollInterval, "first_observation", observed,
+		"auth", poller.AuthScheme(), "user", opt.User)
 	return poller, stop
+}
+
+// observerOptions 는 관측 폴러의 설정을 완성한다 — config 가 채운 값에 비밀번호 파일의 내용을 Pass 로
+// 얹는다(POK-373). config 는 파일을 열지 않으므로(손잡이는 main 이 — SEGMENT_ROOT 의 OpenRoot 와 같은 꼴)
+// 여기서 읽는다.
+//
+// **실패는 기동 실패다** — run 이 이 에러를 그대로 돌려준다(startObserver 주석의 ADR-063 예외).
+// MTX_API_URL 이 비면(관측 끔 — 즉시 롤백 스위치) 파일을 읽지 않는다. 롤백이 파일 문제에 막히면 안 된다.
+func observerOptions(cfg config.Config) (mtxstate.Options, error) {
+	opt := cfg.MTXState
+	if opt.APIURL == "" || cfg.MTXAPIPassFile == "" {
+		return opt, nil
+	}
+	pass, err := readSecretFile("MTX_API_PASS_FILE", cfg.MTXAPIPassFile)
+	if err != nil {
+		return mtxstate.Options{}, err
+	}
+	opt.Pass = mtxstate.NewSecret(pass)
+	return opt, nil
 }
 
 // newUploader 는 설정에 따라 업로더를 고른다. 분기는 셋이고 기동을 거부하는 것은 하나뿐이다.
