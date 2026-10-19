@@ -5,6 +5,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -124,3 +126,66 @@ func TestRemoveTRefusesSymlinkedDirectoryInsideRoot(t *testing.T) {
 		t.Fatalf("RemoveT = %v, want ErrSymlinkInPath", err)
 	}
 }
+
+// Q1(t2 r1) — Lstat 과 OpenRoot 사이에 디렉터리가 심링크로 바뀌는 경쟁도 거부한다(os.SameFile 대조).
+// 다른 고루틴이 s1 을 「빈 디렉터리 ↔ s2 를 가리키는 심링크」로 계속 바꾸는 동안 s1/<이름> 삭제를 되풀이해도
+// s2 의 파일은 남아야 한다. 원본은 경쟁 창이 열려도 SameFile 이 거부하거나 연 디렉터리(빈 s1) 안에서만
+// 지우므로 결정적으로 통과한다(변이 — SameFile 대조 제거 → 경쟁 창에서 s2 파일이 지워진다).
+func TestRemoveTRefusesDirectorySwappedForSymlinkAfterCheck(t *testing.T) {
+	root, dir := openTestRoot(t)
+	const name = "seg.mp4"
+	if err := os.MkdirAll(filepath.Join(dir, "s2"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	victim := filepath.Join(dir, "s2", name)
+	if err := os.WriteFile(victim, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s1, asDir, asLink := filepath.Join(dir, "s1"), filepath.Join(dir, "s1-dir"), filepath.Join(dir, "s1-link")
+	if err := os.Mkdir(asDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("s2", asLink); err != nil {
+		t.Fatal(err)
+	}
+	stop := make(chan struct{})
+	var swapper sync.WaitGroup
+	swapper.Go(func() {
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			// 실패(이름이 잠시 없음)는 무시한다 — s1 이 디렉터리 · 심링크 · 부재를 오가는 것이 목적이다.
+			_ = os.Rename(asDir, s1)
+			_ = os.Rename(s1, asDir)
+			_ = os.Rename(asLink, s1)
+			_ = os.Rename(s1, asLink)
+		}
+	})
+	defer swapper.Wait()
+	defer close(stop)
+
+	// 경쟁 창은 마이크로초라 한 번에 맞히기 어렵다 — 삭제를 여럿이 동시에 되풀이해 시도 수를 늘린다.
+	deadline := time.Now().Add(3 * time.Second)
+	var removers sync.WaitGroup
+	var hit atomic.Bool
+	for range swapRemovers {
+		removers.Go(func() {
+			for !hit.Load() && time.Now().Before(deadline) {
+				_ = RemoveT(root, filepath.Join("s1", name), time.Second)
+				if _, err := os.Stat(victim); err != nil {
+					hit.Store(true)
+				}
+			}
+		})
+	}
+	removers.Wait()
+	if hit.Load() {
+		t.Fatal("검사 뒤 심링크로 바뀐 s1 을 따라가 s2 파일을 지웠다")
+	}
+}
+
+// swapRemovers 는 경쟁 시험에서 동시에 삭제를 되풀이하는 고루틴 수다.
+const swapRemovers = 4

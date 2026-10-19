@@ -303,6 +303,9 @@ func TestPGLockedDebtRowBlocksReclaimUntilReleased(t *testing.T) {
 
 	for i := 1; i <= deletedBlockedFailures; i++ {
 		pr.j.runCycle(ctx)
+		if len(pr.j.debt) != 1 {
+			t.Fatalf("회수 %d회째 부채 = %+v, want 1", i, pr.j.debt)
+		}
 		if pr.j.debt[0].failures != i {
 			t.Fatalf("회수 %d회째 연속 실패 = %d", i, pr.j.debt[0].failures)
 		}
