@@ -106,7 +106,7 @@ docker push --platform <Media 상자 플랫폼> \
   "${registry_host}/pokeclip-prod/media-nginx:<태그>"
 ```
 
-Docker 기본(classic) 이미지 저장소에서는 푸시한 것이 그 변형 하나의
+Docker 의 classic 이미지 저장소에서는 푸시한 것이 그 변형 하나의
 매니페스트라 다이제스트가 핀과 다릅니다. containerd 이미지 저장소를 켠 Docker 는
 인덱스를 통째로 올릴 수 있어, 위처럼 `docker push --platform` 으로 대상 플랫폼
 하나만 올립니다([docker image push](https://docs.docker.com/reference/cli/docker/image/push/)
