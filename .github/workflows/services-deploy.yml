@@ -15,8 +15,6 @@
 # 신뢰 조건은 그 형식의 environment dev-deploy 단위로 묶인다(POK-367). environment 의
 # 배포 브랜치는 develop 하나라, develop 밖 브랜치와 이 environment 를 쓰지 않는 잡은
 # 이 역할로 로그인하지 못한다. 그러니 다른 워크플로가 같은 environment 를 쓰지 않게 둔다.
-# 옮기는 동안(POK-367 2단계 전)은 신뢰 조건이 옛 develop 브랜치 sub 도 받는다 — 그동안은
-# develop 에서 도는 다른 OIDC 잡도 로그인될 수 있다. 2단계에서 옛 값을 빼고 이 줄을 지운다.
 # 잡의 environment 를 바꾸거나 빼면 토큰의 sub 가 바뀐다 — 신뢰 조건도 같은 걸음에서
 # 바꿔야 로그인된다.
 name: services-deploy
