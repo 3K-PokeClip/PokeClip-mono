@@ -8,7 +8,7 @@
 
 networks:
   # MediaMTX 제어면(인증 훅 · Control API) 전용. 밖으로 나가지 않고(internal) edge 는 붙이지 않는다.
-  # 대역은 VPC(172.31.0.0/16)와 겹치지 않는다. 고정 주소 둘은 템플릿의 apiAddress · authHTTPAddress 와 같아야 한다.
+  # 대역은 상자 VPC 대역과 겹치지 않는다. 고정 주소 둘은 템플릿의 apiAddress · authHTTPAddress 와 같아야 한다.
   mtx-control:
     internal: true
     ipam:
