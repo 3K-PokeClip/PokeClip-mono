@@ -1,0 +1,211 @@
+# Media 상자 compose 템플릿.
+#
+# Terraform templatefile() 로 렌더한다 — prod 는 M9 user_data 가 렌더해
+# /etc/pokeclip-media/compose.yml 에 쓰고, 시험(test/render_test.sh)은
+# test/lib/render.sh 로 같은 함수를 부른다. 프로젝트 이름은 파일에 적지 않는다
+# — 시작 · 정지 스크립트가 -p 로 넣는다(MEDIA_COMPOSE_PROJECT).
+#
+# 템플릿 변수:
+#   mediamtx_image · nginx_image · sidecar_image
+#                        이미지 참조 <저장소 URL>@<다이제스트>. 이름은 이미지
+#                        핀 정본 images.json 의 키 + _image 다.
+#   ingest_auth_image · janitor_image
+#                        같은 꼴. 비면 그 서비스를 렌더하지 않는다(자리).
+#   proxy_live_port · proxy_playback_port · proxy_control_port ·
+#   proxy_health_port    nginx 듣기 포트(nginx.conf.tmpl 과 같은 값).
+#   rds_endpoint · rds_db_name
+#                        사이드카 · janitor DB 접속(IAM 인증 — 비밀 아님).
+#   rewind_bucket_name   되감기 버킷 이름(사이드카 S3_BUCKET).
+#   detached_log_driver  비부착 서비스의 로깅 드라이버. "json-file" 이면 회전
+#                        json-file, 그 밖의 값은 모두 journald 다(prod 는
+#                        "journald" — 오타가 나도 prod 쪽으로 떨어진다).
+#                        json-file 은 journald 가 없는 로컬 엔진에서 띄울
+#                        때만 쓴다.
+#
+# 지키는 것:
+#   - 망 칸 하나. nginx · sidecar · 응답기 · janitor 는 MediaMTX 의 네트워크
+#     네임스페이스를 함께 쓴다(network_mode: service:mediamtx). 그래서
+#     MediaMTX 의 루프백 포트(8888 LL-HLS · 9996 재생 서버 · 9997 관리 API)는
+#     밖으로 열지 않고 127.0.0.1 로만 닿는다. 공개 포트는 mediamtx 서비스에서만
+#     연다.
+#   - 재기동 단위. mediamtx · nginx 는 엔진이 다시 띄우지 않는다
+#     (restart: "no") — 시작 스크립트가 이 둘의 출력에만 붙고
+#     (--attach) 하나가 끝나면 compose 전체가 내려가며, systemd 유닛이 전체를
+#     다시 띄운다. 나머지는 restart: on-failure(횟수 상한 없음)로 엔진이 그
+#     컨테이너만 다시 띄운다 — DB 장애로 사이드카가 죽어도 송출은 끊기지 않는다.
+#     unless-stopped · always 는 쓰지 않는다: 데몬 재시작 · 부팅 때 엔진이
+#     스스로 띄워 systemd 와 기동자가 둘이 된다.
+#   - 로그. 출력이 연결된 둘은 compose 출력으로 유닛 저널에 남고, 엔진 쪽은
+#     회전하는 json-file 이다. 비부착 서비스는 journald 에 고정 tag
+#     (pokeclip-media-<서비스>)로 남긴다 — 컨테이너가 다시 만들어져도 로그가
+#     남고, journalctl -t 로 읽는다. 로깅 옵션에 env · labels 를 넣지 않는다
+#     (컨테이너 환경이 저널 필드로 남는다).
+#   - 비밀은 환경변수로 넘기지 않는다. 사이드카 · janitor 는 IAM 인증이라 DB
+#     비밀번호가 없고, MediaMTX 설정(CDN 비밀 포함)은 시작 스크립트가 tmpfs 에
+#     렌더한 파일을 읽기 전용으로 받는다.
+#   - 볼륨에 복사 금지 옵션을 붙이지 않는다 — 이미지에 심은 소유권 복사가
+#     끊겨 비root 쓰기가 조용히 실패한다(루트 docker-compose.yml 과 같은 규칙.
+#     render_test 가 렌더에서 그 옵션 이름 0건을 본다).
+#     사이드카는 녹화 · 훅 스풀을 읽기만 한다(:ro). 녹화 삭제는 janitor 몫이다.
+#   - 실행 계정은 각 이미지의 USER 가 정본이다 — 여기에 user: 를 적지 않는다.
+#   - 모든 서비스에 no-new-privileges · cap_drop: [ALL]. cap 을 되살리는 것은
+#     nginx 의 CHOWN · SETGID · SETUID 뿐이다(master 만 root 인 공식 이미지).
+#     mediamtx · 사이드카는 비root USER 라 cap 없이 돈다 — 응답기 · janitor
+#     이미지도 그래야 한다. privileged · pid · ipc 는 쓰지 않는다.
+#
+# 이 파일에는 compose 변수 치환(달러 중괄호)을 쓰지 않는다 — 값은 모두
+# templatefile() 이 넣는다.
+
+x-attached-logging: &attached-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-mediamtx-dependency: &mediamtx-dependency
+  mediamtx:
+    condition: service_started
+    restart: true
+
+services:
+  # 수신(SRT) · LL-HLS · 재생 서버 · 녹화. 망 칸 주인이다.
+  mediamtx:
+    image: ${mediamtx_image}
+    restart: "no"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    environment:
+      # 녹화 파일명에 박히는 시각을 UTC 로 고정한다(사이드카가 파일명에서
+      # start_wall_utc 를 읽는다).
+      TZ: UTC
+    ports:
+      - "${proxy_live_port}:${proxy_live_port}"
+      - "${proxy_playback_port}:${proxy_playback_port}"
+      - "${proxy_control_port}:${proxy_control_port}"
+      - "${proxy_health_port}:${proxy_health_port}"
+      - "8890:8890/udp"
+    volumes:
+      - recordings:/recordings
+      - hooks:/hooks
+      - dvr:/dvr
+      - /run/pokeclip-media/mediamtx.yml:/mediamtx.yml:ro
+    logging: *attached-logging
+
+  # 앞단 프록시 — 설정은 M9 user_data 가 nginx.conf.tmpl 로 렌더해 둔다.
+  nginx:
+    image: ${nginx_image}
+    network_mode: "service:mediamtx"
+    depends_on: *mediamtx-dependency
+    restart: "no"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # 공식 이미지는 master 가 root 로 떠 임시 디렉터리를 워커 계정에 chown 하고,
+    # 워커가 setgid · setuid 로 그 계정(nginx)이 된다. 셋 중 하나만 빠져도
+    # 워커가 뜨지 않는다. 듣기 포트는 cap 없이 연다(엔진이 망 칸의 비특권
+    # 포트 하한을 0 으로 둔다).
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+    volumes:
+      - /etc/pokeclip-media/nginx.conf:/etc/nginx/nginx.conf:ro
+    logging: *attached-logging
+
+  # 세그먼트 인덱서 사이드카. 제어면 포트는 아직 열지 않는다(I1-6 전).
+  sidecar:
+    image: ${sidecar_image}
+    network_mode: "service:mediamtx"
+    depends_on: *mediamtx-dependency
+    restart: on-failure
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    environment:
+      POSTGRES_AUTH: iam
+      POSTGRES_HOST: ${rds_endpoint}
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: ${rds_db_name}
+      POSTGRES_USER: media_indexer
+      POSTGRES_SSLMODE: verify-full
+      ENSURE_SCHEMA: "false"
+      SEGMENT_ROOT: /recordings
+      HOOK_SPOOL_PATH: /hooks/events.jsonl
+      # 같은 망 칸이라 MediaMTX 관리 API 는 루프백으로 닿는다.
+      MTX_API_URL: http://127.0.0.1:9997
+      TZ: UTC
+      AWS_REGION: ap-northeast-2
+      S3_BUCKET: ${rewind_bucket_name}
+    volumes:
+      - recordings:/recordings:ro
+      - hooks:/hooks:ro
+%{ if detached_log_driver == "json-file" ~}
+    logging: *attached-logging
+%{ else ~}
+    logging:
+      driver: journald
+      options:
+        tag: pokeclip-media-sidecar
+%{ endif ~}
+%{ if ingest_auth_image != "" ~}
+
+  # 송출 인증 응답기(자리 — M15 가 채운다). 비밀은 파일 경로로만 받는다.
+  ingest-auth:
+    image: ${ingest_auth_image}
+    network_mode: "service:mediamtx"
+    depends_on: *mediamtx-dependency
+    restart: on-failure
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+%{ if detached_log_driver == "json-file" ~}
+    logging: *attached-logging
+%{ else ~}
+    logging:
+      driver: journald
+      options:
+        tag: pokeclip-media-ingest-auth
+%{ endif ~}
+%{ endif ~}
+%{ if janitor_image != "" ~}
+
+  # 녹화 정리(자리). 녹화 삭제 책임이라 recordings 를 쓰기로 붙인다.
+  janitor:
+    image: ${janitor_image}
+    network_mode: "service:mediamtx"
+    depends_on: *mediamtx-dependency
+    restart: on-failure
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    environment:
+      POSTGRES_AUTH: iam
+      POSTGRES_HOST: ${rds_endpoint}
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: ${rds_db_name}
+      POSTGRES_USER: media_janitor
+      POSTGRES_SSLMODE: verify-full
+      TZ: UTC
+      AWS_REGION: ap-northeast-2
+    volumes:
+      - recordings:/recordings
+%{ if detached_log_driver == "json-file" ~}
+    logging: *attached-logging
+%{ else ~}
+    logging:
+      driver: journald
+      options:
+        tag: pokeclip-media-janitor
+%{ endif ~}
+%{ endif ~}
+
+volumes:
+  recordings:
+  hooks:
+  dvr:

@@ -1,0 +1,608 @@
+#!/usr/bin/env bash
+#
+# Media 상자 템플릿 렌더 시험 — 계획 M2 c3 「render_test 단언」 과 착수 덧붙임
+# 「render_test 추가 단언」.
+#
+# prod 와 같은 렌더 함수(test/lib/render.sh — terraform console 의
+# templatefile())로 compose.yml.tmpl · nginx/nginx.conf.tmpl 을 렌더하고, 렌더한
+# compose 마다 `docker compose config -q` 로 검증한 뒤 선언 그대로의 구성 JSON
+# (`config --no-normalize`)에 단언한다. 정규화한 구성은 쓰지 않는다 — compose 는
+# 정규화 때 network_mode: service:<이름> 에 depends_on 을 스스로 채워 넣어(5.5.0
+# 실측), 템플릿이 선언을 빠뜨려도 보이지 않는다. 컨테이너는 띄우지 않는다.
+#
+# 템플릿 변수 값은 공용 시험값 파일 test/render_vars.json 하나에서 온다. 갈래를
+# 보려고 값을 바꾼 사본을 이 시험이 만든다(시험 쪽에 값을 따로 적지 않고 그
+# 파일을 jq 로 고친다):
+#   - a: render_vars.json 그대로(응답기 · janitor 빔 · journald).
+#   - b: 응답기만 채움. c: janitor 만 채움.
+#   - d: 둘 다 채우고 detached_log_driver = json-file(로컬 실행 렌더 갈래).
+#   - nginx: control_upstream 빔(a) · 채움(e).
+#
+# 드리프트: 시험 compose(test/compose.contract.yml)에서 템플릿과 이름이 같은
+# 서비스는 restart · network_mode · depends_on · security_opt · cap_drop ·
+# cap_add · 볼륨 읽기 전용 여부가 렌더한 템플릿과 같아야 한다 — 실행 시험은
+# 시험 compose 를 띄우므로, 거기서만 맞는 구조가 prod 에 새지 않게 한다.
+# logging 비교는 c7 의 compose.unit.yml 몫이다(로컬 엔진에 journald 가 없다).
+#
+# 제품 파일(템플릿)이 없으면 사례가 FAIL 이다. 건너뛰는 갈래는 없다.
+#
+# 사용: bash infra/media-host/test/render_test.sh
+# 종료 코드: 0 전부 통과 / 1 하나라도 실패
+
+# 아래 source= 경로를 이 파일 위치 기준으로 찾게 한다.
+# shellcheck source-path=SCRIPTDIR
+
+set -euo pipefail
+
+TEST_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+readonly TEST_DIR
+MEDIA_HOST_DIR="$(cd -- "${TEST_DIR}/.." && pwd)"
+readonly MEDIA_HOST_DIR
+# shellcheck source=lib/render.sh
+source "${TEST_DIR}/lib/render.sh"
+# shellcheck source=lib/harness.sh
+source "${TEST_DIR}/lib/harness.sh"
+
+readonly PROJECT='pcbench-edge-proxy'
+readonly COMPOSE_TEMPLATE="${MEDIA_HOST_DIR}/compose.yml.tmpl"
+readonly NGINX_TEMPLATE="${MEDIA_HOST_DIR}/nginx/nginx.conf.tmpl"
+readonly CONTRACT_COMPOSE="${TEST_DIR}/compose.contract.yml"
+readonly COMPOSE_VARIANTS='a b c d'
+readonly SAMPLE_CONTROL_UPSTREAM='127.0.0.1:28190'
+readonly MIN_READ_TIMEOUT_SECONDS=15
+readonly CONFIG_TIMEOUT=60
+readonly CASE_COUNT=17
+
+# 기대값 jq 프로그램이 함께 쓰는 정의. 입력은 그 갈래의 변수 JSON 이다.
+#   services — 렌더에 있어야 할 서비스(응답기 · janitor 는 변수가 차 있을 때만).
+#   attached — compose 출력이 연결되는 서비스(시작 스크립트의 --attach 집합.
+#              c4 start_test 가 같은 집합을 시작 스크립트 쪽에서 단언한다).
+#   nginx_cap_add — cap_drop: [ALL] 뒤 nginx 에만 되살리는 cap. 공식 이미지는
+#              master 가 root 로 떠 임시 디렉터리를 워커 계정(nginx)에 chown 하고
+#              워커가 setgid · setuid 로 그 계정이 된다 — 셋 중 하나만 빠져도
+#              워커가 뜨지 않는다(실측). 낮은 포트도 이 셋으로 듣는다(엔진이 망
+#              칸의 비특권 포트 하한을 0 으로 둔다 — NET_BIND_SERVICE 불요).
+# shellcheck disable=SC2016 # jq 프로그램 — $ 는 jq 변수다.
+readonly JQ_DEFS='
+def services:
+  ["mediamtx", "nginx", "sidecar"]
+  + (if .ingest_auth_image != "" then ["ingest-auth"] else [] end)
+  + (if .janitor_image != "" then ["janitor"] else [] end)
+  | sort;
+def attached: ["mediamtx", "nginx"];
+def nginx_cap_add: ["CHOWN", "SETGID", "SETUID"];
+def is_attached: . as $s | attached | index($s) != null;
+def db_env:
+  {POSTGRES_AUTH: "iam", POSTGRES_HOST: .rds_endpoint,
+   POSTGRES_PORT: "5432", POSTGRES_DB: .rds_db_name,
+   POSTGRES_SSLMODE: "verify-full", TZ: "UTC",
+   AWS_REGION: "ap-northeast-2"};
+'
+
+scratch=""
+setup_reason=""
+
+cleanup() {
+  local status=$?
+  if [[ -n "${scratch}" ]]; then
+    rm -rf -- "${scratch:?}"
+  fi
+  exit "${status}"
+}
+
+add_setup_reason() {
+  setup_reason="${setup_reason:+${setup_reason}; }$1"
+}
+
+vars_file() { printf '%s/vars-%s.json' "${scratch}" "$1"; }
+compose_render() { printf '%s/compose-%s.yml' "${scratch}" "$1"; }
+config_json() { printf '%s/compose-%s.json' "${scratch}" "$1"; }
+nginx_render() { printf '%s/nginx-%s.conf' "${scratch}" "$1"; }
+
+check_tools() {
+  local ok=0 tool
+  for tool in docker jq terraform base64 awk grep; do
+    if ! command -v "${tool}" >/dev/null 2>&1; then
+      add_setup_reason "도구 없음: ${tool}"
+      ok=1
+    fi
+  done
+  return "${ok}"
+}
+
+# 응답기 · janitor 시험 이미지 — 사이드카 시험값과 같은 저장소 꼴에 이름 ·
+# 다이제스트만 바꾼다(서로 다른 값이라 이미지 변수가 뒤바뀌면 사례 3 이 잡는다).
+# shellcheck disable=SC2016 # jq 프로그램 — $ 는 jq 변수다.
+readonly JQ_SAMPLE_IMAGE='
+def sample_image($name; $fill):
+  .sidecar_image
+  | sub("/[^/@]+@sha256:[0-9a-f]+$"; "/\($name)@sha256:\($fill * 64)");
+def fill_auth: .ingest_auth_image = sample_image("media-ingest-auth"; "4");
+def fill_janitor: .janitor_image = sample_image("media-janitor"; "5");
+'
+
+#######################################
+# 갈래별 변수 파일을 만든다(render_vars.json 을 jq 로 고친 사본).
+#######################################
+write_variant_vars() {
+  local base="${RENDER_VARS_FILE}" defs="${JQ_SAMPLE_IMAGE}"
+  cp -- "${base}" "$(vars_file a)" \
+    && jq "${defs} fill_auth" "${base}" >"$(vars_file b)" \
+    && jq "${defs} fill_janitor" "${base}" >"$(vars_file c)" \
+    && jq "${defs} fill_auth | fill_janitor
+      | .detached_log_driver = \"json-file\"" "${base}" >"$(vars_file d)" \
+    && jq --arg u "${SAMPLE_CONTROL_UPSTREAM}" '.control_upstream = $u' \
+      "${base}" >"$(vars_file e)"
+}
+
+#######################################
+# 템플릿 하나를 렌더한다. 실패하면 준비 실패 원인에 남긴다.
+# Arguments:
+#   템플릿, 변수 파일, 출력 파일.
+#######################################
+render_one() {
+  if ! render::template "$1" "$2" "$3" 2>"$3.err"; then
+    add_setup_reason "${1#"${MEDIA_HOST_DIR}/"} 렌더 실패($(basename -- "$2")): \
+$(harness::log_tail "$3.err")"
+    return 1
+  fi
+}
+
+#######################################
+# 갈래마다 렌더한다(compose a ~ d · nginx a · e). 템플릿이 없으면 그 이름을
+# 한 번만 원인에 남긴다. 하나라도 실패하면 1.
+#######################################
+render_all() {
+  local ok=0 v template
+  if ! write_variant_vars; then
+    add_setup_reason '갈래 변수 파일을 만들지 못함(render_vars.json · jq)'
+    return 1
+  fi
+  for template in "${COMPOSE_TEMPLATE}" "${NGINX_TEMPLATE}"; do
+    if [[ ! -f "${template}" ]]; then
+      add_setup_reason "${template#"${MEDIA_HOST_DIR}/"} 없음"
+      ok=1
+    fi
+  done
+  (( ok == 0 )) || return 1
+  for v in ${COMPOSE_VARIANTS}; do
+    render_one "${COMPOSE_TEMPLATE}" "$(vars_file "${v}")" \
+      "$(compose_render "${v}")" || ok=1
+  done
+  for v in a e; do
+    render_one "${NGINX_TEMPLATE}" "$(vars_file "${v}")" \
+      "$(nginx_render "${v}")" || ok=1
+  done
+  return "${ok}"
+}
+
+#######################################
+# compose 파일 하나를 `docker compose config -q` 로 검증하고, 선언 그대로의
+# 구성(정규화 없음 — 변수 · 앵커는 풀고 볼륨 · 포트는 긴 꼴)을 JSON 으로 쓴다.
+# Arguments:
+#   compose 파일, 출력 JSON 파일.
+# Returns:
+#   0 config -q · JSON 모두 성공 / 1 실패(원인은 출력 JSON 경로 .err).
+#######################################
+compose_config() {
+  harness::run_bounded "${CONFIG_TIMEOUT}" "$2.err" \
+    docker compose -p "${PROJECT}" -f "$1" config -q || return 1
+  harness::run_bounded "${CONFIG_TIMEOUT}" "$2.raw" \
+    docker compose -p "${PROJECT}" -f "$1" config --no-normalize \
+    --format json || return 1
+  jq -e . "$2.raw" >"$2" 2>"$2.err"
+}
+
+#######################################
+# 시험 compose 의 구성 JSON 을 만든다. 그 파일의 변수는 실행하는 쪽이
+# 넣으므로 config 만 돌 수 있게 시험값으로 채운다(구조 비교에 쓰지 않는
+# 값이다).
+#######################################
+contract_config() {
+  (
+    export PCBENCH_ECHO_IMAGE='pcbench-edge-proxy/echo:local'
+    export PCBENCH_NGINX_IMAGE='pcbench-edge-proxy/nginx:render-test'
+    PCBENCH_NGINX_CONF="$(nginx_render a)"
+    export PCBENCH_NGINX_CONF
+    export PCBENCH_LIVE_PORT=28181 PCBENCH_PLAYBACK_PORT=28182
+    export PCBENCH_CONTROL_PORT=28183 PCBENCH_HEALTH_PORT=28184
+    export PCBENCH_ECHO_CONTROL_PORT=28190 PCBENCH_ECHO_ADMIN_PORT=28199
+    export PCBENCH_SIDECAR_EXIT_DELAY=3600s RUNTIME_DIR="${scratch}"
+    compose_config "${CONTRACT_COMPOSE}" "${scratch}/contract.json"
+  )
+}
+
+require_setup() {
+  if [[ -z "${setup_reason}" ]]; then
+    return 0
+  fi
+  harness::add_reason "준비 실패 — ${setup_reason}"
+  return 1
+}
+
+#######################################
+# 갈래 하나의 구성 JSON 에 jq 필터를 적용한 값이 기대값과 같은지 본다.
+# 기대값은 그 갈래의 변수 JSON 을 입력으로 도는 jq 프로그램이다(JQ_DEFS 를
+# 앞에 붙인다).
+# Arguments:
+#   갈래, 실제값 jq 필터, 기대값 jq 프로그램, 이름.
+#######################################
+expect_config() {
+  local v="$1" want got
+  if ! want="$(jq -cS "${JQ_DEFS} $3" "$(vars_file "${v}")" 2>&1)"; then
+    harness::add_reason "시험 오류(기대값 jq): ${want}"
+    return 1
+  fi
+  got="$(jq -cS "$2" "$(config_json "${v}")" 2>/dev/null)" \
+    || got='(구성 JSON 을 읽지 못함)'
+  if [[ "${got}" != "${want}" ]]; then
+    harness::add_reason "갈래 ${v}: $4 기대 ${want} · 실제 ${got}"
+    return 1
+  fi
+}
+
+# 모든 compose 갈래에 같은 단언을 건다. 인자는 expect_config 의 나머지 셋.
+expect_all() {
+  local ok=0 v
+  for v in ${COMPOSE_VARIANTS}; do
+    expect_config "${v}" "$@" || ok=1
+  done
+  return "${ok}"
+}
+
+check_case_1() {
+  local ok=0 v json
+  require_setup || return 1
+  for v in ${COMPOSE_VARIANTS}; do
+    json="$(config_json "${v}")"
+    if ! compose_config "$(compose_render "${v}")" "${json}"; then
+      harness::add_reason "갈래 ${v}: docker compose config 실패: \
+$(harness::log_tail "${json}.err")"
+      ok=1
+    fi
+  done
+  return "${ok}"
+}
+
+check_case_2() {
+  require_setup || return 1
+  expect_all '.services | keys' 'services' '서비스 집합'
+}
+
+check_case_3() {
+  require_setup || return 1
+  expect_all '.services | map_values(.image)' '
+    {mediamtx: .mediamtx_image, nginx: .nginx_image, sidecar: .sidecar_image}
+    + (if .ingest_auth_image != ""
+       then {"ingest-auth": .ingest_auth_image} else {} end)
+    + (if .janitor_image != "" then {janitor: .janitor_image} else {} end)' \
+    '이미지'
+}
+
+check_case_4() {
+  local ok=0
+  require_setup || return 1
+  expect_all '.services | map_values(.restart // null)' '
+    services | map({(.): (if is_attached then "no" else "on-failure" end)})
+    | add' 'restart' || ok=1
+  expect_all '[.services | to_entries[] | select(.value.restart == "no")
+    | .key] | sort' 'attached' 'restart "no" 집합 = 출력 연결 집합' || ok=1
+  return "${ok}"
+}
+
+check_case_5() {
+  require_setup || return 1
+  expect_all '.services | map_values({
+      network_mode: (.network_mode // null),
+      mediamtx_dep: (.depends_on.mediamtx // null
+        | if . == null then null else {condition, restart} end)})' '
+    services | map({(.): (if . == "mediamtx"
+      then {network_mode: null, mediamtx_dep: null}
+      else {network_mode: "service:mediamtx",
+            mediamtx_dep: {condition: "service_started", restart: true}}
+      end)}) | add' '망 칸 · depends_on'
+}
+
+check_case_6() {
+  require_setup || return 1
+  expect_all '{
+      publishers: [.services | to_entries[]
+        | select((.value.ports // []) | length > 0) | .key],
+      mediamtx: [(.services.mediamtx.ports // [])[]
+        | "\(.protocol // "tcp") \(.published) \(.target)"] | sort}' '
+    {publishers: ["mediamtx"],
+     mediamtx: (([.proxy_live_port, .proxy_playback_port,
+                  .proxy_control_port, .proxy_health_port]
+                 | map("tcp \(.) \(.)")) + ["udp 8890 8890"] | sort)}' \
+    '공개 포트(8888 · 9996 · 9997 은 열지 않음)'
+}
+
+check_case_7() {
+  local ok=0 v count
+  require_setup || return 1
+  expect_all '.services | map_values([(.volumes // [])[]
+      | "\(.source) \(.target) \(if .read_only then "ro" else "rw" end)"]
+      | sort)' '
+    {mediamtx: ["recordings /recordings rw", "hooks /hooks rw",
+                "dvr /dvr rw",
+                "/run/pokeclip-media/mediamtx.yml /mediamtx.yml ro"],
+     nginx: ["/etc/pokeclip-media/nginx.conf /etc/nginx/nginx.conf ro"],
+     sidecar: ["recordings /recordings ro", "hooks /hooks ro"]}
+    + (if .ingest_auth_image != "" then {"ingest-auth": []} else {} end)
+    + (if .janitor_image != ""
+       then {janitor: ["recordings /recordings rw"]} else {} end)
+    | map_values(sort)' '볼륨 · 읽기 전용' || ok=1
+  expect_all '[.services[] | (.volumes // [])[]
+    | select(.volume.nocopy == true)] | length' '0' 'volume.nocopy' || ok=1
+  for v in ${COMPOSE_VARIANTS}; do
+    count="$(grep -c -F nocopy "$(compose_render "${v}")" || true)"
+    if [[ "${count}" != 0 ]]; then
+      harness::add_reason "갈래 ${v}: 렌더에 nocopy ${count}건(기대 0)"
+      ok=1
+    fi
+  done
+  return "${ok}"
+}
+
+check_case_8() {
+  require_setup || return 1
+  expect_all '.services | map_values({
+      no_new_privileges: ((.security_opt // [])
+        | index("no-new-privileges:true") != null),
+      privileged: (.privileged // null), pid: (.pid // null),
+      ipc: (.ipc // null), cap_drop: (.cap_drop // null),
+      cap_add: (.cap_add // null | if . == null then null else sort end)})' '
+    services | map({(.): {no_new_privileges: true, privileged: null,
+      pid: null, ipc: null, cap_drop: ["ALL"],
+      cap_add: (if . == "nginx" then nginx_cap_add else null end)}}) | add' \
+    '권한'
+}
+
+check_case_9() {
+  require_setup || return 1
+  expect_all '.services.mediamtx | has("user")' 'false' \
+    'mediamtx user(정본은 Dockerfile USER)'
+}
+
+check_case_10() {
+  require_setup || return 1
+  expect_all '.services | map_values(.environment // {})
+    | with_entries(select(.key == "sidecar" or .key == "janitor"))' '
+    {sidecar: (db_env + {POSTGRES_USER: "media_indexer",
+       ENSURE_SCHEMA: "false", SEGMENT_ROOT: "/recordings",
+       HOOK_SPOOL_PATH: "/hooks/events.jsonl",
+       MTX_API_URL: "http://127.0.0.1:9997",
+       S3_BUCKET: .rewind_bucket_name})}
+    + (if .janitor_image != ""
+       then {janitor: (db_env + {POSTGRES_USER: "media_janitor"})}
+       else {} end)' '사이드카 · janitor env'
+}
+
+check_case_11() {
+  local ok=0 v count
+  require_setup || return 1
+  # shellcheck disable=SC2016 # jq 프로그램 — $ 는 jq 변수다.
+  expect_all '[.services | to_entries[] | .key as $s
+    | (.value.environment // {}) | keys[]
+    | select(test("CDN|TOKEN|PASSWORD|SECRET"; "i")) | "\($s).\(.)"]' \
+    '[]' '비밀 계열 env 이름' || ok=1
+  for v in ${COMPOSE_VARIANTS}; do
+    count="$(grep -c -F POSTGRES_PASSWORD "$(compose_render "${v}")" || true)"
+    if [[ "${count}" != 0 ]]; then
+      harness::add_reason "갈래 ${v}: 렌더에 POSTGRES_PASSWORD ${count}건"
+      ok=1
+    fi
+  done
+  return "${ok}"
+}
+
+check_case_12() {
+  require_setup || return 1
+  expect_all '.services.mediamtx.environment // {}' '{TZ: "UTC"}' \
+    'mediamtx env'
+}
+
+check_case_13() {
+  require_setup || return 1
+  # shellcheck disable=SC2016 # jq 프로그램 — $ 는 jq 변수다.
+  expect_all '.services | map_values({driver: (.logging.driver // null),
+      options: (.logging.options // null)})' '
+    . as $v | services | map(. as $s | {($s):
+      (if ($s | is_attached) or $v.detached_log_driver == "json-file"
+       then {driver: "json-file",
+             options: {"max-size": "10m", "max-file": "3"}}
+       else {driver: "journald",
+             options: {tag: "pokeclip-media-\($s)"}} end)}) | add' \
+    'logging'
+}
+
+#######################################
+# nginx 렌더에서 location 블록 첫 문장을 낸다(블록마다 한 줄).
+# Arguments:
+#   렌더 파일, location 경로.
+#######################################
+location_first_statement() {
+  awk -v loc="location $2 {" '
+    index($0, loc) { grab = 1; next }
+    grab && NF { sub(/^[ \t]+/, ""); print; grab = 0 }' "$1"
+}
+
+#######################################
+# 제어면 location 둘의 첫 문장과 그 밖 상류 proxy_pass 수를 본다.
+# Arguments:
+#   갈래, 기대 첫 문장, 기대 그 밖 proxy_pass 수.
+#######################################
+expect_control_plane() {
+  local file ok=0 loc got others
+  file="$(nginx_render "$1")"
+  for loc in /api/ingest/ /api/streams/; do
+    got="$(location_first_statement "${file}" "${loc}")"
+    if [[ "${got}" != "$2" ]]; then
+      harness::add_reason "nginx ${1}: ${loc} 기대 '$2' · 실제 '${got}'"
+      ok=1
+    fi
+  done
+  others="$(grep -E '^[[:space:]]*proxy_pass[[:space:]]' "${file}" \
+    | grep -c -v -E 'http://127\.0\.0\.1:(8888|9996)[/;]' || true)"
+  if [[ "${others}" != "$3" ]]; then
+    harness::add_reason "nginx ${1}: 8888 · 9996 밖 proxy_pass ${others}건 \
+(기대 $3)"
+    ok=1
+  fi
+  return "${ok}"
+}
+
+check_case_14() {
+  local ok=0
+  require_setup || return 1
+  expect_control_plane a 'return 404;' 0 || ok=1
+  expect_control_plane e "proxy_pass http://${SAMPLE_CONTROL_UPSTREAM};" 2 \
+    || ok=1
+  return "${ok}"
+}
+
+check_case_15() {
+  local ok=0 v count
+  require_setup || return 1
+  for v in a e; do
+    count="$(grep -c -F 9997 "$(nginx_render "${v}")" || true)"
+    if [[ "${count}" != 0 ]]; then
+      harness::add_reason "nginx ${v}: 9997 ${count}줄(기대 0)"
+      ok=1
+    fi
+  done
+  return "${ok}"
+}
+
+#######################################
+# nginx 시간 값 하나를 초로 바꾼다(ms · s · m · h · 단위 없음 = 초). 조합
+# 꼴(1m30s)은 받지 않는다.
+# Arguments:
+#   값.
+# Outputs:
+#   초(정수 — ms 는 내림).
+#######################################
+nginx_time_seconds() {
+  local n unit
+  [[ "$1" =~ ^([0-9]+)(ms|s|m|h)?$ ]] || return 1
+  n=$((10#${BASH_REMATCH[1]}))
+  unit="${BASH_REMATCH[2]}"
+  case "${unit}" in
+    ms) printf '%s' "$((n / 1000))" ;;
+    m) printf '%s' "$((n * 60))" ;;
+    h) printf '%s' "$((n * 3600))" ;;
+    *) printf '%s' "${n}" ;;
+  esac
+}
+
+check_case_16() {
+  local ok=0 v value seconds
+  require_setup || return 1
+  for v in a e; do
+    while read -r value; do
+      if ! seconds="$(nginx_time_seconds "${value}")"; then
+        harness::add_reason "nginx ${v}: proxy_read_timeout '${value}' 판독 불가"
+        ok=1
+      elif (( seconds < MIN_READ_TIMEOUT_SECONDS )); then
+        harness::add_reason "nginx ${v}: proxy_read_timeout ${value} \
+(${MIN_READ_TIMEOUT_SECONDS}s 미만)"
+        ok=1
+      fi
+    done < <(grep -o -E 'proxy_read_timeout[[:space:]]+[^;]*;' \
+      "$(nginx_render "${v}")" | awk '{ sub(/;$/, "", $2); print $2 }')
+  done
+  return "${ok}"
+}
+
+# 드리프트 비교 — 서비스마다 비교 항목을 뽑고(facts), 이름이 같은 서비스끼리
+# 다른 항목을 한 줄씩 낸다. 역할 서비스 셋이 양쪽에 다 없어도 한 줄 낸다.
+# 입력: $p = 렌더한 템플릿, $t = 시험 compose(둘 다 선언 그대로의 구성 JSON).
+# shellcheck disable=SC2016 # jq 프로그램 — $ 는 jq 변수다.
+readonly DRIFT_PROGRAM='
+def facts: .services | map_values({
+  restart: (.restart // null),
+  network_mode: (.network_mode // null),
+  depends_on: ((.depends_on // {}) | map_values({condition, restart})),
+  security_opt: ((.security_opt // []) | sort),
+  cap_drop: ((.cap_drop // []) | sort),
+  cap_add: ((.cap_add // []) | sort),
+  read_only: ((.volumes // []) | map({(.target): (.read_only // false)})
+    | add // {})});
+($p[0] | facts) as $pf | ($t[0] | facts) as $tf
+| [$pf | keys[] | select(. as $s | $tf | has($s))] as $shared
+| (["mediamtx", "nginx", "sidecar"] - $shared | .[]
+   | "공통 서비스 없음: \(.)"),
+  ($shared[] as $s | $pf[$s] | keys[] as $k
+   | select($pf[$s][$k] != $tf[$s][$k])
+   | "\($s).\($k): prod \($pf[$s][$k] | tojson) · 시험 \($tf[$s][$k] | tojson)")
+'
+
+check_case_17() {
+  local diffs
+  require_setup || return 1
+  if ! contract_config; then
+    harness::add_reason "시험 compose config 실패: \
+$(harness::log_tail "${scratch}/contract.json.err")"
+    return 1
+  fi
+  if ! diffs="$(jq -n -r --slurpfile p "$(config_json a)" \
+    --slurpfile t "${scratch}/contract.json" "${DRIFT_PROGRAM}" 2>&1)"; then
+    harness::add_reason "드리프트 비교 실패: ${diffs}"
+    return 1
+  fi
+  if [[ -n "${diffs}" ]]; then
+    harness::add_reason "드리프트: $(printf '%s' "${diffs}" | tr '\n' ';')"
+    return 1
+  fi
+}
+
+main() {
+  if (( $# != 0 )); then
+    printf '사용: bash infra/media-host/test/render_test.sh (인자 없음)\n' >&2
+    exit 1
+  fi
+  trap cleanup EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  scratch="$(mktemp -d "${TMPDIR:-/tmp}/pcbench-edge-proxy-render-test.XXXXXX")"
+
+  if check_tools; then
+    render_all || true
+  fi
+  harness::run_case 1 '렌더한 compose 마다 docker compose config 종료 0' \
+    check_case_1
+  harness::run_case 2 '응답기 · janitor 는 변수가 차 있을 때만 렌더' \
+    check_case_2
+  harness::run_case 3 '서비스 이미지 = 템플릿 변수' check_case_3
+  harness::run_case 4 \
+    'restart — mediamtx · nginx "no" · 나머지 on-failure(상한 없음)' \
+    check_case_4
+  harness::run_case 5 '같은 망 칸 · depends_on mediamtx(재시작 전파)' \
+    check_case_5
+  harness::run_case 6 '공개 포트는 mediamtx 에서만 · 루프백 포트 비공개' \
+    check_case_6
+  harness::run_case 7 '공유 볼륨 · 읽기 전용 · nocopy 0' check_case_7
+  harness::run_case 8 \
+    '권한 — no-new-privileges · cap_drop ALL · cap_add nginx 셋뿐 · 특권 0' \
+    check_case_8
+  harness::run_case 9 'mediamtx 에 user: 없음' check_case_9
+  harness::run_case 10 '사이드카 · janitor env(IAM · 비밀 없음)' check_case_10
+  harness::run_case 11 'env 에 비밀 계열 이름 · POSTGRES_PASSWORD 0' \
+    check_case_11
+  harness::run_case 12 'mediamtx env TZ=UTC' check_case_12
+  harness::run_case 13 \
+    'logging — 출력 연결 json-file 회전(10m × 3) · 비부착 journald 고정 tag' \
+    check_case_13
+  harness::run_case 14 'nginx 제어면 — 상류 빔 404 · 채움 proxy_pass' \
+    check_case_14
+  harness::run_case 15 'nginx 렌더에 관리 API 포트 9997 0건' check_case_15
+  harness::run_case 16 'nginx proxy_read_timeout 15초 이상' check_case_16
+  harness::run_case 17 '드리프트 — 시험 compose 와 템플릿 구조 일치' \
+    check_case_17
+
+  if ! harness::summary "${CASE_COUNT}"; then
+    exit 1
+  fi
+}
+
+main "$@"
