@@ -4,8 +4,9 @@
 # shellcheck disable=SC2034,SC2154
 #
 # 2-3 판정 데이터(data/principal_sim/)를 읽고 꼴을 검사한다(계획 M17b 2절).
-# principal-check.sh 가 source 한다 — die · is_plain · tsv_ok 와 상수
-# (STAGE_ORDER · 패턴)는 부르는 쪽에 있다.
+# principal-check.sh 가 source 한다 — die 와 상수(STAGE_ORDER · 패턴)는
+# 부르는 쪽에, precheck::is_plain · precheck::tsv_ok 는
+# lib/precheck_common.sh 에 있다.
 #
 # 데이터 규약: 탭 구분, 「#」 으로 시작하는 줄은 주석, 빈 줄은 건너뜀, 계정
 # 자리는 ${ACCOUNT} 뿐.
@@ -40,9 +41,9 @@ t_region=()
 t_actions=()
 t_read=()
 t_context=()
-# context_entries 가 남기는 추가 문맥 JSON(앞에 쉼표가 붙은 항목들).
+# principal::context_entries 가 남기는 추가 문맥 JSON(앞에 쉼표가 붙은 항목들).
 context_json=""
-# read_data_file · split_tsv 가 남기는 줄 · 칸.
+# principal::read_data_file · principal::split_tsv 가 남기는 줄 · 칸.
 data_rows=()
 fields=()
 
@@ -55,7 +56,7 @@ fields=()
 # Arguments:
 #   파일 이름.
 #######################################
-read_data_file() {
+principal::read_data_file() {
   local file="${DATA_DIR}/$1" line n=0
   data_rows=()
   [[ -f "${file}" && ! -L "${file}" ]] || die "데이터 파일이 없음: $1"
@@ -67,13 +68,14 @@ read_data_file() {
 }
 
 #######################################
-# 탭 구분 줄을 fields 에 나눠 담는다(tsv_ok 로 칸 수를 먼저 본 줄).
+# 탭 구분 줄을 fields 에 나눠 담는다(precheck::tsv_ok 로 칸 수를 먼저 본
+# 줄).
 # Globals:
 #   fields
 # Arguments:
 #   줄.
 #######################################
-split_tsv() {
+principal::split_tsv() {
   local rest="$1"$'\t'
   fields=()
   while [[ -n "${rest}" ]]; do
@@ -93,7 +95,7 @@ split_tsv() {
 # Returns:
 #   판정 단계가 아니면 1.
 #######################################
-stage_index() {
+principal::stage_index() {
   local i
   for i in "${!STAGE_ORDER[@]}"; do
     if [[ "${STAGE_ORDER[i]}" == "$1" ]]; then
@@ -115,7 +117,7 @@ stage_index() {
 # Returns:
 #   없으면 1.
 #######################################
-principal_index() {
+principal::principal_index() {
   local i
   for i in "${!p_key[@]}"; do
     if [[ "${p_key[i]}" == "$1" ]]; then
@@ -131,14 +133,14 @@ principal_index() {
 # Globals:
 #   p_key, p_kind, p_name, KEY_PATTERN, NAME_PATTERN
 #######################################
-load_principals() {
+principal::load_principals() {
   local entry n line key kind name
-  read_data_file dev_principals.tsv
+  principal::read_data_file dev_principals.tsv
   for entry in ${data_rows[@]+"${data_rows[@]}"}; do
     n="${entry%%$'\t'*}"
     line="${entry#*$'\t'}"
-    tsv_ok "${line}" 3 || die "dev_principals.tsv ${n}행의 칸 수가 틀림"
-    split_tsv "${line}"
+    precheck::tsv_ok "${line}" 3 || die "dev_principals.tsv ${n}행의 칸 수가 틀림"
+    principal::split_tsv "${line}"
     key="${fields[0]}"
     kind="${fields[1]}"
     name="${fields[2]}"
@@ -148,7 +150,7 @@ load_principals() {
       instance-profile | role | user) ;;
       *) die "dev_principals.tsv ${n}행의 주체 종류를 모름" ;;
     esac
-    ! principal_index "${key}" >/dev/null ||
+    ! principal::principal_index "${key}" >/dev/null ||
       die "dev_principals.tsv ${n}행의 키가 겹침"
     p_key+=("${key}")
     p_kind+=("${kind}")
@@ -164,8 +166,8 @@ load_principals() {
 # Returns:
 #   맞으면 0.
 #######################################
-concrete_arn() {
-  is_plain "$1" && [[ "$1" == arn:aws:* && "$1" != *'*'* &&
+principal::concrete_arn() {
+  precheck::is_plain "$1" && [[ "$1" == arn:aws:* && "$1" != *'*'* &&
     "$1" != *[[:space:]]* ]]
 }
 
@@ -174,22 +176,23 @@ concrete_arn() {
 # Globals:
 #   p_key, c_action, c_region, c_arn, ACTION_PATTERN, REGION_PATTERN
 #######################################
-load_controls() {
+principal::load_controls() {
   local entry n line key action region arn i
-  read_data_file positive_controls.tsv
+  principal::read_data_file positive_controls.tsv
   for entry in ${data_rows[@]+"${data_rows[@]}"}; do
     n="${entry%%$'\t'*}"
     line="${entry#*$'\t'}"
-    tsv_ok "${line}" 4 || die "positive_controls.tsv ${n}행의 칸 수가 틀림"
-    split_tsv "${line}"
+    precheck::tsv_ok "${line}" 4 || die "positive_controls.tsv ${n}행의 칸 수가 틀림"
+    principal::split_tsv "${line}"
     key="${fields[0]}"
     action="${fields[1]}"
     region="${fields[2]}"
     arn="${fields[3]}"
-    i="$(principal_index "${key}")" ||
+    i="$(principal::principal_index "${key}")" ||
       die "positive_controls.tsv ${n}행의 주체 키가 주체 목록에 없음"
     if ! [[ "${action}" =~ ${ACTION_PATTERN} &&
-      "${region}" =~ ${REGION_PATTERN} ]] || ! concrete_arn "${arn}"; then
+      "${region}" =~ ${REGION_PATTERN} ]] ||
+      ! principal::concrete_arn "${arn}"; then
       die "positive_controls.tsv ${n}행의 꼴이 틀림"
     fi
     [[ -z "${c_action[i]:-}" ]] ||
@@ -214,7 +217,7 @@ load_controls() {
 # Returns:
 #   꼴이 틀리면 1.
 #######################################
-context_entries() {
+principal::context_entries() {
   local rest="$1" item key type values value list
   context_json=""
   [[ "${rest}" == - ]] && return 0
@@ -237,7 +240,7 @@ context_entries() {
     while [[ -n "${values}" ]]; do
       value="${values%%,*}"
       values="${values#*,}"
-      is_plain "${value}" || return 1
+      precheck::is_plain "${value}" || return 1
       list+="${list:+,}\"${value}\""
     done
     context_json+=",{\"ContextKeyName\":\"${key}\",\"ContextKeyValues\":"
@@ -254,11 +257,11 @@ context_entries() {
 # Returns:
 #   맞으면 0.
 #######################################
-target_fields_ok() {
+principal::target_fields_ok() {
   local method="$1" read="$2" actions="$3," action
   case "${method}" in
     tag:*) [[ "${method#tag:}" =~ ${TAG_TYPE_PATTERN} ]] || return 1 ;;
-    arn:*) concrete_arn "${method#arn:}" || return 1 ;;
+    arn:*) principal::concrete_arn "${method#arn:}" || return 1 ;;
     zone:*) [[ "${method#zone:}" =~ ${ZONE_PATTERN} ]] || return 1 ;;
     self:role | self:user | self:group | prodrole | policy:attached)
       [[ "${read}" == none || "${read}" == unread ]] || return 1
@@ -284,15 +287,15 @@ target_fields_ok() {
 #   t_key, t_stage, t_method, t_region, t_actions, t_read, t_context,
 #   KEY_PATTERN, REGION_PATTERN
 #######################################
-load_targets() {
+principal::load_targets() {
   local entry n line key stage method type region actions read context
   local seen=$'\n'
-  read_data_file prod_targets.tsv
+  principal::read_data_file prod_targets.tsv
   for entry in ${data_rows[@]+"${data_rows[@]}"}; do
     n="${entry%%$'\t'*}"
     line="${entry#*$'\t'}"
-    tsv_ok "${line}" 8 || die "prod_targets.tsv ${n}행의 칸 수가 틀림"
-    split_tsv "${line}"
+    precheck::tsv_ok "${line}" 8 || die "prod_targets.tsv ${n}행의 칸 수가 틀림"
+    principal::split_tsv "${line}"
     key="${fields[0]}"
     stage="${fields[1]}"
     method="${fields[2]}"
@@ -305,11 +308,11 @@ load_targets() {
       "${region}" =~ ${REGION_PATTERN} ]]; then
       die "prod_targets.tsv ${n}행의 키 · 유형 · 리전 꼴이 틀림"
     fi
-    stage_index "${stage}" >/dev/null ||
+    principal::stage_index "${stage}" >/dev/null ||
       die "prod_targets.tsv ${n}행의 첫 단계를 모름"
-    target_fields_ok "${method}" "${read}" "${actions}" ||
+    principal::target_fields_ok "${method}" "${read}" "${actions}" ||
       die "prod_targets.tsv ${n}행의 해석 방법 · 동작 · 정책 읽기 꼴이 틀림"
-    context_entries "${context}" ||
+    principal::context_entries "${context}" ||
       die "prod_targets.tsv ${n}행의 추가 문맥 꼴이 틀림"
     [[ "${seen}" != *$'\n'"${key}"$'\n'* ]] ||
       die "prod_targets.tsv ${n}행의 키가 겹침"
