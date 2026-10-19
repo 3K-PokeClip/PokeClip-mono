@@ -144,7 +144,9 @@ jobs:
       #             취소하기 전에 go가 먼저 panic해 덤프를 남기도록, 위 timeout-minutes 주석의
       #             부등식을 만족하는 값으로 잡았다(로컬 정상 총소요 14~16초 대비 20m).
       # -v를 붙이지 않는다 — 로그가 비대해지고, skip 0 판정은 로그 grep이 아니라 구조로 한다
-      # (초록불 = REQUIRE_PG 가드 미발동, container: 부재 = 비root. 환경 탓 skip 경로는 이 둘뿐이다.
+      # (초록불 = REQUIRE_PG 가드 미발동, container: 부재 = 비root. 이 PR 의 PG 시험이 환경 탓에 skip 되는 경로는
+      # 이 둘뿐이다 — develop 에는 GOMAXPROCS 1 · fd 계수 불가 플랫폼에서 건너뛰는 시험 셋(ingestauth · connlog)이
+      # 더 있으나 이 러너(다중 코어 Linux)에서는 발동하지 않는다.
       # 예외 하나 — G8 동시 writer 시험(rewind/publish g8_race_pg_test.go)은 부하로 경쟁 국면이 서지
       # 않고 결함 신호도 없으면 스스로 건너뛴다. 그 계보는 같은 패키지의 결정적 교차 시험이 판정한다).
       # -p/-parallel도 명시하지 않는다 — 기본값(GOMAXPROCS)이 러너 스펙 변화를 자동 흡수한다.
