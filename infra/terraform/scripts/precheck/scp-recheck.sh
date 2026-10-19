@@ -75,7 +75,7 @@ readonly REGION_PATTERN='^[a-z]{2}(-[a-z]+)+-[0-9]$'
 # shellcheck disable=SC2016 # 펼치지 않는 글자 그대로다.
 readonly ACCOUNT_PLACEHOLDER='${ACCOUNT}'
 # 증거 디렉터리 이름 = 「scp-<묶음>-<UTC 시각>」. 도구 접두로 다른 도구
-# (events · M17b collect 등)의 디렉터리와 이름이 겹치지 않는다.
+# (events.sh · principal-check.sh 등)의 디렉터리와 이름이 겹치지 않는다.
 readonly DIR_PREFIX='scp'
 # 증거 디렉터리 이름의 시각 부분(evidence::new_dir 의 UTC 시각).
 STAMP_GLOB='[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T'

@@ -148,30 +148,61 @@ expect_data_shape() {
 }
 
 #######################################
+# run_check 와 같되(단계 O7a) PATH 앞의 가짜 mkdir(testlib::make_blocking_mkdir)
+# 이 증거 디렉터리를 만들 때 그 안에 이름 하나를 디렉터리로 심는다 — 첫 AWS
+# 호출 전에 쓰는 증거 파일(sts.err)의 쓰기가 실패하게.
+# Globals:
+#   RUN_LIMIT, FAKEBIN, PATH
+# Arguments:
+#   사례 디렉터리, 결과 이름, 막을 파일 이름.
+# Returns:
+#   준비 실패면 1.
+#######################################
+run_check_blocked() {
+  local case_dir="$1" name="$2" target="$3" bin="$1/in/mkdirbin"
+  if ! mkdir -p -- "${bin}" || ! testlib::make_blocking_mkdir "${bin}"; then
+    return 1
+  fi
+  # shellcheck disable=SC2016 # 안쪽 bash 가 펼친다.
+  testlib::run_limited "${RUN_LIMIT}" "${case_dir}" "${name}" \
+    env PATH="${bin}:${FAKEBIN}:${PATH}" \
+    "FAKE_AWS_READS=${case_dir}/in/reads.tsv" \
+    "FAKE_AWS_SIM_TABLE=${case_dir}/in/sim.tsv" \
+    FAKE_BLOCK_PREFIX=principal-O7a "FAKE_BLOCK_NAME=${target}" \
+    bash -c 'cd -- "$1" && shift && exec bash "$@"' _ \
+    "${case_dir}/cwd" "${case_dir}/tree/principal-check.sh" O7a
+}
+
+#######################################
 # 사례 31: 증거 쓰기 실패 — 증거 디렉터리를 쓸 수 없게 되거나 증거 파일
-# 자리마다 쓰기가 실패하면 종료 2 이고, 표준 오류에 bash 원시 진단(절대
-# 경로)이 없다.
+# 자리마다(첫 AWS 호출 전의 sts.err 포함) 쓰기가 실패하면 종료 2 이고,
+# 표준 오류에 bash 원시 진단(절대 경로)이 없다.
 #######################################
 expect_evidence_write_failure() {
   local case_dir spec name
-  for spec in lock sts.txt req-1.json res-1.err res-1.txt principals.tsv \
-    targets.tsv policy-1.json policies.tsv pca-policy.json result.tsv \
-    report.txt complete.txt.tmp; do
+  for spec in lock sts.err sts.txt req-1.json res-1.err res-1.txt \
+    principals.tsv targets.tsv policy-1.json policies.tsv pca-policy.json \
+    result.tsv report.txt complete.txt.tmp; do
     name="write-${spec}"
     case_dir="$(new_tree_case)" || {
       testlib::fail "${name}: 시험 준비 실패"
       return
     }
-    if [[ "${spec}" == lock ]]; then
-      run_check "${case_dir}" "${name}" FAKE_AWS_LOCK_EVIDENCE=1 O7a
-    else
-      run_check "${case_dir}" "${name}" "FAKE_AWS_BLOCK_FILE=${spec}" O7a
-    fi
+    case "${spec}" in
+      lock) run_check "${case_dir}" "${name}" FAKE_AWS_LOCK_EVIDENCE=1 O7a ;;
+      sts.err)
+        run_check_blocked "${case_dir}" "${name}" "${spec}" || {
+          testlib::fail "${name}: 시험 준비 실패"
+          return
+        }
+        ;;
+      *) run_check "${case_dir}" "${name}" "FAKE_AWS_BLOCK_FILE=${spec}" O7a ;;
+    esac
     expect_unverifiable "${name}" || return
     testlib::expect_stderr_count "${name}" '증거를 쓰지 못함' 1 || return
     expect_no_leak "${name}" "${case_dir}" || return
   done
-  testlib::ok "31 evidence-write → 증거 디렉터리 잠김 · 파일 자리 12곳의 쓰기" \
+  testlib::ok "31 evidence-write → 증거 디렉터리 잠김 · 파일 자리 13곳의 쓰기" \
     "실패는 종료 2 · 표준 오류에 절대 경로 0"
 }
 

@@ -222,12 +222,13 @@ expect_scp_exclusion() {
 #######################################
 # 사례 26: CLI 기록 — 프로필의 cli_history 가 enabled 이거나
 # AWS_CLI_HISTORY_FILE 이 설정돼 있으면 AWS 호출 0건으로 종료 2(값 · 경로를
-# 되울리지 않음), 설정 읽기 실패도 종료 2, disabled 면 정상.
+# 되울리지 않음), 설정 읽기 실패도 종료 2, disabled 면 정상이고 설정 조회가
+# 호출 주체 확인보다 먼저다.
 # Globals:
 #   run_out
 #######################################
 expect_cli_history() {
-  local case_dir spec name calls
+  local case_dir spec name calls log
   for spec in enabled file fail disabled; do
     name="cli-history-${spec}"
     case_dir="$(new_tree_case)" || {
@@ -241,8 +242,15 @@ expect_cli_history() {
         ;;
       *) run_check "${case_dir}" "${name}" "FAKE_AWS_CLI_HISTORY=${spec}" O7a ;;
     esac
+    log="${case_dir}/out/aws.log"
     if [[ "${spec}" == disabled ]]; then
       expect_result "${name}" 0 "PRINCIPAL CHECK PASS ${NORMAL_ROWS}" || return
+      if [[ "$(sed -n 1p -- "${log}")" != 'configure get cli_history' ||
+        "$(sed -n 2p -- "${log}")" != 'sts get-caller-identity'* ]]; then
+        testlib::fail "${name}: 설정 조회 · 호출 주체 확인 순서가 아님 —" \
+          "$(head -n 2 -- "${log}")"
+        return
+      fi
       continue
     fi
     expect_unverifiable "${name}" || return
@@ -260,7 +268,7 @@ expect_cli_history() {
     expect_no_leak "${name}" "${case_dir}" || return
   done
   testlib::ok "26 cli-history → enabled · 기록 파일 환경 변수 · 설정 읽기 실패는" \
-    "AWS 호출 0건으로 종료 2 · disabled 는 정상"
+    "AWS 호출 0건으로 종료 2 · disabled 는 설정 조회 뒤 호출 주체 확인"
 }
 
 #######################################
