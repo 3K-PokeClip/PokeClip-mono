@@ -19,12 +19,14 @@ import (
 // COMMIT」이다(K8 — 설계 2-1). 파일을 지우는 일 자체는 호출자(janitor)의 몫이고, 이 파일은
 // 그 일을 잠금 아래에서 돌리고 결과에 따라 장부를 고친다. DDL 은 바꾸지 않는다.
 
-// RowLockTxnTimeout 은 행 잠금 삭제 트랜잭션의 서버 측 전체 상한이다(PG 17 transaction_timeout).
-// 넘기면 서버가 세션을 끝내고 잠금을 모두 푼다 — 클라이언트가 멈춰도 잠금 보유가 이 값에 묶인다.
+// RowLockTxnTimeout 은 행 잠금 삭제 트랜잭션의 서버 측 상한이다(PG 17 transaction_timeout — 커밋
+// 직전까지 잰다). 넘기면 서버가 세션을 끝내고 잠금을 푼다 — 클라이언트가 멈춰도 그렇다. 정상
+// 조건에서 잠금 보유의 기대치이며, 커밋 레코드 삽입 때 WAL 버퍼가 가득 차면 넘을 수 있다(설계 한계 L33).
 //
 // 사이드카의 두 기한보다 작아야 한다: upload MarkTimeout(10s) · 인덱서 lock_timeout 5s × 2
-// (즉시 재시도 두 창). 그래야 janitor 를 기다린 쪽이 헛경보(mark_error · ErrLockContended)를
-// 내지 않는다. 두 관계는 결속 시험이 고정한다(janitor/bind_test.go · local_cleanup_test.go).
+// (즉시 재시도 두 창). 그래야 정상 조건에서 janitor 를 기다린 쪽이 헛경보(mark_error ·
+// ErrLockContended)를 내지 않는다 — 예외는 설계 한계 L30 · L32 · L33 이다. 두 관계는 결속 시험이
+// 고정한다(janitor/bind_test.go · local_cleanup_test.go).
 const RowLockTxnTimeout = 8 * time.Second
 
 // rowLockTxnTimeoutSetting 은 RowLockTxnTimeout 을 PG 설정 값으로 옮긴 것이다. SQL 에 숫자를
@@ -128,7 +130,8 @@ SELECT to_regclass('stream_segments') IS NOT NULL
 //
 //   - 전체 상한(transaction_timeout)을 행을 잠그기 **전에** 건다(E3′).
 //   - 비동기 커밋을 건다(X1 A): transaction_timeout 은 커밋 직전까지만 재므로, 커밋 단계의
-//     WAL flush · 동기 복제 대기를 없애야 잠금 보유가 「8s + 비-flush 처리」에 묶인다. 대가는
+//     WAL flush · 동기 복제 대기를 없애야 정상 조건에서 잠금 보유가 「8s + 비-flush 처리」 안에
+//     끝난다(WAL 버퍼 포화 때는 넘을 수 있다 — 한계 L33). 대가는
 //     DB 비정상 종료 때 마지막 갱신 소실이다(한계 L31 — K7 이 흡수).
 //   - 둘 다 이 트랜잭션에만 건다(is_local = true). 같은 풀의 조회(statement_timeout 15s)와
 //     다른 서비스의 커밋은 그대로다.

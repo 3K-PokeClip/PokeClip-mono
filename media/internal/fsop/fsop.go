@@ -17,8 +17,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -73,6 +76,81 @@ func ProbeT(path string, timeout time.Duration, probe func(string) (int64, error
 		return r.d, r.err
 	case <-t.C:
 		return 0, fmt.Errorf("%w: op=probe path=%q timeout=%s", ErrStalled, path, timeout)
+	}
+}
+
+// ErrSymlinkInPath 는 지울 경로의 디렉터리 요소가 심링크라 지우지 않았음을 뜻한다(RemoveT).
+var ErrSymlinkInPath = errors.New("fsop: 경로의 디렉터리 요소가 심링크다")
+
+// RemoveT 는 root 안의 name 을 지우고 timeout 상한을 준다(StatT 와 같은 워커 · 버퍼 1 형상). 상한을
+// 넘기면 ErrStalled 래핑이고 워커는 버려진다 — 버려진 워커가 뒤늦게 지울 수 있으므로 호출자는 그
+// 경로를 「지워졌을 수 있음」으로 다뤄야 한다. 파일 없음(부모 디렉터리 부재 포함)은 fs.ErrNotExist
+// 그대로 돌려준다 — 판정은 호출자 몫이다.
+//
+// 디렉터리 요소는 심링크를 따라가지 않는다. os.Root 는 루트 밖으로 가는 심링크만 거부하고 루트 안을
+// 가리키는 심링크는 따라간다(t2 r1 실측 — /recordings/s1 -> s2 면 s1/x 삭제가 s2/x 를 지운다). 그래서
+// 요소마다 Lstat 으로 심링크를 거부(ErrSymlinkInPath)하고 하위 Root 를 열어 내려가며, 마지막 요소는
+// 그 하위 Root 안에서 이름만으로 지운다. 하위 Root 는 연 디렉터리를 손잡이로 쥐므로, 연 뒤에 이름이
+// 바뀌어도 삭제가 다른 디렉터리로 새지 않는다.
+func RemoveT(root *os.Root, name string, timeout time.Duration) error {
+	return removeWith(func(n string) error { return removeNoFollow(root, n) }, name, timeout)
+}
+
+// removeNoFollow 는 RemoveT 워커의 본문이다 — name 의 디렉터리 요소를 심링크 없이 내려가 마지막
+// 요소를 지운다. ".." · 절대 경로는 os.Root 가 거부한다.
+func removeNoFollow(root *os.Root, name string) error {
+	parts := strings.Split(filepath.Clean(name), string(filepath.Separator))
+	dir := root
+	for _, p := range parts[:len(parts)-1] {
+		sub, err := openDirNoFollow(dir, p)
+		if err != nil {
+			return err
+		}
+		defer sub.Close() // 디렉터리 손잡이라 닫기 실패가 삭제 결과를 바꾸지 않는다
+		dir = sub
+	}
+	return dir.Remove(parts[len(parts)-1])
+}
+
+// openDirNoFollow 는 parent 안의 디렉터리 name 을 하위 Root 로 연다. name 이 심링크면 거부한다.
+// Lstat 과 OpenRoot 사이에 name 이 심링크로 바뀌면 연 디렉터리가 Lstat 이 본 것과 달라지므로, 연
+// 디렉터리를 Lstat 결과와 대조해(os.SameFile) 그 경쟁도 거부한다.
+func openDirNoFollow(parent *os.Root, name string) (*os.Root, error) {
+	fi, err := parent.Lstat(name)
+	if err != nil {
+		return nil, err
+	}
+	if fi.Mode()&fs.ModeSymlink != 0 {
+		return nil, fmt.Errorf("%w: %q", ErrSymlinkInPath, name)
+	}
+	sub, err := parent.OpenRoot(name)
+	if err != nil {
+		return nil, err
+	}
+	opened, err := sub.Stat(".")
+	if err == nil && !os.SameFile(fi, opened) {
+		err = fmt.Errorf("%w(검사 뒤 바뀜): %q", ErrSymlinkInPath, name)
+	}
+	if err != nil {
+		sub.Close()
+		return nil, err
+	}
+	return sub, nil
+}
+
+// removeWith 는 RemoveT 의 본문이다. 시험이 멈추는 삭제를 끼우려고 삭제 함수를 받는다.
+func removeWith(remove func(string) error, name string, timeout time.Duration) error {
+	// 버퍼 1 이라 버려진 워커의 늦은 송신이 막히지 않는다 — 워커는 반드시 끝까지 간다.
+	ch := make(chan error, 1)
+	go func() { ch <- remove(name) }()
+
+	t := time.NewTimer(timeout)
+	defer t.Stop()
+	select {
+	case err := <-ch:
+		return err
+	case <-t.C:
+		return fmt.Errorf("%w: op=remove path=%q timeout=%s", ErrStalled, name, timeout)
 	}
 }
 
