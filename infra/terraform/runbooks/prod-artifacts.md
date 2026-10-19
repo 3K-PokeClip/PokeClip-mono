@@ -1,0 +1,162 @@
+# prod 산출물 올리기 런북
+
+prod 이미지를 ECR 에 올리고 apex 랜딩을 S3 에 올리는 절차입니다. 계획 M7 의
+운영 단계 O7c(이미지)와 O7f 의 5(랜딩 업로드)에 해당합니다. CI 자동 푸시는
+아직 없어서(설계 8절 후속 승인 지점 · 40차) 이 런북이 기본 경로입니다.
+
+*   실행자는 kty 입니다. kty 의 IAM 사용자 프로필로 **kty 로컬 터미널**에서
+    돌립니다. 에이전트 세션이나 세션의 `!` 로 돌리지 않습니다 — 레지스트리
+    호스트 · 버킷 이름에 계정 ID 가 들어 있어 세션 기록에 남습니다.
+*   쓰기(푸시 · 업로드 · 무효화)마다 실행 직전에 kty 가 승인합니다.
+
+용어:
+
+*   **레지스트리 호스트**: ECR 주소의 앞부분(`<계정>.dkr.ecr.<리전>.amazonaws.com`)
+    입니다. 손으로 적지 않고 `prod/registry` 출력 `repo_urls` 에서 읽습니다.
+*   **다이제스트**: 이미지 내용의 해시(`sha256:…`)입니다. 태그와 달리 내용이
+    바뀌면 값도 바뀌므로, 태스크 정의 · Media 상자는 다이제스트로 이미지를
+    가리킵니다.
+
+## 언제
+
+| 단계 | 하는 일 | 선행 |
+|---|---|---|
+| O7c | 이미지 6종(응답기를 하면 7종) 푸시 · 다이제스트 기록 | M2 머지 · `prod/registry` 적용(O7b) · 이미지별 선행(아래 표) |
+| O7f 의 5 | apex 랜딩 업로드 · 무효화 | `prod/edge` 적용 · 2번의 업로드 제외 경로 확인(I2-8) |
+
+O7c 는 O7d(next · auth · clip 태스크 정의가 다이제스트를 씀)와 O7e(Media
+셋)보다 먼저 끝냅니다.
+
+## 시작 전
+
+1.  [단계 직전 점검](stage-precheck.md)을 합니다 — O7c 는 `O7c` 묶음,
+    랜딩 업로드는 그 하위 단계 묶음입니다. 통과하지 않으면 시작하지
+    않습니다.
+1.  ECR 푸시 · S3 · CloudFront 무효화는 SCP 판정 대조표(설계 13-1)에서
+    허용입니다. 그래도 실행 중 `AccessDenied` 가 나면 그 자리에서 멈추고 계획
+    3절 「SCP 멈춤 규칙」 을 따릅니다 — 다시 시도하지 않고, 거부된 동작 ·
+    저장소 · 시각을 kty 가 확인합니다.
+
+## ECR 로그인
+
+레지스트리 호스트를 `repo_urls` 에서 읽고, 로그인 토큰은 파이프로만
+넘깁니다(명령 인자에 비밀이 남지 않음).
+
+```shell
+registry_host="$(terraform -chdir=infra/terraform/prod/registry output -json repo_urls \
+  | jq -r '.next' | cut -d/ -f1)"
+aws ecr get-login-password --region ap-northeast-2 \
+  | docker login --username AWS --password-stdin "${registry_host}"
+```
+
+`prod/registry` 를 `init -backend-config=backend.hcl` 로 연 체크아웃에서
+돌립니다(출력은 prod 상태에서 읽습니다).
+
+## 이미지
+
+| 저장소 키 | 원천 | 선행 |
+|---|---|---|
+| `next` | 2번 Dockerfile · 환경별 빌드 인자 | 2번의 Dockerfile · prod 빌드 인자 목록(I2-1). 빈 빌드 인자면 빌드가 실패합니다 |
+| `auth` · `clip` | 3번 Dockerfile · 빌드 방법 | 3번의 준비(I3-8) |
+| `media-nginx` | nginx 공식 이미지 — **빌드하지 않습니다** | M2 머지본의 핀 다이제스트 |
+| `media-mediamtx` | `media/Dockerfile.mtxhook`(1번 빌드 · 컨텍스트 `media/`) | 아래 「MediaMTX 확인」 |
+| `media-sidecar` | `media/Dockerfile`(1번 빌드 · 컨텍스트 `media/`) | I1-1(IAM 인증 · `POSTGRES_AUTH` 전환 · CA 번들) 머지본 |
+| `media-ingest-auth` | `media/Dockerfile.ingest-auth`(1번 빌드 · 컨텍스트 `media/`) | 응답기 코드가 준비됐을 때만 |
+
+*   next · auth · clip 의 준비가 안 됐으면 O7d 를 시작하지 않습니다.
+*   응답기가 준비되지 않았으면 건너뛰고, tfvars 의 응답기 다이제스트를 비워
+    둡니다(compose 렌더에서 빠짐). M15 · O8a 에서 다시 합니다.
+*   제어면 서버(I1-6)는 O7c 의 조건이 아닙니다. 없으면 nginx 가 404 를
+    냅니다.
+*   **태그 = 빌드한 커밋 SHA 의 짧은 꼴**입니다. 저장소가 태그 불변이라 같은
+    태그를 다시 푸시하면 실패하는 것이 정상입니다 — 다른 내용을 같은 태그로
+    덮지 않습니다.
+*   **아키텍처**: 빌드 대상 플랫폼을 실행할 곳(ECS 태스크 · Media 상자)의
+    아키텍처와 맞춥니다(`docker build --platform`). kty 로컬(Apple
+    Silicon)의 기본은 arm64 입니다.
+
+빌드한 이미지를 올리는 꼴입니다(`<키>` · `<태그>` 는 표의 값).
+
+```shell
+docker tag <로컬 이미지> "${registry_host}/pokeclip-prod/<키>:<태그>"
+docker push "${registry_host}/pokeclip-prod/<키>:<태그>"
+```
+
+nginx 는 빌드 대신 핀 다이제스트로 받아 다시 태그합니다.
+
+```shell
+docker pull nginx@<M2 머지본의 핀 다이제스트>
+docker tag nginx@<M2 머지본의 핀 다이제스트> \
+  "${registry_host}/pokeclip-prod/media-nginx:<태그>"
+docker push "${registry_host}/pokeclip-prod/media-nginx:<태그>"
+```
+
+### MediaMTX 확인
+
+*   빌드 전에 `media/Dockerfile.mtxhook` 의 `FROM` 이 현행 포크 태그
+    `v1.21.1-pokeclip.2` 인지 대조합니다. 현행 태그의 정본은 볼트 런북
+    「mediamtx-커스텀이미지-반영」 입니다.
+*   **포크 원본 이미지를 그대로 미러링하지 않습니다.** 훅 바이너리가 없어
+    녹화 이벤트가 기록되지 않습니다.
+*   빌드한 이미지에 훅 바이너리가 있고 실행 계정이 10002 인지 봅니다. 이
+    이미지에는 셸이 없어 컨테이너를 만들어 파일 목록을 꺼냅니다.
+
+```shell
+docker image inspect --format '{{.Config.User}}' <로컬 이미지>   # 10002:10002
+cid="$(docker create <로컬 이미지>)"
+docker export "${cid}" | tar -t | grep -x 'hooks-bin/mtxhookwrite'
+docker rm "${cid}"
+```
+
+## 기록
+
+푸시한 이미지마다 저장소 · 태그 · 다이제스트 · 빌드한 커밋 SHA(next 는 mono
+develop 커밋)를 적습니다. 다이제스트는 푸시 출력의 `digest:` 이거나 아래
+명령의 값입니다.
+
+```shell
+aws ecr describe-images --region ap-northeast-2 \
+  --repository-name pokeclip-prod/<키> --image-ids imageTag=<태그> \
+  --query 'imageDetails[0].imageDigest' --output text
+```
+
+다이제스트는 `prod/platform` · `prod/media` 의 tfvars(추적하지 않음)에
+넣습니다. O7c 의 통과 조건은 푸시한 6종(응답기를 했으면 7종)의 다이제스트가
+모두 기록 · 기입된 것입니다.
+
+## 랜딩 업로드(O7f 의 5)
+
+원천은 mono `landing/` 입니다(빌드 없음 · ADR-089). 버킷 · 배포는 `prod/edge`
+출력 `apex_bucket_name` · `apex_distribution_id` 에서 읽습니다.
+
+1.  2번이 넘긴 업로드 제외 경로(I2-8 — 예: `landing/scripts/` 아래 검사
+    스크립트)를 `--exclude` 로 붙여 dry-run 으로 대상을 봅니다.
+
+    ```shell
+    aws s3 sync landing/ "s3://<apex_bucket_name>" \
+      --exclude '<제외 경로>' --dryrun
+    ```
+
+1.  대상 목록을 kty 가 보고 승인한 뒤 같은 명령을 `--dryrun` 없이
+    돌립니다. 버킷에만 있는 옛 파일을 지우는 `--delete` 는 dry-run 결과에서
+    지울 목록을 본 뒤에만 붙입니다.
+1.  무효화합니다.
+
+    ```shell
+    aws cloudfront create-invalidation \
+      --distribution-id <apex_distribution_id> --paths '/*'
+    ```
+
+1.  배포 주소 · 시각을 kty 가 2번에게 알립니다(I2-8).
+
+## CI 로 옮길 때
+
+CI 자동 푸시는 설계 8절 후속 승인 지점(40차)을 따릅니다 — CI 푸시 역할 ·
+apex 업로드 역할과 그 신뢰 조건을 만드는 별도 PR 과 kty 결정이 필요합니다.
+그 뒤에도 이 런북은 CI 가 안 될 때의 수동 대행 경로로 남깁니다.
+
+## See also
+
+*   계획 M7 「c5 런북 내용」 · O7c · 3절 「SCP 멈춤 규칙」
+*   [prod/registry](../prod/registry/README.md) · [단계 직전 점검](stage-precheck.md)
+*   설계 3-1 의 ⑦ · 8절 후속 승인 지점 · 13-1 SCP 판정 대조표
