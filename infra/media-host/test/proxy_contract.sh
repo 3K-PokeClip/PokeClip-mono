@@ -102,8 +102,10 @@ add_setup_reason() {
   setup_reason="${setup_reason:+${setup_reason}; }$1"
 }
 
+# 시험 compose 에 명령을 보낸다(상한 HARNESS_DOCKER_TIMEOUT — 넘기면 124).
 bench_compose() {
-  docker compose -p "${PROJECT}" -f "${CONTRACT_COMPOSE}" "$@"
+  harness::bounded "${HARNESS_DOCKER_TIMEOUT}" \
+    docker compose -p "${PROJECT}" -f "${CONTRACT_COMPOSE}" "$@"
 }
 
 compose_down() {
@@ -124,7 +126,8 @@ cleanup() {
   start_media::abort
   if (( env_ready )); then
     compose_down
-    if left="$(harness::count_output_lines docker ps -aq \
+    if left="$(harness::count_output_lines harness::bounded \
+      "${HARNESS_DOCKER_TIMEOUT}" docker ps -aq \
       --filter "label=com.docker.compose.project=${PROJECT}")"; then
       printf '정리: 프로젝트 %s 컨테이너 잔여 %s\n' "${PROJECT}" "${left}" >&2
     else
@@ -221,7 +224,8 @@ check_tools() {
       ok=1
     fi
   done
-  if (( ! ok )) && ! docker compose version --short >/dev/null 2>&1; then
+  if (( ! ok )) && ! harness::bounded "${HARNESS_DOCKER_TIMEOUT}" \
+    docker compose version --short >/dev/null 2>&1; then
     add_setup_reason 'docker compose 를 쓸 수 없음'
     ok=1
   fi
@@ -234,7 +238,8 @@ check_tools() {
 #######################################
 check_prestate() {
   local ok=0 port leftover
-  if ! leftover="$(harness::count_output_lines docker ps -aq \
+  if ! leftover="$(harness::count_output_lines harness::bounded \
+    "${HARNESS_DOCKER_TIMEOUT}" docker ps -aq \
     --filter "label=com.docker.compose.project=${PROJECT}")"; then
     add_setup_reason '이전 실행 잔여 컨테이너 조회 실패 — 확인 불가'
     ok=1
@@ -255,7 +260,8 @@ down -v 로 정리 뒤 다시)"
 
 build_echo_image() {
   local log="${scratch}/echo-build.log"
-  if ! docker build -t "${ECHO_IMAGE}" "${TEST_DIR}/echo" >"${log}" 2>&1; then
+  if ! harness::run_bounded "${HARNESS_DOCKER_TIMEOUT}" "${log}" \
+    docker build -t "${ECHO_IMAGE}" "${TEST_DIR}/echo"; then
     add_setup_reason "에코 이미지 빌드 실패: $(harness::log_tail "${log}")"
     return 1
   fi
@@ -499,7 +505,8 @@ check_case_10() {
 #   compose 파일.
 #######################################
 netns_facts() {
-  docker compose -p "${PROJECT}" -f "$1" config --format json \
+  harness::bounded "${HARNESS_DOCKER_TIMEOUT}" \
+    docker compose -p "${PROJECT}" -f "$1" config --format json \
     2>>"${scratch}/config.err" \
     | jq -c '{
         nginx: (.services.nginx.network_mode // null),

@@ -1,0 +1,11 @@
+# 시작 스크립트 시험용 MediaMTX 설정 템플릿(시험 자산 — prod 템플릿이 아니다).
+#
+# start_test 와 실물 compose 사례(13 · 14 · 16 · 17)가 MEDIA_MTX_TEMPLATE 으로
+# 넘긴다. 시작 스크립트가 채우는 고정 토큰 자리는 아래 한 곳뿐이고, 토큰은
+# YAML 큰따옴표 안에 둔다(시작 스크립트가 허용하는 글자는 그 안에서 이스케이프가
+# 필요 없다 — 운영 템플릿도 같은 규칙). 시험 compose 의 mediamtx 자리(에코)는
+# 렌더 파일을 마운트만 하고 읽지 않는다.
+logLevel: info
+hlsCDNSecret: "@@HLS_CDN_SECRET@@"
+paths:
+  all_others:

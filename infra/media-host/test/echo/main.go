@@ -52,8 +52,13 @@ const (
 	writeTimeout      = 10 * time.Second
 	// shutdownGrace 는 종료 신호 · 종료 요청 뒤 진행 중인 요청을 기다리는 상한이다.
 	shutdownGrace = 2 * time.Second
-	// ownerDialTimeout 은 sidecar 가 주인 루프백 접속을 기다리는 상한이다.
+	// ownerDialTimeout 은 sidecar 가 주인 루프백 접속 한 번을 기다리는 상한이다.
 	ownerDialTimeout = 2 * time.Second
+	// ownerRetryWindow 는 접속이 거부될 때 다시 시도하는 전체 창이다. 주인이 막
+	// 떠서 아직 듣지 않는 순간(첫 기동)의 거부를 망 칸 합류 실패로 읽지 않게 한다.
+	ownerRetryWindow = 5 * time.Second
+	// ownerRetryInterval 은 거부 뒤 다시 시도하기 전 쉬는 시간이다.
+	ownerRetryInterval = 200 * time.Millisecond
 	// fetchTimeout 은 fetch 요청 하나의 상한이다.
 	fetchTimeout = 5 * time.Second
 )
@@ -296,9 +301,15 @@ func runSidecar(args []string) int {
 }
 
 // reportOwnerDial 은 주인 루프백 주소에 TCP 접속만 해 보고 결과 한 줄을 낸다. HTTP 요청을
-// 보내지 않으므로 serve 의 호출 수를 바꾸지 않는다.
+// 보내지 않으므로 serve 의 호출 수를 바꾸지 않는다. 실패하면 ownerRetryWindow 안에서 다시
+// 시도하고, 창이 끝날 때까지 못 붙으면 마지막 오류로 FAIL 을 낸다.
 func reportOwnerDial(addr string) {
+	deadline := time.Now().Add(ownerRetryWindow)
 	conn, err := net.DialTimeout("tcp", addr, ownerDialTimeout)
+	for err != nil && time.Now().Before(deadline) {
+		time.Sleep(ownerRetryInterval)
+		conn, err = net.DialTimeout("tcp", addr, ownerDialTimeout)
+	}
 	if err != nil {
 		fmt.Printf("SIDECAR OWNER FAIL %s: %v\n", addr, err)
 		return

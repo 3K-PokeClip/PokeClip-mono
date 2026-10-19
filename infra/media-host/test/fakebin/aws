@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+#
+# 가짜 aws — 시작 스크립트의 CDN 비밀 조회(Secrets Manager get-secret-value)만
+# 흉내 낸다. 시험 전용이고, 돌려주는 값은 실제 비밀이 아닌 고정 시험 문자열이다.
+# 사례 13 · 14 · 16 · 17(실물 compose) · start_test · c7 유닛 시험이 PATH 앞에
+# 이 디렉터리를 둔다.
+#
+# 시험이 주는 값(시작 스크립트는 읽지 않는다):
+#   PCBENCH_FAKE_AWS_MODE  ok(기본) · fail(종료 254) · empty(빈 값) ·
+#                          none(SecretString 이 없을 때 CLI 가 내는 None) ·
+#                          special(특수 문자가 든 값) · multiline(가운데
+#                          줄바꿈) · trailing(끝 줄바꿈 — 출력 끝이 줄바꿈 둘) ·
+#                          value(PCBENCH_FAKE_AWS_VALUE_FILE 파일 내용을 그대로 —
+#                          값을 환경에 두면 자식 기록에 섞이므로 파일로 받는다)
+#   PCBENCH_FAKE_LOG_DIR   있으면 argv 를 aws.<n>.argv 에 한 줄에 하나씩 적는다.
+#
+# 모르는 호출 꼴이면 종료 2 — 시작 스크립트가 argv 를 바꾸면 드러난다.
+
+set -euo pipefail
+
+readonly FAKE_SECRET='pcbench-edge-proxy-fake-cdn-secret'
+# sed · 패턴 치환에서 뜻이 있는 글자를 모았다(& \ $ / * 따옴표).
+# shellcheck disable=SC2016 # 펼치지 않는 것이 뜻이다.
+readonly SPECIAL_SECRET='pcbench&edge\proxy$fake/*"cdn'"'"'secret'
+
+#######################################
+# argv 를 기록한다(로그 디렉터리가 있을 때만).
+# Globals:
+#   PCBENCH_FAKE_LOG_DIR
+# Arguments:
+#   받은 argv.
+#######################################
+record_argv() {
+  local dir="${PCBENCH_FAKE_LOG_DIR:-}" n
+  [[ -n "${dir}" ]] || return 0
+  n=1
+  while [[ -e "${dir}/aws.${n}.argv" ]]; do
+    n=$((n + 1))
+  done
+  printf '%s\n' "$@" >"${dir}/aws.${n}.argv"
+}
+
+main() {
+  record_argv "$@"
+  if (( $# != 8 )) \
+    || [[ "$1 $2 $3" != 'secretsmanager get-secret-value --secret-id' \
+    || -z "$4" || "$5 $6 $7 $8" != '--query SecretString --output text' ]]
+  then
+    printf '가짜 aws: 모르는 호출\n' >&2
+    exit 2
+  fi
+  case "${PCBENCH_FAKE_AWS_MODE:-ok}" in
+    ok) printf '%s\n' "${FAKE_SECRET}" ;;
+    special) printf '%s\n' "${SPECIAL_SECRET}" ;;
+    multiline) printf '%s\nlogLevel: debug\n' "${FAKE_SECRET}" ;;
+    trailing) printf '%s\n\n' "${FAKE_SECRET}" ;;
+    value)
+      printf '%s\n' \
+        "$(cat -- "${PCBENCH_FAKE_AWS_VALUE_FILE:?가짜 aws: 값 파일 없음}")"
+      ;;
+    empty) printf '\n' ;;
+    none) printf 'None\n' ;;
+    fail)
+      printf '가짜 aws: AccessDeniedException(시험)\n' >&2
+      exit 254
+      ;;
+    *)
+      printf '가짜 aws: 모르는 모드\n' >&2
+      exit 2
+      ;;
+  esac
+}
+
+main "$@"

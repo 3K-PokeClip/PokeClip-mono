@@ -37,6 +37,10 @@ readonly START_MEDIA_ABORT_TIMEOUT=30
 readonly START_MEDIA_SETTLE_TIMEOUT=20
 readonly START_MEDIA_OBSERVE_WINDOW=40
 readonly START_MEDIA_MIN_RESTARTS=3
+# 마지막 시작의 접속 결과 줄을 기다리는 상한(초).
+readonly START_MEDIA_RESULT_TIMEOUT=15
+# 짧은 docker 조회(info · context · version · ps) 한 번의 상한(초).
+readonly START_MEDIA_QUERY_TIMEOUT=30
 # docker info 에서 compose 플러그인 경로를 꺼내는 형식(한 줄로 둔다 — 쪼개면
 # 템플릿 동작이 달라질 수 있다).
 readonly START_MEDIA_PLUGIN_FORMAT='{{range .ClientInfo.Plugins}}{{if eq .Name "compose"}}{{.Path}}{{end}}{{end}}'
@@ -111,8 +115,8 @@ start_media::prepare_env() {
   mkdir -p -- "${config_dir}/cli-plugins"
   printf '{"credHelpers":{"%s":"ecr-login"}}\n' "${START_MEDIA_FAKE_ECR_HOST}" \
     >"${config_dir}/config.json"
-  plugin="$(docker info --format "${START_MEDIA_PLUGIN_FORMAT}" 2>/dev/null)" \
-    || plugin=""
+  plugin="$(harness::bounded "${START_MEDIA_QUERY_TIMEOUT}" docker info \
+    --format "${START_MEDIA_PLUGIN_FORMAT}" 2>/dev/null)" || plugin=""
   if [[ ! -x "${plugin}" ]]; then
     harness::add_reason 'docker compose 플러그인 경로를 찾지 못함'
     return 1
@@ -120,10 +124,11 @@ start_media::prepare_env() {
   ln -s -- "${plugin}" "${config_dir}/cli-plugins/docker-compose"
   host="${DOCKER_HOST:-}"
   if [[ -z "${host}" ]]; then
-    host="$(docker context inspect --format '{{.Endpoints.docker.Host}}' \
-      2>/dev/null)" || host=""
+    host="$(harness::bounded "${START_MEDIA_QUERY_TIMEOUT}" docker context \
+      inspect --format '{{.Endpoints.docker.Host}}' 2>/dev/null)" || host=""
   fi
-  version="$(docker compose version --short 2>/dev/null)" || version=""
+  version="$(harness::bounded "${START_MEDIA_QUERY_TIMEOUT}" docker compose \
+    version --short 2>/dev/null)" || version=""
   if [[ -z "${host}" || -z "${version}" ]]; then
     harness::add_reason 'docker 엔드포인트 · compose 판을 읽지 못함'
     return 1
@@ -146,28 +151,33 @@ start_media::prepare_env() {
 }
 
 #######################################
-# 스크립트와 같은 값으로 시험 compose 에 명령을 보낸다.
+# 스크립트와 같은 값으로 시험 compose 에 명령을 보낸다(상한
+# HARNESS_DOCKER_TIMEOUT — 넘기면 124).
 # Globals:
 #   start_media_env, start_media_project, start_media_compose_file
 # Arguments:
 #   docker compose 하위 명령과 인자.
 #######################################
 start_media::compose() {
-  env "${start_media_env[@]}" docker compose -p "${start_media_project}" \
+  harness::bounded "${HARNESS_DOCKER_TIMEOUT}" env "${start_media_env[@]}" \
+    docker compose -p "${start_media_project}" \
     -f "${start_media_compose_file}" "$@"
 }
 
 #######################################
-# start-media.sh 를 배경으로 띄운다(전경 compose up 이 끝날 때 끝난다).
+# start-media.sh 를 배경 · 자기 프로세스 그룹으로 띄운다(전경 compose up 이
+# 끝날 때 끝난다).
 # Globals:
 #   start_media_pid, start_media_env, start_media_host_dir
 # Arguments:
 #   로그 파일.
 #######################################
 start_media::start() {
-  env "${start_media_env[@]}" \
-    "${start_media_host_dir}/${START_MEDIA_SCRIPT_REL}" >"$1" 2>&1 &
-  start_media_pid=$!
+  harness::spawn_group env "${start_media_env[@]}" \
+    "${start_media_host_dir}/${START_MEDIA_SCRIPT_REL}" >"$1" 2>&1
+  # harness_spawned_pid 는 harness.sh 가 채운다.
+  # shellcheck disable=SC2154
+  start_media_pid="${harness_spawned_pid}"
 }
 
 #######################################
@@ -226,9 +236,11 @@ start_media::finish_run() {
     if kill -0 "${start_media_pid}" 2>/dev/null; then
       start_media::stop "${start_media_run_dir}/finish-stop.log" || true
       if ! harness::wait_exit "${start_media_pid}" 30; then
-        kill "${start_media_pid}" 2>/dev/null || true
+        harness::terminate "${start_media_pid}"
       fi
     fi
+    # 이미 거둔 PID 에 신호를 보내지 않는다(번호가 다른 프로세스로 재사용될 수
+    # 있다) — 남은 종료 상태만 거둔다.
     wait "${start_media_pid}" 2>/dev/null || true
     start_media_pid=""
   fi
@@ -245,7 +257,7 @@ start_media::finish_run() {
 start_media::abort() {
   [[ -n "${start_media_pid}" ]] || return 0
   if kill -0 "${start_media_pid}" 2>/dev/null; then
-    kill "${start_media_pid}" 2>/dev/null || true
+    harness::terminate "${start_media_pid}"
   fi
 }
 
@@ -338,6 +350,29 @@ start_media::record_14() {
 }
 
 #######################################
+# 사이드카 로그를 받되, 시작마다 접속 결과 줄이 하나씩 있는 시점까지 다시
+# 받는다(마지막 시작이 결과를 쓰는 중일 수 있다). 상한 안에 맞지 않으면 마지막
+# 로그를 그대로 두고 판정에 넘긴다.
+# Arguments:
+#   로그 파일.
+# Returns:
+#   0 받음 / 1 조회 실패.
+#######################################
+start_media::fetch_settled_logs() {
+  local deadline=$((SECONDS + START_MEDIA_RESULT_TIMEOUT)) starts results
+  while :; do
+    start_media::compose logs --no-color --no-log-prefix sidecar >"$1" 2>&1 \
+      || return 1
+    starts="$(harness::count_fixed 'SIDECAR START' "$1")"
+    results="$(harness::count_fixed 'SIDECAR OWNER ' "$1")"
+    if (( results >= starts || SECONDS >= deadline )); then
+      return 0
+    fi
+    sleep 1
+  done
+}
+
+#######################################
 # 사례 16 한 갈래 — 사이드카 역할이 지연 뒤 종료 1 을 되풀이하는 동안 본다.
 # Arguments:
 #   종료 지연(예: 4s · 0s).
@@ -361,8 +396,7 @@ start_media::observe_restarts() {
     sleep 2
   done
   logs="${start_media_run_dir}/sidecar.log"
-  if ! start_media::compose logs --no-color --no-log-prefix sidecar \
-    >"${logs}" 2>&1; then
+  if ! start_media::fetch_settled_logs "${logs}"; then
     harness::add_reason "${label}: 사이드카 로그 조회 실패 — 확인 불가"
     start_media::finish_run
     return 1
@@ -376,8 +410,7 @@ start_media::observe_restarts() {
 ${START_MEDIA_MIN_RESTARTS} 이상)"
     ok=1
   fi
-  # 마지막 시작은 접속 결과를 쓰는 중일 수 있어 한 줄 모자라도 받는다.
-  if (( owner_fail != 0 || owner_ok < starts - 1 )); then
+  if (( owner_fail != 0 || owner_ok != starts )); then
     harness::add_reason "${label}: 주인 루프백 접속 성공 ${owner_ok} · 실패 \
 ${owner_fail}(시작 ${starts})"
     ok=1
@@ -438,7 +471,8 @@ $(harness::log_tail "${start_media_run_dir}/kill.log")"
     harness::add_reason 'compose 가 0 으로 끝남(기대: 0 아님)'
     ok=1
   fi
-  if ! running="$(harness::count_output_lines docker ps -q \
+  if ! running="$(harness::count_output_lines harness::bounded \
+    "${START_MEDIA_QUERY_TIMEOUT}" docker ps -q \
     --filter "label=com.docker.compose.project=${start_media_project}")"; then
     harness::add_reason '프로젝트 컨테이너 조회 실패 — 확인 불가'
     ok=1

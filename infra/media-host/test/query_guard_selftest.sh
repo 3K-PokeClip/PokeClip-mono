@@ -304,6 +304,43 @@ test_cleanup_output() {
 }
 
 #######################################
+# 정리 — set -e 그대로인 셸에서 살아 있는 start-media.sh 자리(자기 프로세스
+# 그룹의 sleep)가 있어도 끝까지 돈다: 그 자리를 끝내고, 잔여를 적고, 임시
+# 디렉터리를 지운다(harness::terminate 의 정상 경로가 0 이어야 한다).
+# Globals:
+#   selftest_root, SELFTEST_PS_MODE, SELFTEST_COMPOSE_MODE
+#######################################
+test_cleanup_set_e_live_start() {
+  local err="${selftest_root}/cleanup-set-e.err" dir status=0 live
+  export SELFTEST_COMPOSE_MODE=ok SELFTEST_PS_MODE=empty
+  dir="$(mktemp -d "${selftest_root}/scratch.XXXXXX")"
+  # 배경 하위 셸로 돌린다 — `( … ) || …` 꼴이면 그 안에서 set -e 가 꺼져
+  # 정상 경로의 0 아닌 상태를 보지 못한다.
+  (
+    set -e
+    scratch="${dir}"
+    env_ready=1
+    harness::spawn_group sleep 300
+    # 하위 셸 안에서만 쓰는 값이다(정리 함수가 그 셸을 끝낸다).
+    # shellcheck disable=SC2030
+    start_media_pid="${harness_spawned_pid}"
+    printf '%s\n' "${start_media_pid}" >"${dir}.pid"
+    cleanup
+  ) 2>"${err}" &
+  wait "$!" || status=$?
+  live=0
+  if kill -0 "$(cat -- "${dir}.pid")" 2>/dev/null; then
+    live=1
+  fi
+  assert_eq '정리(set -e · 살아 있는 시작 자리) 종료 코드' 0 "${status}"
+  assert_contains '정리(set -e · 살아 있는 시작 자리) 잔여 줄' \
+    "$(cat -- "${err}")" '잔여 0'
+  assert_eq '정리(set -e · 살아 있는 시작 자리) 임시 디렉터리 삭제' 0 \
+    "$([[ -e "${dir}" ]] && printf 1 || printf 0)"
+  assert_eq '정리(set -e · 살아 있는 시작 자리) 시작 자리 끝남' 0 "${live}"
+}
+
+#######################################
 # check_prestate — 조회 실패 → 준비 실패(확인 불가) · 두 줄 → 준비 실패(잔여
 # 있음) · 빔 → 통과.
 # Globals:
@@ -343,6 +380,7 @@ test_check_prestate() {
 test_case_16_log_query() {
   local mode status
   # 가짜 프로세스가 끝날 때까지 기다려 관찰 창을 건너뛴다.
+  # shellcheck disable=SC2031 # 이 가짜는 바깥 셸의 값을 읽는다.
   start_media::wait_ready() { wait "${start_media_pid}" 2>/dev/null || true; }
   for mode in fail ok; do
     export SELFTEST_COMPOSE_MODE="${mode}"
@@ -471,6 +509,7 @@ main() {
     test_count_output_lines
     test_case_17_leftover
     test_cleanup_output
+    test_cleanup_set_e_live_start
     test_check_prestate
     test_case_16_log_query
     test_case_8_log_queries

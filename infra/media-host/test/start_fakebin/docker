@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+#
+# start_test 전용 가짜 docker — 받은 argv 와 환경을 전부 기록하고 정해진 답을
+# 낸다. 컨테이너는 띄우지 않는다.
+#
+# 시험이 주는 값(시작 · 정지 스크립트는 읽지 않는다):
+#   PCBENCH_FAKE_LOG_DIR            (필수) docker.<n>.argv(한 줄에 하나) ·
+#                                   docker.<n>.env · docker.<n>.pid(이 프로세스
+#                                   번호 — exec 로 불렸는지 가린다)를 쓴다.
+#   PCBENCH_FAKE_COMPOSE_VERSION    `compose version --short` 의 답.
+#   PCBENCH_FAKE_UP_STATUS          up 의 종료 코드(기본 0).
+#   PCBENCH_FAKE_DOWN_STATUS        down 의 종료 코드(기본 0).
+#
+# 모르는 호출 꼴이면 종료 2.
+
+set -euo pipefail
+
+#######################################
+# argv · 환경을 기록한다.
+# Globals:
+#   PCBENCH_FAKE_LOG_DIR
+# Arguments:
+#   받은 argv.
+#######################################
+record_call() {
+  local dir="${PCBENCH_FAKE_LOG_DIR:?가짜 docker: PCBENCH_FAKE_LOG_DIR 없음}" n=1
+  while [[ -e "${dir}/docker.${n}.argv" ]]; do
+    n=$((n + 1))
+  done
+  printf '%s\n' "$@" >"${dir}/docker.${n}.argv"
+  env >"${dir}/docker.${n}.env"
+  printf '%s\n' "$$" >"${dir}/docker.${n}.pid"
+}
+
+#######################################
+# compose 하위 명령 이름을 낸다(전역 옵션 --ansi · -p · -f 와 그 값은 건너뛴다).
+# Arguments:
+#   compose 뒤의 argv.
+# Outputs:
+#   하위 명령 이름(없으면 빈 줄).
+#######################################
+compose_subcommand() {
+  while (( $# > 0 )); do
+    case "$1" in
+      --ansi | -p | -f)
+        (( $# >= 2 )) || break
+        shift 2
+        ;;
+      -*) shift ;;
+      *)
+        printf '%s\n' "$1"
+        return 0
+        ;;
+    esac
+  done
+  printf '\n'
+}
+
+main() {
+  record_call "$@"
+  if [[ "${1:-}" != compose ]]; then
+    printf '가짜 docker: 모르는 호출\n' >&2
+    exit 2
+  fi
+  shift
+  case "$(compose_subcommand "$@")" in
+    version) printf '%s\n' "${PCBENCH_FAKE_COMPOSE_VERSION:-}" ;;
+    up) exit "${PCBENCH_FAKE_UP_STATUS:-0}" ;;
+    down) exit "${PCBENCH_FAKE_DOWN_STATUS:-0}" ;;
+    *)
+      printf '가짜 docker: 모르는 compose 하위 명령\n' >&2
+      exit 2
+      ;;
+  esac
+}
+
+main "$@"

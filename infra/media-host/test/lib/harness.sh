@@ -13,8 +13,16 @@
 # 이 파일은 source 해서 쓴다(실행하지 않는다). bash 3.2 에서도 돈다 — macOS 에
 # timeout 이 없어 상한 시간은 SECONDS 로 직접 잰다.
 
+# 상한을 넘긴 명령에 TERM 뒤 KILL 까지 주는 유예(초).
+readonly HARNESS_KILL_GRACE=5
+# docker · compose 호출 한 번의 상한(초) — 이미지 받기 · 빌드를 품을 만큼 길게.
+# shellcheck disable=SC2034 # 부르는 시험이 읽는다.
+readonly HARNESS_DOCKER_TIMEOUT=300
+
 harness_fail_reason=""
 harness_record_note=""
+harness_spawned_pid=""
+harness_bounded_pid=""
 # 부르는 쪽이 harness::wait_exit 뒤에 읽는다.
 # shellcheck disable=SC2034
 harness_waited_status=0
@@ -261,28 +269,109 @@ harness::wait_http_200() {
 }
 
 #######################################
-# 명령을 상한 시간 안에서 돌린다. 넘기면 끝내고 124 를 돌려준다.
+# 명령을 배경에서 자기 프로세스 그룹(그룹 번호 = PID)으로 띄운다. 작업 제어
+# (set -m)를 띄우는 순간에만 켠다 — macOS 에는 setsid 명령이 없다. 자손은
+# 부모가 먼저 끝나 재부모화돼도 같은 그룹에 남으므로 그룹 하나로 모두 끝낼 수
+# 있다. 표준 입력은 부르는 쪽 것을 넘긴다.
+# Globals:
+#   harness_spawned_pid
+# Arguments:
+#   명령 …
+#######################################
+harness::spawn_group() {
+  local had_m=0
+  [[ "$-" != *m* ]] || had_m=1
+  set -m
+  "$@" <&0 &
+  harness_spawned_pid=$!
+  (( had_m )) || set +m
+}
+
+#######################################
+# 그룹(없으면 그 PID 하나)에 신호를 보낸다.
+# Arguments:
+#   신호, PID.
+#######################################
+harness::signal_group() {
+  kill "-$1" -- "-$2" 2>/dev/null || kill "-$1" "$2" 2>/dev/null || true
+}
+
+#######################################
+# 그룹(없으면 그 PID 하나)에 아직 살아 있는 프로세스가 있는지 본다.
+# Arguments:
+#   PID.
+#######################################
+harness::group_alive() {
+  kill -0 -- "-$1" 2>/dev/null || kill -0 "$1" 2>/dev/null
+}
+
+#######################################
+# 배경 프로세스와 그 그룹을 끝낸다 — TERM 을 보내고 유예 동안 기다린 뒤 남은
+# 그룹 전체에 KILL 을 보낸다(TERM 처리기가 새로 띄운 자식 · 재부모화된 자손도
+# 같은 그룹이라 함께 끝난다). 기다림마다 상한이 있고, set -e 아래에서도 정상
+# 경로가 0 을 돌려준다.
+# Arguments:
+#   PID(harness::spawn_group 이 띄운 것 — 아니면 그 PID 하나만 다룬다).
+#######################################
+harness::terminate() {
+  local pid="$1" deadline
+  harness::signal_group TERM "${pid}"
+  deadline=$((SECONDS + HARNESS_KILL_GRACE))
+  while (( SECONDS < deadline )) && harness::group_alive "${pid}"; do
+    sleep 0.2
+  done
+  harness::signal_group KILL "${pid}"
+  deadline=$((SECONDS + HARNESS_KILL_GRACE))
+  while (( SECONDS < deadline )) && harness::group_alive "${pid}"; do
+    sleep 0.2
+  done
+  wait "${pid}" 2>/dev/null || true
+  return 0
+}
+
+#######################################
+# 명령을 상한 시간 안에서 돌린다. 명령은 자기 프로세스 그룹에서 돈다. 넘기면
+# 그 그룹을 TERM → 유예 → KILL 로 끝내고 124 를 돌려준다. 표준 입출력은
+# 부르는 쪽 것을 그대로 쓴다 — 출력을 받거나($(…)) 돌려 쓸(>) 수 있다.
+# Globals:
+#   harness_bounded_pid
+# Arguments:
+#   상한(초), 명령 …
+# Returns:
+#   명령의 종료 코드 / 124 상한 초과.
+#######################################
+harness::bounded() {
+  local limit="$1" pid deadline status=0
+  shift
+  harness::spawn_group "$@"
+  pid="${harness_spawned_pid}"
+  # 부르는 쪽이 띄운 프로세스 번호를 확인할 수 있게 남긴다(start_test 의 exec
+  # 판별).
+  # shellcheck disable=SC2034
+  harness_bounded_pid="${pid}"
+  deadline=$((SECONDS + limit))
+  while kill -0 "${pid}" 2>/dev/null; do
+    if (( SECONDS >= deadline )); then
+      harness::terminate "${pid}"
+      return 124
+    fi
+    sleep 0.2
+  done
+  wait "${pid}" || status=$?
+  return "${status}"
+}
+
+#######################################
+# 명령을 상한 시간 안에서 돌리고 출력을 로그 파일에 받는다.
 # Arguments:
 #   상한(초), 로그 파일, 명령 …
 # Returns:
 #   명령의 종료 코드 / 124 상한 초과.
 #######################################
 harness::run_bounded() {
-  local limit="$1" log="$2" pid deadline status=0
+  local limit="$1" log="$2"
   shift 2
-  "$@" >"${log}" 2>&1 &
-  pid=$!
-  deadline=$((SECONDS + limit))
-  while kill -0 "${pid}" 2>/dev/null; do
-    if (( SECONDS >= deadline )); then
-      kill "${pid}" 2>/dev/null || true
-      wait "${pid}" 2>/dev/null || true
-      return 124
-    fi
-    sleep 1
-  done
-  wait "${pid}" || status=$?
-  return "${status}"
+  harness::bounded "${limit}" "$@" >"${log}" 2>&1
 }
 
 #######################################
