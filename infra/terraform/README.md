@@ -15,9 +15,11 @@ Terraform 코드입니다. 설계 정본은 「HTTPS · 엣지 인프라 설계�
 루트 하나가 상태 하나입니다. 의존은 위에서 아래 한쪽으로만 흐릅니다.
 `prod/*` · `nonprod/*` 는 같은 리스 계정 안의 환경입니다(설계 3-1).
 아래는 **목표 구조**입니다 — 지금 있는 것은
-`modules/{state_bucket,secret_shells,cloudfront_public_key}` · `policy/guard` ·
-`scripts` · `runbooks` · `nonprod/{bootstrap,dev,dns-legacy}` ·
-`prod/{bootstrap,secrets}` 뿐이고, 나머지 루트는 계획의 후속 PR 이 더합니다.
+`modules/{state_bucket,secret_shells,cloudfront_public_key}` ·
+`modules/{network,acm_certificate}` · `policy/guard` · `scripts` · `runbooks` ·
+`nonprod/{bootstrap,dev,dns-legacy}` ·
+`prod/{bootstrap,secrets,network,certs,registry}` 뿐이고, 나머지 루트는 계획의
+후속 PR 이 더합니다.
 
 ```
 infra/terraform/
@@ -39,16 +41,18 @@ infra/terraform/
     ├── bootstrap/                 # ① 상태 버킷 pokeclip-tfstate-prod-apne2(같은 계정 안 별도 버킷)
     ├── secrets/                   # ② CloudFront 공개키 · 엣지 비밀 그릇 3개(값 · 리소스 정책 없음)
     ├── dns/                       # ③ 새 존 · 이전용 레코드 복사본 · dev 위임 NS(보류 — 결정 46 · 재개 키트)
-    ├── network/                   # ④ VPC · 서브넷 · NAT · S3 Gateway EP
-    ├── certs/                     # ⑥ ACM 서울 · us-east-1
-    ├── registry/                  # ⑦ ECR(CI 역할은 쓰기로 할 때 — 40차)
+    ├── network/                   # ④ VPC · 서브넷(2 AZ) · NAT 1개 · S3 Gateway EP
+    ├── certs/                     # ⑥ ACM 서울 · us-east-1 + 검증 레코드 한 벌(존 = 이름 조회)
+    ├── registry/                  # ⑦ ECR 7개(CI 역할은 쓰기로 할 때 — 40차)
     ├── platform/                  # ⑧ 공개 ALB · WAF · 내부 ALB · NLB · ECS
     ├── media/                     # ⑨ Media EC2 · 인스턴스 역할 · Media SG
     ├── edge/                      # ⑩ CloudFront 배포 · WAF · KVS · CF Function
     └── records/                   # ⑫ 운영 별칭 레코드
 ```
 
-⑤ · ⑪ 은 prod 런타임 트랙(별도)이 소유합니다. 운영 측(ISB)이 만든 것(SCP ·
+⑤ · ⑪ 은 prod 런타임 트랙(별도)이 소유합니다. 그 트랙과 주고받는 출력
+이름 · 소유 경계는 [런타임 트랙 인터페이스 계약](CONTRACT-runtime.md)이
+정본입니다. 운영 측(ISB)이 만든 것(SCP ·
 OU · 운영 측 역할)과 기존 수동 자원(IAM 사용자 · dev 자동 주체 · GitHub OIDC
 공급자)은 이 트리가 소유하지 않습니다. `infra/dev-media/` 는 이 트리 밖이며
 건드리지 않습니다.
@@ -57,7 +61,8 @@ prod 엣지 비밀의 값 입력 · 교체 절차는 [엣지 비밀 런북](runb
 입니다.
 
 운영 단계 절차는 `runbooks/` 에 있습니다 —
-[조직 · CT 도입(보류 — 결정 46)](runbooks/org-ct.md).
+[조직 · CT 도입(보류 — 결정 46)](runbooks/org-ct.md) ·
+[prod 산출물 올리기(이미지 푸시 · 랜딩 업로드)](runbooks/prod-artifacts.md).
 운영 단계마다 먼저 [단계 직전 점검](runbooks/stage-precheck.md)을 합니다.
 
 ## 규약
