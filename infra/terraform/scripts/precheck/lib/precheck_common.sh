@@ -2,7 +2,7 @@
 #
 # 단계 직전 점검 도구(scp-recheck.sh · events.sh · principal-check.sh)가
 # 함께 쓰는 도우미 — 값 꼴 검사 · 탭 구분 줄 검사 · 파일 해시 · 증거 파일
-# 쓰기 · 호출 주체 확인. 계약: 도우미의 뜻(받는 값 · 멈추는 조건 · 문구)은
+# 쓰기 · 호출 주체 확인 · CLI 기록 꺼짐 확인. 계약: 도우미의 뜻(받는 값 · 멈추는 조건 · 문구)은
 # 세 도구에서 같고, 구현은 여기 한 곳이다. 증거 경로 검사는 갖지 않는다
 # (lib/evidence.sh 가 한 곳이다).
 #
@@ -13,7 +13,8 @@
 #   - 아래 상수 · 호출 주체 변수를 다시 선언하지 않는다(readonly 이중 정의는
 #     source 를 실패시킨다).
 #
-# 쓰는 도구: aws(sts get-caller-identity), sha256sum 또는 shasum.
+# 쓰는 도구: aws(sts get-caller-identity · configure get), sha256sum 또는
+# shasum.
 #
 # 사용: source lib/precheck_common.sh
 
@@ -115,5 +116,27 @@ precheck::caller_identity() {
   if ! [[ "${caller_arn}" =~ ${USER_ARN_PATTERN} ]] ||
     [[ "${caller_arn}" != "arn:aws:iam::${account}:user/"* ]]; then
     die "호출 주체가 IAM 사용자가 아님(시뮬레이터는 역할 세션 ARN 을 받지 않음)"
+  fi
+}
+
+#######################################
+# CLI 기록이 꺼져 있는지 본다 — 켜져 있으면 요청 · 응답 원문이 증거 밖 기록
+# 파일에 남는다. 첫 AWS 호출 전에 부른다. 값 · 경로는 되울리지 않는다.
+# Globals:
+#   AWS_CLI_HISTORY_FILE
+#######################################
+precheck::check_cli_history() {
+  local value status=0
+  if [[ -n "${AWS_CLI_HISTORY_FILE+set}" ]]; then
+    die "CLI 기록이 켜져 있음 — 증거 밖에 원문이 남음(AWS_CLI_HISTORY_FILE" \
+      "설정됨)"
+  fi
+  # 값이 없으면 aws configure get 은 빈 출력 · 종료 1 이다.
+  value="$(aws configure get cli_history 2>/dev/null)" || status=$?
+  if [[ "${status}" -ne 0 && "${status}" -ne 1 ]]; then
+    die "CLI 기록 설정(cli_history)을 읽지 못함"
+  fi
+  if [[ "${value}" == enabled ]]; then
+    die "CLI 기록이 켜져 있음 — 증거 밖에 원문이 남음(프로필의 cli_history)"
   fi
 }

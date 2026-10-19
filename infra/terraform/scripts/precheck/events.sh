@@ -38,8 +38,9 @@
 #       90일보다 이르면 이벤트 기록의 보관 한계(90일)를 표준 오류로 경고하고
 #       조회는 한다.
 # 종료 코드: 0 조회 끝(건수는 표준 출력) / 2 검사 불가(사용법 · 지금보다
-#            늦은 --since · 증거 경로 · 조회 실패 · 호출 자체의
-#            AccessDenied · 응답 꼴 — 칸 수 · 이벤트 ID · 출처 · 이름 · 시각)
+#            늦은 --since · CLI 기록 켜짐(첫 조회 전) · 증거 경로 · 조회
+#            실패 · 호출 자체의 AccessDenied · 응답 꼴 — 칸 수 · 이벤트 ID ·
+#            출처 · 이름 · 시각)
 #            — 0건으로 넘어가지 않는다(fail-closed).
 
 set -uo pipefail
@@ -295,6 +296,7 @@ main() {
       "이벤트 기록은 90일만 보관하므로 그보다 앞의 이벤트는 조회되지 않음" >&2
   fi
   load_names
+  precheck::check_cli_history
   dir="$(evidence::new_dir events)" || exit 2
   printf 'events: 증거 ~/%s/%s\n' "${EVIDENCE_ROOT_NAME}" "${dir##*/}" >&2
   for row in "${names[@]}"; do

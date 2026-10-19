@@ -54,9 +54,10 @@
 #       result.tsv 와 승인 기록의 해시가 완료 표지의 판정 때 해시와 같은지,
 #       그 판정의 호출 주체 계정이 이번과 같은지 본다 — 어긋나면 종료 2.
 # 종료 코드: 0 OK / 1 DENIED(바뀜과 겹쳐도 1) / 3 CHANGED(거부 없음) /
-#            2 검사 불가(사용법 · 묶음 없음 · 증거 경로 · 호출 실패 · 호출
-#            자체의 AccessDenied · 응답 꼴 · IAM 사용자가 아닌 주체 · 앞
-#            기준 손상 · 계정 다름) —
+#            2 검사 불가(사용법 · 묶음 없음 · CLI 기록 켜짐(판정만 — 첫
+#            AWS 호출 전) · 증거 경로 · 호출 실패 · 호출 자체의
+#            AccessDenied · 응답 꼴 · IAM 사용자가 아닌 주체 · 앞 기준 손상 ·
+#            계정 다름) —
 #            OK 로 넘어가지 않는다(fail-closed).
 
 set -uo pipefail
@@ -535,6 +536,7 @@ judge_bundle() {
   local orgs_note=""
   load_bundle "${bundle}"
   load_reference "${bundle}"
+  precheck::check_cli_history
   dir="$(evidence::new_dir "${DIR_PREFIX}-${bundle}")" || exit 2
   printf 'scp-recheck: 증거 ~/%s/%s · 비교 기준 %s\n' "${EVIDENCE_ROOT_NAME}" \
     "${dir##*/}" "${reference_source}" >&2

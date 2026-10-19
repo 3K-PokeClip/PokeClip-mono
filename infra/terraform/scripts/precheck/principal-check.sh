@@ -490,28 +490,6 @@ record_and_report() {
   return "${status}"
 }
 
-#######################################
-# CLI 기록이 꺼져 있는지 본다 — 켜져 있으면 요청 · 응답 원문이 증거 밖 기록
-# 파일에 남는다. 첫 AWS 호출 전에 부른다. 값 · 경로는 되울리지 않는다.
-# Globals:
-#   AWS_CLI_HISTORY_FILE
-#######################################
-check_cli_history() {
-  local value status=0
-  if [[ -n "${AWS_CLI_HISTORY_FILE+set}" ]]; then
-    die "CLI 기록이 켜져 있음 — 증거 밖에 원문이 남음(AWS_CLI_HISTORY_FILE" \
-      "설정됨)"
-  fi
-  # 값이 없으면 aws configure get 은 빈 출력 · 종료 1 이다.
-  value="$(aws configure get cli_history 2>/dev/null)" || status=$?
-  if [[ "${status}" -ne 0 && "${status}" -ne 1 ]]; then
-    die "CLI 기록 설정(cli_history)을 읽지 못함"
-  fi
-  if [[ "${value}" == enabled ]]; then
-    die "CLI 기록이 켜져 있음 — 증거 밖에 원문이 남음(프로필의 cli_history)"
-  fi
-}
-
 main() {
   [[ "$#" -eq 1 ]] || die "사용: principal-check.sh <단계>"
   # 꼴 밖 인자(경로 등)는 되울리지 않는다.
@@ -523,7 +501,7 @@ main() {
   principal::load_controls
   principal::load_targets
   mark_active
-  check_cli_history
+  precheck::check_cli_history
   evidence_dir="$(evidence::new_dir "${DIR_PREFIX}-${stage}")" || exit 2
   printf 'principal-check: 증거 ~/%s/%s\n' "${EVIDENCE_ROOT_NAME}" \
     "${evidence_dir##*/}" >&2

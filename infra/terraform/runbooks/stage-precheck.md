@@ -76,6 +76,12 @@ ARN 이 세션 기록에 남습니다). 값은 보고 · 파일에 옮기지 않
 
 명령은 저장소 뿌리에서 kty IAM 사용자 프로필(`AWS_PROFILE`)로 돌립니다.
 
+세 도구 공통 사전 조건: CLI 기록(프로필의 `cli_history = enabled` 또는 환경
+변수 `AWS_CLI_HISTORY_FILE`)이 켜져 있으면 `scp-recheck.sh` ·
+`principal-check.sh` · `events.sh` 모두 첫 AWS 호출 전에 종료 2 입니다 —
+요청 · 응답 원문이 증거 밖 기록 파일에도 남기 때문입니다.
+`scp-recheck.sh --accept` 는 AWS 를 부르지 않아 이 검사를 하지 않습니다.
+
 ```shell
 bash infra/terraform/scripts/precheck/scp-recheck.sh O7f
 bash infra/terraform/scripts/precheck/scp-recheck.sh O7f-stop2
@@ -104,10 +110,10 @@ bash infra/terraform/scripts/precheck/events.sh --since 2026-10-13T01:59:00Z
 | `SCP RECHECK CHANGED <n>` | 앞 기준과 다른 행 수(거부 없음) | 3 |
 | (첫 줄 없음 — 표준 오류에 「검사 불가」) | — | 2 |
 
-종료 2 는 사용법 · 묶음 없음 · 증거 경로 거부 · 호출 실패 · 시뮬레이터
-호출 자체의 AccessDenied · 응답 꼴 다름 · IAM 사용자가 아닌 주체 · 앞
-기준(승인 결과)의 손상(링크 · 권한 · 꼴 · 해시 · 완료 표지 없음) · 앞
-기준과 호출 주체 계정이 다름입니다.
+종료 2 는 사용법 · 묶음 없음 · CLI 기록 켜짐 · 증거 경로 거부 · 호출
+실패 · 시뮬레이터 호출 자체의 AccessDenied · 응답 꼴 다름 · IAM 사용자가
+아닌 주체 · 앞 기준(승인 결과)의 손상(링크 · 권한 · 꼴 · 해시 · 완료 표지
+없음) · 앞 기준과 호출 주체 계정이 다름입니다.
 
 첫 줄 뒤에는 행마다 **13-1 덧붙임 줄**이 나옵니다. 설계 13-1 표에 그대로
 덧붙일 수 있는 마크다운 표 행입니다(동작 · 리전 · 판정 · 날짜 시각(KST) ·
@@ -240,10 +246,8 @@ bash infra/terraform/scripts/precheck/principal-check.sh O7a
 *   사전 조건: 저장소 뿌리에서 kty IAM 사용자 프로필로 돌립니다(호출 주체가
     역할 세션이면 종료 2). **aws CLI 2.36.12 이상**이어야 합니다. 그보다 옛
     CLI 는 요청의 `PolicyExclusionList`(SCP 제외)를 입력 오류로 거부하고,
-    도구는 종료 2 와 「2.36.12 이상 필요」 를 냅니다. CLI 기록(프로필의
-    `cli_history = enabled` 또는 환경 변수 `AWS_CLI_HISTORY_FILE`)이 켜져
-    있으면 첫 AWS 호출 전에 종료 2 입니다 — 요청 · 응답 원문이 증거 밖 기록
-    파일에도 남기 때문입니다.
+    도구는 종료 2 와 「2.36.12 이상 필요」 를 냅니다. CLI 기록이 켜져
+    있으면 종료 2 입니다(「순서」 절의 세 도구 공통 사전 조건).
 
 ### 2-3 판정의 실행 순서
 
@@ -406,9 +410,9 @@ bash infra/terraform/scripts/precheck/principal-check.sh O7a
         넓어지는 쪽입니다.
     *   묶음이 둘인 단계(O7e · O7f)는 공통 묶음(`O7e` · `O7f`)의 비교
         기준을 씁니다 — 멈춤 자리 묶음의 것이 아닙니다.
-*   종료 0 은 조회 끝, 2 는 검사 불가(사용법 · 지금보다 늦은 `--since` · 증거 경로 · 조회 실패 · 호출
-    자체의 AccessDenied · 응답 꼴 — 칸 수 · 이벤트 ID · 출처 · 이름 ·
-    시각)입니다.
+*   종료 0 은 조회 끝, 2 는 검사 불가(사용법 · 지금보다 늦은 `--since` ·
+    CLI 기록 켜짐 · 증거 경로 · 조회 실패 · 호출 자체의 AccessDenied · 응답
+    꼴 — 칸 수 · 이벤트 ID · 출처 · 이름 · 시각)입니다.
 *   이름 · 시각 · 주체 원본과 행별 건수 · 범주별 이벤트 ID 는 증거
     디렉터리에만 둡니다(`lookup-<n>.txt` · `summary.tsv` ·
     `event_ids.txt`).
