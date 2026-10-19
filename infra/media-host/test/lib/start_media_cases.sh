@@ -8,7 +8,7 @@
 # 스크립트가 읽는 값은 계획 c4 시험 이음매 표 「사례 13」 열뿐이다 — 기대
 # compose 판 · DOCKER_CONFIG(스크래치) · PATH(test/fakebin 을 앞에) ·
 # MEDIA_COMPOSE_FILE(시험 compose) · MEDIA_MTX_TEMPLATE · 가짜 ARN · 가짜
-# 레지스트리 호스트 · RUNTIME_DIR(스크래치) · 자기 uid/gid ·
+# 레지스트리 호스트 · RUNTIME_DIR(스크래치) · 자기 uid/gid(MediaMTX · 사이드카) ·
 # MEDIA_COMPOSE_PROJECT. 우회 플래그는 주지 않는다. 그 밖에 스크립트가 아니라
 # docker CLI · 시험 compose 가 읽는 값 둘을 함께 준다:
 #   - DOCKER_HOST: DOCKER_CONFIG 를 스크래치로 바꾸면 docker CLI 가 홈 아래의
@@ -145,6 +145,8 @@ start_media::prepare_env() {
     "RUNTIME_DIR=${start_media_run_dir}/runtime"
     "MTX_UID=$(id -u)"
     "MTX_GID=$(id -g)"
+    "SIDECAR_UID=$(id -u)"
+    "SIDECAR_GID=$(id -g)"
     "MEDIA_COMPOSE_PROJECT=${start_media_project}"
     "PCBENCH_SIDECAR_EXIT_DELAY=$1"
   )

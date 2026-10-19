@@ -296,11 +296,13 @@ export_compose_env() {
   export PCBENCH_ECHO_CONTROL_PORT="${ECHO_CONTROL_PORT}"
   export PCBENCH_ECHO_ADMIN_PORT="${ECHO_ADMIN_PORT}"
   export PCBENCH_SIDECAR_EXIT_DELAY="${START_MEDIA_IDLE_DELAY}"
-  # 직접 띄울 때 mediamtx 자리가 받는 비밀 없는 자리 파일(에코는 읽지 않는다).
+  # 직접 띄울 때 mediamtx · sidecar 자리가 받는 비밀 없는 자리 파일(에코는
+  # 읽지 않는다).
   export RUNTIME_DIR="${scratch}/runtime-direct"
   mkdir -p -- "${RUNTIME_DIR}"
   printf '# proxy_contract 직접 기동용 자리 파일\n' \
     >"${RUNTIME_DIR}/mediamtx.yml"
+  printf 'proxy-contract-placeholder\n' >"${RUNTIME_DIR}/mtx_api_pass"
 }
 
 start_direct_stack() {

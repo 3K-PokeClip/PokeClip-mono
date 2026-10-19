@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 #
 # 시작 · 정지 스크립트 시험 — 계획 M2 c4 「start_test 단언」 과 착수 덧붙임
-# 「start_test 추가」(MP7 · MP15 · MP16 · MP17 · MP24).
+# 「start_test 추가」(MP7 · MP15 · MP16 · MP17 · MP24), 그리고 c6 의 사이드카
+# 관측 자격(기동마다 만드는 API 비밀번호 · 토큰 둘 — 사례 30 – 35 는
+# lib/start_api_pass_cases.sh).
 #
 # bin/start-media.sh · bin/stop-media.sh 를 빈 환경(env -i)에서 돌린다. PATH 맨
 # 앞에는 가짜 docker · chown(test/start_fakebin — argv 와 환경을 전부 기록)과
@@ -29,18 +31,27 @@ source "${TEST_DIR}/lib/harness.sh"
 source "${TEST_DIR}/lib/start_fixture.sh"
 # shellcheck source=lib/start_guard_cases.sh
 source "${TEST_DIR}/lib/start_guard_cases.sh"
+# shellcheck source=lib/render.sh
+source "${TEST_DIR}/lib/render.sh"
+# shellcheck source=lib/start_api_pass_cases.sh
+source "${TEST_DIR}/lib/start_api_pass_cases.sh"
 
 readonly COMPOSE_TEMPLATE="${MEDIA_HOST_DIR}/compose.yml.tmpl"
 readonly MTX_TEMPLATE="${TEST_DIR}/mediamtx.test.yml.tmpl"
+readonly PROD_MTX_TEMPLATE="${MEDIA_HOST_DIR}/mediamtx.yml.tmpl"
 readonly PROD_COMPOSE_FILE='/etc/pokeclip-media/compose.yml'
 readonly PROD_PROJECT='pokeclip-media'
 readonly PROD_DOCKER_CONFIG='/root/.docker/config.json'
 # 허용 문자를 모두 품은 시험 값.
-readonly ALLOWED_SECRET='pcbench-AZaz09._~+/=-secret'
+readonly ALLOWED_SECRET='pcbench-AZaz09._+=-secret'
 readonly BLOCKED_LINE='MEDIA START BLOCKED: CDN secret unavailable'
+readonly API_BLOCKED_LINE='MEDIA START BLOCKED: MTX API credential unavailable'
+# 사이드카 관측 자격 — 시작 스크립트가 만드는 비밀번호 파일 이름 · 꼴.
+readonly API_PASS_NAME='mtx_api_pass'
+readonly API_PASS_PATTERN='^[0-9a-f]{64}$'
 # 우회 플래그로 읽힐 문자열(대소문자 무시).
 readonly BYPASS_PATTERN='skip|bypass|no_prereq|prereq=0'
-readonly CASE_COUNT=29
+readonly CASE_COUNT=35
 
 #######################################
 # up 호출 argv 를 한 줄로 낸다(인자 사이 공백). 호출이 하나가 아니면 실패.
@@ -89,7 +100,7 @@ template_no_restart_services() {
 # (그 순간 0400 · 최종 경로 없음) · core 한도 0.
 #######################################
 case_success() {
-  local ok=0 argv target expected chowns aws_argv outside up_file
+  local ok=0 argv target expected aws_argv outside up_file n
   fixture::new_case
   fixture::base_env
   fixture::run start-media.sh PCBENCH_FAKE_UP_STATUS=7 || return 1
@@ -115,27 +126,21 @@ ${fixture_dir}/compose.yml up --abort-on-container-exit --attach mediamtx \
 "${fixture_dir}/runtime")(기대 drwx--x--x)"
     ok=1
   fi
-  chowns="$(paste -s -d ' ' - <"${fixture_dir}/log/chown.1.argv" 2>/dev/null)" \
-    || chowns=""
-  if [[ "$(fixture::count_records chown)" != 1 \
-    || "${chowns}" != "10002:10002 ${fixture_dir}/runtime/.mediamtx.yml."* ]]
-  then
-    harness::add_reason "chown 기록 「${chowns}」(기대 10002:10002 \
-<RUNTIME_DIR 임시 파일> 한 번)"
-    ok=1
-  fi
+  api_pass::check_chown_records || ok=1
   if [[ "$(ulimit -c)" == 0 ]]; then
     harness::add_reason \
       '시험 셸의 core 한도가 0 이라 스크립트의 ulimit 을 가릴 수 없음'
     ok=1
   fi
-  if [[ "$(cat -- "${fixture_dir}/log/chown.1.state" 2>/dev/null)" \
-    != 'perm=-r-------- final=absent core=0' ]]; then
-    harness::add_reason "chown 순간 상태 「$(cat -- \
-"${fixture_dir}/log/chown.1.state" 2>/dev/null)」(기대 0400 · 최종 경로 없음 · \
-core 0)"
-    ok=1
-  fi
+  for n in 1 2; do
+    if [[ "$(cat -- "${fixture_dir}/log/chown.${n}.state" 2>/dev/null)" \
+      != 'perm=-r-------- final=absent core=0' ]]; then
+      harness::add_reason "chown ${n} 순간 상태 「$(cat -- \
+"${fixture_dir}/log/chown.${n}.state" 2>/dev/null)」(기대 0400 · 최종 경로 \
+없음 · core 0)"
+      ok=1
+    fi
+  done
   aws_argv="$(paste -s -d ' ' - <"${fixture_dir}/log/aws.1.argv" 2>/dev/null)" \
     || aws_argv=""
   if [[ "${aws_argv}" != "secretsmanager get-secret-value --secret-id \
@@ -149,6 +154,7 @@ ${FIXTURE_FAKE_ARN} --query SecretString --output text" ]]; then
     harness::add_reason "렌더 경로 밖에 시험 비밀이 든 파일 ${outside}개"
     ok=1
   fi
+  api_pass::check_contained || ok=1
   fixture::common_checks || ok=1
   return "${ok}"
 }
@@ -180,30 +186,39 @@ ${harness_bounded_pid}(exec 아님)"
 }
 
 #######################################
-# 렌더 파일이 템플릿의 토큰 한 곳만 값으로 바꾼 것과 같고 권한이 0400 인지
-# 본다. 기대 내용은 awk index() 로 글자 그대로 바꿔 따로 만든다.
+# 렌더 파일이 템플릿의 두 토큰을 각각 한 곳씩 값으로 바꾼 것과 같고 권한이
+# 0400 인지 본다. CDN 토큰 자리는 기대 값, API 비밀번호 토큰 자리는 사이드카
+# 비밀번호 파일의 값이다. 기대 내용은 awk index() 로 글자 그대로 바꿔 따로
+# 만든다.
 # Globals:
 #   fixture_dir
 # Arguments:
-#   렌더 파일, 기대 값.
+#   렌더 파일, 기대 CDN 값, 템플릿(기본 시험 템플릿).
 #######################################
 check_rendered() {
   # 기대 내용은 사례 디렉터리 밖(형제)에 둔다 — 「렌더 경로 밖 비밀 0」 검사 대상이다.
-  local ok=0 expected="${fixture_dir}.expected.yml"
+  local ok=0 expected="${fixture_dir}.expected.yml" pass
+  local template="${3:-${MTX_TEMPLATE}}"
   if [[ ! -f "$1" ]]; then
     harness::add_reason '렌더 파일 없음'
     return 1
   fi
-  PCBENCH_VALUE="$2" PCBENCH_TOKEN="${FIXTURE_SECRET_TOKEN}" awk '
-    BEGIN { v = ENVIRON["PCBENCH_VALUE"]; t = ENVIRON["PCBENCH_TOKEN"] }
-    { i = index($0, t)
+  pass="$(api_pass::value 2>/dev/null)" || pass=""
+  PCBENCH_VALUE="$2" PCBENCH_TOKEN="${FIXTURE_SECRET_TOKEN}" \
+    PCBENCH_PASS="${pass}" PCBENCH_PASS_TOKEN="${FIXTURE_API_PASS_TOKEN}" awk '
+    function put(t, v,   i) {
+      i = index($0, t)
       if (i > 0) $0 = substr($0, 1, i - 1) v substr($0, i + length(t))
-      print }' "${MTX_TEMPLATE}" >"${expected}"
-  if ! cmp -s -- "${expected}" "$1"; then
-    harness::add_reason '렌더 내용이 「토큰 한 곳만 값으로」 와 다름'
+    }
+    { put(ENVIRON["PCBENCH_TOKEN"], ENVIRON["PCBENCH_VALUE"])
+      put(ENVIRON["PCBENCH_PASS_TOKEN"], ENVIRON["PCBENCH_PASS"])
+      print }' "${template}" >"${expected}"
+  if [[ -z "${pass}" ]] || ! cmp -s -- "${expected}" "$1"; then
+    harness::add_reason '렌더 내용이 「토큰 두 곳을 각 값으로」 와 다름'
     ok=1
   fi
-  if grep -q -F -- "${FIXTURE_SECRET_TOKEN}" "$1"; then
+  if grep -q -F -e "${FIXTURE_SECRET_TOKEN}" -e "${FIXTURE_API_PASS_TOKEN}" \
+    -- "$1"; then
     harness::add_reason '렌더에 토큰이 남음'
     ok=1
   fi
@@ -215,7 +230,7 @@ check_rendered() {
 }
 
 #######################################
-# 사례 2 — 허용 문자 전부([A-Za-z0-9._~+/=-])가 든 값을 글자 그대로 렌더한다.
+# 사례 2 — 허용 문자 전부([A-Za-z0-9._+=-])가 든 값을 글자 그대로 렌더한다.
 #######################################
 case_allowed_chars() {
   fixture::new_case
@@ -507,14 +522,20 @@ case_dir_mode_reset() {
 }
 
 #######################################
-# 정지 사례 준비 — RUNTIME_DIR 에 렌더 파일 · 임시 파일 꼴 잔여를 둔다.
+# 정지 사례 준비 — RUNTIME_DIR 에 렌더 파일 · 사이드카 비밀번호 파일과 각자의
+# 임시 파일 꼴 잔여를 둔다.
 #######################################
 seed_runtime() {
   mkdir -p -- "${fixture_dir}/runtime"
   printf '%s\n' "${FIXTURE_FAKE_SECRET}" >"${fixture_dir}/runtime/mediamtx.yml"
   printf '%s\n' "${FIXTURE_FAKE_SECRET}" \
     >"${fixture_dir}/runtime/.mediamtx.yml.AbC123"
-  chmod 0400 "${fixture_dir}/runtime/mediamtx.yml"
+  printf '%s\n' "${FIXTURE_FAKE_SECRET}" \
+    >"${fixture_dir}/runtime/${API_PASS_NAME}"
+  printf '%s\n' "${FIXTURE_FAKE_SECRET}" \
+    >"${fixture_dir}/runtime/.${API_PASS_NAME}.XyZ789"
+  chmod 0400 "${fixture_dir}/runtime/mediamtx.yml" \
+    "${fixture_dir}/runtime/${API_PASS_NAME}"
 }
 
 #######################################
@@ -712,6 +733,16 @@ main() {
     guard::case_signal_removes_tmp
   harness::run_case 29 'stop — RUNTIME_DIR 상대 경로 · / 거부' \
     guard::case_stop_runtime_dir
+  harness::run_case 30 '운영 템플릿(templatefile) → 두 토큰 치환 · 따옴표 자리' \
+    api_pass::case_prod_template_pipe
+  harness::run_case 31 'API 비밀번호 — 실행마다 새 16진 64자' api_pass::case_fresh
+  harness::run_case 32 'API 비밀번호 생성 실패 → 기동 차단 · 잔여 0' \
+    api_pass::case_unavailable
+  harness::run_case 33 '비밀번호 파일 단계 실패 → 렌더 거부 · 두 파일 잔여 0' \
+    api_pass::case_install_failure
+  harness::run_case 34 '템플릿 API 토큰 0 · 2개 → 렌더 거부' api_pass::case_token_count
+  harness::run_case 35 '상속 export 에도 API 비밀번호 노출 0' \
+    api_pass::case_inherited_export
 
   if ! harness::summary "${CASE_COUNT}"; then
     exit 1

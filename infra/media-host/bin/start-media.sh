@@ -7,16 +7,23 @@
 #      credHelpers)을 매번 같은 순서로 모두 보고 결과 줄을 낸다. 하나라도
 #      실패하면 「MEDIA PREREQ FAIL <항목>」 을 남기고 끝낸다.
 #   2. CDN 비밀(MediaMTX hlsCDNSecret)을 Secrets Manager 에서 읽는다(argv 에는
-#      ARN 만). 실패 · 빈 값 · 허용 문자([A-Za-z0-9._~+/=-]) 밖의 글자(줄바꿈
-#      포함)가 있으면 「MEDIA START BLOCKED: CDN secret unavailable」. 템플릿은
-#      토큰을 YAML 큰따옴표 안에 둔다 — 허용 문자는 그 안에서 이스케이프가 필요
-#      없다.
-#   3. MediaMTX 설정 템플릿의 고정 토큰 한 곳을 그 값으로 채워 tmpfs
-#      (RUNTIME_DIR)에 렌더한다. 같은 디렉터리의 임시 파일(0400 · MediaMTX 실행
-#      계정 소유)에 쓴 뒤 rename 한다 — 실행 중인 스택이 보는 옛 파일을 제자리에서
-#      고쳐 쓰지 않는다. 치환은 bash 내장 문자열 연산으로만 해서 값이 외부 명령의
-#      argv 에 오르지 않는다.
-#   4. docker compose up 으로 바뀐다(exec). 출력은 mediamtx · nginx 에만 붙는다
+#      ARN 만). 실패 · 빈 값 · 허용 문자([A-Za-z0-9._+=-]) 밖의 글자(줄바꿈
+#      포함)가 있으면 「MEDIA START BLOCKED: CDN secret unavailable」. 허용
+#      문자는 MediaMTX 가 hlsCDNSecret 에 받는 글자(/ · ~ 는 거부 — 기동 실패)와
+#      YAML 큰따옴표 안에서 이스케이프가 필요 없는 글자의 교집합이다. 템플릿은
+#      토큰을 YAML 큰따옴표 안에 둔다.
+#   3. 사이드카가 MediaMTX 관리 API 에 붙을 비밀번호를 새로 만든다(/dev/urandom
+#      32바이트 → 16진 64자). 저장하지 않는다 — 기동마다 바뀌고, MediaMTX 설정과
+#      사이드카 파일에 같은 실행에서 같이 쓰이므로 둘이 어긋나지 않는다. 만들지
+#      못하면 「MEDIA START BLOCKED: MTX API credential unavailable」.
+#   4. MediaMTX 설정 템플릿의 고정 토큰 두 곳(CDN 비밀 · API 비밀번호 — 각각
+#      정확히 한 번)을 채워 tmpfs(RUNTIME_DIR)의 mediamtx.yml(MediaMTX 실행 계정
+#      소유 0400)로, 비밀번호 한 줄을 mtx_api_pass(사이드카 실행 계정 소유
+#      0400)로 둔다. 두 파일 모두 같은 디렉터리의 임시 파일에 다 쓴 뒤에야
+#      rename 한다 — 실행 중인 스택이 보는 옛 파일을 제자리에서 고쳐 쓰지 않고,
+#      중간에 실패하면 둘 다 남기지 않는다. 치환은 bash 내장 문자열 연산으로만
+#      해서 값이 외부 명령의 argv 에 오르지 않는다.
+#   5. docker compose up 으로 바뀐다(exec). 출력은 mediamtx · nginx 에만 붙는다
 #      — 둘 중 하나가 끝나면 compose 전체가 끝나고 systemd 가 다시 띄운다.
 #      나머지 서비스(사이드카 등)는 엔진 재시작 정책(on-failure)으로 혼자 다시
 #      뜬다.
@@ -34,6 +41,7 @@
 #   MEDIA_MTX_TEMPLATE              기본 /etc/pokeclip-media/mediamtx.yml.tmpl.
 #   RUNTIME_DIR                     기본 /run/pokeclip-media(절대 경로).
 #   MTX_UID · MTX_GID               기본 10002 · 10002(MediaMTX 이미지 USER).
+#   SIDECAR_UID · SIDECAR_GID       기본 10001 · 10001(사이드카 이미지 USER).
 #   MEDIA_COMPOSE_PROJECT           기본 pokeclip-media.
 #   MEDIA_COMPOSE_FILE              기본 /etc/pokeclip-media/compose.yml.
 #
@@ -50,18 +58,26 @@ ulimit -c 0
 # 비밀 · 렌더 내용을 담는 변수 이름이 부모 환경에서 export 된 채 들어오면, bash
 # 의 local 이 그 export 속성을 이어받아 자식(chown 등) 환경에 값이 실린다. 쓰기
 # 전에 그 이름들을 환경에서 지운다.
-unset -v secret rendered value content head tail
+unset -v secret rendered value content head tail api_pass values
 
 readonly SECRET_TOKEN='@@HLS_CDN_SECRET@@'
-# CDN 비밀이 가질 수 있는 글자(YAML 큰따옴표 안에서 이스케이프가 필요 없는 것).
-readonly SECRET_PATTERN='^[A-Za-z0-9._~+/=-]+$'
+# CDN 비밀이 가질 수 있는 글자 — MediaMTX 평문 자격 글자(hlsCDNSecret 검사)와
+# YAML 큰따옴표 안에서 이스케이프가 필요 없는 글자의 교집합.
+readonly SECRET_PATTERN='^[A-Za-z0-9._+=-]+$'
+readonly API_PASS_TOKEN='@@MTX_API_PASS@@'
+# API 비밀번호 꼴 — MediaMTX 평문 pass 허용 글자 안이고 작은따옴표 안에서
+# 이스케이프가 필요 없다.
+readonly API_PASS_PATTERN='^[0-9a-f]{64}$'
+readonly API_PASS_BYTES=32
 readonly RENDER_NAME='mediamtx.yml'
+readonly API_PASS_NAME='mtx_api_pass'
 # compose 출력이 붙는 서비스 — 템플릿에서 restart: "no" 인 집합과 같아야 한다.
 readonly ATTACHED_SERVICES=(mediamtx nginx)
 # 선행 점검이 읽는 config.json 의 크기 상한(바이트) — 넘으면 점검 실패.
 readonly DOCKER_CONFIG_MAX_BYTES=65536
 
-render_tmp=""
+render_tmps=()
+staged_tmp=""
 render_step=""
 
 #######################################
@@ -76,12 +92,13 @@ say() {
 #######################################
 # 끝날 때 남은 임시 렌더 파일을 지운다(EXIT 트랩).
 # Globals:
-#   render_tmp
+#   render_tmps
 #######################################
 remove_render_tmp() {
-  if [[ -n "${render_tmp}" ]]; then
-    rm -f -- "${render_tmp}"
-  fi
+  local f
+  for f in ${render_tmps[@]+"${render_tmps[@]}"}; do
+    rm -f -- "${f}"
+  done
 }
 
 #######################################
@@ -295,40 +312,101 @@ read_cdn_secret() {
 }
 
 #######################################
-# 템플릿의 토큰 한 곳을 값으로 바꾼 내용을 낸다. 토큰이 정확히 하나가 아니면
-# 실패한다. bash 의 ${var/…/…} 는 판에 따라 바꿀 글자의 & 를 달리 읽으므로
-# 쓰지 않고, 앞뒤를 잘라 잇는다.
-# Arguments:
-#   템플릿 경로, 값.
+# 사이드카 API 비밀번호를 새로 만든다 — /dev/urandom 32바이트를 16진 64자로.
+# 값은 명령 치환으로만 받는다(od · tr 의 argv 에 오르지 않는다).
 # Outputs:
-#   렌더 내용(끝 줄바꿈 보존).
+#   값(꼴이 맞을 때만).
 #######################################
-render_template() {
-  local content head tail
-  # 끝 줄바꿈을 지키려고 표식 글자를 붙였다가 뗀다.
-  content="$(cat -- "$1" && printf x)" || return 2
-  content="${content%x}"
-  head="${content%%"${SECRET_TOKEN}"*}"
-  [[ "${head}" != "${content}" ]] || return 1
-  tail="${content#*"${SECRET_TOKEN}"}"
-  [[ "${tail}" != *"${SECRET_TOKEN}"* ]] || return 1
-  printf '%s%s%s' "${head}" "$2" "${tail}"
+generate_api_pass() {
+  local value
+  value="$(od -A n -N "${API_PASS_BYTES}" -t x1 /dev/urandom | tr -d ' \n')" \
+    || return 1
+  [[ "${value}" =~ ${API_PASS_PATTERN} ]] || return 1
+  printf '%s' "${value}"
 }
 
 #######################################
-# 렌더 내용을 RUNTIME_DIR 에 MediaMTX 실행 계정 소유 0400 으로 둔다. 같은
-# 디렉터리의 임시 파일에 쓰고 rename 한다. 디렉터리 권한(0711)은 매번 맞춘다.
-# 서브셸에서 부르지 않는다 — 임시 파일 이름을 EXIT 트랩이 알아야 한다.
-# Globals:
-#   render_tmp, render_step, MTX_UID, MTX_GID
+# 템플릿의 두 토큰(CDN 비밀 · API 비밀번호)을 각 값으로 바꾼 내용을 낸다.
+# 토큰마다 정확히 한 번 있어야 한다. 두 값의 허용 글자에는 @ 가 없어 바꾼 값
+# 안에 토큰이 생기지 않는다. bash 의 ${var/…/…} 는 판에 따라 바꿀 글자의 & 를
+# 달리 읽으므로 쓰지 않고, 앞뒤를 잘라 잇는다.
 # Arguments:
-#   RUNTIME_DIR, 렌더 내용.
+#   템플릿 경로, CDN 비밀, API 비밀번호.
+# Outputs:
+#   렌더 내용(끝 줄바꿈 보존).
+# Returns:
+#   0 / 1 토큰 수가 틀림 / 2 템플릿을 읽지 못함.
+#######################################
+render_template() {
+  local content head tail i
+  local tokens=("${SECRET_TOKEN}" "${API_PASS_TOKEN}") values=("$2" "$3")
+  # 끝 줄바꿈을 지키려고 표식 글자를 붙였다가 뗀다.
+  content="$(cat -- "$1" && printf x)" || return 2
+  content="${content%x}"
+  for i in 0 1; do
+    head="${content%%"${tokens[i]}"*}"
+    [[ "${head}" != "${content}" ]] || return 1
+    tail="${content#*"${tokens[i]}"}"
+    [[ "${tail}" != *"${tokens[i]}"* ]] || return 1
+    content="${head}${values[i]}${tail}"
+  done
+  printf '%s' "${content}"
+}
+
+#######################################
+# 내용 하나를 RUNTIME_DIR 의 임시 파일(0400 · 지정 소유)에 쓴다. 임시 파일
+# 이름을 render_tmps(EXIT 트랩) · staged_tmp 에 남긴다. 서브셸에서 부르지
+# 않는다.
+# Globals:
+#   render_tmps, staged_tmp, render_step
+# Arguments:
+#   RUNTIME_DIR, 최종 이름, 내용, 소유(uid:gid), 실패 단계 이름 앞머리.
+# Returns:
+#   0 / 1 실패(단계 이름은 render_step).
+#######################################
+stage_file() {
+  local dir="$1" name="$2" owner="$4" prefix="$5"
+  staged_tmp="$(mktemp "${dir}/.${name}.XXXXXX")" \
+    || { render_step="${prefix}tmpfile"; return 1; }
+  render_tmps+=("${staged_tmp}")
+  if ! printf '%s' "$3" >"${staged_tmp}" || ! chmod 0400 "${staged_tmp}"; then
+    render_step="${prefix}write"
+    return 1
+  fi
+  if ! chown "${owner}" "${staged_tmp}"; then
+    render_step="${prefix}chown"
+    return 1
+  fi
+}
+
+#######################################
+# 최종 경로가 일반 파일이거나 없는지 본다. 대상이 디렉터리(또는 그리로 가는
+# 링크)면 mv 가 그 안으로 옮기고 성공하므로 받지 않는다.
+# Arguments:
+#   최종 경로.
+#######################################
+target_ok() {
+  [[ ! -L "$1" && ( ! -e "$1" || -f "$1" ) ]]
+}
+
+#######################################
+# 렌더 내용을 mediamtx.yml(MediaMTX 실행 계정 소유)로, 비밀번호 줄을
+# mtx_api_pass(사이드카 실행 계정 소유)로 둔다. 둘 다 0400 이고, 임시 파일
+# 둘을 다 쓴 뒤에야 rename 한다. 디렉터리 권한(0711)은 매번 맞춘다.
+# Globals:
+#   render_tmps, staged_tmp, render_step, MTX_UID, MTX_GID, SIDECAR_UID,
+#   SIDECAR_GID
+# Arguments:
+#   RUNTIME_DIR, 렌더 내용, 비밀번호 줄.
 # Returns:
 #   0 둠 / 1 실패(단계 이름은 render_step).
 #######################################
 install_render() {
-  local dir="$1" uid="${MTX_UID:-10002}" gid="${MTX_GID:-10002}"
-  if [[ ! "${uid}" =~ ^[0-9]+$ || ! "${gid}" =~ ^[0-9]+$ ]]; then
+  local dir="$1" mtx_tmp pass_tmp
+  local mtx_owner="${MTX_UID:-10002}:${MTX_GID:-10002}"
+  local pass_owner="${SIDECAR_UID:-10001}:${SIDECAR_GID:-10001}"
+  if [[ ! "${mtx_owner}" =~ ^[0-9]+:[0-9]+$ \
+    || ! "${pass_owner}" =~ ^[0-9]+:[0-9]+$ ]]; then
     render_step='owner'
     return 1
   fi
@@ -336,28 +414,30 @@ install_render() {
     render_step='runtime-dir'
     return 1
   fi
-  render_tmp="$(mktemp "${dir}/.${RENDER_NAME}.XXXXXX")" \
-    || { render_step='tmpfile'; return 1; }
-  if ! printf '%s' "$2" >"${render_tmp}" || ! chmod 0400 "${render_tmp}"; then
-    render_step='write'
-    return 1
-  fi
-  if ! chown "${uid}:${gid}" "${render_tmp}"; then
-    render_step='chown'
-    return 1
-  fi
-  # 대상이 디렉터리(또는 그리로 가는 링크)면 mv 가 그 안으로 옮기고 성공한다 —
-  # 일반 파일이 아닌 대상은 받지 않는다.
-  if [[ -L "${dir}/${RENDER_NAME}" || ( -e "${dir}/${RENDER_NAME}" \
-    && ! -f "${dir}/${RENDER_NAME}" ) ]]; then
+  stage_file "${dir}" "${RENDER_NAME}" "$2" "${mtx_owner}" '' || return 1
+  mtx_tmp="${staged_tmp}"
+  stage_file "${dir}" "${API_PASS_NAME}" "$3" "${pass_owner}" 'api-pass-' \
+    || return 1
+  pass_tmp="${staged_tmp}"
+  if ! target_ok "${dir}/${RENDER_NAME}"; then
     render_step='target'
     return 1
   fi
-  if ! mv -f -- "${render_tmp}" "${dir}/${RENDER_NAME}"; then
+  if ! target_ok "${dir}/${API_PASS_NAME}"; then
+    render_step='api-pass-target'
+    return 1
+  fi
+  if ! mv -f -- "${mtx_tmp}" "${dir}/${RENDER_NAME}"; then
     render_step='rename'
     return 1
   fi
-  render_tmp=""
+  if ! mv -f -- "${pass_tmp}" "${dir}/${API_PASS_NAME}"; then
+    # 짝이 어긋난 설정을 남기지 않는다.
+    rm -f -- "${dir}/${RENDER_NAME}"
+    render_step='api-pass-rename'
+    return 1
+  fi
+  render_tmps=()
 }
 
 #######################################
@@ -369,7 +449,8 @@ install_render() {
 #######################################
 prepare_config() {
   local template="${MEDIA_MTX_TEMPLATE:-/etc/pokeclip-media/mediamtx.yml.tmpl}"
-  local dir="${RUNTIME_DIR:-/run/pokeclip-media}" secret rendered status=0
+  local dir="${RUNTIME_DIR:-/run/pokeclip-media}" secret api_pass rendered
+  local status=0
   if [[ "${dir}" != /?* ]]; then
     say 'MEDIA START FAIL render runtime-dir'
     return 1
@@ -378,23 +459,31 @@ prepare_config() {
     say 'MEDIA START BLOCKED: CDN secret unavailable'
     return 1
   fi
-  rendered="$(render_template "${template}" "${secret}" && printf x)" \
-    || status=$?
-  unset secret
-  if (( status == 2 )); then
-    say 'MEDIA START FAIL render template'
+  if ! api_pass="$(generate_api_pass)"; then
+    unset secret
+    say 'MEDIA START BLOCKED: MTX API credential unavailable'
     return 1
-  elif (( status != 0 )); then
-    say 'MEDIA START FAIL render template-token'
+  fi
+  rendered="$(render_template "${template}" "${secret}" "${api_pass}" \
+    && printf x)" || status=$?
+  unset secret
+  if (( status != 0 )); then
+    unset api_pass
+    if (( status == 2 )); then
+      say 'MEDIA START FAIL render template'
+    else
+      say 'MEDIA START FAIL render template-token'
+    fi
     return 1
   fi
   rendered="${rendered%x}"
-  if ! install_render "${dir}" "${rendered}"; then
-    unset rendered
+  status=0
+  install_render "${dir}" "${rendered}" "${api_pass}"$'\n' || status=1
+  unset rendered api_pass
+  if (( status != 0 )); then
     say "MEDIA START FAIL render ${render_step}"
     return 1
   fi
-  unset rendered
 }
 
 main() {

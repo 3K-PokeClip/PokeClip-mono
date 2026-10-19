@@ -12,8 +12,9 @@
 #   - PCBENCH_*_PORT — render_vars.json 의 proxy_*_port.
 #   - PCBENCH_ECHO_CONTROL_PORT · PCBENCH_ECHO_ADMIN_PORT.
 #   - PCBENCH_SIDECAR_EXIT_DELAY.
-#   - RUNTIME_DIR — start-media.sh 가 mediamtx.yml 을 렌더하는 자리. 시험이
-#     직접 띄울 때는 비밀 없는 자리 파일을 둔다.
+#   - RUNTIME_DIR — start-media.sh 가 mediamtx.yml · mtx_api_pass(사이드카 API
+#     비밀번호)를 렌더하는 자리. 시험이 직접 띄울 때는 비밀 없는 자리 파일을
+#     둔다.
 #
 # 실험 식별: 프로젝트 pcbench-edge-proxy · 라벨 com.pokeclip.bench=edge-proxy(컨테이너 ·
 # 망 · 볼륨). 호스트 게시는 127.0.0.1 만이다.
@@ -94,6 +95,7 @@ services:
     volumes:
       - recordings:/recordings:ro
       - hooks:/hooks:ro
+      - ${RUNTIME_DIR:?}/mtx_api_pass:/run/secrets/mtx_api_pass:ro
     labels: *bench-labels
 
   # 다른 bridge 컨테이너 자리(사례 12) — `docker compose run --rm probe …` 로만 쓴다.

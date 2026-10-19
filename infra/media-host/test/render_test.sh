@@ -4,7 +4,8 @@
 # 「render_test 추가 단언」.
 #
 # prod 와 같은 렌더 함수(test/lib/render.sh — terraform console 의
-# templatefile())로 compose.yml.tmpl · nginx/nginx.conf.tmpl 을 렌더하고, 렌더한
+# templatefile())로 compose.yml.tmpl · nginx/nginx.conf.tmpl · mediamtx.yml.tmpl
+# 을 렌더하고(MediaMTX 설정은 yamldecode() 로 값을 읽어 단언한다), 렌더한
 # compose 마다 `docker compose config -q` 로 검증한 뒤 선언 그대로의 구성 JSON
 # (`config --no-normalize`)에 단언한다. 정규화한 구성은 쓰지 않는다 — compose 는
 # 정규화 때 network_mode: service:<이름> 에 depends_on 을 스스로 채워 넣어(5.5.0
@@ -42,16 +43,25 @@ readonly MEDIA_HOST_DIR
 source "${TEST_DIR}/lib/render.sh"
 # shellcheck source=lib/harness.sh
 source "${TEST_DIR}/lib/harness.sh"
+# shellcheck source=lib/render_mtx_cases.sh
+source "${TEST_DIR}/lib/render_mtx_cases.sh"
 
 readonly PROJECT='pcbench-edge-proxy'
 readonly COMPOSE_TEMPLATE="${MEDIA_HOST_DIR}/compose.yml.tmpl"
 readonly NGINX_TEMPLATE="${MEDIA_HOST_DIR}/nginx/nginx.conf.tmpl"
+readonly MTX_TEMPLATE="${MEDIA_HOST_DIR}/mediamtx.yml.tmpl"
+# 시작 스크립트가 채우는 고정 토큰(두 곳 — 각 정확히 한 번).
+readonly CDN_TOKEN='@@HLS_CDN_SECRET@@'
+readonly API_PASS_TOKEN='@@MTX_API_PASS@@'
+# MediaMTX 의 사이드카 API 사용자 이름 = compose 사이드카 MTX_API_USER.
+readonly SIDECAR_API_USER='pokeclip-sidecar'
+readonly APP_ORIGIN='https://app.pokeclip.com'
 readonly CONTRACT_COMPOSE="${TEST_DIR}/compose.contract.yml"
 readonly COMPOSE_VARIANTS='a b c d'
 readonly SAMPLE_CONTROL_UPSTREAM='127.0.0.1:28190'
 readonly MIN_READ_TIMEOUT_SECONDS=15
 readonly CONFIG_TIMEOUT=60
-readonly CASE_COUNT=17
+readonly CASE_COUNT=24
 
 # 기대값 jq 프로그램이 함께 쓰는 정의. 입력은 그 갈래의 변수 JSON 이다.
 #   services — 렌더에 있어야 할 서비스(응답기 · janitor 는 변수가 차 있을 때만).
@@ -98,6 +108,8 @@ vars_file() { printf '%s/vars-%s.json' "${scratch}" "$1"; }
 compose_render() { printf '%s/compose-%s.yml' "${scratch}" "$1"; }
 config_json() { printf '%s/compose-%s.json' "${scratch}" "$1"; }
 nginx_render() { printf '%s/nginx-%s.conf' "${scratch}" "$1"; }
+mtx_render() { printf '%s/mediamtx-a.yml' "${scratch}"; }
+mtx_json() { printf '%s/mediamtx-a.json' "${scratch}"; }
 
 check_tools() {
   local ok=0 tool
@@ -158,7 +170,8 @@ render_all() {
     add_setup_reason '갈래 변수 파일을 만들지 못함(render_vars.json · jq)'
     return 1
   fi
-  for template in "${COMPOSE_TEMPLATE}" "${NGINX_TEMPLATE}"; do
+  for template in "${COMPOSE_TEMPLATE}" "${NGINX_TEMPLATE}" \
+    "${MTX_TEMPLATE}"; do
     if [[ ! -f "${template}" ]]; then
       add_setup_reason "${template#"${MEDIA_HOST_DIR}/"} 없음"
       ok=1
@@ -173,6 +186,16 @@ render_all() {
     render_one "${NGINX_TEMPLATE}" "$(vars_file "${v}")" \
       "$(nginx_render "${v}")" || ok=1
   done
+  if render_one "${MTX_TEMPLATE}" "$(vars_file a)" "$(mtx_render)"; then
+    if ! render::yaml_json "$(mtx_render)" "$(vars_file a)" "$(mtx_json)" \
+      2>"$(mtx_json).err"; then
+      add_setup_reason "mediamtx 렌더 YAML 해석 실패: \
+$(harness::log_tail "$(mtx_json).err")"
+      ok=1
+    fi
+  else
+    ok=1
+  fi
   return "${ok}"
 }
 
@@ -327,7 +350,8 @@ check_case_7() {
                 "dvr /dvr rw",
                 "/run/pokeclip-media/mediamtx.yml /mediamtx.yml ro"],
      nginx: ["/etc/pokeclip-media/nginx.conf /etc/nginx/nginx.conf ro"],
-     sidecar: ["recordings /recordings ro", "hooks /hooks ro"]}
+     sidecar: ["recordings /recordings ro", "hooks /hooks ro",
+               "/run/pokeclip-media/mtx_api_pass /run/secrets/mtx_api_pass ro"]}
     + (if .ingest_auth_image != "" then {"ingest-auth": []} else {} end)
     + (if .janitor_image != ""
        then {janitor: ["recordings /recordings rw"]} else {} end)
@@ -372,6 +396,8 @@ check_case_10() {
        ENSURE_SCHEMA: "false", SEGMENT_ROOT: "/recordings",
        HOOK_SPOOL_PATH: "/hooks/events.jsonl",
        MTX_API_URL: "http://127.0.0.1:9997",
+       MTX_API_USER: "pokeclip-sidecar",
+       MTX_API_PASS_FILE: "/run/secrets/mtx_api_pass",
        S3_BUCKET: .rewind_bucket_name})}
     + (if .janitor_image != ""
        then {janitor: (db_env + {POSTGRES_USER: "media_janitor"})}
@@ -599,6 +625,16 @@ main() {
   harness::run_case 16 'nginx proxy_read_timeout 15초 이상' check_case_16
   harness::run_case 17 '드리프트 — 시험 compose 와 템플릿 구조 일치' \
     check_case_17
+  harness::run_case 18 'mediamtx 렌더(templatefile) · YAML 해석' mtx_cases::check_18
+  harness::run_case 19 'mediamtx — 프로토콜 · 루프백 바인딩 · metrics/pprof 끔' \
+    mtx_cases::check_19
+  harness::run_case 20 'mediamtx — 허용 출처 app · 믿는 프록시 없음' \
+    mtx_cases::check_20
+  harness::run_case 21 'mediamtx — 인증 항목 셋(무인증 api 0 · 익명 read 0)' \
+    mtx_cases::check_21
+  harness::run_case 22 'mediamtx — 토큰 둘 각 1번 · 따옴표 자리' mtx_cases::check_22
+  harness::run_case 23 'mediamtx — 경로 · LL-HLS · 녹화 · 훅 유지' mtx_cases::check_23
+  harness::run_case 24 '사이드카 관측 자격 짝(user · 파일 · 포트)' mtx_cases::check_24
 
   if ! harness::summary "${CASE_COUNT}"; then
     exit 1

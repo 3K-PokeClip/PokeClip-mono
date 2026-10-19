@@ -41,8 +41,9 @@
 #     남고, journalctl -t 로 읽는다. 로깅 옵션에 env · labels 를 넣지 않는다
 #     (컨테이너 환경이 저널 필드로 남는다).
 #   - 비밀은 환경변수로 넘기지 않는다. 사이드카 · janitor 는 IAM 인증이라 DB
-#     비밀번호가 없고, MediaMTX 설정(CDN 비밀 포함)은 시작 스크립트가 tmpfs 에
-#     렌더한 파일을 읽기 전용으로 받는다.
+#     비밀번호가 없고, MediaMTX 설정(CDN 비밀 · 사이드카 API 비밀번호 포함)과
+#     사이드카의 API 비밀번호 파일은 시작 스크립트가 tmpfs 에 렌더한 파일을
+#     읽기 전용으로 받는다.
 #   - 볼륨에 복사 금지 옵션을 붙이지 않는다 — 이미지에 심은 소유권 복사가
 #     끊겨 비root 쓰기가 조용히 실패한다(루트 docker-compose.yml 과 같은 규칙.
 #     render_test 가 렌더에서 그 옵션 이름 0건을 본다).
@@ -137,12 +138,18 @@ services:
       HOOK_SPOOL_PATH: /hooks/events.jsonl
       # 같은 망 칸이라 MediaMTX 관리 API 는 루프백으로 닿는다.
       MTX_API_URL: http://127.0.0.1:9997
+      # 관리 API 자격(Basic). 사용자 이름은 mediamtx.yml.tmpl 의 사이드카 항목과
+      # 같다. 비밀번호는 값이 아니라 파일 경로로 받는다 — 시작 스크립트가
+      # 기동마다 새로 만들어 tmpfs 에 사이드카 실행 계정 소유 0400 으로 둔다.
+      MTX_API_USER: pokeclip-sidecar
+      MTX_API_PASS_FILE: /run/secrets/mtx_api_pass
       TZ: UTC
       AWS_REGION: ap-northeast-2
       S3_BUCKET: ${rewind_bucket_name}
     volumes:
       - recordings:/recordings:ro
       - hooks:/hooks:ro
+      - /run/pokeclip-media/mtx_api_pass:/run/secrets/mtx_api_pass:ro
 %{ if detached_log_driver == "json-file" ~}
     logging: *attached-logging
 %{ else ~}

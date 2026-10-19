@@ -11,7 +11,8 @@
 # 이 파일은 source 해서 쓴다(실행하지 않는다). bash 3.2 에서도 돈다.
 
 # 허용 문자 밖의 글자가 든 시험 값 — YAML 주석 · 별칭 · 태그 · 키 구분 ·
-# 흐름 컬렉션 · 공백 · 따옴표 · 셸 · sed 특수 문자.
+# 흐름 컬렉션 · 공백 · 따옴표 · 셸 · sed 특수 문자, 그리고 MediaMTX 가
+# hlsCDNSecret 에서 거부하는 / · ~(YAML 로는 문제없지만 기동이 실패한다).
 # shellcheck disable=SC2016 # 펼치지 않는 것이 뜻이다.
 readonly GUARD_DISALLOWED_VALUES=(
   'pcbench #comment'
@@ -22,6 +23,8 @@ readonly GUARD_DISALLOWED_VALUES=(
   'pcbench edge'
   'pcbench"edge'
   'pcbench&edge\proxy$fake'
+  'pcbench/edge'
+  'pcbench~edge'
 )
 # 신호 사례 — 가짜 chown 이 머무는 시간 · 그 표식을 기다리는 상한(초).
 readonly GUARD_CHOWN_HOLD=3

@@ -55,18 +55,19 @@ EOF
 }
 
 #######################################
-# 템플릿 하나를 templatefile() 로 렌더해 파일에 쓴다.
+# console 에 식 하나를 물어 base64 문자열 답을 풀어 파일에 쓴다. 식은 변수
+# template_path · vars_path 와 local.rendered 를 쓸 수 있다.
 # Globals:
 #   TMPDIR, PWD
 # Arguments:
-#   템플릿 경로, 변수 JSON 파일 경로, 출력 파일 경로.
+#   식, 템플릿(또는 입력 파일) 경로, 변수 JSON 파일 경로, 출력 파일 경로.
 # Outputs:
 #   실패하면 원인을 표준 오류에 쓴다.
 # Returns:
-#   0 렌더함 / 1 실패(실패하면 출력 파일을 남기지 않는다).
+#   0 씀 / 1 실패(실패하면 출력 파일을 남기지 않는다).
 #######################################
-render::template() {
-  local template="$1" vars="$2" out="$3"
+render::console() {
+  local expr="$1" template="$2" vars="$3" out="$4"
   local work encoded status=0
 
   # console 은 -chdir 로 옮겨 가 돌므로 상대 경로를 절대 경로로 바꿔 둔다.
@@ -85,7 +86,7 @@ render::template() {
   fi
 
   # TF_CLI_ARGS 류는 부르는 쪽 셸에서 console 인자를 몰래 더할 수 있어 지운다.
-  if ! encoded="$(printf 'base64encode(local.rendered)\n' \
+  if ! encoded="$(printf '%s\n' "${expr}" \
     | TF_DATA_DIR="${work}/data" env -u TF_CLI_ARGS -u TF_CLI_ARGS_console \
       terraform -chdir="${work}/config" console -no-color \
       -var "template_path=${template}" -var "vars_path=${vars}" \
@@ -107,4 +108,30 @@ render::template() {
   fi
   rm -rf -- "${work:?}"
   return "${status}"
+}
+
+#######################################
+# 템플릿 하나를 templatefile() 로 렌더해 파일에 쓴다.
+# Arguments:
+#   템플릿 경로, 변수 JSON 파일 경로, 출력 파일 경로.
+# Returns:
+#   0 렌더함 / 1 실패(원인은 표준 오류).
+#######################################
+render::template() {
+  render::console 'base64encode(local.rendered)' "$@"
+}
+
+#######################################
+# YAML 파일 하나를 Terraform yamldecode() 로 읽어 JSON 으로 쓴다(렌더한
+# MediaMTX 설정의 값을 jq 로 단언하려고 — 상자 · CI 에 YAML 도구가 있다는
+# 보장이 없고 terraform 은 렌더에 이미 쓴다). yes · no 는 참 · 거짓으로
+# 읽힌다(MediaMTX 와 같다 — 2026-10-20 실측).
+# Arguments:
+#   YAML 파일 경로, 변수 JSON 파일 경로(설정이 요구 — 읽지 않음), 출력 파일 경로.
+# Returns:
+#   0 씀 / 1 실패(원인은 표준 오류).
+#######################################
+render::yaml_json() {
+  render::console \
+    'base64encode(jsonencode(yamldecode(file(var.template_path))))' "$@"
 }

@@ -4,8 +4,9 @@
 # · ExecStopPost(--cleanup-only).
 #
 # 인자 없음: `docker compose … down` 으로 프로젝트를 내리고, down 의 결과와
-#   상관없이 tmpfs 의 렌더 설정(CDN 비밀이 든 파일)과 시작 스크립트가 남겼을 수
-#   있는 임시 파일을 지운다. down 의 종료 코드를 돌려준다. down 인자는 `down`
+#   상관없이 tmpfs 의 렌더 파일 둘(CDN 비밀 · API 비밀번호가 든 mediamtx.yml ·
+#   사이드카의 mtx_api_pass)과 시작 스크립트가 남겼을 수 있는 임시 파일을
+#   지운다. down 의 종료 코드를 돌려준다. down 인자는 `down`
 #   하나로 고정한다 — 볼륨(녹화 · 훅 스풀 · DVR)은 지우지 않는다.
 # --cleanup-only: 지우기만 한다(유닛이 어떻게 끝났든 둘째 방어선).
 #
@@ -16,7 +17,8 @@
 
 set -euo pipefail
 
-readonly RENDER_NAME='mediamtx.yml'
+# 시작 스크립트가 RUNTIME_DIR 에 두는 파일 이름(임시 파일은 .<이름>.XXXXXX).
+readonly RENDER_NAMES=(mediamtx.yml mtx_api_pass)
 
 #######################################
 # 렌더 파일과 임시 렌더 파일을 지우고 0건인지 본다.
@@ -26,13 +28,16 @@ readonly RENDER_NAME='mediamtx.yml'
 #   0 남은 것 없음 / 1 남음.
 #######################################
 remove_rendered() {
-  local dir="$1" f left=0
-  for f in "${dir}/${RENDER_NAME}" "${dir}/.${RENDER_NAME}".*; do
+  local dir="$1" name f left=0 paths=()
+  for name in "${RENDER_NAMES[@]}"; do
+    paths+=("${dir}/${name}" "${dir}/.${name}".*)
+  done
+  for f in "${paths[@]}"; do
     if [[ -e "${f}" || -L "${f}" ]]; then
       rm -f -- "${f}" || true
     fi
   done
-  for f in "${dir}/${RENDER_NAME}" "${dir}/.${RENDER_NAME}".*; do
+  for f in "${paths[@]}"; do
     if [[ -e "${f}" || -L "${f}" ]]; then
       left=$((left + 1))
     fi

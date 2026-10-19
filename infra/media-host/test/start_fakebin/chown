@@ -1,24 +1,36 @@
 #!/usr/bin/env bash
 #
 # start_test 전용 가짜 chown — 받은 argv 와 환경을 전부 기록하고, 불린 순간의
-# 상태(대상 권한 · 같은 디렉터리의 최종 렌더 경로가 이미 있는지 · core 크기
-# 한도)도 적는다. 소유는 바꾸지 않는다(시험은 root 가 아니라 10002 로 바꿀 수
+# 상태(대상 권한 · 같은 디렉터리에 그 임시 파일의 최종 경로가 이미 있는지 ·
+# core 크기 한도)도 적는다. 소유는 바꾸지 않는다(시험은 root 가 아니라 10002 로 바꿀 수
 # 없다 — 단언은 기록으로 한다).
 #
 # 시험이 주는 값:
 #   PCBENCH_FAKE_LOG_DIR       (필수) chown.<n>.argv · chown.<n>.env ·
 #                              chown.<n>.state 를 쓴다.
 #   PCBENCH_FAKE_CHOWN_STATUS  종료 코드(기본 0 — 0 아니면 실패를 흉내 낸다).
+#   PCBENCH_FAKE_CHOWN_FAIL_NAME
+#                              있으면 최종 이름(임시 파일 .<이름>.XXXXXX 의
+#                              <이름>)이 이 값인 대상에서만 종료 1.
 #   PCBENCH_FAKE_CHOWN_HOLD    있으면 chown.hold 를 만든 뒤 그 초만큼 머문다
 #                              (신호 사례 — 렌더 임시 파일이 있는 동안).
 
 set -euo pipefail
 
-readonly FINAL_NAME='mediamtx.yml'
+#######################################
+# 임시 파일 경로(<디렉터리>/.<이름>.XXXXXX)에서 최종 이름을 낸다.
+# Arguments:
+#   대상 경로.
+#######################################
+final_name() {
+  local base="${1##*/}"
+  base="${base#.}"
+  printf '%s\n' "${base%.*}"
+}
 
 #######################################
 # 불린 순간의 상태 한 줄을 낸다 — 마지막 인자(대상)의 권한(ls 앞 10글자) · 같은
-# 디렉터리의 최종 렌더 경로 유무 · core 한도.
+# 디렉터리에 그 최종 경로가 있는지 · core 한도.
 # Arguments:
 #   받은 argv.
 #######################################
@@ -27,7 +39,7 @@ call_state() {
   if line="$(ls -ld -- "${target}" 2>/dev/null)"; then
     perm="${line:0:10}"
   fi
-  if [[ -e "${target%/*}/${FINAL_NAME}" ]]; then
+  if [[ -e "${target%/*}/$(final_name "${target}")" ]]; then
     final="present"
   fi
   printf 'perm=%s final=%s core=%s\n' "${perm}" "${final}" "$(ulimit -c)"
@@ -44,6 +56,11 @@ main() {
   if [[ -n "${PCBENCH_FAKE_CHOWN_HOLD:-}" ]]; then
     : >"${dir}/chown.hold"
     sleep "${PCBENCH_FAKE_CHOWN_HOLD}"
+  fi
+  if [[ -n "${PCBENCH_FAKE_CHOWN_FAIL_NAME:-}" \
+    && "$(final_name "${!#}")" == "${PCBENCH_FAKE_CHOWN_FAIL_NAME}" ]]; then
+    printf '가짜 chown: 실패(시험 — 이름 지정)\n' >&2
+    exit 1
   fi
   if [[ "${PCBENCH_FAKE_CHOWN_STATUS:-0}" != 0 ]]; then
     printf '가짜 chown: 실패(시험)\n' >&2

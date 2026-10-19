@@ -20,9 +20,10 @@ readonly OPS_MAX_TIMEOUT=600
 readonly OPS_KILL_GRACE=3
 # 비밀 값 길이 상한(바이트).
 readonly OPS_SECRET_MAX_BYTES=4096
-# CDN 비밀(MediaMTX hlsCDNSecret)이 가질 수 있는 글자 — 시작 스크립트와 같다.
+# CDN 비밀(MediaMTX hlsCDNSecret)이 가질 수 있는 글자 — 시작 스크립트와 같다
+# (MediaMTX 가 / · ~ 를 거부한다).
 # shellcheck disable=SC2034 # 부르는 스크립트가 읽는다.
-readonly OPS_CDN_SECRET_PATTERN='^[A-Za-z0-9._~+/=-]+$'
+readonly OPS_CDN_SECRET_PATTERN='^[A-Za-z0-9._+=-]+$'
 # 시험 스트림 키 passphrase 의 꼴 — SRT passphrase 길이(10–79) · URL 쿼리에
 # 이스케이프 없이 실을 수 있는 글자.
 # shellcheck disable=SC2034 # 부르는 스크립트가 읽는다.

@@ -25,6 +25,8 @@ readonly FIXTURE_RUN_TIMEOUT=20
 # start_test 가 읽는다.
 # shellcheck disable=SC2034
 readonly FIXTURE_SECRET_TOKEN='@@HLS_CDN_SECRET@@'
+# shellcheck disable=SC2034
+readonly FIXTURE_API_PASS_TOKEN='@@MTX_API_PASS@@'
 readonly FIXTURE_PREREQ_ORDER="compose-version ecr-credential-helper \
 docker-config"
 
