@@ -183,10 +183,11 @@ fail_call() {
 #   t_stage, t_active, stage_idx
 #######################################
 mark_active() {
-  local t
+  local t first
   for t in "${!t_stage[@]}"; do
     t_active[t]=0
-    if [[ "$(stage_index "${t_stage[t]}")" -le "${stage_idx}" ]]; then
+    first="$(principal::stage_index "${t_stage[t]}")"
+    if [[ "${first}" -le "${stage_idx}" ]]; then
       t_active[t]=1
     fi
   done
@@ -201,7 +202,8 @@ mark_active() {
 #######################################
 ask_scope_controls() {
   local regions=$'\n' region t
-  ask "${caller_arn}" "${PC_ACTION}" "${PC_BUCKET_ARN}" "${PC0_REGION}" ""
+  principal::ask "${caller_arn}" "${PC_ACTION}" "${PC_BUCKET_ARN}" \
+    "${PC0_REGION}" ""
   [[ "${sim_class}" == allow ]] ||
     die "PC0(SCP 제외 대조)가 허용이 아님 — 제외가 먹지 않았을 수 있음" \
       "(res-${req_n}.txt)"
@@ -218,7 +220,8 @@ ask_scope_controls() {
     regions="${regions#*$'\n'}"
     [[ "${seen}" == *$'\n'"${region}"$'\n'* ]] && continue
     seen+="${region}"$'\n'
-    ask "${caller_arn}" "${PC_ACTION}" "${PC_BUCKET_ARN}" "${region}" ""
+    principal::ask "${caller_arn}" "${PC_ACTION}" "${PC_BUCKET_ARN}" \
+      "${region}" ""
     [[ "${sim_class}" == allow ]] ||
       die "PC1(문맥 대조)가 ${region} 에서 허용이 아님(res-${req_n}.txt)"
   done
@@ -255,7 +258,7 @@ ask_positive_controls() {
       [[ "${asked}" == *$'\n'"${c_action[i]} ${c_region[i]} ${arn}"$'\n'* ]] &&
         continue
       asked+="${c_action[i]} ${c_region[i]} ${arn}"$'\n'
-      ask "${u_arn[j]}" "${c_action[i]}" "${arn}" "${c_region[i]}" ""
+      principal::ask "${u_arn[j]}" "${c_action[i]}" "${arn}" "${c_region[i]}" ""
       [[ "${sim_class}" == allow ]] || u_pc_failed[j]=1
     done
   done
@@ -282,17 +285,17 @@ ask_branch_control() {
     branch_note='갈래 A 대조 실패 — B 로 판정(대조할 role 주체가 없음)'
     return
   fi
-  build_request "${u_arn[unit]}" "${PC_ACTION}" "${PCA_SAMPLE_ARN}" \
+  principal::build_request "${u_arn[unit]}" "${PC_ACTION}" "${PCA_SAMPLE_ARN}" \
     "${PCA_REGION}" "" owner
-  simulate ""
+  principal::simulate ""
   first="${sim_class}"
   policy="${evidence_dir}/pca-policy.json"
   precheck::write_evidence "${policy}" '%s%s%s\n' \
     '{"Version":"2012-10-17","Statement":[{"Effect":"Allow",' \
     "\"Principal\":{\"AWS\":\"${u_arn[unit]}\"},\"Action\":\"${PC_ACTION}\"," \
     "\"Resource\":\"${PCA_SAMPLE_ARN}\"}]}"
-  ask "${u_arn[unit]}" "${PC_ACTION}" "${PCA_SAMPLE_ARN}" "${PCA_REGION}" "" \
-    "${policy}"
+  principal::ask "${u_arn[unit]}" "${PC_ACTION}" "${PCA_SAMPLE_ARN}" \
+    "${PCA_REGION}" "" "${policy}"
   if [[ "${first}" != allow && "${sim_class}" == allow ]]; then
     branch=A
     branch_note='갈래 A'
@@ -370,15 +373,15 @@ row_arns() {
 judge_question() {
   local j="$1" t="$2" arn="$3" action="$4" state="" file="" verdict=PASS
   local reason=-
-  policy_for "${t_read[t]}" "${arn}"
+  principal::policy_for "${t_read[t]}" "${arn}"
   [[ -z "${found_policy}" ]] || state="${pol_state[found_policy]}"
   if [[ "${state}" == allow && ( "${u_kind[j]}" == user ||
     "${branch}" == A ) ]]; then
     file="${pol_file[found_policy]}"
   fi
-  context_entries "${t_context[t]}" || die "추가 문맥 꼴이 틀림"
-  ask "${u_arn[j]}" "${action}" "${arn}" "${t_region[t]}" "${context_json}" \
-    "${file}"
+  principal::context_entries "${t_context[t]}" || die "추가 문맥 꼴이 틀림"
+  principal::ask "${u_arn[j]}" "${action}" "${arn}" "${t_region[t]}" \
+    "${context_json}" "${file}"
   if [[ "${sim_class}" == allow ]]; then
     verdict=STOP reason=ALLOWED
   elif [[ "${state}" == session ]]; then
@@ -514,11 +517,11 @@ main() {
   # 꼴 밖 인자(경로 등)는 되울리지 않는다.
   [[ "$1" =~ ${STAGE_PATTERN} ]] || die "단계 이름이 아님(영문 · 숫자 · 「-」)"
   stage="$1"
-  stage_idx="$(stage_index "${stage}")" ||
+  stage_idx="$(principal::stage_index "${stage}")" ||
     die "2-3 판정이 없는 단계: ${stage}"
-  load_principals
-  load_controls
-  load_targets
+  principal::load_principals
+  principal::load_controls
+  principal::load_targets
   mark_active
   check_cli_history
   evidence_dir="$(evidence::new_dir "${DIR_PREFIX}-${stage}")" || exit 2
@@ -526,10 +529,10 @@ main() {
     "${evidence_dir##*/}" >&2
   precheck::caller_identity "${evidence_dir}"
   ask_scope_controls
-  resolve_principals
-  resolve_targets
-  resolve_unit_targets
-  read_policies
+  principal::resolve_principals
+  principal::resolve_targets
+  principal::resolve_unit_targets
+  principal::read_policies
   ask_positive_controls
   ask_branch_control
   judge_rows

@@ -32,7 +32,7 @@ pol_state=()
 pol_file=()
 pol_escaped=()
 policy_n=0
-# policy_for 가 남기는 정책 색인(정책을 읽지 않는 행이면 빈 값).
+# principal::policy_for 가 남기는 정책 색인(정책을 읽지 않는 행이면 빈 값).
 found_policy=""
 
 #######################################
@@ -44,7 +44,7 @@ found_policy=""
 # Returns:
 #   ARN 이 읽기 방법의 서비스가 아니면 1.
 #######################################
-policy_subject() {
+principal::policy_subject() {
   local arn="$2" bucket
   case "$1:${arn}" in
     s3:arn:aws:s3:::?*)
@@ -65,7 +65,7 @@ policy_subject() {
 # Arguments:
 #   읽기 방법, 대상, 리전.
 #######################################
-read_policy() {
+principal::read_policy() {
   local read="$1" subject="$2" region="$3" file state=deny absent="" status=0
   local escaped=0
   policy_n=$((policy_n + 1))
@@ -125,10 +125,10 @@ read_policy() {
 # Arguments:
 #   읽기 방법, 자원 ARN.
 #######################################
-policy_for() {
+principal::policy_for() {
   local subject i
   found_policy=""
-  subject="$(policy_subject "$1" "$2")" || return 0
+  subject="$(principal::policy_subject "$1" "$2")" || return 0
   for i in ${pol_read[@]+"${!pol_read[@]}"}; do
     [[ "${pol_read[i]}" == "$1" ]] || continue
     if [[ "${pol_subject[i]}" == "${subject}" ]]; then
@@ -144,7 +144,7 @@ policy_for() {
 #   t_key, t_read, t_region, t_active, tr_arns, found_policy, pol_*,
 #   evidence_dir
 #######################################
-read_policies() {
+principal::read_policies() {
   local t rest arn subject i record=""
   for t in "${!t_key[@]}"; do
     [[ "${t_active[t]}" -eq 1 ]] || continue
@@ -156,11 +156,11 @@ read_policies() {
     while [[ -n "${rest}" ]]; do
       arn="${rest%%$'\n'*}"
       rest="${rest#*$'\n'}"
-      subject="$(policy_subject "${t_read[t]}" "${arn}")" ||
+      subject="$(principal::policy_subject "${t_read[t]}" "${arn}")" ||
         die "자원 키 ${t_key[t]} 의 ARN 이 정책 읽기 방법의 서비스가 아님"
-      policy_for "${t_read[t]}" "${arn}"
+      principal::policy_for "${t_read[t]}" "${arn}"
       [[ -z "${found_policy}" ]] || continue
-      read_policy "${t_read[t]}" "${subject}" "${t_region[t]}"
+      principal::read_policy "${t_read[t]}" "${subject}" "${t_region[t]}"
     done
   done
   for i in ${pol_read[@]+"${!pol_read[@]}"}; do

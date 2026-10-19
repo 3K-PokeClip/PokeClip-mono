@@ -46,7 +46,7 @@ tr_none=()
 # prodrole 해석 결과(ARN 줄들)와 해석했는지.
 prod_roles=""
 prod_roles_done=0
-# read_list · resolve_principal 이 남기는 값.
+# principal::read_list · principal::resolve_principal 이 남기는 값.
 list_items=""
 resolved_arn=""
 merged_lines=""
@@ -58,7 +58,7 @@ merged_lines=""
 # Outputs:
 #   이름.
 #######################################
-arn_name() {
+principal::arn_name() {
   printf '%s\n' "${1##*/}"
 }
 
@@ -70,7 +70,7 @@ arn_name() {
 # Arguments:
 #   항목 정규식.
 #######################################
-read_list() {
+principal::read_list() {
   local pattern="$1" rest item
   rest="${call_out//$'\t'/$'\n'}"$'\n'
   list_items=""
@@ -94,7 +94,7 @@ read_list() {
 # Outputs:
 #   정규식.
 #######################################
-iam_pattern() {
+principal::iam_pattern() {
   printf '^arn:aws:iam::%s:%s/[A-Za-z0-9+=,.@_/-]+$\n' "${account}" "$1"
 }
 
@@ -105,21 +105,21 @@ iam_pattern() {
 # Arguments:
 #   p_* 색인.
 #######################################
-resolve_principal() {
+principal::resolve_principal() {
   local i="$1" kind="${p_kind[$1]}" body query call field pattern
   case "${kind}" in
     instance-profile)
       call=get-instance-profile field=InstanceProfileName
       query='InstanceProfile.Roles[].Arn'
-      pattern="$(iam_pattern role)"
+      pattern="$(principal::iam_pattern role)"
       ;;
     role)
       call=get-role field=RoleName query=Role.Arn
-      pattern="$(iam_pattern role)"
+      pattern="$(principal::iam_pattern role)"
       ;;
     *)
       call=get-user field=UserName query=User.Arn
-      pattern="$(iam_pattern user)"
+      pattern="$(principal::iam_pattern user)"
       ;;
   esac
   body="{\"${field}\":\"${p_name[i]}\"}"
@@ -128,7 +128,7 @@ resolve_principal() {
     grep -qF '(NoSuchEntity)' -- "${call_err}" && return 0
     fail_call "주체 해석"
   fi
-  read_list "${pattern}"
+  principal::read_list "${pattern}"
   if [[ "${list_items}" == *$'\n'?* ||
     ( "${kind}" != instance-profile && -z "${list_items}" ) ]]; then
     die "주체 응답에 ARN 이 하나가 아님(res-${req_n}.txt)"
@@ -141,10 +141,10 @@ resolve_principal() {
 # Globals:
 #   p_key, p_kind, u_arn, u_keys, u_kind, missing_keys, evidence_dir
 #######################################
-resolve_principals() {
+principal::resolve_principals() {
   local i j kind record=""
   for i in "${!p_key[@]}"; do
-    resolve_principal "${i}"
+    principal::resolve_principal "${i}"
     record+="${p_key[i]}"$'\t'"${p_kind[i]}"$'\t'"${resolved_arn:-MISSING}"
     record+=$'\n'
     if [[ -z "${resolved_arn}" ]]; then
@@ -173,11 +173,11 @@ resolve_principals() {
 # Globals:
 #   prod_roles, prod_roles_done, list_items, PROD_ROLE_PATH
 #######################################
-resolve_prod_roles() {
+principal::resolve_prod_roles() {
   [[ "${prod_roles_done}" -eq 1 ]] && return 0
   aws_call "{\"PathPrefix\":\"${PROD_ROLE_PATH}\"}" iam list-roles \
     --query 'Roles[].Arn' || fail_call "prod 역할 해석"
-  read_list "$(iam_pattern role)"
+  principal::read_list "$(principal::iam_pattern role)"
   prod_roles="${list_items}"
   prod_roles_done=1
 }
@@ -190,7 +190,7 @@ resolve_prod_roles() {
 # Arguments:
 #   존 이름.
 #######################################
-resolve_zone() {
+principal::resolve_zone() {
   local want="${1%.}." rest line name id private found=""
   aws_call "{\"DNSName\":\"${want}\"}" route53 list-hosted-zones-by-name \
     --query "${ZONE_QUERY}" || fail_call "존 해석"
@@ -228,7 +228,7 @@ resolve_zone() {
 # Arguments:
 #   t_* 색인.
 #######################################
-resolve_target_arns() {
+principal::resolve_target_arns() {
   local t="$1" method="${t_method[$1]}" body
   list_items=""
   case "${method}" in
@@ -243,11 +243,12 @@ resolve_target_arns() {
         --region "${t_region[t]}" \
         --query 'ResourceTagMappingList[].ResourceARN' ||
         fail_call "태그 해석"
-      read_list '^arn:aws:[a-z0-9-]+:[a-z0-9-]*:[0-9]*:[^*[:space:]]+$'
+      principal::read_list \
+        '^arn:aws:[a-z0-9-]+:[a-z0-9-]*:[0-9]*:[^*[:space:]]+$'
       ;;
-    zone:*) resolve_zone "${method#zone:}" ;;
+    zone:*) principal::resolve_zone "${method#zone:}" ;;
     prodrole)
-      resolve_prod_roles
+      principal::resolve_prod_roles
       list_items="${prod_roles}"
       ;;
     *) ;;
@@ -259,7 +260,7 @@ resolve_target_arns() {
 # Globals:
 #   t_key, t_method, t_active, tr_arns, tr_none, list_items, evidence_dir
 #######################################
-resolve_targets() {
+principal::resolve_targets() {
   local t rest record=""
   for t in "${!t_key[@]}"; do
     tr_arns[t]=""
@@ -269,7 +270,7 @@ resolve_targets() {
       self:* | policy:attached) continue ;;
       *) ;;
     esac
-    resolve_target_arns "${t}"
+    principal::resolve_target_arns "${t}"
     tr_arns[t]="${list_items}"
     if [[ -z "${list_items}" ]]; then
       tr_none[t]=1
@@ -293,11 +294,11 @@ resolve_targets() {
 # Arguments:
 #   호출(list-attached-*-policies), 요청 칸, 이름.
 #######################################
-attached_policies() {
+principal::attached_policies() {
   local call="$1" field="$2" name="$3" item rest
   aws_call "{\"${field}\":\"${name}\"}" iam "${call}" \
     --query 'AttachedPolicies[].PolicyArn' || fail_call "붙은 정책 해석"
-  read_list '^arn:aws:iam::[a-z0-9]+:policy/[A-Za-z0-9+=,.@_/-]+$'
+  principal::read_list '^arn:aws:iam::[a-z0-9]+:policy/[A-Za-z0-9+=,.@_/-]+$'
   rest="${list_items}"
   list_items=""
   while [[ -n "${rest}" ]]; do
@@ -316,7 +317,7 @@ attached_policies() {
 # Arguments:
 #   더할 줄들.
 #######################################
-merge_lines() {
+principal::merge_lines() {
   local rest="$1" item
   while [[ -n "${rest}" ]]; do
     item="${rest%%$'\n'*}"
@@ -335,7 +336,7 @@ merge_lines() {
 # Returns:
 #   있으면 0.
 #######################################
-uses_method() {
+principal::uses_method() {
   local t
   for t in "${!t_method[@]}"; do
     [[ "${t_active[t]}" -eq 1 && "${t_method[t]}" == "$1" ]] && return 0
@@ -352,33 +353,33 @@ uses_method() {
 # Arguments:
 #   u_* 색인.
 #######################################
-resolve_attached() {
+principal::resolve_attached() {
   local j="$1" rest group role
   merged_lines=""
   if [[ "${u_kind[j]}" == role ]]; then
-    attached_policies list-attached-role-policies RoleName \
-      "$(arn_name "${u_arn[j]}")"
+    principal::attached_policies list-attached-role-policies RoleName \
+      "$(principal::arn_name "${u_arn[j]}")"
   else
-    attached_policies list-attached-user-policies UserName \
-      "$(arn_name "${u_arn[j]}")"
+    principal::attached_policies list-attached-user-policies UserName \
+      "$(principal::arn_name "${u_arn[j]}")"
   fi
-  merge_lines "${list_items}"
+  principal::merge_lines "${list_items}"
   rest="${u_groups[j]}"
   while [[ -n "${rest}" ]]; do
     group="${rest%%$'\n'*}"
     rest="${rest#*$'\n'}"
-    attached_policies list-attached-group-policies GroupName \
-      "$(arn_name "${group}")"
-    merge_lines "${list_items}"
+    principal::attached_policies list-attached-group-policies GroupName \
+      "$(principal::arn_name "${group}")"
+    principal::merge_lines "${list_items}"
   done
-  resolve_prod_roles
+  principal::resolve_prod_roles
   rest="${prod_roles}"
   while [[ -n "${rest}" ]]; do
     role="${rest%%$'\n'*}"
     rest="${rest#*$'\n'}"
-    attached_policies list-attached-role-policies RoleName \
-      "$(arn_name "${role}")"
-    merge_lines "${list_items}"
+    principal::attached_policies list-attached-role-policies RoleName \
+      "$(principal::arn_name "${role}")"
+    principal::merge_lines "${list_items}"
   done
   u_attached[j]="${merged_lines}"
 }
@@ -389,21 +390,21 @@ resolve_attached() {
 # Globals:
 #   u_arn, u_kind, u_groups, list_items
 #######################################
-resolve_unit_targets() {
+principal::resolve_unit_targets() {
   local j need_attached=0 need_groups=0
-  uses_method policy:attached && need_attached=1
-  uses_method self:group && need_groups=1
+  principal::uses_method policy:attached && need_attached=1
+  principal::uses_method self:group && need_groups=1
   [[ "${need_attached}" -eq 1 ]] && need_groups=1
   for j in ${u_arn[@]+"${!u_arn[@]}"}; do
     if [[ "${need_groups}" -eq 1 && "${u_kind[j]}" == user ]]; then
-      aws_call "{\"UserName\":\"$(arn_name "${u_arn[j]}")\"}" iam \
+      aws_call "{\"UserName\":\"$(principal::arn_name "${u_arn[j]}")\"}" iam \
         list-groups-for-user --query 'Groups[].Arn' ||
         fail_call "그룹 해석"
-      read_list "$(iam_pattern group)"
+      principal::read_list "$(principal::iam_pattern group)"
       u_groups[j]="${list_items}"
     fi
     if [[ "${need_attached}" -eq 1 ]]; then
-      resolve_attached "${j}"
+      principal::resolve_attached "${j}"
     fi
   done
 }
