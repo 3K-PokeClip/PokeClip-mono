@@ -191,19 +191,35 @@ MediaMTX 이미지는 계정 ECR 의 비공개 저장소 `pokeclip/mediamtx` 에
 기본 포함)가 이 역할로 돈다.
 
 kty 로컬 터미널에서 돌린다 — 계정 번호가 명령 · 응답에 들어가므로 에이전트 세션 · 문서에
-붙여 넣지 않는다. 계정 번호는 손으로 적지 않고 셸에서 얻는다. 역할은 상자에서 거꾸로 집어
-팀 dev EC2 의 역할에 붙지 않게 한다.
+붙여 넣지 않는다. 계정 번호는 손으로 적지 않고 셸에서 얻는다. 세 블록을 차례로 붙여
+넣는다 — 1 이 상자에서 역할을 거꾸로 집어 이름을 보이고, 2 가 그 역할이 상자 전용 역할
+`pokeclip-media-dev-ssm-role` 일 때만 정책을 넣는다. 공유 역할(`pokeclip-dev-ssm-role`
+등 — 팀 dev EC2 와 함께 쓰는 역할)이나 다른 이름이면 2 가 「멈춤」을 내고 아무것도 넣지
+않는다. 그때는 kty 가 정한다(상자를 1-2 의 공유 프로필로 다시 띄웠다면 상자 전용 프로필을
+먼저 붙인다). 2 는 괄호(서브셸) 안이라 멈춰도 터미널은 닫히지 않고, 계정 번호도 괄호 밖에
+남지 않는다.
 
 ```bash
-ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
+# 1) 역할 집기 — 상자에서 거꾸로 집는다. 찍는 것은 역할 이름뿐이다(계정 번호 없음)
 PROFILE_ARN="$(aws ec2 describe-instances --instance-ids <instance-id> \
   --query 'Reservations[0].Instances[0].IamInstanceProfile.Arn' --output text)"
 ROLE="$(aws iam get-instance-profile \
   --instance-profile-name "${PROFILE_ARN##*/}" \
   --query 'InstanceProfile.Roles[0].RoleName' --output text)"
-echo "${ROLE}"   # 상자 전용 역할인지 눈으로 본다 — 아니면 멈춘다
-aws iam put-role-policy --role-name "${ROLE}" \
-  --policy-name pokeclip-media-dev-ecr-pull --policy-document "$(cat <<EOF
+unset PROFILE_ARN
+echo "역할: ${ROLE}"
+```
+
+```bash
+# 2) 정책 넣기 — 상자 전용 역할일 때만. 어긋나면 「멈춤」 · 종료 1 이고 넣지 않는다
+(
+  [[ "${ROLE:-}" == pokeclip-media-dev-ssm-role ]] \
+    || { echo "멈춤 — 상자 전용 역할이 아니다: ${ROLE:-(비었음)}"; exit 1; }
+  ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
+  [[ "${ACCOUNT}" =~ ^[0-9]{12}$ ]] \
+    || { echo '멈춤 — 계정 번호를 얻지 못했다'; exit 1; }
+  aws iam put-role-policy --role-name "${ROLE}" \
+    --policy-name pokeclip-media-dev-ecr-pull --policy-document "$(cat <<EOF
 {
   "Version": "2012-10-17",
   "Statement": [
@@ -227,9 +243,11 @@ aws iam put-role-policy --role-name "${ROLE}" \
 }
 EOF
 )"
-unset ACCOUNT PROFILE_ARN
+)
+```
 
-# 검증: 정책 이름이 보이고 동작이 위 넷이다(자원 — 계정 번호 — 은 찍지 않는다)
+```bash
+# 3) 검증 — 정책 이름이 보이고 동작이 위 넷이다(자원 — 계정 번호 — 은 찍지 않는다)
 aws iam list-role-policies --role-name "${ROLE}"
 aws iam get-role-policy --role-name "${ROLE}" \
   --policy-name pokeclip-media-dev-ecr-pull \
@@ -298,6 +316,7 @@ readonly PROJECT="${COMPOSE_PROJECT_NAME:-dev-media}"  # compose 프로젝트 �
 readonly DENY_DIR="${DEMO_DIR}/ingest-auth/deny"       # 응답기의 /etc/ingest-auth
 readonly DENY_FILE="${DENY_DIR}/deny-tokens"           # 거부 목록(살아 있는 파일)
 readonly STATE_DIR="${DEMO_DIR}/ingest-auth/state"     # 허용 연결 기록
+readonly LOGIN_DIR="${DEMO_DIR}/.ecr-login"            # R3′ 의 ECR 로그인 자격
 readonly RESPONDER_ID=10003                            # 응답기의 UID · GID
 readonly DENY_MAX_BYTES=65536                          # 응답기의 거부 목록 상한
 readonly TOKEN_RE='^[0-9A-HJKMNP-TV-Z]{26}$'           # 정규식 경로와 같은 식
@@ -464,6 +483,23 @@ live_compose() {
     -f "${REPO}/${COMPOSE_YML}" "$@"
 }
 
+# mask_account 는 파일 $1 을 12자리 숫자(ECR 레지스트리 호스트의 계정 번호)를 가려 낸다.
+mask_account() {
+  sed -E 's/[0-9]{12}/<계정>/g' -- "$1"
+}
+
+# compose_up_masked 는 compose 함수 $1(live_compose · paired_compose)로 up 을 부른다(나머지
+# 인자). 도구 출력에는 이미지 좌표 전체가 찍힐 수 있어(받기 진행 · 오류) 파일로 받고, 계정
+# 번호를 가려 낸다. 실패하면 검사 실패다.
+compose_up_masked() {
+  local -r compose="$1"
+  local -i rc=0
+  shift
+  "${compose}" up "$@" > "${WORK}/up.log" 2>&1 || rc=$?
+  mask_account "${WORK}/up.log" >&2
+  (( rc == 0 )) || check_failed "${compose} up $* 실패(종료 ${rc})"
+}
+
 # container_id 는 이 compose 프로젝트에서 서비스 $1 의 컨테이너 id 하나를 변수 $2 에
 # 넣는다. 없거나 둘 이상이면 일치 없음이다.
 container_id() {
@@ -566,7 +602,9 @@ count_lines_with() {
 
 # assert_back_to_pre_t 는 지금 상태가 반영 전 기록(pre-T.*)과 같은지 본다(복귀 확인 —
 # 읽기만). 반영 취소 ⓒ · 롤백 단계 C · T 백업 처분의 첫머리가 이 함수 하나를 부른다.
-# 앞에서 PRE_SHA 를 readonly 로 둔다.
+# 앞에서 PRE_SHA 를 readonly 로 둔다. 도는 서비스는 반영 전 판의 compose 가 정의한
+# 서비스 전부다 — 첫 반영 주기는 edge · mediamtx, 계정 ECR 판을 올린 주기는 edge ·
+# ingest-auth · mediamtx 다(주기마다 다르므로 고정값으로 두지 않는다).
 assert_back_to_pre_t() {
   local head_sha
   head_sha="$(owner_git rev-parse HEAD)"
@@ -583,12 +621,16 @@ assert_back_to_pre_t() {
   assert_same "${DEMO_DIR}/.env.pre-T.bak" "${DEMO_DIR}/.env"
   assert_same "${DEMO_DIR}/mediamtx.demo.yml.pre-T.bak" \
     "${DEMO_DIR}/mediamtx.demo.yml"
-  # ingest-auth · mtx-control 이 없다 — 반영 전과 같다
+  # 컨테이너 · 망 이름이 반영 전과 같다(첫 주기면 ingest-auth · mtx-control 이 없다)
   list_docker_names > "${WORK}/docker"
   assert_same "${WORK}/docker" "${DEMO_DIR}/pre-T.docker"
   list_running_services > "${WORK}/running"
-  printf '%s\n' edge mediamtx > "${WORK}/running.want"
-  assert_same "${WORK}/running" "${WORK}/running.want"
+  # 위에서 HEAD · .env 가 반영 전임을 단언했다 — 그 compose 의 서비스가 기대값이다
+  docker compose -p "${PROJECT}" --env-file "${DEMO_DIR}/.env.pre-T.bak" \
+    -f "${REPO}/${COMPOSE_YML}" config --services > "${WORK}/services"
+  sort -- "${WORK}/services" > "${WORK}/running.want"
+  assert_same "${WORK}/running" "${WORK}/running.want" \
+    '도는 서비스가 반영 전 판 compose 의 서비스와 다르다'
   report_head_shape "${DEMO_DIR}/pre-T.head"
 }
 
@@ -605,32 +647,53 @@ t_backup_names() {
   done < "${WORK}/names"
 }
 
-# stray_secret_names 는 끊긴 R1 · 렌더가 남길 수 있는 비밀 임시 파일(.env.next — resolve
-# 출입증 · API 비번, mediamtx.demo.yml.tmp.* — 잠금값)의 이름을 한 줄에 하나씩 낸다.
+# stray_secret_names 는 끊긴 R1 · 렌더 · R3′ 가 남길 수 있는 비밀 임시 파일(.env.next —
+# resolve 출입증 · API 비번, mediamtx.demo.yml.tmp.* — 잠금값, .ecr-login — ECR 로그인
+# 자격)의 이름을 한 줄에 하나씩 낸다.
 stray_secret_names() {
   local name
   ls -1A -- "${DEMO_DIR}" > "${WORK}/stray-names"   # 못 받으면 검사 실패
   while IFS= read -r name; do
     case "${name}" in
-      .env.next | mediamtx.demo.yml.tmp.*) printf '%s\n' "${name}" ;;
+      .env.next | mediamtx.demo.yml.tmp.* | .ecr-login)
+        printf '%s\n' "${name}"
+        ;;
     esac
   done < "${WORK}/stray-names"
 }
 
-# dispose_stray_secrets 는 stray_secret_names 의 파일을 shred -u 로 지운다(링크면 멈춘다).
-# T 백업 처분 · E-2 · 반영 전 비밀 파기가 부른다 — 셋 다 반영 · 렌더가 돌지 않는 안정
-# 상태를 첫머리에서 단언한 뒤다.
+# dispose_ecr_login 은 R3′ 의 ECR 로그인 자리(LOGIN_DIR — 안에 12시간 유효한 토큰이 든
+# config.json 하나)를 치운다. config.json 은 shred -u, 디렉터리는 rmdir 이다. 없으면 그대로
+# 둔다. 링크 · 디렉터리 아닌 것이면 지우지 않고 일치 없음, 다른 파일이 들어 있으면 rmdir
+# 이 실패해 검사 실패다(모르는 것을 지우지 않는다).
+dispose_ecr_login() {
+  if [[ ! -e "${LOGIN_DIR}" && ! -L "${LOGIN_DIR}" ]]; then
+    return 0
+  fi
+  [[ -d "${LOGIN_DIR}" && ! -L "${LOGIN_DIR}" ]] \
+    || mismatch "디렉터리가 아니거나 링크다 — 지우지 않는다: ${LOGIN_DIR}"
+  remove_box_file shred "${LOGIN_DIR}/config.json"
+  rmdir -- "${LOGIN_DIR}"
+}
+
+# dispose_stray_secrets 는 stray_secret_names 의 파일을 shred -u 로 지운다(링크면 멈춘다 —
+# .ecr-login 은 dispose_ecr_login). T 백업 처분 · E-2 · 반영 전 비밀 파기가 부른다 — 셋 다
+# 반영 · 렌더가 돌지 않는 안정 상태를 첫머리에서 단언한 뒤다.
 dispose_stray_secrets() {
   local name
   stray_secret_names > "${WORK}/stray"
   while IFS= read -r name; do
-    remove_box_file shred "${DEMO_DIR}/${name}"
+    if [[ "${name}" == .ecr-login ]]; then
+      dispose_ecr_login
+    else
+      remove_box_file shred "${DEMO_DIR}/${name}"
+    fi
   done < "${WORK}/stray"
 }
 
 # dispose_t_backups 는 T 백업 아홉과 그 .part 를 있는 것만 지운다 — 비밀 둘(.env.T.bak —
 # resolve 출입증 · API 비번, 렌더 산출물 백업 — 잠금값)은 shred -u(이름 제거 + 최선 노력
-# — 11-7), 나머지 일곱은 rm. 끊긴 R1 · 렌더의 비밀 임시 파일도 shred -u 로 지운다. 링크 ·
+# — 11-7), 나머지 일곱은 rm. 끊긴 R1 · 렌더 · R3′ 의 비밀 임시 파일도 shred -u 로 지운다. 링크 ·
 # 일반 파일 아닌 것은 지우지 않고 멈춘다. 끝에 그 이름 0 을 단언한다. 롤백 E-2 와 T 백업
 # 처분 블록이 이 함수 하나를 부른다(첫머리 단언은 각 블록에 있다).
 dispose_t_backups() {
@@ -1316,14 +1379,16 @@ main "$@"
 # 않게. 컨테이너 · 렌더 산출물은 건드리지 않는다. 레지스트리 호스트는 compose 가 .env 의
 # MTX_IMAGE_REGISTRY 로 푼 좌표에서 읽는다. 호스트에 계정 번호가 들어 있어 내지 않는다 —
 # 도구 출력은 파일로 받고, 실패하면 12자리 숫자를 가려 낸다. 로그인 자격(12시간 유효)은
-# 이 블록의 임시 디렉터리(DOCKER_CONFIG)에만 두고 받은 뒤 shred -u 로 지운다 —
-# /root/.docker 에 남기지 않는다.
+# 상자의 정해진 자리(LOGIN_DIR — DOCKER_CONFIG)에만 두고 받은 뒤 지운다(dispose_ecr_login)
+# — /root/.docker 에 남기지 않는다. 블록이 죽어 자격이 남으면 다음 R3′ 의 첫머리와 비밀 임시
+# 파일 정리(dispose_stray_secrets)가 지운다.
 main() {
   (( $# == 0 )) || check_failed '사용법: 인자 없음'
   local image='' registry tag line
   local -i rc=0 n=0
-  local -r docker_config="${WORK}/docker-config"
+  assert_demo_dir_safe
   command -v aws > /dev/null || check_failed 'aws CLI 가 없다(1-5)'
+  dispose_ecr_login   # 끊긴 R3′ 가 남긴 자격
   # mediamtx 가 기대는 서비스(ingest-auth)의 이미지도 함께 나온다 — 저장소 경로로 고른다
   live_compose config --images mediamtx > "${WORK}/mtx.images"
   while IFS= read -r line; do
@@ -1336,18 +1401,18 @@ main() {
   registry="${image%%/*}"
   [[ "${registry}" =~ ^[0-9]{12}\.dkr\.ecr\.ap-northeast-2\.amazonaws\.com$ ]] \
     || mismatch 'MediaMTX 좌표의 레지스트리가 계정 ECR(ap-northeast-2)이 아니다'
-  install -d -m 0700 -- "${docker_config}"
+  install -d -m 0700 -o root -g root -- "${LOGIN_DIR}"
   aws ecr get-login-password --region ap-northeast-2 2>> "${WORK}/pull.log" \
-    | DOCKER_CONFIG="${docker_config}" docker login --username AWS \
+    | DOCKER_CONFIG="${LOGIN_DIR}" docker login --username AWS \
       --password-stdin "${registry}" >> "${WORK}/pull.log" 2>&1 \
     || rc=$?
   if (( rc == 0 )); then
-    DOCKER_CONFIG="${docker_config}" live_compose pull mediamtx \
+    DOCKER_CONFIG="${LOGIN_DIR}" live_compose pull mediamtx \
       >> "${WORK}/pull.log" 2>&1 || rc=$?
   fi
-  remove_box_file shred "${docker_config}/config.json"   # 성패와 무관하게 먼저
+  dispose_ecr_login   # 성패와 무관하게 먼저
   if (( rc != 0 )); then
-    sed -E 's/[0-9]{12}/<계정>/g' -- "${WORK}/pull.log" >&2
+    mask_account "${WORK}/pull.log" >&2
     check_failed "ECR 로그인 · 받기 실패(종료 ${rc}) — 역할 권한(1-5) · 망을 본다"
   fi
   docker image inspect -f '{{.Id}}' "${image}" > /dev/null 2>&1 \
@@ -1414,7 +1479,7 @@ main() {
   local mtx_id='' image tag arch line want_arch="${DEMO_ARCH:-amd64}"
   local -i i found=0 version=0 denied=0 unsaved=0 mtx_env=0
   wait_ingest_auth_healthy   # 운영 순서 — 응답기 healthy 뒤에만 MediaMTX
-  live_compose up -d
+  compose_up_masked live_compose -d   # 출력에 이미지 좌표가 찍힐 수 있다 — 가려 낸다
   container_id mediamtx mtx_id
   image="$(docker inspect -f '{{.Config.Image}}' "${mtx_id}")"
   live_compose config --images > "${WORK}/images"
@@ -1925,7 +1990,7 @@ sudo docker compose -p dev-media --env-file /opt/pokeclip-demo/.env \
 | 0 | 끝까지 끊었다 — 남은 연결 0 · 두 판독 모두 기록 밖 30초 안 연결 0 |
 | 1 | 미완 — 출력의 `reason` 으로 8-3 의 갈래를 탄다 |
 | 2 | 시작하지 않았다 — 거부 목록에 그 토큰이 없다(`not_denied`) · 사용법 · 설정. 끊은 것 없음 |
-| 출력 줄 없음 | cut 이 돌지 않았다 — compose 의 오류 문구만 나오고 종료 코드는 compose 의 것이다. 문구로 가른다. 응답기 컨테이너가 없거나 멈췄으면(예: `service "ingest-auth" is not running` — 로컬 실측 S7-7 D13) 「응답기 살리기」(7-2) 뒤 cut 을 다시 돌린다. 접혀 있는 동안이면 cut 은 효력이 없다(11-1) — 살리기로 가지 않는다(옛 판에는 응답기가 없다). kty. `couldn't find env file: …/.env` 이면 응답기 탓이 아니다 — 명령의 `--env-file` · `-f` 자리가 그 상자 · 리허설의 `DEMO_HOME` 과 다르다(리허설 · 자리 오설정 — 로컬 실측 S7-5 D40). 응답기를 살리지 않는다. 자리부터 맞춘 뒤 cut 을 다시 돌린다 |
+| 출력 줄 없음 | cut 이 돌지 않았다 — compose 의 오류 문구만 나오고 종료 코드는 compose 의 것이다. 문구로 가른다. 응답기 컨테이너가 없거나 멈췄으면(예: `service "ingest-auth" is not running` — 로컬 실측 S7-7 D13) 「응답기 살리기」(7-2) 뒤 cut 을 다시 돌린다. 첫 반영 주기를 접은 동안이면 cut 은 효력이 없다(11-1) — 살리기로 가지 않는다(그 옛 판에는 응답기가 없다). kty. `couldn't find env file: …/.env` 이면 응답기 탓이 아니다 — 명령의 `--env-file` · `-f` 자리가 그 상자 · 리허설의 `DEMO_HOME` 과 다르다(리허설 · 자리 오설정 — 로컬 실측 S7-5 D40). 응답기를 살리지 않는다. 자리부터 맞춘 뒤 cut 을 다시 돌린다 |
 
 출력 필드의 뜻.
 
@@ -2384,10 +2449,12 @@ T 구성 → 옛 판(반영 전 기록) → (리허설이면) T 로 다시. 블�
 **멈춤.** 어느 블록이든 종료 1(일치 없음) · 2(검사 실패)면 그 자리에서 멈추고 11-5 의
 그 행을 따른다. 지우는 쪽으로 밀어붙이지 않는다.
 
-**접혀 있는 동안.** B 가 응답기를 내리고 옛 판이 공용 passphrase 하나로 송출을 받는다.
-그동안 거부 목록과 긴급 절단(cut)은 효력이 없다 — cut 은 응답기 컨테이너가 없어 돌지 않고,
-송출 통제는 옛 passphrase 하나뿐이다. 거부 목록 파일은 그대로 둔다 — 다시 T 로 갈 때 R5 ·
-D 가 응답기를 띄우기 전에 다시 읽는다.
+**접혀 있는 동안.** 첫 반영 주기라면 B 가 응답기를 내리고 옛 판이 공용 passphrase 하나로
+송출을 받는다. 그동안 거부 목록과 긴급 절단(cut)은 효력이 없다 — cut 은 응답기 컨테이너가
+없어 돌지 않고, 송출 통제는 옛 passphrase 하나뿐이다. 거부 목록 파일은 그대로 둔다 — 다시
+T 로 갈 때 R5 · D 가 응답기를 띄우기 전에 다시 읽는다. 계정 ECR 판을 올린 주기라면 반영 전
+판(ghcr 포크 `.2`)에도 응답기가 있어, B 가 응답기까지 반영 전 판으로 다시 올리고 거부
+목록 · cut 은 그대로 효력이 있다(복귀 확인의 도는 서비스도 셋이다 — 11-4).
 
 ### 11-2. 왜 이 차례인가
 
@@ -2505,8 +2572,9 @@ main() {
     "${DEMO_DIR}/mediamtx.demo.yml"
   # 옛 compose 가 짝 맞는 env 로 풀리는지(출력 없음 — 비밀을 내지 않는다)
   paired_compose config --quiet
-  # 모든 컨테이너를 새로 만들어 단일 파일 마운트도 새로 묶인다
-  paired_compose up -d
+  # 모든 컨테이너를 새로 만들어 단일 파일 마운트도 새로 묶인다. 반영 전 판이 계정 ECR
+  # 판이면 출력에 계정 번호가 든 좌표가 찍힐 수 있다 — 가려 낸다
+  compose_up_masked paired_compose -d
   cp -p -- "${DEMO_DIR}/.env.pre-T.bak" "${DEMO_DIR}/.env"
   assert_same "${DEMO_DIR}/.env.pre-T.bak" "${DEMO_DIR}/.env"
   echo '옛 판으로 끝 — 다음은 C'
@@ -2577,7 +2645,7 @@ main() {
   # 운영 순서 — 응답기 먼저. healthy 시한을 넘기면 MediaMTX 는 띄우지 않는다
   paired_compose up -d ingest-auth
   wait_ingest_auth_healthy
-  paired_compose up -d
+  compose_up_masked paired_compose -d   # 출력에 이미지 좌표가 찍힐 수 있다 — 가려 낸다
   cp -p -- "${DEMO_DIR}/.env.T.bak" "${DEMO_DIR}/.env"
   assert_same "${DEMO_DIR}/.env.T.bak" "${DEMO_DIR}/.env"
   echo 'T 로 다시 끝 — 다음은 E-1'
@@ -2660,8 +2728,10 @@ main "$@"
 - 추적 밖 이름(`-z` — `list_untracked`)이 반영 전 목록과 같고, 그 내용이 반영 전 묶음과
   같다(`tar --compare` — `hls.min.js` 등).
 - `.env` · 렌더 산출물이 반영 전 백업과 바이트까지 같다.
-- 이 compose 프로젝트의 컨테이너 · 망 이름이 반영 전 기록과 같고(`ingest-auth` 없음),
-  도는 서비스가 edge · mediamtx 둘이다.
+- 이 compose 프로젝트의 컨테이너 · 망 이름이 반영 전 기록과 같고, 도는 서비스가 반영 전
+  판 compose 의 서비스 전부다 — 첫 반영 주기는 edge · mediamtx 둘(`ingest-auth` 없음),
+  계정 ECR 판을 올린 주기는 edge · ingest-auth · mediamtx 셋이다. 기대값은 고정값이 아니라
+  반영 전 SHA 의 compose 를 `.env.pre-T.bak` 으로 푼 `config --services` 다.
 - HEAD 형태는 견줘 알리기만 한다 — 반영 전이 브랜치였고 그 브랜치가 옮겨졌으면 B 가
   분리 HEAD 로 둔다.
 
@@ -2793,8 +2863,8 @@ main "$@"
     뒤 다시 반영했으면 처분이 그 전에 지웠고, 리허설 뒤면 E-2 가 지웠다.
 1.  그다음 아래 「반영 전 비밀 파기」로 반영 전 비밀 둘(`.env.pre-T.bak` — 옛
     passphrase · resolve 출입증(T 와 같은 값), `mediamtx.demo.yml.pre-T.bak` — 옛 렌더
-    산출물)과 그 `.part`, 끊긴 R1 · 렌더가 남긴 비밀 임시 파일(`.env.next` ·
-    `mediamtx.demo.yml.tmp.*`)을 지운다. 이 블록은 T 백업이 하나라도 남아 있거나 안정
+    산출물)과 그 `.part`, 끊긴 R1 · 렌더 · R3′ 가 남긴 비밀 임시 파일(`.env.next` ·
+    `mediamtx.demo.yml.tmp.*` · `.ecr-login`)을 지운다. 이 블록은 T 백업이 하나라도 남아 있거나 안정
     상태(접힌 끝 · T 정착)가 아니면 지우지 않고 멈춘다 — 위 차례와 반영 · 접기 도중이
     아님을 블록이 지킨다. T 가 다 떠 있는 채 실측이 실패한 자리(F6 · F7)는 블록이 가르지
     못해 승인 문장(11-1)이 가른다.
@@ -2877,7 +2947,8 @@ main() {
     remove_box_file shred "${DEMO_DIR}/${name}"
     remove_box_file shred "${DEMO_DIR}/${name}.part"
   done
-  # 끊긴 R1 · 렌더가 남긴 비밀 임시 파일(.env.next · mediamtx.demo.yml.tmp.*)
+  # 끊긴 R1 · 렌더 · R3′ 가 남긴 비밀 임시 파일(.env.next · mediamtx.demo.yml.tmp.* ·
+  # .ecr-login)
   dispose_stray_secrets
   # 비밀이 아닌 일곱은 남긴다. 끊긴 보존이 남긴 그 .part 만 지운다
   for name in sha head status worktree.patch untracked.z untracked.tgz \
@@ -2888,7 +2959,7 @@ main() {
   while IFS= read -r name; do
     case "${name}" in
       *.pre-T.bak | *.pre-T.bak.part | pre-T.*.part | .env.next \
-        | mediamtx.demo.yml.tmp.*)
+        | mediamtx.demo.yml.tmp.* | .ecr-login)
         left+="${name} "
         ;;
     esac
@@ -2916,7 +2987,7 @@ IID=$(aws ec2 describe-instances --filters Name=tag:Name,Values=pokeclip-media-d
 ```
 
 1. **terminate 전에 캡처**: 볼륨 ID와 `DeleteOnTermination` 값을 적어 둔다. `false` 면 먼저 `true` 로 바꾸거나 종료 후 볼륨을 직접 지운다.
-   상자 역할 이름도 1-5 의 `PROFILE_ARN` · `ROLE` 두 줄로 집어 둔다(11 이 쓴다).
+   상자 역할 이름도 1-5 의 블록 1(역할 집기)로 집어 둔다(11 이 `ROLE` 을 쓴다).
    ```bash
    aws ec2 describe-instances --instance-ids <instance-id> \
      --query 'Reservations[0].Instances[0].BlockDeviceMappings[].Ebs.{id:VolumeId,del:DeleteOnTermination}'
@@ -2945,8 +3016,8 @@ IID=$(aws ec2 describe-instances --filters Name=tag:Name,Values=pokeclip-media-d
      --filters Name=tag:Name,Values=pokeclip-media-demo \
      --query 'Images[].ImageId' --output text
    ```
-7. 상자의 비밀 파기 — `.env` · 반영 전 · T `.bak` · 끊긴 R1 · 렌더가 남긴 `.env.next` ·
-   `mediamtx.demo.yml.tmp.*`(인스턴스 종료로 자동이지만 명시한다)
+7. 상자의 비밀 파기 — `.env` · 반영 전 · T `.bak` · 끊긴 R1 · 렌더 · R3′ 가 남긴 `.env.next` ·
+   `mediamtx.demo.yml.tmp.*` · `.ecr-login`(인스턴스 종료로 자동이지만 명시한다)
 8. 노트북의 로컬 리허설 디렉터리(`.env` · 렌더물) 삭제 + **클립보드 비우기**
 9. OBS 플러그인 — 시험 계정의 연결을 해제한다
 10. 저장소 정리 PR — `infra/dev-media/` 와 그 포인터를 지울지 kty 가 정한다
