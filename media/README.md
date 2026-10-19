@@ -27,6 +27,7 @@
 - **→ Clip Service**: 세그먼트 인덱스 — "몇 시 조각이 S3 어디에 있나".
   이게 없으면 클립을 자를 수 없다
 - **← Auth**: 스트림 키 검증
+- **← MediaMTX 송출 인증**: ingest-auth 응답기 — prod 계약은 [`cmd/ingest-auth/CONTRACT.md`](cmd/ingest-auth/CONTRACT.md)
 
 ## 상태
 
