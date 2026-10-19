@@ -9,7 +9,7 @@ variable "region" {
 }
 
 variable "cidr" {
-  description = "prod VPC IPv4 CIDR(/16 부터 /26 까지 — 모듈이 검증)."
+  description = "prod VPC IPv4 CIDR(/16 부터 /25 까지의 네트워크 주소 — 모듈이 검증)."
   type        = string
 }
 

@@ -85,6 +85,9 @@ SCP 가 `rds-db:connect` 를 다시 막으면 계약이 이렇게 바뀝니다. 
     (guard R3).
 *   Terraform 이 만든 SG 에는 AWS 기본 이그레스(전부 허용)가 남지 않으므로,
     필요한 이그레스도 모두 별도 규칙으로 적습니다.
+*   prod VPC 의 모든 자원(RDS · ECS · 상자 등)은 전용 SG 를 지정하고 VPC 기본
+    SG 를 쓰지 않습니다. 기본 SG 는 같은 SG 끼리 전부 허용하고, prod/network 는
+    기본 SG 를 다루지 않습니다.
 
 ## 이름 · IAM 경로 · default_tags
 

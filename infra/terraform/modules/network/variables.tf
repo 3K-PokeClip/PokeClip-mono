@@ -4,13 +4,19 @@ variable "name" {
 }
 
 variable "cidr" {
-  description = "VPC IPv4 CIDR(/16 부터 /26 까지). 네 등분해 퍼블릭 둘 · 프라이빗 둘에 준다."
+  description = "VPC IPv4 CIDR(/16 부터 /25 까지 · 네트워크 주소). 네 등분해 퍼블릭 둘 · 프라이빗 둘에 준다."
   type        = string
 
-  # 네 등분한 서브넷이 AWS 서브넷 최소 크기(/28)보다 작아지지 않게 한다.
+  # 네 등분한 서브넷이 ALB 서브넷 최소 크기(/27)보다 작아지지 않게 한다. 호스트
+  # 비트가 남은 값(네트워크 주소가 아님)은 받지 않는다.
   validation {
-    condition     = try(cidrnetmask(var.cidr) != "" && tonumber(split("/", var.cidr)[1]) >= 16 && tonumber(split("/", var.cidr)[1]) <= 26, false)
-    error_message = "cidr 는 /16 부터 /26 까지의 IPv4 CIDR 이어야 한다."
+    condition = try(
+      cidrnetmask(var.cidr) != "" &&
+      cidrhost(var.cidr, 0) == split("/", var.cidr)[0] &&
+      tonumber(split("/", var.cidr)[1]) >= 16 && tonumber(split("/", var.cidr)[1]) <= 25,
+      false,
+    )
+    error_message = "cidr 는 /16 부터 /25 까지의 IPv4 네트워크 주소 CIDR 이어야 한다(호스트 비트 없음)."
   }
 }
 

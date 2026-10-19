@@ -257,12 +257,40 @@ run "rejects_duplicate_azs" {
   expect_failures = [var.azs]
 }
 
-# 네 등분한 서브넷이 AWS 최소(/28)보다 작아지지 않게 VPC 는 /16 부터 /26 까지만 받는다.
-run "rejects_cidr_smaller_than_slash_26" {
+# 네 등분한 서브넷이 ALB 서브넷 최소(/27)보다 작아지지 않게 VPC 는 /16 부터
+# /25 까지만 받는다. /25 는 경계 — 서브넷이 /27 로 나온다.
+run "accepts_cidr_slash_25" {
   command = plan
 
   variables {
-    cidr = "192.0.2.0/27"
+    cidr = "192.0.2.0/25"
+  }
+
+  assert {
+    condition = (
+      aws_subnet.public["ap-northeast-2a"].cidr_block == "192.0.2.0/27" &&
+      aws_subnet.private["ap-northeast-2c"].cidr_block == "192.0.2.96/27"
+    )
+    error_message = "/25 VPC 의 서브넷이 /27 네 등분이 아니다."
+  }
+}
+
+run "rejects_cidr_slash_26" {
+  command = plan
+
+  variables {
+    cidr = "192.0.2.0/26"
+  }
+
+  expect_failures = [var.cidr]
+}
+
+# 호스트 비트가 남은 값(네트워크 주소가 아님)은 받지 않는다.
+run "rejects_cidr_with_host_bits" {
+  command = plan
+
+  variables {
+    cidr = "192.0.2.5/24"
   }
 
   expect_failures = [var.cidr]

@@ -7,6 +7,8 @@ prod 이미지를 ECR 에 올리고 apex 랜딩을 S3 에 올리는 절차입니
 *   실행자는 kty 입니다. kty 의 IAM 사용자 프로필로 **kty 로컬 터미널**에서
     돌립니다. 에이전트 세션이나 세션의 `!` 로 돌리지 않습니다 — 레지스트리
     호스트 · 버킷 이름에 계정 ID 가 들어 있어 세션 기록에 남습니다.
+    `docker tag` · `docker push` 출력에도 같은 호스트가 찍히므로 터미널
+    출력을 세션 · 문서 · 채팅에 붙여 넣지 않습니다.
 *   쓰기(푸시 · 업로드 · 무효화)마다 실행 직전에 kty 가 승인합니다.
 
 용어:
@@ -82,14 +84,29 @@ docker tag <로컬 이미지> "${registry_host}/pokeclip-prod/<키>:<태그>"
 docker push "${registry_host}/pokeclip-prod/<키>:<태그>"
 ```
 
-nginx 는 빌드 대신 핀 다이제스트로 받아 다시 태그합니다.
+nginx 는 빌드 대신 핀 다이제스트로 받아 다시 태그합니다. 받을 때 Media 상자의
+플랫폼을 꼭 지정합니다 — 핀이 여러 아키텍처를 묶은 인덱스 다이제스트면 한
+변형만 로컬에 받아지고(지정하지 않으면 호스트 것), 다시 태그해 푸시하면 그
+변형 하나만 올라갑니다.
+
+*   `<Media 상자 플랫폼>` 은 `linux/amd64` 또는 `linux/arm64` 입니다. 설계 ·
+    계획에 아직 정해져 있지 않으므로 O7c 전에 `prod/media` 의 인스턴스
+    유형으로 확인해 적습니다.
+*   같은 핀의 다른 변형이 이미 로컬에 있으면 pull 이 「cannot overwrite
+    digest」 로 실패하고 옛 변형이 남습니다. 아래 확인이 그것을 잡습니다 —
+    다르면 푸시하지 않고, 그 로컬 이미지를 지운 뒤 다시 받습니다.
 
 ```shell
-docker pull nginx@<M2 머지본의 핀 다이제스트>
+docker pull --platform <Media 상자 플랫폼> nginx@<M2 머지본의 핀 다이제스트>
+docker image inspect --format '{{.Os}}/{{.Architecture}}' \
+  nginx@<M2 머지본의 핀 다이제스트>   # <Media 상자 플랫폼> 과 같아야 함
 docker tag nginx@<M2 머지본의 핀 다이제스트> \
   "${registry_host}/pokeclip-prod/media-nginx:<태그>"
 docker push "${registry_host}/pokeclip-prod/media-nginx:<태그>"
 ```
+
+푸시한 것은 그 변형 하나의 매니페스트라 다이제스트가 핀과 다릅니다. 기록에는
+푸시 출력의 다이제스트를 씁니다(아래 「기록」).
 
 ### MediaMTX 확인
 
@@ -123,6 +140,13 @@ aws ecr describe-images --region ap-northeast-2 \
 다이제스트는 `prod/platform` · `prod/media` 의 tfvars(추적하지 않음)에
 넣습니다. O7c 의 통과 조건은 푸시한 6종(응답기를 했으면 7종)의 다이제스트가
 모두 기록 · 기입된 것입니다.
+
+푸시가 다 끝나면 로그아웃합니다. `docker login` 은 토큰(12시간)을 Docker
+자격 증명 저장소(설정에 따라 `~/.docker/config.json`)에 남깁니다.
+
+```shell
+docker logout "${registry_host}"
+```
 
 ## 랜딩 업로드(O7f 의 5)
 

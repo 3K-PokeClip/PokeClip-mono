@@ -9,7 +9,11 @@ platform · media · edge 가 이 루트의 출력을 씁니다.
     마다 두되 모두 그 NAT 로 나갑니다.
 *   S3 Gateway 엔드포인트를 프라이빗 라우트 테이블에만 붙입니다.
 *   피어링 · TGW 는 없습니다 — dev VPC 와 SG 참조가 생길 수 없습니다(설계
-    2-3 「네트워크」). VPC 기본 SG 는 다루지 않습니다.
+    2-3 「네트워크」).
+*   VPC 기본 SG 는 다루지 않습니다. 기본 SG 는 같은 SG 끼리 전부 허용하므로,
+    이 VPC 를 쓰는 후속 루트의 모든 자원은 전용 SG 를 지정하고 기본 SG 를
+    쓰지 않습니다([런타임 트랙 계약](/infra/terraform/CONTRACT-runtime.md)
+    「SG 규칙 규약」).
 
 자원 Name 태그는 `pokeclip-prod-<용도>` 입니다(계획 3절 「한 계정 규약」).
 provider 의 `default_tags` 네 키(`TerraformRoot = prod/network`)는 태그를
@@ -20,8 +24,10 @@ provider 의 `default_tags` 네 키(`TerraformRoot = prod/network`)는 태그를
 
 `cidr` · `azs` · `media_az` · `nat_az` 는 기본값이 없습니다.
 `terraform.tfvars.example` 을 `terraform.tfvars`(추적 안 함)로 복사해 채웁니다.
-`cidr` 는 dev 상자 VPC 와 겹치지 않게 고르고, O7a 선행 0(단계 직전 점검)에서
-dev VPC CIDR 을 읽어 확인합니다. 적용은 O7a 의 1(kty 승인)입니다.
+`cidr` 는 `/16` 부터 `/25` 까지의 네트워크 주소입니다 — 네 등분한 서브넷이
+ALB 서브넷 최소인 `/27` 이상이 되게 합니다. dev 상자 VPC 와 겹치지 않게
+고르고, O7a 선행 0(단계 직전 점검)에서 dev VPC CIDR 을 읽어 확인합니다.
+적용은 O7a 의 1(kty 승인)입니다.
 
 백엔드는 `backend.hcl.example` 을 `backend.hcl` 로 복사하고 `bucket`
 자리표시자 `<STATE_BUCKET_PROD>` 를 `pokeclip-tfstate-prod-apne2` 로 고친 뒤
