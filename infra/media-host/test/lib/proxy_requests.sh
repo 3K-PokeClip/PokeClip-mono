@@ -79,23 +79,40 @@ proxy::health_url() {
 #   proxy_dir, proxy_request_seq, proxy_resp_code, proxy_resp_body,
 #   proxy_resp_headers, proxy_resp_label
 # Arguments:
-#   메서드, URL, 본문(없어도 됨 — 있으면 JSON 으로 보낸다).
+#   메서드, URL, 본문(없어도 됨 — 있으면 JSON 으로 보낸다), 요청 대상(없어도
+#   됨 — 있으면 요청 줄에 이 글자를 그대로 싣는다).
 #######################################
 proxy::request() {
-  local method="$1" url="$2" body="${3:-}"
+  local method="$1" url="$2" body="${3:-}" target="${4:-}"
   local -a args
   proxy_request_seq=$((proxy_request_seq + 1))
   proxy_resp_body="${proxy_dir}/resp.${proxy_request_seq}.body"
   proxy_resp_headers="${proxy_dir}/resp.${proxy_request_seq}.headers"
-  proxy_resp_label="${method} :${url#http://127.0.0.1:}"
+  proxy_resp_label="${method} :${url#http://127.0.0.1:}${target}"
+  if [[ "${target}" == http* ]]; then
+    proxy_resp_label="${method} ${target}"
+  fi
   args=(-sS -o "${proxy_resp_body}" -D "${proxy_resp_headers}"
     -w '%{http_code}' --max-time 5 -X "${method}"
     -H "Authorization: Bearer ${PROXY_FAKE_TOKEN}")
   if [[ -n "${body}" ]]; then
     args+=(-H 'Content-Type: application/json' --data-binary "${body}")
   fi
+  if [[ -n "${target}" ]]; then
+    args+=(--request-target "${target}")
+  fi
   proxy_resp_code="$(curl "${args[@]}" "${url}" 2>/dev/null)" || true
   proxy_resp_code="${proxy_resp_code:-000}"
+}
+
+#######################################
+# 요청 대상을 손대지 않고 GET 한다 — curl 이 점 구간을 접거나 % 를 바꾸지
+# 않는다. 절대 URI(http://…)도 그대로 싣는다. 정규화 우회 사례가 쓴다.
+# Arguments:
+#   기준 URL(경로 없이), 요청 대상.
+#######################################
+proxy::get_raw() {
+  proxy::request GET "$1" '' "$2"
 }
 
 #######################################

@@ -371,7 +371,9 @@ test_case_16_log_query() {
 test_case_8_log_queries() {
   local mode status
   scratch="$(mktemp -d "${selftest_root}/case8.XXXXXX")"
-  printf 'GET /%s/index.m3u8\n' "${PROXY_STREAM_ID}" >"${scratch}/nginx-a.log"
+  printf 'GET /%s/index.m3u8\nGET /%s/..%%2f%s/index.m3u8 HTTP/1.1\n%s\n' \
+    "${PROXY_STREAM_ID}" "${PROXY_STREAM_ID}" "${OTHER_STREAM_ID}" \
+    "${ERROR_PROBE_LINE}" >"${scratch}/nginx-a.log"
   printf 'POST /api/ingest/end-signal\n' >"${scratch}/nginx-b.log"
   nginx_log_failures=''
   for mode in fail ok; do

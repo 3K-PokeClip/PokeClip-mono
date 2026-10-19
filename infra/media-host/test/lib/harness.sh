@@ -7,7 +7,8 @@
 # harness::add_reason 으로 남긴다. harness::run_case 가 결과 줄(PASS · FAIL)을
 # 낸다. 판정이 아닌 기록 사례는 harness::run_record 로 돌리고 기록은
 # harness_record_note 에 남긴다(RECORDED). 끝에 harness::summary 가 사례별
-# 결과와 합계를 낸다 — 결과가 없는 사례(누락)도 FAIL 로 센다.
+# 결과와 합계를 낸다 — 결과가 없는 사례(누락)도 FAIL 로 센다. 사례 번호는
+# 계획의 정수 번호이고, 계획에 없는 덧붙임 사례는 「1b」 같은 이름으로 단다.
 #
 # 이 파일은 source 해서 쓴다(실행하지 않는다). bash 3.2 에서도 돈다 — macOS 에
 # timeout 이 없어 상한 시간은 SECONDS 로 직접 잰다.
@@ -18,6 +19,9 @@ harness_record_note=""
 # shellcheck disable=SC2034
 harness_waited_status=0
 harness_case_status=()
+# 덧붙임 사례(번호가 정수가 아님)의 이름과 결과 — 같은 칸끼리 짝이다.
+harness_named_cases=()
+harness_named_status=()
 harness_pass_count=0
 harness_fail_count=0
 harness_recorded_count=0
@@ -48,13 +52,19 @@ harness::clear_reason() {
 #   harness_case_status, harness_pass_count, harness_fail_count,
 #   harness_recorded_count
 # Arguments:
-#   사례 번호, PASS|FAIL|RECORDED, 설명, 원인 · 기록(없어도 됨).
+#   사례 번호(정수) 또는 덧붙임 사례 이름, PASS|FAIL|RECORDED, 설명, 원인 ·
+#   기록(없어도 됨).
 # Outputs:
 #   결과 한 줄을 표준 출력에 쓴다.
 #######################################
 harness::report() {
   local num="$1" status="$2" desc="$3" detail="${4:-}"
-  harness_case_status[num]="${status}"
+  if [[ "${num}" =~ ^[0-9]+$ ]]; then
+    harness_case_status[num]="${status}"
+  else
+    harness_named_cases+=("${num}")
+    harness_named_status+=("${status}")
+  fi
   case "${status}" in
     PASS) harness_pass_count=$((harness_pass_count + 1)) ;;
     RECORDED) harness_recorded_count=$((harness_recorded_count + 1)) ;;
@@ -105,24 +115,51 @@ harness::run_record() {
 }
 
 #######################################
+# 덧붙임 사례 하나의 결과를 낸다(없으면 아무것도 내지 않는다).
+# Globals:
+#   harness_named_cases, harness_named_status
+# Arguments:
+#   사례 이름.
+# Outputs:
+#   결과(PASS|FAIL|RECORDED).
+#######################################
+harness::named_status() {
+  local i
+  for (( i = 0; i < ${#harness_named_cases[@]}; i++ )); do
+    if [[ "${harness_named_cases[i]}" == "$1" ]]; then
+      printf '%s' "${harness_named_status[i]}"
+      return 0
+    fi
+  done
+}
+
+#######################################
 # 사례별 결과와 합계를 낸다.
 # Globals:
 #   harness_case_status, harness_pass_count, harness_fail_count,
 #   harness_recorded_count
 # Arguments:
-#   사례 수(1 부터 이 번호까지 본다).
+#   사례 수(1 부터 이 번호까지 본다), 덧붙임 사례 이름 …(없어도 됨).
 # Outputs:
 #   요약 두 줄을 표준 출력에 쓴다.
 # Returns:
 #   0 실패 0건 / 1 실패 있음.
 #######################################
 harness::summary() {
-  local total="$1" num line="" missing=0
+  local total="$1" num line="" missing=0 name status
+  shift
   for (( num = 1; num <= total; num++ )); do
     if [[ -z "${harness_case_status[num]:-}" ]]; then
       missing=$((missing + 1))
     fi
     line="${line} ${num}=${harness_case_status[num]:-누락}"
+  done
+  for name in "$@"; do
+    status="$(harness::named_status "${name}")"
+    if [[ -z "${status}" ]]; then
+      missing=$((missing + 1))
+    fi
+    line="${line} ${name}=${status:-누락}"
   done
   harness_fail_count=$((harness_fail_count + missing))
   printf '요약: PASS %d · FAIL %d · RECORDED %d\n' "${harness_pass_count}" \

@@ -1,21 +1,23 @@
 #!/usr/bin/env bash
 #
 # 앞단 프록시(nginx) 계약 시험 — 계획 M2 c1 사례 1 ~ 15 와 착수 덧붙임 사례
-# 16 · 17.
+# 16 · 17, c2 리뷰 덧붙임 사례 1b(live 정규화 우회).
 #
 # 시험 compose(test/compose.contract.yml)를 띄운다. mediamtx 자리에는
 # 에코(test/echo)가 서서 망 칸 주인 노릇을 하고(127.0.0.1 의 8888 · 9996 · 9997
 # · 제어면 상류 흉내), nginx 는 prod 와 같은 렌더 함수(test/lib/render.sh —
 # templatefile())로 nginx/nginx.conf.tmpl 에서 만든 설정을 받아 그 망 칸에
 # 붙는다. sidecar 자리는 에코의 사이드카 역할이다. 템플릿 변수 값은
-# test/render_vars.json 하나에서 오고, nginx 이미지 다이제스트도 그 파일의
-# nginx_image_digest 를 쓴다(prod 템플릿과 같은 출처).
+# test/render_vars.json 하나에서 온다. nginx 이미지는 제품 쪽 이미지 핀 정본
+# images.json 의 nginx 항목(저장소 · 멀티 아키텍처 인덱스 다이제스트)을 쓴다 —
+# prod 미러링(O7c)이 pull 하는 것과 같은 출처다.
 #
 # 사례 묶음:
-#   - 1 ~ 12 · 15 · 8: 시험이 compose 를 직접 띄운다(up -d). 15 는
+#   - 1 ~ 12 · 1b · 15 · 8: 시험이 compose 를 직접 띄운다(up -d). 15 는
 #     control_upstream 을 채운 설정으로 nginx 만 다시 만든다. 11 · 12 는 실행
 #     결과에 더해, 그 결과가 기대는 구조(nginx 의 망 칸 · 공개 포트)가 prod
-#     템플릿(compose.yml.tmpl)에도 같은지 본다.
+#     템플릿(compose.yml.tmpl)에도 같은지 본다. 1b 와 4 · 15 의 정규화 우회
+#     확인은 test/lib/normalization_cases.sh, 8 은 test/lib/nginx_log_cases.sh.
 #   - 13 · 14 · 16 · 17: bin/start-media.sh · bin/stop-media.sh 로 띄우고
 #     내린다(test/lib/start_media_cases.sh). 14 는 판정이 아니라 기록이다.
 #
@@ -49,6 +51,10 @@ source "${TEST_DIR}/lib/harness.sh"
 source "${TEST_DIR}/lib/proxy_requests.sh"
 # shellcheck source=lib/start_media_cases.sh
 source "${TEST_DIR}/lib/start_media_cases.sh"
+# shellcheck source=lib/normalization_cases.sh
+source "${TEST_DIR}/lib/normalization_cases.sh"
+# shellcheck source=lib/nginx_log_cases.sh
+source "${TEST_DIR}/lib/nginx_log_cases.sh"
 
 readonly PROJECT='pcbench-edge-proxy'
 readonly CONTRACT_COMPOSE="${TEST_DIR}/compose.contract.yml"
@@ -56,6 +62,7 @@ readonly ECHO_IMAGE='pcbench-edge-proxy/echo:local'
 # 제품 파일(MEDIA_HOST_DIR 기준). 없으면 그 사례가 FAIL 이다.
 readonly NGINX_TEMPLATE_REL='nginx/nginx.conf.tmpl'
 readonly COMPOSE_TEMPLATE_REL='compose.yml.tmpl'
+readonly IMAGES_FILE_REL='images.json'
 # 에코(mediamtx 자리)가 망 칸 안 127.0.0.1 에 더 여는 포트 — 호스트에 게시하지
 # 않는다.
 readonly ECHO_CONTROL_PORT=28190
@@ -72,14 +79,12 @@ env_ready=0
 stack_ready=0
 phase_b_ready=0
 phase_b_reason=""
-# 사례 8 이 셀 nginx 로그를 모으지 못한 단계들(collect_nginx_logs 가 채운다).
-nginx_log_failures=""
 live_port=""
 playback_port=""
 control_port=""
 health_port=""
 health_path=""
-nginx_digest=""
+nginx_image=""
 netns_loaded=0
 netns_status=1
 netns_reason=""
@@ -153,10 +158,9 @@ read_port_var() {
 }
 
 #######################################
-# 시험이 쓰는 템플릿 변수(포트 넷 · 헬스 경로 · nginx 다이제스트)를 읽는다.
+# 시험이 쓰는 템플릿 변수(포트 넷 · 헬스 경로)를 읽는다.
 # Globals:
-#   live_port, playback_port, control_port, health_port, health_path,
-#   nginx_digest
+#   live_port, playback_port, control_port, health_port, health_path
 #######################################
 load_render_vars() {
   local ok=0
@@ -174,16 +178,39 @@ load_render_vars() {
     add_setup_reason 'render_vars.json 의 media_health_path 가 / 로 시작 안 함'
     ok=1
   fi
-  nginx_digest="$(jq -r '.nginx_image_digest // empty' \
-    "${RENDER_VARS_FILE}")" || nginx_digest=""
-  if [[ ! "${nginx_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-    add_setup_reason \
-      'render_vars.json 의 nginx_image_digest 가 sha256 다이제스트가 아님(c2 몫)'
-    ok=1
-  fi
   proxy::configure "${live_port}" "${playback_port}" "${control_port}" \
     "${health_port}" "${health_path}" "${scratch}"
   return "${ok}"
+}
+
+#######################################
+# nginx 이미지 참조(<저장소>@<다이제스트>)를 images.json 의 nginx 항목에서
+# 만든다. 항목의 source 는 <저장소>:<태그>, digest 는 그 태그의 멀티 아키텍처
+# 인덱스 다이제스트다.
+# Globals:
+#   nginx_image
+#######################################
+load_nginx_image() {
+  local file="${MEDIA_HOST_DIR}/${IMAGES_FILE_REL}" src digest
+  local src_re='^[a-z0-9.-]+(/[a-z0-9._-]+)+:[A-Za-z0-9._-]+$'
+  local digest_re='^sha256:[0-9a-f]{64}$'
+  if [[ ! -f "${file}" ]]; then
+    add_setup_reason "${IMAGES_FILE_REL} 없음(c2 몫)"
+    return 1
+  fi
+  src="$(jq -r '.nginx.source // empty' "${file}")" || src=""
+  digest="$(jq -r '.nginx.digest // empty' "${file}")" || digest=""
+  if [[ ! "${src}" =~ ${src_re} ]]; then
+    add_setup_reason \
+      "${IMAGES_FILE_REL} 의 nginx.source 가 <저장소>:<태그> 꼴이 아님"
+    return 1
+  fi
+  if [[ ! "${digest}" =~ ${digest_re} ]]; then
+    add_setup_reason \
+      "${IMAGES_FILE_REL} 의 nginx.digest 가 sha256 다이제스트가 아님"
+    return 1
+  fi
+  nginx_image="${src%:*}@${digest}"
 }
 
 check_tools() {
@@ -254,7 +281,7 @@ render_nginx_conf() {
 
 export_compose_env() {
   export PCBENCH_ECHO_IMAGE="${ECHO_IMAGE}"
-  export PCBENCH_NGINX_IMAGE="nginx@${nginx_digest}"
+  export PCBENCH_NGINX_IMAGE="${nginx_image}"
   export PCBENCH_NGINX_CONF="${scratch}/nginx-a.conf"
   export PCBENCH_LIVE_PORT="${live_port}"
   export PCBENCH_PLAYBACK_PORT="${playback_port}"
@@ -293,6 +320,7 @@ setup_stack() {
   local why
   check_tools || return 1
   load_render_vars || true
+  load_nginx_image || true
   build_echo_image || true
   if ! why="$(render_nginx_conf "${RENDER_VARS_FILE}" \
     "${scratch}/nginx-a.conf")"; then
@@ -319,20 +347,6 @@ save_nginx_logs() {
 }
 
 #######################################
-# 사례 8 이 셀 nginx 로그를 모은다. 조회가 실패하면 그 단계를 적어 둔다 —
-# 사례 8 이 실패한 조회의 출력을 로그로 세지 않고 확인 불가로 FAIL 한다.
-# Globals:
-#   nginx_log_failures
-# Arguments:
-#   출력 파일, 단계 이름.
-#######################################
-collect_nginx_logs() {
-  if ! save_nginx_logs "$1"; then
-    nginx_log_failures="${nginx_log_failures:+${nginx_log_failures} · }$2"
-  fi
-}
-
-#######################################
 # 에코의 모든 포트 호출 수 합을 낸다.
 # Outputs:
 #   합(정수).
@@ -344,9 +358,10 @@ echo_calls_total() {
 }
 
 #######################################
-# GET 요청 묶음이 모두 기대 코드이고 에코 호출 수가 늘지 않았는지 본다.
+# GET 요청 묶음이 모두 기대 코드이고 에코 호출 수가 늘지 않았는지 본다. 요청
+# 대상은 손대지 않고 그대로 보낸다(proxy::get_raw).
 # Arguments:
-#   기대 코드, 기준 URL, 경로 · 쿼리 …
+#   기대 코드, 기준 URL, 요청 대상(경로 · 쿼리 또는 절대 URI) …
 #######################################
 expect_blocked_without_upstream() {
   local want="$1" base="$2" before after ok=0 target
@@ -356,7 +371,7 @@ expect_blocked_without_upstream() {
     return 1
   fi
   for target in "$@"; do
-    proxy::request GET "${base}${target}"
+    proxy::get_raw "${base}" "${target}"
     proxy::expect_code "${want}" || ok=1
   done
   if ! after="$(echo_calls_total)"; then
@@ -394,19 +409,26 @@ check_case_3() {
 }
 
 check_case_4() {
-  local id="${PROXY_STREAM_ID}" other="${OTHER_STREAM_ID}" get_query
+  local id="${PROXY_STREAM_ID}" other="${OTHER_STREAM_ID}" get_query ok=0 base
   require_stack || return 1
+  base="$(proxy::base_url playback)"
   get_query="path=${other}&start=2026-10-17T00%3A00%3A00Z&duration=1"
-  expect_blocked_without_upstream 403 "$(proxy::base_url playback)" \
-    "/${id}/list?path=${other}" "/${id}/get?${get_query}&format=mp4"
+  expect_blocked_without_upstream 403 "${base}" \
+    "/${id}/list?path=${other}" "/${id}/get?${get_query}&format=mp4" || ok=1
+  normalization::check_playback "${base}" "${id}" "${other}" || ok=1
+  return "${ok}"
 }
 
 check_case_5() {
   local id="${PROXY_STREAM_ID}"
   require_stack || return 1
+  # 인코딩한 키(pa%74h)도 중복이다 — MediaMTX 는 키를 풀어 읽으므로 pa%74h 도
+  # path 이고, 첫 값(다른 번호)을 쓴다. 값 없는 path 도 빈 값의 path 다.
   expect_blocked_without_upstream 403 "$(proxy::base_url playback)" \
     "/${id}/list" "/${id}/list?path=" "/${id}/list?path=${id}&path=${id}" \
-    "/${id}/list?path=${id}&path=${OTHER_STREAM_ID}"
+    "/${id}/list?path=${id}&path=${OTHER_STREAM_ID}" \
+    "/${id}/list?pa%74h=${OTHER_STREAM_ID}&path=${id}" \
+    "/${id}/list?path&path=${id}" "/${id}/list?path=${id}&path"
 }
 
 check_case_6() {
@@ -450,6 +472,12 @@ check_case_7() {
     ok=1
   fi
   return "${ok}"
+}
+
+check_case_1b() {
+  require_stack || return 1
+  normalization::check_live "$(proxy::base_url live)" "${PROXY_STREAM_ID}" \
+    "${OTHER_STREAM_ID}"
 }
 
 check_case_9() { require_stack && proxy::check_health; }
@@ -691,59 +719,7 @@ check_case_15() {
   # 상류를 채워도 제어면 포트의 그 밖 경로는 404 다(관리 API 를 열지 않는다).
   proxy::request GET "${base}/v3/paths/list"
   proxy::expect_code 404 || ok=1
-  return "${ok}"
-}
-
-#######################################
-# nginx 로그(사례 1 · 7 단계 + 사례 15 단계)와 에코 로그에서 시험 토큰을 센다.
-# 접근 로그가 실제로 모였는지(양성 대조)부터 본다 — 비어 있으면 0건은 거짓
-# 통과다. 로그 조회가 실패했으면 세지 않고 확인 불가로 FAIL 한다.
-# Globals:
-#   nginx_log_failures
-#######################################
-check_case_8() {
-  local ok=0 log_a="${scratch}/nginx-a.log" log_b="${scratch}/nginx-b.log"
-  local echo_log="${scratch}/echo.log" n seen token="${PROXY_FAKE_TOKEN}"
-  if [[ -n "${nginx_log_failures}" ]]; then
-    harness::add_reason \
-      "nginx 로그 조회 실패(${nginx_log_failures}) — 확인 불가"
-    return 1
-  fi
-  if [[ ! -s "${log_a}" ]]; then
-    harness::add_reason "사례 1 · 7 단계 nginx 로그 없음 — \
-${setup_reason:-${phase_b_reason:-로그 비어 있음}}"
-    return 1
-  fi
-  seen="$(harness::count_fixed "/${PROXY_STREAM_ID}/index.m3u8" "${log_a}")"
-  if (( seen == 0 )); then
-    harness::add_reason '접근 로그에 사례 1 요청 줄이 없음(docker 로그 아님)'
-    ok=1
-  fi
-  n="$(harness::count_fixed "${token}" "${log_a}")"
-  if [[ -s "${log_b}" ]]; then
-    seen="$(harness::count_fixed '/api/ingest/end-signal' "${log_b}")"
-    if (( seen == 0 )); then
-      harness::add_reason '접근 로그에 사례 15 요청 줄이 없음'
-      ok=1
-    fi
-    n=$((n + $(harness::count_fixed "${token}" "${log_b}")))
-  else
-    harness::add_reason \
-      "사례 15 단계 nginx 로그 없음 — ${phase_b_reason:-로그 비어 있음}"
-    ok=1
-  fi
-  if (( n != 0 )); then
-    harness::add_reason "nginx 로그에 시험 토큰 ${n}건"
-    ok=1
-  fi
-  if ! bench_compose logs --no-color --no-log-prefix mediamtx \
-    >"${echo_log}" 2>&1; then
-    harness::add_reason '에코 로그 조회 실패 — 확인 불가'
-    ok=1
-  elif [[ "$(harness::count_fixed "${token}" "${echo_log}")" != 0 ]]; then
-    harness::add_reason '에코 로그에 시험 토큰이 있음(대조 오염)'
-    ok=1
-  fi
+  normalization::check_control "${base}" || ok=1
   return "${ok}"
 }
 
@@ -762,9 +738,13 @@ main() {
   harness::run_case 1 'live — 경로 · 쿼리 · Authorization 그대로 8888 로' \
     check_case_1
   harness::run_case 2 'live — /live 접두사를 지우지 않음' check_case_2
+  harness::run_case 1b \
+    'live 정규화 우회 원문 → 400 · 상류 0, LL-HLS 요청은 원문 그대로' \
+    check_case_1b
   harness::run_case 3 'playback — /{id}/list?path={id} 가 9996 /list 로' \
     check_case_3
-  harness::run_case 4 'playback 번호 불일치 → 403 · 상류 호출 0' check_case_4
+  harness::run_case 4 \
+    'playback 번호 불일치 · 정규화 우회 원문 → 403 · 상류 호출 0' check_case_4
   harness::run_case 5 'path 없음 · 빈 값 · 중복 → 403 · 상류 호출 0' check_case_5
   harness::run_case 6 'playback /get — 쿼리 원문 보존' check_case_6
   harness::run_case 7 \
@@ -774,14 +754,17 @@ main() {
     check_case_11
   harness::run_case 12 '다른 bridge 컨테이너에서 8888 · 9996 · 9997 닫힘' \
     check_case_12
+  if (( stack_ready )); then
+    send_error_log_probe || true
+  fi
   switch_control_upstream || true
   harness::run_case 15 \
-    '제어면(상류 = 에코) → 경로 · 메서드 · 본문 · Authorization 그대로' \
-    check_case_15
+    '제어면(상류 = 에코) → 그대로 전달 · 정규화 우회 원문은 400' check_case_15
   if (( phase_b_ready )); then
     collect_nginx_logs "${scratch}/nginx-b.log" '사례 15 단계'
   fi
-  harness::run_case 8 'nginx 로그에 시험 토큰 0건' check_case_8
+  harness::run_case 8 'nginx 로그에 시험 토큰 0건 · 접근 로그 경로는 원문' \
+    check_case_8
   if (( env_ready )); then
     compose_down
   fi
@@ -799,7 +782,7 @@ main() {
   harness::run_case 17 'mediamtx SIGKILL → compose 0 아닌 종료 · 전체 정지' \
     start_media::case_17
 
-  if ! harness::summary "${CASE_COUNT}"; then
+  if ! harness::summary "${CASE_COUNT}" 1b; then
     exit 1
   fi
 }

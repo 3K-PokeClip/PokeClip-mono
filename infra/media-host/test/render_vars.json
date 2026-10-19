@@ -1,7 +1,6 @@
 {
   "control_upstream": "",
   "media_health_path": "/pcbench-edge-proxy-health",
-  "nginx_image_digest": "",
   "proxy_control_port": 28183,
   "proxy_health_port": 28184,
   "proxy_live_port": 28181,

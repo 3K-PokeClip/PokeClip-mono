@@ -7,7 +7,7 @@
 #
 # 값은 모두 실행하는 쪽이 넣는다(빈 값이면 compose 가 멈춘다):
 #   - PCBENCH_ECHO_IMAGE.
-#   - PCBENCH_NGINX_IMAGE — render_vars.json 의 nginx_image_digest.
+#   - PCBENCH_NGINX_IMAGE — images.json 의 nginx 항목(<저장소>@<다이제스트>).
 #   - PCBENCH_NGINX_CONF — 렌더한 nginx 설정.
 #   - PCBENCH_*_PORT — render_vars.json 의 proxy_*_port.
 #   - PCBENCH_ECHO_CONTROL_PORT · PCBENCH_ECHO_ADMIN_PORT.
@@ -51,7 +51,7 @@ services:
 
   # 앞단 프록시 — prod 와 같은 공식 이미지 · 같은 렌더 함수로 만든 설정.
   nginx:
-    image: ${PCBENCH_NGINX_IMAGE:?proxy_contract.sh 가 render_vars.json 에서 넣는다}
+    image: ${PCBENCH_NGINX_IMAGE:?proxy_contract.sh 가 images.json 에서 넣는다}
     network_mode: "service:mediamtx"
     depends_on:
       mediamtx:
