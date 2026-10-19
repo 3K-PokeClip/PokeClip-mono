@@ -1,9 +1,8 @@
 # shellcheck shell=bash
 #
 # 단계 직전 점검 도구의 증거 경로 함수(계획 M17a 「계약」 · 설계 2-3 원칙
-# 11). 점검 도구(scp-recheck.sh · events.sh · M17b collect.sh ·
-# principal-check.sh)는 원본 출력을 이 함수가 돌려준 디렉터리에만 쓴다 —
-# 검사 구현은 여기 한 곳이다.
+# 11). 점검 도구(scp-recheck.sh · events.sh · principal-check.sh)는 원본
+# 출력을 이 함수가 돌려준 디렉터리에만 쓴다 — 검사 구현은 여기 한 곳이다.
 #
 # 고정 루트는 $HOME/.pokeclip-precheck 이고 인자 · 전용 환경 변수로 바꿀 수
 # 없다. 루트가 HOME 에서 나오므로 HOME 을 바꾸면 루트도 바뀐다(시험이 이를
@@ -16,8 +15,8 @@
 #   - 디렉터리가 0700 이 아님.
 #
 # 이름 규약: 하위 디렉터리 이름은 도구 접두로 시작해 도구끼리 겹치지 않게
-# 한다 — scp-recheck.sh 는 scp-<묶음>, events.sh 는 events, M17b 는
-# collect-<단계> 꼴. 앞 결과를 찾는 쪽도 자기 접두만 본다.
+# 한다 — scp-recheck.sh 는 scp-<묶음>, events.sh 는 events,
+# principal-check.sh 는 principal-<단계> 꼴. 앞 결과를 찾는 쪽도 자기 접두만 본다.
 #
 # 거부 문구에는 절대 경로를 내지 않는다(성공 경로를 알리는 문구와 같은
 # 규칙) — HOME 이나 그 아래 경로는 HOME 접두를 「~」 로 가려 적고, HOME 밖
@@ -35,7 +34,7 @@
 #
 # 사용: source lib/evidence.sh
 #       dir="$(evidence::new_dir <도구 접두>-<이름>)" || exit 2
-#       (예: scp-O7a · collect-O7a — 위 「이름 규약」)
+#       (예: scp-O7a · principal-O7a — 위 「이름 규약」)
 
 readonly EVIDENCE_ROOT_NAME='.pokeclip-precheck'
 # 증거 디렉터리 이름의 앞부분(묶음 이름 등). 「/」 · 「..」 로 루트를 벗어나지
