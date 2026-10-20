@@ -2131,3 +2131,167 @@ Homebrew `revision`이 비슷한 구분이다 — 다만 그 관례들은 상류
 6. `segment_indexed`의 `reason` 분포에 `5`(훅)가 남아 있는지 본다 — 사라졌으면 훅이 안 도는 것이다.
 7. 이상이 있으면 `HOOK_SPOOL_PATH`를 빈 값으로 두고 사이드카만 재기동해 즉시 롤백한다.
    그 상태로도 인덱싱은 정상이고, 재접속 검출만 현행 수준으로 돌아간다.
+
+## 로컬 ② 정리기(janitor) 운영 (POK-170)
+
+janitor 는 업로드가 끝난 ② 로컬 녹화 파일을 지우고 장부 행의 `local_path` 를
+NULL 로 바꾼다. 행은 남는다. 삭제 조건은 인덱스 불변식 2(그레이스 8분 경과 ·
+② uploaded · ③ 컷오프 인지 술어)이고 조각마다 따로 판정한다. 회차의 첫
+조각과 init 재수거 원천은 보호 규칙으로 남긴다.
+
+- 실행 형태: 사이드카와 **같은 이미지**의 다른 명령(`/usr/local/bin/janitor`),
+  compose 서비스 `janitor`. 계정 `10002:10002`(MediaMTX 와 같은 소유자) ·
+  recordings 쓰기 마운트는 janitor 하나 · 사이드카는 `:ro` 그대로.
+- 삭제 순서: 행 잠금(`FOR UPDATE NOWAIT`) → 파일 삭제 → `local_path=NULL` →
+  COMMIT. 잠긴 행은 건너뛰고 다음 주기에 다시 본다.
+- 삭제마다 `segment_local_deleted` INFO 한 줄(stream_id · seq · path ·
+  axis=archive · outcome)이 남는다. 주기 요약은 `janitor_cycle_summary`.
+
+### janitor 끄고 켜는 법
+
+정본 끄기는 스위치다. 저장소 루트 `.env` 에 빈 값을 적고 서비스만 다시
+올린다.
+
+```sh
+# .env
+JANITOR_ENABLED=
+```
+
+```sh
+docker compose up -d --no-deps --no-build janitor
+```
+
+- 꺼지면 `janitor_disabled` WARN 한 줄을 내고 컨테이너는 떠 있는 채 대기한다.
+  DB · 파일은 건드리지 않는다. 다음 `docker compose up -d` 뒤에도 꺼져 있다.
+- 다시 켜려면 그 줄을 지우거나 주석으로 돌리고 같은 명령을 다시 쓴다
+  (미설정이면 compose 가 `true` 로 채운다). `false` · `0` 도 끔이다.
+- `docker compose stop janitor` 는 **일시 정지일 뿐**이다. 다음 `up -d` 에서
+  다시 켜진다.
+- 확인한 실행 기록: 전용 compose 프로젝트에서 janitor 만 띄워
+  빈 값 → `janitor_disabled` · 미설정 → `janitor_started` · 다시 빈 값 →
+  `janitor_disabled` 를 봤다(2026-10-20, POK-371 실험 기록
+  `readme-switch.txt`).
+
+### 스키마 이행 배포 때 janitor 끄기
+
+사이드카 기동마다 도는 `EnsureSchema` 가 컬럼 · 제약을 실제로 더하는
+배포(스키마 이행)에서는, 그 잠금과 janitor 의 행 잠금이 드물게 교착할 수
+있다. 교착에서 사이드카 쪽이 희생되면 사이드카가 재기동해 다시 시도한다.
+피하려면 이렇게 배포한다(한계 L26).
+
+1. `.env` 에 `JANITOR_ENABLED=` 를 적고
+   `docker compose up -d --no-deps --no-build janitor`.
+   로그에 `janitor_disabled` 가 나온 것을 본다.
+1. 사이드카를 새 판으로 올린다. 두 서비스는 같은 Dockerfile 이지만 이미지가
+   따로라, janitor 이미지도 이 단계에서 함께 빌드해 둔다(마지막 단계의
+   `--no-build` 는 이미 빌드한 이미지를 쓴다).
+
+    ```sh
+    docker compose build segment-indexer janitor
+    STARTED=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    docker compose up -d --no-deps --no-build segment-indexer
+    ```
+
+   빌드만으로는 떠 있는 사이드카가 바뀌지 않는다 — `up -d` 가 새 이미지로
+   사이드카를 다시 만들어야 기동 때 `EnsureSchema` 가 돈다. `--no-deps` 는
+   postgres · mediamtx 를 다시 만들지 않게 한다.
+1. 이행 성공을 확인한다 — **이번 기동 뒤** 사이드카 로그에 `schema_ensured`
+   INFO 가 있어야 한다(`ENSURE_SCHEMA=true` 인 로컬 compose 기준). 옛 기동의
+   줄에 속지 않도록 위에서 적어 둔 기동 시각 이후만 본다.
+
+    ```sh
+    docker compose logs --since "$STARTED" segment-indexer | grep schema_ensured
+    ```
+
+1. 확인한 뒤에만 `.env` 의 그 줄을 지우고
+   `docker compose up -d --no-deps --no-build janitor`.
+   로그에 `janitor_started` 가 나온다.
+
+이행이 없는 평소 배포에는 끌 필요가 없다.
+
+### janitor 게이지 7종
+
+게이지는 켜질 때(value=1)와 꺼질 때(value=0) 같은 등급으로 한 줄씩 낸다.
+기동하면 7종 모두 `value=0 reason=startup` 을 먼저 낸다(이 run_id 이전 값을
+모두 0 으로 본다는 뜻). `LOG_LEVEL=warn` 으로 모아도 켜짐 · 꺼짐이 둘 다
+보인다.
+
+| 게이지 | 등급 | 켜짐 | 먼저 볼 것 |
+|---|---|---|---|
+| `janitor_delete_failing` | ERROR | 삭제 실패(권한 · 읽기 전용 · 경로 거부)로 건너뛴 행이 있음 — items · sample | sample 행의 파일 소유 · 마운트 rw · `janitor_path_rejected` |
+| `janitor_cycle_failing` | ERROR | 주기가 DB 오류로 중단됨 — reason · SQLSTATE · stage | DB 연결 · `statement_timeout` · 잠금 대기 |
+| `janitor_cutoff_invalid` | ERROR | 가리키는 행이 없는 컷오프 — 그 스트림 삭제 정지(stream_id 별) | `stream_cutoffs` 와 `stream_segments` 대조 |
+| `janitor_backlog_capped` | WARN | 한 주기 상한(`JANITOR_MAX_PER_CYCLE`)에 닿고도 남은 후보가 있음 | 일시적이면 정상. 계속되면 상한 · 주기 조정 |
+| `janitor_volume_suspect` | ERROR | 지웠어야 할 파일이 이미 없는 젊은 행이 3개 이상 — 다른 볼륨이 붙었을 수 있음 | 마운트된 볼륨이 MediaMTX 와 같은지 · sample 경로 |
+| `janitor_fs_suspended` | ERROR | 파일 삭제가 멈춰(stall) 파일 작업을 보류 중 — hold · stall_streak | 녹화 디스크 · 마운트 상태(`fs_op_stalled`) |
+| `janitor_reclaim_blocked` | ERROR | 삭제 뒤 장부 갱신을 못 한 행(부채)을 계속 못 갚음 — 새 삭제가 멈춘 상태 | 아래 절 |
+
+### janitor_reclaim_blocked 대응
+
+janitor 는 파일을 지운 뒤 장부 갱신에 실패한 행을 「부채」로 들고, 갚기
+전에는 새 파일을 지우지 않는다(장부와 파일이 2개 이상 어긋나지 않게).
+`janitor_reclaim_blocked` 는 그 부채를 계속 못 갚는다는 뜻이다. 줄에
+`kind` · `stream_id` · `seq` · `path` · `failures` 가 실린다.
+
+- `kind=deleted`(10회 연속 실패) — 대개 다른 세션이 그 행을 오래 쥐고 있다.
+  그 표를 잠근 세션을 찾는다.
+
+    ```sql
+    SELECT a.pid, a.application_name, a.state,
+           date_trunc('second', now() - a.xact_start) AS xact_age,
+           l.mode, left(a.query, 60) AS query
+      FROM pg_locks l JOIN pg_stat_activity a USING (pid)
+     WHERE l.relation = 'stream_segments'::regclass
+       AND a.pid <> pg_backend_pid()
+     ORDER BY a.xact_start;
+    ```
+
+    오래된 트랜잭션(`xact_age` 가 큰 세션)이 원인이면 그 작업을 끝낸다.
+    풀리면 다음 주기에 부채를 갚고 게이지가 꺼지며 삭제가 다시 돈다.
+- `kind=maybe`(3회 연속 stall) — 파일 삭제 자체가 멈춘다. `janitor_fs_suspended`
+  · `fs_op_stalled` 와 함께 녹화 디스크를 본다.
+- 그동안 디스크는 MediaMTX 의 24시간 정리(`recordDeleteAfter`)가 상한을 지킨다.
+
+### DB 요구 — PostgreSQL 17 이상 · 계정 · TLS
+
+- **PostgreSQL 17 이상**이어야 한다. janitor 는 행 잠금 트랜잭션에
+  `transaction_timeout`(17 에서 생김) 8초를 걸어 잠금 보유 시간을 묶는다.
+  17 미만이면 `janitor_pg_version_unsupported` ERROR(server_version_num ·
+  required=170000)를 내고 종료 코드 1 로 끝난다 — compose 는
+  `restart: unless-stopped` 라 기동 거부를 되풀이한다.
+- **운영 계정 `media_janitor` 권한**은 이것만 준다. janitor 의 장부 질의가 이
+  권한 안에서 도는지는 실 PG 시험이 잰다
+  (`internal/index/local_cleanup_role_pg_test.go`).
+
+    ```sql
+    GRANT SELECT ON stream_segments, stream_sessions, stream_cutoffs TO media_janitor;
+    GRANT UPDATE (local_path) ON stream_segments TO media_janitor;
+    ```
+
+    권한은 janitor 를 켜기 **전에** 준다. `UPDATE (local_path)` 가 없으면 행
+    잠금(`SELECT … FOR UPDATE NOWAIT`) 단계에서 42501 로 막혀 파일을 지우지 않고
+    매 주기 실패한다(`janitor_cycle_failing`). 지운 뒤 장부를 못 고쳐 부채가 되는
+    것은 잠금은 되는데 갱신 문장이 그 밖의 열을 건드릴 때다(시험 변이 VT3-3).
+- **로컬 compose 의 한계**: 로컬 janitor 는 `POSTGRES_USER`(DB 소유자 계정)로
+  붙는다. 최소 권한 경계는 로컬 실행으로는 확인되지 않는다 — 위 시험이 그
+  몫이다.
+- **운영 DSN 은 `POSTGRES_SSLMODE=require` 이상**(`verify-ca` · `verify-full`)
+  으로 둔다. 기본 `prefer` 는 TLS 를 못 쓰면 평문으로 내려간다. `require` 로
+  두면 TLS 를 받지 않는 서버에는 붙지 않고 기동 오류(`janitor_failed`)로
+  끝난다(2026-10-20 실행 확인 — 실험 기록 `c9-sslmode.txt`).
+
+### janitor 환경 변수
+
+| 변수 | 기본 | 범위 · 뜻 |
+|---|---|---|
+| `JANITOR_ENABLED` | compose 가 `true` 로 채움 | 참 값(`true` · `1` · `t` 등) = 실행. 빈 값 · 거짓 값(`false` · `0` · `f` 등) = 대기. 해석할 수 없는 값(예: `yes`)만 기동 거부 |
+| `JANITOR_INTERVAL` | `30s` | 주기. 1초 이상 |
+| `JANITOR_GRACE` | `8m` | 업로드 확정 뒤 기다리는 시간. 8분 미만은 기동 거부 |
+| `JANITOR_RECONNECT_WINDOW` | `300s` | 첫 조각 보호의 재접속 창. 300초 미만 거부 — 사이드카 재접속 창과 같아야 한다 |
+| `JANITOR_RECORD_DELETE_AFTER` | `24h` | MediaMTX `recordDeleteAfter` 와 맞춘다. 2시간 미만 거부 |
+| `JANITOR_BATCH` | `200` | 한 번에 읽는 행. 10000 이하 · `JANITOR_MAX_PER_CYCLE` 이하 |
+| `JANITOR_MAX_PER_CYCLE` | `2000` | 한 주기에 살펴보는 행 상한. 100000 이하 |
+| `FS_OP_TIMEOUT` | `5s` | 파일 작업 한 번의 상한. 100ms 이상 6초 이하 |
+| `POSTGRES_*` · `SEGMENT_ROOT` · `LOG_LEVEL` | 사이드카와 같음 | 위 사이드카 표 참조 |
+
+알려진 한계(L1~L33) 전문은 PR 본문 「알려진 한계」에 있다.
