@@ -72,12 +72,22 @@ normalization::check_live_rejected() {
 
 #######################################
 # 사례 1b 의 통과 쪽 — LL-HLS 블로킹 쿼리 · 조각 · 파트 · init 요청이 200 이고
-# 상류(8888)가 받은 요청 대상이 보낸 원문과 같다.
+# 상류(8888)가 받은 요청 대상이 보낸 원문과 같다. 정상 경로를 절대 URI 로
+# 보내도 200 이고 상류는 그 경로 · 쿼리를 받는다(우회 원문의 절대 URI 만 막는
+# 것을 보인다 — 과차단 대조).
 # Arguments:
 #   live 기준 URL, 번호.
 #######################################
 normalization::check_live_passed() {
   local base="$1" id="$2" ok=0 target
+  local query="/${id}/index.m3u8?_HLS_msn=12&_HLS_part=3"
+  proxy::get_raw "${base}" "${base}${query}"
+  if proxy::expect_code 200; then
+    proxy::expect_field .listener '127.0.0.1:8888' '상류' || ok=1
+    proxy::expect_field .request_uri "${query}" '요청 대상' || ok=1
+  else
+    ok=1
+  fi
   for target in \
     "/${id}/index.m3u8?_HLS_msn=12&_HLS_part=3" \
     "/live/${id}/video1_stream.m3u8?_HLS_msn=12&_HLS_part=3&_HLS_skip=YES" \

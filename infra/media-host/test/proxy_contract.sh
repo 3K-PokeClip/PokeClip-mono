@@ -658,6 +658,11 @@ check_case_15() {
   # 상류를 채워도 제어면 포트의 그 밖 경로는 404 다(관리 API 를 열지 않는다).
   proxy::request GET "${base}/v3/paths/list"
   proxy::expect_code 404 || ok=1
+  # 끝 슬래시 없는 허용 접두사는 nginx 가 301 로 돌린다 — Location 이 상대
+  # 경로여야 nginx 의 듣기 포트 · http 가 바깥 응답에 실리지 않는다.
+  proxy::request GET "${base}/api/ingest"
+  proxy::expect_code 301 || ok=1
+  proxy::expect_location /api/ingest/ || ok=1
   normalization::check_control "${base}" || ok=1
   return "${ok}"
 }

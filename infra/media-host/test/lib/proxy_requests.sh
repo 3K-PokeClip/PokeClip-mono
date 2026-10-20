@@ -188,6 +188,24 @@ proxy::expect_no_cache_control() {
 }
 
 #######################################
+# 마지막 응답의 Location 머리가 기대값과 같은지 본다.
+# Globals:
+#   proxy_resp_headers, proxy_resp_label
+# Arguments:
+#   기대 Location.
+#######################################
+proxy::expect_location() {
+  local got
+  got="$(awk 'tolower($1) == "location:" { sub(/\r$/, ""); print $2 }' \
+    "${proxy_resp_headers}" 2>/dev/null)" || got=""
+  if [[ "${got}" != "$1" ]]; then
+    harness::add_reason \
+      "${proxy_resp_label}: Location 기대 '$1' · 실제 '${got:-없음}'"
+    return 1
+  fi
+}
+
+#######################################
 # 사례 1 의 본체: live 포트 GET 이 경로 · 쿼리 · 메서드 · Authorization 을
 # 그대로 127.0.0.1:8888 에 넘기는지 본다(사례 13 이 재기동 전후로 다시 쓴다).
 #######################################
