@@ -66,7 +66,7 @@ func TestAssembledValuesHideSecrets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Setup: loadServeConfig returned error: %v", err)
 	}
-	mtx, err := newControlClient(getenv)
+	mtx, err := newControlClient(getenv, newSecret(testAPIPass))
 	if err != nil {
 		t.Fatalf("Setup: newControlClient returned error: %v", err)
 	}

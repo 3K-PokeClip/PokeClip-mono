@@ -23,7 +23,8 @@ var runVariables = []string{
 
 // runConfigFailure 는 env 로 run 을 돌려 설정 오류로 끝나는지 본다 — 종료 2 · stderr 에 name · 기동 로그 없음 ·
 // 비밀 카나리아와 extra 없음. 검사를 빠뜨린 변이가 리스너를 열어도 시험이 멈추지 않게 run 의 ctx 에 5초 상한을 둔다.
-func runConfigFailure(t *testing.T, args []string, env map[string]string, name string, extra ...string) {
+// stderr 를 돌려준다 — 원인 문구를 더 보는 시험이 쓴다.
+func runConfigFailure(t *testing.T, args []string, env map[string]string, name string, extra ...string) string {
 	t.Helper()
 	keepDefaultLogger(t)
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
@@ -40,6 +41,7 @@ func runConfigFailure(t *testing.T, args []string, env map[string]string, name s
 		t.Errorf("run(%q) logged ingestauth_started despite the configuration error", args)
 	}
 	checkNoSecrets(t, []string{stdout.String(), stderr.String()}, extra...)
+	return stderr.String()
 }
 
 func TestRunRequiresEveryVariable(t *testing.T) {
@@ -121,7 +123,7 @@ func TestNewResolverReportsHostKindAndPort(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			env := configEnv()
 			env["STREAM_KEY_RESOLVE_URL"] = tc.url
-			_, got, err := newResolver(getenvFrom(env))
+			_, got, err := newResolver(getenvFrom(env), newSecret(testResolveToken))
 			if err != nil {
 				t.Fatalf("newResolver(%s) returned error: %v", tc.name, err)
 			}

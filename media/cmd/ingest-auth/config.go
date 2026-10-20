@@ -12,7 +12,8 @@ import (
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/mtxctl"
 )
 
-// 환경 변수 이름이다(설계 2-6 변수표 — LOG_LEVEL 만 선택이고 표 밖이다). 값은 어떤 에러 · 로그에도 싣지 않는다.
+// 환경 변수 이름이다(설계 2-6 변수표 — LOG_LEVEL 만 선택이고 표 밖이다). 값은 어떤 에러 · 로그에도 싣지 않는다. 비밀
+// (MTX_API_PASS · STREAM_KEY_RESOLVE_TOKEN)은 이름 뒤에 _FILE 을 붙인 변수로 파일 경로를 줘도 된다(resolveSecret).
 const (
 	envListen       = "INGEST_AUTH_LISTEN"
 	envCallerIP     = "INGEST_AUTH_CALLER_IP"
@@ -91,29 +92,29 @@ func logLevel(raw string) (slog.Level, error) {
 	return level, nil
 }
 
-// newControlClient 는 MTX_API_URL · MTX_API_USER · MTX_API_PASS 로 Control API 클라이언트를 만든다. MTX_API_URL 은 http
-// 만 받는다 — 제어망 평문이 설계 값이다(설계 0절 내부 구간 · 2-6). 그 밖의 검사(IP 리터럴 호스트 · 경로 · 사용자 정보
-// 없음 · 자격)는 mtxctl.NewClient 가 한다.
-func newControlClient(getenv func(string) string) (*mtxctl.Client, error) {
-	if err := requireSet(getenv, envMTXAPIURL, envMTXAPIUser, envMTXAPIPass); err != nil {
+// newControlClient 는 MTX_API_URL · MTX_API_USER 와 이미 읽은 Control API 비번 pass(MTX_API_PASS — resolveSecret)로 Control
+// API 클라이언트를 만든다. MTX_API_URL 은 http 만 받는다 — 제어망 평문이 설계 값이다(설계 0절 내부 구간 · 2-6). 그 밖의
+// 검사(IP 리터럴 호스트 · 경로 · 사용자 정보 없음 · 자격)는 mtxctl.NewClient 가 한다.
+func newControlClient(getenv func(string) string, pass secret) (*mtxctl.Client, error) {
+	if err := requireSet(getenv, envMTXAPIURL, envMTXAPIUser); err != nil {
 		return nil, err
 	}
 	raw := getenv(envMTXAPIURL)
 	if u, err := url.Parse(raw); err != nil || u.Scheme != "http" {
 		return nil, fmt.Errorf("%s 는 http URL 이어야 한다", envMTXAPIURL)
 	}
-	c, err := mtxctl.NewClient(mtxctl.Options{APIURL: raw, User: getenv(envMTXAPIUser), Pass: mtxctl.NewSecret(getenv(envMTXAPIPass))})
+	c, err := mtxctl.NewClient(mtxctl.Options{APIURL: raw, User: getenv(envMTXAPIUser), Pass: mtxctl.NewSecret(pass.reveal())})
 	if err != nil {
 		return nil, fmt.Errorf("%s · %s · %s: %w", envMTXAPIURL, envMTXAPIUser, envMTXAPIPass, err)
 	}
 	return c, nil
 }
 
-// newResolver 는 STREAM_KEY_RESOLVE_URL · STREAM_KEY_RESOLVE_TOKEN 으로 4C 클라이언트를 만든다. 기동 로그에 실을 4C
-// 끝점의 모습(authTarget)도 돌려준다.
-func newResolver(getenv func(string) string) (*keyresolve.Client, authTarget, error) {
+// newResolver 는 STREAM_KEY_RESOLVE_URL 과 이미 읽은 출입증 token(STREAM_KEY_RESOLVE_TOKEN — resolveSecret)으로 4C
+// 클라이언트를 만든다. 기동 로그에 실을 4C 끝점의 모습(authTarget)도 돌려준다.
+func newResolver(getenv func(string) string, token secret) (*keyresolve.Client, authTarget, error) {
 	raw := getenv(envResolveURL)
-	c, err := keyresolve.NewClient(keyresolve.ClientOptions{BaseURL: raw, Token: keyresolve.NewSecret(getenv(envResolveToken))})
+	c, err := keyresolve.NewClient(keyresolve.ClientOptions{BaseURL: raw, Token: keyresolve.NewSecret(token.reveal())})
 	if err != nil {
 		return nil, authTarget{}, fmt.Errorf("%s · %s: %w", envResolveURL, envResolveToken, err)
 	}

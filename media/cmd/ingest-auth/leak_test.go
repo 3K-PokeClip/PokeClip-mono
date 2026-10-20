@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"encoding/base64"
 	"fmt"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -32,6 +34,8 @@ const (
 	leakRequestToken    = "synthetic-mtx-jwt-leak-0002"
 	leakRequestQuery    = "synthetic-mtx-query-leak-0002"
 	leakAPIUser         = "synthetic-mtx-api-user-leak-0003"
+	// leakPathSecret 은 비밀 값을 `_FILE` 자리에 잘못 넣은 경우의 값이다 — 경로가 곧 비밀이다(계약 3-2).
+	leakPathSecret = "synthetic-path-is-secret-leak-0005"
 )
 
 // leakCanary 는 출력 어디에도 나와서는 안 되는 합성 비밀 하나다. 실패 문구에는 name 만 싣는다.
@@ -52,6 +56,8 @@ var leakCanaries = []leakCanary{
 	{name: "MediaMTX 요청 password", value: leakRequestPassword},
 	{name: "MediaMTX 요청 token", value: leakRequestToken},
 	{name: "MediaMTX 요청 query", value: leakRequestQuery},
+	{name: "비밀 파일 경로", value: secretPathCanary},
+	{name: "경로 자리의 비밀", value: leakPathSecret},
 }
 
 // leakOutput 은 누설을 훑는 출력 자리 하나다. place 는 실패 문구에 싣는 자리 이름이다.
@@ -107,6 +113,36 @@ func leakAPIBody(ip, user, pass string) string {
 		ip, user, pass, leakRequestToken, leakRequestQuery)
 }
 
+// badSecretFileOutputs 는 args 의 하위 명령을 쓸 수 없는 비밀 파일 둘 — 경로 자리에 비밀을 넣음(열기 실패) · other 비트가
+// 있는 파일(열린 뒤의 거부) — 로 돌린 출력 자리다. name 은 비밀 환경 변수 이름이다. 둘 다 설정 오류(2)여야 하고, 그 에러가
+// 변수 이름을 실어야 출력 자리를 지난 것이다(양성 대조).
+func badSecretFileOutputs(t *testing.T, s site, args []string, env map[string]string, name string) []leakOutput {
+	t.Helper()
+	var outputs []leakOutput
+	for _, c := range []struct {
+		place string
+		path  string
+	}{
+		{place: "경로 자리의 비밀", path: "/" + leakPathSecret},
+		{place: "열린 뒤 거부", path: writeSecretFile(t, secretDir(t), "world", testAPIPass+"\n", 0o644)},
+	} {
+		bad := maps.Clone(env)
+		delete(bad, name)
+		bad[name+"_FILE"] = c.path
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+		stdout, stderr := newOutputLog(), newOutputLog()
+		code := run(ctx, s, args, getenvFrom(bad), stdout, stderr)
+		cancel()
+		if code != 2 || !strings.Contains(stderr.String(), name+"_FILE") {
+			t.Errorf("run(%q) with %s as %s_FILE = %d (stderr names it: %t), want 2 naming it", args, c.place, name, code, strings.Contains(stderr.String(), name+"_FILE"))
+		}
+		place := fmt.Sprintf("%q %s_FILE %s", args, name, c.place)
+		outputs = append(outputs, leakOutput{place: place + " stdout", content: stdout.String()},
+			leakOutput{place: place + " stderr", content: stderr.String()})
+	}
+	return outputs
+}
+
 // missingEvents 는 names 가운데 out 에 한 번도 없는 이벤트 이름이다.
 func missingEvents(out string, names ...string) []string {
 	var missing []string
@@ -121,7 +157,9 @@ func missingEvents(out string, names ...string) []string {
 // run 의 한 생애 — 기동 · publish 허용(기록 회전) · 거절 · 본문 해석 실패 · api 행 · 거부 목록의 틀린 줄(healthz 실패 ·
 // 게이지 set · clear) · auth 끊김(판정 불가 · auth 게이지) · 정지 — 의 출력에 비밀이 없다. 요청 본문의 비밀 필드 ·
 // 출입증(환경 변수 → 4C 머리) · API 사용자 · 비번(환경 변수 · api 행 — 허용 행의 user 도 카나리아다) · passphrase(4C
-// 답)가 이 흐름의 입력이다. 거부 목록에는 운영자가 토큰 자리에 출입증을 잘못 붙인 줄을 둔다.
+// 답)가 이 흐름의 입력이다. 거부 목록에는 운영자가 토큰 자리에 출입증을 잘못 붙인 줄을 둔다. 비밀은 파일로 받고(경로의
+// 디렉터리 이름도 카나리아다), 기동 전에 쓸 수 없는 비밀 파일 둘(경로 자리의 비밀 · 열린 뒤 거부)로 실패한 기동의 출력도
+// 훑는다.
 func TestNoSecretsInRunOutputs(t *testing.T) {
 	auth := newFakeAuth(t)
 	s := newTestSite(t, "")
@@ -129,6 +167,15 @@ func TestNoSecretsInRunOutputs(t *testing.T) {
 	env := responderEnv(auth.srv.URL)
 	env["LOG_LEVEL"] = "debug" // DEBUG 이벤트(api 행 허용)까지 훑는다
 	env["MTX_API_USER"] = leakAPIUser
+	keepDefaultLogger(t)
+	var failed []leakOutput
+	for _, v := range secretVariables {
+		failed = append(failed, badSecretFileOutputs(t, s, nil, env, v.name)...)
+	}
+	dir := secretDir(t)
+	for _, v := range secretVariables {
+		useSecretFile(t, env, dir, v.name, v.value+"\n")
+	}
 	r := startResponder(t, s, env)
 	var bodied []int // 본문을 실은 비-2xx 응답의 상태(누설 규칙 3)
 	post := func(body string) (int, string) {
@@ -191,6 +238,7 @@ func TestNoSecretsInRunOutputs(t *testing.T) {
 		{place: "run stderr", content: r.stderr.String()},
 		{place: "healthcheck stderr", content: failStderr + okStderr},
 	}, stateFiles(t, s.connLogDir)...)
+	outputs = append(outputs, failed...)
 	for _, p := range leakProblems(outputs) {
 		t.Error(p)
 	}
@@ -200,10 +248,13 @@ func TestNoSecretsInRunOutputs(t *testing.T) {
 // 자격이 맞을 때만 답하므로(실패를 넣은 갈래도 자격을 본 뒤 500 이다) 끝까지 끊은 cut 과 그 갈래의 500 이 곧 자격이
 // 실린 증거다. 실패는 Control API 의 세 요청 — 목록 · kick · 조회 — 을 하나씩 500 으로 돈다: 그 에러가 cut 의 stderr 로
 // 나가는 자리가 요청마다 따로다(mtxctl 의 상태 에러 반환). 사유 표 전체는 cut_test 가 평문 카나리아로 보고, 여기서는
-// API 사용자와 Basic 자격(base64)까지 훑는다.
+// API 사용자와 Basic 자격(base64)까지 훑는다. Control API 비번은 파일로 받고, 쓸 수 없는 비밀 파일 둘(경로 자리의 비밀 ·
+// 열린 뒤 거부)로 실패한 cut 의 출력도 훑는다.
 func TestNoSecretsInCutOutputs(t *testing.T) {
 	// 기록 갈래는 고정물이 둔다 — 거부 목록에 testToken, 기록과 목록에 그 토큰의 1번 연결.
 	s, m, env := cutFixtureWithAPIUser(t, leakAPIUser)
+	failed := badSecretFileOutputs(t, s, []string{"cut", testToken}, env, "MTX_API_PASS")
+	useSecretFile(t, env, secretDir(t), "MTX_API_PASS", testAPIPass+"\n")
 	m.add(testConnID(2), fakeConn{created: time.Now(), state: "publish", path: testToken})      // 목록 갈래 — 기록에 없다
 	m.add(testConnID(3), fakeConn{created: time.Now().Add(-40 * time.Second), state: "idle"})   // 기록 밖 갈래 — 기록보다 먼저 생겨 30초 넘음
 	m.add(testConnID(4), fakeConn{created: time.Now(), state: "publish", path: testOtherToken}) // 다른 토큰 — 남는다
@@ -222,7 +273,7 @@ func TestNoSecretsInCutOutputs(t *testing.T) {
 			}
 		}
 	}
-	outputs := []leakOutput{{place: "cut stdout (세 갈래)", content: stdout}, {place: "cut stderr (세 갈래)", content: stderr}}
+	outputs := append([]leakOutput{{place: "cut stdout (세 갈래)", content: stdout}, {place: "cut stderr (세 갈래)", content: stderr}}, failed...)
 
 	// 실패 셋. 기록 갈래의 1번 연결은 앞의 cut 이 끊었어도 kick 은 나간다. 조회 실패는 새 송출(5번)을 kick 200 으로
 	// 끊은 뒤의 확인 조회다. 그 요청의 실패가 stderr 에 적혔는지 먼저 본다(양성 대조 — 그 갈래의 에러가 출력 자리를
