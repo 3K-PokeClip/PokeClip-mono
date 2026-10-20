@@ -20,15 +20,20 @@
 #      정확히 한 번)을 채워 tmpfs(RUNTIME_DIR)의 mediamtx.yml(MediaMTX 실행 계정
 #      소유 0400)로, 비밀번호 한 줄을 mtx_api_pass(사이드카 실행 계정 소유
 #      0400)로 둔다. 두 파일 모두 같은 디렉터리의 임시 파일에 다 쓴 뒤에야
-#      rename 한다 — 실행 중인 스택이 보는 옛 파일을 제자리에서 고쳐 쓰지 않고,
-#      중간에 실패하면 둘 다 남기지 않는다. 치환은 bash 내장 문자열 연산으로만
-#      해서 값이 외부 명령의 argv 에 오르지 않는다.
+#      rename 한다 — 실행 중인 스택이 보는 옛 파일을 제자리에서 고쳐 쓰지
+#      않는다. 중간에 실패하면 새 임시 파일은 남기지 않는다(EXIT 트랩). rename
+#      전에 실패하면 이미 있던 두 파일은 그대로 두고, 둘째 rename(mtx_api_pass)
+#      이 실패하면 방금 옮긴 mediamtx.yml 을 지워 짝이 어긋난 설정을 남기지
+#      않는다. 치환은 bash 내장 문자열 연산으로만 해서 값이 외부 명령의 argv 에
+#      오르지 않는다.
 #   5. docker compose up 으로 바뀐다(exec). 출력은 mediamtx · nginx 에만 붙는다
 #      — 둘 중 하나가 끝나면 compose 전체가 끝나고 systemd 가 다시 띄운다.
 #      나머지 서비스(사이드카 등)는 엔진 재시작 정책(on-failure)으로 혼자 다시
 #      뜬다. 컨테이너는 늘 새로 만든다(--force-recreate) — 정지가 compose 를
 #      내리지 못해 남은 컨테이너는 지운 옛 렌더(옛 CDN 비밀 · 옛 API
-#      비밀번호)를 붙들고 있어, 다시 쓰면 새 렌더가 반영되지 않는다.
+#      비밀번호)를 붙들고 있어, 다시 쓰면 새 렌더가 반영되지 않는다. 렌더에서
+#      빠진 서비스(비운 이미지 변수)의 옛 컨테이너도 지운다(--remove-orphans)
+#      — 남으면 옛 비밀을 든 채 같은 망 칸에 붙어 있다.
 #
 # 인자는 받지 않는다. 점검을 건너뛰는 플래그 · 변수는 없다 — 시험은 아래 변수의
 # 값만 바꾼다.
@@ -156,8 +161,13 @@ json_value_slot() {
 json_scan_helpers() {
   local rest="$1" host="$2" stack="" prev=start key1="" hkey="" raw depth
   local in_helpers=0 helpers_seen=0 host_seen=0 matched=0
-  local ws_re='^[[:space:]]+' str_re='^"(([^"\\]|\\.)*)"'
-  local lit_re='^(true|false|null|-?[0-9][0-9.eE+-]*)'
+  local ws_re='^[[:space:]]+'
+  # 문자열 · 숫자는 JSON 문법 그대로다 — 이스케이프는 \" \\ \/ \b \f \n \r \t
+  # \uXXXX 만, 제어 문자는 이스케이프해야만, 숫자는 앞 0 · 빈 소수부 · 빈
+  # 지수가 없다. 그 밖은 형식 오류다(fail closed).
+  local str_re='^"(([^"\\[:cntrl:]]|\\["\\/bfnrt]|\\u[0-9A-Fa-f]{4})*)"'
+  local num_re='-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?'
+  local lit_re="^(true|false|null|${num_re})"
   local LC_ALL=C
   while :; do
     if [[ "${rest}" =~ ${ws_re} ]]; then
@@ -253,7 +263,11 @@ json_scan_helpers() {
 check_docker_config() {
   local host="${ECR_REGISTRY_HOST:-}" config LC_ALL=C
   [[ -n "${host}" && -f "$1" && -r "$1" ]] || return 1
-  config="$(head -c "$((DOCKER_CONFIG_MAX_BYTES + 1))" -- "$1")" || return 1
+  # 끝 줄바꿈도 크기에 넣는다 — 명령 치환이 지우지 않게 표식 글자를 붙였다가
+  # 뗀다.
+  config="$(head -c "$((DOCKER_CONFIG_MAX_BYTES + 1))" -- "$1" && printf x)" \
+    || return 1
+  config="${config%x}"
   (( ${#config} <= DOCKER_CONFIG_MAX_BYTES )) || return 1
   json_scan_helpers "${config}" "${host}"
 }
@@ -293,8 +307,9 @@ run_prereqs() {
 #######################################
 # CDN 비밀을 읽는다. aws CLI 의 text 출력이 붙이는 끝 줄바꿈 하나만 떼고, 값
 # 자체의 끝 줄바꿈은 남겨 둔다(명령 치환이 끝 줄바꿈을 지우지 않게 표식 글자를
-# 붙였다가 뗀다). 쓸 수 없는 값(빈 값 · None · 허용 문자 밖의 글자 — 줄바꿈 ·
-# 공백 · YAML 기호 포함)도 실패다.
+# 붙였다가 뗀다). 값의 NUL 은 bash 변수에서 사라지므로 담기 전에 다른 제어
+# 문자로 바꿔 허용 문자 검사에 걸리게 한다. 쓸 수 없는 값(빈 값 · None · 허용
+# 문자 밖의 글자 — 줄바꿈 · 공백 · YAML 기호 · NUL 포함)도 실패다.
 # Globals:
 #   CDN_SECRET_ARN
 # Outputs:
@@ -303,8 +318,10 @@ run_prereqs() {
 read_cdn_secret() {
   local arn="${CDN_SECRET_ARN:-}" value
   [[ -n "${arn}" ]] || return 1
-  value="$(aws secretsmanager get-secret-value --secret-id "${arn}" \
-    --query SecretString --output text && printf x)" || return 1
+  value="$({ aws secretsmanager get-secret-value --secret-id "${arn}" \
+    --query SecretString --output text && printf x; } \
+    | LC_ALL=C tr '\000' '\001')" || return 1
+  [[ "${value}" == *x ]] || return 1
   value="${value%x}"
   value="${value%$'\n'}"
   if [[ "${value}" == None || ! "${value}" =~ ${SECRET_PATTERN} ]]; then
@@ -514,7 +531,8 @@ main() {
   done
   trap - EXIT INT TERM
   exec docker compose --ansi never -p "${project}" -f "${compose_file}" \
-    up --force-recreate --abort-on-container-exit "${attach[@]}"
+    up --force-recreate --remove-orphans --abort-on-container-exit \
+    "${attach[@]}"
 }
 
 main "$@"

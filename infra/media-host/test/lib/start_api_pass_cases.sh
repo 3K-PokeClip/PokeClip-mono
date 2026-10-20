@@ -146,12 +146,12 @@ api_pass::case_fresh() {
 }
 
 #######################################
-# 사례 32 — 비밀번호를 만들지 못하면(od 실패 · 짧은 값 · 대문자) 기동을 막고
-# RUNTIME_DIR 에 아무것도 남기지 않는다.
+# 사례 32 — 비밀번호를 만들지 못하면(od 실패 · 짧은 값 · 대문자 · 꼴이 맞는
+# 값을 내고도 od 가 실패) 기동을 막고 RUNTIME_DIR 에 아무것도 남기지 않는다.
 #######################################
 api_pass::case_unavailable() {
   local ok=0 mode
-  for mode in fail short upper; do
+  for mode in fail short upper okfail; do
     fixture::new_case
     ln -s -- "${TEST_DIR}/start_fakebin/od" "${fixture_dir}/bin/od"
     fixture::base_env
@@ -167,16 +167,31 @@ api_pass::case_unavailable() {
 }
 
 #######################################
-# 사례 33 — 사이드카 비밀번호 파일 단계가 실패하면(chown 실패 · 대상이
-# 디렉터리 · 소유 값이 숫자가 아님) 기동을 막고, MediaMTX 렌더도 남기지
-# 않는다.
+# 사례 33 — 사이드카 비밀번호 파일 단계가 실패하면(임시 파일 만들기 · 쓰기 ·
+# chown 실패 · 대상이 디렉터리 · 소유 값이 숫자가 아님 · 둘째 rename 실패)
+# 기동을 막고, MediaMTX 렌더도 남기지 않는다. 둘째 rename 이 실패하면 이미
+# 옮긴 mediamtx.yml 을 지운다(짝이 어긋난 설정을 남기지 않는다).
 #######################################
 api_pass::case_install_failure() {
   local ok=0 kind want
-  for kind in chown target owner; do
+  for kind in tmpfile write chown target owner rename; do
     fixture::new_case
     fixture::base_env
     case "${kind}" in
+      tmpfile)
+        want='MEDIA START FAIL render api-pass-tmpfile'
+        api_pass::run_with_fs_failure mktemp "*/.${API_PASS_NAME}.XXXXXX" \
+          || return 1
+        ;;
+      write)
+        want='MEDIA START FAIL render api-pass-write'
+        api_pass::run_with_fs_failure chmod "*/.${API_PASS_NAME}.*" \
+          || return 1
+        ;;
+      rename)
+        want='MEDIA START FAIL render api-pass-rename'
+        api_pass::run_with_fs_failure mv "*/${API_PASS_NAME}" || return 1
+        ;;
       chown)
         want='MEDIA START FAIL render api-pass-chown'
         fixture::run start-media.sh \
@@ -201,6 +216,19 @@ api_pass::case_install_failure() {
     fixture::common_checks || ok=1
   done
   return "${ok}"
+}
+
+#######################################
+# 가짜 파일 명령(start_fakebin/fsfail)을 그 이름으로 PATH 앞에 두고, 마지막
+# 인자가 glob 에 맞을 때만 실패하게 해 시작 스크립트를 돌린다.
+# Globals:
+#   fixture_dir, TEST_DIR
+# Arguments:
+#   명령 이름(mktemp · chmod · mv), 실패시킬 대상 glob.
+#######################################
+api_pass::run_with_fs_failure() {
+  ln -s -- "${TEST_DIR}/start_fakebin/fsfail" "${fixture_dir}/bin/$1"
+  fixture::run start-media.sh "PCBENCH_FAKE_FS_FAIL_GLOB=$2"
 }
 
 #######################################

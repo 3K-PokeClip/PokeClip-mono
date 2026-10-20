@@ -32,11 +32,22 @@ readonly GUARD_HOLD_TIMEOUT=10
 
 #######################################
 # 사례 23 — 허용 문자 밖의 글자가 든 값은 막고, 그 값이 출력 · 기록에 없다.
+# NUL 이 든 값도 막는다(bash 변수에 담기면 NUL 이 사라져 허용 꼴로 보인다).
 # Globals:
 #   fixture_dir
 #######################################
 guard::case_disallowed_values() {
   local ok=0 value leaked
+  fixture::new_case
+  fixture::base_env
+  fixture_value_file="${fixture_dir}.value"
+  printf 'pcbench\000nul-secret' >"${fixture_value_file}"
+  fixture::run start-media.sh PCBENCH_FAKE_AWS_MODE=value \
+    "PCBENCH_FAKE_AWS_VALUE_FILE=${fixture_value_file}" || return 1
+  if ! expect_secret_blocked; then
+    harness::add_reason 'NUL 이 든 값이 막히지 않음'
+    ok=1
+  fi
   for value in "${GUARD_DISALLOWED_VALUES[@]}"; do
     fixture::new_case
     fixture::base_env
@@ -60,8 +71,10 @@ guard::case_disallowed_values() {
 #######################################
 # 사례 24 — config.json 반례: 호스트가 값에만 있음 · credHelpers 가 null 이고
 # 호스트가 최상위 다른 곳 · auths 에만 있음 · 값이 ecr-login 아님 · 이스케이프된
-# 키 · 형식 오류 · 키 중복 · 중첩 · 최상위가 배열 · 값이 객체 · 뒤에 군더더기.
-# 모두 선행 점검 실패다.
+# 키 · 형식 오류 · 키 중복 · 중첩 · 최상위가 배열 · 값이 객체 · 뒤에 군더더기 ·
+# JSON 문법 밖의 숫자(1e+ · 1. · 01) · 문자열 안의 모르는 이스케이프(\q) ·
+# 이스케이프 안 한 제어 문자(줄바꿈 · 탭), 그리고 끝 줄바꿈으로 채워 크기 상한을
+# 넘긴 파일. 모두 선행 점검 실패다.
 # Globals:
 #   fixture_dir
 #######################################
@@ -82,6 +95,15 @@ guard::case_config_counterexamples() {
     "{\"credHelpers\":{\"${h}\":{\"x\":\"ecr-login\"}}}"
     "{\"credHelpers\":{\"${h}\":\"ecr-login\"}} x"
     "{\"credHelpers\":{\"${h}\":\"ecr-login\",}}"
+    "{\"n\":1e+,\"credHelpers\":{\"${h}\":\"ecr-login\"}}"
+    "{\"n\":1.,\"credHelpers\":{\"${h}\":\"ecr-login\"}}"
+    "{\"n\":01,\"credHelpers\":{\"${h}\":\"ecr-login\"}}"
+    "{\"auths\":{\"x\":\"a\\qb\"},\"credHelpers\":{\"${h}\":\
+\"ecr-login\"}}"
+    "{\"auths\":{\"x\":\"a"$'\n'"b\"},\"credHelpers\":{\"${h}\":\
+\"ecr-login\"}}"
+    "{\"auths\":{\"x\":\"a"$'\t'"b\"},\"credHelpers\":{\"${h}\":\
+\"ecr-login\"}}"
   )
   for body in "${bodies[@]}"; do
     n=$((n + 1))
@@ -95,7 +117,29 @@ guard::case_config_counterexamples() {
       ok=1
     fi
   done
+  # 정상 내용 뒤를 끝 줄바꿈으로 채워 상한(65,536바이트)보다 1바이트 크게 —
+  # 명령 치환이 끝 줄바꿈을 지운 뒤 길이를 재면 상한 안으로 보인다.
+  fixture::new_case
+  fixture::base_env
+  path="${fixture_dir}/docker-config/config.json"
+  guard::pad_with_newlines "${path}" 65537
+  fixture::run start-media.sh || return 1
+  if ! expect_prereq_fail "MEDIA PREREQ FAIL docker-config ${path}"; then
+    harness::add_reason '끝 줄바꿈으로 상한을 넘긴 config.json 이 통과함'
+    ok=1
+  fi
   return "${ok}"
+}
+
+#######################################
+# 이미 있는 config.json 뒤에 줄바꿈을 붙여 정한 크기로 만든다.
+# Arguments:
+#   파일, 크기(바이트).
+#######################################
+guard::pad_with_newlines() {
+  local size
+  size="$(wc -c <"$1" | tr -d ' ')"
+  head -c "$(($2 - size))" /dev/zero | tr '\000' '\n' >>"$1"
 }
 
 #######################################

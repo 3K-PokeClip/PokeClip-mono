@@ -5,6 +5,7 @@
 #
 # 시험이 주는 값:
 #   PCBENCH_FAKE_OD_MODE  short(16진 62자) · upper(대문자 16진 64자) ·
+#                         okfail(꼴이 맞는 16진 64자를 내고 종료 1) ·
 #                         fail(종료 1). 기본 fail.
 
 set -euo pipefail
@@ -15,6 +16,10 @@ main() {
   case "${PCBENCH_FAKE_OD_MODE:-fail}" in
     short) printf ' %s\n' "${HEX62}" ;;
     upper) printf ' %s\n' "$(printf '%sFF' "${HEX62}" | tr 'a-f' 'A-F')" ;;
+    okfail)
+      printf ' %sff\n' "${HEX62}"
+      exit 1
+      ;;
     *)
       printf '가짜 od: 실패(시험)\n' >&2
       exit 1

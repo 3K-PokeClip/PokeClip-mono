@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 #
 # 시작 · 정지 스크립트 시험 — 계획 M2 c4 「start_test 단언」 과 착수 덧붙임
-# 「start_test 추가」(MP7 · MP15 · MP16 · MP17 · MP24), 그리고 c6 의 사이드카
-# 관측 자격(기동마다 만드는 API 비밀번호 · 토큰 둘 — 사례 30 – 35 는
+# 「start_test 추가」(restart 를 빠뜨린 서비스 · 렌더 제자리 쓰기 · 중간에 끊긴
+# 렌더의 임시 파일 · down 실패 뒤 렌더 삭제 · 비밀 변수 export), 그리고 c6 의
+# 사이드카 관측 자격(기동마다 만드는 API 비밀번호 · 토큰 둘 — 사례 30 – 35 는
 # lib/start_api_pass_cases.sh).
 #
 # bin/start-media.sh · bin/stop-media.sh 를 빈 환경(env -i)에서 돌린다. PATH 맨
@@ -51,7 +52,7 @@ readonly API_PASS_NAME='mtx_api_pass'
 readonly API_PASS_PATTERN='^[0-9a-f]{64}$'
 # 우회 플래그로 읽힐 문자열(대소문자 무시).
 readonly BYPASS_PATTERN='skip|bypass|no_prereq|prereq=0'
-readonly CASE_COUNT=35
+readonly CASE_COUNT=36
 
 #######################################
 # up 호출 argv 를 한 줄로 낸다(인자 사이 공백). 호출이 하나가 아니면 실패.
@@ -95,10 +96,11 @@ template_no_restart_services() {
 
 #######################################
 # 사례 1 — 성공 갈래: up argv(--force-recreate — 유닛 밖에 남은 컨테이너가 옛
-# 렌더를 붙든 채 재사용되지 않게 · c9) · -p · -f · 렌더 내용 · 권한 · chown argv ·
-# aws argv · 비밀 노출 0 · exec(가짜 docker 가 스크립트와 같은 프로세스) · up 의
-# 종료 코드가 그대로 · docker 가 점검한 DOCKER_CONFIG 를 받음 · chown 순서
-# (그 순간 0400 · 최종 경로 없음) · core 한도 0.
+# 렌더를 붙든 채 재사용되지 않게 · c9 · --remove-orphans — 렌더에서 빠진
+# 서비스의 옛 컨테이너가 같은 망 칸에 남지 않게) · -p · -f · 렌더 내용 · 권한 ·
+# chown argv · aws argv · 비밀 노출 0 · exec(가짜 docker 가 스크립트와 같은
+# 프로세스) · up 의 종료 코드가 그대로 · docker 가 점검한 DOCKER_CONFIG 를 받음 ·
+# chown 순서(그 순간 0400 · 최종 경로 없음) · core 한도 0.
 #######################################
 case_success() {
   local ok=0 argv target expected aws_argv outside up_file n
@@ -114,8 +116,8 @@ $(harness::log_tail "${fixture_dir}/out")"
   up_file="$(fixture::docker_calls up)"
   check_exec_and_env "${up_file}" || ok=1
   expected="compose --ansi never -p ${FIXTURE_PROJECT} -f \
-${fixture_dir}/compose.yml up --force-recreate --abort-on-container-exit \
---attach mediamtx --attach nginx"
+${fixture_dir}/compose.yml up --force-recreate --remove-orphans \
+--abort-on-container-exit --attach mediamtx --attach nginx"
   if [[ "${argv}" != "${expected}" ]]; then
     harness::add_reason "up argv 「${argv}」"
     ok=1
@@ -248,7 +250,8 @@ case_allowed_chars() {
 
 #######################################
 # 사례 3 — 시작 스크립트의 --attach 집합 = 템플릿의 restart "no" 집합, 그리고
-# 템플릿의 모든 서비스가 restart 를 적었다(H2 · MP7).
+# 템플릿의 모든 서비스가 restart 를 적었다 — 뒤에 더한 서비스가 restart 를
+# 빠뜨리면 그 서비스가 죽어도 아무도 다시 띄우지 않는다.
 #######################################
 case_attach_set() {
   local ok=0 attach no_set up_file
@@ -468,7 +471,8 @@ case_no_bypass() {
 
 #######################################
 # 사례 14 — 렌더는 임시 파일 rename 이다. 옛 렌더를 하드링크로 잡아 두면 그
-# inode 의 내용은 기동 뒤에도 그대로다(MP15).
+# inode 의 내용은 기동 뒤에도 그대로다 — 이전 스택이 살아 있는 채 다시 돌아도
+# 실행 중인 MediaMTX 가 보는 파일을 고쳐 쓰지 않는다.
 #######################################
 case_rename_not_overwrite() {
   local ok=0 target
@@ -490,7 +494,7 @@ case_rename_not_overwrite() {
 
 #######################################
 # 사례 15 — chown 이 실패하면 0 아닌 종료 · up 0 · RUNTIME_DIR 에 파일 0(임시
-# 파일을 trap 이 지운다 — MP16).
+# 파일을 trap 이 지운다 — 끊긴 렌더의 비밀 임시 파일이 /run 에 쌓이지 않게).
 #######################################
 case_chown_failure() {
   local ok=0 left
@@ -507,7 +511,8 @@ case_chown_failure() {
   return "${ok}"
 }
 
-# 사례 16 — 0755 로 이미 있는 RUNTIME_DIR 을 0711 로 맞춘다(MP16).
+# 사례 16 — 0755 로 이미 있는 RUNTIME_DIR 을 0711 로 맞춘다(디렉터리 권한을
+# 기동마다 다시 맞춘다).
 case_dir_mode_reset() {
   local mode
   fixture::new_case
@@ -568,7 +573,8 @@ case_stop_default() {
 }
 
 #######################################
-# 사례 18 — down 이 실패해도 렌더를 지우고 down 의 종료 코드를 돌려준다(MP17).
+# 사례 18 — down 이 실패해도 렌더를 지우고 down 의 종료 코드를 돌려준다(비밀이
+# 든 렌더가 남지 않게).
 #######################################
 case_stop_down_failure() {
   local ok=0
@@ -666,6 +672,23 @@ case_secret_multiline() {
   return "${ok}"
 }
 
+#######################################
+# 사례 36 — 시작 스크립트와 운영 확인 부품(bin/lib/ops.sh)의 CDN 비밀 허용 글자
+# 정규식이 바이트까지 같다(정적). 한쪽만 바뀌면 시작은 되는데 운영 확인이
+# 거부하거나 그 반대가 된다.
+#######################################
+case_cdn_pattern_same() {
+  local start ops
+  start="$(sed -n "s/^readonly SECRET_PATTERN='\(.*\)'\$/\1/p" \
+    "${MEDIA_HOST_DIR}/bin/start-media.sh" 2>/dev/null)" || start=""
+  ops="$(sed -n "s/^readonly OPS_CDN_SECRET_PATTERN='\(.*\)'\$/\1/p" \
+    "${MEDIA_HOST_DIR}/bin/lib/ops.sh" 2>/dev/null)" || ops=""
+  if [[ -z "${start}" || "${start}" != "${ops}" ]]; then
+    harness::add_reason "정규식 시작 「${start:-없음}」 · 운영 「${ops:-없음}」"
+    return 1
+  fi
+}
+
 cleanup() {
   local status=$?
   harness::end_last_group
@@ -745,6 +768,8 @@ main() {
   harness::run_case 34 '템플릿 API 토큰 0 · 2개 → 렌더 거부' api_pass::case_token_count
   harness::run_case 35 '상속 export 에도 API 비밀번호 노출 0' \
     api_pass::case_inherited_export
+  harness::run_case 36 'CDN 비밀 허용 글자 정규식 — 시작 = 운영 확인(정적)' \
+    case_cdn_pattern_same
 
   if ! harness::summary "${CASE_COUNT}"; then
     exit 1
