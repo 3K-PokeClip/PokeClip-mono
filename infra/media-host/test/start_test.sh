@@ -94,8 +94,9 @@ template_no_restart_services() {
 }
 
 #######################################
-# 사례 1 — 성공 갈래: up argv · -p · -f · 렌더 내용 · 권한 · chown argv · aws
-# argv · 비밀 노출 0 · exec(가짜 docker 가 스크립트와 같은 프로세스) · up 의
+# 사례 1 — 성공 갈래: up argv(--force-recreate — 유닛 밖에 남은 컨테이너가 옛
+# 렌더를 붙든 채 재사용되지 않게 · c9) · -p · -f · 렌더 내용 · 권한 · chown argv ·
+# aws argv · 비밀 노출 0 · exec(가짜 docker 가 스크립트와 같은 프로세스) · up 의
 # 종료 코드가 그대로 · docker 가 점검한 DOCKER_CONFIG 를 받음 · chown 순서
 # (그 순간 0400 · 최종 경로 없음) · core 한도 0.
 #######################################
@@ -113,8 +114,8 @@ $(harness::log_tail "${fixture_dir}/out")"
   up_file="$(fixture::docker_calls up)"
   check_exec_and_env "${up_file}" || ok=1
   expected="compose --ansi never -p ${FIXTURE_PROJECT} -f \
-${fixture_dir}/compose.yml up --abort-on-container-exit --attach mediamtx \
---attach nginx"
+${fixture_dir}/compose.yml up --force-recreate --abort-on-container-exit \
+--attach mediamtx --attach nginx"
   if [[ "${argv}" != "${expected}" ]]; then
     harness::add_reason "up argv 「${argv}」"
     ok=1
@@ -688,7 +689,7 @@ main() {
   # 실패한다.
   ulimit -S -c unlimited 2>/dev/null || true
 
-  harness::run_case 1 '성공 — up argv · 렌더 0400 · chown · 비밀 노출 0' \
+  harness::run_case 1 '성공 — up argv(재생성) · 렌더 0400 · chown · 비밀 노출 0' \
     case_success
   harness::run_case 2 '허용 문자 전부를 글자 그대로 렌더' case_allowed_chars
   harness::run_case 3 '--attach 집합 = 템플릿 restart "no" 집합' case_attach_set

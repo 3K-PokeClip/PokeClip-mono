@@ -26,7 +26,9 @@
 #   5. docker compose up 으로 바뀐다(exec). 출력은 mediamtx · nginx 에만 붙는다
 #      — 둘 중 하나가 끝나면 compose 전체가 끝나고 systemd 가 다시 띄운다.
 #      나머지 서비스(사이드카 등)는 엔진 재시작 정책(on-failure)으로 혼자 다시
-#      뜬다.
+#      뜬다. 컨테이너는 늘 새로 만든다(--force-recreate) — 정지가 compose 를
+#      내리지 못해 남은 컨테이너는 지운 옛 렌더(옛 CDN 비밀 · 옛 API
+#      비밀번호)를 붙들고 있어, 다시 쓰면 새 렌더가 반영되지 않는다.
 #
 # 인자는 받지 않는다. 점검을 건너뛰는 플래그 · 변수는 없다 — 시험은 아래 변수의
 # 값만 바꾼다.
@@ -512,7 +514,7 @@ main() {
   done
   trap - EXIT INT TERM
   exec docker compose --ansi never -p "${project}" -f "${compose_file}" \
-    up --abort-on-container-exit "${attach[@]}"
+    up --force-recreate --abort-on-container-exit "${attach[@]}"
 }
 
 main "$@"

@@ -4,7 +4,7 @@
 # 덧붙임(③ 확장 · ⑥ · ⑦a · ⑦b · ⑧).
 #
 # 사례 1 – 3 은 systemd 없이 돈다(유닛 파일 지시어 · 시험 compose 구성 · 가짜 aws
-# 상태 파일). 사례 4 – 15 는 리눅스 · systemd · sudo 가 있는 곳(infra-ci ubuntu
+# 상태 파일). 사례 4 – 18 은 리눅스 · systemd · sudo 가 있는 곳(infra-ci ubuntu
 # 러너 — kty 70차 Q4)에서만 돈다. 없으면 그 사례들은 FAIL 이다 — 건너뛰는 갈래는
 # 없다.
 #
@@ -19,9 +19,11 @@
 #     FAIL 이다 — prod 상자에서 잘못 돌려도 덮어쓰지 않는다.
 #
 # 사례 번호 ↔ 계획: 6 ① · 7 ② · 8 ⑥ · 9 ⑧ · 10 ③ · 11 ③ 확장 · 12 ④ · 13 ⑦a ·
-# 14 ⑦b · 15 ⑤(정리 · 잔여 0). 동작 사례는 lib/unit_runtime_cases.sh 에 있다.
+# 14 ⑦b · 18 ⑤(정리 · 잔여 0). 동작 사례는 lib/unit_runtime_cases.sh 에 있다.
+# 사례 15 – 17 은 크래시 경로(보안 c7 M-1 — compose 플러그인 · 유닛 cgroup
+# SIGKILL · 유닛 밖에 남은 스택)이고 lib/unit_crash_cases.sh 에 있다.
 #
-# 한 바퀴 약 10분이다. 반복(N=3)은 부르는 쪽(CI)이 이 시험을 여러 번 돌린다.
+# 한 바퀴 약 13분이다. 반복(N=3)은 부르는 쪽(CI)이 이 시험을 여러 번 돌린다.
 #
 # 사용: bash infra/media-host/test/unit_restart_test.sh
 # 종료 코드: 0 전부 통과 / 1 하나라도 실패
@@ -39,6 +41,8 @@ readonly MEDIA_HOST_DIR
 source "${TEST_DIR}/lib/harness.sh"
 # shellcheck source=lib/unit_runtime_cases.sh
 source "${TEST_DIR}/lib/unit_runtime_cases.sh"
+# shellcheck source=lib/unit_crash_cases.sh
+source "${TEST_DIR}/lib/unit_crash_cases.sh"
 
 readonly PROJECT='pcbench-edge-proxy'
 readonly UNIT_NAME='pcbench-edge-proxy'
@@ -63,11 +67,12 @@ readonly FAKE_SECRET='pcbench-edge-proxy-fake-cdn-secret'
 readonly UNIT_BASE_PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin'
 readonly CONFIG_TIMEOUT=60
 readonly SYSTEMCTL_TIMEOUT=120
-readonly CASE_COUNT=15
+readonly CASE_COUNT=18
 
 # prod 유닛 지시어(설명 줄 Description= 은 빼고) — 「절|키=값」 한 줄에 하나.
 # 계획 c7 「c7 유닛」 · 덧붙임 편차 14(Requires · After) · 보안 c4 L6(LimitCORE) ·
-# c7 정지 두 단계(주 프로세스 TERM 뒤 down · SuccessExitStatus=130).
+# c7 정지 두 단계(주 프로세스 TERM 뒤 down · SuccessExitStatus=130) · c9
+# ExecStopPost 도 down(크래시 경로에서 ExecStop 을 건너뛰어도 컨테이너를 내림).
 # shellcheck disable=SC2016 # 유닛 원문 — $ 는 펼치지 않는다.
 readonly EXPECTED_UNIT_LINES='Unit|Requires=docker.service
 Unit|After=docker.service
@@ -80,7 +85,7 @@ Service|Environment=MEDIA_COMPOSE_PROJECT=pokeclip-media
 Service|ExecStart=/opt/pokeclip-media/bin/start-media.sh
 Service|ExecStop=/bin/sh -c '"'"'kill -TERM "$$MAINPID" 2>/dev/null; i=0; while kill -0 "$$MAINPID" 2>/dev/null && [ "$$i" -lt 150 ]; do sleep 0.2; i=$$((i + 1)); done'"'"'
 Service|ExecStop=/opt/pokeclip-media/bin/stop-media.sh
-Service|ExecStopPost=/opt/pokeclip-media/bin/stop-media.sh --cleanup-only
+Service|ExecStopPost=/opt/pokeclip-media/bin/stop-media.sh
 Service|SuccessExitStatus=130
 Service|Restart=always
 Service|RestartSec=20
@@ -498,7 +503,7 @@ check_case_5() {
   done
   for prop in 'ExecStart=path=/opt/pokeclip-media/bin/start-media.sh ' \
     'ExecStop=path=/opt/pokeclip-media/bin/stop-media.sh ' \
-    'ExecStopPost=argv[]=/opt/pokeclip-media/bin/stop-media.sh --cleanup-only '
+    'ExecStopPost=argv[]=/opt/pokeclip-media/bin/stop-media.sh ;'
   do
     got="$(unit::prop "${prop%%=*}")"
     if [[ "${got}" != *"${prop#*=}"* ]]; then
@@ -519,9 +524,9 @@ check_case_5() {
 }
 
 #######################################
-# 사례 15 — ⑤ 정리: 유닛 · drop-in · 설치본을 지우고 잔여 0 을 확인한다.
+# 사례 18 — ⑤ 정리: 유닛 · drop-in · 설치본을 지우고 잔여 0 을 확인한다.
 #######################################
-check_case_15() {
+check_case_18() {
   local ok=0 kind n
   require_installed || return 1
   if ! unit::teardown; then
@@ -601,8 +606,14 @@ main() {
     unit::case_docker_restart
   harness::run_case 14 '⑦b dockerd kill -9 → 비부착 자동 시작 0 · 재통과' \
     unit::case_docker_kill
-  harness::run_case 15 '⑤ 정리 — 유닛 · 설치본 · 컨테이너 · 망 · 볼륨 0' \
-    check_case_15
+  harness::run_case 15 '크래시 — compose 플러그인 SIGKILL → 회수 · 새 렌더로 기동' \
+    crash::case_plugin_kill
+  harness::run_case 16 '크래시 — 유닛 cgroup SIGKILL → 회수 · 새 렌더로 기동' \
+    crash::case_cgroup_kill
+  harness::run_case 17 '남은 스택 · 지운 렌더 → 디렉터리 0 · 시작이 새로 만듦' \
+    crash::case_leftover_stack
+  harness::run_case 18 '⑤ 정리 — 유닛 · 설치본 · 컨테이너 · 망 · 볼륨 0' \
+    check_case_18
 
   if [[ -n "${setup_reason}" ]]; then
     printf '준비 경고: %s\n' "${setup_reason}"

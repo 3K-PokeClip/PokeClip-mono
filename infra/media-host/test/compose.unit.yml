@@ -1,10 +1,11 @@
 # 유닛 재기동 시험 compose — unit_restart_test.sh 가 시험 유닛(pcbench-edge-proxy)의
 # MEDIA_COMPOSE_FILE 로 넘기고, 유닛이 bin/start-media.sh 로 띄운다.
 #
-# 서비스 이름 · 망 칸 · 재시작 정책 · cap · 볼륨 읽기 전용 여부 · 로깅은 prod 템플릿
-# (compose.yml.tmpl)과 같게 둔다 — 드리프트 단언이 이름이 같은 서비스끼리 비교하고,
-# 이 파일만 로깅까지 본다(CI 엔진에는 journald 가 있다. 로컬 OrbStack 에는 없어 이
-# 파일은 로컬에서 띄울 수 없다). 다른 점은 이미지와 명령뿐이다:
+# 서비스 이름 · 망 칸 · 재시작 정책 · cap · 볼륨 읽기 전용 여부 · bind 원본 자동
+# 생성 여부 · 로깅은 prod 템플릿(compose.yml.tmpl)과 같게 둔다 — 드리프트 단언이
+# 이름이 같은 서비스끼리 비교하고, 이 파일만 로깅까지 본다(CI 엔진에는 journald 가
+# 있다. 로컬 OrbStack 에는 없어 이 파일은 로컬에서 띄울 수 없다). 다른 점은
+# 이미지와 명령뿐이다:
 #   - mediamtx: 에코(test/echo) — 망 칸 주인 · 종료 제어(관리 포트 POST /exit?code=N).
 #     출력 연결 서비스가 종료를 맡아야 compose 전체가 내려간다(비부착 서비스의
 #     종료는 compose 를 멈추지 않는다).
@@ -55,7 +56,12 @@ services:
       - recordings:/recordings
       - hooks:/hooks
       - dvr:/dvr
-      - ${RUNTIME_DIR:?}/mediamtx.yml:/mediamtx.yml:ro
+      - type: bind
+        source: ${RUNTIME_DIR:?}/mediamtx.yml
+        target: /mediamtx.yml
+        read_only: true
+        bind:
+          create_host_path: false
     logging: *attached-logging
     labels: *bench-labels
 
@@ -94,7 +100,12 @@ services:
     volumes:
       - recordings:/recordings:ro
       - hooks:/hooks:ro
-      - ${RUNTIME_DIR:?}/mtx_api_pass:/run/secrets/mtx_api_pass:ro
+      - type: bind
+        source: ${RUNTIME_DIR:?}/mtx_api_pass
+        target: /run/secrets/mtx_api_pass
+        read_only: true
+        bind:
+          create_host_path: false
     logging:
       driver: journald
       options:

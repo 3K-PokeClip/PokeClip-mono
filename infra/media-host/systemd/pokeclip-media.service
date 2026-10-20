@@ -9,7 +9,8 @@
 #   RDS 가 몇 분 끊겨도 failed 로 굳지 않고, 돌아오면 20초 안에 스스로 뜬다.
 #   그동안 저널에 「MEDIA PREREQ FAIL」 · 「MEDIA START BLOCKED」 가 되풀이된다.
 # - systemctl stop 은 다시 띄우지 않는다. ExecStop 이 compose 를 내리고,
-#   ExecStopPost 가 끝난 방식과 상관없이 tmpfs 의 렌더 파일(비밀)을 지운다.
+#   ExecStopPost 가 끝난 방식과 상관없이 한 번 더 compose 를 내린 뒤 tmpfs 의
+#   렌더 파일(비밀)을 지운다.
 # - docker 를 Requires · After 로 묶는다: 부팅 때 docker 뒤에 뜨고, docker 를
 #   멈추거나 다시 띄우면 이 유닛이 먼저 compose 를 내린 뒤 함께 멈추거나 다시
 #   뜬다.
@@ -39,7 +40,11 @@ ExecStart=/opt/pokeclip-media/bin/start-media.sh
 # compose up 은 TERM 에 종료 130 으로 끝나므로 그 값을 성공으로 본다.
 ExecStop=/bin/sh -c 'kill -TERM "$$MAINPID" 2>/dev/null; i=0; while kill -0 "$$MAINPID" 2>/dev/null && [ "$$i" -lt 150 ]; do sleep 0.2; i=$$((i + 1)); done'
 ExecStop=/opt/pokeclip-media/bin/stop-media.sh
-ExecStopPost=/opt/pokeclip-media/bin/stop-media.sh --cleanup-only
+# 주 프로세스가 실패로 끝나면(compose 플러그인 · 유닛 cgroup SIGKILL 등)
+# systemd 는 ExecStop 을 건너뛰고 여기로 온다. 그래서 여기서도 compose 를
+# 내린다 — 렌더만 지우면 옛 비밀을 붙든 컨테이너가 남는다(c9 실측). 정상
+# 정지에서는 ExecStop 이 이미 내려 두어 빈 down 이다.
+ExecStopPost=/opt/pokeclip-media/bin/stop-media.sh
 SuccessExitStatus=130
 Restart=always
 RestartSec=20

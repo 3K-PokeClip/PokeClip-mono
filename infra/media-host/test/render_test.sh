@@ -21,7 +21,8 @@
 #
 # 드리프트: 시험 compose(test/compose.contract.yml)에서 템플릿과 이름이 같은
 # 서비스는 restart · network_mode · depends_on · security_opt · cap_drop ·
-# cap_add · 볼륨 읽기 전용 여부가 렌더한 템플릿과 같아야 한다 — 실행 시험은
+# cap_add · 볼륨 읽기 전용 여부 · bind 원본 자동 생성 여부가 렌더한 템플릿과
+# 같아야 한다 — 실행 시험은
 # 시험 compose 를 띄우므로, 거기서만 맞는 구조가 prod 에 새지 않게 한다.
 # 유닛 재기동 시험 compose(test/compose.unit.yml)도 같은 항목에 logging(드라이버 ·
 # 옵션)까지 비교한다(사례 25) — 그 파일만 prod 와 같은 journald 를 쓴다(CI 엔진에는
@@ -65,7 +66,7 @@ readonly COMPOSE_VARIANTS='a b c d'
 readonly SAMPLE_CONTROL_UPSTREAM='127.0.0.1:28190'
 readonly MIN_READ_TIMEOUT_SECONDS=15
 readonly CONFIG_TIMEOUT=60
-readonly CASE_COUNT=25
+readonly CASE_COUNT=26
 
 # 기대값 jq 프로그램이 함께 쓰는 정의. 입력은 그 갈래의 변수 JSON 이다.
 #   services — 렌더에 있어야 할 서비스(응답기 · janitor 는 변수가 차 있을 때만).
@@ -577,7 +578,9 @@ def facts: .services | map_values({
   cap_drop: ((.cap_drop // []) | sort),
   cap_add: ((.cap_add // []) | sort),
   read_only: ((.volumes // []) | map({(.target): (.read_only // false)})
-    | add // {})}
+    | add // {}),
+  create_host_path: ((.volumes // []) | map(select(.type == "bind")
+    | {(.target): (.bind.create_host_path != false)}) | add // {})}
   + (if $logging then {logging: (.logging // null)} else {} end));
 ($p[0] | facts) as $pf | ($t[0] | facts) as $tf
 | [$pf | keys[] | select(. as $s | $tf | has($s))] as $shared
@@ -628,6 +631,24 @@ $(harness::log_tail "${scratch}/unit.json.err")"
     return 1
   fi
   expect_no_drift "${scratch}/unit.json" true
+}
+
+#######################################
+# 사례 26 — 시작 스크립트가 tmpfs 에 렌더하는 두 파일의 bind 는 원본이 없으면
+# 만들지 않는다(create_host_path: false). 정지가 렌더를 지운 뒤 남은 컨테이너가
+# 다시 뜨면 엔진이 그 자리에 디렉터리를 만들어 다음 렌더가 영영 막힌다(보안 c7
+# M-1 · 실험 m1-repro).
+#######################################
+check_case_26() {
+  require_setup || return 1
+  # shellcheck disable=SC2016 # jq 프로그램 — $ 는 jq 변수다.
+  expect_all '[.services | to_entries[] | .key as $s | (.value.volumes // [])[]
+      | select(.type == "bind"
+        and (.source | startswith("/run/pokeclip-media/")))
+      | "\($s) \(.target) \(.bind.create_host_path != false)"] | sort' '
+    ["mediamtx /mediamtx.yml false",
+     "sidecar /run/secrets/mtx_api_pass false"]' \
+    '렌더 파일 bind 의 원본 자동 생성'
 }
 
 main() {
@@ -685,6 +706,7 @@ main() {
   harness::run_case 24 '사이드카 관측 자격 짝(user · 파일 · 포트)' mtx_cases::check_24
   harness::run_case 25 \
     '드리프트 — 유닛 시험 compose 와 템플릿 구조 · logging 일치' check_case_25
+  harness::run_case 26 '렌더 파일 bind — 원본 없으면 만들지 않음' check_case_26
 
   if ! harness::summary "${CASE_COUNT}"; then
     exit 1

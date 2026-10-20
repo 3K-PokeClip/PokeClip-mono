@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 #
-# Media 상자 정지 스크립트 — systemd 유닛 pokeclip-media 의 ExecStop(인자 없음)
-# · ExecStopPost(--cleanup-only).
+# Media 상자 정지 스크립트 — systemd 유닛 pokeclip-media 의 ExecStop ·
+# ExecStopPost(둘 다 인자 없음). 주 프로세스가 실패로 끝나면 systemd 가
+# ExecStop 을 건너뛰므로 ExecStopPost 도 down 까지 한다.
 #
 # 인자 없음: `docker compose … down` 으로 프로젝트를 내리고, down 의 결과와
 #   상관없이 tmpfs 의 렌더 파일 둘(CDN 비밀 · API 비밀번호가 든 mediamtx.yml ·
 #   사이드카의 mtx_api_pass)과 시작 스크립트가 남겼을 수 있는 임시 파일을
 #   지운다. down 의 종료 코드를 돌려준다. down 인자는 `down`
 #   하나로 고정한다 — 볼륨(녹화 · 훅 스풀 · DVR)은 지우지 않는다.
-# --cleanup-only: 지우기만 한다(유닛이 어떻게 끝났든 둘째 방어선).
+# --cleanup-only: docker 를 부르지 않고 지우기만 한다(유닛은 쓰지 않는다).
 #
 # 기본값은 시작 스크립트와 같다(MEDIA_COMPOSE_PROJECT · MEDIA_COMPOSE_FILE ·
 # RUNTIME_DIR). RUNTIME_DIR 이 절대 경로가 아니면 아무것도 하지 않고 「MEDIA STOP
