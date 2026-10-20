@@ -77,6 +77,7 @@ func serve(ctx context.Context, s site, getenv func(string) string, stdout, stde
 		"caller_auth", cfg.callerAuth(),
 		"auth_host_kind", cfg.auth.hostKind,
 		"auth_port", cfg.auth.port,
+		"auth_channel", cfg.auth.channel.String(),
 		"deadline_ms", ingestauth.MaxDeadline.Milliseconds(),
 		"health", r.health.ln.Addr().String())
 	if cfg.caller.off {

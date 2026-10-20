@@ -3,9 +3,15 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/keyresolve"
 )
 
 // 설정 검사의 시험이다(설계 2-6 — 필수값이 비면 기동 실패). 설정 오류는 종료 코드 2 이고 아무것도 열지 않는다.
@@ -256,4 +262,78 @@ func TestRunRejectsBadCallerBasicValues(t *testing.T) {
 		env["INGEST_AUTH_BASIC_USER"] = "Media-mtx_1.0~"
 		startResponder(t, newTestSite(t, ""), env)
 	})
+}
+
+// channelRecorder 는 4C 요청에 실린 출입증 머리의 이름을 적는 가짜 auth 다 — 거절하지 않고 늘 valid:true 로 답한다(창구
+// 판별을 Basic · 출입증 값 판별과 섞지 않는다).
+type channelRecorder struct {
+	srv *httptest.Server
+
+	mu    sync.Mutex
+	names [][]string // 요청마다 실린 출입증 머리 이름(전용 · 공용 가운데)
+}
+
+func newChannelRecorder(t *testing.T) *channelRecorder {
+	t.Helper()
+	c := &channelRecorder{}
+	c.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var names []string
+		for _, h := range []string{keyresolve.Header, keyresolve.InternalHeader} {
+			if r.Header.Get(h) == testResolveToken {
+				names = append(names, h)
+			}
+		}
+		c.mu.Lock()
+		c.names = append(c.names, names)
+		c.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"valid":true,"userId":%d,"passphrase":%q}`, testUserID, testPassphrase)
+	}))
+	t.Cleanup(c.srv.Close)
+	return c
+}
+
+// seen 은 지금까지 요청마다 실린 출입증 머리 이름이다.
+func (c *channelRecorder) seen() [][]string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return slices.Clone(c.names)
+}
+
+// STREAM_KEY_RESOLVE_CHANNEL 은 4C 출입증을 실을 창구다 — 비면 전용(resolve-token · X-Stream-Key-Resolve-Token),
+// internal-token 이면 공용(X-Internal-Token)이고 머리는 늘 하나다. 기동 로그의 auth_channel 이 고른 창구다. 그 밖의
+// 값은 기동 거부다 — 오타가 조용히 기본 창구가 되지 않게.
+func TestRunSelectsResolveChannel(t *testing.T) {
+	for _, tc := range []struct {
+		name, value, wantChannel, wantHeader string
+	}{
+		{name: "빈_값", wantChannel: "resolve-token", wantHeader: keyresolve.Header},
+		{name: "resolve-token", value: "resolve-token", wantChannel: "resolve-token", wantHeader: keyresolve.Header},
+		{name: "internal-token", value: "internal-token", wantChannel: "internal-token", wantHeader: keyresolve.InternalHeader},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			auth := newChannelRecorder(t)
+			env := responderEnv(auth.srv.URL)
+			if tc.value != "" {
+				env["STREAM_KEY_RESOLVE_CHANNEL"] = tc.value
+			}
+			r := startResponder(t, newTestSite(t, ""), env)
+			if got := logEvents(r.stdout.String(), "ingestauth_started")[0]["auth_channel"]; got != tc.wantChannel {
+				t.Errorf("ingestauth_started auth_channel = %s, want %q", shown(got), tc.wantChannel)
+			}
+			if status, _ := mustPostAuth(t, r.listen, publishBody(testToken, testConnID(1)), nil); status != http.StatusOK {
+				t.Errorf("POST publish = %d, want 200", status)
+			}
+			if got := auth.seen(); len(got) != 1 || !slices.Equal(got[0], []string{tc.wantHeader}) {
+				t.Errorf("4C resolve headers = %v, want one request carrying only %s", got, tc.wantHeader)
+			}
+		})
+	}
+	for _, typo := range []string{"internal", "Internal-Token", "resolve_token"} {
+		t.Run("오타_"+typo, func(t *testing.T) {
+			env := configEnv()
+			env["STREAM_KEY_RESOLVE_CHANNEL"] = typo
+			runConfigFailure(t, nil, env, "STREAM_KEY_RESOLVE_CHANNEL")
+		})
+	}
 }

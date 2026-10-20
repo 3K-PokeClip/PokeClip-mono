@@ -127,6 +127,8 @@ func TestNewClientRejectsBadOptions(t *testing.T) {
 		{name: "Token_DEL", opt: ClientOptions{BaseURL: "http://auth.test:8082", Token: NewSecret(testResolveToken + "\x7f")}},
 		{name: "Token_앞_공백", opt: ClientOptions{BaseURL: "http://auth.test:8082", Token: NewSecret(" " + testResolveToken)}},
 		{name: "Token_뒤_공백", opt: ClientOptions{BaseURL: "http://auth.test:8082", Token: NewSecret(testResolveToken + " ")}},
+		{name: "Channel_모름", opt: ClientOptions{BaseURL: "http://auth.test:8082", Token: token, Channel: Channel(99)}},
+		{name: "Channel_음수", opt: ClientOptions{BaseURL: "http://auth.test:8082", Token: token, Channel: Channel(-1)}},
 	}
 	for _, tc := range tests {
 		c, err := NewClient(tc.opt)
@@ -595,23 +597,63 @@ func TestResolveOutOfFormatPassphraseIsErrInvalidPassphrase(t *testing.T) {
 }
 
 // 리다이렉트를 따르지 않는다. 3xx 는 비-200 이라 Kind "status" 이고, 리다이렉트 대상에는 요청이 가지
-// 않는다 — Go 의 http.Client 는 리다이렉트 때 사용자 정의 헤더(전용 토큰)를 새 주소에도 그대로 싣는다.
+// 않는다 — Go 의 http.Client 는 리다이렉트 때 사용자 정의 헤더(전용 토큰)를 새 주소에도 그대로 싣는다. 공용 창구
+// (X-Internal-Token)에서도 같다.
 func TestResolveDoesNotFollowRedirects(t *testing.T) {
-	for _, status := range []int{http.StatusTemporaryRedirect, http.StatusFound} {
-		t.Run(strconv.Itoa(status), func(t *testing.T) {
-			target := newFakeAuth(t, replyJSON(http.StatusOK, validBody))
-			redirector := newFakeAuth(t, func(w http.ResponseWriter, r *http.Request) {
-				http.Redirect(w, r, target.srv.URL+resolvePath, status)
-			})
-			c := newTestClient(t, redirector.srv.URL)
+	for _, channel := range []Channel{ChannelResolveToken, ChannelInternalToken} {
+		for _, status := range []int{http.StatusTemporaryRedirect, http.StatusFound} {
+			t.Run(channel.String()+"/"+strconv.Itoa(status), func(t *testing.T) {
+				target := newFakeAuth(t, replyJSON(http.StatusOK, validBody))
+				redirector := newFakeAuth(t, func(w http.ResponseWriter, r *http.Request) {
+					http.Redirect(w, r, target.srv.URL+resolvePath, status)
+				})
+				c, err := NewClient(ClientOptions{BaseURL: redirector.srv.URL, Token: NewSecret(testResolveToken), Channel: channel})
+				if err != nil {
+					t.Fatalf("Setup: NewClient returned error: %v", err)
+				}
 
-			_, err := c.Resolve(t.Context(), testToken)
-			if ue := asUndecided(err); ue == nil || ue.Kind != "status" || ue.Status != status {
-				t.Errorf("Resolve(%q) against an HTTP %d redirect: err = %v, want *UndecidedError{Kind: status, Status: %d}",
-					testToken, status, err, status)
+				_, err = c.Resolve(t.Context(), testToken)
+				if ue := asUndecided(err); ue == nil || ue.Kind != "status" || ue.Status != status {
+					t.Errorf("Resolve(%q) against an HTTP %d redirect: err = %v, want *UndecidedError{Kind: status, Status: %d}",
+						testToken, status, err, status)
+				}
+				if n := target.calls.Load(); n != 0 {
+					t.Errorf("redirect target calls = %d, want 0 (following would carry the resolve token there)", n)
+				}
+			})
+		}
+	}
+}
+
+// 창구(Channel)는 출입증을 실을 머리 하나를 고른다 — 영값과 ChannelResolveToken 은 전용 머리(X-Stream-Key-Resolve-Token)
+// 만, ChannelInternalToken 은 공용 머리(X-Internal-Token)만이다. 다른 쪽 머리는 없어야 한다 — 둘 다 실리면 auth 의 전용
+// 체인(@Order(0))이 가져가 공용 토큰을 전용 값과 견주어 401 이다.
+func TestResolveSendsChannelHeader(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		channel       Channel
+		want, without string
+	}{
+		{name: "영값", want: Header, without: InternalHeader},
+		{name: "resolve-token", channel: ChannelResolveToken, want: Header, without: InternalHeader},
+		{name: "internal-token", channel: ChannelInternalToken, want: InternalHeader, without: Header},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			auth := newFakeAuth(t, replyJSON(http.StatusOK, validBody))
+			c, err := NewClient(ClientOptions{BaseURL: auth.srv.URL, Token: NewSecret(testResolveToken), Channel: tc.channel})
+			if err != nil {
+				t.Fatalf("Setup: NewClient returned error: %v", err)
 			}
-			if n := target.calls.Load(); n != 0 {
-				t.Errorf("redirect target calls = %d, want 0 (following would carry the resolve token there)", n)
+			if _, err := c.Resolve(t.Context(), testToken); err != nil {
+				t.Fatalf("Resolve returned error: %v", err)
+			}
+			got := auth.lastRequest()
+			if v := got.header.Values(tc.want); len(v) != 1 || v[0] != testResolveToken {
+				t.Errorf("%s has %d value(s) (the first is the resolve token: %t), want exactly the resolve token",
+					tc.want, len(v), len(v) > 0 && v[0] == testResolveToken)
+			}
+			if v := got.header.Values(tc.without); len(v) != 0 {
+				t.Errorf("%s has %d value(s), want none", tc.without, len(v))
 			}
 		})
 	}

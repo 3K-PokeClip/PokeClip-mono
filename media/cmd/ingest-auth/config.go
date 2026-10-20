@@ -27,6 +27,8 @@ const (
 	envCallerBasicUser = "INGEST_AUTH_BASIC_USER"   // 호출자(MediaMTX) Basic 사용자 — authHTTPAddress URL 자격
 	envCallerBasicPass = "INGEST_AUTH_BASIC_PASS"   // 호출자 Basic 비번
 	envCallerBasic     = "INGEST_AUTH_CALLER_BASIC" // off 면 호출자 Basic 검사를 끈다(명시 끔) — 그 밖의 값은 거부
+	// 4C 창구 — 비면 resolve-token(전용), internal-token 이면 공용(resolveChannel).
+	envResolveChannel = "STREAM_KEY_RESOLVE_CHANNEL"
 )
 
 // callerBasicOffValue 는 INGEST_AUTH_CALLER_BASIC 이 받는 단 하나의 값이다.
@@ -171,11 +173,30 @@ func newControlClient(getenv func(string) string, pass secret) (*mtxctl.Client, 
 	return c, nil
 }
 
-// newResolver 는 STREAM_KEY_RESOLVE_URL 과 이미 읽은 출입증 token(STREAM_KEY_RESOLVE_TOKEN — resolveSecret)으로 4C
-// 클라이언트를 만든다. 기동 로그에 실을 4C 끝점의 모습(authTarget)도 돌려준다.
+// resolveChannel 은 STREAM_KEY_RESOLVE_CHANNEL 을 읽는다 — 비면 전용 창구(resolve-token)다. 닫힌 집합 밖의 값은 기동
+// 실패다 — 오타가 조용히 기본 창구가 되지 않게.
+func resolveChannel(raw string) (keyresolve.Channel, error) {
+	for _, c := range []keyresolve.Channel{keyresolve.ChannelResolveToken, keyresolve.ChannelInternalToken} {
+		if raw == c.String() {
+			return c, nil
+		}
+	}
+	if raw == "" {
+		return keyresolve.ChannelResolveToken, nil
+	}
+	return 0, fmt.Errorf("%s 는 %v · %v 가운데 하나여야 한다(비우면 %v)", envResolveChannel,
+		keyresolve.ChannelResolveToken, keyresolve.ChannelInternalToken, keyresolve.ChannelResolveToken)
+}
+
+// newResolver 는 STREAM_KEY_RESOLVE_URL · STREAM_KEY_RESOLVE_CHANNEL 과 이미 읽은 출입증 token(STREAM_KEY_RESOLVE_TOKEN —
+// resolveSecret)으로 4C 클라이언트를 만든다. 기동 로그에 실을 4C 끝점의 모습(authTarget)도 돌려준다.
 func newResolver(getenv func(string) string, token secret) (*keyresolve.Client, authTarget, error) {
 	raw := getenv(envResolveURL)
-	c, err := keyresolve.NewClient(keyresolve.ClientOptions{BaseURL: raw, Token: keyresolve.NewSecret(token.reveal())})
+	channel, err := resolveChannel(getenv(envResolveChannel))
+	if err != nil {
+		return nil, authTarget{}, err
+	}
+	c, err := keyresolve.NewClient(keyresolve.ClientOptions{BaseURL: raw, Token: keyresolve.NewSecret(token.reveal()), Channel: channel})
 	if err != nil {
 		return nil, authTarget{}, fmt.Errorf("%s · %s: %w", envResolveURL, envResolveToken, err)
 	}
@@ -184,15 +205,16 @@ func newResolver(getenv func(string) string, token secret) (*keyresolve.Client, 
 		// NewClient 가 이미 해석했으므로 오지 않는다. 해석 에러의 문구는 원문을 담으므로 싣지 않는다.
 		return nil, authTarget{}, errors.New(envResolveURL + " 를 해석하지 못했다")
 	}
-	return c, authTargetOf(u), nil
+	return c, authTargetOf(u, channel), nil
 }
 
 // authTarget 은 기동 로그에 싣는 4C 끝점의 모습이다 — 호스트의 부류와 포트뿐이다. 주소는 싣지 않는다 — 기동 로그는 이슈 ·
 // 문서 · 리뷰로 옮겨지는데 dev 상자의 사설 주소가 따라가지 않게 한다(설계 6절). 부류로 설계 2-6 의 「공인 주소면 403」을
 // 가른다.
 type authTarget struct {
-	hostKind string // hostPrivate · hostPublic · hostName · hostOther
-	port     string // URL 의 포트 — 없으면 스킴의 기본 포트(전송이 다이얼하는 포트)
+	hostKind string             // hostPrivate · hostPublic · hostName · hostOther
+	port     string             // URL 의 포트 — 없으면 스킴의 기본 포트(전송이 다이얼하는 포트)
+	channel  keyresolve.Channel // 출입증을 싣는 창구 — 기동 로그의 auth_channel
 }
 
 // authTarget.hostKind 의 값이다.
@@ -203,9 +225,9 @@ const (
 	hostOther   = "other"   // 루프백 · 링크 로컬 · 미지정 · 멀티캐스트 — 설계가 쓰는 꼴이 아니다
 )
 
-// authTargetOf 는 u 의 authTarget 이다. u 는 keyresolve.NewClient 가 받은 URL 이라 스킴은 http · https 이고 호스트가
-// 있다.
-func authTargetOf(u *url.URL) authTarget {
+// authTargetOf 는 u · channel 의 authTarget 이다. u 는 keyresolve.NewClient 가 받은 URL 이라 스킴은 http · https 이고
+// 호스트가 있다.
+func authTargetOf(u *url.URL, channel keyresolve.Channel) authTarget {
 	port := u.Port()
 	if port == "" {
 		port = "80"
@@ -213,7 +235,7 @@ func authTargetOf(u *url.URL) authTarget {
 			port = "443"
 		}
 	}
-	return authTarget{hostKind: hostKindOf(u.Hostname()), port: port}
+	return authTarget{hostKind: hostKindOf(u.Hostname()), port: port, channel: channel}
 }
 
 // hostKindOf 는 host(URL 의 Hostname — 괄호 · 포트 없음)의 부류다. 사설을 먼저 본다 — IsGlobalUnicast 는 사설 주소에도
