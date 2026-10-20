@@ -74,10 +74,15 @@ func serve(ctx context.Context, s site, getenv func(string) string, stdout, stde
 	log.Info("ingestauth_started",
 		"listen", r.auth.ln.Addr().String(),
 		"caller_ip", cfg.callerIP.String(),
+		"caller_auth", cfg.callerAuth(),
 		"auth_host_kind", cfg.auth.hostKind,
 		"auth_port", cfg.auth.port,
 		"deadline_ms", ingestauth.MaxDeadline.Milliseconds(),
 		"health", r.health.ln.Addr().String())
+	if cfg.caller.off {
+		// dev-media 처럼 제어망이 따로 있는 배치의 의도된 상태다. prod 에서 보이면 설정 누락이다.
+		log.Warn("ingestauth_caller_basic_off")
+	}
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 	if err := serveUntilDone(ctx, r.serving, r.auth, r.health); err != nil {
@@ -93,7 +98,8 @@ func serve(ctx context.Context, s site, getenv func(string) string, stdout, stde
 type serveConfig struct {
 	listen   netip.AddrPort // 인증 리스너 — 이 IP 가 SelfIP 다
 	callerIP netip.Addr
-	apiPass  secret // MTX_API_PASS — 처리기의 api 행 자격(loadSecrets 가 한 번만 읽은 값)
+	apiPass  secret      // MTX_API_PASS — 처리기의 api 행 자격(loadSecrets 가 한 번만 읽은 값)
+	caller   callerBasic // 호출자 Basic 자격 또는 명시 끔
 	resolver *keyresolve.Client
 	auth     authTarget // 기동 로그의 auth_host_kind · auth_port — 주소는 없다
 }
@@ -124,7 +130,15 @@ func loadServeConfig(getenv func(string) string) (serveConfig, error) {
 	if err != nil {
 		return serveConfig{}, err
 	}
-	return serveConfig{listen: listen, callerIP: callerIP, apiPass: sec.apiPass, resolver: resolver, auth: auth}, nil
+	return serveConfig{listen: listen, callerIP: callerIP, apiPass: sec.apiPass, caller: sec.caller, resolver: resolver, auth: auth}, nil
+}
+
+// callerAuth 는 기동 로그의 caller_auth 다 — basic(호출자 Basic 검사) 또는 off(명시 끔).
+func (c serveConfig) callerAuth() string {
+	if c.caller.off {
+		return callerBasicOffValue
+	}
+	return "basic"
 }
 
 // listening 은 리스너 하나와 그 위에서 돌릴 서버다.
@@ -154,6 +168,10 @@ func openResponder(s site, cfg serveConfig, getenv func(string) string, log *slo
 		APIUser:  getenv(envMTXAPIUser),
 		APIPass:  ingestauth.NewSecret(cfg.apiPass.reveal()),
 		Log:      log,
+
+		CallerUser:     cfg.caller.user,
+		CallerPass:     callerPass(cfg.caller),
+		CallerBasicOff: cfg.caller.off,
 	})
 	if err != nil {
 		return responder{}, err
@@ -168,6 +186,14 @@ func openResponder(s site, cfg serveConfig, getenv func(string) string, log *slo
 		health:  listening{srv: newServer(routed(healthRoute, healthz(serving, deny, conns)), log), ln: healthLn},
 		serving: serving,
 	}, nil
+}
+
+// callerPass 는 c 의 비번을 처리기에 넘기는 꼴이다. 끔이면 영값이다 — 처리기는 빈 비번을 자격 없음으로 본다.
+func callerPass(c callerBasic) ingestauth.Secret {
+	if c.off {
+		return ingestauth.Secret{}
+	}
+	return ingestauth.NewSecret(c.pass.reveal())
 }
 
 // listenBoth 는 listen(운영은 net.Listen)으로 인증 리스너와 healthz 리스너를 연다. 둘째가 실패하면 첫째를 닫는다.

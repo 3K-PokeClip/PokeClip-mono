@@ -18,6 +18,7 @@ var secretVariables = []struct {
 }{
 	{name: "MTX_API_PASS", value: testAPIPass},
 	{name: "STREAM_KEY_RESOLVE_TOKEN", value: testResolveToken},
+	{name: "INGEST_AUTH_BASIC_PASS", value: testCallerPass},
 }
 
 // secretPathCanary 는 비밀 파일 경로의 디렉터리 이름이다 — 경로가 어느 출력에 실리면 이 값이 보인다.
@@ -57,7 +58,8 @@ func useSecretFile(t *testing.T, env map[string]string, dir, name, content strin
 }
 
 // 세 비밀을 모두 파일로 주면 기동하고, 파일 내용(끝 줄바꿈을 걷은 값)이 쓰인다 — 가짜 4C 는 출입증 머리가 맞을 때만
-// passphrase 를 돌려주고(publish 200 · 허용 본문), api 행은 Control API 비번이 맞을 때만 200 이다.
+// passphrase 를 돌려주고(publish 200 · 허용 본문), api 행은 Control API 비번이 맞을 때만 200 이며, 두 요청 모두 호출자
+// Basic 비번이 맞아야 처리기에 닿는다.
 func TestRunReadsSecretsFromFiles(t *testing.T) {
 	auth := newFakeAuth(t)
 	env := responderEnv(auth.srv.URL)

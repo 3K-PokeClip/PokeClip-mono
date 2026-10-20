@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"maps"
 	"net/http"
@@ -58,6 +59,9 @@ var leakCanaries = []leakCanary{
 	{name: "MediaMTX 요청 query", value: leakRequestQuery},
 	{name: "비밀 파일 경로", value: secretPathCanary},
 	{name: "경로 자리의 비밀", value: leakPathSecret},
+	{name: "호출자 Basic 비번", value: testCallerPass},
+	{name: "호출자 Basic 비번(16진)", value: hex.EncodeToString([]byte(testCallerPass))},
+	{name: "호출자 Basic 자격", value: base64.StdEncoding.EncodeToString([]byte(testCallerUser + ":" + testCallerPass))},
 }
 
 // leakOutput 은 누설을 훑는 출력 자리 하나다. place 는 실패 문구에 싣는 자리 이름이다.

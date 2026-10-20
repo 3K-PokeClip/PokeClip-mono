@@ -58,8 +58,8 @@ func printedForms(t *testing.T, name string, value any) []leakOutput {
 }
 
 // serveConfig · 4C 클라이언트 · Control API 클라이언트와 세 설정 구조체(값 · 포인터 · 다른 값의 비공개 필드 — 처리기
-// Options 포함)를 어느 동사 · slog · json 으로 찍어도 출입증 · API 비번이 나오지 않는다(설계 6절 누설 규칙 2). 클라이언트와
-// serveConfig 는 run · cut 이 쓰는 생성자로 만든다.
+// Options 포함)를 어느 동사 · slog · json 으로 찍어도 출입증 · API 비번 · 호출자 Basic 비번이 나오지 않는다(설계 6절
+// 누설 규칙 2). 클라이언트와 serveConfig 는 run · cut 이 쓰는 생성자로 만든다.
 func TestAssembledValuesHideSecrets(t *testing.T) {
 	getenv := getenvFrom(configEnv())
 	cfg, err := loadServeConfig(getenv)
@@ -73,10 +73,12 @@ func TestAssembledValuesHideSecrets(t *testing.T) {
 	resolveOpt := keyresolve.ClientOptions{BaseURL: "http://192.0.2.30:8082", Token: keyresolve.NewSecret(testResolveToken)}
 	mtxOpt := mtxctl.Options{APIURL: "http://192.0.2.10:9997", User: testAPIUser, Pass: mtxctl.NewSecret(testAPIPass)}
 	handlerOpt := ingestauth.Options{
-		CallerIP: netip.MustParseAddr("192.0.2.10"),
-		SelfIP:   netip.MustParseAddr("192.0.2.20"),
-		APIUser:  testAPIUser,
-		APIPass:  ingestauth.NewSecret(testAPIPass),
+		CallerIP:   netip.MustParseAddr("192.0.2.10"),
+		SelfIP:     netip.MustParseAddr("192.0.2.20"),
+		APIUser:    testAPIUser,
+		APIPass:    ingestauth.NewSecret(testAPIPass),
+		CallerUser: testCallerUser,
+		CallerPass: ingestauth.NewSecret(testCallerPass),
 	}
 	held := struct {
 		resolve keyresolve.ClientOptions
@@ -107,6 +109,9 @@ func TestAssembledValuesHideSecrets(t *testing.T) {
 		{name: "API 비번", value: testAPIPass},
 		{name: "API 비번(16진)", value: hex.EncodeToString([]byte(testAPIPass))},
 		{name: "Basic 자격", value: base64.StdEncoding.EncodeToString([]byte(testAPIUser + ":" + testAPIPass))},
+		{name: "호출자 Basic 비번", value: testCallerPass},
+		{name: "호출자 Basic 비번(16진)", value: hex.EncodeToString([]byte(testCallerPass))},
+		{name: "호출자 Basic 자격", value: base64.StdEncoding.EncodeToString([]byte(testCallerUser + ":" + testCallerPass))},
 	}
 
 	for _, v := range values {

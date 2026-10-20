@@ -78,10 +78,12 @@ func resolveSecret(getenv func(string) string, name string) (secret, error) {
 	return newSecret(raw), nil
 }
 
-// secrets 는 run 이 쓰는 비밀이다. loadSecrets 가 한 번만 읽는다 — 같은 변수를 두 번 읽어 두 값이 갈리지 않게 한다.
+// secrets 는 run 이 쓰는 비밀이다(호출자 Basic 은 사용자 이름 · 끔과 함께). loadSecrets 가 한 번만 읽는다 — 같은
+// 변수를 두 번 읽어 두 값이 갈리지 않게 한다.
 type secrets struct {
-	apiPass      secret // MTX_API_PASS — Control API 비번(api 행 검사 · cut 의 Basic)
-	resolveToken secret // STREAM_KEY_RESOLVE_TOKEN — 4C 출입증
+	apiPass      secret      // MTX_API_PASS — Control API 비번(api 행 검사 · cut 의 Basic)
+	resolveToken secret      // STREAM_KEY_RESOLVE_TOKEN — 4C 출입증
+	caller       callerBasic // INGEST_AUTH_BASIC_USER · INGEST_AUTH_BASIC_PASS 또는 INGEST_AUTH_CALLER_BASIC=off
 }
 
 // loadSecrets 는 run 의 비밀을 모두 읽는다. 첫 에러에서 멈춘다.
@@ -94,5 +96,9 @@ func loadSecrets(getenv func(string) string) (secrets, error) {
 	if err != nil {
 		return secrets{}, err
 	}
-	return secrets{apiPass: apiPass, resolveToken: resolveToken}, nil
+	caller, err := loadCallerBasic(getenv)
+	if err != nil {
+		return secrets{}, err
+	}
+	return secrets{apiPass: apiPass, resolveToken: resolveToken, caller: caller}, nil
 }

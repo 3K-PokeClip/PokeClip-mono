@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +20,8 @@ var runVariables = []string{
 	"MTX_API_PASS",
 	"STREAM_KEY_RESOLVE_URL",
 	"STREAM_KEY_RESOLVE_TOKEN",
+	"INGEST_AUTH_BASIC_USER",
+	"INGEST_AUTH_BASIC_PASS",
 }
 
 // runConfigFailure 는 env 로 run 을 돌려 설정 오류로 끝나는지 본다 — 종료 2 · stderr 에 name · 기동 로그 없음 ·
@@ -170,4 +173,87 @@ func TestCutRequiresControlVariables(t *testing.T) {
 			checkNoSecrets(t, []string{stdout.String(), stderr.String()}, tc.value)
 		})
 	}
+}
+
+// 호출자 Basic 은 자격(INGEST_AUTH_BASIC_USER · INGEST_AUTH_BASIC_PASS) 둘 다이거나 명시 끔(INGEST_AUTH_CALLER_BASIC=off)
+// 하나여야 기동한다 — 설정이 빠지면 조용히 출발지 검사만 남지 않게 기동을 거부한다. 끔 값은 off 만 받는다(오타가 조용히
+// 켜짐이나 꺼짐이 되지 않게).
+func TestRunRequiresCallerBasicOrExplicitOff(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		edit  func(env map[string]string)
+		wantN string // stderr 에 있어야 하는 이름
+	}{
+		{name: "아무것도_없음", edit: func(env map[string]string) {
+			delete(env, "INGEST_AUTH_BASIC_USER")
+			delete(env, "INGEST_AUTH_BASIC_PASS")
+		}, wantN: "INGEST_AUTH_CALLER_BASIC=off"},
+		{name: "사용자만", edit: func(env map[string]string) { delete(env, "INGEST_AUTH_BASIC_PASS") }, wantN: "INGEST_AUTH_BASIC_PASS"},
+		{name: "비번만", edit: func(env map[string]string) { delete(env, "INGEST_AUTH_BASIC_USER") }, wantN: "INGEST_AUTH_BASIC_USER"},
+		{name: "끔과_자격이_함께", edit: func(env map[string]string) { env["INGEST_AUTH_CALLER_BASIC"] = "off" }, wantN: "INGEST_AUTH_CALLER_BASIC"},
+		{name: "끔과_사용자가_함께", edit: func(env map[string]string) {
+			delete(env, "INGEST_AUTH_BASIC_PASS")
+			env["INGEST_AUTH_CALLER_BASIC"] = "off"
+		}, wantN: "INGEST_AUTH_CALLER_BASIC"},
+		{name: "끔_값_Off", edit: func(env map[string]string) {
+			delete(env, "INGEST_AUTH_BASIC_USER")
+			delete(env, "INGEST_AUTH_BASIC_PASS")
+			env["INGEST_AUTH_CALLER_BASIC"] = "Off"
+		}, wantN: "INGEST_AUTH_CALLER_BASIC"},
+		{name: "끔_값_false", edit: func(env map[string]string) {
+			delete(env, "INGEST_AUTH_BASIC_USER")
+			delete(env, "INGEST_AUTH_BASIC_PASS")
+			env["INGEST_AUTH_CALLER_BASIC"] = "false"
+		}, wantN: "INGEST_AUTH_CALLER_BASIC"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := configEnv()
+			tc.edit(env)
+			runConfigFailure(t, nil, env, tc.wantN)
+		})
+	}
+}
+
+// 호출자 Basic 의 사용자 이름과 비번은 URL 표준(RFC 3986)의 unreserved 문자(A-Z a-z 0-9 - . _ ~)만 받는다 — 둘 다
+// authHTTPAddress URL 에 렌더되므로, 그 밖의 문자는 경계로 읽히거나(@ : / ? #) 퍼센트 디코딩되어(%41 → A) MediaMTX 가
+// 싣는 값이 응답기의 값과 달라진다 — 그러면 모든 인증이 401 이다. 에러는 변수 이름을 싣고 값은 싣지 않는다.
+func TestRunRejectsBadCallerBasicValues(t *testing.T) {
+	type row struct{ name, user, pass string }
+	var rows []row
+	for _, c := range []string{"@", "/", "%", "?", "#", ":", " ", "\x01", "%41"} {
+		rows = append(rows, row{name: "사용자_" + fmt.Sprintf("%q", c), user: "synthetic" + c + "user-canary-0006"})
+	}
+	for _, c := range []string{"@", "%", ":", "/", " "} {
+		rows = append(rows, row{name: "비번_" + fmt.Sprintf("%q", c), pass: "synthetic" + c + "caller-canary-0006"})
+	}
+	for _, r := range rows {
+		for _, viaFile := range []bool{false, true} {
+			if r.user != "" && viaFile {
+				continue // 사용자 이름은 비밀이 아니라 파일 입력이 없다
+			}
+			name := r.name
+			if viaFile {
+				name += "_파일"
+			}
+			t.Run(name, func(t *testing.T) {
+				env := configEnv()
+				key, value := "INGEST_AUTH_BASIC_USER", r.user
+				if r.user == "" {
+					key, value = "INGEST_AUTH_BASIC_PASS", r.pass
+				}
+				if viaFile {
+					useSecretFile(t, env, secretDir(t), key, value+"\n")
+				} else {
+					env[key] = value
+				}
+				runConfigFailure(t, nil, env, key, value, secretPathCanary)
+			})
+		}
+	}
+	t.Run("unreserved_만", func(t *testing.T) {
+		auth := newFakeAuth(t)
+		env := responderEnv(auth.srv.URL)
+		env["INGEST_AUTH_BASIC_USER"] = "Media-mtx_1.0~"
+		startResponder(t, newTestSite(t, ""), env)
+	})
 }

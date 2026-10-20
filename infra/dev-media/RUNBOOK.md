@@ -1846,6 +1846,7 @@ sudo docker compose -p dev-media --env-file /opt/pokeclip-demo/.env \
 | `ingestauth_denylist_changed` | 다시 읽은 파일의 집합이 바뀌었다. 합집합이라 `removed` 는 해제가 아니다 — 판정은 응답기를 다시 시작할 때까지 그대로다 |
 | `ingestauth_connlog_error` | 허용 연결 기록 쓰기 실패(새 연결 거부 — 디스크 부족은 여기로만 드러난다) |
 | `ingestauth_api_denied` `ip=…` | Control API 요청의 출발지 · 자격이 맞지 않음(8-3 의 api_auth) |
+| `ingestauth_caller_basic_off` (WARN, 기동마다 한 줄) | 호출자 Basic 검사를 명시로 껐다(`INGEST_AUTH_CALLER_BASIC=off`). dev-media 는 제어망이 따로 있어 출발지 검사가 MediaMTX 를 가르므로 의도된 상태다 — 고장이 아니다. prod 에서 보이면 설정 누락이다 |
 | MediaMTX `connection not found` ERR | cut 이 kick 한 연결이 이미 없어 404 가 났다 — 예상된 것이다. 가득 찬 cut 하나면 약 17,000줄이 난다 |
 
 - **차례 거절은 auth 장애 뒤 회복이 늦는 모양이다.** 끊긴 뒤 300초 안(5초 재시도 간격
