@@ -38,7 +38,6 @@ readonly SENDER_REPO='registry.pcbench-edge-proxy.invalid/media-sender'
 readonly SENDER_IMAGE="${SENDER_REPO}@${FAKE_DIGEST}"
 readonly IMAGES_FILE="${MEDIA_HOST_DIR}/images.json"
 
-
 #######################################
 # 기본 상태 — 비밀 둘 · mediamtx 컨테이너 · 설정 값.
 #######################################
@@ -87,7 +86,7 @@ has_pair() {
 
 #######################################
 # 송출기 호출이 하나이고 그 argv 가 계획 꼴인지 본다 — 고유 이름 · 같은 값의
-# 라벨 · mediamtx 망 칸 · 권한 축소 옵션 전부(G3) · 금지 옵션 0 · 고정 이미지 ·
+# 라벨 · mediamtx 망 칸 · 권한 축소 옵션 전부 · 금지 옵션 0 · 고정 이미지 ·
 # ffmpeg 조용히 · srt 루프백 주소 · GOP.
 # Arguments:
 #   기대 SRT URL.
@@ -187,7 +186,8 @@ expect_curl_stdin() {
 
 #######################################
 # 송출기가 끝까지 정리됐는지 본다 — docker run 이 TERM 을 받았고, 그 이름으로
-# rm -f 했고, 컨테이너 · 송출 중 표식이 남지 않았다(G2).
+# rm -f 했고, 컨테이너 · 송출 중 표식이 남지 않았다(남은 송출기가 상자에 쌓이지
+# 않게).
 #######################################
 expect_sender_stopped() {
   local ok=0 f found=0 name
@@ -414,7 +414,7 @@ ${src:-없음}"
 }
 
 # 사례 11 — 긴 대기(60초) 중에 TERM 을 받으면 곧바로(8초 안) 송출기를 정리하고
-# 끝난다(G7 — 대기가 명령 치환 안이면 트랩이 대기 끝까지 미뤄진다).
+# 끝난다(대기가 명령 치환 안이면 트랩이 대기 끝까지 미뤄진다).
 case_signal_cleanup() {
   local ok=0 pid deadline sent_at
   setup_loopback
@@ -454,7 +454,7 @@ case_signal_cleanup() {
 }
 
 # 사례 12 — 컨테이너가 TERM 에 안 끝나 docker run 클라이언트만 죽어도(stuck),
-# 그 이름으로 rm -f 해 남기지 않는다(G2).
+# 그 이름으로 rm -f 해 남기지 않는다.
 case_sender_stuck_removed() {
   local ok=0
   setup_loopback
@@ -468,7 +468,7 @@ case_sender_stuck_removed() {
   return "${ok}"
 }
 
-# 사례 13 — 송출기 컨테이너를 지우지 못하면 OK 가 아니라 sender-cleanup(G2).
+# 사례 13 — 송출기 컨테이너를 지우지 못하면 OK 가 아니라 sender-cleanup.
 case_sender_cleanup_failure() {
   local ok=0
   setup_loopback
@@ -478,7 +478,7 @@ case_sender_cleanup_failure() {
   return "${ok}"
 }
 
-# 사례 14 — 송출기 이미지는 대기 전에 따로 받는다(G8): 받기 실패면 pull 실패 ·
+# 사례 14 — 송출기 이미지는 대기 전에 따로 받는다: 받기 실패면 pull 실패 ·
 # 송출 0. docker 는 DOCKER_CONFIG 기본값(/root/.docker)을 받고, 주입한 값은
 # 그대로 받는다.
 case_pull_and_docker_config() {

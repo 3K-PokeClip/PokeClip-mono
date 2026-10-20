@@ -28,7 +28,10 @@ readonly OPS_FAKE_KEY_ARN='pcbench-edge-proxy-fake-arn-testkey'
 readonly OPS_FAKE_CDN_SECRET='pcbench-edge-proxy-fake-cdn-secret'
 readonly OPS_FAKE_PASSPHRASE='pcbenchFakePassphrase0123456789x'
 readonly OPS_FAKE_API_USER='pcbench-sidecar'
-readonly OPS_FAKE_API_PASS='pcbench-edge-proxy-fake-api-pass'
+# prod 꼴(16진 64자 — 시작 스크립트가 기동마다 만든다)이라 「사용자:비밀번호」
+# 의 base64 가 76자를 넘는다(GNU · BusyBox base64 는 76자에서 줄을 바꾼다).
+OPS_FAKE_API_PASS="$(printf '0123456789abcdef%.0s' 1 2 3 4)"
+readonly OPS_FAKE_API_PASS
 readonly OPS_SIDECAR_ID='pcbenchsidecar01'
 readonly OPS_MEDIAMTX_ID='pcbenchmediamtx01'
 readonly OPS_NGINX_ID='pcbenchnginx01'

@@ -25,7 +25,10 @@ readonly MEDIA_HOST_DIR
 source "${TEST_DIR}/lib/harness.sh"
 
 readonly SCRIPT="${MEDIA_HOST_DIR}/ops/force-diff.sh"
-readonly CASE_COUNT=7
+readonly CASE_COUNT=10
+# write_inputs 의 A · B 파일 ID 줄 수(paths-list 의 「PATHS LIST <n>」).
+readonly A_LINES=8
+readonly B_LINES=3
 readonly RUN_TIMEOUT=20
 
 root=""
@@ -118,11 +121,23 @@ write_inputs() {
     >"${dir}/ended.txt"
 }
 
+#######################################
+# 실물 꼴 입력 셋을 개수 인자와 함께 넘긴다.
+# Globals:
+#   dir
+# Arguments:
+#   환경(NAME=값 …)(없어도 됨).
+#######################################
+run_inputs() {
+  run_diff "$@" -- "${dir}/A.txt" "${dir}/B.txt" "${dir}/ended.txt" \
+    "${A_LINES}" "${B_LINES}"
+}
+
 # 사례 1 — 정렬 안 된 A · B 와 실물 3열 ended → 남은 목록(C 정렬) · 건수.
 case_remaining() {
   new_case
   write_inputs
-  run_diff -- "${dir}/A.txt" "${dir}/B.txt" "${dir}/ended.txt" || return 1
+  run_inputs || return 1
   expect_output "FORCE REMAINING 4
 01JAAAAAAAAAAAAAAAAAAAAAA1
 01JZZZZZZZZZZZZZZZZZZZZZZ9
@@ -137,7 +152,7 @@ case_all_covered() {
   printf '%s\t%s\t%s\n' 01JAAAAAAAAAAAAAAAAAAAAAA1 t p \
     01JZZZZZZZZZZZZZZZZZZZZZZ9 t p lower-case-id t p \
     Zeta-upper t p >>"${dir}/ended.txt"
-  run_diff -- "${dir}/A.txt" "${dir}/B.txt" "${dir}/ended.txt" || return 1
+  run_inputs || return 1
   expect_output 'FORCE REMAINING 0' 0
 }
 
@@ -147,7 +162,8 @@ case_blank_and_empty() {
   printf '\nprobe-a\n\nprobe-b\n' >"${dir}/A.txt"
   : >"${dir}/B.txt"
   : >"${dir}/ended.txt"
-  run_diff -- "${dir}/A.txt" "${dir}/B.txt" "${dir}/ended.txt" || return 1
+  run_diff -- "${dir}/A.txt" "${dir}/B.txt" "${dir}/ended.txt" 2 0 \
+    || return 1
   expect_output 'FORCE REMAINING 2
 probe-a
 probe-b' 0
@@ -158,8 +174,7 @@ probe-b' 0
 case_locale() {
   new_case
   write_inputs
-  run_diff LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 -- "${dir}/A.txt" \
-    "${dir}/B.txt" "${dir}/ended.txt" || return 1
+  run_inputs LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 || return 1
   expect_output "FORCE REMAINING 4
 01JAAAAAAAAAAAAAAAAAAAAAA1
 01JZZZZZZZZZZZZZZZZZZZZZZ9
@@ -176,7 +191,7 @@ case_bad_lines() {
       new_case
       write_inputs
       printf '%s\n' "${line}" >>"${dir}/${which}.txt"
-      run_diff -- "${dir}/A.txt" "${dir}/B.txt" "${dir}/ended.txt" || return 1
+      run_inputs || return 1
       if ! expect_output "FORCE FAIL input ${which}" 1; then
         harness::add_reason "(${which})"
         ok=1
@@ -191,25 +206,74 @@ case_missing_input() {
   local ok=0
   new_case
   write_inputs
-  run_diff -- "${dir}/A.txt" "${dir}/nope.txt" "${dir}/ended.txt" || return 1
+  run_diff -- "${dir}/A.txt" "${dir}/nope.txt" "${dir}/ended.txt" \
+    "${A_LINES}" "${B_LINES}" || return 1
   expect_output 'FORCE FAIL input B' 1 || ok=1
   new_case
   write_inputs
-  run_diff -- "${dir}" "${dir}/B.txt" "${dir}/ended.txt" || return 1
+  run_diff -- "${dir}" "${dir}/B.txt" "${dir}/ended.txt" "${A_LINES}" \
+    "${B_LINES}" || return 1
   expect_output 'FORCE FAIL input A' 1 || ok=1
   return "${ok}"
 }
 
-# 사례 7 — 인자 수가 셋이 아니면 사용법(종료 2).
+# 사례 7 — 인자 수가 다섯이 아니거나 개수가 음 아닌 정수가 아니면 사용법
+# (종료 2).
 case_usage() {
-  local ok=0
+  local ok=0 count
   new_case
   write_inputs
-  run_diff -- "${dir}/A.txt" "${dir}/B.txt" || return 1
+  run_diff -- "${dir}/A.txt" "${dir}/B.txt" "${dir}/ended.txt" || return 1
   expect_output 'FORCE FAIL usage' 2 || ok=1
   run_diff -- || return 1
   expect_output 'FORCE FAIL usage' 2 || ok=1
+  for count in '' x -1 08; do
+    run_diff -- "${dir}/A.txt" "${dir}/B.txt" "${dir}/ended.txt" \
+      "${count}" "${B_LINES}" || return 1
+    if ! expect_output 'FORCE FAIL usage' 2; then
+      harness::add_reason "(A 개수 「${count}」)"
+      ok=1
+    fi
+  done
   return "${ok}"
+}
+
+# 사례 8 — 파일의 ID 줄 수가 개수 인자와 다르면(SSM 출력 한도 등으로 목록이
+# 잘림) 대조하지 않는다.
+case_count_mismatch() {
+  local ok=0
+  new_case
+  write_inputs
+  run_diff -- "${dir}/A.txt" "${dir}/B.txt" "${dir}/ended.txt" \
+    "$((A_LINES + 1))" "${B_LINES}" || return 1
+  expect_output 'FORCE FAIL count A' 1 || ok=1
+  run_diff -- "${dir}/A.txt" "${dir}/B.txt" "${dir}/ended.txt" \
+    "${A_LINES}" "$((B_LINES - 1))" || return 1
+  expect_output 'FORCE FAIL count B' 1 || ok=1
+  return "${ok}"
+}
+
+# 사례 9 — A 에 ID 가 없으면(실패한 조회를 저장한 빈 파일) 「복구 완료」 가
+# 아니라 거부한다.
+case_empty_a() {
+  new_case
+  write_inputs
+  : >"${dir}/A.txt"
+  run_diff -- "${dir}/A.txt" "${dir}/B.txt" "${dir}/ended.txt" 0 \
+    "${B_LINES}" || return 1
+  expect_output 'FORCE FAIL empty A' 1
+}
+
+# 사례 10 — 꼴 검사의 grep 이 오류로 끝나면(종료 2) 「꼴 밖 줄 없음」 이 아니라
+# 그 입력을 거부한다.
+case_grep_error() {
+  new_case
+  write_inputs
+  mkdir -p -- "${dir}/bin"
+  printf '#!/bin/sh\nexit 2\n' >"${dir}/bin/grep"
+  chmod +x "${dir}/bin/grep"
+  run_inputs "PATH=${dir}/bin:/usr/bin:/bin" || return 1
+  expect_output 'FORCE FAIL input A' 1
 }
 
 cleanup() {
@@ -237,7 +301,10 @@ main() {
   harness::run_case 4 '로캘 무관(LC_ALL=C)' case_locale
   harness::run_case 5 'ID 꼴 아닌 줄 → FORCE FAIL input' case_bad_lines
   harness::run_case 6 '없는 입력 → FORCE FAIL input' case_missing_input
-  harness::run_case 7 '인자 수 → 사용법' case_usage
+  harness::run_case 7 '인자 수 · 개수 꼴 → 사용법' case_usage
+  harness::run_case 8 'ID 줄 수 ≠ 개수 → FORCE FAIL count' case_count_mismatch
+  harness::run_case 9 '빈 A → FORCE FAIL empty A' case_empty_a
+  harness::run_case 10 '꼴 검사 grep 오류 → FORCE FAIL input' case_grep_error
 
   if ! harness::summary "${CASE_COUNT}"; then
     exit 1

@@ -30,7 +30,7 @@ source "${TEST_DIR}/lib/ops_fixture.sh"
 # shellcheck source=lib/paths_cases.sh
 source "${TEST_DIR}/lib/paths_cases.sh"
 
-readonly CASE_COUNT=14
+readonly CASE_COUNT=15
 # paths_cases.sh 가 읽는다.
 # shellcheck disable=SC2034
 readonly paths_script='bin/paths-count.sh'
@@ -134,6 +134,8 @@ main() {
     case_request_and_timeout
   harness::run_case 14 '인자 · 상한 값 오류 → docker 0' \
     paths::case_usage_and_config
+  harness::run_case 15 '8 MiB 넘는 응답 → response · 항목 1000 개 상한 안' \
+    paths::case_large_response
 
   if ! harness::summary "${CASE_COUNT}"; then
     exit 1

@@ -55,8 +55,8 @@
 #   MEDIA_LIVE_PORT             필수. nginx live 포트(compose proxy_live_port).
 #   LOOPBACK_WAIT_SECONDS       200 을 기다리는 상한(초, 1–300). 기본 30.
 #   DOCKER_CONFIG               기본 /root/.docker.
-#   그 밖은 lib/ops.sh 머리 주석(MEDIA_COMPOSE_PROJECT · MEDIA_OPS_TIMEOUT ·
-#   MEDIA_OPS_SCRATCH_BASE).
+#   그 밖은 lib/ops.sh 머리 주석(MEDIA_COMPOSE_PROJECT · MEDIA_OPS_TIMEOUT).
+#   스크래치는 TMPDIR(없으면 /tmp) 아래다.
 
 # shellcheck source-path=SCRIPTDIR
 

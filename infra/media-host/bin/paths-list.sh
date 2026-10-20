@@ -9,7 +9,9 @@
 #
 # 출력:
 #   성공 — 표준 출력에 송출 중 경로 이름만 한 줄에 하나(응답 순서). 송출 중이
-#          없으면 빈 출력. 종료 0.
+#          없으면 빈 출력. 표준 오류에는 개수 줄 「PATHS LIST <n>」 하나 —
+#          저장한 목록이 SSM 출력 한도 등으로 잘렸는지 force-diff.sh 가 이
+#          개수로 대조한다. 종료 0. 목록은 종료 0 일 때만 저장한다.
 #   실패 — 표준 출력은 비우고 판정 줄 하나를 표준 오류에 낸다(목록 파일에 실패
 #          줄이 섞여 ID 로 읽히지 않게). 종료 1(인자 오류는 2).
 #          PATHS LIST INCOMPLETE  여러 페이지(pageCount > 1) — force · 복구 완료
@@ -32,6 +34,7 @@ source "${BIN_DIR}/lib/ops.sh"
 source "${BIN_DIR}/lib/mtx_paths.sh"
 
 main() {
+  local count=0
   if (( $# != 0 )); then
     ops::say 'PATHS FAIL usage' >&2
     exit 2
@@ -50,7 +53,9 @@ main() {
   fi
   if [[ -n "${mtx_paths_publishing}" ]]; then
     printf '%s\n' "${mtx_paths_publishing}"
+    count="$(printf '%s\n' "${mtx_paths_publishing}" | awk 'END { print NR }')"
   fi
+  ops::say "PATHS LIST ${count}" >&2
 }
 
 main "$@"

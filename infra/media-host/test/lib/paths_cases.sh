@@ -40,6 +40,10 @@ readonly PATHS_MULTI_PAGE_JSON='{"itemCount":2,"pageCount":2,"items":[
 {"name":"a","online":true,"source":{}}]}'
 readonly PATHS_ITEM_FORMAT='{"name":"pcbench-%03d","online":true,
 "source":{"type":"srtConn"}}'
+# 응답 크기 상한(8 MiB)을 넘기는 본문의 채움 바이트 수 · 큰 응답을 끝내야 하는
+# 시간(초).
+readonly PATHS_OVERSIZE_PAD=8800000
+readonly PATHS_LARGE_SECONDS=20
 
 #######################################
 # 송출 중 항목 n 개 · pageCount 로 응답 본문을 만든다.
@@ -202,6 +206,7 @@ paths::case_malformed() {
     '{"itemCount":0,"pageCount":0,"items":[],}'
     '{"itemCount":01,"pageCount":0,"items":[]}'
     '{"itemCount":0,"pageCount":0,"items":[],"x":"\q"}'
+    '{"itemCount":0,"pageCount":0,"items":[]}"'
     '<html>404</html>'
     ''
   )
@@ -300,6 +305,33 @@ paths::case_project_default() {
     || ! grep -q -x -F 'label=com.docker.compose.project=pokeclip-media' "${f}"
   then
     harness::add_reason 'docker ps 에 기본 프로젝트 라벨이 없음'
+    ok=1
+  fi
+  return "${ok}"
+}
+
+#######################################
+# 큰 응답 — 8 MiB 를 넘는 응답은 훑지 않고 곧 response 로 실패하고, 항목
+# 1000 개(itemsPerPage 상한)는 상한 시간 안에 훑어 성공한다.
+#######################################
+paths::case_large_response() {
+  local ok=0 start pad
+  pad="$(head -c "${PATHS_OVERSIZE_PAD}" /dev/zero | tr '\0' x)"
+  paths::setup \
+    "{\"itemCount\":0,\"pageCount\":0,\"items\":[],\"pad\":\"${pad}\"}"
+  start="${SECONDS}"
+  paths::run || return 1
+  paths_expect_fail response || ok=1
+  if (( SECONDS - start > PATHS_LARGE_SECONDS )); then
+    harness::add_reason "8 MiB 넘는 응답에 $((SECONDS - start))초 걸림"
+    ok=1
+  fi
+  paths::setup "$(paths::json_items 1000 1)"
+  start="${SECONDS}"
+  paths::run || return 1
+  ops_fixture::expect_status 0 || ok=1
+  if (( SECONDS - start > PATHS_LARGE_SECONDS )); then
+    harness::add_reason "항목 1000 개에 $((SECONDS - start))초 걸림"
     ok=1
   fi
   return "${ok}"

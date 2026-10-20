@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 #
 # bin/secret-count.sh 시험 — 계획 M2 c5 「secret-count.sh」 · 착수 덧붙임
-# 편차 2 · MP23(box 입력 = 유닛 저널 + 태그 저널 셋 + mediamtx · nginx docker
-# logs) · kty 86차(passphrase 대조는 --passphrase 갈래에서만).
+# 편차 2(box 입력 = 유닛 저널 + 태그 저널 셋 + mediamtx · nginx docker logs —
+# 사이드카는 다시 뜬 앞 컨테이너 로그까지 남는 태그 저널로) · kty 86차
+# (passphrase 대조는 --passphrase 갈래에서만) · box 의 사이드카 API 비밀번호
+# 대조(시작 스크립트가 RUNTIME_DIR 에 둔 이번 기동의 값 · Basic 꼴).
 #
 # 스크립트를 빈 환경(env -i)에서 돌린다. PATH 맨 앞에는 가짜 docker · aws ·
 # journalctl 과 grep 감시 래퍼(argv · 환경을 기록한 뒤 진짜 grep 실행)만 둔다.
@@ -28,7 +30,9 @@ source "${TEST_DIR}/lib/harness.sh"
 source "${TEST_DIR}/lib/ops_fixture.sh"
 
 readonly SCRIPT='bin/secret-count.sh'
-readonly CASE_COUNT=15
+readonly CASE_COUNT=18
+# 사이드카 API 사용자 이름(compose MTX_API_USER) — Basic 값의 앞부분.
+readonly SIDECAR_API_USER='pokeclip-sidecar'
 readonly COMMAND_ID='0123abcd-4567-89ef-0123-456789abcdef'
 readonly INSTANCE_A='i-0123456789abcdef0'
 readonly INSTANCE_B='i-0fedcba9876543210'
@@ -47,8 +51,19 @@ setup_box() {
   ops_fixture::container "${OPS_SIDECAR_ID}" sidecar running
   printf 'sidecar docker logs 줄 %s\n' "${OPS_FAKE_CDN_SECRET}" \
     >"${ops_dir}/state/logs.${OPS_SIDECAR_ID}.out"
+  mkdir -p -- "${ops_dir}/runtime"
+  printf '%s\n' "${OPS_FAKE_API_PASS}" >"${ops_dir}/runtime/mtx_api_pass"
   ops_env+=("CDN_SECRET_ARN=${OPS_FAKE_CDN_ARN}"
-    "TEST_STREAM_KEY_SECRET_ARN=${OPS_FAKE_KEY_ARN}")
+    "TEST_STREAM_KEY_SECRET_ARN=${OPS_FAKE_KEY_ARN}"
+    "RUNTIME_DIR=${ops_dir}/runtime")
+}
+
+#######################################
+# 사이드카 API 자격의 Basic 값(base64 — 줄바꿈 없이)을 낸다.
+#######################################
+api_basic() {
+  printf '%s:%s' "${SIDECAR_API_USER}" "${OPS_FAKE_API_PASS}" \
+    | /usr/bin/base64 | tr -d '\n'
 }
 
 #######################################
@@ -73,22 +88,28 @@ run_count() {
 }
 
 #######################################
-# 비밀 노출 0 · 스크래치 잔여 0 · grep 호출 꼴 · 금지 docker 하위 명령 0 을
-# 본다.
+# 비밀 노출 0 · 스크래치 잔여 0 · grep 호출 꼴(LC_ALL=C · -a — 바이너리가
+# 섞인 로그도 줄 단위로 센다) · 금지 docker 하위 명령 0 을 본다.
 #######################################
 expect_hygiene() {
   local ok=0 f sub left
   ops_fixture::expect_no_leak "${OPS_FAKE_CDN_SECRET}" 'CDN 비밀' || ok=1
   ops_fixture::expect_no_leak "${OPS_FAKE_PASSPHRASE}" '시험 passphrase' || ok=1
+  ops_fixture::expect_no_leak "${OPS_FAKE_API_PASS}" 'API 비밀번호' || ok=1
+  ops_fixture::expect_no_leak "$(api_basic)" 'API Basic 값' || ok=1
   left="$(ops_fixture::tmp_files)"
   if [[ "${left}" != 0 ]]; then
     harness::add_reason "스크래치 잔여 ${left}"
     ok=1
   fi
   while IFS= read -r f; do
-    if [[ "$(head -n 4 "${f}" | paste -s -d ' ' -)" != '-F -c -f -' \
-      || "$(awk 'END { print NR }' "${f}")" != 5 ]]; then
-      harness::add_reason "grep argv 가 「-F -c -f - <파일>」 이 아님"
+    if [[ "$(head -n 5 "${f}" | paste -s -d ' ' -)" != '-a -F -c -f -' \
+      || "$(awk 'END { print NR }' "${f}")" != 6 ]]; then
+      harness::add_reason "grep argv 가 「-a -F -c -f - <파일>」 이 아님"
+      ok=1
+    fi
+    if ! grep -q -x -F 'LC_ALL=C' "${f%.argv}.env"; then
+      harness::add_reason 'grep 환경에 LC_ALL=C 가 없음'
       ok=1
     fi
   done < <(ops_fixture::calls grep)
@@ -118,7 +139,8 @@ case_box_zero() {
   return "${ok}"
 }
 
-# 사례 2 — box: 사이드카 태그 저널에 2건 → SECRET COUNT box 2(MP23 · MU5-1).
+# 사례 2 — box: 사이드카 태그 저널에 2건 → SECRET COUNT box 2(사이드카는
+# docker logs 가 아니라 태그 저널로 센다).
 case_box_tag_journal() {
   local ok=0
   setup_box
@@ -376,7 +398,7 @@ pad_then_secret() {
   printf '\n%s\n' "${OPS_FAKE_CDN_SECRET}" >>"$1"
 }
 
-# 사례 13 — 끝나지 않은 명령 · invocation 은 0 건이 아니라 ssm-status(G1).
+# 사례 13 — 끝나지 않은 명령 · invocation 은 0 건이 아니라 ssm-status.
 # 끝까지 돈 Failed 는 센다.
 case_ssm_status() {
   local ok=0 status
@@ -412,7 +434,7 @@ case_ssm_status() {
 }
 
 # 사례 14 — API 한도(표준 출력 24,000 · 표준 오류 8,000)에 닿은 기록은
-# ssm-truncated(G1). 한도 밑이면 센다.
+# ssm-truncated. 한도 밑이면 센다.
 case_ssm_truncated() {
   local ok=0
   setup_ssm_one
@@ -434,12 +456,61 @@ case_ssm_truncated() {
 
 # 사례 15 — 상태만 묻는 조회는 Success 인데 출력을 받는 조회가 오래된 진행 중
 # 응답(빈 출력)을 받는 경합 — 출력 응답의 상태도 봐서 0 건이 아니라
-# ssm-status(G1 확인 패스).
+# ssm-status.
 case_ssm_status_race() {
   setup_ssm_one
   : >"${ops_dir}/state/ssm.race.${INSTANCE_A}"
   run_count ssm "${COMMAND_ID}" || return 1
   ops_fixture::expect_line 'SECRET COUNT FAIL ssm-status' nonzero
+}
+
+# 사례 16 — box: 이번 기동의 사이드카 API 비밀번호(RUNTIME_DIR/mtx_api_pass)와
+# 그 Basic 값(사용자:비밀번호의 base64)도 센다 — nginx 표준 오류의 비밀번호
+# 1 · 유닛 저널의 Basic 값 1 = 2.
+case_box_api_pass() {
+  local ok=0
+  setup_box
+  plant "${ops_dir}/state/logs.${OPS_NGINX_ID}.err" "${OPS_FAKE_API_PASS}" 1
+  plant "${ops_dir}/state/journal.u.pokeclip-media" "$(api_basic)" 1
+  run_count box || return 1
+  ops_fixture::expect_line 'SECRET COUNT box 2' 0 || ok=1
+  expect_hygiene || ok=1
+  return "${ok}"
+}
+
+# 사례 17 — box: 비밀번호 파일이 없거나 꼴(16진 64자)이 아니면 0 건이 아니라
+# api-pass 로 실패한다.
+case_box_api_pass_unavailable() {
+  local ok=0
+  setup_box
+  rm -f -- "${ops_dir}/runtime/mtx_api_pass"
+  run_count box || return 1
+  ops_fixture::expect_line 'SECRET COUNT FAIL api-pass' nonzero || ok=1
+  setup_box
+  printf 'not-a-hex-password\n' >"${ops_dir}/runtime/mtx_api_pass"
+  run_count box || return 1
+  ops_fixture::expect_line 'SECRET COUNT FAIL api-pass' nonzero || ok=1
+  return "${ok}"
+}
+
+# 사례 18 — ssm: 기록을 읽는 변수 이름(first)이 부모 환경에서 export 된 채
+# 들어와도(bash 의 local 이 export 속성을 이어받는 꼴) 그 변수에 담긴 기록 첫
+# 줄(비밀이 든 줄)이 자식(wc · tail) 환경에 실리지 않는다.
+case_ssm_inherited_export() {
+  local ok=0 name
+  setup_ssm_one
+  for name in wc tail; do
+    ln -s -- "${TEST_DIR}/ops_fakebin/watch" "${ops_dir}/bin/${name}"
+  done
+  ops_fixture::run "${SCRIPT}" first=inherited -- ssm "${COMMAND_ID}" \
+    || return 1
+  ops_fixture::expect_line 'SECRET COUNT ssm 1' 0 || ok=1
+  if [[ "$(ops_fixture::count wc)" == 0 ]]; then
+    harness::add_reason 'wc 를 부르지 않아 판정 불가'
+    ok=1
+  fi
+  ops_fixture::expect_no_leak "${OPS_FAKE_CDN_SECRET}" 'CDN 비밀' || ok=1
+  return "${ok}"
 }
 
 main() {
@@ -453,7 +524,7 @@ main() {
   ops_fixture::init secret-count
 
   harness::run_case 1 'box 심지 않음 → 0 · 노출 0 · grep stdin' case_box_zero
-  harness::run_case 2 'box 태그 저널 2건 → 2(MP23)' case_box_tag_journal
+  harness::run_case 2 'box 태그 저널 2건 → 2' case_box_tag_journal
   harness::run_case 3 'box 입력마다 심은 건수 합' case_box_all_inputs
   harness::run_case 4 'box 정지한 컨테이너 로그도 셈' case_box_exited_container
   harness::run_case 5 'passphrase 는 --passphrase 에서만' case_passphrase_branch
@@ -470,6 +541,11 @@ main() {
     case_ssm_truncated
   harness::run_case 15 'ssm 상태 · 출력 조회 경합 → ssm-status' \
     case_ssm_status_race
+  harness::run_case 16 'box API 비밀번호 · Basic 값도 셈' case_box_api_pass
+  harness::run_case 17 'box API 비밀번호 파일 없음 · 꼴 밖 → api-pass' \
+    case_box_api_pass_unavailable
+  harness::run_case 18 'ssm 상속 export 에도 기록 첫 줄이 자식 환경에 0' \
+    case_ssm_inherited_export
 
   if ! harness::summary "${CASE_COUNT}"; then
     exit 1

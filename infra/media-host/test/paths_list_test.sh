@@ -4,7 +4,8 @@
 # (송출 중 판정 = 사이드카 폴러 규칙 · 전수성 · 빈 목록)와 kty 85 · 86차.
 #
 # 판정: 성공이면 표준 출력에 송출 중 경로 이름만 한 줄에 하나(목록 파일로
-# 저장된다), 실패면 표준 출력은 비우고 판정 줄은 표준 오류 — 실패 줄이 목록
+# 저장된다)와 표준 오류에 개수 줄 「PATHS LIST <n>」(force-diff 가 잘린 목록을
+# 가린다), 실패면 표준 출력은 비우고 판정 줄은 표준 오류 — 실패 줄이 목록
 # 파일에 섞여 force-diff 의 ID 로 읽히지 않게. 실행 도구는 paths_count_test 와
 # 같다(test/lib/ops_fixture.sh).
 #
@@ -29,7 +30,7 @@ source "${TEST_DIR}/lib/ops_fixture.sh"
 # shellcheck source=lib/paths_cases.sh
 source "${TEST_DIR}/lib/paths_cases.sh"
 
-readonly CASE_COUNT=14
+readonly CASE_COUNT=15
 # paths_cases.sh 가 읽는다.
 # shellcheck disable=SC2034
 readonly paths_script='bin/paths-list.sh'
@@ -66,7 +67,8 @@ paths_expect_fail() {
 }
 
 #######################################
-# 성공 판정 — 표준 출력이 정확히 이 줄들(순서대로) · 표준 오류 빈 · 종료 0.
+# 성공 판정 — 표준 출력이 정확히 이 줄들(순서대로) · 표준 오류가 개수 줄
+# 「PATHS LIST <n>」 하나 · 종료 0.
 # Arguments:
 #   기대 이름 …(없으면 빈 출력).
 #######################################
@@ -79,8 +81,9 @@ expect_names() {
     harness::add_reason "목록이 다름: $(harness::log_tail "${ops_dir}/out")"
     ok=1
   fi
-  if [[ -s "${ops_dir}/err" ]]; then
-    harness::add_reason "표준 오류: $(harness::log_tail "${ops_dir}/err")"
+  if [[ "$(cat "${ops_dir}/err")" != "PATHS LIST $#" ]]; then
+    harness::add_reason "표준 오류가 「PATHS LIST $#」 한 줄이 아님: \
+$(harness::log_tail "${ops_dir}/err")"
     ok=1
   fi
   ops_fixture::expect_status 0 || ok=1
@@ -173,6 +176,8 @@ main() {
     case_request_and_timeout
   harness::run_case 14 '인자 · 상한 값 오류 → docker 0' \
     paths::case_usage_and_config
+  harness::run_case 15 '8 MiB 넘는 응답 → response · 항목 1000 개 상한 안' \
+    paths::case_large_response
 
   if ! harness::summary "${CASE_COUNT}"; then
     exit 1

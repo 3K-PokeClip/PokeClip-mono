@@ -8,8 +8,8 @@
 #       비부착 서비스 태그 저널 셋(pokeclip-media-sidecar · -ingest-auth ·
 #       -janitor) · mediamtx · nginx 컨테이너(정지한 것 포함)의 docker logs 를
 #       대조한다. 사이드카는 docker logs 가 아니라 태그 저널로 읽는다 — 엔진이
-#       다시 띄운 사이드카의 앞 컨테이너 로그까지 남는 곳이다(착수 덧붙임
-#       편차 2 · MP23). docker inspect · exec · env 는 쓰지 않는다.
+#       다시 띄운 사이드카의 앞 컨테이너 로그까지 남는 곳이다. docker inspect ·
+#       exec · env 는 쓰지 않는다.
 #   secret-count.sh [--passphrase] ssm <command-id>
 #       kty 로컬에서 돌린다. 그 SSM 명령의 인스턴스마다 기록(표준 출력 · 오류
 #       — aws ssm get-command-invocation, 읽기)을 대조한다. 명령과, 출력을 받은
@@ -23,20 +23,27 @@
 # 대조 값: CDN 비밀(CDN_SECRET_ARN). --passphrase 면 시험 스트림 키 passphrase
 # (TEST_STREAM_KEY_SECRET_ARN)도 — passphrase 를 싣는 루프백은 송출 인증(M15)
 # 반영 뒤에만 돈다(kty 86차 R4). 값은 Secrets Manager 에서 직접 읽어 셸 변수에만
-# 두고(argv 에는 ARN 만), 대조는 `printf '%s\n' … | grep -F -c -f - <파일>` 로만
-# 한다 — 값은 표준 입력으로만 grep 에 간다. 대조할 입력은 스크래치 파일(0600)에
-# 먼저 받고 끝나면 지운다.
+# 둔다(argv 에는 ARN 만). box 면 사이드카의 MediaMTX API 비밀번호(시작 스크립트가
+# RUNTIME_DIR/mtx_api_pass 에 둔 이번 기동의 값 — root 로 읽는다)와 그 Basic
+# 값(「pokeclip-sidecar:<비밀번호>」 의 base64 — 줄바꿈 없이)도 대조한다. 한계:
+# 비밀번호는 기동마다 새로 만들어지므로 이전 기동의 로그에 남은 옛 비밀번호는
+# 대조하지 못하고, ssm 은 그 파일을 읽을 수 없어 대조하지 않는다. 대조는
+# `printf '%s\n' … | LC_ALL=C grep -a -F -c -f - <파일>` 로만 한다 — 값은 표준
+# 입력으로만 grep 에 가고, 바이너리 · 깨진 바이트가 섞인 로그도 줄 단위로
+# 센다. 대조할 입력은 스크래치 파일(0600)에 먼저 받고 끝나면 지운다.
 #
 # 출력(표준 출력 한 줄):
 #   SECRET COUNT <box|ssm> <n>   값이 든 줄 수(두 값이면 어느 하나라도 든 줄).
 #   SECRET COUNT FAIL <단계>     usage · config · cdn-secret · test-key ·
+#                                api-pass(box — 비밀번호 파일 없음 · 꼴 밖) ·
 #                                journal · mediamtx · nginx · docker-logs ·
 #                                ssm-command · ssm-list · ssm-status ·
 #                                ssm-output · ssm-truncated · grep.
 #                                0 건이 아니다.
 # 종료 코드: 0 셈 / 1 실패 / 2 인자 오류.
 #
-# 그 밖에 읽는 변수는 lib/ops.sh 머리 주석.
+# 읽는 변수: RUNTIME_DIR(box — 기본 /run/pokeclip-media, 시작 스크립트와 같다).
+# 그 밖은 lib/ops.sh 머리 주석.
 
 # shellcheck source-path=SCRIPTDIR
 
@@ -44,9 +51,10 @@ set -euo pipefail
 set +x +a
 umask 077
 ulimit -c 0
-# 비밀을 담는 변수 이름이 부모 환경에서 export 된 채 들어오면 local 이 그
-# 속성을 이어받는다 — 쓰기 전에 지운다.
-unset -v values value
+# 비밀 · 그것이 든 원문을 담는 변수 이름이 부모 환경에서 export 된 채 들어오면
+# local 이 그 속성을 이어받아 자식(grep · wc · tail · base64) 환경에 값이
+# 실린다 — 쓰기 전에 지운다.
+unset -v values value first pass basic
 
 BIN_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly BIN_DIR
@@ -65,6 +73,10 @@ readonly SSM_STDOUT_LIMIT=24000
 readonly SSM_STDERR_LIMIT=8000
 # 끝까지 돈 상태 — 명령(list-commands)과 invocation 의 Status · StatusDetails.
 readonly SSM_DONE_PATTERN='^(Success|Failed)$'
+# 사이드카 API 사용자 이름(compose MTX_API_USER) · 비밀번호 꼴(시작 스크립트가
+# 기동마다 만드는 16진 64자).
+readonly SIDECAR_API_USER='pokeclip-sidecar'
+readonly API_PASS_PATTERN='^[0-9a-f]{64}$'
 
 step=""
 
@@ -116,6 +128,26 @@ collect_box() {
       fi
     done
   done
+}
+
+#######################################
+# 이번 기동의 사이드카 API 비밀번호와 그 Basic 값을 대조 값(부르는 main 의
+# 지역 배열 values)에 더한다. 비밀번호는 내장 read · printf 로만 다루고
+# base64 에는 표준 입력으로만 넘긴다.
+# Globals:
+#   RUNTIME_DIR, values(main 의 지역 — 동적 범위)
+# Returns:
+#   0 더함 / 1 파일 없음 · 못 읽음 · 꼴 밖.
+#######################################
+add_api_pass_values() {
+  local file="${RUNTIME_DIR:-/run/pokeclip-media}/mtx_api_pass" pass basic
+  [[ -f "${file}" && -r "${file}" ]] || return 1
+  IFS= read -r pass <"${file}" || return 1
+  [[ "${pass}" =~ ${API_PASS_PATTERN} ]] || return 1
+  basic="$(printf '%s:%s' "${SIDECAR_API_USER}" "${pass}" | base64 \
+    | tr -d '\n')" || return 1
+  [[ -n "${basic}" ]] || return 1
+  values+=("${pass}" "${basic}")
 }
 
 #######################################
@@ -248,6 +280,9 @@ main() {
     values+=("${value}")
   fi
   unset value
+  if [[ "${mode}" == box ]]; then
+    add_api_pass_values || fail api-pass
+  fi
   ops::make_scratch
   input="${ops_scratch}/input"
   : >"${input}"
@@ -256,8 +291,8 @@ main() {
   else
     collect_ssm "${limit}" "${command_id}" "${input}" || fail "${step}"
   fi
-  count="$(printf '%s\n' "${values[@]}" | grep -F -c -f - "${input}")" \
-    || status=$?
+  count="$(printf '%s\n' "${values[@]}" \
+    | LC_ALL=C grep -a -F -c -f - "${input}")" || status=$?
   unset values
   # grep -c 는 맞는 줄이 없으면 0 을 내고 종료 1 이다. 2 이상은 오류다.
   if (( status > 1 )) || [[ ! "${count}" =~ ^[0-9]+$ ]]; then
