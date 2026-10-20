@@ -5,7 +5,7 @@
 - 목적: 엣지 트랙 M15(prod 송출 인증을 응답기로)의 착수 조건 「응답기 계약 확정(포트 · 인증 요청 경로 · 비밀 파일 경로)」을 채운다.
 - 기준 판: 응답기 코드 · dev-media 구성 = `origin/develop`(64633374), M2 compose 자리 = `origin/feat/infra-media-host`(14a57f37), 계획 = 엣지 계획 r6.7(4절 출처). 줄 번호는 이 판 기준이다.
 - 읽는 법: 1절은 **dev-media 가동판 코드와 설정에서 읽어낸 사실**이다(코드가 그렇게 동작한다). 2절은 **prod 에서 정해야 할 선택**이다(계획이 가정한 것과 코드가 다른 자리). 3절은 kty 가 정한 것(K1–K8)과 착수 때 할 확인 항목이다.
-- 표기: 제어망 `10.250.0.0/29` 안의 두 주소는 `<A_mtx>`(MediaMTX) · `<A_auth>`(응답기)로 쓴다. 비밀 · 계정 ID · 사설 IP 실값은 이 문서에 없다.
+- 표기: 제어망 `10.250.0.0/29` 안의 두 주소는 `<A_mtx>`(MediaMTX) · `<A_auth>`(응답기)로 쓴다. 비밀 · 계정 ID · 사설 IP 실값은 이 문서에 없다(설계 제어망 대역 `10.250.0.0/29` 표기는 예외).
 - 이 조사에서 **직접 실행해 확인하지 않은 것**은 「미확인」으로 표시했다. 코드를 읽고 추론한 것은 「추론」이다.
 
 ## 용어 각주
@@ -187,7 +187,7 @@ prod 기대 = 계획 M2(Media 상자 compose) · M15(송출 인증 반영) · O8
 - **선택지**:
   - (가) 수용하고 기록한다. 근거: M2 의 nginx 는 고정 location 만 프록시하고 8080 · 9997 로 가는 location 이 없다(계획 c2). 위 잔여 위험을 M15 PR 의 보안 검토(ecc:security-reviewer 병렬)에 명시 항목으로 올린다. 비용 0.
   - (나) nginx 를 MediaMTX netns 에서 분리한다. 장: 응답기 · Control API 에 닿는 컨테이너가 mediamtx · 사이드카 · janitor 로 줄어든다. 단: M2 의 「nginx 가 `127.0.0.1:8888` 에 닿는다」(c1 사례 11)가 깨져 M2 구조 · 시험 · 헬스 경로를 다시 짠다.
-  - (라) **별도 자격 검증 — 확인됨(kty 115차 채택)**: `authHTTPAddress` 를 `http://사용자:비번@127.0.0.1:포트/…` 꼴로 두면 응답기가 호출자를 Basic 으로 검증할 수 있다. 포크 `v1.21.1-pokeclip.2` 이미지 로컬 실측(2026-10-20)으로 **확인된 것은 셋**이다: ① MediaMTX 가 응답기로 보내는 요청에 `Authorization: Basic` 이 실린다 ② 인증 실패 로그는 `http://user:***@…` 로 비밀번호를 가린다 ③ **Control API 의 설정 조회(`GET /v3/config/global/get`)는 `authHTTPAddress` 를 자격 평문 그대로 돌려준다**(가림 없음 · 로그 노출은 0). 소스 근거: `internal/auth/manager.go` 의 `httpClient.Post(m.HTTPAddress, …)`, `internal/conf/conf.go` 는 `http(s)` 접두만 검사. ③ 때문에 **Control API 에 인증된 주체(사이드카 · 응답기 자신)는 Basic 자격을 읽을 수 있고, Control API 자격이 없는 nginx 는 읽지 못한다.** 응답기 코드 변경 = Basic 검사 추가(「응답기 코드 변경 한 묶음」). 비용: 비밀이 하나 늘고 MediaMTX 설정 파일에 비밀이 든다(tmpfs 렌더 · `0400` 10002 — M2 c4 의 `mediamtx.yml` 렌더와 같은 자리).
+  - (라) **별도 자격 검증 — 확인됨(kty 결정 2026-10-20 채택)**: `authHTTPAddress` 를 `http://사용자:비번@127.0.0.1:포트/…` 꼴로 두면 응답기가 호출자를 Basic 으로 검증할 수 있다. 포크 `v1.21.1-pokeclip.2` 이미지 로컬 실측(2026-10-20)으로 **확인된 것은 셋**이다: ① MediaMTX 가 응답기로 보내는 요청에 `Authorization: Basic` 이 실린다 ② 인증 실패 로그는 `http://user:***@…` 로 비밀번호를 가린다 ③ **Control API 의 설정 조회(`GET /v3/config/global/get`)는 `authHTTPAddress` 를 자격 평문 그대로 돌려준다**(가림 없음 · 로그 노출은 0). 소스 근거: `internal/auth/manager.go` 의 `httpClient.Post(m.HTTPAddress, …)`, `internal/conf/conf.go` 는 `http(s)` 접두만 검사. ③ 때문에 **Control API 에 인증된 주체(사이드카 · 응답기 자신)는 Basic 자격을 읽을 수 있고, Control API 자격이 없는 nginx 는 읽지 못한다.** 응답기 코드 변경 = Basic 검사 추가(「응답기 코드 변경 한 묶음」). 비용: 비밀이 하나 늘고 MediaMTX 설정 파일에 비밀이 든다(tmpfs 렌더 · `0400` 10002 — M2 c4 의 `mediamtx.yml` 렌더와 같은 자리).
 - **표현 한정**: 「구별 불가」는 **현재의 TCP 피어 IP 검사로는**이라는 한정이 붙는다. 다른 수단이 불가능하다는 뜻이 아니다.
 - **다른 결정에 주는 영향**: (라)를 채택하면 K1 의 잔여 위험이 nginx 에 대해 줄고(사이드카에 대해서는 위), K2(Control API 비밀)와 K3(비밀 파일 수)에 인증 비밀이 하나 더 생긴다(응답기 ← 이 URL 자격, MediaMTX 설정에도 렌더). K1 · K2 는 한 묶음으로 정한다.
 - **응답기 코드 변경**: (가) · (나) 없음, (라) 필요(채택됨).
@@ -284,7 +284,7 @@ M2 브랜치의 응답기 자리는 이미지 · netns · `depends_on` · `resta
 
 | # | 채울 것 | 값 · 근거 |
 |---|---|---|
-| 1 | `environment` | 비밀 아닌 값: `INGEST_AUTH_LISTEN` · `INGEST_AUTH_CALLER_IP` · `MTX_API_URL` · `MTX_API_USER` · `STREAM_KEY_RESOLVE_URL` · `LOG_LEVEL`. 비밀 둘은 D4 결정에 따라 파일 경로 |
+| 1 | `environment` | 비밀 아닌 값: `INGEST_AUTH_LISTEN` · `INGEST_AUTH_CALLER_IP` · `MTX_API_URL` · `MTX_API_USER` · `STREAM_KEY_RESOLVE_URL` · `LOG_LEVEL` · Basic 사용자 이름(후보값 표 3). 비밀 셋(K3)은 파일 경로 |
 | 2 | `read_only: true` | dev 가 쓴다(1-7 의 3). 쓰는 곳은 상태 디렉터리 하나뿐 |
 | 3 | `volumes` | 거부 목록 디렉터리 → `/etc/ingest-auth`(읽기 전용, 디렉터리 마운트) · 상태 디렉터리 → `/var/lib/ingest-auth` · 비밀 파일(읽기 전용). D7 |
 | 4 | `healthcheck` | `["CMD","/ingest-auth","healthcheck"]` 30초 · 3회 · 유예 10초(1-8). 같은 netns 의 `127.0.0.1:8081` 이라 포트 충돌 점검(D1) |
@@ -310,9 +310,9 @@ M2 브랜치의 응답기 자리는 이미지 · netns · `depends_on` · `resta
 |---|---|---|---|
 | 1 | 인증 리스너 | `127.0.0.1:8080`, 경로 `POST /mediamtx/auth` → MediaMTX `authHTTPAddress: http://127.0.0.1:8080/mediamtx/auth` | 같은 netns 의 MediaMTX(8888 · 9996 · 9997 · 8890/udp)와 겹치지 않는다. 프록시 네 포트의 prod 값은 **미확인**이라 충돌 확인이 필요하다 |
 | 2 | healthz | `127.0.0.1:8081`(고정, 바꿀 수 없다) | `main.go:34` |
-| 3 | 응답기가 읽을 비밀 파일 셋 | 컨테이너 안 `/run/secrets/stream_key_resolve_token` · `/run/secrets/mtx_api_pass` · `/run/secrets/ingest_basic_pass`(Basic 비밀번호). Basic 사용자 이름은 비밀이 아니라 환경 변수(후보 이름 `INGEST_AUTH_BASIC_USER`) | K3 (가)(`_FILE` 입력 추가)일 때만 성립. 경로 꼴은 사이드카 README 의 예시와 같다(`media/README.md:199`). 변수 이름은 코드 PR 에서 확정 |
+| 3 | 응답기가 읽을 비밀 파일 셋 | 컨테이너 안 `/run/secrets/stream_key_resolve_token` · `/run/secrets/mtx_api_pass` · `/run/secrets/ingest_basic_pass`(Basic 비밀번호). Basic 사용자 이름은 비밀이 아니라 설정값 — 응답기에는 환경 변수(후보 이름 `INGEST_AUTH_BASIC_USER`)로, MediaMTX 에는 같은 값을 4b 의 URL 렌더로 넣는다 | K3 (가)(`_FILE` 입력 추가)일 때만 성립. 경로 꼴은 사이드카 README 의 예시와 같다(`media/README.md:199`). 변수 이름은 코드 PR 에서 확정 |
 | 4 | 사이드카의 비밀 파일 | 컨테이너 안 `/run/secrets/mtx_api_pass`(사이드카 `MTX_API_PASS_FILE`) | D3 (나)일 때. 응답기 파일과 **내용이 같은 별개 파일** |
-| 4b | MediaMTX 쪽 Basic 자격 | `authHTTPAddress: http://<user>:<pass>@127.0.0.1:<포트>/mediamtx/auth` — `<user>` · `<pass>` 는 시작 스크립트가 `ingest_basic_pass` 원본 파일에서 읽어 **렌더**한다(bash 내장 문자열 치환만 — M2 c4 규칙). 렌더 결과 `mediamtx.yml` 은 호스트 `/run/pokeclip-media/mediamtx.yml` `10002:10002 0400` 그대로 | 비밀번호는 URL 에 퍼센트 인코딩이 필요 없는 문자(예: 무작위 16진)로 만든다. 같은 값이 응답기 파일 · `mediamtx.yml` 두 곳에 있다. Control API 설정 조회로 평문이 보인다(D2 ③) |
+| 4b | MediaMTX 쪽 Basic 자격 | `authHTTPAddress: http://<user>:<pass>@127.0.0.1:<포트>/mediamtx/auth` — `<user>` 는 응답기 `INGEST_AUTH_BASIC_USER` 와 **같은 설정값**(비밀 아님), `<pass>` 만 시작 스크립트가 `ingest_basic_pass` 원본 파일에서 읽어 **렌더**한다(bash 내장 문자열 치환만 — M2 c4 규칙). 렌더 결과 `mediamtx.yml` 은 호스트 `/run/pokeclip-media/mediamtx.yml` `10002:10002 0400` 그대로 | 비밀번호는 URL 에 퍼센트 인코딩이 필요 없는 문자(예: 무작위 16진)로 만든다. 같은 비밀번호가 응답기 파일 · `mediamtx.yml` 두 곳에 있다. Control API 설정 조회로 평문이 보인다(D2 ③) |
 | 5 | 호스트 쪽 경로 | `/run/pokeclip-media/ingest-auth/{stream_key_resolve_token,mtx_api_pass,ingest_basic_pass}` · `/run/pokeclip-media/sidecar/mtx_api_pass` (tmpfs) | M2 c4 의 `mediamtx.yml` 렌더 자리(`/run/pokeclip-media`)와 같은 계열. 디렉터리 `root` 소유 `0711` |
 | 6 | 소유 · 모드 | 응답기 파일 셋 `10003:10003 0400` · 사이드카 파일 `10001:10001 0400` · `mediamtx.yml` `10002:10002 0400`. 읽기 전용 bind | 사이드카 규칙: other 권한 · group 쓰기 비트 거부(`media/README.md:206-230`). 응답기 쪽 규칙은 K3 (가)가 같은 규칙으로 정한다 |
 | 7 | 거부 목록(컨테이너 안) | `/etc/ingest-auth/deny-tokens`(고정) · 호스트 쪽은 K5 가 정한다 | 호스트 후보: `/var/lib/pokeclip-media/ingest-auth/deny/` `root:10003 0640` 파일 · 디렉터리 읽기 전용 bind |
@@ -322,9 +322,9 @@ M2 브랜치의 응답기 자리는 이미지 · netns · `depends_on` · `resta
 
 ---
 
-## 3. 결정됨 — kty 115차 (2026-10-20)
+## 3. 결정됨 — kty 결정 (2026-10-20)
 
-선행 조건(결정이 아니라 3번과 먼저 합의할 것): **prod 의 4C 호출 경로 · 인증 방식**(D9 — prod auth `native` 와 전용 토큰 창구는 양립 불가). K6 은 이것이 정해진 뒤에 적용한다. 합의 수단은 kty 가 정한다.
+선행 조건(결정이 아니라 3번과 먼저 합의할 것): **prod 의 4C 호출 경로 · 인증 방식**(D9 — prod auth `native` 와 전용 토큰 창구는 양립 불가). K6 은 이것이 정해진 뒤에 적용한다. 합의 수단은 정해졌다 — POK-307 Jira 코멘트로 3번에게 물었다(2026-10-20). 남은 것은 3번의 답(4C 경로 · 인증 방식)이다.
 
 | # | 결정 | 확정 내용 | 응답기 코드 | 연결 |
 |---|---|---|---|---|
@@ -334,9 +334,9 @@ M2 브랜치의 응답기 자리는 이미지 · netns · `depends_on` · `resta
 | K5 | 거부 목록 정본 | **(나) 상자 밖 정본 + 부팅 시 렌더**(없거나 비면 기동 차단) | 없음 | D7 |
 | K6 | 4C 출발지 잠금 단위 | **(가) 고정 주소 `/32`** — 선행 조건(3번 합의) 뒤 | 없음 | D9 |
 | K7 | 송출자 `ip` 확인 수단 | **(가)** c1 의 가짜 응답기 + MediaMTX 연결 로그 | 없음 | D5 |
-| K8 | 포트 · 비밀 파일 경로 | **D11 의 후보값 표를 후보값으로 채택**(Basic 자격 파일이 하나 늘어 비밀 파일은 응답기 쪽 `/run/secrets/` 아래 셋 · 사이드카 쪽 `mtx_api_pass` 하나 · MediaMTX 쪽은 `mediamtx.yml` 의 `authHTTPAddress` 렌더 — 위 후보 표 3 · 4 · 4b). 포트 충돌은 prod 포트 값 확인 뒤 | 없음(K3 가 전제) | D11 |
+| K8 | 포트 · 비밀 파일 경로 | **2절 끝 후보값 표를 후보값으로 채택**(Basic 자격 파일이 하나 늘어 비밀 파일은 응답기 쪽 `/run/secrets/` 아래 셋 · 사이드카 쪽 `mtx_api_pass` 하나 · MediaMTX 쪽은 `mediamtx.yml` 의 `authHTTPAddress` 렌더 — 위 후보 표 3 · 4 · 4b). 포트 충돌은 prod 포트 값 확인 뒤 | 없음(K3 가 전제) | D11 |
 
-아직 남은 것(kty): **3번 합의 수단**(선행 조건). 정본 위치는 이 파일로 정했다(2026-10-20).
+아직 남은 것: **3번의 답**(4C 경로 · 인증 방식 — 선행 조건, POK-307 에서 물음). 정본 위치(이 파일)와 합의 수단(POK-307 코멘트)은 2026-10-20 에 정했다.
 
 kty 결정이 아닌 **확인 · 실측 항목**(결정 없이 M15 착수 때 한다):
 
@@ -350,7 +350,7 @@ kty 결정이 아닌 **확인 · 실측 항목**(결정 없이 M15 착수 때 �
 - **설정 조회 노출 완화(신규)**: 응답기가 `action=api` 요청 가운데 설정 조회(`/v3/config/…`)를 사이드카 자격에 대해 거부할 수 있는지 — 인증 요청 본문의 `path` 에 API 경로가 실리는지부터 확인(D2).
 - ~~포크 소스에서 `authHTTPAddress` URL 사용자 정보 전달 여부 확인(D2 (라))~~ — **완료**(2026-10-20 로컬 실측 · D2 ① ~ ③).
 
-**3절 집계**: 결정됨 표 7행(K1·K2 묶음 + K3 ~ K8) · 결정 8개(K1 ~ K8) · 확인 항목 전체 9개 = 완료 1 + 남음 8(앞의 목록 8개). 선행 조건 1개 · kty 에게 남은 것 하나(3번 합의 수단)는 별도.
+**3절 집계**: 결정됨 표 7행(K1·K2 묶음 + K3 ~ K8) · 결정 8개(K1 ~ K8) · 확인 항목 전체 9개 = 완료 1 + 남음 8(앞의 목록 8개). 선행 조건 1개(3번의 답 대기)는 별도.
 
 ---
 
@@ -358,8 +358,8 @@ kty 결정이 아닌 **확인 · 실측 항목**(결정 없이 M15 착수 때 �
 
 계획의 두 규칙이 어디서 왔는지 적는다(D1 · D2 · D4 · K1 · K3 의 전제).
 
-- **(a) 같은 netns** — 엣지 설계 r7.5.8 의 3-3-1(kty 14차): MediaMTX 의 HLS(8888)와 재생 서버(9996)가 `127.0.0.1` 에만 바인딩되므로 nginx 가 루프백으로 닿으려면 같은 netns 여야 한다. 설계가 한계로 적은 것은 **IMDS 공유**(같은 netns 컨테이너가 모두 역할 자격에 닿음 — 계획 G22)뿐이고, **응답기가 passphrase 를 돌려주는 위험은 설계가 다루지 않았다** — 설계의 원문은 「응답기 자체(코드 · S1 한도 · prod 배치)는 1번 몫이고(kty 15차), 이 설계는 compose 의 자리와 SG · 읽기 정책 연결만 둔다」이다. 응답기를 다른 망으로 빼더라도 nginx 가 MediaMTX 와 같은 netns 라서 MediaMTX 의 출발지 주소로는 구별되지 않는다(D1 (나)의 논거). 그래서 구별 수단은 주소가 아니라 **자격(Basic)** 이 맞다(K1).
-- **(b) 비밀을 환경 변수로 넘기지 않는다** — 엣지 계획 r6.7 98행(docker 가 `config.v2.json` · `inspect` 에 남긴다) · 노출 표 816행~ · M2 `render_test`(환경 변수 이름 금지 검사). 그런데 **dev-media 응답기는 이 규칙 밖**이다 — 비밀을 환경 변수로 받는다(M2 세션에 보낸 「토큰은 파일로」 참고는 틀렸다 — 114차 정정). prod 는 이 규칙을 따라야 하므로 **K3 (가)(`_FILE` 입력 추가)** 가 필요하다.
+- **(a) 같은 netns** — 엣지 설계 r7.5.8 의 3-3-1(엣지 설계 kty 결정): MediaMTX 의 HLS(8888)와 재생 서버(9996)가 `127.0.0.1` 에만 바인딩되므로 nginx 가 루프백으로 닿으려면 같은 netns 여야 한다. 설계가 한계로 적은 것은 **IMDS 공유**(같은 netns 컨테이너가 모두 역할 자격에 닿음 — 계획 G22)뿐이고, **응답기가 passphrase 를 돌려주는 위험은 설계가 다루지 않았다** — 설계의 원문은 「응답기 자체(코드 · S1 한도 · prod 배치)는 1번 몫이고(엣지 설계 kty 결정), 이 설계는 compose 의 자리와 SG · 읽기 정책 연결만 둔다」이다. 응답기를 다른 망으로 빼더라도 nginx 가 MediaMTX 와 같은 netns 라서 MediaMTX 의 출발지 주소로는 구별되지 않는다(D1 (나)의 논거). 그래서 구별 수단은 주소가 아니라 **자격(Basic)** 이 맞다(K1).
+- **(b) 비밀을 환경 변수로 넘기지 않는다** — 엣지 계획 r6.7 98행(docker 가 `config.v2.json` · `inspect` 에 남긴다) · 노출 표 816행~ · M2 `render_test`(환경 변수 이름 금지 검사). 그런데 **dev-media 응답기는 이 규칙 밖**이다 — 비밀을 환경 변수로 받는다. prod 는 이 규칙을 따라야 하므로 **K3 (가)(`_FILE` 입력 추가)** 가 필요하다.
 
 ### 3-2. 응답기 코드 변경 한 묶음
 
@@ -389,4 +389,4 @@ K1 · K3 가 요구하는 응답기 코드 변경은 아래 둘이고, **한 PR 
 - 엣지 설계: 엣지 설계 r7.5.8 3-3-1(볼트 원문)
 - 엣지 계획: 엣지 계획 r6.7(M4 판, 2026-10-17 · 볼트 원문) — 98행 · 816행~(노출 표) · G22(1929행) · M2 절(658행~; 718 · 731 · 738~747행), M15(1546~1555행), O8a(1500~1512행), c6 변경표(860~877행), G17(1924행), 3-6 계약 요지(1020~1026행 · 1724행)
 
-이 문서가 **읽지 않았거나 실행하지 않은 것**: 포크 MediaMTX 소스(`auth/manager.go` · `conf/auth_action.go`) · 실물 MediaMTX + 응답기의 루프백 조합 · prod 포트 값 · `failedtokens.go` · `internal/ingestauth/cut.go` 의 판독 세부 · 응답기 시험 파일. 설계 검수가 인용한 포크 · Auth 소스는 이 문서 작성자가 직접 열지 않고 검수 기록을 따랐다 — D9 · D12 에 그렇게 표시했다. D2 (라)의 포크 동작은 2026-10-20 로컬 실측(Basic 헤더 · 로그 가림 · 설정 조회 평문 노출)으로 확인했다. 위 본문의 「미확인」 · 「추론」 표시가 그 자리다.
+이 문서가 **읽지 않았거나 실행하지 않은 것**: 포크 MediaMTX 소스 `conf/auth_action.go` · 실물 MediaMTX + 응답기의 루프백 조합 · prod 포트 값 · `failedtokens.go` · `internal/ingestauth/cut.go` 의 판독 세부 · 응답기 시험 파일. 설계 검수가 인용한 포크 · Auth 소스는 이 문서 작성자가 직접 열지 않고 검수 기록을 따랐다 — D9 · D12 에 그렇게 표시했다. D2 (라)의 포크 동작은 포크 `internal/auth/manager.go` 소스와 2026-10-20 로컬 실측(Basic 헤더 · 로그 가림 · 설정 조회 평문 노출)으로 확인했다. 위 본문의 「미확인」 · 「추론」 표시가 그 자리다.
