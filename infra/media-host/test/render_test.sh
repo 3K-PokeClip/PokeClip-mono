@@ -21,8 +21,8 @@
 #
 # 드리프트: 시험 compose(test/compose.contract.yml)에서 템플릿과 이름이 같은
 # 서비스는 restart · network_mode · depends_on · security_opt · cap_drop ·
-# cap_add · 볼륨 읽기 전용 여부 · bind 원본 자동 생성 여부가 렌더한 템플릿과
-# 같아야 한다 — 실행 시험은
+# cap_add · ulimits · 볼륨 읽기 전용 여부 · bind 원본 자동 생성 여부가 렌더한
+# 템플릿과 같아야 한다 — 실행 시험은
 # 시험 compose 를 띄우므로, 거기서만 맞는 구조가 prod 에 새지 않게 한다.
 # 유닛 재기동 시험 compose(test/compose.unit.yml)도 같은 항목에 logging(드라이버 ·
 # 옵션)까지 비교한다(사례 25) — 그 파일만 prod 와 같은 journald 를 쓴다(CI 엔진에는
@@ -208,6 +208,7 @@ $(harness::log_tail "$(mtx_json).err")"
 #######################################
 # compose 파일 하나를 `docker compose config -q` 로 검증하고, 선언 그대로의
 # 구성(정규화 없음 — 변수 · 앵커는 풀고 볼륨 · 포트는 긴 꼴)을 JSON 으로 쓴다.
+# 표준 오류(경고)는 JSON 과 섞지 않고 .err 에 따로 받는다.
 # Arguments:
 #   compose 파일, 출력 JSON 파일, 변수 파일(없어도 됨 — --env-file).
 # Returns:
@@ -219,9 +220,9 @@ compose_config() {
   harness::run_bounded "${CONFIG_TIMEOUT}" "$2.err" \
     docker compose ${env_args[@]+"${env_args[@]}"} -p "${PROJECT}" -f "$1" \
     config -q || return 1
-  harness::run_bounded "${CONFIG_TIMEOUT}" "$2.raw" \
+  harness::bounded "${CONFIG_TIMEOUT}" \
     docker compose ${env_args[@]+"${env_args[@]}"} -p "${PROJECT}" -f "$1" \
-    config --no-normalize --format json || return 1
+    config --no-normalize --format json >"$2.raw" 2>>"$2.err" || return 1
   jq -e . "$2.raw" >"$2" 2>"$2.err"
 }
 
@@ -357,12 +358,13 @@ check_case_6() {
       publishers: [.services | to_entries[]
         | select((.value.ports // []) | length > 0) | .key],
       mediamtx: [(.services.mediamtx.ports // [])[]
-        | "\(.protocol // "tcp") \(.published) \(.target)"] | sort}' '
+        | "\(.protocol // "tcp") \(.host_ip // "*") \(.published) \(.target)"]
+        | sort}' '
     {publishers: ["mediamtx"],
      mediamtx: (([.proxy_live_port, .proxy_playback_port,
                   .proxy_control_port, .proxy_health_port]
-                 | map("tcp \(.) \(.)")) + ["udp 8890 8890"] | sort)}' \
-    '공개 포트(8888 · 9996 · 9997 은 열지 않음)'
+                 | map("tcp * \(.) \(.)")) + ["udp * 8890 8890"] | sort)}' \
+    '공개 포트(모든 주소에 게시 — 경계는 SG · 8888 · 9996 · 9997 은 열지 않음)'
 }
 
 check_case_7() {
@@ -395,16 +397,20 @@ check_case_7() {
 
 check_case_8() {
   require_setup || return 1
+  # ulimits core: 0 은 config JSON 에서 {} 다(0 인 칸을 빼고 낸다 — compose
+  # 5.5.0 실측. 0 이 아니면 그 칸이 나온다).
   expect_all '.services | map_values({
       no_new_privileges: ((.security_opt // [])
         | index("no-new-privileges:true") != null),
       privileged: (.privileged // null), pid: (.pid // null),
       ipc: (.ipc // null), cap_drop: (.cap_drop // null),
-      cap_add: (.cap_add // null | if . == null then null else sort end)})' '
+      cap_add: (.cap_add // null | if . == null then null else sort end),
+      core: (.ulimits.core // null)})' '
     services | map({(.): {no_new_privileges: true, privileged: null,
       pid: null, ipc: null, cap_drop: ["ALL"],
-      cap_add: (if . == "nginx" then nginx_cap_add else null end)}}) | add' \
-    '권한'
+      cap_add: (if . == "nginx" then nginx_cap_add else null end),
+      core: {}}}) | add' \
+    '권한 · core 덤프 0'
 }
 
 check_case_9() {
@@ -578,6 +584,7 @@ def facts: .services | map_values({
   security_opt: ((.security_opt // []) | sort),
   cap_drop: ((.cap_drop // []) | sort),
   cap_add: ((.cap_add // []) | sort),
+  ulimits: (.ulimits // null),
   read_only: ((.volumes // []) | map({(.target): (.read_only // false)})
     | add // {}),
   create_host_path: ((.volumes // []) | map(select(.type == "bind")
@@ -635,19 +642,20 @@ $(harness::log_tail "${scratch}/unit.json.err")"
 }
 
 #######################################
-# 사례 26 — 시작 스크립트가 tmpfs 에 렌더하는 두 파일의 bind 는 원본이 없으면
-# 만들지 않는다(create_host_path: false). 정지가 렌더를 지운 뒤 남은 컨테이너가
-# 다시 뜨면 엔진이 그 자리에 디렉터리를 만들어 다음 렌더가 영영 막힌다(보안 c7
-# M-1 · 실험 m1-repro).
+# 사례 26 — 렌더 파일 bind 셋(시작 스크립트가 tmpfs 에 렌더하는 두 파일 · M9
+# user_data 가 렌더하는 nginx 설정)은 원본이 없으면 만들지 않는다
+# (create_host_path: false). 원본이 없을 때(정지가 렌더를 지운 뒤 남은
+# 컨테이너가 다시 뜰 때 등) 엔진이 그 자리에 디렉터리를 만들면 다음 렌더가
+# 영영 막힌다.
 #######################################
 check_case_26() {
   require_setup || return 1
   # shellcheck disable=SC2016 # jq 프로그램 — $ 는 jq 변수다.
   expect_all '[.services | to_entries[] | .key as $s | (.value.volumes // [])[]
-      | select(.type == "bind"
-        and (.source | startswith("/run/pokeclip-media/")))
+      | select(.type == "bind")
       | "\($s) \(.target) \(.bind.create_host_path != false)"] | sort' '
     ["mediamtx /mediamtx.yml false",
+     "nginx /etc/nginx/nginx.conf false",
      "sidecar /run/secrets/mtx_api_pass false"]' \
     '렌더 파일 bind 의 원본 자동 생성'
 }
@@ -679,7 +687,7 @@ main() {
     check_case_6
   harness::run_case 7 '공유 볼륨 · 읽기 전용 · nocopy 0' check_case_7
   harness::run_case 8 \
-    '권한 — no-new-privileges · cap_drop ALL · cap_add nginx 셋뿐 · 특권 0' \
+    '권한 — no-new-privileges · cap_drop ALL · nginx cap 셋 · 특권 0 · core 0' \
     check_case_8
   harness::run_case 9 'mediamtx 에 user: 없음' check_case_9
   harness::run_case 10 '사이드카 · janitor env(IAM · 비밀 없음)' check_case_10
