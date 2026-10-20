@@ -2226,6 +2226,37 @@ docker compose up -d --no-deps --no-build janitor
 | `janitor_fs_suspended` | ERROR | 파일 삭제가 멈춰(stall) 파일 작업을 보류 중 — hold · stall_streak | 녹화 디스크 · 마운트 상태(`fs_op_stalled`) |
 | `janitor_reclaim_blocked` | ERROR | 삭제 뒤 장부 갱신을 못 한 행(부채)을 계속 못 갚음 — 새 삭제가 멈춘 상태 | 아래 절 |
 
+PG 가 비정상 종료된 뒤 `janitor_volume_suspect` 가 켜질 수 있다. 비동기
+커밋으로 확정된 삭제 기록 몇 건이 사라진 것이다(한계 L31 — 실측 KILL 1회에
+5건). 파일은 이미 지워졌고 장부만 경로를 들고 있다. 그 행들이 나이
+`JANITOR_RECORD_DELETE_AFTER` − 1h(기본 23h)를 넘기면 janitor 가 스스로
+정리하고 게이지가 꺼진다(최대 약 23h).
+
+다만 같은 게이지는 볼륨이 정말 잘못 붙었을 때도 켜진다. 기다리기 전에 둘을
+가른다. 둘 다 맞을 때만 L31 로 보고 자동 정리를 기다린다.
+
+1. 세 서비스의 `/recordings` 가 같은 볼륨인지 본다 — 출력된 볼륨 이름이
+   셋 다 같아야 한다(파일 수 비교로는 가려지지 않는다).
+
+    ```sh
+    for s in media segment-indexer janitor; do
+      docker inspect -f '{{range .Mounts}}{{if eq .Destination "/recordings"}}{{.Name}}{{end}}{{end}}' \
+        "$(docker compose ps -q "$s")"
+    done
+    ```
+
+1. 게이지 줄의 표본(`sample_stream_id` · `sample_seq`)이 PG 종료 직전
+   `segment_local_deleted` 줄(같은 `stream_id` · `seq`)에 있는지 본다 — 있으면
+   janitor 가 지운 뒤 기록만 사라진 것(L31)이다.
+
+    ```sh
+    docker compose logs janitor | grep -E 'janitor_volume_suspect|segment_local_deleted'
+    ```
+
+볼륨 이름이 다르거나 표본이 삭제 로그에 없으면 오연결로 보고 janitor 를 끄고
+(위 「끄고 켜는 법」) 마운트를 고친다 — 그대로 두면 나이 기준을 넘긴 행의
+경로가 지워질 수 있다(한계 L17).
+
 ### janitor_reclaim_blocked 대응
 
 janitor 는 파일을 지운 뒤 장부 갱신에 실패한 행을 「부채」로 들고, 갚기
