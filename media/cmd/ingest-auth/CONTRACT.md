@@ -1,6 +1,7 @@
 # ingest-auth 응답기 prod 계약 — dev 가동판 실물 · prod 차이 · 결정 K1–K8
 
 - 상태: **2026-10-20 확정** — 결정 K1–K8(kty) · 설계 듀얼 리뷰 종결 · prod 착수 전 확인 항목 남음(3절) · 선행 조건: prod 4C 호출 방식 3번 합의(POK-307)
+- 갱신: 2026-10-20 — 송출자 IP별 시도 한도(S1 게이트 · POK-310 트랙 B, 결정 119차) 반영: 1-1 의 7 · 11 · 14 · 1-2 의 7 · 1-5 의 9–11 · 1-9 의 2 · 3 · 4. 이 행들의 근거는 함수 이름으로 적는다(줄 번호는 위 기준 판의 것이라 한도 코드가 없다)
 - 관련 티켓: POK-310 · POK-307 · POK-299(M15) · POK-301(O8a)
 - 목적: 엣지 트랙 M15(prod 송출 인증을 응답기로)의 착수 조건 「응답기 계약 확정(포트 · 인증 요청 경로 · 비밀 파일 경로)」을 채운다.
 - 기준 판: 응답기 코드 · dev-media 구성 = `origin/develop`(64633374), M2 compose 자리 = `origin/feat/infra-media-host`(14a57f37), 계획 = 엣지 계획 r6.7(4절 출처). 줄 번호는 이 판 기준이다.
@@ -34,13 +35,14 @@
 | 4 | 호출자 판정(첫 행) | **TCP 피어 주소**(헤더는 보지 않는다)가 `INGEST_AUTH_CALLER_IP` 와 다르면 403(본문 없음). 예산 · 시한 가드 밖이다 | `media/internal/ingestauth/handler.go:164-180` |
 | 5 | 본문 크기 | 16 KiB 를 넘으면 400 | `ingestauth/request.go:10-11,68-74` |
 | 6 | 읽는 본문 필드 | `ip` · `action` · `path` · `protocol` · `id`. `user` · `password` 는 `action=api` 일 때만 해석한다. `token` · `query` · `userAgent` 등 나머지는 버린다 | `request.go:34-61,98-103` |
-| 7 | `ip` 필드 | IP 로 해석되지 않으면 400(`bad_ip`). **쓰임은 `action=api` 행에서 SelfIP 와 견주는 것 하나**다. publish 판정 · 로그에는 쓰지 않는다 | `request.go:80-83` · `handler.go:207` · `publish.go:277-288` |
+| 7 | `ip` 필드 | IP 로 해석되지 않으면 400(`bad_ip`). **쓰임은 둘**이다 — `action=api` 행에서 SelfIP 와 견주고, publish 행에서 IP별 시도 한도의 키로 쓴다(아래 14). publish 로그에는 한도 사건에서만 싣는다(1-9 의 4) | `request.go:80-83` · `handler.go:207` · `publish.go` `ipAdmit` · `ipTake` |
 | 8 | `id` 필드(연결 id) | null 이면 빈 값. 아니면 소문자 UUID 꼴이어야 하고 아니면 400(`bad_conn_id`) | `request.go:30-32,84-90` |
 | 9 | 행 가르기 | `action=api` → api 행 · `action=read` → 무조건 200 · **그 밖의 모든 action(playback · metrics · pprof 포함)은 publish 행으로 간다** | `handler.go:185-202` |
 | 10 | publish 형식 조건 | `action=publish` ∧ `protocol=srt` ∧ `path` 가 토큰 꼴(26자 Crockford 대문자) ∧ `id` 있음. 하나라도 아니면 401 | `publish.go:99-113` |
-| 11 | publish 판정 순서 | 형식 → 거부 목록 → 예산 → 요청 ctx → 실패 토큰 차례 → 4C resolve → 기억 갱신 → 연결 기록 추가 → 거부 목록 마지막 확인 → 200. 위에서 처음 맞는 행이 답이다 | `publish.go:40-86,166-187` |
+| 11 | publish 판정 순서 | 형식 → **IP 한도 검사** → 거부 목록 → 예산 → 요청 ctx → 실패 토큰 차례 → **IP 한도 차감** → 4C resolve → 기억 갱신 → 연결 기록 추가 → 거부 목록 마지막 확인 → 200. 위에서 처음 맞는 행이 답이다 | `publish.go` `publish` · `allowPublish` |
 | 12 | 예산 | auth 를 부르느라 MediaMTX 경로 관리자를 붙잡는 시간의 토큰 버킷: 한도 1.375초 · 초당 0.5초 보충. 출발지 검사를 지난 요청마다 걸린 시간을 뺀다. api 행은 잔액 검사(`allow`)에 걸리지 않지만, 걸린 시간은 다른 요청처럼 차감된다 | `ingestauth/holdbudget.go:9-10` · `handler.go:115-150,204-206` |
 | 13 | 시한 | 요청 도착부터 resolve 시한 1.125초, 바깥 가드는 +50ms(1.175초). 상수이며 설정으로 바꿀 수 없다 | `handler.go:17-21,130-136` · `publish.go:16-18,88-97` |
+| 14 | 송출자 IP별 시도 한도 | 본문 `ip` 의 키(IPv4 /32 · IPv6 /64 — IPv4-mapped 는 IPv4, zone 은 뗌)마다 **resolve 를 부르는 시도**를 GCRA 로 센다: `BURST` 번(기본 30)은 몰아 쓰고 그 뒤 `INTERVAL`(기본 3초)에 하나. 성공(200)도 센다(공개 토큰 + 틀린 passphrase 시도도 응답기에는 200 이다). 예산 · 차례 거절 · 형식 거절은 세지 않는다. 벌칙 없음 — 통이 비면 3초마다 하나씩 다시 허용. 키 상한 16,384 — 차면 새 키는 기록 없이 예산만 탄다(fail-open). 메모리 상태라 다시 뜨면 비어서 시작한다. publish 행만 걸고 api · read 는 걸지 않는다. 끄기 = `INGEST_AUTH_IP_LIMIT=off`(1-5 의 9) | `ingestauth/iplimit.go` `ipLimiter` · `publish.go` `ipAdmit` · `ipTake` |
 
 ### 1-2. 응답기 → MediaMTX (응답)
 
@@ -52,7 +54,7 @@
 | 4 | 본문 불량(크기 · JSON · ip · id) | `400` 본문 없음 | `handler.go:186-190` |
 | 5 | 호출자 불일치 | `403` 본문 없음 | `handler.go:177-179` |
 | 6 | 바깥 가드가 먼저 끝냄 | `503` 본문 `timeout`. 보통은 resolve 시한(가드보다 50ms 앞)이 먼저라 401 이다 | `handler.go:131` · `publish.go:88-97` |
-| 7 | publish 401 의 reason(닫힌 집합) | `not_publish` · `not_srt` · `not_token` · `no_conn_id` · `denylist_unreadable` · `denylisted` · `budget_exhausted` · `recheck_wait` · `undecided` · `malformed` · `not_found` · `revoked` · `rejected` · `connlog_unwritable` · `internal_error` | `publish.go:22-38` |
+| 7 | publish 401 의 reason(닫힌 집합) | `not_publish` · `not_srt` · `not_token` · `no_conn_id` · `ip_limited` · `denylist_unreadable` · `denylisted` · `budget_exhausted` · `recheck_wait` · `undecided` · `malformed` · `not_found` · `revoked` · `rejected` · `connlog_unwritable` · `internal_error`. `ip_limited` 만 DEBUG 로 내고 auth 게이지(`denied_during`)에 세지 않는다 | `publish.go` 의 reason 상수 · `ipAdmit` |
 
 ### 1-3. 응답기 → auth (4C resolve)
 
@@ -81,7 +83,7 @@
 
 ### 1-5. 설정 입력 — 환경 변수 전체
 
-코드에 `_FILE` 꼴 입력은 **하나도 없다**(환경 변수 이름은 아래 8개가 전부).
+코드에 `_FILE` 꼴 입력은 **하나도 없다**(환경 변수 이름은 아래 11개가 전부).
 
 | # | 이름 | 필수 | 비밀 | 내용 · 검사 | 근거 |
 |---|---|---|---|---|---|
@@ -93,6 +95,9 @@
 | 6 | `STREAM_KEY_RESOLVE_URL` | 필수 | 아니오(그러나 dev 는 사설 주소라 문서 · 로그에 싣지 않는다) | 1-3 의 1. 기동 로그에는 호스트의 **부류**(private · public · name · other)와 포트만 싣는다 | `config.go:112-170` · `.env.example:6` |
 | 7 | `STREAM_KEY_RESOLVE_TOKEN` | 필수 | **예** | 4C 전용 출입증. 제어 문자 · 앞뒤 공백이면 기동 거부. auth 쪽 설정 값과 같아야 한다 | `keyresolve/client.go:55-61` · `.env.example:8` |
 | 8 | `LOG_LEVEL` | 선택(기본 info) | 아니오 | debug · info · warn · error. 틀리면 기동 실패 | `config.go:80-92` |
+| 9 | `INGEST_AUTH_IP_LIMIT` | 선택(기본 `on`) | 아니오 | `on` · `off`(1-1 의 14). 그 밖의 값(`On` · `false` 등)은 기동 실패. dev compose 가 `.env` 에서 넘긴다(`${INGEST_AUTH_IP_LIMIT:-on}`) — 바꾼 값은 `restart` 가 아니라 응답기 재생성(`up -d --force-recreate ingest-auth`)으로 반영된다 | `cmd/ingest-auth/iplimit_config.go` `loadIPLimit` · `compose.yml` |
+| 10 | `INGEST_AUTH_IP_LIMIT_BURST` | 선택(기본 30) | 아니오 | 정수 1–1000. 꺼짐이어도 검사한다. dev compose 는 넘기지 않는다(기본값) | `iplimit_config.go` |
+| 11 | `INGEST_AUTH_IP_LIMIT_INTERVAL` | 선택(기본 `3s`) | 아니오 | Go duration 100ms–10m. 꺼짐이어도 검사한다. dev compose 는 넘기지 않는다(기본값) | `iplimit_config.go` |
 
 환경 변수가 아닌 **이미지 안 고정값**(설정으로 못 바꾼다): 거부 목록 `/etc/ingest-auth/deny-tokens` · 기록 디렉터리 `/var/lib/ingest-auth` · healthz 리스너 `127.0.0.1:8081`(`main.go:32-34`), 시한들(1-1 의 3 · 13).
 환경에 비밀이 든 채로 `docker inspect` 에 보이는 것은 5 · 7 번이다(사이드카 README 가 같은 까닭으로 파일 입력을 택했다 — `media/README.md:199`).
@@ -136,13 +141,13 @@ JSON 한 줄씩 stdout(`slog`). 이벤트 이름은 `ingestauth_*`.
 | # | 구분 | 내용 | 근거 |
 |---|---|---|---|
 | 1 | 남는 것(허용) | `publish_allowed`: `path`(토큰) · `conn_id` · `user_id` · `resolve_ms` | `publish.go:201-208` |
-| 2 | 남는 것(거부) | `publish_denied`: `path`(**토큰 꼴일 때만**) · `conn_id` · `reason` · `resolve_status` · `resolve_ms` · `wait`. `caller_denied`(`remote_ip` = TCP 피어) · `api_denied`(`ip` = 본문 ip) · `request_invalid`(reason 만) | `publish.go:252-288` · `handler.go:177,212` · `request.go:21-28` |
-| 3 | 남는 것(상태) | `started`(`listen` · `caller_ip` · `auth_host_kind` · `auth_port` · `deadline_ms` · `health`) · `denylist_changed`(개수만) · `denylist_error` / `recovered` · `connlog_rotated`(bytes) · `failed_cleared` · cut 출력 한 줄(`path` · 출처별 개수 · `kicked` …) | `serve.go:74-80` · `denylist.go:161,172,182` · `connlog.go:36-37` · `cmd/ingest-auth/cut.go:64-80` |
+| 2 | 남는 것(거부) | `publish_denied`: `path`(**토큰 꼴일 때만**) · `conn_id` · `reason` · `resolve_status` · `resolve_ms` · `wait`(`reason=ip_limited` 은 DEBUG 이고 `path` · `conn_id` · `reason` 만). `caller_denied`(`remote_ip` = TCP 피어) · `api_denied`(`ip` = 본문 ip) · `request_invalid`(reason 만). **IP 한도 사건**(WARN — 에피소드마다 한 줄): `ip_limited`(`ip` = 키 문자열, IPv6 는 /64 접두 · `ip_kind` = public · private · loopback · other · `burst` · `interval_ms`) · `ip_limit_released`(`ip` · `denied` · `limited_for_ms` — 통이 다시 다 찬 뒤 처음 보거나 정리할 때) · `ip_limit_released_summary`(`count` · `denied_total` — 정리 한 번에 32개를 넘은 몫) · `ip_limit_full` / `ip_limit_recovered`(`max_entries`) · `ip_limit_unkeyed`(`ip_kind`). 토큰 · 연결 id · passphrase 는 싣지 않는다 | `publish.go:252-288` · `handler.go:177,212` · `request.go:21-28` · `iplimit.go` `logEvents` |
+| 3 | 남는 것(상태) | `started`(`listen` · `caller_ip` · `auth_host_kind` · `auth_port` · `deadline_ms` · `ip_limit` · `ip_limit_burst` · `ip_limit_interval_ms` · `health`) · `denylist_changed`(개수만) · `denylist_error` / `recovered` · `connlog_rotated`(bytes) · `failed_cleared` · cut 출력 한 줄(`path` · 출처별 개수 · `kicked` …) | `serve.go:74-80` · `denylist.go:161,172,182` · `connlog.go:36-37` · `cmd/ingest-auth/cut.go:64-80` |
 | 3b | 남는 것(장애 · 복구) | `auth_degraded`(ERROR — `reason` · `status`: 판정 불가가 처음 선 때) · `auth_recovered`(ERROR — `down_for` · `denied_during` · `budget_denied` · `recheck_denied`) · `connlog_error`(ERROR — `error`: 기록 쓰기 실패) · `connlog_recovered`(ERROR). healthcheck 는 auth 상태를 보지 않으므로 auth 장애의 유일한 신호다 | `ingestauth/gauge.go:43-74,90-101` |
-| 4 | 남지 않는 것 | passphrase 원문(200 본문 한 자리만) · 4C 출입증 · API 비밀번호 · 거부 목록 줄 내용 · 토큰 꼴이 아닌 경로 · publish 요청의 `user` / `password` · **publish 한 송출자의 IP** · 4C URL 의 주소(부류 · 포트만) · 에러 문구의 환경 변수 값(변수 이름만) | `ingestauth/doc.go:8-10` · `request.go:34-36` · `config.go:128-130` · `main.go:14-17` |
+| 4 | 남지 않는 것 | passphrase 원문(200 본문 한 자리만) · 4C 출입증 · API 비밀번호 · 거부 목록 줄 내용 · 토큰 꼴이 아닌 경로 · publish 요청의 `user` / `password` · **publish 한 송출자의 IP(IP 한도 사건만 예외 — 위 2, 결정 119차 Q2)** · 4C URL 의 주소(부류 · 포트만) · 에러 문구의 환경 변수 값(변수 이름만) | `ingestauth/doc.go:8-10` · `request.go:34-36` · `config.go:128-130` · `main.go:14-17` |
 | 5 | 비밀 보호 장치 | `Secret` 타입은 지원하는 문자열 포맷(`String`) · `GoString` · `slog` 에서 `[REDACTED]` 를 내고, 그 밖의 포맷도 원문을 노출하지 않는다(원문은 포인터 뒤 비공개 필드 — `secret.go:12-14`; `encoding/json` 직접 직렬화는 `{}`, JSON 마샬러는 없다). 조립 시험이 확인한다 | `ingestauth/secret.go:1-44` · `serve.go:90-98` |
 
-**1절 표 행 수**: 1-1 13행 · 1-2 7행 · 1-3 8행 · 1-4 7행 · 1-5 8행 · 1-6 7행 · 1-7 6행 · 1-8 4행 · 1-9 6행(3b 포함) = **66행**.
+**1절 표 행 수**: 1-1 14행 · 1-2 7행 · 1-3 8행 · 1-4 7행 · 1-5 11행 · 1-6 7행 · 1-7 6행 · 1-8 4행 · 1-9 6행(3b 포함) = **70행**.
 
 ---
 
@@ -218,6 +223,7 @@ prod 기대 = 계획 M2(Media 상자 compose) · M15(송출 인증 반영) · O8
 
 - **계획이 가정한 것**: M15 c1 시험 「응답기 요청 본문에 송출자 `ip`」, O8a 4 「T8e 때 MediaMTX 인증 요청의 `ip` = 송출자 IP」(계획 1510 · 1552행).
 - **실물**: MediaMTX 가 본문에 `ip` 를 싣는 것은 맞고 응답기가 파싱도 한다(안 되면 400). 그러나 응답기는 **publish 에서 `ip` 를 판정에도 로그에도 쓰지 않는다**(1-1 의 7 · 1-9 의 4). 실물 응답기의 로그만으로는 「`ip` = 송출자 IP」를 확인할 수 없다.
+- **갱신(2026-10-20 · POK-310 트랙 B)**: 이제 응답기는 publish 의 `ip` 를 IP별 시도 한도의 키로 쓰고, **한도 사건에서만** 그 키와 부류(`ip_kind`)를 로그에 남긴다(1-1 의 14 · 1-9 의 2). 그래서 한도를 일부러 일으키면(자극 도달 식 — 트랙 B 계획 5-1) 응답기 로그로 「`ip` = 송출자 IP」를 확인할 수 있다(트랙 B 계획 5-3 D1 · O8a). 요청마다 남기는 (나)는 택하지 않았다. **전제**: `ip` 가 송출자 공인 주소여야 한다 — docker 포트 게시 · NLB 가 출발지를 바꾸면 모든 송출자가 한 키로 묶여 30번 뒤 전원 거절된다. prod SRT 수신은 IPv4 전용이 공개의 선행 조건이다(결정 119차 Q7 — dualstack NLB 는 반대 계열 송출자를 LB 주소 하나로 보인다).
 - **선택지**:
   - (가) 코드 불변. c1(가짜 응답기)이 본문을 기록해 `ip` 를 확인하고, O8a 4 의 실물 확인은 MediaMTX 쪽 연결 로그(연결 시 송출자 주소가 찍히는지는 이 조사에서 확인 안 함 — 미확인)로 한다. 장: 송출자 IP 를 응답기 로그에 새로 남기지 않는다(현 설계가 의도적으로 안 남기는 것). 단: O8a 4 의 수단을 계획에서 다시 적어야 한다.
   - (나) 응답기에 `ip` 를 DEBUG 로 남긴다. 장: 한 곳에서 확인. 단: 개인정보(송출자 IP)가 응답기 로그에 생긴다. 로그 정책 · 누설 시험(`leak_test`) 변경.

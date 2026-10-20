@@ -273,7 +273,8 @@ aws iam get-role-policy --role-name "${ROLE}" \
 - **꼴:** `sudo bash -s -- <인자…> <<'STEP'` · 스크립트 · `STEP`. 인자는 블록마다 머리
   주석에 적었다. 토큰 · SHA · 파일 이름만 인자로 싣는다 — 비밀 · 주소는 싣지 않는다.
 - **실행 직전 kty 승인.** 상자를 바꾸는 블록(R0–R6 · 반영 취소 · 덧붙이기 · cut · 해제
-  적용 · 되돌림 적용 · 틀린 줄 걷기 · 응답기 살리기 · 다시 시작 · MediaMTX 최후 재시작)은
+  적용 · 되돌림 적용 · 틀린 줄 걷기 · 응답기 살리기 · 다시 시작 · IP 한도 켜기 · 끄기 ·
+  MediaMTX 최후 재시작)은
   블록마다 승인을 받는다. 읽기만 하는 블록(R1 값 단언 · 반영 취소 ⓒ · 걷기 확인)과 준비
   블록(해제 준비 · 되돌림 준비 — 살아 있는 파일을 바꾸지 않는다)도 박스 명령이라 승인
   묶음에 넣는다.
@@ -1846,6 +1847,9 @@ sudo docker compose -p dev-media --env-file /opt/pokeclip-demo/.env \
 | `ingestauth_denylist_changed` | 다시 읽은 파일의 집합이 바뀌었다. 합집합이라 `removed` 는 해제가 아니다 — 판정은 응답기를 다시 시작할 때까지 그대로다 |
 | `ingestauth_connlog_error` | 허용 연결 기록 쓰기 실패(새 연결 거부 — 디스크 부족은 여기로만 드러난다) |
 | `ingestauth_api_denied` `ip=…` | Control API 요청의 출발지 · 자격이 맞지 않음(8-3 의 api_auth) |
+| `ingestauth_ip_limited` `ip=…` `ip_kind=…` | 송출자 IP 하나가 시도 한도(기본 30번 몰아서, 그 뒤 3초에 하나)에 걸렸다 — 에피소드마다 한 줄. 그동안의 요청별 거절은 DEBUG 의 `publish_denied` `reason=ip_limited` 로만 난다. `ip_kind=public` 이 정상이다 — 공인 송출자인데 `private` 면 출발지가 바뀐 것(전원이 한 키로 묶인다 — 7-5 로 끈다) |
+| `ingestauth_ip_limit_released` `denied=…` `limited_for_ms=…` | 그 IP 의 통이 다시 다 찼다(에피소드 끝). 같은 IP 가 돌아오지 않으면 늦게 나오거나 안 나올 수 있다 |
+| `ingestauth_ip_limit_full` · `_recovered` | 기록하는 IP 가 상한(16,384)에 닿아 새 IP 를 한도 밖에 세우는 중 · 풀림 |
 | MediaMTX `connection not found` ERR | cut 이 kick 한 연결이 이미 없어 404 가 났다 — 예상된 것이다. 가득 찬 cut 하나면 약 17,000줄이 난다 |
 
 - **차례 거절은 auth 장애 뒤 회복이 늦는 모양이다.** 끊긴 뒤 300초 안(5초 재시도 간격
@@ -1927,6 +1931,65 @@ sudo sed -n 's/^MTX_API_PASS=//p' /opt/pokeclip-demo/.env \
   401(`connlog_unwritable`)이다. 직전 세대(`.1`) 자리의 링크 · FIFO · 큰 파일은 기동을
   막지 않고 cut 이 그대로 따라 읽는다 — 세대 자리에 링크 · FIFO · 큰 파일을 두지 않는다.
   지워졌으면 응답기를 다시 시작한다(8-3 `connlog_unreadable`).
+
+### 7-5. IP 한도 켜기 · 끄기
+
+응답기는 publish 송출자 IP(IPv6 는 /64)마다 resolve 를 부르는 시도를 센다 — 30번은 몰아
+쓰고 그 뒤 3초에 하나(`INGEST_AUTH_IP_LIMIT` · `_BURST` · `_INTERVAL`, 기본 on · 30 · 3s).
+한 NAT 뒤 송출자들과 한 호스트에서 쏘는 벤치는 같은 IP 라 함께 센다 — 한 물결 30 을 넘는
+벤치는 끄고 돌린다. 공인 송출자의 한도 로그가 `ip_kind=private` 이거나 서로 다른 송출자가
+같은 `ip` 로 찍히면 곧바로 끈다(전원이 한 키로 묶여 30번 뒤 모두 거절된다).
+
+**끄기 · 켜기는 응답기 재생성이다 — `restart` 가 아니다.** compose 는 `.env` 의
+`INGEST_AUTH_IP_LIMIT` 를 응답기에 넘기고(`compose.yml` 의 그 줄), `restart` 는 환경을 다시
+읽지 않는다. 적용값은 새 `ingestauth_started` 의 `ip_limit` 로 확인한다. 재생성 동안(다시
+시작과 같은 창) 모든 계정의 새 연결 · 재접속이 거부된다.
+
+```bash
+# ── 블록: IP 한도 켜기 · 끄기 — 머리 + 이 본문. 인자 on | off ──
+# .env 의 INGEST_AUTH_IP_LIMIT 한 줄을 인자로 맞추고 응답기만 다시 만든다(up -d
+# --force-recreate). 새 ingestauth_started 의 ip_limit 가 인자와 같은지, MediaMTX 의
+# 시작 시각이 앞뒤로 같은지 본다. compose 에 전달 줄이 없으면(상자 체크아웃이 그 판 전) 바꾸지 않고 멈춘다.
+main() {
+  (( $# == 1 )) && [[ "$1" == on || "$1" == off ]] \
+    || check_failed '사용법: on | off'
+  local -r want="$1" env="${DEMO_DIR}/.env"
+  local mtx_id='' before after since tmp
+  assert_demo_dir_safe
+  grep -q 'INGEST_AUTH_IP_LIMIT:' -- "${REPO}/${COMPOSE_YML}" \
+    || mismatch 'compose.yml 에 INGEST_AUTH_IP_LIMIT 전달 줄이 없다 — .env 로 바꿀 수 없다'
+  assert_ready_to_start_ingest_auth
+  echo ".env 앞: $(sha256sum -- "${env}" | cut -c1-12)"
+  # 새 .env 는 같은 디렉터리(root 소유 — assert_demo_dir_safe)에 0600 으로 만들어 이름 바꾸기로
+  # 끼운다. 비밀이 든 사본을 WORK 에 두지 않는다.
+  tmp="$(mktemp -- "${DEMO_DIR}/.env.iplimit.XXXXXX")"
+  grep -v '^INGEST_AUTH_IP_LIMIT=' -- "${env}" > "${tmp}" || true
+  printf 'INGEST_AUTH_IP_LIMIT=%s\n' "${want}" >> "${tmp}"
+  chmod --reference="${env}" -- "${tmp}"
+  chown --reference="${env}" -- "${tmp}"
+  mv -T -- "${tmp}" "${env}"
+  echo ".env 뒤: $(sha256sum -- "${env}" | cut -c1-12)"
+  container_id mediamtx mtx_id
+  before="$(docker inspect -f '{{.State.StartedAt}}' "${mtx_id}")"
+  since="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  echo "재생성 명령: ${since}"
+  compose_up_masked live_compose -d --no-deps --force-recreate ingest-auth
+  wait_ingest_auth_healthy
+  echo "healthy: $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  live_compose logs --no-log-prefix --since "${since}" ingest-auth \
+    > "${WORK}/auth.log"
+  grep '"msg":"ingestauth_started"' -- "${WORK}/auth.log" \
+    | grep -q "\"ip_limit\":\"${want}\"" \
+    || mismatch "새 ingestauth_started 의 ip_limit 가 ${want} 가 아니다"
+  after="$(docker inspect -f '{{.State.StartedAt}}' "${mtx_id}")"
+  [[ "${after}" == "${before}" ]] || mismatch 'MediaMTX 가 다시 시작됐다 — 「응답기만」이 깨졌다'
+  echo "ip_limit=${want}"
+}
+main "$@"
+```
+
+종료 1 이 `.env` 를 바꾼 뒤에 났으면 `.env 앞` 해시와 견주고, 다시 돌리거나 반대 인자로
+되돌린다. 실측 기록에는 `.env` 해시 앞뒤와 `ip_limit` 값을 남긴다.
 
 ---
 
