@@ -492,7 +492,9 @@ func TestJanitorRaceSameRecordRetryMatchesBaseline(t *testing.T) {
 	if got.rows != base.rows || got.tailNil != base.tailNil {
 		t.Errorf("장부 = (행 %d · NULL %v), want 기준선 (행 %d · NULL %v)", got.rows, got.tailNil, base.rows, base.tailNil)
 	}
-	if limit := index.RowLockTxnTimeout + time.Second; got.took > limit {
+	// 원본은 janitor ⓑ 의 transaction_timeout(8s)이 끝나야 재시도가 풀린다(실측 8.02s) — 부하 큰 CI 의
+	// PG 응답 지연을 흡수하게 여유를 2s 로 둔다. 판별은 변이 VT3-2(11s)가 갈래 단언으로도 잡는다(C22).
+	if limit := index.RowLockTxnTimeout + 2*time.Second; got.took > limit {
 		t.Errorf("재시도 대기 = %v, want ≤ %v", got.took, limit)
 	}
 	t.Logf("기록: 기준선 대기 %v · 갈래 %v / janitor ⓑ 겹침 대기 %v · 갈래 %v", base.took, base.signals, got.took, got.signals)

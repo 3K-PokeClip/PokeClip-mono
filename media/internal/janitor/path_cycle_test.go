@@ -139,3 +139,27 @@ func TestCycleRefusesStreamDirectorySymlinkToAnotherStream(t *testing.T) {
 		t.Error("거부 행이 1h 보류에 들지 않았다")
 	}
 }
+
+// C15 M3 — 장부 경로의 마지막 요소가 스트림 아래 빈 디렉터리면 Root.Remove 는 그 디렉터리를 지울 수
+// 있다. Q2 이름 규칙(조각 이름만)이 삭제 통로 앞에서 막는다 — 디렉터리는 남고 bad_name 으로 거부된다
+// (변이 — validatePath 의 이름 규칙 제거 → 빈 디렉터리가 사라진다).
+func TestCycleRefusesEmptyDirectoryAsLastElement(t *testing.T) {
+	r, dir := newRealRootRig(t)
+	sub := filepath.Join(dir, "s1", "sub")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	k := r.realRow(dir, "s1", 1, "sub", true)
+
+	r.cycle(t)
+
+	if fi, err := os.Stat(sub); err != nil || !fi.IsDir() {
+		t.Fatalf("빈 디렉터리 s1/sub 가 지워졌다(stat = %v)", err)
+	}
+	if _, ok := r.ledger.pathOf(k); !ok {
+		t.Error("거부해야 할 행의 장부를 NULL 했다")
+	}
+	if got := r.log.last(t, "janitor_path_rejected").attrs["reasons"]; !strings.Contains(got, "bad_name") {
+		t.Errorf("janitor_path_rejected reasons = %q, want bad_name", got)
+	}
+}

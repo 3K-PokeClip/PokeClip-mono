@@ -2236,15 +2236,22 @@ PG 가 비정상 종료된 뒤 `janitor_volume_suspect` 가 켜질 수 있다. �
 다만 같은 게이지는 볼륨이 정말 잘못 붙었을 때도 켜진다. 기다리기 전에 둘을
 가른다. 둘 다 맞을 때만 L31 로 보고 자동 정리를 기다린다.
 
-1. 세 서비스의 `/recordings` 가 같은 볼륨인지 본다 — 출력된 볼륨 이름이
-   셋 다 같아야 한다(파일 수 비교로는 가려지지 않는다).
+1. 세 서비스의 `/recordings` 가 같은 볼륨인지 본다 — 출력된 볼륨 이름과
+   원본 경로(`Source`)가 셋 다 같아야 한다(파일 수 비교로는 가려지지 않는다).
+   바인드 마운트는 이름이 비므로 이름만 보면 둘 다 바인드일 때 같아 보인다 —
+   원본 경로까지 대조한다.
 
     ```sh
     for s in media segment-indexer janitor; do
-      docker inspect -f '{{range .Mounts}}{{if eq .Destination "/recordings"}}{{.Name}}{{end}}{{end}}' \
+      printf '%s: ' "$s"
+      docker inspect -f '{{range .Mounts}}{{if eq .Destination "/recordings"}}{{.Name}} {{.Source}}{{end}}{{end}}' \
         "$(docker compose ps -q "$s")"
     done
     ```
+
+    떠 있지 않은 서비스는 `docker compose ps -q` 가 비어 그 줄에서
+    `invalid container name or ID: value is empty` 오류가 난다 — 그 서비스를
+    먼저 띄우고 다시 본다.
 
 1. 게이지 줄의 표본(`sample_stream_id` · `sample_seq`)이 PG 종료 직전
    `segment_local_deleted` 줄(같은 `stream_id` · `seq`)에 있는지 본다 — 있으면
@@ -2300,6 +2307,10 @@ janitor 는 파일을 지운 뒤 장부 갱신에 실패한 행을 「부채」�
     GRANT UPDATE (local_path) ON stream_segments TO media_janitor;
     ```
 
+    계정(`CREATE ROLE media_janitor LOGIN …`)은 DB 관리자가 만들고 비밀번호는
+    비밀 관리자(Secrets Manager)에만 둔다(IAM 인증이면 비밀번호 없음) — 문서 ·
+    저장소 · compose 파일에 적지 않는다.
+
     권한은 janitor 를 켜기 **전에** 준다. `UPDATE (local_path)` 가 없으면 행
     잠금(`SELECT … FOR UPDATE NOWAIT`) 단계에서 42501 로 막혀 파일을 지우지 않고
     매 주기 실패한다(`janitor_cycle_failing`). 지운 뒤 장부를 못 고쳐 부채가 되는
@@ -2307,10 +2318,14 @@ janitor 는 파일을 지운 뒤 장부 갱신에 실패한 행을 「부채」�
 - **로컬 compose 의 한계**: 로컬 janitor 는 `POSTGRES_USER`(DB 소유자 계정)로
   붙는다. 최소 권한 경계는 로컬 실행으로는 확인되지 않는다 — 위 시험이 그
   몫이다.
-- **운영 DSN 은 `POSTGRES_SSLMODE=require` 이상**(`verify-ca` · `verify-full`)
-  으로 둔다. 기본 `prefer` 는 TLS 를 못 쓰면 평문으로 내려간다. `require` 로
-  두면 TLS 를 받지 않는 서버에는 붙지 않고 기동 오류(`janitor_failed`)로
-  끝난다(2026-10-20 실행 확인 — 실험 기록 `c9-sslmode.txt`).
+- **운영 DSN 은 `POSTGRES_SSLMODE=verify-full`** 로 두고 RDS CA 번들 파일을
+  janitor 환경 변수 `PGSSLROOTCERT`(컨테이너 안 경로)로 준다 — 서버 인증서와
+  호스트 이름까지 검증해야 중간자를 막는다(pgx 가 이 변수를 읽는다 — 2026-10-20
+  확인, 실험 기록 `c21-pgsslrootcert.txt`). 최소한 `require` 다: 암호화는 되지만
+  서버 인증서를 검증하지 않는다. 기본 `prefer` 는 TLS 를 못 쓰면 평문으로
+  내려간다. `require` 이상이면 TLS 를 받지 않는 서버에는 붙지 않고 기동
+  오류(`janitor_failed`)로 끝난다(2026-10-20 실행 확인 — 실험 기록
+  `c9-sslmode.txt`).
 
 ### janitor 환경 변수
 

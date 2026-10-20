@@ -226,10 +226,9 @@ SELECT count(*) FROM pg_stat_activity
 // 모양을 deadlock_timeout 을 기다리지 않고 **늦게 요청한 쪽**에서 곧바로 잡는다(조기 교착 탐지 —
 // 새 요청자가 이미 기다리는 요청을 막으면서 그 요청자의 보유 잠금에 막히면 즉시 40P01).
 //
-//   - EnsureSchema 가 먼저 대기(실물 EnsureSchema 한 번 — 구조상 흔한 순서다. janitor 의 act
-//     구간이 EnsureSchema 의 SHARE → ACCESS EXCLUSIVE 간격보다 훨씬 길어, 둘이 겹치면
-//     ACCESS EXCLUSIVE 요청은 대개 janitor UPDATE 앞에 떨어진다): janitor 가 희생된다
-//     → 40P01 · StageCommit · 파일 부재 · 장부 그대로 → 회수 ClearLocalPath 로 NULL. PASS/FAIL.
+//   - EnsureSchema 가 먼저 대기(실물 EnsureSchema 한 번): EnsureSchema 가 먼저 ACCESS EXCLUSIVE 를
+//     기다리면 janitor UPDATE 가 희생된다 → 40P01 · StageCommit · 파일 부재 · 장부 그대로 → 회수
+//     ClearLocalPath 로 NULL. PASS/FAIL.
 //   - janitor 가 먼저 대기(EnsureSchema 의 SHARE 와 ACCESS EXCLUSIVE 사이에 janitor UPDATE 가 끼는
 //     좁은 창 — 같은 DDL 을 두 번에 나눠 흉내 낸다): EnsureSchema 가 희생된다 → 사이드카 기동 실패
 //     · 재기동(L26). janitor 는 그 뒤 Cleared. PASS/FAIL 로 고정하고 L26 근거로 기록한다.

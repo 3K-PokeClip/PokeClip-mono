@@ -112,6 +112,10 @@ func removeNoFollow(root *os.Root, name string) error {
 	return dir.Remove(parts[len(parts)-1])
 }
 
+// afterLstat 은 시험 전용 고리다 — openDirNoFollow 의 Lstat 과 OpenRoot 사이에서 불린다. 제품 경로에서는
+// nil 이고 아무도 쓰지 않는다. 시험이 그 사이 바꿔치기를 결정적으로 일으켜 SameFile 대조를 판별한다(C16).
+var afterLstat func(name string)
+
 // openDirNoFollow 는 parent 안의 디렉터리 name 을 하위 Root 로 연다. name 이 심링크면 거부한다.
 // Lstat 과 OpenRoot 사이에 name 이 심링크로 바뀌면 연 디렉터리가 Lstat 이 본 것과 달라지므로, 연
 // 디렉터리를 Lstat 결과와 대조해(os.SameFile) 그 경쟁도 거부한다.
@@ -122,6 +126,9 @@ func openDirNoFollow(parent *os.Root, name string) (*os.Root, error) {
 	}
 	if fi.Mode()&fs.ModeSymlink != 0 {
 		return nil, fmt.Errorf("%w: %q", ErrSymlinkInPath, name)
+	}
+	if afterLstat != nil {
+		afterLstat(name)
 	}
 	sub, err := parent.OpenRoot(name)
 	if err != nil {

@@ -189,3 +189,49 @@ func TestRemoveTRefusesDirectorySwappedForSymlinkAfterCheck(t *testing.T) {
 
 // swapRemovers 는 경쟁 시험에서 동시에 삭제를 되풀이하는 고루틴 수다.
 const swapRemovers = 4
+
+// C16 — 위 경쟁 시험을 결정적으로 만든 판이다. 시험 고리 afterLstat 이 Lstat 과 OpenRoot 사이에서
+// s1 을 「s2 를 가리키는 심링크」로 바꿔치기한다 — 그러면 OpenRoot 는 루트 안 심링크를 따라가 s2 를
+// 연다. SameFile 대조가 그것을 거부해야 s2 파일이 남는다(변이 — SameFile 대조 제거 → s2 파일이 지워져
+// FAIL).
+func TestRemoveTRefusesSwapBetweenLstatAndOpenRoot(t *testing.T) {
+	root, dir := openTestRoot(t)
+	const name = "seg.mp4"
+	if err := os.MkdirAll(filepath.Join(dir, "s2"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	victim := filepath.Join(dir, "s2", name)
+	if err := os.WriteFile(victim, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s1 := filepath.Join(dir, "s1")
+	if err := os.Mkdir(s1, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	swapped := false
+	afterLstat = func(n string) {
+		if n != "s1" || swapped {
+			return
+		}
+		swapped = true
+		if err := os.Remove(s1); err != nil {
+			t.Errorf("바꿔치기 준비(디렉터리 제거) 실패: %v", err)
+		}
+		if err := os.Symlink("s2", s1); err != nil {
+			t.Errorf("바꿔치기(심링크) 실패: %v", err)
+		}
+	}
+	t.Cleanup(func() { afterLstat = nil })
+
+	err := RemoveT(root, filepath.Join("s1", name), time.Second)
+
+	if !swapped {
+		t.Fatal("시험 고리가 불리지 않았다 — 자극 미도달")
+	}
+	if _, serr := os.Stat(victim); serr != nil {
+		t.Fatalf("Lstat 뒤 심링크로 바뀐 s1 을 따라가 s2 파일을 지웠다(RemoveT = %v · stat = %v)", err, serr)
+	}
+	if !errors.Is(err, ErrSymlinkInPath) {
+		t.Fatalf("RemoveT = %v, want ErrSymlinkInPath", err)
+	}
+}

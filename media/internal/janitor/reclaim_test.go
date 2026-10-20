@@ -5,8 +5,10 @@ package janitor
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/fsop"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
 )
 
@@ -148,5 +150,27 @@ func TestReclaimLogsConfirmedDeletionWhenCommitResponseWasLost(t *testing.T) {
 				t.Errorf("삭제 줄 = %v, want 1줄 outcome=%s axis=%s", lines, c.outcome, archiveAxis)
 			}
 		})
+	}
+}
+
+// C15 L1 — maybe 부채의 회수 삭제가 디렉터리 심링크(fsop.ErrSymlinkInPath)로 거부되면 사유를 「other」
+// 로 뭉개지 않고 stream_symlink 로 남긴다 — 주기 요약 recovery 가 blocked_stream_symlink 다. 부채는
+// 그대로 maybe 다(변이 — 명시 갈래 제거 → blocked_other).
+func TestReclaimNamesSymlinkRefusalReason(t *testing.T) {
+	r := newRig(t, nil)
+	r.row("s1", 1, false, true)
+	stallFirstThenAllow(r, 1)
+	r.cycle(t)
+	r.fs.hook = func(string) (error, bool) {
+		return fmt.Errorf("%w: %q", fsop.ErrSymlinkInPath, "s1"), true
+	}
+
+	maybeDebtCycles(t, r, 1)
+
+	if len(r.j.debt) != 1 || r.j.debt[0].kind != debtMaybe || r.j.debt[0].failures != 1 {
+		t.Fatalf("부채 = %+v, want maybe · failures 1", r.j.debt)
+	}
+	if got := r.log.last(t, "janitor_cycle_summary").attrs["recovery"]; got != "blocked_"+rejectStreamSymlink {
+		t.Errorf("summary recovery = %q, want blocked_%s", got, rejectStreamSymlink)
 	}
 }

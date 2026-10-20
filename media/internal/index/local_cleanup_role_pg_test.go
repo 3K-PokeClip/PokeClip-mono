@@ -41,13 +41,16 @@ func lcRolePool(t *testing.T, admin *pgxpool.Pool) *pgxpool.Pool {
 	}
 	password := hex.EncodeToString(buf) // 16진 문자만 — 따옴표를 깰 글자가 없다
 	lcDropRole(t, admin)                // 지난 실행이 죽어 남긴 역할
-	stmts := append([]string{"CREATE ROLE " + lcRoleName + " LOGIN PASSWORD '" + password + "'"}, lcRoleGrants...)
-	for _, s := range stmts {
+	if _, err := admin.Exec(ctx, "CREATE ROLE "+lcRoleName+" LOGIN PASSWORD '"+password+"'"); err != nil {
+		t.Fatalf("역할 생성 실패: %v", err)
+	}
+	// 만든 직후에 등록한다 — 아래 GRANT 가 실패로 끝나도 역할이 클러스터에 남지 않는다(C21).
+	t.Cleanup(func() { lcDropRole(t, admin) })
+	for _, s := range lcRoleGrants {
 		if _, err := admin.Exec(ctx, s); err != nil {
-			t.Fatalf("역할 준비 실패(%.40s…): %v", s, err)
+			t.Fatalf("역할 권한 부여 실패(%.40s…): %v", s, err)
 		}
 	}
-	t.Cleanup(func() { lcDropRole(t, admin) })
 
 	cfg := admin.Config()
 	cfg.ConnConfig.User, cfg.ConnConfig.Password = lcRoleName, password

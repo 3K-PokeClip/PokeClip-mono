@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"path/filepath"
 
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/fsop"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
 )
 
@@ -104,8 +105,13 @@ func (j *Janitor) reclaimRemove(d *debtEntry, st *cycleStats) bool {
 		j.enterFSHold()
 		j.debtFailed(d, st, "stalled")
 	default:
+		reason := failReason(err)
+		if errors.Is(err, fsop.ErrSymlinkInPath) {
+			// 삭제 단계(act)와 같은 사유 이름이다 — 「other」 와 섞이면 경보만으로는 심링크를 못 가른다.
+			reason = rejectStreamSymlink
+		}
 		j.log.Debug("janitor_reclaim_failed", "stream_id", d.seg.StreamID, "seq", d.seg.Seq, "path", d.seg.LocalPath, "err", err)
-		j.debtFailed(d, st, failReason(err))
+		j.debtFailed(d, st, reason)
 	}
 	return false
 }
