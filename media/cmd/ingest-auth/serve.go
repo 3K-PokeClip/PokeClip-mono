@@ -77,6 +77,9 @@ func serve(ctx context.Context, s site, getenv func(string) string, stdout, stde
 		"auth_host_kind", cfg.auth.hostKind,
 		"auth_port", cfg.auth.port,
 		"deadline_ms", ingestauth.MaxDeadline.Milliseconds(),
+		"ip_limit", ipLimitState(cfg.ipLimit),
+		"ip_limit_burst", cfg.ipLimit.Burst,
+		"ip_limit_interval_ms", cfg.ipLimit.Interval.Milliseconds(),
 		"health", r.health.ln.Addr().String())
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
@@ -95,6 +98,7 @@ type serveConfig struct {
 	callerIP netip.Addr
 	resolver *keyresolve.Client
 	auth     authTarget // 기동 로그의 auth_host_kind · auth_port — 주소는 없다
+	ipLimit  ingestauth.IPLimit
 }
 
 // loadServeConfig 는 run 의 환경 변수를 모두 검사한다(설계 2-6 — 필수값이 비면 기동 실패). cut 만 쓰는 MTX_API_URL 도
@@ -119,7 +123,11 @@ func loadServeConfig(getenv func(string) string) (serveConfig, error) {
 	if err != nil {
 		return serveConfig{}, err
 	}
-	return serveConfig{listen: listen, callerIP: callerIP, resolver: resolver, auth: auth}, nil
+	ipLimit, err := loadIPLimit(getenv)
+	if err != nil {
+		return serveConfig{}, err
+	}
+	return serveConfig{listen: listen, callerIP: callerIP, resolver: resolver, auth: auth, ipLimit: ipLimit}, nil
 }
 
 // listening 은 리스너 하나와 그 위에서 돌릴 서버다.
@@ -149,6 +157,7 @@ func openResponder(s site, cfg serveConfig, getenv func(string) string, log *slo
 		APIUser:  getenv(envMTXAPIUser),
 		APIPass:  ingestauth.NewSecret(getenv(envMTXAPIPass)),
 		Log:      log,
+		IPLimit:  cfg.ipLimit,
 	})
 	if err != nil {
 		return responder{}, err
