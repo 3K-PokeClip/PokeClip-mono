@@ -10,6 +10,12 @@
 #   PCBENCH_FAKE_COMPOSE_VERSION    `compose version --short` 의 답.
 #   PCBENCH_FAKE_UP_STATUS          up 의 종료 코드(기본 0).
 #   PCBENCH_FAKE_DOWN_STATUS        down 의 종료 코드(기본 0).
+#   PCBENCH_FAKE_DOWN_HOLD          있으면 down 이 docker.down.hold 를 만든 뒤 그
+#                                   초만큼 머문다(끝나지 않는 down 흉내).
+#   PCBENCH_FAKE_PS_IDS             `ps` 가 낼 컨테이너 ID(공백으로 나눔 — 한 줄에
+#                                   하나씩 낸다). 기본 빈 출력.
+#   PCBENCH_FAKE_PS_STATUS          `ps` 의 종료 코드(기본 0 — 0 아니면 출력 없음).
+#   PCBENCH_FAKE_RM_STATUS          `rm` 의 종료 코드(기본 0).
 #
 # 모르는 호출 꼴이면 종료 2.
 
@@ -56,17 +62,48 @@ compose_subcommand() {
   printf '\n'
 }
 
+#######################################
+# compose 가 아닌 호출(ps · rm)에 답한다. 그 밖이면 종료 2.
+# Arguments:
+#   받은 argv.
+#######################################
+answer_engine() {
+  local id
+  case "${1:-}" in
+    ps)
+      if [[ "${PCBENCH_FAKE_PS_STATUS:-0}" != 0 ]]; then
+        printf '가짜 docker: ps 실패(시험)\n' >&2
+        exit "${PCBENCH_FAKE_PS_STATUS}"
+      fi
+      for id in ${PCBENCH_FAKE_PS_IDS:-}; do
+        printf '%s\n' "${id}"
+      done
+      ;;
+    rm) exit "${PCBENCH_FAKE_RM_STATUS:-0}" ;;
+    *)
+      printf '가짜 docker: 모르는 호출\n' >&2
+      exit 2
+      ;;
+  esac
+}
+
 main() {
   record_call "$@"
   if [[ "${1:-}" != compose ]]; then
-    printf '가짜 docker: 모르는 호출\n' >&2
-    exit 2
+    answer_engine "$@"
+    exit 0
   fi
   shift
   case "$(compose_subcommand "$@")" in
     version) printf '%s\n' "${PCBENCH_FAKE_COMPOSE_VERSION:-}" ;;
     up) exit "${PCBENCH_FAKE_UP_STATUS:-0}" ;;
-    down) exit "${PCBENCH_FAKE_DOWN_STATUS:-0}" ;;
+    down)
+      if [[ -n "${PCBENCH_FAKE_DOWN_HOLD:-}" ]]; then
+        : >"${PCBENCH_FAKE_LOG_DIR}/docker.down.hold"
+        sleep "${PCBENCH_FAKE_DOWN_HOLD}"
+      fi
+      exit "${PCBENCH_FAKE_DOWN_STATUS:-0}"
+      ;;
     *)
       printf '가짜 docker: 모르는 compose 하위 명령\n' >&2
       exit 2

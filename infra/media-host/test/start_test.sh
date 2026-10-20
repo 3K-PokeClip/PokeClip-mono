@@ -36,6 +36,8 @@ source "${TEST_DIR}/lib/start_guard_cases.sh"
 source "${TEST_DIR}/lib/render.sh"
 # shellcheck source=lib/start_api_pass_cases.sh
 source "${TEST_DIR}/lib/start_api_pass_cases.sh"
+# shellcheck source=lib/stop_guard_cases.sh
+source "${TEST_DIR}/lib/stop_guard_cases.sh"
 
 readonly COMPOSE_TEMPLATE="${MEDIA_HOST_DIR}/compose.yml.tmpl"
 readonly MTX_TEMPLATE="${TEST_DIR}/mediamtx.test.yml.tmpl"
@@ -52,7 +54,7 @@ readonly API_PASS_NAME='mtx_api_pass'
 readonly API_PASS_PATTERN='^[0-9a-f]{64}$'
 # 우회 플래그로 읽힐 문자열(대소문자 무시).
 readonly BYPASS_PATTERN='skip|bypass|no_prereq|prereq=0'
-readonly CASE_COUNT=36
+readonly CASE_COUNT=38
 
 #######################################
 # up 호출 argv 를 한 줄로 낸다(인자 사이 공백). 호출이 하나가 아니면 실패.
@@ -770,6 +772,10 @@ main() {
     api_pass::case_inherited_export
   harness::run_case 36 'CDN 비밀 허용 글자 정규식 — 시작 = 운영 확인(정적)' \
     case_cdn_pattern_same
+  harness::run_case 37 'stop — down 실패면 라벨로 컨테이너 회수 · 렌더 삭제' \
+    stop::case_down_fallback
+  harness::run_case 38 'stop — 끝나지 않는 down 중 TERM → 143 · 렌더 삭제' \
+    stop::case_signal_during_down
 
   if ! harness::summary "${CASE_COUNT}"; then
     exit 1
