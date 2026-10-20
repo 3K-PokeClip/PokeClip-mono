@@ -26,8 +26,9 @@
 #
 # 사례 번호 ↔ 계획: 6 ① · 7 ② · 8 ⑥ · 9 ⑧ · 10 ③ · 11 ③ 확장 · 12 ④ · 13 ⑦a ·
 # 14 ⑦b · 18 ⑤(정리 · 잔여 0). 동작 사례는 lib/unit_runtime_cases.sh 에 있다.
-# 사례 15 – 17 은 크래시 경로(보안 c7 M-1 — compose 플러그인 · 유닛 cgroup
-# SIGKILL · 유닛 밖에 남은 스택)이고 lib/unit_crash_cases.sh 에 있다.
+# 사례 15 – 17 은 크래시 경로(compose 플러그인 · 유닛 cgroup SIGKILL · 유닛 밖에
+# 남은 스택 — 옛 비밀을 붙든 컨테이너가 남지 않는지)이고
+# lib/unit_crash_cases.sh 에 있다.
 #
 # 한 바퀴 약 13분이다. 반복(N=3)은 부르는 쪽(CI)이 이 시험을 여러 번 돌린다.
 #
@@ -76,9 +77,10 @@ readonly SYSTEMCTL_TIMEOUT=120
 readonly CASE_COUNT=18
 
 # prod 유닛 지시어(설명 줄 Description= 은 빼고) — 「절|키=값」 한 줄에 하나.
-# 계획 c7 「c7 유닛」 · 덧붙임 편차 14(Requires · After) · 보안 c4 L6(LimitCORE) ·
-# c7 정지 두 단계(주 프로세스 TERM 뒤 down · SuccessExitStatus=130) · c9
-# ExecStopPost 도 down(크래시 경로에서 ExecStop 을 건너뛰어도 컨테이너를 내림).
+# 계획 c7 「c7 유닛」 · 덧붙임 편차 14(Requires · After) · LimitCORE=0(코어
+# 덤프에 비밀이 남지 않게) · c7 정지 두 단계(주 프로세스 TERM 뒤 down ·
+# SuccessExitStatus=130) · c9 ExecStopPost 도 down(크래시 경로에서 ExecStop 을
+# 건너뛰어도 컨테이너를 내림).
 # shellcheck disable=SC2016 # 유닛 원문 — $ 는 펼치지 않는다.
 readonly EXPECTED_UNIT_LINES='Unit|Requires=docker.service
 Unit|After=docker.service

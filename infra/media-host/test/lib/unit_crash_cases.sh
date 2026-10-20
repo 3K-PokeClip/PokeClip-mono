@@ -4,8 +4,8 @@
 # lib/unit_runtime_cases.sh 가 정의한다.
 # shellcheck disable=SC2154
 #
-# 유닛 재기동 시험(unit_restart_test.sh)의 크래시 경로 사례 — 보안 리뷰 c7 M-1
-# 재현(실험 루트 m1-repro). 주 프로세스가 실패로 끝나면 systemd 는 ExecStop 을
+# 유닛 재기동 시험(unit_restart_test.sh)의 크래시 경로 사례 — 크래시 뒤 옛 비밀
+# 컨테이너 잔존 재현(실험 루트 m1-repro). 주 프로세스가 실패로 끝나면 systemd 는 ExecStop 을
 # 건너뛰고 ExecStopPost 로 간다. 그때 compose 를 내릴 주체가 없으면 컨테이너가
 # 옛 렌더(옛 CDN 비밀 · 옛 API 비밀번호)를 붙든 채 남는다.
 #

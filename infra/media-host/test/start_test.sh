@@ -668,6 +668,7 @@ case_secret_multiline() {
 
 cleanup() {
   local status=$?
+  harness::end_last_group
   if [[ -n "${fixture_root}" ]]; then
     chmod -R u+w -- "${fixture_root}" 2>/dev/null || true
     rm -rf -- "${fixture_root:?}"

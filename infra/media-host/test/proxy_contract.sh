@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # 앞단 프록시(nginx) 계약 시험 — 계획 M2 c1 사례 1 ~ 15 와 착수 덧붙임 사례
-# 16 · 17, c2 리뷰 덧붙임 사례 1b(live 정규화 우회).
+# 16 · 17, live 정규화 우회를 겨누는 덧붙임 사례 1b.
 #
 # 시험 compose(test/compose.contract.yml)를 띄운다. mediamtx 자리에는
 # 에코(test/echo)가 서서 망 칸 주인 노릇을 하고(127.0.0.1 의 8888 · 9996 · 9997
@@ -16,8 +16,9 @@
 #   - 1 ~ 12 · 1b · 15 · 8: 시험이 compose 를 직접 띄운다(up -d). 15 는
 #     control_upstream 을 채운 설정으로 nginx 만 다시 만든다. 11 · 12 는 실행
 #     결과에 더해, 그 결과가 기대는 구조(nginx 의 망 칸 · 공개 포트)가 prod
-#     템플릿(compose.yml.tmpl)에도 같은지 본다. 1b 와 4 · 15 의 정규화 우회
-#     확인은 test/lib/normalization_cases.sh, 8 은 test/lib/nginx_log_cases.sh.
+#     템플릿(compose.yml.tmpl)에도 같은지 본다(망 칸 구조 읽기는
+#     test/lib/netns_facts.sh). 1b 와 4 · 15 의 정규화 우회 확인은
+#     test/lib/normalization_cases.sh, 8 은 test/lib/nginx_log_cases.sh.
 #   - 13 · 14 · 16 · 17: bin/start-media.sh · bin/stop-media.sh 로 띄우고
 #     내린다(test/lib/start_media_cases.sh). 14 는 판정이 아니라 기록이다.
 #
@@ -55,6 +56,8 @@ source "${TEST_DIR}/lib/start_media_cases.sh"
 source "${TEST_DIR}/lib/normalization_cases.sh"
 # shellcheck source=lib/nginx_log_cases.sh
 source "${TEST_DIR}/lib/nginx_log_cases.sh"
+# shellcheck source=lib/netns_facts.sh
+source "${TEST_DIR}/lib/netns_facts.sh"
 
 readonly PROJECT='pcbench-edge-proxy'
 readonly CONTRACT_COMPOSE="${TEST_DIR}/compose.contract.yml"
@@ -85,11 +88,6 @@ control_port=""
 health_port=""
 health_path=""
 nginx_image=""
-netns_loaded=0
-netns_status=1
-netns_reason=""
-prod_netns=""
-test_netns=""
 
 #######################################
 # 준비 실패 원인에 한 마디를 더한다(사례 1 ~ 17 이 이 원인을 함께 낸다).
@@ -124,6 +122,7 @@ compose_down() {
 cleanup() {
   local status=$? left
   start_media::abort
+  harness::end_last_group
   if (( env_ready )); then
     compose_down
     if left="$(harness::count_output_lines harness::bounded \
@@ -285,6 +284,15 @@ render_nginx_conf() {
   fi
 }
 
+#######################################
+# 시험 compose 가 읽는 값(이미지 · nginx 설정 · 포트 · 사이드카 종료 지연)을
+# export 하고, 직접 기동 때 mediamtx · sidecar 자리가 bind 하는 비밀 없는 자리
+# 파일을 만든다. 사례 13 · 14 · 16 · 17 의 start-media.sh 도 이 값을 그대로
+# 물려받는다.
+# Globals:
+#   PCBENCH_*, RUNTIME_DIR, scratch, nginx_image, live_port, playback_port,
+#   control_port, health_port
+#######################################
 export_compose_env() {
   export PCBENCH_ECHO_IMAGE="${ECHO_IMAGE}"
   export PCBENCH_NGINX_IMAGE="${nginx_image}"
@@ -305,6 +313,12 @@ export_compose_env() {
   printf 'proxy-contract-placeholder\n' >"${RUNTIME_DIR}/mtx_api_pass"
 }
 
+#######################################
+# 사례 1 ~ 12 의 스택을 시험이 직접(up -d) 띄우고 헬스가 200 을 낼 때까지
+# 기다린다. 실패 원인은 setup_reason 에 더한다.
+# Globals:
+#   scratch, setup_reason
+#######################################
 start_direct_stack() {
   local up_log="${scratch}/up-direct.log" nginx_log="${scratch}/nginx-boot.log"
   if ! bench_compose up -d >"${up_log}" 2>&1; then
@@ -500,92 +514,6 @@ check_case_10() {
   return "${ok}"
 }
 
-#######################################
-# compose 파일 하나의 망 칸 구조 요약(JSON 한 줄)을 낸다 — nginx 의
-# network_mode · 포트를 게시하는 서비스 · 게시된 8888 · 9996 · 9997.
-# Arguments:
-#   compose 파일.
-#######################################
-netns_facts() {
-  harness::bounded "${HARNESS_DOCKER_TIMEOUT}" \
-    docker compose -p "${PROJECT}" -f "$1" config --format json \
-    2>>"${scratch}/config.err" \
-    | jq -c '{
-        nginx: (.services.nginx.network_mode // null),
-        publishers: ([.services | to_entries[]
-          | select((.value.ports // []) | length > 0) | .key] | sort),
-        loopback_published: [.services[] | (.ports // [])[] | .target
-          | select(. == 8888 or . == 9996 or . == 9997)]
-      }'
-}
-
-#######################################
-# prod 템플릿과 시험 compose 의 망 칸 구조를 한 번만 읽어 둔다(사례 11 · 12).
-# Globals:
-#   netns_loaded, netns_status, netns_reason, prod_netns, test_netns
-#######################################
-load_netns_facts() {
-  local rendered="${scratch}/compose.rendered.yml"
-  if (( netns_loaded )); then
-    return "${netns_status}"
-  fi
-  netns_loaded=1
-  if [[ ! -f "${MEDIA_HOST_DIR}/${COMPOSE_TEMPLATE_REL}" ]]; then
-    netns_reason="${COMPOSE_TEMPLATE_REL} 없음(c3 몫)"
-    return 1
-  fi
-  if ! render::template "${MEDIA_HOST_DIR}/${COMPOSE_TEMPLATE_REL}" \
-    "${RENDER_VARS_FILE}" "${rendered}" 2>"${rendered}.err"; then
-    netns_reason="${COMPOSE_TEMPLATE_REL} 렌더 실패: \
-$(harness::log_tail "${rendered}.err")"
-    return 1
-  fi
-  if ! prod_netns="$(netns_facts "${rendered}")"; then
-    netns_reason="렌더한 prod compose 를 읽지 못함: \
-$(harness::log_tail "${scratch}/config.err")"
-    return 1
-  fi
-  if (( env_ready )); then
-    test_netns="$(netns_facts "${CONTRACT_COMPOSE}")" || test_netns=""
-  fi
-  if [[ -z "${test_netns}" ]]; then
-    netns_reason="시험 compose 를 읽지 못함 — ${setup_reason:-config 실패}"
-    return 1
-  fi
-  netns_status=0
-}
-
-require_netns() {
-  if load_netns_facts; then
-    return 0
-  fi
-  harness::add_reason "구조: ${netns_reason}"
-  return 1
-}
-
-#######################################
-# 망 칸 구조 한 항목이 prod 템플릿 · 시험 compose 둘 다 기대값인지 본다
-# (require_netns 뒤에 부른다).
-# Arguments:
-#   jq 필터, 기대값(jq -c 출력), 이름.
-#######################################
-expect_netns() {
-  local ok=0 got kind facts
-  for kind in prod test; do
-    if [[ "${kind}" == prod ]]; then
-      facts="${prod_netns}"
-    else
-      facts="${test_netns}"
-    fi
-    got="$(printf '%s' "${facts}" | jq -c "$1")" || got='(읽지 못함)'
-    if [[ "${got}" != "$2" ]]; then
-      harness::add_reason "구조(${kind}): $3 기대 $2 · 실제 ${got}"
-      ok=1
-    fi
-  done
-  return "${ok}"
-}
-
 check_case_11() {
   local ok=0 remote
   if require_netns; then
@@ -680,6 +608,8 @@ switch_control_upstream() {
     phase_b_reason="control_upstream 을 채운 렌더 — ${why}"
     return 1
   fi
+  # 이 값은 되돌리지 않는다 — 뒤의 사례 13 · 14 · 16 · 17 의 nginx 도 이
+  # 설정(control_upstream 채움)으로 뜬다.
   export PCBENCH_NGINX_CONF="${scratch}/nginx-b.conf"
   if ! bench_compose up -d --no-deps --force-recreate nginx \
     >"${scratch}/up-b.log" 2>&1; then
@@ -797,6 +727,7 @@ main() {
 }
 
 # 자체 시험(query_guard_selftest.sh)이 source 하면 함수만 싣고 돌지 않는다.
-if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
-  main "$@"
+if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+  return 0
 fi
+main "$@"

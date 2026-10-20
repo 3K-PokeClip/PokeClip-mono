@@ -16,6 +16,11 @@
 #     스크래치에 플러그인 링크를 두고 엔드포인트를 이 값으로 준다. prod 는
 #     플러그인이 시스템 경로에 있어 필요 없는 값이다.
 #   - PCBENCH_SIDECAR_EXIT_DELAY: 시험 compose 의 사이드카 역할 종료 지연.
+# 시험 compose 가 읽는 나머지 PCBENCH_* 값(이미지 · 포트 · nginx 설정)은 띄울 때
+# env 로 proxy_contract.sh 가 export 한 값을 그대로 물려받는다. 사례 15 가
+# PCBENCH_NGINX_CONF 를 control_upstream 을 채운 nginx-b.conf 로 바꾸고 되돌리지
+# 않으므로, 이 사례들의 nginx 는 그 설정으로 뜬다(사례 15 준비가 그 설정의
+# 렌더에 닿기 전에 실패하면 nginx-a.conf 그대로다).
 #
 # 제품 스크립트 · c4 시험 자산이 없으면 사례가 FAIL 이다(건너뛰지 않는다).
 #
@@ -347,7 +352,7 @@ start_media::record_14() {
   harness_record_note="restart 종료 코드 ${rc} · 5초 뒤 사례 1 ${c1}"
   harness_record_note+=" · 사례 9 ${c9} · compose ${state} · 중단 줄"
   harness_record_note+=" $(harness::count_fixed 'Aborting on container exit' \
-    "${log}")건"
+    "${log}" || printf '(읽기 실패) ')건"
   start_media::finish_run
 }
 
@@ -358,15 +363,15 @@ start_media::record_14() {
 # Arguments:
 #   로그 파일.
 # Returns:
-#   0 받음 / 1 조회 실패.
+#   0 받음 / 1 조회 · 읽기 실패.
 #######################################
 start_media::fetch_settled_logs() {
   local deadline=$((SECONDS + START_MEDIA_RESULT_TIMEOUT)) starts results
   while :; do
     start_media::compose logs --no-color --no-log-prefix sidecar >"$1" 2>&1 \
       || return 1
-    starts="$(harness::count_fixed 'SIDECAR START' "$1")"
-    results="$(harness::count_fixed 'SIDECAR OWNER ' "$1")"
+    starts="$(harness::count_fixed 'SIDECAR START' "$1")" || return 1
+    results="$(harness::count_fixed 'SIDECAR OWNER ' "$1")" || return 1
     if (( results >= starts || SECONDS >= deadline )); then
       return 0
     fi
@@ -403,10 +408,15 @@ start_media::observe_restarts() {
     start_media::finish_run
     return 1
   fi
-  starts="$(harness::count_fixed 'SIDECAR START' "${logs}")"
-  owner_ok="$(harness::count_fixed 'SIDECAR OWNER OK' "${logs}")"
-  owner_fail="$(harness::count_fixed 'SIDECAR OWNER FAIL' "${logs}")"
-  aborts="$(harness::count_fixed 'Aborting on container exit' "${log}")"
+  if ! starts="$(harness::count_fixed 'SIDECAR START' "${logs}")" \
+    || ! owner_ok="$(harness::count_fixed 'SIDECAR OWNER OK' "${logs}")" \
+    || ! owner_fail="$(harness::count_fixed 'SIDECAR OWNER FAIL' "${logs}")" \
+    || ! aborts="$(harness::count_fixed 'Aborting on container exit' \
+      "${log}")"; then
+    harness::add_reason "${label}: 로그를 읽지 못함 — 확인 불가"
+    start_media::finish_run
+    return 1
+  fi
   if (( starts - 1 < START_MEDIA_MIN_RESTARTS )); then
     harness::add_reason "${label}: 재시작 $((starts - 1))회(기대 \
 ${START_MEDIA_MIN_RESTARTS} 이상)"

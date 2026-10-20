@@ -164,8 +164,10 @@ check_sourceable() {
   out="$(TMPDIR="${selftest_root}" SELFTEST_COMPOSE_MODE=ok \
     bash -c 'source "$1" && printf "SOURCED\n"' _ "${CONTRACT_SCRIPT}" \
     2>/dev/null)" || status=$?
+  # 출력 전체를 비교한다 — 첫 줄만 보면 SOURCED 가 두 번 나와도(source 한
+  # 순간 무언가 돌았다) 통과로 읽는다.
   assert_eq 'proxy_contract.sh 를 source 하면 main 이 돌지 않음' \
-    '0:SOURCED' "${status}:${out%%$'\n'*}"
+    '0:SOURCED' "${status}:${out}"
   [[ "${status}:${out}" == '0:SOURCED' ]]
 }
 
@@ -315,14 +317,14 @@ test_cleanup_set_e_live_start() {
   export SELFTEST_COMPOSE_MODE=ok SELFTEST_PS_MODE=empty
   dir="$(mktemp -d "${selftest_root}/scratch.XXXXXX")"
   # 배경 하위 셸로 돌린다 — `( … ) || …` 꼴이면 그 안에서 set -e 가 꺼져
-  # 정상 경로의 0 아닌 상태를 보지 못한다.
+  # 정상 경로의 0 아닌 상태를 보지 못한다. 안에서 바꾸는 전역은 하위 셸 안에서만
+  # 쓰는 값이다(정리 함수가 그 셸을 끝낸다).
+  # shellcheck disable=SC2030
   (
     set -e
     scratch="${dir}"
     env_ready=1
     harness::spawn_group sleep 300
-    # 하위 셸 안에서만 쓰는 값이다(정리 함수가 그 셸을 끝낸다).
-    # shellcheck disable=SC2030
     start_media_pid="${harness_spawned_pid}"
     printf '%s\n' "${start_media_pid}" >"${dir}.pid"
     cleanup
@@ -448,6 +450,93 @@ test_case_8_log_queries() {
 }
 
 #######################################
+# grep 이 늘 읽기 실패(종료 2)로 끝나는 가짜를 둔 bin 디렉터리를 만든다.
+# Globals:
+#   selftest_root
+# Outputs:
+#   bin 디렉터리.
+#######################################
+grep_fail_bin() {
+  local bin="${selftest_root}/grep-fail"
+  mkdir -p -- "${bin}"
+  printf '#!/bin/sh\nexit 2\n' >"${bin}/grep"
+  chmod +x "${bin}/grep"
+  printf '%s' "${bin}"
+}
+
+#######################################
+# PATH 앞에 읽기 실패 grep 을 둔 채(그 호출 동안만) 사례 함수를 부른 뒤, 종료
+# 코드와 실패 원인을 「코드:원인」 한 줄로 낸다. $(…) 안에서 부른다 — 사례
+# 함수가 바꾼 전역은 그 하위 셸에만 남는다.
+# Globals:
+#   harness_fail_reason
+# Arguments:
+#   사례 함수 이름, 그 인자 ….
+#######################################
+run_with_grep_failure() {
+  local bin status=0
+  bin="$(grep_fail_bin)"
+  harness_fail_reason=''
+  PATH="${bin}:${PATH}" "$@" 2>/dev/null || status=$?
+  printf '%s:%s' "${status}" "${harness_fail_reason}"
+}
+
+#######################################
+# 로그 줄 세기가 읽기 실패면(grep 종료 2) 사례 8 · 16 이 0 건으로 읽지 않고
+# 확인 불가로 FAIL 한다.
+# Globals:
+#   scratch
+#######################################
+test_count_read_failure() {
+  local got
+  export SELFTEST_COMPOSE_MODE=ok
+  scratch="$(mktemp -d "${selftest_root}/count-fail.XXXXXX")"
+  printf 'GET /x\n' >"${scratch}/nginx-a.log"
+  printf 'POST /y\n' >"${scratch}/nginx-b.log"
+  nginx_log_failures=''
+  got="$(run_with_grep_failure check_case_8)" || true
+  assert_eq '사례 8(로그 읽기 실패) FAIL' 1 "${got%%:*}"
+  assert_contains '사례 8(로그 읽기 실패) 원인' "${got#*:}" '확인 불가'
+  got="$(run_with_grep_failure start_media::observe_restarts 4s)" \
+    || true
+  assert_eq '사례 16(로그 읽기 실패) FAIL' 1 "${got%%:*}"
+  assert_contains '사례 16(로그 읽기 실패) 원인' "${got#*:}" '확인 불가'
+}
+
+#######################################
+# Cache-Control 없음 단언 — 머리 파일이 없거나 읽기 실패면 「없음」 통과가
+# 아니라 확인 불가 FAIL · 머리가 있으면 FAIL · 없으면 통과.
+# Globals:
+#   proxy_resp_headers, proxy_resp_label, harness_fail_reason
+#######################################
+test_expect_no_cache_control() {
+  local dir="${selftest_root}/headers" status got
+  mkdir -p -- "${dir}"
+  proxy_resp_label='머리 대조'
+  printf 'HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n' >"${dir}/plain"
+  printf 'HTTP/1.1 200 OK\r\nCache-Control: no-store\r\n' >"${dir}/cached"
+  proxy_resp_headers="${dir}/missing"
+  harness_fail_reason=''
+  status=0
+  proxy::expect_no_cache_control || status=$?
+  assert_eq 'Cache-Control 없음(머리 파일 없음) FAIL' 1 "${status}"
+  assert_contains 'Cache-Control 없음(머리 파일 없음) 원인' \
+    "${harness_fail_reason}" '확인 불가'
+  proxy_resp_headers="${dir}/plain"
+  got="$(run_with_grep_failure proxy::expect_no_cache_control)" \
+    || true
+  assert_eq 'Cache-Control 없음(읽기 실패) FAIL' 1 "${got%%:*}"
+  assert_contains 'Cache-Control 없음(읽기 실패) 원인' "${got#*:}" '확인 불가'
+  status=0
+  proxy::expect_no_cache_control || status=$?
+  assert_eq 'Cache-Control 없음(머리 없음) 통과' 0 "${status}"
+  proxy_resp_headers="${dir}/cached"
+  status=0
+  proxy::expect_no_cache_control 2>/dev/null || status=$?
+  assert_eq 'Cache-Control 없음(머리 있음) FAIL' 1 "${status}"
+}
+
+#######################################
 # 사례 12 의 탐침 조회 두 곳 — 망 칸 안 탐침 실패 → FAIL(확인 불가 · 「닫힘」
 # 을 적지 않음) · bridge 탐침 실패 → FAIL(확인 불가 · 「열려 있음」 · 「닿지
 # 않음」 을 적지 않음) · 성공 → 확인 불가 아님.
@@ -513,6 +602,8 @@ main() {
     test_check_prestate
     test_case_16_log_query
     test_case_8_log_queries
+    test_count_read_failure
+    test_expect_no_cache_control
     test_case_12_probe_query
   fi
   printf '요약: PASS %d · FAIL %d\n' "${selftest_pass_count}" \

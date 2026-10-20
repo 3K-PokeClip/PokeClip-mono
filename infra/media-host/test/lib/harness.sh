@@ -209,17 +209,24 @@ harness::log_tail() {
 }
 
 #######################################
-# 파일에서 고정 문자열이 든 줄 수를 낸다.
+# 파일에서 고정 문자열이 든 줄 수를 낸다. 맞는 줄이 없으면 0 이다. 파일을
+# 읽지 못하면(grep 종료 2 이상) 0 이 아니라 실패다 — 부르는 쪽이 「0 건」 으로
+# 읽지 않고 확인 불가로 다룬다.
 # Arguments:
 #   문자열, 파일.
 # Outputs:
-#   줄 수.
+#   줄 수(셌을 때만).
 # Returns:
-#   0 셈 / 1 파일 없음(아무것도 내지 않는다).
+#   0 셈 / 1 파일 없음 / 2 이상 읽기 실패(grep 의 종료 코드).
 #######################################
 harness::count_fixed() {
+  local out status=0
   [[ -f "$2" ]] || return 1
-  grep -c -F -- "$1" "$2" || true
+  out="$(grep -c -F -- "$1" "$2")" || status=$?
+  if (( status > 1 )); then
+    return "${status}"
+  fi
+  printf '%s\n' "${out}"
 }
 
 #######################################
@@ -330,9 +337,29 @@ harness::terminate() {
 }
 
 #######################################
+# 마지막으로 띄운 그룹(harness::spawn_group)에 아직 살아 있는 프로세스가
+# 있으면 끝낸다. 시험 러너의 EXIT 트랩이 부른다 — 그룹은 러너와 다른 프로세스
+# 그룹이라 러너가 받은 INT · TERM 이 닿지 않아, 부르지 않으면 러너가 끝난 뒤에도
+# 그 그룹(가짜 명령의 대기 등)이 남는다. $(…) 안에서 띄운 그룹은 그 하위 셸의
+# 값이라 여기서 보이지 않는다.
+# Globals:
+#   harness_spawned_pid
+#######################################
+harness::end_last_group() {
+  if [[ -n "${harness_spawned_pid}" ]] \
+    && harness::group_alive "${harness_spawned_pid}"; then
+    harness::terminate "${harness_spawned_pid}"
+  fi
+  return 0
+}
+
+#######################################
 # 명령을 상한 시간 안에서 돌린다. 명령은 자기 프로세스 그룹에서 돈다. 넘기면
-# 그 그룹을 TERM → 유예 → KILL 로 끝내고 124 를 돌려준다. 표준 입출력은
-# 부르는 쪽 것을 그대로 쓴다 — 출력을 받거나($(…)) 돌려 쓸(>) 수 있다.
+# 그 그룹을 TERM → 유예 → KILL 로 끝내고 124 를 돌려준다. 명령이 상한 안에
+# 끝났는데 그 그룹에 배경 자식이 남았으면 그 자식도 끝낸다 — 남은 자식이 표준
+# 출력을 붙잡으면 출력 수집($(…))이 그 자식이 끝날 때까지 매달린다. 표준
+# 입출력은 부르는 쪽 것을 그대로 쓴다 — 출력을 받거나($(…)) 돌려 쓸(>) 수
+# 있다.
 # Globals:
 #   harness_bounded_pid
 # Arguments:
@@ -358,6 +385,9 @@ harness::bounded() {
     sleep 0.2
   done
   wait "${pid}" || status=$?
+  if harness::group_alive "${pid}"; then
+    harness::terminate "${pid}"
+  fi
   return "${status}"
 }
 

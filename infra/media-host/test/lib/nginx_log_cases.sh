@@ -64,7 +64,8 @@ send_error_log_probe() {
 #######################################
 check_case_8() {
   local ok=0 log_a="${scratch}/nginx-a.log" log_b="${scratch}/nginx-b.log"
-  local echo_log="${scratch}/echo.log" n seen token="${PROXY_FAKE_TOKEN}"
+  local echo_log="${scratch}/echo.log" n seen raw probe nb
+  local token="${PROXY_FAKE_TOKEN}"
   if [[ -n "${nginx_log_failures}" ]]; then
     harness::add_reason \
       "nginx 로그 조회 실패(${nginx_log_failures}) — 확인 불가"
@@ -75,31 +76,39 @@ check_case_8() {
 ${setup_reason:-${phase_b_reason:-로그 비어 있음}}"
     return 1
   fi
-  seen="$(harness::count_fixed "/${PROXY_STREAM_ID}/index.m3u8" "${log_a}")"
+  # 세기가 읽기 실패면 0 건으로 읽지 않는다(토큰 0 건이 거짓 통과가 된다).
+  if ! seen="$(harness::count_fixed "/${PROXY_STREAM_ID}/index.m3u8" \
+    "${log_a}")" || ! raw="$(harness::count_fixed \
+    "GET /${PROXY_STREAM_ID}/..%2f${OTHER_STREAM_ID}/index.m3u8 " "${log_a}")" \
+    || ! probe="$(harness::count_fixed "${ERROR_PROBE_LINE}" "${log_a}")" \
+    || ! n="$(harness::count_fixed "${token}" "${log_a}")"; then
+    harness::add_reason '사례 1 · 7 단계 nginx 로그를 읽지 못함 — 확인 불가'
+    return 1
+  fi
   if (( seen == 0 )); then
     harness::add_reason '접근 로그에 사례 1 요청 줄이 없음(docker 로그 아님)'
     ok=1
   fi
-  seen="$(harness::count_fixed \
-    "GET /${PROXY_STREAM_ID}/..%2f${OTHER_STREAM_ID}/index.m3u8 " "${log_a}")"
-  if (( seen == 0 )); then
+  if (( raw == 0 )); then
     harness::add_reason '접근 로그 경로가 원문이 아님(사례 1b 우회 원문 줄 없음)'
     ok=1
   fi
-  seen="$(harness::count_fixed "${ERROR_PROBE_LINE}" "${log_a}")"
-  if (( seen == 0 )); then
+  if (( probe == 0 )); then
     harness::add_reason "오류 로그에 대조 줄이 없음(docker 로그 아님 — 대조 \
 요청 HTTP ${error_probe_code:-미발송})"
     ok=1
   fi
-  n="$(harness::count_fixed "${token}" "${log_a}")"
   if [[ -s "${log_b}" ]]; then
-    seen="$(harness::count_fixed '/api/ingest/end-signal' "${log_b}")"
+    if ! seen="$(harness::count_fixed '/api/ingest/end-signal' "${log_b}")" \
+      || ! nb="$(harness::count_fixed "${token}" "${log_b}")"; then
+      harness::add_reason '사례 15 단계 nginx 로그를 읽지 못함 — 확인 불가'
+      return 1
+    fi
     if (( seen == 0 )); then
       harness::add_reason '접근 로그에 사례 15 요청 줄이 없음'
       ok=1
     fi
-    n=$((n + $(harness::count_fixed "${token}" "${log_b}")))
+    n=$((n + nb))
   else
     harness::add_reason \
       "사례 15 단계 nginx 로그 없음 — ${phase_b_reason:-로그 비어 있음}"
@@ -113,7 +122,10 @@ ${setup_reason:-${phase_b_reason:-로그 비어 있음}}"
     >"${echo_log}" 2>&1; then
     harness::add_reason '에코 로그 조회 실패 — 확인 불가'
     ok=1
-  elif [[ "$(harness::count_fixed "${token}" "${echo_log}")" != 0 ]]; then
+  elif ! seen="$(harness::count_fixed "${token}" "${echo_log}")"; then
+    harness::add_reason '에코 로그를 읽지 못함 — 확인 불가'
+    ok=1
+  elif (( seen != 0 )); then
     harness::add_reason '에코 로그에 시험 토큰이 있음(대조 오염)'
     ok=1
   fi

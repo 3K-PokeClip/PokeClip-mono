@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 #
-# 시험 부품 harness.sh 의 상한 실행 · 종료 자체 시험 — docker 없이 돈다.
+# 시험 부품 harness.sh 의 상한 실행 · 종료 · 줄 세기 자체 시험 — docker 없이
+# 돈다.
 #
 # harness::bounded 는 명령을 자기 프로세스 그룹에서 돌리고, 상한을 넘기면 그
 # 그룹을 TERM → 유예 → KILL 로 끝낸다. 아래 꼴에서 상한 안에 끝나고 남는
@@ -9,8 +10,14 @@
 #   - TERM 처리기가 새 자식을 띄우고 끝나는 명령 — 새 자식이 표준 출력을 붙잡아
 #     출력 수집($(…))이 끝나지 않게 한다.
 #   - 부모가 먼저 끝나 재부모화된 자손.
+#   - 부모가 상한 안에 정상 종료하고 배경 자식만 남은 명령 — 남은 자식이 표준
+#     출력을 붙잡아 출력 수집이 그 자식이 끝날 때까지 매달린다.
 # harness::terminate 는 set -e 아래 정상 경로(이미 다 끝남)에서 0 을 돌려줘야
-# 한다 — 부르는 정리 함수의 뒤 줄이 건너뛰어지지 않게.
+# 한다 — 부르는 정리 함수의 뒤 줄이 건너뛰어지지 않게. 시험 러너가 중단
+# 신호로 끝날 때는 EXIT 트랩의 harness::end_last_group 이 마지막으로 띄운
+# 그룹을 끝내야 한다 — 그룹은 러너와 다른 프로세스 그룹이라 신호가 닿지 않는다.
+# harness::count_fixed 는 맞는 줄이 없으면 0 을 내고, 파일을 읽지 못하면(grep
+# 종료 2) 0 이 아니라 실패를 돌려준다.
 #
 # 각 꼴은 이 실행의 임시 디렉터리 안에 둔 sleep 링크(경로가 고유 표식)를
 # 띄우고, 끝난 뒤 그 표식을 가진 프로세스 수를 센다.
@@ -89,6 +96,66 @@ $((SECONDS - start))초(상한 ${MAX_ELAPSED}) · 잔여 ${left}"
 }
 
 #######################################
+# 러너 흉내(EXIT 트랩에서 harness::end_last_group · TERM 은 exit 143)가 그룹을
+# 띄워 기다리는 중에 TERM 을 받으면, 그 그룹도 남지 않는다.
+# Globals:
+#   marker_sleep
+#######################################
+check_runner_exit() {
+  local status=0 start=${SECONDS} left pid deadline
+  (
+    trap 'harness::end_last_group' EXIT
+    trap 'exit 143' TERM
+    harness::spawn_group "${marker_sleep}" 60 >/dev/null 2>&1
+    harness::wait_exit "${harness_spawned_pid}" 60 || true
+  ) &
+  pid=$!
+  deadline=$((SECONDS + 5))
+  while [[ "$(leftover_count)" == 0 ]] && (( SECONDS < deadline )); do
+    sleep 0.2
+  done
+  kill -TERM "${pid}" 2>/dev/null || true
+  wait "${pid}" || status=$?
+  sleep 0.5
+  left="$(leftover_count)" || left='조회 실패'
+  if (( status == 143 )) && (( SECONDS - start <= MAX_ELAPSED )) \
+    && [[ "${left}" == 0 ]]; then
+    harness::report runner-exit PASS "종료 ${status} · $((SECONDS - start))초"
+  else
+    harness::report runner-exit FAIL '러너 EXIT 트랩 · 잔여' "종료 ${status}\
+(기대 143) · $((SECONDS - start))초 · 잔여 ${left}"
+  fi
+}
+
+#######################################
+# harness::count_fixed — 맞는 줄 없음 → 0 · 종료 0, grep 이 읽기 실패(종료 2)
+# → 출력 없이 0 아닌 종료(가짜 grep 으로 낸다).
+# Globals:
+#   selftest_root
+#######################################
+check_count_fixed() {
+  local file="${selftest_root}/count.txt" bin="${selftest_root}/grep-fail"
+  local out status=0 got_none got_fail
+  printf 'a\nb\n' >"${file}"
+  out="$(harness::count_fixed zzz "${file}")" || status=$?
+  got_none="${status}:${out}"
+  mkdir -p -- "${bin}"
+  printf '#!/bin/sh\nexit 2\n' >"${bin}/grep"
+  chmod +x "${bin}/grep"
+  status=0
+  out="$(PATH="${bin}:${PATH}"; harness::count_fixed a "${file}")" \
+    || status=$?
+  got_fail="${status}:${out}"
+  if [[ "${got_none}" == '0:0' && "${got_fail}" =~ ^[1-9][0-9]*:$ ]]; then
+    harness::report count-fixed PASS '맞는 줄 없음 0 · 읽기 실패는 실패'
+  else
+    harness::report count-fixed FAIL '맞는 줄 없음 0 · 읽기 실패는 실패' \
+      "맞는 줄 없음 「${got_none}」(기대 0:0) · 읽기 실패 「${got_fail}」\
+(기대 0 아닌 종료 · 출력 없음)"
+  fi
+}
+
+#######################################
 # harness::terminate — set -e 셸에서 정상 경로(TERM 으로 바로 끝남)도 0 이고
 # 뒤 줄이 돈다.
 # Globals:
@@ -132,11 +199,16 @@ main() {
   # shellcheck disable=SC2016
   check_shape reparented 124 1 \
     '( "$0" 60 & ); "$0" 60'
+  # shellcheck disable=SC2016
+  check_shape parent-exits-first 0 1 \
+    '"$0" 60 & exit 0'
   check_shape exit-code 7 1 'exit 7'
   check_terminate_set_e
+  check_runner_exit
+  check_count_fixed
 
   harness::summary 0 term-ignore term-spawn-holds-stdout reparented \
-    exit-code terminate-set-e
+    parent-exits-first exit-code terminate-set-e runner-exit count-fixed
 }
 
 main "$@"

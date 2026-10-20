@@ -164,15 +164,24 @@ proxy::expect_auth() {
 }
 
 #######################################
-# 마지막 응답에 Cache-Control 머리가 없는지 본다.
+# 마지막 응답에 Cache-Control 머리가 없는지 본다. 머리 파일이 없거나 읽지
+# 못하면(grep 종료 2 이상) 「없음」 이 아니라 확인 불가로 실패한다.
 # Globals:
 #   proxy_resp_headers, proxy_resp_label
 #######################################
 proxy::expect_no_cache_control() {
-  local n
-  n="$(grep -i -c '^cache-control:' "${proxy_resp_headers}" 2>/dev/null \
-    || true)"
-  if [[ "${n:-0}" != 0 ]]; then
+  local n status=0
+  if [[ ! -r "${proxy_resp_headers}" ]]; then
+    harness::add_reason "${proxy_resp_label}: 응답 머리 파일 없음 — 확인 불가"
+    return 1
+  fi
+  n="$(grep -i -c '^cache-control:' "${proxy_resp_headers}" 2>/dev/null)" \
+    || status=$?
+  if (( status > 1 )); then
+    harness::add_reason "${proxy_resp_label}: 응답 머리를 읽지 못함 — 확인 불가"
+    return 1
+  fi
+  if [[ "${n}" != 0 ]]; then
     harness::add_reason "${proxy_resp_label}: 응답에 Cache-Control 이 붙음"
     return 1
   fi

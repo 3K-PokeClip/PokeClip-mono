@@ -310,12 +310,13 @@ ops_fixture::init() {
 }
 
 #######################################
-# 사례 디렉터리 뿌리를 지운다(EXIT 트랩).
+# 남은 시험 프로세스 그룹을 끝내고 사례 디렉터리 뿌리를 지운다(EXIT 트랩).
 # Globals:
 #   ops_root
 #######################################
 ops_fixture::cleanup() {
   local status=$?
+  harness::end_last_group
   if [[ -n "${ops_root}" ]]; then
     chmod -R u+w -- "${ops_root}" 2>/dev/null || true
     rm -rf -- "${ops_root:?}"

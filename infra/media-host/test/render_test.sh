@@ -99,6 +99,7 @@ setup_reason=""
 
 cleanup() {
   local status=$?
+  harness::end_last_group
   if [[ -n "${scratch}" ]]; then
     rm -rf -- "${scratch:?}"
   fi

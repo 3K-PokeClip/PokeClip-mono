@@ -214,6 +214,7 @@ case_usage() {
 
 cleanup() {
   local code=$?
+  harness::end_last_group
   if [[ -n "${root}" ]]; then
     rm -rf -- "${root:?}"
   fi
