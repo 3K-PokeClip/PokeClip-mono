@@ -50,7 +50,8 @@ auth 서비스에 물어 판정하고(설계상 — 미확인, 위 상태), 받�
                                                     auth (dev EC2 :8082)
 ```
 
-*   **mediamtx** — 포크 이미지 `.2`(핀은 `compose.yml`). SRT 송출을 받아 LL-HLS 로
+*   **mediamtx** — 포크 이미지 `v1.21.2-pokeclip.1`(계정 ECR — 핀은 `compose.yml`,
+    레지스트리 호스트는 상자 `.env` 의 `MTX_IMAGE_REGISTRY`). SRT 송출을 받아 LL-HLS 로
     먹싱한다. UID 10002 로 돈다.
 *   **ingest-auth(응답기)** — MediaMTX 의 HTTP 인증에 답하는 작은 서버다
     (`media/cmd/ingest-auth`, 이미지는 `media/Dockerfile.ingest-auth`). 연결마다
