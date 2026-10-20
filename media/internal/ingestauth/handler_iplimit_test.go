@@ -131,8 +131,10 @@ func TestHandlerIPLimitSkipsBudgetDenials(t *testing.T) {
 	for range 100 {
 		f.publishFrom(t, testAttackerIP, testTokenA)
 	}
-	if e := lastEvent(t, f.logs, "ingestauth_publish_denied"); e.Reason != reasonBudgetExhausted {
-		t.Fatalf("Setup: publish while the budget is drained = %v, want budget_exhausted", e)
+	// 첫 시도가 예산 거절이면 예산이 마른 것이다. 마지막 시도는 보지 않는다 — take 가 예산 앞에 있으면 30번 뒤
+	// 한도 거절로 바뀌고, 그 결함은 아래 단언이 판별한다.
+	if e := handlerEvents(t, f.logs, "ingestauth_publish_denied"); len(e) == 0 || e[0].Reason != reasonBudgetExhausted {
+		t.Fatalf("Setup: the first publish while the budget is drained was not denied as budget_exhausted — events %v", eventNames(t, f.logs))
 	}
 
 	f.clock.advance(10 * time.Second) // 예산이 다시 찬다

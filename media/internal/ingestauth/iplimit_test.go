@@ -395,6 +395,13 @@ func TestIPLimiterOverlappingTakesKeepDebt(t *testing.T) {
 		}
 	}
 
+	// 읽을 때마다 tat 를 지금 + B·r 로 자르면 1초의 읽기에서 빚이 지워져 4초에 허용된다(r1 의 자르기 — 변이 m4a).
+	clock.moveTo(time.Second)
+	l.peek(testIPA)
+	clock.moveTo(4 * time.Second)
+	if ok, _ := l.peek(testIPA); ok {
+		t.Errorf("peek at 4s after 29 + %d overlapping takes = allowed, want denied (debt kept — no clamp on read)", overlap)
+	}
 	clock.moveTo(48*time.Second - time.Millisecond)
 	if ok, _ := l.peek(testIPA); ok {
 		t.Errorf("peek at 47.999s after 29 + %d overlapping takes = allowed, want denied (debt kept)", overlap)
