@@ -10,8 +10,8 @@
 # 부르는 쪽(unit_restart_test.sh)이 정하는 값을 읽는다: PROJECT · UNIT_NAME ·
 # ECHO_ADMIN_PORT · UNIT_COMPOSE · SYSTEMCTL_TIMEOUT · UNIT_FILE · DROPIN_DIR ·
 # INSTALL_ROOT · scratch · health_port · health_path · mode_file · runtime_dir ·
-# unit_env 와 함수 require_installed · write_unit_env. harness.sh 를 먼저 source
-# 한다.
+# unit_env 와 함수 require_installed · require_host_disruption · write_unit_env.
+# harness.sh 를 먼저 source 한다.
 #
 # 판별 신호(덧붙임 예측표):
 #   - 유닛 재기동 = MainPID 가 바뀌고 헬스(사례 9) 200 이 돌아온다.
@@ -38,6 +38,9 @@ readonly UNIT_STOP_HOLD=30
 readonly UNIT_DOCKER_RECOVER=90
 readonly UNIT_MARKER_TIMEOUT=30
 readonly UNIT_POLL=5
+readonly UNIT_DIE_TIMEOUT=10
+# docker exec 가 SIGKILL 로 끝났을 때의 종료 코드(128 + 9).
+readonly UNIT_EXEC_KILLED=137
 # docker events 한 줄 = 「동작 서비스 컨테이너ID」.
 readonly UNIT_EVENT_FORMAT='{{.Action}} '\
 '{{index .Actor.Attributes "com.docker.compose.service"}} {{.Actor.ID}}'
@@ -117,23 +120,61 @@ unit::journal_count() {
 }
 
 #######################################
+# 컨테이너가 끝난(die) 종료 코드를 기다려 낸다.
+# Arguments:
+#   컨테이너 id, 찾기 시작 시각(epoch).
+# Outputs:
+#   die 이벤트의 종료 코드(못 찾으면 빈 값).
+#######################################
+unit::wait_die_code() {
+  local deadline=$((SECONDS + UNIT_DIE_TIMEOUT)) code=""
+  while (( SECONDS < deadline )); do
+    code="$(docker events --since "$2" --until "$(unit::now)" \
+      --filter "container=$1" --filter event=die \
+      --format '{{index .Actor.Attributes "exitCode"}}' 2>/dev/null \
+      | head -n 1)" || code=""
+    if [[ -n "${code}" ]]; then
+      break
+    fi
+    sleep 0.5
+  done
+  printf '%s' "${code}"
+}
+
+#######################################
 # mediamtx 역할(출력 연결 · 망 칸 주인)을 지정한 코드로 끝낸다.
+#
+# 종료 요청(docker exec … fetch)이 137 로 끝나는 경합이 있다 — 에코가 응답을 쓰고
+# 끝나면 컨테이너의 PID 공간이 사라지며 아직 안 끝난 fetch 가 SIGKILL 된다(탐침
+# 상자 실측 약 3%). 그때는 그 컨테이너가 요청한 코드로 끝났는지(die 이벤트)로
+# 전달을 확인한다 — 137 만으로는 받아들이지 않는다.
 # Arguments:
 #   종료 코드.
 #######################################
 unit::mediamtx_exit() {
-  local cid
+  local cid since status=0 died
   cid="$(docker ps -q --filter "label=com.docker.compose.project=${PROJECT}" \
     --filter 'label=com.docker.compose.service=mediamtx')" || cid=""
   if [[ -z "${cid}" ]]; then
     harness::add_reason 'mediamtx 역할 컨테이너를 찾지 못함'
     return 1
   fi
-  if ! docker exec "${cid}" /echo fetch -method POST \
-    "http://127.0.0.1:${ECHO_ADMIN_PORT}/exit?code=$1" >/dev/null 2>&1; then
-    harness::add_reason "종료 요청(${1}) 실패"
-    return 1
+  since="$(( $(unit::now) - 1 ))"
+  docker exec "${cid}" /echo fetch -method POST \
+    "http://127.0.0.1:${ECHO_ADMIN_PORT}/exit?code=$1" >/dev/null 2>&1 \
+    || status=$?
+  if (( status == 0 )); then
+    return 0
   fi
+  if (( status == UNIT_EXEC_KILLED )); then
+    died="$(unit::wait_die_code "${cid}" "${since}")"
+    if [[ "${died}" == "$1" ]]; then
+      return 0
+    fi
+  fi
+  harness::add_reason "종료 요청(${1}) 실패(docker exec 종료 ${status} · die \
+종료 코드 ${died:-없음})"
+  return 1
 }
 
 #######################################
@@ -395,6 +436,7 @@ unit::case_secret_outage() {
 #######################################
 unit::case_docker() {
   local pid0 t0 t1 dpid n ok=0
+  require_host_disruption || return 1
   require_installed || return 1
   unit::fresh_start "${UNIT_IDLE_DELAY}" || return 1
   pid0="$(unit::prop MainPID)"

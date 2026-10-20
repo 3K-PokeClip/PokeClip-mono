@@ -1,5 +1,7 @@
-# infra/terraform 전용 CI: Terraform 트리 · guard 정책 · 단계 직전 점검 스크립트를 고친 PR에서
-# infra/terraform/README.md 「검증」 절의 명령을 모두 돌린다 (POK-312).
+# infra 전용 CI: Terraform 트리 · guard 정책 · 단계 직전 점검 스크립트를 고친 PR에서
+# infra/terraform/README.md 「검증」 절의 명령을 모두 돌린다 (POK-312). Media 상자 설정
+# (infra/media-host)을 고친 PR에서는 그 셸 검사 · 시험(렌더 · 셸 · systemd 유닛 재기동)을
+# 돌린다 (POK-299 — 잡 media-host · media-host-systemd, shellcheck는 shell 잡).
 #
 # 필수 체크가 아니다(ADR-0004). paths로 통째 스킵하는 구조라 필수로 걸면 infra를 안 건드린
 # PR이 Pending으로 잠긴다(media-ci 머리 주석). 결과는 PR 화면의 체크 목록에서 머지 전에 본다.
@@ -10,12 +12,14 @@
 # 기대는 시험은 둘이다. put_secret_test의 실물 CLI 계약 사례는 진짜 aws를 부르되 가짜 자격 · 빈
 # 설정 · 메타데이터 조회 끔 · 닫힌 로컬 주소(엔드포인트와 프록시 모두 127.0.0.1:9)로 불러 요청이
 # 러너 밖으로 나가지 않는다. precheck testlib_test의 실행 비트 사례는 진짜 aws를 부르지 않고 PATH
-# 에서 이름만 푼다(shell 잡 「단계 직전 점검 시험」 주석).
+# 에서 이름만 푼다(shell 잡 「단계 직전 점검 시험」 주석). Media 상자 시험이 부르는 aws도 가짜
+# (infra/media-host/test/fakebin · ops_fakebin)다 — 시험 유닛도 drop-in PATH로 그 가짜를 쓴다.
 #
-# 도구 넷(terraform · tflint · conftest · shellcheck)은 제3자 액션 없이 배포처에서 직접 받아 아래에 적은
-# sha256과 맞을 때만 쓴다. 내려받기는 https만 따르고(리다이렉트 포함) 시간 상한을 둔다. 판은
-# 로컬에서 쓰는 판과 같다(2026-10-17 확인). 도구마다 RUNNER_TEMP 아래 제 디렉터리에 두고
-# GITHUB_PATH로 PATH 앞에 붙인다.
+# 도구 다섯(terraform · tflint · conftest · shellcheck · docker compose)은 제3자 액션 없이 배포처에서
+# 직접 받아 아래에 적은 sha256과 맞을 때만 쓴다. 내려받기는 https만 따르고(리다이렉트 포함) 시간
+# 상한을 둔다. 판은 로컬에서 쓰는 판과 같다(2026-10-17 확인 · compose는 2026-10-20). 도구마다
+# RUNNER_TEMP 아래 제 디렉터리에 두고 GITHUB_PATH로 PATH 앞에 붙인다 — compose만 docker CLI
+# 플러그인 자리에 둔다(media-host 잡 「docker compose 설치」 주석).
 #
 # 판을 올릴 때:
 #   - 옛 판이 적힌 곳을 `git grep -n '<옛 판>'`으로 모두 찾아 함께 바꾼다. 지금은 이 파일(단계
@@ -39,6 +43,10 @@
 #                   로 확인하고, 주체의 ref가 refs/tags/v<판>, 발급자가 위와 같은지 본다.
 #       shellcheck  체크섬 파일이 없다. GitHub 릴리스 자산 shellcheck-<판>.linux.x86_64.tar.gz의
 #                   digest(API)다.
+#       compose     릴리스의 docker-compose-linux-x86_64.sha256(자산별 파일) 값이고, 같은 릴리스
+#                   checksums.txt의 그 줄 · 그 자산의 digest(API)와 셋이 같은지 본다(GitHub
+#                   attestation은 없다 — gh attestation verify가 404). 판은 prod 고정판과 같아야
+#                   한다 — infra/media-host/README.md 「판 고정」 표(두 아키텍처 sha256)도 함께 바꾼다.
 #
 # 저장소가 공개라 이 로그도 공개다. 시험은 가짜 계정 ID · 가짜 이름만 쓴다.
 #
@@ -48,13 +56,16 @@
 #     그 위협이 러너에는 없고, APFS에서의 그 사례는 로컬이 돌린다.
 #   - modules/는 lock을 추적하지 않아(.gitignore — lock 면제) aws provider 최신판으로 돈다.
 #     쓰인 판은 init 로그에 남는다.
+#   - Media 상자 셸 시험은 실행마다 한 번씩 돈다(반복 N은 로컬 몫 — 한 바퀴가 3분 남짓이라 N=20을
+#     잡 상한 안에 넣지 못한다). 유닛 재기동 시험만 잡 안에서 3번 돈다.
+#   - Media 상자 계약 시험(infra/media-host/test/proxy_contract.sh — 실물 이미지로 compose를 띄움)은
+#     CI에서 돌리지 않는다. 로컬 실측 몫이다.
 name: infra-ci
 
 on:
   pull_request:
     paths:
       - 'infra/terraform/**'
-      # 계획상 미디어 상자 설정이 놓일 자리다. 그 시험은 디렉터리를 만드는 PR이 이 파일에 더한다.
       - 'infra/media-host/**'
       - '.github/workflows/infra-ci.yml' # 이 파일을 고치는 PR은 이 파일로 검증한다
       # paths는 PR의 변경 파일 3,000개까지만 본다. 그 뒤에 놓인 infra 파일은 감지되지 않아
@@ -73,6 +84,17 @@ concurrency:
 defaults:
   run:
     shell: bash
+
+# infra/media-host/test 의 시험 배정(파일 이름 — 그 디렉터리 기준). 셸 시험은 media-host 잡의
+# 「셸 시험」, 렌더 시험은 같은 잡의 「render_test」, 유닛 시험은 media-host-systemd 잡이 돌린다.
+# media-host 잡의 「대상 찾기」가 test/*_test.sh · *_selftest.sh 와 이 배정이 정확히 같은지 본다 —
+# 새 시험이 어느 단계에도 배정되지 않은 채 빠지거나, 없는 시험이 배정되면 실패한다.
+env:
+  MEDIA_HOST_SHELL_TESTS: >-
+    start_test.sh loopback_test.sh paths_count_test.sh paths_list_test.sh
+    secret_count_test.sh force_diff_test.sh harness_selftest.sh query_guard_selftest.sh
+  MEDIA_HOST_RENDER_TEST: render_test.sh
+  MEDIA_HOST_UNIT_TEST: unit_restart_test.sh
 
 jobs:
   terraform:
@@ -342,7 +364,10 @@ jobs:
           "${bin}/shellcheck" --version
           echo "${bin}" >>"${GITHUB_PATH}"
 
-      # README 「검증」 절의 세 명령 그대로다(저장소 루트에서 — source 경로가 루트 기준이다).
+      # 앞 세 명령은 infra/terraform README 「검증」 절 그대로다(저장소 루트에서 — source 경로가 루트
+      # 기준이다). 넷째는 infra/media-host 의 셸 파일 전부(실행 스크립트 · 라이브러리 · 운영 스크립트 ·
+      # 시험 · 시험 부품 · 가짜 명령)다. 그 시험 파일들은 source-path=SCRIPTDIR 지시를 두어 루트에서
+      # -x 로 따라간다. 가짜 명령 디렉터리는 확장자가 없어 디렉터리째 적는다.
       - name: shellcheck
         run: |
           shellcheck infra/terraform/scripts/*.sh
@@ -352,6 +377,11 @@ jobs:
             infra/terraform/scripts/precheck/lib/*.sh \
             infra/terraform/scripts/precheck/tests/*.sh \
             infra/terraform/scripts/precheck/tests/fakebin/aws
+          shellcheck -x infra/media-host/bin/*.sh infra/media-host/bin/lib/*.sh \
+            infra/media-host/ops/*.sh \
+            infra/media-host/test/*.sh infra/media-host/test/lib/*.sh \
+            infra/media-host/test/fakebin/* infra/media-host/test/ops_fakebin/* \
+            infra/media-host/test/start_fakebin/*
 
       # README의 루프는 실패를 적기만 하고 종료 0이라 그대로 쓰지 않는다. 하나가 실패해도 끝까지
       # 돌린 뒤 단계를 실패시키고, 시험이 0개이거나 돈 수가 찾은 수와 다르면 실패로 본다(글롭이
@@ -444,3 +474,194 @@ jobs:
             exit 1
           fi
           echo "러너 HOME에 ${evidence_root##*/} 없음"
+
+  media-host:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # render_test 와 start_test 사례 30 이 prod 와 같은 렌더(terraform console 의 templatefile)를
+      # 쓴다 — 없으면 그 사례들이 FAIL 이다. 판 · sha256 은 terraform 잡과 같다(판을 올리는 법은 머리
+      # 주석). provider 를 받지 않아 플러그인 캐시는 없다.
+      - name: terraform 1.16.4 설치(sha256 고정)
+        run: |
+          version=1.16.4
+          sha256=dc94af0eef1147718ad7c8daea792ed199e3e0492eec180d0adafa2a65a879df
+          archive="${RUNNER_TEMP}/terraform.zip"
+          bin="${RUNNER_TEMP}/terraform-bin"
+          curl -fsSL --proto '=https' --tlsv1.2 --retry 3 --connect-timeout 20 --max-time 300 \
+            -o "${archive}" \
+            "https://releases.hashicorp.com/terraform/${version}/terraform_${version}_linux_amd64.zip"
+          echo "${sha256}  ${archive}" | sha256sum --check --strict
+          mkdir -p -- "${bin}"
+          unzip -q "${archive}" terraform -d "${bin}"
+          "${bin}/terraform" version
+          echo "${bin}" >>"${GITHUB_PATH}"
+
+      # sha256 출처: docker/compose v5.5.0 릴리스의 docker-compose-linux-x86_64.sha256(2026-10-20 —
+      # checksums.txt 의 그 줄 · 자산 digest(API)와 같음). prod 고정판이다(Media 상자 README 「판
+      # 고정」). 러너 이미지의 compose 판은 따로 바뀌므로 쓰지 않는다 — 시스템 플러그인 경로 중 docker
+      # CLI 가 가장 먼저 찾는 /usr/local/lib/docker/cli-plugins 에 두고, 러너 계정과 root(sudo) 양쪽이
+      # 이 판을 쓰는지 확인한다. 판을 올리는 법은 머리 주석.
+      - name: docker compose 5.5.0 설치(sha256 고정)
+        run: |
+          version=v5.5.0
+          want=5.5.0
+          sha256=c57ab918abd5b05ca7e7d0f275875dd1330a695074f309dc9eab1b49efafcd4b
+          binary="${RUNNER_TEMP}/docker-compose"
+          curl -fsSL --proto '=https' --tlsv1.2 --retry 3 --connect-timeout 20 --max-time 300 \
+            -o "${binary}" \
+            "https://github.com/docker/compose/releases/download/${version}/docker-compose-linux-x86_64"
+          echo "${sha256}  ${binary}" | sha256sum --check --strict
+          sudo install -D -m 0755 -- "${binary}" /usr/local/lib/docker/cli-plugins/docker-compose
+          got="$(docker compose version --short)"
+          got_root="$(sudo docker compose version --short)"
+          if [[ "${got}" != "${want}" || "${got_root}" != "${want}" ]]; then
+            echo "docker compose 판이 ${want} 가 아니다(러너 계정 ${got} · root ${got_root})" >&2
+            exit 1
+          fi
+          echo "docker compose ${got}"
+
+      # 대상은 워크플로 env 의 배정이고, 여기서 test/*_test.sh · *_selftest.sh 와 정확히 같은지 본다.
+      # proxy_contract.sh 는 이름이 달라 여기 걸리지 않는다(머리 주석 한계 — 로컬 몫).
+      - name: 대상 찾기(media-host 시험 배정)
+        run: |
+          export LC_ALL=C
+          shopt -s nullglob
+          found=(infra/media-host/test/*_test.sh infra/media-host/test/*_selftest.sh)
+          shopt -u nullglob
+          if [[ "${#found[@]}" -eq 0 ]]; then
+            echo "시험이 하나도 없다 — 글롭이나 경로가 깨졌다" >&2
+            exit 1
+          fi
+          read -r -a assigned <<<"${MEDIA_HOST_SHELL_TESTS} ${MEDIA_HOST_RENDER_TEST} ${MEDIA_HOST_UNIT_TEST}"
+          found_names="$(printf '%s\n' "${found[@]##*/}" | sort)"
+          assigned_names="$(printf '%s\n' "${assigned[@]}" | sort)"
+          if [[ "${found_names}" != "${assigned_names}" ]]; then
+            echo "시험 배정이 디렉터리와 다르다(< 배정 안 됨 · > 없거나 두 번 배정된 시험):" >&2
+            diff <(echo "${found_names}") <(echo "${assigned_names}") >&2 || true
+            exit 1
+          fi
+          echo "시험 ${#found[@]}개 배정 확인"
+
+      # 규칙은 shell 잡의 시험 단계와 같다(끝까지 돌림 · 0개 · 돈 수 = 배정 수 · stdin /dev/null).
+      # 시험은 bash 로 직접(파이프 · 배경 없이) 띄운다 — start_test 사례 28 은 시험 셸이 INT 를
+      # 받을 수 있어야 판정되고, 작업 제어 없이 배경으로 띄운 셸은 INT 를 무시한 채 시작한다.
+      - name: 셸 시험
+        run: |
+          read -r -a tests <<<"${MEDIA_HOST_SHELL_TESTS}"
+          if [[ "${#tests[@]}" -eq 0 ]]; then
+            echo "셸 시험 배정이 비었다" >&2
+            exit 1
+          fi
+          ran=0
+          failed=0
+          for name in "${tests[@]}"; do
+            echo "::group::${name}"
+            if ! bash "infra/media-host/test/${name}" </dev/null; then
+              echo "FAIL ${name}" >&2
+              failed=$((failed + 1))
+            fi
+            echo "::endgroup::"
+            ran=$((ran + 1))
+          done
+          echo "시험 ${#tests[@]}개 중 ${ran}개 돌림 · 실패 ${failed}개"
+          if [[ "${ran}" -ne "${#tests[@]}" || "${failed}" -ne 0 ]]; then
+            exit 1
+          fi
+
+      - name: render_test
+        run: bash "infra/media-host/test/${MEDIA_HOST_RENDER_TEST:?}" </dev/null
+
+  # 시험 유닛을 설치하고 sudo 로 systemd · docker 엔진을 흔든다(엔진 재시작 · dockerd kill -9 ·
+  # SIGKILL — 시험은 GITHUB_ACTIONS=true 일 때만 이 사례들을 돈다). 그래서 이 저장소의 브랜치에서
+  # 연 PR 에서만 돈다 — 포크 PR 에서는 잡이 건너뛰어진다(PR 코드가 sudo 로 도는 잡이라). 권한은 워크플로 머리의
+  # contents: read 뿐이고 secrets · id-token 을 쓰지 않는다.
+  media-host-systemd:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    # 상한: 탐침 상자(AL2023 arm64 · systemd 252) 실측 한 바퀴 약 8분 × 3 + 준비(이미지 빌드 ·
+    # 받기)에 여유를 둔 값이다. 첫 실제 러너 실행 시간으로 다시 본다.
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # media-host 잡과 같은 단계다(출처 · 판을 올리는 법은 그 단계 위 주석과 머리 주석). 시험은
+      # root 의 compose 판을 시험 env 파일(MEDIA_EXPECTED_COMPOSE_VERSION)에 넣으므로 시작 스크립트의
+      # 판 확인도 이 판으로 돈다.
+      - name: docker compose 5.5.0 설치(sha256 고정)
+        run: |
+          version=v5.5.0
+          want=5.5.0
+          sha256=c57ab918abd5b05ca7e7d0f275875dd1330a695074f309dc9eab1b49efafcd4b
+          binary="${RUNNER_TEMP}/docker-compose"
+          curl -fsSL --proto '=https' --tlsv1.2 --retry 3 --connect-timeout 20 --max-time 300 \
+            -o "${binary}" \
+            "https://github.com/docker/compose/releases/download/${version}/docker-compose-linux-x86_64"
+          echo "${sha256}  ${binary}" | sha256sum --check --strict
+          sudo install -D -m 0755 -- "${binary}" /usr/local/lib/docker/cli-plugins/docker-compose
+          got="$(docker compose version --short)"
+          got_root="$(sudo docker compose version --short)"
+          if [[ "${got}" != "${want}" || "${got_root}" != "${want}" ]]; then
+            echo "docker compose 판이 ${want} 가 아니다(러너 계정 ${got} · root ${got_root})" >&2
+            exit 1
+          fi
+          echo "docker compose ${got}"
+
+      # 반복 N=3(계획 M2 c7 — 잡 한 번 안에서). 한 바퀴가 실패해도 남은 바퀴를 돌린 뒤 실패로 끝낸다.
+      # 바퀴마다 시험이 끝에 유닛 · 설치본 · 컨테이너 · 망 · 볼륨 0 을 단언한다(사례 18).
+      - name: unit_restart_test(3회)
+        run: |
+          rounds=3
+          failed=0
+          for (( round = 1; round <= rounds; round++ )); do
+            echo "::group::${round}/${rounds}회"
+            if ! bash "infra/media-host/test/${MEDIA_HOST_UNIT_TEST:?}" </dev/null; then
+              echo "FAIL ${round}회" >&2
+              failed=$((failed + 1))
+            fi
+            echo "::endgroup::"
+          done
+          echo "unit_restart_test ${rounds}회 · 실패 ${failed}회"
+          if [[ "${failed}" -ne 0 ]]; then
+            exit 1
+          fi
+
+      # 시험이 중간에 끊겨도(실패 · 상한) 잔여를 따로 판정한다. 대상은 시험이 만드는 것뿐이다 — 시험
+      # 유닛 · drop-in · 설치본(/opt/pokeclip-media) · 시험 compose 프로젝트 · 실험 라벨.
+      - name: 잔여 0 확인
+        if: ${{ !cancelled() }}
+        run: |
+          left=()
+          for path in /etc/systemd/system/pcbench-edge-proxy.service \
+            /etc/systemd/system/pcbench-edge-proxy.service.d /opt/pokeclip-media; do
+            if sudo test -e "${path}"; then
+              left+=("${path}")
+            fi
+          done
+          if [[ "$(systemctl show -p LoadState --value pcbench-edge-proxy)" != not-found ]]; then
+            left+=("systemd 유닛 pcbench-edge-proxy")
+          fi
+          for kind in container network volume; do
+            for filter in label=com.docker.compose.project=pcbench-edge-proxy \
+              label=com.pokeclip.bench=edge-proxy; do
+              if [[ "${kind}" == container ]]; then
+                ids="$(docker ps -a -q --filter "${filter}")"
+              else
+                ids="$(docker "${kind}" ls -q --filter "${filter}")"
+              fi
+              if [[ -n "${ids}" ]]; then
+                left+=("${kind} ${filter}: $(echo "${ids}" | wc -l)개")
+              fi
+            done
+          done
+          if [[ "${#left[@]}" -ne 0 ]]; then
+            printf '잔여: %s\n' "${left[@]}" >&2
+            exit 1
+          fi
+          echo "잔여 0(유닛 · drop-in · 설치본 · 컨테이너 · 망 · 볼륨)"

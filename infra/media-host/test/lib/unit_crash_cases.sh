@@ -1,6 +1,7 @@
 # shellcheck shell=bash
-# 전역(scratch · runtime_dir · unit_env 등)과 require_installed 는
-# unit_restart_test.sh 가, unit:: 함수는 lib/unit_runtime_cases.sh 가 정의한다.
+# 전역(scratch · runtime_dir · unit_env 등)과 require_installed ·
+# require_host_disruption 은 unit_restart_test.sh 가, unit:: 함수는
+# lib/unit_runtime_cases.sh 가 정의한다.
 # shellcheck disable=SC2154
 #
 # 유닛 재기동 시험(unit_restart_test.sh)의 크래시 경로 사례 — 보안 리뷰 c7 M-1
@@ -240,6 +241,7 @@ $(harness::log_tail "${log}")"
 #######################################
 crash::case_kill() {
   local pid0 cid0 t0 ok=0
+  require_host_disruption || return 1
   require_installed || return 1
   crash::reset
   unit::fresh_start "${CRASH_SIDECAR_DELAY}" || return 1
@@ -278,6 +280,7 @@ crash::leave_stack() {
 #######################################
 crash::case_leftover_stack() {
   local cid0 t0 deaths ok=0
+  require_host_disruption || return 1
   require_installed || return 1
   crash::reset
   unit::fresh_start "${CRASH_SIDECAR_DELAY}" || return 1

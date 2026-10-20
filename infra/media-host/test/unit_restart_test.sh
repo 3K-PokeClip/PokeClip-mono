@@ -8,6 +8,12 @@
 # 러너 — kty 70차 Q4)에서만 돈다. 없으면 그 사례들은 FAIL 이다 — 건너뛰는 갈래는
 # 없다.
 #
+# 사례 13 – 17 은 호스트를 흔든다(docker 엔진 재시작 · dockerd kill -9 · 유닛
+# cgroup · compose 플러그인 SIGKILL · 유닛 밖 스택). 그래서 CI 러너
+# (GITHUB_ACTIONS=true) 이거나 PCBENCH_ALLOW_HOST_DISRUPTION=1 을 준 일회용 상자
+# 에서만 돌고, 그 밖에서는 거부해 FAIL 이다 — 개발 머신에서 잘못 돌려 같은 엔진의
+# 다른 컨테이너를 내리지 않게(실수로 돌린 경우의 보호 — 위조 가능한 표식이라 보안 경계는 아니다).
+#
 # 설치 방식(계획 c7 · 이름은 덧붙임 편차 3):
 #   - systemd/pokeclip-media.service 를 바이트 그대로
 #     /etc/systemd/system/pcbench-edge-proxy.service 로 복사한다.
@@ -448,6 +454,19 @@ require_installed() {
     harness::add_reason "설치 실패 — ${install_reason}"
     return 1
   fi
+}
+
+#######################################
+# 호스트를 흔드는 사례(13 – 17)의 선행 조건 — CI 러너 · 명시 표식에서만 돈다.
+#######################################
+require_host_disruption() {
+  if [[ "${GITHUB_ACTIONS:-}" == true \
+    || "${PCBENCH_ALLOW_HOST_DISRUPTION:-}" == 1 ]]; then
+    return 0
+  fi
+  harness::add_reason "호스트를 흔드는 사례 — GITHUB_ACTIONS=true(CI) 또는 \
+PCBENCH_ALLOW_HOST_DISRUPTION=1(일회용 상자)일 때만 돈다"
+  return 1
 }
 
 #######################################
