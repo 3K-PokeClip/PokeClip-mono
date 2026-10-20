@@ -269,6 +269,7 @@ type fixtureOptions struct {
 	callerIP     netip.Addr         // 영값이면 testCallerIP
 	selfIP       netip.Addr         // 영값이면 testSelfIP
 	apiUser      string             // 비면 testAPIUser
+	ipLimit      IPLimit            // 영값이면 IP 한도 꺼짐
 }
 
 func newHandlerFixture(t *testing.T, o fixtureOptions) *handlerFixture {
@@ -302,6 +303,7 @@ func newHandlerFixture(t *testing.T, o fixtureOptions) *handlerFixture {
 		Deadline: o.deadline,
 		Now:      clock.now,
 		Log:      log,
+		IPLimit:  o.ipLimit,
 	})
 	if err != nil {
 		t.Fatalf("Setup: newHandler returned error: %v", err)

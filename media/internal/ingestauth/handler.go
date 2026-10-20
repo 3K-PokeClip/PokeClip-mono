@@ -29,6 +29,7 @@ type Options struct {
 	Deadline time.Duration    // 0 < Deadline ≤ MaxDeadline. 0 이면 MaxDeadline. 시험만 짧게 준다
 	Now      func() time.Time // nil 이면 time.Now. 시험이 예산 · 실패 토큰 차례의 시각을 돌린다
 	Log      *slog.Logger     // nil 이면 slog.Default()
+	IPLimit  IPLimit          // publish 송출자 IP별 resolve 시도 한도. 영값이면 꺼짐(트랙 B 설계 2-1 의 13)
 }
 
 // NewHandler 는 처리기를 바깥 층으로 싸서 돌려준다 — 출발지 검사(판정표 첫 행 — 403 은 예산 · 가드 밖) → 예산
