@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -267,6 +268,27 @@ func TestReadHidesPathWhenShowPathFalse(t *testing.T) {
 		_, err = Read(secretEnv, c.path, Options{ShowPath: true})
 		if got := err != nil && strings.Contains(err.Error(), canary); got != c.opened {
 			t.Errorf("%s: ShowPath 참에서 경로가 실렸나 = %v, want %v", c.name, got, c.opened)
+		}
+	}
+}
+
+// 열린 뒤 상태(Stat) · 읽기(Read) 실패의 에러도 ShowPath 가 거짓이면 경로를 싣지 않고 원인(errno)만 남긴다 — 실제 파일로는
+// 이 두 실패를 일으킬 수 없어 Read 가 그 에러를 감싸는 자리(Options.cause)에 합성 *fs.PathError 를 넣어 본다. 원인
+// 판별(errors.Is)은 두 갈래 모두 살아 있어야 하고, ShowPath 참이면 지금처럼 경로가 남는다(사이드카 문구 유지).
+func TestOptionsCauseHidesPathWhenShowPathFalse(t *testing.T) {
+	const canary = "/causecanary8m/secret"
+	for _, op := range []string{"stat", "read"} {
+		err := &fs.PathError{Op: op, Path: canary, Err: syscall.EIO}
+		hidden := Options{ShowPath: false}.cause(err)
+		if strings.Contains(hidden.Error(), canary) {
+			t.Errorf("%s: ShowPath 거짓인데 에러에 경로 카나리아 발견", op)
+		}
+		if !errors.Is(hidden, syscall.EIO) {
+			t.Errorf("%s: ShowPath 거짓에서 원인이 사라졌다 — errors.Is(EIO) 가 거짓이다", op)
+		}
+		shown := Options{ShowPath: true}.cause(err)
+		if !strings.Contains(shown.Error(), canary) || !errors.Is(shown, syscall.EIO) {
+			t.Errorf("%s: ShowPath 참에서 경로 · 원인이 남지 않았다", op)
 		}
 	}
 }

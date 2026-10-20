@@ -329,11 +329,23 @@ func TestRunSelectsResolveChannel(t *testing.T) {
 			}
 		})
 	}
-	for _, typo := range []string{"internal", "Internal-Token", "resolve_token"} {
-		t.Run("오타_"+typo, func(t *testing.T) {
+	for _, tc := range []struct {
+		typo   string
+		canary bool // 값이 출력에 실리면 안 된다 — "internal" 은 에러 문구가 적는 허용 값의 일부라 단언하지 않는다
+	}{
+		{typo: "internal"},
+		{typo: "Internal-Token", canary: true},
+		{typo: "resolve_token", canary: true},
+		{typo: "synthetic-channel-canary-0007", canary: true},
+	} {
+		t.Run("오타_"+tc.typo, func(t *testing.T) {
 			env := configEnv()
-			env["STREAM_KEY_RESOLVE_CHANNEL"] = typo
-			runConfigFailure(t, nil, env, "STREAM_KEY_RESOLVE_CHANNEL")
+			env["STREAM_KEY_RESOLVE_CHANNEL"] = tc.typo
+			var extra []string
+			if tc.canary {
+				extra = append(extra, tc.typo)
+			}
+			runConfigFailure(t, nil, env, "STREAM_KEY_RESOLVE_CHANNEL", extra...)
 		})
 	}
 }
