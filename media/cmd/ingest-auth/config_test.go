@@ -337,3 +337,36 @@ func TestRunSelectsResolveChannel(t *testing.T) {
 		})
 	}
 }
+
+// 호출자 Basic 비번은 24자 이상이어야 기동한다(kty 120차) — 같은 netns 의 프로세스가 짧은 비번을 맞혀 보지 못하게.
+// 값으로 주든 파일로 주든 같다. 에러는 변수 이름과 최소 길이만 싣고 값 · 실제 길이는 싣지 않는다.
+func TestRunRejectsShortCallerBasicPass(t *testing.T) {
+	const short = "synthetic-short-pass-00" // 23자 — unreserved 문자만
+	for _, viaFile := range []bool{false, true} {
+		name := "값"
+		if viaFile {
+			name = "파일"
+		}
+		t.Run(name, func(t *testing.T) {
+			env := configEnv()
+			if viaFile {
+				useSecretFile(t, env, secretDir(t), "INGEST_AUTH_BASIC_PASS", short+"\n")
+			} else {
+				env["INGEST_AUTH_BASIC_PASS"] = short
+			}
+			stderr := runConfigFailure(t, nil, env, "INGEST_AUTH_BASIC_PASS", short, secretPathCanary)
+			if !strings.Contains(stderr, "24") {
+				t.Errorf("stderr does not carry the minimum length 24 (stderr: %s)", outputSummary(stderr))
+			}
+			if strings.Contains(stderr, "23") {
+				t.Errorf("stderr carries the actual length 23, want only the minimum (stderr: %s)", outputSummary(stderr))
+			}
+		})
+	}
+	t.Run("24자", func(t *testing.T) {
+		auth := newFakeAuth(t)
+		env := responderEnv(auth.srv.URL)
+		env["INGEST_AUTH_BASIC_PASS"] = "synthetic-pass-24-chars0"
+		startResponder(t, newTestSite(t, ""), env)
+	})
+}

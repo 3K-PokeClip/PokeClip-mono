@@ -31,6 +31,10 @@ const (
 	envResolveChannel = "STREAM_KEY_RESOLVE_CHANNEL"
 )
 
+// minCallerBasicPassLen 은 호출자 Basic 비번의 최소 길이다(kty 120차). unreserved 문자만 받으므로 바이트 수가 곧 글자
+// 수다. 같은 netns 의 프로세스가 짧은 비번을 맞혀 보지 못하게 한다.
+const minCallerBasicPassLen = 24
+
 // callerBasicOffValue 는 INGEST_AUTH_CALLER_BASIC 이 받는 단 하나의 값이다.
 const callerBasicOffValue = "off"
 
@@ -44,7 +48,7 @@ type callerBasic struct {
 // loadCallerBasic 은 호출자 Basic 설정을 읽는다. 자격(INGEST_AUTH_BASIC_USER · INGEST_AUTH_BASIC_PASS 또는 _FILE) 둘
 // 다이거나 명시 끔(INGEST_AUTH_CALLER_BASIC=off) 하나여야 한다 — 아무것도 없으면 기동을 거부한다(prod 에서 설정이
 // 빠지면 같은 netns 의 누구나 passphrase 를 받는다 — 계약 D2). 사용자 이름과 비번은 unreserved 문자만 받는다 — 둘 다
-// authHTTPAddress URL 에 렌더된다. 에러에는 변수 이름만 싣는다.
+// authHTTPAddress URL 에 렌더된다. 비번은 24자 이상이어야 한다. 에러에는 변수 이름과 규칙만 싣는다.
 func loadCallerBasic(getenv func(string) string) (callerBasic, error) {
 	mode := getenv(envCallerBasic)
 	if mode != "" && mode != callerBasicOffValue {
@@ -71,6 +75,9 @@ func loadCallerBasic(getenv func(string) string) (callerBasic, error) {
 	}
 	if !unreserved(pass.reveal()) {
 		return callerBasic{}, fmt.Errorf("%s 에 허용 밖 문자가 있다 — URL 의 unreserved 문자(A-Z a-z 0-9 - . _ ~)만 받는다", envCallerBasicPass)
+	}
+	if len(pass.reveal()) < minCallerBasicPassLen {
+		return callerBasic{}, fmt.Errorf("%s 는 %d자 이상이어야 한다", envCallerBasicPass, minCallerBasicPassLen)
 	}
 	return callerBasic{user: user, pass: pass}, nil
 }

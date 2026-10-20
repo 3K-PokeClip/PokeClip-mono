@@ -44,7 +44,7 @@
 | 11 | publish 판정 순서 | 형식 → 거부 목록 → 예산 → 요청 ctx → 실패 토큰 차례 → 4C resolve → 기억 갱신 → 연결 기록 추가 → 거부 목록 마지막 확인 → 200. 위에서 처음 맞는 행이 답이다 | `publish.go:40-86,166-187` |
 | 12 | 예산 | auth 를 부르느라 MediaMTX 경로 관리자를 붙잡는 시간의 토큰 버킷: 한도 1.375초 · 초당 0.5초 보충. 출발지 · 호출자 Basic 검사(4 · 14)를 지난 요청마다 걸린 시간을 뺀다. api 행은 잔액 검사(`allow`)에 걸리지 않지만, 걸린 시간은 다른 요청처럼 차감된다 | `ingestauth/holdbudget.go:9-10` · `handler.go:115-150,204-206` |
 | 13 | 시한 | 요청 도착부터 resolve 시한 1.125초, 바깥 가드는 +50ms(1.175초). 상수이며 설정으로 바꿀 수 없다 | `handler.go:17-21,130-136` · `publish.go:16-18,88-97` |
-| 14 | 호출자 Basic(둘째 행) | 4 를 지난 요청의 `Authorization: Basic` 이 `INGEST_AUTH_BASIC_USER` · `INGEST_AUTH_BASIC_PASS` 와 다르거나 없거나 깨졌으면 401(본문 없음) + WARN `ingestauth_caller_unauthenticated`. **본문을 읽기 전**이고 4 처럼 예산 · 시한 가드 밖이다. 비교는 api 행과 같은 꼴(SHA-256 다이제스트끼리 상수 시간 · 사용자와 비번을 늘 둘 다). 모든 action(api · read · publish)에 걸린다. `INGEST_AUTH_CALLER_BASIC=off`(명시 끔)면 보지 않는다 — 자격도 끔도 없으면 기동 거부 | `ingestauth/callerauth.go` `denyUnauthenticatedCaller` · `callerBasicOn` · `handler.go` `layers` |
+| 14 | 호출자 Basic(둘째 행) | 4 를 지난 요청의 `Authorization: Basic` 이 `INGEST_AUTH_BASIC_USER` · `INGEST_AUTH_BASIC_PASS` 와 다르거나 없거나 깨졌으면 401(본문 없음) + WARN `ingestauth_caller_unauthenticated`. **본문을 읽기 전**이고 4 처럼 예산 · 시한 가드 밖이다. 비교는 api 행과 같은 꼴(SHA-256 다이제스트끼리 상수 시간 · 사용자와 비번을 늘 둘 다). 모든 action(api · read · publish)에 걸린다. `INGEST_AUTH_CALLER_BASIC=off`(명시 끔)면 보지 않는다 — 자격도 끔도 없으면 기동 거부. 비밀번호는 24자 이상이어야 기동한다(1-5 의 12) | `ingestauth/callerauth.go` `denyUnauthenticatedCaller` · `callerBasicOn` · `handler.go` `layers` |
 
 ### 1-2. 응답기 → MediaMTX (응답)
 
@@ -105,7 +105,7 @@
 | 9 | `STREAM_KEY_RESOLVE_TOKEN_FILE` | 8 대신 | 경로(값은 아님) | 8 의 값이 든 파일의 절대 경로 | `secrets.go` `resolveSecret` |
 | 10 | `LOG_LEVEL` | 선택(기본 info) | 아니오 | debug · info · warn · error. 틀리면 기동 실패 | `config.go:80-92` |
 | 11 | `INGEST_AUTH_BASIC_USER` | 12 와 함께 필수(14 가 off 가 아니면) | 아니오 | 호출자(MediaMTX) Basic 사용자 이름(1-1 의 14). `authHTTPAddress` URL 에 렌더되므로 **URL unreserved 문자(`A-Z a-z 0-9 - . _ ~`)만** 받는다 | `config.go` `loadCallerBasic` · `unreserved` |
-| 12 | `INGEST_AUTH_BASIC_PASS` | 11 과 함께 필수(또는 13) | **예** | 호출자 Basic 비밀번호. unreserved 문자만. 응답기는 SHA-256 다이제스트만 쥔다 | `config.go` `loadCallerBasic` · `ingestauth/handler.go` `newHandler` |
+| 12 | `INGEST_AUTH_BASIC_PASS` | 11 과 함께 필수(또는 13) | **예** | 호출자 Basic 비밀번호. unreserved 문자만, **24자 이상**(짧으면 기동 거부 — 에러엔 변수 이름 · 최소 길이만, kty 120차). 응답기는 SHA-256 다이제스트만 쥔다 | `config.go` `loadCallerBasic` · `minCallerBasicPassLen` · `ingestauth/handler.go` `newHandler` |
 | 13 | `INGEST_AUTH_BASIC_PASS_FILE` | 12 대신 | 경로(값은 아님) | 12 의 값이 든 파일의 절대 경로 | `secrets.go` `resolveSecret` |
 | 14 | `INGEST_AUTH_CALLER_BASIC` | 선택 | 아니오 | `off` 만 받는다(명시 끔 — 11 · 12 와 함께 주면 기동 거부). 그 밖의 값은 기동 거부. dev-media 는 `off`(제어망이 따로 있어 1-1 의 4 가 MediaMTX 를 가른다) | `config.go` `loadCallerBasic` · `compose.yml` |
 | 15 | `STREAM_KEY_RESOLVE_CHANNEL` | 선택(기본 `resolve-token`) | 아니오 | 4C 창구(1-3 의 2): `resolve-token`(전용) · `internal-token`(공용). 그 밖의 값은 기동 거부. prod 는 `internal-token`(118차) — 빠뜨리면 전용 헤더로 가 auth 가 401 이고 started `auth_channel=resolve-token` · `ingestauth_auth_degraded` `status=401` 로 드러난다 | `config.go` `resolveChannel` |
