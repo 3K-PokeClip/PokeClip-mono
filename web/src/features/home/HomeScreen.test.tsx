@@ -354,6 +354,60 @@ describe('HomeScreen', () => {
       expect(cardCalls('b-12')).toBe(1);
     });
 
+    it('상위 8개 밖 방송의 카드를 못 읽었으면 빈 값을 기억하지 않고 다음 주기에 다시 읽는다(리뷰 #299 2차)', async () => {
+      vi.useRealTimers();
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      vi.setSystemTime(NOW);
+      // 이번 주엔 아직 — 지난주에만 9번 방송했고 가장 오래된 「old」가 상위 8개 밖이다
+      const slots: [number, number][] = [
+        [18, 20],
+        [17, 20],
+        [16, 20],
+        [15, 20],
+        [14, 20],
+        [13, 20],
+        [12, 22],
+        [12, 21],
+      ];
+      const rows = [
+        ...slots.map(([day, hour], i) => pastRow(`b-${i}`, at(10, day, hour))),
+        pastRow('old', at(10, 12, 20)),
+      ];
+      let failOld = true;
+      const spy = vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (failOld && url.includes('/old/jump-cards'))
+          return Promise.resolve(new Response('{}', { status: 503 }));
+        return Promise.resolve(route(url, { past: rows, cards: { old: [card(1), card(2)] } }));
+      });
+      vi.stubGlobal('fetch', spy);
+      render(<HomeScreen />);
+
+      const hero = await screen.findByRole('region', { name: '이번 주' });
+      expect(hero).toHaveTextContent('찾은 카드0장');
+
+      failOld = false;
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      // 실패를 5분 동안 붙들지 않고 바로 다음 주기에 다시 읽어 바로잡는다
+      expect(hero).toHaveTextContent('찾은 카드2장');
+    });
+
+    it('방송이 막 끝나 라이브·지난 방송 목록에 다 실려 와도 한 번만 센다(리뷰 #299 2차)', async () => {
+      const row = pastRow('just-ended', at(10, 21, 9));
+      serve({
+        live: [{ ...row, status: 'live', endedAt: null }],
+        past: [row],
+        cards: { 'just-ended': [card(1), card(2)] },
+      });
+      render(<HomeScreen />);
+
+      expect(
+        await screen.findByRole('heading', { level: 1, name: '방송 1번에서 카드 2장을 찾았어요' }),
+      ).toBeInTheDocument();
+    });
+
     it('방송 중이면 라이브 밴드가 지난 방송 위에 서고, 지난주에 켠 방송도 이번 주에 센다', async () => {
       serve({
         live: [
@@ -477,6 +531,10 @@ describe('HomeScreen', () => {
     render(<HomeScreen />);
 
     const hero = await screen.findByRole('region', { name: '지금 할 일' });
+    // 못 읽은 단계가 있으면 남은 수를 단정하지 않는다(리뷰 #299 2차)
+    expect(within(hero).getByRole('heading', { level: 1 })).toHaveTextContent(
+      '첫 클립까지 남은 단계를 확인하고 있어요',
+    );
     const channelRow = within(hero).getByText('방송 채널 연동').closest('li')!;
     expect(channelRow).toHaveTextContent('확인 중…');
     expect(within(channelRow).queryByRole('link')).not.toBeInTheDocument();

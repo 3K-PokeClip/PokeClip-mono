@@ -244,6 +244,8 @@ describe('OnboardingController', () => {
     // 짚을 줄이 아직 없어 중앙 카드 — 넓은 스포트라이트 카드 표시가 없다
     expect(dialog).not.toHaveAttribute('data-wide');
 
+    const scroll = vi.mocked(Element.prototype.scrollIntoView);
+    scroll.mockClear();
     release();
     await waitFor(() =>
       expect(screen.getByRole('dialog', { name: /시작 가이드 1\/5/ })).toHaveAttribute(
@@ -251,6 +253,38 @@ describe('OnboardingController', () => {
         'true',
       ),
     );
+    // 나중에 선 줄도 화면 안으로 끌어온다 — 오버레이가 스크롤을 잠가 좁은 화면에서 카드가 화면 밖에 갇히지 않게(리뷰 #299 2차)
+    const row = document.querySelector('[data-tour-id="home-channel"]');
+    expect(row).not.toBeNull();
+    expect(scroll.mock.contexts).toContain(row);
+  });
+
+  it('투어를 끝내 칩만 남으면 DOM 관찰을 멈춘다 — 홈 폴링마다 단계를 다시 세지 않는다(리뷰 #299 2차)', async () => {
+    // 지금 붙어 있는 관찰자 수를 센다
+    const Native = window.MutationObserver;
+    let live = 0;
+    class Counting extends Native {
+      private on = false;
+      observe(target: Node, options?: MutationObserverInit) {
+        if (!this.on) live += 1;
+        this.on = true;
+        super.observe(target, options);
+      }
+      disconnect() {
+        if (this.on) live -= 1;
+        this.on = false;
+        super.disconnect();
+      }
+    }
+    vi.stubGlobal('MutationObserver', Counting);
+    renderWithHome();
+
+    fireEvent.click(await screen.findByRole('button', { name: '둘러보기 시작' }));
+    expect(live).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole('button', { name: '건너뛰기' }));
+
+    expect(screen.getByRole('button', { name: '둘러보기' })).toBeInTheDocument();
+    expect(live).toBe(0);
   });
 
   it('건너뛰기는 어느 스텝에서든 투어를 끝낸다', async () => {

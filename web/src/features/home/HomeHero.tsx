@@ -75,6 +75,8 @@ export function HeroSkeleton() {
 export function SetupHome({ userName, links }: { userName: string | null; links: HomeLinks }) {
   const steps = setupSteps(links, false);
   const left = steps.filter((x) => !x.done).length;
+  // 못 읽은 단계가 있으면 남은 수를 단정하지 않는다 — 줄은 「확인 중…」인데 제목만 「4단계」라 하지 않게(리뷰 #299 2차)
+  const checking = steps.some((x) => x.unknown);
   const waiting = isWaitingForBroadcast(links, false);
   // 지금 단계는 상태를 아는 것 중 첫 미완료 — 못 읽은 단계(unknown)를 지금 할 일로 내세우지 않는다
   const currentId = steps.find((x) => !x.done && !x.unknown)?.id;
@@ -87,7 +89,11 @@ export function SetupHome({ userName, links }: { userName: string | null; links:
             {userName ? `${userName}님, 반가워요` : '반가워요'}
           </div>
           <h1 className={styles.heroTitle}>
-            {waiting ? '이제 방송만 켜면 돼요' : `첫 클립까지 ${left}단계 남았어요`}
+            {waiting
+              ? '이제 방송만 켜면 돼요'
+              : checking
+                ? '첫 클립까지 남은 단계를 확인하고 있어요'
+                : `첫 클립까지 ${left}단계 남았어요`}
           </h1>
           <p className={styles.heroSub}>
             {waiting

@@ -234,7 +234,8 @@ async function loadHome(now: number, cardCache: Map<string, CachedCards>): Promi
   const liveIds = new Set(liveAll.map((b) => b.streamId));
   const past = pastAll.slice(0, PAST_LIMIT);
   const { lastWeekStart, weekStart } = weekStarts(new Date(now));
-  const all = [...liveAll, ...pastAll];
+  // 두 목록은 동시에 읽는다 — 그 사이에 끝난 방송은 양쪽에 다 실려 올 수 있어 한 번만 센다(리뷰 #299 2차)
+  const all = [...liveAll, ...pastAll.filter((b) => !liveIds.has(b.streamId))];
 
   // 카드는 방송마다 한 번씩 — 라이브 + 지난 방송 상위 N개는 매번, 그 밖의 이번 주·지난주 방송(N개를 넘는 주가 있다)은
   // 기억해 둔 값이 CARD_CACHE_MS 안이면 그대로 쓴다(리뷰 #299: 10초마다 수십 개 방송을 다시 읽던 부하)
@@ -252,9 +253,16 @@ async function loadHome(now: number, cardCache: Map<string, CachedCards>): Promi
       }
       // 끝까지 넘긴다 — 기본 50장이고 오래된 것부터 와서, 첫 장만 읽으면 카드 수가 50에서 잘리고
       // 최근 카드가 통째로 빠진다(PR #200 codex)
-      const cards = (
-        await fetchAllJumpCards<WireCard>(streamId).catch(() => [] as WireCard[])
-      ).filter((c) => !c.hidden);
+      const cards = await fetchAllJumpCards<WireCard>(streamId).then(
+        (list) => list.filter((c) => !c.hidden),
+        () => null,
+      );
+      if (cards === null) {
+        // 못 읽었으면 기억해 둔 값을(기한이 지났어도) 쓰고 기억은 건드리지 않는다 — 다음 주기에 다시 읽는다.
+        // 빈 값을 기억하면 5분 동안 카드 수가 실제보다 적게 보인다(리뷰 #299 2차)
+        cardsByStream.set(streamId, cached?.cards ?? []);
+        return;
+      }
       cardsByStream.set(streamId, cards);
       if (!fresh.has(streamId)) cardCache.set(streamId, { cards, at: now });
     }),

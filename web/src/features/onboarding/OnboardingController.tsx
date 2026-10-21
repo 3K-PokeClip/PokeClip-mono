@@ -16,7 +16,7 @@ export function OnboardingController() {
   const hydrated = useOnboardingStore((s) => s.hydrated);
   const welcomeSeen = useOnboardingStore((s) => s.welcomeSeen);
   const tourStep = useOnboardingStore((s) => s.tourStep);
-  const { visible, pending } = useTourVisibility();
+  const { visible, pending } = useTourVisibility(tourStep !== null || !welcomeSeen);
 
   if (!hydrated) return null;
   if (tourStep !== null) {

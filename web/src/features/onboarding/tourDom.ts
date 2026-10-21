@@ -39,10 +39,12 @@ function same(a: TourVisibility, b: TourVisibility): boolean {
 /**
  * 지금 화면에서 보일 단계와 「홈 읽는 중」을 DOM 변화마다 다시 읽는다. 배지(n/전체)·점·웰컴 목록이 이것으로 센다 —
  * TOUR_STEPS 6개를 그대로 세면 막 가입 계정은 4단계에서 「4/6」인 채 끝나 「왜 벌써 끝나지」가 된다(POK-378).
+ * @param active 웰컴 창이나 투어가 떠 있을 때만 참 — 칩만 남으면 쓰는 곳이 없어 홈 폴링마다 다시 읽지 않는다(리뷰 #299 2차)
  */
-export function useTourVisibility(): TourVisibility {
+export function useTourVisibility(active: boolean): TourVisibility {
   const [state, setState] = useState<TourVisibility>({ visible: [], pending: true });
   useLayoutEffect(() => {
+    if (!active) return;
     let raf = 0;
     const update = () => {
       const next = read();
@@ -63,6 +65,6 @@ export function useTourVisibility(): TourVisibility {
       cancelAnimationFrame(raf);
       observer.disconnect();
     };
-  }, []);
+  }, [active]);
   return state;
 }

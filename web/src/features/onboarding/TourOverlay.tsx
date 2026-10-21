@@ -60,6 +60,8 @@ export function TourOverlay({
   const cardRef = useRef<HTMLDivElement>(null);
   const [spot, setSpot] = useState<Rect | null>(null);
   const [cardPos, setCardPos] = useState<{ top: number; left: number } | null>(null);
+  // 마지막으로 화면 안으로 끌어온 타깃 — 같은 요소를 다시 재면 다시 끌지 않는다
+  const scrolledTo = useRef<Element | null>(null);
 
   useScrollLock(true);
 
@@ -84,21 +86,22 @@ export function TourOverlay({
       }
       return;
     }
+    // 처음 짚는 요소면 화면 안으로 끌어온 뒤 잰다 — 스텝 진입 때뿐 아니라 홈이 늦게 그려져 타깃이 나중에 설 때도.
+    // 오버레이가 스크롤을 잠가서, 좁은 화면에서 지난 방송 아래로 내려간 연결 상태 줄을 사용자가 따라갈 수 없다(리뷰 #299 2차)
+    if (scrolledTo.current !== el) {
+      scrolledTo.current = el;
+      el.scrollIntoView({ block: 'nearest' });
+    }
     const r = el.getBoundingClientRect();
     const next = spotlightRect({ top: r.top, left: r.left, width: r.width, height: r.height });
     // 같은 자리면 그대로 둔다 — 아래 DOM 관찰이 다시 재도 다시 그리지 않게
     setSpot((prev) => (prev && sameRect(prev, next) ? prev : next));
   }, [step, stepIndex, setTourStep, completeTour]);
 
-  // 스텝 진입 — 대상을 화면 안으로 끌어온 뒤 측정한다.
+  // 스텝 진입 — 측정이 대상을 화면 안으로 끌어온다.
   useLayoutEffect(() => {
-    if (step?.kind === 'spotlight' && step.targetId) {
-      document
-        .querySelector(`[data-tour-id="${step.targetId}"]`)
-        ?.scrollIntoView({ block: 'nearest' });
-    }
     measure();
-  }, [step, measure]);
+  }, [measure]);
 
   // 카드 크기를 잰 뒤 배치하는 2-pass — 배치 전 프레임은 CSS가 visibility로 숨긴다.
   useLayoutEffect(() => {
