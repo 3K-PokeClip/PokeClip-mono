@@ -66,9 +66,8 @@ describe('PluginSettingsScreen', () => {
     stubStreamKeyFetch();
     renderWithProviders(<PluginSettingsScreen />);
 
-    const guide = screen.getByRole('region', { name: '연결 상태는 OBS에서 확인해 주세요' });
-    expect(guide).toHaveTextContent('도킹 › PokeClip');
-    // 웹은 플러그인 연결 상태를 모른다 — 화면 어디에도 상태 배지도 「연결 진단」 버튼도 없다(ADR-077 결정 4)
+    // 웹은 플러그인 연결 상태를 모른다 — 시안의 연결 상태 배너도 「연결 진단」 버튼도 두지 않는다(ADR-077 결정 4)
+    expect(screen.queryByRole('region', { name: '플러그인 연결 상태' })).not.toBeInTheDocument();
     expect(document.body).not.toHaveTextContent(/연결됨|연결 안 됨/);
     expect(screen.queryByRole('button', { name: '연결 진단' })).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { name: '연동 코드' })).toBeInTheDocument();
@@ -154,11 +153,8 @@ describe('PluginSettingsScreen', () => {
     expect(document.body).not.toHaveTextContent(/연결됨|연결 안 됨/);
     fireEvent.click(screen.getByRole('button', { name: '확인했어요' }));
 
-    // 안내 카드뿐 아니라 화면 전체를 본다 — 발급 뒤 코드 카드나 모달에 배지가 다시 붙는 회귀를 잡는다
+    // 화면 전체를 본다 — 발급 뒤 코드 카드나 모달에 「연결됨」 배지가 다시 붙는 회귀를 잡는다
     expect(await screen.findByText(/코드가 발급되어 있어요/)).toBeInTheDocument();
-    expect(
-      screen.getByRole('region', { name: '연결 상태는 OBS에서 확인해 주세요' }),
-    ).toBeInTheDocument();
     expect(document.body).not.toHaveTextContent(/연결됨|연결 안 됨/);
   });
 

@@ -5,14 +5,14 @@ import { AudioTrackNamesCard } from './AudioTrackNamesCard';
 import { DownloadBanner } from './DownloadBanner';
 import { IssuedCodeDialog } from './IssuedCodeDialog';
 import { PairingCodeCard } from './PairingCodeCard';
-import { PluginConnectionGuide } from './PluginConnectionGuide';
 import { useStreamKeyState } from './useStreamKeyState';
 import styles from './PluginSettingsScreen.module.css';
 
-// 디자인 1m 설정 · 플러그인을 그대로 옮긴 화면.
-// 블록 순서: 연결 확인 안내 → 연동 코드 → 오디오 트랙 이름 → 다운로드.
-// 연동 코드는 실제 API(useStreamKeyState). 연결 상태는 플러그인 신호 API가 없어 상태 대신
-// OBS 독에서 확인하라고 안내한다(PluginConnectionGuide).
+// 디자인 1m 설정 · 플러그인을 옮긴 화면.
+// 블록 순서: 연동 코드 → 오디오 트랙 이름 → 다운로드.
+// 시안 맨 위의 연결 상태 배너·「연결 진단」 버튼은 두지 않는다 — 플러그인은 대기 중 서버에 신호를
+// 보내지 않고 웹은 OBS 안 루프백 독에 닿을 수 없어, 웹이 아는 연결 상태가 없다(ADR-077 결정 4).
+// 코드 입력 결과는 OBS PokeClip 독이 보여 준다. 연동 코드는 실제 API(useStreamKeyState).
 // 재발급 확인 모달은 없다 — rotate를 쓰지 않아 재발급이 방송 키를 죽이지 않으므로
 // 경고할 위험 자체가 사라졌다. 발급·재발급 모두 새 코드 1콜이다.
 export function PluginSettingsScreen() {
@@ -26,7 +26,6 @@ export function PluginSettingsScreen() {
         description="OBS 플러그인이 방송 송출과 하이라이트 감지 신호를 PokeClip 서버로 보냅니다"
       />
       <div className={styles.stack}>
-        <PluginConnectionGuide />
         <PairingCodeCard
           code={code}
           loading={loading}

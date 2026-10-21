@@ -22,48 +22,6 @@
   margin: 0 0 calc(4 * var(--pc-u));
 }
 
-/* ---------- 연결 확인 안내 (디자인 1m 상단 배너 자리) ----------
-   웹이 아는 연결 상태가 없어 상태색(초록)을 쓰지 않는다. 규격은 시안 배너 그대로. */
-.guideBanner {
-  display: flex;
-  align-items: center;
-  gap: calc(14 * var(--pc-u));
-  padding: calc(16 * var(--pc-u));
-  border-radius: calc(14 * var(--pc-u));
-  border: 1px solid var(--pc-color-border-subtle);
-  background: var(--pc-color-bg-surface);
-}
-
-.guideIcon {
-  width: calc(42 * var(--pc-u));
-  height: calc(42 * var(--pc-u));
-  flex: none;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: calc(12 * var(--pc-u));
-  background: var(--pc-color-bg-inset);
-  color: var(--pc-color-text-muted);
-}
-
-.guideBody {
-  flex: 1;
-  min-width: 0;
-  line-height: 1.4;
-}
-
-.guideTitle {
-  font-size: calc(13.5 * var(--pc-u));
-  font-weight: 700;
-  margin: 0;
-}
-
-.guideDesc {
-  font-size: calc(11.5 * var(--pc-u));
-  color: var(--pc-color-text-muted);
-  margin: calc(2 * var(--pc-u)) 0 0;
-}
-
 /* ---------- 연동 코드 ---------- */
 .codeCardDesc {
   font-size: calc(11.5 * var(--pc-u));
@@ -148,11 +106,6 @@
   color: var(--pc-color-text-muted);
   width: calc(16 * var(--pc-u));
   height: calc(16 * var(--pc-u));
-}
-
-.guideIcon svg {
-  width: calc(20 * var(--pc-u));
-  height: calc(20 * var(--pc-u));
 }
 
 .downloadText {
