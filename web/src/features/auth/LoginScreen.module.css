@@ -113,6 +113,9 @@
   line-height: 1.6;
   text-align: center;
   color: var(--pc-color-text-muted);
+  /* 좁은 화면에서 접혀도 낱말이 반으로 갈리지 않고, 두 줄 길이가 고르게 */
+  word-break: keep-all;
+  text-wrap: balance;
 }
 
 .terms a {
