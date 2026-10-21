@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { axe } from 'jest-axe';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { HomeScreen } from '@/features/home/HomeScreen';
@@ -169,11 +169,64 @@ describe('OnboardingController', () => {
     fireEvent.click(screen.getByRole('button', { name: '다음' })); // 2 → 3 큰 칸
     fireEvent.click(screen.getByRole('button', { name: '다음' })); // 3 → 4 포키가 해 주는 일
     expect(screen.getByRole('dialog', { name: /시작 가이드 4\/6/ })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: '다음' })); // 4 → (5·6 결손) → 완료
+    // 기록 없는 계정은 4단계가 실제 마지막 — 「다음」이 아니라 「완료」라 적는다(리뷰 #299)
+    expect(screen.queryByRole('button', { name: '다음' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '완료' })); // 4 → (5·6 결손) → 완료
 
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(useOnboardingStore.getState().tourDone).toBe(true);
     expect(finished()).toEqual([{ outcome: 'completed' }]);
+  });
+
+  /** 지난 방송 목록 응답을 붙잡아 홈을 「읽는 중」에 묶어 둔다 — release()로 풀어 준다 */
+  function holdPastList() {
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    stubFetch(async (url) => {
+      if (url.startsWith('/api/clip/broadcasts?state=past')) await gate;
+      return homeServer(url);
+    });
+    return () => release();
+  }
+
+  it('홈을 읽는 중엔 3단계에서 투어가 끝나지 않고 「다음」을 잠근다 — 다 읽으면 지난 방송으로 이어진다(리뷰 #299)', async () => {
+    const release = holdPastList();
+    renderWithHome();
+
+    fireEvent.click(await screen.findByRole('button', { name: '둘러보기 시작' }));
+    fireEvent.click(screen.getByRole('button', { name: '다음' })); // 1 → 2
+    fireEvent.click(screen.getByRole('button', { name: '다음' })); // 2 → 3 큰 칸(스켈레톤)
+    expect(screen.getByRole('dialog', { name: /시작 가이드 3\/6/ })).toBeInTheDocument();
+    // 뒤 단계 타깃이 아직 없다 — 여기서 끝내지 않고 잠근다
+    await waitFor(() => expect(screen.getByRole('button', { name: '다음' })).toBeDisabled());
+    expect(useOnboardingStore.getState().tourDone).toBe(false);
+
+    release();
+    await waitFor(() => expect(screen.getByRole('button', { name: '다음' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: '다음' })); // 3 → (4 결손) → 5 지난 방송
+    expect(screen.getByRole('dialog', { name: /시작 가이드 5\/6/ })).toBeInTheDocument();
+  });
+
+  it('설정에서 돌아와 홈을 읽는 동안 중앙 카드였던 1단계가, 홈이 그려지면 방송 채널 줄을 짚는다(리뷰 #299)', async () => {
+    const release = holdPastList();
+    // 「채널 연동하기」로 설정에 다녀온 상태 — 투어 단계는 메모리에 남아 있다
+    window.localStorage.setItem('pc-onboarding', JSON.stringify({ v: 1, welcomeSeen: true }));
+    useOnboardingStore.setState({ hydrated: true, welcomeSeen: true, tourStep: 0 });
+    renderWithHome();
+
+    const dialog = await screen.findByRole('dialog', { name: /시작 가이드 1\/6/ });
+    // 짚을 줄이 아직 없어 중앙 카드 — 넓은 스포트라이트 카드 표시가 없다
+    expect(dialog).not.toHaveAttribute('data-wide');
+
+    release();
+    await waitFor(() =>
+      expect(screen.getByRole('dialog', { name: /시작 가이드 1\/6/ })).toHaveAttribute(
+        'data-wide',
+        'true',
+      ),
+    );
   });
 
   it('건너뛰기는 어느 스텝에서든 투어를 끝낸다', async () => {
@@ -193,7 +246,8 @@ describe('OnboardingController', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: '둘러보기 시작' }));
     fireEvent.click(screen.getByRole('button', { name: '다음' })); // 1 → 2
-    fireEvent.click(screen.getByRole('button', { name: '다음' })); // 2 → (3~6 결손) → 완료
+    // 뒤에 보일 단계가 없으니 2단계 버튼이 「완료」다
+    fireEvent.click(screen.getByRole('button', { name: '완료' })); // 2 → (3~6 결손) → 완료
 
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(useOnboardingStore.getState().tourDone).toBe(true);

@@ -1,6 +1,5 @@
 'use client';
 
-import { useEffect, useState } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { Check } from 'lucide-react';
@@ -9,20 +8,12 @@ import { TOUR_TARGET } from '@/features/onboarding/tourSteps';
 import styles from './HomeScreen.module.css';
 import { isWaitingForBroadcast, setupSteps, type SetupStepId } from './setupSteps';
 import type { HomeLinks, WeekStats } from './useHomeMockState';
+import { useRandomIndex } from './useRandomIndex';
 
 // 홈 맨 위 큰 칸(POK-378) — 지금 상황을 한 칸이 말한다.
 //   방송 기록 없음: 첫 클립까지 가는 길 + 「포키가 해 주는 일」 · 방송 채널·플러그인 끝: 방송 기다리는 중
 //   이번 주에 방송함: 이번 주 숫자 넷 · 이번 주(월요일부터) 0회: 마지막 방송 + 흐린 지난주 숫자
 // 포키 그림은 주머니 수정본(landing/assets-pocket-refined)만 쓴다.
-
-/** 0..n-1 중 하나를 마운트 뒤에 고른다 — 렌더 중 Math.random은 서버 HTML과 어긋난다 */
-export function useRandomIndex(n: number): number | null {
-  const [picked, setPicked] = useState<number | null>(null);
-  useEffect(() => {
-    setPicked(Math.floor(Math.random() * n));
-  }, [n]);
-  return picked;
-}
 
 /** 이번 주 칸 옆 포키 포즈 후보. peek은 팁 카드 전용이라 뺀다 */
 const POKI_POSES = [
@@ -68,6 +59,8 @@ export function HeroSkeleton() {
       aria-label="불러오는 중"
       aria-busy="true"
       data-tour-id={TOUR_TARGET.homeHero}
+      // 시작 가이드에게 「홈을 아직 읽는 중」을 알린다 — 그동안 뒤 단계 타깃이 없다고 투어를 끝내지 않게(리뷰 #299)
+      data-tour-pending=""
     >
       <div className={styles.skeletonStack}>
         <Skeleton width={160} height={13} />
@@ -83,7 +76,8 @@ export function SetupHome({ userName, links }: { userName: string | null; links:
   const steps = setupSteps(links, false);
   const left = steps.filter((x) => !x.done).length;
   const waiting = isWaitingForBroadcast(links, false);
-  const currentId = steps.find((x) => !x.done)?.id;
+  // 지금 단계는 상태를 아는 것 중 첫 미완료 — 못 읽은 단계(unknown)를 지금 할 일로 내세우지 않는다
+  const currentId = steps.find((x) => !x.done && !x.unknown)?.id;
 
   return (
     <div>
@@ -116,6 +110,7 @@ export function SetupHome({ userName, links }: { userName: string | null; links:
                   <span className={styles.trackTitle}>
                     {step.title}
                     {step.done ? <span className={styles.trackNote}>{step.doneNote}</span> : null}
+                    {step.unknown ? <span className={styles.trackNote}>확인 중…</span> : null}
                   </span>
                   {state === 'current' ? (
                     <span className={styles.trackDesc}>{step.desc}</span>
@@ -137,7 +132,7 @@ export function SetupHome({ userName, links }: { userName: string | null; links:
                     </span>
                   ) : null}
                   {/* 방송 채널·플러그인은 순서가 없다 — 지금 단계가 아니어도 버튼을 둔다. 마지막 단계는 방송 뒤의 일이라 뺀다 */}
-                  {state === 'todo' && step.action && step.id !== 'publish' ? (
+                  {state === 'todo' && step.action && !step.unknown && step.id !== 'publish' ? (
                     <LinkButton
                       as={Link}
                       href={step.action.href}

@@ -8,7 +8,6 @@ import { track } from '@/lib/analytics';
 import { useOnboardingStore } from '@/stores/onboarding';
 import {
   TOUR_STEPS,
-  isLastStep,
   nextVisibleStep,
   spotlightRect,
   stepDone,
@@ -36,6 +35,15 @@ function hasTargetInDom(targetId: string): boolean {
   return document.querySelector(`[data-tour-id="${targetId}"]`) !== null;
 }
 
+/** 홈이 아직 첫 응답을 기다리는 중 — 큰 칸 스켈레톤이 data-tour-pending을 단다. 그동안 뒤 단계 타깃이 없는 것은 정상이다 */
+function isHomePending(): boolean {
+  return document.querySelector('[data-tour-pending]') !== null;
+}
+
+function sameRect(a: Rect, b: Rect): boolean {
+  return a.top === b.top && a.left === b.left && a.width === b.width && a.height === b.height;
+}
+
 export function TourOverlay({ stepIndex }: { stepIndex: number }) {
   const router = useRouter();
   const setTourStep = useOnboardingStore((s) => s.setTourStep);
@@ -48,12 +56,19 @@ export function TourOverlay({ stepIndex }: { stepIndex: number }) {
   const cardRef = useRef<HTMLDivElement>(null);
   const [spot, setSpot] = useState<Rect | null>(null);
   const [cardPos, setCardPos] = useState<{ top: number; left: number } | null>(null);
+  // 측정이 함께 갱신한다 — 다음에 보일 단계가 있는가 · 홈이 아직 읽는 중인가. 「다음/완료」 표기와 잠금이 이것을 본다
+  const [hasNext, setHasNext] = useState(true);
+  const [pending, setPending] = useState(false);
 
   useScrollLock(true);
 
   // 스포트라이트 측정 — 타깃이 없으면 중앙 카드 대체가 있는 스텝은 중앙 카드로, 나머지는 다음 보이는 스텝으로
-  // (전부 없으면 완료). spot이 서 있느냐가 곧 스포트라이트로 그리느냐다.
+  // (전부 없으면 완료). 단 홈이 아직 읽는 중이면 타깃이 곧 서므로 건너뛰지 않고 중앙 카드로 기다린다(리뷰 #299).
+  // spot이 서 있느냐가 곧 스포트라이트로 그리느냐다.
   const measure = useCallback(() => {
+    const homePending = isHomePending();
+    setPending(homePending);
+    setHasNext(nextVisibleStep(stepIndex, 1, hasTargetInDom) !== null);
     const el =
       step?.kind === 'spotlight' && step.targetId
         ? document.querySelector(`[data-tour-id="${step.targetId}"]`)
@@ -61,7 +76,7 @@ export function TourOverlay({ stepIndex }: { stepIndex: number }) {
     if (!step || !el) {
       setSpot(null);
       setCardPos(null);
-      if (step?.kind === 'spotlight' && step.fallback !== 'centered') {
+      if (step?.kind === 'spotlight' && step.fallback !== 'centered' && !homePending) {
         const next = nextVisibleStep(stepIndex, 1, hasTargetInDom);
         if (next === null) {
           trackTourFinished('auto');
@@ -71,7 +86,9 @@ export function TourOverlay({ stepIndex }: { stepIndex: number }) {
       return;
     }
     const r = el.getBoundingClientRect();
-    setSpot(spotlightRect({ top: r.top, left: r.left, width: r.width, height: r.height }));
+    const next = spotlightRect({ top: r.top, left: r.left, width: r.width, height: r.height });
+    // 같은 자리면 그대로 둔다 — 아래 DOM 관찰이 다시 재도 다시 그리지 않게
+    setSpot((prev) => (prev && sameRect(prev, next) ? prev : next));
   }, [step, stepIndex, setTourStep, completeTour]);
 
   // 스텝 진입 — 대상을 화면 안으로 끌어온 뒤 측정한다.
@@ -112,6 +129,31 @@ export function TourOverlay({ stepIndex }: { stepIndex: number }) {
     };
   }, [measure]);
 
+  // 홈이 늦게 그려지거나(스켈레톤 → 실제 화면, 설정에서 돌아온 직후) 레이아웃이 바뀌면 다시 잰다 — 오버레이가 스크롤을
+  // 잠가 scroll 이벤트가 오지 않고, 단계가 그대로면 위 레이아웃 이펙트도 다시 돌지 않는다(리뷰 #299).
+  // 링·카드의 style 변경은 attributeFilter 밖이라 스스로를 다시 부르지 않는다.
+  useEffect(() => {
+    let raf = 0;
+    const schedule = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(measure);
+    };
+    const mutations = new MutationObserver(schedule);
+    mutations.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['data-tour-id', 'data-tour-pending'],
+    });
+    const sizes = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(schedule);
+    sizes?.observe(document.body);
+    return () => {
+      cancelAnimationFrame(raf);
+      mutations.disconnect();
+      sizes?.disconnect();
+    };
+  }, [measure]);
+
   // 스텝 변경 시 카드로 포커스 이동 — aria-label 변경이 보조기기에 낭독된다.
   useEffect(() => {
     cardRef.current?.focus();
@@ -127,10 +169,14 @@ export function TourOverlay({ stepIndex }: { stepIndex: number }) {
 
   const goNext = () => {
     const next = nextVisibleStep(stepIndex, 1, hasTargetInDom);
-    if (next === null) {
-      trackTourFinished('completed');
-      completeTour();
-    } else setTourStep(next);
+    if (next !== null) {
+      setTourStep(next);
+      return;
+    }
+    // 홈을 아직 읽는 중이면 뒤 단계 타깃이 곧 선다 — 여기서 끝내면 4~6단계를 못 보고 tourDone이 남는다(리뷰 #299)
+    if (isHomePending()) return;
+    trackTourFinished('completed');
+    completeTour();
   };
   const skip = () => {
     trackTourFinished('skipped');
@@ -142,7 +188,10 @@ export function TourOverlay({ stepIndex }: { stepIndex: number }) {
   };
 
   const done = stepDone(step.id, { channelLinked, pluginLinked });
-  const last = isLastStep(stepIndex);
+  // 「완료」는 단계 번호가 아니라 실제로 다음에 보일 단계가 없을 때 — 기록 없는 계정은 4단계가 마지막이다(리뷰 #299).
+  // 홈을 읽는 중이라 아직 모르면 「다음」을 잠근다
+  const last = !hasNext && !pending;
+  const waitingForHome = !hasNext && pending;
   // 측정 전 첫 프레임은 중앙 카드로 그려지지만, 측정이 레이아웃 이펙트라 칠하기 전에 스포트라이트로 바뀐다
   const spotlight = spot !== null;
 
@@ -197,7 +246,7 @@ export function TourOverlay({ stepIndex }: { stepIndex: number }) {
                 {step.cta.label}
               </Button>
             )}
-            <Button variant="solid" size="sm" onClick={goNext}>
+            <Button variant="solid" size="sm" onClick={goNext} disabled={waitingForHome}>
               {last ? '완료' : '다음'}
             </Button>
           </span>

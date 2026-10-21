@@ -305,6 +305,55 @@ describe('HomeScreen', () => {
       expect(hero).toHaveTextContent('유튜브 발행–');
     });
 
+    it('동시에 방송 중인 방송이 여럿이면(여러 스트리머의 편집자) 이번 주 숫자에 모두 센다(리뷰 #299)', async () => {
+      const liveRow = (streamId: string) => ({
+        streamId,
+        status: 'live',
+        relation: 'EDITOR',
+        startedAt: at(10, 21, 10).toISOString(),
+        endedAt: null,
+        vodExpiresAt: null,
+        title: streamId,
+      });
+      serve({
+        live: [liveRow('live-a'), liveRow('live-b')],
+        cards: { 'live-a': [card(1), card(2)], 'live-b': [card(3), card(4), card(5)] },
+      });
+      render(<HomeScreen />);
+
+      expect(
+        await screen.findByRole('heading', { level: 1, name: '방송 2번에서 카드 5장을 찾았어요' }),
+      ).toBeInTheDocument();
+    });
+
+    it('상위 8개 밖의 지난 방송 카드는 매 주기 다시 읽지 않고 기억해 둔다(리뷰 #299)', async () => {
+      // 위 beforeEach는 Date만 가짜다 — 주기(setInterval)까지 돌리려면 갈아 끼운다
+      vi.useRealTimers();
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      vi.setSystemTime(NOW);
+      // 이번 주·지난주에 9번 방송 — 가장 오래된 하나(10월 12일)가 상위 8개 밖이다
+      const rows = [20, 19, 18, 17, 16, 15, 14, 13, 12].map((day) =>
+        pastRow(`b-${day}`, at(10, day)),
+      );
+      const spy = vi.fn((input: RequestInfo | URL) =>
+        Promise.resolve(route(String(input), { past: rows })),
+      );
+      vi.stubGlobal('fetch', spy);
+      const cardCalls = (streamId: string) =>
+        spy.mock.calls.filter(([u]) => String(u).includes(`/${streamId}/jump-cards`)).length;
+      render(<HomeScreen />);
+      await screen.findByRole('region', { name: '이번 주' });
+      expect(cardCalls('b-12')).toBe(1);
+      expect(cardCalls('b-20')).toBe(1);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      // 상위 8개는 매 주기 다시, 그 밖은 기억해 둔 값을 쓴다
+      expect(cardCalls('b-20')).toBe(2);
+      expect(cardCalls('b-12')).toBe(1);
+    });
+
     it('방송 중이면 라이브 밴드가 지난 방송 위에 서고, 지난주에 켠 방송도 이번 주에 센다', async () => {
       serve({
         live: [
@@ -385,6 +434,57 @@ describe('HomeScreen', () => {
     expect(plugin).toHaveTextContent('연결 확인은 OBS 독에서 해요');
     expect(plugin).not.toHaveTextContent('연결됨');
     expect(within(aside).getByText('준비 완료')).toBeInTheDocument();
+  });
+
+  it('연동 상태를 다시 읽다 실패하면 알던 값을 그대로 둔다 — 「확인 중」으로 되돌리지 않는다(리뷰 #299)', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const server: Server = {
+      past: [pastRow('past-1', new Date(Date.now() - 86_400_000))],
+      chzzk: { linked: true, channelName: '재환의 방송', status: 'ACTIVE' },
+    };
+    let chzzkDown = false;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (chzzkDown && url.startsWith('/api/chzzk-link'))
+          return Promise.resolve(new Response('{}', { status: 503 }));
+        return Promise.resolve(route(url, server));
+      }),
+    );
+    render(<HomeScreen />);
+    const aside = await screen.findByRole('complementary', { name: '연결 상태·팁' });
+    expect(within(aside).getAllByRole('listitem')[0]).toHaveTextContent('치지직 · 재환의 방송');
+
+    chzzkDown = true;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(within(aside).getAllByRole('listitem')[0]).toHaveTextContent('치지직 · 재환의 방송');
+    expect(within(aside).getAllByRole('listitem')[0]).not.toHaveTextContent('확인 중');
+  });
+
+  it('방송 기록이 없는데 연동 상태를 못 읽었으면 그 단계에 버튼을 내밀지 않고 「확인 중」이라 한다(리뷰 #299)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.startsWith('/api/chzzk-link'))
+          return Promise.resolve(new Response('{}', { status: 503 }));
+        return Promise.resolve(route(url, {}));
+      }),
+    );
+    render(<HomeScreen />);
+
+    const hero = await screen.findByRole('region', { name: '지금 할 일' });
+    const channelRow = within(hero).getByText('방송 채널 연동').closest('li')!;
+    expect(channelRow).toHaveTextContent('확인 중…');
+    expect(within(channelRow).queryByRole('link')).not.toBeInTheDocument();
+    // 상태를 아는 플러그인 단계가 지금 할 일이 된다
+    expect(within(hero).getByRole('link', { name: '코드 받기' })).toHaveAttribute(
+      'href',
+      '/settings/plugin',
+    );
   });
 
   it('연동 상태를 못 읽은 줄은 「확인 중」이고 버튼을 내밀지 않는다', async () => {

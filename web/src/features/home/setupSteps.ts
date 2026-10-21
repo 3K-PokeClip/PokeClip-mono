@@ -15,6 +15,11 @@ export interface SetupStep {
   /** 끝났을 때 제목 옆에 붙는 한 줄 */
   doneNote: string;
   done: boolean;
+  /**
+   * 연동 상태를 못 읽었다(null) — 「안 함」과 다르다. 이미 연동한 사용자에게 다시 연동하라고 하지 않게 버튼을 내밀지 않고
+   * 「확인 중」으로 둔다. 연결 상태 카드와 같은 규칙(리뷰 #299)
+   */
+  unknown: boolean;
   action?: { label: string; href: string };
 }
 
@@ -26,6 +31,7 @@ export function setupSteps(links: HomeLinks, hasHistory: boolean): SetupStep[] {
       desc: '방송 플랫폼을 연결하면 방송을 알아서 찾아요',
       doneNote: `${links.chzzk?.channelName ?? '채널'} 연결됨`,
       done: links.chzzk?.linked === true,
+      unknown: links.chzzk === null,
       action: { label: '채널 연동', href: '/settings/channels' },
     },
     {
@@ -34,6 +40,7 @@ export function setupSteps(links: HomeLinks, hasHistory: boolean): SetupStep[] {
       desc: '연동 코드 8자리를 OBS에 넣어요',
       doneNote: '연동 코드 발급됨',
       done: links.streamKeyIssued === true,
+      unknown: links.streamKeyIssued === null,
       action: { label: '코드 받기', href: '/settings/plugin' },
     },
     {
@@ -42,6 +49,7 @@ export function setupSteps(links: HomeLinks, hasHistory: boolean): SetupStep[] {
       desc: 'OBS에서 방송을 켜면 감지가 시작돼요',
       doneNote: '첫 방송 완료',
       done: hasHistory,
+      unknown: false,
     },
     {
       id: 'publish',
@@ -50,6 +58,7 @@ export function setupSteps(links: HomeLinks, hasHistory: boolean): SetupStep[] {
       doneNote: '첫 클립 발행',
       // 방송 기록이 없는 계정만 이 칸을 보므로 아직 올린 클립이 있을 수 없다
       done: false,
+      unknown: false,
       action:
         links.youtube?.linked === true
           ? undefined

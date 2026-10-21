@@ -32,7 +32,7 @@ export function HomeScreen() {
       <div className={styles.grid}>
         <div className={styles.main}>
           {live ? <LiveNowBand live={live} /> : null}
-          <VodGrid vods={vods} loading={false} />
+          <VodGrid vods={vods} />
         </div>
         <aside
           className={styles.aside}

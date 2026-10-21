@@ -6,7 +6,7 @@ import Link from 'next/link';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { IconButton, LinkButton } from '@/ui';
 import styles from './HomeScreen.module.css';
-import { useRandomIndex } from './HomeHero';
+import { useRandomIndex } from './useRandomIndex';
 
 // 홈 오른쪽 — 포키의 팁(POK-378). 데이터 없이 들어올 때마다 하나를 고르고, 화살표로 넘겨 본다.
 // 있는 기능만 말한다 — 기능이 바뀌면 여기 문구도 같이 고친다.

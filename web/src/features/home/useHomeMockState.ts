@@ -91,23 +91,7 @@ export interface HomeMockState {
   loading: boolean;
 }
 
-// ── 와이어 형식 ──
-interface WireBroadcast {
-  streamId: string;
-  status: 'live' | 'ended' | 'vod_ready';
-  relation: 'OWNER' | 'EDITOR';
-  startedAt: string | null;
-  endedAt: string | null;
-  vodExpiresAt: string | null;
-  /** 사진 주소(POK-277). 옛 서버면 빠져 온다 */
-  thumbnailUrl?: string | null;
-  /** 방송 제목(POK-259). 없거나 옛 서버면 비어 온다 */
-  title?: string | null;
-}
-interface WireList {
-  broadcasts: WireBroadcast[];
-  nextCursor: string | null;
-}
+// ── 와이어 형식 ── 방송 목록은 api/clipEditor의 BroadcastRow(fetchAllBroadcasts)를 그대로 쓴다
 interface WireCard {
   id: number | string;
   streamId: string;
@@ -140,6 +124,8 @@ interface WireMe {
 const POLL_MS = 10_000;
 /** 연동 상태는 자주 바뀌지 않는다 — 방송 목록(10초)보다 드물게 읽는다 */
 const LINKS_POLL_MS = 60_000;
+/** 상위 N개 밖 방송의 카드 수를 기억하는 시간 — 끝난 지 오래된 방송은 카드가 거의 안 바뀐다 */
+const CARD_CACHE_MS = 5 * 60_000;
 const PAST_LIMIT = 8;
 const EXPIRING_WINDOW_DAYS = 7;
 const DAY_MS = 86_400_000;
@@ -223,51 +209,63 @@ interface Loaded {
   lastBroadcast: { date: string; ago: string } | null;
 }
 
+/** 끝난 지 오래된(상위 N개 밖) 방송의 카드 — 수가 거의 안 바뀌어 10초마다 다시 읽지 않는다 */
+export interface CachedCards {
+  cards: WireCard[];
+  at: number;
+}
+
 /**
  * 홈 한 벌. 방송 목록을 못 읽으면 null — 부른 쪽이 지난 화면을 그대로 둔다.
  * 빈 값으로 덮으면 clip이 잠깐 재시작해도 라이브 띠와 지난 방송이 사라진다(PR #200 codex).
+ * cardCache는 상위 N개 밖 방송의 카드를 CARD_CACHE_MS 동안 기억한다 — 부른 쪽이 주기마다 같은 Map을 넘긴다.
  */
-async function loadHome(now: number): Promise<Loaded | null> {
-  const [me, liveList, pastAll] = await Promise.all([
+async function loadHome(now: number, cardCache: Map<string, CachedCards>): Promise<Loaded | null> {
+  const [me, liveAll, pastAll] = await Promise.all([
     getJson<WireMe>('/api/auth/me'),
-    getJson<WireList>('/api/clip/broadcasts?state=live&limit=1'),
+    // 라이브도 끝까지 — 여러 스트리머의 편집자면 동시에 여럿이 방송 중이다. 밴드는 첫 방송만, 이번 주 숫자는 전부 센다
+    fetchAllBroadcasts('live').catch(() => null),
     // 지난 방송은 끝까지 읽는다 — 지난주 방송 수를 세려면 첫 쪽만으로는 모자랄 수 있다
     fetchAllBroadcasts('past').catch(() => null),
   ]);
-  if (liveList === null || pastAll === null) return null;
+  if (liveAll === null || pastAll === null) return null;
 
-  const liveBroadcast = liveList?.broadcasts[0] ?? null;
+  const liveBroadcast = liveAll[0] ?? null;
+  const liveIds = new Set(liveAll.map((b) => b.streamId));
   const past = pastAll.slice(0, PAST_LIMIT);
   const { lastWeekStart, weekStart } = weekStarts(new Date(now));
-  const all = [...(liveBroadcast ? [liveBroadcast] : []), ...pastAll];
+  const all = [...liveAll, ...pastAll];
 
-  // 카드는 방송마다 한 번씩 — 라이브 + 지난 방송 상위 N개 + 이번 주·지난주 방송(N개를 넘는 주가 있다)
-  const targets = new Map<string, { streamId: string }>();
-  for (const b of [...(liveBroadcast ? [liveBroadcast] : []), ...past]) targets.set(b.streamId, b);
-  for (const b of pastAll) {
-    if (inRange(b.startedAt, lastWeekStart, Infinity)) targets.set(b.streamId, b);
-  }
+  // 카드는 방송마다 한 번씩 — 라이브 + 지난 방송 상위 N개는 매번, 그 밖의 이번 주·지난주 방송(N개를 넘는 주가 있다)은
+  // 기억해 둔 값이 CARD_CACHE_MS 안이면 그대로 쓴다(리뷰 #299: 10초마다 수십 개 방송을 다시 읽던 부하)
+  const fresh = new Set([...liveAll, ...past].map((b) => b.streamId));
+  const older = pastAll
+    .filter((b) => !fresh.has(b.streamId) && inRange(b.startedAt, lastWeekStart, Infinity))
+    .map((b) => b.streamId);
   const cardsByStream = new Map<string, WireCard[]>();
   await Promise.all(
-    [...targets.values()].map(async (b) => {
+    [...fresh, ...older].map(async (streamId) => {
+      const cached = fresh.has(streamId) ? undefined : cardCache.get(streamId);
+      if (cached && now - cached.at < CARD_CACHE_MS) {
+        cardsByStream.set(streamId, cached.cards);
+        return;
+      }
       // 끝까지 넘긴다 — 기본 50장이고 오래된 것부터 와서, 첫 장만 읽으면 카드 수가 50에서 잘리고
       // 최근 카드가 통째로 빠진다(PR #200 codex)
-      const cards = await fetchAllJumpCards<WireCard>(b.streamId).catch(() => [] as WireCard[]);
-      cardsByStream.set(
-        b.streamId,
-        cards.filter((c) => !c.hidden),
-      );
+      const cards = (
+        await fetchAllJumpCards<WireCard>(streamId).catch(() => [] as WireCard[])
+      ).filter((c) => !c.hidden);
+      cardsByStream.set(streamId, cards);
+      if (!fresh.has(streamId)) cardCache.set(streamId, { cards, at: now });
     }),
   );
 
   // 주는 방송 시작 시각으로 가른다 — 일요일 밤에 켜 월요일까지 간 방송은 지난주 방송이다.
   // 단 지금 하고 있는 회차는 이번 주에도 센다 — 방송 중인데 큰 칸이 「방송 0번」이라 하지 않게
-  const weekOf = (
-    from: number,
-    to: number,
-    also: { streamId: string } | null = null,
-  ): BroadcastWeek => {
-    const rows = all.filter((b) => inRange(b.startedAt, from, to) || b === also);
+  const weekOf = (from: number, to: number, withLive = false): BroadcastWeek => {
+    const rows = all.filter(
+      (b) => inRange(b.startedAt, from, to) || (withLive && liveIds.has(b.streamId)),
+    );
     return {
       broadcasts: rows.length,
       cards: rows.reduce((n, b) => n + (cardsByStream.get(b.streamId)?.length ?? 0), 0),
@@ -345,7 +343,7 @@ async function loadHome(now: number): Promise<Loaded | null> {
     live,
     vods,
     hasHistory: liveBroadcast !== null || pastAll.length > 0,
-    week: weekOf(weekStart, Infinity, liveBroadcast),
+    week: weekOf(weekStart, Infinity, true),
     lastWeek: weekOf(lastWeekStart, weekStart),
     lastBroadcast: latestStart
       ? { date: dateLabel(latestStart), ago: daysAgoLabel(latestStart, new Date(now)) }
@@ -384,38 +382,63 @@ export function useHomeMockState(): HomeMockState {
   // 보관함(POK-243) — 클립 완료 수 · 만든 클립 · 유튜브 발행이 여기서 나온다. 못 읽으면 null(수는 「–」)
   const [library, setLibrary] = useState<LibraryEntry[] | null>(null);
   const [links, setLinks] = useState<HomeLinks>(NO_LINKS);
-  const [loading, setLoading] = useState(true);
+  const [homeLoaded, setHomeLoaded] = useState(false);
+  // 연동 상태를 한 번은 물어봤는가 — 그 전에 준비 단계를 그리면 연동을 마친 계정에도 버튼이 잠깐 보인다
+  const [linksTried, setLinksTried] = useState(false);
   // 주의 경계는 클라이언트 시계로 — 서버 렌더와 어긋나지 않게 첫 응답 뒤에만 쓴다
   const [now, setNow] = useState(0);
 
   useEffect(() => {
     let stopped = false;
+    // 상위 N개 밖 방송의 카드 기억 — 주기마다 같은 Map을 넘긴다
+    const cardCache = new Map<string, CachedCards>();
     // 읽기가 10초보다 오래 걸리면 다음 주기와 겹친다. 더 늦게 떠난 읽기가 이미 반영됐으면 먼저 떠나 늦게 온 답은 버린다
     // (PR #203 codex). 가장 최근 것만 받으면 늘 겹칠 때 아무것도 안 그려진다
     let started = 0;
     let applied = 0;
-    let linksReadAt = -Infinity;
     const tick = async () => {
       const mine = ++started;
-      const readLinks = Date.now() - linksReadAt >= LINKS_POLL_MS;
-      if (readLinks) linksReadAt = Date.now();
-      const [loaded, entries, nextLinks] = await Promise.all([
-        loadHome(Date.now()),
+      const [loaded, entries] = await Promise.all([
+        loadHome(Date.now(), cardCache),
         fetchLibraryAll().catch(() => null),
-        readLinks ? loadLinks() : Promise.resolve(null),
       ]);
       if (stopped || mine < applied) return;
       applied = mine;
       if (entries !== null) setLibrary(entries);
-      if (nextLinks !== null) setLinks(nextLinks);
       // 못 읽었으면 지난 화면을 그대로 둔다. 첫 읽기부터 실패면 다음 주기까지 「불러오는 중」
       if (loaded === null) return;
       setData(loaded);
       setNow(Date.now());
-      setLoading(false);
+      setHomeLoaded(true);
     };
     void tick();
     const t = window.setInterval(() => void tick(), POLL_MS);
+    return () => {
+      stopped = true;
+      window.clearInterval(t);
+    };
+  }, []);
+
+  // 연동 상태는 방송 폴링과 따로 1분마다 — 같은 주기에 묶으면 방송 읽기가 10초를 넘길 때 다음 주기가 먼저 반영돼
+  // 연동 결과가 통째로 버려진다(리뷰 #299). 못 읽은 칸은 지난 값을 둔다(방송 목록과 같은 정책)
+  useEffect(() => {
+    let stopped = false;
+    let started = 0;
+    let applied = 0;
+    const read = async () => {
+      const mine = ++started;
+      const next = await loadLinks();
+      if (stopped || mine < applied) return;
+      applied = mine;
+      setLinks((prev) => ({
+        chzzk: next.chzzk ?? prev.chzzk,
+        youtube: next.youtube ?? prev.youtube,
+        streamKeyIssued: next.streamKeyIssued ?? prev.streamKeyIssued,
+      }));
+      setLinksTried(true);
+    };
+    void read();
+    const t = window.setInterval(() => void read(), LINKS_POLL_MS);
     return () => {
       stopped = true;
       window.clearInterval(t);
@@ -444,7 +467,7 @@ export function useHomeMockState(): HomeMockState {
     lastWeek: { ...data.lastWeek, ...libraryWeekOf(library, lastWeekStart, weekStart) },
     lastBroadcast: data.lastBroadcast,
     links,
-    loading,
+    loading: !homeLoaded || !linksTried,
   };
 }
 
