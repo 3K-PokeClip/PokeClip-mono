@@ -20,11 +20,6 @@ const RELEASE: PluginRelease = {
       url: `${DL}/pokeclip-obs-0.2.0-windows-x64-installer.exe`,
       sizeBytes: 31_457_280,
     },
-    portable: {
-      name: 'p.zip',
-      url: `${DL}/pokeclip-obs-0.2.0-windows-x64.zip`,
-      sizeBytes: 30_408_704,
-    },
     pkg: {
       name: 'm.pkg',
       url: `${DL}/pokeclip-obs-0.2.0-macos-universal.pkg`,
@@ -44,7 +39,7 @@ function open(release: PluginRelease, detectedOs: 'windows' | 'macos' | 'unknown
 beforeEach(() => track.mockReset());
 
 describe('PluginDownloadDialog: OS별 설치 파일 받기', () => {
-  it('감지한 OS의 탭으로 열린다 — Mac이면 pkg, zip은 없다', () => {
+  it('감지한 OS의 탭으로 열린다 — Mac이면 pkg', () => {
     open(RELEASE, 'macos');
     expect(screen.getByRole('dialog', { name: '플러그인 다운로드' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'macOS' })).toHaveAttribute('aria-selected', 'true');
@@ -52,20 +47,15 @@ describe('PluginDownloadDialog: OS별 설치 파일 받기', () => {
       'href',
       RELEASE.assets.pkg!.url,
     );
-    expect(screen.queryByRole('link', { name: '포터블 OBS용 zip' })).not.toBeInTheDocument();
   });
 
-  it('Windows는 exe가 주 버튼이고 포터블 zip이 따라온다 — 체크섬·설치 안내 링크는 두지 않는다', () => {
+  it('Windows는 exe 하나만 받는다 — 포터블 zip·체크섬·설치 안내 링크는 두지 않는다', () => {
     open(RELEASE, 'windows');
     const primary = screen.getByRole('link', { name: /Windows 설치 파일, 버전 0\.2\.0/ });
     // 파일은 같은 탭에서 받는다 — GitHub가 attachment로 줘서 페이지가 바뀌지 않는다
     expect(primary).toHaveAttribute('href', RELEASE.assets.installer!.url);
     expect(primary).not.toHaveAttribute('target');
-    expect(screen.getByRole('link', { name: '포터블 OBS용 zip' })).toHaveAttribute(
-      'href',
-      RELEASE.assets.portable!.url,
-    );
-    expect(screen.queryByRole('link', { name: /체크섬|설치 안내/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /zip|체크섬|설치 안내/ })).not.toBeInTheDocument();
     const allVersions = screen.getByRole('link', { name: /모든 버전 보기/ });
     expect(allVersions).toHaveAttribute('target', '_blank');
     expect(allVersions).toHaveAttribute('rel', 'noopener noreferrer');
@@ -91,14 +81,15 @@ describe('PluginDownloadDialog: OS별 설치 파일 받기', () => {
   it('누른 파일 종류를 센다 — 받은 수가 아니라 누른 수', () => {
     open(RELEASE, 'windows');
     fireEvent.click(screen.getByRole('link', { name: /Windows 설치 파일/ }));
-    fireEvent.click(screen.getByRole('link', { name: '포터블 OBS용 zip' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'macOS' }));
+    fireEvent.click(screen.getByRole('link', { name: /macOS 설치 파일/ }));
     expect(track).toHaveBeenNthCalledWith(1, 'plugin_download_clicked', {
       os: 'windows',
       kind: 'installer',
     });
     expect(track).toHaveBeenNthCalledWith(2, 'plugin_download_clicked', {
-      os: 'windows',
-      kind: 'portable',
+      os: 'macos',
+      kind: 'pkg',
     });
   });
 

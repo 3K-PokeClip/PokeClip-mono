@@ -32,7 +32,7 @@ export interface AnalyticsEvents {
    */
   plugin_download_clicked: {
     os: 'windows' | 'macos';
-    kind: 'installer' | 'portable' | 'pkg';
+    kind: 'installer' | 'pkg';
   };
 }
 

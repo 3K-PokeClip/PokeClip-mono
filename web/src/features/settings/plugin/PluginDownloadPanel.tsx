@@ -65,7 +65,6 @@ export function PluginDownloadPanel({
 function OsPanel({ os, release }: { os: PluginOs; release: PluginRelease }) {
   const kind = PRIMARY[os];
   const primary = release.assets[kind];
-  const portable = os === 'windows' ? release.assets.portable : undefined;
 
   return (
     <div className={styles.downloadOsPanel}>
@@ -92,17 +91,6 @@ function OsPanel({ os, release }: { os: PluginOs; release: PluginRelease }) {
       ) : (
         <p className={styles.downloadMissing}>{OS_LABEL[os]} 설치 파일은 지금 받을 수 없어요.</p>
       )}
-
-      {portable ? (
-        <div className={styles.downloadLinks}>
-          <a
-            href={portable.url}
-            onClick={() => track('plugin_download_clicked', { os, kind: 'portable' })}
-          >
-            포터블 OBS용 zip
-          </a>
-        </div>
-      ) : null}
 
       {/* flex 자식은 아이콘·span 둘뿐 — 텍스트 노드를 직접 두면 줄이 갈라진다(.issueWarning 규칙) */}
       <div className={styles.issueWarning}>

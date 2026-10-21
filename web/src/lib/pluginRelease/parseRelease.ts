@@ -14,7 +14,6 @@ import {
 /** Package-Windows.ps1·package-macos가 짓는 이름의 꼬리. 앞은 `pokeclip-obs-<X.Y.Z>` (buildspec 판) */
 const ASSET_SUFFIX: Record<PluginAssetKind, string> = {
   installer: '-windows-x64-installer.exe',
-  portable: '-windows-x64.zip',
   pkg: '-macos-universal.pkg',
 };
 

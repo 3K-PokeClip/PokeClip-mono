@@ -9,14 +9,8 @@ export const RELEASES_PAGE_URL = `https://github.com/${PLUGIN_RELEASE_REPO}/rele
 export const OBS_PLUGIN_TAG_RE = /^obs-plugin-v(\d+)\.(\d+)\.(\d+)(-[0-9A-Za-z.]+)?$/;
 
 export type PluginOs = 'windows' | 'macos';
-/** installer=Windows 설치 파일(exe) · portable=포터블 OBS용 zip · pkg=macOS 설치 파일 */
-export type PluginAssetKind = 'installer' | 'portable' | 'pkg';
-
-export const ASSET_OS: Record<PluginAssetKind, PluginOs> = {
-  installer: 'windows',
-  portable: 'windows',
-  pkg: 'macos',
-};
+/** installer=Windows 설치 파일(exe) · pkg=macOS 설치 파일. 포터블 OBS용 zip은 웹에서 내보이지 않는다 */
+export type PluginAssetKind = 'installer' | 'pkg';
 
 export interface PluginReleaseAsset {
   name: string;

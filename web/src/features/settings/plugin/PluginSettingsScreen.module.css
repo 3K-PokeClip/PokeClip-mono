@@ -176,17 +176,7 @@
   color: var(--pc-color-text-secondary);
 }
 
-.downloadLinks {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: calc(4 * var(--pc-u)) calc(14 * var(--pc-u));
-  margin-top: calc(10 * var(--pc-u));
-  font-size: calc(11.5 * var(--pc-u));
-}
-
 /* 새 창 아이콘이 글자 뒤에 붙어 있게 — svg가 block이라 그냥 두면 아랫줄로 떨어진다 */
-.downloadLinks a,
 .downloadMeta a {
   display: inline-flex;
   align-items: center;

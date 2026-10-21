@@ -48,7 +48,7 @@ describe('selectPluginRelease: 웹이 내보일 플러그인 Release 고르기',
     expect(() => selectPluginRelease({ message: 'Not Found' })).toThrow();
   });
 
-  it('정식판 하나를 설치 파일 셋으로 정리하고, SHA256SUMS 같은 다른 자산은 무시한다', () => {
+  it('정식판 하나를 설치 파일 둘로 정리하고, 포터블 zip·SHA256SUMS 같은 다른 자산은 무시한다', () => {
     const tag = 'obs-plugin-v0.2.0';
     const picked = selectPluginRelease([release(tag)]);
     expect(picked).toMatchObject({
@@ -57,11 +57,10 @@ describe('selectPluginRelease: 웹이 내보일 플러그인 Release 고르기',
       prerelease: false,
       releaseUrl: `https://github.com/3K-PokeClip/PokeClip-mono/releases/tag/${tag}`,
     });
-    expect(Object.keys(picked?.assets ?? {}).sort()).toEqual(['installer', 'pkg', 'portable']);
+    expect(Object.keys(picked?.assets ?? {}).sort()).toEqual(['installer', 'pkg']);
     expect(picked?.assets.installer?.url).toBe(
       `${REPO_DL}/${tag}/pokeclip-obs-0.2.0-windows-x64-installer.exe`,
     );
-    expect(picked?.assets.portable?.name).toBe('pokeclip-obs-0.2.0-windows-x64.zip');
     expect(picked?.assets.pkg?.sizeBytes).toBe(1234);
   });
 
@@ -146,7 +145,6 @@ describe('selectPluginRelease: 웹이 내보일 플러그인 Release 고르기',
     ]);
     expect(picked?.assets.pkg).toBeDefined();
     expect(picked?.assets.installer).toBeUndefined();
-    expect(picked?.assets.portable).toBeUndefined();
   });
 
   it('설치 파일이 하나도 없는 Release는 건너뛰고 다음 후보를 고른다', () => {
