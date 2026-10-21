@@ -17,7 +17,9 @@ export function VodGrid({ vods, loading }: { vods: HomeVod[]; loading: boolean }
         </Link>
       </div>
       {vods.length === 0 ? (
-        <p className={styles.emptyState}>{loading ? '불러오는 중…' : '지난 방송이 없어요.'}</p>
+        <p className={styles.emptyState}>
+          {loading ? '불러오는 중…' : '방송이 끝나면 다시 볼 수 있는 VOD가 여기 쌓여요.'}
+        </p>
       ) : (
         <ul className={styles.vodGrid}>
           {vods.map((vod) => (

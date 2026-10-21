@@ -1,0 +1,119 @@
+import Link from 'next/link';
+import { Check } from 'lucide-react';
+import { Card, LinkButton } from '@/ui';
+import { TOUR_TARGET } from '@/features/onboarding/tourSteps';
+import styles from './HomeScreen.module.css';
+import type { HomeLinks } from './useHomeMockState';
+
+// 홈 오른쪽 — 연결 상태(POK-378). 발행 현황·만료 임박은 실데이터가 자주 비어 이 카드로 바꿨다.
+// 연동 창구(방송 채널·유튜브·스트림키)는 늘 답을 주므로 비는 일이 없다. 카드당 상태색 하나 — 「연결됨」만 강조색, 나머지는 무채색 버튼.
+// OBS는 아직 「연동 코드 발급」으로만 안다 — 플러그인 연결 시각(last_paired_at)이 생기면 그 값으로 바꾼다.
+// 방송 채널은 치지직·SOOP·씨미 모두 되지만 웹이 상태를 읽을 수 있는 건 아직 치지직뿐이다 — 줄 이름은 「방송 채널」로 두고
+// 연결된 플랫폼을 설명 앞에 붙인다. SOOP·씨미 창구가 생기면 같은 줄에 함께 센다.
+
+type RowState = 'ok' | 'off' | 'unknown';
+
+interface Row {
+  key: string;
+  name: string;
+  detail: string;
+  state: RowState;
+  action?: { label: string; href: string };
+}
+
+function rowsOf(links: HomeLinks): Row[] {
+  const channel = (
+    key: string,
+    name: string,
+    link: HomeLinks['chzzk'] | HomeLinks['youtube'],
+    /** 연결된 플랫폼 이름 — 줄 이름이 플랫폼을 말하지 않을 때 설명 앞에 붙인다 */
+    via?: string,
+  ): Row => {
+    const label = (channelName: string | undefined) =>
+      [via, channelName].filter(Boolean).join(' · ') || '연결됨';
+    if (link === null) return { key, name, detail: '확인 중…', state: 'unknown' };
+    if (link.linked) return { key, name, detail: label(link.channelName), state: 'ok' };
+    // 끊긴 연동은 이름이 남아 온다 — 「연결 안 됨」과 갈라 다시 연결을 권한다
+    if (link.status === 'BROKEN') {
+      return {
+        key,
+        name,
+        detail: `${label(link.channelName)} · 다시 연결이 필요해요`,
+        state: 'off',
+        action: { label: '다시 연결', href: '/settings/channels' },
+      };
+    }
+    return {
+      key,
+      name,
+      detail: '연결 안 됨',
+      state: 'off',
+      action: { label: '연동', href: '/settings/channels' },
+    };
+  };
+  const plugin: Row =
+    links.streamKeyIssued === null
+      ? { key: 'plugin', name: 'OBS 플러그인', detail: '확인 중…', state: 'unknown' }
+      : links.streamKeyIssued
+        ? { key: 'plugin', name: 'OBS 플러그인', detail: '연동 코드 발급됨', state: 'ok' }
+        : {
+            key: 'plugin',
+            name: 'OBS 플러그인',
+            detail: '코드 발급 전',
+            state: 'off',
+            action: { label: '코드 받기', href: '/settings/plugin' },
+          };
+  return [
+    channel('chzzk', '방송 채널', links.chzzk, '치지직'),
+    plugin,
+    channel('youtube', '유튜브', links.youtube),
+  ];
+}
+
+/** 시작 가이드 1·2단계가 짚는 줄(방송 기록이 없는 계정이면 큰 칸의 준비 단계 줄이 같은 id를 단다) */
+const ROW_TOUR_TARGET: Record<string, string | undefined> = {
+  chzzk: TOUR_TARGET.homeChannel,
+  plugin: TOUR_TARGET.homePlugin,
+};
+
+export function ConnectionCard({ links }: { links: HomeLinks }) {
+  const rows = rowsOf(links);
+  const note = rows.every((r) => r.state === 'ok')
+    ? '모두 연결됨'
+    : rows.some((r) => r.state === 'off')
+      ? '확인 필요'
+      : null;
+  return (
+    <Card variant="outline" padding={0}>
+      <div className={styles.asideCardHeader}>
+        <h2 className={styles.asideCardTitle}>연결 상태</h2>
+        {note ? <span className={styles.asideCardNote}>{note}</span> : null}
+      </div>
+      <ul className={styles.asideRows}>
+        {rows.map((r) => (
+          <li key={r.key} className={styles.asideRow} data-tour-id={ROW_TOUR_TARGET[r.key]}>
+            <div className={styles.connBody}>
+              <div className={styles.connName}>{r.name}</div>
+              <div className={styles.connDetail}>{r.detail}</div>
+            </div>
+            {r.state === 'ok' ? (
+              <span className={styles.connOk}>
+                <Check aria-hidden /> 연결됨
+              </span>
+            ) : r.action ? (
+              <LinkButton
+                as={Link}
+                href={r.action.href}
+                variant="outline"
+                size="sm"
+                className={styles.connAction}
+              >
+                {r.action.label}
+              </LinkButton>
+            ) : null}
+          </li>
+        ))}
+      </ul>
+    </Card>
+  );
+}

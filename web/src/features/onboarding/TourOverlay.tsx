@@ -18,8 +18,9 @@ import {
 import styles from './Onboarding.module.css';
 
 // 코치마크 투어 오버레이 (디자인 1a ②·④ 규칙).
-// 1·2단계는 중앙 카드(전체 딤), 3~6단계는 스포트라이트 — 링 하나가 transition으로
-// 다음 대상까지 미끄러진다. 배경 클릭·ESC는 잠금(디자인 "배경 클릭 잠금") — 종료는 건너뛰기·완료만.
+// 모든 단계가 스포트라이트다 — 링 하나가 transition으로 다음 대상까지 미끄러진다. 1·2단계(방송 채널·플러그인)는
+// 홈의 해당 줄을 짚고, 그 줄이 아직 없으면(홈을 못 읽음) 중앙 카드(전체 딤)로 대신한다(POK-378).
+// 배경 클릭·ESC는 잠금(디자인 "배경 클릭 잠금") — 종료는 건너뛰기·완료만.
 // CTA는 router.push로 설정 화면에 다녀온다 — tourStep이 스토어 메모리에 남아 홈 복귀 시 같은 스텝 재개.
 
 /**
@@ -50,20 +51,23 @@ export function TourOverlay({ stepIndex }: { stepIndex: number }) {
 
   useScrollLock(true);
 
-  // 스포트라이트 측정 — 타깃 소실 시 다음 보이는 스텝으로, 전부 없으면 완료.
+  // 스포트라이트 측정 — 타깃이 없으면 중앙 카드 대체가 있는 스텝은 중앙 카드로, 나머지는 다음 보이는 스텝으로
+  // (전부 없으면 완료). spot이 서 있느냐가 곧 스포트라이트로 그리느냐다.
   const measure = useCallback(() => {
-    if (!step || step.kind !== 'spotlight' || !step.targetId) {
+    const el =
+      step?.kind === 'spotlight' && step.targetId
+        ? document.querySelector(`[data-tour-id="${step.targetId}"]`)
+        : null;
+    if (!step || !el) {
       setSpot(null);
       setCardPos(null);
-      return;
-    }
-    const el = document.querySelector(`[data-tour-id="${step.targetId}"]`);
-    if (!el) {
-      const next = nextVisibleStep(stepIndex, 1, hasTargetInDom);
-      if (next === null) {
-        trackTourFinished('auto');
-        completeTour();
-      } else setTourStep(next);
+      if (step?.kind === 'spotlight' && step.fallback !== 'centered') {
+        const next = nextVisibleStep(stepIndex, 1, hasTargetInDom);
+        if (next === null) {
+          trackTourFinished('auto');
+          completeTour();
+        } else setTourStep(next);
+      }
       return;
     }
     const r = el.getBoundingClientRect();
@@ -139,7 +143,8 @@ export function TourOverlay({ stepIndex }: { stepIndex: number }) {
 
   const done = stepDone(step.id, { channelLinked, pluginLinked });
   const last = isLastStep(stepIndex);
-  const spotlight = step.kind === 'spotlight';
+  // 측정 전 첫 프레임은 중앙 카드로 그려지지만, 측정이 레이아웃 이펙트라 칠하기 전에 스포트라이트로 바뀐다
+  const spotlight = spot !== null;
 
   const card = (
     <FocusScope>
@@ -156,6 +161,7 @@ export function TourOverlay({ stepIndex }: { stepIndex: number }) {
         }
         style={spotlight && cardPos ? { top: cardPos.top, left: cardPos.left } : undefined}
         data-pending={spotlight && !cardPos ? true : undefined}
+        data-wide={spotlight && step.cta ? true : undefined}
       >
         <div className={styles.cardTitleRow}>
           <Badge tone="point" variant="soft" size="sm">

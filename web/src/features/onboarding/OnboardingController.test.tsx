@@ -34,28 +34,30 @@ function resetStore() {
   });
 }
 
-// 홈은 마운트 뒤 clip·auth를 부른다. 투어 6단계는 「이어서 편집」 배너를 가리키므로 편집 중인 편집본을
-// 하나 둔다 — 배너는 그런 편집본이 있을 때만 선다(POK-251).
-const EDITING_ENTRY = {
-  recipeId: 12,
-  streamId: 'stream-1',
-  creatorId: '1',
-  recipeVersion: 3,
-  cut: null,
-  status: 'editing',
-  broadcast: { status: 'ended', startedAt: null, endedAt: null, vodExpiresAt: null },
-  latestClip: null,
-  createdAt: '2026-09-26T10:00:00Z',
-  updatedAt: '2026-09-26T11:00:00Z',
+// 홈은 마운트 뒤 clip·auth를 부른다. 투어 5·6단계는 지난 방송 격자·오른쪽 패널을 가리키는데 둘은 방송 기록이
+// 있을 때만 선다(POK-378) — 기본 서버는 지난 방송 하나를 둔다. 4단계(포키가 해 주는 일)는 기록이 없을 때만 선다.
+const PAST_BROADCAST = {
+  streamId: 'past-1',
+  status: 'vod_ready',
+  relation: 'OWNER',
+  startedAt: '2026-09-26T10:00:00Z',
+  endedAt: '2026-09-26T12:00:00Z',
+  vodExpiresAt: null,
+  title: '지난 방송',
 };
 
-function homeServer(url: string) {
-  if (url.startsWith('/api/clip/library'))
-    return jsonResponse(200, { items: [EDITING_ENTRY], nextCursor: null });
-  if (url.startsWith('/api/clip/broadcasts'))
-    return jsonResponse(200, { broadcasts: [], nextCursor: null });
-  return jsonResponse(200, { id: 1, email: 'me@example.com', name: null, profileImageUrl: null });
+function homeServerWith(history: boolean) {
+  return (url: string) => {
+    if (url.startsWith('/api/clip/library'))
+      return jsonResponse(200, { items: [], nextCursor: null });
+    if (url.startsWith('/api/clip/broadcasts?state=past'))
+      return jsonResponse(200, { broadcasts: history ? [PAST_BROADCAST] : [], nextCursor: null });
+    if (url.startsWith('/api/clip/broadcasts'))
+      return jsonResponse(200, { broadcasts: [], nextCursor: null });
+    return jsonResponse(200, { id: 1, email: 'me@example.com', name: null, profileImageUrl: null });
+  };
 }
+const homeServer = homeServerWith(true);
 
 /** 홈과 함께 렌더 — 스포트라이트 타깃(data-tour-id)이 실제로 존재하는 환경. */
 function renderWithHome() {
@@ -134,13 +136,18 @@ describe('OnboardingController', () => {
     expect(screen.getByRole('dialog', { name: /시작 가이드 1\/6/ })).toHaveTextContent('완료');
   });
 
-  it('6단계까지 다음으로 진행하고 완료를 누르면 칩으로 돌아간다', async () => {
+  it('6단계까지 다음으로 진행하고 완료를 누르면 칩으로 돌아간다 — 기록이 있으면 4단계는 건너뛴다', async () => {
     renderWithHome();
+    // 지난 방송 격자가 서야 5·6단계 타깃이 있다 — 홈을 다 읽은 뒤 시작한다
+    await screen.findByRole('region', { name: '지난 방송 · VOD' });
 
     fireEvent.click(await screen.findByRole('button', { name: '둘러보기 시작' }));
-    for (let i = 0; i < 5; i += 1) {
-      fireEvent.click(screen.getByRole('button', { name: '다음' }));
-    }
+    fireEvent.click(screen.getByRole('button', { name: '다음' })); // 1 → 2
+    fireEvent.click(screen.getByRole('button', { name: '다음' })); // 2 → 3 큰 칸
+    expect(screen.getByRole('dialog', { name: /시작 가이드 3\/6/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '다음' })); // 3 → (4 결손) → 5
+    expect(screen.getByRole('dialog', { name: /시작 가이드 5\/6/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '다음' })); // 5 → 6
 
     expect(screen.getByRole('dialog', { name: /시작 가이드 6\/6/ })).toBeInTheDocument();
 
@@ -148,6 +155,23 @@ describe('OnboardingController', () => {
 
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: '둘러보기' })).toBeInTheDocument();
+    expect(useOnboardingStore.getState().tourDone).toBe(true);
+    expect(finished()).toEqual([{ outcome: 'completed' }]);
+  });
+
+  it('방송 기록이 없는 계정은 큰 칸 → 포키가 해 주는 일까지 보고 끝난다(POK-378)', async () => {
+    stubFetch(homeServerWith(false));
+    renderWithHome();
+    await screen.findByRole('region', { name: '포키가 해 주는 일' });
+
+    fireEvent.click(await screen.findByRole('button', { name: '둘러보기 시작' }));
+    fireEvent.click(screen.getByRole('button', { name: '다음' })); // 1 → 2
+    fireEvent.click(screen.getByRole('button', { name: '다음' })); // 2 → 3 큰 칸
+    fireEvent.click(screen.getByRole('button', { name: '다음' })); // 3 → 4 포키가 해 주는 일
+    expect(screen.getByRole('dialog', { name: /시작 가이드 4\/6/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '다음' })); // 4 → (5·6 결손) → 완료
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(useOnboardingStore.getState().tourDone).toBe(true);
     expect(finished()).toEqual([{ outcome: 'completed' }]);
   });
