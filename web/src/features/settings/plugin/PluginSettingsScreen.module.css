@@ -114,6 +114,90 @@
   color: var(--pc-color-text-secondary);
 }
 
+/* ---------- 다운로드 창 (POK-379) ---------- */
+
+/* 오류 상태의 버튼 둘 — 배너 한 줄을 지킨다 */
+.downloadActions {
+  display: flex;
+  flex: none;
+  gap: calc(6 * var(--pc-u));
+}
+
+/* DS 기본 폭 480 — OS 탭·경고·설치 순서가 한 화면에 들어간다 */
+.downloadDialog {
+  max-width: calc(480 * var(--pc-u));
+}
+
+.downloadPanel {
+  margin-top: calc(14 * var(--pc-u));
+}
+
+.downloadTabs {
+  margin-bottom: calc(14 * var(--pc-u));
+}
+
+.downloadOsPanel {
+  display: flex;
+  flex-direction: column;
+}
+
+.downloadHint {
+  margin: calc(6 * var(--pc-u)) 0 0;
+  font-size: calc(11 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+  text-align: center;
+}
+
+.downloadMissing {
+  margin: 0;
+  padding: calc(11 * var(--pc-u)) calc(13 * var(--pc-u));
+  border-radius: calc(10 * var(--pc-u));
+  background: var(--pc-color-bg-inset);
+  font-size: calc(12 * var(--pc-u));
+  color: var(--pc-color-text-secondary);
+}
+
+.downloadLinks {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: calc(4 * var(--pc-u)) calc(14 * var(--pc-u));
+  margin-top: calc(10 * var(--pc-u));
+  font-size: calc(11.5 * var(--pc-u));
+}
+
+/* 새 창 아이콘이 글자 뒤에 붙어 있게 — svg가 block이라 그냥 두면 아랫줄로 떨어진다 */
+.downloadLinks a,
+.downloadMeta a {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(3 * var(--pc-u));
+  color: var(--pc-color-text-secondary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.downloadLinkIcon {
+  flex: none;
+}
+
+.downloadSteps {
+  margin: calc(12 * var(--pc-u)) 0 0;
+  padding-left: calc(18 * var(--pc-u));
+  font-size: calc(12 * var(--pc-u));
+  line-height: 1.7;
+  color: var(--pc-color-text-secondary);
+}
+
+.downloadMeta {
+  display: flex;
+  justify-content: space-between;
+  gap: calc(8 * var(--pc-u));
+  margin: calc(14 * var(--pc-u)) 0 0;
+  font-size: calc(11 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}
+
 /* ---------- 연동 코드 실상태 (POK-102) ---------- */
 
 /* 디자인 ②-1 + 폭 유지: 요청 중에도 버튼 폭은 라벨 폭 그대로다 — 라벨은 자리만 지키게

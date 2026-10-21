@@ -84,6 +84,7 @@ SDK는 동적 import라 hydration 뒤에 붙을 수 있다(Next 16 `instrumentat
 | `clip_editor_opened`       | 편집기 진입(편집 대상 마운트당 한 번 — 첫 저장 뒤 `?recipe=` 로 주소만 바뀌는 것은 세지 않음) | `features/clips/editor/studio/StudioScreen.tsx`                | `source`: `card`·`recipe`                                                                                                                  |
 | `video_render_requested`   | 「영상 만들기」 주문을 **서버가 받음**(렌더·업로드 성공 아님)                                 | `StudioScreen.tsx`의 `submitUpload`                            | `privacy_status`: `private`·`unlisted`·`public`, `thumbnail_source`: `none`·`scene`·`file`, `made_for_kids`                                |
 | `editor_invited`           | 편집자 초대 성공(기한 연장 재초대 포함)                                                       | `features/settings/editors/useEditorSettingsState.ts`          | 없음                                                                                                                                       |
+| `plugin_download_clicked`  | 플러그인 설치 파일 링크를 **누름**(받은 수 아님 — 브라우저가 막았는지 웹은 모른다, POK-379)   | `features/settings/plugin/PluginDownloadPanel.tsx`             | `os`: `windows`·`macos`, `kind`: `installer`(exe)·`portable`(zip)·`pkg`                                                                    |
 
 - **「가입」은 사람별 첫 `login_completed`** 로 센다(PostHog 「First time for user」). 로그인 응답에 신규 가입 표시가 없어서다. PostHog를 붙이기 전에 가입한 회원도 처음 로그인할 때 「첫」으로 잡히므로, 화면 이름은 「첫 로그인(PostHog 기준)」으로 쓴다.
 - `login_completed`는 식별 전에 익명으로 나간다. 다음 화면의 `AuthGuard`가 `identify`하면 그 회원에게 합쳐진다.

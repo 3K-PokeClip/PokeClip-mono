@@ -12,16 +12,51 @@ const CREATED_AT = '2026-08-02T03:00:00Z';
 // 기대 날짜는 실행 환경 타임존으로 같이 계산한다 — CI 타임존이 달라도 어긋나지 않는다
 const CREATED_AT_LABEL = new Date(CREATED_AT).toLocaleDateString('ko-KR');
 
+// 다운로드 배너가 읽는 최신 설치 파일 (POK-379) — 링크는 GitHub가 준 주소 모양 그대로
+const PLUGIN_RELEASE = {
+  status: 'ready',
+  release: {
+    version: '0.2.0',
+    tag: 'obs-plugin-v0.2.0',
+    prerelease: false,
+    publishedAt: '2026-10-22T03:00:00Z',
+    releaseUrl: 'https://github.com/3K-PokeClip/PokeClip-mono/releases/tag/obs-plugin-v0.2.0',
+    guideUrl:
+      'https://github.com/3K-PokeClip/PokeClip-mono/blob/obs-plugin-v0.2.0/obs-plugin/README.md#설치',
+    checksumsUrl:
+      'https://github.com/3K-PokeClip/PokeClip-mono/releases/download/obs-plugin-v0.2.0/SHA256SUMS.txt',
+    assets: {
+      installer: {
+        name: 'pokeclip-obs-0.2.0-windows-x64-installer.exe',
+        url: 'https://github.com/3K-PokeClip/PokeClip-mono/releases/download/obs-plugin-v0.2.0/pokeclip-obs-0.2.0-windows-x64-installer.exe',
+        sizeBytes: 31_457_280,
+      },
+      pkg: {
+        name: 'pokeclip-obs-0.2.0-macos-universal.pkg',
+        url: 'https://github.com/3K-PokeClip/PokeClip-mono/releases/download/obs-plugin-v0.2.0/pokeclip-obs-0.2.0-macos-universal.pkg',
+        sizeBytes: 58_720_256,
+      },
+    },
+  },
+};
+
 interface StubOptions {
   issued?: boolean;
   pairingStatus?: number;
+  /** /api/plugin-release 응답 본문 — 기본은 지금처럼 「아직 없음」 */
+  pluginRelease?: unknown;
 }
 
 /** 플러그인 화면이 부르는 엔드포인트 스텁 — rotate는 프론트에서 쓰지 않으므로 스텁에도 없다. */
-function stubStreamKeyFetch({ issued = true, pairingStatus = 201 }: StubOptions = {}) {
+function stubStreamKeyFetch({
+  issued = true,
+  pairingStatus = 201,
+  pluginRelease = { status: 'unavailable' },
+}: StubOptions = {}) {
   // 서버 ensureKey처럼 발급 성공이 키를 만든다 — invalidate 후 재조회가 발급됨으로 바뀐다
   let issuedState = issued;
   return stubFetch((url, init) => {
+    if (url === '/api/plugin-release') return jsonResponse(200, pluginRelease);
     if (url === '/api/stream-keys/pairing-codes') {
       if (pairingStatus !== 201) return jsonResponse(pairingStatus, { reason: '발급 한도 초과' });
       issuedState = true;
@@ -71,7 +106,9 @@ describe('PluginSettingsScreen', () => {
     expect(document.body).not.toHaveTextContent(/연결됨|연결 안 됨/);
     expect(screen.queryByRole('button', { name: '연결 진단' })).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { name: '연동 코드' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '플러그인 다운로드' })).toBeInTheDocument();
+    // Release가 아직 없으면 눌리지 않는 버튼 대신 문장만 있다 (POK-379)
+    expect(await screen.findByText('아직 받을 수 있는 설치 파일이 없어요.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '플러그인 다운로드' })).not.toBeInTheDocument();
     // 라벨은 "최초 발급일" — 서버가 주는 시각이 키 생성일뿐이라 재발급 후에도 참말이다 (리뷰 #74)
     expect(
       await screen.findByText(new RegExp(`최초 발급일 ${CREATED_AT_LABEL.replace(/\./g, '\\.')}`)),
@@ -266,5 +303,22 @@ describe('PluginSettingsScreen', () => {
     // 접근 이름에서는 aria-label이 이겨 '재발급'으로는 찾을 수 없어야 한다
     expect(busyButton).toHaveTextContent('재발급');
     expect(screen.queryByRole('button', { name: '재발급' })).not.toBeInTheDocument();
+  });
+
+  it('설치 파일이 있으면 배너 → 창에서 OS별 파일을 받는다 — 설치·연결 상태는 지어내지 않는다 (POK-379)', async () => {
+    stubStreamKeyFetch({ pluginRelease: PLUGIN_RELEASE });
+    renderWithProviders(<PluginSettingsScreen />);
+
+    fireEvent.click(await screen.findByRole('button', { name: '플러그인 다운로드' }));
+
+    const dialog = await screen.findByRole('dialog', { name: '플러그인 다운로드' });
+    expect(dialog).toBeInTheDocument();
+    // jsdom 기본 UA는 OS를 모른다 — 감지 못 하면 Windows 탭으로 연다
+    expect(screen.getByRole('tab', { name: 'Windows' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('link', { name: /Windows 설치 파일, 버전 0\.2\.0/ })).toHaveAttribute(
+      'href',
+      PLUGIN_RELEASE.release.assets.installer.url,
+    );
+    expect(document.body).not.toHaveTextContent(/설치됨|연결됨/);
   });
 });

@@ -89,6 +89,7 @@ web/                     # 단일 Next.js 앱 (App Router + TanStack Query + Zus
 | `/goodbye`                                                                                                | 탈퇴 완료 안내 (셸 없음) — 토큰이 빈 직후라 `(dock)` 안에서는 못 뜬다                 |
 | `/dev`                                                                                                    | 개발용 데모 (테마 전환 · Zustand 카운터 · TanStack Query 예시)                        |
 | `/api/ping`                                                                                               | 서버 핸들러 앵커                                                                      |
+| `/api/plugin-release`                                                                                     | OBS 플러그인 최신 설치 파일 정보 — GitHub Release 정리본, 로그인 없이 열림 (POK-379)  |
 | 그 밖의 모든 주소                                                                                         | 404 폴백 (`app/not-found.tsx`) — 아래 참조                                            |
 
 **치지직 콜백 계약.** `/oauth/chzzk/callback`은 `(dock)` **밖**이라 `AuthGuard`가 덮지 않는다 — 세션 판정은 화면이 직접 하고, 세션이 없으면 로그인으로 보낸 뒤 `/settings/channels`로 되돌아온다. 이 경로는 백엔드 `CHZZK_REDIRECT_URI`, 그리고 **치지직 개발자 센터에 등록된 redirect URI**와 **정확히 같아야 한다** — 개발자 센터는 앱당 하나만 등록하므로 환경마다 앱을 따로 판다. 프론트에 치지직용 env는 없다(동의 URL을 백엔드가 조립한다). 어긋나면 개발 빌드 콘솔에 경고가 뜬다(`chzzkOAuth.warnIfCallbackMismatch`) — 그게 없으면 증상이 "동의를 다 마친 뒤 낯선 주소에서 막힘"으로만 나타난다.
@@ -100,6 +101,8 @@ web/                     # 단일 Next.js 앱 (App Router + TanStack Query + Zus
 **계정 화면 계약.** 표시 이름·프로필 사진은 auth 서버에 저장된다(`PATCH /api/auth/me` · `PUT /api/auth/me/photo`, POK-208 ← 서버 POK-207). 두 응답이 `GET /api/auth/me`와 같은 모양이라 `['auth','me']` 캐시를 통째로 덮는다 — 헤더·사이드바가 재조회 없이 따라온다. **로컬·CI에서 사진 업로드는 503(`PHOTO_STORAGE_DISABLED`)이 정상이다** — auth의 `PROFILE_PHOTO_*` env가 비면 사진 기능만 꺼진다(`services/README.md` 「사진 창고 다섯」). 배선 버그가 아니다. 사진 주소(`profileImageUrl`)는 서버가 준 것을 그대로 쓴다 — `token` 쿼리가 서명값이라 조립하지 않으며, `null`이면 이니셜을 그린다. 사진 모달의 단계는 시안 1p(선택→업로드→크롭)와 달리 **선택→크롭→업로드**다 — 서버가 잘라낸 최종 그림만 받는다.
 
 **플러그인 화면 계약.** 웹은 플러그인의 지금 연결 상태를 모른다 — 플러그인은 대기 중 서버에 신호를 보내지 않고, 웹은 OBS 안 루프백 독에 닿을 수 없다. 그래서 시안 1m 상단의 상태 배너·「연결 진단」 버튼은 두지 않는다 — 코드 입력 결과는 OBS PokeClip 독이 보여 준다. `GET /api/stream-keys`의 `issued`는 **키 발급 여부이지 연동 여부가 아니다** — 키는 첫 코드 발급 때 생긴다(서버 `ensureKey`). 웹에서 실시간 상태를 보이려면 플러그인 → 서버 신호 계약부터 새로 만들어야 한다(4B·4D 수신부 뒤로 보류).
+
+**플러그인 다운로드 (POK-379).** 하단 배너 → 「플러그인 다운로드」 창에서 OS별 설치 파일을 받는다. 정보는 `GET /api/plugin-release`(이 웹 서버의 라우트)가 GitHub `releases` 목록에서 `obs-plugin-v<X.Y.Z>` 정식판 중 판 번호가 가장 높은 것을 골라 준다 — `/releases/latest`는 저장소 전체의 최신이라 쓰지 않는다. 파일 이름의 판이 태그와 같고 주소가 이 저장소·이 태그의 다운로드 경로인 파일만 내보인다. 서버 메모 캐시 5분·동시 요청 합치기·실패 뒤 60초 쉼·실패 때 24시간까지 지난 값(공개된 자산은 덮어쓰지 않으니 링크가 유효). 배너 상태는 불러오는 중·받을 수 있음·아직 없음(Release 없음)·오류(다시 시도 + GitHub 링크) 넷이다. 다운로드 창의 기본 탭은 감지한 OS(모르면 Windows)이고, 파일 링크는 `target` 없이 연다 — GitHub가 `attachment`로 줘서 페이지가 바뀌지 않는다. 받기 전 서명 경고·설치 순서를 보여 주고, 설치·연결 상태는 그리지 않는다. 누른 수는 `plugin_download_clicked`(받은 수 아님). 긴급히 내리려면 그 Release를 `gh release edit <태그> --prerelease`로 바꾼다 — 다음 캐시 갱신 때 배너에서 빠진다.
 
 **clip 서버 연결 (POK-251).** 홈·라이브·지난 방송·편집기·보관함은 clip 창구에서 실제 값을 받는다. 요청은 전부
 로그인 세션의 `apiFetch`를 거친다(Bearer·401 회전) — clip 거절 사유(`{error, field}`)는 `ApiError.code`·`field`로 오고,
@@ -307,17 +310,19 @@ web/                     # 단일 Next.js 앱 (App Router + TanStack Query + Zus
 
 ### 환경변수 (`.env.example` → `.env.local`)
 
-| 변수                                  | 값(로컬)                   | 용도                                                                            |
-| ------------------------------------- | -------------------------- | ------------------------------------------------------------------------------- |
-| `AUTH_API_URL`                        | `http://localhost:8082`    | auth 서버 — `/api/auth/*` rewrites 프록시 대상                                  |
-| `CLIP_API_URL`                        | `http://localhost:8081`    | clip 서버 — `/api/clip/*` rewrites 프록시 대상                                  |
-| `NEXT_PUBLIC_GOOGLE_CLIENT_ID`        | 구글 OAuth 클라이언트 ID   | 로그인 동의 URL 조립 — 백엔드 `GOOGLE_CLIENT_ID`와 같은 값                      |
-| `NEXT_PUBLIC_MEDIA_STUB_URL`          | 스텁 m3u8 주소             | 플레이어 개발용 정적 세그먼트 ([`infra/compose/stub/`](../infra/compose/stub/)) |
-| `NEXT_PUBLIC_MEDIA_LIVE_BASE_URL`     | LL-HLS 베이스              | 진짜 미디어 서버 (`{base}/{영상 경로 키}/index.m3u8`, POK-233)                  |
-| `NEXT_PUBLIC_MEDIA_PLAYBACK_BASE_URL` | 녹화 재생 서버 (비워도 됨) | 끝난 방송 다시보기·편집기 미리보기 (`{base}/list`·`{base}/get`, POK-251)        |
-| `NEXT_PUBLIC_POSTHOG_KEY`             | 비움                       | 사용 통계(PostHog) 프로젝트 공개 키 — 비면 SDK를 불러오지 않음 (POK-356)        |
-| `NEXT_PUBLIC_POSTHOG_HOST`            | 비움                       | PostHog 수집 주소(운영 `https://us.i.posthog.com`) — 규칙은 `docs/ANALYTICS.md` |
-| `NEXT_PUBLIC_POSTHOG_REPLAY`          | 비움                       | `on`일 때만 세션 녹화(POK-358) — 콘솔 녹화 토글도 켜야 시작                     |
+| 변수                                  | 값(로컬)                   | 용도                                                                                                                                               |
+| ------------------------------------- | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `AUTH_API_URL`                        | `http://localhost:8082`    | auth 서버 — `/api/auth/*` rewrites 프록시 대상                                                                                                     |
+| `CLIP_API_URL`                        | `http://localhost:8081`    | clip 서버 — `/api/clip/*` rewrites 프록시 대상                                                                                                     |
+| `NEXT_PUBLIC_GOOGLE_CLIENT_ID`        | 구글 OAuth 클라이언트 ID   | 로그인 동의 URL 조립 — 백엔드 `GOOGLE_CLIENT_ID`와 같은 값                                                                                         |
+| `NEXT_PUBLIC_MEDIA_STUB_URL`          | 스텁 m3u8 주소             | 플레이어 개발용 정적 세그먼트 ([`infra/compose/stub/`](../infra/compose/stub/))                                                                    |
+| `NEXT_PUBLIC_MEDIA_LIVE_BASE_URL`     | LL-HLS 베이스              | 진짜 미디어 서버 (`{base}/{영상 경로 키}/index.m3u8`, POK-233)                                                                                     |
+| `NEXT_PUBLIC_MEDIA_PLAYBACK_BASE_URL` | 녹화 재생 서버 (비워도 됨) | 끝난 방송 다시보기·편집기 미리보기 (`{base}/list`·`{base}/get`, POK-251)                                                                           |
+| `NEXT_PUBLIC_POSTHOG_KEY`             | 비움                       | 사용 통계(PostHog) 프로젝트 공개 키 — 비면 SDK를 불러오지 않음 (POK-356)                                                                           |
+| `NEXT_PUBLIC_POSTHOG_HOST`            | 비움                       | PostHog 수집 주소(운영 `https://us.i.posthog.com`) — 규칙은 `docs/ANALYTICS.md`                                                                    |
+| `NEXT_PUBLIC_POSTHOG_REPLAY`          | 비움                       | `on`일 때만 세션 녹화(POK-358) — 콘솔 녹화 토글도 켜야 시작                                                                                        |
+| `OBS_PLUGIN_GITHUB_TOKEN`             | 비움                       | 서버 전용(선택). `/api/plugin-release`가 GitHub를 부를 때 쓰는 읽기 토큰 — 비면 비로그인 한도(서버 IP당 시간 60회, 5분 캐시라 12회 이하) (POK-379) |
+| `OBS_PLUGIN_INCLUDE_PRERELEASE`       | 비움                       | 서버 전용. `1`이면 시험판 Release(`-rc.1` …)도 고른다 — dev에서 첫 정식판 전에 확인할 때만, 운영은 비운다 (POK-379)                                |
 
 서버 주소는 **코드에 하드코딩하지 않는다** — env 참조만. env가 없으면 해당 rewrites가
 아예 걸리지 않으므로 백엔드 없이도 **기동·빌드는 된다**. 다만 env가 있는데 백엔드가 안
