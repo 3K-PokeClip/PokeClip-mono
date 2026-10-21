@@ -22,9 +22,9 @@
   margin: 0 0 calc(4 * var(--pc-u));
 }
 
-/* ---------- 연결 상태 배너 (디자인 1m 상단) ----------
-   초록은 "연결됨"에만 쓰는 상태색이라 디자인 값을 그대로 쓴다. */
-.statusBanner {
+/* ---------- 연결 확인 안내 (디자인 1m 상단 배너 자리) ----------
+   웹이 아는 연결 상태가 없어 상태색(초록)을 쓰지 않는다. 규격은 시안 배너 그대로. */
+.guideBanner {
   display: flex;
   align-items: center;
   gap: calc(14 * var(--pc-u));
@@ -34,12 +34,7 @@
   background: var(--pc-color-bg-surface);
 }
 
-.statusBanner[data-connected='true'] {
-  border-color: rgb(61 191 127 / 0.35);
-  background: rgb(61 191 127 / 0.05);
-}
-
-.statusIcon {
+.guideIcon {
   width: calc(42 * var(--pc-u));
   height: calc(42 * var(--pc-u));
   flex: none;
@@ -51,31 +46,22 @@
   color: var(--pc-color-text-muted);
 }
 
-.statusBanner[data-connected='true'] .statusIcon {
-  color: #3dbf7f;
-}
-
-.statusBody {
+.guideBody {
   flex: 1;
   min-width: 0;
   line-height: 1.4;
 }
 
-.statusTitleRow {
-  display: flex;
-  align-items: center;
-  gap: calc(8 * var(--pc-u));
-}
-
-.statusName {
+.guideTitle {
   font-size: calc(13.5 * var(--pc-u));
   font-weight: 700;
+  margin: 0;
 }
 
-.statusMeta {
+.guideDesc {
   font-size: calc(11.5 * var(--pc-u));
   color: var(--pc-color-text-muted);
-  margin-top: calc(2 * var(--pc-u));
+  margin: calc(2 * var(--pc-u)) 0 0;
 }
 
 /* ---------- 연동 코드 ---------- */
@@ -164,7 +150,7 @@
   height: calc(16 * var(--pc-u));
 }
 
-.statusIcon svg {
+.guideIcon svg {
   width: calc(20 * var(--pc-u));
   height: calc(20 * var(--pc-u));
 }

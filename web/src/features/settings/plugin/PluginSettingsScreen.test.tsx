@@ -62,13 +62,15 @@ afterEach(() => {
 });
 
 describe('PluginSettingsScreen', () => {
-  it('디자인 1m의 블록 세 개를 렌더하고 발급 상태를 서버에서 읽는다', async () => {
+  it('디자인 1m의 블록을 렌더하고 발급 상태를 서버에서 읽는다', async () => {
     stubStreamKeyFetch();
     renderWithProviders(<PluginSettingsScreen />);
 
-    expect(screen.getByRole('region', { name: '플러그인 연결 상태' })).toHaveTextContent(
-      '연결 안 됨',
-    );
+    const guide = screen.getByRole('region', { name: '연결 상태는 OBS에서 확인해 주세요' });
+    expect(guide).toHaveTextContent('도킹 › PokeClip');
+    // 웹은 플러그인 연결 상태를 모른다 — 상태 배지도 「연결 진단」 버튼도 없다(ADR-077 결정 4)
+    expect(guide).not.toHaveTextContent(/연결됨|연결 안 됨/);
+    expect(screen.queryByRole('button', { name: '연결 진단' })).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { name: '연동 코드' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '플러그인 다운로드' })).toBeInTheDocument();
     // 라벨은 "최초 발급일" — 서버가 주는 시각이 키 생성일뿐이라 재발급 후에도 참말이다 (리뷰 #74)
@@ -140,6 +142,18 @@ describe('PluginSettingsScreen', () => {
     expect(await screen.findByText('KQ4M-7X2P')).toBeInTheDocument();
     expect(callsTo(spy, '/api/stream-keys/pairing-codes')).toHaveLength(1);
     expect(useOnboardingStore.getState().pluginLinked).toBe(true);
+  });
+
+  it('코드를 발급해도 연결됐다고 말하지 않는다 — 발급은 OBS에 넣었다는 증거가 아니다', async () => {
+    stubStreamKeyFetch({ issued: false });
+    renderWithProviders(<PluginSettingsScreen />);
+    const guide = screen.getByRole('region', { name: '연결 상태는 OBS에서 확인해 주세요' });
+
+    fireEvent.click(await screen.findByRole('button', { name: '코드 발급' }));
+    fireEvent.click(await screen.findByRole('button', { name: '확인했어요' }));
+
+    expect(await screen.findByText(/코드가 발급되어 있어요/)).toBeInTheDocument();
+    expect(guide).not.toHaveTextContent(/연결됨|연결 안 됨/);
   });
 
   it('상태 조회를 한 번도 못 읽으면 미발급이 아니라 오류·다시 시도를 보여준다 (리뷰 #73)', async () => {
