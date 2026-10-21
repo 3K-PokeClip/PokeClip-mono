@@ -32,9 +32,6 @@ export interface PluginRelease {
   prerelease: boolean;
   publishedAt: string;
   releaseUrl: string;
-  /** 그 판의 obs-plugin/README.md 「설치」 절 — 릴리스 노트가 거는 곳과 같다 */
-  guideUrl: string;
-  checksumsUrl?: string;
   /** 빠진 파일은 키가 없다 — 다른 판의 파일로 채우지 않는다 */
   assets: Partial<Record<PluginAssetKind, PluginReleaseAsset>>;
 }

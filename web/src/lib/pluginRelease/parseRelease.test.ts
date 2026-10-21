@@ -48,7 +48,7 @@ describe('selectPluginRelease: 웹이 내보일 플러그인 Release 고르기',
     expect(() => selectPluginRelease({ message: 'Not Found' })).toThrow();
   });
 
-  it('정식판 하나를 파일 셋·체크섬·안내 주소까지 정리한다', () => {
+  it('정식판 하나를 설치 파일 셋으로 정리하고, SHA256SUMS 같은 다른 자산은 무시한다', () => {
     const tag = 'obs-plugin-v0.2.0';
     const picked = selectPluginRelease([release(tag)]);
     expect(picked).toMatchObject({
@@ -56,9 +56,8 @@ describe('selectPluginRelease: 웹이 내보일 플러그인 Release 고르기',
       tag,
       prerelease: false,
       releaseUrl: `https://github.com/3K-PokeClip/PokeClip-mono/releases/tag/${tag}`,
-      guideUrl: `https://github.com/3K-PokeClip/PokeClip-mono/blob/${tag}/obs-plugin/README.md#설치`,
-      checksumsUrl: `${REPO_DL}/${tag}/SHA256SUMS.txt`,
     });
+    expect(Object.keys(picked?.assets ?? {}).sort()).toEqual(['installer', 'pkg', 'portable']);
     expect(picked?.assets.installer?.url).toBe(
       `${REPO_DL}/${tag}/pokeclip-obs-0.2.0-windows-x64-installer.exe`,
     );
@@ -140,7 +139,7 @@ describe('selectPluginRelease: 웹이 내보일 플러그인 Release 고르기',
     }
   });
 
-  it('일부 파일만 빠지면 그 칸만 비고, 체크섬이 없으면 체크섬 주소만 없다', () => {
+  it('일부 파일만 빠지면 그 칸만 빈다', () => {
     const tag = 'obs-plugin-v0.2.0';
     const picked = selectPluginRelease([
       release(tag, { assets: [asset(tag, 'pokeclip-obs-0.2.0-macos-universal.pkg')] }),
@@ -148,7 +147,6 @@ describe('selectPluginRelease: 웹이 내보일 플러그인 Release 고르기',
     expect(picked?.assets.pkg).toBeDefined();
     expect(picked?.assets.installer).toBeUndefined();
     expect(picked?.assets.portable).toBeUndefined();
-    expect(picked?.checksumsUrl).toBeUndefined();
   });
 
   it('설치 파일이 하나도 없는 Release는 건너뛰고 다음 후보를 고른다', () => {

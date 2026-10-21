@@ -6,7 +6,7 @@ import styles from './PluginSettingsScreen.module.css';
 
 // 디자인 1m 하단 배너 (POK-379) — 최신 설치 파일 정보의 네 상태를 그린다.
 // 받을 게 없으면 눌리지 않는 버튼을 두지 않고 문장만 둔다(LinkButton 규칙: 갈 곳이 없으면 텍스트).
-// 시안 문구의 「연동 가이드」는 갈 곳이 없어 뺐다 — 설치 안내는 다운로드 창의 링크가 맡는다.
+// 시안 문구의 「연동 가이드」는 갈 곳이 없어 뺐다 — 설치 순서는 다운로드 창이 보여 준다.
 const TEXT: Record<PluginReleaseViewState['kind'], string> = {
   loading: '다른 PC에 설치하나요? 설치 파일을 받아보세요.',
   ready: '다른 PC에 설치하나요? 설치 파일을 받아보세요.',

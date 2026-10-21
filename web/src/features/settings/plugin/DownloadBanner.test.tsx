@@ -11,8 +11,6 @@ const RELEASE: PluginRelease = {
   prerelease: false,
   publishedAt: '2026-10-22T03:00:00Z',
   releaseUrl: `${RELEASES_PAGE_URL}/tag/obs-plugin-v0.2.0`,
-  guideUrl:
-    'https://github.com/3K-PokeClip/PokeClip-mono/blob/obs-plugin-v0.2.0/obs-plugin/README.md#설치',
   assets: {},
 };
 

@@ -17,7 +17,6 @@ const ASSET_SUFFIX: Record<PluginAssetKind, string> = {
   portable: '-windows-x64.zip',
   pkg: '-macos-universal.pkg',
 };
-const CHECKSUMS_NAME = 'SHA256SUMS.txt';
 
 interface Candidate {
   core: [number, number, number];
@@ -65,14 +64,9 @@ function toCandidate(raw: unknown, includePrerelease: boolean): Candidate | null
   // 이 저장소·이 태그의 다운로드 경로만 받는다 — 다른 곳을 가리키는 주소는 내보이지 않는다
   const downloadPrefix = `https://github.com/${PLUGIN_RELEASE_REPO}/releases/download/${tag}/`;
   const assets: PluginRelease['assets'] = {};
-  let checksumsUrl: string | undefined;
   for (const asset of Array.isArray(raw.assets) ? raw.assets : []) {
     const parsed = toAsset(asset, downloadPrefix);
     if (!parsed) continue;
-    if (parsed.name === CHECKSUMS_NAME) {
-      checksumsUrl = parsed.url;
-      continue;
-    }
     // 파일 이름의 판이 태그의 X.Y.Z와 같아야 한다 — buildspec과 태그가 어긋난 파일을 걸러 낸다
     const kind = (Object.keys(ASSET_SUFFIX) as PluginAssetKind[]).find(
       (k) => parsed.name === `pokeclip-obs-${coreText}${ASSET_SUFFIX[k]}`,
@@ -90,8 +84,6 @@ function toCandidate(raw: unknown, includePrerelease: boolean): Candidate | null
       prerelease,
       publishedAt,
       releaseUrl: `${RELEASES_PAGE_URL}/tag/${tag}`,
-      guideUrl: `https://github.com/${PLUGIN_RELEASE_REPO}/blob/${tag}/obs-plugin/README.md#설치`,
-      ...(checksumsUrl ? { checksumsUrl } : {}),
       assets,
     },
   };

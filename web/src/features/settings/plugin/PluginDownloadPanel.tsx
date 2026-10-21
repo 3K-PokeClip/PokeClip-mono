@@ -15,7 +15,7 @@ import styles from './PluginSettingsScreen.module.css';
 
 // OS별 설치 파일 받기 (POK-379) — 다운로드 창(모달)의 본문. 같은 조각을 다른 배치(카드·공개 페이지)에도 꽂는다.
 // 파일 링크는 target 없이 그대로 연다: GitHub가 Content-Disposition: attachment로 주므로 페이지가 바뀌지 않는다
-// (2026-10-21 실측). 새 창은 Release·체크섬·설치 안내 같은 「페이지」 링크에만 쓴다.
+// (2026-10-21 실측). 새 창은 「모든 버전 보기」 같은 페이지 링크에만 쓴다.
 // 「설치됨·연결됨」은 그리지 않는다 — 받았는지·깔았는지 웹은 모른다(POK-377).
 
 const OS_LABEL: Record<PluginOs, string> = { windows: 'Windows', macos: 'macOS' };
@@ -93,20 +93,16 @@ function OsPanel({ os, release }: { os: PluginOs; release: PluginRelease }) {
         <p className={styles.downloadMissing}>{OS_LABEL[os]} 설치 파일은 지금 받을 수 없어요.</p>
       )}
 
-      <div className={styles.downloadLinks}>
-        {portable ? (
+      {portable ? (
+        <div className={styles.downloadLinks}>
           <a
             href={portable.url}
             onClick={() => track('plugin_download_clicked', { os, kind: 'portable' })}
           >
             포터블 OBS용 zip
           </a>
-        ) : null}
-        {release.checksumsUrl ? (
-          <ExternalPageLink href={release.checksumsUrl}>SHA256 체크섬</ExternalPageLink>
-        ) : null}
-        <ExternalPageLink href={release.guideUrl}>설치 안내</ExternalPageLink>
-      </div>
+        </div>
+      ) : null}
 
       {/* flex 자식은 아이콘·span 둘뿐 — 텍스트 노드를 직접 두면 줄이 갈라진다(.issueWarning 규칙) */}
       <div className={styles.issueWarning}>
@@ -127,7 +123,7 @@ function OsPanel({ os, release }: { os: PluginOs; release: PluginRelease }) {
       <ol className={styles.downloadSteps}>
         <li>OBS를 끕니다</li>
         <li>{os === 'windows' ? '받은 파일을 실행해 설치합니다' : '받은 pkg를 열어 설치합니다'}</li>
-        <li>OBS를 열고 「도킹 › PokeClip」에 이 화면의 연동 코드를 넣습니다</li>
+        <li>OBS를 열고 「독 › PokeClip」에 이 화면의 연동 코드를 넣습니다</li>
       </ol>
     </div>
   );

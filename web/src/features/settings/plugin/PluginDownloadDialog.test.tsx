@@ -14,9 +14,6 @@ const RELEASE: PluginRelease = {
   prerelease: false,
   publishedAt: '2026-10-22T03:00:00Z',
   releaseUrl: 'https://github.com/3K-PokeClip/PokeClip-mono/releases/tag/obs-plugin-v0.2.0',
-  guideUrl:
-    'https://github.com/3K-PokeClip/PokeClip-mono/blob/obs-plugin-v0.2.0/obs-plugin/README.md#설치',
-  checksumsUrl: `${DL}/SHA256SUMS.txt`,
   assets: {
     installer: {
       name: 'i.exe',
@@ -58,7 +55,7 @@ describe('PluginDownloadDialog: OS별 설치 파일 받기', () => {
     expect(screen.queryByRole('link', { name: '포터블 OBS용 zip' })).not.toBeInTheDocument();
   });
 
-  it('Windows는 exe가 주 버튼이고 포터블 zip·체크섬·설치 안내가 따라온다', () => {
+  it('Windows는 exe가 주 버튼이고 포터블 zip이 따라온다 — 체크섬·설치 안내 링크는 두지 않는다', () => {
     open(RELEASE, 'windows');
     const primary = screen.getByRole('link', { name: /Windows 설치 파일, 버전 0\.2\.0/ });
     // 파일은 같은 탭에서 받는다 — GitHub가 attachment로 줘서 페이지가 바뀌지 않는다
@@ -68,13 +65,13 @@ describe('PluginDownloadDialog: OS별 설치 파일 받기', () => {
       'href',
       RELEASE.assets.portable!.url,
     );
-    for (const name of [/SHA256 체크섬/, /설치 안내/, /모든 버전 보기/]) {
-      const page = screen.getByRole('link', { name });
-      expect(page).toHaveAttribute('target', '_blank');
-      expect(page).toHaveAttribute('rel', 'noopener noreferrer');
-      expect(page).toHaveTextContent('(새 창)');
-    }
+    expect(screen.queryByRole('link', { name: /체크섬|설치 안내/ })).not.toBeInTheDocument();
+    const allVersions = screen.getByRole('link', { name: /모든 버전 보기/ });
+    expect(allVersions).toHaveAttribute('target', '_blank');
+    expect(allVersions).toHaveAttribute('rel', 'noopener noreferrer');
+    expect(allVersions).toHaveTextContent('(새 창)');
     expect(screen.getByText(/위험한 파일 다운로드/)).toBeInTheDocument();
+    expect(screen.getByText(/「독 › PokeClip」/)).toBeInTheDocument();
   });
 
   it('OS를 모르면 Windows 탭이고, 다른 탭으로 직접 옮길 수 있다', () => {

@@ -92,7 +92,7 @@ Chrome이 아티팩트를 「위험한 파일」로 막으면 `gh run download <
 3. 워크플로가 ① 태그의 `X.Y.Z` = `buildspec.json` ② 태그 커밋이 origin/develop·main에 있음을 확인하고, CI와 같은 잡으로 빌드한 뒤 draft Release에 자산·`SHA256SUMS.txt`를 올리고 개수를 확인해 공개한다.
 4. 접미사(`-test.1`·`-rc.1` …)가 있으면 prerelease다. 이미 공개된 Release는 덮어쓰지 않는다 — 다시 내려면 접미사나 판 번호를 바꾼다. 실패로 draft만 남았으면 같은 태그로 실행을 다시 돌리면 draft를 지우고 새로 만든다.
 5. 시험 Release는 `gh release delete <태그> --repo 3K-PokeClip/PokeClip-mono --cleanup-tag --yes`로 태그째 지운다.
-6. 웹 설정 → 플러그인의 다운로드 창(POK-379)이 이 Release를 읽는다 — `obs-plugin-v` 태그의 **정식판** 중 판 번호가 가장 높은 것, 그 안에서 위 세 이름(`pokeclip-obs-<태그의 X.Y.Z>-windows-x64-installer.exe`·`-windows-x64.zip`·`-macos-universal.pkg`)과 `SHA256SUMS.txt`만 고른다. 태그 모양이나 파일 이름을 바꾸면 웹 배너가 「아직 없음」으로 떨어지니 `web/src/lib/pluginRelease/parseRelease.ts`도 같이 고친다. 공개 뒤 웹에 보이기까지 최대 10분쯤(서버 캐시 5분 + 화면 5분). 급히 내리려면 `gh release edit <태그> --prerelease`.
+6. 웹 설정 → 플러그인의 다운로드 창(POK-379)이 이 Release를 읽는다 — `obs-plugin-v` 태그의 **정식판** 중 판 번호가 가장 높은 것, 그 안에서 위 세 이름(`pokeclip-obs-<태그의 X.Y.Z>-windows-x64-installer.exe`·`-windows-x64.zip`·`-macos-universal.pkg`)만 고른다. 태그 모양이나 파일 이름을 바꾸면 웹 배너가 「아직 없음」으로 떨어지니 `web/src/lib/pluginRelease/parseRelease.ts`도 같이 고친다. 공개 뒤 웹에 보이기까지 최대 10분쯤(서버 캐시 5분 + 화면 5분). 급히 내리려면 `gh release edit <태그> --prerelease`.
 
 로컬에서 템플릿 경로를 쓰려면 Windows는 Visual Studio 2022 + `cmake --preset windows-x64`, macOS는 **Xcode 16+** + `cmake --preset macos`다 (buildspec.json이 OBS 32.2.1 소스·obs-deps·Qt6를 `.deps/`에 받는다).
 
