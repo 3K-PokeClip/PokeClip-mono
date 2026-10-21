@@ -2,7 +2,7 @@ import { fireEvent, screen, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { renderWithProviders } from '@/test/testProviders';
 import { HighlightCardPanel } from './HighlightCardPanel';
-import type { LiveHighlight, LiveStream } from './useLiveMockState';
+import type { CardListStatus, LiveHighlight, LiveStream } from './useLiveMockState';
 
 const STREAM: LiveStream = {
   title: '새벽 랭크 올리기',
@@ -30,7 +30,7 @@ function highlight(id: number, overrides: Partial<LiveHighlight> = {}): LiveHigh
 function renderPanel(props: {
   detectionPaused: boolean;
   ended?: boolean;
-  loaded?: boolean;
+  listStatus?: CardListStatus;
   highlights?: LiveHighlight[];
   hiddenHighlights?: LiveHighlight[];
 }) {
@@ -40,7 +40,7 @@ function renderPanel(props: {
       stream={STREAM}
       visuals={{}}
       pendingLabel={null}
-      loaded
+      listStatus="loaded"
       onSeek={() => undefined}
       {...props}
     />,
@@ -72,7 +72,7 @@ describe('HighlightCardPanel: 빈 카드 줄', () => {
   });
 
   it('목록을 받기 전에는 없다고 하지 않는다: 모르는 것은 없는 것이 아니다', () => {
-    renderPanel({ detectionPaused: false, loaded: false });
+    renderPanel({ detectionPaused: false, listStatus: 'loading' });
     const status = screen.getByRole('status');
     expect(status).toHaveTextContent('카드를 불러오는 중…');
     // 도는 표시가 있되 낭독은 문장 하나다: Spinner의 status는 숨겨 둔다
@@ -81,6 +81,26 @@ describe('HighlightCardPanel: 빈 카드 줄', () => {
       'true',
     );
     expect(screen.queryByText(/하이라이트가 없어요/)).not.toBeInTheDocument();
+  });
+
+  it('받기 전에 읽기가 실패하면 불러오는 중이라고 가리지 않고 못 읽었다고 말한다', () => {
+    renderPanel({ detectionPaused: false, listStatus: 'failed' });
+    expect(screen.getByRole('status')).toHaveTextContent(
+      '카드를 불러오지 못했어요. 다시 시도하는 중…',
+    );
+    expect(screen.queryByText(/하이라이트가 없어요/)).not.toBeInTheDocument();
+  });
+
+  it('카드가 0장이어도 「수동」 칸에서는 자동 카드가 쌓인다고 하지 않는다', () => {
+    renderPanel({ detectionPaused: false });
+
+    fireEvent.click(screen.getByRole('button', { name: '수동 0' }));
+    expect(screen.getByRole('status')).toHaveTextContent('수동으로 남긴 카드가 없어요.');
+    expect(screen.queryByText(/쌓여요/)).not.toBeInTheDocument();
+
+    // 「자동」 칸은 자동 카드가 쌓이는 곳이라 빈 상태 카드 그대로다
+    fireEvent.click(screen.getByRole('button', { name: '자동 0' }));
+    expect(screen.getByText('아직 감지된 하이라이트가 없어요')).toBeInTheDocument();
   });
 
   it('끝난 방송에는 「아직」이라고 하지 않는다: 기다려도 더 생기지 않는다', () => {

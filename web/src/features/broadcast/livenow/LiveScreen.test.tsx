@@ -1216,10 +1216,10 @@ describe('LiveScreen: 카드가 없을 때', () => {
     expect(screen.getByText('이 방송에서 감지된 하이라이트가 없어요')).toBeInTheDocument();
   });
 
-  it('카드 목록을 못 읽는 동안에는 없다고 하지 않고, 읽히면 그때 말한다', async () => {
+  it('카드 목록을 못 읽는 동안에는 없다고 하지 않고 못 읽었다고 말하며, 읽히면 그때 없다고 말한다', async () => {
     server.cards = 'fail';
     await renderLive();
-    expect(screen.getByText('카드를 불러오는 중…')).toBeInTheDocument();
+    expect(screen.getByText('카드를 불러오지 못했어요. 다시 시도하는 중…')).toBeInTheDocument();
     expect(screen.queryByText(/하이라이트가 없어요/)).not.toBeInTheDocument();
 
     server.cards = 'none';
