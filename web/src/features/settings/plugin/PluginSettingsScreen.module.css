@@ -128,6 +128,25 @@
   max-width: calc(480 * var(--pc-u));
 }
 
+/* 제목 줄 — 제목 왼쪽, 닫기 X 오른쪽. 제목 아래 여백(DS)은 줄이 대신 갖는다 */
+.downloadHead {
+  display: flex;
+  align-items: center;
+  gap: calc(8 * var(--pc-u));
+  margin-bottom: var(--pc-space-2);
+}
+
+/* DS .title의 아래 여백을 지우려면 한 단계 높은 특이도가 필요하다(ProfilePhotoDialog와 같은 수) */
+.downloadTitle.downloadTitle {
+  margin: 0;
+}
+
+/* X 아이콘이 본문 오른쪽 끝선에 맞게 버튼 안쪽 여백만큼 당긴다 */
+.downloadCloseX {
+  margin-left: auto;
+  margin-right: calc(-6 * var(--pc-u));
+}
+
 .downloadPanel {
   margin-top: calc(14 * var(--pc-u));
 }
@@ -197,12 +216,6 @@
   font-size: calc(11 * var(--pc-u));
   color: var(--pc-color-text-muted);
 }
-
-/* 「닫기」 행 — 버전 줄·「모든 버전 보기」와 붙지 않게 띄운다(.confirmActions는 위 여백이 없다) */
-.downloadClose {
-  margin-top: calc(22 * var(--pc-u));
-}
-
 /* ---------- 연동 코드 실상태 (POK-102) ---------- */
 
 /* 디자인 ②-1 + 폭 유지: 요청 중에도 버튼 폭은 라벨 폭 그대로다 — 라벨은 자리만 지키게
