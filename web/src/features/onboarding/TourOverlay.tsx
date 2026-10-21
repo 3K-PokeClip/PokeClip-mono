@@ -14,6 +14,7 @@ import {
   tooltipPosition,
   type Rect,
 } from './tourSteps';
+import { hasTargetInDom, isHomePending } from './tourDom';
 import styles from './Onboarding.module.css';
 
 // 코치마크 투어 오버레이 (디자인 1a ②·④ 규칙).
@@ -31,20 +32,23 @@ function trackTourFinished(outcome: 'completed' | 'skipped' | 'auto') {
   track('onboarding_tour_finished', { outcome });
 }
 
-function hasTargetInDom(targetId: string): boolean {
-  return document.querySelector(`[data-tour-id="${targetId}"]`) !== null;
-}
-
-/** 홈이 아직 첫 응답을 기다리는 중 — 큰 칸 스켈레톤이 data-tour-pending을 단다. 그동안 뒤 단계 타깃이 없는 것은 정상이다 */
-function isHomePending(): boolean {
-  return document.querySelector('[data-tour-pending]') !== null;
-}
-
 function sameRect(a: Rect, b: Rect): boolean {
   return a.top === b.top && a.left === b.left && a.width === b.width && a.height === b.height;
 }
 
-export function TourOverlay({ stepIndex }: { stepIndex: number }) {
+/**
+ * @param visible 지금 홈에서 보일 단계(TOUR_STEPS 인덱스) — 「n/전체」·점·「완료」가 이것으로 센다
+ * @param pending 홈이 아직 첫 응답을 기다리는 중이라 뒤 단계가 몇 개일지 모른다
+ */
+export function TourOverlay({
+  stepIndex,
+  visible,
+  pending,
+}: {
+  stepIndex: number;
+  visible: readonly number[];
+  pending: boolean;
+}) {
   const router = useRouter();
   const setTourStep = useOnboardingStore((s) => s.setTourStep);
   const skipTour = useOnboardingStore((s) => s.skipTour);
@@ -56,9 +60,6 @@ export function TourOverlay({ stepIndex }: { stepIndex: number }) {
   const cardRef = useRef<HTMLDivElement>(null);
   const [spot, setSpot] = useState<Rect | null>(null);
   const [cardPos, setCardPos] = useState<{ top: number; left: number } | null>(null);
-  // 측정이 함께 갱신한다 — 다음에 보일 단계가 있는가 · 홈이 아직 읽는 중인가. 「다음/완료」 표기와 잠금이 이것을 본다
-  const [hasNext, setHasNext] = useState(true);
-  const [pending, setPending] = useState(false);
 
   useScrollLock(true);
 
@@ -67,8 +68,6 @@ export function TourOverlay({ stepIndex }: { stepIndex: number }) {
   // spot이 서 있느냐가 곧 스포트라이트로 그리느냐다.
   const measure = useCallback(() => {
     const homePending = isHomePending();
-    setPending(homePending);
-    setHasNext(nextVisibleStep(stepIndex, 1, hasTargetInDom) !== null);
     const el =
       step?.kind === 'spotlight' && step.targetId
         ? document.querySelector(`[data-tour-id="${step.targetId}"]`)
@@ -188,6 +187,15 @@ export function TourOverlay({ stepIndex }: { stepIndex: number }) {
   };
 
   const done = stepDone(step.id, { channelLinked, pluginLinked });
+  // 번호·점은 TOUR_STEPS 6개가 아니라 지금 보일 단계로 센다 — 막 가입 계정이 「4/6」에서 끝나 「왜 벌써 끝나지」가
+  // 되지 않게(POK-378). 홈을 읽는 중이면 전체 수를 아직 모르니 번호만 보인다
+  const shown = visible.includes(stepIndex)
+    ? visible
+    : [...visible, stepIndex].sort((a, b) => a - b);
+  const position = pending
+    ? `${shown.indexOf(stepIndex) + 1}`
+    : `${shown.indexOf(stepIndex) + 1}/${shown.length}`;
+  const hasNext = visible.some((i) => i > stepIndex);
   // 「완료」는 단계 번호가 아니라 실제로 다음에 보일 단계가 없을 때 — 기록 없는 계정은 4단계가 마지막이다(리뷰 #299).
   // 홈을 읽는 중이라 아직 모르면 「다음」을 잠근다
   const last = !hasNext && !pending;
@@ -202,7 +210,7 @@ export function TourOverlay({ stepIndex }: { stepIndex: number }) {
         tabIndex={-1}
         role="dialog"
         aria-modal="true"
-        aria-label={`시작 가이드 ${stepIndex + 1}/${TOUR_STEPS.length} — ${step.title}`}
+        aria-label={`시작 가이드 ${position} — ${step.title}`}
         className={
           spotlight
             ? `${styles.tourCard} ${styles.spotCard}`
@@ -214,7 +222,7 @@ export function TourOverlay({ stepIndex }: { stepIndex: number }) {
       >
         <div className={styles.cardTitleRow}>
           <Badge tone="point" variant="soft" size="sm">
-            {stepIndex + 1}/{TOUR_STEPS.length}
+            {position}
           </Badge>
           <span className={styles.cardTitle}>{step.title}</span>
           {/* DoD 체크 표면 — 채널 연동 후 홈 복귀 시 1단계 카드에 "완료"가 보인다 */}
@@ -228,9 +236,10 @@ export function TourOverlay({ stepIndex }: { stepIndex: number }) {
         <p className={styles.cardBody}>{step.body}</p>
         <div className={styles.cardFooter}>
           <span className={styles.dots} aria-hidden>
-            {TOUR_STEPS.map((s, i) => (
-              <span key={s.id} className={i === stepIndex ? styles.dotActive : styles.dot} />
-            ))}
+            {!pending &&
+              shown.map((i) => (
+                <span key={i} className={i === stepIndex ? styles.dotActive : styles.dot} />
+              ))}
           </span>
           <span className={styles.cardActions}>
             <Button variant="ghost" size="sm" onClick={skip}>

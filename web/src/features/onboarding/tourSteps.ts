@@ -85,7 +85,7 @@ export const TOUR_STEPS: readonly TourStep[] = [
   },
 ];
 
-/** 웰컴 다이얼로그의 6단계 리스트 (투어 카드 제목과 다르다). */
+/** 웰컴 다이얼로그의 단계 리스트 (투어 카드 제목과 다르다) — 홈에 보이는 단계만 추려 보인다(POK-378). */
 export const WELCOME_STEPS: readonly { id: TourStepId; label: string }[] = [
   { id: 'channel', label: '채널 연동하기' },
   { id: 'plugin', label: 'OBS 플러그인 설치' },
