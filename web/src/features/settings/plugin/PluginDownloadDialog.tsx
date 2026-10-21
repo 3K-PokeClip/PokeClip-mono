@@ -26,7 +26,7 @@ export function PluginDownloadDialog({
           설치할 PC의 운영체제를 고르세요. 지금 쓰는 PC가 아니어도 돼요.
         </Dialog.Description>
         <PluginDownloadPanel release={release} detectedOs={detectedOs} />
-        <div className={styles.confirmActions}>
+        <div className={`${styles.confirmActions} ${styles.downloadClose}`}>
           <Dialog.Close>
             <Button variant="ghost" size="md">
               닫기

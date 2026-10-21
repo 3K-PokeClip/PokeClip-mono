@@ -198,6 +198,11 @@
   color: var(--pc-color-text-muted);
 }
 
+/* 「닫기」 행 — 버전 줄·「모든 버전 보기」와 붙지 않게 띄운다(.confirmActions는 위 여백이 없다) */
+.downloadClose {
+  margin-top: calc(22 * var(--pc-u));
+}
+
 /* ---------- 연동 코드 실상태 (POK-102) ---------- */
 
 /* 디자인 ②-1 + 폭 유지: 요청 중에도 버튼 폭은 라벨 폭 그대로다 — 라벨은 자리만 지키게
