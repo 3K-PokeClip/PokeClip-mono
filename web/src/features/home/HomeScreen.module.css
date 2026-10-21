@@ -695,6 +695,14 @@
   width: calc(84 * var(--pc-u));
 }
 
+/* 할 일은 끝났지만 연결은 웹이 모르는 줄(OBS) — 강조색 없이 */
+.connReady {
+  flex: none;
+  font-size: calc(11.5 * var(--pc-u));
+  font-weight: 600;
+  color: var(--pc-color-text-secondary);
+}
+
 /* ---------- 포키의 팁 (POK-378) ----------
    말풍선 + 카드 아래 가장자리에서 고개를 내민 포키. Card outline과 같은 테두리 규격을 쓴다 */
 

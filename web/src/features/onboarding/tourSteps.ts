@@ -81,7 +81,7 @@ export const TOUR_STEPS: readonly TourStep[] = [
     kind: 'spotlight',
     targetId: TOUR_TARGET.homeAside,
     title: '연결 상태 · 포키의 팁',
-    body: '방송 채널·OBS·유튜브 연결이 끊기면 여기서 바로 다시 연결해요. 팁은 들어올 때마다 바뀌어요.',
+    body: '방송 채널·유튜브 연결이 끊기면 여기서 바로 다시 연결해요. 팁은 들어올 때마다 바뀌어요.',
   },
 ];
 

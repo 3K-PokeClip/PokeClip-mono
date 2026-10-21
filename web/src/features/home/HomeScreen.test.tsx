@@ -370,6 +370,23 @@ describe('HomeScreen', () => {
     expect(within(aside).getByText('확인 필요')).toBeInTheDocument();
   });
 
+  it('OBS 플러그인은 코드를 발급했어도 「연결됨」이라 하지 않는다 — 웹은 연결 상태를 모른다(#298 계약)', async () => {
+    serve({
+      past: [pastRow('past-1', new Date(Date.now() - 86_400_000))],
+      chzzk: { linked: true, channelName: '재환의 방송', status: 'ACTIVE' },
+      youtube: { linked: true, channelName: '재환 클립', status: 'ACTIVE' },
+      streamKey: { issued: true },
+    });
+    render(<HomeScreen />);
+
+    const aside = await screen.findByRole('complementary', { name: '연결 상태·팁' });
+    const plugin = within(aside).getAllByRole('listitem')[1]!;
+    await within(plugin).findByText('코드 발급됨');
+    expect(plugin).toHaveTextContent('연결 확인은 OBS 독에서 해요');
+    expect(plugin).not.toHaveTextContent('연결됨');
+    expect(within(aside).getByText('준비 완료')).toBeInTheDocument();
+  });
+
   it('연동 상태를 못 읽은 줄은 「확인 중」이고 버튼을 내밀지 않는다', async () => {
     vi.stubGlobal(
       'fetch',
