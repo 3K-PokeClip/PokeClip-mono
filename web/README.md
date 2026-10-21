@@ -99,6 +99,8 @@ web/                     # 단일 Next.js 앱 (App Router + TanStack Query + Zus
 
 **계정 화면 계약.** 표시 이름·프로필 사진은 auth 서버에 저장된다(`PATCH /api/auth/me` · `PUT /api/auth/me/photo`, POK-208 ← 서버 POK-207). 두 응답이 `GET /api/auth/me`와 같은 모양이라 `['auth','me']` 캐시를 통째로 덮는다 — 헤더·사이드바가 재조회 없이 따라온다. **로컬·CI에서 사진 업로드는 503(`PHOTO_STORAGE_DISABLED`)이 정상이다** — auth의 `PROFILE_PHOTO_*` env가 비면 사진 기능만 꺼진다(`services/README.md` 「사진 창고 다섯」). 배선 버그가 아니다. 사진 주소(`profileImageUrl`)는 서버가 준 것을 그대로 쓴다 — `token` 쿼리가 서명값이라 조립하지 않으며, `null`이면 이니셜을 그린다. 사진 모달의 단계는 시안 1p(선택→업로드→크롭)와 달리 **선택→크롭→업로드**다 — 서버가 잘라낸 최종 그림만 받는다.
 
+**플러그인 화면 계약.** 웹은 플러그인의 지금 연결 상태를 모른다 — 플러그인은 대기 중 서버에 신호를 보내지 않고, 웹은 OBS 안 루프백 독에 닿을 수 없다. 그래서 시안 1m 상단의 상태 배너·「연결 진단」 버튼은 두지 않는다 — 코드 입력 결과는 OBS PokeClip 독이 보여 준다. `GET /api/stream-keys`의 `issued`는 **키 발급 여부이지 연동 여부가 아니다** — 키는 첫 코드 발급 때 생긴다(서버 `ensureKey`). 웹에서 실시간 상태를 보이려면 플러그인 → 서버 신호 계약부터 새로 만들어야 한다(4B·4D 수신부 뒤로 보류).
+
 **clip 서버 연결 (POK-251).** 홈·라이브·지난 방송·편집기·보관함은 clip 창구에서 실제 값을 받는다. 요청은 전부
 로그인 세션의 `apiFetch`를 거친다(Bearer·401 회전) — clip 거절 사유(`{error, field}`)는 `ApiError.code`·`field`로 오고,
 `src/api/clipEditor.ts`가 `ClipApiError`로 옮긴다(예: 409 `source_not_ready`). 규칙 넷:
