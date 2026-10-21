@@ -402,6 +402,8 @@ const server = vi.hoisted(() => ({
   liveReplayFail: false,
   /** 라이브 차트(최근 10분)가 칸마다 1건이다: 실제 채팅(10초마다 한 줄)보다 훨씬 적게 세어 300줄이 차는 칸을 못 찾는다 */
   liveChartSparse: false,
+  /** 카드 목록의 답: 'all'은 CARDS, 'none'은 빈 목록, 'fail'은 503 */
+  cards: 'all' as 'all' | 'none' | 'fail',
 }));
 
 /** 지난 방송(2시간 반) — 수집기 1시간 창을 넘는다 */
@@ -578,9 +580,10 @@ function handle(url: string, init?: RequestInit): Response | Promise<Response> {
       ? server.listGate.then(() => listResponse(u))
       : listResponse(u);
   if (path.endsWith('/jump-cards')) {
+    if (server.cards === 'fail') return jsonResponse(503, { error: 'unavailable' });
     // 숨긴 카드는 includeHidden일 때만 hidden:true로 온다(서버 기본은 뺀다)
     const withHidden = u.searchParams.get('includeHidden') === 'true';
-    const cards = CARDS.map((c) => ({
+    const cards = (server.cards === 'none' ? [] : CARDS).map((c) => ({
       ...c,
       hidden: server.hidden.has(c.id),
       claimedBy: server.released.has(c.id) ? null : c.claimedBy,
@@ -731,6 +734,7 @@ beforeEach(() => {
   server.liveOriginMs = null;
   server.liveReplayFail = false;
   server.liveChartSparse = false;
+  server.cards = 'all';
   hlsFake.pdt = true;
   hlsFake.readyState = 4;
   hlsFake.sliding = false;
@@ -1141,10 +1145,10 @@ describe('LiveScreen — 하이라이트 카드', () => {
     await settle();
     fireEvent.click(screen.getByRole('button', { name: '숨김 1' }));
     expect(screen.getByText('채팅이 튄 순간 #8')).toBeInTheDocument();
-    // 숨긴 카드에는 편집·숨기기가 없고 되돌리기만 있다
+    // 숨긴 카드에는 편집·숨기기가 없고 숨김 해제만 있다
     expect(screen.queryByRole('link', { name: '편집' })).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: '숨김 되돌리기' }));
+    fireEvent.click(screen.getByRole('button', { name: '숨김 해제' }));
     await settle();
     expect(
       fetchSpy.mock.calls.some(
@@ -1170,7 +1174,7 @@ describe('LiveScreen — 하이라이트 카드', () => {
 });
 
 describe('LiveScreen — 끝난 방송의 카드 동작 (POK-338)', () => {
-  it('놓기·숨김 되돌리기는 다음 목록 주기를 기다리지 않고 바로 반영된다', async () => {
+  it('놓기·숨김 해제는 다음 목록 주기를 기다리지 않고 바로 반영된다', async () => {
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
     await renderLive();
 
@@ -1182,7 +1186,7 @@ describe('LiveScreen — 끝난 방송의 카드 동작 (POK-338)', () => {
     await 숨긴다('중복');
     expect(screen.getByRole('button', { name: '숨김 1' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '숨김 1' }));
-    fireEvent.click(screen.getByRole('button', { name: '숨김 되돌리기' }));
+    fireEvent.click(screen.getByRole('button', { name: '숨김 해제' }));
     await settle();
     expect(screen.getByRole('button', { name: '숨김 0' })).toBeInTheDocument();
   });
@@ -1194,6 +1198,38 @@ async function 숨긴다(이유: string) {
   fireEvent.click(screen.getByRole('menuitem', { name: 이유 }));
   await settle();
 }
+
+describe('LiveScreen: 카드가 없을 때', () => {
+  it('카드가 하나도 없으면 카드 줄 자리에 아직 없다고 말한다', async () => {
+    server.cards = 'none';
+    await renderLive();
+
+    expect(screen.getByRole('button', { name: '전체 0' })).toBeInTheDocument();
+    expect(screen.getByText('아직 감지된 하이라이트가 없어요')).toBeInTheDocument();
+  });
+
+  it('지난 방송에 카드가 없으면 「아직」이라고 하지 않는다', async () => {
+    server.cards = 'none';
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    await renderLive();
+
+    expect(screen.getByText('이 방송에서 감지된 하이라이트가 없어요')).toBeInTheDocument();
+  });
+
+  it('카드 목록을 못 읽는 동안에는 없다고 하지 않고, 읽히면 그때 말한다', async () => {
+    server.cards = 'fail';
+    await renderLive();
+    expect(screen.getByText('카드를 불러오는 중…')).toBeInTheDocument();
+    expect(screen.queryByText(/하이라이트가 없어요/)).not.toBeInTheDocument();
+
+    server.cards = 'none';
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3_000);
+    });
+    await settle();
+    expect(screen.getByText('아직 감지된 하이라이트가 없어요')).toBeInTheDocument();
+  });
+});
 
 describe('LiveScreen: 라이브 문구', () => {
   it('방송 중에는 라이브 문구 그대로다: 실시간 채팅·실시간 통계·자동 감지 중·그래프 끝 「지금」', async () => {
