@@ -14,7 +14,7 @@ import { useToast } from '@/ui';
 //
 // 모달의 「보관함·구독」 수치는 줄 백엔드가 없다 — 숫자를 지어내지 않고 「준비 중」이라고 적는다.
 // 미결제 차단(?mock=blocked)은 결제 도메인이 없어 개발 환경의 시안 확인용으로만 켜진다.
-// 파일 이름의 Mock 은 그 자리들이 아직 가짜임을 뜻한다(usePluginMockState 선례).
+// 파일 이름의 Mock 은 그 자리들이 아직 가짜임을 뜻한다(옛 usePluginMockState 선례 — POK-377에서 삭제).
 
 /** 시안 1p 탈퇴 모달의 표기값. 보관함·구독 API가 없어 값이 아니라 안내 문구다. */
 export const WITHDRAW_FACTS = {
