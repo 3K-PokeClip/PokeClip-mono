@@ -4,9 +4,7 @@ import com.pokeclip.clip.broadcast.BroadcastRepository;
 import com.pokeclip.clip.delegation.AccessErrors;
 import com.pokeclip.clip.delegation.BroadcastAccessGuard;
 import com.pokeclip.clip.jumpcard.JumpCardErrors.BroadcastNotFoundException;
-import com.pokeclip.clip.jumpcard.JumpCardErrors.ClaimedByOtherException;
 import com.pokeclip.clip.jumpcard.JumpCardErrors.JumpCardNotFoundException;
-import com.pokeclip.clip.jumpcard.JumpCardErrors.NotClaimOwnerException;
 import com.pokeclip.clip.jumpcard.api.HighlightRequest;
 import com.pokeclip.clip.jumpcard.stream.CardStreamRegistry;
 import com.pokeclip.clip.paging.CursorCodec;
@@ -23,7 +21,6 @@ import tools.jackson.databind.ObjectMapper;
 
 import java.util.List;
 import java.util.Map;
-import java.util.function.IntSupplier;
 
 /** 카드를 쓰는 유일한 자리. 쓰기는 전부 네이티브 SQL이라 DB 시계와 순번 트리거를 탄다. */
 @Service
@@ -48,26 +45,23 @@ public class JumpCardService {
 
     private final JumpCardRepository cards;
     private final BroadcastRepository broadcasts;
-    private final JumpCardProperties properties;
     private final ObjectMapper mapper;
     private final CardStreamRegistry registry;
     private final BroadcastAccessGuard guard;
     private final ThumbnailUrls thumbnails;
 
     /**
-     * 🔴 <b>{@code @Transactional} 대신 이것을 쓰는 자리가 넷 있다</b>(집기·놓기·숨기기·되돌리기).
-     * 그 넷은 <b>자격 판정을 트랜잭션 밖에서</b> 끝내야 하는데, 자기 호출은 프록시를 안 타므로
-     * 애너테이션으로는 그 경계를 만들 수 없다. 이유와 실측은 {@link #requireViewableCard} 주석에 있다.
+     * 🔴 <b>열기 문이 {@code @Transactional} 대신 이것을 쓴다.</b> 자격 판정을 트랜잭션 밖에서
+     * 끝내야 하는데, 자기 호출은 프록시를 안 타므로 애너테이션으로는 그 경계를 만들 수 없다. 이유와 실측은 {@link #requireViewableCard} 주석에 있다.
      */
     private final TransactionTemplate transactions;
 
     JumpCardService(JumpCardRepository cards, BroadcastRepository broadcasts,
-                    JumpCardProperties properties, ObjectMapper mapper, CardStreamRegistry registry,
+                    ObjectMapper mapper, CardStreamRegistry registry,
                     BroadcastAccessGuard guard, TransactionTemplate transactions, ThumbnailUrls thumbnails) {
         this.thumbnails = thumbnails;
         this.cards = cards;
         this.broadcasts = broadcasts;
-        this.properties = properties;
         this.mapper = mapper;
         this.registry = registry;
         this.guard = guard;
@@ -117,84 +111,8 @@ public class JumpCardService {
     }
 
     /**
-     * 🔴 <b>자격 판정이 맨 앞이고, 트랜잭션은 그 뒤에 열린다.</b> 문 넷이 같은 모양이다 —
-     * 근거는 {@link #requireViewableCard}.
-     */
-    public JumpCardSnapshot claim(long id, String userId) {
-        requireViewableCard(id, userId);
-        return transactions.execute(status -> claimInTx(id, userId));
-    }
-
-    private JumpCardSnapshot claimInTx(long id, String userId) {
-        int updated = cards.claim(id, userId, properties.claimTtl().toSeconds());
-        JumpCard card = cards.findById(id).orElseThrow(() -> new JumpCardNotFoundException(id));
-        if (updated == 0) {
-            // 행은 있는데 못 잡았다 = 남이 잡고 있다. 「없는 카드」는 위 orElseThrow가 이미 갈랐다.
-            throw new ClaimedByOtherException(snapshot(card));
-        }
-        // 본인 재호출(연장)도 남긴다: 편집기로 다시 들어간 것이다. 열람 기록을 집기로 갈음했다(POK-338).
-        cards.recordAction(id, "claim", userId, null);
-        log.info("jumpcard.claimed cardId={} by={}", id, userId);
-        JumpCardSnapshot snapshot = snapshot(card);
-        publishAfterCommit(snapshot);
-        return snapshot;
-    }
-
-    public void release(long id, String userId) {
-        requireViewableCard(id, userId);
-        transactions.executeWithoutResult(status -> releaseInTx(id, userId));
-    }
-
-    private void releaseInTx(long id, String userId) {
-        // 먼저 존재만 본다. 영향 행 0이 「없는 카드」인지 「남의 것」인지 갈라야 404와 403이 다르게 나간다.
-        if (!cards.existsById(id)) {
-            throw new JumpCardNotFoundException(id);
-        }
-
-        // 영향 행 0의 뜻이 둘이다 — 「남이 잡고 있다」와 「아무도 안 잡았다」.
-        // 후자는 이미 목표 상태이므로 성공으로 본다(멱등). 전자만 403이다.
-        //
-        // 그 판정을 UPDATE <b>뒤에</b> 읽은 값으로 한다. 앞에서 읽은 값으로 가르면, 읽은 뒤
-        // UPDATE 전에 남이 놓아 버린 경우 「지금은 아무도 안 잡았는데 403」이 나간다 —
-        // 데이터는 맞고 응답 코드만 사실과 다른 상태다(로컬 리뷰 사소 ③).
-        if (cards.release(id, userId) == 0) {
-            JumpCard after = cards.findById(id).orElseThrow(() -> new JumpCardNotFoundException(id));
-            if (after.getClaimedBy() != null) {
-                throw new NotClaimOwnerException(id);
-            }
-        } else {
-            // 실제로 놓은 경우만 남긴다. 아무도 안 잡은 카드를 놓는 멱등 성공은 바뀐 것이 없다.
-            cards.recordAction(id, "release", userId, null);
-            log.info("jumpcard.released cardId={} by={}", id, userId);
-        }
-        publishAfterCommit(snapshot(cards.findById(id).orElseThrow()));
-    }
-
-    /**
-     * 사유 판정이 자격 판정보다 앞이다: 뒤면 형식 오류 하나가 auth 왕복(최대 7초)을 태우고도 400으로 끝난다
-     * ({@link #listOf}의 요청 칸과 같은 순서).
-     *
-     * @param reason {@code null}이면 이유 없이 숨긴다. 셋 밖이면 400({@link HideReason#parseNullable})
-     */
-    public JumpCardSnapshot hide(long id, String userId, String reason) {
-        HideReason parsed = HideReason.parseNullable(reason);
-        requireViewableCard(id, userId);
-        String dbReason = parsed == null ? null : parsed.dbValue();
-        return transactions.execute(status -> toggleHidden(id, "hide", userId, dbReason,
-                () -> cards.hide(id, userId, dbReason)));
-    }
-
-    public JumpCardSnapshot unhide(long id, String userId) {
-        requireViewableCard(id, userId);
-        return transactions.execute(status -> toggleHidden(id, "unhide", userId, null, () -> cards.unhide(id)));
-    }
-
-    /**
-     * <b>이 방송을 볼 자격이 있나. 문 넷의 다른 모든 판정보다 앞이다.</b>
-     *
-     * <p><b>왜 맨 앞인가.</b> 뒤로 옮기면 남이 잡은 카드를 집으려는 남남에게 <b>409 본문</b>이
-     * 나간다 — 그 본문은 현재 카드 스냅샷이라 <b>누가 잡고 있는지</b>가 실린다. 시각도 갈린다:
-     * 자격을 먼저 물으면 거절이 카드를 읽기 전에 끝난다.
+     * <b>이 방송을 볼 자격이 있나. 열기 문의 쓰기보다 앞이다.</b> 뒤에 두면 자격 없는 사람의 열기가
+     * 기록에 남는다.
      *
      * <p>🔴 <b>거절을 {@code JumpCardNotFoundException}으로 접는다.</b> 그대로 두면
      * 「없는 카드」는 {@code jump_card_not_found}, 「자격 없는 카드」는 {@code broadcast_not_found}로
@@ -208,16 +126,11 @@ public class JumpCardService {
      * 다시 시도하지 않는다).
      *
      * <p>🔴 <b>{@code @Transactional}이 없는 자리에서 부른다.</b> auth 왕복이 최대 7초인데
-     * 트랜잭션 안에서 돌면 그동안 커넥션을 쥔다 — {@code claim}·{@code hide}·{@code unhide}는
-     * <b>읽기 전용도 아니라</b> 쓰기 트랜잭션이 7초 열린다. 커넥션은 첫 질의가 아니라
+     * 트랜잭션 안에서 돌면 그동안 커넥션을 쥔다. 열기는 <b>쓰기라</b> 쓰기 트랜잭션이 7초 열린다. 커넥션은 첫 질의가 아니라
      * <b>트랜잭션이 열릴 때</b> 잡히므로 순서를 바꾸거나 {@code readOnly}를 빼는 것으로는 안 풀린다
-     * (POK-174 실측). 그래서 문 넷이 애너테이션 대신 {@link #transactions}를 쓴다 —
+     * (POK-174 실측). 그래서 열기 문이 애너테이션 대신 {@link #transactions}를 쓴다 :
      * 자기 호출은 프록시를 안 타기 때문이다.
      * {@code BroadcastListTransactionTest.카드를_열_때도_auth_왕복_동안_커넥션을_안_쥔다}가 그 불변식을 잰다.
-     *
-     * <p><b>카드 조회가 한 번 더 도는 것을 감수한다.</b> 아래 갈래들이 각자 다시 읽는데, 여기서
-     * 읽은 것을 넘기면 「읽은 뒤 ~ UPDATE 사이」의 값으로 판정하게 되고 {@code release}가 일부러
-     * UPDATE <b>뒤에</b> 읽도록 고쳐 둔 이유가 무너진다.
      */
     private void requireViewableCard(long cardId, String requesterSubject) {
         JumpCard card = cards.findById(cardId).orElseThrow(() -> new JumpCardNotFoundException(cardId));
@@ -228,26 +141,6 @@ public class JumpCardService {
             log.info("jumpcard.access.not_viewable reason={} cardId={}", e.reason(), cardId);
             throw new JumpCardNotFoundException(cardId);
         }
-    }
-
-    /**
-     * <b>이미 그 상태면 성공이다(멱등).</b> 404를 주면 웹이 새로고침 뒤 숨기기를 눌렀을 때 오류를
-     * 본다 — {@code release}를 멱등으로 둔 것과 같은 이유다. 없는 카드만 404다.
-     *
-     * <p>안 바뀌었으면 <b>발행하지 않는다</b>. 안 그러면 아무것도 안 바뀐 카드가 통로로 나가
-     * 화면이 헛돈다(감사가 {@code unhide}에서 지적한 자리).
-     */
-    private JumpCardSnapshot toggleHidden(long id, String action, String userId, String reason, IntSupplier write) {
-        int updated = write.getAsInt();
-        JumpCard card = cards.findById(id).orElseThrow(() -> new JumpCardNotFoundException(id));
-        JumpCardSnapshot snapshot = snapshot(card);
-        if (updated == 1) {
-            // 발행과 같은 조건이다: 안 바뀐 호출을 남기면 단추를 두 번 누른 것이 「두 번 숨겼다」로 세진다(POK-338).
-            cards.recordAction(id, action, userId, reason);
-            log.info("jumpcard.{} cardId={} by={} reason={}", action, id, userId, reason);
-            publishAfterCommit(snapshot);
-        }
-        return snapshot;
     }
 
     /**
@@ -264,7 +157,7 @@ public class JumpCardService {
      * 열릴 때</b> 잡힌다(POK-174 실측, {@code BroadcastListService} 주석에 재현 기록이 있다).
      * 조회가 하나뿐이라 트랜잭션으로 얻는 것도 없다.
      *
-     * <p><b>문 넷도 같은 이유로 애너테이션을 뗐다</b>(POK-174) — 그쪽은 쓰기라 트랜잭션이 필요하지만
+     * <p><b>열기 문도 같은 이유로 애너테이션을 안 붙였다.</b> 그쪽은 쓰기라 트랜잭션이 필요하지만
      * 자격 판정만은 밖에서 끝내야 해서 {@link #transactions}로 경계를 손수 긋는다.
      * 「정리」로 여기에 붙이면 {@code BroadcastListTransactionTest.카드_목록도_auth_왕복_동안_커넥션을_안_쥔다}가
      * 빨간불이 된다 — 그 그물은 애너테이션이 아니라 <b>왕복 중 활성 커넥션 수</b>를 잰다.
@@ -279,8 +172,7 @@ public class JumpCardService {
      * @throws com.pokeclip.clip.delegation.AccessErrors.AuthUnavailableException
      *         자격을 물어보지 못했다 (503)
      */
-    public JumpCardPage listOf(String requesterSubject, String streamId, boolean includeHidden,
-                               Integer limit, String cursor) {
+    public JumpCardPage listOf(String requesterSubject, String streamId, Integer limit, String cursor) {
         int size = ListLimit.resolve(limit, DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT);
         // 표시는 두 값을 함께 싣는다 — 하나만 오면 같은 방송 시간의 뒷줄이 조용히 빠진다
         // (CursorCodec.Kind.CARD의 칸 수 검사가 그것을 막는다. findPage 주석 참고).
@@ -289,7 +181,7 @@ public class JumpCardService {
         guard.requireViewable(requesterSubject, streamId);
 
         // 상한 하나를 더 받아 「다음 장이 있나」를 본다. 개수를 따로 세면 질의가 하나 더 돈다.
-        List<JumpCard> rows = cards.findPage(streamId, includeHidden,
+        List<JumpCard> rows = cards.findPage(streamId,
                 after == null ? null : after.get(0), after == null ? null : after.get(1), size + 1);
         boolean hasMore = rows.size() > size;
         List<JumpCard> page = hasMore ? rows.subList(0, size) : rows;
@@ -312,9 +204,9 @@ public class JumpCardService {
      *
      * <p><b>그런데도 남긴다 — 지우면 카드를 읽는 법이 두 벌이 되기 때문이다.</b> 지금은 시험이
      * {@link #listOf}와 <b>같은 private {@code snapshot(...)}</b>을 지나 읽는다. 이것을 지우면 아홉
-     * 자리가 리포지터리로 내려가 정렬(<b>{@code event_seq} 오름차순</b>)과 {@code claimTtl}·
+     * 자리가 리포지터리로 내려가 정렬(<b>{@code event_seq} 오름차순</b>)과
      * {@code mapper} 배선을 <b>시험 쪽에 다시</b> 쓰게 된다. {@code JumpCardSnapshot.of}가 public이라
-     * 매핑 함수 자체는 나눠 쓸 수 있지만 <b>그 인자를 어디서 가져오는지가 갈린다</b> — 운영이 TTL의
+     * 매핑 함수 자체는 나눠 쓸 수 있지만 <b>그 인자를 어디서 가져오는지가 갈린다</b>: 운영이 매퍼의
      * 출처를 바꿔도 시험은 옛 배선으로 <b>초록</b>이다. 가시성을 좁히는 절충도 막혀 있다:
      * 호출 아홉 중 <b>일곱이 {@code jumpcard.stream} 패키지</b>라 package-private으로는 안 컴파일된다
      * (2026-08-26 실측: 그 일곱 자리에서 정확히 오류 7건).
@@ -333,7 +225,7 @@ public class JumpCardService {
     }
 
     private JumpCardSnapshot snapshot(JumpCard card) {
-        return JumpCardSnapshot.of(card, properties.claimTtl(), mapper);
+        return JumpCardSnapshot.of(card, mapper);
     }
 
     /**

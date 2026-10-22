@@ -102,7 +102,7 @@ class StreamPropertiesTest {
      * (설정 시한의 4만 배). 같은 경로에 {@code PT2S}를 주면 2995ms에 닫힌다.
      *
      * <p>이 클래스 주석이 「0 이하를 막는다」고 적어 두고 <b>실제로는 그 자리를 열어 두고 있었다.</b>
-     * 자르기 <b>전</b> 값만 봤기 때문이다 — {@code JumpCardProperties}의 {@code toSeconds()}와 뿌리가 같다.
+     * 자르기 <b>전</b> 값만 봤기 때문이다.
      */
     @Test
     void timeout이_1ms_미만이면_기본값이_들어간다() {

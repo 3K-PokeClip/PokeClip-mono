@@ -11,7 +11,6 @@ import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import tools.jackson.databind.ObjectMapper;
 
-import java.time.Duration;
 import java.time.Instant;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -127,17 +126,12 @@ class JumpCardSchemaTest extends IntegrationTestSupport {
     }
 
     @Test
-    void 스냅샷은_claimExpiresAt을_ttl로_계산한다() {
+    void 스냅샷은_evidence와_창을_옮긴다() {
         long id = insert("s-1", "auto", "evt-1", 5_043_000L, 5_020_000L, 5_062_000L, 97, "{\"multiplier\":4.2}");
-        jdbc.update("UPDATE jump_cards SET claimed_by = '1251', claimed_at = now() WHERE id = ?", id);
 
-        JumpCardSnapshot snapshot = JumpCardSnapshot.of(cards.findById(id).orElseThrow(),
-                Duration.ofMinutes(30), mapper);
+        JumpCardSnapshot snapshot = JumpCardSnapshot.of(cards.findById(id).orElseThrow(), mapper);
 
-        assertThat(snapshot.claimedBy()).isEqualTo("1251");
-        assertThat(snapshot.claimExpiresAt()).isEqualTo(snapshot.claimedAt().plus(Duration.ofMinutes(30)));
         assertThat(snapshot.evidence().get("multiplier").asDouble()).isEqualTo(4.2);
-        assertThat(snapshot.hidden()).isFalse();
         assertThat(snapshot.window().startMs()).isEqualTo(5_020_000L);
         assertThat(snapshot.window().endMs()).isEqualTo(5_062_000L);
     }
@@ -148,8 +142,7 @@ class JumpCardSchemaTest extends IntegrationTestSupport {
         long id = insert("s-1", "auto", "evt-1", 1_500L, 1_000L, 2_000L, null, null);
 
         jdbc.update("UPDATE jump_cards SET hidden_at = now(), hidden_reason = 'duplicate' WHERE id = ?", id);
-        assertThat(cards.findById(id).orElseThrow().getHiddenReason()).isEqualTo("duplicate");
-        assertThat(JumpCardSnapshot.of(cards.findById(id).orElseThrow(), Duration.ofMinutes(30), mapper).hiddenReason())
+        assertThat(jdbc.queryForObject("SELECT hidden_reason FROM jump_cards WHERE id = ?", String.class, id))
                 .isEqualTo("duplicate");
 
         assertThatThrownBy(() -> jdbc.update("UPDATE jump_cards SET hidden_reason = 'boring' WHERE id = ?", id))

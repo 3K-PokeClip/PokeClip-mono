@@ -34,7 +34,7 @@ class CorsTest extends IntegrationTestSupport {
 
     @Test
     void 허용된_출처의_preflight는_통과한다() throws Exception {
-        mockMvc.perform(options("/api/clip/jump-cards/1/claim")
+        mockMvc.perform(options("/api/clip/jump-cards/1/open")
                         .header("Origin", ALLOWED)
                         .header("Access-Control-Request-Method", "POST"))
                 .andExpect(status().isOk())
@@ -43,16 +43,19 @@ class CorsTest extends IntegrationTestSupport {
 
     @Test
     void 허용되지_않은_출처의_preflight는_막힌다() throws Exception {
-        mockMvc.perform(options("/api/clip/jump-cards/1/claim")
+        mockMvc.perform(options("/api/clip/jump-cards/1/open")
                         .header("Origin", "https://evil.example.com")
                         .header("Access-Control-Request-Method", "POST"))
                 .andExpect(status().isForbidden());
     }
 
-    /** 놓기·되돌리기가 DELETE다. 허용 메서드에 없으면 브라우저에서 그 둘이 안 된다(auth의 연동 해제와 같은 자리). */
+    /**
+     * 허용 메서드에 DELETE가 있는지 잰다. clip 사람 문의 DELETE(놓기·되돌리기)는 POK-393에서 없앴지만 허용 목록은
+     * web-support 공통 설정이라 auth의 연동 해제와 같은 값이다. 경로는 남아 있는 카드 문으로 잰다.
+     */
     @Test
     void DELETE_preflight가_통과한다() throws Exception {
-        mockMvc.perform(options("/api/clip/jump-cards/1/claim")
+        mockMvc.perform(options("/api/clip/jump-cards/1/open")
                         .header("Origin", ALLOWED)
                         .header("Access-Control-Request-Method", "DELETE")
                         .header("Access-Control-Request-Headers", "Authorization"))
