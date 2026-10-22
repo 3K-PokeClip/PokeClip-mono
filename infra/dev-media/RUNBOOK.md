@@ -2056,6 +2056,16 @@ discard_stale_env_tmps() {
   done < "${WORK}/iplimit-names"
 }
 
+# grep_found 는 grep 을 받은 인자 그대로 부른다. 찾았으면 참(0), 없으면 거짓(1)을 돌려주고, 그 밖(읽기 오류
+# 등 — grep 종료 2 이상)은 검사 실패(종료 2)로 멈춘다 — 「없음」(일치 없음)과 도구 실패를 가른다. 마지막
+# 인자(파일)를 사유에 싣는다. || 의 왼쪽에서 불러도 check_failed 의 exit 가 선다.
+grep_found() {
+  local -i rc=0
+  grep "$@" || rc=$?
+  (( rc <= 1 )) || check_failed "grep 이 실패했다(종료 ${rc}): ${*: -1}"
+  return "${rc}"
+}
+
 # ip_limit_line 은 .env 의 키 줄을 변수 $1 에 넣는다(없으면 빈 값). 지원 형식만 받는다 —
 # .env 가 줄바꿈으로 끝나고, 키 줄은 없거나 정확히 INGEST_AUTH_IP_LIMIT=on · =off 한 줄이다.
 # 그 밖(따옴표 · 빈 값 · 인라인 주석 · CRLF · 앞 공백 · 끝 줄바꿈 없음 · 두 줄)은 바이트로
@@ -2142,7 +2152,7 @@ main() {
   local -r want="$1" env="${DEMO_DIR}/.env"
   local mtx_id='' before after since orig orig_value target
   assert_demo_dir_safe
-  grep -q 'INGEST_AUTH_IP_LIMIT:' -- "${REPO}/${COMPOSE_YML}" \
+  grep_found -q 'INGEST_AUTH_IP_LIMIT:' -- "${REPO}/${COMPOSE_YML}" \
     || mismatch 'compose.yml 에 INGEST_AUTH_IP_LIMIT 전달 줄이 없다 — .env 로 바꿀 수 없다'
   assert_ready_to_start_ingest_auth
   lock_ip_limit
@@ -2172,8 +2182,9 @@ main() {
   echo "healthy: $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
   live_compose logs --no-log-prefix --since "${since}" ingest-auth \
     > "${WORK}/auth.log"
-  grep '"msg":"ingestauth_started"' -- "${WORK}/auth.log" \
-    | grep -q "\"ip_limit\":\"${want}\"" \
+  grep_found '"msg":"ingestauth_started"' -- "${WORK}/auth.log" \
+    > "${WORK}/started" || mismatch '재생성 뒤 ingestauth_started 줄이 없다'
+  grep_found -q "\"ip_limit\":\"${want}\"" -- "${WORK}/started" \
     || mismatch "새 ingestauth_started 의 ip_limit 가 ${want} 가 아니다"
   after="$(docker inspect -f '{{.State.StartedAt}}' "${mtx_id}")"
   [[ "${after}" == "${before}" ]] || mismatch 'MediaMTX 가 다시 시작됐다 — 「응답기만」이 깨졌다'
