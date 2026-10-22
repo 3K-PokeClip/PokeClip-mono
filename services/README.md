@@ -2819,7 +2819,7 @@ access·refresh 삭제는 각각 시도한다(하나가 실패해도 나머지�
 죽음(로그 없음). **단서는 닫힌 행에 남은 ref 둘**(`access_token_ref`·`refresh_token_ref`)이다: 그 ref가 secrets에 아직 있으면
 지우면 된다. 아이디·닉네임은 닫는 문장에서 이미 비었으므로 이 경우에도 남지 않는다.
 
-로그는 `auth.soop.link.<사건> userId=` 영어 한 줄이다: `created` · `relinked` · `unlinked`(셋 다 정리 뒤) · `refreshed` ·
+로그는 `auth.soop.link.<사건> userId=` 영어 한 줄이다: `created` · `relinked` · `unlinked` · `withdrawn`(탈퇴, 셋 다 정리 뒤) · `refreshed` ·
 `refresh_rejected status=`(WARN, 정리 뒤) · `refresh_failed causeType=`(WARN) · `refresh_tick_failed causeType=`(WARN) ·
 `refresh_reject_burst`(ERROR) · `rejected status=` · `unavailable causeType=`(WARN) · `token_orphaned`(교환 뒤 실패해 받은 토큰을
 버리지 못함, SOOP에 폐기 API가 없다) · `resolve_rejected reason=` · `failed reason=`. 정리 스레드는 `auth.soop.cleanup.*`다.

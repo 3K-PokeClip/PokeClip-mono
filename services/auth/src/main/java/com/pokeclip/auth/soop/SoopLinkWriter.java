@@ -83,6 +83,21 @@ public class SoopLinkWriter {
     }
 
     /**
+     * 탈퇴용 닫기. {@link #revoke}와 같고 사유만 {@code WITHDRAWN}이다(「왜 아이디가 비었나」를 남긴다. SOOP은 커밋 뒤 정리에
+     * 외부 호출이 없어 사유로 갈릴 정책이 없다). 탈퇴 트랜잭션에 참여하고(REQUIRED), 회원 행 락은 탈퇴가 이미 쥐고 있어
+     * 같은 트랜잭션의 재진입이라 무해하다(치지직·유튜브 revoke와 같은 모양).
+     *
+     * <p>🔴 <b>가드를 넣지 않는다.</b> 탈퇴가 익명화 <b>전에</b> 부르므로 지금은 넣어도 통과하지만, 익명화를 앞으로 옮기는
+     * 날 탈퇴가 자기 가드에 막힌다. 그 순서는 {@code WithdrawnWriteGuardChannelLinkTest}의 SOOP 갈래가 잰다.
+     */
+    @Transactional
+    public void revokeForWithdrawal(Long userId, Instant now) {
+        users.findByIdForUpdate(userId)
+                .orElseThrow(() -> new IllegalStateException("사용자가 없다 userId=" + userId));
+        closeAndPurge(userId, now, RevokeReason.WITHDRAWN, () -> log.info("auth.soop.link.withdrawn userId={}", userId));
+    }
+
+    /**
      * 살아 있는 내 연동을 닫고(아이디·닉네임도 같은 문장에서 비운다) 커밋 뒤에 secrets를 지운다. 락 뒤에 부른다.
      *
      * <p>옛 행은 락 뒤에 읽는다(락 전 엔티티 읽기 금지). ref 둘은 닫기 <b>전에</b> 읽어 둔다: 닫기 쿼리가

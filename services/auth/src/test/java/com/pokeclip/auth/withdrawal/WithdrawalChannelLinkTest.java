@@ -5,6 +5,11 @@ import com.pokeclip.auth.chzzk.ChzzkCleanupExecutor;
 import com.pokeclip.auth.chzzk.ChzzkLinkWriter;
 import com.pokeclip.auth.chzzk.ChzzkMe;
 import com.pokeclip.auth.chzzk.ChzzkTokens;
+import com.pokeclip.auth.soop.SoopChannelLink;
+import com.pokeclip.auth.soop.SoopCleanupExecutor;
+import com.pokeclip.auth.soop.SoopIdentity;
+import com.pokeclip.auth.soop.SoopLinkWriter;
+import com.pokeclip.auth.soop.SoopTokens;
 import com.pokeclip.auth.token.TokenService;
 import com.pokeclip.auth.user.User;
 import com.pokeclip.auth.user.UserService;
@@ -67,11 +72,16 @@ class WithdrawalChannelLinkTest extends WithdrawalTestSupport {
     private final YoutubeLinkWriter youtubeWriter;
     private final ChzzkCleanupExecutor chzzkCleanup;
     private final YoutubeCleanupExecutor youtubeCleanup;
+    private final SoopLinkWriter soopWriter;
+    private final SoopCleanupExecutor soopCleanup;
 
     WithdrawalChannelLinkTest(MockMvc mockMvc, UserService userService, TokenService tokenService,
                               JdbcTemplate jdbc, ChzzkLinkWriter chzzkWriter, YoutubeLinkWriter youtubeWriter,
-                              ChzzkCleanupExecutor chzzkCleanup, YoutubeCleanupExecutor youtubeCleanup) {
+                              ChzzkCleanupExecutor chzzkCleanup, YoutubeCleanupExecutor youtubeCleanup,
+                              SoopLinkWriter soopWriter, SoopCleanupExecutor soopCleanup) {
         super(mockMvc, userService, tokenService, jdbc);
+        this.soopWriter = soopWriter;
+        this.soopCleanup = soopCleanup;
         this.chzzkWriter = chzzkWriter;
         this.youtubeWriter = youtubeWriter;
         this.chzzkCleanup = chzzkCleanup;
@@ -83,6 +93,7 @@ class WithdrawalChannelLinkTest extends WithdrawalTestSupport {
     void 가짜_서버를_비운다() {
         CHZZK.reset();
         YOUTUBE.reset();
+        SOOP.reset();
     }
 
     /**
@@ -125,6 +136,52 @@ class WithdrawalChannelLinkTest extends WithdrawalTestSupport {
         assertThat(CHZZK.revokedTokens())
                 .as("🔴 우리 표만 닫혔고 토큰은 치지직에 살아 있다")
                 .containsExactlyInAnyOrder("at-old", "rt-old");
+    }
+
+    /**
+     * SOOP 갈래(POK-396). 치지직·유튜브와 달리 <b>새 사유 WITHDRAWN</b>으로 닫는다(SOOP은 커밋 뒤 정리에 외부 호출이 없어
+     * 사유로 갈릴 정책이 없고, 「왜 아이디가 비었나」를 남긴다). 닫는 문장이 아이디·닉네임을 비우고(약관 제11조 ⑰)
+     * 커밋 뒤 정리가 토큰 둘을 지운다. 수집기 창구는 WITHDRAWN을 UNLINKED로 답한다(계획 검증 M11, 실제 탈퇴 경로).
+     */
+    @Test
+    void 탈퇴하면_SOOP_연동이_닫히고_아이디_닉네임_토큰이_지워지고_수집기는_UNLINKED를_받는다() throws Exception {
+        User user = newUser();
+        SoopChannelLink link = linkSoop(user, "soop-at-mine", "soop-rt-mine");
+        List<String> refs = List.of(link.getAccessTokenRef(), link.getRefreshTokenRef());
+
+        assertThat(resolveBody(soopResolve(user)))
+                .as("탈퇴 전에 토큰이 안 나오면 아래 「안 나온다」는 처음부터 참이라 아무것도 안 잰다")
+                .contains("\"valid\":true").contains("soop-at-mine");
+        assertThat(remainingSecrets(refs)).isEqualTo(2);
+
+        withdraw(user);
+        awaitCleanup();
+
+        assertThat(revokedAt("soop_channel_links", link.getId())).as("🔴 SOOP 연동이 안 닫혔다").isNotNull();
+        assertThat(revokeReason("soop_channel_links", link.getId())).isEqualTo("WITHDRAWN");
+        assertThat(jdbc.queryForObject(
+                "SELECT count(*) FROM soop_channel_links WHERE id = ? AND soop_user_id IS NULL AND nickname IS NULL",
+                Integer.class, link.getId()))
+                .as("🔴 탈퇴한 회원의 SOOP 아이디·닉네임이 남았다(약관 제11조 ⑰)").isEqualTo(1);
+        assertThat(remainingSecrets(refs)).as("🔴 탈퇴한 회원의 SOOP 토큰 원문이 창고에 남았다").isZero();
+        assertThat(resolveBody(soopResolve(user)))
+                .as("🔴 탈퇴자의 SOOP 토큰이 아직 수집기에 나간다")
+                .contains("\"valid\":false").contains("\"reason\":\"UNLINKED\"").doesNotContain("soop-at-mine");
+        assertThat(SOOP.tokenCalls() + SOOP.statusCalls() + SOOP.stationCalls()).as("SOOP 탈퇴 정리에 외부 호출이 없다").isZero();
+    }
+
+    @Test
+    void 탈퇴는_남의_SOOP_연동을_안_건드린다() throws Exception {
+        User leaving = newUser();
+        User other = newUser();
+        linkSoop(leaving, "soop-at-leaving", "soop-rt-leaving");
+        SoopChannelLink others = linkSoop(other, "soop-at-other", "soop-rt-other");
+
+        withdraw(leaving);
+        awaitCleanup();
+
+        assertThat(revokedAt("soop_channel_links", others.getId())).isNull();
+        assertThat(resolveBody(soopResolve(other))).contains("\"valid\":true").contains("soop-at-other");
     }
 
     /**
@@ -363,6 +420,8 @@ class WithdrawalChannelLinkTest extends WithdrawalTestSupport {
                 .as("치지직 커밋 뒤 정리가 5초 안에 안 끝났다").isTrue();
         assertThat(youtubeCleanup.awaitIdle(Duration.ofSeconds(5)))
                 .as("유튜브 커밋 뒤 정리가 5초 안에 안 끝났다").isTrue();
+        assertThat(soopCleanup.awaitIdle(Duration.ofSeconds(5)))
+                .as("SOOP 커밋 뒤 정리가 5초 안에 안 끝났다").isTrue();
     }
 
     /** 치지직을 거치지 않고 「이미 연동된 회원」을 만든다. 채널은 매번 다르다(살아있는 채널에 유일 제약). */
@@ -415,6 +474,16 @@ class WithdrawalChannelLinkTest extends WithdrawalTestSupport {
 
     private ResultActions chzzkResolve(User user) throws Exception {
         return internalResolve("/internal/chzzk-link/resolve", user);
+    }
+
+    private ResultActions soopResolve(User user) throws Exception {
+        return internalResolve("/internal/soop-link/resolve", user);
+    }
+
+    /** SOOP resolve의 즉석 갱신 기준은 1시간이다. 8시간이면 갱신을 안 탄다. */
+    private SoopChannelLink linkSoop(User user, String accessToken, String refreshToken) {
+        return soopWriter.create(user.getId(), new SoopIdentity("soop-" + UUID.randomUUID(), "숲닉"),
+                new SoopTokens(accessToken, refreshToken, Duration.ofHours(8), null));
     }
 
     private ResultActions youtubeResolve(User user) throws Exception {
