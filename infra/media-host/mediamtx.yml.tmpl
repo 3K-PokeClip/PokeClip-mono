@@ -1,0 +1,126 @@
+# Media 상자 MediaMTX 설정 템플릿(prod).
+#
+# 두 단계로 렌더한다.
+#   1. M9 user_data 가 Terraform templatefile() 로 렌더해
+#      /etc/pokeclip-media/mediamtx.yml.tmpl 에 둔다(지금은 템플릿 변수가 없다 —
+#      비밀이 아닌 값은 모두 이 파일에 적혀 있다). 그래서 이 파일에는 달러 ·
+#      퍼센트 중괄호를 쓰지 않는다.
+#   2. 시작 스크립트(bin/start-media.sh)가 기동할 때마다 고정 토큰 두 곳을 채워
+#      tmpfs(/run/pokeclip-media/mediamtx.yml — MediaMTX 실행 계정 소유 0400)에
+#      쓴다. compose 가 그 파일을 /mediamtx.yml 로 읽기 전용 마운트한다.
+#        - CDN 비밀(hlsCDNSecret) — Secrets Manager 에서 읽은 값. 큰따옴표 안.
+#        - 사이드카 API 비밀번호(사이드카 사용자 항목의 pass) — 기동할 때마다
+#          새로 만드는 16진 64자. 작은따옴표 안. 같은 값을 사이드카가 읽는
+#          파일(MTX_API_PASS_FILE)에도 쓴다. 저장하지 않는다.
+#      두 값의 허용 글자는 따옴표 안에서 이스케이프가 필요 없다(시작 스크립트가
+#      그 밖의 값을 막는다). 토큰은 각각 정확히 한 번 나와야 한다.
+#
+# 바탕은 로컬 개발 설정 infra/compose/mediamtx.yml 이다. 이 파일은 기본값 전체를
+# 대체하므로(전체 설정 대체 규약) 아래에 없는 키는 MediaMTX 기본값이다.
+# 송출 규약: MPEG-TS · H.264 · AAC · 인코더 GOP 2초 고정(ADR-020).
+
+# 인제스트 — SRT 만. 공개 포트는 compose 가 8890/udp 로 연다(NLB 대상).
+srt: yes
+srtAddress: :8890
+rtmp: no
+
+# 미사용 프로토콜 비활성화
+rtsp: no
+webrtc: no
+moq: no
+
+# Control API — 사이드카 상태 관측(GET /v3/paths/list)과 운영 확인 스크립트
+# (paths-count.sh · paths-list.sh — 사이드카 컨테이너 안에서 사이드카 자격으로)
+# 가 쓴다. 같은 망 칸의 루프백에만 묶는다 — nginx 는 9997 로 넘기지 않는다.
+# 이 API 의 api 권한은 조회 전용이 아니다(설정 변경 · kick · 녹화 삭제까지).
+api: yes
+apiAddress: 127.0.0.1:9997
+# 믿는 프록시를 두지 않는다 — 클라이언트가 보낸 X-Forwarded-For 를 출처로
+# 쓰지 않고 실제 연결 주소로 판정한다(아래 hls · playback 도 같다).
+apiTrustedProxies: []
+
+# 지표 · 프로파일러는 쓰지 않는다. 켜려면 그 권한만 가진 별도 인증 항목을 둔다.
+metrics: no
+pprof: no
+
+# 인증 — 이 키를 적으면 기본 사용자 목록이 통째로 대체된다. 아래 셋 말고는 없다.
+#
+# 무인증(user: any) 항목에 api · metrics · pprof 권한을 두지 않는다 — 기본값의
+# localhost 관리자 항목도 지웠다. 같은 망 칸(nginx · 사이드카 · 응답기 ·
+# janitor)의 모든 컨테이너가 127.0.0.1 로 붙으므로 ips 로는 이들을 가를 수 없고,
+# user: any 는 보낸 자격과 무관하게 맞는다. 관리 API 는 비밀번호가 있는
+# 사이드카 사용자만 쓴다. 운영자용 API 사용자는 두지 않는다 — 운영 조회는
+# paths-count.sh · paths-list.sh 가 사이드카 자격으로 하고, 되돌리기는 설정
+# 수준(이전 설정 · 사이드카 MTX_API_URL 비우기 · compose 전체 재시작)으로 한다.
+#
+# user · pass 값은 작은따옴표로 감싼다. 값이 # 나 ! 로 시작하면 따옴표 없이는
+# 빈 값이 되고, pass 가 비면 그 사용자는 어떤 비밀번호로도 통과한다.
+authInternalUsers:
+  # 익명 송출(publish 만). 송출 통제는 그 전까지 NLB 의 팀 IP 이고, 송출 인증
+  # 응답기(M15)가 이 항목을 대체한다. read · playback 은 주지 않는다 — 시청은
+  # CDN 비밀 Bearer 로만 받는다.
+  - user: any
+    pass:
+    ips: []
+    permissions:
+      - action: publish
+        path:
+
+  # 재생 서버(9996 — /playback). ips 는 루프백이지만 같은 망 칸의 컨테이너는
+  # 모두 127.0.0.1 로 붙으므로 이 항목은 nginx 와 그 밖의 칸 구성원(사이드카 ·
+  # 응답기 · janitor)을 가르지 못한다 — 칸 안 누구나 /list · /get 을 부를 수
+  # 있다(받아들인 위험). 실제 관문은 nginx 의 경로 번호 대조와 CloudFront 서명
+  # 쿠키다.
+  - user: any
+    pass:
+    ips: ["127.0.0.1", "::1"]
+    permissions:
+      - action: playback
+        path:
+
+  # 사이드카 관측 — compose 사이드카 env MTX_API_USER 와 같은 이름이고,
+  # 비밀번호는 시작 스크립트가 채운다.
+  - user: 'pokeclip-sidecar'
+    pass: '@@MTX_API_PASS@@'
+    ips: []
+    permissions:
+      - action: api
+
+# LL-HLS 재생 + DVR — 루프백에만 묶는다(앞단 nginx 가 live 포트에서 넘긴다).
+hls: yes
+hlsAddress: 127.0.0.1:8888
+hlsVariant: lowLatency
+hlsSegmentDuration: 4s
+hlsPartDuration: 500ms
+hlsSegmentCount: 900 # DVR 1h = 4s x 900
+hlsDirectory: /dvr # 세그먼트 디스크 오프로드(메모리 상주 방지)
+# CloudFront 응답 헤더 정책이 덮지만 원본도 같은 출처로 둔다.
+hlsAllowOrigins: ["https://app.pokeclip.com"]
+hlsTrustedProxies: []
+# CDN 모드 — CloudFront 가 이 값을 Bearer 로 실어 보낸다.
+hlsCDNSecret: "@@HLS_CDN_SECRET@@"
+
+# 재생 서버(되감기 · 다운로드 /list · /get) — 루프백에만 묶는다.
+playback: yes
+playbackAddress: 127.0.0.1:9996
+playbackAllowOrigins: ["https://app.pokeclip.com"]
+playbackTrustedProxies: []
+
+# 녹화 — 사이드카(인덱서 · S3 업로더)가 recordings 볼륨을 감시한다.
+pathDefaults:
+  record: yes
+  recordFormat: fmp4
+  recordSegmentDuration: 4s
+  recordPath: /recordings/%path/%Y-%m-%d_%H-%M-%S-%f
+
+  # 훅(ADR-027) — 사이드카 수신 어댑터의 1차 신호원. mtxhook 이미지
+  # (media/Dockerfile.mtxhook)가 /hooks-bin/mtxhookwrite 를 얹는다. 명령줄에
+  # 변수를 심지 않는다 — 값은 훅 프로세스의 환경변수로 넘어온다.
+  runOnOnline: /hooks-bin/mtxhookwrite -kind online
+  runOnOffline: /hooks-bin/mtxhookwrite -kind offline
+  runOnRecordSegmentComplete: /hooks-bin/mtxhookwrite -kind segcomplete
+
+# 경로 허용 — 이 절이 없으면 모든 스트림이 "path not configured" 로 거부된다
+# (전체 설정 대체 시 필수).
+paths:
+  all_others:

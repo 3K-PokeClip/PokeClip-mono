@@ -1,0 +1,161 @@
+#!/usr/bin/env bash
+#
+# 운영 확인 스크립트 시험 전용 가짜 aws — argv 와 환경을 기록하고 상태
+# 디렉터리의 파일로 답한다. 돌려주는 값은 실제 비밀이 아닌 시험 문자열이다.
+#
+# 받는 꼴(그 밖은 종료 2):
+#   secretsmanager get-secret-value --secret-id <ARN> --query SecretString
+#     --output text
+#       state/secret.<ARN> 내용 + 줄바꿈(aws text 출력 꼴). 파일이 없으면
+#       종료 254(AccessDenied 흉내).
+#   ssm list-commands --command-id <ID> --query Commands[].Status
+#     --output text
+#       state/ssm.command 내용(없으면 Success) + 줄바꿈.
+#       state/ssm.command.fail 이 있으면 종료 254.
+#   ssm list-command-invocations --command-id <ID>
+#     --query CommandInvocations[].InstanceId --output text
+#       state/ssm.list 내용. 없으면 종료 254.
+#   ssm get-command-invocation --command-id <ID> --instance-id <IID>
+#     --query <필드> --output text
+#       필드 [Status,StatusDetails]: state/ssm.status.<IID> 내용(없으면
+#         「Success<탭>Success」) + 줄바꿈.
+#       필드 StandardOutputContent: state/ssm.out.<IID> 의 처음 24,000 바이트 +
+#         줄바꿈. 파일이 없으면 종료 254.
+#       필드 StandardErrorContent: state/ssm.err.<IID>(없으면 빈 값)의 처음
+#         8,000 바이트 + 줄바꿈.
+#       필드 [Status,StatusDetails,StandardOutputContent] ·
+#         [Status,StatusDetails,StandardErrorContent]: 같은 응답의 상태 두
+#         값과 출력을 탭으로 이어 한 번에(aws text 출력 꼴).
+#     실제 API 처럼 진행 중(Status 가 Success · Failed 가 아님)이면 두 출력
+#     필드는 빈 값이다(aws ssm get-command-invocation 도움말 — 2026-10-20
+#     aws-cli 2.38.1 의 StandardOutputContent · StandardErrorContent 설명).
+#     state/ssm.race.<IID> 가 있으면 경합을 흉내 낸다 — 상태만 묻는 조회는
+#     Success 지만, 출력 필드가 든 조회는 오래된 진행 중 응답(「InProgress<탭>In
+#     Progress」 · 빈 출력)을 받는다.
+#
+# 시험이 주는 값: PCBENCH_FAKE_LIB · PCBENCH_FAKE_LOG_DIR · PCBENCH_FAKE_STATE_DIR.
+
+# 아래 source= 경로를 이 파일 위치 기준으로 찾게 한다.
+# shellcheck source-path=SCRIPTDIR
+
+set -euo pipefail
+
+# shellcheck source=record.sh
+source "${PCBENCH_FAKE_LIB:?가짜 aws: PCBENCH_FAKE_LIB 없음}"
+
+readonly STATE="${PCBENCH_FAKE_STATE_DIR:?PCBENCH_FAKE_STATE_DIR 없음}"
+readonly STDOUT_LIMIT=24000
+readonly STDERR_LIMIT=8000
+
+#######################################
+# 거부 흉내로 끝낸다.
+#######################################
+denied() {
+  printf '가짜 aws: AccessDeniedException(시험)\n' >&2
+  exit 254
+}
+
+#######################################
+# 상태 파일을 내거나, 없으면 거부 흉내로 끝낸다.
+# Arguments:
+#   파일, 끝에 줄바꿈을 붙일지(1|0).
+#######################################
+answer() {
+  [[ -f "$1" ]] || denied
+  cat -- "$1"
+  if (( $2 )); then
+    printf '\n'
+  fi
+}
+
+#######################################
+# invocation 상태를 낸다(없으면 Success).
+# Arguments:
+#   인스턴스 ID.
+#######################################
+invocation_status() {
+  if [[ -f "${STATE}/ssm.status.$1" ]]; then
+    cat -- "${STATE}/ssm.status.$1"
+  else
+    printf 'Success\tSuccess'
+  fi
+}
+
+#######################################
+# get-command-invocation 의 필드를 답한다.
+# Arguments:
+#   인스턴스 ID, 필드.
+#######################################
+answer_invocation() {
+  local instance="$1" field="$2" status
+  status="$(invocation_status "${instance}")"
+  case "${field}" in
+    '[Status,StatusDetails]')
+      printf '%s\n' "${status}"
+      return 0
+      ;;
+    '[Status,StatusDetails,StandardOutputContent]')
+      field=StandardOutputContent
+      ;;
+    '[Status,StatusDetails,StandardErrorContent]')
+      field=StandardErrorContent
+      ;;
+    StandardOutputContent | StandardErrorContent) status="" ;;
+    *) fake::unknown aws ;;
+  esac
+  if [[ -e "${STATE}/ssm.race.${instance}" ]]; then
+    [[ -z "${status}" ]] || printf 'InProgress\tIn Progress\t'
+    printf '\n'
+    return 0
+  fi
+  if [[ -n "${status}" ]]; then
+    printf '%s\t' "${status}"
+  fi
+  status="$(invocation_status "${instance}")"
+  if [[ "${status%%$'\t'*}" != Success && "${status%%$'\t'*}" != Failed ]]
+  then
+    printf '\n'
+    return 0
+  fi
+  if [[ "${field}" == StandardOutputContent ]]; then
+    [[ -f "${STATE}/ssm.out.${instance}" ]] || denied
+    head -c "${STDOUT_LIMIT}" -- "${STATE}/ssm.out.${instance}"
+  elif [[ -f "${STATE}/ssm.err.${instance}" ]]; then
+    head -c "${STDERR_LIMIT}" -- "${STATE}/ssm.err.${instance}"
+  fi
+  printf '\n'
+}
+
+main() {
+  fake::record aws "$@"
+  local head="${1:-} ${2:-} ${3:-}" tail=""
+  (( $# < 5 )) || tail="${*:5}"
+  if (( $# == 8 )) \
+    && [[ "${head}" == 'secretsmanager get-secret-value --secret-id' \
+    && -n "$4" && "${tail}" == '--query SecretString --output text' ]]; then
+    answer "${STATE}/secret.$4" 1
+  elif (( $# == 8 )) \
+    && [[ "${head}" == 'ssm list-commands --command-id' \
+    && "${tail}" == '--query Commands[].Status --output text' ]]; then
+    [[ ! -e "${STATE}/ssm.command.fail" ]] || denied
+    if [[ -f "${STATE}/ssm.command" ]]; then
+      answer "${STATE}/ssm.command" 1
+    else
+      printf 'Success\n'
+    fi
+  elif (( $# == 8 )) \
+    && [[ "${head}" == 'ssm list-command-invocations --command-id' \
+    && "${tail}" == '--query CommandInvocations[].InstanceId --output text' ]]
+  then
+    answer "${STATE}/ssm.list" 0
+  elif (( $# == 10 )) \
+    && [[ "${head}" == 'ssm get-command-invocation --command-id' \
+    && "$5" == --instance-id && "$7" == --query \
+    && "$9 ${10}" == '--output text' ]]; then
+    answer_invocation "$6" "$8"
+  else
+    fake::unknown aws
+  fi
+}
+
+main "$@"

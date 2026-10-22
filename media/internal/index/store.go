@@ -220,6 +220,9 @@ func (s *pgStore) Insert(ctx context.Context, r Record, seed Seed, src SessionSo
 	return out, res, err
 }
 
+// insertOnce 는 실패한 트랜잭션의 ROLLBACK 에도 되돌리는 순간부터 부른 쪽 취소와 무관하게
+// TxnDeadline 을 따로 씌운다 — 실패한 트랜잭션 하나는 최악 TxnDeadline 의 두 배가 걸린다(커밋하지
+// 않는 경로라 커밋 상한과 무관).
 func (s *pgStore) insertOnce(ctx context.Context, r Record, seed Seed, src SessionSource) (InsertOutcome, SeedResult, error) {
 	txctx, cancel := context.WithTimeout(ctx, TxnDeadline)
 	defer cancel()
@@ -228,8 +231,16 @@ func (s *pgStore) insertOnce(ctx context.Context, r Record, seed Seed, src Sessi
 	if err != nil {
 		return InsertInserted, SeedResult{}, fmt.Errorf("주조 트랜잭션 시작 실패 stream_id=%q seq=%d: %w", r.StreamID, r.Seq, err)
 	}
-	// Commit 성공 후의 Rollback 은 무해한 no-op 이다.
-	defer func() { _ = tx.Rollback(txctx) }()
+	// 되돌림 ctx 는 되돌리는 순간에 만든다 — 부른 쪽 ctx 에서 취소와 시한을 떼고
+	// TxnDeadline 을 새로 씌운다. 끝난 ctx 로 부르면 pgx 는 ROLLBACK 을 보내지 못하고
+	// 연결을 버리는데, 트랜잭션이 상한을 다 쓴 갈래에서 txctx 는 끝나 있고 미리 만들어 둔
+	// ctx 도 거의 같이 끝난다. Commit 뒤(성공 · 실패 모두)의 Rollback 은 문장을 보내지 않는
+	// no-op 이다.
+	defer func() {
+		rctx, rcancel := context.WithTimeout(context.WithoutCancel(ctx), TxnDeadline)
+		defer rcancel()
+		_ = tx.Rollback(rctx)
+	}()
 
 	// ⑴ 상한 + 판정 시각. 비적격 INSERT 는 아래 직렬화 대기가 없으므로 이 자리의 시각이
 	// 곧 판정 시각이고, 적격 INSERT 는 대기가 끝난 뒤로 갱신된다.

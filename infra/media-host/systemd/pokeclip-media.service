@@ -1,0 +1,63 @@
+# Media 상자 compose 전체를 띄우고 다시 띄우는 유닛(M9 user_data 가
+# /etc/systemd/system/pokeclip-media.service 로 설치하고 enable 한다).
+#
+# - 재기동 단위는 compose 전체다. 시작 스크립트가 mediamtx · nginx 출력에 붙어
+#   있어 둘 중 하나가 끝나면(종료 코드 0 이어도) compose 가 끝나고, Restart=always
+#   가 20초 뒤 전체를 다시 띄운다. 사이드카 등은 compose 의 엔진 재시작
+#   (on-failure)이 혼자 다시 띄우므로 이 유닛은 다시 뜨지 않는다.
+# - 재시도 한도가 없다(StartLimitIntervalSec=0). 선행 점검 · CDN 비밀 · NAT ·
+#   RDS 가 몇 분 끊겨도 failed 로 굳지 않고, 돌아오면 20초 안에 스스로 뜬다.
+#   그동안 저널에 「MEDIA PREREQ FAIL」 · 「MEDIA START BLOCKED」 가 되풀이된다.
+# - systemctl stop 은 다시 띄우지 않는다. ExecStop 이 compose 를 내리고,
+#   ExecStopPost 가 끝난 방식과 상관없이 한 번 더 compose 를 내린 뒤 tmpfs 의
+#   렌더 파일(비밀)을 지운다.
+# - docker 를 Requires · After 로 묶는다: 부팅 때 docker 뒤에 뜬다. systemctl 로
+#   docker 를 멈추거나 다시 띄우면 이 유닛도 멈추거나 다시 뜨고, 멈출 때는 이
+#   유닛이 먼저 compose 를 내린다. dockerd 가 스스로 죽는 경우(kill 등)에는 이
+#   묶음이 이 유닛을 멈추지 않는다 — compose up 이 끊겨 끝나고 Restart=always 가
+#   docker 가 돌아온 뒤 다시 띄운다.
+# - 재기동 · 정지는 이 유닛으로만 한다(systemctl restart|stop pokeclip-media).
+#   docker compose restart <서비스> 단독은 쓰지 않는다(README 운영 규칙 ①).
+#
+# 시험(test/unit_restart_test.sh)은 이 파일을 바이트 그대로 설치하고 drop-in 으로
+# Environment= · EnvironmentFile= 값만 바꾼다.
+
+[Unit]
+Description=PokeClip Media host (docker compose)
+Requires=docker.service
+After=docker.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+# 기대 compose 판 · CDN 비밀 ARN · ECR 호스트(값만 — 비밀 아님).
+EnvironmentFile=/etc/pokeclip-media/media.env
+Environment=DOCKER_CONFIG=/root/.docker
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+Environment=MEDIA_COMPOSE_PROJECT=pokeclip-media
+ExecStart=/opt/pokeclip-media/bin/start-media.sh
+# 정지는 두 단계다. 먼저 주 프로세스(compose up)에 TERM 을 보내 컨테이너를
+# 스스로 멈추고 끝나기를 기다린다(상한 30초). 바로 down 부터 하면 up 의 중단
+# 처리와 겹쳐 up 이 종료 1 로 끝나 유닛이 failed 로 남는다(실측 10번 중 9번).
+# compose up 은 TERM 에 종료 130 으로 끝나고, 기동 중(선행 점검 · 비밀 조회 ·
+# 렌더)이면 시작 스크립트도 TERM 에 130 으로 끝나므로 그 값을 성공으로 본다.
+# CDN 비밀 조회(aws)에는 상한이 없어, 조회 중이면 시작 스크립트는 aws 가 끝난
+# 뒤에야 130 으로 끝난다. 그 전에 이 30초 대기가 끝나면 다음 ExecStop 과
+# ExecStopPost 가 정리한다.
+ExecStop=/bin/sh -c 'kill -TERM "$$MAINPID" 2>/dev/null; i=0; \
+  while kill -0 "$$MAINPID" 2>/dev/null && [ "$$i" -lt 150 ]; do \
+  sleep 0.2; i=$$((i + 1)); done'
+ExecStop=/opt/pokeclip-media/bin/stop-media.sh
+# 주 프로세스가 실패로 끝나면(compose 플러그인 · 유닛 cgroup SIGKILL 등)
+# systemd 는 ExecStop 을 건너뛰고 여기로 온다. 그래서 여기서도 compose 를
+# 내린다 — 렌더만 지우면 옛 비밀을 붙든 컨테이너가 남는다(실측). 정상
+# 정지에서는 ExecStop 이 이미 내려 두어 빈 down 이다.
+ExecStopPost=/opt/pokeclip-media/bin/stop-media.sh
+SuccessExitStatus=130
+Restart=always
+RestartSec=20
+# 시작 스크립트가 비밀을 메모리에 들고 있는 동안 core 파일로 남지 않게 한다.
+LimitCORE=0
+
+[Install]
+WantedBy=multi-user.target
