@@ -245,8 +245,18 @@ func TestRunDeployedLogsNoConnectedLineWhenDBUnreachable(t *testing.T) {
 
 // POK-311 실물 — 운영 조립(deployedDeps)으로 실 PG 에 붙으면 db_connected 한 줄(pool=janitor · 접속 값)이 janitor_started
 // 앞에 남는다. 정리기 실행만 바꾼다(곧장 끝남).
+//
+// 누출 검사는 이 시험이 만든 전용 역할(난수 비밀번호 · 권한 없음)로 붙어 그 난수가 로그에 없는지 본다. PG_DSN 의
+// 비밀번호를 찾으면 CI 의 postgres:postgres 처럼 비밀번호가 사용자 이름과 같을 때 user 필드에 걸려 거짓 양성이 난다.
 func TestRunDeployedLogsDBConnectedOnRealServer(t *testing.T) {
 	env := pgtest.PostgresEnv(t, "")
+	admin, err := pgxpool.New(context.Background(), os.Getenv("PG_DSN"))
+	if err != nil {
+		t.Fatalf("관리 풀 생성 실패: %v", err)
+	}
+	t.Cleanup(admin.Close) // 역할 정리(NewLoginRole 의 Cleanup)보다 먼저 등록 — 역할을 지운 뒤 닫힌다
+	role := pgtest.NewLoginRole(t, admin)
+	env["POSTGRES_USER"], env["POSTGRES_PASSWORD"] = role.Name, role.Password
 	env["JANITOR_ENABLED"] = "true"
 	d := deployedDeps()
 	d.openRoot = func(string) (*os.Root, error) { return os.OpenRoot(t.TempDir()) }
@@ -283,7 +293,7 @@ func TestRunDeployedLogsDBConnectedOnRealServer(t *testing.T) {
 	if at[pgconf.ConnectedEvent] > at["janitor_started"] {
 		t.Errorf("%s 이 janitor_started 뒤에 있다", pgconf.ConnectedEvent)
 	}
-	if pw := env["POSTGRES_PASSWORD"]; pw != "" && strings.Contains(out.String(), pw) {
+	if strings.Contains(out.String(), role.Password) {
 		t.Error("로그에 비밀번호가 실렸다")
 	}
 }

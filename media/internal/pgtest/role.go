@@ -85,18 +85,9 @@ func NewMediaIndexerRole(t *testing.T, admin *pgxpool.Pool) *Role {
 	t.Helper()
 	ctx := context.Background()
 	name := mediaIndexerRolePrefix + randHex(t, 4)
-	password := randHex(t, 16) // 16진 문자만 — 따옴표를 깰 글자가 없다
-	// 만료 = 서버 시계로 1시간 뒤. 실행이 강제 종료돼 Cleanup 이 돌지 않아도 남은 역할은 그 뒤 로그인할 수 없다
-	// (C4 보안 검수 L5). 값은 timestamptz 의 text 꼴(숫자 · - · : · . · + · 공백)이라 따옴표를 깰 글자가 없다.
-	var validUntil string
-	if err := admin.QueryRow(ctx, `SELECT (now() + interval '1 hour')::text`).Scan(&validUntil); err != nil {
-		t.Fatalf("시험 역할 만료 시각 계산 실패: %v", err)
-	}
-	if _, err := admin.Exec(ctx, "CREATE ROLE "+name+" LOGIN PASSWORD '"+password+"' VALID UNTIL '"+validUntil+"'"); err != nil {
-		t.Fatalf("시험 역할 생성 실패: %v", err)
-	}
+	password := createLoginRole(t, admin, name)
 	// 만든 직후에 등록한다 — 아래 GRANT 가 실패로 끝나도 역할이 클러스터에 남지 않는다.
-	t.Cleanup(func() { dropRole(t, admin, name) })
+	t.Cleanup(func() { dropRole(t, admin, name, grantedTables()) })
 	for _, s := range MediaIndexerGrantSQL(name) {
 		if _, err := admin.Exec(ctx, s); err != nil {
 			t.Fatalf("시험 역할 권한 부여 실패(%s): %v", s, err)
@@ -117,6 +108,45 @@ func NewMediaIndexerRole(t *testing.T, admin *pgxpool.Pool) *Role {
 	}
 	t.Cleanup(pool.Close) // dropRole 보다 늦게 등록 — 먼저 돌아 연결을 닫은 뒤 역할을 지운다
 	return &Role{Name: name, Pool: pool, admin: admin, sent: log}
+}
+
+// loginRolePrefix 는 로그인 전용 시험 역할 이름의 앞부분이다 — 실행마다 난수 접미가 붙는다.
+const loginRolePrefix = "pc_role_login_"
+
+// LoginRole 은 이 실행 전용 로그인 역할이다. 표 권한은 없다(DB CONNECT 는 PUBLIC 기본값).
+type LoginRole struct {
+	// Name 은 역할 이름이다(난수 접미).
+	Name string
+	// Password 는 이 역할에만 쓰는 난수 비밀번호다 — 로그 · 오류에 나타나는지 찾는 누출 시험의 표지로 쓴다.
+	Password string
+}
+
+// NewLoginRole 은 admin 이 붙은 클러스터에 권한 없는 로그인 역할을 만든다. 접속 자체만 필요한 시험(기동 ·
+// 연결 확인 줄)이 소유자 계정 대신 이 역할로 붙는다. 역할은 t.Cleanup 이 지우고(이 실행이 만든 역할만), 지우지
+// 못하고 남아도 1시간 뒤 만료된다. CREATE ROLE 전제는 NewMediaIndexerRole 과 같다.
+func NewLoginRole(t *testing.T, admin *pgxpool.Pool) LoginRole {
+	t.Helper()
+	name := loginRolePrefix + randHex(t, 4)
+	password := createLoginRole(t, admin, name)
+	t.Cleanup(func() { dropRole(t, admin, name, nil) })
+	return LoginRole{Name: name, Password: password}
+}
+
+// createLoginRole 은 역할 name 을 난수 비밀번호(돌려준다)로 만든다. 정리 등록은 호출자가 한다.
+func createLoginRole(t *testing.T, admin *pgxpool.Pool, name string) string {
+	t.Helper()
+	ctx := context.Background()
+	password := randHex(t, 16) // 16진 문자만 — 따옴표를 깰 글자가 없다
+	// 만료 = 서버 시계로 1시간 뒤. 실행이 강제 종료돼 Cleanup 이 돌지 않아도 남은 역할은 그 뒤 로그인할 수 없다
+	// (C4 보안 검수 L5). 값은 timestamptz 의 text 꼴(숫자 · - · : · . · + · 공백)이라 따옴표를 깰 글자가 없다.
+	var validUntil string
+	if err := admin.QueryRow(ctx, `SELECT (now() + interval '1 hour')::text`).Scan(&validUntil); err != nil {
+		t.Fatalf("시험 역할 만료 시각 계산 실패: %v", err)
+	}
+	if _, err := admin.Exec(ctx, "CREATE ROLE "+name+" LOGIN PASSWORD '"+password+"' VALID UNTIL '"+validUntil+"'"); err != nil {
+		t.Fatalf("시험 역할 생성 실패: %v", err)
+	}
+	return password
 }
 
 // Revoke 는 이 역할에서 표 table 의 권한 privilege 하나를 거둔다 — 음성 대조(그 권한이 정말 필요한가)용이다.
@@ -234,8 +264,17 @@ func randHex(t *testing.T, n int) string {
 	return hex.EncodeToString(buf)
 }
 
-// dropRole 은 이 실행이 만든 역할 name 만 권한을 거두고 지운다.
-func dropRole(t *testing.T, admin *pgxpool.Pool, name string) {
+// grantedTables 는 media_indexer 목록이 권한을 주는 표 이름들이다.
+func grantedTables() []string {
+	tables := make([]string, 0, len(mediaIndexerGrants))
+	for _, g := range mediaIndexerGrants {
+		tables = append(tables, g.table)
+	}
+	return tables
+}
+
+// dropRole 은 이 실행이 만든 역할 name 만 tables 의 권한을 거두고(비면 거두지 않는다) 지운다.
+func dropRole(t *testing.T, admin *pgxpool.Pool, name string, tables []string) {
 	t.Helper()
 	ctx := context.Background()
 	var exists bool
@@ -246,14 +285,11 @@ func dropRole(t *testing.T, admin *pgxpool.Pool, name string) {
 	if !exists {
 		return
 	}
-	tables := make([]string, 0, len(mediaIndexerGrants))
-	for _, g := range mediaIndexerGrants {
-		tables = append(tables, g.table)
+	stmts := []string{"DROP ROLE " + name}
+	if len(tables) > 0 {
+		stmts = append([]string{"REVOKE ALL ON " + strings.Join(tables, ", ") + " FROM " + name}, stmts...)
 	}
-	for _, s := range []string{
-		"REVOKE ALL ON " + strings.Join(tables, ", ") + " FROM " + name,
-		"DROP ROLE " + name,
-	} {
+	for _, s := range stmts {
 		if _, err := admin.Exec(ctx, s); err != nil {
 			t.Errorf("시험 역할 정리 실패(%s): %v", s, err)
 		}

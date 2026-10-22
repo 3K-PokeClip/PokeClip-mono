@@ -164,3 +164,46 @@ func TestRevokeSQLAcceptsOnlyGrantedPairs(t *testing.T) {
 		}
 	}
 }
+
+// 로그인 전용 시험 역할 — 난수 이름 · 난수 비밀번호로 실제로 로그인되고, 1시간 뒤 만료되며, 시험이 끝나면 지워진다.
+// 표 권한은 없다(DB CONNECT 는 PUBLIC 기본값).
+func TestLoginRoleLogsInExpiresAndDropsAfterTest(t *testing.T) {
+	admin := Pool(t, "roletest", roleTables, noReset)
+	ctx := context.Background()
+	var name string
+
+	t.Run("역할", func(t *testing.T) {
+		r := NewLoginRole(t, admin)
+		name = r.Name
+		if !strings.HasPrefix(name, loginRolePrefix) || len(r.Password) < 32 {
+			t.Errorf("역할 %q · 비밀번호 길이 %d, want 접두 %q · 32자 이상", name, len(r.Password), loginRolePrefix)
+		}
+		cfg := admin.Config()
+		cfg.ConnConfig.User, cfg.ConnConfig.Password = r.Name, r.Password
+		pool, err := pgxpool.NewWithConfig(ctx, cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer pool.Close()
+		var who string
+		if err := pool.QueryRow(ctx, "SELECT current_user").Scan(&who); err != nil || who != r.Name {
+			t.Fatalf("로그인 = %q · %v, want %q", who, err, r.Name)
+		}
+		if _, err := pool.Exec(ctx, "SELECT count(*) FROM stream_segments"); !IsInsufficientPrivilege(err) {
+			t.Errorf("표 읽기 오류 = %v, want 42501 — 표 권한은 없어야 한다", err)
+		}
+		var inWindow bool
+		if err := admin.QueryRow(ctx, `SELECT COALESCE(rolvaliduntil > now() AND rolvaliduntil <= now() + interval '1 hour', false)
+			FROM pg_roles WHERE rolname = $1`, r.Name).Scan(&inWindow); err != nil || !inWindow {
+			t.Errorf("VALID UNTIL 이 지금부터 1시간 안이 아니다(%v)", err)
+		}
+	})
+
+	var exists bool
+	if err := admin.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $1)`, name).Scan(&exists); err != nil {
+		t.Fatalf("역할 조회 실패: %v", err)
+	}
+	if exists {
+		t.Errorf("역할 %q 가 시험 뒤에도 남았다", name)
+	}
+}
