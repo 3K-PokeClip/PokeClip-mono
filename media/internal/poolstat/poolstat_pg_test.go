@@ -1,11 +1,14 @@
 package poolstat
 
-// 실 PostgreSQL 에 붙어 관측을 잰다. PG_DSN 이 없으면 건너뛴다(pgtest.Pool).
+// 실 PostgreSQL 에 붙어 관측을 잰다. PG_DSN 이 없으면 건너뛴다(pgtest.Pool) — REQUIRE_PG=1 이면 TestMain 이
+// 실패로 바꾼다.
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net"
+	"os"
 	"strconv"
 	"sync"
 	"testing"
@@ -14,6 +17,14 @@ import (
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/pgtest"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+func TestMain(m *testing.M) {
+	if os.Getenv("REQUIRE_PG") == "1" && os.Getenv("PG_DSN") == "" {
+		fmt.Fprintln(os.Stderr, "REQUIRE_PG=1 인데 PG_DSN 이 비어 있다 — poolstat PG 통합 케이스가 전량 skip 된다. 게이트 실패.")
+		os.Exit(1)
+	}
+	os.Exit(m.Run())
+}
 
 // statWait 는 아래 대기의 상한이다.
 const statWait = 5 * time.Second
