@@ -1112,37 +1112,79 @@ aws ssm start-session --target <instance-id>
 보지 못한다 — 이웃 서브넷 · 피어링된 VPC · 도커 기본 다리(172.17.x) · 네트워크 · 방송
 주소도 사설 꼴이면 통과하므로 눈 확인은 그대로 한다.
 
-세션 **안에서**(반영 전 보존 R0 이 끝난 뒤):
+세션 **안에서**(반영 전 보존 R0 이 끝난 뒤) 여섯 단계로 나눠 붙인다. 한 번에 붙이면
+`sudo bash` 뒤의 줄이 새 root 셸에 들어가지 않거나 `read` 가 그다음 줄을 값으로 삼킨다
+(2026-10-20 상자 — 친 주소가 명령으로 실행됐다. SSM 세션 안에서 어느 쪽이었는지는
+가리지 못했다). 단계마다 앞 단계의 끝을 눈으로 보고 다음을 붙인다.
+
+1.  root 대화형 셸을 연다. 프롬프트가 `#` 로 바뀐 것을 본다.
+
+    ```bash
+    sudo bash
+    ```
+
+2.  셸을 준비한다. 표준 입력을 읽는 명령이 없어 한 번에 붙여도 된다.
+
+    ```bash
+    unset HISTFILE
+    umask 077
+    DEMO_DIR=/opt/pokeclip-demo
+    INFO="$(stat -c '%u %a' -- "${DEMO_DIR}")"   # root 소유 · 그룹 · 기타 쓰기 없음(2-2)
+    # 상자 계정 번호 — 레지스트리 호스트에 든다. 화면에 내지 않는다(저장소에 적지 않음)
+    ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
+    ```
+
+3.  이 한 줄만 붙이고, 이어서 `http://<dev EC2 사설 주소>:8082` 를 친다(비밀 아님 ·
+    저장소에 적지 않음).
+
+    ```bash
+    read -r URL
+    ```
+
+4.  세 칸을 눈으로 본다 — 친 주소 · `/opt/pokeclip-demo` · `0 750` 같은 꼴(root 소유 ·
+    그룹 · 기타 쓰기 없음). 주소가 틀렸으면 3 부터, 나머지가 틀렸으면 2 부터 다시 친다.
+
+    ```bash
+    echo "[${URL}] [${DEMO_DIR}] [${INFO}]"
+    ```
+
+5.  `.env.next` 를 만들어 끼운다. 끝에 「.env 를 끼웠다」가 나와야 한다.
+
+    ```bash
+    if [[ -L "${DEMO_DIR}" || ! "${INFO}" =~ ^0\ [0-7]?[0-7][0145][0145]$ ]]; then
+      echo "멈춤: ${DEMO_DIR} 가 root 전용 디렉터리가 아니다(${INFO})"
+    elif [[ ! "${ACCOUNT}" =~ ^[0-9]{12}$ ]]; then
+      echo '멈춤: 상자 계정 번호를 얻지 못했다(aws sts get-caller-identity)'
+    elif [[ -s "${DEMO_DIR}/.env.pre-T.bak" ]]; then
+      {
+        grep -E '^(DEMO_HOME|STREAM_KEY_RESOLVE_TOKEN)=' "${DEMO_DIR}/.env"
+        printf 'STREAM_KEY_RESOLVE_URL=%s\n' "${URL}"
+        printf 'MTX_API_PASS=%s\n' "$(openssl rand -hex 32)"
+        printf 'MTX_IMAGE_REGISTRY=%s.dkr.ecr.ap-northeast-2.amazonaws.com\n' \
+          "${ACCOUNT}"
+      } > "${DEMO_DIR}/.env.next"
+      chown root:root "${DEMO_DIR}/.env.next"
+      chmod 0600 "${DEMO_DIR}/.env.next"
+      command mv -T "${DEMO_DIR}/.env.next" "${DEMO_DIR}/.env" && echo '.env 를 끼웠다'
+    else
+      echo '멈춤: 반영 전 보존(R0)이 먼저다'
+    fi
+    ```
+
+6.  「.env 를 끼웠다」를 본 뒤에만 변수를 지우고 root 셸을 닫는다.
+
+    ```bash
+    unset URL INFO ACCOUNT
+    exit
+    ```
+
+5 가 「.env 를 끼웠다」를 내지 않았으면(「멈춤」 · `mv` 실패) 6 으로 가지 않고 같은 root
+셸에 남는다. 남았을 수 있는 `.env.next` 를 아래 한 줄로 지우고, 원인을 고친 뒤 2 단계부터
+다시 친다. 세션이 끊겼으면 새 세션에서 1 · 2 단계를 친 뒤 이 한 줄로 지우고 3 단계부터
+잇는다.
 
 ```bash
-sudo bash          # root 대화형 셸 — 아래는 이 셸 안에서
-unset HISTFILE
-umask 077
-DEMO_DIR=/opt/pokeclip-demo
-read -r URL        # http://<dev EC2 사설 주소>:8082 를 친다(비밀 아님 · 저장소에 적지 않음)
-INFO="$(stat -c '%u %a' -- "${DEMO_DIR}")"   # root 소유 · 그룹 · 기타 쓰기 없음(2-2)
-# 상자 계정 번호 — 레지스트리 호스트에 든다. 화면에 내지 않는다(저장소에 적지 않음)
-ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
-if [[ -L "${DEMO_DIR}" || ! "${INFO}" =~ ^0\ [0-7]?[0-7][0145][0145]$ ]]; then
-  echo "멈춤: ${DEMO_DIR} 가 root 전용 디렉터리가 아니다(${INFO})"
-elif [[ ! "${ACCOUNT}" =~ ^[0-9]{12}$ ]]; then
-  echo '멈춤: 상자 계정 번호를 얻지 못했다(aws sts get-caller-identity)'
-elif [[ -s "${DEMO_DIR}/.env.pre-T.bak" ]]; then
-  {
-    grep -E '^(DEMO_HOME|STREAM_KEY_RESOLVE_TOKEN)=' "${DEMO_DIR}/.env"
-    printf 'STREAM_KEY_RESOLVE_URL=%s\n' "${URL}"
-    printf 'MTX_API_PASS=%s\n' "$(openssl rand -hex 32)"
-    printf 'MTX_IMAGE_REGISTRY=%s.dkr.ecr.ap-northeast-2.amazonaws.com\n' \
-      "${ACCOUNT}"
-  } > "${DEMO_DIR}/.env.next"
-  chown root:root "${DEMO_DIR}/.env.next"
-  chmod 0600 "${DEMO_DIR}/.env.next"
-  command mv -T "${DEMO_DIR}/.env.next" "${DEMO_DIR}/.env" && echo '.env 를 끼웠다'
-else
-  echo '멈춤: 반영 전 보존(R0)이 먼저다'
-fi
-unset URL INFO ACCOUNT
-exit
+[[ ! -e "${DEMO_DIR}/.env.next" ]] || shred -u -- "${DEMO_DIR}/.env.next"
 ```
 
 - 옛 두 줄(`DEMO_PATH` · `SRT_PASSPHRASE`)은 옮기지 않는다 — 반영 전 값은 R0 의
@@ -1153,8 +1195,8 @@ exit
   `aws sts get-caller-identity` 는 권한 없이 돈다. 변수와 `.env` 에만 있고 화면에
   나오지 않는다. T `.env` 에 이미 이 줄이 있어도 옮기지 않고 다시 만든다.
 - `.env.next` 를 다 쓴 뒤 이름 바꾸기로 끼우므로 세션이 끊겨도 반쪽 `.env` 가 생기지
-  않는다. 남은 `.env.next` 는 비밀(출입증 · API 비번)이 든 파일이라 같은 세션에서
-  `shred -u -- "${DEMO_DIR}/.env.next"` 로 지우고 다시 친다.
+  않는다. 남은 `.env.next` 는 비밀(출입증 · API 비번)이 든 파일이라 위 한 줄로 지우고
+  다시 친다.
 - 끼우기는 `command mv` 다 — AL2023 의 root 대화형 셸은 `mv` 가 `mv -i` 별칭이라
   덮어쓰기를 묻고, 붙여 넣은 다음 줄이 그 답으로 들어간다(2026-10-20 상자에서 물었다).
   거절돼도 `mv -i` 는 종료 0 이므로(GNU coreutils 8.32) 끼웠는지는 끝의 「.env 를
