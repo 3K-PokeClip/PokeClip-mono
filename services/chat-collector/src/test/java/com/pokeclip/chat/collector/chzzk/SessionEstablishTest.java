@@ -494,7 +494,6 @@ class SessionEstablishTest extends IntegrationTestSupport {
         // 다음 재시도가 응답을 못 받고 매달리게 한다.
         CountDownLatch 붙들림 = new CountDownLatch(1);
         CountDownLatch 놓아줌 = new CountDownLatch(1);
-        behavior.subscribeDonationStatus = 200;
         behavior.onSubscribeDonationBeforeResponse = () -> {
             붙들림.countDown();
             try {
@@ -503,6 +502,9 @@ class SessionEstablishTest extends IntegrationTestSupport {
                 Thread.currentThread().interrupt();
             }
         };
+        // 훅을 먼저 건다. 200 을 먼저 주면 그 사이 재시도(60ms 주기)가 훅 없이 구독을 세우고
+        // 끝나 붙들림이 영영 안 내려간다(봇 claude).
+        behavior.subscribeDonationStatus = 200;
 
         assertThat(붙들림.await(5, TimeUnit.SECONDS))
                 .as("재시도가 구독을 안 쐈다 — 이 검사가 아무것도 안 잰다").isTrue();
@@ -578,7 +580,6 @@ class SessionEstablishTest extends IntegrationTestSupport {
 
         CountDownLatch 붙들림 = new CountDownLatch(1);
         CountDownLatch 놓아줌 = new CountDownLatch(1);
-        behavior.subscribeDonationStatus = 200;
         behavior.onSubscribeDonationBeforeResponse = () -> {
             붙들림.countDown();
             try {
@@ -587,6 +588,9 @@ class SessionEstablishTest extends IntegrationTestSupport {
                 Thread.currentThread().interrupt();
             }
         };
+        // 훅을 먼저 건다. 200 을 먼저 주면 그 사이 재시도(60ms 주기)가 훅 없이 구독을 세우고
+        // 끝나 붙들림이 영영 안 내려간다(봇 claude).
+        behavior.subscribeDonationStatus = 200;
 
         assertThat(붙들림.await(5, TimeUnit.SECONDS))
                 .as("재시도가 구독을 안 쐈다: 이 검사가 아무것도 안 잰다").isTrue();
