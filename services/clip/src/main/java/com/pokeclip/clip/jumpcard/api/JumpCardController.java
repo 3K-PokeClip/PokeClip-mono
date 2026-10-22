@@ -42,6 +42,15 @@ public class JumpCardController {
      * <p><b>문 넷이 같은 줄을 갖는다.</b> 하나라도 빠지면 그 문만 조용히 안 늦는다 —
      * {@code awaitFloorIfMarked}는 기준이 없으면 즉시 내보낸다.
      */
+    /** 편집기가 카드를 열었다(POK-393). 행동 기록에 한 줄을 남기고 본문 없이 204. */
+    @PostMapping("/open")
+    public ResponseEntity<Void> open(@PathVariable long id, @AuthenticationPrincipal Jwt jwt,
+                                     HttpServletRequest request) {
+        NotFoundFloor.mark(request);
+        service.open(id, jwt.getSubject());
+        return ResponseEntity.noContent().build();
+    }
+
     @PostMapping("/claim")
     public JumpCardSnapshot claim(@PathVariable long id, @AuthenticationPrincipal Jwt jwt,
                                   HttpServletRequest request) {

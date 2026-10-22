@@ -101,6 +101,22 @@ public class JumpCardService {
     }
 
     /**
+     * 편집기가 카드를 열었다고 행동 기록에 남긴다(POK-393). 카드가 안 바뀌므로 발행하지 않는다.
+     *
+     * <p>자격 판정은 트랜잭션 밖이다(근거는 {@link #requireViewableCard}). 판정 뒤 카드가 지워졌으면
+     * {@code recordOpen}이 0을 주고 404로 접는다. 탈퇴 정리와 동시인 경우는 {@code recordOpen} 주석.
+     */
+    public void open(long id, String userId) {
+        requireViewableCard(id, userId);
+        transactions.executeWithoutResult(status -> {
+            if (cards.recordOpen(id, userId) == 0) {
+                throw new JumpCardNotFoundException(id);
+            }
+        });
+        log.info("jumpcard.opened cardId={} by={}", id, userId);
+    }
+
+    /**
      * 🔴 <b>자격 판정이 맨 앞이고, 트랜잭션은 그 뒤에 열린다.</b> 문 넷이 같은 모양이다 —
      * 근거는 {@link #requireViewableCard}.
      */
@@ -197,7 +213,7 @@ public class JumpCardService {
      * <b>트랜잭션이 열릴 때</b> 잡히므로 순서를 바꾸거나 {@code readOnly}를 빼는 것으로는 안 풀린다
      * (POK-174 실측). 그래서 문 넷이 애너테이션 대신 {@link #transactions}를 쓴다 —
      * 자기 호출은 프록시를 안 타기 때문이다.
-     * {@code BroadcastListTransactionTest.카드를_집을_때도_auth_왕복_동안_커넥션을_안_쥔다}가 그 불변식을 잰다.
+     * {@code BroadcastListTransactionTest.카드를_열_때도_auth_왕복_동안_커넥션을_안_쥔다}가 그 불변식을 잰다.
      *
      * <p><b>카드 조회가 한 번 더 도는 것을 감수한다.</b> 아래 갈래들이 각자 다시 읽는데, 여기서
      * 읽은 것을 넘기면 「읽은 뒤 ~ UPDATE 사이」의 값으로 판정하게 되고 {@code release}가 일부러

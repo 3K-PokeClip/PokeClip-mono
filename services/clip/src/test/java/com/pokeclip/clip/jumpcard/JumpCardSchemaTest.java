@@ -161,9 +161,13 @@ class JumpCardSchemaTest extends IntegrationTestSupport {
         long id = insert("s-1", "auto", "evt-1", 1_500L, 1_000L, 2_000L, null, null);
         jdbc.update("INSERT INTO jump_card_actions (card_id, action, actor, reason) VALUES (?, 'hide', '7', 'other')", id);
 
+        jdbc.update("INSERT INTO jump_card_actions (card_id, action, actor) VALUES (?, 'open', '7')", id);
+        assertThat(jdbc.queryForObject(
+                "SELECT count(*) FROM jump_card_actions WHERE card_id = ? AND action = 'open'", Long.class, id))
+                .as("열람은 편집기 열기로 센다(POK-393)").isEqualTo(1);
         assertThatThrownBy(() -> jdbc.update(
-                "INSERT INTO jump_card_actions (card_id, action, actor) VALUES (?, 'open', '7')", id))
-                .as("열람은 집기로 갈음한다(2026-10-15 결정): 따로 받지 않는다")
+                "INSERT INTO jump_card_actions (card_id, action, actor) VALUES (?, 'peek', '7')", id))
+                .as("정한 행동 밖은 막힌다")
                 .isInstanceOf(DataIntegrityViolationException.class);
         assertThatThrownBy(() -> jdbc.update(
                 "INSERT INTO jump_card_actions (card_id, action, actor, reason) VALUES (?, 'hide', '7', 'boring')", id))

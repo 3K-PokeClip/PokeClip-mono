@@ -153,4 +153,20 @@ public interface JumpCardRepository extends JpaRepository<JumpCard, Long> {
             """, nativeQuery = true)
     void recordAction(@Param("cardId") long cardId, @Param("action") String action,
                       @Param("actor") String actor, @Param("reason") String reason);
+
+    /**
+     * 편집기가 카드를 열었다(POK-393). 같은 사람이 다시 열어도 한 줄 더 남긴다.
+     *
+     * <p><b>FK 위반(500) 대신 반환값으로 가른다</b>({@link #insertIfAbsent}와 같은 규칙). 카드가 판정 뒤
+     * 지워졌으면(순서대로 온 경우) 0이다. 탈퇴 정리와 동시면 FK 위반 500이 날 수 있는데, 탈퇴 중인
+     * 스트리머의 카드라 감수한다.
+     *
+     * @return 1이면 남겼다. 0이면 카드가 없다
+     */
+    @Modifying
+    @Query(value = """
+            INSERT INTO jump_card_actions (card_id, action, actor)
+            SELECT id, 'open', :actor FROM jump_cards WHERE id = :cardId
+            """, nativeQuery = true)
+    int recordOpen(@Param("cardId") long cardId, @Param("actor") String actor);
 }
