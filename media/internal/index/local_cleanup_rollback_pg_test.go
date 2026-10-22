@@ -147,8 +147,13 @@ func TestRowLockRollsBackWithLiveContext(t *testing.T) {
 // 뒤에도 그대로인지 지키는 회귀 시험).
 func testRowLockRollbackAfterServerEndedSession(t *testing.T) {
 	const name = "server_ended_session"
-	ctx, cancel := context.WithTimeout(context.WithValue(t.Context(), callerValueKey{}, name), RowLockTxnTimeout+5*time.Second)
-	defer cancel()
+	cancel := context.CancelFunc(func() {})
+	defer func() { cancel() }()
+	newCaller := func() context.Context { // 준비가 끝난 뒤 불린다 — 다른 넷처럼 시한이 그때부터 흐른다
+		var ctx context.Context
+		ctx, cancel = context.WithTimeout(context.WithValue(t.Context(), callerValueKey{}, name), RowLockTxnTimeout+5*time.Second)
+		return ctx
+	}
 	probe := &rollbackProbe{}
 	remove := func() bool {
 		time.Sleep(RowLockTxnTimeout + time.Second)
@@ -156,7 +161,7 @@ func testRowLockRollbackAfterServerEndedSession(t *testing.T) {
 		return false
 	}
 
-	run := runRowLockRollback(t, func() context.Context { return ctx }, "lc-rb-"+name, probe, remove)
+	run := runRowLockRollback(t, newCaller, "lc-rb-"+name, probe, remove)
 
 	t.Logf("기록: 되돌림 오류 = %v (SQLSTATE %s) · 새 연결 %d개", run.err, lcSQLState(run.err), run.newConns)
 	if want := (RowLockResult{Acted: true, Stage: StageCommit}); !IsTxnTimeout(run.err) || run.res != want {

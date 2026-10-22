@@ -47,6 +47,19 @@ func waitStat(t *testing.T, pool *pgxpool.Pool, what string, ok func(snapshot) b
 	}
 }
 
+// waitPool 은 pool.Stat 이 ok 를 만족할 때까지 기다린다. snapshotOf 를 거치지 않는다 — 그 배선을 재는 시험의
+// 대기 조건이 배선 변이를 따라 바뀌지 않게.
+func waitPool(t *testing.T, pool *pgxpool.Pool, what string, ok func(*pgxpool.Stat) bool) {
+	t.Helper()
+	deadline := time.Now().Add(statWait)
+	for !ok(pool.Stat()) {
+		if time.Now().After(deadline) {
+			t.Fatalf("%v 안에 %s 에 닿지 않았다", statWait, what)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 // warm 은 연결 n 개를 동시에 빌렸다 돌려준다 — 풀이 n 개까지 자란다. 도중에 실패해도 빌린 연결은 돌려준다
 // (t.Fatalf 도 defer 를 돈다) — 안 돌려주면 Cleanup 의 pool.Close 가 반납을 기다리며 멈춘다.
 func warm(t *testing.T, pool *pgxpool.Pool, n int) {
@@ -85,6 +98,62 @@ func TestPGWarmupRaisesNoWarn(t *testing.T) {
 	stats := out.named(t, statsName)
 	if len(stats) != 1 || stats[0]["new_conns_total"] != float64(4) || stats[0]["discarded_total"] != float64(0) {
 		t.Errorf("%s 줄 = %v, want new_conns_total=4 discarded_total=0 하나", statsName, stats)
+	}
+}
+
+// 통계 줄의 칸은 같은 순간 pool.Stat 의 값이다 — snapshotOf 의 배선을 잰다. 칸끼리 값이 달라야 맞바꿈이
+// 드러나므로 연결 셋 가운데 하나를 쥐고(빌림 1 · 유휴 2) 수명 폐기만 하나 만든다(수명 1 · 유휴 0).
+func TestPGStatsLineMatchesPoolStat(t *testing.T) {
+	const lifetime = 500 * time.Millisecond
+	cfg := pgtest.Pool(t, "poolstat", noTables, noTables).Config()
+	cfg.MinConns, cfg.MinIdleConns = 0, 0
+	cfg.MaxConnLifetime, cfg.MaxConnLifetimeJitter = lifetime, 0
+	cfg.MaxConnIdleTime, cfg.HealthCheckPeriod = time.Hour, time.Hour
+	pool, err := pgxpool.NewWithConfig(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("풀 생성 실패: %v", err)
+	}
+	t.Cleanup(pool.Close)
+	ctx, cancel := context.WithTimeout(context.Background(), statWait)
+	defer cancel()
+
+	// 수명을 넘긴 유휴 연결은 다음 획득이 버린다. 반납 때 버리면 점검이 깨어나 유휴 연결을 건드린다.
+	warm(t, pool, 1)
+	time.Sleep(lifetime + 100*time.Millisecond)
+	held, err := pool.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("연결 획득 실패: %v", err)
+	}
+	defer held.Release()
+	warm(t, pool, 2)
+	waitPool(t, pool, "빌림 1 · 유휴 2 · 수명 폐기 1", func(s *pgxpool.Stat) bool {
+		return s.TotalConns() == 3 && s.IdleConns() == 2 && s.AcquiredConns() == 1 && s.ConstructingConns() == 0 &&
+			s.MaxLifetimeDestroyCount() == 1 && s.MaxIdleDestroyCount() == 0
+	})
+	log, out := newCapture(slog.LevelDebug)
+
+	pgWatcher(pool, log).tick(time.Minute)
+	s := pool.Stat()
+
+	lines := out.named(t, statsName)
+	if len(lines) != 1 {
+		t.Fatalf("%s 줄 %d개 = %v, want 하나", statsName, len(lines), lines)
+	}
+	for _, f := range []struct {
+		key  string
+		want int64
+	}{
+		{"total", int64(s.TotalConns())},
+		{"idle", int64(s.IdleConns())},
+		{"acquired", int64(s.AcquiredConns())},
+		{"constructing", int64(s.ConstructingConns())},
+		{"max", int64(s.MaxConns())},
+		{"lifetime_destroys", s.MaxLifetimeDestroyCount()},
+		{"idle_destroys", s.MaxIdleDestroyCount()},
+	} {
+		if got := lines[0][f.key]; got != float64(f.want) {
+			t.Errorf("%s 줄의 %s = %v, want %d(같은 순간 pool.Stat)", statsName, f.key, got, f.want)
+		}
 	}
 }
 
@@ -180,7 +249,8 @@ func TestPGObservationOpensNoConnections(t *testing.T) {
 	}
 }
 
-// 망이 막혀 연결을 맺지 못한 시도도 「버렸거나 맺지 못한 연결」로 센다(P5).
+// 망이 막혀 연결을 맺지 못한 시도도 「버렸거나 맺지 못한 연결」로 센다(P5). 시도가 끝나기 전, 연결을 세우는
+// 중인 주기는 세지 않고 건너뛴다.
 func TestPGConnectFailureCountsAsDiscard(t *testing.T) {
 	base := pgtest.Pool(t, "poolstat", noTables, noTables)
 	cfg := base.Config()
@@ -206,18 +276,29 @@ func TestPGConnectFailureCountsAsDiscard(t *testing.T) {
 		t.Fatalf("차단 프록시 풀 생성 실패: %v", err)
 	}
 	t.Cleanup(pool.Close)
-	log, out := newCapture(slog.LevelWarn)
+	log, out := newCapture(slog.LevelDebug)
 	w := pgWatcher(pool, log)
 	w.begin(context.Background(), time.Millisecond)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	_, err = pool.Exec(ctx, "SELECT 1")
-	cancel()
-	if err == nil {
+	errc := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_, err := pool.Exec(ctx, "SELECT 1")
+		errc <- err
+	}()
+	// 연결 시도는 ConnectTimeout(1s) 동안 생성 중으로 남는다 — 그 사이의 tick 은 건너뛰어야 한다.
+	waitPool(t, pool, "생성 중 연결 1", func(s *pgxpool.Stat) bool { return s.ConstructingConns() == 1 })
+	w.tick(time.Minute)
+	if err := <-errc; err == nil {
 		t.Fatal("막힌 망으로 질의가 성공했다 — 프록시가 막지 않았다")
 	}
 	waitStat(t, pool, "연결 시도 끝", func(s snapshot) bool { return s.newConns >= 1 })
 	w.tick(time.Minute)
+
+	if stats := out.named(t, statsName); len(stats) != 2 || stats[0]["skipped"] != float64(1) {
+		t.Errorf("%s 줄 = %v, want 둘 · 생성 중 tick 은 skipped=1", statsName, stats)
+	}
 
 	got := out.named(t, gaugeName)
 	if len(got) != 2 {
