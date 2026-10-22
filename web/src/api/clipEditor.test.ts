@@ -182,17 +182,18 @@ describe('방송 목록 쪽 넘기기', () => {
 
 describe('카드 목록 쪽 넘기기', () => {
   // 카드 목록 기본 쪽 크기가 50이고 오래된 것부터 온다 — 한 쪽만 보면 51번째 카드를 편집기가 못 연다(PR #200 codex)
-  it('찾는 카드가 뒤쪽에 있으면 커서를 따라가 찾고, 숨긴 카드도 찾는다', async () => {
+  it('찾는 카드가 뒤쪽에 있으면 커서를 따라가 찾는다', async () => {
     const spy = stubFetch((url) =>
       url.includes('cursor=c2')
-        ? jsonResponse(200, { cards: [{ id: 77, hidden: true }], nextCursor: null })
-        : jsonResponse(200, { cards: [{ id: 1, hidden: false }], nextCursor: 'c2' }),
+        ? jsonResponse(200, { cards: [{ id: 77 }], nextCursor: null })
+        : jsonResponse(200, { cards: [{ id: 1 }], nextCursor: 'c2' }),
     );
 
     expect(await fetchJumpCard('s1', '77')).toMatchObject({ id: 77 });
     const urls = spy.mock.calls.map(([url]) => String(url));
     expect(urls).toHaveLength(2);
-    expect(urls[0]).toContain('includeHidden=true');
+    // 숨김 옵션은 POK-393에서 없앴다(서버가 안 받는다)
+    expect(urls[0]).not.toContain('includeHidden');
     expect(urls[0]).toContain('limit=200');
   });
 });

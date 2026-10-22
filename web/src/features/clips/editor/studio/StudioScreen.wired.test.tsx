@@ -130,8 +130,6 @@ function handle(url: string, init?: RequestInit) {
           window: server.cardWindow,
           score: 80,
           evidence: null,
-          claimedBy: null,
-          hidden: false,
           eventSeq: 1,
           createdAt: '2026-09-20T10:01:00Z',
         },

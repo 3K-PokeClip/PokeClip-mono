@@ -19,8 +19,7 @@ import type {
 // 개수는 넘어온 목록에서 그때그때 센다. 목업에 박아 두면 마킹으로 카드가 늘었을 때
 // 필터 표기만 옛 수에 남는다.
 
-// 'hidden'은 숨긴 카드만 본다(POK-338): 거기서만 숨김을 되돌릴 수 있다
-type Filter = 'all' | HighlightSource | 'hidden';
+type Filter = 'all' | HighlightSource;
 
 const FILTERS: Array<{ value: Filter; label: string }> = [
   { value: 'all', label: '전체' },
@@ -32,7 +31,6 @@ const FILTERS: Array<{ value: Filter; label: string }> = [
 // 필터링이 초당 한 번씩 다시 도는 것을 막는다(ChatPanel·LiveStatsPanel도 같은 이유).
 export const HighlightCardPanel = memo(function HighlightCardPanel({
   highlights,
-  hiddenHighlights = [],
   stream,
   visuals,
   pendingLabel,
@@ -42,8 +40,6 @@ export const HighlightCardPanel = memo(function HighlightCardPanel({
   onSeek,
 }: {
   highlights: LiveHighlight[];
-  /** 숨긴 카드(POK-338). 「숨김」 칩을 누르면 이것만 보인다 */
-  hiddenHighlights?: LiveHighlight[];
   /** 카드 목록을 받았나(useLiveMockState.cardsStatus). 받기 전에 비어 있으면 「없다」가 아니다 */
   listStatus: CardListStatus;
   stream: LiveStream;
@@ -58,20 +54,11 @@ export const HighlightCardPanel = memo(function HighlightCardPanel({
   const [filter, setFilter] = useState<Filter>('all');
 
   const countFor = (value: Filter) =>
-    value === 'all'
-      ? highlights.length
-      : value === 'hidden'
-        ? hiddenHighlights.length
-        : highlights.filter((h) => h.source === value).length;
-  const shown =
-    filter === 'all'
-      ? highlights
-      : filter === 'hidden'
-        ? hiddenHighlights
-        : highlights.filter((h) => h.source === filter);
+    value === 'all' ? highlights.length : highlights.filter((h) => h.source === value).length;
+  const shown = filter === 'all' ? highlights : highlights.filter((h) => h.source === filter);
   // 만들어질 카드는 수동이다 — 「자동」을 보고 있을 땐 자리도 두지 않는다.
   // 아니면 자리만 3초 섰다 사라지고 카드는 안 보여 마킹이 실패한 것처럼 읽힌다.
-  const showPending = pendingLabel !== null && filter !== 'auto' && filter !== 'hidden';
+  const showPending = pendingLabel !== null && filter !== 'auto';
 
   return (
     <section className={styles.cardPanel} aria-label="하이라이트 카드">
@@ -95,14 +82,6 @@ export const HighlightCardPanel = memo(function HighlightCardPanel({
               {label} {countFor(value)}
             </button>
           ))}
-          <button
-            type="button"
-            className={clsx(styles.filterChip, filter === 'hidden' && styles.filterChipActive)}
-            aria-pressed={filter === 'hidden'}
-            onClick={() => setFilter('hidden')}
-          >
-            숨김 {countFor('hidden')}
-          </button>
           <span className={styles.cardPanelDivider} aria-hidden />
           {/* 보관함 화면을 바로 가리킨다 — /clips는 리다이렉트라 한 홉을 더 탄다(POK-235) */}
           <Link className={styles.cardPanelLink} href="/clips/library">
@@ -115,7 +94,6 @@ export const HighlightCardPanel = memo(function HighlightCardPanel({
           filter={filter}
           listStatus={listStatus}
           visibleCount={highlights.length}
-          hiddenCount={hiddenHighlights.length}
           ended={ended}
           detectionPaused={detectionPaused}
         />
@@ -147,21 +125,19 @@ export const HighlightCardPanel = memo(function HighlightCardPanel({
   );
 });
 
-// 카드 줄이 비었을 때 하는 말. 카드가 하나도 없으면 빈 상태 카드(아이콘·제목·설명)다. 불러오는 중·필터·숨김으로
+// 카드 줄이 비었을 때 하는 말. 카드가 하나도 없으면 빈 상태 카드(아이콘·제목·설명)다. 불러오는 중·필터로
 // 빈 자리는 같은 점선 틀에 한 줄만 쓴다: 「아직 없다」 카드를 다시 쓰면 거짓이 된다. 줄이 통째로 사라지는 자리라
 // 한 줄은 role="status"로 낭독시킨다.
 function EmptyTrack({
   filter,
   listStatus,
   visibleCount,
-  hiddenCount,
   ended,
   detectionPaused,
 }: {
   filter: Filter;
   listStatus: CardListStatus;
   visibleCount: number;
-  hiddenCount: number;
   ended: boolean;
   detectionPaused: boolean;
 }) {
@@ -176,11 +152,9 @@ function EmptyTrack({
   if (listStatus === 'loading') return note('카드를 불러오는 중…', true);
   // 실패를 「불러오는 중」으로 가리지 않는다. 다음 주기(라이브 3초, 끝난 방송 1분)에 다시 읽으니 도는 표시는 둔다
   if (listStatus === 'failed') return note('카드를 불러오지 못했어요. 다시 시도하는 중…', true);
-  if (filter === 'hidden') return note('숨긴 카드가 없어요.');
   // 「수동」 칸에는 자동 카드가 쌓이지 않는다. 카드가 0장이어도 「여기에 쌓여요」 카드를 보이면 거짓이다
   if (filter === 'manual') return note('수동으로 남긴 카드가 없어요.');
   if (visibleCount > 0) return note('자동 감지한 카드가 없어요.');
-  if (hiddenCount > 0) return note('보이는 카드가 없어요. 숨긴 카드는 「숨김」에서 볼 수 있어요.');
   return (
     <EmptyState
       className={styles.cardEmpty}

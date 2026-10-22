@@ -316,8 +316,7 @@ function LiveDashboard() {
   // 주소는 usePathname으로 읽는다: 넘어온 직후 첫 그리기의 window.location은 옛 주소다
   const vodRouteId = vodStreamIdFromPathname(usePathname() ?? '');
   const pastRoute = vodRouteId !== null;
-  const { stream, highlights, hiddenHighlights, cardsStatus, chatVolume, chatWarning } =
-    useLiveMockState(pastRoute);
+  const { stream, highlights, cardsStatus, chatVolume, chatWarning } = useLiveMockState(pastRoute);
   const { streamMeta, cardVisuals } = useLiveDetailsMockState();
   const liveData = useLiveData();
   const { streamId, info } = liveData;
@@ -575,7 +574,6 @@ function LiveDashboard() {
           />
           <HighlightCardPanel
             highlights={highlights}
-            hiddenHighlights={hiddenHighlights}
             stream={streamForCards}
             visuals={cardVisuals}
             pendingLabel={null}

@@ -1,6 +1,6 @@
 // 하이라이트 카드의 표시 규칙 — 동결 계약(LiveHighlight)에서 시안 1b 카드가 필요한 것을 만든다.
 //
-// 렌더에서 떼어낸 이유는 playerMath와 같다: 상태 6종 × 폴백 3단은 조합이 많아 jsdom 렌더로
+// 렌더에서 떼어낸 이유는 playerMath와 같다: 상태 5종 × 폴백 3단은 조합이 많아 jsdom 렌더로
 // 훑기보다 여기서 전수 검사하는 편이 싸다. 그리고 status 유니온이 늘면 이 표가 타입으로 깨진다 —
 // 화면이 조용히 빈 배지를 그리는 대신 빌드가 멈춘다.
 
@@ -9,7 +9,7 @@ import type { BadgeTone } from '@/ui';
 import type { CardVisual } from './useLiveDetailsMockState';
 import type { LiveHighlight, LiveStream } from './useLiveMockState';
 
-/** 시안 HighlightCard가 아는 상태 — 계약의 status 6종이 여기로 접힌다 */
+/** 시안 HighlightCard가 아는 상태: 계약의 status 5종이 여기로 접힌다. 'processing'(클립 생성 중)은 지금 내는 상태가 없다 */
 export type CardViewState = 'ready' | 'manual' | 'processing';
 
 export interface HighlightCardView {
@@ -18,7 +18,7 @@ export interface HighlightCardView {
   badgeLabel: string;
   /** 되감기 창을 벗어나 곧 사라질 카드 — 흐리게 */
   dimmed: boolean;
-  /** 편집·업로드 버튼줄을 그릴지 — 남이 편집 중이거나 만료된 카드엔 할 일이 없다 */
+  /** 편집·업로드 버튼줄을 그릴지: 만료된 카드엔 할 일이 없다 */
   showActions: boolean;
 }
 
@@ -50,13 +50,6 @@ const STATE_BY_STATUS: Record<
     dimmed: false,
     showActions: true,
   },
-  editing: {
-    state: 'processing',
-    tone: 'accent',
-    label: '편집 중',
-    dimmed: false,
-    showActions: false,
-  },
   clipped: {
     state: 'ready',
     tone: 'success',
@@ -75,26 +68,12 @@ const STATE_BY_STATUS: Record<
 };
 
 export function cardViewFor(highlight: LiveHighlight): HighlightCardView {
-  // 내가 집은 카드는 「편집 중」이어도 잠그지 않는다 — 잠그면 편집기에서 나온 뒤 다시 못 들어간다
-  // (2026-09-17 실방송 시험). 남이 집은 카드만 시안대로 단추를 감춘다.
-  if (highlight.status === 'editing' && highlight.claimedByMe) {
-    return {
-      state: 'ready',
-      badgeTone: 'accent',
-      badgeLabel: '내가 편집 중',
-      dimmed: false,
-      showActions: true,
-    };
-  }
+  // 「편집 중」 상태는 없다(POK-393): 카드를 찜하지 않아 누가 편집하는지 모르고, 여럿이 같은 카드를 각자 편집한다
   const base = STATE_BY_STATUS[highlight.status];
   return {
     state: base.state,
     badgeTone: base.tone,
-    // 누가 잡고 있는지가 편집 중 카드의 핵심 정보다 — 이름이 없으면 상태만 말한다
-    badgeLabel:
-      highlight.status === 'editing' && highlight.editorName
-        ? `${base.label} · ${highlight.editorName}`
-        : base.label,
+    badgeLabel: base.label,
     dimmed: base.dimmed,
     showActions: base.showActions,
   };
