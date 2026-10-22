@@ -27,7 +27,7 @@ systemd 유닛 하나가 그 묶음 전체를 띄우고 다시 띄운다. 계획
 | `bin/loopback-health.sh` · `paths-count.sh` · `paths-list.sh` · `secret-count.sh` | `/opt/pokeclip-media/bin/` | 운영자(SSM) — secret-count 의 `ssm` 모드만 kty 로컬 |
 | `bin/lib/ops.sh` · `bin/lib/mtx_paths.sh` | `/opt/pokeclip-media/bin/lib/` | 위 스크립트가 source |
 | `compose.yml.tmpl` | `/etc/pokeclip-media/compose.yml`(렌더본) | `start-media.sh` · `stop-media.sh` |
-| `nginx/nginx.conf.tmpl` | `/etc/pokeclip-media/nginx.conf`(렌더본) | compose 가 nginx 에 읽기 전용 마운트 |
+| `nginx/nginx.conf.tmpl` | `/etc/pokeclip-media/nginx.conf`(렌더본) | compose 가 nginx 에 읽기 전용 마운트(원본이 없으면 만들지 않음: `create_host_path: false`, nginx 기동만 실패) |
 | `mediamtx.yml.tmpl` | `/etc/pokeclip-media/mediamtx.yml.tmpl`(토큰이 남은 렌더본) | `start-media.sh` 가 기동마다 비밀을 채움 |
 | (M9 이 씀) | `/etc/pokeclip-media/media.env` | 유닛 `EnvironmentFile` · 운영 확인 스크립트 |
 | (M9 이 씀) | `/root/.docker/config.json`(ECR 자격 도우미 설정) | docker · 시작 스크립트 선행 점검 |
@@ -127,14 +127,18 @@ nginx 요청 줄 · 서비스 진단이 섞여 있고, 비밀이 잘못 찍혔�
     64자). 저장하지 않는다.
 1.  템플릿의 고정 토큰 두 곳(`@@HLS_CDN_SECRET@@` · `@@MTX_API_PASS@@` — 각각
     정확히 한 번)을 채워 `/run/pokeclip-media/mediamtx.yml`(10002 소유 0400)과
-    `mtx_api_pass`(10001 소유 0400)로 둔다. 두 파일을 임시 파일에 다 쓴 뒤에야
-    이름을 바꾼다 — 중간에 실패하면 둘 다 남지 않는다.
+    `mtx_api_pass`(10001 소유 0400)로 둔다. 두 파일 모두 임시 파일에 다 쓴
+    뒤에야 이름을 바꾼다 — 실행 중인 스택이 보는 옛 파일을 제자리에서 고쳐 쓰지
+    않는다. 중간에 실패하면 새 임시 파일은 남지 않는다. 이름을 바꾸기 전에
+    실패하면 이미 있던 두 파일은 그대로이고, 둘째(`mtx_api_pass`) 이름 바꾸기가
+    실패하면 방금 옮긴 `mediamtx.yml` 을 지워 짝이 어긋난 설정을 남기지 않는다.
 1.  `docker compose --ansi never -p pokeclip-media -f
-    /etc/pokeclip-media/compose.yml up --force-recreate
+    /etc/pokeclip-media/compose.yml up --force-recreate --remove-orphans
     --abort-on-container-exit --attach mediamtx --attach nginx` 로
     바뀐다(exec). 컨테이너는 늘 새로 만든다(`--force-recreate`) — 남은
     컨테이너가 지운 옛 렌더(옛 CDN 비밀 · 옛 API 비밀번호)를 붙든 채 다시
-    쓰이지 않게 한다.
+    쓰이지 않게 한다. 렌더에서 빠진 서비스(비운 이미지 변수)의 옛 컨테이너도
+    지운다(`--remove-orphans`) — 남으면 옛 비밀을 든 채 같은 망 칸에 붙어 있다.
 
 인자는 받지 않는다. 점검을 건너뛰는 플래그 · 변수는 없다(아래 「시험
 이음매」).
@@ -143,8 +147,22 @@ nginx 요청 줄 · 서비스 진단이 섞여 있고, 비밀이 잘못 찍혔�
 TERM 을 보내 스스로 끝나기를 기다리고(상한 30초), 그다음 `stop-media.sh` 가
 `docker compose … down` 과 렌더 파일 삭제를 한다. `ExecStopPost` 가 끝난 방식과
 상관없이 한 번 더 compose 를 내리고 렌더를 지운다(정상 정지에서는 빈 down).
-**정지 뒤 유닛 상태는 `inactive` 가 정상이다.** `failed` 면 정지가 깨진
-것이니 저널을 본다. `down` 은 볼륨을 지우지 않는다.
+`down` 은 볼륨을 지우지 않는다.
+
+*   **정지 뒤 유닛 상태는 `inactive` 가 정상이다.** 기동 중(선행 점검 · 비밀
+    조회 · 렌더)에 멈춰도 같다 — 시작 스크립트가 TERM 에 compose up 과 같은
+    130 으로 끝나고, 유닛은 130 을 성공으로 본다.
+*   `failed` 면 정지 단계 하나가 실패한 것이다. `down` 실패(판정 줄
+    `MEDIA STOP down exit <n>`)나 정지 중 주 프로세스가 0 · 130 이 아닌 코드로
+    끝난 경우다. 저널을 본다.
+*   `down` 이 실패하면(compose 파일이 깨진 경우 포함) 정지 스크립트가 프로젝트
+    라벨로 남은 컨테이너를 찾아 지운다(`MEDIA STOP fallback removed <n>`).
+    `down` 이 끝나지 않아 systemd 가 정지 명령에 TERM 을 보내도 렌더는 지운다.
+*   정지 뒤에는 프로젝트 컨테이너가 0 인지 건수로 확인한다.
+
+    ```shell
+    docker ps -a -q --filter label=com.docker.compose.project=pokeclip-media | wc -l
+    ```
 
 **크래시:** 주 프로세스가 실패로 끝나면(compose 플러그인 · 유닛 cgroup
 SIGKILL 등) systemd 252 는 `ExecStop` 을 건너뛰고 `ExecStopPost` 로 간다. 그래서
@@ -171,19 +189,23 @@ SIGKILL 등) systemd 252 는 `ExecStop` 을 건너뛰고 `ExecStopPost` 로 간�
 | | `MEDIA START FAIL usage` | 인자를 줬음 |
 | `stop-media.sh` | `MEDIA STOP FAIL usage\|runtime-dir` | 인자 오류 · `RUNTIME_DIR` 이 절대 경로가 아님 |
 | | `MEDIA STOP down exit <n>` | `compose down` 이 0 아닌 코드 |
+| | `MEDIA STOP fallback removed <n>` · `MEDIA STOP fallback FAIL` | down 실패 뒤 프로젝트 라벨로 지운 컨테이너 수 · 그 조회 · 삭제 실패 |
+| | `MEDIA STOP interrupted` | down 중 TERM · INT — down 을 멈추고 렌더를 지운 뒤 143 · 130 |
 | | `MEDIA STOP CLEANUP FAIL <디렉터리>` | 렌더 파일이 지운 뒤에도 남음 |
 | `paths-count.sh` | `PATHS <n>` | 경로 항목 수(송출 중 아닌 것 포함) |
 | | `PATHS FAIL incomplete` | 응답이 여러 페이지 — 원자 스냅샷 아님 |
 | | `PATHS FAIL <단계>` | `usage` · `config` · `sidecar` · `credentials` · `request` · `timeout` · `auth`(401) · `http` · `response` |
 | `paths-list.sh` | (표준 출력) 경로 이름 한 줄에 하나 | 송출 중인 ingestStreamId 목록 |
+| | `PATHS LIST <n>`(표준 오류) | 그 목록의 개수 — force 대조에 함께 넘긴다 |
 | | `PATHS LIST INCOMPLETE`(표준 오류) | 여러 페이지 — force 를 하지 않는다 |
 | | `PATHS FAIL <단계>`(표준 오류) | paths-count 와 같은 단계 이름 |
 | `loopback-health.sh` | `LOOPBACK OK` | 송출 → 프록시 경유 재생목록 200 |
 | | `LOOPBACK FAIL <단계>` | `usage` · `config` · `cdn-secret` · `test-key` · `mediamtx` · `scratch` · `pull` · `sender` · `playlist` · `sender-cleanup` |
 | `secret-count.sh` | `SECRET COUNT box\|ssm <n>` | 비밀 값이 든 줄 수 |
-| | `SECRET COUNT FAIL <단계>` | `usage` · `config` · `cdn-secret` · `test-key` · `journal` · `mediamtx` · `nginx` · `docker-logs` · `ssm-command` · `ssm-list` · `ssm-status` · `ssm-output` · `ssm-truncated` · `grep` |
+| | `SECRET COUNT FAIL <단계>` | `usage` · `config` · `cdn-secret` · `test-key` · `api-pass` · `journal` · `mediamtx` · `nginx` · `docker-logs` · `ssm-command` · `ssm-list` · `ssm-status` · `ssm-output` · `ssm-truncated` · `grep` |
 | `ops/force-diff.sh` | `FORCE REMAINING <n>` + 남은 ID | n 이 0 이면 복구 완료 |
 | | `FORCE FAIL input A\|B\|ended` · `FORCE FAIL usage` | 입력 거부 · 인자 오류 |
+| | `FORCE FAIL count A\|B` · `FORCE FAIL empty A` | ID 줄 수가 개수 인자와 다름(잘린 목록) · A 에 ID 가 없음 |
 
 `FAIL` 줄은 「0 건」 이 아니다. 조회가 실패하면 실패로 끝낸다.
 
@@ -216,7 +238,7 @@ set -a; . /etc/pokeclip-media/media.env; set +a
 | `MEDIA_OPS_TIMEOUT` | 초, 1–600, 기본 30 | paths 두 스크립트의 컨테이너 찾기 · `docker exec` · secret-count 의 `journalctl` · `docker logs` · `aws` · 루프백의 비밀 읽기 · 컨테이너 찾기 · 송출기 정리(`docker rm` · `ps`) |
 | 고정 300초 | `PULL_TIMEOUT` | 루프백 송출기 이미지 받기(`docker pull`) |
 | 고정 5초 · 바깥 10초 | `CURL_MAX_TIME` · `CURL_BOUND` | 루프백 재생목록 요청 한 번(curl `max-time` · 그 바깥 상한) |
-| `LOOPBACK_WAIT_SECONDS` | 초, 1–300, 기본 30 | 루프백이 200 을 기다리는 전체 시간. 송출기는 이보다 15초 길게 송출한다 |
+| `LOOPBACK_WAIT_SECONDS` | 초, 1–300, 기본 30 | 루프백이 200 을 기다리는 대기 루프의 상한. 진행 중인 요청 한 번(최대 10초)과 재시도 간격(1초)만큼 넘을 수 있다. 송출기는 이보다 15초 길게 송출한다 |
 | 고정 5초 | `nc -w 5` | paths 조회의 컨테이너 안 연결 유휴 상한 |
 
 `MEDIA_OPS_TIMEOUT` · `LOOPBACK_WAIT_SECONDS` 가 틀린 값이면 기본값으로 바꾸지
@@ -232,14 +254,18 @@ set -a; . /etc/pokeclip-media/media.env; set +a
 **force 대조(`ops/force-diff.sh`, kty 로컬):**
 
 1.  force 1 에서 A 상자의 `paths-list.sh` 표준 출력을
-    `force-<시각>-A.txt` 로 저장한다. **종료 0 일 때만 저장한다** — 실패하면
-    표준 출력이 비어 있어, 저장하면 「송출 중 0」 처럼 읽힌다.
-1.  force 4 뒤 B 상자에서 같은 스크립트로 `force-<시각>-B.txt` 를 받는다(같은
-    규칙).
+    `force-<시각>-A.txt` 로 저장하고, 표준 오류의 `PATHS LIST <n>` 의 n 을
+    함께 적어 둔다. **종료 0 일 때만 저장한다** — 실패하면 표준 출력이 비어
+    있어, 저장하면 「송출 중 0」 처럼 읽힌다.
+1.  **SSM 출력 한도(표준 출력 24,000자)에 닿은 출력은 저장하지 않는다** — 뒤가
+    잘린 목록이다. 놓쳐도 다음 단계의 개수 대조가 거부한다.
+1.  force 4 뒤 B 상자에서 같은 스크립트로 `force-<시각>-B.txt` 와 개수를
+    받는다(같은 규칙).
 1.  종료를 확인한 방송은 `force-<시각>-ended.txt` 에 탭 구분 3열(`ingestStreamId`
     · 확인 시각 · 확인 경로)로 덧붙인다.
-1.  `force-diff.sh A B ended` → `FORCE REMAINING <n>`. 남은 ID 가 연락
-    대상이고, 0 이면 복구 완료다.
+1.  `force-diff.sh A B ended <A 개수> <B 개수>` → `FORCE REMAINING <n>`. 남은
+    ID 가 연락 대상이고, 0 이면 복구 완료다. 파일의 ID 줄 수가 개수와 다르거나
+    A 가 비면 대조하지 않는다(`FORCE FAIL count|empty`).
 
 **루프백 헬스(`loopback-health.sh`):** 상자 안에서 시험 신호를 MediaMTX
 (`srt://127.0.0.1:8890`)로 보내고, `127.0.0.1:<live 포트>/<ID>/index.m3u8` 이
@@ -261,8 +287,10 @@ set -a; . /etc/pokeclip-media/media.env; set +a
 passphrase)은 Secrets Manager 에서 직접 읽고, `grep -F -f -` 의 표준 입력으로만
 넘긴다. `box` 모드 입력은 유닛 저널 · 태그 저널 셋 · `mediamtx` · `nginx` 의
 `docker logs`(정지한 컨테이너 포함)다. `ssm` 모드는 SSM API 가 주는 한도(표준
-출력 24,000자 · 표준 오류 8,000자)에 닿으면 `ssm-truncated` 로 실패한다. 관리
-API 비밀번호는 대조하지 않는다(대조 값을 얻을 수단이 아직 없다 — 한계).
+출력 24,000자 · 표준 오류 8,000자)에 닿으면 `ssm-truncated` 로 실패한다.
+`box` 모드는 이번 기동의 관리 API 비밀번호(`/run/pokeclip-media/mtx_api_pass` 를
+root 로 읽음)와 그 Basic 값(`pokeclip-sidecar:<비밀번호>` 의 base64)도 대조한다.
+옛 기동의 비밀번호와 `ssm` 모드의 비밀번호 대조는 아래 「알려진 한계」.
 
 ## 운영 규칙
 
@@ -272,7 +300,7 @@ API 비밀번호는 대조하지 않는다(대조 값을 얻을 수단이 아직
     *   서비스 단독 재시작은 시작 스크립트(비밀 조회 · 렌더 · 선행 점검)를
         건너뛴다. 망 칸을 함께 쓰는 서비스는 주인(mediamtx)과 함께 뜨고 져야
         한다.
-    *   M2 c6 실측(사례 14): `docker compose restart mediamtx` 단독 뒤 nginx
+    *   M2 실측(계약 시험 사례 14): `docker compose restart mediamtx` 단독 뒤 nginx
         가 다시 뜨고, 시작 스크립트의 `compose up` 은 「Aborting on container
         exit」 뒤 3분 넘게 끝나지 않았다. mediamtx · 사이드카는 멈추고 nginx 만
         남았다. prod 라면 유닛은 active 인데 서비스가 없는 상태가 이어진다.
@@ -353,7 +381,7 @@ exit 1
     있으면 틀린 자격도 붙어 같은 신호가 난다(`media/README.md` 「관측 자격
     파일 규칙」). 이 상자는 그 항목을 지운 설정(`mediamtx.yml.tmpl`)이라 이
     신호를 자격 확인으로 쓴다.
-*   무자격 · 「같은 이름 + 틀린 비밀번호」 가 모두 401 인지(음성 확인)는 M2 c6
+*   무자격 · 「같은 이름 + 틀린 비밀번호」 가 모두 401 인지(음성 확인)는 M2
     로컬 실측이 맡았다.
 
 ## 보안 경계
@@ -368,23 +396,28 @@ exit 1
     비밀번호가 있는 사이드카 사용자(`pokeclip-sidecar`) 하나다. **운영자용 API
     사용자는 두지 않는다** — 운영 조회는 paths 두 스크립트가 사이드카 자격으로
     한다.
+*   **재생 서버(9996) 무인증 항목:** `ips` 가 루프백이어도 같은 망 칸의
+    컨테이너는 모두 127.0.0.1 로 붙어, 칸 안 누구나(사이드카 · 응답기 ·
+    janitor) `/list` · `/get` 을 부를 수 있다(받아들인 위험). 실제 관문은
+    nginx 의 경로 번호 대조와 CloudFront 서명 쿠키다.
 *   **비밀 처리:**
     *   CDN 비밀은 Secrets Manager → 시작 스크립트 셸 변수 → tmpfs 의
         `mediamtx.yml`(10002 소유 0400)로만 간다.
     *   API 비밀번호는 기동마다 새로 만들고 저장하지 않는다. 같은 실행에서
         MediaMTX 설정과 사이드카 파일에 함께 쓰이므로 둘이 어긋나지 않는다.
     *   정지 때 두 파일을 지운다.
-    *   core 파일 제한은 **시작 스크립트와 compose CLI 에만** 걸린다(유닛의
-        `LimitCORE=0` · 스크립트의 `ulimit -c 0`). 컨테이너는 dockerd 가 만들어
-        이 제한을 물려받지 않는다. 컨테이너 안 프로세스(MediaMTX · 사이드카)의
-        core 제한은 아직 걸지 않았다 — 미적용, PR 단계로 넘긴 항목이다.
+    *   core 파일을 남기지 않는다. 시작 스크립트와 compose CLI 에는 유닛의
+        `LimitCORE=0` · 스크립트의 `ulimit -c 0` 이, 컨테이너에는 compose 의
+        `ulimits: core: 0`(모든 서비스)이 건다 — 컨테이너는 dockerd 가 만들어
+        유닛의 제한을 물려받지 않는다.
     *   옛 스택이 살아 있는 채 시작 스크립트가 다시 돌아도, `--force-recreate`
         로 컨테이너를 모두 새로 만들어 MediaMTX 와 사이드카가 같은 새 렌더를
-        읽는다.
+        읽는다. 렌더에서 빠진 서비스의 옛 컨테이너는 `--remove-orphans` 가
+        지운다.
 *   **받아들인 위험 — 사이드카 자격 = 관리 API 전권:** MediaMTX 의 `api` 권한은
     조회 전용이 아니다. 이 자격으로 할 수 있는 것은 다음과 같다.
     *   설정 조회 — 응답에 `hlsCDNSecret` 이 평문으로 들어 있다(포크의 가림
-        처리가 이 값을 가리지 않는다 — M2 c6 실측).
+        처리가 이 값을 가리지 않는다 — M2 실측).
     *   설정 변경 — 훅 명령을 바꿔 명령 실행까지 갈 수 있다.
     *   kick · 녹화 삭제.
 
@@ -403,8 +436,10 @@ exit 1
 길이다.
 
 *   **이전 설정:** 이전 커밋의 템플릿으로 설정 반영 교체를 한다.
-*   **관측만 끄기(즉시 롤백):** 사이드카 `MTX_API_URL` 을 비우면 관측이 꺼지고
-    비밀번호 파일은 읽지 않는다.
+*   **관측만 끄기:** 사이드카 `MTX_API_URL` 을 비우면 관측이 꺼지고 비밀번호
+    파일은 읽지 않는다. 사이드카 관리 API 자격 PR(아래 「출처」)은 이것을
+    「즉시 롤백」 이라 부르지만, 이 상자에서 값을 바꾸는 길은 위의 설정 반영
+    교체다 — 바로 되돌아가지 않는다.
 *   **어느 쪽이든 반영은 compose 전체 재시작이다.** MediaMTX 단독 재시작은 하지
     않는다(규칙 ①).
 *   관리 API 로 하는 수동 조작(kick · 설정 PATCH)은 되돌리기 수단이 아니다 —
@@ -463,7 +498,7 @@ prod 상자에 깔 도구의 판이다. M9 user_data 가 같은 값으로 설치
 |---|---|---|
 | docker compose 플러그인 | **5.5.0** | 공식 릴리스 `docker/compose` v5.5.0(2026-10-20 확인). `sha256` — `docker-compose-linux-x86_64`: `c57ab918abd5b05ca7e7d0f275875dd1330a695074f309dc9eab1b49efafcd4b` · `docker-compose-linux-aarch64`: `ff42489f5a9b879d5d117c5ffea6defc27390b3286da8ad52cbc9c6ab5df590e` |
 | `amazon-ecr-credential-helper` | **0.12.0-3.amzn2023** | Amazon Linux 2023 저장소(release 2023.12.20260930 기준 최신 · 2026-10-20 `dnf` 조회) |
-| docker | M9 이 정함 | M2 c7 탐침 상자(AL2023 · systemd 252)는 25.0.16 으로 재기동 시험을 통과했다 |
+| docker | M9 이 정함 | M2 탐침 상자(AL2023 · systemd 252)는 25.0.16 으로 재기동 시험을 통과했다 |
 
 *   Compose 의 `--abort-on-container-exit` · `--attach` · `--force-recreate`
     동작과 bind 의 `create_host_path: false`(원본이 없으면 디렉터리를 만들지
@@ -482,7 +517,7 @@ prod 상자에 깔 도구의 판이다. M9 user_data 가 같은 값으로 설치
 | `test/render_test.sh` | 세 템플릿 렌더 단언 · `docker compose config -q` · 시험 compose 와의 드리프트(bind 원본 자동 생성 여부 포함) | terraform · docker compose(컨테이너 안 띄움) |
 | `test/start_test.sh` | 시작 · 정지 스크립트(가짜 docker · chown · aws) | 어디서나 |
 | `test/proxy_contract.sh` | 앞단 프록시 계약 사례 1–17 · 1b(14 는 판정 아닌 기록) | terraform · docker(에코 상류 `test/echo` 빌드) |
-| `test/unit_restart_test.sh` | 유닛 재기동 사례 1–18(15–17 = 크래시 경로) | 1–3 은 어디서나, 4–18 은 리눅스 · systemd · sudo |
+| `test/unit_restart_test.sh` | 유닛 재기동 사례 1–19(15–17 = 크래시 경로 · 19 = 기동 중 정지) | 1–3 은 어디서나, 4–19 는 리눅스 · systemd · sudo. **13–17 은 호스트를 흔든다**(docker 엔진 재시작 · dockerd kill -9 · SIGKILL) — CI(`GITHUB_ACTIONS=true`) · 일회용 상자(`PCBENCH_ALLOW_HOST_DISRUPTION=1`)가 아니면 거부한다. 개발 머신에서 돌리지 않는다 |
 | `test/loopback_test.sh` · `paths_count_test.sh` · `paths_list_test.sh` · `secret_count_test.sh` · `force_diff_test.sh` | 운영 확인 스크립트(가짜 명령) | 어디서나 |
 | `test/harness_selftest.sh` · `query_guard_selftest.sh` | 시험 부품 자체 | 어디서나 |
 
@@ -510,6 +545,28 @@ prod 상자에 깔 도구의 판이다. M9 user_data 가 같은 값으로 설치
 유닛 시험은 prod 유닛 파일을 바이트 그대로 설치하고, drop-in 에는
 `Environment=` · `EnvironmentFile=` 만 둔다.
 
+## 알려진 한계
+
+고치지 않고 받아들인 것이다. 우리 상자에서 생기지 않는 입력이거나, 대조 수단이
+없는 경우다.
+
+*   **옛 기동의 API 비밀번호:** 비밀번호는 기동마다 새로 만들어지므로
+    `secret-count.sh box` 는 이전 기동 로그에 남은 옛 비밀번호를 대조하지
+    못한다. `ssm` 모드는 tmpfs 의 비밀번호 파일을 읽을 수 없어 비밀번호를
+    대조하지 않는다.
+*   **SSM 에이전트의 상자 안 실행 기록:** SSM 에이전트가 상자에 남기는 명령 ·
+    출력 기록 파일은 `secret-count.sh` 의 대조 밖이다.
+*   **운영 확인 스크립트의 스크래치:** `$TMPDIR`(없으면 `/tmp`)에 0600 으로 두고
+    끝나면 지운다. 그 자리가 tmpfs 인지는 AL2023 의 `/tmp` 마운트에 달렸다 —
+    M9 이 상자에서 확인한다.
+*   **paths 조회의 자격 정규화:** 사이드카는 자격 파일의 앞뒤 공백 · 끝 CRLF 를
+    떼지만 paths 두 스크립트는 그러지 않는다. 자격 파일은 시작 스크립트가 16진
+    64자 + LF 로만 쓰고 사용자 이름은 고정이라 갈리는 입력이 생기지 않는다.
+*   **paths 조회의 `pageCount` 산술:** 2^63 급 값이면 셸 산술이 넘쳐 여러 페이지
+    판정을 비켜 갈 수 있다. 그 값은 같은 망 칸 MediaMTX API 가 주는 것이라 그
+    값을 위조할 수 있으면 응답 전체가 이미 신뢰 밖이고, 실제 경로 수로는 생기지
+    않는다.
+
 ## 후속
 
 이 디렉터리를 입력으로 쓰는 작업에 넘기는 것이다.
@@ -519,24 +576,32 @@ prod 상자에 깔 도구의 판이다. M9 user_data 가 같은 값으로 설치
 | M9 c1 · c2 | 템플릿 변수 키 집합에 `detached_log_driver` 를 넣고, 모듈이 문자 그대로 `"journald"` 를 넘기는지 단언한다. `daemon.json` 로그 옵션에 `env` · `labels` 계열 0 |
 | M9 c1 | 이미지 변수 꼴 `^[^@]+@sha256:[0-9a-f]{64}$`. 다이제스트가 비면 `…@` 로 조립하지 않고 빈 문자열을 넘긴다(응답기 · janitor) |
 | M9 c1 | Media SG 인그레스 단언(위 「SG 가 유일한 경계」). 인그레스 포트에 8888 · 9996 · 9997 0 |
+| M9 c1 · c2 | prod 프록시 포트 넷(nginx 템플릿 변수)을 모듈이 넘기고 c1 에서 단언한다. user_data 렌더본은 렌더 파일 · nginx 설정 bind 의 긴 문법(`create_host_path: false`)을 그대로 쓴다 — 원본이 없으면 그 컨테이너만 기동에 실패한다. 이 PR 의 유닛 · 스크립트 · compose 템플릿을 함께 설치한다 |
+| M9 c1 · c2 | 설치 단언: `bin/lib/` 두 파일이 스크립트와 같은 상대 위치에 있고 내용이 저장소와 같다. `bin/` · `bin/lib/` 소유 `root:root`, 스크립트 0755 · lib 0644. `media.env`(유닛 `EnvironmentFile`)의 소유 · 모드(root 만 쓰기). 압축 user_data 16 KiB 게이트를 다시 잰다 |
+| M9 | prod 엔진의 비특권 포트 하한(`net.ipv4.ip_unprivileged_port_start`)을 상자에서 잰다. nginx 는 cap CHOWN · SETGID · SETUID 만 받고 `NET_BIND_SERVICE` 가 없다 — 프록시 포트가 하한보다 낮으면 nginx 가 기동하지 못한다 |
+| M9 · O7f · edge-secrets 런북 | CDN 비밀 생성 형식을 고정한다: 16진 또는 패딩 없는 base64url. 허용 글자는 `[A-Za-z0-9._+=-]` 이고 표준 base64 의 `/` 는 MediaMTX 가 거부해 기동이 막힌다. 입력 도구 · 런북 문구에 반영 |
+| M9 c2 | 유닛 하드닝 지시어(지금은 `LimitCORE=0` 뿐)를 상자에서 정한다 — docker CLI · `/run` 쓰기와 부딪히지 않는 지시어만 실측으로 고른다 |
 | M9 c1 · c2 | `media.env` 키에 `LOOPBACK_SENDER_IMAGE` · `MEDIA_LIVE_PORT` · `TEST_STREAM_KEY_SECRET_ARN` 을 더한다. ECR 읽기 Resource 에 송출기 저장소 하나 |
 | M9 c2 | `bin/lib/` 두 파일을 스크립트와 같은 상대 위치에 설치. nginx 렌더본을 `/etc/pokeclip-media/nginx.conf` 에. journald 보존 설정. 위 「판 고정」 값으로 설치 |
 | M9 | 사이드카 `S3_BUCKET` 은 버킷 **이름**(`rewind_bucket_name`)이다. 런타임 출력은 `rewind_bucket_arn` 뿐이라 이름을 꺼내거나 출력을 더한다 |
 | M9 | prod 인스턴스 아키텍처를 정한다(O7c 플랫폼 · 위 arm64 주의) |
-| M9 c3 · O7e 5 | 사이드카 기동 판정은 태그 저널(`-t pokeclip-media-sidecar`)로. DB 장애 때는 compose 전체가 아니라 사이드카만 다시 뜬다(송출 유지) — 「5분 MainPID 무변화」 는 mediamtx · nginx 감시로만 읽는다 |
+| M9 c3 · O7e 5 | 사이드카 기동 판정은 태그 저널(`-t pokeclip-media-sidecar`)로. DB 장애 때는 compose 전체가 아니라 사이드카만 다시 뜬다(송출 유지) — 「5분 MainPID 무변화」 는 mediamtx · nginx 감시로만 읽는다. 판정 조건에 「관찰 창 5분 동안 사이드카 태그 저널의 종료 줄 0 건」 을 넣고, 먼저 `docker info` 로 로그 드라이버(journald)를 확인한다 |
 | M7 c3 · O7c | 루프백 송출기 ECR 저장소 · 미러 하나를 더한다 |
 | I1-1 | RDS CA 번들 경로 env 는 지금 템플릿에 없다. **I1-1 PR 이 `compose.yml.tmpl` 사이드카 env 한 줄과 `render_test.sh` 단언을 더한다.** DB 연결 성공 고정 줄도 I1-1 이 정한다 |
 | I1-6 | 제어면 서버가 생기면 `control_upstream` 을 채운다. control 헬스는 nginx 경로라, 사이드카가 다시 뜨는 동안에도 healthy 로 보이고 제어면은 502 를 낸다 |
-| kty · 보안 | 보안 런북: 침해 대응 — 증거 보존 방식 · 저널 영속 여부(M9 의 journald 저장 방식) · 격리 수단(IMDS 차단 필수 · 기존 연결 차단) · 역할 세션 취소 뒤 인라인 정책 정리 시점 · 비밀 교체와 상자 교체 순서 |
+| kty · 보안 | 보안 런북: 침해 대응 — 증거 보존 방식 · 저널 영속 여부(M9 의 journald 저장 방식 — 휘발 저널은 격리 뒤 꺼낼 길이 없다) · **정지 전 컨테이너 증거 보존 여부**(서비스를 멈추면 compose down 이 컨테이너 파일 시스템과 json-file 로그를 지운다 · 정지 승인을 기다리는 동안 서비스는 계속 돈다) · 격리 수단(IMDS 차단 필수 · 기존 연결 차단) · 역할 세션 취소 뒤 인라인 정책 정리 시점 · 비밀 교체와 상자 교체 순서 |
+| 포크 mediamtx 트랙 | 다음 포크 태그에서 설정 조회 응답의 `hlsCDNSecret` 을 가리고(redact), 응답에 비밀이 새지 않는지 회귀 시험을 둔다(위 「받아들인 위험」). ADR 로 남길지는 kty |
 | M15 | 응답기 자리를 채운다. passphrase 를 싣는 루프백 단계(`--passphrase`)를 런북에 더한다. 응답기가 kick 에 쓸 관리 API 자격 경로가 아직 없다(전용 사용자 · 파일 · 실행 계정). `authHTTPExclude: api` 를 두면 관리 API 인증이 풀린다. 응답기가 다시 뜨는 동안 송출 인증이 실패하는 것을 실측에 기록한다 |
+| M15 | 응답기 계약 반영: 응답기 비밀은 파일로 받으므로 `*_FILE` env 이름(예: `STREAM_KEY_RESOLVE_TOKEN_FILE`)이 `render_test.sh` 의 비밀 계열 env 이름 금지(TOKEN 등)에 걸린다 — 값이 아닌 경로 env 는 허용하게 그 검사를 고친다. `authHTTPExclude` 에서 playback 이 빠지면 9996 재생이 막힌다. read 를 제외하려면 SRT 경로 잠금(`srtPublishPassphrase` · `srtReadPassphrase` · `overridePublisher: no`)을 prod 설정에 먼저 옮긴다. 포트 후보 127.0.0.1:8080 · 헬스 8081. dev-media 응답기와 다른 점(전용 제어망 · UID 10003 · 비밀 env)을 정리한다 |
+| O7f · M15 · O8a · edge-secrets 런북 | 루프백 순서: O7f 9 의 기본 루프백은 passphrase 없이 돌고 시험 경로의 공개 토큰(`<ingestStreamId>` 인자)만 있으면 된다 — O7f 8 의 시험 키(passphrase) **입력**은 M15 · O8a 로 넘어간다. 기본 `secret-count.sh box` 는 CDN 비밀(과 이번 기동 API 비밀번호)만 대조한다. M15 전까지 상자는 NLB 송출 대상 밖이라는 전제다. M15 뒤에는 기본 갈래가 거부되는 것이 정상(음성 확인)이고, `--passphrase` 갈래는 인스턴스 역할에 시험 키 ARN 읽기 권한이 있어야 한다. edge-secrets 런북의 「루프백 직전 입력」 문구도 이 순서로 고친다 |
 
 ## 출처
 
 *   계획 POK-299 M2 c1–c8 절, 착수 덧붙임 편차 1 · 2 · 5 · 20 · 23 · 25 · 26 ·
-    30 · 32, 결함 예측표 MP10 · MP12, 로그 설계 절.
+    30 · 32 · 34 · 35 · 36, 결함 예측표, 로그 설계 절.
 *   kty 결정: 20차(루프백 passphrase 노출 수용) · 82차(무인증 관리 항목 삭제) ·
     86차(paths 조회 꼴 · 자격 필수 · 루프백 순서) · 88차(API 비밀번호 기동마다
-    생성 · 운영자 API 사용자 없음).
+    생성 · 운영자 API 사용자 없음) · 89차(침해 대응 상세 절차는 보안 런북으로).
 *   사이드카 관리 API 자격 PR(3K-PokeClip/PokeClip-mono#291) 본문 「인프라 쪽
     전달 사항」 — 비밀번호 파일 규칙 · 배포 신호 · 즉시 롤백.
 *   M2 실측 기록: c6 사례 14(단독 restart) · c6 설정 조회(CDN 비밀 평문) · c7
