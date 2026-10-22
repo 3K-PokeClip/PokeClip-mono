@@ -728,7 +728,7 @@ check_case_27() {
 
 #######################################
 # 사례 28 — janitor_enabled 가 bool 로 바꿀 수 없는 값이면 렌더가 실패한다
-# (문자열 "true" · "false" 는 bool 로 바뀌어 통과한다). 그 키 하나만 "yes" ·
+# (일부 문자열 — "true" · "false" 등 — 은 bool 로 바뀌어 통과한다). 그 키 하나만 "yes" ·
 # 빈 문자열 · null · 숫자 1 로 바꾼 변수 파일은 각각 렌더가 실패하고, 원래 변수
 # 파일(같은 시험 안에서 다시 렌더)은 성공한다 — 렌더 실패가 다른 원인이면 짝의
 # 성공 쪽이 FAIL 한다.
@@ -882,7 +882,7 @@ main() {
   harness::run_case 27 'janitor — entrypoint 로 명령 고름 · 읽기 전용 루트' \
     check_case_27
   harness::run_case 28 \
-    'janitor_enabled 가 bool 로 바꿀 수 없는 값이면 렌더 실패("true" · "false" 는 통과)' \
+    'janitor_enabled 가 bool 로 바꿀 수 없는 값이면 렌더 실패(일부 문자열은 통과)' \
     check_case_28
   harness::run_case 29 '집계 — 읽기 실패는 0 건이 아님(정적)' check_case_29
 

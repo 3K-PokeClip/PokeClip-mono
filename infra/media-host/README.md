@@ -58,7 +58,9 @@ compose 프로젝트 이름은 `pokeclip-media` 다(유닛의 `MEDIA_COMPOSE_PRO
 *   **`unless-stopped` · `always` 를 쓰지 않는 이유:** 데몬 재시작 · 부팅 때
     엔진이 컨테이너를 스스로 띄워, systemd 와 기동자가 둘이 된다.
 *   **볼륨:** `recordings`(녹화) · `hooks`(훅 스풀) · `dvr`(LL-HLS 조각). 사이드카는
-    `recordings` · `hooks` 를 읽기 전용으로 붙인다. 녹화 삭제는 janitor 몫이다.
+    `recordings` · `hooks` 를 읽기 전용으로 붙인다. 녹화는 MediaMTX 가 보존
+    기한(`recordDeleteAfter` — `mediamtx.yml.tmpl` 에 적지 않아 기본 24시간)이
+    지나면 스스로 지우고, janitor 를 켜면 업로드가 끝난 조각을 그 전에 지운다.
 
 ### 설정 파일
 
@@ -73,12 +75,13 @@ compose 프로젝트 이름은 `pokeclip-media` 다(유닛의 `MEDIA_COMPOSE_PRO
     모두 journald 로 떨어진다.
 *   **`janitor_enabled`**(compose 템플릿 변수, bool): 참이면 janitor 를
     렌더하고, 거짓이면 서비스가 없다. bool 로 바꿀 수 없는 값(예: `"yes"` · 빈
-    문자열 · `null` · `1`)은 렌더 실패다. 문자열 `"true"` · `"false"` 는 bool 로
-    바뀌어 통과한다.
+    문자열 · `null` · `1`)은 렌더 실패다. 일부 문자열(`"true"` · `"false"` 등)은
+    bool 로 바뀌어 통과한다.
     *   켜면 사이드카 이미지를 녹화 디렉터리 소유자 계정 `10002:10002` · 읽기
-        전용 루트로 띄우고 `JANITOR_ENABLED: "true"` 를 넣는다. 녹화 파일을
-        지우는 서비스는 janitor 하나다(mediamtx 는 녹화를 쓰고 사이드카는
-        `:ro` 로 읽기만 한다).
+        전용 루트로 띄우고 `JANITOR_ENABLED: "true"` 를 넣는다. janitor 는
+        업로드가 끝난 조각을 MediaMTX 의 보존 기한보다 먼저 지운다. 보존
+        기한 삭제는 MediaMTX 몫이라 janitor 를 꺼도 계속된다. recordings 에
+        쓰기로 붙는 것은 mediamtx 와 janitor 이고 사이드카는 `:ro` 다.
     *   켜고 끄는 길은 설정 반영 교체다(아래 「되돌리기」). 끄면 다음 시작의
         `--remove-orphans` 가 옛 janitor 컨테이너를 지운다.
     *   로컬 compose 는 서비스를 남긴 채 `JANITOR_ENABLED` 를 비워 대기시킨다

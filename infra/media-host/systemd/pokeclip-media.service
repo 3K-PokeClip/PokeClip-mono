@@ -46,8 +46,8 @@ ExecStart=/opt/pokeclip-media/bin/start-media.sh
 # 처리와 겹쳐 up 이 종료 1 로 끝나 유닛이 failed 로 남는다(실측 10번 중 9번).
 # compose up 은 TERM 에 종료 130 으로 끝나고, 기동 중(선행 점검 · 비밀 조회 ·
 # 렌더)이면 시작 스크립트도 TERM 에 130 으로 끝나므로 그 값을 성공으로 본다.
-# CDN 비밀 조회(aws)에는 상한이 없어, 조회 중이면 시작 스크립트는 aws 가 끝난
-# 뒤에야 130 으로 끝난다. 그 전에 이 30초 대기가 끝나면 다음 ExecStop 과
+# 시작 스크립트는 CDN 비밀 조회(aws CLI)에 시간 상한을 걸지 않아, 조회 중이면
+# 시작 스크립트는 aws 가 끝난 뒤에야 130 으로 끝난다. 그 전에 이 30초 대기가 끝나면 다음 ExecStop 과
 # ExecStopPost 가 정리한다.
 ExecStop=/bin/sh -c 'kill -TERM "$$MAINPID" 2>/dev/null; i=0; \
   while kill -0 "$$MAINPID" 2>/dev/null && [ "$$i" -lt 150 ]; do \

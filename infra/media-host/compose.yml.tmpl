@@ -15,7 +15,8 @@
 #                        거짓이면 서비스가 없다(다음 시작의 --remove-orphans 가
 #                        옛 janitor 컨테이너를 지운다). bool 로 바꿀 수 없는 값
 #                        (예: "yes" · 빈 문자열 · null · 1)은 렌더 실패다 —
-#                        문자열 "true" · "false" 는 bool 로 바뀌어 통과한다.
+#                        일부 문자열("true" · "false" 등)은 bool 로 바뀌어
+#                        통과한다.
 #   proxy_live_port · proxy_playback_port · proxy_control_port ·
 #   proxy_health_port    nginx 듣기 포트(nginx.conf.tmpl 과 같은 값).
 #   rds_endpoint · rds_db_name
@@ -58,7 +59,9 @@
 #   - 볼륨에 복사 금지 옵션을 붙이지 않는다 — 이미지에 심은 소유권 복사가
 #     끊겨 비root 쓰기가 조용히 실패한다(루트 docker-compose.yml 과 같은 규칙.
 #     render_test 가 렌더에서 그 옵션 이름 0건을 본다).
-#     사이드카는 녹화 · 훅 스풀을 읽기만 한다(:ro). 녹화 삭제는 janitor 몫이다.
+#     사이드카는 녹화 · 훅 스풀을 읽기만 한다(:ro). 녹화는 MediaMTX 가 보존
+#     기한(recordDeleteAfter — 설정에 적지 않아 기본 24시간)이 지나면 스스로
+#     지우고, janitor 를 켜면 업로드가 끝난 조각을 그 전에 지운다.
 #   - 실행 계정은 각 이미지의 USER 가 정본이다 — 여기에 user: 를 적지 않는다.
 #     예외는 janitor 하나다. 사이드카 이미지(USER 10001)를 쓰지만 녹화 디렉터리
 #     소유자(MediaMTX 이미지 media/Dockerfile.mtxhook 의 USER 10002)로 돌아야
@@ -223,10 +226,12 @@ services:
 %{ endif ~}
 %{ if janitor_enabled ~}
 
-  # 녹화 정리 — 업로드가 끝난 녹화 조각을 지운다. 사이드카와 같은 이미지의 다른
-  # 명령이다. 녹화 파일을 지우는 서비스는 이것 하나다(mediamtx 는 녹화를 쓰고
-  # 사이드카는 :ro 로 읽기만 한다). 판정 표가 아직 없으면 janitor 가 스스로
-  # 기다리므로 사이드카에 기대지 않는다(스키마는 기동 전에 DDL 역할이 놓는다).
+  # 녹화 정리 — 업로드가 끝난 녹화 조각을 MediaMTX 의 보존 기한보다 먼저
+  # 지운다. 사이드카와 같은 이미지의 다른 명령이다. 보존 기한(recordDeleteAfter)
+  # 삭제는 MediaMTX 몫이라 janitor 를 꺼도 계속된다. recordings 에 쓰기로 붙는
+  # 것은 mediamtx 와 이 서비스이고 사이드카는 :ro 다. 판정 표가 아직 없으면
+  # janitor 가 스스로 기다리므로 사이드카에 기대지 않는다(스키마는 기동 전에 DDL
+  # 역할이 놓는다).
   janitor:
     image: ${sidecar_image}
     entrypoint: ["/usr/local/bin/janitor"]
