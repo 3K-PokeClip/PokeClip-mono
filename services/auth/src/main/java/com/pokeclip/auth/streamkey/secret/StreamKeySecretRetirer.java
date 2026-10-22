@@ -10,11 +10,11 @@ import java.util.regex.Pattern;
  * 폐기된 스트림키의 암호 사본을 {@code retire-from}의 <b>모든</b> 저장소에서 지운다(POK-272, 1번 설계 8-A 1) E2).
  * 재발급의 커밋 뒤 정리와 탈퇴 정리가 이것을 부른다.
  *
- * <p>읽기·쓰기 저장소 하나만 지우면 안 되는 이유: 이행·병행·롤백 중에는 같은 키의 사본이 PG와 Secrets Manager
- * 양쪽에 있을 수 있다. aws 상태 탈퇴에서 PG 사본이, postgres 롤백 중 재발급에서 Secrets Manager 사본이 남는다.
+ * <p>읽기·쓰기 저장소 하나만 지우면 안 되는 이유: 롤백 중에는 같은 키의 사본이 PG와 Secrets Manager 양쪽에 있을
+ * 수 있다. 병행이 끝난 dev는 {@code retire-from=aws}라 Secrets Manager 하나만 돈다(POK-329).
  *
  * <p>지울 이름은 셋이다. {@code ref} 그대로, {@code refPrefix + uuid}(이행 뒤 이름), {@code "streamkey:" + uuid}
- * (이행 전 이름). 이행 실행기가 행의 이름을 바꾼 뒤에도 옛 이름의 PG 사본이 남아 있어서다. uuid를 못 뽑으면
+ * (이행 전 이름). 이행(2026-10-06)이 행의 이름을 바꿔서 옛 이름 사본이 남은 키가 있을 수 있다. uuid를 못 뽑으면
  * {@code ref}만 지운다.
  *
  * <p>저장소·이름마다 따로 시도한다. 하나가 실패해도 나머지를 지우고, 마지막에 처음 실패를 다시 던진다

@@ -7,7 +7,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * resolve 전용 출입증의 설정(1번 T 설계 2-7). Media 는 이 토큰을 전용 헤더에 실어 허용 대역 안에서만 부른다.
  *
  * <p>부팅 검사는 여기 두지 않는다. 이 레코드는 모든 프로필에서 만들어지므로({@code
- * ConfigurationPropertiesScan}), 여기 두면 웹이 없는 이행 실행기도 그 검사를 탄다. 검사는 웹 전용인
+ * ConfigurationPropertiesScan}), 여기 두면 웹이 없는 컨텍스트도 그 검사를 탄다. 검사는 웹 전용인
  * {@link StreamKeyResolveSecurityConfig}가 한다.
  *
  * @param token 전용 토큰. 비어 있으면 창구가 닫힌다(401)

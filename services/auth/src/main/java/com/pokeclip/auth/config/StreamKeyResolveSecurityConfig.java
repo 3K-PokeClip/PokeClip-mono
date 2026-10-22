@@ -29,8 +29,8 @@ import org.springframework.util.StringUtils;
  * 않아, 허용 대역까지 비어 있어도 닫힘은 늘 401 이다. 부팅 검사도 토큰이 있을 때만 한다. 운영 ECS 는 전달 헤더
  * 전략을 {@code native}로 띄우는데, 이 창구를 쓰지 않는 그 auth 가 검사에 걸려 죽으면 안 된다.
  *
- * <p>웹 앱일 때만 있다. 이행 실행기(web-application-type: none)는 {@code HttpSecurity} 빈이 없어 이 설정이
- * 있으면 못 뜬다. 공용 체인 · 기본 체인과 같은 조건이다.
+ * <p>웹 앱일 때만 있다. 웹이 없는 컨텍스트에는 {@code HttpSecurity} 빈이 없어 이 설정이 있으면 못 뜬다. 공용
+ * 체인 · 기본 체인과 같은 조건이다(POK-272 이행 실행기 때 달았다).
  */
 @Configuration
 @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
