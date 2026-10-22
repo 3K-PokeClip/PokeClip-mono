@@ -118,14 +118,17 @@ class StreamKeySecretsAwsTest extends AwsSecretStoreTestSupport {
         pg.put(PREFIX + uuid, "token:old");
         SecretsLocalStackFixture.write(PREFIX + uuid, "token:old");
 
-        mockMvc.perform(post("/api/stream-keys/rotate").header("Authorization", bearer(user)))
-                .andExpect(status().isOk());
+        try {
+            mockMvc.perform(post("/api/stream-keys/rotate").header("Authorization", bearer(user)))
+                    .andExpect(status().isOk());
 
-        assertThat(SecretsLocalStackFixture.read(PREFIX + uuid)).isEmpty();
-        assertThat(pg.get(legacy)).as("retire-from=aws는 PG를 안 부른다").isPresent();
-        assertThat(pg.get(PREFIX + uuid)).isPresent();
-        pg.delete(legacy);
-        pg.delete(PREFIX + uuid);
+            assertThat(SecretsLocalStackFixture.read(PREFIX + uuid)).isEmpty();
+            assertThat(pg.get(legacy)).as("retire-from=aws는 PG를 안 부른다").isPresent();
+            assertThat(pg.get(PREFIX + uuid)).isPresent();
+        } finally {
+            pg.delete(legacy);
+            pg.delete(PREFIX + uuid);
+        }
     }
 
     /** aws 상태 탈퇴는 Secrets Manager의 사본을 지우고 PG는 안 부른다({@code retire-from=aws}). */
@@ -136,13 +139,16 @@ class StreamKeySecretsAwsTest extends AwsSecretStoreTestSupport {
         String ref = aliveRef(user);
         pg.put(ref, "token:copy");
 
-        mockMvc.perform(delete("/api/auth/me").header("Authorization", bearer(user)))
-                .andExpect(status().isNoContent());
-        assertThat(cleanup.awaitIdle(Duration.ofSeconds(20))).isTrue();
+        try {
+            mockMvc.perform(delete("/api/auth/me").header("Authorization", bearer(user)))
+                    .andExpect(status().isNoContent());
+            assertThat(cleanup.awaitIdle(Duration.ofSeconds(20))).isTrue();
 
-        assertThat(SecretsLocalStackFixture.read(ref)).isEmpty();
-        assertThat(pg.get(ref)).as("retire-from=aws는 PG를 안 부른다").isPresent();
-        pg.delete(ref);
+            assertThat(SecretsLocalStackFixture.read(ref)).isEmpty();
+            assertThat(pg.get(ref)).as("retire-from=aws는 PG를 안 부른다").isPresent();
+        } finally {
+            pg.delete(ref);
+        }
     }
 
     /**
