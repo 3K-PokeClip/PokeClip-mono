@@ -166,7 +166,7 @@ func TestRunStartsJanitorOnPostgres17(t *testing.T) {
 		t.Fatalf("코드 %d · 루트 %d · 실행 %d, want 0 · 1 · 1", code, f.roots, f.runs)
 	}
 	recs := lines(t, &out)
-	order := []string{"janitor_starting", "janitor_started", "janitor_stopped"}
+	order := []string{"janitor_starting", "pg_pool_conn_discarded", "janitor_started", "janitor_stopped"}
 	at := map[string]int{}
 	for i, r := range recs {
 		if _, ok := at[r["msg"].(string)]; !ok {
@@ -185,8 +185,34 @@ func TestRunStartsJanitorOnPostgres17(t *testing.T) {
 	if starting["run_id"] == nil || starting["run_id"] != started["run_id"] {
 		t.Errorf("run_id 가 기동 줄끼리 다르다: %v · %v", starting["run_id"], started["run_id"])
 	}
+	// P11 — 풀 관측이 janitor 풀에 붙었다(POK-388). 기동 줄은 정리기의 게이지 7종 시작 덤프보다 앞이다.
+	discarded := find(recs, "pg_pool_conn_discarded")
+	if len(discarded) != 1 {
+		t.Fatalf("pg_pool_conn_discarded %d줄, want 기동 줄 1", len(discarded))
+	}
+	if d := discarded[0]; d["level"] != "WARN" || d["pool"] != "janitor" || d["reason"] != "startup" || d["value"] != float64(0) || d["run_id"] != starting["run_id"] {
+		t.Errorf("pg_pool_conn_discarded = %v, want WARN pool=janitor value=0 reason=startup run_id=%v", d, starting["run_id"])
+	}
 	if strings.Contains(out.String(), "p@ss") || strings.Contains(out.String(), "p%40ss") {
 		t.Error("로그에 비밀번호가 실렸다")
+	}
+}
+
+// P2 — 풀 관측의 stop 은 pool.Close 보다 뒤에 등록돼 먼저 실행돼야 한다(defer 는 LIFO). 거꾸로면 풀을 닫은
+// 뒤에도 관측 고루틴이 풀을 읽는다. 등록 순서는 기동 줄에 드러나지 않으므로 소스 순서를 본다(segment-indexer 의
+// TestShutdownDeferRegistrationOrder 와 같은 꼴).
+func TestPoolStatsStopRegisteredAfterPoolClose(t *testing.T) {
+	src, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("main.go 를 읽지 못했다: %v", err)
+	}
+	text := string(src)
+	closeAt, stopAt := strings.Index(text, "defer pool.Close()"), strings.Index(text, "defer stopPoolStats()")
+	if closeAt < 0 || stopAt < 0 {
+		t.Fatalf("defer pool.Close() 위치 %d · defer stopPoolStats() 위치 %d — 종료 절차가 사라졌거나 이름이 바뀌었다", closeAt, stopAt)
+	}
+	if stopAt < closeAt {
+		t.Error("defer stopPoolStats() 가 defer pool.Close() 보다 먼저 등록됐다 — LIFO 라 풀을 닫은 뒤에 관측을 멈춘다")
 	}
 }
 
