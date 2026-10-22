@@ -7,6 +7,11 @@
 # 사례 디렉터리:
 #   bin/            PATH 의 맨 앞 — start_fakebin 의 docker · chown 과 fakebin 의
 #                   aws · docker-credential-ecr-login 을 가리키는 링크.
+#
+# PATH 의 뒤쪽은 호스트 디렉터리(/usr/bin · /bin)가 아니라 그 안의 명령에서 가짜가
+# 맡는 이름(FIXTURE_FAKE_NAMES)을 뺀 링크 모음(fixture::make_sysbin)이다. 호스트에
+# 실물 docker · aws · 자격 도우미가 깔려 있어도(GitHub ubuntu 러너는 자격 도우미가
+# /usr/bin 에 있다) 가짜를 뺀 사례의 「없음」 이 실물로 가려지지 않는다.
 #   log/            가짜 명령 기록(<명령>.<n>.argv · <명령>.<n>.env).
 #   docker-config/  config.json(credHelpers 에 시험 레지스트리 호스트).
 #   runtime/        RUNTIME_DIR(스크립트가 만든다).
@@ -29,13 +34,41 @@ readonly FIXTURE_SECRET_TOKEN='@@HLS_CDN_SECRET@@'
 readonly FIXTURE_API_PASS_TOKEN='@@MTX_API_PASS@@'
 readonly FIXTURE_PREREQ_ORDER="compose-version ecr-credential-helper \
 docker-config"
+# 가짜가 맡는 명령 이름 — 호스트 명령 링크 모음에 넣지 않는다.
+readonly FIXTURE_FAKE_NAMES='docker chown aws docker-credential-ecr-login'
 
 fixture_root=""
+fixture_sysbin=""
 fixture_dir=""
 fixture_status=0
 fixture_env=()
 fixture_cmd=()
 fixture_value_file=""
+
+#######################################
+# 호스트 명령 링크 모음을 fixture_root 아래에 새로 만든다(이후 fixture_sysbin).
+# 주어진 디렉터리 순서대로 실행 파일을 링크하고(앞 디렉터리가 이긴다 — PATH 와
+# 같은 순서), 가짜가 맡는 이름은 넣지 않는다.
+# Globals:
+#   fixture_root, fixture_sysbin
+# Arguments:
+#   호스트 디렉터리 ….
+#######################################
+fixture::make_sysbin() {
+  local dir f name
+  fixture_sysbin="$(mktemp -d "${fixture_root}/sysbin.XXXXXX")"
+  for dir in "$@"; do
+    for f in "${dir}"/*; do
+      name="${f##*/}"
+      [[ -f "${f}" && -x "${f}" ]] || continue
+      case " ${FIXTURE_FAKE_NAMES} " in
+        *" ${name} "*) continue ;;
+      esac
+      [[ ! -e "${fixture_sysbin}/${name}" ]] || continue
+      ln -s -- "${f}" "${fixture_sysbin}/${name}"
+    done
+  done
+}
 
 #######################################
 # 사례 디렉터리를 새로 만든다(이후 fixture_dir).
@@ -107,7 +140,7 @@ fixture::base_env() {
 # 스크립트를 빈 환경(env -i)에 fixture_env 와 가짜 명령 설정만 넣어 부르는
 # 명령 줄을 fixture_cmd 에 만든다(스크립트 인자는 부르는 쪽이 뒤에 붙인다).
 # Globals:
-#   fixture_cmd, fixture_dir, fixture_env
+#   fixture_cmd, fixture_dir, fixture_env, fixture_sysbin
 # Arguments:
 #   스크립트 경로, 가짜 명령 설정(NAME=값 …).
 #######################################
@@ -115,7 +148,7 @@ fixture::command() {
   local script="$1"
   shift
   fixture_cmd=(env -i "HOME=${fixture_dir}/home"
-    "PATH=${fixture_dir}/bin:/usr/bin:/bin"
+    "PATH=${fixture_dir}/bin:${fixture_sysbin:?호스트 명령 링크 모음이 없다}"
     "PCBENCH_FAKE_LOG_DIR=${fixture_dir}/log"
     "PCBENCH_FAKE_COMPOSE_VERSION=${FIXTURE_COMPOSE_VERSION}"
     ${fixture_env[@]+"${fixture_env[@]}"} "$@" "${script}")

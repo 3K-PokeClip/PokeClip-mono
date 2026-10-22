@@ -324,12 +324,30 @@ case_compose_unset() {
   return "${ok}"
 }
 
-# 사례 6 — PATH 에 docker-credential-ecr-login 없음.
+# 사례 6 — PATH 에 docker-credential-ecr-login 없음. 호스트 명령 자리에 실물
+# 도우미가 있는 러너(GitHub ubuntu)도 흉내 낸다 — 호스트 디렉터리에 도우미를 두고
+# 링크 모음을 다시 만들어도 「없음」 이어야 한다.
+# Globals:
+#   fixture_root, fixture_sysbin, TEST_DIR
 case_helper_missing() {
+  local ok=0 saved="${fixture_sysbin}" host
   fixture::new_case 0
   fixture::base_env
   fixture::run start-media.sh || return 1
-  expect_prereq_fail 'MEDIA PREREQ FAIL ecr-credential-helper'
+  expect_prereq_fail 'MEDIA PREREQ FAIL ecr-credential-helper' || ok=1
+  host="$(mktemp -d "${fixture_root}/host-bin.XXXXXX")"
+  ln -s -- "${TEST_DIR}/fakebin/docker-credential-ecr-login" \
+    "${host}/docker-credential-ecr-login"
+  fixture::make_sysbin "${host}" /usr/bin /bin
+  fixture::new_case 0
+  fixture::base_env
+  fixture::run start-media.sh || { fixture_sysbin="${saved}"; return 1; }
+  fixture_sysbin="${saved}"
+  if ! expect_prereq_fail 'MEDIA PREREQ FAIL ecr-credential-helper'; then
+    harness::add_reason '호스트 자리의 실물 도우미가 「없음」 을 가림'
+    ok=1
+  fi
+  return "${ok}"
 }
 
 # 사례 7 — config.json 의 credHelpers 에 호스트 없음 · config.json 없음.
@@ -713,6 +731,7 @@ main() {
   trap 'exit 130' INT
   trap 'exit 143' TERM
   fixture_root="$(mktemp -d "${TMPDIR:-/tmp}/pcbench-edge-proxy-start.XXXXXX")"
+  fixture::make_sysbin /usr/bin /bin
   # 스크립트가 core 한도를 스스로 0 으로 내리는지 보려면 물려받는 한도가 0 이
   # 아니어야 한다(macOS 기본 소프트 한도는 0). 못 올리면 사례 1 이 그 사실로
   # 실패한다.
