@@ -627,7 +627,7 @@ prod 상자에 깔 도구의 판이다. M9 user_data 가 같은 값으로 설치
 | M9 런북 · O7e 5 | 사이드카 기동 판정은 태그 저널(`-t pokeclip-media-sidecar`)로. DB 장애 때는 compose 전체가 아니라 사이드카만 다시 뜬다(송출 유지) — 「5분 MainPID 무변화」 는 mediamtx · nginx 감시로만 읽는다. 판정 조건에 「관찰 창 5분 동안 사이드카 태그 저널의 종료 줄 0 건」 을 넣고, 먼저 `docker info` 로 로그 드라이버(journald)를 확인한다 |
 | M7 · O7c | 루프백 송출기 ECR 저장소 · 미러 하나를 더한다 |
 | M9 | 하드닝 — 상시 서비스에 `read_only`(쓰는 자리는 tmpfs · 볼륨으로) · `pids_limit` · 메모리 상한을 둔다. 값은 상자에서 서비스별 쓰기 자리 · 기동 메모리를 재서 정하고 `render_test.sh` 에 단언을 더한다 |
-| I1-1 | RDS CA 번들 경로 env 는 지금 템플릿에 없다. **I1-1 PR 이 `compose.yml.tmpl` 사이드카 env 한 줄과 `render_test.sh` 단언을 더한다.** DB 연결 성공 고정 줄도 I1-1 이 정한다 |
+| I1-1 | 반영됨(POK-311). `compose.yml.tmpl` 사이드카 · janitor env 에 RDS CA 번들 경로(`POSTGRES_SSLROOTCERT` — 이미지 안 `/etc/pokeclip/rds-ca/global-bundle.pem`)와 `AWS_EC2_METADATA_V1_DISABLED: "true"` 를 넣고 `render_test.sh` 사례 10 이 단언한다. DB 연결 성공 고정 줄은 `db_connected`(media/README 「DB 연결 성공 줄」) |
 | I1-6 | 제어면 서버가 생기면 `control_upstream` 을 채운다. control 헬스는 nginx 경로라, 사이드카가 다시 뜨는 동안에도 healthy 로 보이고 제어면은 502 를 낸다 |
 | kty · 보안 | 보안 런북: 침해 대응 — 증거 보존 방식 · 저널 영속 여부(M9 의 journald 저장 방식 — 휘발 저널은 격리 뒤 꺼낼 길이 없다) · **정지 전 컨테이너 증거 보존 여부**(서비스를 멈추면 compose down 이 컨테이너 파일 시스템과 json-file 로그를 지운다 · 정지 승인을 기다리는 동안 서비스는 계속 돈다) · 격리 수단(IMDS 차단 필수 · 기존 연결 차단) · 역할 세션 취소 뒤 인라인 정책 정리 시점 · 비밀 교체와 상자 교체 순서 |
 | 포크 mediamtx 트랙 | 다음 포크 태그에서 설정 조회 응답의 `hlsCDNSecret` 을 가리고(redact), 응답에 비밀이 새지 않는지 회귀 시험을 둔다(위 「받아들인 위험」). ADR 로 남길지는 kty |
@@ -638,9 +638,10 @@ prod 상자에 깔 도구의 판이다. M9 user_data 가 같은 값으로 설치
 ## 출처
 
 *   계획 POK-299 의 M2 절과 착수 때 계획에서 바꾼 점(재기동 정책 `on-failure` ·
-    로그 설계 · CA 번들 env 이월 · 0.0.0.0 게시와 SG 경계 · 루프백 순서 · API
-    비밀번호 · 무인증 관리 항목 정리 · 단독 restart 관찰 · 두 단계 정지 · 크래시
-    경로 정리), 결함 예측표, 로그 설계 절 — 저장소 밖 작업 기록.
+    로그 설계 · CA 번들 env 이월(POK-311 에서 반영) · 0.0.0.0 게시와 SG 경계 ·
+    루프백 순서 · API 비밀번호 · 무인증 관리 항목 정리 · 단독 restart 관찰 · 두
+    단계 정지 · 크래시 경로 정리), 결함 예측표, 로그 설계 절 — 저장소 밖 작업
+    기록.
 *   설계 결정: 루프백 passphrase 의 argv 일시 노출 수용 · 무인증 관리 항목 삭제 ·
     paths 조회 꼴(사이드카 안 고정 `sh -c`) · 자격 필수 · 루프백 순서(M15 전에는
     passphrase 없이) · API 비밀번호 기동마다 생성 · 운영자 API 사용자 없음 · 침해

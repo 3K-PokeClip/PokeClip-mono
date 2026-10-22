@@ -89,8 +89,10 @@ def is_attached: . as $s | attached | index($s) != null;
 def db_env:
   {POSTGRES_AUTH: "iam", POSTGRES_HOST: .rds_endpoint,
    POSTGRES_PORT: "5432", POSTGRES_DB: .rds_db_name,
-   POSTGRES_SSLMODE: "verify-full", TZ: "UTC",
-   AWS_REGION: "ap-northeast-2"};
+   POSTGRES_SSLMODE: "verify-full",
+   POSTGRES_SSLROOTCERT: "/etc/pokeclip/rds-ca/global-bundle.pem",
+   TZ: "UTC", AWS_REGION: "ap-northeast-2",
+   AWS_EC2_METADATA_V1_DISABLED: "true"};
 '
 
 scratch=""
