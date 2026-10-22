@@ -205,7 +205,9 @@ kty 로컬 터미널에서 돌린다 — 계정 번호가 명령 · 응답에 �
 넣는다 — 1 이 상자에서 역할을 거꾸로 집어 이름을 보이고, 2 가 그 역할이 상자 전용 역할
 `pokeclip-media-dev-ssm-role` 일 때만 정책을 넣는다. 공유 역할(`pokeclip-dev-ssm-role`
 등 — 팀 dev EC2 와 함께 쓰는 역할)이나 다른 이름이면 2 가 「멈춤」을 내고 아무것도 넣지
-않는다. 그때는 kty 가 정한다(상자를 1-2 의 공유 프로필로 다시 띄웠다면 상자 전용 프로필을
+않는다. 이름이 맞아도 그 역할이 든 인스턴스 프로필이 하나가 아니면(0개 · 둘 이상 · 조회
+실패) 2 가 「멈춤」 · 종료 1 을 낸다.
+그때는 kty 가 정한다(상자를 1-2 의 공유 프로필로 다시 띄웠다면 상자 전용 프로필을
 먼저 붙인다). 2 는 따로 띄운 bash 안에서 돈다 — 멈춰도 터미널은 닫히지 않고, 계정
 번호는 지금 셸에 남지 않으며 화면에도 나오지 않는다. 다만 안의 aws 가 실패하면(정책
 넣기 권한 거부 등) 오류 문구에 호출자 ARN(계정 번호가 든다)이 찍힐 수 있다 — 그 출력도
@@ -243,6 +245,11 @@ ROLE="${ROLE:-}" bash <<'SH'
 set -euo pipefail
 [[ "${ROLE}" == pokeclip-media-dev-ssm-role ]] \
   || { echo "멈춤 — 상자 전용 역할이 아니다: ${ROLE:-(비었음)}"; exit 1; }
+PROFILE_COUNT="$(aws iam list-instance-profiles-for-role --role-name "${ROLE}" \
+  --query 'length(InstanceProfiles)' --output text < /dev/null)" \
+  || PROFILE_COUNT=''
+[[ "${PROFILE_COUNT}" == 1 ]] \
+  || { echo "멈춤 — 인스턴스 프로필이 하나가 아니거나 조회 못 했다: ${PROFILE_COUNT:-?}개"; exit 1; }
 ACCOUNT="$(aws sts get-caller-identity --query Account --output text \
   < /dev/null)" || ACCOUNT=''
 [[ "${ACCOUNT}" =~ ^[0-9]{12}$ ]] \
@@ -304,7 +311,7 @@ aws iam get-role-policy --role-name "${ROLE}" \
   주석에 적었다. 토큰 · SHA · 파일 이름만 인자로 싣는다 — 비밀 · 주소는 싣지 않는다.
 - **실행 직전 kty 승인.** 상자를 바꾸는 블록(R0–R6 · 반영 취소 · 덧붙이기 · cut · 해제
   적용 · 되돌림 적용 · 틀린 줄 걷기 · 응답기 살리기 · 다시 시작 · IP 한도 켜기 · 끄기 ·
-  MediaMTX 최후 재시작)은
+  MediaMTX 최후 재시작 · 반영 전 기록 보관)은
   블록마다 승인을 받는다. 읽기만 하는 블록(R1 값 단언 · 반영 취소 ⓒ · 걷기 확인)과 준비
   블록(해제 준비 · 되돌림 준비 — 살아 있는 파일을 바꾸지 않는다)도 박스 명령이라 승인
   묶음에 넣는다.
@@ -390,8 +397,9 @@ assert_demo_dir_safe() {
 }
 
 # remove_box_file 은 상자 파일 $2 를 지운다 — $1 이 shred 면 shred -u, rm 이면 rm 이다.
-# 없으면 그대로 두고, 일반 파일이 아니거나 링크면 지우지 않고 일치 없음이다(shred 와
-# [[ -e ]] 는 링크를 따라가 그 대상을 덮어쓴다).
+# 없으면 그대로 두고, 일반 파일이 아니거나 링크면 지우지 않고 일치 없음이다(shred · > 는
+# 링크를 따라가 그 대상을 덮어쓰고, [[ -e ]] 는 끊어진 링크를 없는 것으로 본다 — 그래서
+# -L 을 함께 본다).
 remove_box_file() {
   local -r how="$1" path="$2"
   if [[ ! -e "${path}" && ! -L "${path}" ]]; then
@@ -1121,13 +1129,14 @@ CloudWatch Logs 그룹을 담는다 — 문서가 없으면 기록 설정도 없
 kty 2026-10-20, 그날 이 계정은 문서가 없었다) · 그 밖 오류(중단 — 못 읽은 것이지 없는 것이
 아니다).
 
-kty 로컬 터미널에서 판정 블록 → 세션 열기 순으로, 같은 셸(같은 프로필 · 리전)에서 친다.
+kty 로컬 터미널에서 판정 블록 → 세션 열기 순으로, 같은 셸(같은 프로필)에서 친다.
+리전은 두 명령에 못박는다 — 기본 세션 문서는 리전마다 있다.
 판정 블록은 문서 본문이나 오류 문구(호출자 ARN — 계정 번호가 든다)를 찍을 수 있으므로
 1-5 처럼 에이전트 세션 · 문서에 붙여 넣지 않는다.
 
 ```bash
 if DOC_OUT="$(aws ssm get-document --name SSM-SessionManagerRunShell \
-    --query Content --output text 2>&1)"; then
+    --region ap-northeast-2 --query Content --output text 2>&1)"; then
   printf '%s\n' "${DOC_OUT}"
   echo '문서 있음 — s3BucketName · cloudWatchLogGroupName 이 둘 다 빈 값일 때만 세션을 연다'
 elif [[ "${DOC_OUT}" == *'(InvalidDocument)'*'does not exist'* ]]; then
@@ -1142,7 +1151,7 @@ unset DOC_OUT
 「통과」를 봤거나, 「문서 있음」이고 두 칸이 다 빈 값일 때만 세션을 연다.
 
 ```bash
-aws ssm start-session --target <instance-id>
+aws ssm start-session --region ap-northeast-2 --target <instance-id>
 ```
 
 **`STREAM_KEY_RESOLVE_URL` 에 넣는 주소는 눈으로 확인한다** — 같은 VPC 의 사설 주소(dev EC2
@@ -1198,6 +1207,8 @@ aws ssm start-session --target <instance-id>
     elif [[ -L "${DEMO_DIR}/.env.next" || ( -e "${DEMO_DIR}/.env.next" \
         && ! -f "${DEMO_DIR}/.env.next" ) ]]; then
       echo '멈춤: .env.next 가 일반 파일이 아니거나 링크다 — 쓰지 않았다'
+    elif [[ -e "${DEMO_DIR}/.env.next" ]]; then
+      echo '멈춤: .env.next 가 남아 있다 — 아래 재시도 지우기 블록부터'
     elif [[ -s "${DEMO_DIR}/.env.pre-T.bak" ]]; then
       {
         grep -E '^(DEMO_HOME|STREAM_KEY_RESOLVE_TOKEN)=' "${DEMO_DIR}/.env"
@@ -1208,7 +1219,29 @@ aws ssm start-session --target <instance-id>
       } > "${DEMO_DIR}/.env.next"
       chown root:root "${DEMO_DIR}/.env.next"
       chmod 0600 "${DEMO_DIR}/.env.next"
-      command mv -T "${DEMO_DIR}/.env.next" "${DEMO_DIR}/.env" && echo '.env 를 끼웠다'
+      BAD_KEYS=''
+      [[ "$(grep -cxF -- "DEMO_HOME=${DEMO_DIR}" \
+          "${DEMO_DIR}/.env.next")" == 1 ]] || BAD_KEYS+=' DEMO_HOME'
+      [[ "$(grep -cxE -- 'STREAM_KEY_RESOLVE_TOKEN=[0-9a-f]{64}' \
+          "${DEMO_DIR}/.env.next")" == 1 ]] \
+        || BAD_KEYS+=' STREAM_KEY_RESOLVE_TOKEN'
+      [[ "$(grep -cxE -- 'MTX_API_PASS=[0-9a-f]{64}' \
+          "${DEMO_DIR}/.env.next")" == 1 ]] || BAD_KEYS+=' MTX_API_PASS'
+      [[ "$(grep -c -- '^STREAM_KEY_RESOLVE_URL=' \
+          "${DEMO_DIR}/.env.next")" == 1 ]] \
+        || BAD_KEYS+=' STREAM_KEY_RESOLVE_URL'
+      [[ "$(grep -c -- '^MTX_IMAGE_REGISTRY=' \
+          "${DEMO_DIR}/.env.next")" == 1 ]] || BAD_KEYS+=' MTX_IMAGE_REGISTRY'
+      [[ "$(wc -l < "${DEMO_DIR}/.env.next")" == 5 ]] \
+        || BAD_KEYS+=' (줄 수가 5 가 아니다)'
+      if [[ -z "${BAD_KEYS}" ]]; then
+        command mv -T "${DEMO_DIR}/.env.next" "${DEMO_DIR}/.env" \
+          && echo '.env 를 끼웠다'
+      else
+        shred -u -- "${DEMO_DIR}/.env.next"
+        echo "멈춤: .env.next 가 다섯 줄 꼴이 아니다 — 어긋난 키:${BAD_KEYS}"
+        echo '.env 는 그대로다'
+      fi
     else
       echo '멈춤: 반영 전 보존(R0)이 먼저다'
     fi
@@ -1234,6 +1267,10 @@ aws ssm start-session --target <instance-id>
 `.env.next` 에는 `>` 로 쓰지 않고 「멈춤」을 낸다. 재시도나 5 단계가 이 셋(링크 · 일반
 파일 아님 · root 전용 아님)으로 「멈춤」을 내면 지우거나 고치지 말고 `ls -la "${DEMO_DIR}"`
 출력을 들고 kty 가 정한다.
+
+5 단계는 일반 파일로 남은 `.env.next` 에도 쓰지 않고 「멈춤: … 남아 있다」를 낸다 — `>` 는
+있던 파일의 모드를 그대로 두므로 `chmod` 전까지 비밀이 옛 모드로 남는다. 이 멈춤은 kty 를
+기다리지 않는다 — 아래 블록으로 지우고 2 단계부터 다시 친다.
 
 ```bash
 if [[ "$(id -u)" != 0 || -z "${DEMO_DIR:-}" ]]; then
@@ -1265,6 +1302,13 @@ fi
 - `.env.next` 를 다 쓴 뒤 이름 바꾸기로 끼우므로 세션이 끊겨도 반쪽 `.env` 가 생기지
   않는다. 남은 `.env.next` 는 비밀(출입증 · API 비번)이 든 파일이라 위 블록으로 지우고
   다시 친다.
+- 끼우기 전에 `.env.next` 가 키마다 정확히 한 줄인 다섯 줄인지 본다 — `DEMO_HOME` 은
+  `DEMO_DIR` 그대로, 출입증 · API 비번은 64자 소문자 hex(R1 값 단언과 같은 기준). 주소 ·
+  레지스트리 값의 꼴은 뒤의 R1 값 단언이 본다. 어긋나면(옛 `.env` 의 출입증 줄이 없거나
+  둘 · CR 꼬리, `openssl` 실패로 빈 비번) `.env.next` 를 지우고 「멈춤」이다 — `.env` 는
+  그대로다. 멈춤은 어긋난 키 이름만 낸다(값은 내지 않는다 — 줄 수만 어긋났으면 그
+  글귀). 이 멈춤은 kty 를 기다리지 않는다 — 옛 `.env` 의 그 줄(출입증 · `DEMO_HOME`, 같은
+  키 줄이 더 있으면 줄 수)이나 `openssl`(`MTX_API_PASS`)을 고친 뒤 2 단계부터 다시 친다.
 - 끼우기는 `command mv` 다 — AL2023 의 root 대화형 셸은 `mv` 가 `mv -i` 별칭이라
   덮어쓰기를 묻고, 붙여 넣은 다음 줄이 그 답으로 들어간다(2026-10-20 상자에서 물었다).
   거절돼도 `mv -i` 는 종료 0 이므로(GNU coreutils 8.32) 끼웠는지는 끝의 「.env 를
@@ -1453,7 +1497,7 @@ main "$@"
 | R3′ | R3′ MediaMTX 이미지 받기 | ECR 로그인(블록 안 임시 자격) → `pull mediamtx` → 자격 지움 · 이미지 있음 단언 | F3 |
 | R4 | R4 렌더 | `${DEMO_HOME}` 소유 단언 → render.sh → `chown root:10002` · `chmod 0640` → 소유 · 모드 단언 | F4 |
 | R5 | R5 응답기 기동 | 디렉터리 준비 · 거부 목록 확인 → `up -d ingest-auth` → healthy(120초) | F5 |
-| R6 | R6 전체 기동 | `up -d`(MediaMTX · edge 재생성) → 판 · 아치 · 좌표 · 권한 오류 · `MTX_` 단언 | F6 |
+| R6 | R6 전체 기동 | `up -d`(바뀐 서비스만) → edge 늘 재생성 · id 단언 → 판 · 아치 · 좌표 · 권한 오류 · `MTX_` 단언 | F6 |
 
 순서의 까닭.
 
@@ -1467,6 +1511,12 @@ main "$@"
 - **응답기 healthy 뒤에 MediaMTX.** 운영 순서(7절)다.
 - 반영 중 옛 MediaMTX 는 옛 설정으로 돈다 — 렌더 산출물은 단일 파일 마운트라 이름
   바꾸기로 바뀐 새 파일을 옛 컨테이너가 보지 않는다(추론 — 로컬 실측에서 확인).
+- **R6 은 edge 를 늘 다시 만든다.** edge 의 세 마운트(nginx.conf · player.html ·
+  hls.min.js)도 단일 파일 마운트다. `up -d` 는 정의가 그대로인 서비스를 다시 만들지
+  않아, 파일만 바뀐 주기에는 edge 가 옛 파일을 낸다(2026-10-20 실측 — 옮긴 옛
+  hls.min.js). 그래서 `up -d` 뒤 edge 하나만(`--no-deps`) 다시 만들고 컨테이너 id 가
+  바뀌었는지 본다. edge 가 8888 의 재생 페이지 · HLS 를 모두 중계하므로 그사이 시청 요청이
+  실패한다(비200 응답 관측 구간 약 0.3초 — 로컬 실측 · 하한 · 상자 값 아님).
 - **R4 뒤 · R6 앞에 옛 MediaMTX 가 다시 시작되면 모든 송출이 끊긴다.** 재시작 정책이
   같은 컨테이너를 다시 띄우면(프로세스가 죽음 · 엔진 재시작 · 상자 재부팅) 마운트가 새로
   묶여 새 렌더를 읽는다. 옛 컨테이너는 제어망에 붙어 있지 않아 새 렌더의 Control API
@@ -1647,7 +1697,9 @@ main "$@"
 
 ```bash
 # ── 블록: R6 전체 기동 — 머리 + 이 본문. 인자 없음 ──
-# 응답기 healthy 를 다시 본 뒤 MediaMTX · edge 를 새로 만든다. 이어서 서버가 쓰는 판을
+# 응답기 healthy 를 다시 본 뒤 up -d(바뀐 서비스만) 하고, edge 는 늘 다시 만든다 — 단일
+# 파일 마운트는 시작 때 inode 에 묶여 이름 바꾸기로 들어온 새 파일을 보지 않는다
+# (2026-10-20 실측). edge 컨테이너 id 가 바뀌었는지 본 뒤, 이어서 서버가 쓰는 판을
 # 단언한다 — 기동 첫 줄의 판 · 이미지 아치 · compose 의 이미지 좌표 · 기동 로그의 권한
 # 오류 0 · 컨테이너 환경의 MTX_ 0(MTX_ 변수는 설정 파일보다 우선해 렌더 단언을 비켜 간다).
 # 이미지 좌표는 레지스트리 호스트(계정 번호)를 떼고 낸다.
@@ -1655,8 +1707,14 @@ main() {
   (( $# == 0 )) || check_failed '사용법: 인자 없음'
   local mtx_id='' image tag arch line want_arch="${DEMO_ARCH:-amd64}"
   local -i i found=0 version=0 denied=0 unsaved=0 mtx_env=0
+  local edge_before='' edge_id=''
   wait_ingest_auth_healthy   # 운영 순서 — 응답기 healthy 뒤에만 MediaMTX
+  container_id_or_none edge edge_before
   compose_up_masked live_compose -d   # 출력에 이미지 좌표가 찍힐 수 있다 — 가려 낸다
+  compose_up_masked live_compose -d --no-deps --force-recreate edge
+  container_id edge edge_id
+  [[ "${edge_id}" != "${edge_before}" ]] \
+    || mismatch 'edge 가 새로 만들어지지 않았다 — 옛 파일을 문다'
   container_id mediamtx mtx_id
   image="$(docker inspect -f '{{.Config.Image}}' "${mtx_id}")"
   live_compose config --images > "${WORK}/images"
@@ -1713,14 +1771,14 @@ main "$@"
 
 | # | 멈춘 자리 | 그때 상태(HEAD · 트리 · `.env` · 렌더 산출물 · 컨테이너) | 복구 진입점 |
 |---|---|---|---|
-| F0 | R0 보존 | 반영 전 그대로 · 만든 백업만 | 다시 돌리면 이어진다. 첫머리 단언(T 백업 남음)에서 멈췄으면 접은 뒤 처분을 빠뜨렸다 — T 백업 처분(11절) 뒤 다시(T 가 도는 리허설 뒤면 E-1 → E-2). 보존 단언이 어긋나면(종료 1) 원인이 둘이다 — 남은 반영 전 기록(`pre-T.*`)이 직전 반영 주기의 것이거나(T 가 정착한 뒤의 다음 반영 — 롤백 창을 닫고 반영 전 일곱을 옮긴 뒤 다시, 11-7 ③ · kty 승인), 이번 보존 도중 반영 전 상태가 바뀌었다(반영을 멈추고 kty). 어느 쪽인지는 `pre-T.sha` 와 지금 HEAD 로 가린다 |
+| F0 | R0 보존 | 반영 전 그대로 · 만든 백업만 | 다시 돌리면 이어진다. 첫머리 단언(T 백업 남음)에서 멈췄으면 접은 뒤 처분을 빠뜨렸다 — T 백업 처분(11절) 뒤 다시(T 가 도는 리허설 뒤면 E-1 → E-2). 보존 단언이 어긋나면(종료 1) 원인이 둘이다 — 남은 반영 전 기록(`pre-T.*`)이 직전 반영 주기의 것이거나(T 가 정착한 뒤의 다음 반영 — 롤백 창을 닫고 「반영 전 기록 보관」(11-7)으로 반영 전 일곱을 옮긴 뒤 다시 · kty 승인), 이번 보존 도중 반영 전 상태가 바뀌었다(반영을 멈추고 kty). 어느 쪽인지는 `pre-T.sha` 와 지금 HEAD 로 가린다 |
 | F1 | R1 값 투입(세션 도중 끊김 · 꼴 단언 실패) | HEAD · 트리 · 렌더 · 컨테이너 = 반영 전(옛 판이 그대로 돈다 — 옛 compose 는 `${DEMO_HOME}` 하나만 보간하고 옛 MediaMTX 는 `.env` 를 다시 읽지 않는다). `.env` = 반영 전 또는 T | 반영 취소 ⓐ → ⓒ. 또는 값을 고쳐 다시 넣고 R2 로 |
 | F2 | R2 체크아웃 — git 이 거부(추적 밖 파일과 겹침) | HEAD = 반영 전 · 손 수정은 버려짐(패치에 있다) · `.env` T · 렌더 · 컨테이너 반영 전 | 반영 취소 ⓑ → ⓐ → ⓒ. 겹친 파일은 kty 가 정한 뒤(옮김) R2 를 다시 |
 | F2′ | R2 체크아웃 도중 끊김(프로세스가 죽음) | 트리 일부만 T · `.git/index.lock` 이 남을 수 있다 · HEAD 는 대개 반영 전(추론) | kty — 남은 lock · 트리 상태를 보고 정한다(lock 지움은 승인). HEAD 가 T 면 F3 행 |
 | F3 | R3 빌드 실패 · R3′ 이미지 받기 실패 | HEAD · 트리 = T · `.env` T · 렌더 · 컨테이너 = 반영 전(옛 판이 돈다) | 원인(디스크 · 모듈 · GHCR · buildx 판 — `compose build requires buildx 0.17.0 or later` 면 4-1 의 buildx 칸 · R3′ 면 아래 둘)을 고쳐 멈춘 블록부터. R3′ 는 종료 2 — aws CLI 없음 · ECR 로그인 · 받기 실패(ECR 권한(1-5) · 망 — 출력은 계정 번호를 가린다) — 또는 종료 1 — compose 의 pokeclip/mediamtx 좌표가 하나가 아니거나 레지스트리가 계정 ECR(ap-northeast-2)이 아님 · 받은 뒤에도 이미지가 없음 · `.ecr-login` 이 링크 · 디렉터리 아님이거나 `config.json` 밖의 모르는 파일이 듦(이름을 보이고 지우지 않는다 — kty)이다. 접으려면 반영 취소 ⓓ → ⓑ → ⓐ → ⓒ(컨테이너를 건드리지 않고 T 백업을 만들지 않는다). 다시 T 로 갈 때는 곧바로 R0 부터 |
 | F4 | R4 렌더 가드 실패(종료 1) · 소유 단언 실패 | F3 과 같다 — 렌더 산출물은 그대로(render.sh 가 임시 파일을 지운다) · 새 응답기 이미지는 남는다. 소유 단언에서 멈췄으면 새 산출물이 얹혔다 — `chown` · `chmod` 를 고쳐 R4 의 단언부터 | F3 과 같다 |
 | F5 | R5 healthy 시한 초과 | HEAD · 트리 · `.env` · 렌더 = T · `ingest-auth` 만 떠 있고 unhealthy · MediaMTX 는 옛 컨테이너가 옛 설정으로 돈다(추론 — 그사이 다시 시작됐으면 새 렌더로 기동을 되풀이하고 송출이 모두 끊겨 있다, 4-2) | 응답기 로그로 원인을 고쳐 R5 부터. 원인이 거부 목록의 틀린 줄이면 손으로 고치지 않고 틀린 줄 걷기(10절 — 재시작 없음) 뒤 R5 부터. 접으려면 롤백 0 → A → B → C(11절). 다시 T 로 갈 때는 T 백업 처분 → R0 부터 — D 를 쓰지 않는다. 접는 중 B · C 에서 막혀도 D 로 돌아가지 않는다 — kty 판단으로 원인을 고쳐 B · C 를 끝낸다 |
-| F6 | R6 `up -d` 실패 · MediaMTX 기동 실패 | T 가 일부 돈다 · 송출이 끊겼을 수 있다 | 롤백 0 → A → B → C. 다시 T 로 — F5 와 같다 |
+| F6 | R6 `up -d` 실패 · edge 다시 만들기 실패(id 그대로 포함) · MediaMTX 기동 실패 | T 가 일부 돈다 · 송출이 끊겼을 수 있다. edge 다시 만들기에서 멈췄으면 시청(8888)도 끊겼을 수 있다 | 롤백 0 → A → B → C. 다시 T 로 — F5 와 같다 |
 | F7 | 실측 1 · 6 · 7 실패(그 자리에서 고칠 수 없음) | T 가 돈다 | 롤백 0 → A → B → C. 다시 T 로 — F5 와 같다 |
 
 **블록이 멈추지 않았는데 R4 뒤 · R6 앞에 송출이 모두 끊겼으면** 위 표의 행이 아니다(R5 가
@@ -2883,6 +2941,7 @@ T 구성 → 옛 판(반영 전 기록) → (리허설이면) T 로 다시. 블�
 | E-2 | 롤백 E-2 | 리허설 뒤(T 가 돎) T 백업 아홉 · 비밀 임시 파일 지움 · 잔여 0 | 있음 |
 | — | T 백업 처분 | 접힌 뒤 T 백업 아홉 · 비밀 임시 파일 지움 · 잔여 0(11-6) | 있음 |
 | — | 반영 전 비밀 파기 | 롤백 창 닫기 — 접힌 끝 · T 정착에서만 반영 전 비밀 둘 · 비밀 임시 파일 지움(11-7) | 있음 |
+| — | 반영 전 기록 보관 | 롤백 창 닫기 — 반영 전 비밀 파기 뒤 반영 전 일곱을 `archive/T-YYYYMMDD` 로 옮김(11-7) | — |
 
 **D 는 리허설(실측 8)에서만 쓴다(kty 81차).** 실제 롤백 · 최초 반영 실패 · 실측 실패로
 0 → A → B → C 를 돌다 B · C 에서 막혀도 D 로 돌아가지 않는다. kty 판단으로 막힌 원인을
@@ -2895,11 +2954,16 @@ T 구성 → 옛 판(반영 전 기록) → (리허설이면) T 로 다시. 블�
 - A 와 B 는 그 사이에 아무것도 손대지 않도록 한 자리에서 잇달아 승인받는다. B ④ 의
   지우기 전 대조는 이름만 본다 — 내용은 A(보존)와 C · E-1 이 본다.
 - D 의 승인 문장에는 리허설(실측 8)임을 적는다. 리허설이 아니면 D 를 승인하지 않는다.
-- 반영 전 비밀 파기의 승인 문장에는 「실측 통과 · 첫 팀 실사용 방송 무사」를 적는다. 블록의
-  첫머리는 접힌 끝 · T 정착(MediaMTX 까지 R6 이 다시 만든 T 의 컨테이너) 둘 가운데
-  하나인지만 본다 — 반영 도중(R1–R6 — R5 끝 · R6 앞 포함) · 접는 도중은 블록이 멈춘다. T 가
-  다 떠 있는 채 실측이 실패한 자리(F6 · F7)는 T 정착과 상태가 같아 블록이 가르지 못하고, 이
-  문장이 가른다.
+- 반영 전 비밀 파기의 승인 문장은 이번 반영 주기의 T 커밋(짧은 해시)과 반영 날짜를 넣어
+  「T `<짧은 해시>`(YYYY-MM-DD 반영) 실측 통과 · 첫 팀 실사용 방송 무사」로 적는다 — 앞
+  주기의 승인과 섞이지 않게 한다. 블록의 첫머리는 접힌 끝 · T 정착(셋이 돌고 MediaMTX 가
+  제어망 · 응답기 healthy) 둘 가운데 하나인지만 본다 — 접는 도중(주기와 상관없이 — T 백업이
+  남아 있다)과 첫 반영 주기의 반영 도중(R1–R6 — R5 끝 · R6 앞 포함)은 블록이 멈춘다.
+  블록이 상태로 가르지 못하는 자리는 이 문장이 가른다. T 가 다 떠 있는 채 실측이 실패한
+  자리(F6 · F7)는 T 정착과 상태가 같다. 재반영 주기(반영 전 판에도 응답기 · 제어망)의 반영
+  도중(R0 뒤–R6)은 반영 전 판의 컨테이너가 그대로 돌아 접힌 끝이나 T 정착과 꼴이 같다. R6
+  뒤 반영 취소 ⓐ 를 순서 밖에서 돌린 상태(문서 밖 — ⓐ 는 F1–F4 에서만 쓴다)도 T 정착과
+  꼴이 같다 — 그대로 지우면 옛 렌더 백업(`mediamtx.demo.yml.pre-T.bak`)을 잃는다.
 
 **멈춤.** 어느 블록이든 종료 1(일치 없음) · 2(검사 실패)면 그 자리에서 멈추고 11-5 의
 그 행을 따른다. 지우는 쪽으로 밀어붙이지 않는다.
@@ -3263,7 +3327,7 @@ B 가 반영 전 렌더로 옛 판을 새로 만든다(로컬 실측 fix3 E6 접
 
 | 멈춘 자리 | 상태 | 그 자리에서 다시 돌리면 | 다른 길 |
 |---|---|---|---|
-| R0(반영 전 보존) | 5-1 F0 | 5-1 F0 | 첫머리(T 백업 남음)에서 멈췄으면 접힌 뒤는 T 백업 처분(11-6), T 가 도는 리허설 뒤(E-2 를 빠뜨림)는 E-1 → E-2 뒤 다시. 보존 단언이 어긋났고(종료 1) 남은 반영 전 기록이 직전 반영 주기의 것이면(T 가 정착한 뒤의 다음 반영) 롤백 창을 닫고 반영 전 일곱을 옮긴 뒤 다시(11-7 ③ — kty 승인) |
+| R0(반영 전 보존) | 5-1 F0 | 5-1 F0 | 첫머리(T 백업 남음)에서 멈췄으면 접힌 뒤는 T 백업 처분(11-6), T 가 도는 리허설 뒤(E-2 를 빠뜨림)는 E-1 → E-2 뒤 다시. 보존 단언이 어긋났고(종료 1) 남은 반영 전 기록이 직전 반영 주기의 것이면(T 가 정착한 뒤의 다음 반영) 롤백 창을 닫고 「반영 전 기록 보관」(11-7)으로 반영 전 일곱을 옮긴 뒤 다시(kty 승인) |
 | 단계 0 | 바뀐 것 없음 — T 가 돈다 | 원인(신원 · 백업 · 도구 판)을 고친 뒤 이어진다 | HEAD 가 반영 전이면 롤백이 아니다 — 반영 도중이면 반영 취소(5-3) |
 | 단계 A | T 가 돈다. T 백업 일부만 있다(반쪽은 `.part`) | 이어진다 — 있는 백업은 지금 상태와 같은지 단언하고 그대로 쓴다 | 단언이 어긋나면(종료 1) 지금 상태가 T 기록과 다르다 — A 를 B 뒤에 돌린 경우 · 끊긴 A 뒤 추적 밖 내용이 바뀐 경우 · 접은 뒤 처분 없이 다시 반영한 경우(옛 반영의 T 백업 — R0 첫머리가 먼저 막는다) 등. 덮어쓰지 않았으므로 그 자리에 맞는 아래 행으로 간다 |
 | B 첫머리 — T 백업 확인(종료 1 · 2) | 바뀐 것 없음 — T 가 돈다 | 같은 자리에서 다시 멈춘다 | T 백업 아홉 가운데 없는 것이 있으면(종료 1) A 가 끝나지 않았다 — A 를 다시 돌려 이은 뒤 B. 묶음이 읽히지 않으면(종료 2) kty |
@@ -3288,6 +3352,7 @@ B 가 반영 전 렌더로 옛 판을 새로 만든다(로컬 실측 fix3 E6 접
 | 단계 E-2 | T 백업 일부가 지워졌다 | 이어진다 — 있는 것만 지운다. `.env.T.bak` 이 남아 있으면 먼저 HEAD = T · 도는 서비스가 edge · ingest-auth · mediamtx · `.env` = `.env.T.bak` 을 본다. 어긋나면(B ② 에서 멈춤 — 컨테이너 내려감 · D 가 `.env` 복원 앞에서 멈춘 채 E-1 을 건너뜀 · 접힌 뒤) 아무것도 지우지 않고 멈춘다(종료 1). 링크 · 일반 파일이 아닌 이름, `.ecr-login` 안의 모르는 파일(끊긴 R3′ 의 자리 — `config.json` 만 있어야 한다)이나 잔여가 남으면(종료 1) 그 이름을 보이고 kty | B ② 에서 멈췄으면 그 행대로 B 를 끝내거나 D 로 T 에 돌아간 뒤 E-1 → E-2. `.env` 가 다르면 D 를 다시 돌린 뒤 E-1 → E-2. 접힌 뒤면 T 백업 처분 |
 | T 백업 처분 | 첫머리 단언에서 멈췄으면 지운 것이 없다. 지우는 중에 멈췄으면 T 백업 일부가 지워졌다 — 반영 전 상태는 그대로 | 이어진다 — 있는 것만 지운다. 첫머리(HEAD = 반영 전 · `.env` = `.env.pre-T.bak` · 복귀 확인)가 어긋나면(종료 1) 아무것도 지우지 않는다 — T 가 돌거나 B 가 끝나지 않았거나 접힌 끝 상태가 반영 전 기록과 다르다. `.env.pre-T.bak` 이 없으면 검사 실패(종료 2)다. 지우는 중 링크 · 일반 파일이 아닌 이름 · `.ecr-login` 안의 모르는 파일을 만나면 그것은 지우지 않고 멈춘다(종료 1 — 그 이름을 보이고 kty) | B 가 끝나지 않았으면 B 를 다시 돌린 뒤 C → 처분. 복귀 확인이 어긋나면 단계 C 행과 같다(kty). T 가 돌면 처분하지 않는다 — 그 T 백업은 롤백의 길이다. 반영 전 비밀을 먼저 지웠으면 이 블록은 돌지 못한다(11-7) |
 | 반영 전 비밀 파기 | 첫머리(T 백업 남음 · 안정 상태 아님 · 7-5 실행 중)에서 멈췄으면 지운 것이 없다. 지우는 중에 멈췄으면 비밀 하나만 지워졌을 수 있다 — `.env.pre-T.bak` 을 맨 먼저 지운다 | 이어진다 — 있는 것만 지운다. `.env.pre-T.bak` 이 이미 없으면 롤백 길이 이미 없어 안정 상태 단언을 건너뛴다 | T 백업이 남았으면 접힌 뒤는 T 백업 처분, T 가 도는 리허설 뒤는 E-1 → E-2 가 먼저다. 안정 상태(접힌 끝 · T 정착)가 아니면 반영 도중 · 접는 도중이다 — 반영(4절) · 반영 실패 복구(5절) · 롤백을 그 행대로 끝낸 뒤 다시. 「MediaMTX 가 제어망에 붙어 있지 않다」면 R5 끝 · R6 앞이다(반영은 R6 부터 잇는다). 「IP 한도 켜기 · 끄기(7-5)가 돌고 있다」면 그 실행이 끝난 뒤 다시. 링크 · 일반 파일이 아닌 이름 · `.ecr-login` 안의 모르는 파일로 멈췄으면(종료 1) 그 이름을 보고 kty |
+| 반영 전 기록 보관 | 인자 검사 · 첫머리 단언(종료 1 · 2)에서 멈췄으면 바뀐 것이 없다. 옮기는 중에 멈췄거나(종료 2 — `install` · `mv` · `chown` · `chmod` 실패, 또는 다 옮긴 뒤 끝 단언 · 끝 출력의 `stat` · `ls` · `tr` 실패) 끊겼거나 끝 단언에서 멈췄으면(종료 1) 보관 자리가 생겼을 수 있고 일곱의 일부 또는 전부가 그리로 옮겨졌을 수 있다 — 어느 쪽인지는 다시 돌렸을 때의 멈춤 문구로 가린다(옆 칸) | 이어 가지 않는다 — 대개 같은 자리에서 다시 멈춘다(보관 뿌리 `archive` 만 만들고 끊겼으면 다시 돌려 그대로 끝난다). 옮기는 중에 끊긴 뒤에는 「pre-T.* 가 반영 전 일곱이 아니다」(일부 · 전부 옮겨짐) 또는 「보관 자리가 이미 있다」(빈 자리만 만듦)로 멈춘다 | 「반영 전 비밀이 있다」면 반영 전 비밀 파기가 먼저다. T 백업 · 비밀 임시 파일이 남았으면 반영 전 비밀 파기 행과 같다. 「보관 자리가 이미 있다」인데 상자의 `pre-T.*` 가 일곱 그대로이고 그 자리가 앞 주기의 보관이면 이미 쓴 이름이다 — kty 가 정한 다른 이름(`T-YYYYMMDD` 꼴)으로 다시. 옮기는 중에 끊겼으면(일곱이 상자와 `archive/<이름>` 에 나뉘었거나, 이 블록이 만든 빈 자리만 있음) kty — 되돌림 · 마저 옮김 · 빈 자리 지움은 승인. 그 밖의 이름 · 링크 · 모드 어긋남이나 끝 단언에서 멈췄으면 그 출력을 보고 kty |
 | 명령 도중 끊김(프로세스가 죽음 — 상자 재부팅 · 명령 시한 등) | 트리 일부만 바뀌었거나 `.git/index.lock` 이 남았다. HEAD 는 옛 값일 수 있다 | `clean` · `tar` 풀기 도중이면 이어진다(남은 이름이 두 목록 안이고 `clean` · `tar` 가 다시 맞춘다 — 끊긴 뒤 상태를 손으로 만들어 본 로컬 실측 S7-7 L10). `apply` 도중이면 손 수정 패치가 고치는 파일이 지워지거나 잘린 채일 수 있다 — 그 파일이 `compose.yml` 이면 첫 `down` 이 compose 파일을 읽지 못해 같은 자리에서 다시 멈춘다(종료 2 — `failed to parse …/compose.yml` · `compose file … is invalid`. B 는 잘리거나 없는 compose.yml 을 손으로 만들어 본 로컬 실측 S7-7 L10, D 는 추론). `reset` · `checkout` 도중이면 지우기 전에 멈춘다(종료 2) — `reset` 이 남은 lock 에서, 또는 첫 `down` 이 HEAD 로 고른 env 와 판이 어긋난 compose 의 `:?` 에서 | kty — 남은 lock · 트리 상태를 보고 정한다(lock 을 지우는 것은 승인). `compose.yml` 이 깨졌으면 `sudo -u <체크아웃 소유자> git -C /opt/pokeclip-demo/repo checkout -- infra/dev-media/compose.yml`(그때 HEAD 판으로 되돌린다 — 승인) 뒤 B · D 를 다시 돌린다(B 에서 이어짐 — 같은 로컬 실측). 블록은 RunShellScript 로 보내 세션 끊김으로는 이 행에 오지 않는다 |
 
 ### 11-6. 접은 뒤 다시 T 로
@@ -3365,15 +3430,17 @@ main "$@"
     passphrase · resolve 출입증(T 와 같은 값), `mediamtx.demo.yml.pre-T.bak` — 옛 렌더
     산출물)과 그 `.part`, 끊긴 R1 · 렌더 · R3′ 가 남긴 비밀 임시 파일(`.env.next` ·
     `mediamtx.demo.yml.tmp.*` · `.ecr-login`)을 지운다. 이 블록은 T 백업이 하나라도 남아 있거나 안정
-    상태(접힌 끝 · T 정착)가 아니면 지우지 않고 멈춘다 — 위 차례와 반영 · 접기 도중이
-    아님을 블록이 지킨다. T 가 다 떠 있는 채 실측이 실패한 자리(F6 · F7)는 블록이 가르지
-    못해 승인 문장(11-1)이 가른다.
+    상태(접힌 끝 · T 정착)가 아니면 지우지 않고 멈춘다 — 위 차례와, 접는 도중 · 첫 반영
+    주기의 반영 도중이 아님은 블록이 지킨다. 블록이 가르지 못하는 자리(F6 · F7 · 재반영
+    주기의 반영 도중 R0 뒤–R6 · R6 뒤 반영 취소 ⓐ 를 순서 밖에서 돌린 상태 — 문서 밖, 옛
+    렌더 백업을 잃는다 — 11-1)는 승인 문장이 가른다.
 1.  반영 전의 나머지 일곱(`.sha` · `.head` · `.status` · `.worktree.patch` ·
     `.untracked.z` · `.untracked.tgz` · `.docker`)은 비밀이 아니라 남겨도 된다. 반영 전
     비밀을 지운 뒤에는 이 판으로 롤백할 수 없다. 다만 T 가 정착한 채 창을 닫았으면 남은
     일곱은 끝난 반영 주기의 기록이라, 다음 반영(T → 다음 판)의 R0 가 지금 상태와 견줘
-    「일치 없음」으로 멈춘다(5-1 F0). 다음 반영 전에 그 일곱을 보관할 곳으로 옮긴다 —
-    옮길 곳과 실행은 kty 승인이다(블록을 두지 않는다).
+    「일치 없음」으로 멈춘다(5-1 F0). 다음 반영 전에 그 일곱을 아래 「반영 전 기록
+    보관」 블록으로 상자 안 `archive/T-YYYYMMDD`(닫는 반영 주기의 반영 날짜)에 옮긴다 —
+    kty 승인. 반영 전 비밀을 지운 뒤에만 돈다(블록의 첫머리가 본다).
 1.  반영 전에 상자에 남아 있던 `compose.yml.bak-*` 둘과 롤백용 옛 이미지의 처분도 그때
     kty 에게 묻는다.
 
@@ -3386,10 +3453,11 @@ main "$@"
 # 첫 삭제 전에 lock_ip_limit 를 잡는다(뒤의 dispose_stray_secrets 도 같은 잠금이라 그대로
 # 지나간다). 지운 뒤에는 이 판으로 롤백할 수 없다.
 
-# assert_mediamtx_on_control_net 은 도는 MediaMTX 가 T 의 컨테이너인지 본다 — 제어망
-# (mtx-control)은 T 의 compose 에만 있어, R6 이 다시 만든 MediaMTX 만 그 망에 붙는다. R5 는
-# 응답기만 띄우므로 R5 끝 · R6 앞에는 옛 MediaMTX(기본 망만)가 돈다. 붙어 있지 않으면 일치
-# 없음이다.
+# assert_mediamtx_on_control_net 은 도는 MediaMTX 가 제어망(mtx-control)에 붙어 있는지
+# 본다. 첫 반영 주기에는 그 망이 T 의 compose 에만 있어 R6 이 다시 만든 MediaMTX 만 붙는다 —
+# R5 는 응답기만 띄우므로 R5 끝 · R6 앞에는 옛 MediaMTX(기본 망만)가 돈다. 반영 전 판에도
+# 제어망이 있는 재반영 주기에는 옛 MediaMTX 도 붙어 있어 가르지 못한다(11-1). 붙어 있지
+# 않으면 일치 없음이다.
 assert_mediamtx_on_control_net() {
   docker ps -q --filter "label=com.docker.compose.project=${PROJECT}" \
     --filter "label=com.docker.compose.service=mediamtx" \
@@ -3401,10 +3469,11 @@ assert_mediamtx_on_control_net() {
 
 # assert_settled_for_pre_t_disposal 은 반영 전 비밀을 지워도 되는 안정 상태인지 본다 —
 # 접힌 끝(HEAD = 반영 전 · .env = .env.pre-T.bak · 복귀 확인) 또는 T 정착(HEAD ≠ 반영 전 ·
-# 도는 서비스가 edge · ingest-auth · mediamtx · MediaMTX 가 제어망에 붙음 · 응답기 healthy ·
-# .env ≠ .env.pre-T.bak). 반영 도중(R1–R6 — R5 끝 · R6 앞의 옛 MediaMTX 포함)과 접는 도중은
-# 둘 다 아니라 멈춘다. F6 · F7(T 가 다 떠 있는 채 실패)은 상태로 가를 수 없어 승인 문장이
-# 가른다(11-1).
+# 도는 서비스가 edge · ingest-auth · mediamtx · MediaMTX 가 제어망에 붙음 · 응답기 healthy).
+# 첫 반영 주기의 반영 도중(R1–R6 — R5 끝 · R6 앞의 옛 MediaMTX 포함)과 접는 도중은 둘 다
+# 아니라 멈춘다. 상태로 가를 수 없는 자리 — F6 · F7(T 가 다 떠 있는 채 실패) · 재반영
+# 주기(반영 전 판에도 응답기 · 제어망)의 반영 도중(R0 뒤–R6) · R6 뒤 반영 취소 ⓐ 를 순서
+# 밖에서 돌린 상태(문서 밖) — 는 승인 문장이 가른다(11-1).
 assert_settled_for_pre_t_disposal() {
   local head_sha
   local -i rc=0
@@ -3423,10 +3492,11 @@ assert_settled_for_pre_t_disposal() {
     '도는 서비스가 edge · ingest-auth · mediamtx 가 아니다 — 반영 · 접기 도중이다'
   assert_mediamtx_on_control_net
   wait_ingest_auth_healthy
+  # .env 가 반영 전과 같은지로는 가르지 않는다 — .env 를 바꾸지 않는 재반영에서는 같은 게
+  # 정상이다. 두 파일이 읽히는지만 본다(없음 · 디렉터리면 검사 실패)
   cmp -s -- "${DEMO_DIR}/.env.pre-T.bak" "${DEMO_DIR}/.env" || rc=$?
   case "${rc}" in
-    0) mismatch '.env 가 반영 전과 같다 — T 가 정착하지 않았다' ;;
-    1) ;;
+    0 | 1) ;;
     *) check_failed "cmp ${rc}: .env.pre-T.bak · .env" ;;
   esac
 }
@@ -3469,6 +3539,142 @@ main() {
   done < "${WORK}/names"
   [[ -z "${left}" ]] || mismatch "반영 전 비밀 잔여: ${left}"
   echo '반영 전 비밀 파기 끝 — 남은 반영 전 백업은 비밀이 아닌 일곱'
+}
+main "$@"
+```
+
+```bash
+# ── 블록: 반영 전 기록 보관 — 머리 + 이 본문. 인자: <T-YYYYMMDD>. 롤백 창 닫기 3 ──
+# 실행 직전 kty 승인. 이름은 닫는 반영 주기의 반영 날짜다(예: T-20261022). 반영 전
+# 일곱(pre-T.* — 비밀 아님)을 상자 안 보관 자리 archive/<이름>(root 0700 · 파일 root
+# 0600)으로 옮겨, 다음 반영의 R0 가 끝난 주기의 기록과 견줘 멈추지 않게 한다(5-1 F0).
+# 첫머리 단언이 하나라도 어긋나면 아무것도 바꾸지 않고 멈춘다(종료 1). ① 상자 디렉터리.
+# ② 롤백 창이 닫혔다 — 반영 전 비밀 둘 · 그 .part · T 백업 · 비밀 임시 파일이 없다(반영
+# 전 비밀 파기가 먼저다). ③ 상자의 pre-T.* 가 정확히 일곱이고 모두 일반 파일이다. ④ 보관
+# 뿌리(있으면)가 root 0700 이고 같은 이름의 보관 자리가 없다 — 있으면 다시 쓰지 않는다.
+
+readonly ARCH_ROOT="${DEMO_DIR}/archive"
+readonly PRE_NAMES=(
+  sha head status worktree.patch untracked.z untracked.tgz docker
+)
+
+# want_pre_t_names 는 반영 전 일곱의 이름(pre-T.<PRE_NAMES>)을 정렬해 낸다.
+want_pre_t_names() {
+  printf 'pre-T.%s\n' "${PRE_NAMES[@]}" | sort
+}
+
+# pre_t_names 는 ${DEMO_DIR} 의 pre-T.* 이름(.part · 모르는 이름 포함)을 한 줄에 하나씩
+# 낸다.
+pre_t_names() {
+  local name
+  ls -1A -- "${DEMO_DIR}" > "${WORK}/pre-names"   # 못 받으면 검사 실패
+  while IFS= read -r name; do
+    case "${name}" in
+      pre-T.*) printf '%s\n' "${name}" ;;
+    esac
+  done < "${WORK}/pre-names"
+}
+
+# assert_window_closed 는 롤백 창이 닫혔는지 본다 — 반영 전 비밀 둘과 그 .part 가 없고(링크
+# 포함) T 백업 · 비밀 임시 파일이 없다. 어긋나면 일치 없음이다.
+assert_window_closed() {
+  local name
+  for name in .env.pre-T.bak .env.pre-T.bak.part mediamtx.demo.yml.pre-T.bak \
+    mediamtx.demo.yml.pre-T.bak.part; do
+    [[ ! -e "${DEMO_DIR}/${name}" && ! -L "${DEMO_DIR}/${name}" ]] \
+      || mismatch "롤백 창이 닫히지 않았다 — 반영 전 비밀이 있다: ${name}" \
+        '(반영 전 비밀 파기가 먼저다)'
+  done
+  t_backup_names > "${WORK}/t-left"
+  [[ ! -s "${WORK}/t-left" ]] \
+    || mismatch 'T 백업이 남아 있다:' "$(tr '\n' ' ' < "${WORK}/t-left")"
+  stray_secret_names > "${WORK}/stray"
+  [[ ! -s "${WORK}/stray" ]] \
+    || mismatch '비밀 임시 파일이 남아 있다:' "$(tr '\n' ' ' < "${WORK}/stray")"
+}
+
+# assert_pre_t_seven 은 상자의 pre-T.* 가 정확히 반영 전 일곱이고 모두 일반 파일(링크
+# 아님)인지 본다. .part · 모르는 이름 · 없는 것 · 링크 · 디렉터리면 일치 없음이다.
+assert_pre_t_seven() {
+  local name now
+  want_pre_t_names > "${WORK}/pre.want"
+  pre_t_names > "${WORK}/pre.now"
+  now="$(tr '\n' ' ' < "${WORK}/pre.now")"
+  assert_same "${WORK}/pre.want" "${WORK}/pre.now" \
+    "pre-T.* 가 반영 전 일곱이 아니다: ${now}"
+  for name in "${PRE_NAMES[@]}"; do
+    [[ -f "${DEMO_DIR}/pre-T.${name}" && ! -L "${DEMO_DIR}/pre-T.${name}" ]] \
+      || mismatch "일반 파일이 아니거나 링크다: pre-T.${name}"
+  done
+}
+
+# assert_archive_free 는 보관 뿌리(있으면)가 링크 아닌 root 0700 디렉터리이고 보관 자리
+# $1 이 어떤 꼴로도 없는지 본다. 어긋나면 일치 없음이다.
+assert_archive_free() {
+  local -r arch="$1"
+  local info
+  if [[ -e "${ARCH_ROOT}" || -L "${ARCH_ROOT}" ]]; then
+    [[ -d "${ARCH_ROOT}" && ! -L "${ARCH_ROOT}" ]] \
+      || mismatch "${ARCH_ROOT} 가 디렉터리가 아니다(링크 포함)"
+    info="$(stat -c '%u %a' -- "${ARCH_ROOT}")"
+    [[ "${info}" == '0 700' ]] \
+      || mismatch "${ARCH_ROOT} 가 root 0700 이 아니다(${info})"
+  fi
+  [[ ! -e "${arch}" && ! -L "${arch}" ]] \
+    || mismatch "보관 자리가 이미 있다 — 같은 이름은 다시 쓰지 않는다: ${arch}"
+}
+
+# assert_archived 는 상자에 pre-T.* 가 남지 않았고 보관 자리 $1 에 정확히 반영 전 일곱이
+# 일반 파일 root:root 0600 으로 있는지 본다.
+assert_archived() {
+  local -r arch="$1"
+  local name info names
+  pre_t_names > "${WORK}/pre.left"
+  [[ ! -s "${WORK}/pre.left" ]] \
+    || mismatch '옮긴 뒤에도 상자에 pre-T.* 가 있다:' \
+      "$(tr '\n' ' ' < "${WORK}/pre.left")"
+  want_pre_t_names > "${WORK}/pre.want"
+  ls -1A -- "${arch}" > "${WORK}/arch"   # 못 받으면 검사 실패
+  names="$(tr '\n' ' ' < "${WORK}/arch")"
+  assert_same "${WORK}/pre.want" "${WORK}/arch" \
+    "보관 자리의 이름이 반영 전 일곱이 아니다: ${names}"
+  for name in "${PRE_NAMES[@]}"; do
+    [[ -f "${arch}/pre-T.${name}" && ! -L "${arch}/pre-T.${name}" ]] \
+      || mismatch "보관한 것이 일반 파일이 아니거나 링크다: pre-T.${name}"
+    info="$(stat -c '%u:%g %a' -- "${arch}/pre-T.${name}")"
+    [[ "${info}" == '0:0 600' ]] \
+      || mismatch "보관한 pre-T.${name} 의 소유 · 모드가 다르다(${info})"
+  done
+}
+
+main() {
+  (( $# == 1 )) || check_failed '사용법: <T-YYYYMMDD>(닫는 반영 주기의 반영 날짜)'
+  [[ "$1" =~ ^T-[0-9]{8}$ ]] || check_failed "보관 이름은 T-YYYYMMDD 꼴이다: $1"
+  local -r arch="${ARCH_ROOT}/$1"
+  local name arch_list
+  assert_demo_dir_safe
+  assert_window_closed
+  assert_pre_t_seven
+  assert_archive_free "${arch}"
+  # 여기까지 아무것도 바꾸지 않았다. 뿌리 · 보관 자리는 root 0700 으로 새로 만든다
+  if [[ ! -e "${ARCH_ROOT}" ]]; then
+    install -d -o root -g root -m 0700 -- "${ARCH_ROOT}"
+  fi
+  install -d -o root -g root -m 0700 -- "${arch}"
+  for name in "${PRE_NAMES[@]}"; do
+    mv -T -- "${DEMO_DIR}/pre-T.${name}" "${arch}/pre-T.${name}"
+  done
+  # 방금 만든 root 0700 자리 안에서만 맞춘다 — 옮기기 전에 일반 파일임을 봤다
+  for name in "${PRE_NAMES[@]}"; do
+    chown root:root -- "${arch}/pre-T.${name}"
+    chmod 0600 -- "${arch}/pre-T.${name}"
+  done
+  assert_archived "${arch}"
+  ls -1A -- "${arch}" > "${WORK}/arch-names"   # 못 받으면 검사 실패
+  # 따로 대입해야 tr 실패가 ERR 덫으로 간다(echo 안의 치환은 종료 상태를 잃는다)
+  arch_list="$(tr '\n' ' ' < "${WORK}/arch-names")"
+  echo "보관 자리 ${arch}: ${arch_list}"
+  echo "반영 전 기록 보관 끝 — ${#PRE_NAMES[@]}개를 옮겼다(root:root 0600)"
 }
 main "$@"
 ```
