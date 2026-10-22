@@ -1169,6 +1169,9 @@ aws ssm start-session --target <instance-id>
       echo "멈춤: ${DEMO_DIR} 가 root 전용 디렉터리가 아니다(${INFO})"
     elif [[ ! "${ACCOUNT}" =~ ^[0-9]{12}$ ]]; then
       echo '멈춤: 상자 계정 번호를 얻지 못했다(aws sts get-caller-identity)'
+    elif [[ -L "${DEMO_DIR}/.env.next" || ( -e "${DEMO_DIR}/.env.next" \
+        && ! -f "${DEMO_DIR}/.env.next" ) ]]; then
+      echo '멈춤: .env.next 가 일반 파일이 아니거나 링크다 — 쓰지 않았다'
     elif [[ -s "${DEMO_DIR}/.env.pre-T.bak" ]]; then
       {
         grep -E '^(DEMO_HOME|STREAM_KEY_RESOLVE_TOKEN)=' "${DEMO_DIR}/.env"
@@ -1198,12 +1201,24 @@ aws ssm start-session --target <instance-id>
 잇는다. 끝에 「.env.next 남은 개수 0」이 나와야 한다. root 셸이 아니거나 `DEMO_DIR` 이
 비었으면 지우지 않고 「멈춤」을 낸다 — 그때는 1 · 2 단계부터 친다.
 
+`DEMO_DIR` 이 root 전용 디렉터리가 아니거나 `.env.next` 가 일반 파일이 아니거나 링크여도
+지우지 않고 「멈춤」이다 — 2-2 `remove_box_file` 과 같은 까닭으로, `shred` 와 `[[ -e ]]` 는
+링크를 따라가 그 대상(예: `.env.pre-T.bak`)을 덮어쓴다. 5 단계도 같은 까닭으로 링크인
+`.env.next` 에는 쓰지 않고 「멈춤」을 낸다.
+
 ```bash
 if [[ "$(id -u)" != 0 || -z "${DEMO_DIR:-}" ]]; then
   echo '멈춤: root 셸(1 단계)이 아니거나 DEMO_DIR 이 비었다(2 단계) — 지우지 않았다'
+elif [[ -L "${DEMO_DIR}" || ! -d "${DEMO_DIR}" \
+    || ! "$(stat -c '%u %a' -- "${DEMO_DIR}")" \
+    =~ ^0\ [0-7]?[0-7][0145][0145]$ ]]; then
+  echo "멈춤: ${DEMO_DIR} 가 root 전용 디렉터리가 아니다 — 지우지 않았다"
+elif [[ -L "${DEMO_DIR}/.env.next" || ( -e "${DEMO_DIR}/.env.next" \
+    && ! -f "${DEMO_DIR}/.env.next" ) ]]; then
+  echo '멈춤: .env.next 가 일반 파일이 아니거나 링크다 — 지우지 않았다'
 else
   [[ ! -e "${DEMO_DIR}/.env.next" ]] || shred -u -- "${DEMO_DIR}/.env.next"
-  if [[ -e "${DEMO_DIR}/.env.next" ]]; then
+  if [[ -e "${DEMO_DIR}/.env.next" || -L "${DEMO_DIR}/.env.next" ]]; then
     echo '멈춤: .env.next 가 남았다 — 지우지 못했다'
   else
     echo '.env.next 남은 개수 0'
