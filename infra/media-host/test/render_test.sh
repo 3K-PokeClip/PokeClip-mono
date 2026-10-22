@@ -13,9 +13,9 @@
 # 템플릿 변수 값은 공용 시험값 파일 test/render_vars.json 하나에서 온다. 갈래를
 # 보려고 값을 바꾼 사본을 이 시험이 만든다(시험 쪽에 값을 따로 적지 않고 그
 # 파일을 jq 로 고친다):
-#   - a: render_vars.json 그대로(응답기 · janitor 빔 · journald).
-#   - b: 응답기만 채움. c: janitor 만 채움.
-#   - d: 둘 다 채우고 detached_log_driver = json-file(로컬 실행 렌더 갈래).
+#   - a: render_vars.json 그대로(응답기 이미지 빔 · janitor 끔 · journald).
+#   - b: 응답기만 채움. c: janitor 만 켬.
+#   - d: 둘 다 채우고 · 켜고 detached_log_driver = json-file(로컬 실행 렌더 갈래).
 #   - nginx: control_upstream 빔(a) · 채움(e).
 #
 # 드리프트: 시험 compose(test/compose.contract.yml)에서 템플릿과 이름이 같은
@@ -65,10 +65,15 @@ readonly COMPOSE_VARIANTS='a b c d'
 readonly SAMPLE_CONTROL_UPSTREAM='127.0.0.1:28190'
 readonly MIN_READ_TIMEOUT_SECONDS=15
 readonly CONFIG_TIMEOUT=60
-readonly CASE_COUNT=26
+readonly CASE_COUNT=28
+# 녹화 디렉터리 소유자의 정본 — MediaMTX 이미지 Dockerfile 의 최종 USER.
+MTXHOOK_DOCKERFILE="$(cd -- "${MEDIA_HOST_DIR}/../.." && pwd)/media/Dockerfile.mtxhook"
+readonly MTXHOOK_DOCKERFILE
+readonly JANITOR_ENTRYPOINT='/usr/local/bin/janitor'
 
 # 기대값 jq 프로그램이 함께 쓰는 정의. 입력은 그 갈래의 변수 JSON 이다.
-#   services — 렌더에 있어야 할 서비스(응답기 · janitor 는 변수가 차 있을 때만).
+#   services — 렌더에 있어야 할 서비스(응답기는 이미지 변수가 차 있을 때만,
+#              janitor 는 janitor_enabled 가 참일 때만).
 #   attached — compose 출력이 연결되는 서비스(시작 스크립트의 --attach 집합.
 #              start_test 가 같은 집합을 시작 스크립트 쪽에서 단언한다).
 #   nginx_cap_add — cap_drop: [ALL] 뒤 nginx 에만 되살리는 cap. 공식 이미지는
@@ -81,7 +86,7 @@ readonly JQ_DEFS='
 def services:
   ["mediamtx", "nginx", "sidecar"]
   + (if .ingest_auth_image != "" then ["ingest-auth"] else [] end)
-  + (if .janitor_image != "" then ["janitor"] else [] end)
+  + (if .janitor_enabled then ["janitor"] else [] end)
   | sort;
 def attached: ["mediamtx", "nginx"];
 def nginx_cap_add: ["CHOWN", "SETGID", "SETUID"];
@@ -129,15 +134,16 @@ check_tools() {
   return "${ok}"
 }
 
-# 응답기 · janitor 시험 이미지 — 사이드카 시험값과 같은 저장소 꼴에 이름 ·
-# 다이제스트만 바꾼다(서로 다른 값이라 이미지 변수가 뒤바뀌면 사례 3 이 잡는다).
+# 응답기 시험 이미지 — 사이드카 시험값과 같은 저장소 꼴에 이름 · 다이제스트만
+# 바꾼다(서로 다른 값이라 이미지 변수가 뒤바뀌면 사례 3 이 잡는다). janitor 는
+# 이미지 변수 없이 켜기만 한다(사이드카 이미지를 쓴다).
 # shellcheck disable=SC2016 # jq 프로그램 — $ 는 jq 변수다.
 readonly JQ_SAMPLE_IMAGE='
 def sample_image($name; $fill):
   .sidecar_image
   | sub("/[^/@]+@sha256:[0-9a-f]+$"; "/\($name)@sha256:\($fill * 64)");
 def fill_auth: .ingest_auth_image = sample_image("media-ingest-auth"; "4");
-def fill_janitor: .janitor_image = sample_image("media-janitor"; "5");
+def fill_janitor: .janitor_enabled = true;
 '
 
 #######################################
@@ -275,23 +281,26 @@ require_setup() {
 # 기대값은 그 갈래의 변수 JSON 을 입력으로 도는 jq 프로그램이다(JQ_DEFS 를
 # 앞에 붙인다).
 # Arguments:
-#   갈래, 실제값 jq 필터, 기대값 jq 프로그램, 이름.
+#   갈래, 실제값 jq 필터, 기대값 jq 프로그램, 이름, 기대값 jq 의 추가 인자
+#   (예: --arg 이름 값 — 없어도 됨).
 #######################################
 expect_config() {
-  local v="$1" want got
-  if ! want="$(jq -cS "${JQ_DEFS} $3" "$(vars_file "${v}")" 2>&1)"; then
+  local v="$1" actual="$2" program="$3" name="$4" want got
+  shift 4
+  if ! want="$(jq -cS "$@" "${JQ_DEFS} ${program}" "$(vars_file "${v}")" \
+    2>&1)"; then
     harness::add_reason "시험 오류(기대값 jq): ${want}"
     return 1
   fi
-  got="$(jq -cS "$2" "$(config_json "${v}")" 2>/dev/null)" \
+  got="$(jq -cS "${actual}" "$(config_json "${v}")" 2>/dev/null)" \
     || got='(구성 JSON 을 읽지 못함)'
   if [[ "${got}" != "${want}" ]]; then
-    harness::add_reason "갈래 ${v}: $4 기대 ${want} · 실제 ${got}"
+    harness::add_reason "갈래 ${v}: ${name} 기대 ${want} · 실제 ${got}"
     return 1
   fi
 }
 
-# 모든 compose 갈래에 같은 단언을 건다. 인자는 expect_config 의 나머지 셋.
+# 모든 compose 갈래에 같은 단언을 건다. 인자는 expect_config 의 갈래 뒤 인자.
 expect_all() {
   local ok=0 v
   for v in ${COMPOSE_VARIANTS}; do
@@ -325,8 +334,8 @@ check_case_3() {
     {mediamtx: .mediamtx_image, nginx: .nginx_image, sidecar: .sidecar_image}
     + (if .ingest_auth_image != ""
        then {"ingest-auth": .ingest_auth_image} else {} end)
-    + (if .janitor_image != "" then {janitor: .janitor_image} else {} end)' \
-    '이미지'
+    + (if .janitor_enabled then {janitor: .sidecar_image} else {} end)' \
+    '이미지(janitor = 사이드카 이미지)'
 }
 
 check_case_4() {
@@ -381,7 +390,7 @@ check_case_7() {
      sidecar: ["recordings /recordings ro", "hooks /hooks ro",
                "/run/pokeclip-media/mtx_api_pass /run/secrets/mtx_api_pass ro"]}
     + (if .ingest_auth_image != "" then {"ingest-auth": []} else {} end)
-    + (if .janitor_image != ""
+    + (if .janitor_enabled
        then {janitor: ["recordings /recordings rw"]} else {} end)
     | map_values(sort)' '볼륨 · 읽기 전용' || ok=1
   expect_all '[.services[] | (.volumes // [])[]
@@ -414,10 +423,37 @@ check_case_8() {
     '권한 · core 덤프 0'
 }
 
+#######################################
+# 녹화 디렉터리 소유자 — MediaMTX 이미지 Dockerfile 최종 스테이지의 USER(마지막
+# FROM 뒤 마지막 USER). media/cmd/janitor 의 compose 계약 시험과 같은 규칙이다.
+# Outputs:
+#   USER 값(없으면 빈 값).
+# Returns:
+#   0 읽음 / 그 밖 파일을 읽지 못함.
+#######################################
+recording_owner() {
+  awk 'toupper($1) == "FROM" { user = "" }
+    toupper($1) == "USER" { user = $2 }
+    END { print user }' "${MTXHOOK_DOCKERFILE}"
+}
+
+# 실행 계정은 이미지 USER 가 정본이라 user: 를 적지 않는다. janitor 만 예외 —
+# 사이드카 이미지(USER 10001)를 쓰지만 녹화 소유자로 돌아야 지울 수 있다.
 check_case_9() {
+  local owner
   require_setup || return 1
-  expect_all '.services.mediamtx | has("user")' 'false' \
-    'mediamtx user(정본은 Dockerfile USER)'
+  if [[ ! -f "${MTXHOOK_DOCKERFILE}" ]]; then
+    harness::add_reason 'media/Dockerfile.mtxhook 없음(녹화 소유자 정본)'
+    return 1
+  fi
+  if ! owner="$(recording_owner)" || [[ -z "${owner}" ]]; then
+    harness::add_reason 'media/Dockerfile.mtxhook 최종 USER 를 읽지 못함'
+    return 1
+  fi
+  # shellcheck disable=SC2016 # jq 프로그램 — $ 는 jq 변수다.
+  expect_all '.services | map_values(.user // null)' '
+    services | map({(.): (if . == "janitor" then $owner else null end)})
+    | add' '실행 계정(user)' --arg owner "${owner}"
 }
 
 check_case_10() {
@@ -431,8 +467,9 @@ check_case_10() {
        MTX_API_USER: "pokeclip-sidecar",
        MTX_API_PASS_FILE: "/run/secrets/mtx_api_pass",
        S3_BUCKET: .rewind_bucket_name})}
-    + (if .janitor_image != ""
-       then {janitor: (db_env + {POSTGRES_USER: "media_janitor"})}
+    + (if .janitor_enabled
+       then {janitor: (db_env + {POSTGRES_USER: "media_janitor",
+         JANITOR_ENABLED: "true", SEGMENT_ROOT: "/recordings"})}
        else {} end)' '사이드카 · janitor env'
 }
 
@@ -661,6 +698,44 @@ check_case_26() {
     '렌더 파일 bind 의 원본 자동 생성'
 }
 
+check_case_27() {
+  require_setup || return 1
+  # shellcheck disable=SC2016 # jq 프로그램 — $ 는 jq 변수다.
+  expect_all '.services | map_values({entrypoint: (.entrypoint // null),
+      read_only: (.read_only // null)})' '
+    services | map({(.): (if . == "janitor"
+      then {entrypoint: [$entry], read_only: true}
+      else {entrypoint: null, read_only: null} end)}) | add' \
+    'entrypoint · 읽기 전용 루트' --arg entry "${JANITOR_ENTRYPOINT}"
+}
+
+#######################################
+# 사례 28 — janitor_enabled 는 bool 이어야 한다. 그 키 하나만 "yes" 로 바꾼
+# 변수 파일은 렌더가 실패하고, 원래 변수 파일(같은 시험 안에서 다시 렌더)은
+# 성공한다 — 렌더 실패가 다른 원인이면 짝의 성공 쪽이 FAIL 한다.
+#######################################
+check_case_28() {
+  local ok=0 bad="${scratch}/vars-bad-enabled.json"
+  local out="${scratch}/compose-bad-enabled.yml"
+  require_setup || return 1
+  if ! jq '.janitor_enabled = "yes"' "${RENDER_VARS_FILE}" >"${bad}"; then
+    harness::add_reason '시험 오류: 변수 파일을 만들지 못함'
+    return 1
+  fi
+  if render::template "${COMPOSE_TEMPLATE}" "${bad}" "${out}" \
+    2>"${out}.err"; then
+    harness::add_reason 'janitor_enabled = "yes" 인데 렌더가 성공함'
+    ok=1
+  fi
+  if ! render::template "${COMPOSE_TEMPLATE}" "${RENDER_VARS_FILE}" \
+    "${scratch}/compose-good-enabled.yml" 2>"${out}.good.err"; then
+    harness::add_reason "원래 변수 파일 렌더 실패: \
+$(harness::log_tail "${out}.good.err")"
+    ok=1
+  fi
+  return "${ok}"
+}
+
 main() {
   if (( $# != 0 )); then
     printf '사용: bash infra/media-host/test/render_test.sh (인자 없음)\n' >&2
@@ -676,7 +751,8 @@ main() {
   fi
   harness::run_case 1 '렌더한 compose 마다 docker compose config 종료 0' \
     check_case_1
-  harness::run_case 2 '응답기 · janitor 는 변수가 차 있을 때만 렌더' \
+  harness::run_case 2 \
+    '응답기는 이미지 변수가 찰 때만 · janitor 는 janitor_enabled 일 때만 렌더' \
     check_case_2
   harness::run_case 3 '서비스 이미지 = 템플릿 변수' check_case_3
   harness::run_case 4 \
@@ -690,7 +766,9 @@ main() {
   harness::run_case 8 \
     '권한 — no-new-privileges · cap_drop ALL · nginx cap 셋 · 특권 0 · core 0' \
     check_case_8
-  harness::run_case 9 'mediamtx 에 user: 없음' check_case_9
+  harness::run_case 9 \
+    '실행 계정 — janitor 만 녹화 소유자(Dockerfile.mtxhook USER) · 나머지 user 없음' \
+    check_case_9
   harness::run_case 10 '사이드카 · janitor env(IAM · 비밀 없음)' check_case_10
   harness::run_case 11 'env 에 비밀 계열 이름 · POSTGRES_PASSWORD 0' \
     check_case_11
@@ -717,6 +795,10 @@ main() {
   harness::run_case 25 \
     '드리프트 — 유닛 시험 compose 와 템플릿 구조 · logging 일치' check_case_25
   harness::run_case 26 '렌더 파일 bind — 원본 없으면 만들지 않음' check_case_26
+  harness::run_case 27 'janitor — entrypoint 로 명령 고름 · 읽기 전용 루트' \
+    check_case_27
+  harness::run_case 28 'janitor_enabled 가 bool 이 아니면 렌더 실패' \
+    check_case_28
 
   if ! harness::summary "${CASE_COUNT}"; then
     exit 1

@@ -2,7 +2,7 @@
   "control_upstream": "",
   "detached_log_driver": "journald",
   "ingest_auth_image": "",
-  "janitor_image": "",
+  "janitor_enabled": false,
   "media_health_path": "/pcbench-edge-proxy-health",
   "mediamtx_image": "registry.pcbench-edge-proxy.invalid/media-mediamtx@sha256:1111111111111111111111111111111111111111111111111111111111111111",
   "nginx_image": "registry.pcbench-edge-proxy.invalid/media-nginx@sha256:2222222222222222222222222222222222222222222222222222222222222222",
