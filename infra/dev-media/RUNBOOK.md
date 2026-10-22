@@ -1072,10 +1072,36 @@ preserve_state() {
 않는다 — 명령 이력이 SSM 에 남는다. 세션 로깅이 꺼져 있는지 먼저 본다(켜져 있으면 세션
 입력이 S3 · CloudWatch 에 남는다 → 중단).
 
+로깅 설정은 계정의 기본 세션 문서 `SSM-SessionManagerRunShell` 에 든다. 이 문서는
+Session Manager 기본 설정을 저장할 때 만들어지고, 세션 기록을 보낼 S3 버킷 ·
+CloudWatch Logs 그룹을 담는다 — 문서가 없으면 기록 설정도 없다
+([AWS — 기본 세션 문서](https://docs.aws.amazon.com/systems-manager/latest/userguide/getting-started-default-session-document.html) ·
+[AWS — CLI 로 Session Manager 기본 설정 바꾸기](https://docs.aws.amazon.com/systems-manager/latest/userguide/getting-started-configure-preferences-cli.html)).
+그래서 판정은 셋이다 — 문서 있음(두 칸이 다 빈 값일 때만 세션을 연다) · 문서 없음(통과 —
+kty 2026-10-20, 그날 이 계정은 문서가 없었다) · 그 밖 오류(중단 — 못 읽은 것이지 없는 것이
+아니다).
+
+kty 로컬 터미널에서 판정 블록 → 세션 열기 순으로, 같은 셸(같은 프로필 · 리전)에서 친다.
+판정 블록은 문서 본문이나 오류 문구(호출자 ARN — 계정 번호가 든다)를 찍을 수 있으므로
+1-5 처럼 에이전트 세션 · 문서에 붙여 넣지 않는다.
+
 ```bash
-aws ssm get-document --name SSM-SessionManagerRunShell \
-  --query Content --output text
-#   s3BucketName / cloudWatchLogGroupName 이 빈 값이어야 한다
+if DOC_OUT="$(aws ssm get-document --name SSM-SessionManagerRunShell \
+    --query Content --output text 2>&1)"; then
+  printf '%s\n' "${DOC_OUT}"
+  echo '문서 있음 — s3BucketName · cloudWatchLogGroupName 이 둘 다 빈 값일 때만 세션을 연다'
+elif [[ "${DOC_OUT}" == *'(InvalidDocument)'*'does not exist'* ]]; then
+  echo '통과 — 문서 없음(세션 로깅 설정이 없다)'
+else
+  printf '%s\n' "${DOC_OUT}"
+  echo '중단 — 문서를 읽지 못했다. 세션을 열지 않는다'
+fi
+unset DOC_OUT
+```
+
+「통과」를 봤거나, 「문서 있음」이고 두 칸이 다 빈 값일 때만 세션을 연다.
+
+```bash
 aws ssm start-session --target <instance-id>
 ```
 
