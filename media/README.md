@@ -418,10 +418,14 @@ SELECT has_schema_privilege('media_indexer', 'public', 'CREATE');  -- false 여�
   `stream_sessions` 의 `dvr_*` · `vod_*`, `stream_segments` 의 `s3_key`.
   사이드카 자격이 새면 이 열을 고칠 수 있다. 열 단위 GRANT · 트리거는 열
   추가마다 운영 GRANT 가 깨지므로 넣지 않았다.
-- **advisory 잠금은 권한으로 막을 수 없다.** 이 DB 에 로그인하는 어떤
-  계정이든 컷오프 주조 잠금 키(`hashtext('pc_cutoff_' || stream_id)`)를 쥐고
-  놓지 않으면, 그 스트림의 컷오프 주조가 `lock_timeout` 으로 실패를
-  되풀이한다. 방어는 이 DB 의 로그인 계정 수를 줄이는 것이다.
+- **advisory 잠금은 이 목록이 막지 않는다.** 잠금 함수(`pg_advisory_*`)는
+  기본값으로 PUBLIC 이 실행할 수 있고, 키 단위 권한은 없다. 그래서 이 DB 에
+  로그인하는 다른 계정이 컷오프 주조 잠금 키(`hashtext('pc_cutoff_' || stream_id)`)를
+  쥐고 놓지 않으면, 그 스트림의 컷오프 주조가 `lock_timeout` 으로 실패를
+  되풀이한다. 방어는 둘이다: 이 DB 의 로그인 계정 수를 줄이는 것, 그리고 잠금
+  함수의 `EXECUTE` 를 PUBLIC 에서 회수하고 사이드카 계정에만 주는 것(함수 소유자
+  권한이 필요하다 — RDS 의 마스터 사용자로 되는지는 아직 확인하지 않았다).
+  함수를 허용받은 계정끼리는 키 단위로 막을 수 없다.
 - **`stream_cutoffs` 가 오염되면 DBA 가 손으로 고친다.** 이 계정에는
   UPDATE · DELETE 가 없어 잘못 들어간 컷오프를 사이드카가 고칠 수 없다.
 
