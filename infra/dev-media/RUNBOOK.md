@@ -2945,10 +2945,12 @@ T 구성 → 옛 판(반영 전 기록) → (리허설이면) T 로 다시. 블�
   지우기 전 대조는 이름만 본다 — 내용은 A(보존)와 C · E-1 이 본다.
 - D 의 승인 문장에는 리허설(실측 8)임을 적는다. 리허설이 아니면 D 를 승인하지 않는다.
 - 반영 전 비밀 파기의 승인 문장에는 「실측 통과 · 첫 팀 실사용 방송 무사」를 적는다. 블록의
-  첫머리는 접힌 끝 · T 정착(MediaMTX 까지 R6 이 다시 만든 T 의 컨테이너) 둘 가운데
-  하나인지만 본다 — 반영 도중(R1–R6 — R5 끝 · R6 앞 포함) · 접는 도중은 블록이 멈춘다. T 가
-  다 떠 있는 채 실측이 실패한 자리(F6 · F7)는 T 정착과 상태가 같아 블록이 가르지 못하고, 이
-  문장이 가른다.
+  첫머리는 접힌 끝 · T 정착(셋이 돌고 MediaMTX 가 제어망 · 응답기 healthy) 둘 가운데
+  하나인지만 본다 — 첫 반영 주기의 반영 도중(R1–R6 — R5 끝 · R6 앞 포함) · 접는 도중은
+  블록이 멈춘다. 블록이 상태로 가르지 못하는 자리는 이 문장이 가른다. T 가 다 떠 있는 채
+  실측이 실패한 자리(F6 · F7)는 T 정착과 상태가 같다. 재반영 주기(반영 전 판에도 응답기 ·
+  제어망)의 반영 도중(R0 뒤–R6)은 반영 전 판의 컨테이너가 그대로 돌아 접힌 끝이나 T 정착과
+  꼴이 같다.
 
 **멈춤.** 어느 블록이든 종료 1(일치 없음) · 2(검사 실패)면 그 자리에서 멈추고 11-5 의
 그 행을 따른다. 지우는 쪽으로 밀어붙이지 않는다.
@@ -3416,8 +3418,8 @@ main "$@"
     산출물)과 그 `.part`, 끊긴 R1 · 렌더 · R3′ 가 남긴 비밀 임시 파일(`.env.next` ·
     `mediamtx.demo.yml.tmp.*` · `.ecr-login`)을 지운다. 이 블록은 T 백업이 하나라도 남아 있거나 안정
     상태(접힌 끝 · T 정착)가 아니면 지우지 않고 멈춘다 — 위 차례와 반영 · 접기 도중이
-    아님을 블록이 지킨다. T 가 다 떠 있는 채 실측이 실패한 자리(F6 · F7)는 블록이 가르지
-    못해 승인 문장(11-1)이 가른다.
+    아님을 블록이 지킨다. 블록이 가르지 못하는 자리(F6 · F7 · 재반영 주기의 반영 도중
+    R0 뒤–R6 — 11-1)는 승인 문장이 가른다.
 1.  반영 전의 나머지 일곱(`.sha` · `.head` · `.status` · `.worktree.patch` ·
     `.untracked.z` · `.untracked.tgz` · `.docker`)은 비밀이 아니라 남겨도 된다. 반영 전
     비밀을 지운 뒤에는 이 판으로 롤백할 수 없다. 다만 T 가 정착한 채 창을 닫았으면 남은
@@ -3437,10 +3439,11 @@ main "$@"
 # 첫 삭제 전에 lock_ip_limit 를 잡는다(뒤의 dispose_stray_secrets 도 같은 잠금이라 그대로
 # 지나간다). 지운 뒤에는 이 판으로 롤백할 수 없다.
 
-# assert_mediamtx_on_control_net 은 도는 MediaMTX 가 T 의 컨테이너인지 본다 — 제어망
-# (mtx-control)은 T 의 compose 에만 있어, R6 이 다시 만든 MediaMTX 만 그 망에 붙는다. R5 는
-# 응답기만 띄우므로 R5 끝 · R6 앞에는 옛 MediaMTX(기본 망만)가 돈다. 붙어 있지 않으면 일치
-# 없음이다.
+# assert_mediamtx_on_control_net 은 도는 MediaMTX 가 제어망(mtx-control)에 붙어 있는지
+# 본다. 첫 반영 주기에는 그 망이 T 의 compose 에만 있어 R6 이 다시 만든 MediaMTX 만 붙는다 —
+# R5 는 응답기만 띄우므로 R5 끝 · R6 앞에는 옛 MediaMTX(기본 망만)가 돈다. 반영 전 판에도
+# 제어망이 있는 재반영 주기에는 옛 MediaMTX 도 붙어 있어 가르지 못한다(11-1). 붙어 있지
+# 않으면 일치 없음이다.
 assert_mediamtx_on_control_net() {
   docker ps -q --filter "label=com.docker.compose.project=${PROJECT}" \
     --filter "label=com.docker.compose.service=mediamtx" \
@@ -3452,10 +3455,10 @@ assert_mediamtx_on_control_net() {
 
 # assert_settled_for_pre_t_disposal 은 반영 전 비밀을 지워도 되는 안정 상태인지 본다 —
 # 접힌 끝(HEAD = 반영 전 · .env = .env.pre-T.bak · 복귀 확인) 또는 T 정착(HEAD ≠ 반영 전 ·
-# 도는 서비스가 edge · ingest-auth · mediamtx · MediaMTX 가 제어망에 붙음 · 응답기 healthy ·
-# .env ≠ .env.pre-T.bak). 반영 도중(R1–R6 — R5 끝 · R6 앞의 옛 MediaMTX 포함)과 접는 도중은
-# 둘 다 아니라 멈춘다. F6 · F7(T 가 다 떠 있는 채 실패)은 상태로 가를 수 없어 승인 문장이
-# 가른다(11-1).
+# 도는 서비스가 edge · ingest-auth · mediamtx · MediaMTX 가 제어망에 붙음 · 응답기 healthy).
+# 첫 반영 주기의 반영 도중(R1–R6 — R5 끝 · R6 앞의 옛 MediaMTX 포함)과 접는 도중은 둘 다
+# 아니라 멈춘다. 상태로 가를 수 없는 자리 — F6 · F7(T 가 다 떠 있는 채 실패) · 재반영
+# 주기(반영 전 판에도 응답기 · 제어망)의 반영 도중(R0 뒤–R6) — 는 승인 문장이 가른다(11-1).
 assert_settled_for_pre_t_disposal() {
   local head_sha
   local -i rc=0
@@ -3474,10 +3477,11 @@ assert_settled_for_pre_t_disposal() {
     '도는 서비스가 edge · ingest-auth · mediamtx 가 아니다 — 반영 · 접기 도중이다'
   assert_mediamtx_on_control_net
   wait_ingest_auth_healthy
+  # .env 가 반영 전과 같은지로는 가르지 않는다 — .env 를 바꾸지 않는 재반영에서는 같은 게
+  # 정상이다. 두 파일이 읽히는지만 본다(없음 · 디렉터리면 검사 실패)
   cmp -s -- "${DEMO_DIR}/.env.pre-T.bak" "${DEMO_DIR}/.env" || rc=$?
   case "${rc}" in
-    0) mismatch '.env 가 반영 전과 같다 — T 가 정착하지 않았다' ;;
-    1) ;;
+    0 | 1) ;;
     *) check_failed "cmp ${rc}: .env.pre-T.bak · .env" ;;
   esac
 }
