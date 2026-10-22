@@ -1416,11 +1416,16 @@ GET /api/clip/broadcasts/{streamId}/segments?startMs=&endMs=     Bearer JWT
 
 | 문 | 인증 | 응답 |
 |---|---|---|
-| `GET /api/clip/broadcasts?state=&limit=&cursor=` | Bearer JWT | **200** `{"broadcasts":[…],"nextCursor":…}` · 400 `{"error":"invalid_request","field":"state\|limit\|cursor"}` · 401 · 404 `{"error":"broadcast_not_found"}`(토큰의 `sub`가 숫자가 아닐 때뿐 — 아래 「알려진 한계」) · **503** `{"error":"authorization_unavailable"}` |
+| `GET /api/clip/broadcasts?state=&limit=&cursor=&streamerId=` | Bearer JWT | **200** `{"broadcasts":[…],"nextCursor":…}` · 400 `{"error":"invalid_request","field":"state\|limit\|cursor\|streamerId"}` · 401 · 404 `{"error":"broadcast_not_found"}`(토큰의 `sub`가 숫자가 아닐 때: 아래 「알려진 한계」: 또는 `streamerId`가 볼 수 없는 채널일 때) · **503** `{"error":"authorization_unavailable"}` |
 | `GET /api/clip/broadcasts/{streamId}/jump-cards?includeHidden=&limit=&cursor=` | Bearer JWT | **200** `{"cards":[…],"nextCursor":…}` · 400 `{"error":"invalid_request","field":"limit\|cursor\|includeHidden"}` · **404** `{"error":"broadcast_not_found"}` · 401 · 503 |
 
 **`state`는 필수이고 소문자다** — `live`(방송 중) 또는 `past`(끝난 것: 표의 `ended`·`vod_ready`).
 **한 목록에 안 섞는다** — 섞으면 오래 켜둔 방송이 첫 장 밖으로 밀려 방송 중인데 라이브 띠가 안 뜬다.
+
+**`streamerId`는 선택이다**(POK-390 채널 스위처). 주면 볼 수 있는 스트리머 중 그 한 명의 방송만 나오고, 안 주거나 비우면
+지금처럼 전부 섞어서 나온다. 숫자로 읽어 비교한다(`0003`은 `3`). 숫자가 아니면 auth를 묻기 전에 400 `field=streamerId`,
+볼 수 없는 채널이면 **404**다(200 빈 목록이 아니다: 위임이 끊긴 편집자 화면이 「방송이 없다」로 남지 않게).
+「없는 번호」와 「권한 없음」은 안 가른다. 보관함 목록도 같은 칸·같은 규칙이다.
 
 **`limit`은 안 주면 기본, 넘겨 달라고 하면 상한에서 깎는다** — 방송 **20/100**, 카드 **50/200**.
 **0 이하는 400이다**(조용히 기본값으로 봐 주면 웹의 계산 실수가 안 드러난다).
@@ -1449,7 +1454,7 @@ JSON 트리를 맞대어 지킨다). 화면이 같은 것을 두 벌로 처리�
 
 | 문 | 무엇으로 판정하나 | 자격이 없으면 |
 |---|---|---|
-| `GET /api/clip/broadcasts` | auth `accessible` — **볼 수 있는 스트리머 번호를 먼저 받아 그 번호로만 조회한다** | 그 줄이 목록에 **안 나온다**(200) |
+| `GET /api/clip/broadcasts` | auth `accessible`: **볼 수 있는 스트리머 번호를 먼저 받아 그 번호로만 조회한다** | 그 줄이 목록에 **안 나온다**(200). `streamerId`로 고른 채널이 그 번호들에 없으면 **404** `broadcast_not_found`(POK-390) |
 | `GET …/{streamId}/jump-cards` | `BroadcastAccessGuard` — 명부에서 스트리머 번호 → auth `resolve` | **404** `broadcast_not_found` |
 | `GET …/{streamId}/events` (통로) | 같음 | **404** `broadcast_not_found` |
 | `GET …/{streamId}/segments` | `SegmentQueryService` — 구간 검증 → 방송 → 자격 → 만료 | **404** `broadcast_not_found` |
@@ -1469,7 +1474,7 @@ JSON 트리를 맞대어 지킨다). 화면이 같은 것을 두 벌로 처리�
 | `GET …/{streamId}/clips/{clipId}` (POK-125) | 같음 → 영상이 그 방송 것인가 | 같음 · **404** `clip_not_found` |
 | `POST …/{streamId}/clips/{clipId}/file-access` (POK-247) | 같음 | 같음 |
 | `POST …/{streamId}/clips/{clipId}/uploads` (POK-220) | 같음 | 같음 |
-| `GET /api/clip/library` (POK-243) | auth `accessible` — **방송 목록과 같은 판정**(볼 수 있는 스트리머 번호로만 조회) | 그 줄이 목록에 **안 나온다**(200) |
+| `GET /api/clip/library` (POK-243) | auth `accessible`: **방송 목록과 같은 판정**(볼 수 있는 스트리머 번호로만 조회) | 그 줄이 목록에 **안 나온다**(200). `streamerId`로 고른 채널이 그 번호들에 없으면 **404** `broadcast_not_found`(POK-390, 방송 목록과 같은 이름) |
 | `GET /api/clip/library/{recipeId}` (POK-243) | 편집본 → 그 편집본의 방송 → `BroadcastAccessGuard` | **404** `recipe_not_found` — `broadcast_not_found`로 안 나간다(그 번호의 편집본이 있다는 것이 샌다) |
 
 **자격 판정이 없는 문은 셋이다 — 스물한 번째 `POST /internal/broadcasts/{streamId}/highlights`·
@@ -2442,7 +2447,7 @@ UploadInfo = {"title":"필수","description":null,"tags":["…"],"privacyStatus"
 
 | 문 | 인증 | 응답 |
 |---|---|---|
-| `GET /api/clip/library?status=&limit=&cursor=` | Bearer JWT | **200** `{"items":[…],"nextCursor":…}` 최근 만든 순 · 400 `{"error":"invalid_request","field":"status\|limit\|cursor"}` · 401 · 404 `{"error":"broadcast_not_found"}`(토큰의 `sub`가 숫자가 아닐 때뿐 — 방송 목록과 같은 한계) · **503** `{"error":"authorization_unavailable"}` |
+| `GET /api/clip/library?status=&limit=&cursor=&streamerId=` | Bearer JWT | **200** `{"items":[…],"nextCursor":…}` 최근 만든 순 · 400 `{"error":"invalid_request","field":"status\|limit\|cursor\|streamerId"}` · 401 · 404 `{"error":"broadcast_not_found"}`(토큰의 `sub`가 숫자가 아닐 때: 방송 목록과 같은 한계: 또는 `streamerId`가 볼 수 없는 채널일 때. 보관함에서도 이 이름이다) · **503** `{"error":"authorization_unavailable"}` |
 | `GET /api/clip/library/{recipeId}` | Bearer JWT | **200** 위 줄의 칸 전부 + `recipe`(계약6 JSON 그대로) · **404** `{"error":"recipe_not_found"}`(없다·남의 것이 **같은 본문·같은 25ms 바닥**) · 401 · 503 |
 
 **`status`는 선택이고 소문자다.** 안 주거나 비우면 전부. `limit`은 방송 목록과 같다 — **20/100**, 0 이하는 400.

@@ -7,6 +7,7 @@ import com.pokeclip.clip.delegation.DelegationResolveClient;
 import com.pokeclip.clip.library.LibraryEntry.BroadcastSummary;
 import com.pokeclip.clip.paging.CursorCodec;
 import com.pokeclip.clip.paging.ListLimit;
+import com.pokeclip.clip.paging.ListParams;
 import com.pokeclip.clip.recipe.Recipe;
 import com.pokeclip.clip.recipe.RecipeDocument;
 import com.pokeclip.clip.recipe.RecipeErrors.RecipeNotFoundException;
@@ -100,23 +101,30 @@ public class LibraryService {
      * @param status {@code null}이거나 빈 문자열이면 전부(빈 문자열을 「안 줬다」로 접는 것은 {@code cursor}와 같은 규칙)
      * @param limit {@code null}이면 {@link #DEFAULT_LIMIT}
      * @param cursor {@code null}이거나 빈 문자열이면 첫 장
-     * @throws com.pokeclip.clip.paging.InvalidListParamException 상태가 모르는 값이거나 개수가 0 이하다 (400)
+     * @param streamerId 화면이 고른 채널(POK-390). 방송 목록과 같은 규칙({@code BroadcastListService.list})
+     * @throws com.pokeclip.clip.paging.InvalidListParamException 상태가 모르는 값이거나 개수가 0 이하거나 {@code streamerId}가 숫자가 아니다 (400)
      * @throws com.pokeclip.clip.paging.InvalidCursorException 이어받기 표시가 우리 모양이 아니다 (400)
-     * @throws AccessErrors.NotViewableException 토큰의 주체를 회원 번호로 못 읽는다 (404)
+     * @throws AccessErrors.NotViewableException 토큰의 주체를 회원 번호로 못 읽거나, 고른 채널을 볼 수 없다 (404 {@code broadcast_not_found})
      * @throws AccessErrors.AuthUnavailableException 볼 수 있는 스트리머를 물어보지 못했다 (503)
      */
-    public LibraryPage list(String requesterSubject, String status, Integer limit, String cursor) {
+    public LibraryPage list(String requesterSubject, String status, Integer limit, String cursor, String streamerId) {
         // 형식 검사가 auth 왕복보다 먼저다 — 틀린 요청에 7초짜리 왕복을 태우지 않는다(방송 목록과 같은 순서).
         LibraryStatus wanted = status == null || status.isBlank() ? null : LibraryStatus.fromParam(status);
         int size = ListLimit.resolve(limit, DEFAULT_LIMIT, MAX_LIMIT);
         List<Long> after = CursorCodec.decodeOrFirstPage(CursorCodec.Kind.LIBRARY, cursor);
         Long afterId = after == null ? null : after.get(0);
+        Long chosen = ListParams.streamerIdOrNull(streamerId);
         long userId = 요청자_번호(requesterSubject);
 
         AccessibleResult accessible = delegation.accessible(userId);
         if (!accessible.available()) {
             // 빈 목록으로 접지 않는다 — 화면이 「편집본이 없다」고 단정하면 auth가 살아난 뒤에도 다시 안 온다.
             throw new AccessErrors.AuthUnavailableException();
+        }
+        accessible = accessible.narrowTo(chosen);
+        if (chosen != null && accessible.streamers().isEmpty()) {
+            // 방송 목록과 같은 이유로 404다(빈 목록이면 끊긴 위임을 화면이 모른다).
+            throw new AccessErrors.NotViewableException("streamer_not_accessible");
         }
         List<String> streamerIds = accessible.streamers().stream()
                 .map(entry -> String.valueOf(entry.streamerUserId()))

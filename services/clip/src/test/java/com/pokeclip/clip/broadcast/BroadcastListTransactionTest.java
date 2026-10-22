@@ -108,7 +108,7 @@ class BroadcastListTransactionTest extends IntegrationTestSupport {
         AUTH.holdFor(붙드는_시간);
 
         AtomicInteger 최대 = new AtomicInteger();
-        Thread 요청 = new Thread(() -> service.list(요청자, BroadcastState.LIVE, 20, null), "tx-probe");
+        Thread 요청 = new Thread(() -> service.list(요청자, BroadcastState.LIVE, 20, null, null), "tx-probe");
         try {
             요청.start();
             // 🔴 auth에 도착한 뒤부터 잰다. 도착 전에 재면 「아직 안 갔다」를 「안 쥔다」로 읽는다.
