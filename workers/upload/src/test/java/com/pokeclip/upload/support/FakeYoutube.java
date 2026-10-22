@@ -72,6 +72,10 @@ public class FakeYoutube implements AutoCloseable {
         public String title;
         public String description;
         public String privacy;
+        /** 시작 본문의 {@code snippet.categoryId}. */
+        public String categoryId;
+        /** 시작 본문의 {@code status.publishAt}. 칸이 없으면 null. */
+        public String publishAt;
         /** 시작 본문의 {@code snippet.tags}. 칸이 없으면 null. */
         public List<String> tags;
         /** 시작 본문의 {@code status.selfDeclaredMadeForKids}. 칸이 없거나 불리언이 아니면 null. */
@@ -168,6 +172,8 @@ public class FakeYoutube implements AutoCloseable {
         s.title = snippet.path("title").asString(null);
         s.description = snippet.path("description").asString(null);
         s.privacy = status.path("privacyStatus").asString(null);
+        s.categoryId = snippet.path("categoryId").asString(null);
+        s.publishAt = status.path("publishAt").asString(null);
         if (snippet.has("tags")) {
             s.tags = new ArrayList<>();
             for (JsonNode tag : snippet.path("tags")) {
