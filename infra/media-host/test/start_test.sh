@@ -461,8 +461,12 @@ case_no_bypass() {
       ok=1
       continue
     fi
-    hits="$(grep -c -i -E -- "${BYPASS_PATTERN}" "${f}" || true)"
-    if (( hits != 0 )); then
+    # grep 의 「맞는 줄 없음」(종료 1)만 0 건이다 — 읽기 실패는 0 이 아니다.
+    if ! hits="$(grep -c -i -E -- "${BYPASS_PATTERN}" "${f}")" \
+      && [[ "${hits}" != 0 ]]; then
+      harness::add_reason "bin/${f##*/} 를 읽지 못함"
+      ok=1
+    elif (( hits != 0 )); then
       harness::add_reason "bin/${f##*/} 에 우회 문자열 ${hits}줄"
       ok=1
     fi

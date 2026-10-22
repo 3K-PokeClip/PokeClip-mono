@@ -44,10 +44,16 @@ crash::cid() {
 }
 
 #######################################
-# 렌더 자리 둘 가운데 디렉터리인 것의 수를 낸다.
+# 렌더 자리 둘 가운데 디렉터리인 것의 수를 낸다. sudo 가 안 되면 「확인 불가」
+# 를 내고 1 을 돌려준다(0 과 비교하는 부르는 쪽에서 실패가 된다).
 #######################################
 crash::render_dirs() {
   local n=0 name
+  # sudo 가 안 되면 test -d 의 거짓과 가를 수 없다 — 0 이 아니라 확인 불가다.
+  if ! sudo -n true 2>/dev/null; then
+    printf '확인 불가'
+    return 1
+  fi
   while read -r _ name _; do
     if sudo -n test -d "${runtime_dir}/${name}"; then
       n=$((n + 1))
@@ -134,9 +140,10 @@ crash::expect_reaped() {
     harness::add_reason "재시작 대기 중 프로젝트 컨테이너 ${n}(옛 렌더를 붙든 채)"
     ok=1
   fi
-  n="$(sudo -n find "${runtime_dir}" -maxdepth 1 \( -name mediamtx.yml \
-    -o -name mtx_api_pass \) 2>/dev/null | grep -c . || true)"
-  if [[ "${n}" != 0 ]]; then
+  if ! n="$(unit::render_count -name mediamtx.yml -o -name mtx_api_pass)"; then
+    harness::add_reason '재시작 대기 중 렌더 자리 조회 실패'
+    ok=1
+  elif [[ "${n}" != 0 ]]; then
     harness::add_reason "재시작 대기 중 렌더 자리 ${n}"
     ok=1
   fi

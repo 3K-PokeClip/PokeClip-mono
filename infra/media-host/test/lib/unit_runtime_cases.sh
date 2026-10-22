@@ -110,6 +110,30 @@ unit::fresh_start() {
 }
 
 #######################################
+# 렌더 자리(runtime_dir 바로 아래)에서 find 식에 맞는 항목 수를 낸다. 자리가
+# 아예 없으면 0 이다. find 가 실패하면 아무것도 내지 않고 1 을 돌려준다 — 조회
+# 실패는 「확인 불가」 이지 0 건이 아니다. 부르는 쪽이 실패로 다룬다.
+# Globals:
+#   runtime_dir
+# Arguments:
+#   find 식(-name … -o -name …).
+# Outputs:
+#   항목 수(조회했을 때만).
+# Returns:
+#   0 셈 / 1 조회 실패.
+#######################################
+unit::render_count() {
+  local found
+  if sudo -n test ! -e "${runtime_dir}" 2>/dev/null; then
+    printf '0\n'
+    return 0
+  fi
+  found="$(sudo -n find "${runtime_dir}" -maxdepth 1 \( "$@" \) 2>/dev/null)" \
+    || return 1
+  printf '%s\n' "${found}" | awk 'NF { n++ } END { print n + 0 }'
+}
+
+#######################################
 # 저널 줄 가운데 고정 문자열이 든 줄 수를 낸다. 저널 조회가 실패하면 아무것도
 # 내지 않고 1 을 돌려준다 — 조회 실패는 「확인 불가」 이지 0 건이 아니다(grep 의
 # 「맞는 줄 없음」 종료 1 과 가른다). 부르는 쪽이 실패로 다룬다.
@@ -205,10 +229,11 @@ unit::expect_stopped() {
     harness::add_reason "$1: 프로젝트 컨테이너 ${n}"
     ok=1
   fi
-  n="$(sudo -n find "${runtime_dir}" -maxdepth 1 \( -name mediamtx.yml \
-    -o -name mtx_api_pass -o -name '.mediamtx.yml.*' \
-    -o -name '.mtx_api_pass.*' \) 2>/dev/null | grep -c . || true)"
-  if [[ "${n}" != 0 ]]; then
+  if ! n="$(unit::render_count -name mediamtx.yml -o -name mtx_api_pass \
+    -o -name '.mediamtx.yml.*' -o -name '.mtx_api_pass.*')"; then
+    harness::add_reason "$1: 렌더 자리 조회 실패"
+    ok=1
+  elif [[ "${n}" != 0 ]]; then
     harness::add_reason "$1: 렌더 파일 ${n}"
     ok=1
   fi

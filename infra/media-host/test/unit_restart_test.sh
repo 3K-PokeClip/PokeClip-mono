@@ -3,9 +3,10 @@
 # Media 상자 systemd 유닛 재기동 시험 — prod 유닛을 시험 이름으로 설치해 재기동 ·
 # 정지 · 데몬 흔들기 · 크래시 경로에서 유닛과 컨테이너가 기대대로 움직이는지 본다.
 #
-# 사례 1 – 3 · 20 은 systemd 없이 돈다(유닛 파일 지시어 · 시험 compose 구성 · 가짜
-# aws 상태 파일 · 저널 건수 도구). 사례 4 – 19 는 리눅스 · systemd · sudo 가 있는 곳(infra-ci ubuntu
-# 러너)에서만 돈다. 없으면 그 사례들은 FAIL 이다 — 건너뛰는 갈래는 없다.
+# 사례 1 – 3 · 20 · 21 은 systemd 없이 돈다(유닛 파일 지시어 · 시험 compose 구성 ·
+# 가짜 aws 상태 파일 · 저널 건수 · 렌더 자리 건수 도구). 사례 4 – 19 는 리눅스 ·
+# systemd · sudo 가 있는 곳(infra-ci ubuntu 러너)에서만 돈다. 없으면 그 사례들은
+# FAIL 이다 — 건너뛰는 갈래는 없다.
 #
 # 사례 13 – 17 은 호스트를 흔든다(docker 엔진 재시작 · dockerd kill -9 · 유닛
 # cgroup · compose 플러그인 SIGKILL · 유닛 밖 스택). 그래서 CI 러너
@@ -76,7 +77,7 @@ readonly FAKE_SECRET='pcbench-edge-proxy-fake-cdn-secret'
 readonly UNIT_BASE_PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin'
 readonly CONFIG_TIMEOUT=60
 readonly SYSTEMCTL_TIMEOUT=120
-readonly CASE_COUNT=20
+readonly CASE_COUNT=21
 
 # prod 유닛 지시어(설명 줄 Description= 은 빼고) — 「절|키=값」 한 줄에 하나.
 # 줄 잇기(끝 백슬래시)는 systemd 처럼 이어 붙인 한 줄로 적는다. 담는 것: docker
@@ -293,6 +294,57 @@ check_case_20() {
       ok=1
     fi
   done
+  return "${ok}"
+}
+
+#######################################
+# 사례 21 — 렌더 자리 건수 도구(unit::render_count · crash::render_dirs)는 조회
+# 실패를 0 건으로 바꾸지 않는다. 가짜 sudo · find 를 PATH 맨 앞에 두고 본다:
+# find 실패 → 실패 · 출력 없음, 빈 결과 → 0, 한 건 → 1, 렌더 자리가 없음 → 0,
+# sudo 실패 → 디렉터리 수 「확인 불가」. systemd 없이 돈다.
+#######################################
+check_case_21() {
+  local ok=0 dir="${scratch}/render-fake" mode out status want
+  local runtime_dir="${scratch}/render-fake-runtime"
+  mkdir -p -- "${dir}" "${runtime_dir}"
+  # shellcheck disable=SC2016 # 가짜 sudo 의 본문이다 — 그 셸이 펼친다.
+  printf '%s\n' '#!/bin/sh' '[ -n "${PCBENCH_FAKE_SUDO_FAIL:-}" ] && exit 1' \
+    '[ "$1" = -n ] && shift' 'exec "$@"' >"${dir}/sudo"
+  # shellcheck disable=SC2016 # 가짜 find 의 본문이다 — 그 셸이 펼친다.
+  printf '%s\n' '#!/bin/sh' 'case "${PCBENCH_FAKE_FIND:-}" in' \
+    '  fail) exit 1 ;;' '  one) printf "%s\n" "$1/mediamtx.yml" ;;' 'esac' \
+    >"${dir}/find"
+  chmod +x "${dir}/sudo" "${dir}/find"
+  for mode in fail empty one absent; do
+    case "${mode}" in
+      fail) want='실패:' ;;
+      one) want='0:1' ;;
+      *) want='0:0' ;;
+    esac
+    status=0
+    if [[ "${mode}" == absent ]]; then
+      out="$(runtime_dir="${scratch}/render-fake-none" PATH="${dir}:${PATH}" \
+        PCBENCH_FAKE_FIND=fail unit::render_count -name mediamtx.yml)" \
+        || status=$?
+    else
+      out="$(PATH="${dir}:${PATH}" PCBENCH_FAKE_FIND="${mode}" \
+        unit::render_count -name mediamtx.yml)" || status=$?
+    fi
+    if (( status != 0 )); then
+      out="실패:${out}"
+    else
+      out="0:${out}"
+    fi
+    if [[ "${out}" != "${want}" ]]; then
+      harness::add_reason "렌더 파일 갈래 ${mode}: 「${out}」(기대 「${want}」)"
+      ok=1
+    fi
+  done
+  out="$(PATH="${dir}:${PATH}" PCBENCH_FAKE_SUDO_FAIL=1 crash::render_dirs)"
+  if [[ "${out}" == 0 ]]; then
+    harness::add_reason 'sudo 가 실패했는데 렌더 자리 디렉터리 0 으로 셈'
+    ok=1
+  fi
   return "${ok}"
 }
 
@@ -673,6 +725,8 @@ main() {
     check_case_2
   harness::run_case 3 '가짜 aws 상태 파일 모드(④ 이음매)' check_case_3
   harness::run_case 20 '저널 건수 — 조회 실패는 0 건이 아님(정적)' check_case_20
+  harness::run_case 21 '렌더 자리 건수 — 조회 실패는 0 건이 아님(정적)' \
+    check_case_21
 
   if check_systemd_host; then
     install_unit || true
