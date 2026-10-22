@@ -37,7 +37,8 @@ main() {
   trap ops::on_exit EXIT
   trap 'exit 130' INT
   trap 'exit 143' TERM
-  if ! ops::make_scratch; then
+  # paths-list 와 같게 mktemp 의 진단은 버리고 단계 이름만 낸다.
+  if ! ops::make_scratch 2>/dev/null; then
     ops::say 'PATHS FAIL scratch'
     exit 1
   fi
