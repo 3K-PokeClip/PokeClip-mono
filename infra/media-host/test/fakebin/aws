@@ -2,11 +2,14 @@
 #
 # 가짜 aws — 시작 스크립트의 CDN 비밀 조회(Secrets Manager get-secret-value)만
 # 흉내 낸다. 시험 전용이고, 돌려주는 값은 실제 비밀이 아닌 고정 시험 문자열이다.
-# 사례 13 · 14 · 16 · 17(실물 compose) · start_test · c7 유닛 시험이 PATH 앞에
-# 이 디렉터리를 둔다.
+# 계약 시험(실물 compose) · start_test · 유닛 재기동 시험이 PATH 앞에 이 디렉터리를
+# 둔다.
 #
 # 시험이 주는 값(시작 스크립트는 읽지 않는다):
 #   PCBENCH_FAKE_AWS_MODE  ok(기본) · fail(종료 254) · empty(빈 값) ·
+#                          hang(모드 파일 옆에 <모드 파일>.hang 표식을 남기고
+#                          HANG_SECONDS 초 머문 뒤 ok 와 같은 값 — 모드 파일로만
+#                          쓴다. 유닛 시험의 기동 중 정지) ·
 #                          none(SecretString 이 없을 때 CLI 가 내는 None) ·
 #                          special(특수 문자가 든 값) · multiline(가운데
 #                          줄바꿈) · trailing(끝 줄바꿈 — 출력 끝이 줄바꿈 둘) ·
@@ -25,6 +28,9 @@
 set -euo pipefail
 
 readonly FAKE_SECRET='pcbench-edge-proxy-fake-cdn-secret'
+# hang 모드가 머무는 시간(초) — 유닛 ExecStop 의 주 프로세스 대기 상한(30초)보다
+# 짧다.
+readonly HANG_SECONDS=10
 # sed · 패턴 치환에서 뜻이 있는 글자를 모았다(& \ $ / * 따옴표).
 # shellcheck disable=SC2016 # 펼치지 않는 것이 뜻이다.
 readonly SPECIAL_SECRET='pcbench&edge\proxy$fake/*"cdn'"'"'secret'
@@ -83,6 +89,11 @@ main() {
     value)
       cat -- "${PCBENCH_FAKE_AWS_VALUE_FILE:?가짜 aws: 값 파일 없음}"
       printf '\n'
+      ;;
+    hang)
+      : >"${PCBENCH_FAKE_AWS_MODE_FILE:?가짜 aws: hang 은 모드 파일로만}.hang"
+      sleep "${HANG_SECONDS}"
+      printf '%s\n' "${FAKE_SECRET}"
       ;;
     empty) printf '\n' ;;
     none) printf 'None\n' ;;

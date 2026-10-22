@@ -304,7 +304,8 @@ guard::int_deliverable() {
 }
 
 #######################################
-# 사례 28 — 렌더 중 TERM → 143, INT → 130. 어느 쪽이든 up 0 · 임시 렌더 파일
+# 사례 28 — 렌더 중 TERM · INT 모두 130(유닛 SuccessExitStatus 와 같은 값 — 기동
+# 중 systemctl stop 이 실패로 남지 않게). 어느 쪽이든 up 0 · 임시 렌더 파일
 # 잔여 0. INT 는 기다리던 자식이 정상 종료하면 bash 가 그대로 이어 가므로(협조
 # 종료 규칙) 트랩이 없으면 up 까지 간다.
 #######################################
@@ -314,7 +315,7 @@ guard::case_signal_removes_tmp() {
     harness::add_reason 'bin/start-media.sh 없음'
     return 1
   fi
-  guard::signal_during_render TERM 143 || ok=1
+  guard::signal_during_render TERM 130 || ok=1
   if ! guard::int_deliverable; then
     harness::add_reason \
       'INT: 시험 셸이 INT 를 무시한 채 시작됨(작업 제어 없는 배경 실행) — 판정 불가'

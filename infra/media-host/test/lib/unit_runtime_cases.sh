@@ -4,8 +4,8 @@
 # shellcheck disable=SC2154
 #
 # 유닛 재기동 시험(unit_restart_test.sh)의 동작 사례 — 설치한 시험 유닛
-# (pcbench-edge-proxy)을 systemctl 로 움직이고 판별 신호를 본다. 계획 M2 c7
-# ① – ④ · 덧붙임 ③ 확장 · ⑥ · ⑦a · ⑦b · ⑧.
+# (pcbench-edge-proxy)을 systemctl 로 움직이고 판별 신호를 본다(시나리오 ① – ④ ·
+# ③ 확장 · ⑥ · ⑦a · ⑦b · ⑧ · 기동 중 정지).
 #
 # 부르는 쪽(unit_restart_test.sh)이 정하는 값을 읽는다: PROJECT · UNIT_NAME ·
 # ECHO_ADMIN_PORT · UNIT_COMPOSE · SYSTEMCTL_TIMEOUT · UNIT_FILE · DROPIN_DIR ·
@@ -13,7 +13,7 @@
 # unit_env 와 함수 require_installed · require_host_disruption · write_unit_env.
 # harness.sh 를 먼저 source 한다.
 #
-# 판별 신호(덧붙임 예측표):
+# 판별 신호:
 #   - 유닛 재기동 = MainPID 가 바뀌고 헬스(사례 9) 200 이 돌아온다.
 #   - 사이드카만의 재시작 = MainPID · NRestarts 가 그대로이고, 태그 저널
 #     (journalctl -t pokeclip-media-sidecar)에 종료 줄이 쌓이며 유닛 저널에는
@@ -370,11 +370,19 @@ unit::case_stop_flapping() {
   require_installed || return 1
   t0="$(unit::now)"
   unit::fresh_start "${UNIT_FLAP_DELAY}" || return 1
-  local deadline=$((SECONDS + UNIT_MARKER_TIMEOUT))
-  while (( SECONDS < deadline )) && (( $(unit::journal_count -t \
-    "${UNIT_SIDECAR_TAG}" "${t0}" 'SIDECAR EXIT 1') < 1 )); do
+  local deadline=$((SECONDS + UNIT_MARKER_TIMEOUT)) exits=0
+  while (( SECONDS < deadline )); do
+    exits="$(unit::journal_count -t "${UNIT_SIDECAR_TAG}" "${t0}" \
+      'SIDECAR EXIT 1')"
+    (( exits < 1 )) || break
     sleep 1
   done
+  # 사이드카가 한 번도 끝나지 않았으면 「재시작 중 stop」 을 시험하지 못한 것이다.
+  if (( exits < 1 )); then
+    harness::add_reason "${UNIT_MARKER_TIMEOUT}초 안에 사이드카 종료 줄 0(재시작 \
+중 상태에 닿지 못함)"
+    return 1
+  fi
   if ! unit::ctl stop "${UNIT_NAME}" >/dev/null 2>&1; then
     harness::add_reason 'systemctl stop 실패'
     return 1
@@ -383,6 +391,47 @@ unit::case_stop_flapping() {
   unit::expect_stopped "stop ${UNIT_STOP_HOLD}초 뒤" || ok=1
   sleep "${UNIT_STOP_HOLD}"
   unit::expect_stopped "stop $((UNIT_STOP_HOLD * 2))초 뒤" || ok=1
+  return "${ok}"
+}
+
+#######################################
+# 기동 중(시작 스크립트가 CDN 비밀을 조회하는 중) systemctl stop 해도 유닛은
+# failed 가 아니라 inactive 로 끝나고, 컨테이너 · 렌더 파일이 남지 않는다.
+# 가짜 aws 의 hang 모드가 조회에 머무는 동안 표식 파일을 남긴다.
+#######################################
+unit::case_stop_while_starting() {
+  local marker="${mode_file}.hang" deadline result ok=0
+  require_installed || return 1
+  unit::ctl stop "${UNIT_NAME}" >/dev/null 2>&1 || true
+  write_unit_env "${UNIT_IDLE_DELAY}"
+  sudo -n rm -f -- "${marker}"
+  printf 'hang\n' >"${mode_file}"
+  if ! unit::ctl start "${UNIT_NAME}" >/dev/null 2>&1; then
+    printf 'ok\n' >"${mode_file}"
+    harness::add_reason 'systemctl start 실패'
+    return 1
+  fi
+  deadline=$((SECONDS + UNIT_MARKER_TIMEOUT))
+  while [[ ! -e "${marker}" ]] && (( SECONDS < deadline )); do
+    sleep 0.2
+  done
+  printf 'ok\n' >"${mode_file}"
+  if [[ ! -e "${marker}" ]]; then
+    harness::add_reason "${UNIT_MARKER_TIMEOUT}초 안에 비밀 조회 중 상태에 닿지 못함"
+    unit::ctl stop "${UNIT_NAME}" >/dev/null 2>&1 || true
+    return 1
+  fi
+  if ! unit::ctl stop "${UNIT_NAME}" >/dev/null 2>&1; then
+    harness::add_reason 'systemctl stop 실패'
+    return 1
+  fi
+  result="$(unit::prop Result)"
+  if [[ "${result}" != success ]]; then
+    harness::add_reason "stop 뒤 Result ${result}(success 기대 · 주 프로세스 종료 \
+$(unit::prop ExecMainStatus))"
+    ok=1
+  fi
+  unit::expect_stopped '기동 중 stop 뒤' || ok=1
   return "${ok}"
 }
 

@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
 #
-# Media 상자 systemd 유닛 재기동 시험 — 계획 M2 c7 「unit_restart_test」 와 착수
-# 덧붙임(③ 확장 · ⑥ · ⑦a · ⑦b · ⑧).
+# Media 상자 systemd 유닛 재기동 시험 — prod 유닛을 시험 이름으로 설치해 재기동 ·
+# 정지 · 데몬 흔들기 · 크래시 경로에서 유닛과 컨테이너가 기대대로 움직이는지 본다.
 #
 # 사례 1 – 3 은 systemd 없이 돈다(유닛 파일 지시어 · 시험 compose 구성 · 가짜 aws
-# 상태 파일). 사례 4 – 18 은 리눅스 · systemd · sudo 가 있는 곳(infra-ci ubuntu
-# 러너 — kty 70차 Q4)에서만 돈다. 없으면 그 사례들은 FAIL 이다 — 건너뛰는 갈래는
-# 없다.
+# 상태 파일). 사례 4 – 19 는 리눅스 · systemd · sudo 가 있는 곳(infra-ci ubuntu
+# 러너)에서만 돈다. 없으면 그 사례들은 FAIL 이다 — 건너뛰는 갈래는 없다.
 #
 # 사례 13 – 17 은 호스트를 흔든다(docker 엔진 재시작 · dockerd kill -9 · 유닛
 # cgroup · compose 플러그인 SIGKILL · 유닛 밖 스택). 그래서 CI 러너
@@ -14,23 +13,23 @@
 # 에서만 돌고, 그 밖에서는 거부해 FAIL 이다 — 개발 머신에서 잘못 돌려 같은 엔진의
 # 다른 컨테이너를 내리지 않게(실수로 돌린 경우의 보호 — 위조 가능한 표식이라 보안 경계는 아니다).
 #
-# 설치 방식(계획 c7 · 이름은 덧붙임 편차 3):
+# 설치 방식:
 #   - systemd/pokeclip-media.service 를 바이트 그대로
 #     /etc/systemd/system/pcbench-edge-proxy.service 로 복사한다.
 #   - bin/ 을 /opt/pokeclip-media/bin/ 에 설치한다(유닛의 ExecStart 경로).
 #   - drop-in pcbench-edge-proxy.service.d/test.conf 에는 Environment= ·
-#     EnvironmentFile= 만 둔다 — 값만 바꾸고 동작 지시어는 prod 유닛 그대로다
-#     (계획 c4 시험 이음매 표 「unit_restart_test」 열).
+#     EnvironmentFile= 만 둔다 — 값만 바꾸고 동작 지시어는 prod 유닛 그대로다.
 #   - 이미 /opt/pokeclip-media 나 같은 이름의 유닛이 있으면 설치하지 않고
 #     FAIL 이다 — prod 상자에서 잘못 돌려도 덮어쓰지 않는다.
 #
-# 사례 번호 ↔ 계획: 6 ① · 7 ② · 8 ⑥ · 9 ⑧ · 10 ③ · 11 ③ 확장 · 12 ④ · 13 ⑦a ·
-# 14 ⑦b · 18 ⑤(정리 · 잔여 0). 동작 사례는 lib/unit_runtime_cases.sh 에 있다.
-# 사례 15 – 17 은 크래시 경로(compose 플러그인 · 유닛 cgroup SIGKILL · 유닛 밖에
-# 남은 스택 — 옛 비밀을 붙든 컨테이너가 남지 않는지)이고
-# lib/unit_crash_cases.sh 에 있다.
+# 사례 제목 앞의 기호(① – ⑧)는 시나리오 이름이다: 6 ① · 7 ② · 8 ⑥ · 9 ⑧ ·
+# 10 ③ · 11 ③ 확장 · 12 ④ · 13 ⑦a · 14 ⑦b · 18 ⑤(정리 · 잔여 0). 동작 사례는
+# lib/unit_runtime_cases.sh 에 있다. 사례 15 – 17 은 크래시 경로(compose 플러그인
+# · 유닛 cgroup SIGKILL · 유닛 밖에 남은 스택 — 옛 비밀을 붙든 컨테이너가 남지
+# 않는지)이고 lib/unit_crash_cases.sh 에 있다. 사례 19 는 기동 중(비밀 조회 중)
+# 정지다.
 #
-# 한 바퀴 약 13분이다. 반복(N=3)은 부르는 쪽(CI)이 이 시험을 여러 번 돌린다.
+# 한 바퀴 약 8분이다. 반복(N=3)은 부르는 쪽(CI)이 이 시험을 여러 번 돌린다.
 #
 # 사용: bash infra/media-host/test/unit_restart_test.sh
 # 종료 코드: 0 전부 통과 / 1 하나라도 실패
@@ -74,13 +73,14 @@ readonly FAKE_SECRET='pcbench-edge-proxy-fake-cdn-secret'
 readonly UNIT_BASE_PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin'
 readonly CONFIG_TIMEOUT=60
 readonly SYSTEMCTL_TIMEOUT=120
-readonly CASE_COUNT=18
+readonly CASE_COUNT=19
 
 # prod 유닛 지시어(설명 줄 Description= 은 빼고) — 「절|키=값」 한 줄에 하나.
-# 계획 c7 「c7 유닛」 · 덧붙임 편차 14(Requires · After) · LimitCORE=0(코어
-# 덤프에 비밀이 남지 않게) · c7 정지 두 단계(주 프로세스 TERM 뒤 down ·
-# SuccessExitStatus=130) · c9 ExecStopPost 도 down(크래시 경로에서 ExecStop 을
-# 건너뛰어도 컨테이너를 내림).
+# 줄 잇기(끝 백슬래시)는 systemd 처럼 이어 붙인 한 줄로 적는다. 담는 것: docker
+# 뒤에 뜨기(Requires · After) · 재시도 한도 없음 · 정지 두 단계(주 프로세스 TERM
+# 뒤 down — 그 TERM 의 종료 130 은 성공) · ExecStopPost 도 down(크래시 경로에서
+# ExecStop 을 건너뛰어도 컨테이너를 내림) · LimitCORE=0(코어 덤프에 비밀이 남지
+# 않게).
 # shellcheck disable=SC2016 # 유닛 원문 — $ 는 펼치지 않는다.
 readonly EXPECTED_UNIT_LINES='Unit|Requires=docker.service
 Unit|After=docker.service
@@ -91,7 +91,7 @@ Service|Environment=DOCKER_CONFIG=/root/.docker
 Service|Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
 Service|Environment=MEDIA_COMPOSE_PROJECT=pokeclip-media
 Service|ExecStart=/opt/pokeclip-media/bin/start-media.sh
-Service|ExecStop=/bin/sh -c '"'"'kill -TERM "$$MAINPID" 2>/dev/null; i=0; while kill -0 "$$MAINPID" 2>/dev/null && [ "$$i" -lt 150 ]; do sleep 0.2; i=$$((i + 1)); done'"'"'
+Service|ExecStop=/bin/sh -c '"'"'kill -TERM "$$MAINPID" 2>/dev/null; i=0;    while kill -0 "$$MAINPID" 2>/dev/null && [ "$$i" -lt 150 ]; do    sleep 0.2; i=$$((i + 1)); done'"'"'
 Service|ExecStop=/opt/pokeclip-media/bin/stop-media.sh
 Service|ExecStopPost=/opt/pokeclip-media/bin/stop-media.sh
 Service|SuccessExitStatus=130
@@ -117,6 +117,7 @@ unit_env=()
 
 cleanup() {
   local status=$?
+  harness::end_last_group
   if (( installed )); then
     unit::teardown >/dev/null 2>&1 || true
   fi
@@ -133,40 +134,55 @@ add_setup_reason() {
 
 #######################################
 # 유닛 파일을 「절|키=값」 줄로 펼친다. 빈 줄 · 주석 · Description= 은 뺀다.
+# 끝이 백슬래시인 줄은 systemd 처럼 그 글자를 공백으로 바꾸고 다음 줄을 그대로
+# 이어 붙인다.
 # Arguments:
 #   유닛 파일.
 # Outputs:
-#   줄을 C 순서로 정렬해 낸다.
+#   줄을 파일 순서대로 낸다.
 #######################################
 unit_lines() {
   awk '
-    /^[[:space:]]*($|[#;])/ { next }
-    /^\[.*\]$/ { section = substr($0, 2, length($0) - 2); next }
+    cont == "" && /^[[:space:]]*($|[#;])/ { next }
+    cont == "" && /^\[.*\]$/ { section = substr($0, 2, length($0) - 2); next }
     {
-      sub(/^[[:space:]]+/, ""); sub(/[[:space:]]+$/, "")
-      if ($0 ~ /^Description=/) next
-      print section "|" $0
-    }' "$1" | LC_ALL=C sort
+      line = $0
+      if (cont != "") { line = cont line; cont = "" }
+      else sub(/^[[:space:]]+/, "", line)
+      if (line ~ /\\$/) { sub(/\\$/, " ", line); cont = line; next }
+      sub(/[[:space:]]+$/, "", line)
+      if (line ~ /^Description=/) next
+      print section "|" line
+    }' "$1"
 }
 
 #######################################
-# 사례 1 — prod 유닛 지시어가 계획 값과 정확히 같다(빠짐 · 더함 · 다름 0).
+# 사례 1 — prod 유닛 지시어가 기대 값과 정확히 같다(빠짐 · 더함 · 다름 0).
+# 같은 키가 여러 번 나오는 지시어(ExecStop)는 실행 순서이므로 순서도 본다.
 #######################################
 check_case_1() {
-  local file="${MEDIA_HOST_DIR}/${PROD_UNIT_REL}" want got diff
+  local file="${MEDIA_HOST_DIR}/${PROD_UNIT_REL}" want got diff lines ok=0
   if [[ ! -f "${file}" ]]; then
-    harness::add_reason "${PROD_UNIT_REL} 없음(c7 몫)"
+    harness::add_reason "${PROD_UNIT_REL} 없음"
     return 1
   fi
+  lines="$(unit_lines "${file}")"
   want="$(printf '%s\n' "${EXPECTED_UNIT_LINES}" | LC_ALL=C sort)"
-  got="$(unit_lines "${file}")"
-  if [[ "${got}" == "${want}" ]]; then
-    return 0
+  got="$(printf '%s\n' "${lines}" | LC_ALL=C sort)"
+  if [[ "${got}" != "${want}" ]]; then
+    diff="$(diff <(printf '%s\n' "${want}") <(printf '%s\n' "${got}") \
+      | grep -E '^[<>]' | sed -e 's/^</빠짐/' -e 's/^>/더함/' || true)"
+    harness::add_reason "지시어 차이: $(printf '%s' "${diff}" | tr '\n' ';')"
+    ok=1
   fi
-  diff="$(diff <(printf '%s\n' "${want}") <(printf '%s\n' "${got}") \
-    | grep -E '^[<>]' | sed -e 's/^</빠짐/' -e 's/^>/더함/' || true)"
-  harness::add_reason "지시어 차이: $(printf '%s' "${diff}" | tr '\n' ';')"
-  return 1
+  want="$(printf '%s\n' "${EXPECTED_UNIT_LINES}" | grep -F 'Service|ExecStop=' \
+    || true)"
+  got="$(printf '%s\n' "${lines}" | grep -F 'Service|ExecStop=' || true)"
+  if [[ "${got}" != "${want}" ]]; then
+    harness::add_reason 'ExecStop 순서가 기대(주 프로세스 TERM → stop-media.sh)와 다름'
+    ok=1
+  fi
+  return "${ok}"
 }
 
 #######################################
@@ -532,6 +548,15 @@ check_case_5() {
       ok=1
     fi
   done
+  # 줄 잇기를 systemd 가 이 시험의 파서와 같게 읽는지 — 첫 ExecStop 의 실효
+  # argv 가 기대 값(이어 붙인 한 줄)과 같다.
+  want="$(printf '%s\n' "${EXPECTED_UNIT_LINES}" \
+    | sed -n "s/^Service|ExecStop=\/bin\/sh -c '\(.*\)'$/\1/p")"
+  got="$(unit::prop ExecStop)"
+  if [[ -z "${want}" || "${got}" != *"argv[]=/bin/sh -c ${want} ;"* ]]; then
+    harness::add_reason 'ExecStop 첫 명령의 실효 argv 가 기대(이어 붙인 한 줄)와 다름'
+    ok=1
+  fi
   want="$(grep -E '^(ExecStart|Restart|StartLimit)' \
     "${MEDIA_HOST_DIR}/${PROD_UNIT_REL}")"
   got="$(sudo -n systemctl cat "${UNIT_NAME}" \
@@ -599,7 +624,7 @@ main() {
     command -v "${n}" >/dev/null 2>&1 || add_setup_reason "도구 없음: ${n}"
   done
 
-  harness::run_case 1 'prod 유닛 지시어 = 계획 값' check_case_1
+  harness::run_case 1 'prod 유닛 지시어 = 기대 값' check_case_1
   harness::run_case 2 '시험 compose(unit) 검증 · 역할 셋 · 로그 자리' \
     check_case_2
   harness::run_case 3 '가짜 aws 상태 파일 모드(④ 이음매)' check_case_3
@@ -623,6 +648,8 @@ main() {
     unit::case_stop_flapping
   harness::run_case 12 '④ CDN 비밀 빈 값 90초 → 재시도 · 되돌리면 자동 기동' \
     unit::case_secret_outage
+  harness::run_case 19 '기동 중(비밀 조회 중) stop → inactive · 실패 아님' \
+    unit::case_stop_while_starting
   harness::run_case 13 '⑦a docker 재시작 → 비부착 자동 시작 0 · 재통과' \
     unit::case_docker_restart
   harness::run_case 14 '⑦b dockerd kill -9 → 비부착 자동 시작 0 · 재통과' \

@@ -4,9 +4,9 @@
 # lib/unit_runtime_cases.sh 가 정의한다.
 # shellcheck disable=SC2154
 #
-# 유닛 재기동 시험(unit_restart_test.sh)의 크래시 경로 사례 — 크래시 뒤 옛 비밀
-# 컨테이너 잔존 재현(실험 루트 m1-repro). 주 프로세스가 실패로 끝나면 systemd 는 ExecStop 을
-# 건너뛰고 ExecStopPost 로 간다. 그때 compose 를 내릴 주체가 없으면 컨테이너가
+# 유닛 재기동 시험(unit_restart_test.sh)의 크래시 경로 사례 — 크래시 뒤 옛 비밀을
+# 붙든 컨테이너가 남지 않는지 본다. 주 프로세스가 실패로 끝나면 systemd 는
+# ExecStop 을 건너뛰고 ExecStopPost 로 간다. 그때 compose 를 내릴 주체가 없으면 컨테이너가
 # 옛 렌더(옛 CDN 비밀 · 옛 API 비밀번호)를 붙든 채 남는다.
 #
 # 판별 신호:
@@ -17,12 +17,12 @@
 #   - 렌더 자리에 디렉터리 0 · 「MEDIA START FAIL」 · 「CLEANUP FAIL」 줄 0.
 #
 # MainPID(docker CLI) 만 SIGKILL 하는 사례는 넣지 않는다 — 남은 compose 플러그인이
-# systemd 의 SIGTERM 을 받아 컨테이너를 멈추므로 이 결함을 놓친다(m1-repro 갈래 A).
+# systemd 의 SIGTERM 을 받아 컨테이너를 멈추므로 이 결함을 놓친다(탐침 상자 실측).
 #
 # 이 파일은 source 해서 쓴다(실행하지 않는다).
 
 # 사이드카 종료 지연 — 10초를 넘겨 엔진 재시작 간격이 늘지 않게 하고, 방아쇠
-# 뒤 곧 재시작해 렌더 자리를 다시 마운트하게 한다(m1-repro 와 같은 12초).
+# 뒤 곧 재시작해 렌더 자리를 다시 마운트하게 한다(결함을 재현한 실측과 같은 12초).
 readonly CRASH_SIDECAR_DELAY='12s'
 # 시간(초).
 readonly CRASH_REAP_TIMEOUT=60
@@ -220,7 +220,7 @@ crash::trigger() {
   fi
   if [[ "$1" == cgroup ]]; then
     # systemd 252 는 주 프로세스가 먼저 죽으면 나머지에 보낸 신호를 EIO 로
-    # 보고하며 0 아닌 코드로 끝나기도 한다(c9 탐침 12회 중 5회 — 신호는 갔다).
+    # 보고하며 0 아닌 코드로 끝나기도 한다(탐침 12회 중 5회 — 신호는 갔다).
     # 그래서 종료 코드가 아니라 두 프로세스가 끝났는지로 본다.
     unit::ctl kill -s KILL "${UNIT_NAME}" >"${log}" 2>&1 || true
     crash::wait_pids_gone "${main}" "${child}" && return 0
@@ -255,7 +255,10 @@ crash::case_kill() {
   return "${ok}"
 }
 
+# 사례 15 — compose 플러그인(MainPID 의 자식)만 SIGKILL 한 크래시.
 crash::case_plugin_kill() { crash::case_kill plugin; }
+
+# 사례 16 — 유닛 cgroup 전체를 SIGKILL 한 크래시(systemctl kill -s KILL).
 crash::case_cgroup_kill() { crash::case_kill cgroup; }
 
 #######################################

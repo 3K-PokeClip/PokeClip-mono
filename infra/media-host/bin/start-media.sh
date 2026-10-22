@@ -517,9 +517,12 @@ main() {
   DOCKER_CONFIG="${DOCKER_CONFIG:-/root/.docker}"
   export DOCKER_CONFIG
   trap remove_render_tmp EXIT
-  # 신호로 끝나도 EXIT 트랩이 돌아 임시 렌더 파일이 남지 않게 한다.
+  # 신호로 끝나도 EXIT 트랩이 돌아 임시 렌더 파일이 남지 않게 한다. TERM 도
+  # 130 으로 끝낸다 — 기동 중 systemctl stop(유닛 ExecStop 의 TERM)이 유닛
+  # SuccessExitStatus=130 에 맞아 failed 로 남지 않게. compose up 이 TERM 에
+  # 내는 값과 같다.
   trap 'exit 130' INT
-  trap 'exit 143' TERM
+  trap 'exit 130' TERM
   if ! run_prereqs; then
     exit 1
   fi
