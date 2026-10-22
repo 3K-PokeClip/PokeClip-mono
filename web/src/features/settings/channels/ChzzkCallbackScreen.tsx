@@ -73,7 +73,7 @@ export function ChzzkCallbackScreen() {
         // 성공 토스트 직후에 「미연동」이 잠깐 스치므로 invalidate가 아니라 remove다.
         queryClient.removeQueries({ queryKey: chzzkLinkQueryOptions.queryKey });
         track('platform_linked', { platform: 'chzzk' }); // 채널 이름은 싣지 않는다 (POK-357)
-        // 온보딩 플래그는 여기서 건드리지 않는다 — 필자는 useChzzkLinkState의 미러링
+        // 온보딩 플래그는 여기서 건드리지 않는다 — 필자는 ChannelSettingsScreen의 미러링
         // 이펙트 하나뿐이고, 목적지 화면이 마운트되며 서버 진실로 반영한다.
         toast({
           tone: 'success',

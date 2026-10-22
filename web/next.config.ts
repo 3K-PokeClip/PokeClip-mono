@@ -22,6 +22,8 @@ const proxies = [
   // /api/youtube-link/start를 함께 덮는다 — dev 서버에 실측했다(둘 다 백엔드까지 도달해
   // 401, 매칭 안 되는 주소는 404).
   { source: '/api/youtube-link/:path*', target: process.env.AUTH_API_URL },
+  // SOOP 채널 연동(POK-396)도 auth 서버 소유다 (SoopLinkController). 같은 이유로 한 줄이 자체와 /start를 덮는다.
+  { source: '/api/soop-link/:path*', target: process.env.AUTH_API_URL },
   // 오디오 트랙 이름(POK-240) 중 편집자가 읽는 문과 프로필 사진도 auth 서버 소유다(POK-251).
   // 🔴 이 줄이 없으면 편집기 오디오 탭이 404를 받아 트랙 이름이 「트랙 n」으로만 보인다(2026-09-17 실측).
   { source: '/api/streamers/:path*', target: process.env.AUTH_API_URL },

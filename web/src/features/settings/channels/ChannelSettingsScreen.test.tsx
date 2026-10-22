@@ -9,9 +9,10 @@ import { useOnboardingStore } from '@/stores/onboarding';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
 import { renderWithProviders } from '@/test/testProviders';
 
-const { goToChzzkConsent, goToYoutubeConsent } = vi.hoisted(() => ({
+const { goToChzzkConsent, goToYoutubeConsent, goToSoopConsent } = vi.hoisted(() => ({
   goToChzzkConsent: vi.fn(),
   goToYoutubeConsent: vi.fn(),
+  goToSoopConsent: vi.fn(),
 }));
 
 // location.assign은 jsdom이 못 흉내 낸다 — 이동은 모킹하고, 등록 주소 판정은
@@ -24,11 +25,18 @@ vi.mock('@/features/settings/channels/youtubeOAuth', async (importOriginal) => (
   ...(await importOriginal<typeof import('@/features/settings/channels/youtubeOAuth')>()),
   goToYoutubeConsent,
 }));
+vi.mock('@/features/settings/channels/soopOAuth', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/features/settings/channels/soopOAuth')>()),
+  goToSoopConsent,
+}));
 
 const LINK_URL = '/api/chzzk-link';
 const START_URL = '/api/chzzk-link/start';
 const YT_LINK_URL = '/api/youtube-link';
 const YT_START_URL = '/api/youtube-link/start';
+const SOOP_LINK_URL = '/api/soop-link';
+const SOOP_START_URL = '/api/soop-link/start';
+const SOOP_AUTHORIZE_URL = 'https://openapi.sooplive.com/auth/code?client_id=cid&state=soop-signed';
 // warnIfCallbackMismatch는 모킹하지 않고 원본을 태운다 — 등록 주소가 맞는 동의 URL이면
 // 조용해야 하고, 그 성질 자체가 회귀 대상이다. redirectUri를 빼면 케이스마다 경고가 찍혀
 // 진짜 회귀 경고와 구분되지 않는다. (jsdom 기본 오리진이 localhost:3000이다)
@@ -51,6 +59,8 @@ function stubLinkStatus(
   status = 200,
   ytBody: unknown = { linked: false },
   ytStatus = 200,
+  soopBody: unknown = { linked: false },
+  soopStatus = 200,
 ) {
   return stubFetch((url, init) => {
     if (url === START_URL && init?.method === 'POST') {
@@ -59,10 +69,18 @@ function stubLinkStatus(
     if (url === YT_START_URL && init?.method === 'POST') {
       return jsonResponse(200, { authorizeUrl: YT_AUTHORIZE_URL });
     }
+    if (url === SOOP_START_URL && init?.method === 'POST') {
+      return jsonResponse(200, { authorizeUrl: SOOP_AUTHORIZE_URL });
+    }
     if (url === YT_LINK_URL) return jsonResponse(ytStatus, ytBody);
+    if (url === SOOP_LINK_URL) return jsonResponse(soopStatus, soopBody);
     return jsonResponse(status, body);
   });
 }
+
+/** 치지직·유튜브는 미연동으로 눕히고 SOOP만 갈아끼운다. */
+const stubSoop = (soopBody: unknown, soopStatus = 200) =>
+  stubLinkStatus({ linked: false }, 200, { linked: false }, 200, soopBody, soopStatus);
 
 const linked = (status: ChzzkLinkStatus, extra: Record<string, unknown> = {}) => ({
   linked: status === 'ACTIVE' || status === 'EXPIRED',
@@ -76,11 +94,14 @@ const linked = (status: ChzzkLinkStatus, extra: Record<string, unknown> = {}) =>
 /** 채널 행 안으로 범위를 좁힌다 — 「연동」 버튼은 행마다 있어 이름만으로는 구분되지 않는다. */
 const row = (name: string) => within(screen.getByRole('group', { name }));
 const chzzk = () => row('치지직');
+const soop = () => row('SOOP');
 
 beforeEach(() => {
   window.localStorage.clear();
   goToChzzkConsent.mockReset();
   goToYoutubeConsent.mockReset();
+  goToSoopConsent.mockReset();
+  window.sessionStorage.clear();
   useAuthStore.setState({ accessToken: 'access-1', refreshToken: 'refresh-1', hydrated: true });
   useOnboardingStore.setState({
     welcomeSeen: false,
@@ -238,17 +259,6 @@ describe('ChannelSettingsScreen — 온보딩·다른 플랫폼', () => {
     await waitFor(() => expect(useOnboardingStore.getState().channelLinked).toBe(false));
   });
 
-  it('백엔드가 없는 SOOP은 자리만 있고 누를 수 없다 — 있는 척하지 않는다', async () => {
-    stubLinkStatus({ linked: false });
-    renderWithProviders(<ChannelSettingsScreen />);
-
-    await chzzk().findByRole('button', { name: '연동' });
-    expect(row('SOOP').getByRole('button', { name: '연동' })).toBeDisabled();
-    // 실배선된 두 행은 반대로 눌리는 상태여야 한다 — 전부 비활성이면 이 케이스가 무의미해진다
-    expect(chzzk().getByRole('button', { name: '연동' })).toBeEnabled();
-    expect(row('유튜브').getByRole('button', { name: '연동' })).toBeEnabled();
-  });
-
   it('유튜브가 실배선됐다 — 준비 중 세 겹과 다계정 UI가 없고 연동이 눌린다 (POK-221)', async () => {
     stubLinkStatus({ linked: false });
     renderWithProviders(<ChannelSettingsScreen />);
@@ -297,7 +307,7 @@ describe('ChannelSettingsScreen — 연동 해제', () => {
       }
       // 유튜브 행은 이 묶음의 관심 밖 — 미연동으로 눕혀 「정상」·「연동 해제」가
       // 치지직 행에서만 나오게 한다 (단일 매치 단언의 전제).
-      if (url === YT_LINK_URL) return jsonResponse(200, { linked: false });
+      if (url === YT_LINK_URL || url === SOOP_LINK_URL) return jsonResponse(200, { linked: false });
       return jsonResponse(200, unlinked ? { linked: false } : linked('ACTIVE'));
     });
   }
@@ -359,5 +369,161 @@ describe('ChannelSettingsScreen — 연동 해제', () => {
     expect(await screen.findByText('연동 해제에 실패했어요')).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
     expect(screen.getByText('정상')).toBeInTheDocument();
+  });
+});
+
+describe('ChannelSettingsScreen — SOOP 행 (POK-396)', () => {
+  const soopLinked = (status: 'ACTIVE' | 'EXPIRED' | 'BROKEN' | 'UNLINKED') =>
+    status === 'ACTIVE' || status === 'EXPIRED'
+      ? {
+          linked: true,
+          soopUserId: 'soop-user-a1',
+          nickname: '숲너구리',
+          status,
+          linkedAt: '2026-10-23T03:00:00Z',
+        }
+      : // 닫힌 연동은 닉네임이 파기돼 오지 않는다(서버 LinkStatusResponse)
+        { linked: false, status };
+
+  it('미연동이면 「연동」이 눌린다 — 다른 두 행도 그대로 눌린다', async () => {
+    stubSoop({ linked: false });
+    renderWithProviders(<ChannelSettingsScreen />);
+
+    expect(await soop().findByRole('button', { name: '연동' })).toBeEnabled();
+    expect(await chzzk().findByRole('button', { name: '연동' })).toBeEnabled();
+    expect(await row('유튜브').findByRole('button', { name: '연동' })).toBeEnabled();
+  });
+
+  it('연동되면 닉네임과 「연동 해제」를 보여준다 — 아이디는 화면에 없다', async () => {
+    stubSoop(soopLinked('ACTIVE'));
+    const { container } = renderWithProviders(<ChannelSettingsScreen />);
+
+    expect(await soop().findByText('숲너구리')).toBeInTheDocument();
+    expect(soop().getByText('정상')).toBeInTheDocument();
+    expect(soop().getByRole('button', { name: '연동 해제' })).toBeInTheDocument();
+    expect(container.innerHTML).not.toContain('soop-user-a1');
+  });
+
+  it('BROKEN이면 끊김을 알리고 「다시 연동」을 준다 — 닉네임도 해제 버튼도 없다', async () => {
+    stubSoop(soopLinked('BROKEN'));
+    renderWithProviders(<ChannelSettingsScreen />);
+
+    expect(await soop().findByText('SOOP 연동이 끊겼어요')).toBeInTheDocument();
+    expect(soop().getByText('연동 끊김')).toBeInTheDocument();
+    expect(soop().getByRole('button', { name: '다시 연동' })).toBeInTheDocument();
+    expect(soop().queryByRole('button', { name: '연동 해제' })).not.toBeInTheDocument();
+    expect(screen.queryByText(/숲너구리/)).not.toBeInTheDocument();
+  });
+
+  it('UNLINKED는 미연동과 같게 그린다', async () => {
+    stubSoop(soopLinked('UNLINKED'));
+    renderWithProviders(<ChannelSettingsScreen />);
+
+    expect(await soop().findByRole('button', { name: '연동' })).toBeEnabled();
+    expect(soop().queryByText('연동 끊김')).not.toBeInTheDocument();
+  });
+
+  it('상태를 못 읽으면 「연동」을 내밀지 않고 다시 시도를 준다 — 미연동으로 오인시키지 않는다', async () => {
+    stubSoop({ reason: 'BOOM' }, 500);
+    renderWithProviders(<ChannelSettingsScreen />);
+
+    expect(await soop().findByRole('button', { name: '다시 시도' })).toBeInTheDocument();
+    expect(soop().getByText('연동 상태를 불러오지 못했어요')).toBeInTheDocument();
+    expect(soop().queryByRole('button', { name: '연동' })).not.toBeInTheDocument();
+  });
+
+  it('「연동」을 누르면 state를 두고 서버가 준 동의 주소로 나간다', async () => {
+    const user = userEvent.setup();
+    const spy = stubSoop({ linked: false });
+    renderWithProviders(<ChannelSettingsScreen />);
+
+    await user.click(await soop().findByRole('button', { name: '연동' }));
+
+    await waitFor(() => expect(goToSoopConsent).toHaveBeenCalledWith(SOOP_AUTHORIZE_URL));
+    expect(window.sessionStorage.getItem('pokeclip.soop.state')).toBe('soop-signed');
+    expect(
+      spy.mock.calls.filter(([url, init]) => url === SOOP_START_URL && init?.method === 'POST'),
+    ).toHaveLength(1);
+  });
+
+  it('동의 주소가 https가 아니면 이동하지 않고 오류를 알린다', async () => {
+    const user = userEvent.setup();
+    stubFetch((url, init) => {
+      if (url === SOOP_START_URL && init?.method === 'POST') {
+        return jsonResponse(200, { authorizeUrl: 'http://openapi.sooplive.com/auth/code?state=s' });
+      }
+      return jsonResponse(200, { linked: false });
+    });
+    renderWithProviders(<ChannelSettingsScreen />);
+
+    await user.click(await soop().findByRole('button', { name: '연동' }));
+
+    expect(await screen.findByText('연동을 시작하지 못했어요')).toBeInTheDocument();
+    expect(goToSoopConsent).not.toHaveBeenCalled();
+    expect(window.sessionStorage.getItem('pokeclip.soop.state')).toBeNull();
+  });
+
+  it('해제는 확인 창을 거친다 — 문구 셋, 확인하면 DELETE 한 번과 토스트', async () => {
+    const user = userEvent.setup();
+    let unlinked = false;
+    const spy = stubFetch((url, init) => {
+      if (url === SOOP_LINK_URL && init?.method === 'DELETE') {
+        unlinked = true;
+        return jsonResponse(204);
+      }
+      if (url === SOOP_LINK_URL) {
+        return jsonResponse(200, unlinked ? { linked: false } : soopLinked('ACTIVE'));
+      }
+      return jsonResponse(200, { linked: false });
+    });
+    renderWithProviders(<ChannelSettingsScreen />);
+
+    await user.click(await soop().findByRole('button', { name: '연동 해제' }));
+    const dialog = within(screen.getByRole('dialog'));
+    expect(dialog.getByText('SOOP 연동을 해제할까요?')).toBeInTheDocument();
+    expect(
+      dialog.getByText('해제하면 SOOP 방송에서 하이라이트를 감지하지 않아요.'),
+    ).toBeInTheDocument();
+    expect(dialog.getByText('SOOP에서 받은 채널 정보는 바로 지워져요.')).toBeInTheDocument();
+
+    await user.click(dialog.getByRole('button', { name: '연동 해제' }));
+
+    expect(await screen.findByText('SOOP 연동을 해제했어요')).toBeInTheDocument();
+    expect(
+      spy.mock.calls.filter(([url, init]) => url === SOOP_LINK_URL && init?.method === 'DELETE'),
+    ).toHaveLength(1);
+    await waitFor(() => expect(soop().getByRole('button', { name: '연동' })).toBeEnabled());
+  });
+});
+
+describe('ChannelSettingsScreen — 「채널 연동됨」 판정은 둘 중 하나 (C8)', () => {
+  it('SOOP만 연동돼 있어도 시작 가이드 플래그가 true다', async () => {
+    useOnboardingStore.setState({ channelLinked: true });
+    stubSoop({ linked: true, status: 'ACTIVE', nickname: '숲너구리' });
+    renderWithProviders(<ChannelSettingsScreen />);
+
+    await soop().findByText('숲너구리');
+    await chzzk().findByRole('button', { name: '연동' });
+    // 치지직 미연동이 플래그를 false로 덮지 않는다
+    await new Promise((r) => setTimeout(r, 50));
+    expect(useOnboardingStore.getState().channelLinked).toBe(true);
+  });
+
+  it('SOOP만 연동되면 false였던 플래그를 세운다', async () => {
+    stubSoop({ linked: true, status: 'ACTIVE', nickname: '숲너구리' });
+    renderWithProviders(<ChannelSettingsScreen />);
+
+    await waitFor(() => expect(useOnboardingStore.getState().channelLinked).toBe(true));
+  });
+
+  it('하나라도 못 읽었으면 플래그를 건드리지 않는다', async () => {
+    useOnboardingStore.setState({ channelLinked: true });
+    stubLinkStatus({ linked: false }, 200, { linked: false }, 200, { reason: 'BOOM' }, 500);
+    renderWithProviders(<ChannelSettingsScreen />);
+
+    await soop().findByRole('button', { name: '다시 시도' });
+    await chzzk().findByRole('button', { name: '연동' });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(useOnboardingStore.getState().channelLinked).toBe(true);
   });
 });
