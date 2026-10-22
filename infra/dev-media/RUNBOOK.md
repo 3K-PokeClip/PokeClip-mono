@@ -1880,10 +1880,25 @@ sudo docker compose -p dev-media --env-file /opt/pokeclip-demo/.env \
 | MediaMTX `connection not found` ERR | cut 이 kick 한 연결이 이미 없어 404 가 났다 — 예상된 것이다. 가득 찬 cut 하나면 약 17,000줄이 난다 |
 
 - **`ingestauth_ip_limit_full` 이 나면 새 IP 는 한도 없이 처리 시간 예산만 탄다
-  (fail-open).** 위 명령 뒤에 `| grep -E 'ingestauth_ip_limit_(full|recovered)'` 를
-  붙여 마지막 `ingestauth_started` 뒤의 줄 가운데 **`state_seq` 가 가장 큰 줄**을 본다
-  — 그 줄이 지금 상태다. 전이는 한도기 잠금 안에서 번호를 받고 줄은 잠금 밖에서
-  쓰여, 줄의 차례로는 가릴 수 없다. 번호는 응답기가 다시 뜨면 1 부터 다시 센다.
+  (fail-open).** 지금 상태는 기간을 자르지 않고 기동 줄과 함께 본다(`--since` 로
+  자르면 오래전에 한 번 난 `full` 이 빠져 0줄이 된다).
+
+  ```bash
+  sudo docker compose -p dev-media --env-file /opt/pokeclip-demo/.env \
+    -f /opt/pokeclip-demo/repo/infra/dev-media/compose.yml \
+    logs --no-log-prefix ingest-auth \
+    | grep -E '"msg":"ingestauth_(started|ip_limit_(full|recovered))"'
+  ```
+
+  출력에서 **마지막 `ingestauth_started` 줄 뒤만** 본다. 그 뒤의 `full` · `recovered`
+  가운데 **`state_seq` 가 가장 큰 줄**이 지금 상태다. 전이는 한도기 잠금 안에서 번호를
+  받고 줄은 잠금 밖에서 쓰여, 줄의 차례로는 가릴 수 없다. 번호는 응답기가 다시 뜨면
+  1 부터 다시 센다. 마지막 기동 뒤에 `full` · `recovered` 가 없으면 「상한 경보
+  없음(정상)」이다. `ingestauth_started` 줄조차 없으면(로그 회전 · 컨테이너 교체로
+  잘림) 「상태 미확인」이다 — kty 에게 알린다. `full` 이 가장 큰 번호여도 이미 풀렸을
+  수 있다 — `recovered` 는 새 IP 가 올 때만 나서, 홍수가 끝난 뒤 새 송출이 없으면
+  `full` 이 마지막으로 남는다. 항목은 보통 길어야 약 90초 뒤 만료되므로 다음 새
+  송출이 오면 `recovered` 가 난다.
   `full` 이면 kty 에게 알린다. `full` 자체가 홍수의 신호다 — 서로 다른 IP 가 짧은
   사이에 상한(16,384)만큼 왔다(항목은 보통 길어야 약 90초 산다). 주소를 바꿔 가며
   쏘는 홍수는 한도로 막지 못하고 처리 시간 예산이 마지막 선이다.
