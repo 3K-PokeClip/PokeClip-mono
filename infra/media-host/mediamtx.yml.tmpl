@@ -66,9 +66,11 @@ authInternalUsers:
       - action: publish
         path:
 
-  # 재생 서버(9996 — /playback). 루프백 출처만 — 같은 망 칸의 nginx 가 경로
-  # 번호를 대조한 뒤 넘긴 요청이다. 실제 관문은 nginx 의 대조와 CloudFront
-  # 서명 쿠키다.
+  # 재생 서버(9996 — /playback). ips 는 루프백이지만 같은 망 칸의 컨테이너는
+  # 모두 127.0.0.1 로 붙으므로 이 항목은 nginx 와 그 밖의 칸 구성원(사이드카 ·
+  # 응답기 · janitor)을 가르지 못한다 — 칸 안 누구나 /list · /get 을 부를 수
+  # 있다(받아들인 위험). 실제 관문은 nginx 의 경로 번호 대조와 CloudFront 서명
+  # 쿠키다.
   - user: any
     pass:
     ips: ["127.0.0.1", "::1"]
