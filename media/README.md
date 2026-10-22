@@ -1718,7 +1718,8 @@ PR ⓒ 가 시험 함수 368개를 더했다(TestMain 제외 991 → 1,359 — d
 
 #### ⓒ 커버리지 게이트
 
-CI(`media-ci`)의 80% 게이트는 열네 패키지다. ⓒ 가 `internal/rewind/publish` 를
+ⓒ 시점 CI(`media-ci`)의 80% 게이트는 열네 패키지였다(지금은 janitor 를 더해
+열다섯 — 아래 PG 시험 절). ⓒ 가 `internal/rewind/publish` 를
 더했고, develop 의 ingest-auth 응답기가 `streamkey` · `keyresolve` · `ingestauth` ·
 `mtxctl` 넷을 더했다(병합으로 합쳐졌다). 아래 값은 커밋 8 의 CI 동일 실행(PG 켬 · `-race`) 프로파일에 CI 판정식을
 다시 돌린 것이다. 표가 열 패키지뿐인 것은 그 프로파일이 병합 전 것이라 develop 이
@@ -1829,14 +1830,14 @@ CI(`media-ci`)의 80% 게이트는 열네 패키지다. ⓒ 가 `internal/rewind
 cd media && go test ./...
 ```
 
-`internal/index`·`internal/session`·`internal/indexer`·`cmd/segment-indexer`·`internal/upload`·`internal/rewind/cache`·`internal/rewind/publish`의 통합 테스트와
+`internal/index`·`internal/session`·`internal/indexer`·`cmd/segment-indexer`·`internal/upload`·`internal/rewind/cache`·`internal/rewind/publish`·`internal/janitor`·`cmd/janitor`의 통합 테스트와
 `internal/pgtest`의 자기 테스트는 **실제 PostgreSQL이 필요**하다. `PG_DSN`이 없으면 해당 케이스는 전부 `skip`되고 나머지는 그대로
 돈다 — 즉 `PG_DSN` 없이 돌린 결과만으로는 DB 계층이 검증되지 않는다.
 
 ```bash
 set -a; . ../.env; set +a
 export PG_DSN="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@localhost:5432/$POSTGRES_DB"
-go test ./internal/index/ ./internal/session/ ./internal/indexer/ ./cmd/segment-indexer/ ./internal/upload/ ./internal/rewind/cache/ ./internal/rewind/publish/ ./internal/pgtest/ -v
+go test ./internal/index/ ./internal/session/ ./internal/indexer/ ./cmd/segment-indexer/ ./internal/upload/ ./internal/rewind/cache/ ./internal/rewind/publish/ ./internal/janitor/ ./cmd/janitor/ ./internal/pgtest/ -v
 ```
 
 이 통합 테스트들은 `PG_DSN`이 가리키는 DB에 **쓰지 않는다.** `PG_DSN`은 관리 접속으로만
@@ -1845,8 +1846,15 @@ go test ./internal/index/ ./internal/session/ ./internal/indexer/ ./cmd/segment-
 `go test ./...`는 패키지별 테스트 바이너리를 병렬로 띄우므로 한 DB를 나눠 쓰면 서로의 표를
 비운다. 실제 이름은 `PG_TEST_DB`에 패키지 접미를 붙인 것으로, `internal/index`만 무접미
 (`pokeclip_uploadtest`)이고 `internal/session`은 `_session`, `internal/indexer`는 `_indexer`,
-`cmd/segment-indexer`는 `_cmd`, `internal/upload`는 `_upload`, `internal/rewind/cache`는 `_rewindcache`, `internal/rewind/publish`는 `_rewindpublish`, `internal/pgtest` 자기 테스트는 `_selftest`다. 그래서 개발 DB의 `stream_segments`는 오염되지 않는다(대신 `PG_DSN`
-롤에 `CREATEDB` 권한이 필요하고 — **로컬 compose와 CI(`media-ci`)의 postgres 서비스 컨테이너 둘 다 superuser라 이미 갖고 있다**, `PG_TEST_DB`를 개발 DB 이름과 같게
+`cmd/segment-indexer`는 `_cmd`, `internal/upload`는 `_upload`, `internal/rewind/cache`는 `_rewindcache`, `internal/rewind/publish`는 `_rewindpublish`, `internal/janitor`는 `_janitor`, `internal/pgtest` 자기 테스트는 `_selftest`다.
+`internal/index`는 로컬 정리 스키마 국면 시험용으로 `_lcempty`(빈 DB)·
+`_lcpartial`(판정 표 일부만)·`_lcmigrate`(옛 스키마 이행)도 만든다.
+`cmd/janitor`의 PG 시험은 전용 DB 없이 `PG_DSN`에 붙어 세션 설정·서버 버전을
+읽기만 한다. 그래서 개발 DB의 `stream_segments`는 오염되지 않는다(대신 `PG_DSN`
+롤에 `CREATEDB` 권한이 필요하고(`internal/index`의 janitor 최소 권한 시험은
+실행마다 이름이 다른 시험 역할을 만들고 지우므로 `CREATEROLE`도) — **로컬
+compose와 CI(`media-ci`)의 postgres 서비스 컨테이너 둘 다 superuser라 이미 갖고
+있다**, `PG_TEST_DB`를 개발 DB 이름과 같게
 주면 테스트가 기동 즉시 실패한다. `PG_DSN`에 DB 이름 자체를 안 적었을 때도 같은데, 단
 `PGDATABASE`가 설정된 환경에서는 그 값이 DB 이름으로 채워져 "이름이 비었다" 가드 대신 동일 이름
 가드가 판정한다).
@@ -1862,8 +1870,8 @@ go test ./internal/index/ ./internal/session/ ./internal/indexer/ ./cmd/segment-
 `media-ci`의 postgres는 잡마다 뜨고 함께 사라져 공유가 없다 — 규약을 완화한 것이 아니라 적용
 조건을 드러낸 것이다. `ddl.go`를 바꾼 뒤에는 전용 DB가 옛 스키마를 유지하므로
 (`CREATE TABLE IF NOT EXISTS`) **접미 DB 전부**를 지운 뒤 다시 돌린다 — `pokeclip_uploadtest`
-하나만 지우면 `internal/index`는 새 스키마로 통과하고 `_session`·`_indexer`·`_cmd`·`_upload`·`_rewindcache`·`_rewindpublish`는 옛
-스키마 그대로라 그 여섯 패키지만 "does not exist" 계열로 실패한다.
+하나만 지우면 `internal/index`는 새 스키마로 통과하고 `_session`·`_indexer`·`_cmd`·`_upload`·`_rewindcache`·`_rewindpublish`·`_janitor`는 옛
+스키마 그대로라 그 일곱 패키지만 "does not exist" 계열로 실패한다.
 
 **아래 루프는 소유 표식을 확인하지 않고 이름만 보고 지운다** — 밑이름이 기본 이름이거나 테스트가 새로 만든
 고유 이름일 때만 쓰고, 표식이 없어 실패한 DB는 실패 메시지대로 전용 테스트 DB가 맞는지 직접 확인한 뒤 하나씩 지운다.
@@ -1871,7 +1879,8 @@ go test ./internal/index/ ./internal/session/ ./internal/indexer/ ./cmd/segment-
 ```bash
 # PG_TEST_DB 를 바꿔 돌렸다면 그 이름이 밑이름이다 — 기본 이름만 지우면 실제 DB 는 남는다.
 base="${PG_TEST_DB:-pokeclip_uploadtest}"
-for suffix in "" _session _indexer _cmd _upload _rewindcache _rewindpublish _selftest; do
+for suffix in "" _session _indexer _cmd _upload _rewindcache _rewindpublish _janitor \
+  _lcempty _lcpartial _lcmigrate _selftest; do
   psql "$PG_DSN" -c "DROP DATABASE IF EXISTS ${base}${suffix}"
 done
 ```
@@ -1886,9 +1895,9 @@ CI(`media-ci`)는 `go test`에 `-coverprofile`을 붙여 패키지별 커버리�
 `internal/mtxstate`·`internal/playback`·`internal/rewind/boundary`·
 `internal/rewind`·`internal/rewind/cache`·`internal/rewind/publish`·
 `internal/streamkey`·`internal/keyresolve`·`internal/ingestauth`·
-`internal/mtxctl`
-**열네 패키지 중 하나라도 80% 미만이면 잡을 실패시킨다**(`session`·`mtxstate` 는 POK-195 M3에서,
-`playback` 은 M4 ⓐ 에서, `rewind/boundary`·`rewind`·`rewind/cache` 는 M4 ⓑ 에서, `rewind/publish` 는 M4 ⓒ 에서 추가 — 되감기 판정 로직과
+`internal/mtxctl`·`internal/janitor`
+**열다섯 패키지 중 하나라도 80% 미만이면 잡을 실패시킨다**(`session`·`mtxstate` 는 POK-195 M3에서,
+`playback` 은 M4 ⓐ 에서, `rewind/boundary`·`rewind`·`rewind/cache` 는 M4 ⓑ 에서, `rewind/publish` 는 M4 ⓒ 에서, `janitor` 는 POK-170 에서 추가 — 되감기 판정 로직과
 ③ 바이트를 만드는 층, 되감기 목록의 경계·본문·입력을 정하는 층이 그 안에 있다. 발행된 목록 줄은 고칠 수 없어
 여기서 틀린 것은 그 목록이 사는 동안 남는다). 나머지 패키지는 수치만 로그에 남고 게이트 대상이 아니다.
 
@@ -2132,3 +2141,220 @@ Homebrew `revision`이 비슷한 구분이다 — 다만 그 관례들은 상류
 6. `segment_indexed`의 `reason` 분포에 `5`(훅)가 남아 있는지 본다 — 사라졌으면 훅이 안 도는 것이다.
 7. 이상이 있으면 `HOOK_SPOOL_PATH`를 빈 값으로 두고 사이드카만 재기동해 즉시 롤백한다.
    그 상태로도 인덱싱은 정상이고, 재접속 검출만 현행 수준으로 돌아간다.
+
+## 로컬 ② 정리기(janitor) 운영 (POK-170)
+
+janitor 는 업로드가 끝난 ② 로컬 녹화 파일을 지우고 장부 행의 `local_path` 를
+NULL 로 바꾼다. 행은 남는다. 삭제 조건은 인덱스 불변식 2(그레이스 8분 경과 ·
+② uploaded · ③ 컷오프 인지 술어)이고 조각마다 따로 판정한다. 회차의 첫
+조각과 init 재수거 원천은 보호 규칙으로 남긴다.
+
+- 실행 형태: 사이드카와 **같은 이미지**의 다른 명령(`/usr/local/bin/janitor`),
+  compose 서비스 `janitor`. 계정 `10002:10002`(MediaMTX 와 같은 소유자) ·
+  recordings 쓰기 마운트는 janitor 하나 · 사이드카는 `:ro` 그대로.
+- 삭제 순서: 행 잠금(`FOR UPDATE NOWAIT`) → 파일 삭제 → `local_path=NULL` →
+  COMMIT. 잠긴 행은 건너뛰고 다음 주기에 다시 본다.
+- 삭제마다 `segment_local_deleted` INFO 한 줄(stream_id · seq · path ·
+  axis=archive · outcome)이 남는다. 부채를 갚은 뒤 행이 아직 있는지 확인하지
+  못했으면(잠김 · 오류) `row_probe=unknown` 이 붙는다 — 그 행은 이미 지워졌을
+  수도 있다. 주기 요약은 `janitor_cycle_summary`.
+
+### janitor 끄고 켜는 법
+
+정본 끄기는 스위치다. 저장소 루트 `.env` 에 빈 값을 적고 서비스만 다시
+올린다.
+
+```sh
+# .env
+JANITOR_ENABLED=
+```
+
+```sh
+docker compose up -d --no-deps --no-build janitor
+```
+
+- 꺼지면 `janitor_disabled` WARN 한 줄을 내고 컨테이너는 떠 있는 채 대기한다.
+  DB · 파일은 건드리지 않는다. 다음 `docker compose up -d` 뒤에도 꺼져 있다.
+- 다시 켜려면 그 줄을 지우거나 주석으로 돌리고 같은 명령을 다시 쓴다
+  (미설정이면 compose 가 `true` 로 채운다). `false` · `0` 도 끔이다.
+- `docker compose stop janitor` 는 **일시 정지일 뿐**이다. 다음 `up -d` 에서
+  다시 켜진다.
+- 확인한 실행 기록: 전용 compose 프로젝트에서 janitor 만 띄워
+  빈 값 → `janitor_disabled` · 미설정 → `janitor_started` · 다시 빈 값 →
+  `janitor_disabled` 를 봤다(2026-10-20, POK-371 실험 기록
+  `readme-switch.txt`).
+
+### 스키마 이행 배포 때 janitor 끄기
+
+사이드카 기동마다 도는 `EnsureSchema` 가 컬럼 · 제약을 실제로 더하는
+배포(스키마 이행)에서는, 그 잠금과 janitor 의 행 잠금이 드물게 교착할 수
+있다. 교착에서 사이드카 쪽이 희생되면 사이드카가 재기동해 다시 시도한다.
+피하려면 이렇게 배포한다(한계 L26).
+
+1. `.env` 에 `JANITOR_ENABLED=` 를 적고
+   `docker compose up -d --no-deps --no-build janitor`.
+   로그에 `janitor_disabled` 가 나온 것을 본다.
+1. 사이드카를 새 판으로 올린다. 두 서비스는 같은 Dockerfile 이지만 이미지가
+   따로라, janitor 이미지도 이 단계에서 함께 빌드해 둔다(마지막 단계의
+   `--no-build` 는 이미 빌드한 이미지를 쓴다).
+
+    ```sh
+    docker compose build segment-indexer janitor
+    STARTED=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    docker compose up -d --no-deps --no-build segment-indexer
+    ```
+
+   빌드만으로는 떠 있는 사이드카가 바뀌지 않는다 — `up -d` 가 새 이미지로
+   사이드카를 다시 만들어야 기동 때 `EnsureSchema` 가 돈다. `--no-deps` 는
+   postgres · mediamtx 를 다시 만들지 않게 한다.
+1. 이행 성공을 확인한다 — **이번 기동 뒤** 사이드카 로그에 `schema_ensured`
+   INFO 가 있어야 한다(`ENSURE_SCHEMA=true` 인 로컬 compose 기준). 옛 기동의
+   줄에 속지 않도록 위에서 적어 둔 기동 시각 이후만 본다.
+
+    ```sh
+    docker compose logs --since "$STARTED" segment-indexer | grep schema_ensured
+    ```
+
+1. 확인한 뒤에만 `.env` 의 그 줄을 지우고
+   `docker compose up -d --no-deps --no-build janitor`.
+   로그에 `janitor_started` 가 나온다.
+
+이행이 없는 평소 배포에는 끌 필요가 없다.
+
+### janitor 게이지 7종
+
+게이지는 켜질 때(value=1)와 꺼질 때(value=0) 같은 등급으로 한 줄씩 낸다.
+기동하면 7종 모두 `value=0 reason=startup` 을 먼저 낸다(이 run_id 이전 값을
+모두 0 으로 본다는 뜻). `LOG_LEVEL=warn` 으로 모아도 켜짐 · 꺼짐이 둘 다
+보인다.
+
+| 게이지 | 등급 | 켜짐 | 먼저 볼 것 |
+|---|---|---|---|
+| `janitor_delete_failing` | ERROR | 삭제 실패(권한 · 읽기 전용 · 경로 거부)로 건너뛴 행이 있음 — items · sample | sample 행의 파일 소유 · 마운트 rw · `janitor_path_rejected` |
+| `janitor_cycle_failing` | ERROR | 주기가 DB 오류로 중단됨 — reason · SQLSTATE · stage. 종료 신호로 주기가 끊긴 것은 켜지 않고 `janitor_cycle_canceled` INFO 한 줄만 남는다 | DB 연결 · `statement_timeout` · 잠금 대기 |
+| `janitor_cutoff_invalid` | ERROR | 가리키는 행이 없는 컷오프 — 그 스트림 삭제 정지(stream_id 별) | `stream_cutoffs` 와 `stream_segments` 대조 |
+| `janitor_backlog_capped` | WARN | 한 주기 상한(`JANITOR_MAX_PER_CYCLE`)에 닿고도 남은 후보가 있음 | 일시적이면 정상. 계속되면 상한 · 주기 조정 |
+| `janitor_volume_suspect` | ERROR | 지웠어야 할 파일이 이미 없는 젊은 행이 3개 이상 — 다른 볼륨이 붙었을 수 있음 | 마운트된 볼륨이 MediaMTX 와 같은지 · sample 경로 |
+| `janitor_fs_suspended` | ERROR | 파일 삭제가 멈춰(stall) 파일 작업을 보류 중 — hold · stall_streak | 녹화 디스크 · 마운트 상태(`fs_op_stalled`) |
+| `janitor_reclaim_blocked` | ERROR | 삭제 뒤 장부 갱신을 못 한 행(부채)을 계속 못 갚음 — 새 삭제가 멈춘 상태 | 아래 절 |
+
+PG 가 비정상 종료된 뒤 `janitor_volume_suspect` 가 켜질 수 있다. 비동기
+커밋으로 확정된 삭제 기록 몇 건이 사라진 것이다(한계 L31 — 실측 KILL 1회에
+5건). 파일은 이미 지워졌고 장부만 경로를 들고 있다. 그 행들이 나이
+`JANITOR_RECORD_DELETE_AFTER` − 1h(기본 23h)를 넘기면 janitor 가 스스로
+정리하고 게이지가 꺼진다(최대 약 23h).
+
+다만 같은 게이지는 볼륨이 정말 잘못 붙었을 때도 켜진다. 기다리기 전에 둘을
+가른다. 둘 다 맞을 때만 L31 로 보고 자동 정리를 기다린다.
+
+1. 세 서비스의 `/recordings` 가 같은 볼륨인지 본다 — 출력된 볼륨 이름과
+   원본 경로(`Source`)가 셋 다 같아야 한다(파일 수 비교로는 가려지지 않는다).
+   바인드 마운트는 이름이 비므로 이름만 보면 둘 다 바인드일 때 같아 보인다 —
+   원본 경로까지 대조한다.
+
+    ```sh
+    for s in media segment-indexer janitor; do
+      printf '%s: ' "$s"
+      docker inspect -f '{{range .Mounts}}{{if eq .Destination "/recordings"}}{{.Name}} {{.Source}}{{end}}{{end}}' \
+        "$(docker compose ps -q "$s")"
+    done
+    ```
+
+    떠 있지 않은 서비스는 `docker compose ps -q` 가 비어 그 줄에서
+    `invalid container name or ID: value is empty` 오류가 난다 — 그 서비스를
+    먼저 띄우고 다시 본다.
+
+1. 게이지 줄의 표본(`sample_stream_id` · `sample_seq`)이 PG 종료 직전
+   `segment_local_deleted` 줄(같은 `stream_id` · `seq`)에 있는지 본다 — 있으면
+   janitor 가 지운 뒤 기록만 사라진 것(L31)이다.
+
+    ```sh
+    docker compose logs janitor | grep -E 'janitor_volume_suspect|segment_local_deleted'
+    ```
+
+볼륨 이름이 다르거나 표본이 삭제 로그에 없으면 오연결로 보고 janitor 를 끄고
+(위 「끄고 켜는 법」) 마운트를 고친다 — 그대로 두면 나이 기준을 넘긴 행의
+경로가 지워질 수 있다(한계 L17).
+
+### janitor_reclaim_blocked 대응
+
+janitor 는 파일을 지운 뒤 장부 갱신에 실패한 행을 「부채」로 들고, 갚기
+전에는 새 파일을 지우지 않는다(장부와 파일이 2개 이상 어긋나지 않게).
+`janitor_reclaim_blocked` 는 그 부채를 계속 못 갚는다는 뜻이다. 줄에
+`kind` · `stream_id` · `seq` · `path` · `failures` 가 실린다.
+
+- `kind=deleted`(10회 연속 실패) — 대개 다른 세션이 그 행을 오래 쥐고 있다.
+  그 표를 잠근 세션을 찾는다.
+
+    ```sql
+    SELECT a.pid, a.application_name, a.state,
+           date_trunc('second', now() - a.xact_start) AS xact_age,
+           l.mode, left(a.query, 60) AS query
+      FROM pg_locks l JOIN pg_stat_activity a USING (pid)
+     WHERE l.relation = 'stream_segments'::regclass
+       AND a.pid <> pg_backend_pid()
+     ORDER BY a.xact_start;
+    ```
+
+    오래된 트랜잭션(`xact_age` 가 큰 세션)이 원인이면 그 작업을 끝낸다.
+    풀리면 다음 주기에 부채를 갚고 게이지가 꺼지며 삭제가 다시 돈다.
+- `kind=maybe`(3회 연속 stall) — 파일 삭제 자체가 멈춘다. `janitor_fs_suspended`
+  · `fs_op_stalled` 와 함께 녹화 디스크를 본다.
+- 그동안 디스크는 MediaMTX 의 24시간 정리(`recordDeleteAfter`)가 상한을 지킨다.
+
+### DB 요구 — PostgreSQL 17 이상 · 계정 · TLS
+
+- **PostgreSQL 17 이상**이어야 한다. janitor 는 행 잠금 트랜잭션에
+  `transaction_timeout`(17 에서 생김) 8초를 걸어 잠금 보유 시간을 묶는다.
+  17 미만이면 `janitor_pg_version_unsupported` ERROR(server_version_num ·
+  required=170000)를 내고 종료 코드 1 로 끝난다 — compose 는
+  `restart: unless-stopped` 라 기동 거부를 되풀이한다.
+- **운영 계정 `media_janitor` 권한**은 이것만 준다. janitor 의 장부 질의가 이
+  권한 안에서 도는지는 실 PG 시험이 잰다
+  (`internal/index/local_cleanup_role_pg_test.go`).
+
+    ```sql
+    GRANT SELECT ON stream_segments, stream_sessions, stream_cutoffs TO media_janitor;
+    GRANT UPDATE (local_path) ON stream_segments TO media_janitor;
+    ```
+
+    계정(`CREATE ROLE media_janitor LOGIN …`)은 DB 관리자가 만들고 비밀번호는
+    비밀 관리자(Secrets Manager)에만 둔다(IAM 인증이면 비밀번호 없음) — 문서 ·
+    저장소 · compose 파일에 적지 않는다.
+
+    권한은 janitor 를 켜기 **전에** 준다. `UPDATE (local_path)` 가 없으면 행
+    잠금(`SELECT … FOR UPDATE NOWAIT`) 단계에서 42501 로 막혀 파일을 지우지 않고
+    매 주기 실패한다(`janitor_cycle_failing`). 지운 뒤 장부를 못 고쳐 부채가 되는
+    것은 잠금은 되는데 갱신 문장이 그 밖의 열을 건드릴 때다(시험 변이 VT3-3).
+- **로컬 compose 의 한계**: 로컬 janitor 는 `POSTGRES_USER`(DB 소유자 계정)로
+  붙는다. 최소 권한 경계는 로컬 실행으로는 확인되지 않는다 — 위 시험이 그
+  몫이다.
+- **운영 DSN 은 `POSTGRES_SSLMODE=verify-full`** 로 두고 RDS CA 번들 파일을
+  janitor 환경 변수 `PGSSLROOTCERT`(컨테이너 안 경로)로 준다 — 서버 인증서와
+  호스트 이름까지 검증해야 중간자를 막는다(pgx 가 이 변수를 읽는다 — 2026-10-20
+  확인, 실험 기록 `c21-pgsslrootcert.txt`). 최소한 `require` 다: 암호화는 되지만
+  서버 인증서를 검증하지 않는다. 기본 `prefer` 는 TLS 를 못 쓰면 평문으로
+  내려간다. `require` 이상이면 TLS 를 받지 않는 서버에는 붙지 않고 기동
+  오류(`janitor_failed`)로 끝난다(2026-10-20 실행 확인 — 실험 기록
+  `c9-sslmode.txt`).
+
+### janitor 환경 변수
+
+| 변수 | 기본 | 범위 · 뜻 |
+|---|---|---|
+| `JANITOR_ENABLED` | compose 가 `true` 로 채움 | 참 값(`true` · `1` · `t` 등) = 실행. 빈 값 · 거짓 값(`false` · `0` · `f` 등) = 대기. 해석할 수 없는 값(예: `yes`)만 기동 거부 |
+| `JANITOR_INTERVAL` | `30s` | 주기. 1초 이상 |
+| `JANITOR_GRACE` | `8m` | 업로드 확정 뒤 기다리는 시간. 8분 미만은 기동 거부 |
+| `JANITOR_RECONNECT_WINDOW` | `300s` | 첫 조각 보호의 재접속 창. 300초 미만 거부 — 사이드카 재접속 창과 같아야 한다 |
+| `JANITOR_RECORD_DELETE_AFTER` | `24h` | MediaMTX `recordDeleteAfter` 와 맞춘다. 2시간 미만 거부 |
+| `JANITOR_BATCH` | `200` | 한 번에 읽는 행. 10000 이하 · `JANITOR_MAX_PER_CYCLE` 이하 |
+| `JANITOR_MAX_PER_CYCLE` | `2000` | 한 주기에 살펴보는 행 상한. 100000 이하 |
+| `FS_OP_TIMEOUT` | `5s` | 파일 작업 한 번의 상한. 100ms 이상 6초 이하 |
+| `POSTGRES_*` · `SEGMENT_ROOT` · `LOG_LEVEL` | 사이드카와 같음 | 위 사이드카 표 참조 |
+
+로컬 compose 가 janitor 에 넘기는 것은 `JANITOR_ENABLED` 와 `POSTGRES_USER` ·
+`POSTGRES_PASSWORD` · `POSTGRES_DB`(호스트 · `SEGMENT_ROOT` · `TZ` 는 고정값)뿐이다
+— 나머지는 `.env` 에 적어도 전달되지 않아 기본값으로 돈다. 운영은 배포 정의에
+직접 지정한다.
+
+알려진 한계(L1~L33) 전문은 PR 본문 「알려진 한계」에 있다.
