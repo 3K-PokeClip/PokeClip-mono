@@ -65,7 +65,7 @@ readonly COMPOSE_VARIANTS='a b c d'
 readonly SAMPLE_CONTROL_UPSTREAM='127.0.0.1:28190'
 readonly MIN_READ_TIMEOUT_SECONDS=15
 readonly CONFIG_TIMEOUT=60
-readonly CASE_COUNT=28
+readonly CASE_COUNT=29
 # 녹화 디렉터리 소유자의 정본 — MediaMTX 이미지 Dockerfile 의 최종 USER.
 MTXHOOK_DOCKERFILE="$(cd -- "${MEDIA_HOST_DIR}/../.." && pwd)/media/Dockerfile.mtxhook"
 readonly MTXHOOK_DOCKERFILE
@@ -309,6 +309,25 @@ expect_all() {
   return "${ok}"
 }
 
+#######################################
+# 파일에 고정 문자열이 든 줄이 없는지 본다. 읽기 실패(grep 종료 2 이상 —
+# 「0」 을 내도)와 파일 없음은 0 건이 아니라 확인 불가로 FAIL 이다.
+# Arguments:
+#   원인에 붙일 이름, 고정 문자열, 파일.
+#######################################
+expect_fixed_absent() {
+  local count status=0
+  count="$(harness::count_fixed "$2" "$3")" || status=$?
+  if (( status != 0 )); then
+    harness::add_reason "$1: 파일을 읽지 못함 — $2 확인 불가"
+    return 1
+  fi
+  if [[ "${count}" != 0 ]]; then
+    harness::add_reason "$1: $2 ${count}줄(기대 0)"
+    return 1
+  fi
+}
+
 check_case_1() {
   local ok=0 v json
   require_setup || return 1
@@ -378,7 +397,7 @@ check_case_6() {
 }
 
 check_case_7() {
-  local ok=0 v count
+  local ok=0 v
   require_setup || return 1
   expect_all '.services | map_values([(.volumes // [])[]
       | "\(.source) \(.target) \(if .read_only then "ro" else "rw" end)"]
@@ -396,11 +415,8 @@ check_case_7() {
   expect_all '[.services[] | (.volumes // [])[]
     | select(.volume.nocopy == true)] | length' '0' 'volume.nocopy' || ok=1
   for v in ${COMPOSE_VARIANTS}; do
-    count="$(grep -c -F nocopy "$(compose_render "${v}")" || true)"
-    if [[ "${count}" != 0 ]]; then
-      harness::add_reason "갈래 ${v}: 렌더에 nocopy ${count}건(기대 0)"
-      ok=1
-    fi
+    expect_fixed_absent "갈래 ${v} 렌더" nocopy "$(compose_render "${v}")" \
+      || ok=1
   done
   return "${ok}"
 }
@@ -474,7 +490,7 @@ check_case_10() {
 }
 
 check_case_11() {
-  local ok=0 v count
+  local ok=0 v
   require_setup || return 1
   # shellcheck disable=SC2016 # jq 프로그램 — $ 는 jq 변수다.
   expect_all '[.services | to_entries[] | .key as $s
@@ -482,11 +498,8 @@ check_case_11() {
     | select(test("CDN|TOKEN|PASSWORD|SECRET"; "i")) | "\($s).\(.)"]' \
     '[]' '비밀 계열 env 이름' || ok=1
   for v in ${COMPOSE_VARIANTS}; do
-    count="$(grep -c -F POSTGRES_PASSWORD "$(compose_render "${v}")" || true)"
-    if [[ "${count}" != 0 ]]; then
-      harness::add_reason "갈래 ${v}: 렌더에 POSTGRES_PASSWORD ${count}건"
-      ok=1
-    fi
+    expect_fixed_absent "갈래 ${v} 렌더" POSTGRES_PASSWORD \
+      "$(compose_render "${v}")" || ok=1
   done
   return "${ok}"
 }
@@ -537,9 +550,17 @@ expect_control_plane() {
       ok=1
     fi
   done
-  others="$(grep -E '^[[:space:]]*proxy_pass[[:space:]]' "${file}" \
-    | grep -c -v -E 'http://127\.0\.0\.1:(8888|9996)[/;]' || true)"
-  if [[ "${others}" != "$3" ]]; then
+  # 한 단계로 센다 — 앞 단계(proxy_pass 줄 고르기)의 실패가 뒤 집계를 0 으로
+  # 만들지 않게. awk 에는 「맞는 줄 없음」 종료 코드가 없어 0 아닌 종료는 모두
+  # 조회 실패다.
+  if ! others="$(awk '
+      /^[[:space:]]*proxy_pass[[:space:]]/ &&
+        !/http:\/\/127\.0\.0\.1:(8888|9996)[\/;]/ { n++ }
+      END { print n + 0 }' "${file}" 2>/dev/null)" \
+    || [[ ! "${others}" =~ ^[0-9]+$ ]]; then
+    harness::add_reason "nginx ${1}: proxy_pass 조회 실패"
+    ok=1
+  elif [[ "${others}" != "$3" ]]; then
     harness::add_reason "nginx ${1}: 8888 · 9996 밖 proxy_pass ${others}건 \
 (기대 $3)"
     ok=1
@@ -557,14 +578,10 @@ check_case_14() {
 }
 
 check_case_15() {
-  local ok=0 v count
+  local ok=0 v
   require_setup || return 1
   for v in a e; do
-    count="$(grep -c -F 9997 "$(nginx_render "${v}")" || true)"
-    if [[ "${count}" != 0 ]]; then
-      harness::add_reason "nginx ${v}: 9997 ${count}줄(기대 0)"
-      ok=1
-    fi
+    expect_fixed_absent "nginx ${v}" 9997 "$(nginx_render "${v}")" || ok=1
   done
   return "${ok}"
 }
@@ -736,6 +753,69 @@ $(harness::log_tail "${out}.good.err")"
   return "${ok}"
 }
 
+#######################################
+# 가짜 명령 하나를 만든다 — 인자가 꼴에 맞으면 주어진 본문을 돌리고, 아니면
+# 진짜 명령으로 넘긴다. 진짜 명령 경로는 가짜를 PATH 에 두기 전에 잡는다
+# (가짜가 자기 자신을 부르는 고리를 막는다).
+# Arguments:
+#   bin 디렉터리, 명령 이름, 인자 꼴(sh case 패턴 — 앞뒤 공백을 붙인 "$*" 에
+#   맞춘다), 맞을 때의 본문.
+#######################################
+write_fake_command() {
+  local real
+  real="$(command -v "$2")" || return 1
+  mkdir -p -- "$1" || return 1
+  printf '#!/bin/sh\ncase " $* " in %s) %s ;; esac\nexec %s "$@"\n' \
+    "$3" "$4" "${real}" >"$1/$2" && chmod +x "$1/$2"
+}
+
+#######################################
+# PATH 앞에 가짜 명령 디렉터리를 둔 채(그 호출 동안만) 사례 함수를 부르고,
+# 종료 코드와 실패 원인을 「코드:원인」 한 줄로 낸다. $(…) 안에서 부른다 —
+# 사례 함수가 바꾼 전역은 그 하위 셸에만 남는다.
+# Arguments:
+#   bin 디렉터리, 사례 함수 이름.
+#######################################
+run_with_fake() {
+  local status=0
+  harness_fail_reason=''
+  PATH="$1:${PATH}" "$2" >/dev/null 2>&1 || status=$?
+  printf '%s:%s' "${status}" "${harness_fail_reason}"
+}
+
+#######################################
+# 사례 29 — 렌더 · nginx 설정을 세는 사례(7 · 11 · 15 · 14)는 읽기 실패를 0 건
+# 으로 읽지 않는다. 실제 사례 함수를 가짜 명령 아래에서 불러 FAIL 과 원인을
+# 본다: grep -c -F 가 「0」 을 내고 종료 2(읽기 실패의 꼴)면 사례 7 · 11 · 15
+# 가 「확인 불가」, proxy_pass 를 세는 단계(grep · awk 어느 쪽이든)가 출력 없이
+# 종료 2 면 사례 14 가 「조회 실패」 다.
+#######################################
+check_case_29() {
+  local ok=0 dir="${scratch}/fake-count" c got want
+  require_setup || return 1
+  if ! write_fake_command "${dir}/count" grep '*" -c -F "*' \
+    'echo 0; exit 2' \
+    || ! write_fake_command "${dir}/proxy" grep '*proxy_pass*' 'exit 2' \
+    || ! write_fake_command "${dir}/proxy" awk '*proxy_pass*' 'exit 2'; then
+    harness::add_reason '시험 오류: 가짜 명령을 만들지 못함'
+    return 1
+  fi
+  for c in 7 11 15 14; do
+    if [[ "${c}" == 14 ]]; then
+      got="$(run_with_fake "${dir}/proxy" "check_case_${c}")"
+      want='조회 실패'
+    else
+      got="$(run_with_fake "${dir}/count" "check_case_${c}")"
+      want='확인 불가'
+    fi
+    if [[ "${got%%:*}" == 0 || "${got#*:}" != *"${want}"* ]]; then
+      harness::add_reason "사례 ${c}: 「${got}」(기대 FAIL · ${want})"
+      ok=1
+    fi
+  done
+  return "${ok}"
+}
+
 main() {
   if (( $# != 0 )); then
     printf '사용: bash infra/media-host/test/render_test.sh (인자 없음)\n' >&2
@@ -799,6 +879,7 @@ main() {
     check_case_27
   harness::run_case 28 'janitor_enabled 가 bool 이 아니면 렌더 실패' \
     check_case_28
+  harness::run_case 29 '집계 — 읽기 실패는 0 건이 아님(정적)' check_case_29
 
   if ! harness::summary "${CASE_COUNT}"; then
     exit 1

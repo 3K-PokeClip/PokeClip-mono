@@ -551,8 +551,8 @@ prod 상자에 깔 도구의 판이다. M9 user_data 가 같은 값으로 설치
 
 | 시험 | 보는 것 | 도는 곳 |
 |---|---|---|
-| `test/render_test.sh` | 세 템플릿 렌더 단언 · `docker compose config -q` · 시험 compose 와의 드리프트(bind 원본 자동 생성 여부 포함) | terraform · docker compose(컨테이너 안 띄움) |
-| `test/start_test.sh` | 시작 · 정지 스크립트(가짜 docker · chown · aws) | 어디서나 |
+| `test/render_test.sh` | 세 템플릿 렌더 단언 · `docker compose config -q` · 시험 compose 와의 드리프트(bind 원본 자동 생성 여부 포함) · 렌더를 세는 사례가 읽기 실패를 0 건으로 읽지 않는지(사례 29 — 가짜 grep · awk 로 정적) | terraform · docker compose(컨테이너 안 띄움) |
+| `test/start_test.sh` | 시작 · 정지 스크립트(가짜 docker · chown · aws). 사례 41 = 우회 문자열 검사가 grep 읽기 실패를 0 건으로 읽지 않는지 | 어디서나 |
 | `test/proxy_contract.sh` | 앞단 프록시 계약 사례 1–17 · 1b(14 는 판정 아닌 기록) | terraform · docker(에코 상류 `test/echo` 빌드) |
 | `test/unit_restart_test.sh` | 유닛 재기동 사례 1–21(15–17 = 크래시 경로 · 19 = 기동 중 정지 · 20 · 21 = 저널 · 렌더 자리 건수 도구가 조회 실패를 0 건으로 바꾸지 않는지 — 가짜 sudo 로 정적) | 1–3 · 20 · 21 은 어디서나, 4–19 는 리눅스 · systemd · sudo. **13–17 은 호스트를 흔든다**(docker 엔진 재시작 · dockerd kill -9 · SIGKILL) — CI(`GITHUB_ACTIONS=true`) · 일회용 상자(`PCBENCH_ALLOW_HOST_DISRUPTION=1`)가 아니면 거부한다. 개발 머신에서 돌리지 않는다 |
 | `test/loopback_test.sh` · `paths_count_test.sh` · `paths_list_test.sh` · `secret_count_test.sh` · `force_diff_test.sh` | 운영 확인 스크립트(가짜 명령) | 어디서나 |
