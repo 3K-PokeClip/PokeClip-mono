@@ -72,6 +72,13 @@ func (h *handler) publish(ctx context.Context, w http.ResponseWriter, req mtxReq
 		return
 	}
 	h.ipTake(req)
+	// take 의 사건 로그는 동기다 — 쓰기가 밀려 resolve 시한을 넘겼으면 부르지 않는다(위와 같은 까닭 — 시간이 남지 않은
+	// resolve 는 auth 에 묻지도 않고 판정 불가다). 차례 · 한도는 이미 썼다(시도로 센다). 요청 취소는 여기서 보지 않는다 —
+	// 위의 확인 뒤에 온 취소는 resolve 를 막지 않는다(아래 — resolve 는 요청 취소에서 뗀다).
+	if !time.Now().Before(resolveBy) {
+		h.late(w, req)
+		return
+	}
 	// resolve 는 요청 취소에서 뗀다 — MediaMTX 가 resolve 도중 요청을 버려도(재시작 · 리로드 · 망) 그 취소가 판정 불가
 	// (timeout)로 와 헛된 auth_degraded 와 그 토큰의 기억을 남기지 않게. 시한은 resolveBy 하나이고 바깥 가드보다
 	// 앞이라, 떼어도 가드가 끊을 resolve 는 없다. 버린 요청의 resolve 는 그 시한까지만 산다.

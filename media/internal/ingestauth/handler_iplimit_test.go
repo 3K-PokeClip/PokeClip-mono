@@ -1,6 +1,8 @@
 package ingestauth
 
 import (
+	"context"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -281,24 +283,108 @@ func TestHandlerIPLimitOffByDefault(t *testing.T) {
 	}
 }
 
-// newHandler 는 범위 밖 IPLimit 을 거부한다(설계 2-3).
+// newHandler 는 범위 밖 IPLimit 을 거부한다(설계 2-3). 나머지 설정은 유효하게 준다 — 호출자 Basic 까지 갖춰야
+// 에러가 IPLimit 에서만 나온다(빠뜨리면 Basic 검사가 대신 거부해 IPLimit 검사가 없어도 통과한다). 먼저 같은 설정에 유효한
+// IPLimit 을 주어 에러가 없음을 본다.
 func TestNewHandlerRejectsInvalidIPLimit(t *testing.T) {
+	newWith := func(cfg IPLimit) error {
+		_, err := newHandler(newTestResolver(t, "http://192.0.2.30:8082"), NewDenyList(t.TempDir()+"/deny", discardLogger()), mustConnLog(t), Options{
+			CallerIP:   testCallerIP,
+			SelfIP:     testSelfIP,
+			APIUser:    testAPIUser,
+			APIPass:    NewSecret(testAPIPass),
+			IPLimit:    cfg,
+			CallerUser: testCallerUser,
+			CallerPass: NewSecret(testCallerPass),
+		})
+		return err
+	}
+	if err := newWith(testIPLimit); err != nil {
+		t.Fatalf("Setup: newHandler with a valid IPLimit returned error: %v", err)
+	}
 	for _, cfg := range []IPLimit{
 		{Burst: 30},
 		{Interval: 3 * time.Second},
 		{Burst: IPLimitBurstMax + 1, Interval: 3 * time.Second},
 		{Burst: 30, Interval: IPLimitIntervalMax + time.Nanosecond},
 	} {
-		_, err := newHandler(newTestResolver(t, "http://192.0.2.30:8082"), NewDenyList(t.TempDir()+"/deny", discardLogger()), mustConnLog(t), Options{
-			CallerIP: testCallerIP,
-			SelfIP:   testSelfIP,
-			APIUser:  testAPIUser,
-			APIPass:  NewSecret(testAPIPass),
-			IPLimit:  cfg,
-		})
-		if err == nil {
+		if err := newWith(cfg); err == nil {
 			t.Errorf("newHandler(IPLimit%+v) returned nil error, want an error", cfg)
 		}
+	}
+}
+
+// stallingLogHandler 는 메시지가 stallOn 인 줄을 내기 전에 stall 만큼 멈추는 slog 처리기다 — 로그 쓰기 대기(디스크 ·
+// 로그 드라이버)를 흉내 낸다.
+type stallingLogHandler struct {
+	slog.Handler
+	stallOn string
+	stall   time.Duration
+}
+
+func (s stallingLogHandler) Handle(ctx context.Context, r slog.Record) error {
+	if r.Message == s.stallOn {
+		time.Sleep(s.stall)
+	}
+	return s.Handler.Handle(ctx, r)
+}
+
+func (s stallingLogHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return stallingLogHandler{Handler: s.Handler.WithAttrs(attrs), stallOn: s.stallOn, stall: s.stall}
+}
+
+func (s stallingLogHandler) WithGroup(name string) slog.Handler {
+	return stallingLogHandler{Handler: s.Handler.WithGroup(name), stallOn: s.stallOn, stall: s.stall}
+}
+
+// IP take 의 동기 로그가 resolve 시한을 넘기면 auth 에 묻지 않고 publish_late 로 끝난다 — 시한이 지난 resolve 는 auth 에
+// 닿지도 않고 판정 불가가 되어, 헛된 auth_degraded 와 그 토큰의 기억을 남긴다. 상한 0 이라 take 가 처음에
+// ip_limit_full 을 내고, 그 줄이 시한을 넘겨 멈춘다.
+func TestHandlerIPTakeLogPastDeadlineIsLate(t *testing.T) {
+	f := newHandlerFixture(t, fixtureOptions{deadline: guardDeadline, ipLimit: testIPLimit})
+	f.h.ipLimit.limit = 0
+	f.h.log = slog.New(stallingLogHandler{
+		Handler: f.h.log.Handler(),
+		stallOn: "ingestauth_ip_limit_full",
+		stall:   guardDeadline + guardMargin + 100*time.Millisecond,
+	})
+
+	f.publishFrom(t, testAttackerIP, testTokenA)
+
+	if end := waitForInnerEnd(t, f.logs); end != "ingestauth_publish_late" {
+		t.Errorf("publish after a stalled take log ended with %s, want ingestauth_publish_late", end)
+	}
+	if n := f.auth.callCount(); n != 0 {
+		t.Errorf("auth calls = %d, want 0", n)
+	}
+	if _, ok := entryOf(f.h.failed, testTokenA); ok {
+		t.Errorf("token remembered as failed after a late publish, want no entry")
+	}
+	if got := f.logs.events(t, "ingestauth_auth_degraded"); len(got) != 0 {
+		t.Errorf("auth_degraded lines = %d, want 0", len(got))
+	}
+}
+
+// 출발지 403 · 호출자 Basic 401 은 본문을 읽기 전이라 송출자 IP 한도를 쓰지 않는다 — 같은 본문 ip 로 한도의 두 배를
+// 보낸 뒤에도 정상 자격의 그 ip 첫 publish 는 200 이다(트랙 A 계획 8절 · 트랙 B 설계 2-2).
+func TestHandlerCallerRejectionsDoNotSpendIPLimit(t *testing.T) {
+	f := newIPLimitFixture(t)
+	body := publishBody(testTokenA, testConnID(1))
+	body.IP = testAttackerIP
+	for range 2 * testIPBurst {
+		foreign := newAuthRequest(t, body)
+		foreign.RemoteAddr = "192.0.2.11:40000"
+		if rr := f.serve(foreign); rr.Code != http.StatusForbidden {
+			t.Fatalf("Setup: foreign caller = %d, want 403", rr.Code)
+		}
+		badBasic := withBasic(newAuthRequest(t, body), "Basic "+basicCredentials(testCallerUser, "other"))
+		if rr := f.serve(badBasic); rr.Code != http.StatusUnauthorized {
+			t.Fatalf("Setup: wrong caller Basic = %d, want 401", rr.Code)
+		}
+	}
+
+	if rr := f.publishFrom(t, testAttackerIP, testTokenA); rr.Code != http.StatusOK {
+		t.Errorf("first authenticated publish from %s after %d rejected callers = %d, want 200", testAttackerIP, 4*testIPBurst, rr.Code)
 	}
 }
 
