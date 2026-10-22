@@ -100,7 +100,7 @@ public class ProfilePhotoController {
      * </ul>
      *
      * <p><b>안 감싼 자리 — 그대로다.</b>
-     * {@code ChzzkLinkController:60} · {@code YoutubeLinkController:70} · {@code SoopLinkController:54} ·
+     * {@code ChzzkLinkController:60} · {@code YoutubeLinkController:70} · {@code SoopLinkController:62} ·
      * <b>{@code StreamKeyController:27}·{@code :38}(한 파일에 두 자리다)</b> ·
      * {@code PairingCodeController:30} · {@code EditorDelegationController:43} ·
      * {@code EditorInvitationController:74}. 이것들은 {@code NumberFormatException}을 그대로 흘려

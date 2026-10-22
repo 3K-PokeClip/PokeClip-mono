@@ -93,4 +93,9 @@ public class SoopLinkService {
     public Optional<SoopChannelLink> latest(Long userId) {
         return links.findFirstByUserIdOrderByCreatedAtDesc(userId);
     }
+
+    /** 트랜잭션은 writer에 있다(자기 호출 함정). 살아 있는 행이 없으면 아무것도 안 하고 조용히 끝. */
+    public void unlink(Long userId) {
+        writer.revoke(userId, Instant.now());
+    }
 }

@@ -10,6 +10,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -47,6 +48,13 @@ public class SoopLinkController {
         return service.latest(userId(jwt))
                 .map(link -> LinkStatusResponse.of(link, Instant.now()))
                 .orElseGet(LinkStatusResponse::none);
+    }
+
+    /** 살아 있는 연동이 없어도 204(멱등). 행은 남고 토큰·아이디·닉네임은 바로 지운다(약관 제11조 ⑰). */
+    @DeleteMapping
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void unlink(@AuthenticationPrincipal Jwt jwt) {
+        service.unlink(userId(jwt));
     }
 
     /** 치지직과 같이 감싸지 않는다: 토큰 주체 명부(ProfilePhotoController.userId)의 「안 감싼 자리」. */

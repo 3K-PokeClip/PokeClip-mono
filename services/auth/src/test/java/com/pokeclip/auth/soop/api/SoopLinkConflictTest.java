@@ -74,6 +74,26 @@ class SoopLinkConflictTest extends SoopLinkTestSupport {
     }
 
     /**
+     * put 뒤에 저장이 실패하면 secrets도 같이 롤백된다(put이 REQUIRED라 이 트랜잭션에 딸려 있다, 감사 1회차 경미 2).
+     * 사전 조회 409는 put 전에 던져 이 성질을 안 지나므로, INSERT 자체를 DB에서 실패시킨다: 닉네임 없는 살아 있는
+     * 행은 V116 CHECK가 막는다. 경합 409(DB 유니크)와 같은 자리, 같은 롤백이다.
+     */
+    @Test
+    void put_뒤_저장이_실패하면_secrets도_롤백된다() {
+        User user = newUser();
+        int secretsBefore = jdbc.queryForObject("SELECT count(*) FROM secrets", Integer.class);
+
+        assertThatThrownBy(() -> writer.create(user.getId(), new SoopIdentity("soop-rollback", null),
+                new SoopTokens("at", "rt", Duration.ofHours(8), null)))
+                .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM secrets", Integer.class))
+                .as("🔴 저장은 실패했는데 토큰 원문이 secrets에 남았다: 가리키는 행이 없어 영영 안 지워진다")
+                .isEqualTo(secretsBefore);
+        assertThat(linkRepository.findFirstByUserIdOrderByCreatedAtDesc(user.getId())).isEmpty();
+    }
+
+    /**
      * 같은 회원 재연동: 옛 행은 USER_UNLINKED로 닫히고 같은 문장에서 아이디·닉네임이 비고(약관 ⑰), 옛 secrets는
      * 커밋 뒤 정리에서 사라진다. 같은 아이디로 다시 붙어도 유니크에 안 걸린다(닫기가 INSERT보다 먼저 나간다, C1).
      */

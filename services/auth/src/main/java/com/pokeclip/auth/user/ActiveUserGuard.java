@@ -49,7 +49,7 @@ import org.springframework.stereotype.Component;
  * <p><b>{@code site}는 상수만 넘긴다.</b> 로그로 나가는 값이라 이메일·이름·채널 이름이 들어가면 안 된다
  * ({@code SecretLeakTest}가 본다).
  *
- * <h2>🔴 전수 명부 — 막는 자리 10자리 · 9파일 · 가드 밖 회원 행 락 6자리</h2>
+ * <h2>🔴 전수 명부 — 막는 자리 10자리 · 9파일 · 가드 밖 회원 행 락 7자리</h2>
  *
  * <p>🔴 <b>숫자는 바로 위 한 줄에만 있다 — 아래 표에는 세어 둔 수를 안 적는다.</b>
  * 두 군데 적으면 한쪽만 고치는 날이 오고, <b>이 세션에서만 그 일이 세 번</b> 났다
@@ -106,6 +106,7 @@ import org.springframework.stereotype.Component;
  * <tr><td>{@code WithdrawalService.withdraw}</td><td>탈퇴 자신이다. 막으면 두 번째 호출의 멱등 판정이 사라진다</td></tr>
  * <tr><td>{@code ChzzkLinkWriter.revoke}</td><td>탈퇴가 익명화 <b>전에</b> 부른다. 막으면 탈퇴가 자기 가드에 걸린다</td></tr>
  * <tr><td>{@code YoutubeLinkWriter.revoke}</td><td>위와 같다(쌍둥이)</td></tr>
+ * <tr><td>{@code SoopLinkWriter.revoke}</td><td>위와 같다(쌍둥이, POK-396)</td></tr>
  * <tr><td>{@code ChzzkTokenRefresher}</td><td>탈퇴가 연동을 닫아 살아있는 링크가 없다 → 아무 일도 안 한다</td></tr>
  * <tr><td>{@code YoutubeTokenRefresher}</td><td>위와 같다(쌍둥이)</td></tr>
  * <tr><td>{@code StreamKeyService.rotate}</td><td>탈퇴가 살아있는 키를 폐기해 {@code findAlive}가 빈손 → 404</td></tr>
