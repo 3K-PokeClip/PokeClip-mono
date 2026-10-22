@@ -72,11 +72,13 @@ compose 프로젝트 이름은 `pokeclip-media` 다(유닛의 `MEDIA_COMPOSE_PRO
     `"json-file"` 은 journald 가 없는 로컬 엔진에서 띄울 때만 쓴다. 그 밖의 값은
     모두 journald 로 떨어진다.
 *   **`janitor_enabled`**(compose 템플릿 변수, bool): 참이면 janitor 를
-    렌더하고, 거짓이면 서비스가 없다. bool 로 바뀌지 않는 값(예: `"yes"` · 빈
-    문자열)은 렌더 실패다.
+    렌더하고, 거짓이면 서비스가 없다. bool 로 바꿀 수 없는 값(예: `"yes"` · 빈
+    문자열 · `null` · `1`)은 렌더 실패다. 문자열 `"true"` · `"false"` 는 bool 로
+    바뀌어 통과한다.
     *   켜면 사이드카 이미지를 녹화 디렉터리 소유자 계정 `10002:10002` · 읽기
-        전용 루트로 띄우고 `JANITOR_ENABLED: "true"` 를 넣는다. recordings 를
-        쓰기로 붙이는 것은 janitor 하나다(사이드카는 `:ro`).
+        전용 루트로 띄우고 `JANITOR_ENABLED: "true"` 를 넣는다. 녹화 파일을
+        지우는 서비스는 janitor 하나다(mediamtx 는 녹화를 쓰고 사이드카는
+        `:ro` 로 읽기만 한다).
     *   켜고 끄는 길은 설정 반영 교체다(아래 「되돌리기」). 끄면 다음 시작의
         `--remove-orphans` 가 옛 janitor 컨테이너를 지운다.
     *   로컬 compose 는 서비스를 남긴 채 `JANITOR_ENABLED` 를 비워 대기시킨다
@@ -192,8 +194,9 @@ SIGKILL 등) systemd 252 는 `ExecStop` 을 건너뛰고 `ExecStopPost` 로 간�
 
 **재시도 한도가 없다.** 선행 점검이 실패하거나 CDN 비밀 조회(Secrets Manager
 · NAT)가 몇 분 끊겨도 유닛은 `failed` 로 굳지 않고 20초마다 다시 시도한다.
-20초는 시도 사이의 대기일 뿐 복구 시간의 상한이 아니다 — CDN 비밀 조회에는
-시간 상한이 없어, 조회가 걸려 있으면 그것이 끝날 때까지 다음 시도가 늦어진다.
+20초는 시도 사이의 대기일 뿐 복구 시간의 상한이 아니다 — 시작 스크립트는 CDN
+비밀 조회(aws CLI)에 시간 상한을 걸지 않아, 조회가 걸려 있으면 aws CLI 가
+스스로 끝날 때까지 다음 시도가 늦어진다.
 그동안 저널에 같은 판정 줄이 되풀이된다. RDS 장애는 유닛이 아니라 사이드카만
 다시 띄운다(위 「재기동 단위」).
 

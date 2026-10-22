@@ -727,23 +727,27 @@ check_case_27() {
 }
 
 #######################################
-# 사례 28 — janitor_enabled 는 bool 이어야 한다. 그 키 하나만 "yes" 로 바꾼
-# 변수 파일은 렌더가 실패하고, 원래 변수 파일(같은 시험 안에서 다시 렌더)은
-# 성공한다 — 렌더 실패가 다른 원인이면 짝의 성공 쪽이 FAIL 한다.
+# 사례 28 — janitor_enabled 가 bool 로 바꿀 수 없는 값이면 렌더가 실패한다
+# (문자열 "true" · "false" 는 bool 로 바뀌어 통과한다). 그 키 하나만 "yes" ·
+# 빈 문자열 · null · 숫자 1 로 바꾼 변수 파일은 각각 렌더가 실패하고, 원래 변수
+# 파일(같은 시험 안에서 다시 렌더)은 성공한다 — 렌더 실패가 다른 원인이면 짝의
+# 성공 쪽이 FAIL 한다.
 #######################################
 check_case_28() {
-  local ok=0 bad="${scratch}/vars-bad-enabled.json"
+  local ok=0 value bad="${scratch}/vars-bad-enabled.json"
   local out="${scratch}/compose-bad-enabled.yml"
   require_setup || return 1
-  if ! jq '.janitor_enabled = "yes"' "${RENDER_VARS_FILE}" >"${bad}"; then
-    harness::add_reason '시험 오류: 변수 파일을 만들지 못함'
-    return 1
-  fi
-  if render::template "${COMPOSE_TEMPLATE}" "${bad}" "${out}" \
-    2>"${out}.err"; then
-    harness::add_reason 'janitor_enabled = "yes" 인데 렌더가 성공함'
-    ok=1
-  fi
+  for value in '"yes"' '""' 'null' '1'; do
+    if ! jq ".janitor_enabled = ${value}" "${RENDER_VARS_FILE}" >"${bad}"; then
+      harness::add_reason '시험 오류: 변수 파일을 만들지 못함'
+      return 1
+    fi
+    if render::template "${COMPOSE_TEMPLATE}" "${bad}" "${out}" \
+      2>"${out}.err"; then
+      harness::add_reason "janitor_enabled = ${value} 인데 렌더가 성공함"
+      ok=1
+    fi
+  done
   if ! render::template "${COMPOSE_TEMPLATE}" "${RENDER_VARS_FILE}" \
     "${scratch}/compose-good-enabled.yml" 2>"${out}.good.err"; then
     harness::add_reason "원래 변수 파일 렌더 실패: \
@@ -877,7 +881,8 @@ main() {
   harness::run_case 26 '렌더 파일 bind — 원본 없으면 만들지 않음' check_case_26
   harness::run_case 27 'janitor — entrypoint 로 명령 고름 · 읽기 전용 루트' \
     check_case_27
-  harness::run_case 28 'janitor_enabled 가 bool 이 아니면 렌더 실패' \
+  harness::run_case 28 \
+    'janitor_enabled 가 bool 로 바꿀 수 없는 값이면 렌더 실패("true" · "false" 는 통과)' \
     check_case_28
   harness::run_case 29 '집계 — 읽기 실패는 0 건이 아님(정적)' check_case_29
 

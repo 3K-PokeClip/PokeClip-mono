@@ -8,8 +8,8 @@
 # - 재시도 한도가 없다(StartLimitIntervalSec=0). 선행 점검이 실패하거나 CDN
 #   비밀 조회(Secrets Manager · NAT)가 몇 분 끊겨도 failed 로 굳지 않고 다시
 #   시도한다. RestartSec=20 은 시도 사이의 대기일 뿐 복구 시간의 상한이 아니다 —
-#   CDN 비밀 조회(aws)에는 시간 상한이 없어, 걸려 있는 동안에는 그 조회가 끝나야
-#   다음 시도로 넘어간다. 그동안 저널에 「MEDIA PREREQ FAIL」 ·
+#   시작 스크립트는 CDN 비밀 조회(aws CLI)에 시간 상한을 걸지 않아, 걸려 있는
+#   동안에는 aws CLI 가 스스로 끝나야 다음 시도로 넘어간다. 그동안 저널에 「MEDIA PREREQ FAIL」 ·
 #   「MEDIA START BLOCKED」 가 되풀이된다.
 # - RDS 장애는 이 유닛의 재시도 경로가 아니다. 사이드카가 엔진 재시작
 #   (on-failure)으로 그 컨테이너만 다시 뜬다.

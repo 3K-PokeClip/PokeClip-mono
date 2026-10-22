@@ -13,8 +13,9 @@
 #   janitor_enabled      bool. 참이면 janitor(녹화 정리)를 렌더한다 — 이미지는
 #                        sidecar_image 이고 entrypoint 로 janitor 명령을 고른다.
 #                        거짓이면 서비스가 없다(다음 시작의 --remove-orphans 가
-#                        옛 janitor 컨테이너를 지운다). bool 로 바뀌지 않는 값
-#                        (예: "yes" · 빈 문자열)은 렌더 실패다.
+#                        옛 janitor 컨테이너를 지운다). bool 로 바꿀 수 없는 값
+#                        (예: "yes" · 빈 문자열 · null · 1)은 렌더 실패다 —
+#                        문자열 "true" · "false" 는 bool 로 바뀌어 통과한다.
 #   proxy_live_port · proxy_playback_port · proxy_control_port ·
 #   proxy_health_port    nginx 듣기 포트(nginx.conf.tmpl 과 같은 값).
 #   rds_endpoint · rds_db_name
@@ -223,9 +224,9 @@ services:
 %{ if janitor_enabled ~}
 
   # 녹화 정리 — 업로드가 끝난 녹화 조각을 지운다. 사이드카와 같은 이미지의 다른
-  # 명령이다. 녹화 삭제 책임이라 recordings 를 쓰기로 붙이는 것은 이 서비스뿐이다
-  # (사이드카는 :ro). 판정 표가 아직 없으면 janitor 가 스스로 기다리므로 사이드카
-  # 에 기대지 않는다(스키마는 기동 전에 DDL 역할이 놓는다).
+  # 명령이다. 녹화 파일을 지우는 서비스는 이것 하나다(mediamtx 는 녹화를 쓰고
+  # 사이드카는 :ro 로 읽기만 한다). 판정 표가 아직 없으면 janitor 가 스스로
+  # 기다리므로 사이드카에 기대지 않는다(스키마는 기동 전에 DDL 역할이 놓는다).
   janitor:
     image: ${sidecar_image}
     entrypoint: ["/usr/local/bin/janitor"]
@@ -235,8 +236,8 @@ services:
     network_mode: "service:mediamtx"
     depends_on: *mediamtx-dependency
     restart: on-failure
-    # 공유 볼륨의 유일한 쓰기자라 그 밖에는 아무것도 못 쓰게 한다. janitor 는
-    # recordings 밖에 쓰지 않는다(로컬 compose 와 같은 설정).
+    # 녹화를 지우는 쓰기 권한을 가진 만큼 그 밖에는 아무것도 못 쓰게 한다.
+    # janitor 는 recordings 밖에 쓰지 않는다(로컬 compose 와 같은 설정).
     read_only: true
     security_opt:
       - no-new-privileges:true
