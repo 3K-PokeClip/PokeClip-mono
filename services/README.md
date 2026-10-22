@@ -163,12 +163,12 @@ compose는 `${GOOGLE_REDIRECT_URI:?}`로 **없으면 컨테이너가 아예 안 
 기본값이 있어 `DeploymentEnvVarsTest`의 「빈 기본값」 정규식엔 안 걸리고 **기본값 있는 변수 명부**가 잡는다.
 
 **스물여섯부터 스물여덟까지: 스트림키 암호 저장소 셋(POK-272).** 로컬은 셋 다 없어도 뜬다(기본은 PG에 두기).
-dev는 아래 「스트림키 암호 이행」 절의 순서대로 채운다. 셋 다 기본값 있는 변수 명부에 있다.
+dev는 `type`·`retire-from` 둘 다 `aws`다(아래 「스트림키 암호 이행」 절). 셋 다 기본값 있는 변수 명부에 있다.
 
 | 변수 | 기본 | 뜻 |
 |---|---|---|
 | `STREAM_KEY_SECRET_STORE_TYPE` | `postgres` | 스트림키 암호를 읽고 쓰는 곳. `postgres` 또는 `aws`(Secrets Manager). 다른 값이면 부팅 실패 |
-| `STREAM_KEY_SECRET_RETIRE_FROM` | `postgres` | 재발급·탈퇴 때 옛 암호를 지울 곳(쉼표 목록). **위 값을 반드시 포함한다**(아니면 부팅 실패). 병행 기간 dev는 `postgres,aws` |
+| `STREAM_KEY_SECRET_RETIRE_FROM` | `postgres` | 재발급·탈퇴 때 옛 암호를 지울 곳(쉼표 목록). **위 값을 반드시 포함한다**(아니면 부팅 실패). dev는 `aws`(병행 종료, POK-329) |
 | `STREAM_KEY_SECRET_REF_PREFIX` | `pokeclip/local/stream-key/` | 새 암호 이름의 앞부분 = Secrets Manager 비밀 이름 접두. `/`로 끝나고 219자 이하. 🔴 **dev compose는 `:?`라 비면 compose가 파일 전체 보간에서 멈춘다.** auth만이 아니라 같은 배포 명령의 clip도 안 올라간다. IAM 정책이 이 접두 안만 허용해서 둔 장치다 |
 
 `SECRET_STORE_KEY`는 `aws`로 바꿔도 **계속 필수다.** 유튜브·치지직 토큰은 이번에 옮기지 않아 PG에 그대로 있다.
@@ -3547,8 +3547,8 @@ OBS는 트랙 여섯을 항상 다 보내고 트랙에 이름이 없다(계약9�
   `@Primary`인 PG다. lombok이 표지를 생성자로 복사하도록 `auth/lombok.config`가 있고, 그 파일이 빠지면 조용히 PG가 꽂히므로
   `compileJava` 입력으로 선언해 뒀다
 - **읽기·쓰기 저장소와 폐기 정리를 갈랐다.** 재발급의 커밋 뒤 정리와 탈퇴 정리는 `StreamKeySecretRetirer`를 부르고, 그것이
-  `retire-from`의 **모든** 저장소에서 이름 셋(행의 이름, `접두+uuid`, `streamkey:uuid`)을 지운다. 이행·병행·롤백 중에는 같은
-  키의 사본이 양쪽에 있을 수 있어서다
+  `retire-from`의 **모든** 저장소에서 이름 셋(행의 이름, `접두+uuid`, `streamkey:uuid`)을 지운다. 손으로 되돌린 상태처럼 같은
+  키의 사본이 양쪽에 있을 때를 위해서다. dev는 `retire-from=aws`라 Secrets Manager 하나만 돈다
 - 새 키 이름은 `PassphraseRefIssuer`가 `<접두><UUID>`로 짓는다(옛 `streamkey:<UUID>`는 `:` 때문에 Secrets Manager 이름이 못 된다).
   **이름은 언제나 새 UUID다**. 강제 삭제가 비동기라 지운 이름을 바로 다시 만들 수 없고, Media 조정자의 「한 번 빠진 이름은
   되살아나지 않는다」가 여기에 기댄다
@@ -3570,10 +3570,9 @@ get·put이 한 트랜잭션에서 이어지는 갈래는 하나다. `ensureKey`
 (행이 있으면 get만, 없으면 put부터다).
 
 클라이언트는 `SecretsManagerClients` 한 곳에서 만든다. 웹 경로는 재시도 **standard**(코드에서 못박음. SDK 기본은 legacy이고
-환경 변수가 바꿀 수 있다), 시도 1초·호출 3초 안전망, HTTP 연결 0.5초·소켓 0.95초다. 이행 실행기는 따로 만든 클라이언트로
-첫 호출 한 번만 30초를 준다(KMS 기본 키의 첫 생성 지연).
+환경 변수가 바꿀 수 있다), 시도 1초·호출 3초 안전망, HTTP 연결 0.5초·소켓 0.95초다.
 
-**배포 순서**(1번 설계 8-A 6). 🔴 **`.env`가 코드보다 먼저다.** compose의 `STREAM_KEY_SECRET_REF_PREFIX`가 `:?`라 코드가
+**이행 때의 배포 순서**(2026-10-06, 1번 설계 8-A 6. 기록으로 둔다). 🔴 **`.env`가 코드보다 먼저다.** compose의 `STREAM_KEY_SECRET_REF_PREFIX`가 `:?`라 코드가
 먼저 머지되면 develop 자동 배포의 `docker compose`가 보간에서 통째로 멈춘다. auth만이 아니라
 같이 올리는 서버 넷의 새 코드가 다 안 올라간다(그때는 `.env`를 채우고 다시 배포한다).
 
@@ -3590,39 +3589,23 @@ SELECT count(*) FROM stream_keys
 WHERE revoked_at IS NULL AND passphrase_ref NOT LIKE 'pokeclip/dev/stream-key/%';
 ```
 
-**이행 실행기.** 프로필 `secret-migration`에서만 뜨고(웹·스케줄러 없음), 한 번 돌고 끝난다.
-
-```bash
-docker compose -f services/docker-compose.dev.yml run --rm   -e SPRING_PROFILES_ACTIVE=<기존 프로필>,secret-migration auth sync; echo "exit=$?"
-```
-
-- `sync`(인자를 빼면 이것). **auth를 내린 상태에서** 돈다. 양방향이다: 살아 있는 키마다 빈 쪽을 채우고(Secrets Manager에 쓰고
-  1·2·4·8·16초로 다시 읽어 확인, PG에 `접두+uuid` 사본), 행 이름을 새 이름으로 바꾼다(행 단위 커밋). **두 값이 다르면 어느 쪽도
-  안 덮고 결함으로 센다.** 폐기된 행은 정리기로 양쪽 사본을 지운다(초당 10회)
-- `verify`. 쓰기 0. 「Secrets Manager에서 읽히는 살아 있는 키 수 / 대상 수」를 센다. auth를 띄운 뒤에 돈다. **인자를 꼭 붙인다**
-- 출력은 건수 한 줄뿐이다(`auth.secret_migration.sync targets=… smWritten=… pgWritten=… refUpdated=… alreadyInSync=… defects=…
-  verifyDelayed=… retired=… retireFailed=…`). 값·이름은 안 찍는다
-- 종료 코드: **0** 정상 · **2** 결함·검증 지연·정리 실패·원격 오류·실행기 안의 예외 · **1** 실행기에 닿기 전 부팅 실패.
-  실행기 안의 예외를 2로 바꾸는 이유는 그대로 두면 `main` 밖으로 나가 1이 되어 부팅 실패와 섞여서다
-
-**롤백(aws → postgres)**: auth 중지 → `sync`(Secrets Manager에만 있는 키를 PG로 채운다) → `type=postgres` → 기동.
-`retire-from`은 그대로 둔다. **재전환(postgres → aws)**: ③·④를 다시 한다. 롤백 기간에 새로 발급된 키는 Secrets Manager에 없어
-Media 조정자가 못 읽는다(그 동안 dev-media로 새 키 송출이 안 된다).
-
-**병행 기간은 이행(④ 통과) 뒤 2주다**(POK-272 코멘트로 확정). 그동안 PG 사본을 둔다. 끝나면 후속 PR이 넷을 한다:
-`retire-from=aws` · PG `secrets`에서 이름이 `streamkey:` 또는 `pokeclip/dev/stream-key/`로 시작하는 행 삭제 · 이행 실행기 철거 ·
-그 행이 0인지 조회한 뒤 ADR-018 표기 변경. 실행기를 걷기 직전에 `sync`를 한 번 더 돌려 `retire_failed`로 남은 폐기 사본을 치운다.
+**병행 종료(POK-329).** 이행 뒤 2주 동안 PG에 사본을 두고 `retire-from=postgres,aws`로 양쪽을 지웠다. 그 기간이 끝나
+이행 실행기(`sync`·`verify`, 프로필 `secret-migration`)를 걷었다. dev는 그 전에 마지막 `sync`(exit=0)를 돌렸고,
+`STREAM_KEY_SECRET_RETIRE_FROM=aws`로 바꿨으며, PG `secrets`에서 이름이 `streamkey:` 또는 `pokeclip/dev/stream-key/`로 시작하는
+행을 손으로 지웠다. 🔴 **그래서 aws에서 postgres로 되돌리는 길이 없다.** PG에 사본이 없고 채워 줄 실행기도 없다. 되돌려야 하면
+실행기를 git 이력(POK-272 PR #218)에서 되살려 `sync`부터 다시 한다. 정리기와 `retire-from` 설정은 로컬(postgres)과 그런
+경우를 위해 남겼다.
 `SECRET_STORE_KEY`는 유튜브·치지직 토큰 때문에 남는다.
 
 **알고 남긴 것**
 
 - **고아 비밀.** 원격 쓰기는 DB 롤백을 안 따라온다. 순서가 비밀 먼저 → 행이라 최악이 아무 행도 안 가리키는 비밀 하나다(월 $0.40,
   송출에는 무해). 삽입 실패로 생긴 고아는 찾으려면 리소스 한정이 안 되는 `ListSecrets`가 필요해 두지 않는다. 삭제 실패로 생긴
-  고아는 행이 남아 실행기의 폐기 행 정리가 지운다
+  고아는 아래 WARN을 보고 손으로 지운다
 - **재발급 뒤 정리가 실패해도 재발급은 200이다.** 커밋 뒤 콜백의 예외는 스프링이 호출자에게 올려 보내므로, 그대로 두면 성공한
   재발급이 500이 되고 `auth.streamkey.rotated` 감사 줄이 빠진다. 감사 줄을 먼저 찍고 정리 실패는
-  `auth.streamkey.secret.retire_failed userId=… causeType=…` WARN으로 남긴다. 남은 옛 사본은 병행 기간에는 이행 실행기의 폐기 행 정리가
-  지운다. 실행기를 걷은 뒤에는 지울 장치가 없어 WARN을 보고 손으로 지운다(송출에는 무해하고 비용만 든다)
+  `auth.streamkey.secret.retire_failed userId=… causeType=…` WARN으로 남긴다. 남은 옛 사본을 지울 장치는
+  없다(이행 실행기는 병행 종료 때 걷었다). WARN을 보고 손으로 지운다(송출에는 무해하고 비용만 든다)
 - **로그의 DB 층.** 시험에서 루트를 TRACE로 내리면 Hibernate와 PostgreSQL 드라이버가 SQL 매개변수로 비밀
   **이름**을 찍는다. 값은 안 찍힌다. PG 저장소 때부터 같고 운영에서 DEBUG를 안 켜는 것으로 막는다(위 시크릿 절의 원칙)
 - 3초는 목표다. SDK의 중단이 늦을 수 있어 시험이 오차 0.3초로 잰다. 오차를 넘으면 비동기 클라이언트로 바꾼다(아직 필요 없었다)
