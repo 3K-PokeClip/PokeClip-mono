@@ -2495,62 +2495,69 @@ auth가 탈퇴를 알리는 내부 문 하나: **`DELETE /internal/streamers/{st
 **대상 줄을 `FOR KEY SHARE`로 잡은 채 확인하고 적는다** — 정리가 그 줄을 `FOR UPDATE`로 먼저 잡으므로 둘이 겹치면 한쪽이 기다린다
 (확인과 적기를 가르면 그 사이에 정리가 끼어 대상 없는 줄이 남았다, PR #220 codex).
 
-### clip: 시범 운영 측정 재료 (POK-338)
+### clip: 시범 운영 측정 재료 (POK-338 · POK-393)
 
 **중간평가에서 약속한 숫자 둘을 정의대로 재려고 남기는 기록이다.** 지나간 기록은 나중에 되살릴 수 없어 시범 운영 전에 쌓기 시작한다.
+POK-393에서 집기·숨기기를 없애면서 「열어 봤다」를 **편집기 열기**로 바꿨고, ①을 「하이라이트 아님으로 숨긴 비율」에서 **「클립 안 나온 카드 비율」**로 바꿨다.
 
 | 무엇 | 어디 | 언제 남나 |
 |---|---|---|
-| 숨긴 이유 | `jump_cards.hidden_reason`(`not_highlight` · `duplicate` · `other`, 없으면 NULL) | 숨기기 본문의 `reason`. 되돌리면 지운다 |
-| 카드 행동 | `jump_card_actions`(`card_id` · `action` · `actor` · `reason` · `at`), 덧붙이기만 | 집기 · 놓기 · 숨기기 · 되돌리기가 **카드 상태를 실제로 바꿨을 때**, 그 쓰기와 같은 트랜잭션에서 한 줄. 본인이 다시 집는 것(연장)도 남긴다 |
+| 카드 행동 | `jump_card_actions`(`card_id` · `action` · `actor` · `reason` · `at`), 덧붙이기만 | 편집기가 카드에서 열릴 때 `open` 한 줄(`POST /api/clip/jump-cards/{id}/open`). 다시 열면 한 줄 더 |
 | 편집본 출처 카드 | `recipes.source_card_id` | 첫 저장(`POST …/recipes?sourceCardId=N`). 이 방송의 카드가 아니거나 숫자가 아니면 **비운 채 저장한다**(측정 재료 때문에 저장이 실패하면 안 된다). 고쳐도 안 바뀐다 |
+| 렌더 주문 | `clips`(`recipe_id` · `created_at`) | 「영상 만들기」 주문 하나에 한 줄 |
 
-카드 표의 `claimed_*` · `hidden_*`는 다시 집거나 되돌리면 덮이고 지워진다. 「몇 번 열었나 · 언제 열었나」는 행동 기록으로만 잰다.
 행동 기록은 카드를 지우면 같이 지워진다(FK `ON DELETE CASCADE`, 탈퇴 정리도 이것에 맡긴다).
 
 **한계** (집계를 읽을 때 같이 본다)
 
-- **「열어 봤다」를 집기(claim)로 갈음한다**(2026-10-15 결정). 남이 이미 집은 카드를 연 경우는 409라 **안 센다**: 분모가 그만큼 작다.
-  카드 목록에서 열지 않고 숨긴 카드도 분모에 안 든다(정의가 「열어 보고 부적절로 표시한 비율」이다).
-- 웹은 「편집」을 누를 때마다 집는다. 같은 카드를 여러 번 열면 claim 줄이 여럿이라 **분모는 카드 수(`DISTINCT card_id`)로 센다.**
-- **점유가 만료로 끝난 것은 기록이 없다**(치우는 배경 작업이 없다). 점유 끝 = `release` 줄, 또는 마지막 `claim` + 점유 시간(`pokeclip.jump-card.claim-ttl`, 지금 30분).
-- 부적절 여부는 **지금 상태**(`hidden_reason`)로 센다. 숨겼다가 되돌린 카드는 부적절로 안 센다.
-  **이유 없이 숨긴 카드(NULL)도 안 센다**: 배포 중 열려 있던 옛 화면이나 본문 없는 호출이 그렇다.
-- 편집 시간의 시작은 **그 편집자가 첫 저장 직전에 마지막으로 집은 시각**이다. 업로드 완료 시각은 따로 없어 `clip_uploads.updated_at`(`uploaded`)을 쓴다.
-  편집자는 처음 저장한 사람(`recipes.creator_id`)만 남는다. 저장한 사람이 그 카드를 직접 집지 못했으면(남이 집어 409였거나
-  주소로 바로 들어왔다) 시작점이 없어 ②에서 빠진다.
+- **열어 봄 = 편집기가 카드를 띄운 것**이다. 카드 목록에서 누른 것이든 주소로 바로 들어온 것이든 센다. 같은 카드를 여러 번 열면
+  `open` 줄이 여럿이라 ①의 분모는 **카드 수(`DISTINCT card_id`)**로 센다.
+- **열기 기록이 실패해도 웹은 무시한다**(편집기는 그대로 열린다). 그만큼 분모가 작을 수 있다.
+- **렌더 주문은 결과를 안 본다.** 주문 뒤 렌더가 실패해도(`clips.status = 'failed'`) 「나왔다」로 센다: 이 비율은 「편집자가 영상으로 만들 만하다고 본 카드」를 재지, 렌더 성공률을 재지 않는다.
+- **렌더 주문은 기간 뒤에 생겨도 센다**(카드를 연 시각만 기간으로 거른다). 기간 끝 무렵에 연 카드는 아직 주문 전일 수 있으니
+  최근 기간은 집계를 늦게 읽는다.
+- **옛 `claim`·`release`·`hide`·`unhide` 줄과 `jump_cards.hidden_reason`은 더 쌓이지 않고 집계에 안 쓴다**(POK-393 전의 기록이다. 지우기는 POK-394).
+- **여러 편집자가 같은 카드로 각자 편집본을 만들 수 있다.** ①은 카드 단위라 영향이 없다(그중 하나라도 렌더 주문이 있으면 「나왔다」).
+  ②는 편집본 단위다.
+- 편집 시간의 시작은 **그 편집자가 첫 저장 직전에 마지막으로 연 시각**이다. 업로드 완료 시각은 따로 없어 `clip_uploads.updated_at`(`uploaded`)을 쓴다.
+  편집자는 처음 저장한 사람(`recipes.creator_id`)만 남는다. 저장한 사람의 열기 기록이 없으면(기록 실패, 또는 옛 `claim` 줄만 있다) 시작점이 없어 ②에서 빠진다.
 - ②는 **시계 둘을 섞는다**: 행동 기록 `at`은 DB 시계이고 `recipes.created_at` · `clips.created_at` · `clip_uploads.updated_at`은
-  앱 시계다. 서버와 DB의 시계 차(보통 1초 안)만큼 어긋난다. 그래서 「저장 직전 집기」를 저장 뒤 5초까지 받는다: 안 받으면 DB 시계가
-  앞선 서버에서 갓 집고 바로 저장한 편집본이 시작점을 잃고 빠진다. 대가로 저장 뒤 5초 안에 다시 집으면 그것이 시작점이 된다.
-- `actor`는 회원 번호다. 되돌리면 지워지는 `hidden_by`와 달리 이 기록은 카드가 있는 동안 남는다.
+  앱 시계다. 서버와 DB의 시계 차(보통 1초 안)만큼 어긋난다. 그리고 웹은 열기 기록을 기다리지 않고 보내며 서버는 **자격 판정(auth 최대
+  7초) 뒤에** 그 줄을 적는다. 그래서 「저장 직전 열기」를 **저장 뒤 15초까지** 받는다(자격 판정 7초 + 시계 차 여유): 안 받으면 갓 열고
+  바로 저장한 편집본이 시작점을 잃고 빠진다. 대가로 저장 뒤 15초 안에 같은 카드를 다시 열면 그것이 시작점이 된다.
+- `actor`는 회원 번호다. 이 기록은 카드가 있는 동안 남는다.
 
-**① 자동 카드 거짓양성률**: 기간(`:from` 이상 `:to` 미만)에 열어 본 자동 카드 중 「하이라이트 아님」으로 숨겨진 비율.
+**① 클립 안 나온 카드 비율**: 기간(`:from` 이상 `:to` 미만)에 편집기로 연 자동 카드 중 렌더 주문(`clips`)이 하나도 없는 비율.
+편집본만 저장하고 영상을 안 만든 카드도 「안 나왔다」로 센다.
 
 ```sql
--- POK-338 거짓양성률
+-- POK-393 클립 안 나온 카드 비율
 WITH opened AS (
     SELECT DISTINCT a.card_id
       FROM jump_card_actions a
       JOIN jump_cards c ON c.id = a.card_id
-     WHERE a.action = 'claim' AND c.source = 'auto'
+     WHERE a.action = 'open' AND c.source = 'auto'
        AND a.at >= :from AND a.at < :to
 )
 SELECT count(*) AS opened,
-       count(*) FILTER (WHERE c.hidden_reason = 'not_highlight') AS not_highlight,
-       round(100.0 * count(*) FILTER (WHERE c.hidden_reason = 'not_highlight') / NULLIF(count(*), 0), 1) AS false_positive_pct
-  FROM opened o
-  JOIN jump_cards c ON c.id = o.card_id;
+       count(*) FILTER (WHERE NOT EXISTS (
+           SELECT 1 FROM recipes r JOIN clips k ON k.recipe_id = r.id
+            WHERE r.source_card_id = o.card_id)) AS no_clip,
+       round(100.0 * count(*) FILTER (WHERE NOT EXISTS (
+           SELECT 1 FROM recipes r JOIN clips k ON k.recipe_id = r.id
+            WHERE r.source_card_id = o.card_id)) / NULLIF(count(*), 0), 1) AS no_clip_pct
+  FROM opened o;
 ```
 
-**② 편집자별 카드 → 영상 시간**: 기간에 처음 저장한, 카드에서 시작한 편집본. 초 단위 중앙값.
+**② 편집자별 카드 → 영상 시간**: 기간에 처음 저장한, 카드에서 시작한 편집본. 시작은 마지막 열기, 끝은 렌더 주문과 업로드 완료. 초 단위 중앙값.
 
 ```sql
--- POK-338 카드에서 영상까지
+-- POK-393 카드에서 영상까지
 WITH started AS (
     SELECT r.creator_id AS editor,
            (SELECT max(a.at) FROM jump_card_actions a
-             WHERE a.card_id = r.source_card_id AND a.action = 'claim'
-               AND a.actor = r.creator_id AND a.at <= r.created_at + interval '5 seconds') AS opened_at,
+             WHERE a.card_id = r.source_card_id AND a.action = 'open'
+               AND a.actor = r.creator_id AND a.at <= r.created_at + interval '15 seconds') AS opened_at,
            (SELECT min(c.created_at) FROM clips c WHERE c.recipe_id = r.id) AS ordered_at,
            (SELECT min(u.updated_at) FROM clips c JOIN clip_uploads u ON u.clip_id = c.id
              WHERE c.recipe_id = r.id AND u.status = 'uploaded') AS uploaded_at
