@@ -1,38 +1,17 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { axe } from 'jest-axe';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { PluginRelease } from '@/lib/pluginRelease/types';
+import { PLUGIN_DOWNLOADS, PLUGIN_VERSION, RELEASES_PAGE_URL } from '@/lib/pluginDownload';
 import { PluginDownloadDialog } from './PluginDownloadDialog';
 
 const { track } = vi.hoisted(() => ({ track: vi.fn() }));
 vi.mock('@/lib/analytics', () => ({ track }));
 
-const DL = 'https://github.com/3K-PokeClip/PokeClip-mono/releases/download/obs-plugin-v0.2.0';
-const RELEASE: PluginRelease = {
-  version: '0.2.0',
-  tag: 'obs-plugin-v0.2.0',
-  prerelease: false,
-  publishedAt: '2026-10-22T03:00:00Z',
-  releaseUrl: 'https://github.com/3K-PokeClip/PokeClip-mono/releases/tag/obs-plugin-v0.2.0',
-  assets: {
-    installer: {
-      name: 'i.exe',
-      url: `${DL}/pokeclip-obs-0.2.0-windows-x64-installer.exe`,
-      sizeBytes: 31_457_280,
-    },
-    pkg: {
-      name: 'm.pkg',
-      url: `${DL}/pokeclip-obs-0.2.0-macos-universal.pkg`,
-      sizeBytes: 58_720_256,
-    },
-  },
-};
+const VERSION_RE = PLUGIN_VERSION.replace(/\./g, '\\.');
 
-function open(release: PluginRelease, detectedOs: 'windows' | 'macos' | 'unknown') {
+function open(detectedOs: 'windows' | 'macos' | 'unknown') {
   const onClose = vi.fn();
-  const view = render(
-    <PluginDownloadDialog open onClose={onClose} release={release} detectedOs={detectedOs} />,
-  );
+  const view = render(<PluginDownloadDialog open onClose={onClose} detectedOs={detectedOs} />);
   return { ...view, onClose };
 }
 
@@ -40,23 +19,25 @@ beforeEach(() => track.mockReset());
 
 describe('PluginDownloadDialog: OS별 설치 파일 받기', () => {
   it('감지한 OS의 탭으로 열린다 — Mac이면 pkg', () => {
-    open(RELEASE, 'macos');
+    open('macos');
     expect(screen.getByRole('dialog', { name: '플러그인 다운로드' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'macOS' })).toHaveAttribute('aria-selected', 'true');
-    expect(screen.getByRole('link', { name: /macOS 설치 파일, 버전 0\.2\.0/ })).toHaveAttribute(
-      'href',
-      RELEASE.assets.pkg!.url,
-    );
+    expect(
+      screen.getByRole('link', { name: new RegExp(`macOS 설치 파일, 버전 ${VERSION_RE}`) }),
+    ).toHaveAttribute('href', PLUGIN_DOWNLOADS.macos.url);
   });
 
   it('Windows는 exe 하나만 받는다 — 포터블 zip·체크섬·설치 안내 링크는 두지 않는다', () => {
-    open(RELEASE, 'windows');
-    const primary = screen.getByRole('link', { name: /Windows 설치 파일, 버전 0\.2\.0/ });
+    open('windows');
+    const primary = screen.getByRole('link', {
+      name: new RegExp(`Windows 설치 파일, 버전 ${VERSION_RE}`),
+    });
     // 파일은 같은 탭에서 받는다 — GitHub가 attachment로 줘서 페이지가 바뀌지 않는다
-    expect(primary).toHaveAttribute('href', RELEASE.assets.installer!.url);
+    expect(primary).toHaveAttribute('href', PLUGIN_DOWNLOADS.windows.url);
     expect(primary).not.toHaveAttribute('target');
     expect(screen.queryByRole('link', { name: /zip|체크섬|설치 안내/ })).not.toBeInTheDocument();
     const allVersions = screen.getByRole('link', { name: /모든 버전 보기/ });
+    expect(allVersions).toHaveAttribute('href', RELEASES_PAGE_URL);
     expect(allVersions).toHaveAttribute('target', '_blank');
     expect(allVersions).toHaveAttribute('rel', 'noopener noreferrer');
     expect(allVersions).toHaveTextContent('(새 창)');
@@ -65,21 +46,15 @@ describe('PluginDownloadDialog: OS별 설치 파일 받기', () => {
   });
 
   it('OS를 모르면 Windows 탭이고, 다른 탭으로 직접 옮길 수 있다', () => {
-    open(RELEASE, 'unknown');
+    open('unknown');
     expect(screen.getByRole('tab', { name: 'Windows' })).toHaveAttribute('aria-selected', 'true');
     fireEvent.click(screen.getByRole('tab', { name: 'macOS' }));
     expect(screen.getByRole('tab', { name: 'macOS' })).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByText(/확인되지 않은 개발자/)).toBeInTheDocument();
   });
 
-  it('빠진 파일은 링크 대신 문장이고, 다른 판으로 채우지 않는다', () => {
-    open({ ...RELEASE, assets: { installer: RELEASE.assets.installer } }, 'macos');
-    expect(screen.getByText('macOS 설치 파일은 지금 받을 수 없어요.')).toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: /macOS 설치 파일/ })).not.toBeInTheDocument();
-  });
-
   it('누른 파일 종류를 센다 — 받은 수가 아니라 누른 수', () => {
-    open(RELEASE, 'windows');
+    open('windows');
     fireEvent.click(screen.getByRole('link', { name: /Windows 설치 파일/ }));
     fireEvent.click(screen.getByRole('tab', { name: 'macOS' }));
     fireEvent.click(screen.getByRole('link', { name: /macOS 설치 파일/ }));
@@ -94,7 +69,7 @@ describe('PluginDownloadDialog: OS별 설치 파일 받기', () => {
   });
 
   it('닫기로 닫히고, 설치·연결 상태를 지어내지 않으며, 접근성 위반이 없다', async () => {
-    const { onClose } = open(RELEASE, 'windows');
+    const { onClose } = open('windows');
     const dialog = screen.getByRole('dialog');
     expect(dialog).not.toHaveTextContent(/설치됨|연결됨/);
     expect(await axe(document.body)).toHaveNoViolations();

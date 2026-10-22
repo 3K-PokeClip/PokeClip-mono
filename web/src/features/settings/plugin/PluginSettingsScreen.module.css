@@ -116,13 +116,6 @@
 
 /* ---------- 다운로드 창 (POK-379) ---------- */
 
-/* 오류 상태의 버튼 둘 — 배너 한 줄을 지킨다 */
-.downloadActions {
-  display: flex;
-  flex: none;
-  gap: calc(6 * var(--pc-u));
-}
-
 /* DS 기본 폭 480 — OS 탭·경고·설치 순서가 한 화면에 들어간다 */
 .downloadDialog {
   max-width: calc(480 * var(--pc-u));
@@ -165,15 +158,6 @@
   font-size: calc(11 * var(--pc-u));
   color: var(--pc-color-text-muted);
   text-align: center;
-}
-
-.downloadMissing {
-  margin: 0;
-  padding: calc(11 * var(--pc-u)) calc(13 * var(--pc-u));
-  border-radius: calc(10 * var(--pc-u));
-  background: var(--pc-color-bg-inset);
-  font-size: calc(12 * var(--pc-u));
-  color: var(--pc-color-text-secondary);
 }
 
 /* 새 창 아이콘이 글자 뒤에 붙어 있게 — svg가 block이라 그냥 두면 아랫줄로 떨어진다 */

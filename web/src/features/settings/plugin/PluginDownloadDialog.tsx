@@ -3,7 +3,6 @@
 import { X } from 'lucide-react';
 import { Dialog, IconButton } from '@/ui';
 import type { DetectedOs } from '@/lib/detectOs';
-import type { PluginRelease } from '@/lib/pluginRelease/types';
 import { PluginDownloadPanel } from './PluginDownloadPanel';
 import styles from './PluginSettingsScreen.module.css';
 
@@ -13,12 +12,10 @@ import styles from './PluginSettingsScreen.module.css';
 export function PluginDownloadDialog({
   open,
   onClose,
-  release,
   detectedOs,
 }: {
   open: boolean;
   onClose: () => void;
-  release: PluginRelease;
   detectedOs: DetectedOs;
 }) {
   return (
@@ -39,7 +36,7 @@ export function PluginDownloadDialog({
         <Dialog.Description>
           설치할 PC의 운영체제를 고르세요. 지금 쓰는 PC가 아니어도 돼요.
         </Dialog.Description>
-        <PluginDownloadPanel release={release} detectedOs={detectedOs} />
+        <PluginDownloadPanel detectedOs={detectedOs} />
       </Dialog.Content>
     </Dialog>
   );
