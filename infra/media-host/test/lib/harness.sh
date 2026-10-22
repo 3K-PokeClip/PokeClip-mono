@@ -7,8 +7,16 @@
 # harness::add_reason 으로 남긴다. harness::run_case 가 결과 줄(PASS · FAIL)을
 # 낸다. 판정이 아닌 기록 사례는 harness::run_record 로 돌리고 기록은
 # harness_record_note 에 남긴다(RECORDED). 끝에 harness::summary 가 사례별
-# 결과와 합계를 낸다 — 결과가 없는 사례(누락)도 FAIL 로 센다. 사례 번호는
-# 정수이고, 정수 번호 사이에 끼운 사례는 「1b」 같은 이름으로 단다.
+# 결과와 합계를 낸다 — 결과가 없는 사례(누락)도 FAIL 로 센다.
+#
+# 사례는 정수 번호(1 부터 — summary 가 1 부터 사례 수까지 본다)나 이름(정수가
+# 아닌 것 — 예: 1b · term-ignore)으로 단다. 이름 사례는 summary 에 그 이름을
+# 함께 넘겨야 누락을 센다.
+#
+# run_case · run_record 는 사례 함수가 실제로 돌았는지도 본다 — 그 함수에 추적
+# 속성(declare -ft)을 주고 RETURN 트랩으로 끝남을 표시해, 함수가 돌지 않았는데
+# PASS · RECORDED 로 적히려 하면 FAIL 로 바꾼다(러너가 사례를 건너뛰고 통과로
+# 적는 결함을 드러낸다).
 #
 # 이 파일은 source 해서 쓴다(실행하지 않는다). bash 3.2 에서도 돈다 — macOS 에
 # timeout 이 없어 상한 시간은 SECONDS 로 직접 잰다.
@@ -33,6 +41,9 @@ harness_named_status=()
 harness_pass_count=0
 harness_fail_count=0
 harness_recorded_count=0
+# 지금 돌리는 사례 함수 이름과, 그 함수가 끝났다는 표식(RETURN 트랩이 세운다).
+harness_watch_fn=""
+harness_watch_ran=0
 
 #######################################
 # 지금 사례의 실패 원인에 한 마디를 더한다.
@@ -55,17 +66,69 @@ harness::clear_reason() {
 }
 
 #######################################
-# 사례 결과 한 줄을 내고 집계한다.
+# 사례 함수를 지켜보기 시작한다 — 그 함수가 끝나면 harness_watch_ran 이 선다.
+# Globals:
+#   harness_watch_fn, harness_watch_ran
+# Arguments:
+#   사례 함수 이름.
+#######################################
+harness::watch_case() {
+  harness_watch_fn="$1"
+  harness_watch_ran=0
+  declare -ft "$1" 2>/dev/null || true
+  trap 'harness::note_return' RETURN
+}
+
+#######################################
+# RETURN 트랩 — 끝난 함수가 지켜보는 사례 함수면 표식을 세운다.
+# Globals:
+#   harness_watch_fn, harness_watch_ran
+#######################################
+# 트랩 문자열이 부른다.
+# shellcheck disable=SC2329
+harness::note_return() {
+  if [[ -n "${harness_watch_fn}" \
+    && "${FUNCNAME[1]:-}" == "${harness_watch_fn}" ]]; then
+    harness_watch_ran=1
+  fi
+  return 0
+}
+
+#######################################
+# 사례 결과 한 줄을 내고 집계한다. 지켜보던 사례 함수가 돌지 않았는데 PASS ·
+# RECORDED 면 FAIL 로 적는다.
 # Globals:
 #   harness_case_status, harness_pass_count, harness_fail_count,
-#   harness_recorded_count
+#   harness_recorded_count, harness_watch_fn, harness_watch_ran
 # Arguments:
-#   사례 번호(정수) 또는 이름 사례 이름, PASS|FAIL|RECORDED, 설명, 원인 ·
-#   기록(없어도 됨).
+#   사례 번호(정수) 또는 이름, PASS|FAIL|RECORDED, 설명, 원인 · 기록(없어도 됨).
 # Outputs:
 #   결과 한 줄을 표준 출력에 쓴다.
 #######################################
 harness::report() {
+  local num="$1" status="$2" desc="$3" detail="${4:-}"
+  if [[ -n "${harness_watch_fn}" ]]; then
+    trap - RETURN
+    if [[ "${status}" != FAIL ]] && (( ! harness_watch_ran )); then
+      status=FAIL
+      detail="사례 함수 ${harness_watch_fn} 가 돌지 않음(러너 이상)"
+    fi
+    harness_watch_fn=""
+  fi
+  harness::tally "${num}" "${status}" "${desc}" "${detail}"
+}
+
+#######################################
+# 사례 결과 한 줄을 내고 집계한다(판정을 바꾸지 않는다).
+# Globals:
+#   harness_case_status, harness_pass_count, harness_fail_count,
+#   harness_recorded_count
+# Arguments:
+#   사례 번호(정수) 또는 이름, PASS|FAIL|RECORDED, 설명, 원인 · 기록(없어도 됨).
+# Outputs:
+#   결과 한 줄을 표준 출력에 쓴다.
+#######################################
+harness::tally() {
   local num="$1" status="$2" desc="$3" detail="${4:-}"
   if [[ "${num}" =~ ^[0-9]+$ ]]; then
     harness_case_status[num]="${status}"
@@ -94,6 +157,7 @@ harness::report() {
 #######################################
 harness::run_case() {
   local num="$1" desc="$2" fn="$3"
+  harness::watch_case "${fn}"
   harness_fail_reason=""
   if "${fn}"; then
     harness::report "${num}" PASS "${desc}"
@@ -112,6 +176,7 @@ harness::run_case() {
 #######################################
 harness::run_record() {
   local num="$1" desc="$2" fn="$3"
+  harness::watch_case "${fn}"
   harness_fail_reason=""
   harness_record_note=""
   if "${fn}"; then

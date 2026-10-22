@@ -398,7 +398,9 @@ unit::case_stop_flapping() {
 #######################################
 # 기동 중(시작 스크립트가 CDN 비밀을 조회하는 중) systemctl stop 해도 유닛은
 # failed 가 아니라 inactive 로 끝나고, 컨테이너 · 렌더 파일이 남지 않는다.
-# 가짜 aws 의 hang 모드가 조회에 머무는 동안 표식 파일을 남긴다.
+# 가짜 aws 의 hang 모드가 조회에 머무는 동안 표식 파일을 남긴다. 유닛 수준에서
+# 멈추는 자리는 비밀 조회 하나다 — 그 뒤 렌더 중 신호(130 · 임시 파일 0 · up
+# 0)는 start_test 사례 28 이 시작 스크립트 단독으로 덮는다.
 #######################################
 unit::case_stop_while_starting() {
   local marker="${mode_file}.hang" deadline result ok=0

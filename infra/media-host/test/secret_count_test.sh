@@ -527,7 +527,8 @@ case_box_api_pass_missing_with_cdn() {
 # 비밀번호 파일 자리를 갈래 하나로 만든다(setup_box 뒤).
 # Arguments:
 #   갈래 — not-hex | empty | dir | dangling | symlink | no-newline | junk |
-#   two-lines.
+#   two-lines | upper | non-hex-64 | cr(뒤 셋은 정확히 65바이트 — 크기 검사를
+#   지나 내용 검사만 겨눈다).
 #######################################
 write_api_pass_variant() {
   local file="${ops_dir}/runtime/mtx_api_pass"
@@ -547,6 +548,11 @@ write_api_pass_variant() {
       printf '%s\n%s\n' "${OPS_FAKE_API_PASS}" "${OPS_FAKE_API_PASS}" \
         >"${file}"
       ;;
+    upper)
+      printf '%s\n' "${OPS_FAKE_API_PASS}" | tr 'a-f' 'A-F' >"${file}"
+      ;;
+    non-hex-64) printf '%sg\n' "${OPS_FAKE_API_PASS:0:63}" >"${file}" ;;
+    cr) printf '%s\r\n' "${OPS_FAKE_API_PASS:0:63}" >"${file}" ;;
     *) return 1 ;;
   esac
 }
@@ -554,15 +560,18 @@ write_api_pass_variant() {
 # 사례 20 — box: 비밀번호 파일은 시작 스크립트가 쓰는 꼴(16진 64자 + 끝 줄바꿈
 # 하나, 파일 전체가 그 한 줄) 하나만 받는다. 그 밖(16진 아님 · 빈 파일 ·
 # 디렉터리 · 끊어진 링크 · 링크(대상이 그 꼴이어도) · 줄바꿈 없음 · 뒤에 남는
-# 바이트 · 두 줄)은 모두 api-pass 로 실패한다(종료 1).
+# 바이트 · 두 줄, 그리고 크기는 65바이트인데 내용이 틀린 대문자 16진 · 16진
+# 아닌 글자 · 줄 끝 CR)은 모두 api-pass 로 실패하고(종료 1), 어느 갈래에서도
+# 비밀이 새거나 스크래치가 남지 않는다.
 case_box_api_pass_malformed() {
   local ok=0 variant
   for variant in not-hex empty dir dangling symlink no-newline junk \
-    two-lines; do
+    two-lines upper non-hex-64 cr; do
     setup_box
     write_api_pass_variant "${variant}" || return 1
     run_count box || return 1
-    if ! ops_fixture::expect_line 'SECRET COUNT FAIL api-pass' 1; then
+    if ! ops_fixture::expect_line 'SECRET COUNT FAIL api-pass' 1 \
+      || ! expect_hygiene; then
       harness::add_reason "갈래 ${variant}"
       ok=1
     fi
