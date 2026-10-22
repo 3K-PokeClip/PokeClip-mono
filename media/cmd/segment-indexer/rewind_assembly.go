@@ -20,6 +20,7 @@ import (
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/config"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/rewind/cache"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/rewind/publish"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/s3errbody"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/upload"
 )
 
@@ -75,18 +76,10 @@ func assemblePublishing(ctx context.Context, cfg config.Config, up *upload.Uploa
 // (DB 의 writer_fence 와 맞춰 볼 수 있게). 셋째 반환값은 켜짐 · 강등 줄의 endpoint 칸이다 — 클라이언트의 실효 엔드포인트에서
 // userinfo 를 뗀 값이고(7c 검수 C7c-1), 클라이언트를 만들기 전에 실패하면 설정값이다.
 func newPublisher(ctx context.Context, cfg config.Config, opt publish.Options) (*publish.Publisher, *pgxpool.Pool, string, error) {
-	loadOpts := []func(*awsconfig.LoadOptions) error{
-		awsconfig.WithRegion(cfg.S3.Region),
-		awsconfig.WithRetryMaxAttempts(1), // 버킷 확인은 한 번이다 — 목록 요청의 시도 수는 S3Store 가 요청마다 고정한다
-	}
-	if cfg.S3.Endpoint != "" {
-		loadOpts = append(loadOpts, awsconfig.WithBaseEndpoint(cfg.S3.Endpoint))
-	}
-	awsCfg, err := awsconfig.LoadDefaultConfig(ctx, loadOpts...)
+	awsCfg, client, err := newPublishS3Client(ctx, cfg)
 	if err != nil {
-		return nil, nil, cfg.S3.Endpoint, fmt.Errorf("AWS 설정 적재 실패: %w", err)
+		return nil, nil, cfg.S3.Endpoint, err
 	}
-	client := s3.NewFromConfig(awsCfg, func(o *s3.Options) { o.UsePathStyle = cfg.S3.ForcePathStyle })
 	ep := aws.ToString(client.Options().BaseEndpoint)
 	endpoint := endpointForLog(ep)
 	if err := requireHTTPS(ep); err != nil {
@@ -111,6 +104,26 @@ func newPublisher(ctx context.Context, cfg config.Config, opt publish.Options) (
 	opt.Log.Info("rewind_publish_started", "bucket", cfg.S3.Bucket, "region", cfg.S3.Region,
 		"endpoint", endpoint, "provider", provider, "base_url", opt.BaseURL, "writer", opt.Writer)
 	return pub, pool, endpoint, nil
+}
+
+// newPublishS3Client 는 발행용 S3 클라이언트(업로더와 따로)와 그 AWS 설정을 만든다 — 설정은 부팅 버킷 확인이 자격증명 provider
+// 이름을 읽는 데 쓴다. newPublisher 에서 뗀 것은 시험이 이 조립점의 클라이언트를 직접 부르게 하려서다(부팅 때 닿는 요청은 본문
+// 없는 HEAD 뿐이다).
+func newPublishS3Client(ctx context.Context, cfg config.Config) (aws.Config, *s3.Client, error) {
+	loadOpts := []func(*awsconfig.LoadOptions) error{
+		awsconfig.WithRegion(cfg.S3.Region),
+		awsconfig.WithRetryMaxAttempts(1), // 버킷 확인은 한 번이다 — 목록 요청의 시도 수는 S3Store 가 요청마다 고정한다
+	}
+	if cfg.S3.Endpoint != "" {
+		loadOpts = append(loadOpts, awsconfig.WithBaseEndpoint(cfg.S3.Endpoint))
+	}
+	awsCfg, err := awsconfig.LoadDefaultConfig(ctx, loadOpts...)
+	if err != nil {
+		return aws.Config{}, nil, fmt.Errorf("AWS 설정 적재 실패: %w", err)
+	}
+	// 오류 응답 본문은 상한까지만 읽는다(s3errbody — 업로더와 같다).
+	client := s3.NewFromConfig(awsCfg, func(o *s3.Options) { o.UsePathStyle = cfg.S3.ForcePathStyle }, s3errbody.Limit)
+	return awsCfg, client, nil
 }
 
 // requireHTTPS 는 발행용 S3 클라이언트의 실효 엔드포인트(client.Options().BaseEndpoint)가 https 인지 본다(판단 J77 ⑵ · 계획

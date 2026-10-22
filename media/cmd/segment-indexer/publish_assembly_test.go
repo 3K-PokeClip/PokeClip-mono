@@ -7,9 +7,12 @@ package main
 // publish_assembly_pg_test.go 다.
 
 import (
+	"bytes"
 	"context"
 	"encoding/pem"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -21,12 +24,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/config"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/indexer"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/recording"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/s3errbody"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/upload"
 )
 
@@ -51,13 +58,19 @@ type fakeS3 struct {
 func newFakeS3(t *testing.T, status int) *fakeS3 {
 	t.Helper()
 	f := startFakeS3(t, status, httptest.NewTLSServer)
+	trustFakeS3Cert(t, f.srv)
+	return f
+}
+
+// trustFakeS3Cert 는 SDK 기본 HTTP 클라이언트가 TLS 서버 srv 의 인증서를 믿게 한다(AWS_CA_BUNDLE).
+func trustFakeS3Cert(t *testing.T, srv *httptest.Server) {
+	t.Helper()
 	ca := filepath.Join(t.TempDir(), "fake-s3-ca.pem")
-	block := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: f.srv.Certificate().Raw})
+	block := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})
 	if err := os.WriteFile(ca, block, 0o600); err != nil {
 		t.Fatalf("가짜 S3 인증서 쓰기 실패: %v", err)
 	}
 	t.Setenv("AWS_CA_BUNDLE", ca)
-	return f
 }
 
 // startFakeS3 는 serve(httptest.NewServer 면 평문 · NewTLSServer 면 TLS)로 가짜 S3 를 띄운다.
@@ -510,5 +523,60 @@ func TestRewindStopLogsReleaseFailure(t *testing.T) {
 	}
 	if at := a.logs.attrs("rewind_fence_release_failed"); at["err"] == nil {
 		t.Errorf("반납 실패 줄에 err 가 없다: %v", at)
+	}
+}
+
+// 발행 조립점의 S3 클라이언트(newPublishS3Client)는 오류 본문을 상한까지만 읽는다(D3 · POK-384). 가짜 S3 는 AWS_CA_BUNDLE 로 믿는
+// TLS 서버이고 PUT 에 상한(s3errbody.MaxBytes)의 64배인 412 본문으로 답한다 — 설정 적재의 CA 묶음 해석이 그대로 돌고, 오류는
+// ErrTooLarge 를 싣고, 상태 코드 412 가 남고, 요청은 하나다. newPublisher 가 newPublishS3Client 를 쓰는지는 이 시험이 고정하지
+// 못한다(부팅 요청은 본문 없는 HEAD 뿐) — 코드 리뷰 몫이다.
+func TestPublishS3ClientCapsErrorBody(t *testing.T) {
+	assemblyCredentialsEnv(t)
+	var puts atomic.Int32
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut {
+			w.WriteHeader(http.StatusNotImplemented)
+			return
+		}
+		puts.Add(1)
+		_, _ = io.Copy(io.Discard, r.Body)
+		respondHuge(w, http.StatusPreconditionFailed)
+	}))
+	t.Cleanup(srv.Close)
+	trustFakeS3Cert(t, srv)
+	cfg := assemblyCfg(t, srv.URL)
+
+	_, client, err := newPublishS3Client(t.Context(), cfg)
+	if err != nil {
+		t.Fatalf("newPublishS3Client 실패: %v", err)
+	}
+	_, err = client.PutObject(t.Context(), &s3.PutObjectInput{
+		Bucket: aws.String(assemblyBucket), Key: aws.String("dvr/demo/sess-1/index.m3u8"), Body: strings.NewReader("x"),
+	})
+
+	if !errors.Is(err, s3errbody.ErrTooLarge) {
+		t.Errorf("PutObject err = %v, want ErrTooLarge", err)
+	}
+	var respErr *awshttp.ResponseError
+	if !errors.As(err, &respErr) || respErr.HTTPStatusCode() != http.StatusPreconditionFailed {
+		t.Errorf("PutObject err = %v, want 상태 412 인 awshttp.ResponseError", err)
+	}
+	if n := puts.Load(); n != 1 {
+		t.Errorf("PUT %d번, want 1", n)
+	}
+}
+
+// hugeChunk 는 거대 오류 본문 흉내 서버가 되풀이해 쓰는 32KiB 조각이다 — 한 번만 할당한다.
+var hugeChunk = bytes.Repeat([]byte("x"), 32<<10)
+
+// respondHuge 는 status 와 hugeChunk 를 128번 이은 4MiB 본문(상한 s3errbody.MaxBytes 의 64배)으로 답한다. 클라이언트가 먼저 닫으면
+// 쓰기를 멈춘다.
+func respondHuge(w http.ResponseWriter, status int) {
+	w.Header().Set("Content-Type", "application/xml")
+	w.WriteHeader(status)
+	for range 128 {
+		if _, err := w.Write(hugeChunk); err != nil {
+			return
+		}
 	}
 }
