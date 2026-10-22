@@ -1198,6 +1198,8 @@ aws ssm start-session --target <instance-id>
     elif [[ -L "${DEMO_DIR}/.env.next" || ( -e "${DEMO_DIR}/.env.next" \
         && ! -f "${DEMO_DIR}/.env.next" ) ]]; then
       echo '멈춤: .env.next 가 일반 파일이 아니거나 링크다 — 쓰지 않았다'
+    elif [[ -e "${DEMO_DIR}/.env.next" ]]; then
+      echo '멈춤: .env.next 가 남아 있다 — 아래 재시도 지우기 블록부터'
     elif [[ -s "${DEMO_DIR}/.env.pre-T.bak" ]]; then
       {
         grep -E '^(DEMO_HOME|STREAM_KEY_RESOLVE_TOKEN)=' "${DEMO_DIR}/.env"
@@ -1234,6 +1236,10 @@ aws ssm start-session --target <instance-id>
 `.env.next` 에는 `>` 로 쓰지 않고 「멈춤」을 낸다. 재시도나 5 단계가 이 셋(링크 · 일반
 파일 아님 · root 전용 아님)으로 「멈춤」을 내면 지우거나 고치지 말고 `ls -la "${DEMO_DIR}"`
 출력을 들고 kty 가 정한다.
+
+5 단계는 일반 파일로 남은 `.env.next` 에도 쓰지 않고 「멈춤: … 남아 있다」를 낸다 — `>` 는
+있던 파일의 모드를 그대로 두므로 `chmod` 전까지 비밀이 옛 모드로 남는다. 이 멈춤은 kty 를
+기다리지 않는다 — 아래 블록으로 지우고 2 단계부터 다시 친다.
 
 ```bash
 if [[ "$(id -u)" != 0 || -z "${DEMO_DIR:-}" ]]; then
