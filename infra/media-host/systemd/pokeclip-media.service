@@ -5,9 +5,14 @@
 #   있어 둘 중 하나가 끝나면(종료 코드 0 이어도) compose 가 끝나고, Restart=always
 #   가 20초 뒤 전체를 다시 띄운다. 사이드카 등은 compose 의 엔진 재시작
 #   (on-failure)이 혼자 다시 띄우므로 이 유닛은 다시 뜨지 않는다.
-# - 재시도 한도가 없다(StartLimitIntervalSec=0). 선행 점검 · CDN 비밀 · NAT ·
-#   RDS 가 몇 분 끊겨도 failed 로 굳지 않고, 돌아오면 20초 안에 스스로 뜬다.
-#   그동안 저널에 「MEDIA PREREQ FAIL」 · 「MEDIA START BLOCKED」 가 되풀이된다.
+# - 재시도 한도가 없다(StartLimitIntervalSec=0). 선행 점검이 실패하거나 CDN
+#   비밀 조회(Secrets Manager · NAT)가 몇 분 끊겨도 failed 로 굳지 않고 다시
+#   시도한다. RestartSec=20 은 시도 사이의 대기일 뿐 복구 시간의 상한이 아니다 —
+#   CDN 비밀 조회(aws)에는 시간 상한이 없어, 걸려 있는 동안에는 그 조회가 끝나야
+#   다음 시도로 넘어간다. 그동안 저널에 「MEDIA PREREQ FAIL」 ·
+#   「MEDIA START BLOCKED」 가 되풀이된다.
+# - RDS 장애는 이 유닛의 재시도 경로가 아니다. 사이드카가 엔진 재시작
+#   (on-failure)으로 그 컨테이너만 다시 뜬다.
 # - systemctl stop 은 다시 띄우지 않는다. ExecStop 이 compose 를 내리고,
 #   ExecStopPost 가 끝난 방식과 상관없이 한 번 더 compose 를 내린 뒤 tmpfs 의
 #   렌더 파일(비밀)을 지운다.
