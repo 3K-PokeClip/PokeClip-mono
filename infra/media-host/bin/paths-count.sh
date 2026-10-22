@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# MediaMTX 경로 목록 건수 — 교체 런북 5-3 의 4(ingest 전환 직전 게이트)와 c6
-# 실물 확인이 쓴다. 상자에서 SSM 으로 돌린다(실행 직전 승인).
+# MediaMTX 경로 목록 건수 — 교체 런북 5-3 의 4(ingest 전환 직전 게이트)와 운영
+# MediaMTX 설정의 로컬 compose 실측이 쓴다. 상자에서 SSM 으로 돌린다(실행 직전 승인).
 #
 # 사이드카 컨테이너 안의 고정 sh -c 로 9997 을 자격과 함께 조회한다(조회 방식 ·
 # 자격 규칙은 lib/mtx_paths.sh). 경로 이름(streamid)은 내지 않는다.

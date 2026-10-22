@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# 루프백 시험(c5) 전용 가짜 curl — `curl -q --config -` 꼴만 받는다. argv · 환경과
+# 루프백 시험 전용 가짜 curl — `curl -q --config -` 꼴만 받는다. argv · 환경과
 # 표준 입력(설정 — Bearer 가 든 유일한 통로)을 기록하고 상태 코드를 낸다.
 #
 # PCBENCH_FAKE_CURL_MODE:

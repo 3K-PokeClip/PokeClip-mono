@@ -123,7 +123,7 @@ paths::expect_request_and_no_leak() {
 }
 
 #######################################
-# 사이드카 자격이 하나라도 비면 요청 전에 credentials 로 실패한다(kty 86차 R2).
+# 사이드카 자격이 하나라도 비면 요청 전에 credentials 로 실패한다.
 #######################################
 paths::case_credentials_missing() {
   local ok=0 mode user

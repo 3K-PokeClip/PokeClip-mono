@@ -227,7 +227,7 @@ set -a; . /etc/pokeclip-media/media.env; set +a
 
 | 스크립트 | 쓰는 자리 | 읽는 `media.env` 키 |
 |---|---|---|
-| `paths-count.sh` | 교체 4(ingest 전환 직전 게이트) · c6 실물 확인 | 없음 |
+| `paths-count.sh` | 교체 4(ingest 전환 직전 게이트) · 운영 MediaMTX 설정의 로컬 compose 실측 | 없음 |
 | `paths-list.sh` | force 1 · 6, 리스 만료 중단 통지 | 없음 |
 | `loopback-health.sh [--passphrase] <ingestStreamId>` | 교체 3 · O7f 9 | `CDN_SECRET_ARN` · `LOOPBACK_SENDER_IMAGE` · `MEDIA_LIVE_PORT` · (`--passphrase` 면) `TEST_STREAM_KEY_SECRET_ARN` |
 | `secret-count.sh [--passphrase] box` | O7f 9 · O8a 3 | `CDN_SECRET_ARN` · (`--passphrase` 면) `TEST_STREAM_KEY_SECRET_ARN` |
@@ -280,7 +280,7 @@ set -a; . /etc/pokeclip-media/media.env; set +a
 *   `--passphrase` 는 M15 반영 뒤에만 쓴다. 그 뒤에는 거꾸로 기본 갈래가 거부되는
     것이 정상이다.
 *   `--passphrase` 일 때 passphrase 는 송출기 argv 에 실린다. 송출이 도는 수십
-    초 동안 상자 프로세스 목록 · `docker inspect` 에 보인다(kty 20차 수용 —
+    초 동안 상자 프로세스 목록 · `docker inspect` 에 보인다(설계에서 받아들인 위험 —
     상자 셸에 들어온 사람은 이미 인스턴스 역할로 비밀을 읽을 수 있다).
 *   송출기는 `linuxserver/ffmpeg` 다이제스트 고정 미러를 `docker run --rm
     --network container:<mediamtx>` 로 띄운다. 모든 cap 을 버리고, 읽기 전용
@@ -600,17 +600,20 @@ prod 상자에 깔 도구의 판이다. M9 user_data 가 같은 값으로 설치
 
 ## 출처
 
-*   계획 POK-299 M2 c1–c8 절, 착수 덧붙임 편차 1 · 2 · 5 · 20 · 23 · 25 · 26 ·
-    30 · 32 · 34 · 35 · 36, 결함 예측표, 로그 설계 절.
-*   kty 결정: 20차(루프백 passphrase 노출 수용) · 82차(무인증 관리 항목 삭제) ·
-    86차(paths 조회 꼴 · 자격 필수 · 루프백 순서) · 88차(API 비밀번호 기동마다
-    생성 · 운영자 API 사용자 없음) · 89차(침해 대응 상세 절차는 보안 런북으로).
+*   계획 POK-299 의 M2 절과 착수 때 계획에서 바꾼 점(재기동 정책 `on-failure` ·
+    로그 설계 · CA 번들 env 이월 · 0.0.0.0 게시와 SG 경계 · 루프백 순서 · API
+    비밀번호 · 무인증 관리 항목 정리 · 단독 restart 관찰 · 두 단계 정지 · 크래시
+    경로 정리), 결함 예측표, 로그 설계 절 — 저장소 밖 작업 기록.
+*   설계 결정: 루프백 passphrase 의 argv 일시 노출 수용 · 무인증 관리 항목 삭제 ·
+    paths 조회 꼴(사이드카 안 고정 `sh -c`) · 자격 필수 · 루프백 순서(M15 전에는
+    passphrase 없이) · API 비밀번호 기동마다 생성 · 운영자 API 사용자 없음 · 침해
+    대응 상세 절차는 보안 런북으로.
 *   사이드카 관리 API 자격 PR(3K-PokeClip/PokeClip-mono#291) 본문 「인프라 쪽
     전달 사항」 — 비밀번호 파일 규칙 · 배포 신호 · 즉시 롤백.
-*   M2 실측 기록: c6 사례 14(단독 restart) · c6 설정 조회(CDN 비밀 평문) · c7
-    탐침 상자(정지 두 단계 · AL2023 docker 25.0.16 · compose 5.5.0) · c8 판
-    조회(2026-10-20).
-*   M2 c3 · c6 보안 리뷰(0.0.0.0 게시 · 사이드카 자격 전권).
+*   실측 기록(저장소 밖, 2026-10-20): 로컬 compose 의 MediaMTX 단독 restart(사례
+    14) · 설정 조회 응답의 CDN 비밀 평문 · 탐침 상자(정지 두 단계 · AL2023
+    docker 25.0.16 · compose 5.5.0) · compose 판 조회.
+*   보안 리뷰(0.0.0.0 게시 · 사이드카 자격 전권).
 *   [Docker 문서 「Start containers automatically」](https://docs.docker.com/engine/containers/start-containers-automatically/)
     — 재시작 정책과 호스트 프로세스 관리자를 섞지 말라는 경고.
 

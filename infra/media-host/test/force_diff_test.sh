@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# ops/force-diff.sh 시험 — 계획 M2 c5 「복귀 대조 = force-diff.sh」(설계 5-3
+# ops/force-diff.sh 시험 — 복귀 대조(설계 5-3
 # force 6: A − B(송출 중) − 종료 확인 = ∅ 이면 복구 완료).
 #
 # 입력은 실물 꼴이다 — A · B 는 paths-list.sh 출력(한 줄에 ID 하나, 정렬 안

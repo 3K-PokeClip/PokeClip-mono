@@ -4,8 +4,9 @@
 # shellcheck disable=SC2154
 #
 # 유닛 재기동 시험(unit_restart_test.sh)의 동작 사례 — 설치한 시험 유닛
-# (pcbench-edge-proxy)을 systemctl 로 움직이고 판별 신호를 본다(시나리오 ① – ④ ·
-# ③ 확장 · ⑥ · ⑦a · ⑦b · ⑧ · 기동 중 정지).
+# (pcbench-edge-proxy)을 systemctl 로 움직이고 판별 신호를 본다(사례 제목의
+# 기호 ① – ④ · ③ 확장 · ⑥ · ⑦a · ⑦b · ⑧ 와 기동 중 정지 — 기호와 사례 번호의
+# 대응은 unit_restart_test.sh 머리 주석).
 #
 # 부르는 쪽(unit_restart_test.sh)이 정하는 값을 읽는다: PROJECT · UNIT_NAME ·
 # ECHO_ADMIN_PORT · UNIT_COMPOSE · SYSTEMCTL_TIMEOUT · UNIT_FILE · DROPIN_DIR ·

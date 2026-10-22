@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 #
-# bin/paths-count.sh 시험 — 계획 M2 c5 「c5 운영 확인 스크립트」 의
-# paths-count 와 kty 85 · 86차(자격 필수 · 401 은 auth).
+# bin/paths-count.sh 시험 — 건수 판정과 자격 규칙(자격 필수 · 401 은 auth).
 #
 # 스크립트를 빈 환경(env -i)에서 돌린다. PATH 맨 앞에는 가짜 docker · aws ·
 # curl · journalctl 과 grep 감시 래퍼(test/ops_fakebin)만 둔다. 가짜 docker

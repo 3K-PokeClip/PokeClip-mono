@@ -5,7 +5,7 @@
 # 돌린다. harness.sh · proxy_requests.sh 를 먼저 source 하고,
 # start_media::configure 로 프로젝트 · 시험 compose · 준비 상태를 넘긴다.
 #
-# 스크립트가 읽는 값은 계획 c4 시험 이음매 표 「사례 13」 열뿐이다 — 기대
+# 스크립트가 읽는 값은 시험 이음매에서 사례 13 에 정한 값뿐이다 — 기대
 # compose 판 · DOCKER_CONFIG(스크래치) · PATH(test/fakebin 을 앞에) ·
 # MEDIA_COMPOSE_FILE(시험 compose) · MEDIA_MTX_TEMPLATE · 가짜 ARN · 가짜
 # 레지스트리 호스트 · RUNTIME_DIR(스크래치) · 자기 uid/gid(MediaMTX · 사이드카) ·
@@ -22,7 +22,8 @@
 # 않으므로, 이 사례들의 nginx 는 그 설정으로 뜬다(사례 15 준비가 그 설정의
 # 렌더에 닿기 전에 실패하면 nginx-a.conf 그대로다).
 #
-# 제품 스크립트 · c4 시험 자산이 없으면 사례가 FAIL 이다(건너뛰지 않는다).
+# 제품 스크립트 · 시작 스크립트 시험 자산(가짜 aws · 자격 도우미 · 시험 MediaMTX
+# 템플릿)이 없으면 사례가 FAIL 이다(건너뛰지 않는다).
 #
 # 이 파일은 source 해서 쓴다(실행하지 않는다). bash 3.2 에서도 돈다.
 
@@ -79,7 +80,7 @@ start_media::configure() {
 }
 
 #######################################
-# 공통 선행 — 제품 스크립트 · c4 시험 자산 · 준비 상태.
+# 공통 선행 — 제품 스크립트 · 시작 스크립트 시험 자산 · 준비 상태.
 # Globals:
 #   start_media_host_dir, start_media_ready, start_media_setup_reason
 #######################################

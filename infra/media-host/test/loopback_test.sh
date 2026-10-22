@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 #
-# bin/loopback-health.sh 시험 — 계획 M2 c5 「c5 루프백 헬스」(노출 표 · 시험
-# 단언)와 kty 86차(R3 공개 토큰은 인자 · R4 기본은 passphrase 없이 송출 —
-# passphrase 갈래는 --passphrase, 착수 덧붙임 편차 23) · kty 78차 Q3 나(송출기 =
-# 다이제스트 고정 linuxserver/ffmpeg 을 docker run --rm).
+# bin/loopback-health.sh 시험 — 비밀 노출 범위와 갈래: 공개 토큰은 인자, 기본은
+# passphrase 없이 송출(송출 인증 반영 전 상자는 익명 publish), passphrase 갈래는
+# --passphrase. 송출기는 다이제스트 고정 linuxserver/ffmpeg 을 docker run --rm.
 #
 # 스크립트를 빈 환경(env -i)에서 돌린다. PATH 맨 앞에는 가짜 docker(ps · run —
 # run 은 송출 중 표식을 두고 TERM 까지 돈다) · aws · curl(--config - 의 표준
@@ -85,7 +84,7 @@ has_pair() {
 }
 
 #######################################
-# 송출기 호출이 하나이고 그 argv 가 계획 꼴인지 본다 — 고유 이름 · 같은 값의
+# 송출기 호출이 하나이고 그 argv 가 정한 꼴인지 본다 — 고유 이름 · 같은 값의
 # 라벨 · mediamtx 망 칸 · 권한 축소 옵션 전부 · 금지 옵션 0 · 고정 이미지 ·
 # ffmpeg 조용히 · srt 루프백 주소 · GOP.
 # Arguments:
@@ -237,8 +236,8 @@ case_default_ok() {
   return "${ok}"
 }
 
-# 사례 2 — --passphrase: passphrase 는 송출기 argv 한 곳에만(kty 20차 수용
-# 범위), CDN 비밀은 그대로 0.
+# 사례 2 — --passphrase: passphrase 는 송출기 argv 한 곳에만(받아들인
+# 노출 범위), CDN 비밀은 그대로 0.
 case_passphrase_ok() {
   local ok=0 found
   setup_loopback

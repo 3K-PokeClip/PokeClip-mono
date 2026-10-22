@@ -5,11 +5,11 @@
 #
 # 사용: loopback-health.sh [--passphrase] <ingestStreamId>
 #   ingestStreamId  시험 계정의 공개 스트림 토큰(26자 Crockford Base32 —
-#                   streamid 의 r 값 · 경로 이름. 비밀이 아니다 — kty 86차 R3).
+#                   streamid 의 r 값 · 경로 이름. 비밀이 아니다).
 #   --passphrase    시험 스트림 키 passphrase 를 실어 송출한다. 송출 인증(M15
 #                   응답기)이 반영된 상자에서만 쓴다. 그 전의 상자는 익명
 #                   publish 라 passphrase 를 실으면 MediaMTX 가 끊는다 — 기본은
-#                   싣지 않는다(kty 86차 R4 · 착수 덧붙임 편차 23). M15 뒤에는
+#                   싣지 않는다. M15 뒤에는
 #                   거꾸로 기본 갈래가 거부되는 것이 정상이다.
 #
 # 하는 일:
@@ -35,7 +35,7 @@
 #      `docker rm -f` 하고 라벨로 남은 것이 0 인지 본다. 남으면 OK 를 내지
 #      않는다.
 #
-# 노출(kty 20차 수용 범위 — 계획 c5 노출 표): CDN 비밀은 curl 표준 입력 밖
+# 노출(설계에서 받아들인 범위): CDN 비밀은 curl 표준 입력 밖
 # 어디에도 없다. passphrase(--passphrase 일 때만)는 송출기 argv 에만 있다 — 송출이
 # 도는 동안 상자 프로세스 목록 · docker inspect 에 보인다(한계 — 5 의 정리로
 # 스크립트가 끝난 뒤에는 남지 않는다).

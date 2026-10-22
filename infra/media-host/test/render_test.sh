@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 #
-# Media 상자 템플릿 렌더 시험 — 계획 M2 c3 「render_test 단언」 과 착수 덧붙임
-# 「render_test 추가 단언」.
+# Media 상자 템플릿 렌더 시험 — 렌더 결과의 구조 단언.
 #
 # prod 와 같은 렌더 함수(test/lib/render.sh — terraform console 의
 # templatefile())로 compose.yml.tmpl · nginx/nginx.conf.tmpl · mediamtx.yml.tmpl
@@ -71,7 +70,7 @@ readonly CASE_COUNT=26
 # 기대값 jq 프로그램이 함께 쓰는 정의. 입력은 그 갈래의 변수 JSON 이다.
 #   services — 렌더에 있어야 할 서비스(응답기 · janitor 는 변수가 차 있을 때만).
 #   attached — compose 출력이 연결되는 서비스(시작 스크립트의 --attach 집합.
-#              c4 start_test 가 같은 집합을 시작 스크립트 쪽에서 단언한다).
+#              start_test 가 같은 집합을 시작 스크립트 쪽에서 단언한다).
 #   nginx_cap_add — cap_drop: [ALL] 뒤 nginx 에만 되살리는 cap. 공식 이미지는
 #              master 가 root 로 떠 임시 디렉터리를 워커 계정(nginx)에 chown 하고
 #              워커가 setgid · setuid 로 그 계정이 된다 — 셋 중 하나만 빠져도

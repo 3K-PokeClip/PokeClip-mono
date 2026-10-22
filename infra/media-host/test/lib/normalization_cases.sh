@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 #
 # 앞단 프록시 계약 시험의 정규화 우회 사례 — 사례 4 · 15 에 더하는 확인과
-# 덧붙임 사례 1b(live).
+# 사례 1b(live).
 #
 # nginx 는 경로의 %XX 를 풀고 점 구간 · 겹 슬래시를 접은 경로($uri)로 location
 # 을 고른다. 앞단 인가(CloudFront 서명 쿠키 정책)는 원문 경로를 본다. 둘이

@@ -22,7 +22,7 @@
 #
 # 대조 값: CDN 비밀(CDN_SECRET_ARN). --passphrase 면 시험 스트림 키 passphrase
 # (TEST_STREAM_KEY_SECRET_ARN)도 — passphrase 를 싣는 루프백은 송출 인증(M15)
-# 반영 뒤에만 돈다(kty 86차 R4). 값은 Secrets Manager 에서 직접 읽어 셸 변수에만
+# 반영 뒤에만 돈다. 값은 Secrets Manager 에서 직접 읽어 셸 변수에만
 # 둔다(argv 에는 ARN 만). box 면 사이드카의 MediaMTX API 비밀번호(시작 스크립트가
 # RUNTIME_DIR/mtx_api_pass 에 둔 이번 기동의 값 — root 로 읽는다)와 그 Basic
 # 값(「pokeclip-sidecar:<비밀번호>」 의 base64 — 줄바꿈 없이)도 대조한다. 한계:

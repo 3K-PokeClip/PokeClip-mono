@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# secret-count 시험(c5) 전용 가짜 journalctl — argv · 환경을 기록하고 심어 둔
+# secret-count 시험 전용 가짜 journalctl — argv · 환경을 기록하고 심어 둔
 # 저널을 낸다.
 #
 # 받는 꼴(그 밖은 종료 2):

@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 #
-# 시작 · 정지 스크립트 시험 — 계획 M2 c4 「start_test 단언」 과 착수 덧붙임
-# 「start_test 추가」(restart 를 빠뜨린 서비스 · 렌더 제자리 쓰기 · 중간에 끊긴
-# 렌더의 임시 파일 · down 실패 뒤 렌더 삭제 · 비밀 변수 export), 그리고 c6 의
-# 사이드카 관측 자격(기동마다 만드는 API 비밀번호 · 토큰 둘 — 사례 30 – 35 는
+# 시작 · 정지 스크립트 시험 — 성공 · 실패 갈래와 restart 를 빠뜨린 서비스 · 렌더
+# 제자리 쓰기 · 중간에 끊긴 렌더의 임시 파일 · down 실패 뒤 렌더 삭제 · 비밀 변수
+# export, 그리고 사이드카 관측 자격(기동마다 만드는 API 비밀번호 · 토큰 둘 — 사례 30 – 35 는
 # lib/start_api_pass_cases.sh).
 #
 # bin/start-media.sh · bin/stop-media.sh 를 빈 환경(env -i)에서 돌린다. PATH 맨
@@ -98,7 +97,7 @@ template_no_restart_services() {
 
 #######################################
 # 사례 1 — 성공 갈래: up argv(--force-recreate — 유닛 밖에 남은 컨테이너가 옛
-# 렌더를 붙든 채 재사용되지 않게 · c9 · --remove-orphans — 렌더에서 빠진
+# 렌더를 붙든 채 재사용되지 않게 · --remove-orphans — 렌더에서 빠진
 # 서비스의 옛 컨테이너가 같은 망 칸에 남지 않게) · -p · -f · 렌더 내용 · 권한 ·
 # chown argv · aws argv · 비밀 노출 0 · exec(가짜 docker 가 스크립트와 같은
 # 프로세스) · up 의 종료 코드가 그대로 · docker 가 점검한 DOCKER_CONFIG 를 받음 ·

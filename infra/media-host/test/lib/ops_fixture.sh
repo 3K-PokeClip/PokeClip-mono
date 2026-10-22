@@ -2,8 +2,8 @@
 # 상수 · 상태 변수는 source 하는 시험이 읽고 쓴다.
 # shellcheck disable=SC2034
 #
-# 운영 확인 스크립트 시험(c5 — loopback · paths_count · paths_list ·
-# secret_count)의 실행 도구. 사례마다 깨끗한 디렉터리를 만들고, 스크립트를 빈
+# 운영 확인 스크립트 시험(loopback · paths_count · paths_list · secret_count)의
+# 실행 도구. 사례마다 깨끗한 디렉터리를 만들고, 스크립트를 빈
 # 환경(env -i)에 정해진 값만 넣어 돌리고, 가짜 명령(test/ops_fakebin)이 남긴
 # 기록을 읽는다.
 #

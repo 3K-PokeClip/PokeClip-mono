@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# 앞단 프록시(nginx) 계약 시험 — 계획 M2 c1 사례 1 ~ 15 와 착수 덧붙임 사례
-# 16 · 17, live 정규화 우회를 겨누는 덧붙임 사례 1b.
+# 앞단 프록시(nginx) 계약 시험 — 사례 1 ~ 17 과 live 정규화 우회를 겨누는 사례
+# 1b.
 #
 # 시험 compose(test/compose.contract.yml)를 띄운다. mediamtx 자리에는
 # 에코(test/echo)가 서서 망 칸 주인 노릇을 하고(127.0.0.1 의 8888 · 9996 · 9997

@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 #
-# bin/secret-count.sh 시험 — 계획 M2 c5 「secret-count.sh」 · 착수 덧붙임
-# 편차 2(box 입력 = 유닛 저널 + 태그 저널 셋 + mediamtx · nginx docker logs —
-# 사이드카는 다시 뜬 앞 컨테이너 로그까지 남는 태그 저널로) · kty 86차
-# (passphrase 대조는 --passphrase 갈래에서만) · box 의 사이드카 API 비밀번호
+# bin/secret-count.sh 시험 — box 입력(유닛 저널 + 태그 저널 셋 + mediamtx ·
+# nginx docker logs — 사이드카는 다시 뜬 앞 컨테이너 로그까지 남는 태그 저널로) ·
+# passphrase 대조는 --passphrase 갈래에서만 · box 의 사이드카 API 비밀번호
 # 대조(시작 스크립트가 RUNTIME_DIR 에 둔 이번 기동의 값 · Basic 꼴).
 #
 # 스크립트를 빈 환경(env -i)에서 돌린다. PATH 맨 앞에는 가짜 docker · aws ·
@@ -183,7 +182,7 @@ case_box_exited_container() {
   return "${ok}"
 }
 
-# 사례 5 — passphrase 는 --passphrase 갈래에서만 대조한다(kty 86차 R4).
+# 사례 5 — passphrase 는 --passphrase 갈래에서만 대조한다.
 case_passphrase_branch() {
   local ok=0
   setup_box
