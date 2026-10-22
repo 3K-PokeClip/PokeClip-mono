@@ -42,10 +42,10 @@ public final class SecretsLocalStackFixture {
 
     private SecretsLocalStackFixture() { }
 
-    /** 스트림키 저장소를 aws로 켠 컨텍스트. 병행 기간 dev와 같게 양쪽에서 지운다. */
+    /** 스트림키 저장소를 aws로 켠 컨텍스트. 병행이 끝난 dev와 같게 Secrets Manager에서만 지운다. */
     public static void registerAws(DynamicPropertyRegistry registry) {
         registry.add("pokeclip.stream-key-secret-store.type", () -> "aws");
-        registry.add("pokeclip.stream-key-secret-store.retire-from", () -> "postgres,aws");
+        registry.add("pokeclip.stream-key-secret-store.retire-from", () -> "aws");
         registry.add("pokeclip.stream-key-secret-store.ref-prefix", () -> PREFIX);
         registry.add("pokeclip.stream-key-secret-store.endpoint", SecretsLocalStackFixture::endpoint);
         registry.add("pokeclip.stream-key-secret-store.region", SecretsLocalStackFixture::region);
