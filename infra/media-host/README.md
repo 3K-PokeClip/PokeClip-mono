@@ -348,6 +348,8 @@ root 로 읽음)와 그 Basic 값(`pokeclip-sidecar:<비밀번호>` 의 base64)�
 *   로깅 옵션에 `env` · `labels` 를 넣지 않는다 — 컨테이너 환경이 저널 필드로
     남는다.
 *   nginx 접근 로그에는 `Authorization` 과 쿼리 문자열을 싣지 않는다.
+*   nginx 오류 로그(표준 오류 → 유닛 저널)에는 요청 줄(쿼리 포함) · Referer 가
+    실린다. 원문을 SSM 출력으로 내지 않는다(건수만 — 위 규칙).
 
 ### 기동 확인 신호
 
@@ -595,6 +597,10 @@ prod 상자에 깔 도구의 판이다. M9 user_data 가 같은 값으로 설치
 *   **paths 조회의 자격 정규화:** 사이드카는 자격 파일의 앞뒤 공백 · 끝 CRLF 를
     떼지만 paths 두 스크립트는 그러지 않는다. 자격 파일은 시작 스크립트가 16진
     64자 + LF 로만 쓰고 사용자 이름은 고정이라 갈리는 입력이 생기지 않는다.
+*   **상시 서비스의 실행 상한:** compose 의 상시 서비스(mediamtx · nginx ·
+    사이드카 · 응답기 · janitor)에 읽기 전용 루트(`read_only`) · 프로세스 수
+    상한(`pids_limit`) · 메모리 상한을 두지 않았다. 서비스마다 쓰는 자리와 기동
+    메모리를 재야 정할 수 있어 아래 「후속」 으로 넘긴다.
 *   **paths 조회의 `pageCount` 산술:** 2^63 급 값이면 셸 산술이 넘쳐 여러 페이지
     판정을 비켜 갈 수 있다. 그 값은 같은 망 칸 MediaMTX API 가 주는 것이라 그
     값을 위조할 수 있으면 응답 전체가 이미 신뢰 밖이고, 실제 경로 수로는 생기지
@@ -607,10 +613,10 @@ prod 상자에 깔 도구의 판이다. M9 user_data 가 같은 값으로 설치
 | 받는 쪽 | 할 일 |
 |---|---|
 | M9 | 템플릿 변수 키 집합에 `detached_log_driver` 를 넣고, 모듈이 문자 그대로 `"journald"` 를 넘기는지 단언한다. `daemon.json` 로그 옵션에 `env` · `labels` 계열 0 |
-| M9 | 이미지 변수 꼴 `^[^@]+@sha256:[0-9a-f]{64}$`. 다이제스트가 비면 `…@` 로 조립하지 않고 빈 문자열을 넘긴다(응답기 · janitor) |
+| M9 | 이미지 변수 꼴 `^[^@]+@sha256:[0-9a-f]{64}$`. 참조가 ECR 레지스트리 호스트(`media.env` 의 `ECR_REGISTRY_HOST` 와 같은 값) + `/` 로 시작하는지도 단언한다. 다이제스트가 비면 `…@` 로 조립하지 않고 빈 문자열을 넘긴다(응답기 · janitor) |
 | M9 | Media SG 인그레스 단언(위 「SG 가 유일한 경계」). 인그레스 포트에 8888 · 9996 · 9997 0 |
 | M9 | prod 프록시 포트 넷(nginx 템플릿 변수)을 모듈이 넘기고 모듈 시험에서 단언한다. user_data 렌더본은 렌더 파일 · nginx 설정 bind 의 긴 문법(`create_host_path: false`)을 그대로 쓴다 — 원본이 없으면 그 컨테이너만 기동에 실패한다. 이 PR 의 유닛 · 스크립트 · compose 템플릿을 함께 설치한다 |
-| M9 | 설치 단언: `bin/lib/` 두 파일이 스크립트와 같은 상대 위치에 있고 내용이 저장소와 같다. `bin/` · `bin/lib/` 소유 `root:root`, 스크립트 0755 · lib 0644. `media.env`(유닛 `EnvironmentFile`)의 소유 · 모드(root 만 쓰기). 압축 user_data 16 KiB 게이트를 다시 잰다 |
+| M9 | 설치 단언: `bin/lib/` 두 파일이 스크립트와 같은 상대 위치에 있고 내용이 저장소와 같다. `bin/` · `bin/lib/` 소유 `root:root`, 스크립트 0755 · lib 0644. `media.env`(유닛 `EnvironmentFile`)의 소유 · 모드(root 만 쓰기). `/etc/pokeclip-media/`(디렉터리 · `mediamtx.yml.tmpl` · `compose.yml` · `nginx.conf`)와 유닛 파일도 소유 `root:root` · 그룹 · 기타 쓰기 불가. 압축 user_data 16 KiB 게이트를 다시 잰다 |
 | M9 | prod 엔진의 비특권 포트 하한(`net.ipv4.ip_unprivileged_port_start`)을 상자에서 잰다. nginx 는 cap CHOWN · SETGID · SETUID 만 받고 `NET_BIND_SERVICE` 가 없다 — 프록시 포트가 하한보다 낮으면 nginx 가 기동하지 못한다 |
 | M9 · O7f · edge-secrets 런북 | CDN 비밀 생성 형식을 고정한다: 16진 또는 패딩 없는 base64url. 허용 글자는 `[A-Za-z0-9._+=-]` 이고 표준 base64 의 `/` 는 MediaMTX 가 거부해 기동이 막힌다. 입력 도구 · 런북 문구에 반영 |
 | M9 | 유닛 하드닝 지시어(지금은 `LimitCORE=0` 뿐)를 상자에서 정한다 — docker CLI · `/run` 쓰기와 부딪히지 않는 지시어만 실측으로 고른다 |
@@ -620,11 +626,12 @@ prod 상자에 깔 도구의 판이다. M9 user_data 가 같은 값으로 설치
 | M9 | prod 인스턴스 아키텍처를 정한다(O7c 플랫폼 · 위 arm64 주의) |
 | M9 런북 · O7e 5 | 사이드카 기동 판정은 태그 저널(`-t pokeclip-media-sidecar`)로. DB 장애 때는 compose 전체가 아니라 사이드카만 다시 뜬다(송출 유지) — 「5분 MainPID 무변화」 는 mediamtx · nginx 감시로만 읽는다. 판정 조건에 「관찰 창 5분 동안 사이드카 태그 저널의 종료 줄 0 건」 을 넣고, 먼저 `docker info` 로 로그 드라이버(journald)를 확인한다 |
 | M7 · O7c | 루프백 송출기 ECR 저장소 · 미러 하나를 더한다 |
+| M9 또는 별도 하드닝 | 상시 서비스에 `read_only`(쓰는 자리는 tmpfs · 볼륨으로) · `pids_limit` · 메모리 상한을 둔다. 값은 상자에서 서비스별 쓰기 자리 · 기동 메모리를 재서 정하고 `render_test.sh` 에 단언을 더한다 |
 | I1-1 | RDS CA 번들 경로 env 는 지금 템플릿에 없다. **I1-1 PR 이 `compose.yml.tmpl` 사이드카 env 한 줄과 `render_test.sh` 단언을 더한다.** DB 연결 성공 고정 줄도 I1-1 이 정한다 |
 | I1-6 | 제어면 서버가 생기면 `control_upstream` 을 채운다. control 헬스는 nginx 경로라, 사이드카가 다시 뜨는 동안에도 healthy 로 보이고 제어면은 502 를 낸다 |
 | kty · 보안 | 보안 런북: 침해 대응 — 증거 보존 방식 · 저널 영속 여부(M9 의 journald 저장 방식 — 휘발 저널은 격리 뒤 꺼낼 길이 없다) · **정지 전 컨테이너 증거 보존 여부**(서비스를 멈추면 compose down 이 컨테이너 파일 시스템과 json-file 로그를 지운다 · 정지 승인을 기다리는 동안 서비스는 계속 돈다) · 격리 수단(IMDS 차단 필수 · 기존 연결 차단) · 역할 세션 취소 뒤 인라인 정책 정리 시점 · 비밀 교체와 상자 교체 순서 |
 | 포크 mediamtx 트랙 | 다음 포크 태그에서 설정 조회 응답의 `hlsCDNSecret` 을 가리고(redact), 응답에 비밀이 새지 않는지 회귀 시험을 둔다(위 「받아들인 위험」). ADR 로 남길지는 kty |
-| M15 | 응답기 자리를 채운다. passphrase 를 싣는 루프백 단계(`--passphrase`)를 런북에 더한다. 응답기가 kick 에 쓸 관리 API 자격 경로가 아직 없다(전용 사용자 · 파일 · 실행 계정). `authHTTPExclude: api` 를 두면 관리 API 인증이 풀린다. 응답기가 다시 뜨는 동안 송출 인증이 실패하는 것을 실측에 기록한다 |
+| M15 | 응답기 자리를 채운다. passphrase 를 싣는 루프백 단계(`--passphrase`)를 런북에 더한다. 응답기가 kick 에 쓸 관리 API 자격 경로가 아직 없다(전용 사용자 · 파일 · 실행 계정). `authHTTPExclude: api` 를 두면 관리 API 인증이 풀린다. MediaMTX→응답기 호출의 Basic 자격은 새 렌더 비밀이다 — 시작 스크립트의 토큰 계약(토큰 수 · 허용 글자 · 소유 · 모드)을 넓혀야 한다. 응답기가 다시 뜨는 동안 송출 인증이 실패하는 것을 실측에 기록한다 |
 | M15 | 응답기 계약 반영: 응답기 비밀은 파일로 받으므로 `*_FILE` env 이름(예: `STREAM_KEY_RESOLVE_TOKEN_FILE`)이 `render_test.sh` 의 비밀 계열 env 이름 금지(TOKEN 등)에 걸린다 — 값이 아닌 경로 env 는 허용하게 그 검사를 고친다. `authHTTPExclude` 에서 playback 이 빠지면 9996 재생이 막힌다. read 를 제외하려면 SRT 경로 잠금(`srtPublishPassphrase` · `srtReadPassphrase` · `overridePublisher: no`)을 prod 설정에 먼저 옮긴다. 포트 후보 127.0.0.1:8080 · 헬스 8081. dev-media 응답기와 다른 점(전용 제어망 · UID 10003 · 비밀 env)을 정리한다 |
 | O7f · M15 · O8a · edge-secrets 런북 | 루프백 순서: O7f 9 의 기본 루프백은 passphrase 없이 돌고 시험 경로의 공개 토큰(`<ingestStreamId>` 인자)만 있으면 된다 — O7f 8 의 시험 키(passphrase) **입력**은 M15 · O8a 로 넘어간다. 기본 `secret-count.sh box` 는 CDN 비밀(과 이번 기동 API 비밀번호)만 대조한다. M15 전까지 상자는 NLB 송출 대상 밖이라는 전제다. M15 뒤에는 기본 갈래가 거부되는 것이 정상(음성 확인)이고, `--passphrase` 갈래는 인스턴스 역할에 시험 키 ARN 읽기 권한이 있어야 한다. edge-secrets 런북의 「루프백 직전 입력」 문구도 이 순서로 고친다 |
 
