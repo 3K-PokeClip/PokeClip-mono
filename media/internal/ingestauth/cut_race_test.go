@@ -115,12 +115,14 @@ func newCutHandler(t *testing.T) *cutHandler {
 	t.Cleanup(func() { closeConnLog(conns) })
 	denyPath := filepath.Join(t.TempDir(), "deny-tokens")
 	h, err := newHandler(newTestResolver(t, auth.srv.URL), NewDenyList(denyPath, discardLogger()), conns, Options{
-		CallerIP: testCallerIP,
-		SelfIP:   testSelfIP,
-		APIUser:  testAPIUser,
-		APIPass:  NewSecret(testAPIPass),
-		Now:      clock.now,
-		Log:      discardLogger(),
+		CallerIP:   testCallerIP,
+		SelfIP:     testSelfIP,
+		APIUser:    testAPIUser,
+		APIPass:    NewSecret(testAPIPass),
+		CallerUser: testCallerUser,
+		CallerPass: NewSecret(testCallerPass),
+		Now:        clock.now,
+		Log:        discardLogger(),
 	})
 	if err != nil {
 		t.Fatalf("Setup: newHandler returned error: %v", err)
@@ -138,6 +140,7 @@ func (h *cutHandler) serveAuth(body mtxAuthBody) int {
 	r := httptest.NewRequest(http.MethodPost, "/mediamtx/auth", bytes.NewReader(raw))
 	r.RemoteAddr = netip.AddrPortFrom(testCallerIP, 40000).String()
 	r.Header.Set("Content-Type", "application/json")
+	r.SetBasicAuth(testCallerUser, testCallerPass)
 	rr := httptest.NewRecorder()
 	h.srv.ServeHTTP(rr, r)
 	return rr.Code

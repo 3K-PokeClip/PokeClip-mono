@@ -40,7 +40,11 @@ func cut(ctx context.Context, s site, token string, getenv func(string) string, 
 		fmt.Fprintln(stderr, "ingest-auth: cut 의 인자가 토큰 꼴(26자 Crockford 대문자)이 아니다")
 		return exitUsage
 	}
-	mtx, err := newControlClient(getenv)
+	pass, err := resolveSecret(getenv, envMTXAPIPass)
+	if err != nil {
+		return exitWith(stderr, exitUsage, err)
+	}
+	mtx, err := newControlClient(getenv, pass)
 	if err != nil {
 		return exitWith(stderr, exitUsage, err)
 	}

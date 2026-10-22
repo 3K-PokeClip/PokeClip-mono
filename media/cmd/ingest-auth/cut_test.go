@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -133,6 +134,29 @@ func TestCutIgnoresResponderVariables(t *testing.T) {
 		t.Errorf("cut with only the Control API variables = %d, want 0 (stderr: %s)", code, outputSummary(stderr))
 	}
 	checkLine(t, cutLine(t, stdout), map[string]any{"msg": "ingestauth_cut_completed", "kicked": 1.0})
+}
+
+// cut 은 run 과 같은 규칙으로 Control API 비번을 읽는다 — MTX_API_PASS_FILE 만 주면 끝까지 끊고, 값과 함께 주면 아무것도
+// 끊지 않고 설정 오류다. 긴급 절단이 run 과 다른 출처를 읽어 api_auth 로 막히지 않게 한다.
+func TestCutReadsAPIPassFromFile(t *testing.T) {
+	s, m, env := cutFixture(t)
+	useSecretFile(t, env, secretDir(t), "MTX_API_PASS", testAPIPass+"\n")
+	code, stdout, stderr := runCut(t, s, env, testToken)
+	if code != 0 {
+		t.Errorf("cut with MTX_API_PASS_FILE only = %d, want 0 (stderr: %s)", code, outputSummary(stderr))
+	}
+	checkLine(t, cutLine(t, stdout), map[string]any{"msg": "ingestauth_cut_completed", "kicked": 1.0})
+	if got := m.live(); len(got) != 0 {
+		t.Errorf("connections left %v, want none", got)
+	}
+
+	env["MTX_API_PASS"] = testAPIPass
+	code, stdout, stderr = runCut(t, s, env, testToken)
+	if code != 2 || stdout != "" || !strings.Contains(stderr, "MTX_API_PASS_FILE") {
+		t.Errorf("cut with both MTX_API_PASS and MTX_API_PASS_FILE = %d (stdout empty: %t, stderr names MTX_API_PASS_FILE: %t), want 2 with nothing written to stdout",
+			code, stdout == "", strings.Contains(stderr, "MTX_API_PASS_FILE"))
+	}
+	checkNoSecrets(t, []string{stdout, stderr}, secretPathCanary)
 }
 
 // cut 의 출력 줄은 LOG_LEVEL 과 무관하다 — 감사 기록이자 결과다.

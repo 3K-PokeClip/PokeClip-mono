@@ -1,6 +1,6 @@
 //go:build unix
 
-package main
+package secretfile
 
 import (
 	"errors"
@@ -22,13 +22,13 @@ func TestReadSecretFileRejectsFIFOWithoutBlocking(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := readSecretFile(secretEnv, path)
+		_, err := Read(secretEnv, path, Options{ShowPath: true})
 		done <- err
 	}()
 
 	select {
 	case err := <-done:
-		if !errors.Is(err, errNotRegularFile) {
+		if !errors.Is(err, ErrNotRegularFile) {
 			t.Errorf("FIFO 거부 사유가 일반 파일 검사가 아니다: %v", err)
 		}
 	case <-time.After(2 * time.Second):
@@ -60,13 +60,13 @@ func TestReadSecretFileRejectsFIFOHoldingPassword(t *testing.T) {
 
 			done := make(chan error, 1)
 			go func() {
-				_, err := readSecretFile(secretEnv, path)
+				_, err := Read(secretEnv, path, Options{ShowPath: true})
 				done <- err
 			}()
 
 			select {
 			case err := <-done:
-				if !errors.Is(err, errNotRegularFile) {
+				if !errors.Is(err, ErrNotRegularFile) {
 					t.Errorf("FIFO 거부 사유가 일반 파일 검사가 아니다(받아들였으면 nil): %v", err)
 				}
 			case <-time.After(2 * time.Second):
@@ -109,7 +109,7 @@ func fifoHoldingPassword(t *testing.T, writerStays bool) (path string, release f
 	return path, func() {}
 }
 
-// unblockFIFO 는 시간 초과로 막힌 readSecretFile 을 풀고 끝나기를 기다린다 — 막는 코드에서도 고루틴이
+// unblockFIFO 는 시간 초과로 막힌 Read 을 풀고 끝나기를 기다린다 — 막는 코드에서도 고루틴이
 // 남지 않게 하는 정리다. O_RDWR 열기는 FIFO 에서 막히지 않고 쓰는 쪽을 붙여 막힌 열기를 풀고, release 는
 // 남은 쓰는 쪽을 닫아 막힌 읽기를 EOF 로 끝낸다. 그래도 2초 안에 끝나지 않으면 더 기다리지 않는다 —
 // 고루틴 하나가 남는 편이 패키지 전체가 시간 초과로 멈추는 것보다 낫다.
@@ -122,6 +122,6 @@ func unblockFIFO(t *testing.T, path string, release func(), done <-chan error) {
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
-		t.Error("정리 뒤에도 readSecretFile 이 2초 안에 끝나지 않았다 — 고루틴 하나를 남기고 넘어간다")
+		t.Error("정리 뒤에도 Read 이 2초 안에 끝나지 않았다 — 고루틴 하나를 남기고 넘어간다")
 	}
 }

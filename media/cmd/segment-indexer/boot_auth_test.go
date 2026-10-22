@@ -50,6 +50,20 @@ func passLeaked(s string) bool {
 	return strings.Contains(s, bootAuthPass) || strings.Contains(s, basic)
 }
 
+// writeSecret 은 dir 아래에 content 를 담은 파일을 mode 로 만든다. WriteFile 의 모드는 umask 를 거치므로
+// Chmod 로 다시 박는다 — 그래야 other 비트 시험이 umask 에 따라 갈리지 않는다.
+func writeSecret(t *testing.T, dir, name, content string, mode os.FileMode) string {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte(content), mode); err != nil {
+		t.Fatalf("시험 파일 생성 실패: %v", err)
+	}
+	if err := os.Chmod(path, mode); err != nil {
+		t.Fatalf("시험 파일 권한 설정 실패: %v", err)
+	}
+	return path
+}
+
 // mtxstate_started 는 자격 방식(auth)과 사용자 이름(user)을 싣는다 — 운영자가 「자격을 싣고 붙었나」 를 기동
 // 한 줄로 확인한다. 비밀번호 · 파일 경로는 싣지 않는다.
 func TestStartObserverLogsAuthScheme(t *testing.T) {

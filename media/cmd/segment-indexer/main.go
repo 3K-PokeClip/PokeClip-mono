@@ -25,6 +25,7 @@ import (
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/mtxstate"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/playback"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/recording"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/secretfile"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/upload"
 )
 
@@ -356,7 +357,7 @@ func observerOptions(cfg config.Config) (mtxstate.Options, error) {
 	if opt.APIURL == "" || cfg.MTXAPIPassFile == "" {
 		return opt, nil
 	}
-	pass, err := readSecretFile("MTX_API_PASS_FILE", cfg.MTXAPIPassFile)
+	pass, err := secretfile.Read("MTX_API_PASS_FILE", cfg.MTXAPIPassFile, secretfile.Options{ShowPath: true})
 	if err != nil {
 		return mtxstate.Options{}, err
 	}
