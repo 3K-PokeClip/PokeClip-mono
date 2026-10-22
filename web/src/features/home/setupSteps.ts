@@ -23,7 +23,7 @@ export interface SetupStep {
   action?: { label: string; href: string };
 }
 
-export function setupSteps(links: HomeLinks, hasHistory: boolean): SetupStep[] {
+export function setupSteps(links: HomeLinks): SetupStep[] {
   return [
     {
       id: 'chzzk',
@@ -48,7 +48,8 @@ export function setupSteps(links: HomeLinks, hasHistory: boolean): SetupStep[] {
       title: '첫 방송 켜기',
       desc: 'OBS에서 방송을 켜면 감지가 시작돼요',
       doneNote: '첫 방송 완료',
-      done: hasHistory,
+      // 방송 기록이 없는 계정만 이 길을 보므로 방송·클립 단계는 아직 끝났을 수 없다
+      done: false,
       unknown: false,
     },
     {
@@ -56,18 +57,15 @@ export function setupSteps(links: HomeLinks, hasHistory: boolean): SetupStep[] {
       title: '첫 클립 올리기',
       desc: '고른 장면을 세로 클립으로 만들어 유튜브에 올려요',
       doneNote: '첫 클립 발행',
-      // 방송 기록이 없는 계정만 이 칸을 보므로 아직 올린 클립이 있을 수 없다
       done: false,
       unknown: false,
-      action:
-        links.youtube?.linked === true
-          ? undefined
-          : { label: '유튜브 연동', href: '/settings/channels' },
+      // 버튼이 없다 — 이 줄은 지금 단계가 되지 못한다(앞의 방송 단계가 늘 남는다). 유튜브 권유는 방송만 남았을 때
+      // 큰 칸 아래 한 줄이 맡는다(리뷰 #299 3차)
     },
   ];
 }
 
 /** 방송 채널·플러그인이 끝났고 방송만 남았다 — 큰 칸이 「기다리는 중」으로 바뀐다 */
-export function isWaitingForBroadcast(links: HomeLinks, hasHistory: boolean): boolean {
-  return links.chzzk?.linked === true && links.streamKeyIssued === true && !hasHistory;
+export function isWaitingForBroadcast(links: HomeLinks): boolean {
+  return links.chzzk?.linked === true && links.streamKeyIssued === true;
 }

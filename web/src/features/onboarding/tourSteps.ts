@@ -20,13 +20,12 @@ export const TOUR_TARGET = {
 export type TourTargetId = (typeof TOUR_TARGET)[keyof typeof TOUR_TARGET];
 export type TourStepId = 'channel' | 'plugin' | 'hero' | 'features' | 'vod' | 'aside';
 
+/** 모든 단계가 홈의 한 곳을 짚는다(POK-378) — 지금 스포트라이트로 그리는지는 오버레이가 타깃 유무로 정한다 */
 export interface TourStep {
   id: TourStepId;
-  /** centered=중앙 카드(전체 딤) · spotlight=대상 강조 */
-  kind: 'centered' | 'spotlight';
   title: string;
   body: string;
-  targetId?: TourTargetId;
+  targetId: TourTargetId;
   /**
    * 타깃이 없을 때 — 기본은 건너뛴다. 'centered'면 중앙 카드로 대신 보인다(홈을 아직 못 읽었을 때도
    * 설정 2단계는 빠지면 안 된다).
@@ -39,7 +38,6 @@ export interface TourStep {
 export const TOUR_STEPS: readonly TourStep[] = [
   {
     id: 'channel',
-    kind: 'spotlight',
     targetId: TOUR_TARGET.homeChannel,
     fallback: 'centered',
     title: '채널 연동',
@@ -48,7 +46,6 @@ export const TOUR_STEPS: readonly TourStep[] = [
   },
   {
     id: 'plugin',
-    kind: 'spotlight',
     targetId: TOUR_TARGET.homePlugin,
     fallback: 'centered',
     title: 'OBS 플러그인 설치',
@@ -57,28 +54,24 @@ export const TOUR_STEPS: readonly TourStep[] = [
   },
   {
     id: 'hero',
-    kind: 'spotlight',
     targetId: TOUR_TARGET.homeHero,
     title: '맨 위 칸이 지금 상황을 알려줘요',
     body: '처음엔 준비 단계를, 방송을 시작한 뒤엔 이번 주에 찾은 카드와 만든 클립을 보여 줘요.',
   },
   {
     id: 'features',
-    kind: 'spotlight',
     targetId: TOUR_TARGET.homeFeatures,
     title: '방송만 켜면 포키가 찾아요',
     body: '방송이 켜지면 채팅이 터진 순간을 하이라이트 카드로 모아요. 첫 방송이 끝나면 이 아래가 지난 방송으로 채워져요.',
   },
   {
     id: 'vod',
-    kind: 'spotlight',
     targetId: TOUR_TARGET.vodGrid,
     title: '지난 방송에서도 클립',
     body: 'VOD는 60일 동안 보관돼요. 지난 방송에서 감지된 카드를 골라 언제든 클립으로 만들 수 있어요.',
   },
   {
     id: 'aside',
-    kind: 'spotlight',
     targetId: TOUR_TARGET.homeAside,
     title: '연결 상태 · 포키의 팁',
     body: '방송 채널·유튜브 연결이 끊기면 여기서 바로 다시 연결해요. 팁은 들어올 때마다 바뀌어요.',
@@ -110,16 +103,7 @@ export function stepDone(id: TourStepId, flags: StepDoneFlags): boolean {
 export function isStepVisible(index: number, hasTarget: (targetId: string) => boolean): boolean {
   const step = TOUR_STEPS[index];
   if (!step) return false;
-  return (
-    step.kind === 'centered' ||
-    step.fallback === 'centered' ||
-    (step.targetId !== undefined && hasTarget(step.targetId))
-  );
-}
-
-/** 이 스텝을 지금 스포트라이트로 그리는가 — 타깃이 없고 중앙 카드로 대신하는 스텝이면 false */
-export function isSpotlightNow(step: TourStep, hasTarget: (targetId: string) => boolean): boolean {
-  return step.kind === 'spotlight' && step.targetId !== undefined && hasTarget(step.targetId);
+  return step.fallback === 'centered' || hasTarget(step.targetId);
 }
 
 /**

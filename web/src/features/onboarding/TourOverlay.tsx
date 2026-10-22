@@ -60,6 +60,8 @@ export function TourOverlay({
   const cardRef = useRef<HTMLDivElement>(null);
   const [spot, setSpot] = useState<Rect | null>(null);
   const [cardPos, setCardPos] = useState<{ top: number; left: number } | null>(null);
+  // 카드 배치가 기댄 창 크기 — 짚은 요소가 그대로여도 창 높이만 줄면 카드를 다시 앉힌다(리뷰 #299 3차)
+  const [viewport, setViewport] = useState<{ width: number; height: number } | null>(null);
   // 마지막으로 화면 안으로 끌어온 타깃 — 같은 요소를 다시 재면 다시 끌지 않는다
   const scrolledTo = useRef<Element | null>(null);
 
@@ -70,14 +72,11 @@ export function TourOverlay({
   // spot이 서 있느냐가 곧 스포트라이트로 그리느냐다.
   const measure = useCallback(() => {
     const homePending = isHomePending();
-    const el =
-      step?.kind === 'spotlight' && step.targetId
-        ? document.querySelector(`[data-tour-id="${step.targetId}"]`)
-        : null;
+    const el = step ? document.querySelector(`[data-tour-id="${step.targetId}"]`) : null;
     if (!step || !el) {
       setSpot(null);
       setCardPos(null);
-      if (step?.kind === 'spotlight' && step.fallback !== 'centered' && !homePending) {
+      if (step && step.fallback !== 'centered' && !homePending) {
         const next = nextVisibleStep(stepIndex, 1, hasTargetInDom);
         if (next === null) {
           trackTourFinished('auto');
@@ -94,8 +93,13 @@ export function TourOverlay({
     }
     const r = el.getBoundingClientRect();
     const next = spotlightRect({ top: r.top, left: r.left, width: r.width, height: r.height });
-    // 같은 자리면 그대로 둔다 — 아래 DOM 관찰이 다시 재도 다시 그리지 않게
+    // 같은 자리면 그대로 둔다 — 아래 DOM 관찰이 다시 재도 다시 그리지 않게. 창 크기도 같은 규칙으로 둔다
     setSpot((prev) => (prev && sameRect(prev, next) ? prev : next));
+    const width = window.innerWidth;
+    const height = window.innerHeight;
+    setViewport((prev) =>
+      prev && prev.width === width && prev.height === height ? prev : { width, height },
+    );
   }, [step, stepIndex, setTourStep, completeTour]);
 
   // 스텝 진입 — 측정이 대상을 화면 안으로 끌어온다.
@@ -105,15 +109,15 @@ export function TourOverlay({
 
   // 카드 크기를 잰 뒤 배치하는 2-pass — 배치 전 프레임은 CSS가 visibility로 숨긴다.
   useLayoutEffect(() => {
-    if (!spot || !cardRef.current) return;
+    if (!spot || !viewport || !cardRef.current) return;
     const rect = cardRef.current.getBoundingClientRect();
     const pos = tooltipPosition(
       spot,
       { width: rect.width || 330, height: rect.height || 160 },
-      { width: window.innerWidth, height: window.innerHeight },
+      viewport,
     );
     setCardPos({ top: pos.top, left: pos.left });
-  }, [spot]);
+  }, [spot, viewport]);
 
   // 리사이즈·스크롤 재측정 (rAF 스로틀).
   useEffect(() => {

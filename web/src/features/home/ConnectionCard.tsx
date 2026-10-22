@@ -40,10 +40,12 @@ function rowsOf(links: HomeLinks): Row[] {
     if (link.linked) return { key, name, detail: label(link.channelName), state: 'ok' };
     // 끊긴 연동은 이름이 남아 온다 — 「연결 안 됨」과 갈라 다시 연결을 권한다
     if (link.status === 'BROKEN') {
+      // 「연결됨」 기본값을 쓰지 않는다 — 이름이 없으면 「연결됨 · 다시 연결이 필요해요」가 되어 앞뒤가 어긋난다(리뷰 #299 3차)
+      const who = [via, link.channelName].filter(Boolean).join(' · ');
       return {
         key,
         name,
-        detail: `${label(link.channelName)} · 다시 연결이 필요해요`,
+        detail: who ? `${who} · 다시 연결이 필요해요` : '다시 연결이 필요해요',
         state: 'off',
         action: { label: '다시 연결', href: '/settings/channels' },
       };

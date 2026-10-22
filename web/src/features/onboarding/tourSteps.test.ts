@@ -3,7 +3,6 @@ import {
   TOUR_TARGET,
   WELCOME_STEPS,
   isLastStep,
-  isSpotlightNow,
   isStepVisible,
   nextVisibleStep,
   spotlightRect,
@@ -24,7 +23,6 @@ describe('TOUR_STEPS', () => {
       'vod',
       'aside',
     ]);
-    expect(TOUR_STEPS.every((s) => s.kind === 'spotlight')).toBe(true);
     expect(TOUR_STEPS.slice(0, 2).every((s) => s.fallback === 'centered')).toBe(true);
     expect(TOUR_STEPS.slice(2).every((s) => s.fallback === undefined)).toBe(true);
   });
@@ -87,11 +85,6 @@ describe('nextVisibleStep', () => {
     expect(isStepVisible(0, noTargets)).toBe(true);
     expect(isStepVisible(2, noTargets)).toBe(false);
     expect(isStepVisible(6, allTargets)).toBe(false);
-  });
-
-  it('isSpotlightNow — 타깃이 있으면 설정 단계도 스포트라이트, 없으면 중앙 카드', () => {
-    expect(isSpotlightNow(TOUR_STEPS[0]!, allTargets)).toBe(true);
-    expect(isSpotlightNow(TOUR_STEPS[0]!, noTargets)).toBe(false);
   });
 
   it('isLastStep은 6번째 스텝에서만 참이다', () => {

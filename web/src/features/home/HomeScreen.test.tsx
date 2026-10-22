@@ -473,6 +473,19 @@ describe('HomeScreen', () => {
     expect(within(aside).getByText('확인 필요')).toBeInTheDocument();
   });
 
+  it('끊긴 연동에 채널 이름이 없어도 「연결됨」이라 하지 않는다(리뷰 #299 3차)', async () => {
+    serve({
+      past: [pastRow('past-1', new Date(Date.now() - 86_400_000))],
+      youtube: { linked: false, status: 'BROKEN' },
+    });
+    render(<HomeScreen />);
+
+    const aside = await screen.findByRole('complementary', { name: '연결 상태·팁' });
+    const youtube = within(aside).getAllByRole('listitem')[2]!;
+    expect(youtube).toHaveTextContent('유튜브다시 연결이 필요해요');
+    expect(youtube).not.toHaveTextContent('연결됨');
+  });
+
   it('OBS 플러그인은 코드를 발급했어도 「연결됨」이라 하지 않는다 — 웹은 연결 상태를 모른다(#298 계약)', async () => {
     serve({
       past: [pastRow('past-1', new Date(Date.now() - 86_400_000))],

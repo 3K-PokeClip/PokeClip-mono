@@ -259,6 +259,24 @@ describe('OnboardingController', () => {
     expect(scroll.mock.contexts).toContain(row);
   });
 
+  it('짚은 줄이 그대로여도 창 높이가 바뀌면 카드 자리를 다시 잡는다(리뷰 #299 3차)', async () => {
+    renderWithHome();
+    fireEvent.click(await screen.findByRole('button', { name: '둘러보기 시작' }));
+    const card = screen.getByRole('dialog', { name: /시작 가이드 1\/5/ });
+    await waitFor(() => expect(card.style.top).not.toBe(''));
+    const before = card.style.top;
+
+    const height = window.innerHeight;
+    try {
+      // 카드가 아래에 들어갈 자리가 없을 만큼 창을 줄인다 — 짚은 줄의 자리(jsdom에선 0)는 그대로다
+      Object.defineProperty(window, 'innerHeight', { configurable: true, value: 120 });
+      fireEvent(window, new Event('resize'));
+      await waitFor(() => expect(card.style.top).not.toBe(before));
+    } finally {
+      Object.defineProperty(window, 'innerHeight', { configurable: true, value: height });
+    }
+  });
+
   it('투어를 끝내 칩만 남으면 DOM 관찰을 멈춘다 — 홈 폴링마다 단계를 다시 세지 않는다(리뷰 #299 2차)', async () => {
     // 지금 붙어 있는 관찰자 수를 센다
     const Native = window.MutationObserver;
