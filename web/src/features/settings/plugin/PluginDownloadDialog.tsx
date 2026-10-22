@@ -33,9 +33,7 @@ export function PluginDownloadDialog({
             <X aria-hidden />
           </IconButton>
         </div>
-        <Dialog.Description>
-          설치할 PC의 운영체제를 고르세요. 지금 쓰는 PC가 아니어도 돼요.
-        </Dialog.Description>
+        <Dialog.Description>설치할 PC를 고르고 아래 순서대로 하세요.</Dialog.Description>
         <PluginDownloadPanel detectedOs={detectedOs} />
       </Dialog.Content>
     </Dialog>

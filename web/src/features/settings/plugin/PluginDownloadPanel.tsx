@@ -13,7 +13,9 @@ import {
 } from '@/lib/pluginDownload';
 import styles from './PluginSettingsScreen.module.css';
 
-// OS별 설치 파일 받기 (POK-379) — 다운로드 창(모달)의 본문. 같은 조각을 다른 배치(카드·공개 페이지)에도 꽂는다.
+// OS별 설치 파일 받기 (POK-379) — 다운로드 창(모달)의 본문.
+// 실제로 하는 순서(받기 → OBS 끄고 설치 → 독에 연동 코드)대로 단계를 세운다 — 버튼은 1단계 안에,
+// 서명 경고는 막히는 2단계 바로 옆에 둔다(2026-10-22 배치 시안 B안).
 // 주소는 고정 상수(lib/pluginDownload)다 — 웹은 Release를 조회하지 않는다.
 // 파일 링크는 target 없이 그대로 연다: GitHub가 Content-Disposition: attachment로 주므로 페이지가 바뀌지 않는다
 // (2026-10-21 실측). 새 창은 「모든 버전 보기」 같은 페이지 링크에만 쓴다.
@@ -31,70 +33,99 @@ export function PluginDownloadPanel({ detectedOs }: { detectedOs: DetectedOs }) 
   const os: PluginOs = chosen ?? (detectedOs === 'macos' ? 'macos' : 'windows');
 
   return (
-    <div className={styles.downloadPanel}>
+    <>
       <Tabs value={os} onValueChange={(value) => setChosen(value as PluginOs)}>
         <Tabs.List aria-label="설치할 PC의 운영체제" className={styles.downloadTabs}>
-          <Tabs.Trigger value="windows">Windows</Tabs.Trigger>
-          <Tabs.Trigger value="macos">macOS</Tabs.Trigger>
+          <Tabs.Trigger value="windows" className={styles.downloadTab}>
+            Windows
+          </Tabs.Trigger>
+          <Tabs.Trigger value="macos" className={styles.downloadTab}>
+            macOS
+          </Tabs.Trigger>
         </Tabs.List>
-        <Tabs.Panel value="windows">
-          <OsPanel os="windows" />
+        <Tabs.Panel value="windows" className={styles.downloadTabPanel}>
+          <OsSteps os="windows" />
         </Tabs.Panel>
-        <Tabs.Panel value="macos">
-          <OsPanel os="macos" />
+        <Tabs.Panel value="macos" className={styles.downloadTabPanel}>
+          <OsSteps os="macos" />
         </Tabs.Panel>
       </Tabs>
       <p className={styles.downloadMeta}>
         <span>버전 {PLUGIN_VERSION}</span>
         <ExternalPageLink href={RELEASES_PAGE_URL}>모든 버전 보기</ExternalPageLink>
       </p>
-    </div>
+    </>
   );
 }
 
-function OsPanel({ os }: { os: PluginOs }) {
+function OsSteps({ os }: { os: PluginOs }) {
   const { kind, url } = PLUGIN_DOWNLOADS[os];
 
   return (
-    <div className={styles.downloadOsPanel}>
-      <LinkButton
-        href={url}
-        variant="solid"
-        size="md"
-        fullWidth
-        iconStart={<Download size={16} aria-hidden />}
-        onClick={() => track('plugin_download_clicked', { os, kind })}
-      >
-        다운로드
-        <VisuallyHidden>
-          {' '}
-          — {OS_LABEL[os]} 설치 파일, 버전 {PLUGIN_VERSION}
-        </VisuallyHidden>
-      </LinkButton>
-      <p className={styles.downloadHint}>{HINT[os]}</p>
+    <ol className={styles.downloadSteps}>
+      <li className={styles.downloadStep}>
+        <span className={styles.downloadStepNum} aria-hidden>
+          1
+        </span>
+        <div className={styles.downloadStepBody}>
+          <p className={styles.downloadStepTitle}>설치 파일을 받습니다</p>
+          <LinkButton
+            href={url}
+            variant="solid"
+            size="md"
+            fullWidth
+            iconStart={<Download size={16} aria-hidden />}
+            onClick={() => track('plugin_download_clicked', { os, kind })}
+          >
+            다운로드
+            <VisuallyHidden>
+              {' '}
+              — {OS_LABEL[os]} 설치 파일, 버전 {PLUGIN_VERSION}
+            </VisuallyHidden>
+          </LinkButton>
+          <p className={styles.downloadStepHint}>{HINT[os]}</p>
+        </div>
+      </li>
 
-      {/* flex 자식은 아이콘·span 둘뿐 — 텍스트 노드를 직접 두면 줄이 갈라진다(.issueWarning 규칙) */}
-      <div className={styles.issueWarning}>
-        <TriangleAlert aria-hidden className={styles.issueWarningIcon} />
-        {os === 'windows' ? (
-          <span>
-            아직 서명이 없어 받을 때·열 때 <b>경고가 뜰 수 있어요</b>. Chrome이 막으면 다운로드
-            목록에서 「위험한 파일 다운로드」, Windows가 막으면 「추가 정보 › 실행」을 눌러 주세요.
-          </span>
-        ) : (
-          <span>
-            아직 Apple 서명이 없어 처음 열 때 <b>「확인되지 않은 개발자」</b>로 막힐 수 있어요.
-            시스템 설정 › 개인정보 보호 및 보안에서 「그래도 열기」를 눌러 주세요.
-          </span>
-        )}
-      </div>
+      <li className={styles.downloadStep}>
+        <span className={styles.downloadStepNum} aria-hidden>
+          2
+        </span>
+        <div className={styles.downloadStepBody}>
+          <p className={styles.downloadStepTitle}>
+            OBS를 끄고 받은 파일을 {os === 'windows' ? '실행합니다' : '엽니다'}
+          </p>
+          {/* flex 자식은 아이콘·span 둘뿐 — 텍스트 노드를 직접 두면 줄이 갈라진다(.issueWarning 규칙).
+              단계 안은 들여쓴 만큼 좁아 두 줄 안에 들게 줄인 문구다 */}
+          <div className={styles.issueWarning}>
+            <TriangleAlert aria-hidden className={styles.issueWarningIcon} />
+            {os === 'windows' ? (
+              <span>
+                서명 전이라 <b>경고가 뜰 수 있어요</b> — Chrome은 「위험한 파일 다운로드」,
+                Windows는 「추가 정보 › 실행」
+              </span>
+            ) : (
+              <span>
+                Apple 서명 전이라 처음 열 때 <b>막힐 수 있어요</b> — 시스템 설정 › 개인정보 보호 및
+                보안 › 「그래도 열기」
+              </span>
+            )}
+          </div>
+        </div>
+      </li>
 
-      <ol className={styles.downloadSteps}>
-        <li>OBS를 끕니다</li>
-        <li>{os === 'windows' ? '받은 파일을 실행해 설치합니다' : '받은 pkg를 열어 설치합니다'}</li>
-        <li>OBS를 열고 「독 › PokeClip」에 이 화면의 연동 코드를 넣습니다</li>
-      </ol>
-    </div>
+      <li className={styles.downloadStep}>
+        <span className={styles.downloadStepNum} aria-hidden>
+          3
+        </span>
+        <div className={styles.downloadStepBody}>
+          <p className={styles.downloadStepTitle}>OBS 「독 › PokeClip」에 연동 코드를 넣습니다</p>
+          <p className={styles.downloadStepHint}>
+            연동 코드는 이 화면 위 「연동 코드」에서 발급해요
+          </p>
+        </div>
+      </li>
+    </ol>
   );
 }
 

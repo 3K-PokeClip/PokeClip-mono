@@ -116,7 +116,7 @@
 
 /* ---------- 다운로드 창 (POK-379) ---------- */
 
-/* DS 기본 폭 480 — OS 탭·경고·설치 순서가 한 화면에 들어간다 */
+/* DS 기본 폭 480 — OS 고르기와 설치 세 단계가 한 화면에 들어간다 */
 .downloadDialog {
   max-width: calc(480 * var(--pc-u));
 }
@@ -140,24 +140,103 @@
   margin-right: calc(-6 * var(--pc-u));
 }
 
-.downloadPanel {
-  margin-top: calc(14 * var(--pc-u));
+/* OS 고르기 — 두 칸을 똑같이 나눈 모양. DS 탭의 밑줄 모양을 덮으려고 특이도를 한 단계 올린다 */
+.downloadTabs.downloadTabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: calc(3 * var(--pc-u));
+  padding: calc(3 * var(--pc-u));
+  border-bottom: 0;
+  border-radius: calc(10 * var(--pc-u));
+  background: var(--pc-color-bg-inset);
 }
 
-.downloadTabs {
-  margin-bottom: calc(14 * var(--pc-u));
+.downloadTab.downloadTab {
+  margin-bottom: 0;
+  border-bottom: 0;
+  border-radius: calc(7 * var(--pc-u));
+  padding: calc(7 * var(--pc-u)) 0;
+  font-size: calc(13 * var(--pc-u));
+  font-weight: 600;
 }
 
-.downloadOsPanel {
+.downloadTab.downloadTab[data-selected] {
+  background: var(--pc-color-bg-surface-raised);
+  color: var(--pc-color-text-primary);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.18);
+}
+
+.downloadTabPanel.downloadTabPanel {
+  padding-block: calc(18 * var(--pc-u)) 0;
+}
+
+/* 단계 — 받기 → OBS 끄고 설치 → 독에 연동 코드. 번호 원 사이를 세로 줄로 잇는다 */
+.downloadSteps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.downloadStep {
+  position: relative;
+  display: flex;
+  gap: calc(12 * var(--pc-u));
+  padding-bottom: calc(18 * var(--pc-u));
+}
+
+.downloadStep:last-child {
+  padding-bottom: 0;
+}
+
+.downloadStep:not(:last-child)::before {
+  content: '';
+  position: absolute;
+  left: calc(11 * var(--pc-u));
+  top: calc(26 * var(--pc-u));
+  bottom: calc(4 * var(--pc-u));
+  width: 1px;
+  background: var(--pc-color-border-default);
+}
+
+.downloadStepNum {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: calc(22 * var(--pc-u));
+  height: calc(22 * var(--pc-u));
+  border-radius: 50%;
+  border: 1px solid var(--pc-color-border-strong);
+  background: var(--pc-color-bg-surface);
+  font-size: calc(11 * var(--pc-u));
+  font-weight: 700;
+  color: var(--pc-color-text-secondary);
+}
+
+.downloadStepBody {
+  flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
+  gap: calc(8 * var(--pc-u));
 }
 
-.downloadHint {
-  margin: calc(6 * var(--pc-u)) 0 0;
+/* 단계 안 경고는 위 여백 대신 단계의 gap을 쓴다 */
+.downloadStepBody > .issueWarning {
+  margin-top: 0;
+}
+
+.downloadStepTitle {
+  margin: 0;
+  font-size: calc(13 * var(--pc-u));
+  font-weight: 600;
+  line-height: calc(22 * var(--pc-u));
+  color: var(--pc-color-text-primary);
+}
+
+.downloadStepHint {
+  margin: calc(-2 * var(--pc-u)) 0 0;
   font-size: calc(11 * var(--pc-u));
   color: var(--pc-color-text-muted);
-  text-align: center;
 }
 
 /* 새 창 아이콘이 글자 뒤에 붙어 있게 — svg가 block이라 그냥 두면 아랫줄로 떨어진다 */
@@ -172,14 +251,6 @@
 
 .downloadLinkIcon {
   flex: none;
-}
-
-.downloadSteps {
-  margin: calc(12 * var(--pc-u)) 0 0;
-  padding-left: calc(18 * var(--pc-u));
-  font-size: calc(12 * var(--pc-u));
-  line-height: 1.7;
-  color: var(--pc-color-text-secondary);
 }
 
 .downloadMeta {

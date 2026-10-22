@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { axe } from 'jest-axe';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PLUGIN_DOWNLOADS, PLUGIN_VERSION, RELEASES_PAGE_URL } from '@/lib/pluginDownload';
@@ -50,7 +50,16 @@ describe('PluginDownloadDialog: OS별 설치 파일 받기', () => {
     expect(screen.getByRole('tab', { name: 'Windows' })).toHaveAttribute('aria-selected', 'true');
     fireEvent.click(screen.getByRole('tab', { name: 'macOS' }));
     expect(screen.getByRole('tab', { name: 'macOS' })).toHaveAttribute('aria-selected', 'true');
-    expect(screen.getByText(/확인되지 않은 개발자/)).toBeInTheDocument();
+    expect(screen.getByText(/그래도 열기/)).toBeInTheDocument();
+  });
+
+  it('실제 하는 순서대로 세 단계 — 버튼은 1단계, 서명 경고는 2단계 안에 있다', () => {
+    open('windows');
+    const [download, install, pair] = within(screen.getByRole('tabpanel')).getAllByRole('listitem');
+    expect(download).toContainElement(screen.getByRole('link', { name: /Windows 설치 파일/ }));
+    expect(install).toHaveTextContent(/OBS를 끄고 받은 파일을 실행합니다/);
+    expect(install).toHaveTextContent(/추가 정보 › 실행/);
+    expect(pair).toHaveTextContent(/「독 › PokeClip」에 연동 코드를 넣습니다/);
   });
 
   it('누른 파일 종류를 센다 — 받은 수가 아니라 누른 수', () => {
