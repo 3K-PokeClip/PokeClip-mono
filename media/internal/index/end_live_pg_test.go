@@ -10,15 +10,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/pgtest"
+	"github.com/jackc/pgx/v5"
 )
 
 // offline_transition_bounded_by_lock_timeout(계획 4.1 대기 상한 · 뮤테이션 130) — 다른 트랜잭션이 live 회차 행을
 // 잠그고 있으면 EndLive 는 lock_timeout(5초) 안에 55P03 오류로 돌아온다 — 기다림이 루프를 붙잡는 시간이 전이 한
-// 번에 상한 안이다. 실패한 트랜잭션은 되돌려져 같은 풀의 다음 문장이 새 연결 없이 서고, 회차는 live 그대로다(서버가
-// 커밋하지 않았다). 루프 쪽 처분(ERROR · 쉼)은 cmd/segment-indexer 의 루프 층 시험이 잰다(판단 J61).
+// 번에 상한 안이다. 실패한 트랜잭션은 되돌려져 잠금 트랜잭션이 연결을 쥔 동안에도 같은 풀의 다음 문장이 새 연결
+// 없이 서고, 회차는 live 그대로다(서버가 커밋하지 않았다). 루프 쪽 처분(ERROR · 쉼)은 cmd/segment-indexer 의
+// 루프 층 시험이 잰다(판단 J61).
 func TestEndLiveBoundedByLockTimeout(t *testing.T) {
 	ctx := t.Context()
 	pool := pgtest.TracedPool(ctx, t, newTestPool(t), nil)
@@ -59,10 +59,12 @@ func TestEndLiveBoundedByLockTimeout(t *testing.T) {
 		t.Errorf("EndLive = (%q, %v), want (\"\", 55P03 lock_timeout 오류)", got.sessionID, got.err)
 	}
 
-	_ = holder.Rollback(ctx)
+	// 다음 문장은 잠금 트랜잭션이 연결을 쥔 채로 보낸다 — 먼저 놓으면 그 연결이 다음 문장을 받아, 되돌림이 연결을
+	// 버렸어도 새 연결이 서지 않는다.
 	if _, err := pool.Exec(ctx, "select 1"); err != nil { // 같은 풀의 다음 문장
 		t.Errorf("실패한 전이 뒤 다음 문장 실패: %v", err)
 	}
+	_ = holder.Rollback(ctx)
 	if n := pool.Stat().NewConnsCount() - conns; n != 0 {
 		t.Errorf("새 연결 %d개, want 0(되돌림이 연결을 버리지 않았다)", n)
 	}

@@ -9,9 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/pgtest"
+	"github.com/jackc/pgx/v5"
 )
 
 // rollbackProbe 는 문장마다 부르는 추적기다(pgx.QueryTracer). 주입 문장(injectSQL)이 서버로 나가기 전에
@@ -122,8 +121,8 @@ func TestInsertRollsBackWithLiveContext(t *testing.T) {
 			_, _, err := newSessionStore(pool).Insert(ctx, segAt(stream, 0, sessionBase, 4000), Seed{}, liveIngress())
 
 			if probe.unbounded {
-				t.Fatalf("주조 문장 ctx 시한(문장 시작부터 TxnDeadline %v 이내) = 없음, want 있음 — 트랜잭션 상한이 주조 문장에 걸리지 않아 주입하지 않았다",
-					TxnDeadline)
+				t.Fatalf("주조 문장 ctx 시한(문장 시작부터 %v 이내) = 없음, want 있음 — 트랜잭션 상한이 주조 문장에 걸리지 않아 주입하지 않았다",
+					probe.bound)
 			}
 			if probe.injects != 1 {
 				t.Fatalf("주조 문장 주입 = %d번, want 1번 — 주입이 없으면 아래 단언은 아무것도 재지 않는다", probe.injects)

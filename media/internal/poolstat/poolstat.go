@@ -94,7 +94,8 @@ func observe(st state, a, b snapshot) (state, reading) {
 		return st, reading{snap: b, skipped: true, total: st.mark}
 	}
 	if !st.baselined {
-		next := state{mark: b.discarded(), newConns: b.newConns, baselined: true}
+		// 음수 잔차는 비동기 폐기의 일시 하강이다 — 그대로 기준점으로 잡으면 회복을 폐기로 센다.
+		next := state{mark: max(0, b.discarded()), newConns: b.newConns, baselined: true}
 		return next, reading{snap: b, total: next.mark}
 	}
 	next := state{mark: max(st.mark, b.discarded()), newConns: b.newConns, baselined: true, firing: st.firing}

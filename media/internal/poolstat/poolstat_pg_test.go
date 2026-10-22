@@ -47,21 +47,24 @@ func waitStat(t *testing.T, pool *pgxpool.Pool, what string, ok func(snapshot) b
 	}
 }
 
-// warm 은 연결 n 개를 동시에 빌렸다 돌려준다 — 풀이 n 개까지 자란다.
+// warm 은 연결 n 개를 동시에 빌렸다 돌려준다 — 풀이 n 개까지 자란다. 도중에 실패해도 빌린 연결은 돌려준다
+// (t.Fatalf 도 defer 를 돈다) — 안 돌려주면 Cleanup 의 pool.Close 가 반납을 기다리며 멈춘다.
 func warm(t *testing.T, pool *pgxpool.Pool, n int) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), statWait)
 	defer cancel()
 	var conns []*pgxpool.Conn
+	defer func() {
+		for _, c := range conns {
+			c.Release()
+		}
+	}()
 	for range n {
 		c, err := pool.Acquire(ctx)
 		if err != nil {
 			t.Fatalf("연결 획득 실패: %v", err)
 		}
 		conns = append(conns, c)
-	}
-	for _, c := range conns {
-		c.Release()
 	}
 }
 

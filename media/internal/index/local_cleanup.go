@@ -380,8 +380,9 @@ func finishRowLock(ctx context.Context, tx pgx.Tx, streamID string, seq int64, p
 // rollbackRowLock 은 행 잠금 트랜잭션을 되돌린다. 되돌림 ctx 는 되돌리는 순간에 만든다 — 부른 쪽 ctx 에서
 // 취소와 시한을 떼고 RowLockTxnTimeout 을 새로 씌운다. 끝난 ctx 로 부르면 pgx 는 ROLLBACK 을 보내지 못하고
 // 연결을 버리는데, 선잠금 문장이나 remove 가 부른 쪽 ctx 를 다 쓴 갈래에서 그 ctx 는 끝나 있다. 시한이
-// RowLockTxnTimeout 인 이유: 그 트랜잭션은 BEGIN 뒤 그만큼을 넘겨 서버에 살아 있지 못하므로 되돌리는 순간부터
-// 그보다 오래 기다릴 쓸모가 없다. 닫힌 트랜잭션(커밋 · 되돌림 뒤)이면 문장을 보내지 않는다.
+// RowLockTxnTimeout 인 이유: 서버 상한(transaction_timeout)은 SET LOCAL 이 닿은 뒤에 걸려 그 트랜잭션은 그만큼을
+// 넘겨 살아 있지 못하고, 그 전에 ctx 가 끝난 갈래도 이 시한 뒤 pgx 가 연결을 버리면 서버 트랜잭션이 끝난다 —
+// 되돌리는 순간부터 그보다 오래 기다릴 쓸모가 없다. 닫힌 트랜잭션(커밋 · 되돌림 뒤)이면 문장을 보내지 않는다.
 func rollbackRowLock(ctx context.Context, tx pgx.Tx) error {
 	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), RowLockTxnTimeout)
 	defer cancel()

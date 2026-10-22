@@ -21,10 +21,11 @@ type rowLockRollbackRun struct {
 	nowait   error // 호출 직후 다른 세션의 NOWAIT 잠금 결과
 }
 
-// runRowLockRollback 은 stream 의 행 하나를 두고 caller 를 부른 쪽 ctx 로 RemoveUnderRowLock 을 부른다.
-// 풀은 연결 하나를 미리 세워 둔다 — 그 뒤 선 새 연결은 되돌림이 연결을 버렸다는 뜻이다. 새 연결은 같은 풀의
-// 다음 문장이 선 뒤에 센다(최소 연결 수 0 인 풀은 버린 연결을 스스로 채우지 않는다).
-func runRowLockRollback(t *testing.T, caller context.Context, stream string, probe *rollbackProbe, remove func() bool) rowLockRollbackRun {
+// runRowLockRollback 은 stream 의 행 하나를 두고 newCaller 가 만든 부른 쪽 ctx 로 RemoveUnderRowLock 을 부른다.
+// newCaller 는 준비(행 · 풀 · 데우기)가 끝난 뒤 부른다 — 짧은 시한을 준비가 먹지 않게. 풀은 연결 하나를 미리
+// 세워 둔다 — 그 뒤 선 새 연결은 되돌림이 연결을 버렸다는 뜻이다. 새 연결은 같은 풀의 다음 문장이 선 뒤에 센다
+// (최소 연결 수 0 인 풀은 버린 연결을 스스로 채우지 않는다).
+func runRowLockRollback(t *testing.T, newCaller func() context.Context, stream string, probe *rollbackProbe, remove func() bool) rowLockRollbackRun {
 	t.Helper()
 	base := newTestPool(t)
 	lcPut(t, base, lcRow{stream: stream, seq: 0})
@@ -34,7 +35,7 @@ func runRowLockRollback(t *testing.T, caller context.Context, stream string, pro
 	}
 	conns := pool.Stat().NewConnsCount()
 
-	res, err := NewLocalCleanupStore(pool).RemoveUnderRowLock(caller, stream, 0, lcPath(stream, 0), remove)
+	res, err := NewLocalCleanupStore(pool).RemoveUnderRowLock(newCaller(), stream, 0, lcPath(stream, 0), remove)
 
 	run := rowLockRollbackRun{res: res, err: err, probe: probe}
 	run.nowait = lcTryLockRow(t.Context(), base, stream, 0) // 다른 풀 — 추적기를 거치지 않는다
@@ -51,20 +52,20 @@ func runRowLockRollback(t *testing.T, caller context.Context, stream string, pro
 func checkRollbackContext(t *testing.T, p *rollbackProbe, wantCaller string) {
 	t.Helper()
 	if p.rollbackStarts != 1 {
-		t.Errorf("되돌림 문장 시작 = %d번, want 1번", p.rollbackStarts)
+		t.Errorf("checkRollbackContext: 되돌림 문장 시작 = %d번, want 1번", p.rollbackStarts)
 		return // 잴 되돌림 문장이 없거나 하나로 정해지지 않는다
 	}
 	d, lo, hi := p.rollbackDeadline, p.failedAt.Add(RowLockTxnTimeout), p.rollbackAt.Add(RowLockTxnTimeout)
 	switch {
 	case !p.hasDeadline:
-		t.Errorf("되돌림 ctx 시한 = 없음, want 실패 뒤 [%v, %v](되돌리는 순간 + RowLockTxnTimeout)",
+		t.Errorf("checkRollbackContext: 되돌림 ctx 시한 = 없음, want 실패 뒤 [%v, %v](되돌리는 순간 + RowLockTxnTimeout)",
 			RowLockTxnTimeout, hi.Sub(p.failedAt))
 	case d.Before(lo) || d.After(hi):
-		t.Errorf("되돌림 ctx 시한 = 실패 뒤 %v, want 실패 뒤 [%v, %v](되돌리는 순간 + RowLockTxnTimeout)",
+		t.Errorf("checkRollbackContext: 되돌림 ctx 시한 = 실패 뒤 %v, want 실패 뒤 [%v, %v](되돌리는 순간 + RowLockTxnTimeout)",
 			d.Sub(p.failedAt), RowLockTxnTimeout, hi.Sub(p.failedAt))
 	}
 	if p.rollbackCaller != wantCaller {
-		t.Errorf("되돌림 ctx 의 부른 쪽 값 = %v, want %q(부른 쪽 ctx 의 값을 물려받는다)", p.rollbackCaller, wantCaller)
+		t.Errorf("checkRollbackContext: 되돌림 ctx 의 부른 쪽 값 = %v, want %q(부른 쪽 ctx 의 값을 물려받는다)", p.rollbackCaller, wantCaller)
 	}
 }
 
@@ -72,14 +73,14 @@ func checkRollbackContext(t *testing.T, p *rollbackProbe, wantCaller string) {
 func checkLiveRollback(t *testing.T, run rowLockRollbackRun, wantCaller string) {
 	t.Helper()
 	if len(run.probe.rollbackErrs) != 1 || run.probe.rollbackErrs[0] != nil {
-		t.Errorf("되돌림 문장 끝 = %v, want [<nil>](끝나지 않은 ctx)", run.probe.rollbackErrs)
+		t.Errorf("checkLiveRollback: 되돌림 문장 끝 = %v, want [<nil>](끝나지 않은 ctx)", run.probe.rollbackErrs)
 	}
 	if run.newConns != 0 {
-		t.Errorf("새 연결 = %d개, want 0개(되돌림이 연결을 버리지 않았다)", run.newConns)
+		t.Errorf("checkLiveRollback: 새 연결 = %d개, want 0개(되돌림이 연결을 버리지 않았다)", run.newConns)
 	}
 	checkRollbackContext(t, run.probe, wantCaller)
 	if run.nowait != nil {
-		t.Errorf("호출 직후 다른 세션의 NOWAIT = %v, want nil(되돌림이 행 잠금을 풀었다)", run.nowait)
+		t.Errorf("checkLiveRollback: 호출 직후 다른 세션의 NOWAIT = %v, want nil(되돌림이 행 잠금을 풀었다)", run.nowait)
 	}
 }
 
@@ -109,8 +110,13 @@ func TestRowLockRollsBackWithLiveContext(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.WithValue(t.Context(), callerValueKey{}, tc.name), tc.timeout)
-			defer cancel()
+			var ctx context.Context
+			cancel := context.CancelFunc(func() {})
+			defer func() { cancel() }()
+			newCaller := func() context.Context { // 준비가 끝난 뒤 불린다 — 300ms 시한이 그때부터 흐른다
+				ctx, cancel = context.WithTimeout(context.WithValue(t.Context(), callerValueKey{}, tc.name), tc.timeout)
+				return ctx
+			}
 			probe := &rollbackProbe{bound: tc.timeout}
 			remove := lcMustNotRemove(t)
 			if tc.atLock {
@@ -120,7 +126,7 @@ func TestRowLockRollsBackWithLiveContext(t *testing.T) {
 				remove = func() bool { tc.end(ctx, cancel); probe.failedAt = time.Now(); return false }
 			}
 
-			run := runRowLockRollback(t, ctx, "lc-rb-"+tc.name, probe, remove)
+			run := runRowLockRollback(t, newCaller, "lc-rb-"+tc.name, probe, remove)
 
 			if tc.atLock && (probe.unbounded || probe.injects != 1) {
 				t.Fatalf("선잠금 문장 주입 = %d번(시한 없음 %v), want 1번 — 주입이 없으면 아래 단언은 아무것도 재지 않는다",
@@ -150,7 +156,7 @@ func testRowLockRollbackAfterServerEndedSession(t *testing.T) {
 		return false
 	}
 
-	run := runRowLockRollback(t, ctx, "lc-rb-"+name, probe, remove)
+	run := runRowLockRollback(t, func() context.Context { return ctx }, "lc-rb-"+name, probe, remove)
 
 	t.Logf("기록: 되돌림 오류 = %v (SQLSTATE %s) · 새 연결 %d개", run.err, lcSQLState(run.err), run.newConns)
 	if want := (RowLockResult{Acted: true, Stage: StageCommit}); !IsTxnTimeout(run.err) || run.res != want {

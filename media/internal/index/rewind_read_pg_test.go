@@ -17,10 +17,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/pgtest"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-
-	"github.com/3K-PokeClip/pokeclip-mono/media/internal/pgtest"
 )
 
 // rewindT0 은 재구성 픽스처의 기준 벽시계다(마이크로초 미만이 없어 PG 왕복에 값이 보존된다).

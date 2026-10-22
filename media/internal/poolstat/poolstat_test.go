@@ -14,7 +14,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// snap 은 판정에 쓰는 다섯 값만 채운 스냅숏이다.
+// snap 은 판정에 쓰는 다섯 값만 채운 스냅숏이다. 인자 순서는 연결 · 생성 중 · 새 연결 누적 · 수명 폐기 누적 ·
+// 유휴 폐기 누적이다.
 func snap(total, constructing int32, newConns, lifetimeDestroys, idleDestroys int64) snapshot {
 	return snapshot{total: total, constructing: constructing, newConns: newConns,
 		lifetimeDestroys: lifetimeDestroys, idleDestroys: idleDestroys}
@@ -173,6 +174,19 @@ func TestObserveAbsorbsAsyncDestroyDip(t *testing.T) {
 	}
 	if sum != 0 {
 		t.Errorf("교체만 있는 구간의 폐기 합 = %d, want 0", sum)
+	}
+}
+
+// 기준점이 그 일시 하강 중에 잡혀도 회복을 폐기로 세지 않는다 — 음수 잔차는 기준점에서 0 으로 잡는다.
+func TestObserveBaselineDuringAsyncDestroyDip(t *testing.T) {
+	st, _ := observe(state{}, snap(2, 0, 2, 1, 0), snap(2, 0, 2, 1, 0)) // 기준점 — 잔차 −1
+	dip := snap(1, 0, 2, 1, 0)                                          // 연결이 치워졌다(잔차 0)
+
+	_, r := observe(st, dip, dip)
+
+	if r.discarded != 0 || r.signal != signalNone {
+		t.Errorf("기준점(잔차 −1) 뒤 회복 tick 판정 = discarded %d · signal %d, want 0 · %d(경보 없음)",
+			r.discarded, r.signal, signalNone)
 	}
 }
 
@@ -376,8 +390,9 @@ func TestStopWaitsForTickInFlight(t *testing.T) {
 	}
 }
 
-// 부모 ctx 가 끝나면 관측 고루틴도 끝나고, 그 뒤 stop 은 곧바로 반환한다.
-func TestLoopTicksUntilContextCanceled(t *testing.T) {
+// 관측 고루틴은 주기마다 tick 하고, stop 은 그 고루틴을 끝낸 뒤 반환한다. 부모 ctx 취소가 고루틴을 끝내는지는
+// 재지 않는다 — stop 이 스스로 취소하므로 전파를 끊어도 이 시험은 통과한다(두 main 은 defer stop 으로 끝낸다).
+func TestLoopTicksUntilStopped(t *testing.T) {
 	log, out := newCapture(slog.LevelDebug)
 	src := &script{snaps: twice(snap(0, 0, 0, 0, 0))}
 	ctx, cancel := context.WithCancel(context.Background())
