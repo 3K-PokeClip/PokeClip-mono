@@ -1,18 +1,17 @@
 import Link from 'next/link';
 import { Tag } from '@/ui';
-import { TOUR_TARGET } from '@/features/onboarding/tourSteps';
 import { LIVE_REFRESH_MS } from '@/features/thumbnail/thumbnailUrl';
 import styles from './HomeScreen.module.css';
 import { Thumb } from './Thumb';
 import type { LiveNow } from './useHomeMockState';
 
-// 디자인 1a ② — 방송 중일 때만 노출되는 라이브 밴드.
+// 디자인 1a ② — 방송 중일 때만 노출되는 라이브 밴드. 홈 개편(POK-378)부터 큰 칸 아래 본문 맨 위에 선다.
 // 두 액션 모두 라이브 대시보드(1b)로 간다 — "카드 검토"는 우측 카드 목록이 목적지다.
 // 시청자 수·클립 완료 수는 줄 창구가 없어 「준비 중」으로 적는다.
 export function LiveNowBand({ live }: { live: LiveNow }) {
   const dashboardHref = `/broadcast/livenow?stream=${encodeURIComponent(live.streamId)}`;
   return (
-    <section aria-label="라이브" className={styles.liveSection} data-tour-id={TOUR_TARGET.liveBand}>
+    <section aria-label="라이브" className={styles.liveSection}>
       <h2 className={styles.sectionLabel}>
         <span className={styles.livePulseDot} aria-hidden />
         라이브
@@ -31,9 +30,11 @@ export function LiveNowBand({ live }: { live: LiveNow }) {
         </Thumb>
         <div className={styles.liveBody}>
           <div className={styles.liveMetaRow}>
-            <Tag variant="soft" size="sm">
-              {live.platform}
-            </Tag>
+            {live.platform ? (
+              <Tag variant="soft" size="sm">
+                {live.platform}
+              </Tag>
+            ) : null}
             <span className={styles.liveMetaText}>{live.startedNote}</span>
           </div>
           <div className={styles.liveTitle}>{live.title}</div>
