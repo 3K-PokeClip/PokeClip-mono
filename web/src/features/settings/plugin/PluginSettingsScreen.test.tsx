@@ -62,13 +62,14 @@ afterEach(() => {
 });
 
 describe('PluginSettingsScreen', () => {
-  it('디자인 1m의 블록 세 개를 렌더하고 발급 상태를 서버에서 읽는다', async () => {
+  it('디자인 1m의 블록을 렌더하고 발급 상태를 서버에서 읽는다', async () => {
     stubStreamKeyFetch();
     renderWithProviders(<PluginSettingsScreen />);
 
-    expect(screen.getByRole('region', { name: '플러그인 연결 상태' })).toHaveTextContent(
-      '연결 안 됨',
-    );
+    // 웹은 플러그인 연결 상태를 모른다 — 시안의 연결 상태 배너도 「연결 진단」 버튼도 두지 않는다(ADR-077 결정 4)
+    expect(screen.queryByRole('region', { name: '플러그인 연결 상태' })).not.toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent(/연결됨|연결 안 됨/);
+    expect(screen.queryByRole('button', { name: '연결 진단' })).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { name: '연동 코드' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '플러그인 다운로드' })).toBeInTheDocument();
     // 라벨은 "최초 발급일" — 서버가 주는 시각이 키 생성일뿐이라 재발급 후에도 참말이다 (리뷰 #74)
@@ -140,6 +141,21 @@ describe('PluginSettingsScreen', () => {
     expect(await screen.findByText('KQ4M-7X2P')).toBeInTheDocument();
     expect(callsTo(spy, '/api/stream-keys/pairing-codes')).toHaveLength(1);
     expect(useOnboardingStore.getState().pluginLinked).toBe(true);
+  });
+
+  it('코드를 발급해도 연결됐다고 말하지 않는다 — 발급은 OBS에 넣었다는 증거가 아니다', async () => {
+    stubStreamKeyFetch({ issued: false });
+    renderWithProviders(<PluginSettingsScreen />);
+
+    fireEvent.click(await screen.findByRole('button', { name: '코드 발급' }));
+    // 코드 모달이 떠 있는 동안에도 연결됐다고 말하지 않는다(모달은 body로 포털된다)
+    expect(await screen.findByText('KQ4M-7X2P')).toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent(/연결됨|연결 안 됨/);
+    fireEvent.click(screen.getByRole('button', { name: '확인했어요' }));
+
+    // 화면 전체를 본다 — 발급 뒤 코드 카드나 모달에 「연결됨」 배지가 다시 붙는 회귀를 잡는다
+    expect(await screen.findByText(/코드가 발급되어 있어요/)).toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent(/연결됨|연결 안 됨/);
   });
 
   it('상태 조회를 한 번도 못 읽으면 미발급이 아니라 오류·다시 시도를 보여준다 (리뷰 #73)', async () => {

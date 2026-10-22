@@ -14,17 +14,24 @@ const allTargets = () => true;
 const noTargets = () => false;
 
 describe('TOUR_STEPS', () => {
-  it('디자인 순서대로 6단계 — 설정 2단계는 중앙 카드, 나머지는 스포트라이트다', () => {
+  it('6단계 모두 스포트라이트다 — 설정 2단계만 타깃이 없으면 중앙 카드로 대신한다(POK-378)', () => {
     expect(TOUR_STEPS.map((s) => s.id)).toEqual([
       'channel',
       'plugin',
-      'live',
+      'hero',
+      'features',
       'vod',
-      'publish',
-      'resume',
+      'aside',
     ]);
-    expect(TOUR_STEPS.slice(0, 2).every((s) => s.kind === 'centered')).toBe(true);
-    expect(TOUR_STEPS.slice(2).every((s) => s.kind === 'spotlight')).toBe(true);
+    expect(TOUR_STEPS.slice(0, 2).every((s) => s.fallback === 'centered')).toBe(true);
+    expect(TOUR_STEPS.slice(2).every((s) => s.fallback === undefined)).toBe(true);
+  });
+
+  it('설정 2단계는 홈의 방송 채널·플러그인 줄을 짚는다', () => {
+    expect(TOUR_STEPS.slice(0, 2).map((s) => s.targetId)).toEqual([
+      TOUR_TARGET.homeChannel,
+      TOUR_TARGET.homePlugin,
+    ]);
   });
 
   it('설정 2단계의 CTA가 해당 화면으로 간다 (DoD — 각 단계가 해당 화면으로 연결)', () => {
@@ -32,12 +39,12 @@ describe('TOUR_STEPS', () => {
     expect(TOUR_STEPS[1]!.cta).toEqual({ label: '연동 코드 발급', href: '/settings/plugin' });
   });
 
-  it('스포트라이트 타깃이 디자인의 강조 순서와 일치한다 — 라이브 밴드 → VOD 그리드 → 우측 패널 → 이어서 편집', () => {
+  it('스포트라이트는 홈 위에서 아래 순서다 — 큰 칸 → 포키가 해 주는 일 → 지난 방송 → 오른쪽 패널(POK-378)', () => {
     expect(TOUR_STEPS.slice(2).map((s) => s.targetId)).toEqual([
-      TOUR_TARGET.liveBand,
+      TOUR_TARGET.homeHero,
+      TOUR_TARGET.homeFeatures,
       TOUR_TARGET.vodGrid,
       TOUR_TARGET.homeAside,
-      TOUR_TARGET.resumeBanner,
     ]);
   });
 
@@ -52,7 +59,7 @@ describe('stepDone', () => {
     const flags = { channelLinked: true, pluginLinked: false };
     expect(stepDone('channel', flags)).toBe(true);
     expect(stepDone('plugin', flags)).toBe(false);
-    expect(stepDone('live', { channelLinked: true, pluginLinked: true })).toBe(false);
+    expect(stepDone('hero', { channelLinked: true, pluginLinked: true })).toBe(false);
   });
 });
 
@@ -64,8 +71,8 @@ describe('nextVisibleStep', () => {
 
   it('타깃 없는 스포트라이트 스텝은 건너뛴다', () => {
     const onlyAside = (id: string) => id === TOUR_TARGET.homeAside;
-    expect(nextVisibleStep(1, 1, onlyAside)).toBe(4);
-    expect(nextVisibleStep(4, -1, onlyAside)).toBe(1);
+    expect(nextVisibleStep(1, 1, onlyAside)).toBe(5);
+    expect(nextVisibleStep(5, -1, onlyAside)).toBe(1);
   });
 
   it('끝을 넘으면 null — 정방향 null은 완료 처리 신호다', () => {
@@ -74,7 +81,7 @@ describe('nextVisibleStep', () => {
     expect(nextVisibleStep(1, 1, noTargets)).toBeNull();
   });
 
-  it('isStepVisible — 중앙 카드는 항상, 스포트라이트는 타깃이 있어야 보인다', () => {
+  it('isStepVisible — 중앙 카드 대체가 있는 스텝은 항상, 나머지 스포트라이트는 타깃이 있어야 보인다', () => {
     expect(isStepVisible(0, noTargets)).toBe(true);
     expect(isStepVisible(2, noTargets)).toBe(false);
     expect(isStepVisible(6, allTargets)).toBe(false);
@@ -102,14 +109,22 @@ describe('tooltipPosition', () => {
   const tooltip = { width: 330, height: 160 };
 
   it('대상 아래에 공간이 있으면 아래에 붙인다', () => {
-    const pos = tooltipPosition({ top: 100, left: 200, width: 300, height: 200 }, tooltip, viewport);
+    const pos = tooltipPosition(
+      { top: 100, left: 200, width: 300, height: 200 },
+      tooltip,
+      viewport,
+    );
     expect(pos.placement).toBe('below');
     expect(pos.top).toBe(312); // 100 + 200 + gap 12
     expect(pos.left).toBe(200);
   });
 
   it('아래 공간이 부족하면 위로 올린다', () => {
-    const pos = tooltipPosition({ top: 700, left: 200, width: 300, height: 150 }, tooltip, viewport);
+    const pos = tooltipPosition(
+      { top: 700, left: 200, width: 300, height: 150 },
+      tooltip,
+      viewport,
+    );
     expect(pos.placement).toBe('above');
     expect(pos.top).toBe(528); // 700 - 12 - 160
   });
@@ -122,7 +137,11 @@ describe('tooltipPosition', () => {
     );
     expect(nearRight.left).toBe(1440 - 330 - 16);
 
-    const nearLeft = tooltipPosition({ top: 100, left: 2, width: 30, height: 30 }, tooltip, viewport);
+    const nearLeft = tooltipPosition(
+      { top: 100, left: 2, width: 30, height: 30 },
+      tooltip,
+      viewport,
+    );
     expect(nearLeft.left).toBe(16);
   });
 });

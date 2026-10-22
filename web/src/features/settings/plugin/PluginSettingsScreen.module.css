@@ -22,62 +22,6 @@
   margin: 0 0 calc(4 * var(--pc-u));
 }
 
-/* ---------- 연결 상태 배너 (디자인 1m 상단) ----------
-   초록은 "연결됨"에만 쓰는 상태색이라 디자인 값을 그대로 쓴다. */
-.statusBanner {
-  display: flex;
-  align-items: center;
-  gap: calc(14 * var(--pc-u));
-  padding: calc(16 * var(--pc-u));
-  border-radius: calc(14 * var(--pc-u));
-  border: 1px solid var(--pc-color-border-subtle);
-  background: var(--pc-color-bg-surface);
-}
-
-.statusBanner[data-connected='true'] {
-  border-color: rgb(61 191 127 / 0.35);
-  background: rgb(61 191 127 / 0.05);
-}
-
-.statusIcon {
-  width: calc(42 * var(--pc-u));
-  height: calc(42 * var(--pc-u));
-  flex: none;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: calc(12 * var(--pc-u));
-  background: var(--pc-color-bg-inset);
-  color: var(--pc-color-text-muted);
-}
-
-.statusBanner[data-connected='true'] .statusIcon {
-  color: #3dbf7f;
-}
-
-.statusBody {
-  flex: 1;
-  min-width: 0;
-  line-height: 1.4;
-}
-
-.statusTitleRow {
-  display: flex;
-  align-items: center;
-  gap: calc(8 * var(--pc-u));
-}
-
-.statusName {
-  font-size: calc(13.5 * var(--pc-u));
-  font-weight: 700;
-}
-
-.statusMeta {
-  font-size: calc(11.5 * var(--pc-u));
-  color: var(--pc-color-text-muted);
-  margin-top: calc(2 * var(--pc-u));
-}
-
 /* ---------- 연동 코드 ---------- */
 .codeCardDesc {
   font-size: calc(11.5 * var(--pc-u));
@@ -162,11 +106,6 @@
   color: var(--pc-color-text-muted);
   width: calc(16 * var(--pc-u));
   height: calc(16 * var(--pc-u));
-}
-
-.statusIcon svg {
-  width: calc(20 * var(--pc-u));
-  height: calc(20 * var(--pc-u));
 }
 
 .downloadText {

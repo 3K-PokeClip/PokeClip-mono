@@ -87,6 +87,8 @@ describe('LoginScreen', () => {
       'https://pokeclip.com/privacy/',
     );
     expect(screen.getByText(/만 14세 이상이며/)).toBeInTheDocument();
+    // 동의의 계기(시작하기 버튼)와 약관 동의가 한 문장에 있다
+    expect(screen.getByText(/시작하면 만 14세 이상이며.*동의한 것으로 봅니다/)).toBeInTheDocument();
     expect(screen.queryByText(/처리방침에 동의/)).not.toBeInTheDocument();
   });
 

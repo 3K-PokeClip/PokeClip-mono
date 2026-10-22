@@ -270,6 +270,26 @@
   display: flex;
 }
 
+/* 카드 줄이 빈 자리 — 여백은 카드 줄과 같다. 카드가 하나도 없으면 DS EmptyState(점선 카드)가,
+   불러오는 중·필터·숨김으로 빈 자리는 같은 점선 틀에 한 줄이 선다. 테두리는 EmptyState와 같다 */
+.cardEmpty {
+  margin: calc(2 * var(--pc-u)) calc(16 * var(--pc-u)) calc(14 * var(--pc-u));
+}
+
+.cardEmptyNote {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: calc(8 * var(--pc-u));
+  margin: calc(2 * var(--pc-u)) calc(16 * var(--pc-u)) calc(14 * var(--pc-u));
+  padding: calc(18 * var(--pc-u)) calc(24 * var(--pc-u));
+  border-radius: calc(14 * var(--pc-u));
+  border: 1.5px dashed var(--pc-color-border-default);
+  font-size: calc(12 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+  text-align: center;
+}
+
 /* ---------- 하이라이트 카드 ---------- */
 
 .card {
