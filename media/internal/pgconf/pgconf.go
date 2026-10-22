@@ -45,8 +45,8 @@ const (
 	defaultRegion = "ap-northeast-2"
 	// prefer = TLS 를 시도하되 서버가 못 하면 평문으로 내려간다. 로컬 compose 기본에 맞춘 password 모드 값이다.
 	defaultPasswordSSLMode = "prefer"
-	// iamSSLMode 는 iam 모드가 받는 유일한 sslmode 다 — 토큰은 15분 동안 재사용 가능한 자격이라 중간자에게
-	// 내줄 수 없다(kty 결정 질문 2).
+	// iamSSLMode 는 iam 모드가 받는 유일한 sslmode 다 — 토큰은 15분(서버는 약 20분까지 받음) 동안 재사용 가능한
+	// 자격이라 중간자에게 내줄 수 없다(kty 결정 질문 2).
 	iamSSLMode = "verify-full"
 	// tokenTimeout 은 토큰 생성(자격 증명 조회 포함) 한 번의 상한이다. 풀의 보충 연결은 context.Background 로
 	// BeforeConnect 를 부르므로(pgx#2545) 이 상한이 없으면 IMDS 가 멈출 때 연결 생성이 끝없이 걸린다.
@@ -139,8 +139,12 @@ func (s Settings) validate() error {
 		if s.password == "" {
 			return errors.New("필수 환경 변수 POSTGRES_PASSWORD 가 비어 있다(password 모드)")
 		}
-		// CA 번들을 주고도 검증하지 않는 sslmode 는 거짓 안도다 — require 는 호스트 이름을 보지 않고, prefer ·
-		// allow 는 평문으로 내려갈 수 있다(kty 결정 — C1 · C2 보안 검수 M).
+		// CA 번들을 주면 검증 강도를 값으로 밝힌 sslmode 만 받는다(kty 결정 — C1 · C2 보안 검수 M).
+		//   - verify-ca: 운영자가 체인 검증만을 명시적으로 고른 경우라 허용한다. 호스트 이름은 보지 않는다
+		//     — README 에 공개하고, 운영은 verify-full 이다.
+		//   - require · prefer · allow: 「검증하는 줄 알았는데 안 하는」 상태라 거부한다. prefer · allow 는 CA 를
+		//     주어도 인증서를 검증하지 않고 평문으로 내려갈 수 있다. require 는 CA 가 있을 때만 pgx 가 암묵적으로
+		//     체인을 검증해(verify-ca 와 같다) CA 가 빠지면 조용히 무검증이 된다.
 		if s.SSLRootCert != "" && s.SSLMode != "verify-ca" && s.SSLMode != iamSSLMode {
 			return fmt.Errorf("POSTGRES_SSLROOTCERT 를 주면 POSTGRES_SSLMODE 가 verify-ca · verify-full 이어야 한다(받은 값 %q)", s.SSLMode)
 		}
@@ -168,6 +172,7 @@ func (s Settings) validate() error {
 
 // checkIAMHost 는 iam 호스트가 TCP 호스트 하나인가를 본다. pgx 는 / 가 든 값을 유닉스 소켓으로, 쉼표를 여러
 // 호스트로 읽는다. 대괄호 없는 IPv6 는 "host:port" 를 깨뜨려 토큰을 서명한 대상과 실제 접속 대상이 갈라진다.
+// [ 로 시작해 ] 로 끝나는 임의 문자열(예: "[a]b]")은 여기서 통과하고 ParseConfig 에서 기동 오류가 된다(안전 실패).
 func checkIAMHost(host string) error {
 	bracketed := strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]")
 	if strings.ContainsAny(host, "/,") || strings.IndexFunc(host, unicode.IsSpace) >= 0 ||
@@ -248,7 +253,8 @@ func PoolConfig(ctx context.Context, s Settings, opts ...Option) (*pgxpool.Confi
 }
 
 // iamBeforeConnect 는 연결마다 토큰을 새로 만들어 그 연결 설정의 비밀번호 자리에 넣는다. 캐시하지 않는다 —
-// 토큰은 15분 뒤 만료되고, 만료된 토큰으로는 새 연결이 PAM 인증 실패가 된다.
+// 토큰은 15분 뒤 만료되고, 만료된 토큰으로는 새 연결이 PAM 인증 실패가 된다. RDS 실측: 서명 뒤 약 20분(만료 뒤
+// 약 5분)까지 받는다 — 2026-10-22 실험 RDS.
 func iamBeforeConnect(tf TokenFunc, s Settings, timeout time.Duration) func(context.Context, *pgx.ConnConfig) error {
 	endpoint := fmt.Sprintf("%s:%d", s.Host, s.Port)
 	region, user := s.Region, s.User

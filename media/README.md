@@ -160,7 +160,7 @@ MediaMTX가 이벤트마다 컨테이너 안의 작은 명령을 실행하고(`m
 | `POSTGRES_PORT` | `5432` | DB 포트 |
 | `POSTGRES_AUTH` | (빈값 = `password`) | DB 로그인 방식. `password`(빈 값) = `POSTGRES_PASSWORD` 로 로그인 — 로컬 compose 의 방식. `iam` = 연결마다 RDS IAM 인증 토큰(15분 유효)을 새로 만들어 로그인한다(자격 증명 = AWS 기본 사슬 · 인스턴스 역할). 그 밖 값(대소문자가 다른 `IAM` 포함)은 기동 거부 |
 | `POSTGRES_SSLMODE` | `prefer` (iam 은 `verify-full`) | DB 접속 TLS 모드. `prefer`는 가능하면 TLS, 안 되면 평문. 네트워크를 건너는 배포에서는 `require` 이상으로 올린다. **iam 은 `verify-full` 만 받는다** — 그 밖 값은 기동 거부 |
-| `POSTGRES_SSLROOTCERT` | (빈값 = 지정 없음) | 서버 인증서를 검증할 CA 번들의 **절대 경로**. 기동 때 일반 파일 · PEM 인증서 1개 이상을 확인한다. **iam 이면 필수.** password 모드에서도 이 값을 주면 `POSTGRES_SSLMODE` 는 `verify-ca` · `verify-full` 만 받는다 — 그 밖 값은 CA 를 주고도 서버를 다 검증하지 않으므로 기동 거부. `PGSSLROOTCERT` 는 쓰지 않는다 — 이 값이 빈 채 `PGSSLROOTCERT` 만 있으면 기동 거부 |
+| `POSTGRES_SSLROOTCERT` | (빈값 = 지정 없음) | 서버 인증서를 검증할 CA 번들의 **절대 경로**. 기동 때 일반 파일 · PEM 인증서 1개 이상을 확인한다. **iam 이면 필수.** password 모드에서도 이 값을 주면 `POSTGRES_SSLMODE` 는 `verify-ca` · `verify-full` 만 받는다 — 그 밖 값은 검증 강도를 값으로 밝히지 않으므로 기동 거부. **`verify-ca` 는 체인만 검증하고 호스트 이름은 보지 않는다 — 운영은 `verify-full`.** `PGSSLROOTCERT` 는 쓰지 않는다 — 이 값이 빈 채 `PGSSLROOTCERT` 만 있으면 기동 거부 |
 | `SEGMENT_ROOT` | `/recordings` | 감시할 녹화 루트. 컨테이너에 읽기 전용으로 붙는다 |
 | `ENSURE_SCHEMA` | `false` | true면 기동 시 정본 DDL(1번 소유)로 `stream_segments`를 만든다. 로컬 compose 전용 — RDS/마이그레이션 도구 도입 시 끈다 |
 | `TZ` | (미설정) | 컨테이너 시간대. **UTC로 고정한다.** 저장 값은 코드가 UTC로 강제하지만 로그 시각도 UTC로 맞춘다 |
@@ -334,6 +334,9 @@ INFO `db_connected` 한 줄을 남긴다. 실패하면 이 줄 없이 기동이 
 - **운영은 반드시 `POSTGRES_AUTH=iam` + `POSTGRES_SSLMODE=verify-full`.**
   password 모드의 기본 `prefer` 는 서버가 TLS 를 받지 않으면 평문으로
   내려간다. 배포 뒤 `db_connected` 줄의 `tls` 가 `true` 인지 본다.
+  IAM 토큰의 재사용 창은 약 20분이다(유효 15분 + RDS 가 만료 뒤 약 5분 더
+  받음 — 2026-10-22 실험 RDS 실측). 토큰이 새면 그동안 쓸 수 있으므로
+  중간자가 토큰을 못 보게 `verify-full` 이 필요하다.
 - **정적 키 환경 변수는 0개.** AWS SDK 의 자격 증명 사슬(credential chain —
   SDK 가 자격 증명을 찾는 차례)은 환경 변수의 정적 키를 맨 앞에, 인스턴스
   역할(IMDS — EC2 메타데이터 서비스)을 맨 뒤에 둔다. 컨테이너에
@@ -425,6 +428,9 @@ SELECT has_schema_privilege('media_indexer', 'public', 'CREATE');  -- false 여�
   되풀이한다. 방어는 둘이다: 이 DB 의 로그인 계정 수를 줄이는 것, 그리고 잠금
   함수의 `EXECUTE` 를 PUBLIC 에서 회수하고 사이드카 계정에만 주는 것(함수 소유자
   권한이 필요하다 — RDS 의 마스터 사용자로 되는지는 아직 확인하지 않았다).
+  회수에는 두 전제가 붙는다. 이 DB 에서 advisory 잠금을 쓰는 다른 계정(마이그레이션
+  도구 등)에도 함께 허용해야 그 계정이 깨지지 않는다. `GRANT` · `REVOKE` 는 DB
+  마다 따로 적용된다 — 이 DB 하나에만 하면 다른 DB 는 그대로다.
   함수를 허용받은 계정끼리는 키 단위로 막을 수 없다.
 - **`stream_cutoffs` 가 오염되면 DBA 가 손으로 고친다.** 이 계정에는
   UPDATE · DELETE 가 없어 잘못 들어간 컷오프를 사이드카가 고칠 수 없다.
@@ -2481,10 +2487,13 @@ janitor 는 파일을 지운 뒤 장부 갱신에 실패한 행을 「부채」�
   `PGSSLROOTCERT` 는 쓰지 않는다. 이것만 있고 `POSTGRES_SSLROOTCERT` 가 비면
   기동 오류다(옛 방식 기록: pgx 가 `PGSSLROOTCERT` 를 읽는다는 2026-10-20
   확인 — 실험 기록 `c21-pgsslrootcert.txt`). CA 를 주면 sslmode 는
-  `verify-ca` · `verify-full` 만 받는다(그 밖 값은 기동 오류). CA 를 준
-  `require` 는 인증서 체인은 검증하지만 호스트 이름은 보지 않아 같은 CA 의
-  다른 서버를 막지 못하기 때문이다. CA 없는 `require` 는 암호화만 하고 서버
-  인증서를 검증하지 않는다. 기본 `prefer` 는 TLS 를 못 쓰면
+  `verify-ca` · `verify-full` 만 받는다(그 밖 값은 기동 오류).
+  **`verify-ca` 는 체인만 검증하고 호스트 이름은 보지 않는다 — 같은 CA 의
+  다른 서버를 막지 못하므로 운영은 `verify-full`.** `verify-ca` 는 운영자가
+  체인 검증만을 명시적으로 고른 경우라 허용한다. CA 를 준 `require` 는 pgx
+  가 암묵적으로 `verify-ca` 처럼 체인을 검증하지만 값이 검증을 밝히지 않고,
+  CA 없는 `require` 는 암호화만 하고 서버 인증서를 검증하지 않는다 — 그래서
+  CA 와 함께 주면 거부한다. 기본 `prefer` 는 TLS 를 못 쓰면
   평문으로 내려간다. `require` 이상이면 TLS 를 받지 않는 서버에는 붙지 않고
   기동 오류(`janitor_failed`)로 끝난다(2026-10-20 실행 확인 — 실험 기록
   `c9-sslmode.txt`).

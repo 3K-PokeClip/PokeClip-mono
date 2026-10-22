@@ -8,7 +8,6 @@ import (
 	"net"
 	"strconv"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -95,30 +94,29 @@ func TestOpenIndexerPoolLogsDBConnected(t *testing.T) {
 }
 
 // silentListener 는 TCP 연결을 받기만 하고 한 바이트도 답하지 않는 서버다 — 붙었지만 응답하지 않는 DB 자리다.
-// 받은 연결은 시험이 끝날 때 닫는다(멈춘 클라이언트가 그때 풀린다).
+// 받은 연결은 시험이 끝날 때 닫는다(멈춘 클라이언트가 그때 풀린다). 정리는 Accept 고루틴이 끝나기를 기다린 뒤
+// 연결 목록을 회수한다 — 닫기 직전에 받은 연결이 목록을 다 돈 뒤에 덧붙어 닫히지 않고 남는 경쟁이 없다.
 func silentListener(t *testing.T) string {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	var mu sync.Mutex
 	var conns []net.Conn
+	acceptDone := make(chan struct{})
 	go func() {
+		defer close(acceptDone)
 		for {
 			c, err := ln.Accept()
 			if err != nil {
 				return
 			}
-			mu.Lock()
 			conns = append(conns, c)
-			mu.Unlock()
 		}
 	}()
 	t.Cleanup(func() {
 		ln.Close()
-		mu.Lock()
-		defer mu.Unlock()
+		<-acceptDone
 		for _, c := range conns {
 			c.Close()
 		}
