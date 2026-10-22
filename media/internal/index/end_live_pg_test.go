@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/pgtest"
 )
 
 // offline_transition_bounded_by_lock_timeout(계획 4.1 대기 상한 · 뮤테이션 130) — 다른 트랜잭션이 live 회차 행을
@@ -18,8 +20,8 @@ import (
 // 번에 상한 안이다. 실패한 트랜잭션은 되돌려져 같은 풀의 다음 문장이 새 연결 없이 서고, 회차는 live 그대로다(서버가
 // 커밋하지 않았다). 루프 쪽 처분(ERROR · 쉼)은 cmd/segment-indexer 의 루프 층 시험이 잰다(판단 J61).
 func TestEndLiveBoundedByLockTimeout(t *testing.T) {
-	pool := newTestPool(t)
 	ctx := t.Context()
+	pool := pgtest.TracedPool(ctx, t, newTestPool(t), nil)
 	stream := sessionStream("endlive-lock")
 	putSession(t, pool, fixtureSession{id: stream + "-S", stream: stream, startedAt: sessionBase})
 
@@ -102,7 +104,7 @@ func TestEndLiveRollsBackWithLiveContext(t *testing.T) {
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			var rollbacks []error
-			pool := hookedPool(t, base, traceSQLEnd{
+			pool := pgtest.TracedPool(t.Context(), t, base, traceSQLEnd{
 				start: func(sctx context.Context, _ *pgx.Conn, sql string) context.Context {
 					if sql == endLiveSQL {
 						return tc.inject(sctx, cancel)
