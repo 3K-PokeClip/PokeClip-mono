@@ -36,5 +36,6 @@ public abstract class RealServerTestSupport {
         registry.add("pokeclip.youtube.token-uri", IntegrationTestSupport.YOUTUBE::tokenUri);
         registry.add("pokeclip.youtube.revoke-uri", IntegrationTestSupport.YOUTUBE::revokeUri);
         registry.add("pokeclip.youtube.api-base-uri", IntegrationTestSupport.YOUTUBE::baseUrl);
+        registry.add("pokeclip.soop.api-base-uri", IntegrationTestSupport.SOOP::baseUrl);
     }
 }

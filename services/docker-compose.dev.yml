@@ -81,6 +81,11 @@ services:
       YOUTUBE_CLIENT_ID: ${YOUTUBE_CLIENT_ID:?}
       YOUTUBE_CLIENT_SECRET: ${YOUTUBE_CLIENT_SECRET:?}
       YOUTUBE_REDIRECT_URI: ${YOUTUBE_REDIRECT_URI:?}
+      # SOOP 셋(POK-396). 셋 중 하나만 비어도 SoopProperties.App이 부팅을 세운다.
+      # 🔴 :? 라 dev .env 에 셋이 없으면 compose 파일 전체가 멈춘다. 이 줄이 머지되기 전에 1번이 값을 넣는다.
+      SOOP_CLIENT_ID: ${SOOP_CLIENT_ID:?}
+      SOOP_CLIENT_SECRET: ${SOOP_CLIENT_SECRET:?}
+      SOOP_REDIRECT_URI: ${SOOP_REDIRECT_URI:?}
       # 프로필 사진(POK-207). 창고 이름이 비면 사진 기능만 꺼진다 — 그래서 :? 가 아니라 :- 다.
       # 나머지 셋은 창고 이름이 차 있을 때만 필수이고, 그 판정은 PhotoProperties가 부팅에서 한다.
       # 🔴 FORCE_PATH_STYLE은 앱에 기본값(false)이 있어 DeploymentEnvVarsTest의 정규식(${VAR:})에

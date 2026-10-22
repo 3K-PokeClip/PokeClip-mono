@@ -137,32 +137,32 @@ set -a && . ../.env && set +a
 | `chat-collector` | `./gradlew :chat-collector:bootRun` | http://localhost:8083/actuator/health |
 | `chat-detector` | `./gradlew :chat-detector:bootRun` | http://localhost:8084/actuator/health |
 
-**`auth`가 부팅 검증·배포 명부로 보는 환경변수는 스물여덟이다.**
-스물넷은 다섯 갈래로 나뉘고 갈래마다 「없으면 어떻게 되나」가 다르다.
+**`auth`가 부팅 검증·배포 명부로 보는 환경변수는 서른하나다.**
+스물일곱은 다섯 갈래로 나뉘고 갈래마다 「없으면 어떻게 되나」가 다르다.
 나머지 넷(`FORWARD_HEADERS_STRATEGY`와 스트림키 암호 저장소 셋)은 기본값이 있는 배포 변수라 표 아래에 따로 적는다.
 이 셈에 안 드는 셋이 더 있다: `DB_HOST`·`DB_PORT`(기본 `localhost`·`5432`, `.env`에 없어 기본값을 남겼다)·`AWS_REGION`(기본 `ap-northeast-2`).
 셋 다 없어도 뜨고 검사 대상도 아니라 세지 않는다.
 🔴 **`GOOGLE_REDIRECT_URI`도 안 든다.** yml에 기본값(`http://localhost:3000/auth/callback`)이 있어 부팅 검증에는 안 걸리는데,
 compose는 `${GOOGLE_REDIRECT_URI:?}`로 **없으면 컨테이너가 아예 안 뜨게** 걸어 뒀고 `.env.dev.example`에도 있다.
-즉 로컬 `bootRun`에는 없어도 되고 dev 배포에는 반드시 있어야 해서, 「앱 시크릿 열둘」에도 「안 드는 셋」에도 자리가 없다.
-**yml 실물은 서른둘이다**(위 스물여덟 + 안 드는 셋 + 이것).
+즉 로컬 `bootRun`에는 없어도 되고 dev 배포에는 반드시 있어야 해서, 「앱 시크릿 열다섯」에도 「안 드는 셋」에도 자리가 없다.
+**yml 실물은 서른다섯이다**(위 서른하나 + 안 드는 셋 + 이것).
 
 | 갈래 | 변수 | 없으면 | 어디서 얻나 |
 |---|---|---|---|
-| **앱 시크릿 열둘** | `JWT_SECRET` · `GOOGLE_CLIENT_ID` · `GOOGLE_CLIENT_SECRET` · `CORS_ALLOWED_ORIGINS` · `SECRET_STORE_KEY`(base64 32바이트) · `INTERNAL_API_TOKEN` · `CHZZK_CLIENT_ID` · `CHZZK_CLIENT_SECRET` · `CHZZK_REDIRECT_URI` · `YOUTUBE_CLIENT_ID` · `YOUTUBE_CLIENT_SECRET` · `YOUTUBE_REDIRECT_URI` | **부팅 실패** | **`.env.example`에 없다** — public 저장소라 예시 값도 두지 않는다. 각자 받아서 넣는다 |
+| **앱 시크릿 열다섯** | `JWT_SECRET` · `GOOGLE_CLIENT_ID` · `GOOGLE_CLIENT_SECRET` · `CORS_ALLOWED_ORIGINS` · `SECRET_STORE_KEY`(base64 32바이트) · `INTERNAL_API_TOKEN` · `CHZZK_CLIENT_ID` · `CHZZK_CLIENT_SECRET` · `CHZZK_REDIRECT_URI` · `YOUTUBE_CLIENT_ID` · `YOUTUBE_CLIENT_SECRET` · `YOUTUBE_REDIRECT_URI` · `SOOP_CLIENT_ID` · `SOOP_CLIENT_SECRET` · `SOOP_REDIRECT_URI` | **부팅 실패** | **`.env.example`에 없다** — public 저장소라 예시 값도 두지 않는다. 각자 받아서 넣는다 |
 | **DB 접속값 셋** | `POSTGRES_DB` · `POSTGRES_USER` · `POSTGRES_PASSWORD` | **부팅 실패**(DB가 접속을 거절한다) | `.env`에 있다. 위 실행 절차의 `set -a && . ../.env` 줄이 싣는다 |
 | **사진 창고 다섯**(POK-207) | `PROFILE_PHOTO_S3_BUCKET` · `PROFILE_PHOTO_TOKEN_SECRET` · `PROFILE_PHOTO_BASE_URL` · `PROFILE_PHOTO_S3_ENDPOINT` · `PROFILE_PHOTO_S3_FORCE_PATH_STYLE` | **그냥 뜬다. 사진 기능만 꺼진다** | 창고는 1번이 판다. 로컬은 가짜 저장소(LocalStack)를 띄워 쓴다 |
 | **탈퇴 정리 알림 주소 둘**(POK-256) | `CLIP_BASE_URL` · `COLLECTOR_BASE_URL` | **부팅 실패**(`@NotBlank`). 비어 있으면 탈퇴한 사람의 방송·채팅 기록이 **조용히 남기** 때문이다 | 서버끼리 붙는 주소다. compose 안은 기본값(`http://clip:8081` · `http://chat-collector:8083`)이라 `.env`는 비워 둔다. 로컬은 `http://localhost:8081` · `:8083` |
 | **resolve 전용 출입증 둘**(계약4 4C) | `STREAM_KEY_RESOLVE_TOKEN` · `STREAM_KEY_RESOLVE_ALLOWED_CIDRS` | **그냥 뜬다. 전용 창구만 닫힌다** — 토큰이 없으면 전용 헤더(`X-Stream-Key-Resolve-Token`) resolve 요청은 늘 401이다. 공용 `X-Internal-Token` resolve는 그대로다. 🔴 토큰을 채우면 조건이 붙는다 — 대역이 비었거나 IPv4 CIDR가 아니거나, `FORWARD_HEADERS_STRATEGY`가 `none`이 아니거나, 톰캣 remoteip 헤더 속성이 있거나, 토큰이 `INTERNAL_API_TOKEN`과 같으면 **부팅 실패** | 토큰은 `openssl rand -hex 32`, 대역은 media-dev 사설 주소 `/32` 하나다. dev는 1번이 두 박스(auth `.env` · media-dev)에 같은 토큰을 한 자리에서 넣는다. 운영 auth는 이 창구를 안 써서 비워 둔다 |
 
-**스물다섯 번째: `FORWARD_HEADERS_STRATEGY`(POK-89, 선택).**
+**스물여덟 번째: `FORWARD_HEADERS_STRATEGY`(POK-89, 선택).**
 없으면 `none`(프록시 헤더를 안 믿는다). `native`면
 사설망·루프백 소켓에서 온 요청의 `X-Forwarded-For`를 요청자 IP로 채택한다(아래 「운영 전 잔불 정리」 절).
 🔴 운영 ECS 태스크 정의에는 `native`를 반드시 넣는다(명시 `none`이 Boot의 ECS 자동 감지를 끈다). 비우지 않는다
 (빈 값은 `none`이 아니라 Boot 유추다). 둘 다 그 절에 있다.
 기본값이 있어 `DeploymentEnvVarsTest`의 「빈 기본값」 정규식엔 안 걸리고 **기본값 있는 변수 명부**가 잡는다.
 
-**스물여섯부터 스물여덟까지: 스트림키 암호 저장소 셋(POK-272).** 로컬은 셋 다 없어도 뜬다(기본은 PG에 두기).
+**스물아홉부터 서른하나까지: 스트림키 암호 저장소 셋(POK-272).** 로컬은 셋 다 없어도 뜬다(기본은 PG에 두기).
 dev는 `type`·`retire-from` 둘 다 `aws`다(아래 「스트림키 암호 이행」 절). 셋 다 기본값 있는 변수 명부에 있다.
 
 | 변수 | 기본 | 뜻 |
@@ -196,7 +196,7 @@ dev는 `type`·`retire-from` 둘 다 `aws`다(아래 「스트림키 암호 이�
 정규식을 넓히지 않는 이유는 `AWS_REGION`·`DB_HOST`처럼 일부러 기본값을 둔 것들이
 필수로 잡혀 예외 목록이 따라오기 때문이다.
 
-**막는 방식이 갈래마다 다르다.** 앱 시크릿 열둘은 빈 기본값(`${VAR:}`)을 주고 부팅 검증으로
+**막는 방식이 갈래마다 다르다.** 앱 시크릿 열다섯은 빈 기본값(`${VAR:}`)을 주고 부팅 검증으로
 잡는다 — 기본값을 아예 안 주면 리터럴 `"${VAR}"`이 바인딩돼 **서버는 뜨고 헬스체크도
 통과하는데 그 기능만 전부 실패하기** 때문이다. DB 접속값 셋은 반대로 기본값 자체를 없앴다(POK-161).
 그쪽은 서버가 실제로 접속을 시도하는 값이라 리터럴이 들어가도 접속 실패로 죽어 신호가 남는다.
@@ -207,7 +207,7 @@ dev는 `type`·`retire-from` 둘 다 `aws`다(아래 「스트림키 암호 이�
 **POK-121이 이 규칙을 그대로 어겼고**(유튜브 셋을 표에만 적었다) 봇 리뷰가 잡았다 —
 그래서 지금은 `DeploymentEnvVarsTest`가 auth의 필수 변수와 두 파일을 대조한다.
 
-**IDE로 띄운다면** 실행 구성의 환경변수에 위 열다섯(부팅에 필요한 것)을 넣거나, `.env`를 읽어 주는 플러그인을 쓴다.
+**IDE로 띄운다면** 실행 구성의 환경변수에 위 열여덟(부팅에 필요한 것)을 넣거나, `.env`를 읽어 주는 플러그인을 쓴다.
 `application-local.yml`(gitignore) 프로파일만으로는 부족하다 — 그 파일은 앱 시크릿만 채우고
 DB 접속값은 채우지 않는다.
 
@@ -227,8 +227,9 @@ DB 접속값은 채우지 않는다.
 | `GOOGLE_REDIRECT_URI` | `https://dev.pokeclip.com/auth/callback` | `https://app.pokeclip.com/auth/callback` |
 | `CHZZK_REDIRECT_URI` | `https://dev.pokeclip.com/oauth/chzzk/callback` | `https://app.pokeclip.com/oauth/chzzk/callback` |
 | `YOUTUBE_REDIRECT_URI` | `https://dev.pokeclip.com/oauth/youtube/callback` | `https://app.pokeclip.com/oauth/youtube/callback` |
+| `SOOP_REDIRECT_URI` | `https://dev.pokeclip.com/oauth/soop/callback` | `https://app.pokeclip.com/oauth/soop/callback` |
 
-치지직은 앱당 리다이렉트가 하나라 환경마다 앱이 따로다(prod 앱은 새로 만든다).
+치지직·SOOP은 앱당 리다이렉트가 하나라 환경마다 앱이 따로다(prod 앱은 새로 만든다).
 
 **치지직 셋은 한 덩어리로 검증한다.** 개발자 센터에 등록한 앱 하나의 값이라 하나만 빠져도
 연동이 통째로 안 되므로, 셋 중 무엇이 비든 같은 메시지 한 줄
@@ -257,6 +258,15 @@ refresh는 **7일 −1초**(실측: 교환 응답에 `refresh_token_expires_in: 
 그 뒤로는 갱신이 `invalid_grant`로 거부돼 연동이 `BROKEN`이 되고, 사용자가 **재동의**해야 풀린다.
 데모 계정은 주 1회 재연동이 필요하다는 뜻이다. 해소 수단은 **OAuth 동의 화면 심사 통과**뿐이다
 (우리 코드로 늘릴 수 없다). 우리는 그 필드를 읽지 않는다 — 판정은 갱신 거부로만 한다.
+
+**SOOP 셋도 한 덩어리다**(POK-396). 셋 중 무엇이 비든 한 메시지
+(`SOOP 앱 설정(SOOP_CLIENT_ID·SOOP_CLIENT_SECRET·SOOP_REDIRECT_URI)이 비었다`)로 죽는다. 값은 메시지에 넣지 않는다.
+
+| | 뜻 |
+|---|---|
+| `SOOP_CLIENT_ID` | SOOP 개발자 콘솔 앱의 Client ID. 동의 URL에 그대로 실린다 |
+| `SOOP_CLIENT_SECRET` | 그 앱의 Client Secret. 토큰 교환·갱신 요청의 form 본문에만 쓰고 URL·로그 어디에도 안 나간다 |
+| `SOOP_REDIRECT_URI` | 동의가 끝난 뒤 SOOP이 code를 돌려줄 주소. **웹 프론트의 콜백 라우트**(`/oauth/soop/callback`)다. **콘솔에 앱당 하나만 등록된다**(환경마다 앱을 따로 판다): 로컬 `http://localhost:3000/oauth/soop/callback` · dev `https://dev.pokeclip.com/oauth/soop/callback` · 운영 `https://app.pokeclip.com/oauth/soop/callback`. 토큰 교환 요청에 이 값을 실어 보낸다(동의 주소에는 안 싣는다) |
 
 **`clip`은 환경변수 없이는 부팅에 실패한다. 일곱이고, auth와 같은 두 갈래다.**
 **여덟째 `COLLECTOR_BASE_URL`(POK-234)은 그 목록에 안 든다** — 비어도 부팅은 살고 채팅 문 셋만 503이다(아래).
@@ -682,7 +692,7 @@ terminationGracePeriodSeconds: 20 # k8s (infra/ 는 1번 폴더라 여기서 못
 
 **셋에는 기본값이 없다**(POK-161). 커밋되는 파일에 비밀번호 기본값을 두면 **public
 저장소에 공개된 값으로 DB에 붙는 창**이 열리기 때문이다. 실행에 필요한 것은 위
-「환경변수 스물여덟」 표를 본다.
+「환경변수 서른하나」 표를 본다.
 
 **이 방식을 다른 시크릿에 확대하지 않는다.** 여기가 통하는 것은 서버가 실제로 접속을
 시도하는 값이라서다 — 값이 없으면 리터럴 `${POSTGRES_PASSWORD}`가 그대로 비밀번호가
