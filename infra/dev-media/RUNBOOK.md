@@ -3649,7 +3649,7 @@ main() {
   (( $# == 1 )) || check_failed '사용법: <T-YYYYMMDD>(닫는 반영 주기의 반영 날짜)'
   [[ "$1" =~ ^T-[0-9]{8}$ ]] || check_failed "보관 이름은 T-YYYYMMDD 꼴이다: $1"
   local -r arch="${ARCH_ROOT}/$1"
-  local name
+  local name arch_list
   assert_demo_dir_safe
   assert_window_closed
   assert_pre_t_seven
@@ -3669,7 +3669,9 @@ main() {
   done
   assert_archived "${arch}"
   ls -1A -- "${arch}" > "${WORK}/arch-names"   # 못 받으면 검사 실패
-  echo "보관 자리 ${arch}: $(tr '\n' ' ' < "${WORK}/arch-names")"
+  # 따로 대입해야 tr 실패가 ERR 덫으로 간다(echo 안의 치환은 종료 상태를 잃는다)
+  arch_list="$(tr '\n' ' ' < "${WORK}/arch-names")"
+  echo "보관 자리 ${arch}: ${arch_list}"
   echo "반영 전 기록 보관 끝 — ${#PRE_NAMES[@]}개를 옮겼다(root:root 0600)"
 }
 main "$@"
