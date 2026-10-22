@@ -10,6 +10,9 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
+# RDS CA 통합 번들의 sha256 정본은 이 줄 하나다. 번들을 바꾸면 이 값도 같은 커밋에서 바꾼다 —
+# 어긋나면 빌드가 여기서 멈춘다(출처 · 취득 기록은 README 「RDS CA 번들」 절).
+RUN echo "90a6f1a7978a1b1b096dca6c57511ca48d3b8cf052f8e704baf358f34ea2f21b  /src/certs/rds-global-bundle.pem" | sha256sum -c -
 # CGO_ENABLED=0 = 순수 정적 바이너리. 빌드 이미지의 libc 에 묶이지 않는다.
 RUN CGO_ENABLED=0 go build -trimpath -o /out/segment-indexer ./cmd/segment-indexer
 RUN CGO_ENABLED=0 go build -trimpath -o /out/janitor ./cmd/janitor
@@ -26,6 +29,9 @@ RUN apk add --no-cache tzdata ca-certificates
 
 COPY --from=build /out/segment-indexer /usr/local/bin/segment-indexer
 COPY --from=build /out/janitor /usr/local/bin/janitor
+# root 소유 0644 — USER 10001 이 읽기만 한다. 이 경로를 쓰게 하는 POSTGRES_SSLROOTCERT 는 배포
+# 정의가 준다(ENV 로 두지 않는다 — 로컬 compose 의 password · prefer 경로에 끼어들지 않게).
+COPY --from=build /src/certs/rds-global-bundle.pem /etc/pokeclip/rds-ca/global-bundle.pem
 
 # 비특권 사용자로 돌린다. recordings 는 :ro 로 붙지만, 권한을 낮춰 두면
 # 컨테이너가 뚫렸을 때 할 수 있는 일이 한 단계 더 줄어든다.
