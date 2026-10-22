@@ -109,7 +109,7 @@ new_tree_case() {
 
 #######################################
 # 사본 트리의 scp-recheck.sh 를 제한 시간(RUN_LIMIT) 안에서 돌린다. 「이름=값」
-# 꼴 인자는 환경으로 넘긴다(FAKE_AWS_*).
+# 꼴 인자는 환경으로 넘긴다(FAKE_AWS_* · AWS_CLI_HISTORY_FILE).
 # Globals:
 #   RUN_LIMIT
 # Arguments:
@@ -119,7 +119,8 @@ run_recheck() {
   local case_dir="$1" name="$2"
   local -a envs=()
   shift 2
-  while [[ "$#" -gt 0 && "$1" == FAKE_AWS_*=* ]]; do
+  while [[ "$#" -gt 0 && ( "$1" == FAKE_AWS_*=* ||
+    "$1" == AWS_CLI_HISTORY_FILE=* ) ]]; do
     envs+=("$1")
     shift
   done
@@ -935,6 +936,130 @@ expect_io_failure_hides_paths() {
 }
 
 #######################################
+# 호출 주체 증거(sts.err · sts.txt)를 쓰지 못하면 종료 2 이고, 원인은
+# 「증거를 쓰지 못함(<파일 이름>)」 한 줄이며 bash 원시 진단(절대 경로)이
+# 없다. sts.err 자리는 호출 전에 비운 파일을 먼저 만들므로 「호출 주체를
+# 확인하지 못함」 으로 가지 않는다. 쓰기 막기는 PATH 앞의 가짜 mkdir 이 증거
+# 디렉터리를 만들 때 그 이름의 디렉터리를 심어 만든다.
+# Globals:
+#   RUN_LIMIT, FAKEBIN, PATH, run_out
+#######################################
+expect_identity_write_failure() {
+  local case_dir bin target name paths
+  case_dir="$(new_tree_case)" || {
+    testlib::fail "identity-write: 시험 준비 실패"
+    return
+  }
+  bin="${case_dir}/in/mkdirbin"
+  if ! mkdir -p -- "${bin}" || ! testlib::make_blocking_mkdir "${bin}"; then
+    testlib::fail "identity-write: 시험 준비 실패"
+    return
+  fi
+  for target in sts.err sts.txt; do
+    name="identity-write-${target}"
+    testlib::run_limited "${RUN_LIMIT}" "${case_dir}" "${name}" \
+      env PATH="${bin}:${FAKEBIN}:${PATH}" FAKE_AWS_SIM=ok \
+      FAKE_BLOCK_PREFIX=scp-alpha FAKE_BLOCK_NAME="${target}" \
+      bash "${case_dir}/tree/scp-recheck.sh" alpha
+    expect_unverifiable "${name}" || return
+    testlib::expect_stderr_count "${name}" "증거를 쓰지 못함(${target})" 1 ||
+      return
+    if [[ "${target}" == sts.err ]]; then
+      testlib::expect_stderr_count "${name}" '호출 주체를 확인하지 못함' 0 ||
+        return
+    fi
+    paths="$(testlib::abs_path_lines "${run_out}.stdout")"
+    paths+="$(testlib::abs_path_lines "${run_out}.stderr")"
+    if [[ -n "${paths}" ]]; then
+      testlib::fail "${name}: 절대 경로 — ${paths}"
+      return
+    fi
+  done
+  expect_no_leak identity-write "${case_dir}" || return
+  testlib::ok "identity-write → sts.err · sts.txt 쓰기 실패는 종료 2 ·" \
+    "「증거를 쓰지 못함(<파일>)」 한 줄 · 절대 경로 0"
+}
+
+#######################################
+# CLI 기록 — 프로필의 cli_history 가 enabled 이거나 AWS_CLI_HISTORY_FILE 이
+# 설정돼 있으면 첫 AWS 호출 전에 종료 2(값 · 경로를 되울리지 않고 증거
+# 디렉터리도 만들지 않음), 설정 읽기 실패도 종료 2, disabled 면 정상이고
+# 설정 조회가 호출 주체 확인보다 먼저다. --accept 는 AWS 를 부르지 않으므로
+# 켜져 있어도 승인한다.
+# Globals:
+#   run_out
+#######################################
+expect_cli_history() {
+  local case_dir spec name log want calls dirs name_judged
+  for spec in enabled file fail disabled; do
+    name="cli-history-${spec}"
+    case_dir="$(new_tree_case)" || {
+      testlib::fail "${name}: 시험 준비 실패"
+      return
+    }
+    log="${case_dir}/out/aws.log"
+    case "${spec}" in
+      file)
+        run_recheck "${case_dir}" "${name}" \
+          "AWS_CLI_HISTORY_FILE=${case_dir}/in/qxhistory.db" alpha
+        ;;
+      *)
+        run_recheck "${case_dir}" "${name}" "FAKE_AWS_CLI_HISTORY=${spec}" alpha
+        ;;
+    esac
+    if [[ "${spec}" == disabled ]]; then
+      expect_result "${name}" 0 'SCP RECHECK OK 3' 3 || return
+      if [[ "$(sed -n 1p -- "${log}")" != 'configure get cli_history' ||
+        "$(sed -n 2p -- "${log}")" != 'sts get-caller-identity'* ]]; then
+        testlib::fail "${name}: 설정 조회 · 호출 주체 확인 순서가 아님 —" \
+          "$(cat -- "${log}")"
+        return
+      fi
+      continue
+    fi
+    expect_unverifiable "${name}" || return
+    calls="$(testlib::count "${log}" ' ')"
+    want=1
+    [[ "${spec}" == file ]] && want=0
+    if [[ "${calls}" -ne "${want}" || ( "${want}" -eq 1 &&
+      "$(cat -- "${log}")" != 'configure get cli_history' ) ]] ||
+      grep -qF -e qxhistory -e enabled -- "${run_out}.stderr"; then
+      testlib::fail "${name}: AWS 호출 ${calls}건(기대 ${want})이거나 값 ·" \
+        "경로를 되울림 — $(cat -- "${run_out}.stderr")"
+      return
+    fi
+    if [[ "${spec}" == fail ]]; then
+      testlib::expect_stderr_count "${name}" \
+        'CLI 기록 설정(cli_history)을 읽지 못함' 1 || return
+    else
+      testlib::expect_stderr_count "${name}" \
+        'CLI 기록이 켜져 있음 — 증거 밖에 원문이 남음' 1 || return
+    fi
+    dirs="$(find "${case_dir}/home" -name 'scp-*' -type d | wc -l)"
+    if [[ "${dirs}" -ne 0 ]]; then
+      testlib::fail "${name}: 멈췄는데 증거 디렉터리 ${dirs}개"
+      return
+    fi
+    expect_no_leak "${name}" "${case_dir}" || return
+  done
+  run_recheck "${case_dir}" cli-history-judge alpha
+  name_judged="$(judged_name)" || {
+    testlib::fail "cli-history-accept: 시험 준비 실패"
+    return
+  }
+  run_recheck "${case_dir}" cli-history-accept FAKE_AWS_CLI_HISTORY=enabled \
+    --accept alpha --dir "${name_judged}" --reason 'kty 답'
+  if [[ "${run_status}" -ne 0 ]]; then
+    testlib::fail "cli-history-accept: 승인은 AWS 를 부르지 않는데 종료" \
+      "${run_status} — $(cat -- "${run_out}.stderr")"
+    return
+  fi
+  expect_no_leak cli-history "${case_dir}" || return
+  testlib::ok "cli-history → enabled · 기록 파일 환경 변수 · 설정 읽기 실패는" \
+    "첫 AWS 호출 전 종료 2 · disabled 는 설정 조회 뒤 정상 · --accept 는 승인"
+}
+
+#######################################
 # 승인 기준 하나를 고친다(종류별).
 # Globals:
 #   NOT_UTC, OTHER_SHA256
@@ -1012,7 +1137,8 @@ tamper_reference() {
         us_east_1 allow allowed True
       ;;
     result-quote)
-      # 다섯째 칸(AllowedByOrganizations)에 큰따옴표 — is_plain 이 막는다.
+      # 다섯째 칸(AllowedByOrganizations)에 큰따옴표 — precheck::is_plain 이
+      # 막는다.
       rewrite_result_row "${dir}" iam:GetAccountAuthorizationDetails \
         us-east-1 allow allowed '"True"'
       ;;
@@ -1344,6 +1470,8 @@ main() {
   expect_accept_changed_result_rejected
   expect_no_record_when_time_fails
   expect_io_failure_hides_paths
+  expect_identity_write_failure
+  expect_cli_history
   expect_tampered_reference_rejected
   expect_result_without_final_newline
   expect_collapsed_baseline_rejected

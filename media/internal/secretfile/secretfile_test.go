@@ -1,6 +1,6 @@
-package main
+package secretfile
 
-// 비밀번호 파일 읽기(readSecretFile — POK-373) 시험. 파일 내용은 모두 합성이다.
+// 비밀번호 파일 읽기(Read — POK-373) 시험. 파일 내용은 모두 합성이다.
 // 실패 문구에는 파일 내용을 싣지 않는다(ADR-018) — 누설 시험은 「카나리아 발견」 만 적는다.
 
 import (
@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -42,9 +43,9 @@ func TestReadSecretFileStripsOneTrailingNewline(t *testing.T) {
 		{content: "a:b c\n", want: "a:b c"},
 	} {
 		path := writeSecret(t, dir, "s"+string(rune('a'+i)), c.content, 0o600)
-		got, err := readSecretFile(secretEnv, path)
+		got, err := Read(secretEnv, path, Options{ShowPath: true})
 		if err != nil {
-			t.Errorf("경우 %d: readSecretFile 에러 %v, want nil", i, err)
+			t.Errorf("경우 %d: Read 에러 %v, want nil", i, err)
 			continue
 		}
 		if got != c.want {
@@ -70,12 +71,12 @@ func TestReadSecretFileRejectsBadContent(t *testing.T) {
 		{name: "4097 바이트", content: strings.Repeat("x", 4097)},
 	} {
 		path := writeSecret(t, dir, "b"+string(rune('a'+i)), c.content, 0o600)
-		if _, err := readSecretFile(secretEnv, path); err == nil {
-			t.Errorf("%s: readSecretFile 이 받았다", c.name)
+		if _, err := Read(secretEnv, path, Options{ShowPath: true}); err == nil {
+			t.Errorf("%s: Read 이 받았다", c.name)
 		}
 	}
 	path := writeSecret(t, dir, "max", strings.Repeat("x", 4096), 0o600)
-	if got, err := readSecretFile(secretEnv, path); err != nil || len(got) != 4096 {
+	if got, err := Read(secretEnv, path, Options{ShowPath: true}); err != nil || len(got) != 4096 {
 		t.Errorf("4096 바이트: 길이 %d, 에러 %v, want 4096 · nil", len(got), err)
 	}
 }
@@ -86,9 +87,9 @@ func TestReadSecretFileRejectsOtherPermissionBits(t *testing.T) {
 	dir := t.TempDir()
 	for _, mode := range []os.FileMode{0o644, 0o604, 0o602, 0o601, 0o444} {
 		path := writeSecret(t, dir, "o"+mode.String(), "pw\n", mode)
-		_, err := readSecretFile(secretEnv, path)
+		_, err := Read(secretEnv, path, Options{ShowPath: true})
 		if err == nil {
-			t.Errorf("모드 %#o: readSecretFile 이 받았다", mode)
+			t.Errorf("모드 %#o: Read 이 받았다", mode)
 			continue
 		}
 		if !strings.Contains(err.Error(), secretEnv) || !strings.Contains(err.Error(), path) {
@@ -97,8 +98,8 @@ func TestReadSecretFileRejectsOtherPermissionBits(t *testing.T) {
 	}
 	for _, mode := range []os.FileMode{0o600, 0o400, 0o640, 0o440} {
 		path := writeSecret(t, dir, "g"+mode.String(), "pw\n", mode)
-		if _, err := readSecretFile(secretEnv, path); err != nil {
-			t.Errorf("모드 %#o: readSecretFile 에러 %v, want nil", mode, err)
+		if _, err := Read(secretEnv, path, Options{ShowPath: true}); err != nil {
+			t.Errorf("모드 %#o: Read 에러 %v, want nil", mode, err)
 		}
 	}
 }
@@ -109,9 +110,9 @@ func TestReadSecretFileRejectsGroupWriteBit(t *testing.T) {
 	dir := t.TempDir()
 	for _, mode := range []os.FileMode{0o660, 0o620} {
 		path := writeSecret(t, dir, "w"+mode.String(), "pw\n", mode)
-		_, err := readSecretFile(secretEnv, path)
+		_, err := Read(secretEnv, path, Options{ShowPath: true})
 		if err == nil {
-			t.Errorf("모드 %#o: readSecretFile 이 받았다", mode)
+			t.Errorf("모드 %#o: Read 이 받았다", mode)
 			continue
 		}
 		if !strings.Contains(err.Error(), secretEnv) || !strings.Contains(err.Error(), path) {
@@ -120,14 +121,14 @@ func TestReadSecretFileRejectsGroupWriteBit(t *testing.T) {
 	}
 	for _, mode := range []os.FileMode{0o640, 0o440} {
 		path := writeSecret(t, dir, "r"+mode.String(), "pw\n", mode)
-		if _, err := readSecretFile(secretEnv, path); err != nil {
-			t.Errorf("모드 %#o: readSecretFile 에러 %v, want nil", mode, err)
+		if _, err := Read(secretEnv, path, Options{ShowPath: true}); err != nil {
+			t.Errorf("모드 %#o: Read 에러 %v, want nil", mode, err)
 		}
 	}
 }
 
 // 일반 파일만 받는다 — 디렉터리 · 없는 파일 · 대상 없는 링크는 기동 실패다. 거부 사유까지 본다.
-// 디렉터리는 일반 파일 검사 갈래(errNotRegularFile)여야 한다 — 그 검사를 지운 트리에서는 다른 거부가 대신
+// 디렉터리는 일반 파일 검사 갈래(ErrNotRegularFile)여야 한다 — 그 검사를 지운 트리에서는 다른 거부가 대신
 // 걸려 「거부됐다」 만으로는 검사가 있는지 가려지지 않는다(t.TempDir 의 하위 폴더는 0755 라 darwin ·
 // linux 모두 other 비트 거부에 걸린다 — 실측). 없는 파일 · 대상 없는 링크는 열기에서 끝나므로(fstat 전)
 // 사유는 「없음」 이고, 열기 실패라 경로를 싣지 않는다(아래 TestReadSecretFileOpenErrorOmitsPath).
@@ -142,13 +143,13 @@ func TestReadSecretFileRejectsNonRegular(t *testing.T) {
 		want       error
 		wantPath   bool
 	}{
-		{name: "디렉터리", path: dir, want: errNotRegularFile, wantPath: true},
+		{name: "디렉터리", path: dir, want: ErrNotRegularFile, wantPath: true},
 		{name: "없는 파일", path: filepath.Join(dir, "missing"), want: fs.ErrNotExist},
 		{name: "대상 없는 링크", path: dangling, want: fs.ErrNotExist},
 	} {
-		_, err := readSecretFile(secretEnv, c.path)
+		_, err := Read(secretEnv, c.path, Options{ShowPath: true})
 		if err == nil {
-			t.Errorf("%s: readSecretFile 이 받았다", c.name)
+			t.Errorf("%s: Read 이 받았다", c.name)
 			continue
 		}
 		if !errors.Is(err, c.want) {
@@ -169,9 +170,9 @@ func TestReadSecretFileRejectsNonRegular(t *testing.T) {
 // 원문 대신 「카나리아 발견」 만 적는다.
 func TestReadSecretFileOpenErrorOmitsPath(t *testing.T) {
 	const canary = "opencanary7q"
-	_, err := readSecretFile(secretEnv, "/"+canary)
+	_, err := Read(secretEnv, "/"+canary, Options{ShowPath: true})
 	if err == nil {
-		t.Fatal("readSecretFile 이 받았다")
+		t.Fatal("Read 이 받았다")
 	}
 	if strings.Contains(err.Error(), canary) {
 		t.Error("열기 실패 에러에 카나리아 발견")
@@ -192,7 +193,7 @@ func TestReadSecretFileFollowsSymlinkToRegularFile(t *testing.T) {
 	if err := os.Symlink(target, link); err != nil {
 		t.Fatalf("링크 생성 실패: %v", err)
 	}
-	got, err := readSecretFile(secretEnv, link)
+	got, err := Read(secretEnv, link, Options{ShowPath: true})
 	if err != nil || got != "pw" {
 		t.Errorf("링크: 길이 %d, 에러 %v, want 길이 2 · nil", len(got), err)
 	}
@@ -213,9 +214,9 @@ func TestReadSecretFileErrorsCarryNoContent(t *testing.T) {
 		{name: "other 비트", content: canary + "\n", mode: 0o644},
 	} {
 		path := writeSecret(t, dir, "c"+string(rune('a'+i)), c.content, c.mode)
-		_, err := readSecretFile(secretEnv, path)
+		_, err := Read(secretEnv, path, Options{ShowPath: true})
 		if err == nil {
-			t.Errorf("%s: readSecretFile 이 받았다", c.name)
+			t.Errorf("%s: Read 이 받았다", c.name)
 			continue
 		}
 		if strings.Contains(err.Error(), canary) {
@@ -223,6 +224,71 @@ func TestReadSecretFileErrorsCarryNoContent(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), secretEnv) || !strings.Contains(err.Error(), path) {
 			t.Errorf("%s: 에러에 env 이름이나 경로가 없다", c.name)
+		}
+	}
+}
+
+// ShowPath 가 거짓이면 어느 갈래에서도 경로를 싣지 않는다 — 응답기(ingest-auth)는 계약 3-2 에 따라
+// 열기 실패뿐 아니라 열린 뒤의 거부(종류 · 권한 · 크기 · 내용)에서도 경로 대신 env 이름과 원인만 싣는다.
+// 경로의 디렉터리 이름에 카나리아를 넣어 본다. 대조 행: 같은 입력을 ShowPath 참으로 읽으면 열린 뒤
+// 갈래에 경로가 실린다(사이드카 문구 유지). 실패 문구에는 원문 대신 「카나리아 발견」 만 적는다.
+func TestReadHidesPathWhenShowPathFalse(t *testing.T) {
+	const canary = "pathcanary5k"
+	dir := filepath.Join(t.TempDir(), canary)
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatalf("시험 폴더 생성 실패: %v", err)
+	}
+	sub := filepath.Join(dir, "sub")
+	if err := os.Mkdir(sub, 0o700); err != nil {
+		t.Fatalf("시험 폴더 생성 실패: %v", err)
+	}
+	for _, c := range []struct {
+		name, path string
+		opened     bool // 열린 뒤의 갈래인가 — ShowPath 참이면 경로가 실려야 한다
+	}{
+		{name: "없는 파일", path: filepath.Join(dir, "missing")},
+		{name: "디렉터리", path: sub, opened: true},
+		{name: "other 비트", path: writeSecret(t, dir, "other", "pw\n", 0o604), opened: true},
+		{name: "group 쓰기", path: writeSecret(t, dir, "gw", "pw\n", 0o620), opened: true},
+		{name: "빈 내용", path: writeSecret(t, dir, "empty", "", 0o600), opened: true},
+		{name: "두 줄", path: writeSecret(t, dir, "two", "pw\nmore\n", 0o600), opened: true},
+		{name: "4 KiB 초과", path: writeSecret(t, dir, "big", strings.Repeat("x", 4097), 0o600), opened: true},
+	} {
+		_, err := Read(secretEnv, c.path, Options{ShowPath: false})
+		if err == nil {
+			t.Errorf("%s: Read 가 받았다", c.name)
+			continue
+		}
+		if strings.Contains(err.Error(), canary) {
+			t.Errorf("%s: ShowPath 거짓인데 에러에 경로 카나리아 발견", c.name)
+		}
+		if !strings.Contains(err.Error(), secretEnv) {
+			t.Errorf("%s: 에러에 env 이름이 없다", c.name)
+		}
+		_, err = Read(secretEnv, c.path, Options{ShowPath: true})
+		if got := err != nil && strings.Contains(err.Error(), canary); got != c.opened {
+			t.Errorf("%s: ShowPath 참에서 경로가 실렸나 = %v, want %v", c.name, got, c.opened)
+		}
+	}
+}
+
+// 열린 뒤 상태(Stat) · 읽기(Read) 실패의 에러도 ShowPath 가 거짓이면 경로를 싣지 않고 원인(errno)만 남긴다 — 실제 파일로는
+// 이 두 실패를 일으킬 수 없어 Read 가 그 에러를 감싸는 자리(Options.cause)에 합성 *fs.PathError 를 넣어 본다. 원인
+// 판별(errors.Is)은 두 갈래 모두 살아 있어야 하고, ShowPath 참이면 지금처럼 경로가 남는다(사이드카 문구 유지).
+func TestOptionsCauseHidesPathWhenShowPathFalse(t *testing.T) {
+	const canary = "/causecanary8m/secret"
+	for _, op := range []string{"stat", "read"} {
+		err := &fs.PathError{Op: op, Path: canary, Err: syscall.EIO}
+		hidden := Options{ShowPath: false}.cause(err)
+		if strings.Contains(hidden.Error(), canary) {
+			t.Errorf("%s: ShowPath 거짓인데 에러에 경로 카나리아 발견", op)
+		}
+		if !errors.Is(hidden, syscall.EIO) {
+			t.Errorf("%s: ShowPath 거짓에서 원인이 사라졌다 — errors.Is(EIO) 가 거짓이다", op)
+		}
+		shown := Options{ShowPath: true}.cause(err)
+		if !strings.Contains(shown.Error(), canary) || !errors.Is(shown, syscall.EIO) {
+			t.Errorf("%s: ShowPath 참에서 경로 · 원인이 남지 않았다", op)
 		}
 	}
 }

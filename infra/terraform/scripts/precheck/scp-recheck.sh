@@ -54,9 +54,10 @@
 #       result.tsv 와 승인 기록의 해시가 완료 표지의 판정 때 해시와 같은지,
 #       그 판정의 호출 주체 계정이 이번과 같은지 본다 — 어긋나면 종료 2.
 # 종료 코드: 0 OK / 1 DENIED(바뀜과 겹쳐도 1) / 3 CHANGED(거부 없음) /
-#            2 검사 불가(사용법 · 묶음 없음 · 증거 경로 · 호출 실패 · 호출
-#            자체의 AccessDenied · 응답 꼴 · IAM 사용자가 아닌 주체 · 앞
-#            기준 손상 · 계정 다름) —
+#            2 검사 불가(사용법 · 묶음 없음 · CLI 기록 켜짐(판정만 — 첫
+#            AWS 호출 전) · 증거 경로 · 호출 실패 · 호출 자체의
+#            AccessDenied · 응답 꼴 · IAM 사용자가 아닌 주체 · 앞 기준 손상 ·
+#            계정 다름) —
 #            OK 로 넘어가지 않는다(fail-closed).
 
 set -uo pipefail
@@ -74,17 +75,14 @@ readonly REGION_PATTERN='^[a-z]{2}(-[a-z]+)+-[0-9]$'
 # shellcheck disable=SC2016 # 펼치지 않는 글자 그대로다.
 readonly ACCOUNT_PLACEHOLDER='${ACCOUNT}'
 # 증거 디렉터리 이름 = 「scp-<묶음>-<UTC 시각>」. 도구 접두로 다른 도구
-# (events · M17b collect 등)의 디렉터리와 이름이 겹치지 않는다.
+# (events.sh · principal-check.sh 등)의 디렉터리와 이름이 겹치지 않는다.
 readonly DIR_PREFIX='scp'
 # 증거 디렉터리 이름의 시각 부분(evidence::new_dir 의 UTC 시각).
 STAMP_GLOB='[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T'
 STAMP_GLOB+='[0-9][0-9][0-9][0-9][0-9][0-9]Z'
 readonly STAMP_GLOB
-# 호출 주체가 IAM 사용자인 ARN(경로 포함).
-readonly USER_ARN_PATTERN='^arn:aws:iam::[0-9]{12}:user/[A-Za-z0-9+=,.@_/-]+$'
 # 증거에 남기는 UTC 시각(완료 표지 · 승인 기록).
 readonly UTC_PATTERN='^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$'
-readonly SHA256_PATTERN='^[0-9a-f]{64}$'
 SIM_QUERY='EvaluationResults[].[EvalActionName,EvalDecision,'
 SIM_QUERY+='OrganizationsDecisionDetail.AllowedByOrganizations]'
 readonly SIM_QUERY
@@ -92,6 +90,11 @@ readonly SIM_QUERY
 # shellcheck source=infra/terraform/scripts/precheck/lib/evidence.sh
 source "${SCRIPT_DIR}/lib/evidence.sh" || {
   printf 'scp-recheck: 검사 불가: 증거 경로 함수를 읽지 못함\n' >&2
+  exit 2
+}
+# shellcheck source=infra/terraform/scripts/precheck/lib/precheck_common.sh
+source "${SCRIPT_DIR}/lib/precheck_common.sh" || {
+  printf 'scp-recheck: 검사 불가: 공용 도우미를 읽지 못함\n' >&2
   exit 2
 }
 
@@ -105,9 +108,6 @@ reference_dir=""
 # read_result_reference 가 센 결과 행 수 · 거부 행 수.
 result_rows=0
 result_denied=0
-# 호출 주체(값은 출력하지 않는다).
-caller_arn=""
-account=""
 # judge_row 가 남기는 행 판정.
 row_decision=""
 row_line=""
@@ -120,53 +120,6 @@ row_line=""
 die() {
   printf 'scp-recheck: 검사 불가: %s\n' "$*" >&2
   exit 2
-}
-
-#######################################
-# 값이 JSON 문자열 · TSV 칸에 그대로 들어가도 되는지 본다(큰따옴표 ·
-# 역슬래시 · 제어 문자 금지).
-# Arguments:
-#   값.
-# Returns:
-#   들어가도 되면 0.
-#######################################
-is_plain() {
-  [[ -n "$1" && "$1" != *[\"\\]* && "$1" != *[[:cntrl:]]* ]]
-}
-
-#######################################
-# 탭 구분 줄의 칸 수가 정확하고 빈 칸이 없는지 본다. 탭 IFS 의 read 는 빈
-# 칸을 접어 칸을 밀기 때문에, 칸을 나누기 전에 이것으로 먼저 거른다.
-# Arguments:
-#   줄, 칸 수.
-# Returns:
-#   맞으면 0.
-#######################################
-tsv_ok() {
-  local line="$1" fields="$2" tab=$'\t' tabs
-  tabs="${line//[!${tab}]/}"
-  [[ "${#tabs}" -eq $((fields - 1)) && "${line}" != "${tab}"* &&
-    "${line}" != *"${tab}" && "${line}" != *"${tab}${tab}"* ]]
-}
-
-#######################################
-# 파일의 sha256 을 낸다(GNU sha256sum, 없으면 shasum -a 256).
-# Globals:
-#   SHA256_PATTERN
-# Arguments:
-#   파일.
-# Outputs:
-#   64자리 16진수.
-# Returns:
-#   계산하지 못하면 1.
-#######################################
-file_sha256() {
-  local out
-  out="$(sha256sum -- "$1" 2>/dev/null || shasum -a 256 -- "$1" 2>/dev/null)" ||
-    return 1
-  out="${out%% *}"
-  [[ "${out}" =~ ${SHA256_PATTERN} ]] || return 1
-  printf '%s\n' "${out}"
 }
 
 #######################################
@@ -190,13 +143,14 @@ load_bundle() {
   fi
   while IFS= read -r line || [[ -n "${line}" ]]; do
     [[ -z "${line}" || "${line}" == '#'* ]] && continue
-    tsv_ok "${line}" 3 || die "묶음 ${bundle} 의 행 꼴이 틀림: ${line}"
+    precheck::tsv_ok "${line}" 3 || die "묶음 ${bundle} 의 행 꼴이 틀림: ${line}"
     action="${line%%$'\t'*}"
     resource="${line#*$'\t'}"
     region="${resource%%$'\t'*}"
     resource="${resource#*$'\t'}"
     if ! [[ "${action}" =~ ${ACTION_PATTERN} &&
-      "${region}" =~ ${REGION_PATTERN} ]] || ! is_plain "${resource}"; then
+      "${region}" =~ ${REGION_PATTERN} ]] ||
+      ! precheck::is_plain "${resource}"; then
       die "묶음 ${bundle} 의 행 꼴이 틀림: ${line}"
     fi
     if [[ "${seen}" == *$'\n'"${action} ${region}"$'\n'* ]]; then
@@ -287,7 +241,7 @@ read_result_reference() {
   result_rows=0
   result_denied=0
   while IFS= read -r line || [[ -n "${line}" ]]; do
-    tsv_ok "${line}" 5 || die "결과 파일의 꼴이 틀림(${1##*/}/result.tsv)"
+    precheck::tsv_ok "${line}" 5 || die "결과 파일의 꼴이 틀림(${1##*/}/result.tsv)"
     action="${line%%$'\t'*}"
     rest="${line#*$'\t'}"
     region="${rest%%$'\t'*}"
@@ -301,7 +255,7 @@ read_result_reference() {
       [[ "${decision}:${sim}" != allow:allowed &&
         "${decision}:${sim}" != deny:implicitDeny &&
         "${decision}:${sim}" != deny:explicitDeny ]] ||
-      ! is_plain "${orgs}"; then
+      ! precheck::is_plain "${orgs}"; then
       die "결과 파일의 꼴이 틀림(${1##*/}/result.tsv)"
     fi
     if [[ "${seen}" == *$'\n'"${action} ${region}"$'\n'* ]]; then
@@ -339,7 +293,7 @@ require_complete() {
   [[ "${at}" =~ ${UTC_PATTERN} && "${sum}" =~ ${SHA256_PATTERN} ]] ||
     die "완료 표지의 꼴이 틀림(${dir##*/}/complete.txt)"
   evidence::check_file "${dir}/result.tsv" || exit 2
-  current="$(file_sha256 "${dir}/result.tsv")" ||
+  current="$(precheck::file_sha256 "${dir}/result.tsv")" ||
     die "결과 파일의 해시를 계산하지 못함(${dir##*/})"
   [[ "${current}" == "${sum}" ]] ||
     die "판정 뒤 결과 파일이 바뀜(${dir##*/}/result.tsv — 해시 다름)"
@@ -359,7 +313,7 @@ check_acceptance() {
   evidence::check_file "${file}" || exit 2
   line="$(cat -- "${file}" 2>/dev/null)" ||
     die "승인 기록을 읽지 못함(${dir##*/})"
-  if [[ "${line}" == *$'\n'* ]] || ! tsv_ok "${line}" 3; then
+  if [[ "${line}" == *$'\n'* ]] || ! precheck::tsv_ok "${line}" 3; then
     die "승인 기록의 꼴이 틀림(${dir##*/}/accepted.tsv)"
   fi
   at="${line%%$'\t'*}"
@@ -387,7 +341,7 @@ read_baseline_reference() {
   [[ -f "${BASELINE}" && ! -L "${BASELINE}" ]] || die "baseline.tsv 가 없음"
   while IFS= read -r line || [[ -n "${line}" ]]; do
     [[ -z "${line}" || "${line}" == '#'* ]] && continue
-    tsv_ok "${line}" 5 || die "baseline.tsv 의 행 꼴이 틀림: ${line}"
+    precheck::tsv_ok "${line}" 5 || die "baseline.tsv 의 행 꼴이 틀림: ${line}"
     name="${line%%$'\t'*}"
     rest="${line#*$'\t'}"
     action="${rest%%$'\t'*}"
@@ -443,7 +397,7 @@ check_reference_account() {
   evidence::check_file "${file}" || exit 2
   line="$(cat -- "${file}" 2>/dev/null)" ||
     die "앞 기준의 호출 주체 기록을 읽지 못함"
-  if [[ "${line}" == *$'\n'* ]] || ! tsv_ok "${line}" 2 ||
+  if [[ "${line}" == *$'\n'* ]] || ! precheck::tsv_ok "${line}" 2 ||
     [[ "${line#*$'\t'}" != "${account}" ]]; then
     die "앞 기준(${reference_dir##*/})의 호출 주체 계정이 이번과 다름"
   fi
@@ -466,33 +420,8 @@ reference_decision() {
 }
 
 #######################################
-# 호출 주체를 확인한다. 값은 변수에만 두고 원본은 증거 디렉터리에 남긴다.
-# IAM 사용자가 아니면 멈춘다(시뮬레이터는 역할 세션 ARN 을 받지 않는다).
-# Globals:
-#   caller_arn, account, USER_ARN_PATTERN
-# Arguments:
-#   증거 디렉터리.
-#######################################
-caller_identity() {
-  local dir="$1" out
-  out="$(aws sts get-caller-identity --query '[Arn,Account]' --output text \
-    2>"${dir}/sts.err")" ||
-    die "호출 주체를 확인하지 못함(증거 디렉터리의 sts.err)"
-  printf '%s\n' "${out}" >"${dir}/sts.txt" || die "증거를 쓰지 못함"
-  caller_arn="${out%%$'\t'*}"
-  account="${out#*$'\t'}"
-  if [[ "${out}" != *$'\t'* ]] || ! [[ "${account}" =~ ^[0-9]{12}$ ]]; then
-    die "호출 주체 응답의 꼴이 다름(증거 디렉터리의 sts.txt)"
-  fi
-  if ! [[ "${caller_arn}" =~ ${USER_ARN_PATTERN} ]] ||
-    [[ "${caller_arn}" != "arn:aws:iam::${account}:user/"* ]]; then
-    die "호출 주체가 IAM 사용자가 아님(시뮬레이터는 역할 세션 ARN 을 받지 않음)"
-  fi
-}
-
-#######################################
-# 행 하나의 시뮬레이터 요청 파일을 쓴다(값은 load_bundle · caller_identity
-# 가 검사한 것만 — 큰따옴표 · 역슬래시 없음).
+# 행 하나의 시뮬레이터 요청 파일을 쓴다(값은 load_bundle ·
+# precheck::caller_identity 가 검사한 것만 — 큰따옴표 · 역슬래시 없음).
 # Globals:
 #   caller_arn
 # Arguments:
@@ -530,7 +459,7 @@ judge_row() {
     die "시뮬레이터 호출 실패(res-${n}.err)"
   fi
   printf '%s\n' "${out}" >"${dir}/res-${n}.txt" || die "증거를 쓰지 못함"
-  if [[ "${out}" == *$'\n'* ]] || ! tsv_ok "${out}" 3; then
+  if [[ "${out}" == *$'\n'* ]] || ! precheck::tsv_ok "${out}" 3; then
     die "시뮬레이터 응답의 꼴이 다름(res-${n}.txt)"
   fi
   got_action="${out%%$'\t'*}"
@@ -583,7 +512,7 @@ save_judgment() {
     die "증거를 쓰지 못함(${dir##*/})"
   fi
   at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')" || die "완료 표지의 시각을 읽지 못함"
-  sum="$(file_sha256 "${dir}/result.tsv")" ||
+  sum="$(precheck::file_sha256 "${dir}/result.tsv")" ||
     die "결과 파일의 해시를 계산하지 못함(${dir##*/})"
   if ! printf '%s\t%s\n' "${at}" "${sum}" >"${dir}/complete.txt.tmp" ||
     ! mv -- "${dir}/complete.txt.tmp" "${dir}/complete.txt" 2>/dev/null; then
@@ -607,10 +536,11 @@ judge_bundle() {
   local orgs_note=""
   load_bundle "${bundle}"
   load_reference "${bundle}"
+  precheck::check_cli_history
   dir="$(evidence::new_dir "${DIR_PREFIX}-${bundle}")" || exit 2
   printf 'scp-recheck: 증거 ~/%s/%s · 비교 기준 %s\n' "${EVIDENCE_ROOT_NAME}" \
     "${dir##*/}" "${reference_source}" >&2
-  caller_identity "${dir}"
+  precheck::caller_identity "${dir}"
   check_reference_account
   stamp="$(TZ=KST-9 date '+%Y-%m-%d %H:%M KST')" || die "시각을 읽지 못함"
   for row in "${rows[@]}"; do

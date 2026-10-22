@@ -15,7 +15,7 @@ import { useMe } from '@/features/auth/useSession';
 import { useToast } from '@/ui';
 
 // 설정 · 계정의 실상태 훅 (POK-208 ← 서버 POK-207) — 표시 이름·프로필 사진 저장이 auth 서버로
-// 간다. 탈퇴는 아직 목업이라 useAccountMockState에 남아 있다(usePluginMockState 선례처럼 실·목업을
+// 간다. 탈퇴는 아직 목업이라 useAccountMockState에 남아 있다(옛 usePluginMockState 선례처럼 실·목업을
 // 파일로 가른다 — 한 파일에 섞으면 안에 가짜가 있다는 걸 다음 사람이 못 알아챈다).
 //
 // 두 창구 모두 GET /api/auth/me와 같은 모양으로 답하므로 재조회 없이 me 캐시를 통째로 덮는다 —

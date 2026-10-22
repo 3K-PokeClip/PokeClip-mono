@@ -169,7 +169,8 @@ testlib::make_tree() {
   mkdir -p -- "${dest}/lib" "${dest}/data/stage_actions" || return 1
   cp -- "${PRECHECK_DIR}/scp-recheck.sh" "${PRECHECK_DIR}/events.sh" \
     "${dest}/" || return 1
-  cp -- "${PRECHECK_DIR}/lib/evidence.sh" "${dest}/lib/" || return 1
+  cp -- "${PRECHECK_DIR}/lib/evidence.sh" \
+    "${PRECHECK_DIR}/lib/precheck_common.sh" "${dest}/lib/" || return 1
 }
 
 #######################################
@@ -270,6 +271,34 @@ testlib::run_limited() {
     run_status="${TIMED_OUT}"
     printf '시험: %s초 제한을 넘겨 끝냄\n' "${seconds}" >>"${run_out}.stderr"
   fi
+}
+
+#######################################
+# 증거 파일 자리 하나의 쓰기를 막는 가짜 mkdir 을 디렉터리에 만든다. 가짜는
+# 진짜 mkdir(절대 경로 — 자기 자신을 다시 부르지 않게)을 부르고, 만든
+# 디렉터리 이름이 「${FAKE_BLOCK_PREFIX}-」 로 시작하면 그 안에
+# ${FAKE_BLOCK_NAME} 디렉터리를 만든다 — 그 이름의 증거 파일 쓰기가 첫
+# AWS 호출 전이라도 실패하게. 시험은 이 디렉터리를 PATH 맨 앞에 두고
+# testlib::run_limited 를 직접 부른다.
+# Arguments:
+#   가짜 mkdir 을 둘 디렉터리(있어야 한다).
+# Returns:
+#   만들지 못하면 1.
+#######################################
+testlib::make_blocking_mkdir() {
+  local bin="$1" real
+  real="$(command -v mkdir)" || return 1
+  [[ "${real}" == /* ]] || return 1
+  {
+    printf '#!/bin/bash\n'
+    printf '%q "$@" || exit\n' "${real}"
+    # shellcheck disable=SC2016 # 가짜 명령의 본문 글자 그대로다.
+    printf '%s\n' 'for target in "$@"; do :; done' \
+      'case "${target##*/}" in' \
+      '  "${FAKE_BLOCK_PREFIX:-}"-*)' \
+      "    $(printf '%q' "${real}")"' -- "${target}/${FAKE_BLOCK_NAME}" ;;' \
+      'esac'
+  } >"${bin}/mkdir" && chmod 700 "${bin}/mkdir"
 }
 
 #######################################

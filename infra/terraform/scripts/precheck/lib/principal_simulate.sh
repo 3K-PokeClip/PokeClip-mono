@@ -36,7 +36,7 @@ readonly SCP_EXCLUSION='"PolicyExclusionList":[{"PolicyType":"scp"}]'
 # 옛 CLI 가 요청 파일의 제외 목록을 거부할 때의 문구.
 readonly CLI_TOO_OLD='Unknown parameter in input: "PolicyExclusionList"'
 
-# simulate 가 남기는 결과: allow · missing · deny 와 최상위 판정.
+# principal::simulate 가 남기는 결과: allow · missing · deny 와 최상위 판정.
 sim_class=""
 sim_decision=""
 
@@ -47,7 +47,7 @@ sim_decision=""
 # Outputs:
 #   JSON 항목.
 #######################################
-context_entry() {
+principal::context_entry() {
   local format='{"ContextKeyName":"%s","ContextKeyValues":["%s"],'
   format+='"ContextKeyType":"%s"}'
   # shellcheck disable=SC2059 # 형식 문자열은 위의 고정 값이다.
@@ -64,13 +64,13 @@ context_entry() {
 #   주체 ARN, 동작, 자원 ARN, 리전, 추가 문맥 JSON(앞에 쉼표 · 없으면 빈
 #   값), policy · owner · -.
 #######################################
-build_request() {
+principal::build_request() {
   local source="$1" action="$2" resource="$3" region="$4" extra="$5"
   local entries
-  entries="$(context_entry aws:RequestedRegion "${region}" string)"
-  entries+=",$(context_entry aws:SecureTransport true boolean)"
+  entries="$(principal::context_entry aws:RequestedRegion "${region}" string)"
+  entries+=",$(principal::context_entry aws:SecureTransport true boolean)"
   if [[ "${action}" == s3:* ]]; then
-    entries+=",$(context_entry s3:TlsVersion 1.3 numeric)"
+    entries+=",$(principal::context_entry s3:TlsVersion 1.3 numeric)"
   fi
   request_json="{\"PolicySourceArn\":\"${source}\",\"ActionNames\":"
   request_json+="[\"${action}\"],\"ResourceArns\":[\"${resource}\"],"
@@ -90,7 +90,7 @@ build_request() {
 # Returns:
 #   맞으면 0.
 #######################################
-decisions_ok() {
+principal::decisions_ok() {
   local rest="$1," value
   [[ "$1" == "" ]] && return 0
   while [[ -n "${rest}" ]]; do
@@ -110,7 +110,7 @@ decisions_ok() {
 # Arguments:
 #   응답 줄.
 #######################################
-read_response() {
+principal::read_response() {
   local out="$1" tab=$'\t' tabs orgs top_missing decisions resource_missing
   tabs="${out//[!${tab}]/}"
   [[ "${out}" != *$'\n'* && "${#tabs}" -eq 4 ]] ||
@@ -127,7 +127,7 @@ read_response() {
     allowed | implicitDeny | explicitDeny) ;;
     *) die "시뮬레이터 판정을 모름(res-${req_n}.txt)" ;;
   esac
-  decisions_ok "${decisions}" ||
+  principal::decisions_ok "${decisions}" ||
     die "시뮬레이터 자원별 판정을 모름(res-${req_n}.txt)"
   case "${orgs}" in
     None | True) ;;
@@ -149,7 +149,7 @@ read_response() {
 # Arguments:
 #   [자원 정책 파일].
 #######################################
-simulate() {
+principal::simulate() {
   local -a extra=()
   [[ -z "${1:-}" ]] || extra=(--resource-policy "file://$1")
   if ! aws_call "${request_json}" iam simulate-principal-policy \
@@ -162,17 +162,17 @@ simulate() {
     fi
     die "시뮬레이터 호출 실패(res-${req_n}.err)"
   fi
-  read_response "${call_out}"
+  principal::read_response "${call_out}"
 }
 
 #######################################
-# 질문 하나를 만들고 묻는다(build_request + simulate).
+# 질문 하나를 만들고 묻는다(principal::build_request + principal::simulate).
 # Arguments:
 #   주체 ARN, 동작, 자원 ARN, 리전, 추가 문맥 JSON, [자원 정책 파일].
 #######################################
-ask() {
+principal::ask() {
   local policy=-
   [[ -z "${6:-}" ]] || policy=policy
-  build_request "$1" "$2" "$3" "$4" "$5" "${policy}"
-  simulate "${6:-}"
+  principal::build_request "$1" "$2" "$3" "$4" "$5" "${policy}"
+  principal::simulate "${6:-}"
 }

@@ -36,6 +36,8 @@ const (
 	testPublisherIP  = "198.51.100.7" // 송출자(OBS)의 주소 — publish 요청의 ip
 	testAPIUser      = "ingest-auth"
 	testAPIPass      = "synthetic-api-pass-0001"
+	testCallerUser   = "mediamtx"                         // 호출자 Basic 사용자 — MediaMTX 가 authHTTPAddress 의 URL 자격으로 싣는다
+	testCallerPass   = "synthetic-caller-pass-0001"       // 호출자 Basic 비번
 	testResolveToken = "synthetic-resolve-token-0001"     // 4C 전용 출입증 헤더 값
 	testPassphrase   = "Synthetic_Pass-phrase_0123456789" // 가짜 auth 가 돌려주는 passphrase
 	testUserID       = 4242
@@ -269,6 +271,8 @@ type fixtureOptions struct {
 	callerIP     netip.Addr         // 영값이면 testCallerIP
 	selfIP       netip.Addr         // 영값이면 testSelfIP
 	apiUser      string             // 비면 testAPIUser
+	// callerBasicOff 가 참이면 호출자 Basic 검사를 끈다(Options.CallerBasicOff). 거짓이면 testCallerUser · testCallerPass 다.
+	callerBasicOff bool
 }
 
 func newHandlerFixture(t *testing.T, o fixtureOptions) *handlerFixture {
@@ -294,7 +298,7 @@ func newHandlerFixture(t *testing.T, o fixtureOptions) *handlerFixture {
 	if !selfIP.IsValid() {
 		selfIP = testSelfIP
 	}
-	h, err := newHandler(resolver, NewDenyList(denyPath, log), conns, Options{
+	opt := Options{
 		CallerIP: callerIP,
 		SelfIP:   selfIP,
 		APIUser:  cmp.Or(o.apiUser, testAPIUser),
@@ -302,7 +306,13 @@ func newHandlerFixture(t *testing.T, o fixtureOptions) *handlerFixture {
 		Deadline: o.deadline,
 		Now:      clock.now,
 		Log:      log,
-	})
+	}
+	if o.callerBasicOff {
+		opt.CallerBasicOff = true
+	} else {
+		opt.CallerUser, opt.CallerPass = testCallerUser, NewSecret(testCallerPass)
+	}
+	h, err := newHandler(resolver, NewDenyList(denyPath, log), conns, opt)
 	if err != nil {
 		t.Fatalf("Setup: newHandler returned error: %v", err)
 	}
@@ -347,7 +357,8 @@ func apiBody(ip, user, pass string) mtxAuthBody {
 	return mtxAuthBody{IP: ip, User: user, Password: pass, Action: "api"}
 }
 
-// newAuthRequest 는 MediaMTX(CallerIP)가 보낸 인증 요청이다. body 가 string · []byte 면 그대로, 아니면 JSON 으로 싣는다.
+// newAuthRequest 는 MediaMTX(CallerIP)가 보낸 인증 요청이다 — 호출자 Basic 자격(testCallerUser · testCallerPass)을
+// 싣는다. body 가 string · []byte 면 그대로, 아니면 JSON 으로 싣는다.
 func newAuthRequest(t *testing.T, body any) *http.Request {
 	t.Helper()
 	var raw []byte
@@ -365,6 +376,7 @@ func newAuthRequest(t *testing.T, body any) *http.Request {
 	r := httptest.NewRequest(http.MethodPost, "/mediamtx/auth", bytes.NewReader(raw))
 	r.RemoteAddr = netip.AddrPortFrom(testCallerIP, 40000).String()
 	r.Header.Set("Content-Type", "application/json")
+	r.SetBasicAuth(testCallerUser, testCallerPass)
 	return r
 }
 

@@ -72,8 +72,6 @@ readonly ACTION_PATTERN='^[a-z0-9-]+:[A-Za-z0-9]+$'
 readonly REGION_PATTERN='^[a-z]{2}(-[a-z]+)+-[0-9]$'
 # shellcheck disable=SC2016 # 펼치지 않는 글자 그대로다.
 readonly ACCOUNT_PLACEHOLDER='${ACCOUNT}'
-readonly USER_ARN_PATTERN='^arn:aws:iam::[0-9]{12}:user/[A-Za-z0-9+=,.@_/-]+$'
-readonly SHA256_PATTERN='^[0-9a-f]{64}$'
 # PC0 · PC1: 호출 주체의 prod 상태 버킷 목록 읽기. PC0 은 운영 측 SCP 가
 # 막는 리전 문맥으로 묻는다(포함이면 거부 · 제외면 허용 — 실측).
 readonly PC_ACTION='s3:ListBucket'
@@ -83,11 +81,9 @@ readonly PC0_REGION='ap-northeast-1'
 readonly PCA_SAMPLE_ARN='arn:aws:s3:::pokeclip-prod-m17b-probe-nonexistent-9f3a'
 readonly PCA_REGION='ap-northeast-2'
 
-# 단계 · 호출 주체 · 증거(값은 출력하지 않는다).
+# 단계 · 증거 디렉터리.
 stage=""
 stage_idx=0
-caller_arn=""
-account=""
 evidence_dir=""
 # aws_call 이 남기는 요청 번호 · 표준 출력 · 표준 오류 파일.
 req_n=0
@@ -120,48 +116,11 @@ die() {
   exit 2
 }
 
-#######################################
-# 증거 파일 하나를 printf 로 쓴다. 쓰지 못하면(디렉터리 권한 · 디스크 등)
-# bash 의 원시 진단(절대 경로가 든다)은 버리고 파일 이름만 적어 멈춘다.
-# Arguments:
-#   파일, printf 형식, 값들.
-#######################################
-write_evidence() {
-  local file="$1"
-  shift
-  # shellcheck disable=SC2059 # 형식은 부르는 쪽의 고정 값이다.
-  { printf "$@"; } 2>/dev/null >"${file}" ||
-    die "증거를 쓰지 못함(${file##*/})"
-}
-
-#######################################
-# 값이 JSON 문자열 · TSV 칸에 그대로 들어가도 되는지 본다(큰따옴표 ·
-# 역슬래시 · 제어 문자 금지).
-# Arguments:
-#   값.
-# Returns:
-#   들어가도 되면 0.
-#######################################
-is_plain() {
-  [[ -n "$1" && "$1" != *[\"\\]* && "$1" != *[[:cntrl:]]* ]]
-}
-
-#######################################
-# 탭 구분 줄의 칸 수가 정확하고 빈 칸이 없는지 본다.
-# Arguments:
-#   줄, 칸 수.
-# Returns:
-#   맞으면 0.
-#######################################
-tsv_ok() {
-  local line="$1" fields="$2" tab=$'\t' tabs
-  tabs="${line//[!${tab}]/}"
-  [[ "${#tabs}" -eq $((fields - 1)) && "${line}" != "${tab}"* &&
-    "${line}" != *"${tab}" && "${line}" != *"${tab}${tab}"* ]]
-}
-
 # shellcheck source=infra/terraform/scripts/precheck/lib/evidence.sh
 source "${SCRIPT_DIR}/lib/evidence.sh" || die "lib/evidence.sh 를 읽지 못함"
+# shellcheck source=infra/terraform/scripts/precheck/lib/precheck_common.sh
+source "${SCRIPT_DIR}/lib/precheck_common.sh" ||
+  die "lib/precheck_common.sh 를 읽지 못함"
 # shellcheck source=infra/terraform/scripts/precheck/lib/principal_data.sh
 source "${SCRIPT_DIR}/lib/principal_data.sh" ||
   die "lib/principal_data.sh 를 읽지 못함"
@@ -174,26 +133,6 @@ source "${SCRIPT_DIR}/lib/principal_resolve.sh" ||
 # shellcheck source=infra/terraform/scripts/precheck/lib/principal_policy.sh
 source "${SCRIPT_DIR}/lib/principal_policy.sh" ||
   die "lib/principal_policy.sh 를 읽지 못함"
-
-#######################################
-# 파일의 sha256 을 낸다(GNU sha256sum, 없으면 shasum -a 256).
-# Globals:
-#   SHA256_PATTERN
-# Arguments:
-#   파일.
-# Outputs:
-#   64자리 16진수.
-# Returns:
-#   계산하지 못하면 1.
-#######################################
-file_sha256() {
-  local out
-  out="$(sha256sum -- "$1" 2>/dev/null || shasum -a 256 -- "$1" 2>/dev/null)" ||
-    return 1
-  out="${out%% *}"
-  [[ "${out}" =~ ${SHA256_PATTERN} ]] || return 1
-  printf '%s\n' "${out}"
-}
 
 #######################################
 # AWS 호출 하나 — 요청 본문을 req-<n>.json 에 쓰고 --cli-input-json
@@ -212,13 +151,14 @@ aws_call() {
   req_n=$((req_n + 1))
   request="${evidence_dir}/req-${req_n}.json"
   call_err="${evidence_dir}/res-${req_n}.err"
-  write_evidence "${request}" '%s\n' "${body}"
-  write_evidence "${call_err}" ''
+  precheck::write_evidence "${request}" '%s\n' "${body}"
+  precheck::write_evidence "${call_err}" ''
   # 바깥 2>/dev/null 은 안쪽 리다이렉션이 실패할 때의 원시 진단만 버린다.
   call_out="$({ aws "$@" --cli-input-json "file://${request}" --output text \
     2>"${call_err}"; } 2>/dev/null)"
   status=$?
-  write_evidence "${evidence_dir}/res-${req_n}.txt" '%s\n' "${call_out}"
+  precheck::write_evidence "${evidence_dir}/res-${req_n}.txt" '%s\n' \
+    "${call_out}"
   return "${status}"
 }
 
@@ -238,39 +178,16 @@ fail_call() {
 }
 
 #######################################
-# 호출 주체를 확인한다. IAM 사용자가 아니면 멈춘다(시뮬레이터 PC0 · PC1 의
-# 주체가 될 수 없다). 값은 변수에만 두고 원본은 sts.txt 에 남긴다.
-# Globals:
-#   caller_arn, account, evidence_dir, USER_ARN_PATTERN
-#######################################
-caller_identity() {
-  local out
-  write_evidence "${evidence_dir}/sts.err" ''
-  out="$({ aws sts get-caller-identity --query '[Arn,Account]' \
-    --output text 2>"${evidence_dir}/sts.err"; } 2>/dev/null)" ||
-    die "호출 주체를 확인하지 못함(증거 디렉터리의 sts.err)"
-  write_evidence "${evidence_dir}/sts.txt" '%s\n' "${out}"
-  caller_arn="${out%%$'\t'*}"
-  account="${out#*$'\t'}"
-  if [[ "${out}" != *$'\t'* ]] || ! [[ "${account}" =~ ^[0-9]{12}$ ]]; then
-    die "호출 주체 응답의 꼴이 다름(증거 디렉터리의 sts.txt)"
-  fi
-  if ! [[ "${caller_arn}" =~ ${USER_ARN_PATTERN} ]] ||
-    [[ "${caller_arn}" != "arn:aws:iam::${account}:user/"* ]]; then
-    die "호출 주체가 IAM 사용자가 아님(시뮬레이터는 역할 세션 ARN 을 받지 않음)"
-  fi
-}
-
-#######################################
 # 대상 행마다 이번 단계에서 도는지(첫 단계 색인 ≤ 이번 색인) 정한다.
 # Globals:
 #   t_stage, t_active, stage_idx
 #######################################
 mark_active() {
-  local t
+  local t first
   for t in "${!t_stage[@]}"; do
     t_active[t]=0
-    if [[ "$(stage_index "${t_stage[t]}")" -le "${stage_idx}" ]]; then
+    first="$(principal::stage_index "${t_stage[t]}")"
+    if [[ "${first}" -le "${stage_idx}" ]]; then
       t_active[t]=1
     fi
   done
@@ -285,7 +202,8 @@ mark_active() {
 #######################################
 ask_scope_controls() {
   local regions=$'\n' region t
-  ask "${caller_arn}" "${PC_ACTION}" "${PC_BUCKET_ARN}" "${PC0_REGION}" ""
+  principal::ask "${caller_arn}" "${PC_ACTION}" "${PC_BUCKET_ARN}" \
+    "${PC0_REGION}" ""
   [[ "${sim_class}" == allow ]] ||
     die "PC0(SCP 제외 대조)가 허용이 아님 — 제외가 먹지 않았을 수 있음" \
       "(res-${req_n}.txt)"
@@ -302,7 +220,8 @@ ask_scope_controls() {
     regions="${regions#*$'\n'}"
     [[ "${seen}" == *$'\n'"${region}"$'\n'* ]] && continue
     seen+="${region}"$'\n'
-    ask "${caller_arn}" "${PC_ACTION}" "${PC_BUCKET_ARN}" "${region}" ""
+    principal::ask "${caller_arn}" "${PC_ACTION}" "${PC_BUCKET_ARN}" \
+      "${region}" ""
     [[ "${sim_class}" == allow ]] ||
       die "PC1(문맥 대조)가 ${region} 에서 허용이 아님(res-${req_n}.txt)"
   done
@@ -339,7 +258,7 @@ ask_positive_controls() {
       [[ "${asked}" == *$'\n'"${c_action[i]} ${c_region[i]} ${arn}"$'\n'* ]] &&
         continue
       asked+="${c_action[i]} ${c_region[i]} ${arn}"$'\n'
-      ask "${u_arn[j]}" "${c_action[i]}" "${arn}" "${c_region[i]}" ""
+      principal::ask "${u_arn[j]}" "${c_action[i]}" "${arn}" "${c_region[i]}" ""
       [[ "${sim_class}" == allow ]] || u_pc_failed[j]=1
     done
   done
@@ -366,17 +285,17 @@ ask_branch_control() {
     branch_note='갈래 A 대조 실패 — B 로 판정(대조할 role 주체가 없음)'
     return
   fi
-  build_request "${u_arn[unit]}" "${PC_ACTION}" "${PCA_SAMPLE_ARN}" \
+  principal::build_request "${u_arn[unit]}" "${PC_ACTION}" "${PCA_SAMPLE_ARN}" \
     "${PCA_REGION}" "" owner
-  simulate ""
+  principal::simulate ""
   first="${sim_class}"
   policy="${evidence_dir}/pca-policy.json"
-  write_evidence "${policy}" '%s%s%s\n' \
+  precheck::write_evidence "${policy}" '%s%s%s\n' \
     '{"Version":"2012-10-17","Statement":[{"Effect":"Allow",' \
     "\"Principal\":{\"AWS\":\"${u_arn[unit]}\"},\"Action\":\"${PC_ACTION}\"," \
     "\"Resource\":\"${PCA_SAMPLE_ARN}\"}]}"
-  ask "${u_arn[unit]}" "${PC_ACTION}" "${PCA_SAMPLE_ARN}" "${PCA_REGION}" "" \
-    "${policy}"
+  principal::ask "${u_arn[unit]}" "${PC_ACTION}" "${PCA_SAMPLE_ARN}" \
+    "${PCA_REGION}" "" "${policy}"
   if [[ "${first}" != allow && "${sim_class}" == allow ]]; then
     branch=A
     branch_note='갈래 A'
@@ -454,15 +373,15 @@ row_arns() {
 judge_question() {
   local j="$1" t="$2" arn="$3" action="$4" state="" file="" verdict=PASS
   local reason=-
-  policy_for "${t_read[t]}" "${arn}"
+  principal::policy_for "${t_read[t]}" "${arn}"
   [[ -z "${found_policy}" ]] || state="${pol_state[found_policy]}"
   if [[ "${state}" == allow && ( "${u_kind[j]}" == user ||
     "${branch}" == A ) ]]; then
     file="${pol_file[found_policy]}"
   fi
-  context_entries "${t_context[t]}" || die "추가 문맥 꼴이 틀림"
-  ask "${u_arn[j]}" "${action}" "${arn}" "${t_region[t]}" "${context_json}" \
-    "${file}"
+  principal::context_entries "${t_context[t]}" || die "추가 문맥 꼴이 틀림"
+  principal::ask "${u_arn[j]}" "${action}" "${arn}" "${t_region[t]}" \
+    "${context_json}" "${file}"
   if [[ "${sim_class}" == allow ]]; then
     verdict=STOP reason=ALLOWED
   elif [[ "${state}" == session ]]; then
@@ -557,39 +476,18 @@ record_and_report() {
   for i in ${reason_names[@]+"${!reason_names[@]}"}; do
     reasons+="사유 ${reason_names[i]} ${reason_counts[i]}"$'\n'
   done
-  write_evidence "${evidence_dir}/result.tsv" '%s' "${result}"
-  write_evidence "${evidence_dir}/report.txt" '%s\n%s%s%s\n%s' "${first}" \
-    "${table}" "${reasons}" "${branch_note}" "${notes}"
+  precheck::write_evidence "${evidence_dir}/result.tsv" '%s' "${result}"
+  precheck::write_evidence "${evidence_dir}/report.txt" '%s\n%s%s%s\n%s' \
+    "${first}" "${table}" "${reasons}" "${branch_note}" "${notes}"
   at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')" || die "완료 표지의 시각을 읽지 못함"
-  sum="$(file_sha256 "${evidence_dir}/result.tsv")" ||
+  sum="$(precheck::file_sha256 "${evidence_dir}/result.tsv")" ||
     die "결과 파일의 해시를 계산하지 못함(${evidence_dir##*/})"
-  write_evidence "${evidence_dir}/complete.txt.tmp" '%s\t%s\n' "${at}" "${sum}"
+  precheck::write_evidence "${evidence_dir}/complete.txt.tmp" '%s\t%s\n' \
+    "${at}" "${sum}"
   mv -- "${evidence_dir}/complete.txt.tmp" "${evidence_dir}/complete.txt" \
     2>/dev/null || die "완료 표지를 쓰지 못함(${evidence_dir##*/})"
   printf '%s\n%s' "${first}" "${table}"
   return "${status}"
-}
-
-#######################################
-# CLI 기록이 꺼져 있는지 본다 — 켜져 있으면 요청 · 응답 원문이 증거 밖 기록
-# 파일에 남는다. 첫 AWS 호출 전에 부른다. 값 · 경로는 되울리지 않는다.
-# Globals:
-#   AWS_CLI_HISTORY_FILE
-#######################################
-check_cli_history() {
-  local value status=0
-  if [[ -n "${AWS_CLI_HISTORY_FILE+set}" ]]; then
-    die "CLI 기록이 켜져 있음 — 증거 밖에 원문이 남음(AWS_CLI_HISTORY_FILE" \
-      "설정됨)"
-  fi
-  # 값이 없으면 aws configure get 은 빈 출력 · 종료 1 이다.
-  value="$(aws configure get cli_history 2>/dev/null)" || status=$?
-  if [[ "${status}" -ne 0 && "${status}" -ne 1 ]]; then
-    die "CLI 기록 설정(cli_history)을 읽지 못함"
-  fi
-  if [[ "${value}" == enabled ]]; then
-    die "CLI 기록이 켜져 있음 — 증거 밖에 원문이 남음(프로필의 cli_history)"
-  fi
 }
 
 main() {
@@ -597,22 +495,22 @@ main() {
   # 꼴 밖 인자(경로 등)는 되울리지 않는다.
   [[ "$1" =~ ${STAGE_PATTERN} ]] || die "단계 이름이 아님(영문 · 숫자 · 「-」)"
   stage="$1"
-  stage_idx="$(stage_index "${stage}")" ||
+  stage_idx="$(principal::stage_index "${stage}")" ||
     die "2-3 판정이 없는 단계: ${stage}"
-  load_principals
-  load_controls
-  load_targets
+  principal::load_principals
+  principal::load_controls
+  principal::load_targets
   mark_active
-  check_cli_history
+  precheck::check_cli_history
   evidence_dir="$(evidence::new_dir "${DIR_PREFIX}-${stage}")" || exit 2
   printf 'principal-check: 증거 ~/%s/%s\n' "${EVIDENCE_ROOT_NAME}" \
     "${evidence_dir##*/}" >&2
-  caller_identity
+  precheck::caller_identity "${evidence_dir}"
   ask_scope_controls
-  resolve_principals
-  resolve_targets
-  resolve_unit_targets
-  read_policies
+  principal::resolve_principals
+  principal::resolve_targets
+  principal::resolve_unit_targets
+  principal::read_policies
   ask_positive_controls
   ask_branch_control
   judge_rows

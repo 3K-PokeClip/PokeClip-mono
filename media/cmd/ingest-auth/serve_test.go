@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -392,13 +393,14 @@ func TestRunClosesConnectionAfterEachAnswer(t *testing.T) {
 	auth := newFakeAuth(t)
 	r := startResponder(t, newTestSite(t, ""), responderEnv(auth.srv.URL))
 	api := apiBody("127.0.0.1", testAPIUser, testAPIPass) // 4C 를 부르지 않고 200 이다
+	basic := base64.StdEncoding.EncodeToString([]byte(testCallerUser + ":" + testCallerPass))
 	for _, tc := range []struct {
 		name, addr, request string
 	}{
 		{
 			name:    "인증_리스너",
 			addr:    r.listen,
-			request: fmt.Sprintf("POST /mediamtx/auth HTTP/1.1\r\nHost: ingest-auth.test\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n%s", len(api), api),
+			request: fmt.Sprintf("POST /mediamtx/auth HTTP/1.1\r\nHost: ingest-auth.test\r\nAuthorization: Basic %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n%s", basic, len(api), api),
 		},
 		{
 			name:    "healthz_리스너",
@@ -633,4 +635,43 @@ func TestRunHonorsLogLevelAndAPICredentials(t *testing.T) {
 			checkNoSecrets(t, []string{r.stdout.String(), r.stderr.String()}, "synthetic-wrong-pass")
 		})
 	}
+}
+
+// 실제 run 에서 호출자 Basic 이 맞으면 publish 200, 없으면 401 이다. 기동 로그의 caller_auth 는 basic 이다. 명시 끔
+// (INGEST_AUTH_CALLER_BASIC=off)이면 caller_auth 는 off 이고 그 상태를 WARN 한 줄로 남긴다 — prod 에서 보이면 설정
+// 누락이다. 끔이면 자격 없이도 처리기에 닿는다.
+func TestRunServesWithCallerBasic(t *testing.T) {
+	t.Run("basic", func(t *testing.T) {
+		auth := newFakeAuth(t)
+		r := startResponder(t, newTestSite(t, ""), responderEnv(auth.srv.URL))
+		if got := logEvents(r.stdout.String(), "ingestauth_started")[0]["caller_auth"]; got != "basic" {
+			t.Errorf("ingestauth_started caller_auth = %s, want \"basic\"", shown(got))
+		}
+		if status, body := mustPostAuth(t, r.listen, publishBody(testToken, testConnID(1)), nil); status != http.StatusOK || body != wantAllowedBody {
+			t.Errorf("POST publish with the caller Basic = %d (allowed body: %t), want 200 with the allowed body", status, body == wantAllowedBody)
+		}
+		if status, body := mustPostAuth(t, r.listen, publishBody(testToken, testConnID(2)), http.Header{"Authorization": nil}); status != http.StatusUnauthorized || body != "" {
+			t.Errorf("POST publish without the caller Basic = %d with a %d-byte body, want 401 without a body", status, len(body))
+		}
+		if n := len(logEvents(r.stdout.String(), "ingestauth_caller_basic_off")); n != 0 {
+			t.Errorf("ingestauth_caller_basic_off events = %d, want 0 while caller Basic is on", n)
+		}
+	})
+	t.Run("off", func(t *testing.T) {
+		auth := newFakeAuth(t)
+		env := responderEnv(auth.srv.URL)
+		delete(env, "INGEST_AUTH_BASIC_USER")
+		delete(env, "INGEST_AUTH_BASIC_PASS")
+		env["INGEST_AUTH_CALLER_BASIC"] = "off"
+		r := startResponder(t, newTestSite(t, ""), env)
+		if got := logEvents(r.stdout.String(), "ingestauth_started")[0]["caller_auth"]; got != "off" {
+			t.Errorf("ingestauth_started caller_auth = %s, want \"off\"", shown(got))
+		}
+		if warns := logEvents(r.stdout.String(), "ingestauth_caller_basic_off"); len(warns) != 1 || warns[0]["level"] != "WARN" {
+			t.Errorf("ingestauth_caller_basic_off events = %s, want one at WARN", eventsSummary(warns))
+		}
+		if status, _ := mustPostAuth(t, r.listen, publishBody(testToken, testConnID(1)), http.Header{"Authorization": nil}); status != http.StatusOK {
+			t.Errorf("POST publish without the caller Basic while it is off = %d, want 200", status)
+		}
+	})
 }

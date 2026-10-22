@@ -3,6 +3,7 @@ package ingestauth
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,6 +29,7 @@ const (
 	leakRequestQuery    = "synthetic-mtx-query-leak-0001"    // MediaMTX 요청의 query
 	leakAuthReason      = "SYNTHETIC_AUTH_REASON_LEAK_0001"  // 4C valid:false 의 이유 — 응답 본문의 임의 문자열
 	leakBadPassphrase   = "Synthetic.passphrase.leak.0001"   // auth 가 돌려준 형식 밖 passphrase('.' 은 받지 않는다)
+	leakCallerPass      = "synthetic-caller-pass-leak-0001"  // 호출자 Basic 의 틀린 비번 — 거절 행의 Authorization 으로 흐른다
 )
 
 // leakCanary 는 출력 어디에도 나와서는 안 되는 합성 비밀 하나다. 실패 문구에는 name 만 싣는다.
@@ -51,6 +53,12 @@ var leakCanaries = []leakCanary{
 	{name: "MediaMTX 요청 token", value: leakRequestToken},
 	{name: "MediaMTX 요청 query", value: leakRequestQuery},
 	{name: "4C 응답 이유", value: leakAuthReason},
+	{name: "호출자 Basic 비번", value: testCallerPass},
+	{name: "호출자 Basic 비번(16진)", value: hex.EncodeToString([]byte(testCallerPass))},
+	{name: "호출자 Basic 자격", value: basicCredentials(testCallerUser, testCallerPass)},
+	{name: "틀린 호출자 Basic 비번", value: leakCallerPass},
+	{name: "틀린 호출자 Basic 비번(16진)", value: hex.EncodeToString([]byte(leakCallerPass))},
+	{name: "틀린 호출자 Basic 자격", value: basicCredentials(testCallerUser, leakCallerPass)},
 }
 
 // basicCredentials 는 user · pass 의 Basic 자격 — Authorization 머리에 실리는 base64(RFC 7617 2절) — 이다. 머리째 새면
@@ -208,6 +216,7 @@ func (f *leakFixture) authorizeAPI(user, pass string) bool {
 	r := httptest.NewRequest(http.MethodPost, "/mediamtx/auth", bytes.NewReader(raw))
 	r.RemoteAddr = netip.AddrPortFrom(testCallerIP, 40000).String()
 	r.Header.Set("Content-Type", "application/json")
+	r.SetBasicAuth(testCallerUser, testCallerPass)
 	return f.send(r).Code == http.StatusOK
 }
 

@@ -565,24 +565,25 @@ func level(env func(string) string, key string, fallback slog.Level) (slog.Level
 }
 
 // validateS3 는 교차 검증 3 이다. 버킷이 설정됐을 때만 부른다.
+// S3_BUCKET 의 거부 문구도 입력 원문을 싣지 않는다 — 버킷 이름은 공개 식별자지만 이 파일의
+// URL 변수들과 같은 형식으로 통일한다. 예약 접두·접미 값은 상수라 그대로 싣는다.
 func validateS3(s3 upload.S3Options) error {
 	if !bucketNameRe.MatchString(s3.Bucket) {
-		return fmt.Errorf(
-			"S3_BUCKET(%q)이 버킷 이름 규칙(소문자·숫자·점·하이픈 3-63자)에 맞지 않는다", s3.Bucket)
+		return fmt.Errorf("S3_BUCKET 이 버킷 이름 규칙(소문자·숫자·점·하이픈 3-63자)에 맞지 않는다")
 	}
 	// 점 두 개 연속과 IP 형식은 S3 가 거부하는 이름이다.
 	if strings.Contains(s3.Bucket, "..") || ipLikeRe.MatchString(s3.Bucket) {
-		return fmt.Errorf("S3_BUCKET(%q)은 연속된 점이나 IP 형식을 쓸 수 없다", s3.Bucket)
+		return fmt.Errorf("S3_BUCKET 은 연속된 점이나 IP 형식을 쓸 수 없다")
 	}
 	// AWS 가 예약한 접두·접미다. 통과시키면 CreateBucket 이 아니라 PUT 단계에서야 실패한다.
 	for _, p := range bucketBannedPrefixes {
 		if strings.HasPrefix(s3.Bucket, p) {
-			return fmt.Errorf("S3_BUCKET(%q)은 예약 접두 %q 를 쓸 수 없다", s3.Bucket, p)
+			return fmt.Errorf("S3_BUCKET 은 예약 접두 %q 를 쓸 수 없다", p)
 		}
 	}
 	for _, sfx := range bucketBannedSuffixes {
 		if strings.HasSuffix(s3.Bucket, sfx) {
-			return fmt.Errorf("S3_BUCKET(%q)은 예약 접미 %q 를 쓸 수 없다", s3.Bucket, sfx)
+			return fmt.Errorf("S3_BUCKET 은 예약 접미 %q 를 쓸 수 없다", sfx)
 		}
 	}
 	if s3.Endpoint == "" {
@@ -592,15 +593,17 @@ func validateS3(s3 upload.S3Options) error {
 	// Hostname() 까지 본다 — "http://:9000" 은 Host 가 ":9000" 이라 비어 있지 않지만
 	// 호스트가 없다. SDK 는 그대로 들고 가 연결 단계에서야 실패한다.
 	if err != nil || u.Host == "" || u.Hostname() == "" {
-		return fmt.Errorf("S3_ENDPOINT(%q)는 scheme 과 호스트를 포함한 URL 이어야 한다", s3.Endpoint)
+		return fmt.Errorf("S3_ENDPOINT 는 scheme 과 호스트를 포함한 URL 이어야 한다")
 	}
 	// SDK 는 이상한 scheme 을 조용히 삼킨다. 우리가 쓰는 것은 둘뿐이다.
 	if u.Scheme != "http" && u.Scheme != "https" {
-		return fmt.Errorf("S3_ENDPOINT(%q)의 scheme 은 http 또는 https 여야 한다", s3.Endpoint)
+		return fmt.Errorf("S3_ENDPOINT 의 scheme(%s)은 http 또는 https 여야 한다", u.Scheme)
 	}
-	// userinfo 거부 — endpoint 원문은 uploader_started 로그와 오류 문자열에 그대로 실린다.
-	// URL 에 자격증명을 넣으면 그 로그가 유출 경로가 된다. 자격증명 자리는 env 3종뿐이다.
-	// (이 오류 문구만은 원문을 되돌려주지 않는다 — 거부 사유 자체가 "비밀이 들어 있다"이므로.)
+	// userinfo 거부 — endpoint 원문은 uploader_started 로그와 SDK 오류 문자열에 그대로
+	// 실린다. URL 에 자격증명을 넣으면 그 로그가 유출 경로가 된다. 자격증명 자리는 env
+	// 3종뿐이다. 세 갈래의 거부 문구는 원문을 싣지 않는다(validateRewindPublicBaseURL 과
+	// 같다 — 원문을 실으면 opaque 꼴 비밀번호 · 질의 토큰이 기동 로그에 남을 수 있어
+	// 생략한다) · scheme 자리에 비밀을 넣는 운영은 없다고 본다.
 	if u.User != nil {
 		return fmt.Errorf("S3_ENDPOINT 에 자격증명(user:pass@)을 넣을 수 없다 — AWS_ACCESS_KEY_ID 등 env 로 전달하라")
 	}
