@@ -35,15 +35,20 @@ const (
 	reasonRejected           = "rejected" // valid:false 인데 auth 의 이유가 위 셋이 아니다(모르는 값 · 빈 값)
 	reasonConnLogUnwritable  = "connlog_unwritable"
 	reasonInternalError      = "internal_error" // resolve 의 그 밖의 에러 — 처리기 · 설정 결함이고 auth 의 상태가 아니다
+	reasonIPLimited          = "ip_limited"     // 송출자 IP 가 시도 한도에 걸렸다 — DEBUG 로만 내고 auth 게이지에 세지 않는다
 )
 
-// publish 는 판정표의 publish 행이다. 차례는 형식 → 거부 목록 → 예산 → 요청 ctx → 실패 토큰 차례 → resolve → 기억
-// 갱신 → 기록 추가 → 마지막 거부 확인 → 200 이고(설계 2-4 · 3-1), 위에서부터 처음 맞는 행이 답이다. 예산 · 차례
-// 거절은 resolve 를 부르지 않고, 예산 거절 · 끝난 ctx 의 요청은 차례를 쓰지 않는다. 응답기는 기다리게 하지 않는다 —
-// 양보도 곧바로 401 이다. ctx 는 요청 ctx 다 — 그 시한이 바깥 가드다(layers).
+// publish 는 판정표의 publish 행이다. 차례는 형식 → IP 한도 검사 → 거부 목록 → 예산 → 요청 ctx → 실패 토큰 차례 →
+// IP 한도 차감 → resolve → 기억 갱신 → 기록 추가 → 마지막 거부 확인 → 200 이고(설계 2-4 · 3-1 · 트랙 B 설계 2-2),
+// 위에서부터 처음 맞는 행이 답이다. 예산 · 차례 거절은 resolve 를 부르지 않고, 예산 거절 · 끝난 ctx 의 요청은 차례를
+// 쓰지 않는다. IP 한도는 resolve 를 부르는 시도만 센다 — 검사는 거부 목록 · 차례 앞이고 차감은 resolve 직전이다.
+// 응답기는 기다리게 하지 않는다 — 양보도 곧바로 401 이다. ctx 는 요청 ctx 다 — 그 시한이 바깥 가드다(layers).
 func (h *handler) publish(ctx context.Context, w http.ResponseWriter, req mtxRequest) {
 	if reason, ok := publishForm(req); !ok {
 		h.denyPublish(w, req, denial{reason: reason})
+		return
+	}
+	if !h.ipAdmit(w, req) {
 		return
 	}
 	if reason, denied := h.denylistDenial(req.path); denied {
@@ -66,6 +71,16 @@ func (h *handler) publish(ctx context.Context, w http.ResponseWriter, req mtxReq
 		h.denyPublish(w, req, denial{reason: reasonRecheckWait, wait: wait})
 		return
 	}
+	h.ipTake(req)
+	// take 의 사건 로그는 동기다 — 쓰기가 밀려 resolve 시한을 넘겼으면 부르지 않는다(위와 같은 까닭 — 시간이 남지 않은
+	// resolve 는 auth 에 묻지도 않고 판정 불가다). 한도는 이미 썼다(시도로 센다). 받은 재확인 차례는 마무리한다 — 기억된
+	// 토큰이면 맨 뒤로 보내 다른 기억 토큰이 양보하지 않게(새 기억 · 게이지는 만들지 않는다). 요청 취소는 여기서 보지
+	// 않는다 — 위의 확인 뒤에 온 취소는 resolve 를 막지 않는다(아래 — resolve 는 요청 취소에서 뗀다).
+	if !time.Now().Before(resolveBy) {
+		h.failed.requeue(req.path)
+		h.late(w, req)
+		return
+	}
 	// resolve 는 요청 취소에서 뗀다 — MediaMTX 가 resolve 도중 요청을 버려도(재시작 · 리로드 · 망) 그 취소가 판정 불가
 	// (timeout)로 와 헛된 auth_degraded 와 그 토큰의 기억을 남기지 않게. 시한은 resolveBy 하나이고 바깥 가드보다
 	// 앞이라, 떼어도 가드가 끊을 resolve 는 없다. 버린 요청의 resolve 는 그 시한까지만 산다.
@@ -83,6 +98,32 @@ func (h *handler) publish(ctx context.Context, w http.ResponseWriter, req mtxReq
 	default:
 		h.denyPublish(w, req, j.denial(j.deniedReason()))
 	}
+}
+
+// ipAdmit 은 IP 한도 검사(peek)다. 꺼졌거나 허용이면 참이다. 잠긴 IP 면 401(본문 없음)을 쓰고 거짓을 돌려준다 —
+// 요청마다의 거절은 ingestauth_publish_denied(DEBUG)로만 내고 denyPublish(auth 게이지)를 거치지 않는다. 홍수가 곧 로그
+// 홍수가 되지 않게, 운영 신호는 에피소드마다 한 줄인 한도기의 사건이다(트랙 B 설계 2-1 의 11 · 15). 사건은 한도기의
+// 잠금 밖에서 낸다.
+func (h *handler) ipAdmit(w http.ResponseWriter, req mtxRequest) bool {
+	if h.ipLimit == nil {
+		return true
+	}
+	ok, evs := h.ipLimit.peek(req.ip)
+	h.ipLimit.logEvents(h.log, evs)
+	if ok {
+		return true
+	}
+	h.log.Debug("ingestauth_publish_denied", append(identityAttrs(req), "reason", reasonIPLimited)...)
+	w.WriteHeader(http.StatusUnauthorized)
+	return false
+}
+
+// ipTake 는 IP 한도 차감이다 — resolve 를 부르기 직전, 예산 · 요청 ctx · 차례를 지난 시도만 센다. 결정은 없다.
+func (h *handler) ipTake(req mtxRequest) {
+	if h.ipLimit == nil {
+		return
+	}
+	h.ipLimit.logEvents(h.log, h.ipLimit.take(req.ip))
 }
 
 // resolveDeadline 은 resolve 의 시한이다 — 요청 ctx 의 시한(바깥 가드 — 바깥 층이 도착 시각에서 잰다)보다 guardMargin
