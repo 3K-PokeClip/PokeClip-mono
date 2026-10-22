@@ -55,7 +55,10 @@ describe('PluginDownloadDialog: OS별 설치 파일 받기', () => {
 
   it('실제 하는 순서대로 세 단계 — 버튼은 1단계, 서명 경고는 2단계 안에 있다', () => {
     open('windows');
-    const [download, install, pair] = within(screen.getByRole('tabpanel')).getAllByRole('listitem');
+    const panel = within(screen.getByRole('tabpanel'));
+    // Safari는 list-style: none 목록의 의미를 벗긴다 — 명시한 role이 남아 있어야 VoiceOver가 순서를 읽는다
+    expect(panel.getByRole('list')).toHaveAttribute('role', 'list');
+    const [download, install, pair] = panel.getAllByRole('listitem');
     expect(download).toContainElement(screen.getByRole('link', { name: /Windows 설치 파일/ }));
     expect(install).toHaveTextContent(/OBS를 끄고 받은 파일을 실행합니다/);
     expect(install).toHaveTextContent(/추가 정보 › 실행/);

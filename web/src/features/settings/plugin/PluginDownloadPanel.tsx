@@ -61,8 +61,10 @@ export function PluginDownloadPanel({ detectedOs }: { detectedOs: DetectedOs }) 
 function OsSteps({ os }: { os: PluginOs }) {
   const { kind, url } = PLUGIN_DOWNLOADS[os];
 
+  // role="list"는 겹쳐 보여도 지우지 않는다 — list-style: none인 목록은 Safari가 목록 의미를 벗겨,
+  // 번호 원까지 aria-hidden인 VoiceOver 사용자에게 받기 → 설치 → 연동 순서가 전달되지 않는다
   return (
-    <ol className={styles.downloadSteps}>
+    <ol role="list" className={styles.downloadSteps}>
       <li className={styles.downloadStep}>
         <span className={styles.downloadStepNum} aria-hidden>
           1
