@@ -33,8 +33,8 @@ const (
 	externalDeleteMargin = time.Hour
 )
 
-// config 는 janitor 설정이다. pg 는 사이드카와 같은 규칙(pgconf)으로 읽은 DB 접속 설정이다 — 비밀번호는 비공개 필드라
-// 로그 · 오류에 실리지 않는다.
+// config 는 janitor 설정이다. pg 는 사이드카와 같은 규칙(pgconf)으로 읽은 DB 접속 설정이다. config 를 통째로 로그 ·
+// 오류에 싣지 않는다 — pg 가 비공개 필드라 fmt 가 Settings.Format 을 부르지 못해 %v · %+v 로 찍으면 비밀번호가 나온다.
 type config struct {
 	enabled           bool
 	pg                pgconf.Settings

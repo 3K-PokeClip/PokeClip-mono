@@ -59,7 +59,8 @@ const (
 // Settings 는 POSTGRES_* · AWS_REGION 을 검증한 값이다.
 //
 // 비밀번호는 비공개 필드라 JSON 에 실리지 않고, fmt 의 모든 동사(Format)와 slog(LogValue)에서도 빠진다.
-// 그래도 Settings 를 오류 문구에 통째로 싣지 않는다 — 필드를 골라 싣는다.
+// 그래도 Settings 를 오류 문구에 통째로 싣지 않는다 — 필드를 골라 싣는다. Settings 를 다른 구조체의 비공개 필드로 두면
+// 그 구조체를 fmt 로 찍을 때 Format 이 불리지 않아 비밀번호가 나온다.
 type Settings struct {
 	Auth    Auth
 	User    string

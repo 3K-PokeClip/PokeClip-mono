@@ -342,7 +342,10 @@ INFO `db_connected` 한 줄을 남긴다. 실패하면 이 줄 없이 기동이 
   SDK 가 자격 증명을 찾는 차례)은 환경 변수의 정적 키를 맨 앞에, 인스턴스
   역할(IMDS — EC2 메타데이터 서비스)을 맨 뒤에 둔다. 컨테이너에
   `AWS_ACCESS_KEY_ID` · `AWS_SECRET_ACCESS_KEY` · `AWS_SESSION_TOKEN` 이 있으면
-  인스턴스 역할 대신 그 키로 토큰을 서명한다.
+  인스턴스 역할 대신 그 키로 토큰을 서명한다. 공유 자격 증명 파일
+  (`~/.aws/credentials`)의 정적 키도 인스턴스 역할보다 앞서므로, 운영
+  컨테이너에는 `~/.aws` 를 마운트하지 않는다(로컬 실험용 마운트를 운영 정의에
+  옮기지 않는다).
 - **`AWS_EC2_METADATA_V1_DISABLED=true`** 를 준다 — 토큰 없는 옛 메타데이터
   요청(IMDSv1)으로 내려가는 길을 막는다.
 - **`credential_process`(외부 명령에서 자격 증명을 받는 SDK 설정)를 쓴다면
