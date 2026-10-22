@@ -1121,13 +1121,14 @@ CloudWatch Logs 그룹을 담는다 — 문서가 없으면 기록 설정도 없
 kty 2026-10-20, 그날 이 계정은 문서가 없었다) · 그 밖 오류(중단 — 못 읽은 것이지 없는 것이
 아니다).
 
-kty 로컬 터미널에서 판정 블록 → 세션 열기 순으로, 같은 셸(같은 프로필 · 리전)에서 친다.
+kty 로컬 터미널에서 판정 블록 → 세션 열기 순으로, 같은 셸(같은 프로필)에서 친다.
+리전은 두 명령에 못박는다 — 기본 세션 문서는 리전마다 있다.
 판정 블록은 문서 본문이나 오류 문구(호출자 ARN — 계정 번호가 든다)를 찍을 수 있으므로
 1-5 처럼 에이전트 세션 · 문서에 붙여 넣지 않는다.
 
 ```bash
 if DOC_OUT="$(aws ssm get-document --name SSM-SessionManagerRunShell \
-    --query Content --output text 2>&1)"; then
+    --region ap-northeast-2 --query Content --output text 2>&1)"; then
   printf '%s\n' "${DOC_OUT}"
   echo '문서 있음 — s3BucketName · cloudWatchLogGroupName 이 둘 다 빈 값일 때만 세션을 연다'
 elif [[ "${DOC_OUT}" == *'(InvalidDocument)'*'does not exist'* ]]; then
@@ -1142,7 +1143,7 @@ unset DOC_OUT
 「통과」를 봤거나, 「문서 있음」이고 두 칸이 다 빈 값일 때만 세션을 연다.
 
 ```bash
-aws ssm start-session --target <instance-id>
+aws ssm start-session --region ap-northeast-2 --target <instance-id>
 ```
 
 **`STREAM_KEY_RESOLVE_URL` 에 넣는 주소는 눈으로 확인한다** — 같은 VPC 의 사설 주소(dev EC2
