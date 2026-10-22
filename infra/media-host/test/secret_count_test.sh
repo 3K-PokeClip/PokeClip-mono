@@ -477,15 +477,14 @@ case_box_api_pass() {
   return "${ok}"
 }
 
-# 사례 17 — box: 비밀번호 파일이 없으면(정지 뒤 — 정지 스크립트가 지운다)
-# 실패하지 않고 CDN 비밀은 그대로 센다. 판정 줄의 모드 칸이 box 가 아니라
-# box-api-pass-skipped 라, 「box 0」 으로 읽혀 전부 깨끗하다고 오독되지 않는다.
+# 사례 17 — box: 비밀번호 파일이 없으면 0 건이 아니라 api-pass 로 실패한다
+# (종료 1). 스택이 떠 있는데 파일이 없는 것은 이상 상태다.
 case_box_api_pass_missing() {
   local ok=0
   setup_box
   rm -f -- "${ops_dir}/runtime/mtx_api_pass"
   run_count box || return 1
-  ops_fixture::expect_line 'SECRET COUNT box-api-pass-skipped 0' 0 || ok=1
+  ops_fixture::expect_line 'SECRET COUNT FAIL api-pass' 1 || ok=1
   expect_hygiene || ok=1
   return "${ok}"
 }
@@ -510,40 +509,58 @@ case_ssm_inherited_export() {
   return "${ok}"
 }
 
-# 사례 19 — box: 비밀번호 파일이 없어도 로그에 든 CDN 비밀은 센다(정지한
-# 컨테이너 로그 1 · 사이드카 태그 저널 1 = 2).
-case_box_api_pass_missing_counts_cdn() {
+# 사례 19 — box: 비밀번호 파일이 없으면 로그에 CDN 비밀이 있어도 건수를 내지
+# 않고 api-pass 로 실패한다(종료 1) — 일부만 센 수가 판정 줄로 나가지 않는다.
+case_box_api_pass_missing_with_cdn() {
   local ok=0
   setup_box
   rm -f -- "${ops_dir}/runtime/mtx_api_pass"
-  ops_fixture::container pcbenchmediamtxold mediamtx exited
-  plant "${ops_dir}/state/logs.pcbenchmediamtxold.out" \
-    "${OPS_FAKE_CDN_SECRET}" 1
   plant "${ops_dir}/state/journal.t.pokeclip-media-sidecar" \
-    "${OPS_FAKE_CDN_SECRET}" 1
+    "${OPS_FAKE_CDN_SECRET}" 2
   run_count box || return 1
-  ops_fixture::expect_line 'SECRET COUNT box-api-pass-skipped 2' 0 || ok=1
+  ops_fixture::expect_line 'SECRET COUNT FAIL api-pass' 1 || ok=1
   expect_hygiene || ok=1
   return "${ok}"
 }
 
-# 사례 20 — box: 비밀번호 파일이 있는데 꼴(16진 64자) 밖 · 빈 파일 · 읽을 수
-# 없는 자리(디렉터리)면 생략하지 않고 api-pass 로 실패한다(fail closed).
+#######################################
+# 비밀번호 파일 자리를 갈래 하나로 만든다(setup_box 뒤).
+# Arguments:
+#   갈래 — not-hex | empty | dir | dangling | no-newline | junk | two-lines.
+#######################################
+write_api_pass_variant() {
+  local file="${ops_dir}/runtime/mtx_api_pass"
+  rm -f -- "${file}"
+  case "$1" in
+    not-hex) printf 'not-a-hex-password\n' >"${file}" ;;
+    empty) : >"${file}" ;;
+    dir) mkdir -- "${file}" ;;
+    dangling) ln -s -- "${ops_dir}/runtime/absent" "${file}" ;;
+    no-newline) printf '%s' "${OPS_FAKE_API_PASS}" >"${file}" ;;
+    junk) printf '%s\nJUNK' "${OPS_FAKE_API_PASS}" >"${file}" ;;
+    two-lines)
+      printf '%s\n%s\n' "${OPS_FAKE_API_PASS}" "${OPS_FAKE_API_PASS}" \
+        >"${file}"
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+# 사례 20 — box: 비밀번호 파일은 시작 스크립트가 쓰는 꼴(16진 64자 + 끝 줄바꿈
+# 하나, 파일 전체가 그 한 줄) 하나만 받는다. 그 밖(16진 아님 · 빈 파일 ·
+# 디렉터리 · 끊어진 링크 · 줄바꿈 없음 · 뒤에 남는 바이트 · 두 줄)은 모두
+# api-pass 로 실패한다(종료 1).
 case_box_api_pass_malformed() {
-  local ok=0
-  setup_box
-  printf 'not-a-hex-password\n' >"${ops_dir}/runtime/mtx_api_pass"
-  run_count box || return 1
-  ops_fixture::expect_line 'SECRET COUNT FAIL api-pass' nonzero || ok=1
-  setup_box
-  : >"${ops_dir}/runtime/mtx_api_pass"
-  run_count box || return 1
-  ops_fixture::expect_line 'SECRET COUNT FAIL api-pass' nonzero || ok=1
-  setup_box
-  rm -f -- "${ops_dir}/runtime/mtx_api_pass"
-  mkdir -- "${ops_dir}/runtime/mtx_api_pass"
-  run_count box || return 1
-  ops_fixture::expect_line 'SECRET COUNT FAIL api-pass' nonzero || ok=1
+  local ok=0 variant
+  for variant in not-hex empty dir dangling no-newline junk two-lines; do
+    setup_box
+    write_api_pass_variant "${variant}" || return 1
+    run_count box || return 1
+    if ! ops_fixture::expect_line 'SECRET COUNT FAIL api-pass' 1; then
+      harness::add_reason "갈래 ${variant}"
+      ok=1
+    fi
+  done
   return "${ok}"
 }
 
@@ -576,13 +593,13 @@ main() {
   harness::run_case 15 'ssm 상태 · 출력 조회 경합 → ssm-status' \
     case_ssm_status_race
   harness::run_case 16 'box API 비밀번호 · Basic 값도 셈' case_box_api_pass
-  harness::run_case 17 'box API 비밀번호 파일 없음 → 생략 표시 · 종료 0' \
+  harness::run_case 17 'box API 비밀번호 파일 없음 → api-pass · 종료 1' \
     case_box_api_pass_missing
   harness::run_case 18 'ssm 상속 export 에도 기록 첫 줄이 자식 환경에 0' \
     case_ssm_inherited_export
-  harness::run_case 19 'box 파일 없음에도 CDN 비밀 건수' \
-    case_box_api_pass_missing_counts_cdn
-  harness::run_case 20 'box API 비밀번호 꼴 밖 · 빈 파일 · 디렉터리 → api-pass' \
+  harness::run_case 19 'box 파일 없음이면 CDN 이 로그에 있어도 api-pass' \
+    case_box_api_pass_missing_with_cdn
+  harness::run_case 20 'box API 비밀번호 파일 전체가 64 hex 한 줄이 아니면 api-pass' \
     case_box_api_pass_malformed
 
   if ! harness::summary "${CASE_COUNT}"; then

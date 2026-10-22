@@ -205,7 +205,6 @@ SIGKILL 등) systemd 252 는 `ExecStop` 을 건너뛰고 `ExecStopPost` 로 간�
 | `loopback-health.sh` | `LOOPBACK OK` | 송출 → 프록시 경유 재생목록 200 |
 | | `LOOPBACK FAIL <단계>` | `usage` · `config` · `cdn-secret` · `test-key` · `mediamtx` · `scratch` · `pull` · `sender` · `playlist` · `sender-cleanup` |
 | `secret-count.sh` | `SECRET COUNT box\|ssm <n>` | 비밀 값이 든 줄 수 |
-| | `SECRET COUNT box-api-pass-skipped <n>` | 관리 API 비밀번호 파일이 없어(정지 뒤) CDN 비밀(과 passphrase)만 센 수 — `box 0` 이 아니다 |
 | | `SECRET COUNT FAIL <단계>` | `usage` · `config` · `cdn-secret` · `test-key` · `api-pass` · `journal` · `mediamtx` · `nginx` · `docker-logs` · `ssm-command` · `ssm-list` · `ssm-status` · `ssm-output` · `ssm-truncated` · `grep` |
 | `ops/force-diff.sh` | `FORCE REMAINING <n>` + 남은 ID | n 이 0 이면 복구 완료 |
 | | `FORCE FAIL input A\|B\|ended` · `FORCE FAIL usage` | 입력 거부 · 인자 오류 |
@@ -287,18 +286,24 @@ set -a; . /etc/pokeclip-media/media.env; set +a
     --network container:<mediamtx>` 로 띄운다. 모든 cap 을 버리고, 읽기 전용
     루트 · 비root(65534)로 돈다.
 
-**비밀 건수(`secret-count.sh`):** 대조 값(CDN 비밀, `--passphrase` 면 시험 키
-passphrase)은 Secrets Manager 에서 직접 읽고, `grep -F -f -` 의 표준 입력으로만
-넘긴다. `box` 모드 입력은 유닛 저널 · 태그 저널 셋 · `mediamtx` · `nginx` 의
-`docker logs`(정지한 컨테이너 포함)다. `ssm` 모드는 SSM API 가 주는 한도(표준
-출력 24,000자 · 표준 오류 8,000자)에 닿으면 `ssm-truncated` 로 실패한다.
+**비밀 건수(`secret-count.sh`):** 대조 값은 CDN 비밀이고, 시험 키 passphrase
+는 `--passphrase` 를 줄 때만 센다(기본은 세지 않는다). 값은 Secrets Manager 에서
+직접 읽고, `grep -F -f -` 의 표준 입력으로만 넘긴다. `box` 모드 입력은 유닛
+저널 · 태그 저널 셋 · `mediamtx` · `nginx` 의 `docker logs`(스택이 도는 동안
+재기동으로 멈춘 컨테이너 포함)다. `ssm` 모드는 SSM API 가 주는 한도(표준 출력
+24,000자 · 표준 오류 8,000자)에 닿으면 `ssm-truncated` 로 실패한다.
+
 `box` 모드는 이번 기동의 관리 API 비밀번호(`/run/pokeclip-media/mtx_api_pass` 를
 root 로 읽음)와 그 Basic 값(`pokeclip-sidecar:<비밀번호>` 의 base64)도 대조한다.
-그 파일이 없으면(서비스를 멈추면 정지 스크립트가 지운다) 비밀번호 대조만 빼고
-세어 `SECRET COUNT box-api-pass-skipped <n>` 을 낸다 — 정지한 컨테이너 로그의
-CDN 비밀은 그대로 센다. 파일이 있는데 못 읽거나 꼴(16진 64자) 밖이면
-`SECRET COUNT FAIL api-pass` 다. 옛 기동의 비밀번호와 `ssm` 모드의 비밀번호
-대조는 아래 「알려진 한계」.
+
+*   **`box` 는 스택이 떠 있을 때만 쓴다.** 정상 정지 뒤에는 compose down 이
+    컨테이너를 지워 셀 로그가 없고, `SECRET COUNT FAIL mediamtx` 로 끝난다.
+*   **비밀번호 파일은 시작 스크립트가 쓰는 꼴 하나만 받는다** — 파일 전체가
+    16진 64자 한 줄(끝 줄바꿈 하나, 65바이트)이다. 파일이 없거나 못 읽거나, 그
+    꼴이 아니면(줄바꿈 없음 · 둘째 줄 · 뒤에 남는 바이트 포함) 0 건이 아니라
+    `SECRET COUNT FAIL api-pass`(종료 1)다. 스택이 떠 있는데 이 실패가 나면
+    비밀번호 파일 이상이니 조사한다.
+*   옛 기동의 비밀번호와 `ssm` 모드의 비밀번호 대조는 아래 「알려진 한계」.
 
 ## 운영 규칙
 
@@ -560,9 +565,12 @@ prod 상자에 깔 도구의 판이다. M9 user_data 가 같은 값으로 설치
 
 *   **옛 기동의 API 비밀번호:** 비밀번호는 기동마다 새로 만들어지므로
     `secret-count.sh box` 는 이전 기동 로그에 남은 옛 비밀번호를 대조하지
-    못한다. 정지 뒤에는 이번 기동의 비밀번호 파일도 지워져 CDN 비밀만 대조한다
-    (`box-api-pass-skipped`). `ssm` 모드는 tmpfs 의 비밀번호 파일을 읽을 수 없어
-    비밀번호를 대조하지 않는다.
+    못한다. `ssm` 모드는 tmpfs 의 비밀번호 파일을 읽을 수 없어 비밀번호를
+    대조하지 않는다.
+*   **정지 뒤의 로그:** 정상 정지(compose down) 뒤에는 컨테이너와 그 로그가
+    지워지고 비밀번호 파일도 정지 스크립트가 지운다. `secret-count.sh box` 는
+    그때 셀 수 없어 실패한다(`FAIL mediamtx`) — 정지 뒤에 남는 유닛 · 태그
+    저널만 따로 볼 수단은 없다.
 *   **SSM 에이전트의 상자 안 실행 기록:** SSM 에이전트가 상자에 남기는 명령 ·
     출력 기록 파일은 `secret-count.sh` 의 대조 밖이다.
 *   **운영 확인 스크립트의 스크래치:** `$TMPDIR`(없으면 `/tmp`)에 0600 으로 두고
