@@ -87,13 +87,15 @@ SIM_QUERY='EvaluationResults[].[EvalActionName,EvalDecision,'
 SIM_QUERY+='OrganizationsDecisionDetail.AllowedByOrganizations]'
 readonly SIM_QUERY
 
+# lib 를 읽지 못하면 bash 의 원시 진단(절대 경로가 든다)은 버리고 아래
+# 문구만 낸다. lib 는 정의만 담아 source 중에 낼 말이 없다.
 # shellcheck source=infra/terraform/scripts/precheck/lib/evidence.sh
-source "${SCRIPT_DIR}/lib/evidence.sh" || {
+source "${SCRIPT_DIR}/lib/evidence.sh" 2>/dev/null || {
   printf 'scp-recheck: 검사 불가: 증거 경로 함수를 읽지 못함\n' >&2
   exit 2
 }
 # shellcheck source=infra/terraform/scripts/precheck/lib/precheck_common.sh
-source "${SCRIPT_DIR}/lib/precheck_common.sh" || {
+source "${SCRIPT_DIR}/lib/precheck_common.sh" 2>/dev/null || {
   printf 'scp-recheck: 검사 불가: 공용 도우미를 읽지 못함\n' >&2
   exit 2
 }
@@ -432,9 +434,8 @@ write_request() {
   format='{"PolicySourceArn":"%s","ActionNames":["%s"],"ResourceArns":["%s"],'
   format+='"ContextEntries":[{"ContextKeyName":"aws:RequestedRegion",'
   format+='"ContextKeyValues":["%s"],"ContextKeyType":"string"}]}\n'
-  # shellcheck disable=SC2059 # 형식 문자열은 위의 고정 값이다.
-  printf "${format}" "${caller_arn}" "${action}" "${resource}" "${region}" \
-    >"${file}" || die "증거를 쓰지 못함"
+  precheck::write_evidence "${file}" "${format}" "${caller_arn}" "${action}" \
+    "${resource}" "${region}"
 }
 
 #######################################
@@ -450,15 +451,19 @@ judge_row() {
   local got_action decision rest
   resource="${resource//${ACCOUNT_PLACEHOLDER}/${account}}"
   write_request "${dir}/req-${n}.json" "${action}" "${region}" "${resource}"
-  if ! out="$(aws iam simulate-principal-policy \
+  # res-<n>.err 는 호출 전에 비운 파일로 먼저 만든다 — 그 쓰기가 실패하면
+  # 호출 실패가 아니라 증거 쓰기 실패로 멈추게. 바깥 2>/dev/null 은 안쪽
+  # 리다이렉션이 실패할 때의 원시 진단만 버린다.
+  precheck::write_evidence "${dir}/res-${n}.err" ''
+  if ! out="$({ aws iam simulate-principal-policy \
     --cli-input-json "file://${dir}/req-${n}.json" --query "${SIM_QUERY}" \
-    --output text 2>"${dir}/res-${n}.err")"; then
+    --output text 2>"${dir}/res-${n}.err"; } 2>/dev/null)"; then
     if grep -qF 'AccessDenied' -- "${dir}/res-${n}.err"; then
       die "시뮬레이터 호출 자체가 거부됨(AccessDenied — res-${n}.err)"
     fi
     die "시뮬레이터 호출 실패(res-${n}.err)"
   fi
-  printf '%s\n' "${out}" >"${dir}/res-${n}.txt" || die "증거를 쓰지 못함"
+  precheck::write_evidence "${dir}/res-${n}.txt" '%s\n' "${out}"
   if [[ "${out}" == *$'\n'* ]] || ! precheck::tsv_ok "${out}" 3; then
     die "시뮬레이터 응답의 꼴이 다름(res-${n}.txt)"
   fi
@@ -505,16 +510,19 @@ decision_word() {
 #######################################
 save_judgment() {
   local dir="$1" result="$2" first="$3" table="$4" at sum
-  if ! printf '%s' "${result}" >"${dir}/result.tsv" ||
-    ! printf '# 비교 기준: %s\n%s' "${reference_source}" "${reference}" \
-      >"${dir}/reference.tsv" ||
-    ! printf '%s\n%s' "${first}" "${table}" >"${dir}/report.txt"; then
+  # 바깥 2>/dev/null 은 쓰지 못할 때의 원시 진단(절대 경로)만 버린다.
+  if ! { printf '%s' "${result}" >"${dir}/result.tsv" &&
+    printf '# 비교 기준: %s\n%s' "${reference_source}" "${reference}" \
+      >"${dir}/reference.tsv" &&
+    printf '%s\n%s' "${first}" "${table}" \
+      >"${dir}/report.txt"; } 2>/dev/null; then
     die "증거를 쓰지 못함(${dir##*/})"
   fi
   at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')" || die "완료 표지의 시각을 읽지 못함"
   sum="$(precheck::file_sha256 "${dir}/result.tsv")" ||
     die "결과 파일의 해시를 계산하지 못함(${dir##*/})"
-  if ! printf '%s\t%s\n' "${at}" "${sum}" >"${dir}/complete.txt.tmp" ||
+  if ! { printf '%s\t%s\n' "${at}" "${sum}" >"${dir}/complete.txt.tmp"; } \
+    2>/dev/null ||
     ! mv -- "${dir}/complete.txt.tmp" "${dir}/complete.txt" 2>/dev/null; then
     die "완료 표지를 쓰지 못함(${dir##*/})"
   fi
@@ -618,8 +626,9 @@ accept_bundle() {
   # 시각을 먼저 구한다 — 실패했을 때 시각 칸이 빈 승인 기록이 남지 않게.
   at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')" || die "승인 시각을 읽지 못함"
   set -o noclobber
-  printf '%s\t%s\t%s\n' "${at}" "${judged}" "${reason}" \
-    >"${dir}/accepted.tsv" || die "승인 기록을 쓰지 못함(${name})"
+  { printf '%s\t%s\t%s\n' "${at}" "${judged}" "${reason}" \
+    >"${dir}/accepted.tsv"; } 2>/dev/null ||
+    die "승인 기록을 쓰지 못함(${name})"
   set +o noclobber
   printf 'scp-recheck: 승인 ~/%s/%s\n' "${EVIDENCE_ROOT_NAME}" "${name}" >&2
   printf 'SCP RECHECK ACCEPTED %s\n' "${result_rows}"

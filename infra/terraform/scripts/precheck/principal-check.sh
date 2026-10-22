@@ -116,22 +116,25 @@ die() {
   exit 2
 }
 
+# lib 를 읽지 못하면 bash 의 원시 진단(절대 경로가 든다)은 버리고 아래
+# 문구만 낸다. lib 는 정의만 담아 source 중에 낼 말이 없다.
 # shellcheck source=infra/terraform/scripts/precheck/lib/evidence.sh
-source "${SCRIPT_DIR}/lib/evidence.sh" || die "lib/evidence.sh 를 읽지 못함"
+source "${SCRIPT_DIR}/lib/evidence.sh" 2>/dev/null ||
+  die "lib/evidence.sh 를 읽지 못함"
 # shellcheck source=infra/terraform/scripts/precheck/lib/precheck_common.sh
-source "${SCRIPT_DIR}/lib/precheck_common.sh" ||
+source "${SCRIPT_DIR}/lib/precheck_common.sh" 2>/dev/null ||
   die "lib/precheck_common.sh 를 읽지 못함"
 # shellcheck source=infra/terraform/scripts/precheck/lib/principal_data.sh
-source "${SCRIPT_DIR}/lib/principal_data.sh" ||
+source "${SCRIPT_DIR}/lib/principal_data.sh" 2>/dev/null ||
   die "lib/principal_data.sh 를 읽지 못함"
 # shellcheck source=infra/terraform/scripts/precheck/lib/principal_simulate.sh
-source "${SCRIPT_DIR}/lib/principal_simulate.sh" ||
+source "${SCRIPT_DIR}/lib/principal_simulate.sh" 2>/dev/null ||
   die "lib/principal_simulate.sh 를 읽지 못함"
 # shellcheck source=infra/terraform/scripts/precheck/lib/principal_resolve.sh
-source "${SCRIPT_DIR}/lib/principal_resolve.sh" ||
+source "${SCRIPT_DIR}/lib/principal_resolve.sh" 2>/dev/null ||
   die "lib/principal_resolve.sh 를 읽지 못함"
 # shellcheck source=infra/terraform/scripts/precheck/lib/principal_policy.sh
-source "${SCRIPT_DIR}/lib/principal_policy.sh" ||
+source "${SCRIPT_DIR}/lib/principal_policy.sh" 2>/dev/null ||
   die "lib/principal_policy.sh 를 읽지 못함"
 
 #######################################
