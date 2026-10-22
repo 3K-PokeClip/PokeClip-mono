@@ -73,9 +73,11 @@ func (h *handler) publish(ctx context.Context, w http.ResponseWriter, req mtxReq
 	}
 	h.ipTake(req)
 	// take 의 사건 로그는 동기다 — 쓰기가 밀려 resolve 시한을 넘겼으면 부르지 않는다(위와 같은 까닭 — 시간이 남지 않은
-	// resolve 는 auth 에 묻지도 않고 판정 불가다). 차례 · 한도는 이미 썼다(시도로 센다). 요청 취소는 여기서 보지 않는다 —
-	// 위의 확인 뒤에 온 취소는 resolve 를 막지 않는다(아래 — resolve 는 요청 취소에서 뗀다).
+	// resolve 는 auth 에 묻지도 않고 판정 불가다). 한도는 이미 썼다(시도로 센다). 받은 재확인 차례는 마무리한다 — 기억된
+	// 토큰이면 맨 뒤로 보내 다른 기억 토큰이 양보하지 않게(새 기억 · 게이지는 만들지 않는다). 요청 취소는 여기서 보지
+	// 않는다 — 위의 확인 뒤에 온 취소는 resolve 를 막지 않는다(아래 — resolve 는 요청 취소에서 뗀다).
 	if !time.Now().Before(resolveBy) {
+		h.failed.requeue(req.path)
 		h.late(w, req)
 		return
 	}

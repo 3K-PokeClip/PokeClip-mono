@@ -365,6 +365,62 @@ func TestHandlerIPTakeLogPastDeadlineIsLate(t *testing.T) {
 	}
 }
 
+// take 뒤 시한 종료가 받은 재확인 차례를 마무리한다 — 기억된 X(먼저) · Y 에서 X 가 차례를 받은 뒤 take 의 로그 지연으로
+// 늦게 끝나면 X 는 차례 맨 뒤로 간다. 그래서 칸이 다시 열렸을 때 Y 가 X 에게 양보(yield)하지 않고 재확인한다. auth 를
+// 부르지 않았으므로 X 의 기억 시각은 그대로이고 auth 게이지도 움직이지 않는다.
+func TestHandlerIPTakeLateRequeuesRecheckTurn(t *testing.T) {
+	f := newHandlerFixture(t, fixtureOptions{deadline: guardDeadline, ipLimit: testIPLimit})
+	tokX, tokY := waveToken(1), waveToken(2)
+	f.h.failed.record(tokX, outcomeUndecided)
+	f.h.failed.record(tokY, outcomeUndecided)
+	xBefore, _ := entryOf(f.h.failed, tokX)
+	f.auth.answerAll(answerUndecided(100 * time.Millisecond))
+	f.h.ipLimit.limit = 0 // 첫 take 가 ip_limit_full 을 낸다(한 번)
+	f.h.log = slog.New(stallingLogHandler{
+		Handler: f.h.log.Handler(),
+		stallOn: "ingestauth_ip_limit_full",
+		stall:   guardDeadline + guardMargin + 100*time.Millisecond,
+	})
+
+	f.publishFrom(t, testAttackerIP, tokX)
+	if end := waitForInnerEnd(t, f.logs); end != "ingestauth_publish_late" {
+		t.Fatalf("Setup: X's publish ended with %s, want ingestauth_publish_late", end)
+	}
+	x, _ := entryOf(f.h.failed, tokX)
+	y, _ := entryOf(f.h.failed, tokY)
+	if x.seq <= y.seq || !x.failedAt.Equal(xBefore.failedAt) {
+		t.Errorf("after X's late end: X (seq %d, failed at %v) · Y (seq %d), want X behind Y with its failure time unchanged (%v)", x.seq, x.failedAt.Sub(f.clock.start), y.seq, xBefore.failedAt.Sub(f.clock.start))
+	}
+	if got := gaugeNames(t, f.logs, "ingestauth_auth_degraded", "ingestauth_auth_recovered"); len(got) != 0 {
+		t.Errorf("auth gauge events after X's late end = %v, want none", got)
+	}
+
+	f.clock.moveTo(4500 * time.Millisecond) // 칸(0초 재확인)이 다시 열렸다. X 는 0초에 와 아직 활동 창 안이다
+	before := f.auth.callCount()
+	f.publishFrom(t, testOtherIP, tokY)
+	if e, ok := lastDenied(t, f.logs); f.auth.callCount() != before+1 || !ok || e.Reason != "undecided" {
+		t.Errorf("publish of Y after X's late end: resolves %d → %d with publish_denied %+v, want Y's recheck (not recheck_wait yield)", before, f.auth.callCount(), e)
+	}
+}
+
+// 기억에 없던 토큰이 take 뒤 시한으로 끝나도 새 기억을 만들지 않는다.
+func TestHandlerIPTakeLateDoesNotRememberToken(t *testing.T) {
+	f := newHandlerFixture(t, fixtureOptions{deadline: guardDeadline, ipLimit: testIPLimit})
+	f.h.ipLimit.limit = 0
+	f.h.log = slog.New(stallingLogHandler{
+		Handler: f.h.log.Handler(),
+		stallOn: "ingestauth_ip_limit_full",
+		stall:   guardDeadline + guardMargin + 100*time.Millisecond,
+	})
+
+	f.publishFrom(t, testAttackerIP, testTokenA)
+	waitForInnerEnd(t, f.logs)
+
+	if _, ok := entryOf(f.h.failed, testTokenA); ok {
+		t.Errorf("unremembered token is remembered after a late end, want no entry")
+	}
+}
+
 // 출발지 403 · 호출자 Basic 401 은 본문을 읽기 전이라 송출자 IP 한도를 쓰지 않는다 — 같은 본문 ip 로 한도의 두 배를
 // 보낸 뒤에도 정상 자격의 그 ip 첫 publish 는 200 이다(트랙 A 계획 8절 · 트랙 B 설계 2-2).
 func TestHandlerCallerRejectionsDoNotSpendIPLimit(t *testing.T) {
