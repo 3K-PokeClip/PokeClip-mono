@@ -217,8 +217,9 @@ describe('mediaStreamId — 영상 주소의 키(POK-233)', () => {
 
 describe('영상 출입증 받기와 쿠키 싣기 (POK-317)', () => {
   // 모듈 안 기억(받은 출입증 · 쿠키 표시)이 시험끼리 새지 않게 매번 새로 읽는다
-  async function load(answer: (url: string) => Response) {
+  async function load(answer: (url: string) => Response, playbackBase = 'https://media.test') {
     vi.resetModules();
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_PLAYBACK_BASE_URL', playbackBase);
     const spy = stubFetch((url) => Promise.resolve(answer(String(url))));
     const api = await import('@/api/clipEditor');
     const media = await import('@/api/mediaPlayback');
@@ -232,6 +233,7 @@ describe('영상 출입증 받기와 쿠키 싣기 (POK-317)', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    vi.unstubAllEnvs();
   });
 
   it('서명 재료가 없는 503만 「필요 없음」이다: 자격 확인이 안 되는 503은 실패라 다시 묻는다', async () => {
@@ -289,6 +291,21 @@ describe('영상 출입증 받기와 쿠키 싣기 (POK-317)', () => {
     await api.ensurePlaybackAccess('s1', 'k1');
     await api.ensurePlaybackAccess('s2', 'k2');
     expect(posts()).toHaveLength(1);
+  });
+
+  it('라이브 화면이 받은 「필요 없음」도 기억한다: 목록·편집기가 같은 답을 받으러 다시 가지 않는다', async () => {
+    const { api, posts } = await load(() =>
+      jsonResponse(503, { error: 'playback_signing_unavailable' }),
+    );
+    await api.requestPlaybackAccess('s1');
+    expect(api.ensurePlaybackAccess('s2', 'k2')).toBeNull();
+    expect(posts()).toHaveLength(1);
+  });
+
+  it('녹화 재생 서버 주소가 없는 곳에서는 받지 않는다: 녹화를 부르지 않으니 쿠키도 필요 없다', async () => {
+    const { api, posts } = await load(granted('2026-10-23T01:00:00Z'), '');
+    expect(api.ensurePlaybackAccess('s1', 'k1')).toBeNull();
+    expect(posts()).toHaveLength(0);
   });
 
   it('영상 키로 부르면 그 키로 받아 둔 방송의 출입증을 다시 쓰거나 새로 받는다: 모르는 키면 묻지 않는다', async () => {

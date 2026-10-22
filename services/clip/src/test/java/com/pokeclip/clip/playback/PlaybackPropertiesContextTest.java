@@ -63,7 +63,7 @@ class PlaybackPropertiesContextTest {
                 });
     }
 
-    /** 위 시험의 대조. 도메인이 있으면 뜬다 — 없으면 위 시험은 「켜진 셋이 늘 실패」로도 초록이다. */
+    /** 위 시험의 대조. 도메인이 있으면 뜬다. 이 갈래가 없으면 위 시험은 「켜진 셋이 늘 실패」로도 초록이다. */
     @Test
     void 필수이고_쿠키_도메인이_있으면_켜진_채로_뜬다() {
         runner.withPropertyValues(켜진_셋("pokeclip.playback.required=true", "pokeclip.playback.cookie-domain=.pokeclip.com"))

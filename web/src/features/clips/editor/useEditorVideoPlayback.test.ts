@@ -94,11 +94,15 @@ describe('useEditorVideoPlayback — 녹화 구간', () => {
   });
 });
 
-describe('useEditorVideoPlayback — 출입증 쿠키 (POK-317)', () => {
-  afterEach(() => vi.unstubAllGlobals());
+describe('useEditorVideoPlayback: 출입증 쿠키 (POK-317)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
 
   it('출입증을 받기 전에는 쿠키를 안 싣고, 받은 뒤에는 싣는다: CDN 뒤 미리보기는 쿠키가 없으면 403이다', async () => {
     vi.resetModules();
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_PLAYBACK_BASE_URL', 'https://media.test');
     const fetchSpy = vi.fn((input: RequestInfo | URL, _init?: RequestInit) =>
       String(input).endsWith('/playback-access')
         ? Promise.resolve(

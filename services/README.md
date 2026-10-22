@@ -330,7 +330,7 @@ localhost가 딸려가고, 로컬에선 되고 운영에서만 막히는데 로�
 🔴 **같은 표시가 쿠키 도메인 빈 값도 막는다**(POK-317). 비면 쿠키가 clip을 부른 호스트(`app.pokeclip.com`) 전용이라
 영상 도메인(`media.pokeclip.com`) 요청에 안 실리고, 재생이 전부 CDN 403인데 부팅은 초록이다. 로컬 · dev는 같은 호스트라
 빈 값이 정상이고 표시가 꺼져 있어 지금처럼 경고 한 줄(`clip.playback.cookie_domain_empty`)만 남긴다.
-**형식은 맞는데 틀린 값**(`.pokeclip.co`)은 못 막는다 — prod 값 확인은 1번 몫이다.
+**형식은 맞는데 틀린 값**(`.pokeclip.co`)은 못 막는다. prod 값 확인은 1번 몫이다.
 
 **`COLLECTOR_BASE_URL`은 서버끼리 붙는 주소다**(compose 안에서는 `http://chat-collector:8083`) —
 `AUTH_BASE_URL`과 같은 성격이고 `PROFILE_PHOTO_BASE_URL`(브라우저가 붙는 주소)과는 반대다.

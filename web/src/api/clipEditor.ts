@@ -1,7 +1,7 @@
 'use client';
 
 import { ApiError, apiFetch } from './client';
-import { markPlaybackCookiesIssued } from './mediaPlayback';
+import { markPlaybackCookiesIssued, playbackConfigured } from './mediaPlayback';
 
 // clip 서버 창구(POK-251). 전부 로그인 세션의 apiFetch로 간다(Bearer 부착·401 회전).
 //   GET /api/clip/broadcasts?state=…            방송 목록 (startedAt 을 얻는 데 쓴다)
@@ -642,6 +642,9 @@ export function cutFromWindow(
 export type PlaybackAccessResult =
   { kind: 'granted'; expiresAtMs: number | null } | { kind: 'not_needed' } | { kind: 'failed' };
 
+/** 서명 재료가 없는 서버(로컬·dev)면 어느 방송도 더 묻지 않는다 */
+let playbackSigningOff = false;
+
 export async function requestPlaybackAccess(streamId: string): Promise<PlaybackAccessResult> {
   try {
     const res = await apiFetch(
@@ -664,8 +667,11 @@ export async function requestPlaybackAccess(streamId: string): Promise<PlaybackA
   } catch (e) {
     // 「필요 없음」은 서명 재료가 없는 503뿐이다. 자격 확인이 안 되는 503(authorization_unavailable)도 필요 없음으로 접으면
     // auth가 잠깐 멈춘 사이 연 화면이 다시 묻지 않아 prod 재생이 403으로 굳었다(POK-317)
-    if (e instanceof ApiError && e.status === 503 && e.code === 'playback_signing_unavailable')
+    if (e instanceof ApiError && e.status === 503 && e.code === 'playback_signing_unavailable') {
+      // 서버 설정이라 이 화면 수명 동안 바뀌지 않는다: 어느 방송도 더 묻지 않는다(LiveScreen이 받은 답도 여기서 남는다)
+      playbackSigningOff = true;
       return { kind: 'not_needed' };
+    }
     return { kind: 'failed' };
   }
 }
@@ -681,25 +687,22 @@ const playbackAccessCache = new Map<
 >();
 /** 영상 키 → 그 키로 출입증을 받은 방송 번호. 쿠키 경로가 영상 키라 같은 키의 방송이면 어느 것으로 받아도 같다 */
 const playbackAccessByMediaKey = new Map<string, string>();
-/** 서명 재료가 없는 서버(로컬·dev)면 어느 방송도 더 묻지 않는다 */
-let playbackSigningOff = false;
 
 /**
- * 영상을 부르기 직전에 출입증을 받아 둔다(POK-317). VOD 목록·편집기가 쓴다(LiveScreen은 제 갱신 타이머가 있다).
- * 받아 둔 것이 아직 쓸 만하거나 받을 필요가 없으면 null이라 부른 쪽이 기다리지 않고 바로 요청한다. 실패는 기억하지 않는다.
+ * 녹화를 부르기 직전에 출입증을 받아 둔다(POK-317). VOD 목록·편집기가 쓴다(LiveScreen은 제 갱신 타이머가 있다).
+ * 받아 둔 것이 아직 쓸 만하거나 받을 필요가 없으면(녹화 재생 서버 주소가 없는 곳 포함) null이라 부른 쪽이 기다리지 않고 바로 요청한다. 실패는 기억하지 않는다.
  */
 export function ensurePlaybackAccess(
   streamId: string,
   mediaKey: string,
 ): Promise<PlaybackAccessResult> | null {
   playbackAccessByMediaKey.set(mediaKey, streamId);
-  if (playbackSigningOff) return null;
+  if (playbackSigningOff || !playbackConfigured()) return null;
   const known = playbackAccessCache.get(streamId);
   if (known !== undefined && known.until > Date.now()) return known.settled ? null : known.result;
   const result = requestPlaybackAccess(streamId);
   playbackAccessCache.set(streamId, { until: Number.POSITIVE_INFINITY, settled: false, result });
   void result.then((r) => {
-    if (r.kind === 'not_needed') playbackSigningOff = true;
     const until =
       r.kind === 'granted'
         ? (r.expiresAtMs ?? Date.now() + PLAYBACK_ACCESS_DEFAULT_REUSE_MS) -

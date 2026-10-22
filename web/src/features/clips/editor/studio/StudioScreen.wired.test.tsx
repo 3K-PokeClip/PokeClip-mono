@@ -38,10 +38,12 @@ const tracked = (name: string) =>
 
 // 녹화 목록을 어느 키로 물었는지 잰다(POK-233) — 실제 구현을 그대로 부른다(재생 서버 주소가 없어 빈 목록이다)
 const spansAsked = vi.hoisted(() => [] as string[]);
+const playbackOn = vi.hoisted(() => ({ value: false }));
 vi.mock('@/api/mediaPlayback', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/api/mediaPlayback')>();
   return {
     ...actual,
+    playbackConfigured: () => playbackOn.value,
     fetchRecordingSpans: (streamId: string) => {
       spansAsked.push(streamId);
       return actual.fetchRecordingSpans(streamId);
@@ -246,6 +248,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  playbackOn.value = false;
 });
 
 function bodiesOf(method: string, path: string) {
@@ -297,6 +300,8 @@ describe('StudioScreen — 영상 경로의 키(POK-233)', () => {
   });
 
   it('녹화를 찾기 전에 출입증을 받는다: 문은 방송 번호다(POK-317, CDN 뒤 녹화는 쿠키가 없으면 403)', async () => {
+    // 녹화 재생 서버가 있는 곳에서만 받는다. 모듈이 주소를 읽어 두므로 흉내 낸 함수만 주소가 있다고 답하게 한다
+    playbackOn.value = true;
     server.ingest = 'key-studio';
     await openFrom(`?stream=${STREAM_ID}&card=5`);
     expect(
