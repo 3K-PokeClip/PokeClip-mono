@@ -15,8 +15,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
-
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/config"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/fmp4meta"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
@@ -93,16 +91,11 @@ func run() error {
 	defer stop()
 
 	// --- 1. 기동: 설정 -> DB 연결 -> (개발 환경이면) 표 생성 ---
-	pool, err := pgxpool.New(ctx, cfg.PGDSN)
+	pool, dbConfig, err := openIndexerPool(ctx, cfg.PG, log)
 	if err != nil {
-		// DSN 에는 비밀번호가 들어 있으므로 에러에 싣지 않는다.
-		return fmt.Errorf("DB 연결 풀 생성 실패: %w", err)
+		return err
 	}
 	defer pool.Close()
-
-	if err := pool.Ping(ctx); err != nil {
-		return fmt.Errorf("DB 접속 확인 실패: %w", err)
-	}
 	if cfg.EnsureSchema {
 		// EnsureSchema 는 Store 인터페이스 밖의 자유 함수다(D7).
 		// 정본 DDL(1번 소유 — ddl.go)을 부팅 시 보장한다. 마이그레이션 도구 도입 시 이 3줄과 ddl.go 만 바꾸면 된다(G7).
@@ -212,7 +205,7 @@ func run() error {
 			return index.EndLive(ctx, pool, streamID)
 		},
 	}
-	if pubPool := assemblePublishing(ctx, cfg, up, rewind); pubPool != nil {
+	if pubPool := assemblePublishing(ctx, cfg, dbConfig.Copy(), up, rewind); pubPool != nil {
 		// ★ 등록 순서가 계약이다(위 up.Shutdown 주석과 같은 원리). 발행자 풀은 up.Shutdown 보다 먼저 닫히고 아래
 		//   rewind.stop(fence 반납)보다 늦게 닫힌다 — 반납 문장이 이 풀로 나간다(체크리스트 474 A-3 3).
 		defer pubPool.Close()

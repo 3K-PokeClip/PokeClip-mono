@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
 
 	sidecarconfig "github.com/3K-PokeClip/pokeclip-mono/media/internal/config"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/pgconf"
 )
 
 // envOf 는 필수 값을 채운 환경에 over 를 덮은 getenv 다.
@@ -27,20 +29,43 @@ func TestLoadConfigDefaults(t *testing.T) {
 		grace: 8 * time.Minute, reconnectWindow: 300 * time.Second, recordDeleteAfter: 24 * time.Hour,
 		batch: 200, maxPerCycle: 2000,
 	}
-	cfg.pgDSN, cfg.logLevel = "", 0
+	cfg.pg, cfg.logLevel = pgconf.Settings{}, 0
 	if cfg != want {
 		t.Errorf("loadConfig = %+v, want %+v", cfg, want)
 	}
 }
 
-// 비밀번호는 URL 인코딩해 DSN 에 싣는다 — 특수문자가 든 비밀번호도 깨지지 않는다.
-func TestLoadConfigBuildsDSN(t *testing.T) {
+// DB 설정은 사이드카와 같은 pgconf 로 읽는다. password 모드는 옮기기 전 DSN(`postgres://u:p%40ss%20word@db:6543/d?
+// sslmode=require`)과 같은 접속 값을 낸다 — 특수문자가 든 비밀번호도 그대로 간다.
+func TestLoadConfigReadsPGSettings(t *testing.T) {
 	cfg, err := loadConfig(envOf(map[string]string{"POSTGRES_HOST": "db", "POSTGRES_PORT": "6543", "POSTGRES_SSLMODE": "require"}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "postgres://u:p%40ss%20word@db:6543/d?sslmode=require"; cfg.pgDSN != want {
-		t.Errorf("pgDSN = %q, want %q", cfg.pgDSN, want)
+	if cfg.pg.Auth != pgconf.AuthPassword || cfg.pg.User != "u" || cfg.pg.Host != "db" || cfg.pg.Port != 6543 ||
+		cfg.pg.DB != "d" || cfg.pg.SSLMode != "require" {
+		t.Fatalf("pg = %v, want password · u@db:6543/d · require", cfg.pg)
+	}
+	pc, err := poolConfig(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cc := pc.ConnConfig; cc.Password != "p@ss word" || cc.User != "u" || cc.Host != "db" || cc.Port != 6543 || cc.Database != "d" {
+		t.Errorf("풀 설정 접속 값이 옮기기 전 DSN 과 다르다: user=%s host=%s port=%d db=%s 비밀번호 일치=%v",
+			cc.User, cc.Host, cc.Port, cc.Database, cc.Password == "p@ss word")
+	}
+}
+
+// iam 묶음(비밀번호 없음 · CA 번들 경로)도 받는다 — 사이드카와 같은 규칙이다.
+func TestLoadConfigAcceptsIAM(t *testing.T) {
+	cfg, err := loadConfig(envOf(map[string]string{
+		"POSTGRES_AUTH": "iam", "POSTGRES_PASSWORD": "", "POSTGRES_SSLROOTCERT": "/etc/pokeclip/rds-ca/global-bundle.pem",
+	}))
+	if err != nil {
+		t.Fatalf("iam 묶음 거부: %v", err)
+	}
+	if cfg.pg.Auth != pgconf.AuthIAM || cfg.pg.SSLMode != "verify-full" || cfg.pg.Region != "ap-northeast-2" {
+		t.Errorf("pg = %v, want iam · verify-full · ap-northeast-2", cfg.pg)
 	}
 }
 
@@ -96,6 +121,11 @@ func TestLoadConfigRejectsUnsafeValues(t *testing.T) {
 		"POSTGRES_USER":                  {"POSTGRES_USER": ""},
 		"POSTGRES_PORT":                  {"POSTGRES_PORT": "x"},
 		"LOG_LEVEL":                      {"LOG_LEVEL": "loud"},
+		// POK-311 — 로그인 방식 규칙(pgconf). iam 은 비밀번호를 받지 않고 verify-full · CA 번들 경로를 요구한다.
+		"POSTGRES_AUTH":               {"POSTGRES_AUTH": "IAM"},
+		"POSTGRES_PASSWORD iam":       {"POSTGRES_AUTH": "iam", "POSTGRES_SSLROOTCERT": "/etc/ca.pem"},
+		"POSTGRES_SSLMODE iam":        {"POSTGRES_AUTH": "iam", "POSTGRES_PASSWORD": "", "POSTGRES_SSLMODE": "require", "POSTGRES_SSLROOTCERT": "/etc/ca.pem"},
+		"POSTGRES_SSLROOTCERT iam 없음": {"POSTGRES_AUTH": "iam", "POSTGRES_PASSWORD": ""},
 	}
 	for name, over := range cases {
 		_, err := loadConfig(envOf(over))

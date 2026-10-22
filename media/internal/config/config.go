@@ -19,14 +19,16 @@ import (
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/indexer"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/mtxhook"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/mtxstate"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/pgconf"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/recording"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/upload"
 )
 
 // Config 는 사이드카가 기동하는 데 필요한 전부다.
 type Config struct {
-	// PGDSN 은 비밀값을 포함한다. 로그나 에러 메시지에 그대로 실으면 안 된다.
-	PGDSN        string
+	// PG 는 DB 접속 설정이다(POSTGRES_* · AWS_REGION — pgconf 가 janitor 와 같은 규칙으로 읽는다). 비밀번호는 비공개
+	// 필드라 로그 · 오류에 실리지 않는다. 풀 설정은 main 이 pgconf.PoolConfig 로 만든다.
+	PG           pgconf.Settings
 	SegmentRoot  string
 	EnsureSchema bool
 	LogLevel     slog.Level
@@ -97,26 +99,11 @@ const (
 // 필수 값이 없거나 빈 문자열이면 즉시 에러다. 빈 문자열을 "설정됨"으로 보면
 // 비밀번호 없이 DB 에 붙으려다 원인 불명으로 실패한다.
 func Load(env func(string) string) (Config, error) {
-	user, err := required(env, "POSTGRES_USER")
+	// DB 설정 규칙(필수 값 · 기본값 · 로그인 방식)은 pgconf 한 곳이다 — janitor 와 같은 값을 같은 뜻으로 읽는다.
+	pg, err := pgconf.FromEnv(env)
 	if err != nil {
 		return Config{}, err
 	}
-	password, err := required(env, "POSTGRES_PASSWORD")
-	if err != nil {
-		return Config{}, err
-	}
-	dbName, err := required(env, "POSTGRES_DB")
-	if err != nil {
-		return Config{}, err
-	}
-	host := withDefault(env, "POSTGRES_HOST", "postgres")
-	port, err := positiveInt(env, "POSTGRES_PORT", 5432)
-	if err != nil {
-		return Config{}, err
-	}
-	// prefer = TLS 를 시도하되 서버가 못 하면 평문으로 내려간다. 로컬 compose 기본에 맞춘 값이며,
-	// 네트워크를 건너는 배포에서는 require 이상으로 올린다.
-	sslMode := withDefault(env, "POSTGRES_SSLMODE", "prefer")
 
 	logLevel, err := level(env, "LOG_LEVEL", slog.LevelInfo)
 	if err != nil {
@@ -335,7 +322,7 @@ func Load(env func(string) string) (Config, error) {
 	}
 
 	return Config{
-		PGDSN:            dsn(user, password, host, port, dbName, sslMode),
+		PG:               pg,
 		SegmentRoot:      watch.Root,
 		S3:               s3,
 		Upload:           up,
@@ -475,18 +462,6 @@ func validateMTXAPIURL(raw string) (string, error) {
 		return "", errors.New("MTX_API_URL 에 query(?)·fragment(#)를 넣을 수 없다 — 베이스 URL 뒤에 /v3/paths/list 가 붙는다")
 	}
 	return u.Hostname(), nil
-}
-
-// dsn 은 사용자명과 비밀번호를 URL 인코딩해 넣는다. 특수문자가 든 비밀번호도 깨지지 않는다.
-func dsn(user, password, host string, port int, dbName, sslMode string) string {
-	u := url.URL{
-		Scheme:   "postgres",
-		User:     url.UserPassword(user, password),
-		Host:     fmt.Sprintf("%s:%d", host, port),
-		Path:     "/" + dbName,
-		RawQuery: url.Values{"sslmode": {sslMode}}.Encode(),
-	}
-	return u.String()
 }
 
 func required(env func(string) string, key string) (string, error) {

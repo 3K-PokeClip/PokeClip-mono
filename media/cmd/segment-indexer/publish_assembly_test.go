@@ -3,7 +3,7 @@ package main
 // 되감기 발행 몫의 조립 시험(체크리스트 474 B-1 4 · 5 · 7b 검수 cc D · 판단 J69 · J75 · J77). run 이 업로더 기동 앞에서 부르는
 // assemblePublishing 을 그대로 부르고, 종료는 run 이 defer 로 부르는 rewindLoop.stop 이다. 부팅 버킷 확인은 루프백 가짜 S3
 // (HeadBucket 만 흉내)에 실제 SDK 전송(서명 · TLS)으로 닿는다 — 시험 서버의 인증서는 AWS_CA_BUNDLE 로 믿게 해 운영 코드에
-// 시험용 이음매를 두지 않는다. 발행자 풀은 닿지 않는 DSN 이다(pgxpool.New 는 접속하지 않는다 — PG 0). PG 반쪽은
+// 시험용 이음매를 두지 않는다. 발행자 풀은 닿지 않는 주소의 풀 설정이다(pgxpool.NewWithConfig 는 접속하지 않는다 — PG 0). PG 반쪽은
 // publish_assembly_pg_test.go 다.
 
 import (
@@ -100,7 +100,6 @@ func assemblyCfg(t *testing.T, endpoint string) config.Config {
 	up := upload.DefaultOptions(nil, dir)
 	up.SweepEvery = time.Hour // 스위퍼가 끼어들지 않게 한다
 	return config.Config{
-		PGDSN:       "postgres://user@127.0.0.1:1/none", // 닿지 않는다 — 접속하는 문장은 접속 단계에서 실패한다
 		SegmentRoot: dir,
 		Indexer:     idx,
 		Watcher:     recording.DefaultWatcherOptions(dir, nil),
@@ -120,12 +119,19 @@ type assembly struct {
 	ix     *indexer.Indexer
 	up     *upload.Uploader
 	rewind *rewindLoop
+	// db 는 run 이 발행자 풀에 넘기는 풀 설정(인덱서 풀 설정의 Copy)이다. 기본은 닿지 않는 주소 — 접속하는 문장은 접속
+	// 단계에서 실패한다. PG 시험은 전용 테스트 DB 설정으로 바꾼다.
+	db *pgxpool.Config
 }
 
 // newAssembly 는 cfg 로 조립 앞 형상을 세운다 — 인덱서의 장부는 store 다.
 func newAssembly(t *testing.T, cfg config.Config, store index.Store) *assembly {
 	t.Helper()
-	a := &assembly{logs: &logCapture{}}
+	db, err := pgxpool.ParseConfig("postgres://user@127.0.0.1:1/none")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := &assembly{logs: &logCapture{}, db: db}
 	log := slog.New(a.logs)
 	a.ix = indexer.New(store, func(string) (int64, error) { return 4000, nil }, noopAdopter{}, nil, nil, cfg.Indexer, log)
 	root, err := os.OpenRoot(cfg.SegmentRoot)
@@ -144,7 +150,7 @@ func newAssembly(t *testing.T, cfg config.Config, store index.Store) *assembly {
 // assemble 은 run 처럼 발행 몫을 조립한다. 돌려받은 발행자 풀은 시험이 끝나면 닫는다.
 func (a *assembly) assemble(t *testing.T, cfg config.Config) *pgxpool.Pool {
 	t.Helper()
-	pool := assemblePublishing(t.Context(), cfg, a.up, a.rewind)
+	pool := assemblePublishing(t.Context(), cfg, a.db, a.up, a.rewind)
 	if pool != nil {
 		t.Cleanup(pool.Close)
 	}

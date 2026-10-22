@@ -3,13 +3,13 @@ package main
 import (
 	"fmt"
 	"log/slog"
-	"net/url"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/pgconf"
 )
 
 // 하한 · 상한(설계 2-5). 값의 근거:
@@ -33,10 +33,11 @@ const (
 	externalDeleteMargin = time.Hour
 )
 
-// config 는 janitor 설정이다. pgDSN 은 비밀번호를 담는다 — 로그 · 오류에 싣지 않는다.
+// config 는 janitor 설정이다. pg 는 사이드카와 같은 규칙(pgconf)으로 읽은 DB 접속 설정이다 — 비밀번호는 비공개 필드라
+// 로그 · 오류에 실리지 않는다.
 type config struct {
 	enabled           bool
-	pgDSN             string
+	pg                pgconf.Settings
 	segmentRoot       string
 	logLevel          slog.Level
 	fsOpTimeout       time.Duration
@@ -61,7 +62,7 @@ func loadConfig(getenv func(string) string) (config, error) {
 	if c.enabled, err = enabledSwitch(getenv("JANITOR_ENABLED")); err != nil {
 		return config{}, err
 	}
-	if c.pgDSN, err = dsnFrom(getenv); err != nil {
+	if c.pg, err = pgconf.FromEnv(getenv); err != nil {
 		return config{}, err
 	}
 	c.segmentRoot = filepath.Clean(withDefault(getenv, "SEGMENT_ROOT", "/recordings"))
@@ -125,28 +126,6 @@ func enabledSwitch(raw string) (bool, error) {
 		return false, fmt.Errorf("JANITOR_ENABLED(%q)는 true · false 꼴(1 · t · TRUE · 0 · f · FALSE 등)이거나 빈 값이어야 한다", raw)
 	}
 	return v, nil
-}
-
-// dsnFrom 은 POSTGRES_* 로 DSN 을 만든다 — 사이드카(internal/config)와 같은 변수 · 기본값 · 인코딩이다.
-func dsnFrom(getenv func(string) string) (string, error) {
-	var vals [3]string
-	for i, key := range []string{"POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_DB"} {
-		if vals[i] = strings.TrimSpace(getenv(key)); vals[i] == "" {
-			return "", fmt.Errorf("필수 환경 변수 %s 가 비어 있다", key)
-		}
-	}
-	port, err := positiveInt(getenv, "POSTGRES_PORT", 5432)
-	if err != nil {
-		return "", err
-	}
-	u := url.URL{
-		Scheme:   "postgres",
-		User:     url.UserPassword(vals[0], vals[1]),
-		Host:     fmt.Sprintf("%s:%d", withDefault(getenv, "POSTGRES_HOST", "postgres"), port),
-		Path:     "/" + vals[2],
-		RawQuery: url.Values{"sslmode": {withDefault(getenv, "POSTGRES_SSLMODE", "prefer")}}.Encode(),
-	}
-	return u.String(), nil
 }
 
 func withDefault(getenv func(string) string, key, fallback string) string {

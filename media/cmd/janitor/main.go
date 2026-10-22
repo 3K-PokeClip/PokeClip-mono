@@ -24,6 +24,7 @@ import (
 
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/janitor"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/pgconf"
 )
 
 const (
@@ -35,7 +36,7 @@ const (
 // 상한이 없어 사이드카 기한(MarkTimeout 10s · 인덱서 5s × 2)과의 결속이 깨진다(E3′ · D43).
 const minServerVersion = 170000
 
-// versionQueryTimeout 은 기동 때 버전 조회의 상한이다(조회 기한과 같다).
+// versionQueryTimeout 은 기동 때 DB 단계 하나(풀 설정 조립 · 연결 확인 · 버전 조회 — 각각)의 상한이다(조회 기한과 같다).
 const versionQueryTimeout = 20 * time.Second
 
 // poolMaxConns 는 janitor 풀 크기다 — 한 번에 한 행 · 조회 하나라 둘이면 된다.
@@ -44,6 +45,7 @@ const poolMaxConns = 2
 // deps 는 기동 순서의 바깥 호출이다. 운영 값은 main 이 채우고 시험만 바꾼다.
 type deps struct {
 	newPool       func(ctx context.Context, cfg *pgxpool.Config) (*pgxpool.Pool, error)
+	confirm       func(ctx context.Context, pool *pgxpool.Pool, s pgconf.Settings, log *slog.Logger) error
 	serverVersion func(ctx context.Context, pool *pgxpool.Pool) (int, error)
 	openRoot      func(dir string) (*os.Root, error)
 	runJanitor    func(ctx context.Context, j *janitor.Janitor) error
@@ -52,15 +54,22 @@ type deps struct {
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
-	deployed := deps{
-		newPool:       pgxpool.NewWithConfig,
+	code := run(ctx, os.Getenv, os.Stdout, os.Stderr, deployedDeps())
+	stop()
+	os.Exit(code)
+}
+
+// deployedDeps 는 운영 조립의 바깥 호출이다.
+func deployedDeps() deps {
+	return deps{
+		newPool: pgxpool.NewWithConfig,
+		confirm: func(ctx context.Context, pool *pgxpool.Pool, s pgconf.Settings, log *slog.Logger) error {
+			return pgconf.ConfirmConnection(ctx, pool, s, log, "janitor")
+		},
 		serverVersion: queryServerVersion,
 		openRoot:      os.OpenRoot,
 		runJanitor:    func(ctx context.Context, j *janitor.Janitor) error { return j.Run(ctx) },
 	}
-	code := run(ctx, os.Getenv, os.Stdout, os.Stderr, deployed)
-	stop()
-	os.Exit(code)
 }
 
 // run 은 기동 순서를 돌고 종료 코드를 돌려준다. 로그는 stdout(JSON), 로거를 만들기 전 오류는 stderr 다.
@@ -91,11 +100,13 @@ func run(ctx context.Context, getenv func(string) string, stdout, stderr io.Writ
 	return exitOK
 }
 
-// start 는 풀 → 버전 확인 → 루트 → 정리기 순으로 조립하고 돌린다. base 는 run_id 를 싣기 전 로거다 —
-// 정리기가 같은 run_id 를 스스로 싣는다.
+// start 는 풀 → 연결 확인(db_connected) → 버전 확인 → 루트 → 정리기 순으로 조립하고 돌린다. base 는 run_id 를 싣기
+// 전 로거다 — 정리기가 같은 run_id 를 스스로 싣는다. 꺼짐(run 의 대기 분기)에서는 여기에 오지 않으므로 DB 를 건드리지 않는다.
 func start(ctx context.Context, cfg config, runID string, base *slog.Logger, d deps) error {
 	log := base.With("run_id", runID)
-	pc, err := poolConfig(cfg)
+	pcctx, cancel := context.WithTimeout(ctx, versionQueryTimeout)
+	pc, err := poolConfig(pcctx, cfg)
+	cancel()
 	if err != nil {
 		return err
 	}
@@ -105,6 +116,12 @@ func start(ctx context.Context, cfg config, runID string, base *slog.Logger, d d
 		return fmt.Errorf("DB 연결 풀 생성 실패: %w", err)
 	}
 	defer pool.Close()
+	cctx, cancel := context.WithTimeout(ctx, versionQueryTimeout)
+	err = d.confirm(cctx, pool, cfg.pg, log)
+	cancel()
+	if err != nil {
+		return err
+	}
 	if err := requirePG17(ctx, pool, log, d); err != nil {
 		return err
 	}
@@ -142,11 +159,12 @@ func requirePG17(ctx context.Context, pool *pgxpool.Pool, log *slog.Logger, d de
 	return nil
 }
 
-// poolConfig 는 janitor 풀 설정이다 — 세션 설정을 연결마다 건다(역할 기본값에 기대지 않는다).
-func poolConfig(cfg config) (*pgxpool.Config, error) {
-	pc, err := pgxpool.ParseConfig(cfg.pgDSN)
+// poolConfig 는 janitor 풀 설정이다 — 접속 · 로그인은 사이드카와 같은 pgconf 로 만들고, 세션 설정을 연결마다 건다
+// (역할 기본값에 기대지 않는다).
+func poolConfig(ctx context.Context, cfg config) (*pgxpool.Config, error) {
+	pc, err := pgconf.PoolConfig(ctx, cfg.pg)
 	if err != nil {
-		return nil, errors.New("POSTGRES_* 로 만든 DSN 해석 실패") // 원문에 비밀번호가 있다
+		return nil, err
 	}
 	applySessionLimits(pc)
 	return pc, nil

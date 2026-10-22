@@ -149,7 +149,7 @@ MediaMTX가 이벤트마다 컨테이너 안의 작은 명령을 실행하고(`m
 | 이름 | 의미 |
 |---|---|
 | `POSTGRES_USER` | DB 사용자 |
-| `POSTGRES_PASSWORD` | DB 비밀번호. 빈 문자열도 누락으로 취급한다 |
+| `POSTGRES_PASSWORD` | DB 비밀번호 — **password 모드에서만 필수**(빈 문자열도 누락으로 취급한다). `POSTGRES_AUTH=iam` 이면 **비워야 한다**(있으면 기동 거부) |
 | `POSTGRES_DB` | DB 이름 |
 
 **선택 — 기본값이 있다.**
@@ -158,7 +158,9 @@ MediaMTX가 이벤트마다 컨테이너 안의 작은 명령을 실행하고(`m
 |---|---|---|
 | `POSTGRES_HOST` | `postgres` | DB 호스트 |
 | `POSTGRES_PORT` | `5432` | DB 포트 |
-| `POSTGRES_SSLMODE` | `prefer` | DB 접속 TLS 모드. `prefer`는 가능하면 TLS, 안 되면 평문. 네트워크를 건너는 배포에서는 `require` 이상으로 올린다 |
+| `POSTGRES_AUTH` | (빈값 = `password`) | DB 로그인 방식. `password`(빈 값) = `POSTGRES_PASSWORD` 로 로그인 — 로컬 compose 의 방식. `iam` = 연결마다 RDS IAM 인증 토큰(15분 유효)을 새로 만들어 로그인한다(자격 증명 = AWS 기본 사슬 · 인스턴스 역할). 그 밖 값(대소문자가 다른 `IAM` 포함)은 기동 거부 |
+| `POSTGRES_SSLMODE` | `prefer` (iam 은 `verify-full`) | DB 접속 TLS 모드. `prefer`는 가능하면 TLS, 안 되면 평문. 네트워크를 건너는 배포에서는 `require` 이상으로 올린다. **iam 은 `verify-full` 만 받는다** — 그 밖 값은 기동 거부 |
+| `POSTGRES_SSLROOTCERT` | (빈값 = 지정 없음) | 서버 인증서를 검증할 CA 번들의 **절대 경로**. 기동 때 일반 파일 · PEM 인증서 1개 이상을 확인한다. **iam 이면 필수.** `PGSSLROOTCERT` 는 쓰지 않는다 — 이 값이 빈 채 `PGSSLROOTCERT` 만 있으면 기동 거부 |
 | `SEGMENT_ROOT` | `/recordings` | 감시할 녹화 루트. 컨테이너에 읽기 전용으로 붙는다 |
 | `ENSURE_SCHEMA` | `false` | true면 기동 시 정본 DDL(1번 소유)로 `stream_segments`를 만든다. 로컬 compose 전용 — RDS/마이그레이션 도구 도입 시 끈다 |
 | `TZ` | (미설정) | 컨테이너 시간대. **UTC로 고정한다.** 저장 값은 코드가 UTC로 강제하지만 로그 시각도 UTC로 맞춘다 |
@@ -280,7 +282,7 @@ M4 ⓒ 이관 기록」의 알려진 한계 「관측 끔」). 인덱싱·업로
 | 이름 | 기본값 | 의미 |
 |---|---|---|
 | `S3_BUCKET` | (빈값 = 비활성) | 업로드 대상 버킷. **버킷 판정이 다른 S3 값 검증보다 앞이라, 비워 두면 나머지 S3 설정이 틀려도 인덱싱은 산다** |
-| `AWS_REGION` | `ap-northeast-2` | 버킷 리전 |
+| `AWS_REGION` | `ap-northeast-2` | 버킷 리전. **DB IAM 토큰(`POSTGRES_AUTH=iam`)을 서명하는 리전도 같은 값이다** — 이 값은 버킷이 비어 있어도 그 용도로 읽힌다 |
 | `S3_ENDPOINT` | (미설정 = AWS 기본) | 호환 스토리지(MinIO 등)용 엔드포인트 URL. scheme+호스트 필수. https 여야 한다 — http 는 SDK 서명 단계에서 PUT 이 거부된다(2026-09-24 실측) |
 | `S3_FORCE_PATH_STYLE` | `false` | 호환 스토리지용 path-style 주소 지정 |
 | `SEGMENT_UPLOAD_RETRY_MAX` | `4` | 조각 1개당 PUT 시도 상한(지수 백오프). 소진하면 `failed` 기록 후 스위퍼가 회수 |
@@ -295,9 +297,29 @@ M4 ⓒ 이관 기록」의 알려진 한계 「관측 끔」). 인덱싱·업로
 `AWS_PROFILE`은 `~/.aws` 마운트 폴백을 켤 때만 함께 넣는다 — 마운트 없이 넣으면
 SDK가 존재하지 않는 프로필을 요구해 기동이 죽는다(2026-08-04 실측).
 
-위 표가 `internal/config/config.go`가 읽는 전부다(`TZ` 제외 44개). 잘못된 값(숫자 자리에 문자,
+위 표가 `internal/config/config.go`가 읽는 전부다(`TZ` 제외 46개 — `POSTGRES_*` · DB 몫 `AWS_REGION` 은
+`internal/pgconf` 가 janitor 와 같은 규칙으로 읽는다). 잘못된 값(숫자 자리에 문자,
 음수, 파싱 불가한 기간)은 조용히 기본값으로 넘어가지 않고 기동에 실패한다.
 `SEGMENT_SUSPECT_BELOW_MS`가 `SEGMENT_EXPECTED_DURATION_MS`보다 크면 기동 단계에서 거부한다.
+
+### DB 연결 성공 줄 `db_connected` (POK-311)
+
+사이드카(인덱서 풀)와 janitor 는 기동 때 DB 연결 하나를 잡아 Ping 하고, 성공하면
+INFO `db_connected` 한 줄을 남긴다. 실패하면 이 줄 없이 기동이 실패한다(사이드카 =
+종료 코드 1 · janitor = `janitor_failed`). 배포 확인은 이 줄로 한다 — 예를 들어 RDS IAM
+배포는 `"msg":"db_connected"` 이면서 `"auth":"iam"` · `"tls":true` 인 줄이 있어야 한다.
+사이드카의 발행자 풀은 같은 설정으로 따로 열리지만 이 줄을 내지 않는다(인덱서 풀 한 줄로
+판정한다).
+
+| 필드 | 뜻 |
+|---|---|
+| `pool` | `indexer`(사이드카) · `janitor` |
+| `auth` | `password` · `iam` |
+| `sslmode` | 설정한 TLS 모드 |
+| `tls` | **실제 연결이 TLS 인가** — `prefer` 는 평문으로 내려갈 수 있어 설정값만으로는 모른다 |
+| `user` · `host` · `port` · `db` | 접속 대상 |
+
+비밀번호 · IAM 토큰 · DSN · CA 파일 내용은 싣지 않는다.
 
 ## 되감기 M3 이관 기록 (POK-195)
 
@@ -2350,7 +2372,7 @@ janitor 는 파일을 지운 뒤 장부 갱신에 실패한 행을 「부채」�
 | `JANITOR_BATCH` | `200` | 한 번에 읽는 행. 10000 이하 · `JANITOR_MAX_PER_CYCLE` 이하 |
 | `JANITOR_MAX_PER_CYCLE` | `2000` | 한 주기에 살펴보는 행 상한. 100000 이하 |
 | `FS_OP_TIMEOUT` | `5s` | 파일 작업 한 번의 상한. 100ms 이상 6초 이하 |
-| `POSTGRES_*` · `SEGMENT_ROOT` · `LOG_LEVEL` | 사이드카와 같음 | 위 사이드카 표 참조 |
+| `POSTGRES_*` · `SEGMENT_ROOT` · `LOG_LEVEL` | 사이드카와 같음 | 위 사이드카 표 참조. `POSTGRES_*` 에는 `POSTGRES_AUTH` · `POSTGRES_SSLROOTCERT` 가 들고, iam 이면 `AWS_REGION`(기본 `ap-northeast-2`)도 읽는다 — 규칙은 사이드카와 같은 코드(`internal/pgconf`)다. 기동 때 Ping 성공 뒤 `db_connected` 한 줄(`pool=janitor`)을 남긴다 |
 
 로컬 compose 가 janitor 에 넘기는 것은 `JANITOR_ENABLED` 와 `POSTGRES_USER` ·
 `POSTGRES_PASSWORD` · `POSTGRES_DB`(호스트 · `SEGMENT_ROOT` · `TZ` 는 고정값)뿐이다
