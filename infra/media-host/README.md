@@ -1,8 +1,8 @@
 # media-host — prod Media 상자 기동 체계
 
 prod Media 상자[^box]를 띄우고 지키는 파일 모음이다. 상자 위에서 MediaMTX ·
-nginx · 세그먼트 인덱서 사이드카[^sidecar]를 docker compose 로 한 묶음으로 돌리고,
-systemd 유닛 하나가 그 묶음 전체를 띄우고 다시 띄운다. 계획 POK-299 의 M2 가 이
+nginx · 세그먼트 인덱서 사이드카[^sidecar](켜면 녹화 정리 janitor 도)를 docker
+compose 로 한 묶음으로 돌리고, systemd 유닛 하나가 그 묶음 전체를 띄우고 다시 띄운다. 계획 POK-299 의 M2 가 이
 디렉터리를 만들었고, M9 의 user_data(인스턴스가 처음 뜰 때 도는 설치 스크립트)가
 상자에 설치한다.
 
@@ -49,7 +49,7 @@ compose 프로젝트 이름은 `pokeclip-media` 다(유닛의 `MEDIA_COMPOSE_PRO
 | `nginx` | 앞단 프록시(live · playback · 제어면 · 헬스 포트) | `"no"` | 유닛 저널 + json-file |
 | `sidecar` | 세그먼트 인덱서 · 업로더 · 관리 API 관측 | `on-failure` | journald 태그 `pokeclip-media-sidecar` |
 | `ingest-auth` | 송출 인증 응답기 — **자리**[^slot](M15 가 채움) | `on-failure` | 태그 `pokeclip-media-ingest-auth` |
-| `janitor` | 녹화 정리 — **자리** | `on-failure` | 태그 `pokeclip-media-janitor` |
+| `janitor` | 녹화 정리 — 업로드가 끝난 녹화 조각을 지운다. 사이드카 이미지의 janitor 명령이고 `janitor_enabled` 가 참일 때만 렌더한다 | `on-failure` | 태그 `pokeclip-media-janitor` |
 
 *   **재기동 단위:** 시작 스크립트는 `mediamtx` · `nginx` 의 출력에만
     붙는다[^attach]. 둘 중 하나가 끝나면 compose 전체가 내려가고, 유닛이 20초 뒤
@@ -71,6 +71,21 @@ compose 프로젝트 이름은 `pokeclip-media` 다(유닛의 `MEDIA_COMPOSE_PRO
 *   **`detached_log_driver`**(compose 템플릿 변수): prod 는 `"journald"`.
     `"json-file"` 은 journald 가 없는 로컬 엔진에서 띄울 때만 쓴다. 그 밖의 값은
     모두 journald 로 떨어진다.
+*   **`janitor_enabled`**(compose 템플릿 변수, bool): 참이면 janitor 를
+    렌더하고, 거짓이면 서비스가 없다. bool 로 바뀌지 않는 값(예: `"yes"` · 빈
+    문자열)은 렌더 실패다.
+    *   켜면 사이드카 이미지를 녹화 디렉터리 소유자 계정 `10002:10002` · 읽기
+        전용 루트로 띄우고 `JANITOR_ENABLED: "true"` 를 넣는다. recordings 를
+        쓰기로 붙이는 것은 janitor 하나다(사이드카는 `:ro`).
+    *   켜고 끄는 길은 설정 반영 교체다(아래 「되돌리기」). 끄면 다음 시작의
+        `--remove-orphans` 가 옛 janitor 컨테이너를 지운다.
+    *   로컬 compose 는 서비스를 남긴 채 `JANITOR_ENABLED` 를 비워 대기시킨다
+        (`.env` 한 줄과 `up -d` 로 바로 바꿀 수 있어서다). 이 상자는 env 를
+        바꾸는 길도 상자 교체라 대기 컨테이너를 둘 이유가 없어, 끈 상태에서는
+        렌더하지 않는다.
+    *   켠 뒤의 고정 줄(`db_connected`(pool=janitor) · `janitor_started` · 표
+        대기 `janitor_schema_waiting`)은 태그 저널 `-t pokeclip-media-janitor`
+        에 있다. 켜기 전 전제는 아래 「후속」 의 janitor 행이다.
 *   **MediaMTX 설정은 기본값 전체를 대체한다.** 템플릿에 없는 키는 MediaMTX
     기본값이고, `paths: all_others:` 가 빠지면 모든 송출이 거부된다.
 
@@ -137,8 +152,9 @@ nginx 요청 줄 · 서비스 진단이 섞여 있고, 비밀이 잘못 찍혔�
     --abort-on-container-exit --attach mediamtx --attach nginx` 로
     바뀐다(exec). 컨테이너는 늘 새로 만든다(`--force-recreate`) — 남은
     컨테이너가 지운 옛 렌더(옛 CDN 비밀 · 옛 API 비밀번호)를 붙든 채 다시
-    쓰이지 않게 한다. 렌더에서 빠진 서비스(비운 이미지 변수)의 옛 컨테이너도
-    지운다(`--remove-orphans`) — 남으면 옛 비밀을 든 채 같은 망 칸에 붙어 있다.
+    쓰이지 않게 한다. 렌더에서 빠진 서비스(비운 이미지 변수 · 끈 janitor)의 옛
+    컨테이너도 지운다(`--remove-orphans`) — 남으면 옛 비밀을 든 채 같은 망 칸에
+    붙어 있다.
 
 인자는 받지 않는다. 점검을 건너뛰는 플래그 · 변수는 없다(아래 「시험
 이음매」).
@@ -476,9 +492,8 @@ compose 는 이미지를 모두 `<ECR 저장소 URL>@<다이제스트>` 로 가�
 |---|---|---|
 | `nginx_image` | `pokeclip-prod/media-nginx` | nginx 공식 이미지 미러[^mirror] — 빌드하지 않음. 핀[^pin] = `images.json` 의 `nginx` |
 | `mediamtx_image` | `pokeclip-prod/media-mediamtx` | 1번이 `media/Dockerfile.mtxhook` 으로 빌드(훅 바이너리 · USER 10002). FROM 은 현행 포크 태그 — 정본은 볼트 런북 「mediamtx-커스텀이미지-반영」 |
-| `sidecar_image` | `pokeclip-prod/media-sidecar` | 1번이 `media/Dockerfile` 로 빌드(USER 10001). I1-1(IAM 인증) 반영본 |
+| `sidecar_image` | `pokeclip-prod/media-sidecar` | 1번이 `media/Dockerfile` 로 빌드(USER 10001). I1-1(IAM 인증) 반영본. janitor 도 이 이미지다(entrypoint 로 명령을 고름 — 별도 저장소 없음) |
 | `ingest_auth_image` | `pokeclip-prod/media-ingest-auth` | 1번이 빌드(`media/Dockerfile.ingest-auth`). 비면 서비스를 렌더하지 않음 |
-| `janitor_image` | (저장소 없음) | 자리 — 비면 서비스를 렌더하지 않음 |
 | (`media.env` `LOOPBACK_SENDER_IMAGE`) | M7 이 정함(후속) | 루프백 송출기 — `linuxserver/ffmpeg` 미러. 핀 = `images.json` 의 `loopback_sender` |
 
 *   **포크 원본 MediaMTX 이미지를 그대로 미러링하지 않는다.** 훅 바이너리가 없어
@@ -598,9 +613,11 @@ prod 상자에 깔 도구의 판이다. M9 user_data 가 같은 값으로 설치
     떼지만 paths 두 스크립트는 그러지 않는다. 자격 파일은 시작 스크립트가 16진
     64자 + LF 로만 쓰고 사용자 이름은 고정이라 갈리는 입력이 생기지 않는다.
 *   **상시 서비스의 실행 상한:** compose 의 상시 서비스(mediamtx · nginx ·
-    사이드카 · 응답기 · janitor)에 읽기 전용 루트(`read_only`) · 프로세스 수
-    상한(`pids_limit`) · 메모리 상한을 두지 않았다. 서비스마다 쓰는 자리와 기동
-    메모리를 재야 정할 수 있어 아래 「후속」 으로 넘긴다.
+    사이드카 · 응답기)에 읽기 전용 루트(`read_only`)를 두지 않았고, janitor
+    를 포함한 모든 서비스에 프로세스 수 상한(`pids_limit`) · 메모리 상한을
+    두지 않았다. 서비스마다 쓰는 자리와 기동 메모리를 재야 정할 수 있어 아래
+    「후속」 으로 넘긴다. janitor 는 recordings 밖에 쓰지 않아 읽기 전용 루트를
+    이미 둔다.
 *   **paths 조회의 `pageCount` 산술:** 2^63 급 값이면 셸 산술이 넘쳐 여러 페이지
     판정을 비켜 갈 수 있다. 그 값은 같은 망 칸 MediaMTX API 가 주는 것이라 그
     값을 위조할 수 있으면 응답 전체가 이미 신뢰 밖이고, 실제 경로 수로는 생기지
@@ -612,8 +629,8 @@ prod 상자에 깔 도구의 판이다. M9 user_data 가 같은 값으로 설치
 
 | 받는 쪽 | 할 일 |
 |---|---|
-| M9 | 템플릿 변수 키 집합에 `detached_log_driver` 를 넣고, 모듈이 문자 그대로 `"journald"` 를 넘기는지 단언한다. `daemon.json` 로그 옵션에 `env` · `labels` 계열 0 |
-| M9 | 이미지 변수 꼴 `^[^@]+@sha256:[0-9a-f]{64}$`. 참조가 ECR 레지스트리 호스트(`media.env` 의 `ECR_REGISTRY_HOST` 와 같은 값) + `/` 로 시작하는지도 단언한다. 다이제스트가 비면 `…@` 로 조립하지 않고 빈 문자열을 넘긴다(응답기 · janitor) |
+| M9 | 템플릿 변수 키 집합에 `detached_log_driver` · `janitor_enabled` 를 넣고, 모듈이 문자 그대로 `"journald"` 를 넘기는지 · `janitor_enabled` 를 bool 로 넘기는지 단언한다(문자열 `"true"` · `"false"` 도 렌더는 되므로 꼴은 모듈 쪽에서 막는다). `daemon.json` 로그 옵션에 `env` · `labels` 계열 0 |
+| M9 | 이미지 변수 꼴 `^[^@]+@sha256:[0-9a-f]{64}$`. 참조가 ECR 레지스트리 호스트(`media.env` 의 `ECR_REGISTRY_HOST` 와 같은 값) + `/` 로 시작하는지도 단언한다. 다이제스트가 비면 `…@` 로 조립하지 않고 빈 문자열을 넘긴다(응답기) |
 | M9 | Media SG 인그레스 단언(위 「SG 가 유일한 경계」). 인그레스 포트에 8888 · 9996 · 9997 0 |
 | M9 | prod 프록시 포트 넷(nginx 템플릿 변수)을 모듈이 넘기고 모듈 시험에서 단언한다. user_data 렌더본은 렌더 파일 · nginx 설정 bind 의 긴 문법(`create_host_path: false`)을 그대로 쓴다 — 원본이 없으면 그 컨테이너만 기동에 실패한다. 이 PR 의 유닛 · 스크립트 · compose 템플릿을 함께 설치한다 |
 | M9 | 설치 단언: `bin/lib/` 두 파일이 스크립트와 같은 상대 위치에 있고 내용이 저장소와 같다. `bin/` · `bin/lib/` 소유 `root:root`, 스크립트 0755 · lib 0644. `media.env`(유닛 `EnvironmentFile`)의 소유 · 모드(root 만 쓰기). `/etc/pokeclip-media/`(디렉터리 · `mediamtx.yml.tmpl` · `compose.yml` · `nginx.conf`)와 유닛 파일도 소유 `root:root` · 그룹 · 기타 쓰기 불가. 압축 user_data 16 KiB 게이트를 다시 잰다 |
@@ -626,8 +643,10 @@ prod 상자에 깔 도구의 판이다. M9 user_data 가 같은 값으로 설치
 | M9 | prod 인스턴스 아키텍처를 정한다(O7c 플랫폼 · 위 arm64 주의) |
 | M9 런북 · O7e 5 | 사이드카 기동 판정은 태그 저널(`-t pokeclip-media-sidecar`)로. DB 장애 때는 compose 전체가 아니라 사이드카만 다시 뜬다(송출 유지) — 「5분 MainPID 무변화」 는 mediamtx · nginx 감시로만 읽는다. 판정 조건에 「관찰 창 5분 동안 사이드카 태그 저널의 종료 줄 0 건」 을 넣고, 먼저 `docker info` 로 로그 드라이버(journald)를 확인한다 |
 | M7 · O7c | 루프백 송출기 ECR 저장소 · 미러 하나를 더한다 |
-| M9 | 하드닝 — 상시 서비스에 `read_only`(쓰는 자리는 tmpfs · 볼륨으로) · `pids_limit` · 메모리 상한을 둔다. 값은 상자에서 서비스별 쓰기 자리 · 기동 메모리를 재서 정하고 `render_test.sh` 에 단언을 더한다 |
+| M9 | 하드닝 — 상시 서비스에 `read_only`(쓰는 자리는 tmpfs · 볼륨으로 — janitor 는 이미 있음) · `pids_limit` · 메모리 상한을 둔다. 값은 상자에서 서비스별 쓰기 자리 · 기동 메모리를 재서 정하고 `render_test.sh` 에 단언을 더한다 |
+| M9 · 런타임 | janitor 를 켜기(`janitor_enabled`) 전 전제: RDS PostgreSQL 17 이상(미만이면 janitor 가 기동을 거부해 엔진이 계속 다시 띄운다) · DB 사용자 `media_janitor` 와 `GRANT rds_iam` · 스키마 배치 · 인스턴스 역할 `rds-db:connect`(`media_janitor`) · 권한은 세 표 `SELECT` 와 `stream_segments` 의 `UPDATE (local_path)` 뿐이다(사이드카처럼 표 단위 UPDATE 를 주지 않는다 — 정본은 [media/README.md](../../media/README.md) 「DB 요구 — PostgreSQL 17 이상 · 계정 · TLS」 의 「운영 계정 `media_janitor` 권한」). 켠 뒤 상자에서 태그 저널의 `db_connected`(pool=janitor) · `janitor_started` 를 보고, IAM 경로에서 읽기 전용 루트로 기동되는지 확인한다(로컬은 비밀번호 경로로만 확인됨) |
 | I1-1 | 반영됨(POK-311). `compose.yml.tmpl` 사이드카 · janitor env 에 RDS CA 번들 경로(`POSTGRES_SSLROOTCERT` — 이미지 안 `/etc/pokeclip/rds-ca/global-bundle.pem`)와 `AWS_EC2_METADATA_V1_DISABLED: "true"` 를 넣고 `render_test.sh` 사례 10 이 단언한다. DB 연결 성공 고정 줄은 `db_connected`(media/README 「DB 연결 성공 줄」) |
+| 범위 밖(제안) | `media/cmd/janitor` 의 compose 계약 시험을 이 템플릿까지 넓힌다 — `media/Dockerfile.mtxhook` 의 USER 가 바뀌어도 infra-ci(경로 필터 `infra/media-host/**`)는 돌지 않아, `render_test.sh` 사례 9 의 대조가 다음 infra 변경 때에야 돈다. `infra/terraform/prod/registry` 의 「janitor 저장소는 janitor 코드가 생길 때 더한다」 문장은 사이드카 이미지를 쓰는 지금 결정과 어긋나 정리한다 |
 | I1-6 | 제어면 서버가 생기면 `control_upstream` 을 채운다. control 헬스는 nginx 경로라, 사이드카가 다시 뜨는 동안에도 healthy 로 보이고 제어면은 502 를 낸다 |
 | kty · 보안 | 보안 런북: 침해 대응 — 증거 보존 방식 · 저널 영속 여부(M9 의 journald 저장 방식 — 휘발 저널은 격리 뒤 꺼낼 길이 없다) · **정지 전 컨테이너 증거 보존 여부**(서비스를 멈추면 compose down 이 컨테이너 파일 시스템과 json-file 로그를 지운다 · 정지 승인을 기다리는 동안 서비스는 계속 돈다) · 격리 수단(IMDS 차단 필수 · 기존 연결 차단) · 역할 세션 취소 뒤 인라인 정책 정리 시점 · 비밀 교체와 상자 교체 순서 |
 | 포크 mediamtx 트랙 | 다음 포크 태그에서 설정 조회 응답의 `hlsCDNSecret` 을 가리고(redact), 응답에 비밀이 새지 않는지 회귀 시험을 둔다(위 「받아들인 위험」). ADR 로 남길지는 kty |
