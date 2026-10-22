@@ -12,8 +12,12 @@
 #   down 이 실패하면(compose 파일이 깨져 읽지 못하는 경우 포함) compose 파일
 #   없이 프로젝트 라벨로 남은 컨테이너를 찾아 지운다 — 남으면 옛 렌더(옛
 #   비밀)를 붙든 채 돈다. 그래도 종료 코드는 down 의 것이다(실패를 드러낸다).
-#   down 이 끝나지 않는 동안 TERM · INT 를 받으면(systemd 가 정지 상한을 넘긴
-#   정지 명령에 보낸다) down 을 멈추고 렌더를 지운 뒤 143 · 130 으로 끝난다.
+#   폴백의 docker 호출은 하나에 10초 상한을 둔다 — 넘기면 그 호출을 끝내고
+#   폴백 실패로 적는다.
+#   down · 폴백이 끝나지 않는 동안 TERM · INT 를 받으면(systemd 가 정지 상한을
+#   넘긴 정지 명령에 보낸다) 그 명령을 멈추고 렌더를 지운 뒤 143 · 130 으로
+#   끝난다. 이때 컨테이너는 거두지 않는다 — 유닛의 ExecStopPost(이 스크립트를
+#   다시 부른다)와 다음 시작의 --force-recreate · --remove-orphans 몫이다.
 # --cleanup-only: docker 를 부르지 않고 지우기만 한다(유닛은 쓰지 않는다).
 #
 # 기본값은 시작 스크립트와 같다(MEDIA_COMPOSE_PROJECT · MEDIA_COMPOSE_FILE ·
@@ -25,9 +29,13 @@ set -euo pipefail
 
 # 시작 스크립트가 RUNTIME_DIR 에 두는 파일 이름(임시 파일은 .<이름>.XXXXXX).
 readonly RENDER_NAMES=(mediamtx.yml mtx_api_pass)
+# 폴백의 docker 호출(ps · rm) 한 번의 상한(초).
+readonly FALLBACK_TIMEOUT=10
 
 runtime_dir=""
 down_pid=""
+fallback_pid=""
+fallback_out=""
 
 #######################################
 # 렌더 파일과 임시 렌더 파일을 지우고 0건인지 본다.
@@ -78,9 +86,15 @@ cleanup_rendered() {
 # 트랩 문자열이 부른다.
 # shellcheck disable=SC2329
 stop_on_signal() {
+  local pid
   trap - INT TERM
-  if [[ -n "${down_pid}" ]]; then
-    kill -TERM "${down_pid}" 2>/dev/null || true
+  for pid in "${down_pid}" "${fallback_pid}"; do
+    if [[ -n "${pid}" ]]; then
+      kill -TERM "${pid}" 2>/dev/null || true
+    fi
+  done
+  if [[ -n "${fallback_out}" ]]; then
+    rm -f -- "${fallback_out}" || true
   fi
   printf 'MEDIA STOP interrupted\n'
   cleanup_rendered "${runtime_dir}" || true
@@ -107,24 +121,68 @@ compose_down() {
 }
 
 #######################################
+# 폴백의 docker 호출 하나를 상한 안에서 돌린다. 배경에서 띄우고 기다린다 —
+# 전경 명령(명령 치환 포함)을 기다리는 동안은 bash 가 트랩을 미룬다. 표준
+# 출력은 부르는 쪽이 정한 곳으로 간다.
+# Globals:
+#   fallback_pid
+# Arguments:
+#   명령 ….
+# Returns:
+#   명령의 종료 코드 / 124 상한 넘김(명령은 끝낸다).
+#######################################
+bounded_fallback() {
+  local deadline=$((SECONDS + FALLBACK_TIMEOUT)) status=0
+  "$@" &
+  fallback_pid=$!
+  while kill -0 "${fallback_pid}" 2>/dev/null; do
+    if (( SECONDS >= deadline )); then
+      kill -KILL "${fallback_pid}" 2>/dev/null || true
+      wait "${fallback_pid}" 2>/dev/null || true
+      fallback_pid=""
+      return 124
+    fi
+    sleep 0.2
+  done
+  wait "${fallback_pid}" || status=$?
+  fallback_pid=""
+  return "${status}"
+}
+
+#######################################
 # compose 파일 없이 프로젝트 라벨로 남은 컨테이너를 찾아 지우고 결과 줄을
-# 낸다(down 이 실패했을 때).
+# 낸다(down 이 실패했을 때). 찾은 ID 는 임시 파일로 받는다(명령 치환은 신호를
+# 미룬다).
+# Globals:
+#   fallback_out, TMPDIR
 # Arguments:
 #   프로젝트.
 # Returns:
 #   0 지움(또는 없음) / 1 찾기 · 지우기 실패.
 #######################################
 remove_project_containers() {
-  local ids n
-  if ! ids="$(docker ps -aq --filter \
-    "label=com.docker.compose.project=$1")"; then
+  local ids="" n status=0
+  if ! fallback_out="$(mktemp "${TMPDIR:-/tmp}/pokeclip-media-stop.XXXXXX")"
+  then
+    fallback_out=""
+    printf 'MEDIA STOP fallback FAIL\n'
+    return 1
+  fi
+  bounded_fallback docker ps -aq --filter \
+    "label=com.docker.compose.project=$1" >"${fallback_out}" || status=$?
+  if (( status == 0 )); then
+    ids="$(awk 'NF' "${fallback_out}")" || status=1
+  fi
+  rm -f -- "${fallback_out}" || true
+  fallback_out=""
+  if (( status != 0 )); then
     printf 'MEDIA STOP fallback FAIL\n'
     return 1
   fi
   n="$(printf '%s' "${ids}" | awk 'NF { n++ } END { print n + 0 }')"
   # 컨테이너 ID(16진)를 낱말로 나눠 넘긴다.
   # shellcheck disable=SC2086
-  if (( n != 0 )) && ! docker rm -f ${ids} >/dev/null; then
+  if (( n != 0 )) && ! bounded_fallback docker rm -f ${ids} >/dev/null; then
     printf 'MEDIA STOP fallback FAIL\n'
     return 1
   fi

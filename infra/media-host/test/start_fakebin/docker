@@ -15,6 +15,9 @@
 #   PCBENCH_FAKE_PS_IDS             `ps` 가 낼 컨테이너 ID(공백으로 나눔 — 한 줄에
 #                                   하나씩 낸다). 기본 빈 출력.
 #   PCBENCH_FAKE_PS_STATUS          `ps` 의 종료 코드(기본 0 — 0 아니면 출력 없음).
+#   PCBENCH_FAKE_PS_HOLD            있으면 `ps` 가 docker.ps.hold 를 만든 뒤 그
+#                                   초만큼 머문다(끝나지 않는 ps 흉내 — 그 sleep
+#                                   으로 exec 해 신호가 바로 닿는다).
 #   PCBENCH_FAKE_RM_STATUS          `rm` 의 종료 코드(기본 0).
 #
 # 모르는 호출 꼴이면 종료 2.
@@ -71,6 +74,10 @@ answer_engine() {
   local id
   case "${1:-}" in
     ps)
+      if [[ -n "${PCBENCH_FAKE_PS_HOLD:-}" ]]; then
+        : >"${PCBENCH_FAKE_LOG_DIR}/docker.ps.hold"
+        exec sleep "${PCBENCH_FAKE_PS_HOLD}"
+      fi
       if [[ "${PCBENCH_FAKE_PS_STATUS:-0}" != 0 ]]; then
         printf '가짜 docker: ps 실패(시험)\n' >&2
         exit "${PCBENCH_FAKE_PS_STATUS}"

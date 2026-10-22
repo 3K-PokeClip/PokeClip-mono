@@ -53,7 +53,7 @@ readonly API_PASS_NAME='mtx_api_pass'
 readonly API_PASS_PATTERN='^[0-9a-f]{64}$'
 # 우회 플래그로 읽힐 문자열(대소문자 무시).
 readonly BYPASS_PATTERN='skip|bypass|no_prereq|prereq=0'
-readonly CASE_COUNT=38
+readonly CASE_COUNT=40
 
 #######################################
 # up 호출 argv 를 한 줄로 낸다(인자 사이 공백). 호출이 하나가 아니면 실패.
@@ -775,6 +775,10 @@ main() {
     stop::case_down_fallback
   harness::run_case 38 'stop — 끝나지 않는 down 중 TERM → 143 · 렌더 삭제' \
     stop::case_signal_during_down
+  harness::run_case 39 'stop — 끝나지 않는 폴백 ps 중 TERM → 143 · 렌더 삭제' \
+    stop::case_signal_during_fallback
+  harness::run_case 40 'stop — 끝나지 않는 폴백 ps → 상한 뒤 FAIL · 렌더 삭제' \
+    stop::case_fallback_bounded
 
   if ! harness::summary "${CASE_COUNT}"; then
     exit 1
