@@ -114,11 +114,13 @@ class GapMeasurerTest extends IntegrationTestSupport {
      * 아무도 안 본다</b>: 운영 질의를 {@code md5(stream_id) = md5(?)}로 바꿔도 이 검사가
      * 초록이었다(결함 주입 N). 베낀 문자열을 재는 것은 아무것도 재지 않는 것과 같다.
      *
-     * <p>🔴 <b>2만 행을 심고 {@code ANALYZE} 한 뒤에 잰다</b>(ChatChartQueryTest 와 같은 방식).
+     * <p>🔴 <b>2천 행을 심고 {@code ANALYZE} 한 뒤에 잰다</b>(ChatChartQueryTest 와 같은 방식).
      * 전에는 한 줄만 넣고 쟀는데, 표에 통계가 한 번도 안 잡혔으면 색인을 타고 앞 검사가 작은
      * 표에서 {@code ANALYZE} 한 뒤면 {@code Seq Scan} 으로 뒤집혔다. 실행 순서에 따라 빨간불이었고
      * (StreamIdColumnTest 머리 주석의 실측과 같다) 앞 검사가 남긴 줄 수에 기대어 초록이었다.
-     * 심은 줄은 반드시 지우고 {@code ANALYZE} 도 다시 돌린다.
+     * 심은 줄은 반드시 지우고 {@code ANALYZE} 도 다시 돌린다. 2천인 이유: StreamIdColumnTest 실측으로
+     * 1000행부터 색인을 고르고, 형제의 2만 행은 지우는 DELETE 하나가 ChatPurgeTest 에서 CI 시한(10초)에
+     * 끊긴 묶음(5000)의 네 배라 줄였다(봇 codex).
      */
     @Test
     void 조회가_색인을_탄다() {
@@ -128,7 +130,7 @@ class GapMeasurerTest extends IntegrationTestSupport {
                       (channel_id, sender_channel_id, content, message_time, received_at,
                        content_sha256, stream_id)
                     SELECT 'gap-idx-ch', 'gap-idx-sender', 'x', ?, ?, lpad(g::text, 64, 'f'), ?
-                      FROM generate_series(0, 19999) g
+                      FROM generate_series(0, 1999) g
                     """,
                     Timestamp.from(Instant.parse("2026-08-31T03:00:00Z")),
                     Timestamp.from(Instant.parse("2026-08-31T03:00:00Z")), BULK_STREAM);
