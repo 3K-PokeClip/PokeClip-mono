@@ -166,7 +166,7 @@ func TestRunStartsJanitorOnPostgres17(t *testing.T) {
 		t.Fatalf("코드 %d · 루트 %d · 실행 %d, want 0 · 1 · 1", code, f.roots, f.runs)
 	}
 	recs := lines(t, &out)
-	order := []string{"janitor_starting", "janitor_started", "janitor_stopped"}
+	order := []string{"janitor_starting", "pg_pool_conn_discarded", "janitor_started", "janitor_stopped"}
 	at := map[string]int{}
 	for i, r := range recs {
 		if _, ok := at[r["msg"].(string)]; !ok {
@@ -184,6 +184,15 @@ func TestRunStartsJanitorOnPostgres17(t *testing.T) {
 	started := find(recs, "janitor_started")[0]
 	if starting["run_id"] == nil || starting["run_id"] != started["run_id"] {
 		t.Errorf("run_id 가 기동 줄끼리 다르다: %v · %v", starting["run_id"], started["run_id"])
+	}
+	// P11 — 풀 관측이 janitor 풀에 붙었다(POK-388). 기동 줄은 정리기의 게이지 7종 시작 덤프보다 앞이다.
+	discarded := find(recs, "pg_pool_conn_discarded")
+	if len(discarded) != 1 {
+		t.Fatalf("pg_pool_conn_discarded %d줄, want 기동 줄 1", len(discarded))
+	}
+	if d := discarded[0]; d["level"] != "WARN" || d["pool"] != "janitor" || d["reason"] != "startup" ||
+		d["value"] != float64(0) || d["run_id"] != starting["run_id"] {
+		t.Errorf("pg_pool_conn_discarded = %v, want WARN pool=janitor value=0 reason=startup run_id=%v", d, starting["run_id"])
 	}
 	if strings.Contains(out.String(), "p@ss") || strings.Contains(out.String(), "p%40ss") {
 		t.Error("로그에 비밀번호가 실렸다")
