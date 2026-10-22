@@ -69,6 +69,9 @@ type ipEvent struct {
 	denied     int           // ipReleased 일 때 그 에피소드의 거절 수, ipReleasedSummary 일 때 합
 	limitedFor time.Duration // ipReleased 일 때 — 에피소드 시작부터 끝을 본 시각까지
 	count      int           // ipReleasedSummary 일 때 — 요약한 키 수
+	// stateSeq 는 ipTableFull · ipTableRecovered 일 때 그 전이의 순번이다 — 한도기 잠금 안에서 1 부터 매긴다. 사건
+	// 로그는 잠금 밖이라 줄의 차례가 전이의 차례와 다를 수 있다. 가장 큰 순번의 사건이 지금 상태다.
+	stateSeq uint64
 }
 
 // ipEntry 는 키 하나의 GCRA 상태다.
@@ -97,6 +100,7 @@ type ipLimiter struct {
 	lastNow   time.Time // 마지막으로 읽은 지금
 	lastSweep time.Time // 마지막 정리 시각. 영값이면 아직 없다
 	full      bool      // 상한이 차서 새 키를 기록하지 못하는 중이다
+	stateSeq  uint64    // 마지막으로 매긴 상한 전이(full · recovered) 순번
 	unkeyed   bool      // ipUnkeyed 사건을 이미 냈다
 	sweeps    int       // 정리 횟수 — 시험이 1초 게이트를 본다
 }
@@ -170,13 +174,15 @@ func (l *ipLimiter) take(addr netip.Addr) []ipEvent {
 		if len(l.entries) >= l.limit {
 			if !l.full {
 				l.full = true
-				evs = append(evs, ipEvent{kind: ipTableFull})
+				l.stateSeq++
+				evs = append(evs, ipEvent{kind: ipTableFull, stateSeq: l.stateSeq})
 			}
 			return evs // 이 키는 기록 없이 예산만 탄다
 		}
 		if l.full {
 			l.full = false
-			evs = append(evs, ipEvent{kind: ipTableRecovered})
+			l.stateSeq++
+			evs = append(evs, ipEvent{kind: ipTableRecovered, stateSeq: l.stateSeq})
 		}
 	}
 	if e.tat.Before(now) {
@@ -266,9 +272,9 @@ func (l *ipLimiter) logEvents(lg *slog.Logger, evs []ipEvent) {
 		case ipReleasedSummary:
 			lg.Warn("ingestauth_ip_limit_released_summary", "count", e.count, "denied_total", e.denied)
 		case ipTableFull:
-			lg.Warn("ingestauth_ip_limit_full", "max_entries", l.limit)
+			lg.Warn("ingestauth_ip_limit_full", "max_entries", l.limit, "state_seq", e.stateSeq)
 		case ipTableRecovered:
-			lg.Warn("ingestauth_ip_limit_recovered", "max_entries", l.limit)
+			lg.Warn("ingestauth_ip_limit_recovered", "max_entries", l.limit, "state_seq", e.stateSeq)
 		case ipUnkeyed:
 			lg.Warn("ingestauth_ip_limit_unkeyed", "ip_kind", ipKindOther)
 		}

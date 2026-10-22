@@ -637,7 +637,7 @@ func TestNoSecretsInPrintedResolvedPassphrase(t *testing.T) {
 
 // ipLimitEventKeys 는 IP 한도 사건 줄이 실을 수 있는 키다(트랙 B 설계 2-1 의 11) — 키와 수뿐이고 토큰(path) · 연결 id ·
 // passphrase 자리는 없다.
-var ipLimitEventKeys = []string{"burst", "count", "denied", "denied_total", "interval_ms", "ip", "ip_kind", "level", "limited_for_ms", "max_entries", "msg", "time"}
+var ipLimitEventKeys = []string{"burst", "count", "denied", "denied_total", "interval_ms", "ip", "ip_kind", "level", "limited_for_ms", "max_entries", "msg", "state_seq", "time"}
 
 // IP 한도 사건(잠김 · 해제 · 상한 · 회복 · 키 없음)의 출력에도 비밀이 없고, 그 줄에는 토큰 · 연결 id 도 없다(B22). 상한을
 // 1 로 줄여 잠긴 송출자 A 하나로 상한을 채우고, B 는 기록 밖(full)에 세운 뒤, 통이 다 찰 때까지 밀어 C 의 기록이 A 를

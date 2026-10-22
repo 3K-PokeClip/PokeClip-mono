@@ -1,8 +1,11 @@
 package ingestauth
 
 import (
+	"fmt"
 	"math/rand/v2"
 	"net/netip"
+	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -277,6 +280,37 @@ func TestIPLimiterTableLimit(t *testing.T) {
 	}
 	if got := eventKinds(evs)[ipTableRecovered]; got != 1 {
 		t.Errorf("recovered events = %d, want 1", got)
+	}
+}
+
+// 상한 전이(full · recovered)에는 한도기 잠금 안에서 매긴 순번(state_seq)이 붙는다 — 사건 로그는 잠금 밖이라 줄의
+// 차례가 전이의 차례와 다를 수 있어, 운영자는 가장 큰 순번의 사건을 지금 상태로 읽는다(RUNBOOK 7-3). full →
+// recovered → full 이면 1 · 2 · 3 이고 로그 줄에 그대로 실린다.
+func TestIPLimiterTableTransitionsAreNumbered(t *testing.T) {
+	clock := newManualClock()
+	l := newTestIPLimiter(clock, 1)
+	l.take(testIPAddr(0)) // TAT = 3초
+	evs := l.take(testIPAddr(1))
+	clock.moveTo(3 * time.Second)
+	evs = append(evs, l.take(testIPAddr(2))...) // 정리가 0번을 회수해 recovered, 2번 기록
+	evs = append(evs, l.take(testIPAddr(3))...) // 정리 게이트(1초) 안이라 다시 full
+
+	var got []string
+	for _, e := range evs {
+		switch e.kind {
+		case ipTableFull:
+			got = append(got, fmt.Sprintf("full#%d", e.stateSeq))
+		case ipTableRecovered:
+			got = append(got, fmt.Sprintf("recovered#%d", e.stateSeq))
+		}
+	}
+	if want := []string{"full#1", "recovered#2", "full#3"}; !slices.Equal(got, want) {
+		t.Errorf("table transitions = %v, want %v", got, want)
+	}
+	lg, rec := newLogRecorder()
+	l.logEvents(lg, evs)
+	if !strings.Contains(rec.String(), `"msg":"ingestauth_ip_limit_full","max_entries":1,"state_seq":3`) {
+		t.Errorf("log lacks the third transition with state_seq 3:\n%s", rec.String())
 	}
 }
 

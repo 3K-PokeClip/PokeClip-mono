@@ -710,7 +710,8 @@ lock_ip_limit() {
   [[ -z "${IP_LIMIT_LOCK_FD:-}" ]] || return 0
   command -v flock > /dev/null || check_failed 'flock 이 없다(util-linux)'
   [[ ! -L "${IP_LIMIT_LOCK}" ]] || mismatch "링크다 — 쓰지 않는다: ${IP_LIMIT_LOCK}"
-  exec {IP_LIMIT_LOCK_FD}>> "${IP_LIMIT_LOCK}"
+  exec {IP_LIMIT_LOCK_FD}>> "${IP_LIMIT_LOCK}" \
+    || check_failed "잠금 파일을 열지 못했다: ${IP_LIMIT_LOCK}"
   flock -n "${IP_LIMIT_LOCK_FD}" || rc=$?
   (( rc != 1 )) \
     || mismatch 'IP 한도 켜기 · 끄기(7-5)가 돌고 있다(ip-limit.lock) — 그 실행이 끝난 뒤 다시'
@@ -1872,18 +1873,25 @@ sudo docker compose -p dev-media --env-file /opt/pokeclip-demo/.env \
 | `ingestauth_api_denied` `ip=…` | Control API 요청의 출발지 · 자격이 맞지 않음(8-3 의 api_auth) |
 | `ingestauth_ip_limited` `ip=…` `ip_kind=…` | 송출자 IP 하나가 시도 한도(기본 30번 몰아서, 그 뒤 3초에 하나)에 걸렸다 — 에피소드마다 한 줄. 그동안의 요청별 거절은 DEBUG 의 `publish_denied` `reason=ip_limited` 로만 난다. `ip_kind=public` 이 정상이다 — 공인 송출자인데 `private` 면 출발지가 바뀐 것(전원이 한 키로 묶인다 — 7-5 로 끈다) |
 | `ingestauth_ip_limit_released` `denied=…` `limited_for_ms=…` | 그 IP 의 통이 다시 다 찼다(에피소드 끝). 같은 IP 가 돌아오지 않으면 늦게 나오거나 안 나올 수 있다 |
-| `ingestauth_ip_limit_full` · `_recovered` | 기록하는 IP 가 상한(16,384)에 닿아 새 IP 를 한도 밖에 세우는 중 · 풀림 |
+| `ingestauth_ip_limit_released_summary` `count=…` `denied_total=…` | 정리 한 번에 끝난 에피소드가 32개를 넘었다 — 넘은 몫을 한 줄로 묶었다(개수 · 거절 합) |
+| `ingestauth_ip_limit_full` · `_recovered` `state_seq=…` | 기록하는 IP 가 상한(16,384)에 닿아 새 IP 를 한도 밖에 세우는 중 · 풀림. `state_seq` 가 가장 큰 줄이 지금 상태다(아래) |
+| `ingestauth_ip_limit_unkeyed` `ip_kind=other` | 본문 `ip` 가 한도 키를 만들 수 없는 주소라 한도 밖에 세웠다 — 처음 한 번만. IP 로 해석된 값만 오므로 나오지 않는 것이 정상이다(추론) |
 | `ingestauth_caller_basic_off` (WARN, 기동마다 한 줄) | 호출자 Basic 검사를 명시로 껐다(`INGEST_AUTH_CALLER_BASIC=off`). dev-media 는 제어망이 따로 있어 출발지 검사가 MediaMTX 를 가르므로 의도된 상태다 — 고장이 아니다. prod 에서 보이면 설정 누락이다 |
 | MediaMTX `connection not found` ERR | cut 이 kick 한 연결이 이미 없어 404 가 났다 — 예상된 것이다. 가득 찬 cut 하나면 약 17,000줄이 난다 |
 
 - **`ingestauth_ip_limit_full` 이 나면 새 IP 는 한도 없이 처리 시간 예산만 탄다
   (fail-open).** 위 명령 뒤에 `| grep -E 'ingestauth_ip_limit_(full|recovered)'` 를
-  붙여 마지막 줄이 어느 쪽인지 본다. `full` 이 마지막이면 kty 에게 알리고, 같은 때의
-  `ingestauth_ip_limited` 줄의 `ip` 가 서로 다른 IPv6 /64 로 쏟아지는지 본다(주소를
-  바꿔 가며 쏘는 홍수 — 한도로 막지 못하는 갈래, 예산이 마지막 선이다). 응답기를 다시
-  띄우거나 끄지 않는다 — 다시 띄우면 기록이 비어 IP 마다 30번을 다시 받고, 끄면 이미
-  기록된 IP 의 한도까지 사라진다. 만료 항목은 새 IP 가 올 때 1초에 한 번 회수되니
-  `_recovered` 가 날 때까지 지켜본다.
+  붙여 마지막 `ingestauth_started` 뒤의 줄 가운데 **`state_seq` 가 가장 큰 줄**을 본다
+  — 그 줄이 지금 상태다. 전이는 한도기 잠금 안에서 번호를 받고 줄은 잠금 밖에서
+  쓰여, 줄의 차례로는 가릴 수 없다. 번호는 응답기가 다시 뜨면 1 부터 다시 센다.
+  `full` 이면 kty 에게 알린다. `full` 자체가 홍수의 신호다 — 서로 다른 IP 가 짧은
+  사이에 상한(16,384)만큼 왔다(항목은 보통 길어야 약 90초 산다). 주소를 바꿔 가며
+  쏘는 홍수는 한도로 막지 못하고 처리 시간 예산이 마지막 선이다.
+  `ingestauth_ip_limited` 는 이미 기록된 IP 가 한도에 걸렸다는 뜻이라, 새 주소마다
+  한 번씩 오는 이 홍수를 가리지 못한다. 응답기를 다시 띄우거나 끄지 않는다 — 다시
+  띄우면 기록이 비어 IP 마다 30번을 다시 받고, 끄면 이미 기록된 IP 의 한도까지
+  사라진다. 만료 항목은 새 IP 가 올 때 1초에 한 번 회수되니, `recovered` 가 가장 큰
+  번호가 될 때까지 지켜본다.
 - **차례 거절은 auth 장애 뒤 회복이 늦는 모양이다.** 끊긴 뒤 300초 안(5초 재시도 간격
   구간)이면 회복은 송출 하나 약 9초, 묶음 약 10–18초다. 최악 약 22초는 차례를 먼저 가진
   거절 토큰 · 계속 실패하는 토큰이 없고 콜드 첫 재확인이 시한(1.125초) 안일 때의 값이다.
