@@ -8,6 +8,7 @@ import { EmptyState, useToast } from '@/ui';
 import {
   ClipApiError,
   createRecipe,
+  ensurePlaybackAccess,
   fetchBroadcast,
   fetchClip,
   fetchJumpCard,
@@ -253,6 +254,8 @@ interface Loaded {
  * 2라운드). 구간 목록은 미리보기 창이 틈에 걸리지 않게 쓴다(POK-253). 재생 서버가 없거나 녹화가 없으면 null
  */
 async function loadRecording(broadcast: BroadcastRow): Promise<RecordingTimeline | null> {
+  // CDN 뒤 녹화 목록·미리보기는 출입증 쿠키가 있어야 열린다(POK-317). 미리보기 창은 이 키로 갱신한다(ensureMediaAccess)
+  await ensurePlaybackAccess(broadcast.streamId, mediaStreamId(broadcast));
   return recordingTimeline(
     // 녹화 재생 서버의 경로는 영상 키다(POK-233) — 방송 번호가 회차 번호면 그 이름의 녹화가 없다
     await fetchRecordingSpans(mediaStreamId(broadcast)),

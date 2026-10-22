@@ -295,6 +295,17 @@ describe('StudioScreen — 영상 경로의 키(POK-233)', () => {
     await openFrom(`?stream=${STREAM_ID}&card=5`);
     expect(spansAsked).toEqual([STREAM_ID]);
   });
+
+  it('녹화를 찾기 전에 출입증을 받는다: 문은 방송 번호다(POK-317, CDN 뒤 녹화는 쿠키가 없으면 403)', async () => {
+    server.ingest = 'key-studio';
+    await openFrom(`?stream=${STREAM_ID}&card=5`);
+    expect(
+      fetchSpy.mock.calls.filter(
+        ([url, init]) =>
+          url === `/api/clip/broadcasts/${STREAM_ID}/playback-access` && init?.method === 'POST',
+      ),
+    ).toHaveLength(1);
+  });
 });
 
 describe('StudioScreen — 카드로 연 실제 편집기', () => {

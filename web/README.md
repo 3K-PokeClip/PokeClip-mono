@@ -129,6 +129,15 @@ web/                     # 단일 Next.js 앱 (App Router + TanStack Query + Zus
   그래서 `recordingTimeline`이 **방송 시간 [시작, 종료]와 실제로 겹치는** 구간들(여유 없음 — 여유를 두면 같은 키로 그 안에 이어
   켠 앞뒤 방송이 섞인다. 켜자마자 끊긴 아주 짧은 첫 구간은 빠진다)을 한 축(첫 구간 시작 ~ 마지막 구간 끝, **틈 포함** —
   접으면 틈 뒤 카드가 어긋난다)에 놓고, 다시보기는 **한 구간씩** 받아 끝나면 다음 구간을 이어 튼다(틈을 누르면 다음 구간 시작).
+- 🔴 **영상 요청은 출입증을 받은 뒤에만 쿠키를 싣는다 (POK-317).** CDN 뒤(prod) 영상은 clip이 주는 CloudFront 서명 쿠키가
+  없으면 403이다. 라이브 화면은 제 타이머로 출입증을 받고, 지난 방송 목록은 녹화를 확인하기 직전에, 편집기는 녹화 목록을 묻기
+  직전에 `ensurePlaybackAccess(방송 번호, 영상 키)`로 받는다(만료 5분 전까지 다시 쓰고, 미리보기 창은 `ensureMediaAccess(영상 키)`로
+  갱신). 쿠키는 **출입증이 실제로 발급된 뒤에만** 싣는다(`mediaCredentials()`: 녹화 목록·미리보기 fetch는 `credentials`,
+  라이브 hls.js는 `xhrSetup`의 `withCredentials`, 다시보기 `<video>`는 원래 싣는다). 로컬·dev 영상 서버(MediaMTX)는
+  `Access-Control-Allow-Origin: *`로만 답해 쿠키를 실으면 브라우저가 응답을 버리기 때문이다(2026-10-23 실측). 서명 재료가 없는
+  clip(로컬·dev)은 503 `playback_signing_unavailable`을 주고 그때는 어느 방송도 더 묻지 않는다. 자격 확인이 안 되는 503
+  (`authorization_unavailable`)은 실패라 다시 묻는다. 🔴 **녹화 목록·미리보기 주소(`{base}/list?path=키`)는 쿠키 경로
+  (`/{kind}/{키}`) 밖이라 CDN 뒤에서는 아직 쿠키가 안 실린다**: 주소 모양은 1번과 정하는 중이다(POK-317 다음 PR).
 - 🔴 **영상 주소는 방송 번호가 아니라 영상 경로의 키로 만든다 (POK-233).** 1번이 편지의 방송 번호를 방송마다 새 회차 번호로
   바꾸면 라이브·녹화 경로(스트림키)와 갈린다. clip이 방송 줄에 `ingestStreamId`를 실어 주고, 라이브 LL-HLS·녹화 목록·다시보기·
   편집기 미리보기는 `mediaStreamId(row)`(= `ingestStreamId`, 없거나 비면 방송 번호)를 쓴다. **API 경로·출입증·채팅·카드는 방송

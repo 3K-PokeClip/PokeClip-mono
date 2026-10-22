@@ -2,6 +2,7 @@
 
 import {
   broadcastTitle,
+  ensurePlaybackAccess,
   fetchAllBroadcasts,
   fetchAllJumpCards,
   mediaStreamId,
@@ -238,10 +239,13 @@ export function useVodListMockState(options: VodListOptions = {}): VodListMockSt
         // 한 번만 묻는다. 방송마다 물으면 방송이 쌓인 계정은 같은 큰 요청을 주기마다 여러 번 보낸다(PR #208 codex)
         // 묻지 못했으면(오류·시한) null이다: 「녹화 없음」과 가른다(리뷰 1라운드)
         const spansByKey = new Map<string, ReturnType<typeof lookupRecordingSpans>>();
-        const spansOf = (key: string) => {
+        const spansOf = (key: string, streamId: string) => {
           let found = spansByKey.get(key);
           if (found === undefined) {
-            found = lookupRecordingSpans(key);
+            // CDN 뒤 녹화 목록은 출입증 쿠키가 있어야 열린다(POK-317)
+            found = Promise.resolve(ensurePlaybackAccess(streamId, key)).then(() =>
+              lookupRecordingSpans(key),
+            );
             spansByKey.set(key, found);
           }
           return found;
@@ -260,7 +264,7 @@ export function useVodListMockState(options: VodListOptions = {}): VodListMockSt
                       () => null,
                     ),
                 // 녹화 재생 서버가 있으면 그 방송의 녹화가 실제로 있는지 본다 — 없으면 열어도 「영상 신호 없음」뿐이다
-                checkRecording(b) ? spansOf(mediaStreamId(b)) : Promise.resolve(null),
+                checkRecording(b) ? spansOf(mediaStreamId(b), b.streamId) : Promise.resolve(null),
               ]);
               // 카드 수를 못 읽었으면 앞 수를 둔다(처음이면 null, 다음 주기에 다시 잰다). 녹화 확인 결과는 카드 수와 따로 남긴다:
               // 카드 목록만 실패해도 녹화 없음을 버리면 그 방송은 「VOD 준비 중」에 갇혔다(PR #256 codex).
