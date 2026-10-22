@@ -3,19 +3,24 @@ package upload
 import (
 	"bytes"
 	"context"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/smithy-go"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
+
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/s3errbody"
 )
 
 // 상태 코드만 주는 오류(awshttp.ResponseError 모양).
@@ -197,5 +202,145 @@ func TestClassifyPutErrorWithSDKErrorTypes(t *testing.T) {
 	}
 	if got := classifyPutError(fmt.Errorf("put: %w", respErr)); got != putErrHard {
 		t.Errorf("awshttp 403 = %v, want hard", got)
+	}
+}
+
+// hugeChunk 는 거대 오류 본문 흉내 서버가 되풀이해 쓰는 32KiB 조각이다 — 한 번만 할당한다.
+var hugeChunk = bytes.Repeat([]byte("x"), 32<<10)
+
+// respondHuge 는 status 와 hugeChunk 를 chunks 번 이은 본문으로 답한다. 클라이언트가 먼저 닫으면 쓰기를 멈춘다.
+func respondHuge(status, chunks int) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/xml")
+		w.WriteHeader(status)
+		for range chunks {
+			if _, err := w.Write(hugeChunk); err != nil {
+				return
+			}
+		}
+	}
+}
+
+// errorBodyServer 는 요청 본문을 다 받은 뒤 status 와 본문으로 답하는 TLS 흉내 S3 다. chunks 가 0 보다 크면 본문은 hugeChunk 를
+// chunks 번 이은 것이고(respondHuge), 아니면 code 를 담은 S3 오류 XML 이다. requests 는 받은 요청 수다.
+func errorBodyServer(t *testing.T, status, chunks int, code string, requests *atomic.Int32) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		_, _ = io.Copy(io.Discard, r.Body)
+		if chunks > 0 {
+			respondHuge(status, chunks)(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/xml")
+		w.WriteHeader(status)
+		fmt.Fprintf(w, `<?xml version="1.0" encoding="UTF-8"?>`+"\n"+
+			`<Error><Code>%s</Code><Message>stub</Message><RequestId>req-1</RequestId></Error>`, code)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// putOnce 는 srv 를 엔드포인트로 한 업로더(주입 이음매 newS3Putter)로 세그먼트 하나를 PUT 하고 오류를 돌려준다.
+func putOnce(t *testing.T, srv *httptest.Server) error {
+	t.Helper()
+	p, _, err := newS3Putter(t.Context(), S3Options{
+		Bucket: "pokeclip-test", Region: "ap-northeast-2",
+		Endpoint: srv.URL, ForcePathStyle: true,
+	}, newLogCapture().logger(), srv.Client())
+	if err != nil {
+		t.Fatalf("NewS3Putter 실패: %v", err)
+	}
+	return p.Put(t.Context(), "streams/demo/2026-08-03/00/seg_000007.m4s", bytes.NewReader([]byte("x")), 1)
+}
+
+// D6 · D8 · D4 — 업로더 PUT 이 상한을 넘는 오류 본문(4MiB)을 받아도 본문을 상한까지만 읽고(ErrTooLarge), 브레이커 분류는 상태 코드로
+// 그대로다(401 · 403 · 404 hard · 나머지 soft). 다시 보내지 않는다(요청 1). 클라이언트는 주입분이다 — 주입이어도 감싼다.
+func TestPutCapsHugeErrorBodyAndKeepsClass(t *testing.T) {
+	putterEnv(t)
+	for _, c := range []struct {
+		status int
+		want   putErrClass
+	}{
+		{status: http.StatusForbidden, want: putErrHard},
+		{status: http.StatusNotFound, want: putErrHard},
+		{status: http.StatusInternalServerError, want: putErrSoft},
+	} {
+		t.Run(fmt.Sprint(c.status), func(t *testing.T) {
+			var requests atomic.Int32
+			srv := errorBodyServer(t, c.status, 128, "", &requests)
+
+			err := putOnce(t, srv)
+
+			if !errors.Is(err, s3errbody.ErrTooLarge) {
+				t.Errorf("Put err = %v, want ErrTooLarge", err)
+			}
+			if got := classifyPutError(err); got != c.want {
+				t.Errorf("classifyPutError(상태 %d 거대 본문) = %v, want %v", c.status, got, c.want)
+			}
+			if n := requests.Load(); n != 1 {
+				t.Errorf("흉내 서버가 받은 요청 %d건, want 1", n)
+			}
+		})
+	}
+}
+
+// D6 — 상한 아래의 오류 본문은 그대로 읽혀 코드 문자열(AccessDenied)이 남고 hard 다.
+func TestPutKeepsSmallErrorCode(t *testing.T) {
+	putterEnv(t)
+	var requests atomic.Int32
+	srv := errorBodyServer(t, http.StatusForbidden, 0, "AccessDenied", &requests)
+
+	err := putOnce(t, srv)
+
+	var apiErr smithy.APIError
+	if !errors.As(err, &apiErr) || apiErr.ErrorCode() != "AccessDenied" {
+		t.Errorf("Put err = %v, want 코드 AccessDenied 인 smithy.APIError", err)
+	}
+	if errors.Is(err, s3errbody.ErrTooLarge) {
+		t.Errorf("Put err = %v, want ErrTooLarge 아님", err)
+	}
+	if got := classifyPutError(err); got != putErrHard {
+		t.Errorf("classifyPutError(작은 403 AccessDenied) = %v, want hard", got)
+	}
+	if n := requests.Load(); n != 1 {
+		t.Errorf("흉내 서버가 받은 요청 %d건, want 1", n)
+	}
+}
+
+// trustServerCert 는 SDK 기본 HTTP 클라이언트가 TLS 서버 srv 의 인증서를 믿게 한다(AWS_CA_BUNDLE).
+func trustServerCert(t *testing.T, srv *httptest.Server) {
+	t.Helper()
+	ca := filepath.Join(t.TempDir(), "fake-s3-ca.pem")
+	block := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})
+	if err := os.WriteFile(ca, block, 0o600); err != nil {
+		t.Fatalf("흉내 S3 인증서 쓰기 실패: %v", err)
+	}
+	t.Setenv("AWS_CA_BUNDLE", ca)
+}
+
+// D6 — 주입 없는 공개 NewS3Putter(SDK 기본 HTTP 클라이언트 + AWS_CA_BUNDLE)도 오류 본문을 상한까지만 읽는다. 위 시험들은 클라이언트를
+// 주입해 CA 묶음 해석을 지나지 않는다 — Limit 을 awsconfig.WithHTTPClient 쪽으로 옮기면 여기서 기동이 실패하고, 빼면 ErrTooLarge 가
+// 사라진다.
+func TestNewS3PutterCapsErrorBodyOnDefaultClient(t *testing.T) {
+	putterEnv(t)
+	var requests atomic.Int32
+	srv := errorBodyServer(t, http.StatusPreconditionFailed, 128, "", &requests)
+	trustServerCert(t, srv)
+	p, _, err := NewS3Putter(t.Context(), S3Options{
+		Bucket: "pokeclip-test", Region: "ap-northeast-2",
+		Endpoint: srv.URL, ForcePathStyle: true,
+	}, newLogCapture().logger())
+	if err != nil {
+		t.Fatalf("NewS3Putter 실패: %v", err)
+	}
+
+	err = p.Put(t.Context(), "streams/demo/2026-08-03/00/seg_000007.m4s", bytes.NewReader([]byte("x")), 1)
+
+	if !errors.Is(err, s3errbody.ErrTooLarge) {
+		t.Errorf("Put err = %v, want ErrTooLarge", err)
+	}
+	if n := requests.Load(); n != 1 {
+		t.Errorf("흉내 서버가 받은 요청 %d건, want 1", n)
 	}
 }

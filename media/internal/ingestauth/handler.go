@@ -29,6 +29,7 @@ type Options struct {
 	Deadline time.Duration    // 0 < Deadline ≤ MaxDeadline. 0 이면 MaxDeadline. 시험만 짧게 준다
 	Now      func() time.Time // nil 이면 time.Now. 시험이 예산 · 실패 토큰 차례의 시각을 돌린다
 	Log      *slog.Logger     // nil 이면 slog.Default()
+	IPLimit  IPLimit          // publish 송출자 IP별 resolve 시도 한도. 영값이면 꺼짐(트랙 B 설계 2-1 의 13)
 
 	// CallerUser · CallerPass 는 호출자(MediaMTX) Basic 자격이다 — MediaMTX 가 authHTTPAddress 의 URL 자격을 요청마다
 	// Authorization: Basic 으로 싣는다(계약 D2). 같은 netns 의 다른 프로세스는 TCP 피어가 같아 출발지 검사로 가려지지
@@ -47,8 +48,9 @@ type Options struct {
 // 부르지 않는다.
 //
 // r · deny · conns 가 nil 이거나, CallerIP · SelfIP 가 영값이거나, APIUser · APIPass 가 비었거나, Deadline 이 0
-// 이상 MaxDeadline 이하가 아니면 에러다. 호출자 자격은 CallerUser · CallerPass 둘 다 있거나 CallerBasicOff 만 참이어야
-// 한다 — 짝이 안 맞거나, 아무것도 없거나, 자격과 끔이 함께면 에러다. 에러에는 자격 값을 싣지 않는다.
+// 이상 MaxDeadline 이하가 아니거나, IPLimit 이 영값도 범위 안도 아니면 에러다. 호출자 자격은 CallerUser ·
+// CallerPass 둘 다 있거나 CallerBasicOff 만 참이어야 한다 — 짝이 안 맞거나, 아무것도 없거나, 자격과 끔이 함께면
+// 에러다. 에러에는 자격 값을 싣지 않는다.
 func NewHandler(r *keyresolve.Client, deny *DenyList, conns *ConnLog, opt Options) (http.Handler, error) {
 	h, err := newHandler(r, deny, conns, opt)
 	if err != nil {
@@ -78,6 +80,7 @@ type handler struct {
 
 	budget    *holdBudget
 	failed    *failedTokens
+	ipLimit   *ipLimiter // nil 이면 IP 한도 꺼짐
 	authGauge *authGauge
 	connGauge *connLogGauge
 }
@@ -99,6 +102,9 @@ func newHandler(r *keyresolve.Client, deny *DenyList, conns *ConnLog, opt Option
 		return nil, errors.New("ingestauth: action=api 자격(APIUser · APIPass)이 비었다")
 	case opt.Deadline < 0 || opt.Deadline > MaxDeadline:
 		return nil, fmt.Errorf("ingestauth: Deadline 은 0 이상 MaxDeadline(%v) 이하여야 한다 — %v", MaxDeadline, opt.Deadline)
+	}
+	if err := opt.IPLimit.validate(); err != nil {
+		return nil, err
 	}
 	callerBasic, err := callerBasicOn(opt)
 	if err != nil {
@@ -131,6 +137,7 @@ func newHandler(r *keyresolve.Client, deny *DenyList, conns *ConnLog, opt Option
 	}
 	h.budget = newHoldBudget(h.now)
 	h.failed = newFailedTokens(h.now)
+	h.ipLimit = newIPLimiter(opt.IPLimit, h.now)
 	h.authGauge = &authGauge{now: h.now, log: h.log}
 	h.connGauge = &connLogGauge{log: h.log}
 	return h, nil

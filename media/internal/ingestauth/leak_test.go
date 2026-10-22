@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -629,6 +631,72 @@ func TestNoSecretsInPrintedResolvedPassphrase(t *testing.T) {
 	}
 	outputs := append(printed, leakOutput{place: "Verdict JSON", content: string(verdictJSON)})
 	for _, p := range leakProblems(outputs, nil) {
+		t.Error(p)
+	}
+}
+
+// ipLimitEventKeys 는 IP 한도 사건 줄이 실을 수 있는 키다(트랙 B 설계 2-1 의 11) — 키와 수뿐이고 토큰(path) · 연결 id ·
+// passphrase 자리는 없다.
+var ipLimitEventKeys = []string{"burst", "count", "denied", "denied_total", "interval_ms", "ip", "ip_kind", "level", "limited_for_ms", "max_entries", "msg", "state_seq", "time"}
+
+// IP 한도 사건(잠김 · 해제 · 상한 · 회복 · 키 없음)의 출력에도 비밀이 없고, 그 줄에는 토큰 · 연결 id 도 없다(B22). 상한을
+// 1 로 줄여 잠긴 송출자 A 하나로 상한을 채우고, B 는 기록 밖(full)에 세운 뒤, 통이 다 찰 때까지 밀어 C 의 기록이 A 를
+// 회수하게 한다(released · recovered). 미지정 주소 하나가 unkeyed 를 낸다. 요청마다 비밀 필드에 카나리아를 싣는다.
+func TestNoSecretsInIPLimitEvents(t *testing.T) {
+	f := newLeakFixture(t, fixtureOptions{ipLimit: IPLimit{Burst: 30, Interval: 3 * time.Second}})
+	f.h.ipLimit.limit = 1
+	token := waveToken(7)
+	var connIDs []string
+	send := func(ip string) {
+		t.Helper()
+		connIDs = append(connIDs, testConnID(500+len(connIDs)))
+		b := leakPublishBody(token, connIDs[len(connIDs)-1])
+		b.IP = ip
+		f.send(newAuthRequest(t, b))
+	}
+	for range 31 {
+		send("203.0.113.70")
+	}
+	send("203.0.113.71")
+	send("0.0.0.0")
+	f.clock.advance(400 * time.Second)
+	send("203.0.113.72")
+
+	events := f.events(t)
+	for _, want := range []leakEvent{
+		{Msg: "ingestauth_ip_limited"},
+		{Msg: "ingestauth_ip_limit_full"},
+		{Msg: "ingestauth_ip_limit_released"},
+		{Msg: "ingestauth_ip_limit_recovered"},
+		{Msg: "ingestauth_ip_limit_unkeyed"},
+		{Msg: "ingestauth_publish_denied", Reason: "ip_limited"},
+		{Msg: "ingestauth_publish_allowed"},
+	} {
+		if !hasEvent(events, want) {
+			t.Errorf("slog lacks %+v — the scenario did not take that path", want)
+		}
+	}
+	for n, line := range slices.Collect(strings.Lines(f.logs.String())) {
+		var e map[string]any
+		if err := json.Unmarshal([]byte(line), &e); err != nil {
+			t.Fatalf("slog line %d is not a JSON object", n+1)
+		}
+		msg, _ := e["msg"].(string)
+		if !strings.HasPrefix(msg, "ingestauth_ip_limit") {
+			continue
+		}
+		for _, key := range slices.Sorted(maps.Keys(e)) {
+			if !slices.Contains(ipLimitEventKeys, key) {
+				t.Errorf("%s carries key %q, want only %v", msg, key, ipLimitEventKeys)
+			}
+		}
+		for _, id := range append([]string{token}, connIDs...) {
+			if strings.Contains(line, id) {
+				t.Errorf("%s carries a token or connection id, want neither", msg)
+			}
+		}
+	}
+	for _, p := range leakProblems(f.outputs(t), f.responses()) {
 		t.Error(p)
 	}
 }

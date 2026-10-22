@@ -44,7 +44,7 @@ class StreamKeySecretStoreConfig {
     @StreamKeySecrets
     SecretStore streamKeySecretStore(StreamKeySecretStoreProperties p, PostgresSecretStore pg,
                                      @Qualifier(SM_BEAN) ObjectProvider<SecretsManagerSecretStore> sm) {
-        // 어느 저장소로 떴는지 한 줄 남긴다. 이행 판정 ④에서 「기동 뒤 설정값 확인」이 이 줄이다. 접두는 비밀이 아니다
+        // 어느 저장소로 떴는지 한 줄 남긴다. 배포 뒤 「기동 뒤 설정값 확인」이 이 줄이다. 접두는 비밀이 아니다
         log.info("auth.streamkey.secret_store type={} retireFrom={} refPrefix={}",
                 p.type(), p.retireFrom(), p.refPrefix());
         return p.type() == StreamKeySecretStoreProperties.Type.AWS ? sm.getObject() : pg;
