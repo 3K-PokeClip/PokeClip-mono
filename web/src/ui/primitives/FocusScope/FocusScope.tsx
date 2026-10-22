@@ -1,8 +1,19 @@
 import { useRef, type ReactNode } from 'react';
 import { useIsomorphicLayoutEffect } from '../hooks/useIsomorphicLayoutEffect';
 
-const FOCUSABLE =
-  'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"]),[contenteditable="true"]';
+// tabindex="-1"은 태그와 상관없이 뺀다 — roving 탭(선택 안 된 탭은 -1)이 든 창이 열릴 때 첫 버튼으로 잡히면
+// 그 탭이 포커스로 선택돼 버린다(POK-379: Mac에서 다운로드 창이 Windows 탭으로 열림)
+const FOCUSABLE = [
+  'a[href]',
+  'button:not([disabled])',
+  'input:not([disabled])',
+  'select:not([disabled])',
+  'textarea:not([disabled])',
+  '[tabindex]',
+  '[contenteditable="true"]',
+]
+  .map((selector) => `${selector}:not([tabindex="-1"])`)
+  .join(',');
 
 function getFocusable(container: HTMLElement): HTMLElement[] {
   return Array.from(container.querySelectorAll<HTMLElement>(FOCUSABLE)).filter(
