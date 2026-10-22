@@ -294,7 +294,8 @@ aws iam get-role-policy --role-name "${ROLE}" \
 # 셸에 붙여 넣지 않는다 — exit 는 그 스크립트만 끝낸다. 스크립트가 표준 입력으로 들어가므로
 # 본문의 어떤 명령도 표준 입력을 읽지 않는다(읽는 것은 < 나 파이프로 준다).
 # 전제: 리눅스 · bash 4.4 이상 · GNU coreutils(stat -c · mv -T · sort -z · comm -z ·
-# chown/chmod --reference) · GNU tar(--compare) · sudo · docker compose v2.
+# chown/chmod --reference) · GNU tar(--compare) · sudo · docker compose v2 ·
+# flock(util-linux — lock_ip_limit 를 부르는 블록만).
 # 종료 코드: 0 통과 · 1 일치 없음(기록 · 기대와 다르다) · 2 검사 실패(목록 · 조회 · 도구가
 # 돌지 못했다 · 인자가 틀렸다). 일치 없음은 명령 치환 · 파이프 밖에서만 낸다 — 안에서
 # 내면 바깥의 ERR 덫이 검사 실패로 바꿔 찍는다. 파일은 "$(cat -- …)" 로 읽는다 —
@@ -318,6 +319,7 @@ readonly DENY_DIR="${DEMO_DIR}/ingest-auth/deny"       # 응답기의 /etc/inges
 readonly DENY_FILE="${DENY_DIR}/deny-tokens"           # 거부 목록(살아 있는 파일)
 readonly STATE_DIR="${DEMO_DIR}/ingest-auth/state"     # 허용 연결 기록
 readonly LOGIN_DIR="${DEMO_DIR}/.ecr-login"            # R3′ 의 ECR 로그인 자격
+readonly IP_LIMIT_LOCK="${DEMO_DIR}/ip-limit.lock"     # 7-5 의 실행 잠금(비밀 아님)
 readonly RESPONDER_ID=10003                            # 응답기의 UID · GID
 readonly DENY_MAX_BYTES=65536                          # 응답기의 거부 목록 상한
 readonly TOKEN_RE='^[0-9A-HJKMNP-TV-Z]{26}$'           # 정규식 경로와 같은 식
@@ -699,11 +701,29 @@ dispose_ecr_login() {
   rmdir -- "${LOGIN_DIR}"
 }
 
+# lock_ip_limit 는 IP_LIMIT_LOCK 에 flock -n 을 잡는다 — 이 프로세스가 끝나면 풀린다. 이미 잡았으면
+# 그대로다(같은 프로세스가 두 번 열면 flock 끼리 막힌다). 다른 실행이 쥐고 있으면 일치 없음이다.
+# 7-5 와 .env.iplimit.* 를 지우는 공통 정리(dispose_stray_secrets)가 잡는다 — 잠금 없이 겹치면
+# 정리의 shred 가 7-5 의 후보를 연 채로, 그 후보가 .env 로 들어간 뒤 덮어쓸 수 있다.
+lock_ip_limit() {
+  local -i rc=0
+  [[ -z "${IP_LIMIT_LOCK_FD:-}" ]] || return 0
+  command -v flock > /dev/null || check_failed 'flock 이 없다(util-linux)'
+  [[ ! -L "${IP_LIMIT_LOCK}" ]] || mismatch "링크다 — 쓰지 않는다: ${IP_LIMIT_LOCK}"
+  exec {IP_LIMIT_LOCK_FD}>> "${IP_LIMIT_LOCK}"
+  flock -n "${IP_LIMIT_LOCK_FD}" || rc=$?
+  (( rc != 1 )) \
+    || mismatch 'IP 한도 켜기 · 끄기(7-5)가 돌고 있다(ip-limit.lock) — 그 실행이 끝난 뒤 다시'
+  (( rc == 0 )) || check_failed "잠금을 잡지 못했다(flock 종료 ${rc})"
+}
+
 # dispose_stray_secrets 는 stray_secret_names 의 파일을 shred -u 로 지운다(링크면 멈춘다 —
 # .ecr-login 은 dispose_ecr_login). T 백업 처분 · E-2 · 반영 전 비밀 파기가 부른다 — 셋 다
-# 반영 · 렌더가 돌지 않는 안정 상태를 첫머리에서 단언한 뒤다.
+# 반영 · 렌더가 돌지 않는 안정 상태를 첫머리에서 단언한 뒤다. 먼저 lock_ip_limit 를 잡는다 —
+# 7-5 가 돌고 있으면 아무것도 지우지 않고 일치 없음이다(그 실행이 끝난 뒤 다시).
 dispose_stray_secrets() {
   local name
+  lock_ip_limit
   stray_secret_names > "${WORK}/stray"
   while IFS= read -r name; do
     if [[ "${name}" == .ecr-login ]]; then
@@ -718,9 +738,11 @@ dispose_stray_secrets() {
 # resolve 출입증 · API 비번, 렌더 산출물 백업 — 잠금값)은 shred -u(이름 제거 + 최선 노력
 # — 11-7), 나머지 일곱은 rm. 끊긴 R1 · 렌더 · R3′ 의 비밀 임시 파일도 shred -u 로 지운다. 링크 ·
 # 일반 파일 아닌 것은 지우지 않고 멈춘다. 끝에 그 이름 0 을 단언한다. 롤백 E-2 와 T 백업
-# 처분 블록이 이 함수 하나를 부른다(첫머리 단언은 각 블록에 있다).
+# 처분 블록이 이 함수 하나를 부른다(첫머리 단언은 각 블록에 있다). 지우기 전에 lock_ip_limit 를
+# 잡는다 — 7-5 가 돌고 있으면 하나도 지우지 않고 멈춘다.
 dispose_t_backups() {
   local name
+  lock_ip_limit
   for name in .env.T.bak mediamtx.demo.yml.T.bak; do
     remove_box_file shred "${DEMO_DIR}/${name}"
     remove_box_file shred "${DEMO_DIR}/${name}.part"
@@ -1956,18 +1978,19 @@ sudo sed -n 's/^MTX_API_PASS=//p' /opt/pokeclip-demo/.env \
 # 없으면 on)과 같으면 원래 줄로(없었으면 줄을 빼서) 되돌리고 그 파일을 지운다 — 반대 인자로
 # 돌리면 .env 가 바이트까지 처음과 같다. 그래서 지원 형식(ip_limit_line)이 아니면 바꾸지 않는다.
 # 새 .env(비밀)는 .env.iplimit.* 에 쓰고, 끼우기 전에 실패하면 덫이 shred -u 로 지운다. 끊긴
-# 앞 실행이 남긴 것은 다시 돌리면 첫머리가 지운다. 회수부터 끝까지 ip-limit.lock 의 잠금
-# (flock — util-linux)을 쥔다 — 두 실행이 겹치면 뒤의 것이 멈춘다.
+# 앞 실행이 남긴 것은 다시 돌리면 첫머리가 지운다. 회수부터 끝까지 머리의 lock_ip_limit 잠금을
+# 쥔다 — 두 실행이 겹치거나 공통 비밀 정리가 돌고 있으면 뒤의 것이 멈춘다.
 readonly IP_LIMIT_KEY='INGEST_AUTH_IP_LIMIT'
 readonly IP_LIMIT_ORIG="${DEMO_DIR}/ip-limit.orig"   # 원래 키 줄 — 비밀 아님
-readonly IP_LIMIT_LOCK="${DEMO_DIR}/ip-limit.lock"   # 실행 잠금 — 비밀 아님
 # 지원하는 키 줄. 키 이름이 든 줄은 # 주석 줄 밖에서 이것 하나뿐이어야 한다.
 readonly IP_LIMIT_LINE_RE="^${IP_LIMIT_KEY}=(on|off)\$"
 # 키 이름이 낱말로 든 줄(# 으로 시작하는 줄 · _BURST 같은 다른 이름은 뺀다)
 readonly IP_LIMIT_ANY_RE="^([^#A-Za-z0-9_]|[^#].*[^A-Za-z0-9_])?${IP_LIMIT_KEY}"\
 "([^A-Za-z0-9_]|\$)"
-ENV_TMP=''   # 끼우기 전의 새 .env — 끼우면 비운다
-trap 'discard_env_tmp; rm -rf -- "${WORK}"' EXIT   # 머리의 덫에 ENV_TMP 지우기를 더한다
+ENV_TMP=''    # 끼우기 전의 새 .env — 끼우면 비운다
+ORIG_TMP=''   # 끼우기 전의 새 기억 파일 — 끼우면 비운다
+# 머리의 덫(WORK 지우기)에 두 임시 파일 지우기를 더한다
+trap 'discard_env_tmp; discard_orig_tmp; rm -rf -- "${WORK}"' EXIT
 
 # discard_env_tmp 는 끼우지 못한 새 .env 를 shred -u 로 지운다.
 discard_env_tmp() {
@@ -1976,22 +1999,15 @@ discard_env_tmp() {
   fi
 }
 
-# lock_ip_limit 는 IP_LIMIT_LOCK 에 flock -n 을 잡는다 — 이 프로세스가 끝나면 풀린다. 다른
-# 실행이 쥐고 있으면 일치 없음이다. 잠금 없이 겹치면 뒤 실행의 잔여 회수(shred)가 앞 실행의
-# 후보를 연 채로, 그 후보가 .env 로 들어간 뒤 덮어쓸 수 있다.
-lock_ip_limit() {
-  local -i rc=0
-  command -v flock > /dev/null || check_failed 'flock 이 없다(util-linux)'
-  [[ ! -L "${IP_LIMIT_LOCK}" ]] || mismatch "링크다 — 쓰지 않는다: ${IP_LIMIT_LOCK}"
-  exec {IP_LIMIT_LOCK_FD}>> "${IP_LIMIT_LOCK}"
-  flock -n "${IP_LIMIT_LOCK_FD}" || rc=$?
-  (( rc != 1 )) \
-    || mismatch '다른 IP 한도 켜기 · 끄기가 돌고 있다 — 바꾸지 않았다. 그 실행이 끝난 뒤 다시'
-  (( rc == 0 )) || check_failed "잠금을 잡지 못했다(flock 종료 ${rc})"
+# discard_orig_tmp 는 끼우지 못한 새 기억 파일(비밀 아님)을 지운다.
+discard_orig_tmp() {
+  if [[ -n "${ORIG_TMP}" && -f "${ORIG_TMP}" && ! -L "${ORIG_TMP}" ]]; then
+    rm -f -- "${ORIG_TMP}"
+  fi
 }
 
-# discard_stale_env_tmps 는 끊긴 앞 실행이 남긴 .env.iplimit.* 를 shred -u 로 지운다. 잠금을
-# 쥔 뒤에만 부른다.
+# discard_stale_env_tmps 는 끊긴 앞 실행이 남긴 임시 파일을 지운다 — .env.iplimit.*(비밀)는
+# shred -u, ip-limit.orig.*(기억 파일 사본)는 rm. 잠금을 쥔 뒤에만 부른다.
 discard_stale_env_tmps() {
   local name
   ls -1A -- "${DEMO_DIR}" > "${WORK}/iplimit-names"   # 못 받으면 검사 실패
@@ -1999,6 +2015,10 @@ discard_stale_env_tmps() {
     case "${name}" in
       .env.iplimit.*)
         remove_box_file shred "${DEMO_DIR}/${name}"
+        echo "앞 실행이 남긴 임시 파일을 지웠다: ${name}"
+        ;;
+      ip-limit.orig.*)
+        remove_box_file rm "${DEMO_DIR}/${name}"
         echo "앞 실행이 남긴 임시 파일을 지웠다: ${name}"
         ;;
     esac
@@ -2027,19 +2047,36 @@ ip_limit_line() {
 }
 
 # ip_limit_orig 는 처음 바꾸기 전의 키 줄을 변수 $1 에 넣는다(빈 값 = 키 줄 없음).
-# IP_LIMIT_ORIG 가 없으면 지금 줄을 적어 두고 그것을 낸다. 지금 .env 의 형식은 늘 본다.
+# IP_LIMIT_ORIG 가 없으면 지금 줄을 적어 두고 그것을 낸다. 지금 .env 의 형식은 늘 본다. 기억
+# 파일은 늘 줄바꿈으로 끝나는 한 줄이다(키 줄 없음 = 빈 줄) — 비었거나 줄바꿈 없이 끝나면 쓰다
+# 끊긴 것이라 「키 없음」으로 읽지 않고 멈춘다.
 ip_limit_orig() {
   local line
   ip_limit_line line
   if [[ ! -e "${IP_LIMIT_ORIG}" && ! -L "${IP_LIMIT_ORIG}" ]]; then
-    printf '%s\n' "${line}" > "${IP_LIMIT_ORIG}"
+    write_ip_limit_orig "${line}"
   fi
   [[ -f "${IP_LIMIT_ORIG}" && ! -L "${IP_LIMIT_ORIG}" ]] \
     || mismatch "일반 파일이 아니거나 링크다: ${IP_LIMIT_ORIG}"
+  [[ -s "${IP_LIMIT_ORIG}" \
+    && "$(tail -c 1 -- "${IP_LIMIT_ORIG}" | wc -l)" == 1 ]] \
+    || mismatch "${IP_LIMIT_ORIG} 가 비었거나 줄바꿈으로 끝나지 않는다(쓰다 끊김) — kty"
   line="$(cat -- "${IP_LIMIT_ORIG}")"
   [[ -z "${line}" || "${line}" =~ ${IP_LIMIT_LINE_RE} ]] \
     || mismatch "${IP_LIMIT_ORIG} 가 지원하는 키 줄도 빈 값도 아니다 — kty"
   printf -v "$1" '%s' "${line}"
+}
+
+# write_ip_limit_orig 는 IP_LIMIT_ORIG 를 $1 한 줄로 만든다 — 같은 디렉터리의 임시 파일에 쓰고
+# 되읽어 견준 뒤 이름 바꾸기로 끼운다. 쓰다 실패하면(ENOSPC 등) IP_LIMIT_ORIG 는 생기지 않고
+# 덫이 임시 파일을 지운다.
+write_ip_limit_orig() {
+  ORIG_TMP="$(mktemp -- "${IP_LIMIT_ORIG}.XXXXXX")"
+  printf '%s\n' "$1" > "${ORIG_TMP}"
+  [[ -s "${ORIG_TMP}" && "$(cat -- "${ORIG_TMP}")" == "$1" ]] \
+    || mismatch '기억 파일을 되읽은 값이 쓴 값과 다르다 — .env 를 바꾸지 않았다'
+  mv -T -- "${ORIG_TMP}" "${IP_LIMIT_ORIG}"
+  ORIG_TMP=''
 }
 
 # write_env_candidate 는 키 줄을 $1 로 바꾼(빈 값이면 뺀) 새 .env 를 ENV_TMP 에 쓴다 — 키 줄
@@ -2083,6 +2120,7 @@ main() {
   target="${IP_LIMIT_KEY}=${want}"
   [[ "${want}" != "${orig_value}" ]] || target="${orig}"
   write_env_candidate "${target}"
+  echo '.env 교체 시작 — 이 줄이 없으면 .env 는 그대로다'
   mv -T -- "${ENV_TMP}" "${env}"
   ENV_TMP=''
   echo '.env 교체함 — 이 줄 뒤의 실패는 교체 뒤 실패다'
@@ -2116,21 +2154,30 @@ main "$@"
 `INGEST_AUTH_IP_LIMIT_BURST` 같은 다른 이름은 상관없다). 지원하지 않는 형식이면 `.env` 를
 건드리지 않고 종료 1 이다 — 손으로 그 형식으로 고친 뒤 다시 돌린다.
 
-**어디서 멈췄나는 `.env 교체함` 줄로 가린다.**
+**어디서 멈췄나는 `.env 교체 시작` · `.env 교체함` 두 줄로 가린다.** 블록은 이름 바꾸기
+바로 앞에 앞의 줄을, 바로 뒤에 뒤의 줄을 찍는다.
 
-- **그 줄이 없으면** `.env` 는 그대로다. 잠금 · 형식 · 읽기 · 쓰기 · 메타데이터 복사에서
-  멈췄다. 마지막 줄의 사유를 고쳐 다시 돌린다.
-- **그 줄이 있으면 교체 뒤 실패다.** `.env` 는 이미 `.env 뒤` 해시이고, 응답기는 아직 옛
-  값으로 돌 수 있다. 같은 인자로 다시 돌리면 이어서 끝난다(기억 파일 정리 · 재생성 ·
+- **`교체 시작` 줄이 없으면** `.env` 는 그대로다. 잠금 · 형식 · 읽기 · 쓰기 · 메타데이터
+  복사 · 기억 파일 쓰기에서 멈췄다. 마지막 줄의 사유를 고쳐 다시 돌린다.
+- **`교체 시작` 은 있고 `교체함` 이 없으면 바뀌었는지 모른다.** 이름 바꾸기 바로 앞뒤에서
+  끊겼거나(신호 · 출력 실패) 이름 바꾸기가 실패했다. 지금 해시를 읽어
+  (`sudo sha256sum -- /opt/pokeclip-demo/.env | cut -c1-12` — 읽기라 승인 묶음에 넣는다)
+  출력의 `.env 앞` 과 견준다. 같으면 그대로다 — 같은 인자로 다시 돌린다. 다르면 아래 교체
+  뒤 실패와 같다.
+- **`교체함` 이 있으면 교체 뒤 실패다.** `.env` 는 이미 `.env 뒤` 해시이고, 응답기는 아직
+  옛 값으로 돌 수 있다. 같은 인자로 다시 돌리면 이어서 끝난다(기억 파일 정리 · 재생성 ·
   확인). 처음으로 돌아가려면 반대 인자로 돌린다.
 
 반대 인자로 되돌리면 `.env` 가 처음 `.env 앞` 해시로 돌아온다 — 처음 바꾸기 전의 키 줄을
-`ip-limit.orig`(비밀 아님)가 기억하고, 되돌릴 때 지운다. 그 파일을 손으로 지우거나 고치지
-않는다. 블록은 회수부터 끝까지 `ip-limit.lock`(비밀 아님)의 잠금을 쥔다 — 다른 실행이 돌고
-있으면 종료 1 로 멈추니, 그 실행이 끝난 뒤 다시 돌린다. 블록이 끊겨 새 `.env` 사본
-(`.env.iplimit.*` — 비밀)이 남았으면 이 블록을 다시 돌린다 — 첫머리가 잠금을 잡은 뒤
-지운다(T 백업 처분 · 반영 전 비밀 파기도 이 이름을 지운다). 실측 기록에는 `.env` 해시
-앞뒤와 `ip_limit` 값을 남긴다.
+`ip-limit.orig`(비밀 아님)가 기억하고, 되돌릴 때 지운다. 기억 파일은 임시 파일에 써서 이름
+바꾸기로 끼우므로 쓰다 끊겨도 반쪽이 남지 않는다 — 비었거나 줄바꿈 없이 끝난 기억 파일을
+만나면 블록이 종료 1 로 멈춘다(kty). 그 파일을 손으로 지우거나 고치지 않는다. 블록은 회수부터
+끝까지 `ip-limit.lock`(비밀 아님)의 잠금을 쥔다 — 다른 7-5 실행이나 공통 비밀 정리(T 백업
+처분 · E-2 · 반영 전 비밀 파기 — 같은 잠금을 잡는다)가 돌고 있으면 종료 1 로 멈추니, 그
+실행이 끝난 뒤 다시 돌린다. 거꾸로 7-5 가 도는 동안 그 정리 블록들도 아무것도 지우지 않고
+종료 1 로 멈춘다. 블록이 끊겨 새 `.env` 사본(`.env.iplimit.*` — 비밀)이 남았으면 이 블록을
+다시 돌린다 — 첫머리가 잠금을 잡은 뒤 지운다(그 정리 블록들도 이 이름을 지운다). 실측
+기록에는 `.env` 해시 앞뒤와 `ip_limit` 값을 남긴다.
 
 ---
 
