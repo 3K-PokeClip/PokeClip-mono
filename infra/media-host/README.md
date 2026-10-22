@@ -296,13 +296,15 @@ set -a; . /etc/pokeclip-media/media.env; set +a
 `box` 모드는 이번 기동의 관리 API 비밀번호(`/run/pokeclip-media/mtx_api_pass` 를
 root 로 읽음)와 그 Basic 값(`pokeclip-sidecar:<비밀번호>` 의 base64)도 대조한다.
 
-*   **`box` 는 스택이 떠 있을 때만 쓴다.** 정상 정지 뒤에는 compose down 이
-    컨테이너를 지워 셀 로그가 없고, `SECRET COUNT FAIL mediamtx` 로 끝난다.
+*   **`box` 는 스택이 떠 있을 때만 쓴다.** 정상 정지 뒤에는 정지 스크립트가
+    비밀번호 파일을 지우므로 `SECRET COUNT FAIL api-pass` 로 끝난다(로그를
+    모으기 전에 비밀번호 파일부터 읽는다). compose down 이 컨테이너도 지워
+    어차피 셀 로그가 없다.
 *   **비밀번호 파일은 시작 스크립트가 쓰는 꼴 하나만 받는다** — 파일 전체가
     16진 64자 한 줄(끝 줄바꿈 하나, 65바이트)이다. 파일이 없거나 못 읽거나, 그
     꼴이 아니면(줄바꿈 없음 · 둘째 줄 · 뒤에 남는 바이트 포함) 0 건이 아니라
-    `SECRET COUNT FAIL api-pass`(종료 1)다. 스택이 떠 있는데 이 실패가 나면
-    비밀번호 파일 이상이니 조사한다.
+    `SECRET COUNT FAIL api-pass`(종료 1)다. 정지 뒤의 이 실패는 정상이다.
+    스택이 떠 있는데 이 실패가 나면 비밀번호 파일 이상이니 조사한다.
 *   옛 기동의 비밀번호와 `ssm` 모드의 비밀번호 대조는 아래 「알려진 한계」.
 
 ## 운영 규칙
@@ -569,7 +571,7 @@ prod 상자에 깔 도구의 판이다. M9 user_data 가 같은 값으로 설치
     대조하지 않는다.
 *   **정지 뒤의 로그:** 정상 정지(compose down) 뒤에는 컨테이너와 그 로그가
     지워지고 비밀번호 파일도 정지 스크립트가 지운다. `secret-count.sh box` 는
-    그때 셀 수 없어 실패한다(`FAIL mediamtx`) — 정지 뒤에 남는 유닛 · 태그
+    그때 셀 수 없어 실패한다(`FAIL api-pass`) — 정지 뒤에 남는 유닛 · 태그
     저널만 따로 볼 수단은 없다.
 *   **SSM 에이전트의 상자 안 실행 기록:** SSM 에이전트가 상자에 남기는 명령 ·
     출력 기록 파일은 `secret-count.sh` 의 대조 밖이다.
