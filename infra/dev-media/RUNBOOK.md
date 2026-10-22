@@ -1876,6 +1876,14 @@ sudo docker compose -p dev-media --env-file /opt/pokeclip-demo/.env \
 | `ingestauth_caller_basic_off` (WARN, 기동마다 한 줄) | 호출자 Basic 검사를 명시로 껐다(`INGEST_AUTH_CALLER_BASIC=off`). dev-media 는 제어망이 따로 있어 출발지 검사가 MediaMTX 를 가르므로 의도된 상태다 — 고장이 아니다. prod 에서 보이면 설정 누락이다 |
 | MediaMTX `connection not found` ERR | cut 이 kick 한 연결이 이미 없어 404 가 났다 — 예상된 것이다. 가득 찬 cut 하나면 약 17,000줄이 난다 |
 
+- **`ingestauth_ip_limit_full` 이 나면 새 IP 는 한도 없이 처리 시간 예산만 탄다
+  (fail-open).** 위 명령 뒤에 `| grep -E 'ingestauth_ip_limit_(full|recovered)'` 를
+  붙여 마지막 줄이 어느 쪽인지 본다. `full` 이 마지막이면 kty 에게 알리고, 같은 때의
+  `ingestauth_ip_limited` 줄의 `ip` 가 서로 다른 IPv6 /64 로 쏟아지는지 본다(주소를
+  바꿔 가며 쏘는 홍수 — 한도로 막지 못하는 갈래, 예산이 마지막 선이다). 응답기를 다시
+  띄우거나 끄지 않는다 — 다시 띄우면 기록이 비어 IP 마다 30번을 다시 받고, 끄면 이미
+  기록된 IP 의 한도까지 사라진다. 만료 항목은 새 IP 가 올 때 1초에 한 번 회수되니
+  `_recovered` 가 날 때까지 지켜본다.
 - **차례 거절은 auth 장애 뒤 회복이 늦는 모양이다.** 끊긴 뒤 300초 안(5초 재시도 간격
   구간)이면 회복은 송출 하나 약 9초, 묶음 약 10–18초다. 최악 약 22초는 차례를 먼저 가진
   거절 토큰 · 계속 실패하는 토큰이 없고 콜드 첫 재확인이 시한(1.125초) 안일 때의 값이다.
@@ -3268,8 +3276,8 @@ main() {
     remove_box_file shred "${DEMO_DIR}/${name}"
     remove_box_file shred "${DEMO_DIR}/${name}.part"
   done
-  # 끊긴 R1 · 렌더 · R3′ 가 남긴 비밀 임시 파일(.env.next · mediamtx.demo.yml.tmp.* ·
-  # .ecr-login)
+  # 끊긴 R1 · 렌더 · R3′ · 7-5 가 남긴 비밀 임시 파일(.env.next · .env.iplimit.* ·
+  # mediamtx.demo.yml.tmp.* · .ecr-login)
   dispose_stray_secrets
   # 비밀이 아닌 일곱은 남긴다. 끊긴 보존이 남긴 그 .part 만 지운다
   for name in sha head status worktree.patch untracked.z untracked.tgz \
@@ -3280,7 +3288,7 @@ main() {
   while IFS= read -r name; do
     case "${name}" in
       *.pre-T.bak | *.pre-T.bak.part | pre-T.*.part | .env.next \
-        | mediamtx.demo.yml.tmp.* | .ecr-login)
+        | .env.iplimit.* | mediamtx.demo.yml.tmp.* | .ecr-login)
         left+="${name} "
         ;;
     esac
