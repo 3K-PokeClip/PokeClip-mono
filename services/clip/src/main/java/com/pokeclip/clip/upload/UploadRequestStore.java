@@ -10,6 +10,8 @@ import tools.jackson.databind.ObjectMapper;
 import java.sql.Array;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Timestamp;
+import java.time.Instant;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
@@ -27,13 +29,14 @@ public class UploadRequestStore {
     };
 
     private static final String UPSERT = """
-            INSERT INTO upload_requests (recipe_id, recipe_version, requested_by, title, description, tags, privacy_status,
-                                         made_for_kids, thumbnail_source, thumbnail_offset_ms, thumbnail_s3_key,
-                                         thumbnail_content_type, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?::jsonb, ?, ?, ?, ?, ?, ?, now())
+            INSERT INTO upload_requests (recipe_id, recipe_version, requested_by, title, description, tags, category_id,
+                                         privacy_status, publish_at, made_for_kids, thumbnail_source, thumbnail_offset_ms,
+                                         thumbnail_s3_key, thumbnail_content_type, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?::jsonb, ?, ?, ?, ?, ?, ?, ?, ?, now())
             ON CONFLICT (recipe_id, recipe_version) DO UPDATE SET
                 requested_by = EXCLUDED.requested_by, title = EXCLUDED.title, description = EXCLUDED.description,
-                tags = EXCLUDED.tags, privacy_status = EXCLUDED.privacy_status, made_for_kids = EXCLUDED.made_for_kids,
+                tags = EXCLUDED.tags, category_id = EXCLUDED.category_id, privacy_status = EXCLUDED.privacy_status,
+                publish_at = EXCLUDED.publish_at, made_for_kids = EXCLUDED.made_for_kids,
                 thumbnail_source = EXCLUDED.thumbnail_source, thumbnail_offset_ms = EXCLUDED.thumbnail_offset_ms,
                 thumbnail_s3_key = EXCLUDED.thumbnail_s3_key, thumbnail_content_type = EXCLUDED.thumbnail_content_type,
                 updated_at = now()""";
@@ -65,8 +68,9 @@ public class UploadRequestStore {
         lockBroadcast(streamId);
         Thumbnail thumbnail = info.thumbnail();
         jdbc.update(UPSERT, recipeId, recipeVersion, requestedBy, info.title(), info.description(),
-                mapper.writeValueAsString(info.tags()), info.privacyStatus(), info.madeForKids(), thumbnail.source(),
-                thumbnail.offsetMs(), thumbnail.s3Key(), thumbnail.contentType());
+                mapper.writeValueAsString(info.tags()), info.categoryId(), info.privacyStatus(),
+                timestamp(info.publishAt()), info.madeForKids(), thumbnail.source(), thumbnail.offsetMs(), thumbnail.s3Key(),
+                thumbnail.contentType());
     }
 
     /**
@@ -112,9 +116,15 @@ public class UploadRequestStore {
     private UploadInfo info(ResultSet rs) throws SQLException {
         Thumbnail thumbnail = new Thumbnail(rs.getString("thumbnail_source"), rs.getObject("thumbnail_offset_ms", Long.class),
                 rs.getString("thumbnail_s3_key"), rs.getString("thumbnail_content_type"));
+        Timestamp publishAt = rs.getTimestamp("publish_at");
         return new UploadInfo(rs.getString("title"), rs.getString("description"),
-                mapper.readValue(rs.getString("tags"), STRINGS), rs.getString("privacy_status"),
-                rs.getBoolean("made_for_kids"), thumbnail);
+                mapper.readValue(rs.getString("tags"), STRINGS), rs.getString("category_id"), rs.getString("privacy_status"),
+                publishAt == null ? null : publishAt.toInstant(), rs.getBoolean("made_for_kids"), thumbnail);
+    }
+
+    /** {@code TIMESTAMPTZ} 칸에 넣을 값. JDBC에 {@link Instant}를 그대로 넘기면 드라이버마다 다르게 읽는다. */
+    static Timestamp timestamp(Instant at) {
+        return at == null ? null : Timestamp.from(at);
     }
 
     private Array array(String type, Object[] values) {

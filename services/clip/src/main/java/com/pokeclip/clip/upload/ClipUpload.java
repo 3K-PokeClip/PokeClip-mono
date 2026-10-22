@@ -90,6 +90,14 @@ public class ClipUpload {
     @Column(name = "privacy_status", nullable = false, length = 8)
     private String privacyStatus;
 
+    /** 유튜브 분류 번호(POK-381). 그 전 줄은 20(게임)이다. */
+    @Column(name = "category_id", nullable = false, length = 4)
+    private String categoryId;
+
+    /** 예약 공개 시각(POK-381). 있으면 공개 범위는 비공개다. */
+    @Column(name = "publish_at")
+    private Instant publishAt;
+
     @Column(name = "made_for_kids", nullable = false)
     private boolean madeForKids;
 
@@ -303,6 +311,14 @@ public class ClipUpload {
         return madeForKids;
     }
 
+    public String getCategoryId() {
+        return categoryId;
+    }
+
+    public Instant getPublishAt() {
+        return publishAt;
+    }
+
     public String getThumbnailSource() {
         return thumbnailSource;
     }
@@ -329,7 +345,7 @@ public class ClipUpload {
 
     /** 이 줄에 적힌 고른 정보 한 벌. 다시 시도가 이것을 그대로 새 줄로 옮긴다. */
     UploadInfo info() {
-        return new UploadInfo(title, description, getTags(), privacyStatus, madeForKids,
+        return new UploadInfo(title, description, getTags(), categoryId, privacyStatus, publishAt, madeForKids,
                 new UploadInfo.Thumbnail(thumbnailSource, thumbnailOffsetMs, thumbnailS3Key, thumbnailContentType));
     }
 
