@@ -24,6 +24,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -138,6 +139,11 @@ func (s Settings) validate() error {
 		if s.password == "" {
 			return errors.New("필수 환경 변수 POSTGRES_PASSWORD 가 비어 있다(password 모드)")
 		}
+		// CA 번들을 주고도 검증하지 않는 sslmode 는 거짓 안도다 — require 는 호스트 이름을 보지 않고, prefer ·
+		// allow 는 평문으로 내려갈 수 있다(kty 결정 — C1 · C2 보안 검수 M).
+		if s.SSLRootCert != "" && s.SSLMode != "verify-ca" && s.SSLMode != iamSSLMode {
+			return fmt.Errorf("POSTGRES_SSLROOTCERT 를 주면 POSTGRES_SSLMODE 가 verify-ca · verify-full 이어야 한다(받은 값 %q)", s.SSLMode)
+		}
 	case AuthIAM:
 		if s.password != "" {
 			return errors.New("iam 에서는 POSTGRES_PASSWORD 를 비워야 한다 — 비밀번호 대신 연결마다 RDS IAM 토큰으로 로그인한다")
@@ -148,11 +154,25 @@ func (s Settings) validate() error {
 		if s.SSLRootCert == "" {
 			return errors.New("iam 에서는 POSTGRES_SSLROOTCERT(RDS CA 번들의 절대 경로)가 필요하다")
 		}
+		if err := checkIAMHost(s.Host); err != nil {
+			return err
+		}
 	default:
 		return fmt.Errorf("POSTGRES_AUTH(%q)는 iam · password 가운데 하나여야 한다", string(s.Auth))
 	}
 	if s.SSLRootCert != "" && !filepath.IsAbs(s.SSLRootCert) {
 		return fmt.Errorf("POSTGRES_SSLROOTCERT(%s)는 절대 경로여야 한다", s.SSLRootCert)
+	}
+	return nil
+}
+
+// checkIAMHost 는 iam 호스트가 TCP 호스트 하나인가를 본다. pgx 는 / 가 든 값을 유닉스 소켓으로, 쉼표를 여러
+// 호스트로 읽는다. 대괄호 없는 IPv6 는 "host:port" 를 깨뜨려 토큰을 서명한 대상과 실제 접속 대상이 갈라진다.
+func checkIAMHost(host string) error {
+	bracketed := strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]")
+	if strings.ContainsAny(host, "/,") || strings.IndexFunc(host, unicode.IsSpace) >= 0 ||
+		(strings.Contains(host, ":") && !bracketed) {
+		return fmt.Errorf("iam 에서는 POSTGRES_HOST(%q)가 TCP 호스트 하나여야 한다 — / · 쉼표 · 공백 불가, IPv6 는 대괄호로 감싼다", host)
 	}
 	return nil
 }

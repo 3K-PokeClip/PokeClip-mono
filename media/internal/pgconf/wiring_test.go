@@ -85,12 +85,13 @@ func TestIAMTokenIsFreshPerConnection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("첫 연결 실패: %v", err)
 	}
+	// 반환을 바로 예약한다 — 아래가 Fatal 로 끝나도 연결이 풀에 돌아가야 Cleanup 의 pool.Close 가 기다리지 않는다.
+	defer c1.Release()
 	c2, err := pool.Acquire(ctx) // c1 을 쥔 채라 새 연결이다
 	if err != nil {
 		t.Fatalf("둘째 연결 실패: %v", err)
 	}
-	c1.Release()
-	c2.Release()
+	defer c2.Release()
 
 	got := srv.received()
 	if len(got) != 2 || got[0] == got[1] {
@@ -217,6 +218,14 @@ func TestIAMConcurrentAcquiresGetDistinctTokens(t *testing.T) {
 
 	var wg sync.WaitGroup
 	hold := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(hold) }) }
+	// 대기 고루틴 해제를 바로 예약한다 — waitFor 가 Fatal 로 끝나도 연결 8개가 풀에 돌아가야 Cleanup 의
+	// pool.Close 가 기다리지 않는다.
+	defer func() {
+		release()
+		wg.Wait()
+	}()
 	errs := make(chan error, n)
 	for range n {
 		wg.Add(1)
@@ -235,7 +244,7 @@ func TestIAMConcurrentAcquiresGetDistinctTokens(t *testing.T) {
 		}()
 	}
 	waitFor(t, func() bool { return len(srv.received()) == n })
-	close(hold)
+	release()
 	wg.Wait()
 	close(errs)
 	for err := range errs {

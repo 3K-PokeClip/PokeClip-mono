@@ -12,6 +12,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -76,7 +77,7 @@ type Role struct {
 }
 
 // NewMediaIndexerRole 은 admin 이 붙은 DB 에 media_indexer 권한만 가진 시험 역할을 만들고 그 역할의 풀을 돌려준다.
-// 역할은 t.Cleanup 이 권한을 거두고 지운다(이 실행이 만든 역할만).
+// 역할은 t.Cleanup 이 권한을 거두고 지운다(이 실행이 만든 역할만). 지우지 못하고 남아도 1시간 뒤 만료된다.
 //
 // 비밀번호는 실행마다 새 난수이고 이 역할에만 쓴다. CREATE ROLE 문장은 서버 문장 로그에 비밀번호째 남을 수
 // 있으니 문장 로그를 켠 공유 클러스터에서는 돌리지 않는다(janitor 역할 시험과 같은 전제).
@@ -85,7 +86,13 @@ func NewMediaIndexerRole(t *testing.T, admin *pgxpool.Pool) *Role {
 	ctx := context.Background()
 	name := mediaIndexerRolePrefix + randHex(t, 4)
 	password := randHex(t, 16) // 16진 문자만 — 따옴표를 깰 글자가 없다
-	if _, err := admin.Exec(ctx, "CREATE ROLE "+name+" LOGIN PASSWORD '"+password+"'"); err != nil {
+	// 만료 = 서버 시계로 1시간 뒤. 실행이 강제 종료돼 Cleanup 이 돌지 않아도 남은 역할은 그 뒤 로그인할 수 없다
+	// (C4 보안 검수 L5). 값은 timestamptz 의 text 꼴(숫자 · - · : · . · + · 공백)이라 따옴표를 깰 글자가 없다.
+	var validUntil string
+	if err := admin.QueryRow(ctx, `SELECT (now() + interval '1 hour')::text`).Scan(&validUntil); err != nil {
+		t.Fatalf("시험 역할 만료 시각 계산 실패: %v", err)
+	}
+	if _, err := admin.Exec(ctx, "CREATE ROLE "+name+" LOGIN PASSWORD '"+password+"' VALID UNTIL '"+validUntil+"'"); err != nil {
 		t.Fatalf("시험 역할 생성 실패: %v", err)
 	}
 	// 만든 직후에 등록한다 — 아래 GRANT 가 실패로 끝나도 역할이 클러스터에 남지 않는다.
@@ -115,9 +122,24 @@ func NewMediaIndexerRole(t *testing.T, admin *pgxpool.Pool) *Role {
 // Revoke 는 이 역할에서 표 table 의 권한 privilege 하나를 거둔다 — 음성 대조(그 권한이 정말 필요한가)용이다.
 func (r *Role) Revoke(t *testing.T, privilege, table string) {
 	t.Helper()
-	if _, err := r.admin.Exec(context.Background(), "REVOKE "+privilege+" ON "+table+" FROM "+r.Name); err != nil {
+	sql, err := revokeSQL(privilege, table, r.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.admin.Exec(context.Background(), sql); err != nil {
 		t.Fatalf("권한 회수 실패(%s ON %s): %v", privilege, table, err)
 	}
+}
+
+// revokeSQL 은 REVOKE 문장을 만든다. 인자를 문장에 붙여 넣으므로 이 목록이 그 표에 준 권한 하나(대문자 그대로)가
+// 아니면 거부한다 — 목록 밖 표 · 권한 · SQL 조각이 관리자 풀로 나가지 않게(C4 보안 검수 L5).
+func revokeSQL(privilege, table, role string) (string, error) {
+	for _, g := range mediaIndexerGrants {
+		if g.table == table && slices.Contains(g.privileges, privilege) {
+			return "REVOKE " + privilege + " ON " + table + " FROM " + role, nil
+		}
+	}
+	return "", fmt.Errorf("회수 대상 %q ON %q 는 media_indexer 목록이 준 권한이 아니다", privilege, table)
 }
 
 // RequireSent 는 want(이름 → 문장)의 문장마다 이 역할 풀이 한 번 이상 보내 성공했는가를 본다. 호출이 오류를

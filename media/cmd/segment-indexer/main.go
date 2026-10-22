@@ -91,7 +91,7 @@ func run() error {
 	defer stop()
 
 	// --- 1. 기동: 설정 -> DB 연결 -> (개발 환경이면) 표 생성 ---
-	pool, dbConfig, err := openIndexerPool(ctx, cfg.PG, log)
+	pool, dbConfig, err := openIndexerPool(ctx, cfg.PG, log, dbStepTimeout)
 	if err != nil {
 		return err
 	}

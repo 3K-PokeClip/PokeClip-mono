@@ -29,9 +29,12 @@ RUN apk add --no-cache tzdata ca-certificates
 
 COPY --from=build /out/segment-indexer /usr/local/bin/segment-indexer
 COPY --from=build /out/janitor /usr/local/bin/janitor
-# root 소유 0644 — USER 10001 이 읽기만 한다. 이 경로를 쓰게 하는 POSTGRES_SSLROOTCERT 는 배포
+# root 소유 0644 — USER 10001 이 읽기만 한다. --chmod 로 못 박아 빌드 입력(작업 트리)의 권한과
+# 떼어 놓는다. --chmod 는 COPY 가 새로 만드는 부모 디렉터리에도 0644(실행 비트 없음)를 주므로
+# 디렉터리는 먼저 만든다(755 — 2026-10-22 실측). 이 경로를 쓰게 하는 POSTGRES_SSLROOTCERT 는 배포
 # 정의가 준다(ENV 로 두지 않는다 — 로컬 compose 의 password · prefer 경로에 끼어들지 않게).
-COPY --from=build /src/certs/rds-global-bundle.pem /etc/pokeclip/rds-ca/global-bundle.pem
+RUN mkdir -p /etc/pokeclip/rds-ca
+COPY --from=build --chmod=0644 /src/certs/rds-global-bundle.pem /etc/pokeclip/rds-ca/global-bundle.pem
 
 # 비특권 사용자로 돌린다. recordings 는 :ro 로 붙지만, 권한을 낮춰 두면
 # 컨테이너가 뚫렸을 때 할 수 있는 일이 한 단계 더 줄어든다.

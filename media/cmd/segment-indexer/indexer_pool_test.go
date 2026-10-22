@@ -5,9 +5,12 @@ package main
 
 import (
 	"log/slog"
+	"net"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -34,7 +37,7 @@ func TestOpenIndexerPoolFailsWithoutConnectedLine(t *testing.T) {
 	})
 	logs := &logCapture{}
 
-	pool, base, err := openIndexerPool(t.Context(), s, slog.New(logs))
+	pool, base, err := openIndexerPool(t.Context(), s, slog.New(logs), dbStepTimeout)
 
 	if err == nil || pool != nil || base != nil {
 		t.Fatalf("openIndexerPool = 풀 %v · 설정 %v · 오류 %v, want 오류만", pool, base, err)
@@ -55,7 +58,7 @@ func TestOpenIndexerPoolLogsDBConnected(t *testing.T) {
 	s := settingsOf(t, env)
 	logs := &logCapture{}
 
-	pool, base, err := openIndexerPool(t.Context(), s, slog.New(logs))
+	pool, base, err := openIndexerPool(t.Context(), s, slog.New(logs), dbStepTimeout)
 	if err != nil {
 		t.Fatalf("openIndexerPool: %v", err)
 	}
@@ -88,5 +91,67 @@ func TestOpenIndexerPoolLogsDBConnected(t *testing.T) {
 	t.Cleanup(second.Close)
 	if err := second.Ping(t.Context()); err != nil {
 		t.Errorf("돌려준 풀 설정의 Copy 로 만든 풀(발행자 풀 자리)이 붙지 못했다: %v", err)
+	}
+}
+
+// silentListener 는 TCP 연결을 받기만 하고 한 바이트도 답하지 않는 서버다 — 붙었지만 응답하지 않는 DB 자리다.
+// 받은 연결은 시험이 끝날 때 닫는다(멈춘 클라이언트가 그때 풀린다).
+func silentListener(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	var conns []net.Conn
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			conns = append(conns, c)
+			mu.Unlock()
+		}
+	}()
+	t.Cleanup(func() {
+		ln.Close()
+		mu.Lock()
+		defer mu.Unlock()
+		for _, c := range conns {
+			c.Close()
+		}
+	})
+	return ln.Addr().(*net.TCPAddr).AddrPort().String()
+}
+
+// 연결 확인에도 상한이 선다(C2 보안 검수 L — janitor 와 같은 단계 상한). 붙었지만 답하지 않는 DB 에서 부모 ctx 에
+// 기한이 없어도 상한 뒤 db_connected 없이 오류로 돌아온다 — 기동이 끝없이 걸리지 않고 재기동이 회복한다.
+func TestOpenIndexerPoolBoundsConnectionCheck(t *testing.T) {
+	host, port, _ := strings.Cut(silentListener(t), ":")
+	s := settingsOf(t, map[string]string{
+		"POSTGRES_USER": "u", "POSTGRES_PASSWORD": "pw", "POSTGRES_DB": "d",
+		"POSTGRES_HOST": host, "POSTGRES_PORT": port, "POSTGRES_SSLMODE": "disable",
+	})
+	logs := &logCapture{}
+	const step = 200 * time.Millisecond
+	done := make(chan error, 1)
+
+	go func() {
+		_, _, err := openIndexerPool(t.Context(), s, slog.New(logs), step)
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("openIndexerPool 오류 nil, want 연결 확인 시간 초과")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatalf("openIndexerPool 이 단계 상한 %v 의 50배가 지나도 돌아오지 않았다 — 연결 확인에 상한이 없다", step)
+	}
+	if n := logs.count(pgconf.ConnectedEvent); n != 0 {
+		t.Errorf("%s %d줄, want 0", pgconf.ConnectedEvent, n)
 	}
 }

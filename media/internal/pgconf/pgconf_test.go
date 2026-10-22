@@ -76,6 +76,21 @@ func TestFromEnvDefaults(t *testing.T) {
 			want: Settings{Auth: AuthIAM, User: "media_indexer", Host: "db.example.internal", Port: 5432, DB: "pokeclip", SSLMode: "verify-full", SSLRootCert: "/etc/pokeclip/rds-ca/global-bundle.pem", Region: "us-east-1"},
 		},
 		{
+			name: "password + SSLROOTCERT + verify-ca",
+			env:  with(passwordEnv(), "POSTGRES_SSLMODE", "verify-ca", "POSTGRES_SSLROOTCERT", "/etc/ca.pem"),
+			want: Settings{Auth: AuthPassword, User: "pokeclip", Host: "postgres", Port: 5432, DB: "pokeclip", SSLMode: "verify-ca", SSLRootCert: "/etc/ca.pem", Region: "ap-northeast-2", password: "pw"},
+		},
+		{
+			name: "password + SSLROOTCERT + verify-full",
+			env:  with(passwordEnv(), "POSTGRES_SSLMODE", "verify-full", "POSTGRES_SSLROOTCERT", "/etc/ca.pem"),
+			want: Settings{Auth: AuthPassword, User: "pokeclip", Host: "postgres", Port: 5432, DB: "pokeclip", SSLMode: "verify-full", SSLRootCert: "/etc/ca.pem", Region: "ap-northeast-2", password: "pw"},
+		},
+		{
+			name: "iam 대괄호 IPv6 호스트",
+			env:  with(iamEnv(), "POSTGRES_HOST", "[fd00::1]"),
+			want: Settings{Auth: AuthIAM, User: "media_indexer", Host: "[fd00::1]", Port: 5432, DB: "pokeclip", SSLMode: "verify-full", SSLRootCert: "/etc/pokeclip/rds-ca/global-bundle.pem", Region: "ap-northeast-2"},
+		},
+		{
 			name: "PGSSLROOTCERT 가 있어도 POSTGRES_SSLROOTCERT 가 있으면 그것이 산다",
 			env:  with(iamEnv(), "PGSSLROOTCERT", "/elsewhere.pem"),
 			want: Settings{Auth: AuthIAM, User: "media_indexer", Host: "db.example.internal", Port: 5432, DB: "pokeclip", SSLMode: "verify-full", SSLRootCert: "/etc/pokeclip/rds-ca/global-bundle.pem", Region: "ap-northeast-2"},
@@ -108,7 +123,7 @@ func TestFromEnvRejects(t *testing.T) {
 		{"iam 에 SSLROOTCERT 없음", with(iamEnv(), "POSTGRES_SSLROOTCERT", ""), "POSTGRES_SSLROOTCERT"},
 		{"PGSSLROOTCERT 만 있음(iam)", with(iamEnv(), "POSTGRES_SSLROOTCERT", "", "PGSSLROOTCERT", "/x.pem"), "PGSSLROOTCERT"},
 		{"PGSSLROOTCERT 만 있음(password)", with(passwordEnv(), "PGSSLROOTCERT", "/x.pem"), "PGSSLROOTCERT"},
-		{"SSLROOTCERT 상대 경로", with(passwordEnv(), "POSTGRES_SSLROOTCERT", "certs/ca.pem"), "POSTGRES_SSLROOTCERT"},
+		{"SSLROOTCERT 상대 경로", with(passwordEnv(), "POSTGRES_SSLMODE", "verify-full", "POSTGRES_SSLROOTCERT", "certs/ca.pem"), "POSTGRES_SSLROOTCERT"},
 		{"모르는 AUTH", with(passwordEnv(), "POSTGRES_AUTH", "md5"), "POSTGRES_AUTH"},
 		{"대소문자 다른 AUTH(IAM)", with(iamEnv(), "POSTGRES_AUTH", "IAM"), "POSTGRES_AUTH"},
 		{"대소문자 다른 AUTH(Iam)", with(iamEnv(), "POSTGRES_AUTH", "Iam"), "POSTGRES_AUTH"},
@@ -123,6 +138,36 @@ func TestFromEnvRejects(t *testing.T) {
 			env     map[string]string
 			wantSub string
 		}{"iam 약한 sslmode " + mode, with(iamEnv(), "POSTGRES_SSLMODE", mode), "POSTGRES_SSLMODE"})
+	}
+	// password 모드에서 CA 번들을 주고 검증하지 않는 sslmode 는 거짓 안도다 — require 는 호스트 이름을 보지
+	// 않고, prefer · allow 는 평문으로 내려갈 수 있다(kty 결정: 기동 에러).
+	for _, mode := range []string{"disable", "allow", "prefer", "require"} {
+		cases = append(cases, struct {
+			name    string
+			env     map[string]string
+			wantSub string
+		}{"password + SSLROOTCERT + " + mode, with(passwordEnv(), "POSTGRES_SSLMODE", mode, "POSTGRES_SSLROOTCERT", "/etc/ca.pem"), "POSTGRES_SSLMODE"})
+	}
+	cases = append(cases, struct {
+		name    string
+		env     map[string]string
+		wantSub string
+	}{"password + SSLROOTCERT + 기본 sslmode(prefer)", with(passwordEnv(), "POSTGRES_SSLROOTCERT", "/etc/ca.pem"), "POSTGRES_SSLMODE"})
+	// iam 호스트는 TCP 호스트 하나여야 한다 — pgx 는 / 를 유닉스 소켓, , 를 여러 호스트로 읽고, 대괄호 없는
+	// IPv6 는 host:port 를 깨뜨려 토큰 서명 대상과 실제 접속 대상이 갈라진다.
+	for name, host := range map[string]string{
+		"슬래시(유닉스 소켓)": "/var/run/postgresql",
+		"쉼표(여러 호스트)":  "db1.example.internal,db2.example.internal",
+		"가운데 공백":      "db .example.internal",
+		"가운데 탭":       "db\t.example.internal",
+		"대괄호 없는 IPv6": "fd00::1",
+		"한쪽 대괄호 IPv6": "[fd00::1",
+	} {
+		cases = append(cases, struct {
+			name    string
+			env     map[string]string
+			wantSub string
+		}{"iam 호스트 " + name, with(iamEnv(), "POSTGRES_HOST", host), "POSTGRES_HOST"})
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

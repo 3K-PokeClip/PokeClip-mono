@@ -289,6 +289,8 @@ func TestMediaIndexerRoleWithoutEachGrantIsDenied(t *testing.T) {
 
 // 음성 대조 — 목록 밖 권한(DELETE · TRUNCATE · DDL)은 처음부터 42501 이다. 사이드카는 행을 지우지 않고 스키마를
 // 만들지 않는다(ENSURE_SCHEMA=false) — EnsureSchema 를 이 역할로 부르면 막힌다.
+// CREATE TABLE · EnsureSchema 의 42501 은 PG15+ 기본값 전제다 — PG15 부터 public 스키마 CREATE 가 PUBLIC 에서
+// 빠졌다. PG14 이하이거나 그 권한을 되돌린 DB 에서는 이 역할도 표를 만들 수 있다(README 운영 DB 사전 확인).
 func TestMediaIndexerRoleHasNoDeleteOrDDL(t *testing.T) {
 	admin := newTestPool(t)
 	role := pgtest.NewMediaIndexerRole(t, admin)

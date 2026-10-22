@@ -74,9 +74,15 @@ func TestDockerfilePinsRDSCABundle(t *testing.T) {
 		t.Errorf("저장소 번들 sha256 = %x, Dockerfile 고정값 = %s(번들 교체는 두 곳을 한 커밋에)", sum, pinned)
 	}
 
-	wantCopy := "COPY --from=build " + rdsBundleBuildPath + " " + rdsBundleImagePath
-	found := false
+	// --chmod=0644 — COPY 는 빌드 입력의 권한을 그대로 옮기므로, 작업 트리의 번들이 0600 이면 실행 계정 10001 이
+	// 못 읽어 iam 기동이 실패한다(C3 검수 M). 이미지 안 권한을 빌드 입력과 떼어 놓는다.
+	wantCopy := "COPY --from=build --chmod=0644 " + rdsBundleBuildPath + " " + rdsBundleImagePath
+	// --chmod 는 COPY 가 새로 만드는 부모 디렉터리에도 같은 모드(실행 비트 없음)를 준다(2026-10-22 실측 — buildx
+	// v0.37.2). 그러면 10001 이 디렉터리를 지나가지 못하므로 부모를 COPY 앞에서 먼저 만든다(755).
+	wantDir := "RUN mkdir -p " + filepath.Dir(rdsBundleImagePath)
+	found, dirFirst := false, false
 	for _, l := range final {
+		dirFirst = dirFirst || (l == wantDir && !found)
 		found = found || l == wantCopy
 		if strings.Contains(l, "POSTGRES_SSLROOTCERT") {
 			t.Errorf("최종 스테이지가 POSTGRES_SSLROOTCERT 를 정한다(%q) — 값은 배포 정의가 준다", l)
@@ -84,6 +90,9 @@ func TestDockerfilePinsRDSCABundle(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("최종 스테이지에 %q 줄이 없다", wantCopy)
+	}
+	if !dirFirst {
+		t.Errorf("최종 스테이지에서 %q 줄이 번들 COPY 앞에 없다 — 부모 디렉터리가 --chmod=0644 로 만들어져 10001 이 못 지나간다", wantDir)
 	}
 }
 

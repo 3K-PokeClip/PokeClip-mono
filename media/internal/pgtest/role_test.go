@@ -120,3 +120,47 @@ func TestMediaIndexerRoleGrantsListAndDropsAfterTest(t *testing.T) {
 		t.Errorf("역할 %q 가 시험 뒤에도 남았다", name)
 	}
 }
+
+// 시험 역할은 1시간 뒤 로그인할 수 없다(C4 보안 검수 L5) — 실행이 강제 종료돼 Cleanup 이 돌지 않아도 남은 역할이
+// 알려진 권한을 든 채 로그인 가능한 계정으로 오래 남지 않는다.
+func TestMediaIndexerRoleExpiresWithinAnHour(t *testing.T) {
+	admin := Pool(t, "roletest", roleTables, noReset)
+	r := NewMediaIndexerRole(t, admin)
+
+	var hasExpiry, inWindow bool
+	err := admin.QueryRow(context.Background(), `
+		SELECT rolvaliduntil IS NOT NULL,
+		       COALESCE(rolvaliduntil > now() AND rolvaliduntil <= now() + interval '1 hour', false)
+		FROM pg_roles WHERE rolname = $1`, r.Name).Scan(&hasExpiry, &inWindow)
+	if err != nil {
+		t.Fatalf("역할 만료 조회 실패: %v", err)
+	}
+	if !hasExpiry {
+		t.Fatalf("역할 %s 에 VALID UNTIL 이 없다 — 강제 종료로 남으면 로그인 가능한 채 남는다", r.Name)
+	}
+	if !inWindow {
+		t.Errorf("역할 %s 의 VALID UNTIL 이 지금부터 1시간 안이 아니다", r.Name)
+	}
+}
+
+// Revoke 는 이 목록이 준 권한만 거둔다 — 문장에 붙여 넣는 인자라 목록 밖 값(다른 표 · 다른 권한 · SQL 조각)은
+// 보내기 전에 거부한다(C4 보안 검수 L5).
+func TestRevokeSQLAcceptsOnlyGrantedPairs(t *testing.T) {
+	got, err := revokeSQL("UPDATE", "stream_sessions", "r1")
+	if err != nil || got != "REVOKE UPDATE ON stream_sessions FROM r1" {
+		t.Errorf(`revokeSQL("UPDATE", "stream_sessions") = %q, %v`, got, err)
+	}
+	for _, c := range []struct{ privilege, table string }{
+		{"DELETE", "stream_segments"},
+		{"UPDATE", "stream_cutoffs"},
+		{"SELECT", "pg_authid"},
+		{"select", "stream_segments"},
+		{"SELECT, INSERT", "stream_segments"},
+		{"SELECT", "stream_segments; DROP TABLE stream_segments"},
+		{"ALL", "stream_segments"},
+	} {
+		if got, err := revokeSQL(c.privilege, c.table, "r1"); err == nil {
+			t.Errorf("revokeSQL(%q, %q) = %q, want 거부", c.privilege, c.table, got)
+		}
+	}
+}
