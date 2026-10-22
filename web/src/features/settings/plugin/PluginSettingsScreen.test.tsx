@@ -1,6 +1,7 @@
 import { fireEvent, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PluginSettingsScreen } from '@/features/settings/plugin/PluginSettingsScreen';
+import { PLUGIN_DOWNLOADS } from '@/lib/pluginDownload';
 import { useAuthStore } from '@/stores/auth';
 import { useOnboardingStore } from '@/stores/onboarding';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
@@ -266,5 +267,22 @@ describe('PluginSettingsScreen', () => {
     // 접근 이름에서는 aria-label이 이겨 '재발급'으로는 찾을 수 없어야 한다
     expect(busyButton).toHaveTextContent('재발급');
     expect(screen.queryByRole('button', { name: '재발급' })).not.toBeInTheDocument();
+  });
+
+  it('배너 → 창에서 OS별 고정 주소의 파일을 받는다 — 설치·연결 상태는 지어내지 않는다 (POK-379)', async () => {
+    stubStreamKeyFetch();
+    renderWithProviders(<PluginSettingsScreen />);
+
+    fireEvent.click(screen.getByRole('button', { name: '플러그인 다운로드' }));
+
+    const dialog = await screen.findByRole('dialog', { name: '플러그인 다운로드' });
+    expect(dialog).toBeInTheDocument();
+    // jsdom 기본 UA는 OS를 모른다 — 감지 못 하면 Windows 탭으로 연다
+    expect(screen.getByRole('tab', { name: 'Windows' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('link', { name: /Windows 설치 파일/ })).toHaveAttribute(
+      'href',
+      PLUGIN_DOWNLOADS.windows.url,
+    );
+    expect(document.body).not.toHaveTextContent(/설치됨|연결됨/);
   });
 });

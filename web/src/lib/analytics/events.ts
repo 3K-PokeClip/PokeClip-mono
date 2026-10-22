@@ -26,6 +26,14 @@ export interface AnalyticsEvents {
   };
   /** 편집자 초대(기한 연장 재초대 포함) */
   editor_invited: Record<string, never>;
+  /**
+   * 플러그인 설치 파일 링크를 누름 — 받은 수가 아니다. 다운로드는 브라우저가 맡아 막혔는지 웹은 모르므로,
+   * 「성공한 뒤에만」 규칙의 예외로 누른 순간을 센다(POK-379). 판 번호는 자유 문자열이라 싣지 않는다
+   */
+  plugin_download_clicked: {
+    os: 'windows' | 'macos';
+    kind: 'installer' | 'pkg';
+  };
 }
 
 /** 행동 이벤트를 보낸다. 분석이 꺼져 있으면(키 없음·SDK 차단) 아무 일도 하지 않는다. */
