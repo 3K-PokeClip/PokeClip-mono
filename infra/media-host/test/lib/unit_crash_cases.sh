@@ -151,8 +151,10 @@ crash::expect_reaped() {
 crash::expect_no_failure_lines() {
   local ok=0 line n
   for line in 'MEDIA START FAIL' 'CLEANUP FAIL'; do
-    n="$(unit::journal_count -u "${UNIT_NAME}" "$1" "${line}")"
-    if [[ "${n}" != 0 ]]; then
+    if ! n="$(unit::journal_count -u "${UNIT_NAME}" "$1" "${line}")"; then
+      harness::add_reason "유닛 저널 조회 실패(「${line}」 확인 불가)"
+      ok=1
+    elif [[ "${n}" != 0 ]]; then
       harness::add_reason "유닛 저널 「${line}」 ${n}줄"
       ok=1
     fi

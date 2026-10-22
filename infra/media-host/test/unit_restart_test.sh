@@ -3,8 +3,8 @@
 # Media 상자 systemd 유닛 재기동 시험 — prod 유닛을 시험 이름으로 설치해 재기동 ·
 # 정지 · 데몬 흔들기 · 크래시 경로에서 유닛과 컨테이너가 기대대로 움직이는지 본다.
 #
-# 사례 1 – 3 은 systemd 없이 돈다(유닛 파일 지시어 · 시험 compose 구성 · 가짜 aws
-# 상태 파일). 사례 4 – 19 는 리눅스 · systemd · sudo 가 있는 곳(infra-ci ubuntu
+# 사례 1 – 3 · 20 은 systemd 없이 돈다(유닛 파일 지시어 · 시험 compose 구성 · 가짜
+# aws 상태 파일 · 저널 건수 도구). 사례 4 – 19 는 리눅스 · systemd · sudo 가 있는 곳(infra-ci ubuntu
 # 러너)에서만 돈다. 없으면 그 사례들은 FAIL 이다 — 건너뛰는 갈래는 없다.
 #
 # 사례 13 – 17 은 호스트를 흔든다(docker 엔진 재시작 · dockerd kill -9 · 유닛
@@ -76,7 +76,7 @@ readonly FAKE_SECRET='pcbench-edge-proxy-fake-cdn-secret'
 readonly UNIT_BASE_PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin'
 readonly CONFIG_TIMEOUT=60
 readonly SYSTEMCTL_TIMEOUT=120
-readonly CASE_COUNT=19
+readonly CASE_COUNT=20
 
 # prod 유닛 지시어(설명 줄 Description= 은 빼고) — 「절|키=값」 한 줄에 하나.
 # 줄 잇기(끝 백슬래시)는 systemd 처럼 이어 붙인 한 줄로 적는다. 담는 것: docker
@@ -253,6 +253,47 @@ call_fake_aws() {
   env ${extra[@]+"${extra[@]}"} "${FAKEBIN}/aws" secretsmanager \
     get-secret-value --secret-id "${FAKE_ARN}" --query SecretString \
     --output text
+}
+
+#######################################
+# 사례 20 — 저널 건수 도구(unit::journal_count)는 조회 실패를 0 건으로 바꾸지
+# 않는다. 가짜 sudo · journalctl 을 PATH 맨 앞에 두고 세 갈래를 본다: 조회
+# 실패(종료 1 · 출력 없음) → 실패 · 출력 없음, 정상 빈 저널 → 0, 맞는 줄 둘 →
+# 2. systemd 없이 돈다.
+#######################################
+check_case_20() {
+  local ok=0 dir="${scratch}/journal-fake" mode out status want
+  mkdir -p -- "${dir}"
+  # shellcheck disable=SC2016 # 가짜 sudo 의 본문이다 — 그 셸이 펼친다.
+  printf '%s\n' '#!/bin/sh' '[ "$1" = -n ] && shift' 'exec "$@"' \
+    >"${dir}/sudo"
+  # shellcheck disable=SC2016 # 가짜 journalctl 의 본문이다 — 그 셸이 펼친다.
+  printf '%s\n' '#!/bin/sh' '[ "$1" = --sync ] && exit 0' \
+    'case "${PCBENCH_FAKE_JOURNAL:-}" in' \
+    '  fail) exit 1 ;;' \
+    '  lines) printf "MEDIA START FAIL a\nother\nMEDIA START FAIL b\n" ;;' \
+    'esac' >"${dir}/journalctl"
+  chmod +x "${dir}/sudo" "${dir}/journalctl"
+  for mode in fail empty lines; do
+    case "${mode}" in
+      fail) want='실패:' ;;
+      empty) want='0:0' ;;
+      *) want='0:2' ;;
+    esac
+    status=0
+    out="$(PATH="${dir}:${PATH}" PCBENCH_FAKE_JOURNAL="${mode}" \
+      unit::journal_count -u pcbench-none 0 'MEDIA START FAIL')" || status=$?
+    if (( status != 0 )); then
+      out="실패:${out}"
+    else
+      out="0:${out}"
+    fi
+    if [[ "${out}" != "${want}" ]]; then
+      harness::add_reason "갈래 ${mode}: 「${out}」(기대 「${want}」)"
+      ok=1
+    fi
+  done
+  return "${ok}"
 }
 
 #######################################
@@ -631,6 +672,7 @@ main() {
   harness::run_case 2 '시험 compose(unit) 검증 · 역할 셋 · 로그 자리' \
     check_case_2
   harness::run_case 3 '가짜 aws 상태 파일 모드(④ 이음매)' check_case_3
+  harness::run_case 20 '저널 건수 — 조회 실패는 0 건이 아님(정적)' check_case_20
 
   if check_systemd_host; then
     install_unit || true

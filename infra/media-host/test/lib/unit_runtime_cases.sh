@@ -110,14 +110,23 @@ unit::fresh_start() {
 }
 
 #######################################
-# 저널 줄 가운데 고정 문자열이 든 줄 수를 낸다.
+# 저널 줄 가운데 고정 문자열이 든 줄 수를 낸다. 저널 조회가 실패하면 아무것도
+# 내지 않고 1 을 돌려준다 — 조회 실패는 「확인 불가」 이지 0 건이 아니다(grep 의
+# 「맞는 줄 없음」 종료 1 과 가른다). 부르는 쪽이 실패로 다룬다.
 # Arguments:
 #   -t (태그) 또는 -u (유닛), 그 이름, 시작 시각(epoch), 문자열.
+# Outputs:
+#   줄 수(조회했을 때만).
+# Returns:
+#   0 셈 / 1 조회 · grep 실패.
 #######################################
 unit::journal_count() {
+  local journal status=0
   sudo -n journalctl --sync >/dev/null 2>&1 || true
-  sudo -n journalctl "$1" "$2" --since "@$3" -o cat --no-pager 2>/dev/null \
-    | grep -c -F -- "$4" || true
+  journal="$(sudo -n journalctl "$1" "$2" --since "@$3" -o cat --no-pager \
+    2>/dev/null)" || return 1
+  printf '%s\n' "${journal}" | grep -c -F -- "$4" || status=$?
+  (( status <= 1 ))
 }
 
 #######################################
@@ -284,14 +293,18 @@ $(unit::prop MainPID) · NRestarts ${n0} → $(unit::prop NRestarts))"
     harness::add_reason "창 안 헬스 실패 ${misses}회"
     ok=1
   fi
-  exits="$(unit::journal_count -t "${UNIT_SIDECAR_TAG}" "${t0}" \
-    'SIDECAR EXIT 1')"
-  if (( exits < 2 )); then
+  if ! exits="$(unit::journal_count -t "${UNIT_SIDECAR_TAG}" "${t0}" \
+    'SIDECAR EXIT 1')"; then
+    harness::add_reason '태그 저널 조회 실패'
+    ok=1
+  elif (( exits < 2 )); then
     harness::add_reason "태그 저널 종료 줄 ${exits}(≥2 기대)"
     ok=1
   fi
-  lines="$(unit::journal_count -u "${UNIT_NAME}" "${t0}" 'SIDECAR')"
-  if [[ "${lines}" != 0 ]]; then
+  if ! lines="$(unit::journal_count -u "${UNIT_NAME}" "${t0}" 'SIDECAR')"; then
+    harness::add_reason '유닛 저널 조회 실패'
+    ok=1
+  elif [[ "${lines}" != 0 ]]; then
     harness::add_reason "유닛 저널에 사이드카 줄 ${lines}(0 기대)"
     ok=1
   fi
@@ -372,9 +385,10 @@ unit::case_stop_flapping() {
   t0="$(unit::now)"
   unit::fresh_start "${UNIT_FLAP_DELAY}" || return 1
   local deadline=$((SECONDS + UNIT_MARKER_TIMEOUT)) exits=0
+  # 조회가 실패한 바퀴는 0 으로 두고 다시 본다 — 끝까지 못 세면 아래에서 실패다.
   while (( SECONDS < deadline )); do
     exits="$(unit::journal_count -t "${UNIT_SIDECAR_TAG}" "${t0}" \
-      'SIDECAR EXIT 1')"
+      'SIDECAR EXIT 1')" || exits=0
     (( exits < 1 )) || break
     sleep 1
   done
@@ -469,9 +483,11 @@ unit::case_secret_outage() {
 이상 기대)"
     ok=1
   fi
-  blocked="$(unit::journal_count -u "${UNIT_NAME}" "${t0}" \
-    'MEDIA START BLOCKED: CDN secret unavailable')"
-  if (( blocked < UNIT_MIN_OUTAGE_RESTARTS )); then
+  if ! blocked="$(unit::journal_count -u "${UNIT_NAME}" "${t0}" \
+    'MEDIA START BLOCKED: CDN secret unavailable')"; then
+    harness::add_reason '유닛 저널 조회 실패'
+    ok=1
+  elif (( blocked < UNIT_MIN_OUTAGE_RESTARTS )); then
     harness::add_reason "유닛 저널 막힘 줄 ${blocked}"
     ok=1
   fi
