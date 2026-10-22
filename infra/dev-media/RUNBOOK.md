@@ -196,11 +196,19 @@ kty 로컬 터미널에서 돌린다 — 계정 번호가 명령 · 응답에 �
 `pokeclip-media-dev-ssm-role` 일 때만 정책을 넣는다. 공유 역할(`pokeclip-dev-ssm-role`
 등 — 팀 dev EC2 와 함께 쓰는 역할)이나 다른 이름이면 2 가 「멈춤」을 내고 아무것도 넣지
 않는다. 그때는 kty 가 정한다(상자를 1-2 의 공유 프로필로 다시 띄웠다면 상자 전용 프로필을
-먼저 붙인다). 2 는 괄호(서브셸) 안이라 멈춰도 터미널은 닫히지 않고, 계정 번호도 괄호 밖에
-남지 않는다.
+먼저 붙인다). 2 는 따로 띄운 bash 안에서 돈다 — 멈춰도 터미널은 닫히지 않고, 계정
+번호는 지금 셸에 남지 않으며 화면에도 나오지 않는다.
+
+세 블록은 맥 기본 셸(zsh)에 그대로 붙여도 돌게 썼다. 대화형 zsh 는 기본으로 `#` 를
+주석으로 읽지 않아서(`interactive_comments` 꺼짐) 블록 안 주석 줄의 `)` 가 붙여 넣은
+묶음 전체를 `parse error near ')'` 로 멈춘다 — 2026-10-20 에 옛 꼴의 블록 2 · 3 이 이렇게
+아무것도 돌지 않았다. 그래서 블록 안에 주석을 두지 않고, zsh 와 문법이 갈리는 몫(2)은
+`bash <<'SH'` 안에 둔다. 그 bash 는 맥 기본 bash(3.2)다 — 0절의 「bash 3.2 에서 돌리지
+않는다」는 2절 머리를 쓰는 상자 블록 얘기라 이 로컬 명령과는 상관없다.
+
+블록 1(역할 집기) — 상자에서 거꾸로 집는다. 찍는 것은 역할 이름뿐이다(계정 번호 없음).
 
 ```bash
-# 1) 역할 집기 — 상자에서 거꾸로 집는다. 찍는 것은 역할 이름뿐이다(계정 번호 없음)
 PROFILE_ARN="$(aws ec2 describe-instances --instance-ids <instance-id> \
   --query 'Reservations[0].Instances[0].IamInstanceProfile.Arn' --output text)"
 ROLE="$(aws iam get-instance-profile \
@@ -210,17 +218,21 @@ unset PROFILE_ARN
 echo "역할: ${ROLE}"
 ```
 
+블록 2(정책 넣기) — 상자 전용 역할일 때만 넣는다. 어긋나면 「멈춤」 · 종료 1 이고 넣지
+않는다. 정책 문서는 `printf` 가 만든다(`%s` 자리가 계정 번호). 안의 aws 는 표준 입력을
+`/dev/null` 로 받는다 — 이 bash 는 스크립트를 표준 입력으로 읽으므로, 표준 입력을 읽는
+명령이 있으면 뒷줄을 삼킨다.
+
 ```bash
-# 2) 정책 넣기 — 상자 전용 역할일 때만. 어긋나면 「멈춤」 · 종료 1 이고 넣지 않는다
-(
-  [[ "${ROLE:-}" == pokeclip-media-dev-ssm-role ]] \
-    || { echo "멈춤 — 상자 전용 역할이 아니다: ${ROLE:-(비었음)}"; exit 1; }
-  ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
-  [[ "${ACCOUNT}" =~ ^[0-9]{12}$ ]] \
-    || { echo '멈춤 — 계정 번호를 얻지 못했다'; exit 1; }
-  aws iam put-role-policy --role-name "${ROLE}" \
-    --policy-name pokeclip-media-dev-ecr-pull --policy-document "$(cat <<EOF
-{
+ROLE="${ROLE:-}" bash <<'SH'
+set -euo pipefail
+[[ "${ROLE}" == pokeclip-media-dev-ssm-role ]] \
+  || { echo "멈춤 — 상자 전용 역할이 아니다: ${ROLE:-(비었음)}"; exit 1; }
+ACCOUNT="$(aws sts get-caller-identity --query Account --output text \
+  < /dev/null)" || ACCOUNT=''
+[[ "${ACCOUNT}" =~ ^[0-9]{12}$ ]] \
+  || { echo '멈춤 — 계정 번호를 얻지 못했다'; exit 1; }
+POLICY="$(printf '{
   "Version": "2012-10-17",
   "Statement": [
     {
@@ -237,17 +249,20 @@ echo "역할: ${ROLE}"
         "ecr:GetDownloadUrlForLayer",
         "ecr:BatchCheckLayerAvailability"
       ],
-      "Resource": "arn:aws:ecr:ap-northeast-2:${ACCOUNT}:repository/pokeclip/mediamtx"
+      "Resource": "arn:aws:ecr:ap-northeast-2:%s:repository/pokeclip/mediamtx"
     }
   ]
-}
-EOF
-)"
-)
+}' "${ACCOUNT}")"
+aws iam put-role-policy --role-name "${ROLE}" \
+  --policy-name pokeclip-media-dev-ecr-pull --policy-document "${POLICY}" \
+  < /dev/null
+echo '정책 넣음'
+SH
 ```
 
+블록 3(검증) — 정책 이름이 보이고 동작이 위 넷이다(자원 — 계정 번호 — 은 찍지 않는다).
+
 ```bash
-# 3) 검증 — 정책 이름이 보이고 동작이 위 넷이다(자원 — 계정 번호 — 은 찍지 않는다)
 aws iam list-role-policies --role-name "${ROLE}"
 aws iam get-role-policy --role-name "${ROLE}" \
   --policy-name pokeclip-media-dev-ecr-pull \
