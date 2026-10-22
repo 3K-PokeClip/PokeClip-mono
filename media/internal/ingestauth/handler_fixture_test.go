@@ -271,6 +271,7 @@ type fixtureOptions struct {
 	callerIP     netip.Addr         // 영값이면 testCallerIP
 	selfIP       netip.Addr         // 영값이면 testSelfIP
 	apiUser      string             // 비면 testAPIUser
+	ipLimit      IPLimit            // 영값이면 IP 한도 꺼짐
 	// callerBasicOff 가 참이면 호출자 Basic 검사를 끈다(Options.CallerBasicOff). 거짓이면 testCallerUser · testCallerPass 다.
 	callerBasicOff bool
 }
@@ -306,6 +307,7 @@ func newHandlerFixture(t *testing.T, o fixtureOptions) *handlerFixture {
 		Deadline: o.deadline,
 		Now:      clock.now,
 		Log:      log,
+		IPLimit:  o.ipLimit,
 	}
 	if o.callerBasicOff {
 		opt.CallerBasicOff = true

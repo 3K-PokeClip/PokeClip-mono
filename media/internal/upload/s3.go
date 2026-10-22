@@ -12,6 +12,8 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/smithy-go"
+
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/s3errbody"
 )
 
 // segmentContentType 은 세그먼트 객체의 Content-Type 이다.
@@ -73,7 +75,7 @@ func newS3Putter(ctx context.Context, opt S3Options, log *slog.Logger, httpClien
 		// 금지하는 바로 그 동작이고, 되감기 불가 스트림에서는 아예 실패한다.
 		// 무결성은 Content-Length 와 응답 ETag 로 확인한다.
 		o.RequestChecksumCalculation = aws.RequestChecksumCalculationWhenRequired
-	})
+	}, s3errbody.Limit) // 오류 응답 본문은 상한까지만 읽는다 — WithHTTPClient 로 감싸면 CA 묶음 해석이 깨진다
 	log.Info("uploader_started", "bucket", opt.Bucket, "region", opt.Region, "endpoint", opt.Endpoint)
 
 	// 기동 시 한 번 확인한다. 실패해도 기동을 거부하지 않는다 — 자격증명은 나중에
