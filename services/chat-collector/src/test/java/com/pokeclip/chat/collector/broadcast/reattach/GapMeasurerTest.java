@@ -29,6 +29,9 @@ class GapMeasurerTest extends IntegrationTestSupport {
     private static final List<String> STREAMS =
             List.of("live-A-001", "live-B-001", "live-C-001", "live-OTHER");
 
+    /** 색인 검사가 통계를 세우려고 심는 방송. 그 검사가 끝나면 지운다. */
+    private static final String BULK_STREAM = "gap-idx-bulk";
+
     /** 지문(channel_id, sender_channel_id, message_time, content_sha256)이 겹치면 접힌다. */
     private static final AtomicInteger SEQ = new AtomicInteger();
 
@@ -110,17 +113,38 @@ class GapMeasurerTest extends IntegrationTestSupport {
      * {@code EXPLAIN} 한다.</b> 처음엔 손으로 베껴 적었는데, 그러면 <b>사본만 재고 운영 질의는
      * 아무도 안 본다</b>: 운영 질의를 {@code md5(stream_id) = md5(?)}로 바꿔도 이 검사가
      * 초록이었다(결함 주입 N). 베낀 문자열을 재는 것은 아무것도 재지 않는 것과 같다.
+     *
+     * <p>🔴 <b>2만 행을 심고 {@code ANALYZE} 한 뒤에 잰다</b>(ChatChartQueryTest 와 같은 방식).
+     * 전에는 한 줄만 넣고 쟀는데, 표에 통계가 한 번도 안 잡혔으면 색인을 타고 앞 검사가 작은
+     * 표에서 {@code ANALYZE} 한 뒤면 {@code Seq Scan} 으로 뒤집혔다. 실행 순서에 따라 빨간불이었고
+     * (StreamIdColumnTest 머리 주석의 실측과 같다) 앞 검사가 남긴 줄 수에 기대어 초록이었다.
+     * 심은 줄은 반드시 지우고 {@code ANALYZE} 도 다시 돌린다.
      */
     @Test
     void 조회가_색인을_탄다() {
-        insertChat("live-A-001", Instant.parse("2026-08-31T04:00:00Z"));
+        try {
+            jdbc.update("""
+                    INSERT INTO chat_messages
+                      (channel_id, sender_channel_id, content, message_time, received_at,
+                       content_sha256, stream_id)
+                    SELECT 'gap-idx-ch', 'gap-idx-sender', 'x', ?, ?, lpad(g::text, 64, 'f'), ?
+                      FROM generate_series(0, 19999) g
+                    """,
+                    Timestamp.from(Instant.parse("2026-08-31T03:00:00Z")),
+                    Timestamp.from(Instant.parse("2026-08-31T03:00:00Z")), BULK_STREAM);
+            insertChat("live-A-001", Instant.parse("2026-08-31T04:00:00Z"));
+            jdbc.execute("ANALYZE chat_messages");
 
-        List<String> plan = jdbc.queryForList(
-                "EXPLAIN " + GapMeasurer.LAST_RECEIVED, String.class, "live-A-001");
-        String joined = String.join("\n", plan);
+            List<String> plan = jdbc.queryForList(
+                    "EXPLAIN " + GapMeasurer.LAST_RECEIVED, String.class, "live-A-001");
+            String joined = String.join("\n", plan);
 
-        assertThat(joined).contains("idx_chat_messages_stream_received");
-        assertThat(joined).doesNotContain("Seq Scan");
+            assertThat(joined).contains("idx_chat_messages_stream_received");
+            assertThat(joined).doesNotContain("Seq Scan");
+        } finally {
+            jdbc.update("DELETE FROM chat_messages WHERE stream_id = ?", BULK_STREAM);
+            jdbc.execute("ANALYZE chat_messages");
+        }
     }
 
     /**
