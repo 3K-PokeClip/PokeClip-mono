@@ -642,8 +642,12 @@ export function cutFromWindow(
 export type PlaybackAccessResult =
   { kind: 'granted'; expiresAtMs: number | null } | { kind: 'not_needed' } | { kind: 'failed' };
 
-/** 서명 재료가 없는 서버(로컬·dev)면 어느 방송도 더 묻지 않는다 */
-let playbackSigningOff = false;
+/**
+ * 「필요 없음」(503 playback_signing_unavailable)을 받은 방송. 그 방송은 더 묻지 않는다. 방송 단위인 이유: 같은 사유 코드가
+ * 「서명 재료 없음」뿐 아니라 그 방송의 영상 키가 정책에 못 들어갈 때(글자 검사 실패)도 오므로, 한 방송의 답으로 다른 방송을
+ * 묻지 않으면 정상 방송의 쿠키까지 빠진다(PR #320 codex)
+ */
+const playbackNotNeeded = new Set<string>();
 
 export async function requestPlaybackAccess(streamId: string): Promise<PlaybackAccessResult> {
   try {
@@ -668,8 +672,8 @@ export async function requestPlaybackAccess(streamId: string): Promise<PlaybackA
     // 「필요 없음」은 서명 재료가 없는 503뿐이다. 자격 확인이 안 되는 503(authorization_unavailable)도 필요 없음으로 접으면
     // auth가 잠깐 멈춘 사이 연 화면이 다시 묻지 않아 prod 재생이 403으로 굳었다(POK-317)
     if (e instanceof ApiError && e.status === 503 && e.code === 'playback_signing_unavailable') {
-      // 서버 설정이라 이 화면 수명 동안 바뀌지 않는다: 어느 방송도 더 묻지 않는다(LiveScreen이 받은 답도 여기서 남는다)
-      playbackSigningOff = true;
+      // 이 방송은 더 묻지 않는다(LiveScreen이 받은 답도 여기서 남는다)
+      playbackNotNeeded.add(streamId);
       return { kind: 'not_needed' };
     }
     return { kind: 'failed' };
@@ -697,7 +701,7 @@ export function ensurePlaybackAccess(
   mediaKey: string,
 ): Promise<PlaybackAccessResult> | null {
   playbackAccessByMediaKey.set(mediaKey, streamId);
-  if (playbackSigningOff || !playbackConfigured()) return null;
+  if (playbackNotNeeded.has(streamId) || !playbackConfigured()) return null;
   const known = playbackAccessCache.get(streamId);
   if (known !== undefined && known.until > Date.now()) return known.settled ? null : known.result;
   const result = requestPlaybackAccess(streamId);

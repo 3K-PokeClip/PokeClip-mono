@@ -97,6 +97,22 @@ describe('useVodListMockState — 녹화 있음 판정', () => {
     expect(api.order.at(-1)).toBe('list:key-shared');
   });
 
+  it('한 번에 출입증을 받는 영상 키는 12개까지다: 키마다 쿠키 9장이라 넘기면 브라우저가 앞 출입증을 지운다(PR #320 codex)', async () => {
+    api.extra = Array.from({ length: 14 }, (_, i) => ({
+      streamId: `S-many-${i}`,
+      ingestStreamId: `key-${i}`,
+      status: 'ended',
+      relation: 'OWNER',
+      startedAt: new Date(MINE_START - (i + 2) * 24 * HOUR).toISOString(),
+      endedAt: new Date(MINE_START - (i + 2) * 24 * HOUR + HOUR).toISOString(),
+      vodExpiresAt: null,
+    }));
+    const { result } = renderHook(() => useVodListMockState(), { wrapper: withToastProvider });
+    await waitFor(() => expect(result.current.totalCount).toBe(16));
+    await waitFor(() => expect(api.asked).toHaveLength(15));
+    expect(api.order.filter((o) => o.startsWith('access:'))).toHaveLength(12);
+  });
+
   it('행 제목은 치지직 제목이고, 제목이 없는 방송은 번호다(POK-259)', async () => {
     const { result } = renderHook(() => useVodListMockState(), { wrapper: withToastProvider });
     await waitFor(() => expect(result.current.visuals['S-mine']?.title).toBe('새벽 랭크'));

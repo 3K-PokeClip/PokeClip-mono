@@ -55,6 +55,8 @@ const STREAM_ID = 'stream-1';
 const STARTED_AT = Date.parse('2026-09-20T10:00:00Z');
 
 const server = vi.hoisted(() => ({
+  /** 출입증 답(POK-317) */
+  playbackAccess: 'grant' as 'grant' | 'fail',
   cardWindow: { startMs: 60_000, endMs: 72_400 },
   savedTracks: [{ trackId: 0, gain: 1 }] as { trackId: number; gain: number }[],
   /** 저장된 편집본의 판 — 1이면 옛 모양(crop 하나), 2면 편집기가 지금 저장하는 모양 */
@@ -205,6 +207,14 @@ function handle(url: string, init?: RequestInit) {
   }
   const polled = path.match(new RegExp(`^/api/clip/broadcasts/${STREAM_ID}/clips/(\\d+)$`));
   if (polled && method === 'GET' && server.clipPoll) return server.clipPoll(Number(polled[1]));
+  if (path === `/api/clip/broadcasts/${STREAM_ID}/playback-access` && method === 'POST')
+    return server.playbackAccess === 'grant'
+      ? jsonResponse(200, {
+          streamId: STREAM_ID,
+          // 1분짜리라 만료 5분 전 여유에 걸려 다시 쓰지 않는다: 받아 둔 것이 다음 시험으로 새지 않는다
+          expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        })
+      : jsonResponse(500, { error: 'boom' });
   if (path === '/api/auth/me')
     return jsonResponse(200, { id: 9, email: 'me@example.com', name: '나' });
   if (path === '/api/streamers/9/audio-tracks') return jsonResponse(200, { labels: {} });
@@ -226,6 +236,7 @@ beforeEach(() => {
   server.origin = null;
   server.savedSubtitles = null;
   server.relation = 'OWNER';
+  server.playbackAccess = 'grant';
   server.delegations = [];
   server.ingest = undefined;
   server.render = { status: 201, clip: {} };
@@ -310,6 +321,15 @@ describe('StudioScreen — 영상 경로의 키(POK-233)', () => {
           url === `/api/clip/broadcasts/${STREAM_ID}/playback-access` && init?.method === 'POST',
       ),
     ).toHaveLength(1);
+  });
+
+  it('출입증을 못 받으면 녹화 없음으로 열지 않고 다시 열라고 알린다: 쿠키 없는 조회는 403이 「녹화 없음」으로 접힌다(PR #320 codex)', async () => {
+    playbackOn.value = true;
+    server.playbackAccess = 'fail';
+    nav.search = `?stream=${STREAM_ID}&card=5`;
+    renderWithProviders(<StudioScreen />);
+    expect(await screen.findByText(/영상 출입증을 받지 못했어요/)).toBeInTheDocument();
+    expect(spansAsked).toEqual([]);
   });
 });
 

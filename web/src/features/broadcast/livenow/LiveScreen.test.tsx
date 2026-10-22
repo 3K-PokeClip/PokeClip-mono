@@ -971,6 +971,21 @@ describe('LiveScreen — 영상 출입증', () => {
     expect(hlsFake.loads).toBeGreaterThan(0);
   });
 
+  it('출입증을 못 받았으면 라이브를 열지 않고, 다시 받아진 뒤에 연다: 쿠키 없이 열면 hls.js가 한 번 다시 해 보고 포기한다(PR #320 codex)', async () => {
+    stubMediaElement();
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', 'http://live.test');
+    server.playback = 'fail';
+    await renderLive();
+    expect(hlsFake.loads).toBe(0);
+
+    server.playback = 'grant';
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    await settle();
+    expect(hlsFake.loads).toBeGreaterThan(0);
+  });
+
   it('출입증이 필요 없는 곳(로컬·dev)은 첫 화면이 서는 사이에 라이브 영상을 부른다: 기다림이 재생 시작을 늦추지 않는다', async () => {
     stubMediaElement();
     vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', 'http://live.test');

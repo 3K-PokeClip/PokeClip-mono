@@ -284,21 +284,23 @@ describe('영상 출입증 받기와 쿠키 싣기 (POK-317)', () => {
     expect(posts()).toHaveLength(2);
   });
 
-  it('서명 재료가 없는 서버면 다른 방송도 더 묻지 않는다: 로컬·dev는 방송마다 503을 받으러 가지 않는다', async () => {
+  it('「필요 없음」을 받은 방송은 더 묻지 않고, 다른 방송은 묻는다: 같은 사유 코드가 한 방송의 키 글자 검사 실패에도 온다(PR #320 codex)', async () => {
     const { api, posts } = await load(() =>
       jsonResponse(503, { error: 'playback_signing_unavailable' }),
     );
     await api.ensurePlaybackAccess('s1', 'k1');
-    await api.ensurePlaybackAccess('s2', 'k2');
+    await api.ensurePlaybackAccess('s1', 'k1');
     expect(posts()).toHaveLength(1);
+    await api.ensurePlaybackAccess('s2', 'k2');
+    expect(posts()).toHaveLength(2);
   });
 
-  it('라이브 화면이 받은 「필요 없음」도 기억한다: 목록·편집기가 같은 답을 받으러 다시 가지 않는다', async () => {
+  it('라이브 화면이 받은 「필요 없음」도 기억한다: 목록·편집기가 같은 방송의 답을 받으러 다시 가지 않는다', async () => {
     const { api, posts } = await load(() =>
       jsonResponse(503, { error: 'playback_signing_unavailable' }),
     );
     await api.requestPlaybackAccess('s1');
-    expect(api.ensurePlaybackAccess('s2', 'k2')).toBeNull();
+    expect(api.ensurePlaybackAccess('s1', 'k1')).toBeNull();
     expect(posts()).toHaveLength(1);
   });
 

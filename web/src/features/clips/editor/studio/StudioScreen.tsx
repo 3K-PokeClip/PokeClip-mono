@@ -255,7 +255,10 @@ interface Loaded {
  */
 async function loadRecording(broadcast: BroadcastRow): Promise<RecordingTimeline | null> {
   // CDN 뒤 녹화 목록·미리보기는 출입증 쿠키가 있어야 열린다(POK-317). 미리보기 창은 이 키로 갱신한다(ensureMediaAccess)
-  await ensurePlaybackAccess(broadcast.streamId, mediaStreamId(broadcast));
+  const access = await ensurePlaybackAccess(broadcast.streamId, mediaStreamId(broadcast));
+  // 못 받았는데 녹화를 물으면 CDN 403이 「녹화 없음」으로 접혀 미리보기 없이 열리고 다시 묻지 않는다(PR #320 codex)
+  if (access?.kind === 'failed')
+    throw new Error('영상 출입증을 받지 못했어요. 잠시 뒤 다시 열어 주세요');
   return recordingTimeline(
     // 녹화 재생 서버의 경로는 영상 키다(POK-233) — 방송 번호가 회차 번호면 그 이름의 녹화가 없다
     await fetchRecordingSpans(mediaStreamId(broadcast)),
