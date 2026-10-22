@@ -343,6 +343,34 @@ func TestRunCyclesUntilCanceled(t *testing.T) {
 	}
 }
 
+// 종결 r1 R6 — 종료 신호(Run 의 ctx 취소)로 주기 도중 끊긴 오류는 주기 실패가 아니다. COMMIT 이
+// 취소로 끊겨도 cycle_failing 을 켜지 않고 종료 사유 한 줄(janitor_cycle_canceled)만 낸다. 부채는 3-3
+// 표대로 그대로 남는다(변이 — 취소 갈래 제거 → cycle_failing value=1).
+func TestCycleCanceledByShutdownDoesNotRaiseCycleFailing(t *testing.T) {
+	r := newRig(t, nil)
+	r.row("s1", 1, false, true)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	r.ledger.commitHook = func(context.Context, rowKey, bool) error {
+		cancel()
+		return ctx.Err()
+	}
+
+	r.j.runCycle(ctx)
+
+	for _, rec := range r.log.all("janitor_cycle_failing") {
+		if rec.attrs["value"] == "1" {
+			t.Fatalf("종료 취소인데 cycle_failing 이 켜졌다: %v", rec.attrs)
+		}
+	}
+	if rec := r.log.last(t, "janitor_cycle_canceled"); rec.attrs["stage"] != "commit" {
+		t.Errorf("janitor_cycle_canceled = %v, want stage=commit", rec.attrs)
+	}
+	if len(r.j.debt) != 1 || r.j.debt[0].kind != debtDeleted {
+		t.Errorf("부채 = %+v, want deleted 1(부채는 그대로)", r.j.debt)
+	}
+}
+
 // 옵션 거부 — 사례마다 다른 조건은 모두 유효하게 두고 하나만 깨뜨린다(t2 r1 Q5). 유효한 root · ledger
 // 가 공통 전제라서 개별 검사 하나를 지우면 그 사례가 FAIL 한다. nil 의존성은 별도 사례다.
 func TestNewRejectsUnusableOptions(t *testing.T) {

@@ -507,8 +507,10 @@ func TestRowLockServerTimeoutFreesWaiterWhenCommitIsLost(t *testing.T) {
 	jr := <-done
 	freed := lcAwaitProbe(t, probe)
 
-	if err != nil || !ok || took > 8500*time.Millisecond {
-		t.Errorf("대기자 MarkPlaybackUploaded = (%v, %v) · %v, want (true, nil) · ≤ 8.5s", ok, err, took)
+	// 상한은 transaction_timeout(8s) 뒤 PG 응답 지연 여유다(C22 · 종결 r1 R7). 여유를 2s 로 두면 MarkTimeout
+	// (10s)과 같아져 기한 초과와 가르지 못하므로 1.5s 로 둔다 — 기한 초과면 err 로도 잡힌다.
+	if limit := RowLockTxnTimeout + 1500*time.Millisecond; err != nil || !ok || took > limit {
+		t.Errorf("대기자 MarkPlaybackUploaded = (%v, %v) · %v, want (true, nil) · ≤ %v", ok, err, took, limit)
 	}
 	held := freed.at.Sub(lockedAt)
 	switch {
@@ -702,8 +704,9 @@ func TestRowLockSamePathInsertWaitIsBoundedInUpdatePhase(t *testing.T) {
 	if err != nil || errors.Is(err, ErrLockContended) {
 		t.Fatalf("Insert 오류 = %v, want nil — janitor 기인 ErrLockContended 는 0 이어야 한다", err)
 	}
-	if took < time.Second || took > RowLockTxnTimeout+time.Second {
-		t.Fatalf("Insert 대기 = %v, want 1s ≤ 대기 ≤ %v (ⓑ 에서는 기다리되 상한 안)", took, RowLockTxnTimeout+time.Second)
+	// 상한 여유 2s 는 부하 큰 CI 의 PG 응답 지연 흡수다(C22 쌍둥이 — 종결 r1 R7).
+	if limit := RowLockTxnTimeout + 2*time.Second; took < time.Second || took > limit {
+		t.Fatalf("Insert 대기 = %v, want 1s ≤ 대기 ≤ %v (ⓑ 에서는 기다리되 상한 안)", took, limit)
 	}
 	t.Logf("기록: ⓑ 같은 경로 Insert = %v · 대기 %v", out, took)
 }
@@ -742,8 +745,10 @@ func TestRowLockSameRecordRetryMatchesBaselineOutcome(t *testing.T) {
 	if got != want {
 		t.Fatalf("재시도 갈래 = %v, want 기준선 %v", got, want)
 	}
-	if took > RowLockTxnTimeout+time.Second {
-		t.Fatalf("재시도 대기 = %v, want ≤ %v", took, RowLockTxnTimeout+time.Second)
+	// 상한 여유 2s 는 부하 큰 CI 의 PG 응답 지연 흡수다(C22 쌍둥이 — 종결 r1 R7). 판별은 변이(11s)의
+	// ErrLockContended 갈래 단언이 잡는다.
+	if limit := RowLockTxnTimeout + 2*time.Second; took > limit {
+		t.Fatalf("재시도 대기 = %v, want ≤ %v", took, limit)
 	}
 	t.Logf("기록: janitor ⓑ 와 겹친 재시도 대기 = %v", took)
 }

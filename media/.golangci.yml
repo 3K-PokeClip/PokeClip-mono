@@ -46,6 +46,9 @@ linters:
         # janitor 의 삭제 통로는 fsop.RemoveT 하나다(D14d) — 루트 손잡이로 직접 지우는 호출을 막는다.
         - pattern: ^os\.Root\.(Remove|RemoveAll|Rename|Create|OpenFile|Mkdir|MkdirAll|Chmod|Chtimes|Symlink|Link|WriteFile)$
           msg: naked FS 호출 금지(m2 · D14d) — os.Root 메서드도 fsop 경유로 감싸라(janitor 의 삭제는 fsop.RemoveT).
+        # syscall 의 삭제 · 이름 바꾸기는 os 패턴을 비켜 간다(종결 r1 R10 — 보안 검수 L1, 추가 때 0건).
+        - pattern: ^syscall\.(Unlink|Unlinkat|Rmdir|Rename)$
+          msg: naked FS 호출 금지(m2 · D14d) — syscall 삭제 · 이름 바꾸기도 fsop 경유로 감싸라.
         - pattern: ^filepath\.(Walk|WalkDir|Glob)$
           msg: naked FS 순회 금지(m2) — 예외 1(collectTree)만 nolint 로 허용된다.
   exclusions:

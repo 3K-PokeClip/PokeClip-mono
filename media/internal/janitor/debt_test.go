@@ -373,7 +373,7 @@ func TestSecondDebtTripsInvariantAndHaltsDeletion(t *testing.T) {
 	for range 3 {
 		r.cycle(t) // 회수가 둘 다 풀어도 이 실행에서는 새 삭제를 하지 않는다
 	}
-	// 선잠금 횟수로는 세지 않는다 — 회수 해결의 행 실재 확인(rowRemains · Q3)도 선잠금을 쓴다.
+	// 선잠금 횟수로는 세지 않는다 — 회수 해결의 행 실재 확인(probeRow · Q3)도 선잠금을 쓴다.
 	if _, ok := r.ledger.pathOf(rowKey{"s1", 9}); !ok || r.fs.callCount() != 0 {
 		t.Errorf("불변식 위반 뒤 새 삭제: remove = %d · s1/9 장부 남음 = %v, want 0 · 참", r.fs.callCount(), ok)
 	}

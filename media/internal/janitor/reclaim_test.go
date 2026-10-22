@@ -102,22 +102,30 @@ func loseFirstCommitResponse(r *rig, k rowKey) {
 
 // Q3 — 파일 삭제와 COMMIT 은 됐는데 응답만 잃으면, 다음 회수의 ClearLocalPath 는 이미 NULL 이라 false
 // 다. 그래도 행이 실재하고 경로가 비었으면 확인된 삭제 사실을 한 줄 남긴다(outcome 은 삭제 때 본 것).
-// 행이 사라져 해소되면(clip DELETE) 줄을 내지 않는다(변이 — false 해소에서 줄 생략 · 행 부재에서도 냄).
-// 행 실재 확인이 Busy 로 끝나면 모름이라 줄을 내지 않는다(부채는 이미 해소 — 줄 하나를 잃는 쪽).
+// 행이 사라져 해소되면(clip DELETE) 줄을 내지 않는다. 행 실재 확인이 Busy · 오류로 끝나면(확인 불가)
+// 확인된 삭제를 버리지 않고 row_probe=unknown 표지와 함께 줄을 낸다(종결 r1 R2). 줄을 내면 summary 의
+// cleared 도 1 이다(변이 — false 해소에서 줄 생략 · 행 부재에서도 냄 · 확인 불가에서 줄 생략).
 func TestReclaimLogsConfirmedDeletionWhenCommitResponseWasLost(t *testing.T) {
+	probeErr := errors.New("탐침 연결 끊김")
 	cases := []struct {
 		name     string
 		due      bool
 		file     bool
 		dropRow  bool
-		busy     bool // 행 실재 확인(선잠금)이 Busy
+		probe    func(rowKey) (index.RowLockResult, error, bool) // 행 실재 확인(선잠금)을 대신한다
 		wantLine bool
 		outcome  string
+		rowProbe string // 삭제 줄의 row_probe(빈 값 = 속성 없음)
 	}{
-		{"응답 유실 · removed", false, true, false, false, true, "removed"},
-		{"응답 유실 · 나이 지난 gone", true, false, false, false, true, "gone"},
-		{"행 부재(clip DELETE)", false, true, true, false, false, ""},
-		{"행 실재 확인 Busy(모름)", false, true, false, true, false, ""},
+		{"응답 유실 · removed", false, true, false, nil, true, "removed", ""},
+		{"응답 유실 · 나이 지난 gone", true, false, false, nil, true, "gone", ""},
+		{"행 부재(clip DELETE)", false, true, true, nil, false, "", ""},
+		{"행 실재 확인 Busy(확인 불가)", false, true, false, func(rowKey) (index.RowLockResult, error, bool) {
+			return index.RowLockResult{Outcome: index.RowLockBusy}, nil, true
+		}, true, "removed", "unknown"},
+		{"행 실재 확인 오류(확인 불가)", false, true, false, func(rowKey) (index.RowLockResult, error, bool) {
+			return index.RowLockResult{Stage: index.StageLock}, probeErr, true
+		}, true, "removed", "unknown"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -131,11 +139,7 @@ func TestReclaimLogsConfirmedDeletionWhenCommitResponseWasLost(t *testing.T) {
 			if c.dropRow {
 				r.ledger.drop(k)
 			}
-			if c.busy {
-				r.ledger.lockHook = func(rowKey) (index.RowLockResult, error, bool) {
-					return index.RowLockResult{Outcome: index.RowLockBusy}, nil, true
-				}
-			}
+			r.ledger.lockHook = c.probe
 
 			maybeDebtCycles(t, r, 1)
 
@@ -143,11 +147,18 @@ func TestReclaimLogsConfirmedDeletionWhenCommitResponseWasLost(t *testing.T) {
 				t.Fatalf("부채 = %+v, want 해결", r.j.debt)
 			}
 			lines := r.log.all("segment_local_deleted")
-			switch {
-			case !c.wantLine && len(lines) != 0:
-				t.Errorf("행 부재 · 모름으로 해소됐는데 삭제 줄 %d, want 0", len(lines))
-			case c.wantLine && (len(lines) != 1 || lines[0].attrs["outcome"] != c.outcome || lines[0].attrs["axis"] != archiveAxis):
-				t.Errorf("삭제 줄 = %v, want 1줄 outcome=%s axis=%s", lines, c.outcome, archiveAxis)
+			if !c.wantLine {
+				if len(lines) != 0 {
+					t.Errorf("행 부재로 해소됐는데 삭제 줄 %d, want 0", len(lines))
+				}
+				return
+			}
+			if len(lines) != 1 || lines[0].attrs["outcome"] != c.outcome || lines[0].attrs["axis"] != archiveAxis ||
+				lines[0].attrs["row_probe"] != c.rowProbe {
+				t.Errorf("삭제 줄 = %v, want 1줄 outcome=%s axis=%s row_probe=%q", lines, c.outcome, archiveAxis, c.rowProbe)
+			}
+			if got := r.log.last(t, "janitor_cycle_summary").attrs["cleared"]; got != "1" {
+				t.Errorf("summary cleared = %s, want 1(삭제 줄과 같은 수)", got)
 			}
 		})
 	}

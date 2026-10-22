@@ -141,8 +141,10 @@ func TestCycleRefusesStreamDirectorySymlinkToAnotherStream(t *testing.T) {
 }
 
 // C15 M3 — 장부 경로의 마지막 요소가 스트림 아래 빈 디렉터리면 Root.Remove 는 그 디렉터리를 지울 수
-// 있다. Q2 이름 규칙(조각 이름만)이 삭제 통로 앞에서 막는다 — 디렉터리는 남고 bad_name 으로 거부된다
-// (변이 — validatePath 의 이름 규칙 제거 → 빈 디렉터리가 사라진다).
+// 있다. 마지막 요소가 조각 이름이 아니면(여기 s1/sub) Q2 이름 규칙이 삭제 통로 앞에서 막는다 — 디렉터리는
+// 남고 bad_name 으로 거부된다(변이 — validatePath 의 이름 규칙 제거 → 빈 디렉터리가 사라진다). 이름
+// 규칙은 어휘 판정이라 조각 이름을 가진 빈 디렉터리는 막지 못한다 — MediaMTX 가 그런 디렉터리를 만들지
+// 않는다는 전제에 기대는 한계다(종결 r1 R5 · 한계 초안).
 func TestCycleRefusesEmptyDirectoryAsLastElement(t *testing.T) {
 	r, dir := newRealRootRig(t)
 	sub := filepath.Join(dir, "s1", "sub")

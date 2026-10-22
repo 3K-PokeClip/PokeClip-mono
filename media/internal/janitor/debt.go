@@ -134,6 +134,8 @@ func (j *Janitor) debtFailed(d *debtEntry, st *cycleStats, why string) {
 //   - cleared — 이 회수가 장부를 NULL 했다.
 //   - false 이고 행이 실재 — 앞선 COMMIT 이 서버에서는 됐는데 응답만 잃었다(경로가 이미 비었거나 다른
 //     값). 파일 삭제는 확인됐으므로 줄을 낸다(t2 r1 Q3).
+//   - false 이고 행 실재를 확인하지 못함(Busy · 오류) — 파일 삭제는 확인됐으니 기록을 버리지 않고
+//     row_probe=unknown 을 붙여 줄을 낸다(종결 r1 R2). 행이 사라졌을 수도 있어 NULL 증가와 어긋날 수 있다.
 //   - false 이고 행 부재(clip DELETE) — 장부의 NULL 증가가 없으므로 줄을 내지 않는다(S-A 계수 대조).
 //
 // cleared 계수도 줄과 함께 올린다 — 응답을 잃은 주기는 cleared 를 세지 않았다.
@@ -141,9 +143,17 @@ func (j *Janitor) resolveDebt(ctx context.Context, cleared bool, st *cycleStats)
 	d := j.debt[0]
 	j.debt = j.debt[1:]
 	st.recovery = "resolved"
-	if cleared || j.rowRemains(ctx, d.seg) {
+	probe := rowPresent
+	if !cleared {
+		probe = j.probeRow(ctx, d.seg)
+	}
+	switch probe {
+	case rowPresent:
 		st.cleared++
 		j.logDeleted(d.seg, d.outcome)
+	case rowUnknown:
+		st.cleared++
+		j.logDeleted(d.seg, d.outcome, "row_probe", "unknown")
 	}
 	kind := d.kind
 	if d.blockedKind != 0 {
@@ -152,20 +162,31 @@ func (j *Janitor) resolveDebt(ctx context.Context, cleared bool, st *cycleStats)
 	j.gauges.reclaimBlocked.clear("kind", kind.String(), "stream_id", d.seg.StreamID, "seq", d.seg.Seq)
 }
 
-// rowRemains 는 회수 CAS 가 false 로 끝난 행이 장부에 아직 있는가다. 장부에 따로 묻는 문장이 없어
+// rowProbe 는 회수 CAS 가 false 로 끝난 행의 실재 확인 결과다.
+type rowProbe uint8
+
+const (
+	rowUnknown rowProbe = iota // 확인 불가(Busy · 오류 · 경로가 다시 같음)
+	rowPresent                 // 행이 있다 — 경로만 그 값이 아니다
+	rowAbsent                  // 행이 없다(clip DELETE)
+)
+
+// probeRow 는 회수 CAS 가 false 로 끝난 행이 장부에 아직 있는가다. 장부에 따로 묻는 문장이 없어
 // RemoveUnderRowLock 을 아무것도 지우지 않는 콜백으로 부른다 — 그 행이 그 경로를 갖지 않으면 잠금
-// 뒤 콜백 없이 PathChanged(행 실재) · Gone(행 부재)으로 끝난다. 그 밖(Busy · 오류 · 경로가 다시 같음)은
-// 모름이라 거짓이다 — 줄을 내지 않는 쪽이다.
-func (j *Janitor) rowRemains(ctx context.Context, seg index.LocalSegment) bool {
+// 뒤 콜백 없이 PathChanged(행 실재) · Gone(행 부재)으로 끝난다. 그 밖은 확인 불가다.
+func (j *Janitor) probeRow(ctx context.Context, seg index.LocalSegment) rowProbe {
 	cctx, cancel := context.WithTimeout(ctx, j.limits.reclaim)
 	defer cancel()
 	res, err := j.ledger.RemoveUnderRowLock(cctx, seg.StreamID, seg.Seq, seg.LocalPath, func() bool { return false })
-	if err != nil || (res.Outcome != index.RowLockPathChanged && res.Outcome != index.RowLockGone) {
-		j.log.Debug("janitor_reclaim_probe_unknown", "stream_id", seg.StreamID, "seq", seg.Seq, "path", seg.LocalPath,
-			"outcome", int(res.Outcome), "err", err)
-		return false
+	switch {
+	case err == nil && res.Outcome == index.RowLockPathChanged:
+		return rowPresent
+	case err == nil && res.Outcome == index.RowLockGone:
+		return rowAbsent
 	}
-	return res.Outcome == index.RowLockPathChanged
+	j.log.Debug("janitor_reclaim_probe_unknown", "stream_id", seg.StreamID, "seq", seg.Seq, "path", seg.LocalPath,
+		"outcome", int(res.Outcome), "err", err)
+	return rowUnknown
 }
 
 // relOf 는 부채 행의 루트 기준 경로다. 부채는 삭제 단계에서 검증을 통과한 행만 들어온다.

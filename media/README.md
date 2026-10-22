@@ -1829,14 +1829,14 @@ CI(`media-ci`)의 80% 게이트는 열네 패키지다. ⓒ 가 `internal/rewind
 cd media && go test ./...
 ```
 
-`internal/index`·`internal/session`·`internal/indexer`·`cmd/segment-indexer`·`internal/upload`·`internal/rewind/cache`·`internal/rewind/publish`의 통합 테스트와
+`internal/index`·`internal/session`·`internal/indexer`·`cmd/segment-indexer`·`internal/upload`·`internal/rewind/cache`·`internal/rewind/publish`·`internal/janitor`·`cmd/janitor`의 통합 테스트와
 `internal/pgtest`의 자기 테스트는 **실제 PostgreSQL이 필요**하다. `PG_DSN`이 없으면 해당 케이스는 전부 `skip`되고 나머지는 그대로
 돈다 — 즉 `PG_DSN` 없이 돌린 결과만으로는 DB 계층이 검증되지 않는다.
 
 ```bash
 set -a; . ../.env; set +a
 export PG_DSN="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@localhost:5432/$POSTGRES_DB"
-go test ./internal/index/ ./internal/session/ ./internal/indexer/ ./cmd/segment-indexer/ ./internal/upload/ ./internal/rewind/cache/ ./internal/rewind/publish/ ./internal/pgtest/ -v
+go test ./internal/index/ ./internal/session/ ./internal/indexer/ ./cmd/segment-indexer/ ./internal/upload/ ./internal/rewind/cache/ ./internal/rewind/publish/ ./internal/janitor/ ./cmd/janitor/ ./internal/pgtest/ -v
 ```
 
 이 통합 테스트들은 `PG_DSN`이 가리키는 DB에 **쓰지 않는다.** `PG_DSN`은 관리 접속으로만
@@ -1845,8 +1845,12 @@ go test ./internal/index/ ./internal/session/ ./internal/indexer/ ./cmd/segment-
 `go test ./...`는 패키지별 테스트 바이너리를 병렬로 띄우므로 한 DB를 나눠 쓰면 서로의 표를
 비운다. 실제 이름은 `PG_TEST_DB`에 패키지 접미를 붙인 것으로, `internal/index`만 무접미
 (`pokeclip_uploadtest`)이고 `internal/session`은 `_session`, `internal/indexer`는 `_indexer`,
-`cmd/segment-indexer`는 `_cmd`, `internal/upload`는 `_upload`, `internal/rewind/cache`는 `_rewindcache`, `internal/rewind/publish`는 `_rewindpublish`, `internal/pgtest` 자기 테스트는 `_selftest`다. 그래서 개발 DB의 `stream_segments`는 오염되지 않는다(대신 `PG_DSN`
-롤에 `CREATEDB` 권한이 필요하고 — **로컬 compose와 CI(`media-ci`)의 postgres 서비스 컨테이너 둘 다 superuser라 이미 갖고 있다**, `PG_TEST_DB`를 개발 DB 이름과 같게
+`cmd/segment-indexer`는 `_cmd`, `internal/upload`는 `_upload`, `internal/rewind/cache`는 `_rewindcache`, `internal/rewind/publish`는 `_rewindpublish`, `internal/janitor`는 `_janitor`, `internal/pgtest` 자기 테스트는 `_selftest`다.
+`internal/index`는 로컬 정리 스키마 국면 시험용으로 `_lcempty`(빈 DB)·
+`_lcpartial`(판정 표 일부만)·`_lcmigrate`(옛 스키마 이행)도 만든다.
+`cmd/janitor`의 PG 시험은 전용 DB 없이 `PG_DSN`에 붙어 세션 설정·서버 버전을
+읽기만 한다. 그래서 개발 DB의 `stream_segments`는 오염되지 않는다(대신 `PG_DSN`
+롤에 `CREATEDB` 권한이 필요하고(`internal/index`의 janitor 최소 권한 시험은 실행마다 이름이 다른 시험 역할을 만들고 지우므로 `CREATEROLE`도) — **로컬 compose와 CI(`media-ci`)의 postgres 서비스 컨테이너 둘 다 superuser라 이미 갖고 있다**, `PG_TEST_DB`를 개발 DB 이름과 같게
 주면 테스트가 기동 즉시 실패한다. `PG_DSN`에 DB 이름 자체를 안 적었을 때도 같은데, 단
 `PGDATABASE`가 설정된 환경에서는 그 값이 DB 이름으로 채워져 "이름이 비었다" 가드 대신 동일 이름
 가드가 판정한다).
@@ -1862,8 +1866,8 @@ go test ./internal/index/ ./internal/session/ ./internal/indexer/ ./cmd/segment-
 `media-ci`의 postgres는 잡마다 뜨고 함께 사라져 공유가 없다 — 규약을 완화한 것이 아니라 적용
 조건을 드러낸 것이다. `ddl.go`를 바꾼 뒤에는 전용 DB가 옛 스키마를 유지하므로
 (`CREATE TABLE IF NOT EXISTS`) **접미 DB 전부**를 지운 뒤 다시 돌린다 — `pokeclip_uploadtest`
-하나만 지우면 `internal/index`는 새 스키마로 통과하고 `_session`·`_indexer`·`_cmd`·`_upload`·`_rewindcache`·`_rewindpublish`는 옛
-스키마 그대로라 그 여섯 패키지만 "does not exist" 계열로 실패한다.
+하나만 지우면 `internal/index`는 새 스키마로 통과하고 `_session`·`_indexer`·`_cmd`·`_upload`·`_rewindcache`·`_rewindpublish`·`_janitor`는 옛
+스키마 그대로라 그 일곱 패키지만 "does not exist" 계열로 실패한다.
 
 **아래 루프는 소유 표식을 확인하지 않고 이름만 보고 지운다** — 밑이름이 기본 이름이거나 테스트가 새로 만든
 고유 이름일 때만 쓰고, 표식이 없어 실패한 DB는 실패 메시지대로 전용 테스트 DB가 맞는지 직접 확인한 뒤 하나씩 지운다.
@@ -1871,7 +1875,8 @@ go test ./internal/index/ ./internal/session/ ./internal/indexer/ ./cmd/segment-
 ```bash
 # PG_TEST_DB 를 바꿔 돌렸다면 그 이름이 밑이름이다 — 기본 이름만 지우면 실제 DB 는 남는다.
 base="${PG_TEST_DB:-pokeclip_uploadtest}"
-for suffix in "" _session _indexer _cmd _upload _rewindcache _rewindpublish _selftest; do
+for suffix in "" _session _indexer _cmd _upload _rewindcache _rewindpublish _janitor \
+  _lcempty _lcpartial _lcmigrate _selftest; do
   psql "$PG_DSN" -c "DROP DATABASE IF EXISTS ${base}${suffix}"
 done
 ```
@@ -1886,9 +1891,9 @@ CI(`media-ci`)는 `go test`에 `-coverprofile`을 붙여 패키지별 커버리�
 `internal/mtxstate`·`internal/playback`·`internal/rewind/boundary`·
 `internal/rewind`·`internal/rewind/cache`·`internal/rewind/publish`·
 `internal/streamkey`·`internal/keyresolve`·`internal/ingestauth`·
-`internal/mtxctl`
-**열네 패키지 중 하나라도 80% 미만이면 잡을 실패시킨다**(`session`·`mtxstate` 는 POK-195 M3에서,
-`playback` 은 M4 ⓐ 에서, `rewind/boundary`·`rewind`·`rewind/cache` 는 M4 ⓑ 에서, `rewind/publish` 는 M4 ⓒ 에서 추가 — 되감기 판정 로직과
+`internal/mtxctl`·`internal/janitor`
+**열다섯 패키지 중 하나라도 80% 미만이면 잡을 실패시킨다**(`session`·`mtxstate` 는 POK-195 M3에서,
+`playback` 은 M4 ⓐ 에서, `rewind/boundary`·`rewind`·`rewind/cache` 는 M4 ⓑ 에서, `rewind/publish` 는 M4 ⓒ 에서, `janitor` 는 POK-170 에서 추가 — 되감기 판정 로직과
 ③ 바이트를 만드는 층, 되감기 목록의 경계·본문·입력을 정하는 층이 그 안에 있다. 발행된 목록 줄은 고칠 수 없어
 여기서 틀린 것은 그 목록이 사는 동안 남는다). 나머지 패키지는 수치만 로그에 남고 게이트 대상이 아니다.
 
@@ -2340,5 +2345,10 @@ janitor 는 파일을 지운 뒤 장부 갱신에 실패한 행을 「부채」�
 | `JANITOR_MAX_PER_CYCLE` | `2000` | 한 주기에 살펴보는 행 상한. 100000 이하 |
 | `FS_OP_TIMEOUT` | `5s` | 파일 작업 한 번의 상한. 100ms 이상 6초 이하 |
 | `POSTGRES_*` · `SEGMENT_ROOT` · `LOG_LEVEL` | 사이드카와 같음 | 위 사이드카 표 참조 |
+
+로컬 compose 가 janitor 에 넘기는 것은 `JANITOR_ENABLED` 와 `POSTGRES_USER` ·
+`POSTGRES_PASSWORD` · `POSTGRES_DB`(호스트 · `SEGMENT_ROOT` · `TZ` 는 고정값)뿐이다
+— 나머지는 `.env` 에 적어도 전달되지 않아 기본값으로 돈다. 운영은 배포 정의에
+직접 지정한다.
 
 알려진 한계(L1~L33) 전문은 PR 본문 「알려진 한계」에 있다.

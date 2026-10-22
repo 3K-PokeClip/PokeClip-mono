@@ -6,7 +6,8 @@ package index
 // SELECT ON stream_segments · stream_sessions · stream_cutoffs, UPDATE (local_path) ON stream_segments.
 // 로컬 compose 는 소유자 계정으로 붙어 이 경계를 시험하지 못한다. 그래서 여기서 같은 권한만 가진
 // 역할을 만들어 janitor 가 쓰는 장부 메서드 전부가 그 권한 안에서 도는지 실 PG 로 잰다.
-// 역할 이름은 클러스터 전역이라 시험 전용 이름을 쓰고, 끝나면 권한을 거두고 지운다.
+// 역할 이름은 클러스터 전역이라 실행마다 난수 접미를 붙인 시험 전용 이름을 쓰고(겹친 실행이 서로의
+// 역할을 지우지 않게 — 종결 r1 R3), 끝나면 자기 역할만 권한을 거두고 지운다.
 
 import (
 	"context"
@@ -19,41 +20,44 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// lcRoleName 은 media_janitor 와 같은 권한을 받는 시험 역할이다.
-const lcRoleName = "pc_lc_media_janitor"
+// lcRolePrefix 는 media_janitor 와 같은 권한을 받는 시험 역할 이름의 앞부분이다 — 실행마다 난수
+// 접미가 붙는다.
+const lcRolePrefix = "pc_lc_media_janitor_"
 
 // lcRoleGrants 는 설계 6절의 media_janitor 권한 그대로다. 운영 GRANT 와 이 목록이 갈라지면
 // 이 시험이 지키는 경계가 운영과 달라진다 — 바꿀 때 설계 6절 · README 와 함께 고친다.
-var lcRoleGrants = []string{
-	"GRANT SELECT ON stream_segments, stream_sessions, stream_cutoffs TO " + lcRoleName,
-	"GRANT UPDATE (local_path) ON stream_segments TO " + lcRoleName,
+func lcRoleGrants(role string) []string {
+	return []string{
+		"GRANT SELECT ON stream_segments, stream_sessions, stream_cutoffs TO " + role,
+		"GRANT UPDATE (local_path) ON stream_segments TO " + role,
+	}
 }
 
 const pgInsufficientPrivilege = "42501"
 
-// lcRolePool 은 시험 역할을 만들고 그 역할로 붙은 풀을 돌려준다. 역할은 Cleanup 이 지운다.
-func lcRolePool(t *testing.T, admin *pgxpool.Pool) *pgxpool.Pool {
+// lcRolePool 은 이 실행 전용 시험 역할을 만들고 그 역할로 붙은 풀과 역할 이름을 돌려준다. 역할은
+// Cleanup 이 지운다.
+//
+// 비밀번호는 실행마다 새 난수이고 이 시험 DB 의 역할에만 쓴다. CREATE ROLE 문장은 서버 문장 로그
+// (log_statement 등)에 비밀번호째 남을 수 있으니 문장 로그를 켠 공유 클러스터에서는 돌리지 않는다(종결 r1 R11).
+func lcRolePool(t *testing.T, admin *pgxpool.Pool) (*pgxpool.Pool, string) {
 	t.Helper()
 	ctx := context.Background()
-	buf := make([]byte, 16)
-	if _, err := rand.Read(buf); err != nil {
-		t.Fatalf("역할 비밀번호 생성 실패: %v", err)
-	}
-	password := hex.EncodeToString(buf) // 16진 문자만 — 따옴표를 깰 글자가 없다
-	lcDropRole(t, admin)                // 지난 실행이 죽어 남긴 역할
-	if _, err := admin.Exec(ctx, "CREATE ROLE "+lcRoleName+" LOGIN PASSWORD '"+password+"'"); err != nil {
+	role := lcRolePrefix + lcRandHex(t, 4)
+	password := lcRandHex(t, 16) // 16진 문자만 — 따옴표를 깰 글자가 없다
+	if _, err := admin.Exec(ctx, "CREATE ROLE "+role+" LOGIN PASSWORD '"+password+"'"); err != nil {
 		t.Fatalf("역할 생성 실패: %v", err)
 	}
 	// 만든 직후에 등록한다 — 아래 GRANT 가 실패로 끝나도 역할이 클러스터에 남지 않는다(C21).
-	t.Cleanup(func() { lcDropRole(t, admin) })
-	for _, s := range lcRoleGrants {
+	t.Cleanup(func() { lcDropRole(t, admin, role) })
+	for _, s := range lcRoleGrants(role) {
 		if _, err := admin.Exec(ctx, s); err != nil {
 			t.Fatalf("역할 권한 부여 실패(%.40s…): %v", s, err)
 		}
 	}
 
 	cfg := admin.Config()
-	cfg.ConnConfig.User, cfg.ConnConfig.Password = lcRoleName, password
+	cfg.ConnConfig.User, cfg.ConnConfig.Password = role, password
 	if cfg.ConnConfig.RuntimeParams == nil {
 		cfg.ConnConfig.RuntimeParams = map[string]string{}
 	}
@@ -63,22 +67,33 @@ func lcRolePool(t *testing.T, admin *pgxpool.Pool) *pgxpool.Pool {
 		t.Fatalf("역할 풀 생성 실패: %v", err)
 	}
 	t.Cleanup(pool.Close) // lcDropRole 보다 늦게 등록 — 먼저 돌아 연결을 닫은 뒤 역할을 지운다
-	return pool
+	return pool, role
 }
 
-func lcDropRole(t *testing.T, admin *pgxpool.Pool) {
+// lcRandHex 는 n 바이트 난수의 16진 문자열이다.
+func lcRandHex(t *testing.T, n int) string {
+	t.Helper()
+	buf := make([]byte, n)
+	if _, err := rand.Read(buf); err != nil {
+		t.Fatalf("난수 생성 실패: %v", err)
+	}
+	return hex.EncodeToString(buf)
+}
+
+// lcDropRole 은 이 실행이 만든 역할 role 만 권한을 거두고 지운다.
+func lcDropRole(t *testing.T, admin *pgxpool.Pool, role string) {
 	t.Helper()
 	ctx := context.Background()
 	var exists bool
-	if err := admin.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $1)`, lcRoleName).Scan(&exists); err != nil {
+	if err := admin.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $1)`, role).Scan(&exists); err != nil {
 		t.Fatalf("역할 조회 실패: %v", err)
 	}
 	if !exists {
 		return
 	}
 	for _, s := range []string{
-		"REVOKE ALL ON stream_segments, stream_sessions, stream_cutoffs FROM " + lcRoleName,
-		"DROP ROLE " + lcRoleName,
+		"REVOKE ALL ON stream_segments, stream_sessions, stream_cutoffs FROM " + role,
+		"DROP ROLE " + role,
 	} {
 		if _, err := admin.Exec(ctx, s); err != nil {
 			t.Errorf("역할 정리 실패(%s): %v", s, err)
@@ -95,7 +110,8 @@ func lcIsPrivilegeError(err error) bool {
 func TestLocalCleanupRunsWithJanitorLeastPrivilegeRole(t *testing.T) {
 	admin := newTestPool(t)
 	lcPut(t, admin, lcRow{stream: "lc-role", seq: 0}, lcRow{stream: "lc-role", seq: 1})
-	store := NewLocalCleanupStore(lcRolePool(t, admin))
+	pool, _ := lcRolePool(t, admin)
+	store := NewLocalCleanupStore(pool)
 	ctx := context.Background()
 
 	if ready, err := store.SchemaReady(ctx); err != nil || !ready {
@@ -133,10 +149,10 @@ func TestLocalCleanupRunsWithJanitorLeastPrivilegeRole(t *testing.T) {
 func TestLocalCleanupRoleWithoutLocalPathUpdateIsDenied(t *testing.T) {
 	admin := newTestPool(t)
 	lcPut(t, admin, lcRow{stream: "lc-role-deny", seq: 0})
-	pool := lcRolePool(t, admin)
+	pool, role := lcRolePool(t, admin)
 	store := NewLocalCleanupStore(pool)
 	ctx := context.Background()
-	if _, err := admin.Exec(ctx, "REVOKE UPDATE (local_path) ON stream_segments FROM "+lcRoleName); err != nil {
+	if _, err := admin.Exec(ctx, "REVOKE UPDATE (local_path) ON stream_segments FROM "+role); err != nil {
 		t.Fatalf("권한 회수 실패: %v", err)
 	}
 

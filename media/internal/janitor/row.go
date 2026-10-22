@@ -142,11 +142,11 @@ func stageName(s index.RowLockStage) string {
 }
 
 // logDeleted 는 행마다 삭제 한 줄을 INFO 로 낸다(E7 — 완료 조건 6 「건수 · 경로 · 축」). basis_age 는
-// 관측용이다 — 판정은 DB 시계(now())가 했다.
-func (j *Janitor) logDeleted(seg index.LocalSegment, outcome string) {
-	j.log.Info("segment_local_deleted",
-		"stream_id", seg.StreamID, "seq", seg.Seq, "path", seg.LocalPath, "axis", archiveAxis,
-		"outcome", outcome, "grace_basis", seg.GraceBasis, "basis_age", j.now().Sub(seg.GraceBasis))
+// 관측용이다 — 판정은 DB 시계(now())가 했다. extra 는 뒤에 붙는 속성 쌍이다(회수의 row_probe 표지).
+func (j *Janitor) logDeleted(seg index.LocalSegment, outcome string, extra ...any) {
+	attrs := []any{"stream_id", seg.StreamID, "seq", seg.Seq, "path", seg.LocalPath, "axis", archiveAxis,
+		"outcome", outcome, "grace_basis", seg.GraceBasis, "basis_age", j.now().Sub(seg.GraceBasis)}
+	j.log.Info("segment_local_deleted", append(attrs, extra...)...)
 }
 
 // isStall 은 err 가 FS 상한 초과인가다.

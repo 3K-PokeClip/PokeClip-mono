@@ -152,7 +152,7 @@ func (j *Janitor) runCycle(ctx context.Context) {
 		j.dumped = true
 	}
 	st := newCycleStats(j.now())
-	defer j.finishCycle(st)
+	defer j.finishCycle(ctx, st)
 
 	if !j.ensureSchema(ctx, st) || j.fsHeld(st) {
 		return
@@ -281,10 +281,14 @@ func (j *Janitor) page(ctx context.Context, limit int) ([]index.LocalSegment, er
 	return segs, err
 }
 
-// finishCycle 은 게이지를 맞추고 summary 를 낸다(6단계).
-func (j *Janitor) finishCycle(st *cycleStats) {
+// finishCycle 은 게이지를 맞추고 summary 를 낸다(6단계). Run 의 ctx 가 끝나(종료 신호) 주기가
+// 끊겼으면 그 중단은 주기 실패가 아니다 — cycle_failing 을 건드리지 않고 종료 사유 한 줄만 낸다
+// (종결 r1 R6 — 종료 때 ERROR 헛경보를 막는다).
+func (j *Janitor) finishCycle(ctx context.Context, st *cycleStats) {
 	g := j.gauges
 	switch {
+	case st.aborted() && ctx.Err() != nil:
+		j.log.Info("janitor_cycle_canceled", st.failAttrs()...)
 	case st.aborted():
 		g.cycleFailing.set(st.failAttrs()...)
 	case st.dbWork:
