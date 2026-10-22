@@ -1,10 +1,15 @@
 'use client';
 
 import { useCallback, useEffect } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { delegationsAsEditorQueryOptions } from '@/api/editors';
 import { useMe } from '@/features/auth/useSession';
-import { setAsEditorCountReader, useChannelStore } from '@/stores/channel';
+import {
+  isListSeenWhenSelected,
+  setAsEditorListReader,
+  useChannelStore,
+  type ListSnapshot,
+} from '@/stores/channel';
 import { useToast } from '@/ui';
 
 // 「지금 채널」(POK-390 채널 스위처): 고른 번호(store)를 me·as-editor와 맞대어 푼다.
@@ -34,6 +39,14 @@ const NOT_READY: ActiveChannel = {
   gone: false,
 };
 
+/** 지금 as-editor 목록(쿼리 객체 + 갱신 횟수). 아직 쿼리가 없으면 null */
+export function asEditorList(queryClient: QueryClient): ListSnapshot | null {
+  const query = queryClient
+    .getQueryCache()
+    .find({ queryKey: delegationsAsEditorQueryOptions.queryKey, exact: true });
+  return query ? { list: query, count: query.state.dataUpdateCount } : null;
+}
+
 export function useActiveChannel(): ActiveChannel {
   const me = useMe().data;
   const asEditor = useQuery({ ...delegationsAsEditorQueryOptions, enabled: me !== undefined });
@@ -43,13 +56,9 @@ export function useActiveChannel(): ActiveChannel {
   const selectedAgainst = useChannelStore((s) => s.selectedAgainst);
   const queryClient = useQueryClient();
 
-  // 고를 때의 목록 갱신 횟수를 store가 적을 수 있게 읽는 길을 넣는다. hydrate보다 먼저: 효과는 적힌 순서로 돈다.
+  // 고를 때의 목록을 store가 적을 수 있게 읽는 길을 넣는다. hydrate보다 먼저: 효과는 적힌 순서로 돈다.
   useEffect(() => {
-    setAsEditorCountReader(
-      () =>
-        queryClient.getQueryState(delegationsAsEditorQueryOptions.queryKey)?.dataUpdateCount ??
-        null,
-    );
+    setAsEditorListReader(() => asEditorList(queryClient));
   }, [queryClient]);
 
   // 스스로 읽는다: 편집기는 (fullscreen) 그룹이라 ChannelScope 밖에서도 이 훅을 쓴다.
@@ -81,9 +90,7 @@ export function useActiveChannel(): ActiveChannel {
   if (!delegation) {
     // 고른 뒤에 읽은 목록이어야 「없다」가 끊김이다. 그 전 목록이면 새로 읽을 때까지 기다린다(새로 읽기는 ChannelScope가
     // 시킨다). 새로 읽기마저 실패했으면 모른다: 내 채널로 보이되 끊김으로 다루지 않는다.
-    const count =
-      queryClient.getQueryState(delegationsAsEditorQueryOptions.queryKey)?.dataUpdateCount ?? 0;
-    if (selectedAgainst !== null && count <= selectedAgainst) {
+    if (isListSeenWhenSelected(selectedAgainst, asEditorList(queryClient))) {
       return asEditor.isError ? mine : NOT_READY;
     }
     return { ...mine, gone: true };

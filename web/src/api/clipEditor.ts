@@ -1,6 +1,7 @@
 'use client';
 
 import { ApiError, apiFetch } from './client';
+import { notifyChannelGone } from '@/stores/channel';
 
 // clip 서버 창구(POK-251). 전부 로그인 세션의 apiFetch로 간다(Bearer 부착·401 회전).
 //   GET /api/clip/broadcasts?state=…            방송 목록 (startedAt 을 얻는 데 쓴다)
@@ -12,6 +13,20 @@ import { ApiError, apiFetch } from './client';
 async function getJson<T>(path: string): Promise<T> {
   const res = await clipFetch(path);
   return res.json() as Promise<T>;
+}
+
+/**
+ * 고른 채널로 묻는 목록 읽기(POK-390). 404면 그 채널을 더는 볼 수 없다는 뜻일 수 있어 신호를 남기고 그대로 던진다.
+ * 판정을 화면 훅마다 두지 않고 여기 한 자리에 둔다: 홈은 실패를 null로 삼켜 훅까지 404가 안 올라온다.
+ */
+async function channelGetJson<T>(path: string, streamerId: number | null): Promise<T> {
+  try {
+    return await getJson<T>(path);
+  } catch (e) {
+    if (streamerId !== null && e instanceof ClipApiError && e.status === 404)
+      notifyChannelGone(streamerId);
+    throw e;
+  }
 }
 
 export interface JumpCard {
@@ -142,14 +157,17 @@ const BROADCAST_PAGE = 100;
 async function walkBroadcasts(
   state: 'live' | 'past',
   stop: (rows: BroadcastRow[]) => boolean = () => false,
+  streamerId: number | null = null,
 ): Promise<BroadcastRow[]> {
   const all: BroadcastRow[] = [];
   let cursor: string | null = null;
   do {
     const qs = new URLSearchParams({ state, limit: String(BROADCAST_PAGE) });
+    if (streamerId !== null) qs.set('streamerId', String(streamerId));
     if (cursor) qs.set('cursor', cursor);
-    const page: { broadcasts: BroadcastRow[]; nextCursor: string | null } = await getJson(
+    const page: { broadcasts: BroadcastRow[]; nextCursor: string | null } = await channelGetJson(
       `/api/clip/broadcasts?${qs}`,
+      streamerId,
     );
     all.push(...page.broadcasts);
     if (stop(page.broadcasts)) break;
@@ -158,9 +176,15 @@ async function walkBroadcasts(
   return all;
 }
 
-/** 그 상태의 방송 전부 — 사람 규모라 몇 쪽이다 */
-export function fetchAllBroadcasts(state: 'live' | 'past'): Promise<BroadcastRow[]> {
-  return walkBroadcasts(state);
+/**
+ * 그 상태의 방송 전부: 사람 규모라 몇 쪽이다.
+ * @param streamerId 고른 채널(POK-390). null이면 볼 수 있는 채널 전부를 섞는다(옛 호출)
+ */
+export function fetchAllBroadcasts(
+  state: 'live' | 'past',
+  streamerId: number | null = null,
+): Promise<BroadcastRow[]> {
+  return walkBroadcasts(state, undefined, streamerId);
 }
 
 /** 방송 한 줄 — 라이브 목록에서 먼저 찾고 없으면 지난 방송 목록을 끝까지 본다. */
@@ -578,15 +602,20 @@ export function requestFileAccess(streamId: string, clipId: number): Promise<Cli
   );
 }
 
-/** 내가 볼 수 있는 방송들의 편집본 전부 — 한 장씩 이어받아 끝까지 모은다(사람 규모라 몇 장이다). */
-export async function fetchLibraryAll(): Promise<LibraryEntry[]> {
+/**
+ * 내가 볼 수 있는 방송들의 편집본 전부: 한 장씩 이어받아 끝까지 모은다(사람 규모라 몇 장이다).
+ * @param streamerId 고른 채널(POK-390). null이면 섞어서
+ */
+export async function fetchLibraryAll(streamerId: number | null = null): Promise<LibraryEntry[]> {
   const items: LibraryEntry[] = [];
   let cursor: string | null = null;
   do {
     const qs = new URLSearchParams({ limit: '100' });
+    if (streamerId !== null) qs.set('streamerId', String(streamerId));
     if (cursor) qs.set('cursor', cursor);
-    const page: { items: LibraryEntry[]; nextCursor: string | null } = await getJson(
+    const page: { items: LibraryEntry[]; nextCursor: string | null } = await channelGetJson(
       `/api/clip/library?${qs}`,
+      streamerId,
     );
     items.push(...page.items);
     cursor = page.nextCursor;

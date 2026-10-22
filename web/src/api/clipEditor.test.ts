@@ -5,11 +5,13 @@ import {
   fetchAllBroadcasts,
   fetchBroadcast,
   fetchJumpCard,
+  fetchLibraryAll,
   mediaStreamId,
   requestRender,
   retryUpload,
   type UploadInfo,
 } from '@/api/clipEditor';
+import { useChannelStore } from '@/stores/channel';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
 
 // clip 창구 호출은 로그인 세션의 apiFetch를 거친다(POK-251). 실패는 ClipApiError로 옮겨 사유 코드를 지킨다.
@@ -212,5 +214,78 @@ describe('mediaStreamId — 영상 주소의 키(POK-233)', () => {
     expect(mediaStreamId({ streamId: 'old-key' })).toBe('old-key');
     expect(mediaStreamId({ streamId: 'old-key', ingestStreamId: null })).toBe('old-key');
     expect(mediaStreamId({ streamId: 'old-key', ingestStreamId: '' })).toBe('old-key');
+  });
+});
+
+describe('고른 채널로 좁히기 (POK-390)', () => {
+  const goneSignal = () => useChannelStore.getState().goneSignal;
+
+  it('방송 전부 읽기는 쪽마다 streamerId를 싣는다', async () => {
+    const spy = stubFetch((url) =>
+      url.includes('cursor=p2')
+        ? jsonResponse(200, { broadcasts: [row('b')], nextCursor: null })
+        : jsonResponse(200, { broadcasts: [row('a')], nextCursor: 'p2' }),
+    );
+
+    await fetchAllBroadcasts('past', 3);
+
+    const urls = spy.mock.calls.map(([url]) => new URL(String(url), 'http://localhost'));
+    expect(urls).toHaveLength(2);
+    expect(urls.map((u) => u.searchParams.get('streamerId'))).toEqual(['3', '3']);
+  });
+
+  it('번호가 없으면 streamerId를 안 싣는다: 옛 호출(섞어서)과 같다', async () => {
+    const spy = stubFetch(() => jsonResponse(200, { broadcasts: [], nextCursor: null }));
+
+    await fetchAllBroadcasts('past');
+    await fetchAllBroadcasts('live', null);
+
+    for (const [url] of spy.mock.calls) expect(String(url)).not.toContain('streamerId');
+  });
+
+  it('보관함 전부 읽기도 쪽마다 streamerId를 싣는다', async () => {
+    const spy = stubFetch((url) =>
+      url.includes('cursor=p2')
+        ? jsonResponse(200, { items: [], nextCursor: null })
+        : jsonResponse(200, { items: [], nextCursor: 'p2' }),
+    );
+
+    await fetchLibraryAll(3);
+
+    const urls = spy.mock.calls.map(([url]) => new URL(String(url), 'http://localhost'));
+    expect(urls.map((u) => u.searchParams.get('streamerId'))).toEqual(['3', '3']);
+  });
+
+  it('방송 한 줄 찾기는 채널 제한 없이 그대로다: 남의 채널 방송 바로가기를 연다', async () => {
+    const spy = stubFetch(() => jsonResponse(200, { broadcasts: [row('x')], nextCursor: null }));
+
+    await fetchBroadcast('x');
+
+    for (const [url] of spy.mock.calls) expect(String(url)).not.toContain('streamerId');
+  });
+
+  it('고른 채널의 목록이 404면 끊김 신호를 한 번 보내고 오류는 그대로 던진다', async () => {
+    stubFetch(() => jsonResponse(404, { error: 'broadcast_not_found' }));
+    const before = goneSignal();
+
+    await expect(fetchAllBroadcasts('past', 3)).rejects.toBeInstanceOf(ClipApiError);
+    expect(goneSignal()).toBe(before + 1);
+    // 어느 번호로 물었는지 싣는다: 내 채널이면 ChannelScope가 끊김 대신 세션 어긋남으로 본다
+    expect(useChannelStore.getState().goneFor).toBe(3);
+
+    await expect(fetchLibraryAll(3)).rejects.toMatchObject({ status: 404 });
+    expect(goneSignal()).toBe(before + 2);
+  });
+
+  it('번호 없이 404거나 404가 아닌 실패는 신호를 안 보낸다', async () => {
+    const before = goneSignal();
+    stubFetch(() => jsonResponse(404, { error: 'broadcast_not_found' }));
+    await fetchAllBroadcasts('past').catch(() => null);
+    await fetchLibraryAll().catch(() => null);
+    vi.unstubAllGlobals();
+    stubFetch(() => jsonResponse(500, { error: 'boom' }));
+    await fetchAllBroadcasts('past', 3).catch(() => null);
+
+    expect(goneSignal()).toBe(before);
   });
 });
