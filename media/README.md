@@ -1718,7 +1718,8 @@ PR ⓒ 가 시험 함수 368개를 더했다(TestMain 제외 991 → 1,359 — d
 
 #### ⓒ 커버리지 게이트
 
-ⓒ 시점 CI(`media-ci`)의 80% 게이트는 열네 패키지였다(지금은 janitor 를 더해 열다섯 — 아래 PG 시험 절). ⓒ 가 `internal/rewind/publish` 를
+ⓒ 시점 CI(`media-ci`)의 80% 게이트는 열네 패키지였다(지금은 janitor 를 더해
+열다섯 — 아래 PG 시험 절). ⓒ 가 `internal/rewind/publish` 를
 더했고, develop 의 ingest-auth 응답기가 `streamkey` · `keyresolve` · `ingestauth` ·
 `mtxctl` 넷을 더했다(병합으로 합쳐졌다). 아래 값은 커밋 8 의 CI 동일 실행(PG 켬 · `-race`) 프로파일에 CI 판정식을
 다시 돌린 것이다. 표가 열 패키지뿐인 것은 그 프로파일이 병합 전 것이라 develop 이
@@ -1850,7 +1851,10 @@ go test ./internal/index/ ./internal/session/ ./internal/indexer/ ./cmd/segment-
 `_lcpartial`(판정 표 일부만)·`_lcmigrate`(옛 스키마 이행)도 만든다.
 `cmd/janitor`의 PG 시험은 전용 DB 없이 `PG_DSN`에 붙어 세션 설정·서버 버전을
 읽기만 한다. 그래서 개발 DB의 `stream_segments`는 오염되지 않는다(대신 `PG_DSN`
-롤에 `CREATEDB` 권한이 필요하고(`internal/index`의 janitor 최소 권한 시험은 실행마다 이름이 다른 시험 역할을 만들고 지우므로 `CREATEROLE`도) — **로컬 compose와 CI(`media-ci`)의 postgres 서비스 컨테이너 둘 다 superuser라 이미 갖고 있다**, `PG_TEST_DB`를 개발 DB 이름과 같게
+롤에 `CREATEDB` 권한이 필요하고(`internal/index`의 janitor 최소 권한 시험은
+실행마다 이름이 다른 시험 역할을 만들고 지우므로 `CREATEROLE`도) — **로컬
+compose와 CI(`media-ci`)의 postgres 서비스 컨테이너 둘 다 superuser라 이미 갖고
+있다**, `PG_TEST_DB`를 개발 DB 이름과 같게
 주면 테스트가 기동 즉시 실패한다. `PG_DSN`에 DB 이름 자체를 안 적었을 때도 같은데, 단
 `PGDATABASE`가 설정된 환경에서는 그 값이 DB 이름으로 채워져 "이름이 비었다" 가드 대신 동일 이름
 가드가 판정한다).
