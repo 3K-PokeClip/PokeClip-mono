@@ -22,11 +22,13 @@
 # 플러그인 자리에 둔다(media-host 잡 「docker compose 설치」 주석).
 #
 # 판을 올릴 때:
-#   - 옛 판이 적힌 곳을 `git grep -n '<옛 판>'`으로 모두 찾아 함께 바꾼다. 지금은 이 파일(단계
-#     이름 · version · sha256 · 단계 위 출처 주석)과 README 「검증」 절의 도구 목록이고, conftest만
-#     README 「설치와 실행」 · 「한계」와 scripts/guard.sh(머리 주석 · conftest 없음 오류 문구)에도
-#     있다. guard.sh와 README 「한계」의 conftest 문장은 그 판에서 확인한 거동이라 새 판에서 다시
-#     확인한다.
+#   - 옛 판이 적힌 곳을 `git grep -n '<옛 판>'`으로 모두 찾아 함께 바꾼다. terraform · tflint ·
+#     conftest · shellcheck은 이 파일의 그 설치 단계(이름 · version · sha256 · 단계 위 출처 주석)와
+#     README 「검증」 절의 도구 목록에 있고, conftest만 README 「설치와 실행」 · 「한계」와
+#     scripts/guard.sh(머리 주석 · conftest 없음 오류 문구)에도 있다. guard.sh와 README 「한계」의
+#     conftest 문장은 그 판에서 확인한 거동이라 새 판에서 다시 확인한다. compose는 이 파일에서는
+#     워크플로 env(MEDIA_HOST_COMPOSE_VERSION · _SHA256) 한 곳에만 있고(두 잡의 설치 단계가 그 값을
+#     쓴다), 함께 바꿀 저장소 안 다른 자리는 아래 compose 항목에 있다.
 #   - sha256은 받은 파일을 재서 적지 않고 출처의 공식 값을 옮기며, 그 출처를 아래 기준으로 확인한다.
 #       terraform   SHA256SUMS의 linux_amd64 줄. 그 파일의 .sig를 HashiCorp 공개 키(지문
 #                   C874011F0AB405110D02105534365D9472D7468F — HashiCorp가 공표한 지문과 다시
@@ -506,12 +508,12 @@ jobs:
           "${bin}/terraform" version
           echo "${bin}" >>"${GITHUB_PATH}"
 
-      # 판 · sha256 은 워크플로 env(MEDIA_HOST_COMPOSE_VERSION · _SHA256) 한 곳에 있다. sha256 출처:
-      # docker/compose v5.5.0 릴리스의 docker-compose-linux-x86_64.sha256(2026-10-20 — checksums.txt
-      # 의 그 줄 · 자산 digest(API)와 같음). prod 고정판이다(Media 상자 README 「판 고정」). 러너
-      # 이미지의 compose 판은 따로 바뀌므로 쓰지 않는다 — 시스템 플러그인 경로 중 docker
-      # CLI 가 가장 먼저 찾는 /usr/local/lib/docker/cli-plugins 에 두고, 러너 계정과 root(sudo) 양쪽이
-      # 이 판을 쓰는지 확인한다. 판을 올리는 법은 머리 주석.
+      # 판 · sha256 은 워크플로 env(MEDIA_HOST_COMPOSE_VERSION · _SHA256) 한 곳에 있다. sha256 출처는
+      # 그 판 릴리스의 x86_64 자산별 sha256 파일이고, 같은 릴리스 checksums.txt 의 그 줄 · 자산
+      # digest(API)와 같은지 본다. prod 고정판이다(Media 상자 README 「판 고정」). 러너 이미지의
+      # compose 판은 따로 바뀌므로 쓰지 않는다 — 시스템 플러그인 경로 중 docker CLI 가 가장 먼저
+      # 찾는 /usr/local/lib/docker/cli-plugins 에 두고, 러너 계정과 root(sudo) 양쪽이 이 판을 쓰는지
+      # 확인한다. 판을 올리는 법은 머리 주석 「판을 올릴 때」.
       - name: docker compose 설치(판 · sha256 은 워크플로 env)
         run: |
           want="${MEDIA_HOST_COMPOSE_VERSION:?}"

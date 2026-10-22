@@ -207,7 +207,7 @@ SIGKILL 등) systemd 252 는 `ExecStop` 을 건너뛰고 `ExecStopPost` 로 간�
 | `loopback-health.sh` | `LOOPBACK OK` | 송출 → 프록시 경유 재생목록 200 |
 | | `LOOPBACK FAIL <단계>` | `usage` · `config` · `cdn-secret` · `test-key` · `mediamtx` · `scratch` · `pull` · `sender` · `playlist` · `sender-cleanup` |
 | `secret-count.sh` | `SECRET COUNT box\|ssm <n>` | 비밀 값이 든 줄 수 |
-| | `SECRET COUNT FAIL <단계>` | `usage` · `config` · `cdn-secret` · `test-key` · `api-pass` · `journal` · `mediamtx` · `nginx` · `docker-logs` · `ssm-command` · `ssm-list` · `ssm-status` · `ssm-output` · `ssm-truncated` · `grep` |
+| | `SECRET COUNT FAIL <단계>` | `usage` · `config` · `cdn-secret` · `test-key` · `api-pass`(관리 API 비밀번호 파일 없음 · 못 읽음 · 꼴 밖 — 정지 뒤에는 정상) · `journal` · `mediamtx` · `nginx` · `docker-logs` · `ssm-command` · `ssm-list` · `ssm-status` · `ssm-output` · `ssm-truncated` · `grep` |
 | `ops/force-diff.sh` | `FORCE REMAINING <n>` + 남은 ID | n 이 0 이면 복구 완료 |
 | | `FORCE FAIL input A\|B\|ended` · `FORCE FAIL usage` | 입력 거부 · 인자 오류 |
 | | `FORCE FAIL count A\|B` · `FORCE FAIL empty A` | 잘린 목록(ID 줄 수가 개수 인자와 다름 · 마지막 줄에 끝 줄바꿈 없음) · A 에 ID 가 없음 |
@@ -573,7 +573,16 @@ prod 상자에 깔 도구의 판이다. M9 user_data 가 같은 값으로 설치
 *   **옛 기동의 API 비밀번호:** 비밀번호는 기동마다 새로 만들어지므로
     `secret-count.sh box` 는 이전 기동 로그에 남은 옛 비밀번호를 대조하지
     못한다. `ssm` 모드는 tmpfs 의 비밀번호 파일을 읽을 수 없어 비밀번호를
-    대조하지 않는다.
+    대조하지 않는다. 판정 줄(`SECRET COUNT box 0`)에는 이 한계가 적히지
+    않는다 — 0 은 「CDN 비밀 · 이번 기동의 비밀번호(`--passphrase` 면 시험 키
+    passphrase 도) 0 건」 이다.
+*   **비밀번호 파일의 크기 · 내용 사이:** `secret-count.sh` 는 크기를 잰 뒤
+    내용을 다시 연다. 그 사이에 파일이 바뀔 수 있지만 그 자리는 root 만 쓰는
+    tmpfs 이고 바꾸는 길은 시작 스크립트의 rename(재기동)뿐이다. 바뀌어도 새
+    내용을 그대로 꼴 검사하므로 통과로 새지 않는다(실패 또는 새 비밀번호 대조).
+*   **paths 응답 크기 상한의 시점:** 8 MiB 상한은 응답을 다 받은 뒤 잰다 — 그
+    전까지는 파일에 쓴다. 응답원은 같은 망 칸의 MediaMTX 이고 조회에는 상한
+    시간이 있어 받는 양이 끝없이 늘지 않는다.
 *   **정지 뒤의 로그:** 정상 정지(compose down) 뒤에는 컨테이너와 그 로그가
     지워지고 비밀번호 파일도 정지 스크립트가 지운다. `secret-count.sh box` 는
     그때 셀 수 없어 실패한다(`FAIL api-pass`) — 정지 뒤에 남는 유닛 · 태그
