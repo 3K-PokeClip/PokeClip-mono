@@ -7,6 +7,7 @@ import {
   type UploadSnapshot,
 } from '@/api/clipEditor';
 import {
+  instantLabel,
   PRIVACY_CHANGE_NOTE,
   PRIVACY_LABEL,
   PRIVACY_VIEWERS,
@@ -556,6 +557,14 @@ export function privacyNoteText(clip: LibraryClip): string | null {
   const upload = entry.latestClip?.upload;
   const privacy =
     upload != null ? upload.privacyStatus : (entry.uploadRequest?.privacyStatus ?? undefined);
+  // 예약 공개(POK-381): 비공개로 올리고 그 시각에 유튜브가 공개로 바꾼다. 업로드 줄이 생긴 뒤에만 시각을 안다
+  const publishAt = upload?.publishAt ?? null;
+  if (privacy === 'private' && publishAt !== null && entry.status !== 'failed') {
+    const when = instantLabel(new Date(publishAt));
+    return entry.status === 'uploaded'
+      ? `「예약」 ${when}에 공개되도록 올렸어요. 그 전까지는 비공개예요. ${PRIVACY_CHANGE_NOTE}`
+      : `「예약」 올라가면 ${when}에 공개로 바뀌어요. ${PUBLIC_NOTIFY_NOTE}`;
+  }
   if (privacy === undefined || privacy === 'private') return null;
   const label = `「${PRIVACY_LABEL[privacy]}」`;
   const viewers = PRIVACY_VIEWERS[privacy];

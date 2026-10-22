@@ -355,6 +355,9 @@ export interface UploadSnapshot {
   /** 「확인 필요」를 사람이 풀었으면 그 사람과 시각(POK-333). 일꾼이 끝냈거나 옛 서버면 null · 빠져 온다 */
   resolvedBy?: string | null;
   resolvedAt?: string | null;
+  /** 고른 유튜브 분류와 예약 공개 시각(POK-381). 예약이 아니면 publishAt은 null, 옛 서버면 빠져 온다 */
+  categoryId?: string;
+  publishAt?: string | null;
 }
 
 /** 보관함 상태 일곱(clip LibraryStatus). 뒤의 셋은 유튜브 업로드(POK-220) */
@@ -469,7 +472,11 @@ export interface UploadInfo {
   title: string;
   description: string;
   tags: string[];
+  /** 유튜브 분류 번호(POK-381). 빠지면 20(게임) */
+  categoryId: string;
   privacyStatus: PrivacyStatus;
+  /** 예약 공개 시각(ISO-8601, POK-381). 있으면 privacyStatus는 private다. 예약이 아니면 칸을 안 싣는다 */
+  publishAt?: string;
   madeForKids: boolean;
   thumbnail: { source: 'none' } | { source: 'scene'; offsetMs: number } | { source: 'file' };
 }

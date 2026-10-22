@@ -33,8 +33,141 @@ export function privacyNote(privacy: PrivacyStatus): string {
   return `${PRIVACY_VIEWERS[privacy]} 볼 수 있어요.${notify} ${PRIVACY_CHANGE_NOTE}`;
 }
 
-export const THUMBNAIL_PHONE_NOTE =
-  '직접 고른 썸네일은 유튜브 채널 전화 인증이 끝나야 붙어요. 안 붙으면 영상만 올라가요.';
+// ---------- 카테고리 ----------
+
+/**
+ * 사람이 고를 수 있는 유튜브 분류(videoCategories assignable, POK-381). clip이 같은 목록 밖이면 400(categoryId)을 준다
+ * (UploadInfoParser.CATEGORIES). 처음 값은 게임이다: 우리 영상은 게임 방송에서 나온다.
+ */
+export const CATEGORIES: readonly { value: string; label: string }[] = [
+  { value: '20', label: '게임' },
+  { value: '24', label: '엔터테인먼트' },
+  { value: '22', label: '인물/블로그' },
+  { value: '23', label: '코미디' },
+  { value: '17', label: '스포츠' },
+  { value: '10', label: '음악' },
+  { value: '1', label: '영화/애니메이션' },
+  { value: '27', label: '교육' },
+  { value: '28', label: '과학기술' },
+  { value: '26', label: '노하우/스타일' },
+  { value: '19', label: '여행/이벤트' },
+  { value: '15', label: '애완동물/동물' },
+  { value: '2', label: '자동차/교통' },
+  { value: '25', label: '뉴스/정치' },
+  { value: '29', label: '비영리/사회운동' },
+];
+
+export const DEFAULT_CATEGORY = '20';
+
+// ---------- 예약 공개 ----------
+
+/**
+ * 예약은 지금부터 이만큼 뒤부터 고른다. 만들고 올리는 데 시간이 걸리고, 그 전에 예약 시각이 지나면 유튜브가 올리자마자
+ * 공개한다(videos status.publishAt 문서). clip은 「지금보다 뒤」만 본다.
+ */
+export const SCHEDULE_MIN_LEAD_MS = 60 * 60 * 1000;
+
+const WEEKDAY = ['일', '월', '화', '수', '목', '금', '토'];
+
+/** 로컬 날짜(2026-10-23)와 시각(18:00) → 그 순간. 둘 중 하나라도 비었거나 틀리면 null */
+export function scheduleInstant(date: string, time: string): Date | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !/^\d{2}:\d{2}$/.test(time)) return null;
+  const at = new Date(`${date}T${time}`);
+  return Number.isNaN(at.getTime()) ? null : at;
+}
+
+/** 10월 23일 (목) 18:00. 날짜·시각이 틀리면 빈 글자 */
+export function scheduleLabel(date: string, time: string): string {
+  const at = scheduleInstant(date, time);
+  return at === null ? '' : instantLabel(at);
+}
+
+/** 그 순간을 이 기기 시각으로: 10월 23일 (목) 18:00 */
+export function instantLabel(at: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${at.getMonth() + 1}월 ${at.getDate()}일 (${WEEKDAY[at.getDay()]}) ${pad(at.getHours())}:${pad(at.getMinutes())}`;
+}
+
+export function scheduleProblem(date: string, time: string, now: number): string | null {
+  const at = scheduleInstant(date, time);
+  if (at === null) return '날짜와 시각을 골라 주세요';
+  if (at.getTime() < now + SCHEDULE_MIN_LEAD_MS) return '지금부터 1시간 뒤부터 고를 수 있어요';
+  return null;
+}
+
+/** 로컬 날짜 표기(2026-10-23) */
+export function localDate(at: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}`;
+}
+
+/** 예약 칸의 처음 값: 내일 18:00 */
+export function defaultSchedule(now: number): { date: string; time: string } {
+  return { date: localDate(new Date(now + 24 * 60 * 60 * 1000)), time: '18:00' };
+}
+
+/** 빠른 고르기 셋. 지금부터 1시간이 안 남은 것은 뺀다(저녁 늦게 열면 「오늘 21:00」이 없다) */
+export function quickSchedules(now: number): { label: string; date: string; time: string }[] {
+  const today = localDate(new Date(now));
+  const tomorrow = localDate(new Date(now + 24 * 60 * 60 * 1000));
+  return [
+    { label: '오늘 21:00', date: today, time: '21:00' },
+    { label: '내일 18:00', date: tomorrow, time: '18:00' },
+    { label: '내일 21:00', date: tomorrow, time: '21:00' },
+  ].filter((q) => scheduleProblem(q.date, q.time, now) === null);
+}
+
+// ---------- 추천 장면 ----------
+
+export interface ScenePick {
+  id: 'highlight' | 'start' | 'playhead' | 'middle' | 'end';
+  label: string;
+  /** 완성 영상 첫 장면 기준 ms */
+  offsetMs: number;
+}
+
+/** 장면 고르기의 눈금. 띠를 끌거나 ← → 로 옮기는 단위다 */
+export const SCENE_STEP_MS = 250;
+
+/**
+ * 추천 장면: 하이라이트 · 시작 · 재생 위치 · 중간 · 마지막(POK-381 사용자 결정). 하이라이트는 카드에서 연 편집기만 안다(카드
+ * 시각), 재생 위치는 녹화가 있어야 안다. 모르거나 영상 밖이면 뺀다. 앞의 것과 한 눈금 안으로 겹치면 뒤의 것을 뺀다(같은 그림
+ * 둘이 나란히 놓이지 않게).
+ */
+export function scenePicks(
+  cutLengthMs: number,
+  highlightOffsetMs: number | null,
+  playheadOffsetMs: number | null,
+): ScenePick[] {
+  const last = Math.max(0, cutLengthMs - 1);
+  const inside = (ms: number | null) => ms !== null && ms >= 0 && ms < cutLengthMs;
+  const all: (ScenePick | null)[] = [
+    inside(highlightOffsetMs)
+      ? { id: 'highlight', label: '하이라이트', offsetMs: highlightOffsetMs! }
+      : null,
+    { id: 'start', label: '시작', offsetMs: 0 },
+    inside(playheadOffsetMs)
+      ? { id: 'playhead', label: '재생 위치', offsetMs: playheadOffsetMs! }
+      : null,
+    { id: 'middle', label: '중간', offsetMs: Math.floor(cutLengthMs / 2) },
+    { id: 'end', label: '마지막', offsetMs: last },
+  ];
+  const picks: ScenePick[] = [];
+  for (const pick of all) {
+    if (pick === null) continue;
+    if (picks.some((p) => Math.abs(p.offsetMs - pick.offsetMs) < SCENE_STEP_MS)) continue;
+    picks.push(pick);
+  }
+  return picks;
+}
+
+/** 장면 시각 표기: 0:03.2 */
+export function sceneLabel(ms: number): string {
+  const tenths = Math.floor(ms / 100);
+  const minutes = Math.floor(tenths / 600);
+  const seconds = (tenths % 600) / 10;
+  return `${minutes}:${seconds.toFixed(1).padStart(4, '0')}`;
+}
 
 // ---------- 장면 시각 ----------
 
@@ -53,7 +186,8 @@ export function sceneOffsetFromPlayhead(
 }
 
 /**
- * 창을 열 때 장면의 처음 값. 재생 위치가 완성 영상 안이면 그 자리, 아니면(구간 앞·뒤, 3분으로 잘린 뒤, 녹화 없음) 가운데.
+ * 창을 열 때 장면의 처음 값(하이라이트를 모를 때, POK-381부터는 하이라이트가 먼저다). 재생 위치가 완성 영상 안이면 그 자리,
+ * 아니면(구간 앞·뒤, 3분으로 잘린 뒤, 녹화 없음) 가운데.
  * 「안」은 구간이 아니라 컷으로 잰다: 5초로 늘어난 컷은 구간 끝 뒤도 영상에 있고, 3분으로 잘린 컷은 그 뒤가 없다.
  */
 export function defaultSceneOffsetMs(
@@ -119,6 +253,9 @@ export function descriptionProblem(text: string): string | null {
 }
 
 // ---------- 썸네일 이미지 ----------
+
+/** 이미지 칸 안내. 우리 영상은 세로(쇼츠)라 세로 크기를 권한다 */
+export const THUMBNAIL_FILE_HINT = 'JPG·PNG · 10MB까지 · 세로 1080×1920 권장';
 
 /** clip이 받는 크기 상한(spring multipart max-file-size=10MB) */
 export const THUMBNAIL_MAX_BYTES = 10 * 1024 * 1024;

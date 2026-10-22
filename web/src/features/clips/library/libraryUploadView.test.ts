@@ -18,6 +18,7 @@ import {
   uploadTitleProblem,
 } from './libraryView';
 import { toLibraryClip } from './useLibraryMockState';
+import { instantLabel } from '@/features/clips/editor/uploadInfo';
 
 // 유튜브 업로드를 보관함에 잇는 규칙(POK-111). 서버 규약은 clip 업로드 문(POK-220)이다.
 
@@ -383,6 +384,23 @@ describe('privacyNoteText: 편집본 상태마다 그 범위로 올라가게 하
     expect(privacyNoteText(withUploadAt('uploaded', { privacyStatus: 'unlisted' }))).toBe(
       `「일부 공개」(주소를 아는 사람만 볼 수 있는 범위)로 올렸어요. ${CHANGE}`,
     );
+  });
+
+  it('예약 공개(비공개 + 시각)면 그 시각을 말한다(POK-381)', () => {
+    const at = '2026-10-23T09:00:00Z';
+    const when = instantLabel(new Date(at));
+    expect(
+      privacyNoteText(withUploadAt('uploaded', { privacyStatus: 'private', publishAt: at })),
+    ).toBe(`「예약」 ${when}에 공개되도록 올렸어요. 그 전까지는 비공개예요. ${CHANGE}`);
+    expect(
+      privacyNoteText(
+        withUploadAt('uploading', { status: 'queued', privacyStatus: 'private', publishAt: at }),
+      ),
+    ).toBe(`「예약」 올라가면 ${when}에 공개로 바뀌어요. ${NOTIFY}`);
+    // 예약이 아닌 비공개는 지금처럼 말하지 않는다
+    expect(
+      privacyNoteText(withUploadAt('uploaded', { privacyStatus: 'private', publishAt: null })),
+    ).toBeNull();
   });
 
   it('확인 필요면 고른 범위만 말한다: 올라갔는지 모른다', () => {

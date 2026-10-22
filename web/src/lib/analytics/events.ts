@@ -23,6 +23,10 @@ export interface AnalyticsEvents {
     privacy_status: PrivacyStatus;
     thumbnail_source: ThumbnailSource;
     made_for_kids: boolean;
+    /** 유튜브 분류 번호(POK-381) */
+    category_id: string;
+    /** 예약 공개로 주문했나(POK-381). 예약이면 privacy_status는 private다 */
+    scheduled: boolean;
   };
   /** 편집자 초대(기한 연장 재초대 포함) */
   editor_invited: Record<string, never>;

@@ -54,7 +54,9 @@ describe('영상 만들기 + 유튜브 올리기 주문 (POK-291)', () => {
     title: '보스 막타',
     description: '설명',
     tags: ['롤', '보스 막타'],
-    privacyStatus: 'unlisted',
+    categoryId: '24',
+    privacyStatus: 'private',
+    publishAt: '2026-10-23T09:00:00.000Z',
     madeForKids: false,
     thumbnail: { source: 'scene', offsetMs: 12_000 },
   };
