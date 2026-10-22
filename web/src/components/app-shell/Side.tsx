@@ -20,7 +20,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { Avatar, IconButton } from '@/ui';
-import { useMe } from '@/features/auth/useSession';
+import { ChannelSwitcher, RoleChip, useChannelIdentity } from '@/features/channel/ChannelSwitcher';
 import { useSidebarStore } from '@/stores/sidebar';
 import { isDockHrefActive } from './dockTransition';
 import styles from './Side.module.css';
@@ -118,9 +118,9 @@ const MENUS: Record<SideMenu, Group[]> = {
 
 export function Side({ menu, badges }: { menu: SideMenu; badges?: SideBadges }) {
   const pathname = usePathname();
-  // 로그인한 사람을 그대로 보인다. 하드코딩이던 시절엔 계정 화면에서 사진·이름을 바꿔도
-  // 바로 옆 사이드바만 남처럼 남아, 「헤더·사이드바에 바로 반영」이라는 토스트가 거짓이 됐다.
-  const { data: me } = useMe();
+  // 지금 채널을 그대로 보인다(POK-390). 내 채널이면 로그인한 사람의 사진·이름이다: 하드코딩이던 시절엔 계정 화면에서
+  // 사진·이름을 바꿔도 사이드바만 남처럼 남아, 「헤더·사이드바에 바로 반영」이라는 토스트가 거짓이 됐다.
+  const channel = useChannelIdentity();
   // 그룹을 옮겨도 접힘이 따라간다 — 지역 상태로 두면 레이아웃이 갈릴 때마다 초기화된다
   const collapsed = useSidebarStore((s) => s.collapsed);
   const toggleCollapsed = useSidebarStore((s) => s.toggle);
@@ -190,19 +190,31 @@ export function Side({ menu, badges }: { menu: SideMenu; badges?: SideBadges }) 
         </div>
       ))}
       <div className={styles.userBlock}>
-        {/* me 로딩 중엔 이름 없는 빈 아바타 — 이니셜이 나중에 채워져도 어긋날 것이 없다
-            (GlobalHeader와 같은 처리) */}
-        <Avatar
-          size="sm"
-          src={me?.profileImageUrl ?? undefined}
-          name={me?.name}
-          className={styles.userAvatar}
-        />
-        <div className={styles.userText}>
-          <div className={styles.userName}>{me?.name ?? ''}</div>
-          {/* 등급·역할은 아직 목업 — 구독 API가 없다 (별도 티켓) */}
-          <div className={styles.userRole}>스트리머 · Pro</div>
-        </div>
+        {/* 프로필이 곧 채널 스위처다(시안 1u). 트리거는 아바타+이름까지만: 알림 버튼까지 넣으면 버튼 안 버튼이 된다.
+            펼친 사이드바에서는 위로, 접힌 레일에서는 오른쪽으로 연다(시안 ①②) */}
+        <ChannelSwitcher side={collapsed ? 'right' : 'top'} align={collapsed ? 'end' : 'start'}>
+          <button
+            type="button"
+            className={styles.userTrigger}
+            aria-label={`계정 전환 · ${channel.name ?? ''} 채널${channel.role ? ` · ${channel.role}` : ''}`}
+          >
+            {/* me 로딩 중엔 이름 없는 빈 아바타: 이니셜이 나중에 채워져도 어긋날 것이 없다
+                (GlobalHeader와 같은 처리) */}
+            <Avatar
+              size="sm"
+              src={channel.photo ?? undefined}
+              name={channel.name ?? undefined}
+              className={styles.userAvatar}
+            />
+            <span className={styles.userText}>
+              <span className={styles.userName}>{channel.name ? `${channel.name} 채널` : ''}</span>
+              {/* 요금제(Pro)는 뺐다: 구독 API가 없다. 역할 칩만 */}
+              <span className={styles.userRole}>
+                {channel.role ? <RoleChip role={channel.role} /> : null}
+              </span>
+            </span>
+          </button>
+        </ChannelSwitcher>
         <div className={styles.bellWrap}>
           <IconButton variant="ghost" size="sm" aria-label="알림">
             <Bell aria-hidden />
