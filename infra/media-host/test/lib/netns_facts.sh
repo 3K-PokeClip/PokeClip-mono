@@ -52,7 +52,7 @@ load_netns_facts() {
   fi
   netns_loaded=1
   if [[ ! -f "${MEDIA_HOST_DIR}/${COMPOSE_TEMPLATE_REL}" ]]; then
-    netns_reason="${COMPOSE_TEMPLATE_REL} 없음(c3 몫)"
+    netns_reason="${COMPOSE_TEMPLATE_REL} 없음(prod 망 칸 구조 — 사례 11 · 12 의 대조 원본)"
     return 1
   fi
   if ! render::template "${MEDIA_HOST_DIR}/${COMPOSE_TEMPLATE_REL}" \

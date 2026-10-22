@@ -89,12 +89,14 @@ start_media::preflight() {
   for rel in "${START_MEDIA_SCRIPT_REL}" "${STOP_MEDIA_SCRIPT_REL}" \
     "${START_MEDIA_FAKE_AWS_REL}" "${START_MEDIA_FAKE_HELPER_REL}"; do
     if [[ ! -x "${start_media_host_dir}/${rel}" ]]; then
-      harness::add_reason "${rel} 없음(c4 몫)"
+      harness::add_reason \
+        "${rel} 없음(사례 13 · 14 · 16 · 17 이 띄우고 내리는 데 쓴다)"
       ok=1
     fi
   done
   if [[ ! -f "${start_media_host_dir}/${START_MEDIA_MTX_TEMPLATE_REL}" ]]; then
-    harness::add_reason "${START_MEDIA_MTX_TEMPLATE_REL} 없음(c4 몫)"
+    harness::add_reason \
+      "${START_MEDIA_MTX_TEMPLATE_REL} 없음(시작 스크립트가 렌더할 시험 템플릿)"
     ok=1
   fi
   if (( ! start_media_ready )); then

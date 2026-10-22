@@ -216,7 +216,7 @@ SIGKILL 등) systemd 252 는 `ExecStop` 을 건너뛰고 `ExecStopPost` 로 간�
 
 모두 상자에서 SSM 으로 돌린다(실행 직전 kty 승인). 스크립트는
 `/etc/pokeclip-media/media.env` 를 스스로 읽지 않으므로, 그 값이 필요한 것은
-먼저 셸에 읽어 들인다. 아래는 그 꼴이고, 정본 명령문은 M9 c3 런북이 정한다.
+먼저 셸에 읽어 들인다. 아래는 그 꼴이고, 정본 명령문은 M9 의 런북이 정한다.
 
 ```shell
 set -a; . /etc/pokeclip-media/media.env; set +a
@@ -434,7 +434,7 @@ exit 1
 
 ## 되돌리기
 
-상자 설정은 user_data 가 쓴 파일이라, 설정을 바꾸는 길은 M9 c3 런북의 「설정
+상자 설정은 user_data 가 쓴 파일이라, 설정을 바꾸는 길은 M9 런북의 「설정
 반영 교체」(`config_version` 을 올린 새 상자 B 로 교체)다. 되돌릴 때도 같은
 길이다.
 
@@ -460,7 +460,7 @@ compose 는 이미지를 모두 `<ECR 저장소 URL>@<다이제스트>` 로 가�
 | `sidecar_image` | `pokeclip-prod/media-sidecar` | 1번이 `media/Dockerfile` 로 빌드(USER 10001). I1-1(IAM 인증) 반영본 |
 | `ingest_auth_image` | `pokeclip-prod/media-ingest-auth` | 1번이 빌드(`media/Dockerfile.ingest-auth`). 비면 서비스를 렌더하지 않음 |
 | `janitor_image` | (저장소 없음) | 자리 — 비면 서비스를 렌더하지 않음 |
-| (`media.env` `LOOPBACK_SENDER_IMAGE`) | M7 c3 이 정함(후속) | 루프백 송출기 — `linuxserver/ffmpeg` 미러. 핀 = `images.json` 의 `loopback_sender` |
+| (`media.env` `LOOPBACK_SENDER_IMAGE`) | M7 이 정함(후속) | 루프백 송출기 — `linuxserver/ffmpeg` 미러. 핀 = `images.json` 의 `loopback_sender` |
 
 *   **포크 원본 MediaMTX 이미지를 그대로 미러링하지 않는다.** 훅 바이너리가 없어
     녹화 이벤트가 기록되지 않는다.
@@ -576,20 +576,20 @@ prod 상자에 깔 도구의 판이다. M9 user_data 가 같은 값으로 설치
 
 | 받는 쪽 | 할 일 |
 |---|---|
-| M9 c1 · c2 | 템플릿 변수 키 집합에 `detached_log_driver` 를 넣고, 모듈이 문자 그대로 `"journald"` 를 넘기는지 단언한다. `daemon.json` 로그 옵션에 `env` · `labels` 계열 0 |
-| M9 c1 | 이미지 변수 꼴 `^[^@]+@sha256:[0-9a-f]{64}$`. 다이제스트가 비면 `…@` 로 조립하지 않고 빈 문자열을 넘긴다(응답기 · janitor) |
-| M9 c1 | Media SG 인그레스 단언(위 「SG 가 유일한 경계」). 인그레스 포트에 8888 · 9996 · 9997 0 |
-| M9 c1 · c2 | prod 프록시 포트 넷(nginx 템플릿 변수)을 모듈이 넘기고 c1 에서 단언한다. user_data 렌더본은 렌더 파일 · nginx 설정 bind 의 긴 문법(`create_host_path: false`)을 그대로 쓴다 — 원본이 없으면 그 컨테이너만 기동에 실패한다. 이 PR 의 유닛 · 스크립트 · compose 템플릿을 함께 설치한다 |
-| M9 c1 · c2 | 설치 단언: `bin/lib/` 두 파일이 스크립트와 같은 상대 위치에 있고 내용이 저장소와 같다. `bin/` · `bin/lib/` 소유 `root:root`, 스크립트 0755 · lib 0644. `media.env`(유닛 `EnvironmentFile`)의 소유 · 모드(root 만 쓰기). 압축 user_data 16 KiB 게이트를 다시 잰다 |
+| M9 | 템플릿 변수 키 집합에 `detached_log_driver` 를 넣고, 모듈이 문자 그대로 `"journald"` 를 넘기는지 단언한다. `daemon.json` 로그 옵션에 `env` · `labels` 계열 0 |
+| M9 | 이미지 변수 꼴 `^[^@]+@sha256:[0-9a-f]{64}$`. 다이제스트가 비면 `…@` 로 조립하지 않고 빈 문자열을 넘긴다(응답기 · janitor) |
+| M9 | Media SG 인그레스 단언(위 「SG 가 유일한 경계」). 인그레스 포트에 8888 · 9996 · 9997 0 |
+| M9 | prod 프록시 포트 넷(nginx 템플릿 변수)을 모듈이 넘기고 모듈 시험에서 단언한다. user_data 렌더본은 렌더 파일 · nginx 설정 bind 의 긴 문법(`create_host_path: false`)을 그대로 쓴다 — 원본이 없으면 그 컨테이너만 기동에 실패한다. 이 PR 의 유닛 · 스크립트 · compose 템플릿을 함께 설치한다 |
+| M9 | 설치 단언: `bin/lib/` 두 파일이 스크립트와 같은 상대 위치에 있고 내용이 저장소와 같다. `bin/` · `bin/lib/` 소유 `root:root`, 스크립트 0755 · lib 0644. `media.env`(유닛 `EnvironmentFile`)의 소유 · 모드(root 만 쓰기). 압축 user_data 16 KiB 게이트를 다시 잰다 |
 | M9 | prod 엔진의 비특권 포트 하한(`net.ipv4.ip_unprivileged_port_start`)을 상자에서 잰다. nginx 는 cap CHOWN · SETGID · SETUID 만 받고 `NET_BIND_SERVICE` 가 없다 — 프록시 포트가 하한보다 낮으면 nginx 가 기동하지 못한다 |
 | M9 · O7f · edge-secrets 런북 | CDN 비밀 생성 형식을 고정한다: 16진 또는 패딩 없는 base64url. 허용 글자는 `[A-Za-z0-9._+=-]` 이고 표준 base64 의 `/` 는 MediaMTX 가 거부해 기동이 막힌다. 입력 도구 · 런북 문구에 반영 |
-| M9 c2 | 유닛 하드닝 지시어(지금은 `LimitCORE=0` 뿐)를 상자에서 정한다 — docker CLI · `/run` 쓰기와 부딪히지 않는 지시어만 실측으로 고른다 |
-| M9 c1 · c2 | `media.env` 키에 `LOOPBACK_SENDER_IMAGE` · `MEDIA_LIVE_PORT` · `TEST_STREAM_KEY_SECRET_ARN` 을 더한다. ECR 읽기 Resource 에 송출기 저장소 하나 |
-| M9 c2 | `bin/lib/` 두 파일을 스크립트와 같은 상대 위치에 설치. nginx 렌더본을 `/etc/pokeclip-media/nginx.conf` 에. journald 보존 설정. 위 「판 고정」 값으로 설치 |
+| M9 | 유닛 하드닝 지시어(지금은 `LimitCORE=0` 뿐)를 상자에서 정한다 — docker CLI · `/run` 쓰기와 부딪히지 않는 지시어만 실측으로 고른다 |
+| M9 | `media.env` 키에 `LOOPBACK_SENDER_IMAGE` · `MEDIA_LIVE_PORT` · `TEST_STREAM_KEY_SECRET_ARN` 을 더한다. ECR 읽기 Resource 에 송출기 저장소 하나 |
+| M9 | `bin/lib/` 두 파일을 스크립트와 같은 상대 위치에 설치. nginx 렌더본을 `/etc/pokeclip-media/nginx.conf` 에. journald 보존 설정. 위 「판 고정」 값으로 설치 |
 | M9 | 사이드카 `S3_BUCKET` 은 버킷 **이름**(`rewind_bucket_name`)이다. 런타임 출력은 `rewind_bucket_arn` 뿐이라 이름을 꺼내거나 출력을 더한다 |
 | M9 | prod 인스턴스 아키텍처를 정한다(O7c 플랫폼 · 위 arm64 주의) |
-| M9 c3 · O7e 5 | 사이드카 기동 판정은 태그 저널(`-t pokeclip-media-sidecar`)로. DB 장애 때는 compose 전체가 아니라 사이드카만 다시 뜬다(송출 유지) — 「5분 MainPID 무변화」 는 mediamtx · nginx 감시로만 읽는다. 판정 조건에 「관찰 창 5분 동안 사이드카 태그 저널의 종료 줄 0 건」 을 넣고, 먼저 `docker info` 로 로그 드라이버(journald)를 확인한다 |
-| M7 c3 · O7c | 루프백 송출기 ECR 저장소 · 미러 하나를 더한다 |
+| M9 런북 · O7e 5 | 사이드카 기동 판정은 태그 저널(`-t pokeclip-media-sidecar`)로. DB 장애 때는 compose 전체가 아니라 사이드카만 다시 뜬다(송출 유지) — 「5분 MainPID 무변화」 는 mediamtx · nginx 감시로만 읽는다. 판정 조건에 「관찰 창 5분 동안 사이드카 태그 저널의 종료 줄 0 건」 을 넣고, 먼저 `docker info` 로 로그 드라이버(journald)를 확인한다 |
+| M7 · O7c | 루프백 송출기 ECR 저장소 · 미러 하나를 더한다 |
 | I1-1 | RDS CA 번들 경로 env 는 지금 템플릿에 없다. **I1-1 PR 이 `compose.yml.tmpl` 사이드카 env 한 줄과 `render_test.sh` 단언을 더한다.** DB 연결 성공 고정 줄도 I1-1 이 정한다 |
 | I1-6 | 제어면 서버가 생기면 `control_upstream` 을 채운다. control 헬스는 nginx 경로라, 사이드카가 다시 뜨는 동안에도 healthy 로 보이고 제어면은 502 를 낸다 |
 | kty · 보안 | 보안 런북: 침해 대응 — 증거 보존 방식 · 저널 영속 여부(M9 의 journald 저장 방식 — 휘발 저널은 격리 뒤 꺼낼 길이 없다) · **정지 전 컨테이너 증거 보존 여부**(서비스를 멈추면 compose down 이 컨테이너 파일 시스템과 json-file 로그를 지운다 · 정지 승인을 기다리는 동안 서비스는 계속 돈다) · 격리 수단(IMDS 차단 필수 · 기존 연결 차단) · 역할 세션 취소 뒤 인라인 정책 정리 시점 · 비밀 교체와 상자 교체 순서 |

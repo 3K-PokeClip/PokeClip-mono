@@ -197,7 +197,7 @@ load_nginx_image() {
   local src_re='^[a-z0-9.-]+(/[a-z0-9._-]+)+:[A-Za-z0-9._-]+$'
   local digest_re='^sha256:[0-9a-f]{64}$'
   if [[ ! -f "${file}" ]]; then
-    add_setup_reason "${IMAGES_FILE_REL} 없음(c2 몫)"
+    add_setup_reason "${IMAGES_FILE_REL} 없음(nginx 이미지 핀 — 시험 compose 의 nginx)"
     return 1
   fi
   src="$(jq -r '.nginx.source // empty' "${file}")" || src=""
@@ -273,7 +273,8 @@ build_echo_image() {
 #######################################
 render_nginx_conf() {
   if [[ ! -f "${MEDIA_HOST_DIR}/${NGINX_TEMPLATE_REL}" ]]; then
-    printf '%s 없음(c2 몫)' "${NGINX_TEMPLATE_REL}"
+    printf '%s 없음(prod nginx 템플릿 — 시험 nginx 가 받는 설정의 원본)' \
+      "${NGINX_TEMPLATE_REL}"
     return 1
   fi
   if ! render::template "${MEDIA_HOST_DIR}/${NGINX_TEMPLATE_REL}" "$1" "$2" \
