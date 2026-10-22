@@ -1,4 +1,5 @@
 import type { PrivacyStatus, ThumbnailSource } from '@/api/clipEditor';
+import type { FaqKey } from '@/features/settings/help/faqItems';
 import { withAnalytics } from './client';
 
 // 행동 이벤트 목록 (POK-357). 이름은 「대상_동사」 snake_case, 속성은 열거형·boolean·number만 —
@@ -34,6 +35,8 @@ export interface AnalyticsEvents {
     os: 'windows' | 'macos';
     kind: 'installer' | 'pkg';
   };
+  /** 도움말 · 문의의 「이 답변이 도움이 되었나요?」에 답함. 질문은 문구가 아니라 고정 key로 싣는다 */
+  faq_feedback_sent: { faq: FaqKey; helpful: boolean };
 }
 
 /** 행동 이벤트를 보낸다. 분석이 꺼져 있으면(키 없음·SDK 차단) 아무 일도 하지 않는다. */

@@ -17,12 +17,12 @@ beforeEach(() => {
 });
 
 describe('Side — 설정', () => {
-  it('설정 메뉴 7개 중 채널 연동·편집자 관리·플러그인·알림 설정·계정만 링크이고 현재 경로를 활성으로 표시한다', () => {
+  it('설정 메뉴 7개 중 구독 · 결제만 빼고 링크이고 현재 경로를 활성으로 표시한다', () => {
     nav.pathname = '/settings/plugin';
     renderWithProviders(<Side menu="settings" />);
 
     const links = screen.getAllByRole('link');
-    expect(links).toHaveLength(5);
+    expect(links).toHaveLength(6);
     expect(links[0]).toHaveAttribute('href', '/settings/channels');
     expect(links[0]).not.toHaveAttribute('aria-current');
     expect(links[1]).toHaveAttribute('href', '/settings/editors');
@@ -33,11 +33,11 @@ describe('Side — 설정', () => {
     expect(links[3]).not.toHaveAttribute('aria-current');
     expect(links[4]).toHaveAttribute('href', '/settings/account');
     expect(links[4]).not.toHaveAttribute('aria-current');
+    expect(links[5]).toHaveAttribute('href', '/settings/help');
+    expect(links[5]).not.toHaveAttribute('aria-current');
 
-    // 나머지 2개는 비활성 (하위 티켓에서 라우트가 생기면 링크로 전환)
-    for (const label of ['구독 · 결제', '도움말 · 문의']) {
-      expect(screen.getByText(label).closest('[aria-disabled="true"]')).not.toBeNull();
-    }
+    // 구독 · 결제는 비활성 (라우트가 생기면 링크로 전환)
+    expect(screen.getByText('구독 · 결제').closest('[aria-disabled="true"]')).not.toBeNull();
   });
 
   it('알림 설정 화면에서 알림 설정이 활성이다', () => {
