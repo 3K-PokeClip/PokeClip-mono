@@ -1,0 +1,96 @@
+package com.pokeclip.auth.soop;
+
+import lombok.RequiredArgsConstructor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.stereotype.Service;
+import org.springframework.web.util.UriComponentsBuilder;
+
+import java.time.Instant;
+import java.util.Optional;
+
+/**
+ * SOOP 연동의 조합부. 트랜잭션이 없다: 외부 HTTP를 트랜잭션 밖에서 하려고. 저장은 {@link SoopLinkWriter}.
+ * {@code chzzk/ChzzkLinkService}의 쌍둥이다.
+ */
+@Service
+@RequiredArgsConstructor
+public class SoopLinkService {
+
+    private static final Logger log = LoggerFactory.getLogger(SoopLinkService.class);
+
+    private final SoopProperties properties;
+    private final SoopLinkStateCodec stateCodec;
+    private final SoopOAuthClient oauthClient;
+    private final SoopLinkWriter writer;
+    private final SoopChannelLinkRepository links;
+
+    /** SOOP 아이디는 싣지 않는다: 화면에 필요 없고 응답에 실리면 그만큼 새는 자리가 는다. */
+    public record LinkResult(String nickname, Instant linkedAt) {
+    }
+
+    /**
+     * 동의 주소. SOOP 문서대로 {@code client_id}·{@code state}만 싣는다(redirect_uri는 콘솔에 등록한 값을 SOOP이 쓴다,
+     * 계획 검증 M10). 치지직의 camelCase 키({@code clientId})가 아니다.
+     */
+    public String startUrl(Long userId) {
+        String state = stateCodec.issue(userId, Instant.now());
+        return UriComponentsBuilder.fromUriString(properties.authorizeUri())
+                .queryParam("client_id", properties.app().clientId())
+                .queryParam("state", state)
+                .encode().build().toUriString();
+    }
+
+    /**
+     * 교환 → 아이디·닉네임 → 저장. 치지직과 달리 <b>실패 뒤 받은 토큰을 버리는 HTTP가 없다</b>(SOOP 폐기 API 없음).
+     * 버리지 못한 사실만 {@code auth.soop.link.token_orphaned} INFO로 남기고 원문은 메모리에서 놓는다.
+     * SOOP 쪽에서는 토큰 수명(문서 예시 8시간)이 지나면 죽는다.
+     */
+    public LinkResult link(Long userId, String code, String state) {
+        if (!stateCodec.matches(state, userId, Instant.now())) {
+            throw new SoopLinkException(SoopLinkFailure.INVALID_STATE, "state가 이 사용자 것이 아니거나 만료됐다");
+        }
+        SoopTokens tokens = null;
+        SoopIdentity identity;
+        try {
+            tokens = oauthClient.exchange(code);
+            identity = oauthClient.fetchIdentity(tokens.accessToken());
+        } catch (SoopRejectedException e) {
+            orphaned(userId, tokens);
+            log.info("auth.soop.link.rejected userId={} status={}", userId, e.status());
+            throw new SoopLinkException(SoopLinkFailure.INVALID_CODE, "SOOP이 교환 또는 방송국 조회를 거부했다");
+        } catch (SoopUnavailableException e) {
+            orphaned(userId, tokens);
+            log.warn("auth.soop.link.unavailable userId={} causeType={}", userId, e.causeType());
+            throw new SoopLinkException(SoopLinkFailure.SOOP_UNAVAILABLE, "SOOP 응답 없음");
+        } catch (RuntimeException e) {
+            orphaned(userId, tokens);
+            throw e;
+        }
+        SoopChannelLink saved;
+        try {
+            saved = writer.create(userId, identity, tokens);   // 저장은 별도 빈(트랜잭션). 시각은 writer가 락 뒤에 잡는다
+        } catch (SoopLinkException | DataIntegrityViolationException e) {
+            // 둘 다 방송국 중복이다(사전 조회 / 경합 시 DB 유니크, SoopLinkWriter.create 주석). 롤백됐다(secrets 포함).
+            orphaned(userId, tokens);
+            throw new SoopLinkException(SoopLinkFailure.CHANNEL_ALREADY_LINKED, "다른 계정에 묶인 방송국이다");
+        } catch (RuntimeException e) {
+            orphaned(userId, tokens);   // 풀 고갈·DB 다운·탈퇴 가드. 예외는 그대로
+            throw e;
+        }
+        log.info("auth.soop.link.created userId={}", userId);
+        return new LinkResult(identity.nickname(), saved.getCreatedAt());
+    }
+
+    /** SOOP에 발급된 토큰을 우리가 버릴 수 없다는 사실만 남긴다. 토큰을 못 받은 실패(교환 실패)면 남길 것이 없다. */
+    private static void orphaned(Long userId, SoopTokens tokens) {
+        if (tokens != null) {
+            log.info("auth.soop.link.token_orphaned userId={}", userId);
+        }
+    }
+
+    public Optional<SoopChannelLink> latest(Long userId) {
+        return links.findFirstByUserIdOrderByCreatedAtDesc(userId);
+    }
+}

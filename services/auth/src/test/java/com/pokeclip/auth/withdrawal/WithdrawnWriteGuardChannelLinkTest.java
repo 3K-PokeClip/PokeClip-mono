@@ -5,6 +5,9 @@ import com.pokeclip.auth.chzzk.ChzzkCleanupExecutor;
 import com.pokeclip.auth.chzzk.ChzzkLinkWriter;
 import com.pokeclip.auth.chzzk.ChzzkMe;
 import com.pokeclip.auth.chzzk.ChzzkTokens;
+import com.pokeclip.auth.soop.SoopIdentity;
+import com.pokeclip.auth.soop.SoopLinkWriter;
+import com.pokeclip.auth.soop.SoopTokens;
 import com.pokeclip.auth.token.TokenService;
 import com.pokeclip.auth.user.User;
 import com.pokeclip.auth.user.UserService;
@@ -64,18 +67,20 @@ class WithdrawnWriteGuardChannelLinkTest extends WithdrawalTestSupport {
     private final ChzzkCleanupExecutor chzzkCleanup;
     private final YoutubeCleanupExecutor youtubeCleanup;
     private final WithdrawalCleanupExecutor cleanup;
+    private final SoopLinkWriter soopWriter;
 
     WithdrawnWriteGuardChannelLinkTest(MockMvc mockMvc, UserService userService, TokenService tokenService,
                                        JdbcTemplate jdbc, ChzzkLinkWriter chzzkWriter,
                                        YoutubeLinkWriter youtubeWriter, ChzzkCleanupExecutor chzzkCleanup,
                                        YoutubeCleanupExecutor youtubeCleanup,
-                                       WithdrawalCleanupExecutor cleanup) {
+                                       WithdrawalCleanupExecutor cleanup, SoopLinkWriter soopWriter) {
         super(mockMvc, userService, tokenService, jdbc);
         this.chzzkWriter = chzzkWriter;
         this.youtubeWriter = youtubeWriter;
         this.chzzkCleanup = chzzkCleanup;
         this.youtubeCleanup = youtubeCleanup;
         this.cleanup = cleanup;
+        this.soopWriter = soopWriter;
     }
 
     /** 상위의 행 거두기보다 먼저 돈다 — 정리 스레드가 secrets를 지운 뒤에 행이 사라져야 한다. */
@@ -180,6 +185,25 @@ class WithdrawnWriteGuardChannelLinkTest extends WithdrawalTestSupport {
     private Timestamp deletedAt(User user) {
         return jdbc.queryForObject("SELECT deleted_at FROM users WHERE id = ?",
                 Timestamp.class, user.getId());
+    }
+
+    /** 셋째 쌍둥이(POK-396). 같은 두 줄(가드+락)이 SOOP writer에도 있어야 한다. */
+    @Test
+    void 탈퇴한_회원에게는_SOOP_연동을_안_만들어_준다() throws Exception {
+        User user = newUser();
+        withdraw(user);
+        int secretsBefore = jdbc.queryForObject("SELECT count(*) FROM secrets", Integer.class);
+
+        assertThatThrownBy(() -> soopWriter.create(user.getId(),
+                new SoopIdentity("soop-" + UUID.randomUUID(), "닉네임"),
+                new SoopTokens("soop-at-late", "soop-rt-late", Duration.ofHours(8), null)))
+                .isInstanceOf(AuthException.class);
+
+        assertThat(aliveLinks("soop_channel_links", user))
+                .as("🔴 탈퇴한 계정에 살아 있는 SOOP 연동이 생겼다")
+                .isZero();
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM secrets", Integer.class))
+                .as("🔴 OAuth 원문이 secrets에 남았다").isEqualTo(secretsBefore);
     }
 
     private int aliveLinks(String table, User user) {
