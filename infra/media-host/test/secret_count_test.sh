@@ -29,7 +29,7 @@ source "${TEST_DIR}/lib/harness.sh"
 source "${TEST_DIR}/lib/ops_fixture.sh"
 
 readonly SCRIPT='bin/secret-count.sh'
-readonly CASE_COUNT=18
+readonly CASE_COUNT=20
 # 사이드카 API 사용자 이름(compose MTX_API_USER) — Basic 값의 앞부분.
 readonly SIDECAR_API_USER='pokeclip-sidecar'
 readonly COMMAND_ID='0123abcd-4567-89ef-0123-456789abcdef'
@@ -477,18 +477,16 @@ case_box_api_pass() {
   return "${ok}"
 }
 
-# 사례 17 — box: 비밀번호 파일이 없거나 꼴(16진 64자)이 아니면 0 건이 아니라
-# api-pass 로 실패한다.
-case_box_api_pass_unavailable() {
+# 사례 17 — box: 비밀번호 파일이 없으면(정지 뒤 — 정지 스크립트가 지운다)
+# 실패하지 않고 CDN 비밀은 그대로 센다. 판정 줄의 모드 칸이 box 가 아니라
+# box-api-pass-skipped 라, 「box 0」 으로 읽혀 전부 깨끗하다고 오독되지 않는다.
+case_box_api_pass_missing() {
   local ok=0
   setup_box
   rm -f -- "${ops_dir}/runtime/mtx_api_pass"
   run_count box || return 1
-  ops_fixture::expect_line 'SECRET COUNT FAIL api-pass' nonzero || ok=1
-  setup_box
-  printf 'not-a-hex-password\n' >"${ops_dir}/runtime/mtx_api_pass"
-  run_count box || return 1
-  ops_fixture::expect_line 'SECRET COUNT FAIL api-pass' nonzero || ok=1
+  ops_fixture::expect_line 'SECRET COUNT box-api-pass-skipped 0' 0 || ok=1
+  expect_hygiene || ok=1
   return "${ok}"
 }
 
@@ -509,6 +507,43 @@ case_ssm_inherited_export() {
     ok=1
   fi
   ops_fixture::expect_no_leak "${OPS_FAKE_CDN_SECRET}" 'CDN 비밀' || ok=1
+  return "${ok}"
+}
+
+# 사례 19 — box: 비밀번호 파일이 없어도 로그에 든 CDN 비밀은 센다(정지한
+# 컨테이너 로그 1 · 사이드카 태그 저널 1 = 2).
+case_box_api_pass_missing_counts_cdn() {
+  local ok=0
+  setup_box
+  rm -f -- "${ops_dir}/runtime/mtx_api_pass"
+  ops_fixture::container pcbenchmediamtxold mediamtx exited
+  plant "${ops_dir}/state/logs.pcbenchmediamtxold.out" \
+    "${OPS_FAKE_CDN_SECRET}" 1
+  plant "${ops_dir}/state/journal.t.pokeclip-media-sidecar" \
+    "${OPS_FAKE_CDN_SECRET}" 1
+  run_count box || return 1
+  ops_fixture::expect_line 'SECRET COUNT box-api-pass-skipped 2' 0 || ok=1
+  expect_hygiene || ok=1
+  return "${ok}"
+}
+
+# 사례 20 — box: 비밀번호 파일이 있는데 꼴(16진 64자) 밖 · 빈 파일 · 읽을 수
+# 없는 자리(디렉터리)면 생략하지 않고 api-pass 로 실패한다(fail closed).
+case_box_api_pass_malformed() {
+  local ok=0
+  setup_box
+  printf 'not-a-hex-password\n' >"${ops_dir}/runtime/mtx_api_pass"
+  run_count box || return 1
+  ops_fixture::expect_line 'SECRET COUNT FAIL api-pass' nonzero || ok=1
+  setup_box
+  : >"${ops_dir}/runtime/mtx_api_pass"
+  run_count box || return 1
+  ops_fixture::expect_line 'SECRET COUNT FAIL api-pass' nonzero || ok=1
+  setup_box
+  rm -f -- "${ops_dir}/runtime/mtx_api_pass"
+  mkdir -- "${ops_dir}/runtime/mtx_api_pass"
+  run_count box || return 1
+  ops_fixture::expect_line 'SECRET COUNT FAIL api-pass' nonzero || ok=1
   return "${ok}"
 }
 
@@ -541,10 +576,14 @@ main() {
   harness::run_case 15 'ssm 상태 · 출력 조회 경합 → ssm-status' \
     case_ssm_status_race
   harness::run_case 16 'box API 비밀번호 · Basic 값도 셈' case_box_api_pass
-  harness::run_case 17 'box API 비밀번호 파일 없음 · 꼴 밖 → api-pass' \
-    case_box_api_pass_unavailable
+  harness::run_case 17 'box API 비밀번호 파일 없음 → 생략 표시 · 종료 0' \
+    case_box_api_pass_missing
   harness::run_case 18 'ssm 상속 export 에도 기록 첫 줄이 자식 환경에 0' \
     case_ssm_inherited_export
+  harness::run_case 19 'box 파일 없음에도 CDN 비밀 건수' \
+    case_box_api_pass_missing_counts_cdn
+  harness::run_case 20 'box API 비밀번호 꼴 밖 · 빈 파일 · 디렉터리 → api-pass' \
+    case_box_api_pass_malformed
 
   if ! harness::summary "${CASE_COUNT}"; then
     exit 1

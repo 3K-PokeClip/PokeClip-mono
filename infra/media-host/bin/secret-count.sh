@@ -25,7 +25,9 @@
 # 반영 뒤에만 돈다. 값은 Secrets Manager 에서 직접 읽어 셸 변수에만
 # 둔다(argv 에는 ARN 만). box 면 사이드카의 MediaMTX API 비밀번호(시작 스크립트가
 # RUNTIME_DIR/mtx_api_pass 에 둔 이번 기동의 값 — root 로 읽는다)와 그 Basic
-# 값(「pokeclip-sidecar:<비밀번호>」 의 base64 — 줄바꿈 없이)도 대조한다. 한계:
+# 값(「pokeclip-sidecar:<비밀번호>」 의 base64 — 줄바꿈 없이)도 대조한다. 그
+# 파일이 없으면(정지 뒤 — 정지 스크립트가 지운다) 비밀번호 대조만 빼고 세며,
+# 판정 줄의 모드 칸으로 그것을 알린다. 한계:
 # 비밀번호는 기동마다 새로 만들어지므로 이전 기동의 로그에 남은 옛 비밀번호는
 # 대조하지 못하고, ssm 은 그 파일을 읽을 수 없어 대조하지 않는다. 대조는
 # `printf '%s\n' … | LC_ALL=C grep -a -F -c -f - <파일>` 로만 한다 — 값은 표준
@@ -34,8 +36,13 @@
 #
 # 출력(표준 출력 한 줄):
 #   SECRET COUNT <box|ssm> <n>   값이 든 줄 수(두 값이면 어느 하나라도 든 줄).
+#   SECRET COUNT box-api-pass-skipped <n>
+#                                box 인데 비밀번호 파일이 없다 — API 비밀번호 ·
+#                                Basic 값은 대조하지 않은 수다(「box 0」 이
+#                                아니다).
 #   SECRET COUNT FAIL <단계>     usage · config · cdn-secret · test-key ·
-#                                api-pass(box — 비밀번호 파일 없음 · 꼴 밖) ·
+#                                api-pass(box — 비밀번호 파일이 있는데 못 읽음 ·
+#                                꼴 밖) ·
 #                                journal · mediamtx · nginx · docker-logs ·
 #                                ssm-command · ssm-list · ssm-status ·
 #                                ssm-output · ssm-truncated · grep.
@@ -137,10 +144,12 @@ collect_box() {
 # Globals:
 #   RUNTIME_DIR, values(main 의 지역 — 동적 범위)
 # Returns:
-#   0 더함 / 1 파일 없음 · 못 읽음 · 꼴 밖.
+#   0 더함 / 1 못 읽음 · 꼴 밖 / 2 파일 없음.
 #######################################
 add_api_pass_values() {
   local file="${RUNTIME_DIR:-/run/pokeclip-media}/mtx_api_pass" pass basic
+  # 자리에 아무것도 없을 때만 「없음」 이다. 디렉터리 등 다른 것이 있으면 실패.
+  [[ -e "${file}" || -L "${file}" ]] || return 2
   [[ -f "${file}" && -r "${file}" ]] || return 1
   IFS= read -r pass <"${file}" || return 1
   [[ "${pass}" =~ ${API_PASS_PATTERN} ]] || return 1
@@ -253,6 +262,7 @@ collect_ssm() {
 
 main() {
   local with_passphrase=0 mode command_id="" limit input count status=0
+  local label api_status=0
   local values=() value
   if [[ "${1:-}" == --passphrase ]]; then
     with_passphrase=1
@@ -280,8 +290,14 @@ main() {
     values+=("${value}")
   fi
   unset value
+  label="${mode}"
   if [[ "${mode}" == box ]]; then
-    add_api_pass_values || fail api-pass
+    add_api_pass_values || api_status=$?
+    case "${api_status}" in
+      0) ;;
+      2) label=box-api-pass-skipped ;;
+      *) fail api-pass ;;
+    esac
   fi
   ops::make_scratch
   input="${ops_scratch}/input"
@@ -298,7 +314,7 @@ main() {
   if (( status > 1 )) || [[ ! "${count}" =~ ^[0-9]+$ ]]; then
     fail grep
   fi
-  ops::say "SECRET COUNT ${mode} ${count}"
+  ops::say "SECRET COUNT ${label} ${count}"
 }
 
 main "$@"
