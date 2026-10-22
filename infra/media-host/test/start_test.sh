@@ -53,7 +53,7 @@ readonly API_PASS_NAME='mtx_api_pass'
 readonly API_PASS_PATTERN='^[0-9a-f]{64}$'
 # 우회 플래그로 읽힐 문자열(대소문자 무시).
 readonly BYPASS_PATTERN='skip|bypass|no_prereq|prereq=0'
-readonly CASE_COUNT=40
+readonly CASE_COUNT=41
 
 #######################################
 # up 호출 argv 를 한 줄로 낸다(인자 사이 공백). 호출이 하나가 아니면 실패.
@@ -471,7 +471,7 @@ case_arguments() {
 
 # 사례 13 — 스크립트 본문에 우회 플래그 문자열 0건(정적).
 case_no_bypass() {
-  local ok=0 f hits
+  local ok=0 f hits status
   for f in "${MEDIA_HOST_DIR}/bin/start-media.sh" \
     "${MEDIA_HOST_DIR}/bin/stop-media.sh"; do
     if [[ ! -f "${f}" ]]; then
@@ -479,9 +479,11 @@ case_no_bypass() {
       ok=1
       continue
     fi
-    # grep 의 「맞는 줄 없음」(종료 1)만 0 건이다 — 읽기 실패는 0 이 아니다.
-    if ! hits="$(grep -c -i -E -- "${BYPASS_PATTERN}" "${f}")" \
-      && [[ "${hits}" != 0 ]]; then
+    # grep 의 「맞는 줄 없음」(종료 1)만 0 건이다. 읽기 실패(종료 2 이상)는 「0」
+    # 을 내더라도 0 건이 아니다 — 종료 코드로 가른다.
+    status=0
+    hits="$(grep -c -i -E -- "${BYPASS_PATTERN}" "${f}")" || status=$?
+    if (( status > 1 )) || [[ ! "${hits}" =~ ^[0-9]+$ ]]; then
       harness::add_reason "bin/${f##*/} 를 읽지 못함"
       ok=1
     elif (( hits != 0 )); then
@@ -490,6 +492,27 @@ case_no_bypass() {
     fi
   done
   return "${ok}"
+}
+
+#######################################
+# 사례 41 — 사례 13 의 우회 문자열 검사는 grep 읽기 실패를 0 건으로 읽지 않는다.
+# PATH 앞에 grep -c -i 가 「0」 을 내고 종료 2 로 끝나는(읽기 실패의 꼴) 가짜를
+# 두고 실제 사례 함수를 부른다 — FAIL 이고 원인이 「읽지 못함」 이어야 한다.
+# 진짜 grep 경로는 가짜를 PATH 에 두기 전에 잡는다(가짜가 자기를 부르지 않게).
+#######################################
+case_no_bypass_read_failure() {
+  local dir="${fixture_root}/fake-grep" real got status=0
+  real="$(command -v grep)" || return 1
+  mkdir -p -- "${dir}" || return 1
+  printf '#!/bin/sh\ncase " $* " in *" -c -i "*) echo 0; exit 2 ;; esac\nexec %s "$@"\n' \
+    "${real}" >"${dir}/grep" && chmod +x "${dir}/grep" || return 1
+  got="$(harness_fail_reason=''
+    PATH="${dir}:${PATH}" case_no_bypass >/dev/null 2>&1 || status=$?
+    printf '%s:%s' "${status}" "${harness_fail_reason}")"
+  if [[ "${got%%:*}" == 0 || "${got#*:}" != *'읽지 못함'* ]]; then
+    harness::add_reason "grep 읽기 실패에서 사례 13 이 「${got}」(기대 FAIL · 읽지 못함)"
+    return 1
+  fi
 }
 
 #######################################
@@ -754,6 +777,8 @@ main() {
     case_secret_empty
   harness::run_case 12 '인자 하나 → 실패 · docker 0' case_arguments
   harness::run_case 13 '우회 플래그 문자열 0건(정적)' case_no_bypass
+  harness::run_case 41 '우회 문자열 검사 — 읽기 실패는 0 건이 아님(정적)' \
+    case_no_bypass_read_failure
   harness::run_case 14 '렌더는 rename — 옛 inode 불변' case_rename_not_overwrite
   harness::run_case 15 'chown 실패 → 임시 파일 잔여 0' case_chown_failure
   harness::run_case 16 '0755 디렉터리 → 0711' case_dir_mode_reset
