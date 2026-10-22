@@ -2333,7 +2333,10 @@ NULL 로 바꾼다. 행은 남는다. 삭제 조건은 인덱스 불변식 2(그
 
 - 실행 형태: 사이드카와 **같은 이미지**의 다른 명령(`/usr/local/bin/janitor`),
   compose 서비스 `janitor`. 계정 `10002:10002`(MediaMTX 와 같은 소유자) ·
-  recordings 쓰기 마운트는 janitor 하나 · 사이드카는 `:ro` 그대로.
+  recordings 에 쓰기로 붙는 것은 media(MediaMTX)와 janitor · 사이드카는 `:ro` 그대로.
+- janitor 는 업로드가 끝난 조각을 MediaMTX 의 보존 기한(`recordDeleteAfter` —
+  설정에 없으면 기본 24시간)보다 먼저 지우는 쪽이다. 보존 기한 삭제는 MediaMTX
+  몫이라 janitor 를 꺼도 계속된다.
 - 삭제 순서: 행 잠금(`FOR UPDATE NOWAIT`) → 파일 삭제 → `local_path=NULL` →
   COMMIT. 잠긴 행은 건너뛰고 다음 주기에 다시 본다.
 - 삭제마다 `segment_local_deleted` INFO 한 줄(stream_id · seq · path ·
