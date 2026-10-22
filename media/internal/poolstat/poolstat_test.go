@@ -180,9 +180,9 @@ func TestObserveAbsorbsAsyncDestroyDip(t *testing.T) {
 // 기준점이 그 일시 하강 중에 잡혀도 회복을 폐기로 세지 않는다 — 음수 잔차는 기준점에서 0 으로 잡는다.
 func TestObserveBaselineDuringAsyncDestroyDip(t *testing.T) {
 	st, _ := observe(state{}, snap(2, 0, 2, 1, 0), snap(2, 0, 2, 1, 0)) // 기준점 — 잔차 −1
-	dip := snap(1, 0, 2, 1, 0)                                          // 연결이 치워졌다(잔차 0)
+	recovered := snap(1, 0, 2, 1, 0)                                    // 연결이 치워졌다(잔차 0)
 
-	_, r := observe(st, dip, dip)
+	_, r := observe(st, recovered, recovered)
 
 	if r.discarded != 0 || r.signal != signalNone {
 		t.Errorf("기준점(잔차 −1) 뒤 회복 tick 판정 = discarded %d · signal %d, want 0 · %d(경보 없음)",
@@ -395,9 +395,8 @@ func TestStopWaitsForTickInFlight(t *testing.T) {
 func TestLoopTicksUntilStopped(t *testing.T) {
 	log, out := newCapture(slog.LevelDebug)
 	src := &script{snaps: twice(snap(0, 0, 0, 0, 0))}
-	ctx, cancel := context.WithCancel(context.Background())
 
-	stop := start(ctx, &watcher{name: "indexer", log: log, read: src.read}, time.Millisecond, time.Millisecond)
+	stop := start(context.Background(), &watcher{name: "indexer", log: log, read: src.read}, time.Millisecond, time.Millisecond)
 	deadline := time.Now().Add(2 * time.Second)
 	for len(out.named(t, statsName)) < 2 {
 		if time.Now().After(deadline) {
@@ -405,14 +404,13 @@ func TestLoopTicksUntilStopped(t *testing.T) {
 		}
 		time.Sleep(time.Millisecond)
 	}
-	cancel()
 	stopped := make(chan struct{})
 	go func() { stop(); close(stopped) }()
 
 	select {
 	case <-stopped:
 	case <-time.After(2 * time.Second):
-		t.Fatal("ctx 취소 뒤 stop 이 2s 안에 반환하지 않았다")
+		t.Fatal("주기가 도는 중에 부른 stop 이 2s 안에 반환하지 않았다 — 관측 고루틴이 끝나지 않는다")
 	}
 }
 
