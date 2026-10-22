@@ -235,8 +235,8 @@ services:
   janitor:
     image: ${sidecar_image}
     entrypoint: ["/usr/local/bin/janitor"]
-    # 녹화 소유자(머리 주석 「실행 계정」 의 예외). 이미지 USER(10001)로 돌면 모든
-    # 삭제가 권한 오류다.
+    # 녹화 소유자(머리 주석 「실행 계정」 의 예외). 이미지 USER(10001)로 돌면
+    # 모든 삭제가 권한 오류다.
     user: "10002:10002"
     network_mode: "service:mediamtx"
     depends_on: *mediamtx-dependency

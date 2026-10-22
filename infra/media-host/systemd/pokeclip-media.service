@@ -9,8 +9,8 @@
 #   비밀 조회(Secrets Manager · NAT)가 몇 분 끊겨도 failed 로 굳지 않고 다시
 #   시도한다. RestartSec=20 은 시도 사이의 대기일 뿐 복구 시간의 상한이 아니다 —
 #   시작 스크립트는 CDN 비밀 조회(aws CLI)에 시간 상한을 걸지 않아, 걸려 있는
-#   동안에는 aws CLI 가 스스로 끝나야 다음 시도로 넘어간다. 그동안 저널에 「MEDIA PREREQ FAIL」 ·
-#   「MEDIA START BLOCKED」 가 되풀이된다.
+#   동안에는 aws CLI 가 스스로 끝나야 다음 시도로 넘어간다. 그동안 저널에
+#   「MEDIA PREREQ FAIL」 · 「MEDIA START BLOCKED」 가 되풀이된다.
 # - RDS 장애는 이 유닛의 재시도 경로가 아니다. 사이드카가 엔진 재시작
 #   (on-failure)으로 그 컨테이너만 다시 뜬다.
 # - systemctl stop 은 다시 띄우지 않는다. ExecStop 이 compose 를 내리고,
@@ -47,8 +47,8 @@ ExecStart=/opt/pokeclip-media/bin/start-media.sh
 # compose up 은 TERM 에 종료 130 으로 끝나고, 기동 중(선행 점검 · 비밀 조회 ·
 # 렌더)이면 시작 스크립트도 TERM 에 130 으로 끝나므로 그 값을 성공으로 본다.
 # 시작 스크립트는 CDN 비밀 조회(aws CLI)에 시간 상한을 걸지 않아, 조회 중이면
-# 시작 스크립트는 aws 가 끝난 뒤에야 130 으로 끝난다. 그 전에 이 30초 대기가 끝나면 다음 ExecStop 과
-# ExecStopPost 가 정리한다.
+# 시작 스크립트는 aws 가 끝난 뒤에야 130 으로 끝난다. 그 전에 이 30초 대기가
+# 끝나면 다음 ExecStop 과 ExecStopPost 가 정리한다.
 ExecStop=/bin/sh -c 'kill -TERM "$$MAINPID" 2>/dev/null; i=0; \
   while kill -0 "$$MAINPID" 2>/dev/null && [ "$$i" -lt 150 ]; do \
   sleep 0.2; i=$$((i + 1)); done'
