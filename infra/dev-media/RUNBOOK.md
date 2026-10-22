@@ -2060,13 +2060,15 @@ discard_stale_env_tmps() {
 # .env 가 줄바꿈으로 끝나고, 키 줄은 없거나 정확히 INGEST_AUTH_IP_LIMIT=on · =off 한 줄이다.
 # 그 밖(따옴표 · 빈 값 · 인라인 주석 · CRLF · 앞 공백 · 끝 줄바꿈 없음 · 두 줄)은 바이트로
 # 되돌릴 수 없어 바꾸기 전에 멈춘다. grep 은 종료 0 · 1 만 받는다 — 2(읽기 오류)를 「없음」
-# 으로 읽으면 반쪽 .env 를 끼우게 된다.
+# 으로 읽으면 반쪽 .env 를 끼우게 된다. 지원 형식 밖은 일치 없음(종료 1), 읽기 오류는 검사
+# 실패(종료 2)다.
 ip_limit_line() {
   local -r env="${DEMO_DIR}/.env"
   local -i rc=0
   local found   # 부르는 쪽의 이름(line)과 겹치면 printf -v 가 이것을 채운다
   grep -E -e "${IP_LIMIT_ANY_RE}" -- "${env}" > "${WORK}/ip-limit-line" || rc=$?
-  (( rc <= 1 )) || mismatch ".env 를 읽지 못했다(grep 종료 ${rc}) — .env 를 바꾸지 않았다"
+  (( rc <= 1 )) \
+    || check_failed ".env 를 읽지 못했다(grep 종료 ${rc}) — .env 를 바꾸지 않았다"
   [[ ! -s "${env}" || "$(tail -c 1 -- "${env}" | wc -l)" == 1 ]] \
     || mismatch '.env 가 줄바꿈으로 끝나지 않는다 — 지원 형식이 아니라 바꾸지 않았다'
   (( $(wc -l < "${WORK}/ip-limit-line") <= 1 )) \
@@ -2113,7 +2115,8 @@ write_ip_limit_orig() {
 # write_env_candidate 는 키 줄을 $1 로 바꾼(빈 값이면 뺀) 새 .env 를 ENV_TMP 에 쓴다 — 키 줄
 # 자리는 그대로, 없던 키는 끝에 붙인다. 모드 · 소유를 .env 와 맞춘다. 같은 디렉터리(root
 # 소유 — assert_demo_dir_safe)에 0600 으로 만든다 — 비밀이 든 사본을 WORK 에 두지 않는다.
-# 읽기 · 쓰기 · 메타데이터 복사가 실패하면 끼우기 전에 멈춘다(덫이 ENV_TMP 를 지운다).
+# 읽기 · 쓰기 · 메타데이터 복사가 실패하면 끼우기 전에 검사 실패(종료 2)로 멈춘다(덫이 ENV_TMP 를
+# 지운다).
 write_env_candidate() {
   local -r env="${DEMO_DIR}/.env"
   local -i rc=0
@@ -2128,7 +2131,7 @@ write_env_candidate() {
     END { if (!seen && ENVIRON["LINE"] != "") print ENVIRON["LINE"] }
   ' < "${env}" > "${ENV_TMP}" || rc=$?
   (( rc == 0 )) \
-    || mismatch "새 .env 를 만들지 못했다(종료 ${rc}) — .env 를 바꾸지 않았다"
+    || check_failed "새 .env 를 만들지 못했다(종료 ${rc}) — .env 를 바꾸지 않았다"
   chmod --reference="${env}" -- "${ENV_TMP}"
   chown --reference="${env}" -- "${ENV_TMP}"
 }
