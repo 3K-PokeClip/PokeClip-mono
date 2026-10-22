@@ -158,10 +158,13 @@ TERM 을 보내 스스로 끝나기를 기다리고(상한 30초), 그다음 `st
 *   `down` 이 실패하면(compose 파일이 깨진 경우 포함) 정지 스크립트가 프로젝트
     라벨로 남은 컨테이너를 찾아 지운다(`MEDIA STOP fallback removed <n>`).
     `down` 이 끝나지 않아 systemd 가 정지 명령에 TERM 을 보내도 렌더는 지운다.
-*   정지 뒤에는 프로젝트 컨테이너가 0 인지 건수로 확인한다.
+*   정지 뒤에는 프로젝트 컨테이너가 0 인지 건수로 확인한다. `containers 0`
+    줄이 나와야 회수가 끝난 것이다. 그 줄 없이 오류만 나오면 조회가 실패한
+    것이다(데몬 정지 · 권한) — 0 으로 읽지 않는다.
 
     ```shell
-    docker ps -a -q --filter label=com.docker.compose.project=pokeclip-media | wc -l
+    ids=$(docker ps -a -q --filter label=com.docker.compose.project=pokeclip-media) \
+      && printf 'containers %s\n' "$(printf '%s' "$ids" | grep -c .)"
     ```
 
 **크래시:** 주 프로세스가 실패로 끝나면(compose 플러그인 · 유닛 cgroup
