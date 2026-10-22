@@ -29,6 +29,7 @@ interface Server {
   library?: unknown[] | 'fail';
   info?: unknown;
   chzzk?: unknown;
+  soop?: unknown;
   youtube?: unknown;
   streamKey?: unknown;
   me?: unknown;
@@ -53,6 +54,7 @@ function route(url: string, s: Server): Response {
   if (cards) return ok({ cards: s.cards?.[decodeURIComponent(cards[1]!)] ?? [], nextCursor: null });
   if (url.endsWith('/broadcast-info')) return ok(s.info ?? { latest: null, series: [] });
   if (url.startsWith('/api/chzzk-link')) return ok(s.chzzk ?? { linked: false });
+  if (url.startsWith('/api/soop-link')) return ok(s.soop ?? { linked: false });
   if (url.startsWith('/api/youtube-link')) return ok(s.youtube ?? { linked: false });
   if (url.startsWith('/api/stream-keys')) return ok(s.streamKey ?? { issued: false });
   return ok(s.me ?? { id: 1, email: 'demo@example.com', name: '재환', profileImageUrl: null });
@@ -228,6 +230,20 @@ describe('HomeScreen', () => {
       );
       expect(useOnboardingStore.getState().channelLinked).toBe(true);
       expect(useOnboardingStore.getState().pluginLinked).toBe(true);
+    });
+
+    it('SOOP만 연동해도 방송만 남았다고 하고 시작 가이드 1단계를 세운다 (POK-396)', async () => {
+      serve({
+        soop: { linked: true, status: 'ACTIVE', nickname: '숲너구리' },
+        streamKey: { issued: true },
+      });
+      render(<HomeScreen />);
+
+      expect(
+        await screen.findByRole('heading', { level: 1, name: '이제 방송만 켜면 돼요' }),
+      ).toBeInTheDocument();
+      expect(screen.getByText('SOOP 연결됨')).toBeInTheDocument();
+      expect(useOnboardingStore.getState().channelLinked).toBe(true);
     });
 
     it('이번 주 기록 — 방송·카드는 이번 주에 시작한 방송, 클립·발행은 이번 주에 만든·올린 것만 센다', async () => {

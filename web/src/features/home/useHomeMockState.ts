@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { apiFetch } from '@/api/client';
 import { fetchChzzkLink, type ChzzkLinkState } from '@/api/chzzkLink';
+import { fetchSoopLink, type SoopLinkState } from '@/api/soopLink';
 import { fetchStreamKeyStatus } from '@/api/streamKeys';
 import { fetchYoutubeLink, type YoutubeLinkState } from '@/api/youtubeLink';
 import { broadcastTitle } from '@/api/clipEditor';
@@ -26,7 +27,7 @@ import { useOnboardingStore } from '@/stores/onboarding';
 //   GET /api/clip/broadcasts/{id}/broadcast-info   → 라이브 제목 (latest=null이면 streamId)
 //   GET /api/auth/me                               → 큰 칸 인사의 이름
 //   GET /api/clip/library                          → 라이브 클립 완료 수 · 이번 주/지난주 만든 클립·유튜브 발행
-//   GET /api/chzzk-link · /api/youtube-link · /api/stream-keys → 준비 단계 · 연결 상태(1분마다)
+//   GET /api/chzzk-link · /api/soop-link · /api/youtube-link · /api/stream-keys → 준비 단계 · 연결 상태(1분마다)
 
 export interface LiveNow {
   streamId: string;
@@ -71,6 +72,7 @@ export interface WeekStats {
 /** 연동 상태 — 각 칸은 못 읽었으면 null(「확인 중」, 버튼을 내밀지 않는다) */
 export interface HomeLinks {
   chzzk: ChzzkLinkState | null;
+  soop: SoopLinkState | null;
   youtube: YoutubeLinkState | null;
   /** 연동 코드를 한 번이라도 발급했는가(스트림키 존재) */
   streamKeyIssued: boolean | null;
@@ -361,13 +363,15 @@ async function loadHome(now: number, cardCache: Map<string, CachedCards>): Promi
 
 /** 연동 상태 셋 — 하나를 못 읽어도 나머지는 그린다 */
 async function loadLinks(): Promise<HomeLinks> {
-  const [chzzk, youtube, streamKey] = await Promise.all([
+  const [chzzk, soop, youtube, streamKey] = await Promise.all([
     fetchChzzkLink().catch(() => null),
+    fetchSoopLink().catch(() => null),
     fetchYoutubeLink().catch(() => null),
     fetchStreamKeyStatus().catch(() => null),
   ]);
   return {
     chzzk,
+    soop,
     youtube,
     streamKeyIssued: streamKey === null ? null : streamKey.issued === true,
   };
@@ -383,7 +387,7 @@ const EMPTY: Loaded = {
   lastWeek: EMPTY_WEEK,
   lastBroadcast: null,
 };
-const NO_LINKS: HomeLinks = { chzzk: null, youtube: null, streamKeyIssued: null };
+const NO_LINKS: HomeLinks = { chzzk: null, soop: null, youtube: null, streamKeyIssued: null };
 
 export function useHomeMockState(): HomeMockState {
   const [data, setData] = useState<Loaded>(EMPTY);
@@ -440,6 +444,7 @@ export function useHomeMockState(): HomeMockState {
       applied = mine;
       setLinks((prev) => ({
         chzzk: next.chzzk ?? prev.chzzk,
+        soop: next.soop ?? prev.soop,
         youtube: next.youtube ?? prev.youtube,
         streamKeyIssued: next.streamKeyIssued ?? prev.streamKeyIssued,
       }));
@@ -456,7 +461,9 @@ export function useHomeMockState(): HomeMockState {
   // 홈이 서버에서 읽은 연동 사실을 시작 가이드 체크에 올린다(다른 기기에서 연동한 경우). 해제는 설정 화면이 내린다
   useEffect(() => {
     const store = useOnboardingStore.getState();
-    if (links.chzzk?.linked && !store.channelLinked) store.setChannelLinked(true);
+    // 방송 채널은 치지직·SOOP 둘 중 하나면 된다(POK-396)
+    if ((links.chzzk?.linked || links.soop?.linked) && !store.channelLinked)
+      store.setChannelLinked(true);
     if (links.streamKeyIssued && !store.pluginLinked) store.markPluginLinked();
   }, [links]);
 
