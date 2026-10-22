@@ -66,6 +66,9 @@ services:
       MTX_API_PASS: "${MTX_API_PASS:?}"
       STREAM_KEY_RESOLVE_URL: "${STREAM_KEY_RESOLVE_URL:?}"
       STREAM_KEY_RESOLVE_TOKEN: "${STREAM_KEY_RESOLVE_TOKEN:?}"
+      # 호출자(MediaMTX) Basic 검사를 명시로 끈다 — dev-media 는 제어망(mtx-control)이 따로 있어 출발지 검사
+      # (INGEST_AUTH_CALLER_IP)만으로 MediaMTX 가 가려진다. 기동마다 WARN ingestauth_caller_basic_off 가 한 줄 난다(RUNBOOK 7-3).
+      INGEST_AUTH_CALLER_BASIC: "off"
       # debug · info · warn · error. 바꾸려면 이 줄을 고치고 응답기만 다시 만든다.
       LOG_LEVEL: "info"
       # 송출자 IP별 시도 한도(on · off — 기본 on). 끄려면 .env 에 INGEST_AUTH_IP_LIMIT=off 를 두고

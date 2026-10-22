@@ -73,13 +73,16 @@ export function LoginScreen() {
           {/* 가입은 이 고지 + 로그인으로 성립한다(체크박스 없음, POK-269). 약관은 「동의」,
               처리방침은 「확인」이다 — 처리방침은 동의를 받는 대상이 아니다. 전문 링크가
               문구 바로 옆에 있어야 약관 명시 의무(약관규제법 제3조)를 채운다.
+              「시작하면」은 바로 위 「Google로 시작하기」 버튼을 가리킨다 — 「Google로」를 빼야 첫 줄이
+              400u 칸에 한 줄로 들어간다. 문장마다 줄을 나눈다(좁으면 낱말 단위로 접힌다).
               문서는 랜딩(pokeclip.com)에 있어 새 탭으로 연다 — 로그인 흐름을 끊지 않는다. */}
           <p className={styles.terms}>
-            Google로 시작하면 만 14세 이상이며{' '}
+            시작하면 만 14세 이상이며{' '}
             <a href={LEGAL_URLS.terms} target="_blank" rel="noopener noreferrer">
               이용약관
             </a>
-            에 동의한 것으로 봅니다. 개인정보 처리 내용은{' '}
+            에 동의한 것으로 봅니다.
+            <br />
             <a
               href={LEGAL_URLS.privacy}
               target="_blank"
@@ -88,7 +91,7 @@ export function LoginScreen() {
             >
               개인정보 처리방침
             </a>
-            에서 확인하세요.
+            도 확인하세요.
           </p>
         </div>
       </section>

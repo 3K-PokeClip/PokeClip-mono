@@ -1,10 +1,15 @@
 # ingest-auth 응답기 prod 계약 — dev 가동판 실물 · prod 차이 · 결정 K1–K8
 
 - 상태: **2026-10-20 확정** — 결정 K1–K8(kty) · 설계 듀얼 리뷰 종결 · prod 착수 전 확인 항목 남음(3절) · 선행 조건: prod 4C 호출 방식 3번 합의(POK-307)
-- 갱신: 2026-10-20 — 송출자 IP별 시도 한도(S1 게이트 · POK-310 트랙 B, 결정 119차) 반영: 1-1 의 7 · 11 · 14 · 1-2 의 7 · 1-5 의 9–11 · 1-9 의 2 · 3 · 4. 이 행들의 근거는 함수 이름으로 적는다(줄 번호는 위 기준 판의 것이라 한도 코드가 없다)
+- 갱신: 2026-10-20 — 송출자 IP별 시도 한도(S1 게이트 · POK-310 트랙 B, 결정 119차) 반영: 1-1 의 7 · 11 · 15 · 1-2 의 7 · 1-5 의 16–18 · 1-9 의 2 · 3 · 4. 이 행들의 근거는 함수 이름으로 적는다(줄 번호는 위 기준 판의 것이라 한도 코드가 없다)
 - 관련 티켓: POK-310 · POK-307 · POK-299(M15) · POK-301(O8a)
 - 목적: 엣지 트랙 M15(prod 송출 인증을 응답기로)의 착수 조건 「응답기 계약 확정(포트 · 인증 요청 경로 · 비밀 파일 경로)」을 채운다.
-- 기준 판: 응답기 코드 · dev-media 구성 = `origin/develop`(64633374), M2 compose 자리 = `origin/feat/infra-media-host`(14a57f37), 계획 = 엣지 계획 r6.7(4절 출처). 줄 번호는 이 판 기준이다.
+- 기준 판: 응답기 코드 · dev-media 구성 = `origin/develop`(64633374), M2 compose 자리 =
+  `origin/feat/infra-media-host`(14a57f37), 계획 = 엣지 계획 r6.7(4절 출처). 줄 번호는 이 판
+  기준이다. 단 POK-310 트랙 A(비밀 `_FILE` 입력 · 호출자 Basic · 4C 창구 선택 ·
+  Basic 비밀번호 최소 24자)가 바꾼 행은 1 · 2 · 3절 모두 그 코드 PR 판이다. 그 행의
+  저장소 파일 인용은 줄 번호 대신 파일 · 함수 이름이나 문서의 절 이름으로 적는다(계획의
+  줄 번호는 위 판 그대로).
 - 읽는 법: 1절은 **dev-media 가동판 코드와 설정에서 읽어낸 사실**이다(코드가 그렇게 동작한다). 2절은 **prod 에서 정해야 할 선택**이다(계획이 가정한 것과 코드가 다른 자리). 3절은 kty 가 정한 것(K1–K8)과 착수 때 할 확인 항목이다.
 - 표기: 제어망 `10.250.0.0/29` 안의 두 주소는 `<A_mtx>`(MediaMTX) · `<A_auth>`(응답기)로 쓴다. 비밀 · 계정 ID · 사설 IP 실값은 이 문서에 없다(설계 제어망 대역 `10.250.0.0/29` 표기는 예외).
 - 이 조사에서 **직접 실행해 확인하지 않은 것**은 「미확인」으로 표시했다. 코드를 읽고 추론한 것은 「추론」이다.
@@ -35,14 +40,15 @@
 | 4 | 호출자 판정(첫 행) | **TCP 피어 주소**(헤더는 보지 않는다)가 `INGEST_AUTH_CALLER_IP` 와 다르면 403(본문 없음). 예산 · 시한 가드 밖이다 | `media/internal/ingestauth/handler.go:164-180` |
 | 5 | 본문 크기 | 16 KiB 를 넘으면 400 | `ingestauth/request.go:10-11,68-74` |
 | 6 | 읽는 본문 필드 | `ip` · `action` · `path` · `protocol` · `id`. `user` · `password` 는 `action=api` 일 때만 해석한다. `token` · `query` · `userAgent` 등 나머지는 버린다 | `request.go:34-61,98-103` |
-| 7 | `ip` 필드 | IP 로 해석되지 않으면 400(`bad_ip`). **쓰임은 둘**이다 — `action=api` 행에서 SelfIP 와 견주고, publish 행에서 IP별 시도 한도의 키로 쓴다(아래 14). publish 로그에는 한도 사건에서만 싣는다(1-9 의 4) | `request.go:80-83` · `handler.go:207` · `publish.go` `ipAdmit` · `ipTake` |
+| 7 | `ip` 필드 | IP 로 해석되지 않으면 400(`bad_ip`). **쓰임은 둘**이다 — `action=api` 행에서 SelfIP 와 견주고, publish 행에서 IP별 시도 한도의 키로 쓴다(아래 15). publish 로그에는 한도 사건에서만 싣는다(1-9 의 4) | `request.go:80-83` · `handler.go:207` · `publish.go` `ipAdmit` · `ipTake` |
 | 8 | `id` 필드(연결 id) | null 이면 빈 값. 아니면 소문자 UUID 꼴이어야 하고 아니면 400(`bad_conn_id`) | `request.go:30-32,84-90` |
 | 9 | 행 가르기 | `action=api` → api 행 · `action=read` → 무조건 200 · **그 밖의 모든 action(playback · metrics · pprof 포함)은 publish 행으로 간다** | `handler.go:185-202` |
 | 10 | publish 형식 조건 | `action=publish` ∧ `protocol=srt` ∧ `path` 가 토큰 꼴(26자 Crockford 대문자) ∧ `id` 있음. 하나라도 아니면 401 | `publish.go:99-113` |
-| 11 | publish 판정 순서 | 형식 → **IP 한도 검사** → 거부 목록 → 예산 → 요청 ctx → 실패 토큰 차례 → **IP 한도 차감** → 4C resolve → 기억 갱신 → 연결 기록 추가 → 거부 목록 마지막 확인 → 200. 위에서 처음 맞는 행이 답이다 | `publish.go` `publish` · `allowPublish` |
-| 12 | 예산 | auth 를 부르느라 MediaMTX 경로 관리자를 붙잡는 시간의 토큰 버킷: 한도 1.375초 · 초당 0.5초 보충. 출발지 검사를 지난 요청마다 걸린 시간을 뺀다. api 행은 잔액 검사(`allow`)에 걸리지 않지만, 걸린 시간은 다른 요청처럼 차감된다 | `ingestauth/holdbudget.go:9-10` · `handler.go:115-150,204-206` |
+| 11 | publish 판정 순서 | 형식 → **IP 한도 검사** → 거부 목록 → 예산 → 요청 ctx → 실패 토큰 차례 → **IP 한도 차감** → 4C resolve → 기억 갱신 → 연결 기록 추가 → 거부 목록 마지막 확인 → 200. 위에서 처음 맞는 행이 답이다. 이 순서는 4(출발지 403) · 14(호출자 Basic 401)를 지나 본문을 읽은 뒤다 | `publish.go` `publish` · `allowPublish` |
+| 12 | 예산 | auth 를 부르느라 MediaMTX 경로 관리자를 붙잡는 시간의 토큰 버킷: 한도 1.375초 · 초당 0.5초 보충. 출발지 · 호출자 Basic 검사(4 · 14)를 지난 요청마다 걸린 시간을 뺀다. api 행은 잔액 검사(`allow`)에 걸리지 않지만, 걸린 시간은 다른 요청처럼 차감된다 | `ingestauth/holdbudget.go` `holdBurst` · `holdRefill` · `handler.go` `layers` · `api` |
 | 13 | 시한 | 요청 도착부터 resolve 시한 1.125초, 바깥 가드는 +50ms(1.175초). 상수이며 설정으로 바꿀 수 없다 | `handler.go:17-21,130-136` · `publish.go:16-18,88-97` |
-| 14 | 송출자 IP별 시도 한도 | 본문 `ip` 의 키(IPv4 /32 · IPv6 /64 — IPv4-mapped 는 IPv4, zone 은 뗌)마다 **resolve 를 부르는 시도**를 GCRA 로 센다: `BURST` 번(기본 30)은 몰아 쓰고 그 뒤 `INTERVAL`(기본 3초)에 하나. 성공(200)도 센다(공개 토큰 + 틀린 passphrase 시도도 응답기에는 200 이다). 예산 · 차례 거절 · 형식 거절은 세지 않는다. 벌칙 없음 — 통이 비면 3초마다 하나씩 다시 허용. 키 상한 16,384 — 차면 새 키는 기록 없이 예산만 탄다(fail-open). 메모리 상태라 다시 뜨면 비어서 시작한다. publish 행만 걸고 api · read 는 걸지 않는다. 끄기 = `INGEST_AUTH_IP_LIMIT=off`(1-5 의 9) | `ingestauth/iplimit.go` `ipLimiter` · `publish.go` `ipAdmit` · `ipTake` |
+| 14 | 호출자 Basic(둘째 행) | 4 를 지난 요청의 `Authorization: Basic` 이 `INGEST_AUTH_BASIC_USER` · `INGEST_AUTH_BASIC_PASS` 와 다르거나 없거나 깨졌으면 401(본문 없음) + WARN `ingestauth_caller_unauthenticated`. **본문을 읽기 전**이고 4 처럼 예산 · 시한 가드 밖이다. 비교는 api 행과 같은 꼴(SHA-256 다이제스트끼리 상수 시간 · 사용자와 비번을 늘 둘 다). 모든 action(api · read · publish)에 걸린다. `INGEST_AUTH_CALLER_BASIC=off`(명시 끔)면 보지 않는다 — 자격도 끔도 없으면 기동 거부. 비밀번호는 24자 이상이어야 기동한다(1-5 의 12) | `ingestauth/callerauth.go` `denyUnauthenticatedCaller` · `callerBasicOn` · `handler.go` `layers` |
+| 15 | 송출자 IP별 시도 한도 | 본문 `ip` 의 키(IPv4 /32 · IPv6 /64 — IPv4-mapped 는 IPv4, zone 은 뗌)마다 **resolve 를 부르는 시도**를 GCRA 로 센다: `BURST` 번(기본 30)은 몰아 쓰고 그 뒤 `INTERVAL`(기본 3초)에 하나. 성공(200)도 센다(공개 토큰 + 틀린 passphrase 시도도 응답기에는 200 이다). 예산 · 차례 거절 · 형식 거절은 세지 않는다. 벌칙 없음 — 통이 비면 3초마다 하나씩 다시 허용. 키 상한 16,384 — 차면 새 키는 기록 없이 예산만 탄다(fail-open). 메모리 상태라 다시 뜨면 비어서 시작한다. publish 행만 걸고 api · read 는 걸지 않는다. 본문을 읽은 뒤라 14 의 401 보다 뒤다. 끄기 = `INGEST_AUTH_IP_LIMIT=off`(1-5 의 16) | `ingestauth/iplimit.go` `ipLimiter` · `publish.go` `ipAdmit` · `ipTake` |
 
 ### 1-2. 응답기 → MediaMTX (응답)
 
@@ -50,7 +56,7 @@
 |---|---|---|---|
 | 1 | publish 허용 | `200` · `Content-Type: application/json` · `Cache-Control: no-store` · 본문 `{"srtPassphrase":"<원문>"}`. passphrase 원문이 나가는 **유일한 자리** | `publish.go:225-241` · `ingestauth/doc.go:8-10` |
 | 2 | api 허용(출발지 = SelfIP ∧ 자격 일치) · read | `200` 빈 본문 | `handler.go:196-198,207-211` |
-| 3 | api 거부 · publish 의 모든 거부 | `401` 본문 없음(MediaMTX 가 비-2xx 본문을 오류 문구에 싣기 때문) | `handler.go:183-184,212-214` · `publish.go:252-265` |
+| 3 | api 거부 · publish 의 모든 거부 · 호출자 Basic 실패(1-1 의 14) | `401` 본문 없음(MediaMTX 가 비-2xx 본문을 오류 문구에 싣기 때문) | `handler.go` `ServeHTTP` · `api` · `publish.go` `denyPublish` · `callerauth.go` `denyUnauthenticatedCaller` |
 | 4 | 본문 불량(크기 · JSON · ip · id) | `400` 본문 없음 | `handler.go:186-190` |
 | 5 | 호출자 불일치 | `403` 본문 없음 | `handler.go:177-179` |
 | 6 | 바깥 가드가 먼저 끝냄 | `503` 본문 `timeout`. 보통은 resolve 시한(가드보다 50ms 앞)이 먼저라 401 이다 | `handler.go:131` · `publish.go:88-97` |
@@ -61,7 +67,7 @@
 | # | 항목 | 내용 | 근거 |
 |---|---|---|---|
 | 1 | 호출 | `POST {STREAM_KEY_RESOLVE_URL}/internal/stream-keys/resolve`. URL 은 http · https 절대 URL, **호스트 이름 허용**, 사용자 정보 · 질의 · 조각 불가 | `media/internal/keyresolve/client.go:29,51-71` |
-| 2 | 헤더 | 전용 출입증 `X-Stream-Key-Resolve-Token: <값>` · `Content-Type: application/json`. 공용 `X-Internal-Token` 은 쓰지 않는다 | `client.go:26,72,176-177` |
+| 2 | 헤더 | 출입증 헤더는 **창구 설정**(`STREAM_KEY_RESOLVE_CHANNEL`)이 고른다 — 비면 · `resolve-token` 이면 전용 `X-Stream-Key-Resolve-Token: <값>`, `internal-token` 이면 공용 `X-Internal-Token: <값>`. **늘 하나만** 싣는다(둘 다 실리면 auth 의 전용 체인이 가져간다). `Content-Type: application/json` | `keyresolve/client.go` `Channel` · `NewClient`(`authorize`) · `cmd/ingest-auth/config.go` `resolveChannel` |
 | 3 | 본문 | `{"streamid":"#!::r=<토큰>,m=publish"}` — MediaMTX 는 SRT streamid 원문을 주지 않고 경로(토큰)만 주므로 정규형을 다시 만든다 | `client.go:141-143,169` · 위키 계약4 2절 |
 | 4 | 응답 해석 | 200 + `valid:true` → `userId` · `passphrase` 필수. `valid:false` → reason `MALFORMED` · `NOT_FOUND` · `REVOKED`(그 밖의 값은 `rejected`). 허락인데 passphrase 가 형식 밖이면 401 + ERROR `ingestauth_passphrase_invalid` | `client.go:146-153,207-226` · `publish.go:79-82,338-350` |
 | 5 | 판단 불가 | 비-200 · 시간 초과 · 연결 실패 · 해석 실패 → 그 새 연결을 401(`undecided`)로 거부. 진행 중인 송출은 건드리지 않는다. 판단 불가였던 토큰은 기억해 차례로 다시 묻는다(기억된 토큰 전체에서 4초에 하나) | `client.go:106-130,185-187` · `publish.go:380-389` · `ingestauth/doc.go:3-6` |
@@ -83,7 +89,14 @@
 
 ### 1-5. 설정 입력 — 환경 변수 전체
 
-코드에 `_FILE` 꼴 입력은 **하나도 없다**(환경 변수 이름은 아래 11개가 전부).
+환경 변수 이름은 아래 18개가 전부다. 비밀 셋(5 · 8 · 12)은 값 변수 대신 이름에 `_FILE` 을 붙인 변수(6 · 9 ·
+13)로 **그 값이 든 파일의 절대 경로**를 줘도 된다. 둘 다 주면 기동 거부, 둘 다 없으면 기동 거부다.
+단 Basic 비밀번호(12 · 13)에는 예외가 있다 — 14 가 `off` 면 거꾸로 둘 다 없어야 하고, 11 · 12 · 13
+가운데 하나라도 있으면 기동 거부다(`config.go` `loadCallerBasic`, 1-1 의 14). 파일 규칙은 사이드카
+`MTX_API_PASS_FILE` 과 같다(일반 파일 · other 권한 · group 쓰기 거부 · 4 KiB · 끝 줄바꿈 하나만 걷음 ·
+실패 = 기동 실패 — `internal/secretfile`). 에러에는 **어느 갈래에서도 경로를 싣지 않고** 변수 이름과 원인만
+싣는다(`cmd/ingest-auth/secrets.go` `resolveSecret`). cut 은 Control API 셋(3 · 4 · 5
+또는 6)만 읽는다.
 
 | # | 이름 | 필수 | 비밀 | 내용 · 검사 | 근거 |
 |---|---|---|---|---|---|
@@ -91,16 +104,25 @@
 | 2 | `INGEST_AUTH_CALLER_IP` | 필수 | 아니오 | MediaMTX 의 주소(IP 리터럴, 미지정 불가). 1-1 의 4 가 TCP 피어와 견준다. dev `<A_mtx>` | `config.go:56-64` · `compose.yml:60` |
 | 3 | `MTX_API_URL` | 필수 | 아니오 | 1-4 의 4. `run` 도 검사한다. dev `http://<A_mtx>:9997` | `config.go:94-110` · `compose.yml:61` |
 | 4 | `MTX_API_USER` | 필수 | 아니오 | Control API Basic 사용자 이름. 응답기의 api 행이 같은 값을 기대한다 | `config.go:19` · `handler.go:82-83,93` |
-| 5 | `MTX_API_PASS` | 필수 | **예** | Control API Basic 비밀번호. 응답기는 **SHA-256 다이제스트만** 쥐고(원문 보관 없음) api 행에서 견준다. dev 는 `.env` 에서 compose 보간 | `config.go:21` · `handler.go:93-94` · `compose.yml:63` |
-| 6 | `STREAM_KEY_RESOLVE_URL` | 필수 | 아니오(그러나 dev 는 사설 주소라 문서 · 로그에 싣지 않는다) | 1-3 의 1. 기동 로그에는 호스트의 **부류**(private · public · name · other)와 포트만 싣는다 | `config.go:112-170` · `.env.example:6` |
-| 7 | `STREAM_KEY_RESOLVE_TOKEN` | 필수 | **예** | 4C 전용 출입증. 제어 문자 · 앞뒤 공백이면 기동 거부. auth 쪽 설정 값과 같아야 한다 | `keyresolve/client.go:55-61` · `.env.example:8` |
-| 8 | `LOG_LEVEL` | 선택(기본 info) | 아니오 | debug · info · warn · error. 틀리면 기동 실패 | `config.go:80-92` |
-| 9 | `INGEST_AUTH_IP_LIMIT` | 선택(기본 `on`) | 아니오 | `on` · `off`(1-1 의 14). 그 밖의 값(`On` · `false` 등)은 기동 실패. dev compose 가 `.env` 에서 넘긴다(`${INGEST_AUTH_IP_LIMIT:-on}`) — 바꾼 값은 `restart` 가 아니라 응답기 재생성(`up -d --force-recreate ingest-auth`)으로 반영된다 | `cmd/ingest-auth/iplimit_config.go` `loadIPLimit` · `compose.yml` |
-| 10 | `INGEST_AUTH_IP_LIMIT_BURST` | 선택(기본 30) | 아니오 | 정수 1–1000. 꺼짐이어도 검사한다. dev compose 는 넘기지 않는다(기본값) | `iplimit_config.go` |
-| 11 | `INGEST_AUTH_IP_LIMIT_INTERVAL` | 선택(기본 `3s`) | 아니오 | Go duration 100ms–10m. 꺼짐이어도 검사한다. dev compose 는 넘기지 않는다(기본값) | `iplimit_config.go` |
+| 5 | `MTX_API_PASS` | 필수(또는 6) | **예** | Control API Basic 비밀번호. 응답기는 **SHA-256 다이제스트만** 쥐고(원문 보관 없음) api 행에서 견준다. dev 는 `.env` 에서 compose 보간 | `config.go` `envMTXAPIPass` · `handler.go` `newHandler` · `compose.yml` `ingest-auth` 의 `environment` |
+| 6 | `MTX_API_PASS_FILE` | 5 대신 | 경로(값은 아님) | 5 의 값이 든 파일의 절대 경로 | `secrets.go` `resolveSecret` |
+| 7 | `STREAM_KEY_RESOLVE_URL` | 필수 | 아니오(그러나 dev 는 사설 주소라 문서 · 로그에 싣지 않는다) | 1-3 의 1. 기동 로그에는 호스트의 **부류**(private · public · name · other)와 포트만 싣는다 | `config.go` `newResolver` · `authTarget` · `.env.example` 의 `STREAM_KEY_RESOLVE_URL` 설명 줄 |
+| 8 | `STREAM_KEY_RESOLVE_TOKEN` | 필수(또는 9) | **예** | 4C 출입증(창구는 15). 제어 문자 · 앞뒤 공백이면 기동 거부. auth 쪽 설정 값과 같아야 한다 | `keyresolve/client.go` `NewClient` · `headerSafe` · `.env.example` 의 `STREAM_KEY_RESOLVE_TOKEN` 설명 줄 |
+| 9 | `STREAM_KEY_RESOLVE_TOKEN_FILE` | 8 대신 | 경로(값은 아님) | 8 의 값이 든 파일의 절대 경로 | `secrets.go` `resolveSecret` |
+| 10 | `LOG_LEVEL` | 선택(기본 info) | 아니오 | debug · info · warn · error. 틀리면 기동 실패 | `config.go` `logLevel` |
+| 11 | `INGEST_AUTH_BASIC_USER` | 12 와 함께 필수(14 가 off 가 아니면) | 아니오 | 호출자(MediaMTX) Basic 사용자 이름(1-1 의 14). `authHTTPAddress` URL 에 렌더되므로 **URL unreserved 문자(`A-Z a-z 0-9 - . _ ~`)만** 받는다 | `config.go` `loadCallerBasic` · `unreserved` |
+| 12 | `INGEST_AUTH_BASIC_PASS` | 11 과 함께 필수(또는 13 · 14 가 off 가 아니면) | **예** | 호출자 Basic 비밀번호. unreserved 문자만, **24자 이상**(짧으면 기동 거부 — 에러엔 변수 이름 · 최소 길이만, kty 120차). 길이 · 문자 집합만 보고 무작위성은 보지 않는다 — 같은 글자 반복 같은 약한 값도 기동은 통과하니 값은 무작위로 만든다(2절 「후보값」 표의 4b). 응답기는 SHA-256 다이제스트만 쥔다 | `config.go` `loadCallerBasic` · `minCallerBasicPassLen` · `ingestauth/handler.go` `newHandler` |
+| 13 | `INGEST_AUTH_BASIC_PASS_FILE` | 12 대신 | 경로(값은 아님) | 12 의 값이 든 파일의 절대 경로 | `secrets.go` `resolveSecret` |
+| 14 | `INGEST_AUTH_CALLER_BASIC` | 선택 | 아니오 | `off` 만 받는다(명시 끔 — 11 · 12 · 13 가운데 하나라도 함께 주면 기동 거부). 그 밖의 값은 기동 거부. dev-media 는 `off`(제어망이 따로 있어 1-1 의 4 가 MediaMTX 를 가른다) | `config.go` `loadCallerBasic` · `compose.yml` |
+| 15 | `STREAM_KEY_RESOLVE_CHANNEL` | 선택(기본 `resolve-token`) | 아니오 | 4C 창구(1-3 의 2): `resolve-token`(전용) · `internal-token`(공용). 그 밖의 값은 기동 거부. prod 는 `internal-token`(118차) — 빠뜨리면 전용 헤더로 가 auth 가 401 이고 started `auth_channel=resolve-token` · `ingestauth_auth_degraded` `status=401` 로 드러난다 | `config.go` `resolveChannel` |
+| 16 | `INGEST_AUTH_IP_LIMIT` | 선택(기본 `on`) | 아니오 | `on` · `off`(1-1 의 15). 그 밖의 값(`On` · `false` 등)은 기동 실패. dev compose 가 `.env` 에서 넘긴다(`${INGEST_AUTH_IP_LIMIT:-on}`) — 바꾼 값은 `restart` 가 아니라 응답기 재생성(`up -d --force-recreate ingest-auth`)으로 반영된다 | `cmd/ingest-auth/iplimit_config.go` `loadIPLimit` · `compose.yml` |
+| 17 | `INGEST_AUTH_IP_LIMIT_BURST` | 선택(기본 30) | 아니오 | 정수 1–1000. 꺼짐이어도 검사한다. dev compose 는 넘기지 않는다(기본값) | `iplimit_config.go` |
+| 18 | `INGEST_AUTH_IP_LIMIT_INTERVAL` | 선택(기본 `3s`) | 아니오 | Go duration 100ms–10m. 꺼짐이어도 검사한다. dev compose 는 넘기지 않는다(기본값) | `iplimit_config.go` |
 
 환경 변수가 아닌 **이미지 안 고정값**(설정으로 못 바꾼다): 거부 목록 `/etc/ingest-auth/deny-tokens` · 기록 디렉터리 `/var/lib/ingest-auth` · healthz 리스너 `127.0.0.1:8081`(`main.go:32-34`), 시한들(1-1 의 3 · 13).
-환경에 비밀이 든 채로 `docker inspect` 에 보이는 것은 5 · 7 번이다(사이드카 README 가 같은 까닭으로 파일 입력을 택했다 — `media/README.md:199`).
+비밀을 값 변수(5 · 8 · 12)로 주면 `docker inspect` 에 보인다 — prod 는 `_FILE`(6 · 9 · 13)로
+준다(사이드카 README 가 같은 까닭으로 파일 입력을 택했다 — `media/README.md` 의 사이드카 환경변수
+표 `MTX_API_PASS_FILE` 행).
 
 ### 1-6. 파일 · 디렉터리
 
@@ -141,13 +163,28 @@ JSON 한 줄씩 stdout(`slog`). 이벤트 이름은 `ingestauth_*`.
 | # | 구분 | 내용 | 근거 |
 |---|---|---|---|
 | 1 | 남는 것(허용) | `publish_allowed`: `path`(토큰) · `conn_id` · `user_id` · `resolve_ms` | `publish.go:201-208` |
-| 2 | 남는 것(거부) | `publish_denied`: `path`(**토큰 꼴일 때만**) · `conn_id` · `reason` · `resolve_status` · `resolve_ms` · `wait`(`reason=ip_limited` 은 DEBUG 이고 `path` · `conn_id` · `reason` 만). `caller_denied`(`remote_ip` = TCP 피어) · `api_denied`(`ip` = 본문 ip) · `request_invalid`(reason 만). **IP 한도 사건**(WARN — 에피소드마다 한 줄): `ip_limited`(`ip` = 키 문자열, IPv6 는 /64 접두 · `ip_kind` = public · private · loopback · other · `burst` · `interval_ms`) · `ip_limit_released`(`ip` · `denied` · `limited_for_ms` — 통이 다시 다 찬 뒤 처음 보거나 정리할 때) · `ip_limit_released_summary`(`count` · `denied_total` — 정리 한 번에 32개를 넘은 몫) · `ip_limit_full` / `ip_limit_recovered`(`max_entries`) · `ip_limit_unkeyed`(`ip_kind`). 토큰 · 연결 id · passphrase 는 싣지 않는다 | `publish.go:252-288` · `handler.go:177,212` · `request.go:21-28` · `iplimit.go` `logEvents` |
-| 3 | 남는 것(상태) | `started`(`listen` · `caller_ip` · `auth_host_kind` · `auth_port` · `deadline_ms` · `ip_limit` · `ip_limit_burst` · `ip_limit_interval_ms` · `health`) · `denylist_changed`(개수만) · `denylist_error` / `recovered` · `connlog_rotated`(bytes) · `failed_cleared` · cut 출력 한 줄(`path` · 출처별 개수 · `kicked` …) | `serve.go:74-80` · `denylist.go:161,172,182` · `connlog.go:36-37` · `cmd/ingest-auth/cut.go:64-80` |
+| 2 | 남는 것(거부) | `publish_denied`: `path`(**토큰 꼴일 때만**) · `conn_id` · `reason` · `resolve_status` · `resolve_ms` · `wait`(`reason=ip_limited` 은 DEBUG 이고 `path` · `conn_id` · `reason` 만). `caller_denied`(`remote_ip` = TCP 피어) · `caller_unauthenticated`(WARN — `remote_ip` = TCP 피어 · `reason` = `missing` · `malformed` · `mismatch`, 자격 값 없음) · `api_denied`(`ip` = 본문 ip) · `request_invalid`(reason 만). **IP 한도 사건**(WARN — 에피소드마다 한 줄): `ip_limited`(`ip` = 키 문자열, IPv6 는 /64 접두 · `ip_kind` = public · private · loopback · other · `burst` · `interval_ms`) · `ip_limit_released`(`ip` · `denied` · `limited_for_ms` — 통이 다시 다 찬 뒤 처음 보거나 정리할 때) · `ip_limit_released_summary`(`count` · `denied_total` — 정리 한 번에 32개를 넘은 몫) · `ip_limit_full` / `ip_limit_recovered`(`max_entries`) · `ip_limit_unkeyed`(`ip_kind`). 토큰 · 연결 id · passphrase 는 싣지 않는다 | `publish.go` `denyPublish` · `identityAttrs` · `handler.go` `denyForeignCaller` · `api` · `callerauth.go` `denyUnauthenticatedCaller` · `request.go` 의 `invalid*` 상수 · `iplimit.go` `logEvents` |
+| 3 | 남는 것(상태) | `started`(`listen` · `caller_ip` · `caller_auth`(`basic` · `off`) · `auth_host_kind` · `auth_port` · `auth_channel`(`resolve-token` · `internal-token`) · `deadline_ms` · `ip_limit` · `ip_limit_burst` · `ip_limit_interval_ms` · `health`) · `caller_basic_off`(WARN — 명시 끔으로 기동할 때마다 한 줄. prod 에서 보이면 설정 누락) · `denylist_changed`(개수만) · `denylist_error` / `recovered` · `connlog_rotated`(bytes) · `failed_cleared` · cut 출력 한 줄(`path` · 출처별 개수 · `kicked` …) | `serve.go` `serve`(`ingestauth_started` · `caller_basic_off`) · `denylist.go` `merge` · `setFailing` · `clearFailing` · `connlog.go` `rotateIfFull` · `cmd/ingest-auth/cut.go` `writeCutLine` |
 | 3b | 남는 것(장애 · 복구) | `auth_degraded`(ERROR — `reason` · `status`: 판정 불가가 처음 선 때) · `auth_recovered`(ERROR — `down_for` · `denied_during` · `budget_denied` · `recheck_denied`) · `connlog_error`(ERROR — `error`: 기록 쓰기 실패) · `connlog_recovered`(ERROR). healthcheck 는 auth 상태를 보지 않으므로 auth 장애의 유일한 신호다 | `ingestauth/gauge.go:43-74,90-101` |
-| 4 | 남지 않는 것 | passphrase 원문(200 본문 한 자리만) · 4C 출입증 · API 비밀번호 · 거부 목록 줄 내용 · 토큰 꼴이 아닌 경로 · publish 요청의 `user` / `password` · **publish 한 송출자의 IP(IP 한도 사건만 예외 — 위 2, 결정 119차 Q2)** · 4C URL 의 주소(부류 · 포트만) · 에러 문구의 환경 변수 값(변수 이름만) | `ingestauth/doc.go:8-10` · `request.go:34-36` · `config.go:128-130` · `main.go:14-17` |
+| 4 | 남지 않는 것 | passphrase 원문(200 본문 한 자리만) · 4C 출입증 · API 비밀번호 · 호출자 Basic 자격(`Authorization` 원문 포함) · 비밀 파일의 경로 · 거부 목록 줄 내용 · 토큰 꼴이 아닌 경로 · publish 요청의 `user` / `password` · **publish 한 송출자의 IP(IP 한도 사건만 예외 — 위 2, 결정 119차 Q2)** · 4C URL 의 주소(부류 · 포트만) · 에러 문구의 환경 변수 값(변수 이름만) | `ingestauth/doc.go` 패키지 주석 · `request.go` `mtxRequest` · `config.go` `authTarget` · `main.go` 패키지 주석 |
 | 5 | 비밀 보호 장치 | `Secret` 타입은 지원하는 문자열 포맷(`String`) · `GoString` · `slog` 에서 `[REDACTED]` 를 내고, 그 밖의 포맷도 원문을 노출하지 않는다(원문은 포인터 뒤 비공개 필드 — `secret.go:12-14`; `encoding/json` 직접 직렬화는 `{}`, JSON 마샬러는 없다). 조립 시험이 확인한다 | `ingestauth/secret.go:1-44` · `serve.go:90-98` |
 
-**1절 표 행 수**: 1-1 14행 · 1-2 7행 · 1-3 8행 · 1-4 7행 · 1-5 11행 · 1-6 7행 · 1-7 6행 · 1-8 4행 · 1-9 6행(3b 포함) = **70행**.
+잔여 위험: `caller_unauthenticated` 는 `caller_denied` 처럼 요청마다 한 줄이라, 같은 netns 에서 틀린
+Basic 을 몰아 보내면 로그가 불어난다. 줄 수 한도 · 표본화는 없고 남는 방어는 로그 회전(배치 몫)뿐이다.
+S1(송출자 IP별 시도 한도 — 1-1 의 15)은 본문을 읽은 뒤에 돌아 이 401 보다 뒤라 막아 주지
+않는다.
+
+잔여 위험(비밀 파일 소유자): `_FILE` 검사(1-5 표 위 문단)는 파일 종류 · 권한 비트 · 크기 · 내용만 보고
+소유자 uid 는 보지 않는다. 소유자는 모드와 상관없이 파일을 바꿔 쓸 수 있다. 그래서 비밀 파일을 root 나
+10003 소유로 두는 것은 배치 몫이다(2절 후보값 표 6).
+
+잔여 위험(평문 http): MediaMTX → 응답기 인증 요청과 응답기 → Control API 호출은 http 평문이다. 호출자
+Basic · Control API 자격과 200 본문의 passphrase 가 암호화 없이 오간다. 응답기에는 TLS 리스너가 없고
+`MTX_API_URL` 은 http 만 받는다(1-4 의 4). 이 구간을 바깥에서 엿볼 수 없게 가두는 것은 배치 몫이다 —
+dev 는 `internal` 제어망, prod 후보는 같은 netns 루프백(D1 · 2절 후보값 표 1).
+
+**1절 표 행 수**: 1-1 15행 · 1-2 7행 · 1-3 8행 · 1-4 7행 · 1-5 18행 · 1-6 7행 · 1-7 6행 ·
+1-8 4행 · 1-9 6행(3b 포함) = **78행**.
 
 ---
 
@@ -158,14 +195,14 @@ prod 기대 = 계획 M2(Media 상자 compose) · M15(송출 인증 반영) · O8
 | # | 차이 | 응답기 코드 변경 | 한 줄 |
 |---|---|---|---|
 | D1 | 연결 꼴: 같은 netns 루프백 vs 제어망 고정 주소 | 불필요(추론 — 실측 필요) | 계획은 루프백 · 같은 netns, dev 는 별도 제어망 |
-| D2 | 호출자 IP 검사가 같은 netns 안에서는 구별력을 잃는다 | 현재 TCP 피어 IP 검사로는 구별 불가. Basic 자격(K1 (라), 포크 실측으로 확인됨)으로 구별 — 응답기에 Basic 검사 추가 필요 | nginx · 사이드카도 같은 `127.0.0.1` 로 보인다 |
+| D2 | 호출자 IP 검사가 같은 netns 안에서는 구별력을 잃는다 | 현재 TCP 피어 IP 검사로는 구별 불가. Basic 자격(K1 (라), 포크 실측으로 확인됨)으로 구별 — 응답기에 Basic 검사를 더했다(트랙 A, 1-1 의 14) | nginx · 사이드카도 같은 `127.0.0.1` 로 보인다 |
 | D3 | Control API 인증: 계획은 `api` 를 응답기에서 제외, 실물은 응답기 경유 | 불필요 | 제외하면 Control API 무인증 |
-| D4 | 비밀 전달: 계획은 tmpfs 파일 경로, 실물은 환경 변수만 | **필요** | `_FILE` 입력이 코드에 없고 이미지에 셸이 없다 |
+| D4 | 비밀 전달: 계획은 tmpfs 파일 경로, 기존 dev 가동판은 환경 변수만 | **필요** — 더했다(트랙 A, 1-5 의 6 · 9 · 13) | 기존 가동판엔 `_FILE` 입력이 없었고 이미지에 셸이 없다 |
 | D5 | 송출자 `ip`: 계획이 응답기 요청에서 검증하려는 것을 응답기는 안 남긴다 | 선택 | publish 판정 · 로그에 ip 를 쓰지 않는다 |
 | D6 | action 처리: 계획의 제외 목록에 `playback` 이 없다 | 불필요 | 그 밖의 action 은 전부 401 |
 | D7 | 거부 목록 · 상태의 저장 자리 | 불필요 | 상자 교체 시 거부 목록 소실 = 신호 없이 풀림 |
 | D8 | 재시작 단위: 계획 문구 vs M2 브랜치 vs dev 운영 절차 | 불필요 | 응답기만 다시 시작할 수 있어야 한다 |
-| D9 | 4C 호출 경로 · 인증 방식 · 출발지 잠금 | 전용 창구 유지면 불필요, 공용 창구 전환이면 헤더 변경 필요(auth 쪽은 3번) | 계약이 「운영 Media 경로 미정」, prod auth 의 `native` 와 전용 토큰 창구는 양립 불가 |
+| D9 | 4C 호출 경로 · 인증 방식 · 출발지 잠금 | 창구 헤더를 설정으로 고르게 더했다(트랙 A, 1-3 의 2 · 1-5 의 15). auth 쪽은 3번 | 계약이 「운영 Media 경로 미정」, prod auth 의 `native` 와 전용 토큰 창구는 양립 불가 |
 | D10 | 시한 · 예산 상수가 환경 변수로 안 열린다 | 측정 뒤 판단 | prod 의 auth 왕복이 dev 와 다를 수 있다 |
 | D11 | compose 자리가 비어 있다(포트 · 볼륨 · healthcheck · 기동 순서) | 불필요 | M15 c2 가 채울 목록 |
 | D12 | prod MediaMTX 에 SRT 송출 · 읽기 경로 잠금과 `overridePublisher: no` 가 없다 | 불필요(MediaMTX 설정) | `read` 는 응답기가 늘 200 이라 SRT 읽기 방어는 이 잠금뿐 |
@@ -187,6 +224,9 @@ prod 기대 = 계획 M2(Media 상자 compose) · M15(송출 인증 반영) · O8
 
 - **계획이 가정한 것**: 언급 없음. 「SG 가 필요 없다」(계획 747행)만 있다.
 - **실물**: 응답기의 첫 방어선은 TCP 피어 주소 = `CALLER_IP`(1-1 의 4)이다. dev 에서는 nginx 가 제어망에 없어 응답기에 닿지도 못한다(`compose.yml:116-118`). 같은 netns 에서는 **nginx · 사이드카 · janitor 도 피어가 `127.0.0.1`** 이라 **현재의 TCP 피어 IP 검사로는** MediaMTX 와 구별되지 않는다. 그 컨테이너 안에서 `POST /mediamtx/auth` 를 칠 수 있으면 공개 식별자인 토큰(HLS 경로 이름이기도 하다 — `mediamtx.demo.yml.tmpl:64-65`)으로 **passphrase 를 200 본문으로 받을 수 있다**(`publish.go:225-241`). 거부 목록 · 예산 · 4C 검증은 그대로 거치지만 호출자 구별만 사라진다.
+- **트랙 A 뒤**: 위 passphrase 노출은 호출자 Basic 검사(1-1 의 14)가 없던 기존 가동판의 모습이다.
+  지금은 TCP 피어 검사(1-1 의 4) 다음에 Basic 검사가 서서, 자격 없는 요청은 본문을 읽기 전에
+  401 이다. 자격을 읽을 수 있는 주체에게 남는 위험은 바로 아래 잔여 위험이다.
 - **잔여 위험(숨기지 않고 적는다)** — K1 (라) 채택 뒤의 모습: **nginx 침해 → 막힌다**(Control API 자격이 없어 설정 조회로 Basic 자격을 읽지 못하고, 응답기를 직접 쳐도 Basic 이 없어 401). **사이드카 침해 → 못 막는다**: 사이드카는 Control API 자격을 쥐고 있으므로 설정 조회로 Basic 자격을 읽고(위 ③), 그 자격으로 응답기에 물어 공개 토큰마다 **모든 계정의 passphrase** 를 받을 수 있다. `overridePublisher: no` 는 진행 중인 송출의 탈취만 막고, 송출 중이 아닌 계정 경로에 먼저 송출하는 것은 막지 않는다(D12). 사이드카도 침해 대상이 되는 것은 (라) 이전에는 구별되지 않던 것이 nginx 와 사이드카를 가른 만큼 줄어든 위험이다.
 - **완화 후보(확인 항목)**: 응답기가 `action=api` 요청 가운데 **설정 조회를 사이드카 자격에 대해 거부**할 수 있는가. 인증 요청 본문에 API 경로가 실리는지가 **미확인**이다(응답기가 읽는 본문 필드는 1-1 의 6 뿐 — `path` 가 API 경로인지는 코드에서 확정되지 않았다).
 - **선택지**:
@@ -195,7 +235,7 @@ prod 기대 = 계획 M2(Media 상자 compose) · M15(송출 인증 반영) · O8
   - (라) **별도 자격 검증 — 확인됨(kty 결정 2026-10-20 채택)**: `authHTTPAddress` 를 `http://사용자:비번@127.0.0.1:포트/…` 꼴로 두면 응답기가 호출자를 Basic 으로 검증할 수 있다. 포크 `v1.21.1-pokeclip.2` 이미지 로컬 실측(2026-10-20)으로 **확인된 것은 셋**이다: ① MediaMTX 가 응답기로 보내는 요청에 `Authorization: Basic` 이 실린다 ② 인증 실패 로그는 `http://user:***@…` 로 비밀번호를 가린다 ③ **Control API 의 설정 조회(`GET /v3/config/global/get`)는 `authHTTPAddress` 를 자격 평문 그대로 돌려준다**(가림 없음 · 로그 노출은 0). 소스 근거: `internal/auth/manager.go` 의 `httpClient.Post(m.HTTPAddress, …)`, `internal/conf/conf.go` 는 `http(s)` 접두만 검사. ③ 때문에 **Control API 에 인증된 주체(사이드카 · 응답기 자신)는 Basic 자격을 읽을 수 있고, Control API 자격이 없는 nginx 는 읽지 못한다.** 응답기 코드 변경 = Basic 검사 추가(「응답기 코드 변경 한 묶음」). 비용: 비밀이 하나 늘고 MediaMTX 설정 파일에 비밀이 든다(tmpfs 렌더 · `0400` 10002 — M2 c4 의 `mediamtx.yml` 렌더와 같은 자리).
 - **표현 한정**: 「구별 불가」는 **현재의 TCP 피어 IP 검사로는**이라는 한정이 붙는다. 다른 수단이 불가능하다는 뜻이 아니다.
 - **다른 결정에 주는 영향**: (라)를 채택하면 K1 의 잔여 위험이 nginx 에 대해 줄고(사이드카에 대해서는 위), K2(Control API 비밀)와 K3(비밀 파일 수)에 인증 비밀이 하나 더 생긴다(응답기 ← 이 URL 자격, MediaMTX 설정에도 렌더). K1 · K2 는 한 묶음으로 정한다.
-- **응답기 코드 변경**: (가) · (나) 없음, (라) 필요(채택됨).
+- **응답기 코드 변경**: (가) · (나) 없음, (라) 필요(채택됨 — 트랙 A 가 더했다, 1-1 의 14).
 
 ### D3. Control API 인증 — `api` 를 제외할 것인가, 응답기가 판정할 것인가
 
@@ -211,19 +251,22 @@ prod 기대 = 계획 M2(Media 상자 compose) · M15(송출 인증 반영) · O8
 ### D4. 비밀 전달 — tmpfs 파일 경로 vs 환경 변수
 
 - **계획이 가정한 것**: 「비밀은 환경변수로 넘기지 않는다 … 응답기도 비밀 파일 경로만 받는다(M15)」(계획 738~740 · 1025 · 1724행). M15 c1 시험 「응답기 컨테이너 환경에 비밀 0건」(1552행). 시작 스크립트가 `media_secret_arns` 값을 tmpfs 파일로 렌더, 소유 = 응답기 실행 계정.
-- **실물**: 비밀 둘(`MTX_API_PASS` · `STREAM_KEY_RESOLVE_TOKEN`)은 **환경 변수로만** 읽는다. `_FILE` 입력이 코드에 없다(1-5). 최종 이미지가 scratch(셸 없음)라 「셸 래퍼가 파일을 읽어 export 한 뒤 exec」하는 우회도 불가능하다(`Dockerfile.ingest-auth:15-18`).
+- **실물(기존 dev 가동판)**: 비밀 둘(`MTX_API_PASS` · `STREAM_KEY_RESOLVE_TOKEN`)을
+  **환경 변수로만** 읽었다. `_FILE` 입력이 코드에 없었다 — POK-310 트랙 A 가 더했다(1-5 의 6 · 9 ·
+  13). 최종 이미지가 scratch(셸 없음)라 「셸 래퍼가 파일을 읽어 export 한 뒤 exec」하는 우회도
+  불가능하다(`Dockerfile.ingest-auth` 의 최종 스테이지 `FROM scratch`).
 - **선택지**:
   - (가) 응답기 코드에 `STREAM_KEY_RESOLVE_TOKEN_FILE` · `MTX_API_PASS_FILE` 를 더한다(파일이 있으면 파일, 환경 변수와 동시 지정은 기동 거부). 사이드카의 `MTX_API_PASS_FILE` 규칙(한 줄 · 끝 줄바꿈 하나만 걷음 · other 권한 · group 쓰기 거부 · 4 KiB 이하 · 실패 = 기동 실패 — `media/README.md:206-230`)을 그대로 따를 수 있다. 장: 계획 · 시험(c1)이 그대로 성립, 사이드카와 규칙 통일. 단: 응답기 코드 · 시험 변경(1번 몫, 이 문서 밖).
   - (나) 환경 변수 유지, 계획 · 시험을 고친다(「환경에 비밀 0건」을 「compose 파일에 값 0건」으로 완화 — 값은 시작 스크립트가 만든 `env_file` 로). 장: 코드 변경 0. 단: `docker inspect` 에 비밀이 남는다(사이드카 README 가 파일을 택한 바로 그 이유). M2 의 원칙 「비밀은 환경변수로 넘기지 않는다」와 어긋난다.
 - **값의 출처(같이 정할 것)**: `STREAM_KEY_RESOLVE_TOKEN` 은(전용 창구를 유지할 때) auth 쪽 설정과 같은 값이어야 하므로 Secrets Manager(`media_secret_arns`)에서 읽는다. `MTX_API_PASS` 는 **응답기와 사이드카 둘만 아는 값**이라 Secrets Manager 에 둘 필요 없이 시작 스크립트가 **부팅마다 무작위로 만들어** 두 파일로 렌더해도 된다(둘 다 같은 시작에서 읽는다; 교체 = compose 전체 재시작 — `media/README.md:199`). 단 3번(auth)과 값을 맞출 일이 없는지는 확인 대상이다(추론: 이 값은 MediaMTX ↔ 응답기 ↔ 사이드카 안에서만 쓰인다).
 - **M2 시험과의 충돌(추가 항목)**: M2 `infra/media-host/test/render_test.sh:387` 이 compose 의 환경 변수 **이름**에 `CDN|TOKEN|PASSWORD|SECRET` 계열을 금지한다(계획 743행의 문구). `STREAM_KEY_RESOLVE_TOKEN_FILE` 은 `TOKEN` 에 걸리고 `MTX_API_PASS_FILE` 은 걸리지 않는다. (가)를 택하면 **파일 경로를 담는 변수(`*_FILE`)는 허용하되 비밀 값을 직접 주입하는 변수의 금지는 유지**하도록 그 검사와 계획 743행 문구를 바꿔야 한다(M2 브랜치·계획 수정 몫 — 이 문서는 고치지 않는다).
-- **응답기 코드 변경**: (가)면 **필요**.
+- **응답기 코드 변경**: (가)면 **필요** — K3 로 채택, 트랙 A 가 더했다(1-5 의 6 · 9 · 13).
 
 ### D5. 송출자 `ip` 필드
 
 - **계획이 가정한 것**: M15 c1 시험 「응답기 요청 본문에 송출자 `ip`」, O8a 4 「T8e 때 MediaMTX 인증 요청의 `ip` = 송출자 IP」(계획 1510 · 1552행).
 - **실물**: MediaMTX 가 본문에 `ip` 를 싣는 것은 맞고 응답기가 파싱도 한다(안 되면 400). 그러나 응답기는 **publish 에서 `ip` 를 판정에도 로그에도 쓰지 않는다**(1-1 의 7 · 1-9 의 4). 실물 응답기의 로그만으로는 「`ip` = 송출자 IP」를 확인할 수 없다.
-- **갱신(2026-10-20 · POK-310 트랙 B)**: 이제 응답기는 publish 의 `ip` 를 IP별 시도 한도의 키로 쓰고, **한도 사건에서만** 그 키와 부류(`ip_kind`)를 로그에 남긴다(1-1 의 14 · 1-9 의 2). 그래서 한도를 일부러 일으키면(자극 도달 식 — 트랙 B 계획 5-1) 응답기 로그로 「`ip` = 송출자 IP」를 확인할 수 있다(트랙 B 계획 5-3 D1 · O8a). 요청마다 남기는 (나)는 택하지 않았다. **전제**: `ip` 가 송출자 공인 주소여야 한다 — docker 포트 게시 · NLB 가 출발지를 바꾸면 모든 송출자가 한 키로 묶여 30번 뒤 전원 거절된다. prod SRT 수신은 IPv4 전용이 공개의 선행 조건이다(결정 119차 Q7 — dualstack NLB 는 반대 계열 송출자를 LB 주소 하나로 보인다).
+- **갱신(2026-10-20 · POK-310 트랙 B)**: 이제 응답기는 publish 의 `ip` 를 IP별 시도 한도의 키로 쓰고, **한도 사건에서만** 그 키와 부류(`ip_kind`)를 로그에 남긴다(1-1 의 15 · 1-9 의 2). 그래서 한도를 일부러 일으키면(자극 도달 식 — 트랙 B 계획 5-1) 응답기 로그로 「`ip` = 송출자 IP」를 확인할 수 있다(트랙 B 계획 5-3 D1 · O8a). 요청마다 남기는 (나)는 택하지 않았다. **전제**: `ip` 가 송출자 공인 주소여야 한다 — docker 포트 게시 · NLB 가 출발지를 바꾸면 모든 송출자가 한 키로 묶여 30번 뒤 전원 거절된다. prod SRT 수신은 IPv4 전용이 공개의 선행 조건이다(결정 119차 Q7 — dualstack NLB 는 반대 계열 송출자를 LB 주소 하나로 보인다).
 - **선택지**:
   - (가) 코드 불변. c1(가짜 응답기)이 본문을 기록해 `ip` 를 확인하고, O8a 4 의 실물 확인은 MediaMTX 쪽 연결 로그(연결 시 송출자 주소가 찍히는지는 이 조사에서 확인 안 함 — 미확인)로 한다. 장: 송출자 IP 를 응답기 로그에 새로 남기지 않는다(현 설계가 의도적으로 안 남기는 것). 단: O8a 4 의 수단을 계획에서 다시 적어야 한다.
   - (나) 응답기에 `ip` 를 DEBUG 로 남긴다. 장: 한 곳에서 확인. 단: 개인정보(송출자 IP)가 응답기 로그에 생긴다. 로그 정책 · 누설 시험(`leak_test`) 변경.
@@ -275,7 +318,10 @@ prod 기대 = 계획 M2(Media 상자 compose) · M15(송출 인증 반영) · O8
 - **선택지(출발지 단위)**:
   - (가) 상자에 고정 사설 주소(고정 ENI 등)를 두고 허용 대역을 그 `/32` 하나로. 장: 가장 좁다. 단: 상자 교체 절차에 주소 고정이 들어간다(M9 몫). 코드 · 설정은 이미 지원(`/32` CIDR).
   - (나) 허용 대역을 Media 서브넷 CIDR 로. 장: 교체에 강하다. 단: 대역 안의 다른 호스트도 출발지 조건을 통과한다(토큰은 여전히 필요). **auth 코드 확장은 필요 없다** — 필요한 것은 **계약4 2절 문구 개정 · 3번 승인 · 위 선행 조건과의 기동 호환 확인**이다.
-- **응답기 코드 변경**: 창구에 따라 갈린다. **전용 창구(`X-Stream-Key-Resolve-Token`) 유지 = 응답기 코드 변경 불필요**. **공용 창구(`X-Internal-Token`)로 전환 = 응답기 클라이언트의 헤더 변경 필요**(`media/internal/keyresolve/client.go:26,70-72`가 전용 헤더 이름을 고정한다). 계약 문서 개정은 어느 쪽이든 필요하다(위키 PR, 승인 3번, 1번 통지).
+- **응답기 코드 변경**: 더 없다. 트랙 A 가 창구 설정 `STREAM_KEY_RESOLVE_CHANNEL` 을 더해
+  전용(`X-Stream-Key-Resolve-Token`) · 공용(`X-Internal-Token`) 헤더를 설정으로
+  고른다(1-3 의 2 · 1-5 의 15 — `keyresolve/client.go` `Channel`). 그 전 dev 가동판은 전용 헤더
+  이름을 고정했다. 계약 문서 개정은 어느 창구든 필요하다(위키 PR, 승인 3번, 1번 통지).
 
 ### D10. 시한 · 예산 상수
 
@@ -290,7 +336,7 @@ M2 브랜치의 응답기 자리는 이미지 · netns · `depends_on` · `resta
 
 | # | 채울 것 | 값 · 근거 |
 |---|---|---|
-| 1 | `environment` | 비밀 아닌 값: `INGEST_AUTH_LISTEN` · `INGEST_AUTH_CALLER_IP` · `MTX_API_URL` · `MTX_API_USER` · `STREAM_KEY_RESOLVE_URL` · `LOG_LEVEL` · Basic 사용자 이름(후보값 표 3). 비밀 셋(K3)은 파일 경로 |
+| 1 | `environment` | 비밀 아닌 값: `INGEST_AUTH_LISTEN` · `INGEST_AUTH_CALLER_IP` · `MTX_API_URL` · `MTX_API_USER` · `STREAM_KEY_RESOLVE_URL` · `LOG_LEVEL` · `INGEST_AUTH_BASIC_USER`(후보값 표 3) · `STREAM_KEY_RESOLVE_CHANNEL`(1-5 의 15). 비밀 셋(K3)은 파일 경로 변수 `MTX_API_PASS_FILE` · `STREAM_KEY_RESOLVE_TOKEN_FILE` · `INGEST_AUTH_BASIC_PASS_FILE`(1-5 의 6 · 9 · 13). `INGEST_AUTH_CALLER_BASIC` 은 적지 않는다(`off` 면 Basic 검사가 꺼진다 — 1-5 의 14 · 1-9 의 3) |
 | 2 | `read_only: true` | dev 가 쓴다(1-7 의 3). 쓰는 곳은 상태 디렉터리 하나뿐 |
 | 3 | `volumes` | 거부 목록 디렉터리 → `/etc/ingest-auth`(읽기 전용, 디렉터리 마운트) · 상태 디렉터리 → `/var/lib/ingest-auth` · 비밀 파일(읽기 전용). D7 |
 | 4 | `healthcheck` | `["CMD","/ingest-auth","healthcheck"]` 30초 · 3회 · 유예 10초(1-8). 같은 netns 의 `127.0.0.1:8081` 이라 포트 충돌 점검(D1) |
@@ -316,11 +362,11 @@ M2 브랜치의 응답기 자리는 이미지 · netns · `depends_on` · `resta
 |---|---|---|---|
 | 1 | 인증 리스너 | `127.0.0.1:8080`, 경로 `POST /mediamtx/auth` → MediaMTX `authHTTPAddress: http://127.0.0.1:8080/mediamtx/auth` | 같은 netns 의 MediaMTX(8888 · 9996 · 9997 · 8890/udp)와 겹치지 않는다. 프록시 네 포트의 prod 값은 **미확인**이라 충돌 확인이 필요하다 |
 | 2 | healthz | `127.0.0.1:8081`(고정, 바꿀 수 없다) | `main.go:34` |
-| 3 | 응답기가 읽을 비밀 파일 셋 | 컨테이너 안 `/run/secrets/stream_key_resolve_token` · `/run/secrets/mtx_api_pass` · `/run/secrets/ingest_basic_pass`(Basic 비밀번호). Basic 사용자 이름은 비밀이 아니라 설정값 — 응답기에는 환경 변수(후보 이름 `INGEST_AUTH_BASIC_USER`)로, MediaMTX 에는 같은 값을 4b 의 URL 렌더로 넣는다 | K3 (가)(`_FILE` 입력 추가)일 때만 성립. 경로 꼴은 사이드카 README 의 예시와 같다(`media/README.md:199`). 변수 이름은 코드 PR 에서 확정 |
+| 3 | 응답기가 읽을 비밀 파일 셋 | 컨테이너 안 `/run/secrets/stream_key_resolve_token` · `/run/secrets/mtx_api_pass` · `/run/secrets/ingest_basic_pass`(Basic 비밀번호). Basic 사용자 이름은 비밀이 아니라 설정값 — 응답기에는 환경 변수 `INGEST_AUTH_BASIC_USER`(1-5 의 11)로, MediaMTX 에는 같은 값을 4b 의 URL 렌더로 넣는다 | 응답기에는 `STREAM_KEY_RESOLVE_TOKEN_FILE` · `MTX_API_PASS_FILE` · `INGEST_AUTH_BASIC_PASS_FILE`(1-5 의 9 · 6 · 13)로 이 경로를 준다 — K3 (가)로 트랙 A 가 더했다. 경로 꼴은 사이드카 README 의 예시와 같다(`media/README.md` 의 사이드카 환경변수 표 `MTX_API_PASS_FILE` 행) |
 | 4 | 사이드카의 비밀 파일 | 컨테이너 안 `/run/secrets/mtx_api_pass`(사이드카 `MTX_API_PASS_FILE`) | D3 (나)일 때. 응답기 파일과 **내용이 같은 별개 파일** |
-| 4b | MediaMTX 쪽 Basic 자격 | `authHTTPAddress: http://<user>:<pass>@127.0.0.1:<포트>/mediamtx/auth` — `<user>` 는 응답기 `INGEST_AUTH_BASIC_USER` 와 **같은 설정값**(비밀 아님), `<pass>` 만 시작 스크립트가 `ingest_basic_pass` 원본 파일에서 읽어 **렌더**한다(bash 내장 문자열 치환만 — M2 c4 규칙). 렌더 결과 `mediamtx.yml` 은 호스트 `/run/pokeclip-media/mediamtx.yml` `10002:10002 0400` 그대로 | 비밀번호는 URL 에 퍼센트 인코딩이 필요 없는 문자(예: 무작위 16진)로 만든다. 같은 비밀번호가 응답기 파일 · `mediamtx.yml` 두 곳에 있다. Control API 설정 조회로 평문이 보인다(D2 ③) |
+| 4b | MediaMTX 쪽 Basic 자격 | `authHTTPAddress: http://<user>:<pass>@127.0.0.1:<포트>/mediamtx/auth` — `<user>` 는 응답기 `INGEST_AUTH_BASIC_USER` 와 **같은 설정값**(비밀 아님), `<pass>` 만 시작 스크립트가 `ingest_basic_pass` 원본 파일에서 읽어 **렌더**한다(bash 내장 문자열 치환만 — M2 c4 규칙). 렌더 결과 `mediamtx.yml` 은 호스트 `/run/pokeclip-media/mediamtx.yml` `10002:10002 0400` 그대로 | 비밀번호는 URL 에 퍼센트 인코딩이 필요 없는 unreserved 문자(예: 무작위 16진)로 **24자 이상** 만든다 — 어기면 응답기가 기동을 거부한다(1-5 의 12). 같은 비밀번호가 응답기 파일 · `mediamtx.yml` 두 곳에 있다. Control API 설정 조회로 평문이 보인다(D2 ③) |
 | 5 | 호스트 쪽 경로 | `/run/pokeclip-media/ingest-auth/{stream_key_resolve_token,mtx_api_pass,ingest_basic_pass}` · `/run/pokeclip-media/sidecar/mtx_api_pass` (tmpfs) | M2 c4 의 `mediamtx.yml` 렌더 자리(`/run/pokeclip-media`)와 같은 계열. 디렉터리 `root` 소유 `0711` |
-| 6 | 소유 · 모드 | 응답기 파일 셋 `10003:10003 0400` · 사이드카 파일 `10001:10001 0400` · `mediamtx.yml` `10002:10002 0400`. 읽기 전용 bind | 사이드카 규칙: other 권한 · group 쓰기 비트 거부(`media/README.md:206-230`). 응답기 쪽 규칙은 K3 (가)가 같은 규칙으로 정한다 |
+| 6 | 소유 · 모드 | 응답기 파일 셋 `10003:10003 0400` · 사이드카 파일 `10001:10001 0400` · `mediamtx.yml` `10002:10002 0400`. 읽기 전용 bind | 사이드카 규칙: other 권한 · group 쓰기 비트 거부(`media/README.md` 「관측 자격 파일 규칙」). 응답기 쪽도 트랙 A 가 같은 규칙으로 더했다(1-5 표 위 문단 — `internal/secretfile`). 소유자 uid 는 코드가 보지 않으므로 이 소유 값은 배치가 지킨다(1-9 아래 「잔여 위험(비밀 파일 소유자)」) |
 | 7 | 거부 목록(컨테이너 안) | `/etc/ingest-auth/deny-tokens`(고정) · 호스트 쪽은 K5 가 정한다 | 호스트 후보: `/var/lib/pokeclip-media/ingest-auth/deny/` `root:10003 0640` 파일 · 디렉터리 읽기 전용 bind |
 | 8 | 상태(컨테이너 안) | `/var/lib/ingest-auth`(고정) · 호스트 후보 `/run/pokeclip-media/ingest-auth/state` `10003:10003 0700` | D7. 재부팅 때 연결도 사라지므로 tmpfs 가능 |
 
@@ -334,8 +380,8 @@ M2 브랜치의 응답기 자리는 이미지 · netns · `depends_on` · `resta
 
 | # | 결정 | 확정 내용 | 응답기 코드 | 연결 |
 |---|---|---|---|---|
-| K1 · K2 | 호출자 구별 · Control API 인증 | **K1 = (라) Basic 자격** — `authHTTPAddress` URL 자격으로 응답기가 호출자를 검증(위 D2 — 포크 실측으로 **확인됨**). 잔여 위험: nginx 침해 → 막힘 / 사이드카 침해 → Basic 자격을 설정 조회로 읽고 전 계정 passphrase 가능(D2). **K2 = (나)** — `api` 는 응답기 경유(`authHTTPExclude` 에 넣지 않는다) | **Basic 검사 추가** | D2 · D3 |
-| K3 | 응답기 비밀 입력 | **(가) `_FILE` 입력 추가.** 받을 비밀은 **셋**: (1) 4C resolve 토큰 (2) Control API 비밀번호(`MTX_API_PASS` — 응답기 · 사이드카가 공유) (3) Basic 자격(MediaMTX → 응답기). 값 출처는 D4 · K1 에 따른다(resolve 토큰 = Secrets Manager, 나머지 둘 = 시작 스크립트가 부팅마다 생성한 tmpfs 렌더 — D4 의 「값의 출처」 조건 하에) | **필요** | D4 |
+| K1 · K2 | 호출자 구별 · Control API 인증 | **K1 = (라) Basic 자격** — `authHTTPAddress` URL 자격으로 응답기가 호출자를 검증(위 D2 — 포크 실측으로 **확인됨**). 잔여 위험: nginx 침해 → 막힘 / 사이드카 침해 → Basic 자격을 설정 조회로 읽고 전 계정 passphrase 가능(D2). **K2 = (나)** — `api` 는 응답기 경유(`authHTTPExclude` 에 넣지 않는다) | **Basic 검사 추가** — 트랙 A 가 더했다(1-1 의 14) | D2 · D3 |
+| K3 | 응답기 비밀 입력 | **(가) `_FILE` 입력 추가.** 받을 비밀은 **셋**: (1) 4C resolve 토큰 (2) Control API 비밀번호(`MTX_API_PASS` — 응답기 · 사이드카가 공유) (3) Basic 자격(MediaMTX → 응답기). 값 출처는 D4 · K1 에 따른다(resolve 토큰 = Secrets Manager, 나머지 둘 = 시작 스크립트가 부팅마다 생성한 tmpfs 렌더 — D4 의 「값의 출처」 조건 하에) | **필요** — 트랙 A 가 더했다(1-5 의 6 · 9 · 13) | D4 |
 | K4 | `authHTTPExclude` | **(가) `read` · `playback`** (+ 켜진 `metrics` · `pprof`). **D12 의 SRT 경로 잠금 이행을 같은 PR 의 전제로** | 없음 | D6 · D12 |
 | K5 | 거부 목록 정본 | **(나) 상자 밖 정본 + 부팅 시 렌더**(없거나 비면 기동 차단) | 없음 | D7 |
 | K6 | 4C 출발지 잠금 단위 | **(가) 고정 주소 `/32`** — 선행 조건(3번 합의) 뒤 | 없음 | D9 |
@@ -365,16 +411,26 @@ kty 결정이 아닌 **확인 · 실측 항목**(결정 없이 M15 착수 때 �
 계획의 두 규칙이 어디서 왔는지 적는다(D1 · D2 · D4 · K1 · K3 의 전제).
 
 - **(a) 같은 netns** — 엣지 설계 r7.5.8 의 3-3-1(엣지 설계 kty 결정): MediaMTX 의 HLS(8888)와 재생 서버(9996)가 `127.0.0.1` 에만 바인딩되므로 nginx 가 루프백으로 닿으려면 같은 netns 여야 한다. 설계가 한계로 적은 것은 **IMDS 공유**(같은 netns 컨테이너가 모두 역할 자격에 닿음 — 계획 G22)뿐이고, **응답기가 passphrase 를 돌려주는 위험은 설계가 다루지 않았다** — 설계의 원문은 「응답기 자체(코드 · S1 한도 · prod 배치)는 1번 몫이고(kty 15차), 이 설계는 compose 의 자리와 SG · 읽기 정책 연결만 둔다」(괄호 안 차수는 엣지 설계의 결정 번호)이다. 응답기를 다른 망으로 빼더라도 nginx 가 MediaMTX 와 같은 netns 라서 MediaMTX 의 출발지 주소로는 구별되지 않는다(D1 (나)의 논거). 그래서 구별 수단은 주소가 아니라 **자격(Basic)** 이 맞다(K1).
-- **(b) 비밀을 환경 변수로 넘기지 않는다** — 엣지 계획 r6.7 98행(docker 가 `config.v2.json` · `inspect` 에 남긴다) · 노출 표 816행~ · M2 `render_test`(환경 변수 이름 금지 검사). 그런데 **dev-media 응답기는 이 규칙 밖**이다 — 비밀을 환경 변수로 받는다. prod 는 이 규칙을 따라야 하므로 **K3 (가)(`_FILE` 입력 추가)** 가 필요하다.
+- **(b) 비밀을 환경 변수로 넘기지 않는다** — 엣지 계획 r6.7 98행(docker 가 `config.v2.json` ·
+  `inspect` 에 남긴다) · 노출 표 816행부터 · M2 `render_test`(환경 변수 이름 금지 검사). 그런데
+  **dev-media 는 이 규칙 밖**이다 — compose 가 비밀을 값 변수로 준다(기존 가동판 응답기는 `_FILE`
+  입력이 없어 다른 길이 없었다). prod 는 이 규칙을 따라야 하므로 **K3 (가)(`_FILE` 입력 추가)** 가
+  필요했고, 트랙 A 가 더했다(1-5 의 6 · 9 · 13).
 
 ### 3-2. 응답기 코드 변경 한 묶음
 
-K1 · K3 가 요구하는 응답기 코드 변경은 아래 둘이고, **한 PR 로 묶을 수 있다**(둘 다 `media/cmd/ingest-auth` · `media/internal/ingestauth` 안, 시험은 같은 누설 · 판정 시험 틀을 쓴다).
+K1 · K3 가 요구하는 응답기 코드 변경은 아래 둘이고, **한 PR(POK-310 트랙 A)로 묶었다**(둘 다
+`media/cmd/ingest-auth` · `media/internal/ingestauth` 안, 시험은 같은 누설 · 판정 시험 틀을
+쓴다).
+
+상태: **구현 — 코드 PR(POK-310 트랙 A)**. 아래 2 의 순서와 dev 호환은 그 PR 에서 정해 1절에 실물로 적었다(순서 =
+1-1 의 4 → 14 → 예산 · 판정, dev 호환 = 1-5 의 14 명시 끔). 4C 창구 선택(118차)과 Basic 비밀번호 최소
+24자(120차)도 같은 PR 이다(1-3 의 2 · 1-5 의 12 · 15).
 
 | # | 변경 | 요건 |
 |---|---|---|
-| 1 | `_FILE` 입력(resolve 토큰 · Control API 비밀번호 · Basic 자격) | 환경 변수와 파일 동시 지정은 기동 거부 · 파일 규칙은 사이드카 `MTX_API_PASS_FILE` 과 같게(한 줄 · 끝 줄바꿈 하나 · other 권한 · group 쓰기 거부 · 4 KiB · 실패 = 기동 실패 — `media/README.md:206-230`) · 에러에 경로 대신 변수 이름(경로가 곧 값일 수 있다) |
-| 2 | Basic 검사(publish 포함 모든 인증 요청) | 자격이 없거나 틀리면 **401** · 비교는 **상수 시간**(다이제스트끼리 — `apiCredentialsMatch` 와 같은 방식) · **로그 · 에러에 자격 0**(`Secret` 타입 · 누설 시험 확장) · 순서(호출자 IP 403 → Basic 401 → 예산 · 판정)와 dev 호환(미설정 시 동작)은 코드 PR 에서 정한다 — 이 문서는 후보만 둔다 |
+| 1 | `_FILE` 입력(resolve 토큰 · Control API 비밀번호 · Basic 자격) | 환경 변수와 파일 동시 지정은 기동 거부 · 파일 규칙은 사이드카 `MTX_API_PASS_FILE` 과 같게(한 줄 · 끝 줄바꿈 하나 · other 권한 · group 쓰기 거부 · 4 KiB · 실패 = 기동 실패 — `media/README.md` 「관측 자격 파일 규칙」) · 에러에 경로 대신 변수 이름(경로가 곧 값일 수 있다) |
+| 2 | Basic 검사(publish 포함 모든 인증 요청) | 자격이 없거나 틀리면 **401** · 비교는 **상수 시간**(다이제스트끼리 — `apiCredentialsMatch` 와 같은 방식) · **로그 · 에러에 자격 0**(`Secret` 타입 · 누설 시험 확장) · 순서는 호출자 IP 403 → Basic 401 → 예산 · 판정으로 정했다(1-1 의 4 · 14) · dev 호환은 명시 끔으로 정했다(1-5 의 14) · 비밀번호는 24자 이상(120차 — 1-5 의 12) |
 
 **M2 몫(응답기 PR 이 아님)**: `render_test.sh:387` 의 `TOKEN` 이름 금지 완화(`*_FILE` 허용 · 비밀 값 주입 금지는 유지 — D4)와 계획 743행 문구.
 

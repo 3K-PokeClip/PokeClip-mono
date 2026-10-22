@@ -19,7 +19,7 @@ type mtxAPIAuth struct {
 // validateMTXAPIURL 이 돌려준 MTX_API_URL 의 호스트다(빈 값 = 관측 끔).
 //
 // **비밀번호 파일은 열지 않는다** — 설정은 값만 읽고 파일 손잡이는 main 이 만든다(SEGMENT_ROOT 와 같은
-// 층 규칙). 읽기 · 권한 · 내용 검사는 main 의 readSecretFile 이 지고, 그 실패도 기동 실패다.
+// 층 규칙). 읽기 · 권한 · 내용 검사는 main 이 부르는 secretfile.Read 가 지고, 그 실패도 기동 실패다.
 //
 // 관측이 꺼져 있어도(apiHost 빈 값) 짝 · 이름 · 경로 문자열은 본다 — OBS_* 와 같은 「꺼져도 값은 본다」
 // 규칙이다(오타를 켜는 날에야 알게 되지 않게). 파일 자체는 main 도 URL 이 비면 읽지 않는다.

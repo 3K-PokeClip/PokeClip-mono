@@ -22,62 +22,6 @@
   margin: 0 0 calc(4 * var(--pc-u));
 }
 
-/* ---------- 연결 상태 배너 (디자인 1m 상단) ----------
-   초록은 "연결됨"에만 쓰는 상태색이라 디자인 값을 그대로 쓴다. */
-.statusBanner {
-  display: flex;
-  align-items: center;
-  gap: calc(14 * var(--pc-u));
-  padding: calc(16 * var(--pc-u));
-  border-radius: calc(14 * var(--pc-u));
-  border: 1px solid var(--pc-color-border-subtle);
-  background: var(--pc-color-bg-surface);
-}
-
-.statusBanner[data-connected='true'] {
-  border-color: rgb(61 191 127 / 0.35);
-  background: rgb(61 191 127 / 0.05);
-}
-
-.statusIcon {
-  width: calc(42 * var(--pc-u));
-  height: calc(42 * var(--pc-u));
-  flex: none;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: calc(12 * var(--pc-u));
-  background: var(--pc-color-bg-inset);
-  color: var(--pc-color-text-muted);
-}
-
-.statusBanner[data-connected='true'] .statusIcon {
-  color: #3dbf7f;
-}
-
-.statusBody {
-  flex: 1;
-  min-width: 0;
-  line-height: 1.4;
-}
-
-.statusTitleRow {
-  display: flex;
-  align-items: center;
-  gap: calc(8 * var(--pc-u));
-}
-
-.statusName {
-  font-size: calc(13.5 * var(--pc-u));
-  font-weight: 700;
-}
-
-.statusMeta {
-  font-size: calc(11.5 * var(--pc-u));
-  color: var(--pc-color-text-muted);
-  margin-top: calc(2 * var(--pc-u));
-}
-
 /* ---------- 연동 코드 ---------- */
 .codeCardDesc {
   font-size: calc(11.5 * var(--pc-u));
@@ -164,17 +108,159 @@
   height: calc(16 * var(--pc-u));
 }
 
-.statusIcon svg {
-  width: calc(20 * var(--pc-u));
-  height: calc(20 * var(--pc-u));
-}
-
 .downloadText {
   flex: 1;
   font-size: calc(12 * var(--pc-u));
   color: var(--pc-color-text-secondary);
 }
 
+/* ---------- 다운로드 창 (POK-379) ---------- */
+
+/* DS 기본 폭 480 — OS 고르기와 설치 세 단계가 한 화면에 들어간다 */
+.downloadDialog {
+  max-width: calc(480 * var(--pc-u));
+}
+
+/* 제목 줄 — 제목 왼쪽, 닫기 X 오른쪽. 제목 아래 여백(DS)은 줄이 대신 갖는다 */
+.downloadHead {
+  display: flex;
+  align-items: center;
+  gap: calc(8 * var(--pc-u));
+  margin-bottom: var(--pc-space-2);
+}
+
+/* DS .title의 아래 여백을 지우려면 한 단계 높은 특이도가 필요하다(ProfilePhotoDialog와 같은 수) */
+.downloadTitle.downloadTitle {
+  margin: 0;
+}
+
+/* X 아이콘이 본문 오른쪽 끝선에 맞게 버튼 안쪽 여백만큼 당긴다 */
+.downloadCloseX {
+  margin-left: auto;
+  margin-right: calc(-6 * var(--pc-u));
+}
+
+/* OS 고르기 — 두 칸을 똑같이 나눈 모양. DS 탭의 밑줄 모양을 덮으려고 특이도를 한 단계 올린다 */
+.downloadTabs.downloadTabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: calc(3 * var(--pc-u));
+  padding: calc(3 * var(--pc-u));
+  border-bottom: 0;
+  border-radius: calc(10 * var(--pc-u));
+  background: var(--pc-color-bg-inset);
+}
+
+.downloadTab.downloadTab {
+  margin-bottom: 0;
+  border-bottom: 0;
+  border-radius: calc(7 * var(--pc-u));
+  padding: calc(7 * var(--pc-u)) 0;
+  font-size: calc(13 * var(--pc-u));
+  font-weight: 600;
+}
+
+.downloadTab.downloadTab[data-selected] {
+  background: var(--pc-color-bg-surface-raised);
+  color: var(--pc-color-text-primary);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.18);
+}
+
+.downloadTabPanel.downloadTabPanel {
+  padding-block: calc(18 * var(--pc-u)) 0;
+}
+
+/* 단계 — 받기 → OBS 끄고 설치 → 독에 연동 코드. 번호 원 사이를 세로 줄로 잇는다 */
+.downloadSteps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.downloadStep {
+  position: relative;
+  display: flex;
+  gap: calc(12 * var(--pc-u));
+  padding-bottom: calc(18 * var(--pc-u));
+}
+
+.downloadStep:last-child {
+  padding-bottom: 0;
+}
+
+.downloadStep:not(:last-child)::before {
+  content: '';
+  position: absolute;
+  left: calc(11 * var(--pc-u));
+  top: calc(26 * var(--pc-u));
+  bottom: calc(4 * var(--pc-u));
+  width: 1px;
+  background: var(--pc-color-border-default);
+}
+
+.downloadStepNum {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: calc(22 * var(--pc-u));
+  height: calc(22 * var(--pc-u));
+  border-radius: 50%;
+  border: 1px solid var(--pc-color-border-strong);
+  background: var(--pc-color-bg-surface);
+  font-size: calc(11 * var(--pc-u));
+  font-weight: 700;
+  color: var(--pc-color-text-secondary);
+}
+
+.downloadStepBody {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: calc(8 * var(--pc-u));
+}
+
+/* 단계 안 경고는 위 여백 대신 단계의 gap을 쓴다 */
+.downloadStepBody > .issueWarning {
+  margin-top: 0;
+}
+
+.downloadStepTitle {
+  margin: 0;
+  font-size: calc(13 * var(--pc-u));
+  font-weight: 600;
+  line-height: calc(22 * var(--pc-u));
+  color: var(--pc-color-text-primary);
+}
+
+.downloadStepHint {
+  margin: calc(-2 * var(--pc-u)) 0 0;
+  font-size: calc(11 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}
+
+/* 새 창 아이콘이 글자 뒤에 붙어 있게 — svg가 block이라 그냥 두면 아랫줄로 떨어진다 */
+.downloadMeta a {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(3 * var(--pc-u));
+  color: var(--pc-color-text-secondary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.downloadLinkIcon {
+  flex: none;
+}
+
+.downloadMeta {
+  display: flex;
+  justify-content: space-between;
+  gap: calc(8 * var(--pc-u));
+  margin: calc(14 * var(--pc-u)) 0 0;
+  font-size: calc(11 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}
 /* ---------- 연동 코드 실상태 (POK-102) ---------- */
 
 /* 디자인 ②-1 + 폭 유지: 요청 중에도 버튼 폭은 라벨 폭 그대로다 — 라벨은 자리만 지키게

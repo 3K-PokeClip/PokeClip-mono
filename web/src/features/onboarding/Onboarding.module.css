@@ -129,6 +129,12 @@
     left 0.35s var(--pc-ease-standard);
 }
 
+/* 설정 2단계(CTA 버튼이 하나 더 있다)는 중앙 카드와 같은 폭 — 330이면 「다음」이 카드 밖으로 밀린다 (POK-378) */
+.spotCard[data-wide='true'] {
+  width: calc(400 * var(--pc-u));
+  max-width: calc(100vw - 32px);
+}
+
 /* 배치 전 프레임 — 크기 측정 중이라 숨긴다 (2-pass) */
 .spotCard[data-pending='true'] {
   visibility: hidden;

@@ -68,6 +68,26 @@ func TestNoSecretsInOutputsAcrossJudgmentRows(t *testing.T) {
 			wantEvent:  leakEvent{Msg: "ingestauth_caller_denied"},
 		},
 		{
+			name: "호출자_Basic_틀림",
+			send: func(t *testing.T, f *leakFixture) *httptest.ResponseRecorder {
+				r := newAuthRequest(t, leakPublishBody(testTokenA, testConnID(1)))
+				r.SetBasicAuth(testCallerUser, leakCallerPass)
+				return f.send(r)
+			},
+			wantStatus: http.StatusUnauthorized,
+			wantEvent:  leakEvent{Msg: "ingestauth_caller_unauthenticated", Reason: "mismatch"},
+		},
+		{
+			name: "호출자_Basic_깨짐",
+			send: func(t *testing.T, f *leakFixture) *httptest.ResponseRecorder {
+				r := newAuthRequest(t, leakPublishBody(testTokenA, testConnID(1)))
+				r.Header.Set("Authorization", "Basic "+leakCallerPass)
+				return f.send(r)
+			},
+			wantStatus: http.StatusUnauthorized,
+			wantEvent:  leakEvent{Msg: "ingestauth_caller_unauthenticated", Reason: "malformed"},
+		},
+		{
 			name:       "본문_해석_실패_ip",
 			send:       publishWith(func(b *mtxAuthBody) { b.IP = "not-an-ip" }),
 			wantStatus: http.StatusBadRequest,

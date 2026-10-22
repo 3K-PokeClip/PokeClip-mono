@@ -153,18 +153,18 @@ export function HighlightCard({
           </div>
         ) : null}
         {highlight.hidden ? (
-          // 숨긴 카드는 되돌리기만 한다. 되돌리기는 누구나 한다(숨긴 사람이 자리를 비워도 막히지 않게, 서버와 같은 규칙)
+          // 숨긴 카드는 숨김 해제만 한다. 해제는 누구나 한다(숨긴 사람이 자리를 비워도 막히지 않게, 서버와 같은 규칙)
           <div className={styles.cardActions}>
             <Button
               variant="soft"
               size="sm"
               onClick={() => {
                 void unhideCard(highlight.id).then((r) => {
-                  if (!r.ok) toast({ tone: 'error', title: '숨김을 되돌리지 못했어요' });
+                  if (!r.ok) toast({ tone: 'error', title: '숨김을 해제하지 못했어요' });
                 });
               }}
             >
-              숨김 되돌리기
+              숨김 해제
             </Button>
           </div>
         ) : view.showActions ? (
