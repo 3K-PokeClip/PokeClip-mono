@@ -95,8 +95,10 @@ services:
       # 로컬 기본값(pokeclip/local/stream-key/)으로 뜨면 재발급·탈퇴의 Secrets Manager 삭제가 권한 거부로 실패한다.
       # 🔴 이 줄이 :? 라서 dev .env 에 세 줄이 먼저 들어간 뒤에 코드를 머지한다. 빠지면 compose 가 파일 전체 보간에서
       # 멈춰 auth 만이 아니라 같은 배포 명령의 서버 넷이 다 안 올라간다.
-      STREAM_KEY_SECRET_STORE_TYPE: ${STREAM_KEY_SECRET_STORE_TYPE:-postgres}
-      STREAM_KEY_SECRET_RETIRE_FROM: ${STREAM_KEY_SECRET_RETIRE_FROM:-postgres}
+      # 저장소 둘의 기본은 aws 다(병행 종료, POK-329). PG 에 스트림키 사본이 없어 .env 줄이 빠진 채 postgres 로 뜨면
+      # 오류 없이 resolve 가 전부 valid:false 가 된다.
+      STREAM_KEY_SECRET_STORE_TYPE: ${STREAM_KEY_SECRET_STORE_TYPE:-aws}
+      STREAM_KEY_SECRET_RETIRE_FROM: ${STREAM_KEY_SECRET_RETIRE_FROM:-aws}
       STREAM_KEY_SECRET_REF_PREFIX: ${STREAM_KEY_SECRET_REF_PREFIX:?}
       # resolve 전용 출입증(계약4 4C — Media 가 X-Stream-Key-Resolve-Token 헤더로 부른다). :? 가 아니라 :- 다.
       # 토큰이 비면 그 창구만 닫히고(전용 헤더 요청은 늘 401) auth 는 뜬다 — 값을 넣기 전에 머지돼도 배포가 auth 를
