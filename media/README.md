@@ -1718,7 +1718,7 @@ PR ⓒ 가 시험 함수 368개를 더했다(TestMain 제외 991 → 1,359 — d
 
 #### ⓒ 커버리지 게이트
 
-CI(`media-ci`)의 80% 게이트는 열네 패키지다. ⓒ 가 `internal/rewind/publish` 를
+ⓒ 시점 CI(`media-ci`)의 80% 게이트는 열네 패키지였다(지금은 janitor 를 더해 열다섯 — 아래 PG 시험 절). ⓒ 가 `internal/rewind/publish` 를
 더했고, develop 의 ingest-auth 응답기가 `streamkey` · `keyresolve` · `ingestauth` ·
 `mtxctl` 넷을 더했다(병합으로 합쳐졌다). 아래 값은 커밋 8 의 CI 동일 실행(PG 켬 · `-race`) 프로파일에 CI 판정식을
 다시 돌린 것이다. 표가 열 패키지뿐인 것은 그 프로파일이 병합 전 것이라 develop 이

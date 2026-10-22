@@ -49,6 +49,9 @@ linters:
         # syscall 의 삭제 · 이름 바꾸기는 os 패턴을 비켜 간다(종결 r1 R10 — 보안 검수 L1, 추가 때 0건).
         - pattern: ^syscall\.(Unlink|Unlinkat|Rmdir|Rename)$
           msg: naked FS 호출 금지(m2 · D14d) — syscall 삭제 · 이름 바꾸기도 fsop 경유로 감싸라.
+        # x/sys/unix 의 같은 호출도 막는다(종결 r2 — 보안 검수 L1, 추가 때 임포트 0건).
+        - pattern: ^unix\.(Unlink|Unlinkat|Rmdir|Rename|Renameat|Renameat2)$
+          msg: naked FS 호출 금지(m2 · D14d) — x/sys/unix 삭제 · 이름 바꾸기도 fsop 경유로 감싸라.
         - pattern: ^filepath\.(Walk|WalkDir|Glob)$
           msg: naked FS 순회 금지(m2) — 예외 1(collectTree)만 nolint 로 허용된다.
   exclusions:
