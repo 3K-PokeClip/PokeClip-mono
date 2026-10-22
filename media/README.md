@@ -2151,7 +2151,9 @@ NULL 로 바꾼다. 행은 남는다. 삭제 조건은 인덱스 불변식 2(그
 - 삭제 순서: 행 잠금(`FOR UPDATE NOWAIT`) → 파일 삭제 → `local_path=NULL` →
   COMMIT. 잠긴 행은 건너뛰고 다음 주기에 다시 본다.
 - 삭제마다 `segment_local_deleted` INFO 한 줄(stream_id · seq · path ·
-  axis=archive · outcome)이 남는다. 주기 요약은 `janitor_cycle_summary`.
+  axis=archive · outcome)이 남는다. 부채를 갚은 뒤 행이 아직 있는지 확인하지
+  못했으면(잠김 · 오류) `row_probe=unknown` 이 붙는다 — 그 행은 이미 지워졌을
+  수도 있다. 주기 요약은 `janitor_cycle_summary`.
 
 ### janitor 끄고 켜는 법
 
@@ -2225,7 +2227,7 @@ docker compose up -d --no-deps --no-build janitor
 | 게이지 | 등급 | 켜짐 | 먼저 볼 것 |
 |---|---|---|---|
 | `janitor_delete_failing` | ERROR | 삭제 실패(권한 · 읽기 전용 · 경로 거부)로 건너뛴 행이 있음 — items · sample | sample 행의 파일 소유 · 마운트 rw · `janitor_path_rejected` |
-| `janitor_cycle_failing` | ERROR | 주기가 DB 오류로 중단됨 — reason · SQLSTATE · stage | DB 연결 · `statement_timeout` · 잠금 대기 |
+| `janitor_cycle_failing` | ERROR | 주기가 DB 오류로 중단됨 — reason · SQLSTATE · stage. 종료 신호로 주기가 끊긴 것은 켜지 않고 `janitor_cycle_canceled` INFO 한 줄만 남는다 | DB 연결 · `statement_timeout` · 잠금 대기 |
 | `janitor_cutoff_invalid` | ERROR | 가리키는 행이 없는 컷오프 — 그 스트림 삭제 정지(stream_id 별) | `stream_cutoffs` 와 `stream_segments` 대조 |
 | `janitor_backlog_capped` | WARN | 한 주기 상한(`JANITOR_MAX_PER_CYCLE`)에 닿고도 남은 후보가 있음 | 일시적이면 정상. 계속되면 상한 · 주기 조정 |
 | `janitor_volume_suspect` | ERROR | 지웠어야 할 파일이 이미 없는 젊은 행이 3개 이상 — 다른 볼륨이 붙었을 수 있음 | 마운트된 볼륨이 MediaMTX 와 같은지 · sample 경로 |
