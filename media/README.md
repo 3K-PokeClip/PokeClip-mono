@@ -2329,14 +2329,50 @@ janitor 는 파일을 지운 뒤 장부 갱신에 실패한 행을 「부채」�
 - **로컬 compose 의 한계**: 로컬 janitor 는 `POSTGRES_USER`(DB 소유자 계정)로
   붙는다. 최소 권한 경계는 로컬 실행으로는 확인되지 않는다 — 위 시험이 그
   몫이다.
-- **운영 DSN 은 `POSTGRES_SSLMODE=verify-full`** 로 두고 RDS CA 번들 파일을
-  janitor 환경 변수 `PGSSLROOTCERT`(컨테이너 안 경로)로 준다 — 서버 인증서와
-  호스트 이름까지 검증해야 중간자를 막는다(pgx 가 이 변수를 읽는다 — 2026-10-20
-  확인, 실험 기록 `c21-pgsslrootcert.txt`). 최소한 `require` 다: 암호화는 되지만
-  서버 인증서를 검증하지 않는다. 기본 `prefer` 는 TLS 를 못 쓰면 평문으로
-  내려간다. `require` 이상이면 TLS 를 받지 않는 서버에는 붙지 않고 기동
-  오류(`janitor_failed`)로 끝난다(2026-10-20 실행 확인 — 실험 기록
+- **운영 DSN 은 `POSTGRES_SSLMODE=verify-full`** 로 두고 CA 번들 경로를
+  `POSTGRES_SSLROOTCERT=/etc/pokeclip/rds-ca/global-bundle.pem` 으로 준다.
+  이 경로는 이미지에 든 RDS 통합 번들이다(아래 「RDS CA 번들」 절). 서버
+  인증서와 호스트 이름까지 검증해야 중간자를 막는다. 경로는 기동 때 확인한다
+  — 절대 경로 · 일반 파일 · PEM 인증서 1장 이상이 아니면 기동 오류다.
+  `PGSSLROOTCERT` 는 쓰지 않는다. 이것만 있고 `POSTGRES_SSLROOTCERT` 가 비면
+  기동 오류다(옛 방식 기록: pgx 가 `PGSSLROOTCERT` 를 읽는다는 2026-10-20
+  확인 — 실험 기록 `c21-pgsslrootcert.txt`). 최소한 `require` 다: 암호화는
+  되지만 서버 인증서를 검증하지 않는다. 기본 `prefer` 는 TLS 를 못 쓰면
+  평문으로 내려간다. `require` 이상이면 TLS 를 받지 않는 서버에는 붙지 않고
+  기동 오류(`janitor_failed`)로 끝난다(2026-10-20 실행 확인 — 실험 기록
   `c9-sslmode.txt`).
+- **`POSTGRES_AUTH=iam`**(RDS IAM 인증)이면 `POSTGRES_PASSWORD` 를 비운다 —
+  연결마다 새 IAM 토큰으로 로그인한다. sslmode 는 `verify-full` 만 받고
+  `POSTGRES_SSLROOTCERT` 는 필수다.
+- **password 로 되돌리기**: 코드 되돌림과 운영 인증 전환은 다르다.
+  `POSTGRES_AUTH` 를 비우는 것만으로는 운영 계정이 비밀번호로 붙지 않는다 —
+  `rds_iam` 을 가진 계정은 IAM 인증이 비밀번호보다 우선한다. 운영 전환에는
+  계정 비밀번호 설정 · `rds_iam` 회수 · 비밀 그릇(Secrets Manager) · 그 읽기
+  정책이 함께 필요하다(엣지 설계 3-6절 절차).
+
+### RDS CA 번들
+
+`POSTGRES_SSLROOTCERT` 가 가리킬 CA 번들을 이미지에 싣는다. 사이드카와
+janitor 가 같은 이미지라 둘 다 쓴다.
+
+| 항목 | 값 |
+|---|---|
+| 저장소 파일 | `media/certs/rds-global-bundle.pem` |
+| 이미지 안 경로 | `/etc/pokeclip/rds-ca/global-bundle.pem`(root 소유 0644 — 실행 계정 10001 이 읽는다) |
+| 출처 | https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem (AWS 문서 「Using SSL/TLS」의 전 상용 리전 통합 번들) |
+| 취득 | 2026-10-22 20:19 KST(서버 `last-modified` 2026-10-14 22:38:21 GMT) |
+| sha256 | `90a6f1a7978a1b1b096dca6c57511ca48d3b8cf052f8e704baf358f34ea2f21b`(174560 바이트) |
+| 인증서 | 114장 — 전부 자체 서명 루트 CA(중간 CA 0장) |
+| 가장 이른 만료 | 2061-05-18(Amazon RDS Preview us-east-2 Root CA RSA2048 G1) |
+
+- **sha256 정본은 `media/Dockerfile` 의 `sha256sum -c` 줄 하나다.** 위 표의
+  값은 옮겨 적은 것이다. 파일이 그 값과 다르면 이미지 빌드가 멈추고, 계약
+  시험(`internal/pgconf/rdsca_bundle_test.go`)도 실패한다.
+- **갱신**: 같은 URL 에서 다시 받아 파일 교체 · Dockerfile sha256 교체 · 위
+  표 갱신을 한 커밋에 한다. 이미지를 다시 배포해야 새 번들이 쓰인다(번들은
+  기동 때 읽는다).
+- Dockerfile 에 `POSTGRES_SSLROOTCERT` 기본값(`ENV`)은 두지 않는다 — 로컬
+  compose 의 password · `prefer` 경로에 끼어들지 않게 배포 정의가 준다.
 
 ### janitor 환경 변수
 
