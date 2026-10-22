@@ -15,13 +15,15 @@
 
 **이 저장소는 public 이다 — 실제 AWS 자원 ID · 공인 IP · 사설 IP 를 이 문서에 적지
 않는다**(git 히스토리에 영구히 남는다). 아래 셸 변수를 세션 시작 시 채워서 쓴다. 값은 AWS
-콘솔이나 팀 비공개 채널에서 확인한다.
+콘솔이나 팀 비공개 채널에서 확인한다. `VPC_ID` 는 팀 dev VPC, `SUBNET_ID` 는 퍼블릭
+서브넷, `HOSTED_ZONE_ID` 는 pokeclip.com 존이다. `AMI_ID` 가 없으면 1-2 의 SSM
+파라미터로 최신 AL2023 을 조회한다.
 
 ```bash
-export VPC_ID=<vpc-id>                 # 팀 dev VPC
-export SUBNET_ID=<subnet-id>           # 퍼블릭 서브넷
-export AMI_ID=<al2023-ami-id>          # 없으면 1-2 의 SSM 파라미터로 최신 AL2023 조회
-export HOSTED_ZONE_ID=<hosted-zone-id> # pokeclip.com 존
+export VPC_ID=<vpc-id>
+export SUBNET_ID=<subnet-id>
+export AMI_ID=<al2023-ami-id>
+export HOSTED_ZONE_ID=<hosted-zone-id>
 export INSTANCE_PROFILE=pokeclip-dev-profile
 ```
 
@@ -110,16 +112,20 @@ main "$@"
 ### 1-1. 보안그룹
 
 인바운드는 정확히 2건이다 — `udp 8890`(SRT 송출) · `tcp 8888`(재생). 소스는 둘 다 팀 공인 IP/32.
+현재 공인 IP 는 그때그때 산출한다(상수로 적지 않는다).
 
 ```bash
-MYIP=$(curl -s https://checkip.amazonaws.com)          # 현재 공인 IP 를 그때그때 산출 (상수로 적지 않는다)
+MYIP=$(curl -s https://checkip.amazonaws.com)
 SG=$(aws ec2 create-security-group --group-name pokeclip-media-demo-sg \
       --description "dev-media per-account broadcast server (always-on)" \
       --vpc-id "$VPC_ID" --query GroupId --output text)
 aws ec2 authorize-security-group-ingress --group-id "$SG" --protocol udp --port 8890 --cidr "$MYIP/32"
 aws ec2 authorize-security-group-ingress --group-id "$SG" --protocol tcp --port 8888 --cidr "$MYIP/32"
+```
 
-# 검증: 규칙 2건 · 0.0.0.0/0 은 0건
+검증: 규칙 2건 · 0.0.0.0/0 은 0건.
+
+```bash
 aws ec2 describe-security-groups --group-ids "$SG" \
   --query 'SecurityGroups[0].IpPermissions[].{proto:IpProtocol,port:FromPort,src:IpRanges[].CidrIp}'
 ```
@@ -172,13 +178,17 @@ aws route53 change-resource-record-sets --hosted-zone-id "$HOSTED_ZONE_ID" \
     \"Name\":\"media-dev.pokeclip.com\",\"Type\":\"A\",\"TTL\":60,
     \"ResourceRecords\":[{\"Value\":\"$IP\"}]}}]}"
 
-dig +short media-dev.pokeclip.com     # 위 IP 가 나와야 한다 (네임서버는 존 조회로 확인)
+dig +short media-dev.pokeclip.com
 ```
+
+`dig` 에 위 IP 가 나와야 한다 (네임서버는 존 조회로 확인).
 
 ### 1-4. 접속 확인
 
+첫 줄은 `Online` 이 나와야 한다.
+
 ```bash
-aws ssm describe-instance-information --query "InstanceInformationList[?InstanceId=='<instance-id>'].PingStatus"  # Online
+aws ssm describe-instance-information --query "InstanceInformationList[?InstanceId=='<instance-id>'].PingStatus"
 nc -z -w3 media-dev.pokeclip.com 22 && echo "22 열림 — 즉시 조사" || echo "22 닫힘(정상)"
 ```
 
@@ -1808,20 +1818,19 @@ main "$@"
 `<토큰>` 은 송출 계정의 공개 토큰).
 
 - 매니페스트는 2단계다. `index.m3u8` 은 멀티버리언트 플레이리스트라 LL-HLS 마커가 거기
-  없다.
+  없다. ①(첫 줄)은 200 + 변형 URI 한 줄, ②(둘째 줄)는 마커다.
 
   ```bash
-  curl -s "http://<host>:8888/<토큰>/index.m3u8"        # ① 200 + 변형 URI 한 줄
-  curl -s "http://<host>:8888/<토큰>/<위에서 얻은 URI>"  # ② 마커
+  curl -s "http://<host>:8888/<토큰>/index.m3u8"
+  curl -s "http://<host>:8888/<토큰>/<위에서 얻은 URI>"
   ```
 
   ②의 합격 조건 — `EXT-X-PART` · `EXT-X-PART-INF` · `EXT-X-PRELOAD-HINT` ·
   `CAN-BLOCK-RELOAD` 존재 + `EXTINF` 가 4.0 근처. `PART-HOLD-BACK` 은 값을 기록만 한다.
 - GOP 는 설정값을 믿지 않고 HLS 디먹서로 잰다 — `key_frame=1` 행의 `pts_time` 간격이
-  2.0초여야 한다.
+  2.0초여야 한다. 몇 초 뒤 Ctrl-C 로 멈춘다.
 
   ```bash
-  # 몇 초 뒤 Ctrl-C
   ffprobe -select_streams v -show_frames \
     -show_entries frame=pts_time,key_frame -of csv \
     "http://<host>:8888/<토큰>/index.m3u8"
@@ -3138,10 +3147,9 @@ main "$@"
 ## 12. 철거
 
 상자를 없애기로 kty 가 정했을 때만 한다. 순서를 지킨다 — 보안그룹은 인스턴스가 종료된
-뒤에만 지워진다.
+뒤에만 지워진다. 세션이 다르면 SG·인스턴스 ID 를 이름·태그로 다시 집는다.
 
 ```bash
-# 세션이 다르면 SG·인스턴스 ID 를 이름·태그로 다시 집는다.
 SG=$(aws ec2 describe-security-groups --filters Name=group-name,Values=pokeclip-media-demo-sg \
       --query 'SecurityGroups[0].GroupId' --output text)
 IID=$(aws ec2 describe-instances --filters Name=tag:Name,Values=pokeclip-media-demo \
