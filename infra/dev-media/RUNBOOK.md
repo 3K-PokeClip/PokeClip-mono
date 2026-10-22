@@ -663,15 +663,16 @@ t_backup_names() {
   done < "${WORK}/names"
 }
 
-# stray_secret_names 는 끊긴 R1 · 렌더 · R3′ 가 남길 수 있는 비밀 임시 파일(.env.next —
-# resolve 출입증 · API 비번, mediamtx.demo.yml.tmp.* — 잠금값, .ecr-login — ECR 로그인
-# 자격)의 이름을 한 줄에 하나씩 낸다.
+# stray_secret_names 는 끊긴 R1 · 렌더 · R3′ · IP 한도 켜기 · 끄기(7-5)가 남길 수 있는 비밀
+# 임시 파일(.env.next · .env.iplimit.* — resolve 출입증 · API 비번,
+# mediamtx.demo.yml.tmp.* — 잠금값, .ecr-login — ECR 로그인 자격)의 이름을 한 줄에
+# 하나씩 낸다.
 stray_secret_names() {
   local name
   ls -1A -- "${DEMO_DIR}" > "${WORK}/stray-names"   # 못 받으면 검사 실패
   while IFS= read -r name; do
     case "${name}" in
-      .env.next | mediamtx.demo.yml.tmp.* | .ecr-login)
+      .env.next | .env.iplimit.* | mediamtx.demo.yml.tmp.* | .ecr-login)
         printf '%s\n' "${name}"
         ;;
     esac
@@ -1950,24 +1951,110 @@ sudo sed -n 's/^MTX_API_PASS=//p' /opt/pokeclip-demo/.env \
 # .env 의 INGEST_AUTH_IP_LIMIT 한 줄을 인자로 맞추고 응답기만 다시 만든다(up -d
 # --force-recreate). 새 ingestauth_started 의 ip_limit 가 인자와 같은지, MediaMTX 의
 # 시작 시각이 앞뒤로 같은지 본다. compose 에 전달 줄이 없으면(상자 체크아웃이 그 판 전) 바꾸지 않고 멈춘다.
+# 처음 바꿀 때 원래 키 줄(없었으면 빈 값)을 ip-limit.orig 에 적어 둔다. 인자가 원래 실효값(키가
+# 없으면 on)과 같으면 원래 줄로(없었으면 줄을 빼서) 되돌리고 그 파일을 지운다 — 반대 인자로
+# 돌리면 .env 가 바이트까지 처음과 같다. 새 .env(비밀)는 .env.iplimit.* 에 쓰고, 끼우기 전에
+# 실패하면 덫이 shred -u 로 지운다. 끊긴 앞 실행이 남긴 것은 다시 돌리면 첫머리가 지운다.
+readonly IP_LIMIT_KEY='INGEST_AUTH_IP_LIMIT'
+readonly IP_LIMIT_ORIG="${DEMO_DIR}/ip-limit.orig"   # 원래 키 줄 — 비밀 아님
+ENV_TMP=''   # 끼우기 전의 새 .env — 끼우면 비운다
+trap 'discard_env_tmp; rm -rf -- "${WORK}"' EXIT   # 머리의 덫에 ENV_TMP 지우기를 더한다
+
+# discard_env_tmp 는 끼우지 못한 새 .env 를 shred -u 로 지운다.
+discard_env_tmp() {
+  if [[ -n "${ENV_TMP}" && -f "${ENV_TMP}" && ! -L "${ENV_TMP}" ]]; then
+    shred -u -- "${ENV_TMP}"
+  fi
+}
+
+# discard_stale_env_tmps 는 끊긴 앞 실행이 남긴 .env.iplimit.* 를 shred -u 로 지운다.
+discard_stale_env_tmps() {
+  local name
+  ls -1A -- "${DEMO_DIR}" > "${WORK}/iplimit-names"   # 못 받으면 검사 실패
+  while IFS= read -r name; do
+    case "${name}" in
+      .env.iplimit.*)
+        remove_box_file shred "${DEMO_DIR}/${name}"
+        echo "앞 실행이 남긴 임시 파일을 지웠다: ${name}"
+        ;;
+    esac
+  done < "${WORK}/iplimit-names"
+}
+
+# ip_limit_line 은 .env 의 키 줄을 변수 $1 에 넣는다(없으면 빈 값). grep 은 종료 0 · 1 만
+# 받는다 — 2(읽기 오류)를 「없음」으로 읽으면 반쪽 .env 를 끼우게 된다. 줄이 둘 이상이면 멈춘다.
+ip_limit_line() {
+  local -i rc=0
+  grep -e "^${IP_LIMIT_KEY}=" -- "${DEMO_DIR}/.env" > "${WORK}/ip-limit-line" \
+    || rc=$?
+  (( rc <= 1 )) || mismatch ".env 를 읽지 못했다(grep 종료 ${rc}) — .env 를 바꾸지 않았다"
+  (( $(wc -l < "${WORK}/ip-limit-line") <= 1 )) \
+    || mismatch ".env 에 ${IP_LIMIT_KEY} 줄이 둘 이상이다 — 손으로 하나로 줄인 뒤 다시"
+  printf -v "$1" '%s' "$(cat -- "${WORK}/ip-limit-line")"
+}
+
+# ip_limit_orig 는 처음 바꾸기 전의 키 줄을 변수 $1 에 넣는다(빈 값 = 키 줄 없음).
+# IP_LIMIT_ORIG 가 없으면 지금 줄을 적어 두고 그것을 낸다.
+ip_limit_orig() {
+  local line
+  if [[ ! -e "${IP_LIMIT_ORIG}" && ! -L "${IP_LIMIT_ORIG}" ]]; then
+    ip_limit_line line
+    printf '%s\n' "${line}" > "${IP_LIMIT_ORIG}"
+  fi
+  [[ -f "${IP_LIMIT_ORIG}" && ! -L "${IP_LIMIT_ORIG}" ]] \
+    || mismatch "일반 파일이 아니거나 링크다: ${IP_LIMIT_ORIG}"
+  line="$(cat -- "${IP_LIMIT_ORIG}")"
+  [[ -z "${line}" || "${line}" == "${IP_LIMIT_KEY}="* ]] \
+    || mismatch "${IP_LIMIT_ORIG} 가 키 줄도 빈 값도 아니다 — kty"
+  printf -v "$1" '%s' "${line}"
+}
+
+# write_env_candidate 는 키 줄을 $1 로 바꾼(빈 값이면 뺀) 새 .env 를 ENV_TMP 에 쓴다 — 키 줄
+# 자리는 그대로, 없던 키는 끝에 붙인다. 모드 · 소유를 .env 와 맞춘다. 같은 디렉터리(root
+# 소유 — assert_demo_dir_safe)에 0600 으로 만든다 — 비밀이 든 사본을 WORK 에 두지 않는다.
+# 읽기 · 쓰기 · 메타데이터 복사가 실패하면 끼우기 전에 멈춘다(덫이 ENV_TMP 를 지운다).
+write_env_candidate() {
+  local -r env="${DEMO_DIR}/.env"
+  local -i rc=0
+  ENV_TMP="$(mktemp -- "${DEMO_DIR}/.env.iplimit.XXXXXX")"
+  KEY="${IP_LIMIT_KEY}=" LINE="$1" awk '
+    index($0, ENVIRON["KEY"]) == 1 {
+      seen = 1
+      if (ENVIRON["LINE"] != "") print ENVIRON["LINE"]
+      next
+    }
+    { print }
+    END { if (!seen && ENVIRON["LINE"] != "") print ENVIRON["LINE"] }
+  ' < "${env}" > "${ENV_TMP}" || rc=$?
+  (( rc == 0 )) \
+    || mismatch "새 .env 를 만들지 못했다(종료 ${rc}) — .env 를 바꾸지 않았다"
+  chmod --reference="${env}" -- "${ENV_TMP}"
+  chown --reference="${env}" -- "${ENV_TMP}"
+}
+
 main() {
   (( $# == 1 )) && [[ "$1" == on || "$1" == off ]] \
     || check_failed '사용법: on | off'
   local -r want="$1" env="${DEMO_DIR}/.env"
-  local mtx_id='' before after since tmp
+  local mtx_id='' before after since orig orig_value target
   assert_demo_dir_safe
   grep -q 'INGEST_AUTH_IP_LIMIT:' -- "${REPO}/${COMPOSE_YML}" \
     || mismatch 'compose.yml 에 INGEST_AUTH_IP_LIMIT 전달 줄이 없다 — .env 로 바꿀 수 없다'
   assert_ready_to_start_ingest_auth
+  discard_stale_env_tmps
   echo ".env 앞: $(sha256sum -- "${env}" | cut -c1-12)"
-  # 새 .env 는 같은 디렉터리(root 소유 — assert_demo_dir_safe)에 0600 으로 만들어 이름 바꾸기로
-  # 끼운다. 비밀이 든 사본을 WORK 에 두지 않는다.
-  tmp="$(mktemp -- "${DEMO_DIR}/.env.iplimit.XXXXXX")"
-  grep -v '^INGEST_AUTH_IP_LIMIT=' -- "${env}" > "${tmp}" || true
-  printf 'INGEST_AUTH_IP_LIMIT=%s\n' "${want}" >> "${tmp}"
-  chmod --reference="${env}" -- "${tmp}"
-  chown --reference="${env}" -- "${tmp}"
-  mv -T -- "${tmp}" "${env}"
+  ip_limit_orig orig
+  orig_value=on
+  [[ -z "${orig}" ]] || orig_value="${orig#"${IP_LIMIT_KEY}="}"
+  target="${IP_LIMIT_KEY}=${want}"
+  [[ "${want}" != "${orig_value}" ]] || target="${orig}"
+  write_env_candidate "${target}"
+  mv -T -- "${ENV_TMP}" "${env}"
+  ENV_TMP=''
+  if [[ "${target}" == "${orig}" ]]; then
+    remove_box_file rm "${IP_LIMIT_ORIG}"
+    echo '.env 를 원래 키 줄로 되돌렸다'
+  fi
   echo ".env 뒤: $(sha256sum -- "${env}" | cut -c1-12)"
   container_id mediamtx mtx_id
   before="$(docker inspect -f '{{.State.StartedAt}}' "${mtx_id}")"
@@ -1988,8 +2075,13 @@ main() {
 main "$@"
 ```
 
-종료 1 이 `.env` 를 바꾼 뒤에 났으면 `.env 앞` 해시와 견주고, 다시 돌리거나 반대 인자로
-되돌린다. 실측 기록에는 `.env` 해시 앞뒤와 `ip_limit` 값을 남긴다.
+`.env 뒤` 줄 앞에 멈췄으면(읽기 · 쓰기 · 메타데이터 복사 실패) `.env` 는 그대로다. 종료 1 이
+`.env` 를 바꾼 뒤에 났으면 `.env 앞` 해시와 견주고, 다시 돌리거나 반대 인자로 되돌린다.
+반대 인자로 되돌리면 `.env` 가 처음 `.env 앞` 해시로 돌아온다 — 처음 바꾸기 전의 키 줄을
+`ip-limit.orig`(비밀 아님)가 기억하고, 되돌릴 때 지운다. 그 파일을 손으로 지우거나 고치지
+않는다. 블록이 끊겨 새 `.env` 사본(`.env.iplimit.*` — 비밀)이 남았으면 이 블록을 다시
+돌린다 — 첫머리가 지운다(T 백업 처분 · 반영 전 비밀 파기도 이 이름을 지운다). 실측
+기록에는 `.env` 해시 앞뒤와 `ip_limit` 값을 남긴다.
 
 ---
 
