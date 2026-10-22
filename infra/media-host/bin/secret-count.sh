@@ -57,7 +57,7 @@ ulimit -c 0
 # 비밀 · 그것이 든 원문을 담는 변수 이름이 부모 환경에서 export 된 채 들어오면
 # local 이 그 속성을 이어받아 자식(grep · wc · tail · base64) 환경에 값이
 # 실린다 — 쓰기 전에 지운다.
-unset -v values value first pass basic
+unset -v values value first pass basic raw
 
 BIN_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly BIN_DIR
@@ -138,21 +138,30 @@ collect_box() {
 #######################################
 # 이번 기동의 사이드카 API 비밀번호와 그 Basic 값을 대조 값(부르는 main 의
 # 지역 배열 values)에 더한다. 파일 전체가 「16진 64자 + 끝 줄바꿈」 한 줄이어야
-# 한다 — 크기가 정확히 그만큼이고 첫 줄이 그 꼴이면 남는 바이트가 없다. 크기는
-# wc 의 표준 입력으로 재고, 비밀번호는 내장 read · printf 로만 다루고 base64
-# 에는 표준 입력으로만 넘긴다.
+# 한다 — 크기가 정확히 그만큼이고 내용이 그 꼴이면 남는 바이트가 없다. 링크는
+# 따르지 않는다(시작 스크립트도 링크 자리에는 쓰지 않는다). wc · head 는 상한
+# 안에서 돌린다 — 그 자리가 FIFO 로 바뀌어 있어도 매달리지 않게. 비밀번호는
+# head 의 표준 출력으로만 받고(argv 에는 경로만), base64 에는 표준 입력으로만
+# 넘긴다.
 # Globals:
 #   RUNTIME_DIR, values(main 의 지역 — 동적 범위)
+# Arguments:
+#   상한(초).
 # Returns:
 #   0 더함 / 1 파일 없음 · 못 읽음 · 꼴 밖.
 #######################################
 add_api_pass_values() {
-  local file="${RUNTIME_DIR:-/run/pokeclip-media}/mtx_api_pass" pass basic
-  local size
-  [[ -f "${file}" && -r "${file}" ]] || return 1
-  size="$(wc -c <"${file}")" || return 1
-  [[ "${size//[[:space:]]/}" == "${API_PASS_FILE_BYTES}" ]] || return 1
-  IFS= read -r pass <"${file}" || return 1
+  local limit="$1" file="${RUNTIME_DIR:-/run/pokeclip-media}/mtx_api_pass"
+  local size raw pass basic
+  [[ ! -L "${file}" && -f "${file}" && -r "${file}" ]] || return 1
+  size="$(ops::bounded "${limit}" wc -c -- "${file}" </dev/null)" || return 1
+  read -r size _ <<<"${size}"
+  [[ "${size}" == "${API_PASS_FILE_BYTES}" ]] || return 1
+  raw="$(ops::bounded "${limit}" head -c "${API_PASS_FILE_BYTES}" -- \
+    "${file}" </dev/null && printf x)" || return 1
+  pass="${raw%$'\n'x}"
+  [[ "${raw}" == "${pass}"$'\n'x ]] || return 1
+  unset raw
   [[ "${pass}" =~ ${API_PASS_PATTERN} ]] || return 1
   basic="$(printf '%s:%s' "${SIDECAR_API_USER}" "${pass}" | base64 \
     | tr -d '\n')" || return 1
@@ -291,7 +300,7 @@ main() {
   fi
   unset value
   if [[ "${mode}" == box ]]; then
-    add_api_pass_values || fail api-pass
+    add_api_pass_values "${limit}" || fail api-pass
   fi
   ops::make_scratch
   input="${ops_scratch}/input"

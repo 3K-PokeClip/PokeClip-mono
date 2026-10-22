@@ -82,8 +82,9 @@ function lex(seg,   i, n, c, rest) {
 function addstr(raw,   t) {
   if (raw ~ ctrlre) fail()
   t = raw
-  gsub(/\\["\\\/bfnrt]/, "", t)
-  gsub(/\\u[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]/, "", t)
+  # 맞는 이스케이프를 한 번에 지운다 — 두 번에 나눠 지우면 앞에서 지운 자리가
+  # 뒤의 꼴을 새로 만든다(\u12\b34 → \u1234).
+  gsub(/\\(["\\\/bfnrt]|u[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f])/, "", t)
   if (index(t, "\\") > 0) fail()
   push((index(raw, "\\") > 0) ? "e" : "s", raw)
 }
@@ -305,7 +306,11 @@ mtx_paths::query() {
     124) mtx_paths_step=timeout; return 1 ;;
     *) mtx_paths_step=response; return 1 ;;
   esac
-  scan="$(cat "${ops_scratch}/scan")"
+  if ! scan="$(cat "${ops_scratch}/scan")" \
+    || [[ ! "${scan##*PAGECOUNT }" =~ ^(0|[1-9][0-9]*)$ ]]; then
+    mtx_paths_step=response
+    return 1
+  fi
   mtx_paths_page_count="${scan##*PAGECOUNT }"
   mtx_paths_item_count="$(printf '%s\n' "${scan}" \
     | LC_ALL=C grep -a -c '^ITEM ' || true)"

@@ -208,7 +208,7 @@ SIGKILL 등) systemd 252 는 `ExecStop` 을 건너뛰고 `ExecStopPost` 로 간�
 | | `SECRET COUNT FAIL <단계>` | `usage` · `config` · `cdn-secret` · `test-key` · `api-pass` · `journal` · `mediamtx` · `nginx` · `docker-logs` · `ssm-command` · `ssm-list` · `ssm-status` · `ssm-output` · `ssm-truncated` · `grep` |
 | `ops/force-diff.sh` | `FORCE REMAINING <n>` + 남은 ID | n 이 0 이면 복구 완료 |
 | | `FORCE FAIL input A\|B\|ended` · `FORCE FAIL usage` | 입력 거부 · 인자 오류 |
-| | `FORCE FAIL count A\|B` · `FORCE FAIL empty A` | ID 줄 수가 개수 인자와 다름(잘린 목록) · A 에 ID 가 없음 |
+| | `FORCE FAIL count A\|B` · `FORCE FAIL empty A` | 잘린 목록(ID 줄 수가 개수 인자와 다름 · 마지막 줄에 끝 줄바꿈 없음) · A 에 ID 가 없음 |
 
 `FAIL` 줄은 「0 건」 이 아니다. 조회가 실패하면 실패로 끝낸다.
 
@@ -261,14 +261,17 @@ set -a; . /etc/pokeclip-media/media.env; set +a
     함께 적어 둔다. **종료 0 일 때만 저장한다** — 실패하면 표준 출력이 비어
     있어, 저장하면 「송출 중 0」 처럼 읽힌다.
 1.  **SSM 출력 한도(표준 출력 24,000자)에 닿은 출력은 저장하지 않는다** — 뒤가
-    잘린 목록이다. 놓쳐도 다음 단계의 개수 대조가 거부한다.
+    잘린 목록이다. 놓쳐도 다음 단계가 거부한다 — 줄 수가 개수와 다르거나,
+    마지막 ID 가 가운데에서 잘려 끝 줄바꿈이 없으면 대조하지 않는다. 저장할 때
+    출력을 손으로 고치지 않는다(끝 줄바꿈을 더하면 이 검사가 무력해진다).
 1.  force 4 뒤 B 상자에서 같은 스크립트로 `force-<시각>-B.txt` 와 개수를
     받는다(같은 규칙).
 1.  종료를 확인한 방송은 `force-<시각>-ended.txt` 에 탭 구분 3열(`ingestStreamId`
     · 확인 시각 · 확인 경로)로 덧붙인다.
 1.  `force-diff.sh A B ended <A 개수> <B 개수>` → `FORCE REMAINING <n>`. 남은
-    ID 가 연락 대상이고, 0 이면 복구 완료다. 파일의 ID 줄 수가 개수와 다르거나
-    A 가 비면 대조하지 않는다(`FORCE FAIL count|empty`).
+    ID 가 연락 대상이고, 0 이면 복구 완료다. A · B 파일의 ID 줄 수가 개수와
+    다르거나 마지막 줄에 끝 줄바꿈이 없으면(잘린 목록), A 가 비면 대조하지
+    않는다(`FORCE FAIL count|empty`).
 
 **루프백 헬스(`loopback-health.sh`):** 상자 안에서 시험 신호를 MediaMTX
 (`srt://127.0.0.1:8890`)로 보내고, `127.0.0.1:<live 포트>/<ID>/index.m3u8` 이

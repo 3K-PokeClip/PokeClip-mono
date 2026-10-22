@@ -13,7 +13,9 @@
 #          덧붙인다.
 #   A 개수 · B 개수
 #          그 두 실행의 표준 오류 「PATHS LIST <n>」 의 n. 파일의 ID 줄 수와
-#          다르면(SSM 출력 한도 등으로 목록이 잘림) 대조하지 않는다.
+#          다르거나, 비지 않은 파일의 마지막 줄에 끝 줄바꿈이 없으면(SSM 출력
+#          한도 등으로 목록이 잘림 — 마지막 ID 가 가운데에서 잘려도 줄 수는
+#          같다) 대조하지 않는다. paths-list.sh 는 줄마다 줄바꿈을 붙인다.
 #
 # 처리: 세 입력의 첫 열만(cut -f1) 빈 줄을 빼고 C 정렬 · 중복 제거한 뒤
 # comm -23 A B 로 미복귀 목록, 다시 comm -23 미복귀 ended 로 남은 목록을 만든다.
@@ -25,7 +27,8 @@
 #   FORCE REMAINING <n>            다음 줄부터 남은 ID(연락 대상). n 이 0 이면
 #                                  복구 완료.
 #   FORCE FAIL input <A|B|ended>   입력 파일 없음 · 못 읽음 · 꼴 밖의 줄.
-#   FORCE FAIL count <A|B>         ID 줄 수가 개수 인자와 다름.
+#   FORCE FAIL count <A|B>         잘린 목록 — ID 줄 수가 개수 인자와 다름 ·
+#                                  마지막 줄에 끝 줄바꿈 없음.
 #   FORCE FAIL empty A             A 에 ID 가 없음.
 #   FORCE FAIL usage               인자가 다섯이 아님 · 개수가 숫자가 아님.
 # 종료 코드: 0 대조함 / 1 입력 · 개수 거부 / 2 인자 오류.
@@ -72,6 +75,18 @@ normalize() {
 }
 
 #######################################
+# 비지 않은 파일이 줄바꿈으로 끝나는지 본다(빈 파일은 참).
+# Arguments:
+#   파일.
+#######################################
+ends_with_newline() {
+  local last
+  [[ -s "$1" ]] || return 0
+  last="$(tail -c 1 -- "$1" && printf x)" || return 1
+  [[ "${last}" == $'\nx' ]]
+}
+
+#######################################
 # ID 줄 수(정렬 전)를 낸다.
 # Arguments:
 #   normalize 가 쓴 파일.
@@ -98,11 +113,13 @@ main() {
       exit 1
     fi
   done
-  if [[ "$(id_lines "${scratch}/A")" != "$4" ]]; then
+  if ! ends_with_newline "${inputs[0]}" \
+    || [[ "$(id_lines "${scratch}/A")" != "$4" ]]; then
     printf 'FORCE FAIL count A\n'
     exit 1
   fi
-  if [[ "$(id_lines "${scratch}/B")" != "$5" ]]; then
+  if ! ends_with_newline "${inputs[1]}" \
+    || [[ "$(id_lines "${scratch}/B")" != "$5" ]]; then
     printf 'FORCE FAIL count B\n'
     exit 1
   fi

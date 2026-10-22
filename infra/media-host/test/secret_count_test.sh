@@ -526,7 +526,8 @@ case_box_api_pass_missing_with_cdn() {
 #######################################
 # 비밀번호 파일 자리를 갈래 하나로 만든다(setup_box 뒤).
 # Arguments:
-#   갈래 — not-hex | empty | dir | dangling | no-newline | junk | two-lines.
+#   갈래 — not-hex | empty | dir | dangling | symlink | no-newline | junk |
+#   two-lines.
 #######################################
 write_api_pass_variant() {
   local file="${ops_dir}/runtime/mtx_api_pass"
@@ -536,6 +537,10 @@ write_api_pass_variant() {
     empty) : >"${file}" ;;
     dir) mkdir -- "${file}" ;;
     dangling) ln -s -- "${ops_dir}/runtime/absent" "${file}" ;;
+    symlink)
+      printf '%s\n' "${OPS_FAKE_API_PASS}" >"${ops_dir}/runtime/real"
+      ln -s -- "${ops_dir}/runtime/real" "${file}"
+      ;;
     no-newline) printf '%s' "${OPS_FAKE_API_PASS}" >"${file}" ;;
     junk) printf '%s\nJUNK' "${OPS_FAKE_API_PASS}" >"${file}" ;;
     two-lines)
@@ -548,11 +553,12 @@ write_api_pass_variant() {
 
 # 사례 20 — box: 비밀번호 파일은 시작 스크립트가 쓰는 꼴(16진 64자 + 끝 줄바꿈
 # 하나, 파일 전체가 그 한 줄) 하나만 받는다. 그 밖(16진 아님 · 빈 파일 ·
-# 디렉터리 · 끊어진 링크 · 줄바꿈 없음 · 뒤에 남는 바이트 · 두 줄)은 모두
-# api-pass 로 실패한다(종료 1).
+# 디렉터리 · 끊어진 링크 · 링크(대상이 그 꼴이어도) · 줄바꿈 없음 · 뒤에 남는
+# 바이트 · 두 줄)은 모두 api-pass 로 실패한다(종료 1).
 case_box_api_pass_malformed() {
   local ok=0 variant
-  for variant in not-hex empty dir dangling no-newline junk two-lines; do
+  for variant in not-hex empty dir dangling symlink no-newline junk \
+    two-lines; do
     setup_box
     write_api_pass_variant "${variant}" || return 1
     run_count box || return 1

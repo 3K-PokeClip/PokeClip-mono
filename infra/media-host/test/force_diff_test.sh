@@ -25,7 +25,7 @@ readonly MEDIA_HOST_DIR
 source "${TEST_DIR}/lib/harness.sh"
 
 readonly SCRIPT="${MEDIA_HOST_DIR}/ops/force-diff.sh"
-readonly CASE_COUNT=10
+readonly CASE_COUNT=11
 # write_inputs 의 A · B 파일 ID 줄 수(paths-list 의 「PATHS LIST <n>」).
 readonly A_LINES=8
 readonly B_LINES=3
@@ -276,6 +276,36 @@ case_grep_error() {
   expect_output 'FORCE FAIL input A' 1
 }
 
+# 사례 11 — 마지막 줄에 끝 줄바꿈이 없는 A · B(마지막 ID 가운데에서 잘린
+# 목록 — 줄 수는 개수와 같다)는 잘린 목록으로 거부한다. ended 는 사람이 쓰는
+# 파일이라 끝 줄바꿈이 없어도 받는다.
+case_unterminated_last_line() {
+  local ok=0
+  new_case
+  write_inputs
+  printf '%s\n' 01JZZZZZZZZZZZZZZZZZZZZZZ9 probe-stream-B \
+    01JAAAAAAAAAAAAAAAAAAAAAA1 Mixed-Case-Id probe-stream-B \
+    01JMMMMMMMMMMMMMMMMMMMMMM5 lower-case-id >"${dir}/A.txt"
+  printf 'Zeta-up' >>"${dir}/A.txt"
+  run_inputs || return 1
+  expect_output 'FORCE FAIL count A' 1 || ok=1
+  new_case
+  write_inputs
+  printf '%s\n' 01JMMMMMMMMMMMMMMMMMMMMMM5 new-since-force >"${dir}/B.txt"
+  printf 'probe-str' >>"${dir}/B.txt"
+  run_inputs || return 1
+  expect_output 'FORCE FAIL count B' 1 || ok=1
+  new_case
+  write_inputs
+  printf '%s\t%s\t%s' Zeta-upper t p >>"${dir}/ended.txt"
+  run_inputs || return 1
+  expect_output "FORCE REMAINING 3
+01JAAAAAAAAAAAAAAAAAAAAAA1
+01JZZZZZZZZZZZZZZZZZZZZZZ9
+lower-case-id" 0 || ok=1
+  return "${ok}"
+}
+
 cleanup() {
   local code=$?
   harness::end_last_group
@@ -305,6 +335,8 @@ main() {
   harness::run_case 8 'ID 줄 수 ≠ 개수 → FORCE FAIL count' case_count_mismatch
   harness::run_case 9 '빈 A → FORCE FAIL empty A' case_empty_a
   harness::run_case 10 '꼴 검사 grep 오류 → FORCE FAIL input' case_grep_error
+  harness::run_case 11 '끝 줄바꿈 없는 A · B → FORCE FAIL count' \
+    case_unterminated_last_line
 
   if ! harness::summary "${CASE_COUNT}"; then
     exit 1

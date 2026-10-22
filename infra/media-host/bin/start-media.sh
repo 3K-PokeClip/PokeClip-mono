@@ -161,7 +161,8 @@ json_value_slot() {
 json_scan_helpers() {
   local rest="$1" host="$2" stack="" prev=start key1="" hkey="" raw depth
   local in_helpers=0 helpers_seen=0 host_seen=0 matched=0
-  local ws_re='^[[:space:]]+'
+  # JSON 공백은 넷뿐이다(SP · HT · LF · CR) — [[:space:]] 는 VT · FF 도 받는다.
+  local ws_re=$'^[ \t\n\r]+'
   # 문자열 · 숫자는 JSON 문법 그대로다 — 이스케이프는 \" \\ \/ \b \f \n \r \t
   # \uXXXX 만, 제어 문자는 이스케이프해야만, 숫자는 앞 0 · 빈 소수부 · 빈
   # 지수가 없다. 그 밖은 형식 오류다(fail closed).

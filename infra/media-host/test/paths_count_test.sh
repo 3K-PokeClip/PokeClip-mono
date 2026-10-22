@@ -29,7 +29,7 @@ source "${TEST_DIR}/lib/ops_fixture.sh"
 # shellcheck source=lib/paths_cases.sh
 source "${TEST_DIR}/lib/paths_cases.sh"
 
-readonly CASE_COUNT=15
+readonly CASE_COUNT=16
 # paths_cases.sh 가 읽는다.
 # shellcheck disable=SC2034
 readonly paths_script='bin/paths-count.sh'
@@ -135,6 +135,8 @@ main() {
     paths::case_usage_and_config
   harness::run_case 15 '8 MiB 넘는 응답 → response · 항목 1000 개 상한 안' \
     paths::case_large_response
+  harness::run_case 16 '훑기 결과 못 읽음 → response' \
+    paths::case_scan_read_failure
 
   if ! harness::summary "${CASE_COUNT}"; then
     exit 1

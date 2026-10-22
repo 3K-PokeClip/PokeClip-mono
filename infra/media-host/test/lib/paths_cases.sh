@@ -206,6 +206,7 @@ paths::case_malformed() {
     '{"itemCount":0,"pageCount":0,"items":[],}'
     '{"itemCount":01,"pageCount":0,"items":[]}'
     '{"itemCount":0,"pageCount":0,"items":[],"x":"\q"}'
+    '{"itemCount":0,"pageCount":0,"items":[],"x":"\u12\b34"}'
     '{"itemCount":0,"pageCount":0,"items":[]}"'
     '<html>404</html>'
     ''
@@ -220,6 +221,21 @@ paths::case_malformed() {
     fi
   done
   return "${ok}"
+}
+
+#######################################
+# 훑기 결과 파일(스크래치의 scan)을 못 읽으면 0 건이 아니라 response 로
+# 실패한다 — 그 파일만 못 읽는 cat 을 PATH 맨 앞에 둔다.
+#######################################
+paths::case_scan_read_failure() {
+  paths::setup "${PATHS_MIXED_JSON}"
+  # shellcheck disable=SC2016 # 가짜 cat 의 본문이다 — 그 셸이 펼친다.
+  printf '%s\n' '#!/bin/sh' \
+    'for a in "$@"; do case "$a" in */scan) exit 1 ;; esac; done' \
+    'exec /bin/cat "$@"' >"${ops_dir}/bin/cat"
+  chmod +x "${ops_dir}/bin/cat"
+  paths::run || return 1
+  paths_expect_fail response
 }
 
 #######################################

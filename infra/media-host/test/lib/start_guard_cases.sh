@@ -73,8 +73,8 @@ guard::case_disallowed_values() {
 # 호스트가 최상위 다른 곳 · auths 에만 있음 · 값이 ecr-login 아님 · 이스케이프된
 # 키 · 형식 오류 · 키 중복 · 중첩 · 최상위가 배열 · 값이 객체 · 뒤에 군더더기 ·
 # JSON 문법 밖의 숫자(1e+ · 1. · 01) · 문자열 안의 모르는 이스케이프(\q) ·
-# 이스케이프 안 한 제어 문자(줄바꿈 · 탭), 그리고 끝 줄바꿈으로 채워 크기 상한을
-# 넘긴 파일. 모두 선행 점검 실패다.
+# 이스케이프 안 한 제어 문자(줄바꿈 · 탭) · JSON 공백이 아닌 공백(VT · FF),
+# 그리고 끝 줄바꿈으로 채워 크기 상한을 넘긴 파일. 모두 선행 점검 실패다.
 # Globals:
 #   fixture_dir
 #######################################
@@ -104,6 +104,8 @@ guard::case_config_counterexamples() {
 \"ecr-login\"}}"
     "{\"auths\":{\"x\":\"a"$'\t'"b\"},\"credHelpers\":{\"${h}\":\
 \"ecr-login\"}}"
+    "{"$'\v'"\"credHelpers\":{\"${h}\":\"ecr-login\"}}"
+    "{"$'\f'"\"credHelpers\":{\"${h}\":\"ecr-login\"}}"
   )
   for body in "${bodies[@]}"; do
     n=$((n + 1))
