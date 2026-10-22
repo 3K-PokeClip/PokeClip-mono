@@ -242,13 +242,24 @@ function LivePlayer({
   // 요청이 쿠키 없이 403이고 hls.js는 한 번만 다시 시도한 뒤 멈춘다. 실패는 열지 않고 1분 뒤 다시 받은 답을 기다린다(PR #320 codex).
   // 로컬·dev는 503이 곧바로 와서 재생 시작이 왕복 한 번만큼만 늦다
   const [accessReadyFor, setAccessReadyFor] = useState<string | null>(null);
+  // 열린 뒤 갱신이 실패하다가 다시 받아진 횟수. 그 사이 쿠키가 끝나 멈춘 hls.js는 새 쿠키로 저절로 안 살아나서 재생기를 새로
+  // 세운다(PR #320 codex). 정상 갱신에는 안 늘어 재생이 끊기지 않는다
+  const [accessRecoveries, setAccessRecoveries] = useState(0);
   useEffect(() => {
     if (!liveStreamId) return undefined;
     let alive = true;
     let timer: number | undefined;
+    let opened = false;
+    let failedSinceOpen = false;
     const ask = () => {
       void requestPlaybackAccess(liveStreamId).then((result) => {
-        if (alive && result.kind !== 'failed') setAccessReadyFor(liveStreamId);
+        if (alive && result.kind === 'failed') failedSinceOpen = opened;
+        if (alive && result.kind !== 'failed') {
+          if (failedSinceOpen) setAccessRecoveries((n) => n + 1);
+          failedSinceOpen = false;
+          opened = true;
+          setAccessReadyFor(liveStreamId);
+        }
         if (!alive || result.kind === 'not_needed') return;
         const wait =
           result.kind === 'failed'
@@ -271,7 +282,8 @@ function LivePlayer({
   return (
     <GlassPlayer
       // 실재생 훅은 경과 시드를 마운트 때 한 번만 읽는다 — startedAt이 도착하면 한 번 다시 세운다
-      key={uptimeSeconds === null ? 'clock-pending' : 'clock-known'}
+      // 출입증 갱신이 실패하다가 다시 받아져도 다시 세운다(accessRecoveries)
+      key={`${uptimeSeconds === null ? 'clock-pending' : 'clock-known'}-${accessRecoveries}`}
       channelName={stream.channelName}
       viewersNote={viewersNote}
       broadcastStatus={displayStatus}

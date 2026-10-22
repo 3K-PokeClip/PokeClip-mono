@@ -684,10 +684,13 @@ export async function requestPlaybackAccess(streamId: string): Promise<PlaybackA
 const PLAYBACK_ACCESS_REUSE_MARGIN_MS = 5 * 60_000;
 /** 만료를 모르는 출입증을 다시 쓰는 시간(운영 수명 60분보다 짧게) */
 const PLAYBACK_ACCESS_DEFAULT_REUSE_MS = 50 * 60_000;
-/** 방송 번호 → 그 방송으로 받은 출입증(받는 중이면 끝날 때까지 다시 쓴다) */
+/**
+ * 방송 번호 → 그 방송으로 받은 출입증(받는 중이면 끝날 때까지 다시 쓴다). 받을 때의 영상 키를 같이 둔다: 늦게 온 방송 편지로 영상 키가
+ * 바뀌면 옛 키로 받은 쿠키는 새 주소에 안 실리므로 다시 받는다(PR #320 codex)
+ */
 const playbackAccessCache = new Map<
   string,
-  { until: number; settled: boolean; result: Promise<PlaybackAccessResult> }
+  { mediaKey: string; until: number; settled: boolean; result: Promise<PlaybackAccessResult> }
 >();
 /** 영상 키 → 그 키로 출입증을 받은 방송 번호. 쿠키 경로가 영상 키라 같은 키의 방송이면 어느 것으로 받아도 같다 */
 const playbackAccessByMediaKey = new Map<string, string>();
@@ -703,16 +706,24 @@ export function ensurePlaybackAccess(
   playbackAccessByMediaKey.set(mediaKey, streamId);
   if (playbackNotNeeded.has(streamId) || !playbackConfigured()) return null;
   const known = playbackAccessCache.get(streamId);
-  if (known !== undefined && known.until > Date.now()) return known.settled ? null : known.result;
+  if (known !== undefined && known.mediaKey === mediaKey && known.until > Date.now())
+    return known.settled ? null : known.result;
   const result = requestPlaybackAccess(streamId);
-  playbackAccessCache.set(streamId, { until: Number.POSITIVE_INFINITY, settled: false, result });
+  playbackAccessCache.set(streamId, {
+    mediaKey,
+    until: Number.POSITIVE_INFINITY,
+    settled: false,
+    result,
+  });
   void result.then((r) => {
     const until =
       r.kind === 'granted'
         ? (r.expiresAtMs ?? Date.now() + PLAYBACK_ACCESS_DEFAULT_REUSE_MS) -
           PLAYBACK_ACCESS_REUSE_MARGIN_MS
         : 0;
-    playbackAccessCache.set(streamId, { until, settled: true, result });
+    // 받는 사이 다른 키로 다시 받기 시작했으면 그 줄을 덮지 않는다
+    if (playbackAccessCache.get(streamId)?.result === result)
+      playbackAccessCache.set(streamId, { mediaKey, until, settled: true, result });
   });
   return result;
 }

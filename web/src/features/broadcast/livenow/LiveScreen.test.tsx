@@ -986,6 +986,33 @@ describe('LiveScreen — 영상 출입증', () => {
     expect(hlsFake.loads).toBeGreaterThan(0);
   });
 
+  it('갱신이 실패하다가 다시 받아지면 재생기를 새로 세운다: 쿠키가 끝난 사이 멈춘 hls.js는 새 쿠키로 저절로 안 살아난다(PR #320 codex)', async () => {
+    stubMediaElement();
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', 'http://live.test');
+    server.playback = 'grant';
+    await renderLive();
+    expect(hlsFake.loads).toBe(1);
+
+    // 정상 갱신(만료 5분 전)은 재생기를 다시 세우지 않는다
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6 * 60_000);
+    });
+    await settle();
+    expect(hlsFake.loads).toBe(1);
+
+    // 다음 갱신이 실패하고, 1분 뒤 다시 받아진다
+    server.playback = 'fail';
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+    });
+    server.playback = 'grant';
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    await settle();
+    expect(hlsFake.loads).toBe(2);
+  });
+
   it('출입증이 필요 없는 곳(로컬·dev)은 첫 화면이 서는 사이에 라이브 영상을 부른다: 기다림이 재생 시작을 늦추지 않는다', async () => {
     stubMediaElement();
     vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', 'http://live.test');

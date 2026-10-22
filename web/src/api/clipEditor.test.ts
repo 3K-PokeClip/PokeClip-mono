@@ -271,6 +271,15 @@ describe('영상 출입증 받기와 쿠키 싣기 (POK-317)', () => {
     expect(posts()).toHaveLength(2);
   });
 
+  it('같은 방송이라도 영상 키가 바뀌면 다시 받는다: 쿠키 경로가 영상 키라 옛 키로 받은 것은 새 주소에 안 실린다(PR #320 codex)', async () => {
+    const { api, posts } = await load(granted('2999-01-01T00:00:00Z'));
+    await api.ensurePlaybackAccess('s1', 's1');
+    await api.ensurePlaybackAccess('s1', 's1');
+    expect(posts()).toHaveLength(1);
+    await api.ensurePlaybackAccess('s1', 'physical-key');
+    expect(posts()).toHaveLength(2);
+  });
+
   it('동시에 여러 번 불러도 한 번만 묻는다: 목록이 같은 방송을 한 회차에 여러 번 볼 수 있다', async () => {
     const { api, posts } = await load(granted('2026-10-23T01:00:00Z'));
     await Promise.all([api.ensurePlaybackAccess('s1', 'k'), api.ensurePlaybackAccess('s1', 'k')]);
