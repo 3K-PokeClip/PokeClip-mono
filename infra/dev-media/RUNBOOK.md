@@ -1137,7 +1137,7 @@ elif [[ -s "${DEMO_DIR}/.env.pre-T.bak" ]]; then
   } > "${DEMO_DIR}/.env.next"
   chown root:root "${DEMO_DIR}/.env.next"
   chmod 0600 "${DEMO_DIR}/.env.next"
-  mv -T "${DEMO_DIR}/.env.next" "${DEMO_DIR}/.env"
+  command mv -T "${DEMO_DIR}/.env.next" "${DEMO_DIR}/.env" && echo '.env 를 끼웠다'
 else
   echo '멈춤: 반영 전 보존(R0)이 먼저다'
 fi
@@ -1155,6 +1155,10 @@ exit
 - `.env.next` 를 다 쓴 뒤 이름 바꾸기로 끼우므로 세션이 끊겨도 반쪽 `.env` 가 생기지
   않는다. 남은 `.env.next` 는 비밀(출입증 · API 비번)이 든 파일이라 같은 세션에서
   `shred -u -- "${DEMO_DIR}/.env.next"` 로 지우고 다시 친다.
+- 끼우기는 `command mv` 다 — AL2023 의 root 대화형 셸은 `mv` 가 `mv -i` 별칭이라
+  덮어쓰기를 묻고, 붙여 넣은 다음 줄이 그 답으로 들어간다(2026-10-20 상자에서 물었다).
+  거절돼도 `mv -i` 는 종료 0 이므로(GNU coreutils 8.32) 끼웠는지는 끝의 「.env 를
+  끼웠다」로만 안다.
 
 이어서 꼴을 단언한다(값은 내지 않는다).
 
