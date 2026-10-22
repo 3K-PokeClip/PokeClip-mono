@@ -214,3 +214,99 @@ describe('mediaStreamId — 영상 주소의 키(POK-233)', () => {
     expect(mediaStreamId({ streamId: 'old-key', ingestStreamId: '' })).toBe('old-key');
   });
 });
+
+describe('영상 출입증 받기와 쿠키 싣기 (POK-317)', () => {
+  // 모듈 안 기억(받은 출입증 · 쿠키 표시)이 시험끼리 새지 않게 매번 새로 읽는다
+  async function load(answer: (url: string) => Response) {
+    vi.resetModules();
+    const spy = stubFetch((url) => Promise.resolve(answer(String(url))));
+    const api = await import('@/api/clipEditor');
+    const media = await import('@/api/mediaPlayback');
+    const posts = () =>
+      spy.mock.calls
+        .filter(([url]) => String(url).endsWith('/playback-access'))
+        .map(([url]) => String(url));
+    return { api, media, posts };
+  }
+  const granted = (expiresAt: string) => () => jsonResponse(200, { expiresAt });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('서명 재료가 없는 503만 「필요 없음」이다: 자격 확인이 안 되는 503은 실패라 다시 묻는다', async () => {
+    const off = await load(() => jsonResponse(503, { error: 'playback_signing_unavailable' }));
+    expect(await off.api.requestPlaybackAccess('s1')).toEqual({ kind: 'not_needed' });
+    const authDown = await load(() => jsonResponse(503, { error: 'authorization_unavailable' }));
+    expect(await authDown.api.requestPlaybackAccess('s1')).toEqual({ kind: 'failed' });
+  });
+
+  it('출입증을 실제로 받기 전에는 쿠키를 안 싣는다: 로컬 영상 서버는 Allow-Origin * 라 쿠키를 실으면 응답을 버린다', async () => {
+    const off = await load(() => jsonResponse(503, { error: 'playback_signing_unavailable' }));
+    expect(off.media.mediaCredentials()).toBe('same-origin');
+    await off.api.requestPlaybackAccess('s1');
+    expect(off.media.mediaCredentials()).toBe('same-origin');
+
+    const on = await load(granted('2026-10-23T01:00:00Z'));
+    await on.api.requestPlaybackAccess('s1');
+    expect(on.media.mediaCredentials()).toBe('include');
+  });
+
+  it('받은 출입증은 만료 5분 전까지 다시 쓴다: 그 뒤에는 다시 받는다', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.parse('2026-10-23T00:00:00Z'));
+    const { api, posts } = await load(granted('2026-10-23T01:00:00Z'));
+
+    await api.ensurePlaybackAccess('s1', 'key-1');
+    await api.ensurePlaybackAccess('s1', 'key-1');
+    expect(posts()).toHaveLength(1);
+
+    vi.setSystemTime(Date.parse('2026-10-23T00:54:59Z'));
+    await api.ensurePlaybackAccess('s1', 'key-1');
+    expect(posts()).toHaveLength(1);
+    vi.setSystemTime(Date.parse('2026-10-23T00:55:01Z'));
+    await api.ensurePlaybackAccess('s1', 'key-1');
+    expect(posts()).toHaveLength(2);
+  });
+
+  it('동시에 여러 번 불러도 한 번만 묻는다: 목록이 같은 방송을 한 회차에 여러 번 볼 수 있다', async () => {
+    const { api, posts } = await load(granted('2026-10-23T01:00:00Z'));
+    await Promise.all([api.ensurePlaybackAccess('s1', 'k'), api.ensurePlaybackAccess('s1', 'k')]);
+    expect(posts()).toHaveLength(1);
+  });
+
+  it('실패는 기억하지 않는다: 다음에 부르면 다시 묻는다', async () => {
+    const { api, posts } = await load(() => jsonResponse(500, {}));
+    await api.ensurePlaybackAccess('s1', 'k');
+    await api.ensurePlaybackAccess('s1', 'k');
+    expect(posts()).toHaveLength(2);
+  });
+
+  it('서명 재료가 없는 서버면 다른 방송도 더 묻지 않는다: 로컬·dev는 방송마다 503을 받으러 가지 않는다', async () => {
+    const { api, posts } = await load(() =>
+      jsonResponse(503, { error: 'playback_signing_unavailable' }),
+    );
+    await api.ensurePlaybackAccess('s1', 'k1');
+    await api.ensurePlaybackAccess('s2', 'k2');
+    expect(posts()).toHaveLength(1);
+  });
+
+  it('영상 키로 부르면 그 키로 받아 둔 방송의 출입증을 다시 쓰거나 새로 받는다: 모르는 키면 묻지 않는다', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.parse('2026-10-23T00:00:00Z'));
+    const { api, posts } = await load(granted('2026-10-23T01:00:00Z'));
+
+    await api.ensureMediaAccess('unknown-key');
+    expect(posts()).toHaveLength(0);
+
+    await api.ensurePlaybackAccess('S-1', 'key-1');
+    await api.ensureMediaAccess('key-1');
+    expect(posts()).toHaveLength(1);
+    vi.setSystemTime(Date.parse('2026-10-23T00:56:00Z'));
+    await api.ensureMediaAccess('key-1');
+    expect(posts()).toEqual([
+      '/api/clip/broadcasts/S-1/playback-access',
+      '/api/clip/broadcasts/S-1/playback-access',
+    ]);
+  });
+});

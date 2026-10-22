@@ -665,7 +665,7 @@ function handle(url: string, init?: RequestInit): Response | Promise<Response> {
         expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
       });
     if (server.playback === 'fail') return jsonResponse(500, { error: 'boom' });
-    return jsonResponse(503, { error: 'signing_unavailable' });
+    return jsonResponse(503, { error: 'playback_signing_unavailable' });
   }
   if (path === '/api/chzzk-link')
     return jsonResponse(200, { linked: true, channelName: '게임하는너구리', status: 'ACTIVE' });
