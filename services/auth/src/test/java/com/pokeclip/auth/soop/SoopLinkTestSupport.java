@@ -28,6 +28,9 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 @AutoConfigureMockMvc
 public abstract class SoopLinkTestSupport extends IntegrationTestSupport {
 
+    /** application-test.yml의 pokeclip.internal-api.token과 같아야 한다. */
+    protected static final String INTERNAL_TOKEN = "test-only-internal-token-32bytes-long!!";
+
     protected final MockMvc mockMvc;
     protected final UserService userService;
     protected final UserRepository userRepository;
@@ -96,6 +99,11 @@ public abstract class SoopLinkTestSupport extends IntegrationTestSupport {
     protected SoopChannelLink linked(User u, Duration expiresIn) {
         return writer.create(u.getId(), new SoopIdentity("soop-" + UUID.randomUUID(), "닉네임"),
                 new SoopTokens("at-old", "rt-old", expiresIn, null));
+    }
+
+    protected MockHttpServletRequestBuilder resolve(Long userId) {
+        return post("/internal/soop-link/resolve").header("X-Internal-Token", INTERNAL_TOKEN)
+                .contentType(APPLICATION_JSON).content("{\"userId\":" + userId + "}");
     }
 
     /** 정상 state를 붙인 완료 요청. */

@@ -24,6 +24,7 @@ public class SoopLinkService {
     private final SoopLinkStateCodec stateCodec;
     private final SoopOAuthClient oauthClient;
     private final SoopLinkWriter writer;
+    private final SoopTokenRefresher refresher;
     private final SoopChannelLinkRepository links;
 
     /** SOOP 아이디는 싣지 않는다: 화면에 필요 없고 응답에 실리면 그만큼 새는 자리가 는다. */
@@ -97,5 +98,31 @@ public class SoopLinkService {
     /** 트랜잭션은 writer에 있다(자기 호출 함정). 살아 있는 행이 없으면 아무것도 안 하고 조용히 끝. */
     public void unlink(Long userId) {
         writer.revoke(userId, Instant.now());
+    }
+
+    /**
+     * 수집기용. 남은 수명이 resolveMinRemaining(1시간)보다 짧으면 즉석 갱신하고 새 토큰을 준다.
+     *
+     * <p>🔴 치지직과 달리 「한 번 받은 토큰으로 방송 끝까지」를 보장하지 못한다: SOOP access는 약 8시간이다(문서 예시).
+     * 수집기는 {@code expiresAt} 전에 다시 부른다(계획 검증 M12, README resolve 계약).
+     *
+     * <p>트랜잭션이 없다: refresher가 최상단이어야 한다. 갱신 뒤 행도 secrets도 두 번째로 읽지 않고 refresher가 락 안에서
+     * 만든 스냅샷만 쓴다(그 사이 해제가 끼면 500이 되는 분기를 없앤다, 치지직과 같다).
+     * 즉석 갱신의 4xx는 브레이크 없이 그대로 파기된다(한 사람 일이다).
+     */
+    public SoopResolveResult resolve(Long userId) {
+        RefreshResult r = refresher.refreshIfExpiringWithin(userId, properties.resolveMinRemaining());
+        return switch (r.outcome()) {
+            case REFRESHED, SKIPPED_FRESH -> {
+                RefreshResult.LinkSnapshot s = r.snapshot();
+                yield new SoopResolveResult(true, s.soopUserId(), s.accessToken(), s.accessExpiresAt(), null);
+            }
+            case REJECTED -> SoopResolveResult.rejected("BROKEN");
+            case UNAVAILABLE -> SoopResolveResult.rejected("REFRESH_UNAVAILABLE");
+            // WITHDRAWN도 UNLINKED다(BROKEN만 다르다): 탈퇴한 회원에게 「다시 연동」을 권할 일이 없다(계획 검증 M11).
+            case NOT_LINKED -> SoopResolveResult.rejected(links.findFirstByUserIdOrderByCreatedAtDesc(userId)
+                    .map(last -> last.status(Instant.now()) == LinkStatus.BROKEN ? "BROKEN" : "UNLINKED")
+                    .orElse("NOT_LINKED"));
+        };
     }
 }

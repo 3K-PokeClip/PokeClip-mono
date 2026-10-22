@@ -2760,6 +2760,73 @@ revoke를 DB 락 안에 넣어야 해서(=트랜잭션 안 외부 호출) 포기
 **마이그레이션은 `V109__create_youtube_channel_links.sql`이다.** 살아있는 행에만 걸리는 부분 유니크
 둘(`channel_id`·`user_id`)이 최종 방어선이고, 점검 후보용 인덱스는 `last_refreshed_at` 축이다.
 
+### SOOP 채널 연동 (POK-396)
+
+**구글 로그인과 별개이고 치지직 연동과 같은 모양이다.** 로그인한 스트리머가 자기 SOOP 방송국을 한 번 묶어 두면
+수집기(POK-397)가 그 스트리머의 Access Token을 auth에서 받아 채팅을 읽는다. 왕복:
+`POST /api/soop-link/start`가 준 `authorizeUrl`(`client_id`·`state`만 싣는다, `redirect_uri`는 SOOP 콘솔에 등록한 값을 SOOP이 쓴다)로
+프론트가 사용자를 보내고, SOOP이 `SOOP_REDIRECT_URI`로 돌려준 `code`를 프론트가 `POST /api/soop-link {code, state}`로 넘긴다.
+방송국은 본문이 아니라 SOOP `validate/live/status`(아이디)·`user/stationinfo`(닉네임)로 확정한다.
+
+🔴 **치지직과 다른 점은 SOOP 개발자 약관 제11조 ⑰(연동 해제·철회 시 지체 없이 파기)에서 나온다.**
+연동이 닫히는 순간(해제 · 재연동 · 갱신 거절 · 탈퇴) 같은 UPDATE 한 문장에서 SOOP 아이디·닉네임을 비우고(V116),
+커밋 뒤 정리에서 토큰 둘을 secrets에서 지운다. 행 자체는 남긴다: 화면이 「SOOP 연동이 끊겼어요」를 그리려면
+「끊겼다는 사실과 사유」(`revoked_at`·`revoke_reason`)가 필요하다. SOOP에는 토큰 폐기 API가 없어 SOOP 쪽 토큰은
+수명(약 8시간)이 지나야 죽는다.
+
+| | 응답 |
+|---|---|
+| `POST /api/soop-link/start` | 200 `{authorizeUrl}`. `state`는 URL 안에 있다(표 없이 서명, 10분. 서명 접두가 치지직과 달라 치지직 state는 여기서 안 통한다) |
+| `POST /api/soop-link` `{code, state}` | 201 `{nickname, linkedAt}` · 400 `INVALID_STATE` · 400 `INVALID_CODE`(SOOP이 교환·조회를 400·401·403 또는 `result` 음수로 거부, **동의부터 다시**) · 409 `CHANNEL_ALREADY_LINKED` · 502 `SOOP_UNAVAILABLE`(5xx·시간 초과·형식 오류·그 밖의 4xx, 잠시 뒤 다시) |
+| `GET /api/soop-link` | 200 `{linked:false}` 또는 `{linked, nickname, status, linkedAt, lastRefreshedAt, accessExpiresAt}`. `status` ∈ `ACTIVE`·`EXPIRED`·`BROKEN`·`UNLINKED`(파생). `linked`는 `ACTIVE`·`EXPIRED`일 때만 true. **`BROKEN`·`UNLINKED`에는 `nickname`이 없다**(파기됐다). 화면은 `status`가 `BROKEN`이면 「SOOP 연동이 끊겼어요(다시 연동)」를 그린다 |
+| `DELETE /api/soop-link` | 204(없어도 204). 행은 남고(`revoked_at`+`USER_UNLINKED`, 아이디·닉네임 NULL) 커밋 뒤에 secrets 삭제. 외부 HTTP 없음 |
+| `POST /internal/soop-link/resolve` `{userId}` | **항상 200**, 아래 |
+
+**공개 응답 어디에도 SOOP 아이디가 없다**(닉네임만). 시험은 키 이름이 아니라 가짜 SOOP이 준 아이디 **값**이 본문에 없는지 본다.
+오류 본문은 `{"reason": "<위 코드>"}` 한 필드다. 토큰·code·state·아이디·닉네임은 로그 어디에도 안 남는다(`SecretLeakTest`).
+예외 하나는 치지직과 같다: 두 계정이 같은 방송국을 동시에 묶어 사전 조회를 지나 DB 유니크 위반까지 가면 Hibernate 오류 로그에
+`soop_user_id`가 한 줄 남을 수 있다(그 로거는 `error`로 눌러 두어 평시 0건).
+
+**`resolve`(수집기용) 계약.** `POST /internal/soop-link/resolve {userId}`, `X-Internal-Token` 헤더, `/internal/**` 체인
+(스트림키·치지직·유튜브 `resolve`와 같은 문, 설정 변경 없음). 우리 회원 번호(`users.id`)만 받는다. **항상 HTTP 200**이다:
+「연동 안 됨·끊김」(수집 안 함)과 「auth 장애」(판단 불가)는 조치가 정반대라 둘 다 4xx면 수집기가 못 가른다.
+`{valid:true, soopUserId, accessToken, expiresAt}` 또는 `{valid:false, reason}`. `soopUserId`는 수집기가 채팅방을 가리키는 데
+필요해 **이 내부 응답에만** 싣는다. `reason`은 넷:
+`NOT_LINKED`(연동한 적 없음) · `UNLINKED`(사용자 해제·탈퇴) · `BROKEN`(SOOP이 갱신을 거부, 스트리머가 재동의해야 풀린다) ·
+`REFRESH_UNAVAILABLE`(즉석 갱신 일시 실패, 임박한 토큰은 주지 않는다). 거절 응답에는 토큰·아이디 칸이 아예 없다.
+남은 수명이 1시간(`resolve-min-remaining`)보다 짧으면 넘기기 전에 즉석 갱신한다.
+🔴 **치지직(24시간 토큰, 「한 번 받으면 방송 끝까지」)과 달리 SOOP 토큰은 약 8시간이다**(문서 예시 `expires_in` 28800, 실값은 실계정
+시험에서 확인). **수집기는 `expiresAt` 전에 다시 부른다**(POK-397 몫). 즉석 갱신의 거절은 아래 브레이크 없이 그대로 파기한다(한 사람 일이다).
+
+**갱신으로 철회를 확인한다.** SOOP은 사용자가 권한을 끊어도 알려 주지 않아, 갱신 거절로만 안다. `@Scheduled`가 **1시간마다**
+(`pokeclip.soop.check.interval=PT1H`) 살아 있는 연동 중 만료가 2시간(`refresh-ahead`) 안으로 남았거나 마지막 확인이
+24시간(`check.staleness`) 지난 것을 골라 회원마다 갱신한다. 회원 행 락 뒤 다시 읽어 이미 갱신됐으면 SOOP을 안 부른다.
+400·401·403이면 영구(`REFRESH_REJECTED` → `BROKEN`, 아이디·닉네임·토큰 파기), 그 밖은 행을 두고 다음 틱에 재시도한다.
+`pokeclip.soop.check.enabled`는 기본 켜짐이고 프로퍼티를 빠뜨려도 켜진다(`matchIfMissing`). 시험 프로파일만 끈다.
+
+🔴 **갱신 브레이크.** 한 틱에서 거절이 **연달아 3번**(`check.reject-brake`) 나면 그 틱을 멈추고 **그 프로세스가 사는 동안
+자동 갱신·파기를 다시 하지 않는다.** 로그 `auth.soop.link.refresh_reject_burst consecutive= lastUserId=`(ERROR) 한 줄.
+이유: 치지직·유튜브는 앱 설정 오류(시크릿 오타·앱 교체)를 응답의 오류 코드로 가려 일시로 돌리지만, SOOP은 토큰 주소의 오류 꼴이
+문서에 없어 가를 수 없다. 브레이크가 없으면 비밀값 하나가 틀린 배포가 틱 한 번에 전 회원 연동을 닫고 토큰까지 지운다(되돌릴 수 없다).
+성공이 끼면 연속 수가 0으로 돌아가고, 일시 장애는 연속 수를 그대로 둔다. 대가: 브레이크 전에 거절된 3명은 이미 닫혔다.
+**푸는 법**: `SOOP_CLIENT_ID`·`SOOP_CLIENT_SECRET`·`SOOP_REDIRECT_URI`를 확인해 고치고 재배포한다(재시작이 브레이크를 푼다).
+실계정으로 확인할 것: 잘못된 `client_secret`으로 갱신하면 SOOP이 무엇을 돌려주는가.
+
+**정리 실패 때 남는 것(한계).** 커밋 뒤 정리는 전용 스레드 2개(`SoopCleanupExecutor`, 종료 시 최대 3초 + 강제 1초)에서 돈다.
+access·refresh 삭제는 각각 시도한다(하나가 실패해도 나머지는 지운다). 그래도 아래 셋에서는 **토큰 원문(암호문)이 secrets에 남을 수
+있고 자동 회수 장치는 없다**: 정리 큐가 차서 거부됨(`auth.soop.cleanup.rejected userId= reason=`, WARN) · 종료 유예에 잘림
+(`auth.soop.cleanup.dropped userId=`, WARN) · 삭제 자체가 실패(`auth.soop.cleanup.failed userId= causeType=`, WARN) · 프로세스가
+죽음(로그 없음). **단서는 닫힌 행에 남은 ref 둘**(`access_token_ref`·`refresh_token_ref`)이다: 그 ref가 secrets에 아직 있으면
+지우면 된다. 아이디·닉네임은 닫는 문장에서 이미 비었으므로 이 경우에도 남지 않는다.
+
+로그는 `auth.soop.link.<사건> userId=` 영어 한 줄이다: `created` · `relinked` · `unlinked`(셋 다 정리 뒤) · `refreshed` ·
+`refresh_rejected status=`(WARN, 정리 뒤) · `refresh_failed causeType=`(WARN) · `refresh_tick_failed causeType=`(WARN) ·
+`refresh_reject_burst`(ERROR) · `rejected status=` · `unavailable causeType=`(WARN) · `token_orphaned`(교환 뒤 실패해 받은 토큰을
+버리지 못함, SOOP에 폐기 API가 없다) · `resolve_rejected reason=` · `failed reason=`. 정리 스레드는 `auth.soop.cleanup.*`다.
+
+풀 고갈 쌍둥이 시험(`ChzzkResolvePoolExhaustionTest`의 SOOP 판)은 두지 않았다: 갱신 HTTP를 회원 행 락·커넥션을 쥔 채 기다리는
+구조가 치지직과 같고 그 구조를 치지직 시험이 잰다. SOOP 코드가 그 구조를 바꾸면 그때 만든다.
+
 ### 회원정보 수정 — 표시 이름·프로필 사진 (POK-207)
 
 표시 이름은 표의 한 칸을 덮어쓰면 끝이다. **사진이 어려운 쪽이고, 어려운 이유가 저장이 아니라 공개 범위다.**
