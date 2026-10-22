@@ -215,6 +215,18 @@ export async function clipFetch(path: string, init?: RequestInit): Promise<Respo
   }
 }
 
+/**
+ * 편집기가 카드를 열었다고 남긴다(POK-393, 시범 운영 측정 재료). 실패는 삼킨다: 기록 하나 때문에 편집을 막지 않는다.
+ * 네트워크 오류도 같이 삼킨다(clipFetch가 그대로 던진다)
+ */
+export async function openJumpCard(cardId: string): Promise<void> {
+  try {
+    await clipFetch(`/api/clip/jump-cards/${encodeURIComponent(cardId)}/open`, { method: 'POST' });
+  } catch {
+    // 기록 실패는 무시한다
+  }
+}
+
 async function sendJson<T>(method: 'POST' | 'PUT', path: string, body?: unknown): Promise<T> {
   const res = await clipFetch(path, {
     method,

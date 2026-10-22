@@ -6,6 +6,7 @@ import {
   fetchBroadcast,
   fetchJumpCard,
   mediaStreamId,
+  openJumpCard,
   requestRender,
   retryUpload,
   type UploadInfo,
@@ -177,6 +178,22 @@ describe('방송 목록 쪽 넘기기', () => {
         : jsonResponse(200, { broadcasts: [row('a')], nextCursor: 'p2' }),
     );
     expect((await fetchAllBroadcasts('past')).map((b) => b.streamId)).toEqual(['a', 'b']);
+  });
+});
+
+describe('openJumpCard: 열기 기록 실패는 삼킨다(POK-393)', () => {
+  // 측정 재료 하나 때문에 편집을 막지 않는다: 부르는 쪽은 결과를 기다리지 않으므로 거부가 새면 처리 안 된 거부가 된다
+  it('서버가 503을 줘도 거부 없이 끝난다', async () => {
+    const spy = stubFetch(() => jsonResponse(503, { error: 'unavailable' }));
+    await expect(openJumpCard('5')).resolves.toBeUndefined();
+    expect(spy.mock.calls.map(([url, init]) => [String(url), init?.method])).toEqual([
+      ['/api/clip/jump-cards/5/open', 'POST'],
+    ]);
+  });
+
+  it('네트워크 오류여도 거부 없이 끝난다', async () => {
+    stubFetch(() => Promise.reject(new TypeError('Failed to fetch')));
+    await expect(openJumpCard('5')).resolves.toBeUndefined();
   });
 });
 
