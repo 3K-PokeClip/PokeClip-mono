@@ -51,6 +51,8 @@ interface Item {
   label: string;
   Icon: LucideIcon;
   href?: string; // 없으면 비활성 — 각 하위 티켓에서 라우트가 생기면 href를 추가한다
+  /** 채널 주인의 일: 남의 채널(편집자)이면 숨기지 않고 비활성으로 둔다(POK-390 PRD 「막는 메뉴」) */
+  ownerOnly?: true;
 }
 
 interface Group {
@@ -99,16 +101,28 @@ const MENUS: Record<SideMenu, Group[]> = {
     {
       title: '채널 · 협업자',
       items: [
-        { key: 'link', label: '채널 연동', Icon: Link2, href: '/settings/channels' },
-        { key: 'editors', label: '편집자 관리', Icon: Users, href: '/settings/editors' },
+        {
+          key: 'link',
+          label: '채널 연동',
+          Icon: Link2,
+          href: '/settings/channels',
+          ownerOnly: true,
+        },
+        {
+          key: 'editors',
+          label: '편집자 관리',
+          Icon: Users,
+          href: '/settings/editors',
+          ownerOnly: true,
+        },
       ],
     },
     {
       title: '환경설정',
       items: [
-        { key: 'plugin', label: '플러그인', Icon: Plug, href: '/settings/plugin' },
+        { key: 'plugin', label: '플러그인', Icon: Plug, href: '/settings/plugin', ownerOnly: true },
         { key: 'noti', label: '알림 설정', Icon: Bell, href: '/settings/notifications' },
-        { key: 'billing', label: '구독 · 결제', Icon: CreditCard },
+        { key: 'billing', label: '구독 · 결제', Icon: CreditCard, ownerOnly: true },
         { key: 'account', label: '계정', Icon: User, href: '/settings/account' },
         { key: 'help', label: '도움말 · 문의', Icon: HelpCircle },
       ],
@@ -121,6 +135,7 @@ export function Side({ menu, badges }: { menu: SideMenu; badges?: SideBadges }) 
   // 지금 채널을 그대로 보인다(POK-390). 내 채널이면 로그인한 사람의 사진·이름이다: 하드코딩이던 시절엔 계정 화면에서
   // 사진·이름을 바꿔도 사이드바만 남처럼 남아, 「헤더·사이드바에 바로 반영」이라는 토스트가 거짓이 됐다.
   const channel = useChannelIdentity();
+  const othersChannel = channel.role === '편집자';
   // 그룹을 옮겨도 접힘이 따라간다 — 지역 상태로 두면 레이아웃이 갈릴 때마다 초기화된다
   const collapsed = useSidebarStore((s) => s.collapsed);
   const toggleCollapsed = useSidebarStore((s) => s.toggle);
@@ -156,7 +171,7 @@ export function Side({ menu, badges }: { menu: SideMenu; badges?: SideBadges }) 
           {i > 0 && <div className={styles.divider} />}
           <div className={styles.groupTitle}>{group.title}</div>
           <nav className={styles.nav} aria-label={group.title}>
-            {group.items.map(({ key, label, Icon, href }) => {
+            {group.items.map(({ key, label, Icon, href, ownerOnly }) => {
               const badge = badges?.[key];
               const content = (
                 <>
@@ -166,7 +181,7 @@ export function Side({ menu, badges }: { menu: SideMenu; badges?: SideBadges }) 
                   {badge ? <span className={styles.badge}>{badge}</span> : null}
                 </>
               );
-              if (!href) {
+              if (!href || (ownerOnly && othersChannel)) {
                 return (
                   <span key={key} className={styles.item} aria-disabled="true">
                     {content}

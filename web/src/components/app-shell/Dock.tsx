@@ -3,6 +3,8 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { House, Radio, Scissors, Settings, type LucideIcon } from 'lucide-react';
+import { useActiveChannel } from '@/features/channel/useActiveChannel';
+import { useChannelStore } from '@/stores/channel';
 import { DOCK_HREFS, dockTransitionType, isDockHrefActive, type DockHref } from './dockTransition';
 import { ViewTransition } from './ViewTransition';
 import styles from './Dock.module.css';
@@ -25,6 +27,15 @@ export type DockBadges = Partial<Record<DockHref, number>>;
 
 export function Dock({ badges }: { badges?: DockBadges } = {}) {
   const pathname = usePathname();
+  // 남의 채널이면 설정 탭은 알림 설정으로 연다(POK-390): 설정 첫 화면(플러그인)은 그 채널에서 막혀 있다. 서버의 redirect는
+  // 고른 채널(브라우저 저장값)을 못 읽어 여기서 가른다. 저장소의 원시 선택값이 아니라 해석된 관계로 본다: as-editor를 못
+  // 읽으면 내 채널로 보이는데 저장값은 남기므로, 원시값으로 가르면 사이드바는 「스트리머」인데 설정 탭만 알림으로 간다
+  // (로컬 리뷰 1라운드). 독은 ChannelScope 밖이라 컨텍스트 대신 훅을 쓴다.
+  // 아직 안 섰으면(as-editor를 기다리는 중) 저장된 선택으로 가른다: 그때 /settings로 보내면 막힌 플러그인 화면에 남는다
+  // (PR #323 codex 2차). 선 뒤에는 해석된 관계가 정본이다
+  const active = useActiveChannel();
+  const storedOther = useChannelStore((s) => s.selected !== null && s.selected !== s.userId);
+  const othersChannel = active.ready ? active.relation === 'EDITOR' : storedOther;
 
   return (
     // 독에는 일부러 view-transition-name을 주지 않는다 — 이름이 붙은 요소는 전환이 도는 동안
@@ -39,7 +50,7 @@ export function Dock({ badges }: { badges?: DockBadges } = {}) {
         return (
           <Link
             key={href}
-            href={href}
+            href={href === '/settings' && othersChannel ? '/settings/notifications' : href}
             className={styles.item}
             aria-current={active ? 'page' : undefined}
             transitionTypes={direction ? [direction] : undefined}

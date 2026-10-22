@@ -30,6 +30,17 @@ import { asEditorList, useActiveChannel } from './useActiveChannel';
 /** 내보내는 것은 화면 훅 시험이 번호를 직접 내려 주기 위해서다. 화면 코드는 ChannelScope만 쓴다. */
 export const ChannelStreamerIdContext = createContext<number | null>(null);
 
+/**
+ * 지금 채널에서 나의 관계(POK-390 태스크 5). 남의 채널이면 연동·편집자·플러그인 같은 「채널 주인의 일」을 막는 데 쓴다.
+ * ChannelScope 밖(시험·편집기)이거나 me를 못 읽었으면 null = 모름 → 막지 않는다. react-query 없이 읽게 컨텍스트로 둔다:
+ * 홈 화면 시험은 QueryClient 없이 렌더한다(계획 검증 m9).
+ */
+export const ChannelRelationContext = createContext<'OWNER' | 'EDITOR' | null>(null);
+
+export function useChannelRelation(): 'OWNER' | 'EDITOR' | null {
+  return useContext(ChannelRelationContext);
+}
+
 /** 화면 훅이 목록에 실을 채널 번호. ChannelScope 밖(시험·편집기)이면 null = 섞어서(옛 호출). */
 export function useChannelStreamerId(): number | null {
   return useContext(ChannelStreamerIdContext);
@@ -130,7 +141,9 @@ export function ChannelScope({ children }: { children: ReactNode }) {
   if (!active.ready || leaving) return null;
   return (
     <ChannelStreamerIdContext.Provider value={active.streamerId}>
-      <Fragment key={active.streamerId}>{children}</Fragment>
+      <ChannelRelationContext.Provider value={active.relation}>
+        <Fragment key={active.streamerId}>{children}</Fragment>
+      </ChannelRelationContext.Provider>
     </ChannelStreamerIdContext.Provider>
   );
 }

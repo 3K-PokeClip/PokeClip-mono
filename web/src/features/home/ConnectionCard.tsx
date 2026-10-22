@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { Check } from 'lucide-react';
-import { Card, LinkButton } from '@/ui';
+import { Button, Card, LinkButton } from '@/ui';
 import { TOUR_TARGET } from '@/features/onboarding/tourSteps';
 import styles from './HomeScreen.module.css';
 import type { HomeLinks } from './useHomeMockState';
@@ -89,7 +89,14 @@ const ROW_TOUR_TARGET: Record<string, string | undefined> = {
   plugin: TOUR_TARGET.homePlugin,
 };
 
-export function ConnectionCard({ links }: { links: HomeLinks }) {
+export function ConnectionCard({
+  links,
+  actionsDisabled = false,
+}: {
+  links: HomeLinks;
+  /** 남의 채널(POK-390): 버튼은 남기되 누를 수 없게. 링크면 비활성을 못 나타낸다 */
+  actionsDisabled?: boolean;
+}) {
   const rows = rowsOf(links);
   // 플러그인은 연결을 모르므로 「모두 연결됨」이 아니라 「준비 완료」라 한다
   const note = rows.every((r) => r.state === 'ok' || r.state === 'ready')
@@ -116,6 +123,10 @@ export function ConnectionCard({ links }: { links: HomeLinks }) {
               </span>
             ) : r.state === 'ready' ? (
               <span className={styles.connReady}>{r.readyLabel}</span>
+            ) : r.action && actionsDisabled ? (
+              <Button variant="outline" size="sm" disabled className={styles.connAction}>
+                {r.action.label}
+              </Button>
             ) : r.action ? (
               <LinkButton
                 as={Link}

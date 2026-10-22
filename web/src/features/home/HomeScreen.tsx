@@ -8,6 +8,7 @@ import { TipCard } from './TipCard';
 import { VodGrid } from './VodGrid';
 import { useHomeMockState } from './useHomeMockState';
 import { TOUR_TARGET } from '@/features/onboarding/tourSteps';
+import { useChannelRelation } from '@/features/channel/ChannelScope';
 
 // 홈 대시보드 — 디자인 1a를 POK-378에서 개편했다. 맨 위 큰 칸 하나가 지금 상황을 말한다:
 //   방송 기록 없음 → 첫 클립까지 가는 길 · 이번 주에 방송함 → 이번 주 기록 · 이번 주 0회 → 마지막 방송 + 지난주 기록.
@@ -18,9 +19,13 @@ import { TOUR_TARGET } from '@/features/onboarding/tourSteps';
 export function HomeScreen() {
   const { userName, live, vods, hasHistory, week, lastWeek, lastBroadcast, links, loading } =
     useHomeMockState();
+  // 남의 채널이면 연동·코드 발급 버튼만 막는다(POK-390, 관리 세션 M3 답 B): 그 버튼들은 「내」 연동 화면으로 간다.
+  // 연결 상태와 인사말은 그대로 둔다.
+  const ownerActionsDisabled = useChannelRelation() === 'EDITOR';
 
   if (loading) return <HeroSkeleton />;
-  if (!hasHistory) return <SetupHome userName={userName} links={links} />;
+  if (!hasHistory)
+    return <SetupHome userName={userName} links={links} actionsDisabled={ownerActionsDisabled} />;
 
   return (
     <div>
@@ -39,7 +44,7 @@ export function HomeScreen() {
           aria-label="연결 상태·팁"
           data-tour-id={TOUR_TARGET.homeAside}
         >
-          <ConnectionCard links={links} />
+          <ConnectionCard links={links} actionsDisabled={ownerActionsDisabled} />
           <TipCard />
         </aside>
       </div>
