@@ -543,9 +543,18 @@ public class ChatSession implements AutoCloseable {
         }
     }
 
-    /** 재시도를 멈춘다. <b>기다리지 않는다</b> — 위 javadoc의 예산 이유. */
+    /**
+     * 재시도를 멈춘다. <b>기다리지 않는다</b> — 위 javadoc의 예산 이유.
+     *
+     * <p>🔴 <b>인터럽트는 한 번만 보낸다.</b> {@code releaseAndClose} 는 처음에 여기를 부르고 끝의
+     * {@code close()} 에서 또 부른다. 첫 인터럽트를 받은 재시도 스레드는 표시를 지우고 후원 반납을
+     * 쏘는데({@link #releaseDonationQuietly}), 두 번째 인터럽트가 그 요청이 서버에 닿기 전에 오면
+     * 요청이 죽어 그 구독은 아무도 거두지 않는다(PR #320 CI 에서 반납 0회로 드러남).
+     */
     private void stopDonationRetry() {
-        stopping.set(true);
+        if (!stopping.compareAndSet(false, true)) {
+            return;
+        }
         Thread retry = donationRetry;
         if (retry != null) {
             retry.interrupt();
