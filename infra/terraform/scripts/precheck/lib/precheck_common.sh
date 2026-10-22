@@ -10,8 +10,9 @@
 #   - die <설명> 을 정의한다(표준 오류에 「검사 불가」 를 적고 종료 2). 이
 #     파일의 함수는 멈출 일에 die 를 부른다.
 #   - `umask 077` 로 돈다 — 증거 파일의 0600 은 부르는 쪽 umask 가 정한다.
-#   - 아래 상수 · 호출 주체 변수를 다시 선언하지 않는다(readonly 이중 정의는
-#     source 를 실패시킨다).
+#   - 아래 상수 · 호출 주체 변수를 다시 선언하지 않는다. 다시 선언하면
+#     readonly 오류가 나지만 source 는 0 을 돌려줘 `|| die` 로 잡히지 않는다
+#     — 다시 선언하지 않는 것이 유일한 방어다.
 #
 # 쓰는 도구: aws(sts get-caller-identity · configure get), sha256sum 또는
 # shasum.
@@ -122,6 +123,10 @@ precheck::caller_identity() {
 #######################################
 # CLI 기록이 꺼져 있는지 본다 — 켜져 있으면 요청 · 응답 원문이 증거 밖 기록
 # 파일에 남는다. 첫 AWS 호출 전에 부른다. 값 · 경로는 되울리지 않는다.
+# AWS_CLI_HISTORY_FILE 은 기록 위치 변수다(aws CLI 2.38.1
+# customizations/history/__init__.py:50-55) — 켜짐 증거가 아니라 보수적
+# 거부다. aws 호출에 --profile 을 붙이게 되면 configure get 에도 같은
+# --profile 을 붙인다(둘 다 그 프로필 범위의 설정을 읽는다).
 # Globals:
 #   AWS_CLI_HISTORY_FILE
 #######################################

@@ -70,13 +70,15 @@ LOOKUP_QUERY+='Username]'
 readonly LOOKUP_QUERY
 readonly ISO_FORMAT='+%Y-%m-%dT%H:%M:%SZ'
 
+# lib 를 읽지 못하면 bash 의 원시 진단(절대 경로가 든다)은 버리고 아래
+# 문구만 낸다. lib 는 정의만 담아 source 중에 낼 말이 없다.
 # shellcheck source=infra/terraform/scripts/precheck/lib/evidence.sh
-source "${SCRIPT_DIR}/lib/evidence.sh" || {
+source "${SCRIPT_DIR}/lib/evidence.sh" 2>/dev/null || {
   printf 'events: 검사 불가: 증거 경로 함수를 읽지 못함\n' >&2
   exit 2
 }
 # shellcheck source=infra/terraform/scripts/precheck/lib/precheck_common.sh
-source "${SCRIPT_DIR}/lib/precheck_common.sh" || {
+source "${SCRIPT_DIR}/lib/precheck_common.sh" 2>/dev/null || {
   printf 'events: 검사 불가: 공용 도우미를 읽지 못함\n' >&2
   exit 2
 }
@@ -203,10 +205,15 @@ lookup_row() {
   local raw="${dir}/lookup-${n}.txt" line fields id got role=0
   row_matched=0
   is_role_assumption "${source}" "${name}" && role=1
-  if ! aws cloudtrail lookup-events \
+  # 원본 두 파일은 호출 전에 비운 파일로 먼저 만든다 — 그 쓰기가 실패하면
+  # 조회 실패가 아니라 증거 쓰기 실패로 멈추게. 바깥 2>/dev/null 은 안쪽
+  # 리다이렉션이 실패할 때의 원시 진단만 버린다.
+  precheck::write_evidence "${raw}" ''
+  precheck::write_evidence "${dir}/lookup-${n}.err" ''
+  if ! { aws cloudtrail lookup-events \
     --lookup-attributes "AttributeKey=EventName,AttributeValue=${name}" \
     --start-time "${since}" --region "${region}" --query "${LOOKUP_QUERY}" \
-    --output text >"${raw}" 2>"${dir}/lookup-${n}.err"; then
+    --output text >"${raw}" 2>"${dir}/lookup-${n}.err"; } 2>/dev/null; then
     if grep -qF 'AccessDenied' -- "${dir}/lookup-${n}.err"; then
       die "조회 호출 자체가 거부됨(AccessDenied — lookup-${n}.err)"
     fi
@@ -260,7 +267,7 @@ report_counts() {
     role=$((role + 1))
     ids+="${id}"$'\t'"역할 받기"$'\n'
   done
-  printf '%s' "${ids}" >"${dir}/event_ids.txt" || die "증거를 쓰지 못함"
+  precheck::write_evidence "${dir}/event_ids.txt" '%s' "${ids}"
   printf 'EVENTS %s (권한 변경 %s · 역할 받기 %s)\n' "$((perm + role))" \
     "${perm}" "${role}"
 }
@@ -308,8 +315,8 @@ main() {
     lookup_row "${dir}" "${n}" "${source}" "${name}" "${region}" "${since}"
     summary+="${row}"$'\t'"${row_matched}"$'\n'
   done
-  printf '# 출처\t이름\t리전\t맞은 수 — --since %s\n%s' "${since}" \
-    "${summary}" >"${dir}/summary.tsv" || die "증거를 쓰지 못함"
+  precheck::write_evidence "${dir}/summary.tsv" \
+    '# 출처\t이름\t리전\t맞은 수 — --since %s\n%s' "${since}" "${summary}"
   report_counts "${dir}"
 }
 
