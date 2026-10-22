@@ -29,6 +29,12 @@ const lcFast = 500 * time.Millisecond
 // lcHoldDeadline 은 janitor 호출의 클라이언트 기한이다(설계 2-3 — RowLockTxnTimeout + 2s).
 const lcHoldDeadline = RowLockTxnTimeout + 2*time.Second
 
+// lcWaiterDeadline 은 잠금 대기자(③ CAS) 호출의 시험 기한이다. 제품 MarkTimeout(10s)을 쓰지 않는다
+// — 잠금 해제 상한(8s)에 바짝 붙은 기한은 해제 뒤 대기자 자신의 UPDATE · 동기 커밋이 느린 러너에서
+// 넘긴다(POK-382 — CI 해제 뒤 4.3s, 쓰기 제한 부하 실측 해제 뒤 최대 11.9s). 언제 풀렸는가는 탐침이
+// 판정하고, 이 기한은 「무한 대기가 아니다」만 묶는다.
+const lcWaiterDeadline = 30 * time.Second
+
 // lcTracer 는 janitor 풀의 질의 추적기다. 시험이 문장 시작 지점에 끼어들어 연결을 붙잡거나
 // (COMMIT 직전 멈춤) 같은 트랜잭션 안을 들여다본다. onStart 는 질의를 보낸 고루틴에서 불린다.
 type lcTracer struct {
@@ -415,41 +421,76 @@ func lcReadEverything(ctx context.Context, t *testing.T, pool *pgxpool.Pool, fix
 	return err
 }
 
-// 4-6 (d) — L 자신의 ③ CAS 는 ⓐ 동안 기다렸다가 해제 뒤 성공한다. 걸린 시간 ≤ 보유 + 1s.
+// 4-6 (d) — L 자신의 ③ CAS 는 ⓐ 동안 기다렸다가 해제 뒤 성공한다. 잠금을 푼 것이 janitor 의
+// COMMIT 인가는 탐침이 판정한다: 탐침 획득이 BEGIN + RowLockTxnTimeout 보다 이르다(서버가 세션을
+// 끝내 풀었다면 그 뒤다). 해제 → ③ CAS 반환 시간은 판정하지 않고 기록만 한다 — CAS 자신의
+// UPDATE · 동기 커밋(WAL flush)이 들어 있어 느린 러너에서 초 단위로 늘어난다(POK-382, CI 실측
+// 해제 뒤 4.3s 로 옛 상한 보유 + 1s 초과).
 func TestRowLockPlaybackCASWaitsForReleaseThenSucceeds(t *testing.T) {
 	pool := newTestPool(t)
 	fix := lcLockFixture(t, pool, "lc-lock-d")
 	ctx, cancel := context.WithTimeout(context.Background(), lcHoldDeadline)
 	defer cancel()
-	h := lcStartHold(ctx, NewLocalCleanupStore(lcJanitorPool(t, pool, lcJanitorOpts{})), fix.stream, lcSeqL, fix.pathL)
+	// janitor 가 BEGIN 을 보낸 시각 — 서버가 transaction_timeout 을 재기 시작하는 시각보다 이르다.
+	begun := make(chan time.Time, 1)
+	tracer := lcTracer{onStart: func(_ *pgx.Conn, sql string) {
+		if sql == "begin" {
+			select {
+			case begun <- time.Now():
+			default:
+			}
+		}
+	}}
+	h := lcStartHold(ctx, NewLocalCleanupStore(lcJanitorPool(t, pool, lcJanitorOpts{tracer: tracer})), fix.stream, lcSeqL, fix.pathL)
 	h.waitLocked(t)
+	var txnBegun time.Time
+	select {
+	case txnBegun = <-begun:
+	default:
+		t.Fatal("janitor 의 BEGIN 을 추적하지 못했다")
+	}
 	const hold = 2 * time.Second
+	// 탐침을 ③ CAS 보다 먼저 대기열에 세워, 잠금이 풀리면 탐침이 먼저 받게 한다.
+	probe := lcStartLockProbe(pool, fix.stream, lcSeqL)
+	lcWaitLockWaiters(t, pool, 1)
 
 	type mark struct {
-		ok   bool
-		err  error
-		took time.Duration
+		ok  bool
+		err error
+		at  time.Time
 	}
 	got := make(chan mark, 1)
 	go func() {
-		mctx, mcancel := context.WithTimeout(context.Background(), 10*time.Second) // MarkTimeout
+		mctx, mcancel := context.WithTimeout(context.Background(), lcWaiterDeadline)
 		defer mcancel()
-		began := time.Now()
 		ok, err := NewUploadStore(pool).MarkPlaybackUploaded(mctx, fix.stream, lcSeqL, 777)
-		got <- mark{ok, err, time.Since(began)}
+		got <- mark{ok, err, time.Now()}
 	}()
 	select {
 	case m := <-got:
 		t.Fatalf("③ CAS 가 janitor 보유 중에 끝났다: %+v — 대상 행 잠금이 걸리지 않았다", m)
 	case <-time.After(hold):
 	}
+	released := time.Now()
 	h.release <- true
 	m := <-got
 	jr := h.wait(t)
+	freed := lcAwaitProbe(t, probe)
 
-	if m.err != nil || !m.ok || m.took > hold+time.Second {
-		t.Fatalf("MarkPlaybackUploaded = (%v, %v) · %v, want (true, nil) · ≤ %v", m.ok, m.err, m.took, hold+time.Second)
+	switch {
+	case freed.err != nil:
+		t.Errorf("탐침 FOR UPDATE = %v, want janitor 해제 뒤 획득", freed.err)
+	case freed.at.Before(released):
+		t.Errorf("탐침이 해제 지시 %v 전에 잠금을 얻었다 — 대상 행 잠금이 걸리지 않았다", released.Sub(freed.at))
+	case freed.at.Sub(txnBegun) >= RowLockTxnTimeout:
+		t.Errorf("BEGIN → 탐침 획득 = %v, want < %v — janitor 의 COMMIT 이 아니라 서버 상한이 잠금을 풀었다", freed.at.Sub(txnBegun), RowLockTxnTimeout)
+	default:
+		t.Logf("기록: 해제 지시 → 탐침 획득 = %v", freed.at.Sub(released))
 	}
+	if m.err != nil || !m.ok {
+		t.Fatalf("MarkPlaybackUploaded = (%v, %v), want (true, nil) — 기한 %v", m.ok, m.err, lcWaiterDeadline)
+	}
+	t.Logf("기록: 해제 지시 → ③ CAS 반환 = %v", m.at.Sub(released))
 	if jr.err != nil || jr.res.Outcome != RowLockCleared {
 		t.Fatalf("janitor = (%+v, %v), want Cleared", jr.res, jr.err)
 	}
@@ -462,8 +503,9 @@ func TestRowLockPlaybackCASWaitsForReleaseThenSucceeds(t *testing.T) {
 }
 
 // 4-6 (d′) · D34 · E3′ — act 5.9s 뒤 UPDATE 까지 하고 COMMIT 이 망에서 사라져도(프록시 막힘),
-// 서버의 transaction_timeout 이 잠금을 푼다. 그동안 기다린 ③ CAS 는 MarkTimeout(10s) 안에
-// 오류 없이 끝난다. 변이(transaction_timeout 제거)면 대기자가 10s 를 넘겨 실패한다.
+// 서버의 transaction_timeout 이 잠금을 푼다. 판정은 탐침의 해제 시각(≤ 8s + 300ms)이 맡고, 그동안
+// 기다린 ③ CAS 는 오류 없이 끝나는지만 본다. 변이(transaction_timeout 제거)면 탐침이 기한 안에
+// 잠금을 얻지 못해 실패한다.
 func TestRowLockServerTimeoutFreesWaiterWhenCommitIsLost(t *testing.T) {
 	pool := newTestPool(t)
 	fix := lcLockFixture(t, pool, "lc-lock-dprime")
@@ -498,7 +540,7 @@ func TestRowLockServerTimeoutFreesWaiterWhenCommitIsLost(t *testing.T) {
 	probe := lcStartLockProbe(pool, fix.stream, lcSeqL)
 	lcWaitLockWaiters(t, pool, 1)
 
-	mctx, mcancel := context.WithTimeout(context.Background(), 10*time.Second) // MarkTimeout
+	mctx, mcancel := context.WithTimeout(context.Background(), lcWaiterDeadline)
 	defer mcancel()
 	began := time.Now()
 	ok, err := NewUploadStore(pool).MarkPlaybackUploaded(mctx, fix.stream, lcSeqL, 777)
@@ -507,10 +549,13 @@ func TestRowLockServerTimeoutFreesWaiterWhenCommitIsLost(t *testing.T) {
 	jr := <-done
 	freed := lcAwaitProbe(t, probe)
 
-	// 상한은 transaction_timeout(8s) 뒤 PG 응답 지연 여유다(C22 · 종결 r1 R7). 여유를 2s 로 두면 MarkTimeout
-	// (10s)과 같아져 기한 초과와 가르지 못하므로 1.5s 로 둔다 — 기한 초과면 err 로도 잡힌다.
-	if limit := RowLockTxnTimeout + 1500*time.Millisecond; err != nil || !ok || took > limit {
-		t.Errorf("대기자 MarkPlaybackUploaded = (%v, %v) · %v, want (true, nil) · ≤ %v", ok, err, took, limit)
+	// 대기자 응답 시간은 판정하지 않는다(기한 lcWaiterDeadline 만) — 해제 시각은 아래 탐침이 판정한다. 옛 상한(8s + 1.5s)은
+	// 해제 뒤 CAS 자신의 응답 시간까지 묶어 느린 러너에서 깨졌다(POK-382, CI 실측 탐침 해제 7.999s ·
+	// 대기자 10s 기한 초과).
+	if err != nil || !ok {
+		t.Errorf("대기자 MarkPlaybackUploaded = (%v, %v) · %v, want (true, nil) — 기한 %v", ok, err, took, lcWaiterDeadline)
+	} else {
+		t.Logf("기록: 대기자 ③ CAS = %v", took)
 	}
 	held := freed.at.Sub(lockedAt)
 	switch {
