@@ -1453,7 +1453,7 @@ main "$@"
 | R3′ | R3′ MediaMTX 이미지 받기 | ECR 로그인(블록 안 임시 자격) → `pull mediamtx` → 자격 지움 · 이미지 있음 단언 | F3 |
 | R4 | R4 렌더 | `${DEMO_HOME}` 소유 단언 → render.sh → `chown root:10002` · `chmod 0640` → 소유 · 모드 단언 | F4 |
 | R5 | R5 응답기 기동 | 디렉터리 준비 · 거부 목록 확인 → `up -d ingest-auth` → healthy(120초) | F5 |
-| R6 | R6 전체 기동 | `up -d`(MediaMTX · edge 재생성) → 판 · 아치 · 좌표 · 권한 오류 · `MTX_` 단언 | F6 |
+| R6 | R6 전체 기동 | `up -d`(바뀐 서비스만) → edge 늘 재생성 · id 단언 → 판 · 아치 · 좌표 · 권한 오류 · `MTX_` 단언 | F6 |
 
 순서의 까닭.
 
@@ -1467,6 +1467,11 @@ main "$@"
 - **응답기 healthy 뒤에 MediaMTX.** 운영 순서(7절)다.
 - 반영 중 옛 MediaMTX 는 옛 설정으로 돈다 — 렌더 산출물은 단일 파일 마운트라 이름
   바꾸기로 바뀐 새 파일을 옛 컨테이너가 보지 않는다(추론 — 로컬 실측에서 확인).
+- **R6 은 edge 를 늘 다시 만든다.** edge 의 세 마운트(nginx.conf · player.html ·
+  hls.min.js)도 단일 파일 마운트다. `up -d` 는 정의가 그대로인 서비스를 다시 만들지
+  않아, 파일만 바뀐 주기에는 edge 가 옛 파일을 낸다(2026-10-20 실측 — 옮긴 옛
+  hls.min.js). 그래서 `up -d` 뒤 edge 하나만(`--no-deps`) 다시 만들고 컨테이너 id 가
+  바뀌었는지 본다. 그사이 재생 페이지가 잠깐 빈다(로컬 실측 약 0.3초 — 상자 값 아님).
 - **R4 뒤 · R6 앞에 옛 MediaMTX 가 다시 시작되면 모든 송출이 끊긴다.** 재시작 정책이
   같은 컨테이너를 다시 띄우면(프로세스가 죽음 · 엔진 재시작 · 상자 재부팅) 마운트가 새로
   묶여 새 렌더를 읽는다. 옛 컨테이너는 제어망에 붙어 있지 않아 새 렌더의 Control API
@@ -1647,7 +1652,9 @@ main "$@"
 
 ```bash
 # ── 블록: R6 전체 기동 — 머리 + 이 본문. 인자 없음 ──
-# 응답기 healthy 를 다시 본 뒤 MediaMTX · edge 를 새로 만든다. 이어서 서버가 쓰는 판을
+# 응답기 healthy 를 다시 본 뒤 up -d(바뀐 서비스만) 하고, edge 는 늘 다시 만든다 — 단일
+# 파일 마운트는 시작 때 inode 에 묶여 이름 바꾸기로 들어온 새 파일을 보지 않는다
+# (2026-10-20 실측). edge 컨테이너 id 가 바뀌었는지 본 뒤, 이어서 서버가 쓰는 판을
 # 단언한다 — 기동 첫 줄의 판 · 이미지 아치 · compose 의 이미지 좌표 · 기동 로그의 권한
 # 오류 0 · 컨테이너 환경의 MTX_ 0(MTX_ 변수는 설정 파일보다 우선해 렌더 단언을 비켜 간다).
 # 이미지 좌표는 레지스트리 호스트(계정 번호)를 떼고 낸다.
@@ -1655,8 +1662,14 @@ main() {
   (( $# == 0 )) || check_failed '사용법: 인자 없음'
   local mtx_id='' image tag arch line want_arch="${DEMO_ARCH:-amd64}"
   local -i i found=0 version=0 denied=0 unsaved=0 mtx_env=0
+  local edge_before='' edge_id=''
   wait_ingest_auth_healthy   # 운영 순서 — 응답기 healthy 뒤에만 MediaMTX
+  container_id_or_none edge edge_before
   compose_up_masked live_compose -d   # 출력에 이미지 좌표가 찍힐 수 있다 — 가려 낸다
+  compose_up_masked live_compose -d --no-deps --force-recreate edge
+  container_id edge edge_id
+  [[ "${edge_id}" != "${edge_before}" ]] \
+    || mismatch 'edge 가 새로 만들어지지 않았다 — 옛 파일을 문다'
   container_id mediamtx mtx_id
   image="$(docker inspect -f '{{.Config.Image}}' "${mtx_id}")"
   live_compose config --images > "${WORK}/images"
@@ -1720,7 +1733,7 @@ main "$@"
 | F3 | R3 빌드 실패 · R3′ 이미지 받기 실패 | HEAD · 트리 = T · `.env` T · 렌더 · 컨테이너 = 반영 전(옛 판이 돈다) | 원인(디스크 · 모듈 · GHCR · buildx 판 — `compose build requires buildx 0.17.0 or later` 면 4-1 의 buildx 칸 · R3′ 면 아래 둘)을 고쳐 멈춘 블록부터. R3′ 는 종료 2 — aws CLI 없음 · ECR 로그인 · 받기 실패(ECR 권한(1-5) · 망 — 출력은 계정 번호를 가린다) — 또는 종료 1 — compose 의 pokeclip/mediamtx 좌표가 하나가 아니거나 레지스트리가 계정 ECR(ap-northeast-2)이 아님 · 받은 뒤에도 이미지가 없음 · `.ecr-login` 이 링크 · 디렉터리 아님이거나 `config.json` 밖의 모르는 파일이 듦(이름을 보이고 지우지 않는다 — kty)이다. 접으려면 반영 취소 ⓓ → ⓑ → ⓐ → ⓒ(컨테이너를 건드리지 않고 T 백업을 만들지 않는다). 다시 T 로 갈 때는 곧바로 R0 부터 |
 | F4 | R4 렌더 가드 실패(종료 1) · 소유 단언 실패 | F3 과 같다 — 렌더 산출물은 그대로(render.sh 가 임시 파일을 지운다) · 새 응답기 이미지는 남는다. 소유 단언에서 멈췄으면 새 산출물이 얹혔다 — `chown` · `chmod` 를 고쳐 R4 의 단언부터 | F3 과 같다 |
 | F5 | R5 healthy 시한 초과 | HEAD · 트리 · `.env` · 렌더 = T · `ingest-auth` 만 떠 있고 unhealthy · MediaMTX 는 옛 컨테이너가 옛 설정으로 돈다(추론 — 그사이 다시 시작됐으면 새 렌더로 기동을 되풀이하고 송출이 모두 끊겨 있다, 4-2) | 응답기 로그로 원인을 고쳐 R5 부터. 원인이 거부 목록의 틀린 줄이면 손으로 고치지 않고 틀린 줄 걷기(10절 — 재시작 없음) 뒤 R5 부터. 접으려면 롤백 0 → A → B → C(11절). 다시 T 로 갈 때는 T 백업 처분 → R0 부터 — D 를 쓰지 않는다. 접는 중 B · C 에서 막혀도 D 로 돌아가지 않는다 — kty 판단으로 원인을 고쳐 B · C 를 끝낸다 |
-| F6 | R6 `up -d` 실패 · MediaMTX 기동 실패 | T 가 일부 돈다 · 송출이 끊겼을 수 있다 | 롤백 0 → A → B → C. 다시 T 로 — F5 와 같다 |
+| F6 | R6 `up -d` 실패 · edge 다시 만들기 실패(id 그대로 포함) · MediaMTX 기동 실패 | T 가 일부 돈다 · 송출이 끊겼을 수 있다 | 롤백 0 → A → B → C. 다시 T 로 — F5 와 같다 |
 | F7 | 실측 1 · 6 · 7 실패(그 자리에서 고칠 수 없음) | T 가 돈다 | 롤백 0 → A → B → C. 다시 T 로 — F5 와 같다 |
 
 **블록이 멈추지 않았는데 R4 뒤 · R6 앞에 송출이 모두 끊겼으면** 위 표의 행이 아니다(R5 가
