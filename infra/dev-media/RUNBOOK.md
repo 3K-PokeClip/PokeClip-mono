@@ -205,7 +205,9 @@ kty 로컬 터미널에서 돌린다 — 계정 번호가 명령 · 응답에 �
 넣는다 — 1 이 상자에서 역할을 거꾸로 집어 이름을 보이고, 2 가 그 역할이 상자 전용 역할
 `pokeclip-media-dev-ssm-role` 일 때만 정책을 넣는다. 공유 역할(`pokeclip-dev-ssm-role`
 등 — 팀 dev EC2 와 함께 쓰는 역할)이나 다른 이름이면 2 가 「멈춤」을 내고 아무것도 넣지
-않는다. 그때는 kty 가 정한다(상자를 1-2 의 공유 프로필로 다시 띄웠다면 상자 전용 프로필을
+않는다. 이름이 맞아도 그 역할이 든 인스턴스 프로필이 하나가 아니면(0개 · 둘 이상 · 조회
+실패) 2 가 같은 「멈춤」을 낸다.
+그때는 kty 가 정한다(상자를 1-2 의 공유 프로필로 다시 띄웠다면 상자 전용 프로필을
 먼저 붙인다). 2 는 따로 띄운 bash 안에서 돈다 — 멈춰도 터미널은 닫히지 않고, 계정
 번호는 지금 셸에 남지 않으며 화면에도 나오지 않는다. 다만 안의 aws 가 실패하면(정책
 넣기 권한 거부 등) 오류 문구에 호출자 ARN(계정 번호가 든다)이 찍힐 수 있다 — 그 출력도
@@ -243,6 +245,10 @@ ROLE="${ROLE:-}" bash <<'SH'
 set -euo pipefail
 [[ "${ROLE}" == pokeclip-media-dev-ssm-role ]] \
   || { echo "멈춤 — 상자 전용 역할이 아니다: ${ROLE:-(비었음)}"; exit 1; }
+PROFILES="$(aws iam list-instance-profiles-for-role --role-name "${ROLE}" \
+  --query 'length(InstanceProfiles)' --output text < /dev/null)" || PROFILES=''
+[[ "${PROFILES}" == 1 ]] \
+  || { echo "멈춤 — 인스턴스 프로필이 하나가 아니다: ${PROFILES:-?}개"; exit 1; }
 ACCOUNT="$(aws sts get-caller-identity --query Account --output text \
   < /dev/null)" || ACCOUNT=''
 [[ "${ACCOUNT}" =~ ^[0-9]{12}$ ]] \
