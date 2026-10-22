@@ -56,7 +56,7 @@
 | `(stream_id, local_path)` UNIQUE | 재기동 후 같은 파일이 두 번 들어가는 것을 막는 최후 방어선 | **해소** — DDL 소유가 1번으로 위임되며 정본에 포함 확정 (U12 종결) |
 | UNIQUE 인덱스 이름 | `stream_segments_local_path_uq` — 이름으로 "정상 멱등"과 "번호 충돌"을 가르므로 이름 자체가 계약 | **정본 사양** — 변경 시 store.go 분류 로직 동시 수정 필요 |
 | 경로 이력 메모리 | 스트림의 기록된 경로 전부를 메모리에 올린다. 창 제한이 없어 장기 실행 시 계속 자란다 | 이월 |
-| DB 권한 | 사이드카가 `POSTGRES_USER`를 그대로 쓴다. 이 표만 다루는 전용 롤이 바람직하다 | 이월 |
+| DB 권한 | 사이드카가 `POSTGRES_USER`를 그대로 쓴다. 이 표만 다루는 전용 롤이 바람직하다 | **해소** — POK-311. 아래 "사이드카 DB 계정 media_indexer 권한" 절(GRANT 목록 · 실 PG 역할 시험) |
 | 파일명 파서 fuzz | 화이트리스트와 정규식에 대한 fuzz 테스트가 없다 | 이월 |
 | 끝내 안정되지 않는 파일 | 되돌리기가 `DeferMaxCycles`(기본 3) 사이클을 넘으면 그 파일을 붙잡지 않고 흘려보낸다. 스트림 전체가 그 파일 하나 때문에 멈추는 것을 막기 위해서다. 그 결과 해당 4초는 `late_segment_skipped` ERROR와 함께 인덱스에서 빠지며, **자동 복구는 없다** — 파일은 `:ro`로 남아 있으니 로그의 경로를 보고 수동 복구한다 | 이월(L5) |
 | 중첩 `%path` | `live/kr/demo` 같은 슬래시 포함 스트림 이름은 거부한다. 필요해지면 `internal/recording/name.go`의 화이트리스트만 고치면 된다 | U9 확정 시 |
@@ -320,6 +320,50 @@ INFO `db_connected` 한 줄을 남긴다. 실패하면 이 줄 없이 기동이 
 | `user` · `host` · `port` · `db` | 접속 대상 |
 
 비밀번호 · IAM 토큰 · DSN · CA 파일 내용은 싣지 않는다.
+
+## 사이드카 DB 계정 media_indexer 권한
+
+운영 사이드카(segment-indexer · 업로더 · 세션 결정 · 되감기 발행자)는 DB 에
+`media_indexer` 로 붙는다. 이 계정에는 아래 권한만 준다(POK-311). 단위는
+표다 — 열 단위로 주면 3번이 승인한 열이 추가될 때마다 운영 GRANT 가 깨진다.
+
+```sql
+GRANT SELECT, INSERT, UPDATE ON stream_segments TO media_indexer;
+GRANT SELECT, INSERT, UPDATE ON stream_sessions TO media_indexer;
+GRANT SELECT, INSERT ON stream_cutoffs TO media_indexer;
+GRANT SELECT, INSERT, UPDATE ON stream_published_gaps TO media_indexer;
+```
+
+- **DELETE · TRUNCATE 없음.** 사이드카는 행을 지우지 않는다.
+  `stream_cutoffs` 에는 UPDATE 도 없다 — 컷오프는 주조 때 한 번 넣고
+  (`ON CONFLICT DO NOTHING`) 고치지 않는다.
+- **DDL 없음 — `ENSURE_SCHEMA=false`.** 스키마(`internal/index/ddl.go`)는
+  별도 역할이 적용한다. 이 계정으로 `ENSURE_SCHEMA=true` 를 켜면 기동 때
+  42501 로 막힌다.
+- **그 밖은 PostgreSQL 기본값으로 충분하다.** 시퀀스는 없고(DDL 에
+  `SERIAL` · `IDENTITY` 0), 트리거 함수 · advisory 잠금 · `set_config` 는
+  PUBLIC 기본 권한으로 돈다. DB `CONNECT` · `public` 스키마 `USAGE` 도
+  PUBLIC 기본값에 기댄다 — 이것을 거둔 DB 라면 따로 준다.
+- **`FOR UPDATE` 는 `stream_sessions` 에 있다**(init 업로드 확정). 행 잠금에도
+  UPDATE 권한이 필요하다. `stream_segments` 의 `FOR UPDATE NOWAIT` 는
+  janitor(`media_janitor`) 몫이다.
+
+계정(`CREATE ROLE media_indexer LOGIN …`, IAM 인증이면 `rds_iam` 부여)은 DB
+관리자가 만든다. 비밀번호를 쓴다면 비밀 관리자에만 둔다.
+
+**시험 경로.** 목록의 정본은 `internal/pgtest/role.go` 한 곳이고, 위 블록과
+같다는 것을 `internal/pgtest/role_test.go` 가 단언한다. SQL 이 사는 패키지마다
+같은 권한만 가진 시험 역할로 사이드카 저장 경로 전부를 실 PG 에서 돌린다
+(문장마다 성공 확인 · 상태 전이 단언 · 권한 하나를 거두면 42501 인 음성 대조).
+
+- `internal/index/media_indexer_role_pg_test.go` — 장부 기록 · 업로드 장부 ·
+  되감기 읽기
+- `internal/session/media_indexer_role_pg_test.go` — 세션 결정 · 개시
+- `internal/rewind/publish/media_indexer_role_pg_test.go` — fence · P0 ·
+  P2′ · P4 · 화해 · GAP 원장
+
+로컬 compose 는 소유자 계정(`POSTGRES_USER`)으로 붙어 이 경계를 확인하지
+못한다 — 위 시험이 그 몫이다.
 
 ## 되감기 M3 이관 기록 (POK-195)
 
