@@ -95,6 +95,11 @@ env:
     secret_count_test.sh force_diff_test.sh harness_selftest.sh query_guard_selftest.sh
   MEDIA_HOST_RENDER_TEST: render_test.sh
   MEDIA_HOST_UNIT_TEST: unit_restart_test.sh
+  # Media 상자 두 잡이 설치하는 docker compose 판과 x86_64 자산 sha256 — 한 곳에만 적는다(두 잡의
+  # 「docker compose 설치」 단계가 이 값을 쓴다). 출처 · 판을 올리는 법은 머리 주석과 media-host
+  # 잡의 그 단계 위 주석.
+  MEDIA_HOST_COMPOSE_VERSION: 5.5.0
+  MEDIA_HOST_COMPOSE_SHA256: c57ab918abd5b05ca7e7d0f275875dd1330a695074f309dc9eab1b49efafcd4b
 
 jobs:
   terraform:
@@ -501,16 +506,17 @@ jobs:
           "${bin}/terraform" version
           echo "${bin}" >>"${GITHUB_PATH}"
 
-      # sha256 출처: docker/compose v5.5.0 릴리스의 docker-compose-linux-x86_64.sha256(2026-10-20 —
-      # checksums.txt 의 그 줄 · 자산 digest(API)와 같음). prod 고정판이다(Media 상자 README 「판
-      # 고정」). 러너 이미지의 compose 판은 따로 바뀌므로 쓰지 않는다 — 시스템 플러그인 경로 중 docker
+      # 판 · sha256 은 워크플로 env(MEDIA_HOST_COMPOSE_VERSION · _SHA256) 한 곳에 있다. sha256 출처:
+      # docker/compose v5.5.0 릴리스의 docker-compose-linux-x86_64.sha256(2026-10-20 — checksums.txt
+      # 의 그 줄 · 자산 digest(API)와 같음). prod 고정판이다(Media 상자 README 「판 고정」). 러너
+      # 이미지의 compose 판은 따로 바뀌므로 쓰지 않는다 — 시스템 플러그인 경로 중 docker
       # CLI 가 가장 먼저 찾는 /usr/local/lib/docker/cli-plugins 에 두고, 러너 계정과 root(sudo) 양쪽이
       # 이 판을 쓰는지 확인한다. 판을 올리는 법은 머리 주석.
-      - name: docker compose 5.5.0 설치(sha256 고정)
+      - name: docker compose 설치(판 · sha256 은 워크플로 env)
         run: |
-          version=v5.5.0
-          want=5.5.0
-          sha256=c57ab918abd5b05ca7e7d0f275875dd1330a695074f309dc9eab1b49efafcd4b
+          want="${MEDIA_HOST_COMPOSE_VERSION:?}"
+          version="v${want}"
+          sha256="${MEDIA_HOST_COMPOSE_SHA256:?}"
           binary="${RUNNER_TEMP}/docker-compose"
           curl -fsSL --proto '=https' --tlsv1.2 --retry 3 --connect-timeout 20 --max-time 300 \
             -o "${binary}" \
@@ -594,11 +600,11 @@ jobs:
       # media-host 잡과 같은 단계다(출처 · 판을 올리는 법은 그 단계 위 주석과 머리 주석). 시험은
       # root 의 compose 판을 시험 env 파일(MEDIA_EXPECTED_COMPOSE_VERSION)에 넣으므로 시작 스크립트의
       # 판 확인도 이 판으로 돈다.
-      - name: docker compose 5.5.0 설치(sha256 고정)
+      - name: docker compose 설치(판 · sha256 은 워크플로 env)
         run: |
-          version=v5.5.0
-          want=5.5.0
-          sha256=c57ab918abd5b05ca7e7d0f275875dd1330a695074f309dc9eab1b49efafcd4b
+          want="${MEDIA_HOST_COMPOSE_VERSION:?}"
+          version="v${want}"
+          sha256="${MEDIA_HOST_COMPOSE_SHA256:?}"
           binary="${RUNNER_TEMP}/docker-compose"
           curl -fsSL --proto '=https' --tlsv1.2 --retry 3 --connect-timeout 20 --max-time 300 \
             -o "${binary}" \
@@ -632,8 +638,10 @@ jobs:
             exit 1
           fi
 
-      # 시험이 중간에 끊겨도(실패 · 상한) 잔여를 따로 판정한다. 대상은 시험이 만드는 것뿐이다 — 시험
-      # 유닛 · drop-in · 설치본(/opt/pokeclip-media) · 시험 compose 프로젝트 · 실험 라벨.
+      # 시험이 실패하거나 시험 안의 상한으로 끊겨도 잔여를 따로 판정한다. 잡 상한(timeout-minutes)을
+      # 넘겨 잡이 취소되면 이 단계도 돌지 않는다(!cancelled() 가 취소된 실행을 거른다) — 그때 잔여는
+      # 판정되지 않는다. 대상은 시험이 만드는 것뿐이다 — 시험 유닛 · drop-in · 설치본
+      # (/opt/pokeclip-media) · 시험 compose 프로젝트 · 실험 라벨.
       - name: 잔여 0 확인
         if: ${{ !cancelled() }}
         run: |
