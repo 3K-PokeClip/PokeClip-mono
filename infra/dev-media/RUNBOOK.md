@@ -15,13 +15,15 @@
 
 **이 저장소는 public 이다 — 실제 AWS 자원 ID · 공인 IP · 사설 IP 를 이 문서에 적지
 않는다**(git 히스토리에 영구히 남는다). 아래 셸 변수를 세션 시작 시 채워서 쓴다. 값은 AWS
-콘솔이나 팀 비공개 채널에서 확인한다.
+콘솔이나 팀 비공개 채널에서 확인한다. `VPC_ID` 는 팀 dev VPC, `SUBNET_ID` 는 퍼블릭
+서브넷, `HOSTED_ZONE_ID` 는 pokeclip.com 존이다. `AMI_ID` 가 없으면 1-2 의 SSM
+파라미터로 최신 AL2023 을 조회한다.
 
 ```bash
-export VPC_ID=<vpc-id>                 # 팀 dev VPC
-export SUBNET_ID=<subnet-id>           # 퍼블릭 서브넷
-export AMI_ID=<al2023-ami-id>          # 없으면 1-2 의 SSM 파라미터로 최신 AL2023 조회
-export HOSTED_ZONE_ID=<hosted-zone-id> # pokeclip.com 존
+export VPC_ID=<vpc-id>
+export SUBNET_ID=<subnet-id>
+export AMI_ID=<al2023-ami-id>
+export HOSTED_ZONE_ID=<hosted-zone-id>
 export INSTANCE_PROFILE=pokeclip-dev-profile
 ```
 
@@ -110,16 +112,20 @@ main "$@"
 ### 1-1. 보안그룹
 
 인바운드는 정확히 2건이다 — `udp 8890`(SRT 송출) · `tcp 8888`(재생). 소스는 둘 다 팀 공인 IP/32.
+현재 공인 IP 는 그때그때 산출한다(상수로 적지 않는다).
 
 ```bash
-MYIP=$(curl -s https://checkip.amazonaws.com)          # 현재 공인 IP 를 그때그때 산출 (상수로 적지 않는다)
+MYIP=$(curl -s https://checkip.amazonaws.com)
 SG=$(aws ec2 create-security-group --group-name pokeclip-media-demo-sg \
       --description "dev-media per-account broadcast server (always-on)" \
       --vpc-id "$VPC_ID" --query GroupId --output text)
 aws ec2 authorize-security-group-ingress --group-id "$SG" --protocol udp --port 8890 --cidr "$MYIP/32"
 aws ec2 authorize-security-group-ingress --group-id "$SG" --protocol tcp --port 8888 --cidr "$MYIP/32"
+```
 
-# 검증: 규칙 2건 · 0.0.0.0/0 은 0건
+검증: 규칙 2건 · 0.0.0.0/0 은 0건.
+
+```bash
 aws ec2 describe-security-groups --group-ids "$SG" \
   --query 'SecurityGroups[0].IpPermissions[].{proto:IpProtocol,port:FromPort,src:IpRanges[].CidrIp}'
 ```
@@ -172,13 +178,17 @@ aws route53 change-resource-record-sets --hosted-zone-id "$HOSTED_ZONE_ID" \
     \"Name\":\"media-dev.pokeclip.com\",\"Type\":\"A\",\"TTL\":60,
     \"ResourceRecords\":[{\"Value\":\"$IP\"}]}}]}"
 
-dig +short media-dev.pokeclip.com     # 위 IP 가 나와야 한다 (네임서버는 존 조회로 확인)
+dig +short media-dev.pokeclip.com
 ```
+
+`dig` 에 위 IP 가 나와야 한다 (네임서버는 존 조회로 확인).
 
 ### 1-4. 접속 확인
 
+첫 명령(aws)의 결과에 `Online` 이 나와야 한다.
+
 ```bash
-aws ssm describe-instance-information --query "InstanceInformationList[?InstanceId=='<instance-id>'].PingStatus"  # Online
+aws ssm describe-instance-information --query "InstanceInformationList[?InstanceId=='<instance-id>'].PingStatus"
 nc -z -w3 media-dev.pokeclip.com 22 && echo "22 열림 — 즉시 조사" || echo "22 닫힘(정상)"
 ```
 
@@ -196,11 +206,24 @@ kty 로컬 터미널에서 돌린다 — 계정 번호가 명령 · 응답에 �
 `pokeclip-media-dev-ssm-role` 일 때만 정책을 넣는다. 공유 역할(`pokeclip-dev-ssm-role`
 등 — 팀 dev EC2 와 함께 쓰는 역할)이나 다른 이름이면 2 가 「멈춤」을 내고 아무것도 넣지
 않는다. 그때는 kty 가 정한다(상자를 1-2 의 공유 프로필로 다시 띄웠다면 상자 전용 프로필을
-먼저 붙인다). 2 는 괄호(서브셸) 안이라 멈춰도 터미널은 닫히지 않고, 계정 번호도 괄호 밖에
-남지 않는다.
+먼저 붙인다). 2 는 따로 띄운 bash 안에서 돈다 — 멈춰도 터미널은 닫히지 않고, 계정
+번호는 지금 셸에 남지 않으며 화면에도 나오지 않는다. 다만 안의 aws 가 실패하면(정책
+넣기 권한 거부 등) 오류 문구에 호출자 ARN(계정 번호가 든다)이 찍힐 수 있다 — 그 출력도
+에이전트 세션 · 문서에 붙여 넣지 않는다.
+
+세 블록은 맥 기본 셸(zsh)에 그대로 붙여도 돌게 썼다. 대화형 zsh 는 기본으로 `#` 를
+주석으로 읽지 않아서(`interactive_comments` 꺼짐) 블록 안 주석 줄의 `)` 가 붙여 넣은
+묶음 전체를 `parse error near ')'` 로 멈춘다 — 2026-10-20 에 옛 꼴의 블록 2 · 3 이 이렇게
+아무것도 돌지 않았다. 그래서 블록 안에 주석을 두지 않는다 — 원인은 이 주석 줄이다(주석
+줄을 뺀 옛 블록 2 는 zsh 에서도 돌았다). 2 를 `bash <<'SH'` 안에 둔 것은 붙인 셸이
+무엇이든 가드 · 정책 만들기를 bash 가 읽게 하려는 것이다. 그 bash 는 PATH 에서 찾은
+bash 이고 맥 기본 bash(3.2)에서도 돈다 — 0절의 「맥의 셸(bash 3.2)에서 돌리지
+않는다」는 2절 머리를 쓰는 상자 블록을 맥의 bash 3.2 로 돌리지 말라는 얘기라 이 로컬
+명령과는 상관없다.
+
+블록 1(역할 집기) — 상자에서 거꾸로 집는다. 찍는 것은 역할 이름뿐이다(계정 번호 없음).
 
 ```bash
-# 1) 역할 집기 — 상자에서 거꾸로 집는다. 찍는 것은 역할 이름뿐이다(계정 번호 없음)
 PROFILE_ARN="$(aws ec2 describe-instances --instance-ids <instance-id> \
   --query 'Reservations[0].Instances[0].IamInstanceProfile.Arn' --output text)"
 ROLE="$(aws iam get-instance-profile \
@@ -210,17 +233,21 @@ unset PROFILE_ARN
 echo "역할: ${ROLE}"
 ```
 
+블록 2(정책 넣기) — 상자 전용 역할일 때만 넣는다. 어긋나면 「멈춤」 · 종료 1 이고 넣지
+않는다. 정책 문서는 `printf` 가 만든다(`%s` 자리가 계정 번호). 안의 aws 는 표준 입력을
+`/dev/null` 로 받는다 — 이 bash 는 스크립트를 표준 입력으로 읽으므로, 표준 입력을 읽는
+명령이 있으면 뒷줄을 삼킨다.
+
 ```bash
-# 2) 정책 넣기 — 상자 전용 역할일 때만. 어긋나면 「멈춤」 · 종료 1 이고 넣지 않는다
-(
-  [[ "${ROLE:-}" == pokeclip-media-dev-ssm-role ]] \
-    || { echo "멈춤 — 상자 전용 역할이 아니다: ${ROLE:-(비었음)}"; exit 1; }
-  ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
-  [[ "${ACCOUNT}" =~ ^[0-9]{12}$ ]] \
-    || { echo '멈춤 — 계정 번호를 얻지 못했다'; exit 1; }
-  aws iam put-role-policy --role-name "${ROLE}" \
-    --policy-name pokeclip-media-dev-ecr-pull --policy-document "$(cat <<EOF
-{
+ROLE="${ROLE:-}" bash <<'SH'
+set -euo pipefail
+[[ "${ROLE}" == pokeclip-media-dev-ssm-role ]] \
+  || { echo "멈춤 — 상자 전용 역할이 아니다: ${ROLE:-(비었음)}"; exit 1; }
+ACCOUNT="$(aws sts get-caller-identity --query Account --output text \
+  < /dev/null)" || ACCOUNT=''
+[[ "${ACCOUNT}" =~ ^[0-9]{12}$ ]] \
+  || { echo '멈춤 — 계정 번호를 얻지 못했다'; exit 1; }
+POLICY="$(printf '{
   "Version": "2012-10-17",
   "Statement": [
     {
@@ -237,17 +264,20 @@ echo "역할: ${ROLE}"
         "ecr:GetDownloadUrlForLayer",
         "ecr:BatchCheckLayerAvailability"
       ],
-      "Resource": "arn:aws:ecr:ap-northeast-2:${ACCOUNT}:repository/pokeclip/mediamtx"
+      "Resource": "arn:aws:ecr:ap-northeast-2:%s:repository/pokeclip/mediamtx"
     }
   ]
-}
-EOF
-)"
-)
+}' "${ACCOUNT}")"
+aws iam put-role-policy --role-name "${ROLE}" \
+  --policy-name pokeclip-media-dev-ecr-pull --policy-document "${POLICY}" \
+  < /dev/null
+echo '정책 넣음'
+SH
 ```
 
+블록 3(검증) — 정책 이름이 보이고 동작이 위 넷이다(자원 — 계정 번호 — 은 찍지 않는다).
+
 ```bash
-# 3) 검증 — 정책 이름이 보이고 동작이 위 넷이다(자원 — 계정 번호 — 은 찍지 않는다)
 aws iam list-role-policies --role-name "${ROLE}"
 aws iam get-role-policy --role-name "${ROLE}" \
   --policy-name pokeclip-media-dev-ecr-pull \
@@ -1082,10 +1112,36 @@ preserve_state() {
 않는다 — 명령 이력이 SSM 에 남는다. 세션 로깅이 꺼져 있는지 먼저 본다(켜져 있으면 세션
 입력이 S3 · CloudWatch 에 남는다 → 중단).
 
+로깅 설정은 계정의 기본 세션 문서 `SSM-SessionManagerRunShell` 에 든다. 이 문서는
+Session Manager 기본 설정을 저장할 때 만들어지고, 세션 기록을 보낼 S3 버킷 ·
+CloudWatch Logs 그룹을 담는다 — 문서가 없으면 기록 설정도 없다
+([AWS — 기본 세션 문서](https://docs.aws.amazon.com/systems-manager/latest/userguide/getting-started-default-session-document.html) ·
+[AWS — CLI 로 Session Manager 기본 설정 바꾸기](https://docs.aws.amazon.com/systems-manager/latest/userguide/getting-started-configure-preferences-cli.html)).
+그래서 판정은 셋이다 — 문서 있음(두 칸이 다 빈 값일 때만 세션을 연다) · 문서 없음(통과 —
+kty 2026-10-20, 그날 이 계정은 문서가 없었다) · 그 밖 오류(중단 — 못 읽은 것이지 없는 것이
+아니다).
+
+kty 로컬 터미널에서 판정 블록 → 세션 열기 순으로, 같은 셸(같은 프로필 · 리전)에서 친다.
+판정 블록은 문서 본문이나 오류 문구(호출자 ARN — 계정 번호가 든다)를 찍을 수 있으므로
+1-5 처럼 에이전트 세션 · 문서에 붙여 넣지 않는다.
+
 ```bash
-aws ssm get-document --name SSM-SessionManagerRunShell \
-  --query Content --output text
-#   s3BucketName / cloudWatchLogGroupName 이 빈 값이어야 한다
+if DOC_OUT="$(aws ssm get-document --name SSM-SessionManagerRunShell \
+    --query Content --output text 2>&1)"; then
+  printf '%s\n' "${DOC_OUT}"
+  echo '문서 있음 — s3BucketName · cloudWatchLogGroupName 이 둘 다 빈 값일 때만 세션을 연다'
+elif [[ "${DOC_OUT}" == *'(InvalidDocument)'*'does not exist'* ]]; then
+  echo '통과 — 문서 없음(세션 로깅 설정이 없다)'
+else
+  printf '%s\n' "${DOC_OUT}"
+  echo '중단 — 문서를 읽지 못했다. 세션을 열지 않는다'
+fi
+unset DOC_OUT
+```
+
+「통과」를 봤거나, 「문서 있음」이고 두 칸이 다 빈 값일 때만 세션을 연다.
+
+```bash
 aws ssm start-session --target <instance-id>
 ```
 
@@ -1096,37 +1152,107 @@ aws ssm start-session --target <instance-id>
 보지 못한다 — 이웃 서브넷 · 피어링된 VPC · 도커 기본 다리(172.17.x) · 네트워크 · 방송
 주소도 사설 꼴이면 통과하므로 눈 확인은 그대로 한다.
 
-세션 **안에서**(반영 전 보존 R0 이 끝난 뒤):
+세션 **안에서**(반영 전 보존 R0 이 끝난 뒤) 여섯 단계로 나눠 붙인다. 한 번에 붙이면
+`sudo bash` 뒤의 줄이 새 root 셸에 들어가지 않거나 `read` 가 그다음 줄을 값으로 삼킨다
+(2026-10-20 상자 — 친 주소가 명령으로 실행됐다. SSM 세션 안에서 어느 쪽이었는지는
+가리지 못했다). 단계마다 앞 단계의 끝을 눈으로 보고 다음을 붙인다.
+
+1.  root 대화형 셸을 연다. 프롬프트가 `#` 로 바뀐 것을 본다.
+
+    ```bash
+    sudo bash
+    ```
+
+2.  셸을 준비한다. 표준 입력을 읽는 명령이 없어 한 번에 붙여도 된다.
+
+    ```bash
+    unset HISTFILE
+    umask 077
+    DEMO_DIR=/opt/pokeclip-demo
+    INFO="$(stat -c '%u %a' -- "${DEMO_DIR}")"   # root 소유 · 그룹 · 기타 쓰기 없음(2-2)
+    # 상자 계정 번호 — 레지스트리 호스트에 든다. 화면에 내지 않는다(저장소에 적지 않음)
+    ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
+    ```
+
+3.  이 한 줄만 붙이고, 이어서 `http://<dev EC2 사설 주소>:8082` 를 친다(비밀 아님 ·
+    저장소에 적지 않음).
+
+    ```bash
+    read -r URL
+    ```
+
+4.  세 칸을 눈으로 본다 — 친 주소 · `/opt/pokeclip-demo` · `0 750` 같은 꼴(root 소유 ·
+    그룹 · 기타 쓰기 없음). 주소가 틀렸으면 3 부터, 나머지가 틀렸으면 2 부터 다시 친다.
+
+    ```bash
+    echo "[${URL}] [${DEMO_DIR}] [${INFO}]"
+    ```
+
+5.  `.env.next` 를 만들어 끼운다. 끝에 「.env 를 끼웠다」가 나와야 한다.
+
+    ```bash
+    if [[ -L "${DEMO_DIR}" || ! "${INFO}" =~ ^0\ [0-7]?[0-7][0145][0145]$ ]]; then
+      echo "멈춤: ${DEMO_DIR} 가 root 전용 디렉터리가 아니다(${INFO})"
+    elif [[ ! "${ACCOUNT}" =~ ^[0-9]{12}$ ]]; then
+      echo '멈춤: 상자 계정 번호를 얻지 못했다(aws sts get-caller-identity)'
+    elif [[ -L "${DEMO_DIR}/.env.next" || ( -e "${DEMO_DIR}/.env.next" \
+        && ! -f "${DEMO_DIR}/.env.next" ) ]]; then
+      echo '멈춤: .env.next 가 일반 파일이 아니거나 링크다 — 쓰지 않았다'
+    elif [[ -s "${DEMO_DIR}/.env.pre-T.bak" ]]; then
+      {
+        grep -E '^(DEMO_HOME|STREAM_KEY_RESOLVE_TOKEN)=' "${DEMO_DIR}/.env"
+        printf 'STREAM_KEY_RESOLVE_URL=%s\n' "${URL}"
+        printf 'MTX_API_PASS=%s\n' "$(openssl rand -hex 32)"
+        printf 'MTX_IMAGE_REGISTRY=%s.dkr.ecr.ap-northeast-2.amazonaws.com\n' \
+          "${ACCOUNT}"
+      } > "${DEMO_DIR}/.env.next"
+      chown root:root "${DEMO_DIR}/.env.next"
+      chmod 0600 "${DEMO_DIR}/.env.next"
+      command mv -T "${DEMO_DIR}/.env.next" "${DEMO_DIR}/.env" && echo '.env 를 끼웠다'
+    else
+      echo '멈춤: 반영 전 보존(R0)이 먼저다'
+    fi
+    ```
+
+6.  「.env 를 끼웠다」를 본 뒤에만 변수를 지우고 root 셸을 닫는다.
+
+    ```bash
+    unset URL INFO ACCOUNT
+    exit
+    ```
+
+5 가 「.env 를 끼웠다」를 내지 않았으면(「멈춤」 · `mv` 실패) 6 으로 가지 않고 같은 root
+셸에 남는다. 남았을 수 있는 `.env.next` 를 아래 블록으로 지우고, 원인을 고친 뒤 2 단계부터
+다시 친다. 세션이 끊겼으면 새 세션에서 1 · 2 단계를 친 뒤 이 블록으로 지우고 3 단계부터
+잇는다. 끝에 「.env.next 남은 개수 0」이 나와야 한다. root 셸이 아니거나 `DEMO_DIR` 이
+비었으면 지우지 않고 「멈춤」을 낸다 — 그때는 1 · 2 단계부터 친다.
+
+`DEMO_DIR` 이 root 전용 디렉터리가 아니거나 `.env.next` 가 일반 파일이 아니거나 링크여도
+지우지 않고 「멈춤」이다 — 2-2 `remove_box_file` 과 같은 까닭이다. `shred` 와 `>`
+리다이렉트는 링크를 따라가 그 대상(예: `.env.pre-T.bak`)을 덮어쓰고, `[[ -e ]]` 만으로는
+끊어진 링크를 찾지 못한다(그래서 `-L` 을 함께 본다). 5 단계도 같은 까닭으로 링크인
+`.env.next` 에는 `>` 로 쓰지 않고 「멈춤」을 낸다. 재시도나 5 단계가 이 셋(링크 · 일반
+파일 아님 · root 전용 아님)으로 「멈춤」을 내면 지우거나 고치지 말고 `ls -la "${DEMO_DIR}"`
+출력을 들고 kty 가 정한다.
 
 ```bash
-sudo bash          # root 대화형 셸 — 아래는 이 셸 안에서
-unset HISTFILE
-umask 077
-DEMO_DIR=/opt/pokeclip-demo
-read -r URL        # http://<dev EC2 사설 주소>:8082 를 친다(비밀 아님 · 저장소에 적지 않음)
-INFO="$(stat -c '%u %a' -- "${DEMO_DIR}")"   # root 소유 · 그룹 · 기타 쓰기 없음(2-2)
-# 상자 계정 번호 — 레지스트리 호스트에 든다. 화면에 내지 않는다(저장소에 적지 않음)
-ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
-if [[ -L "${DEMO_DIR}" || ! "${INFO}" =~ ^0\ [0-7]?[0-7][0145][0145]$ ]]; then
-  echo "멈춤: ${DEMO_DIR} 가 root 전용 디렉터리가 아니다(${INFO})"
-elif [[ ! "${ACCOUNT}" =~ ^[0-9]{12}$ ]]; then
-  echo '멈춤: 상자 계정 번호를 얻지 못했다(aws sts get-caller-identity)'
-elif [[ -s "${DEMO_DIR}/.env.pre-T.bak" ]]; then
-  {
-    grep -E '^(DEMO_HOME|STREAM_KEY_RESOLVE_TOKEN)=' "${DEMO_DIR}/.env"
-    printf 'STREAM_KEY_RESOLVE_URL=%s\n' "${URL}"
-    printf 'MTX_API_PASS=%s\n' "$(openssl rand -hex 32)"
-    printf 'MTX_IMAGE_REGISTRY=%s.dkr.ecr.ap-northeast-2.amazonaws.com\n' \
-      "${ACCOUNT}"
-  } > "${DEMO_DIR}/.env.next"
-  chown root:root "${DEMO_DIR}/.env.next"
-  chmod 0600 "${DEMO_DIR}/.env.next"
-  mv -T "${DEMO_DIR}/.env.next" "${DEMO_DIR}/.env"
+if [[ "$(id -u)" != 0 || -z "${DEMO_DIR:-}" ]]; then
+  echo '멈춤: root 셸(1 단계)이 아니거나 DEMO_DIR 이 비었다(2 단계) — 지우지 않았다'
+elif [[ -L "${DEMO_DIR}" || ! -d "${DEMO_DIR}" \
+    || ! "$(stat -c '%u %a' -- "${DEMO_DIR}")" \
+    =~ ^0\ [0-7]?[0-7][0145][0145]$ ]]; then
+  echo "멈춤: ${DEMO_DIR} 가 root 전용 디렉터리가 아니다 — 지우지 않았다"
+elif [[ -L "${DEMO_DIR}/.env.next" || ( -e "${DEMO_DIR}/.env.next" \
+    && ! -f "${DEMO_DIR}/.env.next" ) ]]; then
+  echo '멈춤: .env.next 가 일반 파일이 아니거나 링크다 — 지우지 않았다'
 else
-  echo '멈춤: 반영 전 보존(R0)이 먼저다'
+  [[ ! -e "${DEMO_DIR}/.env.next" ]] || shred -u -- "${DEMO_DIR}/.env.next"
+  if [[ -e "${DEMO_DIR}/.env.next" || -L "${DEMO_DIR}/.env.next" ]]; then
+    echo '멈춤: .env.next 가 남았다 — 지우지 못했다'
+  else
+    echo '.env.next 남은 개수 0'
+  fi
 fi
-unset URL INFO ACCOUNT
-exit
 ```
 
 - 옛 두 줄(`DEMO_PATH` · `SRT_PASSPHRASE`)은 옮기지 않는다 — 반영 전 값은 R0 의
@@ -1137,8 +1263,12 @@ exit
   `aws sts get-caller-identity` 는 권한 없이 돈다. 변수와 `.env` 에만 있고 화면에
   나오지 않는다. T `.env` 에 이미 이 줄이 있어도 옮기지 않고 다시 만든다.
 - `.env.next` 를 다 쓴 뒤 이름 바꾸기로 끼우므로 세션이 끊겨도 반쪽 `.env` 가 생기지
-  않는다. 남은 `.env.next` 는 비밀(출입증 · API 비번)이 든 파일이라 같은 세션에서
-  `shred -u -- "${DEMO_DIR}/.env.next"` 로 지우고 다시 친다.
+  않는다. 남은 `.env.next` 는 비밀(출입증 · API 비번)이 든 파일이라 위 블록으로 지우고
+  다시 친다.
+- 끼우기는 `command mv` 다 — AL2023 의 root 대화형 셸은 `mv` 가 `mv -i` 별칭이라
+  덮어쓰기를 묻고, 붙여 넣은 다음 줄이 그 답으로 들어간다(2026-10-20 상자에서 물었다).
+  거절돼도 `mv -i` 는 종료 0 이므로(GNU coreutils 8.32) 끼웠는지는 끝의 「.env 를
+  끼웠다」로만 안다.
 
 이어서 꼴을 단언한다(값은 내지 않는다).
 
@@ -1746,20 +1876,19 @@ main "$@"
 `<토큰>` 은 송출 계정의 공개 토큰).
 
 - 매니페스트는 2단계다. `index.m3u8` 은 멀티버리언트 플레이리스트라 LL-HLS 마커가 거기
-  없다.
+  없다. ①(첫 줄)은 200 + 변형 URI 한 줄, ②(둘째 줄)는 마커다.
 
   ```bash
-  curl -s "http://<host>:8888/<토큰>/index.m3u8"        # ① 200 + 변형 URI 한 줄
-  curl -s "http://<host>:8888/<토큰>/<위에서 얻은 URI>"  # ② 마커
+  curl -s "http://<host>:8888/<토큰>/index.m3u8"
+  curl -s "http://<host>:8888/<토큰>/<위에서 얻은 URI>"
   ```
 
   ②의 합격 조건 — `EXT-X-PART` · `EXT-X-PART-INF` · `EXT-X-PRELOAD-HINT` ·
   `CAN-BLOCK-RELOAD` 존재 + `EXTINF` 가 4.0 근처. `PART-HOLD-BACK` 은 값을 기록만 한다.
 - GOP 는 설정값을 믿지 않고 HLS 디먹서로 잰다 — `key_frame=1` 행의 `pts_time` 간격이
-  2.0초여야 한다.
+  2.0초여야 한다. 몇 초 뒤 Ctrl-C 로 멈춘다.
 
   ```bash
-  # 몇 초 뒤 Ctrl-C
   ffprobe -select_streams v -show_frames \
     -show_entries frame=pts_time,key_frame -of csv \
     "http://<host>:8888/<토큰>/index.m3u8"
@@ -2496,14 +2625,22 @@ main "$@"
 - **무접촉** — 다른 진행 송출이 재시작 창 내내 이어진다(재생 · MediaMTX 로그에 그 경로의
   `closed` 없음). MediaMTX 시작 시각은 적용 블록이 앞뒤로 견줬다.
 - **재시작 창** — 적용 블록이 낸 「재시작 명령」 · 「healthy」 두 시각의 차다. 창 전체가
-  거부 구간은 아니다 — 창에는 healthy 판정을 기다리는 몫(약 5–6초)이 들어 있다. 모든
+  거부 구간은 아니다 — 창의 대부분은 첫 healthcheck 를 기다리는 몫이다. compose 가
+  `start_interval` 을 주지 않아 시작 유예(`start_period`) 안의 검사 간격이 엔진
+  기본값인데, 그 기본값이 docker 25 · 26 은 `interval`(30초)이고 27 부터는 5초다(moby
+  `daemon/health.go` —
+  [v25.0.16 254행](https://github.com/moby/moby/blob/v25.0.16/daemon/health.go#L254) ·
+  [v27.0.1 258행](https://github.com/moby/moby/blob/v27.0.1/daemon/health.go#L258) ·
+  [v29.0.0 255행](https://github.com/moby/moby/blob/docker-v29.0.0/daemon/health.go#L255)).
+  그래서 창이 상자(AL2023 docker 25)에서 약 31초, 로컬(docker 29)에서 6–7초다. 모든
   계정의 새 연결 · 재접속이 거부되는 것은 응답기가 멈췄다 다시 듣기까지의 앞부분뿐이다.
-  로컬 실측 S7-5 에서 창 6–7초 가운데 멈춤 → 시작이 0.19–0.29초(그동안 MediaMTX 인증 실패
+  로컬 실측 S7-5 에서 멈춤 → 시작이 0.19–0.29초(그동안 MediaMTX 인증 실패
   `connection refused` 0–2줄)였고, 멈춤부터 첫 정상 수락까지는 1.20–3.29초(시도 간격에
-  묶인 값)였다 — healthy 보다 앞서 수락했다. 「응답기 다시 시작」 블록 주석의 「그동안 …
-  거부된다」는 이 짧은 구간을 말한다. 실측 3 의 값: 상자에서 창 31초(재시작 명령
-  06:06:49Z → healthy 06:07:20Z · healthy 대기 포함 · AL2023 docker 25 ·
-  2026-10-19)로 로컬 6–7초와 다르다. 지금은 서비스 사용자가 없어 따로 알리지 않는다.
+  묶인 값)였다 — healthy 보다 앞서 수락했다. 상자 실측 3 은 2026-10-20 재측정에서
+  창 31초(재시작 명령 03:22:08Z → healthy 03:22:39Z — 2026-10-19 의 06:06:49Z →
+  06:07:20Z 와 같다) 가운데 멈춤 → 시작이 0.86초, 멈춤부터 첫 정상 수락까지가
+  4.06초(플러그인 재시도 간격에 묶인 값)였다. 「응답기 다시 시작」 블록 주석의 「그동안
+  … 거부된다」는 이 짧은 구간을 말한다. 지금은 서비스 사용자가 없어 따로 알리지 않는다.
 - `ingestauth_denylist_changed` 가 나면 그 `denied` 를 참고로 적는다(판정에는 쓰지
   않는다).
 
@@ -3341,10 +3478,9 @@ main "$@"
 ## 12. 철거
 
 상자를 없애기로 kty 가 정했을 때만 한다. 순서를 지킨다 — 보안그룹은 인스턴스가 종료된
-뒤에만 지워진다.
+뒤에만 지워진다. 세션이 다르면 SG·인스턴스 ID 를 이름·태그로 다시 집는다.
 
 ```bash
-# 세션이 다르면 SG·인스턴스 ID 를 이름·태그로 다시 집는다.
 SG=$(aws ec2 describe-security-groups --filters Name=group-name,Values=pokeclip-media-demo-sg \
       --query 'SecurityGroups[0].GroupId' --output text)
 IID=$(aws ec2 describe-instances --filters Name=tag:Name,Values=pokeclip-media-demo \
