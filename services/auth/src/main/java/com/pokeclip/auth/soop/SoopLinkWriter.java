@@ -57,7 +57,7 @@ public class SoopLinkWriter {
                 .ifPresent(other -> {
                     throw new SoopLinkException(SoopLinkFailure.CHANNEL_ALREADY_LINKED, "다른 계정에 묶인 방송국이다");
                 });
-        closeAndPurge(userId, now, RevokeReason.USER_UNLINKED, "auth.soop.link.relinked");   // 재연동이면 옛 행을 닫는다
+        closeAndPurge(userId, now, RevokeReason.USER_UNLINKED, () -> log.info("auth.soop.link.relinked userId={}", userId));   // 재연동이면 옛 행을 닫는다
         String accessRef = "soop-access:" + UUID.randomUUID();
         String refreshRef = "soop-refresh:" + UUID.randomUUID();
         secretStore.put(accessRef, tokens.accessToken());
@@ -79,7 +79,7 @@ public class SoopLinkWriter {
     public void revoke(Long userId, Instant now) {
         users.findByIdForUpdate(userId)
                 .orElseThrow(() -> new IllegalStateException("사용자가 없다 userId=" + userId));
-        closeAndPurge(userId, now, RevokeReason.USER_UNLINKED, "auth.soop.link.unlinked");
+        closeAndPurge(userId, now, RevokeReason.USER_UNLINKED, () -> log.info("auth.soop.link.unlinked userId={}", userId));
     }
 
     /**
@@ -90,13 +90,17 @@ public class SoopLinkWriter {
      *
      * <p>정리는 afterCommit에서 <b>제출만</b> 하고 전용 스레드({@link SoopCleanupExecutor})가 돈다: afterCommit 안에서
      * REQUIRES_NEW delete를 직접 부르면 풀 데드락이 된다. 치지직과 달리 정리 잡에 외부 HTTP가 없다.
+     *
+     * <p>닫는 자리 넷(재연동 · 해제 · 갱신 거절 {@link SoopTokenRefresher} · 탈퇴)이 모두 이것 하나를 쓴다. 그래서
+     * 부분 삭제 결함(감사 1회차 중대 1)을 한 번 고치면 넷이 같이 닫힌다. package-private은 갱신기가 같은 트랜잭션
+     * (그쪽의 회원 행 락 안)에서 부르기 위해서다. {@code done}은 secrets를 다 지운 뒤에 찍을 「일어났다」 로그다.
      */
-    private void closeAndPurge(Long userId, Instant now, RevokeReason reason, String event) {
+    void closeAndPurge(Long userId, Instant now, RevokeReason reason, Runnable done) {
         links.findByUserIdAndRevokedAtIsNull(userId).ifPresent(old -> {
             String accessRef = old.getAccessTokenRef();
             String refreshRef = old.getRefreshTokenRef();
             links.closeAndPurgeAlive(userId, now, reason);
-            cleanup.afterCommit(userId, () -> purgeSecrets(userId, accessRef, refreshRef, event));
+            cleanup.afterCommit(userId, () -> purgeSecrets(accessRef, refreshRef, done));
         });
     }
 
@@ -108,13 +112,13 @@ public class SoopLinkWriter {
      * 고친 자리, SOOP은 고치기 전 치지직 모양을 복제했다가 감사 1회차가 재현했다). 예외는 마지막에 다시 올려
      * 잡이 {@code cleanup.failed} WARN으로 남기게 한다.
      */
-    private void purgeSecrets(Long userId, String accessRef, String refreshRef, String event) {
+    private void purgeSecrets(String accessRef, String refreshRef, Runnable done) {
         RuntimeException deleteFailure = deleteQuietly(accessRef, null);
         deleteFailure = deleteQuietly(refreshRef, deleteFailure);
         if (deleteFailure != null) {
             throw deleteFailure;
         }
-        log.info("{} userId={}", event, userId);
+        done.run();
     }
 
     /** 지우고, 실패하면 예외를 모아 둔다(먼저 난 것을 유지한다). 나머지 삭제를 막지 않으려고. */
