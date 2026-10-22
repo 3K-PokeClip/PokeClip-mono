@@ -1,9 +1,14 @@
 package config
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/pgconf"
 )
 
 // envOf 는 map 을 Load 가 받는 조회 함수로 바꾼다.
@@ -79,8 +84,9 @@ func TestLoadRequiresPostgresSettings(t *testing.T) {
 	}
 }
 
-// DSN 에 비밀값이 들어가므로 에러 메시지나 로그에 그대로 실리면 안 된다.
-func TestLoadBuildsDSN(t *testing.T) {
+// password 모드의 DB 설정은 pgconf 로 옮기기 전(DSN 문자열 조립)과 같은 접속 값을 낸다 — 로컬 compose 가 그대로 돈다.
+// 기대값은 옮기기 전 dsn() 이 만들던 문자열을 pgx 가 해석한 결과다.
+func TestLoadKeepsPasswordModeConnection(t *testing.T) {
 	env := minimalEnv()
 	env["POSTGRES_HOST"] = "db.internal"
 	env["POSTGRES_PORT"] = "6543"
@@ -89,13 +95,45 @@ func TestLoadBuildsDSN(t *testing.T) {
 	if err != nil {
 		t.Fatalf("예상 밖 에러: %v", err)
 	}
-	if !strings.HasPrefix(cfg.PGDSN, "postgres://") {
-		t.Fatalf("DSN = %q, want postgres:// 로 시작", cfg.PGDSN)
+	if cfg.PG.Auth != pgconf.AuthPassword || cfg.PG.User != "pokeclip" || cfg.PG.Host != "db.internal" ||
+		cfg.PG.Port != 6543 || cfg.PG.DB != "pokeclip" || cfg.PG.SSLMode != "prefer" {
+		t.Fatalf("PG = %v, want password · pokeclip@db.internal:6543/pokeclip · prefer", cfg.PG)
 	}
-	for _, want := range []string{"db.internal", "6543", "pokeclip"} {
-		if !strings.Contains(cfg.PGDSN, want) {
-			t.Errorf("DSN 에 %q 가 없다: %q", want, cfg.PGDSN)
-		}
+	got, err := pgconf.PoolConfig(context.Background(), cfg.PG)
+	if err != nil {
+		t.Fatalf("PoolConfig: %v", err)
+	}
+	want, err := pgxpool.ParseConfig("postgres://pokeclip:%EB%B9%84%EB%B0%80%EA%B0%92-%EC%98%88%EC%8B%9C@db.internal:6543/pokeclip?sslmode=prefer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	g, w := got.ConnConfig, want.ConnConfig
+	if g.User != w.User || g.Password != w.Password || g.Host != w.Host || g.Port != w.Port || g.Database != w.Database ||
+		(g.TLSConfig == nil) != (w.TLSConfig == nil) || len(g.Fallbacks) != len(w.Fallbacks) || got.BeforeConnect != nil {
+		t.Errorf("password 모드 접속 값이 옮기기 전과 다르다(비밀번호 일치 %v · TLS %v/%v · 대체 %d/%d · BeforeConnect %v)",
+			g.Password == w.Password, g.TLSConfig != nil, w.TLSConfig != nil, len(g.Fallbacks), len(w.Fallbacks), got.BeforeConnect != nil)
+	}
+}
+
+// iam 묶음(비밀번호 없음 · CA 번들 경로)이 기동을 통과하고, 비밀번호를 함께 주면 거부한다.
+func TestLoadAcceptsIAMSettings(t *testing.T) {
+	env := minimalEnv()
+	delete(env, "POSTGRES_PASSWORD")
+	env["POSTGRES_AUTH"] = "iam"
+	env["POSTGRES_SSLROOTCERT"] = "/etc/pokeclip/rds-ca/global-bundle.pem"
+
+	cfg, err := Load(envOf(env))
+	if err != nil {
+		t.Fatalf("iam 묶음 거부: %v", err)
+	}
+	if cfg.PG.Auth != pgconf.AuthIAM || cfg.PG.SSLMode != "verify-full" || cfg.PG.Region != "ap-northeast-2" {
+		t.Errorf("PG = %v, want iam · verify-full · ap-northeast-2", cfg.PG)
+	}
+
+	env["POSTGRES_PASSWORD"] = "비밀값-예시"
+	_, err = Load(envOf(env))
+	if err == nil || !strings.Contains(err.Error(), "POSTGRES_PASSWORD") || strings.Contains(err.Error(), "비밀값") {
+		t.Errorf("iam + 비밀번호 = %v, want POSTGRES_PASSWORD 를 말하고 값은 싣지 않는 거부", err)
 	}
 }
 
@@ -201,14 +239,14 @@ func TestFixMaxWatchDirs(t *testing.T) {
 	}
 }
 
-// LOW — sslmode 를 DSN 에 실어 보낸다. 기본은 prefer(가능하면 TLS).
+// LOW — sslmode 를 DB 설정에 싣는다. 기본은 prefer(가능하면 TLS).
 func TestFixSSLMode(t *testing.T) {
 	cfg, err := Load(envOf(minimalEnv()))
 	if err != nil {
 		t.Fatalf("예상 밖 에러: %v", err)
 	}
-	if !strings.Contains(cfg.PGDSN, "sslmode=prefer") {
-		t.Fatalf("DSN 에 기본 sslmode 가 없다: %q", cfg.PGDSN)
+	if cfg.PG.SSLMode != "prefer" {
+		t.Fatalf("기본 sslmode = %q, want prefer", cfg.PG.SSLMode)
 	}
 
 	env := minimalEnv()
@@ -217,8 +255,8 @@ func TestFixSSLMode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("예상 밖 에러: %v", err)
 	}
-	if !strings.Contains(cfg.PGDSN, "sslmode=require") {
-		t.Fatalf("DSN = %q", cfg.PGDSN)
+	if cfg.PG.SSLMode != "require" {
+		t.Fatalf("sslmode = %q, want require", cfg.PG.SSLMode)
 	}
 }
 

@@ -8,32 +8,32 @@ package main
 import (
 	"context"
 	"net/http"
-	"net/url"
-	"os"
 	"slices"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/pgconf"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/pgtest"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/rewind/publish"
 )
 
-// testDBDSN 은 db 가 붙은 전용 테스트 DB 의 DSN 이다 — PG_DSN 의 DB 이름만 바꾼다. 조립은 DSN 문자열로 풀을 만들므로 공용 DB 로
-// 새지 않게 이름을 다시 확인한다. DSN 에는 비밀번호가 있어 오류에 싣지 않는다.
-func testDBDSN(t *testing.T, db *pgxpool.Pool) string {
+// testPoolConfig 는 db 가 붙은 전용 테스트 DB 의 풀 설정이다 — run 과 같이 POSTGRES_* 를 pgconf 로 지나 만들고(DB 이름만 전용
+// 테스트 DB), 공용 DB 로 새지 않게 이름을 다시 확인한다.
+func testPoolConfig(t *testing.T, db *pgxpool.Pool) *pgxpool.Config {
 	t.Helper()
 	name := db.Config().ConnConfig.Database
-	u, err := url.Parse(os.Getenv("PG_DSN"))
+	env := pgtest.PostgresEnv(t, name)
+	s, err := pgconf.FromEnv(func(k string) string { return env[k] })
 	if err != nil {
-		t.Fatal("PG_DSN 을 URL 로 읽지 못했다(값은 싣지 않는다)")
+		t.Fatalf("POSTGRES_* 설정 실패: %v", err)
 	}
-	u.Path = "/" + name
-	dsn := u.String()
-	if cfg, err := pgxpool.ParseConfig(dsn); err != nil || cfg.ConnConfig.Database != name {
-		t.Fatalf("전용 테스트 DB %q 의 DSN 을 만들지 못했다(값은 싣지 않는다)", name)
+	pc, err := pgconf.PoolConfig(t.Context(), s)
+	if err != nil || pc.ConnConfig.Database != name {
+		t.Fatalf("전용 테스트 DB %q 의 풀 설정을 만들지 못했다: %v", name, err)
 	}
-	return dsn
+	return pc
 }
 
 // execSQL 은 픽스처 문장 하나다.
@@ -56,8 +56,8 @@ func TestRewindStopReleasesAfterLateLaneStatement(t *testing.T) {
 	assemblyCredentialsEnv(t)
 	s3 := newFakeS3(t, http.StatusOK)
 	cfg := assemblyCfg(t, s3.srv.URL)
-	cfg.PGDSN = testDBDSN(t, db)
 	a := newAssembly(t, cfg, &fakeStore{})
+	a.db = testPoolConfig(t, db)
 	a.assembleOrFatal(t, cfg)
 	writer, _ := a.logs.attrs("rewind_publish_started")["writer"].(string)
 	execSQL(t, db, `
@@ -114,9 +114,9 @@ func TestAssembledWatchUsesSeedAlarmWindow(t *testing.T) {
 			assemblyCredentialsEnv(t)
 			s3 := newFakeS3(t, http.StatusOK)
 			cfg := assemblyCfg(t, s3.srv.URL)
-			cfg.PGDSN = testDBDSN(t, db)
 			cfg.Watcher.RescanEvery = c.rescanEvery
 			a := newAssembly(t, cfg, &fakeStore{})
+			a.db = testPoolConfig(t, db)
 			a.assembleOrFatal(t, cfg)
 			for stream, ago := range map[string]string{"nocut-inside": c.inside, "nocut-outer": c.outer} {
 				execSQL(t, db, `

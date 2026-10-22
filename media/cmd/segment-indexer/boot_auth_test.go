@@ -210,7 +210,7 @@ func TestBootOrderReadsPassFileBeforeDB(t *testing.T) {
 	}
 	text := string(src)
 	const call = "obsOpt, err := observerOptions(cfg)"
-	const db = "pgxpool.New("
+	const db = "openIndexerPool(" // DB 연결 단계(POK-311 — 풀 생성 · Ping · db_connected)
 	callAt, dbAt := strings.Index(text, call), strings.Index(text, db)
 	if callAt < 0 || dbAt < 0 {
 		t.Fatalf("%q 위치 %d · %q 위치 %d — 기동 단계가 사라졌거나 이름이 바뀌었다", call, callAt, db, dbAt)

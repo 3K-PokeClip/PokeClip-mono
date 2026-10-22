@@ -56,7 +56,7 @@
 | `(stream_id, local_path)` UNIQUE | 재기동 후 같은 파일이 두 번 들어가는 것을 막는 최후 방어선 | **해소** — DDL 소유가 1번으로 위임되며 정본에 포함 확정 (U12 종결) |
 | UNIQUE 인덱스 이름 | `stream_segments_local_path_uq` — 이름으로 "정상 멱등"과 "번호 충돌"을 가르므로 이름 자체가 계약 | **정본 사양** — 변경 시 store.go 분류 로직 동시 수정 필요 |
 | 경로 이력 메모리 | 스트림의 기록된 경로 전부를 메모리에 올린다. 창 제한이 없어 장기 실행 시 계속 자란다 | 이월 |
-| DB 권한 | 사이드카가 `POSTGRES_USER`를 그대로 쓴다. 이 표만 다루는 전용 롤이 바람직하다 | 이월 |
+| DB 권한 | 사이드카가 `POSTGRES_USER`를 그대로 쓴다. 이 표만 다루는 전용 롤이 바람직하다 | **해소** — POK-311. 아래 "사이드카 DB 계정 media_indexer 권한" 절(GRANT 목록 · 실 PG 역할 시험) |
 | 파일명 파서 fuzz | 화이트리스트와 정규식에 대한 fuzz 테스트가 없다 | 이월 |
 | 끝내 안정되지 않는 파일 | 되돌리기가 `DeferMaxCycles`(기본 3) 사이클을 넘으면 그 파일을 붙잡지 않고 흘려보낸다. 스트림 전체가 그 파일 하나 때문에 멈추는 것을 막기 위해서다. 그 결과 해당 4초는 `late_segment_skipped` ERROR와 함께 인덱스에서 빠지며, **자동 복구는 없다** — 파일은 `:ro`로 남아 있으니 로그의 경로를 보고 수동 복구한다 | 이월(L5) |
 | 중첩 `%path` | `live/kr/demo` 같은 슬래시 포함 스트림 이름은 거부한다. 필요해지면 `internal/recording/name.go`의 화이트리스트만 고치면 된다 | U9 확정 시 |
@@ -149,16 +149,18 @@ MediaMTX가 이벤트마다 컨테이너 안의 작은 명령을 실행하고(`m
 | 이름 | 의미 |
 |---|---|
 | `POSTGRES_USER` | DB 사용자 |
-| `POSTGRES_PASSWORD` | DB 비밀번호. 빈 문자열도 누락으로 취급한다 |
+| `POSTGRES_PASSWORD` | DB 비밀번호 — **password 모드에서만 필수**(빈 문자열도 누락으로 취급한다). `POSTGRES_AUTH=iam` 이면 **비워야 한다**(있으면 기동 거부) |
 | `POSTGRES_DB` | DB 이름 |
 
 **선택 — 기본값이 있다.**
 
 | 이름 | 기본값 | 의미 |
 |---|---|---|
-| `POSTGRES_HOST` | `postgres` | DB 호스트 |
+| `POSTGRES_HOST` | `postgres` | DB 호스트. **iam 이면 TCP 호스트 하나여야 한다** — `/`(유닉스 소켓) · 쉼표(여러 호스트) · 공백 · 대괄호 없는 IPv6 는 기동 거부 |
 | `POSTGRES_PORT` | `5432` | DB 포트 |
-| `POSTGRES_SSLMODE` | `prefer` | DB 접속 TLS 모드. `prefer`는 가능하면 TLS, 안 되면 평문. 네트워크를 건너는 배포에서는 `require` 이상으로 올린다 |
+| `POSTGRES_AUTH` | (빈값 = `password`) | DB 로그인 방식. `password`(빈 값) = `POSTGRES_PASSWORD` 로 로그인 — 로컬 compose 의 방식. `iam` = 연결마다 RDS IAM 인증 토큰(15분 유효)을 새로 만들어 로그인한다(자격 증명 = AWS 기본 사슬 · 인스턴스 역할). 그 밖 값(대소문자가 다른 `IAM` 포함)은 기동 거부 |
+| `POSTGRES_SSLMODE` | `prefer` (iam 은 `verify-full`) | DB 접속 TLS 모드. `prefer`는 가능하면 TLS, 안 되면 평문. 네트워크를 건너는 배포에서는 `verify-full` + `POSTGRES_SSLROOTCERT` 로 올린다(CA 없는 `require` 는 암호화만 하고 서버를 확인하지 않는다). **iam 은 `verify-full` 만 받는다** — 그 밖 값은 기동 거부 |
+| `POSTGRES_SSLROOTCERT` | (빈값 = 지정 없음) | 서버 인증서를 검증할 CA 번들의 **절대 경로**. 기동 때 일반 파일 · PEM 인증서 1개 이상을 확인한다. **iam 이면 필수.** password 모드에서도 이 값을 주면 `POSTGRES_SSLMODE` 는 `verify-ca` · `verify-full` 만 받는다 — 그 밖 값은 검증 강도를 값으로 밝히지 않으므로 기동 거부. **`verify-ca` 는 체인만 검증하고 호스트 이름은 보지 않는다 — 운영은 `verify-full`.** `PGSSLROOTCERT` 는 쓰지 않는다 — 이 값이 빈 채 `PGSSLROOTCERT` 만 있으면 기동 거부 |
 | `SEGMENT_ROOT` | `/recordings` | 감시할 녹화 루트. 컨테이너에 읽기 전용으로 붙는다 |
 | `ENSURE_SCHEMA` | `false` | true면 기동 시 정본 DDL(1번 소유)로 `stream_segments`를 만든다. 로컬 compose 전용 — RDS/마이그레이션 도구 도입 시 끈다 |
 | `TZ` | (미설정) | 컨테이너 시간대. **UTC로 고정한다.** 저장 값은 코드가 UTC로 강제하지만 로그 시각도 UTC로 맞춘다 |
@@ -280,7 +282,7 @@ M4 ⓒ 이관 기록」의 알려진 한계 「관측 끔」). 인덱싱·업로
 | 이름 | 기본값 | 의미 |
 |---|---|---|
 | `S3_BUCKET` | (빈값 = 비활성) | 업로드 대상 버킷. **버킷 판정이 다른 S3 값 검증보다 앞이라, 비워 두면 나머지 S3 설정이 틀려도 인덱싱은 산다** |
-| `AWS_REGION` | `ap-northeast-2` | 버킷 리전 |
+| `AWS_REGION` | `ap-northeast-2` | 버킷 리전. **DB IAM 토큰(`POSTGRES_AUTH=iam`)을 서명하는 리전도 같은 값이다** — 이 값은 버킷이 비어 있어도 그 용도로 읽힌다 |
 | `S3_ENDPOINT` | (미설정 = AWS 기본) | 호환 스토리지(MinIO 등)용 엔드포인트 URL. scheme+호스트 필수. https 여야 한다 — http 는 SDK 서명 단계에서 PUT 이 거부된다(2026-09-24 실측) |
 | `S3_FORCE_PATH_STYLE` | `false` | 호환 스토리지용 path-style 주소 지정 |
 | `SEGMENT_UPLOAD_RETRY_MAX` | `4` | 조각 1개당 PUT 시도 상한(지수 백오프). 소진하면 `failed` 기록 후 스위퍼가 회수 |
@@ -295,9 +297,163 @@ M4 ⓒ 이관 기록」의 알려진 한계 「관측 끔」). 인덱싱·업로
 `AWS_PROFILE`은 `~/.aws` 마운트 폴백을 켤 때만 함께 넣는다 — 마운트 없이 넣으면
 SDK가 존재하지 않는 프로필을 요구해 기동이 죽는다(2026-08-04 실측).
 
-위 표가 `internal/config/config.go`가 읽는 전부다(`TZ` 제외 44개). 잘못된 값(숫자 자리에 문자,
+위 표가 `internal/config/config.go`가 읽는 전부다(`TZ` 제외 46개 — `POSTGRES_*` · DB 몫 `AWS_REGION` 은
+`internal/pgconf` 가 janitor 와 같은 규칙으로 읽는다). 잘못된 값(숫자 자리에 문자,
 음수, 파싱 불가한 기간)은 조용히 기본값으로 넘어가지 않고 기동에 실패한다.
 `SEGMENT_SUSPECT_BELOW_MS`가 `SEGMENT_EXPECTED_DURATION_MS`보다 크면 기동 단계에서 거부한다.
+
+### DB 연결 성공 줄 `db_connected` (POK-311)
+
+사이드카(인덱서 풀)와 janitor 는 기동 때 DB 연결 하나를 잡아 Ping 하고, 성공하면
+INFO `db_connected` 한 줄을 남긴다. 실패하면 이 줄 없이 기동이 실패한다(사이드카 =
+종료 코드 1 · janitor = `janitor_failed`). 배포 확인은 이 줄로 한다 — 예를 들어 RDS IAM
+배포는 `"msg":"db_connected"` 이면서 `"auth":"iam"` · `"tls":true` 인 줄이 있어야 한다.
+사이드카의 발행자 풀은 같은 설정으로 따로 열리지만 이 줄을 내지 않는다(인덱서 풀 한 줄로
+판정한다).
+
+| 필드 | 뜻 |
+|---|---|
+| `pool` | `indexer`(사이드카) · `janitor` |
+| `auth` | `password` · `iam` |
+| `sslmode` | 설정한 TLS 모드 |
+| `tls` | **실제 연결이 TLS 인가** — `prefer` 는 평문으로 내려갈 수 있어 설정값만으로는 모른다 |
+| `user` · `host` · `port` · `db` | 접속 대상 |
+
+비밀번호 · IAM 토큰 · DSN · CA 파일 내용은 싣지 않는다.
+
+한계: 사이드카 쪽 시험은 `openIndexerPool` 단위 시험(실 PG 에서 줄 한 줄 ·
+닿지 않는 DB 에서 줄 0)과, `run()` 이 비밀번호 파일을 읽은 뒤 이 단계를
+부르는지 보는 소스 순서 시험뿐이다. `run()` 을 끝까지 돌려 줄을 확인하는
+시험은 없다 — 배포 확인과 로컬 compose 실측이 그 몫이다.
+
+### DB 접속 운영 전제 (POK-311)
+
+로컬 compose 밖(운영)에서 사이드카 · janitor 가 DB 에 붙을 때 지킬 것이다.
+코드가 기동 때 거부하지 못하는 조건이라 배포 정의 · 인스턴스 설정이 맡는다.
+
+- **운영은 반드시 `POSTGRES_AUTH=iam` + `POSTGRES_SSLMODE=verify-full`.**
+  password 모드의 기본 `prefer` 는 서버가 TLS 를 받지 않으면 평문으로
+  내려간다. 배포 뒤 `db_connected` 줄의 `tls` 가 `true` 인지 본다.
+  IAM 토큰의 공식 유효 시간은 15분이지만 RDS 는 그 뒤에도 얼마간 받는다
+  (2026-10-22 실험 RDS 서울 1대 · 1회 실측: 서명 뒤 19분 30초 수용 · 20분 30초
+  거부 — 보장 값이 아니고 더 길 수 있다). 토큰이 새면 그동안 쓸 수 있으므로
+  중간자가 토큰을 못 보게 `verify-full` 이 필요하다.
+- **정적 키 환경 변수는 0개.** AWS SDK 의 자격 증명 사슬(credential chain —
+  SDK 가 자격 증명을 찾는 차례)은 환경 변수의 정적 키를 맨 앞에, 인스턴스
+  역할(IMDS — EC2 메타데이터 서비스)을 맨 뒤에 둔다. 컨테이너에
+  `AWS_ACCESS_KEY_ID` · `AWS_SECRET_ACCESS_KEY` · `AWS_SESSION_TOKEN` 이 있으면
+  인스턴스 역할 대신 그 키로 토큰을 서명한다. 공유 자격 증명 파일
+  (`~/.aws/credentials`)의 정적 키도 인스턴스 역할보다 앞서므로, 운영
+  컨테이너에는 `~/.aws` 를 마운트하지 않는다(로컬 실험용 마운트를 운영 정의에
+  옮기지 않는다).
+- **`AWS_EC2_METADATA_V1_DISABLED=true`** 를 준다 — 토큰 없는 옛 메타데이터
+  요청(IMDSv1)으로 내려가는 길을 막는다.
+- **`credential_process`(외부 명령에서 자격 증명을 받는 SDK 설정)를 쓴다면
+  그 명령은 stderr 에 비밀을 쓰지 않아야 한다.** SDK 는 그 명령의 stderr 를
+  컨테이너 stderr 에 그대로 잇는다. pgconf 의 오류 정제(원인 오류의 타입
+  이름만 싣기)는 이 출력에 닿지 않는다.
+- **`rds-db:connect` 는 DB 사용자별 ARN 으로 준다** —
+  `arn:aws:rds-db:<리전>:<계정>:dbuser:<리소스 ID>/media_indexer` 처럼 사용자
+  이름까지 적는다. `dbuser:<리소스 ID>/*` 면 인스턴스 역할이 그 DB 의 어느
+  `rds_iam` 사용자로도 로그인한다.
+- **기동 상한은 SDK 설정 파일 읽기를 덮지 못한다.** 풀 설정 조립과 연결
+  확인에는 단계마다 20초 상한이 서지만, AWS 설정을 적재하며 파일을 읽는
+  동작은 취소를 따르지 않는다. `AWS_CONFIG_FILE` ·
+  `AWS_SHARED_CREDENTIALS_FILE` 이 FIFO 나 멈춘 네트워크 파일 시스템을
+  가리키면 기동이 상한 뒤에도 멈춰 있다. 운영에서는 이 변수를 두지 않거나
+  일반 파일을 가리킨다.
+
+## 사이드카 DB 계정 media_indexer 권한
+
+운영 사이드카(segment-indexer · 업로더 · 세션 결정 · 되감기 발행자)는 DB 에
+`media_indexer` 로 붙는다. 이 계정에는 아래 권한만 준다(POK-311). 단위는
+표다 — 열 단위로 주면 3번이 승인한 열이 추가될 때마다 운영 GRANT 가 깨진다.
+
+```sql
+GRANT SELECT, INSERT, UPDATE ON stream_segments TO media_indexer;
+GRANT SELECT, INSERT, UPDATE ON stream_sessions TO media_indexer;
+GRANT SELECT, INSERT ON stream_cutoffs TO media_indexer;
+GRANT SELECT, INSERT, UPDATE ON stream_published_gaps TO media_indexer;
+```
+
+- **DELETE · TRUNCATE 없음.** 사이드카는 행을 지우지 않는다.
+  `stream_cutoffs` 에는 UPDATE 도 없다 — 컷오프는 주조 때 한 번 넣고
+  (`ON CONFLICT DO NOTHING`) 고치지 않는다.
+- **DDL 없음 — `ENSURE_SCHEMA=false`.** 스키마(`internal/index/ddl.go`)는
+  별도 역할이 적용한다. 이 계정으로 `ENSURE_SCHEMA=true` 를 켜면 기동 때
+  42501 로 막힌다.
+- **그 밖에 이 계정에 따로 주는 권한은 없다 — 대신 PUBLIC(모든 계정)
+  기본 권한에 기댄다.** 시퀀스는 없고(DDL 에 `SERIAL` · `IDENTITY` 0),
+  트리거 함수 · advisory 잠금 · `set_config` 는 PUBLIC 기본 권한으로 돈다.
+  DB `CONNECT` · `public` 스키마 `USAGE` 도 PUBLIC 기본값에 기댄다 — 이것을
+  거둔 DB 라면 따로 준다. 반대로 PUBLIC 기본값이 이 목록보다 넓은 DB 가
+  있으므로 아래 사전 확인을 한다.
+- **`FOR UPDATE` 는 `stream_sessions` 에 있다**(init 업로드 확정). 행 잠금에도
+  UPDATE 권한이 필요하다. `stream_segments` 의 `FOR UPDATE NOWAIT` 는
+  janitor(`media_janitor`) 몫이다.
+- **`stream_published_gaps` 는 GAP 원장(되감기 목록에 끊김 표시로 발행한
+  조각의 장부)이다.** 되감기 발행자가 발행 전에 INSERT 로 `recorded` 를
+  기록하고, P4(목록 PUT 확정) 단계가 UPDATE 로 `put_confirmed` 를 찍는다.
+
+계정(`CREATE ROLE media_indexer LOGIN …`, IAM 인증이면 `rds_iam` 부여)은 DB
+관리자가 만든다. 비밀번호를 쓴다면 비밀 관리자에만 둔다.
+
+**운영 DB 사전 확인.** GRANT 전에 DB 관리자가 본다.
+
+```sql
+SELECT has_schema_privilege('media_indexer', 'public', 'CREATE');  -- false 여야 한다
+```
+
+- 결과가 true 면(PostgreSQL 14 이하이거나 누가 되돌린 DB) 이 계정도 표를
+  만들 수 있다 — PG15 부터 `public` 스키마 CREATE 가 PUBLIC 에서 빠졌다.
+  `REVOKE CREATE ON SCHEMA public FROM PUBLIC;` 을 하고, 임시 표도 막으려면
+  `REVOKE TEMP ON DATABASE <DB 이름> FROM PUBLIC;` 을 한다. 역할 시험의
+  「CREATE TABLE 42501」 도 이 PG15+ 기본값을 전제로 한다.
+- **계정 하드닝**(만들 때 확인): `NOSUPERUSER` · `NOCREATEDB` ·
+  `NOCREATEROLE` · `rds_superuser` 비소속 · `CONNECTION LIMIT`(사이드카 두
+  풀의 최대 연결 수에 여유를 더한 값) · 역할 단위 `statement_timeout`
+  (`ALTER ROLE media_indexer SET statement_timeout = …`).
+- **표 소유자는 DDL 역할이다.** `media_indexer` 가 표를 소유하면 소유자는
+  GRANT 와 상관없이 모든 권한을 가지므로 이 목록이 무의미해진다.
+- **새 표 · 열이 생기면 이 목록을 다시 본다.** 새 표는 GRANT 를 더하고
+  (`internal/pgtest/role.go` · 위 블록 · 운영 GRANT 를 함께), 새 열은 표
+  단위 권한을 자동으로 받으므로 사이드카가 그 열을 고쳐도 되는지 본다.
+
+**잔여 위험.** 이 목록이 막지 못하는 것이다.
+
+- **표 단위 UPDATE 는 사이드카가 쓰지 않는 열도 연다.** 예:
+  `stream_sessions` 의 `dvr_*` · `vod_*`, `stream_segments` 의 `s3_key`.
+  사이드카 자격이 새면 이 열을 고칠 수 있다. 열 단위 GRANT · 트리거는 열
+  추가마다 운영 GRANT 가 깨지므로 넣지 않았다.
+- **advisory 잠금은 이 목록이 막지 않는다.** 잠금 함수(`pg_advisory_*`)는
+  기본값으로 PUBLIC 이 실행할 수 있고, 키 단위 권한은 없다. 그래서 이 DB 에
+  로그인하는 다른 계정이 컷오프 주조 잠금 키(`hashtext('pc_cutoff_' || stream_id)`)를
+  쥐고 놓지 않으면, 그 스트림의 컷오프 주조가 `lock_timeout` 으로 실패를
+  되풀이한다. 방어는 둘이다: 이 DB 의 로그인 계정 수를 줄이는 것, 그리고 잠금
+  함수의 `EXECUTE` 를 PUBLIC 에서 회수하고 사이드카 계정에만 주는 것(함수 소유자
+  권한이 필요하다 — RDS 의 마스터 사용자로 되는지는 아직 확인하지 않았다).
+  회수에는 두 전제가 붙는다. 이 DB 에서 advisory 잠금을 쓰는 다른 계정(마이그레이션
+  도구 등)에도 함께 허용해야 그 계정이 깨지지 않는다. `GRANT` · `REVOKE` 는 DB
+  마다 따로 적용된다 — 이 DB 하나에만 하면 다른 DB 는 그대로다. 새로 만드는
+  DB 는 `template1` 을 복제하므로 새 DB 까지 막으려면 `template1` 에도 한다.
+  운영에 앞서 스테이징 DB 에서 회수와 관련 도구 동작을 먼저 확인한다.
+  함수를 허용받은 계정끼리는 키 단위로 막을 수 없다.
+- **`stream_cutoffs` 가 오염되면 DBA 가 손으로 고친다.** 이 계정에는
+  UPDATE · DELETE 가 없어 잘못 들어간 컷오프를 사이드카가 고칠 수 없다.
+
+**시험 경로.** 목록의 정본은 `internal/pgtest/role.go` 한 곳이고, 위 블록과
+같다는 것을 `internal/pgtest/role_test.go` 가 단언한다. SQL 이 사는 패키지마다
+같은 권한만 가진 시험 역할로 사이드카 저장 경로 전부를 실 PG 에서 돌린다
+(문장마다 성공 확인 · 상태 전이 단언 · 권한 하나를 거두면 42501 인 음성 대조).
+
+- `internal/index/media_indexer_role_pg_test.go` — 장부 기록 · 업로드 장부 ·
+  되감기 읽기
+- `internal/session/media_indexer_role_pg_test.go` — 세션 결정 · 개시
+- `internal/rewind/publish/media_indexer_role_pg_test.go` — fence · P0 ·
+  P2′ · P4 · 화해 · GAP 원장
+
+로컬 compose 는 소유자 계정(`POSTGRES_USER`)으로 붙어 이 경계를 확인하지
+못한다 — 위 시험이 그 몫이다.
 
 ## 되감기 M3 이관 기록 (POK-195)
 
@@ -2329,14 +2485,64 @@ janitor 는 파일을 지운 뒤 장부 갱신에 실패한 행을 「부채」�
 - **로컬 compose 의 한계**: 로컬 janitor 는 `POSTGRES_USER`(DB 소유자 계정)로
   붙는다. 최소 권한 경계는 로컬 실행으로는 확인되지 않는다 — 위 시험이 그
   몫이다.
-- **운영 DSN 은 `POSTGRES_SSLMODE=verify-full`** 로 두고 RDS CA 번들 파일을
-  janitor 환경 변수 `PGSSLROOTCERT`(컨테이너 안 경로)로 준다 — 서버 인증서와
-  호스트 이름까지 검증해야 중간자를 막는다(pgx 가 이 변수를 읽는다 — 2026-10-20
-  확인, 실험 기록 `c21-pgsslrootcert.txt`). 최소한 `require` 다: 암호화는 되지만
-  서버 인증서를 검증하지 않는다. 기본 `prefer` 는 TLS 를 못 쓰면 평문으로
-  내려간다. `require` 이상이면 TLS 를 받지 않는 서버에는 붙지 않고 기동
-  오류(`janitor_failed`)로 끝난다(2026-10-20 실행 확인 — 실험 기록
+- **운영 DSN 은 `POSTGRES_SSLMODE=verify-full`** 로 두고 CA 번들 경로를
+  `POSTGRES_SSLROOTCERT=/etc/pokeclip/rds-ca/global-bundle.pem` 으로 준다.
+  이 경로는 이미지에 든 RDS 통합 번들이다(아래 「RDS CA 번들」 절). 서버
+  인증서와 호스트 이름까지 검증해야 중간자를 막는다. 경로는 기동 때 확인한다
+  — 절대 경로 · 일반 파일 · PEM 인증서 1장 이상이 아니면 기동 오류다.
+  `PGSSLROOTCERT` 는 쓰지 않는다. 이것만 있고 `POSTGRES_SSLROOTCERT` 가 비면
+  기동 오류다(옛 방식 기록: pgx 가 `PGSSLROOTCERT` 를 읽는다는 2026-10-20
+  확인 — 실험 기록 `c21-pgsslrootcert.txt`). CA 를 주면 sslmode 는
+  `verify-ca` · `verify-full` 만 받는다(그 밖 값은 기동 오류).
+  **`verify-ca` 는 체인만 검증하고 호스트 이름은 보지 않는다 — 같은 CA 의
+  다른 서버를 막지 못하므로 운영은 `verify-full`.** RDS 통합 번들은 모든 AWS
+  고객의 RDS 가 쓰는 공용 CA 라, `verify-ca` 면 다른 고객의 RDS 인증서도
+  통과한다. `verify-ca` 는 운영자가
+  체인 검증만을 명시적으로 고른 경우라 허용한다. CA 를 준 `require` 는 pgx
+  가 암묵적으로 `verify-ca` 처럼 체인을 검증하지만 값이 검증을 밝히지 않고,
+  CA 없는 `require` 는 암호화만 하고 서버 인증서를 검증하지 않는다 — 그래서
+  CA 와 함께 주면 거부한다. 기본 `prefer` 는 TLS 를 못 쓰면
+  평문으로 내려간다. `require` 이상이면 TLS 를 받지 않는 서버에는 붙지 않고
+  기동 오류(`janitor_failed`)로 끝난다(2026-10-20 실행 확인 — 실험 기록
   `c9-sslmode.txt`).
+- **`POSTGRES_AUTH=iam`**(RDS IAM 인증)이면 `POSTGRES_PASSWORD` 를 비운다 —
+  연결마다 새 IAM 토큰으로 로그인한다. sslmode 는 `verify-full` 만 받고
+  `POSTGRES_SSLROOTCERT` 는 필수다.
+- **password 로 되돌리기**: 코드 되돌림과 운영 인증 전환은 다르다.
+  `POSTGRES_AUTH` 를 비우는 것만으로는 운영 계정이 비밀번호로 붙지 않는다 —
+  `rds_iam` 을 가진 계정은 IAM 인증이 비밀번호보다 우선한다. 운영 전환에는
+  계정 비밀번호 설정 · `rds_iam` 회수 · 비밀 그릇(Secrets Manager) · 그 읽기
+  정책이 함께 필요하다(엣지 설계 r7.5.8 3-6절 「password 대비 갈래」 —
+  2026-10-22 원문 대조).
+
+### RDS CA 번들
+
+`POSTGRES_SSLROOTCERT` 가 가리킬 CA 번들을 이미지에 싣는다. 사이드카와
+janitor 가 같은 이미지라 둘 다 쓴다.
+
+| 항목 | 값 |
+|---|---|
+| 저장소 파일 | `media/certs/rds-global-bundle.pem` |
+| 이미지 안 경로 | `/etc/pokeclip/rds-ca/global-bundle.pem`(root 소유 0644 · 상위 디렉터리 755 — Dockerfile 이 디렉터리를 먼저 만들고 `COPY --chmod=0644` 로 파일 권한을 고정한다, 실행 계정 10001 이 읽는다) |
+| 출처 | https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem (AWS 문서 「Using SSL/TLS」의 전 상용 리전 통합 번들) |
+| 취득 | 2026-10-22 20:19 KST(서버 `last-modified` 2026-10-14 22:38:21 GMT) |
+| sha256 | `90a6f1a7978a1b1b096dca6c57511ca48d3b8cf052f8e704baf358f34ea2f21b`(174560 바이트) |
+| 인증서 | 114장 — 전부 자체 서명 루트 CA(중간 CA 0장) |
+| 가장 이른 만료 | 2061-05-18(Amazon RDS Preview us-east-2 Root CA RSA2048 G1) |
+
+- **sha256 정본은 `media/Dockerfile` 의 `sha256sum -c` 줄 하나다.** 위 표의
+  값은 옮겨 적은 것이다. 파일이 그 값과 다르면 이미지 빌드가 멈추고, 계약
+  시험(`internal/pgconf/rdsca_bundle_test.go`)도 실패한다.
+- **갱신**: 같은 URL 에서 다시 받아 파일 교체 · Dockerfile sha256 교체 · 위
+  표 갱신을 한 커밋에 한다. 이미지를 다시 배포해야 새 번들이 쓰인다(번들은
+  기동 때 읽는다). 받은 파일은 커밋 전에 따로 검증한다 — sha256 은 받은
+  파일을 고정할 뿐 그 파일이 맞는지는 말하지 않는다.
+    1.  이전 번들과 인증서 단위로 diff 한다(주체 · 만료 · 지문 목록 비교).
+    1.  새로 생긴 인증서는 하나씩 본다 — 주체가 Amazon RDS 루트 CA 이고
+        자체 서명인지, AWS 문서의 리전 · CA 목록과 맞는지.
+    1.  `PRIVATE KEY` 블록이 없는지 확인한다(`grep -c 'PRIVATE KEY'` = 0).
+- Dockerfile 에 `POSTGRES_SSLROOTCERT` 기본값(`ENV`)은 두지 않는다 — 로컬
+  compose 의 password · `prefer` 경로에 끼어들지 않게 배포 정의가 준다.
 
 ### janitor 환경 변수
 
@@ -2350,7 +2556,7 @@ janitor 는 파일을 지운 뒤 장부 갱신에 실패한 행을 「부채」�
 | `JANITOR_BATCH` | `200` | 한 번에 읽는 행. 10000 이하 · `JANITOR_MAX_PER_CYCLE` 이하 |
 | `JANITOR_MAX_PER_CYCLE` | `2000` | 한 주기에 살펴보는 행 상한. 100000 이하 |
 | `FS_OP_TIMEOUT` | `5s` | 파일 작업 한 번의 상한. 100ms 이상 6초 이하 |
-| `POSTGRES_*` · `SEGMENT_ROOT` · `LOG_LEVEL` | 사이드카와 같음 | 위 사이드카 표 참조 |
+| `POSTGRES_*` · `SEGMENT_ROOT` · `LOG_LEVEL` | 사이드카와 같음 | 위 사이드카 표 참조. `POSTGRES_*` 에는 `POSTGRES_AUTH` · `POSTGRES_SSLROOTCERT` 가 들고, iam 이면 `AWS_REGION`(기본 `ap-northeast-2`)도 읽는다 — 규칙은 사이드카와 같은 코드(`internal/pgconf`)다. 기동 때 Ping 성공 뒤 `db_connected` 한 줄(`pool=janitor`)을 남긴다 |
 
 로컬 compose 가 janitor 에 넘기는 것은 `JANITOR_ENABLED` 와 `POSTGRES_USER` ·
 `POSTGRES_PASSWORD` · `POSTGRES_DB`(호스트 · `SEGMENT_ROOT` · `TZ` 는 고정값)뿐이다

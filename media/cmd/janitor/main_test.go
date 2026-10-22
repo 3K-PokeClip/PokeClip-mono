@@ -6,7 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -15,14 +18,25 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/janitor"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/pgconf"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/pgtest"
 )
 
 // fakeDeps 는 기동 순서의 바깥 호출을 센다.
 type fakeDeps struct {
-	mu                           sync.Mutex
-	pools, versions, roots, runs int
-	version                      int
-	versionErr                   error
+	mu                                     sync.Mutex
+	pools, confirms, versions, roots, runs int
+	version                                int
+	versionErr, confirmErr                 error
+	calls                                  []string      // 바깥 호출 차례
+	confirmBudget                          time.Duration // 연결 확인이 받은 ctx 의 남은 기한(없으면 0)
+}
+
+// note 는 바깥 호출 하나를 차례에 적는다.
+func (f *fakeDeps) note(call string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, call)
 }
 
 func (f *fakeDeps) deps(t *testing.T) deps {
@@ -31,9 +45,21 @@ func (f *fakeDeps) deps(t *testing.T) deps {
 			f.mu.Lock()
 			f.pools++
 			f.mu.Unlock()
+			f.note("newPool")
 			return pgxpool.NewWithConfig(ctx, cfg) // 연결은 첫 질의 때 — 여기서는 열지 않는다
 		},
+		confirm: func(ctx context.Context, _ *pgxpool.Pool, _ pgconf.Settings, _ *slog.Logger) error {
+			f.note("confirm")
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			f.confirms++
+			if dl, ok := ctx.Deadline(); ok {
+				f.confirmBudget = time.Until(dl)
+			}
+			return f.confirmErr
+		},
 		serverVersion: func(context.Context, *pgxpool.Pool) (int, error) {
+			f.note("serverVersion")
 			f.mu.Lock()
 			defer f.mu.Unlock()
 			f.versions++
@@ -98,8 +124,9 @@ func TestRunDisabledTouchesNothingAndWaits(t *testing.T) {
 	if code := <-done; code != exitOK {
 		t.Errorf("종료 코드 = %d, want 0", code)
 	}
-	if f.pools+f.versions+f.roots+f.runs != 0 {
-		t.Errorf("꺼짐에서 풀 %d · 버전 %d · 루트 %d · 실행 %d, want 전부 0", f.pools, f.versions, f.roots, f.runs)
+	if f.pools+f.confirms+f.versions+f.roots+f.runs != 0 {
+		t.Errorf("꺼짐에서 풀 %d · 연결 확인 %d · 버전 %d · 루트 %d · 실행 %d, want 전부 0(변이 — 연결 확인을 꺼짐 분기 앞으로)",
+			f.pools, f.confirms, f.versions, f.roots, f.runs)
 	}
 	got := find(lines(t, &out), "janitor_disabled")
 	if len(got) != 1 || got[0]["level"] != "WARN" {
@@ -171,6 +198,106 @@ func TestRunFailsWhenVersionQueryFails(t *testing.T) {
 	}
 }
 
+// POK-311 — 풀을 만든 뒤 버전 조회보다 먼저 연결을 확인한다(Ping · db_connected 줄). 확인은 기동 상한
+// (versionQueryTimeout) 안에서 돈다.
+func TestRunConfirmsConnectionBeforeVersionQuery(t *testing.T) {
+	f := &fakeDeps{version: 170000}
+	var out, errOut bytes.Buffer
+	if code := run(context.Background(), envOf(nil), &out, &errOut, f.deps(t)); code != exitOK {
+		t.Fatalf("코드 %d, want 0 — stderr %q", code, errOut.String())
+	}
+	if want := []string{"newPool", "confirm", "serverVersion"}; !slices.Equal(f.calls, want) {
+		t.Errorf("바깥 호출 차례 = %v, want %v", f.calls, want)
+	}
+	if f.confirmBudget <= 0 || f.confirmBudget > versionQueryTimeout {
+		t.Errorf("연결 확인 ctx 의 남은 기한 = %v, want 0 초과 %v 이하", f.confirmBudget, versionQueryTimeout)
+	}
+}
+
+// 연결 확인이 실패하면 버전 조회 · 루트 · 정리기 없이 janitor_failed 한 줄로 종료 코드 1 이다.
+func TestRunFailsWhenConnectionCheckFails(t *testing.T) {
+	f := &fakeDeps{version: 170000, confirmErr: errors.New("DB Ping 실패(pool=janitor)")}
+	var out, errOut bytes.Buffer
+	code := run(context.Background(), envOf(nil), &out, &errOut, f.deps(t))
+	if code != exitFailure || f.versions+f.roots+f.runs != 0 {
+		t.Errorf("코드 %d · 버전 %d · 루트 %d · 실행 %d, want %d · 0 · 0 · 0", code, f.versions, f.roots, f.runs, exitFailure)
+	}
+	if n := len(find(lines(t, &out), "janitor_failed")); n != 1 {
+		t.Errorf("janitor_failed %d줄, want 1", n)
+	}
+}
+
+// 운영 조립(deployedDeps)의 연결 확인이 닿지 않는 DB 에서 db_connected 없이 실패한다 — 줄은 Ping 성공 뒤에만 남는다.
+func TestRunDeployedLogsNoConnectedLineWhenDBUnreachable(t *testing.T) {
+	d := deployedDeps()
+	d.openRoot = func(string) (*os.Root, error) { return os.OpenRoot(t.TempDir()) }
+	var out, errOut bytes.Buffer
+	code := run(context.Background(), envOf(map[string]string{"POSTGRES_HOST": "127.0.0.1", "POSTGRES_PORT": "1"}), &out, &errOut, d)
+	recs := lines(t, &out)
+	if code != exitFailure || len(find(recs, pgconf.ConnectedEvent)) != 0 || len(find(recs, "janitor_failed")) != 1 {
+		t.Errorf("코드 %d · %s %d줄 · janitor_failed %d줄, want %d · 0 · 1",
+			code, pgconf.ConnectedEvent, len(find(recs, pgconf.ConnectedEvent)), len(find(recs, "janitor_failed")), exitFailure)
+	}
+	if strings.Contains(out.String(), "p@ss") || strings.Contains(out.String(), "p%40ss") {
+		t.Error("로그에 비밀번호가 실렸다")
+	}
+}
+
+// POK-311 실물 — 운영 조립(deployedDeps)으로 실 PG 에 붙으면 db_connected 한 줄(pool=janitor · 접속 값)이 janitor_started
+// 앞에 남는다. 정리기 실행만 바꾼다(곧장 끝남).
+//
+// 누출 검사는 이 시험이 만든 전용 역할(난수 비밀번호 · 권한 없음)로 붙어 그 난수가 로그에 없는지 본다. PG_DSN 의
+// 비밀번호를 찾으면 CI 의 postgres:postgres 처럼 비밀번호가 사용자 이름과 같을 때 user 필드에 걸려 거짓 양성이 난다.
+func TestRunDeployedLogsDBConnectedOnRealServer(t *testing.T) {
+	env := pgtest.PostgresEnv(t, "")
+	admin, err := pgxpool.New(context.Background(), os.Getenv("PG_DSN"))
+	if err != nil {
+		t.Fatalf("관리 풀 생성 실패: %v", err)
+	}
+	t.Cleanup(admin.Close) // 역할 정리(NewLoginRole 의 Cleanup)보다 먼저 등록 — 역할을 지운 뒤 닫힌다
+	role := pgtest.NewLoginRole(t, admin)
+	env["POSTGRES_USER"], env["POSTGRES_PASSWORD"] = role.Name, role.Password
+	env["JANITOR_ENABLED"] = "true"
+	d := deployedDeps()
+	d.openRoot = func(string) (*os.Root, error) { return os.OpenRoot(t.TempDir()) }
+	d.runJanitor = func(context.Context, *janitor.Janitor) error { return context.Canceled }
+	var out, errOut bytes.Buffer
+	if code := run(context.Background(), func(k string) string { return env[k] }, &out, &errOut, d); code != exitOK {
+		t.Fatalf("코드 %d, want 0 — stderr %q · 로그 %s", code, errOut.String(), out.String())
+	}
+	recs := lines(t, &out)
+	got := find(recs, pgconf.ConnectedEvent)
+	if len(got) != 1 {
+		t.Fatalf("%s %d줄, want 1", pgconf.ConnectedEvent, len(got))
+	}
+	port, _ := strconv.Atoi(env["POSTGRES_PORT"])
+	want := map[string]any{
+		"level": "INFO", "pool": "janitor", "auth": "password", "sslmode": env["POSTGRES_SSLMODE"],
+		"user": env["POSTGRES_USER"], "host": env["POSTGRES_HOST"], "port": float64(port), "db": env["POSTGRES_DB"],
+	}
+	if want["sslmode"] == "" {
+		want["sslmode"] = "prefer" // PG_DSN 에 sslmode 가 없으면 기동 기본값
+	}
+	if want["sslmode"] == "disable" {
+		want["tls"] = false // CI · 실험 PG 는 TLS 를 끈다 — 줄의 tls 가 실제 연결을 따르는지 본다
+	}
+	for k, v := range want {
+		if got[0][k] != v {
+			t.Errorf("%s[%s] = %v, want %v", pgconf.ConnectedEvent, k, got[0][k], v)
+		}
+	}
+	at := map[string]int{}
+	for i, r := range recs {
+		at[r["msg"].(string)] = i
+	}
+	if at[pgconf.ConnectedEvent] > at["janitor_started"] {
+		t.Errorf("%s 이 janitor_started 뒤에 있다", pgconf.ConnectedEvent)
+	}
+	if strings.Contains(out.String(), role.Password) {
+		t.Error("로그에 비밀번호가 실렸다")
+	}
+}
+
 func TestRunRejectsBadConfigBeforeAnything(t *testing.T) {
 	f := &fakeDeps{version: 170000}
 	var out, errOut bytes.Buffer
@@ -190,7 +317,7 @@ func TestPoolConfigCarriesSessionLimits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pc, err := poolConfig(cfg)
+	pc, err := poolConfig(context.Background(), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
