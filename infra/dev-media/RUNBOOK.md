@@ -273,7 +273,8 @@ aws iam get-role-policy --role-name "${ROLE}" \
 - **꼴:** `sudo bash -s -- <인자…> <<'STEP'` · 스크립트 · `STEP`. 인자는 블록마다 머리
   주석에 적었다. 토큰 · SHA · 파일 이름만 인자로 싣는다 — 비밀 · 주소는 싣지 않는다.
 - **실행 직전 kty 승인.** 상자를 바꾸는 블록(R0–R6 · 반영 취소 · 덧붙이기 · cut · 해제
-  적용 · 되돌림 적용 · 틀린 줄 걷기 · 응답기 살리기 · 다시 시작 · MediaMTX 최후 재시작)은
+  적용 · 되돌림 적용 · 틀린 줄 걷기 · 응답기 살리기 · 다시 시작 · IP 한도 켜기 · 끄기 ·
+  MediaMTX 최후 재시작)은
   블록마다 승인을 받는다. 읽기만 하는 블록(R1 값 단언 · 반영 취소 ⓒ · 걷기 확인)과 준비
   블록(해제 준비 · 되돌림 준비 — 살아 있는 파일을 바꾸지 않는다)도 박스 명령이라 승인
   묶음에 넣는다.
@@ -293,7 +294,8 @@ aws iam get-role-policy --role-name "${ROLE}" \
 # 셸에 붙여 넣지 않는다 — exit 는 그 스크립트만 끝낸다. 스크립트가 표준 입력으로 들어가므로
 # 본문의 어떤 명령도 표준 입력을 읽지 않는다(읽는 것은 < 나 파이프로 준다).
 # 전제: 리눅스 · bash 4.4 이상 · GNU coreutils(stat -c · mv -T · sort -z · comm -z ·
-# chown/chmod --reference) · GNU tar(--compare) · sudo · docker compose v2.
+# chown/chmod --reference) · GNU tar(--compare) · sudo · docker compose v2 ·
+# flock(util-linux — lock_ip_limit 를 부르는 블록만).
 # 종료 코드: 0 통과 · 1 일치 없음(기록 · 기대와 다르다) · 2 검사 실패(목록 · 조회 · 도구가
 # 돌지 못했다 · 인자가 틀렸다). 일치 없음은 명령 치환 · 파이프 밖에서만 낸다 — 안에서
 # 내면 바깥의 ERR 덫이 검사 실패로 바꿔 찍는다. 파일은 "$(cat -- …)" 로 읽는다 —
@@ -317,6 +319,7 @@ readonly DENY_DIR="${DEMO_DIR}/ingest-auth/deny"       # 응답기의 /etc/inges
 readonly DENY_FILE="${DENY_DIR}/deny-tokens"           # 거부 목록(살아 있는 파일)
 readonly STATE_DIR="${DEMO_DIR}/ingest-auth/state"     # 허용 연결 기록
 readonly LOGIN_DIR="${DEMO_DIR}/.ecr-login"            # R3′ 의 ECR 로그인 자격
+readonly IP_LIMIT_LOCK="${DEMO_DIR}/ip-limit.lock"     # 7-5 의 실행 잠금(비밀 아님)
 readonly RESPONDER_ID=10003                            # 응답기의 UID · GID
 readonly DENY_MAX_BYTES=65536                          # 응답기의 거부 목록 상한
 readonly TOKEN_RE='^[0-9A-HJKMNP-TV-Z]{26}$'           # 정규식 경로와 같은 식
@@ -662,15 +665,16 @@ t_backup_names() {
   done < "${WORK}/names"
 }
 
-# stray_secret_names 는 끊긴 R1 · 렌더 · R3′ 가 남길 수 있는 비밀 임시 파일(.env.next —
-# resolve 출입증 · API 비번, mediamtx.demo.yml.tmp.* — 잠금값, .ecr-login — ECR 로그인
-# 자격)의 이름을 한 줄에 하나씩 낸다.
+# stray_secret_names 는 끊긴 R1 · 렌더 · R3′ · IP 한도 켜기 · 끄기(7-5)가 남길 수 있는 비밀
+# 임시 파일(.env.next · .env.iplimit.* — resolve 출입증 · API 비번,
+# mediamtx.demo.yml.tmp.* — 잠금값, .ecr-login — ECR 로그인 자격)의 이름을 한 줄에
+# 하나씩 낸다.
 stray_secret_names() {
   local name
   ls -1A -- "${DEMO_DIR}" > "${WORK}/stray-names"   # 못 받으면 검사 실패
   while IFS= read -r name; do
     case "${name}" in
-      .env.next | mediamtx.demo.yml.tmp.* | .ecr-login)
+      .env.next | .env.iplimit.* | mediamtx.demo.yml.tmp.* | .ecr-login)
         printf '%s\n' "${name}"
         ;;
     esac
@@ -697,11 +701,30 @@ dispose_ecr_login() {
   rmdir -- "${LOGIN_DIR}"
 }
 
+# lock_ip_limit 는 IP_LIMIT_LOCK 에 flock -n 을 잡는다 — 이 프로세스가 끝나면 풀린다. 이미 잡았으면
+# 그대로다(같은 프로세스가 두 번 열면 flock 끼리 막힌다). 다른 실행이 쥐고 있으면 일치 없음이다.
+# 7-5 와 .env.iplimit.* 를 지우는 공통 정리(dispose_stray_secrets)가 잡는다 — 잠금 없이 겹치면
+# 정리의 shred 가 7-5 의 후보를 연 채로, 그 후보가 .env 로 들어간 뒤 덮어쓸 수 있다.
+lock_ip_limit() {
+  local -i rc=0
+  [[ -z "${IP_LIMIT_LOCK_FD:-}" ]] || return 0
+  command -v flock > /dev/null || check_failed 'flock 이 없다(util-linux)'
+  [[ ! -L "${IP_LIMIT_LOCK}" ]] || mismatch "링크다 — 쓰지 않는다: ${IP_LIMIT_LOCK}"
+  exec {IP_LIMIT_LOCK_FD}>> "${IP_LIMIT_LOCK}" \
+    || check_failed "잠금 파일을 열지 못했다: ${IP_LIMIT_LOCK}"
+  flock -n "${IP_LIMIT_LOCK_FD}" || rc=$?
+  (( rc != 1 )) \
+    || mismatch 'IP 한도 켜기 · 끄기(7-5)가 돌고 있다(ip-limit.lock) — 그 실행이 끝난 뒤 다시'
+  (( rc == 0 )) || check_failed "잠금을 잡지 못했다(flock 종료 ${rc})"
+}
+
 # dispose_stray_secrets 는 stray_secret_names 의 파일을 shred -u 로 지운다(링크면 멈춘다 —
 # .ecr-login 은 dispose_ecr_login). T 백업 처분 · E-2 · 반영 전 비밀 파기가 부른다 — 셋 다
-# 반영 · 렌더가 돌지 않는 안정 상태를 첫머리에서 단언한 뒤다.
+# 반영 · 렌더가 돌지 않는 안정 상태를 첫머리에서 단언한 뒤다. 먼저 lock_ip_limit 를 잡는다 —
+# 7-5 가 돌고 있으면 아무것도 지우지 않고 일치 없음이다(그 실행이 끝난 뒤 다시).
 dispose_stray_secrets() {
   local name
+  lock_ip_limit
   stray_secret_names > "${WORK}/stray"
   while IFS= read -r name; do
     if [[ "${name}" == .ecr-login ]]; then
@@ -716,9 +739,11 @@ dispose_stray_secrets() {
 # resolve 출입증 · API 비번, 렌더 산출물 백업 — 잠금값)은 shred -u(이름 제거 + 최선 노력
 # — 11-7), 나머지 일곱은 rm. 끊긴 R1 · 렌더 · R3′ 의 비밀 임시 파일도 shred -u 로 지운다. 링크 ·
 # 일반 파일 아닌 것은 지우지 않고 멈춘다. 끝에 그 이름 0 을 단언한다. 롤백 E-2 와 T 백업
-# 처분 블록이 이 함수 하나를 부른다(첫머리 단언은 각 블록에 있다).
+# 처분 블록이 이 함수 하나를 부른다(첫머리 단언은 각 블록에 있다). 지우기 전에 lock_ip_limit 를
+# 잡는다 — 7-5 가 돌고 있으면 하나도 지우지 않고 멈춘다.
 dispose_t_backups() {
   local name
+  lock_ip_limit
   for name in .env.T.bak mediamtx.demo.yml.T.bak; do
     remove_box_file shred "${DEMO_DIR}/${name}"
     remove_box_file shred "${DEMO_DIR}/${name}.part"
@@ -1846,9 +1871,42 @@ sudo docker compose -p dev-media --env-file /opt/pokeclip-demo/.env \
 | `ingestauth_denylist_changed` | 다시 읽은 파일의 집합이 바뀌었다. 합집합이라 `removed` 는 해제가 아니다 — 판정은 응답기를 다시 시작할 때까지 그대로다 |
 | `ingestauth_connlog_error` | 허용 연결 기록 쓰기 실패(새 연결 거부 — 디스크 부족은 여기로만 드러난다) |
 | `ingestauth_api_denied` `ip=…` | Control API 요청의 출발지 · 자격이 맞지 않음(8-3 의 api_auth) |
+| `ingestauth_ip_limited` `ip=…` `ip_kind=…` | 송출자 IP 하나가 시도 한도(기본 30번 몰아서, 그 뒤 3초에 하나)에 걸렸다 — 에피소드마다 한 줄. 그동안의 요청별 거절은 DEBUG 의 `publish_denied` `reason=ip_limited` 로만 난다. `ip_kind=public` 이 정상이다 — 공인 송출자인데 `private` 면 출발지가 바뀐 것(전원이 한 키로 묶인다 — 7-5 로 끈다) |
+| `ingestauth_ip_limit_released` `denied=…` `limited_for_ms=…` | 그 IP 의 통이 다시 다 찼다(에피소드 끝). 같은 IP 가 돌아오지 않으면 늦게 나오거나 안 나올 수 있다 |
+| `ingestauth_ip_limit_released_summary` `count=…` `denied_total=…` | 정리 한 번에 끝난 에피소드가 32개를 넘었다 — 넘은 몫을 한 줄로 묶었다(개수 · 거절 합) |
+| `ingestauth_ip_limit_full` · `_recovered` `state_seq=…` | 기록하는 IP 가 상한(16,384)에 닿아 새 IP 를 한도 밖에 세우는 중 · 풀림. `state_seq` 가 가장 큰 줄이 지금 상태다(아래) |
+| `ingestauth_ip_limit_unkeyed` `ip_kind=other` | 본문 `ip` 가 한도 키를 만들 수 없는 주소라 한도 밖에 세웠다 — 처음 한 번만. IP 로 해석된 값만 오므로 나오지 않는 것이 정상이다(추론) |
 | `ingestauth_caller_basic_off` (WARN, 기동마다 한 줄) | 호출자 Basic 검사를 명시로 껐다(`INGEST_AUTH_CALLER_BASIC=off`). dev-media 는 제어망이 따로 있어 출발지 검사가 MediaMTX 를 가르므로 의도된 상태다 — 고장이 아니다. prod 에서 보이면 설정 누락이다 |
 | MediaMTX `connection not found` ERR | cut 이 kick 한 연결이 이미 없어 404 가 났다 — 예상된 것이다. 가득 찬 cut 하나면 약 17,000줄이 난다 |
 
+- **`ingestauth_ip_limit_full` 이 나면 새 IP 는 한도 없이 처리 시간 예산만 탄다
+  (fail-open).** 지금 상태는 기간을 자르지 않고 기동 줄과 함께 본다(`--since` 로
+  자르면 오래전에 한 번 난 `full` 이 빠져 0줄이 된다).
+
+  ```bash
+  sudo docker compose -p dev-media --env-file /opt/pokeclip-demo/.env \
+    -f /opt/pokeclip-demo/repo/infra/dev-media/compose.yml \
+    logs --no-log-prefix ingest-auth \
+    | grep -E '"msg":"ingestauth_(started|ip_limit_(full|recovered))"'
+  ```
+
+  출력에서 **마지막 `ingestauth_started` 줄 뒤만** 본다. 그 뒤의 `full` · `recovered`
+  가운데 **`state_seq` 가 가장 큰 줄**이 지금 상태다. 전이는 한도기 잠금 안에서 번호를
+  받고 줄은 잠금 밖에서 쓰여, 줄의 차례로는 가릴 수 없다. 번호는 응답기가 다시 뜨면
+  1 부터 다시 센다. 마지막 기동 뒤에 `full` · `recovered` 가 없으면 「상한 경보
+  없음(정상)」이다. `ingestauth_started` 줄조차 없으면(로그 회전 · 컨테이너 교체로
+  잘림) 「상태 미확인」이다 — kty 에게 알린다. `full` 이 가장 큰 번호여도 이미 풀렸을
+  수 있다 — `recovered` 는 새 IP 가 올 때만 나서, 홍수가 끝난 뒤 새 송출이 없으면
+  `full` 이 마지막으로 남는다. 항목은 보통 길어야 약 90초 뒤 만료되므로 다음 새
+  송출이 오면 `recovered` 가 난다.
+  `full` 이면 kty 에게 알린다. `full` 자체가 홍수의 신호다 — 서로 다른 IP 가 짧은
+  사이에 상한(16,384)만큼 왔다(항목은 보통 길어야 약 90초 산다). 주소를 바꿔 가며
+  쏘는 홍수는 한도로 막지 못하고 처리 시간 예산이 마지막 선이다.
+  `ingestauth_ip_limited` 는 이미 기록된 IP 가 한도에 걸렸다는 뜻이라, 새 주소마다
+  한 번씩 오는 이 홍수를 가리지 못한다. 응답기를 다시 띄우거나 끄지 않는다 — 다시
+  띄우면 기록이 비어 IP 마다 30번을 다시 받고, 끄면 이미 기록된 IP 의 한도까지
+  사라진다. 만료 항목은 새 IP 가 올 때 1초에 한 번 회수되니, `recovered` 가 가장 큰
+  번호가 될 때까지 지켜본다.
 - **차례 거절은 auth 장애 뒤 회복이 늦는 모양이다.** 끊긴 뒤 300초 안(5초 재시도 간격
   구간)이면 회복은 송출 하나 약 9초, 묶음 약 10–18초다. 최악 약 22초는 차례를 먼저 가진
   거절 토큰 · 계속 실패하는 토큰이 없고 콜드 첫 재확인이 시한(1.125초) 안일 때의 값이다.
@@ -1928,6 +1986,243 @@ sudo sed -n 's/^MTX_API_PASS=//p' /opt/pokeclip-demo/.env \
   401(`connlog_unwritable`)이다. 직전 세대(`.1`) 자리의 링크 · FIFO · 큰 파일은 기동을
   막지 않고 cut 이 그대로 따라 읽는다 — 세대 자리에 링크 · FIFO · 큰 파일을 두지 않는다.
   지워졌으면 응답기를 다시 시작한다(8-3 `connlog_unreadable`).
+
+### 7-5. IP 한도 켜기 · 끄기
+
+응답기는 publish 송출자 IP(IPv6 는 /64)마다 resolve 를 부르는 시도를 센다 — 30번은 몰아
+쓰고 그 뒤 3초에 하나(`INGEST_AUTH_IP_LIMIT` · `_BURST` · `_INTERVAL`, 기본 on · 30 · 3s).
+한 NAT 뒤 송출자들과 한 호스트에서 쏘는 벤치는 같은 IP 라 함께 센다 — 한 물결 30 을 넘는
+벤치는 끄고 돌린다. 공인 송출자의 한도 로그가 `ip_kind=private` 이거나 서로 다른 송출자가
+같은 `ip` 로 찍히면 곧바로 끈다(전원이 한 키로 묶여 30번 뒤 모두 거절된다).
+
+**끄기 · 켜기는 응답기 재생성이다 — `restart` 가 아니다.** compose 는 `.env` 의
+`INGEST_AUTH_IP_LIMIT` 를 응답기에 넘기고(`compose.yml` 의 그 줄), `restart` 는 환경을 다시
+읽지 않는다. 적용값은 새 `ingestauth_started` 의 `ip_limit` 로 확인한다. 재생성 동안(다시
+시작과 같은 창) 모든 계정의 새 연결 · 재접속이 거부된다.
+
+```bash
+# ── 블록: IP 한도 켜기 · 끄기 — 머리 + 이 본문. 인자 on | off ──
+# .env 의 INGEST_AUTH_IP_LIMIT 한 줄을 인자로 맞추고 응답기만 다시 만든다(up -d
+# --force-recreate). 새 ingestauth_started 의 ip_limit 가 인자와 같은지, MediaMTX 의
+# 시작 시각이 앞뒤로 같은지 본다. compose 에 전달 줄이 없으면(상자 체크아웃이 그 판 전) 바꾸지 않고 멈춘다.
+# 처음 바꿀 때 원래 키 줄(없었으면 빈 값)을 ip-limit.orig 에 적어 둔다. 인자가 원래 실효값(키가
+# 없으면 on)과 같으면 원래 줄로(없었으면 줄을 빼서) 되돌리고 그 파일을 지운다 — 반대 인자로
+# 돌리면 .env 가 바이트까지 처음과 같다. 그래서 지원 형식(ip_limit_line)이 아니면 바꾸지 않는다.
+# 새 .env(비밀)는 .env.iplimit.* 에 쓰고, 끼우기 전에 실패하면 덫이 shred -u 로 지운다. 끊긴
+# 앞 실행이 남긴 것은 다시 돌리면 첫머리가 지운다. 회수부터 끝까지 머리의 lock_ip_limit 잠금을
+# 쥔다 — 두 실행이 겹치거나 공통 비밀 정리가 돌고 있으면 뒤의 것이 멈춘다.
+readonly IP_LIMIT_KEY='INGEST_AUTH_IP_LIMIT'
+readonly IP_LIMIT_ORIG="${DEMO_DIR}/ip-limit.orig"   # 원래 키 줄 — 비밀 아님
+# 지원하는 키 줄. 키 이름이 든 줄은 # 주석 줄 밖에서 이것 하나뿐이어야 한다.
+readonly IP_LIMIT_LINE_RE="^${IP_LIMIT_KEY}=(on|off)\$"
+# 키 이름이 낱말로 든 줄(# 으로 시작하는 줄 · _BURST 같은 다른 이름은 뺀다)
+readonly IP_LIMIT_ANY_RE="^([^#A-Za-z0-9_]|[^#].*[^A-Za-z0-9_])?${IP_LIMIT_KEY}"\
+"([^A-Za-z0-9_]|\$)"
+ENV_TMP=''    # 끼우기 전의 새 .env — 끼우면 비운다
+ORIG_TMP=''   # 끼우기 전의 새 기억 파일 — 끼우면 비운다
+# 머리의 덫(WORK 지우기)에 두 임시 파일 지우기를 더한다
+trap 'discard_env_tmp; discard_orig_tmp; rm -rf -- "${WORK}"' EXIT
+
+# discard_env_tmp 는 끼우지 못한 새 .env 를 shred -u 로 지운다.
+discard_env_tmp() {
+  if [[ -n "${ENV_TMP}" && -f "${ENV_TMP}" && ! -L "${ENV_TMP}" ]]; then
+    shred -u -- "${ENV_TMP}"
+  fi
+}
+
+# discard_orig_tmp 는 끼우지 못한 새 기억 파일(비밀 아님)을 지운다.
+discard_orig_tmp() {
+  if [[ -n "${ORIG_TMP}" && -f "${ORIG_TMP}" && ! -L "${ORIG_TMP}" ]]; then
+    rm -f -- "${ORIG_TMP}"
+  fi
+}
+
+# discard_stale_env_tmps 는 끊긴 앞 실행이 남긴 임시 파일을 지운다 — .env.iplimit.*(비밀)는
+# shred -u, ip-limit.orig.*(기억 파일 사본)는 rm. 잠금을 쥔 뒤에만 부른다.
+discard_stale_env_tmps() {
+  local name
+  ls -1A -- "${DEMO_DIR}" > "${WORK}/iplimit-names"   # 못 받으면 검사 실패
+  while IFS= read -r name; do
+    case "${name}" in
+      .env.iplimit.*)
+        remove_box_file shred "${DEMO_DIR}/${name}"
+        echo "앞 실행이 남긴 임시 파일을 지웠다: ${name}"
+        ;;
+      ip-limit.orig.*)
+        remove_box_file rm "${DEMO_DIR}/${name}"
+        echo "앞 실행이 남긴 임시 파일을 지웠다: ${name}"
+        ;;
+    esac
+  done < "${WORK}/iplimit-names"
+}
+
+# grep_found 는 grep 을 받은 인자 그대로 부른다. 찾았으면 참(0), 없으면 거짓(1)을 돌려주고, 그 밖(읽기 오류
+# 등 — grep 종료 2 이상)은 검사 실패(종료 2)로 멈춘다 — 「없음」(일치 없음)과 도구 실패를 가른다. 마지막
+# 인자(파일)를 사유에 싣는다. || 의 왼쪽에서 불러도 check_failed 의 exit 가 선다.
+grep_found() {
+  local -i rc=0
+  grep "$@" || rc=$?
+  (( rc <= 1 )) || check_failed "grep 이 실패했다(종료 ${rc}): ${*: -1}"
+  return "${rc}"
+}
+
+# ip_limit_line 은 .env 의 키 줄을 변수 $1 에 넣는다(없으면 빈 값). 지원 형식만 받는다 —
+# .env 가 줄바꿈으로 끝나고, 키 줄은 없거나 정확히 INGEST_AUTH_IP_LIMIT=on · =off 한 줄이다.
+# 그 밖(따옴표 · 빈 값 · 인라인 주석 · CRLF · 앞 공백 · 끝 줄바꿈 없음 · 두 줄)은 바이트로
+# 되돌릴 수 없어 바꾸기 전에 멈춘다. grep 은 종료 0 · 1 만 받는다 — 2(읽기 오류)를 「없음」
+# 으로 읽으면 반쪽 .env 를 끼우게 된다. 지원 형식 밖은 일치 없음(종료 1), 읽기 오류는 검사
+# 실패(종료 2)다.
+ip_limit_line() {
+  local -r env="${DEMO_DIR}/.env"
+  local -i rc=0
+  local found   # 부르는 쪽의 이름(line)과 겹치면 printf -v 가 이것을 채운다
+  grep -E -e "${IP_LIMIT_ANY_RE}" -- "${env}" > "${WORK}/ip-limit-line" || rc=$?
+  (( rc <= 1 )) \
+    || check_failed ".env 를 읽지 못했다(grep 종료 ${rc}) — .env 를 바꾸지 않았다"
+  [[ ! -s "${env}" || "$(tail -c 1 -- "${env}" | wc -l)" == 1 ]] \
+    || mismatch '.env 가 줄바꿈으로 끝나지 않는다 — 지원 형식이 아니라 바꾸지 않았다'
+  (( $(wc -l < "${WORK}/ip-limit-line") <= 1 )) \
+    || mismatch ".env 에 ${IP_LIMIT_KEY} 줄이 둘 이상이다 — 손으로 하나로 줄인 뒤 다시"
+  found="$(cat -- "${WORK}/ip-limit-line")"
+  [[ -z "${found}" || "${found}" =~ ${IP_LIMIT_LINE_RE} ]] \
+    || mismatch "${IP_LIMIT_KEY} 줄이 지원 형식(=on · =off 그대로)이 아니다 — 바꾸지 않았다"
+  printf -v "$1" '%s' "${found}"
+}
+
+# ip_limit_orig 는 처음 바꾸기 전의 키 줄을 변수 $1 에 넣는다(빈 값 = 키 줄 없음).
+# IP_LIMIT_ORIG 가 없으면 지금 줄을 적어 두고 그것을 낸다. 지금 .env 의 형식은 늘 본다. 기억
+# 파일은 늘 줄바꿈으로 끝나는 한 줄이다(키 줄 없음 = 빈 줄) — 비었거나 줄바꿈 없이 끝나면 쓰다
+# 끊긴 것이라 「키 없음」으로 읽지 않고 멈춘다.
+ip_limit_orig() {
+  local line
+  ip_limit_line line
+  if [[ ! -e "${IP_LIMIT_ORIG}" && ! -L "${IP_LIMIT_ORIG}" ]]; then
+    write_ip_limit_orig "${line}"
+  fi
+  [[ -f "${IP_LIMIT_ORIG}" && ! -L "${IP_LIMIT_ORIG}" ]] \
+    || mismatch "일반 파일이 아니거나 링크다: ${IP_LIMIT_ORIG}"
+  [[ -s "${IP_LIMIT_ORIG}" \
+    && "$(tail -c 1 -- "${IP_LIMIT_ORIG}" | wc -l)" == 1 ]] \
+    || mismatch "${IP_LIMIT_ORIG} 가 비었거나 줄바꿈으로 끝나지 않는다(쓰다 끊김) — kty"
+  line="$(cat -- "${IP_LIMIT_ORIG}")"
+  [[ -z "${line}" || "${line}" =~ ${IP_LIMIT_LINE_RE} ]] \
+    || mismatch "${IP_LIMIT_ORIG} 가 지원하는 키 줄도 빈 값도 아니다 — kty"
+  printf -v "$1" '%s' "${line}"
+}
+
+# write_ip_limit_orig 는 IP_LIMIT_ORIG 를 $1 한 줄로 만든다 — 같은 디렉터리의 임시 파일에 쓰고
+# 되읽어 견준 뒤 이름 바꾸기로 끼운다. 쓰다 실패하면(ENOSPC 등) IP_LIMIT_ORIG 는 생기지 않고
+# 덫이 임시 파일을 지운다.
+write_ip_limit_orig() {
+  ORIG_TMP="$(mktemp -- "${IP_LIMIT_ORIG}.XXXXXX")"
+  printf '%s\n' "$1" > "${ORIG_TMP}"
+  [[ -s "${ORIG_TMP}" && "$(cat -- "${ORIG_TMP}")" == "$1" ]] \
+    || mismatch '기억 파일을 되읽은 값이 쓴 값과 다르다 — .env 를 바꾸지 않았다'
+  mv -T -- "${ORIG_TMP}" "${IP_LIMIT_ORIG}"
+  ORIG_TMP=''
+}
+
+# write_env_candidate 는 키 줄을 $1 로 바꾼(빈 값이면 뺀) 새 .env 를 ENV_TMP 에 쓴다 — 키 줄
+# 자리는 그대로, 없던 키는 끝에 붙인다. 모드 · 소유를 .env 와 맞춘다. 같은 디렉터리(root
+# 소유 — assert_demo_dir_safe)에 0600 으로 만든다 — 비밀이 든 사본을 WORK 에 두지 않는다.
+# 읽기 · 쓰기 · 메타데이터 복사가 실패하면 끼우기 전에 검사 실패(종료 2)로 멈춘다(덫이 ENV_TMP 를
+# 지운다).
+write_env_candidate() {
+  local -r env="${DEMO_DIR}/.env"
+  local -i rc=0
+  ENV_TMP="$(mktemp -- "${DEMO_DIR}/.env.iplimit.XXXXXX")"
+  KEY="${IP_LIMIT_KEY}=" LINE="$1" awk '
+    index($0, ENVIRON["KEY"]) == 1 {
+      seen = 1
+      if (ENVIRON["LINE"] != "") print ENVIRON["LINE"]
+      next
+    }
+    { print }
+    END { if (!seen && ENVIRON["LINE"] != "") print ENVIRON["LINE"] }
+  ' < "${env}" > "${ENV_TMP}" || rc=$?
+  (( rc == 0 )) \
+    || check_failed "새 .env 를 만들지 못했다(종료 ${rc}) — .env 를 바꾸지 않았다"
+  chmod --reference="${env}" -- "${ENV_TMP}"
+  chown --reference="${env}" -- "${ENV_TMP}"
+}
+
+main() {
+  (( $# == 1 )) && [[ "$1" == on || "$1" == off ]] \
+    || check_failed '사용법: on | off'
+  local -r want="$1" env="${DEMO_DIR}/.env"
+  local mtx_id='' before after since orig orig_value target
+  assert_demo_dir_safe
+  grep_found -q 'INGEST_AUTH_IP_LIMIT:' -- "${REPO}/${COMPOSE_YML}" \
+    || mismatch 'compose.yml 에 INGEST_AUTH_IP_LIMIT 전달 줄이 없다 — .env 로 바꿀 수 없다'
+  assert_ready_to_start_ingest_auth
+  lock_ip_limit
+  discard_stale_env_tmps
+  echo ".env 앞: $(sha256sum -- "${env}" | cut -c1-12)"
+  ip_limit_orig orig
+  orig_value=on
+  [[ -z "${orig}" ]] || orig_value="${orig#"${IP_LIMIT_KEY}="}"
+  target="${IP_LIMIT_KEY}=${want}"
+  [[ "${want}" != "${orig_value}" ]] || target="${orig}"
+  write_env_candidate "${target}"
+  echo '.env 교체 시작 — 이 줄이 없으면 .env 는 그대로다'
+  mv -T -- "${ENV_TMP}" "${env}"
+  ENV_TMP=''
+  echo '.env 교체함 — 이 줄 뒤의 실패는 교체 뒤 실패다'
+  echo ".env 뒤: $(sha256sum -- "${env}" | cut -c1-12)"
+  if [[ "${target}" == "${orig}" ]]; then
+    remove_box_file rm "${IP_LIMIT_ORIG}"
+    echo '.env 를 원래 키 줄로 되돌렸다'
+  fi
+  container_id mediamtx mtx_id
+  before="$(docker inspect -f '{{.State.StartedAt}}' "${mtx_id}")"
+  since="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  echo "재생성 명령: ${since}"
+  compose_up_masked live_compose -d --no-deps --force-recreate ingest-auth
+  wait_ingest_auth_healthy
+  echo "healthy: $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  live_compose logs --no-log-prefix --since "${since}" ingest-auth \
+    > "${WORK}/auth.log"
+  grep_found '"msg":"ingestauth_started"' -- "${WORK}/auth.log" \
+    > "${WORK}/started" || mismatch '재생성 뒤 ingestauth_started 줄이 없다'
+  grep_found -q "\"ip_limit\":\"${want}\"" -- "${WORK}/started" \
+    || mismatch "새 ingestauth_started 의 ip_limit 가 ${want} 가 아니다"
+  after="$(docker inspect -f '{{.State.StartedAt}}' "${mtx_id}")"
+  [[ "${after}" == "${before}" ]] || mismatch 'MediaMTX 가 다시 시작됐다 — 「응답기만」이 깨졌다'
+  echo "ip_limit=${want}"
+}
+main "$@"
+```
+
+**지원 형식.** `.env` 는 줄바꿈으로 끝나야 하고, 키 줄은 없거나 정확히
+`INGEST_AUTH_IP_LIMIT=on` · `INGEST_AUTH_IP_LIMIT=off` 한 줄이어야 한다. 따옴표 · 빈 값 ·
+인라인 주석 · CRLF · 앞 공백 · 두 줄은 지원하지 않는다(`#` 으로 시작하는 주석 줄과
+`INGEST_AUTH_IP_LIMIT_BURST` 같은 다른 이름은 상관없다). 지원하지 않는 형식이면 `.env` 를
+건드리지 않고 종료 1 이다 — 손으로 그 형식으로 고친 뒤 다시 돌린다.
+
+**어디서 멈췄나는 `.env 교체 시작` · `.env 교체함` 두 줄로 가린다.** 블록은 이름 바꾸기
+바로 앞에 앞의 줄을, 바로 뒤에 뒤의 줄을 찍는다.
+
+- **`교체 시작` 줄이 없으면** `.env` 는 그대로다. 잠금 · 형식 · 읽기 · 쓰기 · 메타데이터
+  복사 · 기억 파일 쓰기에서 멈췄다. 마지막 줄의 사유를 고쳐 다시 돌린다.
+- **`교체 시작` 은 있고 `교체함` 이 없으면 바뀌었는지 모른다.** 이름 바꾸기 바로 앞뒤에서
+  끊겼거나(신호 · 출력 실패) 이름 바꾸기가 실패했다. 지금 해시를 읽어
+  (`sudo sha256sum -- /opt/pokeclip-demo/.env | cut -c1-12` — 읽기라 승인 묶음에 넣는다)
+  출력의 `.env 앞` 과 견준다. 같으면 그대로다 — 같은 인자로 다시 돌린다. 다르면 아래 교체
+  뒤 실패와 같다.
+- **`교체함` 이 있으면 교체 뒤 실패다.** `.env` 는 이미 `.env 뒤` 해시이고, 응답기는 아직
+  옛 값으로 돌 수 있다. 같은 인자로 다시 돌리면 이어서 끝난다(기억 파일 정리 · 재생성 ·
+  확인). 처음으로 돌아가려면 반대 인자로 돌린다.
+
+반대 인자로 되돌리면 `.env` 가 처음 `.env 앞` 해시로 돌아온다 — 처음 바꾸기 전의 키 줄을
+`ip-limit.orig`(비밀 아님)가 기억하고, 되돌릴 때 지운다. 기억 파일은 임시 파일에 써서 이름
+바꾸기로 끼우므로 쓰다 끊겨도 반쪽이 남지 않는다 — 비었거나 줄바꿈 없이 끝난 기억 파일을
+만나면 블록이 종료 1 로 멈춘다(kty). 그 파일을 손으로 지우거나 고치지 않는다. 블록은 회수부터
+끝까지 `ip-limit.lock`(비밀 아님)의 잠금을 쥔다 — 다른 7-5 실행이나 공통 비밀 정리(T 백업
+처분 · E-2 · 반영 전 비밀 파기 — 같은 잠금을 잡는다)가 돌고 있으면 종료 1 로 멈추니, 그
+실행이 끝난 뒤 다시 돌린다. 거꾸로 7-5 가 도는 동안 그 정리 블록들도 아무것도 지우지 않고
+종료 1 로 멈춘다. 블록이 끊겨 새 `.env` 사본(`.env.iplimit.*` — 비밀)이 남았으면 이 블록을
+다시 돌린다 — 첫머리가 잠금을 잡은 뒤 지운다(그 정리 블록들도 이 이름을 지운다). 실측
+기록에는 `.env` 해시 앞뒤와 `ip_limit` 값을 남긴다.
 
 ---
 
@@ -2855,7 +3150,7 @@ B 가 반영 전 렌더로 옛 판을 새로 만든다(로컬 실측 fix3 E6 접
 | 단계 E-1 | 바뀐 것 없음(읽기만) | 같은 결과다 | 어긋남(종료 1)은 T 가 A 의 기록대로 돌아오지 않았다는 뜻 — 추적 밖 이름 · 내용 포함. 아무것도 지우지 않았다. kty |
 | 단계 E-2 | T 백업 일부가 지워졌다 | 이어진다 — 있는 것만 지운다. `.env.T.bak` 이 남아 있으면 먼저 HEAD = T · 도는 서비스가 edge · ingest-auth · mediamtx · `.env` = `.env.T.bak` 을 본다. 어긋나면(B ② 에서 멈춤 — 컨테이너 내려감 · D 가 `.env` 복원 앞에서 멈춘 채 E-1 을 건너뜀 · 접힌 뒤) 아무것도 지우지 않고 멈춘다(종료 1). 링크 · 일반 파일이 아닌 이름, `.ecr-login` 안의 모르는 파일(끊긴 R3′ 의 자리 — `config.json` 만 있어야 한다)이나 잔여가 남으면(종료 1) 그 이름을 보이고 kty | B ② 에서 멈췄으면 그 행대로 B 를 끝내거나 D 로 T 에 돌아간 뒤 E-1 → E-2. `.env` 가 다르면 D 를 다시 돌린 뒤 E-1 → E-2. 접힌 뒤면 T 백업 처분 |
 | T 백업 처분 | 첫머리 단언에서 멈췄으면 지운 것이 없다. 지우는 중에 멈췄으면 T 백업 일부가 지워졌다 — 반영 전 상태는 그대로 | 이어진다 — 있는 것만 지운다. 첫머리(HEAD = 반영 전 · `.env` = `.env.pre-T.bak` · 복귀 확인)가 어긋나면(종료 1) 아무것도 지우지 않는다 — T 가 돌거나 B 가 끝나지 않았거나 접힌 끝 상태가 반영 전 기록과 다르다. `.env.pre-T.bak` 이 없으면 검사 실패(종료 2)다. 지우는 중 링크 · 일반 파일이 아닌 이름 · `.ecr-login` 안의 모르는 파일을 만나면 그것은 지우지 않고 멈춘다(종료 1 — 그 이름을 보이고 kty) | B 가 끝나지 않았으면 B 를 다시 돌린 뒤 C → 처분. 복귀 확인이 어긋나면 단계 C 행과 같다(kty). T 가 돌면 처분하지 않는다 — 그 T 백업은 롤백의 길이다. 반영 전 비밀을 먼저 지웠으면 이 블록은 돌지 못한다(11-7) |
-| 반영 전 비밀 파기 | 첫머리(T 백업 남음 · 안정 상태 아님)에서 멈췄으면 지운 것이 없다. 지우는 중에 멈췄으면 비밀 하나만 지워졌을 수 있다 — `.env.pre-T.bak` 을 맨 먼저 지운다 | 이어진다 — 있는 것만 지운다. `.env.pre-T.bak` 이 이미 없으면 롤백 길이 이미 없어 안정 상태 단언을 건너뛴다 | T 백업이 남았으면 접힌 뒤는 T 백업 처분, T 가 도는 리허설 뒤는 E-1 → E-2 가 먼저다. 안정 상태(접힌 끝 · T 정착)가 아니면 반영 도중 · 접는 도중이다 — 반영(4절) · 반영 실패 복구(5절) · 롤백을 그 행대로 끝낸 뒤 다시. 「MediaMTX 가 제어망에 붙어 있지 않다」면 R5 끝 · R6 앞이다(반영은 R6 부터 잇는다). 링크 · 일반 파일이 아닌 이름 · `.ecr-login` 안의 모르는 파일로 멈췄으면(종료 1) 그 이름을 보고 kty |
+| 반영 전 비밀 파기 | 첫머리(T 백업 남음 · 안정 상태 아님 · 7-5 실행 중)에서 멈췄으면 지운 것이 없다. 지우는 중에 멈췄으면 비밀 하나만 지워졌을 수 있다 — `.env.pre-T.bak` 을 맨 먼저 지운다 | 이어진다 — 있는 것만 지운다. `.env.pre-T.bak` 이 이미 없으면 롤백 길이 이미 없어 안정 상태 단언을 건너뛴다 | T 백업이 남았으면 접힌 뒤는 T 백업 처분, T 가 도는 리허설 뒤는 E-1 → E-2 가 먼저다. 안정 상태(접힌 끝 · T 정착)가 아니면 반영 도중 · 접는 도중이다 — 반영(4절) · 반영 실패 복구(5절) · 롤백을 그 행대로 끝낸 뒤 다시. 「MediaMTX 가 제어망에 붙어 있지 않다」면 R5 끝 · R6 앞이다(반영은 R6 부터 잇는다). 「IP 한도 켜기 · 끄기(7-5)가 돌고 있다」면 그 실행이 끝난 뒤 다시. 링크 · 일반 파일이 아닌 이름 · `.ecr-login` 안의 모르는 파일로 멈췄으면(종료 1) 그 이름을 보고 kty |
 | 명령 도중 끊김(프로세스가 죽음 — 상자 재부팅 · 명령 시한 등) | 트리 일부만 바뀌었거나 `.git/index.lock` 이 남았다. HEAD 는 옛 값일 수 있다 | `clean` · `tar` 풀기 도중이면 이어진다(남은 이름이 두 목록 안이고 `clean` · `tar` 가 다시 맞춘다 — 끊긴 뒤 상태를 손으로 만들어 본 로컬 실측 S7-7 L10). `apply` 도중이면 손 수정 패치가 고치는 파일이 지워지거나 잘린 채일 수 있다 — 그 파일이 `compose.yml` 이면 첫 `down` 이 compose 파일을 읽지 못해 같은 자리에서 다시 멈춘다(종료 2 — `failed to parse …/compose.yml` · `compose file … is invalid`. B 는 잘리거나 없는 compose.yml 을 손으로 만들어 본 로컬 실측 S7-7 L10, D 는 추론). `reset` · `checkout` 도중이면 지우기 전에 멈춘다(종료 2) — `reset` 이 남은 lock 에서, 또는 첫 `down` 이 HEAD 로 고른 env 와 판이 어긋난 compose 의 `:?` 에서 | kty — 남은 lock · 트리 상태를 보고 정한다(lock 을 지우는 것은 승인). `compose.yml` 이 깨졌으면 `sudo -u <체크아웃 소유자> git -C /opt/pokeclip-demo/repo checkout -- infra/dev-media/compose.yml`(그때 HEAD 판으로 되돌린다 — 승인) 뒤 B · D 를 다시 돌린다(B 에서 이어짐 — 같은 로컬 실측). 블록은 RunShellScript 로 보내 세션 끊김으로는 이 행에 오지 않는다 |
 
 ### 11-6. 접은 뒤 다시 T 로
@@ -2947,10 +3242,12 @@ main "$@"
 
 ```bash
 # ── 블록: 반영 전 비밀 파기 — 머리 + 이 본문. 인자 없음. 롤백 창 닫기 2. 지운다 ──
-# 실행 직전 kty 승인(승인 문장 — 11-1). 첫머리 단언 셋 가운데 하나라도 어긋나면 아무것도
+# 실행 직전 kty 승인(승인 문장 — 11-1). 첫머리 단언 넷 가운데 하나라도 어긋나면 아무것도
 # 지우지 않고 멈춘다(종료 1). ① 상자 디렉터리. ② T 백업이 하나도 없다 — T 백업 처분(접힌
 # 뒤) · E-2(리허설 뒤)가 먼저다. ③ 반영 전 .env 백업이 남아 있으면 안정 상태 둘 가운데
-# 하나다(assert_settled_for_pre_t_disposal). 지운 뒤에는 이 판으로 롤백할 수 없다.
+# 하나다(assert_settled_for_pre_t_disposal). ④ IP 한도 켜기 · 끄기(7-5)가 돌고 있지 않다 —
+# 첫 삭제 전에 lock_ip_limit 를 잡는다(뒤의 dispose_stray_secrets 도 같은 잠금이라 그대로
+# 지나간다). 지운 뒤에는 이 판으로 롤백할 수 없다.
 
 # assert_mediamtx_on_control_net 은 도는 MediaMTX 가 T 의 컨테이너인지 본다 — 제어망
 # (mtx-control)은 T 의 compose 에만 있어, R6 이 다시 만든 MediaMTX 만 그 망에 붙는다. R5 는
@@ -3011,12 +3308,13 @@ main() {
   if [[ -e "${pre_env}" || -L "${pre_env}" ]]; then
     assert_settled_for_pre_t_disposal
   fi
+  lock_ip_limit   # ④ — 7-5 가 돌고 있으면 아무것도 지우지 않고 일치 없음
   for name in .env.pre-T.bak mediamtx.demo.yml.pre-T.bak; do
     remove_box_file shred "${DEMO_DIR}/${name}"
     remove_box_file shred "${DEMO_DIR}/${name}.part"
   done
-  # 끊긴 R1 · 렌더 · R3′ 가 남긴 비밀 임시 파일(.env.next · mediamtx.demo.yml.tmp.* ·
-  # .ecr-login)
+  # 끊긴 R1 · 렌더 · R3′ · 7-5 가 남긴 비밀 임시 파일(.env.next · .env.iplimit.* ·
+  # mediamtx.demo.yml.tmp.* · .ecr-login)
   dispose_stray_secrets
   # 비밀이 아닌 일곱은 남긴다. 끊긴 보존이 남긴 그 .part 만 지운다
   for name in sha head status worktree.patch untracked.z untracked.tgz \
@@ -3027,7 +3325,7 @@ main() {
   while IFS= read -r name; do
     case "${name}" in
       *.pre-T.bak | *.pre-T.bak.part | pre-T.*.part | .env.next \
-        | mediamtx.demo.yml.tmp.* | .ecr-login)
+        | .env.iplimit.* | mediamtx.demo.yml.tmp.* | .ecr-login)
         left+="${name} "
         ;;
     esac

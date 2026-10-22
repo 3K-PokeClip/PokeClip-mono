@@ -71,6 +71,10 @@ services:
       INGEST_AUTH_CALLER_BASIC: "off"
       # debug · info · warn · error. 바꾸려면 이 줄을 고치고 응답기만 다시 만든다.
       LOG_LEVEL: "info"
+      # 송출자 IP별 시도 한도(on · off — 기본 on). 끄려면 .env 에 INGEST_AUTH_IP_LIMIT=off 를 두고
+      # `docker compose up -d --force-recreate ingest-auth` 로 응답기를 다시 만든다 — restart 는 환경을 다시 읽지 않는다.
+      # 적용값은 ingestauth_started 의 ip_limit 로 확인한다.
+      INGEST_AUTH_IP_LIMIT: "${INGEST_AUTH_IP_LIMIT:-on}"
     volumes:
       # 거부 목록 — 디렉터리를 마운트한다(이름을 바꿔 끼우는 편집이 컨테이너에 닿게). 긴 꼴 bind 로 호스트 경로를 만들지 않는다 —
       # 디렉터리가 없으면 빈 디렉터리(= 거부 목록 없음)로 뜨지 않고 기동이 실패한다.
