@@ -1210,7 +1210,23 @@ aws ssm start-session --target <instance-id>
       } > "${DEMO_DIR}/.env.next"
       chown root:root "${DEMO_DIR}/.env.next"
       chmod 0600 "${DEMO_DIR}/.env.next"
-      command mv -T "${DEMO_DIR}/.env.next" "${DEMO_DIR}/.env" && echo '.env 를 끼웠다'
+      if [[ "$(grep -cxF -- "DEMO_HOME=${DEMO_DIR}" \
+            "${DEMO_DIR}/.env.next")" == 1 \
+          && "$(grep -cxE -- 'STREAM_KEY_RESOLVE_TOKEN=[0-9a-f]{64}' \
+            "${DEMO_DIR}/.env.next")" == 1 \
+          && "$(grep -cxE -- 'MTX_API_PASS=[0-9a-f]{64}' \
+            "${DEMO_DIR}/.env.next")" == 1 \
+          && "$(grep -c -- '^STREAM_KEY_RESOLVE_URL=' \
+            "${DEMO_DIR}/.env.next")" == 1 \
+          && "$(grep -c -- '^MTX_IMAGE_REGISTRY=' \
+            "${DEMO_DIR}/.env.next")" == 1 \
+          && "$(wc -l < "${DEMO_DIR}/.env.next")" == 5 ]]; then
+        command mv -T "${DEMO_DIR}/.env.next" "${DEMO_DIR}/.env" \
+          && echo '.env 를 끼웠다'
+      else
+        shred -u -- "${DEMO_DIR}/.env.next"
+        echo '멈춤: .env.next 가 다섯 줄 꼴이 아니다 — .env 는 그대로다'
+      fi
     else
       echo '멈춤: 반영 전 보존(R0)이 먼저다'
     fi
@@ -1271,6 +1287,11 @@ fi
 - `.env.next` 를 다 쓴 뒤 이름 바꾸기로 끼우므로 세션이 끊겨도 반쪽 `.env` 가 생기지
   않는다. 남은 `.env.next` 는 비밀(출입증 · API 비번)이 든 파일이라 위 블록으로 지우고
   다시 친다.
+- 끼우기 전에 `.env.next` 가 키마다 정확히 한 줄인 다섯 줄인지 본다 — `DEMO_HOME` 은
+  `DEMO_DIR` 그대로, 출입증 · API 비번은 64자 소문자 hex(R1 값 단언과 같은 기준). 주소 ·
+  레지스트리 값의 꼴은 뒤의 R1 값 단언이 본다. 어긋나면(옛 `.env` 의 출입증 줄이 없거나
+  둘 · CR 꼬리, `openssl` 실패로 빈 비번) `.env.next` 를 지우고 「멈춤」이다 — `.env` 는
+  그대로다.
 - 끼우기는 `command mv` 다 — AL2023 의 root 대화형 셸은 `mv` 가 `mv -i` 별칭이라
   덮어쓰기를 묻고, 붙여 넣은 다음 줄이 그 답으로 들어간다(2026-10-20 상자에서 물었다).
   거절돼도 `mv -i` 는 종료 0 이므로(GNU coreutils 8.32) 끼웠는지는 끝의 「.env 를
