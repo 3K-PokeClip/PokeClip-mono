@@ -142,8 +142,8 @@ func (s Settings) validate() error {
 		// CA 번들을 주면 검증 강도를 값으로 밝힌 sslmode 만 받는다(kty 결정 — C1 · C2 보안 검수 M).
 		//   - verify-ca: 운영자가 체인 검증만을 명시적으로 고른 경우라 허용한다. 호스트 이름은 보지 않는다
 		//     — README 에 공개하고, 운영은 verify-full 이다.
-		//   - require · prefer · allow: 「검증하는 줄 알았는데 안 하는」 상태라 거부한다. prefer · allow 는 CA 를
-		//     주어도 인증서를 검증하지 않고 평문으로 내려갈 수 있다. require 는 CA 가 있을 때만 pgx 가 암묵적으로
+		//   - require · prefer · allow: 값이 검증 강도를 밝히지 않아 거부한다. prefer · allow 는 CA 를 주어도
+		//     인증서를 검증하지 않고 평문으로 내려갈 수 있다. require 는 CA 가 있을 때만 pgx 가 암묵적으로
 		//     체인을 검증해(verify-ca 와 같다) CA 가 빠지면 조용히 무검증이 된다.
 		if s.SSLRootCert != "" && s.SSLMode != "verify-ca" && s.SSLMode != iamSSLMode {
 			return fmt.Errorf("POSTGRES_SSLROOTCERT 를 주면 POSTGRES_SSLMODE 가 verify-ca · verify-full 이어야 한다(받은 값 %q)", s.SSLMode)

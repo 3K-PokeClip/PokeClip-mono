@@ -431,7 +431,9 @@ SELECT has_schema_privilege('media_indexer', 'public', 'CREATE');  -- false 여�
   권한이 필요하다 — RDS 의 마스터 사용자로 되는지는 아직 확인하지 않았다).
   회수에는 두 전제가 붙는다. 이 DB 에서 advisory 잠금을 쓰는 다른 계정(마이그레이션
   도구 등)에도 함께 허용해야 그 계정이 깨지지 않는다. `GRANT` · `REVOKE` 는 DB
-  마다 따로 적용된다 — 이 DB 하나에만 하면 다른 DB 는 그대로다.
+  마다 따로 적용된다 — 이 DB 하나에만 하면 다른 DB 는 그대로다. 새로 만드는
+  DB 는 `template1` 을 복제하므로 새 DB 까지 막으려면 `template1` 에도 한다.
+  운영에 앞서 스테이징 DB 에서 회수와 관련 도구 동작을 먼저 확인한다.
   함수를 허용받은 계정끼리는 키 단위로 막을 수 없다.
 - **`stream_cutoffs` 가 오염되면 DBA 가 손으로 고친다.** 이 계정에는
   UPDATE · DELETE 가 없어 잘못 들어간 컷오프를 사이드카가 고칠 수 없다.
@@ -2490,7 +2492,9 @@ janitor 는 파일을 지운 뒤 장부 갱신에 실패한 행을 「부채」�
   확인 — 실험 기록 `c21-pgsslrootcert.txt`). CA 를 주면 sslmode 는
   `verify-ca` · `verify-full` 만 받는다(그 밖 값은 기동 오류).
   **`verify-ca` 는 체인만 검증하고 호스트 이름은 보지 않는다 — 같은 CA 의
-  다른 서버를 막지 못하므로 운영은 `verify-full`.** `verify-ca` 는 운영자가
+  다른 서버를 막지 못하므로 운영은 `verify-full`.** RDS 통합 번들은 모든 AWS
+  고객의 RDS 가 쓰는 공용 CA 라, `verify-ca` 면 다른 고객의 RDS 인증서도
+  통과한다. `verify-ca` 는 운영자가
   체인 검증만을 명시적으로 고른 경우라 허용한다. CA 를 준 `require` 는 pgx
   가 암묵적으로 `verify-ca` 처럼 체인을 검증하지만 값이 검증을 밝히지 않고,
   CA 없는 `require` 는 암호화만 하고 서버 인증서를 검증하지 않는다 — 그래서
