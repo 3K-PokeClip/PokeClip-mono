@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+#
+# start_test 전용 가짜 파일 명령(mktemp · chmod · mv) — 사례 디렉터리 bin/ 에 그
+# 이름의 링크로 둔다. 마지막 인자(대상)가 정한 꼴이면 실패를 흉내 내고, 아니면
+# 같은 이름의 진짜 명령(/usr/bin · /bin)으로 넘긴다. 시작 스크립트의 사이드카
+# 비밀번호 파일 단계(임시 파일 · 쓰기 · rename)를 하나씩 실패시킬 때 쓴다.
+#
+# 시험이 주는 값:
+#   PCBENCH_FAKE_FS_FAIL_GLOB  마지막 인자가 이 glob 에 맞으면 종료 1(없으면
+#                              늘 진짜 명령으로 넘긴다).
+
+set -euo pipefail
+
+main() {
+  local name="${0##*/}" glob="${PCBENCH_FAKE_FS_FAIL_GLOB:-}" dir
+  # glob 은 패턴으로 맞춘다(따옴표를 두르지 않는다).
+  # shellcheck disable=SC2053
+  if [[ -n "${glob}" && "${!#}" == ${glob} ]]; then
+    printf '가짜 %s: 실패(시험)\n' "${name}" >&2
+    exit 1
+  fi
+  for dir in /usr/bin /bin; do
+    if [[ -x "${dir}/${name}" ]]; then
+      exec "${dir}/${name}" "$@"
+    fi
+  done
+  printf '가짜 %s: 진짜 명령을 찾지 못함\n' "${name}" >&2
+  exit 2
+}
+
+main "$@"

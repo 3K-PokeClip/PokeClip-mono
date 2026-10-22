@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+#
+# start_test 전용 가짜 od — 시작 스크립트의 API 비밀번호 생성 실패를 흉내 낸다.
+# 그 사례만 PATH 앞에 이 파일을 둔다(다른 사례는 진짜 od 를 쓴다).
+#
+# 시험이 주는 값:
+#   PCBENCH_FAKE_OD_MODE  short(16진 62자) · upper(대문자 16진 64자) ·
+#                         okfail(꼴이 맞는 16진 64자를 내고 종료 1) ·
+#                         fail(종료 1). 기본 fail.
+
+set -euo pipefail
+
+readonly HEX62='00112233445566778899aabbccddeeff00112233445566778899aabbccddee'
+
+main() {
+  case "${PCBENCH_FAKE_OD_MODE:-fail}" in
+    short) printf ' %s\n' "${HEX62}" ;;
+    upper) printf ' %s\n' "$(printf '%sFF' "${HEX62}" | tr 'a-f' 'A-F')" ;;
+    okfail)
+      printf ' %sff\n' "${HEX62}"
+      exit 1
+      ;;
+    *)
+      printf '가짜 od: 실패(시험)\n' >&2
+      exit 1
+      ;;
+  esac
+}
+
+main "$@"
