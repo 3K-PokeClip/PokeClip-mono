@@ -696,7 +696,7 @@ const playbackAccessCache = new Map<
 const playbackAccessByMediaKey = new Map<string, string>();
 
 /**
- * 녹화를 부르기 직전에 출입증을 받아 둔다(POK-317). VOD 목록·편집기가 쓴다(LiveScreen은 제 갱신 타이머가 있다).
+ * 녹화를 부르기 직전에 출입증을 받아 둔다(POK-317). 편집기가 쓴다(LiveScreen은 제 갱신 타이머가 있다. 지난 방송 목록은 아직 안 받는다).
  * 받아 둔 것이 아직 쓸 만하거나 받을 필요가 없으면(녹화 재생 서버 주소가 없는 곳 포함) null이라 부른 쪽이 기다리지 않고 바로 요청한다. 실패는 기억하지 않는다.
  */
 export function ensurePlaybackAccess(

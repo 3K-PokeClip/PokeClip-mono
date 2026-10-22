@@ -280,7 +280,7 @@ describe('영상 출입증 받기와 쿠키 싣기 (POK-317)', () => {
     expect(posts()).toHaveLength(2);
   });
 
-  it('동시에 여러 번 불러도 한 번만 묻는다: 목록이 같은 방송을 한 회차에 여러 번 볼 수 있다', async () => {
+  it('동시에 여러 번 불러도 한 번만 묻는다: 편집기 화면과 미리보기가 같은 방송을 거의 동시에 부른다', async () => {
     const { api, posts } = await load(granted('2026-10-23T01:00:00Z'));
     await Promise.all([api.ensurePlaybackAccess('s1', 'k'), api.ensurePlaybackAccess('s1', 'k')]);
     expect(posts()).toHaveLength(1);

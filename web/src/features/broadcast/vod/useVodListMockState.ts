@@ -2,7 +2,6 @@
 
 import {
   broadcastTitle,
-  ensurePlaybackAccess,
   fetchAllBroadcasts,
   fetchAllJumpCards,
   mediaStreamId,
@@ -20,11 +19,6 @@ const CARD_COUNT_TTL_MS = 10 * 60_000;
  * 카드 목록을 한꺼번에 불렀다(리뷰 1라운드). 남은 것은 다음 주기로 넘어가 흩어진다
  */
 const CARD_RECOUNT_PER_POLL = 20;
-/**
- * 한 주기에 출입증을 받는 영상 키 수의 상한(POK-317). 출입증 하나가 쿠키 9장(종류 셋 × 셋)이라 키가 스무 개를 넘으면 도메인당
- * 쿠키 한도(크롬 180장)를 넘어 브라우저가 앞 출입증을 지우고, 받아 둔 것으로 여긴 키가 403이 된다(PR #320 codex). 12개면 108장이다
- */
-const VOD_ACCESS_KEYS_PER_POLL = 12;
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useToast } from '@/ui';
 import { lookupRecordingSpans, playbackConfigured } from '@/api/mediaPlayback';
@@ -244,16 +238,10 @@ export function useVodListMockState(options: VodListOptions = {}): VodListMockSt
         // 한 번만 묻는다. 방송마다 물으면 방송이 쌓인 계정은 같은 큰 요청을 주기마다 여러 번 보낸다(PR #208 codex)
         // 묻지 못했으면(오류·시한) null이다: 「녹화 없음」과 가른다(리뷰 1라운드)
         const spansByKey = new Map<string, ReturnType<typeof lookupRecordingSpans>>();
-        const spansOf = (key: string, streamId: string) => {
+        const spansOf = (key: string) => {
           let found = spansByKey.get(key);
           if (found === undefined) {
-            // CDN 뒤 녹화 목록은 출입증 쿠키가 있어야 열린다(POK-317). 한 번에 받는 키는 상한까지다: 넘는 키는 쿠키 없이 물어
-            // 「물을 수 없음」이 되고 다음 주기에 다시 묻는다
-            const access =
-              spansByKey.size < VOD_ACCESS_KEYS_PER_POLL
-                ? ensurePlaybackAccess(streamId, key)
-                : null;
-            found = Promise.resolve(access).then(() => lookupRecordingSpans(key));
+            found = lookupRecordingSpans(key);
             spansByKey.set(key, found);
           }
           return found;
@@ -272,7 +260,7 @@ export function useVodListMockState(options: VodListOptions = {}): VodListMockSt
                       () => null,
                     ),
                 // 녹화 재생 서버가 있으면 그 방송의 녹화가 실제로 있는지 본다 — 없으면 열어도 「영상 신호 없음」뿐이다
-                checkRecording(b) ? spansOf(mediaStreamId(b), b.streamId) : Promise.resolve(null),
+                checkRecording(b) ? spansOf(mediaStreamId(b)) : Promise.resolve(null),
               ]);
               // 카드 수를 못 읽었으면 앞 수를 둔다(처음이면 null, 다음 주기에 다시 잰다). 녹화 확인 결과는 카드 수와 따로 남긴다:
               // 카드 목록만 실패해도 녹화 없음을 버리면 그 방송은 「VOD 준비 중」에 갇혔다(PR #256 codex).

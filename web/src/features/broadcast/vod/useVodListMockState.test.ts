@@ -11,8 +11,6 @@ const MINE_START = Date.parse('2026-09-29T10:00:00Z');
 const api = vi.hoisted(() => ({
   spans: [] as { startMs: number; durationSeconds: number }[],
   asked: [] as string[],
-  /** 출입증 받기와 녹화 목록 묻기를 부른 순서(POK-317) */
-  order: [] as string[],
   /** 목록 끝에 더할 방송 줄 */
   extra: [] as Record<string, unknown>[],
 }));
@@ -20,17 +18,12 @@ vi.mock('@/api/mediaPlayback', () => ({
   playbackConfigured: () => true,
   lookupRecordingSpans: (key: string) => {
     api.asked.push(key);
-    api.order.push(`list:${key}`);
     return Promise.resolve(api.spans);
   },
 }));
 vi.mock('@/api/clipEditor', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/api/clipEditor')>()),
   fetchAllJumpCards: () => Promise.resolve([]),
-  ensurePlaybackAccess: (streamId: string, key: string) => {
-    api.order.push(`access:${streamId}:${key}`);
-    return Promise.resolve({ kind: 'granted', expiresAtMs: null });
-  },
   fetchAllBroadcasts: () =>
     Promise.resolve([
       {
@@ -59,7 +52,6 @@ vi.mock('@/api/clipEditor', async (importOriginal) => ({
 afterEach(() => {
   api.spans = [];
   api.asked = [];
-  api.order = [];
   api.extra = [];
 });
 
@@ -88,29 +80,6 @@ describe('useVodListMockState — 녹화 있음 판정', () => {
     const { result } = renderHook(() => useVodListMockState(), { wrapper: withToastProvider });
     await waitFor(() => expect(result.current.totalCount).toBe(2));
     expect(api.asked).toEqual(['key-shared']);
-  });
-
-  it('녹화 목록을 묻기 전에 그 방송의 출입증을 받는다: CDN 뒤 녹화 목록은 쿠키가 없으면 403이다(POK-317)', async () => {
-    const { result } = renderHook(() => useVodListMockState(), { wrapper: withToastProvider });
-    await waitFor(() => expect(result.current.totalCount).toBe(2));
-    expect(api.order[0]).toMatch(/^access:S-(mine|other):key-shared$/);
-    expect(api.order.at(-1)).toBe('list:key-shared');
-  });
-
-  it('한 번에 출입증을 받는 영상 키는 12개까지다: 키마다 쿠키 9장이라 넘기면 브라우저가 앞 출입증을 지운다(PR #320 codex)', async () => {
-    api.extra = Array.from({ length: 14 }, (_, i) => ({
-      streamId: `S-many-${i}`,
-      ingestStreamId: `key-${i}`,
-      status: 'ended',
-      relation: 'OWNER',
-      startedAt: new Date(MINE_START - (i + 2) * 24 * HOUR).toISOString(),
-      endedAt: new Date(MINE_START - (i + 2) * 24 * HOUR + HOUR).toISOString(),
-      vodExpiresAt: null,
-    }));
-    const { result } = renderHook(() => useVodListMockState(), { wrapper: withToastProvider });
-    await waitFor(() => expect(result.current.totalCount).toBe(16));
-    await waitFor(() => expect(api.asked).toHaveLength(15));
-    expect(api.order.filter((o) => o.startsWith('access:'))).toHaveLength(12);
   });
 
   it('행 제목은 치지직 제목이고, 제목이 없는 방송은 번호다(POK-259)', async () => {
