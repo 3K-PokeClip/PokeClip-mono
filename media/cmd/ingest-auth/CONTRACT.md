@@ -109,7 +109,7 @@
 | 9 | `STREAM_KEY_RESOLVE_TOKEN_FILE` | 8 대신 | 경로(값은 아님) | 8 의 값이 든 파일의 절대 경로 | `secrets.go` `resolveSecret` |
 | 10 | `LOG_LEVEL` | 선택(기본 info) | 아니오 | debug · info · warn · error. 틀리면 기동 실패 | `config.go` `logLevel` |
 | 11 | `INGEST_AUTH_BASIC_USER` | 12 와 함께 필수(14 가 off 가 아니면) | 아니오 | 호출자(MediaMTX) Basic 사용자 이름(1-1 의 14). `authHTTPAddress` URL 에 렌더되므로 **URL unreserved 문자(`A-Z a-z 0-9 - . _ ~`)만** 받는다 | `config.go` `loadCallerBasic` · `unreserved` |
-| 12 | `INGEST_AUTH_BASIC_PASS` | 11 과 함께 필수(또는 13 · 14 가 off 가 아니면) | **예** | 호출자 Basic 비밀번호. unreserved 문자만, **24자 이상**(짧으면 기동 거부 — 에러엔 변수 이름 · 최소 길이만, kty 120차). 응답기는 SHA-256 다이제스트만 쥔다 | `config.go` `loadCallerBasic` · `minCallerBasicPassLen` · `ingestauth/handler.go` `newHandler` |
+| 12 | `INGEST_AUTH_BASIC_PASS` | 11 과 함께 필수(또는 13 · 14 가 off 가 아니면) | **예** | 호출자 Basic 비밀번호. unreserved 문자만, **24자 이상**(짧으면 기동 거부 — 에러엔 변수 이름 · 최소 길이만, kty 120차). 길이 · 문자 집합만 보고 무작위성은 보지 않는다 — 같은 글자 반복 같은 약한 값도 기동은 통과하니 값은 무작위로 만든다(3절 4b). 응답기는 SHA-256 다이제스트만 쥔다 | `config.go` `loadCallerBasic` · `minCallerBasicPassLen` · `ingestauth/handler.go` `newHandler` |
 | 13 | `INGEST_AUTH_BASIC_PASS_FILE` | 12 대신 | 경로(값은 아님) | 12 의 값이 든 파일의 절대 경로 | `secrets.go` `resolveSecret` |
 | 14 | `INGEST_AUTH_CALLER_BASIC` | 선택 | 아니오 | `off` 만 받는다(명시 끔 — 11 · 12 · 13 가운데 하나라도 함께 주면 기동 거부). 그 밖의 값은 기동 거부. dev-media 는 `off`(제어망이 따로 있어 1-1 의 4 가 MediaMTX 를 가른다) | `config.go` `loadCallerBasic` · `compose.yml` |
 | 15 | `STREAM_KEY_RESOLVE_CHANNEL` | 선택(기본 `resolve-token`) | 아니오 | 4C 창구(1-3 의 2): `resolve-token`(전용) · `internal-token`(공용). 그 밖의 값은 기동 거부. prod 는 `internal-token`(118차) — 빠뜨리면 전용 헤더로 가 auth 가 401 이고 started `auth_channel=resolve-token` · `ingestauth_auth_degraded` `status=401` 로 드러난다 | `config.go` `resolveChannel` |
