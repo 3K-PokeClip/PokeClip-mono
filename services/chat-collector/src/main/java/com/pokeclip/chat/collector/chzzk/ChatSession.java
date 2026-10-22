@@ -428,7 +428,12 @@ public class ChatSession implements AutoCloseable {
         // <b>이 수립의 종료 표시를 붙잡아 둔다.</b> 필드를 매 바퀴 읽으면 다음 수립이 갈아
         // 끼운 새 표시를 보게 되어, 이미 반납된 키로 구독을 쏘는 스레드가 되살아난다.
         AtomicBoolean myStopping = stopping;
-        donationRetry = Thread.ofVirtual().name("chzzk-donation-retry").start(() -> {
+        // 🔴 <b>필드에 먼저 싣고 나서 띄운다</b>(봇 codex). 띄운 뒤에 실으면 그 사이에 온 멈춤이
+        // 옛 값(null)을 읽고 지나가, 이 스레드는 멈춤 표시를 못 본 채 한 주기를 잔다. 멈춤은
+        // 인터럽트를 한 번만 보내므로(stopDonationRetry) 뒤에 다시 잡아 줄 사람이 없다.
+        // 먼저 실으면 멈춤이 이 스레드를 보고 깨우거나, 못 봤다면 그 멈춤은 시작보다 앞이라
+        // 첫 조건에서 끝난다.
+        Thread retry = Thread.ofVirtual().name("chzzk-donation-retry").unstarted(() -> {
             while (!myStopping.get()) {
                 try {
                     Thread.sleep(donationRetryPeriod);
@@ -502,6 +507,8 @@ public class ChatSession implements AutoCloseable {
                 }
             }
         });
+        donationRetry = retry;
+        retry.start();
     }
 
     /**
