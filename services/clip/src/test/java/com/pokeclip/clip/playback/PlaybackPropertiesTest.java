@@ -111,6 +111,20 @@ class PlaybackPropertiesTest {
                 .hasMessageContaining("MEDIA_BASE_URL");
     }
 
+    /**
+     * prod에서 쿠키 도메인이 비면 쿠키가 clip을 부른 호스트(app) 전용이 되어 영상 도메인(media) 요청에 안 실린다.
+     * 재생이 전부 CDN 403인데 부팅은 초록이라, 필수 표시가 켜졌으면 여기서 막는다(POK-317). 공백뿐인 값도 빈 값이다.
+     */
+    @Test
+    void 필수이고_켜졌는데_쿠키_도메인이_비면_부팅을_거부하고_변수_이름을_말한다() {
+        for (String blank : new String[] {null, "", "   "}) {
+            PlaybackProperties p = new PlaybackProperties("K1", PEM, "https://media.test", blank, Duration.ofMinutes(60), true);
+            assertThatThrownBy(p::validate).as("cookieDomain=[%s]", blank)
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("PLAYBACK_COOKIE_DOMAIN");
+        }
+    }
+
     @Test
     void 필수이고_셋_다_있으면_켜진다() {
         PlaybackProperties p = new PlaybackProperties("K1", PEM, "https://media.test", ".pokeclip.com", Duration.ofMinutes(60), true);

@@ -1,5 +1,6 @@
 package com.pokeclip.clip.playback;
 
+import com.pokeclip.clip.support.TestPlaybackKeys;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.autoconfigure.context.ConfigurationPropertiesAutoConfiguration;
@@ -52,6 +53,48 @@ class PlaybackPropertiesContextTest {
                 });
     }
 
+    /** 서명은 켜졌는데 쿠키 도메인만 비면 prod 재생이 전부 CDN 403이다(POK-317). 키 이름으로 넣어 바인딩까지 잰다. */
+    @Test
+    void 필수이고_켜졌는데_쿠키_도메인이_비면_컨텍스트가_뜨지_않고_변수_이름을_말한다() {
+        runner.withPropertyValues(켜진_셋("pokeclip.playback.required=true", "pokeclip.playback.cookie-domain="))
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure()).rootCause().hasMessageContaining("PLAYBACK_COOKIE_DOMAIN");
+                });
+    }
+
+    /** 위 시험의 대조. 도메인이 있으면 뜬다 — 없으면 위 시험은 「켜진 셋이 늘 실패」로도 초록이다. */
+    @Test
+    void 필수이고_쿠키_도메인이_있으면_켜진_채로_뜬다() {
+        runner.withPropertyValues(켜진_셋("pokeclip.playback.required=true", "pokeclip.playback.cookie-domain=.pokeclip.com"))
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(context.getBean(PlaybackProperties.class).enabled()).isTrue();
+                });
+    }
+
+    /** 로컬 · dev는 clip과 영상이 같은 호스트라 빈 도메인이 정상이다. 필수 표시가 없으면 지금처럼 뜬다. */
+    @Test
+    void 필수_표시가_없으면_쿠키_도메인이_비어도_켜진_채로_뜬다() {
+        runner.withPropertyValues(켜진_셋("pokeclip.playback.cookie-domain="))
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(context.getBean(PlaybackProperties.class).enabled()).isTrue();
+                });
+    }
+
+    private static String[] 켜진_셋(String... more) {
+        // PEM은 여러 줄이라 리터럴 \n으로 한 줄에 싣는다(운영 환경변수와 같은 모양)
+        String pem = TestPlaybackKeys.privateKeyPem().replace("\n", "\\n");
+        String[] base = {
+                "pokeclip.playback.key-pair-id=K1",
+                "pokeclip.playback.private-key-pem=" + pem,
+                "pokeclip.playback.resource-base-url=https://media.test"};
+        String[] all = java.util.Arrays.copyOf(base, base.length + more.length);
+        System.arraycopy(more, 0, all, base.length, more.length);
+        return all;
+    }
+
     /**
      * 위 두 시험은 키를 직접 넣어 yml을 안 거친다. prod가 넣는 값은 환경변수 {@code PLAYBACK_REQUIRED}이니
      * yml이 그것을 이 키로 잇는지, 기본이 false인지를 따로 잰다. 문자열로 훑지 않고 YAML로 풀어 비교한다
@@ -64,6 +107,7 @@ class PlaybackPropertiesContextTest {
         Properties props = yaml.getObject();
         assertThat(props).isNotNull();
         assertThat(props.getProperty("pokeclip.playback.required")).isEqualTo("${PLAYBACK_REQUIRED:false}");
+        assertThat(props.getProperty("pokeclip.playback.cookie-domain")).isEqualTo("${PLAYBACK_COOKIE_DOMAIN:}");
     }
 
     @EnableConfigurationProperties(PlaybackProperties.class)

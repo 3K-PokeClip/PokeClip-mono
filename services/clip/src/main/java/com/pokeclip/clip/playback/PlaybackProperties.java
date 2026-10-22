@@ -30,6 +30,7 @@ import java.util.Base64;
  * <p><b>{@code required}가 켜졌으면 「꺼짐」도 거부한다</b>(POK-321, 엣지 T9b 대체). prod에서 셋을 통째로
  * 빠뜨려도 부팅 확인이 초록이면 재생만 조용히 503이다. 기본값은 꺼짐 허용이라 prod 런타임 변수에
  * {@code PLAYBACK_REQUIRED=true}를 넣어야 이 막이 선다. 빠뜨리면 지금처럼 재생이 꺼진 채 조용히 뜬다.
+ * 같은 표시가 <b>쿠키 도메인 빈 값</b>도 거부한다(POK-317) — 켜졌어도 쿠키가 영상 도메인에 안 실리면 결과가 같다.
  */
 @ConfigurationProperties(prefix = "pokeclip.playback")
 public class PlaybackProperties {
@@ -84,6 +85,12 @@ public class PlaybackProperties {
         }
         if (resourceBaseUrl.endsWith("/")) {
             throw new IllegalStateException("pokeclip.playback.resource-base-url은 끝에 /가 없어야 한다");
+        }
+        if (required && cookieDomain == null) {
+            // 비면 쿠키가 clip을 부른 호스트 전용이 되어 영상 도메인 요청에 안 실린다. 재생이 전부 CDN 403인데
+            // 부팅은 초록이다(POK-317). 로컬 · dev는 같은 호스트라 빈 값이 정상이고, 필수 표시가 없어 여기 안 온다.
+            throw new IllegalStateException("pokeclip.playback.required=true인데 cookie-domain(PLAYBACK_COOKIE_DOMAIN)이 비었다."
+                    + " 비면 출입증 쿠키가 영상 도메인에 안 실려 재생이 전부 403이다. 운영은 .pokeclip.com");
         }
         this.privateKey = parsePkcs8(privateKeyPem);
     }
