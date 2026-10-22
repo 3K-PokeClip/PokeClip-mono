@@ -199,7 +199,7 @@ SIGKILL 등) systemd 252 는 `ExecStop` 을 건너뛰고 `ExecStopPost` 로 간�
 | | `MEDIA STOP CLEANUP FAIL <디렉터리>` | 렌더 파일이 지운 뒤에도 남음 |
 | `paths-count.sh` | `PATHS <n>` | 경로 항목 수(송출 중 아닌 것 포함) |
 | | `PATHS FAIL incomplete` | 응답이 여러 페이지 — 원자 스냅샷 아님 |
-| | `PATHS FAIL <단계>` | `usage` · `config` · `sidecar` · `credentials` · `request` · `timeout` · `auth`(401) · `http` · `response` |
+| | `PATHS FAIL <단계>` | `usage` · `scratch`(스크래치 디렉터리를 못 만듦) · `config` · `sidecar` · `credentials` · `request` · `timeout` · `auth`(401) · `http` · `response` |
 | `paths-list.sh` | (표준 출력) 경로 이름 한 줄에 하나 | 송출 중인 ingestStreamId 목록 |
 | | `PATHS LIST <n>`(표준 오류) | 그 목록의 개수 — force 대조에 함께 넘긴다 |
 | | `PATHS LIST INCOMPLETE`(표준 오류) | 여러 페이지 — force 를 하지 않는다 |
@@ -207,7 +207,7 @@ SIGKILL 등) systemd 252 는 `ExecStop` 을 건너뛰고 `ExecStopPost` 로 간�
 | `loopback-health.sh` | `LOOPBACK OK` | 송출 → 프록시 경유 재생목록 200 |
 | | `LOOPBACK FAIL <단계>` | `usage` · `config` · `cdn-secret` · `test-key` · `mediamtx` · `scratch` · `pull` · `sender` · `playlist` · `sender-cleanup` |
 | `secret-count.sh` | `SECRET COUNT box\|ssm <n>` | 비밀 값이 든 줄 수 |
-| | `SECRET COUNT FAIL <단계>` | `usage` · `config` · `cdn-secret` · `test-key` · `api-pass`(관리 API 비밀번호 파일 없음 · 못 읽음 · 꼴 밖 — 정지 뒤에는 정상) · `journal` · `mediamtx` · `nginx` · `docker-logs` · `ssm-command` · `ssm-list` · `ssm-status` · `ssm-output` · `ssm-truncated` · `grep` |
+| | `SECRET COUNT FAIL <단계>` | `usage` · `config` · `cdn-secret` · `test-key` · `api-pass`(관리 API 비밀번호 파일 없음 · 못 읽음 · 꼴 밖 — 정지 뒤에는 정상) · `scratch` · `journal` · `mediamtx` · `nginx` · `docker-logs` · `ssm-command` · `ssm-list` · `ssm-status` · `ssm-output` · `ssm-truncated` · `grep` |
 | `ops/force-diff.sh` | `FORCE REMAINING <n>` + 남은 ID | n 이 0 이면 복구 완료 |
 | | `FORCE FAIL input A\|B\|ended` · `FORCE FAIL usage` | 입력 거부 · 인자 오류 |
 | | `FORCE FAIL count A\|B` · `FORCE FAIL empty A` | 잘린 목록(ID 줄 수가 개수 인자와 다름 · 마지막 줄에 끝 줄바꿈 없음) · A 에 ID 가 없음 |

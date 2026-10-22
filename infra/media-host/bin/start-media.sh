@@ -262,14 +262,21 @@ json_scan_helpers() {
 #   config.json 경로.
 #######################################
 check_docker_config() {
-  local host="${ECR_REGISTRY_HOST:-}" config LC_ALL=C
+  local host="${ECR_REGISTRY_HOST:-}" config size kept LC_ALL=C
   [[ -n "${host}" && -f "$1" && -r "$1" ]] || return 1
+  # 크기 · NUL 은 원본 바이트로 본다 — 명령 치환은 NUL 을 지워, 지운 뒤의 내용이
+  # 상한 안 · 정상 JSON 으로 보일 수 있다. NUL 이 하나라도 있으면 거부한다.
+  size="$(wc -c <"$1")" || return 1
+  size=$((size + 0))
+  (( size <= DOCKER_CONFIG_MAX_BYTES )) || return 1
+  kept="$(tr -d '\000' <"$1" | wc -c)" || return 1
+  (( kept + 0 == size )) || return 1
   # 끝 줄바꿈도 크기에 넣는다 — 명령 치환이 지우지 않게 표식 글자를 붙였다가
-  # 뗀다.
+  # 뗀다. 원본과 길이가 다르면(그 사이 바뀜) 거부한다.
   config="$(head -c "$((DOCKER_CONFIG_MAX_BYTES + 1))" -- "$1" && printf x)" \
     || return 1
   config="${config%x}"
-  (( ${#config} <= DOCKER_CONFIG_MAX_BYTES )) || return 1
+  (( ${#config} == size )) || return 1
   json_scan_helpers "${config}" "${host}"
 }
 

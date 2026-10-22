@@ -29,7 +29,7 @@ source "${TEST_DIR}/lib/harness.sh"
 source "${TEST_DIR}/lib/ops_fixture.sh"
 
 readonly SCRIPT='bin/secret-count.sh'
-readonly CASE_COUNT=20
+readonly CASE_COUNT=21
 # 사이드카 API 사용자 이름(compose MTX_API_USER) — Basic 값의 앞부분.
 readonly SIDECAR_API_USER='pokeclip-sidecar'
 readonly COMMAND_ID='0123abcd-4567-89ef-0123-456789abcdef'
@@ -579,6 +579,18 @@ case_box_api_pass_malformed() {
   return "${ok}"
 }
 
+# 사례 21 — box: 스크래치를 만들 수 없으면(TMPDIR 이 없는 자리) 판정 줄 없이
+# 끝나지 않고 scratch 로 실패한다(종료 1).
+case_scratch_failure() {
+  local ok=0
+  setup_box
+  ops_env+=("TMPDIR=${ops_dir}/absent")
+  run_count box || return 1
+  ops_fixture::expect_line 'SECRET COUNT FAIL scratch' 1 || ok=1
+  expect_hygiene || ok=1
+  return "${ok}"
+}
+
 main() {
   if (( $# != 0 )); then
     printf '사용: bash infra/media-host/test/secret_count_test.sh (인자 없음)\n' >&2
@@ -616,6 +628,7 @@ main() {
     case_box_api_pass_missing_with_cdn
   harness::run_case 20 'box API 비밀번호 파일 전체가 64 hex 한 줄이 아니면 api-pass' \
     case_box_api_pass_malformed
+  harness::run_case 21 'TMPDIR 없음 → scratch' case_scratch_failure
 
   if ! harness::summary "${CASE_COUNT}"; then
     exit 1

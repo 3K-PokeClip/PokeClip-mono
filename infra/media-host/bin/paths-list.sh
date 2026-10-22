@@ -42,7 +42,11 @@ main() {
   trap ops::on_exit EXIT
   trap 'exit 130' INT
   trap 'exit 143' TERM
-  ops::make_scratch
+  # 표준 오류는 판정 줄 자리다 — mktemp 의 진단은 버리고 단계 이름만 낸다.
+  if ! ops::make_scratch 2>/dev/null; then
+    ops::say 'PATHS FAIL scratch' >&2
+    exit 1
+  fi
   if ! mtx_paths::query; then
     ops::say "PATHS FAIL ${mtx_paths_step}" >&2
     exit 1

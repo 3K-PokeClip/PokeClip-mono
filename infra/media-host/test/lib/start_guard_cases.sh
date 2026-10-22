@@ -74,7 +74,8 @@ guard::case_disallowed_values() {
 # 키 · 형식 오류 · 키 중복 · 중첩 · 최상위가 배열 · 값이 객체 · 뒤에 군더더기 ·
 # JSON 문법 밖의 숫자(1e+ · 1. · 01) · 문자열 안의 모르는 이스케이프(\q) ·
 # 이스케이프 안 한 제어 문자(줄바꿈 · 탭) · JSON 공백이 아닌 공백(VT · FF),
-# 그리고 끝 줄바꿈으로 채워 크기 상한을 넘긴 파일. 모두 선행 점검 실패다.
+# 그리고 끝 줄바꿈으로 채워 크기 상한을 넘긴 파일 · NUL 두 갈래(아래). 모두
+# 선행 점검 실패다.
 # Globals:
 #   fixture_dir
 #######################################
@@ -128,6 +129,38 @@ guard::case_config_counterexamples() {
   fixture::run start-media.sh || return 1
   if ! expect_prereq_fail "MEDIA PREREQ FAIL docker-config ${path}"; then
     harness::add_reason '끝 줄바꿈으로 상한을 넘긴 config.json 이 통과함'
+    ok=1
+  fi
+  guard::case_config_nul || ok=1
+  return "${ok}"
+}
+
+#######################################
+# 사례 24 의 NUL 갈래 — 키 안에 NUL 이 든 config.json(NUL 을 지우면 정상 키가
+# 된다) · 정상 내용 뒤를 NUL 로 채워 크기 상한을 넘긴 config.json. 둘 다 원본
+# 바이트로 보면 거부해야 한다(명령 치환은 NUL 을 지운다).
+# Globals:
+#   fixture_dir
+#######################################
+guard::case_config_nul() {
+  local ok=0 h="${FIXTURE_FAKE_ECR_HOST}" path size
+  fixture::new_case
+  fixture::base_env
+  path="${fixture_dir}/docker-config/config.json"
+  printf '{"cred\000Helpers":{"%s":"ecr-login"}}\n' "${h}" >"${path}"
+  fixture::run start-media.sh || return 1
+  if ! expect_prereq_fail "MEDIA PREREQ FAIL docker-config ${path}"; then
+    harness::add_reason '키 안에 NUL 이 든 config.json 이 통과함'
+    ok=1
+  fi
+  fixture::new_case
+  fixture::base_env
+  path="${fixture_dir}/docker-config/config.json"
+  size="$(wc -c <"${path}" | tr -d ' ')"
+  head -c "$((65537 - size))" /dev/zero >>"${path}"
+  fixture::run start-media.sh || return 1
+  if ! expect_prereq_fail "MEDIA PREREQ FAIL docker-config ${path}"; then
+    harness::add_reason 'NUL 로 상한을 넘긴 config.json 이 통과함'
     ok=1
   fi
   return "${ok}"

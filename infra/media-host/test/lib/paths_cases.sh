@@ -239,6 +239,22 @@ paths::case_scan_read_failure() {
 }
 
 #######################################
+# 스크래치를 만들 수 없으면(TMPDIR 이 없는 자리) 판정 줄 없이 끝나지 않고
+# scratch 로 실패한다. 조회(docker exec)는 하지 않는다.
+#######################################
+paths::case_scratch_failure() {
+  local ok=0
+  paths::setup "${PATHS_MIXED_JSON}"
+  paths::run "TMPDIR=${ops_dir}/absent" || return 1
+  paths_expect_fail scratch || ok=1
+  if [[ "$(ops_fixture::docker_count exec)" != 0 ]]; then
+    harness::add_reason '스크래치 없이 docker exec 를 부름'
+    ok=1
+  fi
+  return "${ok}"
+}
+
+#######################################
 # 깨진 HTTP 틀 — 머리글 끝 없음 · Content-Length 와 본문 길이 다름 · 상태 줄
 # 아님.
 #######################################

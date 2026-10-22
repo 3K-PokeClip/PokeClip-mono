@@ -29,7 +29,7 @@ source "${TEST_DIR}/lib/ops_fixture.sh"
 # shellcheck source=lib/paths_cases.sh
 source "${TEST_DIR}/lib/paths_cases.sh"
 
-readonly CASE_COUNT=16
+readonly CASE_COUNT=17
 # paths_cases.sh 가 읽는다.
 # shellcheck disable=SC2034
 readonly paths_script='bin/paths-count.sh'
@@ -137,6 +137,8 @@ main() {
     paths::case_large_response
   harness::run_case 16 '훑기 결과 못 읽음 → response' \
     paths::case_scan_read_failure
+  harness::run_case 17 'TMPDIR 없음 → scratch · 조회 0' \
+    paths::case_scratch_failure
 
   if ! harness::summary "${CASE_COUNT}"; then
     exit 1

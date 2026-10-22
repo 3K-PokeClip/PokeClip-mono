@@ -9,8 +9,8 @@
 # 출력(표준 출력 한 줄):
 #   PATHS <n>               경로 항목 수(송출 중이 아닌 항목 포함). 빈 목록은 0.
 #   PATHS FAIL incomplete   응답이 여러 페이지(pageCount > 1) — 원자 스냅샷 아님.
-#   PATHS FAIL <단계>       usage · config · sidecar · credentials · request ·
-#                           timeout · auth(401) · http · response.
+#   PATHS FAIL <단계>       usage · scratch · config · sidecar · credentials ·
+#                           request · timeout · auth(401) · http · response.
 # 종료 코드: 0 셈 / 1 실패 / 2 인자 오류.
 #
 # 인자는 받지 않는다. 읽는 변수는 lib/ops.sh 머리 주석(MEDIA_COMPOSE_PROJECT ·
@@ -37,7 +37,10 @@ main() {
   trap ops::on_exit EXIT
   trap 'exit 130' INT
   trap 'exit 143' TERM
-  ops::make_scratch
+  if ! ops::make_scratch; then
+    ops::say 'PATHS FAIL scratch'
+    exit 1
+  fi
   if ! mtx_paths::query; then
     ops::say "PATHS FAIL ${mtx_paths_step}"
     exit 1

@@ -39,7 +39,8 @@
 #   SECRET COUNT FAIL <단계>     usage · config · cdn-secret · test-key ·
 #                                api-pass(box — 비밀번호 파일 없음 · 못 읽음 ·
 #                                파일 전체가 16진 64자 한 줄이 아님) ·
-#                                journal · mediamtx · nginx · docker-logs ·
+#                                scratch · journal · mediamtx · nginx ·
+#                                docker-logs ·
 #                                ssm-command · ssm-list · ssm-status ·
 #                                ssm-output · ssm-truncated · grep.
 #                                0 건이 아니다.
@@ -302,7 +303,7 @@ main() {
   if [[ "${mode}" == box ]]; then
     add_api_pass_values "${limit}" || fail api-pass
   fi
-  ops::make_scratch
+  ops::make_scratch || fail scratch
   input="${ops_scratch}/input"
   : >"${input}"
   if [[ "${mode}" == box ]]; then
