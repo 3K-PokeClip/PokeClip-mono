@@ -159,7 +159,7 @@ MediaMTX가 이벤트마다 컨테이너 안의 작은 명령을 실행하고(`m
 | `POSTGRES_HOST` | `postgres` | DB 호스트. **iam 이면 TCP 호스트 하나여야 한다** — `/`(유닉스 소켓) · 쉼표(여러 호스트) · 공백 · 대괄호 없는 IPv6 는 기동 거부 |
 | `POSTGRES_PORT` | `5432` | DB 포트 |
 | `POSTGRES_AUTH` | (빈값 = `password`) | DB 로그인 방식. `password`(빈 값) = `POSTGRES_PASSWORD` 로 로그인 — 로컬 compose 의 방식. `iam` = 연결마다 RDS IAM 인증 토큰(15분 유효)을 새로 만들어 로그인한다(자격 증명 = AWS 기본 사슬 · 인스턴스 역할). 그 밖 값(대소문자가 다른 `IAM` 포함)은 기동 거부 |
-| `POSTGRES_SSLMODE` | `prefer` (iam 은 `verify-full`) | DB 접속 TLS 모드. `prefer`는 가능하면 TLS, 안 되면 평문. 네트워크를 건너는 배포에서는 `require` 이상으로 올린다. **iam 은 `verify-full` 만 받는다** — 그 밖 값은 기동 거부 |
+| `POSTGRES_SSLMODE` | `prefer` (iam 은 `verify-full`) | DB 접속 TLS 모드. `prefer`는 가능하면 TLS, 안 되면 평문. 네트워크를 건너는 배포에서는 `verify-full` + `POSTGRES_SSLROOTCERT` 로 올린다(CA 없는 `require` 는 암호화만 하고 서버를 확인하지 않는다). **iam 은 `verify-full` 만 받는다** — 그 밖 값은 기동 거부 |
 | `POSTGRES_SSLROOTCERT` | (빈값 = 지정 없음) | 서버 인증서를 검증할 CA 번들의 **절대 경로**. 기동 때 일반 파일 · PEM 인증서 1개 이상을 확인한다. **iam 이면 필수.** password 모드에서도 이 값을 주면 `POSTGRES_SSLMODE` 는 `verify-ca` · `verify-full` 만 받는다 — 그 밖 값은 검증 강도를 값으로 밝히지 않으므로 기동 거부. **`verify-ca` 는 체인만 검증하고 호스트 이름은 보지 않는다 — 운영은 `verify-full`.** `PGSSLROOTCERT` 는 쓰지 않는다 — 이 값이 빈 채 `PGSSLROOTCERT` 만 있으면 기동 거부 |
 | `SEGMENT_ROOT` | `/recordings` | 감시할 녹화 루트. 컨테이너에 읽기 전용으로 붙는다 |
 | `ENSURE_SCHEMA` | `false` | true면 기동 시 정본 DDL(1번 소유)로 `stream_segments`를 만든다. 로컬 compose 전용 — RDS/마이그레이션 도구 도입 시 끈다 |
@@ -334,8 +334,9 @@ INFO `db_connected` 한 줄을 남긴다. 실패하면 이 줄 없이 기동이 
 - **운영은 반드시 `POSTGRES_AUTH=iam` + `POSTGRES_SSLMODE=verify-full`.**
   password 모드의 기본 `prefer` 는 서버가 TLS 를 받지 않으면 평문으로
   내려간다. 배포 뒤 `db_connected` 줄의 `tls` 가 `true` 인지 본다.
-  IAM 토큰의 재사용 창은 약 20분이다(유효 15분 + RDS 가 만료 뒤 약 5분 더
-  받음 — 2026-10-22 실험 RDS 실측). 토큰이 새면 그동안 쓸 수 있으므로
+  IAM 토큰의 공식 유효 시간은 15분이지만 RDS 는 그 뒤에도 얼마간 받는다
+  (2026-10-22 실험 RDS 서울 1대 · 1회 실측: 서명 뒤 19분 30초 수용 · 20분 30초
+  거부 — 보장 값이 아니고 더 길 수 있다). 토큰이 새면 그동안 쓸 수 있으므로
   중간자가 토큰을 못 보게 `verify-full` 이 필요하다.
 - **정적 키 환경 변수는 0개.** AWS SDK 의 자격 증명 사슬(credential chain —
   SDK 가 자격 증명을 찾는 차례)은 환경 변수의 정적 키를 맨 앞에, 인스턴스
