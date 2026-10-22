@@ -1,156 +1,147 @@
 'use client';
 
-import { useId, useState, type ReactNode } from 'react';
-import { Lock } from 'lucide-react';
+import { useId, useState } from 'react';
+import { BellOff } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
 import { Switch } from '@/ui';
+import { delegationsAsEditorQueryOptions } from '@/api/editors';
 import { SettingsPageHeader } from '../SettingsPageHeader';
+import { ModeSegment, type ModeOption } from './ModeSegment';
 import {
-  CRITICAL_ITEMS,
   DO_NOT_DISTURB_DEFAULT,
-  NORMAL_ITEMS,
-  type EmailKey,
-  type InappKey,
+  NOTIFICATION_ITEMS,
   type NotificationItem,
+  type NotificationKey,
+  type NotificationMode,
 } from './notificationItems';
 import styles from './NotificationSettingsScreen.module.css';
 
-// 디자인 1n 설정 · 알림 (POK-209).
+// 설정 · 알림.
 //
-// 스위치 값은 어디에도 저장하지 않는다 — 서버·localStorage·전역 스토어·모듈 캐시 전부 없다.
-// 아래 useState는 저장이 아니라 스위치가 눌리는 것을 보여 주기 위한 렌더 상태이고,
-// 화면을 벗어나면 사라진다. 저장 위치는 백엔드 연결 티켓에서 정하며, 그때 이 useState가
-// 상태 훅으로 승격된다 — useChannelMockState처럼 목업 훅을 실제 왕복으로 갈아끼우는 자리다.
+// 알림마다 「끔 · 받기 · 중요」 중 하나를 고르고, 맨 위 「방송 중 방해 금지」를 켜면 방송 중에는
+// 「중요」로 고른 알림만 온다. 처음 값만 우리가 정해 두고(notificationItems) 전부 사용자가 바꾼다.
+//
+// 고른 값은 어디에도 저장하지 않는다 — 서버·localStorage·전역 스토어·모듈 캐시 전부 없다. 알림을
+// 보내는 서버가 아직 없어서다. 아래 useState는 고르는 동작을 보여 주기 위한 렌더 상태이고 화면을
+// 벗어나면 사라진다. 저장은 알림 서버 티켓에서 정하며, 그때 이 useState가 상태 훅으로 승격된다.
 
-// 키를 항목 목록에서 뽑아 쓴다 — Record<string, …>로 두면 목록에 없는 키를 읽어도,
-// 일반 항목이 inapp 기본값을 빠뜨려도 타입이 잡지 못하고 스위치가 비제어로 샌다.
-interface Toggles {
-  /** 이메일 on/off — 중요·일반 전부 */
-  email: Record<EmailKey, boolean>;
-  /** 인앱 on/off — 일반만. 중요 알림의 인앱은 항상 켜져 있어 값을 갖지 않는다 */
-  inapp: Record<InappKey, boolean>;
-  /** 방송 중 방해 금지 */
-  dnd: boolean;
+const MODE_OPTIONS: readonly ModeOption<NotificationMode>[] = [
+  { key: 'off', label: '끔' },
+  { key: 'on', label: '받기' },
+  { key: 'important', label: '중요', accent: true },
+];
+
+function initialModes(): Record<NotificationKey, NotificationMode> {
+  // 정확히 목록을 훑어 만들므로 키가 빠질 수 없다 — 그 사실을 단언으로 옮긴다
+  return Object.fromEntries(
+    NOTIFICATION_ITEMS.map((item) => [item.key, item.defaultMode]),
+  ) as Record<NotificationKey, NotificationMode>;
 }
 
-function initialToggles(): Toggles {
-  return {
-    // 정확히 목록을 훑어 만들므로 키가 빠질 수 없다 — 그 사실을 단언으로 옮긴다
-    email: Object.fromEntries(
-      [...CRITICAL_ITEMS, ...NORMAL_ITEMS].map((item) => [item.key, item.email]),
-    ) as Record<EmailKey, boolean>,
-    inapp: Object.fromEntries(NORMAL_ITEMS.map((item) => [item.key, item.inapp])) as Record<
-      InappKey,
-      boolean
-    >,
-    dnd: DO_NOT_DISTURB_DEFAULT,
-  };
+/** 방해 금지 설명 — 지금 고른 값으로 방송 중에 실제로 몇 개가 오는지 말한다 */
+function dndDescription(dnd: boolean, importantCount: number): string {
+  if (!dnd) return '라이브 중에도 켜 둔 알림이 모두 와요';
+  if (importantCount === 0) return '라이브 중엔 알림이 오지 않아요';
+  return `라이브 중엔 중요 알림 ${importantCount}개만 와요`;
 }
 
 export function NotificationSettingsScreen() {
-  const [toggles, setToggles] = useState<Toggles>(initialToggles);
-  const criticalId = useId();
-  const normalId = useId();
+  const [modes, setModes] = useState(initialModes);
+  const [dnd, setDnd] = useState(DO_NOT_DISTURB_DEFAULT);
+  const dndTitleId = useId();
+  const dndDescId = useId();
+  const listId = useId();
 
-  const setEmail = (key: EmailKey, next: boolean) =>
-    setToggles((prev) => ({ ...prev, email: { ...prev.email, [key]: next } }));
-  const setInapp = (key: InappKey, next: boolean) =>
-    setToggles((prev) => ({ ...prev, inapp: { ...prev.inapp, [key]: next } }));
+  // 편집을 맡은 채널이 하나라도 있어야 편집자용 줄을 보인다 — 불러오는 중·실패면 숨긴다
+  const asEditor = useQuery(delegationsAsEditorQueryOptions);
+  const isEditor = (asEditor.data?.length ?? 0) > 0;
+  const items = NOTIFICATION_ITEMS.filter((item) => isEditor || !item.editorOnly);
+  // 화면에 보이는 줄만 센다 — 숨긴 편집자용 줄이 개수에 섞이면 설명이 화면과 어긋난다
+  const importantCount = items.filter((item) => modes[item.key] === 'important').length;
+
+  const setMode = (key: NotificationKey, mode: NotificationMode) =>
+    setModes((prev) => ({ ...prev, [key]: mode }));
 
   return (
     <div>
-      {/* 시안 1n의 제목-카드 간격 20u — 헤더가 자체로 4u를 갖는다 */}
-      <div className={styles.header}>
-        <SettingsPageHeader title="알림 설정" />
-      </div>
+      {/* 「인앱」 열 이름이 사라져 알림이 어디로 오는지 머리말이 말한다 */}
+      <SettingsPageHeader
+        title="알림 설정"
+        description="알림은 오른쪽 위 종 아이콘에서 볼 수 있어요"
+      />
 
-      <section className={`${styles.card} ${styles.criticalCard}`} aria-labelledby={criticalId}>
-        <ColumnHeader groupId={criticalId} group="중요 알림" />
-        {CRITICAL_ITEMS.map((item) => (
-          <NotificationRow key={item.key} item={item}>
-            {/* 끌 수 없다는 사실을 접근 이름이 든다 — disabled 입력은 포커스를 받지 못해
-                aria-describedby가 낭독되지 않는다. 아래 자물쇠 문구가 시각 채널로 같은 말을 한다. */}
-            <span className={styles.switchCell}>
-              <Switch size="sm" aria-label="인앱 — 항상 켜져 있어요" checked disabled />
-            </span>
-            <span className={styles.switchCell}>
-              <Switch
-                size="sm"
-                aria-label="이메일"
-                checked={toggles.email[item.key]}
-                onChange={(e) => setEmail(item.key, e.target.checked)}
-              />
-            </span>
-          </NotificationRow>
-        ))}
-        <p className={styles.lockNote}>
-          <Lock aria-hidden />
-          인앱 중요 알림은 항상 켜져 있어요
-        </p>
-      </section>
-
-      <section className={styles.card} aria-labelledby={normalId}>
-        <ColumnHeader groupId={normalId} group="일반 알림" />
-        {NORMAL_ITEMS.map((item) => (
-          <NotificationRow key={item.key} item={item}>
-            <span className={styles.switchCell}>
-              <Switch
-                size="sm"
-                aria-label="인앱"
-                checked={toggles.inapp[item.key]}
-                onChange={(e) => setInapp(item.key, e.target.checked)}
-              />
-            </span>
-            <span className={styles.switchCell}>
-              <Switch
-                size="sm"
-                aria-label="이메일"
-                checked={toggles.email[item.key]}
-                onChange={(e) => setEmail(item.key, e.target.checked)}
-              />
-            </span>
-          </NotificationRow>
-        ))}
-        {/* 방해 금지는 알림 종류가 아니라 그 위에 걸리는 규칙이라 2열 격자 밖에 선다 */}
-        <div className={styles.dndRow}>
+      <section className={`${styles.card} ${styles.cardGap}`} aria-labelledby={dndTitleId}>
+        <div className={styles.dnd}>
+          <span className={styles.dndIcon} aria-hidden>
+            <BellOff />
+          </span>
           <div className={styles.rowBody}>
-            <div className={styles.rowTitle}>방송 중 방해 금지</div>
-            <div className={styles.rowDesc}>라이브 중에는 중요 알림만 받아요</div>
+            <div id={dndTitleId} className={styles.dndTitle}>
+              방송 중 방해 금지
+            </div>
+            <div id={dndDescId} className={styles.rowDesc} aria-live="polite">
+              {dndDescription(dnd, importantCount)}
+            </div>
           </div>
+          {/* 이름은 aria-label로 직접 준다 — 위 제목을 aria-labelledby로만 가리키면 axe가
+              label-title-only로 잡는다 */}
           <Switch
             size="sm"
             aria-label="방송 중 방해 금지"
-            checked={toggles.dnd}
-            onChange={(e) => setToggles((prev) => ({ ...prev, dnd: e.target.checked }))}
+            aria-describedby={dndDescId}
+            checked={dnd}
+            onChange={(e) => setDnd(e.target.checked)}
           />
         </div>
+      </section>
+
+      <section className={styles.card} aria-labelledby={listId}>
+        <h2 id={listId} className={styles.cardTitle}>
+          알림
+        </h2>
+        {items.map((item) => (
+          <NotificationRow
+            key={item.key}
+            item={item}
+            mode={modes[item.key]}
+            onChange={(mode) => setMode(item.key, mode)}
+          />
+        ))}
       </section>
     </div>
   );
 }
 
-function ColumnHeader({ groupId, group }: { groupId: string; group: string }) {
-  return (
-    <div className={styles.columnHeader}>
-      <span id={groupId}>{group}</span>
-      <span className={styles.channelHead}>인앱</span>
-      <span className={styles.channelHead}>이메일</span>
-    </div>
-  );
-}
-
-// 행을 role="group"으로 묶고 항목 제목으로 이름을 준다 — 「인앱」·「이메일」 스위치가
-// 열한 행에 같은 이름으로 반복되어 낱개로는 어느 항목의 것인지 알 수 없다.
-function NotificationRow({ item, children }: { item: NotificationItem; children: ReactNode }) {
+// 세그먼트가 항목 제목을 이름으로, 설명을 설명으로 든다 — 같은 「끔 · 받기 · 중요」가 줄마다 반복된다
+function NotificationRow({
+  item,
+  mode,
+  onChange,
+}: {
+  item: NotificationItem;
+  mode: NotificationMode;
+  onChange: (mode: NotificationMode) => void;
+}) {
   const titleId = useId();
+  const descId = useId();
   return (
-    <div className={styles.row} role="group" aria-labelledby={titleId}>
+    <div className={styles.row}>
       <div className={styles.rowBody}>
         <div id={titleId} className={styles.rowTitle}>
           {item.title}
         </div>
-        <div className={styles.rowDesc}>{item.desc}</div>
+        <div id={descId} className={styles.rowDesc}>
+          {item.desc}
+        </div>
       </div>
-      {children}
+      <ModeSegment
+        className={styles.segment}
+        options={MODE_OPTIONS}
+        value={mode}
+        onChange={onChange}
+        labelledBy={titleId}
+        describedBy={descId}
+      />
     </div>
   );
 }
