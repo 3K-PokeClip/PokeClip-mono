@@ -1,0 +1,654 @@
+/* 실시간 통계 패널 — 숫자 줄 + 한 상자 두 층 그래프 + 카테고리 띠 + 시간축 (LiveStatsPanel.tsx 주석 참고).
+   색은 넷: 채팅 막대 = 브랜드 남색, 시청자 선 = 글자색(막대 위에서도 묻히지 않게 무채색), 하이라이트 = 포인트 분홍,
+   후원 = 금색(숫자 줄 표시와 툴팁만). 금색은 dataviz 검증기로 남색·분홍과 두 테마 모두 통과한 단계다(다크 #bf8a1f · 라이트 #a87610).
+   옛 패널은 다섯 색(초록 선·주황 마름모·꽉 찬 남색 카테고리 막대 포함)이라 「장난감 같다」는 지적을 받았다. */
+
+.panel {
+  --sp-chat: var(--pc-color-accent);
+  --sp-hl: var(--pc-color-point);
+  --sp-viewer: var(--pc-color-text-primary);
+  --sp-grid: var(--pc-color-border-subtle);
+  --sp-surface: var(--pc-color-bg-surface);
+  --sp-gold: #bf8a1f;
+
+  border: 1px solid var(--pc-color-border-subtle);
+  border-radius: calc(14 * var(--pc-u));
+  background: var(--sp-surface);
+}
+
+:global([data-theme='light']) .panel {
+  --sp-gold: #a87610;
+}
+
+@media (prefers-color-scheme: light) {
+  :global(:root:not([data-theme])) .panel {
+    --sp-gold: #a87610;
+  }
+}
+
+/* ---------- 머리줄 ---------- */
+
+.head {
+  display: flex;
+  align-items: baseline;
+  gap: calc(10 * var(--pc-u));
+  padding: calc(14 * var(--pc-u)) calc(18 * var(--pc-u)) calc(12 * var(--pc-u));
+}
+
+.headTitle {
+  margin: 0;
+  font-size: calc(14 * var(--pc-u));
+  font-weight: 700;
+}
+
+.headMeta {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(6 * var(--pc-u));
+  font-size: calc(11.5 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}
+
+.liveDot {
+  width: calc(6 * var(--pc-u));
+  height: calc(6 * var(--pc-u));
+  border-radius: 50%;
+  background: var(--sp-hl);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .liveDot {
+    animation: spPulse 2s ease-in-out infinite;
+  }
+}
+
+@keyframes spPulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.headHint {
+  margin-left: auto;
+  font-size: calc(11.5 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}
+
+/* ---------- 숫자 줄 — 칸마다 그래프 표시(범례)를 겸한다 ---------- */
+
+.strip {
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border-top: 1px solid var(--sp-grid);
+  border-bottom: 1px solid var(--sp-grid);
+}
+
+.cell {
+  min-width: 0;
+  padding: calc(12 * var(--pc-u)) calc(18 * var(--pc-u));
+  border-right: 1px solid var(--sp-grid);
+}
+
+.cell:last-child {
+  border-right: 0;
+}
+
+.cellLabel {
+  display: flex;
+  align-items: center;
+  gap: calc(7 * var(--pc-u));
+  font-size: calc(12 * var(--pc-u));
+  font-weight: 600;
+  color: var(--pc-color-text-secondary);
+}
+
+.cellValue {
+  margin: calc(3 * var(--pc-u)) 0 0;
+  font-size: calc(22 * var(--pc-u));
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+}
+
+.cellValue[data-muted] {
+  color: var(--pc-color-text-muted);
+  font-weight: 600;
+}
+
+.cellSub {
+  margin: calc(1 * var(--pc-u)) 0 0;
+  font-size: calc(11.5 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.keyBar,
+.keyLine,
+.keyDot,
+.keyGold {
+  display: inline-block;
+  flex: none;
+}
+
+.keyBar {
+  width: calc(9 * var(--pc-u));
+  height: calc(9 * var(--pc-u));
+  border-radius: 2px;
+  background: var(--sp-chat);
+}
+
+.keyLine {
+  width: calc(12 * var(--pc-u));
+  height: 2px;
+  border-radius: 1px;
+  background: var(--sp-viewer);
+}
+
+.keyDot {
+  width: calc(8 * var(--pc-u));
+  height: calc(8 * var(--pc-u));
+  border-radius: 50%;
+  background: var(--sp-hl);
+}
+
+.keyGold {
+  width: calc(12 * var(--pc-u));
+  height: calc(8 * var(--pc-u));
+  border-radius: 4px;
+  background: var(--sp-gold);
+}
+
+/* 좁은 본문(1단 화면)에서는 둘씩 — LiveScreen의 .container가 크기 기준이다 */
+@container (max-width: 47.5rem) {
+  .strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .cell:nth-child(2) {
+    border-right: 0;
+  }
+
+  .cell:nth-child(-n + 2) {
+    border-bottom: 1px solid var(--sp-grid);
+  }
+}
+
+/* ---------- 그래프 ---------- */
+
+.body {
+  padding: calc(6 * var(--pc-u)) calc(18 * var(--pc-u)) calc(12 * var(--pc-u));
+}
+
+.wrap {
+  position: relative;
+}
+
+.empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: calc(6 * var(--pc-u));
+  background: color-mix(in srgb, var(--pc-color-bg-inset) 45%, transparent);
+  font-size: calc(12 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}
+
+.scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--pc-color-border-strong) transparent;
+}
+
+.scroll[data-scroll] {
+  padding-bottom: calc(6 * var(--pc-u));
+}
+
+.content {
+  position: relative;
+  outline: none;
+  touch-action: pan-y;
+  border-radius: calc(4 * var(--pc-u));
+}
+
+.content:focus-visible {
+  box-shadow: 0 0 0 2px var(--pc-color-focus-ring);
+}
+
+.content[data-pannable] {
+  cursor: grab;
+}
+
+.content[data-dragging] {
+  cursor: grabbing;
+  user-select: none;
+}
+
+.svg {
+  display: block;
+  overflow: visible;
+}
+
+.paneBg {
+  fill: color-mix(in srgb, var(--pc-color-bg-inset) 45%, transparent);
+}
+
+.grid {
+  stroke: var(--sp-grid);
+  stroke-width: 1;
+  shape-rendering: crispEdges;
+}
+
+.yLabel {
+  fill: var(--pc-color-text-muted);
+  font-family: var(--pc-font-mono);
+  font-size: calc(10 * var(--pc-u));
+  font-variant-numeric: tabular-nums;
+}
+
+.bar,
+.barHot {
+  transition: opacity 120ms;
+}
+
+.bar {
+  fill: var(--sp-chat);
+}
+
+.barHot {
+  fill: var(--sp-hl);
+}
+
+.bar[data-dim],
+.barHot[data-dim] {
+  opacity: 0.4;
+}
+
+.viewerArea {
+  fill: color-mix(in srgb, var(--sp-viewer) 6%, transparent);
+}
+
+.viewerLine {
+  fill: none;
+  stroke: var(--sp-viewer);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.viewerDot {
+  fill: var(--sp-viewer);
+  stroke: var(--sp-surface);
+  stroke-width: 2;
+}
+
+.livePulse {
+  fill: var(--sp-viewer);
+  opacity: 0.18;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .livePulse {
+    animation: spPulse 2s ease-in-out infinite;
+  }
+}
+
+.paneEmpty {
+  fill: var(--pc-color-text-muted);
+  font-size: calc(12 * var(--pc-u));
+}
+
+/* 하이라이트 줄기 — 핀에서 내려와 막대까지. 수동 마킹은 더 옅게 */
+.stem,
+.stemManual {
+  stroke: var(--sp-hl);
+  stroke-width: 1;
+  shape-rendering: crispEdges;
+}
+
+.stem {
+  opacity: 0.5;
+}
+
+.stemManual {
+  opacity: 0.3;
+}
+
+/* 카테고리가 바뀐 시각 — 하이라이트 줄기(분홍)와 헷갈리지 않게 무채색·옅게 */
+.catChange {
+  stroke: var(--pc-color-text-muted);
+  stroke-width: 1;
+  opacity: 0.45;
+  shape-rendering: crispEdges;
+}
+
+/* ---------- 핀 ---------- */
+
+.pinRow {
+  position: relative;
+}
+
+.pin,
+.pinManual {
+  position: absolute;
+  top: 50%;
+  z-index: 1;
+  transform: translate(-50%, -50%);
+  display: inline-flex;
+  align-items: center;
+  gap: calc(3 * var(--pc-u));
+  height: calc(18 * var(--pc-u));
+  padding: 0 calc(6 * var(--pc-u));
+  border-radius: calc(9 * var(--pc-u));
+  font: inherit;
+  font-size: calc(10.5 * var(--pc-u));
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  box-shadow: 0 0 0 2px var(--sp-surface);
+}
+
+.pin {
+  border: 0;
+  background: var(--sp-hl);
+  color: var(--pc-color-text-on-accent, #fff);
+}
+
+.pinManual {
+  border: 1.5px solid var(--sp-hl);
+  background: var(--sp-surface);
+  color: var(--pc-color-text-primary);
+}
+
+.pin:hover,
+.pinManual:hover {
+  box-shadow:
+    0 0 0 2px var(--sp-surface),
+    0 0 0 4px var(--pc-color-point-subtle);
+}
+
+.pin:focus-visible,
+.pinManual:focus-visible {
+  outline: 2px solid var(--pc-color-focus-ring);
+  outline-offset: 2px;
+}
+
+.pinMore {
+  font-weight: 600;
+  opacity: 0.8;
+}
+
+/* ---------- 카테고리 띠 ---------- */
+
+.catRow {
+  position: relative;
+}
+
+/* 구간 띠 — 이웃 구간은 무채색 두 단계로 번갈아, 사이는 2px 바탕 틈. 방송 중 지금 구간만 옅은 남색.
+   이름은 세로 가운데에(띠가 flex — 블록 안 inline-flex였을 때는 부모 글줄 기준선에 얹혀 아래로 처졌다).
+   overflow: clip — hidden이면 띠가 스크롤 상자가 되어 안의 이름(sticky)이 붙지 않는다 */
+.catSeg {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  border-radius: calc(5 * var(--pc-u));
+  background: var(--pc-color-bg-inset);
+  color: var(--pc-color-text-secondary);
+  overflow: clip;
+}
+
+.catSeg[data-alt] {
+  background: color-mix(in srgb, var(--pc-color-border-default) 55%, var(--pc-color-bg-inset));
+}
+
+.catSeg[data-now] {
+  background: var(--pc-color-accent-subtle);
+  color: var(--pc-color-accent-text);
+}
+
+/* 붙는 자리는 왼쪽 가장자리 그림자(36u) 안쪽 — 0에 붙이면 그림자에 이름이 반쯤 가렸다 */
+.catLabel {
+  position: sticky;
+  left: calc(28 * var(--pc-u));
+  display: flex;
+  align-items: baseline;
+  line-height: 1;
+  padding: 0 calc(8 * var(--pc-u));
+  font-size: calc(11 * var(--pc-u));
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.catDur {
+  margin-left: calc(6 * var(--pc-u));
+  font-weight: 500;
+  opacity: 0.75;
+}
+
+.rowEmpty {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: calc(11 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}
+
+/* ---------- 시간축 ---------- */
+
+.timeAxis {
+  position: relative;
+  height: calc(20 * var(--pc-u));
+}
+
+.timeTick {
+  position: absolute;
+  top: calc(5 * var(--pc-u));
+  transform: translateX(-50%);
+  font-family: var(--pc-font-mono);
+  font-size: calc(10.5 * var(--pc-u));
+  font-variant-numeric: tabular-nums;
+  color: var(--pc-color-text-muted);
+  white-space: nowrap;
+}
+
+.timeTick[data-edge='end'] {
+  transform: translateX(-100%);
+  font-family: var(--pc-font-sans);
+  font-weight: 600;
+  color: var(--pc-color-text-secondary);
+}
+
+/* ---------- 십자선·툴팁 — 값이 진하고 이름이 흐리다 ---------- */
+
+.cross {
+  position: absolute;
+  top: 0;
+  width: 1px;
+  background: var(--pc-color-text-muted);
+  opacity: 0.7;
+  pointer-events: none;
+}
+
+.tip {
+  position: absolute;
+  top: calc(4 * var(--pc-u));
+  z-index: 3;
+  min-width: calc(168 * var(--pc-u));
+  padding: calc(8 * var(--pc-u)) calc(10 * var(--pc-u));
+  border-radius: calc(10 * var(--pc-u));
+  background: var(--pc-color-bg-surface-raised);
+  border: 1px solid var(--pc-color-border-default);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.2);
+  pointer-events: none;
+  display: grid;
+  gap: calc(4 * var(--pc-u));
+}
+
+.tipTitle {
+  margin-bottom: calc(2 * var(--pc-u));
+  font-family: var(--pc-font-mono);
+  font-size: calc(10.5 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}
+
+.tipRow {
+  display: flex;
+  align-items: center;
+  gap: calc(7 * var(--pc-u));
+  font-size: calc(12 * var(--pc-u));
+}
+
+.tipKeyBar,
+.tipKeyLine,
+.tipKeyDot,
+.tipKeyGold {
+  flex: none;
+}
+
+.tipKeyBar {
+  width: calc(8 * var(--pc-u));
+  height: calc(8 * var(--pc-u));
+  margin-inline: 1px;
+  border-radius: 2px;
+  background: var(--sp-chat);
+}
+
+.tipKeyLine {
+  width: calc(10 * var(--pc-u));
+  height: 2px;
+  border-radius: 1px;
+  background: var(--sp-viewer);
+}
+
+.tipKeyDot,
+.tipKeyGold {
+  width: calc(8 * var(--pc-u));
+  height: calc(8 * var(--pc-u));
+  margin-inline: 1px;
+  border-radius: 50%;
+}
+
+.tipKeyDot {
+  background: var(--sp-hl);
+}
+
+.tipKeyGold {
+  background: var(--sp-gold);
+}
+
+.tipValue {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--pc-color-text-primary);
+}
+
+.tipLabel {
+  color: var(--pc-color-text-muted);
+}
+
+/* ---------- 제자리 요소(스크롤해도 남는다) ---------- */
+
+.axis {
+  position: absolute;
+  right: 0;
+  display: block;
+  overflow: visible;
+}
+
+.caption {
+  position: absolute;
+  left: calc(6 * var(--pc-u));
+  z-index: 2;
+  padding: 1px calc(6 * var(--pc-u));
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--sp-surface) 88%, transparent);
+  font-size: calc(10.5 * var(--pc-u));
+  font-weight: 600;
+  color: var(--pc-color-text-muted);
+  pointer-events: none;
+}
+
+/* 카테고리 줄 이름은 오른쪽 눈금 칸에 — 왼쪽에 두면 맨 앞 구간 이름을 가린다 */
+.rowLabel {
+  position: absolute;
+  right: 0;
+  display: flex;
+  align-items: center;
+  padding-left: calc(8 * var(--pc-u));
+  box-sizing: border-box;
+  font-size: calc(10.5 * var(--pc-u));
+  font-weight: 600;
+  color: var(--pc-color-text-muted);
+  pointer-events: none;
+}
+
+/* 가장자리 그림자 — 옆에 더 있다는 표시 */
+.fadeLeft,
+.fadeRight {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 1;
+  width: calc(36 * var(--pc-u));
+  pointer-events: none;
+}
+
+.fadeLeft {
+  left: 0;
+  background: linear-gradient(to right, var(--sp-surface), transparent);
+}
+
+.fadeRight {
+  background: linear-gradient(to left, var(--sp-surface), transparent);
+}
+
+/* ---------- 넘기기 ---------- */
+
+.footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: calc(12 * var(--pc-u));
+  margin-top: calc(8 * var(--pc-u));
+}
+
+.jump {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: calc(4 * var(--pc-u));
+  min-width: calc(76 * var(--pc-u));
+  padding: calc(5 * var(--pc-u)) calc(10 * var(--pc-u));
+  border: 1px solid var(--pc-color-border-default);
+  border-radius: calc(7 * var(--pc-u));
+  background: transparent;
+  color: var(--pc-color-text-secondary);
+  font: inherit;
+  font-size: calc(12 * var(--pc-u));
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.jump:hover:not(:disabled) {
+  background: var(--pc-color-bg-surface-hover);
+}
+
+.jump:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.range {
+  font-size: calc(11.5 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+  text-align: center;
+}

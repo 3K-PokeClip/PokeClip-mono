@@ -25,9 +25,11 @@ import {
 // 실시간(SSE events: 카드·중계 채팅·방송 정보) + 채팅량 차트(chat-chart) + 방송 정보(broadcast-info).
 // 이름에 Mock이 남은 것은 화면 쪽 import를 안 흔들기 위해서다.
 //
-// ⚠ 반환 형태는 계약이다 (POK-180 SSE 실연동이 "화면은 그대로, 훅 내부만" 전제로 선다).
+// ⚠ 반환 형태는 계약이다 (POK-180 SSE 실연동이 "화면은 그대로, 훅 내부만" 전제로 섰다).
 // 값은 시안을 따라 바꿔도 되지만 필드·유니온을 늘리면 저쪽이 채울 수 없는 자리가 생긴다.
 // 시안이 요구하는데 여기 없는 표기값은 useLiveDetailsMockState로 간다.
+// 옛 통계 그래프의 좌표 계약(chatVolume, 800×90 꺾은선)은 뺐다: 새 그래프는 저장소의 차트 칸을 그대로 그리고(useLiveStatsMockState),
+// 핀은 카드의 atMs로 선다.
 
 export interface LiveStream {
   title: string;
@@ -66,14 +68,10 @@ export interface LiveHighlight {
   thumbnailUrl?: string | null;
   /** 숨긴 카드다(POK-338): 「숨김」 칩에서만 보이고 「숨김 해제」만 할 수 있다 */
   hidden?: boolean;
-}
-
-export interface ChatVolumeSeries {
-  /** SVG 좌표계(0..800 × 0..90)의 꺾은선 점들 */
-  points: ReadonlyArray<readonly [number, number]>;
-  /** 자동 감지 시점 마커 */
-  markers: ReadonlyArray<readonly [number, number]>;
-  timeLabels: readonly string[];
+  /** 카드가 가리키는 절대 시각(epoch ms, cardAt) — 통계 그래프의 핀 자리 */
+  atMs?: number;
+  /** 감지 사유 한 줄(채팅 ×3.2 급증 (120건) · 수동 마킹) — 통계 그래프 툴팁 */
+  reason?: string;
 }
 
 export type CardListStatus = 'loading' | 'failed' | 'loaded';
@@ -89,7 +87,6 @@ export interface LiveMockState {
    * 실패한 것이다(다음 주기에 다시 읽는다). 한 번 받은 뒤의 실패는 받은 목록을 그대로 두므로 'loaded'다
    */
   cardsStatus: CardListStatus;
-  chatVolume: ChatVolumeSeries;
   /** 채팅 수집 끊김 경고 배너 노출 여부 */
   chatWarning: boolean;
 }
@@ -119,7 +116,8 @@ interface BroadcastInfoResponse {
     category: string | null;
     viewers?: number | null;
   } | null;
-  series: { observedAt: string; viewers: number | null }[];
+  /** category는 수집기가 관측마다 싣기 전엔 없다(지금은 latest에만 있다) — 오면 통계가 카테고리 구간을 나눈다 */
+  series: { observedAt: string; viewers: number | null; category?: string | null }[];
 }
 /** chat-chart 응답 한 장. 어느 창을 읽었는지(scope)는 부른 쪽이 안다 */
 type ChartPage = Omit<LiveChart, 'scope'>;
@@ -176,6 +174,16 @@ export function unhideCard(cardId: string) {
   return cardCall('DELETE', `${cardPath(cardId)}/hide`);
 }
 
+/**
+ * 라이브 그래프·시청자 기록을 읽기 시작할 시각(epoch ms) — 방송 시작이다. 12시간이 넘으면 끝 12시간인데(끝난 방송과 같은 상한,
+ * endedWindowStart) 그 시작을 방송 시작에서 1시간 단위로 맞춘다: 지금에서 12시간을 빼면 창 경계가 10초마다 밀려 기억한 창을 못 쓴다
+ */
+export function liveWindowStart(startedAt: number, now: number): number {
+  const tail = endedWindowStart(startedAt, now);
+  if (tail === startedAt) return startedAt;
+  return startedAt + Math.ceil((tail - startedAt) / COLLECTOR_WINDOW_MS) * COLLECTOR_WINDOW_MS;
+}
+
 /** [from, to)를 수집기 한 번에 받을 수 있는 1시간 창들로 자른다 */
 export function chartWindows(from: number, to: number): [number, number][] {
   const windows: [number, number][] = [];
@@ -228,7 +236,7 @@ function currentUserId(): string | null {
   }
 }
 
-function toHighlight(c: Snapshot, index: number, now: number): LiveHighlight {
+function toHighlight(c: Snapshot, index: number, now: number, base: number | null): LiveHighlight {
   const ev = c.evidence ?? {};
   const ratio = typeof ev.ratio === 'number' ? ev.ratio : null;
   const count =
@@ -258,6 +266,8 @@ function toHighlight(c: Snapshot, index: number, now: number): LiveHighlight {
     claimedByMe: c.claimedBy !== null && c.claimedBy === currentUserId(),
     thumbnailUrl: c.thumbnailUrl ?? null,
     ...(c.hidden ? { hidden: true } : {}),
+    atMs: cardAt(c, base),
+    reason,
   };
 }
 
@@ -281,7 +291,6 @@ function parseSseBlock(block: string): { event: string; data: string } | null {
 export function useLiveMockState(pastRoute: boolean): LiveMockState {
   const [cards, setCards] = useState<Record<number, Snapshot>>({});
   const [cardsStatus, setCardsStatus] = useState<CardListStatus>('loading');
-  const [chart, setChart] = useState<LiveChart | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [sseOk, setSseOk] = useState(false);
   const [info, setInfo] = useState<LoadedInfo | null>(null);
@@ -296,8 +305,6 @@ export function useLiveMockState(pastRoute: boolean): LiveMockState {
     endedAt: null,
   });
   rangeRef.current = { status: live.status, startedAt: live.startedAt, endedAt: live.endedAt };
-  const chartRef = useRef(chart);
-  chartRef.current = chart;
 
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 1000);
@@ -316,7 +323,6 @@ export function useLiveMockState(pastRoute: boolean): LiveMockState {
     // 바뀌면 통째로 비운다)
     setCards({});
     setCardsStatus('loading');
-    setChart(null);
     setInfo(null);
     publishLiveData({ chart: null, info: null, cardTimes: [] });
     let stopped = false;
@@ -370,38 +376,55 @@ export function useLiveMockState(pastRoute: boolean): LiveMockState {
         if (!stopped) setCardsStatus((s) => (s === 'loaded' ? s : 'failed'));
       }
     };
+    /**
+     * 라이브 그래프의 다 지난 1시간 창(열쇠 = 창 시작|끝|칸). 방송 중에도 처음부터 지금까지 그리므로, 길어진 방송을 10초마다
+     * 처음부터 다시 읽지 않게 끝난 지 ENDED_SETTLE_MS가 지난 창은 한 번 받은 답을 쓴다(그 안은 수집기가 아직 쓰고 있을 수 있다)
+     */
+    const settledPages = new Map<string, ChartPage>();
+    /** 지금 보이는 그래프를 라이브 때 읽었나. 끝난 방송으로 바뀌면 그 그래프는 끝 몇 초가 빠졌을 수 있어 버린다 */
+    let chartReadLive = false;
+    const chartPage = (a: number, b: number, bucket: number) =>
+      getJsonOrNull<ChartPage>(
+        `/api/clip/broadcasts/${encodeURIComponent(streamId)}/chat-chart?${new URLSearchParams({
+          from: new Date(a).toISOString(),
+          to: new Date(b).toISOString(),
+          bucket: String(bucket),
+        })}`,
+      );
     const loadChart = async () => {
       try {
         const rg = rangeRef.current;
         if (waitForRange(rg)) return;
         if (endedKey(rg) !== null && endedKey(rg) === chartDoneFor) return;
         const askedAt = Date.now();
-        const to = new Date();
-        const from = new Date(to.getTime() - CHART_MINUTES * 60_000);
-        const bucket = CHART_BUCKET;
-        // 지난 방송은 시작~종료 전체를 본다(12시간이 넘거나 시작을 모르면 끝 12시간, endedWindowStart). 수집기는 한 번에
-        // 1시간까지만 받으므로(window-max PT1H, 넘으면 400 too_wide) 1시간씩 나눠 읽어 이어 붙인다(PR #200 codex). 버킷은 길이에 맞춰 고른다
-        if (rg.status === 'ended' && rg.endedAt !== null) {
-          const start = endedWindowStart(rg.startedAt, rg.endedAt);
-          const dur = rg.endedAt - start;
-          const vodBucket = dur <= 60 * 60_000 ? 10 : dur <= 6 * 60 * 60_000 ? 30 : 60;
-          // 라이브 때 읽은 최근 그래프는 끝난 방송의 창이 아니다. 남겨 두면 다시 읽지 않아 「지금」이 굳는다(리뷰 3라운드)
-          if (chartRef.current?.scope === 'recent') {
-            setChart(null);
+        // 지난 방송은 시작~종료 전체, 라이브는 시작~지금이다(둘 다 12시간이 넘으면 끝 12시간, 지난 방송은 시작을 몰라도 끝 12시간).
+        // 수집기는 한 번에 1시간까지만 받으므로(window-max PT1H, 넘으면 400 too_wide) 1시간씩 나눠 읽어 이어 붙인다(PR #200 codex).
+        // 버킷은 길이에 맞춰 고른다. 라이브는 10초 칸을 쓰지 않는다: 그래프가 30초보다 잘게 그리지 않고, 1시간을 넘는 순간 칸이
+        // 바뀌어 기억한 창을 다 버리게 된다
+        const ended = rg.status === 'ended' && rg.endedAt !== null;
+        const liveWhole = rg.status === 'live' && rg.startedAt !== null;
+        if (ended || liveWhole) {
+          const end = ended ? rg.endedAt! : askedAt;
+          const start = ended
+            ? endedWindowStart(rg.startedAt, end)
+            : liveWindowStart(rg.startedAt!, end);
+          const dur = end - start;
+          const bucket = dur <= 60 * 60_000 && ended ? 10 : dur <= 6 * 60 * 60_000 ? 30 : 60;
+          // 라이브 때 읽은 그래프는 끝난 방송의 창이 아니다(끝 몇 초가 빠졌고, 최근 창이면 처음이 없다). 남겨 두면 다시 읽지 않아
+          // 「지금」이 굳는다(리뷰 3라운드)
+          if (ended && chartReadLive) {
+            chartReadLive = false;
             publishLiveData({ chart: null });
           }
           const pages = await Promise.all(
-            chartWindows(start, rg.endedAt).map(([a, b]) =>
-              getJsonOrNull<ChartPage>(
-                `/api/clip/broadcasts/${encodeURIComponent(streamId)}/chat-chart?${new URLSearchParams(
-                  {
-                    from: new Date(a).toISOString(),
-                    to: new Date(b).toISOString(),
-                    bucket: String(vodBucket),
-                  },
-                )}`,
-              ),
-            ),
+            chartWindows(start, end).map(async ([a, b]) => {
+              const key = `${a}|${b}|${bucket}`;
+              const kept = settledPages.get(key);
+              if (kept) return kept;
+              const page = await chartPage(a, b, bucket);
+              if (page && liveWhole && askedAt - b >= ENDED_SETTLE_MS) settledPages.set(key, page);
+              return page;
+            }),
           );
           if (!stillCurrent(rg)) return;
           const first = pages[0];
@@ -412,27 +435,22 @@ export function useLiveMockState(pastRoute: boolean): LiveMockState {
               buckets: pages.flatMap((pg) => pg.buckets),
               scope: start === rg.startedAt ? 'broadcast' : 'tail',
             };
-            setChart(joined);
+            chartReadLive = liveWhole;
             publishLiveData({ chart: joined });
-            chartDoneFor = settledKey(rg, askedAt);
+            if (ended) chartDoneFor = settledKey(rg, askedAt);
           }
           return;
         } else if (rg.status === 'offline') {
-          setChart(null);
           publishLiveData({ chart: null });
           return;
         }
-        const qs = new URLSearchParams({
-          from: from.toISOString(),
-          to: to.toISOString(),
-          bucket: String(bucket),
-        });
-        const page = await getJsonOrNull<ChartPage>(
-          `/api/clip/broadcasts/${encodeURIComponent(streamId)}/chat-chart?${qs}`,
-        );
+        // 시작 시각을 모르는 라이브(자리표시 방송)와 방송 상태를 아직 모를 때는 지금 기준 최근 10분이다: 처음을 모른다
+        const to = new Date(askedAt);
+        const from = new Date(askedAt - CHART_MINUTES * 60_000);
+        const page = await chartPage(from.getTime(), to.getTime(), CHART_BUCKET);
         if (page && stillCurrent(rg)) {
           const recent: LiveChart = { ...page, scope: 'recent' };
-          setChart(recent);
+          chartReadLive = true;
           publishLiveData({ chart: recent });
         }
       } catch {
@@ -447,12 +465,15 @@ export function useLiveMockState(pastRoute: boolean): LiveMockState {
       if (rg.status === 'offline') return;
       if (endedKey(rg) !== null && endedKey(rg) === infoDoneFor) return;
       const askedAt = Date.now();
-      // 지난 방송은 그래프와 같은 창의 시청자 기록을 달라고 한다: 안 주면 서버가 최근 1시간만 준다(PR #200 codex). 그 밖(라이브,
-      // 아직 모름)은 최근 창으로 읽고 그렇다고 표시한다. 제목·카테고리는 창과 무관해 명부 답을 기다리지 않는다(리뷰 4라운드)
+      // 그래프와 같은 창의 시청자 기록을 달라고 한다: 안 주면 서버가 최근 1시간만 준다(PR #200 codex). 지난 방송은 그 방송의 창,
+      // 라이브는 시작~지금이다(그래프가 처음부터라 선도 처음부터다). 시작을 모르는 라이브와 아직 모를 때는 최근 창으로 읽고 그렇다고
+      // 표시한다. 제목·카테고리는 창과 무관해 명부 답을 기다리지 않는다(리뷰 4라운드)
       const sinceMs =
         rg.status === 'ended' && rg.endedAt !== null
           ? endedWindowStart(rg.startedAt, rg.endedAt)
-          : null;
+          : rg.status === 'live' && rg.startedAt !== null
+            ? liveWindowStart(rg.startedAt, askedAt)
+            : null;
       const since =
         sinceMs === null
           ? ''
@@ -464,7 +485,7 @@ export function useLiveMockState(pastRoute: boolean): LiveMockState {
         const loaded: LoadedInfo = { ...page, scope: sinceMs === null ? 'recent' : 'broadcast' };
         setInfo(loaded);
         publishLiveData({ info: loaded });
-        if (sinceMs !== null) infoDoneFor = settledKey(rg, askedAt);
+        if (sinceMs !== null && rg.status === 'ended') infoDoneFor = settledKey(rg, askedAt);
       }
     };
     const ctrl = new AbortController();
@@ -604,74 +625,16 @@ export function useLiveMockState(pastRoute: boolean): LiveMockState {
     const list = Object.values(cards)
       .filter((c) => !c.hidden)
       .sort((a, b) => b.eventSeq - a.eventSeq);
-    return list.map((c, i) => toHighlight(c, i, now));
-  }, [cards, now]);
+    return list.map((c, i) => toHighlight(c, i, now, base));
+  }, [cards, now, base]);
   const hiddenHighlights = useMemo(() => {
     const list = Object.values(cards)
       .filter((c) => c.hidden)
       .sort((a, b) => b.eventSeq - a.eventSeq);
     // 강조(맨 앞 「방금」)는 보이는 목록의 몫이라 숨긴 카드에는 주지 않는다
-    return list.map((c) => toHighlight(c, -1, now));
-  }, [cards, now]);
+    return list.map((c) => toHighlight(c, -1, now, base));
+  }, [cards, now, base]);
   const hiddenCount = hiddenHighlights.length;
-
-  const chatVolume = useMemo<ChatVolumeSeries>(() => {
-    if (!chart || chart.buckets.length === 0)
-      return {
-        points: [
-          [0, 88],
-          [800, 88],
-        ],
-        markers: [],
-        timeLabels: [],
-      };
-    const b = chart.buckets;
-    const max = Math.max(1, ...b.map((x) => x.chats));
-    const n = b.length;
-    const x = (i: number) => (n === 1 ? 0 : (i / (n - 1)) * 800);
-    const y = (v: number) => 88 - (v / max) * 80;
-    const points = b.map((bk, i) => [Math.round(x(i)), Math.round(y(bk.chats))] as const);
-    const firstB = b[0];
-    const lastB = b[n - 1];
-    if (!firstB || !lastB)
-      return {
-        points: [
-          [0, 88],
-          [800, 88],
-        ],
-        markers: [],
-        timeLabels: [],
-      };
-    const t0 = Date.parse(firstB.start);
-    const t1 = Date.parse(lastB.start) + chart.bucketSeconds * 1000;
-    const markers = Object.values(cards)
-      .filter((c) => !c.hidden)
-      .map((c) => {
-        const t = cardAt(c, base);
-        if (t < t0 || t > t1) return null;
-        const i = Math.min(n - 1, Math.floor(((t - t0) / (t1 - t0)) * n));
-        const bk = b[i];
-        if (!bk) return null;
-        return [Math.round(x(i)), Math.round(y(bk.chats))] as const;
-      })
-      .filter((m): m is readonly [number, number] => m !== null);
-    const lab = (ms: number) => {
-      const d = new Date(ms);
-      return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-    };
-    return {
-      points,
-      markers,
-      // 방송 전체·끝 12시간을 읽은 끝난 방송이면 오른쪽 끝은 「지금」이 아니라 마지막 칸이 끝난 시각이다(QA 2026-10-11).
-      // 지금 기준 최근 10분을 읽은 차트만 끝이 「지금」이다: 그 차트는 10초마다 다시 읽는다
-      timeLabels: [
-        lab(t0),
-        lab(t0 + (t1 - t0) / 3),
-        lab(t0 + ((t1 - t0) * 2) / 3),
-        chart.scope === 'recent' ? '지금' : lab(t1),
-      ],
-    };
-  }, [chart, cards, base]);
 
   const { data: chzzk } = useQuery(chzzkLinkQueryOptions);
   const { data: me } = useMe();
@@ -715,7 +678,6 @@ export function useLiveMockState(pastRoute: boolean): LiveMockState {
     hiddenHighlights,
     hiddenCount,
     cardsStatus,
-    chatVolume,
     chatWarning: false,
   };
 }

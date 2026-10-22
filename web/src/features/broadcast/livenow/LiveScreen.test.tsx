@@ -396,6 +396,8 @@ const server = vi.hoisted(() => ({
   liveOffsetMs: 0,
   /** 라이브 줄에 시작 시각이 없고 시각 기준점만 있다(명부가 시작을 모르는 라이브) */
   liveStartUnknown: false,
+  /** 수집기가 관측마다 카테고리를 싣는다(아직 안 싣는다 — 실으면 통계가 바뀐 구간을 나눈다) */
+  infoCategoryChange: false,
   /** 라이브 줄의 시각 기준점(카드 0초). 서버 기준점은 첫 조각의 PDT − pts라 ms 자리가 있다. 없으면 싣지 않는다 */
   liveOriginMs: null as number | null,
   /** 라이브 다시 보기 물음(한 쪽 CHAT_PAGE_MAX줄)에 503을 준다. 폴링(200줄)은 그대로다 */
@@ -553,6 +555,29 @@ function listResponse(u: URL): Response {
   });
 }
 
+/**
+ * 라이브 방송의 차트 한 장 — 수집기처럼 물은 창(영상 축)을 칸으로 다 채운다(빈 칸은 0, 칸 시작은 표 축 = 영상 축 + 보정).
+ * 최근 10분 고정 차트(CHART)의 칸은 그 시각이 든 칸에 얹는다. 라이브도 방송 처음부터 1시간 창으로 나눠 읽으므로, 창마다 같은
+ * 차트를 주면 칸이 겹친다
+ */
+function liveChartPage(u: URL, base: typeof CHART.buckets, offsetMs: number) {
+  const from = Date.parse(u.searchParams.get('from') ?? '');
+  const to = Date.parse(u.searchParams.get('to') ?? '');
+  const bucket = Number(u.searchParams.get('bucket'));
+  const span = bucket * 1000;
+  const buckets: { start: string; chats: number; donations: number }[] = [];
+  for (let t = from; t < to; t += span)
+    buckets.push({ start: new Date(t + offsetMs).toISOString(), chats: 0, donations: 0 });
+  for (const b of base) {
+    const i = Math.floor((Date.parse(b.start) - (from + offsetMs)) / span);
+    const hit = buckets[i];
+    if (!hit) continue;
+    hit.chats += b.chats;
+    hit.donations += b.donations;
+  }
+  return { bucketSeconds: bucket, appliedOffsetMs: offsetMs, buckets };
+}
+
 /** 방송 정보의 답. 수집기는 since가 없으면 최근 1시간만 준다(DEFAULT_WINDOW): 몇 시간 전에 끝난 지난 방송은 기록이 비어 온다 */
 function infoResponse(path: string, noSince: boolean): Response {
   if (server.infoSinceFail && !noSince) return jsonResponse(503, { error: 'unavailable' });
@@ -561,11 +586,20 @@ function infoResponse(path: string, noSince: boolean): Response {
     : server.infoTitleMissing
       ? { ...INFO, latest: { ...INFO.latest, title: null } }
       : INFO;
+  const withCategory = server.infoCategoryChange
+    ? {
+        ...info,
+        series: info.series.map((p, i) => ({
+          ...p,
+          category: i < 2 ? '저스트 채팅' : '리그 오브 레전드',
+        })),
+      }
+    : info;
   const body = server.infoNoViewers
-    ? { ...info, series: info.series.map((p) => ({ ...p, viewers: null })) }
+    ? { ...withCategory, series: withCategory.series.map((p) => ({ ...p, viewers: null })) }
     : server.infoLastNull
       ? { ...info, series: [...info.series.slice(0, -1), { ...info.series[2], viewers: null }] }
-      : info;
+      : withCategory;
   return jsonResponse(
     200,
     noSince && path.includes(`/${VOD_ID}/`) ? { ...body, series: [] } : body,
@@ -622,15 +656,21 @@ function handle(url: string, init?: RequestInit): Response | Promise<Response> {
         buckets: CHART.buckets.map((b, i) => ({ ...b, chats: i === 0 ? first : 0, donations: 0 })),
       });
     }
-    if (server.vodChartFail && Date.parse(u.searchParams.get('from')!) < NOW - 3_600_000)
+    // 지난 방송 그래프가 실패한다: 지난 방송 주소는 1시간보다 앞 창이, 끝난 라이브는 모든 창이(라이브 동안 받아 둔 다 지난 창은
+    // 다시 묻지 않으므로 끝 창까지 실패해야 「못 받은」 상태다). 라이브 동안은 읽힌다
+    if (
+      server.vodChartFail &&
+      ((path.includes(`/${VOD_ID}/`) &&
+        Date.parse(u.searchParams.get('from')!) < NOW - 3_600_000) ||
+        (path.includes(`/${STREAM_ID}/`) && server.liveEnded))
+    )
       return jsonResponse(503, { error: 'unavailable' });
     // 라이브 되감기 보정 시험(POK-326)은 라이브 채팅과 같은 보정을 차트에도 싣는다
-    if (server.liveChartSparse)
-      return jsonResponse(200, {
-        ...CHART,
-        appliedOffsetMs: server.liveOffsetMs,
-        buckets: CHART.buckets.map((b) => ({ ...b, chats: 1, donations: 0 })),
-      });
+    const liveBuckets = server.liveChartSparse
+      ? CHART.buckets.map((b) => ({ ...b, chats: 1, donations: 0 }))
+      : CHART.buckets;
+    if (path.includes(`/${STREAM_ID}/`))
+      return jsonResponse(200, liveChartPage(u, liveBuckets, server.liveOffsetMs));
     return jsonResponse(200, { ...CHART, appliedOffsetMs: server.liveOffsetMs });
   }
   if (path.endsWith('/broadcast-info')) {
@@ -730,6 +770,7 @@ beforeEach(() => {
   server.liveChatTimeline = false;
   server.liveAsks = [];
   server.liveStartUnknown = false;
+  server.infoCategoryChange = false;
   server.liveOffsetMs = 0;
   server.liveOriginMs = null;
   server.liveReplayFail = false;
@@ -783,6 +824,26 @@ async function settle() {
       await vi.advanceTimersByTimeAsync(0);
     });
   }
+}
+
+/** jsdom은 폭이 0이다 — 통계 그래프는 폭을 재고서야 그린다. 그래프 안(「지금」·타임라인)을 보는 시험은 넓은 화면의 패널 폭을 준다 */
+function graphWidth() {
+  vi.spyOn(Element.prototype, 'getBoundingClientRect').mockReturnValue({
+    width: 1092,
+    height: 300,
+    top: 0,
+    left: 0,
+    right: 1092,
+    bottom: 300,
+    x: 0,
+    y: 0,
+    toJSON: () => ({}),
+  } as DOMRect);
+}
+
+/** 통계 숫자 줄 한 칸의 값(이름 dt 다음 dd) */
+function statValue(label: string) {
+  return screen.getByText(label, { selector: 'dt' }).nextElementSibling;
 }
 
 async function renderLive() {
@@ -1233,14 +1294,16 @@ describe('LiveScreen: 카드가 없을 때', () => {
 
 describe('LiveScreen: 라이브 문구', () => {
   it('방송 중에는 라이브 문구 그대로다: 실시간 채팅·실시간 통계·자동 감지 중·그래프 끝 「지금」', async () => {
+    graphWidth();
     await renderLive();
 
     expect(screen.getByRole('complementary', { name: '실시간 채팅' })).toBeInTheDocument();
     expect(screen.getByRole('region', { name: '실시간 통계' })).toBeInTheDocument();
     expect(screen.getByText('자동 감지 중 · 카드 클릭 = 시점 이동')).toBeInTheDocument();
     expect(screen.getByText('지금')).toBeInTheDocument();
-    // 채팅 수 이름은 차트가 읽은 창대로다: 라이브는 지금 기준 최근 창이다
-    expect(screen.getByText('최근 10분 채팅')).toBeInTheDocument();
+    // 채팅 수 이름은 차트가 읽은 창대로다: 라이브도 방송 처음부터 지금까지 읽는다
+    expect(screen.getByText(/^방송 중 채팅 [\d,]+개$/)).toBeInTheDocument();
+    expect(screen.queryByText(/^최근 \d+분 채팅/)).toBeNull();
   });
 });
 
@@ -1412,29 +1475,40 @@ describe('LiveScreen — 실시간 통계', () => {
   it('지표를 방송 정보와 채팅 차트에서 센다', async () => {
     await renderLive();
 
-    expect(screen.getByText('최고 시청자')).toBeInTheDocument();
-    expect(screen.getByText('2,310')).toBeInTheDocument();
-    expect(screen.getByText('분당 평균 채팅')).toBeInTheDocument();
-    expect(screen.getByText('2회')).toBeInTheDocument();
+    // 라이브 시청자 칸은 지금 값이다(정보 바 「1,842명 시청 중」과 같은 수). 최고·평균은 그 아래
+    expect(statValue('시청자')).toHaveTextContent('1,842');
+    expect(screen.getByText('최고 2,310 · 평균 1,884')).toBeInTheDocument();
+    expect(statValue('분당 평균 채팅')).toBeInTheDocument();
+    expect(statValue('후원')).toHaveTextContent('2회');
   });
 
-  it('타임라인이 채팅량·시청자·하이라이트·후원을 한 그림으로 알린다', async () => {
+  it('타임라인이 채팅·시청자·하이라이트·후원을 한 그림으로 알린다: 방송 처음부터라 카드 여덟 장이 다 선다', async () => {
+    graphWidth();
     await renderLive();
 
     expect(
-      screen.getByRole('img', {
-        name: '방송 타임라인 — 채팅량과 시청자 추이, 하이라이트 4곳, 후원 2회',
+      screen.getByRole('group', {
+        name: /^방송 타임라인 — 채팅·시청자, 하이라이트 8곳, 후원 2회/,
       }),
     ).toBeInTheDocument();
   });
 
-  it('하이라이트 내역은 총계 앞에 선다 — 총계가 다른 지표와 같은 오른쪽 끝에 맞는다', async () => {
+  it('하이라이트 칸은 총계와 자동·수동 내역을 같이 보인다', async () => {
     await renderLive();
 
-    const note = screen.getByText('자동 6 · 수동 2');
-    const value = note.parentElement;
-    expect(value?.textContent).toBe('자동 6 · 수동 28');
-    expect(note.nextElementSibling).toHaveTextContent('8');
+    expect(statValue('하이라이트')).toHaveTextContent('8');
+    expect(screen.getByText('자동 6 · 수동 2')).toBeInTheDocument();
+  });
+
+  it('그래프의 하이라이트 핀을 누르면 카드를 누른 것과 같이 그 시점으로 간다', async () => {
+    graphWidth();
+    await renderLive();
+
+    const pins = screen.getAllByRole('button', { name: /^하이라이트 (#\d+|수동) — / });
+    expect(pins.length).toBeGreaterThan(0);
+    expect(
+      screen.getByRole('button', { name: /^하이라이트 #8 — .*1:23:20로 이동$/ }),
+    ).toBeInTheDocument();
   });
 
   it('카드를 숨기면 지표와 필터 칩이 같이 준다: 요약이 첫 값에 굳지 않는다', async () => {
@@ -1457,6 +1531,50 @@ describe('LiveScreen — 실시간 통계', () => {
     expect(screen.getByText('자동 6 · 수동 2')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '자동 6' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '수동 2' })).toBeInTheDocument();
+  });
+
+  it('방송 중에도 그래프를 처음부터 1시간 창으로 나눠 읽고, 다 지난 창은 10초마다 다시 묻지 않는다: 시청자 기록도 시작부터다', async () => {
+    await renderLive();
+    const charts = () =>
+      fetchSpy.mock.calls
+        .map(([url]) => new URL(String(url), 'http://localhost'))
+        .filter((u) => u.pathname === `/api/clip/broadcasts/${STREAM_ID}/chat-chart`);
+    const range = (u: URL) => [
+      Date.parse(u.searchParams.get('from')!),
+      Date.parse(u.searchParams.get('to')!),
+    ];
+    const opened = charts();
+    expect(Math.min(...opened.map((u) => range(u)[0]!))).toBe(STARTED_AT);
+    for (const u of opened) expect(range(u)[1]! - range(u)[0]!).toBeLessThanOrEqual(3_600_000);
+    // 방송 1시간 24분: 30초 칸이고 창은 시작~1시간, 1시간~지금 둘이다
+    expect(opened.some((u) => range(u)[0] === STARTED_AT + 3_600_000)).toBe(true);
+    expect(opened.every((u) => u.searchParams.get('bucket') === '30')).toBe(true);
+
+    const before = charts().length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    await settle();
+    const polled = charts().slice(before);
+    expect(polled.length).toBeGreaterThan(0);
+    // 다 지난 첫 창(시작~1시간)은 다시 묻지 않고 끝 창만 묻는다
+    for (const u of polled) expect(range(u)[0]).toBe(STARTED_AT + 3_600_000);
+
+    const sinces = fetchSpy.mock.calls
+      .map(([url]) => new URL(String(url), 'http://localhost'))
+      .filter((u) => u.pathname === `/api/clip/broadcasts/${STREAM_ID}/broadcast-info`)
+      .map((u) => u.searchParams.get('since'));
+    expect(sinces).toContain(new Date(STARTED_AT).toISOString());
+  });
+
+  it('수집기가 관측마다 카테고리를 실으면 그래프 아래 띠가 바뀐 구간마다 나뉜다', async () => {
+    server.infoCategoryChange = true;
+    graphWidth();
+    await renderLive();
+
+    // 관측: 8분 전·5분 전 저스트 채팅, 1분 전 리그 오브 레전드. 처음 관측 앞은 모른다(띠를 지어내지 않는다)
+    expect(screen.getByTitle('저스트 채팅 · 7분')).toBeInTheDocument();
+    expect(screen.getByTitle(/^리그 오브 레전드 · /)).toBeInTheDocument();
   });
 });
 
@@ -2639,10 +2757,10 @@ describe('LiveScreen — 지난 방송 상세', () => {
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
     await renderLive();
 
-    expect(screen.queryByText(/^최근 \d+분 채팅$/)).toBeNull();
-    expect(screen.queryByText('방송 중 채팅')).toBeNull();
+    expect(screen.queryByText(/^최근 \d+분 채팅/)).toBeNull();
+    expect(screen.queryByText(/^방송 중 채팅/)).toBeNull();
     expect(screen.queryByText('지금')).toBeNull();
-    expect(screen.getAllByText('확인 중').length).toBeGreaterThan(0);
+    expect(statValue('분당 평균 채팅')).toHaveTextContent('확인 중');
   });
 
   it('라이브가 끝난 뒤 방송 전체 그래프를 못 받으면 라이브 때의 최근 그래프를 「지금」으로 남기지 않는다', async () => {
@@ -2650,6 +2768,7 @@ describe('LiveScreen — 지난 방송 상세', () => {
     server.vodChartFail = true;
     nav.search = `?stream=${STREAM_ID}`;
     window.history.pushState({}, '', `/broadcast/livenow?stream=${STREAM_ID}`);
+    graphWidth();
     await renderLive();
     expect(screen.getByText('지금')).toBeInTheDocument();
 
@@ -2661,7 +2780,8 @@ describe('LiveScreen — 지난 방송 상세', () => {
 
     expect(screen.getByText('방송함')).toBeInTheDocument();
     expect(screen.queryByText('지금')).toBeNull();
-    expect(screen.queryByText(/^최근 \d+분 채팅$/)).toBeNull();
+    expect(screen.queryByText(/^최근 \d+분 채팅/)).toBeNull();
+    expect(screen.queryByText(/^방송 중 채팅/)).toBeNull();
   });
 
   it('12시간 넘는 방송은 끝 12시간만 읽으므로 그 채팅 수를 방송 전체라고 하지 않는다', async () => {
@@ -2670,8 +2790,8 @@ describe('LiveScreen — 지난 방송 상세', () => {
     await renderLive();
 
     // 시험 서버는 칸 크기와 무관하게 창마다 30초 칸 20개(10분)를 준다: 1시간 창 12개면 120분이다
-    expect(screen.getByText('마지막 120분 채팅')).toBeInTheDocument();
-    expect(screen.queryByText('방송 중 채팅')).toBeNull();
+    expect(screen.getByText(/^마지막 120분 채팅 [\d,]+개$/)).toBeInTheDocument();
+    expect(screen.queryByText(/^방송 중 채팅/)).toBeNull();
   });
 
   it('12시간 넘는 방송의 분당 채팅은 읽은 끝 12시간으로 나눈다: 방송 전체 길이로 나누면 줄어 보인다', async () => {
@@ -2769,8 +2889,7 @@ describe('LiveScreen — 지난 방송 상세', () => {
     await renderLive();
 
     expect(screen.queryByText('수집 전')).toBeNull();
-    expect(screen.getByText('최고 시청자').nextElementSibling).toHaveTextContent('확인 중');
-    expect(screen.getByText('평균 시청자').nextElementSibling).toHaveTextContent('확인 중');
+    expect(statValue('평균 시청자')).toHaveTextContent('확인 중');
   });
 
   it('시청자 기록이 전부 빈 지난 방송은 정보 바와 통계가 같은 말이다: 「기록 없음」', async () => {
@@ -2780,7 +2899,7 @@ describe('LiveScreen — 지난 방송 상세', () => {
 
     expect(screen.getAllByText('시청자 수 기록 없음').length).toBeGreaterThan(0);
     expect(screen.queryByText('수집 전')).toBeNull();
-    expect(screen.getByText('최고 시청자').nextElementSibling).toHaveTextContent('기록 없음');
+    expect(statValue('평균 시청자')).toHaveTextContent('기록 없음');
   });
 
   it('명부 답보다 먼저 온 최근 창의 시청자 기록을 끝난 방송의 기록으로 보지 않는다: since 답이 실패해도 「기록 없음」이 아니다', async () => {
@@ -2866,15 +2985,16 @@ describe('LiveScreen — 지난 방송 상세', () => {
     });
     nav.search = `?stream=${VOD_ID}`;
     window.history.pushState({}, '', `/broadcast/livenow?stream=${VOD_ID}`);
+    graphWidth();
     await renderLive();
-    expect(screen.getByText('방송 중 채팅')).toBeInTheDocument();
+    expect(screen.getByText(/^방송 중 채팅 [\d,]+개$/)).toBeInTheDocument();
 
     await act(async () => {
       releaseChart();
     });
     await settle();
 
-    expect(screen.getByText('방송 중 채팅')).toBeInTheDocument();
+    expect(screen.getByText(/^방송 중 채팅 [\d,]+개$/)).toBeInTheDocument();
     expect(screen.queryByText('지금')).toBeNull();
   });
 
@@ -2914,8 +3034,8 @@ describe('LiveScreen — 지난 방송 상세', () => {
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
     await renderLive();
 
-    expect(screen.getByText('방송 중 채팅')).toBeInTheDocument();
-    expect(screen.queryByText(/^최근 \d+분 채팅$/)).toBeNull();
+    expect(screen.getByText(/^방송 중 채팅 [\d,]+개$/)).toBeInTheDocument();
+    expect(screen.queryByText(/^최근 \d+분 채팅/)).toBeNull();
   });
 
   it('시작 시각을 모르는 지난 방송은 그래프·채팅·시청자 기록을 같은 창(끝 12시간)으로 읽는다', async () => {
@@ -2926,7 +3046,7 @@ describe('LiveScreen — 지난 방송 상세', () => {
     await renderLive();
 
     expect(screen.queryByText('지금')).toBeNull();
-    expect(screen.getByText('마지막 120분 채팅')).toBeInTheDocument();
+    expect(screen.getByText(/^마지막 120분 채팅 [\d,]+개$/)).toBeInTheDocument();
     // 채팅도 읽는다(전에는 아예 읽지 않았다). 시작 시각을 모르니 하한(녹화를 찾는 끝 12시간에서 보정 여유 60초 앞, ADR-092)보다
     // 앞은 읽지 않는다
     const froms = chatFroms();
@@ -3104,7 +3224,7 @@ describe('LiveScreen: 값이 없을 때의 말(리뷰 5라운드)', () => {
     expect(screen.getByText('방송 정보 확인 중')).toBeInTheDocument();
     expect(screen.getAllByText('시청자 수 확인 중').length).toBeGreaterThan(0);
     expect(screen.queryByText(/수집 전/)).toBeNull();
-    expect(screen.getByText('최고 시청자').nextElementSibling).toHaveTextContent('확인 중');
+    expect(statValue('시청자')).toHaveTextContent('확인 중');
   });
 
   it('라이브 주소로 연 방송도 명부 답 전에는 「수집 전」이라 하지 않는다: 라이브인지 아직 모른다', async () => {
@@ -3267,10 +3387,10 @@ describe('LiveScreen: 라이브 되감기 채팅(POK-326)', () => {
     // 지금 62초 전(방송 4981초)
     expect(within(chatPanel()).getByText('라이브 4975초')).toBeInTheDocument();
     expect(within(chatPanel()).queryByText('라이브 4985초')).toBeNull();
-    // 앞 줄은 라이브 차트(최근 10분)로 그 앞 300줄이 차는 칸(지금 480초 전, 방송 4563초)부터 읽는다: 60초 앞부터만 읽으면
-    // 채팅이 뜸한 방송은 되감는 순간 300줄이 몇 줄로 줄었다
-    expect(within(chatPanel()).getByText('라이브 4565초')).toBeInTheDocument();
-    expect(within(chatPanel()).queryByText('라이브 4555초')).toBeNull();
+    // 앞 줄은 라이브 차트(방송 처음부터, 방송 시작에 맞춘 30초 칸)로 그 앞 300줄이 차는 칸(방송 4620초)부터 읽는다: 60초 앞부터만
+    // 읽으면 채팅이 뜸한 방송은 되감는 순간 300줄이 몇 줄로 줄었다. 시험 차트(지금 기준 30초 칸)는 3초 앞 칸에 얹힌다
+    expect(within(chatPanel()).getByText('라이브 4625초')).toBeInTheDocument();
+    expect(within(chatPanel()).queryByText('라이브 4615초')).toBeNull();
 
     await playFor(container, 20);
     expect(within(chatPanel()).getByText('라이브 4995초')).toBeInTheDocument();

@@ -18,7 +18,7 @@ import { formatUptime, parseClockLabel } from '@/features/player/playerMath';
 import { ChatPanel } from './ChatPanel';
 import { HighlightCardPanel } from './HighlightCardPanel';
 import { LiveOfflineScreen } from './LiveOfflineScreen';
-import { LiveStatsPanel } from './LiveStatsPanel';
+import { LiveStatsPanel, type TimelineCard } from './LiveStatsPanel';
 import { StreamInfoBar } from './StreamInfoBar';
 import { notFound, usePathname, useSearchParams } from 'next/navigation';
 import { requestPlaybackAccess } from '@/api/clipEditor';
@@ -316,7 +316,7 @@ function LiveDashboard() {
   // 주소는 usePathname으로 읽는다: 넘어온 직후 첫 그리기의 window.location은 옛 주소다
   const vodRouteId = vodStreamIdFromPathname(usePathname() ?? '');
   const pastRoute = vodRouteId !== null;
-  const { stream, highlights, hiddenHighlights, cardsStatus, chatVolume, chatWarning } =
+  const { stream, highlights, hiddenHighlights, cardsStatus, chatWarning } =
     useLiveMockState(pastRoute);
   const { streamMeta, cardVisuals } = useLiveDetailsMockState();
   const liveData = useLiveData();
@@ -419,6 +419,26 @@ function LiveDashboard() {
     const manual = highlights.filter((card) => card.source === 'manual').length;
     return { total: highlights.length, auto: highlights.length - manual, manual };
   }, [highlights]);
+  // 통계 그래프의 핀도 같은 카드 목록이다(숨긴 카드는 없다). 자동 카드는 제목의 번호(채팅이 튄 순간 #12)로, 수동 카드는 제목에
+  // 번호가 없어 「수동」으로 선다. 누르면 카드를 누른 것과 같이 그 시점으로 간다(handleSeek)
+  const timelineCards = useMemo<TimelineCard[]>(
+    () =>
+      highlights.flatMap((card) =>
+        card.atMs === undefined
+          ? []
+          : [
+              {
+                id: card.id,
+                atMs: card.atMs,
+                timestamp: card.timestamp,
+                label: card.source === 'manual' ? '수동' : `#${card.id.replace('card-', '')}`,
+                manual: card.source === 'manual',
+                reason: card.reason ?? card.title,
+              },
+            ],
+      ),
+    [highlights],
+  );
 
   // 녹화는 방송을 연 뒤에 찾는다. 그 전에 고른 시점은 옮길 플레이어가 없어(자리 표시) 그냥 사라지고, 뒤늦게 선 녹화는
   // 처음부터 튼다. 그래서 플레이어가 못 옮긴 시점만 남겨 두었다가 녹화의 시작 위치로 넘긴다(QA 2026-10-11 실기동).
@@ -605,14 +625,15 @@ function LiveDashboard() {
         ) : null}
       </div>
       {/* 전폭 — 스크롤로 내려와 만나는 자리다 */}
+      {/* 방송이 바뀌면 처음부터 다시 그린다 — 스크롤 위치·끝 따라가기를 앞 방송에서 이어받지 않는다 */}
       <LiveStatsPanel
-        chatVolume={chatVolume}
-        viewerLine={stats.viewerLine}
-        donations={stats.donations}
-        categorySegments={stats.categorySegments}
-        metrics={stats.metrics}
+        key={streamId}
+        stats={stats}
+        cards={timelineCards}
         highlightSummary={highlightSummary}
+        live={viewStatus === 'live'}
         ended={ended}
+        onSeekCard={handleSeek}
       />
     </main>
   );
