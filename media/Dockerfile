@@ -1,4 +1,5 @@
-# segment-indexer 사이드카 — 멀티스테이지 빌드
+# segment-indexer 사이드카 · janitor(로컬 ② 정리기) — 멀티스테이지 빌드. 한 이미지에 두 명령이 들고,
+# 기본 ENTRYPOINT 는 사이드카다(janitor 는 compose 의 entrypoint 로 고른다).
 # 빌드 스테이지의 Go 버전은 media/go.mod 의 go 지시자와 같은 1.27 로 유지한다.
 
 FROM golang:1.27-alpine AS build
@@ -11,6 +12,7 @@ RUN go mod download
 COPY . .
 # CGO_ENABLED=0 = 순수 정적 바이너리. 빌드 이미지의 libc 에 묶이지 않는다.
 RUN CGO_ENABLED=0 go build -trimpath -o /out/segment-indexer ./cmd/segment-indexer
+RUN CGO_ENABLED=0 go build -trimpath -o /out/janitor ./cmd/janitor
 
 # 최종 스테이지를 scratch 가 아니라 alpine 으로 두는 이유:
 # G4(사이드카가 파일을 쓰지도 지우지도 않는다)의 검증이 "touch /recordings/x 가
@@ -23,6 +25,7 @@ FROM alpine:3
 RUN apk add --no-cache tzdata ca-certificates
 
 COPY --from=build /out/segment-indexer /usr/local/bin/segment-indexer
+COPY --from=build /out/janitor /usr/local/bin/janitor
 
 # 비특권 사용자로 돌린다. recordings 는 :ro 로 붙지만, 권한을 낮춰 두면
 # 컨테이너가 뚫렸을 때 할 수 있는 일이 한 단계 더 줄어든다.

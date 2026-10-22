@@ -6,13 +6,15 @@ import { Check } from 'lucide-react';
 import { Button, FocusScope, Portal, VisuallyHidden, useScrollLock } from '@/ui';
 import { track } from '@/lib/analytics';
 import { useOnboardingStore } from '@/stores/onboarding';
-import { WELCOME_STEPS, stepDone } from './tourSteps';
+import { TOUR_STEPS, WELCOME_STEPS, stepDone } from './tourSteps';
 import styles from './Onboarding.module.css';
 
 // 웰컴 다이얼로그 (디자인 1a ① — 첫 진입 시 1회).
 // DS Dialog 대신 프리미티브 조합인 이유: 디자인이 백드롭 클릭 잠금 + 전용 딤(rgb(5 7 13/.58))을
 // 요구하는데 Dialog는 dismiss·오버레이 색이 고정이다. ESC만 "나중에 볼게요"와 같게 둔다(a11y 탈출구).
-export function WelcomeDialog() {
+// 목록은 지금 홈에서 실제로 짚을 단계만 — 막 가입 계정에 6개를 늘어놓으면 투어가 4번에서 끝날 때 어색하다(POK-378).
+export function WelcomeDialog({ visible }: { visible: readonly number[] }) {
+  const steps = WELCOME_STEPS.filter((step) => visible.some((i) => TOUR_STEPS[i]?.id === step.id));
   const dismissWelcome = useOnboardingStore((s) => s.dismissWelcome);
   const startTour = useOnboardingStore((s) => s.startTour);
   const channelLinked = useOnboardingStore((s) => s.channelLinked);
@@ -62,7 +64,7 @@ export function WelcomeDialog() {
               짚어드릴게요.
             </p>
             <ol className={styles.welcomeSteps}>
-              {WELCOME_STEPS.map((step, i) => {
+              {steps.map((step, i) => {
                 const done = stepDone(step.id, { channelLinked, pluginLinked });
                 return (
                   <li key={step.id} className={styles.welcomeStep}>

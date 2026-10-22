@@ -1,7 +1,10 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { apiFetch } from '@/api/client';
+import { fetchChzzkLink, type ChzzkLinkState } from '@/api/chzzkLink';
+import { fetchStreamKeyStatus } from '@/api/streamKeys';
+import { fetchYoutubeLink, type YoutubeLinkState } from '@/api/youtubeLink';
 import { broadcastTitle } from '@/api/clipEditor';
 import { ddayFor, isJustEnded } from '@/features/broadcast/vod/vodListView';
 import {
@@ -11,31 +14,25 @@ import {
   liveUploadsOf,
   type LibraryEntry,
 } from '@/api/clipEditor';
+import { useOnboardingStore } from '@/stores/onboarding';
 
-// 홈 대시보드 상태 — clip·auth 창구 배선(POK-251).
-// 목업 값은 전부 걷어냈다. 백엔드가 있는 것만 실값으로 채우고, 없는 칸은 null/빈 배열로
-// 내려 화면이 「백엔드 미구현」을 그리게 한다. 훅·타입 이름은 화면이 그대로 쓰도록 유지한다.
+// 홈 대시보드 상태 — clip·auth 창구 배선(POK-251), 화면 개편(POK-378).
+// 백엔드가 있는 것만 실값으로 채운다. 맨 위 큰 칸의 숫자는 새 API 없이 이미 읽는 목록을 날짜로 세기만 한다 —
+// 「무엇을 먼저 할지」 고르는 추천 로직은 두지 않는다(POK-378에서 「할 일 목록」 안을 기각한 이유).
 //
 // 실값 출처 (전부 same-origin 프록시, 로그인 세션의 apiFetch):
-//   GET /api/clip/broadcasts?state=live|past       → 라이브 밴드 · 지난 방송 · 만료 임박
-//   GET /api/clip/broadcasts/{id}/jump-cards       → 카드 수
+//   GET /api/clip/broadcasts?state=live|past       → 라이브 밴드 · 지난 방송 · 이번 주/지난주 방송 수 · 마지막 방송
+//   GET /api/clip/broadcasts/{id}/jump-cards       → 카드 수(지난 방송 격자 · 이번 주/지난주 찾은 카드)
 //   GET /api/clip/broadcasts/{id}/broadcast-info   → 라이브 제목 (latest=null이면 streamId)
-//   GET /api/auth/me                               → 인사말의 이름
-//   GET /api/clip/library                          → 이어서 편집 · 발행 현황 · 클립 완료 수(POK-111)
+//   GET /api/auth/me                               → 큰 칸 인사의 이름
+//   GET /api/clip/library                          → 라이브 클립 완료 수 · 이번 주/지난주 만든 클립·유튜브 발행
+//   GET /api/chzzk-link · /api/youtube-link · /api/stream-keys → 준비 단계 · 연결 상태(1분마다)
 
-/** 이어서 편집 배너 — 편집본 저장 API가 없어 항상 null. 닫기는 이번 세션에서만 유효 */
-export interface ResumeDraft {
-  title: string;
-  meta: string;
-  /** 편집기로 여는 주소 — 저장된 편집본(?recipe=) */
-  href: string;
-}
-
-/** 방송 중일 때만 노출되는 라이브 밴드 — 오프라인이면 섹션 전체 미노출 */
 export interface LiveNow {
   streamId: string;
   title: string;
-  platform: string;
+  /** 방송 플랫폼(치지직·SOOP·씨미). 방송 목록이 아직 알려 주지 않아 null — 모르는 플랫폼을 치지직이라 적지 않는다 */
+  platform: string | null;
   startedNote: string;
   /** 방송 경과 표기 — LIVE 배지 옆에 그대로 붙는다 */
   uptimeLabel: string;
@@ -63,62 +60,38 @@ export interface HomeVod {
   thumbnailUrl?: string | null;
 }
 
-/** checking = 유튜브에 올라갔는지 모른다(사람이 채널을 봐야 한다, POK-220) */
-export type PublishStatus = 'uploading' | 'checking' | 'scheduled' | 'published';
-
-export interface PublishRow {
-  id: string;
-  title: string;
-  status: PublishStatus;
-  /** uploading일 때만 존재하는 진행률(%) */
-  progress?: number;
-  /** scheduled·published의 우측 보조 텍스트 (예약 시각·조회수) */
-  note?: string;
+/** 한 주(월요일 0시부터, 로컬 시각)의 숫자 넷. 보관함을 못 읽었으면 클립·발행은 null(「–」로 그린다) */
+export interface WeekStats {
+  broadcasts: number;
+  cards: number;
+  clips: number | null;
+  published: number | null;
 }
 
-export interface ExpiringVod {
-  id: string;
-  dday: string;
-  /** D-3 이하 — 붉은 배지로 급함을 표시 */
-  urgent: boolean;
-  title: string;
+/** 연동 상태 — 각 칸은 못 읽었으면 null(「확인 중」, 버튼을 내밀지 않는다) */
+export interface HomeLinks {
+  chzzk: ChzzkLinkState | null;
+  youtube: YoutubeLinkState | null;
+  /** 연동 코드를 한 번이라도 발급했는가(스트림키 존재) */
+  streamKeyIssued: boolean | null;
 }
 
 export interface HomeMockState {
   userName: string | null;
-  greeting: string;
-  /** 가장 최근에 고친 「편집 중」 편집본. 없으면 배너를 안 그린다 */
-  resumeDraft: ResumeDraft | null;
-  resumeDismissed: boolean;
-  dismissResume: () => void;
   live: LiveNow | null;
   vods: HomeVod[];
-  /** 발행 현황 줄. 보관함을 아직 못 읽었으면 null — 빈 배열(「올린 영상 없음」)과 가른다 */
-  publishRows: PublishRow[] | null;
-  /** 보관함을 한 번도 못 읽었고 마지막 시도가 실패했다 */
-  publishUnavailable: boolean;
-  expiringVods: ExpiringVod[];
-  /** 첫 응답이 오기 전 true — 빈 목록을 「없음」으로 그리지 않기 위해 */
+  /** 방송 기록이 하나라도 있다(라이브 포함) — 없으면 준비 단계 큰 칸을 그린다 */
+  hasHistory: boolean;
+  week: WeekStats;
+  lastWeek: WeekStats;
+  /** 가장 최근에 끝난 방송 — 이번 주가 빈 주일 때 큰 칸이 말한다 */
+  lastBroadcast: { date: string; ago: string } | null;
+  links: HomeLinks;
+  /** 첫 응답이 오기 전 true — 그동안 준비 단계(신규 계정 화면)를 잘못 보이지 않는다 */
   loading: boolean;
 }
 
-// ── 와이어 형식 ──
-interface WireBroadcast {
-  streamId: string;
-  status: 'live' | 'ended' | 'vod_ready';
-  relation: 'OWNER' | 'EDITOR';
-  startedAt: string | null;
-  endedAt: string | null;
-  vodExpiresAt: string | null;
-  /** 사진 주소(POK-277). 옛 서버면 빠져 온다 */
-  thumbnailUrl?: string | null;
-  /** 치지직 방송 제목(POK-259). 없거나 옛 서버면 비어 온다 */
-  title?: string | null;
-}
-interface WireList {
-  broadcasts: WireBroadcast[];
-  nextCursor: string | null;
-}
+// ── 와이어 형식 ── 방송 목록은 api/clipEditor의 BroadcastRow(fetchAllBroadcasts)를 그대로 쓴다
 interface WireCard {
   id: number | string;
   streamId: string;
@@ -149,8 +122,13 @@ interface WireMe {
 }
 
 const POLL_MS = 10_000;
+/** 연동 상태는 자주 바뀌지 않는다 — 방송 목록(10초)보다 드물게 읽는다 */
+const LINKS_POLL_MS = 60_000;
+/** 상위 N개 밖 방송의 카드 수를 기억하는 시간 — 끝난 지 오래된 방송은 카드가 거의 안 바뀐다 */
+const CARD_CACHE_MS = 5 * 60_000;
 const PAST_LIMIT = 8;
 const EXPIRING_WINDOW_DAYS = 7;
+const DAY_MS = 86_400_000;
 
 async function getJson<T>(path: string): Promise<T | null> {
   try {
@@ -184,54 +162,123 @@ function dateLabel(iso: string): string {
 
 /** 만료까지 남은 일수 (올림). 지났으면 0 */
 function daysLeft(iso: string, now: number): number {
-  return Math.max(0, Math.ceil((Date.parse(iso) - now) / 86_400_000));
+  return Math.max(0, Math.ceil((Date.parse(iso) - now) / DAY_MS));
 }
 
-function greetingFor(hour: number): string {
-  if (hour < 5) return '늦은 밤이에요';
-  if (hour < 12) return '좋은 아침이에요';
-  if (hour < 18) return '좋은 오후예요';
-  return '좋은 저녁이에요';
+function startOfDay(d: Date): Date {
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+}
+
+/** 이번 주(월요일 0시, 로컬)와 지난주의 시작 시각(ms). 지난주 = [lastWeekStart, weekStart) */
+export function weekStarts(now: Date): { lastWeekStart: number; weekStart: number } {
+  const monday = startOfDay(now);
+  monday.setDate(monday.getDate() - ((monday.getDay() + 6) % 7));
+  const lastMonday = new Date(monday);
+  lastMonday.setDate(monday.getDate() - 7);
+  return { lastWeekStart: lastMonday.getTime(), weekStart: monday.getTime() };
+}
+
+/** 달력 날짜로 센 「며칠 전」 — 어제 밤 방송이 아침에 「0일 전」으로 보이지 않게 시각이 아니라 날짜로 뺀다 */
+export function daysAgoLabel(iso: string, now: Date): string {
+  const days = Math.round(
+    (startOfDay(now).getTime() - startOfDay(new Date(iso)).getTime()) / DAY_MS,
+  );
+  if (days <= 0) return '오늘';
+  if (days === 1) return '어제';
+  return `${days}일 전`;
+}
+
+function inRange(iso: string | null | undefined, from: number, to: number): boolean {
+  if (!iso) return false;
+  const t = Date.parse(iso);
+  return t >= from && t < to;
+}
+
+interface BroadcastWeek {
+  broadcasts: number;
+  cards: number;
 }
 
 interface Loaded {
   userName: string | null;
   live: LiveNow | null;
   vods: HomeVod[];
-  expiringVods: ExpiringVod[];
+  hasHistory: boolean;
+  week: BroadcastWeek;
+  lastWeek: BroadcastWeek;
+  lastBroadcast: { date: string; ago: string } | null;
+}
+
+/** 끝난 지 오래된(상위 N개 밖) 방송의 카드 — 수가 거의 안 바뀌어 10초마다 다시 읽지 않는다 */
+export interface CachedCards {
+  cards: WireCard[];
+  at: number;
 }
 
 /**
  * 홈 한 벌. 방송 목록을 못 읽으면 null — 부른 쪽이 지난 화면을 그대로 둔다.
  * 빈 값으로 덮으면 clip이 잠깐 재시작해도 라이브 띠와 지난 방송이 사라진다(PR #200 codex).
+ * cardCache는 상위 N개 밖 방송의 카드를 CARD_CACHE_MS 동안 기억한다 — 부른 쪽이 주기마다 같은 Map을 넘긴다.
  */
-async function loadHome(now: number): Promise<Loaded | null> {
-  const [me, liveList, pastAll] = await Promise.all([
+async function loadHome(now: number, cardCache: Map<string, CachedCards>): Promise<Loaded | null> {
+  const [me, liveAll, pastAll] = await Promise.all([
     getJson<WireMe>('/api/auth/me'),
-    getJson<WireList>('/api/clip/broadcasts?state=live&limit=1'),
-    // 지난 방송은 끝까지 읽는다 — 곧 만료될 방송은 가장 오래된 것이라 목록 끝에 있다(POK-251 리뷰 2라운드).
-    // 한 쪽만 읽으면 방송이 많은 채널일수록 「만료 임박」이 비어 보인다
+    // 라이브도 끝까지 — 여러 스트리머의 편집자면 동시에 여럿이 방송 중이다. 밴드는 첫 방송만, 이번 주 숫자는 전부 센다
+    fetchAllBroadcasts('live').catch(() => null),
+    // 지난 방송은 끝까지 읽는다 — 지난주 방송 수를 세려면 첫 쪽만으로는 모자랄 수 있다
     fetchAllBroadcasts('past').catch(() => null),
   ]);
-  if (liveList === null || pastAll === null) return null;
+  if (liveAll === null || pastAll === null) return null;
 
-  const liveBroadcast = liveList?.broadcasts[0] ?? null;
+  const liveBroadcast = liveAll[0] ?? null;
+  const liveIds = new Set(liveAll.map((b) => b.streamId));
   const past = pastAll.slice(0, PAST_LIMIT);
+  const { lastWeekStart, weekStart } = weekStarts(new Date(now));
+  // 두 목록은 동시에 읽는다 — 그 사이에 끝난 방송은 양쪽에 다 실려 올 수 있어 한 번만 센다(리뷰 #299 2차)
+  const all = [...liveAll, ...pastAll.filter((b) => !liveIds.has(b.streamId))];
 
-  // 카드는 방송마다 한 번씩 — 라이브 + 지난 방송 상위 N개
-  const targets = [...(liveBroadcast ? [liveBroadcast] : []), ...past];
+  // 카드는 방송마다 한 번씩 — 라이브 + 지난 방송 상위 N개는 매번, 그 밖의 이번 주·지난주 방송(N개를 넘는 주가 있다)은
+  // 기억해 둔 값이 CARD_CACHE_MS 안이면 그대로 쓴다(리뷰 #299: 10초마다 수십 개 방송을 다시 읽던 부하)
+  const fresh = new Set([...liveAll, ...past].map((b) => b.streamId));
+  const older = pastAll
+    .filter((b) => !fresh.has(b.streamId) && inRange(b.startedAt, lastWeekStart, Infinity))
+    .map((b) => b.streamId);
   const cardsByStream = new Map<string, WireCard[]>();
   await Promise.all(
-    targets.map(async (b) => {
+    [...fresh, ...older].map(async (streamId) => {
+      const cached = fresh.has(streamId) ? undefined : cardCache.get(streamId);
+      if (cached && now - cached.at < CARD_CACHE_MS) {
+        cardsByStream.set(streamId, cached.cards);
+        return;
+      }
       // 끝까지 넘긴다 — 기본 50장이고 오래된 것부터 와서, 첫 장만 읽으면 카드 수가 50에서 잘리고
       // 최근 카드가 통째로 빠진다(PR #200 codex)
-      const cards = await fetchAllJumpCards<WireCard>(b.streamId).catch(() => [] as WireCard[]);
-      cardsByStream.set(
-        b.streamId,
-        cards.filter((c) => !c.hidden),
+      const cards = await fetchAllJumpCards<WireCard>(streamId).then(
+        (list) => list.filter((c) => !c.hidden),
+        () => null,
       );
+      if (cards === null) {
+        // 못 읽었으면 기억해 둔 값을(기한이 지났어도) 쓰고 기억은 건드리지 않는다 — 다음 주기에 다시 읽는다.
+        // 빈 값을 기억하면 5분 동안 카드 수가 실제보다 적게 보인다(리뷰 #299 2차)
+        cardsByStream.set(streamId, cached?.cards ?? []);
+        return;
+      }
+      cardsByStream.set(streamId, cards);
+      if (!fresh.has(streamId)) cardCache.set(streamId, { cards, at: now });
     }),
   );
+
+  // 주는 방송 시작 시각으로 가른다 — 일요일 밤에 켜 월요일까지 간 방송은 지난주 방송이다.
+  // 단 지금 하고 있는 회차는 이번 주에도 센다 — 방송 중인데 큰 칸이 「방송 0번」이라 하지 않게
+  const weekOf = (from: number, to: number, withLive = false): BroadcastWeek => {
+    const rows = all.filter(
+      (b) => inRange(b.startedAt, from, to) || (withLive && liveIds.has(b.streamId)),
+    );
+    return {
+      broadcasts: rows.length,
+      cards: rows.reduce((n, b) => n + (cardsByStream.get(b.streamId)?.length ?? 0), 0),
+    };
+  };
 
   let live: LiveNow | null = null;
   if (liveBroadcast) {
@@ -244,7 +291,7 @@ async function loadHome(now: number): Promise<Loaded | null> {
     live = {
       streamId: liveBroadcast.streamId,
       title,
-      platform: '치지직',
+      platform: null,
       startedNote: startedAt ? `${clockLabel(startedAt)} 시작` : '시작 시각 정보 없음',
       uptimeLabel: startedAt ? msToClock(now - Date.parse(startedAt)) : '--:--:--',
       // 수집기가 1분마다 채우는 시청자 수. 아직 없으면 null(「준비 중」)
@@ -293,70 +340,84 @@ async function loadHome(now: number): Promise<Loaded | null> {
     };
   });
 
-  // 이미 만료된 방송은 뺀다 — 기한이 지난 방송도 목록에 남으므로 빼지 않으면 D-0으로 영영 쌓인다(PR #200 claude)
-  const expiringVods: ExpiringVod[] = pastAll
-    .flatMap((b) =>
-      b.vodExpiresAt && Date.parse(b.vodExpiresAt) > now
-        ? [{ b, d: daysLeft(b.vodExpiresAt, now) }]
-        : [],
-    )
-    .filter(({ d }) => d <= EXPIRING_WINDOW_DAYS)
-    .sort((x, y) => x.d - y.d)
-    .map(({ b, d }) => {
-      const cards = cardsByStream.get(b.streamId);
-      return {
-        id: b.streamId,
-        dday: `D-${d}`,
-        urgent: d <= 3,
-        title: cards ? `${broadcastTitle(b)} · 카드 ${cards.length}개` : broadcastTitle(b),
-      };
-    });
+  // 목록 순서를 믿지 않고 시작 시각으로 가장 최근 것을 고른다
+  const latestStart = pastAll
+    .map((b) => b.startedAt)
+    .filter((t): t is string => t !== null)
+    .sort((a, b) => Date.parse(b) - Date.parse(a))[0];
 
   return {
     userName: me?.name?.trim() || me?.email || null,
     live,
     vods,
-    expiringVods,
+    hasHistory: liveBroadcast !== null || pastAll.length > 0,
+    week: weekOf(weekStart, Infinity, true),
+    lastWeek: weekOf(lastWeekStart, weekStart),
+    lastBroadcast: latestStart
+      ? { date: dateLabel(latestStart), ago: daysAgoLabel(latestStart, new Date(now)) }
+      : null,
   };
 }
 
-const EMPTY: Loaded = { userName: null, live: null, vods: [], expiringVods: [] };
+/** 연동 상태 셋 — 하나를 못 읽어도 나머지는 그린다 */
+async function loadLinks(): Promise<HomeLinks> {
+  const [chzzk, youtube, streamKey] = await Promise.all([
+    fetchChzzkLink().catch(() => null),
+    fetchYoutubeLink().catch(() => null),
+    fetchStreamKeyStatus().catch(() => null),
+  ]);
+  return {
+    chzzk,
+    youtube,
+    streamKeyIssued: streamKey === null ? null : streamKey.issued === true,
+  };
+}
+
+const EMPTY_WEEK: BroadcastWeek = { broadcasts: 0, cards: 0 };
+const EMPTY: Loaded = {
+  userName: null,
+  live: null,
+  vods: [],
+  hasHistory: false,
+  week: EMPTY_WEEK,
+  lastWeek: EMPTY_WEEK,
+  lastBroadcast: null,
+};
+const NO_LINKS: HomeLinks = { chzzk: null, youtube: null, streamKeyIssued: null };
 
 export function useHomeMockState(): HomeMockState {
-  // 편집본 저장 백엔드가 없다 — 배너는 「백엔드 미구현」 안내로만 선다. 닫으면 세션 동안 사라진다.
-  const [resumeDismissed, setResumeDismissed] = useState(false);
-  const dismissResume = useCallback(() => setResumeDismissed(true), []);
-
   const [data, setData] = useState<Loaded>(EMPTY);
-  // 보관함(POK-243) — 이어서 편집 · 발행 현황 · 클립 완료 수가 여기서 나온다. 못 읽으면 null(배너는 안내만, 수는 「준비 중」)
+  // 보관함(POK-243) — 클립 완료 수 · 만든 클립 · 유튜브 발행이 여기서 나온다. 못 읽으면 null(수는 「–」)
   const [library, setLibrary] = useState<LibraryEntry[] | null>(null);
-  const [libraryFailed, setLibraryFailed] = useState(false);
-  const [loading, setLoading] = useState(true);
-  // 인사말은 마운트 뒤 클라이언트 시계로 정한다 — 서버 렌더와 어긋나지 않게 초기값은 고정.
-  const [greeting, setGreeting] = useState('안녕하세요');
+  const [links, setLinks] = useState<HomeLinks>(NO_LINKS);
+  const [homeLoaded, setHomeLoaded] = useState(false);
+  // 연동 상태를 한 번은 물어봤는가 — 그 전에 준비 단계를 그리면 연동을 마친 계정에도 버튼이 잠깐 보인다
+  const [linksTried, setLinksTried] = useState(false);
+  // 주의 경계는 클라이언트 시계로 — 서버 렌더와 어긋나지 않게 첫 응답 뒤에만 쓴다
+  const [now, setNow] = useState(0);
 
   useEffect(() => {
-    setGreeting(greetingFor(new Date().getHours()));
     let stopped = false;
+    // 상위 N개 밖 방송의 카드 기억 — 주기마다 같은 Map을 넘긴다
+    const cardCache = new Map<string, CachedCards>();
     // 읽기가 10초보다 오래 걸리면 다음 주기와 겹친다. 더 늦게 떠난 읽기가 이미 반영됐으면 먼저 떠나 늦게 온 답은 버린다
-    // (옛 「올리는 중」이 새 「발행됨」을 덮지 않게, PR #203 codex). 가장 최근 것만 받으면 늘 겹칠 때 아무것도 안 그려진다
+    // (PR #203 codex). 가장 최근 것만 받으면 늘 겹칠 때 아무것도 안 그려진다
     let started = 0;
     let applied = 0;
     const tick = async () => {
       const mine = ++started;
-      // 업로드가 끝나면 발행 현황이 바뀌어야 해서 방송과 같은 주기로 다시 읽는다. 못 읽으면 지난 값을 둔다
       const [loaded, entries] = await Promise.all([
-        loadHome(Date.now()),
+        loadHome(Date.now(), cardCache),
         fetchLibraryAll().catch(() => null),
       ]);
       if (stopped || mine < applied) return;
       applied = mine;
       if (entries !== null) setLibrary(entries);
-      setLibraryFailed(entries === null);
       // 못 읽었으면 지난 화면을 그대로 둔다. 첫 읽기부터 실패면 다음 주기까지 「불러오는 중」
       if (loaded === null) return;
       setData(loaded);
-      setLoading(false);
+      setNow(Date.now());
+      setHomeLoaded(true);
     };
     void tick();
     const t = window.setInterval(() => void tick(), POLL_MS);
@@ -366,76 +427,82 @@ export function useHomeMockState(): HomeMockState {
     };
   }, []);
 
+  // 연동 상태는 방송 폴링과 따로 1분마다 — 같은 주기에 묶으면 방송 읽기가 10초를 넘길 때 다음 주기가 먼저 반영돼
+  // 연동 결과가 통째로 버려진다(리뷰 #299). 못 읽은 칸은 지난 값을 둔다(방송 목록과 같은 정책)
+  useEffect(() => {
+    let stopped = false;
+    let started = 0;
+    let applied = 0;
+    const read = async () => {
+      const mine = ++started;
+      const next = await loadLinks();
+      if (stopped || mine < applied) return;
+      applied = mine;
+      setLinks((prev) => ({
+        chzzk: next.chzzk ?? prev.chzzk,
+        youtube: next.youtube ?? prev.youtube,
+        streamKeyIssued: next.streamKeyIssued ?? prev.streamKeyIssued,
+      }));
+      setLinksTried(true);
+    };
+    void read();
+    const t = window.setInterval(() => void read(), LINKS_POLL_MS);
+    return () => {
+      stopped = true;
+      window.clearInterval(t);
+    };
+  }, []);
+
+  // 홈이 서버에서 읽은 연동 사실을 시작 가이드 체크에 올린다(다른 기기에서 연동한 경우). 해제는 설정 화면이 내린다
+  useEffect(() => {
+    const store = useOnboardingStore.getState();
+    if (links.chzzk?.linked && !store.channelLinked) store.setChannelLinked(true);
+    if (links.streamKeyIssued && !store.pluginLinked) store.markPluginLinked();
+  }, [links]);
+
   const live =
     data.live === null
       ? null
       : { ...data.live, completedClips: completedClipsOf(library, data.live.streamId) };
+  const { lastWeekStart, weekStart } = weekStarts(new Date(now));
 
   return {
     userName: data.userName,
-    greeting,
-    resumeDraft: library === null ? null : resumeDraftOf(library),
-    resumeDismissed,
-    dismissResume,
     live,
     vods: data.vods,
-    publishRows: library === null ? null : publishRowsOf(library),
-    // 한 번 읽은 뒤의 실패는 지난 줄을 그대로 둔다(방송 목록과 같다) — 안내는 아직 아무것도 모를 때만
-    publishUnavailable: library === null && libraryFailed,
-    expiringVods: data.expiringVods,
-    loading,
+    hasHistory: data.hasHistory,
+    week: { ...data.week, ...libraryWeekOf(library, weekStart, Infinity) },
+    lastWeek: { ...data.lastWeek, ...libraryWeekOf(library, lastWeekStart, weekStart) },
+    lastBroadcast: data.lastBroadcast,
+    links,
+    loading: !homeLoaded || !linksTried,
   };
 }
 
-/** 이어서 편집 = 가장 최근에 고친 「편집 중」 편집본 하나 */
-function resumeDraftOf(entries: readonly LibraryEntry[]): ResumeDraft | null {
-  const editing = entries
-    .filter((e) => e.status === 'editing')
-    .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))[0];
-  return editing === undefined
-    ? null
-    : {
-        title: `편집본 #${editing.recipeId}`,
-        meta: `방송 ${editing.streamId} · v${editing.recipeVersion} · ${new Date(editing.updatedAt).toLocaleString('ko-KR')} 고침`,
-        href: `/clips/editor/studio?recipe=${editing.recipeId}`,
-      };
-}
-
-const PUBLISH_LIMIT = 5;
-
 /**
- * 발행 현황 = 편집본마다 살아 있는 업로드를 <b>한 줄씩</b> 최근 순으로(올리는 중·확인 필요·올림). 실패는 빼고(보관함 패널이 사유를
- * 말한다) 예약 발행은 아직 없다. 🔴 편집본 상태가 아니라 <b>업로드 상태</b>로 가른다: 올린 뒤 새 판을 저장하면 편집본은
- * 「편집 중」이 되지만 올린 영상은 유튜브에 그대로 있다. 새 판 영상을 만들어도 옛 판 업로드가 남는다(POK-334, liveUploads).
+ * 한 주의 만든 클립·유튜브 발행. 클립은 「가장 최근 영상이 완성」인 편집본을 그 영상을 주문한 시각으로 센다(라이브 띠의
+ * 클립 완료와 같은 기준). 발행은 편집본마다 살아 있는 업로드 중 「올림」을 마지막으로 바뀐 시각으로 센다 — 새 판 영상을
+ * 만들어도 옛 판 업로드가 남는다(POK-334, liveUploads).
  */
-function publishRowsOf(entries: readonly LibraryEntry[]): PublishRow[] {
-  const rows: (PublishRow & { at: number })[] = [];
-  for (const upload of entries.flatMap(liveUploadsOf)) {
-    const status: PublishStatus | null =
-      upload.status === 'queued' || upload.status === 'uploading'
-        ? 'uploading'
-        : upload.status === 'checking'
-          ? 'checking'
-          : upload.status === 'uploaded'
-            ? 'published'
-            : null;
-    if (status === null) continue;
-    rows.push({
-      id: String(upload.id),
-      title: upload.title,
-      status,
-      at: Date.parse(upload.updatedAt),
-    });
-  }
-  return rows
-    .sort((a, b) => b.at - a.at)
-    .slice(0, PUBLISH_LIMIT)
-    .map(({ at: _at, ...row }) => row);
+function libraryWeekOf(
+  entries: readonly LibraryEntry[] | null,
+  from: number,
+  to: number,
+): Pick<WeekStats, 'clips' | 'published'> {
+  if (entries === null) return { clips: null, published: null };
+  return {
+    clips: entries.filter(
+      (e) => e.latestClip?.status === 'rendered' && inRange(e.latestClip.createdAt, from, to),
+    ).length,
+    published: entries
+      .flatMap(liveUploadsOf)
+      .filter((u) => u.status === 'uploaded' && inRange(u.updatedAt, from, to)).length,
+  };
 }
 
 /**
  * 라이브 방송에서 영상까지 만든 편집본 수. 편집본 상태가 아니라 <b>가장 최근 영상이 완성인가</b>로 센다: 영상을 만든 뒤 새 판을
- * 저장만 하면 편집본은 「편집 중」이지만 만든 영상은 그대로 있다(발행 현황과 같은 기준). 새 판을 다시 만드는 중이면 목록 줄이
+ * 저장만 하면 편집본은 「편집 중」이지만 만든 영상은 그대로 있다. 새 판을 다시 만드는 중이면 목록 줄이
  * 그 영상을 가리켜 세지 않는다(보관함 목록은 편집본마다 영상 하나만 준다).
  */
 function completedClipsOf(

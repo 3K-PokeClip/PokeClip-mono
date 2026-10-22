@@ -1,5 +1,6 @@
 /* 디자인 1a 홈 대시보드 — 1440px 시안을 1200px 컨테이너 안에서 유동으로 번역.
-   인디고·마젠타 틴트는 브랜드 원색(#586fc4 · #d63f9f)의 투명 혼합이라 시안 값을 그대로 쓴다. */
+   인디고·마젠타 틴트는 브랜드 원색(#586fc4 · #d63f9f)의 투명 혼합이라 시안 값을 그대로 쓴다.
+   POK-378 개편: 맨 위 큰 칸(준비 단계·이번 주) · 연결 상태 · 포키의 팁을 더했다. */
 
 /* 홈 전체(헤더 포함)를 감싸는 래퍼 — home/page.tsx에서 사용.
    상단 인디고 그라디언트가 화면 전체 폭으로, 헤더 뒤까지 내려온다 (디자인 1a). */
@@ -19,29 +20,12 @@
   z-index: -1;
 }
 
-.greeting {
-  margin-top: calc(8 * var(--pc-u));
-}
-
-.greetingTitle {
-  margin: 0;
-  font-size: calc(23 * var(--pc-u));
-  font-weight: 800;
-  letter-spacing: -0.025em;
-}
-
-.greetingSub {
-  margin: calc(5 * var(--pc-u)) 0 0;
-  font-size: calc(13 * var(--pc-u));
-  color: var(--pc-color-text-secondary);
-}
-
 .grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) calc(332 * var(--pc-u));
   gap: calc(22 * var(--pc-u));
   align-items: start;
-  margin-top: calc(22 * var(--pc-u));
+  margin-top: calc(26 * var(--pc-u));
 }
 
 .main {
@@ -56,46 +40,296 @@
   gap: calc(12 * var(--pc-u));
 }
 
-/* ---------- 이어서 편집 배너 ---------- */
+/* ---------- 맨 위 큰 칸 (POK-378) ---------- */
 
-.resumeBanner {
-  display: flex;
-  align-items: center;
-  gap: calc(14 * var(--pc-u));
-  padding: calc(13 * var(--pc-u)) calc(16 * var(--pc-u));
-  border-radius: calc(14 * var(--pc-u));
-  background: linear-gradient(90deg, rgb(88 111 196 / 0.16), rgb(88 111 196 / 0.05));
-  border: 1px solid rgb(88 111 196 / 0.35);
-  margin-bottom: calc(22 * var(--pc-u));
+.hero {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) calc(250 * var(--pc-u));
+  gap: calc(24 * var(--pc-u));
+  margin-top: calc(10 * var(--pc-u));
+  padding: calc(28 * var(--pc-u)) calc(30 * var(--pc-u));
+  border-radius: calc(22 * var(--pc-u));
+  border: 1px solid rgb(88 111 196 / 0.32);
+  background:
+    radial-gradient(circle at 88% 60%, rgb(88 111 196 / 0.32), transparent calc(260 * var(--pc-u))),
+    linear-gradient(160deg, rgb(88 111 196 / 0.1), transparent 70%), var(--pc-color-bg-surface);
+  overflow: hidden;
 }
 
-.resumeThumb {
-  width: calc(58 * var(--pc-u));
-  aspect-ratio: 16 / 9;
-  border-radius: calc(8 * var(--pc-u));
-  background: var(--pc-color-bg-inset);
-  flex: none;
+/* 포키가 칸 아래 테두리에 걸쳐 서 있게 아래로 조금 내린다(overflow로 잘림) */
+.heroMascot {
+  align-self: end;
+  justify-self: center;
+  width: calc(230 * var(--pc-u));
+  height: auto;
+  margin-bottom: calc(-46 * var(--pc-u));
+}
+
+.weekMascot {
+  width: calc(190 * var(--pc-u));
+  margin-bottom: calc(-36 * var(--pc-u));
+}
+
+.heroHello {
+  font-size: calc(13 * var(--pc-u));
+  color: var(--pc-color-text-secondary);
+}
+
+.heroTitle {
+  margin: calc(6 * var(--pc-u)) 0 0;
+  font-size: calc(27 * var(--pc-u));
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  line-height: 1.25;
+}
+
+.heroSub {
+  margin: calc(8 * var(--pc-u)) 0 0;
+  font-size: calc(13 * var(--pc-u));
+  line-height: 1.5;
+  color: var(--pc-color-text-secondary);
+}
+
+.skeletonStack {
   display: flex;
+  flex-direction: column;
+  gap: calc(14 * var(--pc-u));
+  max-width: 100%;
+}
+
+/* 첫 클립까지 가는 길 — 순서가 있는 단계라 번호와 세로 실선을 쓴다 */
+.track {
+  max-width: calc(560 * var(--pc-u));
+  list-style: none;
+  margin: calc(22 * var(--pc-u)) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.trackItem {
+  position: relative;
+  display: grid;
+  grid-template-columns: calc(26 * var(--pc-u)) minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: center;
+  column-gap: calc(12 * var(--pc-u));
+  padding: calc(9 * var(--pc-u)) 0;
+}
+
+.trackItem:not(:last-child)::before {
+  content: '';
+  position: absolute;
+  left: calc(12.5 * var(--pc-u));
+  top: calc(35 * var(--pc-u));
+  bottom: calc(-9 * var(--pc-u));
+  width: 1px;
+  background: var(--pc-color-border-default);
+}
+
+.trackNo {
+  position: relative;
+  z-index: 1;
+  width: calc(26 * var(--pc-u));
+  height: calc(26 * var(--pc-u));
+  border-radius: 99px;
+  display: grid;
+  place-items: center;
+  font-size: calc(12 * var(--pc-u));
+  font-weight: 800;
+  background: var(--pc-color-bg-inset);
+  border: 1px solid var(--pc-color-border-default);
   color: var(--pc-color-text-muted);
 }
 
-.resumeBody {
-  flex: 1;
-  min-width: 0;
-  line-height: 1.35;
+.trackNo svg {
+  width: calc(14 * var(--pc-u));
+  height: calc(14 * var(--pc-u));
 }
 
-.resumeTitle {
+.trackItem[data-state='done'] .trackNo {
+  background: var(--pc-color-accent-subtle);
+  border-color: transparent;
+  color: var(--pc-color-accent-text);
+}
+
+.trackItem[data-state='current'] .trackNo {
+  background: var(--pc-color-accent);
+  border-color: transparent;
+  color: var(--pc-color-text-on-accent);
+}
+
+.trackTitle {
+  font-size: calc(14 * var(--pc-u));
+  font-weight: 700;
+}
+
+.trackItem[data-state='done'] .trackTitle,
+.trackItem[data-state='todo'] .trackTitle {
+  font-weight: 600;
+  color: var(--pc-color-text-secondary);
+}
+
+.trackNote {
+  margin-left: calc(8 * var(--pc-u));
+  font-size: calc(12 * var(--pc-u));
+  font-weight: 500;
+  color: var(--pc-color-text-muted);
+}
+
+.trackDesc {
+  grid-column: 2;
+  margin-top: calc(3 * var(--pc-u));
+  font-size: calc(12 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}
+
+.trackAction {
+  grid-column: 3;
+  grid-row: 1 / span 2;
+  width: calc(104 * var(--pc-u));
+}
+
+.trackWait {
+  grid-column: 3;
+  grid-row: 1 / span 2;
+  display: inline-flex;
+  align-items: center;
+  gap: calc(8 * var(--pc-u));
+  font-size: calc(12 * var(--pc-u));
+  font-weight: 600;
+  color: var(--pc-color-accent-text);
+}
+
+.heroFoot {
+  max-width: calc(560 * var(--pc-u));
+  display: flex;
+  align-items: center;
+  gap: calc(12 * var(--pc-u));
+  margin-top: calc(18 * var(--pc-u));
+  padding-top: calc(16 * var(--pc-u));
+  border-top: 1px solid var(--pc-color-border-subtle);
+  font-size: calc(12.5 * var(--pc-u));
+  color: var(--pc-color-text-secondary);
+}
+
+.heroFoot > :last-child {
+  margin-left: auto;
+  width: calc(104 * var(--pc-u));
+  flex: none;
+}
+
+/* 방송 기다리는 중 — 퍼져 나가는 고리 하나 */
+.pulse {
+  width: calc(8 * var(--pc-u));
+  height: calc(8 * var(--pc-u));
+  flex: none;
+  border-radius: 99px;
+  background: var(--pc-color-accent);
+  animation: pc-home-wait-pulse 1.8s ease-out infinite;
+}
+
+@keyframes pc-home-wait-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgb(88 111 196 / 0.55);
+  }
+  100% {
+    box-shadow: 0 0 0 calc(9 * var(--pc-u)) rgb(88 111 196 / 0);
+  }
+}
+
+/* 포키가 해 주는 일 — 방송 기록이 없을 때 빈 섹션 대신 기능 셋을 그림으로 */
+.featureHead {
+  margin: calc(28 * var(--pc-u)) 0 calc(12 * var(--pc-u));
+  font-size: calc(14.5 * var(--pc-u));
+  font-weight: 750;
+}
+
+.features {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: calc(12 * var(--pc-u));
+}
+
+.feature {
+  display: flex;
+  align-items: center;
+  gap: calc(12 * var(--pc-u));
+  padding: calc(14 * var(--pc-u)) calc(16 * var(--pc-u)) calc(14 * var(--pc-u))
+    calc(8 * var(--pc-u));
+  border-radius: calc(14 * var(--pc-u));
+  background: var(--pc-color-bg-surface);
+  border: 1px solid var(--pc-color-border-subtle);
+}
+
+.feature img {
+  width: calc(76 * var(--pc-u));
+  height: auto;
+  flex: none;
+}
+
+.featureTitle {
   font-size: calc(13.5 * var(--pc-u));
   font-weight: 700;
 }
 
-.resumeMeta {
+.featureDesc {
+  margin-top: calc(3 * var(--pc-u));
+  font-size: calc(11.5 * var(--pc-u));
+  line-height: 1.45;
+  color: var(--pc-color-text-muted);
+}
+
+/* 이번 주 숫자 넷 */
+.weekStats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  max-width: calc(640 * var(--pc-u));
+  margin: calc(24 * var(--pc-u)) 0 0;
+}
+
+.weekStats > div + div {
+  padding-left: calc(20 * var(--pc-u));
+  border-left: 1px solid var(--pc-color-border-subtle);
+}
+
+.weekStats dt {
   font-size: calc(11.5 * var(--pc-u));
   color: var(--pc-color-text-muted);
-  margin-top: calc(2 * var(--pc-u));
+}
+
+.weekStats dd {
+  margin: calc(3 * var(--pc-u)) 0 0;
+  font-size: calc(26 * var(--pc-u));
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.weekStats dd small {
+  margin-left: calc(3 * var(--pc-u));
+  font-size: calc(13 * var(--pc-u));
+  font-weight: 600;
+  color: var(--pc-color-text-muted);
+}
+
+/* 이번 주가 빈 주 — 지난주 숫자는 지나간 기록이라 한 단계 흐리게 */
+.weekStats[data-past] dd {
+  color: var(--pc-color-text-secondary);
+}
+
+.pastLabel {
+  margin-top: calc(22 * var(--pc-u));
+  font-size: calc(11.5 * var(--pc-u));
+  font-weight: 650;
+  color: var(--pc-color-text-secondary);
+}
+
+.pastLabel + .weekStats {
+  margin-top: calc(10 * var(--pc-u));
 }
 
 /* ---------- 라이브 밴드 ---------- */
@@ -135,7 +369,9 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .livePulseDot {
+  .livePulseDot,
+  .pulse,
+  .tipBubble {
     animation: none;
   }
 }
@@ -416,45 +652,178 @@
   border-top: 1px solid var(--pc-color-border-subtle);
 }
 
-.asideRowTitle {
+/* ---------- 연결 상태 (POK-378) ---------- */
+
+.connBody {
   flex: 1;
   min-width: 0;
+  line-height: 1.35;
+}
+
+.connName {
   font-size: calc(12.5 * var(--pc-u));
   font-weight: 650;
+}
+
+.connDetail {
+  margin-top: calc(1 * var(--pc-u));
+  font-size: calc(11.5 * var(--pc-u));
+  color: var(--pc-color-text-muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.asideRowNote {
-  font-size: calc(11 * var(--pc-u));
-  color: var(--pc-color-text-muted);
+/* 카드당 상태색 하나 — 연결됨만 강조색, 미연결은 무채색 버튼 */
+.connOk {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(4 * var(--pc-u));
   flex: none;
+  font-size: calc(11.5 * var(--pc-u));
+  font-weight: 600;
+  color: var(--pc-color-accent-text);
 }
 
-.rowProgress {
-  width: calc(64 * var(--pc-u));
-  flex: none;
-}
-
-/* ---------- 아이콘 스케일 ----------
-   lucide size prop은 px 속성 고정이라 CSS로 유닛에 태운다 */
-
-.resumeThumb svg {
+.connOk svg {
   width: calc(13 * var(--pc-u));
   height: calc(13 * var(--pc-u));
 }
 
-.resumeBanner button svg {
-  width: calc(14 * var(--pc-u));
-  height: calc(14 * var(--pc-u));
+.connAction {
+  flex: none;
+  width: calc(84 * var(--pc-u));
+}
+
+/* 할 일은 끝났지만 연결은 웹이 모르는 줄(OBS) — 강조색 없이 */
+.connReady {
+  flex: none;
+  font-size: calc(11.5 * var(--pc-u));
+  font-weight: 600;
+  color: var(--pc-color-text-secondary);
+}
+
+/* ---------- 포키의 팁 (POK-378) ----------
+   말풍선 + 카드 아래 가장자리에서 고개를 내민 포키. Card outline과 같은 테두리 규격을 쓴다 */
+
+.tipCard {
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--pc-radius-lg);
+  border: 1px solid var(--pc-color-border-default);
+  background: radial-gradient(
+    circle at 86% 100%,
+    rgb(88 111 196 / 0.3),
+    transparent calc(150 * var(--pc-u))
+  );
+}
+
+.tipNav {
+  margin: calc(-6 * var(--pc-u)) calc(-8 * var(--pc-u)) calc(-6 * var(--pc-u)) auto;
+  display: flex;
+  align-items: center;
+  gap: calc(2 * var(--pc-u));
+}
+
+.tipCount {
+  margin-right: calc(4 * var(--pc-u));
+  font-size: calc(11 * var(--pc-u));
+  font-variant-numeric: tabular-nums;
+  color: var(--pc-color-text-muted);
+}
+
+.tipNav svg {
+  width: calc(15 * var(--pc-u));
+  height: calc(15 * var(--pc-u));
+}
+
+/* 팁 길이가 달라도 두 줄 높이를 지켜 넘길 때마다 카드 높이가 출렁이지 않게 */
+.tipBubble {
+  position: relative;
+  margin: calc(8 * var(--pc-u)) calc(15 * var(--pc-u)) 0;
+  padding: calc(13 * var(--pc-u)) calc(15 * var(--pc-u));
+  min-height: calc(66 * var(--pc-u));
+  border-radius: calc(14 * var(--pc-u));
+  background: var(--pc-color-bg-surface-raised);
+  font-size: calc(12.5 * var(--pc-u));
+  line-height: 1.55;
+  color: var(--pc-color-text-primary);
+  animation: pc-home-tip-in var(--pc-duration-normal) var(--pc-ease-decelerate);
+}
+
+/* 꼬리 — 아래 오른쪽 포키 쪽 */
+.tipBubble::after {
+  content: '';
+  position: absolute;
+  right: calc(54 * var(--pc-u));
+  bottom: calc(-6 * var(--pc-u));
+  width: calc(12 * var(--pc-u));
+  height: calc(12 * var(--pc-u));
+  background: inherit;
+  border-radius: calc(2 * var(--pc-u));
+  transform: rotate(45deg);
+}
+
+@keyframes pc-home-tip-in {
+  from {
+    opacity: 0;
+    transform: translateY(calc(4 * var(--pc-u)));
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* 버튼은 포키 자리만 남기고 폭을 채운다 */
+.tipFoot {
+  display: flex;
+  align-items: flex-end;
+  min-height: calc(88 * var(--pc-u));
+  padding: calc(14 * var(--pc-u)) calc(124 * var(--pc-u)) calc(15 * var(--pc-u))
+    calc(15 * var(--pc-u));
+}
+
+.tipAction {
+  flex: 1;
+}
+
+.tipActionSlot {
+  display: block;
+  flex: 1;
+  height: calc(32 * var(--pc-u));
+}
+
+.tipPoki {
+  position: absolute;
+  right: calc(10 * var(--pc-u));
+  bottom: calc(-8 * var(--pc-u));
+  width: calc(112 * var(--pc-u));
+  height: auto;
+  pointer-events: none;
 }
 
 /* ---------- 반응형 ---------- */
 
 @media (max-width: 1023px) {
-  .grid {
+  .grid,
+  .hero,
+  .features {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .heroMascot {
+    display: none;
+  }
+
+  .weekStats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    row-gap: calc(16 * var(--pc-u));
+  }
+
+  .weekStats > div:nth-child(odd) {
+    padding-left: 0;
+    border-left: none;
   }
 
   .liveBand {
@@ -467,7 +836,7 @@
 }
 
 /* ---------- 빈 상태 ----------
-   창구가 없거나 목록이 비었을 때 자리를 지키는 한 줄 */
+   목록이 비었을 때 자리를 지키는 한 줄 */
 
 .emptyState {
   margin: 0;

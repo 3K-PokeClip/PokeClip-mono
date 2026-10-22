@@ -6,7 +6,8 @@ import { Thumb } from './Thumb';
 import type { HomeVod } from './useHomeMockState';
 
 // 디자인 1a ③ — 지난 방송·VOD 그리드. clip `state=past` 실값이다 (제목은 아직 streamId).
-export function VodGrid({ vods, loading }: { vods: HomeVod[]; loading: boolean }) {
+// 첫 응답 전엔 홈이 큰 칸 스켈레톤만 그려 이 격자는 늘 읽은 뒤에 선다 — 「불러오는 중」 칸이 없다(POK-378).
+export function VodGrid({ vods }: { vods: HomeVod[] }) {
   return (
     <section aria-label="지난 방송 · VOD" data-tour-id={TOUR_TARGET.vodGrid}>
       <div className={styles.vodHeader}>
@@ -17,7 +18,7 @@ export function VodGrid({ vods, loading }: { vods: HomeVod[]; loading: boolean }
         </Link>
       </div>
       {vods.length === 0 ? (
-        <p className={styles.emptyState}>{loading ? '불러오는 중…' : '지난 방송이 없어요.'}</p>
+        <p className={styles.emptyState}>방송이 끝나면 다시 볼 수 있는 VOD가 여기 쌓여요.</p>
       ) : (
         <ul className={styles.vodGrid}>
           {vods.map((vod) => (

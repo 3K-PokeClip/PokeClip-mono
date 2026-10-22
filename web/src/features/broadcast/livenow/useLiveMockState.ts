@@ -64,7 +64,7 @@ export interface LiveHighlight {
   emphasized?: boolean;
   /** 카드 시점 장면 사진(POK-277). 없으면 자리표시 */
   thumbnailUrl?: string | null;
-  /** 숨긴 카드다(POK-338): 「숨김」 칩에서만 보이고 「되돌리기」만 할 수 있다 */
+  /** 숨긴 카드다(POK-338): 「숨김」 칩에서만 보이고 「숨김 해제」만 할 수 있다 */
   hidden?: boolean;
 }
 
@@ -76,12 +76,19 @@ export interface ChatVolumeSeries {
   timeLabels: readonly string[];
 }
 
+export type CardListStatus = 'loading' | 'failed' | 'loaded';
+
 export interface LiveMockState {
   stream: LiveStream;
   highlights: LiveHighlight[];
   /** 숨긴 카드(POK-338). 숨김을 되돌릴 자리가 없으면 행동 기록에 되돌리기가 영영 안 쌓인다 */
   hiddenHighlights: LiveHighlight[];
   hiddenCount: number;
+  /**
+   * 이 방송의 카드 목록을 받았나. 받기 전의 빈 목록은 「없다」가 아니라 「모른다」다. 'failed'는 받기 전에 읽기가
+   * 실패한 것이다(다음 주기에 다시 읽는다). 한 번 받은 뒤의 실패는 받은 목록을 그대로 두므로 'loaded'다
+   */
+  cardsStatus: CardListStatus;
   chatVolume: ChatVolumeSeries;
   /** 채팅 수집 끊김 경고 배너 노출 여부 */
   chatWarning: boolean;
@@ -136,7 +143,7 @@ export interface CardActionResult {
 
 /**
  * 카드 동작이 성공하면 열린 화면이 목록을 그 자리에서 다시 읽는다(POK-338). 끝난 방송은 통로가 없고 목록을 드물게 읽어,
- * 기다리면 「놓기」·「숨김 되돌리기」가 한참 뒤에야 보인다
+ * 기다리면 「놓기」·「숨김 해제」가 한참 뒤에야 보인다
  */
 const cardChangeListeners = new Set<() => void>();
 
@@ -273,6 +280,7 @@ function parseSseBlock(block: string): { event: string; data: string } | null {
  */
 export function useLiveMockState(pastRoute: boolean): LiveMockState {
   const [cards, setCards] = useState<Record<number, Snapshot>>({});
+  const [cardsStatus, setCardsStatus] = useState<CardListStatus>('loading');
   const [chart, setChart] = useState<LiveChart | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [sseOk, setSseOk] = useState(false);
@@ -307,6 +315,7 @@ export function useLiveMockState(pastRoute: boolean): LiveMockState {
     // 방송이 바뀌면 앞 방송의 것은 전부 비운다. 방송 번호는 올리지 않는다: 올리는 곳은 방송을 고르는 훅 하나다(저장소는 번호가
     // 바뀌면 통째로 비운다)
     setCards({});
+    setCardsStatus('loading');
     setChart(null);
     setInfo(null);
     publishLiveData({ chart: null, info: null, cardTimes: [] });
@@ -355,8 +364,10 @@ export function useLiveMockState(pastRoute: boolean): LiveMockState {
         // 끝까지 넘기고 숨긴 카드도 받는다 — 숨김이 목록에 반영돼야 한다(통로가 끊겨 폴링이 대신할 때도).
         // 한 쪽만 읽으면 51번째 카드부터 빠진다(PR #200 codex)
         merge(await fetchAllJumpCards<Snapshot>(streamId, { includeHidden: true }));
+        if (!stopped) setCardsStatus('loaded');
       } catch {
-        /* 다음 주기에 다시 */
+        // 다음 주기에 다시. 받기 전의 실패만 「못 읽었다」고 말한다: 받은 목록이 있으면 그것을 그대로 보인다
+        if (!stopped) setCardsStatus((s) => (s === 'loaded' ? s : 'failed'));
       }
     };
     const loadChart = async () => {
@@ -698,5 +709,13 @@ export function useLiveMockState(pastRoute: boolean): LiveMockState {
     [streamId, sseOk, info, live.status, live.listTitle, channelName, myName, pastRoute],
   );
 
-  return { stream, highlights, hiddenHighlights, hiddenCount, chatVolume, chatWarning: false };
+  return {
+    stream,
+    highlights,
+    hiddenHighlights,
+    hiddenCount,
+    cardsStatus,
+    chatVolume,
+    chatWarning: false,
+  };
 }

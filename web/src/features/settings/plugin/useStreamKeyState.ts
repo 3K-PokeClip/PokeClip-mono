@@ -13,7 +13,7 @@ import { track } from '@/lib/analytics';
 import { useOnboardingStore } from '@/stores/onboarding';
 import { useToast } from '@/ui';
 
-// 연동 코드 실상태 훅 (POK-102) — usePluginMockState의 교체 주석이 약속한 자리.
+// 연동 코드 실상태 훅 (POK-102).
 // 화면 용어 "연동 코드"는 사용자 모델이고, 실제로는 스트림키 유무(GET /api/stream-keys)와
 // 페어링 코드 발급(POST pairing-codes)의 합성이다. 발급·재발급은 같은 동작 —
 // 새 일회용 코드를 찍는 1콜이고(키가 없으면 서버 ensureKey가 만든다), 키 회전(rotate)은
