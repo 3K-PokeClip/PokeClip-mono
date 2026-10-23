@@ -445,6 +445,23 @@ describe('ChannelSwitcher: 관리 모드에서 참여 채널 나가기', () => {
     // 지금 채널이 아니니 바꾸지 않고 창도 그대로다
     expect(useSwitchCurtain.getState().curtain).toBeNull();
     expect(screen.getByRole('dialog', { name: '계정 전환' })).toBeInTheDocument();
+    // 누른 줄은 사라졌다: 포커스는 남은 「완료」에 둔다(리뷰 6)
+    expect(panel.getByRole('button', { name: '완료' })).toHaveFocus();
+  });
+
+  it('마지막 참여 채널에서 나가면 「관리」도 사라지니 포커스를 「내 채널」 줄에 둔다(PR #342 리뷰 6)', async () => {
+    stub({ delegations: [KONGSTAR], invitations: [] });
+    const user = userEvent.setup();
+    const panel = within(await open(user));
+    await panel.findByText('편집 참여 중 · 1');
+    await user.click(panel.getByRole('button', { name: '관리' }));
+    await user.click(panel.getByRole('button', { name: '콩스타 채널에서 나가기' }));
+    await user.click(
+      within(await panel.findByRole('alertdialog')).getByRole('button', { name: '나가기' }),
+    );
+
+    await waitFor(() => expect(panel.queryByText(/편집 참여 중/)).not.toBeInTheDocument());
+    expect(rowOf(panel, '나')).toHaveFocus();
   });
 
   it('지금 들어가 있는 채널에서 나가면 창을 닫고 내 채널로 돌아간다: 참여 목록은 바꾼 뒤에 다시 읽는다', async () => {

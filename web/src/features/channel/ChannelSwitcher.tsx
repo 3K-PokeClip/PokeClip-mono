@@ -1,6 +1,15 @@
 'use client';
 
-import { useEffect, useId, useRef, useState, type ReactElement, type RefObject } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type ReactElement,
+  type Ref,
+  type RefObject,
+} from 'react';
 import Link from 'next/link';
 import clsx from 'clsx';
 import { Check } from 'lucide-react';
@@ -109,6 +118,17 @@ function SwitcherPanel({
   const [asking, setAsking] = useState<Asking | null>(null);
   // 관리 모드: 참여 채널마다 「나가기」를 꺼낸다(시안 비교 3안). 평소 창은 바꾸기만 해서 실수로 나갈 일이 없다
   const [managing, setManaging] = useState(false);
+  // 나간 뒤 포커스를 둘 곳: 누른 줄은 목록을 다시 읽으면 사라진다(PR #342 리뷰 6). 참여 채널이 남으면 「관리/완료」,
+  // 마지막 채널이었으면 그것도 사라지니 늘 남는 「내 채널」 줄
+  const manageRef = useRef<HTMLButtonElement>(null);
+  const mineRef = useRef<HTMLButtonElement>(null);
+  const focusAfterLeave = useRef<HTMLElement | null>(null);
+  // 한 번 쓰고 비운다(취소로 닫힐 땐 비어 있어 누른 버튼으로 간다). ref만 읽어 고정해 둔다: 덮개의 포커스 효과가 다시 돌지 않게
+  const takeFocusAfterLeave = useCallback(() => {
+    const target = focusAfterLeave.current;
+    focusAfterLeave.current = null;
+    return target;
+  }, []);
 
   if (!me) return <div className={styles.head}>계정 전환</div>;
   const currentId = active.ready ? active.streamerId : me.id;
@@ -127,6 +147,7 @@ function SwitcherPanel({
   const channels = asEditor.data ?? [];
   const invitations = received.data ?? [];
   const left = (channel: StreamerDelegation, refresh: () => void) => {
+    focusAfterLeave.current = channels.length > 1 ? manageRef.current : mineRef.current;
     setAsking(null);
     if (channel.streamerId !== currentId) {
       refresh();
@@ -150,6 +171,7 @@ function SwitcherPanel({
         <div className={styles.section}>
           <div className={styles.sectionTitle}>내 채널</div>
           <ChannelRow
+            buttonRef={mineRef}
             name={me.name}
             photo={me.profileImageUrl}
             role="스트리머"
@@ -161,6 +183,7 @@ function SwitcherPanel({
               <div className={clsx(styles.sectionTitle, styles.sectionHead)}>
                 <span>편집 참여 중 · {channels.length}</span>
                 <button
+                  ref={manageRef}
                   type="button"
                   className={styles.manage}
                   aria-pressed={managing}
@@ -240,6 +263,7 @@ function SwitcherPanel({
           onClose={() => setAsking(null)}
           onBusyChange={onBusyChange}
           onLeft={(refresh) => left(asking.channel, refresh)}
+          returnFocusTo={takeFocusAfterLeave}
         />
       )}
     </>
@@ -255,12 +279,23 @@ interface ChannelRowProps {
   /** 관리 모드: 줄을 눌러도 바꾸지 않고 오른쪽에 「나가기」를 둔다(참여 채널만) */
   managing?: boolean;
   onLeave?: (opener: HTMLElement) => void;
+  buttonRef?: Ref<HTMLButtonElement>;
 }
 
-function ChannelRow({ name, photo, role, current, onClick, managing, onLeave }: ChannelRowProps) {
+function ChannelRow({
+  name,
+  photo,
+  role,
+  current,
+  onClick,
+  managing,
+  onLeave,
+  buttonRef,
+}: ChannelRowProps) {
   const leaving = Boolean(managing && onLeave);
   const row = (
     <button
+      ref={buttonRef}
       type="button"
       className={styles.row}
       aria-current={current ? 'true' : undefined}
@@ -411,12 +446,15 @@ function LeaveConfirm({
   onClose,
   onBusyChange,
   onLeft,
+  returnFocusTo,
 }: {
   channel: StreamerDelegation;
   opener: HTMLElement;
   onClose: () => void;
   onBusyChange: (busy: boolean) => void;
   onLeft: (refresh: () => void) => void;
+  /** 나간 뒤 포커스를 둘 곳(없으면 누른 버튼) */
+  returnFocusTo: () => HTMLElement | null;
 }) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -438,6 +476,7 @@ function LeaveConfirm({
       onConfirm={() => leave.mutate()}
       onClose={onClose}
       onBusyChange={onBusyChange}
+      returnFocusTo={returnFocusTo}
     />
   );
 }
@@ -456,6 +495,7 @@ function PanelConfirm({
   onConfirm,
   onClose,
   onBusyChange,
+  returnFocusTo,
 }: {
   title: string;
   text: string;
@@ -466,6 +506,8 @@ function PanelConfirm({
   onClose: () => void;
   /** 요청이 나가 있는지 창(Popover)에 알린다: 그동안은 창도 닫히지 않는다 */
   onBusyChange: (busy: boolean) => void;
+  /** 닫힐 때 포커스를 둘 곳. 없거나 null이면 누른 버튼(opener) */
+  returnFocusTo?: () => HTMLElement | null;
 }) {
   const titleId = useId();
   const textId = useId();
@@ -476,9 +518,10 @@ function PanelConfirm({
   useEffect(() => {
     cancelRef.current?.focus();
     return () => {
-      if (opener.isConnected) opener.focus();
+      const target = returnFocusTo?.() ?? opener;
+      if (target.isConnected) target.focus();
     };
-  }, [opener]);
+  }, [opener, returnFocusTo]);
 
   useEffect(() => {
     onBusyChange(busy);
