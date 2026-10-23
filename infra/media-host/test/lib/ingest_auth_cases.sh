@@ -12,19 +12,21 @@
 
 # 고정 가짜 값 — 실제 비밀이 아니다. C11 이 로그 · inspect 에서 이 값들을 찾는다.
 # 꼴은 prod 와 같다(CDN 비밀 · API 비밀번호 · Basic · 잠금 = 16진 64자, 4C 출입증
-# = 머리에 실을 수 있는 글자, passphrase = 10–64자의 [A-Za-z0-9_-]).
+# = 머리에 실을 수 있는 글자, passphrase = 10–64자의 [A-Za-z0-9_-]). 16진 값은
+# 무작위가 아니라 무늬다 — 머리 8자 fa4e5ec7(가짜 표지) · 값 번호 두 자리 ·
+# 0 여섯 · 0123456789abcdef 세 번. 비밀 훑기에서 진짜 값과 가른다.
 readonly IA_CDN_SECRET=\
-'530cf149b112158a005fcbe69de7812ff1232e8ee9703ad7c2713e2d35338d74'
+'fa4e5ec7010000000123456789abcdef0123456789abcdef0123456789abcdef'
 readonly IA_API_PASS=\
-'3df5d9361c7e7db4792e5efaa61c805226412055c967873ea43840e327fdb8c5'
+'fa4e5ec7020000000123456789abcdef0123456789abcdef0123456789abcdef'
 readonly IA_BASIC_PASS=\
-'95be291326ae1096ea4ab51711022a8532e557a9b2f56b81d7e397db8dc3f03a'
+'fa4e5ec7030000000123456789abcdef0123456789abcdef0123456789abcdef'
 readonly IA_PUBLISH_LOCK=\
-'7b331bb740b0fab72888aaac8aa9d071cb1402b2471d62eb63fb1f1dcc0d3468'
+'fa4e5ec7040000000123456789abcdef0123456789abcdef0123456789abcdef'
 readonly IA_READ_LOCK=\
-'368c92c34ca173e814ce5744e3f75c5bd4cc6422a5338eb15a57f53e97ae23aa'
+'fa4e5ec7050000000123456789abcdef0123456789abcdef0123456789abcdef'
 readonly IA_INTERNAL_TOKEN=\
-'8679b392aa47539446ae8fcbd592b77ac94faf2bb775d0942b6c84181fe932e5'
+'fa4e5ec7060000000123456789abcdef0123456789abcdef0123456789abcdef'
 readonly IA_PASSPHRASE='m15FakePassphrase0000000000000001'
 readonly IA_WRONG_PASSPHRASE='m15WrongPassphrase000000000000002'
 # 스트림 토큰(공개 식별자 · 경로 이름) — 26자 Crockford 대문자.
@@ -218,6 +220,50 @@ ia::exit_code() {
     || printf '?'
 }
 
+# 끝난 송출기가 메모리 부족으로 죽었는지(조회 실패도 참 — 도구 실패 쪽).
+ia::oom_killed() {
+  [[ "$(docker inspect -f '{{.State.OOMKilled}}' "$(ia::name "$1")" \
+    2>/dev/null)" != false ]]
+}
+
+#######################################
+# 송출 · 읽기 명령의 종료 코드가 거부(인증 · 잠금이 막음)로 셀 수 있는 것인지
+# 본다. 조회 실패(?) · 0 · 상한 초과(124) · docker 가 명령을 못 돌림(125–127)은
+# 거부가 아니다. ffmpeg 는 오류를 음수 errno 의 하위 바이트로 내므로(예: 251)
+# 128 이상도 거부로 센다.
+# Arguments:
+#   종료 코드, 설명.
+#######################################
+ia::rejection_code() {
+  case "$1" in
+    0) harness::add_reason "$2: 0 으로 끝남(기대: 거부)" ;;
+    124) harness::add_reason "$2: 시간 초과(거부로 세지 않음)" ;;
+    125 | 126 | 127) harness::add_reason "$2: 명령 실행 실패(종료 $1)" ;;
+    *)
+      [[ "$1" =~ ^[0-9]+$ ]] && return 0
+      harness::add_reason "$2: 종료 코드 조회 실패(${1:-빈 값})"
+      ;;
+  esac
+  return 1
+}
+
+#######################################
+# MediaMTX 가 살아 있는지 본다 — 컨테이너 실행 중 · 관리 API 가 답함(코드가
+# 000 아님 — 응답기 정지 중이면 401 일 수 있다).
+# Arguments:
+#   설명.
+#######################################
+ia::expect_mtx_alive() {
+  local id
+  id="$(ia::compose ps -q mediamtx 2>/dev/null)" || id=""
+  if [[ -z "${id}" || "$(docker inspect -f '{{.State.Running}}' "${id}" \
+    2>/dev/null)" != true \
+    || "$(ia::http_code http://127.0.0.1:9997/v3/paths/list)" == 000 ]]; then
+    harness::add_reason "$1: 뒤에 MediaMTX 가 살아 있지 않음"
+    return 1
+  fi
+}
+
 #######################################
 # 송출을 띄우고 경로가 ready 가 될 때까지 기다린다. 받아들여지면 송출기를 그대로
 # 둔다(부르는 쪽이 ia::sender_stop).
@@ -245,12 +291,14 @@ ia::expect_accepted() {
 }
 
 #######################################
-# 송출을 띄우고 거부로 끝나는지 본다(상한 안에 0 아닌 종료). 송출기는 지운다.
+# 송출을 띄우고 거부로 끝나는지 본다 — 상한 안에 끝나고, 종료 코드가 거부로 셀
+# 수 있는 것이고(ia::rejection_code · 메모리 부족 아님), 그 뒤에도 MediaMTX 가
+# 살아 있다. 송출기는 지운다.
 # Arguments:
 #   이름, passphrase(빈 값 가능), 설명.
 #######################################
 ia::expect_rejected() {
-  local deadline=$((SECONDS + IA_REJECT_TIMEOUT)) code
+  local deadline=$((SECONDS + IA_REJECT_TIMEOUT)) code ok=0
   if ! ia::sender_start "$1" "$2"; then
     harness::add_reason "$3: 송출기 시작 실패"
     return 1
@@ -264,11 +312,55 @@ ia::expect_rejected() {
     return 1
   fi
   code="$(ia::exit_code "$1")"
+  if ia::oom_killed "$1"; then
+    harness::add_reason "$3: 송출기가 메모리 부족으로 죽음(또는 조회 실패)"
+    ok=1
+  fi
   ia::sender_stop "$1"
-  if [[ "${code}" == 0 ]]; then
-    harness::add_reason "$3: 송출기가 0 으로 끝남(기대: 거부)"
+  ia::rejection_code "${code}" "$3 송출기" || ok=1
+  ia::expect_mtx_alive "$3" || ok=1
+  return "${ok}"
+}
+
+# 가짜 응답기가 기억한 시험 경로 publish 요청 수(조회 실패면 실패).
+ia::stub_publish_count() {
+  local records
+  records="$(ia::stub_admin /records)" || return 1
+  jq --arg p "${IA_STREAM_TOKEN}" \
+    '[.[] | select(.action == "publish" and .path == $p)] | length' \
+    <<<"${records}"
+}
+
+#######################################
+# 송출 하나가 가짜 응답기에 닿았고(publish 요청이 늘었다) 응답기는 허용(200)
+# 했는데 거부로 끝났는지 본다 — 거부가 MediaMTX 쪽(잠금 · 경로 점유) 판정에서
+# 왔음을 가른다. 송출 자체는 ia::expect_rejected 가 본다.
+# Arguments:
+#   이름, passphrase(빈 값 가능), 설명.
+#######################################
+ia::expect_stub_rejected() {
+  local before records seen ok=0
+  if ! before="$(ia::stub_publish_count)"; then
+    harness::add_reason "$3: 가짜 응답기 기록 조회 실패"
     return 1
   fi
+  ia::expect_rejected "$@" || ok=1
+  # 새 publish 기록의 「개수 모두200여부」(예: 「1 true」).
+  if ! records="$(ia::stub_admin /records)" || ! seen="$(jq -r \
+    --arg p "${IA_STREAM_TOKEN}" --argjson n "${before}" '[.[]
+    | select(.action == "publish" and .path == $p)] | .[$n:]
+    | "\(length) \(all(.status == 200))"' <<<"${records}")"; then
+    harness::add_reason "$3: 가짜 응답기 기록 조회 실패"
+    return 1
+  fi
+  if [[ "${seen}" == '0 '* ]]; then
+    harness::add_reason "$3: 자극 미도달 — 가짜 응답기가 publish 요청을 못 받음"
+    ok=1
+  elif [[ "${seen}" != *' true' ]]; then
+    harness::add_reason "$3: 가짜 응답기 답이 모두 200 이 아님(기록 ${seen})"
+    ok=1
+  fi
+  return "${ok}"
 }
 
 #######################################
@@ -277,15 +369,18 @@ ia::expect_rejected() {
 #   ok|fail, passphrase(빈 값 가능), 설명.
 #######################################
 ia::expect_read() {
-  local got=fail
-  if ia::compose_within "${IA_READ_TIMEOUT}" run --rm --no-deps -T sender \
+  local got=fail status=0
+  ia::compose_within "${IA_READ_TIMEOUT}" run --rm --no-deps -T sender \
     -hide_banner -loglevel error -t 3 -i "$(ia::srt_url request "$2")" \
-    -f null - >/dev/null 2>&1; then
-    got=ok
-  fi
+    -f null - >/dev/null 2>&1 || status=$?
+  (( status != 0 )) || got=ok
   if [[ "${got}" != "$1" ]]; then
     harness::add_reason "$3: 읽기 ${got}(기대 $1)"
     return 1
+  fi
+  # 실패를 기대한 읽기 — 시간 초과 · 명령 실행 실패는 잠금이 막은 것이 아니다.
+  if [[ "$1" == fail ]]; then
+    ia::rejection_code "${status}" "$3"
   fi
 }
 
@@ -455,7 +550,8 @@ check_c8() {
 check_c10() {
   local ok=0
   ia::require_layer A || return 1
-  ia::expect_rejected a-c10 "${IA_PASSPHRASE}" '같은 경로 둘째 송출' || ok=1
+  ia::expect_stub_rejected a-c10 "${IA_PASSPHRASE}" '같은 경로 둘째 송출' \
+    || ok=1
   if ! ia::running a-c1 || ! ia::path_ready; then
     harness::add_reason '첫 송출이 살아 있지 않음(탈취)'
     ok=1
@@ -481,37 +577,58 @@ measure_big_bodies() {
 
 check_c2() {
   ia::require_layer A || return 1
-  ia::expect_rejected a-c2 "${IA_WRONG_PASSPHRASE}" '틀린 passphrase'
+  ia::expect_stub_rejected a-c2 "${IA_WRONG_PASSPHRASE}" '틀린 passphrase'
 }
 
 check_c3() {
   ia::require_layer A || return 1
-  ia::expect_rejected a-c3 '' 'passphrase 없는 송출'
+  ia::expect_stub_rejected a-c3 '' 'passphrase 없는 송출'
 }
 
 check_c7() {
   local ok=0
   ia::require_layer A || return 1
   ia::stub_mode allow-empty || return 1
-  ia::expect_rejected a-c7p "${IA_PASSPHRASE}" '빈 허용 + passphrase' || ok=1
-  ia::expect_rejected a-c7n '' '빈 허용 + passphrase 없음' || ok=1
+  ia::expect_stub_rejected a-c7p "${IA_PASSPHRASE}" '빈 허용 + passphrase' \
+    || ok=1
+  ia::expect_stub_rejected a-c7n '' '빈 허용 + passphrase 없음' || ok=1
   ia::stub_mode allow || ok=1
   return "${ok}"
 }
 
+#######################################
+# C6 — 응답기 정지 중 송출 거부. 자극(가짜 응답기가 정말 멈춤)을 확인하고,
+# 다시 띄운 뒤 같은 송출이 받아들여지는지 본다(양성 대조 — 층 A 의 거부 사례가
+# 스택 고장이 아니라 각 자극 때문임을 끝에서 한 번 보인다).
+#######################################
 check_c6() {
   local ok=0
   ia::require_layer A || return 1
-  if ! ia::compose stop authstub >/dev/null 2>&1; then
-    harness::add_reason '가짜 응답기 정지 실패'
+  if ! ia::compose stop authstub >/dev/null 2>&1 \
+    || [[ -n "$(ia::compose ps -q authstub 2>/dev/null)" ]]; then
+    harness::add_reason '가짜 응답기 정지 실패(자극 미도달)'
     return 1
   fi
   ia::expect_rejected a-c6 "${IA_PASSPHRASE}" '응답기 정지 중 송출' || ok=1
-  if ! ia::compose start authstub >/dev/null 2>&1; then
+  if ! ia::compose start authstub >/dev/null 2>&1 \
+    || ! ia::wait_stub_admin; then
     harness::add_reason '가짜 응답기 다시 시작 실패'
-    ok=1
+    return 1
   fi
+  ia::expect_accepted a-c6ok "${IA_PASSPHRASE}" '다시 띄운 뒤 송출(양성 대조)' \
+    || ok=1
+  ia::sender_stop a-c6ok
   return "${ok}"
+}
+
+# 가짜 응답기 관리 포트가 답할 때까지 기다린다(상한 IA_REJECT_TIMEOUT).
+ia::wait_stub_admin() {
+  local deadline=$((SECONDS + IA_REJECT_TIMEOUT))
+  while (( SECONDS < deadline )); do
+    ia::stub_admin /healthz >/dev/null && return 0
+    sleep 1
+  done
+  return 1
 }
 
 # ---- 층 B(실물 MediaMTX + 실물 응답기 + 가짜 4C) ----------------------------
@@ -706,7 +823,8 @@ ia::run_ops() {
     PCBENCH_FAKE_LIB="${ia_ops_media_dir}/test/ops_fakebin/record.sh" \
     PCBENCH_FAKE_LOG_DIR="${ia_ops_work}/log" \
     PCBENCH_FAKE_STATE_DIR="${ia_ops_work}/state" \
-    MEDIA_COMPOSE_PROJECT="${ia_project}" MEDIA_COMPOSE_FILE="${ia_compose_file}" \
+    MEDIA_COMPOSE_PROJECT="${ia_project}" \
+    MEDIA_COMPOSE_FILE="${ia_compose_file}" \
     INGEST_AUTH_DENY_DIR="${ia_ops_deny_dir}" \
     INGEST_AUTH_DENYLIST_PARAM="${IA_DENY_PARAM}" INGEST_AUTH_GID=10003 \
     harness::bounded "${IA_OPS_TIMEOUT}" "${script}" "$@" \
@@ -765,8 +883,10 @@ ia::connlog_lines() {
 }
 
 #######################################
-# 응답기 인증 수신 자리(망 칸 127.0.0.1:8080)를 1초 간격으로 찔러 코드와 시각을
-# 파일에 남긴다 — 멈춤 표식이 생길 때까지(배경 실행).
+# 응답기 인증 수신 자리(망 칸 127.0.0.1:8080)를 찔러 코드와 시각을 파일에
+# 남긴다 — 멈춤 표식이 생길 때까지(배경 실행). 탐침 한 번이 보조 컨테이너
+# (netprobe) 하나를 띄우므로 한 번에 수 초가 걸리고, 그 사이 1초를 쉰다 — 1초
+# 미만의 창은 놓칠 수 있다(기록 전용).
 # Arguments:
 #   기록 파일, 멈춤 표식.
 #######################################
@@ -783,9 +903,13 @@ ia::probe_window() {
 # C13 — 송출 중 IP 한도 끄기. 기존 송출은 끊기지 않고(받은 바이트 증가 · 송출기
 # 생존), mediamtx 는 그대로(ID · 시작 시각), 응답기만 바뀌고, connlog 가
 # 남고, 재생성 창(인증 자리 000)을 기록하고, 끝난 뒤 새 송출이 받아들여진다.
+# 계획 7-1 편차: 창의 길이 · 창 동안의 거부는 판정하지 않고 기록만 한다(탐침
+# 간격이 수 초라 창을 놓칠 수 있다 — ia::probe_window). 송출 연속성은 스크립트
+# 전후의 받은 바이트 증가와 송출기 생존으로만 본다 — 창 동안 잠시 멎었다
+# 이어진 송출은 가르지 못한다.
 #######################################
 check_c13() {
-  local ok=0 mtx_id mtx_at ia_id bytes0 bytes1 log0 log1 probe stop
+  local ok=0 mtx_id mtx_at ia_id bytes0 bytes1 log0 log1 probe stop pid
   require_ops_scripts "${IA_IP_LIMIT_SCRIPT}" || return 1
   if ! ia::running b-c9 || ! ia::path_ready; then
     harness::add_reason '기존 송출(b-c9)이 없음(C9 선행)'
@@ -799,11 +923,12 @@ check_c13() {
   probe="${ia_ops_work}/c13-window.txt"
   stop="${ia_ops_work}/c13-stop"
   ia::probe_window "${probe}" "${stop}" &
+  pid=$!
   ia::expect_ops 'INGEST AUTH IP LIMIT OK off' "${IA_IP_LIMIT_SCRIPT}" off \
     || ok=1
   : >"${stop}"
-  wait || true
-  printf '기록 C13 창 — 인증 자리 000 %s회(1초 간격 탐침 %s회)\n' \
+  wait "${pid}" || true
+  printf '기록 C13 창 — 인증 자리 000 %s회(탐침 %s회 · 한 번에 수 초)\n' \
     "$(grep -c ' 000$' "${probe}" || true)" \
     "$(awk 'END { print NR }' "${probe}")"
   if [[ "$(ia::http_code -X POST http://127.0.0.1:8080/mediamtx/auth)" == 000 ]]
@@ -866,11 +991,31 @@ check_c15() {
 }
 
 #######################################
-# C18 — 허용된 송출 중 토큰을 덧붙여 deny-sync 한 뒤 실물 cut: kicked=1 · 그
-# 연결이 사라짐 · 같은 토큰 재송출 거부.
+# 시험 경로의 상태를 낸다 — 관리 API 조회가 성공했을 때만 ready · idle(404 ·
+# ready=false)을 가르고, 그 밖(접속 실패 · 다른 코드 · JSON 아님)은 error 다.
+# Outputs:
+#   ready | idle | error.
+#######################################
+ia::path_state() {
+  local out code body
+  out="$(ia::probe_curl -u "${IA_API_USER}:${IA_API_PASS}" -w '\n%{http_code}' \
+    "http://127.0.0.1:9997/v3/paths/get/${IA_STREAM_TOKEN}")" || out=""
+  code="${out##*$'\n'}"
+  body="${out%$'\n'*}"
+  case "${code}:$(jq -r '.ready' <<<"${body}" 2>/dev/null)" in
+    200:true) printf 'ready' ;;
+    200:false | 404:*) printf 'idle' ;;
+    *) printf 'error' ;;
+  esac
+}
+
+#######################################
+# C18 — 허용된 송출 중 토큰을 덧붙여 deny-sync 한 뒤 실물 cut: 종료 0 ·
+# ingestauth_cut_completed · kicked=1 · 성공한 조회로 그 연결이 사라짐을
+# 확인(조회 실패는 「사라짐」 이 아니다) · 같은 토큰 재송출 거부.
 #######################################
 check_c18() {
-  local ok=0 out deadline
+  local ok=0 out status=0 deadline state
   require_ops_scripts "${IA_DENY_SYNC_SCRIPT}" || return 1
   if ! ia::running b-c15c || ! ia::path_ready; then
     harness::add_reason '허용된 송출(b-c15c)이 없음(C15 선행)'
@@ -880,17 +1025,22 @@ check_c18() {
   ia::expect_ops 'INGEST AUTH DENY SYNC OK tokens=1' "${IA_DENY_SYNC_SCRIPT}" \
     || ok=1
   out="$(ia::compose exec -T ingest-auth /ingest-auth cut \
-    "${IA_STREAM_TOKEN}" 2>&1)" || true
-  if ! grep -q -E '"kicked":1[,}]' <<<"${out}"; then
-    harness::add_reason "cut 출력에 kicked=1 없음: ${out:0:200}"
+    "${IA_STREAM_TOKEN}" 2>&1)" || status=$?
+  if (( status != 0 )) \
+    || ! grep -q -F '"msg":"ingestauth_cut_completed"' <<<"${out}" \
+    || ! grep -q -E '"kicked":1[,}]' <<<"${out}"; then
+    harness::add_reason "cut 종료 ${status} · completed · kicked=1 아님: \
+${out:0:200}"
     ok=1
   fi
   deadline=$((SECONDS + IA_REJECT_TIMEOUT))
-  while (( SECONDS < deadline )) && ia::path_ready; do
+  state="$(ia::path_state)"
+  while (( SECONDS < deadline )) && [[ "${state}" != idle ]]; do
     sleep 0.5
+    state="$(ia::path_state)"
   done
-  if ia::path_ready; then
-    harness::add_reason 'cut 뒤에도 경로가 ready(연결이 남음)'
+  if [[ "${state}" != idle ]]; then
+    harness::add_reason "cut 뒤 경로 상태 ${state}(기대 idle — error 는 조회 실패)"
     ok=1
   fi
   ia::sender_stop b-c15c
@@ -898,29 +1048,55 @@ check_c18() {
   return "${ok}"
 }
 
+# 사용자 · 비밀번호의 Basic 자격 표현(base64 — 줄바꿈 없이).
+ia::basic_b64() { printf '%s:%s' "$1" "$2" | base64 | tr -d '\n'; }
+
+#######################################
+# 비밀 여섯 원문과 Basic 자격 표현 둘(호출자 · 사이드카 API)을 「이름 값」 한
+# 줄씩 낸다 — C11 이 찾고 층 로그 저장이 가리는 목록(보고에는 이름만 싣는다).
+#######################################
+ia::secret_forms() {
+  printf '%s %s\n' cdn "${IA_CDN_SECRET}" api "${IA_API_PASS}" \
+    basic "${IA_BASIC_PASS}" publish-lock "${IA_PUBLISH_LOCK}" \
+    read-lock "${IA_READ_LOCK}" internal-token "${IA_INTERNAL_TOKEN}" \
+    basic-b64 "$(ia::basic_b64 "${IA_BASIC_USER}" "${IA_BASIC_PASS}")" \
+    api-b64 "$(ia::basic_b64 "${IA_API_USER}" "${IA_API_PASS}")"
+}
+
+#######################################
+# C11 — 응답기 inspect 와 mediamtx · 응답기 로그에 비밀 여섯 · Basic 표현 둘 ·
+# passphrase 가 없다. 로그가 비었으면(읽은 것이 없으면) 통과로 치지 않는다 —
+# 두 서비스 모두 줄이 있고 응답기 로그에 started 줄이 있어야 한다.
+#######################################
 check_c11() {
-  local ok=0 id inspect logs secret
+  local ok=0 id inspect logs name secret mtx_lines
   ia::require_layer B || return 1
   id="$(ia::compose ps -q ingest-auth 2>/dev/null)" || id=""
   if [[ -z "${id}" ]] || ! inspect="$(docker inspect "${id}" 2>/dev/null)"; then
     harness::add_reason '응답기 inspect 실패'
     return 1
   fi
-  if ! logs="$(ia::logs mediamtx ingest-auth)"; then
+  if ! logs="$(ia::logs mediamtx ingest-auth)" \
+    || ! mtx_lines="$(harness::count_output_lines ia::logs mediamtx)"; then
     harness::add_reason '로그를 읽지 못함'
     return 1
   fi
-  for secret in "${IA_CDN_SECRET}" "${IA_API_PASS}" "${IA_BASIC_PASS}" \
-    "${IA_PUBLISH_LOCK}" "${IA_READ_LOCK}" "${IA_INTERNAL_TOKEN}"; do
+  if (( mtx_lines == 0 )) \
+    || [[ "${logs}" != *'"msg":"ingestauth_started"'* ]]; then
+    harness::add_reason "로그가 비었거나 응답기 started 줄이 없음(mediamtx \
+${mtx_lines}줄)"
+    return 1
+  fi
+  while read -r name secret; do
     if [[ "${inspect}" == *"${secret}"* ]]; then
-      harness::add_reason "inspect 에 비밀(${secret:0:6}…)"
+      harness::add_reason "inspect 에 비밀(${name})"
       ok=1
     fi
     if [[ "${logs}" == *"${secret}"* ]]; then
-      harness::add_reason "로그에 비밀(${secret:0:6}…)"
+      harness::add_reason "로그에 비밀(${name})"
       ok=1
     fi
-  done
+  done < <(ia::secret_forms)
   if [[ "${logs}" == *"${IA_PASSPHRASE}"* ]]; then
     harness::add_reason '로그에 passphrase'
     ok=1

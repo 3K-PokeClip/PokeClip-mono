@@ -29,17 +29,25 @@
 # 시험 이음매(lib 의 ia::configure_ops — 가짜 SSM · 기록만 하는 chown · docker
 # logs 저널)로 돌린다. compose 파일은 scratch 사본이다 — 응답기 env_file 이
 # compose 파일 옆 ingest-auth.env(운영 스크립트의 규칙)이게. 거부 목록은 scratch
-# 의 호스트 디렉터리를 bind 한다. 스크립트가 없으면 「없음」 으로 실패한다.
-# 건너뛰는 갈래는 없다.
+# 의 호스트 디렉터리를 bind 한다. 가짜 chown 은 기록만 하므로 거부 목록의
+# root:10003 소유는 여기서 보지 않는다 — ops 시험(ingest_auth_ops_test.sh)의
+# chown argv 단언 몫이다. 스크립트가 없으면 「없음」 으로 실패한다. 건너뛰는
+# 갈래는 없다.
 #
 # 실험 식별: compose 프로젝트 pcbench-m15-ingest-auth · 라벨
 # com.pokeclip.bench=m15-ingest-auth(컨테이너 · 망 · 볼륨). 호스트 포트 게시 0.
-# 끝날 때와 중단 신호에 이 프로젝트를 down -v 하고 남은 일회성 컨테이너 · 임시
-# 디렉터리를 지운다. 빌드한 이미지(pcbench-m15-ingest-auth/*:local)는 다음
-# 실행이 다시 쓰도록 남긴다. 비밀은 고정 가짜 문자열이다(lib).
+# 프로젝트 이름이 고정이라 한 번에 하나만 돈다 — 시작할 때 잠금
+# 디렉터리(TMPDIR 의 pcbench-m15-ingest-auth.lock — 안에 PID)를 잡지 못하면
+# 아무것도 건드리지 않고 멈춘다. 그다음 정리 범위(이 프로젝트 · 이 라벨의
+# 컨테이너 · 망 · 볼륨)에 앞 실행 잔여가 하나라도 있으면 남의 것일 수 있으니
+# 지우지 않고 멈춘다. 끝날 때와 중단 신호에 이 프로젝트를 down -v 하고 남은
+# 일회성 컨테이너 · 임시 디렉터리를 지운 뒤 같은 범위의 잔여를 다시 센다 —
+# 하나라도 남거나 셀 수 없으면 종료 1 이다. 빌드한
+# 이미지(pcbench-m15-ingest-auth/*:local)는 다음 실행이 다시 쓰도록 남긴다.
+# 비밀은 고정 가짜 문자열이다(lib — 무늬 16진).
 #
 # INGEST_AUTH_CONTRACT_LOG_DIR 를 주면 층마다 compose 로그를 그 디렉터리에
-# 남긴다(가짜 비밀은 가린다).
+# 남긴다(가짜 비밀 · Basic 표현 · passphrase 는 이름 표지로 가린다).
 #
 # 사용: bash infra/media-host/test/ingest_auth_contract.sh
 # 종료 코드: 0 전부 통과 / 1 하나라도 실패
@@ -78,6 +86,11 @@ readonly BUILD_TIMEOUT=600
 # MediaMTX 관리 API 가 답할 때까지 · 응답기가 healthy 가 될 때까지(초).
 readonly MTX_READY_TIMEOUT=30
 readonly RESPONDER_READY_TIMEOUT=60
+readonly PROJECT_LABEL="com.docker.compose.project=${PROJECT}"
+# count_owned 의 「잔여 없음」 꼴.
+readonly NONE_OWNED='컨테이너 0 · 망 0 · 볼륨 0'
+# 동시 실행을 막는 잠금 디렉터리(mkdir 은 원자적이다).
+readonly LOCK_DIR="${TMPDIR:-/tmp}/${PROJECT}.lock"
 
 scratch=""
 setup_reason=""
@@ -95,6 +108,8 @@ legacy_reason=""
 auth_reason=""
 # 토큰 채우기 기록(T1) — 줄마다 「모드 토큰 개수」 · 「모드 @@남음 0|1」.
 token_counts=""
+# 이 실행이 잠금을 잡았는지(잡은 것만 푼다).
+lock_held=0
 
 add_setup_reason() {
   setup_reason="${setup_reason:+${setup_reason}; }$1"
@@ -123,26 +138,58 @@ stack_down() {
 }
 
 #######################################
-# 정리(EXIT 트랩). 잔여를 조회하지 못하면 「확인 불가」 를 내고, 종료 코드가
-# 0 이었으면 1 로 끝낸다.
+# 정리 범위(이 프로젝트 · 이 라벨)의 컨테이너 · 망 · 볼륨 수를 센다(두 필터의
+# 합 — 둘 다 붙은 것은 두 번 센다. 0 인지만 본다).
+# Outputs:
+#   「컨테이너 N · 망 N · 볼륨 N」(셀 수 없으면 실패).
+#######################################
+count_owned() {
+  local filter kind out="" n total
+  local -a list
+  for kind in 컨테이너 망 볼륨; do
+    case "${kind}" in
+      컨테이너) list=(ps -aq) ;;
+      망) list=(network ls -q) ;;
+      볼륨) list=(volume ls -q) ;;
+    esac
+    total=0
+    for filter in "label=${BENCH_LABEL}" "label=${PROJECT_LABEL}"; do
+      n="$(harness::count_output_lines docker "${list[@]}" \
+        --filter "${filter}")" || return 1
+      total=$((total + n))
+    done
+    out="${out:+${out} · }${kind} ${total}"
+  done
+  printf '%s' "${out}"
+}
+
+#######################################
+# 정리(EXIT 트랩). 정리 범위의 잔여가 하나라도 있거나 셀 수 없으면 종료 코드가
+# 0 이었어도 1 로 끝낸다. 잡은 잠금만 푼다.
 # Globals:
-#   scratch, env_ready
+#   scratch, env_ready, lock_held
 #######################################
 cleanup() {
   local status=$? left
   harness::end_last_group
   if (( env_ready )); then
     stack_down
-    if left="$(harness::count_output_lines docker ps -aq \
-      --filter "label=${BENCH_LABEL}")"; then
-      printf '정리: 라벨 %s 컨테이너 잔여 %s\n' "${BENCH_LABEL}" "${left}" >&2
-    else
-      printf '정리: 라벨 %s 컨테이너 잔여 확인 불가\n' "${BENCH_LABEL}" >&2
+    if ! left="$(count_owned)"; then
+      printf '정리: 라벨 %s · 프로젝트 %s 잔여 확인 불가\n' "${BENCH_LABEL}" \
+        "${PROJECT}" >&2
       (( status != 0 )) || status=1
+    else
+      printf '정리: 라벨 %s · 프로젝트 %s 잔여 — %s\n' "${BENCH_LABEL}" \
+        "${PROJECT}" "${left}" >&2
+      [[ "${left}" == "${NONE_OWNED}" ]] || status=1
     fi
   fi
   if [[ -n "${scratch}" ]]; then
     rm -rf -- "${scratch:?}"
+  fi
+  if (( lock_held )); then
+    rm -f -- "${LOCK_DIR}/pid"
+    rmdir -- "${LOCK_DIR}" 2>/dev/null || true
   fi
   exit "${status}"
 }
@@ -158,16 +205,34 @@ check_tools() {
   return "${ok}"
 }
 
-# 이전 실행 잔여(이 라벨)를 본다. 남의 것은 건드리지 않고 멈춘다.
+#######################################
+# 잠금을 잡는다(동시 실행 막기). 잡지 못하면 아무것도 건드리지 않고 멈춘다.
+# Globals:
+#   lock_held
+#######################################
+take_lock() {
+  local holder
+  if ! mkdir -- "${LOCK_DIR}" 2>/dev/null; then
+    holder="$(cat -- "${LOCK_DIR}/pid" 2>/dev/null)" || holder='?'
+    add_setup_reason "다른 실행이 잠금을 쥠(${LOCK_DIR} · PID ${holder} — 그 \
+실행이 없으면 지우고 다시)"
+    return 1
+  fi
+  lock_held=1
+  printf '%s\n' "$$" >"${LOCK_DIR}/pid"
+}
+
+# 정리 범위(이 프로젝트 · 이 라벨의 컨테이너 · 망 · 볼륨)의 이전 실행 잔여를
+# 본다. 남의 것일 수 있으니 건드리지 않고 멈춘다.
 check_prestate() {
   local leftover
-  if ! leftover="$(harness::count_output_lines docker ps -aq \
-    --filter "label=${BENCH_LABEL}")"; then
+  if ! leftover="$(count_owned)"; then
     add_setup_reason '이전 실행 잔여 조회 실패 — 확인 불가'
     return 1
   fi
-  if (( leftover != 0 )); then
-    add_setup_reason "이전 실행 잔여 컨테이너 ${leftover}개(라벨 ${BENCH_LABEL})"
+  if [[ "${leftover}" != "${NONE_OWNED}" ]]; then
+    add_setup_reason "이전 실행 잔여 ${leftover}(라벨 ${BENCH_LABEL} · \
+프로젝트 ${PROJECT})"
     return 1
   fi
 }
@@ -422,6 +487,7 @@ EOF
 
 setup() {
   check_tools || return 1
+  take_lock || return 1
   check_prestate || return 1
   load_sender_image || true
   build_images
@@ -531,15 +597,15 @@ stack_up() {
 #   층 이름.
 #######################################
 save_layer_logs() {
-  local dir="${INGEST_AUTH_CONTRACT_LOG_DIR:-}" secret raw
+  local dir="${INGEST_AUTH_CONTRACT_LOG_DIR:-}" name secret raw
   [[ -n "${dir}" ]] || return 0
   mkdir -p -- "${dir}"
   raw="$(compose_all logs --no-color --timestamps 2>&1)" || true
-  for secret in "${IA_CDN_SECRET}" "${IA_API_PASS}" "${IA_BASIC_PASS}" \
-    "${IA_PUBLISH_LOCK}" "${IA_READ_LOCK}" "${IA_INTERNAL_TOKEN}" \
-    "${IA_PASSPHRASE}" "${IA_WRONG_PASSPHRASE}"; do
-    raw="${raw//"${secret}"/<가림>}"
-  done
+  while read -r name secret; do
+    raw="${raw//"${secret}"/<가림 ${name}>}"
+  done < <(ia::secret_forms
+    printf '%s %s\n' passphrase "${IA_PASSPHRASE}" \
+      wrong-passphrase "${IA_WRONG_PASSPHRASE}")
   printf '%s\n' "${raw}" >"${dir}/layer-$1.log"
 }
 

@@ -29,7 +29,9 @@
 #     bind 다 — 운영 스크립트(deny-sync)가 그 안에서 rename 한다(C15 ·
 #     C18). 소유는 바꾸지 못한다 — 로컬 엔진 OrbStack 은 bind 파일을 읽는
 #     컨테이너 uid 의 것으로 보여, 0750 · 0640 이면 응답기가 읽는다
-#     (2026-10-24 실측).
+#     (2026-10-24 실측). 리눅스 엔진에서는 호스트 소유가 그대로 옮겨져
+#     응답기(uid 10003)가 못 읽어 층 B 준비가 실패할 수 있다 — 이 시험은 로컬
+#     OrbStack 전용이다.
 #   - env_file: 이 파일 옆 ingest-auth.env(prod 와 같은 상대 경로) — 시험은 이
 #     파일을 scratch 에 복사해 그 옆에 env 파일을 둔다.
 #   - healthcheck: prod 꼴에 start_interval 2s 를 더한다(시작 유예 안에서

@@ -77,22 +77,23 @@ write_env() {
 }
 
 #######################################
-# 새 컨테이너의 started 줄을 상한 안에서 기다려 ip_limit 를 대조한다. 실패
-# 단계로 끝낸다.
+# 새 컨테이너의 started 줄을 상한 안에서 기다려 ip_limit 를 대조한다. 조회 한
+# 번의 상한은 남은 시간과 명령 상한 가운데 작은 쪽이다(ops::remaining — 기한이
+# 지나면 다음 조회를 시작하지 않는다). 실패 단계로 끝낸다.
 # Arguments:
 #   컨테이너 ID, on | off, 상한(초).
 #######################################
 verify_started() {
-  local id="$1" want="$2" limit="$3" deadline lines started matched
+  local id="$1" want="$2" limit="$3" deadline lines started matched bound
   deadline=$((SECONDS + limit))
   while :; do
-    lines="$(ops::bounded "${limit}" journalctl -t "${JOURNAL_TAG}" \
+    bound="$(ops::remaining "${deadline}" "${limit}")" || fail journal
+    lines="$(ops::bounded "${bound}" journalctl -t "${JOURNAL_TAG}" \
       "CONTAINER_ID_FULL=${id}" -q --no-pager -o cat </dev/null \
       2>/dev/null)" || fail journal
     started="$(printf '%s\n' "${lines}" | grep -c -F -- "${STARTED_PATTERN}")" \
       || started=0
     (( started == 0 )) || break
-    (( SECONDS < deadline )) || fail journal
     sleep 1
   done
   matched="$(printf '%s\n' "${lines}" | grep -F -- "${STARTED_PATTERN}" \

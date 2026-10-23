@@ -8,8 +8,9 @@
 #      --filter label=com.docker.compose.project=<P>
 #      --filter label=com.docker.compose.service=<S>
 #        state/ps.<S> 의 「<id> <running|exited>」 줄에서 고른다. health 필터면
-#        state/healthy.<S> 의 ID 줄을 낸다. P 가 PCBENCH_FAKE_PROJECT 와 다르면
-#        빈 출력. state/ps.fail 이 있으면 종료 1.
+#        state/healthy.<S> 의 ID 줄을 낸다(state/healthy.hang 이 있으면 오래
+#        잔다). P 가 PCBENCH_FAKE_PROJECT 와 다르면 빈 출력. state/ps.fail 이
+#        있으면 종료 1.
 #   compose -p <P> -f <F> up -d --no-deps --force-recreate <S>
 #        재생성을 흉내 낸다 — 새 ID(pcbenchrecreated<n>)를 state/ps.<S> 의 단
 #        하나의 running 줄로 두고, state/health.never 가 없으면
@@ -114,6 +115,7 @@ fake_ps() {
   fi
   [[ "${project}" == "${PCBENCH_FAKE_PROJECT:-}" ]] || return 0
   if (( healthy )); then
+    [[ ! -e "${STATE}/healthy.hang" ]] || exec sleep 60
     [[ ! -f "${STATE}/healthy.${service}" ]] \
       || cat -- "${STATE}/healthy.${service}"
     return 0

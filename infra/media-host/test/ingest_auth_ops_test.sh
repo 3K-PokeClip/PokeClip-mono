@@ -28,16 +28,21 @@ source "${TEST_DIR}/lib/harness.sh"
 # shellcheck source=lib/ops_fixture.sh
 source "${TEST_DIR}/lib/ops_fixture.sh"
 
-readonly CASE_NAMES='D1 D2 D3 D4 D5 D6 D7 D8 D9 I1 I2 I3 I4 I5 I6 I7 I8 I9'
+readonly DENY_CASES='D1 D2 D3 D4 D5 D6 D7 D8 D9 D10'
+readonly LIMIT_CASES='I1 I2 I3 I4 I5 I6 I7 I8 I9 I10'
 readonly DENY_SCRIPT='bin/ingest-auth-deny-sync.sh'
 readonly LIMIT_SCRIPT='bin/ingest-auth-ip-limit.sh'
 readonly DENY_PARAM='pcbench-edge-proxy-fake-deny-param'
 readonly IA_ID='pcbenchingestauth01'
 readonly IA_TAG='pokeclip-media-ingest-auth'
 readonly HEADER='# pokeclip deny-tokens v1'
-# 공개 식별자 꼴(26자 Crockford 대문자) — 비밀이 아니다.
-readonly TOKEN_A='M15OPSTEST0000000000000001'
-readonly TOKEN_B='M15OPSTEST0000000000000002'
+# 공개 식별자 꼴(26자 Crockford 대문자 — I · L · O · U 없음, media/internal/
+# streamkey 의 정규식) — 비밀이 아니다.
+readonly TOKEN_A='M15DPSTEST0000000000000001'
+readonly TOKEN_B='M15DPSTEST0000000000000002'
+# healthy 대기 상한 시험(D10 · I10)이 받아 주는 실행 시간 상한(초) — 대기 1초 +
+# TERM 유예(lib/ops.sh 의 OPS_KILL_GRACE 3초)에 여유를 둔 값.
+readonly BOUNDED_WAIT_MAX=15
 readonly OLD_DENY="${HEADER}
 ${TOKEN_A}"
 
@@ -127,12 +132,14 @@ expect_mode() {
 }
 
 #######################################
-# 임시 파일 잔여가 없는지 본다(거부 목록 · compose 디렉터리의 점 파일 · TMPDIR).
+# 임시 파일 잔여가 없는지 본다 — 사례 디렉터리 어디에도(링크가 가리키던
+# 디렉터리 · 대상 자리의 디렉터리 안 포함) 두 스크립트의 임시 파일 이름이 없고
+# TMPDIR 가 비었는지.
 #######################################
 expect_no_temp() {
   local left
-  left="$(find "${ops_dir}/deny" "${ops_dir}/etc" -name '.*' -type f \
-    | awk 'END { print NR }')"
+  left="$(find "${ops_dir}" \( -name '.deny-tokens.*' \
+    -o -name '.ingest-auth.env.*' \) | awk 'END { print NR }')"
   if [[ "${left}" != 0 || "$(ops_fixture::tmp_files)" != 0 ]]; then
     harness::add_reason "임시 파일 잔여(디렉터리 ${left}개)"
     return 1
@@ -157,8 +164,8 @@ compose_argv() {
 
 # ---- 거부 목록 동기화 --------------------------------------------------------
 
-# D1 — 덧붙임 → 원자 교체(0640 · root:<그룹>) · 실행 중 healthcheck · 재생성 0 ·
-# 유효 토큰 수(주석 · 빈 줄 · 중복 제외).
+# D1 — 덧붙임 → 원자 교체(0640 · root:<그룹>) · 디렉터리 root:<그룹> 0750 ·
+# 실행 중 healthcheck · 재생성 0 · 유효 토큰 수(주석 · 빈 줄 · 중복 제외).
 case_deny_sync() {
   local ok=0 value="${HEADER}
 ${TOKEN_A}  # 사고 1
@@ -171,6 +178,8 @@ ${TOKEN_A}"
   ops_fixture::expect_line 'INGEST AUTH DENY SYNC OK tokens=2' 0 || ok=1
   expect_content "${ops_dir}/deny/deny-tokens" "${value}" '거부 목록' || ok=1
   expect_mode "${ops_dir}/deny/deny-tokens" 640 '거부 목록' || ok=1
+  expect_mode "${ops_dir}/deny" 750 '거부 목록 디렉터리' || ok=1
+  expect_argv chown 1 -h 0:10003 "${ops_dir}/deny" || ok=1
   expect_content "${ops_dir}/deny.keep" "${OLD_DENY}" '하드 링크(옛 파일)' \
     || ok=1
   expect_argv aws 1 ssm get-parameter --name "${DENY_PARAM}" --query \
@@ -279,22 +288,81 @@ case_deny_ssm_invalid() {
   return "${ok}"
 }
 
-# D6 — 설치 실패(디렉터리가 링크 · chown 실패) → install · 옛 파일 그대로.
+# D6 — 설치 실패(chown 실패 · 디렉터리가 링크 · 대상 자리가 링크 · 디렉터리)
+# → install · 옛 파일 그대로 · 임시 파일 0.
 case_deny_install_fail() {
-  local ok=0
-  setup_case
-  ssm_value "${HEADER}"
-  ops_fixture::run "${DENY_SCRIPT}" PCBENCH_FAKE_CHOWN_STATUS=1 -- || return 1
-  ops_fixture::expect_line 'INGEST AUTH DENY SYNC FAIL install' 1 || ok=1
-  expect_untouched || ok=1
-  expect_no_temp || ok=1
-  setup_case
-  ssm_value "${HEADER}"
-  mv -- "${ops_dir}/deny" "${ops_dir}/deny.real"
-  ln -s -- "${ops_dir}/deny.real" "${ops_dir}/deny"
-  ops_fixture::run "${DENY_SCRIPT}" -- || return 1
-  ops_fixture::expect_line 'INGEST AUTH DENY SYNC FAIL install' 1 || ok=1
+  local ok=0 variant
+  for variant in chown dirlink filelink filedir; do
+    setup_case
+    ssm_value "${HEADER}"
+    if ! deny_install_variant "${variant}"; then
+      ok=1
+      continue
+    fi
+    ops_fixture::expect_line 'INGEST AUTH DENY SYNC FAIL install' 1 || ok=1
+    expect_no_temp || ok=1
+    expect_install_untouched "${variant}" || ok=1
+  done
   return "${ok}"
+}
+
+#######################################
+# D6 갈래 하나의 자리를 꾸미고 deny-sync 를 돌린다.
+# Arguments:
+#   chown | dirlink | filelink | filedir.
+#######################################
+deny_install_variant() {
+  local deny="${ops_dir}/deny"
+  case "$1" in
+    chown)
+      ops_fixture::run "${DENY_SCRIPT}" PCBENCH_FAKE_CHOWN_STATUS=1 --
+      return
+      ;;
+    dirlink)
+      mv -- "${deny}" "${ops_dir}/deny.real"
+      ln -s -- "${ops_dir}/deny.real" "${deny}"
+      ;;
+    filelink)
+      mv -- "${deny}/deny-tokens" "${ops_dir}/outside"
+      ln -s -- "${ops_dir}/outside" "${deny}/deny-tokens"
+      ;;
+    filedir) rm -f -- "${deny}/deny-tokens" && mkdir -- "${deny}/deny-tokens" ;;
+  esac
+  ops_fixture::run "${DENY_SCRIPT}" --
+}
+
+#######################################
+# D6 갈래 하나가 남긴 자리가 옛 그대로인지 본다 — 링크는 링크로, 가리키는 곳은
+# 옛 내용으로, 대상 자리의 디렉터리는 빈 채로, env · compose 호출 0.
+# Arguments:
+#   chown | dirlink | filelink | filedir.
+#######################################
+expect_install_untouched() {
+  local deny="${ops_dir}/deny"
+  case "$1" in
+    chown | dirlink)
+      if [[ "$1" == dirlink && ! -L "${deny}" ]]; then
+        harness::add_reason 'dirlink: 디렉터리 링크가 바뀜'
+        return 1
+      fi
+      expect_untouched
+      ;;
+    filelink)
+      if [[ ! -L "${deny}/deny-tokens" ]]; then
+        harness::add_reason 'filelink: 대상 자리의 링크가 바뀜'
+        return 1
+      fi
+      expect_content "${ops_dir}/outside" "${OLD_DENY}" 'filelink: 링크 대상'
+      ;;
+    filedir)
+      if [[ ! -d "${deny}/deny-tokens" \
+        || -n "$(ls -A -- "${deny}/deny-tokens")" ]]; then
+        harness::add_reason 'filedir: 대상 자리의 디렉터리가 비어 있지 않음'
+        return 1
+      fi
+      expect_docker_count compose 0
+      ;;
+  esac
 }
 
 # D7 — healthcheck 실패 → health · 새 파일 그대로(되돌리지 않음) · 재생성 0.
@@ -324,6 +392,37 @@ case_deny_release_fail() {
   ops_fixture::run "${DENY_SCRIPT}" -- --release || return 1
   ops_fixture::expect_line 'INGEST AUTH DENY SYNC FAIL unhealthy' 1 || ok=1
   return "${ok}"
+}
+
+#######################################
+# 재생성 뒤 healthy 대기가 상한을 지키는지 본다 — healthy 조회가 매달려도
+# MEDIA_OPS_HEALTH_WAIT(1초)에 TERM 유예를 더한 만큼 안에 unhealthy 로 끝난다
+# (조회 한 번의 상한이 MEDIA_OPS_TIMEOUT 600초가 아니라 남은 대기 시간).
+# Arguments:
+#   스크립트, 기대 판정 줄, 스크립트 인자 ….
+#######################################
+expect_bounded_wait() {
+  local script="$1" want="$2" ok=0 started elapsed
+  shift 2
+  setup_case
+  ssm_value "${HEADER}"
+  mark healthy.hang
+  started="${SECONDS}"
+  ops_fixture::run "${script}" MEDIA_OPS_HEALTH_WAIT=1 MEDIA_OPS_TIMEOUT=600 \
+    -- "$@" || return 1
+  elapsed=$((SECONDS - started))
+  ops_fixture::expect_line "${want}" 1 || ok=1
+  if (( elapsed > BOUNDED_WAIT_MAX )); then
+    harness::add_reason "healthy 대기 ${elapsed}초(상한 ${BOUNDED_WAIT_MAX}초)"
+    ok=1
+  fi
+  return "${ok}"
+}
+
+# D10 — --release 의 healthy 조회가 매달림 → 대기 상한 안에 unhealthy.
+case_deny_bounded_wait() {
+  expect_bounded_wait "${DENY_SCRIPT}" 'INGEST AUTH DENY SYNC FAIL unhealthy' \
+    --release
 }
 
 # D9 — 인자 · 설정 오류 → usage(2) · config · docker 0.
@@ -493,6 +592,11 @@ case_limit_verify() {
   return "${ok}"
 }
 
+# I10 — 재생성 뒤 healthy 조회가 매달림 → 대기 상한 안에 unhealthy.
+case_limit_bounded_wait() {
+  expect_bounded_wait "${LIMIT_SCRIPT}" 'INGEST AUTH IP LIMIT FAIL unhealthy' off
+}
+
 # I9 — 비밀 · 토큰 값이 argv · 출력에 없음(거부 목록 값은 표준 입력 아닌 파일로만).
 case_no_leak() {
   local ok=0
@@ -524,13 +628,16 @@ main() {
     case_deny_not_running
   harness::run_case D5 'SSM 실패 · 꼴 밖 → ssm · invalid · 옛 파일' \
     case_deny_ssm_invalid
-  harness::run_case D6 '설치 실패 → install' case_deny_install_fail
+  harness::run_case D6 '설치 실패(chown · 링크 · 디렉터리) → install · 옛 그대로' \
+    case_deny_install_fail
   harness::run_case D7 'healthcheck 실패 → health · 되돌리지 않음' \
     case_deny_health_fail
   harness::run_case D8 '재생성 실패 · healthy 아님 → recreate · unhealthy' \
     case_deny_release_fail
   harness::run_case D9 '인자 · 설정 오류 → usage · config · docker 0' \
     case_deny_usage_config
+  harness::run_case D10 'healthy 조회 매달림 → 대기 상한 안에 unhealthy' \
+    case_deny_bounded_wait
   harness::run_case I1 'off → 원자 교체 · 재생성 · started 대조' case_limit_off
   harness::run_case I2 'on → 다시 쓰고 재생성' case_limit_on
   harness::run_case I3 '인자 · 설정 오류 → usage · config · docker 0' \
@@ -543,9 +650,11 @@ main() {
   harness::run_case I7 '저널 실패 · started 없음 → journal' case_limit_journal
   harness::run_case I8 '새 컨테이너가 다른 값 → verify' case_limit_verify
   harness::run_case I9 '토큰 값이 argv · 출력에 없음' case_no_leak
+  harness::run_case I10 'healthy 조회 매달림 → 대기 상한 안에 unhealthy' \
+    case_limit_bounded_wait
 
   # shellcheck disable=SC2086 # 이름 목록을 낱낱으로 넘긴다.
-  if ! harness::summary 0 ${CASE_NAMES}; then
+  if ! harness::summary 0 ${DENY_CASES} ${LIMIT_CASES}; then
     exit 1
   fi
 }

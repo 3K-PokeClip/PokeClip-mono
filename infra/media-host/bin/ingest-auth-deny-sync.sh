@@ -10,15 +10,18 @@
 #      에는 이름만 · 상한).
 #   3. 꼴(lib/deny_tokens.sh — 첫 줄 머리 줄 · NUL · 크기)을 보고 rename 으로
 #      둔다. 응답기는 요청마다 파일을 다시 읽으므로 덧붙임은 재시작 없이 곧 선다.
-#   4. 실행 중 응답기의 healthcheck 를 부른다 — /healthz 는 거부 목록을 다시
-#      읽어 틀린 줄이 있거나 못 읽으면 실패한다(FAIL health). 그때 응답기가 새
-#      송출을 다루는 법은 둘이다(media/internal/ingestauth 의 denylist.go ·
-#      publish.go denylistDenial):
+#   4. 실행 중 응답기의 healthcheck 를 부른다(실패면 FAIL health). /healthz 는
+#      거부 목록 · 연결 기록 · 인증 리스너를 함께 본다(media/cmd/ingest-auth 의
+#      health.go) — exec 실패 · 상한 초과도 같은 줄이니, 원인은 표준 오류의
+#      본문 줄로 가른다. 거부 목록 탓(틀린 줄 · 못 읽음)일 때 응답기가 새 송출을
+#      다루는 법은 둘이다(media/internal/ingestauth 의 denylist.go · publish.go
+#      denylistDenial):
 #      - 틀린 줄(토큰 꼴 아님)이 있으면 그 줄의 값은 막히지 않는다(건너뜀). 같은
 #        파일의 유효 토큰은 막힌다.
 #      - 파일을 못 읽으면 모든 새 송출을 거부한다.
-#      되돌리면 이번에 더한 유효 토큰도 풀리므로 되돌리지 않는다 — 고친 값을
-#      다시 동기화한다.
+#      되돌리지 않는다 — 되돌리면 이번에 더한 유효 토큰이 목록에서 빠져, 응답기가
+#      다시 뜰 때(--release · ip-limit · 재기동) 풀린다. 고친 값을 다시
+#      동기화한다.
 #   5. --release 면 응답기만 재생성하고 healthy 를 기다린다(lib/ops.sh). 응답기는
 #      한 번 본 토큰을 프로세스가 끝날 때까지 쥐므로, 해제는 재생성으로만 선다.
 #
