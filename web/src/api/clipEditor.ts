@@ -281,6 +281,29 @@ export async function openJumpCard(cardId: string): Promise<void> {
   }
 }
 
+/**
+ * 수동 마킹 본문(POK-392). 라이브는 누른 때·보낸 때(브라우저 시계 epoch ms)를 보내 서버가 시각을 정하고, 지난 방송은
+ * 기준점 축 재생 위치(정수 ms)를 보낸다. 둘 중 하나만 보낸다(섞으면 서버가 400)
+ */
+export type WebMarkBody =
+  { eventId: string; pressedAt: number; sentAt: number } | { eventId: string; positionMs: number };
+
+/**
+ * 방송 화면의 수동 마킹(POK-392). 201은 새 카드, 200은 같은 eventId 카드이거나 20초 안의 앞 카드다(둘 다 카드 모양).
+ * 거절은 ClipApiError로 던진다: 503 timeline_not_ready(기준점 아직 없음) · 400 invalid_request(field) · 404 broadcast_not_found.
+ * 다시 보낼 때는 같은 eventId를 쓴다(서버가 같은 카드를 준다)
+ */
+export async function postWebMark<T = JumpCard>(
+  streamId: string,
+  body: WebMarkBody,
+): Promise<{ status: number; card: T }> {
+  const res = await clipFetch(`/api/clip/broadcasts/${encodeURIComponent(streamId)}/marks`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+  return { status: res.status, card: (await res.json()) as T };
+}
+
 async function sendJson<T>(method: 'POST' | 'PUT', path: string, body?: unknown): Promise<T> {
   const res = await clipFetch(path, {
     method,
