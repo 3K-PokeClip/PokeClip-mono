@@ -389,6 +389,10 @@ const server = vi.hoisted(() => ({
   sseCards: null as Card[] | null,
   /** 통로가 카드 뒤에 실어 보낼 방송 정보 이벤트(PR-C, POK-397에서 platform이 붙었다) */
   sseInfo: null as Record<string, unknown>[] | null,
+  /** 통로가 실어 보낼 중계 후원 이벤트(POK-431) */
+  sseDonations: null as Record<string, unknown>[] | null,
+  /** 채팅 창구 답에 SOOP 별풍선 후원 한 줄을 더한다(POK-431) */
+  soopDonation: false,
   live: true,
   failLive: false,
   relation: 'OWNER',
@@ -787,14 +791,35 @@ function handle(url: string, init?: RequestInit): Response | Promise<Response> {
         nextCursor: null,
         appliedOffsetMs: 0,
       });
-    return jsonResponse(200, { items: CHAT, nextCursor: null, appliedOffsetMs: 0 });
+    return jsonResponse(200, {
+      items: server.soopDonation
+        ? [
+            ...CHAT,
+            {
+              kind: 'donation',
+              id: 9,
+              time: chatAt(10),
+              nickname: '숲팬',
+              senderChannelId: 's9',
+              text: '',
+              amount: 1000,
+              donationType: 'BALLOON_GIFTED',
+            },
+          ]
+        : CHAT,
+      nextCursor: null,
+      appliedOffsetMs: 0,
+    });
   }
-  if (path.endsWith('/events') && (server.sseCards || server.sseInfo))
+  if (path.endsWith('/events') && (server.sseCards || server.sseInfo || server.sseDonations))
     return new Response(
       [
         ...(server.sseCards ?? []).map((c) => `event: card\ndata: ${JSON.stringify(c)}\n\n`),
         ...(server.sseInfo ?? []).map(
           (i) => `event: broadcast-info\ndata: ${JSON.stringify(i)}\n\n`,
+        ),
+        ...(server.sseDonations ?? []).map(
+          (d) => `event: donation\ndata: ${JSON.stringify(d)}\n\n`,
         ),
       ].join(''),
       { status: 200, headers: { 'Content-Type': 'text/event-stream' } },
@@ -912,6 +937,8 @@ beforeEach(() => {
   server.markGate = null;
   server.sseCards = null;
   server.sseInfo = null;
+  server.sseDonations = null;
+  server.soopDonation = false;
   server.live = true;
   server.failLive = false;
   server.relation = 'OWNER';
@@ -2389,6 +2416,42 @@ describe('LiveScreen: 지난 방송 이 시점 카드 추가(POK-392)', () => {
 });
 
 describe('LiveScreen — 실시간 채팅 패널', () => {
+  it('SOOP 별풍선 후원은 「별풍선 N개」다: 치즈로 그리지 않는다(POK-431)', async () => {
+    server.soopDonation = true;
+    await renderLive();
+
+    expect(screen.getByText('숲팬 · 별풍선 1,000개')).toBeInTheDocument();
+    expect(screen.queryByText('숲팬 · 치즈 1,000')).toBeNull();
+    // 치지직 후원은 그대로 치즈다
+    expect(screen.getByText('도네초코 · 치즈 5,000')).toBeInTheDocument();
+  });
+
+  it('실시간 중계로 온 SOOP 후원도 종류를 지켜 그린다(POK-431)', async () => {
+    await renderLive();
+    server.sseDonations = [
+      {
+        seq: 1,
+        seqEpoch: 1,
+        kind: 'donation',
+        time: new Date(Date.now() - 1_000).toISOString(),
+        timeBasis: 'received',
+        nickname: '애드팬',
+        senderChannelId: 's10',
+        role: null,
+        text: '',
+        amount: 30,
+        donationType: 'ADBALLOON_GIFTED',
+      },
+    ];
+    // 첫 통로는 용량 초과(503)라 60초 쉬고 다시 붙는다
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(61_000);
+    });
+    await settle();
+
+    expect(screen.getByText('애드팬 · 애드벌룬 30개')).toBeInTheDocument();
+  });
+
   it('급증 키워드·후원·채팅 줄을 그린다', async () => {
     await renderLive();
 

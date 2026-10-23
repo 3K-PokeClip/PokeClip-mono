@@ -28,7 +28,8 @@ function ChatLine({ message }: { message: ChatPanelMessage }) {
         <span className={styles.chatDonationHead}>
           {message.name} · {message.amountLabel}
         </span>
-        <span className={styles.chatDonationText}>{message.text}</span>
+        {/* SOOP 후원은 문구가 늘 비어 온다(POK-431): 빈 자리를 그리면 후원마다 빈 줄이 생긴다 */}
+        {message.text ? <span className={styles.chatDonationText}>{message.text}</span> : null}
       </li>
     );
   }

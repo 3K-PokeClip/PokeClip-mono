@@ -361,6 +361,11 @@ web/                     # 단일 Next.js 앱 (App Router + TanStack Query + Zus
   있는 마지막 값), 홈 라이브 띠·지난 방송 그리드·만료 임박 줄·지난 방송 목록이 `broadcastTitle`(`api/clipEditor.ts`)로 이름을 고른다:
   제목이 있으면 제목, 없으면 지금처럼 방송 번호. 라이브 화면과 홈 라이브 띠는 방송 정보 창구의 최신 관측 제목이 먼저고, 그 관측에
   제목이 비면 목록 제목, 그것도 없으면 번호다.
+- **후원 금액은 후원 종류(`donationType`)로 단위를 고른다 (POK-431).** 수집기는 종류를 플랫폼 이름 그대로 싣고 금액(`amount`)은
+  그 단위의 개수다(원 환산 없음). 치지직 `CHAT` · `VIDEO`는 「치즈 N」, SOOP `BALLOON_GIFTED` 「별풍선 N개」 · `ADBALLOON_GIFTED`
+  「애드벌룬 N개」 · `VIDEOBALLOON_GIFTED` 「영상풍선 N개」 · `STICKER_GIFTED` 「스티커 N개」 · 미션 후원 둘은 「미션 후원 N개」다
+  (`chatCollector.ts`의 `donationLabel`, 채팅 창구 줄과 실시간 중계 둘 다). 종류가 비면 치지직, 모르는 종류는 「후원 N」, 개수를
+  모르면 숫자 없이 단위만 보인다.
 - **한 방송이 치지직 · SOOP에 나란히 켜질 수 있다 (POK-397).** 서버는 플랫폼마다 값을 준다(목록 `platforms`, 방송 정보 `platforms`,
   시청자 기록 점마다 `platform`). 무엇을 보일지는 `features/broadcast/platformView.ts` 한 곳이 정하고 홈 · 라이브가 같이 쓴다:
   관측이 3분 안인 플랫폼이 켜짐(지금 켜진 것이 없는 끝난 방송이면 마지막 관측에서 3분 안, 서버 목록 제목과 같은 기준), 대표 플랫폼은 켜진 것 중 시청자가 가장 많은 쪽(같으면 치지직 → SOOP).
