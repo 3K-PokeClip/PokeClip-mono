@@ -72,6 +72,25 @@ export function MultitrackTimeline({
     state.setRangeEdge(edge, seconds);
   };
 
+  // 재생 위치 옮기기(POK-389): 타임라인·윗줄 눈금을 누르면 그 시점으로, 누른 채 끌면 따라간다. 눈금과 덮개는 가로 범위가
+  // 같다(둘 다 이름 칸 뒤부터 끝까지). 덮개 좌표 하나로 잰다
+  const seekFromPointer = (clientX: number) => {
+    const overlay = overlayRef.current;
+    if (overlay === null) return;
+    const seconds = secondsFromPointer(overlay.getBoundingClientRect(), clientX, state.view);
+    if (seconds !== null) state.seekTo(seconds);
+  };
+
+  const onScrubPointerDown = (event: PointerEvent<HTMLElement>) => {
+    event.currentTarget.setPointerCapture(event.pointerId);
+    seekFromPointer(event.clientX);
+  };
+
+  const onScrubPointerMove = (event: PointerEvent<HTMLElement>) => {
+    if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
+    seekFromPointer(event.clientX);
+  };
+
   const onHandlePointerDown = (edge: 'start' | 'end') => (event: PointerEvent<HTMLElement>) => {
     event.currentTarget.setPointerCapture(event.pointerId);
     draggingEdge.current = edge;
@@ -172,7 +191,12 @@ export function MultitrackTimeline({
 
       {!state.timelineCollapsed ? (
         <>
-          <div className={styles.ruler}>
+          <div
+            className={styles.ruler}
+            data-ruler
+            onPointerDown={onScrubPointerDown}
+            onPointerMove={onScrubPointerMove}
+          >
             {rulerTicks(state.view).map((tick) => (
               <span key={tick}>{formatUptime(tick)}</span>
             ))}
@@ -239,6 +263,14 @@ export function MultitrackTimeline({
             </div>
 
             <div className={styles.overlay} ref={overlayRef}>
+              {/* 누르거나 끌어 재생 위치를 옮기는 바닥. 구간 손잡이는 이 뒤에 그려 위에 놓인다. 키로는 ← → 가 같은 일을 한다 */}
+              <div
+                className={styles.scrub}
+                data-scrub
+                aria-hidden
+                onPointerDown={onScrubPointerDown}
+                onPointerMove={onScrubPointerMove}
+              />
               {/* 쇼츠 밖은 양쪽을 흐리게 덮는다: 쓰는 구간만 밝게(알파컷 방식, POK-389) */}
               <div
                 className={styles.outsideMask}

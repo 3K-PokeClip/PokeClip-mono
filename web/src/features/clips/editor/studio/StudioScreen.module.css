@@ -213,6 +213,9 @@
   color: var(--pc-color-text-muted);
   padding-left: calc(180 * var(--pc-u));
   margin-bottom: calc(5 * var(--pc-u));
+  /* 눌러서 재생 위치를 옮긴다(POK-389) */
+  cursor: pointer;
+  user-select: none;
 }
 
 .laneArea {
@@ -376,24 +379,36 @@
   outline-offset: 2px;
 }
 
+/* 누르거나 끌어 재생 위치를 옮기는 바닥(덮개는 누르기를 통과시키고 이것만 받는다) */
+.scrub {
+  position: absolute;
+  inset: 0;
+  pointer-events: auto;
+  cursor: pointer;
+}
+
 .playhead {
   position: absolute;
   top: 0;
   bottom: 0;
   width: 2px;
+  margin-left: -1px;
   background: var(--pc-color-point);
+  /* 누르기는 바닥이 받는다: 선 위를 눌러 끌어도 같은 일이다 */
+  pointer-events: none;
 }
 
+/* 재생 위치 머리: 잡을 자리가 보이게 동그랗게(이전 삼각형은 6px라 안 보였다) */
 .playheadTip {
   position: absolute;
-  top: calc(-5 * var(--pc-u));
+  top: calc(-7 * var(--pc-u));
   left: 50%;
   transform: translateX(-50%);
-  width: 0;
-  height: 0;
-  border-left: calc(5 * var(--pc-u)) solid transparent;
-  border-right: calc(5 * var(--pc-u)) solid transparent;
-  border-top: calc(6 * var(--pc-u)) solid var(--pc-color-point);
+  width: calc(11 * var(--pc-u));
+  height: calc(11 * var(--pc-u));
+  border-radius: 50%;
+  background: var(--pc-color-point);
+  box-shadow: 0 0 0 2px var(--pc-color-bg-surface);
 }
 
 /* ---------- 범례 ---------- */

@@ -242,6 +242,32 @@ describe('StudioScreen', () => {
     expect(lane?.style.height).toMatch(/^\d+px$/);
   });
 
+  it('타임라인이나 윗줄 눈금을 누르면 그 시점으로 가고, 누른 채 끌면 따라온다(POK-389)', () => {
+    renderStudio();
+    const scrub = document.querySelector<HTMLElement>('[data-scrub]')!;
+    const ruler = document.querySelector<HTMLElement>('[data-ruler]')!;
+    const overlay = scrub.parentElement!;
+    // jsdom엔 레이아웃이 없다: 덮개 폭을 1000px로 둔다(눈금과 같은 가로 범위)
+    overlay.getBoundingClientRect = () => ({ left: 0, width: 1000 }) as DOMRect;
+    for (const el of [scrub, ruler]) el.setPointerCapture = () => {};
+    scrub.hasPointerCapture = () => true;
+    // 구간 상자의 자리로 쇼츠 안 n초가 몇 px인지 잰다(목업 구간 12.4초)
+    const box = document.querySelector<HTMLElement>('[class*="rangeBox"]')!;
+    const start = parseFloat(box.style.left) / 100;
+    const width = parseFloat(box.style.width) / 100;
+    const xAt = (seconds: number) => (start + (width * seconds) / 12.4) * 1000;
+    const position = () => screen.getByRole('status', { name: '재생 위치' }).textContent;
+
+    fireEvent.pointerDown(scrub, { clientX: xAt(2.5), pointerId: 1 });
+    expect(position()).toBe('0:02 / 0:12');
+    fireEvent.pointerMove(scrub, { clientX: xAt(9.5), pointerId: 1 });
+    expect(position()).toBe('0:09 / 0:12');
+    fireEvent.pointerUp(scrub, { pointerId: 1 });
+
+    fireEvent.pointerDown(ruler, { clientX: xAt(4.5), pointerId: 2 });
+    expect(position()).toBe('0:04 / 0:12');
+  });
+
   it('타임라인을 접으면 선택 구간 요약만 남는다', async () => {
     const user = userEvent.setup();
     renderStudio();
