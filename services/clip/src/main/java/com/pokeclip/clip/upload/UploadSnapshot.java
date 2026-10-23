@@ -10,6 +10,8 @@ import java.util.List;
  * @param status        {@link UploadStatus} 소문자
  * @param videoId       올렸을 때만. 주소는 {@code https://youtu.be/{videoId}}
  * @param privacyStatus 고른 공개 범위(POK-291). 우리가 실어 보낸 값이다(스튜디오에서 바꾸면 모른다)
+ * @param categoryId    고른 유튜브 분류 번호(POK-381)
+ * @param publishAt     예약 공개 시각(POK-381). 예약이 아니면 {@code null}
  * @param thumbnail     썸네일 고르기와 결과(POK-291)
  * @param resolvedBy    「확인 필요」를 사람이 풀었으면 그 사람(POK-333). 일꾼이 끝냈으면 {@code null}
  * @param resolvedAt    그 시각. {@code resolvedBy}와 같이 차고 같이 빈다
@@ -29,7 +31,9 @@ public record UploadSnapshot(long id,
                              List<String> tags,
                              Thumbnail thumbnail,
                              String resolvedBy,
-                             Instant resolvedAt) {
+                             Instant resolvedAt,
+                             String categoryId,
+                             Instant publishAt) {
 
     public record Error(String code, String message) {
     }
@@ -49,6 +53,6 @@ public record UploadSnapshot(long id,
                 upload.getRequestedBy(), upload.getCreatedAt(), upload.getUpdatedAt(),
                 upload.getPrivacyStatus(), upload.isMadeForKids(), upload.getTags(),
                 new Thumbnail(upload.getThumbnailSource(), upload.getThumbnailStatus(), upload.getThumbnailErrorCode()),
-                upload.getResolvedBy(), upload.getResolvedAt());
+                upload.getResolvedBy(), upload.getResolvedAt(), upload.getCategoryId(), upload.getPublishAt());
     }
 }

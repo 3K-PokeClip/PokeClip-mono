@@ -1,7 +1,7 @@
 'use client';
 
 import { ApiError, apiFetch } from './client';
-import { markPlaybackCookiesIssued, playbackConfigured } from './mediaPlayback';
+import { markPlaybackCookiesIssued } from './mediaPlayback';
 import { notifyChannelGone } from '@/stores/channel';
 
 // clip 서버 창구(POK-251). 전부 로그인 세션의 apiFetch로 간다(Bearer 부착·401 회전).
@@ -358,6 +358,10 @@ export interface UploadRequestSummary {
   title: string;
   privacyStatus: PrivacyStatus;
   thumbnailSource: ThumbnailSource;
+  /** 고른 분류(POK-381). 창을 다시 열 때 되살린다. 옛 서버면 빠져 온다 */
+  categoryId?: string;
+  /** 예약 공개 시각(ISO-8601, POK-381). 예약이 아니면 null, 옛 서버면 빠져 온다 */
+  publishAt?: string | null;
 }
 
 /** 유튜브 업로드 한 건(POK-220). 주소는 https://youtu.be/{videoId} */
@@ -385,6 +389,9 @@ export interface UploadSnapshot {
   /** 「확인 필요」를 사람이 풀었으면 그 사람과 시각(POK-333). 일꾼이 끝냈거나 옛 서버면 null · 빠져 온다 */
   resolvedBy?: string | null;
   resolvedAt?: string | null;
+  /** 고른 유튜브 분류와 예약 공개 시각(POK-381). 예약이 아니면 publishAt은 null, 옛 서버면 빠져 온다 */
+  categoryId?: string;
+  publishAt?: string | null;
 }
 
 /** 보관함 상태 일곱(clip LibraryStatus). 뒤의 셋은 유튜브 업로드(POK-220) */
@@ -499,7 +506,11 @@ export interface UploadInfo {
   title: string;
   description: string;
   tags: string[];
+  /** 유튜브 분류 번호(POK-381). 빠지면 20(게임) */
+  categoryId: string;
   privacyStatus: PrivacyStatus;
+  /** 예약 공개 시각(ISO-8601, POK-381). 있으면 privacyStatus는 private다. 예약이 아니면 칸을 안 싣는다 */
+  publishAt?: string;
   madeForKids: boolean;
   thumbnail: { source: 'none' } | { source: 'scene'; offsetMs: number } | { source: 'file' };
 }
@@ -676,13 +687,7 @@ export function cutFromWindow(
 export type PlaybackAccessResult =
   { kind: 'granted'; expiresAtMs: number | null } | { kind: 'not_needed' } | { kind: 'failed' };
 
-/**
- * 「필요 없음」(503 playback_signing_unavailable)을 받은 방송. 그 방송은 더 묻지 않는다. 방송 단위인 이유: 같은 사유 코드가
- * 「서명 재료 없음」뿐 아니라 그 방송의 영상 키가 정책에 못 들어갈 때(글자 검사 실패)도 오므로, 한 방송의 답으로 다른 방송을
- * 묻지 않으면 정상 방송의 쿠키까지 빠진다(PR #320 codex)
- */
-const playbackNotNeeded = new Set<string>();
-
+/** 문 한 번 부르기. 받아 둔 출입증 · 다시 쓰기 · 403 처리는 playbackAccess.ts 한 곳이 한다(POK-317) */
 export async function requestPlaybackAccess(streamId: string): Promise<PlaybackAccessResult> {
   try {
     const res = await apiFetch(
@@ -705,65 +710,8 @@ export async function requestPlaybackAccess(streamId: string): Promise<PlaybackA
   } catch (e) {
     // 「필요 없음」은 서명 재료가 없는 503뿐이다. 자격 확인이 안 되는 503(authorization_unavailable)도 필요 없음으로 접으면
     // auth가 잠깐 멈춘 사이 연 화면이 다시 묻지 않아 prod 재생이 403으로 굳었다(POK-317)
-    if (e instanceof ApiError && e.status === 503 && e.code === 'playback_signing_unavailable') {
-      // 이 방송은 더 묻지 않는다(LiveScreen이 받은 답도 여기서 남는다)
-      playbackNotNeeded.add(streamId);
+    if (e instanceof ApiError && e.status === 503 && e.code === 'playback_signing_unavailable')
       return { kind: 'not_needed' };
-    }
     return { kind: 'failed' };
   }
-}
-
-/** 받은 출입증을 만료 이만큼 전까지 다시 쓴다(LiveScreen의 갱신 여유와 같다) */
-const PLAYBACK_ACCESS_REUSE_MARGIN_MS = 5 * 60_000;
-/** 만료를 모르는 출입증을 다시 쓰는 시간(운영 수명 60분보다 짧게) */
-const PLAYBACK_ACCESS_DEFAULT_REUSE_MS = 50 * 60_000;
-/**
- * 방송 번호 → 그 방송으로 받은 출입증(받는 중이면 끝날 때까지 다시 쓴다). 받을 때의 영상 키를 같이 둔다: 늦게 온 방송 편지로 영상 키가
- * 바뀌면 옛 키로 받은 쿠키는 새 주소에 안 실리므로 다시 받는다(PR #320 codex)
- */
-const playbackAccessCache = new Map<
-  string,
-  { mediaKey: string; until: number; settled: boolean; result: Promise<PlaybackAccessResult> }
->();
-/** 영상 키 → 그 키로 출입증을 받은 방송 번호. 쿠키 경로가 영상 키라 같은 키의 방송이면 어느 것으로 받아도 같다 */
-const playbackAccessByMediaKey = new Map<string, string>();
-
-/**
- * 녹화를 부르기 직전에 출입증을 받아 둔다(POK-317). 편집기가 쓴다(LiveScreen은 제 갱신 타이머가 있다. 지난 방송 목록은 아직 안 받는다).
- * 받아 둔 것이 아직 쓸 만하거나 받을 필요가 없으면(녹화 재생 서버 주소가 없는 곳 포함) null이라 부른 쪽이 기다리지 않고 바로 요청한다. 실패는 기억하지 않는다.
- */
-export function ensurePlaybackAccess(
-  streamId: string,
-  mediaKey: string,
-): Promise<PlaybackAccessResult> | null {
-  playbackAccessByMediaKey.set(mediaKey, streamId);
-  if (playbackNotNeeded.has(streamId) || !playbackConfigured()) return null;
-  const known = playbackAccessCache.get(streamId);
-  if (known !== undefined && known.mediaKey === mediaKey && known.until > Date.now())
-    return known.settled ? null : known.result;
-  const result = requestPlaybackAccess(streamId);
-  playbackAccessCache.set(streamId, {
-    mediaKey,
-    until: Number.POSITIVE_INFINITY,
-    settled: false,
-    result,
-  });
-  void result.then((r) => {
-    const until =
-      r.kind === 'granted'
-        ? (r.expiresAtMs ?? Date.now() + PLAYBACK_ACCESS_DEFAULT_REUSE_MS) -
-          PLAYBACK_ACCESS_REUSE_MARGIN_MS
-        : 0;
-    // 받는 사이 다른 키로 다시 받기 시작했으면 그 줄을 덮지 않는다
-    if (playbackAccessCache.get(streamId)?.result === result)
-      playbackAccessCache.set(streamId, { mediaKey, until, settled: true, result });
-  });
-  return result;
-}
-
-/** 영상 키만 아는 자리(편집기 미리보기)의 갱신. 그 키로 출입증을 받은 방송이 없으면 묻지 않는다 */
-export function ensureMediaAccess(mediaKey: string): Promise<PlaybackAccessResult> | null {
-  const streamId = playbackAccessByMediaKey.get(mediaKey);
-  return streamId === undefined ? null : ensurePlaybackAccess(streamId, mediaKey);
 }

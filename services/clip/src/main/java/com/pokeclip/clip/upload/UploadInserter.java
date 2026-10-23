@@ -23,9 +23,10 @@ public class UploadInserter {
 
     private static final String INSERT_IF_NO_ACTIVE = """
             INSERT INTO clip_uploads (clip_id, output_id, requested_by, channel_owner, title, description, status, payload,
-                                      tags, privacy_status, made_for_kids, thumbnail_source, thumbnail_offset_ms,
-                                      thumbnail_s3_key, thumbnail_content_type, thumbnail_status, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, 'queued', '{}'::jsonb, ?::jsonb, ?, ?, ?, ?, ?, ?, ?, now())
+                                      tags, category_id, privacy_status, publish_at, made_for_kids, thumbnail_source,
+                                      thumbnail_offset_ms, thumbnail_s3_key, thumbnail_content_type, thumbnail_status,
+                                      updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, 'queued', '{}'::jsonb, ?::jsonb, ?, ?, ?, ?, ?, ?, ?, ?, ?, now())
             ON CONFLICT (clip_id, output_id) WHERE status <> 'failed' DO NOTHING
             RETURNING id""";
 
@@ -42,8 +43,9 @@ public class UploadInserter {
         Thumbnail thumbnail = info.thumbnail();
         List<Long> ids = jdbc.query(INSERT_IF_NO_ACTIVE, (rs, i) -> rs.getLong("id"),
                 clipId, outputId, requestedBy, channelOwner, info.title(), info.description(),
-                mapper.writeValueAsString(info.tags()), info.privacyStatus(), info.madeForKids(), thumbnail.source(),
-                thumbnail.offsetMs(), thumbnail.s3Key(), thumbnail.contentType(), thumbnail.initialStatus());
+                mapper.writeValueAsString(info.tags()), info.categoryId(), info.privacyStatus(),
+                UploadRequestStore.timestamp(info.publishAt()), info.madeForKids(), thumbnail.source(), thumbnail.offsetMs(),
+                thumbnail.s3Key(), thumbnail.contentType(), thumbnail.initialStatus());
         return ids.isEmpty() ? OptionalLong.empty() : OptionalLong.of(ids.getFirst());
     }
 
