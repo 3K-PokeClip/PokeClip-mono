@@ -37,8 +37,8 @@ public class SoopChatConfiguration {
             SoopChatBrowser browser = new SoopChatBrowser(properties, sessions);
             sessions.attach(new SoopChatSessions.Tabs() {
                 @Override
-                public void open(String streamId, String token) {
-                    browser.open(streamId, token);
+                public void open(String streamId, String token, long generation) {
+                    browser.open(streamId, token, generation);
                 }
 
                 @Override

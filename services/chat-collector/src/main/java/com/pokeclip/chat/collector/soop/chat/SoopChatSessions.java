@@ -17,6 +17,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.LongSupplier;
 
 /**
@@ -30,6 +31,11 @@ import java.util.function.LongSupplier;
  * <p>넣기 · 빼기({@link #ensure} · {@link #close})는 지켜보기 틱 스레드가, 알림({@link #onMessage} 등)은 브라우저 스레드가 부른다.
  * 둘 다 막지 않는다. 표는 동시 맵이고, 한 방송의 상태 바꾸기는 그 줄을 잠근다.
  *
+ * <p><b>세대 번호</b>(POK-431, PR4 봇 codex P2): 탭을 열 때마다(붙이기 · 다시 붙기 둘 다) 새 세대를 받고, 브라우저는 이벤트마다 그것을 낸
+ * 탭의 세대를 싣는다. 세션은 지금 연 탭의 세대와 다른 이벤트를 버린다. 탭 명령은 줄에 들어가기만 해서 브라우저가 옛 탭을 실제로 닫기까지
+ * 펌프 한 번(최대 0.1초)이 걸리는데, 그 사이 옛 탭의 채팅이 새 채널 아이디로 저장되거나 옛 탭의 늦은 닫힘 · 오류가 막 연 새 탭을 다시
+ * 열게 했다. 다시 붙기도 새 세대인 이유: 같은 세션 안의 재연결이라 세션당 세대 하나로는 옛 탭의 늦은 알림을 못 거른다(계획 검증 중대 1).
+ *
  * <p>🔴 토큰 · SOOP 아이디 · 본문은 로그에 안 싣는다. 방송 번호 · 사유 · 건수만.
  */
 public class SoopChatSessions implements SoopChat, SoopChatBrowser.Listener {
@@ -38,7 +44,8 @@ public class SoopChatSessions implements SoopChat, SoopChatBrowser.Listener {
 
     /** 브라우저에 명령을 보내는 쪽. 운영은 {@link SoopChatBrowser}, 시험은 가짜. */
     public interface Tabs {
-        void open(String streamId, String token);
+        /** {@code generation}은 이 탭이 낼 이벤트에 실릴 번호다. */
+        void open(String streamId, String token, long generation);
 
         void close(String streamId);
     }
@@ -53,6 +60,10 @@ public class SoopChatSessions implements SoopChat, SoopChatBrowser.Listener {
 
     private final Map<String, Session> sessions = new ConcurrentHashMap<>();
 
+    /** 탭 세대. 프로세스 하나에서 한 줄로 늘어 방송 · 세션이 달라도 겹치지 않는다. 자물쇠 안에서 {@code tabs.open}과 같이 받는다. */
+    private final AtomicLong generations = new AtomicLong();
+    private final AtomicLong staleEvents = new AtomicLong();
+
     /** 한 방송의 채팅 세션. 칸은 이 객체를 잠그고 바꾼다. */
     private static final class Session {
         final String streamId;
@@ -62,6 +73,10 @@ public class SoopChatSessions implements SoopChat, SoopChatBrowser.Listener {
         long received;
         /** 다시 붙기를 예약했는가. 예약이 겹치지 않게 한다. */
         boolean retryScheduled;
+        /** 지금 연 탭의 세대. 이와 다른 세대의 이벤트는 지난 탭에서 온 것이다. */
+        long generation;
+        /** 지난 탭 이벤트를 INFO로 한 번 남겼는가(그 뒤는 DEBUG). */
+        boolean staleLogged;
 
         Session(String streamId, String channelId, String token) {
             this.streamId = streamId;
@@ -121,7 +136,37 @@ public class SoopChatSessions implements SoopChat, SoopChatBrowser.Listener {
             return;
         }
         log.info("soop.chat.opening stream={}", streamId);
-        tabs.open(streamId, token);
+        openTab(session);
+    }
+
+    /**
+     * 새 세대로 탭을 연다. 붙이기 · 다시 붙기가 이 객체의 자물쇠 안에서 부른다. 🔴 예약 표시 끄기와 세대 바꾸기를 세션 자물쇠 한 번에 한다:
+     * 따로 잡으면 그 사이에 온 옛 탭의 닫힘이 「세대는 아직 옛것, 예약은 꺼짐」을 보고 다시 붙기를 한 번 더 건다(감사 1회차 경미 1).
+     */
+    private void openTab(Session session) {
+        long generation = generations.incrementAndGet();
+        String token;
+        synchronized (session) {
+            session.retryScheduled = false;
+            session.generation = generation;
+            token = session.token;
+        }
+        tabs.open(session.streamId, token, generation);
+    }
+
+    /** 이 세대가 지금 연 탭의 것인가. 아니면(지난 탭) 세고 버린다. 세션 자물쇠를 쥔 채 부른다. */
+    private boolean isCurrent(Session session, long generation) {
+        if (session.generation == generation) {
+            return true;
+        }
+        staleEvents.incrementAndGet();
+        if (!session.staleLogged) {
+            session.staleLogged = true;
+            log.info("soop.chat.stale_event stream={}", session.streamId);
+        } else {
+            log.debug("soop.chat.stale_event stream={}", session.streamId);
+        }
+        return false;
     }
 
     @Override
@@ -139,13 +184,16 @@ public class SoopChatSessions implements SoopChat, SoopChatBrowser.Listener {
     }
 
     @Override
-    public void onMessage(String streamId, SoopChatMessage message) {
+    public void onMessage(String streamId, long generation, SoopChatMessage message) {
         Session session = sessions.get(streamId);
         if (session == null) {
             return;
         }
         long receivedAt = clockMillis.getAsLong();
         synchronized (session) {
+            if (!isCurrent(session, generation)) {
+                return;
+            }
             session.received++;
             session.failures = 0;
         }
@@ -158,24 +206,24 @@ public class SoopChatSessions implements SoopChat, SoopChatBrowser.Listener {
     }
 
     @Override
-    public void onClosed(String streamId) {
-        scheduleRetry(streamId, "closed");
+    public void onClosed(String streamId, long generation) {
+        scheduleRetry(streamId, generation, "closed");
     }
 
     @Override
-    public void onError(String streamId, String code) {
+    public void onError(String streamId, long generation, String code) {
         log.warn("soop.chat.error stream={} code={}", streamId, safeCode(code));
-        scheduleRetry(streamId, "error");
+        scheduleRetry(streamId, generation, "error");
     }
 
-    private void scheduleRetry(String streamId, String reason) {
+    private void scheduleRetry(String streamId, long generation, String reason) {
         Session session = sessions.get(streamId);
         if (session == null) {
             return;
         }
         Duration delay;
         synchronized (session) {
-            if (session.retryScheduled) {
+            if (!isCurrent(session, generation) || session.retryScheduled) {
                 return;
             }
             session.retryScheduled = true;
@@ -198,12 +246,7 @@ public class SoopChatSessions implements SoopChat, SoopChatBrowser.Listener {
         if (sessions.get(session.streamId) != session) {
             return;
         }
-        String token;
-        synchronized (session) {
-            session.retryScheduled = false;
-            token = session.token;
-        }
-        tabs.open(session.streamId, token);
+        openTab(session);
     }
 
     Duration backoff(int failures) {
@@ -221,6 +264,11 @@ public class SoopChatSessions implements SoopChat, SoopChatBrowser.Listener {
         }
         String cleaned = code.replaceAll("[^A-Za-z0-9_\\-]", "");
         return cleaned.length() > 40 ? cleaned.substring(0, 40) : cleaned;
+    }
+
+    /** 지난 탭에서 와 버린 이벤트 수(시험 · 진단). */
+    long staleEvents() {
+        return staleEvents.get();
     }
 
     /** 지금 붙어 있어야 하는 방송 수(시험 · 진단). */

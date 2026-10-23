@@ -36,16 +36,22 @@ public class SoopChatBrowser implements AutoCloseable {
     /** 탭이 있을 때 한 번에 펌프하는 시간. 명령(열기 · 닫기)이 늦게 처리되는 최대치이기도 하다. */
     private static final double PUMP_MILLIS = 100;
 
-    /** 페이지가 알리는 일. 브라우저 스레드에서 불린다: 넣기만 하고 막지 않는다. */
+    /**
+     * 페이지가 알리는 일. 브라우저 스레드에서 불린다: 넣기만 하고 막지 않는다. {@code generation}은 그 일을 낸 탭을 열 때 받은 세대다
+     * (듣는 쪽이 지난 탭의 늦은 일을 거른다).
+     */
     public interface Listener {
-        void onMessage(String streamId, SoopChatMessage message);
+        void onMessage(String streamId, long generation, SoopChatMessage message);
 
         /** 채팅 서버 연결이 닫혔다({@code handleChatClosed}). */
-        void onClosed(String streamId);
+        void onClosed(String streamId, long generation);
 
         /** SDK 오류({@code handleError}) 또는 스크립트를 못 불러옴 · 연결 실패. 코드만 온다. */
-        void onError(String streamId, String code);
+        void onError(String streamId, long generation, String code);
     }
+
+    /** 열린 탭 하나: 브라우저 컨텍스트와 열 때 받은 세대. */
+    private record Tab(BrowserContext context, long generation) { }
 
     private final SoopChatProperties properties;
     private final Listener listener;
@@ -56,7 +62,7 @@ public class SoopChatBrowser implements AutoCloseable {
     // 아래는 브라우저 스레드만 만진다
     private Playwright playwright;
     private Browser browser;
-    private final Map<String, BrowserContext> tabs = new LinkedHashMap<>();
+    private final Map<String, Tab> tabs = new LinkedHashMap<>();
 
     public SoopChatBrowser(SoopChatProperties properties, Listener listener) {
         this.properties = properties;
@@ -64,9 +70,9 @@ public class SoopChatBrowser implements AutoCloseable {
         this.thread = Thread.ofPlatform().name("soop-chat-browser").daemon(true).start(this::loop);
     }
 
-    /** 이 방송의 탭을 연다. 이미 있으면 닫고 새로 연다(다시 붙기). */
-    public void open(String streamId, String token) {
-        commands.add(() -> doOpen(streamId, token));
+    /** 이 방송의 탭을 연다. 이미 있으면 닫고 새로 연다(다시 붙기). 그 탭이 내는 일에는 {@code generation}이 실린다. */
+    public void open(String streamId, String token, long generation) {
+        commands.add(() -> doOpen(streamId, token, generation));
     }
 
     /** 이 방송의 탭을 닫는다. 없으면 무시한다. */
@@ -105,48 +111,51 @@ public class SoopChatBrowser implements AutoCloseable {
      * 다시 붙기 줄에 태운다(렌더러 충돌은 던지지 않고 {@link #onPageCrashed}로 온다).
      */
     private void pump() {
-        Map.Entry<String, BrowserContext> first = tabs.entrySet().iterator().next();
+        Map.Entry<String, Tab> first = tabs.entrySet().iterator().next();
+        Tab tab = first.getValue();
         try {
-            first.getValue().pages().getFirst().waitForTimeout(PUMP_MILLIS);
+            tab.context().pages().getFirst().waitForTimeout(PUMP_MILLIS);
         } catch (RuntimeException e) {
-            if (!tabs.containsKey(first.getKey())) {
+            if (tabs.get(first.getKey()) != tab) {
                 return; // 펌프 중에 브라우저를 잃어 이미 알렸다
             }
             log.warn("soop.chat.page_lost stream={} causeType={}", first.getKey(), e.getClass().getSimpleName());
-            loseTab(first.getKey());
+            loseTab(first.getKey(), tab);
         }
     }
 
     /**
      * 이 탭의 렌더러가 죽었다(메모리 · 충돌, 브라우저 스레드). 🔴 깨진 페이지에서도 {@code waitForTimeout}은 그냥 기다려서 펌프로는 모른다
-     * (시험 실측). 사건으로 받아 그 탭만 버리고 다시 붙는다.
+     * (시험 실측). 사건으로 받아 그 탭만 버리고 다시 붙는다. 🔴 사건이 그 탭을 갈아 낀 뒤에 오면(옛 페이지의 늦은 사건) 무시한다. 방송
+     * 번호만 보면 막 연 새 탭을 닫고, 옛 세대로 알린 오류는 세션이 버려 다시 붙기도 없다(계획 검증 경미).
      */
-    private void onPageCrashed(String streamId) {
-        if (!tabs.containsKey(streamId)) {
+    private void onPageCrashed(String streamId, BrowserContext context) {
+        Tab tab = tabs.get(streamId);
+        if (tab == null || tab.context() != context) {
             return;
         }
         log.warn("soop.chat.page_crashed stream={}", streamId);
-        loseTab(streamId);
+        loseTab(streamId, tab);
     }
 
-    private void loseTab(String streamId) {
+    private void loseTab(String streamId, Tab tab) {
         doClose(streamId);
-        listener.onError(streamId, "PAGE_LOST");
+        listener.onError(streamId, tab.generation(), "PAGE_LOST");
     }
 
-    private void doOpen(String streamId, String token) {
+    private void doOpen(String streamId, String token, long generation) {
         doClose(streamId);
         try {
-            openTab(streamId, token);
+            openTab(streamId, token, generation);
         } catch (RuntimeException e) {
             // 브라우저를 못 띄웠거나 탭을 못 만들었다(막 끊긴 브라우저 등). 이대로 두면 세션은 남는데 탭이 없어 영영 안 붙는다
             log.warn("soop.chat.tab_open_failed stream={} causeType={}", streamId, e.getClass().getSimpleName());
             doClose(streamId);
-            listener.onError(streamId, "OPEN");
+            listener.onError(streamId, generation, "OPEN");
         }
     }
 
-    private void openTab(String streamId, String token) {
+    private void openTab(String streamId, String token, long generation) {
         if (browser != null && !browser.isConnected()) {
             // 끊긴 브라우저를 계속 쓰면 newContext가 영영 던진다(메모리 상한에 죽은 경우 등). 버리고 새로 띄운다
             discardBrowser();
@@ -166,13 +175,15 @@ public class SoopChatBrowser implements AutoCloseable {
             log.info("soop.chat.browser_started");
         }
         BrowserContext context = browser.newContext();
-        tabs.put(streamId, context);
+        tabs.put(streamId, new Tab(context, generation));
+        // 세대 · 컨텍스트는 열 때 캡처해 일을 낸 탭의 값을 싣는다. 지금은 옛 탭을 먼저 닫고 새 탭을 맵에 넣어 맵의 값과 같지만,
+        // 열고 닫는 순서가 바뀌어도 새 탭의 세대가 옛 탭의 일에 실리지 않게 맵에서 찾지 않는다
         context.exposeBinding(BINDING, (source, args) -> {
-            onPageEvent(streamId, args);
+            onPageEvent(streamId, context, generation, args);
             return null;
         });
         Page page = context.newPage();
-        page.onCrash(crashed -> onPageCrashed(streamId));
+        page.onCrash(crashed -> onPageCrashed(streamId, context));
         String origin = properties.pageOrigin().replaceAll("/+$", "");
         page.route(origin + "/soop-chat", route -> route.fulfill(new Route.FulfillOptions()
                 .setStatus(200).setContentType("text/html; charset=utf-8").setBody(SoopChatPage.html(properties.sdkUrl()))));
@@ -183,7 +194,7 @@ public class SoopChatBrowser implements AutoCloseable {
         } catch (RuntimeException e) {
             // SDK 스크립트를 못 불러왔거나(SOOP 전역 없음) 시작이 던졌다. 오류로 넘겨 다시 붙기 줄에 태운다
             log.warn("soop.chat.page_failed stream={} causeType={}", streamId, e.getClass().getSimpleName());
-            listener.onError(streamId, "PAGE");
+            listener.onError(streamId, generation, "PAGE");
         }
     }
 
@@ -192,12 +203,10 @@ public class SoopChatBrowser implements AutoCloseable {
         if (!running) {
             return;
         }
-        java.util.List<String> lost = java.util.List.copyOf(tabs.keySet());
+        Map<String, Tab> lost = new LinkedHashMap<>(tabs);
         tabs.clear();
         log.warn("soop.chat.browser_lost tabs={}", lost.size());
-        for (String streamId : lost) {
-            listener.onError(streamId, "BROWSER_LOST");
-        }
+        lost.forEach((streamId, tab) -> listener.onError(streamId, tab.generation(), "BROWSER_LOST"));
     }
 
     /** 끊긴 브라우저와 Playwright를 조용히 치운다. 다음 열기가 새로 띄운다. */
@@ -231,23 +240,24 @@ public class SoopChatBrowser implements AutoCloseable {
     void crashPageForTest(String streamId) {
         commands.add(() -> {
             try {
-                tabs.get(streamId).pages().getFirst().navigate("chrome://crash");
+                tabs.get(streamId).context().pages().getFirst().navigate("chrome://crash");
             } catch (RuntimeException expected) {
                 // 충돌로 이동이 실패한다
             }
         });
     }
 
-    private void onPageEvent(String streamId, Object[] args) {
-        if (args.length == 0 || !tabs.containsKey(streamId)) {
-            return;
+    private void onPageEvent(String streamId, BrowserContext context, long generation, Object[] args) {
+        Tab tab = tabs.get(streamId);
+        if (args.length == 0 || tab == null || tab.context() != context) {
+            return; // 닫았거나 갈아 낀 탭이다
         }
         String kind = String.valueOf(args[0]);
         switch (kind) {
-            case "message" -> listener.onMessage(streamId, new SoopChatMessage(str(args, 1), str(args, 2), str(args, 3),
-                    str(args, 4), str(args, 5)));
-            case "closed" -> listener.onClosed(streamId);
-            case "error" -> listener.onError(streamId, str(args, 1));
+            case "message" -> listener.onMessage(streamId, generation, new SoopChatMessage(str(args, 1), str(args, 2),
+                    str(args, 3), str(args, 4), str(args, 5)));
+            case "closed" -> listener.onClosed(streamId, generation);
+            case "error" -> listener.onError(streamId, generation, str(args, 1));
             default -> { }
         }
     }
@@ -257,10 +267,10 @@ public class SoopChatBrowser implements AutoCloseable {
     }
 
     private void doClose(String streamId) {
-        BrowserContext context = tabs.remove(streamId);
-        if (context != null) {
+        Tab tab = tabs.remove(streamId);
+        if (tab != null) {
             try {
-                context.close();
+                tab.context().close();
             } catch (RuntimeException e) {
                 log.warn("soop.chat.tab_close_failed stream={} causeType={}", streamId, e.getClass().getSimpleName());
             }

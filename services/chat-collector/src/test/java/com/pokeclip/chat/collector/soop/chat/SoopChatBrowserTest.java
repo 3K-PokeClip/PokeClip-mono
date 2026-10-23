@@ -107,8 +107,8 @@ class SoopChatBrowserTest {
         browser = new SoopChatBrowser(properties, sessions);
         sessions.attach(new SoopChatSessions.Tabs() {
             @Override
-            public void open(String streamId, String token) {
-                browser.open(streamId, token);
+            public void open(String streamId, String token, long generation) {
+                browser.open(streamId, token, generation);
             }
 
             @Override
@@ -209,6 +209,10 @@ class SoopChatBrowserTest {
     @DisabledIfEnvironmentVariable(named = "GITHUB_ACTIONS", matches = "true",
             disabledReason = "CI 러너(Ubuntu 26)에서 렌더러 충돌 사건이 안 온다. 운영과 같은 noble+deps 컨테이너에서 통과")
     void 페이지가_깨지면_그_탭만_다시_붙고_채팅을_받는다() {
+        // 앞 두 연결 몫의 빈 대본을 먼저 쌓는다. 안 쌓으면 둘째 연결이 붙은 뒤(connects 셈) 대본을 받으러 가기 전에 아래 「다시」가 쌓여
+        // s-2가 그것을 가져가 흘린다(대본은 연결 순서대로 나간다, 감사 1회차 경미 4)
+        sdk.script();
+        sdk.script();
         start(10);
         sessions.ensure("s-1", "bj-1", TOKEN);
         await(() -> sdk.connects.size() >= 1);
@@ -230,6 +234,9 @@ class SoopChatBrowserTest {
     /** 방송 중에 다른 SOOP 계정으로 다시 연동하면 탭을 갈아 새 채널로 저장한다(토큰만 바꾸면 옛 채널로 저장된다) */
     @Test
     void 채널이_바뀌면_새로_붙어_새_채널로_저장한다() {
+        // 첫 연결 몫의 빈 대본을 먼저 쌓는다. 안 쌓으면 첫 연결이 대본을 받으러 가기 전에 「새 계정」이 쌓여 옛 탭이 그것을 흘리고, 세대 번호가
+        // 그 줄을 버려 둘째 연결은 빈 대본을 받는다(30초 시한, 클래스 10회 중 1회 실측). 옛 코드는 그 줄을 새 채널로 저장해 통과했다
+        sdk.script();
         start(10);
         sessions.ensure("s-1", "bj-old", TOKEN);
         await(() -> sdk.connects.size() >= 1);
@@ -245,6 +252,38 @@ class SoopChatBrowserTest {
         assertThat(chats).extracting(PersistableChat::channelId).containsExactly("bj-new");
         assertThat(sdk.connects).extracting(FakeSoopSdkServer.Connect::token).containsExactly(TOKEN, "token-new");
         assertThat(sessions.size()).isEqualTo(1);
+    }
+
+    /**
+     * 🔴 채널이 바뀐 직후, 브라우저가 옛 탭을 닫기 전(펌프 한 번, 최대 0.1초)에 옛 탭이 보낸 채팅이 새 채널 아이디로 저장되면 안 된다
+     * (PR4 봇 codex P2). 연결마다 20ms 간격으로 「연결 번호-순번」을 흘리고 채널을 다섯 번 바꿔, 줄마다 그 연결의 채널로만 저장됐는지 본다.
+     * 틈에 걸려 버려진 줄이 실제로 있었는지도 본다(없으면 이 시험은 아무것도 안 잰 것이다. 한 번 바꿀 때 걸리는 줄 수는 펌프 시점에
+     * 따라 0~5줄이라 다섯 번 바꾼다).
+     */
+    @Test
+    void 채널이_바뀌는_틈에_온_옛_탭_채팅은_새_채널로_저장되지_않는다() {
+        int switches = 5;
+        for (int k = 0; k <= switches; k++) {
+            Step[] steps = new Step[200];
+            for (int i = 0; i < steps.length; i++) {
+                steps[i] = Step.message("MESSAGE", "v", "n", k + "-" + i);
+            }
+            sdk.script(steps);
+        }
+        start(10);
+        List<PersistableChat> chats = new ArrayList<>();
+        for (int k = 0; k <= switches; k++) {
+            String prefix = k + "-";
+            sessions.ensure("s-1", "bj-" + k, "token-" + k);
+            await(() -> {
+                chats.addAll(buffer.drain(100));
+                return chats.stream().filter(c -> c.content().startsWith(prefix)).count() >= 3;
+            });
+        }
+
+        assertThat(chats).allSatisfy(c -> assertThat(c.channelId())
+                .as("연결 %s의 채팅", c.content()).isEqualTo("bj-" + c.content().substring(0, c.content().indexOf('-'))));
+        assertThat(sessions.staleEvents()).as("틈에 걸린 옛 탭 채팅이 있었고 버려졌다").isPositive();
     }
 
     @Test
