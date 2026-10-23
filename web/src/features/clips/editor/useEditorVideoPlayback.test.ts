@@ -1,4 +1,4 @@
-import { renderHook, waitFor } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useEditorVideoPlayback } from './useEditorVideoPlayback';
 
@@ -121,6 +121,35 @@ describe('useEditorVideoPlayback: 받은 창 알리기 (POK-389)', () => {
     finish(new Response('mp4', { status: 200 }));
     await waitFor(() => expect(result.current.src).toBe('blob:x'));
     expect(result.current.window).toEqual({ startSeconds: 0, endSeconds: 14 });
+  });
+});
+
+describe('useEditorVideoPlayback: 창 다시 받기 예약 (POK-389)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it('창 끝까지 끌었다가 곧 안쪽으로 돌리면 같은 창을 다시 받지 않는다(PR #341 codex)', () => {
+    vi.useFakeTimers();
+    const fetchSpy = vi.fn(() => new Promise<Response>(() => undefined));
+    vi.stubGlobal('fetch', fetchSpy);
+    const { result } = renderHook(() =>
+      useEditorVideoPlayback({
+        streamId: 'key-1',
+        recordingStartMs: BASE,
+        recordingSeconds: 100,
+        initialRange: { startSeconds: 20, endSeconds: 30 },
+      }),
+    );
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      result.current.playback.setBounds({ startSeconds: 20, endSeconds: 39.8, loop: true });
+      result.current.playback.setBounds({ startSeconds: 20, endSeconds: 30, loop: true });
+      vi.advanceTimersByTime(1_000);
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 });
 

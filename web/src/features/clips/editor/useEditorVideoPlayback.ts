@@ -281,8 +281,17 @@ export function useEditorVideoPlayback(options: {
       rewindowTimer.current = window.setTimeout(() => {
         rewindowTimer.current = null;
         const current = boundsRef.current;
+        const next = windowFor(current, recordingSeconds, piecesRef.current);
+        const w = winRef.current;
+        // 기다리는 사이 구간을 안쪽으로 되돌렸으면 창이 그대로다: 같은 영상을 다시 받고 구간 시작으로 튀지 않게 둔다
+        if (
+          next.startSeconds === w.startSeconds &&
+          next.endSeconds === w.endSeconds &&
+          next.empty === w.empty
+        )
+          return;
         pendingSeekRef.current = current.startSeconds;
-        setWin(windowFor(current, recordingSeconds, piecesRef.current));
+        setWin(next);
       }, REWINDOW_DELAY_MS);
     },
     [recordingSeconds],
