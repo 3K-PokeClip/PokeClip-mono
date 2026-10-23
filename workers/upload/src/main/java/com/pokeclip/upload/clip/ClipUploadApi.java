@@ -93,7 +93,7 @@ public class ClipUploadApi {
         record SessionExists(String sessionUri) implements FailOutcome {
         }
 
-        /** 이미 끝난 주문이다(409 그 밖, 또는 칸을 모르는 옛 clip이 확인 중으로 받았다). */
+        /** 이미 끝난 주문이다(409 그 밖 · 404 주문 없음, 또는 칸을 모르는 옛 clip이 확인 중으로 받았다). */
         record Terminal() implements FailOutcome {
         }
     }
@@ -113,6 +113,10 @@ public class ClipUploadApi {
         body.putAll(error(code, message));
         body.put("onlyIfNoSession", true);
         Reply reply = http.post(url(uploadId, "result"), body);
+        if (reply.status() == 404) {
+            // 주문이 지워졌다(탈퇴 정리 등). start의 404와 같이 끝난 주문으로 본다: 다시 해도 같다.
+            return new FailOutcome.Terminal();
+        }
         if (reply.status() == 409) {
             String uri = reply.body() == null ? null : reply.body().path("sessionUri").asString(null);
             if (reply.body() != null && "SESSION_EXISTS".equals(reply.body().path("reason").asString(null)) && uri != null) {

@@ -61,7 +61,8 @@
 | 연동이 끊겨 실패를 보내는 사이 겹친 일꾼이 주소를 적었다(409 `SESSION_EXISTS`) | 없음(clip이 실패를 반영하지 않았다. 이 일꾼은 토큰이 없어 못 잇는다) | 60~120초 뒤 다시 |
 | 시작에서 속도 제한(403 `rateLimitExceeded`·`userRateLimitExceeded`·`servingLimitExceeded`) | 없음 | 60~120초 뒤 다시 |
 | 조각 전송·주소 물음에서 같은 속도 제한 | 없음(주소에 다시 물어 잇는다) | 재시도를 넘기면 60~120초 뒤 다시 |
-| auth 즉석 갱신 실패(`REFRESH_UNAVAILABLE`)·유튜브 401·5xx·끊김이 재시도보다 길다·clip·S3 무응답 | 없음 | 60~120초 뒤 다시 |
+| 유튜브 401(시작 · 조각 · 주소 물음, POK-250) | auth에 그 토큰의 지문(`rejectedTokenSha256`)을 실어 **강제 갱신**한 새 토큰으로 한 번 더(조각 · 주소 물음이면 주소에 먼저 묻고 받은 데부터). **배달 전체에 한 번**이다(썸네일은 자기 한 번을 따로 쓴다: 결론 자리가 토큰 없이 썸네일로 넘기면 썸네일이 resolve로 받은 토큰이 401일 때 한 번 더 갱신한다). 새 토큰도 401이거나 갱신이 거절되면(`BROKEN` 등): 주소가 없으면 `FAILED YOUTUBE_{사유}`(그 순간 주소가 생기면 토큰이 없어 쪽지를 남긴다), 있으면 위 「결론 내기」 | 결과대로 |
+| auth 즉석 갱신 실패(`REFRESH_UNAVAILABLE`)·옛 auth가 401을 받은 그 토큰을 다시 줌(`NOT_REFRESHED`)·5xx·끊김이 재시도보다 길다·clip·S3 무응답 | 없음 | 60~120초 뒤 다시 |
 | 영상은 올라갔고 썸네일만 못 붙였다(어떤 이유든) | `UPLOADED` + `thumbnailOutcome:FAILED` + `THUMBNAIL_*` | **지운다** |
 | 썸네일을 붙인 뒤 clip 보고가 안 됐다(clip 무응답) | 없음 | 60~120초 뒤 다시: 주소가 「다 받았다」고 해 썸네일을 다시 붙이고 보고한다 |
 | 그렇게 다시 온 배달(바이트를 하나도 안 보냈는데 주소가 「다 받았다」)에서 다시 붙이기가 실패했다 | `UPLOADED` + `thumbnailOutcome:FAILED` + `THUMBNAIL_UNCONFIRMED`(지난 배달에서 붙었을 수 있다. 원래 사유는 로그 `upload.thumbnail_unconfirmed`) | 지운다 |
@@ -98,7 +99,7 @@
 |---|---|---|
 | 사유 `quotaExceeded`·`dailyLimitExceeded`·`uploadLimitExceeded`(상태 코드와 상관없이) | `THUMBNAIL_QUOTA_EXCEEDED` | 아니오 |
 | 429, 사유 `rateLimitExceeded`·`userRateLimitExceeded`·`servingLimitExceeded` | `THUMBNAIL_RATE_LIMITED` | 예 |
-| 401 | auth에 토큰을 한 번 다시 받아 붙인다. 그래도 401이면 `THUMBNAIL_UNAUTHORIZED` | 한 번 |
+| 401 | auth에 거절된 토큰의 지문을 실어 강제 갱신한 새 토큰으로 한 번 다시 붙인다(POK-250. 지문 없이 물으면 수명이 넉넉한 토큰을 그대로 받는다). 그래도 401이거나 못 받으면 `THUMBNAIL_UNAUTHORIZED` | 한 번 |
 | 그 밖의 403(`forbidden`: 채널 전화 인증 미완 등) | `THUMBNAIL_FORBIDDEN` | 아니오 |
 | 404(`videoNotFound`, 막 올린 영상이 잠깐 안 보일 수 있다) | `THUMBNAIL_VIDEO_NOT_FOUND` | 예 |
 | 5xx·끊김 | `THUMBNAIL_UNAVAILABLE` | 예 |
@@ -159,6 +160,11 @@ cd workers/upload && ./gradlew bootJar
 401에 토큰 다시 안 받기 · 짧은 재시도 없음 · 아동용 고정 · 새 칸이 틀리면 못 읽음 · 임시 그림 안 지움 · 재배달의 썸네일
 실패를 원래 사유로 보내기 · 바이트를 보냈다는 표시 빼먹기 · 장면 뽑기에 상대 경로 그대로 넘기기가 각각 빨간불이다.
 
+401 강제 갱신(POK-250): 가짜 유튜브의 `acceptedToken`이 시작 · 주소 문에 그 토큰만 받게 하고(주소 문은 머리가 없으면 통과), 가짜 auth는
+지문이 지금 토큰과 같을 때만 새 토큰으로 바꾼다(`refreshedToken` · `refusalOnForce` · 옛 auth `oldAuth`, 강제 갱신 세 번을 넘기면 500).
+결함 주입: 시작 401 갱신 빼기 · 조각 401을 곧장 결론으로 · 결론 내기 401 갱신 빼기 · 「배달에 한 번」 표시 빼기(시작 길 · 이어받기 길) ·
+옛 auth의 같은 토큰 알아보기 빼기 · 썸네일 401을 지문 없이 다시 묻기가 각각 빨간불이다.
+
 ## 아직 없는 것
 
 - **유튜브 자막 등록**(F5, `captions.insert` 400유닛) · 조회수.
@@ -166,4 +172,8 @@ cd workers/upload && ./gradlew bootJar
 - **실제 공개 범위 읽기**: 유튜브가 처리하며 범위를 바꾸는지(잠금) 알리려면 처리 뒤 상태를 읽어 보고해야 한다. 완료 응답은 처리(인코딩) 전에
   와서 못 볼 수 있다(잠긴 영상이 없어 실측 못 함. 처리 뒤 `videos.list`로 읽은 것은 실측했다). 스트리머가 나중에 스튜디오에서 바꾸는 것은
   일꾼 몫이 아니다(주문 하나를 올리면 끝난다. clip이 주기적으로 읽어야 한다).
+- **토큰 없이 주소에 묻는 자리는 진짜 유튜브에서 실측하지 않았다**(연동이 끊긴 채 주소가 있을 때 · 강제 갱신을 다 쓴 뒤 401일 때, POK-250).
+  유튜브가 머리 없는 주소 물음을 안 받으면 401이 오고 확인 중으로 떨어진다(401을 받은 토큰으로 물었을 때와 같은 결과).
+- **한 배달 안에서 강제 갱신한 토큰도 401이면 다음 배달로 미루지 않고 결론을 낸다**(덜 받았으면 확인 중, POK-250). 한 배달이 토큰 수명(약 1시간)보다
+  오래 올릴 때(또는 그 사이 권한이 회수됐을 때)만 생긴다.
 - ECS 작업 정의(렌더 일꾼과 같이 인프라 몫).

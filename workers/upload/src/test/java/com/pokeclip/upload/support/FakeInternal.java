@@ -48,9 +48,24 @@ public class FakeInternal implements AutoCloseable {
     /** 설정하면 result를 받는 순간 이 값을 재 {@link #atResult}에 남긴다(보고 시점에 썸네일이 이미 붙었나). */
     public volatile IntSupplier probeAtResult;
     public final List<Integer> atResult = new ArrayList<>();
-    /** 설정하면 두 번째 resolve부터 이 토큰을 준다(auth가 토큰을 새로 갱신했다). */
+    /** 설정하면 두 번째 resolve부터 이 토큰을 준다(auth가 토큰을 새로 갱신했다). 강제 갱신(지문이 실린 resolve)에는 안 쓴다. */
     public volatile String accessTokenAfterFirst;
+    /** 지문이 실린 resolve를 포함한 전체 resolve 수. */
     public volatile int resolves;
+    /**
+     * 강제 갱신(POK-250): 지문이 지금 토큰과 같으면 이 토큰으로 바꿔 준다. null이면 매번 새 토큰({@code ya29.forced-N})이다
+     * (기본이 거절이면 「새 토큰도 401」 시험들이 강제 갱신의 거절로 끝나 원래 재던 것을 못 잰다).
+     */
+    public volatile String refreshedToken;
+    /** 설정하면 강제 갱신이 이 사유로 거절된다(예: {@code BROKEN} = 구글 invalid_grant). 그 뒤로는 연동이 끊긴 것으로 답한다. */
+    public volatile String refusalOnForce;
+    /** true면 지문 칸을 모르는 옛 auth다(칸을 무시하고 지금 토큰을 준다). */
+    public volatile boolean oldAuth;
+    /** 지문이 실린 resolve 수. 상한({@link #FORCED_LIMIT})을 넘으면 500을 줘 끝없이 부르는 구현이 멈추지 않고 빨개지게 한다. */
+    public volatile int forcedResolves;
+    public static final int FORCED_LIMIT = 3;
+    /** true면 result 문이 404(주문 없음, 탈퇴 정리 등으로 지워졌다)를 준다. */
+    public volatile boolean resultNotFound;
     /** heartbeat 문이 받은 횟수와 줄 상태 코드(POK-333). 404는 이 문을 모르는 옛 clip이다. */
     public volatile int heartbeats;
     public volatile int heartbeatStatus = 200;
@@ -108,6 +123,10 @@ public class FakeInternal implements AutoCloseable {
                 reply(ex, 200, "{\"sessionUri\":\"" + sessionUri + "\"}");
             }
             case "result" -> {
+                if (resultNotFound) {
+                    reply(ex, 404, "{\"error\":\"upload_not_found\"}");
+                    return;
+                }
                 if (resultDown > 0) {
                     resultDown--;
                     reply(ex, 503, "{}");
@@ -151,14 +170,39 @@ public class FakeInternal implements AutoCloseable {
     }
 
     private synchronized void resolve(HttpExchange ex) throws IOException {
-        ex.getRequestBody().readAllBytes();
-        if (resolves++ >= 1 && accessTokenAfterFirst != null) {
+        String body = new String(ex.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+        String rejected = oldAuth ? null : field(body, "rejectedTokenSha256");
+        if (rejected != null) {
+            resolves++;
+            if (++forcedResolves > FORCED_LIMIT) {
+                reply(ex, 500, "{}");
+                return;
+            }
+            // 진짜 auth처럼 회원 행 잠금 안에서 지금 토큰의 지문과 견준다. 다르면 누가 이미 갱신했다: 지금 토큰을 준다.
+            if (accessToken != null && sha256(accessToken).equals(rejected)) {
+                if (refusalOnForce != null) {
+                    accessToken = null;
+                    refusal = refusalOnForce;
+                } else {
+                    accessToken = refreshedToken != null ? refreshedToken : "ya29.forced-" + forcedResolves;
+                }
+            }
+        } else if (resolves++ >= 1 && accessTokenAfterFirst != null) {
             accessToken = accessTokenAfterFirst;
         }
         if (accessToken != null) {
             reply(ex, 200, "{\"valid\":true,\"channelId\":\"UC1\",\"accessToken\":\"" + accessToken + "\"}");
         } else {
             reply(ex, 200, "{\"valid\":false,\"reason\":\"" + refusal + "\"}");
+        }
+    }
+
+    public static String sha256(String value) {
+        try {
+            return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(value.getBytes(StandardCharsets.UTF_8)));
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
         }
     }
 

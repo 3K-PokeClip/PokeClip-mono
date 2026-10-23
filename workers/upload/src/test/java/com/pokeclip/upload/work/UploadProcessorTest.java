@@ -281,15 +281,19 @@ class UploadProcessorTest {
         assertThat(youtube.videosCreated()).isEqualTo(1);
     }
 
-    /** 긴 업로드 뒤 토큰이 끝났다(401). auth에 한 번 다시 물어 새 토큰으로 붙인다. 새 토큰도 로그에 안 남는다. */
+    /**
+     * 긴 업로드 뒤 토큰이 끝났다(401). auth에 「이 토큰이 거절됐다」(지문)를 실어 강제 갱신으로 새 토큰을 받아 붙인다(POK-250: 그 전에는
+     * 지문 없이 다시 물어, 수명이 넉넉하다고 본 auth가 같은 토큰을 주면 못 붙였다). 새 토큰도 로그에 안 남는다.
+     */
     @Test
     void 썸네일이_401이면_토큰을_다시_받아_붙인다(CapturedOutput output) {
         youtube.thumbnailToken = "ya29.fresh-token";
-        internal.accessTokenAfterFirst = "ya29.fresh-token";
+        internal.refreshedToken = "ya29.fresh-token";
 
         processor().process(주문서("", 장면(500)));
 
         assertThat(internal.thumbnailResults).containsExactly("SET");
+        assertThat(internal.forcedResolves).isEqualTo(1);
         assertThat(internal.resolves).isEqualTo(2);
         assertThat(youtube.thumbnailCalls()).isEqualTo(2);
         assertThat(output.getAll()).contains("upload.done").contains("upload.thumbnail")
@@ -584,6 +588,14 @@ class UploadProcessorTest {
         assertThat(internal.results).containsExactly("CHECKING:QUOTA_EXCEEDED");
     }
 
+    /** 주문이 지워졌으면(clip 404, 탈퇴 정리 등) start와 같이 끝난 주문으로 본다: 쪽지를 지운다. */
+    @Test
+    void 주소가_없을_때만_실패에_주문이_없으면_끝난_주문이다() {
+        internal.resultNotFound = true;
+        assertThat(clipApi().failIfNoSession(UPLOAD_ID, "QUOTA_EXCEEDED", "한도"))
+                .isInstanceOf(ClipUploadApi.FailOutcome.Terminal.class);
+    }
+
     /** 새 clip이 주소 없는 줄의 실패를 받으면 실패다. 이미 끝난 줄이면 끝난 주문이다. */
     @Test
     void 주소가_없을_때만_실패의_답을_셋으로_가른다() {
@@ -597,6 +609,197 @@ class UploadProcessorTest {
         internal.sessionUri = "https://upload.example/s1";
         assertThat(clipApi().failIfNoSession(UPLOAD_ID, "QUOTA_EXCEEDED", "한도"))
                 .isEqualTo(new ClipUploadApi.FailOutcome.SessionExists("https://upload.example/s1"));
+    }
+
+    // ── 401이면 새 토큰으로 한 번 더(POK-250) ─────────────────────
+
+    /** 🔴 시작이 401: 그 전에는 쪽지를 남겨 다음 배달도 같은 토큰을 받아 끝내 실패 큐(SWEPT)로 갔다. 강제 갱신한 새 토큰으로 한 번 더 시작한다. */
+    @Test
+    void 시작이_401이면_새_토큰으로_한_번_더_시작한다() {
+        youtube.acceptedToken = "ya29.fresh";
+        internal.refreshedToken = "ya29.fresh";
+
+        processor().process(주문서());
+
+        assertThat(internal.results).containsExactly("UPLOADED:vid1");
+        assertThat(internal.forcedResolves).isEqualTo(1);
+        assertThat(youtube.videosCreated()).isEqualTo(1);
+    }
+
+    /** 🔴 올리는 도중 401: 그 전에는 쪽지만 남기고 다음 배달도 같은 토큰이었다. 새 토큰으로 주소에 먼저 묻고 받은 데부터 잇는다. 영상 하나. */
+    @Test
+    void 조각_전송이_401이면_새_토큰으로_받은_데부터_잇는다() {
+        internal.refreshedToken = "ya29.fresh";
+        UploadProcessor p = processorAfterPut((uri, progress) -> youtube.acceptedToken = "ya29.fresh");
+
+        p.process(주문서());
+
+        assertThat(internal.results).containsExactly("UPLOADED:vid1");
+        assertThat(internal.forcedResolves).isEqualTo(1);
+        assertThat(youtube.session(internal.sessionUri).bytes.toByteArray()).isEqualTo(video);
+        assertThat(youtube.videosCreated()).isEqualTo(1);
+    }
+
+    /** 🔴 새 토큰도 401이고 주소가 없다: 영상이 없으니 {@code YOUTUBE_BROKEN} 실패(그 전에는 쪽지를 남겨 SWEPT). */
+    @Test
+    void 시작이_새_토큰으로도_401이면_YOUTUBE_BROKEN이다() {
+        youtube.acceptedToken = "ya29.never";
+        internal.refreshedToken = "ya29.fresh";
+
+        processor().process(주문서());
+
+        assertThat(internal.results).containsExactly("FAILED:YOUTUBE_BROKEN");
+        assertThat(internal.forcedResolves).isEqualTo(1);
+    }
+
+    /**
+     * 시작 401에 강제 갱신이 거절됐다(연동 끊김). 실패를 보내는 순간 겹친 일꾼이 주소를 적었으면 clip이 그 주소를 주지만, 이 일꾼은
+     * 토큰이 없어 이을 수 없다: 실패도 안 남기고 쪽지를 남긴다.
+     */
+    @Test
+    void 시작_401에_연동이_끊겨_실패를_보내는_순간_주소가_생기면_쪽지를_남긴다() {
+        youtube.acceptedToken = "ya29.fresh";
+        internal.refusalOnForce = "BROKEN";
+        internal.sessionBeforeResult = youtube.openSession(SIZE);
+
+        assertThat(processor().process(주문서()).kind()).isEqualTo(Disposition.Kind.DELAY);
+        assertThat(internal.refusedResults).containsExactly("SESSION_EXISTS");
+        assertThat(internal.results).isEmpty();
+        assertThat(youtube.videosCreated()).isZero();
+    }
+
+    /** 🔴 도중 401에 강제 갱신이 거절됐다(BROKEN). 주소가 있으니 실패가 아니라 결론 내기(주소에 물어 덜 받았으면 확인 중). */
+    @Test
+    void 도중_401에_연동이_끊겼으면_결론을_낸다() {
+        internal.sessionUri = youtube.openSession(SIZE);
+        youtube.acceptedToken = "ya29.other";
+        internal.refusalOnForce = "BROKEN";
+
+        processor().process(주문서());
+
+        assertThat(internal.results).containsExactly("CHECKING:YOUTUBE_BROKEN");
+        assertThat(internal.forcedResolves).isEqualTo(1);
+    }
+
+    /** 옛 auth(칸을 무시)가 같은 토큰을 다시 주면 지금처럼 잠시 뒤 다시다. 배포 순서가 어긋나도 나빠지지 않는다. */
+    @Test
+    void 옛_auth가_같은_토큰을_주면_잠시_뒤_다시다() {
+        youtube.acceptedToken = "ya29.fresh";
+        internal.oldAuth = true;
+
+        assertThat(processor().process(주문서()).kind()).isEqualTo(Disposition.Kind.DELAY);
+        assertThat(internal.results).isEmpty();
+        assertThat(youtube.sessionsStarted()).isZero();
+    }
+
+    /** 강제 갱신은 배달마다 한 번: 시작 401로 썼으면 도중 401에서 또 부르지 않고 결론을 낸다(끝없는 되풀이를 막는다). */
+    @Test
+    void 강제_갱신은_한_배달에_한_번이다() {
+        youtube.acceptedToken = "ya29.fresh";
+        internal.refreshedToken = "ya29.fresh";
+        UploadProcessor p = processorAfterPut((uri, progress) -> youtube.acceptedToken = "ya29.later");
+
+        p.process(주문서());
+
+        assertThat(internal.forcedResolves).isEqualTo(1);
+        assertThat(internal.results).containsExactly("CHECKING:YOUTUBE_BROKEN");
+    }
+
+    /**
+     * 「배달에 한 번」은 이어받기 길에도 따라간다: 시작 401로 갱신한 뒤 한도에 걸려 겹친 일꾼의 주소로 이어받았는데 그 도중 또 401이면
+     * 다시 갱신하지 않고 결론을 낸다.
+     */
+    @Test
+    void 이어받은_주소에서도_강제_갱신은_한_번이다() {
+        youtube.acceptedToken = "ya29.fresh";
+        internal.refreshedToken = "ya29.fresh";
+        youtube.quotaOnStart = true;
+        internal.sessionBeforeResult = youtube.openSession(SIZE);
+        UploadProcessor p = processorAfterPut((uri, progress) -> youtube.acceptedToken = "ya29.later");
+
+        p.process(주문서());
+
+        assertThat(internal.refusedResults).containsExactly("SESSION_EXISTS");
+        assertThat(internal.forcedResolves).isEqualTo(1);
+        assertThat(internal.results).containsExactly("CHECKING:YOUTUBE_BROKEN");
+    }
+
+    /**
+     * 🔴 결론 내기 자리(바이트 거절 뒤)에서 주소 물음이 401: 그 전에는 확인 중으로 닫았다. 새 토큰으로 다시 물어 다 받았으면 올림이다
+     * (거절된 조각 뒤에 겹친 일꾼이 주소를 끝냈다).
+     */
+    @Test
+    void 결론_내기의_401은_새_토큰으로_다시_묻는다() {
+        youtube.rejectChunks = true;
+        internal.refreshedToken = "ya29.fresh";
+        UploadProcessor p = processorAfterPut((uri, progress) -> {
+            youtube.completeSession(uri, video);
+            youtube.acceptedToken = "ya29.fresh";
+        });
+
+        p.process(주문서());
+
+        assertThat(internal.results).containsExactly("UPLOADED:vid1");
+        assertThat(internal.forcedResolves).isEqualTo(1);
+        assertThat(youtube.videosCreated()).isEqualTo(1);
+    }
+
+    /**
+     * 결론 내기의 주소 물음이 401이고 강제 갱신이 거절됐다(연동 끊김). 확인 중의 사유는 처음 사유(바이트 거절)가 아니라 갱신 거절 사유다:
+     * 조각 자리(drive)와 같다. 사람이 채널을 볼 때 「다시 연동」이 필요하다는 것을 알 수 있게(로컬 리뷰 1라운드).
+     */
+    @Test
+    void 결론_내기의_401에_강제_갱신이_거절되면_그_사유로_확인_중이다() {
+        youtube.rejectChunks = true;
+        internal.refusalOnForce = "BROKEN";
+        UploadProcessor p = processorAfterPut((uri, progress) -> youtube.acceptedToken = "ya29.later");
+
+        p.process(주문서());
+
+        assertThat(internal.forcedResolves).isEqualTo(1);
+        assertThat(internal.results).containsExactly("CHECKING:YOUTUBE_BROKEN");
+    }
+
+    /**
+     * 「배달에 한 번」은 결론 내기 자리에도 걸린다(감사 2 경미 1): 시작 401로 갱신한 뒤 조각이 거절돼 결론을 내는데 주소 물음이 또 401이면
+     * 다시 갱신하지 않고 확인 중으로 닫는다. 이 가드가 빠지면 진짜 auth는 매번 새 토큰을 주므로 결론 내기가 스스로를 끝없이 다시 부른다.
+     */
+    @Test
+    void 갱신을_쓴_뒤_결론_내기의_401은_다시_갱신하지_않는다() {
+        youtube.acceptedToken = "ya29.fresh";
+        internal.refreshedToken = "ya29.fresh";
+        youtube.rejectChunks = true;
+        UploadProcessor p = processorAfterPut((uri, progress) -> youtube.acceptedToken = "ya29.later");
+
+        p.process(주문서());
+
+        assertThat(internal.forcedResolves).isEqualTo(1);
+        assertThat(internal.results).containsExactly("CHECKING:YOUTUBE_REJECTED");
+    }
+
+    /**
+     * 갱신을 이미 쓴 배달에서 조각이 또 401이면 401을 받은 토큰 대신 토큰 없이 주소에 묻는다(감사 2 경미 2): 그사이 겹친 일꾼이 주소를
+     * 끝냈으면 「다 받았다」를 알아듣고 올림을 보고한다. 받은 토큰으로 물으면 또 401이라 확인 중으로 닫힌다.
+     * 🔴 진짜 유튜브가 머리 없는 주소 물음을 받는지는 실측하지 않았다(README). 가짜는 머리가 없으면 통과시킨다.
+     */
+    @Test
+    void 갱신을_쓴_뒤_조각_401이면_토큰_없이_물어_끝났으면_올림이다() {
+        youtube.acceptedToken = "ya29.fresh";
+        internal.refreshedToken = "ya29.fresh";
+        boolean[] done = {false};
+        UploadProcessor p = processorAfterPut((uri, progress) -> {
+            if (!done[0]) {
+                done[0] = true;
+                youtube.completeSession(uri, video);   // 겹친 일꾼이 같은 주소를 끝냈다
+                youtube.acceptedToken = "ya29.later";
+            }
+        });
+
+        p.process(주문서());
+
+        assertThat(internal.forcedResolves).isEqualTo(1);
+        assertThat(internal.results).containsExactly("UPLOADED:vid1");
+        assertThat(youtube.videosCreated()).isEqualTo(1);
     }
 
     /** 조각 전송 중 403 속도 제한도 거절이 아니다. 주소에 다시 물어 받은 데부터 잇는다(PR #199 codex 3판). */
@@ -692,9 +895,13 @@ class UploadProcessorTest {
     @Test
     void 토큰과_주소는_로그에_안_남는다(CapturedOutput output) {
         youtube.dropFinalResponseOnce = true;
+        youtube.acceptedToken = "ya29.fresh";   // 시작 401 → 강제 갱신 길도 지나게 한다(POK-250)
+        internal.refreshedToken = "ya29.fresh";
         processor().process(주문서());
 
-        assertThat(output.getAll()).contains("upload.done").doesNotContain(FakeYoutube.GOOD_TOKEN).doesNotContain("/session/");
+        assertThat(internal.forcedResolves).isEqualTo(1);
+        assertThat(output.getAll()).contains("upload.done").doesNotContain(FakeYoutube.GOOD_TOKEN).doesNotContain("/session/")
+                .doesNotContain("ya29.fresh").doesNotContain(FakeInternal.sha256(FakeYoutube.GOOD_TOKEN));
     }
 
     // ── heartbeat(POK-333) ─────────────────────────────────────
@@ -810,6 +1017,18 @@ class UploadProcessorTest {
                     return new Progress.Transient("HTTP 503");
                 }
                 return super.put(sessionUri, accessToken, file, offset, length, size);
+            }
+        });
+    }
+
+    /** 조각을 하나 보낼 때마다(응답을 받은 뒤) {@code afterPut}을 부르는 업로더로. 토큰을 바꾸거나 주소를 끝내는 손잡이다. */
+    private UploadProcessor processorAfterPut(java.util.function.BiConsumer<String, ResumableUploader.Progress> afterPut) {
+        return processor(new ResumableUploader(new ObjectMapper(), youtube.startUrl(), youtube.thumbnailUrl()) {
+            @Override
+            public Progress put(String sessionUri, String accessToken, Path file, long offset, int length, long size) {
+                Progress progress = super.put(sessionUri, accessToken, file, offset, length, size);
+                afterPut.accept(sessionUri, progress);
+                return progress;
             }
         });
     }
