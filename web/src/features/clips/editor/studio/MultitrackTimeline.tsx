@@ -1,8 +1,9 @@
 import { useRef, type KeyboardEvent, type PointerEvent } from 'react';
-import { Captions, Film } from 'lucide-react';
+import { Camera, Captions, Film } from 'lucide-react';
 import { formatUptime } from '@/features/player/playerMath';
 import styles from './StudioScreen.module.css';
-import { TimelineToolbar } from './TimelineToolbar';
+import { ThumbnailTile } from './ThumbnailTile';
+import { shortClock, TimelineToolbar } from './TimelineToolbar';
 import { TimelineTrackRow } from './TimelineTrackRow';
 import {
   MAX_RANGE_SECONDS,
@@ -214,6 +215,15 @@ export function MultitrackTimeline({
                 <span className={styles.trackLabel}>
                   <Film size={12} aria-hidden />
                   <span data-row-label>영상</span>
+                  <ThumbnailTile
+                    seconds={state.thumbnailSeconds}
+                    label={shortClock(
+                      (state.thumbnailSeconds ?? state.range.startSeconds) -
+                        state.range.startSeconds,
+                    )}
+                    video={state.previewVideo}
+                    onSeek={state.seekTo}
+                  />
                 </span>
                 <div className={styles.lane} data-kind="video">
                   <div className={styles.laneFilmstrip} aria-hidden />
@@ -294,6 +304,17 @@ export function MultitrackTimeline({
               </div>
               {/* 창 밖이면 그리지 않는다. 클램프된 채 두면 눈금 가장자리에 딱 붙어
                   실제와 다른 시각을 현재 위치처럼 읽게 한다. */}
+              {state.thumbnailSeconds !== null ? (
+                <span
+                  className={styles.thumbnailMarker}
+                  style={{
+                    left: `${secondsToFraction(state.thumbnailSeconds, state.view) * 100}%`,
+                  }}
+                  aria-hidden
+                >
+                  <Camera size={9} />
+                </span>
+              ) : null}
               {playheadVisible ? (
                 <div className={styles.playhead} style={{ left: `${playheadFraction * 100}%` }}>
                   <span className={styles.playheadTip} aria-hidden />

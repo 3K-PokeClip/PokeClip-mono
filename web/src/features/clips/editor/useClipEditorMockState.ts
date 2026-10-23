@@ -362,7 +362,8 @@ export interface EditorSource {
 /** 저장·주문을 실제 서버에 잇는 자리 */
 export interface EditorActions {
   saveDraft?: (recipe: EditorRecipe) => void;
-  requestUpload?: (recipe: EditorRecipe) => void;
+  /** thumbnailSeconds: 편집기에서 고른 썸네일 장면(소스 축 초). 안 골랐으면 null(POK-389) */
+  requestUpload?: (recipe: EditorRecipe, thumbnailSeconds: number | null) => void;
 }
 
 export interface ClipEditorOptions {
@@ -427,6 +428,11 @@ export interface ClipEditorMockState {
   playing: boolean;
   togglePlay: () => void;
   playheadSeconds: number;
+  /** 편집기에서 고른 썸네일 장면(소스 축 초) — 쇼츠 구간 밖으로 밀려나면 null(POK-389) */
+  thumbnailSeconds: number | null;
+  /** 지금 재생 위치가 쇼츠 구간 안이라 썸네일로 고를 수 있는가 */
+  canPickThumbnail: boolean;
+  pickThumbnail: () => void;
   playheadLabel: string;
   seekBy: (deltaSeconds: number) => void;
   seekTo: (seconds: number) => void;
@@ -786,6 +792,20 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
   const playheadRef = useRef(playheadSeconds);
   playheadRef.current = playheadSeconds;
 
+  // 썸네일 장면은 업로드 정보라 편집 기록(실행취소)에 넣지 않는다. 구간이 줄어 밖으로 나가면 고른 것이 없는 셈이다
+  const [pickedThumbnail, setPickedThumbnail] = useState<number | null>(null);
+  const thumbnailSeconds =
+    pickedThumbnail !== null &&
+    pickedThumbnail >= recipe.range.startSeconds &&
+    pickedThumbnail < recipe.range.endSeconds
+      ? pickedThumbnail
+      : null;
+  const thumbnailRef = useRef(thumbnailSeconds);
+  thumbnailRef.current = thumbnailSeconds;
+  const canPickThumbnail =
+    playheadSeconds >= recipe.range.startSeconds && playheadSeconds < recipe.range.endSeconds;
+  const pickThumbnail = useCallback(() => setPickedThumbnail(playheadRef.current), []);
+
   const markIn = useCallback(() => setRangeEdge('start', playheadRef.current), [setRangeEdge]);
   const markOut = useCallback(() => setRangeEdge('end', playheadRef.current), [setRangeEdge]);
 
@@ -880,7 +900,7 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
       else toast({ tone: 'success', title: '편집본을 저장했어요' });
     }, [actions, toast]),
     requestUpload: useCallback(() => {
-      if (actions?.requestUpload) actions.requestUpload(presentRef.current);
+      if (actions?.requestUpload) actions.requestUpload(presentRef.current, thumbnailRef.current);
       else
         toast({
           tone: 'info',
@@ -934,6 +954,9 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     ),
     markIn,
     markOut,
+    thumbnailSeconds,
+    canPickThumbnail,
+    pickThumbnail,
 
     layout: recipe.layout,
     layoutOptions: LAYOUT_OPTIONS,

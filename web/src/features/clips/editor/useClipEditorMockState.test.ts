@@ -167,6 +167,29 @@ describe('useClipEditorMockState', () => {
     expect(result.current.playheadSeconds).toBeCloseTo(result.current.range.startSeconds, 5);
   });
 
+  it('썸네일 장면은 쇼츠 구간 안에서만 고르고 편집 기록에 남기지 않는다(POK-389)', () => {
+    const { result } = renderEditor();
+    expect(result.current.thumbnailSeconds).toBeNull();
+    expect(result.current.canPickThumbnail).toBe(true);
+
+    act(() => result.current.pickThumbnail());
+    expect(result.current.thumbnailSeconds).toBe(4934);
+    // 보는 값이 아니라 업로드 정보라 실행취소 거리가 생기지 않는다
+    expect(result.current.canUndo).toBe(false);
+
+    act(() => result.current.seekTo(result.current.range.endSeconds + 5));
+    expect(result.current.canPickThumbnail).toBe(false);
+  });
+
+  it('구간을 줄여 고른 장면이 쇼츠 밖으로 나가면 고른 장면이 없는 것으로 본다', () => {
+    const { result } = renderEditor();
+    act(() => result.current.pickThumbnail());
+    // 시작을 4935로 당기면(쇼츠 5.8초) 고른 4934초는 밖이다
+    act(() => result.current.setRangeEdge('start', 4935));
+    expect(result.current.range.startSeconds).toBe(4935);
+    expect(result.current.thumbnailSeconds).toBeNull();
+  });
+
   it('드래그 한 번은 실행취소 한 칸이다 — 이력을 삼키지 않는다', () => {
     const { result } = renderEditor();
     act(() => result.current.setLayout('vert'));

@@ -32,6 +32,18 @@ function renderDialog(
 }
 
 describe('UploadInfoDialog', () => {
+  it('편집기에서 고른 장면이면 그렇다고 말하고, 창에서 장면을 옮기면 그 말을 거둔다(POK-389)', async () => {
+    const user = userEvent.setup();
+    const { dialog } = renderDialog(
+      { pickedInEditor: true },
+      { thumbnailSource: 'scene', sceneOffsetMs: 3_500 },
+    );
+    expect(dialog().getByText('편집기에서 고른 장면')).toBeInTheDocument();
+
+    await user.click(dialog().getByRole('button', { name: '지금 재생 위치로' }));
+    expect(dialog().queryByText('편집기에서 고른 장면')).not.toBeInTheDocument();
+  });
+
   it('칸 여섯의 처음 값: 비공개 · 아동용 아님 · 썸네일 자동 · 확인 단추는 「만들고 올리기」', () => {
     const { dialog } = renderDialog();
 

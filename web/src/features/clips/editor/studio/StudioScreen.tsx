@@ -63,7 +63,7 @@ import {
   type UploadDraft,
   type UploadFieldErrors,
 } from '../UploadInfoDialog';
-import { defaultSceneOffsetMs, sceneOffsetFromPlayhead } from '../uploadInfo';
+import { defaultSceneOffsetMs, sceneOffsetFromPlayhead, withPickedScene } from '../uploadInfo';
 import { clipLabel, clipSettled } from './clipProgress';
 
 // 시안 1d-a 클립 편집기(스튜디오형). 전폭 자체 헤더를 가지므로 ScreenContainer를 쓰지 않는다
@@ -510,6 +510,8 @@ interface PendingUpload {
   recipe: EditorRecipe;
   cutLengthMs: number;
   initial: UploadDraft;
+  /** 썸네일 장면이 편집기의 「이 장면을 썸네일로」로 채워졌는가(POK-389) */
+  pickedInEditor: boolean;
   playheadOffsetMs: number | null;
 }
 
@@ -681,7 +683,7 @@ function WiredStudio({
 
   /** 「영상 만들기」 = 업로드 정보 창을 연다. 연 순간의 화면이 주문할 모양이다(창이 떠 있는 동안 편집기는 안 바뀐다) */
   const openUploadDialog = useCallback(
-    (recipe: EditorRecipe) => {
+    (recipe: EditorRecipe, thumbnailSeconds: number | null) => {
       const current = saveRef.current;
       if (current.busy !== null) return;
       const playheadSeconds = playheadRef.current;
@@ -704,11 +706,13 @@ function WiredStudio({
               thumbnailSource: stored.thumbnailSource,
             }
           : emptyUploadDraft(scene);
+      const prefilled = withPickedScene(initial, thumbnailSeconds, rangeStart, cutLengthMs);
       setUploadErrors({});
       setPending({
         recipe,
         cutLengthMs,
-        initial,
+        initial: prefilled.draft,
+        pickedInEditor: prefilled.picked,
         playheadOffsetMs: sceneOffsetFromPlayhead(playheadSeconds, rangeStart, cutLengthMs),
       });
     },
@@ -909,6 +913,7 @@ function WiredStudio({
           busy={save.busy === 'render'}
           initial={pending.initial}
           cutLengthMs={pending.cutLengthMs}
+          pickedInEditor={pending.pickedInEditor}
           playheadOffsetMs={pending.playheadOffsetMs}
           serverErrors={uploadErrors}
           onCancel={() => setPending(null)}

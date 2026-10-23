@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronUp, Pause, Play, SkipBack } from 'lucide-react';
+import { Camera, ChevronDown, ChevronUp, Pause, Play, SkipBack } from 'lucide-react';
 import { Button, IconButton, Slider } from '@/ui';
 import styles from './StudioScreen.module.css';
 import { MAX_RANGE_TEXT } from '../timelineMath';
@@ -9,7 +9,7 @@ import type { ClipEditorMockState } from '../useClipEditorMockState';
 // 1초·5초 이동은 ←→(Shift) 키가 맡고, 구간 반복은 늘 켠 채 둔다.
 
 /** 쇼츠 안 시각 — 반올림하면 끝에서 「0:13 / 0:12」처럼 넘쳐 보이니 내림한다 */
-function shortClock(seconds: number): string {
+export function shortClock(seconds: number): string {
   const s = Math.max(0, Math.floor(seconds));
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
@@ -30,6 +30,17 @@ export function TimelineToolbar({ state }: { state: ClipEditorMockState }) {
         </Button>
         <Button variant="outline" size="sm" onClick={state.markOut}>
           여기까지 <span aria-hidden>]</span>
+        </Button>
+        {/* 고른 장면은 영상 만들기 창의 「장면 고르기」로 채워진다. 쇼츠 구간 밖에서는 못 고른다 */}
+        <Button
+          variant="outline"
+          size="sm"
+          aria-label="이 장면을 썸네일로"
+          title="이 장면을 썸네일로"
+          disabled={!state.canPickThumbnail}
+          onClick={state.pickThumbnail}
+        >
+          <Camera size={13} aria-hidden /> 썸네일
         </Button>
       </div>
 

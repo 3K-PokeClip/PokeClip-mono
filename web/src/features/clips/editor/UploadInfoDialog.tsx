@@ -88,6 +88,7 @@ export function UploadInfoDialog({
   initial,
   cutLengthMs,
   playheadOffsetMs,
+  pickedInEditor = false,
   serverErrors,
   onCancel,
   onSubmit,
@@ -101,6 +102,8 @@ export function UploadInfoDialog({
   cutLengthMs: number;
   /** 지금 재생 위치를 완성 영상 시각으로 옮긴 값. 녹화가 없어 모르면 null */
   playheadOffsetMs: number | null;
+  /** 장면이 편집기의 「이 장면을 썸네일로」로 채워졌는가(POK-389) */
+  pickedInEditor?: boolean;
   serverErrors: UploadFieldErrors;
   onCancel: () => void;
   onSubmit: (draft: UploadDraft) => void;
@@ -123,6 +126,7 @@ export function UploadInfoDialog({
           initial={initial}
           cutLengthMs={cutLengthMs}
           playheadOffsetMs={playheadOffsetMs}
+          pickedInEditor={pickedInEditor}
           serverErrors={serverErrors}
           onCancel={onCancel}
           onSubmit={onSubmit}
@@ -137,6 +141,7 @@ function UploadInfoForm({
   initial,
   cutLengthMs,
   playheadOffsetMs,
+  pickedInEditor = false,
   serverErrors,
   onCancel,
   onSubmit,
@@ -366,7 +371,10 @@ function UploadInfoForm({
                 </Button>
               </HStack>
               <Text as="p" size="sm" tone="muted">
-                완성 영상의 이 장면을 썸네일로 써요
+                {/* 창에서 장면을 옮기면 더는 편집기에서 고른 장면이 아니다 */}
+                {pickedInEditor && draft.sceneOffsetMs === initial.sceneOffsetMs
+                  ? '편집기에서 고른 장면'
+                  : '완성 영상의 이 장면을 썸네일로 써요'}
               </Text>
             </VStack>
           ) : null}

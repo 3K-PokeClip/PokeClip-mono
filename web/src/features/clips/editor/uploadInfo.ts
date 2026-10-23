@@ -67,6 +67,21 @@ export function defaultSceneOffsetMs(
   return raw >= 0 && raw < cutLengthMs ? raw : middle;
 }
 
+/**
+ * 편집기에서 고른 썸네일 장면(소스 축 초)으로 업로드 창의 처음 값을 바꾼다(POK-389). 지금 막 고른 값이라 기억된 창 값·저장된
+ * 업로드 정보보다 앞선다. 고르지 않았으면 처음 값 그대로다.
+ */
+export function withPickedScene<T extends { thumbnailSource: string; sceneOffsetMs: number }>(
+  initial: T,
+  thumbnailSeconds: number | null,
+  rangeStartSeconds: number,
+  cutLengthMs: number,
+): { draft: T; picked: boolean } {
+  const offset = sceneOffsetFromPlayhead(thumbnailSeconds, rangeStartSeconds, cutLengthMs);
+  if (offset === null) return { draft: initial, picked: false };
+  return { draft: { ...initial, thumbnailSource: 'scene', sceneOffsetMs: offset }, picked: true };
+}
+
 // ---------- 태그 ----------
 
 const TAGS_MAX = 500;

@@ -2,7 +2,7 @@ import { act } from 'react';
 import { fireEvent, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { renderWithProviders } from '@/test/testProviders';
 import { Dialog, RadioGroup } from '@/ui';
 import { StudioEditor } from './StudioScreen';
@@ -148,6 +148,29 @@ describe('StudioScreen', () => {
     expect(within(bar).getByRole('status', { name: '재생 위치' })).toHaveTextContent('0:02 / 0:06');
     await user.click(within(bar).getByRole('button', { name: /시작으로/ }));
     expect(within(bar).getByRole('status', { name: '재생 위치' })).toHaveTextContent('0:00 / 0:06');
+  });
+
+  it('「이 장면을 썸네일로」를 누르면 영상 줄 앞 칸에 그 장면이 선다(POK-389)', async () => {
+    const user = userEvent.setup();
+    renderStudio();
+    const timeline = screen.getByRole('region', { name: '타임라인' });
+    expect(within(timeline).queryByRole('button', { name: /썸네일 장면/ })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: '이 장면을 썸네일로' }));
+    expect(within(timeline).getByRole('button', { name: '썸네일 장면 0:05' })).toBeInTheDocument();
+  });
+
+  it('고른 썸네일 장면을 영상 만들기 요청에 실어 보낸다 — 창이 그 장면으로 채워진다', async () => {
+    const user = userEvent.setup();
+    const requestUpload = vi.fn();
+    renderStudio({ actions: { requestUpload } });
+
+    await user.click(screen.getByRole('button', { name: '업로드' }));
+    expect(requestUpload).toHaveBeenLastCalledWith(expect.anything(), null);
+
+    await user.click(screen.getByRole('button', { name: '이 장면을 썸네일로' }));
+    await user.click(screen.getByRole('button', { name: '업로드' }));
+    expect(requestUpload).toHaveBeenLastCalledWith(expect.anything(), 4934);
   });
 
   it('확대 막대가 타임라인 배율을 바꾼다', async () => {

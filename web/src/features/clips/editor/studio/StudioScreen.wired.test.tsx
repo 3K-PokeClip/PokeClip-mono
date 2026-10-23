@@ -471,6 +471,23 @@ describe('StudioScreen — 카드로 연 실제 편집기', () => {
   });
 });
 
+describe('StudioScreen — 편집기에서 고른 썸네일 장면(POK-389)', () => {
+  it('녹화가 없으면 재생 위치를 몰라 썸네일 단추가 꺼져 있다', async () => {
+    await openFrom(`stream=${STREAM_ID}&card=5`);
+    expect(screen.getByRole('button', { name: '이 장면을 썸네일로' })).toBeDisabled();
+  });
+
+  it('고르지 않았으면 지금처럼 자동으로 연다', async () => {
+    const user = userEvent.setup();
+    await openFrom(`stream=${STREAM_ID}&card=5`);
+
+    await user.click(screen.getByRole('button', { name: '영상 만들기' }));
+    const dialog = within(await screen.findByRole('dialog'));
+    expect(dialog.getByRole('radio', { name: '자동(유튜브가 고름)' })).toBeChecked();
+    expect(dialog.queryByText('편집기에서 고른 장면')).not.toBeInTheDocument();
+  });
+});
+
 describe('StudioScreen — 오디오 빠른 설정(POK-389)', () => {
   it('「저작권 걱정 없이」를 고르면 BGM 트랙만 빼고 나머지 소스 트랙을 섞어 저장한다', async () => {
     server.myTrackLabels = [null, '마이크', '게임', '디스코드', 'BGM', null];
