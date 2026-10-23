@@ -180,6 +180,9 @@ export function Dock({ badges }: { badges?: DockBadges } = {}) {
       setPress(null);
       return;
     }
+    // 고른 칸으로 포커스를 옮긴다 — pointerdown의 preventDefault가 브라우저의 포커스 이동을 막아, 안 옮기면
+    // 키보드로 와 있던 옛 칸에 포커스가 남아 이어서 누른 Enter가 옛 탭으로 되돌아간다(ModeSegment와 같다)
+    items.current[index]?.focus({ preventScroll: true });
     if (press.grabbed && index !== restIndex) {
       willMovePill(index);
       setDropped(index);

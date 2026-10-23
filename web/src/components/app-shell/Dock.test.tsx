@@ -195,6 +195,22 @@ describe('Dock: 꾹 눌러 끌기', () => {
     fireEvent.pointerUp(nav, { pointerId: 1, clientX: X[0], clientY: Y, metaKey: true });
     expect(push).not.toHaveBeenCalled();
   });
+
+  it('놓아서 옮기면 고른 칸으로 포커스가 간다 — 키보드로 와 있던 옛 칸에 남지 않는다(PR #346 리뷰)', () => {
+    const { nav } = setup();
+    link(/설정/).focus();
+
+    // 그냥 누르기
+    fireEvent.pointerDown(nav, { pointerId: 1, clientX: X[0], clientY: Y });
+    fireEvent.pointerUp(nav, { pointerId: 1, clientX: X[0], clientY: Y });
+    expect(link(/홈/)).toHaveFocus();
+
+    // 끌어 놓기
+    fireEvent.pointerDown(nav, { pointerId: 2, clientX: X[1], clientY: Y });
+    fireEvent.pointerMove(nav, { pointerId: 2, clientX: X[2], clientY: Y });
+    fireEvent.pointerUp(nav, { pointerId: 2, clientX: X[2], clientY: Y });
+    expect(link(/클립/)).toHaveFocus();
+  });
 });
 
 describe('Dock: 관계는 해석된 값으로(로컬 리뷰 1라운드 지적 2)', () => {
