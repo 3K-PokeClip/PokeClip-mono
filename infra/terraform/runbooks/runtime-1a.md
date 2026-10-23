@@ -511,8 +511,8 @@ EXECUTE 를 PUBLIC 에서 회수할 수 있는지만 보고 ROLLBACK 합니다(K
 갑니다. 이 출력이 1단-나의 재료입니다(8 에서 기록). 1단-나에 넘길 내용:
 
 *   쓰는 쪽이 둘입니다. 사이드카 `media_indexer` 가 컷오프 경로에서
-    `pg_advisory_xact_lock(hashtext('pc_cutoff_' || …))` 을 씁니다
-    (`media/internal/index/store.go:206` 의 `lockCutoffStreamSQL`). 권한
+    `pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtext(…)::bigint)` 을
+    씁니다(`media/internal/index/store.go:206` 의 `lockCutoffStreamSQL`). 권한
     정본은 「advisory 잠금은 PUBLIC 기본으로 충분」 을 전제로 GRANT 를 두지
     않습니다(`media/internal/pgtest/role.go:41`). 3번 서버 넷의 Flyway 도
     advisory 잠금으로 직렬화합니다(Flyway 일반 거동 — 3번 코드 미대조).

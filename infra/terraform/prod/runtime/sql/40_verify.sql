@@ -43,6 +43,11 @@
 -- 「없음」 을 단언하면 회수 전까지 늘 실패한다). 비밀번호 없음도 보지 못한다 — 마스터는 pg_authid 를 읽지
 -- 못하고 pg_roles.rolpassword 는 늘 ******** 다. 앱 사용자가 자기 표에 갖는 권한과 app_chat_detector 의
 -- chat_messages SELECT(수집 서버 Flyway V316 이 준다)도 보지 않는다 — 행렬은 stream_* 표만 본다.
+--
+-- 내장 함수는 pg_catalog 로 한정하고 연산자는 pg_catalog 에 정확한 판이 있는 형으로 맞춘다(oid 열과 비교하는
+-- regclass · regprocedure · 정수 상수는 ::oid). 배열 비교(text[] = text[])는 pg_catalog 에 다형 판뿐이라
+-- OPERATOR(pg_catalog.=) 로 쓴다. 맞추지 않으면 앱 사용자 넷이 public 에 심은 같은 이름의 판이 마스터 신분으로
+-- 돈다(search_path 가로채기, media/README.md).
 -- 트랜잭션 문을 쓰지 않는다 — 원자성은 psql -1 이 준다.
 \set ON_ERROR_STOP on
 
@@ -93,18 +98,19 @@ BEGIN
         SELECT r, t, p, go
           FROM grantees,
                tables,
-               unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER',
-                            'MAINTAIN']) AS p,
-               unnest(ARRAY[false, true]) AS go
-         WHERE to_regclass('public.' || t) IS NOT NULL
+               pg_catalog.unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER',
+                                       'MAINTAIN']) AS p,
+               pg_catalog.unnest(ARRAY[false, true]) AS go
+         WHERE pg_catalog.to_regclass('public.' || t) IS NOT NULL
     ),
     column_matrix(r, t, c, p, go) AS (
         SELECT r, t, a.attname::text, p, go
           FROM grantees,
                tables
-               JOIN pg_attribute a ON a.attrelid = to_regclass('public.' || t) AND a.attnum > 0 AND NOT a.attisdropped,
-               unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', 'REFERENCES']) AS p,
-               unnest(ARRAY[false, true]) AS go
+               JOIN pg_attribute a
+                 ON a.attrelid = pg_catalog.to_regclass('public.' || t)::oid AND a.attnum > 0 AND NOT a.attisdropped,
+               pg_catalog.unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', 'REFERENCES']) AS p,
+               pg_catalog.unnest(ARRAY[false, true]) AS go
     ),
     checks(id, ok) AS (
         SELECT 'role:media_owner',
@@ -121,80 +127,85 @@ BEGIN
         UNION ALL
         SELECT 'media_indexer_statement_timeout',
                EXISTS (SELECT 1 FROM pg_db_role_setting s JOIN pg_roles r ON r.oid = s.setrole
-                        WHERE r.rolname = 'media_indexer' AND s.setdatabase = 0
+                        WHERE r.rolname = 'media_indexer' AND s.setdatabase = 0::oid
                           AND 'statement_timeout=60s' = ANY (s.setconfig))
         UNION ALL
         SELECT 'rds_iam:' || a,
-               EXISTS (SELECT 1 FROM pg_roles WHERE rolname = a) AND pg_has_role(a, 'rds_iam', 'MEMBER')
+               EXISTS (SELECT 1 FROM pg_roles WHERE rolname = a) AND pg_catalog.pg_has_role(a, 'rds_iam', 'MEMBER')
           FROM accounts
         UNION ALL
         SELECT 'membership_' || a,
-               ARRAY(SELECT DISTINCT pg_get_userbyid(m.roleid)::text
+               ARRAY(SELECT DISTINCT pg_catalog.pg_get_userbyid(m.roleid)::text
                        FROM pg_auth_members m JOIN pg_roles r ON r.oid = m.member
-                      WHERE r.rolname = a ORDER BY 1) = ARRAY['rds_iam']
+                      WHERE r.rolname = a ORDER BY 1) OPERATOR(pg_catalog.=) ARRAY['rds_iam']
           FROM accounts
         UNION ALL
         SELECT 'members_media_owner',
-               ARRAY(SELECT DISTINCT pg_get_userbyid(m.member)::text
+               ARRAY(SELECT DISTINCT pg_catalog.pg_get_userbyid(m.member)::text
                        FROM pg_auth_members m JOIN pg_roles r ON r.oid = m.roleid
                       WHERE r.rolname = 'media_owner'
-                        AND pg_get_userbyid(m.member) NOT IN (SELECT a FROM accounts)
-                      ORDER BY 1) = ARRAY[current_user::text]
+                        AND pg_catalog.pg_get_userbyid(m.member) NOT IN (SELECT a FROM accounts)
+                      ORDER BY 1) OPERATOR(pg_catalog.=) ARRAY[current_user::text]
         UNION ALL
         SELECT 'schema_create_' || a,
                EXISTS (SELECT 1 FROM pg_roles WHERE rolname = a)
-               AND has_schema_privilege(a, 'public', 'CREATE') = schema_create
+               AND pg_catalog.has_schema_privilege(a, 'public', 'CREATE') = schema_create
           FROM accounts
         UNION ALL
         SELECT 'schema_usage_' || a,
                EXISTS (SELECT 1 FROM pg_roles WHERE rolname = a)
-               AND has_schema_privilege(a, 'public', 'USAGE')
+               AND pg_catalog.has_schema_privilege(a, 'public', 'USAGE')
           FROM accounts
         UNION ALL
-        SELECT 'public_create_revoked', NOT has_schema_privilege('public', 'public', 'CREATE')
+        SELECT 'public_create_revoked', NOT pg_catalog.has_schema_privilege('public', 'public', 'CREATE')
         UNION ALL
         SELECT 'media_owner_schema',
                EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'media_owner')
-               AND has_schema_privilege('media_owner', 'public', 'USAGE')
-               AND has_schema_privilege('media_owner', 'public', 'CREATE')
+               AND pg_catalog.has_schema_privilege('media_owner', 'public', 'USAGE')
+               AND pg_catalog.has_schema_privilege('media_owner', 'public', 'CREATE')
         UNION ALL
         SELECT 'owner:' || t,
                EXISTS (SELECT 1 FROM pg_class
-                        WHERE oid = to_regclass('public.' || t) AND pg_get_userbyid(relowner) = 'media_owner')
+                        WHERE oid = pg_catalog.to_regclass('public.' || t)::oid
+                          AND pg_catalog.pg_get_userbyid(relowner) = 'media_owner')
           FROM tables
         UNION ALL
         SELECT 'owner:stream_segments_immutable_axes',
                EXISTS (SELECT 1 FROM pg_proc
-                        WHERE oid = to_regprocedure('public.stream_segments_immutable_axes()')
-                          AND pg_get_userbyid(proowner) = 'media_owner')
+                        WHERE oid = pg_catalog.to_regprocedure('public.stream_segments_immutable_axes()')::oid
+                          AND pg_catalog.pg_get_userbyid(proowner) = 'media_owner')
         UNION ALL
-        SELECT format('privilege:%s:%s:%s%s', m.r, m.t, m.p, CASE WHEN m.go THEN '+grant_option' ELSE '' END),
-               has_table_privilege(m.r, 'public.' || m.t, m.p || CASE WHEN m.go THEN ' WITH GRANT OPTION' ELSE '' END)
+        SELECT pg_catalog.format('privilege:%s:%s:%s%s', m.r, m.t, m.p,
+                                 CASE WHEN m.go THEN '+grant_option' ELSE '' END),
+               pg_catalog.has_table_privilege(m.r, 'public.' || m.t,
+                                              m.p || CASE WHEN m.go THEN ' WITH GRANT OPTION' ELSE '' END)
                = (NOT m.go AND EXISTS (SELECT 1 FROM granted g WHERE (g.r, g.t, g.p) = (m.r, m.t, m.p)))
           FROM matrix m
         UNION ALL
         -- 표 단위 권한이 있으면 열 단위도 참이다. 그래서 기대값은 표 단위 결과이고, 어긋나면 열에만 준 권한이다.
-        SELECT format('column:%s:%s.%s:%s%s', c.r, c.t, c.c, c.p, CASE WHEN c.go THEN '+grant_option' ELSE '' END),
-               has_column_privilege(c.r, 'public.' || c.t, c.c,
-                                    c.p || CASE WHEN c.go THEN ' WITH GRANT OPTION' ELSE '' END)
-               = (has_table_privilege(c.r, 'public.' || c.t,
-                                      c.p || CASE WHEN c.go THEN ' WITH GRANT OPTION' ELSE '' END)
+        SELECT pg_catalog.format('column:%s:%s.%s:%s%s', c.r, c.t, c.c, c.p,
+                                 CASE WHEN c.go THEN '+grant_option' ELSE '' END),
+               pg_catalog.has_column_privilege(c.r, 'public.' || c.t, c.c,
+                                               c.p || CASE WHEN c.go THEN ' WITH GRANT OPTION' ELSE '' END)
+               = (pg_catalog.has_table_privilege(c.r, 'public.' || c.t,
+                                                 c.p || CASE WHEN c.go THEN ' WITH GRANT OPTION' ELSE '' END)
                   OR (c.r, c.t, c.c, c.p, c.go) = ('media_janitor', 'stream_segments', 'local_path', 'UPDATE', false))
           FROM column_matrix c
         UNION ALL
         SELECT 'connect:' || a,
                EXISTS (SELECT 1 FROM pg_roles WHERE rolname = a)
-               AND has_database_privilege(a, current_database(), 'CONNECT')
+               AND pg_catalog.has_database_privilege(a, pg_catalog.current_database(), 'CONNECT')
           FROM accounts
         UNION ALL
         SELECT 'advisory_xact_lock_media_indexer',
                EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'media_indexer')
-               AND has_function_privilege('media_indexer', 'pg_advisory_xact_lock(bigint)', 'EXECUTE')
+               AND pg_catalog.has_function_privilege('media_indexer', 'pg_catalog.pg_advisory_xact_lock(bigint)',
+                                                     'EXECUTE')
     )
-    SELECT coalesce(array_agg(id ORDER BY id), '{}') INTO failed FROM checks WHERE ok IS NOT TRUE;
+    SELECT coalesce(pg_catalog.array_agg(id ORDER BY id), '{}') INTO failed FROM checks WHERE ok IS NOT TRUE;
 
-    IF cardinality(failed) > 0 THEN
-        RAISE EXCEPTION 'verify failed: %', array_to_string(failed, ', ');
+    IF pg_catalog.cardinality(failed) > 0 THEN
+        RAISE EXCEPTION 'verify failed: %', pg_catalog.array_to_string(failed, ', ');
     END IF;
 END $do$;
 

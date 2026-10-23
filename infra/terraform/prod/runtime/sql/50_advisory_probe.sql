@@ -10,18 +10,25 @@
 --
 -- 쓰는 쪽이 둘이라 지금 회수하지 않는다: 사이드카 media_indexer 의 컷오프 잠금
 -- (media/internal/index/store.go 의 lockCutoffStreamSQL)과 3번 서버 넷의 Flyway 직렬화다.
+--
+-- 내장 함수와 대상 함수는 pg_catalog 로 한정한다 — 앱 사용자 넷이 public 에 심은 (text, text, text) 판이
+-- 마스터 신분으로 돌지 않게(search_path 가로채기, media/README.md).
 \set ON_ERROR_STOP on
 
 BEGIN;
 
 SELECT 'before' AS phase,
-       has_function_privilege('public', 'pg_advisory_xact_lock(bigint)', 'EXECUTE') AS public_execute,
-       has_function_privilege('media_indexer', 'pg_advisory_xact_lock(bigint)', 'EXECUTE') AS media_indexer_execute;
+       pg_catalog.has_function_privilege('public', 'pg_catalog.pg_advisory_xact_lock(bigint)',
+                                         'EXECUTE') AS public_execute,
+       pg_catalog.has_function_privilege('media_indexer', 'pg_catalog.pg_advisory_xact_lock(bigint)',
+                                         'EXECUTE') AS media_indexer_execute;
 
-REVOKE EXECUTE ON FUNCTION pg_advisory_xact_lock(bigint) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION pg_catalog.pg_advisory_xact_lock(bigint) FROM PUBLIC;
 
 SELECT 'after' AS phase,
-       has_function_privilege('public', 'pg_advisory_xact_lock(bigint)', 'EXECUTE') AS public_execute,
-       has_function_privilege('media_indexer', 'pg_advisory_xact_lock(bigint)', 'EXECUTE') AS media_indexer_execute;
+       pg_catalog.has_function_privilege('public', 'pg_catalog.pg_advisory_xact_lock(bigint)',
+                                         'EXECUTE') AS public_execute,
+       pg_catalog.has_function_privilege('media_indexer', 'pg_catalog.pg_advisory_xact_lock(bigint)',
+                                         'EXECUTE') AS media_indexer_execute;
 
 ROLLBACK;

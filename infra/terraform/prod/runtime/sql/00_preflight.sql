@@ -13,6 +13,9 @@
 --   db_owner             이 DB 의 소유자가 접속 신분이다(public 스키마 소유 = pg_database_owner)
 --   public_create        PUBLIC 이 public 스키마에 CREATE 를 갖지 않는다(PG15+ 기본값)
 --
+-- 내장 함수는 pg_catalog 로 한정한다 — 앱 사용자 넷이 public 에 심은 같은 이름 함수가 마스터 신분으로 돌지
+-- 않게(search_path 가로채기, media/README.md). 배열에 덧붙이기는 연산자 || 대신 array_append 다(text[] || text
+-- 는 pg_catalog 에 다형 판뿐이라 public 의 정확한 판이 먼저 골린다).
 -- 트랜잭션 문을 쓰지 않는다 — 원자성은 psql -1 이 준다.
 \set ON_ERROR_STOP on
 
@@ -23,33 +26,33 @@ DECLARE
 BEGIN
     SELECT * INTO me FROM pg_roles WHERE rolname = current_user;
 
-    IF current_setting('server_version_num')::int < 170000 THEN
-        failed := failed || 'version'::text;
+    IF pg_catalog.current_setting('server_version_num')::int < 170000 THEN
+        failed := pg_catalog.array_append(failed, 'version');
     END IF;
-    IF coalesce(current_setting('rds.force_ssl', true), '') NOT IN ('1', 'on') THEN
-        failed := failed || 'rds.force_ssl'::text;
+    IF coalesce(pg_catalog.current_setting('rds.force_ssl', true), '') NOT IN ('1', 'on') THEN
+        failed := pg_catalog.array_append(failed, 'rds.force_ssl');
     END IF;
-    IF NOT coalesce((SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()), false) THEN
-        failed := failed || 'tls'::text;
+    IF NOT coalesce((SELECT ssl FROM pg_stat_ssl WHERE pid = pg_catalog.pg_backend_pid()), false) THEN
+        failed := pg_catalog.array_append(failed, 'tls');
     END IF;
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'rds_iam') THEN
-        failed := failed || 'rds_iam'::text;
+        failed := pg_catalog.array_append(failed, 'rds_iam');
     END IF;
     IF me.rolsuper THEN
-        failed := failed || 'master_not_superuser'::text;
+        failed := pg_catalog.array_append(failed, 'master_not_superuser');
     END IF;
     IF NOT me.rolcreaterole THEN
-        failed := failed || 'master_createrole'::text;
+        failed := pg_catalog.array_append(failed, 'master_createrole');
     END IF;
-    IF (SELECT datdba FROM pg_database WHERE datname = current_database()) <> me.oid THEN
-        failed := failed || 'db_owner'::text;
+    IF (SELECT datdba FROM pg_database WHERE datname = pg_catalog.current_database()) <> me.oid THEN
+        failed := pg_catalog.array_append(failed, 'db_owner');
     END IF;
-    IF has_schema_privilege('public', 'public', 'CREATE') THEN
-        failed := failed || 'public_create'::text;
+    IF pg_catalog.has_schema_privilege('public', 'public', 'CREATE') THEN
+        failed := pg_catalog.array_append(failed, 'public_create');
     END IF;
 
-    IF cardinality(failed) > 0 THEN
-        RAISE EXCEPTION 'preflight failed: %', array_to_string(failed, ', ');
+    IF pg_catalog.cardinality(failed) > 0 THEN
+        RAISE EXCEPTION 'preflight failed: %', pg_catalog.array_to_string(failed, ', ');
     END IF;
 END $do$;
 

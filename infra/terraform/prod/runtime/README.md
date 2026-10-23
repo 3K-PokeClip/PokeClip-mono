@@ -72,7 +72,7 @@ default_tags 가 붙는지는 미확인이고, 런북 「운영 확인」 에서
 | `broadcast_queue_arns`(소비자 clip · chat → 큐 ARN) | chat-collector(POK-306)의 수신 정책 대상. clip 은 `app_task_resource_arns` 를 쓴다 |
 | `app_db_users`(서비스 → DB 사용자 이름) | platform — 태스크 env `POSTGRES_USER` · `rds-db:connect` 의 사용자 자리(auth · clip). `auth` `app_auth` · `clip` `app_clip` · `chat-collector` `app_chat_collector` · `chat-detector` `app_chat_detector` — chat 두 키는 배치(POK-306)가 읽는다. 사용자 · `rds_iam` · GRANT 는 `sql/` 이 만든다 |
 | `app_task_resource_arns`(서비스 → 키 → ARN) | platform — 작업 역할 정책 Resource(키 = platform 의 `task_resource_keys`). 지금은 clip 의 `broadcast_queue_arn` 하나 — 일 큐 · 버킷 키는 런타임 다음 PR(POK-408) |
-| `rds_master_user_secret_arn` | 운영 전용(계약 아님) — SQL 실행기 역할 정책 · 런북 |
+| `rds_master_user_secret_arn` | 운영 전용(계약 아님) — SQL 실행기 역할 정책 · 런북. 본 apply 직후 kty 가 이 출력을 `~/.pokeclip-precheck/input-rds-master.txt`(0600)에 적어 2-3 판정이 관리형 마스터 비밀을 묻게 합니다(런북 runtime-1a 3-1). 화면 · 세션에 내지 않습니다 |
 | `sql_runner_instance_id` | 운영 전용(계약 아님) — send-command 대상. 꺼져 있으면 null |
 
 비밀은 전체 ARN 으로만 지정합니다. 이름 끝의 「-secret」 을 부분 ARN 의
@@ -90,7 +90,11 @@ SQL 을 적용한 뒤 곧바로 끕니다. 켜진 동안 `iam:PassRole` 을 가�
 이 프로필로 상자를 띄워 마스터 비밀을 읽을 수 있기 때문입니다. 2-3
 판정(principal-check)은 dev 주체가 실행기 역할을 EC2 에 넘길 수 있는지
 (`iam:PassRole` · `iam:PassedToService = ec2.amazonaws.com`)를 묻습니다.
-잊어도 상자는 준비 단계가 건 자동 종료로 120분 뒤 멈춥니다(런북 4 · 5-3).
+켠 뒤 SQL 을 보내기 전에 2-3 판정을 다시 돌립니다 — 켜진 실행기는
+`Environment = prod` 태그로 `prod-instance` 행에 풀리고, dev 주체에 그
+인스턴스의 `ssm:SendCommand` · `ssm:StartSession` 이 있으면 SQL 을 보내지
+않고 끕니다(런북 runtime-1a 4). 잊어도 상자는 준비 단계가 건 자동 종료로
+120분 뒤 멈춥니다(런북 4 · 5-3).
 
 ## 대안
 
@@ -113,8 +117,8 @@ CREATE 는 1단-가가 했습니다(POK-407 · kty 2026-10-24). 잊지 않도록
 1.  **advisory 함수 권한 회수(K7)** — `pg_advisory_lock` ·
     `pg_advisory_xact_lock` 등을 PUBLIC 에서 회수할지 정합니다.
     *   미룬 이유 — 쓰는 쪽이 둘입니다. ① 사이드카 `media_indexer` 가 컷오프
-        경로에서 `pg_advisory_xact_lock(hashtext('pc_cutoff_' || …))` 을
-        씁니다(`media/internal/index/store.go:206` 의 `lockCutoffStreamSQL`).
+        경로에서 `pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtext(…)::bigint)`
+        을 씁니다(`media/internal/index/store.go:206` 의 `lockCutoffStreamSQL`).
         권한 정본은 「advisory 잠금은 PUBLIC 기본으로 충분」 을 전제로 GRANT 를
         두지 않습니다(`media/internal/pgtest/role.go:41`). ② 3번 서버 넷의
         Flyway 가 advisory 잠금으로 마이그레이션을 직렬화합니다(Flyway 일반
@@ -149,7 +153,10 @@ CREATE 는 1단-가가 했습니다(POK-407 · kty 2026-10-24). 잊지 않도록
     `FORWARD_HEADERS_STRATEGY` 제약).
 1.  앱별 스키마 — 앱 사용자 넷에게 `public` CREATE 대신 자기 스키마를 주고
     (3번 Flyway 의 스키마 설정과 함께) `public` CREATE 를 회수해, 한계 절의
-    이름 해석 가로채기를 닫습니다.
+    이름 해석 가로채기를 닫습니다. 3번 Java(`services/auth` 의
+    `AudioTrackLabelRepository` · `PairingAttemptRecorder` 의
+    `pg_advisory_xact_lock(hashtext(?))`)도 같은 꼴이라 앱 사용자끼리 가로챌
+    수 있습니다 — 1단-나 · 3번 협의입니다.
 
 ## 한계
 
@@ -173,9 +180,12 @@ CREATE 는 1단-가가 했습니다(POK-407 · kty 2026-10-24). 잊지 않도록
     점검은 통과하고 apply 가 거부로 멈춥니다(런북 2).
 *   앱 사용자 넷이 `public` CREATE 를 가져, 같은 DB 의 다른 계정 세션이 맨
     이름으로 부르는 함수 · 연산자를 가로챌 수 있습니다(CVE-2018-1058 계열).
-    사이드카 · janitor SQL 과 스키마 사본(`sql/stream_schema.sql`)은 이 PR 에서
-    `pg_catalog` 로 한정하고 형을 맞췄습니다(규약은 `media/README.md`) —
-    근본(앱별 스키마)은 1단-나 · 3번 협의입니다.
+    사이드카 · janitor SQL 과 `sql/` 의 마스터 SQL(00–50 · 스키마 사본
+    `stream_schema.sql`)은 이 PR 에서 `pg_catalog` 로 한정하고 형을
+    맞췄습니다(규약은 `media/README.md`). 3번 Java(`services/auth` 의
+    `AudioTrackLabelRepository` · `PairingAttemptRecorder` 의
+    `pg_advisory_xact_lock(hashtext(?))`)도 같은 꼴이라 앱 사용자끼리 가로챌
+    수 있습니다 — 근본(앱별 스키마)과 함께 1단-나 · 3번 협의입니다.
 
 ## See also
 
