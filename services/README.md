@@ -777,7 +777,9 @@ cd - && git worktree remove /tmp/pokeclip-image
 
 **`POSTGRES_AUTH` 하나로 고른다. 비어 있거나 `password`면 지금 그대로다**(로컬 compose · CI). `iam`이면 비밀번호 대신
 **새 연결마다** AWS SDK로 서명한 RDS IAM 토큰(15분 유효)으로 붙는다. 이름과 뜻은 media 사이드카(ADR-0006)와 같다.
-코드는 `db-support`의 `DataSourceLoginConfiguration`이고, 각 서버 `Application`이 `@Import` 한다.
+코드는 `db-support`의 `DataSourceLoginConfiguration`이고, 쓰는 서버의 `Application`이 `@Import` 한다.
+**🔴 지금 붙은 서버는 `chat-detector` 하나다.** auth · clip · chat-collector에는 아직 안 붙어 `POSTGRES_AUTH`를 줘도
+비밀번호로만 붙는다(POK-407 다음 PR에서 붙인다).
 
 | `iam`이면 | 왜 |
 |---|---|
