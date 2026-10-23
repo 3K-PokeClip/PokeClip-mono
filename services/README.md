@@ -803,6 +803,51 @@ cd - && git worktree remove /tmp/pokeclip-image
 큰 색인 마이그레이션(V309 · V314 같은 동시 색인)이 그 시한에 끊길 수 있고, 5초면 그 가능성이 커진다.
 auth · clip에는 이 시한이 아예 없다(POK-414로 따로 넣는다).
 
+### 서버별 DB 계정과 권한 (POK-407)
+
+**운영은 서버마다 DB 계정이 따로다.** 넷 다 `rds_iam`(IAM 토큰 로그인)을 받고, 각 서버가 **자기 표를 자기 계정으로
+만든다**(Flyway가 그 계정으로 돈다). 그래서 자기 표 권한은 소유로 충분하고, 목록에 남는 것은 표를 만들 자리
+(`CREATE ON SCHEMA public`, PG 15부터 기본으로 닫혔다)와 남의 표에 대한 교차 접근 넷뿐이다. `stream_*`는 media(1번) 표다.
+
+**계정 만들기와 GRANT 실행은 1번(런타임) 몫이다.** 순서가 있다.
+
+1. 계정 넷을 **서버가 처음 뜨기 전에** 만든다. `chat_messages` 읽기는 수집 서버 마이그레이션(`V316`)이 판별 서버 계정이
+   있을 때만 주므로, 그 계정이 늦게 생기면 그 줄이 건너뛰어진다(그때는 아래 수동 줄로 준다)
+2. `stream_*` 교차 권한은 media가 그 표를 만든 **뒤에** 준다
+
+```sql
+-- auth
+CREATE ROLE app_auth LOGIN;
+GRANT rds_iam TO app_auth;
+GRANT CREATE ON SCHEMA public TO app_auth;
+
+-- clip: 탈퇴 정리가 조각 장부를 읽고 지운다(StreamerPurgeStore) · 조각 조회 · 사진 대상 · 회차 머리 파일
+CREATE ROLE app_clip LOGIN;
+GRANT rds_iam TO app_clip;
+GRANT CREATE ON SCHEMA public TO app_clip;
+GRANT SELECT, DELETE ON stream_segments TO app_clip;
+GRANT SELECT ON stream_sessions TO app_clip;
+
+-- chat-collector: 채팅 시각을 영상 위치로 바꿀 때 조각 장부를 읽는다(SegmentLedger)
+CREATE ROLE app_chat_collector LOGIN;
+GRANT rds_iam TO app_chat_collector;
+GRANT CREATE ON SCHEMA public TO app_chat_collector;
+GRANT SELECT ON stream_segments TO app_chat_collector;
+
+-- chat-detector: 채팅 원문을 읽는다(ChatWindowReader). 아래 SELECT는 수집 서버 V316이 준다(표 주인이 준다).
+-- V316이 돌 때 이 계정이 없었다면 수집 서버 계정이나 마스터로 이 줄을 손으로 돌린다.
+CREATE ROLE app_chat_detector LOGIN;
+GRANT rds_iam TO app_chat_detector;
+GRANT CREATE ON SCHEMA public TO app_chat_detector;
+GRANT SELECT ON chat_messages TO app_chat_detector;
+```
+
+**이 목록은 서버마다 `DbRoleGrantsTest`가 그대로 잰다.** 빈 DB에 「이 줄들만 가진」 역할을 만들어 그 역할로 서버를 띄운다.
+마이그레이션이 끝까지 돌고 위 교차 접근 코드가 돈다. 한 줄씩 거두면 그 경로가 권한 부족(`42501`)으로 거절된다.
+README의 `GRANT ... TO app_*;` 줄과 시험의 목록이 다르면 빨간불이다.
+**재지 않는 것**: 자기 표의 전체 저장 경로를 그 역할로 다 돌리지는 않는다(소유자라 표 권한이 다 있다). 시퀀스 ·
+트리거 함수 · advisory 잠금 · `pg_stat_ssl` 자기 행은 소유 또는 PUBLIC 기본으로 충분하다.
+
 ## DB 마이그레이션
 
 Flyway 마이그레이션은 앱이 뜰 때 실행돼야 하므로 **코드 옆(`auth/src/main/resources/db/migration/`)에 둔다.**
