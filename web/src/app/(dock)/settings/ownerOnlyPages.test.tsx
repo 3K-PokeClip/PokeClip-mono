@@ -50,6 +50,6 @@ describe('남의 채널에서 막는 설정 페이지', () => {
       </ChannelRelationContext.Provider>,
     );
 
-    expect(screen.getByText('이 채널에서는 열 수 없어요')).toBeInTheDocument();
+    expect(screen.getByText('채널 주인만 볼 수 있는 화면이에요')).toBeInTheDocument();
   });
 });

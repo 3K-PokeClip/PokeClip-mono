@@ -2,7 +2,7 @@
 
 import type { ReactNode } from 'react';
 import { Lock } from 'lucide-react';
-import { Button, EmptyState } from '@/ui';
+import { Button } from '@/ui';
 import { useMe } from '@/features/auth/useSession';
 import { useChannelRelation } from './ChannelScope';
 import { useSwitchChannel } from './useActiveChannel';
@@ -17,24 +17,27 @@ export function OwnerOnly({ children }: { children: ReactNode }) {
   return <Blocked />;
 }
 
+/** 막힌 화면(시안 비교 B안 「잠긴 미리보기」에서 흐린 목록을 뺀 것). 안내는 본문의 가로·세로 한가운데에 둔다. */
 function Blocked() {
   const me = useMe().data;
   const switchTo = useSwitchChannel();
   return (
     <div className={styles.root}>
-      <EmptyState
-        icon={<Lock />}
-        title="이 채널에서는 열 수 없어요"
-        description="채널 연동 · 편집자 관리 · 플러그인은 채널 주인만 다뤄요. 내 채널로 돌아가면 열 수 있어요."
-      />
-      <Button
-        variant="soft"
-        size="sm"
-        disabled={!me}
-        onClick={() => me && switchTo({ streamerId: me.id, name: me.name, relation: 'OWNER' })}
-      >
-        내 채널로 전환
-      </Button>
+      <div className={styles.center}>
+        <span className={styles.icon} aria-hidden>
+          <Lock />
+        </span>
+        <p className={styles.title}>채널 주인만 볼 수 있는 화면이에요</p>
+        <p className={styles.text}>지금은 남의 채널에서 편집자로 일하는 중이에요</p>
+        <Button
+          variant="solid"
+          size="sm"
+          disabled={!me}
+          onClick={() => me && switchTo({ streamerId: me.id, name: me.name, relation: 'OWNER' })}
+        >
+          내 채널로 전환
+        </Button>
+      </div>
     </div>
   );
 }

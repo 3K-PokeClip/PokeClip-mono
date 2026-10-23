@@ -1,7 +1,47 @@
+/* 설정 본문 높이(셸 위·아래 여백을 뺀 화면 높이)를 채운다: 안내는 그 칸의 가로·세로 한가운데에 선다.
+   아래 여백 96u는 독 자리라 한가운데도 독에 가리지 않는다 */
 .root {
   display: flex;
   flex-direction: column;
+  min-height: calc(100dvh - var(--pc-shell-body-pad-top) - var(--pc-shell-body-pad-bottom));
+}
+
+.center {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: var(--pc-space-4);
-  padding: calc(64 * var(--pc-u)) var(--pc-space-4);
+  justify-content: center;
+  gap: calc(8 * var(--pc-u));
+  text-align: center;
+}
+
+.icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: calc(46 * var(--pc-u));
+  height: calc(46 * var(--pc-u));
+  margin-bottom: calc(4 * var(--pc-u));
+  border-radius: 50%;
+  background: var(--pc-color-bg-surface);
+  color: var(--pc-color-text-secondary);
+  box-shadow: var(--pc-shadow-lg);
+}
+
+.icon svg {
+  width: calc(20 * var(--pc-u));
+  height: calc(20 * var(--pc-u));
+}
+
+.title {
+  margin: 0;
+  font-size: calc(15 * var(--pc-u));
+  font-weight: 750;
+}
+
+.text {
+  margin: 0 0 calc(6 * var(--pc-u));
+  font-size: calc(12 * var(--pc-u));
+  color: var(--pc-color-text-secondary);
 }

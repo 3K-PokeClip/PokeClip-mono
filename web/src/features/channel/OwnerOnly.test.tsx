@@ -51,7 +51,7 @@ describe('OwnerOnly', () => {
     renderAs('EDITOR');
 
     expect(screen.queryByText('플러그인 화면')).not.toBeInTheDocument();
-    expect(screen.getByText('이 채널에서는 열 수 없어요')).toBeInTheDocument();
+    expect(screen.getByText('채널 주인만 볼 수 있는 화면이에요')).toBeInTheDocument();
     // 한 번이라도 마운트하면 그 사이 내 키·연동을 읽는다: 그렸다 지우는 구현을 여기서 막는다(감사 3회차 지적 3)
     expect(mounts).toBe(0);
 
