@@ -68,7 +68,7 @@ describe('StudioScreen', () => {
     expect(within(locked).getByText('잠김')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '1대3 클러치 미쳤다 #발로란트' })).toBeNull();
 
-    await user.click(screen.getByRole('button', { name: /AI 자막 생성/ }));
+    await user.click(screen.getByRole('button', { name: /AI 자막 만들기/ }));
 
     // 목업 생성이 끝나면 자막 목록과 제목 후보가 함께 열린다
     expect(
@@ -81,7 +81,7 @@ describe('StudioScreen', () => {
     ).toBeInTheDocument();
     expect(screen.getByText('아 이게 된다고?? 미쳤다')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '재생성' })).toBeInTheDocument();
-    expect(screen.getByRole('radio', { name: '번인+CC' })).toBeChecked();
+    expect(screen.getByRole('radio', { name: '둘 다' })).toBeChecked();
   });
 
   it('구간을 5초 미만으로 줄이려 하면 핸들이 거기서 멈춘다', async () => {
@@ -162,9 +162,9 @@ describe('StudioScreen', () => {
     const user = userEvent.setup();
     renderStudio();
 
-    expect(screen.getByText(/자막 번인\+CC · 1× 배속/)).toBeInTheDocument();
+    expect(screen.getByText(/자막 영상\+파일 · 1× 배속/)).toBeInTheDocument();
     await user.click(screen.getByRole('radio', { name: '2×' }));
-    expect(screen.getByText(/자막 번인\+CC · 2× 배속/)).toBeInTheDocument();
+    expect(screen.getByText(/자막 영상\+파일 · 2× 배속/)).toBeInTheDocument();
 
     await user.click(screen.getByRole('radio', { name: /세로/ }));
     expect(screen.getByRole('radio', { name: /세로/ })).toBeChecked();
@@ -296,14 +296,35 @@ describe('StudioScreen', () => {
     expect(input.value).toBe(undoCountBefore);
   });
 
-  it('자막 위치 「경계」는 분할 지분을 따른다 — 50:50 이 아니면 한가운데가 아니다', async () => {
+  it('자막 메뉴는 쉬운 말이다 — 번인·CC·경계 같은 말을 쓰지 않는다(POK-389)', async () => {
+    const user = userEvent.setup();
+    renderStudio();
+    await user.click(screen.getByRole('tab', { name: '자막' }));
+
+    const mode = screen.getByRole('radiogroup', { name: '자막 보이는 방식' });
+    expect(
+      within(mode)
+        .getAllByRole('radio')
+        .map((r) => r.textContent),
+    ).toEqual(['영상에 새기기', '자막 파일', '둘 다']);
+    const position = screen.getByRole('radiogroup', { name: '자막 위치' });
+    expect(
+      within(position)
+        .getAllByRole('radio')
+        .map((r) => r.textContent),
+    ).toEqual(['위', '가운데', '아래']);
+    expect(screen.getByText('글꼴')).toBeInTheDocument();
+    expect(screen.queryByText(/번인|CC/)).not.toBeInTheDocument();
+  });
+
+  it('자막 위치 「가운데」는 분할 경계를 따른다 — 50:50 이 아니면 한가운데가 아니다', async () => {
     const user = userEvent.setup();
     const { container } = renderStudio();
     await user.click(screen.getByRole('radio', { name: '70 : 30' }));
     await user.click(screen.getByRole('tab', { name: '자막' }));
     await user.click(
       within(screen.getByRole('radiogroup', { name: '자막 위치' })).getByRole('radio', {
-        name: '경계',
+        name: '가운데',
       }),
     );
 

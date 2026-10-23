@@ -765,7 +765,7 @@ describe('StudioScreen — 화면에서 고른 모양이 저장 본문에 그대
 
     expect(screen.getByText('저장된 첫 자막')).toBeInTheDocument();
     expect(screen.queryByText('구간 밖 자막')).not.toBeInTheDocument();
-    expect(screen.getByRole('radio', { name: '상단' })).toBeChecked();
+    expect(screen.getByRole('radio', { name: '위' })).toBeChecked();
 
     // 고치지 않았으면 다시 저장하지 않는다 — 자막 방식·자리도 제자리로 돌아왔다
     await orderVideo(user);
@@ -796,7 +796,18 @@ describe('StudioScreen — 화면에서 고른 모양이 저장 본문에 그대
   it('자막이 없으면 결과 설명도 「자막 없음」이다: 고른 방식(번인+CC)만 적으면 자막이 들어갈 것처럼 읽힌다', async () => {
     await openFrom('recipe=31');
     expect(screen.getByText(/자막 없음 · 1× 배속/)).toBeInTheDocument();
-    expect(screen.queryByText(/자막 번인\+CC/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/자막 영상\+파일/)).not.toBeInTheDocument();
+  });
+
+  it('AI 자막 만들기는 서버 기능이 없어 꺼져 있고 준비 중이라고 말한다(POK-389)', async () => {
+    const user = userEvent.setup();
+    await openFrom('recipe=31');
+    await user.click(screen.getByRole('tab', { name: '자막' }));
+
+    expect(screen.getByRole('button', { name: /AI 자막 만들기/ })).toBeDisabled();
+    expect(
+      within(screen.getByRole('region', { name: 'AI 자막' })).getByText('준비 중'),
+    ).toBeInTheDocument();
   });
 
   it('저장된 자막이 있으면 결과 설명은 고른 방식을 적는다', async () => {
@@ -807,7 +818,7 @@ describe('StudioScreen — 화면에서 고른 모양이 저장 본문에 그대
       ],
     };
     await openFrom('recipe=31');
-    expect(screen.getByText(/자막 번인 · 1× 배속/)).toBeInTheDocument();
+    expect(screen.getByText(/자막 영상에 새김 · 1× 배속/)).toBeInTheDocument();
   });
 });
 

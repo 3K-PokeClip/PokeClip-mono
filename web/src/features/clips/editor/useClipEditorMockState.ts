@@ -320,10 +320,18 @@ const NO_SFX_PRESETS: readonly string[] = [];
  * 자막 모드가 늘어날 때 화면을 고쳐야 한다(레시피 항목이라 서버가 알게 될 값이다).
  */
 export const SUBTITLE_MODE_OPTIONS: readonly { value: SubtitleMode; label: string }[] = [
-  { value: 'burn-cc', label: '번인+CC' },
-  { value: 'burn', label: '번인' },
-  { value: 'cc', label: 'CC' },
+  // 번인·CC 같은 업계 말 대신 결과로 말한다(POK-389). 값(계약6 mode 매핑)은 그대로다
+  { value: 'burn', label: '영상에 새기기' },
+  { value: 'cc', label: '자막 파일' },
+  { value: 'burn-cc', label: '둘 다' },
 ];
+
+/** 미리보기 아래 설명 줄의 짧은 말 — 「자막 둘 다」처럼 읽히지 않게 따로 둔다 */
+const SUBTITLE_MODE_NOTE: Record<SubtitleMode, string> = {
+  burn: '영상에 새김',
+  cc: '자막 파일',
+  'burn-cc': '영상+파일',
+};
 
 /**
  * 시안 좌측 도구 레일 — 순서가 곧 화면 순서다. 쇼츠를 만드는 순서(배치 → 자막 → 글자 → 소리 → 이미지)를 따른다(POK-389).
@@ -574,6 +582,8 @@ export interface ClipEditorMockState {
   subtitleModeOptions: readonly { value: SubtitleMode; label: string }[];
   setSubtitleMode: (mode: SubtitleMode) => void;
   generateSubtitles: () => void;
+  /** AI 자막을 만들 서버 기능이 있는가 — 실제 모드에는 아직 없다(MVP 밖) */
+  subtitleGenerationAvailable: boolean;
   selectedSubtitleId: string | null;
   selectSubtitle: (id: string) => void;
 
@@ -1165,8 +1175,7 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     subtitle,
     subtitleFontLabel: MOCK_SOURCE.subtitleFontLabel,
     subtitleMode: recipe.subtitleMode,
-    subtitleModeLabel:
-      SUBTITLE_MODE_OPTIONS.find((o) => o.value === recipe.subtitleMode)?.label ?? '',
+    subtitleModeLabel: SUBTITLE_MODE_NOTE[recipe.subtitleMode],
     subtitleModeOptions: SUBTITLE_MODE_OPTIONS,
     setSubtitleMode: useCallback(
       (mode: SubtitleMode) =>
@@ -1176,6 +1185,7 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
       [commit],
     ),
     generateSubtitles,
+    subtitleGenerationAvailable: !real,
     selectedSubtitleId,
     selectSubtitle: setSelectedSubtitleId,
 
