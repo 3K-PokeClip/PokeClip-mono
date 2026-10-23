@@ -7,6 +7,8 @@ import com.pokeclip.chat.collector.liveinfo.BroadcastInfoStore;
 import com.pokeclip.chat.collector.platforms.ClipPlatformClient;
 import com.pokeclip.chat.collector.relay.RelaySink;
 import com.pokeclip.chat.collector.session.SessionRegistry;
+import com.pokeclip.chat.collector.soop.chat.SoopChat;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.http.client.ClientHttpRequestFactoryBuilder;
@@ -42,18 +44,22 @@ public class SoopWatchConfiguration {
                                                          SoopWatchProperties properties, LinkProperties link,
                                                          BroadcastInfoStore store, RelaySink relay,
                                                          ClipPlatformClient platforms, SessionRegistry registry,
-                                                         EndedStreamStore endedStreams) {
+                                                         EndedStreamStore endedStreams,
+                                                         ObjectProvider<SoopChat> chat) {
             properties.validate();
             SoopLinkClient links = new SoopLinkClient(builder.clone(), link);
             SoopLiveClient live = new SoopLiveClient(builder.clone().requestFactory(factoryBuilder.build(
                     HttpClientSettings.defaults().withTimeouts(CONNECT_TIMEOUT, READ_TIMEOUT))),
                     properties.apiBaseUri(), properties.diagnoseResponse());
             // 종료 메모는 정상 종료만(포기 메모는 치지직 쪽 사정이라 SOOP 지켜보기와 무관하다)
-            return new SoopBroadcastWatcher(links::resolve, live::check, store::insert, relay, platforms,
+            SoopBroadcastWatcher watcher = new SoopBroadcastWatcher(links::resolve, live::check, store::insert, relay, platforms,
                     registry::activeStreamIds,
                     ids -> endedStreams.findAll(ids).values().stream().filter(memo -> !memo.stopped())
                             .map(EndedStream::streamId).collect(java.util.stream.Collectors.toSet()),
                     properties.maxWatched(), Clock.systemUTC(), SoopBroadcastWatcher.TICK_BUDGET);
+            // 채팅 받기(PR4). 꺼져 있으면 SoopChat.NONE이라 아무 일도 안 한다
+            watcher.attachChat(chat.getIfAvailable(() -> SoopChat.NONE));
+            return watcher;
         }
 
         @Bean
