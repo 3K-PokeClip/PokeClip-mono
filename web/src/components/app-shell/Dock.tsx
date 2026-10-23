@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useState, type MouseEvent, type PointerEvent } from 'react';
+import { useLayoutEffect, useRef, useState, type MouseEvent, type PointerEvent } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { House, Radio, Scissors, Settings, type LucideIcon } from 'lucide-react';
@@ -14,9 +14,9 @@ import styles from './Dock.module.css';
 // 아이콘은 lucide로 통일한다 — 크기는 CSS(.icon)가 셸 배율로 덮어쓰므로 size prop을 두지 않는다.
 //
 // 꾹 눌러 좌우로 끌면 알약이 손가락을 따라 칸을 옮겨 가고, 놓는 칸으로 간다 — 알림 설정 ModeSegment와
-// 같은 손맛이다.
+// 같은 손맛이다. 그쪽은 칸 폭이 같아 CSS로 옮기지만 독은 칸 폭이 달라 옮긴 뒤 옛 자리에서 미끄러뜨린다(FLIP).
 //
-// - 알약(지금 탭)을 잡으면 살짝 작아지고 칸을 넘을 때마다 따라온다. 다른 칸에 놓으면 그 탭으로 간다.
+// - 알약(지금 탭)을 잡으면 살짝 작아지고 칸을 넘을 때마다 미끄러져 간다. 다른 칸에 놓으면 그 탭으로 간다.
 // - 다른 칸을 누르면 그 칸만 흐려졌다가 놓는 칸으로 간다 — 그냥 누르고 떼면 예전처럼 탭 이동이다.
 // - 끌다가 지금 탭에 도로 놓거나 위아래로 CANCEL_SLOP 넘게 벗어나 놓으면 취소.
 // - 이동은 링크의 click이 아니라 pointerup이 한다: 독이 포인터를 잡고 있어 click은 대개 독으로 가 링크에 닿지
@@ -46,10 +46,27 @@ interface Press {
   moved: boolean;
 }
 
+/** 독 기준 알약의 좌우 가장자리(px) */
+interface PillBox {
+  left: number;
+  right: number;
+}
+
 // 놓는 자리가 독에서 이만큼(px) 벗어나면 취소로 본다 — ModeSegment와 같은 너그러움
 const CANCEL_SLOP = 40;
 // pointerup이 옮긴 뒤 이 안에 오는 click은 같은 누름의 것이다
 const CLICK_AFTER_UP_MS = 1000;
+// 알약이 칸을 옮겨 가는 곡선 — ModeSegment 손잡이와 같다
+const PILL_MOVE: KeyframeAnimationOptions = {
+  duration: 320,
+  easing: 'cubic-bezier(0.32, 0.72, 0, 1)',
+};
+
+// offset 값으로 잰다 — 잡았을 때의 scale과 독의 translateX가 섞이지 않는다. 알약의 offsetParent는 칸이다
+function boxOf(pill: HTMLElement): PillBox {
+  const left = (pill.parentElement?.offsetLeft ?? 0) + pill.offsetLeft;
+  return { left, right: left + pill.offsetWidth };
+}
 
 export function Dock({ badges }: { badges?: DockBadges } = {}) {
   const pathname = usePathname();
@@ -67,6 +84,9 @@ export function Dock({ badges }: { badges?: DockBadges } = {}) {
     href === '/settings' && othersChannel ? '/settings/notifications' : href;
 
   const items = useRef<(HTMLAnchorElement | null)[]>([]);
+  const pill = useRef<HTMLSpanElement>(null);
+  // 알약을 다른 칸으로 옮기기 직전 자리 — 옮긴 뒤 레이아웃 효과가 여기서부터 미끄러뜨린다
+  const pillFrom = useRef<PillBox | null>(null);
   const upAt = useRef(-Infinity);
   const [press, setPress] = useState<Press | null>(null);
   const [dropped, setDropped] = useState<number | null>(null);
@@ -80,6 +100,27 @@ export function Dock({ badges }: { badges?: DockBadges } = {}) {
   const activeIndex = dockIndexOf(pathname);
   const restIndex = dropped ?? activeIndex;
   const pillIndex = press?.grabbed ? press.index : restIndex;
+
+  useLayoutEffect(() => {
+    const from = pillFrom.current;
+    const el = pill.current;
+    pillFrom.current = null;
+    if (!from || !el || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const to = boxOf(el);
+    // 새 칸의 inset -1px 기준으로 옛 가장자리에서 출발한다
+    el.animate(
+      [
+        { left: `${from.left - to.left - 1}px`, right: `${to.right - from.right - 1}px` },
+        { left: '-1px', right: '-1px' },
+      ],
+      PILL_MOVE,
+    );
+  }, [pillIndex]);
+
+  // 알약이 다른 칸으로 옮겨 갈 참이면 지금 자리를 적어 둔다
+  const willMovePill = (next: number) => {
+    if (next !== pillIndex && pill.current) pillFrom.current = boxOf(pill.current);
+  };
 
   // 칸 폭이 제각각이라 칸마다 잰다. 칸 사이 틈이나 독 밖이면 가장 가까운 칸
   const indexAt = (clientX: number) => {
@@ -120,8 +161,11 @@ export function Dock({ badges }: { badges?: DockBadges } = {}) {
     if (!press || e.pointerId !== press.pointerId) return;
     const index = indexAt(e.clientX);
     if (index === press.index) return;
-    // 알약이 칸을 넘을 때 짧은 진동 — 지원하는 폰(안드로이드)에서만, 나머지는 조용히 넘어간다
-    if (press.grabbed) navigator.vibrate?.(8);
+    if (press.grabbed) {
+      willMovePill(index);
+      // 알약이 칸을 넘을 때 짧은 진동 — 지원하는 폰(안드로이드)에서만, 나머지는 조용히 넘어간다
+      navigator.vibrate?.(8);
+    }
     setPress({ ...press, index, moved: true });
   };
 
@@ -132,10 +176,14 @@ export function Dock({ badges }: { badges?: DockBadges } = {}) {
     const r = e.currentTarget.getBoundingClientRect();
     const outside = e.clientY < r.top - CANCEL_SLOP || e.clientY > r.bottom + CANCEL_SLOP;
     if (outside || (press.moved && index === restIndex)) {
+      willMovePill(restIndex);
       setPress(null);
       return;
     }
-    if (press.grabbed && index !== restIndex) setDropped(index);
+    if (press.grabbed && index !== restIndex) {
+      willMovePill(index);
+      setDropped(index);
+    }
     setPress(null);
     go(index);
   };
@@ -143,7 +191,9 @@ export function Dock({ badges }: { badges?: DockBadges } = {}) {
   // 잡고 있던 포인터만 푼다 — 알약은 제자리로 돌아간다.
   // lostpointercapture는 pointerup 뒤에도 오지만 그때는 이미 풀린 뒤라 아무 일도 하지 않는다
   const onPointerLost = (e: PointerEvent<HTMLElement>) => {
-    if (press && e.pointerId === press.pointerId) setPress(null);
+    if (!press || e.pointerId !== press.pointerId) return;
+    willMovePill(restIndex);
+    setPress(null);
   };
 
   // pointerup이 이미 옮겼다 — 같은 누름의 click이 링크에 닿아 한 번 더 옮기지 않게.
@@ -197,6 +247,7 @@ export function Dock({ badges }: { badges?: DockBadges } = {}) {
             {i === pillIndex && (
               <ViewTransition name="pc-dock-pill">
                 <span
+                  ref={pill}
                   className={styles.pill}
                   data-grabbed={press?.grabbed ? '' : undefined}
                   aria-hidden

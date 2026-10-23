@@ -1,5 +1,5 @@
 import { fireEvent, screen, waitFor } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Dock } from '@/components/app-shell/Dock';
 import styles from '@/components/app-shell/Dock.module.css';
 import { useAuthStore } from '@/stores/auth';
@@ -51,6 +51,7 @@ describe('Dock: 꾹 눌러 끌기', () => {
   ] as const;
   const X = [20, 85, 150, 195] as const;
   const Y = 25;
+  const animate = vi.fn();
 
   function rect(left: number, right: number) {
     const r = { left, right, top: 0, bottom: 50, width: right - left, height: 50, x: left, y: 0 };
@@ -71,11 +72,27 @@ describe('Dock: 꾹 눌러 끌기', () => {
 
   const link = (name: RegExp) => screen.getByRole('link', { name });
 
+  // jsdom에는 Web Animations와 matchMedia가 없다 — 알약이 미끄러지는 FLIP이 이 둘을 부른다
+  beforeAll(() => {
+    Object.defineProperty(Element.prototype, 'animate', {
+      configurable: true,
+      writable: true,
+      value: animate,
+    });
+  });
+  afterAll(() => {
+    Reflect.deleteProperty(Element.prototype, 'animate');
+  });
   beforeEach(() => {
     push.mockClear();
+    animate.mockClear();
+    vi.stubGlobal('matchMedia', () => ({ matches: false }));
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
-  it('알약을 잡아 끌면 손가락 아래 칸으로 따라오고, 놓은 탭으로 간다', () => {
+  it('알약을 잡아 끌면 손가락 아래 칸으로 미끄러져 가고, 놓은 탭으로 간다', () => {
     const { nav, pill, pillLink } = setup();
 
     fireEvent.pointerDown(nav, { pointerId: 1, clientX: X[1], clientY: Y });
@@ -86,6 +103,7 @@ describe('Dock: 꾹 눌러 끌기', () => {
     expect(pillLink()).toBe(link(/클립/));
     expect(link(/클립/)).toHaveAttribute('data-pill');
     expect(link(/방송/)).toHaveAttribute('aria-current', 'page');
+    expect(animate).toHaveBeenCalledTimes(1);
     expect(push).not.toHaveBeenCalled();
 
     fireEvent.pointerUp(nav, { pointerId: 1, clientX: X[2], clientY: Y });
