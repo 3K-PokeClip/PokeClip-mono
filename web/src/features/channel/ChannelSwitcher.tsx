@@ -146,6 +146,9 @@ function SwitcherPanel({
   const invitesFailed = received.data === undefined && received.isError;
   const channels = asEditor.data ?? [];
   const invitations = received.data ?? [];
+  // 참여 채널이 다 없어지면(마지막 채널에서 나감·끊김) 관리 모드도 끈다: 남기면 초대를 수락해 구역이 다시 설 때 「완료」·
+  // 「나가기」가 켜진 채로 서서 새 줄을 눌러도 바뀌지 않는다(PR #342 2차 리뷰)
+  if (managing && channels.length === 0) setManaging(false);
   const left = (channel: StreamerDelegation, refresh: () => void) => {
     focusAfterLeave.current = channels.length > 1 ? manageRef.current : mineRef.current;
     setAsking(null);

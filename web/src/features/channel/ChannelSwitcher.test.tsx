@@ -472,6 +472,26 @@ describe('ChannelSwitcher: 관리 모드에서 참여 채널 나가기', () => {
     expect(rowOf(panel, '나')).toHaveFocus();
   });
 
+  it('마지막 참여 채널에서 나가면 관리 모드도 끈다: 초대를 수락해 구역이 다시 서도 관리 중이 아니다(PR #342 2차 리뷰)', async () => {
+    stub({ delegations: [KONGSTAR], invitations: [invitation(18)] });
+    const user = userEvent.setup();
+    const panel = within(await open(user));
+    await panel.findByText('편집 참여 중 · 1');
+    await user.click(panel.getByRole('button', { name: '관리' }));
+    await user.click(panel.getByRole('button', { name: '콩스타 채널에서 나가기' }));
+    await user.click(
+      within(await panel.findByRole('alertdialog')).getByRole('button', { name: '나가기' }),
+    );
+    await waitFor(() => expect(panel.queryByText(/편집 참여 중/)).not.toBeInTheDocument());
+
+    await user.click(panel.getByRole('button', { name: '수락' }));
+
+    expect(await panel.findByText('편집 참여 중 · 1')).toBeInTheDocument();
+    expect(panel.getByRole('button', { name: '관리' })).toBeInTheDocument();
+    expect(panel.queryByRole('button', { name: /채널에서 나가기/ })).not.toBeInTheDocument();
+    expect(rowOf(panel, '감자대장')).not.toHaveAttribute('tabindex');
+  });
+
   it('지금 들어가 있는 채널에서 나가면 창을 닫고 내 채널로 돌아간다: 참여 목록은 바꾼 뒤에 다시 읽는다', async () => {
     window.localStorage.setItem('pc-channel', JSON.stringify({ '7': 3 }));
     // 목록을 읽는 순간의 고른 채널을 적는다: 나간 뒤 읽기가 바꾸기보다 먼저면 ChannelScope가 끊김으로 보고 경고를 띄운다
