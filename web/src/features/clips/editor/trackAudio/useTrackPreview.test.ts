@@ -25,7 +25,15 @@ function fakeContext() {
         this.state = 'closed';
         return Promise.resolve();
       }),
-      decodeAudioData: vi.fn(() => Promise.resolve({ duration: 1 } as AudioBuffer)),
+      decodeAudioData: vi.fn(() =>
+        Promise.resolve({
+          duration: 1,
+          length: 100,
+          sampleRate: 100,
+          numberOfChannels: 1,
+          getChannelData: () => new Float32Array(100).fill(0.5),
+        } as unknown as AudioBuffer),
+      ),
       createGain() {
         const node = { gain: { value: 1 }, connect: vi.fn(), disconnect: vi.fn() };
         gains.push(node);
@@ -90,6 +98,10 @@ describe('useTrackPreview', () => {
     result.current.setGains([1, 0, 0]);
     expect(gains.map((g) => g.gain.value)).toEqual([1, 0, 0]);
     expect(node.muted).toBe(true);
+    // 타임라인 파형: 창(10~40초)을 0.05초 칸으로 잰다. 조각(10~11초) 자리는 소리가 있다
+    expect(result.current.levels?.tracks).toHaveLength(3);
+    expect(result.current.levels?.startSeconds).toBe(10);
+    expect(result.current.levels?.tracks[0]![0]).toBeCloseTo(0.5);
   });
 
   it('붙였다 떼었다 다시 붙여도(개발 모드 StrictMode) 닫힌 소리 문맥을 쓰지 않는다', async () => {

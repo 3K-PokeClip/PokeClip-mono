@@ -1,11 +1,12 @@
 import { Check, Gamepad2, Mic, Music } from 'lucide-react';
 import type { ComponentType } from 'react';
 import styles from './StudioScreen.module.css';
+import { TrackWaveform } from './TrackWaveform';
 import type { EditorTrack, EditorTrackKind } from '../useClipEditorMockState';
 
 // 방송 소리 트랙 한 줄(POK-389): 우리만 가진 「트랙별 소리」를 타임라인의 주인공으로 둔다.
 // 머리: 아이콘 · 이름 · 넣기 단추 · 음량 %. 뺀 줄은 흐리게 「안 넣음」. 음량 막대는 오디오 메뉴에 있다.
-// 파형은 아직 모양만이다: 트랙별 파형 자료가 없다.
+// 파형은 미리 듣기로 풀어 둔 이 트랙 소리의 실제 크기다(음량을 반영, 무음은 평평, 뺀 줄은 흐리게). 목업은 모양만 그린다.
 
 const TRACK_ICONS: Record<EditorTrackKind, ComponentType<{ size?: number }>> = {
   mic: Mic,
@@ -16,9 +17,14 @@ const TRACK_ICONS: Record<EditorTrackKind, ComponentType<{ size?: number }>> = {
 export function TimelineTrackRow({
   track,
   onToggleMute,
+  levels,
+  view,
 }: {
   track: EditorTrack;
   onToggleMute: (trackId: string) => void;
+  /** 소리 크기. undefined면 목업(모양만), null이면 아직·못 불러 빈 줄 */
+  levels: { values: Float32Array; startSeconds: number; stepSeconds: number } | null | undefined;
+  view: { startSeconds: number; endSeconds: number };
 }) {
   const Icon = TRACK_ICONS[track.kind];
 
@@ -46,7 +52,21 @@ export function TimelineTrackRow({
       </span>
 
       <div className={styles.lane} data-kind={track.kind}>
-        <div className={`${styles.laneWave} ${track.muted ? styles.laneMuted : ''}`} aria-hidden />
+        {levels === undefined ? (
+          <div
+            className={`${styles.laneWave} ${track.muted ? styles.laneMuted : ''}`}
+            aria-hidden
+          />
+        ) : levels !== null ? (
+          <TrackWaveform
+            levels={levels.values}
+            startSeconds={levels.startSeconds}
+            stepSeconds={levels.stepSeconds}
+            // 뺀 줄도 소리 모양은 보인다(흐리게): 넣기 전에 어느 트랙에 소리가 있는지 알 수 있게
+            gain={(track.volume ?? 100) / 100}
+            view={view}
+          />
+        ) : null}
       </div>
     </div>
   );

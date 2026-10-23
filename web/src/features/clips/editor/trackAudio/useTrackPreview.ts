@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { requestSegmentAudioAccess } from '@/api/clipEditor';
 import { loadTrackAudio } from './loadTrackAudio';
+import { measureLevels, type TrackLevels } from './trackLevels';
 import { followVideo, TrackAudioPlayer, type AudioContextLike } from './trackAudioPlayer';
 
 // 트랙별 미리 듣기(POK-389): 영상이 받은 창(구간 ± 여유)의 녹화 조각을 받아 트랙마다 풀고, 영상 노드를 따라 튼다.
@@ -14,6 +15,8 @@ export type TrackPreviewStatus = 'loading' | 'ready' | 'unavailable';
 
 export interface TrackPreview {
   status: TrackPreviewStatus;
+  /** 트랙별 소리 크기(타임라인 파형). 못 불렀거나 아직이면 null */
+  levels: TrackLevels | null;
   /** 트랙 번호 순 음량(1 = 100%, 끈 트랙 0) */
   setGains(gains: readonly number[]): void;
 }
@@ -41,6 +44,7 @@ export function useTrackPreview(options: {
   const endSeconds = options.window?.endSeconds ?? null;
   const [status, setStatus] = useState<TrackPreviewStatus>('loading');
   const [player, setPlayer] = useState<TrackAudioPlayer | null>(null);
+  const [levels, setLevels] = useState<TrackLevels | null>(null);
   const contextRef = useRef<DecodingContext | null>(null);
   const gainsRef = useRef<readonly number[]>([]);
   const createRef = useRef(createContext);
@@ -64,6 +68,7 @@ export function useTrackPreview(options: {
     let made: TrackAudioPlayer | null = null;
     setStatus('loading');
     setPlayer(null);
+    setLevels(null);
     const fromMs = baseMs + Math.round(startSeconds * 1000);
     const toMs = baseMs + Math.round(endSeconds * 1000);
     loadTrackAudio(
@@ -80,6 +85,8 @@ export function useTrackPreview(options: {
     )
       .then((tracks) => {
         if (cancelled) return;
+        // 파형은 트랙이 하나뿐이어도 그린다(소리 크기는 보여 줄 수 있다)
+        setLevels(measureLevels(tracks, startSeconds, endSeconds));
         // 트랙이 하나뿐이면(최종 믹스만) 영상 소리와 같다: 트랙을 꺼도 고를 소리가 없다
         if (tracks.length < 2) {
           setStatus('unavailable');
@@ -122,5 +129,5 @@ export function useTrackPreview(options: {
     [player],
   );
 
-  return useMemo(() => ({ status, setGains }), [status, setGains]);
+  return useMemo(() => ({ status, levels, setGains }), [status, levels, setGains]);
 }

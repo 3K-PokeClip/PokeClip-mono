@@ -58,6 +58,7 @@ import {
   type AudioPresetId,
 } from './audioPresets';
 import type { EditorPlayback } from './editorPlayback';
+import type { TrackLevels } from './trackAudio/trackLevels';
 import type { TrackPreview, TrackPreviewStatus } from './trackAudio/useTrackPreview';
 import { regionCropsOf, type EditorLook } from './recipeLook';
 import { useEditorPlaybackSimulation } from './useEditorPlaybackSimulation';
@@ -431,6 +432,10 @@ export interface ClipEditorMockState {
   previewVideo: HTMLVideoElement | null;
   /** 트랙별 미리 듣기 상태. 실제 영상이 없으면 null */
   trackPreviewStatus: TrackPreviewStatus | null;
+  /**
+   * 소리 줄 파형(트랙 순서 = 번호). 목업이면 undefined(모양만 그린다), 실제인데 아직·못 불렀으면 null(빈 줄)
+   */
+  trackLevels: TrackLevels | null | undefined;
 
   // 트랜스포트
   playing: boolean;
@@ -899,6 +904,7 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     uploadLabel: options.uploadLabel ?? '업로드',
     previewVideo: options.previewVideo ?? null,
     trackPreviewStatus: options.trackPreview?.status ?? null,
+    trackLevels: real ? (options.trackPreview?.levels ?? null) : undefined,
     canUndo: historyCanUndo(history),
     canRedo: historyCanRedo(history),
     // 되돌리면 구간이 다른 값이 되므로 직전 거부 안내는 더 이상 그 구간의 이야기가 아니다

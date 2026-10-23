@@ -253,13 +253,29 @@ export function MultitrackTimeline({
                   <div className={styles.laneFilmstrip} aria-hidden />
                 </div>
               </div>
-              {state.tracks.map((track) => (
-                <TimelineTrackRow
-                  key={track.id}
-                  track={track}
-                  onToggleMute={state.toggleTrackMute}
-                />
-              ))}
+              {state.tracks.map((track, index) => {
+                const levels = state.trackLevels;
+                const values = levels?.tracks[index];
+                return (
+                  <TimelineTrackRow
+                    key={track.id}
+                    track={track}
+                    onToggleMute={state.toggleTrackMute}
+                    levels={
+                      levels === undefined
+                        ? undefined
+                        : levels !== null && values !== undefined
+                          ? {
+                              values,
+                              startSeconds: levels.startSeconds,
+                              stepSeconds: levels.stepSeconds,
+                            }
+                          : null
+                    }
+                    view={state.view}
+                  />
+                );
+              })}
             </div>
 
             <div className={styles.overlay} ref={overlayRef}>

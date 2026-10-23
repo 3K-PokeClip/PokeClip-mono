@@ -330,6 +330,21 @@
   opacity: 0.35;
 }
 
+/* 실제 파형(POK-389). 무음은 가는 선만 남고, 뺀 줄은 흐리게 */
+.laneWaveform {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.laneWaveform path {
+  fill: rgb(140 160 230 / 0.6);
+}
+
+[data-muted] .laneWaveform path {
+  fill: rgb(140 160 230 / 0.25);
+}
+
 /* ---------- 구간 오버레이 · 플레이헤드 ---------- */
 
 .overlay {

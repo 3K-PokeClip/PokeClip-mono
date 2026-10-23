@@ -64,7 +64,7 @@ describe('StudioScreen', () => {
   it('트랙을 빼거나 음량을 바꾸면 미리 듣기 음량에도 바로 넘긴다: 트랙 순서가 번호다(POK-389)', async () => {
     const user = userEvent.setup();
     const setGains = vi.fn();
-    renderStudio({ trackPreview: { status: 'ready', setGains } });
+    renderStudio({ trackPreview: { status: 'ready', levels: null, setGains } });
     // 목업 트랙: 마이크 80 · 게임 60 · 디스코드 100 · BGM 40
     expect(setGains).toHaveBeenLastCalledWith([0.8, 0.6, 1, 0.4]);
 
@@ -75,7 +75,7 @@ describe('StudioScreen', () => {
   });
 
   it('트랙별 미리 듣기를 못 불렀으면 영상 소리로 들린다고 알린다', () => {
-    renderStudio({ trackPreview: { status: 'unavailable', setGains: vi.fn() } });
+    renderStudio({ trackPreview: { status: 'unavailable', levels: null, setGains: vi.fn() } });
     expect(
       screen.getByText('트랙별 미리 듣기를 못 불러왔어요 · 영상 소리로 들려요'),
     ).toHaveAttribute('role', 'status');
