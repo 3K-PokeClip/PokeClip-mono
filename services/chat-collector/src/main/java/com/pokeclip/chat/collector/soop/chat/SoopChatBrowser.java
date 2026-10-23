@@ -224,12 +224,17 @@ public class SoopChatBrowser implements AutoCloseable {
         });
     }
 
-    /** 시험용: 이 방송 탭의 렌더러만 죽인다(CDP {@code Page.crash}). 브라우저는 산다. */
+    /**
+     * 시험용: 이 방송 탭의 렌더러만 죽인다({@code chrome://crash}로 이동). 브라우저는 산다. 이동은 충돌로 실패하는 것이 정상이라 삼킨다.
+     * 🔴 CDP {@code Page.crash}는 Linux CI에서 응답이 안 와 이 스레드를 30초 붙잡았다(첫 CI 실측).
+     */
     void crashPageForTest(String streamId) {
         commands.add(() -> {
-            BrowserContext context = tabs.get(streamId);
-            Page page = context.pages().getFirst();
-            context.newCDPSession(page).send("Page.crash");
+            try {
+                tabs.get(streamId).pages().getFirst().navigate("chrome://crash");
+            } catch (RuntimeException expected) {
+                // 충돌로 이동이 실패한다
+            }
         });
     }
 
