@@ -13,7 +13,8 @@ import {
 import Link from 'next/link';
 import clsx from 'clsx';
 import { Check } from 'lucide-react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useSessionMutation } from '@/lib/useSessionMutation';
 import { Avatar, Button, Popover, Slot, useToast } from '@/ui';
 import {
   acceptInvitation,
@@ -367,7 +368,7 @@ function useInvitationAction(
 ) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  return useMutation({
+  return useSessionMutation({
     mutationFn: send,
     onSuccess: () => {
       toast({ tone: 'success', title: doneTitle });
@@ -475,7 +476,7 @@ function LeaveConfirm({
 }) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const leave = useMutation({
+  const leave = useSessionMutation({
     mutationFn: () => revokeDelegation(channel.id),
     onSuccess: () => {
       toast({ tone: 'success', title: `${channel.streamerName} 채널에서 나왔어요` });
