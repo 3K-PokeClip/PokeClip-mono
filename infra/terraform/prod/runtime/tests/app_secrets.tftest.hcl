@@ -2,7 +2,9 @@
 # 「런타임 1단 → platform · media」 행)을 단언한다. network 출력은 가짜 값이다.
 # override_data 가 원격 상태를 대신하므로 S3 를 읽지 않는다(AWS 호출 0).
 
-mock_provider "aws" {}
+mock_provider "aws" {
+  source = "./tests/mocks"
+}
 
 override_data {
   target = data.terraform_remote_state.network

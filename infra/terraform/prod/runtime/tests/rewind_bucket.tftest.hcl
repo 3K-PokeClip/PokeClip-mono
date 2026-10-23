@@ -4,7 +4,9 @@
 # 시험이 참조할 수 없어 커밋 전 grep 으로 확인한다.
 # override_data 가 network 원격 상태를 대신하므로 S3 를 읽지 않는다(AWS 호출 0).
 
-mock_provider "aws" {}
+mock_provider "aws" {
+  source = "./tests/mocks"
+}
 
 override_data {
   target = data.terraform_remote_state.network
