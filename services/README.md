@@ -152,7 +152,10 @@ set -a && . ../.env && set +a
 🔴 **`GOOGLE_REDIRECT_URI`도 안 든다.** yml에 기본값(`http://localhost:3000/auth/callback`)이 있어 부팅 검증에는 안 걸리는데,
 compose는 `${GOOGLE_REDIRECT_URI:?}`로 **없으면 컨테이너가 아예 안 뜨게** 걸어 뒀고 `.env.dev.example`에도 있다.
 즉 로컬 `bootRun`에는 없어도 되고 dev 배포에는 반드시 있어야 해서, 「앱 시크릿 열다섯」에도 「안 드는 넷」에도 자리가 없다.
-**yml 실물은 서른여섯이다**(위 서른하나 + 안 드는 넷 + 이것).
+**DB 로그인 둘도 안 든다**(POK-407): `POSTGRES_AUTH`(기본 `password`) · `POSTGRES_SSLROOTCERT`(`iam`에서만 읽는다, 빈 값).
+없어도 뜨고 dev compose는 비밀번호 방식이라 넘길 값이 없다. `DeploymentEnvVarsTest`는 빈 기본값인 `POSTGRES_SSLROOTCERT`를
+「iam 전용」으로 필수에서 뺀다. 뜻은 아래 「DB 로그인 방식」.
+**yml 실물은 서른여덟이다**(위 서른하나 + 안 드는 넷 + 이것 + DB 로그인 둘).
 
 | 갈래 | 변수 | 없으면 | 어디서 얻나 |
 |---|---|---|---|
@@ -283,6 +286,8 @@ refresh는 **7일 −1초**(실측: 교환 응답에 `refresh_token_expires_in: 
 | **앱 시크릿 넷** | `CORS_ALLOWED_ORIGINS` · `JWT_SECRET` · `INTERNAL_API_TOKEN` · **`AUTH_BASE_URL`**(POK-117) | **`.env.example`에 값이 없다** — auth의 앱 시크릿 아홉과 같은 규칙이다. `.env`에 직접 넣는다. 다만 `AUTH_BASE_URL`은 시크릿이 아닌 주소라 예시 값이 적혀 있다(`http://localhost:8082`, compose 안에서는 `http://auth:8082`) |
 | **DB 접속값 셋** | `POSTGRES_DB` · `POSTGRES_USER` · `POSTGRES_PASSWORD` | `.env`에 있다(POK-82에서 POK-161의 규칙을 옮겼다) |
 
+**DB 로그인 방식 셋은 목록에 안 든다**(POK-407, auth · 수집기 · 판별기와 같다): `POSTGRES_AUTH`(기본 `password`) · `POSTGRES_SSLROOTCERT`(`iam`에서만) · `AWS_REGION`(기본 `ap-northeast-2`). 아래 「DB 로그인 방식」.
+
 **`JWT_SECRET`·`INTERNAL_API_TOKEN`은 auth와 <u>같은 값·같은 이름</u>이어야 한다**(POK-118).
 같은 이름인 이유는 `.env` 한 줄로 두 서버가 뜨게 하려는 것이고, 같은 값이어야 하는 이유는
 **auth가 서명한 토큰을 clip이 검증**하기 때문이다(대칭키 HS256, ADR-048). 값이 갈리면
@@ -406,6 +411,8 @@ CHZZK_ENABLED=true CHZZK_ACCESS_TOKEN=<유저 Access Token> ./gradlew :chat-coll
 | 변수 | 기본값 | compose | |
 |---|---|---|---|
 | `POSTGRES_DB` · `POSTGRES_USER` · `POSTGRES_PASSWORD` | **없음** | ✅ | auth · clip과 같다. 셸에 없으면 리터럴이 그대로 바인딩돼 DB가 접속을 거절한다 |
+| `POSTGRES_AUTH` | `password` | — | DB 로그인 방식. `iam`이면 연결마다 RDS IAM 토큰으로 붙고 `POSTGRES_PASSWORD`가 있으면 부팅 거부. 아래 「DB 로그인 방식」 |
+| `POSTGRES_SSLROOTCERT` | 빈 값 | — | `iam`에서만 쓴다. RDS CA 번들의 절대 경로(이미지 안 `/etc/pokeclip/rds-global-bundle.pem`) |
 | `BROADCAST_INTAKE_ENABLED` | `false` | ✅ `CHAT_`\* | 켜면 편지 폴링 루프가 돈다 |
 | `BROADCAST_QUEUE_URL` | 빈 값 | ✅ `CHAT_`\* | 생명주기 FIFO 큐 주소. **켜져 있는데 비면 부팅이 죽는다** |
 | `BROADCAST_QUEUE_ENDPOINT` | 빈 값 | — | 비면 진짜 AWS. LocalStack 실측 때만 준다 |
@@ -415,7 +422,7 @@ CHZZK_ENABLED=true CHZZK_ACCESS_TOKEN=<유저 Access Token> ./gradlew :chat-coll
 | `INTERNAL_API_TOKEN` | 빈 값 | ✅ | auth의 `/internal/**`이 `X-Internal-Token`으로 보는 값. **auth에 준 것과 같아야 한다.** POK-128부터는 이 서버의 `/internal/*`도 같은 값으로 잠근다 — **필터가 접두 매핑이라 창구를 새로 열면 자동으로 걸린다**(지금 둘: 수집 상태 창구 · 영상 위치 창구). 비면 그 창구들이 전부 401이다 |
 | `BROADCAST_ENDED_SWEEP_INTERVAL` | `PT1H` | — | 끝난 방송 메모를 치우는 주기 |
 | `BROADCAST_ENDED_RETENTION` | `PT24H` | — | 그 메모의 보관 기간(ADR-016의 TTL 24h) |
-| `AWS_REGION` | `ap-northeast-2` | ✅ | 큐·S3 공용 |
+| `AWS_REGION` | `ap-northeast-2` | ✅ | 큐·S3 공용. `iam`이면 DB 토큰 서명 리전도 이것이다 |
 | `CHAT_REATTACH_ENABLED` | `false` | ✅ | 켜면 `clip`에 「지금 방송 중인 목록」을 주기적으로 물어 **붙어 있어야 하는데 안 붙은 방송**에 붙는다(POK-219). 🔴 **`BROADCAST_INTAKE_ENABLED=false`인 채로 이것만 켜면 부팅이 죽는다** — 붙이는 문을 편지 경로가 만들고, 알림 경로가 꺼져 있으면 애초에 주울 것이 없다 |
 | `CLIP_BASE_URL` | `http://localhost:8081` | ✅ | 그 목록을 물을 clip 주소. 컨테이너 안에서는 서비스 이름이다 — **기본값을 그대로 두면 컨테이너 안에서 자기 자신을 가리킨다.** 재부착이 켜졌는데 비면 부팅이 죽는다 |
 | `CHAT_DETACH_ENABLED` | `false` | ✅ | 켜면 재부착 회차에서 **내가 붙어 있는데 clip 명부에 없는 방송**의 세션을 반납한다(POK-244). clip 치우개(`BROADCAST_REAPER_ENABLED`)와 같이 켠다 — clip이 놓친 방송을 닫으면 다음 회차(1분)에 자리가 돌아온다. 🔴 **`CHAT_REATTACH_ENABLED=true`가 함께 있어야 한다** — 없으면 부팅 거부(이 갈래는 재부착 회차 안에서 돈다). 명부가 잘렸거나 읽을 수 없는 줄이 있는 회차는 통째로 건너뛴다 |
@@ -777,9 +784,8 @@ cd - && git worktree remove /tmp/pokeclip-image
 
 **`POSTGRES_AUTH` 하나로 고른다. 비어 있거나 `password`면 지금 그대로다**(로컬 compose · CI). `iam`이면 비밀번호 대신
 **새 연결마다** AWS SDK로 서명한 RDS IAM 토큰(15분 유효)으로 붙는다. 이름과 뜻은 media 사이드카(ADR-0006)와 같다.
-코드는 `db-support`의 `DataSourceLoginConfiguration`이고, 쓰는 서버의 `Application`이 `@Import` 한다.
-**🔴 지금 붙은 서버는 `chat-detector` 하나다.** auth · clip · chat-collector에는 아직 안 붙어 `POSTGRES_AUTH`를 줘도
-비밀번호로만 붙는다(POK-407 다음 PR에서 붙인다).
+코드는 `db-support`의 `DataSourceLoginConfiguration`이고, 서버 넷 각 `Application`이 `@Import` 한다. 서버마다 `DbLoginWiringTest`가
+iam 실부팅으로 그 배선이 풀까지 닿는지 잰다.
 
 | `iam`이면 | 왜 |
 |---|---|
