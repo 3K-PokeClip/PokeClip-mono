@@ -63,6 +63,8 @@ export interface GlassPlayerProps {
   src?: string | null;
   /** 라이브 영상 키(출입증 쿠키의 경로). 영상 요청이 403이면 그 키의 출입증을 버린다(POK-410) */
   mediaKey?: string;
+  /** 이 라이브 재생기는 403으로 출입증을 다시 받은 뒤 새로 섰다. 또 403이면 멈춘다(POK-419, useHlsPlayback) */
+  afterForbidden?: boolean;
   /** 끝난 방송의 녹화(재생 서버) — 있으면 HLS 대신 이것으로 다시보기를 튼다 */
   recorded?: RecordedSource | null;
   /** 녹화 다시보기를 이 자리(방송 기준 초)부터 튼다. 녹화 플레이어가 설 때 한 번만 읽는다(useRecordedPlayback) */
@@ -199,6 +201,7 @@ function HlsGlassPlayer(props: GlassPlayerProps & { src: string }) {
     props.simulationOptions,
     props.onSeek,
     props.mediaKey,
+    props.afterForbidden,
   );
   // 초가 바뀌거나 시차가 바뀔 때만 알린다(재생기가 초로 내리고, 같은 값이면 같은 객체를 둔다)
   const { onLivePosition } = props;

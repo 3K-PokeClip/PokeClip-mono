@@ -277,6 +277,9 @@ function LivePlayer({
   // 열린 뒤 갱신이 실패하다가, 또는 쿠키가 지워져(403) 버린 뒤 다시 받아진 횟수. 그 사이 멈춘 hls.js는 새 쿠키로 저절로 안
   // 살아나서 재생기를 새로 세운다(PR #320 · #332 codex). 정상 갱신에는 안 늘어 재생이 끊기지 않는다
   const [accessRecoveries, setAccessRecoveries] = useState(0);
+  // 403(출입증을 버림)으로 재생기를 새로 세운 출입증 키. 새 재생기가 또 403이면 더 받지 않고 멈춘다(POK-419). 키로 두어 방송이나
+  // 영상 키가 바뀌면 앞 방송의 403을 다음 방송에 들고 가지 않는다(LivePlayer는 방송마다 새로 서지 않는다, 로컬 리뷰 1라운드)
+  const [afterForbiddenFor, setAfterForbiddenFor] = useState<string | null>(null);
   useEffect(() => {
     if (!liveStreamId) return undefined;
     let alive = true;
@@ -304,7 +307,10 @@ function LivePlayer({
           setCookieFor(result.kind === 'granted' ? key : null);
           // 버려진 것은 한 번 읽으면 지워진다: 열기 전이어도 읽어 둔다
           const droppedBefore = takePlaybackDrop(liveStreamId);
-          if (opened && (failedSinceOpen || droppedBefore)) setAccessRecoveries((n) => n + 1);
+          if (opened && (failedSinceOpen || droppedBefore)) {
+            setAccessRecoveries((n) => n + 1);
+            setAfterForbiddenFor(droppedBefore ? key : null);
+          }
           failedSinceOpen = false;
           opened = true;
           setAccessReadyFor(key);
@@ -329,6 +335,7 @@ function LivePlayer({
       broadcastStatus={displayStatus}
       noSignalNote={noSignalNote}
       mediaKey={liveStreamId && cookieFor === accessKey ? (mediaKey ?? liveStreamId) : undefined}
+      afterForbidden={accessKey !== null && afterForbiddenFor === accessKey}
       // 라이브 주소는 방송 중일 때만 — 끝난 방송의 LL-HLS는 닫혀 있어 검은 화면과 오류만 남는다(PR #200 codex).
       // 끝난 방송은 녹화가 있으면 recorded로, 없으면 「지난 방송 영상」 자리를 그린다
       src={
