@@ -245,6 +245,18 @@ public class JumpCardExceptionHandler {
         return json(HttpStatus.CONFLICT, error("clip_not_rendered"));
     }
 
+    /** 400. 원본 조각 주소(POK-389)의 구간이 잘못됐다 — {@code field}는 {@code fromMs}·{@code toMs}. */
+    @ExceptionHandler(RenderErrors.InvalidSegmentRangeException.class)
+    ResponseEntity<Map<String, Object>> invalidSegmentRange(RenderErrors.InvalidSegmentRangeException e) {
+        return json(HttpStatus.BAD_REQUEST, field(e.field()));
+    }
+
+    /** 410. 보관 기한이 지난 방송의 원본 조각(POK-389). 조각 조회 문과 같은 {@code vod_expired}. */
+    @ExceptionHandler(RenderErrors.SegmentsExpiredException.class)
+    ResponseEntity<Map<String, Object>> segmentsExpired(RenderErrors.SegmentsExpiredException e) {
+        return json(HttpStatus.GONE, error("vod_expired"));
+    }
+
     // ── POK-220: 유튜브 업로드 주문·일꾼 보고 문이 쓰는 갈래 ──────────
 
     /** 503. 업로드 주문줄이 꺼져 있다. */
