@@ -96,7 +96,7 @@ public class SoopChatSessions implements SoopChat, SoopChatBrowser.Listener {
      */
     @Override
     public synchronized void ensure(String streamId, String channelId, String token) {
-        if (streamId == null || channelId == null || token == null) {
+        if (streamId == null || channelId == null || token == null || shutDown) {
             return;
         }
         Session current = sessions.get(streamId);
@@ -183,10 +183,17 @@ public class SoopChatSessions implements SoopChat, SoopChatBrowser.Listener {
             session.failures++;
         }
         log.info("soop.chat.retrying stream={} reason={} delayMs={}", streamId, reason, delay.toMillis());
-        retries.schedule(() -> reopen(session), delay.toMillis(), TimeUnit.MILLISECONDS);
+        try {
+            retries.schedule(() -> reopen(session), delay.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (java.util.concurrent.RejectedExecutionException e) {
+            // 끄는 중이다(예약기가 멈췄다). 브라우저 스레드로 번지지 않게 삼킨다
+        }
     }
 
     private synchronized void reopen(Session session) {
+        if (shutDown) {
+            return;
+        }
         // 그 사이 떼였거나 같은 방송으로 새 세션이 섰으면 이 예약은 버린다
         if (sessions.get(session.streamId) != session) {
             return;
@@ -222,8 +229,12 @@ public class SoopChatSessions implements SoopChat, SoopChatBrowser.Listener {
     }
 
     /** 끌 때 첫걸음: 다시 붙기 예약을 멈추고 세션을 다 뗀다(뒤로 오는 채팅 · 닫힘 알림은 버려진다). 탭은 다음 걸음에 브라우저가 닫는다. */
-    public void shutdown() {
-        retries.shutdownNow();
+    public synchronized void shutdown() {
+        shutDown = true;
         sessions.clear();
+        retries.shutdownNow();
     }
+
+    /** 끈 뒤에는 지켜보기 틱이 붙이기를 불러도 새 세션을 안 만든다(닫히는 브라우저에 탭 열기가 가지 않게). 자물쇠 안에서만 바뀐다. */
+    private boolean shutDown;
 }

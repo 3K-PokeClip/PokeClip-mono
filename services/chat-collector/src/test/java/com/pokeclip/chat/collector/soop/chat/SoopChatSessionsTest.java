@@ -57,4 +57,32 @@ class SoopChatSessionsTest {
 
         assertThat(calls).containsExactly("open:true", "open:true", "close:true");
     }
+
+    /** 끈 뒤에 지켜보기 틱이 붙이기 · 닫힘 알림을 보내도 탭을 안 열고 던지지도 않는다(닫히는 브라우저 · 멈춘 예약기) */
+    @Test
+    void 끈_뒤에는_붙이기도_다시_붙기도_안_한다() {
+        SoopChatProperties properties = new SoopChatProperties(true, "i", "s", "u", "o", 10, Duration.ofMillis(10),
+                Duration.ofMillis(10));
+        sessions = new SoopChatSessions(properties, new ChatBuffer(), ChatArchive.NONE, RelaySink.NONE,
+                System::currentTimeMillis);
+        sessions.attach(new SoopChatSessions.Tabs() {
+            @Override
+            public void open(String streamId, String token) {
+                calls.add("open:" + streamId);
+            }
+
+            @Override
+            public void close(String streamId) {
+                calls.add("close:" + streamId);
+            }
+        });
+        sessions.ensure("s-1", "bj-1", "t");
+
+        sessions.shutdown();
+        sessions.ensure("s-2", "bj-2", "t");
+        sessions.onClosed("s-1");
+
+        assertThat(calls).containsExactly("open:s-1");
+        assertThat(sessions.size()).isZero();
+    }
 }
