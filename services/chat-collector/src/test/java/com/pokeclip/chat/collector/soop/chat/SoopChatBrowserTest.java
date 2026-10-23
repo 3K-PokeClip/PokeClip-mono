@@ -226,6 +226,26 @@ class SoopChatBrowserTest {
         assertThat(sdk.connects).hasSize(3);
     }
 
+    /** 방송 중에 다른 SOOP 계정으로 다시 연동하면 탭을 갈아 새 채널로 저장한다(토큰만 바꾸면 옛 채널로 저장된다) */
+    @Test
+    void 채널이_바뀌면_새로_붙어_새_채널로_저장한다() {
+        start(10);
+        sessions.ensure("s-1", "bj-old", TOKEN);
+        await(() -> sdk.connects.size() >= 1);
+
+        sdk.script(Step.message("MESSAGE", "v1", "n1", "새 계정"));
+        sessions.ensure("s-1", "bj-new", "token-new");
+
+        List<PersistableChat> chats = new ArrayList<>();
+        await(() -> {
+            chats.addAll(buffer.drain(100));
+            return !chats.isEmpty();
+        });
+        assertThat(chats).extracting(PersistableChat::channelId).containsExactly("bj-new");
+        assertThat(sdk.connects).extracting(FakeSoopSdkServer.Connect::token).containsExactly(TOKEN, "token-new");
+        assertThat(sessions.size()).isEqualTo(1);
+    }
+
     @Test
     void 연결이_닫히면_다시_붙고_다음_채팅을_받는다() {
         sdk.script(Step.message("MESSAGE", "v1", "n1", "첫째"), Step.closed());

@@ -95,6 +95,12 @@ public class SoopChatSessions implements SoopChat, SoopChatBrowser.Listener {
             return;
         }
         Session current = sessions.get(streamId);
+        if (current != null && !current.channelId.equals(channelId)) {
+            // 방송 중에 다른 SOOP 계정으로 다시 연동했다. 토큰만 바꾸면 새 계정으로 받은 채팅이 옛 채널로 저장된다. 떼고 새로 붙인다
+            log.info("soop.chat.channel_changed stream={}", streamId);
+            close(streamId);
+            current = null;
+        }
         if (current != null) {
             synchronized (current) {
                 current.token = token;
