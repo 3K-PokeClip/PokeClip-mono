@@ -174,6 +174,30 @@ run "creates_internet_facing_alb_when_not_internal" {
   }
 }
 
+# 잘못된 헤더 버림은 기본으로 끄고(내부 ALB), 공개 ALB 는 켜서 넘긴다(kty
+# 확정).
+run "keeps_invalid_header_fields_by_default" {
+  command = plan
+
+  assert {
+    condition     = aws_lb.this.drop_invalid_header_fields == false
+    error_message = "drop_invalid_header_fields 기본값에서 ALB 가 잘못된 헤더를 버린다."
+  }
+}
+
+run "drops_invalid_header_fields_when_enabled" {
+  command = plan
+
+  variables {
+    drop_invalid_header_fields = true
+  }
+
+  assert {
+    condition     = aws_lb.this.drop_invalid_header_fields == true
+    error_message = "drop_invalid_header_fields = true 인데 ALB 가 잘못된 헤더를 버리지 않는다."
+  }
+}
+
 # SG 는 모듈이 만들고 ALB 에 붙인다. 규칙은 호출하는 루트가 별도 자원으로
 # 붙인다(guard R3 · 설계 5-5).
 run "attaches_own_security_group" {

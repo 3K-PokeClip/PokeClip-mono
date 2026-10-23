@@ -51,6 +51,8 @@ resource "aws_lb" "this" {
   subnets            = var.subnet_ids
   security_groups    = [aws_security_group.this.id]
   idle_timeout       = var.idle_timeout
+
+  drop_invalid_header_fields = var.drop_invalid_header_fields
 }
 
 resource "aws_lb_target_group" "this" {

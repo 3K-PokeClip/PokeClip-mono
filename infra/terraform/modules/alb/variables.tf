@@ -46,6 +46,12 @@ variable "idle_timeout" {
   }
 }
 
+variable "drop_invalid_header_fields" {
+  description = "true 면 이름이 잘못된 HTTP 헤더(영숫자 · - 밖의 글자, 예: 밑줄)를 대상에 넘기기 전에 버린다. 공개 ALB 는 켠다."
+  type        = bool
+  default     = false
+}
+
 variable "target_groups" {
   description = <<-EOT
     키 → 대상 그룹. 이름은 <name>-<키>. health_check 의 port("traffic-port" 또는
