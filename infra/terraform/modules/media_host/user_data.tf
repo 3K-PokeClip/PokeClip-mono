@@ -15,6 +15,7 @@ locals {
     control_upstream       = var.control_upstream
     detached_log_driver    = "journald"
     ingest_auth_image      = var.ingest_auth_image
+    ingest_auth_ip_limit   = var.ingest_auth_ip_limit
     janitor_enabled        = var.janitor_enabled
     media_health_path      = var.media_health_path
     mediamtx_image         = var.mediamtx_image
@@ -28,6 +29,7 @@ locals {
     rewind_bucket_name     = split(":::", var.rewind_bucket_arn)[1]
     rewind_public_base_url = var.rewind_public_base_url
     sidecar_image          = var.sidecar_image
+    stream_key_resolve_url = var.stream_key_resolve_url
   }
 
   compose_yml = templatefile("${local.media_host_dir}/compose.yml.tmpl", local.template_vars)

@@ -389,3 +389,26 @@ variable "denylist_parameter_name" {
     error_message = "denylist_parameter_name 은 /<토막>/… 꼴이어야 한다."
   }
 }
+
+variable "stream_key_resolve_url" {
+  description = "응답기의 4C(스트림 키 판정) 주소 http://<호스트>:<포트>(예: http://auth.pokeclip.internal:<auth 포트>). 응답기 모드(ingest_auth_image 비어 있지 않음)에서만 값이 필수다(빈 값 거부는 루트 배선과 함께 — M9 후속). 키는 두 모드 모두 템플릿에 넘긴다 — templatefile() 은 쓰지 않는 갈래의 변수도 요구한다(옛 모드는 빈 값)."
+  type        = string
+  default     = ""
+
+  # 문자 집합으로 사용자 정보 · 경로 · 질의 · 조각 · $ · 공백 · # 이 모두 막힌다.
+  validation {
+    condition     = var.stream_key_resolve_url == "" || can(regex("^http://[A-Za-z0-9.-]+:[0-9]+$", var.stream_key_resolve_url))
+    error_message = "stream_key_resolve_url 은 빈 값이거나 http://<호스트>:<포트> 여야 한다(사용자 정보 · 경로 · 질의 · 조각 금지)."
+  }
+}
+
+variable "ingest_auth_ip_limit" {
+  description = "응답기 IP 한도 \"on\" · \"off\"(ingest-auth.env 의 INGEST_AUTH_IP_LIMIT). 두 모드 모두 렌더하고 응답기 모드에서만 읽힌다."
+  type        = string
+  default     = "on"
+
+  validation {
+    condition     = contains(["on", "off"], var.ingest_auth_ip_limit)
+    error_message = "ingest_auth_ip_limit 은 \"on\" 또는 \"off\" 여야 한다."
+  }
+}
