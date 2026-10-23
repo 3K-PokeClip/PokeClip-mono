@@ -161,25 +161,49 @@ test_r10_managed_locals_accept_partition_reference if {
 	}
 }
 
-# 정책 문서는 허용 동작 · Resource 를 그대로 적는다 — 부정형 · 다른 문서 합치기 ·
-# dynamic 블록은 대조를 비켜 간다.
-test_r10_policy_document_negations if {
-	every statement in [
-		{"not_actions": ["iam:*"], "resources": ["*"]},
-		{"actions": ["s3:GetObject"], "not_resources": ["arn:aws:s3:::x/*"]},
+# IAM 자원 · 정책 문서 · statement 는 허용 속성만 — 목록 밖 키(dynamic 포함)는
+# 권한을 대조 밖으로 들여온다(역할 inline_policy · managed_policy_arns ·
+# dynamic "inline_policy", 문서 합치기 · dynamic, statement 의 not_* · principals).
+role_body := {
+	"name": "pokeclip-prod-media",
+	"path": "/pokeclip/prod/",
+	"assume_role_policy": "${jsonencode({Statement = [{Action = \"sts:AssumeRole\"}]})}",
+}
+
+test_r10_iam_attribute_outside_allowlist if {
+	every file in [
+		resource_file(media_host_path, "aws_iam_role", object.union(role_body, {"inline_policy": [{"name": "x", "policy": "${data.aws_iam_policy_document.media.json}"}]})),
+		resource_file(media_host_path, "aws_iam_role", object.union(role_body, {"managed_policy_arns": "${var.arns}"})),
+		resource_file(media_host_path, "aws_iam_role", object.union(role_body, {"permissions_boundary": "${var.boundary}"})),
+		resource_file(media_host_path, "aws_iam_role", object.union(role_body, {"dynamic": {"inline_policy": [{
+			"for_each": "${var.x}",
+			"content": [{"policy": "${jsonencode({Action = \"*\", Resource = \"*\"})}"}],
+		}]}})),
+		resource_file(media_host_path, "aws_iam_instance_profile", {"name": "x", "role": "x", "dynamic": {"tags": [{}]}}),
+		resource_file(media_host_path, "aws_iam_role_policy", {"role": "x", "policy": "${data.aws_iam_policy_document.media.json}", "policy_arn": "${var.arn}"}),
+		attachment_file(media_host_path, managed_locals, "managed", object.union(managed_body, {"policy_arns": "${var.arns}"})),
+		tf(media_host_path, {"data": {"aws_iam_policy_document": {"media": [{"source_policy_documents": ["${jsonencode({})}"]}]}}}),
+		tf(media_host_path, {"data": {"aws_iam_policy_document": {"media": [{"override_policy_documents": ["${var.extra}"]}]}}}),
+		tf(media_host_path, {"data": {"aws_iam_policy_document": {"media": [{"dynamic": {"statement": [{"for_each": "${var.x}", "content": [{"actions": ["s3:GetObject"], "resources": ["*"]}]}]}}]}}}),
+		policy_document_file(media_host_path, [{"not_actions": ["iam:PassRole"], "resources": ["*"]}]),
+		policy_document_file(media_host_path, [{"actions": ["s3:GetObject"], "not_resources": ["arn:aws:s3:::x/*"]}]),
+		policy_document_file(media_host_path, [{"actions": ["s3:GetObject"], "resources": ["*"], "principals": [{"type": "AWS", "identifiers": ["*"]}]}]),
+		policy_document_file(media_host_path, [{"actions": ["s3:GetObject"], "resources": ["*"], "dynamic": {"condition": [{}]}}]),
 	] {
-		one_hit([policy_document_file(media_host_path, [statement])], "not_")
+		one_hit([file], "허용 속성")
 	}
 }
 
-test_r10_policy_document_merges_and_dynamic if {
-	every body in [
-		{"source_policy_documents": ["${jsonencode({})}"]},
-		{"override_policy_documents": ["${var.extra}"]},
-		{"dynamic": {"statement": [{"for_each": "${var.x}", "content": [{"actions": ["s3:GetObject"], "resources": ["*"]}]}]}},
-	] {
-		one_hit([tf(media_host_path, {"data": {"aws_iam_policy_document": {"media": [body]}}})], "정책 문서")
-	}
+# 실제 모듈 · ok 픽스처가 쓰는 키와 메타 인자 · 무해한 키는 통과한다.
+test_r10_iam_attribute_allowlist_accepts_used_keys if {
+	files := [
+		resource_file(media_host_path, "aws_iam_role", object.union(role_body, {"description": "x", "tags": {"a": "b"}, "lifecycle": [{}]})),
+		resource_file("modules/media_host/profile.tf", "aws_iam_instance_profile", {"name": "x", "path": "/pokeclip/prod/", "role": "x", "tags": {}}),
+		resource_file("modules/media_host/policy.tf", "aws_iam_role_policy", {"name": "x", "role": "x", "policy": "${data.aws_iam_policy_document.media.json}"}),
+		attachment_file("modules/media_host/main.tf", managed_locals, "managed", object.union(managed_body, {"depends_on": ["${aws_iam_role.media}"]})),
+		policy_document_file("modules/media_host/doc.tf", [{"sid": "S", "effect": "Allow", "actions": ["s3:GetObject"], "resources": ["*"], "condition": [{"test": "StringEquals", "variable": "aws:x", "values": ["y"]}]}]),
+	]
+	count(role_hits(files)) == 0
 }
 
 # 권한 정책은 정책 문서 json 으로만 붙인다. 신뢰 정책(assume_role_policy)은 예외.
@@ -190,8 +214,6 @@ test_r10_inline_policy_not_from_document if {
 			"policy": "${jsonencode({Statement = [{Effect = \"Allow\", Action = \"s3:*\", Resource = \"*\"}]})}",
 		}),
 		resource_file(media_host_path, "aws_iam_role_policy", {"role": "${aws_iam_role.this.id}", "policy": "${var.policy}"}),
-		resource_file(media_host_path, "aws_iam_role", {"name": "x", "inline_policy": [{"name": "x", "policy": "${data.aws_iam_policy_document.media.json}"}]}),
-		resource_file(media_host_path, "aws_iam_role", {"name": "x", "managed_policy_arns": "${var.arns}"}),
 	] {
 		one_hit([file], "인라인")
 	}
@@ -316,6 +338,7 @@ test_r10_template_directive_any_string if {
 		locals_file(media_host_path, "%{if true}rds-db:connect%{endif}"),
 		locals_file(media_host_path, "arn:aws:rds-db:ap-northeast-2:${local.account_id}:dbuser:${var.rds_resource_id}/%{if true}*%{endif}"),
 		tf(media_root_path, {"variable": {"x": [{"description": "%{for a in var.x}${a}%{endfor}"}]}}),
+		tf(media_root_path, {"locals": [{"tags": {"%{if true}x%{endif}": "y"}}]}),
 	] {
 		one_hit([file], "%{")
 	}

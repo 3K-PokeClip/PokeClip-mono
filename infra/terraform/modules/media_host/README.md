@@ -25,16 +25,17 @@ Media 상자[^box] 모듈입니다(설계 3-3 · 3-3-1 · 5-3 · 5-5, 계획 M9)
         주소 `managed` 하나(`for_each = local.managed_policy_arns` ·
         `policy_arn = each.value`, 지역값은 SSM Core 하나) · 정책 조회
         (`data "aws_iam_policy"`) · 고객 관리 정책 · 다른 IAM 정책 유형 금지.
-    *   정책 문서: `not_actions` · `not_resources` · 다른 문서 합치기 ·
-        `dynamic` 금지. 역할 인라인 정책은 정책 문서 json 으로만(jsonencode ·
-        역할의 `inline_policy` · `managed_policy_arns` 금지 — 신뢰 정책은
-        예외).
+    *   허용 속성: IAM 자원 · 정책 문서 · statement 는 유형마다 정한 키와
+        메타 인자만 쓴다(`dynamic` 금지 — 역할 `inline_policy` ·
+        `managed_policy_arns`, 문서 합치기, `not_actions` · `not_resources` 가
+        여기서 걸린다). 역할 인라인 정책은 정책 문서 json 으로만(jsonencode
+        금지 — 신뢰 정책은 예외).
     *   DB: `rds-db:connect` 는 정책 문서 statement 에만 · Resource 는
         `local.db_users` 를 도는 for 식만 · `db_users` 는 두 이름
         (`media_indexer` · `media_janitor`) 리터럴.
     *   statement `actions` 는 `서비스:동작` 꼴 리터럴 목록만(허용 목록 —
-        와일드카드 · 지시자 · 식 금지). 두 경로의 문자열에 템플릿 지시자 `%{`
-        금지.
+        와일드카드 · 지시자 · 식 금지). 두 경로의 문자열 · 맵 키에 템플릿
+        지시자 `%{` 금지.
     *   lifecycle: 거부 목록 파라미터는 `prevent_destroy = true`(리터럴) ·
         `ignore_changes` 에 `value`, 상자는 `ignore_changes` 에 `ami` ·
         `user_data_base64`.

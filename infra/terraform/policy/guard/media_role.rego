@@ -28,10 +28,12 @@
 #    정책 문서만(정책 조회 data "aws_iam_policy" · 고객 관리 정책 금지).
 # ⑤ 관리형 정책 연결은 주소 managed 하나 · for_each = local.managed_policy_arns ·
 #    policy_arn = each.value 이고, 그 지역값은 키 · 값 모두 SSM Core 하나다.
-# ⑥ 정책 문서에 not_actions · not_resources · 다른 문서 합치기 · dynamic 금지.
-# ⑦ 역할 인라인 정책은 정책 문서 json 으로만 붙인다(jsonencode 등 금지). 역할의
-#    inline_policy · managed_policy_arns 도 금지. 신뢰 정책(assume_role_policy)은
-#    예외다.
+# ⑥ IAM 자원 · 정책 문서 · statement 는 허용 속성만 쓴다(유형마다 정한 키 +
+#    메타 인자). 목록 밖 키는 dynamic 을 포함해 위반 — 역할의 inline_policy ·
+#    managed_policy_arns · permissions_boundary, 문서 합치기(source · override),
+#    statement 의 not_actions · not_resources · principals 가 여기서 걸린다.
+# ⑦ 역할 인라인 정책은 정책 문서 json 으로만 붙인다(jsonencode 등 금지). 신뢰
+#    정책(assume_role_policy)은 예외다.
 #
 # lifecycle(modules/media_host): 응답기 거부 목록 그릇(aws_ssm_parameter)은
 # ignore_changes 에 value — 없으면 다음 apply 가 운영자가 고친 목록을 초기값으로
@@ -172,11 +174,25 @@ deny contains msg if {
 	)
 }
 
+template_directive_message(file) := sprintf("R10 %s: 템플릿 지시자(%%{) 금지 — 문자열 대조를 비켜 간다", [file])
+
 deny contains msg if {
 	some item in media_role_strings
 	contains(item.value, "%{")
 	not statement_actions_path(item.path)
-	msg := sprintf("R10 %s: 템플릿 지시자(%%{) 금지 — 문자열 대조를 비켜 간다", [item.file])
+	msg := template_directive_message(item.file)
+}
+
+# 맵 키도 문자열이다.
+deny contains msg if {
+	some file in input
+	some dir in media_role_dirs
+	in_dir(file.path, dir)
+	walk(file.contents, [_, value])
+	is_object(value)
+	some key, _ in value
+	contains(key, "%{")
+	msg := template_directive_message(file.path)
 }
 
 # hcl2 JSON 에서 정책 문서 statement 의 actions 자리:
@@ -323,24 +339,41 @@ deny contains msg if {
 	)
 }
 
-policy_documents contains decl if {
-	some decl in media_role_decls
-	decl.kind == "data"
-	decl.type == "aws_iam_policy_document"
+# 모든 자원 · data 가 쓸 수 있는 메타 인자.
+meta_arguments := {"count", "for_each", "depends_on", "lifecycle", "provider"}
+
+# 유형마다 쓸 수 있는 최상위 키(실제 모듈 · ok 픽스처가 쓰는 키와 무해한 것).
+# 목록에 없는 키는 dynamic 을 포함해 위반이다.
+allowed_iam_attributes := {
+	"aws_iam_role": {
+		"name", "name_prefix", "path", "assume_role_policy", "description",
+		"max_session_duration", "force_detach_policies", "tags",
+	},
+	"aws_iam_instance_profile": {"name", "name_prefix", "path", "role", "tags"},
+	"aws_iam_role_policy": {"name", "name_prefix", "role", "policy"},
+	"aws_iam_role_policy_attachment": {"role", "policy_arn"},
+	"aws_iam_policy_document": {"statement", "version"},
 }
 
+allowed_statement_attributes := {"sid", "effect", "actions", "resources", "condition"}
+
 deny contains msg if {
-	some decl in policy_documents
-	some key in ["source_policy_documents", "override_policy_documents", "dynamic"]
-	key in object.keys(decl.body)
-	msg := sprintf("R10 %s: %s — 정책 문서에 %s 금지(문을 그대로 적는다)", [decl.path, label(decl), key])
+	some decl in media_role_decls
+	some allowed in [allowed_iam_attributes[decl.type]]
+	some key, _ in decl.body
+	not key in allowed
+	not key in meta_arguments
+	msg := sprintf("R10 %s: %s 의 %s — IAM 자원은 허용 속성만(dynamic 포함 금지)", [decl.path, label(decl), key])
 }
 
 deny contains msg if {
 	some item in policy_statements
-	some key in ["not_actions", "not_resources"]
-	key in object.keys(item.statement)
-	msg := sprintf("R10 %s: %s 의 statement 에 %s 금지", [item.decl.path, label(item.decl), key])
+	some key, _ in item.statement
+	not key in allowed_statement_attributes
+	msg := sprintf(
+		"R10 %s: %s 의 statement %s — 허용 속성만(sid · effect · actions · resources · condition)",
+		[item.decl.path, label(item.decl), key],
+	)
 }
 
 policy_document_json_pattern := `^\$\{data\.aws_iam_policy_document\.[A-Za-z0-9_-]+\.json\}$`
@@ -351,16 +384,4 @@ deny contains msg if {
 	decl.type == "aws_iam_role_policy"
 	not regex.match(policy_document_json_pattern, object.get(decl.body, "policy", ""))
 	msg := sprintf("R10 %s: %s — 역할 인라인 정책은 정책 문서 json 으로만", [decl.path, label(decl)])
-}
-
-deny contains msg if {
-	some decl in media_role_decls
-	decl.kind == "resource"
-	decl.type == "aws_iam_role"
-	some key in ["inline_policy", "managed_policy_arns"]
-	key in object.keys(decl.body)
-	msg := sprintf(
-		"R10 %s: %s 의 %s 금지 — 권한은 인라인 정책(정책 문서) · 관리형은 연결 managed 로만",
-		[decl.path, label(decl), key],
-	)
 }
