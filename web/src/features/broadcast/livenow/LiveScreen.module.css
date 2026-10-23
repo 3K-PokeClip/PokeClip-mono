@@ -199,6 +199,13 @@
   background: rgb(255 255 255 / 0.22);
 }
 
+.markNote {
+  font-size: calc(10.5 * var(--pc-u));
+  line-height: 1.3;
+  text-align: center;
+  color: var(--pc-color-text-muted);
+}
+
 .markFeedback {
   font-size: calc(10.5 * var(--pc-u));
   font-weight: 650;

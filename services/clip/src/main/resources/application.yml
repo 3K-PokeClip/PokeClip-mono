@@ -13,6 +13,16 @@ spring:
     url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${POSTGRES_DB}
     username: ${POSTGRES_USER}
     password: ${POSTGRES_PASSWORD}
+    hikari:
+      data-source-properties:
+        # DB 응답 대기 시한(초, POK-414). 연결은 받고 응답을 안 하는 DB(반개방)를 끊는 것은 이것뿐이다:
+        # queryTimeout은 취소를 서버에 보내 답 없는 상대에게 무력하고, Hikari connection-timeout은 풀에서 빌리는
+        # 대기라 이미 빌린 연결의 읽기를 못 끊는다(services/CLAUDE.md 실측, 둘 다 20초 넘게 매달림). 없으면 그 요청
+        # 스레드가 끝없이 매달려 풀이 바닥나고 화면이 통째로 멈춘다(수집 서버 PR #55와 같은 현상).
+        # 수집 · 판별 서버와 같은 10이다. 이 연결의 모든 문장에 걸린다: 10초를 넘기는 마이그레이션(큰 표 색인)을
+        # 쓰는 날 이 값을 다시 본다. 정수로 주면 Hikari가 조용히 무시한다(문자열로 바인딩돼야 먹는다).
+        # DatasourceTimeoutTest가 값이 아니라 행동으로 잰다. iam 허용 목록(db-support)이 받는 유일한 드라이버 속성이다.
+        socketTimeout: 10
 
   jpa:
     hibernate:
@@ -58,6 +68,14 @@ logging:
     # 기본 콘솔 형식의 레벨 자리에 상관 ID를 끼워 넣는다. 값이 없으면 빈칸이다.
     level: "%5p [%X{requestId:-}]"
   level:
+    # DB 로거 트리 셋을 info로 박는다(POK-409). 로그 수준을 DEBUG · TRACE로 올려도 DB를 오가는 값이 안 찍히게 한다:
+    # root TRACE 실측(clip)에서 org.hibernate.orm.jdbc.extract가 읽은 칸 값을, org.hibernate.orm.core가 DEBUG에서
+    # 엔티티 통째를, org.springframework.jdbc.core.StatementCreatorUtils가 JdbcTemplate 매개변수를,
+    # org.postgresql.core.v3.QueryExecutorImpl이 보내는 값을 찍었다. 방송의 물리 키는 지금 스트림키와 같다.
+    # 디버그 로그가 꼭 필요하면 env로 그 트리만 잠깐 켠다(예: LOGGING_LEVEL_ORG_HIBERNATE_ORM=debug).
+    org.hibernate.orm: info
+    org.springframework.jdbc: info
+    org.postgresql: info
     # 🔴 이 서버의 첫 발신 HTTP다. clip 클래스패스에 AWS SDK가 끌어온 httpclient5가 있어
     # 팩토리가 JDK가 아니라 Apache HC5로 뽑히고, 그 두 로거가 DEBUG에서 나가는 헤더를
     # 통째로 찍는다 — X-Internal-Token 평문 유출을 실측했다(계획 검증 F4, 2건).

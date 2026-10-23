@@ -555,7 +555,7 @@ prod 상자에 깔 도구의 판이다. M9 user_data 가 같은 값으로 설치
 |---|---|---|
 | docker compose 플러그인 | **5.5.0** | 공식 릴리스 `docker/compose` v5.5.0(2026-10-20 확인). `sha256` — `docker-compose-linux-x86_64`: `c57ab918abd5b05ca7e7d0f275875dd1330a695074f309dc9eab1b49efafcd4b` · `docker-compose-linux-aarch64`: `ff42489f5a9b879d5d117c5ffea6defc27390b3286da8ad52cbc9c6ab5df590e` |
 | `amazon-ecr-credential-helper` | **0.12.0-3.amzn2023** | Amazon Linux 2023 저장소(release 2023.12.20260930 기준 최신 · 2026-10-20 `dnf` 조회) |
-| docker | **25.0.16**(`modules/media_host` · `prod/media` tfvars 예시) | M2 탐침 상자(AL2023 · systemd 252)는 25.0.16 으로 재기동 시험을 통과했다. AL2023 **arm64** 저장소에 이 판이 있는지는 O7e 에서 확인한다 |
+| docker | **25.0.16**(`prod/media` 의 `terraform.tfvars.example` 값 — `modules/media_host` · `prod/media` 변수에는 기본값이 없다) | M2 탐침 상자(AL2023 · systemd 252)는 25.0.16 으로 재기동 시험을 통과했다. AL2023 **arm64** 저장소에 이 판이 있는지는 O7e 에서 확인한다 |
 
 *   Compose 의 `--abort-on-container-exit` · `--attach` · `--force-recreate`
     동작과 bind 의 `create_host_path: false`(원본이 없으면 디렉터리를 만들지

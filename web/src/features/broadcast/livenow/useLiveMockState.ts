@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ApiError, apiFetch } from '@/api/client';
 import { chzzkLinkQueryOptions } from '@/api/chzzkLink';
@@ -78,10 +78,18 @@ export interface LiveMockState {
   cardsStatus: CardListStatus;
   /** 채팅 수집 끊김 경고 배너 노출 여부 */
   chatWarning: boolean;
+  /**
+   * 수동 마킹 답의 카드를 목록에 넣는다(POK-392). 지금 방송의 카드일 때만 넣는다: 답이 오는 사이 방송을 바꾸면 앞 방송 카드가
+   * 새 방송 목록에 섞인다. 같은 id면 하나이고(통로·목록으로 같은 카드가 와도), 받아 둔 사진은 지킨다(답에는 사진이 없다)
+   */
+  mergeCard: (card: LiveCardSnapshot) => void;
 }
 
 // ── clip 창구 배선 ────────────────────────────────────────────────────────────
 // 반환 형태(LiveMockState)는 그대로다 — 화면은 손대지 않는다.
+
+/** 카드 스냅샷(목록·통로·수동 마킹 답이 같은 모양) */
+export type LiveCardSnapshot = Snapshot;
 
 interface Snapshot {
   id: number;
@@ -232,6 +240,8 @@ export function useLiveMockState(pastRoute: boolean): LiveMockState {
   const base = timeBaseOf(live);
   // 방송 번호는 화면 맨 위(useLiveStreamSelection)가 정한다. 정해지기 전(빈 문자열)에는 아무것도 안 받는다
   const streamId = live.streamId;
+  const streamIdRef = useRef(streamId);
+  streamIdRef.current = streamId;
   const rangeRef = useRef<{ status: string; startedAt: number | null; endedAt: number | null }>({
     status: 'unknown',
     startedAt: null,
@@ -629,10 +639,16 @@ export function useLiveMockState(pastRoute: boolean): LiveMockState {
     [streamId, sseOk, info, live.status, live.listTitle, channelName, myName, pastRoute],
   );
 
+  const mergeCard = useCallback((card: Snapshot) => {
+    if (!card || card.streamId !== streamIdRef.current) return;
+    setCards((prev) => ({ ...prev, [card.id]: keepKnownThumbnail(prev[card.id], card) }));
+  }, []);
+
   return {
     stream,
     highlights,
     cardsStatus,
     chatWarning: false,
+    mergeCard,
   };
 }

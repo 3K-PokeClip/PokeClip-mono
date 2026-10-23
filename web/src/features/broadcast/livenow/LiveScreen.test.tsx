@@ -8,6 +8,7 @@ import {
 } from 'react';
 import { fireEvent, screen, within } from '@testing-library/react';
 import { axe } from 'jest-axe';
+import { QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { reportPlaybackForbidden, resetPlaybackAccessForTests } from '@/api/playbackAccess';
 import { LiveScreen } from '@/features/broadcast/livenow/LiveScreen';
@@ -23,6 +24,7 @@ import { useAuthStore } from '@/stores/auth';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
 import { fakeScrollMetrics } from '@/test/scrollMetrics';
 import { renderWithProviders } from '@/test/testProviders';
+import { ToastProvider } from '@/ui';
 
 // 라이브 대시보드(시안 1b)는 clip 창구에 붙어 있다(POK-251). 이 시험은 서버 응답을 흉내 내고
 // 화면이 그 값으로 무엇을 그리는지 잰다. 시계는 가짜다 — 경과·마킹 시각이 결정적이어야 한다.
@@ -129,6 +131,10 @@ const hlsFake = vi.hoisted(() => ({
   error: null as ((event: string, data: unknown) => void) | null,
   /** hls.js를 쓸 수 있나. 아니면 브라우저 기본 HLS(옛 iOS Safari)로 튼다 */
   supported: true,
+  /** 영상 목록을 읽어 내나. 아니면 목록 읽기 완료(MANIFEST_PARSED)가 오지 않는다(CDN이 계속 403인 곳, POK-419) */
+  manifest: true,
+  /** 영상 조각을 받아 내나. 아니면 조각 받기 완료(FRAG_LOADED)가 오지 않는다(목록만 열리고 조각이 403인 곳, POK-419) */
+  frags: true,
 }));
 /** 재생기가 서는 라이브 끝(영상 초): 영상 끝(지금)에서 2초 뒤다 */
 function liveSyncSeconds(): number {
@@ -139,7 +145,11 @@ vi.mock('hls.js', () => {
     static isSupported() {
       return hlsFake.supported;
     }
-    static Events = { ERROR: 'hlsError', MANIFEST_PARSED: 'hlsManifestParsed' };
+    static Events = {
+      ERROR: 'hlsError',
+      MANIFEST_PARSED: 'hlsManifestParsed',
+      FRAG_LOADED: 'hlsFragLoaded',
+    };
     static ErrorTypes = { NETWORK_ERROR: 'networkError', MEDIA_ERROR: 'mediaError' };
     private readonly handlers = new Map<string, () => void>();
     on(event: string, handler: () => void) {
@@ -149,7 +159,8 @@ vi.mock('hls.js', () => {
     attachMedia() {}
     loadSource() {
       hlsFake.loads += 1;
-      this.handlers.get('hlsManifestParsed')?.();
+      if (hlsFake.manifest) this.handlers.get('hlsManifestParsed')?.();
+      if (hlsFake.manifest && hlsFake.frags) this.handlers.get('hlsFragLoaded')?.();
     }
     startLoad() {}
     recoverMediaError() {}
@@ -239,6 +250,17 @@ const CARDS: Card[] = [
   card(1, { eventSeq: 10 }),
 ];
 
+/** 수동 마킹 문이 돌려주는 새 수동 카드(지금 = 방송 5,043초) */
+const MARK_CARD = card(9, {
+  source: 'hotkey',
+  score: null,
+  evidence: null,
+  eventSeq: 90,
+  streamTimestampMs: 5_043_000,
+  window: { startMs: 5_003_000, endMs: 5_063_000 },
+  createdAt: new Date(NOW).toISOString(),
+});
+
 const chatAt = (secondsAgo: number) => new Date(NOW - secondsAgo * 1000).toISOString();
 const CHAT = [
   {
@@ -323,6 +345,14 @@ const INFO = {
 };
 
 const server = vi.hoisted(() => ({
+  /** 수동 마킹 문(POK-392)이 받은 본문들 */
+  markBodies: [] as Record<string, unknown>[],
+  /** 수동 마킹 문의 답. 기본은 201 새 카드 */
+  markReply: null as { status: number; body: unknown } | null,
+  /** 이것이 풀릴 때까지 수동 마킹 답을 붙든다(「카드 만드는 중」 자리를 보려고) */
+  markGate: null as Promise<void> | null,
+  /** 통로(SSE)가 이 카드들을 card 이벤트로 보내고 닫는다. null이면 통로는 용량 초과(503)다 */
+  sseCards: null as Card[] | null,
   live: true,
   failLive: false,
   relation: 'OWNER',
@@ -626,6 +656,14 @@ function handle(url: string, init?: RequestInit): Response | Promise<Response> {
     return server.listGate && u.searchParams.get('limit') !== '1'
       ? server.listGate.then(() => listResponse(u))
       : listResponse(u);
+  if (path.endsWith('/marks') && init?.method === 'POST') {
+    server.markBodies.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+    const reply = () => {
+      const r = server.markReply ?? { status: 201, body: MARK_CARD };
+      return jsonResponse(r.status, r.body);
+    };
+    return server.markGate ? server.markGate.then(reply) : reply();
+  }
   if (path.endsWith('/jump-cards')) {
     if (server.cards === 'fail') return jsonResponse(503, { error: 'unavailable' });
     const cards = server.cards === 'none' ? [] : [...CARDS, ...server.extraCards];
@@ -707,6 +745,11 @@ function handle(url: string, init?: RequestInit): Response | Promise<Response> {
       });
     return jsonResponse(200, { items: CHAT, nextCursor: null, appliedOffsetMs: 0 });
   }
+  if (path.endsWith('/events') && server.sseCards)
+    return new Response(
+      server.sseCards.map((c) => `event: card\ndata: ${JSON.stringify(c)}\n\n`).join(''),
+      { status: 200, headers: { 'Content-Type': 'text/event-stream' } },
+    );
   // 통로는 용량 초과로 답한다 — 폴링이 카드를 채운다(통로 자체는 useLiveMockState의 몫)
   if (path.endsWith('/events')) return jsonResponse(503, { error: 'sse_capacity' });
   if (path.endsWith('/playback-access') && server.playbackGate) {
@@ -795,6 +838,8 @@ beforeEach(() => {
   hlsFake.seekableEnd = null;
   hlsFake.error = null;
   hlsFake.supported = true;
+  hlsFake.manifest = true;
+  hlsFake.frags = true;
   chatModes.length = 0;
   chatTexts.length = 0;
   playerStatuses.length = 0;
@@ -804,6 +849,10 @@ beforeEach(() => {
   mediaCalls.spans = [];
   mediaCalls.answer = null;
   mediaCalls.configured = false;
+  server.markBodies = [];
+  server.markReply = null;
+  server.markGate = null;
+  server.sseCards = null;
   server.live = true;
   server.failLive = false;
   server.relation = 'OWNER';
@@ -1178,6 +1227,197 @@ describe('LiveScreen — 영상 출입증', () => {
     expect(accessCalls()).toBe(before + 1);
     expect(hlsFake.loads).toBe(2);
     expect(screen.queryByText('영상 출입증이 끝나 다시 받고 있어요')).toBeNull();
+  });
+
+  it('다시 받아 새로 세운 재생기도 영상 목록을 못 읽고 또 403이면 멈추고 접근할 수 없다고 알린다: 계약3 재시도 정책(POK-419)', async () => {
+    // 서명 설정이 틀린 곳은 출입증을 몇 번 받아도 403이다. 전에는 1분마다 다시 받으며 「다시 받고 있어요」를 끝없이 보였다
+    stubMediaElement();
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', 'http://live.test');
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    server.playback = 'grant';
+    await renderLive();
+    const forbidden = {
+      fatal: true,
+      type: 'networkError',
+      details: 'manifestLoadError',
+      response: { code: 403 },
+    };
+    act(() => hlsFake.error?.('hlsError', forbidden));
+    hlsFake.manifest = false;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    await settle();
+    expect(hlsFake.loads).toBe(2);
+    const calls = accessCalls();
+
+    act(() => hlsFake.error?.('hlsError', forbidden));
+    expect(screen.getByText('영상에 접근할 수 없어요. 새로고침해 주세요')).toBeInTheDocument();
+    expect(screen.queryByText('영상 출입증이 끝나 다시 받고 있어요')).toBeNull();
+
+    // 출입증을 버리지 않아 더 받지도, 재생기를 다시 세우지도 않는다
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120_000);
+    });
+    await settle();
+    expect(hlsFake.loads).toBe(2);
+    expect(accessCalls()).toBe(calls);
+    expect(screen.getByText('영상에 접근할 수 없어요. 새로고침해 주세요')).toBeInTheDocument();
+  });
+
+  it('hls.js가 없는 브라우저도 다시 받아 새로 세운 재생기가 또 403이면 멈추고 접근할 수 없다고 알린다(POK-419)', async () => {
+    stubMediaElement();
+    vi.spyOn(HTMLMediaElement.prototype, 'canPlayType').mockReturnValue('maybe');
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', 'http://live.test');
+    hlsFake.supported = false;
+    server.playback = 'grant';
+    server.liveStatus = 403;
+    const { container } = await renderLive();
+    const first = container.querySelector('video')!;
+    await act(async () => {
+      first.dispatchEvent(new Event('error'));
+    });
+    await settle();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    await settle();
+    const second = container.querySelector('video')!;
+    expect(second).not.toBe(first);
+    const calls = accessCalls();
+
+    // 영상을 하나도 못 받았다(loadeddata 없음): 묻기만 하고 출입증은 버리지 않는다
+    await act(async () => {
+      second.dispatchEvent(new Event('error'));
+    });
+    await settle();
+    expect(screen.getByText('영상에 접근할 수 없어요. 새로고침해 주세요')).toBeInTheDocument();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120_000);
+    });
+    await settle();
+    expect(container.querySelector('video')).toBe(second);
+    expect(accessCalls()).toBe(calls);
+  });
+
+  it('다시 세운 재생기가 영상 목록은 읽어도 조각을 하나도 못 받고 또 403이면 멈춘다: 목록만 열리는 곳에서 1분마다 다시 받지 않는다(POK-419 로컬 리뷰)', async () => {
+    stubMediaElement();
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', 'http://live.test');
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    server.playback = 'grant';
+    await renderLive();
+    const forbidden = {
+      fatal: true,
+      type: 'networkError',
+      details: 'fragLoadError',
+      response: { code: 403 },
+    };
+    act(() => hlsFake.error?.('hlsError', forbidden));
+    hlsFake.frags = false;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    await settle();
+    expect(hlsFake.loads).toBe(2);
+
+    act(() => hlsFake.error?.('hlsError', forbidden));
+    expect(screen.getByText('영상에 접근할 수 없어요. 새로고침해 주세요')).toBeInTheDocument();
+  });
+
+  it('갱신 실패로 다시 세운 재생기는 첫 403에서 출입증을 한 번 다시 받는다: 403 때문에 다시 세운 것만 멈출 까닭이다(POK-419)', async () => {
+    stubMediaElement();
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', 'http://live.test');
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    server.playback = 'grant';
+    // 5분 30초짜리라 1분마다 새로 받는다
+    server.playbackTtlMs = 5 * 60_000 + 30_000;
+    await renderLive();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(65_000);
+    });
+    server.playback = 'fail';
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    server.playback = 'grant';
+    hlsFake.manifest = false;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    await settle();
+    expect(hlsFake.loads).toBe(2);
+
+    act(() =>
+      hlsFake.error?.('hlsError', {
+        fatal: true,
+        type: 'networkError',
+        details: 'manifestLoadError',
+        response: { code: 403 },
+      }),
+    );
+    expect(screen.getByText('영상 출입증이 끝나 다시 받고 있어요')).toBeInTheDocument();
+    expect(screen.queryByText('영상에 접근할 수 없어요. 새로고침해 주세요')).toBeNull();
+  });
+
+  it('hls.js가 없는 브라우저도 다시 세운 재생기가 목록을 읽어 회복했으면 나중의 403은 다시 한 번 받아 본다(POK-419)', async () => {
+    stubMediaElement();
+    vi.spyOn(HTMLMediaElement.prototype, 'canPlayType').mockReturnValue('maybe');
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', 'http://live.test');
+    hlsFake.supported = false;
+    server.playback = 'grant';
+    server.liveStatus = 403;
+    const { container } = await renderLive();
+    await act(async () => {
+      container.querySelector('video')!.dispatchEvent(new Event('error'));
+    });
+    await settle();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    await settle();
+    const second = container.querySelector('video')!;
+    act(() => {
+      second.dispatchEvent(new Event('loadeddata'));
+    });
+
+    await act(async () => {
+      second.dispatchEvent(new Event('error'));
+    });
+    await settle();
+    expect(screen.getByText('영상 출입증이 끝나 다시 받고 있어요')).toBeInTheDocument();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    await settle();
+    expect(container.querySelector('video')).not.toBe(second);
+  });
+
+  it('다시 세운 재생기가 영상 목록을 읽어 회복했으면 나중의 403은 다시 한 번 받아 본다: 쿠키가 또 지워진 것이다(POK-419)', async () => {
+    stubMediaElement();
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', 'http://live.test');
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    server.playback = 'grant';
+    await renderLive();
+    const forbidden = {
+      fatal: true,
+      type: 'networkError',
+      details: 'fragLoadError',
+      response: { code: 403 },
+    };
+    act(() => hlsFake.error?.('hlsError', forbidden));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    await settle();
+    expect(hlsFake.loads).toBe(2);
+
+    act(() => hlsFake.error?.('hlsError', forbidden));
+    expect(screen.getByText('영상 출입증이 끝나 다시 받고 있어요')).toBeInTheDocument();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    await settle();
+    expect(hlsFake.loads).toBe(3);
   });
 
   it('출입증을 새로 받는 중에 라이브가 403으로 멎어도 받은 뒤 재생기를 새로 세운다: 받는 중인 것은 버리지 않아 다시 세울 신호가 없었다(로컬 리뷰 1라운드)', async () => {
@@ -1633,32 +1873,175 @@ describe('LiveScreen: 라이브 문구', () => {
 describe('LiveScreen — 수동 마킹', () => {
   // 이 파일은 전부 fireEvent다 — userEvent는 가짜 시계와 엉켜 멈춘다(GlassPlayer 자동 숨김 케이스와 같은 이유).
   //
-  // 누른 순간을 서버에 카드로 남기는 길이 아직 없다(POK-257, MVP 밖). 화면에만 카드를 세우면 새로 고침에 사라지고 편집도
-  // 못 하는 가짜 성공이다(QA 2026-10-11). 준비 중이라고만 말한다.
-  const PREPARING = '수동 마킹은 아직 준비 중이에요. 준비되면 알려드릴게요.';
+  // 라이브는 누른 때·보낸 때를 서버에 보내고 서버가 시각을 정한다(POK-392). 답이 올 때까지 「카드 만드는 중」 자리가 서고,
+  // 답의 카드가 목록에 들어온다. 지난 방송은 아래 「이 시점 카드 추가」 묶음이다.
+  const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
-  it('버튼을 누르면 준비 중이라고 알리고 카드를 만들지 않는다', async () => {
+  /** 답을 붙들어 둔다. 돌려준 함수를 부르면 풀린다 */
+  function holdMark() {
+    let release!: () => void;
+    server.markGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    return async () => {
+      release();
+      await settle();
+    };
+  }
+
+  it('버튼을 누르면 누른 때·보낸 때를 한 번 보내고, 만드는 중 자리가 선 뒤 받은 카드로 바뀐다', async () => {
     await renderLive();
+    const release = holdMark();
 
     fireEvent.click(screen.getByRole('button', { name: /수동 마킹/ }));
-    expect(screen.getByText(PREPARING)).toBeInTheDocument();
+    await settle();
 
-    act(() => {
-      vi.advanceTimersByTime(5_000);
-    });
+    expect(server.markBodies).toHaveLength(1);
+    const body = server.markBodies[0]!;
+    expect(Object.keys(body).sort()).toEqual(['eventId', 'pressedAt', 'sentAt']);
+    expect(body.eventId).toMatch(UUID_V4);
+    expect(body.pressedAt).toBe(NOW);
+    expect(body.sentAt).toBe(NOW);
+    const post = fetchSpy.mock.calls.find(([u]) => String(u).endsWith('/marks'));
+    expect(String(post?.[0])).toContain(`/api/clip/broadcasts/${STREAM_ID}/marks`);
+    // 자리: 누른 순간의 방송 시계(시안 1b 글자 그대로)
+    expect(screen.getByText('1:24:03 마킹됨 · 카드 생성 중')).toBeInTheDocument();
+    expect(screen.getByText('카드 만드는 중…')).toBeInTheDocument();
+
+    await release();
+
     expect(screen.queryByText('카드 만드는 중…')).not.toBeInTheDocument();
     expect(screen.queryByText(/마킹됨 · 카드 생성 중/)).not.toBeInTheDocument();
-    // 카드 수·필터·지표가 그대로다. 서버에 없는 카드를 세지 않는다
-    expect(screen.getByRole('button', { name: '전체 8' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '수동 2' })).toBeInTheDocument();
-    expect(screen.getByText('자동 6 · 수동 2')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '전체 9' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '수동 3' })).toBeInTheDocument();
   });
 
-  it('F8도 어디에 포커스가 있든 같은 안내다', async () => {
+  it('F8도 어디에 포커스가 있든 같은 요청이다', async () => {
     await renderLive();
 
     fireEvent.keyDown(document, { key: 'F8' });
-    expect(screen.getByText(PREPARING)).toBeInTheDocument();
+    await settle();
+
+    expect(server.markBodies).toHaveLength(1);
+    expect(server.markBodies[0]!.eventId).toMatch(UUID_V4);
+    expect(screen.getByRole('button', { name: '수동 3' })).toBeInTheDocument();
+  });
+
+  it('같은 카드가 목록으로 다시 와도 하나다', async () => {
+    await renderLive();
+    fireEvent.keyDown(document, { key: 'F8' });
+    await settle();
+    expect(screen.getByRole('button', { name: '전체 9' })).toBeInTheDocument();
+
+    const listReads = () =>
+      fetchSpy.mock.calls.filter(([u]) => String(u).includes('/jump-cards')).length;
+    const before = listReads();
+    server.extraCards = [MARK_CARD];
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    await settle();
+
+    expect(listReads(), '목록을 다시 안 읽었다: 이 갈래는 아무것도 안 잰다').toBeGreaterThan(
+      before,
+    );
+    expect(screen.getByRole('button', { name: '전체 9' })).toBeInTheDocument();
+  });
+
+  // 감사 1회차 m3: PRD 「통로로 같은 카드가 와도 하나」. 통로 카드는 목록과 다른 길(fromStream, 사진 지키기)로 들어온다
+  it('같은 카드가 통로로 다시 와도 하나다', async () => {
+    await renderLive();
+    fireEvent.keyDown(document, { key: 'F8' });
+    await settle();
+    expect(screen.getByRole('button', { name: '전체 9' })).toBeInTheDocument();
+
+    const sseReads = () =>
+      fetchSpy.mock.calls.filter(([u]) => String(u).endsWith('/events')).length;
+    const before = sseReads();
+    // 같은 카드와 함께 새 카드 하나를 보낸다: 새 카드가 서야 통로가 실제로 카드를 넣었다는 증거다(양성 대조)
+    server.sseCards = [MARK_CARD, card(10, { eventSeq: 100, streamTimestampMs: 5_040_000 })];
+    // 첫 통로는 용량 초과(503)라 60초 쉬고 다시 붙는다
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(61_000);
+    });
+    await settle();
+
+    expect(sseReads(), '통로에 다시 안 붙었다: 이 갈래는 아무것도 안 잰다').toBeGreaterThan(before);
+    expect(screen.getByRole('button', { name: '전체 10' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '수동 3' })).toBeInTheDocument();
+  });
+
+  it('다른 방송의 카드가 답으로 오면 목록에 안 넣는다', async () => {
+    await renderLive();
+    server.markReply = { status: 201, body: { ...MARK_CARD, streamId: 'live-2' } };
+
+    fireEvent.keyDown(document, { key: 'F8' });
+    await settle();
+
+    expect(screen.getByRole('button', { name: '전체 8' })).toBeInTheDocument();
+  });
+
+  it('200(20초 안 앞 카드)이면 가까운 카드가 이미 있다고 알리고 새 카드를 세지 않는다', async () => {
+    await renderLive();
+    server.markReply = { status: 200, body: CARDS[1] };
+
+    fireEvent.click(screen.getByRole('button', { name: /수동 마킹/ }));
+    await settle();
+
+    expect(screen.getByText('가까운 카드가 이미 있어요')).toBeInTheDocument();
+    expect(screen.queryByText('카드 만드는 중…')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '전체 8' })).toBeInTheDocument();
+  });
+
+  it('503 timeline_not_ready면 영상 기준을 못 정했다고 알리고 자리를 치운다', async () => {
+    await renderLive();
+    server.markReply = { status: 503, body: { error: 'timeline_not_ready' } };
+
+    fireEvent.click(screen.getByRole('button', { name: /수동 마킹/ }));
+    await settle();
+
+    expect(
+      screen.getByText('아직 영상 기준을 못 정했어요. 잠시 뒤 다시 눌러 주세요'),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('카드 만드는 중…')).not.toBeInTheDocument();
+    expect(screen.queryByText(/마킹됨 · 카드 생성 중/)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '전체 8' })).toBeInTheDocument();
+  });
+
+  it.each([
+    [404, { error: 'broadcast_not_found' }],
+    [500, { error: 'boom' }],
+    [503, { error: 'authorization_unavailable' }],
+  ])('%i이면 카드를 만들지 못했다고 알리고 자리를 치운다', async (status, body) => {
+    await renderLive();
+    server.markReply = { status, body };
+
+    fireEvent.click(screen.getByRole('button', { name: /수동 마킹/ }));
+    await settle();
+
+    expect(screen.getByText('카드를 만들지 못했어요')).toBeInTheDocument();
+    expect(screen.queryByText('카드 만드는 중…')).not.toBeInTheDocument();
+    expect(screen.queryByText(/마킹됨 · 카드 생성 중/)).not.toBeInTheDocument();
+  });
+
+  it('보내는 중에 또 누르면 무시한다(자리는 하나)', async () => {
+    await renderLive();
+    const release = holdMark();
+
+    fireEvent.click(screen.getByRole('button', { name: /수동 마킹/ }));
+    await settle();
+    fireEvent.keyDown(document, { key: 'F8' });
+    fireEvent.click(screen.getByRole('button', { name: /수동 마킹/ }));
+    await settle();
+
+    expect(server.markBodies).toHaveLength(1);
+    expect(screen.getAllByText('카드 만드는 중…')).toHaveLength(1);
+    await release();
+
+    // 답을 받은 뒤에는 다시 누를 수 있다
+    fireEvent.keyDown(document, { key: 'F8' });
+    await settle();
+    expect(server.markBodies).toHaveLength(2);
   });
 
   it('자동반복과 입력 중인 곳에서 누른 F8은 무시한다', async () => {
@@ -1671,21 +2054,19 @@ describe('LiveScreen — 수동 마킹', () => {
     document.body.appendChild(input);
     fireEvent.keyDown(input, { key: 'F8' });
     input.remove();
+    await settle();
 
-    expect(screen.queryByText(PREPARING)).not.toBeInTheDocument();
+    expect(server.markBodies).toHaveLength(0);
   });
 
-  it('지난 방송에서도 같다: 방송 끝 시각에 카드가 생기지 않는다', async () => {
-    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+  it('방송 상태를 모르는 동안은 단추가 꺼져 있고 F8도 아무것도 안 보낸다', async () => {
+    server.failLive = true;
     await renderLive();
 
-    fireEvent.click(screen.getByRole('button', { name: /수동 마킹/ }));
-    expect(screen.getByText(PREPARING)).toBeInTheDocument();
-    act(() => {
-      vi.advanceTimersByTime(5_000);
-    });
-    expect(screen.queryByRole('heading', { name: /수동 마킹$/ })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '수동 2' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /수동 마킹/ })).toBeDisabled();
+    fireEvent.keyDown(document, { key: 'F8' });
+    await settle();
+    expect(server.markBodies).toHaveLength(0);
   });
 
   it('경과 시간이 흐른다', async () => {
@@ -1696,6 +2077,196 @@ describe('LiveScreen — 수동 마킹', () => {
       vi.advanceTimersByTime(120_000); // 2분
     });
     expect(screen.getByText('1:26:03')).toBeInTheDocument();
+  });
+});
+
+describe('LiveScreen: 지난 방송 이 시점 카드 추가(POK-392)', () => {
+  // 지난 방송은 통로가 없어 답의 카드가 목록에 들어오는 유일한 길이다. 위치는 재생기의 정확한 자리(초 × 1000, 반올림)이고
+  // 녹화가 서버 기준점 축일 때만 보낸다: 녹화 시작 축이면 카드가 두 시작의 차만큼 어긋난다
+  const VOD_MARK_CARD = card(9, {
+    streamId: VOD_ID,
+    source: 'hotkey',
+    score: null,
+    evidence: null,
+    eventSeq: 90,
+    streamTimestampMs: 91_390,
+    window: { startMs: 51_390, endMs: 111_390 },
+  });
+
+  /** 녹화가 있는 지난 방송을 연다. 기본은 서버 기준점이 녹화 시작과 같아 재생 위치 = 기준점 축 위치다 */
+  async function openPast({
+    origin = true,
+    spans = [{ startMs: VOD_STARTED, durationSeconds: 9_000 }],
+  }: { origin?: boolean; spans?: { startMs: number; durationSeconds: number }[] } = {}) {
+    stubMediaElement();
+    server.vodChat = true;
+    server.vodOrigin = origin ? VOD_STARTED : null;
+    mediaCalls.configured = true;
+    mediaCalls.answer = Promise.resolve(spans);
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    const result = await renderLive();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300);
+    });
+    await settle();
+    return result;
+  }
+
+  const addButton = () => screen.getByRole('button', { name: '이 시점 카드 추가' });
+
+  it('시안 1c: 「이 시점 카드 추가」와 「재생 지점 앞 40초 · 뒤 20초」, 라이브 단추는 없다', async () => {
+    await openPast();
+
+    expect(addButton()).toBeEnabled();
+    expect(screen.getByText('재생 지점 앞 40초 · 뒤 20초')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /수동 마킹/ })).not.toBeInTheDocument();
+  });
+
+  // 8.11 × 1000은 부동소수로 8109.999…다: 내리면 8109로 1ms 앞이 된다(계획 검증 C2). 91.39 같은 값은 곱이 정확히 떨어져 내림을 못 잡는다
+  it('8.11초에서 누르면 positionMs 8110(내림이 아니라 반올림)을 보내고 답의 카드가 목록에 바로 선다', async () => {
+    const { container } = await openPast();
+    await playTo(container, 8.11);
+    let release!: () => void;
+    server.markGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    server.markReply = { status: 201, body: VOD_MARK_CARD };
+
+    fireEvent.click(addButton());
+    await settle();
+
+    expect(server.markBodies).toHaveLength(1);
+    const body = server.markBodies[0]!;
+    expect(Object.keys(body).sort()).toEqual(['eventId', 'positionMs']);
+    expect(body.positionMs).toBe(8_110);
+    const post = fetchSpy.mock.calls.find(([u]) => String(u).endsWith('/marks'));
+    expect(String(post?.[0])).toContain(`/api/clip/broadcasts/${VOD_ID}/marks`);
+    expect(screen.getByText('0:00:08 마킹됨 · 카드 생성 중')).toBeInTheDocument();
+
+    release();
+    await settle();
+    expect(screen.queryByText(/마킹됨 · 카드 생성 중/)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '전체 9' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '수동 3' })).toBeInTheDocument();
+  });
+
+  it('F8도 같은 위치 갈래다', async () => {
+    const { container } = await openPast();
+    await playTo(container, 123.4);
+    server.markReply = { status: 201, body: VOD_MARK_CARD };
+
+    fireEvent.keyDown(document, { key: 'F8' });
+    await settle();
+
+    expect(server.markBodies).toHaveLength(1);
+    expect(server.markBodies[0]!.positionMs).toBe(123_400);
+    expect(server.markBodies[0]!).not.toHaveProperty('pressedAt');
+  });
+
+  it('200(20초 안 앞 카드)이면 알리고 그 카드 시점으로 옮긴다', async () => {
+    const { container } = await openPast();
+    await playTo(container, 610);
+    server.markReply = {
+      status: 200,
+      body: { ...VOD_MARK_CARD, id: 7, streamTimestampMs: 600_000 },
+    };
+
+    fireEvent.click(addButton());
+    await settle();
+
+    expect(screen.getByText('가까운 카드가 이미 있어요')).toBeInTheDocument();
+    expect(screen.getByText(/^0:10:00 시점까지 보는 중/)).toBeInTheDocument();
+  });
+
+  /**
+   * PR #350 codex P2: 답을 기다리는 사이 다른 방송으로 옮기면, 앞 방송의 200이 새 방송 화면을 앞 방송 카드 시각으로 옮겼다(카드 넣기는
+   * 방송 번호를 보지만 옮기기·안내는 안 봤다). 보낸 방송이 지금 방송일 때만 옮기고 알린다
+   */
+  it('답을 기다리는 사이 다른 방송으로 옮기면 앞 방송의 200이 새 방송을 옮기지도 알리지도 않는다', async () => {
+    const { container, rerender, queryClient } = await openPast();
+    await playTo(container, 610);
+    let release!: () => void;
+    server.markGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    server.markReply = {
+      status: 200,
+      body: { ...VOD_MARK_CARD, id: 7, streamTimestampMs: 600_000 },
+    };
+    fireEvent.click(addButton());
+    await settle();
+    expect(server.markBodies).toHaveLength(1);
+
+    // 다른 지난 방송(live-1, 끝남)으로 옮긴다
+    server.liveEnded = true;
+    nav.pathname = `/broadcast/vod/${STREAM_ID}`;
+    window.history.pushState({}, '', `/broadcast/vod/${STREAM_ID}`);
+    // 주소는 그리기에서 읽는다(usePathname): Next가 주소를 바꾸면 화면이 다시 그려진다
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <ToastProvider>
+          <LiveScreen />
+        </ToastProvider>
+      </QueryClientProvider>,
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    await settle();
+    expect(
+      fetchSpy.mock.calls.some(([u]) =>
+        String(u).includes(`/api/clip/broadcasts/${STREAM_ID}/jump-cards`),
+      ),
+      '새 방송으로 안 옮겨졌다: 이 갈래는 아무것도 안 잰다',
+    ).toBe(true);
+
+    release();
+    await settle();
+
+    expect(screen.queryByText('가까운 카드가 이미 있어요')).toBeNull();
+    expect(screen.queryByText(/^0:10:00 시점까지 보는 중/)).toBeNull();
+    expect(screen.queryByText(/마킹됨 · 카드 생성 중/)).toBeNull();
+  });
+
+  it('녹화가 없으면 단추가 꺼지고 F8은 보내지 않고 알린다', async () => {
+    await openPast({ spans: [] });
+
+    expect(addButton()).toBeDisabled();
+    fireEvent.keyDown(document, { key: 'F8' });
+    await settle();
+
+    expect(server.markBodies).toHaveLength(0);
+    expect(screen.getByText('재생 위치를 알 수 없어 카드를 만들 수 없어요')).toBeInTheDocument();
+  });
+
+  /**
+   * 감사 1회차: 지난 방송 주소는 명부 답 전에도 지난 방송으로 그린다(viewStatus). 그 상태로 위치 갈래를 보내면 안 된다: 방송이 사실
+   * 방송 중이면 서버가 400을 주고, 그 사이 재생기가 무엇을 틀고 있는지도 모른다. 단추는 지난 방송 모양으로 꺼지고 F8은 상태를
+   * 확인 중이라고 알린다(「재생 위치를 알 수 없다」가 아니다: 그것은 상태를 안 뒤의 말이다)
+   */
+  it('지난 방송 주소라도 방송 상태를 모르는 동안은 보내지 않고 확인 중이라고 알린다', async () => {
+    server.failLive = true;
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    await renderLive();
+
+    expect(addButton()).toBeDisabled();
+    fireEvent.keyDown(document, { key: 'F8' });
+    await settle();
+
+    expect(server.markBodies).toHaveLength(0);
+    expect(
+      screen.getByText('방송 정보를 확인하고 있어요. 잠시 뒤 다시 눌러 주세요'),
+    ).toBeInTheDocument();
+  });
+
+  it('녹화가 서버 기준점 축이 아니면(기준점 없음) 단추가 꺼지고 F8도 보내지 않는다', async () => {
+    await openPast({ origin: false });
+
+    expect(addButton()).toBeDisabled();
+    fireEvent.keyDown(document, { key: 'F8' });
+    await settle();
+
+    expect(server.markBodies).toHaveLength(0);
   });
 });
 
@@ -3794,6 +4365,24 @@ describe('LiveScreen: 라이브 되감기 채팅(POK-326)', () => {
     expect(within(chatPanel()).getByText(/^0:47:22 시점까지 보는 중/)).toBeInTheDocument();
     expect(within(chatPanel()).getByText('라이브 2835초')).toBeInTheDocument();
     expect(within(chatPanel()).queryByText('라이브 2845초')).toBeNull();
+  });
+
+  /**
+   * 수동 마킹(POK-392)의 200은 같은 eventId이거나 20초 안의 앞 카드다. 라이브는 알리기만 하고 재생을 되감지 않는다(PRD): 보던 실시간을
+   * 앞 카드로 끌고 가면 방송을 놓친다. 지난 방송만 그 카드로 옮긴다. 재생기가 서 있어야 「안 옮겼다」가 무언가를 잰다(감사 2회차 n1)
+   */
+  it('수동 마킹이 앞 카드(200)를 받아도 라이브 재생기는 되감지 않는다', async () => {
+    const { container } = await openLive();
+    const video = container.querySelector('video')!;
+    const before = video.currentTime;
+    server.markReply = { status: 200, body: CARDS[1] };
+
+    fireEvent.keyDown(document, { key: 'F8' });
+    await tick(container);
+
+    expect(server.markBodies).toHaveLength(1);
+    expect(screen.getByText('가까운 카드가 이미 있어요')).toBeInTheDocument();
+    expect(video.currentTime).toBeCloseTo(before, 0);
   });
 
   it('영상 목록에 시각 표시가 없으면 라이브 카드는 재생기의 방송 경과로 옮긴다: 옮기지 못했다고 하지 않는다', async () => {

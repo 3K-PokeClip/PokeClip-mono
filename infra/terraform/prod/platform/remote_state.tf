@@ -108,14 +108,59 @@ resource "terraform_data" "runtime_contract" {
       error_message = "런타임 출력 app_task_resource_arns 에 모르는 키가 있다(계약 키 이름 확인)."
     }
 
+    # SQS 큐 이름은 영숫자 · - · _ 이고 FIFO 큐만 .fifo 로 끝난다(SQS
+    # CreateQueue API 참조 QueueName). 점은 그 접미에만 허용한다.
     precondition {
       condition = alltrue(flatten([
         for arns in values(local.task_resource_arns) : [
           for key, arn in arns :
-          endswith(key, "_bucket_arn") ? can(regex("^arn:aws:s3:::[a-z0-9][a-z0-9.-]+$", arn)) : can(regex("^arn:aws:sqs:[a-z0-9-]+:[0-9]{12}:[A-Za-z0-9_-]+$", arn))
+          endswith(key, "_bucket_arn") ? can(regex("^arn:aws:s3:::[a-z0-9][a-z0-9.-]+$", arn)) : can(regex("^arn:aws:sqs:[a-z0-9-]+:[0-9]{12}:[A-Za-z0-9_-]+(\\.fifo)?$", arn))
         ]
       ]))
       error_message = "런타임 출력 app_task_resource_arns 의 값이 와일드카드 없는 S3 버킷 · SQS 큐 ARN 이 아니다."
+    }
+
+    # iam 에서 POSTGRES_PASSWORD 가 비어 있지 않으면 auth · clip 이 부팅을
+    # 거부한다(db-support DataSourceLoginConfiguration.rejectLeftoverPassword).
+    # env 든 secrets 든 같은 이름이면 앱이 읽는다.
+    precondition {
+      condition = var.app_db_auth != "iam" || alltrue([
+        for service in ["auth", "clip"] :
+        !contains(concat(keys(local.service_env[service]), keys(local.service_secrets[service])), "POSTGRES_PASSWORD")
+      ])
+      error_message = "app_db_auth = iam 인데 런타임 출력이 auth · clip 에 POSTGRES_PASSWORD 를 준다 — 앱이 부팅을 거부한다. 런타임 app_secret_arns · app_env 에서 지운다."
+    }
+
+    # auth 는 resolve 전용 토큰이 있으면 허용 대역이 빌 때 부팅을 거부한다
+    # (auth StreamKeyResolveSecurityConfig.requireSafeToOpen). 앱은 env 든
+    # secrets 든 같은 이름이면 읽는다. secrets 값은 plan 에서 볼 수 없어 키가
+    # 있으면 값이 있다고 보고, env 값은 공백뿐이면 빈 값으로 본다(앱의
+    # isBlank 와 같다).
+    precondition {
+      condition = (
+        !(
+          contains(keys(local.service_secrets.auth), "STREAM_KEY_RESOLVE_TOKEN") ||
+          trimspace(lookup(local.service_env.auth, "STREAM_KEY_RESOLVE_TOKEN", "")) != ""
+        ) ||
+        contains(keys(local.service_secrets.auth), "STREAM_KEY_RESOLVE_ALLOWED_CIDRS") ||
+        trimspace(lookup(local.service_env.auth, "STREAM_KEY_RESOLVE_ALLOWED_CIDRS", "")) != ""
+      )
+      error_message = "런타임 출력이 auth 에 STREAM_KEY_RESOLVE_TOKEN 을 주는데(app_secret_arns · app_env 어느 쪽이든) STREAM_KEY_RESOLVE_ALLOWED_CIDRS 가 둘 다에 없거나 app_env 값이 비었다 — auth 가 부팅을 거부한다."
+    }
+
+    # 런타임 app_env 는 평문 태스크 env 로 들어가 태스크 정의를 읽는 누구에게나
+    # 보인다 — 비밀은 app_secret_arns 로 와야 한다(장부 16). 이름의 끝 토막만
+    # 보는 것은 STREAM_KEY_SECRET_STORE_TYPE · CLOUDFRONT_KEY_PAIR_ID 처럼 비밀
+    # 낱말이 가운데 든 설정 이름을 막지 않기 위해서다.
+    precondition {
+      condition = alltrue(flatten([
+        for env in values(try(local.runtime.app_env, {})) : [
+          for name in keys(env) :
+          contains(var.app_env_non_secret_names, name) ||
+          !contains(["PASSWORD", "PASSWD", "PASSPHRASE", "SECRET", "TOKEN", "KEY", "PEM", "CREDENTIAL", "CREDENTIALS"], reverse(split("_", upper(name)))[0])
+        ]
+      ]))
+      error_message = "런타임 출력 app_env 에 끝 토막이 PASSWORD · PASSWD · PASSPHRASE · SECRET · TOKEN · KEY · PEM · CREDENTIAL(S) 인 이름이 있다 — 비밀이면 런타임 app_secret_arns 로 옮기고, 비밀이 아니면 app_env_non_secret_names 에 적는다."
     }
   }
 }

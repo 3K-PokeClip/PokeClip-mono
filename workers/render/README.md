@@ -121,7 +121,7 @@ MediaMTX 조각은 **조각마다 머리(`ftyp+moov`)가 있는 완전한 fMP4**
 
 | 이름 | 기본값 | 뜻 |
 |---|---|---|
-| `RENDER_QUEUE_URL` | (빈 값) | 주문 줄 주소. **비면 줄을 안 본다**(부품만 띄울 때) |
+| `RENDER_QUEUE_URL` | (빈 값) | 주문 줄 주소. **비면 줄을 안 본다.** 사진 줄(`THUMBNAIL_QUEUE_URL`)까지 둘 다 비면 경고 한 줄(`render.worker_idle`)을 남긴 채 일 없이 떠 있는다(POK-332: 끝나 버리면 dev compose가 끝없이 다시 띄운다. 로컬에서는 Ctrl+C로 끈다) |
 | `RENDER_QUEUE_ENDPOINT` | (빈 값) | 가짜 SQS(LocalStack) 주소 |
 | `S3_ENDPOINT` · `S3_PATH_STYLE` | (빈 값) · `false` | 가짜 S3 주소 · 경로식 주소 |
 | `AWS_REGION` | `ap-northeast-2` | 자격증명은 SDK 기본 체인(env·프로필·역할) |

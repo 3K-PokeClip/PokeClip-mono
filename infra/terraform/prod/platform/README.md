@@ -26,7 +26,7 @@ prod 의 요청 입구와 앱 서비스를 만드는 루트입니다(설계 3-1 
 | 내부 ALB 인그레스 ← CloudFront VPC origin | edge |
 | 내부 ALB · NLB 이그레스 → Media · Media 대상 등록 · Media ↔ RDS | media |
 | Media ↔ auth · chat ↔ auth · clip 규칙(auth → chat-collector 8083 포함) | 런타임 2단(POK-306) |
-| 일꾼 · chat 서비스 | POK-306 · POK-408(출력 `ecs_cluster_arn` · `discovery_namespace_id` · `service_sg_ids` 를 씀) |
+| 일꾼 · chat 서비스 | POK-408 · POK-306(출력 `ecs_cluster_arn` · `discovery_namespace_id` · `service_sg_ids` 를 씀) |
 
 용어:
 
@@ -85,15 +85,16 @@ next 이미지를 다시 빌드해야 합니다.
 | 서비스 | 이름 | 값 |
 |---|---|---|
 | auth | `FORWARD_HEADERS_STRATEGY` | `native`(로드밸런서 뒤) |
-| auth | `SERVER_TOMCAT_REMOTEIP_INTERNALPROXIES` | `auth_internal_proxies` — 빈 값이면 넣지 않음(톰캣 기본 대역) |
+| auth | `FORWARD_HEADERS_TRUSTED_PROXIES` | network `vpc_cidr`(ALB · next 가 VPC 안 — 빈 값이면 auth 가 아무 프록시도 안 믿는다) |
 | auth | `STREAM_KEY_SECRET_STORE_TYPE` | `aws`(prod 는 처음부터 Secrets Manager — 앱 기본값 postgres) |
 | auth | `STREAM_KEY_SECRET_RETIRE_FROM` | `aws`(PG 이관이 없어 옛 암호도 Secrets Manager 에만 있다) |
 | auth | `STREAM_KEY_SECRET_REF_PREFIX` | `stream_key_secret_prefix`(작업 역할 정책과 같은 값) |
 | clip | `CLOUDFRONT_KEY_PAIR_ID` | secrets `public_key_id` |
 | clip | `MEDIA_BASE_URL` · `PLAYBACK_COOKIE_DOMAIN` | `https://media.pokeclip.com` · `.pokeclip.com` |
-| auth | `CLIP_BASE_URL` · `COLLECTOR_BASE_URL` | `http://clip.pokeclip.internal:8081` · `http://chat-collector.pokeclip.internal:8083`(탈퇴 정리 — 비면 부팅 거부. chat-collector 등록은 POK-408) |
+| auth | `CLIP_BASE_URL` · `COLLECTOR_BASE_URL` | `http://clip.pokeclip.internal:8081` · `http://chat-collector.pokeclip.internal:8083`(탈퇴 정리 — 비면 부팅 거부. chat-collector 등록은 POK-306) |
 | auth · clip | `CORS_ALLOWED_ORIGINS` | `cors_allowed_origins`(기본 `https://app.pokeclip.com` — 위 「공개 ALB 규칙」) |
 | clip | `AUTH_BASE_URL` | `http://auth.pokeclip.internal:8082`(clip → auth 자격 판정) |
+| clip | `COLLECTOR_BASE_URL` | auth 와 같은 값(비어도 부팅은 되지만 채팅 문 셋이 503) |
 | clip | `PLAYBACK_REQUIRED` | `true`(서명 값 셋 중 하나라도 빠지면 부팅 거부 — POK-321) |
 | clip | `CLOUDFRONT_PRIVATE_KEY_PEM`(비밀) | secrets `signing_key_secret_arn` |
 | auth · clip | `POSTGRES_USER` | 런타임 `app_db_users` 의 자기 사용자 |
@@ -125,12 +126,19 @@ next 이미지를 다시 빌드해야 합니다.
 *   맨 `*` Resource 는 없습니다(`ecs_service` 검증). 런타임 출력 값은
     `terraform_data.runtime_contract` 가 먼저 봅니다 — 와일드카드 · 모르는 키 ·
     DB 사용자 이름 꼴이 틀리면 plan 이 멈춥니다.
+*   같은 자원이 앱의 부팅 거부 조건도 미리 봅니다 — `app_db_auth = "iam"` 인데
+    auth · clip 에 `POSTGRES_PASSWORD` 가 오거나, auth 에
+    `STREAM_KEY_RESOLVE_TOKEN` 이 오는데 `STREAM_KEY_RESOLVE_ALLOWED_CIDRS` 가
+    비면 plan 이 멈춥니다.
+*   런타임 `app_env` 이름의 끝 토막이 `PASSWORD` · `SECRET` · `TOKEN` · `KEY`
+    등이면 plan 이 멈춥니다(평문 env 라 비밀은 `app_secret_arns` 로). 비밀이
+    아닌 그런 이름은 `app_env_non_secret_names` 에 적습니다.
 *   next 는 AWS 를 부르지 않아 작업 역할에 정책이 없습니다.
 
 ## 값과 적용
 
 `image_digests` · `proxy_ports` · `media_health_path` · `ingest_allowed_cidrs`
-· `postgres_sslrootcert` 는 기본값이 없습니다. `terraform.tfvars.example` 을
+는 기본값이 없습니다. `terraform.tfvars.example` 을
 `terraform.tfvars`(추적 안 함)로 복사해 채웁니다. `proxy_ports` ·
 `media_health_path` 는 Media 상자 nginx 포트 · 헬스 경로의 정본입니다 —
 대상 그룹이 이 값을 쓰고, 같은 값을 출력(`media_proxy_ports` ·
@@ -143,6 +151,7 @@ next 이미지를 다시 빌드해야 합니다.
 | `waf_rate_limit` | 2000 | IP 하나당 5분 요청 수 |
 | `services` | next 3000 `/api/ping` 512/1024 · 60초, auth 8082 · clip 8081 `/actuator/health` 1024/2048 · 180초 | 포트 · 헬스 경로 · CPU · 메모리(MiB) · 기동 유예(Flyway) |
 | `app_db_auth` | `iam` | `password` 면 `rds-db:connect` · `POSTGRES_AUTH` 없음 |
+| `postgres_sslrootcert` | `/etc/pokeclip/rds-ca/global-bundle.pem` | 서버 이미지의 RDS CA 번들 경로(POK-407 코멘트 10715 · 커밋 2975805e) — iam 에서만 넣음 |
 | `cors_allowed_origins` | `https://app.pokeclip.com` | auth · clip 부팅 필수 값(실사용 없음) |
 | `ingest_public_approved` | `false` | `ingest_allowed_cidrs` 에 /16 보다 넓은 CIDR(0.0.0.0/0 등)을 받을지 — S1 게이트 · 응답기(M15) 반영 뒤 8a 단계에서만 `true` |
 | `stream_key_secret_prefix` | `pokeclip/prod/stream-key/` | auth 스트림 키 비밀 이름 접두 |
@@ -151,10 +160,11 @@ next 이미지를 다시 빌드해야 합니다.
 (network · certs · secrets · registry · runtime)로 읽습니다. 런타임 1단 키는
 `prod/runtime/terraform.tfstate` 로 고정입니다(CONTRACT-runtime.md).
 
-**O7d 선행 확인 — POK-407 머지 여부**: auth · clip 의 IAM DB 인증 코드
-(`POSTGRES_AUTH=iam`)가 머지되지 않았으면 tfvars 에서
-`app_db_auth = "password"` 로 둡니다. 그때는 런타임이 DB 비밀번호 그릇을
-`app_secret_arns` 로 줍니다.
+**O7d 선행 확인 — IAM DB 인증**: PR 343 으로 auth · clip(chat-collector
+포함)도 db-support 의 `POSTGRES_AUTH` 를 읽습니다 — `app_db_auth` 는 기본
+`iam` 을 유지합니다. iam 에서는 런타임이 DB 비밀번호 그릇
+(`POSTGRES_PASSWORD`)을 주지 않습니다. 그 키가 있으면 앱이 부팅을 거부합니다.
+`password` 로 바꿀 때만 런타임이 그 그릇을 `app_secret_arns` 로 줍니다.
 
 적용은 O7d(kty 승인)입니다. 그 전에 [단계 직전 점검](/infra/terraform/runbooks/stage-precheck.md)
 과 [ALB 교차 영역 실측](/infra/terraform/runbooks/alb-cross-zone-bench.md)을
@@ -167,6 +177,17 @@ provider 의 `default_tags` 네 키(`TerraformRoot = prod/platform`)는 태그�
 받는 자원에 붙습니다. mock 시험은 태그를 보지 못하므로 plan 의 `tags_all` 로
 확인합니다.
 
+### apply 뒤 되돌리기
+
+apply 한 뒤 이 루트를 내리거나 코드를 되돌릴(revert) 때는
+[prod 철거 런북](/infra/terraform/runbooks/prod-teardown.md)을 따릅니다.
+**revert 전에** 내립니다 — 되돌리면 이 루트의 코드가 사라져 destroy 할
+구성이 없어지고, 자원이 관리 밖에 남습니다. 이 루트의 출력을 읽는
+prod/media 를 먼저 내리고(이 루트를 먼저 내리면 media 의 destroy plan 이
+출력 이름으로 실패합니다), edge · records · 런타임 2단 같은 다른 소비
+루트가 apply 돼 있으면 그 루트도 먼저입니다(아래 「출력」). destroy 마다
+plan 요지를 kty 가 보고 승인합니다.
+
 ## 출력
 
 소비 루트와의 계약입니다(설계 3-2). 이름을 바꾸지 않습니다.
@@ -178,5 +199,5 @@ provider 의 `default_tags` 네 키(`TerraformRoot = prod/platform`)는 태그�
 | `nlb_{dns_name,zone_id,sg_id}` | records(ingest 별칭) · media(이그레스 → Media) |
 | `target_group_arns`(ingest · live · control · playback) | media — Media 상자 등록 |
 | `media_proxy_ports`(live · control · playback · health) · `media_health_path` | media — 상자 nginx 포트 · 헬스 경로(대상 그룹과 같은 값) |
-| `ecs_cluster_arn` · `discovery_namespace_id` · `service_sg_ids`(auth · clip · next) | 런타임 2단 · 일꾼(POK-306) · chat(POK-408) |
+| `ecs_cluster_arn` · `discovery_namespace_id` · `service_sg_ids`(auth · clip · next) | 런타임 2단 · 일꾼(POK-408) · chat(POK-306) |
 | `clip_execution_role_arn` | 런타임 2단 |

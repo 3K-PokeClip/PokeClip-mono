@@ -197,7 +197,6 @@ run "rejects_invalid_ingest_allowed_cidr" {
   expect_failures = [var.ingest_allowed_cidrs]
 }
 
-# 헬스는 트래픽과 다른 포트(TCP)여야 한다.
 # /16 보다 넓은 출처(0.0.0.0/0 등)는 공개 승인(S1 게이트 · 응답기 — 설계 4-6)
 # 뒤에만 받는다.
 run "rejects_wide_cidr_without_public_approval" {
@@ -247,6 +246,7 @@ run "accepts_slash_16_and_narrower_without_approval" {
   }
 }
 
+# 헬스는 트래픽과 다른 포트(TCP)여야 한다.
 run "rejects_health_port_equal_to_srt_port" {
   command = plan
 

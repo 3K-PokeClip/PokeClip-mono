@@ -1,6 +1,6 @@
 'use client';
 
-import { Pencil, Zap } from 'lucide-react';
+import { CirclePlus, Pencil, Zap } from 'lucide-react';
 import { Button, IconButton, Tag } from '@/ui';
 import styles from './LiveScreen.module.css';
 import { MARK_HOTKEY } from './markKey';
@@ -18,6 +18,8 @@ export function StreamInfoBar({
   uptimeNote,
   metaNote,
   pendingLabel,
+  markMode,
+  markDisabled,
   onMark,
 }: {
   stream: LiveStream;
@@ -38,6 +40,13 @@ export function StreamInfoBar({
   metaNote: string;
   /** 만드는 중인 카드의 시각 — 있으면 버튼 아래 피드백이 선다 */
   pendingLabel: string | null;
+  /**
+   * 라이브는 시안 1b 「수동 마킹 F8」, 지난 방송은 시안 1c 「이 시점 카드 추가」(재생 위치에 카드를 세운다, POK-392). 화면 상태로
+   * 그린다: 지난 방송 주소는 명부 답 전에도 지난 방송 단추다(눌러지는지는 markDisabled가 정한다)
+   */
+  markMode: 'live' | 'past';
+  /** 지금은 못 누른다: 방송 상태를 모르거나, 지난 방송인데 재생 위치를 서버 기준점 축으로 못 읽는다(녹화 없음·기준점 없음) */
+  markDisabled: boolean;
   onMark: () => void;
 }) {
   return (
@@ -82,16 +91,33 @@ export function StreamInfoBar({
       </div>
       <span className={styles.infoRule} aria-hidden />
       <div className={styles.markBlock}>
-        <Button
-          variant="solid"
-          size="sm"
-          fullWidth
-          onClick={onMark}
-          iconStart={<Zap size={13} aria-hidden />}
-        >
-          수동 마킹
-          <kbd className={styles.markHotkey}>{MARK_HOTKEY}</kbd>
-        </Button>
+        {markMode === 'past' ? (
+          <>
+            <Button
+              variant="solid"
+              size="sm"
+              fullWidth
+              disabled={markDisabled}
+              onClick={onMark}
+              iconStart={<CirclePlus size={13} aria-hidden />}
+            >
+              이 시점 카드 추가
+            </Button>
+            <span className={styles.markNote}>재생 지점 앞 40초 · 뒤 20초</span>
+          </>
+        ) : (
+          <Button
+            variant="solid"
+            size="sm"
+            fullWidth
+            disabled={markDisabled}
+            onClick={onMark}
+            iconStart={<Zap size={13} aria-hidden />}
+          >
+            수동 마킹
+            <kbd className={styles.markHotkey}>{MARK_HOTKEY}</kbd>
+          </Button>
+        )}
         {/* 눌렀다는 사실이 화면에만 남으면 스크린리더 사용자는 마킹됐는지 알 수 없다.
             쉴 때는 비운다 — CSS가 빈 요소를 접어 버튼이 바의 가운데에 그대로 선다. */}
         <span className={styles.markFeedback} role="status">

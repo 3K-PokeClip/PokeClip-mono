@@ -4,7 +4,8 @@
 # 7(auth 프록시) · 런타임 계약 검사.
 #
 # 앞 루트 상태 흉내 · 가짜 값은 platform.tftest.hcl 과 같다(시험 파일마다
-# 따로 둬야 한다). 루트 시험은 하위 모듈 안의 자원을 볼 수 없어 모듈에 넘기는
+# 따로 둬야 한다). 출력 ARN 을 자원마다 다르게 두는 override_resource 는 그
+# 출력을 단언하는 platform.tftest.hcl 에만 있다. 루트 시험은 하위 모듈 안의 자원을 볼 수 없어 모듈에 넘기는
 # 선언(locals) · 루트 자원 · 모듈 출력을 단언한다.
 
 mock_provider "aws" {
@@ -304,10 +305,17 @@ run "auth_trusts_forwarded_headers_natively" {
     error_message = "auth FORWARD_HEADERS_STRATEGY 가 native 가 아니다."
   }
 
-  # 빈 값이면 톰캣 기본 신뢰 대역(사설망 · 루프백)을 쓴다 — env 를 넣지 않는다.
+  # 신뢰 대역 = network vpc_cidr(가짜 192.0.2.0/24) — ALB · next 가 VPC 안이다.
+  # auth 는 빈 값을 「아무 프록시도 안 믿음」 으로 읽는다(POK-316).
+  assert {
+    condition     = try(local.service_env.auth["FORWARD_HEADERS_TRUSTED_PROXIES"], "") == "192.0.2.0/24"
+    error_message = "auth FORWARD_HEADERS_TRUSTED_PROXIES 가 network vpc_cidr 가 아니다."
+  }
+
+  # 옛 이름(톰캣 속성 직접 지정)은 쓰지 않는다 — POK-316 계약 이름은 위 하나다.
   assert {
     condition     = !contains(keys(local.service_env.auth), "SERVER_TOMCAT_REMOTEIP_INTERNALPROXIES")
-    error_message = "auth_internal_proxies 가 빈 값인데 internal-proxies env 가 있다."
+    error_message = "auth 에 옛 신뢰 대역 env(SERVER_TOMCAT_REMOTEIP_INTERNALPROXIES)가 남아 있다."
   }
 
   # 탈퇴 정리(withdrawal-purge)가 부르는 주소 — 비면 auth 가 부팅하지 않는다.
@@ -380,19 +388,6 @@ run "rejects_public_ingest_without_approval" {
   }
 
   expect_failures = [var.ingest_allowed_cidrs]
-}
-
-run "auth_internal_proxies_variable_sets_env" {
-  command = plan
-
-  variables {
-    auth_internal_proxies = "192\\.0\\.2\\.\\d{1,3}"
-  }
-
-  assert {
-    condition     = local.service_env.auth["SERVER_TOMCAT_REMOTEIP_INTERNALPROXIES"] == "192\\.0\\.2\\.\\d{1,3}"
-    error_message = "auth_internal_proxies 값이 internal-proxies env 로 들어가지 않는다."
-  }
 }
 
 # --- 앱 DB IAM 인증(POK-407) ---
@@ -758,6 +753,90 @@ run "runtime_contract_rejects_unknown_resource_key" {
   }
 
   expect_failures = [terraform_data.runtime_contract]
+}
+
+# 런타임 app_env 는 평문 태스크 env 다 — 비밀은 app_secret_arns 로 와야 한다
+# (장부 16). 이름 끝 토막이 PASSWORD · SECRET · TOKEN · KEY 등이면 멈춘다.
+run "rejects_secret_like_name_in_runtime_app_env" {
+  command = plan
+
+  override_data {
+    target = data.terraform_remote_state.runtime
+    values = {
+      outputs = {
+        rds_sg_id              = "sg-0rds"
+        rds_resource_id        = "db-ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        rewind_bucket_arn      = "arn:aws:s3:::pokeclip-prod-rewind-example"
+        app_db_users           = { auth = "app_auth", clip = "app_clip" }
+        app_env                = { auth = {}, clip = { POSTGRES_PASSWORD = "example-not-a-secret" } }
+        app_secret_arns        = { auth = {}, clip = {} }
+        app_task_resource_arns = { auth = {}, clip = {} }
+      }
+    }
+  }
+
+  expect_failures = [terraform_data.runtime_contract]
+}
+
+# 비밀 낱말이 끝 토막이 아닌 실제 이름(auth application.yml · clip env)은
+# 통과한다 — 오탐 방지.
+run "allows_names_with_secret_word_not_last" {
+  command = plan
+
+  override_data {
+    target = data.terraform_remote_state.runtime
+    values = {
+      outputs = {
+        rds_sg_id         = "sg-0rds"
+        rds_resource_id   = "db-ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        rewind_bucket_arn = "arn:aws:s3:::pokeclip-prod-rewind-example"
+        app_db_users      = { auth = "app_auth", clip = "app_clip" }
+        app_env = {
+          auth = {
+            STREAM_KEY_SECRET_STORE_TYPE     = "aws"
+            STREAM_KEY_RESOLVE_ALLOWED_CIDRS = "192.0.2.0/24"
+          }
+          clip = { CLOUDFRONT_KEY_PAIR_ID = "K0EXAMPLEKEYID" }
+        }
+        app_secret_arns        = { auth = {}, clip = {} }
+        app_task_resource_arns = { auth = {}, clip = {} }
+      }
+    }
+  }
+
+  assert {
+    condition     = local.service_env.auth["STREAM_KEY_RESOLVE_ALLOWED_CIDRS"] == "192.0.2.0/24"
+    error_message = "비밀 낱말이 끝 토막이 아닌 app_env 이름이 태스크 env 로 넘어가지 않는다."
+  }
+}
+
+# 비밀처럼 보이지만 비밀이 아닌 이름은 app_env_non_secret_names 에 적어 통과시킨다.
+run "allows_secret_like_name_listed_as_non_secret" {
+  command = plan
+
+  variables {
+    app_env_non_secret_names = ["NEXT_PUBLIC_POSTHOG_KEY"]
+  }
+
+  override_data {
+    target = data.terraform_remote_state.runtime
+    values = {
+      outputs = {
+        rds_sg_id              = "sg-0rds"
+        rds_resource_id        = "db-ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        rewind_bucket_arn      = "arn:aws:s3:::pokeclip-prod-rewind-example"
+        app_db_users           = { auth = "app_auth", clip = "app_clip" }
+        app_env                = { next = { NEXT_PUBLIC_POSTHOG_KEY = "phc_example" }, auth = {}, clip = {} }
+        app_secret_arns        = { auth = {}, clip = {} }
+        app_task_resource_arns = { auth = {}, clip = {} }
+      }
+    }
+  }
+
+  assert {
+    condition     = local.service_env.next["NEXT_PUBLIC_POSTHOG_KEY"] == "phc_example"
+    error_message = "app_env_non_secret_names 에 적은 이름이 태스크 env 로 넘어가지 않는다."
+  }
 }
 
 run "rejects_proxy_port_used_by_ingest_auth" {

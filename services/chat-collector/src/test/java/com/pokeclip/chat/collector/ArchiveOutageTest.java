@@ -13,7 +13,7 @@ import com.pokeclip.chat.collector.fake.FakeChzzkBehavior;
 import com.pokeclip.chat.collector.fake.FakeChzzkTest;
 import com.pokeclip.chat.collector.reconnect.ReconnectPolicy;
 import com.pokeclip.chat.collector.support.IntegrationTestSupport;
-import com.pokeclip.chat.collector.support.StallingTcpProxy;
+import com.pokeclip.db.support.StallingTcpProxy;
 import com.pokeclip.chat.collector.support.TestPersistence;
 import com.pokeclip.web.support.LogCaptor;
 import org.junit.jupiter.api.AfterEach;

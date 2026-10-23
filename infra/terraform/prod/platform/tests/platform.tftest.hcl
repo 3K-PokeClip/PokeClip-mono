@@ -183,6 +183,58 @@ override_data {
   }
 }
 
+# 출력 · WAF 연결로 루트 밖에 나가는 ARN 은 자원마다 다르게 둔다(장부 8 — 위
+# mock 기본값은 같은 종류끼리 모두 같아 엇갈린 연결을 가린다). 여기 없는
+# 대상 그룹 · ALB · 역할은 mock 기본값(example)이라 아래 값 어느 것과도 다르다.
+override_resource {
+  target = module.public_alb.aws_lb.this
+  values = {
+    arn = "arn:aws:elasticloadbalancing:ap-northeast-2:111122223333:loadbalancer/app/pokeclip-prod-public/000000000000b001"
+  }
+}
+
+override_resource {
+  target = module.internal_alb.aws_lb.this
+  values = {
+    arn = "arn:aws:elasticloadbalancing:ap-northeast-2:111122223333:loadbalancer/app/pokeclip-prod-internal/000000000000b002"
+  }
+}
+
+override_resource {
+  target = module.nlb.aws_lb_target_group.srt
+  values = {
+    arn = "arn:aws:elasticloadbalancing:ap-northeast-2:111122223333:targetgroup/pokeclip-prod-ingest/000000000000a001"
+  }
+}
+
+override_resource {
+  target = module.internal_alb.aws_lb_target_group.this["live"]
+  values = {
+    arn = "arn:aws:elasticloadbalancing:ap-northeast-2:111122223333:targetgroup/pokeclip-prod-internal-live/000000000000a002"
+  }
+}
+
+override_resource {
+  target = module.internal_alb.aws_lb_target_group.this["control"]
+  values = {
+    arn = "arn:aws:elasticloadbalancing:ap-northeast-2:111122223333:targetgroup/pokeclip-prod-internal-control/000000000000a003"
+  }
+}
+
+override_resource {
+  target = module.internal_alb.aws_lb_target_group.this["playback"]
+  values = {
+    arn = "arn:aws:elasticloadbalancing:ap-northeast-2:111122223333:targetgroup/pokeclip-prod-internal-playback/000000000000a004"
+  }
+}
+
+override_resource {
+  target = module.clip.aws_iam_role.execution
+  values = {
+    arn = "arn:aws:iam::111122223333:role/pokeclip/prod/pokeclip-prod-clip-execution"
+  }
+}
+
 variables {
   image_digests = {
     next = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
@@ -205,24 +257,24 @@ variables {
 run "routes_api_auth_prefixes_from_next_config" {
   command = plan
 
-  # web/next.config.ts 의 AUTH_API_URL 줄 아홉 접두사 × {/api/x, /api/x/*}.
+  # web/next.config.ts 의 AUTH_API_URL 줄을 파일에서 읽어 auth 접두사와 대조한다
+  # (장부 13 — 손으로 옮긴 목록이 어긋나면 그 경로가 api 호스트에서 404).
   assert {
-    condition = toset(flatten([
-      for prefix in local.public_listener_rules.auth.path_prefixes : [prefix, "${prefix}/*"]
-      ])) == toset(flatten([
-      for prefix in [
-        "/api/auth",
-        "/api/stream-keys",
-        "/api/chzzk-link",
-        "/api/editor-delegations",
-        "/api/editor-invitations",
-        "/api/youtube-link",
-        "/api/soop-link",
-        "/api/streamers",
-        "/api/profile-photos",
-      ] : [prefix, "${prefix}/*"]
-    ]))
-    error_message = "api 호스트 auth 규칙 패턴 집합이 next.config.ts 의 아홉 접두사 × 두 패턴(18개)과 다르다."
+    condition = toset(local.public_listener_rules.auth.path_prefixes) == toset(flatten(regexall(
+      "source: '(/api/[^':]+)/:path\\*', target: process\\.env\\.AUTH_API_URL",
+      file("${path.module}/../../../../web/next.config.ts"),
+    )))
+    error_message = "api 호스트 auth 규칙 접두사가 web/next.config.ts 의 AUTH_API_URL 줄(source '/api/x/:path*')과 다르다 — load_balancers.tf auth_path_prefixes 를 맞춘다."
+  }
+
+  # 위 정규식이 못 읽는 꼴의 AUTH_API_URL 줄(다른 source 모양 · 따옴표)이 생기면
+  # 개수가 어긋나 여기서 멈춘다 — 대조가 조용히 줄지 않게.
+  assert {
+    condition = length(local.public_listener_rules.auth.path_prefixes) == length(regexall(
+      "process\\.env\\.AUTH_API_URL",
+      file("${path.module}/../../../../web/next.config.ts"),
+    ))
+    error_message = "web/next.config.ts 의 AUTH_API_URL 줄 수와 auth 접두사 수가 다르다(읽지 못한 꼴의 줄 · 중복 접두사) — 시험 정규식이나 auth_path_prefixes 를 맞춘다."
   }
 
   assert {
@@ -468,6 +520,52 @@ run "lb_outputs_match_consumer_contract" {
       }
     )
     error_message = "출력 ecs_cluster_arn · discovery_namespace_id · clip_execution_role_arn · service_sg_ids 가 자원 · 모듈 출력과 다르다."
+  }
+}
+
+# 소비 루트가 읽는 출력이 맞는 자원을 가리키는지 값으로 본다(장부 8). 위
+# override_resource 로 자원마다 ARN 이 달라, 출력을 엇갈려 이으면(예: live 에
+# 공개 ALB 의 auth 대상 그룹) 여기서 걸린다.
+run "boundary_outputs_point_at_distinct_resources" {
+  command = apply
+
+  assert {
+    condition = output.target_group_arns == {
+      ingest   = "arn:aws:elasticloadbalancing:ap-northeast-2:111122223333:targetgroup/pokeclip-prod-ingest/000000000000a001"
+      live     = "arn:aws:elasticloadbalancing:ap-northeast-2:111122223333:targetgroup/pokeclip-prod-internal-live/000000000000a002"
+      control  = "arn:aws:elasticloadbalancing:ap-northeast-2:111122223333:targetgroup/pokeclip-prod-internal-control/000000000000a003"
+      playback = "arn:aws:elasticloadbalancing:ap-northeast-2:111122223333:targetgroup/pokeclip-prod-internal-playback/000000000000a004"
+    }
+    error_message = "출력 target_group_arns 가 NLB ingest · 내부 ALB live · control · playback 대상 그룹을 저마다 가리키지 않는다."
+  }
+
+  assert {
+    condition = (
+      output.public_alb_arn == "arn:aws:elasticloadbalancing:ap-northeast-2:111122223333:loadbalancer/app/pokeclip-prod-public/000000000000b001" &&
+      output.internal_alb_arn == "arn:aws:elasticloadbalancing:ap-northeast-2:111122223333:loadbalancer/app/pokeclip-prod-internal/000000000000b002" &&
+      aws_wafv2_web_acl_association.public.resource_arn == output.public_alb_arn
+    )
+    error_message = "출력 public_alb_arn · internal_alb_arn 이나 WAF 연결 대상이 공개 · 내부 ALB 를 저마다 가리키지 않는다."
+  }
+
+  assert {
+    condition     = output.clip_execution_role_arn == "arn:aws:iam::111122223333:role/pokeclip/prod/pokeclip-prod-clip-execution"
+    error_message = "출력 clip_execution_role_arn 이 clip 실행 역할이 아니다(작업 역할 · 다른 서비스 역할)."
+  }
+
+  # SG id 는 mock 이 자원마다 무작위로 만든다 — 엇갈림을 잡으려면 서로 달라야
+  # 한다(전제 확인).
+  assert {
+    condition = length(distinct([
+      output.service_sg_ids.next,
+      output.service_sg_ids.auth,
+      output.service_sg_ids.clip,
+      output.public_alb_sg_id,
+      output.internal_alb_sg_id,
+      output.nlb_sg_id,
+      "sg-0rds",
+    ])) == 7
+    error_message = "서비스 · ALB · NLB · RDS SG id 가 서로 다르지 않아 SG 엇갈림을 시험이 못 잡는다."
   }
 }
 

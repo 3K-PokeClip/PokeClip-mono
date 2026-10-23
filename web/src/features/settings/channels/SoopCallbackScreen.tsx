@@ -14,7 +14,7 @@ import {
 import { ReplaceLink } from '@/components/ReplaceLink';
 import { restoreReturnPath } from '@/components/app-shell/AuthGuard';
 import { track } from '@/lib/analytics';
-import { useAuthHydration, useAuthStore } from '@/stores/auth';
+import { captureSession, useAuthHydration, useAuthStore } from '@/stores/auth';
 import { CHANNEL_SETTINGS_PATH } from './chzzkOAuth';
 import styles from './ChzzkCallbackScreen.module.css';
 
@@ -64,8 +64,16 @@ export function SoopCallbackScreen() {
       return;
     }
 
+    // 응답을 기다리는 사이 다른 탭이 계정을 바꿀 수 있다 (POK-222): 시작한 세션을 적어 둔다.
+    const isSameSession = captureSession();
     completeSoopLink({ code, state })
       .then((linked) => {
+        // 계정이 바뀌었으면 결과를 알리지 않고 돌아가기만 한다: 토스트의 채널명이 다음 사람에게
+        // 보이고 집계도 그 사람에게 붙는다. 캐시는 크로스탭 핸들러가 이미 비웠다.
+        if (!isSameSession()) {
+          back();
+          return;
+        }
         // 치지직과 같은 이유로 낙관 갱신 대신 캐시를 비운다(다른 탭의 계정 전환 뒤 늦은 응답).
         queryClient.removeQueries({ queryKey: soopLinkQueryOptions.queryKey });
         track('platform_linked', { platform: 'soop' });
@@ -84,6 +92,11 @@ export function SoopCallbackScreen() {
         ) {
           restoreReturnPath(CHANNEL_SETTINGS_PATH);
           setSignedOut(true);
+          return;
+        }
+        // 앞 계정의 실패도 다음 사람에게는 엉뚱한 안내다. 위의 「로그인 필요」는 지금 상태라 그대로 둔다.
+        if (!isSameSession()) {
+          back();
           return;
         }
         toast({ tone: 'error', ...soopLinkFailureMessage(e) });
