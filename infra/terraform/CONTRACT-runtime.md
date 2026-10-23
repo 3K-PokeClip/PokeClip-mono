@@ -35,7 +35,7 @@
 | platform → media | `media_proxy_ports`(live · control · playback · health) · `media_health_path` | Media 상자 nginx 포트 · 헬스 경로 — platform 대상 그룹과 같은 값(정본 = platform) | platform |
 | 런타임 1단 → media | `rds_endpoint` · `rds_db_name` · `rds_resource_id` · `rds_sg_id` · `rewind_bucket_arn` | 사이드카 · janitor env(주소 · DB 이름) · Media 인스턴스 역할의 `rds-db:connect`(대상 = `rds_resource_id`) · Media ↔ RDS 5432 규칙 한 쌍 · 사이드카 S3(rewind) 업로드 정책(대상 = `rewind_bucket_arn/*`) | RDS · DB 사용자 · GRANT = 런타임(DB 사용자 · GRANT 는 Terraform 이 아니라 `prod/runtime/sql/` 과 [runtime-1a 런북](runbooks/runtime-1a.md)), 접속 정책 · SG 규칙 · 업로드 정책 = media |
 | 런타임 1단 → media | `media_secret_arns`(`INTERNAL_API_TOKEN` 하나 — 앱의 그릇과 같은 ARN) | Media 인스턴스 역할 읽기 정책. 한계: 이 열쇠는 auth `/internal/**` 전부에 통한다(전용 토큰은 런타임 1단-나에서 3번과 재합의) | 그릇 · 값 = 런타임, 읽기 정책 = media |
-| 런타임 1단 → media | `broadcast_topic_arn` | 사이드카 역할의 `sns:Publish` 대상(계약9 발행 — `MessageDeduplicationId = eventId`) | 주제 = 런타임, 발행 정책 = media |
+| 런타임 1단 → media | `broadcast_topic_arn` | 사이드카 역할의 `sns:Publish` 대상(계약9 발행 — `MessageDeduplicationId = eventId`). 발행 권한은 media 역할의 신원 정책이다 — 주제 정책은 계정 루트만 주체로 둔다(기본 정책의 `Principal *` 없음) | 주제 · 주제 정책 = 런타임, 발행 정책 = media |
 | 런타임 1단 → edge | `rewind_bucket_{name,arn,regional_domain_name}` | `cdn_media` 의 `rewind-s3` 오리진 | 버킷 = 런타임 |
 | edge → 런타임 2단 | `media_distribution_arn` | rewind 버킷 정책의 OAC 허용문(조건 `AWS:SourceArn`) | 버킷 정책 = 런타임 2단 |
 | platform · media → 런타임 2단 | `service_sg_ids`(auth · clip · next) · `media_sg_id` | Media 이그레스 → auth · auth 인그레스 ← Media(내부 resolve), chat-collector · chat-detector ↔ auth · clip 규칙 | SG 규칙 = 런타임 2단 |

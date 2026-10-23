@@ -12,6 +12,13 @@
 # 암호화: 큐는 SSE-SQS. 주제는 끈다 — 발행자 KMS 권한이 미확인이다(D4 · PR
 # 한계). 그래서 편지는 주제에 머무는 동안 서버 측 암호화가 없고, 큐에 들어간
 # 뒤부터 SSE-SQS 로 암호화된다.
+#
+# 주제 정책: SNS 가 주제에 붙이는 기본 정책(Principal * · AWS:SourceOwner =
+# 이 계정) 대신 명시 정책을 둔다(kty 2026-10-24). 기본 정책은 모호하다 — *
+# 주체가 조건 하나에 기대고, 그 조건 키는 일부 서비스만 채우며 AWS 가
+# 폐지 예정으로 적었다. 리스 계정에는 dev 와 prod 주체가 같이 있어, 주제
+# 정책은 계정 루트에만 열고 누가 쓰는지는 신원 정책이 정한다. 사이드카
+# 발행 권한(sns:Publish)은 media 역할의 신원 정책이다.
 
 variable "broadcast_queue_visibility_timeout_seconds" {
   description = "계약9 큐의 숨김 시간(초). 3번 확인 전 임시값(dev 관례값)."
@@ -37,6 +44,11 @@ variable "broadcast_dlq_message_retention_seconds" {
   default     = 1209600
 }
 
+# 실행기의 data.aws_partition.current 는 켜졌을 때만 읽어(count) 따로 둔다.
+data "aws_partition" "broadcast" {}
+
+data "aws_caller_identity" "current" {}
+
 locals {
   broadcast_name_prefix = "pokeclip-prod-broadcast-lifecycle"
 
@@ -48,6 +60,37 @@ resource "aws_sns_topic" "broadcast_lifecycle" {
   name                        = "${local.broadcast_name_prefix}.fifo"
   fifo_topic                  = true
   content_based_deduplication = false
+}
+
+# 계정 루트 주체 = 이 계정의 IAM 신원 정책이 허용한 주체만. 동작은 기본
+# 정책의 여덟이다(provider 기본 정책의 SNS:Receive 는 SNS 정책 동작이 아니라
+# 뺀다). 같은 계정 주체는 신원 정책만으로 접근하므로 이 정책이 교체되는
+# 동안에도 발행 · 구독이 끊기지 않는다 — 구독과 순서를 두지 않는다.
+resource "aws_sns_topic_policy" "broadcast_lifecycle" {
+  arn = aws_sns_topic.broadcast_lifecycle.arn
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "AllowAccountIdentityPolicies"
+        Effect = "Allow"
+        Principal = {
+          AWS = "arn:${data.aws_partition.broadcast.partition}:iam::${data.aws_caller_identity.current.account_id}:root"
+        }
+        Action = [
+          "SNS:GetTopicAttributes",
+          "SNS:SetTopicAttributes",
+          "SNS:AddPermission",
+          "SNS:RemovePermission",
+          "SNS:DeleteTopic",
+          "SNS:Subscribe",
+          "SNS:ListSubscriptionsByTopic",
+          "SNS:Publish",
+        ]
+        Resource = aws_sns_topic.broadcast_lifecycle.arn
+      },
+    ]
+  })
 }
 
 resource "aws_sqs_queue" "broadcast_dlq" {

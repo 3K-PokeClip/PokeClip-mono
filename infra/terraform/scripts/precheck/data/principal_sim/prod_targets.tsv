@@ -68,9 +68,9 @@ cert-use1	O7b	tag:acm:certificate	certificate	us-east-1	acm:DeleteCertificate,ac
 # 물을 수 있다). 태그 동작은 넣지 않는다 — 태그 해석 행과 달리 태그를 바꿔도
 # 대상에서 빠지지 않는다.
 # SNS 주제 · SQS 큐의 정책은 직접 읽는다(sns · sqs — lib/principal_policy.sh
-# 머리 주석, kty 2026-10-24). 주제는 기본 주제 정책(Principal * ·
-# AWS:SourceOwner 조건), 원 큐는 이 주제의 SendMessage 허용 정책을 가지고
-# DLQ 는 정책이 없다. 첫 단계(runtime-1a) 직전에는 주제 · 큐가 아직 없어
+# 머리 주석, kty 2026-10-24). 주제는 명시 정책(계정 루트 하나 · 조건
+# 없음 — broadcast_events.tf), 원 큐는 이 주제의 SendMessage 허용 정책을
+# 가지고 DLQ 는 정책이 없다. 첫 단계(runtime-1a) 직전에는 주제 · 큐가 아직 없어
 # 「자원 없음」 을 정책 없이 판정한다(런북 2-3 한계 A13).
 rds-instance	runtime-1a	arn:arn:aws:rds:ap-northeast-2:${ACCOUNT}:db:pokeclip-prod-db	db	ap-northeast-2	rds:DeleteDBInstance,rds:ModifyDBInstance,rds:RebootDBInstance,rds:StopDBInstance,rds:CreateDBSnapshot	none	-
 rds-parameter-group	runtime-1a	arn:arn:aws:rds:ap-northeast-2:${ACCOUNT}:pg:pokeclip-prod-pg17	pg	ap-northeast-2	rds:ModifyDBParameterGroup,rds:ResetDBParameterGroup,rds:DeleteDBParameterGroup	none	-

@@ -1,8 +1,9 @@
 # 계약9 방송 생명주기 이벤트(POK-309 · 설계 D3 · D4 · D5) — SNS FIFO 주제 하나,
 # 소비자(clip · chat)마다 SQS FIFO 큐 · 전용 DLQ · 재처리 허용 · raw 구독 ·
-# 큐 정책, 큐 값 변수 기본값 넷, 출력 셋을 단언한다. ARN · URL 은 mock 이
-# 만드는 가짜 값이다. override_data 가 network 원격 상태를 대신하므로 S3 를
-# 읽지 않는다(AWS 호출 0).
+# 큐 정책 · 주제 정책, 큐 값 변수 기본값 넷, 출력 셋을 단언한다. ARN · URL 은
+# mock 이 만드는 가짜 값이다. override_data 가 network 원격 상태 · 호출자 ·
+# 파티션을 대신하므로 S3 · STS 를 읽지 않는다(AWS 호출 0). 계정 자리는 숫자가
+# 아닌 가짜 값이다(공유 mock 과 같은 관례 — 계정 ID 숫자열 없음).
 
 mock_provider "aws" {
   source = "./tests/mocks"
@@ -20,6 +21,19 @@ override_data {
   }
 }
 
+override_data {
+  target = data.aws_caller_identity.current
+  values = {
+    account_id = "example-account"
+  }
+}
+
+override_data {
+  target = data.aws_partition.broadcast
+  values = {
+    partition = "aws"
+  }
+}
 
 # 중복 제거 좌표는 발행자가 주는 eventId 다(계약9 2절). 내용 기반 중복 제거를
 # 켜면 본문이 다른 재시도가 멱등을 깨므로 주제 · 큐 모두 끈다(D3).
@@ -268,6 +282,62 @@ run "lets_only_broadcast_topic_send_to_queues" {
       }
     ])
     error_message = "큐 정책 조건이 aws:SourceArn = 방송 주제 ARN 하나가 아니다."
+  }
+}
+
+# 주제 정책은 이 계정의 신원 정책에 맡기는 한 문장이다 — 주체는 계정 루트,
+# 조건 없음, 동작은 기본 주제 정책의 여덟(SNS:Receive 는 SNS 정책 동작이
+# 아니라 뺀다). 기본 정책의 Principal * · AWS:SourceOwner 를 남기지 않는다.
+run "delegates_topic_access_to_account_identity_policies" {
+  command = apply
+
+  assert {
+    condition     = aws_sns_topic_policy.broadcast_lifecycle.arn == aws_sns_topic.broadcast_lifecycle.arn
+    error_message = "주제 정책이 방송 주제 ARN 에 걸려 있지 않다."
+  }
+
+  assert {
+    condition     = length(jsondecode(aws_sns_topic_policy.broadcast_lifecycle.policy).Statement) == 1
+    error_message = "주제 정책의 문장이 정확히 하나가 아니다."
+  }
+
+  assert {
+    condition = (
+      jsondecode(aws_sns_topic_policy.broadcast_lifecycle.policy).Statement[0].Effect == "Allow" &&
+      jsondecode(aws_sns_topic_policy.broadcast_lifecycle.policy).Statement[0].Resource == aws_sns_topic.broadcast_lifecycle.arn
+    )
+    error_message = "주제 정책 문장이 방송 주제(Resource)에 대한 Allow 가 아니다."
+  }
+
+  assert {
+    condition = jsondecode(aws_sns_topic_policy.broadcast_lifecycle.policy).Statement[0].Principal == {
+      AWS = "arn:aws:iam::example-account:root"
+    }
+    error_message = "주제 정책 주체가 data.aws_partition · data.aws_caller_identity 로 만든 계정 루트 하나가 아니다."
+  }
+
+  assert {
+    condition     = !strcontains(jsonencode(jsondecode(aws_sns_topic_policy.broadcast_lifecycle.policy).Statement[0].Principal), "*")
+    error_message = "주제 정책 주체에 와일드카드 * 가 있다."
+  }
+
+  assert {
+    condition     = !contains(keys(jsondecode(aws_sns_topic_policy.broadcast_lifecycle.policy).Statement[0]), "Condition")
+    error_message = "주제 정책 문장에 Condition 이 있다 — 계정 루트 주체에는 조건을 두지 않는다."
+  }
+
+  assert {
+    condition = toset(jsondecode(aws_sns_topic_policy.broadcast_lifecycle.policy).Statement[0].Action) == toset([
+      "SNS:GetTopicAttributes",
+      "SNS:SetTopicAttributes",
+      "SNS:AddPermission",
+      "SNS:RemovePermission",
+      "SNS:DeleteTopic",
+      "SNS:Subscribe",
+      "SNS:ListSubscriptionsByTopic",
+      "SNS:Publish",
+    ])
+    error_message = "주제 정책 동작이 기본 주제 정책의 여덟(SNS:Receive 제외)이 아니다."
   }
 }
 

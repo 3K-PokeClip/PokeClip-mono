@@ -70,7 +70,9 @@ bash infra/terraform/scripts/precheck/events.sh --since <비교 기준 판정 �
     한 번에 묻고, kty 의 답을 들은 뒤 `--accept` 하고 다시 판정합니다
     (stage-precheck 「첫 실행과 기준 승인」).
 *   ② 는 stage-precheck 「2-3 판정의 결과와 갈래」 대로 봅니다. 런타임
-    상태 객체 행은 이 단계부터 묻습니다. 종료 3(UNDECIDED)이면 kty 가
+    상태 객체 행은 이 단계부터 묻습니다. SNS 주제 · SQS 큐의 자원 정책은
+    2-3 판정이 직접 읽습니다. runtime-1a 직전에는 자원이 없어 정책 없이
+    판정하고 `report.txt` 에 「자원 없음」 을 남깁니다. 종료 3(UNDECIDED)이면 kty 가
     `approvals.tsv` 에 「진행」 을 적어야 다음으로 갑니다.
 *   ① 이 종료 0 이 아니거나(승인 뒤에도 DENIED 등) ② 가 종료 0 도, 「진행」
     이 적힌 종료 3 도 아니면 2 로 가지 않습니다.
@@ -95,9 +97,11 @@ bash infra/terraform/scripts/precheck/events.sh --since <비교 기준 판정 �
 1.  **확인 · 승인**: 아래를 모두 확인하고 kty 승인을 받습니다. 하나라도
     다르면 apply 하지 않습니다.
 
-    *   `Plan: 28 to add, 0 to change, 0 to destroy` — RDS 다섯(SG · 서브넷
+    *   `Plan: 29 to add, 0 to change, 0 to destroy` — RDS 다섯(SG · 서브넷
         그룹 · 파라미터 그룹 · 로그 그룹 · 인스턴스) · 비밀 그릇 일곱 ·
-        rewind 버킷 다섯 · 계약9 열하나.
+        rewind 버킷 다섯 · 계약9 열둘(주제 정책 포함).
+    *   주제 정책(`aws_sns_topic_policy.broadcast_lifecycle`)은 명시
+        정책입니다 — 주체가 계정 루트 하나이고 `*` · `Condition` 이 없습니다.
     *   주소에 `sql_runner` 가 없습니다(실행기 꺼짐).
     *   `aws_secretsmanager_secret_version` 이 0 입니다.
     *   태그를 받는 자원의 `tags_all` 에 네 키(`TerraformRoot =

@@ -36,7 +36,7 @@ prod 런타임 1단(설계 3-1 의 ⑤)을 만드는 루트입니다 — RDS Pos
 | `rds.tf` | RDS 인스턴스 · 서브넷 그룹 · 파라미터 그룹 · 로그 그룹(30일) · RDS SG(규칙 0) | POK-304 |
 | `app_secrets.tf` | 앱 비밀 그릇 일곱과 서비스별 ARN 지도 | POK-305 |
 | `rewind_bucket.tf` | rewind 버킷(공개 차단 · SSE-S3 · 미완료 업로드 정리) | POK-308 |
-| `broadcast_events.tf` · `app_env.tf` | 계약9 주제 · 큐 · DLQ · 구독 · 큐 정책 · 서비스별 env | POK-309 |
+| `broadcast_events.tf` · `app_env.tf` | 계약9 주제 · 주제 정책 · 큐 · DLQ · 구독 · 큐 정책 · 서비스별 env | POK-309 |
 | `app_db_users.tf` | 앱 서버 DB 사용자 이름 출력(`sql/10_roles.sql` 에서 읽음) | POK-407 |
 | `sql_runner.tf` | SQL 실행기 스위치(꺼짐이 기본) | POK-304 |
 | `sql/` | media DB 계정 · 앱 서버 DB 사용자 · `stream_*` 스키마 · 권한 · 확인 · advisory 확인 SQL | POK-304 · POK-407 |
@@ -68,7 +68,7 @@ default_tags 가 붙는지는 미확인이고, 런북 「운영 확인」 에서
 | `app_secret_arns`(서비스 → env 이름 → 전체 ARN) | platform — `ecs_service.secrets` · 실행 역할 읽기 정책. auth 일곱 · clip 둘(`JWT_SECRET` · `INTERNAL_API_TOKEN`) · chat-collector 둘(`INTERNAL_API_TOKEN` · `CHZZK_CLIENT_SECRET`) · chat-detector 하나(`INTERNAL_API_TOKEN`) |
 | `media_secret_arns` | media — 인스턴스 역할 읽기 정책 · 응답기 시작 스크립트. `INTERNAL_API_TOKEN` 하나(앱과 같은 그릇) |
 | `app_env`(서비스 → env 이름 → 값) | platform — `ecs_service.environment`. 네 서버 모두 `DB_HOST` · `DB_PORT` · `POSTGRES_DB`, auth 는 `STREAM_KEY_SECRET_REF_PREFIX`, clip · chat-collector 는 자기 큐의 `BROADCAST_QUEUE_URL`, clip 은 수신 스위치 `BROADCAST_INTAKE_ENABLED = "true"`(문자열 — 빠지면 큐를 읽지 않아 편지가 보관 기간 뒤 사라진다). `AUTH_BASE_URL` 은 platform 이 넣는다. chat-collector 의 스위치는 배치(POK-306)가 `AUTH_BASE_URL` · `INTERNAL_API_TOKEN` 과 함께 정한다 |
-| `broadcast_topic_arn` | media — 사이드카 역할의 `sns:Publish` 대상 |
+| `broadcast_topic_arn` | media — 사이드카 역할의 `sns:Publish` 대상(신원 정책 — 주제 정책은 계정 루트만 주체로 둔다) |
 | `broadcast_queue_arns`(소비자 clip · chat → 큐 ARN) | chat-collector(POK-306)의 수신 정책 대상. clip 은 `app_task_resource_arns` 를 쓴다 |
 | `app_db_users`(서비스 → DB 사용자 이름) | platform — 태스크 env `POSTGRES_USER` · `rds-db:connect` 의 사용자 자리(auth · clip). `auth` `app_auth` · `clip` `app_clip` · `chat-collector` `app_chat_collector` · `chat-detector` `app_chat_detector` — chat 두 키는 배치(POK-306)가 읽는다. 사용자 · `rds_iam` · GRANT 는 `sql/` 이 만든다 |
 | `app_task_resource_arns`(서비스 → 키 → ARN) | platform — 작업 역할 정책 Resource(키 = platform 의 `task_resource_keys`). 지금은 clip 의 `broadcast_queue_arn` 하나 — 일 큐 · 버킷 키는 런타임 다음 PR(POK-408) |
@@ -138,9 +138,10 @@ CREATE 는 1단-가가 했습니다(POK-407 · kty 2026-10-24). 잊지 않도록
     rewind 버킷 · 실행기 역할 · 프로필)은 이 PR 이 더했습니다(설계 K5 는
     바뀌었습니다 — POK-365 완료로 `runtime-1a` 는 O7c 뒤 · O7d 앞의 2-3 판정
     단계, kty 2026-10-23 · 10-24). 남은 것: rewind 행은 O7d 부터(runtime-1a
-    직전에는 버킷이 없음) · SNS · SQS 는 자원 정책을 읽지 못해 판정 불가
-    (`unread`) · RDS 관리형 비밀(`rds!db-*`)은 `Environment=prod` 태그가
-    붙는지 apply 뒤 실측.
+    직전에는 버킷이 없음) · RDS 관리형 비밀(`rds!db-*`)은 `Environment=prod`
+    태그가 붙는지 apply 뒤 실측. SNS 주제 · SQS 큐의 자원 정책은 2-3 판정이
+    직접 읽습니다. runtime-1a 직전에는 자원이 없어 정책 없이 판정하고
+    `report.txt` 에 「자원 없음」 을 남깁니다.
 1.  `scripts/put-secret-from-file.sh` 의 비밀 종류 확장(O7d 앞).
 1.  응답기 비밀 최소 권한(K1) — 응답기가 앱과 같은 `INTERNAL_API_TOKEN` 을
     써서 Media 상자가 auth `/internal/**` 전부에 통하는 열쇠를 가집니다. 전용
@@ -154,6 +155,12 @@ CREATE 는 1단-가가 했습니다(POK-407 · kty 2026-10-24). 잊지 않도록
 *   SQL 실행기 SG 의 이그레스 443 은 `0.0.0.0/0` 전체입니다 — SSM 끝점 ·
     패키지 저장소 · CA 번들을 NAT 로 받기 때문이고, VPC 엔드포인트는 두지
     않았습니다.
+*   계약9 주제 정책은 SNS 기본 정책(`Principal *` · `AWS:SourceOwner`)
+    대신 계정 루트 한 주체에 기본 정책의 동작 여덟을 여는 명시 정책입니다
+    (kty 2026-10-24). 누가 쓰는지는 신원 정책이 정하므로, 같은 리스 계정의
+    dev 주체가 신원 정책으로 `sns:*` 를 가지면 이 정책이 막지 못합니다 —
+    2-3 판정이 그 질문을 합니다. AWS 서비스가 이 계정 대신 발행하는 길
+    (`AWS:SourceOwner`)은 닫힙니다.
 *   상자가 받는 RDS CA 번들은 지문을 대조하지 않습니다 — HTTPS(curl 기본
     인증서 검증)만 믿습니다.
 *   SQL 적용 뒤 마스터 비밀 순환(`rotate-secret`)은 하지 않습니다. 실행기가
