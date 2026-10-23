@@ -24,6 +24,9 @@ on:
     branches: [develop]
     paths:
       - 'services/**'
+      # 렌더 · 업로드 일꾼(POK-332). 같은 상자 같은 compose 에서 뜨므로 같은 잡이 굽는다
+      - 'workers/render/**'
+      - 'workers/upload/**'
       - '.github/workflows/services-deploy.yml' # 이 파일을 고치는 커밋은 이 파일로 검증한다
 
 # contents 는 checkout 용이 아니라(이 잡은 체크아웃하지 않는다) 기본값을 좁히기 위해
@@ -73,6 +76,9 @@ jobs:
         run: |
           set -euo pipefail
 
+          # 일꾼 둘(POK-332)은 서버 넷 다음에 굽고, 받는 쪽이라 clip 보다 먼저 올린다(up 두 번). 일꾼은 health 주소가 없어
+          # 「running 인가」로 보고(아니면 배포 실패), 큐 주소 변수가 컨테이너 안에서 비었으면 경고만 찍는다(값은 안 찍는다):
+          # dev .env 가 아직 빈 채로 머지돼도 서버 넷 배포를 막지 않으려는 것이다. 비면 일꾼은 그 줄을 안 보고 떠 있기만 한다.
           # 서버 넷(POK-331)을 하나씩 굽는다. compose 기본은 동시 빌드라 Gradle 넷이 한꺼번에 돌면
           # 옛 컨테이너가 떠 있는 상자의 메모리가 모자랄 수 있다. -q 는 SSM 출력(앞 24,000자만 돌려준다)을
           # 빌드 로그가 채워 끝의 health · compose ps · free 줄이 잘리지 않게 한다.
@@ -100,10 +106,12 @@ jobs:
               'cd services',
               'sudo -u ec2-user docker builder prune -f --filter until=$BUILD_CACHE_KEEP | tail -1',
               'df -h /',
-              'for s in auth clip chat-collector chat-detector; do echo build \$s; sudo -u ec2-user docker compose -f docker-compose.dev.yml build -q \$s; done',
+              'for s in auth clip chat-collector chat-detector render-worker upload-worker; do echo build \$s; sudo -u ec2-user docker compose -f docker-compose.dev.yml build -q \$s; done',
+              'sudo -u ec2-user docker compose -f docker-compose.dev.yml up -d render-worker upload-worker',
               'sudo -u ec2-user docker compose -f docker-compose.dev.yml up -d postgres auth clip chat-collector chat-detector',
               'sudo -u ec2-user docker image prune -f',
-              'fail=0; end=\$((\$(date +%s) + 600)); for p in 8081 8082 8083 8084; do ok=0; while [ \$(date +%s) -lt \$end ]; do if curl -sf -m 5 -o /dev/null http://127.0.0.1:\$p/actuator/health; then ok=1; break; fi; sleep 10; done; if [ \$ok -eq 1 ]; then echo \$p UP; else echo \$p not UP within 600s; fail=1; fi; done; sudo -u ec2-user docker compose -f docker-compose.dev.yml ps; free -m; df -h /; use=\$(df --output=pcent / | tail -1 | tr -dc 0-9); if [ \$use -ge $DISK_WARN_PERCENT ]; then echo ::warning::dev box disk \$use% used; fi; [ \$fail -eq 0 ]'
+              'fail=0; end=\$((\$(date +%s) + 600)); for p in 8081 8082 8083 8084; do ok=0; while [ \$(date +%s) -lt \$end ]; do if curl -sf -m 5 -o /dev/null http://127.0.0.1:\$p/actuator/health; then ok=1; break; fi; sleep 10; done; if [ \$ok -eq 1 ]; then echo \$p UP; else echo \$p not UP within 600s; fail=1; fi; done; sudo -u ec2-user docker compose -f docker-compose.dev.yml ps; free -m; df -h /; use=\$(df --output=pcent / | tail -1 | tr -dc 0-9); if [ \$use -ge $DISK_WARN_PERCENT ]; then echo ::warning::dev box disk \$use% used; fi',
+              'wfail=0; for s in render-worker upload-worker; do if [ -z \"\$(sudo -u ec2-user docker compose -f docker-compose.dev.yml ps --status running -q \$s)\" ]; then echo \$s not running; wfail=1; else echo \$s running; fi; done; for v in render-worker:RENDER_QUEUE_URL render-worker:THUMBNAIL_QUEUE_URL upload-worker:UPLOAD_QUEUE_URL; do s=\${v%%:*}; n=\${v#*:}; if ! sudo -u ec2-user docker compose -f docker-compose.dev.yml exec -T \$s env 2>/dev/null | grep -q ^\$n=.; then echo ::warning::\$s \$n empty; fi; done; [ \$fail -eq 0 ] && [ \$wfail -eq 0 ]'
             ]" \
             --query Command.CommandId --output text)
 
