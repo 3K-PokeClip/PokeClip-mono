@@ -2,13 +2,13 @@ import { act } from 'react';
 import { fireEvent, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderWithProviders } from '@/test/testProviders';
 import { emptyUploadDraft, UploadInfoDialog, type UploadDraft } from './UploadInfoDialog';
 import { THUMBNAIL_MAX_BYTES } from './uploadInfo';
 
-// 「영상 만들기」의 업로드 창(POK-291 → POK-381 개편). 탭 「정보 · 썸네일 · 공개」와 썸네일 펼치는 목록.
-// 여기서 재는 것은 칸의 값·규칙과 「업로드는 공개 탭에서만」이다. 장면 그림은 녹화 조각에서 뽑으므로 시험에서는 재료가 없다
+// 「영상 만들기」의 업로드 창(POK-291 → POK-381 개편 → POK-389 한 화면). 「정보 · 썸네일 · 공개」를 차례로 두고 스크롤하며,
+// 썸네일은 펼치는 목록이다. 여기서 재는 것은 칸의 값·규칙과 「보내기는 『만들고 올리기』로만」이다. 장면 그림은 녹화 조각에서 뽑으므로 시험에서는 재료가 없다
 // (frameSource 없음 → 시각만 보인다).
 
 function renderDialog(
@@ -37,14 +37,26 @@ function renderDialog(
 
 type Dialog = ReturnType<typeof renderDialog>['dialog'];
 
-async function openTab(user: ReturnType<typeof userEvent.setup>, dialog: Dialog, name: string) {
-  await user.click(dialog().getByRole('tab', { name: new RegExp(name) }));
+async function upload(user: ReturnType<typeof userEvent.setup>, dialog: Dialog) {
+  await user.click(dialog().getByRole('button', { name: '만들고 올리기' }));
 }
 
-async function upload(user: ReturnType<typeof userEvent.setup>, dialog: Dialog) {
-  await openTab(user, dialog, '공개');
-  await user.click(dialog().getByRole('button', { name: /업로드/ }));
-}
+// jsdom엔 레이아웃·스크롤이 없다: 칸 묶음마다 오른쪽 칸 안 높이(offsetTop)를 주고, 오른쪽 칸을 어디로 옮겼는지 적는다
+const SECTION_TOP: Record<string, number> = { info: 0, thumbnail: 500, publish: 1000 };
+const scrolledTo = vi.fn<(top: number | undefined) => void>();
+beforeEach(() => {
+  scrolledTo.mockClear();
+  Element.prototype.scrollTo = function (options?: ScrollToOptions | number) {
+    scrolledTo(typeof options === 'object' ? options.top : options);
+  } as typeof Element.prototype.scrollTo;
+  Object.defineProperty(HTMLElement.prototype, 'offsetTop', {
+    configurable: true,
+    get(this: HTMLElement) {
+      return SECTION_TOP[this.dataset.section ?? ''] ?? 0;
+    },
+  });
+});
+const lastScrolledTop = () => scrolledTo.mock.calls.at(-1)?.[0];
 
 describe('UploadInfoDialog', () => {
   it('장면 그림 재료가 없으면 미리보기가 「불러오는 중」에 머물지 않고 못 불러온다고 말한다(PR #301 리뷰)', () => {
@@ -60,7 +72,6 @@ describe('UploadInfoDialog', () => {
       { pickedInEditor: true },
       { thumbnailSource: 'scene', sceneOffsetMs: 3_500 },
     );
-    await openTab(user, dialog, '썸네일');
     expect(dialog().getByRole('button', { name: '편집기에서 고름 0:03.5' })).toHaveAttribute(
       'aria-pressed',
       'true',
@@ -73,11 +84,9 @@ describe('UploadInfoDialog', () => {
     );
   });
 
-  it('처음 값: 정보 탭 · 빈 칸 · 카테고리 게임 · 썸네일은 장면 · 비공개 · 아동용 아님', async () => {
-    const user = userEvent.setup();
+  it('처음 값: 빈 칸 · 카테고리 게임 · 썸네일은 장면 · 비공개 · 아동용 아님', () => {
     const { dialog } = renderDialog();
 
-    expect(dialog().getByRole('tab', { name: '정보' })).toHaveAttribute('aria-selected', 'true');
     // 창을 열면 제목 칸부터 친다(DS 창의 첫 초점은 탭이다)
     expect(dialog().getByRole('textbox', { name: /제목/ })).toHaveFocus();
     expect(dialog().getByRole('textbox', { name: /제목/ })).toHaveValue('');
@@ -85,10 +94,8 @@ describe('UploadInfoDialog', () => {
     expect(dialog().getByRole('textbox', { name: /태그/ })).toHaveValue('');
     expect(dialog().getByRole('combobox', { name: '카테고리' })).toHaveTextContent('게임');
 
-    await openTab(user, dialog, '썸네일');
     expect(dialog().getByRole('radio', { name: /영상 장면/ })).toBeChecked();
 
-    await openTab(user, dialog, '공개');
     expect(dialog().getByRole('radio', { name: '비공개' })).toBeChecked();
     expect(dialog().getByRole('switch', { name: /아동용 영상으로 올리기/ })).not.toBeChecked();
     // 비공개(처음 값)면 바꾸는 곳만 말한다
@@ -99,29 +106,26 @@ describe('UploadInfoDialog', () => {
     expect(dialog().queryByRole('button', { name: '영상 만들기' })).not.toBeInTheDocument();
   });
 
-  it('업로드는 공개 탭에서만: 정보·썸네일 탭은 「다음」으로 넘어가고 「이전」으로 돌아온다', async () => {
+  it('정보 · 썸네일 · 공개를 탭 없이 한 화면에 차례로 두고, 단추는 「만들고 올리기」 하나다(POK-389)', async () => {
     const user = userEvent.setup();
     const { dialog, onSubmit, onCancel } = renderDialog({}, { title: '제목' });
 
-    expect(dialog().queryByRole('button', { name: '업로드' })).not.toBeInTheDocument();
-    expect(dialog().getByText('공개 탭에서 올려요')).toBeInTheDocument();
-    await user.click(dialog().getByRole('button', { name: '다음' }));
-    expect(dialog().getByRole('tab', { name: '썸네일' })).toHaveAttribute('aria-selected', 'true');
-    expect(dialog().queryByRole('button', { name: '업로드' })).not.toBeInTheDocument();
+    expect(dialog().queryByRole('tab')).not.toBeInTheDocument();
+    expect(
+      dialog()
+        .getAllByRole('heading', { level: 3 })
+        .map((h) => h.textContent),
+    ).toEqual(['정보', '썸네일', '공개']);
+    expect(dialog().queryByRole('button', { name: '다음' })).not.toBeInTheDocument();
+    expect(dialog().queryByRole('button', { name: '이전' })).not.toBeInTheDocument();
 
-    // 「다음」을 누른 단추가 그 자리의 「업로드」로 바뀌어 보내지면 안 된다
-    await user.click(dialog().getByRole('button', { name: '다음' }));
-    expect(dialog().getByRole('tab', { name: '공개' })).toHaveAttribute('aria-selected', 'true');
-    expect(onSubmit).not.toHaveBeenCalled();
-
-    await user.click(dialog().getByRole('button', { name: '이전' }));
-    expect(dialog().getByRole('tab', { name: '썸네일' })).toHaveAttribute('aria-selected', 'true');
-    await user.click(dialog().getByRole('button', { name: '이전' }));
+    await upload(user, dialog);
+    expect(onSubmit).toHaveBeenCalledTimes(1);
     await user.click(dialog().getByRole('button', { name: '취소' }));
     expect(onCancel).toHaveBeenCalled();
   });
 
-  it('제목 칸에서 Enter를 쳐도 보내지 않는다(업로드 단추가 없는 탭)', async () => {
+  it('제목 칸에서 Enter를 쳐도 보내지 않는다: 한 화면이라 치다 누르면 렌더·업로드가 나가 버린다', async () => {
     const user = userEvent.setup();
     const { dialog, onSubmit } = renderDialog();
     await user.type(dialog().getByRole('textbox', { name: /제목/ }), '보스 막타{Enter}');
@@ -131,7 +135,6 @@ describe('UploadInfoDialog', () => {
   it('공개 범위를 고르면 안내가 그 범위로 바뀐다: 누가 보는지 · 공개면 구독자 알림 · 바꾸는 곳(POK-291)', async () => {
     const user = userEvent.setup();
     const { dialog } = renderDialog();
-    await openTab(user, dialog, '공개');
 
     // 문장 전체를 잰다: 셋 중 하나가 빠지거나 범위가 섞여도 빨간불이어야 한다
     await user.click(dialog().getByRole('radio', { name: '공개' }));
@@ -157,10 +160,9 @@ describe('UploadInfoDialog', () => {
     await user.type(dialog().getByRole('textbox', { name: /태그/ }), '롤{Enter}보스 막타,역전,');
     await user.click(dialog().getByRole('combobox', { name: '카테고리' }));
     await user.click(screen.getByRole('option', { name: '엔터테인먼트' }));
-    await openTab(user, dialog, '공개');
     await user.click(dialog().getByRole('radio', { name: '일부 공개' }));
     await user.click(dialog().getByRole('switch', { name: /아동용 영상으로 올리기/ }));
-    await user.click(dialog().getByRole('button', { name: '업로드' }));
+    await user.click(dialog().getByRole('button', { name: '만들고 올리기' }));
 
     expect(onSubmit).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -179,7 +181,6 @@ describe('UploadInfoDialog', () => {
   it('아동용 스위치를 켜면 카드에 「아동용」 표와 꺼지는 기능이 보인다', async () => {
     const user = userEvent.setup();
     const { dialog } = renderDialog();
-    await openTab(user, dialog, '공개');
     expect(
       dialog().getByText('어린이(만 13세 미만)를 보라고 만든 영상일 때만 켜요'),
     ).toBeInTheDocument();
@@ -194,7 +195,6 @@ describe('UploadInfoDialog', () => {
   it('예약을 고르면 비공개 + 시각으로 보내고 단추는 「예약 업로드」다', async () => {
     const user = userEvent.setup();
     const { dialog, onSubmit } = renderDialog({}, { title: '제목' });
-    await openTab(user, dialog, '공개');
     await user.click(dialog().getByRole('radio', { name: '예약' }));
 
     await user.click(dialog().getByRole('button', { name: '내일 21:00' }));
@@ -205,7 +205,7 @@ describe('UploadInfoDialog', () => {
     expect(
       dialog().getByText(/^지금 비공개로 올리고 .+ 21:00에 공개로 바꿔요$/),
     ).toBeInTheDocument();
-    await user.click(dialog().getByRole('button', { name: '예약 업로드' }));
+    await user.click(dialog().getByRole('button', { name: '만들고 올리기' }));
 
     expect(onSubmit).toHaveBeenCalledWith(
       expect.objectContaining({ privacyStatus: 'private', scheduled: true, scheduleTime: '21:00' }),
@@ -215,14 +215,14 @@ describe('UploadInfoDialog', () => {
   it('예약 시각이 1시간 안이거나 지났으면 보내지 않고 그 칸에 말한다', async () => {
     const user = userEvent.setup();
     const { dialog, onSubmit } = renderDialog({}, { title: '제목' });
-    await openTab(user, dialog, '공개');
     await user.click(dialog().getByRole('radio', { name: '예약' }));
 
     fireEvent.change(dialog().getByLabelText('공개 날짜'), { target: { value: '2020-01-01' } });
-    await user.click(dialog().getByRole('button', { name: '예약 업로드' }));
+    await user.click(dialog().getByRole('button', { name: '만들고 올리기' }));
     expect(onSubmit).not.toHaveBeenCalled();
     expect(dialog().getByRole('alert')).toHaveTextContent('지금부터 1시간 뒤부터 고를 수 있어요');
-    expect(dialog().getByRole('tab', { name: /공개/ })).toHaveAccessibleName(/확인할 칸 있음/);
+    expect(dialog().getByRole('heading', { name: /공개/ })).toHaveAccessibleName(/확인할 칸 있음/);
+    expect(lastScrolledTop()).toBe(SECTION_TOP.publish);
   });
 
   it('태그는 제거 단추로 뺄 수 있고, 친 채 남은 글자도 보낼 때 태그가 된다', async () => {
@@ -236,14 +236,14 @@ describe('UploadInfoDialog', () => {
     expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ tags: ['보스', '남은 글자'] }));
   });
 
-  it('제목이 비었으면 보내지 않고 정보 탭을 열어 그 칸에 말한다', async () => {
+  it('제목이 비었으면 보내지 않고 정보 칸으로 스크롤해 그 칸에 말한다', async () => {
     const user = userEvent.setup();
     const { dialog, onSubmit } = renderDialog();
 
     await upload(user, dialog);
     expect(onSubmit).not.toHaveBeenCalled();
-    expect(dialog().getByRole('tab', { name: /정보/ })).toHaveAttribute('aria-selected', 'true');
-    expect(dialog().getByRole('tab', { name: /정보/ })).toHaveAccessibleName(/확인할 칸 있음/);
+    expect(lastScrolledTop()).toBe(SECTION_TOP.info);
+    expect(dialog().getByRole('heading', { name: /정보/ })).toHaveAccessibleName(/확인할 칸 있음/);
     expect(dialog().getByRole('textbox', { name: /제목/ })).toHaveAccessibleDescription(
       /유튜브 제목을 적어 주세요/,
     );
@@ -265,7 +265,6 @@ describe('UploadInfoDialog', () => {
   it('추천 장면 다섯(하이라이트 · 시작 · 재생 위치 · 중간 · 마지막)을 누르거나 띠를 옮겨 고른 ms를 보낸다', async () => {
     const user = userEvent.setup();
     const { dialog, onSubmit } = renderDialog({}, { title: '제목', sceneOffsetMs: 8_000 });
-    await openTab(user, dialog, '썸네일');
 
     const picks = [
       '하이라이트 0:08.0',
@@ -300,10 +299,8 @@ describe('UploadInfoDialog', () => {
     );
   });
 
-  it('하이라이트·재생 위치를 모르면(카드 없음 · 녹화 없음) 그 추천은 빠진다', async () => {
-    const user = userEvent.setup();
+  it('하이라이트·재생 위치를 모르면(카드 없음 · 녹화 없음) 그 추천은 빠진다', () => {
     const { dialog } = renderDialog({ highlightOffsetMs: null, playheadOffsetMs: null });
-    await openTab(user, dialog, '썸네일');
     expect(dialog().queryByRole('button', { name: /하이라이트/ })).not.toBeInTheDocument();
     expect(dialog().queryByRole('button', { name: /재생 위치/ })).not.toBeInTheDocument();
     expect(dialog().getByRole('button', { name: '중간 0:06.2' })).toHaveAttribute(
@@ -315,14 +312,13 @@ describe('UploadInfoDialog', () => {
   it('내 이미지는 JPG·PNG 10MB까지 받고, 넘으면 창 안에서 거절한다', async () => {
     const user = userEvent.setup();
     const { dialog, onSubmit } = renderDialog({}, { title: '제목' });
-    await openTab(user, dialog, '썸네일');
 
     await user.click(dialog().getByRole('radio', { name: /내 이미지/ }));
     expect(dialog().getAllByText(/세로 1080×1920 권장/).length).toBeGreaterThan(0);
-    // 고르지 않고 보내면 썸네일 탭을 열어 말한다
+    // 고르지 않고 보내면 썸네일 칸으로 스크롤해 말한다
     await upload(user, dialog);
     expect(onSubmit).not.toHaveBeenCalled();
-    expect(dialog().getByRole('tab', { name: /썸네일/ })).toHaveAttribute('aria-selected', 'true');
+    expect(lastScrolledTop()).toBe(SECTION_TOP.thumbnail);
     expect(dialog().getByText('이미지를 골라 주세요')).toBeInTheDocument();
 
     const input = document.querySelector('input[type="file"]') as HTMLInputElement;
@@ -341,9 +337,9 @@ describe('UploadInfoDialog', () => {
     );
   });
 
-  it('서버가 칸을 짚어 거절하면 그 칸이 있는 탭을 열어 그 칸에 보인다', () => {
+  it('서버가 칸을 짚어 거절하면 그 칸이 있는 묶음으로 스크롤해 그 칸에 보인다', () => {
     const { dialog } = renderDialog({ serverErrors: { thumbnail: '썸네일을 확인해 주세요.' } });
-    expect(dialog().getByRole('tab', { name: /썸네일/ })).toHaveAttribute('aria-selected', 'true');
+    expect(lastScrolledTop()).toBe(SECTION_TOP.thumbnail);
     expect(dialog().getByText('썸네일을 확인해 주세요.')).toBeInTheDocument();
   });
 
@@ -366,7 +362,6 @@ describe('UploadInfoDialog', () => {
     expect(title).not.toHaveAccessibleDescription(/유튜브 제목을 확인해 주세요/);
     expect(dialog().queryByText('유튜브 제목을 확인해 주세요.')).not.toBeInTheDocument();
     // 고치지 않은 칸의 서버 오류는 남는다
-    await openTab(user, dialog, '썸네일');
     expect(dialog().getByText('이미지는 10MB까지 올릴 수 있어요')).toBeInTheDocument();
 
     await user.click(dialog().getByRole('radio', { name: /유튜브에 맡기기/ }));
@@ -389,22 +384,19 @@ describe('UploadInfoDialog', () => {
   it('보내는 중에는 업로드 단추가 잠기고 닫히지 않는다', async () => {
     const user = userEvent.setup();
     const { dialog, onCancel } = renderDialog({ busy: true });
-    await openTab(user, dialog, '공개');
-    expect(dialog().getByRole('button', { name: /업로드/ })).toBeDisabled();
+    // 보내는 중에는 단추 글자가 도는 표시로 바뀐다: 「보내는 중」 단추로 찾는다
+    expect(dialog().getByRole('button', { busy: true })).toBeDisabled();
     await user.keyboard('{Escape}');
     expect(onCancel).not.toHaveBeenCalled();
   });
 
-  it('다시 열면 받은 값(같은 판의 업로드 정보)으로 채워진다', async () => {
-    const user = userEvent.setup();
+  it('다시 열면 받은 값(같은 판의 업로드 정보)으로 채워진다', () => {
     const { dialog } = renderDialog(
       {},
       { title: '먼저 적은 제목', privacyStatus: 'public', thumbnailSource: 'none' },
     );
     expect(dialog().getByRole('textbox', { name: /제목/ })).toHaveValue('먼저 적은 제목');
-    await openTab(user, dialog, '썸네일');
     expect(dialog().getByRole('radio', { name: /유튜브에 맡기기/ })).toBeChecked();
-    await openTab(user, dialog, '공개');
     expect(dialog().getByRole('radio', { name: '공개' })).toBeChecked();
   });
 
@@ -417,11 +409,9 @@ describe('UploadInfoDialog', () => {
       });
     };
     await check();
-    await openTab(user, dialog, '썸네일');
     await check();
     await user.click(dialog().getByRole('radio', { name: /내 이미지/ }));
     await check();
-    await openTab(user, dialog, '공개');
     await user.click(dialog().getByRole('radio', { name: '예약' }));
     await check();
   });

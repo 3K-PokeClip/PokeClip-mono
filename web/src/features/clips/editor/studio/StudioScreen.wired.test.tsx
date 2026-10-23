@@ -293,20 +293,19 @@ async function openFrom(search: string) {
 }
 
 /** 업로드 창의 공개 탭을 열고 「업로드」. 업로드 단추는 공개 탭에만 있다(POK-381) */
-async function uploadFromPublishTab(user: ReturnType<typeof userEvent.setup>) {
+async function uploadFromDialog(user: ReturnType<typeof userEvent.setup>) {
   const dialog = within(screen.getByRole('dialog', { name: '유튜브에 올리기' }));
-  await user.click(dialog.getByRole('tab', { name: '공개' }));
-  await user.click(dialog.getByRole('button', { name: '업로드' }));
+  await user.click(dialog.getByRole('button', { name: '만들고 올리기' }));
 }
 
-/** 「영상 만들기」 → 업로드 창 정보 탭에 제목을 적고 공개 탭에서 「업로드」 */
+/** 「영상 만들기」 → 업로드 창에 제목을 적고 「만들고 올리기」 */
 async function orderVideo(user: ReturnType<typeof userEvent.setup>, title = '보스 막타') {
   await user.click(screen.getByRole('button', { name: '영상 만들기' }));
   const dialog = within(screen.getByRole('dialog', { name: '유튜브에 올리기' }));
   const field = dialog.getByRole('textbox', { name: /제목/ });
   await user.clear(field);
   await user.type(field, title);
-  await uploadFromPublishTab(user);
+  await uploadFromDialog(user);
 }
 
 const RENDERS = `/api/clip/broadcasts/${STREAM_ID}/recipes/31/renders`;
@@ -580,7 +579,6 @@ describe('StudioScreen: 편집기에서 고른 썸네일 장면(POK-389)', () =>
 
     await user.click(screen.getByRole('button', { name: '영상 만들기' }));
     const dialog = within(await screen.findByRole('dialog'));
-    await user.click(dialog.getByRole('tab', { name: '썸네일' }));
     expect(dialog.getByRole('radio', { name: /영상 장면/ })).toBeChecked();
     expect(dialog.queryByRole('button', { name: /편집기에서 고름/ })).not.toBeInTheDocument();
   });
@@ -1025,14 +1023,12 @@ describe('StudioScreen: 영상 만들기 + 유튜브 올리기(POK-291)', () => 
     await user.type(dialog().getByRole('textbox', { name: /설명/ }), '역전');
     await user.type(dialog().getByRole('textbox', { name: /태그/ }), '롤,보스 막타{Enter}');
     // 카드에서 연 편집기: 처음 고른 장면은 하이라이트(카드 시각 = 구간 시작 + 5초, POK-381)
-    await user.click(dialog().getByRole('tab', { name: '썸네일' }));
     expect(dialog().getByRole('button', { name: '하이라이트 0:05.0' })).toHaveAttribute(
       'aria-pressed',
       'true',
     );
-    await user.click(dialog().getByRole('tab', { name: '공개' }));
     await user.click(dialog().getByRole('radio', { name: '공개' }));
-    await user.click(dialog().getByRole('button', { name: '업로드' }));
+    await user.click(dialog().getByRole('button', { name: '만들고 올리기' }));
 
     await waitFor(() => expect(renders()).toBe(1));
     expect(bodiesOf('POST', `/api/clip/broadcasts/${STREAM_ID}/recipes`)).toHaveLength(1);
@@ -1063,13 +1059,12 @@ describe('StudioScreen: 영상 만들기 + 유튜브 올리기(POK-291)', () => 
     await openFrom(`stream=${STREAM_ID}&card=5`);
     await user.click(screen.getByRole('button', { name: '영상 만들기' }));
     await user.type(dialog().getByRole('textbox', { name: /제목/ }), '제목');
-    await user.click(dialog().getByRole('tab', { name: '썸네일' }));
     await user.click(dialog().getByRole('radio', { name: /내 이미지/ }));
     const file = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], 'cover.png', {
       type: 'image/png',
     });
     await user.upload(document.querySelector('input[type="file"]') as HTMLInputElement, file);
-    await uploadFromPublishTab(user);
+    await uploadFromDialog(user);
 
     await waitFor(() => expect(renders()).toBe(1));
     const { request, thumbnail } = await renderPartsOf();
@@ -1121,14 +1116,16 @@ describe('StudioScreen: 영상 만들기 + 유튜브 올리기(POK-291)', () => 
       ),
     );
 
-    // 걸린 칸이 있는 탭(태그 → 정보)이 열린다. 썸네일 사유는 썸네일 탭에 보인다
+    // 걸린 칸이 있는 묶음(태그 → 정보)으로 스크롤한다. 썸네일 사유는 썸네일 칸에 보인다
     server.renderError = { status: 413, body: { error: 'payload_too_large' } };
-    await uploadFromPublishTab(user);
+    await uploadFromDialog(user);
     expect(await dialog().findByText('이미지는 10MB까지 올릴 수 있어요')).toBeInTheDocument();
-    expect(dialog().getByRole('tab', { name: /썸네일/ })).toHaveAttribute('aria-selected', 'true');
+    expect(dialog().getByRole('heading', { name: /썸네일/ })).toHaveAccessibleName(
+      /확인할 칸 있음/,
+    );
 
     server.renderError = { status: 415, body: { error: 'unsupported_image' } };
-    await uploadFromPublishTab(user);
+    await uploadFromDialog(user);
     expect(await dialog().findByText('JPG나 PNG만 올릴 수 있어요')).toBeInTheDocument();
   });
 
@@ -1143,7 +1140,7 @@ describe('StudioScreen: 영상 만들기 + 유튜브 올리기(POK-291)', () => 
     await user.type(title(), '!');
     expect(title()).not.toHaveAccessibleDescription(/제목을 확인해 주세요/);
 
-    await uploadFromPublishTab(user);
+    await uploadFromDialog(user);
     await waitFor(() => expect(renders()).toBe(2));
     await waitFor(() => expect(title()).toHaveAccessibleDescription(/제목을 확인해 주세요/));
   });
@@ -1156,7 +1153,6 @@ describe('StudioScreen: 영상 만들기 + 유튜브 올리기(POK-291)', () => 
     expect(screen.getByRole('checkbox', { name: '트랙 2 넣기' })).toBeChecked();
 
     await user.click(screen.getByRole('button', { name: '영상 만들기' }));
-    await user.click(dialog().getByRole('tab', { name: '공개' }));
     dialog()
       .getByRole('switch', { name: /아동용 영상으로 올리기/ })
       .focus();
@@ -1166,8 +1162,6 @@ describe('StudioScreen: 영상 만들기 + 유튜브 올리기(POK-291)', () => 
     await user.keyboard(' ');
     expect(unlisted).toBeChecked();
 
-    // 「취소」는 첫 탭(정보)에 있다
-    await user.click(dialog().getByRole('tab', { name: '정보' }));
     await user.click(dialog().getByRole('button', { name: '취소' }));
     // ⌘Z가 창 뒤로 샜으면 트랙 2가 꺼져 있다
     expect(screen.getByRole('checkbox', { name: '트랙 2 넣기' })).toBeChecked();
@@ -1256,9 +1250,7 @@ describe('StudioScreen: 영상 만들기 + 유튜브 올리기(POK-291)', () => 
     await user.click(screen.getByRole('button', { name: '영상 만들기' }));
 
     expect(dialog().getByRole('textbox', { name: /제목/ })).toHaveValue('먼저 적은 제목');
-    await user.click(dialog().getByRole('tab', { name: '공개' }));
     expect(dialog().getByRole('radio', { name: '일부 공개' })).toBeChecked();
-    await user.click(dialog().getByRole('tab', { name: '썸네일' }));
     expect(dialog().getByRole('radio', { name: /영상 장면/ })).toBeChecked();
   });
 
@@ -1275,12 +1267,11 @@ describe('StudioScreen: 영상 만들기 + 유튜브 올리기(POK-291)', () => 
     await user.click(screen.getByRole('button', { name: '영상 만들기' }));
 
     expect(dialog().getByRole('combobox', { name: '카테고리' })).toHaveTextContent('엔터테인먼트');
-    await user.click(dialog().getByRole('tab', { name: '공개' }));
     expect(dialog().getByRole('radio', { name: '예약' })).toBeChecked();
     // 시험은 Asia/Seoul(vitest.config): 09:00Z = 18:00
     expect(dialog().getByLabelText('공개 날짜')).toHaveValue('2099-01-01');
     expect(dialog().getByLabelText('공개 시각')).toHaveValue('18:00');
-    await user.click(dialog().getByRole('button', { name: '예약 업로드' }));
+    await user.click(dialog().getByRole('button', { name: '만들고 올리기' }));
 
     await waitFor(() => expect(renders()).toBe(1));
     const { request } = await renderPartsOf();

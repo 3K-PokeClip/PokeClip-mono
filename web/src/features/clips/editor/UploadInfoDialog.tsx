@@ -19,7 +19,6 @@ import {
   RadioGroup,
   Select,
   Switch,
-  Tabs,
   Tag,
   Text,
   Textarea,
@@ -49,8 +48,9 @@ import styles from './UploadInfoDialog.module.css';
 // 「영상 만들기」를 누르면 뜨는 유튜브 업로드 창(POK-291 → POK-381 개편). 확인하면 렌더 주문에 이 정보가 실리고, 렌더가 끝나는
 // 대로 clip이 스트리머 채널에 올린다.
 //
-// 틀은 시안 C3(2026-10-22 사용자 결정): 왼쪽은 쇼츠에서 보일 모습(세로 썸네일 + 제목), 오른쪽은 탭 「정보 · 썸네일 · 공개」.
-// 탭은 아무 때나 오가지만 「업로드」는 공개 탭에만 있다(정보·썸네일 탭은 「다음」). 썸네일 탭은 시안 T2(펼치는 목록).
+// 틀은 시안 C3(2026-10-22 사용자 결정): 왼쪽은 쇼츠에서 보일 모습(세로 썸네일 + 제목), 오른쪽은 「정보 · 썸네일 · 공개」.
+// 오른쪽은 탭 대신 세 칸을 위에서 아래로 차례로 두고 스크롤한다(POK-389 사용자 결정: 탭을 넘길 때 창 크기가 바뀌어 보기 안 좋았다).
+// 왼쪽 미리보기는 고정이고, 단추는 「만들고 올리기」 하나다. 걸린 칸이 있으면 그 칸으로 스크롤한다. 썸네일은 시안 T2(펼치는 목록).
 
 /** 창 안의 값. 썸네일 파일은 서버에 다시 받을 수 없어(정보에는 「이미지」라는 표시만 남는다) 이 화면이 쥐고 있다 */
 export interface UploadDraft {
@@ -99,17 +99,15 @@ export function emptyUploadDraft(sceneOffsetMs: number, now: number = Date.now()
   };
 }
 
-type UploadTab = 'info' | 'thumbnail' | 'publish';
-const TABS: { value: UploadTab; label: string }[] = [
+type UploadSection = 'info' | 'thumbnail' | 'publish';
+const SECTIONS: { value: UploadSection; label: string }[] = [
   { value: 'info', label: '정보' },
   { value: 'thumbnail', label: '썸네일' },
   { value: 'publish', label: '공개' },
 ];
-const NEXT_TAB: Partial<Record<UploadTab, UploadTab>> = { info: 'thumbnail', thumbnail: 'publish' };
-const PREV_TAB: Partial<Record<UploadTab, UploadTab>> = { thumbnail: 'info', publish: 'thumbnail' };
 
-/** 사유 칸 → 그 칸이 있는 탭. 보낼 때 걸린 칸의 탭으로 옮겨 준다 */
-const TAB_OF: Record<keyof UploadFieldErrors, UploadTab> = {
+/** 사유 칸 → 그 칸이 있는 칸 묶음. 보낼 때 걸린 묶음으로 스크롤한다 */
+const SECTION_OF: Record<keyof UploadFieldErrors, UploadSection> = {
   title: 'info',
   description: 'info',
   tags: 'info',
@@ -127,13 +125,13 @@ const VISIBILITY: { value: Visibility; label: string }[] = [
   { value: 'scheduled', label: '예약' },
 ];
 
-function firstErrorTab(errors: UploadFieldErrors): UploadTab | null {
-  for (const tab of TABS) {
+function firstErrorSection(errors: UploadFieldErrors): UploadSection | null {
+  for (const section of SECTIONS) {
     const hit = Object.entries(errors).some(
       ([key, message]) =>
-        message !== undefined && TAB_OF[key as keyof UploadFieldErrors] === tab.value,
+        message !== undefined && SECTION_OF[key as keyof UploadFieldErrors] === section.value,
     );
-    if (hit) return tab.value;
+    if (hit) return section.value;
   }
   return null;
 }
@@ -218,11 +216,22 @@ function UploadInfoForm({
   frameSource: SceneFrameSource | null;
 }) {
   const [draft, setDraft] = useState<UploadDraft>(initial);
-  const [tab, setTab] = useState<UploadTab>('info');
+  const sectionRefs = useRef<Partial<Record<UploadSection, HTMLElement | null>>>({});
+  const rightRef = useRef<HTMLDivElement>(null);
+  /**
+   * 걸린 칸 묶음을 보이게 오른쪽 칸 안에서만 스크롤한다. scrollIntoView는 창 전체까지 끌어올려 머리(「유튜브에 올리기」)가
+   * 가려졌다(실화면). 묶음의 offsetTop은 오른쪽 칸 기준이다(.right가 position: relative)
+   */
+  const scrollToSection = (section: UploadSection | null, smooth = true) => {
+    const target = section === null ? null : sectionRefs.current[section];
+    if (target == null) return;
+    rightRef.current?.scrollTo?.({ top: target.offsetTop, behavior: smooth ? 'smooth' : 'auto' });
+  };
   const [tagText, setTagText] = useState('');
   const [errors, setErrors] = useState<UploadFieldErrors>({});
   const [hover, setHover] = useState<number | null>(null);
   const [openedAt] = useState(() => Date.now());
+  const baseId = useId();
   const privacyLabelId = useId();
   const privacyNoteId = useId();
   const titleRef = useRef<HTMLInputElement>(null);
@@ -263,10 +272,10 @@ function UploadInfoForm({
     if (field !== null) clearError(field);
   };
 
-  // 서버가 칸을 짚어 거절하면 그 칸이 있는 탭을 연다(업로드는 공개 탭에서 누르므로 다른 탭의 칸은 안 보인다)
+  // 서버가 칸을 짚어 거절하면 그 칸이 있는 묶음으로 스크롤한다(단추는 맨 아래라 위의 칸은 안 보일 수 있다)
+  // 걸린 칸이 없으면(처음 열 때 등) 움직이지 않는다
   useEffect(() => {
-    const target = firstErrorTab(serverErrors);
-    if (target !== null) setTab(target);
+    scrollToSection(firstErrorSection(serverErrors), false);
   }, [serverErrors]);
 
   // 고른 이미지의 미리보기 주소: 바꾸거나 닫으면 놓아준다. 만드는 것과 놓는 것을 한 effect에 둔다(개발 모드가 effect를
@@ -325,12 +334,6 @@ function UploadInfoForm({
   const submit = (event: FormEvent) => {
     event.preventDefault();
     if (busy) return;
-    // 업로드는 공개 탭에서만. 다른 탭에서 Enter로 보내지면 다음 탭으로 넘긴다
-    const following = NEXT_TAB[tab];
-    if (following !== undefined) {
-      setTab(following);
-      return;
-    }
     // 칸에 친 채 Enter를 안 누른 태그도 넣는다: 보이는 글자가 빠지면 안 된다
     const tags = tagText.trim() === '' ? draft.tags : commitTags(tagText);
     const found: UploadFieldErrors = {
@@ -350,8 +353,8 @@ function UploadInfoForm({
     ) as UploadFieldErrors;
     if (tags === null || Object.keys(problems).length > 0) {
       setErrors((e) => ({ ...e, ...problems }));
-      // 걸린 칸이 있는 첫 탭으로(태그가 걸렸으면 commitTags가 사유를 이미 얹었다)
-      setTab(firstErrorTab(tags === null ? { ...problems, tags: '태그' } : problems) ?? tab);
+      // 걸린 칸이 있는 첫 묶음으로 스크롤한다(태그가 걸렸으면 commitTags가 사유를 이미 얹었다)
+      scrollToSection(firstErrorSection(tags === null ? { ...problems, tags: '태그' } : problems));
       return;
     }
     setTagText('');
@@ -364,10 +367,27 @@ function UploadInfoForm({
   // 읽히지 않게). 다음 보내기 때 비운다
   const errorOf = (key: keyof UploadFieldErrors) =>
     key in errors ? errors[key] : serverErrors[key];
-  const tabHasError = (value: UploadTab) =>
-    (Object.keys(TAB_OF) as (keyof UploadFieldErrors)[]).some(
-      (key) => TAB_OF[key] === value && errorOf(key) !== undefined,
+  const sectionHasError = (value: UploadSection) =>
+    (Object.keys(SECTION_OF) as (keyof UploadFieldErrors)[]).some(
+      (key) => SECTION_OF[key] === value && errorOf(key) !== undefined,
     );
+  /** 칸 묶음 머리: 이름 + 걸린 칸 표시. 스크롤 목적지라 ref를 단다 */
+  const sectionProps = (value: UploadSection) => ({
+    ref: (el: HTMLElement | null) => {
+      sectionRefs.current[value] = el;
+    },
+    className: styles.section,
+    'aria-labelledby': `${baseId}-${value}`,
+    'data-section': value,
+  });
+  const sectionTitle = (value: UploadSection) => (
+    <h3 id={`${baseId}-${value}`} className={styles.sectionTitle}>
+      {SECTIONS.find((sec) => sec.value === value)!.label}
+      {sectionHasError(value) ? (
+        <span className={styles.tabError} role="img" aria-label="확인할 칸 있음" />
+      ) : null}
+    </h3>
+  );
   const bytes = descriptionBytes(draft.description);
   const schedule = scheduleLabel(draft.scheduleDate, draft.scheduleTime);
   const previewSrc =
@@ -376,19 +396,24 @@ function UploadInfoForm({
       : draft.thumbnailSource === 'file'
         ? previewUrl
         : null;
-  const footNote =
-    tab !== 'publish'
-      ? '공개 탭에서 올려요'
-      : draft.scheduled
-        ? schedule === ''
-          ? '예약 시각을 골라 주세요'
-          : `지금 비공개로 올리고 ${schedule}에 공개로 바꿔요`
-        : '영상을 다 만들면 바로 올려요';
-  const prev = PREV_TAB[tab];
-  const next = NEXT_TAB[tab];
+  const footNote = draft.scheduled
+    ? schedule === ''
+      ? '예약 시각을 골라 주세요'
+      : `지금 비공개로 올리고 ${schedule}에 공개로 바꿔요`
+    : '영상을 다 만들면 바로 올려요';
 
   return (
-    <form onSubmit={submit} noValidate className={styles.form}>
+    <form
+      onSubmit={submit}
+      // 입력 칸의 Enter로는 보내지 않는다: 한 화면이라 제목을 치다 Enter만 눌러도 렌더·업로드가 나가 버린다.
+      // 「만들고 올리기」를 눌러야 보낸다(태그 칸의 Enter는 태그를 넣는다)
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' && event.target instanceof HTMLInputElement)
+          event.preventDefault();
+      }}
+      noValidate
+      className={styles.form}
+    >
       <div className={styles.body}>
         <div className={styles.left}>
           <span className={styles.label}>쇼츠에서 이렇게 보여요</span>
@@ -419,214 +444,182 @@ function UploadInfoForm({
           </div>
         </div>
 
-        <div className={styles.right}>
-          <Tabs value={tab} onValueChange={(v) => setTab(v as UploadTab)}>
-            <Tabs.List aria-label="업로드 정보" className={styles.tabs}>
-              {TABS.map((t) => (
-                <Tabs.Trigger key={t.value} value={t.value} className={styles.tab}>
-                  {t.label}
-                  {tabHasError(t.value) ? (
-                    <span className={styles.tabError} role="img" aria-label="확인할 칸 있음" />
-                  ) : null}
-                </Tabs.Trigger>
-              ))}
-            </Tabs.List>
-
-            <Tabs.Panel value="info" className={styles.panel}>
-              <Field invalid={errorOf('title') !== undefined} required>
-                <Field.Label>제목</Field.Label>
-                <Input
-                  ref={titleRef}
-                  value={draft.title}
-                  autoComplete="off"
-                  onChange={(e) => set('title', e.target.value)}
-                />
-                {errorOf('title') ? (
-                  <Field.Error>{errorOf('title')}</Field.Error>
-                ) : (
-                  <Field.Description>100자까지, &lt; &gt; 는 쓸 수 없어요</Field.Description>
-                )}
-              </Field>
-
-              <Field invalid={errorOf('description') !== undefined}>
-                <Field.Label>설명</Field.Label>
-                <Textarea
-                  value={draft.description}
-                  rows={4}
-                  onChange={(e) => set('description', e.target.value)}
-                />
-                {errorOf('description') ? (
-                  <Field.Error>{errorOf('description')}</Field.Error>
-                ) : null}
-                <Field.Description>
-                  {bytes} / {DESCRIPTION_MAX_BYTES}바이트
-                </Field.Description>
-              </Field>
-
-              <Field invalid={errorOf('tags') !== undefined}>
-                <Field.Label>태그</Field.Label>
-                <Input
-                  value={tagText}
-                  autoComplete="off"
-                  onChange={(e) => onTagChange(e.target.value)}
-                  onKeyDown={onTagKeyDown}
-                />
-                {errorOf('tags') ? (
-                  <Field.Error>{errorOf('tags')}</Field.Error>
-                ) : (
-                  <Field.Description>Enter나 쉼표로 넣어요. 합쳐서 500자까지예요</Field.Description>
-                )}
-                {draft.tags.length > 0 ? (
-                  <HStack gap={2} wrap>
-                    {draft.tags.map((tag) => (
-                      <Tag
-                        key={tag}
-                        size="sm"
-                        onRemove={() =>
-                          set(
-                            'tags',
-                            draft.tags.filter((t) => t !== tag),
-                          )
-                        }
-                        removeLabel={`태그 ${tag} 빼기`}
-                      >
-                        {tag}
-                      </Tag>
-                    ))}
-                  </HStack>
-                ) : null}
-              </Field>
-
-              <Field invalid={errorOf('categoryId') !== undefined}>
-                <Field.Label>카테고리</Field.Label>
-                <Select
-                  aria-label="카테고리"
-                  options={CATEGORIES.map((c) => ({ value: c.value, label: c.label }))}
-                  value={draft.categoryId}
-                  onValueChange={(v) => set('categoryId', v)}
-                  invalid={errorOf('categoryId') !== undefined}
-                />
-                {errorOf('categoryId') ? <Field.Error>{errorOf('categoryId')}</Field.Error> : null}
-              </Field>
-            </Tabs.Panel>
-
-            <Tabs.Panel value="thumbnail" className={styles.panel}>
-              <UploadThumbnailPane
-                source={draft.thumbnailSource}
-                sceneOffsetMs={draft.sceneOffsetMs}
-                file={draft.file}
-                previewUrl={previewUrl}
-                cutLengthMs={cutLengthMs}
-                picks={picks}
-                frameOf={frameOf}
-                error={errorOf('thumbnail')}
-                onSource={(source) => set('thumbnailSource', source)}
-                onScene={(ms) => set('sceneOffsetMs', ms)}
-                onFile={(file) => set('file', file)}
-                onFileProblem={(problem) => setErrors((e) => ({ ...e, thumbnail: problem }))}
-                onHover={setHover}
+        <div className={styles.right} ref={rightRef}>
+          <section {...sectionProps('info')}>
+            {sectionTitle('info')}
+            <Field invalid={errorOf('title') !== undefined} required>
+              <Field.Label>제목</Field.Label>
+              <Input
+                ref={titleRef}
+                value={draft.title}
+                autoComplete="off"
+                onChange={(e) => set('title', e.target.value)}
               />
-            </Tabs.Panel>
+              {errorOf('title') ? (
+                <Field.Error>{errorOf('title')}</Field.Error>
+              ) : (
+                <Field.Description>100자까지, &lt; &gt; 는 쓸 수 없어요</Field.Description>
+              )}
+            </Field>
 
-            <Tabs.Panel value="publish" className={styles.panel}>
-              <Field invalid={errorOf('privacyStatus') !== undefined}>
-                <Field.Label id={privacyLabelId}>공개 범위</Field.Label>
-                <RadioGroup
-                  value={visibility}
-                  onValueChange={(v) => setVisibility(v as Visibility)}
-                  orientation="horizontal"
-                  aria-labelledby={privacyLabelId}
-                  aria-describedby={privacyNoteId}
-                  className={styles.segmented}
-                >
-                  {VISIBILITY.map((v) => (
-                    <RadioGroup.Item
-                      key={v.value}
-                      value={v.value}
-                      label={v.label}
-                      className={styles.segment}
-                    />
+            <Field invalid={errorOf('description') !== undefined}>
+              <Field.Label>설명</Field.Label>
+              <Textarea
+                value={draft.description}
+                rows={4}
+                onChange={(e) => set('description', e.target.value)}
+              />
+              {errorOf('description') ? <Field.Error>{errorOf('description')}</Field.Error> : null}
+              <Field.Description>
+                {bytes} / {DESCRIPTION_MAX_BYTES}바이트
+              </Field.Description>
+            </Field>
+
+            <Field invalid={errorOf('tags') !== undefined}>
+              <Field.Label>태그</Field.Label>
+              <Input
+                value={tagText}
+                autoComplete="off"
+                onChange={(e) => onTagChange(e.target.value)}
+                onKeyDown={onTagKeyDown}
+              />
+              {errorOf('tags') ? (
+                <Field.Error>{errorOf('tags')}</Field.Error>
+              ) : (
+                <Field.Description>Enter나 쉼표로 넣어요. 합쳐서 500자까지예요</Field.Description>
+              )}
+              {draft.tags.length > 0 ? (
+                <HStack gap={2} wrap>
+                  {draft.tags.map((tag) => (
+                    <Tag
+                      key={tag}
+                      size="sm"
+                      onRemove={() =>
+                        set(
+                          'tags',
+                          draft.tags.filter((t) => t !== tag),
+                        )
+                      }
+                      removeLabel={`태그 ${tag} 빼기`}
+                    >
+                      {tag}
+                    </Tag>
                   ))}
-                </RadioGroup>
-                {errorOf('privacyStatus') ? (
-                  <Field.Error>{errorOf('privacyStatus')}</Field.Error>
-                ) : null}
-                <Text as="p" size="sm" tone="muted" id={privacyNoteId}>
-                  {draft.scheduled
-                    ? '예약한 시각까지는 비공개예요. 그때 공개로 바뀌어 누구나 볼 수 있고, 구독자에게 새 영상 알림이 갈 수 있어요.'
-                    : privacyNote(draft.privacyStatus)}
-                </Text>
-              </Field>
-
-              {draft.scheduled ? (
-                <SchedulePicker
-                  date={draft.scheduleDate}
-                  time={draft.scheduleTime}
-                  openedAt={openedAt}
-                  error={errorOf('publishAt')}
-                  onChange={(date, time) => {
-                    setDraft((d) => ({ ...d, scheduleDate: date, scheduleTime: time }));
-                    clearError('publishAt');
-                  }}
-                />
+                </HStack>
               ) : null}
+            </Field>
 
-              <Switch
-                className={draft.madeForKids ? `${styles.kids} ${styles.kidsOn}` : styles.kids}
-                checked={draft.madeForKids}
-                onChange={(e) => set('madeForKids', e.target.checked)}
-                label={
-                  <span className={styles.kidsText}>
-                    <span className={styles.kidsTitle}>
-                      아동용 영상으로 올리기
-                      {draft.madeForKids ? (
-                        <Badge tone="accent" size="sm">
-                          아동용
-                        </Badge>
-                      ) : null}
-                    </span>
-                    <span className={styles.kidsDesc}>
-                      {draft.madeForKids
-                        ? '아동용으로 올려요 · 댓글 · 알림 · 맞춤 광고가 꺼져요'
-                        : '어린이(만 13세 미만)를 보라고 만든 영상일 때만 켜요'}
-                    </span>
-                  </span>
-                }
+            <Field invalid={errorOf('categoryId') !== undefined}>
+              <Field.Label>카테고리</Field.Label>
+              <Select
+                aria-label="카테고리"
+                options={CATEGORIES.map((c) => ({ value: c.value, label: c.label }))}
+                value={draft.categoryId}
+                onValueChange={(v) => set('categoryId', v)}
+                invalid={errorOf('categoryId') !== undefined}
               />
-            </Tabs.Panel>
-          </Tabs>
+              {errorOf('categoryId') ? <Field.Error>{errorOf('categoryId')}</Field.Error> : null}
+            </Field>
+          </section>
+
+          <section {...sectionProps('thumbnail')}>
+            {sectionTitle('thumbnail')}
+            <UploadThumbnailPane
+              source={draft.thumbnailSource}
+              sceneOffsetMs={draft.sceneOffsetMs}
+              file={draft.file}
+              previewUrl={previewUrl}
+              cutLengthMs={cutLengthMs}
+              picks={picks}
+              frameOf={frameOf}
+              error={errorOf('thumbnail')}
+              onSource={(source) => set('thumbnailSource', source)}
+              onScene={(ms) => set('sceneOffsetMs', ms)}
+              onFile={(file) => set('file', file)}
+              onFileProblem={(problem) => setErrors((e) => ({ ...e, thumbnail: problem }))}
+              onHover={setHover}
+            />
+          </section>
+
+          <section {...sectionProps('publish')}>
+            {sectionTitle('publish')}
+            <Field invalid={errorOf('privacyStatus') !== undefined}>
+              <Field.Label id={privacyLabelId}>공개 범위</Field.Label>
+              <RadioGroup
+                value={visibility}
+                onValueChange={(v) => setVisibility(v as Visibility)}
+                orientation="horizontal"
+                aria-labelledby={privacyLabelId}
+                aria-describedby={privacyNoteId}
+                className={styles.segmented}
+              >
+                {VISIBILITY.map((v) => (
+                  <RadioGroup.Item
+                    key={v.value}
+                    value={v.value}
+                    label={v.label}
+                    className={styles.segment}
+                  />
+                ))}
+              </RadioGroup>
+              {errorOf('privacyStatus') ? (
+                <Field.Error>{errorOf('privacyStatus')}</Field.Error>
+              ) : null}
+              <Text as="p" size="sm" tone="muted" id={privacyNoteId}>
+                {draft.scheduled
+                  ? '예약한 시각까지는 비공개예요. 그때 공개로 바뀌어 누구나 볼 수 있고, 구독자에게 새 영상 알림이 갈 수 있어요.'
+                  : privacyNote(draft.privacyStatus)}
+              </Text>
+            </Field>
+
+            {draft.scheduled ? (
+              <SchedulePicker
+                date={draft.scheduleDate}
+                time={draft.scheduleTime}
+                openedAt={openedAt}
+                error={errorOf('publishAt')}
+                onChange={(date, time) => {
+                  setDraft((d) => ({ ...d, scheduleDate: date, scheduleTime: time }));
+                  clearError('publishAt');
+                }}
+              />
+            ) : null}
+
+            <Switch
+              className={draft.madeForKids ? `${styles.kids} ${styles.kidsOn}` : styles.kids}
+              checked={draft.madeForKids}
+              onChange={(e) => set('madeForKids', e.target.checked)}
+              label={
+                <span className={styles.kidsText}>
+                  <span className={styles.kidsTitle}>
+                    아동용 영상으로 올리기
+                    {draft.madeForKids ? (
+                      <Badge tone="accent" size="sm">
+                        아동용
+                      </Badge>
+                    ) : null}
+                  </span>
+                  <span className={styles.kidsDesc}>
+                    {draft.madeForKids
+                      ? '아동용으로 올려요 · 댓글 · 알림 · 맞춤 광고가 꺼져요'
+                      : '어린이(만 13세 미만)를 보라고 만든 영상일 때만 켜요'}
+                  </span>
+                </span>
+              }
+            />
+          </section>
         </div>
       </div>
 
       <div className={styles.foot}>
         <span className={styles.footNote}>{footNote}</span>
         <HStack gap={2} justify="flex-end">
-          {/* 단추마다 key를 달리한다: 같은 자리 단추를 다시 쓰면 「다음」을 누른 그 단추가 업로드(submit)로 바뀌어 보내진다 */}
-          {prev !== undefined ? (
-            <Button key="prev" variant="ghost" size="md" type="button" onClick={() => setTab(prev)}>
-              이전
-            </Button>
-          ) : (
-            <Button
-              key="cancel"
-              variant="ghost"
-              size="md"
-              type="button"
-              onClick={onCancel}
-              disabled={busy}
-            >
-              취소
-            </Button>
-          )}
-          {next !== undefined ? (
-            <Button key="next" variant="solid" size="md" type="button" onClick={() => setTab(next)}>
-              다음
-            </Button>
-          ) : (
-            <Button key="upload" variant="solid" size="md" type="submit" loading={busy}>
-              {draft.scheduled ? '예약 업로드' : '업로드'}
-            </Button>
-          )}
+          <Button variant="ghost" size="md" type="button" onClick={onCancel} disabled={busy}>
+            취소
+          </Button>
+          <Button variant="solid" size="md" type="submit" loading={busy}>
+            만들고 올리기
+          </Button>
         </HStack>
       </div>
     </form>
