@@ -47,8 +47,8 @@ public record BroadcastListResponse(List<Item> broadcasts, String nextCursor) {
      * 마지막 관측을 고르고, 카테고리는 같은 관측의 값이다. 관측이 없거나 수집기 표를 못 읽으면 둘 다 {@code null}이고 화면은 방송 번호를
      * 보인다. 수집기에 한 장을 한 번에 묻는다({@code BroadcastTitleClient}).
      *
-     * <p>{@code platform}은 방송 플랫폼 코드다(POK-398, {@code CHZZK}·{@code SOOP}, 늘 있다). 켜진 플랫폼({@code platforms})의 첫째라 편지 값과
-     * 다를 수 있다(POK-397). 화면은 이 값으로 라이브 띠의 플랫폼 태그를 그린다.
+     * <p>{@code platform}은 방송 플랫폼 코드다(POK-398, {@code CHZZK}·{@code SOOP}, 늘 있다). 켜진 플랫폼 중 시청자가 많은 쪽(제목과 같은 규칙, 관측이 없으면
+     * {@code platforms}의 첫째)이라 편지 값과 다를 수 있다(POK-397). 화면은 이 값으로 라이브 띠의 플랫폼 태그를 그린다.
      *
      * <p>{@code platforms}는 그 방송이 켜진 플랫폼과 플랫폼마다 시청자 수다(POK-397). 편지 플랫폼({@code platform})과 묶음 표
      * ({@code broadcast_platforms}, 수집기가 확인할 때 적는다)의 합이라 늘 한 개 이상이고, 순서는 CHZZK → SOOP → 그 밖 이름순이다.
@@ -79,10 +79,15 @@ public record BroadcastListResponse(List<Item> broadcasts, String nextCursor) {
     }
 
     /**
-     * 옛 칸 {@code platform} = 켜진 플랫폼의 첫째(재시험 결함, POK-397). Media가 편지에 플랫폼을 안 실어 편지 값이 늘 CHZZK라, 편지 값을 그대로 실으면
-     * SOOP으로만 방송하는 방송에 치지직 태그가 떴다. 목록이 비는 일은 없지만(편지 플랫폼이나 묶음이 늘 있다) 비면 편지 값이다.
+     * 옛 칸 {@code platform} = 대표 플랫폼(켜진 것 중 시청자 많은 쪽, 제목과 같은 규칙, POK-397). 관측이 없으면 실린 플랫폼의 첫째, 그것도 없으면 편지 값이다.
+     * Media가 편지에 플랫폼을 안 실어 편지 값이 늘 CHZZK라, 편지 값이나 묶음 순서 첫째를 그대로 실으면 SOOP으로만 방송하는 방송에 치지직 태그가 떴다
+     * (재시험 결함 · 로컬 리뷰 4라운드).
      */
     private static String platformOf(Broadcast row, BroadcastPage page) {
+        String lead = page.leadPlatforms().get(row.getStreamId());
+        if (lead != null) {
+            return lead;
+        }
         List<PlatformViewers> listed = page.platforms().getOrDefault(row.getStreamId(), List.of());
         return listed.isEmpty() ? row.getPlatform() : listed.get(0).platform();
     }

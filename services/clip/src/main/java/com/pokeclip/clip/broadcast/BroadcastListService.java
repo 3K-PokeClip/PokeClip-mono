@@ -181,20 +181,25 @@ public class BroadcastListService {
         Map<String, List<String>> bundled = bundlesOrEmpty(streamIds);
         Map<String, BroadcastTitle> chosenTitles = new HashMap<>();
         Map<String, List<PlatformViewers>> platforms = new HashMap<>();
+        Map<String, String> leads = new HashMap<>();
         for (Broadcast row : page) {
             List<BroadcastLatest.PlatformLatest> observed =
                     latest.platforms().getOrDefault(row.getStreamId(), List.of());
             List<PlatformViewers> listed = platformsOf(row, bundled.getOrDefault(row.getStreamId(), List.of()), observed);
             platforms.put(row.getStreamId(), listed);
+            List<BroadcastLatest.PlatformLatest> onAir = onAirByViewers(listed, observed);
+            if (!onAir.isEmpty()) {
+                leads.put(row.getStreamId(), onAir.get(0).platform());
+            }
             BroadcastTitle title = latest.platformAware()
-                    ? titleOf(listed, observed)
+                    ? titleOf(onAir)
                     : latest.titles().get(row.getStreamId());
             if (title != null) {
                 chosenTitles.put(row.getStreamId(), title);
             }
         }
         return new BroadcastPage(page, relations, next, originsOrEmpty(page), thumbnailsOf(page),
-                chosenTitles, platforms, editorsOnlineOf(page, userId));
+                chosenTitles, platforms, leads, editorsOnlineOf(page, userId));
     }
 
     /**
@@ -223,17 +228,18 @@ public class BroadcastListService {
     }
 
     /**
-     * 제목 규칙(POK-397): <b>목록에 실린 플랫폼 중 켜진 것</b>에서 시청자가 많은 쪽, 같으면 위 순서(CHZZK → SOOP)다. 그 플랫폼에 제목이 없으면 다음 켜진
-     * 플랫폼을 본다. 카테고리는 고른 제목과 같은 플랫폼 값이다. 웹이 띠·머리에 고르는 규칙과 같다.
+     * <b>목록에 실린 플랫폼 중 켜진 것</b>을 시청자가 많은 순, 같으면 위 순서(CHZZK → SOOP)로 줄 세운다(POK-397). 첫째가 그 방송의 대표 플랫폼이고
+     * 제목({@link #titleOf})과 옛 칸 {@code platform}(PR3b 전 웹 홈 태그)이 같이 쓴다. 둘이 따로 고르면 SOOP 제목에 치지직 태그가 붙는다(로컬 리뷰 4라운드).
+     * 웹이 띠·머리에 고르는 규칙과 같다.
      *
      * <p>켜짐 = 그 방송의 가장 최근 관측에서 {@link #ON_AIR_WINDOW} 안에 관측된 플랫폼. 웹의 「관측 3분 안」과 같은 폭이되 지금 시각이 아니라 마지막 관측에
-     * 잰다: 끝난 방송도 마지막에 켜져 있던 플랫폼의 제목을 낸다.
+     * 잰다: 끝난 방송도 마지막에 켜져 있던 플랫폼을 고른다. 관측이 하나도 없으면(옛 수집기·수집기가 아픔) 빈다.
      *
-     * <p>🔴 꺼진 플랫폼의 제목은 시청자가 많았어도 안 쓴다(웹 PR3b 로컬 리뷰). 치지직을 잠깐 켰다 끄고 SOOP으로만 방송하면 묶음에 CHZZK가 남는데, 전에는
-     * 편지 플랫폼(Media가 플랫폼을 안 실어 늘 CHZZK)을 먼저 골라 꺼진 치지직 제목이 떴다. 켜진 플랫폼에 제목이 없으면 옛 칸(플랫폼과 무관한 제목 있는
-     * 마지막 관측)도 안 쓴다(재시험 결함, 옛 칸도 꺼진 플랫폼 제목일 수 있다). 옛 수집기(플랫폼 값 없음)일 때만 부르는 쪽이 옛 칸을 쓴다.
+     * <p>🔴 꺼진 플랫폼은 시청자가 많았어도 안 고른다(웹 PR3b 로컬 리뷰). 치지직을 잠깐 켰다 끄고 SOOP으로만 방송하면 묶음에 CHZZK가 남는데, 전에는
+     * 편지 플랫폼(Media가 플랫폼을 안 실어 늘 CHZZK)이나 묶음 순서 첫째를 골라 꺼진 치지직 제목·태그가 떴다.
      */
-    private static BroadcastTitle titleOf(List<PlatformViewers> listed, List<BroadcastLatest.PlatformLatest> observed) {
+    private static List<BroadcastLatest.PlatformLatest> onAirByViewers(List<PlatformViewers> listed,
+                                                                       List<BroadcastLatest.PlatformLatest> observed) {
         Set<String> listedNames = new HashSet<>();
         listed.forEach(each -> listedNames.add(each.platform()));
         List<BroadcastLatest.PlatformLatest> seen = observed.stream()
@@ -241,16 +247,25 @@ public class BroadcastListService {
                 .toList();
         Instant last = seen.stream().map(BroadcastLatest.PlatformLatest::observedAt).max(Comparator.naturalOrder()).orElse(null);
         if (last == null) {
-            return null;
+            return List.of();
         }
         Instant onAirFrom = last.minus(ON_AIR_WINDOW);
-        List<BroadcastLatest.PlatformLatest> candidates = new ArrayList<>(seen.stream()
+        List<BroadcastLatest.PlatformLatest> onAir = new ArrayList<>(seen.stream()
                 .filter(each -> !each.observedAt().isBefore(onAirFrom))
                 .toList());
-        candidates.sort(Comparator.comparing(BroadcastLatest.PlatformLatest::viewers,
+        onAir.sort(Comparator.comparing(BroadcastLatest.PlatformLatest::viewers,
                         Comparator.nullsLast(Comparator.<Integer>reverseOrder()))
                 .thenComparing(BroadcastLatest.PlatformLatest::platform, PLATFORM_ORDER));
-        for (BroadcastLatest.PlatformLatest each : candidates) {
+        return onAir;
+    }
+
+    /**
+     * 제목 규칙(POK-397): {@link #onAirByViewers} 순서로 제목 있는 첫 플랫폼이다. 대표 플랫폼에 제목이 없으면 다음 켜진 플랫폼을 본다. 카테고리는 고른 제목과
+     * 같은 플랫폼 값이다. 켜진 플랫폼에 제목이 없으면 옛 칸(플랫폼과 무관한 제목 있는 마지막 관측)도 <b>안 쓴다</b>(재시험 결함, 옛 칸은 꺼진 플랫폼
+     * 제목일 수 있다). 옛 수집기(플랫폼 값 없음)일 때만 부르는 쪽이 옛 칸을 쓴다.
+     */
+    private static BroadcastTitle titleOf(List<BroadcastLatest.PlatformLatest> onAir) {
+        for (BroadcastLatest.PlatformLatest each : onAir) {
             if (each.title() != null) {
                 return new BroadcastTitle(each.title(), each.category());
             }

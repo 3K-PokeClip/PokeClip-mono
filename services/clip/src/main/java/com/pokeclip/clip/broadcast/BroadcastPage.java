@@ -25,10 +25,10 @@ import java.util.Map;
 public record BroadcastPage(List<Broadcast> rows, Map<String, ResolveResult> relations, String nextCursor,
                             Map<String, Instant> origins, Map<String, String> thumbnails,
                             Map<String, BroadcastTitle> titles, Map<String, List<PlatformViewers>> platforms,
-                            Map<String, Integer> editorsOnline) {
+                            Map<String, String> leadPlatforms, Map<String, Integer> editorsOnline) {
 
     private static final BroadcastPage EMPTY =
-            new BroadcastPage(List.of(), Map.of(), null, Map.of(), Map.of(), Map.of(), Map.of(), Map.of());
+            new BroadcastPage(List.of(), Map.of(), null, Map.of(), Map.of(), Map.of(), Map.of(), Map.of(), Map.of());
 
     public static BroadcastPage empty() {
         return EMPTY;

@@ -1007,12 +1007,44 @@ class BroadcastListControllerTest extends IntegrationTestSupport {
         목록("?state=live")
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.broadcasts[0].title").value("숲 제목"))
-                .andExpect(jsonPath("$.broadcasts[0].category").value(nullValue()));
+                .andExpect(jsonPath("$.broadcasts[0].category").value(nullValue()))
+                // 옛 칸(PR3b 전 웹 홈 태그)도 같은 규칙이다. 묶음 순서의 첫째(CHZZK)면 SOOP 제목에 치지직 태그가 붙는다(로컬 리뷰 4라운드)
+                .andExpect(jsonPath("$.broadcasts[0].platform").value("SOOP"))
+                .andExpect(jsonPath("$.broadcasts[0].platforms[*].platform").value(
+                        org.hamcrest.Matchers.contains("CHZZK", "SOOP")));
     }
 
-    /** 둘 다 켜져 있으면 시청자가 많은 쪽 제목이다(편지 플랫폼 CHZZK가 먼저가 아니다). 같으면 CHZZK → SOOP. */
+    /** 켜짐 폭의 끝: 마지막 관측에서 정확히 3분 전 관측은 켜짐, 3분 1초 전은 꺼짐이다. */
     @Test
-    void 동시_방송이면_시청자_많은_플랫폼_제목이고_같으면_치지직이다() throws Exception {
+    void 마지막_관측에서_정확히_3분_전은_켜짐이고_그보다_앞은_꺼짐이다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("s-edge-in", TestIds.STREAMER, "live");
+        묶음("s-edge-in", "CHZZK");
+        묶음("s-edge-in", "SOOP");
+        방송을_넣는다("s-edge-out", TestIds.STREAMER, "live");
+        묶음("s-edge-out", "CHZZK");
+        묶음("s-edge-out", "SOOP");
+        COLLECTOR.respondWith(TITLES, 200, """
+                {"titles":{},
+                 "platforms":{
+                  "s-edge-in":[{"platform":"CHZZK","title":"치지직","viewers":1,"observedAt":"2026-08-25T00:10:00Z"},
+                               {"platform":"SOOP","title":"숲","viewers":9,"observedAt":"2026-08-25T00:07:00Z"}],
+                  "s-edge-out":[{"platform":"CHZZK","title":"치지직","viewers":1,"observedAt":"2026-08-25T00:10:00Z"},
+                                {"platform":"SOOP","title":"숲","viewers":9,"observedAt":"2026-08-25T00:06:59Z"}]}}""");
+
+        목록("?state=live")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.broadcasts[1].streamId").value("s-edge-in"))
+                .andExpect(jsonPath("$.broadcasts[1].title").value("숲"))
+                .andExpect(jsonPath("$.broadcasts[1].platform").value("SOOP"))
+                .andExpect(jsonPath("$.broadcasts[0].streamId").value("s-edge-out"))
+                .andExpect(jsonPath("$.broadcasts[0].title").value("치지직"))
+                .andExpect(jsonPath("$.broadcasts[0].platform").value("CHZZK"));
+    }
+
+    /** 둘 다 켜져 있으면 시청자가 많은 쪽 제목·옛 칸 {@code platform}이다(편지 플랫폼 CHZZK가 먼저가 아니다). 같으면 CHZZK → SOOP. */
+    @Test
+    void 동시_방송이면_시청자_많은_플랫폼_제목과_옛_칸이고_같으면_치지직이다() throws Exception {
         볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
         방송을_넣는다("s-more-soop", TestIds.STREAMER, "live");
         묶음("s-more-soop", "CHZZK");
@@ -1032,8 +1064,10 @@ class BroadcastListControllerTest extends IntegrationTestSupport {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.broadcasts[1].streamId").value("s-more-soop"))
                 .andExpect(jsonPath("$.broadcasts[1].title").value("숲 제목"))
+                .andExpect(jsonPath("$.broadcasts[1].platform").value("SOOP"))
                 .andExpect(jsonPath("$.broadcasts[0].streamId").value("s-tie"))
-                .andExpect(jsonPath("$.broadcasts[0].title").value("치지직 같음"));
+                .andExpect(jsonPath("$.broadcasts[0].title").value("치지직 같음"))
+                .andExpect(jsonPath("$.broadcasts[0].platform").value("CHZZK"));
     }
 
     /**
