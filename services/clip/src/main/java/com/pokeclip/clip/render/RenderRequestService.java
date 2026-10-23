@@ -11,6 +11,7 @@ import com.pokeclip.clip.render.RenderErrors.MessageTooLargeException;
 import com.pokeclip.clip.render.RenderErrors.RecipeNotRenderableException;
 import com.pokeclip.clip.render.RenderErrors.RenderUnavailableException;
 import com.pokeclip.clip.render.RenderErrors.SourceNotReadyException;
+import com.pokeclip.clip.segment.SegmentErrors.VodExpiredException;
 import com.pokeclip.clip.segment.SegmentSource;
 import com.pokeclip.clip.segment.SegmentWindow;
 import com.pokeclip.clip.segment.SegmentWindowAssembler;
@@ -265,6 +266,11 @@ public class RenderRequestService {
             throw new RecipeNotRenderableException("cut");
         }
 
+        // 보관 기간(60일)이 지났으면 조각을 1번이 지운다: 새로 만들 수 없다(POK-335). 이미 만든 영상을 돌려주는 갈래 (a)·(b)는 여기
+        // 오기 전에 끝나 조각이 필요 없다. 자격 판정 뒤다(410은 방송의 실재를 말한다)
+        if (Boolean.TRUE.equals(broadcasts.isVodExpired(streamId))) {
+            throw new VodExpiredException();
+        }
         // 조각이 「연속 uploaded」로 구간을 다 덮어야 주문한다. 조립기의 판정 그대로다(POK-117) — 축만 재생 축이다.
         // 조각 장부는 물리 키로 찾는다(POK-233). 자격 판정을 지났으니 줄은 있다
         String ingestKey = broadcasts.findIngestKeyByStreamId(streamId).orElse(streamId);
