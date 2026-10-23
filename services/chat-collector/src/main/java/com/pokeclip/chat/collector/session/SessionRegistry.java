@@ -536,7 +536,8 @@ public class SessionRegistry {
     }
 
     /**
-     * 이 채널을 걷는 세션을 <b>상태와 무관하게</b> 닫는다(탈퇴, POK-256). 수립 중인 세션도 닫는다: 붙은 세션만 보면
+     * 이 (플랫폼, 채널)을 걷는 세션을 <b>상태와 무관하게</b> 닫는다(탈퇴, POK-256). 플랫폼을 같이 보는 이유는 채널 아이디가
+     * 플랫폼마다 따로 매겨져서다. 치지직 탈퇴가 같은 아이디의 SOOP 방송 세션을 닫으면 안 된다(POK-397). 수립 중인 세션도 닫는다: 붙은 세션만 보면
      * 탈퇴 순간 붙는 중이던 세션이 정리 뒤에 붙어 계속 적는다(PR #220 codex).
      *
      * <p>{@code startedBefore}(탈퇴 시각) 뒤에 시작한 세션은 남긴다. 알림이 늦게 오는 사이 같은 채널을 다른 계정이 연동해
@@ -544,11 +545,11 @@ public class SessionRegistry {
      *
      * @return 닫은 세션 수
      */
-    public int closeChannel(String channelId, Instant startedBefore) {
+    public int closeChannel(Platform platform, String channelId, Instant startedBefore) {
         int closed = 0;
         for (Map.Entry<Long, Entry> slot : sessions.entrySet()) {
             SessionKey key = slot.getValue().session().key();
-            if (channelId.equals(key.channelId()) && key.startedAt().isBefore(startedBefore)
+            if (platform == key.platform() && channelId.equals(key.channelId()) && key.startedAt().isBefore(startedBefore)
                     && sessions.remove(slot.getKey(), slot.getValue())) {
                 closeEntry(key.streamId(), slot.getValue());
                 closed++;

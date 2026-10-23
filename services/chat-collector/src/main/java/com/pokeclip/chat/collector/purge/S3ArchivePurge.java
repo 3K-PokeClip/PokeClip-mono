@@ -1,5 +1,7 @@
 package com.pokeclip.chat.collector.purge;
 
+import com.pokeclip.chat.collector.Platform;
+import com.pokeclip.chat.collector.archive.ArchiveKey;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.Delete;
 import software.amazon.awssdk.services.s3.model.DeleteObjectsResponse;
@@ -13,8 +15,15 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 채널 접두사 아래에서 정해진 분 전 파일을 1,000개씩 지운다. 키 모양은 {@code ArchiveKey}가 정한다({@code chat/{channelId}/날짜/시/…}).
- * 끝의 {@code /} 덕분에 번호가 이어지는 이웃 채널({@code abc}와 {@code abcd})은 안 걸린다.
+ * 채널 접두사 아래에서 정해진 분 전 파일을 1,000개씩 지운다. 키 모양과 접두사는 {@link ArchiveKey}가 정한다
+ * ({@code chat/{PLATFORM}/{channelId}/날짜/시/…}). 접두사를 여기서 따로 짓지 않는다: 키는 채널 아이디의 경로 문자를 밑줄로 다듬는데
+ * 접두사가 안 다듬으면 그 채널 파일을 못 찾는다. 끝의 {@code /} 덕분에 번호가 이어지는 이웃 채널({@code abc}와 {@code abcd})은
+ * 안 걸린다.
+ *
+ * <p>치지직이면 플랫폼 폴더가 생기기 전의 옛 경로({@link ArchiveKey#legacyPrefix})도 같은 분 판정으로 지운다. 옛 파일을 새 경로로
+ * 옮기는 동안 어느 시점에 탈퇴가 와도 남지 않게 하려는 것이다. SOOP은 옛 경로에 파일이 없어 안 본다. 채널 아이디가 마침
+ * {@code CHZZK}·{@code SOOP}이면 옛 접두사가 새 플랫폼 폴더 전체를 훑지만, 그 아래 키는 조각이 넷이라 {@link #minuteOf}가 못 읽고
+ * 건너뛴다.
  *
  * <p>🔴 묶음 지우기는 일부만 실패해도 200이다. 응답의 {@code errors}를 직접 봐야 한다.
  */
@@ -29,8 +38,14 @@ class S3ArchivePurge implements ArchivePurge {
     }
 
     @Override
-    public void deleteChannel(String channelId, Instant before) {
-        String prefix = "chat/" + channelId + "/";
+    public void deleteChannel(Platform platform, String channelId, Instant before) {
+        deleteUnder(ArchiveKey.channelPrefix(platform, channelId), before);
+        if (platform == Platform.CHZZK) {
+            deleteUnder(ArchiveKey.legacyPrefix(channelId), before);
+        }
+    }
+
+    private void deleteUnder(String prefix, Instant before) {
         List<ObjectIdentifier> chunk = new ArrayList<>();
         for (S3Object object : s3.listObjectsV2Paginator(b -> b.bucket(bucket).prefix(prefix)).contents()) {
             Instant minute = minuteOf(object.key().substring(prefix.length()));
