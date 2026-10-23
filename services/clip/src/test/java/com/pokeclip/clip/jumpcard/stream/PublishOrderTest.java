@@ -97,8 +97,6 @@ class PublishOrderTest extends IntegrationTestSupport {
         int wentBackward = 0;    // 최신 뒤에 낡은 것이 도착한 회차 — 화면이 뒤로 간다
         int staleWon = 0;        // 마지막에 적용된 것이 낡은 쪽이었던 회차
         int missing = 0;
-        int reversed = 0;        // N+1이 먼저 자물쇠를 얻어 낡은 N이 버려진 회차
-
         try (SseReader reader = new SseReader("http://localhost:" + port + "/api/clip/broadcasts/s-ord/events",
                 Map.of("Authorization", "Bearer " + TestTokens.access("1601")))) {
             // 연결이 명부에 올랐는지는 주석으로 본다 — 통로는 지난 카드를 안 보낸다(POK-174).
@@ -148,9 +146,6 @@ class PublishOrderTest extends IntegrationTestSupport {
                 if (staleAt >= 0 && freshAt >= 0 && staleAt > freshAt) {
                     wentBackward++;
                 }
-                if (staleAt < 0 && freshAt >= 0) {
-                    reversed++;
-                }
             }
 
             assertThat(missing).as("%d/%d 회차에서 카드 이벤트가 하나도 안 왔다", missing, TRIALS).isZero();
@@ -166,10 +161,8 @@ class PublishOrderTest extends IntegrationTestSupport {
         // 낡은 것은 최신 뒤에 나가면 안 된다. 「마지막 값만 맞으면 된다」로 두면 화면이 잠깐 뒤로 갔다 온다.
         assertThat(wentBackward).as("최신 뒤에 낡은 순번이 %d/%d 회차에서 전송됐다", wentBackward, TRIALS)
                 .isZero();
-        // 뒤집힌 회차가 하나도 없으면 위 단언은 걸러 내기를 한 번도 안 지나고 초록이 된다.
-        // 걸러 내기 자체는 아래 시험이 매번 재고, 여기서는 경합이 실제로 일어났는지만 본다.
-        assertThat(reversed).as("%d회 모두 N이 먼저 자물쇠를 얻어 뒤집힘이 한 번도 안 일어났다", TRIALS)
-                .isPositive();
+        // 뒤집힌 회차 수는 단언하지 않는다. 모니터는 뒤집힘도 보장하지 않아서 0이어도 결함이 아니다.
+        // 그래서 이 시험은 걸러 내기를 확률로만 지나고, 걸러 내기 자체는 아래 시험이 매번 잰다.
     }
 
     @Test
