@@ -15,6 +15,8 @@ const api = vi.hoisted(() => ({
   order: [] as string[],
   /** 목록 끝에 더할 방송 줄 */
   extra: [] as Record<string, unknown>[],
+  /** 목록·카드 읽기에 넘긴 끊기 신호 */
+  signals: [] as (AbortSignal | undefined)[],
 }));
 vi.mock('@/api/mediaPlayback', () => ({
   playbackConfigured: () => true,
@@ -40,9 +42,13 @@ vi.mock('@/api/playbackAccess', () => ({
 }));
 vi.mock('@/api/clipEditor', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/api/clipEditor')>()),
-  fetchAllJumpCards: () => Promise.resolve([]),
-  fetchAllBroadcasts: () =>
-    Promise.resolve([
+  fetchAllJumpCards: (_streamId: string, signal?: AbortSignal) => {
+    api.signals.push(signal);
+    return Promise.resolve([]);
+  },
+  fetchAllBroadcasts: (_state: string, _streamerId: number | null, signal?: AbortSignal) => {
+    api.signals.push(signal);
+    return Promise.resolve([
       {
         streamId: 'S-mine',
         ingestStreamId: 'key-shared',
@@ -63,7 +69,8 @@ vi.mock('@/api/clipEditor', async (importOriginal) => ({
         vodExpiresAt: null,
       },
       ...api.extra,
-    ]),
+    ]);
+  },
 }));
 
 afterEach(() => {
@@ -71,6 +78,22 @@ afterEach(() => {
   api.asked = [];
   api.order = [];
   api.extra = [];
+  api.signals = [];
+});
+
+describe('useVodListMockState — 내려갈 때', () => {
+  it('읽던 목록·카드를 끊는다: 채널을 바꿔 다시 그려지면 옛 채널 요청을 이어 가지 않는다(PR #342 2차 리뷰)', async () => {
+    const { result, unmount } = renderHook(() => useVodListMockState(), {
+      wrapper: withToastProvider,
+    });
+    await waitFor(() => expect(result.current.totalCount).toBe(2));
+    expect(api.signals.length).toBeGreaterThan(1);
+    expect(api.signals.every((s) => s !== undefined && !s.aborted)).toBe(true);
+
+    unmount();
+
+    expect(api.signals.every((s) => s?.aborted)).toBe(true);
+  });
 });
 
 describe('useVodListMockState — 녹화 있음 판정', () => {

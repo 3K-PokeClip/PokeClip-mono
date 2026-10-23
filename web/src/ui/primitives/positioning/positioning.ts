@@ -1,4 +1,4 @@
-import { useCallback, useState, type RefCallback, type RefObject } from 'react';
+import { useCallback, useRef, useState, type RefCallback, type RefObject } from 'react';
 import { useIsomorphicLayoutEffect } from '../hooks/useIsomorphicLayoutEffect';
 
 export type Side = 'top' | 'bottom' | 'left' | 'right';
@@ -74,14 +74,17 @@ export function useFloating(
     const t = triggerRef.current;
     const c = contentRef.current;
     if (!t || !c) return;
-    setCoords(
-      compute(
-        t.getBoundingClientRect(),
-        { width: c.offsetWidth, height: c.offsetHeight },
-        side,
-        align,
-        offset,
-      ),
+    const next = compute(
+      t.getBoundingClientRect(),
+      { width: c.offsetWidth, height: c.offsetHeight },
+      side,
+      align,
+      offset,
+    );
+    // 같은 자리면 그대로 둔다: ResizeObserver는 관찰을 시작하자마자 한 번 알리고, 스크롤·리사이즈도 자리가 안 바뀌는 일이
+    // 잦다 — 새 객체를 넣으면 팝업 아래 전체가 같은 좌표로 한 번 더 그려진다(PR #342 리뷰 9)
+    setCoords((prev) =>
+      prev.top === next.top && prev.left === next.left && prev.side === next.side ? prev : next,
     );
   }, [triggerRef, contentRef, side, align, offset]);
 
@@ -105,11 +108,21 @@ export function useFloating(
  * 없어 첫 측정이 무산된다. 그대로 두면 팝업이 초기 좌표 좌상단에 붙은 채 스크롤·
  * 리사이즈에만 복구된다. 이 콜백을 콘텐츠 ref "뒤에" 합성하면(측정 대상 ref가 먼저
  * 채워진 뒤) DOM이 붙는 순간 — 페인트 전 — 다시 재서 첫 프레임부터 제자리에 그려진다.
+ *
+ * 붙은 뒤에 크기가 바뀌어도 다시 잰다(ResizeObserver): 열린 뒤 목록이 늦게 도착해 길어지면 위로 여는 팝업이
+ * 첫 높이로 잡은 좌표에 남아 아래로 자라고, 트리거를 덮고 화면 밖으로 밀려났다(채널 스위처의 받은 초대).
  */
 export function useMeasureOnAttach(update: () => void): RefCallback<HTMLElement> {
+  const observer = useRef<ResizeObserver | null>(null);
   return useCallback(
     (node) => {
-      if (node !== null) update();
+      observer.current?.disconnect();
+      observer.current = null;
+      if (node === null) return;
+      update();
+      if (typeof ResizeObserver === 'undefined') return;
+      observer.current = new ResizeObserver(() => update());
+      observer.current.observe(node);
     },
     [update],
   );

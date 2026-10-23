@@ -1,10 +1,12 @@
 'use client';
 
+import { useRef } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
   Bell,
+  ChevronsUpDown,
   CreditCard,
   FolderOpen,
   HelpCircle,
@@ -20,7 +22,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { Avatar, IconButton } from '@/ui';
-import { ChannelSwitcher, RoleChip, useChannelIdentity } from '@/features/channel/ChannelSwitcher';
+import { ChannelSwitcher, useChannelIdentity } from '@/features/channel/ChannelSwitcher';
 import { useSidebarStore } from '@/stores/sidebar';
 import { isDockHrefActive } from './dockTransition';
 import styles from './Side.module.css';
@@ -139,6 +141,7 @@ export function Side({ menu, badges }: { menu: SideMenu; badges?: SideBadges }) 
   // 그룹을 옮겨도 접힘이 따라간다 — 지역 상태로 두면 레이아웃이 갈릴 때마다 초기화된다
   const collapsed = useSidebarStore((s) => s.collapsed);
   const toggleCollapsed = useSidebarStore((s) => s.toggle);
+  const userBlockRef = useRef<HTMLDivElement>(null);
 
   return (
     <aside className={styles.sidebar} data-collapsed={collapsed}>
@@ -204,10 +207,16 @@ export function Side({ menu, badges }: { menu: SideMenu; badges?: SideBadges }) 
           </nav>
         </div>
       ))}
-      <div className={styles.userBlock}>
+      <div ref={userBlockRef} className={styles.userBlock}>
         {/* 프로필이 곧 채널 스위처다(시안 1u). 트리거는 아바타+이름까지만: 알림 버튼까지 넣으면 버튼 안 버튼이 된다.
-            펼친 사이드바에서는 위로, 접힌 레일에서는 오른쪽으로 연다(시안 ①②) */}
-        <ChannelSwitcher side={collapsed ? 'right' : 'top'} align={collapsed ? 'end' : 'start'}>
+            펼친 사이드바에서는 위로, 접힌 레일에서는 오른쪽으로 연다(시안 ①②). 위로 열 때는 버튼이 아니라 이 블록에
+            붙여 구분선 위 10px에 띄운다: 버튼에 붙이면 블록 윗여백만큼 내려와 창이 구분선을 덮는다 */}
+        <ChannelSwitcher
+          side={collapsed ? 'right' : 'top'}
+          align={collapsed ? 'end' : 'start'}
+          anchorRef={collapsed ? undefined : userBlockRef}
+          offset={collapsed ? undefined : 10}
+        >
           <button
             type="button"
             className={styles.userTrigger}
@@ -221,13 +230,13 @@ export function Side({ menu, badges }: { menu: SideMenu; badges?: SideBadges }) 
               name={channel.name ?? undefined}
               className={styles.userAvatar}
             />
+            {/* 요금제(Pro)는 뺐다: 구독 API가 없다. 역할은 칩 대신 회색 작은 글씨로 */}
             <span className={styles.userText}>
               <span className={styles.userName}>{channel.name ? `${channel.name} 채널` : ''}</span>
-              {/* 요금제(Pro)는 뺐다: 구독 API가 없다. 역할 칩만 */}
-              <span className={styles.userRole}>
-                {channel.role ? <RoleChip role={channel.role} /> : null}
-              </span>
+              <span className={styles.userRole}>{channel.role}</span>
             </span>
+            {/* 눌러서 채널을 바꾼다는 표시(시안 1u의 위아래 화살표). 접힌 레일에선 라벨과 함께 접는다 */}
+            <ChevronsUpDown aria-hidden className={styles.userChevron} />
           </button>
         </ChannelSwitcher>
         <div className={styles.bellWrap}>

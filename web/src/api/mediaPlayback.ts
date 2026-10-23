@@ -1,5 +1,7 @@
 'use client';
 
+import { trackApiActivity } from './client';
+
 // 녹화 재생 서버(MediaMTX playback, 로컬 시험용 9996) — 끝난 방송 다시보기와 편집기 미리보기가 쓴다.
 //   GET {base}/playback/<키>/list                                       녹화된 구간들(시작 시각·길이)
 //   GET {base}/playback/<키>/get?start=<RFC3339>&duration=<초>&format=mp4   그 구간의 영상 한 덩어리
@@ -73,21 +75,24 @@ export function parseSpanStartMs(iso: string): number {
 export async function lookupRecordingSpans(streamId: string): Promise<RecordingSpan[] | null> {
   if (BASE === '') return null;
   if (!STREAM_ID_RE.test(streamId)) return [];
-  try {
-    const res = await fetch(`${playbackRoot(streamId)}/list`, {
-      signal: AbortSignal.timeout(LIST_TIMEOUT_MS),
-      credentials: mediaCredentials(),
-    });
-    if (res.status === 400 || res.status === 404) return [];
-    if (res.status === 403) forbiddenListener?.(streamId);
-    if (!res.ok) return null;
-    const body = (await res.json()) as { start: string; duration: number }[];
-    return body
-      .map((span) => ({ startMs: parseSpanStartMs(span.start), durationSeconds: span.duration }))
-      .filter((span) => Number.isFinite(span.startMs) && span.durationSeconds > 0);
-  } catch {
-    return null;
-  }
+  // apiFetch 밖 요청이라 직접 알린다(본문까지): 지난 방송 목록이 이것을 기다리니 채널 전환 화면도 기다린다(PR #342 2차 리뷰)
+  return trackApiActivity(async () => {
+    try {
+      const res = await fetch(`${playbackRoot(streamId)}/list`, {
+        signal: AbortSignal.timeout(LIST_TIMEOUT_MS),
+        credentials: mediaCredentials(),
+      });
+      if (res.status === 400 || res.status === 404) return [];
+      if (res.status === 403) forbiddenListener?.(streamId);
+      if (!res.ok) return null;
+      const body = (await res.json()) as { start: string; duration: number }[];
+      return body
+        .map((span) => ({ startMs: parseSpanStartMs(span.start), durationSeconds: span.duration }))
+        .filter((span) => Number.isFinite(span.startMs) && span.durationSeconds > 0);
+    } catch {
+      return null;
+    }
+  });
 }
 
 /** 녹화 구간. 재생 서버가 없거나 녹화가 없거나 묻지 못했으면 빈 배열이다(「있음」만 쓰는 목록·편집기) */

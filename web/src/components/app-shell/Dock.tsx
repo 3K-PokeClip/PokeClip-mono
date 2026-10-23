@@ -62,6 +62,9 @@ const PILL_MOVE: KeyframeAnimationOptions = {
   duration: 320,
   easing: 'cubic-bezier(0.32, 0.72, 0, 1)',
 };
+// 눌러 옮긴 포커스엔 포커스 링을 그리지 않는다 — 스크립트 focus()는 브라우저가 키보드 포커스처럼 링을 그린다.
+// focusVisible은 TS 5.9 DOM 타입에 아직 없어 상수로 넘긴다(객체 리터럴을 바로 넘기면 초과 속성 오류)
+const POINTER_FOCUS = { preventScroll: true, focusVisible: false };
 
 // offset 값으로 잰다 — 잡았을 때의 scale과 독의 translateX가 섞이지 않는다. 알약의 offsetParent는 칸이다
 function boxOf(pill: HTMLElement): PillBox {
@@ -183,7 +186,7 @@ export function Dock({ badges }: { badges?: DockBadges } = {}) {
     }
     // 고른 칸으로 포커스를 옮긴다 — pointerdown의 preventDefault가 브라우저의 포커스 이동을 막아, 안 옮기면
     // 키보드로 와 있던 옛 칸에 포커스가 남아 이어서 누른 Enter가 옛 탭으로 되돌아간다(ModeSegment와 같다)
-    items.current[index]?.focus({ preventScroll: true });
+    items.current[index]?.focus(POINTER_FOCUS);
     if (press.grabbed) {
       // 끌어 놓은 칸은 주소가 바뀔 때까지 붙든다 — 지금 탭에 놓았으면 붙들 것이 없다
       if (index !== restIndex) {

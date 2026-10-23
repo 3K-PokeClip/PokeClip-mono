@@ -164,6 +164,35 @@ describe('HomeScreen', () => {
     vi.restoreAllMocks();
   });
 
+  it('내려가면 읽던 것을 끊는다: 채널을 바꿔 홈이 다시 그려지면 옛 채널 카드 요청을 이어 가지 않는다(PR #342 2차 리뷰)', async () => {
+    const s: Server = { past: [pastRow('S-old', new Date())] };
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const signals: AbortSignal[] = [];
+    const fetchSpy = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (!url.includes('state=past')) return Promise.resolve(route(url, s));
+      // 지난 방송 목록이 늦게 온다: 그 사이에 채널이 바뀌어 홈이 내려간다
+      if (init?.signal) signals.push(init.signal);
+      return gate.then(() => route(url, s));
+    });
+    vi.stubGlobal('fetch', fetchSpy);
+    const { unmount } = render(<HomeScreen />);
+    await waitFor(() => expect(signals).toHaveLength(1));
+
+    unmount();
+    expect(signals[0]!.aborted).toBe(true);
+    // 이 가짜 서버는 끊겨도 답한다: 답이 와도 다음 단계(카드)로 가지 않는다
+    await act(async () => {
+      release();
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    const asked = fetchSpy.mock.calls.map(([u]) => String(u));
+    expect(asked.filter((u) => u.includes('/jump-cards'))).toEqual([]);
+  });
+
   it('첫 응답 전에는 신규 계정 화면(준비 단계)을 보이지 않는다', () => {
     vi.stubGlobal(
       'fetch',
