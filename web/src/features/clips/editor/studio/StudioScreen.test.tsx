@@ -1,4 +1,4 @@
-import { act } from 'react';
+import { act, useState } from 'react';
 import { fireEvent, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
@@ -224,6 +224,105 @@ describe('StudioScreen', () => {
     expect(zoomIn).toBeEnabled();
   });
 
+  it('카드 범위가 좁아도 100%에서 손잡이를 범위 끝까지 끌어 구간을 늘리고, 확대는 그대로 된다(로컬 리뷰 3라운드)', async () => {
+    const user = userEvent.setup();
+    // 카드 창 100~119초에 5초 구간. 100% = 범위 전체(19초)
+    renderStudio({
+      source: {
+        clipTitle: '카드',
+        sourceLabel: '방송',
+        minSeconds: 100,
+        durationSeconds: 119,
+        range: { startSeconds: 107, endSeconds: 112 },
+      },
+      playback: {
+        playing: false,
+        currentSeconds: 107,
+        durationSeconds: 119,
+        error: null,
+        togglePlay: vi.fn(),
+        seekTo: vi.fn(),
+        seekBy: vi.fn(),
+        setRate: vi.fn(),
+        setBounds: vi.fn(),
+      },
+    });
+    const bar = screen.getByRole('toolbar', { name: '재생과 구간' });
+    // 범위보다 넓힐 수 없으니 축소 단추는 꺼져 있다
+    expect(within(bar).getByRole('button', { name: '타임라인 축소' })).toBeDisabled();
+
+    // 구간 늘리기: 끝점을 레인 오른쪽 끝까지 끌면 범위 끝(119초)까지 늘어난다
+    const end = screen.getByRole('slider', { name: '구간 끝점' });
+    const overlay = document.querySelector<HTMLElement>('[data-scrub]')!.parentElement!;
+    overlay.getBoundingClientRect = () => ({ left: 0, width: 1000 }) as DOMRect;
+    end.setPointerCapture = () => {};
+    end.hasPointerCapture = () => true;
+    fireEvent.pointerDown(end, { clientX: 600, pointerId: 3 });
+    fireEvent.pointerMove(end, { clientX: 1000, pointerId: 3 });
+    fireEvent.pointerUp(end, { pointerId: 3 });
+    expect(Number(end.getAttribute('aria-valuenow'))).toBeCloseTo(119);
+
+    // 확대: 200%면 눈금 폭이 범위의 절반이 된다
+    const span = () => {
+      const ticks = [...document.querySelectorAll('[data-ruler] span')].map((t) => t.textContent!);
+      return ticks;
+    };
+    const at100 = span();
+    await user.click(within(bar).getByRole('button', { name: '타임라인 한 단계 확대' }));
+    expect(span()).not.toEqual(at100);
+    expect(within(bar).getByRole('button', { name: '타임라인 축소' })).toBeEnabled();
+  });
+
+  it('키운 채 끄는 동안은 창을 붙잡는다: 재생 위치가 창 밖으로 가도 끄던 자리 밑에서 창이 안 넘어간다(로컬 리뷰 2라운드)', async () => {
+    const user = userEvent.setup();
+    // 재생 위치를 바깥에서 바꾸는 재생기(실제 재생기처럼 seekTo가 위치를 옮긴다)
+    let setPosition: (seconds: number) => void = () => {};
+    function Harness() {
+      const [position, setPos] = useState(130);
+      setPosition = setPos;
+      return (
+        <StudioEditor
+          source={{
+            clipTitle: '카드',
+            sourceLabel: '방송',
+            durationSeconds: 400,
+            range: { startSeconds: 100, endSeconds: 160 },
+          }}
+          playback={{
+            playing: false,
+            currentSeconds: position,
+            durationSeconds: 400,
+            error: null,
+            togglePlay: vi.fn(),
+            seekTo: setPos,
+            seekBy: vi.fn(),
+            setRate: vi.fn(),
+            setBounds: vi.fn(),
+          }}
+        />
+      );
+    }
+    renderWithProviders(<Harness />);
+    const bar = screen.getByRole('toolbar', { name: '재생과 구간' });
+    await user.click(within(bar).getByRole('button', { name: '타임라인 한 단계 확대' }));
+    await user.click(within(bar).getByRole('button', { name: '타임라인 한 단계 확대' }));
+    const ticks = () =>
+      [...document.querySelectorAll('[data-ruler] span')].map((tick) => tick.textContent);
+    const before = ticks();
+
+    const scrub = document.querySelector<HTMLElement>('[data-scrub]')!;
+    scrub.parentElement!.getBoundingClientRect = () => ({ left: 0, width: 1000 }) as DOMRect;
+    scrub.setPointerCapture = () => {};
+    scrub.hasPointerCapture = () => true;
+    fireEvent.pointerDown(scrub, { clientX: 500, pointerId: 1 });
+    // 끄는 중에 재생 위치가 창 밖(150초)으로 가도 창은 그대로다
+    act(() => setPosition(150));
+    expect(ticks()).toEqual(before);
+    // 놓으면 그때 재생 위치를 따라 넘어간다
+    fireEvent.pointerUp(scrub, { pointerId: 1 });
+    expect(ticks()).not.toEqual(before);
+  });
+
   it('키우면 구간보다 좁게 재생 위치 둘레만 보이고, 밖으로 나간 끝은 가장자리 표시가 대신한다(POK-389)', async () => {
     const user = userEvent.setup();
     const seekTo = vi.fn();
@@ -253,8 +352,8 @@ describe('StudioScreen', () => {
 
     await user.click(within(bar).getByRole('button', { name: '타임라인 한 단계 확대' }));
     await user.click(within(bar).getByRole('button', { name: '타임라인 한 단계 확대' }));
-    // 400%: 18.75초 창(121~139초)이라 두 끝이 다 밖이다
-    expect(screen.queryAllByRole('slider', { name: /구간 (시작|끝)점/ })).toHaveLength(0);
+    // 400%: 18.75초 창(121~139초)이라 두 끝이 다 밖이다. 손잡이는 잘려 안 보일 뿐 그대로 있다(키보드 초점을 잃지 않게)
+    expect(screen.getAllByRole('slider', { name: /구간 (시작|끝)점/ })).toHaveLength(2);
     await user.click(screen.getByRole('button', { name: '시작점으로 가기' }));
     expect(seekTo).toHaveBeenLastCalledWith(100);
     await user.click(screen.getByRole('button', { name: '끝점으로 가기' }));

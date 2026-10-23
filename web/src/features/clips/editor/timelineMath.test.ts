@@ -17,6 +17,7 @@ import {
   secondsFromPointer,
   secondsToFraction,
   zoomedView,
+  zoomSpan,
   zoomStep,
 } from './timelineMath';
 
@@ -154,15 +155,15 @@ describe('창 환산', () => {
         maxSeconds: max,
         previous: null,
       });
-    // 구간 가운데: 10초 구간이면 11.5초 창이 구간을 0.75초씩 넉넉히 품는다
-    expect(at({ startSeconds: 20, endSeconds: 30 })).toEqual({
-      startSeconds: 19.25,
-      endSeconds: 30.75,
+    // 구간 가운데에 기본 75초 창을 두되 원본 밖으로는 안 나간다
+    expect(at({ startSeconds: 200, endSeconds: 210 })).toEqual({
+      startSeconds: 167.5,
+      endSeconds: 242.5,
     });
-    expect(at({ startSeconds: 0, endSeconds: 10 }).startSeconds).toBe(0);
+    expect(at({ startSeconds: 5, endSeconds: 15 }).startSeconds).toBe(0);
     expect(at({ startSeconds: DURATION - 10, endSeconds: DURATION }).endSeconds).toBe(DURATION);
-    // 원본이 창보다 짧으면 전체를 보여준다(25%: 46초 창 > 30초 원본)
-    expect(at({ startSeconds: 5, endSeconds: 15 }, 30, 25)).toEqual({
+    // 원본이 창보다 짧으면 전체를 보여준다
+    expect(at({ startSeconds: 5, endSeconds: 15 }, 30)).toEqual({
       startSeconds: 0,
       endSeconds: 30,
     });
@@ -177,40 +178,26 @@ describe('줌·높이', () => {
     expect(zoomStep(400, 'in')).toBe(400);
   });
 
-  it('다섯 배율의 폭이 다 다르다: 짧은 구간 · 좁은 범위에서도(사용자 실화면 재현, POK-389)', () => {
-    // 5초 구간, 잡을 수 있는 범위 19초, 정지 · 재생 위치는 구간 시작. 전에는 100%가 「기본 75초」라 범위(19초)에 잘려
-    // 25% · 50% · 100% · 200%가 모두 19초였다
-    const widths = ZOOM_LEVELS.map((zoom) => {
-      const view = zoomedView({
-        range: { startSeconds: 107, endSeconds: 112 },
-        playheadSeconds: 107,
-        zoom,
-        minSeconds: 100,
-        maxSeconds: 119,
-        previous: null,
-      });
-      return +(view.endSeconds - view.startSeconds).toFixed(3);
-    });
-    // 100% = 구간 × 1.15, 25% · 50%는 그 4배 · 2배(범위까지만), 200% · 400%는 절반 · 4분의 1
-    expect(widths).toEqual([19, 11.5, 5.75, 2.875, 1.438]);
+  it('100%는 잡을 수 있는 범위 전체다: 짧은 구간이어도 손잡이를 범위 끝까지 끌 수 있다(로컬 리뷰 3라운드, 사용자 결정)', () => {
+    // 5초 구간, 잡을 수 있는 범위 19초(카드 창). 100%가 「구간에 맞춤」이면 한 번 끌어 0.7초밖에 못 늘렸다
+    const widths = ZOOM_LEVELS.map(
+      (zoom) => +zoomSpan({ startSeconds: 107, endSeconds: 112 }, zoom, 100, 119).toFixed(3),
+    );
+    // 25% · 50%는 범위보다 넓힐 수 없어 100%와 같고(화면은 그 단추를 끈다), 200% · 400%는 100% 폭의 절반 · 4분의 1
+    expect(widths).toEqual([19, 19, 19, 9.5, 4.75]);
   });
 
-  it('100%는 구간에 맞춘다: 아주 짧은 구간도 최소 5초는 보인다', () => {
-    const view = zoomedView({
-      range: { startSeconds: 50, endSeconds: 51 },
-      playheadSeconds: 50,
-      zoom: 100,
-      minSeconds: 0,
-      maxSeconds: DURATION,
-      previous: null,
-    });
-    expect(view.endSeconds - view.startSeconds).toBe(5);
+  it('범위가 넓으면 25% · 50%가 100%보다 넓다(기본 75초 기준, 범위까지만)', () => {
+    const widths = ZOOM_LEVELS.map((zoom) =>
+      zoomSpan({ startSeconds: 2000, endSeconds: 2010 }, zoom, 0, DURATION),
+    );
+    expect(widths).toEqual([300, 150, 75, 37.5, 18.75]);
   });
 
   describe('100%를 넘기면 진짜로 키운다: 구간보다 좁아질 수 있고 재생 위치를 따라간다(POK-389)', () => {
-    // 1분 구간(카드 하나). 100%는 구간 × 1.15 = 69초, 400%는 17.25초
+    // 1분 구간, 잡을 수 있는 범위 120초. 100%는 기본 75초(구간 × 1.15 = 69초보다 크다), 400%는 18.75초
     const range = { startSeconds: 100, endSeconds: 160 };
-    const span = 69 / 4;
+    const span = 75 / 4;
     const base = { range, minSeconds: 70, maxSeconds: 190 };
 
     it('처음 키우면 재생 위치를 가운데에 두고 폭이 배율만큼 줄어든다', () => {

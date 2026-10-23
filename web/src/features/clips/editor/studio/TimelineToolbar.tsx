@@ -99,7 +99,8 @@ export function TimelineToolbar({ state }: { state: ClipEditorMockState }) {
           size="sm"
           aria-label="타임라인 축소"
           title="타임라인 축소"
-          disabled={zoomIndex <= 0}
+          // 범위보다 넓힐 수 없으면(카드 창 등) 꺼 둔다: 눌러도 화면이 그대로다
+          disabled={!state.canZoomOut}
           onClick={() => state.setZoom(state.zoomLevels[zoomIndex - 1] ?? state.zoom)}
         >
           <ZoomOut size={14} aria-hidden />

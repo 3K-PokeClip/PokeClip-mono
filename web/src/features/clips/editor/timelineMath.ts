@@ -21,12 +21,12 @@ export const MAX_RANGE_LABEL = '3:00';
  */
 export const MAX_RANGE_TEXT = `${MAX_RANGE_SECONDS / 60}분`;
 
-/** 100%(구간에 맞춤)에서도 이보다는 좁히지 않는다: 아주 짧은 구간도 둘레가 보이게 */
-export const MIN_FIT_SECONDS = 5;
+/** 100% 배율에서 타임라인에 보이는 폭(구간이 더 길면 구간 × 1.15). 잡을 수 있는 범위보다 넓으면 범위까지만(시안 눈금자) */
+export const BASE_VIEW_SECONDS = 75;
 
 /**
- * 줌 단계: `100%`가 기본값이고 「구간에 맞춤」이다(zoomedView). 25% · 50%는 그 4배 · 2배로 넓혀 구간 밖을 보고
- * (잡을 수 있는 범위까지만), 200% · 400%는 재생 위치 둘레를 키운다.
+ * 줌 단계: `100%`가 기본값이다(zoomSpan). 25% · 50%는 그 4배 · 2배로 넓히되 잡을 수 있는 범위까지만이라, 카드 창처럼 범위가
+ * 좁으면 100%와 같다(화면이 축소 단추를 끈다). 200% · 400%는 100%에 보이는 폭의 절반 · 4분의 1로 재생 위치 둘레를 키운다.
  */
 export const ZOOM_LEVELS = [25, 50, 100, 200, 400] as const;
 
@@ -176,9 +176,29 @@ export function secondsFromPointer(
 }
 
 /**
- * 확대 배율에서 보이는 창(POK-389). 100%는 구간에 맞춘 폭(구간 × 1.15, 최소 5초)이고 배율만큼 좁히거나 넓힌다.
- * 🔴 전에는 100%를 「기본 75초」로 잡아, 잡을 수 있는 범위가 그보다 좁으면(카드 창 19초 등) 25% · 50% · 100% · 200%가
- * 모두 범위 폭으로 잘려 같아 보였다(사용자 실화면: 확대·축소가 안 된다).
+ * 배율의 창 폭(POK-389). 100% = 기본 75초와 구간 × 1.15 중 큰 폭을 잡을 수 있는 범위로 자른 것(손잡이를 범위 끝까지 끌 수 있다).
+ * 25% · 50%는 그 4배 · 2배를 범위로 자르고, 200% · 400%는 100% 폭을 나눈다.
+ * 🔴 한때 200%를 「기본 75초 ÷ 2」로 잡아 범위가 좁으면(카드 창 19초) 200%까지 다 범위 폭으로 잘려 확대가 안 됐고, 그걸 고치려
+ * 100%를 「구간에 맞춤」으로 바꿨더니 이번엔 100%에서 손잡이를 구간의 7.5%밖에 못 끌었다(로컬 리뷰 3라운드). 확대는
+ * 「지금 보이는 100% 폭」을 나눠야 둘 다 된다.
+ */
+export function zoomSpan(
+  range: ClipRange,
+  zoom: number,
+  minSeconds: number,
+  maxSeconds: number,
+): number {
+  const available = Math.max(0, maxSeconds - minSeconds);
+  const fit = Math.min(
+    available,
+    Math.max(BASE_VIEW_SECONDS, (range.endSeconds - range.startSeconds) * 1.15),
+  );
+  if (zoom >= 100) return (fit * 100) / zoom;
+  return Math.min(available, (fit * 100) / zoom);
+}
+
+/**
+ * 확대 배율에서 보이는 창(POK-389). 폭은 zoomSpan.
  *
  * - 100% 이하: 구간 가운데에 둔다. 구간 손잡이가 늘 보인다.
  * - 100% 초과: 구간보다 좁아질 수 있어(캡컷처럼 진짜 확대) 재생 위치를 따라간다. 앞 창 안에 재생 위치가 있으면 그대로 두고
@@ -203,9 +223,7 @@ export function zoomedView({
   /** 바로 앞에 그린 창. 처음이면 null */
   previous: TimelineView | null;
 }): TimelineView {
-  const fitSpan = Math.max(MIN_FIT_SECONDS, (range.endSeconds - range.startSeconds) * 1.15);
-  const available = Math.max(0, maxSeconds - minSeconds);
-  const span = Math.min(available, (fitSpan * 100) / zoom);
+  const span = zoomSpan(range, zoom, minSeconds, maxSeconds);
   const place = (start: number) => {
     const clamped = Math.min(Math.max(minSeconds, start), maxSeconds - span);
     return { startSeconds: roundMs(clamped), endSeconds: roundMs(clamped + span) };

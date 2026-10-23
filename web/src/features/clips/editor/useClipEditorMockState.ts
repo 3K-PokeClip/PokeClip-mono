@@ -13,7 +13,7 @@
 // 누르면 「준비 중」이라고만 말한다. 저장·주문은 `actions`가 실제 서버로 보낸다.
 // `source`가 없으면 지금까지의 목업이다(시험·스토리북).
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useToast } from '@/ui';
 import {
   cropRectOf,
@@ -82,6 +82,7 @@ import {
   resolveRangeEdge,
   clampTimelineHeight,
   zoomedView,
+  zoomSpan,
   zoomStep,
   ZOOM_LEVELS,
   type ClipRange,
@@ -619,6 +620,8 @@ export interface ClipEditorMockState {
   zoomOut: () => void;
   /** 확대 막대가 고르는 단계들(%): 막대 값은 이 목록의 자리다 */
   zoomLevels: readonly number[];
+  /** 한 단계 줄이면 실제로 더 넓어지는가(잡을 수 있는 범위에 막혀 같으면 false) */
+  canZoomOut: boolean;
   setZoom: (zoom: number) => void;
 }
 
@@ -883,7 +886,10 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
       }),
     [recipe.range, followedPlayhead, zoom, source.durationSeconds, source.minSeconds],
   );
-  previousViewRef.current = liveView;
+  // 커밋된 창만 다음 계산에 쓴다: 그리는 중에 바꾸면 버려진 그리기(개발 모드 두 번 그리기 등)의 창이 남는다
+  useLayoutEffect(() => {
+    previousViewRef.current = liveView;
+  }, [liveView]);
   // 제스처가 시작될 때의 창을 그대로 붙잡아 둔다
   const liveViewRef = useRef(liveView);
   liveViewRef.current = liveView;
@@ -1285,6 +1291,16 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     zoomIn: useCallback(() => setZoom((z) => zoomStep(z, 'in')), []),
     zoomOut: useCallback(() => setZoom((z) => zoomStep(z, 'out')), []),
     zoomLevels: ZOOM_LEVELS,
+    canZoomOut: (() => {
+      const index = ZOOM_LEVELS.indexOf(zoom as (typeof ZOOM_LEVELS)[number]);
+      const lower = ZOOM_LEVELS[index - 1];
+      if (index <= 0 || lower === undefined) return false;
+      const min = source.minSeconds ?? 0;
+      return (
+        zoomSpan(recipe.range, lower, min, source.durationSeconds) >
+        zoomSpan(recipe.range, zoom, min, source.durationSeconds) + 1e-6
+      );
+    })(),
     setZoom,
   };
 }
