@@ -10,6 +10,8 @@ import styles from './ModeSegment.module.css';
 // - 손잡이(고른 칸)를 누르면 살짝 작아지고 손가락을 따라 칸 단위로 옮겨 가며, 놓는 칸으로 정해진다.
 // - 다른 칸을 누르면 그 칸만 흐려졌다가 놓을 때 손잡이가 그리로 미끄러진다(누른 채 옆 칸으로 끌면 놓는 칸).
 // - 위아래로 CANCEL_SLOP 넘게 벗어나 놓으면 취소. 세로로 밀면 화면 스크롤로 넘긴다(touch-action: pan-y).
+// - 포인터를 놓치면(pointercancel · lostpointercapture) 값은 그대로 두고 누름만 푼다 — 안 풀면 누름이
+//   남아 다음 pointerdown을 버리고, 터치는 손가락마다 pointerId가 바뀌어 그 줄이 손에 반응하지 않는다.
 // - 키보드는 숨긴 진짜 라디오가 맡는다 — 방향키로 바꿔도 손잡이가 같은 애니메이션으로 옮겨 간다.
 //   포인터로 고르면 그 칸의 라디오로 포커스를 옮긴다(아래 onPointerUp) — 안 옮기면 키보드로 와 있던
 //   다른 줄에 포커스가 남아, 이어서 누른 방향키가 그 줄을 바꾼다.
@@ -71,8 +73,8 @@ export function ModeSegment<T extends string>({
     if (e.button !== 0 || press) return;
     // 끄는 동안 글자가 잡히거나 라벨 클릭으로 값이 먼저 바뀌지 않게
     e.preventDefault();
-    // 칸 밖으로 끌어도 이 요소가 이벤트를 계속 받게 — jsdom에는 없어 있을 때만 건다
-    e.currentTarget.setPointerCapture?.(e.pointerId);
+    // 칸 밖으로 끌어도 이 요소가 이벤트를 계속 받게
+    e.currentTarget.setPointerCapture(e.pointerId);
     const index = indexAt(e.clientX);
     setPress({ pointerId: e.pointerId, grabbed: index === selected, index });
   };
@@ -97,6 +99,12 @@ export function ModeSegment<T extends string>({
     if (next.key !== value) onChange(next.key);
   };
 
+  // 잡고 있던 포인터만 푼다 — 다른 손가락의 취소가 이 누름을 지우지 않게.
+  // lostpointercapture는 pointerup 뒤에도 오지만 그때는 이미 풀린 뒤라 아무 일도 하지 않는다
+  const onPointerLost = (e: PointerEvent<HTMLDivElement>) => {
+    if (press && e.pointerId === press.pointerId) setPress(null);
+  };
+
   return (
     <div
       ref={ref}
@@ -104,12 +112,13 @@ export function ModeSegment<T extends string>({
       role="radiogroup"
       aria-labelledby={labelledBy}
       aria-describedby={describedBy}
-      data-pressed={press ? '' : undefined}
+      data-grabbing={press?.grabbed ? '' : undefined}
       style={{ '--seg-n': options.length, '--seg-i': thumbIndex } as CSSProperties}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
-      onPointerCancel={() => setPress(null)}
+      onPointerCancel={onPointerLost}
+      onLostPointerCapture={onPointerLost}
     >
       <span className={styles.thumb} data-grabbed={press?.grabbed ? '' : undefined} aria-hidden />
       {options.map((o, i) => (

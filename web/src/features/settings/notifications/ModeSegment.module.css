@@ -17,7 +17,8 @@
   cursor: pointer;
 }
 
-.root[data-pressed] {
+/* 손잡이를 잡고 끄는 동안만 — 다른 칸을 누르고 있을 때는 아무것도 끌지 않는다 */
+.root[data-grabbing] {
   cursor: grabbing;
 }
 

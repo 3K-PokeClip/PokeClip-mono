@@ -149,6 +149,45 @@ describe('ModeSegment', () => {
     expect(before).toHaveFocus();
   });
 
+  it('포인터를 놓치면 누름만 풀고, 다음 누름은 새 포인터로 바로 받는다', () => {
+    const { group, onChange, checked, thumb } = setup('important');
+
+    fireEvent.pointerDown(group, { pointerId: 1, clientX: X[2], clientY: Y });
+    expect(thumb).toHaveAttribute('data-grabbed');
+    fireEvent.lostPointerCapture(group, { pointerId: 1 });
+    expect(thumb).not.toHaveAttribute('data-grabbed');
+    expect(onChange).not.toHaveBeenCalled();
+
+    // 터치는 접촉마다 pointerId가 바뀐다 — 누름이 굳어 있으면 이 누름을 버린다
+    fireEvent.pointerDown(group, { pointerId: 2, clientX: X[0], clientY: Y });
+    fireEvent.pointerUp(group, { pointerId: 2, clientX: X[0], clientY: Y });
+    expect(checked()).toBe('끔');
+  });
+
+  it('다른 포인터의 취소는 지금 누름을 지우지 않는다', () => {
+    const { group, onChange, thumb } = setup('important');
+
+    fireEvent.pointerDown(group, { pointerId: 1, clientX: X[2], clientY: Y });
+    fireEvent.pointerCancel(group, { pointerId: 2 });
+    expect(thumb).toHaveAttribute('data-grabbed');
+
+    fireEvent.pointerMove(group, { pointerId: 1, clientX: X[0], clientY: Y });
+    fireEvent.pointerUp(group, { pointerId: 1, clientX: X[0], clientY: Y });
+    expect(onChange).toHaveBeenCalledWith('off');
+  });
+
+  it('움켜쥔 커서는 손잡이를 잡았을 때만 — 다른 칸을 누르는 동안은 아니다', () => {
+    const { group } = setup('important');
+
+    fireEvent.pointerDown(group, { pointerId: 1, clientX: X[0], clientY: Y });
+    expect(group).not.toHaveAttribute('data-grabbing');
+    fireEvent.pointerUp(group, { pointerId: 1, clientX: X[0], clientY: Y });
+
+    // 이제 「끔」이 손잡이다
+    fireEvent.pointerDown(group, { pointerId: 2, clientX: X[0], clientY: Y });
+    expect(group).toHaveAttribute('data-grabbing');
+  });
+
   it('키보드·낭독기는 숨긴 라디오로 고른다', () => {
     const { group, onChange, checked } = setup('on');
 
