@@ -1,8 +1,9 @@
-package com.pokeclip.chat.collector.support;
+package com.pokeclip.db.support;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
@@ -22,6 +23,10 @@ import java.util.concurrent.atomic.AtomicReference;
  * 고르면 커넥션 풀의 생존 검사(isValid)가 먼저 스톨을 만나 재는 대상이 바뀐다 —
  * 표식을 INSERT의 SQL 텍스트로 두면 <b>정확히 그 배치의 응답</b>이 막힌다.
  * 스톨 뒤에는 서버→클라이언트 바이트를 읽어서 버린다(연결은 유지).
+ *
+ * <p>수집 서버 시험에만 있던 것을 auth · clip의 DB 시한 시험(POK-414)이 같이 쓰려고 여기로 옮겼다(사본이 갈리지 않게).
+ * 옮기면서 듣는 주소를 루프백으로 못박았다: 와일드카드면 남의 프로세스가 같은 번호의 127.0.0.1을 잡아 연결을 가져간다
+ * (services/CLAUDE.md 「시험용 임시 포트」).
  */
 public final class StallingTcpProxy implements AutoCloseable {
 
@@ -37,7 +42,7 @@ public final class StallingTcpProxy implements AutoCloseable {
     public StallingTcpProxy(String targetHost, int targetPort) throws IOException {
         this.targetHost = targetHost;
         this.targetPort = targetPort;
-        this.server = new ServerSocket(0);
+        this.server = new ServerSocket(0, 50, InetAddress.getLoopbackAddress());
         this.acceptor = new Thread(this::acceptLoop, "stalling-proxy-accept");
         acceptor.setDaemon(true);
         acceptor.start();

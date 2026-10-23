@@ -13,6 +13,16 @@ spring:
     url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${POSTGRES_DB}
     username: ${POSTGRES_USER}
     password: ${POSTGRES_PASSWORD}
+    hikari:
+      data-source-properties:
+        # DB 응답 대기 시한(초, POK-414). 연결은 받고 응답을 안 하는 DB(반개방)를 끊는 것은 이것뿐이다:
+        # queryTimeout은 취소를 서버에 보내 답 없는 상대에게 무력하고, Hikari connection-timeout은 풀에서 빌리는
+        # 대기라 이미 빌린 연결의 읽기를 못 끊는다(services/CLAUDE.md 실측, 둘 다 20초 넘게 매달림). 없으면 그 요청
+        # 스레드가 끝없이 매달려 풀이 바닥나고 화면이 통째로 멈춘다(수집 서버 PR #55와 같은 현상).
+        # 수집 · 판별 서버와 같은 10이다. 이 연결의 모든 문장에 걸린다: 10초를 넘기는 마이그레이션(큰 표 색인)을
+        # 쓰는 날 이 값을 다시 본다. 정수로 주면 Hikari가 조용히 무시한다(문자열로 바인딩돼야 먹는다).
+        # DatasourceTimeoutTest가 값이 아니라 행동으로 잰다. iam 허용 목록(db-support)이 받는 유일한 드라이버 속성이다.
+        socketTimeout: 10
 
   jpa:
     hibernate:
