@@ -20,7 +20,7 @@ import java.util.regex.Pattern;
  * {@code BroadcastAccessGuard}를 먼저 지난다.
  *
  * <p><b>범위는 그 스트리머의 영상 전부다</b> — 계약3 7-1의 경로 종류({@code /live} · {@code /dvr} ·
- * {@code /vod})마다 정책 {@code {base}/{kind}/{streamId}/*} 하나, 쿠키 셋 하나. 카드 하나 구간만 열면
+ * {@code /vod} · {@code /playback})마다 정책 {@code {base}/{kind}/{streamId}/*} 하나, 쿠키 셋 하나. 카드 하나 구간만 열면
  * 카드를 넘길 때마다 새로 받아야 하고, 그 왕복마다 auth를 두드린다.
  *
  * <p>🔴 <b>종류를 앞 와일드카드 하나({@code {base}/*&#47;{streamId}/*})로 덮지 않는다</b>(봇 리뷰 2판).
@@ -45,8 +45,12 @@ public class PlaybackAccessSigner {
     /** 계약9 좌표(스트림키·회차 번호)가 쓰는 문자만. 와일드카드·구분자·공백은 전부 밖이다. */
     static final Pattern SAFE_STREAM_ID = Pattern.compile("[A-Za-z0-9._-]{1,128}");
 
-    /** 계약3 7-1의 경로 종류. 순서가 곧 응답 순서다. 새 종류가 생기면 여기 한 줄이고, 쿠키는 셋씩 는다. */
-    static final List<String> KINDS = List.of("live", "dvr", "vod");
+    /**
+     * 계약3 7-1의 경로 종류. 순서가 곧 응답 순서다. 새 종류가 생기면 여기 한 줄이고, 쿠키는 셋씩 는다.
+     * {@code playback}은 녹화 재생 서버의 목록 · 조각 길이다(POK-317). 🔴 쿼리는 정책이 못 막으므로 그 서버의
+     * {@code path} 쿼리는 엣지가 경로의 키로 덮는다(클라이언트가 보낸 값은 버린다).
+     */
+    static final List<String> KINDS = List.of("live", "dvr", "vod", "playback");
 
     private final PlaybackProperties properties;
     private final CloudFrontUtilities cloudFront = CloudFrontUtilities.create();
