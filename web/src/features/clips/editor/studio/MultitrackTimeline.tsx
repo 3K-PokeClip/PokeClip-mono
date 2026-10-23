@@ -10,6 +10,7 @@ import {
   MAX_RANGE_SECONDS,
   MAX_RANGE_TEXT,
   MIN_RANGE_SECONDS,
+  rulerLabel,
   rulerTicks,
   secondsFromPointer,
   secondsToFraction,
@@ -101,10 +102,6 @@ export function MultitrackTimeline({
   };
 
   // 키운 창 밖으로 나간 구간 끝(POK-389): 가장자리에 표시하고 누르면 그리로 간다(손잡이를 잃지 않게)
-  const outside = (seconds: number) =>
-    seconds < state.view.startSeconds || seconds > state.view.endSeconds;
-  const startHidden = outside(state.range.startSeconds);
-  const endHidden = outside(state.range.endSeconds);
   // 왼쪽 표시: 시작점이 왼쪽 밖이면 「시작점」, 구간이 통째로 왼쪽 밖이면 「구간」. 오른쪽도 같다
   const leftMarker =
     state.range.endSeconds < state.view.startSeconds
@@ -233,7 +230,9 @@ export function MultitrackTimeline({
             onLostPointerCapture={onScrubPointerUp}
           >
             {rulerTicks(state.view).map((tick) => (
-              <span key={tick}>{formatUptime(tick)}</span>
+              <span key={tick}>
+                {rulerLabel(tick, state.view.endSeconds - state.view.startSeconds)}
+              </span>
             ))}
           </div>
 
@@ -350,49 +349,47 @@ export function MultitrackTimeline({
                   width: `${(endFraction - startFraction) * 100}%`,
                 }}
               >
-                {/* 핸들은 창 안에 있을 때만 그린다(100% 이하에서는 창이 구간을 품어 늘 보인다). 키워서 창 밖으로 나간
-                    끝은 가장자리 표시가 대신한다: 덮개가 가로로 잘라 밖의 핸들은 어차피 안 보인다 */}
-                {(['start', 'end'] as const)
-                  .filter((edge) => !(edge === 'start' ? startHidden : endHidden))
-                  .map((edge) => (
-                    <button
-                      key={edge}
-                      type="button"
-                      role="slider"
-                      aria-label={edge === 'start' ? '구간 시작점' : '구간 끝점'}
-                      // 이름·키 조작이 「경계 위치」를 뜻하므로 값도 위치로 읽어 준다.
-                      // 길이를 실으면 시작점에서 ArrowRight(증가)에 값이 줄어드는 모순이 생기고
-                      // 두 핸들이 늘 같은 숫자를 말한다.
-                      // 길이 상한(3분)까지 반영한다. 안 하면 「0부터」라 안내해 놓고
-                      // 그쪽으로는 값이 움직이지 않는다
-                      aria-valuemin={
-                        edge === 'start'
-                          ? Math.max(0, state.range.endSeconds - MAX_RANGE_SECONDS)
-                          : state.range.startSeconds + MIN_RANGE_SECONDS
-                      }
-                      aria-valuemax={
-                        edge === 'start'
-                          ? state.range.endSeconds - MIN_RANGE_SECONDS
-                          : Math.min(
-                              state.sourceDurationSeconds,
-                              state.range.startSeconds + MAX_RANGE_SECONDS,
-                            )
-                      }
-                      aria-valuenow={
-                        edge === 'start' ? state.range.startSeconds : state.range.endSeconds
-                      }
-                      aria-valuetext={`${edge === 'start' ? state.rangeStartLabel : state.rangeEndLabel} · 구간 ${state.rangeLengthLabel}`}
-                      className={`${styles.rangeHandle} ${
-                        edge === 'start' ? styles.rangeHandleStart : styles.rangeHandleEnd
-                      }`}
-                      onPointerDown={onHandlePointerDown(edge)}
-                      onPointerMove={onHandlePointerMove}
-                      onPointerUp={onHandlePointerUp}
-                      onPointerCancel={onHandlePointerUp}
-                      onLostPointerCapture={onHandlePointerUp}
-                      onKeyDown={onHandleKeyDown(edge)}
-                    />
-                  ))}
+                {/* 핸들은 늘 그린다. 키워서 창 밖으로 나간 핸들은 덮개가 가로로 잘라 안 보이고 가장자리 표시가 대신한다.
+                    빼 버리면 그 핸들에 있던 키보드 초점이 사라진다(로컬 리뷰 1라운드) */}
+                {(['start', 'end'] as const).map((edge) => (
+                  <button
+                    key={edge}
+                    type="button"
+                    role="slider"
+                    aria-label={edge === 'start' ? '구간 시작점' : '구간 끝점'}
+                    // 이름·키 조작이 「경계 위치」를 뜻하므로 값도 위치로 읽어 준다.
+                    // 길이를 실으면 시작점에서 ArrowRight(증가)에 값이 줄어드는 모순이 생기고
+                    // 두 핸들이 늘 같은 숫자를 말한다.
+                    // 길이 상한(3분)까지 반영한다. 안 하면 「0부터」라 안내해 놓고
+                    // 그쪽으로는 값이 움직이지 않는다
+                    aria-valuemin={
+                      edge === 'start'
+                        ? Math.max(0, state.range.endSeconds - MAX_RANGE_SECONDS)
+                        : state.range.startSeconds + MIN_RANGE_SECONDS
+                    }
+                    aria-valuemax={
+                      edge === 'start'
+                        ? state.range.endSeconds - MIN_RANGE_SECONDS
+                        : Math.min(
+                            state.sourceDurationSeconds,
+                            state.range.startSeconds + MAX_RANGE_SECONDS,
+                          )
+                    }
+                    aria-valuenow={
+                      edge === 'start' ? state.range.startSeconds : state.range.endSeconds
+                    }
+                    aria-valuetext={`${edge === 'start' ? state.rangeStartLabel : state.rangeEndLabel} · 구간 ${state.rangeLengthLabel}`}
+                    className={`${styles.rangeHandle} ${
+                      edge === 'start' ? styles.rangeHandleStart : styles.rangeHandleEnd
+                    }`}
+                    onPointerDown={onHandlePointerDown(edge)}
+                    onPointerMove={onHandlePointerMove}
+                    onPointerUp={onHandlePointerUp}
+                    onPointerCancel={onHandlePointerUp}
+                    onLostPointerCapture={onHandlePointerUp}
+                    onKeyDown={onHandleKeyDown(edge)}
+                  />
+                ))}
               </div>
               {leftMarker !== null ? (
                 <button

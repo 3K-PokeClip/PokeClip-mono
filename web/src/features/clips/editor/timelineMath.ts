@@ -3,7 +3,7 @@
 // jsdom 렌더 테스트로 검증할 수 없어(레이아웃이 없다) 여기서 단위 테스트한다
 // (playerMath.ts와 같은 이유).
 
-import { seekFractionFromPointer } from '@/features/player/playerMath';
+import { formatUptime, seekFractionFromPointer } from '@/features/player/playerMath';
 
 /** 클립 길이 하한 — ADR-009 "클립 길이 5초~3분" */
 export const MIN_RANGE_SECONDS = 5;
@@ -21,13 +21,12 @@ export const MAX_RANGE_LABEL = '3:00';
  */
 export const MAX_RANGE_TEXT = `${MAX_RANGE_SECONDS / 60}분`;
 
-/** 100% 배율에서 타임라인에 보이는 폭 — 시안 눈금자(1:21:40~1:22:55) */
-export const BASE_VIEW_SECONDS = 75;
+/** 100%(구간에 맞춤)에서도 이보다는 좁히지 않는다: 아주 짧은 구간도 둘레가 보이게 */
+export const MIN_FIT_SECONDS = 5;
 
 /**
- * 줌 단계 — 시안의 `100%`가 기본값이다.
- * 25%를 두는 이유: 창이 최대 구간(180초)보다 좁으면 포인터 환산이 창에 갇혀
- * 마우스로는 3:00을 만들 수 없다. 75초 기준 25%에서 창이 300초가 되어 그 문이 열린다.
+ * 줌 단계: `100%`가 기본값이고 「구간에 맞춤」이다(zoomedView). 25% · 50%는 그 4배 · 2배로 넓혀 구간 밖을 보고
+ * (잡을 수 있는 범위까지만), 200% · 400%는 재생 위치 둘레를 키운다.
  */
 export const ZOOM_LEVELS = [25, 50, 100, 200, 400] as const;
 
@@ -177,7 +176,9 @@ export function secondsFromPointer(
 }
 
 /**
- * 확대 배율에서 보이는 창(POK-389). 100%는 구간을 다 품는 폭(구간 × 1.15와 기본 폭 중 큰 것)이고 배율만큼 좁히거나 넓힌다.
+ * 확대 배율에서 보이는 창(POK-389). 100%는 구간에 맞춘 폭(구간 × 1.15, 최소 5초)이고 배율만큼 좁히거나 넓힌다.
+ * 🔴 전에는 100%를 「기본 75초」로 잡아, 잡을 수 있는 범위가 그보다 좁으면(카드 창 19초 등) 25% · 50% · 100% · 200%가
+ * 모두 범위 폭으로 잘려 같아 보였다(사용자 실화면: 확대·축소가 안 된다).
  *
  * - 100% 이하: 구간 가운데에 둔다. 구간 손잡이가 늘 보인다.
  * - 100% 초과: 구간보다 좁아질 수 있어(캡컷처럼 진짜 확대) 재생 위치를 따라간다. 앞 창 안에 재생 위치가 있으면 그대로 두고
@@ -202,7 +203,7 @@ export function zoomedView({
   /** 바로 앞에 그린 창. 처음이면 null */
   previous: TimelineView | null;
 }): TimelineView {
-  const fitSpan = Math.max(BASE_VIEW_SECONDS, (range.endSeconds - range.startSeconds) * 1.15);
+  const fitSpan = Math.max(MIN_FIT_SECONDS, (range.endSeconds - range.startSeconds) * 1.15);
   const available = Math.max(0, maxSeconds - minSeconds);
   const span = Math.min(available, (fitSpan * 100) / zoom);
   const place = (start: number) => {
@@ -247,6 +248,16 @@ export function clampTimelineHeight(px: number, ceiling = MAX_TIMELINE_HEIGHT): 
  * 눈금자 눈금 위치(초). 창을 균등 분할한다 —
  * 줌을 바꾸면 눈금도 따라 움직여야 해서 시안 값(1:21:40…1:22:55)을 박아둘 수 없다.
  */
+/** 눈금 글자. 창이 이보다 좁으면 0.1초까지 적는다(초만 적으면 같은 초가 되풀이된다) */
+const TENTHS_BELOW_SECONDS = 15;
+
+export function rulerLabel(seconds: number, spanSeconds: number): string {
+  if (spanSeconds >= TENTHS_BELOW_SECONDS) return formatUptime(seconds);
+  // 내림한다: 반올림하면 「:47.9」 다음 칸이 「:48.0」이 아니라 「:47.10」처럼 셀 수 있다
+  const tenths = Math.floor(seconds * 10 + 1e-6);
+  return `${formatUptime(Math.floor(tenths / 10))}.${tenths % 10}`;
+}
+
 export function rulerTicks(view: TimelineView, count = 6): number[] {
   if (count < 2) return [view.startSeconds];
   const span = view.endSeconds - view.startSeconds;

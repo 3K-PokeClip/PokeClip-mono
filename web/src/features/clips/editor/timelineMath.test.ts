@@ -12,6 +12,7 @@ import {
   rangeGaugeFraction,
   rangeLengthSeconds,
   resolveRangeEdge,
+  rulerLabel,
   rulerTicks,
   secondsFromPointer,
   secondsToFraction,
@@ -137,20 +138,31 @@ describe('창 환산', () => {
     expect(rulerTicks(view, 6)).toEqual([4900, 4915, 4930, 4945, 4960, 4975]);
   });
 
+  it('창이 15초보다 좁으면 눈금을 0.1초까지 적는다: 키우면 같은 초가 되풀이돼 보였다(POK-389)', () => {
+    expect(rulerLabel(4907.25, 60)).toBe('1:21:47');
+    expect(rulerLabel(4907.25, 2)).toBe('1:21:47.2');
+    expect(rulerLabel(4907.99, 2)).toBe('1:21:47.9');
+  });
+
   it('100% 이하는 구간 가운데에 두되 원본 밖으로 나가지 않는다', () => {
-    const at = (range: { startSeconds: number; endSeconds: number }, max = DURATION) =>
+    const at = (range: { startSeconds: number; endSeconds: number }, max = DURATION, zoom = 100) =>
       zoomedView({
         range,
         playheadSeconds: range.startSeconds,
-        zoom: 100,
+        zoom,
         minSeconds: 0,
         maxSeconds: max,
         previous: null,
       });
-    expect(at({ startSeconds: 5, endSeconds: 15 }).startSeconds).toBe(0);
+    // 구간 가운데: 10초 구간이면 11.5초 창이 구간을 0.75초씩 넉넉히 품는다
+    expect(at({ startSeconds: 20, endSeconds: 30 })).toEqual({
+      startSeconds: 19.25,
+      endSeconds: 30.75,
+    });
+    expect(at({ startSeconds: 0, endSeconds: 10 }).startSeconds).toBe(0);
     expect(at({ startSeconds: DURATION - 10, endSeconds: DURATION }).endSeconds).toBe(DURATION);
-    // 원본이 창보다 짧으면 전체를 보여준다
-    expect(at({ startSeconds: 5, endSeconds: 15 }, 30)).toEqual({
+    // 원본이 창보다 짧으면 전체를 보여준다(25%: 46초 창 > 30초 원본)
+    expect(at({ startSeconds: 5, endSeconds: 15 }, 30, 25)).toEqual({
       startSeconds: 0,
       endSeconds: 30,
     });
@@ -165,45 +177,64 @@ describe('줌·높이', () => {
     expect(zoomStep(400, 'in')).toBe(400);
   });
 
-  it('가장 넓은 줌에서는 창이 최대 구간보다 넓다: 마우스로 3:00에 닿는 길', () => {
-    const widest = zoomedView({
-      range: { startSeconds: 2000, endSeconds: 2010 },
-      playheadSeconds: 2000,
-      zoom: ZOOM_LEVELS[0],
+  it('다섯 배율의 폭이 다 다르다: 짧은 구간 · 좁은 범위에서도(사용자 실화면 재현, POK-389)', () => {
+    // 5초 구간, 잡을 수 있는 범위 19초, 정지 · 재생 위치는 구간 시작. 전에는 100%가 「기본 75초」라 범위(19초)에 잘려
+    // 25% · 50% · 100% · 200%가 모두 19초였다
+    const widths = ZOOM_LEVELS.map((zoom) => {
+      const view = zoomedView({
+        range: { startSeconds: 107, endSeconds: 112 },
+        playheadSeconds: 107,
+        zoom,
+        minSeconds: 100,
+        maxSeconds: 119,
+        previous: null,
+      });
+      return +(view.endSeconds - view.startSeconds).toFixed(3);
+    });
+    // 100% = 구간 × 1.15, 25% · 50%는 그 4배 · 2배(범위까지만), 200% · 400%는 절반 · 4분의 1
+    expect(widths).toEqual([19, 11.5, 5.75, 2.875, 1.438]);
+  });
+
+  it('100%는 구간에 맞춘다: 아주 짧은 구간도 최소 5초는 보인다', () => {
+    const view = zoomedView({
+      range: { startSeconds: 50, endSeconds: 51 },
+      playheadSeconds: 50,
+      zoom: 100,
       minSeconds: 0,
       maxSeconds: DURATION,
       previous: null,
     });
-    expect(widest.endSeconds - widest.startSeconds).toBeGreaterThan(MAX_RANGE_SECONDS);
+    expect(view.endSeconds - view.startSeconds).toBe(5);
   });
 
   describe('100%를 넘기면 진짜로 키운다: 구간보다 좁아질 수 있고 재생 위치를 따라간다(POK-389)', () => {
-    // 1분 구간(카드 하나). 100%는 구간 × 1.15와 기본 75초 중 큰 폭이다
+    // 1분 구간(카드 하나). 100%는 구간 × 1.15 = 69초, 400%는 17.25초
     const range = { startSeconds: 100, endSeconds: 160 };
+    const span = 69 / 4;
     const base = { range, minSeconds: 70, maxSeconds: 190 };
 
     it('처음 키우면 재생 위치를 가운데에 두고 폭이 배율만큼 줄어든다', () => {
       const view = zoomedView({ ...base, playheadSeconds: 130, zoom: 400, previous: null });
-      expect(view).toEqual({ startSeconds: 120.625, endSeconds: 139.375 }); // 75 / 4 = 18.75초
+      expect(view).toEqual({ startSeconds: 130 - span / 2, endSeconds: 130 + span / 2 });
     });
 
     it('창 안에서 재생 위치를 옮기면 창은 그대로다(누를 때마다 출렁이지 않게)', () => {
-      const previous = { startSeconds: 120.625, endSeconds: 139.375 };
+      const previous = { startSeconds: 130 - span / 2, endSeconds: 130 + span / 2 };
       expect(zoomedView({ ...base, playheadSeconds: 137, zoom: 400, previous })).toEqual(previous);
     });
 
     it('재생 위치가 창을 앞으로 벗어나면 그 자리가 창의 10%에 오게 넘기고, 뒤로 벗어나면 90%에 오게 넘긴다', () => {
-      const previous = { startSeconds: 120.625, endSeconds: 139.375 };
+      const previous = { startSeconds: 130 - span / 2, endSeconds: 130 + span / 2 };
       const ahead = zoomedView({ ...base, playheadSeconds: 140, zoom: 400, previous });
-      expect(ahead.startSeconds).toBeCloseTo(140 - 18.75 * 0.1);
+      expect(ahead.startSeconds).toBeCloseTo(140 - span * 0.1);
       const behind = zoomedView({ ...base, playheadSeconds: 110, zoom: 400, previous });
-      expect(behind.startSeconds).toBeCloseTo(110 - 18.75 * 0.9);
+      expect(behind.startSeconds).toBeCloseTo(110 - span * 0.9);
     });
 
     it('잡을 수 있는 범위(min~max) 밖으로는 넘기지 않는다', () => {
       const view = zoomedView({ ...base, playheadSeconds: 189, zoom: 400, previous: null });
       expect(view.endSeconds).toBe(190);
-      expect(view.endSeconds - view.startSeconds).toBeCloseTo(18.75);
+      expect(view.endSeconds - view.startSeconds).toBeCloseTo(span);
     });
   });
 
