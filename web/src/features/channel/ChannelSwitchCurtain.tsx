@@ -66,7 +66,8 @@ function Cover({
   const [phase, setPhase] = useState<'loading' | 'finishing' | 'leaving'>('loading');
 
   // 덮개가 서 있는 동안 나간 API 요청과 끝난 요청을 센다: 새 채널 화면이 부르는 목록들이다. 덮기 전에 나가 있던
-  // 요청(다른 화면의 주기 갱신 등)은 세지 않는다. react-query 밖의 화면 훅도 apiFetch는 지나므로 여기서 다 잡힌다
+  // 요청(다른 화면의 주기 갱신 등)은 세지 않는다. react-query 밖의 화면 훅도 apiFetch는 지나고, apiFetch 밖 요청(재생 서버
+  // 녹화 목록)은 trackApiActivity로 감싸 여기서 다 잡힌다
   useEffect(() => {
     const started = new Set<number>();
     const finished = new Set<number>();

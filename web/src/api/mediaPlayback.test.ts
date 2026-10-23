@@ -98,6 +98,28 @@ describe('lookupRecordingSpans: 녹화 없음과 물을 수 없음을 가른다(
     },
   );
 
+  it('apiFetch 밖 요청이라도 활동으로 알린다: 본문까지 받아야 끝이다 — 지난 방송 목록이 기다리니 채널 전환 화면도 기다린다(PR #342 2차 리뷰)', async () => {
+    let respond: (res: Response) => void = () => {};
+    const m = await load(
+      'http://pb',
+      () =>
+        new Promise<Response>((r) => {
+          respond = r;
+        }),
+    );
+    const { subscribeApiActivity } = await import('./client');
+    const events: string[] = [];
+    const off = subscribeApiActivity(({ type }) => events.push(type));
+
+    const done = m.lookupRecordingSpans('vod-1');
+    expect(events).toEqual(['start']);
+    respond(new Response('[]', { status: 200 }));
+    await done;
+
+    expect(events).toEqual(['start', 'end']);
+    off();
+  });
+
   it('녹화가 있으면 구간을 준다', async () => {
     const m = await load('http://pb', () =>
       Promise.resolve(
