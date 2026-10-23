@@ -112,17 +112,23 @@ clip: `CLOUDFRONT_KEY_PAIR_ID` · `MEDIA_BASE_URL` · `PLAYBACK_COOKIE_DOMAIN` �
 `app_env` 는 평문 태스크 env 라 platform 이 plan 때 비밀을 싣는 꼴을
 거부합니다(`prod/platform/remote_state.tf` 의 런타임 계약 검사).
 
-*   이름: `^[A-Z][A-Z0-9_]*$` 꼴만 받고, `PASSWORD` · `SECRET` · `TOKEN` ·
-    `KEY` 같은 비밀 낱말이 이름 어디에 들어도 거부합니다(아래 표의 비밀 아닌
-    계약 이름은 예외). 비밀이 아닌데 걸리는 이름은 platform 변수
+*   이름: `^[A-Z][A-Z0-9_]*$` 꼴만 받고, `PASSWORD` · `PASSWD` ·
+    `PASSPHRASE` · `SECRET` · `TOKEN` · `KEY` · `PEM` · `CREDENTIAL` 이
+    이름 어디에 들어도 거부합니다(아래 표의 비밀 아닌 계약 이름은 예외). 비밀이 아닌데 걸리는 이름은 platform 변수
     `app_env_non_secret_names` 에 적습니다.
 *   운반 이름: `SPRING_APPLICATION_JSON` · `JAVA_TOOL_OPTIONS` ·
     `JDK_JAVA_OPTIONS` · `JAVA_OPTS` 는 받지 않습니다.
-*   값: URL 자격 증명(`scheme://user:pass@` · `https://<토큰>@`), 이름에
-    비밀 낱말이 든 쿼리 · 프래그먼트 매개변수(`?password=` ·
-    `#access_token=`), 비밀 낱말이 든 `-D` 속성을 거부합니다. 쿼리나
-    프래그먼트에 `user:x@` 꼴이 든 정상 값도 걸릴 수 있습니다(알려진
-    오탐 — 그런 값은 `app_secret_arns` 로 옮깁니다).
+*   값: 다음 꼴을 거부합니다.
+    *   URL 자격 증명(`scheme://user:pass@` · `https://<토큰>@`).
+    *   키 이름에 `passw` · `pwd` · `secret` · `token` 이 든 쿼리 ·
+        프래그먼트 매개변수(`?password=` · `#access_token=`, 대소문자 무관).
+    *   속성 이름에 `secret` · `password` · `token` 이 든 `-D` 속성.
+*   값 검사는 위 낱말만 봅니다. `?api_key=…` · `-Ddb.passwd=…` ·
+    `-Dapi.key=…` 처럼 다른 낱말을 쓴 비밀은 통과하므로 검사에 기대지
+    말고 처음부터 `app_secret_arns` 로 넘깁니다. 거꾸로 쿼리나
+    프래그먼트에 `user:x@` 꼴이 든 정상 값과 `token_type` 같은 비밀 아닌
+    키는 걸릴 수 있습니다(알려진 오탐 — 그런 값은 `app_secret_arns` 로
+    옮깁니다).
 
 비밀은 모두 `app_secret_arns` 로 넘깁니다.
 
