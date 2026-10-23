@@ -540,7 +540,9 @@ B 는 「정상 교체」 2 · 3 으로 미리 띄워 둡니다. force 파일은
 
 ```shell
 force_dir="${HOME}/.pokeclip-media-force"; mkdir -p -m 0700 "${force_dir}"
-stamp="$(date +%Y%m%dT%H%M%S)"
+stamp="$(date +%Y%m%dT%H%M%S)"   # 재개면 처음 값을 다시 넣는다(아래)
+ended="${force_dir}/force-${stamp}-ended.txt"
+[ -e "${ended}" ] || : > "${ended}"
 cat > "${work}/paths-list.sh" <<'SH'
 set -a; . /etc/pokeclip-media/media.env; set +a
 /opt/pokeclip-media/bin/paths-list.sh
@@ -583,6 +585,13 @@ force_list() {  # force_list <상자 키> <A|B>
     파일은 쓰지 않습니다(지웁니다). 놓쳐도 `force-diff.sh` 가 줄 수 · 끝
     줄바꿈으로 거부합니다.
 *   표준 오류 줄의 `PATHS LIST <n>` 의 n 을 함께 적어 둡니다.
+*   **`ended.txt` 는 없을 때만 빈 파일로 만듭니다.** `force-diff.sh` 는 A ·
+    B · ended 세 파일이 모두 있어야 대조합니다(없으면 `FORCE FAIL input
+    ended`). 첫 대조는 종료 확인이 0 건인 것이 보통이라 빈 파일이 필요합니다.
+*   **재개**(셸을 다시 열어 이어 할 때)는 `ls "${force_dir}"` 로 처음
+    `stamp` 를 찾아 다시 넣고 위 블록을 돌립니다 — 이미 적은 종료 확인을
+    지우지 않고, A 파일 이름도 그대로 맞습니다. 새 `date` 값으로 돌리면 A
+    파일이 없는 새 묶음이 됩니다.
 
 | # | 동작 | 통과 · 중단 |
 |---|---|---|
@@ -636,9 +645,23 @@ kty 가 받아들인 한계입니다(설계 5-3 — kty 5차).
 ## O7e 뒤 측정 · 기록
 
 상자에서 재야 정할 수 있는 값입니다. 이번 코드에는 값을 넣지 않았습니다.
-O7e 5 를 통과한 뒤 재고, 결과 원문은 kty 로컬 작업 기록(볼트 raw 의 엣지
-폴더)에 남깁니다 — 계정 ID · 사설 IP 는 가린 요약만 문서로 옮깁니다. 값은
-후속 PR 에서 모듈 · 템플릿에 넣고 설정 반영 교체로 들어갑니다.
+O7e 5 를 통과한 뒤 잽니다. 값은 후속 PR 에서 모듈 · 템플릿에 넣고 설정 반영
+교체로 들어갑니다.
+
+*   **결과 원문**(명령 · 출력 · 판정)은 증거 루트 `~/.pokeclip-precheck/`
+    아래 이 측정 전용 디렉터리(0700)에 둡니다 — 규칙은
+    [단계 직전 점검 런북](/infra/terraform/runbooks/stage-precheck.md)
+    「증거」 입니다(저장소 · 볼트 표지가 있는 경로 · 심볼릭 링크 밖). 계정
+    ID · 사설 IP · 인스턴스 id 가 들어 있어 저장소 · 볼트에 그대로 올리지
+    않습니다.
+*   볼트로 옮기는 것은 kty 가 「저장해」 할 때만이고, 가린 요약만 옮깁니다
+    (비밀 값 훑기 · 계정 ID · ARN · IP · 인스턴스 id 가림).
+
+```shell
+umask 077
+measure_dir="${HOME}/.pokeclip-precheck/media-o7e-measure-$(date -u +%Y%m%dT%H%M%SZ)"
+mkdir -p "${measure_dir}" && chmod 700 "${measure_dir}"
+```
 
 *   **읽기**만 하는 항목은 SSM 명령(판정 값만 출력)으로 재도 됩니다. 원문이
     필요한 것은 상자 셸(Session Manager)에서 직접 보고 SSM 명령 출력으로 내지

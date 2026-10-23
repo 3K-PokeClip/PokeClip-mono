@@ -71,6 +71,12 @@ compose 프로젝트 이름은 `pokeclip-media` 다(유닛의 `MEDIA_COMPOSE_PRO
     그 경로를 그대로 넘긴다. 제어면 포트의 그 밖 경로는 언제나 404 다.
 *   **nginx 는 9997(관리 API)로 넘기는 설정을 두지 않는다.** 렌더 결과에 그 번호가
     한 번도 나오지 않는지 `render_test.sh` 가 본다.
+*   **`rewind_public_base_url`**(compose 템플릿 변수): 사이드카
+    `REWIND_PUBLIC_BASE_URL` — 되감기 목록 URI 앞머리다. 목록 줄은 이 값 +
+    `/` + S3 키(`dvr/…`)이고, prod 는 영상 CDN 주소 `https://media.pokeclip.com`
+    (CDN 의 `/dvr/*` 가 rewind 버킷 — 설계 4-5)다. 사이드카는 `S3_BUCKET` 이
+    있으면 이 값 없이 기동하지 않으므로(재시작 반복) 늘 넘긴다. https 절대
+    URL · 끝 `/` 없음은 M9 모듈이 plan 에서 검증한다.
 *   **`detached_log_driver`**(compose 템플릿 변수): prod 는 `"journald"`.
     `"json-file"` 은 journald 가 없는 로컬 엔진에서 띄울 때만 쓴다. 그 밖의 값은
     모두 journald 로 떨어진다.
@@ -286,7 +292,11 @@ set -a; . /etc/pokeclip-media/media.env; set +a
 1.  force 1 에서 A 상자의 `paths-list.sh` 표준 출력을
     `force-<시각>-A.txt` 로 저장하고, 표준 오류의 `PATHS LIST <n>` 의 n 을
     함께 적어 둔다. **종료 0 일 때만 저장한다** — 실패하면 표준 출력이 비어
-    있어, 저장하면 「송출 중 0」 처럼 읽힌다.
+    있어, 저장하면 「송출 중 0」 처럼 읽힌다. 같은 자리에
+    `force-<시각>-ended.txt` 가 **없을 때만** 빈 파일로 만든다(`[ -e
+    force-<시각>-ended.txt ] || : > force-<시각>-ended.txt`). `force-diff.sh` 는
+    세 파일이 모두 있어야 대조하고(없으면 `FORCE FAIL input ended`), 다시 이어
+    할 때 이미 적은 종료 확인을 지우면 안 된다.
 1.  **SSM 출력 한도(표준 출력 24,000자)에 닿은 출력은 저장하지 않는다** — 뒤가
     잘린 목록이다. 놓쳐도 다음 단계가 거부한다 — 줄 수가 개수와 다르거나,
     마지막 ID 가 가운데에서 잘려 끝 줄바꿈이 없으면 대조하지 않는다. 저장할 때
@@ -545,7 +555,7 @@ prod 상자에 깔 도구의 판이다. M9 user_data 가 같은 값으로 설치
 |---|---|---|
 | docker compose 플러그인 | **5.5.0** | 공식 릴리스 `docker/compose` v5.5.0(2026-10-20 확인). `sha256` — `docker-compose-linux-x86_64`: `c57ab918abd5b05ca7e7d0f275875dd1330a695074f309dc9eab1b49efafcd4b` · `docker-compose-linux-aarch64`: `ff42489f5a9b879d5d117c5ffea6defc27390b3286da8ad52cbc9c6ab5df590e` |
 | `amazon-ecr-credential-helper` | **0.12.0-3.amzn2023** | Amazon Linux 2023 저장소(release 2023.12.20260930 기준 최신 · 2026-10-20 `dnf` 조회) |
-| docker | M9 이 정함 | M2 탐침 상자(AL2023 · systemd 252)는 25.0.16 으로 재기동 시험을 통과했다 |
+| docker | **25.0.16**(`modules/media_host` · `prod/media` tfvars 예시) | M2 탐침 상자(AL2023 · systemd 252)는 25.0.16 으로 재기동 시험을 통과했다. AL2023 **arm64** 저장소에 이 판이 있는지는 O7e 에서 확인한다 |
 
 *   Compose 의 `--abort-on-container-exit` · `--attach` · `--force-recreate`
     동작과 bind 의 `create_host_path: false`(원본이 없으면 디렉터리를 만들지
