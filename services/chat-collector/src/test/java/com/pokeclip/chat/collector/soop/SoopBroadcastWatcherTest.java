@@ -5,6 +5,7 @@ import com.pokeclip.chat.collector.liveinfo.BroadcastInfo;
 import com.pokeclip.chat.collector.platforms.PlatformNotifier;
 import com.pokeclip.chat.collector.relay.RelayPayload;
 import com.pokeclip.chat.collector.relay.RelaySink;
+import com.pokeclip.chat.collector.soop.chat.SoopChat;
 import org.junit.jupiter.api.Test;
 
 import java.time.Clock;
@@ -136,6 +137,125 @@ class SoopBroadcastWatcherTest {
         assertThat(resolved).containsExactly(42L);
         assertThat(checkedTokens).containsExactly("tok-1");
         assertThat(retained).containsExactly(Set.of("s-1"));
+    }
+
+    // ── 채팅 받기(PR4) ──────────────────────────────────────────
+
+    /** 채팅 붙이기 · 떼기를 적는 가짜. 순서까지 본다. */
+    private final List<String> chatCalls = new CopyOnWriteArrayList<>();
+
+    private final SoopChat chat = new SoopChat() {
+        @Override
+        public void ensure(String streamId, String channelId, String token) {
+            chatCalls.add("ensure:" + streamId + ":" + channelId + ":" + token);
+        }
+
+        @Override
+        public void close(String streamId) {
+            chatCalls.add("close:" + streamId);
+        }
+    };
+
+    private SoopBroadcastWatcher watcherWithChat() {
+        SoopBroadcastWatcher watcher = watcher();
+        watcher.attachChat(chat);
+        return watcher;
+    }
+
+    /** 방송 중으로 본 방송에 그 스트리머의 SOOP 아이디 · 토큰으로 채팅을 붙인다. 틱마다 부르되 이미 붙어 있으면 받는 쪽이 토큰만 고친다 */
+    @Test
+    void 방송_중이면_채팅을_붙인다() {
+        linkAnswers.add(link("tok-1", now.get().plus(Duration.ofHours(8))));
+        liveAnswers.add(onAir("숲", 1));
+        SoopBroadcastWatcher watcher = watcherWithChat();
+
+        watcher.watch("s-1", 42L, 시작);
+        watcher.tick();
+
+        assertThat(chatCalls).containsExactly("ensure:s-1:soop-user-1:tok-1");
+    }
+
+    /**
+     * 붙이기는 지켜보기의 자물쇠 안에서 한다. 「아직 지켜보는가」를 본 직후 다른 스레드가 빼고(close) 나서 붙이면, 이미 명부에서 빠진 방송이라
+     * 다음 틱도 못 떼어 영영 붙어 있다(탈퇴 정리 뒤 채팅이 다시 쌓인다). 빼기(unwatch 등)가 같은 자물쇠라 자물쇠 안이면 끼어들 수 없다
+     */
+    @Test
+    void 채팅을_붙이는_것은_지켜보기_자물쇠_안에서_한다() {
+        linkAnswers.add(link("tok-1", now.get().plus(Duration.ofHours(8))));
+        liveAnswers.add(onAir("숲", 1));
+        SoopBroadcastWatcher watcher = watcher();
+        List<Boolean> lockHeld = new CopyOnWriteArrayList<>();
+        watcher.attachChat(new SoopChat() {
+            @Override
+            public void ensure(String streamId, String channelId, String token) {
+                lockHeld.add(Thread.holdsLock(watcher));
+            }
+
+            @Override
+            public void close(String streamId) {
+            }
+        });
+
+        watcher.watch("s-1", 42L, 시작);
+        watcher.tick();
+
+        assertThat(lockHeld).containsExactly(true);
+    }
+
+    /** SOOP 방송이 끝났으면(streamend) 채팅을 뗀다. 지켜보기는 종료 편지가 뺀다 */
+    @Test
+    void 방송이_끝나면_채팅을_뗀다() {
+        linkAnswers.add(link("tok-1", now.get().plus(Duration.ofHours(8))));
+        liveAnswers.add(onAir("숲", 1));
+        liveAnswers.add(outcome(SoopLiveStatus.Outcome.OFF_AIR));
+        SoopBroadcastWatcher watcher = watcherWithChat();
+
+        watcher.watch("s-1", 42L, 시작);
+        watcher.tick();
+        watcher.tick();
+
+        assertThat(chatCalls).containsExactly("ensure:s-1:soop-user-1:tok-1", "close:s-1");
+    }
+
+    /** 일시 실패(SOOP 응답 없음)는 채팅을 그대로 둔다: 그 사이 채팅은 계속 들어온다 */
+    @Test
+    void 확인이_일시_실패면_채팅을_그대로_둔다() {
+        linkAnswers.add(link("tok-1", now.get().plus(Duration.ofHours(8))));
+        liveAnswers.add(onAir("숲", 1));
+        liveAnswers.add(outcome(SoopLiveStatus.Outcome.UNAVAILABLE));
+        SoopBroadcastWatcher watcher = watcherWithChat();
+
+        watcher.watch("s-1", 42L, 시작);
+        watcher.tick();
+        watcher.tick();
+
+        assertThat(chatCalls).containsExactly("ensure:s-1:soop-user-1:tok-1");
+    }
+
+    /** 지켜보기에서 빠지면(종료 편지 · 갈아낌) 채팅도 뗀다 */
+    @Test
+    void 지켜보기에서_빠지거나_갈아끼면_채팅을_뗀다() {
+        SoopBroadcastWatcher watcher = watcherWithChat();
+
+        watcher.watch("s-1", 42L, 시작);
+        watcher.watch("s-2", 42L, 시작.plusSeconds(10));
+        watcher.unwatch("s-2");
+
+        assertThat(chatCalls).containsExactly("close:s-1", "close:s-2");
+    }
+
+    /** 토큰이 거부돼 멈추면 채팅도 뗀다(새 토큰도 거부) */
+    @Test
+    void 토큰이_거부돼_멈추면_채팅을_뗀다() {
+        linkAnswers.add(link("tok-1", now.get().plus(Duration.ofHours(8))));
+        linkAnswers.add(link("tok-2", now.get().plus(Duration.ofHours(8))));
+        liveAnswers.add(outcome(SoopLiveStatus.Outcome.REJECTED));
+        SoopBroadcastWatcher watcher = watcherWithChat();
+
+        watcher.watch("s-1", 42L, 시작);
+        watcher.tick();
+
+        assertThat(chatCalls).containsExactly("close:s-1");
     }
 
     /** 영구 거절(연동 없음·해제·끊김)은 그 방송 동안 다시 안 묻는다. SOOP에도 안 묻는다. */

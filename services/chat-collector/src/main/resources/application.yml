@@ -281,6 +281,24 @@ pokeclip:
     initial-delay: PT20S
     # 동시에 지켜보는 방송 상한(설계 전제 동시 사용자 100명). 한 틱 시간이 이것에 비례한다(방송마다 SOOP 시한 접속 1초·읽기 2초 최대 두 번).
     max-watched: 100
+    chat:
+      # SOOP 채팅 받기(POK-397 PR4). 켜면 위 지켜보기가 방송 중으로 본 방송마다 화면 없는 Chromium 탭에서 SOOP 공식 Chat SDK로
+      # 채팅을 받아 치지직과 같은 세 길(표 · 원본 · 화면 중계)에 platform SOOP으로 넣는다(ADR-105 사용자 결정). 기본 꺼짐.
+      # 🔴 지켜보기(watch-enabled)가 꺼져 있는데 이것만 켜면 부팅을 거부한다(붙을 방송을 지켜보기가 고른다).
+      # 🔴 SOOP은 메시지 시각을 안 주므로 시각은 받은 시각이다. Chromium 탭이 방송마다 수십 MB라 켤 때 메모리 상한을 같이 본다.
+      enabled: ${SOOP_CHAT_ENABLED:false}
+      # 🔴 비밀. auth와 같은 SOOP 앱 값. 공식 SDK가 생성자에서 둘 다 받는다(문서 예시). 켜졌는데 비면 부팅을 거부한다.
+      client-id: ${SOOP_CLIENT_ID:}
+      client-secret: ${SOOP_CLIENT_SECRET:}
+      # 공식 SDK 스크립트. 시험만 가짜 SDK 주소로 바꾼다.
+      sdk-url: ${SOOP_CHAT_SDK_URL:https://static.sooplive.com/asset/app/chat-sdk/sooplive-chat-sdk.js}
+      # 탭이 여는 빈 페이지의 출처. SDK가 출처를 보는지 문서에 없어 흔한 개발 출처로 둔다.
+      page-origin: http://localhost
+      # 동시에 여는 탭 상한(지켜보기 상한과 같게).
+      max-sessions: 100
+      # 끊기면 다시 붙는 간격. 처음 1초, 이어서 끊기면 두 배씩 60초까지.
+      reconnect-min: PT1S
+      reconnect-max: PT60S
   liveinfo:
     # 켜면 걷고 있는 방송마다 1분에 한 번 제목·태그·카테고리·시청자 수를 broadcast_info에 남기고
     # (중계가 켜져 있으면) 화면에 broadcast-info로 민다(POK-234 PR-C). 기본 꺼짐.
