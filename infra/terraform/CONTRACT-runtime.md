@@ -26,7 +26,7 @@
 | network → 런타임 1단 | `vpc_id` · `private_subnet_ids` · `media_az` · `media_private_subnet_id` | RDS 서브넷 그룹 · RDS SG 의 VPC · RDS 의 AZ(Media 상자와 같은 AZ) · SQL 실행기 서브넷(켜진 동안만) | network |
 | 런타임 1단 → platform | `rds_sg_id` | platform 이 RDS 인그레스 ← auth · clip 규칙을 만든다 | RDS SG = 런타임, 규칙 = platform. 예외: `sql_runner_enabled` 가 켜진 동안만 RDS ← SQL 실행기 5432 규칙은 런타임이 가진다 |
 | 런타임 1단 → platform | `app_secret_arns`(서비스 → env 이름 → 전체 ARN — auth · clip · chat-collector · chat-detector 의 JWT_SECRET · SECRET_STORE_KEY · INTERNAL_API_TOKEN · OAuth 비밀 등, 그릇 일곱 · 서비스별 목록은 [prod/runtime](prod/runtime/README.md)) | `ecs_service.secrets` 에 엣지 비밀(clip 의 `CLOUDFRONT_PRIVATE_KEY_PEM` = prod/secrets `signing_key_secret_arn`)과 합쳐 넣는다. 읽기 정책은 platform(실행 역할). 앱 서버 DB 자격은 런타임 1단-나가 더한다 | 그릇 · 값 = 런타임, 읽기 정책 = platform |
-| 런타임 1단 → platform | `app_env`(서비스 → 이름 → 값 — DB 엔드포인트 · 큐 URL 등 비밀 아닌 값) | 태스크 env. platform 이 정하는 이름(아래 「platform 이 정하는 env」)이 겹치면 platform 값이 이긴다. 큐 수신 스위치 `BROADCAST_INTAKE_ENABLED`(clip · chat-collector 기본 false)와 서비스 주소 `AUTH_BASE_URL` 은 `app_env` 에 없다. platform 이 넣는다. 스위치가 빠지면 서버는 뜨지만 큐를 읽지 않아 편지가 보관 기간 뒤 사라진다. clip 은 `AUTH_BASE_URL` 이 비면 부팅을 거부하고, chat-collector 는 기본값(localhost)으로 떠서 주소가 틀린 채 돈다. 켜면 auth 내부 호출에 `INTERNAL_API_TOKEN`(`app_secret_arns`)도 쓴다 | 런타임 |
+| 런타임 1단 → platform | `app_env`(서비스 → 이름 → 값 — DB 엔드포인트 · 큐 URL 등 비밀 아닌 값) | 태스크 env. platform 이 정하는 이름(아래 「platform 이 정하는 env」)이 겹치면 platform 값이 이긴다. 큐 수신 스위치 `BROADCAST_INTAKE_ENABLED`(서버 기본 false)는 clip 만 `app_env` 가 `"true"`(문자열)로 준다. 스위치가 빠지면 서버는 뜨지만 큐를 읽지 않아 편지가 보관 기간 뒤 사라진다. 서비스 주소 `AUTH_BASE_URL` 은 platform 이 넣는다 — clip 은 비면 부팅을 거부한다. 켜면 auth 내부 호출에 `INTERNAL_API_TOKEN`(`app_secret_arns`)도 쓴다. chat-collector 의 스위치는 배치(POK-306)가 `AUTH_BASE_URL` · `INTERNAL_API_TOKEN` 과 함께 정한다 — 주소가 없으면 기본값(localhost)으로 떠서 틀린 주소로 돈다 | 런타임 |
 | 런타임 1단 → platform | `rds_resource_id` | auth · clip 작업 역할의 `rds-db:connect`(대상 = `dbuser:<rds_resource_id>/<사용자>`) — platform `app_db_auth = "iam"` 일 때 | RDS = 런타임, 접속 정책 = platform |
 | 런타임 1단 → platform | `app_db_users`(`auth` · `clip` → DB 사용자 이름 — 가칭 `app_auth` · `app_clip`, 3번 POK-407 확정) | 태스크 env `POSTGRES_USER` · `rds-db:connect` 의 사용자 자리(서비스마다 하나, 와일드카드 없음). 런타임 1단-나가 낸다 — O7d(platform)는 1단-나 뒤(kty 2026-10-23) | DB 사용자 · `rds_iam` · GRANT = 런타임 |
 | 런타임 1단 → platform | `app_task_resource_arns`(서비스 → 키 → ARN — 아래 「작업 역할 대상」) | auth · clip 작업 역할 정책 Resource. 키가 없으면(기능 꺼짐) 그 문장을 만들지 않는다 | 자원 = 런타임, 작업 역할 정책 = platform |
@@ -101,11 +101,11 @@ auth: `FORWARD_HEADERS_STRATEGY` · `STREAM_KEY_SECRET_STORE_TYPE` ·
 `POSTGRES_SSLROOTCERT`(IAM 일 때).
 clip: `CLOUDFRONT_KEY_PAIR_ID` · `MEDIA_BASE_URL` · `PLAYBACK_COOKIE_DOMAIN` ·
 `AUTH_BASE_URL` · `CORS_ALLOWED_ORIGINS` · `PLAYBACK_REQUIRED` ·
-`BROADCAST_INTAKE_ENABLED`(약속 — platform 코드 반영은 POK-299 아래 후속
-티켓) · `POSTGRES_USER` · `POSTGRES_AUTH` · `POSTGRES_SSLROOTCERT`(IAM 일
-때), 비밀 `CLOUDFRONT_PRIVATE_KEY_PEM`. chat-collector 의
-`BROADCAST_INTAKE_ENABLED` · `AUTH_BASE_URL` 은 그 서비스를 배치하는
-POK-306 이 넣습니다. 런타임 `app_env` 에는 이 이름을 넣지 않습니다.
+`POSTGRES_USER` · `POSTGRES_AUTH` · `POSTGRES_SSLROOTCERT`(IAM 일 때), 비밀
+`CLOUDFRONT_PRIVATE_KEY_PEM`. 런타임 `app_env` 에는 이 이름을 넣지 않습니다.
+clip 의 큐 수신 스위치 `BROADCAST_INTAKE_ENABLED` 는 이 목록에 없고 런타임
+`app_env` 가 줍니다. chat-collector 의 스위치 · `AUTH_BASE_URL` 은 그 서비스를
+배치하는 POK-306 이 정합니다.
 
 ### 응답기 비밀
 

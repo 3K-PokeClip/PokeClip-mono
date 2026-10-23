@@ -42,8 +42,9 @@ run "lists_env_names_per_service" {
   assert {
     condition = toset(keys(output.app_env["clip"])) == toset([
       "DB_HOST", "DB_PORT", "POSTGRES_DB", "BROADCAST_QUEUE_URL",
+      "BROADCAST_INTAKE_ENABLED",
     ])
-    error_message = "clip 의 env 이름 집합이 DB_HOST · DB_PORT · POSTGRES_DB · BROADCAST_QUEUE_URL 과 다르다."
+    error_message = "clip 의 env 이름 집합이 DB_HOST · DB_PORT · POSTGRES_DB · BROADCAST_QUEUE_URL · BROADCAST_INTAKE_ENABLED 와 다르다."
   }
 
   assert {
@@ -124,5 +125,23 @@ run "prefixes_stream_key_secrets_under_prod" {
   assert {
     condition     = output.app_env["auth"]["STREAM_KEY_SECRET_REF_PREFIX"] == "pokeclip/prod/stream-key/"
     error_message = "auth 의 STREAM_KEY_SECRET_REF_PREFIX 가 pokeclip/prod/stream-key/ 가 아니다."
+  }
+}
+
+# 큐 수신 스위치(서버 기본 false)는 clip 만 런타임이 켠다(kty 2026-10-24).
+# 빠지거나 false 면 clip 은 뜨지만 큐를 읽지 않아 편지가 보관 기간 뒤
+# 사라진다. 태스크 env 값은 문자열이라 불리언 true 가 아니라 "true" 다.
+# chat-collector 는 배치(POK-306)가 AUTH_BASE_URL 과 함께 켠다.
+run "turns_on_broadcast_intake_for_clip_only" {
+  command = apply
+
+  assert {
+    condition     = lookup(output.app_env["clip"], "BROADCAST_INTAKE_ENABLED", null) == "true"
+    error_message = "clip 의 BROADCAST_INTAKE_ENABLED 가 문자열 \"true\" 가 아니다."
+  }
+
+  assert {
+    condition     = !contains(keys(output.app_env["chat-collector"]), "BROADCAST_INTAKE_ENABLED")
+    error_message = "chat-collector 에 BROADCAST_INTAKE_ENABLED 가 있다 — 배치(POK-306)가 정한다."
   }
 }
