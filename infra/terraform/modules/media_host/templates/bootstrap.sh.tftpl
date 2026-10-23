@@ -1,0 +1,156 @@
+#!/bin/bash
+#
+# Media 상자 첫 부팅 설치 — cloud-init runcmd 가 한 번 부른다(modules/media_host
+# 의 templatefile 렌더본. 셸 변수는 $${…} 로 적는다).
+#
+# 1. docker · ECR 자격 도우미(AL2023 저장소, 판 고정) · compose 플러그인(공식
+#    릴리스, 판 · sha256 고정)을 설치한다.
+# 2. docker 를 띄우고, 설치 묶음 이미지(다이제스트 고정 — credHelpers 로 ECR
+#    로그인)에서 스크립트 · MediaMTX 템플릿을 꺼내 소유 root:root · 모드 고정으로
+#    설치한 뒤 설치 표지를 쓴다.
+# 3. 유닛을 enable · start 한다.
+#
+# 어느 단계가 실패해도 유닛까지 enable · start 한다. 묶음 표지가 없으면 유닛
+# drop-in 이 「MEDIA PREREQ FAIL bundle」, 도구가 빠졌으면 시작 스크립트의 선행
+# 점검이 「MEDIA PREREQ FAIL <항목>」 으로 기동을 막는다 — 실패가 유닛 저널에
+# 같은 꼴로 남는다. 이 스크립트의 줄(MEDIA BOOTSTRAP …)은 cloud-init 출력
+# (/var/log/cloud-init-output.log)에 남는다. 비밀은 다루지 않는다.
+
+set -uo pipefail
+umask 022
+
+readonly BUNDLE_IMAGE='${bundle_image}'
+readonly COMPOSE_SHA256='${compose_sha256}'
+readonly COMPOSE_URL='https://github.com/docker/compose/releases/download/v${compose_version}/docker-compose-linux-aarch64'
+readonly COMPOSE_PLUGIN=/usr/libexec/docker/cli-plugins/docker-compose
+readonly BIN_DIR=/opt/pokeclip-media/bin
+readonly CONF_DIR=/etc/pokeclip-media
+readonly STATE_DIR=/var/lib/pokeclip-media
+readonly BUNDLE_MARKER="$${STATE_DIR}/bundle-installed"
+# 묶음에 반드시 있어야 하는 파일(묶음 안 /bundle 기준).
+readonly REQUIRED_FILES=(
+  bin/start-media.sh
+  bin/stop-media.sh
+  bin/loopback-health.sh
+  bin/paths-count.sh
+  bin/paths-list.sh
+  bin/secret-count.sh
+  bin/lib/ops.sh
+  bin/lib/mtx_paths.sh
+  mediamtx.yml.tmpl
+)
+readonly PULL_ATTEMPTS=6
+readonly PULL_RETRY_SECONDS=10
+
+#######################################
+# 판정 줄 하나를 쓴다.
+# Arguments:
+#   내용.
+#######################################
+log() {
+  printf 'MEDIA BOOTSTRAP %s\n' "$*"
+}
+
+#######################################
+# docker · ECR 자격 도우미를 판 고정으로 설치한다.
+#######################################
+install_packages() {
+  dnf install -y 'docker-${docker_version}' \
+    'amazon-ecr-credential-helper-${ecr_credential_helper_version}'
+}
+
+#######################################
+# compose 플러그인을 공식 릴리스에서 받아 sha256 을 확인한 뒤 설치한다.
+#######################################
+install_compose() {
+  local tmp status=0
+  tmp="$(mktemp)" || return 1
+  if ! curl -fsSL --retry 5 --retry-connrefused --max-time 300 \
+    -o "$${tmp}" "$${COMPOSE_URL}"; then
+    status=1
+  elif ! printf '%s  %s\n' "$${COMPOSE_SHA256}" "$${tmp}" | sha256sum -c -; then
+    status=1
+  elif ! install -D -o root -g root -m 0755 "$${tmp}" "$${COMPOSE_PLUGIN}"; then
+    status=1
+  fi
+  rm -f -- "$${tmp}"
+  return "$${status}"
+}
+
+#######################################
+# 묶음 안 디렉터리 하나의 파일을 소유 root:root · 정한 모드로 설치한다.
+# Globals:
+#   staging
+# Arguments:
+#   묶음 안 상대 경로, 설치 디렉터리, 디렉터리 모드, 파일 모드.
+#######################################
+install_tree() {
+  local source="$${staging}/$1" target="$2" dir_mode="$3" file_mode="$4"
+  local file
+  install -d -o root -g root -m "$${dir_mode}" "$${target}" || return 1
+  for file in "$${source}"/*; do
+    [[ -f "$${file}" ]] || continue
+    install -o root -g root -m "$${file_mode}" "$${file}" \
+      "$${target}/$${file##*/}" || return 1
+  done
+}
+
+#######################################
+# 설치 묶음 이미지를 받아 꺼내 설치하고 설치 표지를 쓴다.
+# Globals:
+#   staging
+#######################################
+install_bundle() {
+  local attempt cid path
+  for ((attempt = 1; attempt <= PULL_ATTEMPTS; attempt++)); do
+    docker pull --quiet "$${BUNDLE_IMAGE}" >/dev/null && break
+    ((attempt < PULL_ATTEMPTS)) || return 1
+    sleep "$${PULL_RETRY_SECONDS}"
+  done
+  # 묶음은 실행하지 않는다 — create 의 명령은 자리만 채운다.
+  cid="$(docker create "$${BUNDLE_IMAGE}" /bundle-not-run)" || return 1
+  if ! docker cp "$${cid}:/bundle/." "$${staging}/"; then
+    docker rm "$${cid}" >/dev/null
+    return 1
+  fi
+  docker rm "$${cid}" >/dev/null || return 1
+  for path in "$${REQUIRED_FILES[@]}"; do
+    [[ -f "$${staging}/$${path}" ]] || {
+      log "missing $${path}"
+      return 1
+    }
+  done
+  rm -rf -- "$${BIN_DIR}" || return 1
+  install_tree bin /opt/pokeclip-media/bin 0755 0755 || return 1
+  install_tree bin/lib /opt/pokeclip-media/bin/lib 0755 0644 || return 1
+  install -d -o root -g root -m 0755 "$${CONF_DIR}" "$${STATE_DIR}" || return 1
+  install -o root -g root -m 0644 "$${staging}/mediamtx.yml.tmpl" \
+    /etc/pokeclip-media/mediamtx.yml.tmpl || return 1
+  printf '%s\n' "$${BUNDLE_IMAGE}" >"$${BUNDLE_MARKER}"
+}
+
+main() {
+  local staging
+  # cloud-init 의 runcmd 환경에는 HOME 이 없을 수 있다 — credHelpers 자리를 못 박는다.
+  export DOCKER_CONFIG=/root/.docker
+  rm -f -- "$${BUNDLE_MARKER}"
+
+  install_packages || log "FAIL packages"
+  install_compose || log "FAIL compose"
+  systemctl restart systemd-journald || log "FAIL journald"
+  systemctl enable --now docker || log "FAIL docker"
+
+  staging="$(mktemp -d)" || staging=""
+  if [[ -n "$${staging}" ]] && install_bundle; then
+    log "OK bundle"
+  else
+    log "FAIL bundle"
+  fi
+  [[ -z "$${staging}" ]] || rm -rf -- "$${staging}"
+
+  systemctl daemon-reload || log "FAIL daemon-reload"
+  systemctl enable pokeclip-media || log "FAIL enable"
+  systemctl start --no-block pokeclip-media || log "FAIL start"
+}
+
+main "$@"
