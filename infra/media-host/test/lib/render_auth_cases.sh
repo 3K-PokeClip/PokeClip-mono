@@ -23,12 +23,21 @@ readonly AUTH_VARIANTS='b d'
 readonly LEGACY_VARIANTS='a c'
 readonly ENV_TEMPLATE="${MEDIA_HOST_DIR}/ingest-auth.env.tmpl"
 readonly IP_LIMIT_ENV_NAME='ingest-auth.env'
+# 옛 갈래 compose 골든(a · c) — develop 6c90c935 의 템플릿 · 변수로 렌더한
+# compose 를 compose 5.5.0 `config --no-normalize --format json` 으로 받아
+# `jq -S .` 로 정렬한 출력이다. 이 출력은 compose 판에 기대므로 판 고정을
+# 올리면 다시 만든다. 만든 명령 = M15 c4 실험 기록 make-golden.sh.
 readonly COMPOSE_GOLDEN_PREFIX="${TEST_DIR}/golden/compose.legacy"
 readonly START_SCRIPT="${MEDIA_HOST_DIR}/bin/start-media.sh"
 RESPONDER_MAIN="$(cd -- "${MEDIA_HOST_DIR}/../.." && pwd)"
 RESPONDER_MAIN="${RESPONDER_MAIN}/media/cmd/ingest-auth/main.go"
 readonly RESPONDER_MAIN
 readonly INGEST_AUTH_COMPOSE="${TEST_DIR}/compose.ingest-auth.yml"
+readonly UNIT_INGEST_AUTH_COMPOSE="${TEST_DIR}/compose.unit.ingest-auth.yml"
+# 응답기 실행 계정의 정본 — 응답기 이미지 Dockerfile 의 최종 USER.
+INGEST_AUTH_DOCKERFILE="$(cd -- "${MEDIA_HOST_DIR}/../.." && pwd)"
+INGEST_AUTH_DOCKERFILE="${INGEST_AUTH_DOCKERFILE}/media/Dockerfile.ingest-auth"
+readonly INGEST_AUTH_DOCKERFILE
 # compose 렌더본의 응답기 서비스 키 줄(시작 스크립트의 모드 판정과 같은 줄).
 readonly INGEST_AUTH_SERVICE_LINE='  ingest-auth:'
 
@@ -56,7 +65,10 @@ def ia_binds:
 
 auth_setup_reason=""
 
+# scratch 의 env 렌더본(ingest-auth.env) 경로를 낸다 — compose 렌더본 옆이다.
 auth_cases::env_render() { printf '%s/%s' "${scratch}" "${IP_LIMIT_ENV_NAME}"; }
+
+# 갈래 하나($1)의 env 를 풀지 않은 구성 JSON 경로를 낸다.
 auth_cases::noenv_json() {
   printf '%s/compose-%s.noenv.json' "${scratch}" "$1"
 }
@@ -79,6 +91,14 @@ $(harness::log_tail "${scratch}/env-render.err")"
   fi
 }
 
+#######################################
+# 응답기 사례의 준비 확인 — 공통 준비(require_setup)와 env 렌더(prepare)가
+# 둘 다 됐는지 본다. 실패면 원인을 사례 원인에 더한다.
+# Globals:
+#   auth_setup_reason
+# Returns:
+#   0 준비됨 / 1 준비 실패.
+#######################################
 auth_cases::require() {
   require_setup || return 1
   if [[ -n "${auth_setup_reason}" ]]; then
@@ -183,12 +203,23 @@ auth_cases::start_default() {
   printf '%s' "${got%\}}"
 }
 
+# 사례 35 — 응답기 environment 가 정확히 ia_env 다(env_file 은 풀지 않고 본다).
 auth_cases::check_35() {
   auth_cases::require || return 1
   auth_cases::expect_noenv '.services["ingest-auth"].environment // null' \
     'ia_env' '응답기 env 정확 집합(env_file 풀지 않음)'
 }
 
+#######################################
+# 사례 36 — `*_FILE` env 값은 그 서비스의 읽기 전용 bind 대상이다(모든 갈래).
+# 응답기의 거부 목록 · 상태 디렉터리 bind 대상은 응답기 이미지 고정 자리
+# (main.go denyListFile 의 디렉터리 · connLogDirectory)와 같고, 거부 목록만
+# 읽기 전용이다.
+# Globals:
+#   RESPONDER_MAIN, AUTH_VARIANTS
+# Returns:
+#   0 통과 / 1 어긋남 · 읽지 못함.
+#######################################
 auth_cases::check_36() {
   local ok=0 deny_file log_dir v got want
   auth_cases::require || return 1
@@ -223,6 +254,8 @@ auth_cases::check_36() {
   return "${ok}"
 }
 
+# 사례 37 — 응답기 healthcheck(exec 꼴) · 읽기 전용 루트 · user 없음(실행 계정은
+# 이미지 USER — 사례 45).
 auth_cases::check_37() {
   auth_cases::require || return 1
   auth_cases::expect_auth '.services["ingest-auth"]
@@ -234,6 +267,15 @@ auth_cases::check_37() {
     'healthcheck · 읽기 전용 루트 · user 없음'
 }
 
+#######################################
+# 사례 38 — 응답기 env_file 은 compose 파일 옆 ingest-auth.env 하나이고 required
+# 다. 풀린 env 에 그 파일의 IP 한도 값이 들어가고, 그 파일이 없는 자리에서는
+# config 가 그 파일 이름을 대며 실패한다.
+# Globals:
+#   scratch, IP_LIMIT_ENV_NAME, PROJECT, CONFIG_TIMEOUT
+# Returns:
+#   0 통과 / 1 어긋남.
+#######################################
 auth_cases::check_38() {
   local ok=0 dir="${scratch}/no-env-file" err
   auth_cases::require || return 1
@@ -324,6 +366,8 @@ auth_cases::check_40() {
   return "${ok}"
 }
 
+# 사례 41 — env 템플릿 렌더가 on · off 각각 정확히 `INGEST_AUTH_IP_LIMIT=<값>`
+# 한 줄이다(바이트 대조).
 auth_cases::check_41() {
   local ok=0 value vars out
   auth_cases::require || return 1
@@ -374,6 +418,14 @@ auth_cases::check_42() {
     --arg basic "${basic}" --arg token "${token}" --arg state "${state}"
 }
 
+#######################################
+# 사례 43 — 옛 갈래(a · c) 렌더 구성이 develop 골든과 같다(최상위 키 · 서비스
+# 단위로 차이를 댄다).
+# Globals:
+#   COMPOSE_GOLDEN_PREFIX, LEGACY_VARIANTS, TEST_DIR
+# Returns:
+#   0 같음 / 1 다름 · 골든 없음.
+#######################################
 auth_cases::check_43() {
   local ok=0 v golden diffs
   require_setup || return 1
@@ -404,13 +456,18 @@ auth_cases::check_43() {
 }
 
 # 계약 시험 compose 와 렌더(갈래 b)의 드리프트 — 응답기 · mediamtx 서비스.
-# 마운트는 대상이 같거나 시험 쪽 대상이 prod 대상의 상위 디렉터리면 같은
-# 자리로 친다(시험은 비밀 셋을 디렉터리 볼륨 하나로 준다). 4C 주소 값 ·
-# 시험 전용 depends_on(도우미 · 가짜 4C) · healthcheck start_interval 은 뺀다.
+# 마운트는 대상이 같으면 같은 자리다. 비밀 셋만 예외로, 시험 쪽 대상이 비밀
+# 디렉터리(/run/secrets)이고 prod 대상이 그 아래 파일이면 덮는다고 친다(시험은
+# 비밀 셋을 디렉터리 볼륨 하나로 준다). 거부 목록 · 상태 디렉터리는 대상이
+# 정확히 같아야 한다 — 거부 목록을 파일 bind 로 바꾸면(원자 rename 이 반영되지
+# 않는다) 여기서도 FAIL 이다. 4C 주소 값 · 시험 전용 depends_on(도우미 · 가짜
+# 4C) · healthcheck start_interval 은 뺀다.
 # shellcheck disable=SC2016 # jq 프로그램 — $ 는 jq 변수다.
 readonly IA_DRIFT_PROGRAM='
 def mounts: [(.volumes // [])[] | {t: .target, ro: (.read_only // false)}];
-def covers($m; $n): $m.t == $n.t or ($m.t | startswith($n.t + "/"));
+def secret_dir: "/run/secrets";
+def covers($m; $n): $m.t == $n.t
+  or ($n.t == secret_dir and ($m.t | startswith(secret_dir + "/")));
 def core: {network_mode: (.network_mode // null),
   restart: (.restart // null), read_only: (.read_only // null),
   user: (.user // null), security_opt: ((.security_opt // []) | sort),
@@ -447,6 +504,15 @@ $p[0].services as $ps | $t[0].services as $ts
   end
 '
 
+#######################################
+# 사례 44 — 계약 시험 compose(compose.ingest-auth.yml)의 응답기 · mediamtx
+# 서비스가 렌더(갈래 b)와 구조가 같다(IA_DRIFT_PROGRAM). 그 파일의 변수는 구조
+# 비교에 쓰지 않는 값으로 채운다.
+# Globals:
+#   scratch, INGEST_AUTH_COMPOSE, IA_DRIFT_PROGRAM
+# Returns:
+#   0 드리프트 없음 / 1 드리프트 · config 실패.
+#######################################
 auth_cases::check_44() {
   local prod trial diffs
   auth_cases::require || return 1
@@ -473,6 +539,114 @@ $(harness::log_tail "${trial}.err")"
   fi
   if ! diffs="$(jq -n -r --slurpfile p "${prod}" --slurpfile t "${trial}" \
     "${IA_DRIFT_PROGRAM}" 2>&1)"; then
+    harness::add_reason "드리프트 비교 실패: ${diffs}"
+    return 1
+  fi
+  if [[ -n "${diffs}" ]]; then
+    harness::add_reason "드리프트: $(printf '%s' "${diffs}" | tr '\n' ';')"
+    return 1
+  fi
+}
+
+#######################################
+# 사례 45 — 응답기 실행 계정. compose 는 응답기에 user 를 적지 않으므로(사례
+# 37) 이미지 Dockerfile.ingest-auth 최종 스테이지의 USER 가 정본이다. 시작
+# 스크립트는 응답기 비밀 셋을 INGEST_AUTH_UID · INGEST_AUTH_GID 기본값 소유로
+# 둔다 — 둘이 갈리면 응답기가 비밀을 읽지 못한다. USER 는 사례 9(janitor ⇔
+# Dockerfile.mtxhook)와 같은 규칙(마지막 FROM 뒤 마지막 USER)으로 읽는다.
+# Globals:
+#   INGEST_AUTH_DOCKERFILE, START_SCRIPT
+# Returns:
+#   0 같음 / 1 다름 · 읽지 못함.
+#######################################
+auth_cases::check_45() {
+  local image_user uid gid
+  if [[ ! -f "${INGEST_AUTH_DOCKERFILE}" ]]; then
+    harness::add_reason 'media/Dockerfile.ingest-auth 없음(응답기 실행 계정 정본)'
+    return 1
+  fi
+  if ! image_user="$(dockerfile_user "${INGEST_AUTH_DOCKERFILE}")" \
+    || [[ -z "${image_user}" ]]; then
+    harness::add_reason 'media/Dockerfile.ingest-auth 최종 USER 를 읽지 못함'
+    return 1
+  fi
+  if ! uid="$(auth_cases::start_default INGEST_AUTH_UID)" \
+    || ! gid="$(auth_cases::start_default INGEST_AUTH_GID)"; then
+    harness::add_reason 'bin/start-media.sh 응답기 소유 기본값을 읽지 못함'
+    return 1
+  fi
+  if [[ "${image_user}" != "${uid}:${gid}" ]]; then
+    harness::add_reason "Dockerfile.ingest-auth 최종 USER ${image_user} · \
+start-media 기본 소유 ${uid}:${gid}"
+    return 1
+  fi
+}
+
+# 응답기 모드 유닛 시험 compose 와 렌더(갈래 b)의 응답기 서비스 드리프트.
+# 아래 제외 목록 밖의 키는 전부 같아야 한다(망 칸 · depends_on · restart ·
+# read_only · security_opt · cap · ulimits · env_file · bind · logging tag 등 —
+# prod 에 키가 늘어도 잡힌다). 제외 목록 = 의도된 차이(그 시험 compose 머리
+# 주석): 이미지 · 명령(셸) · healthcheck(/bin/true · start_interval) ·
+# environment(셸은 응답기 설정을 읽지 않는다) · user(prod 는 이미지 USER —
+# 사례 45, 시험 이미지에는 그 계정이 없어 적는다) · labels(실험 식별). bind 는
+# 원본(시험 env 가 정함)을 빼고, env_file 은 파일 이름 · required 로 본다.
+# shellcheck disable=SC2016 # jq 프로그램 — $ 는 jq 변수다.
+readonly UNIT_IA_DRIFT_PROGRAM='
+def excluded: ["image", "entrypoint", "command", "healthcheck", "environment",
+  "user", "labels"];
+def facts: with_entries(select(.key as $k | excluded | index($k) == null))
+  | if has("volumes") then .volumes |= (map(del(.source)) | sort_by(.target))
+    else . end
+  | if has("env_file") then .env_file |= map({name: (.path | split("/") | last),
+      required: (if .required == false then false else true end)})
+    else . end;
+($p[0].services["ingest-auth"] // null) as $ps
+| ($t[0].services["ingest-auth"] // null) as $ts
+| if $ps == null or $ts == null
+  then "응답기 서비스 없음(prod \($ps != null) · 시험 \($ts != null))"
+  else ($ps | facts) as $pf | ($ts | facts) as $tf
+    | (($pf | keys) + ($tf | keys) | unique[]) as $k
+    | select($pf[$k] != $tf[$k])
+    | "ingest-auth.\($k): prod \($pf[$k] | tojson) · 시험 \($tf[$k] | tojson)"
+  end
+'
+
+#######################################
+# 사례 46 — 응답기 모드 유닛 시험 compose(unit_restart_test 사례 22 · 23)의
+# 응답기 서비스가 prod 렌더와 구조가 같다(UNIT_IA_DRIFT_PROGRAM). 그 파일은
+# 옆의 ingest-auth.env 를 required 로 읽으므로, env 렌더본이 있는 scratch 로
+# 복사해 config 를 돈다. include 하는 compose.unit.yml 쪽은 사례 25 가 본다.
+# Globals:
+#   scratch, UNIT_INGEST_AUTH_COMPOSE, UNIT_COMPOSE, UNIT_IA_DRIFT_PROGRAM
+# Returns:
+#   0 드리프트 없음 / 1 드리프트 · config 실패.
+#######################################
+auth_cases::check_46() {
+  local prod trial diffs copy="${scratch}/compose.unit.ingest-auth.yml"
+  auth_cases::require || return 1
+  if [[ ! -f "${UNIT_INGEST_AUTH_COMPOSE}" ]]; then
+    harness::add_reason 'test/compose.unit.ingest-auth.yml 없음'
+    return 1
+  fi
+  prod="$(auth_cases::noenv_json b)"
+  trial="${scratch}/unit-ingest-auth.noenv.json"
+  if [[ ! -s "${prod}" ]] \
+    && ! auth_cases::noenv_config "$(compose_render b)" "${prod}"; then
+    harness::add_reason "갈래 b config 실패: $(harness::log_tail "${prod}.err")"
+    return 1
+  fi
+  cp -- "${UNIT_INGEST_AUTH_COMPOSE}" "${copy}" || return 1
+  { unit_env_lines
+    printf '%s\n' "PCBENCH_UNIT_COMPOSE=${UNIT_COMPOSE}" \
+      "INGEST_AUTH_DENY_DIR=${scratch}/deny"; } >"${trial}.env"
+  if ! auth_cases::noenv_config "${copy}" "${trial}" --env-file "${trial}.env"
+  then
+    harness::add_reason "응답기 모드 유닛 시험 compose config 실패: \
+$(harness::log_tail "${trial}.err")"
+    return 1
+  fi
+  if ! diffs="$(jq -n -r --slurpfile p "${prod}" --slurpfile t "${trial}" \
+    "${UNIT_IA_DRIFT_PROGRAM}" 2>&1)"; then
     harness::add_reason "드리프트 비교 실패: ${diffs}"
     return 1
   fi

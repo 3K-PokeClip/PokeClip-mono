@@ -19,7 +19,7 @@
 #   - nginx: control_upstream 빔(a) · 채움(e).
 #   - mediamtx: 옛 모드(a) · 응답기 모드(b).
 #   - ingest-auth.env: 갈래 a 로 compose 렌더본 옆에 렌더한다(응답기 갈래의
-#     env_file). 응답기 사례(35 – 44)는 test/lib/render_auth_cases.sh 에 있다.
+#     env_file). 응답기 사례(35 – 46)는 test/lib/render_auth_cases.sh 에 있다.
 #
 # 드리프트: 시험 compose(test/compose.contract.yml)에서 템플릿과 이름이 같은
 # 서비스는 restart · network_mode · depends_on · security_opt · cap_drop ·
@@ -29,7 +29,8 @@
 # 유닛 재기동 시험 compose(test/compose.unit.yml)도 같은 항목에 logging(드라이버 ·
 # 옵션)까지 비교한다(사례 25) — 그 파일만 prod 와 같은 journald 를 쓴다(CI 엔진에는
 # journald 가 있고, 로컬 엔진에는 없어 계약 시험 compose 는 로그 설정을 두지 않는다).
-# 구성 확인(config)만 하므로 로컬에서도 돈다.
+# 응답기 서비스의 드리프트는 사례 44(계약 시험 compose) · 46(응답기 모드 유닛
+# 시험 compose)이 본다. 구성 확인(config)만 하므로 로컬에서도 돈다.
 #
 # 제품 파일(템플릿)이 없으면 사례가 FAIL 이다. 건너뛰는 갈래는 없다.
 #
@@ -70,7 +71,7 @@ readonly COMPOSE_VARIANTS='a b c d'
 readonly SAMPLE_CONTROL_UPSTREAM='127.0.0.1:28190'
 readonly MIN_READ_TIMEOUT_SECONDS=15
 readonly CONFIG_TIMEOUT=60
-readonly CASE_COUNT=44
+readonly CASE_COUNT=46
 # 녹화 디렉터리 소유자의 정본 — MediaMTX 이미지 Dockerfile 의 최종 USER.
 MTXHOOK_DOCKERFILE="$(cd -- "${MEDIA_HOST_DIR}/../.." && pwd)/media/Dockerfile.mtxhook"
 readonly MTXHOOK_DOCKERFILE
@@ -265,13 +266,19 @@ contract_config() {
 #######################################
 unit_config() {
   local env_file="${scratch}/unit.env"
+  unit_env_lines >"${env_file}"
+  compose_config "${UNIT_COMPOSE}" "${scratch}/unit.json" "${env_file}"
+}
+
+# 유닛 시험 compose 의 config 용 시험값(env 파일 줄)을 낸다 — 응답기 모드
+# 유닛 시험 compose(사례 46)도 이 파일을 include 하므로 같은 값을 쓴다.
+unit_env_lines() {
   printf '%s\n' \
     'PCBENCH_ECHO_IMAGE=pcbench-edge-proxy/echo:local' \
     'PCBENCH_NGINX_IMAGE=pcbench-edge-proxy/nginx:render-test' \
     "PCBENCH_NGINX_CONF=${scratch}/unit-nginx.conf" \
     'PCBENCH_HEALTH_PORT=28184' 'PCBENCH_ECHO_ADMIN_PORT=28199' \
-    'PCBENCH_SIDECAR_EXIT_DELAY=3600s' "RUNTIME_DIR=${scratch}" >"${env_file}"
-  compose_config "${UNIT_COMPOSE}" "${scratch}/unit.json" "${env_file}"
+    'PCBENCH_SIDECAR_EXIT_DELAY=3600s' "RUNTIME_DIR=${scratch}"
 }
 
 require_setup() {
@@ -446,18 +453,23 @@ check_case_8() {
 }
 
 #######################################
-# 녹화 디렉터리 소유자 — MediaMTX 이미지 Dockerfile 최종 스테이지의 USER(마지막
-# FROM 뒤 마지막 USER). media/cmd/janitor 의 compose 계약 시험과 같은 규칙이다.
+# Dockerfile 최종 스테이지의 USER(마지막 FROM 뒤 마지막 USER).
+# media/cmd/janitor 의 compose 계약 시험과 같은 규칙이다.
+# Arguments:
+#   Dockerfile 경로.
 # Outputs:
 #   USER 값(없으면 빈 값).
 # Returns:
 #   0 읽음 / 그 밖 파일을 읽지 못함.
 #######################################
-recording_owner() {
+dockerfile_user() {
   awk 'toupper($1) == "FROM" { user = "" }
     toupper($1) == "USER" { user = $2 }
-    END { print user }' "${MTXHOOK_DOCKERFILE}"
+    END { print user }' "$1"
 }
+
+# 녹화 디렉터리 소유자 — MediaMTX 이미지 Dockerfile 의 최종 USER.
+recording_owner() { dockerfile_user "${MTXHOOK_DOCKERFILE}"; }
 
 # 실행 계정은 이미지 USER 가 정본이라 user: 를 적지 않는다. janitor 만 예외 —
 # 사이드카 이미지(USER 10001)를 쓰지만 녹화 소유자로 돌아야 지울 수 있다.
@@ -499,13 +511,14 @@ check_case_11() {
   local ok=0 v
   require_setup || return 1
   # shellcheck disable=SC2016 # jq 프로그램 — $ 는 jq 변수다.
-  # 예외는 `_FILE` 로 끝나고 값이 그 서비스의 읽기 전용 bind 대상인 env 뿐이다
-  # (값이 아니라 파일 경로다).
+  # 이름 패턴의 PASS 는 PASSWORD 와 *_PASS 를 함께 덮는다. 예외는 `_FILE` 로
+  # 끝나고 값이 그 서비스의 읽기 전용 bind 대상인 env 뿐이다(값이 아니라 파일
+  # 경로다).
   expect_all '[.services | to_entries[] | .key as $s | .value as $c
     | ([($c.volumes // [])[] | select(.type == "bind" and .read_only == true)
         | .target]) as $ro
     | ($c.environment // {}) | to_entries[]
-    | select(.key | test("CDN|TOKEN|PASSWORD|SECRET"; "i"))
+    | select(.key | test("CDN|TOKEN|PASS|SECRET"; "i"))
     | select(((.key | endswith("_FILE"))
         and (.value as $v | $ro | index($v) != null)) | not)
     | "\($s).\(.key)"]' '[]' '비밀 계열 env 이름(읽기 전용 bind 파일 경로 제외)' \
@@ -939,6 +952,11 @@ main() {
     auth_cases::check_43
   harness::run_case 44 '드리프트 — 계약 시험 compose 응답기 · mediamtx' \
     auth_cases::check_44
+  harness::run_case 45 \
+    '응답기 실행 계정 — Dockerfile.ingest-auth USER = start-media 기본 소유' \
+    auth_cases::check_45
+  harness::run_case 46 '드리프트 — 응답기 모드 유닛 시험 compose 응답기' \
+    auth_cases::check_46
 
   if ! harness::summary "${CASE_COUNT}"; then
     exit 1
