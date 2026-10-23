@@ -651,15 +651,16 @@ export function useLiveMockState(pastRoute: boolean): LiveMockState {
   // 화면이 그릴 방송 정보는 대표 플랫폼 하나의 것이다(POK-397). 받을 때 고른 것을 쓰지 않고 여기서 다시 고르는 것은 이 값이
   // info와 같은 렌더에 서야 해서다(저장소 값은 효과 뒤에 온다)
   const view = useMemo(() => (info === null ? null : primaryInfo(info, Date.now())), [info]);
-  // 채널 이름은 내 방송일 때만, 대표 플랫폼의 내 연동에서 읽는다(치지직 채널 이름 · SOOP 닉네임, POK-397). 플랫폼 값이 없는 옛
-  // 서버면 치지직이다. 위임받은 방송(EDITOR)은 방송 줄에 스트리머 채널이 실려 오지 않아 비운다 — 내 채널 이름을 남의 방송에
-  // 붙이면 거짓이다(POK-251 리뷰)
+  // 채널 이름은 대표 플랫폼의 것이다(치지직 채널 이름 · SOOP 닉네임, POK-397). 플랫폼 값이 없는 옛 서버면 치지직이다. 내 방송은 내
+  // 연동에서, 위임받은 방송(EDITOR)은 방송 줄에 실려 온 스트리머 이름에서 읽는다(POK-430). 내 채널 이름을 남의 방송에 붙이면 거짓이라
+  // (POK-251 리뷰) 줄에 이름이 없으면(옛 서버 · 연동 없음) 비운다
+  const soopLead = view?.platform === 'SOOP';
   const channelName =
-    live.relation !== 'OWNER'
-      ? ''
-      : view?.platform === 'SOOP'
-        ? (soop?.nickname ?? '')
-        : (chzzk?.channelName ?? '');
+    live.relation === 'OWNER'
+      ? ((soopLead ? soop?.nickname : chzzk?.channelName) ?? '')
+      : live.relation === 'EDITOR'
+        ? ((soopLead ? live.channelNames?.SOOP : live.channelNames?.CHZZK) ?? '')
+        : '';
   const myName = me?.name ?? '';
   const stream = useMemo<LiveStream>(
     () => ({

@@ -91,6 +91,10 @@ export interface BroadcastRow {
    * 옛 서버면 빠져 온다
    */
   editorsOnline?: number | null;
+  /**
+   * 이 방송 스트리머의 플랫폼 채널 이름(POK-430). 치지직 채널 이름 · SOOP 닉네임, 지금 연동된 것만이고 없으면 null. 옛 서버면 빠져 온다
+   */
+  channelNames?: { CHZZK: string | null; SOOP: string | null } | null;
 }
 
 /** 방송을 사람에게 보일 이름(POK-259). 방송 제목이 있으면 그것, 없으면 방송 번호 */

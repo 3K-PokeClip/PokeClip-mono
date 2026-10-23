@@ -483,6 +483,8 @@ const server = vi.hoisted(() => ({
   infoSoop: false,
   /** SOOP 연동 닉네임. null이면 미연동 */
   soopNickname: null as string | null,
+  /** 방송 목록 줄의 스트리머 채널 이름(POK-430). undefined면 이 칸을 모르는 옛 서버다 */
+  channelNames: undefined as { CHZZK: string | null; SOOP: string | null } | undefined,
   /** 라이브 줄의 시각 기준점(카드 0초). 서버 기준점은 첫 조각의 PDT − pts라 ms 자리가 있다. 없으면 싣지 않는다 */
   liveOriginMs: null as number | null,
   /** 라이브 다시 보기 물음(한 쪽 CHAT_PAGE_MAX줄)에 503을 준다. 폴링(200줄)은 그대로다 */
@@ -614,6 +616,7 @@ function listResponse(u: URL): Response {
     vodExpiresAt: null,
     ingestStreamId: server.ingest,
     title: server.listTitle,
+    channelNames: server.channelNames,
   };
   const vod = {
     streamId: VOD_ID,
@@ -884,6 +887,7 @@ beforeEach(() => {
   server.infoCategoryChange = false;
   server.infoSoop = false;
   server.soopNickname = null;
+  server.channelNames = undefined;
   server.liveOffsetMs = 0;
   server.liveOriginMs = null;
   server.liveReplayFail = false;
@@ -1825,6 +1829,41 @@ describe('LiveScreen — 방송 정보 바', () => {
     server.relation = 'EDITOR';
     await renderLive();
     expect(screen.queryByText('게임하는너구리')).not.toBeInTheDocument();
+  });
+
+  it('위임받은 방송은 목록 줄의 스트리머 채널 이름 중 대표 플랫폼(치지직) 것을 보인다 (POK-430)', async () => {
+    server.relation = 'EDITOR';
+    server.channelNames = { CHZZK: '남의치지직', SOOP: '남의숲' };
+    await renderLive();
+    expect(screen.getAllByText('남의치지직').length).toBeGreaterThan(0);
+    expect(screen.queryByText('남의숲')).toBeNull();
+    expect(screen.queryByText('게임하는너구리')).toBeNull();
+  });
+
+  it('위임받은 방송이 SOOP 대표면 스트리머의 SOOP 닉네임이다 (POK-430)', async () => {
+    server.relation = 'EDITOR';
+    server.infoSoop = true;
+    server.soopNickname = '숲너구리';
+    server.channelNames = { CHZZK: '남의치지직', SOOP: '남의숲' };
+    await renderLive();
+    expect(screen.getAllByText('남의숲').length).toBeGreaterThan(0);
+    expect(screen.queryByText('남의치지직')).toBeNull();
+    expect(screen.queryByText('숲너구리')).toBeNull();
+  });
+
+  it('위임받은 방송에서 대표 플랫폼 이름이 null이면 비운다: 다른 플랫폼 이름으로 채우지 않는다 (POK-430)', async () => {
+    server.relation = 'EDITOR';
+    server.channelNames = { CHZZK: null, SOOP: '남의숲' };
+    await renderLive();
+    expect(screen.queryByText('남의숲')).toBeNull();
+    expect(screen.queryByText('게임하는너구리')).toBeNull();
+  });
+
+  it('내 방송이면 목록 줄의 이름이 와도 내 연동 이름이다 (POK-430)', async () => {
+    server.channelNames = { CHZZK: '남의치지직', SOOP: '남의숲' };
+    await renderLive();
+    expect(screen.getByText('게임하는너구리')).toBeInTheDocument();
+    expect(screen.queryByText('남의치지직')).toBeNull();
   });
 
   it('페이지 헤더가 없다 — 시안 1b는 콘텐츠부터 시작한다', async () => {
