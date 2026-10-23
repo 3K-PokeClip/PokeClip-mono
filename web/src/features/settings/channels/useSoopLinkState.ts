@@ -1,7 +1,8 @@
 'use client';
 
 import { useCallback, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useSessionMutation } from '@/lib/useSessionMutation';
 import {
   soopLinkQueryOptions,
   startSoopLink,
@@ -41,14 +42,18 @@ export function useSoopLinkState(): SoopLinkViewState {
   const status = useQuery(soopLinkQueryOptions);
   const [confirmOpen, setConfirmOpen] = useState(false);
 
-  const start = useMutation({
+  const start = useSessionMutation({
     // 검증을 mutationFn 안에서 한다: 던지면 onError의 문구로 흐른다(onSuccess에서 던지면 안 잡힌다).
     mutationFn: async () => {
       const authorizeUrl = await startSoopLink();
       assertSoopConsentUrl(authorizeUrl);
       return authorizeUrl;
     },
-    onSuccess: (authorizeUrl) => goToSoopConsent(authorizeUrl),
+    // 동의 주소는 요청한 회원 몫이다(state가 회원에 묶인다): 그 사이 계정이 바뀌면 useSessionMutation이 주소를 버려
+    // 다음 사람을 앞 계정의 동의 화면으로 보내지 않는다(POK-222 · POK-424).
+    onSuccess: (authorizeUrl) => {
+      goToSoopConsent(authorizeUrl);
+    },
     onError: () => {
       toast({
         tone: 'error',
@@ -58,8 +63,10 @@ export function useSoopLinkState(): SoopLinkViewState {
     },
   });
 
-  const unlink = useMutation({
+  const unlink = useSessionMutation({
     mutationFn: unlinkSoop,
+    // 응답을 기다리는 사이 계정이 바뀌면 useSessionMutation이 성공 · 실패를 버린다(POK-222 · POK-424). 크로스탭 핸들러가
+    // 비운 캐시에 앞 계정의 「미연동」을 되심으면, 이어지는 재조회가 실패할 때 그 값이 다음 사람의 연동을 덮는다.
     onSuccess: () => {
       queryClient.setQueryData<SoopLinkState>(soopLinkQueryOptions.queryKey, { linked: false });
       track('platform_unlinked', { platform: 'soop' });

@@ -68,6 +68,14 @@ logging:
     # 기본 콘솔 형식의 레벨 자리에 상관 ID를 끼워 넣는다. 값이 없으면 빈칸이다.
     level: "%5p [%X{requestId:-}]"
   level:
+    # DB 로거 트리 셋을 info로 박는다(POK-409). 로그 수준을 DEBUG · TRACE로 올려도 DB를 오가는 값이 안 찍히게 한다:
+    # root TRACE 실측(clip)에서 org.hibernate.orm.jdbc.extract가 읽은 칸 값을, org.hibernate.orm.core가 DEBUG에서
+    # 엔티티 통째를, org.springframework.jdbc.core.StatementCreatorUtils가 JdbcTemplate 매개변수를,
+    # org.postgresql.core.v3.QueryExecutorImpl이 보내는 값을 찍었다. 방송의 물리 키는 지금 스트림키와 같다.
+    # 디버그 로그가 꼭 필요하면 env로 그 트리만 잠깐 켠다(예: LOGGING_LEVEL_ORG_HIBERNATE_ORM=debug).
+    org.hibernate.orm: info
+    org.springframework.jdbc: info
+    org.postgresql: info
     # 🔴 이 서버의 첫 발신 HTTP다. clip 클래스패스에 AWS SDK가 끌어온 httpclient5가 있어
     # 팩토리가 JDK가 아니라 Apache HC5로 뽑히고, 그 두 로거가 DEBUG에서 나가는 헤더를
     # 통째로 찍는다 — X-Internal-Token 평문 유출을 실측했다(계획 검증 F4, 2건).

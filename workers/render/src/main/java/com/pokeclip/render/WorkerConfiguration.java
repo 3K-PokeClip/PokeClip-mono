@@ -10,6 +10,7 @@ import com.pokeclip.render.thumbnail.ThumbnailProperties;
 import com.pokeclip.render.thumbnail.ThumbnailReporter;
 import com.pokeclip.render.work.ClipRenderer;
 import com.pokeclip.render.work.JobProcessor;
+import com.pokeclip.render.work.IdleKeeper;
 import com.pokeclip.render.work.QueueWorker;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.context.annotation.Bean;
@@ -77,10 +78,17 @@ class WorkerConfiguration {
         return new QueueWorker("thumbnail", sqs, t.queueUrl(), processor, t.visibilityTimeout(), p.pollWait());
     }
 
-    /** 줄 주소가 비면 줄을 안 본다. 부품만 띄워 보는 로컬 기동용. */
+    /** 줄 주소가 비면 줄을 안 본다. */
     @Bean
     @ConditionalOnExpression("!'${pokeclip.render.queue-url:}'.isBlank()")
     QueueWorker queueWorker(RenderProperties p, SqsClient sqs, JobProcessor processor) {
         return new QueueWorker(sqs, p.queueUrl(), processor, p.visibilityTimeout(), p.pollWait());
+    }
+
+    /** 두 줄 주소가 다 비면 일 없이 떠 있는다(POK-332). 없으면 기동하자마자 끝나 dev compose가 끝없이 다시 띄운다. */
+    @Bean
+    @ConditionalOnExpression("'${pokeclip.render.queue-url:}'.isBlank() && '${pokeclip.thumbnail.queue-url:}'.isBlank()")
+    IdleKeeper idleKeeper() {
+        return new IdleKeeper("render.worker_idle reason=no_queue_url vars=RENDER_QUEUE_URL,THUMBNAIL_QUEUE_URL");
     }
 }

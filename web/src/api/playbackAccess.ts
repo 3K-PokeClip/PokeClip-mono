@@ -36,7 +36,10 @@ const streamIdByMediaKey = new Map<string, string>();
 const notNeeded = new Set<string>();
 /** 보관 기간이 지난 방송(410, POK-335). 다시 받아도 같으므로 더 묻지 않는다 */
 const expired = new Set<string>();
-/** 방송 번호 → 이 탭이 받은 쿠키가 끝나는 시각. 지난 방송 목록의 상한은 누가 받았든 다 센다 */
+/**
+ * 영상 키 → 이 탭이 받은 쿠키가 끝나는 시각. 지난 방송 목록의 상한은 누가 받았든 다 센다. 쿠키 경로가 영상 키라 같은 키의 방송 여럿은
+ * 브라우저에 쿠키 한 벌이다: 방송 번호로 세면 같은 송출 키로 한 방송들이 한 벌을 여러 칸으로 세어 목록이 받을 키가 줄었다(POK-411)
+ */
 const cookieUntil = new Map<string, number>();
 /**
  * 영상 키 → 목록이 마지막으로 출입증을 받으려 한 시각(실패 포함). 자리가 나면 한 번도 안 해 본 키, 그다음 오래전에 해 본 키 순으로
@@ -46,10 +49,11 @@ const listTriedAt = new Map<string, number>();
 /** 쿠키가 지워져(403) 출입증을 버린 방송. 라이브 화면이 다시 받은 뒤 재생기를 새로 세울지 본다 */
 const dropped = new Set<string>();
 
-async function request(streamId: string): Promise<PlaybackAccessResult> {
+async function request(streamId: string, mediaKey: string): Promise<PlaybackAccessResult> {
   const result = await requestPlaybackAccess(streamId);
+  // 같은 키를 다른 방송으로 다시 받으면 같은 이름 · 같은 경로라 쿠키를 덮는다
   if (result.kind === 'granted')
-    cookieUntil.set(streamId, result.expiresAtMs ?? Date.now() + COOKIE_TTL_MS);
+    cookieUntil.set(mediaKey, result.expiresAtMs ?? Date.now() + COOKIE_TTL_MS);
   if (result.kind === 'not_needed') notNeeded.add(streamId);
   if (result.kind === 'expired') expired.add(streamId);
   return result;
@@ -64,7 +68,7 @@ function obtain(
   const known = cache.get(streamId);
   if (known !== undefined && known.mediaKey === mediaKey && known.until > Date.now())
     return { result: known.result, reused: known.settled };
-  const result = request(streamId);
+  const result = request(streamId, mediaKey);
   cache.set(streamId, { mediaKey, until: Number.POSITIVE_INFINITY, settled: false, result });
   void result.then((r) => {
     const until =
@@ -133,14 +137,15 @@ export function ensurePlaybackAccessForList(
   const now = Date.now();
   const fresh = new Set<string>();
   const alive = new Set<string>();
-  // 받는 중인 것도 곧 쿠키가 되므로 자리를 쓴다
-  let aliveCookies = 0;
+  // 쿠키가 살아 있는 영상 키. 받는 중인 것도 곧 쿠키가 되므로 자리를 쓴다. 키로 세어 같은 키의 방송 여럿은 한 칸이다(POK-411)
+  const cookieKeys = new Set<string>();
   for (const entry of cache.values()) {
     if (entry.until > now) fresh.add(entry.mediaKey);
     if (entry.until + REUSE_MARGIN_MS > now) alive.add(entry.mediaKey);
-    if (!entry.settled) aliveCookies += 1;
+    if (!entry.settled) cookieKeys.add(entry.mediaKey);
   }
-  for (const until of cookieUntil.values()) if (until > now) aliveCookies += 1;
+  for (const [mediaKey, until] of cookieUntil) if (until > now) cookieKeys.add(mediaKey);
+  const aliveCookies = cookieKeys.size;
   const byKey = new Map<string, string>();
   for (const { streamId, mediaKey } of items)
     if (!byKey.has(mediaKey)) byKey.set(mediaKey, streamId);
@@ -192,7 +197,7 @@ export function reportPlaybackForbidden(mediaKey: string): void {
       dropped.add(streamId);
       if (!entry.settled) continue;
       cache.delete(streamId);
-      cookieUntil.delete(streamId);
+      cookieUntil.delete(mediaKey);
     }
 }
 onPlaybackForbidden(reportPlaybackForbidden);

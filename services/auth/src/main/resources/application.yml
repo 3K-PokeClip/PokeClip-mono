@@ -96,6 +96,14 @@ spring:
 
 logging:
   level:
+    # DB 로거 트리 셋을 info로 박는다(POK-409). 로그 수준을 DEBUG · TRACE로 올려도 DB를 오가는 값이 안 찍히게 한다:
+    # root TRACE 실측(clip)에서 org.hibernate.orm.jdbc.extract가 읽은 칸 값을, org.hibernate.orm.core가 DEBUG에서
+    # 엔티티 통째를, org.springframework.jdbc.core.StatementCreatorUtils가 JdbcTemplate 매개변수를,
+    # org.postgresql.core.v3.QueryExecutorImpl이 보내는 값을 찍었다. 방송의 물리 키는 지금 스트림키와 같다.
+    # 디버그 로그가 꼭 필요하면 env로 그 트리만 잠깐 켠다(예: LOGGING_LEVEL_ORG_HIBERNATE_ORM=debug).
+    org.hibernate.orm: info
+    org.springframework.jdbc: info
+    org.postgresql: info
     # 이 로거를 DEBUG로 켜면 나가는 폼 본문이 통째로 찍힌다 —
     # DefaultRestClient.logBody가 "Writing [" 뒤에 본문을 그대로 붙이고,
     # LogFormatUtils를 안 거치므로 길이 상한이 없다. 구글 토큰 교환의

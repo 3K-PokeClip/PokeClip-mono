@@ -200,21 +200,17 @@ variable "app_db_auth" {
   }
 }
 
+# 기본값은 auth · clip 이미지가 RDS CA 번들을 두는 자리다(services/auth ·
+# clip Dockerfile — media 사이드카와 같은 경로).
 variable "postgres_sslrootcert" {
   description = "auth · clip 이미지 안 RDS CA 번들 경로(POSTGRES_SSLROOTCERT). app_db_auth = iam 이면 필수."
   type        = string
-  default     = null
+  default     = "/etc/pokeclip/rds-ca/global-bundle.pem"
 
   validation {
     condition     = var.app_db_auth != "iam" || can(regex("^/[^[:space:]]+$", var.postgres_sslrootcert))
     error_message = "app_db_auth = iam 이면 postgres_sslrootcert 는 / 로 시작하는 이미지 안 경로여야 한다."
   }
-}
-
-variable "auth_internal_proxies" {
-  description = "auth 톰캣이 X-Forwarded-* 를 믿을 소켓 대역(정규식 — server.tomcat.remoteip.internal-proxies). 빈 값이면 env 를 넣지 않아 톰캣 기본 대역(사설망 · 루프백)을 쓴다."
-  type        = string
-  default     = ""
 }
 
 # auth 의 STREAM_KEY_SECRET_REF_PREFIX 와 작업 역할 정책 Resource 를 이 값
@@ -228,4 +224,12 @@ variable "stream_key_secret_prefix" {
     condition     = can(regex("^pokeclip/prod/([A-Za-z0-9_+=.@-]+/)+$", var.stream_key_secret_prefix))
     error_message = "stream_key_secret_prefix 는 pokeclip/prod/ 로 시작하고 / 로 끝나는 Secrets Manager 이름 접두여야 한다(와일드카드 금지)."
   }
+}
+
+# 런타임 app_env 이름 검사(장부 16 — terraform_data.runtime_contract)의 예외
+# 목록이다.
+variable "app_env_non_secret_names" {
+  description = "런타임 app_env 에 들어와도 되는 이름 — 끝 토막이 PASSWORD · SECRET · TOKEN · KEY 등이지만 비밀이 아닌 env. 이 목록 밖에서 그런 이름이 오면 plan 이 멈춘다."
+  type        = list(string)
+  default     = []
 }

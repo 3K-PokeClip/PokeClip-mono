@@ -1,7 +1,8 @@
 'use client';
 
 import { useCallback, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useSessionMutation } from '@/lib/useSessionMutation';
 import { ApiError } from '@/api/client';
 import {
   cancelInvitation as requestCancelInvitation,
@@ -79,7 +80,7 @@ export function useEditorSettingsState(): EditorSettingsViewState {
     void queryClient.invalidateQueries({ queryKey: sentInvitationsQueryOptions.queryKey });
   }, [queryClient]);
 
-  const invite = useMutation({
+  const invite = useSessionMutation({
     mutationFn: inviteEditor,
     onSuccess: () => {
       setInviteOpen(false);
@@ -96,7 +97,7 @@ export function useEditorSettingsState(): EditorSettingsViewState {
     onSettled: invalidateLists,
   });
 
-  const revoke = useMutation({
+  const revoke = useSessionMutation({
     // 대상을 클로저가 아니라 variables로 받는다 — onSettled가 revokeTarget을 먼저 지워도
     // 토스트 문구가 이름을 잃지 않는다.
     mutationFn: (target: EditorDelegation) => revokeDelegation(target.id),
@@ -132,7 +133,7 @@ export function useEditorSettingsState(): EditorSettingsViewState {
     },
   });
 
-  const cancel = useMutation({
+  const cancel = useSessionMutation({
     mutationFn: (invitation: SentInvitation) => requestCancelInvitation(invitation.id),
     onMutate: (invitation) => {
       setCancelingIds((prev) => new Set(prev).add(invitation.id));

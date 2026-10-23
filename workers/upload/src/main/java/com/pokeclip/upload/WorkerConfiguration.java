@@ -7,6 +7,7 @@ import com.pokeclip.upload.media.ProcessRunner;
 import com.pokeclip.upload.media.SceneExtractor;
 import com.pokeclip.upload.storage.S3Download;
 import com.pokeclip.upload.work.InternalHttp;
+import com.pokeclip.upload.work.IdleKeeper;
 import com.pokeclip.upload.work.QueueWorker;
 import com.pokeclip.upload.work.Sleeper;
 import com.pokeclip.upload.work.ThumbnailStep;
@@ -71,10 +72,17 @@ class WorkerConfiguration {
                 storage, youtube, thumbnails, p.workDir(), p.chunkSize().toBytes(), p.retryDelays(), Sleeper.real());
     }
 
-    /** 줄 주소가 비면 줄을 안 본다. 부품만 띄워 보는 로컬 기동용. */
+    /** 줄 주소가 비면 줄을 안 본다. */
     @Bean
     @ConditionalOnExpression("!'${pokeclip.upload.queue-url:}'.isBlank()")
     QueueWorker queueWorker(UploadProperties p, SqsClient sqs, UploadProcessor processor) {
         return new QueueWorker(sqs, p.queueUrl(), processor, p.visibilityTimeout(), p.pollWait());
+    }
+
+    /** 줄 주소가 비면 일 없이 떠 있는다(POK-332). 없으면 기동하자마자 끝나 dev compose가 끝없이 다시 띄운다. */
+    @Bean
+    @ConditionalOnExpression("'${pokeclip.upload.queue-url:}'.isBlank()")
+    IdleKeeper idleKeeper() {
+        return new IdleKeeper("upload.worker_idle reason=no_queue_url vars=UPLOAD_QUEUE_URL");
     }
 }

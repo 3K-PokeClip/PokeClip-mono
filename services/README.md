@@ -460,7 +460,7 @@ CHZZK_ENABLED=true CHZZK_ACCESS_TOKEN=<유저 Access Token> ./gradlew :chat-coll
 | 평균 · 범위 | 4,100ms · 3,746~4,977ms |
 | 수렴 | 표본 15개일 때 3,893 → 20개일 때 3,884 |
 | P₂ 판독 오차 | **±33ms** — 사람이 재생기로 읽지 않고 30fps 프레임 단위로 자동 검출했다 |
-| 측정 장소 | **로컬 개발 노트북**(EC2에는 조각 장부를 쓰는 구성이 없다) |
+| 측정 장소 | **로컬 개발 노트북**(측정 당시 EC2에는 조각 장부를 쓰는 구성이 없었다) |
 
 **배제한 표본은 셋이다** — 스트리머가 측정 중 「늦게 쳤다」고 먼저 신고한 1건과, 송출 재시작
 직후라 채팅이 화면보다 먼저인(물리적으로 불가능한) 음수 2건. **셋을 다 포함해도 중앙값은
@@ -474,7 +474,7 @@ CHZZK_ENABLED=true CHZZK_ACCESS_TOKEN=<유저 Access Token> ./gradlew :chat-coll
 
 **🔴 운영으로 옮길 때는 반드시 다시 잰다.** 이 값이 보증하지 않는 것 다섯:
 
-1. **로컬 노트북에서 쟀다** — EC2 dev에는 `segment-indexer`도 조각 장부 표도 없다
+1. **로컬 노트북에서 쟀다**: 측정 당시 EC2 dev에는 `segment-indexer`도 조각 장부 표도 없었다
 2. **시계 오프셋을 손으로 뺀 값이다** — 시계가 맞는 기계에는 그 항이 아예 없다
 3. **테스트 패턴 송출이다** — 실제 게임 화면은 인코딩 난이도가 달라 지연이 다를 수 있다
 4. **시청자 한 명(스트리머 본인)의 반응이다** — 여러 시청자의 분포는 더 넓다
@@ -539,6 +539,24 @@ CHZZK_ENABLED=true CHZZK_ACCESS_TOKEN=<유저 Access Token> ./gradlew :chat-coll
 > 「dev로 띄운」이 아니라 **「이 compose로 띄운」**이다. 2026-10-16(POK-331)부터 `services-deploy.yml`이 dev EC2에
 > 서버 넷을 다 올린다(그 전에는 `postgres`·`auth`·`clip` 셋뿐이라 dev에 수집기가 없었다). 그래서 이 구멍은 이제
 > dev 배포에서도 드러난다. compose와 예시 파일의 이름 대조는 auth `DeploymentEnvVarsTest`가 잰다.
+
+**렌더 · 업로드 일꾼도 같은 compose · 같은 배포로 뜬다**(POK-332). `render-worker` · `upload-worker` 두 서비스이고 빌드 폴더는
+각자 `workers/render` · `workers/upload`다(독립 Gradle 루트). `workers/render/**` · `workers/upload/**`가 바뀌어도 배포가 돈다.
+- **받는 쪽이 먼저**: 일꾼 둘을 올린 뒤 clip을 올린다(옛 일꾼이 새 주문서 칸을 버리지 않게).
+- **새 변수가 없다**: 일꾼은 clip과 같은 이름(`RENDER_QUEUE_URL` · `THUMBNAIL_QUEUE_URL` · `UPLOAD_QUEUE_URL` · `INTERNAL_API_TOKEN`)을
+  받는다. 주문하는 쪽과 받는 쪽이 같은 줄이어야 해서다. AWS 키는 안 넣는다(상자 역할), 창고 이름은 주문서로 받는다.
+- **배포 확인이 따로다**: 일꾼은 웹 문도 health 주소도 없다. 배포는 `running`이 아니면 실패하고, 컨테이너 안 큐 주소가
+  비었으면 경고만 찍는다(값은 안 찍는다). 🔴 큐 주소가 비면 일꾼은 그 줄을 안 보고 **떠 있기만** 한다: 「떠 있다」는 초록이 아니다.
+- **메모리**: render 768m(힙 192m) · upload 384m(힙 160m). ffmpeg가 힙 밖에서 돌아 상한을 크게 둔다. 서버 넷 · DB와 합한 상한
+  3,648MB(상자 4GiB, 예약 아님). 배포 끝 `free -m`으로 본다.
+- **디스크 · 시간**: 이미지가 render 약 1.3GB · upload 약 1.1GB다(ffmpeg · 한글 글꼴, 로컬 실측). 서버 넷(각 약 0.6GB)보다 커서
+  30GB 상자의 디스크 경고(80%)가 빨리 온다. 첫 배포는 캐시 없이 두 일꾼을 더 구워 SSM 시한(3,000초)에 가까울 수 있으니 그 판의
+  배포 시간을 본다.
+- **빌드 캐시는 크기로 묶는다**(POK-425). 배포가 굽기 전 · 뒤에 빌드 캐시를 6GB 아래로 줄이고, 굽기 전 남은 공간이 8GB 미만이면
+  캐시를 통째로 비운 뒤 굽는다(그 판은 처음부터 굽어 느리다). 옛 처방(24시간보다 오래된 캐시만 지움)은 하루 여러 번 배포하면
+  아무것도 안 지워 디스크가 두 번 100%가 됐다(10-16 · 10-24). 값은 `services-deploy.yml`의 `BUILD_CACHE_MAX` · `MIN_FREE_GB`.
+- **배포가 하던 일을 끊는다**: 배포는 일꾼 컨테이너를 새로 띄워 하던 렌더 · 업로드가 끊긴다. 주문은 줄(SQS)에 남아 숨김 시간
+  (렌더 600초 · 업로드 900초)이 지나면 다시 나온다: dev에서 배포 직후 렌더가 「만드는 중」으로 오래 머물면 그것이다.
 
 **`AUTH_BASE_URL`·`INTERNAL_API_TOKEN`이 비면 부팅이 죽는데, 켜져 있을 때만 그렇다.**
 둘을 쓰는 부품이 **큐가 켜졌을 때만 만들어지기** 때문이다 — 안 그러면 CI와 남의 로컬이
@@ -859,6 +877,19 @@ GRANT SELECT ON chat_messages TO app_chat_detector;
 README의 `GRANT ... TO app_*;` 줄과 시험의 목록이 다르면 빨간불이다.
 **재지 않는 것**: 자기 표의 전체 저장 경로를 그 역할로 다 돌리지는 않는다(소유자라 표 권한이 다 있다). 시퀀스 ·
 트리거 함수 · advisory 잠금 · `pg_stat_ssl` 자기 행은 소유 또는 PUBLIC 기본으로 충분하다.
+
+### DB 로거 셋은 info로 박혀 있다 (POK-409)
+
+**서버 넷 다 `org.hibernate.orm` · `org.springframework.jdbc` · `org.postgresql` 트리를 `application.yml`에서 info로 박는다.**
+로그 수준을 DEBUG · TRACE로 올려도 DB를 오가는 값이 안 찍히게 하려는 것이다. clip에서 root TRACE로 방송을 읽어 보니 넷이 값을
+찍었다: 읽은 칸 값(`org.hibernate.orm.jdbc.extract`) · 엔티티 통째(`org.hibernate.orm.core`, DEBUG에서도) · JdbcTemplate 매개변수
+(`StatementCreatorUtils`) · 드라이버가 보내는 값(`QueryExecutorImpl`). 방송의 물리 키는 지금 스트림키와 같아 그대로 새는 값이다.
+clip `DbValueTraceLeakTest` · 수집 서버 `IngestKeyTraceLeakTest`가 root TRACE에서 안 새는지와, 막이를 풀면 실제로 새는지(대조)를 잰다.
+auth는 비밀을 해시 · 암호문으로만 저장해 원문이 DB로 안 가므로 값을 흘려 보는 시험은 두지 않고, `SecretLeakTest`가 세 줄이 박혀 root TRACE를 안 따라가는지만 지킨다(회원 이메일 같은 개인정보는 이 막이가 덮는다).
+
+**디버그 로그가 꼭 필요하면 env로 그 트리만 잠깐 켠다**: `LOGGING_LEVEL_ORG_HIBERNATE_ORM=debug` ·
+`LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_JDBC=debug` · `LOGGING_LEVEL_ORG_POSTGRESQL=debug`. 켜는 동안은 그 값들이 로그에 남는다는 뜻이니
+보고 나면 끈다.
 
 ## DB 마이그레이션
 
@@ -1521,8 +1552,8 @@ GET /api/clip/broadcasts/{streamId}/segments?startMs=&endMs=     Bearer JWT
   25ms 바닥으로 못 덮는다. **503을 404로 접는 길은 일부러 안 골랐다** — 화면이 「없는 방송」으로
   단정하면 auth가 살아난 뒤에도 편집자가 다시 시도하지 않는다. 즉 이 구멍은 **auth 장애 중에만**
   열리고, 그때는 미리보기가 어차피 아무에게도 안 열린다
-- **개발용 compose에는 `stream_segments`가 없다**(그 파일에 media·인덱서가 없다). 거기서 이 API를
-  부르면 500이다. media가 뜨면 표가 생긴다 — 로컬에서는 media 컨테이너를 띄우거나 정본 DDL을 심는다
+- **장부 표(`stream_segments`)가 없는 DB에서 이 API를 부르면 500이다.** 표는 media 인덱서가 만든다. dev 공유 DB에는
+  1번이 표를 만들어 두었다(2026-10-19, media-dev가 쓴다. 3번은 읽기만). 로컬에서는 media 컨테이너를 띄우거나 정본 DDL을 심는다
 - **종료 이벤트가 유실된 방송은 기한이 영영 안 채워진다** — 만료 판정을 못 한다
 - **계약이 인정한 `failed` 고착 하나** — 실패한 조각이 그 스트림의 마지막인 채로 방송이 끝나면
   후속이 없어 자동 회복되지 않는다. 그 구간을 포함한 요청은 영원히 `complete=false`이고,
@@ -1598,6 +1629,7 @@ JSON 트리를 맞대어 지킨다). 화면이 같은 것을 두 벌로 처리�
 | `GET …/{streamId}/clips/{clipId}` (POK-125) | 같음 → 영상이 그 방송 것인가 | 같음 · **404** `clip_not_found` |
 | `POST …/{streamId}/clips/{clipId}/file-access` (POK-247) | 같음 | 같음 |
 | `POST …/{streamId}/clips/{clipId}/uploads` (POK-220) | 같음 | 같음 |
+| `POST …/{streamId}/marks` (POK-392, 웹 수동 마킹) | `BroadcastAccessGuard`: **본문 형식 검사 뒤, 방송 읽기·저장 앞** | **404** `broadcast_not_found` |
 | `GET /api/clip/library` (POK-243) | auth `accessible`: **방송 목록과 같은 판정**(볼 수 있는 스트리머 번호로만 조회) | 그 줄이 목록에 **안 나온다**(200). `streamerId`로 고른 채널이 그 번호들에 없으면 **404** `broadcast_not_found`(POK-390, 방송 목록과 같은 이름) |
 | `GET /api/clip/library/{recipeId}` (POK-243) | 편집본 → 그 편집본의 방송 → `BroadcastAccessGuard` | **404** `recipe_not_found` — `broadcast_not_found`로 안 나간다(그 번호의 편집본이 있다는 것이 샌다) |
 
@@ -2067,7 +2099,7 @@ clip이 그 방송을 `ended`로 굳힌다.** POK-218이 찾은 구멍이다 —
 | `ended_at` = **마지막 신호 시각**(지금이 아니다) | 방송은 그 근처에서 끝났고 VOD 보관 60일도 거기서 센다. 편지가 뒤늦게 오면 그 값으로 덮인다 |
 | 방송마다 **트랜잭션을 따로** 연다 | 하나가 실패해도 나머지는 닫힌다. 회차 자체는 `Throwable`까지 삼킨다 — `@Scheduled`는 한 번 던지면 영영 안 돈다 |
 | **락을 잡은 뒤 신호를 다시 읽는다** | 후보 목록은 락 밖 스냅샷이다. 그 뒤 락을 잡기 전에 새 조각이 들어오면 스냅샷은 낡았는데 줄은 아직 `live`라, 스냅샷대로 닫으면 **살아있는 방송을 닫는다**(봇 리뷰 1판 codex P1). 다시 읽은 신호가 유예 안이면 `broadcast.reaper.revived`를 남기고 안 닫는다. 시험이 다른 트랜잭션으로 행을 잠근 채 새 조각을 넣어 결정적으로 잰다 |
-| **켜져 있는데 장부 표가 없으면 부팅 거부** | 장부는 media 인덱서가 만든다(ADR-030). media 없는 배포(dev compose·`services-deploy.yml`)에서 켜면 매 회차 질의가 표 없음으로 터지고 회차가 삼켜 **clip은 초록인데 치우개는 영영 안 돈다**(codex P2). 기본 꺼짐이라 그런 배포의 부팅은 안 바뀐다 |
+| **켜져 있는데 장부 표가 없으면 부팅 거부** | 장부는 media 인덱서가 만든다(ADR-030). 장부 표가 없는 배포에서 켜면 매 회차 질의가 표 없음으로 터지고 회차가 삼켜 **clip은 초록인데 치우개는 영영 안 돈다**(codex P2). 기본 꺼짐이라 그런 배포의 부팅은 안 바뀐다. dev 공유 DB에는 표가 있지만(2026-10-19) dev에서는 켜지 않는다(1번 요청: 장부는 읽기만) |
 
 **비용은 방송 수에 비례한다.** 후보 질의는 `live` 부분 색인(`V205`)을 타고, 방송마다 장부 PK를 **뒤에서 한 줄**
 읽는다(`ORDER BY seq DESC LIMIT 1` — `MAX(start_wall_utc)`가 아니다. 조각이 수만 개라도 한 줄). 로컬 실행계획:
@@ -2825,6 +2857,37 @@ OBS 플러그인의 핫키(계약4 4B/2B)를 받아 **그 회원의 켜진 방�
 이미지만 되돌린 동안 자동 카드가 버려진다.** 되돌릴 때는 이 마이그레이션도 함께 되돌린다(색인 둘을 지우고 옛 제약을 다시 만든다 :
 그 전에 수동 카드 중 `(stream_id, source, window_start_ms)`가 겹치는 행이 없는지 본다).
 
+
+### clip: 웹 수동 마킹 받기 (POK-392)
+
+웹 방송 화면의 「수동 마킹」(라이브 F8·단추)과 지난 방송의 「이 시점 카드 추가」를 **그 방송의 수동 카드**로 만든다.
+로그인(JWT) 문이고 자격은 다른 카드 문과 같다: **주인·편집자 모두**(`OWNER`·`EDITOR`를 안 가른다). 저장과 20초 판정은
+OBS 문(위 절)과 같은 `recordHotkey`라 **두 문의 카드가 한 판정을 같이 쓴다**(출처가 둘 다 `hotkey`).
+
+| 문 | 응답 |
+|---|---|
+| `POST /api/clip/broadcasts/{streamId}/marks` (헤더 `Authorization: Bearer <JWT>`) | **201** 새 카드 · **200** 같은 eventId 카드 또는 20초 안 앞 카드(본문은 목록·통로와 같은 카드 모양) · **400** `{"error":"invalid_request","field":…}` · **401**(토큰 없음, 체인) · **404** `{"error":"broadcast_not_found"}`(없는 방송 · 자격 없음 · 저장하려는 사이 사라짐, 본문이 같고 25ms 바닥을 같이 탄다) · **503** `{"error":"authorization_unavailable"}`(자격을 못 물었다) · **503** `{"error":"timeline_not_ready"}` + `Retry-After: 5`(첫 조각이 아직 없어 기준점이 없다) |
+
+본문은 갈래가 둘이고 **하나만** 온다. 모르는 칸은 무시한다. 본문 상한 4KB.
+
+| 갈래 | 본문 | 카드 ms |
+|---|---|---|
+| 라이브(방송이 `live`) | `{"eventId":"<UUID v4>","pressedAt":<epoch ms>,"sentAt":<epoch ms>}`(브라우저 시계) | OBS 문과 같은 식: 서버 시각 = `pressedAt + (받은 시각 − sentAt)`, 받은 시각보다 미래면 받은 시각. 카드 ms = 서버 시각 − 기준점, 앞이면 0 |
+| 지난 방송(방송이 `live`가 아님) | `{"eventId":"<UUID v4>","positionMs":<정수 ms>}`(기준점 축 재생 위치) | 위치 그대로. 기준점 앞 10분까지(음수)는 0으로 접는다 |
+
+**400 `field`**: `body`(JSON 객체가 아님 · 4KB 초과 · 갈래가 없거나 둘 다) · `eventId`(UUID v4가 아님 · 그 eventId가 남의 방송 카드) ·
+`pressedAt`·`sentAt`(0 초과 정수가 아님 · 시각이 넘침·48시간 넘음 · **지난 방송에 보냄**) ·
+`positionMs`(정수가 아님(소수도 거절, 반올림은 웹이 한다) · −10분 아래 · 상한 넘음 · **라이브에 보냄**).
+위치 상한은 `(종료 시각 − 기준점) + 10분`(녹화가 종료 편지 뒤까지 이어질 수 있다), 종료 시각을 모르면 48시간.
+
+**처리 순서가 계약이다.** 받은 시각 읽기 → 본문(400) → 자격(404·503, **트랜잭션 밖**) → 방송(404) → 갈래와 방송 상태(400) →
+기준점(503) → 시각·위치(400) → 저장(201·200). 본문이 자격 앞인 것은 형식 오류가 auth 왕복(최대 7초)을 태우지 않게, 자격이
+방송 읽기·저장 앞인 것은 자격 없는 요청이 남의 방송을 읽거나 카드를 남기지 않게 하려는 것이다. 받은 시각은 문에 들어오자마자 한 번 읽는다.
+
+- 🔴 **저장에는 요청자가 아니라 방송 주인 번호를 넘긴다.** `recordHotkey`가 「방송 주인이 이 회원인가」를 보므로 편집자 번호를 넘기면 편집자의 마킹이 전부 404다
+- **거절 봉투가 OBS 문과 다르다**: 이 문은 전역 `{"error":…}` 봉투다. OBS 거절 타입(`MarkRejectedException`)은 이 문에서 안 나가고, 시각 식(`MarkService.serverPressedAt`·`cardMillis`)도 그 타입을 안 던진다(두 문이 같이 쓴다)
+- **`timeline_not_ready`는 전역 조언에 처리기가 있다.** OBS 문은 이 타입을 안 던져(그쪽 503은 `MarkErrors`) OBS 봉투를 안 뺏는다
+- **로그**: `clip.webmark.created`·`clip.webmark.suppressed`에 `by=<요청자>`·`owner=<주인>`·`cardId`
 
 ### 치지직 채널 연동 (POK-93)
 

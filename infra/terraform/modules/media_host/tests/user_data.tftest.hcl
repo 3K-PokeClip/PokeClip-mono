@@ -323,6 +323,77 @@ run "rejects_dot_segment_rewind_public_base_url" {
   expect_failures = [var.rewind_public_base_url]
 }
 
+# 포트는 사이드카와 같이 1 – 65535 만 받는다(media/internal/config/config.go
+# validPort). 정규식의 다섯 자리 제한만으로는 0 · 65536 – 99999 가 지나간다.
+run "rejects_port_0_rewind_public_base_url" {
+  command = plan
+
+  variables {
+    rewind_public_base_url = "https://media.pokeclip.com:0"
+  }
+
+  expect_failures = [var.rewind_public_base_url]
+}
+
+run "rejects_port_65536_rewind_public_base_url" {
+  command = plan
+
+  variables {
+    rewind_public_base_url = "https://media.pokeclip.com:65536"
+  }
+
+  expect_failures = [var.rewind_public_base_url]
+}
+
+run "rejects_port_99999_rewind_public_base_url" {
+  command = plan
+
+  variables {
+    rewind_public_base_url = "https://media.pokeclip.com:99999/rewind"
+  }
+
+  expect_failures = [var.rewind_public_base_url]
+}
+
+run "accepts_port_1_rewind_public_base_url" {
+  command = plan
+
+  variables {
+    rewind_public_base_url = "https://media.pokeclip.com:1"
+  }
+
+  assert {
+    condition     = output.template_vars.rewind_public_base_url == "https://media.pokeclip.com:1"
+    error_message = "포트 1 인 rewind_public_base_url 을 받지 않는다."
+  }
+}
+
+run "accepts_port_65535_rewind_public_base_url" {
+  command = plan
+
+  variables {
+    rewind_public_base_url = "https://media.pokeclip.com:65535/rewind"
+  }
+
+  assert {
+    condition     = output.template_vars.rewind_public_base_url == "https://media.pokeclip.com:65535/rewind"
+    error_message = "포트 65535 인 rewind_public_base_url 을 받지 않는다."
+  }
+}
+
+run "accepts_rewind_public_base_url_without_port" {
+  command = plan
+
+  variables {
+    rewind_public_base_url = "https://cdn.example.com/rewind"
+  }
+
+  assert {
+    condition     = output.template_vars.rewind_public_base_url == "https://cdn.example.com/rewind"
+    error_message = "포트 없는 rewind_public_base_url 을 받지 않는다."
+  }
+}
+
 run "toggles_optional_services_and_control_upstream" {
   command = plan
 

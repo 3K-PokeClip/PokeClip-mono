@@ -1,30 +1,117 @@
 'use client';
 
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { ClipApiError, postWebMark, type WebMarkBody } from '@/api/clipEditor';
 import { useToast } from '@/ui';
 import { isMarkHotkey, isTypingTarget } from './markKey';
+import { msToClock, type LiveCardSnapshot } from './useLiveMockState';
 
-// 수동 마킹(시안 1b): 누른 순간을 서버에 카드로 남기는 길이 아직 없다(POK-257, MVP 밖).
-//
-// 전에는 3초 뒤 화면에만 카드를 세웠다. 그 카드는 새로 고침에 사라지고 편집기도 못 찾는, 저장된 것처럼 보이는
-// 가짜 성공이었다. 지난 방송에서는 방송 끝 시각에 찍혔다(QA 2026-10-11). 그래서 단추와 핫키는 두고 준비 중이라고만
-// 말한다(없는 기능은 「준비 중」, ADR-077). 서버 길이 생기면 mark() 안이 「서버에 찍어 보내고 통로로 되받는다」가 되고,
-// 되받기 전까지의 자리는 StreamInfoBar·HighlightCardPanel의 pendingLabel이 그린다. 지난 방송에서 찍으려면 방송 시계가
-// 아니라 플레이어의 재생 위치를 읽어야 한다: 방송 시계는 끝난 방송에서 방송 길이에 멈춰 있어 끝 시각에 찍혔다.
+// 수동 마킹(시안 1b·1c, POK-392). 갈래가 둘이다.
+// - 라이브: 누른 때·보낸 때를 보내고 서버가 시각을 정한다. 브라우저 시계가 틀려도 그 차(받은 시각 − 보낸 때)가 빠진다.
+// - 지난 방송: 녹화 재생기의 정확한 자리(서버 기준점 축 ms)를 보낸다. 방송 시계는 끝난 방송에서 방송 길이에 멈춰 있어 쓰지 않는다.
+//   재생기가 그 축의 자리를 못 주면(녹화 없음 · 기준점을 몰라 녹화 시작 축) 보내지 않는다: 카드가 두 시작의 차만큼 어긋난다.
+// 답이 올 때까지의 자리는 StreamInfoBar·HighlightCardPanel의 pendingLabel이 그리고, 답의 카드는 onCard로 목록에 넣는다(라이브는
+// 통로로 같은 카드가 와도 같은 id라 하나다. 지난 방송은 통로가 없어 답이 유일한 길이다).
 //
 // 리스너를 document에 다는 이유: 핫키의 쓸모가 "어디를 보고 있든 눌리는 것"이라
 // 화면 컨테이너에 달면 포커스가 밖에 있을 때 죽는다. 대신 가드가 둘 붙는다 —
 // 입력 중인 곳(isTypingTarget)과 이미 누군가 처리한 키(defaultPrevented).
 
-export function useManualMarking(): { mark: () => void } {
+/** live·past는 명부가 답한 방송 상태다. 모르면 unknown이고 어느 갈래도 보내지 않는다 */
+export type MarkMode = 'live' | 'past' | 'unknown';
+
+export interface ManualMarkingOptions {
+  /** 지금 화면의 방송 번호. 비어 있으면(정하기 전) 아무것도 안 보낸다 */
+  streamId: string;
+  mode: MarkMode;
+  /** 라이브: 누른 순간의 방송 시계 표기(만드는 중 자리에 쓴다). 모르면 null */
+  clockLabel: string | null;
+  /** 지난 방송: 지금 재생 위치(서버 기준점 축 ms). 그 축의 자리가 없으면 null */
+  positionMs: () => number | null;
+  /** 답으로 받은 카드(201 새 카드 · 200 앞 카드) */
+  onCard: (card: LiveCardSnapshot) => void;
+  /** 200(같은 eventId이거나 20초 안 앞 카드)에서 지난 방송이면 그 카드로 옮긴다. 라이브는 되감지 않는다 */
+  onExistingCard: (card: LiveCardSnapshot) => void;
+}
+
+export function useManualMarking(options: ManualMarkingOptions): {
+  mark: () => void;
+  /** 만드는 중인 카드의 시각. 보내는 동안만 있다 */
+  pendingLabel: string | null;
+} {
   const { toast } = useToast();
+  const [pendingLabel, setPendingLabel] = useState<string | null>(null);
+  // 보내는 중이면 또 누른 것은 버린다(자리는 하나). 상태가 아니라 ref다: 같은 그리기 안에서 두 번 눌러도 막는다
+  const sending = useRef(false);
+  // 그리기마다 바뀌는 값(방송 시계·콜백)을 ref로 읽는다: mark가 매초 새로 만들어지면 document 리스너도 매초 다시 붙는다
+  const latest = useRef(options);
+  useEffect(() => {
+    latest.current = options;
+  });
+  // 답이 오기 전에 화면이 내려갔나(방송을 옮기면 화면이 통째로 바뀔 수 있다)
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
 
   const mark = useCallback(() => {
-    toast({
-      tone: 'info',
-      title: '준비 중인 기능이에요',
-      description: '수동 마킹은 아직 준비 중이에요. 준비되면 알려드릴게요.',
-    });
+    const { streamId, mode, clockLabel, positionMs, onCard, onExistingCard } = latest.current;
+    if (!streamId || sending.current) return;
+    if (mode === 'unknown') {
+      toast({ tone: 'info', title: '방송 정보를 확인하고 있어요. 잠시 뒤 다시 눌러 주세요' });
+      return;
+    }
+    let body: WebMarkBody;
+    let label: string;
+    const eventId = crypto.randomUUID();
+    if (mode === 'past') {
+      const position = positionMs();
+      if (position === null) {
+        toast({ tone: 'info', title: '재생 위치를 알 수 없어 카드를 만들 수 없어요' });
+        return;
+      }
+      body = { eventId, positionMs: position };
+      // 카드 목록과 같은 표기(카드가 서면 그 카드의 시각과 같은 글자다)
+      label = msToClock(Math.max(0, position));
+    } else {
+      const pressedAt = Date.now();
+      body = { eventId, pressedAt, sentAt: pressedAt };
+      label = clockLabel ?? '지금';
+    }
+    sending.current = true;
+    setPendingLabel(label);
+    // 답이 왔을 때 아직 그 방송을 보고 있나. 기다리는 사이 다른 방송으로 옮겼으면 앞 방송의 답으로 새 방송을 옮기거나 알리지 않는다
+    // (PR #350 codex P2: 200이 새 방송의 영상·채팅을 앞 방송 카드 시각으로 옮겼다). 카드 넣기는 mergeCard가 방송 번호를 따로 본다
+    const stillHere = () => mounted.current && latest.current.streamId === streamId;
+    void (async () => {
+      try {
+        // 보낸 때는 보내기 직전에 다시 읽는다(누른 때와 사이가 생기면 그만큼 서버가 뺀다)
+        const sent = 'sentAt' in body ? { ...body, sentAt: Date.now() } : body;
+        const { status, card } = await postWebMark<LiveCardSnapshot>(streamId, sent);
+        onCard(card);
+        if (!stillHere()) return;
+        if (status === 200) {
+          toast({ tone: 'info', title: '가까운 카드가 이미 있어요' });
+          if (mode === 'past') onExistingCard(card);
+        }
+      } catch (e) {
+        if (!stillHere()) return;
+        const notReady =
+          e instanceof ClipApiError && e.status === 503 && e.code === 'timeline_not_ready';
+        toast({
+          tone: 'warning',
+          title: notReady
+            ? '아직 영상 기준을 못 정했어요. 잠시 뒤 다시 눌러 주세요'
+            : '카드를 만들지 못했어요',
+        });
+      } finally {
+        sending.current = false;
+        setPendingLabel(null);
+      }
+    })();
   }, [toast]);
 
   useEffect(() => {
@@ -40,5 +127,5 @@ export function useManualMarking(): { mark: () => void } {
     return () => document.removeEventListener('keydown', onKeyDown);
   }, [mark]);
 
-  return { mark };
+  return { mark, pendingLabel };
 }

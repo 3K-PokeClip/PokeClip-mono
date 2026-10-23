@@ -1,7 +1,8 @@
 'use client';
 
 import { useCallback, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useSessionMutation } from '@/lib/useSessionMutation';
 import {
   youtubeLinkQueryOptions,
   startYoutubeLink,
@@ -60,7 +61,7 @@ export function useYoutubeLinkState(): YoutubeLinkViewState {
   const status = useQuery(youtubeLinkQueryOptions);
   const [confirmOpen, setConfirmOpen] = useState(false);
 
-  const start = useMutation({
+  const start = useSessionMutation({
     // 검증을 mutationFn 안에서 한다 — onSuccess에서 던지면 잡히지 않고 unhandled로 샌다.
     // 여기서 던지면 아래 onError의 「연동을 시작하지 못했어요」 경로로 그대로 흐른다.
     mutationFn: async () => {
@@ -68,6 +69,8 @@ export function useYoutubeLinkState(): YoutubeLinkViewState {
       assertYoutubeConsentUrl(authorizeUrl);
       return authorizeUrl;
     },
+    // 동의 주소는 요청한 회원 몫이다(state가 회원에 묶인다): 그 사이 계정이 바뀌면 useSessionMutation이 주소를 버려
+    // 다음 사람을 앞 계정의 동의 화면으로 보내지 않는다(POK-222 · POK-424).
     onSuccess: (authorizeUrl) => {
       // 등록 주소가 어긋나 있으면 동의를 다 마친 뒤에야 증상이 나온다 — 개발 빌드에서 미리 알린다.
       warnIfCallbackMismatch(authorizeUrl);
@@ -83,8 +86,10 @@ export function useYoutubeLinkState(): YoutubeLinkViewState {
     },
   });
 
-  const unlink = useMutation({
+  const unlink = useSessionMutation({
     mutationFn: unlinkYoutube,
+    // 응답을 기다리는 사이 계정이 바뀌면 useSessionMutation이 성공 · 실패를 버린다(POK-222 · POK-424). 크로스탭 핸들러가
+    // 비운 캐시에 앞 계정의 「미연동」을 되심으면, 이어지는 재조회가 실패할 때 그 값이 다음 사람의 연동을 덮는다.
     onSuccess: () => {
       // 재조회가 끝나기 전에도 행이 미연동으로 서게 캐시를 먼저 갱신한다.
       queryClient.setQueryData<YoutubeLinkState>(youtubeLinkQueryOptions.queryKey, {
