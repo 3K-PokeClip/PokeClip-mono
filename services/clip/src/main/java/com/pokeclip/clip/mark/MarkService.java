@@ -15,6 +15,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.OptionalLong;
 
 /**
  * OBS 수동 마킹(계약4 4B/2B)을 그 회원의 켜진 방송의 수동 카드로 만든다(POK-391).
@@ -102,7 +103,12 @@ public class MarkService {
         }
 
         Broadcast broadcast = pick(userId, request.streamKeyToken());
-        Instant pressed = serverPressedAt(request, receivedAt);
+        Instant pressed;
+        try {
+            pressed = serverPressedAt(request.pressedAt(), request.sentAt(), receivedAt);
+        } catch (ArithmeticException e) {
+            throw MarkErrors.invalidRequest();
+        }
         if (broadcast.getStartedAt() != null && pressed.isBefore(broadcast.getStartedAt().minus(LATE_MARK_TOLERANCE))) {
             // 누른 그때는 이 방송이 없었다. 큐에 오래 있던 앞 방송의 마킹이 새 방송에 붙지 않게 한다.
             // 400이다: 다시 보내도 결과가 같다(감사 2회차 B3).
@@ -113,7 +119,7 @@ public class MarkService {
         if (origin == null) {
             throw MarkErrors.timelineNotReady(TIMELINE_RETRY_AFTER_SECONDS);
         }
-        long cardMs = cardMillis(pressed, origin);
+        long cardMs = cardMillis(pressed, origin).orElseThrow(MarkErrors::invalidRequest);
         return cards.recordHotkey(broadcast.getStreamId(), userId, request.eventId(), cardMs);
     }
 
@@ -158,33 +164,34 @@ public class MarkService {
     }
 
     /**
-     * 플러그인 시계의 누른 시각을 서버 시계로 옮긴다: {@code pressedAt + (받은 시각 − sentAt)}(계약4 2B-1).
-     * 받은 시각보다 미래면 받은 시각이다(플러그인 시계가 앞서 있거나 sentAt이 틀렸다). 넘치면 400.
+     * 클라이언트 시계의 누른 시각을 서버 시계로 옮긴다: {@code pressedAt + (받은 시각 − sentAt)}(계약4 2B-1).
+     * 받은 시각보다 미래면 받은 시각이다(클라이언트 시계가 앞서 있거나 sentAt이 틀렸다).
+     *
+     * <p>OBS 문과 웹 문(POK-392 {@code WebMarkService})이 같이 쓴다. 그래서 어느 문의 거절 타입도 안 던진다 :
+     * OBS 거절({@code MarkRejectedException})이 웹 문에서 나가면 처리기가 없어 500이다. 부르는 쪽이 넘침을 제 봉투로 바꾼다.
+     *
+     * @throws ArithmeticException long이 넘친다
      */
-    private static Instant serverPressedAt(MarkRequest request, Instant receivedAt) {
-        try {
-            long shift = Math.subtractExact(receivedAt.toEpochMilli(), request.sentAt());
-            long pressed = Math.addExact(request.pressedAt(), shift);
-            return Instant.ofEpochMilli(Math.min(pressed, receivedAt.toEpochMilli()));
-        } catch (ArithmeticException e) {
-            throw MarkErrors.invalidRequest();
-        }
+    static Instant serverPressedAt(long pressedAt, long sentAt, Instant receivedAt) {
+        long shift = Math.subtractExact(receivedAt.toEpochMilli(), sentAt);
+        long pressed = Math.addExact(pressedAt, shift);
+        return Instant.ofEpochMilli(Math.min(pressed, receivedAt.toEpochMilli()));
     }
 
     /**
      * 카드 ms = 누른 시각 − 기준점. 기준점보다 앞이면 0(감사 1회차 A2: {@code recordHotkey}에 음수가 가면 500이다).
-     * 상한 밖이면 시각이 틀린 것이라 400.
+     * 넘치거나 {@link #MAX_CARD_MS}를 넘으면 비어 있다: 시각이 틀린 것이라 부르는 쪽이 400으로 바꾼다(위와 같은 이유로 예외를 안 고른다).
      */
-    private static long cardMillis(Instant pressed, Instant origin) {
+    static OptionalLong cardMillis(Instant pressed, Instant origin) {
         long ms;
         try {
             ms = Math.subtractExact(pressed.toEpochMilli(), origin.toEpochMilli());
         } catch (ArithmeticException e) {
-            throw MarkErrors.invalidRequest();
+            return OptionalLong.empty();
         }
         if (ms > MAX_CARD_MS) {
-            throw MarkErrors.invalidRequest();
+            return OptionalLong.empty();
         }
-        return Math.max(0, ms);
+        return OptionalLong.of(Math.max(0, ms));
     }
 }
