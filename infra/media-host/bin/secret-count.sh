@@ -36,11 +36,14 @@
 # (srtPublishPassphrase · srtReadPassphrase) — 표지 넷 — 이 모두 있으면 응답기
 # 모드로 보고 넷을 더 대조한다: 호출자 Basic 비밀번호와 그 Basic 머리 값
 # (「pokeclip-mediamtx:<비밀번호>」 의 base64 — 줄바꿈 없이) · 4C 토큰 · 잠금
-# 둘. 표지가 하나도 없으면 옛 모드(위 대조만)다. 일부만 있거나, 있는 것이
-# 시작 스크립트가 쓰는 꼴 밖이면(Basic 파일은 16진 64자 한 줄 · 4C 파일은 끝
-# 줄바꿈 하나의 한 줄 · 4096바이트 이하 · 제어 문자 없음 · 잠금 줄은 「  키:
-# '16진 64자'」 정확히 한 줄씩 · 링크 아님) 실패다. ssm 은 넷도 대조하지 않는다
-# (한계 — 같은 까닭). 대조는
+# 둘. 4C 토큰은 원문과 함께 slog JSON 처리기가 문자열로 낼 꼴(「\」 ·
+# 「"」 · U+2028 · U+2029 를 이스케이프한 것 — 원문과 다를 때만)도 대조한다.
+# 표지가 하나도 없으면 옛 모드(위 대조만)다. 일부만 있거나, 있는 것이 시작
+# 스크립트가 쓰는 꼴 밖이면(Basic 파일은 16진 64자 한 줄 · 4C 파일은 끝
+# 줄바꿈 하나의 한 줄 · 4096바이트 이하이고 값은 시작 스크립트
+# read_resolve_token 이 받는 꼴 — 빈 값 · None · 제어 문자(C1 포함) · 앞뒤
+# 공백 없음 · 잠금 줄은 「  키: '16진 64자'」 정확히 한 줄씩 · 링크 아님)
+# 실패다. ssm 은 넷도 대조하지 않는다(한계 — 같은 까닭). 대조는
 # `printf '%s\n' … | LC_ALL=C grep -a -F -c -f - <파일>` 로만 한다 — 값은 표준
 # 입력으로만 grep 에 가고, 바이너리 · 깨진 바이트가 섞인 로그도 줄 단위로
 # 센다. 대조할 입력은 스크래치 파일(0600)에 먼저 받고 끝나면 지운다.
@@ -107,6 +110,13 @@ readonly RESOLVE_TOKEN_MAX_BYTES=4096
 readonly RENDER_NAME='mediamtx.yml'
 readonly RENDER_MAX_BYTES=1048576
 readonly LOCK_KEYS=(srtPublishPassphrase srtReadPassphrase)
+# slog JSON 처리기가 문자열에서 이스케이프하는 것 중 4C 꼴 안에 들 수 있는 것과
+# 그 꼴(Go log/slog json_handler.go appendEscapedJSONString — 「\」 를 맨
+# 앞에 둔다: 뒤에서 넣는 역슬래시를 다시 바꾸지 않게). 같은 자리끼리 짝이다.
+# 제어 문자는 4C 꼴 밖이라 없다. 깨진 UTF-8 은 U+FFFD 로 바뀌어 원문 조각을
+# 되찾을 수 없어 대조하지 않는다(한계).
+readonly JSON_ESCAPE_FROM=("\\" '"' $'\xe2\x80\xa8' $'\xe2\x80\xa9')
+readonly JSON_ESCAPE_TO=("\\\\" "\\\"" '\u2028' '\u2029')
 
 step=""
 
@@ -114,6 +124,8 @@ step=""
 # 실패 줄을 내고 끝낸다.
 # Arguments:
 #   단계, 종료 코드(기본 1).
+# Outputs:
+#   「SECRET COUNT FAIL <단계>」 한 줄(표준 출력).
 #######################################
 fail() {
   ops::say "SECRET COUNT FAIL $1"
@@ -168,6 +180,8 @@ collect_box() {
 # 이 빠짐 · 도중에 바뀜) 실패다.
 # Arguments:
 #   상한(초), 파일, 크기 상한(바이트).
+# Outputs:
+#   파일 내용 + 「x」(표준 출력).
 # Returns:
 #   0 냄 / 1 파일 없음 · 링크 · 못 읽음 · 상한 초과.
 #######################################
@@ -188,6 +202,8 @@ read_capped() {
 # 값을 낸다.
 # Arguments:
 #   상한(초), 파일.
+# Outputs:
+#   16진 64자(표준 출력 — 줄바꿈 없이).
 # Returns:
 #   0 냄 / 1 파일 없음 · 못 읽음 · 꼴 밖.
 #######################################
@@ -205,6 +221,10 @@ read_credential() {
 # base64 에 표준 입력으로만 넘긴다.
 # Arguments:
 #   사용자, 비밀번호.
+# Outputs:
+#   Basic 값(표준 출력 — 줄바꿈 없이).
+# Returns:
+#   0 냄 / 1 base64 실패 · 빈 값.
 #######################################
 basic_value() {
   local basic
@@ -232,20 +252,56 @@ add_api_pass_values() {
 }
 
 #######################################
-# 4C 토큰 파일(값 + 끝 줄바꿈 하나 — 4096바이트 이하)의 값을 낸다. 빈 값 ·
-# 제어 문자(줄바꿈 · 탭 포함)는 꼴 밖이다 — 시작 스크립트도 받지 않는다.
+# 4C 토큰 파일(값 + 끝 줄바꿈 하나 — 4096바이트 이하)의 값을 낸다. 값의 꼴은
+# 시작 스크립트 read_resolve_token 과 같다 — 빈 값 · None(aws text 출력의 빈
+# 값) · 제어 문자(줄바꿈 · 탭 포함) · C1 제어 문자(U+0080–U+009F 의 UTF-8 두
+# 바이트) · 앞뒤 공백은 꼴 밖이다.
 # Arguments:
 #   상한(초), 파일.
+# Outputs:
+#   토큰(표준 출력 — 줄바꿈 없이).
 # Returns:
 #   0 냄 / 1 파일 없음 · 못 읽음 · 꼴 밖.
 #######################################
 read_resolve_token() {
   local raw token LC_ALL=C
+  local c1=$'\xc2['$'\x80''-'$'\x9f'']'
   raw="$(read_capped "$1" "$2" "${RESOLVE_TOKEN_MAX_BYTES}")" || return 1
   token="${raw%$'\n'x}"
-  [[ "${raw}" == "${token}"$'\n'x && -n "${token}" ]] || return 1
-  [[ "${token}" != *[[:cntrl:]]* ]] || return 1
+  [[ "${raw}" == "${token}"$'\n'x ]] || return 1
+  if [[ -z "${token}" || "${token}" == None || "${token}" == *[[:cntrl:]]* \
+    || "${token}" == ' '* || "${token}" == *' ' ]]; then
+    return 1
+  fi
+  # shellcheck disable=SC2053 # 패턴으로 대조한다.
+  [[ "${token}" != *${c1}* ]] || return 1
   printf '%s' "${token}"
+}
+
+#######################################
+# 값을 slog JSON 처리기가 문자열로 낼 꼴로 바꿔 낸다(JSON_ESCAPE_FROM →
+# JSON_ESCAPE_TO). 「${v//찾을/바꿀}」 은 쓰지 않는다 — bash 5.2 부터 바꿀
+# 문자열의 역슬래시를 따로 다뤄(patsub_replacement) 3.2 와 결과가 다르다.
+# Globals:
+#   JSON_ESCAPE_FROM, JSON_ESCAPE_TO
+# Arguments:
+#   값.
+# Outputs:
+#   바꾼 꼴(표준 출력 — 줄바꿈 없이).
+#######################################
+json_escaped() {
+  local LC_ALL=C value="$1" raw i from
+  for (( i = 0; i < ${#JSON_ESCAPE_FROM[@]}; i++ )); do
+    from="${JSON_ESCAPE_FROM[i]}"
+    raw="${value}"
+    value=""
+    while [[ "${raw}" == *"${from}"* ]]; do
+      value+="${raw%%"${from}"*}${JSON_ESCAPE_TO[i]}"
+      raw="${raw#*"${from}"}"
+    done
+    value+="${raw}"
+  done
+  printf '%s' "${value}"
 }
 
 #######################################
@@ -253,6 +309,8 @@ read_resolve_token() {
 # 순서). 렌더본이 없으면 줄 수 0 이다. 값은 awk 의 표준 출력으로만 받는다.
 # Arguments:
 #   상한(초), 렌더본.
+# Outputs:
+#   키마다 「줄 수<탭>마지막 줄」 한 줄(표준 출력 — 두 줄).
 # Returns:
 #   0 냄 / 1 링크 · 일반 파일 아님 · 못 읽음 · 상한 초과.
 #######################################
@@ -275,9 +333,10 @@ lock_lines() {
 }
 
 #######################################
-# 응답기 모드면 대조 넷(Basic 비밀번호 · 그 Basic 머리 값 · 4C 토큰 · 잠금 둘)을
-# 대조 값(main 의 지역 배열 values)에 더한다. 표지 넷(Basic 파일 · 4C 파일 ·
-# 잠금 줄 둘)이 하나도 없으면 옛 모드라 더하지 않는다.
+# 응답기 모드면 대조 넷(Basic 비밀번호 · 그 Basic 머리 값 · 4C 토큰 — 원문과
+# 다르면 그 JSON 꼴도 · 잠금 둘)을 대조 값(main 의 지역 배열 values)에
+# 더한다. 표지 넷(Basic 파일 · 4C 파일 · 잠금 줄 둘)이 하나도 없으면 옛 모드라
+# 더하지 않는다.
 # Globals:
 #   RUNTIME_DIR, values(main 의 지역 — 동적 범위)
 # Arguments:
@@ -287,7 +346,7 @@ lock_lines() {
 #######################################
 add_ingest_auth_values() {
   local limit="$1" dir="${RUNTIME_DIR:-/run/pokeclip-media}"
-  local ia found marks=0 key n line pattern pass basic token locks=()
+  local ia found marks=0 key n line pattern pass basic token value locks=()
   local basic_file resolve_file
   ia="${dir}/${INGEST_AUTH_DIR_NAME}"
   basic_file="${ia}/${BASIC_PASS_NAME}"
@@ -315,6 +374,8 @@ add_ingest_auth_values() {
   basic="$(basic_value "${INGEST_AUTH_BASIC_USER}" "${pass}")" || return 1
   token="$(read_resolve_token "${limit}" "${resolve_file}")" || return 1
   values+=("${pass}" "${basic}" "${token}" "${locks[@]}")
+  value="$(json_escaped "${token}")"
+  [[ "${value}" == "${token}" ]] || values+=("${value}")
 }
 
 #######################################
