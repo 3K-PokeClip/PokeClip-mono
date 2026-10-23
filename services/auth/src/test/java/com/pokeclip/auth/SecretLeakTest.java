@@ -620,7 +620,7 @@ class SecretLeakTest extends IntegrationTestSupport {
                     .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
             assertThat(status).contains(SOOP_NICK).doesNotContain(SOOP_USER_ID);
 
-            // ② 재연동 — 옛 행 닫기·비우기 + 커밋 뒤 정리.
+            // ② 재연동: 옛 행 닫기·비우기 + 커밋 뒤 정리.
             String state2 = soopCodec.issue(user.getId(), Instant.now());
             mockMvc.perform(post("/api/soop-link").header("Authorization", bearer)
                             .contentType(MediaType.APPLICATION_JSON)
@@ -628,7 +628,7 @@ class SecretLeakTest extends IntegrationTestSupport {
                     .andExpect(status().isCreated());
             assertThat(soopCleanup.awaitIdle(Duration.ofSeconds(5))).isTrue();
 
-            // ③ 교환 400 — 본문에 바늘. 에러 응답에도 로그에도 없어야 한다.
+            // ③ 교환 400: 본문에 바늘. 에러 응답에도 로그에도 없어야 한다.
             String state3 = soopCodec.issue(user.getId(), Instant.now());
             SOOP.tokenResponds(400, "{\"error\":\"bad code " + SOOP_CODE + " secret " + SOOP_CLIENT_SECRET + "\"}");
             String rejected = mockMvc.perform(post("/api/soop-link").header("Authorization", bearer)
@@ -637,7 +637,7 @@ class SecretLeakTest extends IntegrationTestSupport {
                     .andExpect(status().isBadRequest()).andReturn().getResponse().getContentAsString();
             assertNoSecretsIn(rejected, needles);
 
-            // ④ 교환은 됐는데 아이디 조회가 거부 — 받은 토큰은 버릴 길이 없어 한 줄만 남는다. msg에 바늘.
+            // ④ 교환은 됐는데 아이디 조회가 거부: 받은 토큰은 버릴 길이 없어 한 줄만 남는다. msg에 바늘.
             String state4 = soopCodec.issue(user.getId(), Instant.now());
             SOOP.tokenResponds(200, "{\"access_token\":\"" + SOOP_ACCESS + "\",\"refresh_token\":\"" + SOOP_REFRESH
                     + "\",\"expires_in\":28800}");

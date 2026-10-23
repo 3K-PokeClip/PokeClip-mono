@@ -128,7 +128,7 @@ describe('soopLinkFailureMessage', () => {
     );
   });
 
-  it('모르는 실패는 폴백 문구로 — reason 원문을 노출하지 않는다', () => {
+  it('모르는 실패는 폴백 문구로: reason 원문을 노출하지 않는다', () => {
     const message = soopLinkFailureMessage(new ApiError(400, 'SOME_INTERNAL_CODE'));
     expect(message).toEqual({
       title: '연동에 실패했어요',

@@ -17,13 +17,13 @@ describe('assertSoopConsentUrl', () => {
     expect(() => assertSoopConsentUrl(CONSENT)).not.toThrow();
   });
 
-  it('https가 아니거나 URL이 아니면 막는다 — 이동하지 않는다', () => {
+  it('https가 아니거나 URL이 아니면 막는다: 이동하지 않는다', () => {
     expect(() => assertSoopConsentUrl('http://openapi.sooplive.com/auth/code?state=s')).toThrow();
     expect(() => assertSoopConsentUrl('javascript:alert(1)')).toThrow();
     expect(() => assertSoopConsentUrl('그냥 문자열')).toThrow();
   });
 
-  it('오류 메시지에 주소를 담지 않는다 — 서명된 state가 들어 있다', () => {
+  it('오류 메시지에 주소를 담지 않는다: 서명된 state가 들어 있다', () => {
     let message = '';
     try {
       assertSoopConsentUrl('http://evil.example/?state=signed-secret');
@@ -67,7 +67,7 @@ describe('takeSoopState', () => {
     expect(takeSoopState('')).toBe('stored-1');
   });
 
-  it('둘 다 없으면 null이다 — 콜백이 오류로 처리한다', () => {
+  it('둘 다 없으면 null이다: 콜백이 오류로 처리한다', () => {
     expect(takeSoopState(null)).toBeNull();
   });
 });

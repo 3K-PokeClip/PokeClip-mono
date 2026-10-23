@@ -45,7 +45,7 @@ public class SoopCleanupExecutor {
     static final Duration FORCED_STOP_WAIT = Duration.ofSeconds(1);
 
     private final ThreadPoolExecutor pool;
-    /** 제출·완료 카운터. awaitIdle이 큐·활성 수 대신 이것을 본다 — TPE의 take()~실행 사이 창에서 둘 다 0으로 보인다. */
+    /** 제출·완료 카운터. awaitIdle이 큐·활성 수 대신 이것을 본다: TPE의 take()~실행 사이 창에서 둘 다 0으로 보인다. */
     private final AtomicLong submitted = new AtomicLong();
     private final AtomicLong finished = new AtomicLong();
 
@@ -62,15 +62,15 @@ public class SoopCleanupExecutor {
                     log.warn("auth.soop.cleanup.rejected userId={} reason={}",
                             r instanceof Job job ? job.userId : null,
                             executor.isShutdown() ? "shutdown" : "queue_full");
-                    finished.incrementAndGet();   // 거부도 "끝"이다 — 안 세면 awaitIdle이 영영 기다린다
+                    finished.incrementAndGet();   // 거부도 "끝"이다: 안 세면 awaitIdle이 영영 기다린다
                 });
     }
 
     /**
      * 현재 트랜잭션이 커밋되면 정리 action을 전용 스레드에 제출한다. 트랜잭션이 없으면
-     * IllegalStateException — 그게 맞다(자기 호출로 프록시를 안 탄 것을 잡아 준다).
+     * IllegalStateException: 그게 맞다(자기 호출로 프록시를 안 탄 것을 잡아 준다).
      *
-     * <p>로그의 자리 — {@code relinked}·{@code unlinked}·{@code refresh_rejected}는 정리 잡 안에서
+     * <p>로그의 자리: {@code relinked}·{@code unlinked}·{@code refresh_rejected}는 정리 잡 안에서
      * secrets 삭제 뒤에 찍힌다("정리까지 끝났다"는 순서 로그). 큐가 거부되면 그 로그도 함께 사라지고,
      * 그때 {@code cleanup.rejected} WARN이 신호다. requestId는 잡이 값으로 옮긴다.
      */
@@ -85,7 +85,7 @@ public class SoopCleanupExecutor {
     }
 
     /**
-     * 테스트 전용 진입점 — 운영은 {@link #afterCommit}만 쓴다. 커밋 전에 제출하면 REQUIRES_NEW delete가
+     * 테스트 전용 진입점: 운영은 {@link #afterCommit}만 쓴다. 커밋 전에 제출하면 REQUIRES_NEW delete가
      * 롤백 불능 상태(행은 살았는데 secret 없음)를 만든다.
      */
     void submit(Job job) {
@@ -113,23 +113,23 @@ public class SoopCleanupExecutor {
     /**
      * 종료. 유예 안에 안 끝나면 <b>인터럽트한다</b>({@code shutdownNow}).
      *
-     * <p>🔴 예전에는 로그만 찍고 반환했는데, 워커가 <b>비데몬</b>이라 JVM이 큐가 빌 때까지 안 죽었다 —
+     * <p>🔴 예전에는 로그만 찍고 반환했는데, 워커가 <b>비데몬</b>이라 JVM이 큐가 빌 때까지 안 죽었다:
      * 실측: {@code shutdown()}이 10초 만에 반환한 뒤에도 잡이 인터럽트 없이 끝까지 돌았다(봇 3판 P2-2).
      * 우리가 README·인프라에 적어 둔 <b>종료 유예 15초를 넘길 수 있다</b>는 뜻이고, 그러면 오케스트레이터가
      * SIGKILL로 끊어 <b>어차피 유실되면서 배포만 느려진다.</b>
      *
-     * <p>대가는 <b>대기 중이던 secrets 삭제가 유실되는 것</b>이다 — 다만 그것은 이 클래스가 처음부터
+     * <p>대가는 <b>대기 중이던 secrets 삭제가 유실되는 것</b>이다: 다만 그것은 이 클래스가 처음부터
      * 문서화한 성질이다(위 「프로세스가 죽으면 고아 secret이 남는다」). 유실 건수를 로그로 남겨
      * 나중에 찾을 수 있게 한다.
      *
      * <p>🔴 <b>버려진 잡의 회원 번호를 한 줄씩 남긴다</b>(PR #148 codex C5, 감사 재현).
      * 예전에는 {@code shutdownNow()}의 반환값을 <b>버렸다.</b> 큐에서 뽑혀 나온 잡은 {@code run()}을
      * 못 하므로 {@code started}가 한 줄도 안 찍히고, 거부 핸들러도 안 탄다({@code shutdown()} 뒤에
-     * <b>새로 들어온 것</b>만 잡는다) — 이 클래스가 약속한 회복법(「{@code started}는 있는데
+     * <b>새로 들어온 것</b>만 잡는다): 이 클래스가 약속한 회복법(「{@code started}는 있는데
      * {@code completed}가 없는 회원을 찾는다」)이 <b>이 갈래에서만 성립하지 않았다.</b>
      *
      * <p>건수도 갈랐다. 옛 {@code pending}은 <b>돌던 것과 안 돈 것을 뭉친 숫자</b>라 「몇 명이 복구
-     * 불가인가」조차 못 말했다 — 돌던 것은 {@code started}가 찍혀 짝으로 찾을 수 있고, 큐에 있던 것은
+     * 불가인가」조차 못 말했다: 돌던 것은 {@code started}가 찍혀 짝으로 찾을 수 있고, 큐에 있던 것은
      * 이 줄이 유일한 실마리다.
      *
      * <p>줄 수는 최악 큐 상한({@value #QUEUE_CAPACITY})만큼이다. 종료 시점에 한 번뿐이고,
@@ -180,7 +180,7 @@ public class SoopCleanupExecutor {
             try {
                 action.run();
             } catch (RuntimeException e) {
-                // 원인은 타입 이름만 — 메시지에 응답 본문·ref가 붙을 수 있다.
+                // 원인은 타입 이름만: 메시지에 응답 본문·ref가 붙을 수 있다.
                 log.warn("auth.soop.cleanup.failed userId={} causeType={}", userId, e.getClass().getSimpleName());
             } finally {
                 MDC.remove(RequestIdFilter.MDC_KEY);

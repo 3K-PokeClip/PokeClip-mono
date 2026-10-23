@@ -14,7 +14,7 @@ import { useSoopLinkState } from './useSoopLinkState';
 import { useYoutubeLinkState } from './useYoutubeLinkState';
 import styles from './ChannelSettingsScreen.module.css';
 
-// 디자인 1k 설정 · 채널 연동 (POK-205 치지직 · POK-221 유튜브 · POK-396 SOOP). 조립만 한다 —
+// 디자인 1k 설정 · 채널 연동 (POK-205 치지직 · POK-221 유튜브 · POK-396 SOOP). 조립만 한다:
 // 상태 판단은 use*LinkState 훅, 상태별 표현은 *ChannelRow가 갖는다.
 export function ChannelSettingsScreen() {
   // 아래 미러링이 저장된 값과 비교하므로 스토어가 먼저 서 있어야 한다. 온보딩 스토어를 세우는 곳이

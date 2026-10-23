@@ -105,7 +105,7 @@ class YoutubeShutdownBudgetTest {
         Duration total = chzzk.plus(youtube).plus(withdrawal).plus(soop);
 
         assertThat(total)
-                .as("치지직 %s + 유튜브 %s + 탈퇴 %s + SOOP %s = %s — 문서화한 종료 유예 %s를 넘는다. "
+                .as("치지직 %s + 유튜브 %s + 탈퇴 %s + SOOP %s = %s: 문서화한 종료 유예 %s를 넘는다. "
                         + "치지직은 revoke 2회가 남아 줄일 수 없고 탈퇴는 사진 창고(최대 8초)를 기다리니, "
                         + "줄일 수 있는 쪽부터 보고 그래도 안 되면 README와 인프라 요구를 함께 올려라",
                         chzzk, youtube, withdrawal, soop, total, documentedGrace())

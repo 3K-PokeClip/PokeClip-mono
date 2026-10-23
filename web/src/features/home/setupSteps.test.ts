@@ -12,7 +12,7 @@ const chzzkOn = { linked: true, status: 'ACTIVE' as const, channelName: '재환�
 const soopOn = { linked: true, status: 'ACTIVE' as const, nickname: '숲너구리' };
 const channelStep = (links: HomeLinks) => setupSteps(links).find((s) => s.id === 'chzzk')!;
 
-describe('setupSteps — 방송 채널 단계는 치지직·SOOP 둘 중 하나 (POK-396)', () => {
+describe('setupSteps: 방송 채널 단계는 치지직·SOOP 둘 중 하나 (POK-396)', () => {
   it('치지직만 연동 → 완료, 문구는 그대로 채널 이름', () => {
     const step = channelStep({ ...base, chzzk: chzzkOn });
     expect(step).toMatchObject({ done: true, unknown: false, doneNote: '재환의 방송 연결됨' });
@@ -56,12 +56,12 @@ describe('setupSteps — 방송 채널 단계는 치지직·SOOP 둘 중 하나 
     expect(channelStep({ ...base, soop: null })).toMatchObject({ done: false, unknown: true });
   });
 
-  it('단계 id는 chzzk 그대로다 — 시작 가이드 표적이 기대한다', () => {
+  it('단계 id는 chzzk 그대로다: 시작 가이드 표적이 기대한다', () => {
     expect(setupSteps(base)[0]!.id).toBe('chzzk');
   });
 });
 
-describe('isWaitingForBroadcast — 방송 채널은 둘 중 하나 (C8)', () => {
+describe('isWaitingForBroadcast: 방송 채널은 둘 중 하나 (C8)', () => {
   it('SOOP만 연동 + 코드 발급 → 방송만 남았다', () => {
     expect(isWaitingForBroadcast({ ...base, soop: soopOn })).toBe(true);
   });

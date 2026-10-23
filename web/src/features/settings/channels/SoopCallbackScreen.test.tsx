@@ -69,7 +69,7 @@ afterEach(() => {
 });
 
 describe('SoopCallbackScreen', () => {
-  it('code·state로 완료를 부르고 채널 화면으로 replace한다 — 캐시를 비우고 아이디를 그리지 않는다', async () => {
+  it('code·state로 완료를 부르고 채널 화면으로 replace한다: 캐시를 비우고 아이디를 그리지 않는다', async () => {
     window.sessionStorage.setItem(STATE_KEY, 'stored-state');
     const spy = stubFetch(() => jsonResponse(201, linkedBody));
     const queryClient = renderScreen(<SoopCallbackScreen />);
@@ -101,7 +101,7 @@ describe('SoopCallbackScreen', () => {
     expect(window.sessionStorage.getItem(STATE_KEY)).toBeNull();
   });
 
-  it('StrictMode 이중 마운트에도 교환은 정확히 한 번이다 — code는 1회용이다', async () => {
+  it('StrictMode 이중 마운트에도 교환은 정확히 한 번이다: code는 1회용이다', async () => {
     const spy = stubFetch(() => jsonResponse(201, linkedBody));
     renderScreen(
       <StrictMode>
@@ -148,7 +148,7 @@ describe('SoopCallbackScreen', () => {
     expect(track).not.toHaveBeenCalled();
   });
 
-  it('code가 없으면 교환하지 않고 취소로 안내한다 — 남은 state도 지운다', async () => {
+  it('code가 없으면 교환하지 않고 취소로 안내한다: 남은 state도 지운다', async () => {
     searchRef.current = new URLSearchParams('error=access_denied');
     window.sessionStorage.setItem(STATE_KEY, 'stored-state');
     const spy = stubFetch(() => jsonResponse(500));
@@ -170,7 +170,7 @@ describe('SoopCallbackScreen', () => {
     expect(exchangeCalls(spy)).toHaveLength(0);
   });
 
-  it('세션이 없으면 교환하지 않고 로그인 화면으로 안내한다 — 되돌아올 자리를 남긴다', async () => {
+  it('세션이 없으면 교환하지 않고 로그인 화면으로 안내한다: 되돌아올 자리를 남긴다', async () => {
     useAuthStore.setState({ accessToken: null, refreshToken: null, hydrated: true });
     const spy = stubFetch(() => jsonResponse(500));
     renderScreen(<SoopCallbackScreen />);

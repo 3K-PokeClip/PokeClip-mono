@@ -51,7 +51,7 @@ public class SoopOAuthClient {
     }
 
     /**
-     * 아이디(validate/live/status — 방송 중이 아니어도 user_id가 온다)와 닉네임(user/stationinfo)을 합친다.
+     * 아이디(validate/live/status: 방송 중이 아니어도 user_id가 온다)와 닉네임(user/stationinfo)을 합친다.
      * 아이디를 못 받으면 닉네임은 묻지 않는다.
      */
     public SoopIdentity fetchIdentity(String accessToken) {

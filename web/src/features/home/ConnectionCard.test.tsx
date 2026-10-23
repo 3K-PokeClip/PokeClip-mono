@@ -27,8 +27,8 @@ function channelRow(links: HomeLinks) {
   return screen.getByText('방송 채널').closest('li')!;
 }
 
-describe('ConnectionCard — 방송 채널 한 줄에 치지직·SOOP (POK-396)', () => {
-  it('SOOP 줄을 따로 만들지 않는다 — 줄은 방송 채널·플러그인·유튜브 셋', () => {
+describe('ConnectionCard: 방송 채널 한 줄에 치지직·SOOP (POK-396)', () => {
+  it('SOOP 줄을 따로 만들지 않는다: 줄은 방송 채널·플러그인·유튜브 셋', () => {
     render(<ConnectionCard links={{ ...base, soop: soopOn }} />);
     expect(screen.getAllByRole('listitem')).toHaveLength(3);
     expect(screen.queryByText('SOOP', { exact: true })).not.toBeInTheDocument();
@@ -60,7 +60,7 @@ describe('ConnectionCard — 방송 채널 한 줄에 치지직·SOOP (POK-396)'
     );
   });
 
-  it('SOOP 하나만 못 읽고 치지직이 미연동이면 확인 중 — 연동을 권하지 않는다', () => {
+  it('SOOP 하나만 못 읽고 치지직이 미연동이면 확인 중: 연동을 권하지 않는다', () => {
     const row = channelRow({ ...base, soop: null });
     expect(row).toHaveTextContent('확인 중…');
     expect(within(row).queryByRole('link')).not.toBeInTheDocument();

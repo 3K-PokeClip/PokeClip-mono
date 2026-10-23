@@ -372,7 +372,7 @@ describe('ChannelSettingsScreen — 연동 해제', () => {
   });
 });
 
-describe('ChannelSettingsScreen — SOOP 행 (POK-396)', () => {
+describe('ChannelSettingsScreen: SOOP 행 (POK-396)', () => {
   const soopLinked = (status: 'ACTIVE' | 'EXPIRED' | 'BROKEN' | 'UNLINKED') =>
     status === 'ACTIVE' || status === 'EXPIRED'
       ? {
@@ -385,7 +385,7 @@ describe('ChannelSettingsScreen — SOOP 행 (POK-396)', () => {
       : // 닫힌 연동은 닉네임이 파기돼 오지 않는다(서버 LinkStatusResponse)
         { linked: false, status };
 
-  it('미연동이면 「연동」이 눌린다 — 다른 두 행도 그대로 눌린다', async () => {
+  it('미연동이면 「연동」이 눌린다: 다른 두 행도 그대로 눌린다', async () => {
     stubSoop({ linked: false });
     renderWithProviders(<ChannelSettingsScreen />);
 
@@ -394,7 +394,7 @@ describe('ChannelSettingsScreen — SOOP 행 (POK-396)', () => {
     expect(await row('유튜브').findByRole('button', { name: '연동' })).toBeEnabled();
   });
 
-  it('연동되면 닉네임과 「연동 해제」를 보여준다 — 아이디는 화면에 없다', async () => {
+  it('연동되면 닉네임과 「연동 해제」를 보여준다: 아이디는 화면에 없다', async () => {
     stubSoop(soopLinked('ACTIVE'));
     const { container } = renderWithProviders(<ChannelSettingsScreen />);
 
@@ -404,7 +404,7 @@ describe('ChannelSettingsScreen — SOOP 행 (POK-396)', () => {
     expect(container.innerHTML).not.toContain('soop-user-a1');
   });
 
-  it('BROKEN이면 끊김을 알리고 「다시 연동」을 준다 — 닉네임도 해제 버튼도 없다', async () => {
+  it('BROKEN이면 끊김을 알리고 「다시 연동」을 준다: 닉네임도 해제 버튼도 없다', async () => {
     stubSoop(soopLinked('BROKEN'));
     renderWithProviders(<ChannelSettingsScreen />);
 
@@ -423,7 +423,7 @@ describe('ChannelSettingsScreen — SOOP 행 (POK-396)', () => {
     expect(soop().queryByText('연동 끊김')).not.toBeInTheDocument();
   });
 
-  it('상태를 못 읽으면 「연동」을 내밀지 않고 다시 시도를 준다 — 미연동으로 오인시키지 않는다', async () => {
+  it('상태를 못 읽으면 「연동」을 내밀지 않고 다시 시도를 준다: 미연동으로 오인시키지 않는다', async () => {
     stubSoop({ reason: 'BOOM' }, 500);
     renderWithProviders(<ChannelSettingsScreen />);
 
@@ -463,7 +463,7 @@ describe('ChannelSettingsScreen — SOOP 행 (POK-396)', () => {
     expect(window.sessionStorage.getItem('pokeclip.soop.state')).toBeNull();
   });
 
-  it('해제는 확인 창을 거친다 — 문구 셋, 확인하면 DELETE 한 번과 토스트', async () => {
+  it('해제는 확인 창을 거친다: 문구 셋, 확인하면 DELETE 한 번과 토스트', async () => {
     const user = userEvent.setup();
     let unlinked = false;
     const spy = stubFetch((url, init) => {
@@ -496,7 +496,7 @@ describe('ChannelSettingsScreen — SOOP 행 (POK-396)', () => {
   });
 });
 
-describe('ChannelSettingsScreen — 「채널 연동됨」 판정은 둘 중 하나 (C8)', () => {
+describe('ChannelSettingsScreen: 「채널 연동됨」 판정은 둘 중 하나 (C8)', () => {
   it('SOOP만 연동돼 있어도 시작 가이드 플래그가 true다', async () => {
     useOnboardingStore.setState({ channelLinked: true });
     stubSoop({ linked: true, status: 'ACTIVE', nickname: '숲너구리' });

@@ -10,7 +10,7 @@ import type { HomeLinks } from './useHomeMockState';
 // OBS 플러그인은 「연결됨」이라 하지 않는다 — 웹은 플러그인의 지금 연결 상태를 모르고 `issued`는 키 발급 여부일 뿐이다
 // (web/README 「플러그인 화면 계약」, #298). 발급했으면 무채색 「코드 발급됨」만 적고 연결 확인은 OBS 독에 맡긴다.
 // 플러그인 → 서버 신호(연결 시각 등)가 생기면 그때 「연결됨」으로 올린다.
-// 방송 채널은 치지직·SOOP을 한 줄(「방송 채널」)에 함께 센다(POK-396, 사용자 결정) — 둘 중 하나라도 연동이면 연결됨이고
+// 방송 채널은 치지직·SOOP을 한 줄(「방송 채널」)에 함께 센다(POK-396, 사용자 결정): 둘 중 하나라도 연동이면 연결됨이고
 // 연결된 플랫폼을 설명 앞에 붙인다. 씨미 창구가 생기면 같은 줄에 더한다.
 
 /** ok=연결됨(서버가 확인) · ready=할 일은 끝났지만 연결은 웹이 모른다 · off=할 일 남음 · unknown=못 읽음 */
@@ -80,9 +80,9 @@ function rowsOf(links: HomeLinks): Row[] {
 }
 
 /**
- * 「방송 채널」 한 줄. 끊긴 연동이 먼저다 — 다른 쪽이 살아 있어도 끊긴 쪽은 손을 써야 감지가 돌아온다.
+ * 「방송 채널」 한 줄. 끊긴 연동이 먼저다: 다른 쪽이 살아 있어도 끊긴 쪽은 손을 써야 감지가 돌아온다.
  * 그다음 하나라도 연동이면 연결됨, 하나라도 못 읽었으면 확인 중(못 읽은 쪽이 연동돼 있을 수 있다), 둘 다 아니면 연동 권유.
- * 키는 'chzzk' 그대로다 — 시작 가이드 표적(TOUR_TARGET.homeChannel)이 그 키로 붙는다.
+ * 키는 'chzzk' 그대로다: 시작 가이드 표적(TOUR_TARGET.homeChannel)이 그 키로 붙는다.
  */
 function broadcastChannel(
   links: HomeLinks,
@@ -91,7 +91,7 @@ function broadcastChannel(
   const { chzzk, soop } = links;
   const key = 'chzzk';
   const name = '방송 채널';
-  // SOOP은 끊기면 닉네임이 지워져 온다(서버가 파기) — 이름 없이 플랫폼만 말한다
+  // SOOP은 끊기면 닉네임이 지워져 온다(서버가 파기): 이름 없이 플랫폼만 말한다
   if (soop?.status === 'BROKEN')
     return {
       key,

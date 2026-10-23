@@ -41,7 +41,7 @@ describe('next.config rewrites', () => {
         source: '/api/youtube-link/:path*',
         destination: 'http://auth.internal:8082/api/youtube-link/:path*',
       },
-      // SOOP 연동도 auth 서버 소유 — 한 줄이 /api/soop-link 자체와 /start를 덮는다 (POK-396)
+      // SOOP 연동도 auth 서버 소유: 한 줄이 /api/soop-link 자체와 /start를 덮는다 (POK-396)
       {
         source: '/api/soop-link/:path*',
         destination: 'http://auth.internal:8082/api/soop-link/:path*',
