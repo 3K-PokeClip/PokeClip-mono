@@ -40,3 +40,31 @@ variable "rate_limit" {
     error_message = "rate_limit 은 10 부터 2,000,000,000 까지의 정수여야 한다."
   }
 }
+
+variable "logging" {
+  description = "트래픽 로그(CloudWatch Logs 로 차단된 요청만). null(기본)이면 끈다. log_group_name 은 aws-waf-logs- 로 시작 · retention_in_days 는 보존 일수 · redacted_headers 는 로그에서 가릴 헤더 이름(소문자)."
+  type = object({
+    log_group_name    = string
+    retention_in_days = number
+    redacted_headers  = list(string)
+  })
+  default = null
+
+  # WAF 는 이 접두가 없는 로그 그룹을 로그 대상으로 받지 않는다(WAF 개발자
+  # 안내서 「Log group naming」).
+  validation {
+    condition     = var.logging == null || startswith(try(var.logging.log_group_name, ""), "aws-waf-logs-")
+    error_message = "logging.log_group_name 은 aws-waf-logs- 로 시작해야 한다."
+  }
+
+  validation {
+    condition     = var.logging == null || contains([1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1096, 1827, 2192, 2557, 2922, 3288, 3653], try(var.logging.retention_in_days, 0))
+    error_message = "logging.retention_in_days 는 CloudWatch Logs 보존 값(1 · 3 · 5 · 7 · 14 · 30 · … · 3653) 중 하나여야 한다."
+  }
+
+  # provider 의 single_header.name 은 소문자로 받는다.
+  validation {
+    condition     = var.logging == null || alltrue([for header in try(var.logging.redacted_headers, []) : header == lower(header)])
+    error_message = "logging.redacted_headers 의 헤더 이름은 소문자여야 한다."
+  }
+}

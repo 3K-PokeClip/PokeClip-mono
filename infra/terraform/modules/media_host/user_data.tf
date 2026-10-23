@@ -4,8 +4,9 @@
 # 파일(compose · nginx · media.env · docker 설정) · 유닛 · 작은 부트스트랩만 둔다.
 #
 # 유닛은 묶음이 아니라 여기서 설치한다 — 묶음을 꺼내지 못해도 유닛이 있어야
-# drop-in 의 「MEDIA PREREQ FAIL bundle」 이 유닛 저널에 남고 20초마다 다시
-# 시도한다. 비밀 값은 어디에도 없다(ARN · 다이제스트 · 판뿐).
+# drop-in 의 「MEDIA PREREQ FAIL bundle」 이 유닛 저널에 남는다. 유닛은 20초마다
+# 기동을 다시 시도하지만 설치는 다시 하지 않는다(부트스트랩은 첫 부팅에 한 번).
+# 비밀 값은 어디에도 없다(ARN · 다이제스트 · 판뿐).
 
 locals {
   media_host_dir = "${path.module}/../../../media-host"

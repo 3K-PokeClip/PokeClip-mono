@@ -75,3 +75,47 @@ resource "aws_wafv2_web_acl" "this" {
     metric_name                = var.name
   }
 }
+
+# 트래픽 로그 — 차단(BLOCK)된 요청만 CloudWatch Logs 로 보낸다. 로그 그룹 자원
+# 정책(delivery.logs.amazonaws.com 이 쓰는 권한)은 로깅을 켤 때 AWS 가 만든다
+# — 실행자에게 logs:PutResourcePolicy · DescribeResourcePolicies ·
+# DescribeLogGroups 가 있으면(CloudWatch Logs 안내서 「Logs sent to
+# CloudWatch Logs」).
+resource "aws_cloudwatch_log_group" "this" {
+  count = var.logging == null ? 0 : 1
+
+  name              = var.logging.log_group_name
+  retention_in_days = var.logging.retention_in_days
+}
+
+resource "aws_wafv2_web_acl_logging_configuration" "this" {
+  count = var.logging == null ? 0 : 1
+
+  resource_arn            = aws_wafv2_web_acl.this.arn
+  log_destination_configs = [aws_cloudwatch_log_group.this[0].arn]
+
+  dynamic "redacted_fields" {
+    for_each = var.logging.redacted_headers
+
+    content {
+      single_header {
+        name = redacted_fields.value
+      }
+    }
+  }
+
+  logging_filter {
+    default_behavior = "DROP"
+
+    filter {
+      behavior    = "KEEP"
+      requirement = "MEETS_ANY"
+
+      condition {
+        action_condition {
+          action = "BLOCK"
+        }
+      }
+    }
+  }
+}
