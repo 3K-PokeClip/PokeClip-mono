@@ -495,6 +495,7 @@ class RequiredPropertiesTest {
         assertThat(props.getProperty("pokeclip.soop.check.interval")).isEqualTo("PT1H");
         assertThat(props.getProperty("pokeclip.soop.check.staleness")).isEqualTo("PT24H");
         assertThat(props.get("pokeclip.soop.check.reject-brake")).isEqualTo(3);
+        assertThat(props.get("pokeclip.soop.check.batch-limit")).isEqualTo(25);
     }
 
     /** 키 하나가 빠지면 {@code @NotNull}이 부팅을 세운다(기본값으로 조용히 뜨지 않는다). */
@@ -502,7 +503,8 @@ class RequiredPropertiesTest {
     void SOOP_설정값이_하나라도_빠지면_부팅이_실패한다() {
         for (String missing : List.of("pokeclip.soop.state-ttl=", "pokeclip.soop.refresh-ahead=",
                 "pokeclip.soop.resolve-min-remaining=", "pokeclip.soop.check.interval=",
-                "pokeclip.soop.check.staleness=", "pokeclip.soop.check.reject-brake=")) {
+                "pokeclip.soop.check.staleness=", "pokeclip.soop.check.reject-brake=",
+                "pokeclip.soop.check.batch-limit=", "pokeclip.soop.check.batch-limit=0")) {
             runner.withPropertyValues(jwt("test-only-secret-key-at-least-32-bytes-long!!"))
                     .withPropertyValues(google("id", "secret"))
                     .withPropertyValues(cors("http://localhost:3000"))
@@ -615,7 +617,8 @@ class RequiredPropertiesTest {
                 "pokeclip.soop.check.enabled=true",
                 "pokeclip.soop.check.interval=PT1H",
                 "pokeclip.soop.check.staleness=PT24H",
-                "pokeclip.soop.check.reject-brake=3"};
+                "pokeclip.soop.check.reject-brake=3",
+                "pokeclip.soop.check.batch-limit=25"};
     }
 
     private String[] jwt(String secret) {

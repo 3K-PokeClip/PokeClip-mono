@@ -94,6 +94,23 @@ class SoopTokenRefreshSchedulerTest {
         verify(refresher).refreshForCheck(3L);
     }
 
+    /**
+     * 한 틱의 후보에 상한(batch-limit 25)을 둔다(PR #329 봇 지적): 스프링 기본 스케줄러는 스레드 하나라 치지직·유튜브·청소
+     * 틱과 공유한다. 후보가 많을 때 한 틱이 그 스레드를 오래 쥐면 다른 틱이 밀린다. 오래 확인 안 한 순 앞 25만 본다.
+     */
+    @Test
+    void 한_틱의_후보는_batch_limit까지만_묻는다() {
+        when(links.findIdsExpiringOrStale(any(), any(), any())).thenReturn(List.of());
+
+        scheduler.tick();
+
+        ArgumentCaptor<Pageable> page = ArgumentCaptor.forClass(Pageable.class);
+        verify(links).findIdsExpiringOrStale(any(), any(), page.capture());
+        assertThat(page.getValue().isPaged()).as("상한 없이 전부 읽는다").isTrue();
+        assertThat(page.getValue().getPageNumber()).isZero();
+        assertThat(page.getValue().getPageSize()).isEqualTo(25);
+    }
+
     /** 총합이 아니라 「연속」을 센다(계획 검증 M9): 사이에 성공이 끼면 0으로 돌아가 다섯 다 처리된다. */
     @Test
     void 거절_사이에_성공이_끼면_멈추지_않는다() {
@@ -166,6 +183,6 @@ class SoopTokenRefreshSchedulerTest {
                 new SoopProperties.App("cid", "csecret", "http://localhost:3000/oauth/soop/callback"),
                 "https://openapi.sooplive.com/auth/code", "http://127.0.0.1:1",
                 Duration.ofMinutes(10), Duration.ofHours(2), Duration.ofHours(1),
-                new SoopProperties.Check(true, Duration.ofHours(1), Duration.ofHours(24), 3));
+                new SoopProperties.Check(true, Duration.ofHours(1), Duration.ofHours(24), 3, 25));
     }
 }

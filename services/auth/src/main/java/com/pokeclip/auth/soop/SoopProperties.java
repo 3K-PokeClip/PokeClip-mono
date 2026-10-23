@@ -3,6 +3,7 @@ package com.pokeclip.auth.soop;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Positive;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.validation.annotation.Validated;
 
@@ -45,8 +46,9 @@ public record SoopProperties(
     /**
      * 갱신 점검. {@code rejectBrake}는 한 틱에서 갱신 거절이 연달아 이만큼 나면 그 틱을 멈추는 수다(SOOP은 앱 설정
      * 오류의 오류 코드를 몰라 치지직의 INVALID_CLIENT 예외 대신 이것으로 전 회원 BROKEN을 막는다).
+     * {@code batchLimit}은 한 틱이 보는 후보 상한이다: 스프링 기본 스케줄러는 스레드 하나라 다른 틱(치지직·유튜브·청소)과 나눈다.
      */
     public record Check(boolean enabled, @NotNull Duration interval, @NotNull Duration staleness,
-                        @NotNull Integer rejectBrake) {
+                        @NotNull Integer rejectBrake, @NotNull @Positive Integer batchLimit) {
     }
 }

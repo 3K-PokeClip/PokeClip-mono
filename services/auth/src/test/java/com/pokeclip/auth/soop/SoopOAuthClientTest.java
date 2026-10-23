@@ -281,6 +281,6 @@ class SoopOAuthClientTest {
                 new SoopProperties.App("test-soop-client-id", CLIENT_SECRET, "http://localhost:3000/oauth/soop/callback"),
                 "https://openapi.sooplive.com/auth/code", baseUrl,
                 Duration.ofMinutes(10), Duration.ofHours(2), Duration.ofHours(1),
-                new SoopProperties.Check(false, Duration.ofHours(1), Duration.ofHours(24), 3));
+                new SoopProperties.Check(false, Duration.ofHours(1), Duration.ofHours(24), 3, 25));
     }
 }

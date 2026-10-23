@@ -110,6 +110,7 @@ pokeclip:
       interval: PT1H
       staleness: PT24H
       reject-brake: 3
+      batch-limit: 25
   retention:
     # 컨텍스트마다 틱이 돌면 다른 시험이 심은 행을 지운다. 배선은 RetentionCleanupSchedulerTest가 잰다.
     enabled: false

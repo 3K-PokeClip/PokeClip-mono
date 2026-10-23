@@ -3,7 +3,7 @@ package com.pokeclip.auth.soop;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -25,6 +25,10 @@ import java.util.List;
  * 대가: 브레이크 전에 거절된 {@code rejectBrake}명은 이미 닫혔다. 운영자가 원인을 고치고 재배포하면 풀린다.
  * 성공(REFRESHED·SKIPPED_FRESH)이 끼면 0으로 돌아가고, 일시 장애(UNAVAILABLE)·예외는 연속 수를 그대로 둔다
  * (설정 오류면 5xx가 섞여도 멈춰야 한다, 계획 검증 M9). 연속 수는 틱마다 새로 센다.
+ *
+ * <p>한 틱은 오래 확인 안 한 순 앞 {@code batchLimit}(25)명만 본다: 스프링 기본 스케줄러는 스레드 하나라 치지직·유튜브·청소
+ * 틱과 나눈다. 대가: SOOP 장애가 길면 앞 25가 매 틱 실패해(확인 시각이 안 바뀐다) 뒤쪽은 장애가 끝난 뒤 확인된다
+ * (유튜브 철회 점검의 알려진 구멍과 같은 성질). 놓친 철회는 resolve 즉석 갱신이 발견한다.
  *
  * <p>{@code matchIfMissing = true}: 운영에서 프로퍼티를 빠뜨려도 조용히 꺼지지 않는다. 꺼짐은 명시적으로만(시험 프로파일).
  */
@@ -56,7 +60,7 @@ public class SoopTokenRefreshScheduler {
         }
         Instant now = Instant.now();
         List<Long> candidates = links.findIdsExpiringOrStale(now.plus(properties.refreshAhead()),
-                now.minus(properties.check().staleness()), Pageable.unpaged());
+                now.minus(properties.check().staleness()), PageRequest.of(0, properties.check().batchLimit()));
         int consecutiveRejects = 0;
         for (Long userId : candidates) {
             RefreshOutcome outcome;

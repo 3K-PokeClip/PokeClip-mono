@@ -261,6 +261,8 @@ pokeclip:
       staleness: PT24H
       # 한 틱에서 갱신 거절이 연달아 이만큼 나면 그 틱을 멈춘다. 앱 설정 오류로 전 회원이 BROKEN 되는 것을 막는다.
       reject-brake: 3
+      # 한 틱이 보는 후보 상한. 스프링 기본 스케줄러는 스레드 하나라 다른 틱과 나눈다(오래 확인 안 한 순 앞부터).
+      batch-limit: 25
   profile-photo:
     # 창고 이름이 비면 사진 기능이 통째로 꺼진다(chat-collector의 S3_BUCKET 관례). CI·팀원 로컬 기본.
     # 이름을 PROFILE_PHOTO_ 접두어로 두는 이유: S3_BUCKET은 chat-collector가 이미 쓴다.
