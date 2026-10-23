@@ -867,7 +867,7 @@ README의 `GRANT ... TO app_*;` 줄과 시험의 목록이 다르면 빨간불�
 찍었다: 읽은 칸 값(`org.hibernate.orm.jdbc.extract`) · 엔티티 통째(`org.hibernate.orm.core`, DEBUG에서도) · JdbcTemplate 매개변수
 (`StatementCreatorUtils`) · 드라이버가 보내는 값(`QueryExecutorImpl`). 방송의 물리 키는 지금 스트림키와 같아 그대로 새는 값이다.
 clip `DbValueTraceLeakTest` · 수집 서버 `IngestKeyTraceLeakTest`가 root TRACE에서 안 새는지와, 막이를 풀면 실제로 새는지(대조)를 잰다.
-auth는 비밀을 해시 · 암호문으로만 저장해 원문이 DB로 안 가므로 yml만 박았다(회원 이메일 같은 개인정보는 이 막이가 덮는다).
+auth는 비밀을 해시 · 암호문으로만 저장해 원문이 DB로 안 가므로 값을 흘려 보는 시험은 두지 않고, `SecretLeakTest`가 세 줄이 박혀 root TRACE를 안 따라가는지만 지킨다(회원 이메일 같은 개인정보는 이 막이가 덮는다).
 
 **디버그 로그가 꼭 필요하면 env로 그 트리만 잠깐 켠다**: `LOGGING_LEVEL_ORG_HIBERNATE_ORM=debug` ·
 `LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_JDBC=debug` · `LOGGING_LEVEL_ORG_POSTGRESQL=debug`. 켜는 동안은 그 값들이 로그에 남는다는 뜻이니

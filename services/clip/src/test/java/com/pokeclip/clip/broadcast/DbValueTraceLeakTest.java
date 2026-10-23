@@ -9,12 +9,11 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.bridge.SLF4JBridgeHandler;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.support.TransactionTemplate;
 
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -74,22 +73,35 @@ class DbValueTraceLeakTest extends IntegrationTestSupport {
         }
     }
 
-    /** 대조: 세 트리를 풀면 같은 읽기가 실제로 키를 찍는다. 그래야 위 갈래가 「막아서 안 나온다」를 잰다. */
+    /**
+     * 대조: 트리를 <b>하나씩</b> 풀면 같은 읽기가 그 트리에서 실제로 키를 찍는다. 그래야 위 갈래가 「막아서 안 나온다」를 잰다.
+     * 묶어서 풀면 한 트리가 조용해져도(라이브러리가 바뀌어) 다른 트리가 대조를 초록으로 지킨다.
+     */
     @Test
-    void 대조_세_트리를_풀면_같은_읽기가_물리_키를_찍는다() {
+    void 대조_트리를_하나씩_풀면_그_트리가_물리_키를_찍는다() {
         String key = 방송을_심는다();
-        Map<String, Level> before = new LinkedHashMap<>();
-        PINNED.forEach(name -> before.put(name, AuthClientTokenLeakTest.levelOf(name)));
-
-        try (LogCaptor captor = new LogCaptor()) {
-            PINNED.forEach(name -> AuthClientTokenLeakTest.setLevel(name, Level.TRACE));
-            try {
-                atRootTrace(() -> 세_길로_읽는다(key));
-            } finally {
-                before.forEach(AuthClientTokenLeakTest::setLevel);
+        // pgjdbc는 JUL로 찍는다. 시험 컨텍스트가 닫힐 때 Boot가 JUL→SLF4J 다리를 떼므로(수집 서버 IntegrationTestSupport와 같은 함정)
+        // 다시 걸고, JUL 쪽 레벨도 같이 푼다. 안 하면 다른 시험 뒤에 돌 때만 드라이버 갈래가 빈손이다
+        if (!SLF4JBridgeHandler.isInstalled()) {
+            SLF4JBridgeHandler.install();
+        }
+        java.util.logging.Logger pgJul = java.util.logging.Logger.getLogger("org.postgresql");
+        java.util.logging.Level pgJulBefore = pgJul.getLevel();
+        for (String tree : PINNED) {
+            Level before = AuthClientTokenLeakTest.levelOf(tree);
+            try (LogCaptor captor = new LogCaptor()) {
+                AuthClientTokenLeakTest.setLevel(tree, Level.TRACE);
+                pgJul.setLevel(java.util.logging.Level.ALL);
+                try {
+                    atRootTrace(() -> 세_길로_읽는다(key));
+                } finally {
+                    AuthClientTokenLeakTest.setLevel(tree, before);
+                    pgJul.setLevel(pgJulBefore);
+                }
+                assertThat(captor.events())
+                        .as("%s를 풀어도 키를 안 찍는다면 라이브러리가 바뀌었다: 그 yml 줄의 근거를 다시 볼 때다", tree)
+                        .anyMatch(e -> e.getLoggerName().startsWith(tree) && e.getFormattedMessage().contains(key));
             }
-            assertThat(captor.messages()).as("풀어도 키를 안 찍는다면 라이브러리가 바뀌었다: 위 갈래는 이제 아무것도 안 잰다")
-                    .anySatisfy(m -> assertThat(m).contains(key));
         }
     }
 
