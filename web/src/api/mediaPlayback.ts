@@ -1,8 +1,10 @@
 'use client';
 
 // 녹화 재생 서버(MediaMTX playback, 로컬 시험용 9996) — 끝난 방송 다시보기와 편집기 미리보기가 쓴다.
-//   GET {base}/list?path=<방송>                                   녹화된 구간들(시작 시각·길이)
-//   GET {base}/get?path=<방송>&start=<RFC3339>&duration=<초>&format=mp4   그 구간의 영상 한 덩어리
+//   GET {base}/playback/<키>/list                                       녹화된 구간들(시작 시각·길이)
+//   GET {base}/playback/<키>/get?start=<RFC3339>&duration=<초>&format=mp4   그 구간의 영상 한 덩어리
+// 🔴 주소는 출입증 쿠키 경로(/playback/<키>) 아래다(POK-317). 재생 서버의 path 쿼리는 싣지 않는다: 쿠키 정책은 쿼리를 못 막아
+//    엣지(로컬은 app/media/playback 라우트)가 경로의 키로 path를 채운다(들어온 path는 버린다).
 // 방송 중에도 된다(이미 닫힌 4초 조각까지). 서버 주소는 env에만 둔다(하드코딩 금지 규칙).
 // 🔴 카드·조각의 위치(ms)는 「방송 시작 편지 시각」이 아니라 **녹화 첫 조각** 기준이다(조각 장부의 pts 축).
 //    그래서 절대 시각으로 옮길 때의 기준점은 여기 list의 첫 구간 start다.
@@ -61,7 +63,7 @@ export async function lookupRecordingSpans(streamId: string): Promise<RecordingS
   if (BASE === '') return null;
   if (!STREAM_ID_RE.test(streamId)) return [];
   try {
-    const res = await fetch(`${BASE}/list?path=${encodeURIComponent(streamId)}`, {
+    const res = await fetch(`${playbackRoot(streamId)}/list`, {
       signal: AbortSignal.timeout(LIST_TIMEOUT_MS),
       credentials: mediaCredentials(),
     });
@@ -88,10 +90,14 @@ export function recordingClipUrl(
   durationSeconds: number,
 ): string {
   const qs = new URLSearchParams({
-    path: streamId,
     start: new Date(startMs).toISOString(),
     duration: durationSeconds.toFixed(3),
     format: 'mp4',
   });
-  return `${BASE}/get?${qs}`;
+  return `${playbackRoot(streamId)}/get?${qs}`;
+}
+
+/** 출입증 쿠키 경로와 같은 뿌리(POK-317) */
+function playbackRoot(streamId: string): string {
+  return `${BASE}/playback/${encodeURIComponent(streamId)}`;
 }
