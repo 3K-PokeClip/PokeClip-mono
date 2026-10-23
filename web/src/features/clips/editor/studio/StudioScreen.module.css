@@ -150,11 +150,20 @@
 /* ---------- 타임라인 위 막대 (POK-389) ---------- */
 
 .timelineToolbar {
+  /* 막대 폭으로 글자를 숨길지 정한다(아래 @container) */
+  container-type: inline-size;
   display: grid;
   grid-template-columns: 1fr auto 1fr;
   align-items: center;
   gap: calc(10 * var(--pc-u));
   margin-bottom: calc(6 * var(--pc-u));
+}
+
+/* 막대가 좁으면(약 800px 창) 단추 글자가 서로 겹쳤다: 글자를 숨기고 기호·아이콘만 남긴다. 이름은 마우스를 올리면 보인다 */
+@container (max-width: 900px) {
+  .toolbarText {
+    display: none;
+  }
 }
 
 .toolbarGroup,

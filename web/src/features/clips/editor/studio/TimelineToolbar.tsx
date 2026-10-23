@@ -34,11 +34,26 @@ export function TimelineToolbar({ state }: { state: ClipEditorMockState }) {
   return (
     <div className={styles.timelineToolbar} role="toolbar" aria-label="재생과 구간">
       <div className={styles.toolbarGroup}>
-        <Button variant="outline" size="sm" onClick={state.markIn}>
-          <span aria-hidden>[</span> 여기부터
+        {/* 좁은 폭에서는 글자를 숨기고 기호·아이콘만 남긴다(겹치지 않게). 이름은 aria-label·title이 늘 말한다 */}
+        <Button
+          variant="outline"
+          size="sm"
+          aria-label="여기부터"
+          title="여기부터 (I)"
+          onClick={state.markIn}
+        >
+          <span aria-hidden>[</span>
+          <span className={styles.toolbarText}> 여기부터</span>
         </Button>
-        <Button variant="outline" size="sm" onClick={state.markOut}>
-          여기까지 <span aria-hidden>]</span>
+        <Button
+          variant="outline"
+          size="sm"
+          aria-label="여기까지"
+          title="여기까지 (O)"
+          onClick={state.markOut}
+        >
+          <span className={styles.toolbarText}>여기까지 </span>
+          <span aria-hidden>]</span>
         </Button>
         {/* 고른 장면은 영상 만들기 창의 「장면 고르기」로 채워진다. 쇼츠 구간 밖에서는 못 고른다 */}
         <Button
@@ -49,13 +64,21 @@ export function TimelineToolbar({ state }: { state: ClipEditorMockState }) {
           disabled={!state.canPickThumbnail}
           onClick={state.pickThumbnail}
         >
-          <Camera size={13} aria-hidden /> 썸네일
+          <Camera size={13} aria-hidden />
+          <span className={styles.toolbarText}> 썸네일</span>
         </Button>
       </div>
 
       <div className={styles.toolbarCenter}>
-        <Button variant="outline" size="sm" onClick={() => state.seekTo(range.startSeconds)}>
-          <SkipBack size={13} aria-hidden /> 시작으로
+        <Button
+          variant="outline"
+          size="sm"
+          aria-label="시작으로"
+          title="시작으로"
+          onClick={() => state.seekTo(range.startSeconds)}
+        >
+          <SkipBack size={13} aria-hidden />
+          <span className={styles.toolbarText}> 시작으로</span>
         </Button>
         <IconButton
           variant="solid"
