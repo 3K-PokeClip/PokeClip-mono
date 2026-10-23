@@ -285,17 +285,22 @@ public class SoopChatBrowser implements AutoCloseable {
     }
 
     /**
-     * 브라우저 스레드를 멈추고 기다린다. 수집기 종료 유예(20초, docker-compose stop_grace_period) 안에 끝나야 해서 기다림 상한을
-     * {@link #CLOSE_BUDGET}으로 둔다. 넘으면 기다리지 않고 넘어간다(그 뒤는 JVM이 내리며 정리한다).
+     * 브라우저 스레드에 멈추라고 알리고 <b>기다리지 않는다.</b> 스레드가 탭 → 브라우저 → Playwright 순으로 닫는다.
+     *
+     * <p>🔴 수집기 종료 예산(접수 join · 줄 비우기 · 세션 닫기 · flush · 후원 flush)이 이미 19초로 유예 20초에 1초만 남는다
+     * ({@code ShutdownBudgetTest}). 여기서 몇 초라도 기다리면 그 합에 더해져 유예를 넘고 도커가 프로세스를 죽인다. 기다리지 않아도
+     * JVM이 내릴 때 Playwright 드라이버가 입력이 끊겨 Chromium을 함께 내린다. SOOP 채팅은 저장 버퍼로 이미 넘어가 있다.
      */
     @Override
-    public void close() throws InterruptedException {
+    public void close() {
         running = false;
-        thread.join(CLOSE_BUDGET.toMillis());
     }
 
-    /** 끌 때 브라우저를 기다리는 상한. */
-    static final java.time.Duration CLOSE_BUDGET = java.time.Duration.ofSeconds(5);
+    /** 시험용: 브라우저 스레드가 끝날 때까지 기다린다. */
+    boolean awaitStopped(java.time.Duration wait) throws InterruptedException {
+        thread.join(wait.toMillis());
+        return stopped();
+    }
 
     /** 브라우저 스레드가 끝났는가(시험). */
     boolean stopped() {

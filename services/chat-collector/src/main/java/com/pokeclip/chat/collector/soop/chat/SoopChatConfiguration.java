@@ -81,9 +81,9 @@ public class SoopChatConfiguration {
             sessions.close(streamId);
         }
 
-        /** 끄는 순서: 세션 떼기 → 탭 닫기 → 브라우저 닫기({@link SoopChatBrowser#CLOSE_BUDGET} 안에). */
+        /** 끄는 순서: 세션 떼기 → 탭 닫기 → 브라우저 닫기. 브라우저 닫기는 기다리지 않는다(종료 예산 밖, {@link SoopChatBrowser#close}). */
         @Override
-        public void destroy() throws InterruptedException {
+        public void destroy() {
             sessions.shutdown();
             browser.close();
         }

@@ -72,6 +72,7 @@ class SoopChatBrowserTest {
         }
         if (browser != null) {
             browser.close();
+            browser.awaitStopped(Duration.ofSeconds(5));
         }
         sdk.close();
     }
@@ -316,7 +317,7 @@ class SoopChatBrowserTest {
 
     /** 끄는 순서(세션 떼기 → 탭 닫기 → 브라우저 닫기)가 수집기 종료 유예(20초) 안에, 상한 5초 안에 끝난다. 탭 셋이 열린 채로 */
     @Test
-    void 끌_때_탭을_닫고_브라우저를_닫는_것이_유예_안에_끝난다() throws Exception {
+    void 끌_때_기다리지_않고_뒤에서_탭과_브라우저를_닫는다() throws Exception {
         start(10);
         sessions.ensure("s-1", "bj-1", TOKEN);
         sessions.ensure("s-2", "bj-2", TOKEN);
@@ -328,8 +329,8 @@ class SoopChatBrowserTest {
         runtime.destroy();
         Duration took = Duration.ofNanos(System.nanoTime() - started);
 
-        assertThat(took).isLessThan(SoopChatBrowser.CLOSE_BUDGET);
-        assertThat(browser.stopped()).as("브라우저 스레드가 끝나야 프로세스가 내린다").isTrue();
+        assertThat(took).as("종료 예산(유예 20초에 1초 여유)에 더하지 않게 기다리지 않는다").isLessThan(Duration.ofMillis(200));
+        assertThat(browser.awaitStopped(Duration.ofSeconds(5))).as("브라우저 스레드는 뒤에서 탭 · 브라우저를 닫고 끝난다").isTrue();
         assertThat(sessions.size()).isZero();
         browser = null;
         sessions = null;
