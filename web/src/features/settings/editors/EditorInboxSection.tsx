@@ -1,28 +1,25 @@
 'use client';
 
-import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Button, ConfirmDialog, useToast } from '@/ui';
+import { Button, useToast } from '@/ui';
 import {
   acceptInvitation,
   declineInvitation,
-  delegationsAsEditorQueryOptions,
   receivedInvitationsQueryOptions,
-  revokeDelegation,
 } from '@/api/editors';
 import styles from './EditorSettingsScreen.module.css';
 
-// 편집자 시점(초대함) — 받은 초대에 답하고, 내가 편집자로 들어가 있는 채널을 본다.
+// 편집자 시점(초대함) — 받은 초대에 답한다.
 // 시안 1l은 스트리머 시점만 그렸다. 백엔드(POK-57)는 양쪽을 다 가지므로 같은 화면의 행 모양을 빌려 아래에 잇는다.
 // 없을 때는 아무것도 그리지 않는다 — 스트리머 혼자 쓰는 계정에는 이 구역이 보이지 않는다.
+// 내가 편집자로 들어가 있는 채널(「나가기」)은 여기서 뺐다: 이 화면은 내 채널에서만 열려 남의 채널에선 못 나갔다.
+// 나가기는 계정 전환 창의 「관리」에서 한다(POK-416).
 export function EditorInboxSection() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const received = useQuery(receivedInvitationsQueryOptions);
-  const asEditor = useQuery(delegationsAsEditorQueryOptions);
-  // 「나가기」는 되돌릴 수 없어 확인을 받는다(POK-254). 편집자 내보내기(RevokeEditorDialog)와 같은 모양이다
-  const [leaveTarget, setLeaveTarget] = useState<{ id: number; streamerName: string } | null>(null);
 
+  // 수락하면 참여 채널이 하나 는다: 계정 전환 창의 목록도 다시 읽게 위임 쪽도 무효화한다
   const refresh = () => {
     void queryClient.invalidateQueries({ queryKey: ['editor-invitations'] });
     void queryClient.invalidateQueries({ queryKey: ['editor-delegations'] });
@@ -41,30 +38,15 @@ export function EditorInboxSection() {
         description: e instanceof Error ? e.message : String(e),
       }),
   });
-  const leave = useMutation({
-    mutationFn: (id: number) => revokeDelegation(id),
-    onSuccess: () => {
-      toast({ tone: 'success', title: '편집자에서 나왔어요' });
-      setLeaveTarget(null);
-      refresh();
-    },
-    onError: (e: unknown) =>
-      toast({
-        tone: 'error',
-        title: '처리하지 못했어요',
-        description: e instanceof Error ? e.message : String(e),
-      }),
-  });
 
   // 못 읽은 것을 「초대 없음」으로 숨기지 않는다 — 기한 있는 초대를 놓친다(PR #200 codex).
   // 편집자 목록과 같은 실패 카드(행 개수를 모르니 한 덩어리)에 다시 시도를 둔다
-  if (received.isError || asEditor.isError) {
-    const retrying = received.isFetching || asEditor.isFetching;
+  if (received.isError) {
     return (
-      <section aria-label="내가 편집자인 채널" className={styles.rows}>
+      <section aria-label="받은 편집자 초대" className={styles.rows}>
         <div className={styles.fallbackCard}>
           <span className={styles.fallbackText}>받은 초대를 불러오지 못했어요</span>
-          <Button variant="soft" size="sm" loading={retrying} onClick={refresh}>
+          <Button variant="soft" size="sm" loading={received.isFetching} onClick={refresh}>
             다시 시도
           </Button>
         </div>
@@ -72,13 +54,12 @@ export function EditorInboxSection() {
     );
   }
   const invitations = received.data ?? [];
-  const channels = asEditor.data ?? [];
-  if (invitations.length === 0 && channels.length === 0) return null;
+  if (invitations.length === 0) return null;
 
   return (
-    <section aria-label="내가 편집자인 채널" className={styles.rows}>
+    <section aria-label="받은 편집자 초대" className={styles.rows}>
       {invitations.map((invitation) => (
-        <div key={`inv-${invitation.id}`} className={styles.row}>
+        <div key={invitation.id} className={styles.row}>
           <div className={styles.rowBody}>
             <div className={styles.rowName}>{invitation.streamerName} 님의 초대</div>
             <div className={styles.rowMeta}>
@@ -103,37 +84,6 @@ export function EditorInboxSection() {
           </Button>
         </div>
       ))}
-      {channels.map((channel) => (
-        <div key={`ch-${channel.id}`} className={styles.row}>
-          <div className={styles.rowBody}>
-            <div className={styles.rowName}>{channel.streamerName} 채널의 편집자</div>
-            <div className={styles.rowMeta}>
-              {new Date(channel.grantedAt).toLocaleDateString('ko-KR')}부터
-            </div>
-          </div>
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={leave.isPending}
-            onClick={() => setLeaveTarget(channel)}
-          >
-            나가기
-          </Button>
-        </div>
-      ))}
-      <ConfirmDialog
-        open={leaveTarget !== null}
-        busy={leave.isPending}
-        title={`${leaveTarget?.streamerName ?? ''} 채널의 편집자에서 나갈까요?`}
-        consequences={[
-          '지금 바로 이 채널의 하이라이트·클립을 볼 수 없게 됩니다.',
-          '이미 업로드된 클립과 만들어 둔 편집본은 그대로 남아요.',
-        ]}
-        footnote="다시 들어가려면 스트리머에게 새로 초대받아야 해요."
-        confirmLabel="나가기"
-        onCancel={() => setLeaveTarget(null)}
-        onConfirm={() => leaveTarget && leave.mutate(leaveTarget.id)}
-      />
     </section>
   );
 }

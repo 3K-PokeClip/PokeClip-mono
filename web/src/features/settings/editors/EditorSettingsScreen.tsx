@@ -40,7 +40,7 @@ export function EditorSettingsScreen() {
 
       <div className={styles.rows}>{listOf(state)}</div>
 
-      {/* 편집자 시점 — 받은 초대·내가 편집자인 채널. 없으면 아무것도 안 그린다 */}
+      {/* 편집자 시점 — 받은 초대. 없으면 아무것도 안 그린다(나가기는 계정 전환 창에서) */}
       <EditorInboxSection />
 
       {/* 편집자 0명이어도 항상 그린다 — 안내와 「권한 2단계 비교」가 목록 유무와 무관한
