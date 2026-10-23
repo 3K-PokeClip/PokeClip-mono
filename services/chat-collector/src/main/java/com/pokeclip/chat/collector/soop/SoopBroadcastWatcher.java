@@ -307,9 +307,13 @@ public class SoopBroadcastWatcher implements SoopWatch {
                     info.category(), info.viewers()));
         }
         platforms.seen(watch.streamId, Platform.SOOP, observedAt);
-        // 채팅을 붙인다(이미 붙어 있으면 토큰만 새것으로). 확인 · 남기기 사이에 빠졌으면 안 붙인다
-        if (stillWatched(watch)) {
-            chat.ensure(watch.streamId, watch.soopUserId, watch.accessToken);
+        // 채팅을 붙인다(이미 붙어 있으면 토큰만 새것으로). 확인 · 남기기 사이에 빠졌으면 안 붙인다.
+        // 🔴 확인과 붙이기를 빼기(unwatch 등)와 같은 자물쇠 안에서 한다. 확인 직후 빼기가 끝나고 붙이면 명부에서 빠진 방송이라 다음 틱도
+        // 못 떼어 영영 붙는다(탈퇴 정리 뒤 채팅이 다시 쌓인다). ensure는 줄에 넣기만 해서 자물쇠를 오래 쥐지 않는다
+        synchronized (this) {
+            if (stillWatched(watch)) {
+                chat.ensure(watch.streamId, watch.soopUserId, watch.accessToken);
+            }
         }
     }
 

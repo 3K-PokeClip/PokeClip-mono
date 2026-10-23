@@ -175,6 +175,33 @@ class SoopBroadcastWatcherTest {
         assertThat(chatCalls).containsExactly("ensure:s-1:soop-user-1:tok-1");
     }
 
+    /**
+     * 붙이기는 지켜보기의 자물쇠 안에서 한다. 「아직 지켜보는가」를 본 직후 다른 스레드가 빼고(close) 나서 붙이면, 이미 명부에서 빠진 방송이라
+     * 다음 틱도 못 떼어 영영 붙어 있다(탈퇴 정리 뒤 채팅이 다시 쌓인다). 빼기(unwatch 등)가 같은 자물쇠라 자물쇠 안이면 끼어들 수 없다
+     */
+    @Test
+    void 채팅을_붙이는_것은_지켜보기_자물쇠_안에서_한다() {
+        linkAnswers.add(link("tok-1", now.get().plus(Duration.ofHours(8))));
+        liveAnswers.add(onAir("숲", 1));
+        SoopBroadcastWatcher watcher = watcher();
+        List<Boolean> lockHeld = new CopyOnWriteArrayList<>();
+        watcher.attachChat(new SoopChat() {
+            @Override
+            public void ensure(String streamId, String channelId, String token) {
+                lockHeld.add(Thread.holdsLock(watcher));
+            }
+
+            @Override
+            public void close(String streamId) {
+            }
+        });
+
+        watcher.watch("s-1", 42L, 시작);
+        watcher.tick();
+
+        assertThat(lockHeld).containsExactly(true);
+    }
+
     /** SOOP 방송이 끝났으면(streamend) 채팅을 뗀다. 지켜보기는 종료 편지가 뺀다 */
     @Test
     void 방송이_끝나면_채팅을_뗀다() {
