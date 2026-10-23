@@ -216,7 +216,16 @@ function ChannelRow({ name, photo, role, current, onClick }: ChannelRowProps) {
   );
 }
 
-/** 수락·거절 공통: 함수와 무효화 키는 설정의 EditorInboxSection과 같다. 실패는 토스트로만 알린다. */
+/** 실패는 토스트로만 알린다: 서버 문구를 그대로 보인다(EditorInboxSection과 같다) */
+function failedToast(toast: ReturnType<typeof useToast>['toast'], e: unknown) {
+  toast({
+    tone: 'error',
+    title: '처리하지 못했어요',
+    description: e instanceof Error ? e.message : String(e),
+  });
+}
+
+/** 수락·거절 공통: 함수와 무효화 키는 설정의 EditorInboxSection과 같다. */
 function useInvitationAction(
   send: (id: number) => Promise<void>,
   doneTitle: string,
@@ -232,12 +241,7 @@ function useInvitationAction(
       void queryClient.invalidateQueries({ queryKey: ['editor-invitations'] });
       void queryClient.invalidateQueries({ queryKey: ['editor-delegations'] });
     },
-    onError: (e: unknown) =>
-      toast({
-        tone: 'error',
-        title: '처리하지 못했어요',
-        description: e instanceof Error ? e.message : String(e),
-      }),
+    onError: (e: unknown) => failedToast(toast, e),
   });
 }
 
@@ -289,13 +293,51 @@ function Invitations({
   );
 }
 
+/** 받은 초대 거절 확인 */
+function DeclineConfirm({
+  invitation,
+  opener,
+  onClose,
+}: {
+  invitation: ReceivedInvitation;
+  opener: HTMLElement;
+  onClose: () => void;
+}) {
+  const decline = useInvitationAction(declineInvitation, '초대를 거절했어요', onClose);
+  return (
+    <PanelConfirm
+      title={`${invitation.streamerName}님의 초대를 거절할까요?`}
+      text="거절하면 목록에서 사라지고, 다시 참여하려면 새로 초대받아야 해요."
+      confirmLabel="거절하기"
+      busy={decline.isPending}
+      opener={opener}
+      onConfirm={() => decline.mutate(invitation.id)}
+      onClose={onClose}
+    />
+  );
+}
+
 /**
- * 거절 확인 덮개(시안 1u ③, 시안 비교 B안). 화면 가운데 모달 대신 창 안에서 묻되, 덮개는 패널(position: fixed)을
+ * 창 안 확인 덮개(시안 1u ③, 시안 비교 B안). 화면 가운데 모달 대신 창 안에서 묻되, 덮개는 패널(position: fixed)을
  * 기준으로 보이는 칸 전체를 덮는다: 초대가 많아 창을 내려 둔 채로 눌러도 카드가 눈앞 가운데에 뜬다.
  */
-function DeclineConfirm({ invitation, opener, onClose }: Declining & { onClose: () => void }) {
-  const decline = useInvitationAction(declineInvitation, '초대를 거절했어요', onClose);
-  const busy = decline.isPending;
+function PanelConfirm({
+  title,
+  text,
+  confirmLabel,
+  busy,
+  opener,
+  onConfirm,
+  onClose,
+}: {
+  title: string;
+  text: string;
+  confirmLabel: string;
+  busy: boolean;
+  opener: HTMLElement;
+  onConfirm: () => void;
+  onClose: () => void;
+}) {
   const titleId = useId();
   const textId = useId();
   const cancelRef = useRef<HTMLButtonElement>(null);
@@ -335,10 +377,10 @@ function DeclineConfirm({ invitation, opener, onClose }: Declining & { onClose: 
         className={styles.confirmCard}
       >
         <div id={titleId} className={styles.confirmTitle}>
-          {invitation.streamerName}님의 초대를 거절할까요?
+          {title}
         </div>
         <div id={textId} className={styles.confirmText}>
-          거절하면 목록에서 사라지고, 다시 참여하려면 새로 초대받아야 해요.
+          {text}
         </div>
         <div className={styles.confirmActions}>
           <Button
@@ -351,14 +393,8 @@ function DeclineConfirm({ invitation, opener, onClose }: Declining & { onClose: 
           >
             취소
           </Button>
-          <Button
-            variant="danger"
-            size="sm"
-            fullWidth
-            loading={busy}
-            onClick={() => decline.mutate(invitation.id)}
-          >
-            거절하기
+          <Button variant="danger" size="sm" fullWidth loading={busy} onClick={onConfirm}>
+            {confirmLabel}
           </Button>
         </div>
       </div>
