@@ -23,7 +23,7 @@ import static org.assertj.core.api.Assertions.catchThrowable;
  * 손으로 만든 풀로 재면 이 배선을 안 지나 설정이 통째로 죽어 있어도 초록이다
  * (chat-collector {@code DatasourceTimeoutTest}와 같은 이유).
  *
- * <p>Flyway는 끈다. 시험 컨테이너는 TLS가 없어 verify-full로는 못 붙는다 — 그 실패가 곧 아래
+ * <p>Flyway는 끈다. 시험 컨테이너는 TLS가 없어 verify-full로는 못 붙는다. 그 실패가 곧 아래
  * 두 번째 시험의 증거다.
  */
 class RdsIamWiringTest extends IntegrationTestSupport {
@@ -55,6 +55,7 @@ class RdsIamWiringTest extends IntegrationTestSupport {
 
             assertThat(thrown).as("평문 서버에 붙었다면 verify-full이 안 걸린 것이다").isNotNull();
             assertThat(sqlStateOf(thrown)).as("서버가 TLS를 안 한다는 거절이어야 한다").isEqualTo("08004");
+            assertThat(signed.get()).as("Boot가 만든 풀이 우리 공급자를 거쳐야 한다").isPositive();
         }
     }
 
@@ -65,6 +66,31 @@ class RdsIamWiringTest extends IntegrationTestSupport {
         assertThat(thrown).hasStackTraceContaining("POSTGRES_SSLROOTCERT");
     }
 
+    /** pgjdbc는 URL 쿼리 값을 속성보다 앞세운다. 그대로 두면 verify-full이 조용히 풀린다. */
+    @Test
+    void iam인데_URL에_sslmode가_있으면_부팅을_거부한다() throws Exception {
+        Path ca = caFile();
+        Throwable thrown = catchThrowable(() -> bootIam(ca, new AtomicInteger(),
+                POSTGRES.getJdbcUrl() + "?sslmode=require").close());
+
+        assertThat(thrown).hasStackTraceContaining("sslmode");
+    }
+
+    /** 오타가 password 모드로 조용히 떨어지면 원인 없는 인증 실패만 남는다. */
+    @Test
+    void 로그인_방식이_iam도_password도_아니면_부팅을_거부한다() {
+        Throwable thrown = catchThrowable(() -> new SpringApplicationBuilder(DetectorApplication.class)
+                .web(WebApplicationType.NONE)
+                .profiles("test")
+                .run("--spring.datasource.url=" + POSTGRES.getJdbcUrl(),
+                        "--spring.datasource.username=" + POSTGRES.getUsername(),
+                        "--spring.datasource.password=" + POSTGRES.getPassword(),
+                        "--spring.flyway.enabled=false",
+                        "--pokeclip.datasource.auth=IAM").close());
+
+        assertThat(thrown).hasStackTraceContaining("POSTGRES_AUTH");
+    }
+
     private Path caFile() throws Exception {
         Path ca = tmp.resolve("ca.pem");
         if (!Files.exists(ca)) {
@@ -73,8 +99,12 @@ class RdsIamWiringTest extends IntegrationTestSupport {
         return ca;
     }
 
-    /** 서명기는 가짜다 — 이 시험이 실제 AWS 자격 증명을 찾아 나가면 안 된다. */
     private ConfigurableApplicationContext bootIam(Path ca, AtomicInteger signed) {
+        return bootIam(ca, signed, POSTGRES.getJdbcUrl());
+    }
+
+    /** 서명기는 가짜다. 이 시험이 실제 AWS 자격 증명을 찾아 나가면 안 된다. */
+    private ConfigurableApplicationContext bootIam(Path ca, AtomicInteger signed, String jdbcUrl) {
         return new SpringApplicationBuilder(DetectorApplication.class)
                 .web(WebApplicationType.NONE)
                 .profiles("test")
@@ -83,7 +113,7 @@ class RdsIamWiringTest extends IntegrationTestSupport {
                             signed.incrementAndGet();
                             return POSTGRES.getPassword();
                         }))
-                .run("--spring.datasource.url=" + POSTGRES.getJdbcUrl(),
+                .run("--spring.datasource.url=" + jdbcUrl,
                         "--spring.datasource.username=" + POSTGRES.getUsername(),
                         "--spring.datasource.password=",
                         "--spring.flyway.enabled=false",

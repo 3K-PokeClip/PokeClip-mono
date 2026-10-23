@@ -24,7 +24,7 @@ class RdsIamCredentialsProviderTest extends IntegrationTestSupport {
 
     @Test
     void 실제_서명기는_네트워크_없이_접속_토큰_꼴을_만든다() {
-        // 가짜 키다. 서명은 로컬 계산이라 이 키로도 꼴은 나온다 — 서버가 받아 줄지는 S1이 잰다.
+        // 가짜 키다. 서명은 로컬 계산이라 이 키로도 꼴은 나온다. 서버가 받아 줄지는 S1이 잰다.
         RdsTokenSigner signer = RdsTokenSigner.rds(Region.AP_NORTHEAST_2,
                 StaticCredentialsProvider.create(AwsBasicCredentials.create("AKIDEXAMPLE", "fake-secret")));
 
@@ -37,7 +37,7 @@ class RdsIamCredentialsProviderTest extends IntegrationTestSupport {
     }
 
     /**
-     * Hikari가 새 연결을 만들 때마다 공급자를 부르는지. 풀 설정의 비밀번호는 일부러 틀리게 둔다 —
+     * Hikari가 새 연결을 만들 때마다 공급자를 부르는지. 풀 설정의 비밀번호는 일부러 틀리게 둔다.
      * 공급자를 안 거치면 접속이 거절돼 빨간불이 된다.
      */
     @Test
@@ -52,10 +52,10 @@ class RdsIamCredentialsProviderTest extends IntegrationTestSupport {
             try (Connection first = ds.getConnection()) {
                 assertThat(first.isValid(1)).isTrue();
             }
-            // 풀을 띄울 때 한 번(initializeDataSource — 접속에는 안 쓰는 기본값) + 첫 연결 한 번.
+            // 풀을 띄울 때 한 번(initializeDataSource, 접속에는 안 쓰는 기본값) + 첫 연결 한 번.
             assertThat(signed.get()).as("풀 시작 + 첫 연결").isEqualTo(2);
 
-            // 수명이 다한 연결을 회수하는 것과 같은 길이다 — 다음 대여는 새 연결을 만든다.
+            // 수명이 다한 연결을 회수하는 것과 같은 길이다. 다음 대여는 새 연결을 만든다.
             ds.getHikariPoolMXBean().softEvictConnections();
             try (Connection second = ds.getConnection()) {
                 assertThat(second.isValid(1)).isTrue();

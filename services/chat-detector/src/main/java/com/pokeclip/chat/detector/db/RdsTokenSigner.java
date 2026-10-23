@@ -17,7 +17,7 @@ public interface RdsTokenSigner {
     String sign(String host, int port, String user);
 
     /**
-     * 서명은 로컬 계산이다 — 네트워크를 안 탄다. 자격 증명 조회만 밖으로 나갈 수 있고
+     * 서명은 로컬 계산이라 네트워크를 안 탄다. 자격 증명 조회만 밖으로 나갈 수 있고
      * (ECS 태스크 역할 · IMDS), 그 값은 SDK가 만료 전까지 캐시한다.
      */
     static RdsTokenSigner rds(Region region, AwsCredentialsProvider credentials) {

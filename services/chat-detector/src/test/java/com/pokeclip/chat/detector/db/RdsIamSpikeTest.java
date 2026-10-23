@@ -27,11 +27,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 
 /**
- * POK-406 완료 조건 S1~S5를 <b>실험 RDS</b>에서 잰다. {@code RDS_SPIKE_HOST}가 없으면 통째로 건너뛴다 —
+ * POK-406 완료 조건 S1~S5를 <b>실험 RDS</b>에서 잰다. {@code RDS_SPIKE_HOST}가 없으면 통째로 건너뛴다.
  * 평소 시험·CI에서는 안 돈다.
  *
  * <p>서버 전체를 실제 배선 그대로 띄운다({@code POSTGRES_AUTH=iam}과 같은 값). 서명기만 실제 서명기를
- * 감싸 발급 시각을 센다 — 서명 자체는 바꾸지 않는다. 토큰 값은 어디에도 안 찍는다.
+ * 감싸 발급 시각을 센다. 서명 자체는 바꾸지 않는다. 토큰 값은 어디에도 안 찍는다.
  *
  * <pre>
  * RDS_SPIKE_HOST=&lt;엔드포인트&gt; AWS_PROFILE=&lt;실험 프로필&gt; ./gradlew :chat-detector:test --tests '*RdsIamSpikeTest' -i
@@ -56,7 +56,7 @@ class RdsIamSpikeTest {
         try (ConfigurableApplicationContext context = boot()) {
             JdbcTemplate jdbc = context.getBean(JdbcTemplate.class);
 
-            // S1 — 부팅이 끝났다는 것이 곧 Flyway가 IAM 사용자로 돌았다는 뜻이다. 이력 표로 확인한다.
+            // S1: 부팅이 끝났다는 것이 곧 Flyway가 IAM 사용자로 돌았다는 뜻이다. 이력 표로 확인한다.
             List<Map<String, Object>> history = jdbc.queryForList("""
                     SELECT version, success, installed_by
                       FROM flyway_schema_history_chat_detector ORDER BY installed_rank""");
@@ -68,13 +68,13 @@ class RdsIamSpikeTest {
                 assertThat(row.get("installed_by")).isEqualTo(USER);
             });
 
-            // S4 — 실제 연결이 TLS인지. 설정이 아니라 서버가 본 연결 상태를 묻는다.
+            // S4: 실제 연결이 TLS인지. 설정이 아니라 서버가 본 연결 상태를 묻는다.
             Map<String, Object> ssl = jdbc.queryForMap(
                     "SELECT ssl, version, cipher FROM pg_stat_ssl WHERE pid = pg_backend_pid()");
             print("S4", "pg_stat_ssl=" + ssl + " sslmode=" + RdsIamDataSourceConfiguration.SSL_MODE);
             assertThat(ssl.get("ssl")).isEqualTo(true);
 
-            // S3 — 15초 걸리는 질의가 socketTimeout 10초에 끊기는지. 응답이 안 오는 상대와 같은 길이다
+            // S3: 15초 걸리는 질의가 socketTimeout 10초에 끊기는지. 응답이 안 오는 상대와 같은 길이다
             // (드라이버가 소켓 읽기에서 기다린다).
             Instant start = Instant.now();
             Throwable thrown = catchThrowable(() -> jdbc.execute("SELECT pg_sleep(15)"));
@@ -108,7 +108,7 @@ class RdsIamSpikeTest {
     }
 
     /**
-     * S2 — 연결 수명을 2분으로 줄이고 토큰 수명(15분)을 넘겨 돌린다. 판별 한 바퀴(1초)도 같은 풀을 쓰므로
+     * S2: 연결 수명을 2분으로 줄이고 토큰 수명(15분)을 넘겨 돌린다. 판별 한 바퀴(1초)도 같은 풀을 쓰므로
      * 실제 부하가 그대로 실린다. 30초마다 한 번 붙어 그 연결이 언제 만들어졌는지를 서버에 묻는다.
      */
     @Test
