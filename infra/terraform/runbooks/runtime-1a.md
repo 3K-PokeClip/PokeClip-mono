@@ -29,13 +29,14 @@
 prod/network(O7a) 뒤, platform(O7d) · media(O7e) 앞입니다. platform · media
 가 이 루트의 출력을 읽고, media 사이드카는 이 런북 5 의 DB 계정이 있어야
 접속합니다([런타임 트랙 인터페이스 계약](../CONTRACT-runtime.md)
-「DB 접속(IAM DB 인증)」).
+「DB 접속(IAM DB 인증)」). platform(O7d)은 런타임 1단-나 뒤입니다 —
+platform 이 읽는 `app_db_users` 는 1단-나가 냅니다(kty 2026-10-23).
 
 ## 순서 한눈에
 
 | 걸음 | 하는 일 | 승인 지점 |
 |---|---|---|
-| 1 | 직전 점검(`runtime-1a`) — 첫 판정은 CHANGED | ⑤ 보고 · `--accept` |
+| 1 | 직전 점검(`runtime-1a` — SCP · 2-3 · 이벤트) — 첫 SCP 판정은 CHANGED | ⑤ 보고 · `--accept` |
 | 2 | 본 apply(실행기 끔) | plan 승인 |
 | 3 | 운영 확인 — 엔진 실제 부판 기록 | — |
 | 4 | 직전 점검 다시 → 실행기 켬 | plan 승인 |
@@ -49,19 +50,29 @@ prod/network(O7a) 뒤, platform(O7d) · media(O7e) 앞입니다. platform · med
 
 ## 1. 직전 점검
 
-[단계 직전 점검](stage-precheck.md)의 「순서」 를 묶음 `runtime-1a` 로
-합니다. 이 묶음은 2-3 판정이 없습니다(K5 — POK-365 전 미판정 · O7e 전에
-POK-365 를 권장). 그래서 ② `principal-check.sh` 는 돌리지 않습니다.
+[단계 직전 점검](stage-precheck.md)의 「순서」 를 묶음 · 단계
+`runtime-1a` 로 합니다. POK-365 완료로 이 단계도 2-3 판정을 합니다(설계
+K5 가 바뀜 — 처음 계획은 미판정이었습니다).
+
+먼저 kty 가 **세션 밖 터미널**에서 `aws sts get-caller-identity` 로 호출
+주체가 리스 계정의 kty IAM 사용자인지 눈으로 봅니다. 에이전트 세션이나
+세션의 `!` 로 돌리지 않습니다 — 출력의 계정 ID · ARN 이 세션 기록에
+남습니다.
 
 ```shell
 bash infra/terraform/scripts/precheck/scp-recheck.sh runtime-1a
+bash infra/terraform/scripts/precheck/principal-check.sh runtime-1a
 bash infra/terraform/scripts/precheck/events.sh --since <비교 기준 판정 시각>
 ```
 
-*   첫 판정은 기준에 없는 행이라 종료 3(CHANGED)이 정상입니다. ⑤ 보고와
+*   ① 첫 판정은 기준에 없는 행이라 종료 3(CHANGED)이 정상입니다. ⑤ 보고와
     한 번에 묻고, kty 의 답을 들은 뒤 `--accept` 하고 다시 판정합니다
     (stage-precheck 「첫 실행과 기준 승인」).
-*   종료 0 이 아니면(승인 뒤에도 DENIED 등) 2 로 가지 않습니다.
+*   ② 는 stage-precheck 「2-3 판정의 결과와 갈래」 대로 봅니다. 런타임
+    상태 객체 행은 이 단계부터 묻습니다. 종료 3(UNDECIDED)이면 kty 가
+    `approvals.tsv` 에 「진행」 을 적어야 다음으로 갑니다.
+*   ① 이 종료 0 이 아니거나(승인 뒤에도 DENIED 등) ② 가 종료 0 도, 「진행」
+    이 적힌 종료 3 도 아니면 2 로 가지 않습니다.
 
 ## 2. 본 apply
 
@@ -144,7 +155,7 @@ aws secretsmanager describe-secret --region ap-northeast-2 \
 ## 4. 실행기 켬
 
 1.  1 의 점검을 다시 합니다(같은 묶음 · `--since` 는 그때의 비교 기준).
-    종료 0 이 아니면 켜지 않습니다.
+    1 의 통과 조건이 아니면 켜지 않습니다.
 1.  **plan**: 실행기만 켜는 plan 입니다.
 
     ```shell
@@ -157,6 +168,10 @@ aws secretsmanager describe-secret --region ap-northeast-2 \
     모두 실행기 자원(역할 · 정책 연결 · 인라인 정책 · 프로필 · SG · 이그레스
     둘 · `rds_from_sql_runner` · 인스턴스)입니다. 다르면 apply 하지 않습니다.
 1.  **apply**: `terraform apply runner-on.tfplan && rm runner-on.tfplan`.
+1.  **켠 시각 기록**: `date '+%Y-%m-%d %H:%M'` 를 적습니다(8). **이 시각부터
+    120분 안에 7(끔)을 시작합니다.** 준비 단계(5-3)가 상자에 120분 뒤 자동
+    종료(`shutdown -h +120`)를 걸어 두지만, 상자가 멈춰도 자원 · 역할은
+    남으므로 7 은 그대로 합니다.
 1.  **SSM 등록**: 아래가 `Online` 이 될 때까지 기다립니다(보통 몇 분).
 
     ```shell
@@ -170,7 +185,8 @@ aws secretsmanager describe-secret --region ap-northeast-2 \
 
 SQL 원본은 **머지 커밋 SHA 에서 `git show`** 로 꺼내 send-command 에 인라인으로
 싣습니다. 작업 트리의 파일을 쓰지 않습니다. 파일마다 gzip + base64 로 실어
-상자에서 풀고, 로컬에서 계산한 sha256 과 대조합니다. 새 비밀이 생기지 않고
+상자에서 풀고, 상자가 푼 파일의 sha256 을 상자 출력으로 받아 로컬에서
+`git show` 원본으로 계산한 목록과 대조합니다. 새 비밀이 생기지 않고
 저장소 공개 여부에 기대지 않습니다. 실은 크기는 지금 약 15 KB 입니다. SSM
 매개변수 크기 한계는 미확인입니다 — 넘어서 거부되면 파일마다 한 번씩
 보냅니다.
@@ -178,19 +194,30 @@ SQL 원본은 **머지 커밋 SHA 에서 `git show`** 로 꺼내 send-command �
 ### 5-1. 페이로드 만들기
 
 로컬에서 돌리고 AWS 를 부르지 않습니다(`terraform output` 은 상태만
-읽습니다). 저장소 뿌리에서 돌립니다. SQL 파일을 더하거나 이름을 바꾸면
-`names` 도 함께 고칩니다.
+읽습니다). 저장소 뿌리에서 같은 셸에 함수를 정의하고 부릅니다. SHA 가
+`origin/develop` 의 조상이 아니거나 어느 명령이든 실패하면 「멈춤」 을 내고
+페이로드를 만들지 않습니다. SQL 파일을 더하거나 이름을 바꾸면 `names` 도
+함께 고칩니다.
 
 ```shell
-cd "$(git rev-parse --show-toplevel)"
-sha="<머지 커밋 SHA>"
-git fetch origin
-git merge-base --is-ancestor "${sha}" origin/develop && printf 'SHA OK\n'
-rds_endpoint="$(terraform -chdir=infra/terraform/prod/runtime output -raw rds_endpoint)"
-secret_arn="$(terraform -chdir=infra/terraform/prod/runtime output -raw rds_master_user_secret_arn)"
-runner_id="$(terraform -chdir=infra/terraform/prod/runtime output -raw sql_runner_instance_id)"
-payload="$(mktemp -d)"
-python3 - "${sha}" "${rds_endpoint}" "${secret_arn}" "${payload}" <<'PY'
+make_payload() {
+  local sha="$1" rt=infra/terraform/prod/runtime
+  git fetch origin || { printf '멈춤: git fetch 실패\n' >&2; return 1; }
+  if ! git merge-base --is-ancestor "${sha}" origin/develop; then
+    printf '멈춤: SHA 가 origin/develop 의 조상이 아님\n' >&2
+    return 1
+  fi
+  printf 'SHA OK\n'
+  if ! {
+    rds_endpoint="$(terraform -chdir="${rt}" output -raw rds_endpoint)" &&
+      secret_arn="$(terraform -chdir="${rt}" output -raw rds_master_user_secret_arn)" &&
+      runner_id="$(terraform -chdir="${rt}" output -raw sql_runner_instance_id)" &&
+      payload="$(mktemp -d)"
+  }; then
+    printf '멈춤: 출력 읽기 · 임시 디렉터리 실패\n' >&2
+    return 1
+  fi
+  python3 - "${sha}" "${rds_endpoint}" "${secret_arn}" "${payload}" <<'PY' || {
 import base64, gzip, hashlib, json, os, subprocess, sys
 
 sha, endpoint, secret_arn, out = sys.argv[1:5]
@@ -200,17 +227,20 @@ names = ["00_preflight.sql", "10_roles.sql", "stream_schema.sql",
          "50_advisory_probe.sql"]
 box = "/root/rt1a"
 sums = []
-prepare = ["set -eu", "umask 077", f"mkdir -p {box}/sql", f"cd {box}/sql"]
+# 자동 종료를 맨 앞에 건다 — 뒤 명령이 실패해도 상자는 120분 뒤 멈춘다.
+prepare = ["set -eu", "umask 077", "shutdown -h +120",
+           f"mkdir -p {box}/sql", f"cd {box}/sql"]
 for n in names:
     raw = subprocess.run(["git", "show", f"{sha}:{src}/{n}"],
                          check=True, capture_output=True).stdout
     b64 = base64.b64encode(gzip.compress(raw, mtime=0)).decode()
     prepare.append(f"printf '%s' '{b64}' | base64 -d | gunzip > {n}")
     sums.append(f"{hashlib.sha256(raw).hexdigest()}  {n}")
-prepare.append("printf '%s\\n' " + " ".join(f"'{s}'" for s in sums)
-               + f" > {box}/sql.sha256")
-prepare.append(f"sha256sum -c {box}/sql.sha256")
+# 상자가 푼 파일의 해시를 상자에서 계산해 내보낸다(로컬 목록과 대조 — 5-3).
+# dnf 출력보다 먼저 내서 표준 출력 상한(앞 24,000자)에 들게 한다.
 prepare += [
+    f"sha256sum {' '.join(names)} > {box}/sql.sha256",
+    f"cat {box}/sql.sha256",
     "dnf install -y postgresql17 || dnf install -y postgresql16",
     "psql --version",
     "curl -fsS -o /root/rt1a/rds-ca.pem "
@@ -236,9 +266,11 @@ apply = conn + [
     " 40_verify.sql; do echo \"== ${f}\";"
     " psql -X -1 -v ON_ERROR_STOP=1 -f \"${f}\"; done",
 ]
+# VERBOSITY verbose — 오류 · 경고 줄에 SQLSTATE(42501 · 01006)가 붙는다.
 probe = conn + [
     "echo '== 50_advisory_probe.sql'",
-    "rc=0; psql -X -v ON_ERROR_STOP=1 -f 50_advisory_probe.sql || rc=$?",
+    "rc=0; psql -X -v ON_ERROR_STOP=1 -v VERBOSITY=verbose"
+    " -f 50_advisory_probe.sql || rc=$?",
     "echo \"50 exit ${rc}\"",
     "echo '== 40_verify.sql'",
     "psql -X -1 -v ON_ERROR_STOP=1 -f 40_verify.sql",
@@ -251,10 +283,18 @@ for name, cmds, timeout in (("prepare", prepare, "600"),
 with open(os.path.join(out, "sql.sha256"), "w") as f:
     f.write("\n".join(sums) + "\n")
 PY
-cat "${payload}/sql.sha256"
+    printf '멈춤: 페이로드 만들기 실패\n' >&2
+    return 1
+  }
+  cat "${payload}/sql.sha256"
+}
+
+cd "$(git rev-parse --show-toplevel)"
+make_payload "<머지 커밋 SHA>"
 ```
 
-마지막 명령이 내는 sha256 일곱 줄을 기록합니다(8). 비밀번호는 페이로드에
+마지막 줄이 `SHA OK` 와 sha256 일곱 줄을 냅니다. 일곱 줄을 기록합니다(8).
+「멈춤」 이 나오면 보내지 않고 7(끔)로 갑니다. 비밀번호는 페이로드에
 없습니다 — 상자가 실행 때 비밀에서 받아 셸 변수(`PGPASSWORD`)로만 씁니다.
 psql 은 `-X`(개인 설정 무시) · `-1`(파일 하나 = 트랜잭션 하나) ·
 `ON_ERROR_STOP` 으로 돌고, 첫 실패에서 멈춥니다.
@@ -268,13 +308,16 @@ psql 은 `-X`(개인 설정 무시) · `-1`(파일 하나 = 트랜잭션 하나)
 
 결과 조회가 오류를 내면(거부 · 자격 만료 등) 그 오류를 그대로 보이고 곧바로
 멈춥니다 — 다시 시도하지 않습니다(SCP 멈춤 규칙). 예외는 보낸 직후 아직
-조회되지 않는 `InvocationDoesNotExist` 하나뿐이고, 60초까지만 기다립니다.
-기다림 전체에도 상한(전달 600초 + 실행 최대 600초 + 여유 120초 = 1320초)을
-두어 넘으면 멈춥니다. 함수가 「멈춤」 을 내면 7(실행기 끔)로 갑니다.
+조회되지 않는 `InvocationDoesNotExist` 하나뿐이고, 보낸 뒤 60초까지만
+기다립니다. `Pending` · `InProgress` · `Delayed` · `Cancelling` 은 아직 끝나지
+않은 상태라 계속 기다립니다. 기다림 전체에도 상한(전달 600초 + 실행 최대
+600초 + 여유 120초 = 1320초)을 두고, 보낸 시각부터 실제로 흐른 시간
+(`date +%s`)으로 재어 넘으면 멈춥니다. 끝난 뒤 결과 JSON 을 받거나 읽지
+못해도 멈춥니다. 함수가 「멈춤」 을 내면 7(실행기 끔)로 갑니다.
 
 ```shell
 send_step() {
-  local step="$1" cmd_id cmd_state waited=0 limit=1320
+  local step="$1" cmd_id cmd_state started elapsed limit=1320
   cmd_id="$(aws ssm send-command --region ap-northeast-2 \
     --document-name AWS-RunShellScript --instance-ids "${runner_id}" \
     --timeout-seconds 600 --comment "rt1a ${step}" \
@@ -283,10 +326,11 @@ send_step() {
     printf '멈춤: send-command 실패 — 다시 보내지 않고 7(끔)로 갑니다\n' >&2
     return 1
   }
+  started="$(date +%s)"
   while :; do
     sleep 10
-    waited=$((waited + 10))
-    if [ "${waited}" -gt "${limit}" ]; then
+    elapsed=$(($(date +%s) - started))
+    if [ "${elapsed}" -gt "${limit}" ]; then
       printf '멈춤: %s초 안에 끝나지 않음 — 7(끔)로 갑니다\n' "${limit}" >&2
       return 1
     fi
@@ -294,34 +338,52 @@ send_step() {
       --command-id "${cmd_id}" --instance-id "${runner_id}" \
       --query Status --output text 2>&1)"; then
       case "${cmd_state}" in
-        Pending | InProgress | Delayed) continue ;;
+        Pending | InProgress | Delayed | Cancelling) continue ;;
         *) break ;;
       esac
     fi
     case "${cmd_state}" in
       *InvocationDoesNotExist*)
-        [ "${waited}" -le 60 ] && continue ;;
+        [ "${elapsed}" -le 60 ] && continue ;;
     esac
     printf '%s\n' "${cmd_state}" >&2
     printf '멈춤: 결과 조회 실패 — 다시 시도하지 않고 7(끔)로 갑니다\n' >&2
     return 1
   done
-  aws ssm get-command-invocation --region ap-northeast-2 \
+  if ! aws ssm get-command-invocation --region ap-northeast-2 \
     --command-id "${cmd_id}" --instance-id "${runner_id}" \
-    --output json > "${payload}/${step}-result.json"
+    --output json >"${payload}/${step}-result.json"; then
+    printf '멈춤: 결과 JSON 조회 실패 — 다시 시도하지 않고 7(끔)로 갑니다\n' >&2
+    return 1
+  fi
   jq -r '.Status, "--- stdout", .StandardOutputContent,
-    "--- stderr", .StandardErrorContent' "${payload}/${step}-result.json"
+    "--- stderr", .StandardErrorContent' "${payload}/${step}-result.json" || {
+    printf '멈춤: 결과 JSON 을 읽지 못함 — 7(끔)로 갑니다\n' >&2
+    return 1
+  }
 }
 ```
 
 ### 5-3. 준비와 적용
 
-1.  **준비**(승인 뒤): `send_step prepare`. 상태 `Success` · sha256 일곱 줄
-    모두 `OK` · `psql --version` · 인증서 수(0 이 아님)를 봅니다. psql
-    패키지 `postgresql17` 이 AL2023 에 있는지는 미확인이라 없으면 16 을
-    깝니다(이 SQL 에는 16 클라이언트로 충분). CA 번들 주소는 RDS 문서의
-    지역 번들 꼴이고 원문 대조는 미확인입니다 — 받지 못하면 준비가
-    실패합니다.
+1.  **준비**(승인 뒤): `send_step prepare`. 상태 `Success` · `psql
+    --version` · 인증서 수(0 이 아님)를 보고, 상자가 낸 sha256 일곱 줄을
+    로컬 목록과 대조합니다 — `SHA256 OK` 가 아니면 7(끔)로 갑니다.
+
+    ```shell
+    jq -r '.StandardOutputContent' "${payload}/prepare-result.json" |
+      grep -E '^[0-9a-f]{64}  [0-9a-z_]+\.sql$' >"${payload}/box.sha256"
+    if cmp -s "${payload}/sql.sha256" "${payload}/box.sha256"; then
+      printf 'SHA256 OK\n'
+    else
+      printf '멈춤: 상자의 sha256 이 로컬 목록과 다름 — 7(끔)로 갑니다\n' >&2
+    fi
+    ```
+
+    psql 패키지 `postgresql17` 이 AL2023 에 있는지는 미확인이라 없으면
+    16 을 깝니다(이 SQL 에는 16 클라이언트로 충분). CA 번들 주소는 RDS
+    문서의 지역 번들 꼴이고 원문 대조는 미확인입니다 — 받지 못하면 준비가
+    실패합니다. 준비는 맨 앞에서 상자에 120분 뒤 자동 종료를 겁니다.
 1.  **적용**(승인 뒤): `send_step apply`. 통과는 상태 `Success` 이고 표준
     출력에 `PREFLIGHT OK` · `VERIFY OK` 가 있는 것입니다. 실패하면 「실패 ·
     시간 초과」 로 갑니다.
@@ -358,10 +420,12 @@ EXECUTE 를 PUBLIC 에서 회수할 수 있는지만 보고 ROLLBACK 합니다(K
 | 관측 | 뜻 |
 |---|---|
 | 표준 출력 `after` 행의 `public_execute` 가 `f` | 회수 가능(ROLLBACK 으로 되돌림) |
-| 표준 오류에 `WARNING: no privileges could be revoked` · `after` 가 `t` | 회수 불가 |
-| 표준 오류에 `ERROR` 42501 · 표준 출력 `50 exit 3` | 회수 불가(트랜잭션째 끝남) |
+| 표준 오류에 `WARNING:  01006: no privileges could be revoked` · `after` 가 `t` | 회수 불가 |
+| 표준 오류에 `ERROR:  42501:` · 표준 출력 `50 exit 3` | 회수 불가(트랜잭션째 끝남) |
 
-이 출력이 1단-나의 재료입니다(8 에서 기록). 1단-나에 넘길 내용:
+50 은 `VERBOSITY=verbose` 로 돌아 오류 · 경고 줄에 SQLSTATE 가 붙습니다 —
+`50 exit 3` 이 42501 이 아닌 다른 오류로 났으면 「실패 · 시간 초과」 로
+갑니다. 이 출력이 1단-나의 재료입니다(8 에서 기록). 1단-나에 넘길 내용:
 
 *   쓰는 쪽이 둘입니다. 사이드카 `media_indexer` 가 컷오프 경로에서
     `pg_advisory_xact_lock(hashtext('pc_cutoff_' || …))` 을 씁니다
@@ -377,18 +441,29 @@ EXECUTE 를 PUBLIC 에서 회수할 수 있는지만 보고 ROLLBACK 합니다(K
 
 ## 7. 실행기 끔
 
-1.  1 의 점검을 다시 합니다. **결과가 CHANGED · DENIED 여도 끔은 진행하고**
-    결과만 보고합니다 — 끔은 잔여 정리라 막지 않습니다.
-1.  **지금 남은 실행기 자원 수 N**: 상태의 자원 주소만 셉니다(계정 ID ·
-    ARN 은 나오지 않음). 4 가 끝까지 됐으면 9 이고, 4 가 중간에
-    실패했으면(예: 인스턴스만 실패) 그보다 작습니다 — 이 걸음이 그런 부분
-    생성도 같은 길로 정리합니다. N 이 0 이면 지울 것이 없으니 아래 「잔여 0」
-    으로 갑니다.
+1.  1 의 점검을 다시 합니다. **결과가 CHANGED · DENIED · STOP ·
+    UNDECIDED 여도 끔은 진행하고** 결과만 보고합니다 — 끔은 잔여 정리라
+    막지 않습니다.
+1.  **지금 남은 실행기 자원 수 N**: 상태의 자원 주소 가운데 실행기 자원
+    아홉의 주소(`runner_re` — 앵커 일치 허용 목록)만 셉니다(계정 ID · ARN
+    은 나오지 않음). 4 가 끝까지 됐으면 9 이고, 4 가 중간에 실패했으면(예:
+    인스턴스만 실패) 그보다 작습니다 — 이 걸음이 그런 부분 생성도 같은 길로
+    정리합니다. N 이 0 이면 지울 것이 없으니 아래 「잔여 0」 으로 갑니다.
+    `state list` 가 실패하면 N 을 0 으로 치지 않고 멈춥니다. 실행기 자원을
+    더하거나 이름을 바꾸는 PR 은 `runner_re` 도 함께 고칩니다.
 
     ```shell
     cd "$(git rev-parse --show-toplevel)/infra/terraform/prod/runtime"
-    n="$(terraform state list | grep -c sql_runner)"
-    printf 'N=%s\n' "${n}"
+    runner_re='^(aws_iam_role\.sql_runner|aws_iam_role_policy_attachment\.sql_runner_ssm|aws_iam_role_policy\.sql_runner_master_secret|aws_iam_instance_profile\.sql_runner|aws_security_group\.sql_runner|aws_vpc_security_group_egress_rule\.sql_runner_(https|to_rds)|aws_vpc_security_group_ingress_rule\.rds_from_sql_runner|aws_instance\.sql_runner)\[0\]$'
+    count_runner() {
+      local addrs
+      addrs="$(terraform state list)" || {
+        printf '멈춤: state list 실패 — N 을 0 으로 치지 않습니다\n' >&2
+        return 1
+      }
+      printf 'N=%s\n' "$(printf '%s\n' "${addrs}" | grep -cE "${runner_re}")"
+    }
+    count_runner
     ```
 
 1.  **plan**: `-var` 없이(기본 꺼짐) plan 하고, 바뀌는 자원 수와 그 가운데
@@ -397,10 +472,10 @@ EXECUTE 를 PUBLIC 에서 회수할 수 있는지만 보고 ROLLBACK 합니다(K
     ```shell
     rm -f runner-off.tfplan
     terraform plan -out=runner-off.tfplan
-    terraform show -json runner-off.tfplan | jq -r '
+    terraform show -json runner-off.tfplan | jq -r --arg re "${runner_re}" '
       [.resource_changes[] | select(.change.actions != ["no-op"])]
       | "바뀜 \(length) · 실행기 삭제 \(map(select(
-          .change.actions == ["delete"] and (.address | contains("sql_runner"))
+          .change.actions == ["delete"] and (.address | test($re))
         )) | length)"'
     ```
 
@@ -408,10 +483,11 @@ EXECUTE 를 PUBLIC 에서 회수할 수 있는지만 보고 ROLLBACK 합니다(K
     줄이 「바뀜 N · 실행기 삭제 N」(둘 다 앞에서 센 N)일 때만 kty 승인을
     받습니다. 그 밖이면 apply 하지 않고 멈춥니다.
 1.  **apply**: `terraform apply runner-off.tfplan && rm runner-off.tfplan`.
-1.  **잔여 0**: 아래가 모두 0(마지막 둘은 `NoSuchEntity` 오류)이어야 합니다.
+1.  **잔여 0**: 아래가 모두 0(첫 줄은 `N=0`, 마지막 둘은 `NoSuchEntity`
+    오류)이어야 합니다.
 
     ```shell
-    terraform state list | grep -c sql_runner
+    count_runner
     aws ec2 describe-instances --region ap-northeast-2 \
       --filters Name=tag:Name,Values=pokeclip-prod-sql-runner \
         Name=instance-state-name,Values=pending,running,stopping,stopped \
@@ -477,9 +553,10 @@ send-command 상태가 `Success` 가 아니거나(`Failed` · `TimedOut` ·
 
 ## 한계
 
-*   `runtime-1a` 는 2-3 판정이 없습니다(K5). POK-365 전까지 런타임 자원은
-    미판정이고, 실행기가 켜진 동안 `iam:PassRole` 을 가진 dev 주체가 이
-    프로필로 마스터 비밀을 읽을 수 있습니다. 그래서 SQL 직후 끕니다.
+*   2-3 판정(1 의 ②)은 prod 역할의 권한 변경은 묻지만 실행기 역할의
+    `iam:PassRole` 은 묻지 않습니다. 실행기가 켜진 동안 `iam:PassRole` 을
+    가진 dev 주체가 이 프로필로 상자를 띄워 마스터 비밀을 읽을 수 있습니다.
+    그래서 SQL 직후 끄고, 잊어도 상자는 120분 뒤 스스로 멈춥니다.
 *   SQL 실적용 시험(CI)은 Go 메타 명령 처리기로 돌고 psql 자체가 아니며,
     대역은 `rds_superuser` 가 아닙니다. TLS · `rds.force_ssl` 은 CI 가 재지
     못합니다.

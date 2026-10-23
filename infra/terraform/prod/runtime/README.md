@@ -64,9 +64,10 @@ default_tags 가 붙는지는 미확인이고, 런북 「운영 확인」 에서
 | `rewind_bucket_name` · `rewind_bucket_arn` · `rewind_bucket_regional_domain_name` | edge — `rewind-s3` 오리진 · media — 업로드 정책 · 런타임 2단 — 버킷 정책 |
 | `app_secret_arns`(서비스 → env 이름 → 전체 ARN) | platform — `ecs_service.secrets` · 실행 역할 읽기 정책. auth 일곱 · clip 둘(`JWT_SECRET` · `INTERNAL_API_TOKEN`) · chat-collector 둘(`INTERNAL_API_TOKEN` · `CHZZK_CLIENT_SECRET`) · chat-detector 하나(`INTERNAL_API_TOKEN`) |
 | `media_secret_arns` | media — 인스턴스 역할 읽기 정책 · 응답기 시작 스크립트. `INTERNAL_API_TOKEN` 하나(앱과 같은 그릇) |
-| `app_env`(서비스 → env 이름 → 값) | platform — `ecs_service.environment`. 네 서버 모두 `DB_HOST` · `DB_PORT` · `POSTGRES_DB`, auth 는 `STREAM_KEY_SECRET_REF_PREFIX`, clip · chat-collector 는 자기 큐의 `BROADCAST_QUEUE_URL`. 수신 스위치 `BROADCAST_INTAKE_ENABLED` 와 `AUTH_BASE_URL` 은 여기 없고 2단 platform 이 넣는다 — 스위치가 빠지면 큐를 읽지 않아 편지가 보관 기간 뒤 사라진다 |
+| `app_env`(서비스 → env 이름 → 값) | platform — `ecs_service.environment`. 네 서버 모두 `DB_HOST` · `DB_PORT` · `POSTGRES_DB`, auth 는 `STREAM_KEY_SECRET_REF_PREFIX`, clip · chat-collector 는 자기 큐의 `BROADCAST_QUEUE_URL`. 수신 스위치 `BROADCAST_INTAKE_ENABLED` 와 `AUTH_BASE_URL` 은 여기 없고 platform 이 넣는다 — 스위치가 빠지면 큐를 읽지 않아 편지가 보관 기간 뒤 사라진다 |
 | `broadcast_topic_arn` | media — 사이드카 역할의 `sns:Publish` 대상 |
-| `broadcast_queue_arns`(소비자 clip · chat → 큐 ARN) | platform — clip · chat-collector 의 수신 정책 대상 |
+| `broadcast_queue_arns`(소비자 clip · chat → 큐 ARN) | chat-collector(POK-306)의 수신 정책 대상. clip 은 `app_task_resource_arns` 를 쓴다 |
+| `app_task_resource_arns`(서비스 → 키 → ARN) | platform — 작업 역할 정책 Resource(키 = platform 의 `task_resource_keys`). 지금은 clip 의 `broadcast_queue_arn` 하나 — 일 큐 · 버킷 키는 런타임 다음 PR(POK-408) |
 | `rds_master_user_secret_arn` | 운영 전용(계약 아님) — SQL 실행기 역할 정책 · 런북 |
 | `sql_runner_instance_id` | 운영 전용(계약 아님) — send-command 대상. 꺼져 있으면 null |
 
@@ -82,8 +83,9 @@ IP · 인그레스 없음, IMDSv2 필수, 루트 볼륨 암호화). 역할은 SS
 관리형 마스터 비밀 하나의 `GetSecretValue` 만 가집니다.
 
 SQL 을 적용한 뒤 곧바로 끕니다. 켜진 동안 `iam:PassRole` 을 가진 dev 주체가
-이 프로필로 상자를 띄워 마스터 비밀을 읽을 수 있기 때문입니다. 이 노출의
-판정은 POK-365 입니다.
+이 프로필로 상자를 띄워 마스터 비밀을 읽을 수 있기 때문입니다. 2-3
+판정(POK-365)은 이 `iam:PassRole` 을 묻지 않습니다. 잊어도 상자는 준비
+단계가 건 자동 종료로 120분 뒤 멈춥니다(런북 4 · 5-3).
 
 ## 대안
 
@@ -125,12 +127,30 @@ SQL 을 적용한 뒤 곧바로 끕니다. 켜진 동안 `iam:PassRole` 을 가�
     결과).
 1.  앱 서버 사용자에게 `public` 스키마 CREATE 부여(Flyway).
 1.  IAM 인증을 못 쓰는 대체 갈래면 `POSTGRES_PASSWORD` 그릇.
-1.  POK-365 — 런타임 자원을 2-3 판정 대상에 넣기(O7e 전 권장).
+1.  런타임 자원 행(RDS · SNS · SQS · rewind 버킷)을 2-3 판정 대상
+    (`scripts/precheck/data/principal_sim/prod_targets.tsv`)에 더하기. 설계
+    K5 는 바뀌었습니다 — POK-365 완료로 `runtime-1a` 는 2-3 판정 단계이고
+    (O7c 뒤 · O7d 앞, kty 2026-10-23), 지금 대상은 런타임 상태 객체입니다.
 1.  `scripts/put-secret-from-file.sh` 의 비밀 종류 확장(O7d 앞).
 1.  응답기 비밀 최소 권한(K1) — 응답기가 앱과 같은 `INTERNAL_API_TOKEN` 을
     써서 Media 상자가 auth `/internal/**` 전부에 통하는 열쇠를 가집니다. 전용
     토큰으로 옮길지는 3번과 다시 합의해야 합니다(auth
     `FORWARD_HEADERS_STRATEGY` 제약).
+
+## 한계
+
+고치지 않고 남긴 것입니다(PR 본문에도 한 줄씩).
+
+*   SQL 실행기 SG 의 이그레스 443 은 `0.0.0.0/0` 전체입니다 — SSM 끝점 ·
+    패키지 저장소 · CA 번들을 NAT 로 받기 때문이고, VPC 엔드포인트는 두지
+    않았습니다.
+*   상자가 받는 RDS CA 번들은 지문을 대조하지 않습니다 — HTTPS(curl 기본
+    인증서 검증)만 믿습니다.
+*   SQL 적용 뒤 마스터 비밀 순환(`rotate-secret`)은 하지 않습니다. 실행기가
+    켜진 동안의 노출이 걱정되면 운영자가 고를 수 있는 선택지로 남습니다.
+*   관리형 마스터 비밀(`rds!db-*`)의 생성 · 태그 동작은 `runtime-1a` 묶음이
+    그릇 경로(`pokeclip/prod/*`)로 대신 판정합니다. SCP 가 그 이름만 거부하면
+    점검은 통과하고 apply 가 거부로 멈춥니다(런북 2).
 
 ## See also
 

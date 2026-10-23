@@ -4,12 +4,14 @@
 # media 루트, 수신 권한은 platform 루트가 자기 역할에 붙인다(CONTRACT-runtime.md
 # 「출력과 소유 경계」).
 #
-# 중복 제거: 주제 · 큐 모두 내용 기반 중복 제거를 끈다. 발행자가
-# MessageDeduplicationId = eventId 를 준다 — 빠뜨리면 발행이 시끄럽게 실패한다.
-# 켜면 본문이 다른 재시도가 멱등을 깬다(D3).
+# 중복 제거: 좌표는 발행자가 주는 MessageDeduplicationId = eventId 다(D3).
+# 명시 ID 는 내용 기반 중복 제거보다 우선한다. 그래서 주제 · 큐에서 내용 기반
+# 중복 제거를 끈 실제 효과는 하나다 — ID 를 빠뜨린 발행이 본문 해시로 조용히
+# 중복 제거되지 않고 실패한다.
 #
 # 암호화: 큐는 SSE-SQS. 주제는 끈다 — 발행자 KMS 권한이 미확인이다(D4 · PR
-# 한계).
+# 한계). 그래서 편지는 주제에 머무는 동안 서버 측 암호화가 없고, 큐에 들어간
+# 뒤부터 SSE-SQS 로 암호화된다.
 
 variable "broadcast_queue_visibility_timeout_seconds" {
   description = "계약9 큐의 숨김 시간(초). 3번 확인 전 임시값(dev 관례값)."
@@ -130,7 +132,19 @@ output "broadcast_topic_arn" {
   value       = aws_sns_topic.broadcast_lifecycle.arn
 }
 
+# chat-collector(POK-306)가 아직 platform 서비스가 아니라 chat 큐의 수신
+# 정책 대상은 이 출력에 남는다. clip 은 app_task_resource_arns 로 받는다.
 output "broadcast_queue_arns" {
-  description = "소비자(clip · chat) → 계약9 SQS FIFO 큐 ARN — platform 의 수신 정책 대상. 큐 URL 은 app_env 에 있다."
+  description = "소비자(clip · chat) → 계약9 SQS FIFO 큐 ARN. chat-collector(POK-306) 수신 정책 대상이고, clip 은 app_task_resource_arns 를 쓴다. 큐 URL 은 app_env 에 있다."
   value       = { for consumer, queue in aws_sqs_queue.broadcast : consumer => queue.arn }
+}
+
+# platform 이 clip 작업 역할 정책을 만드는 지도(CONTRACT-runtime.md 「작업
+# 역할 대상」). 키는 platform 의 task_resource_keys 와 같은 이름이고, 일 큐 ·
+# 버킷 키는 런타임 다음 PR 이 더한다(kty 2026-10-23).
+output "app_task_resource_arns" {
+  description = "서비스 → 키 → ARN(와일드카드 없음) — platform 작업 역할 정책 Resource. 지금은 clip 의 broadcast_queue_arn 하나."
+  value = {
+    clip = { broadcast_queue_arn = aws_sqs_queue.broadcast["clip"].arn }
+  }
 }

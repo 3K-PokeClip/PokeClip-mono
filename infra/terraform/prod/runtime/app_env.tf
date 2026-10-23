@@ -15,11 +15,13 @@ locals {
 # 방송 편지는 팬아웃이라 clip 과 chat-collector 가 각자 자기 큐를 받는다 — 같은
 # 큐를 가리키면 두 서버가 편지를 서로 뺏는다.
 #
-# 큐 수신 스위치 BROADCAST_INTAKE_ENABLED(두 서버 기본 false)는 여기 두지
-# 않는다. 켜면 auth 내부 주소 AUTH_BASE_URL 도 함께 필요한데 그 값은 서비스를
-# 띄우는 2단 platform 이 안다. 그래서 스위치와 주소는 platform 이 같이 넣는다
-# (kty 2026-10-23). 둘 다 빠지면 서버는 뜨지만 큐를 읽지 않아 편지가 보관
-# 기간 뒤 사라진다 — 2단 리뷰의 확인 항목이다.
+# 큐 수신 스위치 BROADCAST_INTAKE_ENABLED(두 서버 기본 false)와 auth 내부
+# 주소 AUTH_BASE_URL 은 여기 두지 않는다. 주소는 서비스를 띄우는 platform 이
+# 알아서 스위치와 같이 넣는다(kty 2026-10-23). 스위치가 빠지면 서버는 뜨지만
+# 큐를 읽지 않아 편지가 보관 기간 뒤 사라진다 — platform 리뷰의 확인 항목이다.
+# 주소가 빠지면 clip 은 부팅을 거부하고, chat-collector 는 기본값(localhost)
+# 으로 떠서 주소가 틀린 채 돈다. 켜면 auth 내부 호출에 INTERNAL_API_TOKEN 도
+# 쓴다(그릇은 app_secret_arns).
 output "app_env" {
   description = "서비스 → env 이름 → 값(비밀 아님) — platform 의 ecs_service.environment."
   value = {

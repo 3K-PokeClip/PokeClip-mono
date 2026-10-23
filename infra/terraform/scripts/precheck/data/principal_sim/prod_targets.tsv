@@ -6,7 +6,8 @@
 #
 # 첫 단계 = 그 자원을 만드는 루트를 apply 하는 단계(런북 단계 표 ·
 # stage_actions 의 출처 주석): bootstrap · secrets = 5, network = O7a,
-# certs = O7b, registry = O7c. 그 단계부터 뒤 단계마다 묻는다.
+# certs = O7b, registry = O7c, runtime = runtime-1a. 그 단계부터 뒤 단계마다
+# 묻는다.
 # 상태 객체 키 = 각 루트 backend.hcl.example 의 key, 상태 버킷 이름 =
 # prod/bootstrap 의 state_bucket_name 기본값.
 # 해석 tag:<서비스>:<유형> 은 Resource Groups Tagging API 의
@@ -33,6 +34,7 @@ state-object-secrets	5	arn:arn:aws:s3:::pokeclip-tfstate-prod-apne2/prod/secrets
 state-object-network	O7a	arn:arn:aws:s3:::pokeclip-tfstate-prod-apne2/prod/network/terraform.tfstate	object	ap-northeast-2	s3:GetObject,s3:PutObject,s3:DeleteObject	s3	-
 state-object-certs	O7b	arn:arn:aws:s3:::pokeclip-tfstate-prod-apne2/prod/certs/terraform.tfstate	object	ap-northeast-2	s3:GetObject,s3:PutObject,s3:DeleteObject	s3	-
 state-object-registry	O7c	arn:arn:aws:s3:::pokeclip-tfstate-prod-apne2/prod/registry/terraform.tfstate	object	ap-northeast-2	s3:GetObject,s3:PutObject,s3:DeleteObject	s3	-
+state-object-runtime	runtime-1a	arn:arn:aws:s3:::pokeclip-tfstate-prod-apne2/prod/runtime/terraform.tfstate	object	ap-northeast-2	s3:GetObject,s3:PutObject,s3:DeleteObject	s3	-
 
 # 비밀 pokeclip/prod/* · ECR pokeclip-prod/*
 secrets	5	tag:secretsmanager:secret	secret	ap-northeast-2	secretsmanager:GetSecretValue,secretsmanager:PutSecretValue,secretsmanager:UpdateSecret,secretsmanager:DeleteSecret,secretsmanager:PutResourcePolicy,secretsmanager:DeleteResourcePolicy,secretsmanager:TagResource,secretsmanager:UntagResource	secretsmanager	-

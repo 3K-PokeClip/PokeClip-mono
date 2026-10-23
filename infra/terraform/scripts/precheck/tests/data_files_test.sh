@@ -30,11 +30,11 @@ readonly EVENT_NAMES="${DATA_DIR}/event_names.txt"
 BUNDLES=(1b 5 O7a O7b O7c O7d O7e O7e-stop1 O7f O7f-stop2 testkey loopback 8
   8a 9 ci-followup lease-expiry runtime-1a)
 readonly BUNDLES
-# 2-3 판정을 하는 묶음과 하지 않는 묶음(계획 3절 · 5절 표).
-JUDGED_BUNDLES=(5 O7a O7b O7c O7d O7e O7f 8 8a 9 ci-followup)
+# 2-3 판정을 하는 묶음과 하지 않는 묶음(계획 3절 · 5절 표). runtime-1a 는
+# POK-365 완료로 판정 묶음이다(kty 2026-10-23 — O7c 뒤 · O7d 앞).
+JUDGED_BUNDLES=(5 O7a O7b O7c runtime-1a O7d O7e O7f 8 8a 9 ci-followup)
 readonly JUDGED_BUNDLES
-UNJUDGED_BUNDLES=(1b O7e-stop1 O7f-stop2 testkey loopback lease-expiry
-  runtime-1a)
+UNJUDGED_BUNDLES=(1b O7e-stop1 O7f-stop2 testkey loopback lease-expiry)
 readonly UNJUDGED_BUNDLES
 # 2-3 판정 · 이벤트 조회 자신의 읽기 동작(설계 11-5 의 2-3-7 · 2-3-8).
 JUDGE_READS=(iam:GetAccountAuthorizationDetails
@@ -81,16 +81,9 @@ readonly PRINCIPAL_READS
 # 2-3 판정이 없는 묶음이 자기 단계 동작으로 가진 판정 읽기 동작(JUDGE_READS
 # · PRINCIPAL_READS 와 이름이 같은 「묶음 동작」). 「묶음 이름 + 동작」 정확
 # 일치 쌍만 받는다 — 와일드카드 · 동작만 쓰는 예외는 없다(계획 rt1a H1).
-# lease-expiry 는 공유 존 조회, runtime-1a 는 Terraform 자기 읽기와 이벤트
-# 기록 조회다. 쌍마다 묶음 · 동작 · 필요는 expect_stage_own_reads_scoped 가
-# 본다.
-STAGE_OWN_READS=('lease-expiry route53:ListHostedZonesByName'
-  'runtime-1a s3:GetBucketPolicy' 'runtime-1a secretsmanager:GetResourcePolicy'
-  'runtime-1a sns:GetTopicAttributes' 'runtime-1a sqs:GetQueueAttributes'
-  'runtime-1a ec2:DescribeInstances' 'runtime-1a iam:GetRole'
-  'runtime-1a iam:GetInstanceProfile'
-  'runtime-1a iam:ListAttachedRolePolicies'
-  'runtime-1a cloudtrail:LookupEvents')
+# lease-expiry 는 공유 존 조회다. 쌍마다 묶음 · 동작 · 필요는
+# expect_stage_own_reads_scoped 가 본다.
+STAGE_OWN_READS=('lease-expiry route53:ListHostedZonesByName')
 readonly STAGE_OWN_READS
 # 자원 정책을 가지는 서비스(그 행은 정책 읽기 방법 none 을 쓸 수 없다).
 readonly POLICY_SERVICES=' s3 secretsmanager ecr sns sqs kms lambda '
@@ -296,8 +289,8 @@ expect_judge_reads() {
       return
     fi
   done
-  testlib::ok "judge-reads → 2-3 판정 묶음 11개에만(묶음 자기 동작 쌍 뺌) ·" \
-    "DescribeRegions 0"
+  testlib::ok "judge-reads → 2-3 판정 묶음" \
+    "${#JUDGED_BUNDLES[@]}개에만(묶음 자기 동작 쌍 뺌) · DescribeRegions 0"
 }
 
 #######################################
@@ -849,7 +842,7 @@ expect_dev_principals() {
 }
 
 #######################################
-# 데이터 단언: PRINCIPAL_READS(동작 · 리전)가 판정 묶음 11개 모두에 자원
+# 데이터 단언: PRINCIPAL_READS(동작 · 리전)가 판정 묶음 모두에 자원
 # 「*」 로 있고(래퍼가 읽는 dev 주체 · 대상은 단계 자원 경로 밖이다 — 예 dev
 # 역할의 get-role), 판정이 없는 묶음에는 그 동작이 없다(STAGE_OWN_READS 의
 # 묶음 동작은 뺌).
@@ -881,7 +874,8 @@ expect_principal_reads() {
       fi
     done
   done
-  testlib::ok "principal-reads → 래퍼 읽기 동작 · 리전이 자원 * 로 판정 묶음 11개에만"
+  testlib::ok "principal-reads → 래퍼 읽기 동작 · 리전이 자원 * 로" \
+    "판정 묶음 ${#JUDGED_BUNDLES[@]}개에만"
 }
 
 #######################################
@@ -910,8 +904,8 @@ expect_wrapper_accepts_data() {
       return
     fi
   done
-  testlib::ok "wrapper-data → 실제 래퍼가 실제 데이터를 판정 단계 11개 모두" \
-    "받음"
+  testlib::ok "wrapper-data → 실제 래퍼가 실제 데이터를 판정 단계" \
+    "${#JUDGED_BUNDLES[@]}개 모두 받음"
 }
 
 main() {

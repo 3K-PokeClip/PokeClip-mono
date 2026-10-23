@@ -1,6 +1,6 @@
 # 계약9 방송 생명주기 이벤트(POK-309 · 설계 D3 · D4 · D5) — SNS FIFO 주제 하나,
 # 소비자(clip · chat)마다 SQS FIFO 큐 · 전용 DLQ · 재처리 허용 · raw 구독 ·
-# 큐 정책, 큐 값 변수 기본값 넷, 출력 둘을 단언한다. ARN · URL 은 mock 이
+# 큐 정책, 큐 값 변수 기본값 넷, 출력 셋을 단언한다. ARN · URL 은 mock 이
 # 만드는 가짜 값이다. override_data 가 network 원격 상태를 대신하므로 S3 를
 # 읽지 않는다(AWS 호출 0).
 
@@ -286,5 +286,28 @@ run "outputs_topic_and_queue_arns" {
       chat = aws_sqs_queue.broadcast["chat"].arn
     }
     error_message = "출력 broadcast_queue_arns 가 소비자 → 원 큐 ARN(clip · chat)이 아니다."
+  }
+}
+
+# platform 은 clip 작업 역할의 수신 문장을 app_task_resource_arns 의
+# 키로 만든다(prod/platform remote_state.tf 의 task_resource_keys). 일 큐 ·
+# 버킷 키는 런타임 다음 PR 이 더한다 — 지금은 clip 의 계약9 큐 하나뿐이다.
+run "outputs_clip_broadcast_queue_as_task_resource" {
+  command = apply
+
+  assert {
+    condition = output.app_task_resource_arns == {
+      clip = { broadcast_queue_arn = aws_sqs_queue.broadcast["clip"].arn }
+    }
+    error_message = "출력 app_task_resource_arns 가 { clip = { broadcast_queue_arn = clip 큐 ARN } } 이 아니다."
+  }
+
+  assert {
+    condition = alltrue(flatten([
+      for arns in values(output.app_task_resource_arns) : [
+        for arn in values(arns) : !strcontains(arn, "*")
+      ]
+    ]))
+    error_message = "app_task_resource_arns 의 값에 와일드카드가 있다."
   }
 }
