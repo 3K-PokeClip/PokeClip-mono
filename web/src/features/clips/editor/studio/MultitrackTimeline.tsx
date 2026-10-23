@@ -279,7 +279,7 @@ export function MultitrackTimeline({
                       (state.thumbnailSeconds ?? state.range.startSeconds) -
                         state.range.startSeconds,
                     )}
-                    video={state.previewVideo}
+                    source={state.filmstripSource}
                     onSeek={state.seekTo}
                   />
                 </span>
@@ -415,8 +415,11 @@ export function MultitrackTimeline({
               ) : null}
               {/* 창 밖이면 그리지 않는다. 클램프된 채 두면 눈금 가장자리에 딱 붙어
                   실제와 다른 시각을 현재 위치처럼 읽게 한다. */}
-              {state.thumbnailSeconds !== null ? (
+              {state.thumbnailSeconds !== null &&
+              state.thumbnailSeconds >= state.view.startSeconds &&
+              state.thumbnailSeconds <= state.view.endSeconds ? (
                 <span
+                  data-thumbnail-marker
                   className={styles.thumbnailMarker}
                   style={{
                     left: `${secondsToFraction(state.thumbnailSeconds, state.view) * 100}%`,

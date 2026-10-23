@@ -323,6 +323,47 @@ describe('StudioScreen', () => {
     expect(ticks()).not.toEqual(before);
   });
 
+  it('키운 창 밖으로 나간 썸네일 표시는 그리지 않는다: 가장자리에 붙으면 그 시각에 고른 것처럼 읽힌다(봇 리뷰)', async () => {
+    const user = userEvent.setup();
+    let setPosition: (seconds: number) => void = () => {};
+    function Harness() {
+      const [position, setPos] = useState(105);
+      setPosition = setPos;
+      return (
+        <StudioEditor
+          source={{
+            clipTitle: '카드',
+            sourceLabel: '방송',
+            durationSeconds: 400,
+            range: { startSeconds: 100, endSeconds: 160 },
+          }}
+          playback={{
+            playing: false,
+            currentSeconds: position,
+            durationSeconds: 400,
+            error: null,
+            togglePlay: vi.fn(),
+            seekTo: setPos,
+            seekBy: vi.fn(),
+            setRate: vi.fn(),
+            setBounds: vi.fn(),
+          }}
+        />
+      );
+    }
+    renderWithProviders(<Harness />);
+    const bar = screen.getByRole('toolbar', { name: '재생과 구간' });
+    await user.click(within(bar).getByRole('button', { name: '이 장면을 썸네일로' }));
+    const marker = () => document.querySelector('[data-thumbnail-marker]');
+    expect(marker()).not.toBeNull();
+
+    await user.click(within(bar).getByRole('button', { name: '타임라인 한 단계 확대' }));
+    await user.click(within(bar).getByRole('button', { name: '타임라인 한 단계 확대' }));
+    // 재생 위치가 멀리 가면 창이 따라가고, 105초에 고른 썸네일은 창 밖이다
+    act(() => setPosition(155));
+    expect(marker()).toBeNull();
+  });
+
   it('키우면 구간보다 좁게 재생 위치 둘레만 보이고, 밖으로 나간 끝은 가장자리 표시가 대신한다(POK-389)', async () => {
     const user = userEvent.setup();
     const seekTo = vi.fn();
