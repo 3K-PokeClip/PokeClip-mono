@@ -31,7 +31,8 @@
 # lib/unit_runtime_cases.sh 에 있다. 사례 15 – 17 은 크래시 경로(compose 플러그인
 # · 유닛 cgroup SIGKILL · 유닛 밖에 남은 스택 — 옛 비밀을 붙든 컨테이너가 남지
 # 않는지)이고 lib/unit_crash_cases.sh 에 있다. 사례 19 는 기동 중(비밀 조회 중)
-# 정지다.
+# 정지다. 사례 22 · 23 은 응답기 모드 D8(응답기만 재생성 · 양성 대조 — 부착
+# 서비스 재생성)이고 lib/unit_ingest_auth_cases.sh 에 있다.
 #
 # 한 바퀴 약 8분이다. 반복(N=3)은 부르는 쪽(CI)이 이 시험을 여러 번 돌린다.
 #
@@ -53,6 +54,8 @@ source "${TEST_DIR}/lib/harness.sh"
 source "${TEST_DIR}/lib/unit_runtime_cases.sh"
 # shellcheck source=lib/unit_crash_cases.sh
 source "${TEST_DIR}/lib/unit_crash_cases.sh"
+# shellcheck source=lib/unit_ingest_auth_cases.sh
+source "${TEST_DIR}/lib/unit_ingest_auth_cases.sh"
 
 readonly PROJECT='pcbench-edge-proxy'
 readonly UNIT_NAME='pcbench-edge-proxy'
@@ -77,7 +80,7 @@ readonly FAKE_SECRET='pcbench-edge-proxy-fake-cdn-secret'
 readonly UNIT_BASE_PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin'
 readonly CONFIG_TIMEOUT=60
 readonly SYSTEMCTL_TIMEOUT=120
-readonly CASE_COUNT=21
+readonly CASE_COUNT=23
 
 # prod 유닛 지시어(설명 줄 Description= 은 빼고) — 「절|키=값」 한 줄에 하나.
 # 줄 잇기(끝 백슬래시)는 systemd 처럼 이어 붙인 한 줄로 적는다. 담는 것: docker
@@ -284,11 +287,7 @@ check_case_20() {
     status=0
     out="$(PATH="${dir}:${PATH}" PCBENCH_FAKE_JOURNAL="${mode}" \
       unit::journal_count -u pcbench-none 0 'MEDIA START FAIL')" || status=$?
-    if (( status != 0 )); then
-      out="실패:${out}"
-    else
-      out="0:${out}"
-    fi
+    case "${status}" in 0) out="0:${out}" ;; *) out="실패:${out}" ;; esac
     if [[ "${out}" != "${want}" ]]; then
       harness::add_reason "갈래 ${mode}: 「${out}」(기대 「${want}」)"
       ok=1
@@ -333,11 +332,7 @@ check_case_21() {
       out="$(PATH="${dir}:${PATH}" PCBENCH_FAKE_FIND="${mode}" \
         unit::render_count -name mediamtx.yml)" || status=$?
     fi
-    if (( status != 0 )); then
-      out="실패:${out}"
-    else
-      out="0:${out}"
-    fi
+    case "${status}" in 0) out="0:${out}" ;; *) out="실패:${out}" ;; esac
     if [[ "${out}" != "${want}" ]]; then
       harness::add_reason "렌더 파일 갈래 ${mode}: 「${out}」(기대 「${want}」)"
       ok=1
@@ -362,11 +357,7 @@ check_case_21() {
           crash::render_dirs)" || status=$?
         ;;
     esac
-    if (( status != 0 )); then
-      out="실패:${out}"
-    else
-      out="0:${out}"
-    fi
+    case "${status}" in 0) out="0:${out}" ;; *) out="실패:${out}" ;; esac
     if [[ "${out}" != "${want}" ]]; then
       harness::add_reason "렌더 자리 디렉터리 갈래 ${mode}: 「${out}」(기대 「${want}」)"
       ok=1
@@ -786,6 +777,10 @@ main() {
     crash::case_cgroup_kill
   harness::run_case 17 '남은 스택 · 지운 렌더 → 디렉터리 0 · 시작이 새로 만듦' \
     crash::case_leftover_stack
+  harness::run_case 22 'D8 응답기만 재생성 → 유닛 · 부착 서비스 불변' \
+    responder::case_recreate_only
+  harness::run_case 23 'D8 양성 대조 — 부착 nginx 재생성 → Aborting · ID 바뀜' \
+    responder::case_attached_recreate
   harness::run_case 18 '⑤ 정리 — 유닛 · 설치본 · 컨테이너 · 망 · 볼륨 0' \
     check_case_18
 
