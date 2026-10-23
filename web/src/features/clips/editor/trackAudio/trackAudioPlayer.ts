@@ -68,6 +68,11 @@ export class TrackAudioPlayer {
     this.anchor = null;
   }
 
+  /** 소리 시계가 흐르는가. 브라우저가 문맥을 멈춰 두면(suspended) 시계가 서서 어긋남을 잴 수 없다 */
+  get running(): boolean {
+    return this.ctx.state === 'running';
+  }
+
   /** 소리가 지금 내고 있는 자리(편집기 초). 세워 두었으면 null */
   position(): number | null {
     const anchor = this.anchor;
@@ -81,8 +86,11 @@ export class TrackAudioPlayer {
   }
 }
 
+/** HTMLMediaElement.HAVE_FUTURE_DATA: 지금 장면 다음까지 받아 두었다(흐를 수 있다) */
+const HAVE_FUTURE_DATA = 3;
+
 /**
- * 소리를 영상 노드에 묶는다. 따라가는 동안 영상 소리는 끈다(두 소리가 겹치면 트랙을 꺼도 들린다).
+ * 소리를 영상 노드에 묶는다. 영상 소리를 끄는 것은 훅(useTrackPreview)이 맡는다: 다시 받는 동안에도 꺼 둬야 해서다.
  * @param sourceSeconds 영상 노드의 지금 자리를 편집기 초로(창 시작 + currentTime)
  * @returns 그만두기: 소리를 세우고 영상 소리를 원래대로
  */
@@ -91,9 +99,12 @@ export function followVideo(
   video: HTMLVideoElement,
   sourceSeconds: () => number,
 ): () => void {
+  // 장면이 실제로 나가고 있을 때만 튼다. 버퍼링 중(waiting)에는 paused·seeking이 false라도 장면이 멈춰 있다:
+  // 그때 틀면 소리만 앞서 가고 어긋남 검사가 0.25초마다 같은 자리를 다시 틀었다(로컬 리뷰 1라운드)
+  const flowing = () => !video.paused && !video.seeking && video.readyState >= HAVE_FUTURE_DATA;
   const sync = () => {
-    if (video.paused || video.seeking) player.stop();
-    else player.play(sourceSeconds(), video.playbackRate);
+    if (flowing()) player.play(sourceSeconds(), video.playbackRate);
+    else player.stop();
   };
   const halt = () => player.stop();
   const resyncEvents = ['playing', 'seeked', 'ratechange'] as const;
@@ -103,13 +114,12 @@ export function followVideo(
 
   // 영상이 버벅이거나(버퍼링) 시계가 서로 조금씩 밀리면 소리가 앞서 간다: 주기적으로 재서 맞춘다
   const timer = setInterval(() => {
-    if (video.paused || video.seeking) return;
+    // 소리 시계가 서 있으면(suspended) 잴 수 없다: 다시 걸어도 같다. 시계가 흐르기 시작하면 한 번 맞춘다
+    if (!flowing() || !player.running) return;
     const heard = player.position();
     if (heard === null || Math.abs(heard - sourceSeconds()) > DRIFT_SECONDS) sync();
   }, DRIFT_CHECK_MS);
 
-  const wasMuted = video.muted;
-  video.muted = true;
   if (!video.paused) sync();
 
   return () => {
@@ -117,6 +127,5 @@ export function followVideo(
     for (const name of haltEvents) video.removeEventListener(name, halt);
     clearInterval(timer);
     player.stop();
-    video.muted = wasMuted;
   };
 }

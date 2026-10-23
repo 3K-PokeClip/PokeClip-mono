@@ -29,6 +29,12 @@ describe('demuxAudioTracks: 조각 하나에서 소리 트랙을 파일 순서�
     expect(tracks.every((t) => t.frames.every((f) => f.length > 0))).toBe(true);
   });
 
+  it('프레임은 조각 버퍼를 붙잡지 않는 복사본이다: 영상까지 든 조각 전체가 디코드 끝까지 남지 않게(로컬 리뷰 1라운드)', () => {
+    const frame = tracks[0]!.frames[0]!;
+    expect(frame.buffer).not.toBe(fixture.buffer);
+    expect(frame.buffer.byteLength).toBe(frame.byteLength);
+  });
+
   it('소리 트랙이 없거나 상자가 깨졌으면 빈 목록이다(던지지 않는다)', () => {
     expect(demuxAudioTracks(new Uint8Array(0))).toEqual([]);
     expect(demuxAudioTracks(fixture.subarray(0, 40))).toEqual([]);

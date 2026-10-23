@@ -1,10 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { StrictMode } from 'react';
-import { renderHook, waitFor } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { requestSegmentAudioAccess } from '@/api/clipEditor';
-import { useTrackPreview } from './useTrackPreview';
+import { TRACK_LOAD_TIMEOUT_MS, useTrackPreview } from './useTrackPreview';
 
 vi.mock('@/api/clipEditor', () => ({ requestSegmentAudioAccess: vi.fn() }));
 
@@ -126,6 +126,80 @@ describe('useTrackPreview', () => {
     const used = made.filter((ctx) => ctx.decodeAudioData.mock.calls.length > 0);
     expect(used.length).toBeGreaterThan(0);
     expect(used.at(-1)!.state).toBe('running');
+  });
+
+  it('불러오는 동안에도 영상 소리를 끈다: 다시 받는 사이 뺀 트랙까지 섞인 최종 믹스가 들리지 않게(로컬 리뷰 1라운드)', async () => {
+    const node = video();
+    let finish: (value: unknown) => void = () => {};
+    vi.mocked(requestSegmentAudioAccess).mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve;
+      }) as never,
+    );
+    const { result } = renderHook(() =>
+      useTrackPreview({
+        streamId: 's-1',
+        baseMs: BASE,
+        window: WINDOW,
+        video: node,
+        createContext: () => fakeContext().ctx as never,
+      }),
+    );
+    expect(result.current.status).toBe('loading');
+    expect(node.muted).toBe(true);
+    finish({ expiresAt: '', segments: [] });
+    // 소리 트랙을 못 꺼냈다(빈 조각) → 못 부름 → 영상 소리로 돌아간다
+    await waitFor(() => expect(result.current.status).toBe('unavailable'));
+    expect(node.muted).toBe(false);
+  });
+
+  it('조각 받기가 멈춰 있으면 시한 뒤 「못 부름」으로 영상 소리를 되살린다(로컬 리뷰 2라운드)', async () => {
+    vi.useFakeTimers();
+    try {
+      // 서명 주소 GET이 끝나지 않는다(느린 망 · 붙잡힌 연결)
+      vi.mocked(fetch).mockImplementation(() => new Promise<Response>(() => {}));
+      const node = video();
+      const { result } = renderHook(() =>
+        useTrackPreview({
+          streamId: 's-1',
+          baseMs: BASE,
+          window: WINDOW,
+          video: node,
+          createContext: () => fakeContext().ctx as never,
+        }),
+      );
+      expect(node.muted).toBe(true);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(TRACK_LOAD_TIMEOUT_MS + 10);
+      });
+      expect(result.current.status).toBe('unavailable');
+      expect(node.muted).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('창이 바뀌면 앞 창의 조각 받기를 멈춘다(로컬 리뷰 2라운드)', async () => {
+    const signals: AbortSignal[] = [];
+    vi.mocked(fetch).mockImplementation((_url, init) => {
+      signals.push((init as RequestInit).signal!);
+      return new Promise<Response>(() => {});
+    });
+    const node = video();
+    const { rerender } = renderHook(
+      ({ window }) =>
+        useTrackPreview({
+          streamId: 's-1',
+          baseMs: BASE,
+          window,
+          video: node,
+          createContext: () => fakeContext().ctx as never,
+        }),
+      { initialProps: { window: WINDOW } },
+    );
+    await waitFor(() => expect(signals).toHaveLength(1));
+    rerender({ window: { startSeconds: 20, endSeconds: 50 } });
+    expect(signals[0]!.aborted).toBe(true);
   });
 
   it('소리 문맥을 못 만들면(브라우저가 안 줌) 묻지도 않고 못 부름이다: 영상 소리가 그대로 난다', async () => {

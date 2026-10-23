@@ -120,6 +120,7 @@ function fakeVideo() {
     currentTime: 0,
     playbackRate: 1,
     muted: false,
+    readyState: 4,
   }) as unknown as HTMLVideoElement & EventTarget;
 }
 
@@ -127,8 +128,9 @@ describe('followVideo: 소리를 영상 노드에 맞춰 튼다', () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
-  function setup() {
+  function setup(state = 'running') {
     const { ctx } = fakeContext();
+    Object.assign(ctx, { state });
     const player = new TrackAudioPlayer(ctx, TRACKS);
     const play = vi.spyOn(player, 'play');
     const video = fakeVideo();
@@ -137,11 +139,34 @@ describe('followVideo: 소리를 영상 노드에 맞춰 튼다', () => {
     return { ctx, player, play, video, stopFollowing };
   }
 
-  it('따라가는 동안 영상 소리는 끄고, 그만두면 원래대로 돌린다', () => {
-    const { video, stopFollowing } = setup();
-    expect(video.muted).toBe(true);
-    stopFollowing();
-    expect(video.muted).toBe(false);
+  it('영상이 버퍼링 중이면(waiting, 다음 장면 없음) 어긋남 검사가 소리를 다시 틀지 않는다(로컬 리뷰 1라운드)', () => {
+    const { play, video } = setup();
+    Object.assign(video, { paused: false, currentTime: 2 });
+    video.dispatchEvent(new Event('playing'));
+    expect(play).toHaveBeenCalledTimes(1);
+
+    // 영상이 멈춰 기다린다: paused·seeking은 false인데 장면이 안 나간다
+    Object.assign(video, { readyState: 2 });
+    video.dispatchEvent(new Event('waiting'));
+    vi.advanceTimersByTime(1000);
+    expect(play).toHaveBeenCalledTimes(1);
+
+    // 다시 흐르면 그 자리부터
+    Object.assign(video, { readyState: 4, currentTime: 2.1 });
+    video.dispatchEvent(new Event('playing'));
+    expect(play).toHaveBeenLastCalledWith(12.1, 1);
+  });
+
+  it('소리 문맥이 아직 멈춰 있으면(suspended) 0.25초마다 노드를 새로 걸지 않는다(로컬 리뷰 1라운드)', () => {
+    const { play, video } = setup('suspended');
+    Object.assign(video, { paused: false });
+    video.dispatchEvent(new Event('playing'));
+    // 영상은 흐르는데 소리 시계는 멈춰 있다
+    for (let i = 1; i <= 4; i++) {
+      video.currentTime = i * 0.25;
+      vi.advanceTimersByTime(250);
+    }
+    expect(play).toHaveBeenCalledTimes(1);
   });
 
   it('영상이 재생되면 그 자리·배속으로 틀고, 멈추거나 옮기기 시작하면 세운다', () => {

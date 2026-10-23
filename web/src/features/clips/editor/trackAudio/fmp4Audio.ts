@@ -227,7 +227,8 @@ function readTraf(
       if (flags & 0x400) at += 4;
       if (flags & 0x800) at += 4;
       if (size <= 0 || dataOffset + size > bytes.byteLength) throw new RangeError('trun');
-      out.push(bytes.subarray(dataOffset, dataOffset + size));
+      // 복사한다: 보기(subarray)면 영상까지 든 조각 버퍼 전체가 디코드가 끝날 때까지 남는다(3분 구간이면 약 170MB)
+      out.push(bytes.slice(dataOffset, dataOffset + size));
       dataOffset += size;
     }
   }

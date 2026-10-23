@@ -29,6 +29,12 @@ type DecodingContext = AudioContextLike & Pick<AudioContext, 'decodeAudioData' |
  */
 const defaultContext = (): DecodingContext => new AudioContext({ sampleRate: 24_000 });
 
+/**
+ * 조각 받기·풀기가 이만큼 안에 안 끝나면 「못 부름」이다. 불러오는 동안 영상 소리를 꺼 두므로, 받기가 멈춘 채면 화면이 아무
+ * 소리도 안 낸다(로컬 리뷰 2라운드). 3분 20초 창(조각 약 50개)을 보통 망에서 받는 데 넉넉하다
+ */
+export const TRACK_LOAD_TIMEOUT_MS = 60_000;
+
 export function useTrackPreview(options: {
   /** clip 방송 번호(편집본과 같은 번호) */
   streamId: string;
@@ -66,23 +72,32 @@ export function useTrackPreview(options: {
     const decoder = ctx;
     let cancelled = false;
     let made: TrackAudioPlayer | null = null;
+    // 창이 바뀌거나 화면이 떠나면 앞 창의 받기를 멈춘다: 안 멈추면 버릴 조각 수십 개를 끝까지 받는다(로컬 리뷰 2라운드)
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(), TRACK_LOAD_TIMEOUT_MS);
+    const stopped = new Promise<never>((_, reject) => {
+      abort.signal.addEventListener('abort', () => reject(new Error('track audio load stopped')));
+    });
     setStatus('loading');
     setPlayer(null);
     setLevels(null);
     const fromMs = baseMs + Math.round(startSeconds * 1000);
     const toMs = baseMs + Math.round(endSeconds * 1000);
-    loadTrackAudio(
-      {
-        fetchAccess: () => requestSegmentAudioAccess(streamId, fromMs, toMs),
-        fetchBytes: async (url) => {
-          const res = await fetch(url);
-          if (!res.ok) throw new Error(`segment ${res.status}`);
-          return res.arrayBuffer();
+    Promise.race([
+      loadTrackAudio(
+        {
+          fetchAccess: () => requestSegmentAudioAccess(streamId, fromMs, toMs),
+          fetchBytes: async (url) => {
+            const res = await fetch(url, { signal: abort.signal });
+            if (!res.ok) throw new Error(`segment ${res.status}`);
+            return res.arrayBuffer();
+          },
+          decode: (adts) => decoder.decodeAudioData(adts.buffer as ArrayBuffer),
         },
-        decode: (adts) => decoder.decodeAudioData(adts.buffer as ArrayBuffer),
-      },
-      baseMs,
-    )
+        baseMs,
+      ),
+      stopped,
+    ])
       .then((tracks) => {
         if (cancelled) return;
         // 파형은 트랙이 하나뿐이어도 그린다(소리 크기는 보여 줄 수 있다)
@@ -99,9 +114,12 @@ export function useTrackPreview(options: {
       })
       .catch(() => {
         if (!cancelled) setStatus('unavailable');
-      });
+      })
+      .finally(() => clearTimeout(timer));
     return () => {
       cancelled = true;
+      abort.abort();
+      clearTimeout(timer);
       made?.dispose();
     };
   }, [streamId, baseMs, startSeconds, endSeconds]);
@@ -115,6 +133,17 @@ export function useTrackPreview(options: {
     },
     [],
   );
+
+  // 영상 소리는 「못 부름」일 때만 켠다. 불러오는 동안에도 끈다: 창을 다시 받는 사이 영상 소리(최종 믹스)를 켜면 뺀 트랙까지
+  // 섞여 들렸다(로컬 리뷰 1라운드). 소리 문맥이 늦게 뜨는 1~2초는 조용하다
+  useEffect(() => {
+    if (video === null) return undefined;
+    const wasMuted = video.muted;
+    video.muted = status !== 'unavailable';
+    return () => {
+      video.muted = wasMuted;
+    };
+  }, [video, status]);
 
   useEffect(() => {
     if (player === null || video === null || startSeconds === null) return undefined;
