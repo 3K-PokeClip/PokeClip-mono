@@ -21,7 +21,7 @@ class RenderWorkerBootTest {
 
     @Test
     void 사진_줄만_보는데_내부_토큰이_비면_부팅을_거부한다() {
-        assertThatThrownBy(() -> boot("--pokeclip.render.queue-url=", "--pokeclip.thumbnail.queue-url=" + NOWHERE + "thumb",
+        assertThatThrownBy(() -> bootAndClose("--pokeclip.render.queue-url=", "--pokeclip.thumbnail.queue-url=" + NOWHERE + "thumb",
                 "--pokeclip.render.internal-token="))
                 .rootCause()
                 .isInstanceOf(IllegalStateException.class)
@@ -30,7 +30,7 @@ class RenderWorkerBootTest {
 
     @Test
     void 렌더_줄을_보는데_내부_토큰이_비면_부팅을_거부한다() {
-        assertThatThrownBy(() -> boot("--pokeclip.render.queue-url=" + NOWHERE + "render", "--pokeclip.thumbnail.queue-url=",
+        assertThatThrownBy(() -> bootAndClose("--pokeclip.render.queue-url=" + NOWHERE + "render", "--pokeclip.thumbnail.queue-url=",
                 "--pokeclip.render.internal-token="))
                 .rootCause()
                 .isInstanceOf(IllegalStateException.class)
@@ -43,6 +43,11 @@ class RenderWorkerBootTest {
                 "--pokeclip.render.internal-token=")) {
             assertThat(context.isActive()).isTrue();
         }
+    }
+
+    /** 거부해야 할 경우에 쓴다. 검사가 깨져 떠 버리면 닫아서, 가짜 주소를 두드리는 일꾼 스레드가 뒤 시험까지 남지 않게 한다. */
+    private static void bootAndClose(String... args) {
+        boot(args).close();
     }
 
     private static ConfigurableApplicationContext boot(String... args) {
