@@ -162,7 +162,7 @@ public class BroadcastInfoCollector {
         String title = setting != null ? setting.title() : live == null ? null : live.liveTitle();
         List<String> tags = setting != null ? setting.tags() : live == null ? List.of() : live.tags();
         String category = setting != null ? setting.category() : live == null ? null : live.category();
-        return new BroadcastInfo(session.streamId(), session.channelId(), observedAt, title, tags, category,
+        return new BroadcastInfo(session.platform(), session.streamId(), session.channelId(), observedAt, title, tags, category,
                 live == null ? null : live.viewers());
     }
 

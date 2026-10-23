@@ -1,5 +1,7 @@
 package com.pokeclip.chat.collector.relay;
 
+import com.pokeclip.chat.collector.Platform;
+
 import com.pokeclip.chat.collector.ChatLogLeakTest;
 import com.pokeclip.chat.collector.ChzzkProperties;
 import com.pokeclip.chat.collector.archive.ArchivableChat;
@@ -507,9 +509,9 @@ class RelayRegistryPathTest extends IntegrationTestSupport {
         RelayBuffer buffer = startRelay(recordingClient());
         givenRegistry(buffer);
         Instant cutoff = Instant.parse("2026-10-08T00:00:00Z");
-        registry.open(new SessionKey("relay-purge-old", 81L, "CH-gone", cutoff.minusSeconds(60)), "tok-81");
-        registry.open(new SessionKey("relay-purge-new", 82L, "CH-gone", cutoff.plusSeconds(60)), "tok-82");
-        registry.open(new SessionKey("relay-purge-other", 83L, "CH-other", cutoff.minusSeconds(60)), "tok-83");
+        registry.open(new SessionKey(Platform.CHZZK, "relay-purge-old", 81L, "CH-gone", cutoff.minusSeconds(60)), "tok-81");
+        registry.open(new SessionKey(Platform.CHZZK, "relay-purge-new", 82L, "CH-gone", cutoff.plusSeconds(60)), "tok-82");
+        registry.open(new SessionKey(Platform.CHZZK, "relay-purge-other", 83L, "CH-other", cutoff.minusSeconds(60)), "tok-83");
 
         assertThat(registry.closeChannel("CH-gone", cutoff)).isEqualTo(1);
 
@@ -518,7 +520,7 @@ class RelayRegistryPathTest extends IntegrationTestSupport {
     }
 
     private static SessionKey key(String streamId, long streamerId) {
-        return new SessionKey(streamId, streamerId, "CH", Instant.EPOCH.plusSeconds(KEY_SEQ.incrementAndGet()));
+        return new SessionKey(Platform.CHZZK, streamId, streamerId, "CH", Instant.EPOCH.plusSeconds(KEY_SEQ.incrementAndGet()));
     }
 
     private static String chatJson(String content, long messageTime) {

@@ -1,5 +1,7 @@
 package com.pokeclip.chat.collector.persist;
 
+import com.pokeclip.chat.collector.Platform;
+
 import com.pokeclip.chat.collector.support.IntegrationTestSupport;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -34,7 +36,7 @@ class DonationPersisterTest extends IntegrationTestSupport {
     }
 
     private static PersistableDonation donation(String donatorChannelId, Long amount) {
-        return new PersistableDonation("don-1", "CH", donatorChannelId, "도네초코",
+        return new PersistableDonation(Platform.CHZZK, "don-1", "CH", donatorChannelId, "도네초코",
                 "CHAT", amount, "가즈아", 1_754_300_000_000L, 1L);
     }
 
@@ -43,7 +45,7 @@ class DonationPersisterTest extends IntegrationTestSupport {
     void 후원이_표에_남고_금액이_없어도_저장된다() {
         DonationBuffer buffer = new DonationBuffer(100);
         buffer.offer(donation("D1", 5000L));
-        buffer.offer(new PersistableDonation("don-1", "CH", "D2", "n", "VIDEO", null, "",
+        buffer.offer(new PersistableDonation(Platform.CHZZK, "don-1", "CH", "D2", "n", "VIDEO", null, "",
                 1_754_300_001_000L, 2L));
 
         new DonationPersister(jdbc, buffer).flushBacklog();
@@ -111,7 +113,7 @@ class DonationPersisterTest extends IntegrationTestSupport {
      */
     @Test
     void 닉네임_문구_종류의_NUL은_생성_지점에서_제거된다() {
-        PersistableDonation d = new PersistableDonation("don\0-1", "C\0H", "D\0ONOR", "도\0네",
+        PersistableDonation d = new PersistableDonation(Platform.CHZZK, "don\0-1", "C\0H", "D\0ONOR", "도\0네",
                 "CH\0AT", 1L, "가\0즈아", 1L, 3L);
         assertThat(d.donatorNickname()).isEqualTo("도네");
         assertThat(d.donationText()).isEqualTo("가즈아");
@@ -122,7 +124,7 @@ class DonationPersisterTest extends IntegrationTestSupport {
         // 🔴 방송 번호가 세 번째다 — 매번 같은 표의 나머지 칸을 안 세서 났다.
         assertThat(d.streamId()).as("방송 편지 검사는 「비었나·길이」만 본다").isEqualTo("don-1");
 
-        PersistableDonation 빈값 = new PersistableDonation("don-1", "CH", "D", null,
+        PersistableDonation 빈값 = new PersistableDonation(Platform.CHZZK, "don-1", "CH", "D", null,
                 null, 1L, null, 1L, 4L);
         assertThat(빈값.donationText()).as("표가 NOT NULL이다").isEmpty();
         assertThat(빈값.donationType()).as("종류도 같은 모양이어야 한다").isEmpty();
@@ -169,9 +171,9 @@ class DonationPersisterTest extends IntegrationTestSupport {
         // 99%가 이 모양이다(실측 20,000회 중 19,999회) — 1밀리초를 벌려 두면
         // 이 검사는 <b>열쇠에서 순번을 빼도 초록이다</b>(주입으로 확인했다).
         // 가르는 것은 순번뿐이어야 한다.
-        buffer.offer(new PersistableDonation("don-1", "CH", "SAME", "도네초코", "CHAT", 5000L,
+        buffer.offer(new PersistableDonation(Platform.CHZZK, "don-1", "CH", "SAME", "도네초코", "CHAT", 5000L,
                 "가즈아", 1_754_300_000_000L, 5L));
-        buffer.offer(new PersistableDonation("don-1", "CH", "SAME", "도네초코", "CHAT", 5000L,
+        buffer.offer(new PersistableDonation(Platform.CHZZK, "don-1", "CH", "SAME", "도네초코", "CHAT", 5000L,
                 "가즈아", 1_754_300_000_000L, 6L));   // 같은 ms, 다른 순번
 
         new DonationPersister(jdbc, buffer).flushBacklog();
@@ -192,9 +194,9 @@ class DonationPersisterTest extends IntegrationTestSupport {
     @Test
     void 종류에_NUL이나_긴_값이_와도_저장된다() {
         DonationBuffer buffer = new DonationBuffer(100);
-        buffer.offer(new PersistableDonation("don-1", "CH", "NUL", "n", "CH\0AT", 1L,
+        buffer.offer(new PersistableDonation(Platform.CHZZK, "don-1", "CH", "NUL", "n", "CH\0AT", 1L,
                 "t", 1_754_300_000_000L, 9L));
-        buffer.offer(new PersistableDonation("don-1", "CH", "LONG", "n",
+        buffer.offer(new PersistableDonation(Platform.CHZZK, "don-1", "CH", "LONG", "n",
                 "0123456789ABCDEFG", 1L, "t", 1_754_300_001_000L, 10L));
 
         new DonationPersister(jdbc, buffer).flushBacklog();
@@ -218,7 +220,7 @@ class DonationPersisterTest extends IntegrationTestSupport {
     @Test
     void 식별자에_NUL이_있어도_저장된다() {
         DonationBuffer buffer = new DonationBuffer(100);
-        buffer.offer(new PersistableDonation("don-1", "CH\0X", "NUL\0ID", "n",
+        buffer.offer(new PersistableDonation(Platform.CHZZK, "don-1", "CH\0X", "NUL\0ID", "n",
                 "CHAT", 1L, "t", 1_754_300_000_000L, 11L));
 
         new DonationPersister(jdbc, buffer).flushBacklog();

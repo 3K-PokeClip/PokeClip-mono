@@ -2,6 +2,7 @@ package com.pokeclip.chat.collector.session;
 
 import com.pokeclip.chat.collector.ChzzkProperties;
 import com.pokeclip.chat.collector.CollectionStatus;
+import com.pokeclip.chat.collector.Platform;
 import com.pokeclip.chat.collector.StopReason;
 import com.pokeclip.chat.collector.archive.ChatArchive;
 import com.pokeclip.chat.collector.chzzk.DonationSubscription;
@@ -678,7 +679,7 @@ public class SessionRegistry {
             SessionKey key = entry.session().key();
             if ((state == CollectionStatus.State.COLLECTING || state == CollectionStatus.State.RECONNECTING)
                     && key.streamId() != null && key.channelId() != null) {
-                out.add(new ActiveSession(key.streamId(), key.streamerId(), key.channelId(),
+                out.add(new ActiveSession(key.platform(), key.streamId(), key.streamerId(), key.channelId(),
                         entry.session().accessToken()));
             }
         }
@@ -707,10 +708,11 @@ public class SessionRegistry {
     public record ActiveStart(String streamId, long streamerId, Instant startedAt) {
     }
 
-    public record ActiveSession(String streamId, long streamerId, String channelId, String accessToken) {
+    public record ActiveSession(Platform platform, String streamId, long streamerId, String channelId,
+                                String accessToken) {
         @Override
         public String toString() {
-            return "ActiveSession[streamId=" + streamId + ", streamerId=" + streamerId + ", channelId=" + channelId + "]";
+            return "ActiveSession[platform=" + platform + ", streamId=" + streamId + ", streamerId=" + streamerId + ", channelId=" + channelId + "]";
         }
     }
 

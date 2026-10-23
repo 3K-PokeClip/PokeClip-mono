@@ -48,9 +48,9 @@ public class DonationPersister {
 
     private static final String INSERT = """
             INSERT INTO chat_donations
-              (stream_id, channel_id, donator_channel_id, donator_nickname,
+              (platform, stream_id, channel_id, donator_channel_id, donator_nickname,
                donation_type, pay_amount, donation_text, received_at, received_seq)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT ON CONSTRAINT uq_chat_donations_received DO NOTHING
             """;
 
@@ -237,7 +237,7 @@ public class DonationPersister {
 
     private static Object[] toRow(PersistableDonation donation) {
         return new Object[] {
-                donation.streamId(), donation.channelId(), donation.donatorChannelId(),
+                donation.platform().name(), donation.streamId(), donation.channelId(), donation.donatorChannelId(),
                 donation.donatorNickname(), donation.donationType(), donation.payAmount(),
                 donation.donationText(),
                 Timestamp.from(Instant.ofEpochMilli(donation.receivedAtMillis())),

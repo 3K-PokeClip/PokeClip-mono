@@ -1100,8 +1100,10 @@ public class StreamSession {
             // 채팅이 계속 들어오기 때문이다(StreamIdStampingTest).
             // 🔴 <b>한 번만 읽어 저장과 중계에 같이 쓴다</b>(F7). key는 volatile이라 두 번 읽으면
             // 그 사이 갈아끼움이 끼어 저장은 옛 방송, 중계는 새 방송으로 갈린다.
-            String streamId = key.streamId();
-            buffer.offer(new PersistableChat(streamId, message.channelId(),
+            // 플랫폼도 같은 한 번의 읽기에서 꺼낸다(프레임에는 플랫폼이 없다).
+            SessionKey current = key;
+            String streamId = current.streamId();
+            buffer.offer(new PersistableChat(current.platform(), streamId, message.channelId(),
                     message.senderChannelId(), message.content(),
                     message.messageTimeMillis(), receivedAt,
                     message.nickname(), message.userRole()));
@@ -1126,7 +1128,8 @@ public class StreamSession {
             // 되돌리기를 무한 반복하고 바구니가 차서 <b>멀쩡한 후원까지 밀려난다</b>.
             // 채팅은 그 칸이 NULL 허용이라 「모른다」로 남길 수 있지만 여기는 그 길이 없다.
             // 한 번만 읽는다 — 채팅 갈래와 같은 이유(F7).
-            String streamId = key.streamId();
+            SessionKey current = key;
+            String streamId = current.streamId();
             if (streamId == null) {
                 return;
             }
@@ -1135,7 +1138,7 @@ public class StreamSession {
             // 🔴 순번을 여기서 매긴다 — 재시도 때 같은 객체가 다시 들어가므로 그 값이 유지되고,
             // 그래서 재시도 중복만 접히고 정당한 연속 후원은 안 접힌다(봇 codex P2).
             // 시각만으로는 못 가른다: 연속 수신의 99%가 같은 밀리초다(실측).
-            donationBuffer.offer(new PersistableDonation(streamId, donationEvent.channelId(),
+            donationBuffer.offer(new PersistableDonation(current.platform(), streamId, donationEvent.channelId(),
                     donationEvent.donatorChannelId(), donationEvent.donatorNickname(),
                     donationEvent.donationType(), donationEvent.payAmount(),
                     donationEvent.donationText(), receivedAt, donationSeq.incrementAndGet()));

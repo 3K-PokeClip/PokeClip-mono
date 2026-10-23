@@ -1,5 +1,7 @@
 package com.pokeclip.chat.collector.relay;
 
+import com.pokeclip.chat.collector.Platform;
+
 import com.pokeclip.chat.collector.CollectorApplication;
 import com.pokeclip.chat.collector.CollectorHealth;
 import com.pokeclip.chat.collector.CollectionStatus;
@@ -164,7 +166,7 @@ class RelayShutdownWiringTest extends IntegrationTestSupport {
     }
 
     private static SessionKey key(String streamId, long streamerId) {
-        return new SessionKey(streamId, streamerId, "CH", Instant.EPOCH.plusSeconds(KEY_SEQ.incrementAndGet()));
+        return new SessionKey(Platform.CHZZK, streamId, streamerId, "CH", Instant.EPOCH.plusSeconds(KEY_SEQ.incrementAndGet()));
     }
 
     private static String chatJson(String content, long messageTime) {

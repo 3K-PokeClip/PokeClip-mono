@@ -52,9 +52,9 @@ public final class TestPersistence {
         };
     }
 
-    /** INSERT 파라미터 배열의 넷째 자리가 content다 — ChatPersister.toRow와 같은 순서. */
+    /** INSERT 파라미터 배열의 다섯째 자리가 content다(첫째가 platform). ChatPersister.toRow와 같은 순서. */
     private static String contentOf(Object[] row) {
-        return (String) row[3];
+        return (String) row[4];
     }
 
     private static org.springframework.dao.DataIntegrityViolationException poison() {

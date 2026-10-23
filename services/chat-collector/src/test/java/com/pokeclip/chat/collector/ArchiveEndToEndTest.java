@@ -166,7 +166,7 @@ class ArchiveEndToEndTest extends IntegrationTestSupport {
         try {
             String channel = "eqn" + UUID.randomUUID().toString().substring(0, 6);
             assertThat(registry.open(
-                    new SessionKey("s-eqn", 91L, channel, Instant.EPOCH), "tok-eqn")).isTrue();
+                    new SessionKey(Platform.CHZZK, "s-eqn", 91L, channel, Instant.EPOCH), "tok-eqn")).isTrue();
 
             // 🔴 <b>후원을 먼저 쏜다</b>(C1과 같은 이유). 프레임은 순서대로 오고 처리도
             // 수신 스레드 하나라, 뒤에 쏜 채팅이 아카이브에 실렸다는 것이 곧 앞의 후원이

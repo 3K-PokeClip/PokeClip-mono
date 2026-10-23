@@ -398,7 +398,7 @@ class PersistenceWiringTest extends IntegrationTestSupport {
                 new CollectionStatus(), restClientBuilder, buffer, persister, ChatArchive.NONE,
                 donationPersister, null, () -> { });
         runner.run(null);
-        donationBuffer.offer(new PersistableDonation(
+        donationBuffer.offer(new PersistableDonation(Platform.CHZZK, 
                 "close-wiring", "close-wiring-ch", "donator-1", "닉",
                 "CHAT", 1000L, "고마워요", 1_723_600_500_000L, 1L));
         assertThat(countDonationRows("close-wiring-ch"))

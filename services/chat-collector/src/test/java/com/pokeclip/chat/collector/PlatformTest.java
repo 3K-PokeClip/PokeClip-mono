@@ -1,5 +1,6 @@
 package com.pokeclip.chat.collector;
 
+import com.pokeclip.chat.collector.session.SessionKey;
 import org.junit.jupiter.api.Test;
 
 import java.util.Optional;
@@ -35,5 +36,11 @@ class PlatformTest {
         assertThat(Platform.parse("X Y")).isEqualTo(Optional.empty());
         assertThat(Platform.parse("YOUTUBE")).isEqualTo(Optional.empty());
         assertThat(Platform.parse(" ")).isEqualTo(Optional.empty());
+    }
+
+    /** 옛 경로(CHZZK_ENABLED)는 치지직 설정 토큰으로만 붙는다. */
+    @Test
+    void 옛_경로_세션은_치지직이다() {
+        assertThat(SessionKey.legacy().platform()).isEqualTo(Platform.CHZZK);
     }
 }
