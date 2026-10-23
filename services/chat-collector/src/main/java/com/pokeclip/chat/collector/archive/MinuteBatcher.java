@@ -1,5 +1,7 @@
 package com.pokeclip.chat.collector.archive;
 
+import com.pokeclip.chat.collector.Platform;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -12,7 +14,8 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 받은 시각(UTC) 기준 1분 창을 <b>채널별로</b> 열고 닫는다. 아카이브 스레드 전용 —
+ * 받은 시각(UTC) 기준 1분 창을 <b>(플랫폼, 채널)별로</b> 열고 닫는다. 같은 아이디가 두 플랫폼에 있을 수 있어 열쇠에 플랫폼이
+ * 든다. 열린 창 맵과 닫은 순번 맵이 같은 열쇠를 쓴다(한쪽만 바꾸면 두 플랫폼이 서로의 재열림 순번을 올린다, POK-397 F2). 아카이브 스레드 전용:
  * 동기화 없다(호출자가 한 스레드임을 보장한다: ChatArchiver의 틱과 마지막 flush 모두
  * 같은 스케줄러 스레드다).
  *
@@ -30,20 +33,27 @@ import java.util.Map;
  */
 public final class MinuteBatcher {
 
+    /** 창의 열쇠. 열린 창 맵과 닫은 순번 맵이 이것 하나를 쓴다. */
+    private record WindowOwner(Platform platform, String channelId) {
+        static WindowOwner of(ArchivableChat chat) {
+            return new WindowOwner(chat.platform(), chat.channelId());
+        }
+    }
+
     private static final class OpenWindow {
-        final String channelId;
+        final WindowOwner owner;
         final long windowStart;
         final ByteArrayOutputStream bytes = new ByteArrayOutputStream(8 * 1024);
         int count;
         int seq = 1;
 
-        OpenWindow(String channelId, long windowStart) {
-            this.channelId = channelId;
+        OpenWindow(WindowOwner owner, long windowStart) {
+            this.owner = owner;
             this.windowStart = windowStart;
         }
 
         ArchiveObject toObject(String runId) {
-            return new ArchiveObject(ArchiveKey.of(channelId, windowStart, runId, seq), bytes.toByteArray(), count);
+            return new ArchiveObject(ArchiveKey.of(owner.platform(), owner.channelId(), windowStart, runId, seq), bytes.toByteArray(), count);
         }
     }
 
@@ -52,9 +62,9 @@ public final class MinuteBatcher {
     static final long CLOSED_MEMORY_MS = 2 * 60 * 60_000L;
     private final String runId;
     private final long graceMillis;
-    private final Map<String, OpenWindow> open = new HashMap<>();   // channelId → 열린 창(채널당 하나)
-    /** channelId → (windowStart → 그 열쇠로 지금까지 닫은 횟수). 같은 창이 다시 열리면 순번 = 횟수 + 1. */
-    private final Map<String, Map<Long, Integer>> closedSeq = new HashMap<>();
+    private final Map<WindowOwner, OpenWindow> open = new HashMap<>();   // (플랫폼, 채널) → 열린 창(하나)
+    /** (플랫폼, 채널) → (windowStart → 그 열쇠로 지금까지 닫은 횟수). 같은 창이 다시 열리면 순번 = 횟수 + 1. */
+    private final Map<WindowOwner, Map<Long, Integer>> closedSeq = new HashMap<>();
     /** 아카이브 스레드만 쓰고 읽기도 그 스레드·테스트뿐이라 평범한 long이다(다른 스레드에서 읽지 마라 — openWindows와 같다). */
     private long reopened;
     private long encodeFailures;
@@ -80,19 +90,20 @@ public final class MinuteBatcher {
                 continue;
             }
             long start = ArchiveKey.windowStartOf(chat.receivedAtMillis());
-            OpenWindow window = open.get(chat.channelId());
+            WindowOwner owner = WindowOwner.of(chat);
+            OpenWindow window = open.get(owner);
             if (window != null && window.windowStart != start) {
                 closeWindow(window, closed);              // ① 다른 분이 왔다 — 열린 창 닫기(클래스 주석 ①)
                 window = null;
             }
             if (window == null) {
-                window = openWindow(chat.channelId(), start);   // 이전 창은 여기서 덮여 map에서 사라진다
+                window = openWindow(owner, start);   // 이전 창은 여기서 덮여 map에서 사라진다
             }
             window.bytes.write(line, 0, line.length);
             window.count++;
         }
         // ② 유예 닫기 — 채팅이 없어도 시각이 지나면 닫는다
-        Iterator<Map.Entry<String, OpenWindow>> it = open.entrySet().iterator();
+        Iterator<Map.Entry<WindowOwner, OpenWindow>> it = open.entrySet().iterator();
         while (it.hasNext()) {
             OpenWindow w = it.next().getValue();
             if (nowMillis >= w.windowStart + 60_000L + graceMillis) {
@@ -121,16 +132,16 @@ public final class MinuteBatcher {
      * 재열림은 조용하고 규모는 S3의 {@code -N} 접미로 센다. seq는 안 싣는다 — 첫 재열림은 언제나 2라 정보가 0이다.
      * 키·본문은 안 싣는다.
      */
-    private OpenWindow openWindow(String channelId, long start) {
-        OpenWindow window = new OpenWindow(channelId, start);
-        int closedBefore = closedSeq.getOrDefault(channelId, Map.of()).getOrDefault(start, 0);
+    private OpenWindow openWindow(WindowOwner owner, long start) {
+        OpenWindow window = new OpenWindow(owner, start);
+        int closedBefore = closedSeq.getOrDefault(owner, Map.of()).getOrDefault(start, 0);
         if (closedBefore > 0) {
             window.seq = closedBefore + 1;
             if (++reopened == 1) {
                 log.info("chat.archive.window_reopened");
             }
         }
-        open.put(channelId, window);
+        open.put(owner, window);
         return window;
     }
 
@@ -142,7 +153,7 @@ public final class MinuteBatcher {
      */
     private void closeWindow(OpenWindow w, List<ArchiveObject> closed) {
         closed.add(w.toObject(runId));
-        closedSeq.computeIfAbsent(w.channelId, k -> new HashMap<>()).put(w.windowStart, w.seq);
+        closedSeq.computeIfAbsent(w.owner, k -> new HashMap<>()).put(w.windowStart, w.seq);
         long cutoff = w.windowStart - CLOSED_MEMORY_MS;
         for (Map<Long, Integer> perChannel : closedSeq.values()) {
             perChannel.keySet().removeIf(start -> start < cutoff);

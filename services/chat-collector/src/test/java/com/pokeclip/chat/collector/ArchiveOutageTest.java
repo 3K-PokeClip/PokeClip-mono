@@ -81,14 +81,14 @@ class ArchiveOutageTest extends IntegrationTestSupport {
             archiver.start();
 
             // ① 정상: 10:23 창 10건 → 시계를 10:24:02로 → 파일 1개 올라감
-            for (int i = 0; i < 10; i++) archiver.offer(new ArchivableChat(channel, T0 + i, "{\"i\":" + i + "}"));
+            for (int i = 0; i < 10; i++) archiver.offer(new ArchivableChat(Platform.CHZZK, channel, T0 + i, "{\"i\":" + i + "}"));
             clock.set(T0 + 62_000);
             awaitUntil(Duration.ofSeconds(5), () -> archiver.uploadedCount() == 1);
             assertThat(archiver.uploadedCount()).isEqualTo(1);
 
             // ② 반개방: 응답을 삼킨다. 10:24 창 40건 → 시계 10:25:02 → 닫힘 → 시도 → 4초 안에 실패
             proxy.stallResponsesAfter("PUT /");
-            for (int i = 0; i < 40; i++) archiver.offer(new ArchivableChat(channel, T0 + 60_000 + i, "{\"i\":" + i + "}"));
+            for (int i = 0; i < 40; i++) archiver.offer(new ArchivableChat(Platform.CHZZK, channel, T0 + 60_000 + i, "{\"i\":" + i + "}"));
             clock.set(T0 + 122_000);
             awaitUntil(Duration.ofSeconds(8), () -> archiver.pendingCount() >= 1 && archiver.archivedCount() == 50
                     && proxy.stalledAt() != null);
@@ -98,7 +98,7 @@ class ArchiveOutageTest extends IntegrationTestSupport {
             // 반개방 중에는 시도 한 번이 최대 4초 매달리고 그동안 틱이 못 돈다(같은 스레드) — 그래서
             // 시한을 10초로 준다. 이것이 정직한 한계다: 백오프 간격마다 4초씩 퍼가기가 멈추고, 그 사이
             // 바구니(상한 1만)가 받는다. CLAUDE.md 실측 표에 적는다.
-            for (int i = 0; i < 20; i++) archiver.offer(new ArchivableChat(channel, T0 + 120_000 + i, "{\"i\":" + i + "}"));
+            for (int i = 0; i < 20; i++) archiver.offer(new ArchivableChat(Platform.CHZZK, channel, T0 + 120_000 + i, "{\"i\":" + i + "}"));
             awaitUntil(Duration.ofSeconds(10), () -> archiver.archivedCount() == 70);
             assertThat(archiver.archivedCount()).as("반개방에 매달린 뒤에도 퍼가기가 이어져야 한다 — 시한이 없으면 여기 못 온다").isEqualTo(70);
             assertThat(archiver.archiveBufferDroppedCount()).isZero();
@@ -121,7 +121,7 @@ class ArchiveOutageTest extends IntegrationTestSupport {
             });
             assertThat(archiver.pendingCount()).isZero();
             assertThat(archiver.uploadedCount()).isEqualTo(3);
-            assertThat(listKeys("chat/" + channel + "/")).hasSize(3);   // 1023·1024·1025 — 열쇠가 clock이라 분이 다르다
+            assertThat(listKeys("chat/CHZZK/" + channel + "/")).hasSize(3);   // 1023·1024·1025, 열쇠가 clock이라 분이 다르다
             archiver.beginClose();
             archiver.awaitClosed(Duration.ofSeconds(2));
         }

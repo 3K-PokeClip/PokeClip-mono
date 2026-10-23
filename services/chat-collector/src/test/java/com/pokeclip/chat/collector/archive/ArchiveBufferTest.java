@@ -1,5 +1,7 @@
 package com.pokeclip.chat.collector.archive;
 
+import com.pokeclip.chat.collector.Platform;
+
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -37,6 +39,6 @@ class ArchiveBufferTest {
     }
 
     private static ArchivableChat chat(long receivedAt) {
-        return new ArchivableChat("CH", receivedAt, "{}");
+        return new ArchivableChat(Platform.CHZZK, "CH", receivedAt, "{}");
     }
 }

@@ -1,5 +1,7 @@
 package com.pokeclip.chat.collector.archive;
 
+import com.pokeclip.chat.collector.Platform;
+
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.node.ObjectNode;
@@ -8,7 +10,10 @@ import java.nio.charset.StandardCharsets;
 import java.util.Objects;
 
 /**
- * 파일 한 줄 = 채팅 한 건. {@code {"receivedAtMillis":N,"raw":"…"}\n}
+ * 파일 한 줄 = 채팅 한 건. {@code {"platform":"CHZZK","receivedAtMillis":N,"raw":"…"}\n}
+ *
+ * <p>플랫폼은 폴더({@link ArchiveKey})에도 있지만 줄에도 싣는다. 파일 하나만 내려받아도 어느 플랫폼 채팅인지 보인다. 이 칸이
+ * 생기기 전에 쓴 줄에는 플랫폼이 없고 전부 치지직이라 읽을 때 CHZZK로 채운다(POK-397).
  *
  * <p>raw를 <b>JSON 문자열 값으로 감싼다</b>(객체로 끼워 넣지 않는다). 원문에 줄바꿈이
  * 있어도 한 줄이 유지되고, 읽는 쪽이 파싱하면 바이트 하나 안 틀리는 원문이 나온다 —
@@ -31,6 +36,7 @@ public final class JsonLinesEncoder {
         // 스키마 위반 줄이 섞이고 인코드 실패 경로는 영영 안 탄다. null은 여기서 거부한다.
         Objects.requireNonNull(chat.raw(), "raw");
         ObjectNode node = MAPPER.createObjectNode();
+        node.put("platform", chat.platform().name());
         node.put("receivedAtMillis", chat.receivedAtMillis());
         node.put("raw", chat.raw());
         byte[] json = MAPPER.writeValueAsBytes(node);
@@ -43,7 +49,8 @@ public final class JsonLinesEncoder {
     /** 대조·수동 검증용 역방향. 채널은 줄에 없어(키가 든다) 밖에서 받는다. */
     public static ArchivableChat decodeLine(String channelId, String line) {
         JsonNode node = MAPPER.readTree(line);
-        return new ArchivableChat(channelId,
+        JsonNode platform = node.get("platform");
+        return new ArchivableChat(platform == null ? Platform.CHZZK : Platform.valueOf(platform.asString()), channelId,
                 node.get("receivedAtMillis").asLong(),
                 node.get("raw").asString());
     }

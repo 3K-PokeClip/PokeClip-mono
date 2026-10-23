@@ -1,5 +1,7 @@
 package com.pokeclip.chat.collector.relay;
 
+import com.pokeclip.chat.collector.Platform;
+
 import com.pokeclip.chat.collector.ChatLogLeakTest;
 import com.pokeclip.chat.collector.ChzzkProperties;
 import com.pokeclip.chat.collector.archive.ArchivableChat;
@@ -499,7 +501,7 @@ class RelayRegistryPathTest extends IntegrationTestSupport {
     }
 
     /**
-     * 탈퇴(POK-256): 그 채널을 걷는 세션을 붙었든 붙는 중이든 닫되, 탈퇴 시각 뒤에 시작한 세션(같은 채널을 새로 연동한 계정)과
+     * 탈퇴(POK-256): 그 (플랫폼, 채널)을 걷는 세션을 붙었든 붙는 중이든 닫되, 탈퇴 시각 뒤에 시작한 세션(같은 채널을 새로 연동한 계정)과
      * 다른 채널은 남긴다(PR #220 codex 2판).
      */
     @Test
@@ -507,18 +509,24 @@ class RelayRegistryPathTest extends IntegrationTestSupport {
         RelayBuffer buffer = startRelay(recordingClient());
         givenRegistry(buffer);
         Instant cutoff = Instant.parse("2026-10-08T00:00:00Z");
-        registry.open(new SessionKey("relay-purge-old", 81L, "CH-gone", cutoff.minusSeconds(60)), "tok-81");
-        registry.open(new SessionKey("relay-purge-new", 82L, "CH-gone", cutoff.plusSeconds(60)), "tok-82");
-        registry.open(new SessionKey("relay-purge-other", 83L, "CH-other", cutoff.minusSeconds(60)), "tok-83");
+        registry.open(new SessionKey(Platform.CHZZK, "relay-purge-old", 81L, "CH-gone", cutoff.minusSeconds(60)), "tok-81");
+        registry.open(new SessionKey(Platform.CHZZK, "relay-purge-new", 82L, "CH-gone", cutoff.plusSeconds(60)), "tok-82");
+        registry.open(new SessionKey(Platform.CHZZK, "relay-purge-other", 83L, "CH-other", cutoff.minusSeconds(60)), "tok-83");
+        // 🔴 같은 아이디의 SOOP 방송(POK-397). 치지직 탈퇴가 닫으면 안 된다. 탈퇴 시각 전에 시작한 것이라 플랫폼만이 가른다.
+        registry.open(new SessionKey(Platform.SOOP, "relay-purge-soop", 84L, "CH-gone", cutoff.minusSeconds(60)), "tok-84");
 
-        assertThat(registry.closeChannel("CH-gone", cutoff)).isEqualTo(1);
+        assertThat(registry.closeChannel(Platform.CHZZK, "CH-gone", cutoff)).isEqualTo(1);
 
-        assertThat(registry.activeStreamIds()).contains("relay-purge-new", "relay-purge-other")
+        assertThat(registry.activeStreamIds()).contains("relay-purge-new", "relay-purge-other", "relay-purge-soop")
                 .doesNotContain("relay-purge-old");
+
+        assertThat(registry.closeChannel(Platform.SOOP, "CH-gone", cutoff)).isEqualTo(1);
+        assertThat(registry.activeStreamIds()).contains("relay-purge-new", "relay-purge-other")
+                .doesNotContain("relay-purge-soop");
     }
 
     private static SessionKey key(String streamId, long streamerId) {
-        return new SessionKey(streamId, streamerId, "CH", Instant.EPOCH.plusSeconds(KEY_SEQ.incrementAndGet()));
+        return new SessionKey(Platform.CHZZK, streamId, streamerId, "CH", Instant.EPOCH.plusSeconds(KEY_SEQ.incrementAndGet()));
     }
 
     private static String chatJson(String content, long messageTime) {

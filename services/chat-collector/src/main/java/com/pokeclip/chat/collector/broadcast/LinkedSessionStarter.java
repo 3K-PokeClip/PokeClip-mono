@@ -1,5 +1,6 @@
 package com.pokeclip.chat.collector.broadcast;
 
+import com.pokeclip.chat.collector.Platform;
 import com.pokeclip.chat.collector.link.ChzzkLinkClient;
 import com.pokeclip.chat.collector.link.LinkResolution;
 import com.pokeclip.chat.collector.session.SessionKey;
@@ -82,7 +83,8 @@ public class LinkedSessionStarter implements BroadcastSessions {
             // 안 가른다</b> — LINK_UNAVAILABLE의 주석에 근거를 적었다.
             return ProcessResult.LINK_REFUSED;
         }
-        SessionKey key = new SessionKey(streamId, streamer.value(),
+        // 치지직이다. 연동을 auth의 치지직 창구(ChzzkLinkClient)로만 풀기 때문이다. SOOP 연동이 붙는 날 이 자리가 갈린다.
+        SessionKey key = new SessionKey(Platform.CHZZK, streamId, streamer.value(),
                 resolution.channelId(), startedAt);
         if (registry.open(key, resolution.accessToken())) {
             return ProcessResult.PROCESSED;
