@@ -2537,7 +2537,7 @@ UploadInfo = {"title":"필수","description":null,"tags":["…"],"categoryId":"2
 | `POST /internal/uploads/{id}/start` | `X-Internal-Token` | 200 `{"proceed":true,"status","attempt","sessionUri"\|null}` 또는 `{"proceed":false,"status"}`(끝난 주문) · 404 `upload_not_found` |
 | `POST /internal/uploads/{id}/session` `{sessionUri}` | `X-Internal-Token` | 200 `{"sessionUri"}` = **먼저 적힌 주소**(일꾼은 자기 주소를 버리고 이것을 쓴다) · 409 `{"reason":"NOT_STARTED"\|"TERMINAL"}` · 400 |
 | `POST /internal/uploads/{id}/heartbeat` (본문 없음, POK-333) | `X-Internal-Token` | 200 `{"status","touched"}`: 일꾼이 처리 중이라는 신호. 상태는 안 바꾸고 `updated_at`만 옮긴다. 끝난 줄(올림 · 실패)은 안 건드린다(`touched:false`). 몇 번 와도 같다 · 404 `upload_not_found` |
-| `POST /internal/uploads/{id}/result` `{outcome, videoId?, errorCode?, errorMessage?, thumbnailOutcome?, thumbnailErrorCode?}` | `X-Internal-Token` | 200 `{"status"}`(같은 끝 보고가 다시 와도 200. 주소가 적힌 줄의 `FAILED`는 `checking`으로 받는다) · 409 `TERMINAL`(다른 끝으로 덮기. `checking`→`UPLOADED`만 허용)·`NOT_STARTED` · 400 |
+| `POST /internal/uploads/{id}/result` `{outcome, videoId?, errorCode?, errorMessage?, thumbnailOutcome?, thumbnailErrorCode?, onlyIfNoSession?}` | `X-Internal-Token` | 200 `{"status"}`(같은 끝 보고가 다시 와도 200. 주소가 적힌 줄의 `FAILED`는 `checking`으로 받는다) · 409 `TERMINAL`(다른 끝으로 덮기. `checking`→`UPLOADED`만 허용)·`NOT_STARTED` · **409 `{"reason":"SESSION_EXISTS","sessionUri"}`**(`onlyIfNoSession:true`인 `FAILED`가 주소 적힌 올리는 중 줄에 왔다. 상태는 그대로, 일꾼은 그 주소로 잇는다. POK-250) · 400 |
 
 **봉투**: `{"id","clipId","outputId","title","status","videoId","error":{"code","message"},"requestedBy","createdAt","updatedAt","privacyStatus","madeForKids","tags":[…],"thumbnail":{"source","status","errorCode"},"resolvedBy","resolvedAt","categoryId","publishAt"}`.
 `categoryId`·`publishAt`은 POK-381(`V217`). 예약이 아니면 `publishAt`은 `null`이고, 그 전 줄의 분류는 `20`이다.
@@ -2595,6 +2595,14 @@ UploadInfo = {"title":"필수","description":null,"tags":["…"],"categoryId":"2
   확인 중 → 올림 **두 전이 모두**에서 적는다. `SET` → `set`, `FAILED` → `failed` + 코드, `NONE`·칸 없음 → 줄이 `pending`이면 `failed` + `THUMBNAIL_NOT_REPORTED`
   (옛 일꾼), `none`이면 그대로. 🔴 **칸이 이상해도 400으로 거절하지 않는다**: 거절하면 일꾼이 같은 보고를 되풀이하다 실패 큐로 가고, 정리기가 영상이 있는데도
   확인 중으로 닫는다. 같은 끝 보고의 재전송은 처음 값이 이긴다. 코드는 일꾼이 정한다(`THUMBNAIL_FORBIDDEN` = 채널 전화 인증 필요 등, `workers/upload` README).
+
+**「주소가 없을 때만 실패」(`onlyIfNoSession`, POK-250).** 일꾼이 실패를 보내는 순간 겹친 일꾼이 주소를 적었으면, 옛 규칙은 그 실패를 `checking`으로
+받아 일꾼이 쪽지를 지우고 아무도 그 주소를 잇지 않았다. 이 칸이 `true`(불리언만. 모양이 틀리면 꺼짐, 400 없음)인 `FAILED`는 그때 상태를 안 바꾸고
+409 `SESSION_EXISTS`와 주소를 준다. 주소가 없으면 그대로 `failed`(재전송도 200)다. 이미 `checking`인 줄에 오면 「같은 보고」가 아니라 409 `TERMINAL`이다:
+200을 주면 일꾼이 주소 있는 줄을 실패로 닫혔다고 읽는다. 칸이 없는 옛 보고는 지금 규칙 그대로다.
+
+**🔴 배포 순서(POK-250): clip → auth → 업로드 일꾼. 필수다.**
+- clip이 일꾼보다 먼저인 이유: 새 일꾼은 실패 직전의 다시 묻기를 없애고 이 칸 하나에 기댄다. 옛 clip은 칸을 무시해 주소 있는 줄의 실패를 `checking`으로 받으므로, 유튜브 시작 요청 구간 전체가 확인 필요로 굳어 지금보다 확인 필요가 늘어난다.
 
 **🔴 배포 순서(POK-291): 업로드 일꾼 → auth → clip → web.**
 - 일꾼이 먼저인 이유: 옛 일꾼은 새 주문서 칸을 모르는 칸으로 버리는데, 무해하지 않다. `madeForKids`를 읽지 않고 `false`로 덮어 올리고(아동용 신고가 틀린다),
