@@ -23,7 +23,7 @@ describe('LiveOfflineScreen', () => {
     expect(screen.getByRole('main')).toBeInTheDocument();
   });
 
-  it('다음 행동은 지난 방송과 채널 연동 설정 둘뿐이다', () => {
+  it('다음 행동은 지난 방송과 플러그인 설정 둘뿐이다', () => {
     // 티켓의 「VOD에서 이어서 정리」는 시안 갱신으로 빠졌다 — 링크가 늘면 시안과 어긋난다
     render(<LiveOfflineScreen />);
 
@@ -33,9 +33,9 @@ describe('LiveOfflineScreen', () => {
       'href',
       '/broadcast/vod',
     );
-    expect(screen.getByRole('link', { name: '연동 상태 확인' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: '플러그인 설정' })).toHaveAttribute(
       'href',
-      '/settings/channels',
+      '/settings/plugin',
     );
   });
 
@@ -55,7 +55,7 @@ describe('LiveOfflineScreen', () => {
 });
 
 describe('LiveOfflineScreen: 남의 채널(POK-390)', () => {
-  it('「연동 상태 확인」은 비활성 버튼이고 링크가 아니다: 지난 방송은 그대로 링크', () => {
+  it('「플러그인 설정」은 비활성 버튼이고 링크가 아니다: 지난 방송은 그대로 링크', () => {
     render(
       <ChannelRelationContext.Provider value="EDITOR">
         <LiveOfflineScreen />
@@ -64,7 +64,7 @@ describe('LiveOfflineScreen: 남의 채널(POK-390)', () => {
 
     expect(screen.getAllByRole('link')).toHaveLength(1);
     expect(screen.getByRole('link', { name: '지난 방송 보기' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '연동 상태 확인' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '플러그인 설정' })).toBeDisabled();
   });
 
   it('내 채널이면 둘 다 링크다', () => {
@@ -74,9 +74,9 @@ describe('LiveOfflineScreen: 남의 채널(POK-390)', () => {
       </ChannelRelationContext.Provider>,
     );
 
-    expect(screen.getByRole('link', { name: '연동 상태 확인' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: '플러그인 설정' })).toHaveAttribute(
       'href',
-      '/settings/channels',
+      '/settings/plugin',
     );
   });
 });

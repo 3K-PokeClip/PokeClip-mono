@@ -2,24 +2,25 @@
 
 import Image from 'next/image';
 import Link from 'next/link';
-// 경로는 리터럴이다(Side·온보딩 투어와 같다). chzzkOAuth의 CHANNEL_SETTINGS_PATH는 'use client' 모듈이라
-// 이 골격을 서버 컴포넌트로 올리는 날 문자열이 아니라 클라이언트 참조로 들어온다.
+// 경로는 리터럴이다(Side·홈 팁 카드와 같다) — 플러그인 설정 경로 상수는 따로 없다.
 import { Button } from '@/ui/components/Button';
 import { LinkButton } from '@/ui/components/LinkButton';
 import { useChannelRelation } from '@/features/channel/ChannelScope';
 import styles from './LiveOfflineScreen.module.css';
 
 // 디자인 1b 오프라인 프레임 — 방송 중이 아닐 때 라이브 자리에 선다 (POK-227).
-// 이 상태가 하는 일은 둘이다: 연동이 멀쩡한지 확인할 길을 주고, 지난 방송으로 보낸다.
+// 이 상태가 하는 일은 둘이다: 방송을 켤 플러그인 설정으로 보내고, 지난 방송으로 보낸다.
 //
 // 시안 갱신으로 티켓 본문의 「마지막 방송 요약 바」·「VOD에서 이어서 정리」는 빠졌다(2026-09-17 결정).
 // 1g-2(보관함 · 클립 없음)가 같은 골격이라 그 화면을 만들 때 공용으로 올린다 — 1t(404)는 숫자
 // 오버레이가 붙어 같은 골격이 아니다. EmptyState(점선 카드)와는 모양이 달라 그것을 쓰지 않는다.
 //
-// 문구는 시안 그대로다. 「연동을 다시 하면 복구」류는 쓰지 않는다 — 포기한 방송은 새 방송을 켜야
+// 문구는 시안 그대로다. 단 시안의 「연동 상태 확인」은 「플러그인 설정」으로 바꿨다 — 웹은 플러그인이
+// 지금 붙었는지 모르고(ADR-077 결정 4) 플러그인 화면에도 상태가 없어 「확인」을 약속할 수 없다.
+// 「연동을 다시 하면 복구」류는 쓰지 않는다 — 포기한 방송은 새 방송을 켜야
 // 다시 붙어서 실연동 뒤에 거짓이 된다(위키 ADR-048).
 export function LiveOfflineScreen() {
-  // 남의 채널이면 채널 연동 화면은 막혀 있다(POK-390): 버튼은 남기고 비활성으로
+  // 남의 채널이면 플러그인 설정은 막혀 있다(OwnerOnly, POK-390): 버튼은 남기고 비활성으로
   const othersChannel = useChannelRelation() === 'EDITOR';
   return (
     <main className={styles.screen}>
@@ -45,11 +46,11 @@ export function LiveOfflineScreen() {
           </LinkButton>
           {othersChannel ? (
             <Button variant="ghost" size="md" disabled>
-              연동 상태 확인
+              플러그인 설정
             </Button>
           ) : (
-            <LinkButton as={Link} href="/settings/channels" variant="ghost" size="md">
-              연동 상태 확인
+            <LinkButton as={Link} href="/settings/plugin" variant="ghost" size="md">
+              플러그인 설정
             </LinkButton>
           )}
         </div>
