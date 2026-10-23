@@ -1,4 +1,4 @@
-package com.pokeclip.chat.detector.db;
+package com.pokeclip.db;
 
 import software.amazon.awssdk.auth.credentials.AwsCredentialsProvider;
 import software.amazon.awssdk.regions.Region;

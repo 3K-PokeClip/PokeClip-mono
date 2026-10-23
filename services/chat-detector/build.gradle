@@ -29,14 +29,9 @@ dependencies {
 
     runtimeOnly 'org.postgresql:postgresql'
 
-    // RDS IAM 토큰 서명(RdsUtilities)만 쓴다(POK-406). 서명은 로컬 계산이라 SDK HTTP 클라이언트가 필요 없다.
-    // 🔴 HTTP 구현 둘을 뺀다. apache5-client가 httpclient5를 클래스패스에 올리면 Boot가 RestClient
-    // 스택을 바꾼다(chat-collector build.gradle 주석). 자격 증명 조회(ECS 태스크 역할 · IMDS)는
-    // SDK HTTP 클라이언트가 아니라 JDK 연결로 한다.
-    implementation('software.amazon.awssdk:rds') {
-        exclude group: 'software.amazon.awssdk', module: 'apache5-client'
-        exclude group: 'software.amazon.awssdk', module: 'netty-nio-client'
-    }
+    // DB 로그인 방식(비밀번호 · RDS IAM)과 db_connected 줄(POK-407). 서버 넷이 같이 쓴다.
+    // AWS SDK는 이 모듈이 rds 하나만, HTTP 구현 둘을 뺀 채로 가져온다(db-support/build.gradle).
+    implementation project(':db-support')
 
     testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
     testImplementation 'org.springframework.boot:spring-boot-testcontainers'
@@ -48,6 +43,7 @@ dependencies {
     // implementation(project(':web-support'))는 일부러 안 건다 — CorsProperties가 딸려 와
     // CORS_ALLOWED_ORIGINS 없이는 부팅이 실패한다. 이 서버는 브라우저 문이 없다.
     testImplementation testFixtures(project(':web-support'))
+    testImplementation testFixtures(project(':db-support'))
 }
 
 tasks.named('test') {

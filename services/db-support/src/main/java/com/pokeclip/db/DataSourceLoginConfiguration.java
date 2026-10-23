@@ -1,4 +1,4 @@
-package com.pokeclip.chat.detector.db;
+package com.pokeclip.db;
 
 import com.zaxxer.hikari.HikariDataSource;
 import org.springframework.beans.factory.ObjectProvider;
@@ -16,23 +16,28 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
 import java.util.TreeSet;
+import javax.sql.DataSource;
 
 /**
- * {@code POSTGRES_AUTH=iam}이면 Boot가 만든 Hikari 풀에 토큰 공급자와 TLS 설정을 건다(POK-406 스파이크).
- * 기본({@code password})이면 아무것도 안 건드리고 지금과 똑같다. 둘 다 아닌 값은 부팅을 거부한다.
+ * {@code POSTGRES_AUTH=iam}이면 Boot가 만든 Hikari 풀에 토큰 공급자와 TLS 설정을 건다(POK-406 스파이크, POK-407에서
+ * 서버 넷 공용). 기본({@code password})이면 풀을 안 건드리고 지금과 똑같다. 둘 다 아닌 값은 부팅을 거부한다.
+ * 어느 쪽이든 기동 직후 {@code db_connected} 한 줄을 남긴다({@link DbConnectedLogger}).
+ *
+ * <p>env 이름과 뜻은 사이드카(media {@code pgconf}, ADR-0006)와 같다. 서버는 각자 {@code Application}에서
+ * {@code @Import} 한다. 이 패키지는 서버들의 컴포넌트 스캔 밖이다.
  *
  * <p>Boot 4.1.0은 {@code HikariCredentialsProvider} 빈을 풀에 자동으로 꽂아 주지 않는다. 그래서
  * 풀이 처음 연결을 만들기 전, 빈 후처리 단계에서 직접 건다. Boot의 접속정보 후처리기는
  * {@code PriorityOrdered}라 이것보다 먼저 돌아 URL이 이미 확정돼 있다.
  */
 @Configuration(proxyBeanMethods = false)
-public class RdsIamDataSourceConfiguration {
+public class DataSourceLoginConfiguration {
 
     /**
      * 토큰은 15분 동안 다시 쓸 수 있는 자격이라 중간자에게 내줄 수 없다. 그래서 verify-full 하나만
      * 건다. 서버 인증서를 CA 번들로 검증하고 호스트 이름까지 맞춘다(media pgconf와 같은 규칙).
      */
-    static final String SSL_MODE = "verify-full";
+    public static final String SSL_MODE = "verify-full";
 
     /** yml이 넣는 드라이버 속성. 반개방 스톨을 끊는 유일한 장치라 iam에서도 그대로 받는다. */
     private static final Set<String> ALLOWED_DRIVER_PROPERTIES = Set.of("socketTimeout");
@@ -51,21 +56,30 @@ public class RdsIamDataSourceConfiguration {
         };
     }
 
+    @Bean
+    static DbConnectedLogger dbConnectedLogger(Environment env, ObjectProvider<DataSource> dataSource) {
+        return new DbConnectedLogger(env, dataSource);
+    }
+
     /**
      * 오타(예: {@code IAM})가 password 모드로 조용히 떨어지면 빈 비밀번호로 접속하다 원인 없는
-     * 인증 실패만 남는다. 그래서 두 값 말고는 거부한다(media pgconf와 같은 규칙).
+     * 인증 실패만 남는다. 그래서 iam · password · 빈 값 말고는 거부한다(media pgconf와 같은 규칙).
+     *
+     * <p>빈 값은 password다. env가 빈 글자로 있으면 yml 기본값이 안 쓰이고 빈 글자가 오는데, 사이드카가 그것을
+     * password로 읽는다(같은 이름 · 같은 뜻).
      */
-    private static boolean isIam(Environment env) {
+    static boolean isIam(Environment env) {
         String auth = env.getProperty("pokeclip.datasource.auth", "password");
         return switch (auth) {
             case "iam" -> true;
-            case "password" -> false;
+            case "password", "" -> false;
             default -> throw new IllegalStateException(
-                    "POSTGRES_AUTH(" + auth + ")는 iam · password 가운데 하나여야 한다(대소문자 구분)");
+                    "POSTGRES_AUTH(" + auth + ")는 iam · password · 빈 값(= password) 가운데 하나여야 한다(대소문자 구분)");
         };
     }
 
     private static void apply(HikariDataSource ds, Environment env, ObjectProvider<RdsTokenSigner> signer) {
+        rejectLeftoverPassword(env);
         Path rootCert = rootCert(env.getProperty("pokeclip.datasource.ssl-root-cert", ""));
         URI uri = URI.create(ds.getJdbcUrl().substring("jdbc:".length()));
         if (uri.getHost() == null) {
@@ -95,8 +109,9 @@ public class RdsIamDataSourceConfiguration {
      * 오류 문구에는 키만 싣고 값은 안 싣는다.
      */
     private static void rejectOverrides(URI uri, HikariDataSource ds) {
-        if (uri.getQuery() != null) {
-            List<String> keys = Arrays.stream(uri.getQuery().split("&")).map(pair -> pair.split("=", 2)[0]).toList();
+        if (uri.getRawQuery() != null) {
+            // 인코딩된 채로 쪼갠다. getQuery()는 값 안의 %26을 &로 풀어, 값 조각이 키처럼 오류에 실린다(PR #340 codex P2).
+            List<String> keys = Arrays.stream(uri.getRawQuery().split("&")).map(pair -> pair.split("=", 2)[0]).toList();
             throw new IllegalStateException("iam에서는 DB URL 쿼리를 받지 않는다(접속 값은 이 서버가 정한다). 받은 키: " + keys);
         }
         Set<String> extra = new TreeSet<>(ds.getDataSourceProperties().stringPropertyNames());
@@ -104,6 +119,20 @@ public class RdsIamDataSourceConfiguration {
         if (!extra.isEmpty()) {
             throw new IllegalStateException("iam에서는 드라이버 속성으로 " + ALLOWED_DRIVER_PROPERTIES
                     + "만 받는다. 받은 키: " + extra);
+        }
+    }
+
+    /**
+     * iam인데 장기 비밀번호가 환경에 남아 있으면 쓰이지 않아도 태스크 정의 · 비밀 저장소에 실린 채 운영된다.
+     * POK-161(접속값에 기본값 없음)과 같은 결로 부팅을 막는다. 값은 오류에 안 싣는다.
+     *
+     * <p>{@code spring.datasource.password}가 아니라 env를 직접 본다. yml이 그 값을 기본값 없이
+     * {@code ${POSTGRES_PASSWORD}}로 받아, env가 없으면 그 글자가 그대로 바인딩된다(services/CLAUDE.md 실측).
+     */
+    private static void rejectLeftoverPassword(Environment env) {
+        String password = env.getProperty("POSTGRES_PASSWORD");
+        if (password != null && !password.isBlank()) {
+            throw new IllegalStateException("iam에서는 POSTGRES_PASSWORD를 두지 않는다(값은 싣지 않는다). 태스크 정의에서 지워라");
         }
     }
 
