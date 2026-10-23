@@ -3,7 +3,9 @@
 # bin/secret-count.sh 시험 — box 입력(유닛 저널 + 태그 저널 셋 + mediamtx ·
 # nginx docker logs — 사이드카는 다시 뜬 앞 컨테이너 로그까지 남는 태그 저널로) ·
 # passphrase 대조는 --passphrase 갈래에서만 · box 의 사이드카 API 비밀번호
-# 대조(시작 스크립트가 RUNTIME_DIR 에 둔 이번 기동의 값 · Basic 꼴).
+# 대조(시작 스크립트가 RUNTIME_DIR 에 둔 이번 기동의 값 · Basic 꼴) · box 응답기
+# 모드의 대조 넷(Basic 비밀번호 · 그 Basic 머리 값 · 4C 토큰 · 잠금 둘)과 표지
+# 일부만 있음 · 꼴 밖의 실패 · 실제 템플릿 잠금 줄 꼴 대조.
 #
 # 스크립트를 빈 환경(env -i)에서 돌린다. PATH 맨 앞에는 가짜 docker · aws ·
 # journalctl 과 grep 감시 래퍼(argv · 환경을 기록한 뒤 진짜 grep 실행)만 둔다.
@@ -29,7 +31,7 @@ source "${TEST_DIR}/lib/harness.sh"
 source "${TEST_DIR}/lib/ops_fixture.sh"
 
 readonly SCRIPT='bin/secret-count.sh'
-readonly CASE_COUNT=21
+readonly CASE_COUNT=27
 # 사이드카 API 사용자 이름(compose MTX_API_USER) — Basic 값의 앞부분.
 readonly SIDECAR_API_USER='pokeclip-sidecar'
 readonly COMMAND_ID='0123abcd-4567-89ef-0123-456789abcdef'
@@ -37,6 +39,20 @@ readonly INSTANCE_A='i-0123456789abcdef0'
 readonly INSTANCE_B='i-0fedcba9876543210'
 readonly TAGS=(pokeclip-media-sidecar pokeclip-media-ingest-auth
   pokeclip-media-janitor)
+# 응답기 모드 시험 값 — Basic 사용자(mediamtx.yml.tmpl authHTTPAddress ·
+# 응답기 INGEST_AUTH_BASIC_USER), 16진 64자 셋(Basic 비밀번호 · 송출 잠금 ·
+# 읽기 잠금 — 서로 다르고 API 비밀번호와도 다르다), 4C 토큰(안에 공백 — 꼴
+# 안), 템플릿의 잠금 토큰 둘.
+readonly IA_BASIC_USER='pokeclip-mediamtx'
+IA_BASIC_PASS="$(printf 'fedcba9876543210%.0s' 1 2 3 4)"
+readonly IA_BASIC_PASS
+IA_PUBLISH_LOCK="$(printf '00112233445566778899aabbccddeeff%.0s' 1 2)"
+readonly IA_PUBLISH_LOCK
+IA_READ_LOCK="$(printf 'ffeeddccbbaa99887766554433221100%.0s' 1 2)"
+readonly IA_READ_LOCK
+readonly IA_RESOLVE_TOKEN='pcbench fake resolve token 4c'
+readonly IA_PUBLISH_TOKEN='@@SRT_PUBLISH_LOCK@@'
+readonly IA_READ_TOKEN='@@SRT_READ_LOCK@@'
 
 #######################################
 # box 모드 기본 상태 — 비밀 둘 · mediamtx · nginx 컨테이너 · 빈 저널.
@@ -591,6 +607,266 @@ case_scratch_failure() {
   return "${ok}"
 }
 
+#######################################
+# 응답기 모드 Basic 머리 값(base64 — 줄바꿈 없이)을 낸다.
+#######################################
+ia_basic() {
+  printf '%s:%s' "${IA_BASIC_USER}" "${IA_BASIC_PASS}" | /usr/bin/base64 \
+    | tr -d '\n'
+}
+
+#######################################
+# 실제 템플릿(mediamtx.yml.tmpl)의 토큰을 시작 스크립트처럼 문자열 치환으로
+# 채워 렌더본 자리에 둔다 — 잠금 두 줄은 Terraform 지시문 밖이라
+# templatefile() 이 줄을 바꾸지 않는다(render_test 가 그 줄을 단언한다).
+# Arguments:
+#   출력 파일.
+#######################################
+render_ia_mtx() {
+  local body
+  body="$(cat -- "${MEDIA_HOST_DIR}/mediamtx.yml.tmpl" && printf x)"
+  body="${body//"${IA_PUBLISH_TOKEN}"/${IA_PUBLISH_LOCK}}"
+  body="${body//"${IA_READ_TOKEN}"/${IA_READ_LOCK}}"
+  body="${body//@@INGEST_AUTH_BASIC_PASS@@/${IA_BASIC_PASS}}"
+  body="${body//@@HLS_CDN_SECRET@@/${OPS_FAKE_CDN_SECRET}}"
+  printf '%s' "${body%x}" >"$1"
+}
+
+#######################################
+# 응답기 모드 상태(setup_box 위에) — 응답기 파일 둘 · 잠금 두 줄이 든 렌더본.
+# 값이 argv 로 가지 않는지 보도록 awk · head · wc · base64 · tr 도 감시
+# 래퍼로 돌린다.
+#######################################
+setup_ingest_auth() {
+  local ia name
+  setup_box
+  ia="${ops_dir}/runtime/ingest-auth"
+  mkdir -p -- "${ia}"
+  printf '%s\n' "${IA_BASIC_PASS}" >"${ia}/ingest_basic_pass"
+  printf '%s\n' "${OPS_FAKE_API_PASS}" >"${ia}/mtx_api_pass"
+  printf '%s\n' "${IA_RESOLVE_TOKEN}" >"${ia}/stream_key_resolve_token"
+  render_ia_mtx "${ops_dir}/runtime/mediamtx.yml"
+  for name in awk head wc base64 tr; do
+    ln -s -- "${TEST_DIR}/ops_fakebin/watch" "${ops_dir}/bin/${name}"
+  done
+}
+
+#######################################
+# expect_hygiene 에 응답기 모드 값 다섯의 노출 0 을 더한다.
+#######################################
+expect_ia_hygiene() {
+  local ok=0
+  expect_hygiene || ok=1
+  ops_fixture::expect_no_leak "${IA_BASIC_PASS}" 'Basic 비밀번호' || ok=1
+  ops_fixture::expect_no_leak "$(ia_basic)" 'Basic 머리 값' || ok=1
+  ops_fixture::expect_no_leak "${IA_RESOLVE_TOKEN}" '4C 토큰' || ok=1
+  ops_fixture::expect_no_leak "${IA_PUBLISH_LOCK}" '송출 잠금' || ok=1
+  ops_fixture::expect_no_leak "${IA_READ_LOCK}" '읽기 잠금' || ok=1
+  return "${ok}"
+}
+
+# 사례 22 — box 응답기 모드: 대조 넷(Basic 비밀번호 · 그 Basic 머리 값 ·
+# 4C 토큰 · 잠금 둘)을 옛 셋(CDN · API 비밀번호 · 그 Basic 값)과 함께 센다 —
+# nginx 표준 오류의 Basic 비밀번호 1 · 유닛 저널의 Basic 머리 값 2 · 응답기
+# 태그 저널의 4C 토큰 1 · mediamtx 표준 출력의 송출 잠금 1 · 사이드카 태그
+# 저널의 읽기 잠금 1 · janitor 태그 저널의 CDN 1 · API 비밀번호 1 = 8.
+case_ia_count() {
+  local ok=0
+  setup_ingest_auth
+  plant "${ops_dir}/state/logs.${OPS_NGINX_ID}.err" "${IA_BASIC_PASS}" 1
+  plant "${ops_dir}/state/journal.u.pokeclip-media" "$(ia_basic)" 2
+  plant "${ops_dir}/state/journal.t.pokeclip-media-ingest-auth" \
+    "${IA_RESOLVE_TOKEN}" 1
+  plant "${ops_dir}/state/logs.${OPS_MEDIAMTX_ID}.out" "${IA_PUBLISH_LOCK}" 1
+  plant "${ops_dir}/state/journal.t.pokeclip-media-sidecar" \
+    "${IA_READ_LOCK}" 1
+  plant "${ops_dir}/state/journal.t.pokeclip-media-janitor" \
+    "${OPS_FAKE_CDN_SECRET}" 1
+  plant "${ops_dir}/state/journal.t.pokeclip-media-janitor" \
+    "${OPS_FAKE_API_PASS}" 1
+  run_count box || return 1
+  ops_fixture::expect_line 'SECRET COUNT box 8' 0 || ok=1
+  if [[ "$(ops_fixture::count awk)" == 0 ]]; then
+    harness::add_reason 'awk 를 부르지 않아 argv 판정 불가'
+    ok=1
+  fi
+  expect_ia_hygiene || ok=1
+  return "${ok}"
+}
+
+#######################################
+# 응답기 모드 표지 넷(파일 둘 · 잠금 줄 둘) 중 비트가 0 인 것을 지운다.
+# Arguments:
+#   비트 마스크(1 Basic 파일 · 2 4C 파일 · 4 송출 잠금 줄 · 8 읽기 잠금 줄).
+#######################################
+drop_ia_marks() {
+  local ia="${ops_dir}/runtime/ingest-auth"
+  local mtx="${ops_dir}/runtime/mediamtx.yml" kept
+  (( $1 & 1 )) || rm -f -- "${ia}/ingest_basic_pass"
+  (( $1 & 2 )) || rm -f -- "${ia}/stream_key_resolve_token"
+  kept="$(awk -v m="$1" '
+    /^  srtPublishPassphrase:/ && !(m % 8 >= 4) { next }
+    /^  srtReadPassphrase:/ && !(m >= 8) { next }
+    { print }' "${mtx}")"
+  printf '%s\n' "${kept}" >"${mtx}"
+}
+
+# 사례 23 — box: 표지 넷이 일부만 있으면(14갈래) 옛 모드로 내려가지 않고
+# ingest-auth 로 실패한다(종료 1).
+case_ia_partial() {
+  local ok=0 mask
+  for (( mask = 1; mask <= 14; mask++ )); do
+    setup_ingest_auth
+    drop_ia_marks "${mask}"
+    plant "${ops_dir}/state/journal.u.pokeclip-media" "${OPS_FAKE_CDN_SECRET}" 1
+    run_count box || return 1
+    if ! ops_fixture::expect_line 'SECRET COUNT FAIL ingest-auth' 1 \
+      || ! expect_ia_hygiene; then
+      harness::add_reason "표지 ${mask}"
+      ok=1
+    fi
+  done
+  return "${ok}"
+}
+
+#######################################
+# 응답기 모드 입력 하나를 꼴 밖으로 만든다(setup_ingest_auth 뒤).
+# Arguments:
+#   갈래 이름.
+#######################################
+write_ia_variant() {
+  local ia="${ops_dir}/runtime/ingest-auth"
+  local mtx="${ops_dir}/runtime/mediamtx.yml"
+  local token="${ia}/stream_key_resolve_token" body
+  case "$1" in
+    basic-not-hex) printf 'not-a-hex-password\n' >"${ia}/ingest_basic_pass" ;;
+    basic-upper)
+      printf '%s\n' "${IA_BASIC_PASS}" | tr 'a-f' 'A-F' \
+        >"${ia}/ingest_basic_pass"
+      ;;
+    basic-symlink)
+      mv -- "${ia}/ingest_basic_pass" "${ia}/real"
+      ln -s -- "${ia}/real" "${ia}/ingest_basic_pass"
+      ;;
+    token-empty) printf '\n' >"${token}" ;;
+    token-no-newline) printf '%s' "${IA_RESOLVE_TOKEN}" >"${token}" ;;
+    token-two-lines)
+      printf '%s\n%s\n' "${IA_RESOLVE_TOKEN}" "${IA_RESOLVE_TOKEN}" >"${token}"
+      ;;
+    token-control) printf 'pcbench\ttoken\n' >"${token}" ;;
+    token-too-large)
+      head -c 4096 /dev/zero | tr '\0' 't' >"${token}"
+      printf '\n' >>"${token}"
+      ;;
+    token-dir)
+      rm -f -- "${token}"
+      mkdir -- "${token}"
+      ;;
+    lock-double-quote)
+      body="$(awk '/^  srtPublishPassphrase:/ { gsub("\047", "\"") }
+        { print }' "${mtx}")"
+      printf '%s\n' "${body}" >"${mtx}"
+      ;;
+    lock-twice)
+      printf "  srtReadPassphrase: '%s'\n" "${IA_READ_LOCK}" >>"${mtx}"
+      ;;
+    lock-short)
+      body="$(awk '/^  srtReadPassphrase:/ { sub("[0-9a-f]\047$", "\047") }
+        { print }' "${mtx}")"
+      printf '%s\n' "${body}" >"${mtx}"
+      ;;
+    mtx-symlink)
+      mv -- "${mtx}" "${ops_dir}/runtime/real.yml"
+      ln -s -- "${ops_dir}/runtime/real.yml" "${mtx}"
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+# 사례 24 — box 응답기 모드: 입력이 시작 스크립트가 쓰는 꼴 밖이면(Basic
+# 파일 16진 64자 한 줄 아님 · 링크, 4C 파일 빔 · 끝 줄바꿈 없음 · 두 줄 · 제어
+# 문자 · 4096바이트 초과 · 디렉터리, 잠금 줄 큰따옴표 · 두 번 · 63자, 렌더본
+# 링크) ingest-auth 로 실패한다(종료 1). 4C 파일은 꼭 4096바이트까지 받는다.
+case_ia_malformed() {
+  local ok=0 variant token
+  for variant in basic-not-hex basic-upper basic-symlink token-empty \
+    token-no-newline token-two-lines token-control token-too-large \
+    token-dir lock-double-quote lock-twice lock-short mtx-symlink; do
+    setup_ingest_auth
+    write_ia_variant "${variant}" || return 1
+    run_count box || return 1
+    if ! ops_fixture::expect_line 'SECRET COUNT FAIL ingest-auth' 1 \
+      || ! expect_ia_hygiene; then
+      harness::add_reason "갈래 ${variant}"
+      ok=1
+    fi
+  done
+  setup_ingest_auth
+  token="$(head -c 4095 /dev/zero | tr '\0' 'm')"
+  printf '%s\n' "${token}" \
+    >"${ops_dir}/runtime/ingest-auth/stream_key_resolve_token"
+  plant "${ops_dir}/state/journal.u.pokeclip-media" "${token}" 2
+  run_count box || return 1
+  if ! ops_fixture::expect_line 'SECRET COUNT box 2' 0; then
+    harness::add_reason '4096바이트 4C 파일'
+    ok=1
+  fi
+  return "${ok}"
+}
+
+# 사례 25 — 렌더본 꼴 대조: 실제 템플릿의 잠금 줄이 각각 정확히 한 줄이고, 그
+# 줄을 시작 스크립트처럼 채운 렌더본에서 잠금 둘을 각각 센다(송출 1 · 읽기 2).
+case_ia_render_form() {
+  local ok=0 tmpl="${MEDIA_HOST_DIR}/mediamtx.yml.tmpl" line
+  for line in "  srtPublishPassphrase: '${IA_PUBLISH_TOKEN}'" \
+    "  srtReadPassphrase: '${IA_READ_TOKEN}'"; do
+    if [[ "$(grep -c -x -F -- "${line}" "${tmpl}")" != 1 ]]; then
+      harness::add_reason "템플릿에 「${line}」 이 정확히 한 줄이 아님"
+      ok=1
+    fi
+  done
+  setup_ingest_auth
+  if [[ "$(grep -c -x -F -- "  srtPublishPassphrase: '${IA_PUBLISH_LOCK}'" \
+    "${ops_dir}/runtime/mediamtx.yml")" != 1 ]]; then
+    harness::add_reason '렌더본에 채운 송출 잠금 줄이 한 줄이 아님'
+    ok=1
+  fi
+  plant "${ops_dir}/state/logs.${OPS_NGINX_ID}.out" "${IA_PUBLISH_LOCK}" 1
+  plant "${ops_dir}/state/logs.${OPS_MEDIAMTX_ID}.err" "${IA_READ_LOCK}" 2
+  run_count box || return 1
+  ops_fixture::expect_line 'SECRET COUNT box 3' 0 || ok=1
+  expect_ia_hygiene || ok=1
+  return "${ok}"
+}
+
+# 사례 26 — box 옛 모드: 표지가 하나도 없는 렌더본(옛 갈래 — 잠금 줄 없음)이
+# 있어도 지금처럼 센다(CDN 1 · API 비밀번호 1 = 2).
+case_legacy_with_render() {
+  local ok=0
+  setup_box
+  printf 'hlsCDNSecret: "%s"\npathDefaults:\n  record: yes\n' \
+    "${OPS_FAKE_CDN_SECRET}" >"${ops_dir}/runtime/mediamtx.yml"
+  plant "${ops_dir}/state/journal.u.pokeclip-media" "${OPS_FAKE_CDN_SECRET}" 1
+  plant "${ops_dir}/state/logs.${OPS_NGINX_ID}.err" "${OPS_FAKE_API_PASS}" 1
+  run_count box || return 1
+  ops_fixture::expect_line 'SECRET COUNT box 2' 0 || ok=1
+  expect_hygiene || ok=1
+  return "${ok}"
+}
+
+# 사례 27 — ssm: 응답기 파일은 읽지 않는다(알려진 한계) — 표지가 일부만 있어도
+# 실패하지 않고 SSM 기록만 센다.
+case_ssm_ignores_ingest_auth() {
+  local ok=0
+  setup_ssm_one
+  mkdir -p -- "${ops_dir}/runtime/ingest-auth"
+  printf '%s\n' "${IA_BASIC_PASS}" \
+    >"${ops_dir}/runtime/ingest-auth/ingest_basic_pass"
+  run_count ssm "${COMMAND_ID}" || return 1
+  ops_fixture::expect_line 'SECRET COUNT ssm 1' 0 || ok=1
+  return "${ok}"
+}
+
 main() {
   if (( $# != 0 )); then
     printf '사용: bash infra/media-host/test/secret_count_test.sh (인자 없음)\n' >&2
@@ -629,6 +905,13 @@ main() {
   harness::run_case 20 'box API 비밀번호 파일 전체가 64 hex 한 줄이 아니면 api-pass' \
     case_box_api_pass_malformed
   harness::run_case 21 'TMPDIR 없음 → scratch' case_scratch_failure
+  harness::run_case 22 'box 응답기 모드 대조 넷 심은 건수 · argv 0' case_ia_count
+  harness::run_case 23 'box 응답기 표지 일부만 → ingest-auth' case_ia_partial
+  harness::run_case 24 'box 응답기 입력 꼴 밖 → ingest-auth' case_ia_malformed
+  harness::run_case 25 '렌더본 잠금 줄 꼴 = 실제 템플릿' case_ia_render_form
+  harness::run_case 26 'box 옛 렌더본은 지금처럼' case_legacy_with_render
+  harness::run_case 27 'ssm 은 응답기 파일을 읽지 않음' \
+    case_ssm_ignores_ingest_auth
 
   if ! harness::summary "${CASE_COUNT}"; then
     exit 1
