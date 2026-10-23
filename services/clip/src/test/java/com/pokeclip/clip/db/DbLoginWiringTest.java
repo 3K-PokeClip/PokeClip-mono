@@ -19,8 +19,8 @@ import static org.assertj.core.api.Assertions.entry;
 /**
  * 이 서버가 db-support의 로그인 설정을 실제로 끌어오는지 잰다(POK-407). 거부 조합 · TLS 거절 같은 갈래는
  * db-support {@code DataSourceLoginConfigurationTest}가 잰다. 여기서는 @Import와 이 서버 yml이 iam 풀까지 닿는지만
- * 본다. @Import를 지우면 공급자가 안 걸려 빨간불이다. 이 서버 yml에는 드라이버 속성이 없어(socketTimeout도 없다,
- * POK-414) iam이 넣는 둘만 있어야 한다.
+ * 본다. @Import를 지우면 공급자가 안 걸려 빨간불이다. 드라이버 속성은 이 서버 yml의 socketTimeout(POK-414)과 iam이
+ * 넣는 둘뿐이어야 한다: socketTimeout이 iam 허용 목록을 지나 풀까지 그대로 닿는지도 여기서 본다.
  */
 class DbLoginWiringTest extends IntegrationTestSupport {
 
@@ -47,7 +47,7 @@ class DbLoginWiringTest extends IntegrationTestSupport {
 
             assertThat(ds.getCredentialsProvider()).isNotNull();
             assertThat(ds.getDataSourceProperties()).containsOnly(
-                    entry("sslmode", "verify-full"), entry("sslrootcert", ca.toString()));
+                    entry("sslmode", "verify-full"), entry("sslrootcert", ca.toString()), entry("socketTimeout", "10"));
         }
     }
 }

@@ -2,6 +2,7 @@ package com.pokeclip.chat.collector.support;
 
 import com.pokeclip.chat.collector.archive.ArchiveProperties;
 import com.pokeclip.chat.collector.archive.S3Clients;
+import com.pokeclip.db.support.StallingTcpProxy;
 import org.testcontainers.localstack.LocalStackContainer;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.CreateBucketRequest;
