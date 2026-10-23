@@ -6,7 +6,7 @@
 # lib/start_api_pass_cases.sh)과 응답기 모드(토큰 집합 모드 판정 · 생성 셋 ·
 # 응답기 파일 · 정지 정리 — 사례 42 – 50 은 lib/start_ingest_auth_cases.sh)와
 # 응답기 모드 외부 입력(4C 토큰 · 거부 목록 · 상태 디렉터리 · IP 한도 env 파일 ·
-# 모드 대조 — 사례 51 – 59 는 lib/start_ingest_input_cases.sh).
+# 모드 대조 · 거부 목록 가드 — 사례 51 – 61 은 lib/start_ingest_input_cases.sh).
 #
 # bin/start-media.sh · bin/stop-media.sh 를 빈 환경(env -i)에서 돌린다. PATH 맨
 # 앞에는 가짜 docker · chown(test/start_fakebin — argv 와 환경을 전부 기록)과
@@ -60,7 +60,7 @@ readonly API_PASS_NAME='mtx_api_pass'
 readonly API_PASS_PATTERN='^[0-9a-f]{64}$'
 # 우회 플래그로 읽힐 문자열(대소문자 무시).
 readonly BYPASS_PATTERN='skip|bypass|no_prereq|prereq=0'
-readonly CASE_COUNT=59
+readonly CASE_COUNT=61
 
 #######################################
 # up 호출 argv 를 한 줄로 낸다(인자 사이 공백). 호출이 하나가 아니면 실패.
@@ -869,6 +869,10 @@ main() {
     auth_input::case_legacy_untouched
   harness::run_case 59 'stop — 응답기 디렉터리 링크 → CLEANUP FAIL · 대상 보존' \
     auth_input::case_stop_link
+  harness::run_case 60 '거부 목록 디렉터리 · 자리 가드 → deny-dir · deny-install' \
+    auth_input::case_deny_guards
+  harness::run_case 61 '거부 목록 — 앞 기동이 남긴 임시 파일 정리' \
+    auth_input::case_deny_stale_tmp
 
   if ! harness::summary "${CASE_COUNT}"; then
     exit 1

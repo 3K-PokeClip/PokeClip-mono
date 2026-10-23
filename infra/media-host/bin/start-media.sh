@@ -33,9 +33,6 @@
 #        정확히 INGEST_AUTH_IP_LIMIT=on 또는 =off 한 줄인지 본다(없으면 compose
 #        의 required env_file 때문에 판정 줄 없이 재시작이 되풀이된다). 아니면
 #        「MEDIA START BLOCKED: ingest-auth ip-limit setting unavailable」.
-#      - 생성 셋(Basic 비밀번호 · 잠금 둘 — 각각 3 과 같은 꼴의 새 값)을
-#        만든다. 저장하지 않는다. 하나라도 만들지 못하면 「MEDIA START
-#        BLOCKED: generated credential unavailable」.
 #      - 4C 토큰(공용 창구 INTERNAL_API_TOKEN)을 Secrets Manager 에서 읽는다
 #        (argv 에는 ARN 만). ARN 빔 · 실패 · 빈 값 · None · 제어 문자(NUL ·
 #        C1 포함) · 앞뒤 공백 · 파일(값 + 줄바꿈)이 4096바이트 초과면 「MEDIA
@@ -44,14 +41,22 @@
 #        디렉터리의 임시 파일에 바이트 그대로 쓴다. 이름 빔 · 받기 실패면
 #        「… ingest-auth denylist unavailable」, 꼴 밖(lib/deny_tokens.sh)이면
 #        「… ingest-auth denylist invalid」. 꼴이 맞으면 rename 으로 둔다.
+#        디렉터리가 링크 · 상대 경로이거나 맞추지 · 앞 기동의 임시 파일을
+#        지우지 · 임시 파일을 만들지 못하면 「MEDIA START FAIL render
+#        deny-dir」, 거부 목록 자리가 링크 · 일반 파일 아님이거나 rename 이
+#        실패하면 「MEDIA START FAIL render deny-install」.
+#      - 생성 셋(Basic 비밀번호 · 잠금 둘 — 각각 3 과 같은 꼴의 새 값)을
+#        만든다. 저장하지 않는다. 하나라도 만들지 못하면 「MEDIA START
+#        BLOCKED: generated credential unavailable」.
 #   7. 모드의 토큰(각각 정확히 한 번)을 채워 tmpfs(RUNTIME_DIR)의
 #      mediamtx.yml(MediaMTX 실행 계정 소유 0400)로, API 비밀번호 한 줄을
 #      mtx_api_pass(사이드카 실행 계정 소유 0400)로 둔다. 응답기 모드면
 #      RUNTIME_DIR/ingest-auth(root 0711)에 Basic 비밀번호 한 줄(ingest_basic_pass)
 #      과 같은 API 비밀번호 한 줄(mtx_api_pass) · 4C 토큰 한 줄
 #      (stream_key_resolve_token)을 응답기 실행 계정 소유 0400 으로 더 두고, 그
-#      안의 상태 디렉터리(state)를 응답기 실행 계정 소유 0700 으로 맞춘다. 잠금 둘은 mediamtx.yml 에만 있고, 응답기 모드 mediamtx.yml 에는
-#      API 비밀번호가 없다(그 토큰이 없다). 모든 파일을 각 디렉터리의 임시
+#      안의 상태 디렉터리(state)를 응답기 실행 계정 소유 0700 으로 맞춘다. 잠금
+#      둘은 mediamtx.yml 에만 있고, 응답기 모드 mediamtx.yml 에는 API
+#      비밀번호가 없다(그 토큰이 없다). 모든 파일을 각 디렉터리의 임시
 #      파일에 다 쓰고 대상을 모두 점검한 뒤에야 차례로 rename 한다 — 실행 중인
 #      스택이 보는 옛 파일을 제자리에서 고쳐 쓰지 않는다. 중간에 실패하면 새 임시
 #      파일은 남기지 않는다(EXIT 트랩). rename 전에 실패하면 이미 있던 파일은
@@ -117,7 +122,7 @@ ulimit -c 0
 # 비밀 · 렌더 내용을 담는 변수 이름이 부모 환경에서 export 된 채 들어오면, bash
 # 의 local 이 그 export 속성을 이어받아 자식(chown 등) 환경에 값이 실린다. 쓰기
 # 전에 그 이름들을 환경에서 지운다.
-unset -v secret rendered value content head tail api_pass values basic_pass \
+unset -v secret rendered value content head tail api_pass basic_pass \
   publish_lock read_lock file_bodies template_body resolve_token
 
 readonly SECRET_TOKEN='@@HLS_CDN_SECRET@@'
@@ -385,6 +390,8 @@ set_owners() {
 #   render_step
 # Arguments:
 #   RUNTIME_DIR.
+# Returns:
+#   0 / 1 실패(단계 이름은 render_step).
 #######################################
 prepare_runtime_dir() {
   if ! mkdir -p -- "$1" || ! chmod 0711 "$1"; then
@@ -400,6 +407,8 @@ prepare_runtime_dir() {
 #   render_step
 # Arguments:
 #   응답기 파일 디렉터리.
+# Returns:
+#   0 / 1 링크 · 실패(단계 이름은 render_step).
 #######################################
 prepare_ingest_auth_dir() {
   if [[ -L "$1" ]] || ! mkdir -p -- "$1" || ! chown -h 0:0 "$1" \
@@ -417,6 +426,8 @@ prepare_ingest_auth_dir() {
 #   ingest_auth_owner, render_step
 # Arguments:
 #   상태 디렉터리.
+# Returns:
+#   0 / 1 링크 · 실패(단계 이름은 render_step).
 #######################################
 prepare_state_dir() {
   if [[ -L "$1" ]] || ! mkdir -p -- "$1" \
@@ -525,6 +536,8 @@ check_ip_limit_env() {
 #   INTERNAL_API_TOKEN_SECRET_ARN
 # Outputs:
 #   값(성공했을 때만).
+# Returns:
+#   0 / 1 조회 실패 · 쓸 수 없는 값.
 #######################################
 read_resolve_token() {
   local arn="${INTERNAL_API_TOKEN_SECRET_ARN:-}" value LC_ALL=C
@@ -549,8 +562,9 @@ read_resolve_token() {
 
 #######################################
 # 거부 목록을 SSM 에서 받아(argv 에는 이름만) 거부 목록 디렉터리의 임시 파일에
-# 바이트 그대로 쓰고, 꼴을 본 뒤 rename 한다. 임시 파일은 render_tmps(EXIT
-# 트랩)에 남긴다. 판정 줄은 여기서 낸다.
+# 바이트 그대로 쓰고, 꼴을 본 뒤 rename 한다. 임시 파일을 만들기 전에 앞
+# 기동이 끊겨 남긴 임시 파일을 지운다. 새 임시 파일은 render_tmps(EXIT 트랩)에
+# 남긴다. 판정 줄은 여기서 낸다.
 # Globals:
 #   INGEST_AUTH_DENYLIST_PARAM, INGEST_AUTH_DENY_DIR, ingest_auth_owner,
 #   render_tmps
@@ -567,6 +581,7 @@ install_denylist() {
   fi
   if [[ "${dir}" != /?* || ! "${gid}" =~ ^[0-9]+$ ]] \
     || ! deny_tokens::prepare_dir "${dir}" "${gid}" \
+    || ! deny_tokens::remove_stale_tmps "${dir}" \
     || ! tmp="$(mktemp "${dir}/.${DENY_TOKENS_FILE_NAME}.XXXXXX")"; then
     say 'MEDIA START FAIL render deny-dir'
     return 1

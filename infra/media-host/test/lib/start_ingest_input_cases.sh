@@ -3,11 +3,12 @@
 # start_ingest_auth_cases.sh · start_test.sh 가 정의한다.
 # shellcheck disable=SC2154
 #
-# start_test 의 응답기 모드 외부 입력 사례(사례 51 – 59)와 도우미 — 시작
+# start_test 의 응답기 모드 외부 입력 사례(사례 51 – 61)와 도우미 — 시작
 # 스크립트가 응답기 모드에서만 4C 토큰(Secrets Manager) · 거부 목록(SSM) ·
 # 상태 디렉터리 · IP 한도 env 파일을 다루고, compose 렌더본과 모드가 어긋나면
 # 막는지, 옛 모드는 그 무엇도 보지 않는지, 정지 스크립트가 링크인 응답기
-# 디렉터리를 따라가지 않는지 본다.
+# 디렉터리를 따라가지 않는지, 거부 목록 디렉터리 · 자리의 링크 · 상대 경로 ·
+# 임시 파일 · rename 실패를 막고 앞 기동이 남긴 임시 파일을 치우는지 본다.
 #
 # start_ingest_auth_cases.sh 다음에 source 한다. 이 파일은 source 해서 쓴다
 # (실행하지 않는다). bash 3.2 에서도 돈다.
@@ -497,5 +498,164 @@ ${fixture_status}): $(harness::log_tail "${fixture_dir}/out")"
       ok=1
     fi
   done
+  return "${ok}"
+}
+
+#######################################
+# 거부 목록 가드 행 하나를 두고 응답기 모드를 돌린다. 옛 목록(keep 한 줄)은
+# 행마다 정한 자리에 둔다 — 디렉터리 링크면 링크 대상 안, 대상 링크면 그 링크가
+# 가리키는 파일, 대상 디렉터리면 그 안, 나머지는 거부 목록 자리.
+# Globals:
+#   fixture_dir, auth_input_drop, auth_mode_tmpl, TEST_DIR
+# Arguments:
+#   행 이름.
+#######################################
+auth_input::deny_guard_run() {
+  local dir="${fixture_dir}/deny" target="${fixture_dir}/deny-target"
+  local glob=""
+  case "$1" in
+    dir-link)
+      mkdir -p -- "${target}"
+      chmod 0755 "${target}"
+      printf 'keep\n' >"${target}/${AUTH_DENY_NAME}"
+      ln -s -- "${target}" "${dir}"
+      ;;
+    file-link)
+      mkdir -p -- "${dir}"
+      printf 'keep\n' >"${target}"
+      chmod 0644 "${target}"
+      ln -s -- "${target}" "${dir}/${AUTH_DENY_NAME}"
+      ;;
+    file-dir)
+      mkdir -p -- "${dir}/${AUTH_DENY_NAME}"
+      printf 'keep\n' >"${dir}/${AUTH_DENY_NAME}/keep"
+      ;;
+    *)
+      mkdir -p -- "${dir}"
+      printf 'keep\n' >"${dir}/${AUTH_DENY_NAME}"
+      ;;
+  esac
+  case "$1" in
+    relative)
+      auth_input_drop=INGEST_AUTH_DENY_DIR
+      cd -- "${fixture_dir}" || return 1
+      auth_mode::run "${auth_mode_tmpl}" 'INGEST_AUTH_DENY_DIR=deny-rel'
+      cd -- "${OLDPWD}" || return 1
+      auth_input_drop=""
+      return 0
+      ;;
+    tmpfile)
+      ln -s -- "${TEST_DIR}/start_fakebin/fsfail" "${fixture_dir}/bin/mktemp"
+      glob="*/deny/.${AUTH_DENY_NAME}.XXXXXX"
+      ;;
+    rename)
+      ln -s -- "${TEST_DIR}/start_fakebin/fsfail" "${fixture_dir}/bin/mv"
+      glob="*/deny/${AUTH_DENY_NAME}"
+      ;;
+  esac
+  auth_mode::run "${auth_mode_tmpl}" "PCBENCH_FAKE_FS_FAIL_GLOB=${glob}"
+}
+
+#######################################
+# 거부 목록 가드 행의 옛 목록이 그대로이고 임시 파일이 없는지 본다.
+# Globals:
+#   fixture_dir
+# Arguments:
+#   행 이름.
+# Returns:
+#   0 / 1 바뀜 · 남음(이유는 harness::add_reason).
+#######################################
+auth_input::deny_guard_kept() {
+  local dir="${fixture_dir}/deny" target="${fixture_dir}/deny-target"
+  local old="${fixture_dir}/deny/${AUTH_DENY_NAME}" want="${AUTH_DENY_NAME}"
+  case "$1" in
+    dir-link)
+      old="${target}/${AUTH_DENY_NAME}"
+      if [[ ! -L "${dir}" \
+        || "$(fixture::perm "${target}")" != drwxr-xr-x ]]; then
+        harness::add_reason "$1: 링크 대상 권한이 바뀜 \
+$(fixture::perm "${target}")"
+        return 1
+      fi
+      dir="${target}"
+      ;;
+    file-link)
+      old="${target}"
+      if [[ ! -L "${dir}/${AUTH_DENY_NAME}" \
+        || "$(fixture::perm "${target}")" != -rw-r--r-- ]]; then
+        harness::add_reason "$1: 거부 목록 링크가 바뀜"
+        return 1
+      fi
+      ;;
+    file-dir)
+      old="${dir}/${AUTH_DENY_NAME}/keep"
+      want="${AUTH_DENY_NAME}/keep"
+      ;;
+    relative)
+      if [[ -e "${fixture_dir}/deny-rel" ]]; then
+        harness::add_reason "$1: 상대 경로 디렉터리를 만듦"
+        return 1
+      fi
+      ;;
+  esac
+  if [[ "$(cat -- "${old}" 2>/dev/null)" != keep \
+    || "$(cd -- "${dir}" && find . -mindepth 1 ! -type d | sed 's|^\./||' \
+      | LC_ALL=C sort | paste -s -d ' ' -)" != "${want}" ]]; then
+    harness::add_reason "$1: 옛 거부 목록이 바뀌었거나 임시 파일이 남음"
+    return 1
+  fi
+}
+
+#######################################
+# 사례 60 — 거부 목록 디렉터리가 링크 · 상대 경로이거나 임시 파일을 만들지
+# 못하면 「MEDIA START FAIL render deny-dir」, 거부 목록 자리가 링크 ·
+# 디렉터리이거나 rename 이 실패하면 「… render deny-install」 로 막는다 — 링크
+# 대상의 권한 · 내용과 옛 목록은 그대로, 임시 파일 0, RUNTIME_DIR 파일 0.
+#######################################
+auth_input::case_deny_guards() {
+  local ok=0 row want max
+  auth_mode::prod_template || return 1
+  for row in 'dir-link dir' 'relative dir' 'tmpfile dir' \
+    'file-link install' 'file-dir install' 'rename install'; do
+    want="MEDIA START FAIL render deny-${row#* }"
+    # 디렉터리 단계에서 막히면 SSM 을 부르지 않는다(aws 는 CDN · 4C 둘).
+    max=3
+    [[ "${row#* }" != dir ]] || max=2
+    fixture::new_case
+    auth_input::deny_guard_run "${row% *}" || return 1
+    auth_input::expect_blocked "${row% *}" "${want}" "${max}" || ok=1
+    auth_input::deny_guard_kept "${row% *}" || ok=1
+  done
+  return "${ok}"
+}
+
+#######################################
+# 사례 61 — 앞 기동이 끊겨(SIGKILL) 거부 목록 디렉터리에 남긴 임시 파일
+# (.deny-tokens.XXXXXX)은 다음 기동이 지운다 — 그 이름의 링크는 링크만 지우고
+# (대상 불변), 다른 이름은 둔다.
+#######################################
+auth_input::case_deny_stale_tmp() {
+  local ok=0 dir left
+  auth_mode::prod_template || return 1
+  fixture::new_case
+  dir="${fixture_dir}/deny"
+  mkdir -p -- "${dir}"
+  printf 'stale\n' >"${dir}/.${AUTH_DENY_NAME}.AbC123"
+  printf 'keep\n' >"${fixture_dir}/stale-target"
+  ln -s -- "${fixture_dir}/stale-target" "${dir}/.${AUTH_DENY_NAME}.LnK456"
+  printf 'keep\n' >"${dir}/other"
+  auth_mode::run "${auth_mode_tmpl}" || return 1
+  left="$(cd -- "${dir}" && find . -mindepth 1 | sed 's|^\./||' \
+    | LC_ALL=C sort | paste -s -d ' ' -)"
+  if (( fixture_status != 0 )) \
+    || [[ "${left}" != "${AUTH_DENY_NAME} other" ]]; then
+    harness::add_reason "남은 것 「${left}」(종료 ${fixture_status} · 기대 \
+「${AUTH_DENY_NAME} other」)"
+    ok=1
+  fi
+  if [[ "$(cat -- "${fixture_dir}/stale-target")" != keep ]]; then
+    harness::add_reason '임시 파일 이름 링크의 대상이 바뀜'
+    ok=1
+  fi
   return "${ok}"
 }

@@ -616,9 +616,10 @@ auth_mode::owner_run() {
 
 #######################################
 # 사례 46 — 응답기 모드 설치 단계가 실패하면(디렉터리가 링크 · 디렉터리 chown ·
-# Basic 임시 파일 · Basic chown · 마지막 대상이 디렉터리 · 마지막 rename · 소유
-# 값) 기동을 막고 RUNTIME_DIR 에 파일을 남기지 않는다 — 대상 점검은 모든
-# rename 앞이고, 마지막 rename 이 실패하면 이번에 옮긴 셋을 지운다.
+# Basic 임시 파일 · Basic chown · 응답기 API 비밀번호 대상이 디렉터리 · 그
+# rename · 소유 값) 기동을 막고 RUNTIME_DIR 에 파일을 남기지 않는다 — 대상
+# 점검은 모든 rename 앞이고, 응답기 API 비밀번호 rename(다섯 가운데 넷째)이
+# 실패하면 이번에 옮긴 셋을 지운다.
 #######################################
 auth_mode::case_install_failure() {
   local ok=0 row want
@@ -654,7 +655,8 @@ auth_mode::case_inherited_export() {
   auth_mode::run "${auth_mode_tmpl}" basic_pass=inherited \
     publish_lock=inherited read_lock=inherited api_pass=inherited \
     file_bodies=inherited rendered=inherited content=inherited \
-    value=inherited template_body=inherited || return 1
+    value=inherited template_body=inherited resolve_token=inherited \
+    || return 1
   if (( fixture_status != 0 )); then
     harness::add_reason "종료 코드 ${fixture_status}"
     return 1

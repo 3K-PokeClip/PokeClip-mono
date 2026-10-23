@@ -261,8 +261,8 @@ api_pass::case_token_count() {
 api_pass::case_inherited_export() {
   fixture::new_case
   fixture::base_env
-  fixture::run start-media.sh api_pass=inherited values=inherited \
-    rendered=inherited content=inherited || return 1
+  fixture::run start-media.sh api_pass=inherited rendered=inherited \
+    content=inherited || return 1
   if (( fixture_status != 0 )); then
     harness::add_reason "종료 코드 ${fixture_status}"
     return 1

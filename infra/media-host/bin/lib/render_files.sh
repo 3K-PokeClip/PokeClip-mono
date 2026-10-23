@@ -100,6 +100,8 @@ install_files() {
 # 목록의 소유 값이 모두 숫자 uid:gid 인지 본다.
 # Globals:
 #   file_owners, render_step
+# Returns:
+#   0 / 1 숫자 꼴 아님(단계 이름은 render_step = owner).
 #######################################
 check_file_owners() {
   local owner
