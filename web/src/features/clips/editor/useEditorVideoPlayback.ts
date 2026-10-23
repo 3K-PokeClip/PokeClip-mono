@@ -102,13 +102,17 @@ export function useEditorVideoPlayback(options: {
   // 🔴 재생 서버의 응답은 만들어 가며 흘려보내는 영상이라 그대로 틀면 **되감기·건너뛰기가 안 된다**(seekable 0~0, 실측).
   // 창 하나를 통째로 받아 브라우저 안의 파일로 만든 뒤 튼다 — 그러면 구간 반복·프레임 이동이 즉시 된다.
   const [src, setSrc] = useState('');
+  // src에 실제로 담긴 창. 새 창을 받는 동안은 옛 영상이 그대로라 새 창을 알리면 옛 장면을 새 시각으로 읽는다
+  const [srcWindow, setSrcWindow] = useState<Window | null>(null);
   useEffect(() => {
     if (recordingSeconds <= 0) return undefined;
     if (win.empty) {
       setFailed(true);
       setSrc('');
+      setSrcWindow(null);
       return undefined;
     }
+    const target = win;
     const abort = new AbortController();
     let objectUrl: string | null = null;
     setFailed(false);
@@ -130,6 +134,7 @@ export function useEditorVideoPlayback(options: {
       .then((blob) => {
         objectUrl = URL.createObjectURL(new Blob([blob], { type: 'video/mp4' }));
         setSrc(objectUrl);
+        setSrcWindow(target);
       })
       .catch((e: unknown) => {
         if (!(e instanceof DOMException && e.name === 'AbortError')) setFailed(true);
@@ -138,7 +143,7 @@ export function useEditorVideoPlayback(options: {
       abort.abort();
       if (objectUrl !== null) URL.revokeObjectURL(objectUrl);
     };
-  }, [remoteUrl, streamId, recordingSeconds, win.empty]);
+  }, [remoteUrl, streamId, recordingSeconds, win]);
 
   const clampToWindow = useCallback((seconds: number) => {
     const w = winRef.current;
@@ -317,10 +322,10 @@ export function useEditorVideoPlayback(options: {
 
   const loadedWindow = useMemo(
     () =>
-      win.empty || recordingSeconds <= 0
+      srcWindow === null || recordingSeconds <= 0
         ? null
-        : { startSeconds: win.startSeconds, endSeconds: win.endSeconds },
-    [win, recordingSeconds],
+        : { startSeconds: srcWindow.startSeconds, endSeconds: srcWindow.endSeconds },
+    [srcWindow, recordingSeconds],
   );
 
   return {
@@ -329,6 +334,6 @@ export function useEditorVideoPlayback(options: {
     video,
     src,
     window: loadedWindow,
-    windowStartSeconds: win.startSeconds,
+    windowStartSeconds: srcWindow?.startSeconds ?? win.startSeconds,
   };
 }

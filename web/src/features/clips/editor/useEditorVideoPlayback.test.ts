@@ -94,6 +94,36 @@ describe('useEditorVideoPlayback — 녹화 구간', () => {
   });
 });
 
+describe('useEditorVideoPlayback: 받은 창 알리기 (POK-389)', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('창은 영상을 다 받은 뒤에 알린다: 받는 동안 알리면 옛 영상을 새 창 시각으로 읽어 미리 듣기·필름띠가 어긋난다(PR #341 codex)', async () => {
+    let finish: (res: Response) => void = () => undefined;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => new Promise<Response>((resolve) => (finish = resolve))),
+    );
+    vi.stubGlobal(
+      'URL',
+      Object.assign(URL, { createObjectURL: () => 'blob:x', revokeObjectURL: () => undefined }),
+    );
+    const { result } = renderHook(() =>
+      useEditorVideoPlayback({
+        streamId: 'key-1',
+        recordingStartMs: BASE,
+        recordingSeconds: 38,
+        pieces: PIECES,
+        initialRange: { startSeconds: 5, endSeconds: 10 },
+      }),
+    );
+    expect(result.current.window).toBeNull();
+
+    finish(new Response('mp4', { status: 200 }));
+    await waitFor(() => expect(result.current.src).toBe('blob:x'));
+    expect(result.current.window).toEqual({ startSeconds: 0, endSeconds: 14 });
+  });
+});
+
 describe('useEditorVideoPlayback: 출입증 쿠키 (POK-317)', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
