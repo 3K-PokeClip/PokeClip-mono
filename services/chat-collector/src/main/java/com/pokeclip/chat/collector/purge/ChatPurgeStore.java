@@ -45,7 +45,7 @@ public class ChatPurgeStore {
     public void request(String channelId, Instant since) {
         jdbc.update("""
                 INSERT INTO purged_channels (channel_id, requested_at) VALUES (?, ?)
-                ON CONFLICT (channel_id) DO UPDATE SET requested_at = EXCLUDED.requested_at, completed_at = NULL
+                ON CONFLICT (platform, channel_id) DO UPDATE SET requested_at = EXCLUDED.requested_at, completed_at = NULL
                  WHERE purged_channels.completed_at IS NOT NULL
                    AND EXCLUDED.requested_at > purged_channels.completed_at""",
                 channelId, Timestamp.from(since));
