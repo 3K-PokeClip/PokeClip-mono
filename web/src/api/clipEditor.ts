@@ -682,6 +682,14 @@ export type PlaybackAccessResult =
  * 묻지 않으면 정상 방송의 쿠키까지 빠진다(PR #320 codex)
  */
 const playbackNotNeeded = new Set<string>();
+/**
+ * 방송 번호 → 이 탭이 받은 출입증 쿠키가 끝나는 시각. 라이브 화면이 직접 받은 것까지 여기 모인다: 지난 방송 목록의 상한은
+ * 브라우저 쿠키 한도를 지키려는 것이라 누가 받았든 다 센다(PR #332 codex). 같은 영상 키를 다른 방송 번호로 받으면 두 번 세는데,
+ * 그쪽은 쿠키가 덜 쌓이는 쪽으로 틀린다
+ */
+const issuedCookieUntil = new Map<string, number>();
+/** 만료 시각을 모르는 출입증의 쿠키 수명(운영 PLAYBACK_ACCESS_TTL 기본값) */
+const PLAYBACK_COOKIE_TTL_MS = 60 * 60_000;
 
 export async function requestPlaybackAccess(streamId: string): Promise<PlaybackAccessResult> {
   try {
@@ -701,6 +709,7 @@ export async function requestPlaybackAccess(streamId: string): Promise<PlaybackA
       /* 본문이 없으면 만료를 모른다 — 부른 쪽이 기본 간격으로 다시 받는다 */
     }
     markPlaybackCookiesIssued();
+    issuedCookieUntil.set(streamId, expiresAtMs ?? Date.now() + PLAYBACK_COOKIE_TTL_MS);
     return { kind: 'granted', expiresAtMs };
   } catch (e) {
     // 「필요 없음」은 서명 재료가 없는 503뿐이다. 자격 확인이 안 되는 503(authorization_unavailable)도 필요 없음으로 접으면
@@ -783,10 +792,15 @@ export function ensurePlaybackAccessForList(
   const now = Date.now();
   const fresh = new Set<string>();
   const alive = new Set<string>();
+  // 받는 중인 것도 곧 쿠키가 되므로 자리를 쓴다
+  let inFlight = 0;
   for (const entry of playbackAccessCache.values()) {
     if (entry.until > now) fresh.add(entry.mediaKey);
     if (entry.until + PLAYBACK_ACCESS_REUSE_MARGIN_MS > now) alive.add(entry.mediaKey);
+    if (!entry.settled) inFlight += 1;
   }
+  let aliveCookies = inFlight;
+  for (const until of issuedCookieUntil.values()) if (until > now) aliveCookies += 1;
   const byKey = new Map<string, string>();
   for (const { streamId, mediaKey } of items)
     if (!byKey.has(mediaKey)) byKey.set(mediaKey, streamId);
@@ -809,7 +823,7 @@ export function ensurePlaybackAccessForList(
   };
   // 정렬은 안정적이라 같은 차례끼리는 목록 순서다
   waiting.sort((a, b) => (listGrantedAt.get(a) ?? -1) - (listGrantedAt.get(b) ?? -1));
-  let free = LIST_ACCESS_MAX_KEYS - alive.size;
+  let free = LIST_ACCESS_MAX_KEYS - aliveCookies;
   // 자리가 없어 못 받은 키가 있나. ensurePlaybackAccess의 null(필요 없음 · 재생 서버 없음)과 섞지 않으려고 따로 센다
   let someoneWaits = false;
   for (const mediaKey of waiting) {

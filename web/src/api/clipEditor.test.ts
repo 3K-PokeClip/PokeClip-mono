@@ -480,6 +480,19 @@ describe('영상 출입증 받기와 쿠키 싣기 (POK-317)', () => {
     expect(posts()).toHaveLength(6);
   });
 
+  it('라이브 화면이 직접 받은 출입증도 목록 상한에 센다: 그 쿠키도 브라우저 한도를 같이 쓴다(PR #332 codex)', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.parse('2026-10-23T00:00:00Z'));
+    const { api, posts } = await load(granted('2026-10-23T01:00:00Z'));
+    for (const id of ['L-1', 'L-2', 'L-3', 'L-4']) await api.requestPlaybackAccess(id);
+    const items = Array.from({ length: 14 }, (_, i) => ({
+      streamId: `S-${i}`,
+      mediaKey: `k-${i}`,
+    }));
+    await Promise.all([...api.ensurePlaybackAccessForList(items).values()]);
+    expect(posts().filter((url) => url.includes('/S-'))).toHaveLength(8);
+  });
+
   it('「필요 없음」을 받은 방송은 목록 자리를 쓰지 않는다: 로컬 · dev는 상한에 안 걸린다', async () => {
     const { api, posts } = await load(() =>
       jsonResponse(503, { error: 'playback_signing_unavailable' }),
