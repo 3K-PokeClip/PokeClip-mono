@@ -121,9 +121,9 @@ public class SoopLinkService {
             case REJECTED -> SoopResolveResult.rejected("BROKEN");
             case UNAVAILABLE -> SoopResolveResult.rejected("REFRESH_UNAVAILABLE");
             // WITHDRAWN도 UNLINKED다(BROKEN만 다르다): 탈퇴한 회원에게 「다시 연동」을 권할 일이 없다(계획 검증 M11).
-            case NOT_LINKED -> SoopResolveResult.rejected(links.findFirstByUserIdOrderByCreatedAtDesc(userId)
-                    .map(last -> last.status(Instant.now()) == LinkStatus.BROKEN ? "BROKEN" : "UNLINKED")
-                    .orElse("NOT_LINKED"));
+            // 마지막 행 상태는 갱신기가 락 안에서 읽어 실어 준 것을 쓴다(락 밖에서 다시 읽지 않는다, PR #329 봇 지적).
+            case NOT_LINKED -> SoopResolveResult.rejected(r.lastStatus() == null ? "NOT_LINKED"
+                    : r.lastStatus() == LinkStatus.BROKEN ? "BROKEN" : "UNLINKED");
         };
     }
 }

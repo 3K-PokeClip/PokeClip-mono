@@ -187,6 +187,24 @@ class SoopTokenRefresherTest extends SoopLinkTestSupport {
         assertThat(refresher.refreshIfExpiringWithin(u.getId(), AHEAD).outcome()).isEqualTo(RefreshOutcome.REFRESHED);
     }
 
+    /** NOT_LINKED에는 락 안에서 읽은 마지막 행 상태가 실린다(resolve가 락 밖에서 다시 안 읽게). */
+    @Test
+    void NOT_LINKED에는_락_안에서_읽은_마지막_행_상태가_실린다() {
+        User broken = newUser();
+        linked(broken, Duration.ofHours(1));
+        SOOP.tokenResponds(401, "{}");
+        refresher.refreshIfExpiringWithin(broken.getId(), AHEAD);
+        awaitCleanup();
+        User unlinked = newUser();
+        linked(unlinked, Duration.ofHours(8));
+        writer.revoke(unlinked.getId(), Instant.now());
+        awaitCleanup();
+
+        assertThat(refresher.refreshIfExpiringWithin(broken.getId(), AHEAD).lastStatus()).isEqualTo(LinkStatus.BROKEN);
+        assertThat(refresher.refreshIfExpiringWithin(unlinked.getId(), AHEAD).lastStatus()).isEqualTo(LinkStatus.UNLINKED);
+        assertThat(refresher.refreshIfExpiringWithin(newUser().getId(), AHEAD).lastStatus()).isNull();
+    }
+
     @Test
     void 미연동이면_NOT_LINKED() {
         assertThat(refresher.refreshIfExpiringWithin(newUser().getId(), AHEAD).outcome())

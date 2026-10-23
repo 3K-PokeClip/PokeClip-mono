@@ -66,11 +66,14 @@ public class SoopTokenRefresher {
         // DB(timestamptz)는 마이크로초까지다. 리눅스 시계는 나노초라 자르지 않으면 스냅샷의 만료 시각이 저장값과 어긋난다.
         Instant now = Instant.now().truncatedTo(ChronoUnit.MICROS);
         if (users.findByIdForUpdate(userId).isEmpty()) {
-            return RefreshResult.of(RefreshOutcome.NOT_LINKED);
+            return RefreshResult.notLinked(null);
         }
         Optional<SoopChannelLink> found = links.findByUserIdAndRevokedAtIsNull(userId);   // 락 뒤 재읽기
         if (found.isEmpty()) {
-            return RefreshResult.of(RefreshOutcome.NOT_LINKED);
+            // 마지막 행 상태도 락 안에서 읽어 싣는다. resolve가 락 밖에서 다시 읽지 않게.
+            LinkStatus last = links.findFirstByUserIdOrderByCreatedAtDesc(userId)
+                    .map(l -> l.status(now)).orElse(null);
+            return RefreshResult.notLinked(last);
         }
         SoopChannelLink link = found.get();
         boolean expiring = !link.getAccessExpiresAt().isAfter(now.plus(minRemaining));
