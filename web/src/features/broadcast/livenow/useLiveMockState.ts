@@ -649,7 +649,8 @@ export function useLiveMockState(pastRoute: boolean): LiveMockState {
   const { data: soop } = useQuery(soopLinkQueryOptions);
   const { data: me } = useMe();
   // 화면이 그릴 방송 정보는 대표 플랫폼 하나의 것이다(POK-397). 받을 때 고른 것을 쓰지 않고 여기서 다시 고르는 것은 이 값이
-  // info와 같은 렌더에 서야 해서다(저장소 값은 효과 뒤에 온다)
+  // info와 같은 렌더에 서야 해서다(저장소 값은 효과 뒤에 온다). 켜짐 판정은 info가 바뀔 때만 다시 한다: 방송 중에는 관측이
+  // 1분마다 오고(통로 · 정기 조회), 끝난 방송은 마지막 관측 기준이라 지금 시각에 기대지 않는다(PR #368 claude)
   const view = useMemo(() => (info === null ? null : primaryInfo(info, Date.now())), [info]);
   // 채널 이름은 내 방송일 때만, 대표 플랫폼의 내 연동에서 읽는다(치지직 채널 이름 · SOOP 닉네임, POK-397). 플랫폼 값이 없는 옛
   // 서버면 치지직이다. 위임받은 방송(EDITOR)은 방송 줄에 스트리머 채널이 실려 오지 않아 비운다 — 내 채널 이름을 남의 방송에
@@ -670,6 +671,7 @@ export function useLiveMockState(pastRoute: boolean): LiveMockState {
         // 지난 방송 주소는 방송 번호를 정하기 전에도 라이브 안내(「방송 중인 채널이 없어요」)를 쓰지 않는다(리뷰 3라운드)
         streamId ||
         (pastRoute ? '지난 방송' : '방송 중인 채널이 없어요'),
+      // 정보 바는 이 칸을 그리지 않는다(플랫폼 태그는 홈 라이브 띠에만 있다). 방송 정보가 아직 없으면 빈 값이다
       platform: onAirLabel(info?.platforms, Date.now()) ?? '',
       channelName,
       startedNote: !streamId
