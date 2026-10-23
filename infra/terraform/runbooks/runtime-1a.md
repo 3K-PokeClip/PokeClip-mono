@@ -39,8 +39,8 @@ prod/network(O7a) 뒤, platform(O7d) · media(O7e) 앞입니다. platform · med
 |---|---|---|
 | 1 | 직전 점검(`runtime-1a` — SCP · 2-3 · 이벤트) — 첫 SCP 판정은 CHANGED | ⑤ 보고 · `--accept` |
 | 2 | 본 apply(실행기 끔) | plan 승인 |
-| 3 | 운영 확인 — 엔진 실제 부판 기록 | — |
-| 4 | 직전 점검 다시 → 실행기 켬 | plan 승인 |
+| 3 | 운영 확인 — 엔진 실제 부판 기록 · 마스터 비밀 입력 파일 · 2-3 다시 | — |
+| 4 | 직전 점검 다시 → 실행기 켬 → 2-3 다시(SQL 전) | plan 승인 |
 | 5 | SQL 적용(00 → 10 → 20 → 30 → 40) | send-command 승인 |
 | 6 | advisory 확인(50 → 40) | send-command 승인 |
 | 7 | 직전 점검 다시(막지 않음) → 실행기 끔 · 잔여 0 | plan 승인 |
@@ -74,21 +74,28 @@ bash infra/terraform/scripts/precheck/events.sh --since <비교 기준 판정 �
     2-3 판정이 직접 읽습니다. runtime-1a 직전에는 자원이 없어 정책 없이
     판정하고 `report.txt` 에 「자원 없음」 을 남깁니다. 종료 3(UNDECIDED)이면 kty 가
     `approvals.tsv` 에 「진행」 을 적어야 다음으로 갑니다.
+*   ② 에서 `prod-instance`(prod EC2 인스턴스 — 실행기가 꺼져 있고 다른 prod
+    인스턴스도 없음) · `rds-master-secret`(관리형 마스터 비밀 — apply 전이라
+    입력 파일 없음)의 `TARGET_NONE` 은 이 걸음에서 정상입니다. 「진행」 의
+    이유로 그렇게 적습니다.
 *   ① 이 종료 0 이 아니거나(승인 뒤에도 DENIED 등) ② 가 종료 0 도, 「진행」
     이 적힌 종료 3 도 아니면 2 로 가지 않습니다.
 
 ## 2. 본 apply
 
 1.  **plan**: 실행기는 끈 채(기본값) plan 을 파일로 남깁니다. 앞에 남은 plan
-    파일은 먼저 지웁니다.
+    파일은 먼저 지웁니다. `<상태 버킷 이름>` 은 kty 가 터미널에서 prod 상태
+    버킷 이름(`prod/bootstrap` 의 `state_bucket_name`)으로 바꿔 넣고
+    돌립니다 — 이 문서 · 세션에 값을 적지 않습니다.
 
     ```shell
     cd "$(git rev-parse --show-toplevel)/infra/terraform/prod/runtime"
     cp backend.hcl.example backend.hcl
-    sed -i.orig 's/<STATE_BUCKET_PROD>/pokeclip-tfstate-prod-apne2/' backend.hcl
+    sed -i.orig 's/<STATE_BUCKET_PROD>/<상태 버킷 이름>/' backend.hcl
     rm backend.hcl.orig
     grep -c '^bucket' backend.hcl              # 1 이어야 함(값은 내지 않음)
     grep -c '<STATE_BUCKET_PROD>' backend.hcl  # 0 이어야 함
+    grep -c '<상태 버킷 이름>' backend.hcl      # 0 이어야 함(1 이면 안 바꿔 넣음)
     rm -f runtime.tfplan
     terraform init -backend-config=backend.hcl
     terraform plan -out=runtime.tfplan
@@ -147,20 +154,54 @@ aws logs describe-log-groups --region ap-northeast-2 \
     판은 메이저만 고정해서 생성 부판은 AWS 의 17 기본값입니다(H4).
 *   로그 그룹은 `/aws/rds/instance/pokeclip-prod-db/postgresql` 하나이고
     보관이 `30` 입니다.
-*   관리형 마스터 비밀에 default_tags 가 붙는지는 미확인입니다. 아래로
-    보고 결과를 기록합니다(붙지 않아도 멈추지 않습니다).
+*   관리형 마스터 비밀에 default_tags 가 붙는지는 미확인입니다. 아래
+    `describe-secret` 으로 보고 결과를 기록합니다. 태그는 판정에 쓰지 않습니다
+    — 2-3 판정은 이 비밀을 아래 입력 파일로 묻습니다.
+
+### 3-1. 관리형 마스터 비밀을 2-3 판정에 넣기
+
+이 비밀은 이름 끝이 생성 때 정해져 데이터 행에 ARN 을 적을 수 없습니다.
+그래서 본 apply 직후 kty 가 `terraform output` 을 증거 루트의 입력 파일로
+한 번 적고, 2-3 판정을 다시 돌립니다. ARN 은 화면에 내지 않고 파일로만
+옮깁니다. 입력 파일은 다음 단계 판정도 읽으니 지우지 않습니다.
 
 ```shell
 cd "$(git rev-parse --show-toplevel)/infra/terraform/prod/runtime"
+if (
+  umask 077
+  mkdir -p ~/.pokeclip-precheck &&
+    terraform output -raw rds_master_user_secret_arn \
+      >~/.pokeclip-precheck/input-rds-master.txt
+); then
+  printf 'INPUT OK\n'
+else
+  printf '멈춤: 입력 파일을 쓰지 못함\n' >&2
+fi
 aws secretsmanager describe-secret --region ap-northeast-2 \
-  --secret-id "$(terraform output -raw rds_master_user_secret_arn)" \
+  --secret-id "$(cat ~/.pokeclip-precheck/input-rds-master.txt)" \
   --query Tags
+cd "$(git rev-parse --show-toplevel)"
+bash infra/terraform/scripts/precheck/principal-check.sh runtime-1a
 ```
+
+*   `INPUT OK` 가 아니면 4 로 가지 않습니다.
+*   2-3 판정은 1 의 ② 대로 봅니다. 여기에 더해 `rds-master-secret` 행이
+    `ALLOWED`(멈춤)이면 dev 주체가 마스터 비밀을 읽거나 바꿀 수 있다는
+    뜻이니 4 로 가지 않고 보고합니다. 그 행이 아직 `TARGET_NONE` 이거나
+    종료 2 면(입력 파일을 읽지 못함 · 꼴 밖) 원인을 고친 뒤 다시 돌립니다.
+    `prod-instance` 의 `TARGET_NONE` 은 실행기가 꺼져 있어 정상입니다.
 
 ## 4. 실행기 켬
 
 1.  1 의 점검을 다시 합니다(같은 묶음 · `--since` 는 그때의 비교 기준).
-    1 의 통과 조건이 아니면 켜지 않습니다.
+    1 의 통과 조건이 아니면 켜지 않습니다. 이번에는 아래도 멈춤입니다.
+    *   2-3 판정의 `report.txt` 에 「자원 없음(첫 단계 — 정책 없이
+        판정)」 줄이 있음 — 본 apply 뒤인데 주제 · 큐가 없다는 뜻이라
+        이상입니다. 도구는 첫 단계라 통과로 셉니다. 사람이 이 줄을 보고
+        멈춥니다.
+    *   `rds-master-secret` 행이 `TARGET_NONE` 이거나 `ALLOWED` 임(3-1).
+
+    `prod-instance` 의 `TARGET_NONE` 은 실행기가 아직 꺼져 있어 정상입니다.
 1.  **plan**: 실행기만 켜는 plan 입니다.
 
     ```shell
@@ -185,6 +226,27 @@ aws secretsmanager describe-secret --region ap-northeast-2 \
       --filters "Key=InstanceIds,Values=${runner_id}" \
       --query 'InstanceInformationList[0].PingStatus' --output text
     ```
+
+1.  **켬 뒤 2-3 판정(SQL 보내기 전)**: 켜진 실행기는 이제 `prod-instance`
+    행으로 풀립니다(인스턴스 ID 는 켤 때 정해져 `Environment = prod` 태그로
+    찾음). dev 주체가 이 상자에 명령(`ssm:SendCommand`)이나 세션
+    (`ssm:StartSession`)을 보낼 수 있으면 상자의 역할로 마스터 비밀을 읽을
+    수 있습니다. 저장소 뿌리에서 2-3 판정만 다시 돌립니다.
+
+    ```shell
+    cd "$(git rev-parse --show-toplevel)"
+    bash infra/terraform/scripts/precheck/principal-check.sh runtime-1a
+    ```
+
+    1 의 ② 통과 조건(종료 0, 또는 「진행」 이 적힌 종료 3)이 아니거나 아래
+    가운데 하나면 SQL 을 보내지 않고 곧바로 7(끔)로 갑니다.
+
+    *   `prod-instance` 행이 `ALLOWED`(멈춤) — dev 주체에 그 인스턴스의
+        명령 · 세션 권한이 있음.
+    *   `prod-instance` 행이 `TARGET_NONE` — 켰는데 태그로 풀리지 않음(한계
+        A14). 판정하지 못했으니 보내지 않습니다.
+    *   `report.txt` 에 「자원 없음」 줄 · `rds-master-secret` 의
+        `TARGET_NONE` 또는 `ALLOWED`(4 의 첫 걸음과 같음).
 
 ## 5. SQL 적용
 
@@ -464,7 +526,9 @@ EXECUTE 를 PUBLIC 에서 회수할 수 있는지만 보고 ROLLBACK 합니다(K
 
 1.  1 의 점검을 다시 합니다. **결과가 CHANGED · DENIED · STOP ·
     UNDECIDED 여도 끔은 진행하고** 결과만 보고합니다 — 끔은 잔여 정리라
-    막지 않습니다.
+    막지 않습니다. 단 2-3 판정의 `report.txt` 에 「자원 없음(첫 단계 —
+    정책 없이 판정)」 줄이 있으면(본 apply 뒤인데 주제 · 큐가 없음 —
+    이상), 끔과 잔여 0 까지는 하고 8 로 닫지 않고 멈춰 보고합니다.
 1.  **지금 남은 실행기 자원 수 N**: 상태의 자원 주소 가운데 실행기 자원
     아홉의 주소(`runner_re` — 앵커 일치 허용 목록)만 셉니다(계정 ID · ARN
     은 나오지 않음). 4 가 끝까지 됐으면 9 이고, 4 가 중간에 실패했으면(예:
@@ -530,8 +594,8 @@ EXECUTE 를 PUBLIC 에서 회수할 수 있는지만 보고 ROLLBACK 합니다(K
 
 ## 8. 기록
 
-*   볼트 raw: 각 걸음의 명령 · 출력 · 판정 — 1 · 4 · 7 의 점검 첫 줄과 증거
-    디렉터리 이름, 3 의 `EngineVersion` 실제 값 · 비밀 태그, 5 의 sha256
+*   볼트 raw: 각 걸음의 명령 · 출력 · 판정 — 1 · 3-1 · 4(켬 전 · 켬 뒤) ·
+    7 의 점검 첫 줄과 증거 디렉터리 이름, 3 의 `EngineVersion` 실제 값 · 비밀 태그, 5 의 sha256
     일곱 줄 · 머지 SHA · `prepare` · `apply` 결과, 6 의 `probe` 결과, 7 의
     잔여 0. 옮기기 전에 비밀 값 훑기를 합니다(계정 ID · ARN 은 가립니다).
 *   Jira POK-304 코멘트: 6 의 출력과 판정 갈래(1단-나 재료).
@@ -579,11 +643,17 @@ send-command 상태가 `Success` 가 아니거나(`Failed` · `TimedOut` ·
 
 ## 한계
 
-*   2-3 판정(1 의 ②)은 dev 주체가 실행기 역할을 EC2 에 넘길 수 있는지
-    (`iam:PassRole` · `iam:PassedToService`)를 묻지만, 판정은 직전 한 번입니다.
-    실행기가 켜진 동안 그 권한이 생기면 dev 주체가 이 프로필로 상자를 띄워
-    마스터 비밀을 읽을 수 있습니다. 그래서 SQL 직후 끄고, 잊어도 상자는
-    120분 뒤 스스로 멈춥니다.
+*   2-3 판정은 dev 주체가 실행기 역할을 EC2 에 넘길 수 있는지
+    (`iam:PassRole` · `iam:PassedToService` — 1 의 ②), 켜진 실행기에 명령 ·
+    세션을 보낼 수 있는지(`ssm:SendCommand` · `ssm:StartSession` — 4 의 켬
+    뒤), 마스터 비밀을 읽을 수 있는지(3-1)를 묻지만, 판정은 그 시점 한
+    번씩입니다. 실행기가 켜진 동안 그 권한이 생기면 dev 주체가 마스터 비밀을
+    읽을 수 있습니다. 그래서 SQL 직후 끄고, 잊어도 상자는 120분 뒤 스스로
+    멈춥니다.
+*   명령 질문은 인스턴스 ARN 만 묻고 문서(`AWS-RunShellScript`) 쪽 허용은
+    묻지 않습니다. dev 배포 주체 둘은 그 문서 허용이 양성 대조라 갈리는
+    쪽이 인스턴스이기 때문입니다. dev 정책이 인스턴스를 태그 조건으로 열면
+    시뮬레이터가 누락 문맥을 내고 판정 불가(`MISSING_CONTEXT`)가 됩니다.
 *   SQL 실적용 시험(CI)은 Go 메타 명령 처리기로 돌고 psql 자체가 아니며,
     대역은 `rds_superuser` 가 아닙니다. TLS · `rds.force_ssl` 은 CI 가 재지
     못합니다.

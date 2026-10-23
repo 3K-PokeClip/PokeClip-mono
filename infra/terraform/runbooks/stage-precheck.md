@@ -41,7 +41,7 @@
 | O7a | `O7a` | — | 함 | 함 | dev VPC CIDR 비중첩 | apply |
 | O7b | `O7b` | — | 함 | 함 | 공유 존의 옛 ACM 검증 이름(`_` 로 시작하는 CNAME) | apply |
 | O7c | `O7c` | — | 함 | 함 | — | 푸시마다 |
-| runtime-1a | `runtime-1a` | — | 함(POK-365 완료 — 런타임 상태 객체 · RDS · SNS · SQS · 실행기 역할 · 프로필이 이 단계부터, rewind 버킷은 O7d 부터 대상) | 함 | — | plan 승인마다(본 apply · 켬 · 끔) |
+| runtime-1a | `runtime-1a` | — | 함(POK-365 완료 — 런타임 상태 객체 · RDS · SNS · SQS · 실행기 역할 · 프로필 · prod EC2 인스턴스(켬 뒤 태그) · 관리형 마스터 비밀(apply 뒤 입력 파일)이 이 단계부터, rewind 버킷은 O7d 부터 대상) | 함 | — | plan 승인마다(본 apply · 켬 · 끔) · 켬 직후 2-3 재판정 |
 | O7d | `O7d` | — | 함 | 함 | Cloud Map 사설 존 리전 조건 · 리스너 규칙 transform 속성 · ELB 한도 읽기 | (f) 실측 · 태스크 생성 |
 | O7e | `O7e` | `O7e-stop1`(멈춤 자리 ①) | 함 | 함 | — | apply · 기동 확인 · A1 |
 | O7f | `O7f` | `O7f-stop2`(멈춤 자리 ② — 값 입력 직전 · 7-R 직전에 다시). 부분 진행 중 하위 단계는 `O7f` · `testkey` · `loopback` 을 다시 | 함 | 함 | KVS 그릇 재조회 · Origin Shield · 로그 그룹 부수 동작 | apply · 값 · 시험 판정 · A2 |
@@ -230,7 +230,8 @@ bash infra/terraform/scripts/precheck/scp-recheck.sh --accept O7f \
 (같은 인스턴스 프로필) · dev 배포 사용자 · 옛 OIDC 역할이고
 (`data/principal_sim/dev_principals.tsv`), 자원은 상태 버킷 · 상태 객체 ·
 비밀 · ECR · network · 인증서 · 권한 변경 대상 · prod 런타임 자원(RDS ·
-SNS · SQS · rewind 버킷 · SQL 실행기 역할 · 프로필)입니다
+관리형 마스터 비밀 · SNS · SQS · rewind 버킷 · SQL 실행기 역할 · 프로필) ·
+prod EC2 인스턴스(켜진 SQL 실행기 · O7e 뒤 media 상자)입니다
 (`prod_targets.tsv`). SNS 주제 · SQS 큐의 자원 정책도 직접 읽습니다(아래
 「해석 · 정책 읽기」). 읽기만 하고 AWS 에 아무것도 만들지 않으며, 실제
 접근을 시도하지 않습니다.
@@ -271,7 +272,11 @@ bash infra/terraform/scripts/precheck/principal-check.sh O7a
     허용이 아니면 종료 2 입니다.
 1.  **해석 · 정책 읽기**: 주체 넷을 ARN 으로 풀고(같은 역할이면 하나로
     합침), 대상 행을 태그(`Environment = prod`) · 구체 ARN · prod 역할 경로
-    (`/pokeclip/prod/`) · 붙은 고객 관리형 정책으로 풉니다. 상태 버킷 · 비밀
+    (`/pokeclip/prod/`) · 붙은 고객 관리형 정책 · 입력 파일로 풉니다. 입력
+    파일은 apply 뒤에야 ARN 이 정해지는 자원(관리형 마스터 비밀)을 kty 가
+    증거 루트에 적은 `~/.pokeclip-precheck/input-<이름>.txt`(0600 — 줄마다
+    이 계정 · 행의 서비스 · 리전의 ARN 하나)입니다. 없으면 `TARGET_NONE`,
+    비었거나 꼴 밖 줄 · 0600 아님 · 링크면 종료 2 입니다. 상태 버킷 · 비밀
     · ECR · SNS 주제 · SQS 큐는 자원 정책을 직접 읽습니다. 주제 · 큐가 아직
     없으면(`NotFound` · `AWS.SimpleQueueService.NonExistentQueue` ·
     `QueueDoesNotExist`) 그 행의 첫 단계일 때만 정책 없이 판정하고
@@ -321,7 +326,10 @@ bash infra/terraform/scripts/precheck/principal-check.sh O7a
 | 그 밖(우리 정책의 거부) | 통과 | — |
 
 주체 · 대상 단위 사유는 하나당 1건으로 셉니다 — 주체를 찾지 못함
-`PRINCIPAL_MISSING`, 태그 · 존 · prod 역할 해석 0건 `TARGET_NONE`.
+`PRINCIPAL_MISSING`, 태그 · 존 · prod 역할 해석 0건과 입력 파일 없음
+`TARGET_NONE`. 켬 · apply 뒤에야 생기는 대상(prod EC2 인스턴스 · 관리형
+마스터 비밀)은 그 전 실행에서 `TARGET_NONE` 이 정상입니다 — 언제 정상이고
+언제 멈추는지는 [runtime-1a 런북](runtime-1a.md) 1 · 3 · 4 에 있습니다.
 
 ### 2-3 판정의 결과와 갈래
 
@@ -343,7 +351,8 @@ bash infra/terraform/scripts/precheck/principal-check.sh O7a
     자체의 AccessDenied · 응답 꼴(역할 · 사용자 ARN 이 하나가 아님 · 최상위
     판정이 값 하나가 아님 · 큐 속성 응답의 `None` · 요청과 다른 큐 ARN 포함) ·
     정책 파일 꼴 · S3 · ECR · SNS 정책 응답의 `None` ·
-    존 해석 2건 이상 · 잘린 존 목록 · PC0 · PC1 실패 · 옛 CLI · 조직 판정
+    존 해석 2건 이상 · 잘린 존 목록 · 입력 파일의 거부 · 빈 파일 · 꼴 밖
+    줄 · PC0 · PC1 실패 · 옛 CLI · 조직 판정
     False · 자원 정책 읽기의 「없음」 아닌 오류(첫 단계 뒤의 주제 · 큐 「자원
     없음」 포함)입니다.
 *   ⑤ 보고에는 첫 줄 · 표 행 · 증거 디렉터리 이름 · `report.txt` 의 사유별
@@ -353,7 +362,9 @@ bash infra/terraform/scripts/precheck/principal-check.sh O7a
     `policy-<n>.json` · `pca-policy.json`(PC-A 합성 정책) · `req-<n>.json` ·
     `res-<n>.txt` · `res-<n>.err` · `result.tsv` · `report.txt` ·
     `complete.txt`(마지막 — UTC 시각과 `result.tsv` 해시) · kty 손 기록
-    `approvals.tsv`. 지우지 않습니다(리스 만료 때 M18).
+    `approvals.tsv`. 지우지 않습니다(리스 만료 때 M18). 입력 파일
+    `input-<이름>.txt` 는 증거 디렉터리가 아니라 루트 바로 아래에 있고, 다음
+    단계 실행도 그것을 읽습니다(지우지 않음).
 *   지금 데이터에는 공유 공개 존의 prod 레코드 행(Route 53 레코드 변경)이
     없습니다. prod 레코드 이름이 저장소 Terraform 에 오르는 단계 PR 이
     더합니다.
@@ -381,7 +392,7 @@ bash infra/terraform/scripts/precheck/principal-check.sh O7a
 | A4 자원 정책이 역할 세션 ARN 을 지명한 허용 | 좁게 | `SESSION_PRINCIPAL_IN_POLICY` · 이스케이프된 원문은 `POLICY_ESCAPED` |
 | A5 고정 문맥 밖 요청 문맥(출발지 · 요청 태그 · MFA 등)에서만 열리는 허용 | 좁게 | 드러난 키는 첫 실행에서 행에 더함 |
 | A6 자원 리전 밖의 요청 리전 값 | 좁게 | SCP 는 근거로 쓰지 않음 → 한계로 둠 |
-| A7 역할 받기 외 간접 경로(역할 넘기기 · 명령 실행 · 계산 자원 변경 등) | 좁게 | dev 상자 역할이 주체 · 권한 변경 행 |
+| A7 역할 받기 외 간접 경로(역할 넘기기 · 명령 실행 · 계산 자원 변경 등) | 좁게 | dev 상자 역할이 주체 · 권한 변경 행 · 실행기 역할 넘기기 행 · prod 인스턴스의 명령 · 세션 행(태그로 풀린 인스턴스만 — 문서 쪽 허용은 묻지 않음) |
 | A8 권한 변경 대상 밖(다른 주체 · 다른 그룹 대상 변경, 그룹 가입, AWS 관리형 정책 붙이기의 연쇄) | 좁게 | 자기 자신 · 자기 그룹 · prod 역할 · 붙은 고객 관리형 정책까지 |
 | A9 양성 대조는 주체당 질문 하나 · 동작 × 자원 유형 짝의 어긋남 | 좁게 | PC1 · PC2 · 짝은 서비스 승인 참조 대조(사람). 데이터 단언은 서비스 접두 · 계열만 봄 |
 | A10 사람 주체 | 좁게(범위 밖) | — |

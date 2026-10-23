@@ -11,14 +11,18 @@
 # 상태 객체 키 = 각 루트 backend.hcl.example 의 key, 상태 버킷 이름 =
 # prod/bootstrap 의 state_bucket_name 기본값.
 # 해석 tag:<서비스>:<유형> 은 Resource Groups Tagging API 의
-# ResourceTypeFilters 값이다(Environment = prod 태그로 찾음).
+# ResourceTypeFilters 값이다(Environment = prod 태그로 찾음). 해석
+# input:<이름> 은 kty 가 apply 뒤 증거 루트에 적는 입력 파일
+# input-<이름>.txt 의 ARN 이다(lib/principal_resolve.sh 머리 주석 · 파일이
+# 없으면 TARGET_NONE).
 #
 # 동작 이름과 동작 × 자원 유형 짝은 서비스 승인 참조 대조 2026-10-19
 # (https://docs.aws.amazon.com/service-authorization/latest/reference/list_<prefix>.html
 # — prefix = amazons3 · awssecretsmanager · amazonelasticcontainerregistry ·
 # amazonec2 · awscertificatemanager · awsidentityandaccessmanagementiam).
 # prod/runtime 행은 대조 2026-10-24(같은 참조가 지금은 서비스 접두 이름 —
-# list_<접두>.html, 접두 = rds · logs · sns · sqs · s3 · iam).
+# list_<접두>.html, 접두 = rds · logs · sns · sqs · s3 · iam · ssm ·
+# secretsmanager).
 # 데이터 단언은 서비스 접두 · 계열만 본다 — 짝은 사람이 대조한다(A9).
 #
 # 두지 않는 행:
@@ -27,12 +31,6 @@
 # *   Lambda · ALB · ECS · CloudFront — 그 단계 PR 이 행을 더한다.
 # *   prod/runtime 의 앱 비밀 그릇(pokeclip/prod/*)과 RDS SG — 따로 두지
 #     않는다. Environment = prod 태그라 secrets · network-sg 행이 이미 푼다.
-# *   RDS 관리형 마스터 비밀(rds!db-*) — 이름 끝이 생성 때 정해져 구체 ARN 을
-#     적을 수 없고, 없는 ARN 은 정책 읽기가 실패한다. RDS 가 이 비밀에
-#     Environment = prod 를 다는지는 apply 뒤 실측이다(달면 secrets 행이
-#     푼다).
-# *   SQL 실행기 인스턴스 — 켜진 동안만 있다. 상자를 띄우는 길은
-#     sql-runner-role 의 역할 넘기기 질문이 받는다.
 # *   공유 공개 존의 prod 레코드(zone: · Route 53 레코드 이름 문맥) — prod
 #     레코드 이름이 저장소 Terraform 에 오르는 단계 PR 이 더한다.
 
@@ -83,10 +81,27 @@ broadcast-dlq-clip	runtime-1a	arn:arn:aws:sqs:ap-northeast-2:${ACCOUNT}:pokeclip
 broadcast-dlq-chat	runtime-1a	arn:arn:aws:sqs:ap-northeast-2:${ACCOUNT}:pokeclip-prod-broadcast-lifecycle-chat-dlq.fifo	queue	ap-northeast-2	sqs:SendMessage,sqs:ReceiveMessage,sqs:PurgeQueue,sqs:SetQueueAttributes,sqs:AddPermission,sqs:RemovePermission,sqs:DeleteQueue	sqs	-
 
 # SQL 실행기 역할 · 인스턴스 프로필(켜진 동안만 있다 — 꺼져 있어도 묻는다).
-# 역할 넘기기는 EC2 로 넘기는 문맥으로 묻는다(dev 주체가 상자를 띄워 마스터
-# 비밀을 읽는 길). 역할의 권한 변경은 prod-roles 행이 묻는다.
+# 역할 넘기기는 EC2 로 넘기는 문맥으로 묻는다(dev 주체가 이 역할로 새 상자를
+# 띄워 마스터 비밀을 읽는 길). 켜진 실행기 자신에 명령 · 세션을 보내는 길은
+# 아래 prod-instance 행이 받는다. 역할의 권한 변경은 prod-roles 행이 묻는다.
 sql-runner-role	runtime-1a	arn:arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/pokeclip-prod-sql-runner	role	us-east-1	iam:PassRole	none	iam:PassedToService:string:ec2.amazonaws.com
 sql-runner-profile	runtime-1a	arn:arn:aws:iam::${ACCOUNT}:instance-profile/pokeclip/prod/pokeclip-prod-sql-runner	instance-profile	us-east-1	iam:AddRoleToInstanceProfile,iam:RemoveRoleFromInstanceProfile,iam:DeleteInstanceProfile	none	-
+
+# 켬 · apply 뒤에 정해지는 자원(rt1a 종결 r1 H2 · H4 — 런북 runtime-1a 3 ·
+# 4). 그 전 실행에서는 TARGET_NONE(판정 불가)이 정상이다.
+# *   EC2 인스턴스 — 켜진 SQL 실행기는 인스턴스 ID 가 켤 때 정해져
+#     Environment = prod 태그로 푼다(default_tags). O7e 뒤로는 같은 태그의
+#     media 상자도 함께 묻는다. 동작 × 유형 짝은 list_ssm.html — SendCommand
+#     는 document(필수) · instance, StartSession 은 document · instance 이고
+#     instance 의 ARN 이 EC2 인스턴스 ARN 이다. 문서(AWS-RunShellScript)는 묻지
+#     않는다 — dev 배포 주체 둘은 그 문서 허용이 양성 대조라, 갈리는 쪽은
+#     인스턴스다. 꺼져 있고 다른 prod 인스턴스도 없으면 TARGET_NONE 이다.
+# *   RDS 관리형 마스터 비밀(rds!db-*) — 이름 끝이 생성 때 정해져 apply 뒤
+#     kty 가 terraform output 을 입력 파일로 적는다(input:rds-master). RDS 가
+#     이 비밀에 붙이는 태그는 AWS 문서로 확인하지 못해 태그로 풀지 않는다.
+#     동작은 secrets 행과 같다.
+prod-instance	runtime-1a	tag:ec2:instance	instance	ap-northeast-2	ssm:SendCommand,ssm:StartSession	none	-
+rds-master-secret	runtime-1a	input:rds-master	secret	ap-northeast-2	secretsmanager:GetSecretValue,secretsmanager:PutSecretValue,secretsmanager:UpdateSecret,secretsmanager:DeleteSecret,secretsmanager:PutResourcePolicy,secretsmanager:DeleteResourcePolicy,secretsmanager:TagResource,secretsmanager:UntagResource	secretsmanager	-
 
 # rewind 버킷 · 객체 — 첫 단계는 버킷이 생긴 뒤인 O7d 다. runtime-1a 직전
 # 점검 때는 버킷이 없어 버킷 정책 읽기가 「정책 없음」 이 아닌 오류(종료 2)가

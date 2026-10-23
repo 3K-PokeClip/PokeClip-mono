@@ -251,7 +251,8 @@ principal::context_entries() {
 #######################################
 # 대상 행의 해석 방법 · 정책 읽기 방법 · 동작을 검사한다.
 # Globals:
-#   TAG_TYPE_PATTERN, ZONE_PATTERN, ACTION_PATTERN, POLICY_SERVICES
+#   TAG_TYPE_PATTERN, ZONE_PATTERN, KEY_PATTERN, ACTION_PATTERN,
+#   POLICY_SERVICES
 # Arguments:
 #   해석 방법, 정책 읽기 방법, 동작(쉼표 구분).
 # Returns:
@@ -263,6 +264,7 @@ principal::target_fields_ok() {
     tag:*) [[ "${method#tag:}" =~ ${TAG_TYPE_PATTERN} ]] || return 1 ;;
     arn:*) principal::concrete_arn "${method#arn:}" || return 1 ;;
     zone:*) [[ "${method#zone:}" =~ ${ZONE_PATTERN} ]] || return 1 ;;
+    input:*) [[ "${method#input:}" =~ ${KEY_PATTERN} ]] || return 1 ;;
     self:role | self:user | self:group | prodrole | policy:attached)
       [[ "${read}" == none || "${read}" == unread ]] || return 1
       ;;

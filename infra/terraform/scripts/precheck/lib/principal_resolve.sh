@@ -14,17 +14,28 @@
 # 2 다(cc348-5). get-role · get-user 의 성공 응답은 ARN 이 정확히 하나여야
 # 한다(빈 출력도 종료 2).
 #
-# 대상: 단계와 무관한 해석(tag: · arn: · zone: · prodrole)은 행마다 한 번,
+# 대상: 단계와 무관한 해석(tag: · arn: · zone: · input: · prodrole)은 행마다
+# 한 번,
 # 주체에 매인 해석(self:group 의 그룹 · policy:attached 의 고객 관리형
 # 정책)은 단위마다 한 번 한다. tag: · zone: · prodrole 이 0건이면
 # TARGET_NONE 이다. zone: 은 뒤 점을 맞춘 이름이 같고 공개(PrivateZone =
 # False)인 존이 정확히 1건이어야 하고, 2건 이상이면 종료 2 다(cc348-3). 존
 # 목록이 잘렸으면(IsTruncated True · NextDNSName 있음 — 한 번에 최대 100개)
 # 다음 쪽의 같은 이름 공개 존을 못 보므로 종료 2 다.
+#
+# input:<이름> 은 apply 뒤에야 ARN 이 정해지는 자원(관리형 마스터 비밀 —
+# 이름 끝이 생성 때 정해짐)을 kty 가 증거 루트에 적은 입력 파일
+# input-<이름>.txt 로 푼다(rt1a 종결 r1 H4 · 런북 runtime-1a 3). 파일이
+# 없으면 TARGET_NONE 이다. 파일은 evidence::check_file 을 통과해야 하고(0700
+# 루트 · 링크 아닌 0600 일반 파일), 줄마다 이 계정 · 행의 서비스(동작 접두) ·
+# 행의 리전의 구체 ARN 이어야 한다. 빈 파일 · 꼴 밖 줄은 종료 2 다. 파일
+# 이름 말고는 표준 오류에 적지 않는다.
 
 readonly PROD_ROLE_PATH='/pokeclip/prod/'
 readonly AWS_MANAGED_POLICY='arn:aws:iam::aws:policy/'
 readonly ZONE_ID_PATTERN='^/hostedzone/[A-Z0-9]+$'
+# input: 해석의 입력 파일 이름 앞부분(증거 루트 바로 아래).
+readonly INPUT_PREFIX='input-'
 # 존 목록 질의 — 첫 줄은 「IsTruncated<탭>NextDNSName」, 그 뒤 존마다 「이름<탭>
 # ID<탭>PrivateZone」(text 출력은 스칼라를 먼저, 목록을 줄마다 낸다).
 ZONE_QUERY='[IsTruncated,NextDNSName,'
@@ -222,7 +233,36 @@ principal::resolve_zone() {
 }
 
 #######################################
-# 단계 무관 해석 하나(tag: · arn: · zone: · prodrole)를 list_items 로 낸다.
+# input: 행을 증거 루트의 입력 파일로 푼다(머리 주석). 파일이 없으면
+# list_items 가 빈 값이다.
+# Globals:
+#   t_actions, t_region, list_items, account, INPUT_PREFIX
+# Arguments:
+#   t_* 색인, 입력 이름.
+#######################################
+principal::resolve_input() {
+  local t="$1" name="${INPUT_PREFIX}$2.txt" root file line prefix
+  prefix="arn:aws:${t_actions[t]%%:*}:${t_region[t]}:${account}:"
+  root="$(evidence::root)" || exit 2
+  file="${root}/${name}"
+  list_items=""
+  [[ -e "${file}" || -L "${file}" ]] || return 0
+  evidence::check_file "${file}" || exit 2
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    [[ -n "${line}" ]] || continue
+    if [[ "${line}" != "${prefix}"?* ]] ||
+      ! principal::concrete_arn "${line}"; then
+      die "입력 파일의 줄이 이 계정 · 행의 서비스 · 리전의 구체 ARN 이" \
+        "아님(${name})"
+    fi
+    list_items+="${line}"$'\n'
+  done <"${file}" || die "입력 파일을 읽지 못함(${name})"
+  [[ -n "${list_items}" ]] || die "입력 파일이 비어 있음(${name})"
+}
+
+#######################################
+# 단계 무관 해석 하나(tag: · arn: · zone: · input: · prodrole)를 list_items
+# 로 낸다.
 # Globals:
 #   t_method, t_region, list_items, account, ACCOUNT_PLACEHOLDER, prod_roles
 # Arguments:
@@ -247,6 +287,7 @@ principal::resolve_target_arns() {
         '^arn:aws:[a-z0-9-]+:[a-z0-9-]*:[0-9]*:[^*[:space:]]+$'
       ;;
     zone:*) principal::resolve_zone "${method#zone:}" ;;
+    input:*) principal::resolve_input "${t}" "${method#input:}" ;;
     prodrole)
       principal::resolve_prod_roles
       list_items="${prod_roles}"

@@ -130,6 +130,14 @@ PASSED_TO_EC2_ENTRY='{"ContextKeyName":"iam:PassedToService",'
 PASSED_TO_EC2_ENTRY+='"ContextKeyValues":["ec2.amazonaws.com"],'
 PASSED_TO_EC2_ENTRY+='"ContextKeyType":"string"}'
 readonly PASSED_TO_EC2_ENTRY
+# 켬 · apply 뒤에 정해지는 런타임 자원의 대상 행(rt1a 종결 r1 H2 · H4).
+# 「자원 키 · 첫 단계 · 해석 방법 · 반드시 묻는 동작(쉼표 구분)」 이다. 실행기
+# 인스턴스는 켤 때 ID 가 정해져 태그로 풀고, 관리형 마스터 비밀은 이름 끝이
+# 생성 때 정해져 apply 뒤 kty 가 적는 입력 파일로 푼다.
+LATE_TARGETS=(
+  'prod-instance runtime-1a tag:ec2:instance ssm:SendCommand,ssm:StartSession'
+  'rds-master-secret runtime-1a input:rds-master secretsmanager:GetSecretValue')
+readonly LATE_TARGETS
 
 #######################################
 # 데이터 파일의 행(주석 · 빈 줄 뺌)을 낸다.
@@ -730,6 +738,7 @@ service_types() {
     logs) printf ' log-group \n' ;;
     sns) printf ' topic \n' ;;
     sqs) printf ' queue \n' ;;
+    ssm) printf ' instance \n' ;;
     *) ;;
   esac
 }
@@ -805,8 +814,18 @@ method_problem() {
       fi
       ;;
     tag:*)
-      [[ "${method}" == "tag:${service}:${type}" ]] ||
+      # SSM 의 instance 유형은 EC2 인스턴스 ARN 이다(서비스 승인 참조
+      # list_ssm.html 「Resource types」) — 태그 해석도 ec2:instance 로 한다.
+      if [[ "${service}:${type}" == ssm:instance ]]; then
+        [[ "${method}" == tag:ec2:instance ]] ||
+          printf 'ssm instance 행의 tag: 유형 조각이 ec2:instance 가 아님\n'
+      elif [[ "${method}" != "tag:${service}:${type}" ]]; then
         printf 'tag: 유형 조각이 서비스 · 유형과 다름\n'
+      fi
+      ;;
+    input:*)
+      [[ "${method#input:}" =~ ^[a-z][a-z0-9-]*$ ]] ||
+        printf 'input: 이름 꼴이 틀림\n'
       ;;
     zone:*)
       [[ "${service}:${type}" == route53:hostedzone ]] ||
@@ -1014,6 +1033,36 @@ expect_runtime_targets() {
 }
 
 #######################################
+# 데이터 단언: 켬 · apply 뒤에 정해지는 런타임 자원 행(LATE_TARGETS)이 그
+# 첫 단계 · 해석 방법으로 있고 반드시 묻는 동작을 모두 담는다(rt1a 종결 r1
+# H2 · H4).
+# Globals:
+#   LATE_TARGETS
+#######################################
+expect_late_targets() {
+  local entry key want_stage want_method want_actions action stage method
+  local actions
+  for entry in "${LATE_TARGETS[@]}"; do
+    read -r key want_stage want_method want_actions <<<"${entry}"
+    IFS=$'\t' read -r stage method actions _ <<<"$(target_row "${key}")"
+    if [[ "${stage}" != "${want_stage}" || "${method}" != "${want_method}" ]]
+    then
+      testlib::fail "late-targets: ${key} 의 첫 단계 · 해석 방법이" \
+        "${want_stage} · ${want_method} 가 아님 — 「${stage} · ${method}」"
+      return
+    fi
+    for action in ${want_actions//,/ }; do
+      if [[ ",${actions}," != *",${action},"* ]]; then
+        testlib::fail "late-targets: ${key} 에 ${action} 이 없음"
+        return
+      fi
+    done
+  done
+  testlib::ok "late-targets → 실행기 인스턴스(태그) · 관리형 마스터 비밀" \
+    "(입력 파일) 행이 첫 단계 · 해석 방법 · 핵심 동작대로"
+}
+
+#######################################
 # 실제 dev 주체 이름을 가짜 aws 의 주체 해석 답(FAKE_AWS_READS 표)으로 낸다
 # (인스턴스 프로필은 같은 이름의 역할).
 # Outputs:
@@ -1127,6 +1176,7 @@ main() {
   expect_stage_order_matches_wrapper
   expect_target_rows_consistent
   expect_runtime_targets
+  expect_late_targets
   expect_runtime_rows_asked
   expect_dev_principals
   expect_principal_reads
