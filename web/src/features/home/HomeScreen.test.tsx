@@ -1,5 +1,5 @@
 import { act } from 'react';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -229,8 +229,11 @@ describe('HomeScreen', () => {
         'href',
         '/settings/channels',
       );
-      expect(useOnboardingStore.getState().channelLinked).toBe(true);
-      expect(useOnboardingStore.getState().pluginLinked).toBe(true);
+      // 시작 가이드 체크는 화면을 그린 뒤 도는 효과가 세운다: 제목이 뜬 순간엔 아직일 수 있어 기다린다(POK-412)
+      await waitFor(() => {
+        expect(useOnboardingStore.getState().channelLinked).toBe(true);
+        expect(useOnboardingStore.getState().pluginLinked).toBe(true);
+      });
     });
 
     it('SOOP만 연동해도 방송만 남았다고 하고 시작 가이드 1단계를 세운다 (POK-396)', async () => {
@@ -244,7 +247,7 @@ describe('HomeScreen', () => {
         await screen.findByRole('heading', { level: 1, name: '이제 방송만 켜면 돼요' }),
       ).toBeInTheDocument();
       expect(screen.getByText('SOOP 연결됨')).toBeInTheDocument();
-      expect(useOnboardingStore.getState().channelLinked).toBe(true);
+      await waitFor(() => expect(useOnboardingStore.getState().channelLinked).toBe(true));
     });
 
     it('이번 주 기록 — 방송·카드는 이번 주에 시작한 방송, 클립·발행은 이번 주에 만든·올린 것만 센다', async () => {
