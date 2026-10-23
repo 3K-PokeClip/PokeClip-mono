@@ -26,14 +26,15 @@ source "$(dirname -- "${BASH_SOURCE[0]}")/testlib.sh"
 readonly DATA_DIR="${PRECHECK_DIR}/data"
 readonly STAGE_DIR="${DATA_DIR}/stage_actions"
 readonly EVENT_NAMES="${DATA_DIR}/event_names.txt"
-# 계획 M17a 「데이터」 의 묶음 이름 전부.
+# 계획 M17a 「데이터」 의 묶음 이름 전부 + prod 런타임 1단-가(runtime-1a).
 BUNDLES=(1b 5 O7a O7b O7c O7d O7e O7e-stop1 O7f O7f-stop2 testkey loopback 8
-  8a 9 ci-followup lease-expiry)
+  8a 9 ci-followup lease-expiry runtime-1a)
 readonly BUNDLES
 # 2-3 판정을 하는 묶음과 하지 않는 묶음(계획 3절 · 5절 표).
 JUDGED_BUNDLES=(5 O7a O7b O7c O7d O7e O7f 8 8a 9 ci-followup)
 readonly JUDGED_BUNDLES
-UNJUDGED_BUNDLES=(1b O7e-stop1 O7f-stop2 testkey loopback lease-expiry)
+UNJUDGED_BUNDLES=(1b O7e-stop1 O7f-stop2 testkey loopback lease-expiry
+  runtime-1a)
 readonly UNJUDGED_BUNDLES
 # 2-3 판정 · 이벤트 조회 자신의 읽기 동작(설계 11-5 의 2-3-7 · 2-3-8).
 JUDGE_READS=(iam:GetAccountAuthorizationDetails
@@ -77,9 +78,19 @@ PRINCIPAL_READS=('iam:GetInstanceProfile us-east-1' 'iam:GetRole us-east-1'
   'secretsmanager:GetResourcePolicy ap-northeast-2'
   'ecr:GetRepositoryPolicy ap-northeast-2')
 readonly PRINCIPAL_READS
-# 2-3 판정이 없는 묶음이 자기 단계 동작으로 가진 PRINCIPAL_READS 동작
-# (「묶음 동작」 — lease-expiry 의 공유 존 조회).
-STAGE_OWN_READS=('lease-expiry route53:ListHostedZonesByName')
+# 2-3 판정이 없는 묶음이 자기 단계 동작으로 가진 판정 읽기 동작(JUDGE_READS
+# · PRINCIPAL_READS 와 이름이 같은 「묶음 동작」). 「묶음 이름 + 동작」 정확
+# 일치 쌍만 받는다 — 와일드카드 · 동작만 쓰는 예외는 없다(계획 rt1a H1).
+# lease-expiry 는 공유 존 조회, runtime-1a 는 Terraform 자기 읽기와 이벤트
+# 기록 조회다. 쌍마다 묶음 · 동작 · 필요는 expect_stage_own_reads_scoped 가
+# 본다.
+STAGE_OWN_READS=('lease-expiry route53:ListHostedZonesByName'
+  'runtime-1a s3:GetBucketPolicy' 'runtime-1a secretsmanager:GetResourcePolicy'
+  'runtime-1a sns:GetTopicAttributes' 'runtime-1a sqs:GetQueueAttributes'
+  'runtime-1a ec2:DescribeInstances' 'runtime-1a iam:GetRole'
+  'runtime-1a iam:GetInstanceProfile'
+  'runtime-1a iam:ListAttachedRolePolicies'
+  'runtime-1a cloudtrail:LookupEvents')
 readonly STAGE_OWN_READS
 # 자원 정책을 가지는 서비스(그 행은 정책 읽기 방법 none 을 쓸 수 없다).
 readonly POLICY_SERVICES=' s3 secretsmanager ecr sns sqs kms lambda '
@@ -146,7 +157,7 @@ expect_bundle_set() {
       "${got}" | tr '\n' ' ')"
     return
   fi
-  testlib::ok "bundle-set → 묶음 파일 17개 = 계획 M17a 묶음"
+  testlib::ok "bundle-set → 묶음 파일 18개 = 계획 M17a 묶음 + runtime-1a"
 }
 
 #######################################
@@ -251,13 +262,15 @@ expect_stop_point_split() {
 }
 
 #######################################
-# 2-3 판정 읽기 동작은 2-3 판정 묶음에만 있다. ec2:DescribeRegions 는
-# 어디에도 없다(kty 45차).
+# 2-3 판정 읽기 동작은 2-3 판정 묶음에만 있다 — 판정이 없는 묶음에서는
+# STAGE_OWN_READS 의 「묶음 이름 + 동작」 쌍만 예외다(계획 rt1a H1).
+# ec2:DescribeRegions 는 어디에도 없다(kty 45차).
 # Globals:
-#   JUDGED_BUNDLES, JUDGE_READS, UNJUDGED_BUNDLES, BUNDLES
+#   JUDGED_BUNDLES, JUDGE_READS, UNJUDGED_BUNDLES, STAGE_OWN_READS, BUNDLES
 #######################################
 expect_judge_reads() {
-  local bundle action actions
+  local bundle action actions own
+  own="$(printf '%s\n' "${STAGE_OWN_READS[@]}")"
   for bundle in "${JUDGED_BUNDLES[@]}"; do
     actions="$(bundle_actions "${bundle}")"
     for action in "${JUDGE_READS[@]}"; do
@@ -270,6 +283,7 @@ expect_judge_reads() {
   for bundle in "${UNJUDGED_BUNDLES[@]}"; do
     actions="$(bundle_actions "${bundle}")"
     for action in "${JUDGE_READS[@]}"; do
+      has_line "${own}" "${bundle} ${action}" && continue
       if has_line "${actions}" "${action}"; then
         testlib::fail "judge-reads: 2-3 판정이 없는 ${bundle} 에 ${action}"
         return
@@ -282,7 +296,50 @@ expect_judge_reads() {
       return
     fi
   done
-  testlib::ok "judge-reads → 2-3 판정 묶음 11개에만 · DescribeRegions 0"
+  testlib::ok "judge-reads → 2-3 판정 묶음 11개에만(묶음 자기 동작 쌍 뺌) ·" \
+    "DescribeRegions 0"
+}
+
+#######################################
+# STAGE_OWN_READS 의 쌍마다: 꼴이 「묶음 이름 + 동작」 하나(와일드카드 0)이고,
+# 묶음이 UNJUDGED_BUNDLES 에 있고, 동작이 그 묶음 파일에 실제로 있으며(죽은
+# 예외 0), 동작이 JUDGE_READS ∪ PRINCIPAL_READS(리전 뺌)에 든다(필요 없는
+# 예외 0 — 계획 rt1a H1).
+# Globals:
+#   STAGE_OWN_READS, UNJUDGED_BUNDLES, JUDGE_READS, PRINCIPAL_READS,
+#   ACTION_PATTERN, STAGE_DIR
+#######################################
+expect_stage_own_reads_scoped() {
+  local pair bundle action reads read unjudged
+  reads="$(printf '%s\n' "${JUDGE_READS[@]}")"
+  for read in "${PRINCIPAL_READS[@]}"; do
+    reads+=$'\n'"${read% *}"
+  done
+  unjudged="$(printf '%s\n' "${UNJUDGED_BUNDLES[@]}")"
+  for pair in "${STAGE_OWN_READS[@]}"; do
+    bundle="${pair%% *}"
+    action="${pair#* }"
+    if [[ "${pair}" != *' '* ]] ||
+      ! [[ "${action}" =~ ${ACTION_PATTERN} ]]; then
+      testlib::fail "own-reads: 「${pair}」 가 「묶음 이름 + 동작」 꼴이 아님"
+      return
+    fi
+    if ! has_line "${unjudged}" "${bundle}"; then
+      testlib::fail "own-reads: ${pair} — ${bundle} 은 판정이 없는 묶음이 아님"
+      return
+    fi
+    if [[ ! -f "${STAGE_DIR}/${bundle}.tsv" ]] ||
+      ! has_line "$(bundle_actions "${bundle}")" "${action}"; then
+      testlib::fail "own-reads: ${pair} — 묶음 파일에 없는 동작(죽은 예외)"
+      return
+    fi
+    if ! has_line "${reads}" "${action}"; then
+      testlib::fail "own-reads: ${pair} — 판정 읽기 동작이 아님(필요 없는 예외)"
+      return
+    fi
+  done
+  testlib::ok "own-reads → 예외 쌍 ${#STAGE_OWN_READS[@]}개 모두 판정 없는 묶음" \
+    "· 그 묶음 파일에 있음 · 판정 읽기 동작"
 }
 
 #######################################
@@ -523,7 +580,7 @@ expect_real_scripts_accept_data() {
     testlib::fail "real-scripts: 증거 루트 밖 유출"
     return
   fi
-  testlib::ok "real-scripts → 묶음 17개 모두 판정됨 · 이벤트 ${rows}행을 그 리전에서 조회"
+  testlib::ok "real-scripts → 묶음 18개 모두 판정됨 · 이벤트 ${rows}행을 그 리전에서 조회"
 }
 
 #######################################
@@ -873,6 +930,7 @@ main() {
   expect_target_rows_consistent
   expect_dev_principals
   expect_principal_reads
+  expect_stage_own_reads_scoped
   expect_wrapper_accepts_data
   testlib::finish data_files_test
 }
