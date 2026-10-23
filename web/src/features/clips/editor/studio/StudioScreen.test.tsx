@@ -30,17 +30,25 @@ describe('StudioScreen', () => {
     expect(screen.getByRole('button', { name: '작업 앞으로' })).toBeDisabled();
   });
 
-  it('타임라인에 트랙 6종을 훅이 준 이름·볼륨으로 그린다', () => {
-    renderStudio();
+  it('타임라인은 자막 · 영상 · 방송 소리 트랙 줄이다 — 준비 중인 음악·효과음·이미지 줄은 없다(POK-389)', () => {
+    const { container } = renderStudio();
     const timeline = screen.getByRole('region', { name: '타임라인' });
 
-    for (const label of ['영상', '마이크', '게임 사운드', 'BGM', '효과음', '이미지']) {
-      expect(within(timeline).getByText(label)).toBeInTheDocument();
-    }
+    const labels = [...container.querySelectorAll('[data-row-label]')].map((el) => el.textContent);
+    expect(labels).toEqual(['자막', '영상', '마이크', '게임', '디스코드', 'BGM']);
+    // 목업 자막 다섯 줄이 자막 줄에 조각으로 선다
+    expect(container.querySelectorAll('[data-subtitle-block]')).toHaveLength(5);
     expect(within(timeline).getByText('80%')).toBeInTheDocument();
-    expect(within(timeline).getByRole('button', { name: /Neon Drive\.mp3/ })).toBeInTheDocument();
-    expect(within(timeline).getByRole('button', { name: '띠용' })).toBeInTheDocument();
-    expect(within(timeline).getByRole('button', { name: /로고\.png/ })).toBeInTheDocument();
+    expect(within(timeline).queryByText('효과음')).not.toBeInTheDocument();
+    expect(within(timeline).queryByText('이미지')).not.toBeInTheDocument();
+    // 쇼츠 밖은 양쪽을 흐리게 덮는다
+    expect(container.querySelectorAll('[data-outside]')).toHaveLength(2);
+  });
+
+  it('자막이 아직 없으면 자막 줄을 그리지 않는다', () => {
+    const { container } = renderStudio({ initialSubtitleStatus: 'idle' });
+    const labels = [...container.querySelectorAll('[data-row-label]')].map((el) => el.textContent);
+    expect(labels[0]).toBe('영상');
   });
 
   it('도구 레일을 누르면 패널만 바뀌고 타임라인은 남는다', async () => {
@@ -79,7 +87,10 @@ describe('StudioScreen', () => {
         { timeout: 3000 },
       ),
     ).toBeInTheDocument();
-    expect(screen.getByText('아 이게 된다고?? 미쳤다')).toBeInTheDocument();
+    // 같은 문장이 타임라인 자막 줄에도 선다 — 자막 패널 안만 본다
+    expect(
+      within(screen.getByRole('region', { name: '자막' })).getByText('아 이게 된다고?? 미쳤다'),
+    ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '재생성' })).toBeInTheDocument();
     expect(screen.getByRole('radio', { name: '둘 다' })).toBeChecked();
   });

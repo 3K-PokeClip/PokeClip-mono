@@ -156,6 +156,9 @@ export interface SubtitleItem {
   text: string;
   /** (환호)처럼 발화가 아닌 줄 — 흐리게 그린다 */
   nonSpeech?: boolean;
+  /** 타임라인 자막 줄에 놓을 자리(소스 축 초). 모르면 그 줄은 타임라인에 안 그린다 */
+  startSeconds?: number;
+  endSeconds?: number;
 }
 
 export interface TitleSuggestion {
@@ -243,56 +246,35 @@ const MOCK_SOURCE = {
   range: { startSeconds: 4928.4, endSeconds: 4940.8 } satisfies ClipRange,
 } as const;
 
-/** 시안 1d-a 타임라인의 트랙 6종 — 클립 위치는 눈금자(1:21:40~1:22:55) 기준 */
+/**
+ * 목업의 방송 소리 트랙 — 실제 모드처럼 스트리머가 이름 붙인 소스 트랙들이다(POK-389).
+ * 영상 줄은 타임라인이 늘 그리고, 음악·효과음·이미지는 기능이 생기면 줄이 생긴다.
+ */
 const MOCK_TRACKS: readonly EditorTrack[] = [
-  { id: 'video', kind: 'video', label: '영상', volume: null, muted: false, clips: [] },
   { id: 'mic', kind: 'mic', label: '마이크', volume: 80, muted: false, clips: [] },
-  { id: 'game', kind: 'game', label: '게임 사운드', volume: 60, muted: false, clips: [] },
-  {
-    id: 'bgm',
-    kind: 'bgm',
-    label: 'BGM',
-    volume: 40,
-    muted: false,
-    clips: [
-      {
-        id: 'bgm-1',
-        label: 'Neon Drive.mp3 · 페이드 인/아웃',
-        startSeconds: 4913.5,
-        endSeconds: 4957,
-      },
-    ],
-  },
-  {
-    id: 'sfx',
-    kind: 'sfx',
-    label: '효과음',
-    volume: 70,
-    muted: false,
-    clips: [
-      { id: 'sfx-1', label: '띠용', startSeconds: 4927, endSeconds: 4931.5 },
-      { id: 'sfx-2', label: '박수', startSeconds: 4939, endSeconds: 4943.5 },
-    ],
-  },
-  {
-    id: 'image',
-    kind: 'image',
-    label: '이미지',
-    volume: null,
-    muted: false,
-    clips: [
-      { id: 'img-1', label: '로고.png · 우측 상단', startSeconds: 4922.5, endSeconds: 4949.5 },
-    ],
-  },
+  { id: 'game', kind: 'game', label: '게임', volume: 60, muted: false, clips: [] },
+  { id: 'discord', kind: 'mic', label: '디스코드', volume: 100, muted: false, clips: [] },
+  { id: 'bgm', kind: 'bgm', label: 'BGM', volume: 40, muted: false, clips: [] },
 ];
 
-const MOCK_SUBTITLES: readonly SubtitleItem[] = [
-  { id: 'sub-1', timecode: '02.1', text: '아 이게 된다고?? 미쳤다' },
-  { id: 'sub-2', timecode: '04.9', text: '잠깐 잠깐 각 나온다' },
-  { id: 'sub-3', timecode: '06.8', text: '1대3인데 이걸 이겨버리네' },
-  { id: 'sub-4', timecode: '08.4', text: '(환호)', nonSpeech: true },
-  { id: 'sub-5', timecode: '10.2', text: '채팅창 난리났다 ㅋㅋㅋㅋ' },
-];
+/** 목업 자막 — 타임코드(구간 시작 기준)에서 다음 줄 시작까지 화면에 선다. 소스 축 자리는 목업 구간 시작(4928.4)에 더한다 */
+const MOCK_SUBTITLES: readonly SubtitleItem[] = (
+  [
+    { id: 'sub-1', timecode: '02.1', text: '아 이게 된다고?? 미쳤다' },
+    { id: 'sub-2', timecode: '04.9', text: '잠깐 잠깐 각 나온다' },
+    { id: 'sub-3', timecode: '06.8', text: '1대3인데 이걸 이겨버리네' },
+    { id: 'sub-4', timecode: '08.4', text: '(환호)', nonSpeech: true },
+    { id: 'sub-5', timecode: '10.2', text: '채팅창 난리났다 ㅋㅋㅋㅋ' },
+  ] satisfies SubtitleItem[]
+).map((item, i, all) => {
+  const start = 4928.4 + Number(item.timecode);
+  const next = all[i + 1];
+  return {
+    ...item,
+    startSeconds: start,
+    endSeconds: next ? 4928.4 + Number(next.timecode) : start + 1.8,
+  };
+});
 
 const MOCK_TITLE_SUGGESTIONS: readonly TitleSuggestion[] = [
   { id: 'title-1', text: '1대3 클러치 미쳤다 #발로란트' },

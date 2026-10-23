@@ -1,21 +1,10 @@
-import {
-  Film,
-  Image as ImageIcon,
-  Mic,
-  Music,
-  SlidersHorizontal,
-  Sparkles,
-} from 'lucide-react';
+import { Film, Image as ImageIcon, Mic, Music, SlidersHorizontal, Sparkles } from 'lucide-react';
 import type { ComponentType } from 'react';
 import { Slider } from '@/ui';
 import styles from './StudioScreen.module.css';
 import { TimelineClip } from './TimelineClip';
 import type { TimelineView } from '../timelineMath';
-import type {
-  ClipEditorMockState,
-  EditorTrack,
-  EditorTrackKind,
-} from '../useClipEditorMockState';
+import type { ClipEditorMockState, EditorTrack, EditorTrackKind } from '../useClipEditorMockState';
 
 // 시안 1d-a 타임라인 한 줄 — 라벨 열(172px) + 레인.
 // 레인을 어떻게 그릴지는 트랙 종류가 정한다: 영상은 필름스트립, 마이크·게임은 파형,
@@ -53,7 +42,7 @@ export function TimelineTrackRow({
     <div className={styles.trackRow}>
       <span className={styles.trackLabel}>
         <Icon size={12} />
-        {track.label}
+        <span data-row-label>{track.label}</span>
         {track.volume !== null ? (
           <span className={styles.trackControls}>
             <Slider

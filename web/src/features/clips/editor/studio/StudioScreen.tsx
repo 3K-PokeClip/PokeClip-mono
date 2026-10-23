@@ -867,8 +867,11 @@ function WiredStudio({
         id: `saved-${i}`,
         timecode: (Math.max(0, seg.startAtMs - cut.inAtMs) / 1000).toFixed(1).padStart(4, '0'),
         text: seg.text,
+        // 타임라인 자막 줄의 자리 — 소스 축(기준점 + 초)이다
+        startSeconds: (seg.startAtMs - base) / 1000,
+        endSeconds: (seg.endAtMs - base) / 1000,
       }));
-  }, [saved]);
+  }, [saved, base]);
   const label =
     save.clip && save.busy === null && !save.label.includes('영상 #')
       ? `${save.label} · ${clipLabel(save.clip)}`

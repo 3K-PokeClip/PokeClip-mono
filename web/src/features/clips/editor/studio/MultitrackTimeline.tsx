@@ -1,4 +1,5 @@
 import { useRef, type KeyboardEvent, type PointerEvent } from 'react';
+import { Captions, Film } from 'lucide-react';
 import { formatUptime } from '@/features/player/playerMath';
 import styles from './StudioScreen.module.css';
 import { TimelineToolbar } from './TimelineToolbar';
@@ -44,6 +45,18 @@ export function MultitrackTimeline({
   const heightDragOrigin = useRef<{ y: number; height: number; ceiling: number } | null>(null);
 
   const startFraction = secondsToFraction(state.range.startSeconds, state.view);
+  // 자막 줄 조각 — 자리를 아는 줄만, 창 밖으로 완전히 벗어난 줄은 빼고
+  const subtitleBlocks =
+    state.subtitle.status === 'ready'
+      ? state.subtitle.items.flatMap((item) => {
+          if (item.startSeconds === undefined || item.endSeconds === undefined) return [];
+          const left = secondsToFraction(item.startSeconds, state.view);
+          const right = secondsToFraction(item.endSeconds, state.view);
+          if (right <= 0 || left >= 1) return [];
+          const from = Math.max(0, left);
+          return [{ id: item.id, text: item.text, left: from, width: Math.min(1, right) - from }];
+        })
+      : [];
   const endFraction = secondsToFraction(state.range.endSeconds, state.view);
   const playheadFraction = secondsToFraction(state.playheadSeconds, state.view);
   const playheadVisible =
@@ -177,6 +190,35 @@ export function MultitrackTimeline({
             }
           >
             <div className={styles.lanes}>
+              {subtitleBlocks.length > 0 ? (
+                <div className={styles.trackRow}>
+                  <span className={styles.trackLabel}>
+                    <Captions size={12} aria-hidden />
+                    <span data-row-label>자막</span>
+                  </span>
+                  <div className={styles.lane} data-kind="subtitle">
+                    {subtitleBlocks.map((block) => (
+                      <span
+                        key={block.id}
+                        className={styles.subtitleBlock}
+                        data-subtitle-block
+                        style={{ left: `${block.left * 100}%`, width: `${block.width * 100}%` }}
+                      >
+                        {block.text}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+              <div className={styles.trackRow}>
+                <span className={styles.trackLabel}>
+                  <Film size={12} aria-hidden />
+                  <span data-row-label>영상</span>
+                </span>
+                <div className={styles.lane} data-kind="video">
+                  <div className={styles.laneFilmstrip} aria-hidden />
+                </div>
+              </div>
               {state.tracks.map((track) => (
                 <TimelineTrackRow
                   key={track.id}
@@ -191,6 +233,20 @@ export function MultitrackTimeline({
             </div>
 
             <div className={styles.overlay} ref={overlayRef}>
+              {/* 쇼츠 밖은 양쪽을 흐리게 덮는다 — 쓰는 구간만 밝게(알파컷 방식, POK-389) */}
+              <div
+                className={styles.outsideMask}
+                data-outside
+                style={{ left: 0, width: `${Math.max(0, startFraction) * 100}%` }}
+              />
+              <div
+                className={styles.outsideMask}
+                data-outside
+                style={{
+                  left: `${Math.min(1, endFraction) * 100}%`,
+                  right: 0,
+                }}
+              />
               <div
                 className={styles.rangeBox}
                 style={{

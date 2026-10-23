@@ -470,3 +470,30 @@
   flex-direction: column;
   padding-bottom: calc(14 * var(--pc-u));
 }
+
+/* ---------- 타임라인 줄 (POK-389) ---------- */
+
+.subtitleBlock {
+  position: absolute;
+  top: calc(3 * var(--pc-u));
+  bottom: calc(3 * var(--pc-u));
+  padding: 0 calc(6 * var(--pc-u));
+  border-radius: calc(4 * var(--pc-u));
+  background: var(--pc-color-accent-subtle);
+  border: 1px solid var(--pc-color-accent);
+  color: var(--pc-color-text-primary);
+  font-size: calc(10 * var(--pc-u));
+  line-height: calc(16 * var(--pc-u));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.outsideMask {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: var(--pc-color-bg-canvas);
+  opacity: 0.55;
+  pointer-events: none;
+}

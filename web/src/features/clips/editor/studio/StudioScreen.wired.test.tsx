@@ -763,8 +763,12 @@ describe('StudioScreen — 화면에서 고른 모양이 저장 본문에 그대
     await openFrom('recipe=31');
     await user.click(screen.getByRole('tab', { name: '자막' }));
 
-    expect(screen.getByText('저장된 첫 자막')).toBeInTheDocument();
+    expect(
+      within(screen.getByRole('region', { name: '자막' })).getByText('저장된 첫 자막'),
+    ).toBeInTheDocument();
     expect(screen.queryByText('구간 밖 자막')).not.toBeInTheDocument();
+    // 타임라인 자막 줄에도 구간 안 한 줄만 조각으로 선다(POK-389)
+    expect(document.querySelectorAll('[data-subtitle-block]')).toHaveLength(1);
     expect(screen.getByRole('radio', { name: '위' })).toBeChecked();
 
     // 고치지 않았으면 다시 저장하지 않는다 — 자막 방식·자리도 제자리로 돌아왔다

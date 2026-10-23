@@ -46,20 +46,16 @@ describe('useClipEditorMockState', () => {
     expect(result.current.rangeGaugeLabel).toBe('0:12.4 / 최대 3:00');
   });
 
-  it('트랙 6종을 시안 볼륨과 클립 이름 그대로 준다', () => {
+  it('목업 트랙은 방송 소리 넷이다 — 실제 모드처럼 스트리머가 이름 붙인 소스 트랙(POK-389)', () => {
     const { result } = renderEditor();
 
     expect(result.current.tracks.map((t) => t.label)).toEqual([
-      '영상',
       '마이크',
-      '게임 사운드',
+      '게임',
+      '디스코드',
       'BGM',
-      '효과음',
-      '이미지',
     ]);
-    expect(result.current.tracks.map((t) => t.volume)).toEqual([null, 80, 60, 40, 70, null]);
-    expect(result.current.tracks[3]?.clips[0]?.label).toBe('Neon Drive.mp3 · 페이드 인/아웃');
-    expect(result.current.tracks[4]?.clips.map((c) => c.label)).toEqual(['띠용', '박수']);
+    expect(result.current.tracks.map((t) => t.volume)).toEqual([80, 60, 100, 40]);
   });
 
   it('자막 생성 전에는 제목 추천이 잠기고, 생성하면 열린다', () => {
@@ -154,10 +150,10 @@ describe('useClipEditorMockState', () => {
     const { result } = renderEditor();
 
     act(() => result.current.setTrackVolume('mic', 20));
-    expect(result.current.tracks[1]?.volume).toBe(20);
+    expect(result.current.tracks[0]?.volume).toBe(20);
 
     act(() => result.current.undo());
-    expect(result.current.tracks[1]?.volume).toBe(80);
+    expect(result.current.tracks[0]?.volume).toBe(80);
   });
 
   it('재생하면 구간 안에서 플레이헤드가 흐르고 끝에서 되감는다', () => {
@@ -214,9 +210,9 @@ describe('useClipEditorMockState', () => {
     }
     act(() => result.current.gestureHandlers.onPointerUp());
 
-    expect(result.current.tracks[1]?.volume).toBe(30);
+    expect(result.current.tracks[0]?.volume).toBe(30);
     act(() => result.current.undo());
-    expect(result.current.tracks[1]?.volume).toBe(80);
+    expect(result.current.tracks[0]?.volume).toBe(80);
     // 드래그 이전 편집도 그대로 남아 있다
     act(() => result.current.undo());
     expect(result.current.layout).toBe('split');
