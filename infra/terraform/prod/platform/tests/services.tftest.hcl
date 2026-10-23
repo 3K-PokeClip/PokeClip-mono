@@ -986,6 +986,72 @@ run "rejects_url_credentials_even_for_listed_name" {
   expect_failures = [terraform_data.runtime_contract]
 }
 
+# 비밀번호에 인코딩 없는 # 가 있어도 멈춘다 — libpq 는 이 꼴을 받아들인다.
+run "rejects_url_credentials_with_raw_hash_in_password" {
+  command = plan
+
+  override_data {
+    target = data.terraform_remote_state.runtime
+    values = {
+      outputs = {
+        rds_sg_id              = "sg-0rds"
+        rds_resource_id        = "db-ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        rewind_bucket_arn      = "arn:aws:s3:::pokeclip-prod-rewind-example"
+        app_db_users           = { auth = "app_auth", clip = "app_clip" }
+        app_env                = { auth = {}, clip = { BROADCAST_QUEUE_URL = "postgres://u:p#x@h:5432/db" } }
+        app_secret_arns        = { auth = {}, clip = {} }
+        app_task_resource_arns = { auth = {}, clip = {} }
+      }
+    }
+  }
+
+  expect_failures = [terraform_data.runtime_contract]
+}
+
+# 비밀번호에 인코딩 없는 ? 가 있어도 멈춘다.
+run "rejects_url_credentials_with_raw_question_in_password" {
+  command = plan
+
+  override_data {
+    target = data.terraform_remote_state.runtime
+    values = {
+      outputs = {
+        rds_sg_id              = "sg-0rds"
+        rds_resource_id        = "db-ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        rewind_bucket_arn      = "arn:aws:s3:::pokeclip-prod-rewind-example"
+        app_db_users           = { auth = "app_auth", clip = "app_clip" }
+        app_env                = { auth = {}, clip = { BROADCAST_QUEUE_URL = "https://u:p?w@h" } }
+        app_secret_arns        = { auth = {}, clip = {} }
+        app_task_resource_arns = { auth = {}, clip = {} }
+      }
+    }
+  }
+
+  expect_failures = [terraform_data.runtime_contract]
+}
+
+# 쿼리 안에 넣은 URL 의 자격 증명도 멈춘다 — 판정은 :// 마다 따로 한다.
+run "rejects_url_credentials_in_nested_query_url" {
+  command = plan
+
+  override_data {
+    target = data.terraform_remote_state.runtime
+    values = {
+      outputs = {
+        rds_sg_id              = "sg-0rds"
+        rds_resource_id        = "db-ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        rewind_bucket_arn      = "arn:aws:s3:::pokeclip-prod-rewind-example"
+        app_db_users           = { auth = "app_auth", clip = "app_clip" }
+        app_env                = { auth = {}, clip = { BROADCAST_QUEUE_URL = "https://h.example.invalid?next=https://u:p@x" } }
+        app_secret_arns        = { auth = {}, clip = {} }
+        app_task_resource_arns = { auth = {}, clip = {} }
+      }
+    }
+  }
+
+  expect_failures = [terraform_data.runtime_contract]
+}
+
 # 자격 증명이 없는 URL 의 쿼리 속 @ 는 통과한다 — 검사는 authority 안만 본다.
 run "allows_at_sign_in_url_query" {
   command = plan
@@ -1032,6 +1098,31 @@ run "allows_at_sign_in_url_fragment" {
 
   assert {
     condition     = local.service_env.clip["BROADCAST_QUEUE_URL"] == "https://example.invalid:443#ops@example.invalid"
+    error_message = "authority 뒤의 @ 를 URL 자격 증명으로 오인해 멈췄다."
+  }
+}
+
+# 포트 없는 호스트 뒤 쿼리 속 콜론과 @ 도 통과한다.
+run "allows_colon_and_at_sign_in_url_query_without_port" {
+  command = plan
+
+  override_data {
+    target = data.terraform_remote_state.runtime
+    values = {
+      outputs = {
+        rds_sg_id              = "sg-0rds"
+        rds_resource_id        = "db-ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        rewind_bucket_arn      = "arn:aws:s3:::pokeclip-prod-rewind-example"
+        app_db_users           = { auth = "app_auth", clip = "app_clip" }
+        app_env                = { auth = {}, clip = { BROADCAST_QUEUE_URL = "https://host.example.invalid?x=a:b@c" } }
+        app_secret_arns        = { auth = {}, clip = {} }
+        app_task_resource_arns = { auth = {}, clip = {} }
+      }
+    }
+  }
+
+  assert {
+    condition     = local.service_env.clip["BROADCAST_QUEUE_URL"] == "https://host.example.invalid?x=a:b@c"
     error_message = "authority 뒤의 @ 를 URL 자격 증명으로 오인해 멈췄다."
   }
 }

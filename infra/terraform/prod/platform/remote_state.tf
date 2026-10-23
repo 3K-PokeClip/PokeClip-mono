@@ -191,13 +191,22 @@ resource "terraform_data" "runtime_contract" {
     }
 
     # 값: URL 의 user:pass@ 는 이름과 무관하게 비밀이다. app_env_non_secret_names
-    # 는 이름 검사만 풀고 이 검사는 풀지 않는다. 문자 클래스에서 / ? # 를 빼
-    # authority(RFC 3986 3.2 — // 뒤 첫 / ? # 앞까지) 안만 본다 — 경로 · 쿼리 ·
-    # 프래그먼트 속 @ 는 자격 증명이 아니다.
+    # 는 이름 검사만 풀고 이 검사는 풀지 않는다. 판정은 :// 마다 그 뒤 조각에
+    # 따로 한다 — 쿼리 안에 넣은 URL 의 자격 증명도 잡으려고. 첫 식은 / 앞의
+    # :…@ 를 넓게 잡는다 — libpq 처럼 인코딩 없는 ? · # 를 비밀번호에 받는
+    # 클라이언트가 있어 ? · # 에서 끊지 않는다. 둘째 식은 호스트(+숫자 포트)
+    # 바로 뒤에 ? · # 가 오는 꼴, 곧 쿼리 · 프래그먼트 속 @ 만 빼 준다. 알려진
+    # 한계: 숫자만인 비밀번호 뒤 원문 ?(https://u:123?x@h)는 통과하고, IPv6
+    # 호스트 + 쿼리 속 :…@(https://[2001:db8::1]?a=b:c@d)는 멈춘다.
     precondition {
       condition = alltrue(flatten([
         for env in values(try(local.runtime.app_env, {})) : [
-          for value in values(env) : !can(regex("://[^/?#@]*:[^/?#@]*@", value))
+          for value in values(env) : !anytrue([
+            for i, seg in split("://", value) :
+            i > 0 &&
+            can(regex("^[^/@]*:[^/@]*@", seg)) &&
+            !can(regex("^[^/?#@:]*(:[0-9]*)?[?#]", seg))
+          ])
         ]
       ]))
       error_message = "런타임 출력 app_env 값에 URL 자격 증명(scheme://user:pass@)이 있다 — 자격 증명은 런타임 app_secret_arns 로 옮긴다."
