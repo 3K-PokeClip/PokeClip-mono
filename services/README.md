@@ -1019,9 +1019,9 @@ CHECK 제약**을 더한다(POK-171).
 🔴 **`PATCH`·`PUT`은 POK-207이 CORS 허용 목록에 넣은 것이다.** 없으면 화면의 「저장」이
 preflight에서 막혀 **창구는 멀쩡한데 브라우저만 못 부른다.** 자리는 `web-support/CorsConfig` 하나다.
 
-아래 표의 창구는 **서른하나**다 — 스트림키 다섯(**계약4 = `POST /internal/stream-keys/resolve`** —
+아래 표의 창구는 **서른둘**이다 — 스트림키 다섯(**계약4 = `POST /internal/stream-keys/resolve`** —
 1번 Media가 SRT 연결을 받기 전에 한 번 부른다) · 치지직 연동 다섯 · **유튜브 연동 여섯**(POK-121, 상태 확인 하나는 POK-291) ·
-편집자 위임 아홉 · **clip용 내부 창구 둘**(POK-175, 아래 절) · **회원정보 수정 셋**(POK-207) ·
+편집자 위임 아홉 · **clip용 내부 창구 둘**(POK-175, 아래 절) · **clip용 이름 창구 하나**(POK-430) · **회원정보 수정 셋**(POK-207) ·
 **회원 탈퇴 하나**(POK-171).
 로그인·토큰 창구 넷(`/api/auth/google`·`/refresh`·`/logout`·`/me`)은 이 표에 없다 — 위 「인증」 줄이 그것이다.
 **탈퇴는 주소가 `/api/auth/me`로 같지만 메서드가 달라 표에 넣었다** — 그 넷과 달리 이 카드가 새로 연 문이다.
@@ -1056,6 +1056,7 @@ preflight에서 막혀 **창구는 멀쩡한데 브라우저만 못 부른다.**
 | `DELETE /api/editor-delegations/{id}` | 웹 | 사용자 JWT |
 | `POST /internal/editor-delegations/resolve` | **clip** | `X-Internal-Token` 헤더 |
 | `POST /internal/editor-delegations/accessible` | **clip** | `X-Internal-Token` 헤더 |
+| `POST /internal/streamer-channel-names` — 스트리머 번호 여럿(최대 100, 넘으면 400)의 플랫폼 채널 이름(POK-430) | **clip**(방송 목록) | `X-Internal-Token` 헤더 |
 | `PATCH /api/auth/me` | 웹 | 사용자 JWT |
 | `PUT /api/auth/me/photo` | 웹 | 사용자 JWT (**multipart/form-data**) |
 | `GET /api/profile-photos/{userId}?token=…` | **웹의 그림 태그** | **사진 표**(세 번째 `permitAll`) |
@@ -3429,6 +3430,28 @@ clip이 「이 사람이 이 스트리머의 방송을 봐도 되나」를 물�
   그 전에는 노출·인증이 맞아도 **404**다. 설정이 틀린 것으로 오해하기 쉬운 자리다).
   **이 카드는 설정을 바꾸지 않았다** — 운영 노출 정책은 auth 전체와 다른 서버에 걸린 별도 결정이다.
   그때까지 같은 숫자를 보는 방법은 로그의 `auth.delegation.resolve_none` 줄을 세는 것이다(판정마다 한 줄)
+
+#### clip용 이름 창구 (POK-430)
+
+clip이 방송 목록 한 장을 만들 때 그 장에 나온 스트리머들의 플랫폼 채널 이름을 한 번에 묻는다. 편집자 화면에도
+주인 화면처럼 채널 이름을 보이려는 것이다. 잠금은 위 두 문과 같은 `/internal/**` 체인이다(사용자 JWT로는 401).
+
+| 문 | 요청 | 응답 |
+|---|---|---|
+| `POST /internal/streamer-channel-names` | `{"streamerUserIds":[7,3]}` | `{"names":{"7":{"chzzk":"채널","soop":"닉네임"},"3":{"chzzk":null,"soop":null}}}` |
+
+- **살아 있는 연동의 이름만 준다.** 해제 · 갱신 거절 · 탈퇴로 닫힌 행은 이름이 남아 있어도 null이다
+  (치지직은 해제해도 행에 이름이 남는다). 치지직은 연동 때 받은 채널 이름, SOOP은 연동 때 받은 닉네임이라
+  그 뒤에 바꾼 이름은 따라가지 않는다
+- **요청한 번호마다 한 항목, 두 칸은 늘 있다.** 연동이 없는 번호도 빼지 않고 두 칸 null로 준다.
+  회원 표를 안 읽으므로 없는 번호도 같은 모양이다
+- **번호는 최대 100개.** 넘거나 목록이 없거나 null이 섞이면 Spring 기본 **400**. 100은 수집기
+  `broadcast-info/latest`와 같은 수이고, clip 목록 한 장이 최대 100줄이라 넘을 일이 없다
+- 표당 한 번씩만 묻는다(치지직 1 + SOOP 1, 번호마다 묻지 않는다). 둘 다 살아 있는 행의 부분 유일 색인(V107 · V116)을 탄다
+- **`accessible`에 이름을 덧붙이지 않고 문을 따로 연 이유:** 그 응답은 「서버용 창구에 화면용 정보를 싣지
+  않는다」로 번호와 관계만 준다(POK-57). 자격 판정을 부르는 자리마다 이름이 딸려 가지 않고, 이름이 필요한
+  목록 한 곳만 이 문을 부른다
+- 이름은 로그에 안 싣는다(SOOP 닉네임은 약관 제11조 ⑰의 파기 대상이다)
 
 ### 회원 탈퇴 — 개인정보 파기와 발급물 회수 (POK-171)
 

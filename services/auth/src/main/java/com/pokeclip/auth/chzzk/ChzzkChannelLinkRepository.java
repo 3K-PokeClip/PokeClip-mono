@@ -6,6 +6,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -15,6 +16,20 @@ public interface ChzzkChannelLinkRepository extends JpaRepository<ChzzkChannelLi
 
     /** 닫힌 행도 찾힌다. GET·resolve가 BROKEN·UNLINKED를 구분해 돌려주려면 필요하다. */
     Optional<ChzzkChannelLink> findFirstByUserIdOrderByCreatedAtDesc(Long userId);
+
+    /**
+     * 살아 있는 연동의 채널 이름을 번호 여럿에 한 번에 묻는다(POK-430, clip 방송 목록). 닫힌 행은 이름이 남아 있어도
+     * 안 준다. 회원당 살아 있는 행은 부분 유일 색인이 하나로 막아 결과도 회원당 0~1행이다.
+     */
+    @Query("select l.userId as userId, l.channelName as name from ChzzkChannelLink l "
+            + "where l.revokedAt is null and l.userId in :userIds")
+    List<AliveName> findAliveNames(@Param("userIds") Collection<Long> userIds);
+
+    interface AliveName {
+        Long getUserId();
+
+        String getName();
+    }
 
     Optional<ChzzkChannelLink> findByChannelIdAndRevokedAtIsNull(String channelId);
 
