@@ -1,6 +1,7 @@
 'use client';
 
 import { ApiError, apiFetch } from './client';
+import { markPlaybackCookiesIssued, playbackConfigured } from './mediaPlayback';
 import { notifyChannelGone } from '@/stores/channel';
 
 // clip 서버 창구(POK-251). 전부 로그인 세션의 apiFetch로 간다(Bearer 부착·401 회전).
@@ -37,8 +38,6 @@ export interface JumpCard {
   window: { startMs: number; endMs: number };
   score: number | null;
   evidence: unknown;
-  claimedBy: string | null;
-  hidden: boolean;
   eventSeq: number | null;
   /** 카드 시점 장면 사진(POK-277). 목록 문만 싣는다. 통로(SSE)로 온 카드는 비어 있다 */
   thumbnailUrl?: string | null;
@@ -120,17 +119,13 @@ const CARD_PAGE = 200;
 
 /**
  * 방송의 카드를 쪽마다 끝까지 읽는다. 한 쪽만 읽으면 51번째 카드부터 없는 것이 된다(기본 쪽 크기 50,
- * 오래된 것부터 온다 — PR #200 codex). `includeHidden`이면 숨긴 카드도 받는다(숨김 반영·편집기 열기).
+ * 오래된 것부터 온다: PR #200 codex).
  */
-export async function fetchAllJumpCards<T = JumpCard>(
-  streamId: string,
-  { includeHidden = false }: { includeHidden?: boolean } = {},
-): Promise<T[]> {
+export async function fetchAllJumpCards<T = JumpCard>(streamId: string): Promise<T[]> {
   const all: T[] = [];
   let cursor: string | null = null;
   do {
     const qs = new URLSearchParams({ limit: String(CARD_PAGE) });
-    if (includeHidden) qs.set('includeHidden', 'true');
     if (cursor) qs.set('cursor', cursor);
     const page: { cards: T[]; nextCursor?: string | null } = await getJson(
       `/api/clip/broadcasts/${encodeURIComponent(streamId)}/jump-cards?${qs}`,
@@ -142,8 +137,7 @@ export async function fetchAllJumpCards<T = JumpCard>(
 }
 
 export async function fetchJumpCard(streamId: string, cardId: string): Promise<JumpCard | null> {
-  // 숨긴 카드도 편집기로는 열 수 있다 — 숨김은 목록에서 빼는 것이지 지우는 것이 아니다
-  const cards = await fetchAllJumpCards(streamId, { includeHidden: true });
+  const cards = await fetchAllJumpCards(streamId);
   return cards.find((card) => String(card.id) === cardId) ?? null;
 }
 
@@ -243,6 +237,18 @@ export async function clipFetch(path: string, init?: RequestInit): Promise<Respo
   } catch (e) {
     if (e instanceof ApiError) throw new ClipApiError(e.status, e.code, e.field);
     throw e;
+  }
+}
+
+/**
+ * 편집기가 카드를 열었다고 남긴다(POK-393, 시범 운영 측정 재료). 실패는 삼킨다: 기록 하나 때문에 편집을 막지 않는다.
+ * 네트워크 오류도 같이 삼킨다(clipFetch가 그대로 던진다)
+ */
+export async function openJumpCard(cardId: string): Promise<void> {
+  try {
+    await clipFetch(`/api/clip/jump-cards/${encodeURIComponent(cardId)}/open`, { method: 'POST' });
+  } catch {
+    // 기록 실패는 무시한다
   }
 }
 
@@ -670,6 +676,13 @@ export function cutFromWindow(
 export type PlaybackAccessResult =
   { kind: 'granted'; expiresAtMs: number | null } | { kind: 'not_needed' } | { kind: 'failed' };
 
+/**
+ * 「필요 없음」(503 playback_signing_unavailable)을 받은 방송. 그 방송은 더 묻지 않는다. 방송 단위인 이유: 같은 사유 코드가
+ * 「서명 재료 없음」뿐 아니라 그 방송의 영상 키가 정책에 못 들어갈 때(글자 검사 실패)도 오므로, 한 방송의 답으로 다른 방송을
+ * 묻지 않으면 정상 방송의 쿠키까지 빠진다(PR #320 codex)
+ */
+const playbackNotNeeded = new Set<string>();
+
 export async function requestPlaybackAccess(streamId: string): Promise<PlaybackAccessResult> {
   try {
     const res = await apiFetch(
@@ -687,9 +700,70 @@ export async function requestPlaybackAccess(streamId: string): Promise<PlaybackA
     } catch {
       /* 본문이 없으면 만료를 모른다 — 부른 쪽이 기본 간격으로 다시 받는다 */
     }
+    markPlaybackCookiesIssued();
     return { kind: 'granted', expiresAtMs };
   } catch (e) {
-    if (e instanceof ApiError && e.status === 503) return { kind: 'not_needed' };
+    // 「필요 없음」은 서명 재료가 없는 503뿐이다. 자격 확인이 안 되는 503(authorization_unavailable)도 필요 없음으로 접으면
+    // auth가 잠깐 멈춘 사이 연 화면이 다시 묻지 않아 prod 재생이 403으로 굳었다(POK-317)
+    if (e instanceof ApiError && e.status === 503 && e.code === 'playback_signing_unavailable') {
+      // 이 방송은 더 묻지 않는다(LiveScreen이 받은 답도 여기서 남는다)
+      playbackNotNeeded.add(streamId);
+      return { kind: 'not_needed' };
+    }
     return { kind: 'failed' };
   }
+}
+
+/** 받은 출입증을 만료 이만큼 전까지 다시 쓴다(LiveScreen의 갱신 여유와 같다) */
+const PLAYBACK_ACCESS_REUSE_MARGIN_MS = 5 * 60_000;
+/** 만료를 모르는 출입증을 다시 쓰는 시간(운영 수명 60분보다 짧게) */
+const PLAYBACK_ACCESS_DEFAULT_REUSE_MS = 50 * 60_000;
+/**
+ * 방송 번호 → 그 방송으로 받은 출입증(받는 중이면 끝날 때까지 다시 쓴다). 받을 때의 영상 키를 같이 둔다: 늦게 온 방송 편지로 영상 키가
+ * 바뀌면 옛 키로 받은 쿠키는 새 주소에 안 실리므로 다시 받는다(PR #320 codex)
+ */
+const playbackAccessCache = new Map<
+  string,
+  { mediaKey: string; until: number; settled: boolean; result: Promise<PlaybackAccessResult> }
+>();
+/** 영상 키 → 그 키로 출입증을 받은 방송 번호. 쿠키 경로가 영상 키라 같은 키의 방송이면 어느 것으로 받아도 같다 */
+const playbackAccessByMediaKey = new Map<string, string>();
+
+/**
+ * 녹화를 부르기 직전에 출입증을 받아 둔다(POK-317). 편집기가 쓴다(LiveScreen은 제 갱신 타이머가 있다. 지난 방송 목록은 아직 안 받는다).
+ * 받아 둔 것이 아직 쓸 만하거나 받을 필요가 없으면(녹화 재생 서버 주소가 없는 곳 포함) null이라 부른 쪽이 기다리지 않고 바로 요청한다. 실패는 기억하지 않는다.
+ */
+export function ensurePlaybackAccess(
+  streamId: string,
+  mediaKey: string,
+): Promise<PlaybackAccessResult> | null {
+  playbackAccessByMediaKey.set(mediaKey, streamId);
+  if (playbackNotNeeded.has(streamId) || !playbackConfigured()) return null;
+  const known = playbackAccessCache.get(streamId);
+  if (known !== undefined && known.mediaKey === mediaKey && known.until > Date.now())
+    return known.settled ? null : known.result;
+  const result = requestPlaybackAccess(streamId);
+  playbackAccessCache.set(streamId, {
+    mediaKey,
+    until: Number.POSITIVE_INFINITY,
+    settled: false,
+    result,
+  });
+  void result.then((r) => {
+    const until =
+      r.kind === 'granted'
+        ? (r.expiresAtMs ?? Date.now() + PLAYBACK_ACCESS_DEFAULT_REUSE_MS) -
+          PLAYBACK_ACCESS_REUSE_MARGIN_MS
+        : 0;
+    // 받는 사이 다른 키로 다시 받기 시작했으면 그 줄을 덮지 않는다
+    if (playbackAccessCache.get(streamId)?.result === result)
+      playbackAccessCache.set(streamId, { mediaKey, until, settled: true, result });
+  });
+  return result;
+}
+
+/** 영상 키만 아는 자리(편집기 미리보기)의 갱신. 그 키로 출입증을 받은 방송이 없으면 묻지 않는다 */
+export function ensureMediaAccess(mediaKey: string): Promise<PlaybackAccessResult> | null {
+  const streamId = playbackAccessByMediaKey.get(mediaKey);
+  return streamId === undefined ? null : ensurePlaybackAccess(streamId, mediaKey);
 }

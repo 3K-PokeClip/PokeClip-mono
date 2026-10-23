@@ -9,8 +9,14 @@
 #   mediamtx_image · nginx_image · sidecar_image
 #                        이미지 참조 <저장소 URL>@<다이제스트>. 이름은 이미지
 #                        핀 정본 images.json 의 키 + _image 다.
-#   ingest_auth_image · janitor_image
-#                        같은 꼴. 비면 그 서비스를 렌더하지 않는다(자리).
+#   ingest_auth_image    같은 꼴. 비면 그 서비스를 렌더하지 않는다(자리).
+#   janitor_enabled      bool. 참이면 janitor(녹화 정리)를 렌더한다 — 이미지는
+#                        sidecar_image 이고 entrypoint 로 janitor 명령을 고른다.
+#                        거짓이면 서비스가 없다(다음 시작의 --remove-orphans 가
+#                        옛 janitor 컨테이너를 지운다). bool 로 바꿀 수 없는 값
+#                        (예: "yes" · 빈 문자열 · null · 1)은 렌더 실패다 —
+#                        일부 문자열("true" · "false" 등)은 bool 로 바뀌어
+#                        통과한다.
 #   proxy_live_port · proxy_playback_port · proxy_control_port ·
 #   proxy_health_port    nginx 듣기 포트(nginx.conf.tmpl 과 같은 값).
 #   rds_endpoint · rds_db_name
@@ -53,11 +59,17 @@
 #   - 볼륨에 복사 금지 옵션을 붙이지 않는다 — 이미지에 심은 소유권 복사가
 #     끊겨 비root 쓰기가 조용히 실패한다(루트 docker-compose.yml 과 같은 규칙.
 #     render_test 가 렌더에서 그 옵션 이름 0건을 본다).
-#     사이드카는 녹화 · 훅 스풀을 읽기만 한다(:ro). 녹화 삭제는 janitor 몫이다.
+#     사이드카는 녹화 · 훅 스풀을 읽기만 한다(:ro). 녹화는 MediaMTX 가 보존
+#     기한(recordDeleteAfter — 설정에 적지 않아 기본 24시간)이 지나면 스스로
+#     지우고, janitor 를 켜면 업로드가 끝난 조각을 그 전에 지운다.
 #   - 실행 계정은 각 이미지의 USER 가 정본이다 — 여기에 user: 를 적지 않는다.
+#     예외는 janitor 하나다. 사이드카 이미지(USER 10001)를 쓰지만 녹화 디렉터리
+#     소유자(MediaMTX 이미지 media/Dockerfile.mtxhook 의 USER 10002)로 돌아야
+#     녹화를 지울 수 있어 user: 를 적는다. render_test 가 그 Dockerfile 의 최종
+#     USER 와 대조한다.
 #   - 모든 서비스에 no-new-privileges · cap_drop: [ALL]. cap 을 되살리는 것은
 #     nginx 의 CHOWN · SETGID · SETUID 뿐이다(master 만 root 인 공식 이미지).
-#     mediamtx · 사이드카는 비root USER 라 cap 없이 돈다 — 응답기 · janitor
+#     mediamtx · 사이드카 · janitor 는 비root 계정이라 cap 없이 돈다 — 응답기
 #     이미지도 그래야 한다. privileged · pid · ipc 는 쓰지 않는다.
 #
 # 이 파일에는 compose 변수 치환(달러 중괄호)을 쓰지 않는다 — 값은 모두
@@ -212,14 +224,26 @@ services:
         tag: pokeclip-media-ingest-auth
 %{ endif ~}
 %{ endif ~}
-%{ if janitor_image != "" ~}
+%{ if janitor_enabled ~}
 
-  # 녹화 정리(자리). 녹화 삭제 책임이라 recordings 를 쓰기로 붙인다.
+  # 녹화 정리 — 업로드가 끝난 녹화 조각을 MediaMTX 의 보존 기한보다 먼저
+  # 지운다. 사이드카와 같은 이미지의 다른 명령이다. 보존 기한(recordDeleteAfter)
+  # 삭제는 MediaMTX 몫이라 janitor 를 꺼도 계속된다. recordings 에 쓰기로 붙는
+  # 것은 mediamtx 와 이 서비스이고 사이드카는 :ro 다. 판정 표가 아직 없으면
+  # janitor 가 스스로 기다리므로 사이드카에 기대지 않는다(스키마는 기동 전에 DDL
+  # 역할이 놓는다).
   janitor:
-    image: ${janitor_image}
+    image: ${sidecar_image}
+    entrypoint: ["/usr/local/bin/janitor"]
+    # 녹화 소유자(머리 주석 「실행 계정」 의 예외). 이미지 USER(10001)로 돌면
+    # 모든 삭제가 권한 오류다.
+    user: "10002:10002"
     network_mode: "service:mediamtx"
     depends_on: *mediamtx-dependency
     restart: on-failure
+    # 녹화를 지우는 쓰기 권한을 가진 만큼 그 밖에는 아무것도 못 쓰게 한다.
+    # janitor 는 recordings 밖에 쓰지 않는다(로컬 compose 와 같은 설정).
+    read_only: true
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -227,6 +251,9 @@ services:
     ulimits:
       core: 0
     environment:
+      # 렌더할 때만 켠다. 빈 값 · 거짓이면 janitor 는 아무것도 건드리지 않고
+      # 대기만 하므로 이 줄을 빼면 조용히 멈춘다.
+      JANITOR_ENABLED: "true"
       POSTGRES_AUTH: iam
       POSTGRES_HOST: ${rds_endpoint}
       POSTGRES_PORT: "5432"
@@ -239,6 +266,7 @@ services:
       AWS_REGION: ap-northeast-2
       # 토큰 없는 옛 메타데이터 요청(IMDSv1)으로 내려가는 길을 막는다.
       AWS_EC2_METADATA_V1_DISABLED: "true"
+      SEGMENT_ROOT: /recordings
     volumes:
       - recordings:/recordings
 %{ if detached_log_driver == "json-file" ~}

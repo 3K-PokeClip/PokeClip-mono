@@ -26,11 +26,10 @@ function highlight(overrides: Partial<LiveHighlight> = {}): LiveHighlight {
   };
 }
 
-describe('cardViewFor — 계약 status 6종 → 시안 카드 상태', () => {
+describe('cardViewFor: 계약 status 5종 → 시안 카드 상태', () => {
   const cases: Array<[HighlightStatus, string, string]> = [
     ['scored', 'ready', '검토 대기'],
     ['manual', 'manual', '수동 마킹'],
-    ['editing', 'processing', '편집 중'],
     ['clipped', 'ready', '클립 완료'],
     ['unprocessed', 'ready', '미처리'],
     ['expired', 'ready', '만료'],
@@ -42,20 +41,9 @@ describe('cardViewFor — 계약 status 6종 → 시안 카드 상태', () => {
     expect(view.badgeLabel).toBe(label);
   });
 
-  it('편집 중 카드는 누가 잡고 있는지까지 배지에 적는다', () => {
-    expect(cardViewFor(highlight({ status: 'editing', editorName: '박편집' })).badgeLabel).toBe(
-      '편집 중 · 박편집',
-    );
-  });
-
-  it('이름을 모르면 상태만 말한다 — "편집 중 · undefined"가 되면 안 된다', () => {
-    expect(cardViewFor(highlight({ status: 'editing' })).badgeLabel).toBe('편집 중');
-  });
-
-  it('만료 카드만 흐리고, 만료·편집 중에는 버튼줄이 없다', () => {
+  it('만료 카드만 흐리고 버튼줄이 없다', () => {
     expect(cardViewFor(highlight({ status: 'expired' })).dimmed).toBe(true);
     expect(cardViewFor(highlight({ status: 'expired' })).showActions).toBe(false);
-    expect(cardViewFor(highlight({ status: 'editing' })).showActions).toBe(false);
     expect(cardViewFor(highlight({ status: 'scored' })).dimmed).toBe(false);
     expect(cardViewFor(highlight({ status: 'scored' })).showActions).toBe(true);
   });

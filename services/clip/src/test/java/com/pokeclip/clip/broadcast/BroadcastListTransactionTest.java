@@ -25,7 +25,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * 🔴 <b>지켜야 할 불변식 하나만 잰다 — 「auth 왕복 동안 DB 커넥션을 쥐지 않는다」.</b>
  *
- * <p><b>사람 문 <u>넷</u>을 잰다</b>(방송 목록 · 카드 목록 · <b>통로</b> · <b>카드 집기</b>). 이름이 방송 쪽으로 남아
+ * <p><b>사람 문 <u>넷</u>을 잰다</b>(방송 목록 · 카드 목록 · <b>통로</b> · <b>카드 열기</b>). 이름이 방송 쪽으로 남아
  * 있는 것은 표집 장치가 여기 있어서다 — 쪼개면 이 클래스의 대부분인 도우미가 복사된다.
  * 각 문에서 이 그물을 찾아오는 길은 그쪽 주석에 적어 두었다
  * ({@code JumpCardService.listOf} · {@code JumpCardStreamController.open}).
@@ -151,7 +151,7 @@ class BroadcastListTransactionTest extends IntegrationTestSupport {
 
         AtomicInteger 최대 = new AtomicInteger();
         Thread 요청 = new Thread(
-                () -> cardService.listOf(요청자, "s-tx-card", false, 20, null), "tx-probe-card");
+                () -> cardService.listOf(요청자, "s-tx-card", 20, null), "tx-probe-card");
         try {
             요청.start();
             auth에_도착할_때까지_기다린다();
@@ -230,31 +230,26 @@ class BroadcastListTransactionTest extends IntegrationTestSupport {
      * 🔴 <b>카드를 만지는 문 넷은 읽기 전용도 아니다.</b> 여기서 커넥션을 쥐면 <b>쓰기 트랜잭션</b>이
      * auth 왕복(최대 7초) 동안 열려 있다 — 그 사이 그 행의 락도 함께 잡힌다.
      *
-     * <p>넷 중 {@code claim} 하나만 잰다. 넷이 같은 한 줄({@code requireViewableCard})을 지나므로
-     * 하나가 쥐면 넷이 쥔다 — 그 한 줄이 갈리는 날은 {@code JumpCardAccessTest}가 넷을 다 재고 있다.
+     * <p>{@code open} 하나만 잰다(POK-393, 전에는 집기를 쟀다). 카드 문이 같은 한 줄({@code requireViewableCard})을
+     * 지나므로 하나가 쥐면 다 쥔다.
      *
-     * <p>대조 넷 — 표집기가 살아 있나 · auth까지 갔나 · 요청이 끝났나 · <b>실제로 집혔나</b>.
+     * <p>대조 넷: 표집기가 살아 있나 · auth까지 갔나 · 요청이 끝났나 · <b>실제로 기록됐나</b>.
      * 마지막이 없으면 판정 앞에서 죽은 결함이 {@code 최대=0}으로 통과한다.
      */
     @Test
-    void 카드를_집을_때도_auth_왕복_동안_커넥션을_안_쥔다() throws Exception {
+    void 카드를_열_때도_auth_왕복_동안_커넥션을_안_쥔다() throws Exception {
         HikariDataSource 풀 = (HikariDataSource) jdbc.getDataSource();
 
         int 손으로_쥐었을_때 = 손으로_하나_쥐고_센다(풀);
 
         AUTH.respondWith(RESOLVE, 200, "{\"relation\":\"OWNER\"}");
-        방송을_넣는다("s-tx-claim", TestIds.STREAMER);
-        long 카드 = cardService.record("s-tx-claim", new HighlightRequest("evt-tx", "auto", 23_000L,
+        방송을_넣는다("s-tx-open", TestIds.STREAMER);
+        long 카드 = cardService.record("s-tx-open", new HighlightRequest("evt-tx", "auto", 23_000L,
                 new HighlightRequest.Window(0L, 42_000L), 97, null)).card().id();
         AUTH.holdFor(붙드는_시간);
 
         AtomicInteger 최대 = new AtomicInteger();
-        AtomicInteger 집혔다 = new AtomicInteger();
-        Thread 요청 = new Thread(() -> {
-            if (cardService.claim(카드, 요청자).claimedBy() != null) {
-                집혔다.incrementAndGet();
-            }
-        }, "tx-probe-claim");
+        Thread 요청 = new Thread(() -> cardService.open(카드, 요청자), "tx-probe-open");
         try {
             요청.start();
             auth에_도착할_때까지_기다린다();
@@ -271,7 +266,8 @@ class BroadcastListTransactionTest extends IntegrationTestSupport {
                 .as("요청이 auth까지 안 갔다 — active=0은 「안 쥐었다」가 아니라 「아무 일도 안 했다」다")
                 .isPositive();
         assertThat(요청.isAlive()).as("요청이 안 끝났다 — 표집 결과를 믿을 수 없다").isFalse();
-        assertThat(집혔다.get()).as("집히지도 않았다 — 판정 앞에서 죽었다면 이 시험은 아무것도 안 잰다")
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM jump_card_actions WHERE card_id = ?", Long.class, 카드))
+                .as("기록되지도 않았다: 판정 앞에서 죽었다면 이 시험은 아무것도 안 잰다")
                 .isEqualTo(1);
         assertThat(최대.get())
                 .as("쓰기 트랜잭션이 auth 왕복(최대 7초) 내내 열려 있다 — 커넥션과 행 락을 함께 쥔다")

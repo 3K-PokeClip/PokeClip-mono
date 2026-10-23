@@ -1,5 +1,5 @@
 import Hls from 'hls.js';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { HLS_DVR_CONFIG } from './hlsConfig';
 
 // "catch-up 끄기"의 강제 시크 절반은 hls.js 기본값에 의존한다 — 명시하면 생성자 검증이
@@ -40,5 +40,22 @@ describe('HLS_DVR_CONFIG의 실효 설정', () => {
     expect('liveMaxLatencyDuration' in HLS_DVR_CONFIG).toBe(false);
     expect('liveSyncDurationCount' in HLS_DVR_CONFIG).toBe(false);
     expect('liveSyncDuration' in HLS_DVR_CONFIG).toBe(false);
+  });
+});
+
+describe('라이브 조각 요청의 쿠키 싣기 (POK-317)', () => {
+  it('출입증이 발급된 뒤에만 withCredentials를 켠다: 로컬 영상 서버는 Allow-Origin * 라 켜면 조각을 못 받는다', async () => {
+    vi.resetModules();
+    const { HLS_DVR_CONFIG: config } = await import('./hlsConfig');
+    const media = await import('@/api/mediaPlayback');
+    const xhr = () => {
+      const x = { withCredentials: false } as XMLHttpRequest;
+      config.xhrSetup(x);
+      return x.withCredentials;
+    };
+
+    expect(xhr()).toBe(false);
+    media.markPlaybackCookiesIssued();
+    expect(xhr()).toBe(true);
   });
 });

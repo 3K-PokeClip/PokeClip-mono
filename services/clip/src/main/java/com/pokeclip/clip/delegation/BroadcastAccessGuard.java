@@ -14,8 +14,8 @@ import org.springframework.stereotype.Component;
  * (그 숫자는 「Media가 보내는 번호가 우리 회원 번호가 아니다」를 드러내려고 있는 장치다 —
  * README auth 절).
  *
- * <p><b>{@code OWNER}와 {@code EDITOR}를 가르지 않는다</b>(PRD 결정). 편집자가 카드를 집어
- * 편집하고 숨기는 것이 그 사람의 본업이다. 가르고 싶어지면 그때 새 규칙을 얹는다 —
+ * <p><b>{@code OWNER}와 {@code EDITOR}를 가르지 않는다</b>(PRD 결정). 편집자가 카드를 열어
+ * 편집하는 것이 그 사람의 본업이다. 가르고 싶어지면 그때 새 규칙을 얹는다 :
  * 좁은 것을 넓히는 편이 반대보다 안전하다.
  *
  * <p><b>{@code @Transactional}이 없다.</b> auth 왕복이 최대 7초인데 트랜잭션 안에서 돌면

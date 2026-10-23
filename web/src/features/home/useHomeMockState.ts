@@ -101,8 +101,6 @@ interface WireCard {
   window: { startMs: number; endMs: number };
   score: number | null;
   evidence: unknown;
-  claimedBy: string | null;
-  hidden: boolean;
   eventSeq: number;
   createdAt: string;
 }
@@ -258,10 +256,8 @@ async function loadHome(
       }
       // 끝까지 넘긴다 — 기본 50장이고 오래된 것부터 와서, 첫 장만 읽으면 카드 수가 50에서 잘리고
       // 최근 카드가 통째로 빠진다(PR #200 codex)
-      const cards = await fetchAllJumpCards<WireCard>(streamId).then(
-        (list) => list.filter((c) => !c.hidden),
-        () => null,
-      );
+      // 옛 서버가 hidden을 실어 보내도 거르지 않는다: 숨기기는 POK-393에서 없앴다
+      const cards = await fetchAllJumpCards<WireCard>(streamId).catch(() => null);
       if (cards === null) {
         // 못 읽었으면 기억해 둔 값을(기한이 지났어도) 쓰고 기억은 건드리지 않는다 — 다음 주기에 다시 읽는다.
         // 빈 값을 기억하면 5분 동안 카드 수가 실제보다 적게 보인다(리뷰 #299 2차)

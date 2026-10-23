@@ -44,21 +44,21 @@ crash::cid() {
 }
 
 #######################################
-# 렌더 자리 둘 가운데 디렉터리인 것의 수를 낸다. sudo 가 안 되면 「확인 불가」
-# 를 내고 1 을 돌려준다(0 과 비교하는 부르는 쪽에서 실패가 된다).
+# 렌더 자리 둘 가운데 디렉터리인 것의 수를 낸다. 조회가 실패하면(sudo 전체 ·
+# sudo 는 되고 find 만 실패) 「확인 불가」 를 내고 1 을 돌려준다(0 과 비교하는
+# 부르는 쪽에서 실패가 된다). 이름마다 test -d 를 부르지 않는다 — 그 실패(종료
+# 1)는 「디렉터리 아님」 과 가를 수 없다.
 #######################################
 crash::render_dirs() {
-  local n=0 name
-  # sudo 가 안 되면 test -d 의 거짓과 가를 수 없다 — 0 이 아니라 확인 불가다.
-  if ! sudo -n true 2>/dev/null; then
+  local n name
+  local -a names=()
+  while read -r _ name _; do
+    names+=(${names[@]+-o} -name "${name}")
+  done <<<"${CRASH_VIEWS}"
+  if ! n="$(unit::render_count -type d \( "${names[@]}" \))"; then
     printf '확인 불가'
     return 1
   fi
-  while read -r _ name _; do
-    if sudo -n test -d "${runtime_dir}/${name}"; then
-      n=$((n + 1))
-    fi
-  done <<<"${CRASH_VIEWS}"
   printf '%s' "${n}"
 }
 

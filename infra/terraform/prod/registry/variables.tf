@@ -16,6 +16,10 @@ variable "repository_keys" {
     "media-mediamtx",
     "media-sidecar",
     "media-ingest-auth",
+    "render",
+    "upload",
+    "chat-collector",
+    "chat-detector",
   ]
 }
 

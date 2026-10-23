@@ -13,9 +13,9 @@
 # 템플릿 변수 값은 공용 시험값 파일 test/render_vars.json 하나에서 온다. 갈래를
 # 보려고 값을 바꾼 사본을 이 시험이 만든다(시험 쪽에 값을 따로 적지 않고 그
 # 파일을 jq 로 고친다):
-#   - a: render_vars.json 그대로(응답기 · janitor 빔 · journald).
-#   - b: 응답기만 채움. c: janitor 만 채움.
-#   - d: 둘 다 채우고 detached_log_driver = json-file(로컬 실행 렌더 갈래).
+#   - a: render_vars.json 그대로(응답기 이미지 빔 · janitor 끔 · journald).
+#   - b: 응답기만 채움. c: janitor 만 켬.
+#   - d: 둘 다 채우고 · 켜고 detached_log_driver = json-file(로컬 실행 렌더 갈래).
 #   - nginx: control_upstream 빔(a) · 채움(e).
 #
 # 드리프트: 시험 compose(test/compose.contract.yml)에서 템플릿과 이름이 같은
@@ -65,10 +65,15 @@ readonly COMPOSE_VARIANTS='a b c d'
 readonly SAMPLE_CONTROL_UPSTREAM='127.0.0.1:28190'
 readonly MIN_READ_TIMEOUT_SECONDS=15
 readonly CONFIG_TIMEOUT=60
-readonly CASE_COUNT=26
+readonly CASE_COUNT=29
+# 녹화 디렉터리 소유자의 정본 — MediaMTX 이미지 Dockerfile 의 최종 USER.
+MTXHOOK_DOCKERFILE="$(cd -- "${MEDIA_HOST_DIR}/../.." && pwd)/media/Dockerfile.mtxhook"
+readonly MTXHOOK_DOCKERFILE
+readonly JANITOR_ENTRYPOINT='/usr/local/bin/janitor'
 
 # 기대값 jq 프로그램이 함께 쓰는 정의. 입력은 그 갈래의 변수 JSON 이다.
-#   services — 렌더에 있어야 할 서비스(응답기 · janitor 는 변수가 차 있을 때만).
+#   services — 렌더에 있어야 할 서비스(응답기는 이미지 변수가 차 있을 때만,
+#              janitor 는 janitor_enabled 가 참일 때만).
 #   attached — compose 출력이 연결되는 서비스(시작 스크립트의 --attach 집합.
 #              start_test 가 같은 집합을 시작 스크립트 쪽에서 단언한다).
 #   nginx_cap_add — cap_drop: [ALL] 뒤 nginx 에만 되살리는 cap. 공식 이미지는
@@ -81,7 +86,7 @@ readonly JQ_DEFS='
 def services:
   ["mediamtx", "nginx", "sidecar"]
   + (if .ingest_auth_image != "" then ["ingest-auth"] else [] end)
-  + (if .janitor_image != "" then ["janitor"] else [] end)
+  + (if .janitor_enabled then ["janitor"] else [] end)
   | sort;
 def attached: ["mediamtx", "nginx"];
 def nginx_cap_add: ["CHOWN", "SETGID", "SETUID"];
@@ -129,15 +134,16 @@ check_tools() {
   return "${ok}"
 }
 
-# 응답기 · janitor 시험 이미지 — 사이드카 시험값과 같은 저장소 꼴에 이름 ·
-# 다이제스트만 바꾼다(서로 다른 값이라 이미지 변수가 뒤바뀌면 사례 3 이 잡는다).
+# 응답기 시험 이미지 — 사이드카 시험값과 같은 저장소 꼴에 이름 · 다이제스트만
+# 바꾼다(서로 다른 값이라 이미지 변수가 뒤바뀌면 사례 3 이 잡는다). janitor 는
+# 이미지 변수 없이 켜기만 한다(사이드카 이미지를 쓴다).
 # shellcheck disable=SC2016 # jq 프로그램 — $ 는 jq 변수다.
 readonly JQ_SAMPLE_IMAGE='
 def sample_image($name; $fill):
   .sidecar_image
   | sub("/[^/@]+@sha256:[0-9a-f]+$"; "/\($name)@sha256:\($fill * 64)");
 def fill_auth: .ingest_auth_image = sample_image("media-ingest-auth"; "4");
-def fill_janitor: .janitor_image = sample_image("media-janitor"; "5");
+def fill_janitor: .janitor_enabled = true;
 '
 
 #######################################
@@ -275,29 +281,51 @@ require_setup() {
 # 기대값은 그 갈래의 변수 JSON 을 입력으로 도는 jq 프로그램이다(JQ_DEFS 를
 # 앞에 붙인다).
 # Arguments:
-#   갈래, 실제값 jq 필터, 기대값 jq 프로그램, 이름.
+#   갈래, 실제값 jq 필터, 기대값 jq 프로그램, 이름, 기대값 jq 의 추가 인자
+#   (예: --arg 이름 값 — 없어도 됨).
 #######################################
 expect_config() {
-  local v="$1" want got
-  if ! want="$(jq -cS "${JQ_DEFS} $3" "$(vars_file "${v}")" 2>&1)"; then
+  local v="$1" actual="$2" program="$3" name="$4" want got
+  shift 4
+  if ! want="$(jq -cS "$@" "${JQ_DEFS} ${program}" "$(vars_file "${v}")" \
+    2>&1)"; then
     harness::add_reason "시험 오류(기대값 jq): ${want}"
     return 1
   fi
-  got="$(jq -cS "$2" "$(config_json "${v}")" 2>/dev/null)" \
+  got="$(jq -cS "${actual}" "$(config_json "${v}")" 2>/dev/null)" \
     || got='(구성 JSON 을 읽지 못함)'
   if [[ "${got}" != "${want}" ]]; then
-    harness::add_reason "갈래 ${v}: $4 기대 ${want} · 실제 ${got}"
+    harness::add_reason "갈래 ${v}: ${name} 기대 ${want} · 실제 ${got}"
     return 1
   fi
 }
 
-# 모든 compose 갈래에 같은 단언을 건다. 인자는 expect_config 의 나머지 셋.
+# 모든 compose 갈래에 같은 단언을 건다. 인자는 expect_config 의 갈래 뒤 인자.
 expect_all() {
   local ok=0 v
   for v in ${COMPOSE_VARIANTS}; do
     expect_config "${v}" "$@" || ok=1
   done
   return "${ok}"
+}
+
+#######################################
+# 파일에 고정 문자열이 든 줄이 없는지 본다. 읽기 실패(grep 종료 2 이상 —
+# 「0」 을 내도)와 파일 없음은 0 건이 아니라 확인 불가로 FAIL 이다.
+# Arguments:
+#   원인에 붙일 이름, 고정 문자열, 파일.
+#######################################
+expect_fixed_absent() {
+  local count status=0
+  count="$(harness::count_fixed "$2" "$3")" || status=$?
+  if (( status != 0 )); then
+    harness::add_reason "$1: 파일을 읽지 못함 — $2 확인 불가"
+    return 1
+  fi
+  if [[ "${count}" != 0 ]]; then
+    harness::add_reason "$1: $2 ${count}줄(기대 0)"
+    return 1
+  fi
 }
 
 check_case_1() {
@@ -325,8 +353,8 @@ check_case_3() {
     {mediamtx: .mediamtx_image, nginx: .nginx_image, sidecar: .sidecar_image}
     + (if .ingest_auth_image != ""
        then {"ingest-auth": .ingest_auth_image} else {} end)
-    + (if .janitor_image != "" then {janitor: .janitor_image} else {} end)' \
-    '이미지'
+    + (if .janitor_enabled then {janitor: .sidecar_image} else {} end)' \
+    '이미지(janitor = 사이드카 이미지)'
 }
 
 check_case_4() {
@@ -369,7 +397,7 @@ check_case_6() {
 }
 
 check_case_7() {
-  local ok=0 v count
+  local ok=0 v
   require_setup || return 1
   expect_all '.services | map_values([(.volumes // [])[]
       | "\(.source) \(.target) \(if .read_only then "ro" else "rw" end)"]
@@ -381,17 +409,14 @@ check_case_7() {
      sidecar: ["recordings /recordings ro", "hooks /hooks ro",
                "/run/pokeclip-media/mtx_api_pass /run/secrets/mtx_api_pass ro"]}
     + (if .ingest_auth_image != "" then {"ingest-auth": []} else {} end)
-    + (if .janitor_image != ""
+    + (if .janitor_enabled
        then {janitor: ["recordings /recordings rw"]} else {} end)
     | map_values(sort)' '볼륨 · 읽기 전용' || ok=1
   expect_all '[.services[] | (.volumes // [])[]
     | select(.volume.nocopy == true)] | length' '0' 'volume.nocopy' || ok=1
   for v in ${COMPOSE_VARIANTS}; do
-    count="$(grep -c -F nocopy "$(compose_render "${v}")" || true)"
-    if [[ "${count}" != 0 ]]; then
-      harness::add_reason "갈래 ${v}: 렌더에 nocopy ${count}건(기대 0)"
-      ok=1
-    fi
+    expect_fixed_absent "갈래 ${v} 렌더" nocopy "$(compose_render "${v}")" \
+      || ok=1
   done
   return "${ok}"
 }
@@ -414,10 +439,37 @@ check_case_8() {
     '권한 · core 덤프 0'
 }
 
+#######################################
+# 녹화 디렉터리 소유자 — MediaMTX 이미지 Dockerfile 최종 스테이지의 USER(마지막
+# FROM 뒤 마지막 USER). media/cmd/janitor 의 compose 계약 시험과 같은 규칙이다.
+# Outputs:
+#   USER 값(없으면 빈 값).
+# Returns:
+#   0 읽음 / 그 밖 파일을 읽지 못함.
+#######################################
+recording_owner() {
+  awk 'toupper($1) == "FROM" { user = "" }
+    toupper($1) == "USER" { user = $2 }
+    END { print user }' "${MTXHOOK_DOCKERFILE}"
+}
+
+# 실행 계정은 이미지 USER 가 정본이라 user: 를 적지 않는다. janitor 만 예외 —
+# 사이드카 이미지(USER 10001)를 쓰지만 녹화 소유자로 돌아야 지울 수 있다.
 check_case_9() {
+  local owner
   require_setup || return 1
-  expect_all '.services.mediamtx | has("user")' 'false' \
-    'mediamtx user(정본은 Dockerfile USER)'
+  if [[ ! -f "${MTXHOOK_DOCKERFILE}" ]]; then
+    harness::add_reason 'media/Dockerfile.mtxhook 없음(녹화 소유자 정본)'
+    return 1
+  fi
+  if ! owner="$(recording_owner)" || [[ -z "${owner}" ]]; then
+    harness::add_reason 'media/Dockerfile.mtxhook 최종 USER 를 읽지 못함'
+    return 1
+  fi
+  # shellcheck disable=SC2016 # jq 프로그램 — $ 는 jq 변수다.
+  expect_all '.services | map_values(.user // null)' '
+    services | map({(.): (if . == "janitor" then $owner else null end)})
+    | add' '실행 계정(user)' --arg owner "${owner}"
 }
 
 check_case_10() {
@@ -431,13 +483,14 @@ check_case_10() {
        MTX_API_USER: "pokeclip-sidecar",
        MTX_API_PASS_FILE: "/run/secrets/mtx_api_pass",
        S3_BUCKET: .rewind_bucket_name})}
-    + (if .janitor_image != ""
-       then {janitor: (db_env + {POSTGRES_USER: "media_janitor"})}
+    + (if .janitor_enabled
+       then {janitor: (db_env + {POSTGRES_USER: "media_janitor",
+         JANITOR_ENABLED: "true", SEGMENT_ROOT: "/recordings"})}
        else {} end)' '사이드카 · janitor env'
 }
 
 check_case_11() {
-  local ok=0 v count
+  local ok=0 v
   require_setup || return 1
   # shellcheck disable=SC2016 # jq 프로그램 — $ 는 jq 변수다.
   expect_all '[.services | to_entries[] | .key as $s
@@ -445,11 +498,8 @@ check_case_11() {
     | select(test("CDN|TOKEN|PASSWORD|SECRET"; "i")) | "\($s).\(.)"]' \
     '[]' '비밀 계열 env 이름' || ok=1
   for v in ${COMPOSE_VARIANTS}; do
-    count="$(grep -c -F POSTGRES_PASSWORD "$(compose_render "${v}")" || true)"
-    if [[ "${count}" != 0 ]]; then
-      harness::add_reason "갈래 ${v}: 렌더에 POSTGRES_PASSWORD ${count}건"
-      ok=1
-    fi
+    expect_fixed_absent "갈래 ${v} 렌더" POSTGRES_PASSWORD \
+      "$(compose_render "${v}")" || ok=1
   done
   return "${ok}"
 }
@@ -500,9 +550,17 @@ expect_control_plane() {
       ok=1
     fi
   done
-  others="$(grep -E '^[[:space:]]*proxy_pass[[:space:]]' "${file}" \
-    | grep -c -v -E 'http://127\.0\.0\.1:(8888|9996)[/;]' || true)"
-  if [[ "${others}" != "$3" ]]; then
+  # 한 단계로 센다 — 앞 단계(proxy_pass 줄 고르기)의 실패가 뒤 집계를 0 으로
+  # 만들지 않게. awk 에는 「맞는 줄 없음」 종료 코드가 없어 0 아닌 종료는 모두
+  # 조회 실패다.
+  if ! others="$(awk '
+      /^[[:space:]]*proxy_pass[[:space:]]/ &&
+        !/http:\/\/127\.0\.0\.1:(8888|9996)[\/;]/ { n++ }
+      END { print n + 0 }' "${file}" 2>/dev/null)" \
+    || [[ ! "${others}" =~ ^[0-9]+$ ]]; then
+    harness::add_reason "nginx ${1}: proxy_pass 조회 실패"
+    ok=1
+  elif [[ "${others}" != "$3" ]]; then
     harness::add_reason "nginx ${1}: 8888 · 9996 밖 proxy_pass ${others}건 \
 (기대 $3)"
     ok=1
@@ -520,14 +578,10 @@ check_case_14() {
 }
 
 check_case_15() {
-  local ok=0 v count
+  local ok=0 v
   require_setup || return 1
   for v in a e; do
-    count="$(grep -c -F 9997 "$(nginx_render "${v}")" || true)"
-    if [[ "${count}" != 0 ]]; then
-      harness::add_reason "nginx ${v}: 9997 ${count}줄(기대 0)"
-      ok=1
-    fi
+    expect_fixed_absent "nginx ${v}" 9997 "$(nginx_render "${v}")" || ok=1
   done
   return "${ok}"
 }
@@ -661,6 +715,111 @@ check_case_26() {
     '렌더 파일 bind 의 원본 자동 생성'
 }
 
+check_case_27() {
+  require_setup || return 1
+  # shellcheck disable=SC2016 # jq 프로그램 — $ 는 jq 변수다.
+  expect_all '.services | map_values({entrypoint: (.entrypoint // null),
+      read_only: (.read_only // null)})' '
+    services | map({(.): (if . == "janitor"
+      then {entrypoint: [$entry], read_only: true}
+      else {entrypoint: null, read_only: null} end)}) | add' \
+    'entrypoint · 읽기 전용 루트' --arg entry "${JANITOR_ENTRYPOINT}"
+}
+
+#######################################
+# 사례 28 — janitor_enabled 가 bool 로 바꿀 수 없는 값이면 렌더가 실패한다
+# (일부 문자열 — "true" · "false" 등 — 은 bool 로 바뀌어 통과한다). 그 키 하나만 "yes" ·
+# 빈 문자열 · null · 숫자 1 로 바꾼 변수 파일은 각각 렌더가 실패하고, 원래 변수
+# 파일(같은 시험 안에서 다시 렌더)은 성공한다 — 렌더 실패가 다른 원인이면 짝의
+# 성공 쪽이 FAIL 한다.
+#######################################
+check_case_28() {
+  local ok=0 value bad="${scratch}/vars-bad-enabled.json"
+  local out="${scratch}/compose-bad-enabled.yml"
+  require_setup || return 1
+  for value in '"yes"' '""' 'null' '1'; do
+    if ! jq ".janitor_enabled = ${value}" "${RENDER_VARS_FILE}" >"${bad}"; then
+      harness::add_reason '시험 오류: 변수 파일을 만들지 못함'
+      return 1
+    fi
+    if render::template "${COMPOSE_TEMPLATE}" "${bad}" "${out}" \
+      2>"${out}.err"; then
+      harness::add_reason "janitor_enabled = ${value} 인데 렌더가 성공함"
+      ok=1
+    fi
+  done
+  if ! render::template "${COMPOSE_TEMPLATE}" "${RENDER_VARS_FILE}" \
+    "${scratch}/compose-good-enabled.yml" 2>"${out}.good.err"; then
+    harness::add_reason "원래 변수 파일 렌더 실패: \
+$(harness::log_tail "${out}.good.err")"
+    ok=1
+  fi
+  return "${ok}"
+}
+
+#######################################
+# 가짜 명령 하나를 만든다 — 인자가 꼴에 맞으면 주어진 본문을 돌리고, 아니면
+# 진짜 명령으로 넘긴다. 진짜 명령 경로는 가짜를 PATH 에 두기 전에 잡는다
+# (가짜가 자기 자신을 부르는 고리를 막는다).
+# Arguments:
+#   bin 디렉터리, 명령 이름, 인자 꼴(sh case 패턴 — 앞뒤 공백을 붙인 "$*" 에
+#   맞춘다), 맞을 때의 본문.
+#######################################
+write_fake_command() {
+  local real
+  real="$(command -v "$2")" || return 1
+  mkdir -p -- "$1" || return 1
+  printf '#!/bin/sh\ncase " $* " in %s) %s ;; esac\nexec %s "$@"\n' \
+    "$3" "$4" "${real}" >"$1/$2" && chmod +x "$1/$2"
+}
+
+#######################################
+# PATH 앞에 가짜 명령 디렉터리를 둔 채(그 호출 동안만) 사례 함수를 부르고,
+# 종료 코드와 실패 원인을 「코드:원인」 한 줄로 낸다. $(…) 안에서 부른다 —
+# 사례 함수가 바꾼 전역은 그 하위 셸에만 남는다.
+# Arguments:
+#   bin 디렉터리, 사례 함수 이름.
+#######################################
+run_with_fake() {
+  local status=0
+  harness_fail_reason=''
+  PATH="$1:${PATH}" "$2" >/dev/null 2>&1 || status=$?
+  printf '%s:%s' "${status}" "${harness_fail_reason}"
+}
+
+#######################################
+# 사례 29 — 렌더 · nginx 설정을 세는 사례(7 · 11 · 15 · 14)는 읽기 실패를 0 건
+# 으로 읽지 않는다. 실제 사례 함수를 가짜 명령 아래에서 불러 FAIL 과 원인을
+# 본다: grep -c -F 가 「0」 을 내고 종료 2(읽기 실패의 꼴)면 사례 7 · 11 · 15
+# 가 「확인 불가」, proxy_pass 를 세는 단계(grep · awk 어느 쪽이든)가 출력 없이
+# 종료 2 면 사례 14 가 「조회 실패」 다.
+#######################################
+check_case_29() {
+  local ok=0 dir="${scratch}/fake-count" c got want
+  require_setup || return 1
+  if ! write_fake_command "${dir}/count" grep '*" -c -F "*' \
+    'echo 0; exit 2' \
+    || ! write_fake_command "${dir}/proxy" grep '*proxy_pass*' 'exit 2' \
+    || ! write_fake_command "${dir}/proxy" awk '*proxy_pass*' 'exit 2'; then
+    harness::add_reason '시험 오류: 가짜 명령을 만들지 못함'
+    return 1
+  fi
+  for c in 7 11 15 14; do
+    if [[ "${c}" == 14 ]]; then
+      got="$(run_with_fake "${dir}/proxy" "check_case_${c}")"
+      want='조회 실패'
+    else
+      got="$(run_with_fake "${dir}/count" "check_case_${c}")"
+      want='확인 불가'
+    fi
+    if [[ "${got%%:*}" == 0 || "${got#*:}" != *"${want}"* ]]; then
+      harness::add_reason "사례 ${c}: 「${got}」(기대 FAIL · ${want})"
+      ok=1
+    fi
+  done
+  return "${ok}"
+}
+
 main() {
   if (( $# != 0 )); then
     printf '사용: bash infra/media-host/test/render_test.sh (인자 없음)\n' >&2
@@ -676,7 +835,8 @@ main() {
   fi
   harness::run_case 1 '렌더한 compose 마다 docker compose config 종료 0' \
     check_case_1
-  harness::run_case 2 '응답기 · janitor 는 변수가 차 있을 때만 렌더' \
+  harness::run_case 2 \
+    '응답기는 이미지 변수가 찰 때만 · janitor 는 janitor_enabled 일 때만 렌더' \
     check_case_2
   harness::run_case 3 '서비스 이미지 = 템플릿 변수' check_case_3
   harness::run_case 4 \
@@ -690,7 +850,9 @@ main() {
   harness::run_case 8 \
     '권한 — no-new-privileges · cap_drop ALL · nginx cap 셋 · 특권 0 · core 0' \
     check_case_8
-  harness::run_case 9 'mediamtx 에 user: 없음' check_case_9
+  harness::run_case 9 \
+    '실행 계정 — janitor 만 녹화 소유자(Dockerfile.mtxhook USER) · 나머지 user 없음' \
+    check_case_9
   harness::run_case 10 '사이드카 · janitor env(IAM · 비밀 없음)' check_case_10
   harness::run_case 11 'env 에 비밀 계열 이름 · POSTGRES_PASSWORD 0' \
     check_case_11
@@ -717,6 +879,12 @@ main() {
   harness::run_case 25 \
     '드리프트 — 유닛 시험 compose 와 템플릿 구조 · logging 일치' check_case_25
   harness::run_case 26 '렌더 파일 bind — 원본 없으면 만들지 않음' check_case_26
+  harness::run_case 27 'janitor — entrypoint 로 명령 고름 · 읽기 전용 루트' \
+    check_case_27
+  harness::run_case 28 \
+    'janitor_enabled 가 bool 로 바꿀 수 없는 값이면 렌더 실패(일부 문자열은 통과)' \
+    check_case_28
+  harness::run_case 29 '집계 — 읽기 실패는 0 건이 아님(정적)' check_case_29
 
   if ! harness::summary "${CASE_COUNT}"; then
     exit 1

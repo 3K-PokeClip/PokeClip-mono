@@ -6,7 +6,6 @@ import { ApiError, apiFetch } from '@/api/client';
 import { chzzkLinkQueryOptions } from '@/api/chzzkLink';
 import { fetchAllJumpCards } from '@/api/clipEditor';
 import { useMe } from '@/features/auth/useSession';
-import { useAuthStore } from '@/stores/auth';
 import { keepKnownThumbnail } from '@/features/thumbnail/thumbnailUrl';
 import { timeAgo } from '@/lib/timeAgo';
 import { endedWindowStart } from '@/features/broadcast/endedWindow';
@@ -41,8 +40,7 @@ export interface LiveStream {
   editorName: string;
 }
 
-export type HighlightStatus =
-  'scored' | 'manual' | 'editing' | 'clipped' | 'unprocessed' | 'expired';
+export type HighlightStatus = 'scored' | 'manual' | 'clipped' | 'unprocessed' | 'expired';
 
 /** 전체/자동/수동 필터의 기준 */
 export type HighlightSource = 'auto' | 'manual';
@@ -56,16 +54,10 @@ export interface LiveHighlight {
   source: HighlightSource;
   /** 채점 점수 — 채점 전(unprocessed)·수동 카드에는 없다 */
   score?: number;
-  /** editing일 때 편집 중인 사람 */
-  editorName?: string;
-  /** 내가 집은 카드인가 — 그러면 「편집 중」이어도 다시 들어갈 수 있어야 한다 */
-  claimedByMe?: boolean;
   /** 방금 감지된 카드 — 마젠타 틴트로 강조 */
   emphasized?: boolean;
   /** 카드 시점 장면 사진(POK-277). 없으면 자리표시 */
   thumbnailUrl?: string | null;
-  /** 숨긴 카드다(POK-338): 「숨김」 칩에서만 보이고 「숨김 해제」만 할 수 있다 */
-  hidden?: boolean;
 }
 
 export interface ChatVolumeSeries {
@@ -81,9 +73,6 @@ export type CardListStatus = 'loading' | 'failed' | 'loaded';
 export interface LiveMockState {
   stream: LiveStream;
   highlights: LiveHighlight[];
-  /** 숨긴 카드(POK-338). 숨김을 되돌릴 자리가 없으면 행동 기록에 되돌리기가 영영 안 쌓인다 */
-  hiddenHighlights: LiveHighlight[];
-  hiddenCount: number;
   /**
    * 이 방송의 카드 목록을 받았나. 받기 전의 빈 목록은 「없다」가 아니라 「모른다」다. 'failed'는 받기 전에 읽기가
    * 실패한 것이다(다음 주기에 다시 읽는다). 한 번 받은 뒤의 실패는 받은 목록을 그대로 두므로 'loaded'다
@@ -105,8 +94,6 @@ interface Snapshot {
   window: { startMs: number; endMs: number };
   score: number | null;
   evidence: Record<string, unknown> | null;
-  claimedBy: string | null;
-  hidden: boolean;
   eventSeq: number;
   createdAt: string;
   /** 목록 문만 싣는다(POK-277). 통로로 온 카드는 비어 있다 */
@@ -128,54 +115,13 @@ type LoadedInfo = BroadcastInfoResponse & { scope: LiveInfoScope };
 
 const CHART_MINUTES = 10;
 const CHART_BUCKET = 30;
-/** 끝난 방송의 카드 목록을 다시 읽는 간격(POK-254). 사진 주소(50분)보다 짧고, 다른 편집자의 집기·숨김이 1분 안에 보인다 */
+/** 끝난 방송의 카드 목록을 다시 읽는 간격(POK-254). 사진 주소(50분)보다 짧다 */
 const ENDED_LIST_MS = 60_000;
 /**
  * 끝난 방송의 차트·방송 정보를 굳히기 전에 기다리는 시간(PR #256 codex). 명부가 끝을 먼저 알리면 수집기의 마지막 적재(1초마다 몰아
  * 쓴다)와 마지막 관측(1분마다) 전 답을 받는다: 첫 답을 굳히면 꼬리가 빠진 채 남았다. 이만큼 지난 뒤 받은 답부터 굳힌다
  */
 const ENDED_SETTLE_MS = 2 * 60_000;
-export interface CardActionResult {
-  ok: boolean;
-  status: number;
-  text: string;
-}
-
-/**
- * 카드 동작이 성공하면 열린 화면이 목록을 그 자리에서 다시 읽는다(POK-338). 끝난 방송은 통로가 없고 목록을 드물게 읽어,
- * 기다리면 「놓기」·「숨김 해제」가 한참 뒤에야 보인다
- */
-const cardChangeListeners = new Set<() => void>();
-
-/** 카드 집기·놓기·숨기기·되돌리기. 실패도 값으로 돌려준다: 카드가 사유(409 already_claimed 등)를 토스트로 보인다 */
-async function cardCall(method: string, path: string, body?: object): Promise<CardActionResult> {
-  try {
-    // 문자열 본문이면 apiFetch가 Content-Type을 JSON으로 붙인다
-    const r = await apiFetch(path, body ? { method, body: JSON.stringify(body) } : { method });
-    cardChangeListeners.forEach((reload) => reload());
-    return { ok: true, status: r.status, text: '' };
-  } catch (e) {
-    if (e instanceof ApiError) return { ok: false, status: e.status, text: e.code ?? e.message };
-    return { ok: false, status: 0, text: String(e) };
-  }
-}
-
-const cardPath = (cardId: string) => `/api/clip/jump-cards/${cardId.replace('card-', '')}`;
-export function claimCard(cardId: string) {
-  return cardCall('POST', `${cardPath(cardId)}/claim`);
-}
-export function releaseCard(cardId: string) {
-  return cardCall('DELETE', `${cardPath(cardId)}/claim`);
-}
-/** 숨긴 이유(POK-338). 거짓양성률 = 자동 카드 중 「하이라이트 아님」으로 숨긴 비율이다 */
-export type HideReason = 'not_highlight' | 'duplicate' | 'other';
-export function hideCard(cardId: string, reason: HideReason) {
-  return cardCall('POST', `${cardPath(cardId)}/hide`, { reason });
-}
-export function unhideCard(cardId: string) {
-  return cardCall('DELETE', `${cardPath(cardId)}/hide`);
-}
-
 /** [from, to)를 수집기 한 번에 받을 수 있는 1시간 창들로 자른다 */
 export function chartWindows(from: number, to: number): [number, number][] {
   const windows: [number, number][] = [];
@@ -213,21 +159,6 @@ export function msToClock(ms: number): string {
   return `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
 }
 
-/** 지금 로그인한 회원 번호 — 토큰의 sub. 카드의 claimedBy와 같은 값이다 */
-function currentUserId(): string | null {
-  try {
-    const token = useAuthStore.getState().accessToken;
-    const payload = token?.split('.')[1];
-    if (!payload) return null;
-    const json = JSON.parse(atob(payload.replace(/-/g, '+').replace(/_/g, '/'))) as {
-      sub?: unknown;
-    };
-    return typeof json.sub === 'string' ? json.sub : null;
-  } catch {
-    return null;
-  }
-}
-
 function toHighlight(c: Snapshot, index: number, now: number): LiveHighlight {
   const ev = c.evidence ?? {};
   const ratio = typeof ev.ratio === 'number' ? ev.ratio : null;
@@ -244,8 +175,8 @@ function toHighlight(c: Snapshot, index: number, now: number): LiveHighlight {
     : ratio !== null
       ? `채팅 ×${ratio.toFixed(1)} 급증${count !== null ? ` (${count}건)` : ''}`
       : `채팅 급증${count !== null ? ` (${count}건)` : ''}`;
-  let status: HighlightStatus = manual ? 'manual' : 'scored';
-  if (c.claimedBy) status = 'editing';
+  // 옛 서버가 claimedBy·hidden을 실어 보내도 안 본다: 집기·숨기기는 POK-393에서 없앴다
+  const status: HighlightStatus = manual ? 'manual' : 'scored';
   return {
     id: `card-${c.id}`,
     timestamp: msToClock(c.streamTimestampMs),
@@ -255,9 +186,7 @@ function toHighlight(c: Snapshot, index: number, now: number): LiveHighlight {
     source: manual ? 'manual' : 'auto',
     score: c.score ?? undefined,
     emphasized: index === 0,
-    claimedByMe: c.claimedBy !== null && c.claimedBy === currentUserId(),
     thumbnailUrl: c.thumbnailUrl ?? null,
-    ...(c.hidden ? { hidden: true } : {}),
   };
 }
 
@@ -346,7 +275,7 @@ export function useLiveMockState(pastRoute: boolean): LiveMockState {
 
     /**
      * 끝난 방송은 덜 읽는다(POK-254). 차트·방송 정보는 그 창을 한 번 받으면 더 바뀌지 않는다(창이 바뀌면 열쇠가 바뀌어 다시 읽는다).
-     * 카드 목록은 다른 편집자의 집기·숨김과 50분짜리 사진 주소 때문에 1분마다 읽는다. 전에는 끝난 방송도 3초·10초마다 읽어
+     * 카드 목록은 50분짜리 사진 주소 때문에 1분마다 읽는다. 전에는 끝난 방송도 3초·10초마다 읽어
      * 12시간 방송이면 탭 하나에 분당 차트 72건이었다
      */
     const endedKey = (rg: Range) =>
@@ -361,9 +290,8 @@ export function useLiveMockState(pastRoute: boolean): LiveMockState {
     const loadList = async () => {
       listReadAt = Date.now();
       try {
-        // 끝까지 넘기고 숨긴 카드도 받는다 — 숨김이 목록에 반영돼야 한다(통로가 끊겨 폴링이 대신할 때도).
-        // 한 쪽만 읽으면 51번째 카드부터 빠진다(PR #200 codex)
-        merge(await fetchAllJumpCards<Snapshot>(streamId, { includeHidden: true }));
+        // 끝까지 넘긴다: 한 쪽만 읽으면 51번째 카드부터 빠진다(PR #200 codex)
+        merge(await fetchAllJumpCards<Snapshot>(streamId));
         if (!stopped) setCardsStatus('loaded');
       } catch {
         // 다음 주기에 다시. 받기 전의 실패만 「못 읽었다」고 말한다: 받은 목록이 있으면 그것을 그대로 보인다
@@ -573,8 +501,7 @@ export function useLiveMockState(pastRoute: boolean): LiveMockState {
     void loadChart();
     void loadInfo();
     void sseLoop();
-    cardChangeListeners.add(loadList);
-    // 끝난 방송이면 주기 읽기만 1분에 한 번이다. 그 밖에서 부르는 읽기(카드 동작 뒤 등)는 막지 않는다
+    // 끝난 방송이면 주기 읽기만 1분에 한 번이다
     const t1 = setInterval(() => {
       if (rangeRef.current.status === 'ended' && Date.now() - listReadAt < ENDED_LIST_MS) return;
       void loadList();
@@ -584,7 +511,6 @@ export function useLiveMockState(pastRoute: boolean): LiveMockState {
     return () => {
       stopped = true;
       ctrl.abort();
-      cardChangeListeners.delete(loadList);
       clearInterval(t1);
       clearInterval(t2);
       clearInterval(t3);
@@ -594,27 +520,18 @@ export function useLiveMockState(pastRoute: boolean): LiveMockState {
 
   useEffect(() => {
     publishLiveData({
-      cardTimes: Object.values(cards)
-        .filter((c) => !c.hidden)
-        .map((c) => cardAt(c, base)),
+      cardTimes: Object.values(cards).map((c) => cardAt(c, base)),
     });
   }, [cards, base]);
 
   const highlights = useMemo(() => {
-    const list = Object.values(cards)
-      .filter((c) => !c.hidden)
-      .sort((a, b) => b.eventSeq - a.eventSeq);
+    // 방송 시각이 늦은 것부터, 같으면 번호가 큰 것부터: 둘 다 저장 뒤 안 바뀐다. 순번(eventSeq)은 행이 바뀔 때마다 올라
+    // 옛 숨김 카드(숨길 때 올랐다)가 맨 앞에서 「방금」 강조를 받았다(PR #326 codex)
+    const list = Object.values(cards).sort(
+      (a, b) => b.streamTimestampMs - a.streamTimestampMs || b.id - a.id,
+    );
     return list.map((c, i) => toHighlight(c, i, now));
   }, [cards, now]);
-  const hiddenHighlights = useMemo(() => {
-    const list = Object.values(cards)
-      .filter((c) => c.hidden)
-      .sort((a, b) => b.eventSeq - a.eventSeq);
-    // 강조(맨 앞 「방금」)는 보이는 목록의 몫이라 숨긴 카드에는 주지 않는다
-    return list.map((c) => toHighlight(c, -1, now));
-  }, [cards, now]);
-  const hiddenCount = hiddenHighlights.length;
-
   const chatVolume = useMemo<ChatVolumeSeries>(() => {
     if (!chart || chart.buckets.length === 0)
       return {
@@ -645,7 +562,6 @@ export function useLiveMockState(pastRoute: boolean): LiveMockState {
     const t0 = Date.parse(firstB.start);
     const t1 = Date.parse(lastB.start) + chart.bucketSeconds * 1000;
     const markers = Object.values(cards)
-      .filter((c) => !c.hidden)
       .map((c) => {
         const t = cardAt(c, base);
         if (t < t0 || t > t1) return null;
@@ -712,8 +628,6 @@ export function useLiveMockState(pastRoute: boolean): LiveMockState {
   return {
     stream,
     highlights,
-    hiddenHighlights,
-    hiddenCount,
     cardsStatus,
     chatVolume,
     chatWarning: false,

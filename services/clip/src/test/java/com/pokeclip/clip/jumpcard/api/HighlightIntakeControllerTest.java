@@ -16,7 +16,6 @@ import org.springframework.test.web.servlet.MvcResult;
 import java.time.Instant;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.hamcrest.Matchers.nullValue;
 import static org.springframework.http.MediaType.APPLICATION_JSON;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -64,9 +63,17 @@ class HighlightIntakeControllerTest extends IntegrationTestSupport {
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.source").value("auto"))
                 .andExpect(jsonPath("$.window.startMs").value(5020000))
-                .andExpect(jsonPath("$.evidence.multiplier").value(4.2))
-                .andExpect(jsonPath("$.claimedBy").value(nullValue()))
-                .andExpect(jsonPath("$.hidden").value(false));
+                .andExpect(jsonPath("$.evidence.multiplier").value(4.2));
+    }
+
+    /** 점유·숨김 칸은 POK-393에서 뺐다. 값이 null인 칸도 「없음」이 아니므로 본문 글자로 본다. */
+    @Test
+    void 응답에_점유_숨김_칸이_없다() throws Exception {
+        String body = mvc.perform(요청("evt-1", 5_020_000L, 5_062_000L, 5_043_000L))
+                .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
+
+        assertThat(body).contains("\"streamTimestampMs\"")
+                .doesNotContain("claimedBy", "claimedAt", "claimExpiresAt", "\"hidden\"", "hiddenBy", "hiddenReason");
     }
 
     @Test
