@@ -190,6 +190,36 @@ describe('ChannelSwitchCurtain', () => {
     expect(trigger).toHaveFocus();
   });
 
+  it('덮기 전 요소가 전환에 다시 그려져 사라졌으면 걷힐 때 표식으로 새로 선 자리를 찾아 포커스를 돌린다(PR #342 2차 리뷰)', () => {
+    // 트리거는 ChannelScope 안이라 채널이 바뀌면 통째로 다시 그려진다: key로 흉내 낸다
+    const view = (channel: string) => (
+      <>
+        <button key={channel} type="button" data-switch-return="channel-switcher-sidebar">
+          {channel} 프로필
+        </button>
+        <ChannelSwitchCurtain />
+      </>
+    );
+    const { rerender } = render(view('내'));
+    screen.getByRole('button', { name: '내 프로필' }).focus();
+    act(() =>
+      useSwitchCurtain.getState().cover(
+        {
+          name: '별하',
+          relation: 'EDITOR',
+          photo: null,
+          returnFocus: 'channel-switcher-sidebar',
+        },
+        vi.fn(),
+      ),
+    );
+    rerender(view('별하'));
+
+    run(HOLD_MS + 100 + FINISH_MS + FADE_OUT_MS + 50);
+    expect(useSwitchCurtain.getState().curtain).toBeNull();
+    expect(screen.getByRole('button', { name: '별하 프로필' })).toHaveFocus();
+  });
+
   it('걷히기 전에 화면이 내려가면 덮개도 지운다: 다음에 다시 서서 번쩍이지 않는다(PR #342 리뷰 5)', () => {
     const { unmount } = render(<ChannelSwitchCurtain />);
     cover();

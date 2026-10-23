@@ -173,7 +173,16 @@ describe('ChannelSwitcher: 펼친 패널', () => {
 
     await user.click(await panel.findByRole('button', { name: /별하 채널/ }));
 
-    expect(useSwitchCurtain.getState().curtain).toMatchObject({ name: '별하', relation: 'EDITOR' });
+    // 걷힐 때 돌아올 자리: 트리거에 단 표식과 같은 값을 덮개에 싣는다(PR #342 2차 리뷰)
+    expect(useSwitchCurtain.getState().curtain).toMatchObject({
+      name: '별하',
+      relation: 'EDITOR',
+      returnFocus: 'channel-switcher-sidebar',
+    });
+    expect(screen.getByRole('button', { name: '열기' })).toHaveAttribute(
+      'data-switch-return',
+      'channel-switcher-sidebar',
+    );
     await waitFor(() =>
       expect(screen.queryByRole('dialog', { name: '계정 전환' })).not.toBeInTheDocument(),
     );
@@ -532,6 +541,7 @@ describe('ChannelSwitcher: 관리 모드에서 참여 채널 나가기', () => {
       name: '나',
       relation: 'OWNER',
       leftStreamerId: 3,
+      returnFocus: 'channel-switcher-sidebar',
     });
     await waitFor(() =>
       expect(screen.queryByRole('dialog', { name: '계정 전환' })).not.toBeInTheDocument(),

@@ -14,7 +14,7 @@ import Link from 'next/link';
 import clsx from 'clsx';
 import { Check } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Avatar, Button, Popover, useToast } from '@/ui';
+import { Avatar, Button, Popover, Slot, useToast } from '@/ui';
 import {
   acceptInvitation,
   declineInvitation,
@@ -77,6 +77,9 @@ export function ChannelSwitcher({
   // 거절·나가기 요청이 나가 있는 동안은 창을 닫지 않는다: 바깥 클릭·Esc·트리거로 닫히면 확인 덮개가 같이 사라져
   // 취소된 줄 알았다가 결과 토스트를 보게 된다(PR #342 리뷰 1)
   const [busy, setBusy] = useState(false);
+  // 전환 화면이 걷힐 때 포커스를 돌려줄 표식: 트리거는 채널과 함께 다시 그려져 덮기 전 요소로는 못 돌아간다(PR #342 2차 리뷰).
+  // 사이드바(펼침·접힘)와 홈 헤더에 하나씩이다
+  const returnFocus = side === 'bottom' ? 'channel-switcher-header' : 'channel-switcher-sidebar';
   return (
     <Popover
       open={open}
@@ -89,10 +92,16 @@ export function ChannelSwitcher({
       anchorRef={anchorRef}
       offset={offset}
     >
-      <Popover.Trigger>{children}</Popover.Trigger>
+      <Popover.Trigger>
+        <Slot data-switch-return={returnFocus}>{children}</Slot>
+      </Popover.Trigger>
       <Popover.Content className={styles.panel} aria-label="계정 전환">
         {/* 본문은 열렸을 때만 선다: 쿼리·로그아웃 훅이 닫힌 트리거마다 돌지 않게 */}
-        <SwitcherPanel onClose={() => setOpen(false)} onBusyChange={setBusy} />
+        <SwitcherPanel
+          onClose={() => setOpen(false)}
+          onBusyChange={setBusy}
+          returnFocus={returnFocus}
+        />
       </Popover.Content>
     </Popover>
   );
@@ -101,9 +110,11 @@ export function ChannelSwitcher({
 function SwitcherPanel({
   onClose,
   onBusyChange,
+  returnFocus,
 }: {
   onClose: () => void;
   onBusyChange: (busy: boolean) => void;
+  returnFocus: string;
 }) {
   const me = useMe().data;
   const active = useActiveChannel();
@@ -134,7 +145,7 @@ function SwitcherPanel({
   const currentId = active.ready ? active.streamerId : me.id;
   const pick = (target: SwitchTarget) => {
     // 지금 채널을 다시 누르면 닫기만 한다: 같은 채널로 「전환했어요」를 띄우지 않는다
-    if (target.streamerId !== currentId) switchTo(target);
+    if (target.streamerId !== currentId) switchTo(target, { returnFocus });
     // 다만 내 채널로 보이는 것이 as-editor를 못 읽어서라면 저장된 남의 채널이 남아 있다. 「내 채널」을 눌렀으면 그것을 지운다:
     // 안 지우면 나중에 목록이 읽히는 순간 그 채널로 되돌아간다(PR #323 codex 2차). 같은 채널로 보이니 토스트는 없다
     else if (target.relation === 'OWNER' && storedOther) select(me.id, null);
@@ -160,7 +171,7 @@ function SwitcherPanel({
     // 그 채널 요청이 404로 와도 끊김 경고는 띄우지 않는다(useSwitchChannel의 SwitchOptions)
     switchTo(
       { streamerId: me.id, name: me.name, relation: 'OWNER' },
-      { onSwitched: refresh, leftStreamerId: channel.streamerId },
+      { onSwitched: refresh, leftStreamerId: channel.streamerId, returnFocus },
     );
     onClose();
   };

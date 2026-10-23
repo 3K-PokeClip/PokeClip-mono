@@ -91,9 +91,11 @@ function Cover({
     document.addEventListener('keydown', trap, true);
     return () => {
       document.removeEventListener('keydown', trap, true);
-      if (previous?.isConnected) previous.focus();
+      // 덮기 전 요소가 전환에 다시 그려져 사라졌으면 새로 선 자리를 표식으로 찾는다(PR #342 2차 리뷰)
+      const back = previous?.isConnected ? previous : returnTarget(curtain.returnFocus);
+      back?.focus();
     };
-  }, []);
+  }, [curtain.returnFocus]);
 
   // 걷히기 전에 이 화면이 내려가면(전체 화면 편집기로 이동·로그아웃) 덮개도 지운다: 남기면 다음에 독 화면이 설 때 옛 덮개가
   // 다시 서서 번쩍이고 「전환했어요」를 다시 읽는다(PR #342 리뷰 5). 다 걷힌 뒤라면 이미 지워져 아무 일도 안 한다
@@ -167,6 +169,10 @@ function Cover({
  * 곡선만큼 느리게 나아가고, 요청이 하나씩 끝날 때마다 앞으로 간다. 처음 HOLD_MS 동안은 시간만큼만 나아가 한 번에
  * 튀지 않게 하고, 다 불러오기 전에는 끝까지 차지 않는다.
  */
+function returnTarget(key: string | undefined): HTMLElement | null {
+  return key ? document.querySelector<HTMLElement>(`[data-switch-return="${key}"]`) : null;
+}
+
 function loadingProgress(elapsed: number, load: { started: number; finished: number }): number {
   const byTime = 0.9 * (1 - Math.exp(-elapsed / 1200));
   const byRequests = load.started > 0 ? (0.9 * load.finished) / load.started : 0;

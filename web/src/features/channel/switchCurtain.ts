@@ -18,6 +18,11 @@ export interface SwitchCurtain {
   shownAt: number;
   /** 이 전환이 그 채널에서 스스로 나가서 일어났다: 그 채널의 끊김 경고를 띄우지 않는다(ChannelScope) */
   leftStreamerId?: number;
+  /**
+   * 걷힐 때 포커스를 돌려줄 자리: 그 요소의 `data-switch-return` 값. 덮기 전 요소(계정 전환 창의 줄·트리거)는 전환에 채널
+   * 화면과 함께 다시 그려져 사라지므로 새로 선 요소를 이 표식으로 찾는다
+   */
+  returnFocus?: string;
 }
 
 interface SwitchCurtainState {

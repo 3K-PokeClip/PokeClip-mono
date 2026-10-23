@@ -112,6 +112,8 @@ export interface SwitchOptions {
   onSwitched?: () => void;
   /** 스스로 나간 채널: 덮는 동안 그 채널 요청이 404로 와도 끊김 경고를 띄우지 않는다(PR #342 리뷰 4) */
   leftStreamerId?: number;
+  /** 걷힐 때 포커스를 돌려줄 자리(`data-switch-return` 값, switchCurtain.ts) */
+  returnFocus?: string;
 }
 
 export interface SwitchTarget {
@@ -140,6 +142,7 @@ export function useSwitchChannel() {
           // 남의 채널은 서버가 사진을 안 준다: 이름 글자 아바타
           photo: target.relation === 'OWNER' ? me.profileImageUrl : null,
           leftStreamerId: options.leftStreamerId,
+          returnFocus: options.returnFocus,
         },
         () => {
           select(me.id, target.streamerId === me.id ? null : target.streamerId);
