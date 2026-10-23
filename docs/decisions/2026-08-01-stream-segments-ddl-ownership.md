@@ -47,8 +47,10 @@
     돌린다. `50_advisory_probe` 는 확인만 하고 되돌린다. 실행 절차는
     `infra/terraform/runbooks/runtime-1a.md` 에 둔다.
 - **사본과 정본:** `stream_schema.sql` 의 표지 사이는 `ddl.go` 의 `schemaDDL` 과
-    바이트가 같다. `30_grants.sql` 의 GRANT 는 `pgtest.MediaIndexerGrantSQL` ·
-    `lcRoleGrants` 와 같은 집합이다. 둘 다
+    바이트가 같다. `30_grants.sql` 의 media 두 계정 GRANT 는
+    `pgtest.MediaIndexerGrantSQL` · `lcRoleGrants` 와 같은 집합이다. 앱 서버
+    사용자 넷(10 · 30 — POK-407)의 GRANT 는 `services/README.md`
+    「서버별 DB 계정과 권한」 목록과 같은 집합이다. 셋 다
     `media/internal/index/prod_sql_contract_test.go` 가 강제하고, 비superuser
     마스터 대역으로 실제로 적용하는 시험은 `prod_sql_apply_pg_test.go` 다.
     media-ci 의 paths 에 이 디렉터리가 있어 SQL 만 고쳐도 시험이 돈다.

@@ -239,7 +239,7 @@ func TestProdStreamSchemaCopyMatchesSchemaDDL(t *testing.T) {
 // grantTarget 은 GRANT 문장 끝의 대상 역할이다.
 var grantTarget = regexp.MustCompile(`(?i)\sTO\s+(\S+)$`)
 
-// 30_grants.sql 의 GRANT 를 대상 역할별로 모은 집합이 정본 두 목록과 같다. 그 밖의 문장은 감싸는
+// 30_grants.sql 의 GRANT 를 대상 역할별로 모은 집합이 정본 두 목록과 3번 목록의 stream_* 줄을 합친 것과 같다. 그 밖의 문장은 감싸는
 // SET ROLE · RESET ROLE 둘뿐이다(ALTER DEFAULT PRIVILEGES 등은 쓰지 않는다 — K4).
 func TestProdGrantsMatchCanonicalRoleLists(t *testing.T) {
 	stmts := mustSplitPSQL(t, "30_grants.sql").statements
@@ -260,6 +260,13 @@ func TestProdGrantsMatchCanonicalRoleLists(t *testing.T) {
 		"media_indexer": pgtest.MediaIndexerGrantSQL("media_indexer"),
 		"media_janitor": lcRoleGrants("media_janitor"),
 	}
+	for role, grants := range appDBUserGrants {
+		for _, g := range grants {
+			if strings.Contains(g, " ON stream_") {
+				want[role] = append(want[role], g)
+			}
+		}
+	}
 	for role := range got {
 		if _, ok := want[role]; !ok {
 			t.Errorf("30_grants.sql 이 목록 밖 역할 %q 에 GRANT 한다: %q", role, got[role])
@@ -270,6 +277,78 @@ func TestProdGrantsMatchCanonicalRoleLists(t *testing.T) {
 		w = slices.Sorted(slices.Values(w))
 		if !slices.Equal(g, w) {
 			t.Errorf("30_grants.sql 의 %s GRANT = %q, want %q (정본과 같은 집합)", role, g, w)
+		}
+	}
+}
+
+// appDBUsers 는 3번 서버 넷의 운영 DB 사용자다(POK-407 · services/README.md 「서버별 DB 계정과 권한」).
+// 10_roles.sql 이 만들고, prod/runtime 의 출력 app_db_users 는 그 파일의 CREATE ROLE 줄에서 이름을 읽는다.
+var appDBUsers = []string{"app_auth", "app_clip", "app_chat_collector", "app_chat_detector"}
+
+// appDBUserGrants 는 3번 목록(services/README.md 「서버별 DB 계정과 권한」 의 SQL 블록)의 GRANT 줄 사본이다.
+// app_chat_detector 의 chat_messages SELECT 는 빠진다 — 표 주인인 수집 서버의 Flyway(V316)가 준다.
+var appDBUserGrants = map[string][]string{
+	"app_auth": {
+		"GRANT rds_iam TO app_auth",
+		"GRANT CREATE ON SCHEMA public TO app_auth",
+	},
+	"app_clip": {
+		"GRANT rds_iam TO app_clip",
+		"GRANT CREATE ON SCHEMA public TO app_clip",
+		"GRANT SELECT, DELETE ON stream_segments TO app_clip",
+		"GRANT SELECT ON stream_sessions TO app_clip",
+	},
+	"app_chat_collector": {
+		"GRANT rds_iam TO app_chat_collector",
+		"GRANT CREATE ON SCHEMA public TO app_chat_collector",
+		"GRANT SELECT ON stream_segments TO app_chat_collector",
+	},
+	"app_chat_detector": {
+		"GRANT rds_iam TO app_chat_detector",
+		"GRANT CREATE ON SCHEMA public TO app_chat_detector",
+	},
+}
+
+// appUserCreate 는 10_roles.sql 의 DO 블록 안에서 앱 사용자를 만드는 줄이다. prod/runtime 의 app_db_users.tf 가
+// 같은 꼴의 정규식으로 이름을 읽는다 — 줄 꼴을 바꾸면 그쪽도 함께 고친다.
+var appUserCreate = regexp.MustCompile(`(?m)^\s+CREATE ROLE (app_[a-z0-9_]+) LOGIN;$`)
+
+// 10_roles.sql 은 3번 목록의 사용자 넷을 만들고, 10 · 30 이 앱 사용자에게 주는 GRANT 는 3번 목록과 같은 집합이다.
+// 앱 사용자를 다른 역할과 한 문장에 묶어 주지 않는다 — 문장 하나가 목록 한 줄이다.
+func TestProdAppUserGrantsMatchServiceList(t *testing.T) {
+	var created []string
+	for _, m := range appUserCreate.FindAllStringSubmatch(readProdSQL(t, "10_roles.sql"), -1) {
+		created = append(created, m[1])
+	}
+	if want := slices.Sorted(slices.Values(appDBUsers)); !slices.Equal(slices.Sorted(slices.Values(created)), want) {
+		t.Errorf("10_roles.sql 이 만드는 앱 사용자 = %q, want %q", created, want)
+	}
+
+	got := map[string][]string{}
+	for _, name := range []string{"10_roles.sql", "30_grants.sql"} {
+		for _, s := range mustSplitPSQL(t, name).statements {
+			s = normalizeSQL(s)
+			if firstKeyword(s) != "GRANT" || !strings.Contains(s, "app_") {
+				continue
+			}
+			m := grantTarget.FindStringSubmatch(s)
+			if m == nil || !strings.HasPrefix(m[1], "app_") {
+				t.Errorf("%s 의 문장 %q 는 GRANT … TO <앱 사용자 하나> 가 아니다", name, s)
+				continue
+			}
+			got[m[1]] = append(got[m[1]], s)
+		}
+	}
+	for role := range got {
+		if _, ok := appDBUserGrants[role]; !ok {
+			t.Errorf("목록 밖 앱 사용자 %q 에 GRANT 한다: %q", role, got[role])
+		}
+	}
+	for role, w := range appDBUserGrants {
+		g := slices.Sorted(slices.Values(got[role]))
+		w = slices.Sorted(slices.Values(w))
+		if !slices.Equal(g, w) {
+			t.Errorf("10 · 30 의 %s GRANT = %q, want %q (3번 목록과 같은 집합)", role, g, w)
 		}
 	}
 }

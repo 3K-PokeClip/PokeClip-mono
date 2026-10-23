@@ -11,7 +11,7 @@ package index
 // \ir stream_schema.sql 은 끼워 넣는다) 파일마다 BEGIN … COMMIT 으로 감싸 한 번에 보낸다(psql -1 대역).
 // 대역도 rds_superuser 가 아니다 — 첫 운영 적용이 최종 판정이다.
 //
-// 고정 역할 media_owner · media_indexer · media_janitor 는 SQL 이 만드는 실제 이름이고 역할은 클러스터
+// 고정 역할 media_owner · media_indexer · media_janitor · app_* 넷은 SQL 이 만드는 실제 이름이고 역할은 클러스터
 // 전역이다. 그래서 사례마다 새로 만들고 지우며, 시작할 때 이미 있으면 멈춘다(남의 역할을 지우지 않게) —
 // 같은 PG 에서 이 시험을 동시에 돌리지 않는다.
 
@@ -29,8 +29,8 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// prodFixedRoles 는 10_roles.sql 이 만드는 역할이다.
-var prodFixedRoles = []string{"media_owner", "media_indexer", "media_janitor"}
+// prodFixedRoles 는 10_roles.sql 이 만드는 역할이다(media 셋 + 3번 서버의 앱 사용자 넷).
+var prodFixedRoles = append([]string{"media_owner", "media_indexer", "media_janitor"}, appDBUsers...)
 
 // rdsIAMRole 은 RDS 가 미리 만들어 두는 IAM 인증 역할이다. 로컬 · CI PG 에는 없어서 없으면 시험이 만든다.
 const rdsIAMRole = "rds_iam"
@@ -509,7 +509,51 @@ func TestProdSQLVerifyCatchesPrivilegeDrift(t *testing.T) {
 		{
 			name:   "CONNECT revoked from PUBLIC",
 			tamper: "REVOKE CONNECT ON DATABASE " + env.dbName + " FROM PUBLIC",
-			want:   []string{"connect:media_indexer", "connect:media_janitor"},
+			want: []string{
+				"connect:app_auth", "connect:app_chat_collector", "connect:app_chat_detector", "connect:app_clip",
+				"connect:media_indexer", "connect:media_janitor",
+			},
+		},
+		{
+			name:   "app cross grant beyond the list",
+			tamper: "GRANT UPDATE ON stream_segments TO app_clip",
+			want:   []string{"privilege:app_clip:stream_segments:UPDATE"},
+		},
+		{
+			name:   "app cross grant on another table",
+			tamper: "GRANT SELECT ON stream_sessions TO app_chat_collector",
+			want:   []string{"privilege:app_chat_collector:stream_sessions:SELECT"},
+		},
+		{
+			name:   "app without cross grants reads stream table",
+			tamper: "GRANT SELECT ON stream_cutoffs TO app_auth",
+			want:   []string{"privilege:app_auth:stream_cutoffs:SELECT"},
+		},
+		{
+			name:   "app column grant",
+			tamper: "GRANT UPDATE (local_path) ON stream_segments TO app_clip",
+			want:   []string{"column:app_clip:stream_segments.local_path:UPDATE"},
+		},
+		{
+			name:   "app attribute",
+			tamper: "ALTER ROLE app_chat_detector CREATEDB",
+			want:   []string{"role:app_chat_detector"},
+		},
+		{
+			name:   "app membership",
+			tamper: "GRANT media_owner TO app_clip WITH INHERIT FALSE, SET TRUE",
+			want:   []string{"membership_app_clip"},
+		},
+		{
+			name:   "app schema CREATE revoked",
+			tamper: "REVOKE CREATE ON SCHEMA public FROM app_auth",
+			want:   []string{"schema_create_app_auth"},
+		},
+		{
+			// 멤버십은 부여자(대역 마스터)별로 남는다 — superuser 의 맨 REVOKE 는 그 행을 지우지 않는다(PG16+).
+			name:   "app rds_iam revoked",
+			tamper: "REVOKE rds_iam FROM app_chat_collector GRANTED BY " + env.masterName,
+			want:   []string{"membership_app_chat_collector", "rds_iam:app_chat_collector"},
 		},
 		{
 			name:   "third member of media_owner",

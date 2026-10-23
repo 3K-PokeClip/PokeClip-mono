@@ -1,8 +1,8 @@
 # prod 런타임 1단-가 런북
 
-`infra/terraform/prod/runtime` 을 처음 적용하고, media DB 계정 · `stream_*`
-스키마 SQL(`prod/runtime/sql/`)을 RDS 에 적용하는 절차입니다. 계획 rt1a 의
-「운영 순서와 승인 지점」 이 이 문서입니다.
+`infra/terraform/prod/runtime` 을 처음 적용하고, media DB 계정 · 앱 서버 DB
+사용자 · `stream_*` 스키마 SQL(`prod/runtime/sql/`)을 RDS 에 적용하는
+절차입니다. 계획 rt1a 의 「운영 순서와 승인 지점」 이 이 문서입니다.
 
 *   실행자는 kty 입니다. kty 의 IAM 사용자 프로필로 **kty 로컬 터미널**에서
     돌립니다. 에이전트 세션이나 세션의 `!` 로 돌리지 않습니다 — 비밀 ARN ·
@@ -29,8 +29,9 @@
 prod/network(O7a) 뒤, platform(O7d) · media(O7e) 앞입니다. platform · media
 가 이 루트의 출력을 읽고, media 사이드카는 이 런북 5 의 DB 계정이 있어야
 접속합니다([런타임 트랙 인터페이스 계약](../CONTRACT-runtime.md)
-「DB 접속(IAM DB 인증)」). platform(O7d)은 런타임 1단-나 뒤입니다 —
-platform 이 읽는 `app_db_users` 는 1단-나가 냅니다(kty 2026-10-23).
+「DB 접속(IAM DB 인증)」). 앱 서버 넷도 이 런북 5 의 DB 사용자가 있어야
+처음 뜹니다 — platform 이 읽는 `app_db_users` 는 이 루트가 내고, 그 사용자는
+5 의 `10_roles.sql` 이 만듭니다(POK-407 · kty 2026-10-24).
 
 ## 순서 한눈에
 
@@ -397,11 +398,27 @@ send_step() {
     비superuser 마스터 대역 시험(CI)은 RDS 의 `rds_superuser` 와 같지
     않으므로 **첫 운영 적용이 최종 판정**입니다.
 *   `40` 은 `verify failed: <식별자>, …` 로 실패합니다(식별자 뜻은
-    `40_verify.sql` 머리). 멤버십(`membership_<계정>` ·
-    `members_media_owner`)이나 직접 부여된 CREATE(`schema_create_<계정>`)로
-    실패하면, 10 은 그것을 회수하지 않습니다 — 무엇이 왜 붙었는지 모르기
-    때문입니다. 운영자가 원인을 확인한 뒤 손으로 회수하고 40 을 다시
-    돌립니다.
+    `40_verify.sql` 머리). 계정은 media 두 계정과 앱 사용자 넷입니다.
+    멤버십(`membership_<계정>` · `members_media_owner`)이나 media 계정에
+    직접 부여된 CREATE(`schema_create_<계정>`)로 실패하면, 10 은 그것을
+    회수하지 않습니다 — 무엇이 왜 붙었는지 모르기 때문입니다. 운영자가
+    원인을 확인한 뒤 손으로 회수하고 40 을 다시 돌립니다.
+*   앱 서버 사용자 넷(`app_auth` · `app_clip` · `app_chat_collector` ·
+    `app_chat_detector`)은 10 이 만들고, `stream_*` 교차 권한은 30 이
+    줍니다. 판별 서버의 `chat_messages` 읽기는 수집 서버 Flyway(`V316`)가
+    주므로 런타임은 주지 않습니다. `app_chat_detector` 가 수집 서버의 첫
+    기동보다 늦게 생겼으면 그 줄이 건너뛰어졌으니 아래를 마스터로 `psql -1`
+    로 손으로 돌립니다(표 주인으로 바꿔서 주고 그 멤버십을 거둡니다 — 로컬
+    PG 비superuser 대역으로 확인함).
+
+    ```sql
+    GRANT app_chat_collector TO CURRENT_USER WITH SET TRUE, INHERIT FALSE;
+    SET ROLE app_chat_collector;
+    GRANT SELECT ON chat_messages TO app_chat_detector;
+    RESET ROLE;
+    REVOKE app_chat_collector FROM CURRENT_USER;
+    ```
+
 *   파일 하나가 실패하면 그 파일만 롤백되고 앞 파일은 남습니다. 10 · 20 ·
     30 은 다시 돌려도 같은 상태로 수렴하므로, 원인을 고친 뒤 00 부터 다시
     돌립니다.
@@ -530,14 +547,19 @@ send-command 상태가 `Success` 가 아니거나(`Failed` · `TimedOut` ·
 
 *   **SQL**: 파일마다 트랜잭션이라 실패한 파일은 남지 않습니다. 적용을 통째로
     되돌릴 때는 실행기를 켜고 마스터로 아래를 `psql -1` 로 돌립니다 — 표 ·
-    함수(media_owner 소유 전부) → 두 계정 → media_owner 순서입니다. 이
-    SQL 은 시험하지 않았습니다(쓰기 전에 로컬 PG 비superuser 대역으로
+    함수(media_owner 소유 전부) → 앱 사용자 → 두 계정 → media_owner
+    순서입니다. 앱 사용자 두 줄은 앱 서버가 처음 뜨기 전에만 씁니다. 뜬
+    뒤면 앱 사용자가 자기 표의 소유자라 지우면 앱 데이터가 함께 사라집니다.
+    이 SQL 은 시험하지 않았습니다(쓰기 전에 로컬 PG 비superuser 대역으로
     확인합니다).
 
     ```sql
     SET ROLE media_owner;
     DROP OWNED BY media_owner;
     RESET ROLE;
+    REVOKE CREATE ON SCHEMA public
+      FROM app_auth, app_clip, app_chat_collector, app_chat_detector;
+    DROP ROLE app_auth, app_clip, app_chat_collector, app_chat_detector;
     DROP ROLE media_indexer, media_janitor;
     DROP ROLE media_owner;
     ```

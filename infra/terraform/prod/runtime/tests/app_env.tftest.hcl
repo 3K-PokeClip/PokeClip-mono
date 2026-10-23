@@ -20,8 +20,8 @@ override_data {
 }
 
 
-# env 이름은 각 서비스 application.yml 실물이다. 1단-나가 POSTGRES_USER 등을
-# 더하면 이 집합도 함께 고친다.
+# env 이름은 각 서비스 application.yml 실물이다. 이름을 더하면 이 집합도
+# 함께 고친다(POSTGRES_USER 는 platform 이 app_db_users 로 넣는다).
 run "lists_env_names_per_service" {
   command = apply
 

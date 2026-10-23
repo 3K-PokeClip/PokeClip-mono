@@ -13,8 +13,10 @@ prod 런타임 1단(설계 3-1 의 ⑤)을 만드는 루트입니다 — RDS Pos
     읽기 · DB 접속 · 발행 · 수신 정책. 소비 루트가 자기 역할에 붙입니다.
 *   rewind 버킷 정책(OAC 허용문). edge 배포 ARN 이 있어야 해서 런타임 2단이
     만듭니다.
-*   media DB 계정 · `stream_*` 스키마 · 권한. Terraform 이 아니라 `sql/` 과
-    [runtime-1a 런북](../../runbooks/runtime-1a.md)으로 적용합니다.
+*   media DB 계정 · 앱 서버 DB 사용자 · `stream_*` 스키마 · 권한. Terraform
+    이 아니라 `sql/` 과 [runtime-1a 런북](../../runbooks/runtime-1a.md)으로
+    적용합니다. 앱 서버 사용자 이름은 출력 `app_db_users` 가
+    `sql/10_roles.sql` 에서 읽어 냅니다.
 *   비밀 값. 그릇만 만들고 값은 운영 단계에서 Terraform 밖으로 넣습니다
     (guard R1 · R6). 마스터 비밀번호는 RDS 관리형 비밀이라 상태에 값이
     없습니다.
@@ -35,8 +37,9 @@ prod 런타임 1단(설계 3-1 의 ⑤)을 만드는 루트입니다 — RDS Pos
 | `app_secrets.tf` | 앱 비밀 그릇 일곱과 서비스별 ARN 지도 | POK-305 |
 | `rewind_bucket.tf` | rewind 버킷(공개 차단 · SSE-S3 · 미완료 업로드 정리) | POK-308 |
 | `broadcast_events.tf` · `app_env.tf` | 계약9 주제 · 큐 · DLQ · 구독 · 큐 정책 · 서비스별 env | POK-309 |
+| `app_db_users.tf` | 앱 서버 DB 사용자 이름 출력(`sql/10_roles.sql` 에서 읽음) | POK-407 |
 | `sql_runner.tf` | SQL 실행기 스위치(꺼짐이 기본) | POK-304 |
-| `sql/` | media DB 계정 · `stream_*` 스키마 · 권한 · 확인 · advisory 확인 SQL | POK-304 |
+| `sql/` | media DB 계정 · 앱 서버 DB 사용자 · `stream_*` 스키마 · 권한 · 확인 · advisory 확인 SQL | POK-304 · POK-407 |
 | `tests/` | 파일마다 mock 시험 · 공유 mock 기본값(`tests/mocks/`) | — |
 
 ## 적용
@@ -67,6 +70,7 @@ default_tags 가 붙는지는 미확인이고, 런북 「운영 확인」 에서
 | `app_env`(서비스 → env 이름 → 값) | platform — `ecs_service.environment`. 네 서버 모두 `DB_HOST` · `DB_PORT` · `POSTGRES_DB`, auth 는 `STREAM_KEY_SECRET_REF_PREFIX`, clip · chat-collector 는 자기 큐의 `BROADCAST_QUEUE_URL`, clip 은 수신 스위치 `BROADCAST_INTAKE_ENABLED = "true"`(문자열 — 빠지면 큐를 읽지 않아 편지가 보관 기간 뒤 사라진다). `AUTH_BASE_URL` 은 platform 이 넣는다. chat-collector 의 스위치는 배치(POK-306)가 `AUTH_BASE_URL` · `INTERNAL_API_TOKEN` 과 함께 정한다 |
 | `broadcast_topic_arn` | media — 사이드카 역할의 `sns:Publish` 대상 |
 | `broadcast_queue_arns`(소비자 clip · chat → 큐 ARN) | chat-collector(POK-306)의 수신 정책 대상. clip 은 `app_task_resource_arns` 를 쓴다 |
+| `app_db_users`(서비스 → DB 사용자 이름) | platform — 태스크 env `POSTGRES_USER` · `rds-db:connect` 의 사용자 자리(auth · clip). `auth` `app_auth` · `clip` `app_clip` · `chat-collector` `app_chat_collector` · `chat-detector` `app_chat_detector` — chat 두 키는 배치(POK-306)가 읽는다. 사용자 · `rds_iam` · GRANT 는 `sql/` 이 만든다 |
 | `app_task_resource_arns`(서비스 → 키 → ARN) | platform — 작업 역할 정책 Resource(키 = platform 의 `task_resource_keys`). 지금은 clip 의 `broadcast_queue_arn` 하나 — 일 큐 · 버킷 키는 런타임 다음 PR(POK-408) |
 | `rds_master_user_secret_arn` | 운영 전용(계약 아님) — SQL 실행기 역할 정책 · 런북 |
 | `sql_runner_instance_id` | 운영 전용(계약 아님) — send-command 대상. 꺼져 있으면 null |
@@ -102,7 +106,8 @@ SQL 을 적용한 뒤 곧바로 끕니다. 켜진 동안 `iam:PassRole` 을 가�
 
 ## 1단-나 이월
 
-런타임 1단-나(앱 서버 DB 사용자 등)로 넘긴 일입니다. 잊지 않도록 여기 둡니다
+런타임 1단-나로 넘긴 일입니다. 앱 서버 DB 사용자 · GRANT · `public` 스키마
+CREATE 는 1단-가가 했습니다(POK-407 · kty 2026-10-24). 잊지 않도록 여기 둡니다
 (설계 9절 · Jira POK-304 코멘트와 같은 목록).
 
 1.  **advisory 함수 권한 회수(K7)** — `pg_advisory_lock` ·
@@ -124,9 +129,10 @@ SQL 을 적용한 뒤 곧바로 끕니다. 켜진 동안 `iam:PassRole` 을 가�
     *   1단-나에서 할 일: ① 3번 서버 넷의 advisory 사용 실물 대조(Flyway 판 ·
         코드) ② 회수하면 PUBLIC 에서 회수하고 필요한 계정에만 EXECUTE 를 다시
         줌 ③ 회수하지 않으면 사유를 기록.
-1.  앱 서버 DB 사용자 · GRANT 와 `app_env` 의 `POSTGRES_USER`(POK-406 · 407
-    결과).
-1.  앱 서버 사용자에게 `public` 스키마 CREATE 부여(Flyway).
+1.  계정의 TEMP · PUBLIC CONNECT 회수 — media 두 계정과 앱 사용자 넷이 같은
+    DB 를 쓰므로 함께 정합니다. CONNECT 를 PUBLIC 에서 회수하면
+    `sql/40_verify.sql` 의 `connect:<계정>` 이 깨집니다 — 필요한 계정에 다시
+    줍니다.
 1.  IAM 인증을 못 쓰는 대체 갈래면 `POSTGRES_PASSWORD` 그릇.
 1.  2-3 판정 대상의 남은 칸. 런타임 자원 행(RDS · 로그 그룹 · SNS · SQS ·
     rewind 버킷 · 실행기 역할 · 프로필)은 이 PR 이 더했습니다(설계 K5 는

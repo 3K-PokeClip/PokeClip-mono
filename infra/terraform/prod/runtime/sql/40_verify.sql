@@ -3,20 +3,26 @@
 -- 실행: psql -1 -v ON_ERROR_STOP=1 -f 40_verify.sql (마스터 사용자). 모두 통과하면 VERIFY OK 행이 나오고,
 -- 하나라도 틀리면 "verify failed: <식별자>, <식별자>" 로 실패한다.
 --
+-- 계정은 media 두 계정(media_indexer · media_janitor)과 앱 사용자 넷(app_auth · app_clip · app_chat_collector ·
+-- app_chat_detector)이다. 앱 사용자가 아직 없으면(10 을 돌리기 전) 그 계정의 단언이 실패한다.
+--
 -- 식별자:
---   role:<역할>                     media_owner 는 NOLOGIN, 두 계정은 LOGIN 이고 SUPERUSER · CREATEDB ·
+--   role:<역할>                     media_owner 는 NOLOGIN, 계정은 LOGIN 이고 SUPERUSER · CREATEDB ·
 --                                   CREATEROLE · REPLICATION · BYPASSRLS 가 없다
 --   media_indexer_connection_limit  연결 상한 20
 --   media_indexer_statement_timeout 역할 단위 statement_timeout = 60s
 --   rds_iam:<계정>                  계정이 rds_iam 에 속한다
 --   membership_<계정>               계정의 직접 멤버십이 정확히 {rds_iam} 이다(media_owner · rds_superuser ·
 --                                   pg_write_all_data 등의 멤버면 SET ROLE · 상속으로 표를 지울 수 있다)
---   members_media_owner             media_owner 의 멤버는 두 계정을 빼면 접속 신분(마스터) 하나뿐이다
---   schema_create_<계정>            계정이 public 스키마에 CREATE 를 갖지 않는다(직접 부여 포함)
+--   members_media_owner             media_owner 의 멤버는 계정을 빼면 접속 신분(마스터) 하나뿐이다(계정은
+--                                   membership_<계정> 이 잡는다)
+--   schema_create_<계정>            계정의 public 스키마 CREATE 가 기대와 같다 — media 두 계정은 없고(직접 부여
+--                                   포함), 앱 사용자는 있다(Flyway 가 자기 표를 만든다)
 --   public_create_revoked           PUBLIC 이 public 스키마에 CREATE 를 갖지 않는다
 --   media_owner_schema              media_owner 가 public 스키마에 USAGE · CREATE 를 가진다
 --   owner:<표 · 함수>               소유자가 media_owner 다(없으면 이것이 실패한다)
---   privilege:<역할>:<표>:<권한>    표 단위 권한이 30 의 목록과 같다(PUBLIC 은 아무것도 없다). 권한은 PG17 의
+--   privilege:<역할>:<표>:<권한>    표 단위 권한이 30 의 목록과 같다(PUBLIC 과 교차 권한이 없는 앱 사용자 둘은
+--                                   stream_* 에 아무것도 없다). 권한은 PG17 의
 --                                   MAINTAIN 까지 여덟이고, 끝에 +grant_option 이 붙은 것은 재부여 권한이다(모두 없다)
 --   column:<역할>:<표>.<열>:<권한>  열 단위 권한이 표 단위 권한과 같다 — 예외는 janitor 의 stream_segments.local_path
 --                                   UPDATE 하나다(+grant_option 은 위와 같다)
@@ -26,13 +32,14 @@
 -- 마지막 단언은 사이드카 컷오프 잠금(media/internal/index/store.go 의 lockCutoffStreamSQL)의 전제다.
 -- 권한 정본(media/internal/pgtest/role.go)은 「advisory 잠금은 PUBLIC 기본으로 충분」 이라 GRANT 를 두지
 -- 않는다. 1단-나가 PUBLIC 에서 회수하면서 media_indexer 에 다시 주는 것을 잊으면 여기서 깨진다(K7 · H3).
--- connect 도 같은 전제다 — 두 계정의 CONNECT 는 PUBLIC 기본이라, 1단-나가 PUBLIC 에서 회수하면 여기서 깨진다.
+-- connect 도 같은 전제다 — 계정의 CONNECT 는 PUBLIC 기본이라, PUBLIC 에서 회수하면 여기서 깨진다.
 -- 10 은 남는 멤버십 · 직접 부여를 회수하지 않는다. 무엇이 왜 붙어 있는지 모르므로 여기서 실패로 드러내고
 -- 운영자가 판단한다.
 --
--- 단언하지 않는 것: 두 계정의 TEMP · 다른 DB CONNECT 는 PUBLIC 기본으로 남는다. 회수는 같은 DB 를 쓰는 3번
--- 서버 계정과 함께 1단-나가 정한다(여기서 「없음」 을 단언하면 회수 전까지 늘 실패한다). 비밀번호 없음도
--- 보지 못한다 — 마스터는 pg_authid 를 읽지 못하고 pg_roles.rolpassword 는 늘 ******** 다.
+-- 단언하지 않는 것: 계정의 TEMP · 다른 DB CONNECT 는 PUBLIC 기본으로 남는다. 회수는 1단-나가 정한다(여기서
+-- 「없음」 을 단언하면 회수 전까지 늘 실패한다). 비밀번호 없음도 보지 못한다 — 마스터는 pg_authid 를 읽지
+-- 못하고 pg_roles.rolpassword 는 늘 ******** 다. 앱 사용자가 자기 표에 갖는 권한과 app_chat_detector 의
+-- chat_messages SELECT(수집 서버 Flyway V316 이 준다)도 보지 않는다 — 행렬은 stream_* 표만 본다.
 -- 트랜잭션 문을 쓰지 않는다 — 원자성은 psql -1 이 준다.
 \set ON_ERROR_STOP on
 
@@ -41,6 +48,15 @@ DECLARE
     failed text[];
 BEGIN
     WITH
+    -- schema_create = public 스키마 CREATE 를 가져야 하는가(schema_create_<계정>).
+    accounts(a, schema_create) AS (
+        VALUES ('media_indexer', false),
+               ('media_janitor', false),
+               ('app_auth', true),
+               ('app_clip', true),
+               ('app_chat_collector', true),
+               ('app_chat_detector', true)
+    ),
     tables(t) AS (
         VALUES ('stream_segments'), ('stream_sessions'), ('stream_cutoffs'), ('stream_published_gaps')
     ),
@@ -58,12 +74,16 @@ BEGIN
                ('media_indexer', 'stream_published_gaps', 'UPDATE'),
                ('media_janitor', 'stream_segments', 'SELECT'),
                ('media_janitor', 'stream_sessions', 'SELECT'),
-               ('media_janitor', 'stream_cutoffs', 'SELECT')
+               ('media_janitor', 'stream_cutoffs', 'SELECT'),
+               ('app_clip', 'stream_segments', 'SELECT'),
+               ('app_clip', 'stream_segments', 'DELETE'),
+               ('app_clip', 'stream_sessions', 'SELECT'),
+               ('app_chat_collector', 'stream_segments', 'SELECT')
     ),
     grantees(r) AS (
-        SELECT r
-          FROM unnest(ARRAY['media_indexer', 'media_janitor', 'public']) AS r
-         WHERE r = 'public' OR EXISTS (SELECT 1 FROM pg_roles WHERE rolname = r)
+        SELECT a FROM accounts WHERE EXISTS (SELECT 1 FROM pg_roles WHERE rolname = a)
+        UNION ALL
+        SELECT 'public'
     ),
     -- go = 재부여 권한(WITH GRANT OPTION). 30 은 하나도 주지 않는다.
     matrix(r, t, p, go) AS (
@@ -91,7 +111,7 @@ BEGIN
                EXISTS (SELECT 1 FROM pg_roles
                         WHERE rolname = a AND rolcanlogin
                           AND NOT (rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls))
-          FROM unnest(ARRAY['media_indexer', 'media_janitor']) AS a
+          FROM accounts
         UNION ALL
         SELECT 'media_indexer_connection_limit',
                EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'media_indexer' AND rolconnlimit = 20)
@@ -103,25 +123,25 @@ BEGIN
         UNION ALL
         SELECT 'rds_iam:' || a,
                EXISTS (SELECT 1 FROM pg_roles WHERE rolname = a) AND pg_has_role(a, 'rds_iam', 'MEMBER')
-          FROM unnest(ARRAY['media_indexer', 'media_janitor']) AS a
+          FROM accounts
         UNION ALL
         SELECT 'membership_' || a,
                ARRAY(SELECT DISTINCT pg_get_userbyid(m.roleid)::text
                        FROM pg_auth_members m JOIN pg_roles r ON r.oid = m.member
                       WHERE r.rolname = a ORDER BY 1) = ARRAY['rds_iam']
-          FROM unnest(ARRAY['media_indexer', 'media_janitor']) AS a
+          FROM accounts
         UNION ALL
         SELECT 'members_media_owner',
                ARRAY(SELECT DISTINCT pg_get_userbyid(m.member)::text
                        FROM pg_auth_members m JOIN pg_roles r ON r.oid = m.roleid
                       WHERE r.rolname = 'media_owner'
-                        AND pg_get_userbyid(m.member) NOT IN ('media_indexer', 'media_janitor')
+                        AND pg_get_userbyid(m.member) NOT IN (SELECT a FROM accounts)
                       ORDER BY 1) = ARRAY[current_user::text]
         UNION ALL
         SELECT 'schema_create_' || a,
                EXISTS (SELECT 1 FROM pg_roles WHERE rolname = a)
-               AND NOT has_schema_privilege(a, 'public', 'CREATE')
-          FROM unnest(ARRAY['media_indexer', 'media_janitor']) AS a
+               AND has_schema_privilege(a, 'public', 'CREATE') = schema_create
+          FROM accounts
         UNION ALL
         SELECT 'public_create_revoked', NOT has_schema_privilege('public', 'public', 'CREATE')
         UNION ALL
@@ -157,7 +177,7 @@ BEGIN
         SELECT 'connect:' || a,
                EXISTS (SELECT 1 FROM pg_roles WHERE rolname = a)
                AND has_database_privilege(a, current_database(), 'CONNECT')
-          FROM unnest(ARRAY['media_indexer', 'media_janitor']) AS a
+          FROM accounts
         UNION ALL
         SELECT 'advisory_xact_lock_media_indexer',
                EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'media_indexer')

@@ -1,8 +1,9 @@
 # 서비스별 비밀 아닌 env(POK-309 · 설계 3절) — platform 이 태스크 env 로 넣는다
 # (CONTRACT-runtime.md 「런타임 1단 → platform」 행). 비밀은 app_secret_arns 에
-# 있다. env 이름은 각 서비스 application.yml 실물이고, 1단-나가 POSTGRES_USER
-# 등을 더한다. platform 이 정하는 이름과 겹치면 platform 값이 이긴다 — clip 의
-# 큐 수신 스위치는 platform 이 넣지 않으므로 여기서 준다.
+# 있다. env 이름은 각 서비스 application.yml 실물이다. POSTGRES_USER 는
+# platform 이 app_db_users 로 넣는다. platform 이 정하는 이름과 겹치면 platform
+# 값이 이긴다 — clip 의 큐 수신 스위치는 platform 이 넣지 않으므로 여기서
+# 준다.
 
 locals {
   # 네 서버가 같은 DB 에 붙는다. 태스크 env 값은 문자열이라 포트도 문자열이다.
