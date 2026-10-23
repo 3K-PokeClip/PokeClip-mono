@@ -7,6 +7,8 @@ import { useSceneFrames, type SceneFrameSource } from './useSceneFrames';
 // FAIL_SECONDS면 error), 캔버스는 그릴 때마다 다른 주소를 준다.
 
 const FAIL_SECONDS = new Set<number>();
+/** 참이면 조각을 못 읽는다: 첫 장면(loadeddata) 대신 error */
+let loadFails = false;
 let drawn = 0;
 
 class FakeVideo extends EventTarget {
@@ -27,7 +29,7 @@ class FakeVideo extends EventTarget {
     );
   }
   set src(_value: string) {
-    queueMicrotask(() => this.dispatchEvent(new Event('loadeddata')));
+    queueMicrotask(() => this.dispatchEvent(new Event(loadFails ? 'error' : 'loadeddata')));
   }
   removeAttribute() {}
   load() {}
@@ -44,6 +46,7 @@ const SOURCE: SceneFrameSource = {
 describe('useSceneFrames', () => {
   beforeEach(() => {
     FAIL_SECONDS.clear();
+    loadFails = false;
     drawn = 0;
     const create = document.createElement.bind(document);
     vi.spyOn(document, 'createElement').mockImplementation(((tag: string) => {
@@ -79,6 +82,26 @@ describe('useSceneFrames', () => {
     rerender({ urgent: 6_000 });
     await waitFor(() => expect(result.current.frameOf(6_000)).not.toBeNull());
     expect(result.current.failed(6_000)).toBe(false);
+  });
+
+  it('조각을 처음부터 못 읽으면(첫 장면 전 error) 모든 시각이 「못 얻음」이다(PR #301 2차 리뷰)', async () => {
+    loadFails = true;
+    const { result } = renderHook(() => useSceneFrames(SOURCE, [0], 5_000));
+    expect(result.current.failed(5_000)).toBe(false);
+    await waitFor(() => expect(result.current.failed(5_000)).toBe(true));
+    expect(result.current.failed(0)).toBe(true);
+    expect(result.current.frameOf(5_000)).toBeNull();
+  });
+
+  it('띠에 올린 자리가 그대로여도 고른 장면을 따로 뽑는다(키로 고를 때, PR #301 2차 리뷰)', async () => {
+    const { result, rerender } = renderHook(
+      ({ keep }: { keep: number }) => useSceneFrames(SOURCE, [], 2_000, keep),
+      { initialProps: { keep: 2_000 } },
+    );
+    await waitFor(() => expect(result.current.frameOf(2_000)).not.toBeNull());
+
+    rerender({ keep: 3_500 });
+    await waitFor(() => expect(result.current.frameOf(3_500)).not.toBeNull());
   });
 
   it('띠를 훑으며 뽑은 그림은 최근 24장만 남기고, 추천·띠 칸과 고른 장면은 계속 둔다', async () => {

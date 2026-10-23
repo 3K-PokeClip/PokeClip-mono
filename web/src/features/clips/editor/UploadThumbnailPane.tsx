@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useState, type KeyboardEvent, type PointerEvent } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react';
 import { RadioGroup, Text } from '@/ui';
 import type { ThumbnailSource } from '@/api/clipEditor';
 import {
@@ -216,6 +216,11 @@ function SceneStrip({
   const ref = useRef<HTMLDivElement>(null);
   const [hover, setHover] = useState<number | null>(null);
   const [dragging, setDragging] = useState(false);
+  // 띠가 사라지면(탭을 바꾸거나 다른 방식을 고르면) pointerleave가 안 온다: 창이 든 올린 자리도 비운다. 안 비우면 옛 자리가
+  // 남아 그 그림을 뽑는다(PR #301 2차 리뷰)
+  const onHoverRef = useRef(onHover);
+  onHoverRef.current = onHover;
+  useEffect(() => () => onHoverRef.current(null), []);
   const max = Math.max(0, cutLengthMs - 1);
   const at = (clientX: number) => {
     const rect = ref.current?.getBoundingClientRect();

@@ -26,6 +26,8 @@ const FRAME_WIDTH = 360;
 const FRAME_HEIGHT = 640;
 /** 옮기기가 이만큼 안 끝나면 그 시각은 건너뛴다(손상된 조각에서 줄이 멈추지 않게) */
 const SEEK_TIMEOUT_MS = 4_000;
+/** 조각을 이만큼 안에 못 읽으면(첫 장면이 안 옴) 재료를 못 쓰는 것으로 본다. 브라우저 안 파일이라 보통 1초 안이다 */
+const LOAD_TIMEOUT_MS = 10_000;
 /**
  * 띠에 올리거나 끌며 뽑은 그림(추천 · 띠 칸 · 고른 장면 밖)은 최근 이만큼만 남긴다. 장당 수십 KB라 3분 구간(720칸)을 다
  * 훑으면 수십 MB가 창을 닫을 때까지 남았다(PR #301 리뷰). 지운 자리에 다시 올리면 다시 뽑는다
@@ -42,8 +44,10 @@ export interface SceneFrames {
 }
 
 /**
- * `wanted`의 시각들을 차례로 뽑고, `urgent`(띠에 올린 자리·고른 장면)는 줄 맨 앞에 끼운다(새 것이 오면 옛 것을 버린다).
- * `wanted`와 `keep`(고른 장면)의 그림은 계속 두고, 나머지는 최근 {@link EXTRA_FRAMES_KEPT}장만 둔다.
+ * `wanted`의 시각들을 차례로 뽑는다. `urgent`(띠에 올린 자리)는 줄 맨 앞, `keep`(고른 장면)은 그다음에 끼운다 — 둘 다 한
+ * 칸이라 새 것이 오면 옛 것을 버린다(끌기 중 쌓이지 않는다). `keep`을 따로 받는 까닭: 띠에 포인터를 둔 채 키로 고르면
+ * `urgent`가 계속 올린 자리라 고른 장면을 안 뽑았다(PR #301 2차 리뷰).
+ * `wanted`와 `keep`의 그림은 계속 두고, 나머지는 최근 {@link EXTRA_FRAMES_KEPT}장만 둔다.
  */
 export function useSceneFrames(
   source: SceneFrameSource | null,
@@ -52,9 +56,12 @@ export function useSceneFrames(
   keep: number | null = null,
 ): SceneFrames {
   const [frames, setFrames] = useState<ReadonlyMap<number, string>>(() => new Map());
+  /** 못 읽은 조각(blob 주소). 재료가 바뀌면 저절로 풀린다 */
+  const [broken, setBroken] = useState<string | null>(null);
   const done = useRef(new Map<number, string>());
   const queue = useRef<number[]>([]);
   const urgentRef = useRef<number | null>(null);
+  const keepRef = useRef<number | null>(null);
   const video = useRef<HTMLVideoElement | null>(null);
   const ready = useRef(false);
   const busy = useRef(false);
@@ -76,9 +83,10 @@ export function useSceneFrames(
     const el = video.current;
     const src = sourceRef.current;
     if (busy.current || !ready.current || el === null || src === null) return;
-    const next = urgentRef.current ?? queue.current.shift();
+    const next = urgentRef.current ?? keepRef.current ?? queue.current.shift();
     if (next === undefined) return;
     if (urgentRef.current === next) urgentRef.current = null;
+    else if (keepRef.current === next) keepRef.current = null;
     if (done.current.has(next)) {
       pump();
       return;
@@ -105,20 +113,32 @@ export function useSceneFrames(
     el.muted = true;
     el.playsInline = true;
     el.preload = 'auto';
+    // 첫 장면 전에 오류가 나거나 안 오면 이 조각은 못 쓴다: 창이 「불러오는 중」 대신 「못 불러와요」를 보이게 적는다
+    // (옮기기 실패는 장면마다 적지만, 읽기 실패는 옮기기까지 가지 못한다 — PR #301 2차 리뷰)
+    const giveUp = () => {
+      if (!ready.current) setBroken(src);
+    };
+    const timer = globalThis.setTimeout(giveUp, LOAD_TIMEOUT_MS);
     const onReady = () => {
+      globalThis.clearTimeout(timer);
+      el.removeEventListener('error', giveUp);
       ready.current = true;
       pump();
     };
     el.addEventListener('loadeddata', onReady, { once: true });
+    el.addEventListener('error', giveUp, { once: true });
     el.src = src;
     video.current = el;
     return () => {
+      globalThis.clearTimeout(timer);
       el.removeEventListener('loadeddata', onReady);
+      el.removeEventListener('error', giveUp);
       video.current = null;
       ready.current = false;
       done.current = new Map();
       queue.current = [];
       urgentRef.current = null;
+      keepRef.current = null;
       setFrames(new Map());
       el.removeAttribute('src');
       el.load();
@@ -141,6 +161,12 @@ export function useSceneFrames(
     pump();
   }, [src, urgent, pump]);
 
+  useEffect(() => {
+    if (src === null || keep === null || done.current.has(keep)) return;
+    keepRef.current = keep;
+    pump();
+  }, [src, keep, pump]);
+
   const frameOf = useCallback(
     (offsetMs: number) => {
       const url = frames.get(offsetMs);
@@ -149,8 +175,8 @@ export function useSceneFrames(
     [frames],
   );
   const failed = useCallback(
-    (offsetMs: number) => src === null || frames.get(offsetMs) === FAILED,
-    [frames, src],
+    (offsetMs: number) => src === null || broken === src || frames.get(offsetMs) === FAILED,
+    [frames, src, broken],
   );
   return useMemo(() => ({ frameOf, failed }), [frameOf, failed]);
 }
