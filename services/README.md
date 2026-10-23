@@ -4101,14 +4101,21 @@ SQLSTATE 22류라 격리 폐기되어 **채팅이 조용히 사라진다.**
 안 틀리는 원문이 나온다.
 
 ```
-{"receivedAtMillis":1786852111229,"raw":"{\"channelId\":\"…\",\"content\":\"ㅋㅋ\",\"messageTime\":1754300000000}"}
+{"platform":"CHZZK","receivedAtMillis":1786852111229,"raw":"{\"channelId\":\"…\",\"content\":\"ㅋㅋ\",\"messageTime\":1754300000000}"}
 ```
+
+`platform`(POK-397)은 그 채팅을 받은 세션의 플랫폼(`CHZZK`·`SOOP`)이다. 이 칸이 생기기 전에 쓴 줄에는 없고, 그 줄은
+전부 치지직이라 읽을 때 `CHZZK`로 채운다.
 
 **키 규칙:**
 
 ```
-chat/{channelId}/{yyyy-MM-dd}/{HH}/{HHmm}-{runId}.jsonl
+chat/{PLATFORM}/{channelId}/{yyyy-MM-dd}/{HH}/{HHmm}-{runId}.jsonl
 ```
+
+- **플랫폼 폴더가 맨 앞이다(POK-397).** 채널 아이디는 플랫폼마다 따로 매겨서 치지직과 SOOP에 같은 아이디가 있을
+  수 있다. 폴더가 안 갈리면 한쪽 탈퇴 정리가 다른 쪽 원본까지 지운다. 1분 창도 (플랫폼, 채널)마다 따로 연다.
+  이 폴더가 생기기 전에 쓴 파일은 옛 경로 `chat/{channelId}/…`에 있고 전부 치지직이다
 
 - **UTC · 우리가 받은 시각 기준 1분 창.** `messageTime`(치지직 시각)이 아니다 — 1번 media의
   세그먼트 키(`streams/{streamId}/{date}/{HH}/seg_NNNNNN.m4s`)와 같은 시계·같은 층위라 나중에

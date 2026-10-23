@@ -47,6 +47,18 @@ class PlatformStampingTest extends IntegrationTestSupport {
     private SessionRegistry registry;
     private ChatPersister persister;
     private DonationPersister donationPersister;
+    /** 아카이브 바구니에 들어간 원본의 (플랫폼, 채널). S3 폴더가 이 플랫폼으로 갈린다. */
+    private final List<String> archived = new java.util.concurrent.CopyOnWriteArrayList<>();
+    private final ChatArchive recordingArchive = new ChatArchive() {
+        @Override public void offer(com.pokeclip.chat.collector.archive.ArchivableChat chat) {
+            archived.add(chat.platform() + ":" + chat.channelId());
+        }
+        @Override public void beginClose() { }
+        @Override public void awaitClosed(Duration budget) { }
+        @Override public com.pokeclip.chat.collector.archive.ArchiveCounters counters() {
+            return com.pokeclip.chat.collector.archive.ArchiveCounters.NONE;
+        }
+    };
 
     @BeforeEach
     void clean() {
@@ -81,6 +93,9 @@ class PlatformStampingTest extends IntegrationTestSupport {
                 String.class))
                 .as("SOOP 세션의 채팅이 CHZZK로 남거나, 지문에 걸려 버려졌다")
                 .containsExactly("CHZZK:plat-s1", "SOOP:plat-s2");
+        assertThat(archived)
+                .as("원본 파일의 플랫폼 폴더가 세션의 플랫폼을 따라야 한다")
+                .containsExactlyInAnyOrder("CHZZK:plat-same", "SOOP:plat-same");
     }
 
     @Test
@@ -123,7 +138,7 @@ class PlatformStampingTest extends IntegrationTestSupport {
                 new ChzzkProperties(true, "설정-토큰-쓰면-안-된다",
                         "http://localhost:" + port, Duration.ofSeconds(5),
                         Duration.ofMillis(200), Duration.ofSeconds(60), Duration.ofMillis(60)),
-                restClientBuilder, buffer, persister, ChatArchive.NONE,
+                restClientBuilder, buffer, persister, recordingArchive,
                 new DonationSubscriptions(), donationBuffer);
     }
 

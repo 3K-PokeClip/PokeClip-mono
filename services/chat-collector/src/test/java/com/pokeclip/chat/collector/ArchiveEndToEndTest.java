@@ -71,7 +71,7 @@ class ArchiveEndToEndTest extends IntegrationTestSupport {
         awaitReceived(30);
         runner.stop();                                    // 열린 창을 닫아 올린다
 
-        List<String> keys = listKeys("chat/" + channel + "/");
+        List<String> keys = listKeys("chat/CHZZK/" + channel + "/");
         assertThat(keys).as("이 채널의 파일이 최소 하나(같은 분이면 하나)").isNotEmpty();
         assertThat(keys).allMatch(k -> k.endsWith("-" + archive.counters().runId() + ".jsonl"));
 
@@ -104,7 +104,7 @@ class ArchiveEndToEndTest extends IntegrationTestSupport {
             runner.stop();
             String verdict = captor.messages().stream().filter(m -> m.startsWith("chat.session.verdict")).findFirst().orElseThrow();
             // uploaded는 5건이 분 경계에 걸치면 2다 — 실제 파일 수와 대조한다(plan-critic 사소-10).
-            int files = listKeys("chat/" + channel + "/").size();
+            int files = listKeys("chat/CHZZK/" + channel + "/").size();
             assertThat(files).isBetween(1, 2);
             assertThat(verdict).contains("archived=5").contains("archiveBufferDropped=0")
                     .contains("uploaded=" + files).contains("pending=0").contains("droppedObjects=0")
@@ -126,7 +126,7 @@ class ArchiveEndToEndTest extends IntegrationTestSupport {
             dbBuffer.drain(Integer.MAX_VALUE);
             behavior.emitSystem("{\"type\":\"revoked\",\"data\":{}}");
             awaitUntil(Duration.ofSeconds(5), () -> captor.messages().stream().anyMatch(m -> m.startsWith("chat.session.verdict")));
-            assertThat(listKeys("chat/" + channel + "/")).hasSize(1);
+            assertThat(listKeys("chat/CHZZK/" + channel + "/")).hasSize(1);
             String verdict = captor.messages().stream().filter(m -> m.startsWith("chat.session.verdict")).findFirst().orElseThrow();
             assertThat(verdict).contains("archived=1").contains("uploaded=1");
         }
