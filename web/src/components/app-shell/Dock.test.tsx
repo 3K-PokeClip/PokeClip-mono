@@ -211,6 +211,36 @@ describe('Dock: 꾹 눌러 끌기', () => {
     fireEvent.pointerUp(nav, { pointerId: 2, clientX: X[2], clientY: Y });
     expect(link(/클립/)).toHaveFocus();
   });
+
+  it('끌어 놓은 이동을 다른 이동이 덮으면 붙든 칸을 놓는다 — 주소가 그대로여도(PR #346 리뷰)', () => {
+    const { nav, pillLink } = setup();
+    const dropOnClips = (pointerId: number) => {
+      fireEvent.pointerDown(nav, { pointerId, clientX: X[1], clientY: Y });
+      fireEvent.pointerMove(nav, { pointerId, clientX: X[2], clientY: Y });
+      fireEvent.pointerUp(nav, { pointerId, clientX: X[2], clientY: Y });
+      expect(pillLink()).toBe(link(/클립/));
+    };
+
+    // 이동이 끝나기 전에 지금 탭(방송)을 그냥 누른다 — 주소는 계속 /broadcast/livenow다
+    dropOnClips(1);
+    fireEvent.pointerDown(nav, { pointerId: 2, clientX: X[1], clientY: Y });
+    fireEvent.pointerUp(nav, { pointerId: 2, clientX: X[1], clientY: Y });
+    expect(push).toHaveBeenLastCalledWith('/broadcast', undefined);
+    expect(pillLink()).toBe(link(/방송/));
+
+    // 키보드 Enter로 링크가 옮겨도 같다. ⌘ 클릭은 다른 탭으로 열려 붙든 칸을 그대로 둔다
+    dropOnClips(3);
+    const stop = (e: Event) => e.preventDefault();
+    document.addEventListener('click', stop);
+    try {
+      fireEvent.click(link(/홈/), { detail: 0, metaKey: true });
+      expect(pillLink()).toBe(link(/클립/));
+      fireEvent.click(link(/방송/), { detail: 0 });
+      expect(pillLink()).toBe(link(/방송/));
+    } finally {
+      document.removeEventListener('click', stop);
+    }
+  });
 });
 
 describe('Dock: 관계는 해석된 값으로(로컬 리뷰 1라운드 지적 2)', () => {

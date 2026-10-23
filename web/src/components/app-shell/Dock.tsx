@@ -22,7 +22,8 @@ import styles from './Dock.module.css';
 // - 이동은 링크의 click이 아니라 pointerup이 한다: 독이 포인터를 잡고 있어 click은 대개 독으로 가 링크에 닿지
 //   않는다. 브라우저에 따라 링크로 가는 click은 막는다(onClickCapture). 키보드 Enter와 ⌘·Ctrl 클릭(새 탭)은
 //   예전처럼 링크가 맡는다.
-// - 끌어 놓은 칸은 주소가 바뀔 때까지 알약을 붙든다 — 놓자마자 옛 칸으로 돌아갔다가 전환으로 다시 오지 않게.
+// - 끌어 놓은 칸은 주소가 바뀔 때까지(또는 다른 이동이 덮을 때까지) 알약을 붙든다 — 놓자마자 옛 칸으로
+//   돌아갔다가 전환으로 다시 오지 않게.
 const ITEM_META: Record<DockHref, { label: string; Icon: LucideIcon }> = {
   '/home': { label: '홈', Icon: House },
   '/broadcast': { label: '방송', Icon: Radio },
@@ -183,9 +184,17 @@ export function Dock({ badges }: { badges?: DockBadges } = {}) {
     // 고른 칸으로 포커스를 옮긴다 — pointerdown의 preventDefault가 브라우저의 포커스 이동을 막아, 안 옮기면
     // 키보드로 와 있던 옛 칸에 포커스가 남아 이어서 누른 Enter가 옛 탭으로 되돌아간다(ModeSegment와 같다)
     items.current[index]?.focus({ preventScroll: true });
-    if (press.grabbed && index !== restIndex) {
-      willMovePill(index);
-      setDropped(index);
+    if (press.grabbed) {
+      // 끌어 놓은 칸은 주소가 바뀔 때까지 붙든다 — 지금 탭에 놓았으면 붙들 것이 없다
+      if (index !== restIndex) {
+        willMovePill(index);
+        setDropped(index === activeIndex ? null : index);
+      }
+    } else {
+      // 잡지 않은 누름의 이동은 앞서 끌어 놓은 이동을 덮는다. 주소가 그대로면(지금 탭) 위의 주소 리셋이
+      // 돌지 않아 알약이 놓은 칸에 남는다 — 여기서 놓는다
+      willMovePill(activeIndex);
+      setDropped(null);
     }
     setPress(null);
     go(index);
@@ -202,7 +211,15 @@ export function Dock({ badges }: { badges?: DockBadges } = {}) {
   // pointerup이 이미 옮겼다 — 같은 누름의 click이 링크에 닿아 한 번 더 옮기지 않게.
   // 키보드 Enter의 click은 detail이 0이라 그대로 링크가 옮긴다
   const onClickCapture = (e: MouseEvent<HTMLElement>) => {
-    if (e.detail > 0 && e.timeStamp - upAt.current < CLICK_AFTER_UP_MS) e.preventDefault();
+    if (e.detail > 0 && e.timeStamp - upAt.current < CLICK_AFTER_UP_MS) {
+      e.preventDefault();
+      return;
+    }
+    // 링크가 이 창에서 옮기면 앞서 끌어 놓은 이동을 덮는다 — 붙든 칸을 놓는다(위 onPointerUp과 같은 이유).
+    // ⌘·Ctrl·Shift·Alt 클릭은 다른 탭·창으로 열려 이 창의 이동은 그대로다
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    willMovePill(activeIndex);
+    setDropped(null);
   };
 
   // 휴대폰은 링크를 꾹 누르면 메뉴를 띄운다 — 누르는 동안만 막는다(마우스 오른쪽 버튼 메뉴는 그대로)
