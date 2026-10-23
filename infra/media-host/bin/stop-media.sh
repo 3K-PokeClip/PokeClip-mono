@@ -6,9 +6,13 @@
 #
 # 인자 없음: `docker compose … down` 으로 프로젝트를 내리고, down 의 결과와
 #   상관없이 tmpfs 의 렌더 파일 둘(CDN 비밀 · API 비밀번호가 든 mediamtx.yml ·
-#   사이드카의 mtx_api_pass), 응답기 모드의 비밀 파일 둘(RUNTIME_DIR/ingest-auth
-#   의 ingest_basic_pass · mtx_api_pass)과 시작 스크립트가 남겼을 수 있는 임시
-#   파일을 지운다. 응답기 디렉터리 자체와 그 안의 상태 디렉터리는 남긴다.
+#   사이드카의 mtx_api_pass), 응답기 모드의 비밀 파일 셋(RUNTIME_DIR/ingest-auth
+#   의 ingest_basic_pass · mtx_api_pass · stream_key_resolve_token)과 시작
+#   스크립트가 남겼을 수 있는 임시 파일을 지운다. 응답기 디렉터리 자체와 그 안의
+#   상태 디렉터리, 거부 목록(/var/lib 쪽)은 남긴다 — 비밀이 아니고, 상태는 다음
+#   기동이 이어 쓰며 거부 목록은 다음 기동이 SSM 에서 다시 받는다. 응답기
+#   디렉터리가 링크면 따라가 지우지 않고 실패로 적는다(시작 스크립트도 받지
+#   않는다).
 #   down 의 종료 코드를 돌려준다. down 인자는 `down`
 #   하나로 고정한다 — 볼륨(녹화 · 훅 스풀 · DVR)은 지우지 않는다.
 #   down 이 실패하면(compose 파일이 깨져 읽지 못하는 경우 포함) compose 파일
@@ -34,7 +38,8 @@ readonly RENDER_NAMES=(mediamtx.yml mtx_api_pass)
 # 응답기 모드에서 RUNTIME_DIR/ingest-auth 에 두는 비밀 파일 이름(임시 파일 꼴은
 # 위와 같다).
 readonly INGEST_AUTH_DIR_NAME='ingest-auth'
-readonly INGEST_AUTH_NAMES=(ingest_basic_pass mtx_api_pass)
+readonly INGEST_AUTH_NAMES=(ingest_basic_pass mtx_api_pass
+  stream_key_resolve_token)
 # 폴백의 docker 호출(ps · rm) 한 번의 상한(초).
 readonly FALLBACK_TIMEOUT=10
 
@@ -83,7 +88,9 @@ cleanup_rendered() {
     printf 'MEDIA STOP CLEANUP FAIL %s\n' "$1"
     status=1
   fi
-  if ! remove_rendered "${ia}" "${INGEST_AUTH_NAMES[@]}"; then
+  # 링크면 가리키는 곳의 같은 이름 파일을 지우게 되므로 손대지 않는다.
+  if [[ -L "${ia}" ]] || ! remove_rendered "${ia}" "${INGEST_AUTH_NAMES[@]}"
+  then
     printf 'MEDIA STOP CLEANUP FAIL %s\n' "${ia}"
     status=1
   fi

@@ -23,15 +23,34 @@
 #          비밀번호 0 → 응답기 모드(송출 인증 응답기).
 #      그 밖이면 「MEDIA START FAIL render template-token」. 모드 판정 줄은 따로
 #      내지 않는다.
-#   5. 응답기 모드면 생성 셋(Basic 비밀번호 · 잠금 둘 — 각각 3 과 같은 꼴의 새
-#      값)을 만든다. 저장하지 않는다. 하나라도 만들지 못하면 「MEDIA START
-#      BLOCKED: generated credential unavailable」.
-#   6. 모드의 토큰(각각 정확히 한 번)을 채워 tmpfs(RUNTIME_DIR)의
+#   5. compose 렌더본(MEDIA_COMPOSE_FILE)의 응답기 서비스 키 줄(`  ingest-auth:`)
+#      수가 모드와 맞는지 본다 — 응답기 모드 ⇔ 1, 옛 모드 ⇔ 0. 아니면 「MEDIA
+#      START BLOCKED: ingest-auth mode mismatch」. 읽을 수 없는 파일은 0 으로
+#      센다(옛 모드는 compose up 이 그 파일로 실패를 드러낸다). 응답기 모드의
+#      외부 입력(6)을 받기 전에 본다.
+#   6. 응답기 모드만(옛 모드는 아래 키 · 파일을 읽지 않는다):
+#      - compose 파일 옆 ingest-auth.env 가 링크 아닌 일반 파일이고 내용이
+#        정확히 INGEST_AUTH_IP_LIMIT=on 또는 =off 한 줄인지 본다(없으면 compose
+#        의 required env_file 때문에 판정 줄 없이 재시작이 되풀이된다). 아니면
+#        「MEDIA START BLOCKED: ingest-auth ip-limit setting unavailable」.
+#      - 생성 셋(Basic 비밀번호 · 잠금 둘 — 각각 3 과 같은 꼴의 새 값)을
+#        만든다. 저장하지 않는다. 하나라도 만들지 못하면 「MEDIA START
+#        BLOCKED: generated credential unavailable」.
+#      - 4C 토큰(공용 창구 INTERNAL_API_TOKEN)을 Secrets Manager 에서 읽는다
+#        (argv 에는 ARN 만). ARN 빔 · 실패 · 빈 값 · None · 제어 문자(NUL ·
+#        C1 포함) · 앞뒤 공백 · 파일(값 + 줄바꿈)이 4096바이트 초과면 「MEDIA
+#        START BLOCKED: ingest-auth resolve token unavailable」.
+#      - 거부 목록을 SSM 파라미터에서 받아(argv 에는 이름만) 거부 목록
+#        디렉터리의 임시 파일에 바이트 그대로 쓴다. 이름 빔 · 받기 실패면
+#        「… ingest-auth denylist unavailable」, 꼴 밖(lib/deny_tokens.sh)이면
+#        「… ingest-auth denylist invalid」. 꼴이 맞으면 rename 으로 둔다.
+#   7. 모드의 토큰(각각 정확히 한 번)을 채워 tmpfs(RUNTIME_DIR)의
 #      mediamtx.yml(MediaMTX 실행 계정 소유 0400)로, API 비밀번호 한 줄을
 #      mtx_api_pass(사이드카 실행 계정 소유 0400)로 둔다. 응답기 모드면
 #      RUNTIME_DIR/ingest-auth(root 0711)에 Basic 비밀번호 한 줄(ingest_basic_pass)
-#      과 같은 API 비밀번호 한 줄(mtx_api_pass)을 응답기 실행 계정 소유 0400 으로
-#      더 둔다. 잠금 둘은 mediamtx.yml 에만 있고, 응답기 모드 mediamtx.yml 에는
+#      과 같은 API 비밀번호 한 줄(mtx_api_pass) · 4C 토큰 한 줄
+#      (stream_key_resolve_token)을 응답기 실행 계정 소유 0400 으로 더 두고, 그
+#      안의 상태 디렉터리(state)를 응답기 실행 계정 소유 0700 으로 맞춘다. 잠금 둘은 mediamtx.yml 에만 있고, 응답기 모드 mediamtx.yml 에는
 #      API 비밀번호가 없다(그 토큰이 없다). 모든 파일을 각 디렉터리의 임시
 #      파일에 다 쓰고 대상을 모두 점검한 뒤에야 차례로 rename 한다 — 실행 중인
 #      스택이 보는 옛 파일을 제자리에서 고쳐 쓰지 않는다. 중간에 실패하면 새 임시
@@ -39,7 +58,7 @@
 #      그대로 두고, rename 하나가 실패하면 이번에 옮긴 파일을 지워 짝이 어긋난
 #      설정을 남기지 않는다. 치환은 bash 내장 문자열 연산으로만 해서 값이 외부
 #      명령의 argv 에 오르지 않는다.
-#   7. docker compose up 으로 바뀐다(exec). 출력은 mediamtx · nginx 에만 붙는다
+#   8. docker compose up 으로 바뀐다(exec). 출력은 mediamtx · nginx 에만 붙는다
 #      — 둘 중 하나가 끝나면 compose 전체가 끝나고 systemd 가 다시 띄운다.
 #      나머지 서비스(사이드카 등)는 엔진 재시작 정책(on-failure)으로 혼자 다시
 #      뜬다. 컨테이너는 늘 새로 만든다(--force-recreate) — 정지가 compose 를
@@ -66,23 +85,40 @@
 #                                   기본 10003 · 10003(응답기 이미지 USER — 응답기
 #                                   모드만 쓴다).
 #   MEDIA_COMPOSE_PROJECT           기본 pokeclip-media.
-#   MEDIA_COMPOSE_FILE              기본 /etc/pokeclip-media/compose.yml.
+#   MEDIA_COMPOSE_FILE              기본 /etc/pokeclip-media/compose.yml. 옆의
+#                                   ingest-auth.env 도 본다(응답기 모드).
+#   INTERNAL_API_TOKEN_SECRET_ARN   응답기 모드 필수. 4C 토큰 비밀 ARN.
+#   INGEST_AUTH_DENYLIST_PARAM      응답기 모드 필수. 거부 목록 SSM 파라미터
+#                                   이름.
+#   INGEST_AUTH_DENY_DIR            기본 /var/lib/pokeclip-media/ingest-auth/deny
+#                                   (절대 경로 — 응답기 모드만).
 #
 # 출력: 판정 줄(MEDIA PREREQ OK|FAIL · MEDIA START BLOCKED · MEDIA START FAIL)만
 # 낸다. 비밀 값은 어디에도 쓰지 않는다.
+
+# 아래 source= 경로를 이 파일 위치 기준으로 찾게 한다.
+# shellcheck source-path=SCRIPTDIR
 
 set -euo pipefail
 # 부모가 넘긴 셸 옵션(SHELLOPTS)으로 xtrace · allexport 가 켜져 있어도 끈다 —
 # allexport 면 비밀을 담은 변수가 자식 환경으로 나간다.
 set +x +a
 umask 077
+BIN_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+readonly BIN_DIR
+# shellcheck source=lib/docker_config.sh
+source "${BIN_DIR}/lib/docker_config.sh"
+# shellcheck source=lib/deny_tokens.sh
+source "${BIN_DIR}/lib/deny_tokens.sh"
+# shellcheck source=lib/render_files.sh
+source "${BIN_DIR}/lib/render_files.sh"
 # 비밀이 든 메모리가 core 파일로 남지 않게 한다.
 ulimit -c 0
 # 비밀 · 렌더 내용을 담는 변수 이름이 부모 환경에서 export 된 채 들어오면, bash
 # 의 local 이 그 export 속성을 이어받아 자식(chown 등) 환경에 값이 실린다. 쓰기
 # 전에 그 이름들을 환경에서 지운다.
 unset -v secret rendered value content head tail api_pass values basic_pass \
-  publish_lock read_lock file_bodies template_body
+  publish_lock read_lock file_bodies template_body resolve_token
 
 readonly SECRET_TOKEN='@@HLS_CDN_SECRET@@'
 # CDN 비밀이 가질 수 있는 글자 — MediaMTX 평문 자격 글자(hlsCDNSecret 검사)와
@@ -110,10 +146,16 @@ readonly API_PASS_NAME='mtx_api_pass'
 # 응답기의 API 비밀번호 파일 이름은 사이드카와 같다(API_PASS_NAME).
 readonly INGEST_AUTH_DIR_NAME='ingest-auth'
 readonly BASIC_PASS_NAME='ingest_basic_pass'
+# 응답기 디렉터리 안의 4C 토큰 파일 · 상태 디렉터리 이름과 4C 토큰 파일 크기
+# 상한(바이트 — 응답기 secretfile 의 상한과 같다).
+readonly RESOLVE_TOKEN_NAME='stream_key_resolve_token'
+readonly STATE_DIR_NAME='state'
+readonly RESOLVE_TOKEN_MAX_BYTES=4096
+# compose 파일 옆 IP 한도 env 파일과 compose 렌더본의 응답기 서비스 키 줄.
+readonly IP_LIMIT_ENV_NAME='ingest-auth.env'
+readonly INGEST_AUTH_SERVICE_LINE='  ingest-auth:'
 # compose 출력이 붙는 서비스 — 템플릿에서 restart: "no" 인 집합과 같아야 한다.
 readonly ATTACHED_SERVICES=(mediamtx nginx)
-# 선행 점검이 읽는 config.json 의 크기 상한(바이트) — 넘으면 점검 실패.
-readonly DOCKER_CONFIG_MAX_BYTES=65536
 
 render_tmps=()
 staged_tmp=""
@@ -171,159 +213,6 @@ check_compose_version() {
 #######################################
 check_credential_helper() {
   command -v docker-credential-ecr-login >/dev/null 2>&1
-}
-
-#######################################
-# 지금 자리에 JSON 값이 올 수 있는지 본다(json_scan_helpers 의 도우미).
-# Arguments:
-#   여는 괄호 쌓기(예: "{["), 바로 앞 토큰 종류.
-#######################################
-json_value_slot() {
-  local stack="$1" prev="$2"
-  if [[ -z "${stack}" ]]; then
-    [[ "${prev}" == start ]]
-    return
-  fi
-  case "${stack: -1}" in
-    '{') [[ "${prev}" == ':' ]] ;;
-    *) [[ "${prev}" == '[' || "${prev}" == ',' ]] ;;
-  esac
-}
-
-#######################################
-# config.json 내용을 토큰 단위로 훑어, 최상위 객체의 credHelpers 객체에 호스트
-# 키가 정확히 한 번 있고 그 값이 문자열 "ecr-login" 인지 본다. jq 가 상자에 있다는
-# 보장이 없어 bash 로 훑는다.
-#
-# 구조(괄호 짝 · 키와 값 자리 · 쉼표)가 어긋나면 실패다. 한계 — 이스케이프(\)가
-# 든 최상위 키 · credHelpers 안의 키 · 값은 풀지 않고 실패로 본다(fail closed).
-# 그 밖 자리의 문자열(예: auths 의 값)은 이스케이프가 있어도 건너뛴다. 같은 키가
-# 두 번 나오는 것(credHelpers · 호스트)도 실패다.
-# Arguments:
-#   config.json 내용, 호스트.
-# Returns:
-#   0 있음 / 1 없음 · 형식 오류.
-#######################################
-json_scan_helpers() {
-  local rest="$1" host="$2" stack="" prev=start key1="" hkey="" raw depth
-  local in_helpers=0 helpers_seen=0 host_seen=0 matched=0
-  # JSON 공백은 넷뿐이다(SP · HT · LF · CR) — [[:space:]] 는 VT · FF 도 받는다.
-  local ws_re=$'^[ \t\n\r]+'
-  # 문자열 · 숫자는 JSON 문법 그대로다 — 이스케이프는 \" \\ \/ \b \f \n \r \t
-  # \uXXXX 만, 제어 문자는 이스케이프해야만, 숫자는 앞 0 · 빈 소수부 · 빈
-  # 지수가 없다. 그 밖은 형식 오류다(fail closed).
-  local str_re='^"(([^"\\[:cntrl:]]|\\["\\/bfnrt]|\\u[0-9A-Fa-f]{4})*)"'
-  local num_re='-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?'
-  local lit_re="^(true|false|null|${num_re})"
-  local LC_ALL=C
-  while :; do
-    if [[ "${rest}" =~ ${ws_re} ]]; then
-      rest="${rest:${#BASH_REMATCH[0]}}"
-    fi
-    [[ -n "${rest}" ]] || break
-    depth=${#stack}
-    case "${rest:0:1}" in
-      '{' | '[')
-        json_value_slot "${stack}" "${prev}" || return 1
-        [[ -n "${stack}" || "${rest:0:1}" == '{' ]] || return 1
-        if [[ "${rest:0:1}" == '{' && "${stack}" == '{' \
-          && "${key1}" == credHelpers ]]; then
-          in_helpers=1
-        fi
-        stack+="${rest:0:1}"
-        prev="${rest:0:1}"
-        rest="${rest:1}"
-        ;;
-      '}' | ']')
-        (( depth > 0 )) || return 1
-        if [[ "${rest:0:1}" == '}' ]]; then
-          [[ "${stack: -1}" == '{' ]] || return 1
-          [[ "${prev}" == '{' || "${prev}" == v ]] || return 1
-        else
-          [[ "${stack: -1}" == '[' ]] || return 1
-          [[ "${prev}" == '[' || "${prev}" == v ]] || return 1
-        fi
-        (( depth != 2 )) || in_helpers=0
-        stack="${stack%?}"
-        prev=v
-        rest="${rest:1}"
-        ;;
-      ':')
-        [[ "${prev}" == k ]] || return 1
-        prev=':'
-        rest="${rest:1}"
-        ;;
-      ',')
-        [[ "${prev}" == v && -n "${stack}" ]] || return 1
-        prev=','
-        rest="${rest:1}"
-        ;;
-      '"')
-        [[ "${rest}" =~ ${str_re} ]] || return 1
-        raw="${BASH_REMATCH[1]}"
-        rest="${rest:${#BASH_REMATCH[0]}}"
-        if [[ "${stack: -1}" == '{' && ( "${prev}" == '{' \
-          || "${prev}" == ',' ) ]]; then
-          prev=k
-          if (( depth == 1 || in_helpers )) && [[ "${raw}" == *\\* ]]; then
-            return 1
-          fi
-          if (( depth == 1 )); then
-            key1="${raw}"
-            [[ "${raw}" != credHelpers ]] || helpers_seen=$((helpers_seen + 1))
-          elif (( in_helpers && depth == 2 )); then
-            hkey="${raw}"
-            [[ "${raw}" != "${host}" ]] || host_seen=$((host_seen + 1))
-          fi
-        else
-          json_value_slot "${stack}" "${prev}" || return 1
-          prev=v
-          if (( in_helpers )) && [[ "${raw}" == *\\* ]]; then
-            return 1
-          fi
-          if (( in_helpers && depth == 2 )) && [[ "${hkey}" == "${host}" \
-            && "${raw}" == ecr-login ]]; then
-            matched=$((matched + 1))
-          fi
-        fi
-        ;;
-      *)
-        [[ "${rest}" =~ ${lit_re} ]] || return 1
-        json_value_slot "${stack}" "${prev}" || return 1
-        prev=v
-        rest="${rest:${#BASH_REMATCH[0]}}"
-        ;;
-    esac
-  done
-  [[ -z "${stack}" && "${prev}" == v ]] || return 1
-  (( helpers_seen == 1 && host_seen == 1 && matched == 1 ))
-}
-
-#######################################
-# 선행 점검 3 — config.json 의 최상위 credHelpers 객체에 ECR 레지스트리 호스트
-# 키가 있고 그 값이 ecr-login 이다.
-# Globals:
-#   ECR_REGISTRY_HOST
-# Arguments:
-#   config.json 경로.
-#######################################
-check_docker_config() {
-  local host="${ECR_REGISTRY_HOST:-}" config size kept LC_ALL=C
-  [[ -n "${host}" && -f "$1" && -r "$1" ]] || return 1
-  # 크기 · NUL 은 원본 바이트로 본다 — 명령 치환은 NUL 을 지워, 지운 뒤의 내용이
-  # 상한 안 · 정상 JSON 으로 보일 수 있다. NUL 이 하나라도 있으면 거부한다.
-  size="$(wc -c <"$1")" || return 1
-  size=$((size + 0))
-  (( size <= DOCKER_CONFIG_MAX_BYTES )) || return 1
-  kept="$(tr -d '\000' <"$1" | wc -c)" || return 1
-  (( kept + 0 == size )) || return 1
-  # 끝 줄바꿈도 크기에 넣는다 — 명령 치환이 지우지 않게 표식 글자를 붙였다가
-  # 뗀다. 원본과 길이가 다르면(그 사이 바뀜) 거부한다.
-  config="$(head -c "$((DOCKER_CONFIG_MAX_BYTES + 1))" -- "$1" && printf x)" \
-    || return 1
-  config="${config%x}"
-  (( ${#config} == size )) || return 1
-  json_scan_helpers "${config}" "${host}"
 }
 
 #######################################
@@ -491,106 +380,6 @@ set_owners() {
 }
 
 #######################################
-# 둘 파일 하나를 목록에 더한다.
-# Globals:
-#   file_paths, file_owners, file_steps, file_bodies
-# Arguments:
-#   최종 경로, 소유(uid:gid), 실패 단계 이름 앞머리, 내용.
-#######################################
-add_file() {
-  file_paths+=("$1")
-  file_owners+=("$2")
-  file_steps+=("$3")
-  file_bodies+=("$4")
-}
-
-#######################################
-# 내용 하나를 최종 경로와 같은 디렉터리의 임시 파일(0400 · 지정 소유)에 쓴다.
-# 임시 파일 이름을 render_tmps(EXIT 트랩) · staged_tmp 에 남긴다. 서브셸에서
-# 부르지 않는다.
-# Globals:
-#   render_tmps, staged_tmp, render_step
-# Arguments:
-#   최종 경로, 내용, 소유(uid:gid), 실패 단계 이름 앞머리.
-# Returns:
-#   0 / 1 실패(단계 이름은 render_step).
-#######################################
-stage_file() {
-  local path="$1" owner="$3" prefix="$4"
-  staged_tmp="$(mktemp "${path%/*}/.${path##*/}.XXXXXX")" \
-    || { render_step="${prefix}tmpfile"; return 1; }
-  render_tmps+=("${staged_tmp}")
-  if ! printf '%s' "$2" >"${staged_tmp}" || ! chmod 0400 "${staged_tmp}"; then
-    render_step="${prefix}write"
-    return 1
-  fi
-  if ! chown "${owner}" "${staged_tmp}"; then
-    render_step="${prefix}chown"
-    return 1
-  fi
-}
-
-#######################################
-# 최종 경로가 일반 파일이거나 없는지 본다. 대상이 디렉터리(또는 그리로 가는
-# 링크)면 mv 가 그 안으로 옮기고 성공하므로 받지 않는다.
-# Arguments:
-#   최종 경로.
-#######################################
-target_ok() {
-  [[ ! -L "$1" && ( ! -e "$1" || -f "$1" ) ]]
-}
-
-#######################################
-# 목록의 파일을 모두 임시 파일에 쓰고, 대상을 모두 점검한 뒤 차례로 rename
-# 한다. rename 이 하나라도 실패하면 이번에 옮긴 파일을 지운다(짝이 어긋난
-# 설정을 남기지 않는다). 디렉터리는 부르는 쪽이 맞춰 둔다.
-# Globals:
-#   file_paths, file_owners, file_steps, file_bodies, render_tmps,
-#   staged_tmp, render_step
-# Returns:
-#   0 둠 / 1 실패(단계 이름은 render_step).
-#######################################
-install_files() {
-  local i j tmps=()
-  for (( i = 0; i < ${#file_paths[@]}; i++ )); do
-    stage_file "${file_paths[i]}" "${file_bodies[i]}" "${file_owners[i]}" \
-      "${file_steps[i]}" || return 1
-    tmps+=("${staged_tmp}")
-  done
-  for (( i = 0; i < ${#file_paths[@]}; i++ )); do
-    if ! target_ok "${file_paths[i]}"; then
-      render_step="${file_steps[i]}target"
-      return 1
-    fi
-  done
-  for (( i = 0; i < ${#file_paths[@]}; i++ )); do
-    if ! mv -f -- "${tmps[i]}" "${file_paths[i]}"; then
-      for (( j = 0; j < i; j++ )); do
-        rm -f -- "${file_paths[j]}"
-      done
-      render_step="${file_steps[i]}rename"
-      return 1
-    fi
-  done
-  render_tmps=()
-}
-
-#######################################
-# 목록의 소유 값이 모두 숫자 uid:gid 인지 본다.
-# Globals:
-#   file_owners, render_step
-#######################################
-check_file_owners() {
-  local owner
-  for owner in "${file_owners[@]}"; do
-    if [[ ! "${owner}" =~ ^[0-9]+:[0-9]+$ ]]; then
-      render_step='owner'
-      return 1
-    fi
-  done
-}
-
-#######################################
 # RUNTIME_DIR 을 만들고 권한(0711)을 매번 맞춘다.
 # Globals:
 #   render_step
@@ -613,9 +402,27 @@ prepare_runtime_dir() {
 #   응답기 파일 디렉터리.
 #######################################
 prepare_ingest_auth_dir() {
-  if [[ -L "$1" ]] || ! mkdir -p -- "$1" || ! chown 0:0 "$1" \
-    || ! chmod 0711 "$1"; then
+  if [[ -L "$1" ]] || ! mkdir -p -- "$1" || ! chown -h 0:0 "$1" \
+    || ! chmod 0711 "$1" || [[ ! -d "$1" || -L "$1" ]]; then
     render_step='ingest-auth-dir'
+    return 1
+  fi
+}
+
+#######################################
+# 응답기 상태 디렉터리를 응답기 실행 계정 소유 0700 으로 매번 맞춘다(안의
+# 파일은 둔다). 링크면 받지 않는다. 부모(응답기 파일 디렉터리)는 root 0711 이라
+# 응답기 계정은 이 이름 자리를 바꿔치지 못한다 — 안의 내용만 바꾼다.
+# Globals:
+#   ingest_auth_owner, render_step
+# Arguments:
+#   상태 디렉터리.
+#######################################
+prepare_state_dir() {
+  if [[ -L "$1" ]] || ! mkdir -p -- "$1" \
+    || ! chown -h "${ingest_auth_owner}" "$1" || ! chmod 0700 "$1" \
+    || [[ ! -d "$1" || -L "$1" ]]; then
+    render_step='ingest-auth-state-dir'
     return 1
   fi
 }
@@ -633,7 +440,8 @@ prepare_ingest_auth_dir() {
 place_files() {
   local status=0
   check_file_owners && prepare_runtime_dir "$1" \
-    && { (( $# < 2 )) || prepare_ingest_auth_dir "$2"; } \
+    && { (( $# < 2 )) || { prepare_ingest_auth_dir "$2" \
+      && prepare_state_dir "$2/${STATE_DIR_NAME}"; }; } \
     && install_files || status=1
   file_bodies=()
   if (( status != 0 )); then
@@ -666,31 +474,156 @@ render_legacy() {
 }
 
 #######################################
+# compose 렌더본의 응답기 서비스 키 줄 수가 모드와 맞는지 본다 — 응답기 모드 ⇔
+# 1, 옛 모드 ⇔ 0. 읽을 수 없는 파일은 0 으로 센다.
+# Globals:
+#   render_mode, INGEST_AUTH_SERVICE_LINE
+# Arguments:
+#   compose 파일.
+# Returns:
+#   0 맞음 / 1 어긋남.
+#######################################
+check_mode_match() {
+  local n=0 want=1
+  [[ "${render_mode}" != legacy ]] || want=0
+  if [[ -f "$1" && -r "$1" ]]; then
+    n="$(awk -v line="${INGEST_AUTH_SERVICE_LINE}" \
+      '$0 == line { n++ } END { print n + 0 }' "$1")" || return 1
+  fi
+  (( n == want ))
+}
+
+#######################################
+# IP 한도 env 파일이 링크 아닌 일반 파일이고 내용이 정확히
+# INGEST_AUTH_IP_LIMIT=on 또는 =off 한 줄(끝 줄바꿈은 있어도 없어도)인지
+# 본다. 크기는 원본 바이트로 대조한다(명령 치환은 NUL 을 지운다).
+# Arguments:
+#   env 파일.
+# Returns:
+#   0 맞음 / 1 없음 · 꼴 밖.
+#######################################
+check_ip_limit_env() {
+  local size content LC_ALL=C
+  [[ -f "$1" && ! -L "$1" ]] || return 1
+  size="$(wc -c <"$1")" || return 1
+  size=$((size + 0))
+  (( size <= 64 )) || return 1
+  content="$(cat -- "$1" && printf x)" || return 1
+  content="${content%x}"
+  (( ${#content} == size )) || return 1
+  content="${content%$'\n'}"
+  [[ "${content}" == INGEST_AUTH_IP_LIMIT=on \
+    || "${content}" == INGEST_AUTH_IP_LIMIT=off ]]
+}
+
+#######################################
+# 4C 토큰을 읽는다(read_cdn_secret 과 같은 방식 — 끝 줄바꿈 하나만 떼고 NUL 은
+# 제어 문자로 바꾼다). 응답기가 값을 HTTP 머리글에 싣고(headerSafe) 파일을
+# 4096바이트까지 받으므로(secretfile) 빈 값 · None · 제어 문자(C1 포함) · 앞뒤
+# 공백 · 값 + 줄바꿈이 상한 초과면 실패다.
+# Globals:
+#   INTERNAL_API_TOKEN_SECRET_ARN
+# Outputs:
+#   값(성공했을 때만).
+#######################################
+read_resolve_token() {
+  local arn="${INTERNAL_API_TOKEN_SECRET_ARN:-}" value LC_ALL=C
+  local c1=$'\xc2['$'\x80''-'$'\x9f'']'
+  [[ -n "${arn}" ]] || return 1
+  value="$({ aws secretsmanager get-secret-value --secret-id "${arn}" \
+    --query SecretString --output text && printf x; } \
+    | LC_ALL=C tr '\000' '\001')" || return 1
+  [[ "${value}" == *x ]] || return 1
+  value="${value%x}"
+  value="${value%$'\n'}"
+  if [[ -z "${value}" || "${value}" == None || "${value}" == *[[:cntrl:]]* \
+    || "${value}" == ' '* || "${value}" == *' ' ]]; then
+    return 1
+  fi
+  # C1 제어 문자(U+0080–U+009F 의 UTF-8 두 바이트)도 headerSafe 가 거부한다.
+  # shellcheck disable=SC2053 # 패턴으로 대조한다.
+  [[ "${value}" != *${c1}* ]] || return 1
+  (( ${#value} + 1 <= RESOLVE_TOKEN_MAX_BYTES )) || return 1
+  printf '%s' "${value}"
+}
+
+#######################################
+# 거부 목록을 SSM 에서 받아(argv 에는 이름만) 거부 목록 디렉터리의 임시 파일에
+# 바이트 그대로 쓰고, 꼴을 본 뒤 rename 한다. 임시 파일은 render_tmps(EXIT
+# 트랩)에 남긴다. 판정 줄은 여기서 낸다.
+# Globals:
+#   INGEST_AUTH_DENYLIST_PARAM, INGEST_AUTH_DENY_DIR, ingest_auth_owner,
+#   render_tmps
+# Returns:
+#   0 둠 / 1 막힘 · 실패.
+#######################################
+install_denylist() {
+  local name="${INGEST_AUTH_DENYLIST_PARAM:-}" gid="${ingest_auth_owner#*:}"
+  local dir="${INGEST_AUTH_DENY_DIR:-/var/lib/pokeclip-media/ingest-auth/deny}"
+  local tmp
+  if [[ -z "${name}" ]]; then
+    say 'MEDIA START BLOCKED: ingest-auth denylist unavailable'
+    return 1
+  fi
+  if [[ "${dir}" != /?* || ! "${gid}" =~ ^[0-9]+$ ]] \
+    || ! deny_tokens::prepare_dir "${dir}" "${gid}" \
+    || ! tmp="$(mktemp "${dir}/.${DENY_TOKENS_FILE_NAME}.XXXXXX")"; then
+    say 'MEDIA START FAIL render deny-dir'
+    return 1
+  fi
+  render_tmps+=("${tmp}")
+  if ! aws ssm get-parameter --name "${name}" --query Parameter.Value \
+    --output text >"${tmp}"; then
+    say 'MEDIA START BLOCKED: ingest-auth denylist unavailable'
+    return 1
+  fi
+  if ! deny_tokens::valid "${tmp}"; then
+    say 'MEDIA START BLOCKED: ingest-auth denylist invalid'
+    return 1
+  fi
+  if ! deny_tokens::install "${tmp}" "${dir}/${DENY_TOKENS_FILE_NAME}" \
+    "${gid}"; then
+    say 'MEDIA START FAIL render deny-install'
+    return 1
+  fi
+}
+
+#######################################
 # 응답기 모드 — 생성 셋(Basic 비밀번호 · 잠금 둘)을 새로 만들어 토큰 넷(CDN
 # 비밀 · Basic · 잠금 둘)을 채운 렌더를 mediamtx.yml 로 두고, API 비밀번호를
-# 사이드카 파일과 응답기 파일에, Basic 비밀번호를 응답기 파일에 둔다. 실패 줄은
-# 여기서 낸다.
+# 사이드카 파일과 응답기 파일에, Basic 비밀번호 · 4C 토큰을 응답기 파일에
+# 둔다. 그 전에 외부 입력(IP 한도 env 파일 · 4C 토큰 · 거부 목록)을 본다. 실패
+# 줄은 여기서 낸다.
 # Globals:
 #   mtx_owner, sidecar_owner, ingest_auth_owner
 # Arguments:
-#   RUNTIME_DIR, CDN 비밀, API 비밀번호.
+#   RUNTIME_DIR, CDN 비밀, API 비밀번호, compose 파일.
 # Returns:
 #   0 둠 / 1 막힘 · 실패.
 #######################################
 render_ingest_auth() {
   local ia="$1/${INGEST_AUTH_DIR_NAME}" basic_pass publish_lock read_lock
-  local rendered
+  local rendered resolve_token
+  if ! check_ip_limit_env "$(dirname -- "$4")/${IP_LIMIT_ENV_NAME}"; then
+    say 'MEDIA START BLOCKED: ingest-auth ip-limit setting unavailable'
+    return 1
+  fi
+  if ! resolve_token="$(read_resolve_token)"; then
+    say 'MEDIA START BLOCKED: ingest-auth resolve token unavailable'
+    return 1
+  fi
+  install_denylist || { unset resolve_token; return 1; }
   if ! basic_pass="$(generate_credential)" \
     || ! publish_lock="$(generate_credential)" \
     || ! read_lock="$(generate_credential)"; then
-    unset basic_pass publish_lock read_lock
+    unset basic_pass publish_lock read_lock resolve_token
     say 'MEDIA START BLOCKED: generated credential unavailable'
     return 1
   fi
   if ! rendered="$(render_template "${SECRET_TOKEN}" "$2" \
     "${BASIC_PASS_TOKEN}" "${basic_pass}" "${PUBLISH_LOCK_TOKEN}" \
     "${publish_lock}" "${READ_LOCK_TOKEN}" "${read_lock}" && printf x)"; then
-    unset basic_pass publish_lock read_lock
+    unset basic_pass publish_lock read_lock resolve_token
     say 'MEDIA START FAIL render template-token'
     return 1
   fi
@@ -703,6 +636,9 @@ render_ingest_auth() {
   unset basic_pass
   add_file "${ia}/${API_PASS_NAME}" "${ingest_auth_owner}" \
     'ingest-auth-api-pass-' "$3"$'\n'
+  add_file "${ia}/${RESOLVE_TOKEN_NAME}" "${ingest_auth_owner}" \
+    'ingest-auth-resolve-token-' "${resolve_token}"$'\n'
+  unset resolve_token
   place_files "$1" "${ia}"
 }
 
@@ -711,6 +647,8 @@ render_ingest_auth() {
 # 여기서(또는 모드 함수가) 낸다.
 # Globals:
 #   MEDIA_MTX_TEMPLATE, RUNTIME_DIR, render_mode
+# Arguments:
+#   compose 파일.
 # Returns:
 #   0 렌더함 / 1 막힘.
 #######################################
@@ -740,11 +678,16 @@ prepare_config() {
     say 'MEDIA START FAIL render template-token'
     return 1
   fi
+  if ! check_mode_match "$1"; then
+    unset secret api_pass
+    say 'MEDIA START BLOCKED: ingest-auth mode mismatch'
+    return 1
+  fi
   set_owners
   if [[ "${render_mode}" == legacy ]]; then
     render_legacy "${dir}" "${secret}" "${api_pass}" || status=1
   else
-    render_ingest_auth "${dir}" "${secret}" "${api_pass}" || status=1
+    render_ingest_auth "${dir}" "${secret}" "${api_pass}" "$1" || status=1
   fi
   unset secret api_pass
   return "${status}"
@@ -771,7 +714,7 @@ main() {
   if ! run_prereqs; then
     exit 1
   fi
-  if ! prepare_config; then
+  if ! prepare_config "${compose_file}"; then
     exit 1
   fi
   for service in "${ATTACHED_SERVICES[@]}"; do

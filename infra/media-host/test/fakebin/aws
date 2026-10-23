@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 #
-# 가짜 aws — 시작 스크립트의 CDN 비밀 조회(Secrets Manager get-secret-value)만
-# 흉내 낸다. 시험 전용이고, 돌려주는 값은 실제 비밀이 아닌 고정 시험 문자열이다.
+# 가짜 aws — 시작 스크립트의 비밀 조회(Secrets Manager get-secret-value — CDN
+# 비밀 · 응답기 모드의 4C 토큰)와 거부 목록 조회(SSM get-parameter)만 흉내 낸다.
+# 시험 전용이고, 돌려주는 값은 실제 비밀이 아닌 고정 시험 문자열이다. 비밀 조회는
+# --secret-id 로 값을 고른다 — 4C 토큰 ARN(FAKE_RESOLVE_ARN)이면 4C 토큰 갈래,
+# 그 밖은 CDN 비밀 갈래다.
 # 계약 시험(실물 compose) · start_test · 유닛 재기동 시험이 PATH 앞에 이 디렉터리를
 # 둔다.
 #
@@ -21,6 +24,17 @@
 #                          먼저 본다). 부를 때마다 읽으므로 띄운 유닛을 건드리지
 #                          않고 모드를 바꿀 수 있다(유닛 시험 ④). 파일이 없으면
 #                          종료 2.
+#   PCBENCH_FAKE_AWS_RESOLVE_MODE
+#                          4C 토큰 갈래의 모드 — ok(기본) · fail · empty · none ·
+#                          value(PCBENCH_FAKE_AWS_RESOLVE_VALUE_FILE 파일 내용을
+#                          바이트 그대로 낸 뒤 줄바꿈 하나).
+#   PCBENCH_FAKE_AWS_SSM_MODE
+#                          거부 목록 조회의 모드 — ok(기본 · 머리 줄 + 토큰 한
+#                          줄) · headeronly(머리 줄만) · notfound(종료 254) ·
+#                          blank(공백뿐) · noheader(머리 줄 없이 토큰 줄) ·
+#                          oversize(64 KiB 초과) · nul(머리 줄 뒤에 NUL) ·
+#                          value(PCBENCH_FAKE_AWS_SSM_VALUE_FILE 파일 내용 뒤
+#                          줄바꿈 하나).
 #   PCBENCH_FAKE_LOG_DIR   있으면 argv 를 aws.<n>.argv 에 한 줄에 하나씩 적는다.
 #
 # 모르는 호출 꼴이면 종료 2 — 시작 스크립트가 argv 를 바꾸면 드러난다.
@@ -28,6 +42,13 @@
 set -euo pipefail
 
 readonly FAKE_SECRET='pcbench-edge-proxy-fake-cdn-secret'
+# 4C 토큰 ARN(값이 아니다)과 그 갈래가 돌려주는 가짜 토큰.
+readonly FAKE_RESOLVE_ARN='pcbench-ingest-auth-fake-resolve-arn'
+readonly FAKE_RESOLVE_TOKEN='pcbench-ingest-auth-fake-resolve-token'
+readonly DENY_HEADER='# pokeclip deny-tokens v1'
+readonly FAKE_DENY_TOKEN='pcbench-deny-token-1'
+# 거부 목록 크기 상한(바이트) — oversize 모드가 넘긴다.
+readonly DENY_MAX_BYTES=65536
 # hang 모드가 머무는 시간(초) — 유닛 ExecStop 의 주 프로세스 대기 상한(30초)보다
 # 짧다.
 readonly HANG_SECONDS=10
@@ -70,18 +91,13 @@ current_mode() {
   printf '%s' "${mode}"
 }
 
-main() {
-  local mode
-  record_argv "$@"
-  if (( $# != 8 )) \
-    || [[ "$1 $2 $3" != 'secretsmanager get-secret-value --secret-id' \
-    || -z "$4" || "$5 $6 $7 $8" != '--query SecretString --output text' ]]
-  then
-    printf '가짜 aws: 모르는 호출\n' >&2
-    exit 2
-  fi
-  mode="$(current_mode)" || exit 2
-  case "${mode}" in
+#######################################
+# CDN 비밀 갈래 — 모드대로 값을 낸다.
+# Arguments:
+#   모드.
+#######################################
+cdn_secret() {
+  case "$1" in
     ok) printf '%s\n' "${FAKE_SECRET}" ;;
     special) printf '%s\n' "${SPECIAL_SECRET}" ;;
     multiline) printf '%s\nlogLevel: debug\n' "${FAKE_SECRET}" ;;
@@ -106,6 +122,90 @@ main() {
       exit 2
       ;;
   esac
+}
+
+#######################################
+# 4C 토큰 갈래 — PCBENCH_FAKE_AWS_RESOLVE_MODE 대로 값을 낸다.
+# Globals:
+#   PCBENCH_FAKE_AWS_RESOLVE_MODE, PCBENCH_FAKE_AWS_RESOLVE_VALUE_FILE
+#######################################
+resolve_token() {
+  case "${PCBENCH_FAKE_AWS_RESOLVE_MODE:-ok}" in
+    ok) printf '%s\n' "${FAKE_RESOLVE_TOKEN}" ;;
+    value)
+      cat -- "${PCBENCH_FAKE_AWS_RESOLVE_VALUE_FILE:?가짜 aws: 값 파일 없음}"
+      printf '\n'
+      ;;
+    empty) printf '\n' ;;
+    none) printf 'None\n' ;;
+    fail)
+      printf '가짜 aws: AccessDeniedException(시험)\n' >&2
+      exit 254
+      ;;
+    *)
+      printf '가짜 aws: 모르는 4C 모드\n' >&2
+      exit 2
+      ;;
+  esac
+}
+
+#######################################
+# 거부 목록 갈래 — PCBENCH_FAKE_AWS_SSM_MODE 대로 파라미터 값을 낸다(text 출력
+# 처럼 끝에 줄바꿈 하나).
+# Globals:
+#   PCBENCH_FAKE_AWS_SSM_MODE, PCBENCH_FAKE_AWS_SSM_VALUE_FILE
+#######################################
+deny_param() {
+  local i
+  case "${PCBENCH_FAKE_AWS_SSM_MODE:-ok}" in
+    ok) printf '%s\n%s\n' "${DENY_HEADER}" "${FAKE_DENY_TOKEN}" ;;
+    headeronly) printf '%s\n' "${DENY_HEADER}" ;;
+    blank) printf ' \t \n\n' ;;
+    noheader) printf '%s\n' "${FAKE_DENY_TOKEN}" ;;
+    oversize)
+      printf '%s\n' "${DENY_HEADER}"
+      for (( i = 0; i * 64 <= DENY_MAX_BYTES; i++ )); do
+        printf '%063d\n' "${i}"
+      done
+      ;;
+    nul) printf '%s\n%s\000\n' "${DENY_HEADER}" "${FAKE_DENY_TOKEN}" ;;
+    value)
+      cat -- "${PCBENCH_FAKE_AWS_SSM_VALUE_FILE:?가짜 aws: 값 파일 없음}"
+      printf '\n'
+      ;;
+    notfound)
+      printf '가짜 aws: ParameterNotFound(시험)\n' >&2
+      exit 254
+      ;;
+    *)
+      printf '가짜 aws: 모르는 SSM 모드\n' >&2
+      exit 2
+      ;;
+  esac
+}
+
+main() {
+  local mode
+  record_argv "$@"
+  if (( $# == 8 )) && [[ "$1 $2 $3" == 'ssm get-parameter --name' \
+    && -n "$4" && "$5 $6 $7 $8" == '--query Parameter.Value --output text' ]]
+  then
+    deny_param
+    return
+  fi
+  if (( $# != 8 )) \
+    || [[ "$1 $2 $3" != 'secretsmanager get-secret-value --secret-id' \
+    || -z "$4" || "$5 $6 $7 $8" != '--query SecretString --output text' ]]
+  then
+    printf '가짜 aws: 모르는 호출\n' >&2
+    exit 2
+  fi
+  if [[ "$4" == "${FAKE_RESOLVE_ARN}" ]]; then
+    resolve_token
+    return
+  fi
+  mode="$(current_mode)" || exit 2
+  cdn_secret "${mode}"
 }
 
 main "$@"

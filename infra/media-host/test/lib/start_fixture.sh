@@ -24,6 +24,8 @@
 readonly FIXTURE_FAKE_ARN='pcbench-edge-proxy-fake-arn'
 readonly FIXTURE_FAKE_ECR_HOST='pcbench-edge-proxy.invalid'
 readonly FIXTURE_FAKE_SECRET='pcbench-edge-proxy-fake-cdn-secret'
+# 응답기 모드 4C 토큰(가짜 aws 의 값) — 공통 노출 검사도 본다.
+readonly FIXTURE_FAKE_RESOLVE_TOKEN='pcbench-ingest-auth-fake-resolve-token'
 readonly FIXTURE_COMPOSE_VERSION='9.9.9-pcbench'
 readonly FIXTURE_PROJECT='pcbench-edge-proxy'
 readonly FIXTURE_RUN_TIMEOUT=20
@@ -283,24 +285,27 @@ fixture::prereq_order() {
 
 #######################################
 # 이번 실행의 공통 단언 — 인자가 없는 실행이면 선행 점검 세 항목이 정한
-# 순서로 기록되고, 시험 비밀이 가짜 명령 기록 · 스크립트 출력 어디에도 없다.
+# 순서로 기록되고, 시험 비밀(CDN · 4C 토큰)이 가짜 명령 기록 · 스크립트 출력
+# 어디에도 없다.
 # Globals:
 #   fixture_dir
 #######################################
 fixture::common_checks() {
-  local ok=0 order leaked
+  local ok=0 order leaked secret
   order="$(fixture::prereq_order)"
   if [[ "${order}" != "${FIXTURE_PREREQ_ORDER}" ]]; then
     harness::add_reason "선행 점검 기록 순서 「${order}」(기대 \
 「${FIXTURE_PREREQ_ORDER}」)"
     ok=1
   fi
-  leaked="$(fixture::files_with "${FIXTURE_FAKE_SECRET}" \
-    "${fixture_dir}/log" "${fixture_dir}/out" | awk 'END { print NR }')"
-  if (( leaked != 0 )); then
-    harness::add_reason "시험 비밀이 가짜 명령 기록 · 출력 ${leaked}곳에 있음"
-    ok=1
-  fi
+  for secret in "${FIXTURE_FAKE_SECRET}" "${FIXTURE_FAKE_RESOLVE_TOKEN}"; do
+    leaked="$(fixture::files_with "${secret}" "${fixture_dir}/log" \
+      "${fixture_dir}/out" | awk 'END { print NR }')"
+    if (( leaked != 0 )); then
+      harness::add_reason "시험 비밀이 가짜 명령 기록 · 출력 ${leaked}곳에 있음"
+      ok=1
+    fi
+  done
   return "${ok}"
 }
 

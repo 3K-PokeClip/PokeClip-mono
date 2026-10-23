@@ -92,6 +92,7 @@ auth_mode::run() {
   shift
   fixture::base_env MEDIA_MTX_TEMPLATE
   fixture_env+=("MEDIA_MTX_TEMPLATE=${tmpl}")
+  auth_input::add_env
   fixture::run start-media.sh "$@"
 }
 
@@ -291,6 +292,8 @@ auth_mode::check_contained() {
   auth_mode::check_only_in "${auth_read}" '읽기 잠금' "${mtx}" || ok=1
   auth_mode::check_only_in "${auth_api}" 'API 비밀번호' "${run}/${API_PASS_NAME}" \
     "${ia}/${API_PASS_NAME}" || ok=1
+  auth_mode::check_only_in "${AUTH_RESOLVE_TOKEN}" '4C 토큰' \
+    "${ia}/${AUTH_RESOLVE_NAME}" || ok=1
   return "${ok}"
 }
 
@@ -315,24 +318,30 @@ auth_mode::chown_is() {
 }
 
 #######################################
-# 응답기 모드 chown 기록 — 디렉터리(root) 뒤 임시 파일 넷이 차례로 MediaMTX ·
-# 사이드카 · 응답기 · 응답기 소유이고, 파일은 그 순간 0400 · 최종 경로 없음.
+# 응답기 모드 chown 기록 — 거부 목록 디렉터리 · 그 임시 파일(root:응답기) 뒤
+# 응답기 디렉터리(root) · 상태 디렉터리(응답기 — 디렉터리는 -h), 그 뒤 임시
+# 파일 다섯이 차례로 MediaMTX · 사이드카 · 응답기 셋 소유이고, 그 순간 0400 ·
+# 최종 경로 없음.
 # Globals:
 #   fixture_dir
 #######################################
 auth_mode::check_chown_records() {
-  local ok=0 run="${fixture_dir}/runtime" n
+  local ok=0 run="${fixture_dir}/runtime" n deny="${fixture_dir}/deny"
   local ia="${fixture_dir}/runtime/${AUTH_DIR_NAME}"
-  if [[ "$(fixture::count_records chown)" != 5 ]]; then
-    harness::add_reason "chown $(fixture::count_records chown)회(기대 5)"
+  if [[ "$(fixture::count_records chown)" != 9 ]]; then
+    harness::add_reason "chown $(fixture::count_records chown)회(기대 9)"
     ok=1
   fi
-  auth_mode::chown_is 1 "0:0 ${ia}" || ok=1
-  auth_mode::chown_is 2 "10002:10002 ${run}/.mediamtx.yml.*" || ok=1
-  auth_mode::chown_is 3 "10001:10001 ${run}/.${API_PASS_NAME}.*" || ok=1
-  auth_mode::chown_is 4 "${AUTH_OWNER} ${ia}/.${AUTH_BASIC_NAME}.*" || ok=1
-  auth_mode::chown_is 5 "${AUTH_OWNER} ${ia}/.${API_PASS_NAME}.*" || ok=1
-  for n in 2 3 4 5; do
+  auth_mode::chown_is 1 "-h 0:10003 ${deny}" || ok=1
+  auth_mode::chown_is 2 "0:10003 ${deny}/.${AUTH_DENY_NAME}.*" || ok=1
+  auth_mode::chown_is 3 "-h 0:0 ${ia}" || ok=1
+  auth_mode::chown_is 4 "-h ${AUTH_OWNER} ${ia}/state" || ok=1
+  auth_mode::chown_is 5 "10002:10002 ${run}/.mediamtx.yml.*" || ok=1
+  auth_mode::chown_is 6 "10001:10001 ${run}/.${API_PASS_NAME}.*" || ok=1
+  auth_mode::chown_is 7 "${AUTH_OWNER} ${ia}/.${AUTH_BASIC_NAME}.*" || ok=1
+  auth_mode::chown_is 8 "${AUTH_OWNER} ${ia}/.${API_PASS_NAME}.*" || ok=1
+  auth_mode::chown_is 9 "${AUTH_OWNER} ${ia}/.${AUTH_RESOLVE_NAME}.*" || ok=1
+  for n in 5 6 7 8 9; do
     if [[ "$(cat -- "${fixture_dir}/log/chown.${n}.state" 2>/dev/null)" \
       != 'perm=-r-------- final=absent core=0' ]]; then
       harness::add_reason "chown ${n} 순간 상태 「$(cat -- \
@@ -403,6 +412,7 @@ auth_mode::table_row() {
   fixture::new_case
   tmpl="${fixture_dir}.body.tmpl"
   auth_mode::write_body "${tmpl}" "$2" "$3" "$4" "$5" "$6"
+  [[ "${want}" != legacy ]] || auth_input::write_compose 0
   auth_mode::run "${tmpl}" || return 1
   case "${want}" in
     token)
@@ -600,6 +610,7 @@ auth_mode::owner_run() {
   fixture::base_env MEDIA_MTX_TEMPLATE
   fixture_env+=("MEDIA_MTX_TEMPLATE=${auth_mode_tmpl}"
     'INGEST_AUTH_UID=pcbench')
+  auth_input::add_env
   fixture::run start-media.sh
 }
 
@@ -697,7 +708,8 @@ auth_mode::seed_ingest_auth() {
   seed_runtime
   mkdir -p -- "${ia}/state"
   printf 'keep\n' >"${ia}/state/connlog.jsonl"
-  for name in "${AUTH_BASIC_NAME}" "${API_PASS_NAME}"; do
+  for name in "${AUTH_BASIC_NAME}" "${API_PASS_NAME}" "${AUTH_RESOLVE_NAME}"
+  do
     printf '%s\n' "${FIXTURE_FAKE_SECRET}" >"${ia}/${name}"
     printf '%s\n' "${FIXTURE_FAKE_SECRET}" >"${ia}/.${name}.AbC123"
     chmod 0400 "${ia}/${name}"
