@@ -403,6 +403,23 @@ describe('privacyNoteText: 편집본 상태마다 그 범위로 올라가게 하
     ).toBeNull();
   });
 
+  it('예약으로 올린 뒤 새 판을 저장해 편집 중이면 옛 판의 예약 시각을 말하지 않는다(PR #301 리뷰)', () => {
+    const at = '2026-10-23T09:00:00Z';
+    expect(
+      privacyNoteText(withUploadAt('editing', { privacyStatus: 'private', publishAt: at })),
+    ).toBeNull();
+    expect(
+      privacyNoteText(
+        withUploadAt('editing', {
+          status: 'failed',
+          error: { code: 'QUOTA_EXCEEDED', message: null },
+          privacyStatus: 'private',
+          publishAt: at,
+        }),
+      ),
+    ).toBeNull();
+  });
+
   it('확인 필요면 고른 범위만 말한다: 올라갔는지 모른다', () => {
     expect(
       privacyNoteText(withUploadAt('checking', { status: 'checking', privacyStatus: 'public' })),

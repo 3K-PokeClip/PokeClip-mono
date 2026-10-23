@@ -557,9 +557,15 @@ export function privacyNoteText(clip: LibraryClip): string | null {
   const upload = entry.latestClip?.upload;
   const privacy =
     upload != null ? upload.privacyStatus : (entry.uploadRequest?.privacyStatus ?? undefined);
-  // 예약 공개(POK-381): 비공개로 올리고 그 시각에 유튜브가 공개로 바꾼다. 업로드 줄이 생긴 뒤에만 시각을 안다
+  // 예약 공개(POK-381): 비공개로 올리고 그 시각에 유튜브가 공개로 바꾼다. 업로드 줄이 생긴 뒤에만 시각을 안다.
+  // 편집 중이면 latestClip이 옛 판이라 아래 switch처럼 말하지 않는다(새 판엔 예약이 없다, PR #301 리뷰)
   const publishAt = upload?.publishAt ?? null;
-  if (privacy === 'private' && publishAt !== null && entry.status !== 'failed') {
+  if (
+    privacy === 'private' &&
+    publishAt !== null &&
+    entry.status !== 'failed' &&
+    entry.status !== 'editing'
+  ) {
     const when = instantLabel(new Date(publishAt));
     return entry.status === 'uploaded'
       ? `「예약」 ${when}에 공개되도록 올렸어요. 그 전까지는 비공개예요. ${PRIVACY_CHANGE_NOTE}`
