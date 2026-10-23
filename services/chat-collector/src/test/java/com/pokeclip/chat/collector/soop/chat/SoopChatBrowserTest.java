@@ -153,6 +153,41 @@ class SoopChatBrowserTest {
         assertThat(archived).hasSize(2);
     }
 
+    /** 펌프는 한 탭에서만 기다리지만 다른 탭의 채팅도 온다(탭 셋, 방송마다 제 번호로) */
+    @Test
+    void 탭이_여럿이어도_탭마다_제_방송으로_받는다() {
+        sdk.script(Step.message("MESSAGE", "v1", "n1", "하나"));
+        sdk.script(Step.message("MESSAGE", "v2", "n2", "둘"));
+        sdk.script(Step.message("MESSAGE", "v3", "n3", "셋"));
+        start(10);
+
+        sessions.ensure("s-1", "bj-1", TOKEN);
+        sessions.ensure("s-2", "bj-2", TOKEN);
+        sessions.ensure("s-3", "bj-3", TOKEN);
+
+        List<PersistableChat> chats = new ArrayList<>();
+        await(() -> {
+            chats.addAll(buffer.drain(100));
+            return chats.size() >= 3;
+        });
+        assertThat(chats).extracting(c -> c.streamId() + ":" + c.channelId())
+                .containsExactlyInAnyOrder("s-1:bj-1", "s-2:bj-2", "s-3:bj-3");
+    }
+
+    /** Chromium이 죽으면 탭마다 오류로 알려 새 브라우저로 다시 붙는다(메모리 상한에 죽은 경우) */
+    @Test
+    void 브라우저가_죽으면_새로_띄워_다시_붙는다() {
+        start(10);
+        sessions.ensure("s-1", "bj-1", TOKEN);
+        sessions.ensure("s-2", "bj-2", TOKEN);
+        await(() -> sdk.connects.size() >= 2);
+
+        browser.crashForTest();
+
+        await(() -> sdk.connects.size() >= 4);
+        assertThat(sessions.size()).isEqualTo(2);
+    }
+
     @Test
     void 연결이_닫히면_다시_붙고_다음_채팅을_받는다() {
         sdk.script(Step.message("MESSAGE", "v1", "n1", "첫째"), Step.closed());

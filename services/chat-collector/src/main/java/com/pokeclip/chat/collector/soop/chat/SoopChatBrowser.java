@@ -102,10 +102,16 @@ public class SoopChatBrowser implements AutoCloseable {
 
     private void doOpen(String streamId, String token) {
         doClose(streamId);
+        if (browser != null && !browser.isConnected()) {
+            // 끊긴 브라우저를 계속 쓰면 newContext가 영영 던진다(메모리 상한에 죽은 경우 등). 버리고 새로 띄운다
+            discardBrowser();
+        }
         if (browser == null) {
             playwright = Playwright.create();
             BrowserType.LaunchOptions options = new BrowserType.LaunchOptions().setHeadless(true);
             browser = playwright.chromium().launch(options);
+            // 🔴 Chromium이 죽으면(메모리 상한 · 충돌) 모든 탭이 조용히 멈춘다. 탭마다 오류로 알려 다시 붙기 줄에 태우고 브라우저를 버린다
+            browser.onDisconnected(gone -> onBrowserLost());
             log.info("soop.chat.browser_started");
         }
         BrowserContext context = browser.newContext();
@@ -127,6 +133,42 @@ public class SoopChatBrowser implements AutoCloseable {
             log.warn("soop.chat.page_failed stream={} causeType={}", streamId, e.getClass().getSimpleName());
             listener.onError(streamId, "PAGE");
         }
+    }
+
+    /** 브라우저가 끊겼다(브라우저 스레드). 열려 있던 탭마다 오류로 알리고, 다음 열기가 새 브라우저를 띄우게 버린다. */
+    private void onBrowserLost() {
+        if (!running) {
+            return;
+        }
+        java.util.List<String> lost = java.util.List.copyOf(tabs.keySet());
+        tabs.clear();
+        log.warn("soop.chat.browser_lost tabs={}", lost.size());
+        for (String streamId : lost) {
+            listener.onError(streamId, "BROWSER_LOST");
+        }
+    }
+
+    /** 끊긴 브라우저와 Playwright를 조용히 치운다. 다음 열기가 새로 띄운다. */
+    private void discardBrowser() {
+        tabs.clear();
+        try {
+            if (playwright != null) {
+                playwright.close();
+            }
+        } catch (RuntimeException e) {
+            log.warn("soop.chat.browser_close_failed causeType={}", e.getClass().getSimpleName());
+        }
+        browser = null;
+        playwright = null;
+    }
+
+    /** 시험용: 브라우저를 밖에서 끊긴 것처럼 닫는다(Chromium이 죽은 경우를 흉내). */
+    void crashForTest() {
+        commands.add(() -> {
+            if (browser != null) {
+                browser.close();
+            }
+        });
     }
 
     private void onPageEvent(String streamId, Object[] args) {
