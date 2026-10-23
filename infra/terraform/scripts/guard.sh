@@ -2,7 +2,7 @@
 #
 # Terraform 트리의 금지 규약을 검사한다(README 「guard 규칙」).
 #
-# 규칙 R1 ~ R13 은 conftest(`--parser hcl2`)로 돌리는 Rego 정책
+# 규칙 R1 ~ R14 는 conftest(`--parser hcl2`)로 돌리는 Rego 정책
 # (`../policy/guard`)이 판정한다. 이 스크립트는 얇은 실행기다 — 파서가 볼 수
 # 없는 R0(`.tf.json` · 심볼릭 링크 · 숨김 · 줄바꿈 · 제어 문자 이름 · conftest
 # 설정 파일)를 직접 보고, 설정 파일이 있으면 conftest 를 부르지 않고 멈추고,

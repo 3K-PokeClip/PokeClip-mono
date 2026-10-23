@@ -11,7 +11,7 @@ locals {
   log_retention_days = 30
   discovery_domain   = "pokeclip.internal"
 
-  # chat-collector 는 POK-408 이 같은 네임스페이스에 등록한다(이름 · 포트 계약).
+  # chat-collector 는 POK-306 이 같은 네임스페이스에 등록한다(이름 · 포트 계약).
   collector_base_url = "http://chat-collector.${local.discovery_domain}:8083"
 
   account_id = data.aws_caller_identity.current.account_id
@@ -20,6 +20,15 @@ locals {
   service_images = {
     for name in keys(var.services) :
     name => "${data.terraform_remote_state.registry.outputs.repo_urls[name]}@${var.image_digests[name]}"
+  }
+
+  # 리스너 규칙이 붙은 뒤의 ARN(아래 public_routed_target_groups).
+  routed_target_group_arns = terraform_data.public_routed_target_groups.output
+
+  service_target_group_arns = {
+    next = [local.routed_target_group_arns["next"]]
+    auth = [local.routed_target_group_arns["auth"]]
+    clip = [local.routed_target_group_arns["clip"], local.routed_target_group_arns["clip-sse"]]
   }
 
   service_sg_ids = {
@@ -49,6 +58,9 @@ locals {
       {
         # 로드밸런서 뒤 — 명시하지 않으면 application.yml 의 none 이 남는다.
         FORWARD_HEADERS_STRATEGY = "native"
+        # X-Forwarded-For 를 믿을 소켓 대역 — ALB · next 가 VPC 안이다(app · api 는
+        # CloudFront 없이 ALB 직접). 비면 auth 가 아무 프록시도 안 믿는다(POK-316).
+        FORWARD_HEADERS_TRUSTED_PROXIES = local.network.vpc_cidr
         # prod 는 처음부터 Secrets Manager(PG 이관 없음) — 접두 · 작업 역할
         # StreamKeySecrets 와 짝이다. application.yml 기본값은 postgres 다.
         STREAM_KEY_SECRET_STORE_TYPE  = "aws"
@@ -59,7 +71,6 @@ locals {
         CLIP_BASE_URL      = "http://clip.${local.discovery_domain}:${var.services.clip.port}"
         COLLECTOR_BASE_URL = local.collector_base_url
       },
-      { for key, value in { SERVER_TOMCAT_REMOTEIP_INTERNALPROXIES = var.auth_internal_proxies } : key => value if value != "" },
     )
     clip = merge(
       try(local.runtime.app_env.clip, {}),
@@ -70,6 +81,8 @@ locals {
         PLAYBACK_COOKIE_DOMAIN = var.playback_cookie_domain
         AUTH_BASE_URL          = "http://auth.${local.discovery_domain}:${var.services.auth.port}"
         CORS_ALLOWED_ORIGINS   = var.cors_allowed_origins
+        # 비어도 부팅은 되지만 채팅 문 셋(수집기 경유)이 503 이다.
+        COLLECTOR_BASE_URL = local.collector_base_url
         # 서명 값 셋 중 하나라도 빠지면 부팅을 거부한다(POK-321).
         PLAYBACK_REQUIRED = "true"
       },
@@ -110,6 +123,17 @@ resource "aws_ecs_cluster" "this" {
   name = local.name_prefix
 }
 
+# 공개 ALB 대상 그룹 ARN 을 리스너 · 리스너 규칙이 다 생긴 뒤에 내보내는 다리.
+# 리스너 규칙에 안 붙은 대상 그룹이면 ECS CreateService 가 「does not have an
+# associated load balancer」 로 거부한다. 서비스가 이 출력으로 대상 그룹을 받아
+# 규칙을 기다린다. 모듈 호출의 depends_on 은 쓰지 않는다 — 모듈 안 data 읽기가
+# apply 로 밀려, ALB 만 바뀌어도 태스크 정의가 교체된다.
+resource "terraform_data" "public_routed_target_groups" {
+  input = module.public_alb.target_group_arns
+
+  depends_on = [module.public_alb]
+}
+
 resource "aws_service_discovery_private_dns_namespace" "this" {
   name        = local.discovery_domain
   description = "prod ECS services"
@@ -133,7 +157,7 @@ module "next" {
   log_retention_days     = local.log_retention_days
   env                    = local.service_env.next
   secrets                = local.service_secrets.next
-  target_group_arns      = [module.public_alb.target_group_arns["next"]]
+  target_group_arns      = local.service_target_group_arns.next
   discovery_namespace_id = aws_service_discovery_private_dns_namespace.this.id
   egress_targets         = local.egress_targets.next
   task_role_statements   = local.task_role_statements.next
@@ -156,7 +180,7 @@ module "auth" {
   log_retention_days     = local.log_retention_days
   env                    = local.service_env.auth
   secrets                = local.service_secrets.auth
-  target_group_arns      = [module.public_alb.target_group_arns["auth"]]
+  target_group_arns      = local.service_target_group_arns.auth
   discovery_namespace_id = aws_service_discovery_private_dns_namespace.this.id
   egress_targets         = local.egress_targets.auth
   task_role_statements   = local.task_role_statements.auth
@@ -181,7 +205,7 @@ module "clip" {
   log_retention_days     = local.log_retention_days
   env                    = local.service_env.clip
   secrets                = local.service_secrets.clip
-  target_group_arns      = [module.public_alb.target_group_arns["clip"], module.public_alb.target_group_arns["clip-sse"]]
+  target_group_arns      = local.service_target_group_arns.clip
   discovery_namespace_id = aws_service_discovery_private_dns_namespace.this.id
   egress_targets         = local.egress_targets.clip
   task_role_statements   = local.task_role_statements.clip

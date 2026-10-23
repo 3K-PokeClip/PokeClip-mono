@@ -304,10 +304,17 @@ run "auth_trusts_forwarded_headers_natively" {
     error_message = "auth FORWARD_HEADERS_STRATEGY 가 native 가 아니다."
   }
 
-  # 빈 값이면 톰캣 기본 신뢰 대역(사설망 · 루프백)을 쓴다 — env 를 넣지 않는다.
+  # 신뢰 대역 = network vpc_cidr(가짜 192.0.2.0/24) — ALB · next 가 VPC 안이다.
+  # auth 는 빈 값을 「아무 프록시도 안 믿음」 으로 읽는다(POK-316).
+  assert {
+    condition     = try(local.service_env.auth["FORWARD_HEADERS_TRUSTED_PROXIES"], "") == "192.0.2.0/24"
+    error_message = "auth FORWARD_HEADERS_TRUSTED_PROXIES 가 network vpc_cidr 가 아니다."
+  }
+
+  # 옛 이름(톰캣 속성 직접 지정)은 쓰지 않는다 — POK-316 계약 이름은 위 하나다.
   assert {
     condition     = !contains(keys(local.service_env.auth), "SERVER_TOMCAT_REMOTEIP_INTERNALPROXIES")
-    error_message = "auth_internal_proxies 가 빈 값인데 internal-proxies env 가 있다."
+    error_message = "auth 에 옛 신뢰 대역 env(SERVER_TOMCAT_REMOTEIP_INTERNALPROXIES)가 남아 있다."
   }
 
   # 탈퇴 정리(withdrawal-purge)가 부르는 주소 — 비면 auth 가 부팅하지 않는다.
@@ -380,19 +387,6 @@ run "rejects_public_ingest_without_approval" {
   }
 
   expect_failures = [var.ingest_allowed_cidrs]
-}
-
-run "auth_internal_proxies_variable_sets_env" {
-  command = plan
-
-  variables {
-    auth_internal_proxies = "192\\.0\\.2\\.\\d{1,3}"
-  }
-
-  assert {
-    condition     = local.service_env.auth["SERVER_TOMCAT_REMOTEIP_INTERNALPROXIES"] == "192\\.0\\.2\\.\\d{1,3}"
-    error_message = "auth_internal_proxies 값이 internal-proxies env 로 들어가지 않는다."
-  }
 }
 
 # --- 앱 DB IAM 인증(POK-407) ---
