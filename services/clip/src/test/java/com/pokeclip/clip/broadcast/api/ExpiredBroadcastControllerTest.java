@@ -291,6 +291,22 @@ class ExpiredBroadcastControllerTest extends IntegrationTestSupport {
         assertThat(Instant.parse(a.get("segmentsUntil").asString())).isEqualTo(p끝.minus(Duration.ofMinutes(2)));
     }
 
+    /**
+     * 렌더가 열려 있는(주문됨 · 만드는 중) 방송은 끝날 때까지 안 낸다: 일꾼이 그 조각을 나중에 읽는다(PR #348 codex). 끝나면(완성 ·
+     * 실패) 낸다. 표시를 지나쳐도 1번의 하루 한 번 처음부터 훑기가 거둔다
+     */
+    @Test
+    void 렌더가_열려_있는_방송은_끝날_때까지_안_낸다() throws Exception {
+        방송("S-render", "k-1", T0, T0.plusSeconds(60), 지금.minusSeconds(60));
+        방송("S-plain", "k-2", T0, T0.plusSeconds(60), 지금.minusSeconds(60));
+        long clip = 영상("S-render", "rendering");
+
+        assertThat(번호들(부른다(지금, null))).containsExactly("S-plain");
+
+        jdbc.update("UPDATE clips SET status = 'failed' WHERE id = ?", clip);
+        assertThat(번호들(부른다(지금, null))).containsExactlyInAnyOrder("S-render", "S-plain");
+    }
+
     /** 다른 물리 키의 방송은 이웃이 아니다 */
     @Test
     void 다른_물리_키의_방송은_구간에_영향이_없다() throws Exception {
@@ -411,6 +427,16 @@ class ExpiredBroadcastControllerTest extends IntegrationTestSupport {
                 INSERT INTO broadcasts (stream_id, streamer_id, status, started_at, ended_at, vod_expires_at, ingest_stream_id, last_sequence)
                 VALUES (?, 'u', ?, ?, ?, ?, ?, 1)""",
                 streamId, endedAt == null ? "live" : "ended", at(startedAt), at(endedAt), at(expiresAt), ingest);
+    }
+
+    private long 영상(String streamId, String status) {
+        long recipe = jdbc.queryForObject("""
+                INSERT INTO recipes (stream_id, creator_id, schema_version, recipe_version, cut_in_at_ms, cut_out_at_ms,
+                                     outputs, audio, updated_at)
+                VALUES (?, 'u', 1, 1, 0, 1000, '[]'::jsonb, '{}'::jsonb, now()) RETURNING id""", Long.class, streamId);
+        return jdbc.queryForObject("""
+                INSERT INTO clips (stream_id, recipe_id, recipe_version, requested_by, status, updated_at)
+                VALUES (?, ?, 1, 'u', ?, now()) RETURNING id""", Long.class, streamId, recipe, status);
     }
 
     private static OffsetDateTime at(Instant t) {

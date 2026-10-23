@@ -29,6 +29,10 @@ import java.util.List;
  * 「끝없이」를 낼 수는 없고, 적게 지우는 쪽이 안전하다(PR #348 claude).
  * 이렇게 자르면 조각 하나가 정확히 한 방송에만 속하고, 안 만료된 이웃 방송의 조각(자리 − 2분부터)은 어느 구간에도 안 든다.
  *
+ * <p>렌더가 열려 있는(주문됨 · 만드는 중) 방송은 안 낸다: 주문서에 조각 키를 실어 일꾼이 나중에 읽으므로, 그 사이 1번이 지우면
+ * 정상 접수된 렌더가 원본 없이 실패한다(PR #348 codex). 끝나면(완성 · 실패 · 실패 큐 정리) 다음에 나온다. 이어받기 표시가 그 줄을
+ * 지나쳤으면 1번의 하루 한 번 처음부터 훑기가 거둔다. 만료 뒤 새 렌더 주문은 410이라 열린 렌더는 만료 전 주문뿐이다.
+ *
  * <p>시각은 조각 장부의 벽시계 칸({@code start_wall_utc})으로 쓰라고 계약에 적는다. 이 클래스는 구간만 계산하고 장부를 안 읽는다.
  */
 @Component
@@ -47,6 +51,8 @@ public class ExpiredBroadcastReader {
                  WHERE b.vod_expires_at IS NOT NULL
                    AND b.vod_expires_at < ?
                    AND (b.vod_expires_at, b.id) > (TIMESTAMPTZ 'epoch' + ? * INTERVAL '1 microsecond', ?)
+                   AND NOT EXISTS (SELECT 1 FROM clips c
+                                    WHERE c.stream_id = b.stream_id AND c.status IN ('queued', 'rendering'))
                  ORDER BY b.vod_expires_at, b.id
                  LIMIT ?
             )
