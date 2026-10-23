@@ -1,6 +1,7 @@
 package com.pokeclip.chat.collector.archive;
 
 import ch.qos.logback.classic.Level;
+import com.pokeclip.chat.collector.Platform;
 import com.pokeclip.web.support.LogCaptor;
 import org.junit.jupiter.api.Test;
 
@@ -30,7 +31,7 @@ class MinuteBatcherTest {
 
         assertThat(closed).hasSize(1);
         ArchiveObject obj = closed.get(0);
-        assertThat(obj.key()).isEqualTo("chat/CH/2026-08-15/10/1023-r1.jsonl");
+        assertThat(obj.key()).isEqualTo("chat/CHZZK/CH/2026-08-15/10/1023-r1.jsonl");
         assertThat(obj.messageCount()).isEqualTo(2);
         assertThat(new String(obj.bytes(), StandardCharsets.UTF_8).split("\n")).hasSize(2);
         assertThat(batcher.openWindows()).isEqualTo(1);   // 10:24 창이 열려 있다
@@ -56,13 +57,13 @@ class MinuteBatcherTest {
         batcher.accept(List.of(chat("A", T0 + 1), chat("B", T0 + 2)), T0 + 10);
         List<ArchiveObject> closed = batcher.closeAll();
         assertThat(closed).extracting(ArchiveObject::key)
-                .containsExactlyInAnyOrder("chat/A/2026-08-15/10/1023-r1.jsonl", "chat/B/2026-08-15/10/1023-r1.jsonl");
+                .containsExactlyInAnyOrder("chat/CHZZK/A/2026-08-15/10/1023-r1.jsonl", "chat/CHZZK/B/2026-08-15/10/1023-r1.jsonl");
     }
 
     @Test
     void 인코드가_깨지는_한_건은_세고_버리되_창은_산다() {
         // raw가 null이면 인코더가 예외를 던진다 — 그 한 건 때문에 창(=다른 채팅)이 죽으면 안 된다.
-        ArchivableChat broken = new ArchivableChat("CH", T0 + 1, null);
+        ArchivableChat broken = new ArchivableChat(Platform.CHZZK, "CH", T0 + 1, null);
         batcher.accept(List.of(chat("CH", T0), broken, chat("CH", T0 + 2)), T0 + 10);
         List<ArchiveObject> closed = batcher.closeAll();
         assertThat(closed).hasSize(1);
@@ -75,14 +76,14 @@ class MinuteBatcherTest {
         // 유예로 10:23 창이 닫힌 뒤(now = 10:24:02) 10:23:59.9 채팅이 뒤늦게 온다(바구니 밀림·시계 역행).
         batcher.accept(List.of(chat("CH", T0 + 100)), T0 + 500);
         List<ArchiveObject> first = batcher.accept(List.of(), T0 + 62_000);
-        assertThat(first).extracting(ArchiveObject::key).containsExactly("chat/CH/2026-08-15/10/1023-r1.jsonl");
+        assertThat(first).extracting(ArchiveObject::key).containsExactly("chat/CHZZK/CH/2026-08-15/10/1023-r1.jsonl");
         // 뒤늦은 채팅으로 다시 열린 창은 틱 시각이 이미 유예를 넘어 같은 accept 안에서 닫힌다 — 그래서 반환값에서 받는다.
         List<ArchiveObject> second = batcher.accept(List.of(chat("CH", T0 + 59_900)), T0 + 62_500);
-        assertThat(second).extracting(ArchiveObject::key).containsExactly("chat/CH/2026-08-15/10/1023-r1-2.jsonl");
+        assertThat(second).extracting(ArchiveObject::key).containsExactly("chat/CHZZK/CH/2026-08-15/10/1023-r1-2.jsonl");
         assertThat(batcher.reopenedCount()).isEqualTo(1);
         // 세 번째 재열림은 -3
         List<ArchiveObject> third = batcher.accept(List.of(chat("CH", T0 + 59_950)), T0 + 63_000);
-        assertThat(third).extracting(ArchiveObject::key).containsExactly("chat/CH/2026-08-15/10/1023-r1-3.jsonl");
+        assertThat(third).extracting(ArchiveObject::key).containsExactly("chat/CHZZK/CH/2026-08-15/10/1023-r1-3.jsonl");
         assertThat(batcher.closeAll()).isEmpty();
     }
 
@@ -116,13 +117,13 @@ class MinuteBatcherTest {
         batcher.accept(List.of(chat("CH", later + 100)), later + 500);
         batcher.accept(List.of(), later + 62_000);                                   // 그 창을 닫으며 옛 열쇠를 잊는다
         List<ArchiveObject> reopened = batcher.accept(List.of(chat("CH", T0 + 59_900)), later + 62_500);
-        assertThat(reopened).extracting(ArchiveObject::key).containsExactly("chat/CH/2026-08-15/10/1023-r1.jsonl");
+        assertThat(reopened).extracting(ArchiveObject::key).containsExactly("chat/CHZZK/CH/2026-08-15/10/1023-r1.jsonl");
         assertThat(batcher.reopenedCount()).isZero();
     }
 
     @Test
     void 채널_첫_건이_인코드에_실패하면_창을_열지_않아_빈_파일이_안_생긴다() {
-        batcher.accept(List.of(new ArchivableChat("CH", T0 + 1, null)), T0 + 10);
+        batcher.accept(List.of(new ArchivableChat(Platform.CHZZK, "CH", T0 + 1, null)), T0 + 10);
         assertThat(batcher.openWindows()).isZero();
         assertThat(batcher.closeAll()).isEmpty();
         assertThat(batcher.encodeFailures()).isEqualTo(1);
@@ -136,7 +137,50 @@ class MinuteBatcherTest {
         assertThat(batcher.closeAll()).isEmpty();
     }
 
+    /**
+     * 같은 분·같은 아이디라도 플랫폼이 다르면 창도 파일도 따로다. 창 열쇠가 채널만 보면 두 플랫폼의 채팅이 한 파일에 섞이고, 그
+     * 파일은 한쪽 폴더에만 가서 다른 쪽 탈퇴 정리가 남의 채팅까지 지운다.
+     */
+    @Test
+    void 같은_분_같은_아이디라도_플랫폼이_다르면_다른_파일이다() {
+        batcher.accept(List.of(chat(Platform.CHZZK, "same", T0 + 100), chat(Platform.SOOP, "same", T0 + 200),
+                chat(Platform.SOOP, "same", T0 + 300)), T0 + 500);
+        assertThat(batcher.openWindows()).isEqualTo(2);
+
+        List<ArchiveObject> closed = batcher.closeAll();
+
+        assertThat(closed).extracting(ArchiveObject::key, ArchiveObject::messageCount).containsExactlyInAnyOrder(
+                org.assertj.core.groups.Tuple.tuple("chat/CHZZK/same/2026-08-15/10/1023-r1.jsonl", 1),
+                org.assertj.core.groups.Tuple.tuple("chat/SOOP/same/2026-08-15/10/1023-r1.jsonl", 2));
+    }
+
+    /**
+     * 재열림 순번도 플랫폼마다 센다. 순번 맵이 채널만 보면 치지직 창이 닫힌 뒤 처음 열리는 SOOP 창이 「다시 열림」으로 세어져
+     * {@code -2}가 붙는다(파일은 안 섞이지만 거짓 재열림이 로그와 접미에 남는다, 계획 검증 F2-7).
+     */
+    @Test
+    void 재열림_순번은_플랫폼마다_따로_센다() {
+        batcher.accept(List.of(chat(Platform.CHZZK, "same", T0 + 100)), T0 + 500);
+        assertThat(batcher.accept(List.of(), T0 + 62_000)).extracting(ArchiveObject::key)
+                .containsExactly("chat/CHZZK/same/2026-08-15/10/1023-r1.jsonl");
+
+        List<ArchiveObject> soop = batcher.accept(List.of(chat(Platform.SOOP, "same", T0 + 59_900)), T0 + 62_500);
+        assertThat(soop).extracting(ArchiveObject::key)
+                .as("SOOP의 그 분은 처음 열린 창이다")
+                .containsExactly("chat/SOOP/same/2026-08-15/10/1023-r1.jsonl");
+        assertThat(batcher.reopenedCount()).isZero();
+
+        List<ArchiveObject> chzzk = batcher.accept(List.of(chat(Platform.CHZZK, "same", T0 + 59_950)), T0 + 63_000);
+        assertThat(chzzk).extracting(ArchiveObject::key)
+                .containsExactly("chat/CHZZK/same/2026-08-15/10/1023-r1-2.jsonl");
+        assertThat(batcher.reopenedCount()).isEqualTo(1);
+    }
+
     private static ArchivableChat chat(String ch, long receivedAt) {
-        return new ArchivableChat(ch, receivedAt, "{\"t\":" + receivedAt + "}");
+        return chat(Platform.CHZZK, ch, receivedAt);
+    }
+
+    private static ArchivableChat chat(Platform platform, String ch, long receivedAt) {
+        return new ArchivableChat(platform, ch, receivedAt, "{\"t\":" + receivedAt + "}");
     }
 }

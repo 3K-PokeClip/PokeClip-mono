@@ -130,7 +130,12 @@ public class WithdrawalService {
         chzzkLinkWriter.revoke(userId, now);
         youtubeLinkWriter.revoke(userId, now);
         // SOOP은 닫는 문장이 아이디·닉네임까지 비운다(약관 제11조 ⑰). 아래 POK-341 비우기 줄과 별개다(그 줄은 두 연동 표만).
-        // 탈퇴 장부(withdrawal_purge_jobs)에는 안 적는다: SOOP 채팅 데이터가 아직 없다(POK-397이 수집기 몫을 더한다).
+        //
+        // 🔴 그래서 수집기 정리에 넘길 SOOP 아이디는 <b>닫기 전에</b> 읽어 탈퇴 장부에 적는다(POK-397). 뒤로 옮기면 아이디가
+        // 비어 있어 SOOP 채팅·후원·방송 정보가 60일 보관으로만 지워진다. 회원 행 락 뒤라 그 사이 다른 연동이 끼지 못한다.
+        // JDBC라 영속성 컨텍스트를 안 건드린다(아래 재조회 규칙과 무관). 살아 있는 연동만 본다: 이미 해제한 연동은 아이디가
+        // 없다(남은 한계, PurgeJobRepository.aliveSoopUserId).
+        purgeJobs.aliveSoopUserId(userId).ifPresent(soopUserId -> purgeJobs.enqueueSoop(userId, soopUserId, now));
         soopLinkWriter.revokeForWithdrawal(userId, now);
 
         // 🔴 편집자 관계는 양쪽 방향을 다 닫는다. 이 회원은 남의 편집자이기도 하고 자기 방송의

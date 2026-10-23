@@ -33,7 +33,7 @@ Java 21 · Spring Boot 4.1 · Gradle 멀티모듈 · PostgreSQL · Redis
 |---|---|
 | `auth` | `users` · `refresh_tokens` · `secrets` · `stream_keys` · `pairing_codes` · `pairing_exchange_attempts` |
 | `clip` | `broadcasts` · `broadcast_events` (V201) · `jump_cards` (V202) · `broadcasts.vod_expires_at` (V203, POK-117) · `recipes` (V206, POK-124) · `clips` · `render_jobs` · `render_job_events` (V207, POK-125) · **`clips` 색인 `idx_clips_recipe` (V208, POK-243)** |
-| chat 계열 | `chat_messages` (V301 · `stream_id` 칸은 V302 · **닉네임·역할 칸은 V306**) · `chat_ended_streams` (V303) · **`chat_donations` (V307)** · **`broadcast_info` (V308)** · **`chat_ingest_keys` (V310, POK-233)** — **collector가 쓰고 detector가 읽는다.** 같은 담당(3번)·같은 V3xx 대역의 공동 소유라, 아래 "서로의 표를 직접 읽지 않는다"의 예외가 아니라 한 소유자의 두 프로세스다 |
+| chat 계열 | `chat_messages` (V301 · `stream_id` 칸은 V302 · **닉네임·역할 칸은 V306**) · `chat_ended_streams` (V303) · **`chat_donations` (V307)** · **`broadcast_info` (V308)** · **`chat_ingest_keys` (V310, POK-233)** · **`purged_channels` (V311, POK-256)** · **표 넷의 `platform` 칸과 플랫폼을 앞에 둔 색인 (V313~V315, POK-397)** — **collector가 쓰고 detector가 읽는다.** 같은 담당(3번)·같은 V3xx 대역의 공동 소유라, 아래 "서로의 표를 직접 읽지 않는다"의 예외가 아니라 한 소유자의 두 프로세스다 |
 | `chat-detector` | `chat_metrics` (V401, POK-120) — **판별 서버 단독 소유다.** 위 `chat_messages`와 달리 공동 소유가 아니라 이 서버만 읽고 쓴다 |
 
 **서로의 표를 직접 읽지 않는다.** 필요하면 계약4의 `POST /internal/stream-keys/resolve`로
@@ -140,12 +140,13 @@ set -a && . ../.env && set +a
 **`auth`가 부팅 검증·배포 명부로 보는 환경변수는 서른하나다.**
 스물일곱은 다섯 갈래로 나뉘고 갈래마다 「없으면 어떻게 되나」가 다르다.
 나머지 넷(`FORWARD_HEADERS_STRATEGY`와 스트림키 암호 저장소 셋)은 기본값이 있는 배포 변수라 표 아래에 따로 적는다.
-이 셈에 안 드는 셋이 더 있다: `DB_HOST`·`DB_PORT`(기본 `localhost`·`5432`, `.env`에 없어 기본값을 남겼다)·`AWS_REGION`(기본 `ap-northeast-2`).
-셋 다 없어도 뜨고 검사 대상도 아니라 세지 않는다.
+이 셈에 안 드는 넷이 더 있다: `DB_HOST`·`DB_PORT`(기본 `localhost`·`5432`, `.env`에 없어 기본값을 남겼다)·`AWS_REGION`(기본 `ap-northeast-2`)·
+`FORWARD_HEADERS_TRUSTED_PROXIES`(기본 Boot 신뢰 대역, 운영 전용. 아래 「프록시 뒤 실제 IP」 절, POK-316).
+넷 다 없어도 뜨고 배포 명부 대상도 아니라 세지 않는다.
 🔴 **`GOOGLE_REDIRECT_URI`도 안 든다.** yml에 기본값(`http://localhost:3000/auth/callback`)이 있어 부팅 검증에는 안 걸리는데,
 compose는 `${GOOGLE_REDIRECT_URI:?}`로 **없으면 컨테이너가 아예 안 뜨게** 걸어 뒀고 `.env.dev.example`에도 있다.
-즉 로컬 `bootRun`에는 없어도 되고 dev 배포에는 반드시 있어야 해서, 「앱 시크릿 열다섯」에도 「안 드는 셋」에도 자리가 없다.
-**yml 실물은 서른다섯이다**(위 서른하나 + 안 드는 셋 + 이것).
+즉 로컬 `bootRun`에는 없어도 되고 dev 배포에는 반드시 있어야 해서, 「앱 시크릿 열다섯」에도 「안 드는 넷」에도 자리가 없다.
+**yml 실물은 서른여섯이다**(위 서른하나 + 안 드는 넷 + 이것).
 
 | 갈래 | 변수 | 없으면 | 어디서 얻나 |
 |---|---|---|---|
@@ -153,7 +154,7 @@ compose는 `${GOOGLE_REDIRECT_URI:?}`로 **없으면 컨테이너가 아예 안 
 | **DB 접속값 셋** | `POSTGRES_DB` · `POSTGRES_USER` · `POSTGRES_PASSWORD` | **부팅 실패**(DB가 접속을 거절한다) | `.env`에 있다. 위 실행 절차의 `set -a && . ../.env` 줄이 싣는다 |
 | **사진 창고 다섯**(POK-207) | `PROFILE_PHOTO_S3_BUCKET` · `PROFILE_PHOTO_TOKEN_SECRET` · `PROFILE_PHOTO_BASE_URL` · `PROFILE_PHOTO_S3_ENDPOINT` · `PROFILE_PHOTO_S3_FORCE_PATH_STYLE` | **그냥 뜬다. 사진 기능만 꺼진다** | 창고는 1번이 판다. 로컬은 가짜 저장소(LocalStack)를 띄워 쓴다 |
 | **탈퇴 정리 알림 주소 둘**(POK-256) | `CLIP_BASE_URL` · `COLLECTOR_BASE_URL` | **부팅 실패**(`@NotBlank`). 비어 있으면 탈퇴한 사람의 방송·채팅 기록이 **조용히 남기** 때문이다 | 서버끼리 붙는 주소다. compose 안은 기본값(`http://clip:8081` · `http://chat-collector:8083`)이라 `.env`는 비워 둔다. 로컬은 `http://localhost:8081` · `:8083` |
-| **resolve 전용 출입증 둘**(계약4 4C) | `STREAM_KEY_RESOLVE_TOKEN` · `STREAM_KEY_RESOLVE_ALLOWED_CIDRS` | **그냥 뜬다. 전용 창구만 닫힌다** — 토큰이 없으면 전용 헤더(`X-Stream-Key-Resolve-Token`) resolve 요청은 늘 401이다. 공용 `X-Internal-Token` resolve는 그대로다. 🔴 토큰을 채우면 조건이 붙는다 — 대역이 비었거나 IPv4 CIDR가 아니거나, `FORWARD_HEADERS_STRATEGY`가 `none`이 아니거나, 톰캣 remoteip 헤더 속성이 있거나, 토큰이 `INTERNAL_API_TOKEN`과 같으면 **부팅 실패** | 토큰은 `openssl rand -hex 32`, 대역은 media-dev 사설 주소 `/32` 하나다. dev는 1번이 두 박스(auth `.env` · media-dev)에 같은 토큰을 한 자리에서 넣는다. 운영 auth는 이 창구를 안 써서 비워 둔다 |
+| **resolve 전용 출입증 둘**(계약4 4C) | `STREAM_KEY_RESOLVE_TOKEN` · `STREAM_KEY_RESOLVE_ALLOWED_CIDRS` | **그냥 뜬다. 전용 창구만 닫힌다** — 토큰이 없으면 전용 헤더(`X-Stream-Key-Resolve-Token`) resolve 요청은 늘 401이다. 공용 `X-Internal-Token` resolve는 그대로다. 🔴 토큰을 채우면 조건이 붙는다 — 대역이 비었거나 IPv4 CIDR가 아니거나, `FORWARD_HEADERS_STRATEGY`가 `none`·`native`가 아니거나(POK-316 전에는 `none`만), 톰캣 remoteip 헤더 이름 속성(`remote-ip-header`·`protocol-header`)이 있거나, 토큰이 `INTERNAL_API_TOKEN`과 같으면 **부팅 실패** | 토큰은 `openssl rand -hex 32`, 대역은 media-dev 사설 주소 `/32` 하나다. dev는 1번이 두 박스(auth `.env` · media-dev)에 같은 토큰을 한 자리에서 넣는다. 운영은 `native` 위에서도 열 수 있다(전달 머리글을 단 전용 헤더 요청은 403, 아래 resolve 절) |
 
 **스물여덟 번째: `FORWARD_HEADERS_STRATEGY`(POK-89, 선택).**
 없으면 `none`(프록시 헤더를 안 믿는다). `native`면
@@ -773,17 +774,28 @@ Flyway 마이그레이션은 앱이 뜰 때 실행돼야 하므로 **코드 옆(
 서버마다 자기 Flyway를 돌리고 **이력 테이블을 나눈다**(`flyway_schema_history_auth` ·
 `..._clip` · `..._chat` · `..._chat_detector`). 기본 이름을 쓰면 나중에 뜬 쪽이 남의 이력을 자기 것으로 읽고 부팅에 실패한다.
 마이그레이션 번호는 모듈별 대역을 쓴다 — `V1xx` auth · `V2xx` clip · `V3xx` chat-collector · `V4xx` chat-detector.
-지금까지 나간 것은 auth의 `V101`~`V112`(`V110`·`V111`은 칸, **`V112`는 인덱스 넷과 표 주석 둘**, POK-89) · clip의 `V201`(`broadcasts`·`broadcast_events`)과
+지금까지 나간 것은 auth의 `V101`~`V118`(`V110`·`V111`은 칸, **`V112`는 인덱스 넷과 표 주석 둘**, POK-89 · `V113` 오디오 트랙 이름 · `V114` 탈퇴 장부 · `V115` 연동 채널 칸 NULL 허용 · `V116`·`V117` SOOP 연동 · **`V118` 탈퇴 장부의 `platform` 칸, POK-397**) · clip의 `V201`(`broadcasts`·`broadcast_events`)과
 `V202`(`jump_cards`, POK-118)·`V203`(`broadcasts.vod_expires_at`, POK-117)·`V204`(색인 둘, POK-174)·
 **`V205`(방송 중 부분 색인, POK-218)** · `V206`(`recipes`, POK-124) · `V207`(`clips`·`render_jobs`·`render_job_events`, POK-125) · **`V208`(`clips (recipe_id, id DESC)` 색인 하나, POK-243)** ·
-`V209`~`V213` · **`V214`(`jump_cards.hidden_reason` · `jump_card_actions` · `recipes.source_card_id`, POK-338)** · **`V216`(`jump_card_actions`가 `open`도 받는다, POK-393)** · chat-collector의 `V301`(`chat_messages`)~**`V308`** ·
+`V209`~`V213` · **`V214`(`jump_cards.hidden_reason` · `jump_card_actions` · `recipes.source_card_id`, POK-338)** · **`V216`(`jump_card_actions`가 `open`도 받는다, POK-393)** · chat-collector의 `V301`(`chat_messages`)~**`V315`** ·
 chat-detector의 `V401`(`chat_metrics`, POK-120)이다.
 
 **chat-collector 대역 열:** `V301`(`chat_messages`) · `V302`(`stream_id` 칸) ·
 `V303`(`chat_ended_streams`) · `V304`(`stop_reason` 칸) · `V305`(`received_at` 색인 — 아래) ·
 **`V306`**(`nickname`·`user_role` 칸 + `(stream_id, message_time)` 부분 색인, POK-234) ·
 **`V307`**(`chat_donations` — 후원, POK-234) · **`V308`**(`broadcast_info` — 방송 정보 관측 이력, POK-234) ·
-`V309`(`(stream_id, message_time)` 색인을 `CONCURRENTLY`로, POK-234) · **`V310`**(`chat_ingest_keys` — 방송 번호 → 물리 키, POK-233).
+`V309`(`(stream_id, message_time)` 색인을 `CONCURRENTLY`로, POK-234) · **`V310`**(`chat_ingest_keys` — 방송 번호 → 물리 키, POK-233) ·
+`V311`(`purged_channels`, POK-256) · `V312`(정리 색인 셋, `CONCURRENTLY`) ·
+**`V313`**(표 넷에 `platform` 칸 + CHECK `NOT VALID` + 명부 PK `(platform, channel_id)`, POK-397) ·
+**`V314`**(플랫폼을 앞에 둔 색인 넷, `CONCURRENTLY`) · **`V315`**(지문 제약을 같은 이름으로 플랫폼 색인에 옮김 · 옛 채널 색인 셋 삭제 · CHECK 검증).
+
+🔴 **`-- executeInTransaction=false` 주석은 Flyway가 읽지 않는다**(Flyway 12.4 OSS, POK-397에서 확인). 스크립트 설정은
+**같은 폴더의 `<파일 이름>.conf`**에서만 읽는다. `V309`·`V312`가 주석만으로 트랜잭션 밖에서 돈 것은 문장이 전부 `CONCURRENTLY`라
+Flyway가 스스로 그렇게 판정했기 때문이다(우연). `V315`처럼 트랜잭션 가능 문장(DO 블록·`VALIDATE`)과 불가 문장(`DROP INDEX CONCURRENTLY`)이
+섞이면 주석만으로는 `Detected both transactional and non-transactional statements`로 부팅이 실패한다. 그래서
+**`V315__chat_platform_swap_and_validate.sql.conf`**(`executeInTransaction=false`)를 둔다. 🔴 **번호를 다시 매기면 `.conf` 이름도 같이 바꾼다**
+(안 바꾸면 같은 실패). `V315`는 트랜잭션 밖이라 중간에 끊기면 실패 줄이 이력에 남는다. 문장마다 다시 돌려도 같은 결과라
+`flyway repair`로 실패 줄을 지우고 다시 부팅하면 된다. 지문 교체가 잠금 시한(`55P03`, 5초)에 걸려 실패한 경우도 같다(그대로 다시 부팅하면 「Detected failed migration」으로 막힌다). `V314`의 INVALID 색인 확인법은 그 파일 머리말에 있다.
 
 🔴 **Flyway 잠금을 세션 잠금으로 둔다**(`spring.flyway.postgresql.transactional-lock: false`, POK-233). 기본은 잠금을 다른 연결의
 트랜잭션으로 쥐는데, `V309`의 `CONCURRENTLY`는 그 트랜잭션이 끝나기를 기다리다 `socketTimeout`(10초)에 끊겼다. 부팅은 재시도로
@@ -958,7 +970,12 @@ Media의 응답기(새 송출 연결을 받을지 판정하는 쪽)는 두 경�
 
 **`resolve`의 인증은 두 갈래다**(계약4 4C). 전용 헤더 `X-Stream-Key-Resolve-Token`이 붙은 요청은
 전용 체인만 본다 — 출발지(소켓 주소. `X-Forwarded-For`는 안 본다)가 허용 대역 밖이거나 IPv4가 아니면 403,
-그다음 토큰이 틀리면 401이다. 출발지를 먼저 보므로 대역 밖에서는 응답 코드로 토큰이 맞는지 가릴 수 없다.
+그다음 토큰이 틀리면 401이다.
+🔴 **전달 머리글(`Forwarded`·`X-Forwarded-For`·`-Proto`·`-Host`·`-Port`)을 하나라도 달고 오면 출발지를 보기 전에 403이다**(POK-316).
+Media는 auth에 직접 붙어 이 머리글을 안 싣는다. 머리글은 Spring 필터가 아니라 톰캣 엔진 밸브 맨 앞(`ForwardedHeaderMarkValve`)에서 본다:
+`native`에서 톰캣 `RemoteIpValve`는 `X-Forwarded-For`를 다 읽으면 **그 머리글을 지우고** 소켓 주소를 그 값으로 바꾼다.
+그래서 믿는 프록시 대역 안의 호출자가 Media 주소를 적어 보내면 필터에는 「머리글 없는 허용 주소 요청」으로 보인다
+(밸브를 빼면 `ProxyTrustNativeTest`에서 그 요청이 200이 된다. 주입으로 확인). 출발지를 먼저 보므로 대역 밖에서는 응답 코드로 토큰이 맞는지 가릴 수 없다.
 공용 `X-Internal-Token`을 같이 실어도 통하지 않는다. 전용 헤더가 없으면 지금처럼 공용 토큰으로 받는다.
 🔴 **토큰(`STREAM_KEY_RESOLVE_TOKEN`)이 없으면 창구가 닫힌다 — 전용 헤더 요청은 늘 401이다.**
 대역까지 비어 있어도 403이 아니다. 값과 부팅 조건은 위 「돌리는 법」의 환경변수 표에 있다.
@@ -1005,6 +1022,15 @@ Media의 응답기(새 송출 연결을 받을지 판정하는 쪽)는 두 경�
 뒀다(`unreadable_dropped` 대 `unknown_type_dropped`) — 후자는 1번이 새 이벤트를 냈다는
 신호라 형식 오류와 섞으면 안 된다. 반대로 **처리가 예외로 끝나면 안 지운다** —
 가시성 타임아웃이 지나면 다시 오고, 처리가 멱등이라 두 번 와도 안전하다.
+
+**편지의 `platform` 칸은 선택이다**(POK-398). 봉투 최상위의 대문자 코드(`CHZZK`·`SOOP`)이고 `broadcasts.platform`(`V218`)에
+남는다. **안 실었거나 비었으면 `CHZZK`**(칸이 생기기 전 방송·편지는 전부 치지직이다). 형식(대문자 영문·숫자·밑줄 1~16자) 밖이면
+편지를 버리지 않고 `CHZZK`로 저장하고 WARN `broadcast.platform_invalid`를 남긴다(값 원문은 안 찍고 길이만). 소문자도 형식 밖이다.
+**줄이 생길 때 한 번만 정한다.** 시작 편지든 먼저 온 종료 편지든 첫 편지의 값이고, 뒤 편지가 다른 값을 실어도 안 바꾼다.
+물리 키(아래 POK-233 절)와 규칙이 다르다: 물리 키는 빈 칸을 뒤 편지가 채우지만, 플랫폼은 칸을 안 실은 편지로 만든 줄이 `CHZZK`로 굳는다.
+**SOOP 방송은 시작·종료 등 모든 생명주기 편지에 `platform`을 실어야 한다**(종료가 먼저 와 자리표시를 만들면 그 값으로 굳는다).
+첫 값을 지키는 것은 **생명주기 편지 처리기만의 규칙**이다. 수집기가 SOOP 방송을 확인하고 `platform`을 적는 clip 내부 창구
+(POK-397 PR3에서 만든다)는 이미 있는 줄의 값(기본값 `CHZZK` 포함)을 덮어쓸 수 있다.
 
 `streamer_id`에 FK를 걸지 않는다 — 그 표는 auth 소유이고, 서로의 표를 직접 참조하지
 않는 것이 ADR-022의 경계다.
@@ -1443,6 +1469,8 @@ GET /api/clip/broadcasts/{streamId}/segments?startMs=&endMs=     Bearer JWT
 | `timelineOriginAt` | **시각 기준점**(POK-255): 이 방송의 카드·조각 ms(`streamTimestampMs`·`window`·`start_pts_ms`)가 0이 되는 절대 시각. 화면은 여기에 ms를 더해 편집본 컷(절대 시각)을 만든다. 값 = 방송 시간(시작 편지 앞 **2분** ~ 종료 편지 뒤 10분, `start_wall_utc` 색인으로 거름) 안 **첫 조각**(seq 순)의 `COALESCE(playback_pdt, start_wall_utc) − start_pts_ms`. 한 재생 회차 안에서는 어느 조각으로 재도 같다(로컬 실방송 135조각 실측 차이 0ms, 벽시계로 재면 9분에 2.1초 흔들림). 🔴 **방송 시작 편지 시각과 다르다**(2026-09-17 실측 32초). 🔴 **장부의 `start_pts_ms`는 방송을 넘어 이어진다** — 그래서 「가장 작은 pts」가 아니라 시작 앞 2분 이후 첫 조각이다(앞 방송 꼬리가 섞이면 그 회차 값이 나온다). **조각이 없거나, 시작 시각을 모르는 방송(종료 편지가 먼저 온 자리표시)이거나, 장부를 못 읽으면 `null`**(목록은 그대로 나간다. 시작 시각이 없으면 아래 경계가 없어 앞 방송 조각이 뽑히므로 재지 않는다). 한계(같은 뿌리): 방송 중 재접속으로 재생 회차가 끊기거나, 같은 키로 재시작 편지가 와 `started_at`이 덮이거나, 끊고 2분 안에 다시 켜면 카드가 수 초 어긋난다(조각마다 바꾸는 것은 별도). 시작 편지와 첫 조각의 관계는 코드로 증명 못 했고 근거는 실측 한 번이다. POK-233 뒤에는 `session_id`로 골라야 한다. 한 장의 방송 전부를 질의 한 번(`unnest` + `LATERAL`) |
 | `thumbnailUrl` | 사진 주소(POK-277, 60분 미리서명). 방송 중이면 1분마다 바뀌는 최신 화면, 끝났으면 최고 점수 카드 장면(없으면 마지막 라이브 화면). 없으면 `null`. 아래 「썸네일」 절 |
 | `title` · `category` | 치지직 방송 제목과 카테고리(POK-259). 수집기가 1분마다 남기는 방송 정보에서 **제목이 있는 마지막 관측**을 고르고, 카테고리는 같은 관측의 값이다(제목을 못 얻은 회차는 건너뛴다. 고르면 보이던 제목이 번호로 돌아간다). 한 장을 수집기에 **한 번에** 묻는다(`POST /internal/broadcast-info/latest`, 수집기 절). **관측이 없거나, 수집기 주소가 비었거나, 수집기가 아프면 둘 다 `null`이고 목록은 그대로 나간다.** 화면은 그때 방송 번호를 보인다. 🔴 수집기가 응답 없이 매달리면 목록이 시한(접속 2초 + 읽기 3초)만큼 늦어진다. clip은 수집기 표를 직접 읽지 않는다(위 「서로의 표를 직접 읽지 않는다」) |
+| `platform` | 방송 플랫폼 코드(POK-398). `CHZZK` 또는 `SOOP`, **늘 있다.** 칸이 생기기 전 방송은 `CHZZK`. 편지의 `platform` 칸에서 온다(위 「방송 생명주기 수신」 절) |
+| `editorsOnline` | 그 방송의 라이브 대시보드(카드 통로 `…/events`)를 **지금 열어 둔 편집자 수**(POK-398). 스트리머 본인과 묻는 사람은 빼고, 같은 사람의 여러 탭은 1명(회원 번호를 숫자로 비교). **방송 중 줄만 숫자**(아무도 없으면 `0`), 끝난 줄은 `null`. 연결 보관소를 자물쇠 없이 읽어 막 열리거나 닫힌 연결 하나만큼 낡을 수 있다. 연결은 열 때만 자격을 보므로 편집 권한이 풀려도 그 연결이 끊길 때까지 세어진다. 브라우저가 닫아도 서버는 다음 쓰기(최대 하트비트 한 주기)에야 연결을 뺀다. 🔴 **clip 한 대 전제**: 연결은 받은 서버의 메모리에만 있어 여러 대면 각자 제 몫만 세어 적게 나온다(모으는 곳이 필요하다) |
 
 **카드 한 줄은 통로로 오는 카드 JSON과 칸 하나까지 같다**(`JumpCardListShapeTest`가 두 경로의
 JSON 트리를 맞대어 지킨다). 화면이 같은 것을 두 벌로 처리하지 않게 하려는 것이다.
@@ -3441,12 +3469,16 @@ OBS는 트랙 여섯을 항상 다 보내고 트랙에 이름이 없다(계약9�
 | clip 표 | 그 회원의 방송 · 방송 편지 기록 · 카드 · 편집본 · **렌더 뒤 업로드 의도(`upload_requests`, 편집본보다 먼저)** · 완성 영상 · 렌더 주문·보고 · 업로드 기록 · 썸네일 줄 | 알림 뒤 15초 안 |
 | clip 창고 `CLIPS_BUCKET` | `clips/{clipId}/` · `thumbnails/{live,card,clip}/…jpg` · **`upload-thumbnails/{streamerUserId}/`**(사용자가 올린 썸네일 그림, 스트리머 접두사 하나라 아무 줄도 안 가리키는 그림까지 덮는다, POK-291) | 표 다음 |
 | 1번 장부·창고 `SEGMENT_BUCKET` | 녹화 조각 줄(`stream_segments`)과 그 파일(원본·재생용 사본) · 회차 머리 파일(init) | 창고 다음, 500줄씩 |
-| 수집기 표 | 그 회원이 연동했던 치지직 채널의 채팅 · 후원 · 방송 정보 | 알림 뒤 15초 안, 늦게 적재된 것까지 10분 동안 |
-| 수집기 창고 `S3_BUCKET` | 채팅 원본 `chat/{channelId}/` | 표 다음 |
+| 수집기 표 | 그 회원이 연동했던 치지직 채널과 탈퇴 때 살아 있던 SOOP 연동 아이디의 채팅 · 후원 · 방송 정보 | 알림 뒤 15초 안, 늦게 적재된 것까지 10분 동안 |
+| 수집기 창고 `S3_BUCKET` | 채팅 원본 `chat/{PLATFORM}/{channelId}/`(치지직은 옛 경로 `chat/{channelId}/`도) | 표 다음 |
 
 **흐름은 장부 셋이다.**
 1. auth 탈퇴 트랜잭션이 **`withdrawal_purge_jobs`(`V114`)에 「지울 일」을 적는다** — clip 한 줄, 연동했던 치지직 채널마다
    수집기 한 줄. 🔴 **지금 다른 회원이 살아 있는 연동으로 쥔 채널은 뺀다**(같은 사람이 새 구글 계정으로 다시 연동했을 수 있다).
+   **수집기 줄에는 플랫폼을 적는다(`V118`, POK-397).** 치지직 줄은 `CHZZK`, SOOP 연동이 살아 있으면 그 SOOP 아이디로 `SOOP` 한 줄.
+   SOOP 연동은 닫는 순간 아이디를 비우므로(약관) **닫기 전에** 읽어 적는다. 🔴 이미 해제한 SOOP 연동은 아이디가 없어 장부에 못 오르고,
+   그 채팅은 60일 보관으로만 지워진다(남은 한계). 발송기는 수집기 주소에 `&platform=`을 싣는다. 플랫폼 칸 전의 auth가 적은 줄
+   (NULL)은 치지직으로 보낸다.
 2. auth 발송기(`PurgeDispatcher`, 자기 스레드 하나, 15초)가 두 서버의 지우기 문을 부르고 **받을 때까지 다시 보낸다**
    (15초부터 두 배, 상한 1시간). 커밋 뒤 정리 스레드에 맡기지 않은 이유: 그쪽은 재시도가 없어 clip이 잠깐 죽어 있던 탈퇴는
    기록이 영영 남는다.
@@ -3475,7 +3507,14 @@ OBS는 트랙 여섯을 항상 다 보내고 트랙에 이름이 없다(계약9�
   (ADR-085 한계). 늦게 온 시작 편지는 auth가 연동을 닫아 다시 못 연다.
 
 **수집기는 지우는 범위를 시각으로 자른다.** 「탈퇴 시각 + 10분」 전에 받은 줄만 지우고, 그 창이 닫히면 명부 줄을 닫는다.
-채팅 원본 파일도 키의 분(`chat/{channelId}/{날짜}/{시}/{시분}-…`)으로 같은 창 안 것만 지운다(모양이 다른 키는 안 건드린다).
+채팅 원본 파일도 키의 분(`chat/{PLATFORM}/{channelId}/{날짜}/{시}/{시분}-…`)으로 같은 창 안 것만 지운다(모양이 다른 키는 안 건드린다).
+접두사는 원본을 쓰는 쪽과 같은 `ArchiveKey.channelPrefix`로 짓는다(채널 아이디의 경로 문자를 같은 규칙으로 다듬는다). 치지직이면 플랫폼
+폴더 전의 옛 경로 `chat/{channelId}/`도 같은 규칙으로 지운다. SOOP은 옛 경로를 안 본다.
+
+**🔴 수집기 정리는 전부 (플랫폼, 채널)로 본다(POK-397).** 채널 아이디는 플랫폼마다 따로 매겨서 치지직과 SOOP에 같은 아이디가 있을 수 있다.
+명부(`purged_channels`, PK `(platform, channel_id)`) · 표 셋 지우기 · 짝 지우기의 세 갈래 · 원본 접두사 · 세션 닫기가 모두 플랫폼을 같이 본다.
+수집기 문은 **`?platform=`**(`CHZZK`·`SOOP`)을 받는다. 없거나 비면 치지직이다(플랫폼 칸 전의 auth는 안 보낸다). 대문자만 받고, 그 밖은
+**400 `{"error":"invalid_platform"}`**이다. 모르는 값을 치지직으로 접으면 SOOP 탈퇴가 같은 아이디의 치지직 채팅을 지운다.
 「방송 번호 → 스트림키」 짝(`chat_ingest_keys`)도 그 채널 방송의 것을 지운다(그 표에는 채널 칸이 없어 채팅·후원·방송 정보의 방송 번호로 찾는다).
 적재 바구니에 남아 있던 채팅이 지운 뒤 들어오는 것을 잡으려는 창이다. 창이 닫힌 뒤 같은 채널에 쌓이는 것은 새 연동의 것이라 안 건드린다.
 
@@ -3515,6 +3554,56 @@ OBS는 트랙 여섯을 항상 다 보내고 트랙에 이름이 없다(계약9�
   ③ 🔴 **영상 서버(1번)가 올리던 조각이 정리 뒤에 창고에 다시 생길 수 있다** — media 업로더가 창고에 먼저 올리고 장부를 나중에 고쳐서,
   정리가 그 사이에 끼면 줄 없는 파일이 남는다. 1번 코드라 1번에게 알렸다(장부에 줄이 없으면 방금 올린 파일을 지우는 처리).
   「clip·수집기가 3xx로 답하면 발송기가 성공으로 닫는다」는 재현되지 않았다(지금 구성의 RestClient는 302도 예외로 던진다). 시험 한 갈래를 그물로 남겼다. 옛 단일 채널 경로(`CHZZK_ENABLED`) 세션은 채널 번호가 없어 닫을 대상을 못 고른다(개발용).
+
+### 수집기 저장소의 플랫폼 칸 (POK-397 PR2)
+
+**채팅·후원·방송 정보·탈퇴 명부에 `platform`(`CHZZK`·`SOOP`) 칸을 더하고, 채널로 찾거나 지우는 자리를 전부 (플랫폼, 채널)로 바꿨다.**
+채널 아이디는 플랫폼마다 따로 매겨서 치지직과 SOOP에 같은 아이디가 있을 수 있다. 칸은 수집기 `V313`~`V315`, auth `V118`이다.
+플랫폼은 프레임이 아니라 **세션 키(`SessionKey.platform`)**에서 와서 저장 셋·원본 파일 폴더(`chat/{PLATFORM}/…`)·1분 창 열쇠에 들어간다.
+SOOP 수신은 다음 PR이고, 지금 세션을 여는 곳(연동 시작)은 치지직뿐이다.
+
+**🔴 배포 순서: 수집기 먼저, auth 나중.**
+- 이유: 옛 수집기는 모르는 `platform` 쿼리를 무시한다. 새 auth가 SOOP 정리를 먼저 보내면 옛 수집기는 같은 아이디의 **치지직** 데이터를
+  지우고 202로 답해 장부 줄이 닫힌다. 지금은 SOOP 연동 탈퇴가 드물고 아이디가 겹칠 일도 거의 없지만 순서로 막는다.
+- 수집기 배포 중(옛·새 인스턴스가 함께 도는 동안): 옛 코드는 플랫폼 없이 넣고 표의 기본값 `CHZZK`가 채운다. `V315` 뒤에도 지문 제약 이름이
+  같아 옛 `ON CONFLICT ON CONSTRAINT uq_chat_messages_fingerprint`가 산다(계획 검증 실측).
+- 🔴 **겹침 1(수집기, 계획 검증 F4)**: `V313`이 명부 PK를 `(platform, channel_id)`로 바꾼 뒤 옛 인스턴스의 탈퇴 창구는 `ON CONFLICT (channel_id)`가
+  맞지 않아 **500을 낸다.** auth 발송기가 백오프(15초부터)로 다시 보내 새 인스턴스에 닿으므로 유실은 없다. 같은 동안 옛 인스턴스의 정리 묶음은
+  옛 채널 색인이 지워져(`V315`) Seq Scan이 된다. 탈퇴 때만 돌아 겹치는 동안만 참는다.
+- 🔴 **겹침 2(auth, F5)**: 옛 auth 발송기는 플랫폼을 모른다. 새 auth가 적은 SOOP 줄을 옛 인스턴스가 집으면 `platform` 없이 보내고, 새 수집기는
+  그것을 치지직으로 지운 뒤 202로 답해 줄이 닫힌다(SOOP 데이터는 60일 보관으로만 지워진다). **auth 배포가 끝난 직후 한 번** 그 줄을 다시 연다.
+  실행은 배포 담당 몫이다(이 문서는 명령만 적는다). 배포 시작·끝 시각을 넣는다:
+
+  ```sql
+  UPDATE withdrawal_purge_jobs
+     SET done_at = NULL, next_attempt_at = now()
+   WHERE target = 'COLLECTOR' AND platform = 'SOOP'
+     AND done_at BETWEEN :deploy_started_at AND :deploy_finished_at;
+  ```
+
+  다시 열린 줄은 새 발송기가 `platform=SOOP`으로 보낸다. 새 auth가 이미 바르게 보낸 줄도 함께 열려 한 번 더 가지만, 수집기 명부가 같은 탈퇴 시각으로 접어 결과는 같다. 같은 아이디의 치지직 데이터가 잘못 지워졌다면 되돌릴 길은 없다(백업 없음).
+
+**옛 원본 파일 이전(관리 세션이 실행, dev `S3_BUCKET`).** 새 수집기는 `chat/{PLATFORM}/{channelId}/…`에 쓰고, 그 전 파일은 옛 경로
+`chat/{channelId}/…`에 있다(전부 치지직). 탈퇴 정리는 치지직이면 **옛·새 경로를 둘 다** 같은 분 판정으로 지우므로 이전 전·중·후 언제 탈퇴가
+와도 남지 않는다.
+1. 새 수집기 배포 **뒤에**(옛 인스턴스가 다 내려간 뒤. 옛 코드는 옛 경로에 쓴다) 옛 접두사 목록과 개수를 뽑는다(`chat/` 바로 아래에서 `CHZZK/`·`SOOP/`가 아닌 폴더)
+2. 채널마다 `aws s3 cp --recursive s3://$BUCKET/chat/{ch}/ s3://$BUCKET/chat/CHZZK/{ch}/`
+3. 채널마다 옛·새 키 목록을 대조한다(접두사를 뗀 상대 키 집합이 같아야 한다)
+4. 같을 때만 옛 경로를 `aws s3 rm --recursive`로 지운다
+5. 옛 접두사가 0개인지 다시 확인한다
+- 🔴 **보관 기한이 늘어난다**: 수명 규칙은 객체를 만든 날로 세므로 복사본은 이전한 날부터 다시 60일 산다. 관리 세션이 이전 스크립트와 함께
+  「이전 60일 뒤, 키의 날짜 폴더가 60일 넘은 파일을 지우는」 한 번짜리 명령을 보내고 실행 날짜를 스크립트 머리에 적는다(관리 세션 결정 A).
+- 옛 경로 읽기 코드(`ArchiveKey.legacyPrefix`와 정리의 옛 경로 갈래)는 이전을 확인한 뒤 다음 PR에서 지운다.
+
+**남은 한계.**
+- **이미 해제한 SOOP 연동은 장부에 못 오른다**(F9). SOOP 연동은 닫히는 순간(해제·재연동·갱신 거절) 아이디를 비우므로, 해제한 뒤 탈퇴한
+  회원의 SOOP 채팅은 60일 보관으로만 지워진다. 치지직은 닫힌 연동 줄에도 채널이 남아 과거 채널까지 잡는다.
+- **방송 정보 수집기가 플랫폼을 안 가리고 치지직 목록을 훑는다**(F10·감사 L2). SOOP 세션이 생기면 같은 아이디 치지직 방송의 제목·시청자 수가
+  그 세션의 줄에 섞인다. SOOP 세션이 생기기 전(PR3)에 치지직 세션만 훑게 한다(`BroadcastInfoCollector` 주석).
+- **세션 자리가 스트리머 번호 하나다**(감사 L1). 같은 회원이 치지직 세션을 쥔 채 SOOP 시작 편지가 오면 갈아끼움으로 받아 치지직 소켓의 채팅이
+  SOOP으로 찍힌다. 지금은 여는 곳이 치지직뿐이라 도달 불가. PR4에서 자리 열쇠에 플랫폼을 넣는다(`SessionRegistry.retargetOrSkip` 주석).
+- **표의 기본값 `CHZZK`가 빠뜨림을 감춘다.** 새 코드가 플랫폼을 빠뜨려도 오류 없이 치지직이 된다(시험은 SOOP 값으로만 잰다). 옛 인스턴스가 다
+  내려간 뒤 기본값을 지우는 것과, auth `V118`의 CHECK를 「수집기 줄이면 플랫폼 필수」로 올리는 것(채우기 + `VALIDATE`)은 다음 PR이다.
 
 ### 운영 전 잔불 정리: 보관 기한 청소·프록시 IP (POK-89)
 
@@ -3609,8 +3698,8 @@ OBS는 트랙 여섯을 항상 다 보내고 트랙에 이름이 없다(계약9�
   null). compose의 `:-none`만 빈 값을 막는다
 - 🔴 **「대역 밖 소켓의 헤더는 무시」에는 한정 조건이 있다.** 요청자 자신이 신뢰 대역 안이면(사설망에서 ALB를 거쳐 오는
   호출자) ALB가 오른쪽에 붙인 사설 IP를 Valve가 건너뛰어 **왼쪽 위조 값이 채택된다.** 사설망에서 교환 창구를 부르는
-  호출자를 만들면 안 되고(지금은 없다: clip·chat-collector는 `/internal/**`를 직접 부르고 헤더를 안 싣는다), 운영
-  대역이 정해지면 `internal-proxies`를 **로드밸런서 서브넷으로 좁힌다**(환경변수로 빼면서 좁히는 것이라 yml 한 줄이다). `RemoteIpValveTrustTest`의
+  호출자를 만들면 안 되고(지금은 없다: clip·chat-collector는 `/internal/**`를 직접 부르고 헤더를 안 싣는다),
+  운영은 `internal-proxies`를 `FORWARD_HEADERS_TRUSTED_PROXIES`로 **좁힌다**(아래 「운영 신뢰 대역」, POK-316). `RemoteIpValveTrustTest`의
   `대역_안_소켓이_보낸_헤더의_오른쪽_값도_대역_안이면_왼쪽_값을_채택한다`가 이 갈래를 못박는다
 - 🔴 **`native`는 `X-Forwarded-Proto`·`Host`·`Port`도 같이 처리해 auth 전체의 요청 해석이 바뀐다.** 지금 요청에서
   주소를 유추하는 코드는 없다(사진 `PROFILE_PHOTO_BASE_URL`은 명시 설정이다). **프레임워크가 읽는 자리는 하나다:
@@ -3618,6 +3707,29 @@ OBS는 트랙 여섯을 항상 다 보내고 트랙에 이름이 없다(계약9�
   붙는다**(실서버 실측). 브라우저는 그 호스트와 하위 도메인 전부를 1년간 https로만 부른다. 운영 호스트를 루트
   도메인으로 잡으면 `dev.pokeclip.com:8082` 같은 하위 http 주소가 그 브라우저에서 막힌다. 끄지 않는다(운영은
   https가 맞다)
+
+##### 운영 신뢰 대역 (POK-316)
+
+운영 API 앞은 `CloudFront → ALB → (웹) → auth`다. 톰캣은 `X-Forwarded-For`를 **오른쪽부터** 읽어 믿는 대역의 값을 건너뛰고
+처음 만나는 밖 값을 요청자 IP로 삼는다. 그래서 믿는 대역에 **CloudFront 원본 쪽 대역**이 있어야 엣지 주소를 건너뛰어
+시청자 IP에 닿는다(없으면 엣지 주소에서 멈춰 IP당 한도가 「엣지 노드당」이 된다). 시청자가 왼쪽에 적은 위조 값은 CloudFront가
+그 오른쪽에 진짜 주소를 붙이므로 버려진다.
+
+| 변수 | 기본 | 운영 |
+|---|---|---|
+| `FORWARD_HEADERS_STRATEGY` | `none` | **`native`** |
+| `FORWARD_HEADERS_TRUSTED_PROXIES` | Boot 기본 신뢰 대역(사설망 · 루프백 등 아홉, yml에 글자 그대로) | **VPC 안(ALB · 웹) CIDR + CloudFront 원본 쪽 대역**(AWS 공개 IP 목록의 `CLOUDFRONT_ORIGIN_FACING`). 쉼표로 이은 CIDR, IPv6도 된다 |
+
+- **채우는 것은 인프라(1번) 몫이다.** 코드는 이름과 기본값만 둔다. CloudFront 대역은 AWS가 바꾸므로 목록이 바뀌면 다시 채운다
+- 🔴 **주소 하나도 `/32`처럼 접두를 붙인다.** 톰캣은 값 전체에 `/`가 하나도 없으면 목록을 **정규식 하나**로 읽는다(`RemoteIpValve.setInternalProxies`).
+  `10.0.1.5, 10.0.1.6`처럼 주면 어느 주소에도 안 맞아 아래 빈 값과 같은 꼴이 되는데 부팅은 성공한다
+- 🔴 **빈 값은 「아무 프록시도 안 믿음」이다.** 비우면 ALB가 붙인 머리글까지 무시해 한도가 다시 전역이 된다. 안 쓸 거면 변수를 아예 빼라(기본 대역으로 돌아간다)
+- **dev compose·`.env.dev.example`에는 넣지 않았다.** compose는 빈 값을 그대로 넘겨 위 함정이 되고, dev는 `none`이라 이 값을 안 쓴다
+- CloudFront → ALB 홉은 **HTTPS**여야 한다. ALB가 `X-Forwarded-Proto`를 자기가 받은 프로토콜로 덮어쓰므로, 그 홉이 http면 https 요청도 http로 읽혀 HSTS가 안 붙는다(인프라 몫)
+- 기본값이 Boot 값과 같은지는 `RequiredPropertiesTest.신뢰_대역의_운영_기본값이_Boot_기본_대역과_같다`가 본다. Boot 판을 올려 기본 대역이 바뀌면 거기서 갈린다
+- 실제 톰캣으로 잰 것(`ProxyTrustNativeTest`, 루프백 = ALB 자리, 문서용 `198.51.100.0/24` = CloudFront 자리): 엣지를 거친 요청은 시청자 IP로 센다 ·
+  왼쪽 위조 값은 버린다 · 좁힌 대역에 없는 `10.0.0.5`에서 멈춘다(환경변수가 밸브에 닿는다) · 믿는 프록시가 `X-Forwarded-Proto: https`를 보내면 HSTS가 붙는다 ·
+  resolve 전용 창구는 전달 머리글이 있으면 403, 없으면 출발지·토큰 검사 그대로
 
 #### 시험 컨텍스트: 21, 여유 0
 
@@ -4112,14 +4224,21 @@ SQLSTATE 22류라 격리 폐기되어 **채팅이 조용히 사라진다.**
 안 틀리는 원문이 나온다.
 
 ```
-{"receivedAtMillis":1786852111229,"raw":"{\"channelId\":\"…\",\"content\":\"ㅋㅋ\",\"messageTime\":1754300000000}"}
+{"platform":"CHZZK","receivedAtMillis":1786852111229,"raw":"{\"channelId\":\"…\",\"content\":\"ㅋㅋ\",\"messageTime\":1754300000000}"}
 ```
+
+`platform`(POK-397)은 그 채팅을 받은 세션의 플랫폼(`CHZZK`·`SOOP`)이다. 이 칸이 생기기 전에 쓴 줄에는 없고, 그 줄은
+전부 치지직이라 읽을 때 `CHZZK`로 채운다.
 
 **키 규칙:**
 
 ```
-chat/{channelId}/{yyyy-MM-dd}/{HH}/{HHmm}-{runId}.jsonl
+chat/{PLATFORM}/{channelId}/{yyyy-MM-dd}/{HH}/{HHmm}-{runId}.jsonl
 ```
+
+- **플랫폼 폴더가 맨 앞이다(POK-397).** 채널 아이디는 플랫폼마다 따로 매겨서 치지직과 SOOP에 같은 아이디가 있을
+  수 있다. 폴더가 안 갈리면 한쪽 탈퇴 정리가 다른 쪽 원본까지 지운다. 1분 창도 (플랫폼, 채널)마다 따로 연다.
+  이 폴더가 생기기 전에 쓴 파일은 옛 경로 `chat/{channelId}/…`에 있고 전부 치지직이다
 
 - **UTC · 우리가 받은 시각 기준 1분 창.** `messageTime`(치지직 시각)이 아니다 — 1번 media의
   세그먼트 키(`streams/{streamId}/{date}/{HH}/seg_NNNNNN.m4s`)와 같은 시계·같은 층위라 나중에
@@ -4497,6 +4616,9 @@ NPE를 던진다**(빈 Set도 그렇다 — 실측).
 | `POSTGRES_DB` | **없음** | ✅ | **기본값을 일부러 안 준다**(POK-161). 셸에 없으면 리터럴이 그대로 바인딩돼 `FATAL: password authentication failed`로 죽는다 |
 | `POSTGRES_USER` | **없음** | ✅ | 위와 같다 |
 | `POSTGRES_PASSWORD` | **없음** | ✅ | 위와 같다 |
+| `POSTGRES_AUTH` | `password` | — | DB 로그인 방식. `iam`이면 비밀번호 대신 **연결마다 RDS IAM 토큰**으로 붙고(POK-406 스파이크) `POSTGRES_PASSWORD`는 안 쓴다. 이름은 media 사이드카와 같다 |
+| `POSTGRES_SSLROOTCERT` | 빈 값 | — | `iam`에서만 쓴다. RDS CA 번들의 **절대 경로**. 비거나 못 읽으면 부팅 거부. 접속은 `verify-full` 하나로 고정이다. 토큰이 15분 동안 다시 쓸 수 있는 자격이라 중간자에게 내줄 수 없다 |
+| `AWS_REGION` | `ap-northeast-2` | — | `iam` 토큰을 서명할 리전. 자격 증명은 환경변수에 없다. SDK 표준 체인(환경변수·프로파일·ECS 태스크 역할)이 찾는다 |
 | `INTERNAL_API_TOKEN` | 빈 값 | ✅ | clip·수집 서버의 `/internal/**`에 **보낼** 값. 그쪽에 준 것과 같아야 한다 |
 | `CLIP_BASE_URL` | `http://localhost:8081` | ✅ `http://clip:8081` | 점프카드를 넣는 곳 |
 | `CLIP_MAX_ATTEMPTS` | `3` | — | 카드 발행 총 시도 횟수(재시도 포함). **4xx는 이 횟수와 무관하게 한 번만 보낸다** — 같은 본문이라 다시 보내도 같은 답이다 |

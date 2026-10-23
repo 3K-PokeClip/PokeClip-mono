@@ -126,7 +126,7 @@ MediaMTX 조각은 **조각마다 머리(`ftyp+moov`)가 있는 완전한 fMP4**
 | `S3_ENDPOINT` · `S3_PATH_STYLE` | (빈 값) · `false` | 가짜 S3 주소 · 경로식 주소 |
 | `AWS_REGION` | `ap-northeast-2` | 자격증명은 SDK 기본 체인(env·프로필·역할) |
 | `CLIP_BASE_URL` | `http://localhost:8081` | 보고를 받는 clip |
-| `INTERNAL_API_TOKEN` | (빈 값) | clip `/internal/**`의 열쇠. auth·clip·chat-collector와 같은 값 |
+| `INTERNAL_API_TOKEN` | (빈 값) | clip `/internal/**`의 열쇠. auth·clip·chat-collector와 같은 값. **렌더 줄이나 사진 줄을 보는데 비면 부팅을 거부한다**(비어도 뜨면 보고가 전부 401이라 주문이 다 실패하는데 일꾼은 멀쩡해 보인다, POK-408) |
 | `RENDER_WORK_DIR` | `/tmp/pokeclip-render` | 주문마다 임시 폴더. 끝나면 지운다 |
 | `FFMPEG_PATH` · `FFPROBE_PATH` | `ffmpeg` · `ffprobe` | 실행 파일 |
 | `RENDER_JOB_TIMEOUT` | `15m` | 주문 하나의 상한 |

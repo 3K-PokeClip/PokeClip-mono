@@ -407,7 +407,7 @@ class CollectorHealthTest extends IntegrationTestSupport {
     }
 
     private static PersistableDonation donation(String text) {
-        return new PersistableDonation("s-health", "ch-health", "d-1", "닉",
+        return new PersistableDonation(Platform.CHZZK, "s-health", "ch-health", "d-1", "닉",
                 "CHAT", 1000L, text, 1_723_600_000_000L, 1L);
     }
 
@@ -507,7 +507,7 @@ class CollectorHealthTest extends IntegrationTestSupport {
 
     private static SessionKey keyStartedAt(String streamId, long streamerId, String channelId,
                                            Instant startedAt) {
-        return new SessionKey(streamId, streamerId, channelId, startedAt);
+        return new SessionKey(Platform.CHZZK, streamId, streamerId, channelId, startedAt);
     }
 
     private static final java.util.concurrent.atomic.AtomicLong KEY_SEQ =

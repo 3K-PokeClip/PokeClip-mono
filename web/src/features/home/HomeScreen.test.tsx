@@ -665,6 +665,58 @@ describe('HomeScreen', () => {
     expect(screen.queryByText('S-past-1')).toBeNull();
   });
 
+  // 띠 컴포넌트는 받은 값을 그대로 그리므로 컴포넌트 시험만으로는 홈이 방송 목록의 칸을 실제로 넘기는지 못 잰다(계획 검증 중대 2).
+  // 홈 다른 곳(연동 카드)에도 「치지직」이 있어 라이브 영역으로 좁혀 본다
+  it('방송 목록의 플랫폼과 접속 편집자 수가 라이브 띠에 실린다(POK-398)', async () => {
+    serve({
+      live: [
+        {
+          streamId: 'S-live-p',
+          status: 'live',
+          relation: 'OWNER',
+          startedAt: new Date(Date.now() - 60_000).toISOString(),
+          endedAt: null,
+          vodExpiresAt: null,
+          title: '플랫폼 방송',
+          platform: 'CHZZK',
+          editorsOnline: 2,
+        },
+      ],
+    });
+    render(<HomeScreen />);
+
+    const band = await screen.findByRole('region', { name: '라이브' });
+    expect(within(band).getByText('치지직')).toBeInTheDocument();
+    expect(within(band).getByText(/· 편집자 2명 접속 중$/)).toBeInTheDocument();
+  });
+
+  it('접속 편집자가 0이거나 칸이 없으면 수를 안 보이고, 플랫폼 칸이 없으면 태그도 없다(POK-398)', async () => {
+    const row = {
+      status: 'live',
+      relation: 'OWNER',
+      startedAt: new Date(Date.now() - 60_000).toISOString(),
+      endedAt: null,
+      vodExpiresAt: null,
+    };
+    serve({
+      live: [{ ...row, streamId: 'S-zero', title: '영 명', platform: 'SOOP', editorsOnline: 0 }],
+    });
+    const { unmount } = render(<HomeScreen />);
+    let band = await screen.findByRole('region', { name: '라이브' });
+    expect(await within(band).findByText('영 명')).toBeInTheDocument();
+    expect(within(band).getByText('SOOP')).toBeInTheDocument();
+    expect(within(band).queryByText(/접속 중/)).toBeNull();
+    unmount();
+
+    // 이 칸을 모르는 옛 서버
+    serve({ live: [{ ...row, streamId: 'S-old', title: '옛 서버' }] });
+    render(<HomeScreen />);
+    band = await screen.findByRole('region', { name: '라이브' });
+    expect(await within(band).findByText('옛 서버')).toBeInTheDocument();
+    expect(within(band).queryByText('치지직')).toBeNull();
+    expect(within(band).queryByText(/접속 중/)).toBeNull();
+  });
+
   it('라이브 띠의 클립 완료는 그 방송에서 영상까지 만든 편집본 수다', async () => {
     const rendered = { status: 'rendered', createdAt: new Date('2026-09-26T10:00:00Z') };
     serve({
@@ -984,6 +1036,17 @@ describe('LiveNowBand', () => {
 
     rerender(<LiveNowBand live={{ ...LIVE, platform: 'SOOP' }} />);
     expect(screen.getByText('SOOP')).toBeInTheDocument();
+  });
+
+  it('편집자가 접속해 있으면 시작 줄 뒤에 수를 붙이고, 0이거나 모르면 안 붙인다(POK-398)', () => {
+    const { rerender } = render(<LiveNowBand live={{ ...LIVE, editorsOnline: 2 }} />);
+    expect(screen.getByText('오후 7:12 시작 · 편집자 2명 접속 중')).toBeInTheDocument();
+
+    for (const editorsOnline of [0, null, undefined]) {
+      rerender(<LiveNowBand live={{ ...LIVE, editorsOnline }} />);
+      expect(screen.getByText('오후 7:12 시작')).toBeInTheDocument();
+      expect(screen.queryByText(/접속 중/)).toBeNull();
+    }
   });
 
   it('방송 정보와 라이브 대시보드 진입 링크를 렌더한다', () => {

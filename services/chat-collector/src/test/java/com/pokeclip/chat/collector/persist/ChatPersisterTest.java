@@ -1,5 +1,7 @@
 package com.pokeclip.chat.collector.persist;
 
+import com.pokeclip.chat.collector.Platform;
+
 import com.pokeclip.chat.collector.support.IntegrationTestSupport;
 import com.pokeclip.chat.collector.support.TestPersistence;
 import com.pokeclip.web.support.LogCaptor;
@@ -43,7 +45,7 @@ class ChatPersisterTest extends IntegrationTestSupport {
 
     /** 방송 번호를 모르는 채로 들어온 채팅 — 옛 경로(CHZZK_ENABLED)와 같은 상태다. */
     private static PersistableChat chat(String sender, String content, long time) {
-        return new PersistableChat(null, "ch-1", sender, content, time, time + 175, null, null);
+        return new PersistableChat(Platform.CHZZK, null, "ch-1", sender, content, time, time + 175, null, null);
     }
 
     @Test
@@ -268,7 +270,7 @@ class ChatPersisterTest extends IntegrationTestSupport {
      */
     @Test
     void NUL은_생성_지점에서_제거되고_해시와_저장이_같은_본문을_쓴다() {
-        PersistableChat chat = new PersistableChat(null, "ch", "s", "a\0b", 1L, 2L,
+        PersistableChat chat = new PersistableChat(Platform.CHZZK, null, "ch", "s", "a\0b", 1L, 2L,
                 "닉\0네임", "com\0mon_user");
 
         assertThat(chat.content())
@@ -467,7 +469,7 @@ class ChatPersisterTest extends IntegrationTestSupport {
         ChatBuffer buffer = new ChatBuffer(100);
         ChatPersister persister = new ChatPersister(jdbc, buffer);
         buffer.offer(chat("s-1", "정상", 1723600000000L));
-        buffer.offer(new PersistableChat(null, "ch-1", "s-2", "시각오버플로", Long.MAX_VALUE, Long.MAX_VALUE, null, null));
+        buffer.offer(new PersistableChat(Platform.CHZZK, null, "ch-1", "s-2", "시각오버플로", Long.MAX_VALUE, Long.MAX_VALUE, null, null));
 
         int consumed = persister.flushOnce();
 
@@ -559,7 +561,7 @@ class ChatPersisterTest extends IntegrationTestSupport {
     @Test
     void 새로_들어온_채팅에_방송_번호가_채워진다() {
         ChatBuffer buffer = new ChatBuffer(100);
-        buffer.offer(new PersistableChat("s1", "ch-1", "s-1", "안녕",
+        buffer.offer(new PersistableChat(Platform.CHZZK, "s1", "ch-1", "s-1", "안녕",
                 1723600000000L, 1723600000175L, null, null));
 
         new ChatPersister(jdbc, buffer).flushOnce();
@@ -579,7 +581,7 @@ class ChatPersisterTest extends IntegrationTestSupport {
     @Test
     void 방송_번호를_몰라도_저장은_된다() {
         ChatBuffer buffer = new ChatBuffer(100);
-        buffer.offer(new PersistableChat(null, "ch-1", "s-1", "안녕",
+        buffer.offer(new PersistableChat(Platform.CHZZK, null, "ch-1", "s-1", "안녕",
                 1723600000000L, 1723600000175L, null, null));
 
         new ChatPersister(jdbc, buffer).flushOnce();
@@ -601,9 +603,9 @@ class ChatPersisterTest extends IntegrationTestSupport {
     @Test
     void 두_방송의_채팅이_안_섞인다() {
         ChatBuffer buffer = new ChatBuffer(100);
-        buffer.offer(new PersistableChat("s1", "chA", "u1", "A방송",
+        buffer.offer(new PersistableChat(Platform.CHZZK, "s1", "chA", "u1", "A방송",
                 1723600000000L, 1723600000175L, null, null));
-        buffer.offer(new PersistableChat("s2", "chB", "u2", "B방송",
+        buffer.offer(new PersistableChat(Platform.CHZZK, "s2", "chB", "u2", "B방송",
                 1723600000001L, 1723600000176L, null, null));
 
         new ChatPersister(jdbc, buffer).flushOnce();
@@ -621,9 +623,9 @@ class ChatPersisterTest extends IntegrationTestSupport {
     @Test
     void 지문_제약은_방송_번호를_안_본다() {
         ChatBuffer buffer = new ChatBuffer(100);
-        buffer.offer(new PersistableChat("s1", "ch-1", "u1", "같은말",
+        buffer.offer(new PersistableChat(Platform.CHZZK, "s1", "ch-1", "u1", "같은말",
                 1723600000000L, 1723600000175L, null, null));
-        buffer.offer(new PersistableChat("s2", "ch-1", "u1", "같은말",
+        buffer.offer(new PersistableChat(Platform.CHZZK, "s2", "ch-1", "u1", "같은말",
                 1723600000000L, 1723600000176L, null, null));
 
         new ChatPersister(jdbc, buffer).flushOnce();
@@ -640,7 +642,7 @@ class ChatPersisterTest extends IntegrationTestSupport {
     @Test
     void 닉네임과_역할이_같은_행에_저장된다() {
         ChatBuffer buffer = new ChatBuffer(100);
-        buffer.offer(new PersistableChat("s-1", "CH", "S", "hi",
+        buffer.offer(new PersistableChat(Platform.CHZZK, "s-1", "CH", "S", "hi",
                 1_754_300_000_000L, 1_754_300_000_100L, "겜돌이", "common_user"));
 
         new ChatPersister(jdbc, buffer).flushOnce();
@@ -671,7 +673,7 @@ class ChatPersisterTest extends IntegrationTestSupport {
     @Test
     void 닉네임의_NUL도_생성_지점에서_제거된다() {
         PersistableChat chat =
-                new PersistableChat(null, "ch", "s", "본문", 1L, 2L, "겜\0돌이", "streamer");
+                new PersistableChat(Platform.CHZZK, null, "ch", "s", "본문", 1L, 2L, "겜\0돌이", "streamer");
 
         assertThat(chat.nickname()).isEqualTo("겜돌이");
     }
@@ -685,7 +687,7 @@ class ChatPersisterTest extends IntegrationTestSupport {
      */
     @Test
     void 채팅의_문자열_칸_여섯_전부_NUL을_생성_지점에서_지운다() {
-        PersistableChat chat = new PersistableChat("stre\0am", "c\0h", "sen\0der", "본\0문", 1L, 2L,
+        PersistableChat chat = new PersistableChat(Platform.CHZZK, "stre\0am", "c\0h", "sen\0der", "본\0문", 1L, 2L,
                 "닉\0", "ro\0le");
 
         assertThat(chat.streamId()).as("stream_id").isEqualTo("stream");
@@ -701,7 +703,7 @@ class ChatPersisterTest extends IntegrationTestSupport {
     void 채널_번호와_방송_번호에_NUL이_있어도_저장된다() {
         ChatBuffer buffer = new ChatBuffer(100);
         ChatPersister persister = new ChatPersister(jdbc, buffer);
-        buffer.offer(new PersistableChat("nul\0-stream", "c\0h-1", "s\0-1", "본문", 1723600000000L,
+        buffer.offer(new PersistableChat(Platform.CHZZK, "nul\0-stream", "c\0h-1", "s\0-1", "본문", 1723600000000L,
                 1723600000175L, null, null));
 
         persister.flushOnce();

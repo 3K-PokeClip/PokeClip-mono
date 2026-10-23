@@ -129,6 +129,13 @@ server:
   # 🔴 native는 X-Forwarded-For만이 아니다: Proto·Host·Port까지 처리해 HSTS가 붙는 자리가 있다. 서술은 위 README 절.
   # 그 절에 없는 실측 하나만 여기 남긴다: Valve가 request.setSecure(true)를 하고 HstsHeaderWriter가 isSecure()를 본다.
   forward-headers-strategy: ${FORWARD_HEADERS_STRATEGY:none}
+  tomcat:
+    remoteip:
+      # native일 때 믿는 프록시 대역(쉼표로 이은 CIDR). 운영은 FORWARD_HEADERS_TRUSTED_PROXIES로 VPC 안(ALB·웹)과
+      # CloudFront 원본 쪽 대역만 남긴다(POK-316). 기본값은 Boot 기본 대역을 글자 그대로 옮긴 것이다: 안 주면 전과 같다.
+      # RequiredPropertiesTest가 Boot 값과 같은지 본다. 🔴 빈 값은 「아무 프록시도 안 믿음」이다(한도가 전역으로 돌아간다).
+      # 🔴 주소 하나도 /32처럼 접두를 붙인다. 값 전체에 '/'가 없으면 톰캣이 목록을 정규식 하나로 읽어 아무 주소에도 안 맞는다.
+      internal-proxies: "${FORWARD_HEADERS_TRUSTED_PROXIES:192.168.0.0/16, 172.16.0.0/12, 169.254.0.0/16, fc00::/7, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, fe80::/10, ::1/128}"
 
 management:
   endpoints:
@@ -185,8 +192,8 @@ pokeclip:
     token: ${INTERNAL_API_TOKEN:}
     # resolve 전용 출입증(계약4 4C). Media가 이 토큰을 X-Stream-Key-Resolve-Token 헤더에 싣고 허용 대역(IPv4 CIDR,
     # 쉼표 목록) 안에서만 부른다. 토큰이 비면 창구가 닫힌다 — 전용 헤더 요청은 늘 401이고 auth는 그대로 뜬다.
-    # 운영 auth는 이 창구를 안 써서 비워 둔다. 토큰이 있으면 StreamKeyResolveSecurityConfig가 부팅을 검사한다
-    # (대역이 있고 IPv4 · 위 forward-headers-strategy가 none · 톰캣 remoteip 헤더 속성 없음 · 공용 토큰과 다름).
+    # 토큰이 있으면 StreamKeyResolveSecurityConfig가 부팅을 검사한다(대역이 있고 IPv4 · 위 forward-headers-strategy가
+    # none이나 native · 톰캣 remoteip 헤더 이름 속성 없음 · 공용 토큰과 다름). 전달 머리글을 단 전용 헤더 요청은 403이다.
     stream-key-resolve:
       token: ${STREAM_KEY_RESOLVE_TOKEN:}
       allowed-cidrs: ${STREAM_KEY_RESOLVE_ALLOWED_CIDRS:}

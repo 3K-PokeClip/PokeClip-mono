@@ -3,6 +3,11 @@ plugins {
     id 'org.springframework.boot'
 }
 
+dependencyManagement {
+    // Boot 4.1.0 BOM은 AWS SDK를 관리하지 않는다. 다른 서버 셋과 같은 판으로 박는다.
+    imports { mavenBom 'software.amazon.awssdk:bom:2.46.7' }
+}
+
 dependencies {
 
     implementation 'org.springframework.boot:spring-boot-starter-webmvc'
@@ -23,6 +28,15 @@ dependencies {
     implementation 'org.flywaydb:flyway-database-postgresql'
 
     runtimeOnly 'org.postgresql:postgresql'
+
+    // RDS IAM 토큰 서명(RdsUtilities)만 쓴다(POK-406). 서명은 로컬 계산이라 SDK HTTP 클라이언트가 필요 없다.
+    // 🔴 HTTP 구현 둘을 뺀다. apache5-client가 httpclient5를 클래스패스에 올리면 Boot가 RestClient
+    // 스택을 바꾼다(chat-collector build.gradle 주석). 자격 증명 조회(ECS 태스크 역할 · IMDS)는
+    // SDK HTTP 클라이언트가 아니라 JDK 연결로 한다.
+    implementation('software.amazon.awssdk:rds') {
+        exclude group: 'software.amazon.awssdk', module: 'apache5-client'
+        exclude group: 'software.amazon.awssdk', module: 'netty-nio-client'
+    }
 
     testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
     testImplementation 'org.springframework.boot:spring-boot-testcontainers'

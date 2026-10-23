@@ -1,12 +1,13 @@
 package com.pokeclip.chat.collector.purge;
 
+import com.pokeclip.chat.collector.Platform;
+
 import com.pokeclip.chat.collector.purge.ChatPurgeStore.Due;
 import com.pokeclip.chat.collector.purge.ChatPurgeStore.Table;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Instant;
-import java.util.function.BiConsumer;
 import java.util.function.Supplier;
 
 /**
@@ -17,11 +18,17 @@ import java.util.function.Supplier;
  */
 public class ChannelPurger {
 
+    /** 그 (플랫폼, 채널)을 걷는 세션 중 {@code startedBefore} 전에 시작한 것을 닫는다. 운영은 {@code SessionRegistry::closeChannel}. */
+    @FunctionalInterface
+    public interface SessionCloser {
+        void close(Platform platform, String channelId, Instant startedBefore);
+    }
+
     private static final Logger log = LoggerFactory.getLogger(ChannelPurger.class);
 
     private final ChatPurgeStore store;
     private final ArchivePurge archive;
-    private final BiConsumer<String, Instant> stopCollecting;
+    private final SessionCloser stopCollecting;
     private final ChatPurgeProperties properties;
     private final Supplier<Instant> clock;
 
@@ -29,7 +36,7 @@ public class ChannelPurger {
      * @param stopCollecting 그 채널을 지금 걷고 있는 세션 중 탈퇴 시각 전에 시작한 것을 닫는다. 탈퇴가 치지직 토큰을 폐기해도 붙어 있는 소켓이 끊긴다는
      *                       보장이 없다(ADR-085 한계). 닫지 않으면 창이 닫힌 뒤 쌓인 채팅은 60일까지 남는다(PR #220 codex P1).
      */
-    public ChannelPurger(ChatPurgeStore store, ArchivePurge archive, BiConsumer<String, Instant> stopCollecting,
+    public ChannelPurger(ChatPurgeStore store, ArchivePurge archive, SessionCloser stopCollecting,
                          ChatPurgeProperties properties, Supplier<Instant> clock) {
         this.store = store;
         this.archive = archive;
@@ -41,23 +48,23 @@ public class ChannelPurger {
     /** 실패는 예외로 올린다. 정리기가 잡아 다음 순회에 다시 부른다. */
     public void purge(Due due) {
         Instant before = due.requestedAt().plus(properties.lateWindow());
-        stopCollecting.accept(due.channelId(), due.requestedAt());
-        int deleted = store.deleteIngestKeysOfChannel(due.channelId(), before);
+        stopCollecting.close(due.platform(), due.channelId(), due.requestedAt());
+        int deleted = store.deleteIngestKeysOfChannel(due.platform(), due.channelId(), before);
         for (Table table : Table.values()) {
             int batch;
             do {
-                batch = store.deleteChannelBatch(table, due.channelId(), before, properties.batch());
+                batch = store.deleteChannelBatch(table, due.platform(), due.channelId(), before, properties.batch());
                 deleted += batch;
             } while (batch == properties.batch());
         }
-        archive.deleteChannel(due.channelId(), before);
+        archive.deleteChannel(due.platform(), due.channelId(), before);
         // 채널 번호는 안 찍는다(auth 규칙과 같다. 치지직 채널을 사람과 잇는 값이다).
         if (deleted > 0) {
             log.info("chat.purge.rows_deleted count={}", deleted);
         }
         Instant now = clock.get();
         if (!now.isBefore(before)) {
-            store.complete(due.channelId(), now);
+            store.complete(due.platform(), due.channelId(), now);
             log.info("chat.purge.completed");
         }
     }

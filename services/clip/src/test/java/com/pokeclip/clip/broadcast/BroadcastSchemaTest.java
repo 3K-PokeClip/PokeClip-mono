@@ -74,4 +74,27 @@ class BroadcastSchemaTest extends IntegrationTestSupport {
         assertThat(events.existsByEventId("evt-1")).isTrue();
         assertThat(events.existsByEventId("evt-없음")).isFalse();
     }
+
+    /**
+     * 플랫폼 칸의 기본값(POK-398)을 잰다. 시험 DB는 빈 표에 마이그레이션을 거니 「마이그레이션 전부터 있던 줄」은 여기서 못
+     * 만든다. 대신 칸을 빼고 SQL로 넣어 기본값이 채우는지 본다. 운영의 기존 줄이 받는 것도 같은 기본값이다
+     * (PostgreSQL 11부터 상수 기본값은 표를 다시 쓰지 않고 읽을 때 채운다). 기본값이 없으면 NOT NULL로 여기서 죽는다.
+     */
+    @Test
+    void 플랫폼을_안_적은_줄은_치지직이다() {
+        jdbc.update("INSERT INTO broadcasts (stream_id, streamer_id, status, last_sequence) VALUES ('stream-p', ?, 'live', 1)",
+                TestIds.STREAMER);
+
+        assertThat(jdbc.queryForObject("SELECT platform FROM broadcasts WHERE stream_id = 'stream-p'", String.class))
+                .isEqualTo("CHZZK");
+        assertThat(broadcasts.findByStreamId("stream-p").orElseThrow().getPlatform()).isEqualTo("CHZZK");
+    }
+
+    @Test
+    void 플랫폼을_저장하고_읽는다() {
+        broadcasts.save(Broadcast.startedNow("stream-soop", TestIds.STREAMER, null, 1L,
+                Instant.parse("2026-08-18T00:00:00Z"), null, "SOOP"));
+
+        assertThat(broadcasts.findByStreamId("stream-soop").orElseThrow().getPlatform()).isEqualTo("SOOP");
+    }
 }
