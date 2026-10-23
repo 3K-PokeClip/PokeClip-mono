@@ -18,6 +18,12 @@ export const FINISH_MS = 180;
 export const FADE_OUT_MS = 220;
 /** 응답 없이 멈춘 요청이 화면을 막지 않게: 이만큼 지나면 다 못 불러와도 걷는다 */
 export const MAX_MS = 10_000;
+/**
+ * 「다 불러왔다」로 보려면 진행 중 요청 0개가 이만큼 이어져야 한다. apiFetch의 「끝」은 응답 머리가 온 때라 화면이 본문을
+ * 읽는(res.json) 동안이 빠지고, 쪽 넘김처럼 요청을 차례로 잇는 화면은 요청 사이에 0개인 틈이 생긴다(PR #342 리뷰 3).
+ * 본문 읽기까지 감싸 재지 않는 이유: apiFetch를 쓰는 곳이 본문을 다 읽는 건 아니라 「끝」이 영영 안 오는 요청이 생긴다
+ */
+export const QUIET_MS = 250;
 const TICK_MS = 100;
 
 export function ChannelSwitchCurtain() {
@@ -49,7 +55,8 @@ function Cover({
   const clear = useSwitchCurtain((s) => s.clear);
   const ref = useRef<HTMLDivElement>(null);
   const [now, setNow] = useState(() => Date.now());
-  const [load, setLoad] = useState({ started: 0, finished: 0 });
+  // changedAt: 마지막으로 요청이 나가거나 끝난 때. 아무 요청도 없으면 덮은 때다
+  const [load, setLoad] = useState({ started: 0, finished: 0, changedAt: curtain.shownAt });
   const [phase, setPhase] = useState<'loading' | 'finishing' | 'leaving'>('loading');
 
   // 덮개가 서 있는 동안 나간 API 요청과 끝난 요청을 센다: 새 채널 화면이 부르는 목록들이다. 덮기 전에 나가 있던
@@ -61,7 +68,7 @@ function Cover({
       if (type === 'start') started.add(id);
       else if (started.has(id)) finished.add(id);
       else return;
-      setLoad({ started: started.size, finished: finished.size });
+      setLoad({ started: started.size, finished: finished.size, changedAt: Date.now() });
     });
   }, []);
 
@@ -84,17 +91,18 @@ function Cover({
 
   const elapsed = now - curtain.shownAt;
   const pending = load.started - load.finished;
+  const quiet = now - load.changedAt >= QUIET_MS;
 
-  // 최소 시간이 지났고 불러오는 것이 없으면 막대를 채우고 걷는다. 멈춘 요청은 MAX_MS에서 끊는다
+  // 최소 시간이 지났고 불러오는 것이 없는 채로 잠잠하면 막대를 채우고 걷는다. 멈춘 요청은 MAX_MS에서 끊는다
   useEffect(() => {
     if (phase !== 'loading') return;
-    if ((elapsed >= HOLD_MS && pending === 0) || elapsed >= MAX_MS) {
+    if ((elapsed >= HOLD_MS && pending === 0 && quiet) || elapsed >= MAX_MS) {
       setPhase('finishing');
       return;
     }
     const tick = setTimeout(() => setNow(Date.now()), TICK_MS);
     return () => clearTimeout(tick);
-  }, [phase, elapsed, pending]);
+  }, [phase, elapsed, pending, quiet]);
 
   useEffect(() => {
     if (phase === 'finishing') {

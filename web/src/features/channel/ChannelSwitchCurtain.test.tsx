@@ -7,6 +7,7 @@ import {
   FINISH_MS,
   HOLD_MS,
   MAX_MS,
+  QUIET_MS,
 } from './ChannelSwitchCurtain';
 import { COVER_IN_MS, useSwitchCurtain } from './switchCurtain';
 
@@ -124,7 +125,28 @@ describe('ChannelSwitchCurtain', () => {
     expect(later).toBeLessThanOrEqual(95);
 
     await finish();
-    run(100 + FINISH_MS + FADE_OUT_MS + 50);
+    run(QUIET_MS + 100 + FINISH_MS + FADE_OUT_MS + 50);
+    expect(useSwitchCurtain.getState().curtain).toBeNull();
+  });
+
+  it('요청을 차례로 잇는 화면은 요청 사이 0개 틈에 걷지 않는다: 잠잠한 시간이 지나야 걷는다', async () => {
+    setup();
+    cover();
+    run(COVER_IN_MS);
+    const first = pendingRequest();
+    run(HOLD_MS);
+
+    // 첫 쪽이 끝나고 다음 쪽을 부르기까지 틈(QUIET_MS보다 짧게)
+    await first();
+    run(QUIET_MS - 100);
+    expect(shown()).toBe(true);
+    const second = pendingRequest();
+    run(QUIET_MS + 100);
+    expect(shown()).toBe(true);
+    expect(progress()).toBeLessThan(100);
+
+    await second();
+    run(QUIET_MS + 100 + FINISH_MS + FADE_OUT_MS + 50);
     expect(useSwitchCurtain.getState().curtain).toBeNull();
   });
 
