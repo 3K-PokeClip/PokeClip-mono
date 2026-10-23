@@ -14,6 +14,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.SQLException;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
@@ -71,9 +72,32 @@ class RdsIamWiringTest extends IntegrationTestSupport {
     void iam인데_URL에_sslmode가_있으면_부팅을_거부한다() throws Exception {
         Path ca = caFile();
         Throwable thrown = catchThrowable(() -> bootIam(ca, new AtomicInteger(),
-                POSTGRES.getJdbcUrl() + "?sslmode=require").close());
+                withQuery("sslmode=require")).close());
 
         assertThat(thrown).hasStackTraceContaining("sslmode");
+    }
+
+    /**
+     * sslmode만 막으면 부족하다. {@code sslfactory=NonValidatingFactory}는 verify-full을 둔 채로 인증서
+     * 검증을 통째로 건너뛰어, 가짜 서버가 재사용 가능한 토큰을 받는다(PR #336 codex P1).
+     */
+    @Test
+    void iam인데_URL에_sslfactory가_있으면_부팅을_거부한다() throws Exception {
+        Path ca = caFile();
+        Throwable thrown = catchThrowable(() -> bootIam(ca, new AtomicInteger(),
+                withQuery("sslfactory=org.postgresql.ssl.NonValidatingFactory")).close());
+
+        assertThat(thrown).hasStackTraceContaining("sslfactory");
+    }
+
+    /** URL이 아니라 yml의 드라이버 속성으로 들어와도 같다. */
+    @Test
+    void iam인데_드라이버_속성에_ssl_설정이_있으면_부팅을_거부한다() throws Exception {
+        Path ca = caFile();
+        Throwable thrown = catchThrowable(() -> bootIam(ca, new AtomicInteger(), POSTGRES.getJdbcUrl(),
+                "--spring.datasource.hikari.data-source-properties.sslhostnameverifier=x.AllowAll").close());
+
+        assertThat(thrown).hasStackTraceContaining("sslhostnameverifier");
     }
 
     /** 오타가 password 모드로 조용히 떨어지면 원인 없는 인증 실패만 남는다. */
@@ -91,6 +115,12 @@ class RdsIamWiringTest extends IntegrationTestSupport {
         assertThat(thrown).hasStackTraceContaining("POSTGRES_AUTH");
     }
 
+    /** 시험 컨테이너 URL에는 이미 쿼리({@code ?loggerLevel=OFF})가 있다. {@code ?}를 또 붙이면 드라이버도 키로 안 읽는다. */
+    private static String withQuery(String param) {
+        String url = POSTGRES.getJdbcUrl();
+        return url + (url.contains("?") ? "&" : "?") + param;
+    }
+
     private Path caFile() throws Exception {
         Path ca = tmp.resolve("ca.pem");
         if (!Files.exists(ca)) {
@@ -104,7 +134,7 @@ class RdsIamWiringTest extends IntegrationTestSupport {
     }
 
     /** 서명기는 가짜다. 이 시험이 실제 AWS 자격 증명을 찾아 나가면 안 된다. */
-    private ConfigurableApplicationContext bootIam(Path ca, AtomicInteger signed, String jdbcUrl) {
+    private ConfigurableApplicationContext bootIam(Path ca, AtomicInteger signed, String jdbcUrl, String... extra) {
         return new SpringApplicationBuilder(DetectorApplication.class)
                 .web(WebApplicationType.NONE)
                 .profiles("test")
@@ -113,12 +143,13 @@ class RdsIamWiringTest extends IntegrationTestSupport {
                             signed.incrementAndGet();
                             return POSTGRES.getPassword();
                         }))
-                .run("--spring.datasource.url=" + jdbcUrl,
+                .run(Stream.concat(Stream.of("--spring.datasource.url=" + jdbcUrl,
                         "--spring.datasource.username=" + POSTGRES.getUsername(),
                         "--spring.datasource.password=",
                         "--spring.flyway.enabled=false",
                         "--pokeclip.datasource.auth=iam",
-                        "--pokeclip.datasource.ssl-root-cert=" + (ca == null ? "" : ca.toString()));
+                        "--pokeclip.datasource.ssl-root-cert=" + (ca == null ? "" : ca.toString())),
+                        Stream.of(extra)).toArray(String[]::new));
     }
 
     private static String sqlStateOf(Throwable thrown) {
