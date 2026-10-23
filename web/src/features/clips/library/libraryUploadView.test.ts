@@ -425,6 +425,29 @@ describe('privacyNoteText: 편집본 상태마다 그 범위로 올라가게 하
     );
   });
 
+  it('렌더가 실패한 예약 주문은 「렌더 재시도」 뒤를 말하고, 시각이 지났으면 바로 공개된다고 경고한다(PR #301 3차 리뷰)', () => {
+    const at = '2026-10-23T09:00:00Z';
+    const when = instantLabel(new Date(at));
+    const renderFailed = toLibraryClip(
+      {
+        ...entry('failed', { ...snapshot(null), status: 'failed' }),
+        uploadRequest: {
+          title: 't',
+          privacyStatus: 'private',
+          thumbnailSource: 'none',
+          publishAt: at,
+        },
+      },
+      '9',
+    );
+    expect(note(renderFailed)).toBe(
+      `「렌더 재시도」가 끝나면 올라가고 「예약」 ${when}에 공개로 바뀌어요. ${NOTIFY}`,
+    );
+    expect(privacyNoteText(renderFailed, new Date('2026-10-24T00:00:00Z'))).toBe(
+      `「예약」 시각(${when})이 지나 「렌더 재시도」가 끝나면 바로 공개돼요. ${NOTIFY}`,
+    );
+  });
+
   it('예약 시각이 지났으면 「올라가면 그 시각에」라고 하지 않고, 확인 필요면 단정하지 않는다(PR #301 2차 리뷰)', () => {
     const at = '2026-10-23T09:00:00Z';
     const when = instantLabel(new Date(at));

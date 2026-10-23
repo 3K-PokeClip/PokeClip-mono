@@ -562,16 +562,17 @@ export function privacyNoteText(clip: LibraryClip, now: Date): string | null {
   // (새 판엔 예약이 없다, PR #301 리뷰)
   const publishAt =
     upload != null ? (upload.publishAt ?? null) : (entry.uploadRequest?.publishAt ?? null);
-  if (
-    privacy === 'private' &&
-    publishAt !== null &&
-    entry.status !== 'failed' &&
-    entry.status !== 'editing'
-  ) {
+  if (privacy === 'private' && publishAt !== null && entry.status !== 'editing') {
     const at = new Date(publishAt);
     const when = instantLabel(at);
     const passed = at.getTime() <= now.getTime();
     switch (entry.status) {
+      case 'failed':
+        // 렌더 실패: 「렌더 재시도」가 성공하면 그 판의 정보(예약 시각 포함)로 이어서 올린다. 시각이 지났으면 바로 공개된다
+        // — 렌더 실패를 빼면 이 경고가 아무 데도 안 떴다(PR #301 3차 리뷰)
+        return passed
+          ? `「예약」 시각(${when})이 지나 「렌더 재시도」가 끝나면 바로 공개돼요. ${PUBLIC_NOTIFY_NOTE}`
+          : `「렌더 재시도」가 끝나면 올라가고 「예약」 ${when}에 공개로 바뀌어요. ${PUBLIC_NOTIFY_NOTE}`;
       case 'uploaded':
         return passed
           ? `「예약」 ${when}에 공개되도록 올렸어요. ${PRIVACY_CHANGE_NOTE}`
