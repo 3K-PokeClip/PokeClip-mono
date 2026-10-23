@@ -220,6 +220,24 @@ class PlaybackAccessControllerTest extends IntegrationTestSupport {
      * 🔴 <b>이 카드가 막는 것: 로그인만 하면 남의 방송 영상을 받는 것.</b> 404 본문이 「없는 방송」과
      * 같고 <b>쿠키가 한 개도 안 나간다</b> — 404인데 쿠키가 실리면 상태 코드만 거절이다.
      */
+    /**
+     * 보관 기간(60일)이 지난 방송은 새 출입증을 안 준다(POK-335): 410 vod_expired, 쿠키 없음. 자격이 먼저다(없으면 404 그대로).
+     * 한계: 같은 물리 키의 안 만료된 방송으로 받은 쿠키는 그 키 전체를 여므로 이 410은 「만료된 방송으로 새 쿠키를 받는 길」만 막는다
+     */
+    @Test
+    void 만료된_방송이면_410이고_쿠키가_없다() throws Exception {
+        jdbc.update("UPDATE broadcasts SET ended_at = now() - interval '61 days', vod_expires_at = now() - interval '1 day' WHERE stream_id = ?", 내_방송);
+
+        볼_수_없다();
+        assertThat(부른다(내_방송).statusCode()).isEqualTo(404);
+
+        볼_수_있다("OWNER");
+        HttpResponse<String> 응답 = 부른다(내_방송);
+        assertThat(응답.statusCode()).isEqualTo(410);
+        assertThat(응답.body()).contains("\"error\":\"vod_expired\"");
+        assertThat(응답.headers().allValues("set-cookie")).isEmpty();
+    }
+
     @Test
     void 자격이_없으면_404이고_쿠키가_없다() throws Exception {
         볼_수_없다();

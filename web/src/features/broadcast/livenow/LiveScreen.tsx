@@ -180,6 +180,8 @@ function LivePlayer({
   // 새 키의 출입증 전에 쿠키 없이 부르고 403을 받았다(PR #332 codex P1)
   const accessKey = liveStreamId ? `${liveStreamId}|${mediaKey ?? liveStreamId}` : null;
   const [accessReadyFor, setAccessReadyFor] = useState<string | null>(null);
+  // 보관 기간(60일)이 지나 출입증을 안 주는 방송(410, POK-335). 녹화를 찾지 않고 그렇다고 알린다
+  const [accessExpiredFor, setAccessExpiredFor] = useState<string | null>(null);
   const [lookup, setLookup] = useState<RecordingLookup>({ kind: 'pending' });
   useEffect(() => {
     setLookup({ kind: 'pending' });
@@ -253,17 +255,19 @@ function LivePlayer({
   // 않았어요」가 맞다: 그때 「찾지 못했어요」라 하면 녹화가 지워진 것처럼 읽혔다(dev·운영은 재생 서버 주소가 비어 있다, 리뷰
   // 6라운드). 서버는 있는데 묻지 못했으면(오류·시한·출입증 쿠키 없음 403) 그렇다고 알린다: 1분 뒤 다시 묻는다(POK-337)
   const noSignalNote =
-    displayStatus === 'live'
-      ? accessKey !== null && accessFailedFor === accessKey
-        ? '영상 출입증을 받지 못했어요. 1분 뒤 다시 받아요'
-        : undefined
-      : displayStatus !== 'ended' || !playbackConfigured()
-        ? undefined
-        : recordingMayPlay(lookup.kind)
-          ? '녹화 영상을 확인하고 있어요'
-          : lookup.kind === 'none'
-            ? '녹화 영상을 찾지 못했어요'
-            : '녹화 영상을 불러오지 못했어요. 1분 뒤 다시 확인해요';
+    displayStatus === 'ended' && accessKey !== null && accessExpiredFor === accessKey
+      ? '보관 기간(60일)이 지나 녹화 영상을 볼 수 없어요'
+      : displayStatus === 'live'
+        ? accessKey !== null && accessFailedFor === accessKey
+          ? '영상 출입증을 받지 못했어요. 1분 뒤 다시 받아요'
+          : undefined
+        : displayStatus !== 'ended' || !playbackConfigured()
+          ? undefined
+          : recordingMayPlay(lookup.kind)
+            ? '녹화 영상을 확인하고 있어요'
+            : lookup.kind === 'none'
+              ? '녹화 영상을 찾지 못했어요'
+              : '녹화 영상을 불러오지 못했어요. 1분 뒤 다시 확인해요';
   // 영상 출입증(POK-122). 방송을 열 때 받고, 1분마다 다시 본다(playbackAccess 한 곳에서 받는다: 만료 5분 전이면 새로 받고,
   // 실패했거나 다른 화면이 403으로 버렸으면 다시 받는다, POK-317). 쿠키 수명(운영 60분)이 지나면 새 조각이 403이 되어 재생이
   // 멈춘다(PR #200 codex P1). 서명 재료가 없는 서버(503)는 출입증이 필요 없는 곳이라(로컬·dev) 다시 묻지 않는다.
@@ -283,6 +287,14 @@ function LivePlayer({
     const ask = () => {
       void ensureLiveAccess(liveStreamId, mediaKey ?? liveStreamId).then((result) => {
         if (!alive) return;
+        if (result.kind === 'expired') {
+          // 다시 받아도 같다: 더 묻지 않는다. 보던 녹화가 있으면 내린다: 준비 표시를 비우면 녹화 효과가 찾은 녹화를 치운다
+          // (남기면 녹화가 안내보다 앞서 쿠키가 끝날 때까지 계속 돈다, PR #348 codex)
+          setAccessExpiredFor(key);
+          setAccessReadyFor(null);
+          setCookieFor(null);
+          return;
+        }
         if (result.kind === 'failed') {
           failedSinceOpen = opened;
           // 열린 뒤의 갱신 실패는 알리지 않는다: 받아 둔 쿠키가 아직 살아 있어 재생은 이어진다

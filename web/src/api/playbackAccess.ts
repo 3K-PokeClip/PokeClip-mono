@@ -34,6 +34,8 @@ const streamIdByMediaKey = new Map<string, string>();
  * 영상 키가 정책에 못 들어갈 때(글자 검사 실패)도 와서, 한 방송의 답으로 다른 방송을 안 물으면 정상 방송의 쿠키까지 빠진다(PR #320 codex)
  */
 const notNeeded = new Set<string>();
+/** 보관 기간이 지난 방송(410, POK-335). 다시 받아도 같으므로 더 묻지 않는다 */
+const expired = new Set<string>();
 /** 방송 번호 → 이 탭이 받은 쿠키가 끝나는 시각. 지난 방송 목록의 상한은 누가 받았든 다 센다 */
 const cookieUntil = new Map<string, number>();
 /**
@@ -49,6 +51,7 @@ async function request(streamId: string): Promise<PlaybackAccessResult> {
   if (result.kind === 'granted')
     cookieUntil.set(streamId, result.expiresAtMs ?? Date.now() + COOKIE_TTL_MS);
   if (result.kind === 'not_needed') notNeeded.add(streamId);
+  if (result.kind === 'expired') expired.add(streamId);
   return result;
 }
 
@@ -81,12 +84,20 @@ export function ensurePlaybackAccess(
   streamId: string,
   mediaKey: string,
 ): Promise<PlaybackAccessResult> | null {
-  if (notNeeded.has(streamId) || !playbackConfigured()) {
+  if (notNeeded.has(streamId) || expired.has(streamId) || !playbackConfigured()) {
     streamIdByMediaKey.set(mediaKey, streamId);
     return null;
   }
   const { result, reused } = obtain(streamId, mediaKey);
   return reused ? null : result;
+}
+
+/**
+ * 보관 기간이 지나 서버가 410을 준 방송인가. 받아 둔 만료는 ensurePlaybackAccess가 null(묻지 않음)로 돌려줘 부른 쪽이 그것만으로는
+ * 만료를 모른다: 같은 탭에서 다시 연 편집기가 녹화를 묻지 않게 이것으로 먼저 본다(PR #348 codex)
+ */
+export function isPlaybackExpired(streamId: string): boolean {
+  return expired.has(streamId);
 }
 
 /**
@@ -98,6 +109,7 @@ export function ensureLiveAccess(
   mediaKey: string,
 ): Promise<PlaybackAccessResult> {
   if (notNeeded.has(streamId)) return Promise.resolve({ kind: 'not_needed' });
+  if (expired.has(streamId)) return Promise.resolve({ kind: 'expired' });
   return obtain(streamId, mediaKey).result;
 }
 
@@ -137,7 +149,7 @@ export function ensurePlaybackAccessForList(
   const stale: string[] = [];
   const waiting: string[] = [];
   for (const [mediaKey, streamId] of byKey) {
-    if (fresh.has(mediaKey) || notNeeded.has(streamId))
+    if (fresh.has(mediaKey) || notNeeded.has(streamId) || expired.has(streamId))
       out.set(mediaKey, ensurePlaybackAccess(streamId, mediaKey));
     else if (alive.has(mediaKey)) stale.push(mediaKey);
     else waiting.push(mediaKey);
@@ -218,6 +230,7 @@ export function resetPlaybackAccessForTests(): void {
   cache.clear();
   streamIdByMediaKey.clear();
   notNeeded.clear();
+  expired.clear();
   cookieUntil.clear();
   listTriedAt.clear();
   dropped.clear();

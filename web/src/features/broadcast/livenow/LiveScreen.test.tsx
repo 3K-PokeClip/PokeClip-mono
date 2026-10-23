@@ -334,7 +334,7 @@ const server = vi.hoisted(() => ({
   /** 후원 줄의 서버 id를 첫 채팅 id와 같게 준다: 채팅·후원은 표가 달라 번호가 겹친다(POK-254) */
   chatIdClash: false,
   /** 출입증: 'off'는 서명 재료 없음(503), 'grant'는 10분짜리, 'fail'은 500 */
-  playback: 'off' as 'off' | 'grant' | 'fail',
+  playback: 'off' as 'off' | 'grant' | 'fail' | 'expired',
   /** 'grant' 출입증이 끝날 때까지의 시간. 갱신은 만료 5분 전이라, 갱신을 재는 시험은 짧게 주어 가짜 시계를 몇 분씩 돌리지 않는다(POK-415) */
   playbackTtlMs: 10 * 60_000,
   /** 라이브 영상 서버(live.test)가 첫 바이트 물음에 주는 응답 코드(POK-337) */
@@ -721,6 +721,7 @@ function handle(url: string, init?: RequestInit): Response | Promise<Response> {
         expiresAt: new Date(Date.now() + server.playbackTtlMs).toISOString(),
       });
     if (server.playback === 'fail') return jsonResponse(500, { error: 'boom' });
+    if (server.playback === 'expired') return jsonResponse(410, { error: 'vod_expired' });
     return jsonResponse(503, { error: 'playback_signing_unavailable' });
   }
   if (path === '/api/chzzk-link')
@@ -1346,6 +1347,41 @@ describe('LiveScreen — 영상 출입증', () => {
     release();
     await settle();
     expect(hlsFake.loads).toBe(2);
+  });
+
+  it('보관 기간이 지난 방송이면 녹화를 찾지 않고 그렇다고 알린다(POK-335)', async () => {
+    mediaCalls.configured = true;
+    server.playback = 'expired';
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    await renderLive();
+    expect(screen.getByText('보관 기간(60일)이 지나 녹화 영상을 볼 수 없어요')).toBeInTheDocument();
+    expect(mediaCalls.spans).toEqual([]);
+    const before = accessCalls();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3 * 60_000);
+    });
+    expect(accessCalls()).toBe(before);
+  });
+
+  it('녹화를 보는 중 갱신이 410이면 녹화를 내리고 만료를 알린다(PR #348 codex)', async () => {
+    stubMediaElement();
+    mediaCalls.configured = true;
+    mediaCalls.answer = Promise.resolve([{ startMs: VOD_STARTED, durationSeconds: 9_000 }]);
+    server.playback = 'grant';
+    server.playbackTtlMs = 5 * 60_000 + 30_000;
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    const { container } = await renderLive();
+    await settle();
+    // 녹화를 틀고 있다(요청한 시작 위치가 있다)
+    expect(container.querySelector('video')?.getAttribute('src') ?? '').toContain('/playback/');
+    expect(screen.queryByText('보관 기간(60일)이 지나 녹화 영상을 볼 수 없어요')).toBeNull();
+
+    server.playback = 'expired';
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(65_000);
+    });
+    await settle();
+    expect(screen.getByText('보관 기간(60일)이 지나 녹화 영상을 볼 수 없어요')).toBeInTheDocument();
   });
 
   it('출입증이 필요 없는 곳(로컬·dev)은 첫 화면이 서는 사이에 라이브 영상을 부른다: 기다림이 재생 시작을 늦추지 않는다', async () => {

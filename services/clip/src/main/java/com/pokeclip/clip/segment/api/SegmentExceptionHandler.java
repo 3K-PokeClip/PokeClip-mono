@@ -3,7 +3,6 @@ package com.pokeclip.clip.segment.api;
 import com.pokeclip.clip.segment.SegmentErrors.AuthUnavailableException;
 import com.pokeclip.clip.segment.SegmentErrors.InvalidRangeException;
 import com.pokeclip.clip.segment.SegmentErrors.NotViewableException;
-import com.pokeclip.clip.segment.SegmentErrors.VodExpiredException;
 import com.pokeclip.clip.support.NotFoundFloor;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
@@ -82,15 +81,6 @@ public class SegmentExceptionHandler {
         // 기다림이 로그 뒤인 것은 의도다 — 로그를 쓰는 시간까지 바닥 안에 들어간다.
         NotFoundFloor.awaitFloor(request);
         return json(HttpStatus.NOT_FOUND, error("broadcast_not_found"));
-    }
-
-    /**
-     * 410. 이 응답은 <b>자격이 확인된 사람에게만</b> 도달한다 — 「있었는데 없어졌다」는 뜻이라
-     * 그 자체로 방송의 실재를 말하기 때문이다. 순서를 지키는 것은 서비스 쪽이다.
-     */
-    @ExceptionHandler(VodExpiredException.class)
-    ResponseEntity<Map<String, Object>> vodExpired(VodExpiredException e) {
-        return json(HttpStatus.GONE, error("vod_expired"));
     }
 
     /**

@@ -158,6 +158,8 @@ web/                     # 단일 Next.js 앱 (App Router + TanStack Query + Zus
     출입증 흐름을 로컬에서 시험할 때만 켠다.
   - 503 `playback_signing_unavailable`(서명 재료 없음, 또는 그 방송의 영상 키가 정책에 못 들어감)을 받은 **방송은** 더 묻지 않는다.
     자격 확인이 안 되는 503(`authorization_unavailable`)은 실패라 다시 묻는다.
+    보관 기간(60일)이 지난 방송은 출입증 문이 410 `vod_expired`라 「만료」로 받아 그 방송은 더 묻지 않고, 지난 방송 화면 · 편집기가
+    「보관 기간(60일)이 지나 … 볼 수 없어요」로 알린다. 렌더 주문의 410도 편집기가 같은 뜻으로 알린다(POK-335).
   - 🔴 **녹화 주소는 쿠키 경로 아래다**: `{base}/playback/{키}/list` · `/playback/{키}/get?start&duration&format`. 재생 서버의
     `path` 쿼리는 싣지 않는다. 쿠키 정책은 쿼리를 못 막아(`/playback/{내키}/list?path={남의키}`도 맞는다) 엣지가 경로의 키로
     `path`를 채우고 **들어온 `path`는 버린다**. 로컬은 `app/media/playback/[key]/[op]/route.ts`가 같은 규칙으로 재생 서버에
