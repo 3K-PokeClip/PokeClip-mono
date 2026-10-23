@@ -149,6 +149,9 @@ web/                     # 단일 Next.js 앱 (App Router + TanStack Query + Zus
   - 쿠키는 **출입증이 실제로 발급된 뒤에만** 싣는다(`mediaCredentials()`: 녹화 목록·미리보기 fetch는 `credentials`, 라이브
     hls.js는 `xhrSetup`의 `withCredentials`, 다시보기 `<video>`는 원래 싣는다). 로컬·dev 영상 서버(MediaMTX)는
     `Access-Control-Allow-Origin: *`로만 답해 쿠키를 실으면 브라우저가 응답을 버리기 때문이다(2026-10-23 실측).
+    🔴 **로컬은 clip 출입증 설정 셋(`CLOUDFRONT_KEY_PAIR_ID` · `CLOUDFRONT_PRIVATE_KEY_PEM` · `MEDIA_BASE_URL`)을 비워 두는 것이
+    기본이다.** 채우면 출입증이 실제로 나와 쿠키를 싣는데, 라이브(`:8888`)는 다른 출처라 막힌다(녹화는 `/media` 같은 출처 전달이라 된다).
+    출입증 흐름을 로컬에서 시험할 때만 켠다.
   - 503 `playback_signing_unavailable`(서명 재료 없음, 또는 그 방송의 영상 키가 정책에 못 들어감)을 받은 **방송은** 더 묻지 않는다.
     자격 확인이 안 되는 503(`authorization_unavailable`)은 실패라 다시 묻는다.
   - 🔴 **녹화 주소는 쿠키 경로 아래다**: `{base}/playback/{키}/list` · `/playback/{키}/get?start&duration&format`. 재생 서버의
