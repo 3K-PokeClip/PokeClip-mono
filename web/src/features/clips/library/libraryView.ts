@@ -506,6 +506,10 @@ export function uploadFailureText(clip: LibraryClip): string | null {
   if (LINK_FAILURES.has(code)) {
     return '스트리머의 유튜브 채널 연동이 없거나 끊겨 올리지 못했어요. 스트리머가 설정 › 채널 연동에서 다시 연결한 뒤 올려 주세요.';
   }
+  if (code === 'SWEPT') {
+    // 주문줄에서 거듭 실패해 닫혔다. 이 실패는 주소를 받기 전에만 생긴다(주소가 있으면 SWEPT_AFTER_SESSION 확인 필요): 영상은 없다
+    return '올리는 중에 문제가 거듭 생겨 유튜브에 올리지 못했어요. 영상은 올라가지 않았으니 다시 올려 주세요.';
+  }
   if (code === 'QUOTA_EXCEEDED') {
     return '오늘 유튜브 업로드 한도를 다 써서 올리지 못했어요. 내일 다시 올려 주세요.';
   }
