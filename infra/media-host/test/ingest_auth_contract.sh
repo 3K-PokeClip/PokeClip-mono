@@ -11,17 +11,22 @@
 #   A   응답기 모드 설정 + 가짜 응답기(에코 authstub) — C1 ~ C8 · C10.
 #   B   응답기 모드 설정 + 실물 응답기(media/Dockerfile.ingest-auth) + 가짜
 #       4C(에코 resolvestub) — C9 · C11 ~ C19.
+#   T1  두 모드 렌더본의 토큰이 각각 정확히 한 번이고 채운 뒤 `@@` 가 남지
+#       않는지(시작 스크립트의 「토큰마다 정확히 한 번」 불변식). 준비 관문이
+#       아니라 사례다 — 개수가 어긋나도 채워서 층을 띄운다.
 #
 # 이미지는 모두 이 트리에서 로컬 빌드한다(MediaMTX = media/Dockerfile.mtxhook ·
 # 응답기 = media/Dockerfile.ingest-auth · 에코 = test/echo). 송출기는 images.json
 # 의 loopback_sender 핀이다(로컬에 없으면 받는다). compose 는
 # test/compose.ingest-auth.yml 이다.
 #
-# 응답기 모드의 MediaMTX 설정은 아직 운영 템플릿에 없다(계획 c2a 전). 그래서
-# auth_mode_stage1 이 옛 갈래 렌더본에 계획 4-c2a 의 응답기 갈래 꼴을 얹어 시험
-# 전용으로 만든다 — c2a 뒤에는 그 함수 하나를 운영 템플릿 렌더로 바꾼다. c5 운영
-# 스크립트가 필요한 사례(C13 · C15 · C18)는 스크립트가 없으면 「없음」 으로
-# 실패한다. 건너뛰는 갈래는 없다.
+# 두 모드의 MediaMTX 설정은 운영 템플릿(mediamtx.yml.tmpl) 렌더다 — 옛 모드는
+# render_vars.json 그대로, 응답기 모드는 ingest_auth_image 만 채운 사본이다.
+# 응답기 모드 렌더가 실패하면 층 A · B 만 준비 실패이고 C0 · 층 L 은 돈다(옛
+# 모드 렌더 실패는 층 L 만 막는다). 시험 compose 의 응답기 서비스(env · 마운트
+# 대상 · healthcheck 등)는 render_test 사례 44 가 운영 compose 렌더본과
+# 대조한다. c5 운영 스크립트가 필요한 사례(C13 · C15 · C18)는 스크립트가
+# 없으면 「없음」 으로 실패한다. 건너뛰는 갈래는 없다.
 #
 # 실험 식별: compose 프로젝트 pcbench-m15-ingest-auth · 라벨
 # com.pokeclip.bench=m15-ingest-auth(컨테이너 · 망 · 볼륨). 호스트 포트 게시 0.
@@ -59,6 +64,10 @@ readonly MTX_IMAGE="${PROJECT}/mediamtx:local"
 readonly INGEST_AUTH_IMAGE="${PROJECT}/ingest-auth:local"
 readonly ECHO_IMAGE="${PROJECT}/echo:local"
 readonly HELPER_IMAGE='alpine:3.22'
+# 응답기 모드 렌더의 ingest_auth_image(MediaMTX 설정은 빈 값인지만 본다 — 실제
+# 실행 이미지는 INGEST_AUTH_IMAGE).
+readonly INGEST_AUTH_IMAGE_REF="registry.pcbench-m15.invalid/media-ingest-auth@\
+sha256:4444444444444444444444444444444444444444444444444444444444444444"
 readonly MTX_TEMPLATE_REL='mediamtx.yml.tmpl'
 readonly IP_LIMIT_SCRIPT_REL='bin/ingest-auth-ip-limit.sh'
 readonly DENY_SYNC_SCRIPT_REL='bin/ingest-auth-deny-sync.sh'
@@ -75,6 +84,11 @@ mtx_built=0
 ia_built=0
 ia_build_reason=""
 sender_image=""
+# 층별 준비 실패 원인 — 옛 모드 렌더(층 L) · 응답기 모드 렌더(층 A · B).
+legacy_reason=""
+auth_reason=""
+# 토큰 채우기 기록(T1) — 줄마다 「모드 토큰 개수」 · 「모드 @@남음 0|1」.
+token_counts=""
 
 add_setup_reason() {
   setup_reason="${setup_reason:+${setup_reason}; }$1"
@@ -262,120 +276,107 @@ export_compose_env() {
 }
 
 #######################################
-# 1단계 렌더본의 토큰을 채운다. 각 토큰이 정확히 한 번 나와야 하고, 다 채운
-# 뒤 `@@` 가 남으면 안 된다(시작 스크립트의 「토큰마다 정확히 한 번」 불변식).
+# 1단계 렌더본의 토큰을 모두 채운다. 개수는 막지 않고 token_counts 에 남긴다
+# (T1 이 본다).
+# Globals:
+#   token_counts
 # Arguments:
-#   입력, 출력, 토큰 이름, 값, [토큰 이름, 값 …].
-# Outputs:
-#   실패하면 원인 한 줄.
+#   입력, 출력, 모드 이름, 토큰 이름, 값, [토큰 이름, 값 …].
 #######################################
 fill_tokens() {
-  local in="$1" out="$2" content name count
-  shift 2
-  content="$(<"${in}")"
+  local in="$1" out="$2" mode="$3" content name count left=0
+  shift 3
+  content="$(<"${in}")" || return 1
   while (( $# >= 2 )); do
     name="@@$1@@"
-    count="$(grep -o -F -- "${name}" "${in}" | wc -l | tr -d ' ')"
-    if [[ "${count}" != 1 ]]; then
-      printf '토큰 %s 가 %s번(기대 1번)' "$1" "${count}"
-      return 1
-    fi
+    count="$({ grep -o -F -- "${name}" "${in}" || true; } | wc -l \
+      | tr -d ' ')"
+    token_counts="${token_counts}${mode} $1 ${count}"$'\n'
     content="${content//"${name}"/$2}"
     shift 2
   done
-  if [[ "${content}" == *@@* ]]; then
-    printf '채우지 않은 @@ 토큰이 남음'
-    return 1
-  fi
+  [[ "${content}" != *@@* ]] || left=1
+  token_counts="${token_counts}${mode} @@남음 ${left}"$'\n'
   printf '%s\n' "${content}" >"${out}"
 }
 
-# 응답기 모드 인증 블록(계획 4-c2a 의 꼴) — 1단계 토큰 그대로.
-print_auth_block() {
-  cat <<'EOF'
-authMethod: http
-authHTTPAddress: 'http://pokeclip-mediamtx:@@INGEST_AUTH_BASIC_PASS@@@127.0.0.1:8080/mediamtx/auth'
-authHTTPExclude:
-  - action: playback
-authInternalUsers: []
-EOF
-}
-
-# 응답기 모드 pathDefaults 의 잠금 둘 · overridePublisher(계획 4-c2a).
-print_lock_lines() {
-  cat <<'EOF'
-  srtPublishPassphrase: '@@SRT_PUBLISH_LOCK@@'
-  srtReadPassphrase: '@@SRT_READ_LOCK@@'
-  overridePublisher: no
-EOF
-}
-
 #######################################
-# 응답기 모드의 1단계 렌더본(토큰 미치환)을 만든다 — c2a 뒤 바꿔 끼울 자리.
-#
-# 지금(c2a 전)은 옛 갈래 1단계 렌더본에서 authInternalUsers 블록을 계획 4-c2a
-# 의 인증 블록으로 갈고 pathDefaults 에 잠금 둘 · overridePublisher 를 더한
-# 시험 전용 고정 설정이다. c2a 가 운영 템플릿에 응답기 갈래를 넣으면 이 함수
-# 본문을 「ingest_auth_image 를 채운 변수 파일로 MTX_TEMPLATE_REL 을
-# render::template」 로 바꾼다(그러면 음성 대조에서 층 A · B 가 실패한다).
+# 운영 템플릿을 변수 파일 하나로 렌더한다.
 # Arguments:
-#   옛 갈래 1단계 렌더본, 출력.
-#######################################
-auth_mode_stage1() {
-  local line skipping=0
-  while IFS= read -r line || [[ -n "${line}" ]]; do
-    if (( skipping )); then
-      if [[ -z "${line}" || "${line}" == [[:space:]]* ]]; then
-        continue
-      fi
-      skipping=0
-    fi
-    case "${line}" in
-      authInternalUsers:*)
-        print_auth_block
-        skipping=1
-        continue
-        ;;
-      pathDefaults:*)
-        printf '%s\n' "${line}"
-        print_lock_lines
-        continue
-        ;;
-    esac
-    printf '%s\n' "${line}"
-  done <"$1" >"$2"
-}
-
-#######################################
-# 층 L · A · B 의 MediaMTX 설정을 렌더한다(옛 · 응답기 두 벌).
+#   변수 파일, 출력.
 # Outputs:
 #   실패하면 원인 한 줄.
 #######################################
-render_configs() {
-  local stage1="${scratch}/mediamtx.stage1.yml" why
+render_mtx() {
   if [[ ! -f "${MEDIA_HOST_DIR}/${MTX_TEMPLATE_REL}" ]]; then
     printf '%s 없음' "${MTX_TEMPLATE_REL}"
     return 1
   fi
-  if ! render::template "${MEDIA_HOST_DIR}/${MTX_TEMPLATE_REL}" \
-    "${RENDER_VARS_FILE}" "${stage1}" 2>"${scratch}/render.err"; then
-    printf '렌더 실패: %s' "$(harness::log_tail "${scratch}/render.err")"
+  if ! render::template "${MEDIA_HOST_DIR}/${MTX_TEMPLATE_REL}" "$1" "$2" \
+    2>"$2.err"; then
+    printf '렌더 실패: %s' "$(harness::log_tail "$2.err")"
     return 1
   fi
-  if ! why="$(fill_tokens "${stage1}" "${scratch}/mediamtx.legacy.yml" \
-    HLS_CDN_SECRET "${IA_CDN_SECRET}" MTX_API_PASS "${IA_API_PASS}")"; then
-    printf '옛 모드 %s' "${why}"
+}
+
+#######################################
+# 층 L · A · B 의 MediaMTX 설정을 렌더한다(옛 · 응답기 두 벌). 실패 원인은 그
+# 모드를 쓰는 층에만 남긴다.
+# Globals:
+#   legacy_reason, auth_reason
+#######################################
+render_configs() {
+  local stage1="${scratch}/mediamtx.stage1.yml" why
+  local auth_vars="${scratch}/vars-auth.json"
+  local auth_stage1="${scratch}/mediamtx.auth.stage1.yml"
+  if ! why="$(render_mtx "${RENDER_VARS_FILE}" "${stage1}")"; then
+    legacy_reason="옛 모드 ${why}"
+  else
+    fill_tokens "${stage1}" "${scratch}/mediamtx.legacy.yml" legacy \
+      HLS_CDN_SECRET "${IA_CDN_SECRET}" MTX_API_PASS "${IA_API_PASS}" \
+      || legacy_reason='옛 모드 토큰 채우기 실패'
+  fi
+  # shellcheck disable=SC2016 # jq 프로그램 — $ 는 jq 변수다.
+  if ! jq --arg image "${INGEST_AUTH_IMAGE_REF}" \
+    '.ingest_auth_image = $image' "${RENDER_VARS_FILE}" >"${auth_vars}"; then
+    auth_reason='응답기 모드 변수 파일을 만들지 못함'
+  elif ! why="$(render_mtx "${auth_vars}" "${auth_stage1}")"; then
+    auth_reason="응답기 모드 ${why}"
+  else
+    fill_tokens "${auth_stage1}" "${scratch}/mediamtx.auth.yml" auth \
+      HLS_CDN_SECRET "${IA_CDN_SECRET}" \
+      INGEST_AUTH_BASIC_PASS "${IA_BASIC_PASS}" \
+      SRT_PUBLISH_LOCK "${IA_PUBLISH_LOCK}" SRT_READ_LOCK "${IA_READ_LOCK}" \
+      || auth_reason='응답기 모드 토큰 채우기 실패'
+  fi
+}
+
+#######################################
+# T1 — 채운 토큰이 각각 정확히 한 번이고 남은 `@@` 가 없다(두 모드).
+# Globals:
+#   token_counts, legacy_reason, auth_reason
+#######################################
+check_t1() {
+  local ok=0 mode name count
+  if [[ -n "${legacy_reason}" || -n "${auth_reason}" ]]; then
+    harness::add_reason "렌더 실패 — ${legacy_reason}${legacy_reason:+ · }\
+${auth_reason}"
     return 1
   fi
-  auth_mode_stage1 "${stage1}" "${scratch}/mediamtx.auth.stage1.yml"
-  if ! why="$(fill_tokens "${scratch}/mediamtx.auth.stage1.yml" \
-    "${scratch}/mediamtx.auth.yml" HLS_CDN_SECRET "${IA_CDN_SECRET}" \
-    INGEST_AUTH_BASIC_PASS "${IA_BASIC_PASS}" \
-    SRT_PUBLISH_LOCK "${IA_PUBLISH_LOCK}" SRT_READ_LOCK "${IA_READ_LOCK}")"
-  then
-    printf '응답기 모드 %s' "${why}"
+  if [[ -z "${token_counts}" ]]; then
+    harness::add_reason '토큰 기록 없음(렌더 전 준비 실패)'
     return 1
   fi
+  while read -r mode name count; do
+    [[ -n "${mode}" ]] || continue
+    if [[ "${name}" == @@남음 && "${count}" != 0 ]] \
+      || [[ "${name}" != @@남음 && "${count}" != 1 ]]; then
+      harness::add_reason "${mode} ${name} ${count}(기대 \
+$([[ "${name}" == @@남음 ]] && echo 0 || echo 1))"
+      ok=1
+    fi
+  done <<<"${token_counts}"
+  return "${ok}"
 }
 
 # C0 최소 설정 — HTTP 인증 · 내부 사용자 빈 목록. 설정 조회만 하므로 api 를
@@ -404,7 +405,6 @@ EOF
 }
 
 setup() {
-  local why
   check_tools || return 1
   check_prestate || return 1
   load_sender_image || true
@@ -413,9 +413,7 @@ setup() {
   env_ready=1
   export_compose_env
   ia::configure "${PROJECT}" "${IA_COMPOSE}"
-  if ! why="$(render_configs)"; then
-    add_setup_reason "${why}"
-  fi
+  render_configs
   (( mtx_built )) || return 1
 }
 
@@ -481,15 +479,15 @@ wait_stub() {
 #   ia_layer, ia_layer_ok, ia_layer_reason, PCBENCH_MTX_CONFIG, setup_reason
 # Arguments:
 #   층 이름, 설정 파일(층마다 다른 파일 — 덮어쓰지 않는다), 프로필(빈 값이면
-#   mediamtx 하나).
+#   mediamtx 하나), 그 층만의 준비 실패 원인(없어도 됨 — 렌더 실패 등).
 #######################################
 stack_up() {
   local why
   ia_layer="$1"
   ia_layer_ok=0
   ia_layer_reason=""
-  if [[ -n "${setup_reason}" ]]; then
-    ia_layer_reason="준비 실패 — ${setup_reason}"
+  if [[ -n "${setup_reason}" || -n "${4:-}" ]]; then
+    ia_layer_reason="준비 실패 — ${setup_reason}${setup_reason:+${4:+; }}${4:-}"
     return 1
   fi
   export PCBENCH_MTX_CONFIG="$2"
@@ -536,7 +534,7 @@ layer_down() {
 }
 
 run_layer_l() {
-  stack_up L "${scratch}/mediamtx.legacy.yml" '' || true
+  stack_up L "${scratch}/mediamtx.legacy.yml" '' "${legacy_reason}" || true
   harness::run_case L1 '옛 모드 — 익명 송출 성공' check_l1
   harness::run_case L2 '옛 모드 — Bearer 없음 401 · CDN Bearer 200' check_l2
   harness::run_case L3 '옛 모드 — 사이드카 자격 관리 API 200 · 무자격 401' \
@@ -545,7 +543,7 @@ run_layer_l() {
 }
 
 run_layer_a() {
-  stack_up A "${scratch}/mediamtx.auth.yml" stub || true
+  stack_up A "${scratch}/mediamtx.auth.yml" stub "${auth_reason}" || true
   harness::run_case C1 '가짜 응답기 허용(P) — 송출 성공' check_c1
   harness::run_case C4 '응답기가 받은 Basic = 렌더 자격' check_c4
   harness::run_case C5 '본문 ip = 송출자 IP(기본 망)' check_c5
@@ -567,7 +565,7 @@ run_layer_a() {
 run_layer_b() {
   local why="${ia_build_reason}"
   if (( ia_built )); then
-    stack_up B "${scratch}/mediamtx.auth.yml" real || true
+    stack_up B "${scratch}/mediamtx.auth.yml" real "${auth_reason}" || true
   else
     ia_layer=B
     ia_layer_ok=0
@@ -617,11 +615,13 @@ main() {
   harness::run_case C0 'authMethod http + authInternalUsers [] 수용 · 설정 조회' \
     check_c0
   layer_down C0
+  harness::run_case T1 '두 모드 렌더본 — 토큰 각 정확히 한 번 · 남은 @@ 0' \
+    check_t1
   run_layer_l
   run_layer_a
   run_layer_b
 
-  if ! harness::summary 0 C0 L1 L2 L3 C1 C2 C3 C4 C5 C6 C7 C8 C9 C10 C11 \
+  if ! harness::summary 0 C0 T1 L1 L2 L3 C1 C2 C3 C4 C5 C6 C7 C8 C9 C10 C11 \
     C12 C13 C14 C15 C16 C17 C18 C19; then
     exit 1
   fi

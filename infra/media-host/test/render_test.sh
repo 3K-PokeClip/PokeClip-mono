@@ -18,6 +18,8 @@
 #   - d: 둘 다 채우고 · 켜고 detached_log_driver = json-file(로컬 실행 렌더 갈래).
 #   - nginx: control_upstream 빔(a) · 채움(e).
 #   - mediamtx: 옛 모드(a) · 응답기 모드(b).
+#   - ingest-auth.env: 갈래 a 로 compose 렌더본 옆에 렌더한다(응답기 갈래의
+#     env_file). 응답기 사례(35 – 44)는 test/lib/render_auth_cases.sh 에 있다.
 #
 # 드리프트: 시험 compose(test/compose.contract.yml)에서 템플릿과 이름이 같은
 # 서비스는 restart · network_mode · depends_on · security_opt · cap_drop ·
@@ -49,6 +51,8 @@ source "${TEST_DIR}/lib/render.sh"
 source "${TEST_DIR}/lib/harness.sh"
 # shellcheck source=lib/render_mtx_cases.sh
 source "${TEST_DIR}/lib/render_mtx_cases.sh"
+# shellcheck source=lib/render_auth_cases.sh
+source "${TEST_DIR}/lib/render_auth_cases.sh"
 
 readonly PROJECT='pcbench-edge-proxy'
 readonly COMPOSE_TEMPLATE="${MEDIA_HOST_DIR}/compose.yml.tmpl"
@@ -66,7 +70,7 @@ readonly COMPOSE_VARIANTS='a b c d'
 readonly SAMPLE_CONTROL_UPSTREAM='127.0.0.1:28190'
 readonly MIN_READ_TIMEOUT_SECONDS=15
 readonly CONFIG_TIMEOUT=60
-readonly CASE_COUNT=34
+readonly CASE_COUNT=44
 # 녹화 디렉터리 소유자의 정본 — MediaMTX 이미지 Dockerfile 의 최종 USER.
 MTXHOOK_DOCKERFILE="$(cd -- "${MEDIA_HOST_DIR}/../.." && pwd)/media/Dockerfile.mtxhook"
 readonly MTXHOOK_DOCKERFILE
@@ -99,7 +103,7 @@ def db_env:
    POSTGRES_SSLROOTCERT: "/etc/pokeclip/rds-ca/global-bundle.pem",
    TZ: "UTC", AWS_REGION: "ap-northeast-2",
    AWS_EC2_METADATA_V1_DISABLED: "true"};
-'
+'"${AUTH_JQ_DEFS}"
 
 scratch=""
 setup_reason=""
@@ -410,7 +414,7 @@ check_case_7() {
      nginx: ["/etc/pokeclip-media/nginx.conf /etc/nginx/nginx.conf ro"],
      sidecar: ["recordings /recordings ro", "hooks /hooks ro",
                "/run/pokeclip-media/mtx_api_pass /run/secrets/mtx_api_pass ro"]}
-    + (if .ingest_auth_image != "" then {"ingest-auth": []} else {} end)
+    + (if .ingest_auth_image != "" then {"ingest-auth": ia_binds} else {} end)
     + (if .janitor_enabled
        then {janitor: ["recordings /recordings rw"]} else {} end)
     | map_values(sort)' '볼륨 · 읽기 전용' || ok=1
@@ -495,10 +499,17 @@ check_case_11() {
   local ok=0 v
   require_setup || return 1
   # shellcheck disable=SC2016 # jq 프로그램 — $ 는 jq 변수다.
-  expect_all '[.services | to_entries[] | .key as $s
-    | (.value.environment // {}) | keys[]
-    | select(test("CDN|TOKEN|PASSWORD|SECRET"; "i")) | "\($s).\(.)"]' \
-    '[]' '비밀 계열 env 이름' || ok=1
+  # 예외는 `_FILE` 로 끝나고 값이 그 서비스의 읽기 전용 bind 대상인 env 뿐이다
+  # (값이 아니라 파일 경로다).
+  expect_all '[.services | to_entries[] | .key as $s | .value as $c
+    | ([($c.volumes // [])[] | select(.type == "bind" and .read_only == true)
+        | .target]) as $ro
+    | ($c.environment // {}) | to_entries[]
+    | select(.key | test("CDN|TOKEN|PASSWORD|SECRET"; "i"))
+    | select(((.key | endswith("_FILE"))
+        and (.value as $v | $ro | index($v) != null)) | not)
+    | "\($s).\(.key)"]' '[]' '비밀 계열 env 이름(읽기 전용 bind 파일 경로 제외)' \
+    || ok=1
   for v in ${COMPOSE_VARIANTS}; do
     expect_fixed_absent "갈래 ${v} 렌더" POSTGRES_PASSWORD \
       "$(compose_render "${v}")" || ok=1
@@ -659,19 +670,23 @@ def facts: .services | map_values({
 #######################################
 # 시험 compose 하나와 렌더한 템플릿(갈래 a)의 드리프트를 본다.
 # Arguments:
-#   시험 compose 구성 JSON, logging 도 비교할지(true|false).
+#   시험 compose 구성 JSON, logging 도 비교할지(true|false). 옛 갈래(a)와
+#   응답기 갈래(b) 둘 다와 비교한다.
 #######################################
 expect_no_drift() {
-  local diffs
-  if ! diffs="$(jq -n -r --slurpfile p "$(config_json a)" \
-    --slurpfile t "$1" --argjson logging "$2" "${DRIFT_PROGRAM}" 2>&1)"; then
-    harness::add_reason "드리프트 비교 실패: ${diffs}"
-    return 1
-  fi
-  if [[ -n "${diffs}" ]]; then
-    harness::add_reason "드리프트: $(printf '%s' "${diffs}" | tr '\n' ';')"
-    return 1
-  fi
+  local diffs v ok=0
+  for v in a b; do
+    if ! diffs="$(jq -n -r --slurpfile p "$(config_json "${v}")" \
+      --slurpfile t "$1" --argjson logging "$2" "${DRIFT_PROGRAM}" 2>&1)"; then
+      harness::add_reason "드리프트 비교 실패(갈래 ${v}): ${diffs}"
+      ok=1
+    elif [[ -n "${diffs}" ]]; then
+      harness::add_reason "드리프트(갈래 ${v}): \
+$(printf '%s' "${diffs}" | tr '\n' ';')"
+      ok=1
+    fi
+  done
+  return "${ok}"
 }
 
 check_case_17() {
@@ -713,7 +728,10 @@ check_case_26() {
       | "\($s) \(.target) \(.bind.create_host_path != false)"] | sort' '
     ["mediamtx /mediamtx.yml false",
      "nginx /etc/nginx/nginx.conf false",
-     "sidecar /run/secrets/mtx_api_pass false"]' \
+     "sidecar /run/secrets/mtx_api_pass false"]
+    + (if .ingest_auth_image != ""
+       then [ia_binds[] | "ingest-auth \(split(" ")[1]) false"] else [] end)
+    | sort' \
     '렌더 파일 bind 의 원본 자동 생성'
 }
 
@@ -724,6 +742,7 @@ check_case_27() {
       read_only: (.read_only // null)})' '
     services | map({(.): (if . == "janitor"
       then {entrypoint: [$entry], read_only: true}
+      elif . == "ingest-auth" then {entrypoint: null, read_only: true}
       else {entrypoint: null, read_only: null} end)}) | add' \
     'entrypoint · 읽기 전용 루트' --arg entry "${JANITOR_ENTRYPOINT}"
 }
@@ -834,6 +853,7 @@ main() {
 
   if check_tools; then
     render_all || true
+    auth_cases::prepare || true
   fi
   harness::run_case 1 '렌더한 compose 마다 docker compose config 종료 0' \
     check_case_1
@@ -899,6 +919,26 @@ main() {
     mtx_cases::check_33
   harness::run_case 34 'mediamtx 두 모드 차이 키 = 인증 · pathDefaults 잠금뿐' \
     mtx_cases::check_34
+  harness::run_case 35 '응답기 env 정확 집합(env_file 풀지 않음)' \
+    auth_cases::check_35
+  harness::run_case 36 \
+    '응답기 _FILE env = 읽기 전용 bind 대상 · 거부 목록 · 상태는 디렉터리 bind' \
+    auth_cases::check_36
+  harness::run_case 37 '응답기 healthcheck · 읽기 전용 루트 · user 없음' \
+    auth_cases::check_37
+  harness::run_case 38 '응답기 env_file — compose 파일 옆 · required · 값 반영' \
+    auth_cases::check_38
+  harness::run_case 39 '모드 일치 — compose 응답기 서비스 ⇔ mediamtx 응답기 모드' \
+    auth_cases::check_39
+  harness::run_case 40 '망 칸 포트 열 개 서로 다름' auth_cases::check_40
+  harness::run_case 41 'ingest-auth.env 렌더 = 정확히 한 줄(on · off)' \
+    auth_cases::check_41
+  harness::run_case 42 '응답기 bind 원본 = 시작 스크립트 기본 자리' \
+    auth_cases::check_42
+  harness::run_case 43 'compose 옛 갈래(a · c) — develop 골든과 같은 구성' \
+    auth_cases::check_43
+  harness::run_case 44 '드리프트 — 계약 시험 compose 응답기 · mediamtx' \
+    auth_cases::check_44
 
   if ! harness::summary "${CASE_COUNT}"; then
     exit 1

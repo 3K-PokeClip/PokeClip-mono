@@ -11,7 +11,8 @@
 #     `docker compose run` 으로만 쓴다.
 #
 # mediamtx · 응답기 서비스의 망 칸 · 재시작 정책 · cap · ulimits · 읽기 전용
-# 여부는 prod 템플릿(compose.yml.tmpl)과 계획 4-c4 의 응답기 꼴을 따른다.
+# 여부 · 응답기 env · env_file · 마운트 대상 · healthcheck 는 prod 템플릿
+# (compose.yml.tmpl)을 따른다 — render_test 사례 44 가 렌더본과 대조한다.
 # 다른 점:
 #   - 이미지: 시험이 로컬에서 빌드한 것(media/Dockerfile.mtxhook ·
 #     media/Dockerfile.ingest-auth · test/echo)과 images.json 의 송출기 핀.

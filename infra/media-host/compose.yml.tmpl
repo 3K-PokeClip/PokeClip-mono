@@ -9,7 +9,13 @@
 #   mediamtx_image · nginx_image · sidecar_image
 #                        이미지 참조 <저장소 URL>@<다이제스트>. 이름은 이미지
 #                        핀 정본 images.json 의 키 + _image 다.
-#   ingest_auth_image    같은 꼴. 비면 그 서비스를 렌더하지 않는다(자리).
+#   ingest_auth_image    같은 꼴. 비면 송출 인증 응답기 서비스를 렌더하지 않는다
+#                        (옛 모드). 차면 응답기 모드 — mediamtx.yml.tmpl 에 같은
+#                        값을 넘긴다(어긋나면 시작 스크립트가 막는다).
+#   stream_key_resolve_url
+#                        응답기의 4C(스트림 키 판정) 주소. 응답기 모드에서만
+#                        쓰이지만 templatefile() 은 안 쓰는 갈래의 변수도 요구해
+#                        늘 넘긴다(옛 모드는 빈 값이어도 된다).
 #   janitor_enabled      bool. 참이면 janitor(녹화 정리)를 렌더한다 — 이미지는
 #                        sidecar_image 이고 entrypoint 로 janitor 명령을 고른다.
 #                        거짓이면 서비스가 없다(다음 시작의 --remove-orphans 가
@@ -53,7 +59,9 @@
 #     nginx 설정)은 원본이 없으면 만들지 않는다(create_host_path: false) —
 #     원본이 없을 때(정지가 렌더를 지운 뒤 남은 컨테이너가 다시 뜰 때 등) 엔진이
 #     그 자리에 디렉터리를 만들면, 다음 렌더가 영영 막힌다. 원본이 없으면 그
-#     컨테이너 기동이 실패할 뿐이다.
+#     컨테이너 기동이 실패할 뿐이다. 응답기도 같다 — 시작 스크립트가 tmpfs 에
+#     둔 비밀 셋 · 상태 디렉터리와 거부 목록 디렉터리를 bind 로 받고, env 에는
+#     그 파일 경로(*_FILE)만 적는다.
 #   - 모든 서비스의 core 덤프 크기 0(ulimits core: 0 — 소프트 · 하드 둘 다).
 #     메모리의 CDN 비밀 · API 비밀번호가 덤프 파일로 남지 않게 한다.
 #   - 볼륨에 복사 금지 옵션을 붙이지 않는다 — 이미지에 심은 소유권 복사가
@@ -203,18 +211,83 @@ services:
 %{ endif ~}
 %{ if ingest_auth_image != "" ~}
 
-  # 송출 인증 응답기(자리 — M15 가 채운다). 비밀은 파일 경로로만 받는다.
+  # 송출 인증 응답기 — MediaMTX 가 송출 · 읽기 · 관리 API 인증을 망 칸 루프백
+  # 127.0.0.1:8080 으로 묻는다(media/cmd/ingest-auth/CONTRACT.md). 실행 계정은
+  # 이미지 USER 다. 루트 파일 시스템은 읽기 전용이고, 쓰는 곳은 상태
+  # 디렉터리(연결 기록) 하나다.
   ingest-auth:
     image: ${ingest_auth_image}
     network_mode: "service:mediamtx"
     depends_on: *mediamtx-dependency
     restart: on-failure
+    read_only: true
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
     ulimits:
       core: 0
+    environment:
+      INGEST_AUTH_LISTEN: 127.0.0.1:8080
+      # MediaMTX 가 같은 망 칸 루프백에서 묻는다 — 그 밖의 호출자는 거부한다.
+      INGEST_AUTH_CALLER_IP: 127.0.0.1
+      # 끊기(kick) · 경로 조회용 관리 API 자격 — 사이드카와 같은 사용자 · 같은
+      # 비밀번호 파일 내용(시작 스크립트가 응답기 디렉터리에 따로 둔다).
+      MTX_API_URL: http://127.0.0.1:9997
+      MTX_API_USER: pokeclip-sidecar
+      MTX_API_PASS_FILE: /run/secrets/mtx_api_pass
+      STREAM_KEY_RESOLVE_URL: ${stream_key_resolve_url}
+      STREAM_KEY_RESOLVE_CHANNEL: internal-token
+      STREAM_KEY_RESOLVE_TOKEN_FILE: /run/secrets/stream_key_resolve_token
+      # MediaMTX 가 인증 요청에 싣는 Basic 자격(mediamtx.yml.tmpl
+      # authHTTPAddress 의 사용자 · 비밀번호 토큰과 짝).
+      INGEST_AUTH_BASIC_USER: pokeclip-mediamtx
+      INGEST_AUTH_BASIC_PASS_FILE: /run/secrets/ingest_basic_pass
+    # IP 한도 켜기 · 끄기(INGEST_AUTH_IP_LIMIT 한 줄). 이 compose 파일 옆
+    # ingest-auth.env(prod /etc/pokeclip-media/ingest-auth.env — M9 가
+    # ingest-auth.env.tmpl 로 렌더하고 운영 스크립트가 바꾼다)다. 바꾼 값은
+    # 재기동이 아니라 재생성해야 반영된다.
+    env_file:
+      - path: ingest-auth.env
+        required: true
+    volumes:
+      - type: bind
+        source: /run/pokeclip-media/ingest-auth/mtx_api_pass
+        target: /run/secrets/mtx_api_pass
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /run/pokeclip-media/ingest-auth/stream_key_resolve_token
+        target: /run/secrets/stream_key_resolve_token
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /run/pokeclip-media/ingest-auth/ingest_basic_pass
+        target: /run/secrets/ingest_basic_pass
+        read_only: true
+        bind:
+          create_host_path: false
+      # 거부 목록은 디렉터리로 받는다 — 동기화 스크립트가 같은 디렉터리 안에서
+      # 새 파일로 바꿔 끼우므로(rename), 파일 하나를 bind 하면 컨테이너가 옛
+      # 파일을 계속 본다.
+      - type: bind
+        source: /var/lib/pokeclip-media/ingest-auth/deny
+        target: /etc/ingest-auth
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /run/pokeclip-media/ingest-auth/state
+        target: /var/lib/ingest-auth
+        bind:
+          create_host_path: false
+    healthcheck:
+      test: ["CMD", "/ingest-auth", "healthcheck"]
+      interval: 30s
+      retries: 3
+      start_period: 10s
 %{ if detached_log_driver == "json-file" ~}
     logging: *attached-logging
 %{ else ~}
