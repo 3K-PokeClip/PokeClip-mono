@@ -494,7 +494,6 @@ class SessionEstablishTest extends IntegrationTestSupport {
         // 다음 재시도가 응답을 못 받고 매달리게 한다.
         CountDownLatch 붙들림 = new CountDownLatch(1);
         CountDownLatch 놓아줌 = new CountDownLatch(1);
-        behavior.subscribeDonationStatus = 200;
         behavior.onSubscribeDonationBeforeResponse = () -> {
             붙들림.countDown();
             try {
@@ -503,6 +502,9 @@ class SessionEstablishTest extends IntegrationTestSupport {
                 Thread.currentThread().interrupt();
             }
         };
+        // 훅을 먼저 건다. 200 을 먼저 주면 그 사이 재시도(60ms 주기)가 훅 없이 구독을 세우고
+        // 끝나 붙들림이 영영 안 내려간다(봇 claude).
+        behavior.subscribeDonationStatus = 200;
 
         assertThat(붙들림.await(5, TimeUnit.SECONDS))
                 .as("재시도가 구독을 안 쐈다 — 이 검사가 아무것도 안 잰다").isTrue();
@@ -527,6 +529,79 @@ class SessionEstablishTest extends IntegrationTestSupport {
                 .as("닫힌 세션의 상태를 되살리면 창구가 영영 「구독 중」으로 답한다")
                 .isEmpty();
         assertThat(session.donationSubscription()).isEqualTo(DonationSubscription.NONE);
+    }
+
+    /**
+     * 🔴 <b>닫기 끝의 {@code close()} 가 재시도의 반납을 끊지 않는다</b>(CI 간헐 실패, 2026-10-23).
+     *
+     * <p>{@code releaseAndClose} 는 처음에 재시도를 멈추고(인터럽트 1) 끝의 {@code close()} 에서
+     * <b>또 멈췄다</b>(인터럽트 2). 재시도 스레드는 인터럽트 1을 받고 표시를 지운 뒤 반납을 쏘는데,
+     * 그 반납이 서버에 닿기 전에 인터럽트 2가 오면 요청이 죽어 그 구독은 아무도 거두지 않는다.
+     * 위 검사가 PR #320 의 CI 에서 반납 0회로 깨진 것이 이것이다. 채팅 반납 왕복 하나만큼의
+     * 창이라 로컬에서는 거의 안 열린다(CPU·디스크 부하를 줘도 30회 모두 초록).
+     *
+     * <p>그 창을 <b>늘 열어 둔다</b>: 재시도 스레드의 반납을 {@code close()} 가 끝날 때까지 미룬다.
+     * 두 번째 인터럽트를 보내던 코드로 돌리면 반납 0회로 빨간불이다.
+     */
+    @Test
+    void 닫기_끝의_close가_재시도의_반납을_끊지_않는다() throws Exception {
+        behavior.subscribeDonationStatus = 503;
+        CountDownLatch 닫힘 = new CountDownLatch(1);
+        ChzzkSessionClient client = new ChzzkSessionClient(
+                RestClient.create(), "http://localhost:" + port, "test-token") {
+            @Override
+            public boolean unsubscribeDonationQuietly(String sessionKey) {
+                // 기다리는 동안 온 인터럽트는 삼키지 않고 되살린다. 운영에서 반납 요청이 그 표시를 밟는다.
+                boolean interrupted = false;
+                long 시한 = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+                while (닫힘.getCount() > 0 && System.nanoTime() < 시한) {
+                    try {
+                        닫힘.await(시한 - System.nanoTime(), TimeUnit.NANOSECONDS);
+                    } catch (InterruptedException e) {
+                        interrupted = true;
+                    }
+                }
+                if (interrupted) {
+                    Thread.currentThread().interrupt();
+                }
+                return super.unsubscribeDonationQuietly(sessionKey);
+            }
+        };
+        // 필드에 둔다. 단언이 중간에 깨져도 tearDown 이 닫아 재시도 스레드가 다음 검사로 새지 않는다.
+        session = new ChatSession(client, Duration.ofMillis(60)) {
+            @Override
+            public void close() {
+                super.close();
+                닫힘.countDown();
+            }
+        };
+        session.open(Duration.ofSeconds(5), NO_ABORT);
+        assertThat(session.donationSubscription()).isEqualTo(DonationSubscription.FAILED);
+
+        CountDownLatch 붙들림 = new CountDownLatch(1);
+        CountDownLatch 놓아줌 = new CountDownLatch(1);
+        behavior.onSubscribeDonationBeforeResponse = () -> {
+            붙들림.countDown();
+            try {
+                놓아줌.await(5, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        };
+        // 훅을 먼저 건다. 200 을 먼저 주면 그 사이 재시도(60ms 주기)가 훅 없이 구독을 세우고
+        // 끝나 붙들림이 영영 안 내려간다(봇 claude).
+        behavior.subscribeDonationStatus = 200;
+
+        assertThat(붙들림.await(5, TimeUnit.SECONDS))
+                .as("재시도가 구독을 안 쐈다: 이 검사가 아무것도 안 잰다").isTrue();
+        session.releaseAndClose();
+        놓아줌.countDown();
+
+        awaitUntil(Duration.ofSeconds(5), () -> behavior.unsubscribeDonationCallCount() > 0);
+
+        assertThat(behavior.unsubscribeDonationCallCount())
+                .as("close() 의 두 번째 멈춤이 재시도 스레드의 반납 요청을 죽였다")
+                .isEqualTo(1);
     }
 
     /**
