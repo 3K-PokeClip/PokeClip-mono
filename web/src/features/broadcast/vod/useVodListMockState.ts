@@ -158,7 +158,7 @@ interface WireBroadcast {
   ingestStreamId?: string | null;
   /** 사진 주소(POK-277). 옛 서버면 빠져 온다 */
   thumbnailUrl?: string | null;
-  /** 치지직 방송 제목(POK-259). 없거나 옛 서버면 비어 온다 */
+  /** 방송 제목(POK-259, 켜진 플랫폼 중에서). 없거나 옛 서버면 비어 온다 */
   title?: string | null;
 }
 

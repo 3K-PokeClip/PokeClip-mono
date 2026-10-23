@@ -62,7 +62,7 @@ export interface LiveData {
   timeBaseMs: number | null;
   /** 서버가 준 시각 기준점(epoch ms, POK-255) — 녹화 첫 조각의 절대 시각. 조각이 아직 없으면 null */
   originMs: number | null;
-  /** 방송 목록 줄의 치지직 제목(POK-259). 방송 정보 관측에 제목이 비었을 때 대신 쓴다. 없으면 null */
+  /** 방송 목록 줄의 제목(POK-259). 방송 정보 관측에 제목이 비었을 때 대신 쓴다. 없으면 null */
   listTitle: string | null;
 }
 
