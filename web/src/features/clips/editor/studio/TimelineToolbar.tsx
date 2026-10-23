@@ -1,4 +1,4 @@
-import { Camera, ChevronDown, ChevronUp, Pause, Play, SkipBack } from 'lucide-react';
+import { Camera, ChevronDown, ChevronUp, Pause, Play, SkipBack, ZoomIn } from 'lucide-react';
 import { Button, IconButton, Slider } from '@/ui';
 import styles from './StudioScreen.module.css';
 import { MAX_RANGE_TEXT } from '../timelineMath';
@@ -64,6 +64,10 @@ export function TimelineToolbar({ state }: { state: ClipEditorMockState }) {
       <div className={styles.toolbarGroupEnd}>
         <span className={styles.toolbarChip}>
           쇼츠 {state.rangeLengthLabel} · 최대 {MAX_RANGE_TEXT}
+        </span>
+        {/* 무엇을 키우는 막대인지 보이게(POK-389): 돋보기 + 마우스를 올리면 이름 */}
+        <span className={styles.zoomIcon} title="타임라인 확대" data-zoom-icon>
+          <ZoomIn size={13} aria-hidden />
         </span>
         <Slider
           className={styles.zoomSlider}

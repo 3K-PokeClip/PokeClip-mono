@@ -203,6 +203,8 @@ describe('StudioScreen', () => {
     zoom.focus();
     await user.keyboard('{ArrowRight}');
     expect(within(bar).getByText('200%')).toBeInTheDocument();
+    // 무엇을 키우는 막대인지 돋보기가 말한다(POK-389)
+    expect(bar.querySelector('[data-zoom-icon]')).toHaveAttribute('title', '타임라인 확대');
   });
 
   it('단축키로 재생을 토글하고 되돌린다', async () => {

@@ -192,11 +192,23 @@
   white-space: nowrap;
 }
 
-.zoomSlider {
-  width: calc(90 * var(--pc-u));
+.zoomIcon {
+  display: inline-flex;
+  color: var(--pc-color-text-muted);
 }
 
+/* 디자인 시스템 Slider의 width: 100%와 같은 무게라 CSS를 불러온 순서에 따라 이기고 진다: 막대 안에서 두 단계로 걸어
+   이 폭을 쓴다. 손잡이(18)가 양 끝에서 반만큼 밖으로 나가므로 그만큼 띄운다(오디오 메뉴 트랙 줄과 같은 처방) */
+.toolbarGroupEnd .zoomSlider {
+  flex: 0 0 calc(90 * var(--pc-u));
+  width: calc(90 * var(--pc-u));
+  margin-inline: calc(9 * var(--pc-u));
+}
+
+/* 가장 긴 값(「400%」)이 들어가는 폭. 좁으면 글자가 슬라이더 손잡이 밑으로 들어간다 */
 .zoomValue {
+  flex: 0 0 calc(34 * var(--pc-u));
+  white-space: nowrap;
   font:
     600 calc(10.5 * var(--pc-u)) ui-monospace,
     Menlo,
@@ -290,8 +302,18 @@
     Menlo,
     monospace;
   color: var(--pc-color-text-muted);
-  width: calc(24 * var(--pc-u));
+  /* 「안 넣음」(가장 긴 값)이 한 줄에 들어가는 폭. 좁으면 두 줄로 접힌다(오디오 메뉴 값 칸과 같은 처방) */
+  flex: 0 0 calc(34 * var(--pc-u));
+  white-space: nowrap;
   text-align: right;
+}
+
+/* 줄 이름은 한 줄로 줄인다: 이름 칸 폭이 정해져 있어 긴 이름이 넣기·값 칸을 밀지 않게 */
+.trackLabel [data-row-label] {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .lane {
