@@ -43,13 +43,14 @@ afterEach(() => {
 });
 
 describe('남의 채널에서 막는 설정 페이지', () => {
-  it.each(PAGES)('%s 페이지는 남의 채널이면 안내만 그린다', (_name, Page) => {
+  it.each(PAGES)('%s 페이지는 남의 채널이면 화면 이름과 안내만 그린다', (name, Page) => {
     renderWithProviders(
       <ChannelRelationContext.Provider value="EDITOR">
         <Page />
       </ChannelRelationContext.Provider>,
     );
 
+    expect(screen.getByRole('heading', { name })).toBeInTheDocument();
     expect(screen.getByText('채널 주인만 볼 수 있는 화면이에요')).toBeInTheDocument();
   });
 });

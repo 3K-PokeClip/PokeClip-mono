@@ -25,7 +25,7 @@ function PluginScreen() {
 function renderAs(relation: 'OWNER' | 'EDITOR' | null) {
   return renderWithProviders(
     <ChannelRelationContext.Provider value={relation}>
-      <OwnerOnly>
+      <OwnerOnly title="플러그인">
         <PluginScreen />
       </OwnerOnly>
     </ChannelRelationContext.Provider>,
@@ -46,11 +46,13 @@ afterEach(() => {
 });
 
 describe('OwnerOnly', () => {
-  it('남의 채널이면 화면 대신 안내와 「내 채널로 전환」을 보이고, 누르면 내 채널로 돌아간다', async () => {
+  it('남의 채널이면 화면 대신 화면 이름 · 안내 · 「내 채널로 전환」을 보이고, 누르면 내 채널로 돌아간다', async () => {
     const user = userEvent.setup();
     renderAs('EDITOR');
 
     expect(screen.queryByText('플러그인 화면')).not.toBeInTheDocument();
+    // 어느 화면이 막혔는지는 제목으로 말한다
+    expect(screen.getByRole('heading', { name: '플러그인' })).toBeInTheDocument();
     expect(screen.getByText('채널 주인만 볼 수 있는 화면이에요')).toBeInTheDocument();
     // 한 번이라도 마운트하면 그 사이 내 키·연동을 읽는다: 그렸다 지우는 구현을 여기서 막는다(감사 3회차 지적 3)
     expect(mounts).toBe(0);
