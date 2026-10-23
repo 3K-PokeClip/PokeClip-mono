@@ -83,6 +83,10 @@ tfvars 에 둡니다.
 *   `control_upstream` 은 기본 빈 값(nginx 제어면 404), `janitor_enabled` 는
     기본 켬입니다. 둘 다 바꾸면 설정 반영 교체로 들어갑니다 — 떠 있는
     상자의 user_data 는 바뀌지 않습니다.
+*   `rewind_public_base_url` 은 기본 `https://media.pokeclip.com` 입니다.
+    사이드카 `REWIND_PUBLIC_BASE_URL`(되감기 목록 URI 앞머리 — 목록 줄 = 이
+    값 + `/` + S3 키 `dvr/…`)이고, 영상 CDN 의 `/dvr/*` 가 rewind 버킷입니다
+    (설계 4-5). 버킷이 있으면 사이드카가 이 값 없이 기동하지 않습니다.
 
 적용은 O7e 의 1(kty 승인)입니다. 백엔드는 `backend.hcl.example` 을
 `backend.hcl` 로 복사하고 `bucket` 자리표시자 `<STATE_BUCKET_PROD>` 를

@@ -40,3 +40,7 @@ compose_sha256                = "ff42489f5a9b879d5d117c5ffea6defc27390b3286da8ad
 
 # 기본 켬(kty 확정). 끄는 것도 설정 반영 교체다.
 # janitor_enabled = true
+
+# 기본값 — 사이드카 되감기 목록 URI 앞머리(영상 CDN 주소 · 끝 / 없음). 목록
+# 줄 = 이 값 + "/" + S3 키(dvr/…).
+# rewind_public_base_url = "https://media.pokeclip.com"

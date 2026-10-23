@@ -12,21 +12,22 @@ locals {
 
   # compose · nginx 템플릿 변수(키 집합 = infra/media-host/test/render_vars.json).
   template_vars = {
-    control_upstream    = var.control_upstream
-    detached_log_driver = "journald"
-    ingest_auth_image   = var.ingest_auth_image
-    janitor_enabled     = var.janitor_enabled
-    media_health_path   = var.media_health_path
-    mediamtx_image      = var.mediamtx_image
-    nginx_image         = var.nginx_image
-    proxy_control_port  = var.proxy_ports.control
-    proxy_health_port   = var.proxy_ports.health
-    proxy_live_port     = var.proxy_ports.live
-    proxy_playback_port = var.proxy_ports.playback
-    rds_db_name         = var.rds_db_name
-    rds_endpoint        = var.rds_endpoint
-    rewind_bucket_name  = split(":::", var.rewind_bucket_arn)[1]
-    sidecar_image       = var.sidecar_image
+    control_upstream       = var.control_upstream
+    detached_log_driver    = "journald"
+    ingest_auth_image      = var.ingest_auth_image
+    janitor_enabled        = var.janitor_enabled
+    media_health_path      = var.media_health_path
+    mediamtx_image         = var.mediamtx_image
+    nginx_image            = var.nginx_image
+    proxy_control_port     = var.proxy_ports.control
+    proxy_health_port      = var.proxy_ports.health
+    proxy_live_port        = var.proxy_ports.live
+    proxy_playback_port    = var.proxy_ports.playback
+    rds_db_name            = var.rds_db_name
+    rds_endpoint           = var.rds_endpoint
+    rewind_bucket_name     = split(":::", var.rewind_bucket_arn)[1]
+    rewind_public_base_url = var.rewind_public_base_url
+    sidecar_image          = var.sidecar_image
   }
 
   compose_yml = templatefile("${local.media_host_dir}/compose.yml.tmpl", local.template_vars)

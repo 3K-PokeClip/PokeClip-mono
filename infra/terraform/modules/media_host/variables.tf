@@ -289,6 +289,22 @@ variable "rewind_bucket_arn" {
   }
 }
 
+# 기본값은 prod 영상 CDN 주소다 — 목록 줄 = 앞머리 + "/" + S3 키(dvr/…), CDN 의
+# /dvr/* 가 rewind 버킷이다(설계 4-5).
+variable "rewind_public_base_url" {
+  description = "사이드카 REWIND_PUBLIC_BASE_URL — 되감기 목록 URI 앞머리(https 절대 URL · 끝 / 없음). 버킷이 있으면 사이드카가 이 값 없이 기동하지 않는다."
+  type        = string
+  default     = "https://media.pokeclip.com"
+
+  # 사이드카 검증(media/internal/config/config.go)보다 좁게 — https · 호스트 ·
+  # 선택 포트 · . 으로 시작하지 않는 경로 조각(dot 세그먼트 · 끝 / · query ·
+  # fragment 거부).
+  validation {
+    condition     = can(regex("^https://[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:[0-9]{1,5})?(/[A-Za-z0-9_~-][A-Za-z0-9._~-]*)*$", var.rewind_public_base_url))
+    error_message = "rewind_public_base_url 은 https://<호스트>[/<경로>] 꼴이어야 한다(끝 / · query · fragment · . 으로 시작하는 경로 조각 금지)."
+  }
+}
+
 variable "cdn_secret_arn" {
   description = "CDN 비밀 ARN(prod/secrets 출력 — 값 아님)."
   type        = string

@@ -73,6 +73,12 @@ variable "janitor_enabled" {
   default     = true
 }
 
+variable "rewind_public_base_url" {
+  description = "사이드카 REWIND_PUBLIC_BASE_URL — 되감기 목록 URI 앞머리. 목록 줄 = 이 값 + \"/\" + S3 키(dvr/…)이고 영상 CDN 의 /dvr/* 가 rewind 버킷이다(설계 4-5). 바꾸면 설정 반영 교체로 들어간다."
+  type        = string
+  default     = "https://media.pokeclip.com"
+}
+
 variable "image_digests" {
   description = "Media 상자 이미지 다이제스트(sha256:<64자리>) — 저장소는 registry 출력 repo_urls. 응답기(ingest_auth)는 비우면 렌더하지 않는다(M15)."
   type = object({

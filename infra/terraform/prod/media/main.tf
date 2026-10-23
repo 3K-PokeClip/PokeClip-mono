@@ -60,6 +60,8 @@ module "media_host" {
   rewind_bucket_arn = local.runtime.rewind_bucket_arn
   media_secret_arns = local.runtime.media_secret_arns
 
+  rewind_public_base_url = var.rewind_public_base_url
+
   cdn_secret_arn             = local.secrets.cdn_secret_arn
   test_stream_key_secret_arn = local.secrets.test_stream_key_secret_arn
 
