@@ -361,6 +361,9 @@ docker build --platform linux/<태스크 아키텍처> -t pokeclip-web \
 | `NEXT_PUBLIC_POSTHOG_REPLAY`          | 세션 녹화 꺼짐         | `on`일 때만 켜짐                    |
 | `NEXT_PUBLIC_LANDING_URL`             | `https://pokeclip.com` | 랜딩 주소                           |
 
+`NEXT_PUBLIC_MEDIA_PLAYBACK_BASE_URL`은 prod 이미지가 다시보기·편집기 미리보기가 꺼진 채 나가지 않게
+필수로 둔다(로컬 개발은 위 환경변수 표대로 비워도 된다). prod 값은 I2-2에서 이것도 함께 정한다.
+
 선택 인자는 비어도 빌드가 멈추지 않으므로, 이름을 잘못 적으면 그 기능이 조용히 꺼진 채 빌드된다.
 
 - `NEXT_PUBLIC_MEDIA_STUB_URL`은 받지 않는다 — 배포 빌드에서는 반드시 비어야 한다. 같은 이유로

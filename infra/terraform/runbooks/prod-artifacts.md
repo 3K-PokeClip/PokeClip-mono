@@ -58,7 +58,7 @@ aws ecr get-login-password --region ap-northeast-2 \
 
 | 저장소 키 | 원천 | 선행 |
 |---|---|---|
-| `next` | `web/Dockerfile`(컨텍스트 `web/`) · 환경별 빌드 인자 | prod 빌드 인자 값(I2-1). 목록은 web README 「컨테이너 이미지」 절이고, 필수 빌드 인자가 비면 빌드가 실패합니다 |
+| `next` | 2번 Dockerfile `web/Dockerfile`(컨텍스트 `web/`) · 환경별 빌드 인자 | 빌드 인자 목록은 web README 「컨테이너 이미지」 절(I2-1) · prod 값은 I2-2(`NEXT_PUBLIC_MEDIA_PLAYBACK_BASE_URL` 포함). 필수 빌드 인자가 비면 빌드가 실패합니다 |
 | `auth` · `clip` | 3번 Dockerfile · 빌드 방법 | 3번의 준비(I3-8) |
 | `media-nginx` | nginx 공식 이미지 — **빌드하지 않습니다** | M2 머지본의 핀 다이제스트 |
 | `media-mediamtx` | `media/Dockerfile.mtxhook`(1번 빌드 · 컨텍스트 `media/`) | 아래 「MediaMTX 확인」 |
