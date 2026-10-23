@@ -777,7 +777,7 @@ Flyway 마이그레이션은 앱이 뜰 때 실행돼야 하므로 **코드 옆(
 지금까지 나간 것은 auth의 `V101`~`V118`(`V110`·`V111`은 칸, **`V112`는 인덱스 넷과 표 주석 둘**, POK-89 · `V113` 오디오 트랙 이름 · `V114` 탈퇴 장부 · `V115` 연동 채널 칸 NULL 허용 · `V116`·`V117` SOOP 연동 · **`V118` 탈퇴 장부의 `platform` 칸, POK-397**) · clip의 `V201`(`broadcasts`·`broadcast_events`)과
 `V202`(`jump_cards`, POK-118)·`V203`(`broadcasts.vod_expires_at`, POK-117)·`V204`(색인 둘, POK-174)·
 **`V205`(방송 중 부분 색인, POK-218)** · `V206`(`recipes`, POK-124) · `V207`(`clips`·`render_jobs`·`render_job_events`, POK-125) · **`V208`(`clips (recipe_id, id DESC)` 색인 하나, POK-243)** ·
-`V209`~`V213` · **`V214`(`jump_cards.hidden_reason` · `jump_card_actions` · `recipes.source_card_id`, POK-338)** · **`V216`(`jump_card_actions`가 `open`도 받는다, POK-393)** · chat-collector의 `V301`(`chat_messages`)~**`V315`** ·
+`V209`~`V213` · **`V214`(`jump_cards.hidden_reason` · `jump_card_actions` · `recipes.source_card_id`, POK-338)** · **`V216`(`jump_card_actions`가 `open`도 받는다, POK-393)** · `V217`(`upload_requests`의 카테고리·예약 공개, POK-381) · `V218`(`broadcasts.platform`, POK-398) · chat-collector의 `V301`(`chat_messages`)~**`V315`** ·
 chat-detector의 `V401`(`chat_metrics`, POK-120)이다.
 
 **chat-collector 대역 열:** `V301`(`chat_messages`) · `V302`(`stream_id` 칸) ·
@@ -1071,7 +1071,7 @@ Media는 auth에 직접 붙어 이 머리글을 안 싣는다. 머리글은 Spri
 
 | 문 | 인증 | 응답 |
 |---|---|---|
-| `POST /internal/broadcasts/{streamId}/highlights` (계약 2A) | `X-Internal-Token` | **201** 새 카드 · **200** 같은 창이 이미 있음(기존 카드 그대로) · 404 `{"error":"broadcast_not_found"}` · 400 `{"error":"invalid_request","field":…}` · 401 |
+| `POST /internal/broadcasts/{streamId}/highlights` (계약 2A) | `X-Internal-Token` | **201** 새 카드 · **200** 같은 창의 자동 카드가 이미 있음(기존 카드 그대로) · 404 `{"error":"broadcast_not_found"}` · 400 `{"error":"invalid_request","field":…}`(**`source`가 `hotkey`여도 `field:"source"`**, 자동 카드만 받는다. POK-391) · 401 |
 | `GET /api/clip/broadcasts/{streamId}/events` (계약 2B, SSE) | Bearer JWT | **200** `text/event-stream` · 404 `{"error":"broadcast_not_found"}` · 401 · **503** `{"error":"stream_limit","scope":"user\|stream\|total"}` 또는 `{"error":"authorization_unavailable"}` |
 | `POST /api/clip/jump-cards/{id}/open` | Bearer JWT | **204**(본문 없음, 행동 기록 `jump_card_actions`에 `open` 한 줄. 다시 열면 한 줄 더) · **400** `{"error":"invalid_request","field":"id"}`(번호가 숫자가 아니다) · 404 `{"error":"jump_card_not_found"}`(없거나 볼 수 없는 카드) · 503 `{"error":"authorization_unavailable"}` · 401. 편집기가 카드에서 열릴 때 부른다(POK-393) |
 
@@ -1084,10 +1084,14 @@ Media는 auth에 직접 붙어 이 머리글을 안 싣는다. 머리글은 Spri
 **표의 400도 POK-174가 붙인 것이다** — 그 전에는 그 예외를 다루는 조언이 세그먼트 문으로 좁혀져
 있어 스프링 기본 `/error` 봉투로 나갔다. 전문은 아래 POK-174 절 **「거절 봉투는 한 벌이다」**.
 
-**중복 방어선은 `(stream_id, source, window_start_ms)` UNIQUE와 `ON CONFLICT … DO NOTHING`의
-영향 행 수 하나뿐이다.** POK-82와 같은 이유로 예외가 아니라 반환값으로 가른다 — 예외로 가르면
-FK·CHECK 위반이 중복으로 보고돼 판별기가 "성공"으로 읽고 다시 안 보낸다. `eventId`는 **추적용**이라
-UNIQUE가 아니다(재전송 때 값이 달라도 같은 창이면 같은 카드다).
+**자동 카드의 중복 방어선은 `(stream_id, window_start_ms) WHERE source = 'auto'` 부분 유일 색인
+(`uq_jump_cards_auto_window`, `V219`)과 `ON CONFLICT … WHERE source = 'auto' DO NOTHING`의 영향 행 수 하나뿐이다.**
+POK-82와 같은 이유로 예외가 아니라 반환값으로 가른다: 예외로 가르면
+FK·CHECK 위반이 중복으로 보고돼 판별기가 "성공"으로 읽고 다시 안 보낸다. 자동 카드의 `eventId`는 **추적용**이라
+유일하지 않다(재전송 때 값이 달라도 같은 창이면 같은 카드다).
+**`V219`(POK-391) 전에는 `(stream_id, source, window_start_ms)` UNIQUE 제약 `uq_jump_cards_window`였다.** 수동 카드는
+구간 시작이 0으로 잘려 부딪혀서 갈랐고, 수동 카드의 중복은 `event_id` 부분 유일 색인(`uq_jump_cards_hotkey_event`)이 막는다.
+🔴 그 색인 위에서 **옛 clip의 2A 저장은 42P10으로 실패한다**(고를 제약이 없다): 되돌리거나 옛 컨테이너가 겹쳐 도는 동안 자동 카드가 버려진다.
 **`eventId`는 128자 이내다** — 넘으면 400 `{"error":"invalid_request","field":"eventId"}`.
 칸이 `VARCHAR(128)`이고, 검증이 없으면 DB까지 가서 **500**이 나가는데 그러면 판별기가 같은
 payload로 영영 재시도한다(2026-08-23 실측). **판별기 세션에 전할 것.**
