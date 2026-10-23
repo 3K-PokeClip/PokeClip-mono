@@ -1363,6 +1363,27 @@ describe('LiveScreen — 영상 출입증', () => {
     expect(accessCalls()).toBe(before);
   });
 
+  it('녹화를 보는 중 갱신이 410이면 녹화를 내리고 만료를 알린다(PR #348 codex)', async () => {
+    stubMediaElement();
+    mediaCalls.configured = true;
+    mediaCalls.answer = Promise.resolve([{ startMs: VOD_STARTED, durationSeconds: 9_000 }]);
+    server.playback = 'grant';
+    server.playbackTtlMs = 5 * 60_000 + 30_000;
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    const { container } = await renderLive();
+    await settle();
+    // 녹화를 틀고 있다(요청한 시작 위치가 있다)
+    expect(container.querySelector('video')?.getAttribute('src') ?? '').toContain('/playback/');
+    expect(screen.queryByText('보관 기간(60일)이 지나 녹화 영상을 볼 수 없어요')).toBeNull();
+
+    server.playback = 'expired';
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(65_000);
+    });
+    await settle();
+    expect(screen.getByText('보관 기간(60일)이 지나 녹화 영상을 볼 수 없어요')).toBeInTheDocument();
+  });
+
   it('출입증이 필요 없는 곳(로컬·dev)은 첫 화면이 서는 사이에 라이브 영상을 부른다: 기다림이 재생 시작을 늦추지 않는다', async () => {
     stubMediaElement();
     vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', 'http://live.test');

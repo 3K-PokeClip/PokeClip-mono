@@ -239,8 +239,9 @@ class ExpiredBroadcastControllerTest extends IntegrationTestSupport {
     }
 
     /**
-     * 시작 시각을 모르는 방송(자리표시)도 나오고(startedAt null), 그 자리는 끝 시각이다. 낀 자리표시는 앞 · 뒤 방송의 칸 나눔에도
-     * 그 끝 시각으로 선다
+     * 시작 시각을 모르는 방송(자리표시)도 나오고(startedAt null), 그 자리는 끝 시각이다. 뒤 방송은 자리표시의 끝 시각에서 칸을
+     * 나누지만, 자리표시 바로 앞 방송은 그 끝을 경계로 믿지 않고 자기 끝 + 10분에서 멈춘다(자리표시가 실제로 언제 시작했는지 모른다,
+     * PR #348 codex P1). 그 사이는 어느 구간에도 안 든다(적게 지우는 쪽)
      */
     @Test
     void 자리표시_방송도_나오고_끝_시각을_자리로_삼는다() throws Exception {
@@ -257,10 +258,25 @@ class ExpiredBroadcastControllerTest extends IntegrationTestSupport {
         JsonNode p = body.get("broadcasts").get(1);
         JsonNode c = body.get("broadcasts").get(2);
         assertThat(p.get("startedAt").isNull()).isTrue();
-        assertThat(Instant.parse(a.get("segmentsUntil").asString())).isEqualTo(p끝.minus(Duration.ofMinutes(2)));
+        assertThat(Instant.parse(a.get("segmentsUntil").asString())).isEqualTo(a끝.plus(Duration.ofMinutes(10)));
         assertThat(Instant.parse(p.get("segmentsFrom").asString())).isEqualTo(p끝.minus(Duration.ofMinutes(2)));
         assertThat(Instant.parse(p.get("segmentsUntil").asString())).isEqualTo(c시작.minus(Duration.ofMinutes(2)));
         assertThat(Instant.parse(c.get("segmentsFrom").asString())).isEqualTo(c시작.minus(Duration.ofMinutes(2)));
+    }
+
+    /**
+     * 뒤가 아직 안 만료된 자리표시면 그 방송의 조각(시작을 모름)을 앞 방송 몫으로 지우지 않는다: 자리표시 끝 − 2분까지 늘리면
+     * 그 방송의 실제 시작부터 끝 2분 전까지가 일찍 지워진다(PR #348 codex P1)
+     */
+    @Test
+    void 뒤가_시작을_모르는_방송이면_앞_방송은_자기_끝_10분_뒤에서_멈춘다() throws Exception {
+        Instant a끝 = T0.plusSeconds(3600);
+        Instant p끝 = T0.plusSeconds(10800);
+        방송("S-a", "key", T0, a끝, a끝.plus(Duration.ofDays(60)));
+        방송("S-place", "key", null, p끝, 지금.plus(Duration.ofDays(1)));
+
+        JsonNode a = 부른다(지금, null).get("broadcasts").get(0);
+        assertThat(Instant.parse(a.get("segmentsUntil").asString())).isEqualTo(a끝.plus(Duration.ofMinutes(10)));
     }
 
     /** 다른 물리 키의 방송은 이웃이 아니다 */

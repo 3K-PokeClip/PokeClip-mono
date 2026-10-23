@@ -288,8 +288,11 @@ function LivePlayer({
       void ensureLiveAccess(liveStreamId, mediaKey ?? liveStreamId).then((result) => {
         if (!alive) return;
         if (result.kind === 'expired') {
-          // 다시 받아도 같다: 더 묻지 않는다
+          // 다시 받아도 같다: 더 묻지 않는다. 보던 녹화가 있으면 내린다: 준비 표시를 비우면 녹화 효과가 찾은 녹화를 치운다
+          // (남기면 녹화가 안내보다 앞서 쿠키가 끝날 때까지 계속 돈다, PR #348 codex)
           setAccessExpiredFor(key);
+          setAccessReadyFor(null);
+          setCookieFor(null);
           return;
         }
         if (result.kind === 'failed') {
