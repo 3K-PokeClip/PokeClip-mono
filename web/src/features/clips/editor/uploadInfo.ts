@@ -101,6 +101,12 @@ export function localDate(at: Date): string {
   return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}`;
 }
 
+/** 그 순간 → 예약 칸 값(로컬 날짜 · 시각). 저장된 예약을 창에 되살릴 때 쓴다 */
+export function scheduleOf(at: Date): { date: string; time: string } {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return { date: localDate(at), time: `${pad(at.getHours())}:${pad(at.getMinutes())}` };
+}
+
 /** 예약 칸의 처음 값: 내일 18:00 */
 export function defaultSchedule(now: number): { date: string; time: string } {
   return { date: localDate(new Date(now + 24 * 60 * 60 * 1000)), time: '18:00' };

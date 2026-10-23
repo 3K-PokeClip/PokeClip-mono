@@ -328,6 +328,10 @@ export interface UploadRequestSummary {
   title: string;
   privacyStatus: PrivacyStatus;
   thumbnailSource: ThumbnailSource;
+  /** 고른 분류(POK-381). 창을 다시 열 때 되살린다. 옛 서버면 빠져 온다 */
+  categoryId?: string;
+  /** 예약 공개 시각(ISO-8601, POK-381). 예약이 아니면 null, 옛 서버면 빠져 온다 */
+  publishAt?: string | null;
 }
 
 /** 유튜브 업로드 한 건(POK-220). 주소는 https://youtu.be/{videoId} */

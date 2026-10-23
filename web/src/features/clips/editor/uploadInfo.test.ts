@@ -9,7 +9,9 @@ import {
   sceneLabel,
   sceneOffsetFromPlayhead,
   scenePicks,
+  scheduleInstant,
   scheduleLabel,
+  scheduleOf,
   scheduleProblem,
   tagsLength,
   thumbnailFileProblem,
@@ -70,6 +72,13 @@ describe('예약 공개(POK-381): 지금부터 1시간 뒤부터', () => {
   it('표기: 10월 23일 (금) 18:00', () => {
     expect(scheduleLabel('2026-10-23', '18:00')).toBe('10월 23일 (금) 18:00');
     expect(scheduleLabel('2026-13-40', '18:00')).toBe('');
+  });
+
+  it('저장된 예약 시각 → 예약 칸 값(이 기기 시각), 다시 순간으로 돌리면 같다', () => {
+    const at = new Date('2026-10-23T09:05:00Z');
+    expect(scheduleOf(at)).toEqual({ date: '2026-10-23', time: '18:05' });
+    const { date, time } = scheduleOf(at);
+    expect(scheduleInstant(date, time)?.toISOString()).toBe('2026-10-23T09:05:00.000Z');
   });
 });
 

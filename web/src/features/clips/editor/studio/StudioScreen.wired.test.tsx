@@ -1073,4 +1073,33 @@ describe('StudioScreen: 영상 만들기 + 유튜브 올리기(POK-291)', () => 
     await user.click(dialog().getByRole('tab', { name: '썸네일' }));
     expect(dialog().getByRole('radio', { name: /영상 장면/ })).toBeChecked();
   });
+
+  it('남은 의도가 예약이면 카테고리·예약 시각까지 되살려, 그대로 다시 올려도 예약이 안 지워진다(PR #301 리뷰)', async () => {
+    server.savedUploadRequest = {
+      title: '예약한 제목',
+      privacyStatus: 'private',
+      thumbnailSource: 'scene',
+      categoryId: '24',
+      publishAt: '2099-01-01T09:00:00Z',
+    };
+    const user = userEvent.setup();
+    await openFrom('recipe=31');
+    await user.click(screen.getByRole('button', { name: '영상 만들기' }));
+
+    expect(dialog().getByRole('combobox', { name: '카테고리' })).toHaveTextContent('엔터테인먼트');
+    await user.click(dialog().getByRole('tab', { name: '공개' }));
+    expect(dialog().getByRole('radio', { name: '예약' })).toBeChecked();
+    // 시험은 Asia/Seoul(vitest.config): 09:00Z = 18:00
+    expect(dialog().getByLabelText('공개 날짜')).toHaveValue('2099-01-01');
+    expect(dialog().getByLabelText('공개 시각')).toHaveValue('18:00');
+    await user.click(dialog().getByRole('button', { name: '예약 업로드' }));
+
+    await waitFor(() => expect(renders()).toBe(1));
+    const { request } = await renderPartsOf();
+    expect(request.upload).toMatchObject({
+      categoryId: '24',
+      privacyStatus: 'private',
+      publishAt: '2099-01-01T09:00:00.000Z',
+    });
+  });
 });

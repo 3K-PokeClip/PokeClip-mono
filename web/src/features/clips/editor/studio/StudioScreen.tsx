@@ -70,7 +70,12 @@ import {
   type UploadDraft,
   type UploadFieldErrors,
 } from '../UploadInfoDialog';
-import { defaultSceneOffsetMs, sceneOffsetFromPlayhead, scheduleInstant } from '../uploadInfo';
+import {
+  defaultSceneOffsetMs,
+  sceneOffsetFromPlayhead,
+  scheduleInstant,
+  scheduleOf,
+} from '../uploadInfo';
 import type { SceneFrameSource } from '../useSceneFrames';
 import { clipLabel, clipSettled } from './clipProgress';
 
@@ -364,6 +369,25 @@ function uploadInfoOf(draft: UploadDraft, cutLengthMs: number): UploadInfo {
           }
         : { source: draft.thumbnailSource },
   };
+}
+
+/**
+ * 같은 판에 남은 업로드 의도 → 창의 처음 값(새로 고친 뒤 다시 열 때). 카테고리·예약도 되살린다: 빠지면 게임·「비공개」로 열려
+ * 그대로 다시 누르면 같은 판의 예약이 지워진다(PR #301 리뷰). 지난 예약 시각도 그대로 둔다 — 창이 보낼 때 다시 고르게 한다
+ */
+function draftFromSummary(summary: UploadRequestSummary, sceneOffsetMs: number): UploadDraft {
+  const base = emptyUploadDraft(sceneOffsetMs);
+  const draft: UploadDraft = {
+    ...base,
+    title: summary.title,
+    categoryId: summary.categoryId ?? base.categoryId,
+    privacyStatus: summary.privacyStatus,
+    thumbnailSource: summary.thumbnailSource,
+  };
+  const at = summary.publishAt != null ? new Date(summary.publishAt) : null;
+  if (at === null || Number.isNaN(at.getTime())) return draft;
+  const { date, time } = scheduleOf(at);
+  return { ...draft, scheduled: true, scheduleDate: date, scheduleTime: time };
 }
 
 async function loadFromCard(streamId: string, cardId: string): Promise<Status> {
@@ -745,12 +769,7 @@ function WiredStudio({
       const initial: UploadDraft = remembered
         ? { ...remembered, sceneOffsetMs: Math.min(cutLengthMs - 1, remembered.sceneOffsetMs) }
         : stored
-          ? {
-              ...emptyUploadDraft(scene),
-              title: stored.title,
-              privacyStatus: stored.privacyStatus,
-              thumbnailSource: stored.thumbnailSource,
-            }
+          ? draftFromSummary(stored, scene)
           : emptyUploadDraft(scene);
       setUploadErrors({});
       setPending({
