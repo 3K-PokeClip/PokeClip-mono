@@ -1,6 +1,5 @@
-package com.pokeclip.chat.detector.db;
+package com.pokeclip.db;
 
-import com.pokeclip.chat.detector.support.IntegrationTestSupport;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import org.junit.jupiter.api.Test;
@@ -9,18 +8,19 @@ import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
 import software.amazon.awssdk.regions.Region;
 
 import java.sql.Connection;
+import java.time.Duration;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 
 /**
- * 공급자가 <b>연결마다</b> 토큰을 새로 받는지, 그리고 그 토큰이 RDS가 받는 꼴인지를 잰다(POK-406).
+ * 공급자가 <b>연결마다</b> 토큰을 새로 받는지, 그리고 그 토큰이 RDS가 받는 꼴인지를 잰다(POK-406 · POK-407).
  *
  * <p>실제 RDS 없이 재는 범위는 여기까지다. 서버가 토큰을 받아 주는지(S1) · 15분 뒤에도 새 연결이
- * 붙는지(S2)는 {@code RdsIamSpikeTest}가 실험 RDS에서 잰다.
+ * 붙는지(S2)는 chat-detector {@code RdsIamSpikeTest}가 실험 RDS에서 잰다.
  */
-class RdsIamCredentialsProviderTest extends IntegrationTestSupport {
+class RdsIamCredentialsProviderTest extends PostgresTestBase {
 
     @Test
     void 실제_서명기는_네트워크_없이_접속_토큰_꼴을_만든다() {
@@ -77,6 +77,35 @@ class RdsIamCredentialsProviderTest extends IntegrationTestSupport {
         assertThat(thrown).hasMessageContaining("IllegalStateException")
                 .hasMessageNotContaining("secret-profile-name")
                 .hasNoCause();
+    }
+
+    /**
+     * 서명 자체는 로컬 계산이지만 자격 증명 조회(ECS 태스크 역할 엔드포인트)는 밖으로 나간다. 그 조회가 멈추면
+     * 연결 생성이 끝없이 매달려 풀이 바닥난다. 그래서 시한을 둔다(media {@code iam.go}의 10초와 같다).
+     */
+    @Test
+    void 토큰_생성이_시한을_넘기면_기다리지_않고_실패한다() {
+        RdsTokenSigner hanging = (host, port, user) -> {
+            try {
+                Thread.sleep(Duration.ofSeconds(30));
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            return "never";
+        };
+        RdsIamCredentialsProvider provider = new RdsIamCredentialsProvider(
+                hanging, "db.local", 5432, "app_auth", Duration.ofMillis(200));
+
+        long started = System.nanoTime();
+        Throwable thrown = catchThrowable(provider::getCredentials);
+
+        assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofSeconds(5));
+        assertThat(thrown).hasMessageContaining("시한").hasNoCause();
+    }
+
+    @Test
+    void 운영_시한은_10초다() {
+        assertThat(RdsIamCredentialsProvider.SIGN_TIMEOUT).isEqualTo(Duration.ofSeconds(10));
     }
 
     private static HikariConfig poolConfig(RdsTokenSigner signer) {

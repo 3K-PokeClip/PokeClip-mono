@@ -4,12 +4,14 @@ import com.pokeclip.chat.detector.config.DetectionProperties;
 import com.pokeclip.chat.detector.metrics.ChatMetricsStore;
 import com.pokeclip.chat.detector.metrics.ChatWindowReader;
 import com.pokeclip.chat.detector.observe.LateArrivalReporter;
+import com.pokeclip.db.DataSourceLoginConfiguration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Import;
 import org.springframework.core.task.TaskExecutor;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
@@ -19,6 +21,8 @@ import java.time.Instant;
 @SpringBootApplication
 @ConfigurationPropertiesScan
 @EnableScheduling
+// DB 로그인 방식(POSTGRES_AUTH)과 db_connected 줄. db-support 패키지는 이 앱의 컴포넌트 스캔 밖이라 끌어온다.
+@Import(DataSourceLoginConfiguration.class)
 public class DetectorApplication {
 
     private static final Logger log = LoggerFactory.getLogger(DetectorApplication.class);
