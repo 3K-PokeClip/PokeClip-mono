@@ -1,7 +1,8 @@
 'use client';
 
 import { useCallback, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useSessionMutation } from '@/lib/useSessionMutation';
 import { ApiError } from '@/api/client';
 import {
   issuePairingCode,
@@ -63,7 +64,7 @@ export function useStreamKeyState(): StreamKeyState {
   const status = useQuery(streamKeyStatusQueryOptions);
   const [justIssued, setJustIssued] = useState<DisplayedPairingCode | null>(null);
 
-  const mutation = useMutation({
+  const mutation = useSessionMutation({
     mutationFn: issuePairingCode,
     onSuccess: (issued) => {
       // 마감은 서버 expiresAt이 아니라 "수신 순간 + TTL"로 앵커한다 — 클라 시계가
