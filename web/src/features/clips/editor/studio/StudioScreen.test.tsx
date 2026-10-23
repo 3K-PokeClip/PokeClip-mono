@@ -166,8 +166,8 @@ describe('StudioScreen', () => {
     await user.click(screen.getByRole('radio', { name: '2×' }));
     expect(screen.getByText(/자막 영상\+파일 · 2× 배속/)).toBeInTheDocument();
 
-    await user.click(screen.getByRole('radio', { name: /세로/ }));
-    expect(screen.getByRole('radio', { name: /세로/ })).toBeChecked();
+    await user.click(screen.getByRole('radio', { name: /전체/ }));
+    expect(screen.getByRole('radio', { name: /전체/ })).toBeChecked();
   });
 
   it('도구는 쇼츠 만드는 순서대로 다섯이다 — 구간·BGM·효과·패널 위치는 없다(POK-389)', () => {
@@ -197,8 +197,8 @@ describe('StudioScreen', () => {
     const user = userEvent.setup();
     renderStudio();
 
-    await user.click(screen.getByRole('radio', { name: /세로/ }));
-    expect(screen.getByRole('radio', { name: /세로/ })).toBeChecked();
+    await user.click(screen.getByRole('radio', { name: /전체/ }));
+    expect(screen.getByRole('radio', { name: /전체/ })).toBeChecked();
 
     // 클릭한 버튼에 포커스가 남은 채로 되돌린다
     await user.keyboard('{Meta>}z{/Meta}');
@@ -334,9 +334,23 @@ describe('StudioScreen', () => {
     expect(burned!.style.getPropertyValue('--pc-edge')).toBe('70%');
   });
 
+  it('레이아웃은 폰 모양 타일 다섯이다 — 이름만 읽고 설명은 덧붙임으로(POK-389)', () => {
+    renderStudio();
+    const group = screen.getByRole('radiogroup', { name: '레이아웃 종류' });
+    const tiles = within(group).getAllByRole('radio');
+    expect(tiles.map((tile) => tile.textContent)).toEqual([
+      '전체',
+      '상하 분할',
+      '중앙',
+      '크롭',
+      '가로',
+    ]);
+    expect(tiles[1]).toHaveAccessibleDescription('위 · 아래 두 칸');
+  });
+
   it('레이아웃 카드에 포커스만 옮겨서는 레이아웃이 바뀌지 않는다 — 창 복귀 재포커스가 편집을 되살리면 안 된다', () => {
     renderStudio();
-    screen.getByRole('radio', { name: /세로/ }).focus();
+    screen.getByRole('radio', { name: /전체/ }).focus();
     expect(screen.getByRole('radio', { name: /분할/ })).toBeChecked();
   });
 
@@ -362,7 +376,7 @@ describe('StudioScreen', () => {
     // 시안 순서: 세로 · 분할 · 중앙 · 크롭 · 가로 — 세로 목록이라 위아래 화살표다
     screen.getByRole('radio', { name: /분할/ }).focus();
     await user.keyboard('{ArrowUp}');
-    expect(screen.getByRole('radio', { name: /세로/ })).toBeChecked();
+    expect(screen.getByRole('radio', { name: /전체/ })).toBeChecked();
 
     await user.keyboard('{ArrowDown}{ArrowDown}');
     expect(screen.getByRole('radio', { name: /중앙/ })).toBeChecked();

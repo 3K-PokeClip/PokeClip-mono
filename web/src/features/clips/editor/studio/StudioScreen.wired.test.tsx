@@ -606,7 +606,7 @@ describe('StudioScreen — 화면에서 고른 모양이 저장 본문에 그대
   it('세로: 자르는 틀을 옮긴 자리가 그대로 실린다', async () => {
     const user = userEvent.setup();
     await openFrom(`stream=${STREAM_ID}&card=5`);
-    await user.click(screen.getByRole('radio', { name: /세로/ }));
+    await user.click(screen.getByRole('radio', { name: /전체/ }));
     const frame = screen.getByRole('button', { name: /세로 9:16 영역/ });
     frame.focus();
     await user.keyboard('{ArrowRight}{ArrowRight}');
@@ -732,7 +732,7 @@ describe('StudioScreen — 화면에서 고른 모양이 저장 본문에 그대
     const user = userEvent.setup();
     await openFrom('recipe=31');
     // 첫 출력이 정사각이어도 화면은 세로 출력으로 연다
-    expect(screen.getByRole('radio', { name: /세로/ })).toBeChecked();
+    expect(screen.getByRole('radio', { name: /전체/ })).toBeChecked();
 
     await user.click(screen.getByRole('button', { name: '편집본 저장' }));
     await waitFor(() =>
