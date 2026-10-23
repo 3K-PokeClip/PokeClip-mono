@@ -125,6 +125,7 @@ function LivePlayer({
   onPlaybackPosition,
   onLivePosition,
   onSeek,
+  onMarkableChange,
 }: {
   stream: LiveStream;
   viewersNote: string;
@@ -167,6 +168,11 @@ function LivePlayer({
    * 따라간다. 라이브 재생기도 부른다(실시간으로 포함)
    */
   onSeek: () => void;
+  /**
+   * 지난 방송에서 「이 시점 카드 추가」를 할 수 있나(POK-392): 녹화가 서 있고 그 0초가 서버 기준점이다. 재생기가 위치를 셀 때 쓰는
+   * 녹화 소스 하나에서 읽는다(계획 검증 m11): 녹화 조회 결과와 기준점을 따로 보면 둘이 갈리는 그리기가 생긴다
+   */
+  onMarkableChange: (markable: boolean) => void;
 }) {
   // env 미설정이면 null → GlassPlayer가 「영상 신호 없음」 자리 표시를 그린다.
   // 주소에 ?stream= 이 없으면 clip 명부에서 고른 방송(liveDataStore)의 영상을 튼다.
@@ -215,7 +221,10 @@ function LivePlayer({
         // 재생기의 0초를 서버 기준점(카드·조각 위치의 0초, POK-255)에 세운다 — 녹화 시작에 세우면 두 시작의 차만큼 카드를
         // 누른 자리와 영상이 어긋난다(POK-253). 서버가 모르면(null) 녹화 시작
         const timeline = originMs === null ? found : rebaseTimeline(found, originMs);
-        setLookup({ kind: 'found', source: { streamId: mediaKey, ...timeline } });
+        setLookup({
+          kind: 'found',
+          source: { streamId: mediaKey, ...timeline, originAxis: originMs !== null },
+        });
         // 영상의 0초가 곧 카드 시점의 0초다 — 채팅도 이 기준으로 시점을 잡게 알린다
         publishLiveData({ timeBaseMs: timeline.startMs });
       });
@@ -236,6 +245,10 @@ function LivePlayer({
     onRecordingLookupStart,
   ]);
   const recorded = lookup.kind === 'found' ? lookup.source : null;
+  const markable = recorded?.originAxis === true;
+  useEffect(() => {
+    onMarkableChange(markable);
+  }, [markable, onMarkableChange]);
   useEffect(() => {
     if (recorded !== null) onRecordedReady();
   }, [recorded, onRecordedReady]);
@@ -390,12 +403,19 @@ function LiveDashboard() {
 
   const uptimeSeconds = clock.uptimeSeconds;
   const uptimeLabel = uptimeSeconds === null ? null : formatUptime(uptimeSeconds);
-  // 라이브는 서버에 카드를 만든다(POK-392). 지난 방송은 아직 준비 중 안내다(재생 위치 갈래가 따로 붙는다)
+  // 수동 마킹(POK-392). 라이브는 서버 시각, 지난 방송은 녹화 재생 위치로 카드를 만든다. 갈래는 명부가 답한 상태로만 고른다:
+  // 지난 방송 주소라도 상태를 모르는 동안(viewStatus는 그때 이미 ended로 그린다)에는 어느 갈래도 보내지 않는다(감사 1회차)
+  const [pastMarkable, setPastMarkable] = useState(false);
+  const markMode = clock.status === 'live' ? 'live' : clock.status === 'ended' ? 'past' : 'unknown';
   const marking = useManualMarking({
     streamId,
-    live: viewStatus === 'live',
+    mode: markMode,
     clockLabel: uptimeLabel,
+    positionMs: () => playerRef.current?.currentPositionMs?.() ?? null,
     onCard: mergeCard,
+    onExistingCard: (card) => {
+      seekTo(card.streamTimestampMs / 1000);
+    },
   });
   // 접으면 패널 자체가 사라지므로 되살릴 통로는 플레이어 상단 오버레이의 여는 버튼이다
   const [chatPanelOpen, setChatPanelOpen] = useState(true);
@@ -644,6 +664,7 @@ function LiveDashboard() {
                 onPlaybackPosition={handlePlaybackPosition}
                 onLivePosition={handleLivePosition}
                 onSeek={handlePlayerSeek}
+                onMarkableChange={setPastMarkable}
               />
             </Suspense>
           </div>
@@ -655,6 +676,8 @@ function LiveDashboard() {
             uptimeNote={UPTIME_NOTE[viewStatus]}
             metaNote={`방송 정보 ${missingWord(viewStatus, info !== null)}`}
             pendingLabel={marking.pendingLabel}
+            markMode={ended ? 'past' : 'live'}
+            markDisabled={markMode === 'unknown' || (markMode === 'past' && !pastMarkable)}
             onMark={marking.mark}
           />
           <HighlightCardPanel

@@ -8,6 +8,7 @@ import {
 } from 'react';
 import { fireEvent, screen, within } from '@testing-library/react';
 import { axe } from 'jest-axe';
+import { QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { reportPlaybackForbidden, resetPlaybackAccessForTests } from '@/api/playbackAccess';
 import { LiveScreen } from '@/features/broadcast/livenow/LiveScreen';
@@ -23,6 +24,7 @@ import { useAuthStore } from '@/stores/auth';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
 import { fakeScrollMetrics } from '@/test/scrollMetrics';
 import { renderWithProviders } from '@/test/testProviders';
+import { ToastProvider } from '@/ui';
 
 // 라이브 대시보드(시안 1b)는 clip 창구에 붙어 있다(POK-251). 이 시험은 서버 응답을 흉내 내고
 // 화면이 그 값으로 무엇을 그리는지 잰다. 시계는 가짜다 — 경과·마킹 시각이 결정적이어야 한다.
@@ -1634,8 +1636,7 @@ describe('LiveScreen — 수동 마킹', () => {
   // 이 파일은 전부 fireEvent다 — userEvent는 가짜 시계와 엉켜 멈춘다(GlassPlayer 자동 숨김 케이스와 같은 이유).
   //
   // 라이브는 누른 때·보낸 때를 서버에 보내고 서버가 시각을 정한다(POK-392). 답이 올 때까지 「카드 만드는 중」 자리가 서고,
-  // 답의 카드가 목록에 들어온다. 지난 방송의 위치 갈래는 태스크 3이라 지금은 준비 중 안내 그대로다.
-  const PREPARING = '수동 마킹은 아직 준비 중이에요. 준비되면 알려드릴게요.';
+  // 답의 카드가 목록에 들어온다. 지난 방송은 아래 「이 시점 카드 추가」 묶음이다.
   const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
   /** 답을 붙들어 둔다. 돌려준 함수를 부르면 풀린다 */
@@ -1820,17 +1821,14 @@ describe('LiveScreen — 수동 마킹', () => {
     expect(server.markBodies).toHaveLength(0);
   });
 
-  it('지난 방송에서는 아직 준비 중 안내다: 라이브 갈래를 보내지 않는다', async () => {
-    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+  it('방송 상태를 모르는 동안은 단추가 꺼져 있고 F8도 아무것도 안 보낸다', async () => {
+    server.failLive = true;
     await renderLive();
 
-    fireEvent.click(screen.getByRole('button', { name: /수동 마킹/ }));
+    expect(screen.getByRole('button', { name: /수동 마킹/ })).toBeDisabled();
     fireEvent.keyDown(document, { key: 'F8' });
     await settle();
-
-    expect(screen.getAllByText(PREPARING).length).toBeGreaterThan(0);
     expect(server.markBodies).toHaveLength(0);
-    expect(screen.getByRole('button', { name: '수동 2' })).toBeInTheDocument();
   });
 
   it('경과 시간이 흐른다', async () => {
@@ -1841,6 +1839,196 @@ describe('LiveScreen — 수동 마킹', () => {
       vi.advanceTimersByTime(120_000); // 2분
     });
     expect(screen.getByText('1:26:03')).toBeInTheDocument();
+  });
+});
+
+describe('LiveScreen: 지난 방송 이 시점 카드 추가(POK-392)', () => {
+  // 지난 방송은 통로가 없어 답의 카드가 목록에 들어오는 유일한 길이다. 위치는 재생기의 정확한 자리(초 × 1000, 반올림)이고
+  // 녹화가 서버 기준점 축일 때만 보낸다: 녹화 시작 축이면 카드가 두 시작의 차만큼 어긋난다
+  const VOD_MARK_CARD = card(9, {
+    streamId: VOD_ID,
+    source: 'hotkey',
+    score: null,
+    evidence: null,
+    eventSeq: 90,
+    streamTimestampMs: 91_390,
+    window: { startMs: 51_390, endMs: 111_390 },
+  });
+
+  /** 녹화가 있는 지난 방송을 연다. 기본은 서버 기준점이 녹화 시작과 같아 재생 위치 = 기준점 축 위치다 */
+  async function openPast({
+    origin = true,
+    spans = [{ startMs: VOD_STARTED, durationSeconds: 9_000 }],
+  }: { origin?: boolean; spans?: { startMs: number; durationSeconds: number }[] } = {}) {
+    stubMediaElement();
+    server.vodChat = true;
+    server.vodOrigin = origin ? VOD_STARTED : null;
+    mediaCalls.configured = true;
+    mediaCalls.answer = Promise.resolve(spans);
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    const result = await renderLive();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300);
+    });
+    await settle();
+    return result;
+  }
+
+  const addButton = () => screen.getByRole('button', { name: '이 시점 카드 추가' });
+
+  it('시안 1c: 「이 시점 카드 추가」와 「재생 지점 앞 40초 · 뒤 20초」, 라이브 단추는 없다', async () => {
+    await openPast();
+
+    expect(addButton()).toBeEnabled();
+    expect(screen.getByText('재생 지점 앞 40초 · 뒤 20초')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /수동 마킹/ })).not.toBeInTheDocument();
+  });
+
+  // 8.11 × 1000은 부동소수로 8109.999…다: 내리면 8109로 1ms 앞이 된다(계획 검증 C2). 91.39 같은 값은 곱이 정확히 떨어져 내림을 못 잡는다
+  it('8.11초에서 누르면 positionMs 8110(내림이 아니라 반올림)을 보내고 답의 카드가 목록에 바로 선다', async () => {
+    const { container } = await openPast();
+    await playTo(container, 8.11);
+    let release!: () => void;
+    server.markGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    server.markReply = { status: 201, body: VOD_MARK_CARD };
+
+    fireEvent.click(addButton());
+    await settle();
+
+    expect(server.markBodies).toHaveLength(1);
+    const body = server.markBodies[0]!;
+    expect(Object.keys(body).sort()).toEqual(['eventId', 'positionMs']);
+    expect(body.positionMs).toBe(8_110);
+    const post = fetchSpy.mock.calls.find(([u]) => String(u).endsWith('/marks'));
+    expect(String(post?.[0])).toContain(`/api/clip/broadcasts/${VOD_ID}/marks`);
+    expect(screen.getByText('0:00:08 마킹됨 · 카드 생성 중')).toBeInTheDocument();
+
+    release();
+    await settle();
+    expect(screen.queryByText(/마킹됨 · 카드 생성 중/)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '전체 9' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '수동 3' })).toBeInTheDocument();
+  });
+
+  it('F8도 같은 위치 갈래다', async () => {
+    const { container } = await openPast();
+    await playTo(container, 123.4);
+    server.markReply = { status: 201, body: VOD_MARK_CARD };
+
+    fireEvent.keyDown(document, { key: 'F8' });
+    await settle();
+
+    expect(server.markBodies).toHaveLength(1);
+    expect(server.markBodies[0]!.positionMs).toBe(123_400);
+    expect(server.markBodies[0]!).not.toHaveProperty('pressedAt');
+  });
+
+  it('200(20초 안 앞 카드)이면 알리고 그 카드 시점으로 옮긴다', async () => {
+    const { container } = await openPast();
+    await playTo(container, 610);
+    server.markReply = {
+      status: 200,
+      body: { ...VOD_MARK_CARD, id: 7, streamTimestampMs: 600_000 },
+    };
+
+    fireEvent.click(addButton());
+    await settle();
+
+    expect(screen.getByText('가까운 카드가 이미 있어요')).toBeInTheDocument();
+    expect(screen.getByText(/^0:10:00 시점까지 보는 중/)).toBeInTheDocument();
+  });
+
+  /**
+   * PR #350 codex P2: 답을 기다리는 사이 다른 방송으로 옮기면, 앞 방송의 200이 새 방송 화면을 앞 방송 카드 시각으로 옮겼다(카드 넣기는
+   * 방송 번호를 보지만 옮기기·안내는 안 봤다). 보낸 방송이 지금 방송일 때만 옮기고 알린다
+   */
+  it('답을 기다리는 사이 다른 방송으로 옮기면 앞 방송의 200이 새 방송을 옮기지도 알리지도 않는다', async () => {
+    const { container, rerender, queryClient } = await openPast();
+    await playTo(container, 610);
+    let release!: () => void;
+    server.markGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    server.markReply = {
+      status: 200,
+      body: { ...VOD_MARK_CARD, id: 7, streamTimestampMs: 600_000 },
+    };
+    fireEvent.click(addButton());
+    await settle();
+    expect(server.markBodies).toHaveLength(1);
+
+    // 다른 지난 방송(live-1, 끝남)으로 옮긴다
+    server.liveEnded = true;
+    nav.pathname = `/broadcast/vod/${STREAM_ID}`;
+    window.history.pushState({}, '', `/broadcast/vod/${STREAM_ID}`);
+    // 주소는 그리기에서 읽는다(usePathname): Next가 주소를 바꾸면 화면이 다시 그려진다
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <ToastProvider>
+          <LiveScreen />
+        </ToastProvider>
+      </QueryClientProvider>,
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    await settle();
+    expect(
+      fetchSpy.mock.calls.some(([u]) =>
+        String(u).includes(`/api/clip/broadcasts/${STREAM_ID}/jump-cards`),
+      ),
+      '새 방송으로 안 옮겨졌다: 이 갈래는 아무것도 안 잰다',
+    ).toBe(true);
+
+    release();
+    await settle();
+
+    expect(screen.queryByText('가까운 카드가 이미 있어요')).toBeNull();
+    expect(screen.queryByText(/^0:10:00 시점까지 보는 중/)).toBeNull();
+    expect(screen.queryByText(/마킹됨 · 카드 생성 중/)).toBeNull();
+  });
+
+  it('녹화가 없으면 단추가 꺼지고 F8은 보내지 않고 알린다', async () => {
+    await openPast({ spans: [] });
+
+    expect(addButton()).toBeDisabled();
+    fireEvent.keyDown(document, { key: 'F8' });
+    await settle();
+
+    expect(server.markBodies).toHaveLength(0);
+    expect(screen.getByText('재생 위치를 알 수 없어 카드를 만들 수 없어요')).toBeInTheDocument();
+  });
+
+  /**
+   * 감사 1회차: 지난 방송 주소는 명부 답 전에도 지난 방송으로 그린다(viewStatus). 그 상태로 위치 갈래를 보내면 안 된다: 방송이 사실
+   * 방송 중이면 서버가 400을 주고, 그 사이 재생기가 무엇을 틀고 있는지도 모른다. 단추는 지난 방송 모양으로 꺼지고 F8은 상태를
+   * 확인 중이라고 알린다(「재생 위치를 알 수 없다」가 아니다: 그것은 상태를 안 뒤의 말이다)
+   */
+  it('지난 방송 주소라도 방송 상태를 모르는 동안은 보내지 않고 확인 중이라고 알린다', async () => {
+    server.failLive = true;
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    await renderLive();
+
+    expect(addButton()).toBeDisabled();
+    fireEvent.keyDown(document, { key: 'F8' });
+    await settle();
+
+    expect(server.markBodies).toHaveLength(0);
+    expect(
+      screen.getByText('방송 정보를 확인하고 있어요. 잠시 뒤 다시 눌러 주세요'),
+    ).toBeInTheDocument();
+  });
+
+  it('녹화가 서버 기준점 축이 아니면(기준점 없음) 단추가 꺼지고 F8도 보내지 않는다', async () => {
+    await openPast({ origin: false });
+
+    expect(addButton()).toBeDisabled();
+    fireEvent.keyDown(document, { key: 'F8' });
+    await settle();
+
+    expect(server.markBodies).toHaveLength(0);
   });
 });
 
@@ -3939,6 +4127,24 @@ describe('LiveScreen: 라이브 되감기 채팅(POK-326)', () => {
     expect(within(chatPanel()).getByText(/^0:47:22 시점까지 보는 중/)).toBeInTheDocument();
     expect(within(chatPanel()).getByText('라이브 2835초')).toBeInTheDocument();
     expect(within(chatPanel()).queryByText('라이브 2845초')).toBeNull();
+  });
+
+  /**
+   * 수동 마킹(POK-392)의 200은 같은 eventId이거나 20초 안의 앞 카드다. 라이브는 알리기만 하고 재생을 되감지 않는다(PRD): 보던 실시간을
+   * 앞 카드로 끌고 가면 방송을 놓친다. 지난 방송만 그 카드로 옮긴다. 재생기가 서 있어야 「안 옮겼다」가 무언가를 잰다(감사 2회차 n1)
+   */
+  it('수동 마킹이 앞 카드(200)를 받아도 라이브 재생기는 되감지 않는다', async () => {
+    const { container } = await openLive();
+    const video = container.querySelector('video')!;
+    const before = video.currentTime;
+    server.markReply = { status: 200, body: CARDS[1] };
+
+    fireEvent.keyDown(document, { key: 'F8' });
+    await tick(container);
+
+    expect(server.markBodies).toHaveLength(1);
+    expect(screen.getByText('가까운 카드가 이미 있어요')).toBeInTheDocument();
+    expect(video.currentTime).toBeCloseTo(before, 0);
   });
 
   it('영상 목록에 시각 표시가 없으면 라이브 카드는 재생기의 방송 경과로 옮긴다: 옮기지 못했다고 하지 않는다', async () => {

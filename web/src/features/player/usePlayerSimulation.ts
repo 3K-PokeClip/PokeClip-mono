@@ -68,6 +68,10 @@ export interface PlayerSimulation {
    */
   seekToPosition?: (seconds: number) => void;
   /**
+   * 녹화 다시보기만: 지금 자리(방송 기준 초)를 내리지 않은 값으로 읽는다. 옮기는 중이면 도착점이다. 없으면 그 길이 없는 재생기다
+   */
+  currentPositionSeconds?: () => number;
+  /**
    * 라이브 실재생만: 그 실제 시각(epoch ms)으로 옮긴다. 조각마다 그 조각의 시각 표시(PDT)로 영상 시각을 센다(계약3, POK-326).
    * 목록에 시각 표시가 없으면 false다(부르는 쪽이 방송 경과로 옮긴다). 없으면 그 길이 없는 재생기다
    */

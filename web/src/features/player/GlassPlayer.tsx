@@ -53,6 +53,11 @@ export interface GlassPlayerController {
    * 부른 쪽이 seekToUptime으로 옮긴다. 방송 경과 시계로 옮기면 숨은 탭에서 그 시계가 밀려 카드보다 늦은 자리로 갔다
    */
   seekToTime?: (epochMs: number) => boolean;
+  /**
+   * 녹화의 지금 자리(서버 기준점 축 ms, 반올림)(POK-392). 녹화가 없거나 그 축이 아니면(기준점을 몰라 녹화 시작에 세웠다) null이다:
+   * 수동 마킹이 이 값 하나로 보낼지를 정한다. 초를 ms로 바꿀 때 내리지 않고 반올림한다(8.11초 → 8110, 곱이 8109.999…라 내리면 1ms 앞이다)
+   */
+  currentPositionMs?: () => number | null;
 }
 
 export interface GlassPlayerProps {
@@ -234,6 +239,7 @@ function GlassPlayerBody({
   onToggleChatPanel,
   controllerRef,
   onUptimeChange,
+  recorded,
   sim,
   videoNode,
 }: GlassPlayerBodyProps) {
@@ -337,8 +343,12 @@ function GlassPlayerBody({
         sim.wake();
         return true;
       },
+      currentPositionMs: () =>
+        recorded?.originAxis === true && sim.currentPositionSeconds
+          ? Math.round(sim.currentPositionSeconds() * 1000)
+          : null,
     }),
-    [sim],
+    [sim, recorded],
   );
 
   // 설정 팝오버는 Portal로 document.body에 붙지만, React는 DOM이 아니라 React 트리를 따라
