@@ -274,6 +274,8 @@ function Timeline({
   const shown = index !== null && index < n ? index : null;
   // 툴팁을 스크린 리더에 알리는 것은 키로 칸을 옮겼을 때뿐이다 — 마우스가 지나갈 때마다 칸을 낭독하면 다른 안내를 덮었다(리뷰 2라운드)
   const [viaKey, setViaKey] = useState(false);
+  /** 호버 중인 핀의 카드들(묶인 카드 전부). 있으면 툴팁이 칸의 카드 대신 이것을 말한다 */
+  const [pinGroup, setPinGroup] = useState<readonly TimelineCard[] | null>(null);
   const tipRef = useRef<HTMLDivElement>(null);
   const [tipW, setTipW] = useState(0);
 
@@ -379,15 +381,19 @@ function Timeline({
     const rect = e.currentTarget.getBoundingClientRect();
     const ratio = (e.clientX - rect.left) / Math.max(1, rect.width);
     setViaKey(false);
+    setPinGroup(null);
     setIndex(bucketIndexAt(view, view.t0 + ratio * span));
   };
   // 핀은 칸보다 넓다(스크롤하면 칸 14px). 핀 위에서는 마우스 좌표가 아니라 그 카드의 칸을 고른다 — 좌표로 고르면 핀 오른쪽에서
-  // 옆 칸이 잡혀 툴팁에 그 카드가 없었다(리뷰 2라운드). 누른 채 끌 때는 타임라인이 넘기도록 그대로 올려 보낸다
-  const onPinPointerMove = (e: PointerEvent<HTMLButtonElement>, card: TimelineCard) => {
-    if (drag.current && e.buttons === 1) return;
+  // 옆 칸이 잡혀 툴팁에 그 카드가 없었다(리뷰 2라운드). 묶인 핀(+N)은 칸이 달라도 묶인 카드를 툴팁에 전부 싣는다 — 첫 카드의
+  // 칸만 말하면 나머지 카드는 그래프에서 닿을 길이 없었다(리뷰 3라운드). 누른 채 끌 때는 타임라인이 넘기도록 그대로 올려 보낸다
+  const onPinPointerMove = (e: PointerEvent<HTMLButtonElement>, group: readonly TimelineCard[]) => {
+    const first = group[0];
+    if (!first || (drag.current && e.buttons === 1)) return;
     e.stopPropagation();
     setViaKey(false);
-    setIndex(bucketIndexAt(view, card.atMs));
+    setPinGroup(group);
+    setIndex(bucketIndexAt(view, first.atMs));
   };
   const endDrag = () => {
     setDragging(false);
@@ -407,6 +413,9 @@ function Timeline({
     else if (to > el.scrollLeft + el.clientWidth) el.scrollLeft = to - el.clientWidth;
   };
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    // 수정자 조합은 브라우저·OS 단축키다(Alt+← 뒤로 가기, Ctrl/Cmd+Home 문서 처음). 플레이어(seekIntentForKey)처럼 그대로 둔다
+    // — 가로채면 preventDefault까지 걸려 뒤로 가기가 막혔다(리뷰 3라운드)
+    if (e.altKey || e.ctrlKey || e.metaKey) return;
     const next =
       e.key === 'ArrowLeft'
         ? Math.max(0, (shown ?? n) - 1)
@@ -420,6 +429,7 @@ function Timeline({
     if (next === null) return;
     e.preventDefault();
     setViaKey(true);
+    setPinGroup(null);
     setIndex(next);
     reveal(next);
   };
@@ -438,12 +448,15 @@ function Timeline({
     ];
     const v = viewersAt(stats.viewers, end);
     if (v !== null) rows.push({ id: 'line', key: 'line', value: fmtNum(v), label: '시청자' });
-    for (const c of inView.filter((c) => bucketIndexAt(view, c.atMs) === i))
+    // 핀에 호버하면 그 핀에 묶인 카드 전부, 아니면 이 칸의 카드. 다른 칸의 카드는 시점을 붙여 어느 칸인지 알린다
+    for (const c of pinGroup ?? inView.filter((c) => bucketIndexAt(view, c.atMs) === i))
       rows.push({
         id: c.id,
         key: 'dot',
         value: c.label,
-        label: `${c.manual ? '수동' : '자동'} · ${c.reason}`,
+        label: `${c.manual ? '수동' : '자동'} · ${c.reason}${
+          bucketIndexAt(view, c.atMs) === i ? '' : ` · ${c.timestamp}`
+        }`,
       });
     if (b.donations > 0)
       rows.push({ id: 'gold', key: 'gold', value: `${fmtNum(b.donations)}회`, label: '후원' });
@@ -493,20 +506,28 @@ function Timeline({
           tabIndex={0}
           onKeyDown={onKeyDown}
           onBlur={() => setIndex(null)}
-          onPointerLeave={() => setIndex(null)}
+          onPointerLeave={() => {
+            setIndex(null);
+            setPinGroup(null);
+          }}
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={endDrag}
           onPointerCancel={endDrag}
         >
           <div className={styles.pinRow} style={{ height: pinRow }}>
-            {pins.map(({ first, x, more }) => (
+            {pins.map(({ first, x, more, items }) => (
               <button
                 key={first.card.id}
                 type="button"
                 className={first.card.manual ? styles.pinManual : styles.pin}
                 style={{ left: x }}
-                onPointerMove={(e) => onPinPointerMove(e, first.card)}
+                onPointerMove={(e) =>
+                  onPinPointerMove(
+                    e,
+                    items.map((p) => p.card),
+                  )
+                }
                 onClick={() => {
                   if (drag.current?.moved) return;
                   onSeekCard(first.card.timestamp);
@@ -699,6 +720,9 @@ function Timeline({
                   <span className={styles.tipLabel}>{row.label}</span>
                 </div>
               ))}
+              {pinGroup && pinGroup.length > 1 ? (
+                <div className={styles.tipHint}>누르면 {pinGroup[0]!.label} 시점으로 가요</div>
+              ) : null}
             </div>
           ) : null}
         </div>
@@ -721,7 +745,7 @@ function Timeline({
                 className={styles.yLabel}
                 dominantBaseline="middle"
               >
-                {fmtTick(t)}
+                {fmtTick(t, vScale.step)}
               </text>
             ))
           : null}
@@ -733,7 +757,7 @@ function Timeline({
             className={styles.yLabel}
             dominantBaseline="middle"
           >
-            {fmtTick(t)}
+            {fmtTick(t, cScale.step)}
           </text>
         ))}
       </svg>

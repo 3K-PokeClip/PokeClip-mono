@@ -555,6 +555,15 @@
   color: var(--pc-color-text-muted);
 }
 
+/* 묶인 핀 툴팁 끝의 안내(누르면 어느 카드로 가는지) */
+.tipHint {
+  margin-top: calc(2 * var(--pc-u));
+  padding-top: calc(6 * var(--pc-u));
+  border-top: 1px solid var(--pc-color-border-default);
+  font-size: calc(11 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}
+
 /* ---------- 제자리 요소(스크롤해도 남는다) ---------- */
 
 .axis {

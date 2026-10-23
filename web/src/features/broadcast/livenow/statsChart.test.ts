@@ -5,6 +5,7 @@ import {
   clusterPins,
   fmtDuration,
   fmtSeconds,
+  fmtTick,
   layoutFor,
   rangeScale,
   rebucketTo,
@@ -193,5 +194,19 @@ describe('statsChart: 카테고리·핀', () => {
       [100, 1],
       [300, 0],
     ]);
+    // 묶인 핀은 묶인 것을 모두 들고 다닌다 — 툴팁이 나머지 카드도 말한다(PR #316 리뷰 3라운드)
+    expect(pins[1]!.items.map((p) => p.x)).toEqual([100, 120]);
+  });
+});
+
+describe('statsChart: 눈금 글자', () => {
+  it('만부터 줄이되, 눈금 간격이 천보다 촘촘하면 전체 숫자로 쓴다', () => {
+    expect(fmtTick(12_000, 1_000)).toBe('1.2만');
+    expect(fmtTick(9_500, 500)).toBe('9,500');
+    expect(fmtTick(12_050, 50)).toBe('12,050');
+    // 12,000–12,100 시청자 층의 세 눈금이 모두 「1.2만」으로 겹쳤다
+    const s = rangeScale(12_000, 12_100, 3);
+    const labels = s.ticks.map((t) => fmtTick(t, s.step));
+    expect(new Set(labels).size).toBe(labels.length);
   });
 });

@@ -101,7 +101,7 @@ export function zeroScale(max: number, count = 3) {
   const top = Math.max(step, Math.ceil(max / step) * step);
   const ticks: number[] = [];
   for (let v = 0; v <= top + 1e-9; v += step) ticks.push(v);
-  return { min: 0, max: top, ticks };
+  return { min: 0, max: top, step, ticks };
 }
 
 /**
@@ -114,7 +114,7 @@ export function rangeScale(min: number, max: number, count = 3) {
   const hi = Math.max(lo + step, Math.ceil(max / step) * step);
   const ticks: number[] = [];
   for (let v = lo; v <= hi + 1e-9; v += step) ticks.push(v);
-  return { min: lo, max: hi, ticks };
+  return { min: lo, max: hi, step, ticks };
 }
 
 const pad2 = (n: number) => String(n).padStart(2, '0');
@@ -127,9 +127,12 @@ export const fmtHMS = (ms: number) => {
   return `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
 };
 export const fmtNum = (n: number) => n.toLocaleString('ko-KR');
-/** 눈금 숫자 — 만부터는 「1.2만」 */
-export const fmtTick = (n: number) =>
-  n >= 10_000
+/**
+ * 눈금 숫자 — 만부터는 「1.2만」. 단 눈금 간격(step)이 천보다 촘촘하면 줄이지 않는다: 시청자 층은 값이 있는 범위만 잡아
+ * 12,000 · 12,050 · 12,100이 모두 「1.2만」으로 겹쳤다(PR #316 리뷰 3라운드)
+ */
+export const fmtTick = (n: number, step = Infinity) =>
+  n >= 10_000 && step >= 1_000
     ? `${(n / 10_000).toLocaleString('ko-KR', { maximumFractionDigits: 1 })}만`
     : fmtNum(n);
 /** 칸 길이 — 덜 찬 마지막 칸은 「1분 30초」처럼 나머지 초까지 쓴다 */
@@ -284,14 +287,16 @@ export function barPath(x: number, w: number, top: number, base: number, r: numb
 
 /**
  * 하이라이트 핀 묶기 — 핀(알약)이 칸보다 넓어 가까운 카드끼리 겹친다. gap px 안에 붙으면 앞 핀 하나로 묶고 몇 장 더 있는지 붙인다.
- * 묶인 카드는 툴팁이 그 칸의 카드를 전부 말한다
+ * 묶인 카드는 items로 들고 다닌다: 핀 툴팁이 칸이 달라도 묶인 카드를 전부 말한다(PR #316 리뷰 3라운드)
  */
 export function clusterPins<T extends { x: number }>(pins: readonly T[], gap: number) {
-  const out: { first: T; x: number; more: number }[] = [];
+  const out: { first: T; x: number; more: number; items: T[] }[] = [];
   for (const pin of [...pins].sort((a, b) => a.x - b.x)) {
     const last = out.at(-1);
-    if (last && pin.x - last.x < gap) last.more += 1;
-    else out.push({ first: pin, x: pin.x, more: 0 });
+    if (last && pin.x - last.x < gap) {
+      last.more += 1;
+      last.items.push(pin);
+    } else out.push({ first: pin, x: pin.x, more: 0, items: [pin] });
   }
   return out;
 }

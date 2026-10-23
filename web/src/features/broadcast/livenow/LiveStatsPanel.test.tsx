@@ -295,6 +295,46 @@ describe('LiveStatsPanel: 그래프', () => {
     expect(tip).toHaveTextContent('수동 · 수동 마킹');
   });
 
+  it('묶인 핀(+N)에 호버하면 칸이 달라도 묶인 카드를 전부 말한다', () => {
+    // 스크롤 모드(2분 칸 14px)에서 2분 30초 떨어진 두 카드는 「#12+1」 핀 하나다. 첫 카드의 칸만 말하면 #13은 그래프에서
+    // 닿을 길이 없었다(PR #316 리뷰 3라운드)
+    const twelve = CARDS[0]!;
+    const { container } = panel({
+      stats: stats({ chart: chart(504) }),
+      cards: [
+        twelve,
+        {
+          ...twelve,
+          id: 'card-13',
+          label: '#13',
+          atMs: twelve.atMs + 150_000,
+          timestamp: '0:22:30',
+        },
+      ],
+    });
+    const pin = screen.getByRole('button', { name: /^하이라이트 #12 — .* 외 1개/ });
+    fireEvent.pointerMove(pin, { clientX: 0 });
+    const tip = container.querySelector(`.${styles.tip}`)!;
+    expect(tip).toHaveTextContent('#12');
+    // 다른 칸의 카드는 시점을 붙인다
+    expect(tip).toHaveTextContent('#13');
+    expect(tip).toHaveTextContent('0:22:30');
+    expect(tip).toHaveTextContent('누르면 #12 시점으로 가요');
+  });
+
+  it('Alt·Ctrl·Cmd 조합 키는 그래프가 가로채지 않는다(브라우저 뒤로 가기·문서 처음)', () => {
+    panel();
+    const group = screen.getByRole('group');
+    // fireEvent는 preventDefault되면 false를 돌려준다
+    expect(fireEvent.keyDown(group, { key: 'ArrowLeft', altKey: true })).toBe(true);
+    expect(fireEvent.keyDown(group, { key: 'Home', ctrlKey: true })).toBe(true);
+    expect(fireEvent.keyDown(group, { key: 'End', metaKey: true })).toBe(true);
+    expect(screen.queryByRole('status')).toBeNull();
+    // 수정자 없는 키는 그대로 칸을 옮긴다
+    expect(fireEvent.keyDown(group, { key: 'ArrowLeft' })).toBe(false);
+    expect(screen.getByRole('status')).toBeInTheDocument();
+  });
+
   it('마우스로 고른 칸은 스크린 리더에 낭독하지 않고, 키로 옮긴 칸만 알린다', () => {
     const { container } = panel();
     const group = screen.getByRole('group');
