@@ -149,18 +149,56 @@ resource "terraform_data" "runtime_contract" {
     }
 
     # 런타임 app_env 는 평문 태스크 env 로 들어가 태스크 정의를 읽는 누구에게나
-    # 보인다 — 비밀은 app_secret_arns 로 와야 한다(장부 16). 이름의 끝 토막만
-    # 보는 것은 STREAM_KEY_SECRET_STORE_TYPE · CLOUDFRONT_KEY_PAIR_ID 처럼 비밀
-    # 낱말이 가운데 든 설정 이름을 막지 않기 위해서다.
+    # 보인다 — 비밀은 app_secret_arns 로 와야 한다(장부 16). 아래 셋으로 본다.
+    #
+    # 이름 꼴: Spring 은 jwt.secret · JWT-SECRET 같은 env 도 같은 속성으로 묶어
+    # (relaxed binding) _ 토막 검사를 비켜 간다. 앱이 읽는 이름은 대문자 env
+    # 이므로 그 꼴만 받는다.
+    precondition {
+      condition = alltrue(flatten([
+        for env in values(try(local.runtime.app_env, {})) : [
+          for name in keys(env) : can(regex("^[A-Z][A-Z0-9_]*$", name))
+        ]
+      ]))
+      error_message = "런타임 출력 app_env 에 대문자 · 숫자 · _ 꼴(^[A-Z][A-Z0-9_]*$)이 아닌 이름이 있다 — 점 · 하이픈 · 소문자 이름은 받지 않는다."
+    }
+
+    # 비밀 낱말: 이름 어디에 들든(JWT_SECRET_B64 · DB_PASSWORD_PROD · 구분자
+    # 없는 APIKEY · DBPASSWORD) 멈춘다. 낱말에 _ 가 없어 이름 전체에서 찾는
+    # 것이 토막마다 찾는 것과 같다. 예외 둘 — 계약(CONTRACT-runtime.md)의
+    # 비밀 아닌 이름과 app_env_non_secret_names. 계약 이름은 변수 기본값이
+    # 아니라 여기 둔다 — 변수를 덮을 때 함께 사라지면 계약대로 준 런타임이
+    # 멈춘다. STREAM_KEY_RESOLVE_ALLOWED_CIDRS 는 런타임이 app_env 로 주는
+    # 이름, 나머지 넷은 platform 이 정해 런타임 값을 덮는 이름이다.
     precondition {
       condition = alltrue(flatten([
         for env in values(try(local.runtime.app_env, {})) : [
           for name in keys(env) :
-          contains(var.app_env_non_secret_names, name) ||
-          !contains(["PASSWORD", "PASSWD", "PASSPHRASE", "SECRET", "TOKEN", "KEY", "PEM", "CREDENTIAL", "CREDENTIALS"], reverse(split("_", upper(name)))[0])
+          contains(concat(var.app_env_non_secret_names, [
+            "STREAM_KEY_RESOLVE_ALLOWED_CIDRS",
+            "STREAM_KEY_SECRET_STORE_TYPE",
+            "STREAM_KEY_SECRET_RETIRE_FROM",
+            "STREAM_KEY_SECRET_REF_PREFIX",
+            "CLOUDFRONT_KEY_PAIR_ID",
+          ]), name) ||
+          !anytrue([
+            for word in ["PASSWORD", "PASSWD", "PASSPHRASE", "SECRET", "TOKEN", "KEY", "PEM", "CREDENTIAL"] :
+            strcontains(upper(name), word)
+          ])
         ]
       ]))
-      error_message = "런타임 출력 app_env 에 끝 토막이 PASSWORD · PASSWD · PASSPHRASE · SECRET · TOKEN · KEY · PEM · CREDENTIAL(S) 인 이름이 있다 — 비밀이면 런타임 app_secret_arns 로 옮기고, 비밀이 아니면 app_env_non_secret_names 에 적는다."
+      error_message = "런타임 출력 app_env 이름에 PASSWORD · PASSWD · PASSPHRASE · SECRET · TOKEN · KEY · PEM · CREDENTIAL 이 들어 있다 — 비밀이면 런타임 app_secret_arns 로 옮기고, 비밀이 아니면 app_env_non_secret_names 에 적는다."
+    }
+
+    # 값: URL 의 user:pass@ 는 이름과 무관하게 비밀이다. app_env_non_secret_names
+    # 는 이름 검사만 풀고 이 검사는 풀지 않는다.
+    precondition {
+      condition = alltrue(flatten([
+        for env in values(try(local.runtime.app_env, {})) : [
+          for value in values(env) : !can(regex("://[^/@]*:[^/@]*@", value))
+        ]
+      ]))
+      error_message = "런타임 출력 app_env 값에 URL 자격 증명(scheme://user:pass@)이 있다 — 자격 증명은 런타임 app_secret_arns 로 옮긴다."
     }
   }
 }

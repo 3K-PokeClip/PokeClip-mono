@@ -37,6 +37,12 @@
 #    statement 의 not_actions · not_resources · principals 가 여기서 걸린다.
 # ⑦ 역할 인라인 정책은 정책 문서 json 으로만 붙인다(jsonencode 등 금지). 신뢰
 #    정책(assume_role_policy)은 예외다.
+# ⑧ 역할 · 프로필을 받는 자리는 같은 경로의 참조만이다 — 인라인 정책 · 인스턴스
+#    프로필 · 관리형 정책 연결의 role 은 aws_iam_role.<이름>.name · .id, 상자의
+#    iam_instance_profile 은 aws_iam_instance_profile.<이름>.name(리터럴 이름 ·
+#    변수로 다른 서비스 역할 · 이미 있는 특권 프로필을 겨누지 못하게).
+# ⑨ statement actions 에 iam · sts 동작은 없다(서비스째 — 아래 규칙 주석).
+# ⑩ 자원 본문에 provisioner · connection 은 없다(dynamic 포함).
 #
 # lifecycle(modules/media_host): 응답기 거부 목록 그릇(aws_ssm_parameter)은
 # ignore_changes 에 value — 없으면 다음 apply 가 운영자가 고친 목록을 초기값으로
@@ -458,4 +464,84 @@ deny contains msg if {
 	decl.type == "aws_iam_role_policy"
 	not regex.match(policy_document_json_pattern, object.get(decl.body, "policy", ""))
 	msg := sprintf("R10 %s: %s — 역할 인라인 정책은 정책 문서 json 으로만", [decl.path, label(decl)])
+}
+
+# 역할을 받는 자리(role)는 같은 경로의 역할 참조 aws_iam_role.<이름>.name · .id
+# 만이다 — 리터럴 이름 · 변수 · 가공 식은 다른 서비스 역할(예: auth 작업 역할)에
+# 권한을 붙일 수 있다. Terraform 참조는 모듈 안에서만 풀리므로 이 꼴이면 같은
+# 경로의 역할이다. hcl2 는 `role = aws_iam_role.x.name` 과 `"${aws_iam_role.x.name}"`
+# 를 같은 문자열로 남긴다.
+role_reference_pattern := `^\$\{aws_iam_role\.[A-Za-z_][A-Za-z0-9_-]*\.(name|id)\}$`
+
+role_target_types := {"aws_iam_role_policy", "aws_iam_instance_profile", "aws_iam_role_policy_attachment"}
+
+deny contains msg if {
+	some decl in media_role_decls
+	decl.kind == "resource"
+	decl.type in role_target_types
+	"role" in object.keys(decl.body)
+	not regex.match(role_reference_pattern, decl.body.role)
+	msg := sprintf(
+		"R10 %s: %s 의 role 은 같은 경로의 aws_iam_role.<이름>.name · .id 참조만(다른 역할을 겨누지 못하게)",
+		[decl.path, label(decl)],
+	)
+}
+
+# 상자의 인스턴스 프로필은 같은 경로의 프로필 참조 aws_iam_instance_profile.<이름>.name
+# 만이다 — 리터럴 이름 · 변수는 이미 있는 특권 프로필을 상자에 붙인다.
+instance_profile_reference_pattern := `^\$\{aws_iam_instance_profile\.[A-Za-z_][A-Za-z0-9_-]*\.name\}$`
+
+deny contains msg if {
+	some decl in media_role_decls
+	decl.kind == "resource"
+	decl.type == "aws_instance"
+	"iam_instance_profile" in object.keys(decl.body)
+	not regex.match(instance_profile_reference_pattern, decl.body.iam_instance_profile)
+	msg := sprintf(
+		"R10 %s: %s 의 iam_instance_profile 은 같은 경로의 aws_iam_instance_profile.<이름>.name 참조만",
+		[decl.path, label(decl)],
+	)
+}
+
+# Media 역할은 iam · sts 동작을 갖지 않는다. 쓰기(PutRolePolicy · PassRole ·
+# AssumeRole)는 권한 상승 · 다른 역할 탈취이고, Get · List 에도 자격 발급
+# (sts:GetFederationToken)과 계정 전체 정책 조회(iam:GetAccountAuthorizationDetails)
+# 가 섞여 있어 동작 이름으로 가르지 않고 서비스째 막는다(지금 트리는 둘 다 안 쓴다).
+iam_sts_action(action) if {
+	is_string(action)
+	regex.match(`^(iam|sts):`, lower(action))
+}
+
+deny contains msg if {
+	some item in policy_statements
+	some action in object.get(item.statement, "actions", [])
+	iam_sts_action(action)
+	msg := sprintf(
+		"R10 %s: %s 의 statement actions 에 %s — Media 역할은 iam · sts 동작을 갖지 않는다",
+		[item.decl.path, label(item.decl), action],
+	)
+}
+
+# 자원 본문 안 provisioner(local-exec · remote-exec · file) · connection 은 허용
+# 유형 안에서도 위반이다 — apply 하는 기계의 자격으로 임의 명령을 돌려 위 대조를
+# 모두 비켜 간다. dynamic 꼴도 같다.
+exec_block_kinds := {"provisioner", "connection"}
+
+exec_block(body) if {
+	some kind in exec_block_kinds
+	kind in object.keys(body)
+}
+
+exec_block(body) if {
+	some kind in exec_block_kinds
+	kind in object.keys(object.get(body, "dynamic", {}))
+}
+
+deny contains msg if {
+	some decl in media_role_decls
+	exec_block(decl.body)
+	msg := sprintf(
+		"R10 %s: %s 의 provisioner · connection — 대상 경로의 자원은 명령을 돌리지 않는다(dynamic 포함)",
+		[decl.path, label(decl)],
+	)
 }

@@ -229,7 +229,7 @@ variable "stream_key_secret_prefix" {
 # 런타임 app_env 이름 검사(장부 16 — terraform_data.runtime_contract)의 예외
 # 목록이다.
 variable "app_env_non_secret_names" {
-  description = "런타임 app_env 에 들어와도 되는 이름 — 끝 토막이 PASSWORD · SECRET · TOKEN · KEY 등이지만 비밀이 아닌 env. 이 목록 밖에서 그런 이름이 오면 plan 이 멈춘다."
+  description = "런타임 app_env 에 들어와도 되는 이름 — PASSWORD · SECRET · TOKEN · KEY 등이 이름에 들었지만 비밀이 아닌 env. 계약의 비밀 아닌 이름(STREAM_KEY_RESOLVE_ALLOWED_CIDRS 등)은 적지 않아도 된다. 이 목록 밖에서 그런 이름이 오면 plan 이 멈춘다. 이름 꼴 검사와 값의 URL 자격 증명 검사는 풀지 않는다."
   type        = list(string)
   default     = []
 }

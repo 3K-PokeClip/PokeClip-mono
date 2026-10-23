@@ -40,8 +40,14 @@ Media 상자[^box] 모듈입니다(설계 3-3 · 3-3-1 · 5-3 · 5-5, 계획 M9)
         `local.db_users` 를 도는 for 식만 · `db_users` 는 두 이름
         (`media_indexer` · `media_janitor`) 리터럴.
     *   statement `actions` 는 `서비스:동작` 꼴 리터럴 목록만(허용 목록 —
-        와일드카드 · 지시자 · 식 금지). 두 경로의 문자열 · 맵 키에 템플릿
-        지시자 `%{` 금지.
+        와일드카드 · 지시자 · 식 금지)이고 `iam:` · `sts:` 동작은 없다. 두
+        경로의 문자열 · 맵 키에 템플릿 지시자 `%{` 금지.
+    *   역할 참조: 인라인 정책 · 인스턴스 프로필 · 관리형 정책 연결의 `role` 은
+        같은 경로의 `aws_iam_role.<이름>.name` · `.id` 만, 상자의
+        `iam_instance_profile` 은 `aws_iam_instance_profile.<이름>.name` 만
+        (리터럴 이름 · 변수로 다른 역할 · 프로필을 겨누지 못하게).
+    *   명령 블록: 자원 본문에 `provisioner`(`local-exec` · `remote-exec` ·
+        `file`) · `connection` 금지(`dynamic` 포함).
     *   lifecycle: 거부 목록 파라미터는 `prevent_destroy = true`(리터럴) ·
         `ignore_changes` 에 `value`, 상자는 `ignore_changes` 에 `ami` ·
         `user_data_base64`.

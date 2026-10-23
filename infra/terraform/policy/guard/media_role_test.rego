@@ -292,8 +292,8 @@ test_r10_iam_attribute_outside_allowlist if {
 			"for_each": "${var.x}",
 			"content": [{"policy": "${jsonencode({Action = \"*\", Resource = \"*\"})}"}],
 		}]}})),
-		resource_file(media_host_path, "aws_iam_instance_profile", {"name": "x", "role": "x", "dynamic": {"tags": [{}]}}),
-		resource_file(media_host_path, "aws_iam_role_policy", {"role": "x", "policy": "${data.aws_iam_policy_document.media.json}", "policy_arn": "${var.arn}"}),
+		resource_file(media_host_path, "aws_iam_instance_profile", {"name": "x", "role": "${aws_iam_role.media.name}", "dynamic": {"tags": [{}]}}),
+		resource_file(media_host_path, "aws_iam_role_policy", {"role": "${aws_iam_role.media.id}", "policy": "${data.aws_iam_policy_document.media.json}", "policy_arn": "${var.arn}"}),
 		attachment_file(media_host_path, managed_locals, "managed", object.union(managed_body, {"policy_arns": "${var.arns}"})),
 		tf(media_host_path, {"data": {"aws_iam_policy_document": {"media": [{"source_policy_documents": ["${jsonencode({})}"]}]}}}),
 		tf(media_host_path, {"data": {"aws_iam_policy_document": {"media": [{"override_policy_documents": ["${var.extra}"]}]}}}),
@@ -311,8 +311,8 @@ test_r10_iam_attribute_outside_allowlist if {
 test_r10_iam_attribute_allowlist_accepts_used_keys if {
 	files := [
 		resource_file(media_host_path, "aws_iam_role", object.union(role_body, {"description": "x", "tags": {"a": "b"}, "lifecycle": [{}]})),
-		resource_file("modules/media_host/profile.tf", "aws_iam_instance_profile", {"name": "x", "path": "/pokeclip/prod/", "role": "x", "tags": {}}),
-		resource_file("modules/media_host/policy.tf", "aws_iam_role_policy", {"name": "x", "role": "x", "policy": "${data.aws_iam_policy_document.media.json}"}),
+		resource_file("modules/media_host/profile.tf", "aws_iam_instance_profile", {"name": "x", "path": "/pokeclip/prod/", "role": "${aws_iam_role.media.name}", "tags": {}}),
+		resource_file("modules/media_host/policy.tf", "aws_iam_role_policy", {"name": "x", "role": "${aws_iam_role.media.id}", "policy": "${data.aws_iam_policy_document.media.json}"}),
 		attachment_file("modules/media_host/main.tf", managed_locals, "managed", object.union(managed_body, {"depends_on": ["${aws_iam_role.media}"]})),
 		policy_document_file("modules/media_host/doc.tf", [{"sid": "S", "effect": "Allow", "actions": ["s3:GetObject"], "resources": ["*"], "condition": [{"test": "StringEquals", "variable": "aws:x", "values": ["y"]}]}]),
 	]
@@ -558,4 +558,132 @@ test_r10_instance_missing_ignore_changes if {
 test_r10_instance_other_dir_ignored if {
 	file := resource_file(media_root_path, "aws_instance", {"ami": "ami-x"})
 	count(role_hits([file])) == 0
+}
+
+# 역할을 받는 자리(인라인 정책 · 인스턴스 프로필 · 관리형 정책 연결의 role)는
+# 같은 경로의 역할 참조 aws_iam_role.<이름>.name · .id 만 — 리터럴 이름 · 변수 ·
+# 다른 속성 · 가공 식은 다른 서비스 역할(예: auth 작업 역할)을 겨눌 수 있다.
+role_reference_files(role) := [
+	resource_file(media_host_path, "aws_iam_role_policy", {
+		"role": role,
+		"policy": "${data.aws_iam_policy_document.media.json}",
+	}),
+	resource_file(media_host_path, "aws_iam_instance_profile", {"name": "x", "role": role}),
+	attachment_file(media_host_path, managed_locals, "managed", object.union(managed_body, {"role": role})),
+]
+
+test_r10_role_not_same_path_reference if {
+	every role in [
+		"pokeclip-prod-auth-task",
+		"${var.role_name}",
+		"${local.role_name}",
+		"${aws_iam_role.media.arn}",
+		"${aws_iam_role.media.unique_id}",
+		"${aws_iam_role.media.name}-x",
+		"${replace(aws_iam_role.media.name, \"media\", \"auth-task\")}",
+		"${data.aws_iam_role.auth.name}",
+		"${module.auth.role_name}",
+		"${aws_iam_role.media[0].name}",
+	] {
+		every file in role_reference_files(role) {
+			one_hit([file], "role 은")
+		}
+	}
+}
+
+test_r10_role_same_path_reference_accepted if {
+	every role in ["${aws_iam_role.media.name}", "${aws_iam_role.media.id}", "${aws_iam_role.this.name}"] {
+		count(role_hits(role_reference_files(role))) == 0
+	}
+}
+
+test_r10_role_other_dir_ignored if {
+	file := resource_file("modules/ecs_service/iam.tf", "aws_iam_role_policy", {
+		"role": "pokeclip-prod-auth-task",
+		"policy": "${data.aws_iam_policy_document.media.json}",
+	})
+	count(role_hits([file])) == 0
+}
+
+# 상자의 인스턴스 프로필은 같은 경로의 aws_iam_instance_profile.<이름>.name 참조만
+# — 리터럴 이름 · 변수는 이미 있는 특권 프로필을 상자에 붙일 수 있다. 두 경로
+# 모두 본다.
+profile_instance_file(path, profile) := resource_file(path, "aws_instance", {
+	"ami": "${data.aws_ssm_parameter.ami.insecure_value}",
+	"iam_instance_profile": profile,
+	"lifecycle": [{"ignore_changes": ["${ami}", "${user_data_base64}"]}],
+})
+
+test_r10_instance_profile_not_same_path_reference if {
+	every path in ["modules/media_host/main.tf", media_root_path] {
+		every profile in [
+			"pokeclip-prod-admin",
+			"${var.instance_profile}",
+			"${aws_iam_instance_profile.media.arn}",
+			"${aws_iam_instance_profile.media.id}",
+			"${aws_iam_instance_profile.media.name}-x",
+			"${data.aws_iam_instance_profile.admin.name}",
+			"${aws_iam_role.media.name}",
+		] {
+			one_hit([profile_instance_file(path, profile)], "iam_instance_profile")
+		}
+	}
+}
+
+test_r10_instance_profile_same_path_reference_accepted if {
+	file := profile_instance_file("modules/media_host/main.tf", "${aws_iam_instance_profile.media.name}")
+	count(role_hits([file])) == 0
+}
+
+test_r10_instance_profile_other_dir_ignored if {
+	file := resource_file("modules/ecs_service/main.tf", "aws_instance", {"iam_instance_profile": "pokeclip-prod-admin"})
+	count(role_hits([file])) == 0
+}
+
+# Media 역할은 iam · sts 동작을 갖지 않는다 — 쓰기(PutRolePolicy · PassRole ·
+# AssumeRole)는 권한 상승 · 다른 역할 탈취, Get · List 도 자격 발급
+# (GetFederationToken)과 계정 전체 정책 조회가 섞여 있어 서비스째 막는다.
+test_r10_statement_actions_iam_sts if {
+	every action in [
+		"iam:PutRolePolicy",
+		"iam:PassRole",
+		"iam:AttachRolePolicy",
+		"iam:CreateAccessKey",
+		"iam:GetAccountAuthorizationDetails",
+		"iam:ListRoles",
+		"sts:AssumeRole",
+		"sts:GetFederationToken",
+	] {
+		one_hit([policy_document_file(media_host_path, [db_statement([action], ["*"])])], "iam · sts")
+	}
+}
+
+test_r10_statement_actions_iam_sts_other_dir_ignored if {
+	file := policy_document_file("modules/ecs_service/iam.tf", [db_statement(["iam:PassRole"], ["*"])])
+	count(role_hits([file])) == 0
+}
+
+# 자원 본문 안 provisioner(local-exec · remote-exec · file) · connection 은
+# 위반이다 — 허용 유형 안에서 apply 하는 기계의 자격으로 임의 명령을 돌린다.
+# dynamic 꼴도 같다. 두 경로 모두 본다.
+provisioner_bodies := [
+	{"provisioner": {"local-exec": [{"command": "aws iam put-role-policy"}]}},
+	{"provisioner": {"remote-exec": [{"inline": ["id"]}]}},
+	{"provisioner": {"file": [{"source": "a", "destination": "b"}]}},
+	{"connection": [{"host": "h"}]},
+	{"dynamic": {"provisioner": [{"for_each": "${var.x}", "content": [{}]}]}},
+	{"dynamic": {"connection": [{"for_each": "${var.x}", "content": [{}]}]}},
+]
+
+test_r10_provisioner_or_connection if {
+	every path in ["modules/media_host/main.tf", media_root_path] {
+		every body in provisioner_bodies {
+			one_hit([resource_file(path, "aws_security_group", object.union({"name": "x"}, body))], "provisioner · connection")
+		}
+	}
+}
+
+test_r10_provisioner_other_dir_ignored if {
+	body := {"provisioner": {"local-exec": [{"command": "x"}]}}
+	count(role_hits([resource_file("modules/ecs_service/main.tf", "aws_security_group", body)])) == 0
 }

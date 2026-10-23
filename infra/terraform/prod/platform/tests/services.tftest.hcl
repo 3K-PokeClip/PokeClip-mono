@@ -756,9 +756,14 @@ run "runtime_contract_rejects_unknown_resource_key" {
 }
 
 # 런타임 app_env 는 평문 태스크 env 다 — 비밀은 app_secret_arns 로 와야 한다
-# (장부 16). 이름 끝 토막이 PASSWORD · SECRET · TOKEN · KEY 등이면 멈춘다.
+# (장부 16). app_db_auth = password 로 두어 iam 의 POSTGRES_PASSWORD 검사와
+# 겹치지 않게 장부 16 검사만 본다.
 run "rejects_secret_like_name_in_runtime_app_env" {
   command = plan
+
+  variables {
+    app_db_auth = "password"
+  }
 
   override_data {
     target = data.terraform_remote_state.runtime
@@ -778,9 +783,214 @@ run "rejects_secret_like_name_in_runtime_app_env" {
   expect_failures = [terraform_data.runtime_contract]
 }
 
-# 비밀 낱말이 끝 토막이 아닌 실제 이름(auth application.yml · clip env)은
-# 통과한다 — 오탐 방지.
-run "allows_names_with_secret_word_not_last" {
+# 비밀 낱말이 끝 토막이 아니어도 멈춘다 — 꼬리를 붙여 피하는 꼴.
+run "rejects_secret_word_in_middle_token_of_app_env_name" {
+  command = plan
+
+  override_data {
+    target = data.terraform_remote_state.runtime
+    values = {
+      outputs = {
+        rds_sg_id              = "sg-0rds"
+        rds_resource_id        = "db-ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        rewind_bucket_arn      = "arn:aws:s3:::pokeclip-prod-rewind-example"
+        app_db_users           = { auth = "app_auth", clip = "app_clip" }
+        app_env                = { auth = { JWT_SECRET_B64 = "example-not-a-secret" }, clip = {} }
+        app_secret_arns        = { auth = {}, clip = {} }
+        app_task_resource_arns = { auth = {}, clip = {} }
+      }
+    }
+  }
+
+  expect_failures = [terraform_data.runtime_contract]
+}
+
+# 꼬리 토막(_PROD)을 붙여 끝 토막 검사를 피하는 꼴.
+run "rejects_secret_word_before_suffix_in_app_env_name" {
+  command = plan
+
+  override_data {
+    target = data.terraform_remote_state.runtime
+    values = {
+      outputs = {
+        rds_sg_id              = "sg-0rds"
+        rds_resource_id        = "db-ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        rewind_bucket_arn      = "arn:aws:s3:::pokeclip-prod-rewind-example"
+        app_db_users           = { auth = "app_auth", clip = "app_clip" }
+        app_env                = { auth = {}, clip = { DB_PASSWORD_PROD = "example-not-a-secret" } }
+        app_secret_arns        = { auth = {}, clip = {} }
+        app_task_resource_arns = { auth = {}, clip = {} }
+      }
+    }
+  }
+
+  expect_failures = [terraform_data.runtime_contract]
+}
+
+# 구분자 없이 붙인 비밀 낱말(APIKEY).
+run "rejects_glued_api_key_in_app_env_name" {
+  command = plan
+
+  override_data {
+    target = data.terraform_remote_state.runtime
+    values = {
+      outputs = {
+        rds_sg_id              = "sg-0rds"
+        rds_resource_id        = "db-ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        rewind_bucket_arn      = "arn:aws:s3:::pokeclip-prod-rewind-example"
+        app_db_users           = { auth = "app_auth", clip = "app_clip" }
+        app_env                = { auth = {}, clip = { APIKEY = "example-not-a-secret" } }
+        app_secret_arns        = { auth = {}, clip = {} }
+        app_task_resource_arns = { auth = {}, clip = {} }
+      }
+    }
+  }
+
+  expect_failures = [terraform_data.runtime_contract]
+}
+
+# 구분자 없이 붙인 비밀 낱말(DBPASSWORD).
+run "rejects_glued_db_password_in_app_env_name" {
+  command = plan
+
+  override_data {
+    target = data.terraform_remote_state.runtime
+    values = {
+      outputs = {
+        rds_sg_id              = "sg-0rds"
+        rds_resource_id        = "db-ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        rewind_bucket_arn      = "arn:aws:s3:::pokeclip-prod-rewind-example"
+        app_db_users           = { auth = "app_auth", clip = "app_clip" }
+        app_env                = { auth = {}, clip = { DBPASSWORD = "example-not-a-secret" } }
+        app_secret_arns        = { auth = {}, clip = {} }
+        app_task_resource_arns = { auth = {}, clip = {} }
+      }
+    }
+  }
+
+  expect_failures = [terraform_data.runtime_contract]
+}
+
+# 점 · 하이픈 이름도 Spring 이 같은 속성으로 묶는다(relaxed binding) —
+# 이름 꼴(대문자 · 숫자 · _)부터 거부한다.
+run "rejects_dotted_name_in_app_env" {
+  command = plan
+
+  override_data {
+    target = data.terraform_remote_state.runtime
+    values = {
+      outputs = {
+        rds_sg_id              = "sg-0rds"
+        rds_resource_id        = "db-ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        rewind_bucket_arn      = "arn:aws:s3:::pokeclip-prod-rewind-example"
+        app_db_users           = { auth = "app_auth", clip = "app_clip" }
+        app_env                = { auth = { "jwt.secret" = "example-not-a-secret" }, clip = {} }
+        app_secret_arns        = { auth = {}, clip = {} }
+        app_task_resource_arns = { auth = {}, clip = {} }
+      }
+    }
+  }
+
+  expect_failures = [terraform_data.runtime_contract]
+}
+
+# 하이픈으로 나눠 _ 토막 검사를 피하는 꼴.
+run "rejects_hyphenated_name_in_app_env" {
+  command = plan
+
+  override_data {
+    target = data.terraform_remote_state.runtime
+    values = {
+      outputs = {
+        rds_sg_id              = "sg-0rds"
+        rds_resource_id        = "db-ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        rewind_bucket_arn      = "arn:aws:s3:::pokeclip-prod-rewind-example"
+        app_db_users           = { auth = "app_auth", clip = "app_clip" }
+        app_env                = { auth = { "JWT-SECRET" = "example-not-a-secret" }, clip = {} }
+        app_secret_arns        = { auth = {}, clip = {} }
+        app_task_resource_arns = { auth = {}, clip = {} }
+      }
+    }
+  }
+
+  expect_failures = [terraform_data.runtime_contract]
+}
+
+# 비밀 낱말이 없어도 이름 꼴이 아니면 멈춘다(앱이 읽는 이름은 대문자 env 다).
+run "rejects_lowercase_non_secret_name_in_app_env" {
+  command = plan
+
+  override_data {
+    target = data.terraform_remote_state.runtime
+    values = {
+      outputs = {
+        rds_sg_id              = "sg-0rds"
+        rds_resource_id        = "db-ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        rewind_bucket_arn      = "arn:aws:s3:::pokeclip-prod-rewind-example"
+        app_db_users           = { auth = "app_auth", clip = "app_clip" }
+        app_env                = { auth = { "server.port" = "8080" }, clip = {} }
+        app_secret_arns        = { auth = {}, clip = {} }
+        app_task_resource_arns = { auth = {}, clip = {} }
+      }
+    }
+  }
+
+  expect_failures = [terraform_data.runtime_contract]
+}
+
+# 값이 URL 자격 증명(user:pass@)을 품으면 이름과 무관하게 멈춘다.
+run "rejects_url_credentials_in_app_env_value" {
+  command = plan
+
+  override_data {
+    target = data.terraform_remote_state.runtime
+    values = {
+      outputs = {
+        rds_sg_id              = "sg-0rds"
+        rds_resource_id        = "db-ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        rewind_bucket_arn      = "arn:aws:s3:::pokeclip-prod-rewind-example"
+        app_db_users           = { auth = "app_auth", clip = "app_clip" }
+        app_env                = { auth = {}, clip = { BROADCAST_QUEUE_URL = "https://user:example-pw@sqs.example.invalid/queue" } }
+        app_secret_arns        = { auth = {}, clip = {} }
+        app_task_resource_arns = { auth = {}, clip = {} }
+      }
+    }
+  }
+
+  expect_failures = [terraform_data.runtime_contract]
+}
+
+# app_env_non_secret_names 는 이름 검사만 풀고 값 검사는 풀지 않는다.
+run "rejects_url_credentials_even_for_listed_name" {
+  command = plan
+
+  variables {
+    app_env_non_secret_names = ["CUSTOM_ENDPOINT_KEY"]
+  }
+
+  override_data {
+    target = data.terraform_remote_state.runtime
+    values = {
+      outputs = {
+        rds_sg_id              = "sg-0rds"
+        rds_resource_id        = "db-ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        rewind_bucket_arn      = "arn:aws:s3:::pokeclip-prod-rewind-example"
+        app_db_users           = { auth = "app_auth", clip = "app_clip" }
+        app_env                = { auth = {}, clip = { CUSTOM_ENDPOINT_KEY = "postgresql://app:example-pw@db.example.invalid:5432/pokeclip" } }
+        app_secret_arns        = { auth = {}, clip = {} }
+        app_task_resource_arns = { auth = {}, clip = {} }
+      }
+    }
+  }
+
+  expect_failures = [terraform_data.runtime_contract]
+}
+
+# 계약(CONTRACT-runtime.md)의 비밀 아닌 이름은 예외 목록 없이 통과한다 —
+# 오탐 방지. STREAM_KEY_RESOLVE_ALLOWED_CIDRS 는 런타임이 app_env 로 주는
+# 이름이고, 나머지는 platform 이 정해 런타임 값을 덮는 이름이다. 자격 증명이
+# 없는 URL(포트 · 경로의 @)도 통과한다.
+run "allows_contract_non_secret_names_without_listing" {
   command = plan
 
   override_data {
@@ -794,9 +1004,16 @@ run "allows_names_with_secret_word_not_last" {
         app_env = {
           auth = {
             STREAM_KEY_SECRET_STORE_TYPE     = "aws"
+            STREAM_KEY_SECRET_RETIRE_FROM    = "aws"
+            STREAM_KEY_SECRET_REF_PREFIX     = "pokeclip/prod/stream-key/"
             STREAM_KEY_RESOLVE_ALLOWED_CIDRS = "192.0.2.0/24"
+            GOOGLE_REDIRECT_URI              = "https://example.invalid/auth/callback"
           }
-          clip = { CLOUDFRONT_KEY_PAIR_ID = "K0EXAMPLEKEYID" }
+          clip = {
+            CLOUDFRONT_KEY_PAIR_ID   = "K0EXAMPLEKEYID"
+            BROADCAST_INTAKE_ENABLED = "true"
+            BROADCAST_QUEUE_URL      = "https://sqs.ap-northeast-2.amazonaws.com:443/111122223333/a@b"
+          }
         }
         app_secret_arns        = { auth = {}, clip = {} }
         app_task_resource_arns = { auth = {}, clip = {} }
@@ -805,8 +1022,11 @@ run "allows_names_with_secret_word_not_last" {
   }
 
   assert {
-    condition     = local.service_env.auth["STREAM_KEY_RESOLVE_ALLOWED_CIDRS"] == "192.0.2.0/24"
-    error_message = "비밀 낱말이 끝 토막이 아닌 app_env 이름이 태스크 env 로 넘어가지 않는다."
+    condition = (
+      local.service_env.auth["STREAM_KEY_RESOLVE_ALLOWED_CIDRS"] == "192.0.2.0/24" &&
+      local.service_env.clip["BROADCAST_INTAKE_ENABLED"] == "true"
+    )
+    error_message = "계약의 비밀 아닌 app_env 이름이 태스크 env 로 넘어가지 않는다."
   }
 }
 
