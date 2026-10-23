@@ -6,21 +6,27 @@ import org.slf4j.LoggerFactory;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
+import java.time.Instant;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 /**
  * 주문서 해석. 모양이 틀리면 {@link Unreadable}: 다시 받아도 같으니 일꾼은 지운다.
  *
- * <p>🔴 POK-291에서 더한 칸(태그·아동용·썸네일, 공개 범위 값)은 <b>너그럽게</b> 읽는다. 모양이 틀리면 기본값으로 떨어뜨리고 경고만
- * 남긴다. 이 칸들 때문에 못 읽는 쪽지로 지우면 clip에 아무 보고도 안 가서 그 줄이 queued로 영원히 남는다.
+ * <p>🔴 POK-291에서 더한 칸(태그·아동용·썸네일, 공개 범위 값)과 POK-381의 카테고리·예약 시각은 <b>너그럽게</b> 읽는다.
+ * 모양이 틀리면 기본값으로 떨어뜨리고 경고만 남긴다. 이 칸들 때문에 못 읽는 쪽지로 지우면 clip에 아무 보고도 안 가서
+ * 그 줄이 queued로 영원히 남는다.
  */
 public class EnvelopeParser {
 
     private static final Logger log = LoggerFactory.getLogger(EnvelopeParser.class);
     private static final Set<String> PRIVACY = Set.of("private", "unlisted", "public");
     private static final Set<String> IMAGE_TYPES = Set.of("image/jpeg", "image/png");
+    private static final Pattern CATEGORY = Pattern.compile("[0-9]{1,3}");
+    private static final String GAMING = "20";
 
     private final ObjectMapper mapper;
 
@@ -37,12 +43,14 @@ public class EnvelopeParser {
             JsonNode source = root.path("source");
             JsonNode video = root.path("video");
             long uploadId = Long.parseLong(required(root, "uploadId"));
+            String privacy = privacy(uploadId, video.path("privacyStatus"));
             return new UploadEnvelope(
                     uploadId,
                     Long.parseLong(required(root, "channelOwnerUserId")),
                     required(source, "bucket"), required(source, "s3Key"),
                     required(video, "title"), video.path("description").asString(""),
-                    privacy(uploadId, video.path("privacyStatus")), tags(video.path("tags")),
+                    category(uploadId, video.path("categoryId")), privacy,
+                    publishAt(uploadId, video.path("publishAt"), privacy), tags(video.path("tags")),
                     video.path("madeForKids").isBoolean() && video.path("madeForKids").asBoolean(),
                     thumbnail(uploadId, root.path("thumbnail")));
         } catch (Unreadable e) {
@@ -62,6 +70,39 @@ public class EnvelopeParser {
             return "private";
         }
         return value;
+    }
+
+    /** 없으면 20(게임, POK-381 전 값). 숫자 문자열이 아니면 20으로 올린다(경고). 고를 수 있는 분류인지는 clip이 본다. */
+    private static String category(long uploadId, JsonNode node) {
+        if (node.isMissingNode() || node.isNull()) {
+            return GAMING;
+        }
+        String value = node.isString() ? node.asString() : null;
+        if (value == null || !CATEGORY.matcher(value).matches()) {
+            log.warn("upload.category_ignored uploadId={}", uploadId);
+            return GAMING;
+        }
+        return value;
+    }
+
+    /**
+     * 예약 공개 시각. 유튜브는 비공개 영상에만 받는다: 공개 범위가 비공개가 아니거나 시각을 못 읽으면 예약 없이 올린다(경고).
+     * 지난 시각은 그대로 보낸다: 유튜브가 바로 공개한다(사람이 고른 「그 시각에 공개」에 가장 가깝다).
+     */
+    private static String publishAt(long uploadId, JsonNode node, String privacy) {
+        if (node.isMissingNode() || node.isNull()) {
+            return null;
+        }
+        try {
+            String value = node.isString() ? Instant.parse(node.asString()).toString() : null;
+            if (value != null && "private".equals(privacy)) {
+                return value;
+            }
+        } catch (DateTimeParseException e) {
+            // 아래 경고
+        }
+        log.warn("upload.publish_at_ignored uploadId={} privacy={}", uploadId, privacy);
+        return null;
     }
 
     /** 배열이 아니면 빈 목록. 배열 안의 문자열이 아닌 것은 버린다. */

@@ -25,9 +25,10 @@ readonly READ_LOCK_TOKEN='@@SRT_READ_LOCK@@'
 # 주소다(ingest-auth CONTRACT 2절 후보값 표 1 · 4b).
 readonly AUTH_HTTP_ADDRESS="http://pokeclip-mediamtx:${BASIC_PASS_TOKEN}@\
 127.0.0.1:8080/mediamtx/auth"
-# 옛 모드 골든 — develop 6c90c935 의 템플릿을 render_vars.json 으로 렌더한
-# yamldecode JSON. CI checkout 은 이력이 얕아 시험이 git 으로 옛 판을 읽지
-# 않는다(만든 명령은 M15 c2a 실험 기록).
+# 옛 모드 골든 — develop 0d057a32 의 템플릿을 render_vars.json 으로 렌더한
+# yamldecode JSON(6c90c935 와 템플릿 · 렌더 결과가 바이트까지 같아 파일은
+# 그대로다). CI checkout 은 이력이 얕아 시험이 git 으로 옛 판을 읽지 않는다(만든 명령은
+# M15 c2a 실험 기록 · 병합 때 다시 렌더한 명령은 merge-develop 기록).
 readonly MTX_LEGACY_GOLDEN_REL='golden/mediamtx.legacy.json'
 # 두 모드 JSON 의 차이 키(최상위 · pathDefaults 아래는 pathDefaults.<키>) 정본.
 readonly MTX_MODE_DIFF_KEYS='["authHTTPAddress", "authHTTPExclude",

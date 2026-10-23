@@ -217,6 +217,22 @@ class RequiredPropertiesTest {
     }
 
     /**
+     * DB 로그인 방식 셋(POK-407)이 yml에 사이드카와 같은 이름으로 있다. 기본은 password라 로컬 compose · CI가 지금 그대로
+     * 붙는다. 이름이 어긋나면 운영에서 POSTGRES_AUTH=iam을 줘도 조용히 비밀번호 방식으로 남는다.
+     */
+    @Test
+    void DB_로그인_방식_자리가_사이드카와_같은_이름으로_있다() {
+        YamlPropertiesFactoryBean yaml = new YamlPropertiesFactoryBean();
+        yaml.setResources(new ClassPathResource("application.yml"));
+        Properties properties = yaml.getObject();
+
+        assertThat(properties).as("application.yml을 읽지 못했다").isNotNull().isNotEmpty();
+        assertThat(properties.getProperty("pokeclip.datasource.auth")).isEqualTo("${POSTGRES_AUTH:password}");
+        assertThat(properties.getProperty("pokeclip.datasource.region")).isEqualTo("${AWS_REGION:ap-northeast-2}");
+        assertThat(properties.getProperty("pokeclip.datasource.ssl-root-cert")).isEqualTo("${POSTGRES_SSLROOTCERT:}");
+    }
+
+    /**
      * 시크릿 둘은 DB 접속값과 반대로 <b>빈 기본값을 남긴다</b>. 기본값을 아예 안 주면
      * 리터럴 {@code "${JWT_SECRET}"}이 바인딩돼 서버는 뜨고 인증만 전부 401이 된다
      * (services/CLAUDE.md — 접속을 시도하지 않는 값이라 DB처럼 우연히 죽지도 않는다).

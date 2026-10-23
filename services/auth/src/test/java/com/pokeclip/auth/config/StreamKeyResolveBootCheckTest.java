@@ -82,11 +82,26 @@ class StreamKeyResolveBootCheckTest {
         .run(context -> assertThat(context).hasNotFailed());
   }
 
-  /** 정확히 none 이어야 한다. 빈 값은 none 이 아니라 미설정으로 읽혀 플랫폼 감지로 간다. */
+  /**
+   * 운영 ECS 꼴로 창구를 연다(POK-316). 전달 헤더가 붙은 요청은 {@link ForwardedHeaderMarkValve}가 도착 때 표시해 두고
+   * 출발지 필터가 403 으로 끝내므로, native 에서도 출발지 잠금이 헤더로 뚫리지 않는다.
+   */
   @Test
-  void withToken_failsUnlessStrategyIsExactlyNone() {
+  void withToken_bootsUnderNative() {
+    web(INTERNAL_TOKEN_SET, RESOLVE_TOKEN_SET, ALLOWED_CIDR_SET, STRATEGY_NATIVE)
+        .run(
+            context ->
+                assertThat(context).hasNotFailed().hasBean("streamKeyResolveFilterChain"));
+  }
+
+  /**
+   * none 이나 native 여야 한다. framework 는 Spring 필터가 표시 밸브가 안 보는 헤더(X-Forwarded-Prefix 등)까지 읽는다.
+   * 빈 값은 none 이 아니라 미설정으로 읽혀 플랫폼 감지로 간다.
+   */
+  @Test
+  void withToken_failsUnlessStrategyIsNoneOrNative() {
     String empty = STRATEGY;
-    for (String strategy : List.of(STRATEGY_NATIVE, STRATEGY + "framework", empty)) {
+    for (String strategy : List.of(STRATEGY + "framework", empty)) {
       web(INTERNAL_TOKEN_SET, RESOLVE_TOKEN_SET, ALLOWED_CIDR_SET, strategy)
           .run(context -> assertFailedWithoutValues(context, "server.forward-headers-strategy"));
     }

@@ -206,10 +206,56 @@ function send(path: string, init: RequestInit): Promise<Response> {
 }
 
 /**
+ * 요청 하나가 나가고(start) 끝났다(end, 성공·실패 모두). 보호 API(apiFetch)는 스스로 알리고 회전 재시도는 같은 요청이다.
+ * apiFetch를 안 거치는 요청(재생 서버 녹화 목록)은 trackApiActivity로 감싸 알린다
+ */
+export interface ApiActivity {
+  type: 'start' | 'end';
+  id: number;
+}
+
+const activityListeners = new Set<(event: ApiActivity) => void>();
+let lastActivityId = 0;
+
+/**
+ * 요청 활동을 듣는다. 채널 전환 화면이 「새 채널 화면이 부른 요청이 다 끝났나」를 보는 데 쓴다: 홈·지난 방송처럼
+ * react-query 밖에서 부르는 화면 훅도 이 진입점은 지나므로 쿼리 캐시가 아니라 여기서 센다(apiFetch 밖 요청은
+ * trackApiActivity로 감싼다).
+ */
+export function subscribeApiActivity(listener: (event: ApiActivity) => void): () => void {
+  activityListeners.add(listener);
+  return () => {
+    activityListeners.delete(listener);
+  };
+}
+
+function emitActivity(event: ApiActivity) {
+  for (const listener of activityListeners) listener(event);
+}
+
+/**
+ * 일 하나를 요청 활동으로 알린다: 시작에 start, 끝나면(성공·실패 모두) end. 본문 읽기까지 넘기면 본문을 받는 동안도 센다.
+ * 화면이 기다리는 요청인데 apiFetch 밖이면 이것으로 감싼다: 안 감싸면 채널 전환 화면이 그 요청을 모르고 먼저 걷힌다
+ */
+export async function trackApiActivity<T>(work: () => Promise<T>): Promise<T> {
+  const id = ++lastActivityId;
+  emitActivity({ type: 'start', id });
+  try {
+    return await work();
+  } finally {
+    emitActivity({ type: 'end', id });
+  }
+}
+
+/**
  * 보호 API 호출 진입점. 2xx가 아니면 ApiError를 던진다 — 호출부는 status로 분기한다
  * (예: 429 발급 제한 안내). 401은 여기서 refresh 회전 후 딱 한 번 재시도한다.
  */
 export async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
+  return trackApiActivity(() => request(path, init));
+}
+
+async function request(path: string, init: RequestInit): Promise<Response> {
   const res = await send(path, init);
   if (res.status !== 401) {
     if (!res.ok) throw await errorFrom(res);

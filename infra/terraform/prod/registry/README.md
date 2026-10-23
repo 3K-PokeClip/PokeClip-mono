@@ -12,12 +12,15 @@ prod 이미지를 담는 ECR 저장소를 만드는 루트입니다(설계 3-1 �
 | `pokeclip-prod/media-mediamtx` | MediaMTX(`media/Dockerfile.mtxhook` 빌드) |
 | `pokeclip-prod/media-sidecar` | 사이드카(`media/Dockerfile` 빌드) |
 | `pokeclip-prod/media-ingest-auth` | 응답기(`media/Dockerfile.ingest-auth` 빌드) |
+| `pokeclip-prod/media-loopback-sender` | Media 상자 루프백 송출기(`linuxserver/ffmpeg` 미러 — 빌드 없음, 핀은 `infra/media-host/images.json`) |
+| `pokeclip-prod/media-host-bundle` | Media 상자 설치 묶음(`infra/media-host/bundle/Dockerfile` 빌드 — 스크립트 · MediaMTX 템플릿) |
 | `pokeclip-prod/render` | 3번 렌더 워커(`workers/render/Dockerfile` 빌드) |
 | `pokeclip-prod/upload` | 3번 업로드 워커(`workers/upload/Dockerfile` 빌드) |
 | `pokeclip-prod/chat-collector` | 3번 채팅 수집 서버(`services/chat-collector/Dockerfile` 빌드) |
 | `pokeclip-prod/chat-detector` | 3번 채팅 판별 서버(`services/chat-detector/Dockerfile` 빌드) |
 
-janitor 저장소는 janitor 코드가 생길 때 `repository_keys` 에 더합니다.
+janitor 는 사이드카 이미지를 씁니다(entrypoint 로 명령을 고름) — 저장소를
+따로 두지 않습니다.
 
 *   **태그 불변 · 푸시 때 스캔**: 둘 다 켭니다(`image_tag_immutable` ·
     `scan_on_push` 기본 `true`). 설계에 없는 것이라 변수로 둡니다(kty 47차
@@ -41,6 +44,13 @@ provider 의 `default_tags` 네 키(`TerraformRoot = prod/registry`)는 태그�
 승인)입니다. 백엔드는 `backend.hcl.example` 을 `backend.hcl` 로 복사하고
 `bucket` 자리표시자 `<STATE_BUCKET_PROD>` 를 `pokeclip-tfstate-prod-apne2` 로
 고친 뒤 `init -backend-config=backend.hcl` 로 엽니다(운영 단계).
+
+**저장소 둘을 더한 뒤의 재적용(M9):** O7b 로 저장소 11개를 만든 뒤
+`media-loopback-sender` · `media-host-bundle` 을 더했습니다. `prod/media` 가
+두 저장소의 `repo_urls` 를 읽으므로, O7c 에서 두 이미지를 올리기 전에 이
+루트를 한 번 더 apply 합니다(kty 승인). plan 은 `aws_ecr_repository.this` 두
+개 생성만이어야 합니다(변경 · 삭제 0). 그 밖의 줄이 보이면 적용하지
+않습니다.
 
 ## 출력
 

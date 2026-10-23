@@ -3,6 +3,11 @@ plugins {
     id 'org.springframework.boot'
 }
 
+dependencyManagement {
+    // Boot 4.1.0 BOM은 AWS SDK를 관리하지 않는다. 다른 서버 셋과 같은 판으로 박는다.
+    imports { mavenBom 'software.amazon.awssdk:bom:2.46.7' }
+}
+
 dependencies {
 
     implementation 'org.springframework.boot:spring-boot-starter-webmvc'
@@ -24,6 +29,10 @@ dependencies {
 
     runtimeOnly 'org.postgresql:postgresql'
 
+    // DB 로그인 방식(비밀번호 · RDS IAM)과 db_connected 줄(POK-407). 서버 넷이 같이 쓴다.
+    // AWS SDK는 이 모듈이 rds 하나만, HTTP 구현 둘을 뺀 채로 가져온다(db-support/build.gradle).
+    implementation project(':db-support')
+
     testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
     testImplementation 'org.springframework.boot:spring-boot-testcontainers'
     testImplementation 'org.testcontainers:testcontainers-junit-jupiter'
@@ -34,6 +43,7 @@ dependencies {
     // implementation(project(':web-support'))는 일부러 안 건다 — CorsProperties가 딸려 와
     // CORS_ALLOWED_ORIGINS 없이는 부팅이 실패한다. 이 서버는 브라우저 문이 없다.
     testImplementation testFixtures(project(':web-support'))
+    testImplementation testFixtures(project(':db-support'))
 }
 
 tasks.named('test') {

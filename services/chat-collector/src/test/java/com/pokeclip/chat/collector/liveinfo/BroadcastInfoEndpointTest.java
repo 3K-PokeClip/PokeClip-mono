@@ -1,5 +1,7 @@
 package com.pokeclip.chat.collector.liveinfo;
 
+import com.pokeclip.chat.collector.Platform;
+
 import com.pokeclip.chat.collector.support.IntegrationTestSupport;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -60,8 +62,8 @@ class BroadcastInfoEndpointTest extends IntegrationTestSupport {
      */
     @Test
     void 최신과_추이를_계약된_칸_이름으로_준다() throws Exception {
-        store.insert(new BroadcastInfo(STREAM, "CH", T, "제목1", List.of("롤"), "LoL", 100));
-        store.insert(new BroadcastInfo(STREAM, "CH", T.plusSeconds(60), "제목2",
+        store.insert(new BroadcastInfo(Platform.CHZZK, STREAM, "CH", T, "제목1", List.of("롤"), "LoL", 100));
+        store.insert(new BroadcastInfo(Platform.CHZZK, STREAM, "CH", T.plusSeconds(60), "제목2",
                 List.of("롤", "다이아"), "LoL", null));
 
         HttpResponse<String> response = 물어본다("since=" + T.minusSeconds(1), TOKEN);
@@ -118,9 +120,9 @@ class BroadcastInfoEndpointTest extends IntegrationTestSupport {
     @Test
     void since를_안_주면_최근_한_시간이다() throws Exception {
         Instant now = Instant.now();
-        store.insert(new BroadcastInfo(STREAM, "CH", now.minus(Duration.ofMinutes(30)),
+        store.insert(new BroadcastInfo(Platform.CHZZK, STREAM, "CH", now.minus(Duration.ofMinutes(30)),
                 "안쪽", List.of(), "LoL", 7));
-        store.insert(new BroadcastInfo(STREAM, "CH", now.minus(Duration.ofHours(2)),
+        store.insert(new BroadcastInfo(Platform.CHZZK, STREAM, "CH", now.minus(Duration.ofHours(2)),
                 "바깥쪽", List.of(), "LoL", 9));
 
         String body = 물어본다("", TOKEN).body();
@@ -148,8 +150,8 @@ class BroadcastInfoEndpointTest extends IntegrationTestSupport {
     /** 칸 이름은 clip과의 계약이라 글자로 못박는다. 쉼표가 든 번호도 하나로 다룬다(주소에 이어 붙이던 첫 판은 쪼갰다). */
     @Test
     void 여러_방송의_마지막_제목을_계약된_칸_이름으로_준다() throws Exception {
-        store.insert(new BroadcastInfo("api-bt-1", "CH", T, "제목1", List.of(), "LoL", 3));
-        store.insert(new BroadcastInfo("api-bt-2", "CH", T, "제목2", List.of(), null, null));
+        store.insert(new BroadcastInfo(Platform.CHZZK, "api-bt-1", "CH", T, "제목1", List.of(), "LoL", 3));
+        store.insert(new BroadcastInfo(Platform.CHZZK, "api-bt-2", "CH", T, "제목2", List.of(), null, null));
 
         HttpResponse<String> joined = 제목을_묻는다(본문(List.of("api-bt-1", "api-bt-2", "api-bt-none")), TOKEN);
         assertThat(joined.statusCode()).as(joined.body()).isEqualTo(200);
@@ -161,7 +163,7 @@ class BroadcastInfoEndpointTest extends IntegrationTestSupport {
 
         assertThat(제목을_묻는다("{}", TOKEN).body()).isEqualTo("{\"titles\":{}}");
 
-        store.insert(new BroadcastInfo("api-bt-a,b", "CH", T, "쉼표 방송", List.of(), null, null));
+        store.insert(new BroadcastInfo(Platform.CHZZK, "api-bt-a,b", "CH", T, "쉼표 방송", List.of(), null, null));
         assertThat(제목을_묻는다(본문(List.of("api-bt-a,b")), TOKEN).body()).contains("\"api-bt-a,b\":{\"title\":\"쉼표 방송\"");
     }
 

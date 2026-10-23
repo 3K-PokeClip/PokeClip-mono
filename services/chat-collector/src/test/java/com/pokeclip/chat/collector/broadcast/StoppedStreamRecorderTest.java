@@ -1,5 +1,7 @@
 package com.pokeclip.chat.collector.broadcast;
 
+import com.pokeclip.chat.collector.Platform;
+
 import com.pokeclip.chat.collector.ChzzkProperties;
 import com.pokeclip.chat.collector.StopReason;
 import com.pokeclip.chat.collector.archive.ChatArchive;
@@ -72,7 +74,7 @@ class StoppedStreamRecorderTest extends IntegrationTestSupport {
     void 재연결_발급이_401이면_포기_메모가_남는다() throws Exception {
         registry = newRegistry();
         new StoppedStreamRecorder(registry, store, () -> 지금);
-        registry.open(new SessionKey("s1", 1L, "chA", Instant.EPOCH), "tokA");
+        registry.open(new SessionKey(Platform.CHZZK, "s1", 1L, "chA", Instant.EPOCH), "tokA");
         awaitUntil(AWAIT, () -> behavior.isConnected("tokA"));
         behavior.failSessionCreateFor("tokA", 401);
         behavior.dropConnectionFor("tokA");
@@ -97,7 +99,7 @@ class StoppedStreamRecorderTest extends IntegrationTestSupport {
         new StoppedStreamRecorder(registry, store, () -> 지금);
         behavior.failSessionCreateFor("tokA", 401);
 
-        assertThat(registry.open(new SessionKey("s1", 1L, "chA", Instant.EPOCH), "tokA")).isFalse();
+        assertThat(registry.open(new SessionKey(Platform.CHZZK, "s1", 1L, "chA", Instant.EPOCH), "tokA")).isFalse();
 
         EndedStream memo = store.find("s1").orElseThrow();   // open()이 동기라 기다릴 것이 없다
         assertThat(memo.stopReason()).isEqualTo(StopReason.SESSION_AUTH_REJECTED.name());
@@ -113,7 +115,7 @@ class StoppedStreamRecorderTest extends IntegrationTestSupport {
         new StoppedStreamRecorder(registry, store, () -> 지금);
         behavior.failSessionCreateFor("tokA", 503);
 
-        assertThat(registry.open(new SessionKey("s1", 1L, "chA", Instant.EPOCH), "tokA")).isFalse();
+        assertThat(registry.open(new SessionKey(Platform.CHZZK, "s1", 1L, "chA", Instant.EPOCH), "tokA")).isFalse();
 
         assertThat(behavior.authCallCount()).as("발급을 시도조차 안 했으면 아래 isEmpty는 공짜다")
                 .isGreaterThanOrEqualTo(1);
@@ -137,7 +139,7 @@ class StoppedStreamRecorderTest extends IntegrationTestSupport {
         behavior.failSessionCreateFor("tokA", 401);
 
         try (LogCaptor captor = new LogCaptor()) {
-            assertThat(registry.open(new SessionKey("s1", 1L, "chA", Instant.EPOCH), "tokA"))
+            assertThat(registry.open(new SessionKey(Platform.CHZZK, "s1", 1L, "chA", Instant.EPOCH), "tokA"))
                     .as("리스너가 던져도 open은 정상으로 false를 돌려준다").isFalse();
             assertThat(captor.messages())
                     .anyMatch(m -> m.startsWith("chat.broadcast.stopped_memo_failed"))

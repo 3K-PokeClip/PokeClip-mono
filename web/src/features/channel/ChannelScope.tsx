@@ -16,6 +16,7 @@ import { delegationsAsEditorQueryOptions, type StreamerDelegation } from '@/api/
 import { useMe } from '@/features/auth/useSession';
 import { isListSeenWhenSelected, useChannelStore } from '@/stores/channel';
 import { useToast } from '@/ui';
+import { useSwitchCurtain } from './switchCurtain';
 import { asEditorList, useActiveChannel } from './useActiveChannel';
 
 // 독 화면들의 채널 범위(POK-390). 하는 일 넷:
@@ -72,8 +73,12 @@ export function ChannelScope({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!active.ready || !active.gone) return;
+    const goneId = useChannelStore.getState().selected;
     // 내 채널로 풀린 상태라 streamerId가 내 번호다. 지우면 gone이 꺼져 이 효과가 다시 안 돈다(토스트 한 번).
     select(active.streamerId, null);
+    // 방금 스스로 나간 채널이면 경고하지 않는다: 나가기가 이미 「나왔어요」와 전환 화면으로 알렸다. 덮는 동안(내 채널로
+    // 바꾸기 전) 그 채널 요청이 404를 받으면 여기로 온다(PR #342 리뷰 4)
+    if (goneId !== null && useSwitchCurtain.getState().curtain?.leftStreamerId === goneId) return;
     toast({
       tone: 'warning',
       title: '편집 권한이 없어져 내 채널로 돌아왔어요',

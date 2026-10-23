@@ -203,4 +203,32 @@ class RenderWithUploadControllerTest extends RenderUploadTestSupport {
     private int count(String table) {
         return jdbc.queryForObject("SELECT count(*) FROM " + table, Integer.class);
     }
+
+    /**
+     * 보관 기간(60일)이 지난 방송(POK-335): 새로 렌더해야 하는 (c)만 410이다. 조각을 1번이 지우므로 만들 수 없다. 거절은 아무것도
+     * 안 남긴다
+     */
+    @Test
+    void 만료된_방송은_새로_렌더하는_갈래만_410이고_아무것도_안_남는다() throws Exception {
+        jdbc.update("UPDATE broadcasts SET ended_at = now() - interval '61 days', vod_expires_at = now() - interval '1 day' WHERE stream_id = ?", 방송);
+
+        만들기(편집본, 기본_업로드()).andExpect(status().isGone()).andExpect(jsonPath("$.error").value("vod_expired"));
+
+        assertThat(count("clips")).isZero();
+        assertThat(count("upload_requests")).isZero();
+        assertThat(LocalStackFixture.receiveAndDelete(렌더줄.queueUrl())).isNull();
+    }
+
+    /** (b) 이미 만든 영상은 조각이 필요 없다: 방송이 만료돼도 그 영상에 바로 올린다(POK-335) */
+    @Test
+    void 만료된_방송이어도_이미_완성된_판은_바로_올린다() throws Exception {
+        long clipId = json(만들기(편집본, null).andExpect(status().isCreated())).get("id").asLong();
+        완성시킨다(clipId, 영상_하나());
+        비운다(렌더줄);
+        jdbc.update("UPDATE broadcasts SET ended_at = now() - interval '61 days', vod_expires_at = now() - interval '1 day' WHERE stream_id = ?", 방송);
+
+        만들기(편집본, 기본_업로드()).andExpect(status().isOk()).andExpect(jsonPath("$.id").value(clipId));
+        assertThat(업로드_줄_수()).isOne();
+    }
+
 }

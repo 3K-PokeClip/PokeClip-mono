@@ -16,12 +16,15 @@ import java.util.Map;
  *
  * <p>키가 {@code String}인 것은 {@code broadcasts.streamer_id}가 {@code VARCHAR}이기 때문이다 —
  * 조회 조건과 같은 모양이라야 여기서 못 찾는 줄이 안 생긴다.
+ *
+ * <p>{@code editorsOnline}은 방송 번호별 「대시보드를 연 편집자 수」다(POK-398). 방송 중 줄만 들어 있고, 끝난 줄은 키가 없다(응답에서 null).
  */
 public record BroadcastPage(List<Broadcast> rows, Map<String, ResolveResult> relations, String nextCursor,
                             Map<String, Instant> origins, Map<String, String> thumbnails,
-                            Map<String, BroadcastTitle> titles) {
+                            Map<String, BroadcastTitle> titles, Map<String, Integer> editorsOnline) {
 
-    private static final BroadcastPage EMPTY = new BroadcastPage(List.of(), Map.of(), null, Map.of(), Map.of(), Map.of());
+    private static final BroadcastPage EMPTY =
+            new BroadcastPage(List.of(), Map.of(), null, Map.of(), Map.of(), Map.of(), Map.of());
 
     public static BroadcastPage empty() {
         return EMPTY;

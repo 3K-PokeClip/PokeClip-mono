@@ -3,9 +3,10 @@
 import { useEffect, useState } from 'react';
 import { apiFetch } from '@/api/client';
 import { fetchChzzkLink, type ChzzkLinkState } from '@/api/chzzkLink';
+import { fetchSoopLink, type SoopLinkState } from '@/api/soopLink';
 import { fetchStreamKeyStatus } from '@/api/streamKeys';
 import { fetchYoutubeLink, type YoutubeLinkState } from '@/api/youtubeLink';
-import { broadcastTitle } from '@/api/clipEditor';
+import { broadcastTitle, platformLabel } from '@/api/clipEditor';
 import { ddayFor, isJustEnded } from '@/features/broadcast/vod/vodListView';
 import {
   fetchAllBroadcasts,
@@ -27,13 +28,15 @@ import { useChannelStreamerId } from '@/features/channel/ChannelScope';
 //   GET /api/clip/broadcasts/{id}/broadcast-info   → 라이브 제목 (latest=null이면 streamId)
 //   GET /api/auth/me                               → 큰 칸 인사의 이름
 //   GET /api/clip/library                          → 라이브 클립 완료 수 · 이번 주/지난주 만든 클립·유튜브 발행
-//   GET /api/chzzk-link · /api/youtube-link · /api/stream-keys → 준비 단계 · 연결 상태(1분마다)
+//   GET /api/chzzk-link · /api/soop-link · /api/youtube-link · /api/stream-keys → 준비 단계 · 연결 상태(1분마다)
 
 export interface LiveNow {
   streamId: string;
   title: string;
-  /** 방송 플랫폼(치지직·SOOP·씨미). 방송 목록이 아직 알려 주지 않아 null — 모르는 플랫폼을 치지직이라 적지 않는다 */
+  /** 방송 플랫폼 표시 이름(치지직·SOOP). 방송 목록의 코드에서 고르고, 모르는 코드거나 옛 서버면 null(모르는 플랫폼을 치지직이라 적지 않는다) */
   platform: string | null;
+  /** 이 방송 대시보드를 지금 연 편집자 수(POK-398, 스트리머 본인과 나는 뺌). 0이거나 모르면(null·없음) 띠에 안 적는다 */
+  editorsOnline?: number | null;
   startedNote: string;
   /** 방송 경과 표기 — LIVE 배지 옆에 그대로 붙는다 */
   uptimeLabel: string;
@@ -72,6 +75,7 @@ export interface WeekStats {
 /** 연동 상태 — 각 칸은 못 읽었으면 null(「확인 중」, 버튼을 내밀지 않는다) */
 export interface HomeLinks {
   chzzk: ChzzkLinkState | null;
+  soop: SoopLinkState | null;
   youtube: YoutubeLinkState | null;
   /** 연동 코드를 한 번이라도 발급했는가(스트림키 존재) */
   streamKeyIssued: boolean | null;
@@ -129,9 +133,9 @@ const PAST_LIMIT = 8;
 const EXPIRING_WINDOW_DAYS = 7;
 const DAY_MS = 86_400_000;
 
-async function getJson<T>(path: string): Promise<T | null> {
+async function getJson<T>(path: string, signal?: AbortSignal): Promise<T | null> {
   try {
-    const r = await apiFetch(path);
+    const r = await apiFetch(path, signal ? { signal } : undefined);
     return (await r.json()) as T;
   } catch {
     return null;
@@ -218,20 +222,23 @@ export interface CachedCards {
  * 홈 한 벌. 방송 목록을 못 읽으면 null — 부른 쪽이 지난 화면을 그대로 둔다.
  * 빈 값으로 덮으면 clip이 잠깐 재시작해도 라이브 띠와 지난 방송이 사라진다(PR #200 codex).
  * cardCache는 상위 N개 밖 방송의 카드를 CARD_CACHE_MS 동안 기억한다 — 부른 쪽이 주기마다 같은 Map을 넘긴다.
+ * signal은 홈이 내려가면(채널 전환 등) 남은 단계를 끊는다: 끊지 않으면 옛 채널 카드 요청이 이어져 채널 전환 화면이 그것까지
+ * 기다린다(PR #342 2차 리뷰)
  */
 async function loadHome(
   now: number,
   cardCache: Map<string, CachedCards>,
   streamerId: number | null,
+  signal: AbortSignal,
 ): Promise<Loaded | null> {
   const [me, liveAll, pastAll] = await Promise.all([
-    getJson<WireMe>('/api/auth/me'),
+    getJson<WireMe>('/api/auth/me', signal),
     // 라이브도 끝까지 — 여러 스트리머의 편집자면 동시에 여럿이 방송 중이다. 밴드는 첫 방송만, 이번 주 숫자는 전부 센다
-    fetchAllBroadcasts('live', streamerId).catch(() => null),
+    fetchAllBroadcasts('live', streamerId, signal).catch(() => null),
     // 지난 방송은 끝까지 읽는다 — 지난주 방송 수를 세려면 첫 쪽만으로는 모자랄 수 있다
-    fetchAllBroadcasts('past', streamerId).catch(() => null),
+    fetchAllBroadcasts('past', streamerId, signal).catch(() => null),
   ]);
-  if (liveAll === null || pastAll === null) return null;
+  if (liveAll === null || pastAll === null || signal.aborted) return null;
 
   const liveBroadcast = liveAll[0] ?? null;
   const liveIds = new Set(liveAll.map((b) => b.streamId));
@@ -257,7 +264,7 @@ async function loadHome(
       // 끝까지 넘긴다 — 기본 50장이고 오래된 것부터 와서, 첫 장만 읽으면 카드 수가 50에서 잘리고
       // 최근 카드가 통째로 빠진다(PR #200 codex)
       // 옛 서버가 hidden을 실어 보내도 거르지 않는다: 숨기기는 POK-393에서 없앴다
-      const cards = await fetchAllJumpCards<WireCard>(streamId).catch(() => null);
+      const cards = await fetchAllJumpCards<WireCard>(streamId, signal).catch(() => null);
       if (cards === null) {
         // 못 읽었으면 기억해 둔 값을(기한이 지났어도) 쓰고 기억은 건드리지 않는다 — 다음 주기에 다시 읽는다.
         // 빈 값을 기억하면 5분 동안 카드 수가 실제보다 적게 보인다(리뷰 #299 2차)
@@ -281,10 +288,12 @@ async function loadHome(
     };
   };
 
+  if (signal.aborted) return null;
   let live: LiveNow | null = null;
   if (liveBroadcast) {
     const info = await getJson<WireInfo>(
       `/api/clip/broadcasts/${encodeURIComponent(liveBroadcast.streamId)}/broadcast-info`,
+      signal,
     );
     // 방송 정보 창구의 최신 관측이 먼저다(목록보다 늦게 바뀐 제목을 먼저 본다). 그 관측에 제목이 비면 목록 제목, 그것도 없으면 번호
     const title = info?.latest?.title?.trim() || broadcastTitle(liveBroadcast);
@@ -292,7 +301,8 @@ async function loadHome(
     live = {
       streamId: liveBroadcast.streamId,
       title,
-      platform: null,
+      platform: platformLabel(liveBroadcast.platform),
+      editorsOnline: liveBroadcast.editorsOnline ?? null,
       startedNote: startedAt ? `${clockLabel(startedAt)} 시작` : '시작 시각 정보 없음',
       uptimeLabel: startedAt ? msToClock(now - Date.parse(startedAt)) : '--:--:--',
       // 수집기가 1분마다 채우는 시청자 수. 아직 없으면 null(「준비 중」)
@@ -362,13 +372,15 @@ async function loadHome(
 
 /** 연동 상태 셋 — 하나를 못 읽어도 나머지는 그린다 */
 async function loadLinks(): Promise<HomeLinks> {
-  const [chzzk, youtube, streamKey] = await Promise.all([
+  const [chzzk, soop, youtube, streamKey] = await Promise.all([
     fetchChzzkLink().catch(() => null),
+    fetchSoopLink().catch(() => null),
     fetchYoutubeLink().catch(() => null),
     fetchStreamKeyStatus().catch(() => null),
   ]);
   return {
     chzzk,
+    soop,
     youtube,
     streamKeyIssued: streamKey === null ? null : streamKey.issued === true,
   };
@@ -384,7 +396,7 @@ const EMPTY: Loaded = {
   lastWeek: EMPTY_WEEK,
   lastBroadcast: null,
 };
-const NO_LINKS: HomeLinks = { chzzk: null, youtube: null, streamKeyIssued: null };
+const NO_LINKS: HomeLinks = { chzzk: null, soop: null, youtube: null, streamKeyIssued: null };
 
 export function useHomeMockState(): HomeMockState {
   // 고른 채널(POK-390). ChannelScope가 채널이 바뀌면 화면을 다시 세우므로 마운트 동안은 안 바뀐다
@@ -401,6 +413,8 @@ export function useHomeMockState(): HomeMockState {
 
   useEffect(() => {
     let stopped = false;
+    // 내려가면 읽던 것을 끊는다(loadHome)
+    const abort = new AbortController();
     // 상위 N개 밖 방송의 카드 기억 — 주기마다 같은 Map을 넘긴다
     const cardCache = new Map<string, CachedCards>();
     // 읽기가 10초보다 오래 걸리면 다음 주기와 겹친다. 더 늦게 떠난 읽기가 이미 반영됐으면 먼저 떠나 늦게 온 답은 버린다
@@ -410,8 +424,8 @@ export function useHomeMockState(): HomeMockState {
     const tick = async () => {
       const mine = ++started;
       const [loaded, entries] = await Promise.all([
-        loadHome(Date.now(), cardCache, streamerId),
-        fetchLibraryAll(streamerId).catch(() => null),
+        loadHome(Date.now(), cardCache, streamerId, abort.signal),
+        fetchLibraryAll(streamerId, abort.signal).catch(() => null),
       ]);
       if (stopped || mine < applied) return;
       applied = mine;
@@ -426,6 +440,7 @@ export function useHomeMockState(): HomeMockState {
     const t = window.setInterval(() => void tick(), POLL_MS);
     return () => {
       stopped = true;
+      abort.abort();
       window.clearInterval(t);
     };
   }, [streamerId]);
@@ -443,6 +458,7 @@ export function useHomeMockState(): HomeMockState {
       applied = mine;
       setLinks((prev) => ({
         chzzk: next.chzzk ?? prev.chzzk,
+        soop: next.soop ?? prev.soop,
         youtube: next.youtube ?? prev.youtube,
         streamKeyIssued: next.streamKeyIssued ?? prev.streamKeyIssued,
       }));
@@ -459,7 +475,9 @@ export function useHomeMockState(): HomeMockState {
   // 홈이 서버에서 읽은 연동 사실을 시작 가이드 체크에 올린다(다른 기기에서 연동한 경우). 해제는 설정 화면이 내린다
   useEffect(() => {
     const store = useOnboardingStore.getState();
-    if (links.chzzk?.linked && !store.channelLinked) store.setChannelLinked(true);
+    // 방송 채널은 치지직·SOOP 둘 중 하나면 된다(POK-396)
+    if ((links.chzzk?.linked || links.soop?.linked) && !store.channelLinked)
+      store.setChannelLinked(true);
     if (links.streamKeyIssued && !store.pluginLinked) store.markPluginLinked();
   }, [links]);
 

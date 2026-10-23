@@ -9,6 +9,7 @@ import {
 import { fireEvent, screen, within } from '@testing-library/react';
 import { axe } from 'jest-axe';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { reportPlaybackForbidden, resetPlaybackAccessForTests } from '@/api/playbackAccess';
 import { LiveScreen } from '@/features/broadcast/livenow/LiveScreen';
 import { ChatReplayLoader } from '@/features/broadcast/livenow/chatReplay';
 import { CHAT_PAGE_MAX, LIVE_REREAD_MS } from '@/features/broadcast/livenow/chatCollector';
@@ -124,6 +125,14 @@ const hlsFake = vi.hoisted(() => ({
   sync: null as number | null,
   /** 되감기 창(seekable)의 끝(영상 초)을 이 값으로 둔다. 없으면 지금 */
   seekableEnd: null as number | null,
+  /** 마지막으로 선 재생기의 오류 처리기. 시험이 hls.js 오류를 쏜다(POK-337) */
+  error: null as ((event: string, data: unknown) => void) | null,
+  /** hls.js를 쓸 수 있나. 아니면 브라우저 기본 HLS(옛 iOS Safari)로 튼다 */
+  supported: true,
+  /** 영상 목록을 읽어 내나. 아니면 목록 읽기 완료(MANIFEST_PARSED)가 오지 않는다(CDN이 계속 403인 곳, POK-419) */
+  manifest: true,
+  /** 영상 조각을 받아 내나. 아니면 조각 받기 완료(FRAG_LOADED)가 오지 않는다(목록만 열리고 조각이 403인 곳, POK-419) */
+  frags: true,
 }));
 /** 재생기가 서는 라이브 끝(영상 초): 영상 끝(지금)에서 2초 뒤다 */
 function liveSyncSeconds(): number {
@@ -132,18 +141,24 @@ function liveSyncSeconds(): number {
 vi.mock('hls.js', () => {
   class FakeHls {
     static isSupported() {
-      return true;
+      return hlsFake.supported;
     }
-    static Events = { ERROR: 'hlsError', MANIFEST_PARSED: 'hlsManifestParsed' };
+    static Events = {
+      ERROR: 'hlsError',
+      MANIFEST_PARSED: 'hlsManifestParsed',
+      FRAG_LOADED: 'hlsFragLoaded',
+    };
     static ErrorTypes = { NETWORK_ERROR: 'networkError', MEDIA_ERROR: 'mediaError' };
     private readonly handlers = new Map<string, () => void>();
     on(event: string, handler: () => void) {
       this.handlers.set(event, handler);
+      if (event === 'hlsError') hlsFake.error = handler;
     }
     attachMedia() {}
     loadSource() {
       hlsFake.loads += 1;
-      this.handlers.get('hlsManifestParsed')?.();
+      if (hlsFake.manifest) this.handlers.get('hlsManifestParsed')?.();
+      if (hlsFake.manifest && hlsFake.frags) this.handlers.get('hlsFragLoaded')?.();
     }
     startLoad() {}
     recoverMediaError() {}
@@ -328,7 +343,11 @@ const server = vi.hoisted(() => ({
   /** 후원 줄의 서버 id를 첫 채팅 id와 같게 준다: 채팅·후원은 표가 달라 번호가 겹친다(POK-254) */
   chatIdClash: false,
   /** 출입증: 'off'는 서명 재료 없음(503), 'grant'는 10분짜리, 'fail'은 500 */
-  playback: 'off' as 'off' | 'grant' | 'fail',
+  playback: 'off' as 'off' | 'grant' | 'fail' | 'expired',
+  /** 'grant' 출입증이 끝날 때까지의 시간. 갱신은 만료 5분 전이라, 갱신을 재는 시험은 짧게 주어 가짜 시계를 몇 분씩 돌리지 않는다(POK-415) */
+  playbackTtlMs: 10 * 60_000,
+  /** 라이브 영상 서버(live.test)가 첫 바이트 물음에 주는 응답 코드(POK-337) */
+  liveStatus: 200,
   /** 있으면 출입증 답을 이것이 풀릴 때까지 붙잡는다(POK-317) */
   playbackGate: null as Promise<void> | null,
   /** 지난 방송의 시각 기준점(POK-255). null이면 서버가 모른다 */
@@ -398,6 +417,8 @@ const server = vi.hoisted(() => ({
   liveOffsetMs: 0,
   /** 라이브 줄에 시작 시각이 없고 시각 기준점만 있다(명부가 시작을 모르는 라이브) */
   liveStartUnknown: false,
+  /** 수집기가 관측마다 카테고리를 싣는다(아직 안 싣는다 — 실으면 통계가 바뀐 구간을 나눈다) */
+  infoCategoryChange: false,
   /** 라이브 줄의 시각 기준점(카드 0초). 서버 기준점은 첫 조각의 PDT − pts라 ms 자리가 있다. 없으면 싣지 않는다 */
   liveOriginMs: null as number | null,
   /** 라이브 다시 보기 물음(한 쪽 CHAT_PAGE_MAX줄)에 503을 준다. 폴링(200줄)은 그대로다 */
@@ -555,6 +576,29 @@ function listResponse(u: URL): Response {
   });
 }
 
+/**
+ * 라이브 방송의 차트 한 장 — 수집기처럼 물은 창(영상 축)을 칸으로 다 채운다(빈 칸은 0, 칸 시작은 표 축 = 영상 축 + 보정).
+ * 최근 10분 고정 차트(CHART)의 칸은 그 시각이 든 칸에 얹는다. 라이브도 방송 처음부터 1시간 창으로 나눠 읽으므로, 창마다 같은
+ * 차트를 주면 칸이 겹친다
+ */
+function liveChartPage(u: URL, base: typeof CHART.buckets, offsetMs: number) {
+  const from = Date.parse(u.searchParams.get('from') ?? '');
+  const to = Date.parse(u.searchParams.get('to') ?? '');
+  const bucket = Number(u.searchParams.get('bucket'));
+  const span = bucket * 1000;
+  const buckets: { start: string; chats: number; donations: number }[] = [];
+  for (let t = from; t < to; t += span)
+    buckets.push({ start: new Date(t + offsetMs).toISOString(), chats: 0, donations: 0 });
+  for (const b of base) {
+    const i = Math.floor((Date.parse(b.start) - (from + offsetMs)) / span);
+    const hit = buckets[i];
+    if (!hit) continue;
+    hit.chats += b.chats;
+    hit.donations += b.donations;
+  }
+  return { bucketSeconds: bucket, appliedOffsetMs: offsetMs, buckets };
+}
+
 /** 방송 정보의 답. 수집기는 since가 없으면 최근 1시간만 준다(DEFAULT_WINDOW): 몇 시간 전에 끝난 지난 방송은 기록이 비어 온다 */
 function infoResponse(path: string, noSince: boolean): Response {
   if (server.infoSinceFail && !noSince) return jsonResponse(503, { error: 'unavailable' });
@@ -563,11 +607,20 @@ function infoResponse(path: string, noSince: boolean): Response {
     : server.infoTitleMissing
       ? { ...INFO, latest: { ...INFO.latest, title: null } }
       : INFO;
+  const withCategory = server.infoCategoryChange
+    ? {
+        ...info,
+        series: info.series.map((p, i) => ({
+          ...p,
+          category: i < 2 ? '저스트 채팅' : '리그 오브 레전드',
+        })),
+      }
+    : info;
   const body = server.infoNoViewers
-    ? { ...info, series: info.series.map((p) => ({ ...p, viewers: null })) }
+    ? { ...withCategory, series: withCategory.series.map((p) => ({ ...p, viewers: null })) }
     : server.infoLastNull
       ? { ...info, series: [...info.series.slice(0, -1), { ...info.series[2], viewers: null }] }
-      : info;
+      : withCategory;
   return jsonResponse(
     200,
     noSince && path.includes(`/${VOD_ID}/`) ? { ...body, series: [] } : body,
@@ -577,6 +630,7 @@ function infoResponse(path: string, noSince: boolean): Response {
 function handle(url: string, init?: RequestInit): Response | Promise<Response> {
   const u = new URL(url, 'http://localhost');
   const path = u.pathname;
+  if (u.host === 'live.test') return new Response(null, { status: server.liveStatus });
   if (path === '/api/clip/broadcasts')
     return server.listGate && u.searchParams.get('limit') !== '1'
       ? server.listGate.then(() => listResponse(u))
@@ -622,15 +676,21 @@ function handle(url: string, init?: RequestInit): Response | Promise<Response> {
         buckets: CHART.buckets.map((b, i) => ({ ...b, chats: i === 0 ? first : 0, donations: 0 })),
       });
     }
-    if (server.vodChartFail && Date.parse(u.searchParams.get('from')!) < NOW - 3_600_000)
+    // 지난 방송 그래프가 실패한다: 지난 방송 주소는 1시간보다 앞 창이, 끝난 라이브는 모든 창이(라이브 동안 받아 둔 다 지난 창은
+    // 다시 묻지 않으므로 끝 창까지 실패해야 「못 받은」 상태다). 라이브 동안은 읽힌다
+    if (
+      server.vodChartFail &&
+      ((path.includes(`/${VOD_ID}/`) &&
+        Date.parse(u.searchParams.get('from')!) < NOW - 3_600_000) ||
+        (path.includes(`/${STREAM_ID}/`) && server.liveEnded))
+    )
       return jsonResponse(503, { error: 'unavailable' });
     // 라이브 되감기 보정 시험(POK-326)은 라이브 채팅과 같은 보정을 차트에도 싣는다
-    if (server.liveChartSparse)
-      return jsonResponse(200, {
-        ...CHART,
-        appliedOffsetMs: server.liveOffsetMs,
-        buckets: CHART.buckets.map((b) => ({ ...b, chats: 1, donations: 0 })),
-      });
+    const liveBuckets = server.liveChartSparse
+      ? CHART.buckets.map((b) => ({ ...b, chats: 1, donations: 0 }))
+      : CHART.buckets;
+    if (path.includes(`/${STREAM_ID}/`))
+      return jsonResponse(200, liveChartPage(u, liveBuckets, server.liveOffsetMs));
     return jsonResponse(200, { ...CHART, appliedOffsetMs: server.liveOffsetMs });
   }
   if (path.endsWith('/broadcast-info')) {
@@ -667,9 +727,10 @@ function handle(url: string, init?: RequestInit): Response | Promise<Response> {
     if (server.playback === 'grant')
       return jsonResponse(200, {
         streamId: STREAM_ID,
-        expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
+        expiresAt: new Date(Date.now() + server.playbackTtlMs).toISOString(),
       });
     if (server.playback === 'fail') return jsonResponse(500, { error: 'boom' });
+    if (server.playback === 'expired') return jsonResponse(410, { error: 'vod_expired' });
     return jsonResponse(503, { error: 'playback_signing_unavailable' });
   }
   if (path === '/api/chzzk-link')
@@ -691,6 +752,11 @@ function tokenFor(sub: string) {
 }
 
 let fetchSpy: ReturnType<typeof stubFetch>;
+
+// 이 파일은 대시보드 전체를 그리고 가짜 시계로 몇십 초씩 돌린다. 혼자서는 시험 하나가 0.5초 안팎이지만, 웹 전체 시험이
+// 여러 벌 겹쳐 도는 바쁜 기계에서는 10배쯤 느려져 기본 5초를 넘긴다. vitest는 시한을 넘긴 시험을 멈추지 않아, 그 시험이 뒤에서
+// 계속 가짜 시계를 돌리며 다음 시험들을 150여 건씩 연쇄로 깨뜨렸다(POK-415). 기다리는 실제 시간은 없고 계산 시간뿐이라 넉넉히 준다
+vi.setConfig({ testTimeout: 15_000 });
 
 beforeEach(() => {
   nav.search = '';
@@ -725,6 +791,7 @@ beforeEach(() => {
   server.liveChatTimeline = false;
   server.liveAsks = [];
   server.liveStartUnknown = false;
+  server.infoCategoryChange = false;
   server.liveOffsetMs = 0;
   server.liveOriginMs = null;
   server.liveReplayFail = false;
@@ -735,6 +802,10 @@ beforeEach(() => {
   hlsFake.sliding = false;
   hlsFake.sync = null;
   hlsFake.seekableEnd = null;
+  hlsFake.error = null;
+  hlsFake.supported = true;
+  hlsFake.manifest = true;
+  hlsFake.frags = true;
   chatModes.length = 0;
   chatTexts.length = 0;
   playerStatuses.length = 0;
@@ -752,7 +823,10 @@ beforeEach(() => {
   server.chatPaged = false;
   server.chatIdClash = false;
   server.playback = 'off';
+  server.playbackTtlMs = 10 * 60_000;
   server.playbackGate = null;
+  server.liveStatus = 200;
+  resetPlaybackAccessForTests();
   hlsFake.loads = 0;
   notFound.mockClear();
   // env는 셸에서 그대로 상속된다 — 로컬/CI 셸에 NEXT_PUBLIC_MEDIA_*가 export돼 있어도 소스가 null이게 고정한다.
@@ -780,6 +854,26 @@ async function settle() {
       await vi.advanceTimersByTimeAsync(0);
     });
   }
+}
+
+/** jsdom은 폭이 0이다 — 통계 그래프는 폭을 재고서야 그린다. 그래프 안(「지금」·타임라인)을 보는 시험은 넓은 화면의 패널 폭을 준다 */
+function graphWidth() {
+  vi.spyOn(Element.prototype, 'getBoundingClientRect').mockReturnValue({
+    width: 1092,
+    height: 300,
+    top: 0,
+    left: 0,
+    right: 1092,
+    bottom: 300,
+    x: 0,
+    y: 0,
+    toJSON: () => ({}),
+  } as DOMRect);
+}
+
+/** 통계 숫자 줄 한 칸의 값(이름 dt 다음 dd) */
+function statValue(label: string) {
+  return screen.getByText(label, { selector: 'dt' }).nextElementSibling;
 }
 
 async function renderLive() {
@@ -917,15 +1011,19 @@ describe('LiveScreen — 영상 출입증', () => {
   it('출입증은 만료 5분 전에 다시 받는다 — 한 번만 받으면 한 시간 뒤 재생이 멈춘다', async () => {
     // 쿠키가 끝나면 새 영상 조각이 403이 된다(PR #200 codex P1)
     server.playback = 'grant';
+    // 7분짜리라 만료 5분 전은 2분째다. 화면은 1분마다 확인하므로 1분째엔 그대로 쓰고(만료 전엔 다시 받지 않는다) 2분째에 새로
+    // 받는다. 10분짜리로 6분을 돌리면 1초 주기 화면 갱신이 수백 번 돌아 바쁜 기계에서 5초 시한을 넘기고 뒤 시험들까지 연쇄로
+    // 깨뜨렸다(POK-415)
+    server.playbackTtlMs = 7 * 60_000;
     await renderLive();
     expect(accessCalls()).toBe(1);
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(4 * 60_000);
+      await vi.advanceTimersByTimeAsync(65_000);
     });
     expect(accessCalls()).toBe(1);
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(2 * 60_000);
+      await vi.advanceTimersByTimeAsync(60_000);
     });
     expect(accessCalls()).toBe(2);
   });
@@ -975,27 +1073,517 @@ describe('LiveScreen — 영상 출입증', () => {
     stubMediaElement();
     vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', 'http://live.test');
     server.playback = 'grant';
+    // 5분 30초짜리라 1분마다 확인할 때마다 새로 받는다(POK-415: 몇 분씩 돌리지 않는다)
+    server.playbackTtlMs = 5 * 60_000 + 30_000;
     await renderLive();
     expect(hlsFake.loads).toBe(1);
 
     // 정상 갱신(만료 5분 전)은 재생기를 다시 세우지 않는다
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(6 * 60_000);
+      await vi.advanceTimersByTimeAsync(65_000);
     });
     await settle();
+    expect(accessCalls()).toBe(2);
     expect(hlsFake.loads).toBe(1);
 
     // 다음 갱신이 실패하고, 1분 뒤 다시 받아진다
     server.playback = 'fail';
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      await vi.advanceTimersByTimeAsync(60_000);
     });
+    expect(accessCalls()).toBe(3);
     server.playback = 'grant';
     await act(async () => {
       await vi.advanceTimersByTimeAsync(60_000);
     });
     await settle();
     expect(hlsFake.loads).toBe(2);
+  });
+
+  it('끝난 방송의 녹화 조회도 출입증 답 뒤에 한다: CDN 뒤 녹화 목록은 쿠키가 없으면 403이다(POK-317)', async () => {
+    mediaCalls.configured = true;
+    server.playback = 'grant';
+    let release!: () => void;
+    server.playbackGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    await renderLive();
+    expect(mediaCalls.spans).toEqual([]);
+
+    release();
+    await settle();
+    expect(mediaCalls.spans.length).toBeGreaterThan(0);
+  });
+
+  it('다른 화면이 403으로 출입증을 버리면 1분 안에 다시 받고 재생기를 새로 세운다: 쿠키가 지워져 멈춘 hls.js는 저절로 안 산다(PR #332 codex)', async () => {
+    stubMediaElement();
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', 'http://live.test');
+    server.playback = 'grant';
+    await renderLive();
+    expect(hlsFake.loads).toBe(1);
+    const before = accessCalls();
+
+    // 영상 키는 방송 번호다(옛 서버라 ingest 칸이 없다)
+    reportPlaybackForbidden(STREAM_ID);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    await settle();
+    expect(accessCalls()).toBe(before + 1);
+    expect(hlsFake.loads).toBe(2);
+  });
+
+  it('열기 전 출입증을 못 받으면 영상 자리에 그렇게 알리고, 다시 받으면 연다: 「아직 연결되지 않았어요」는 틀린 말이었다(POK-337)', async () => {
+    stubMediaElement();
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', 'http://live.test');
+    server.playback = 'fail';
+    await renderLive();
+    expect(screen.getByText('영상 출입증을 받지 못했어요. 1분 뒤 다시 받아요')).toBeInTheDocument();
+    expect(screen.queryByText(/아직 연결되지 않았어요/)).toBeNull();
+
+    server.playback = 'grant';
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    await settle();
+    expect(hlsFake.loads).toBe(1);
+    expect(screen.queryByText('영상 출입증을 받지 못했어요. 1분 뒤 다시 받아요')).toBeNull();
+
+    // 영상 키가 늦게 와 새 키의 출입증을 기다리는 동안 영상 자리가 다시 보인다: 지난 실패를 다시 말하지 않는다
+    server.ingest = 'key-late';
+    server.playbackGate = new Promise<void>(() => undefined);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    await settle();
+    expect(mediaCalls.keys.at(-1)).toBe('key-late');
+    expect(screen.getByText('영상 서버에 아직 연결되지 않았어요')).toBeInTheDocument();
+    expect(screen.queryByText('영상 출입증을 받지 못했어요. 1분 뒤 다시 받아요')).toBeNull();
+  });
+
+  it('라이브가 403으로 멎으면 출입증을 버리고 영상 위에 알린 뒤, 다시 받으면 재생기를 새로 세워 알림이 사라진다(POK-410)', async () => {
+    stubMediaElement();
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', 'http://live.test');
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    server.playback = 'grant';
+    await renderLive();
+    expect(hlsFake.loads).toBe(1);
+    const before = accessCalls();
+
+    // 같은 403을 다시 받아 봐야 쿠키가 없으니 또 403이다: 한 번 더 해 보지 않고 바로 버린다
+    act(() => {
+      hlsFake.error?.('hlsError', {
+        fatal: true,
+        type: 'networkError',
+        details: 'levelLoadError',
+        response: { code: 403 },
+      });
+    });
+    expect(screen.getByText('영상 출입증이 끝나 다시 받고 있어요')).toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    await settle();
+    expect(accessCalls()).toBe(before + 1);
+    expect(hlsFake.loads).toBe(2);
+    expect(screen.queryByText('영상 출입증이 끝나 다시 받고 있어요')).toBeNull();
+  });
+
+  it('다시 받아 새로 세운 재생기도 영상 목록을 못 읽고 또 403이면 멈추고 접근할 수 없다고 알린다: 계약3 재시도 정책(POK-419)', async () => {
+    // 서명 설정이 틀린 곳은 출입증을 몇 번 받아도 403이다. 전에는 1분마다 다시 받으며 「다시 받고 있어요」를 끝없이 보였다
+    stubMediaElement();
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', 'http://live.test');
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    server.playback = 'grant';
+    await renderLive();
+    const forbidden = {
+      fatal: true,
+      type: 'networkError',
+      details: 'manifestLoadError',
+      response: { code: 403 },
+    };
+    act(() => hlsFake.error?.('hlsError', forbidden));
+    hlsFake.manifest = false;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    await settle();
+    expect(hlsFake.loads).toBe(2);
+    const calls = accessCalls();
+
+    act(() => hlsFake.error?.('hlsError', forbidden));
+    expect(screen.getByText('영상에 접근할 수 없어요. 새로고침해 주세요')).toBeInTheDocument();
+    expect(screen.queryByText('영상 출입증이 끝나 다시 받고 있어요')).toBeNull();
+
+    // 출입증을 버리지 않아 더 받지도, 재생기를 다시 세우지도 않는다
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120_000);
+    });
+    await settle();
+    expect(hlsFake.loads).toBe(2);
+    expect(accessCalls()).toBe(calls);
+    expect(screen.getByText('영상에 접근할 수 없어요. 새로고침해 주세요')).toBeInTheDocument();
+  });
+
+  it('hls.js가 없는 브라우저도 다시 받아 새로 세운 재생기가 또 403이면 멈추고 접근할 수 없다고 알린다(POK-419)', async () => {
+    stubMediaElement();
+    vi.spyOn(HTMLMediaElement.prototype, 'canPlayType').mockReturnValue('maybe');
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', 'http://live.test');
+    hlsFake.supported = false;
+    server.playback = 'grant';
+    server.liveStatus = 403;
+    const { container } = await renderLive();
+    const first = container.querySelector('video')!;
+    await act(async () => {
+      first.dispatchEvent(new Event('error'));
+    });
+    await settle();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    await settle();
+    const second = container.querySelector('video')!;
+    expect(second).not.toBe(first);
+    const calls = accessCalls();
+
+    // 영상을 하나도 못 받았다(loadeddata 없음): 묻기만 하고 출입증은 버리지 않는다
+    await act(async () => {
+      second.dispatchEvent(new Event('error'));
+    });
+    await settle();
+    expect(screen.getByText('영상에 접근할 수 없어요. 새로고침해 주세요')).toBeInTheDocument();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120_000);
+    });
+    await settle();
+    expect(container.querySelector('video')).toBe(second);
+    expect(accessCalls()).toBe(calls);
+  });
+
+  it('다시 세운 재생기가 영상 목록은 읽어도 조각을 하나도 못 받고 또 403이면 멈춘다: 목록만 열리는 곳에서 1분마다 다시 받지 않는다(POK-419 로컬 리뷰)', async () => {
+    stubMediaElement();
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', 'http://live.test');
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    server.playback = 'grant';
+    await renderLive();
+    const forbidden = {
+      fatal: true,
+      type: 'networkError',
+      details: 'fragLoadError',
+      response: { code: 403 },
+    };
+    act(() => hlsFake.error?.('hlsError', forbidden));
+    hlsFake.frags = false;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    await settle();
+    expect(hlsFake.loads).toBe(2);
+
+    act(() => hlsFake.error?.('hlsError', forbidden));
+    expect(screen.getByText('영상에 접근할 수 없어요. 새로고침해 주세요')).toBeInTheDocument();
+  });
+
+  it('갱신 실패로 다시 세운 재생기는 첫 403에서 출입증을 한 번 다시 받는다: 403 때문에 다시 세운 것만 멈출 까닭이다(POK-419)', async () => {
+    stubMediaElement();
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', 'http://live.test');
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    server.playback = 'grant';
+    // 5분 30초짜리라 1분마다 새로 받는다
+    server.playbackTtlMs = 5 * 60_000 + 30_000;
+    await renderLive();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(65_000);
+    });
+    server.playback = 'fail';
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    server.playback = 'grant';
+    hlsFake.manifest = false;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    await settle();
+    expect(hlsFake.loads).toBe(2);
+
+    act(() =>
+      hlsFake.error?.('hlsError', {
+        fatal: true,
+        type: 'networkError',
+        details: 'manifestLoadError',
+        response: { code: 403 },
+      }),
+    );
+    expect(screen.getByText('영상 출입증이 끝나 다시 받고 있어요')).toBeInTheDocument();
+    expect(screen.queryByText('영상에 접근할 수 없어요. 새로고침해 주세요')).toBeNull();
+  });
+
+  it('hls.js가 없는 브라우저도 다시 세운 재생기가 목록을 읽어 회복했으면 나중의 403은 다시 한 번 받아 본다(POK-419)', async () => {
+    stubMediaElement();
+    vi.spyOn(HTMLMediaElement.prototype, 'canPlayType').mockReturnValue('maybe');
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', 'http://live.test');
+    hlsFake.supported = false;
+    server.playback = 'grant';
+    server.liveStatus = 403;
+    const { container } = await renderLive();
+    await act(async () => {
+      container.querySelector('video')!.dispatchEvent(new Event('error'));
+    });
+    await settle();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    await settle();
+    const second = container.querySelector('video')!;
+    act(() => {
+      second.dispatchEvent(new Event('loadeddata'));
+    });
+
+    await act(async () => {
+      second.dispatchEvent(new Event('error'));
+    });
+    await settle();
+    expect(screen.getByText('영상 출입증이 끝나 다시 받고 있어요')).toBeInTheDocument();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    await settle();
+    expect(container.querySelector('video')).not.toBe(second);
+  });
+
+  it('다시 세운 재생기가 영상 목록을 읽어 회복했으면 나중의 403은 다시 한 번 받아 본다: 쿠키가 또 지워진 것이다(POK-419)', async () => {
+    stubMediaElement();
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', 'http://live.test');
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    server.playback = 'grant';
+    await renderLive();
+    const forbidden = {
+      fatal: true,
+      type: 'networkError',
+      details: 'fragLoadError',
+      response: { code: 403 },
+    };
+    act(() => hlsFake.error?.('hlsError', forbidden));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    await settle();
+    expect(hlsFake.loads).toBe(2);
+
+    act(() => hlsFake.error?.('hlsError', forbidden));
+    expect(screen.getByText('영상 출입증이 끝나 다시 받고 있어요')).toBeInTheDocument();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    await settle();
+    expect(hlsFake.loads).toBe(3);
+  });
+
+  it('출입증을 새로 받는 중에 라이브가 403으로 멎어도 받은 뒤 재생기를 새로 세운다: 받는 중인 것은 버리지 않아 다시 세울 신호가 없었다(로컬 리뷰 1라운드)', async () => {
+    stubMediaElement();
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', 'http://live.test');
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    server.playback = 'grant';
+    // 5분 30초짜리라 1분 뒤 확인에서 새로 받는다
+    server.playbackTtlMs = 5 * 60_000 + 30_000;
+    await renderLive();
+    expect(hlsFake.loads).toBe(1);
+
+    let release!: () => void;
+    server.playbackGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(65_000);
+    });
+    // 새 출입증을 받는 사이 쿠키가 지워져 영상이 403이다
+    act(() => {
+      hlsFake.error?.('hlsError', {
+        fatal: true,
+        type: 'networkError',
+        details: 'fragLoadError',
+        response: { code: 403 },
+      });
+    });
+    release();
+    await settle();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    await settle();
+    expect(hlsFake.loads).toBe(2);
+    expect(screen.queryByText('영상 출입증이 끝나 다시 받고 있어요')).toBeNull();
+  });
+
+  it('출입증이 필요 없는 곳(로컬·dev)의 403은 출입증 탓이 아니다: 「다시 받고 있어요」라 하지 않고 한 번 다시 해 본 뒤 끊겼다고 알린다(로컬 리뷰 1라운드)', async () => {
+    stubMediaElement();
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', 'http://live.test');
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    // 「필요 없음」(503)을 받으면 라이브 화면은 다시 묻지 않는다: 출입증을 버려도 다시 받을 길이 없다
+    server.playback = 'off';
+    await renderLive();
+    expect(hlsFake.loads).toBe(1);
+    const forbidden = {
+      fatal: true,
+      type: 'networkError',
+      details: 'levelLoadError',
+      response: { code: 403 },
+    };
+
+    act(() => hlsFake.error?.('hlsError', forbidden));
+    expect(screen.queryByText('영상 출입증이 끝나 다시 받고 있어요')).toBeNull();
+    act(() => hlsFake.error?.('hlsError', forbidden));
+    expect(screen.getByText('영상이 끊겼어요. 새로고침하면 다시 연결해요')).toBeInTheDocument();
+  });
+
+  it('hls.js가 없는 브라우저(옛 iOS Safari)의 기본 재생도 403이면 출입증을 버리고 알린 뒤, 다시 받으면 재생기를 새로 세운다(PR #347 codex)', async () => {
+    stubMediaElement();
+    vi.spyOn(HTMLMediaElement.prototype, 'canPlayType').mockReturnValue('maybe');
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', 'http://live.test');
+    hlsFake.supported = false;
+    server.playback = 'grant';
+    const { container } = await renderLive();
+    const video = container.querySelector('video')!;
+    expect(video.getAttribute('src')).toContain('http://live.test');
+
+    // 기본 재생은 응답 코드를 못 읽어 첫 바이트를 물어 403인지 본다
+    server.liveStatus = 403;
+    await act(async () => {
+      video.dispatchEvent(new Event('error'));
+    });
+    await settle();
+    expect(screen.getByText('영상 출입증이 끝나 다시 받고 있어요')).toBeInTheDocument();
+
+    server.liveStatus = 200;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    await settle();
+    expect(container.querySelector('video')).not.toBe(video);
+    expect(screen.queryByText('영상 출입증이 끝나 다시 받고 있어요')).toBeNull();
+  });
+
+  it('hls.js가 없는 브라우저의 기본 재생이 403이 아닌 까닭으로 멎으면 끊겼다고 알린다(PR #347 codex)', async () => {
+    stubMediaElement();
+    vi.spyOn(HTMLMediaElement.prototype, 'canPlayType').mockReturnValue('maybe');
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', 'http://live.test');
+    hlsFake.supported = false;
+    server.playback = 'grant';
+    const { container } = await renderLive();
+    const before = accessCalls();
+    server.liveStatus = 502;
+    await act(async () => {
+      container.querySelector('video')!.dispatchEvent(new Event('error'));
+    });
+    await settle();
+    expect(screen.getByText('영상이 끊겼어요. 새로고침하면 다시 연결해요')).toBeInTheDocument();
+    expect(accessCalls()).toBe(before);
+  });
+
+  it('403이 아닌 치명 오류는 한 번 다시 해 본 뒤 알린다: 출입증은 그대로 두고 재생기도 다시 세우지 않는다(POK-337)', async () => {
+    stubMediaElement();
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', 'http://live.test');
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    server.playback = 'grant';
+    await renderLive();
+    const before = accessCalls();
+    const fatal = {
+      fatal: true,
+      type: 'networkError',
+      details: 'fragLoadError',
+      response: { code: 502 },
+    };
+
+    act(() => hlsFake.error?.('hlsError', fatal));
+    expect(screen.queryByText('영상이 끊겼어요. 새로고침하면 다시 연결해요')).toBeNull();
+    act(() => hlsFake.error?.('hlsError', fatal));
+    expect(screen.getByText('영상이 끊겼어요. 새로고침하면 다시 연결해요')).toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    await settle();
+    expect(accessCalls()).toBe(before);
+    expect(hlsFake.loads).toBe(1);
+  });
+
+  it('치명이 아닌 오류는 알리지 않는다: hls.js가 스스로 다시 해 본다', async () => {
+    stubMediaElement();
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', 'http://live.test');
+    server.playback = 'grant';
+    await renderLive();
+    act(() =>
+      hlsFake.error?.('hlsError', {
+        fatal: false,
+        type: 'networkError',
+        details: 'fragLoadError',
+        response: { code: 403 },
+      }),
+    );
+    expect(screen.queryByText(/영상 출입증이 끝나|영상이 끊겼어요/)).toBeNull();
+  });
+
+  it('영상 키가 늦게 오면 새 키의 출입증을 받기 전에는 라이브 영상을 다시 부르지 않는다: 옛 키 쿠키는 새 주소에 안 실린다(PR #332 codex P1)', async () => {
+    stubMediaElement();
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', 'http://live.test');
+    server.playback = 'grant';
+    await renderLive();
+    expect(hlsFake.loads).toBe(1);
+
+    // 방송 줄에 영상 키가 새로 실려 온다. 그 키의 출입증 답은 붙잡아 둔다
+    server.ingest = 'key-late';
+    let release!: () => void;
+    server.playbackGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    await settle();
+    expect(mediaCalls.keys.at(-1)).toBe('key-late');
+    expect(hlsFake.loads).toBe(1);
+
+    release();
+    await settle();
+    expect(hlsFake.loads).toBe(2);
+  });
+
+  it('보관 기간이 지난 방송이면 녹화를 찾지 않고 그렇다고 알린다(POK-335)', async () => {
+    mediaCalls.configured = true;
+    server.playback = 'expired';
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    await renderLive();
+    expect(screen.getByText('보관 기간(60일)이 지나 녹화 영상을 볼 수 없어요')).toBeInTheDocument();
+    expect(mediaCalls.spans).toEqual([]);
+    const before = accessCalls();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3 * 60_000);
+    });
+    expect(accessCalls()).toBe(before);
+  });
+
+  it('녹화를 보는 중 갱신이 410이면 녹화를 내리고 만료를 알린다(PR #348 codex)', async () => {
+    stubMediaElement();
+    mediaCalls.configured = true;
+    mediaCalls.answer = Promise.resolve([{ startMs: VOD_STARTED, durationSeconds: 9_000 }]);
+    server.playback = 'grant';
+    server.playbackTtlMs = 5 * 60_000 + 30_000;
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    const { container } = await renderLive();
+    await settle();
+    // 녹화를 틀고 있다(요청한 시작 위치가 있다)
+    expect(container.querySelector('video')?.getAttribute('src') ?? '').toContain('/playback/');
+    expect(screen.queryByText('보관 기간(60일)이 지나 녹화 영상을 볼 수 없어요')).toBeNull();
+
+    server.playback = 'expired';
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(65_000);
+    });
+    await settle();
+    expect(screen.getByText('보관 기간(60일)이 지나 녹화 영상을 볼 수 없어요')).toBeInTheDocument();
   });
 
   it('출입증이 필요 없는 곳(로컬·dev)은 첫 화면이 서는 사이에 라이브 영상을 부른다: 기다림이 재생 시작을 늦추지 않는다', async () => {
@@ -1007,8 +1595,9 @@ describe('LiveScreen — 영상 출입증', () => {
 
   it('서명 재료가 없는 서버(503)에는 다시 묻지 않는다 — 출입증이 필요 없는 곳이다', async () => {
     await renderLive();
+    // 실패 재시도(1분)보다 넉넉히 길게만 본다
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      await vi.advanceTimersByTimeAsync(2 * 60_000);
     });
     expect(accessCalls()).toBe(1);
   });
@@ -1230,14 +1819,16 @@ describe('LiveScreen: 카드가 없을 때', () => {
 
 describe('LiveScreen: 라이브 문구', () => {
   it('방송 중에는 라이브 문구 그대로다: 실시간 채팅·실시간 통계·자동 감지 중·그래프 끝 「지금」', async () => {
+    graphWidth();
     await renderLive();
 
     expect(screen.getByRole('complementary', { name: '실시간 채팅' })).toBeInTheDocument();
     expect(screen.getByRole('region', { name: '실시간 통계' })).toBeInTheDocument();
     expect(screen.getByText('자동 감지 중 · 카드 클릭 = 시점 이동')).toBeInTheDocument();
     expect(screen.getByText('지금')).toBeInTheDocument();
-    // 채팅 수 이름은 차트가 읽은 창대로다: 라이브는 지금 기준 최근 창이다
-    expect(screen.getByText('최근 10분 채팅')).toBeInTheDocument();
+    // 채팅 수 이름은 차트가 읽은 창대로다: 라이브도 방송 처음부터 지금까지 읽는다
+    expect(screen.getByText(/^방송 중 채팅 [\d,]+개$/)).toBeInTheDocument();
+    expect(screen.queryByText(/^최근 \d+분 채팅/)).toBeNull();
   });
 });
 
@@ -1409,29 +2000,40 @@ describe('LiveScreen — 실시간 통계', () => {
   it('지표를 방송 정보와 채팅 차트에서 센다', async () => {
     await renderLive();
 
-    expect(screen.getByText('최고 시청자')).toBeInTheDocument();
-    expect(screen.getByText('2,310')).toBeInTheDocument();
-    expect(screen.getByText('분당 평균 채팅')).toBeInTheDocument();
-    expect(screen.getByText('2회')).toBeInTheDocument();
+    // 라이브 시청자 칸은 지금 값이다(정보 바 「1,842명 시청 중」과 같은 수). 최고·평균은 그 아래
+    expect(statValue('시청자')).toHaveTextContent('1,842');
+    expect(screen.getByText('최고 2,310 · 평균 1,884')).toBeInTheDocument();
+    expect(statValue('분당 평균 채팅')).toBeInTheDocument();
+    expect(statValue('후원')).toHaveTextContent('2회');
   });
 
-  it('타임라인이 채팅량·시청자·하이라이트·후원을 한 그림으로 알린다', async () => {
+  it('타임라인이 채팅·시청자·하이라이트·후원을 한 그림으로 알린다: 방송 처음부터라 카드 여덟 장이 다 선다', async () => {
+    graphWidth();
     await renderLive();
 
     expect(
-      screen.getByRole('img', {
-        name: '방송 타임라인 — 채팅량과 시청자 추이, 하이라이트 4곳, 후원 2회',
+      screen.getByRole('group', {
+        name: /^방송 타임라인 — 채팅·시청자, 하이라이트 8곳, 후원 2회/,
       }),
     ).toBeInTheDocument();
   });
 
-  it('하이라이트 내역은 총계 앞에 선다 — 총계가 다른 지표와 같은 오른쪽 끝에 맞는다', async () => {
+  it('하이라이트 칸은 총계와 자동·수동 내역을 같이 보인다', async () => {
     await renderLive();
 
-    const note = screen.getByText('자동 6 · 수동 2');
-    const value = note.parentElement;
-    expect(value?.textContent).toBe('자동 6 · 수동 28');
-    expect(note.nextElementSibling).toHaveTextContent('8');
+    expect(statValue('하이라이트')).toHaveTextContent('8');
+    expect(screen.getByText('자동 6 · 수동 2')).toBeInTheDocument();
+  });
+
+  it('그래프의 하이라이트 핀을 누르면 카드를 누른 것과 같이 그 시점으로 간다', async () => {
+    graphWidth();
+    await renderLive();
+
+    const pins = screen.getAllByRole('button', { name: /^하이라이트 (#\d+|수동) — / });
+    expect(pins.length).toBeGreaterThan(0);
+    expect(
+      screen.getByRole('button', { name: /^하이라이트 #8 — .*1:23:20로 이동$/ }),
+    ).toBeInTheDocument();
   });
 
   it('새 카드가 들어오면 지표와 필터 칩이 같이 는다: 요약이 첫 값에 굳지 않는다', async () => {
@@ -1454,6 +2056,54 @@ describe('LiveScreen — 실시간 통계', () => {
     expect(screen.getByText('자동 6 · 수동 2')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '자동 6' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '수동 2' })).toBeInTheDocument();
+  });
+
+  it('방송 중에도 그래프를 처음부터 1시간 창으로 나눠 읽고, 다 지난 창은 10초마다 다시 묻지 않는다: 시청자 기록도 시작부터다', async () => {
+    await renderLive();
+    const charts = () =>
+      fetchSpy.mock.calls
+        .map(([url]) => new URL(String(url), 'http://localhost'))
+        .filter((u) => u.pathname === `/api/clip/broadcasts/${STREAM_ID}/chat-chart`);
+    const range = (u: URL) => [
+      Date.parse(u.searchParams.get('from')!),
+      Date.parse(u.searchParams.get('to')!),
+    ];
+    const opened = charts();
+    expect(Math.min(...opened.map((u) => range(u)[0]!))).toBe(STARTED_AT);
+    for (const u of opened) expect(range(u)[1]! - range(u)[0]!).toBeLessThanOrEqual(3_600_000);
+    // 방송 1시간 24분: 30초 칸이고 창은 시작~1시간, 1시간~지금 둘이다
+    expect(opened.some((u) => range(u)[0] === STARTED_AT + 3_600_000)).toBe(true);
+    expect(opened.every((u) => u.searchParams.get('bucket') === '30')).toBe(true);
+
+    const before = charts().length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    await settle();
+    const polled = charts().slice(before);
+    expect(polled.length).toBeGreaterThan(0);
+    // 다 지난 첫 창(시작~1시간)은 다시 묻지 않고 끝 창만 묻는다
+    for (const u of polled) expect(range(u)[0]).toBe(STARTED_AT + 3_600_000);
+
+    const sinces = fetchSpy.mock.calls
+      .map(([url]) => new URL(String(url), 'http://localhost'))
+      .filter((u) => u.pathname === `/api/clip/broadcasts/${STREAM_ID}/broadcast-info`)
+      .map((u) => u.searchParams.get('since'));
+    expect(sinces).toContain(new Date(STARTED_AT).toISOString());
+    // 처음 한 번만 시작부터 받고, 그다음은 받아 둔 마지막 관측(1분 전)의 2분 앞부터만 묻는다 — 10초마다 방송 전체를 다시 받지
+    // 않는다(PR #316 리뷰). 받아 둔 앞 기록은 그대로라 최고 시청자가 남는다
+    expect(sinces.at(-1)).toBe(new Date(NOW - 3 * 60_000).toISOString());
+    expect(statValue('시청자')?.nextElementSibling).toHaveTextContent('최고 2,310');
+  });
+
+  it('수집기가 관측마다 카테고리를 실으면 그래프 아래 띠가 바뀐 구간마다 나뉜다', async () => {
+    server.infoCategoryChange = true;
+    graphWidth();
+    await renderLive();
+
+    // 관측: 8분 전·5분 전 저스트 채팅, 1분 전 리그 오브 레전드. 처음 관측 앞은 모른다(띠를 지어내지 않는다)
+    expect(screen.getByTitle('저스트 채팅 · 7분')).toBeInTheDocument();
+    expect(screen.getByTitle(/^리그 오브 레전드 · /)).toBeInTheDocument();
   });
 });
 
@@ -1611,8 +2261,12 @@ describe('LiveScreen: 주소로 고른 카드로 들어오기', () => {
     mediaCalls.answer = Promise.resolve(null);
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
     const { container } = await renderLive();
-    expect(screen.getByText('영상 서버에 아직 연결되지 않았어요')).toBeInTheDocument();
+    // 묻지 못한 것은 묻지 못했다고 알린다: 「아직 연결되지 않았어요」는 기다리면 저절로 붙을 것처럼 읽혔다(POK-337)
+    expect(
+      screen.getByText('녹화 영상을 불러오지 못했어요. 1분 뒤 다시 확인해요'),
+    ).toBeInTheDocument();
     expect(screen.queryByText('녹화 영상을 찾지 못했어요')).toBeNull();
+    expect(screen.queryByText(/아직 연결되지 않았어요/)).toBeNull();
 
     mediaCalls.answer = Promise.resolve([{ startMs: VOD_STARTED, durationSeconds: 9_000 }]);
     await act(async () => {
@@ -2636,10 +3290,10 @@ describe('LiveScreen — 지난 방송 상세', () => {
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
     await renderLive();
 
-    expect(screen.queryByText(/^최근 \d+분 채팅$/)).toBeNull();
-    expect(screen.queryByText('방송 중 채팅')).toBeNull();
+    expect(screen.queryByText(/^최근 \d+분 채팅/)).toBeNull();
+    expect(screen.queryByText(/^방송 중 채팅/)).toBeNull();
     expect(screen.queryByText('지금')).toBeNull();
-    expect(screen.getAllByText('확인 중').length).toBeGreaterThan(0);
+    expect(statValue('분당 평균 채팅')).toHaveTextContent('확인 중');
   });
 
   it('라이브가 끝난 뒤 방송 전체 그래프를 못 받으면 라이브 때의 최근 그래프를 「지금」으로 남기지 않는다', async () => {
@@ -2647,6 +3301,7 @@ describe('LiveScreen — 지난 방송 상세', () => {
     server.vodChartFail = true;
     nav.search = `?stream=${STREAM_ID}`;
     window.history.pushState({}, '', `/broadcast/livenow?stream=${STREAM_ID}`);
+    graphWidth();
     await renderLive();
     expect(screen.getByText('지금')).toBeInTheDocument();
 
@@ -2658,7 +3313,8 @@ describe('LiveScreen — 지난 방송 상세', () => {
 
     expect(screen.getByText('방송함')).toBeInTheDocument();
     expect(screen.queryByText('지금')).toBeNull();
-    expect(screen.queryByText(/^최근 \d+분 채팅$/)).toBeNull();
+    expect(screen.queryByText(/^최근 \d+분 채팅/)).toBeNull();
+    expect(screen.queryByText(/^방송 중 채팅/)).toBeNull();
   });
 
   it('12시간 넘는 방송은 끝 12시간만 읽으므로 그 채팅 수를 방송 전체라고 하지 않는다', async () => {
@@ -2667,8 +3323,8 @@ describe('LiveScreen — 지난 방송 상세', () => {
     await renderLive();
 
     // 시험 서버는 칸 크기와 무관하게 창마다 30초 칸 20개(10분)를 준다: 1시간 창 12개면 120분이다
-    expect(screen.getByText('마지막 120분 채팅')).toBeInTheDocument();
-    expect(screen.queryByText('방송 중 채팅')).toBeNull();
+    expect(screen.getByText(/^마지막 120분 채팅 [\d,]+개$/)).toBeInTheDocument();
+    expect(screen.queryByText(/^방송 중 채팅/)).toBeNull();
   });
 
   it('12시간 넘는 방송의 분당 채팅은 읽은 끝 12시간으로 나눈다: 방송 전체 길이로 나누면 줄어 보인다', async () => {
@@ -2766,8 +3422,7 @@ describe('LiveScreen — 지난 방송 상세', () => {
     await renderLive();
 
     expect(screen.queryByText('수집 전')).toBeNull();
-    expect(screen.getByText('최고 시청자').nextElementSibling).toHaveTextContent('확인 중');
-    expect(screen.getByText('평균 시청자').nextElementSibling).toHaveTextContent('확인 중');
+    expect(statValue('평균 시청자')).toHaveTextContent('확인 중');
   });
 
   it('시청자 기록이 전부 빈 지난 방송은 정보 바와 통계가 같은 말이다: 「기록 없음」', async () => {
@@ -2777,7 +3432,7 @@ describe('LiveScreen — 지난 방송 상세', () => {
 
     expect(screen.getAllByText('시청자 수 기록 없음').length).toBeGreaterThan(0);
     expect(screen.queryByText('수집 전')).toBeNull();
-    expect(screen.getByText('최고 시청자').nextElementSibling).toHaveTextContent('기록 없음');
+    expect(statValue('평균 시청자')).toHaveTextContent('기록 없음');
   });
 
   it('명부 답보다 먼저 온 최근 창의 시청자 기록을 끝난 방송의 기록으로 보지 않는다: since 답이 실패해도 「기록 없음」이 아니다', async () => {
@@ -2863,15 +3518,16 @@ describe('LiveScreen — 지난 방송 상세', () => {
     });
     nav.search = `?stream=${VOD_ID}`;
     window.history.pushState({}, '', `/broadcast/livenow?stream=${VOD_ID}`);
+    graphWidth();
     await renderLive();
-    expect(screen.getByText('방송 중 채팅')).toBeInTheDocument();
+    expect(screen.getByText(/^방송 중 채팅 [\d,]+개$/)).toBeInTheDocument();
 
     await act(async () => {
       releaseChart();
     });
     await settle();
 
-    expect(screen.getByText('방송 중 채팅')).toBeInTheDocument();
+    expect(screen.getByText(/^방송 중 채팅 [\d,]+개$/)).toBeInTheDocument();
     expect(screen.queryByText('지금')).toBeNull();
   });
 
@@ -2911,19 +3567,22 @@ describe('LiveScreen — 지난 방송 상세', () => {
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
     await renderLive();
 
-    expect(screen.getByText('방송 중 채팅')).toBeInTheDocument();
-    expect(screen.queryByText(/^최근 \d+분 채팅$/)).toBeNull();
+    expect(screen.getByText(/^방송 중 채팅 [\d,]+개$/)).toBeInTheDocument();
+    expect(screen.queryByText(/^최근 \d+분 채팅/)).toBeNull();
   });
 
   it('시작 시각을 모르는 지난 방송은 그래프·채팅·시청자 기록을 같은 창(끝 12시간)으로 읽는다', async () => {
     // 그래프만 지금 기준 최근 10분을 읽으면 끝난 지 한참 된 방송은 늘 비고, 시청자 기록과 다른 창이라 최고·평균은 있는데
     // 선이 없다. 채팅은 아예 읽지 않았다(리뷰 4라운드)
     server.vodStartUnknown = true;
+    // 그래프 폭을 줘야 그래프가 선다 — 폭 0이면 「지금」이 없다는 단언이 늘 참이다(PR #316 리뷰 2라운드)
+    graphWidth();
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
     await renderLive();
 
+    expect(screen.getByRole('group', { name: /^방송 타임라인/ })).toBeInTheDocument();
     expect(screen.queryByText('지금')).toBeNull();
-    expect(screen.getByText('마지막 120분 채팅')).toBeInTheDocument();
+    expect(screen.getByText(/^마지막 120분 채팅 [\d,]+개$/)).toBeInTheDocument();
     // 채팅도 읽는다(전에는 아예 읽지 않았다). 시작 시각을 모르니 하한(녹화를 찾는 끝 12시간에서 보정 여유 60초 앞, ADR-092)보다
     // 앞은 읽지 않는다
     const froms = chatFroms();
@@ -2933,8 +3592,10 @@ describe('LiveScreen — 지난 방송 상세', () => {
   });
 
   it('지난 방송은 라이브 문구를 쓰지 않는다: 채팅 기록·방송 통계, 감지 중 안내 없음, 그래프 끝은 끝난 시각', async () => {
+    graphWidth();
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
     await renderLive();
+    expect(screen.getByRole('group', { name: /^방송 타임라인/ })).toBeInTheDocument();
 
     expect(screen.getByRole('complementary', { name: '채팅 기록' })).toBeInTheDocument();
     expect(screen.queryByRole('complementary', { name: '실시간 채팅' })).toBeNull();
@@ -3101,7 +3762,7 @@ describe('LiveScreen: 값이 없을 때의 말(리뷰 5라운드)', () => {
     expect(screen.getByText('방송 정보 확인 중')).toBeInTheDocument();
     expect(screen.getAllByText('시청자 수 확인 중').length).toBeGreaterThan(0);
     expect(screen.queryByText(/수집 전/)).toBeNull();
-    expect(screen.getByText('최고 시청자').nextElementSibling).toHaveTextContent('확인 중');
+    expect(statValue('시청자')).toHaveTextContent('확인 중');
   });
 
   it('라이브 주소로 연 방송도 명부 답 전에는 「수집 전」이라 하지 않는다: 라이브인지 아직 모른다', async () => {
@@ -3264,10 +3925,10 @@ describe('LiveScreen: 라이브 되감기 채팅(POK-326)', () => {
     // 지금 62초 전(방송 4981초)
     expect(within(chatPanel()).getByText('라이브 4975초')).toBeInTheDocument();
     expect(within(chatPanel()).queryByText('라이브 4985초')).toBeNull();
-    // 앞 줄은 라이브 차트(최근 10분)로 그 앞 300줄이 차는 칸(지금 480초 전, 방송 4563초)부터 읽는다: 60초 앞부터만 읽으면
-    // 채팅이 뜸한 방송은 되감는 순간 300줄이 몇 줄로 줄었다
-    expect(within(chatPanel()).getByText('라이브 4565초')).toBeInTheDocument();
-    expect(within(chatPanel()).queryByText('라이브 4555초')).toBeNull();
+    // 앞 줄은 라이브 차트(방송 처음부터, 방송 시작에 맞춘 30초 칸)로 그 앞 300줄이 차는 칸(방송 4620초)부터 읽는다: 60초 앞부터만
+    // 읽으면 채팅이 뜸한 방송은 되감는 순간 300줄이 몇 줄로 줄었다. 시험 차트(지금 기준 30초 칸)는 3초 앞 칸에 얹힌다
+    expect(within(chatPanel()).getByText('라이브 4625초')).toBeInTheDocument();
+    expect(within(chatPanel()).queryByText('라이브 4615초')).toBeNull();
 
     await playFor(container, 20);
     expect(within(chatPanel()).getByText('라이브 4995초')).toBeInTheDocument();

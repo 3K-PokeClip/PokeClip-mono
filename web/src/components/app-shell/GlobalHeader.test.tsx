@@ -92,7 +92,7 @@ describe('GlobalHeader', () => {
     expect(await screen.findByRole('dialog', { name: '계정 전환' })).toBeInTheDocument();
   });
 
-  it('남의 채널에 있으면 아바타 옆에 「편집자」 칩이 붙고 그 채널 글자 아바타다', async () => {
+  it('남의 채널에 있으면 그 채널 글자 아바타다: 칩은 없고 역할은 버튼 이름에만', async () => {
     window.localStorage.setItem('pc-channel', JSON.stringify({ '1': 3 }));
     stubFetch((url) => {
       if (url === '/api/auth/me') return jsonResponse(200, ME);
@@ -104,7 +104,8 @@ describe('GlobalHeader', () => {
     });
     renderWithProviders(<GlobalHeader />);
 
-    expect(await screen.findByText('편집자')).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: '계정 메뉴 · 편집자' })).toBeInTheDocument();
+    expect(screen.queryByText('편집자')).not.toBeInTheDocument();
     expect(screen.getByText('별하')).toBeInTheDocument();
   });
 
@@ -113,6 +114,7 @@ describe('GlobalHeader', () => {
     renderWithProviders(<GlobalHeader />);
     await screen.findByText('게임');
 
+    expect(screen.getByRole('button', { name: '계정 메뉴' })).toBeInTheDocument();
     expect(screen.queryByText('편집자')).not.toBeInTheDocument();
   });
 

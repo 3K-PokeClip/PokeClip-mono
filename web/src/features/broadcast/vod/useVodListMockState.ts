@@ -6,6 +6,7 @@ import {
   fetchAllJumpCards,
   mediaStreamId,
 } from '@/api/clipEditor';
+import { ensurePlaybackAccessForList } from '@/api/playbackAccess';
 
 /** 지난 방송 목록을 다시 읽는 간격 — 끝난 방송이라 자주 볼 까닭이 없다 */
 const LIST_POLL_MS = 60_000;
@@ -198,11 +199,13 @@ export function useVodListMockState(options: VodListOptions = {}): VodListMockSt
   useEffect(() => {
     if (options.broadcasts) return;
     let stopped = false;
+    // 내려가면(채널 전환 등) 넘기던 쪽·카드 읽기를 끊는다: 이어 가면 채널 전환 화면이 옛 채널 요청까지 기다린다(PR #342 2차 리뷰)
+    const abort = new AbortController();
     const load = async () => {
       try {
         // 목록을 끝까지 넘긴다 — 한 쪽만 읽으면 51번째부터 조용히 사라진다(POK-251 리뷰).
         // 실패하면 바깥 catch가 받아 지금 목록을 그대로 두고 다음 주기에 다시 한다
-        const all: WireBroadcast[] = await fetchAllBroadcasts('past', streamerId);
+        const all: WireBroadcast[] = await fetchAllBroadcasts('past', streamerId, abort.signal);
         if (stopped) return;
         // 방송마다 카드 수·녹화 여부는 재서 기억한다. 카드 수는 낡으면(countStale) 다시 센다
         const cache = rowCache.current;
@@ -241,10 +244,17 @@ export function useVodListMockState(options: VodListOptions = {}): VodListMockSt
         // 한 번만 묻는다. 방송마다 물으면 방송이 쌓인 계정은 같은 큰 요청을 주기마다 여러 번 보낸다(PR #208 codex)
         // 묻지 못했으면(오류·시한) null이다: 「녹화 없음」과 가른다(리뷰 1라운드)
         const spansByKey = new Map<string, ReturnType<typeof lookupRecordingSpans>>();
+        // CDN 뒤 녹화 목록은 출입증 쿠키가 있어야 열린다(POK-317). 한 탭에 든 키는 12개까지라 차례가 안 온 키는 쿠키 없이 묻고
+        // 다음 주기에 다시 온다
+        const access = ensurePlaybackAccessForList(
+          all
+            .filter(checkRecording)
+            .map((b) => ({ streamId: b.streamId, mediaKey: mediaStreamId(b) })),
+        );
         const spansOf = (key: string) => {
           let found = spansByKey.get(key);
           if (found === undefined) {
-            found = lookupRecordingSpans(key);
+            found = Promise.resolve(access.get(key)).then(() => lookupRecordingSpans(key));
             spansByKey.set(key, found);
           }
           return found;
@@ -258,7 +268,7 @@ export function useVodListMockState(options: VodListOptions = {}): VodListMockSt
               const [fetched, spans] = await Promise.all([
                 known !== undefined && !recount
                   ? Promise.resolve(known.cardCount)
-                  : fetchAllJumpCards(b.streamId).then(
+                  : fetchAllJumpCards(b.streamId, abort.signal).then(
                       (cards) => cards.length,
                       () => null,
                     ),
@@ -328,6 +338,7 @@ export function useVodListMockState(options: VodListOptions = {}): VodListMockSt
     const t = window.setInterval(load, LIST_POLL_MS);
     return () => {
       stopped = true;
+      abort.abort();
       window.clearInterval(t);
     };
   }, [options.broadcasts, streamerId]);

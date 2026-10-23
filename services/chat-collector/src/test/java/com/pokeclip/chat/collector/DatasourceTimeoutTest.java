@@ -1,7 +1,7 @@
 package com.pokeclip.chat.collector;
 
 import com.pokeclip.chat.collector.support.IntegrationTestSupport;
-import com.pokeclip.chat.collector.support.StallingTcpProxy;
+import com.pokeclip.db.support.StallingTcpProxy;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.builder.SpringApplicationBuilder;

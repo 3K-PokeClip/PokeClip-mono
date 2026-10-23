@@ -1,5 +1,7 @@
 package com.pokeclip.chat.collector.session;
 
+import com.pokeclip.chat.collector.Platform;
+
 import com.pokeclip.chat.collector.ChzzkProperties;
 import com.pokeclip.chat.collector.archive.ChatArchive;
 import com.pokeclip.chat.collector.fake.FakeChzzkBehavior;
@@ -488,7 +490,7 @@ class SessionShutdownTest extends IntegrationTestSupport {
 
     private static SessionKey keyStartedAt(String streamId, long streamerId, String channelId,
                                            Instant startedAt) {
-        return new SessionKey(streamId, streamerId, channelId, startedAt);
+        return new SessionKey(Platform.CHZZK, streamId, streamerId, channelId, startedAt);
     }
 
     private static final java.util.concurrent.atomic.AtomicLong KEY_SEQ =

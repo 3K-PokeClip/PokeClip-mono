@@ -8,7 +8,6 @@ import { EmptyState, useToast } from '@/ui';
 import {
   ClipApiError,
   createRecipe,
-  ensurePlaybackAccess,
   fetchBroadcast,
   fetchClip,
   fetchJumpCard,
@@ -28,6 +27,7 @@ import {
   type UploadInfo,
   type UploadRequestSummary,
 } from '@/api/clipEditor';
+import { ensurePlaybackAccess, isPlaybackExpired } from '@/api/playbackAccess';
 import { EditorHeader } from '../EditorHeader';
 import { PreviewCanvas } from '../PreviewCanvas';
 import { TransportBar } from '../TransportBar';
@@ -59,14 +59,26 @@ import {
   type RecordingTimeline,
 } from '@/features/player/recordingTimeline';
 import { useEditorVideoPlayback } from '../useEditorVideoPlayback';
-import { lookFromDocument, outputsFor, sameRecipe, subtitlesFor } from '../recipeLook';
+import {
+  lookFromDocument,
+  outputFromLook,
+  outputsFor,
+  sameRecipe,
+  subtitlesFor,
+} from '../recipeLook';
 import {
   emptyUploadDraft,
   UploadInfoDialog,
   type UploadDraft,
   type UploadFieldErrors,
 } from '../UploadInfoDialog';
-import { defaultSceneOffsetMs, sceneOffsetFromPlayhead } from '../uploadInfo';
+import {
+  defaultSceneOffsetMs,
+  sceneOffsetFromPlayhead,
+  scheduleInstant,
+  scheduleOf,
+} from '../uploadInfo';
+import type { SceneFrameSource } from '../useSceneFrames';
 import { clipLabel, clipSettled } from './clipProgress';
 
 // 시안 1d-a 클립 편집기(스튜디오형). 전폭 자체 헤더를 가지므로 ScreenContainer를 쓰지 않는다
@@ -260,6 +272,8 @@ async function loadRecording(broadcast: BroadcastRow): Promise<RecordingTimeline
   // 못 받았는데 녹화를 물으면 CDN 403이 「녹화 없음」으로 접혀 미리보기 없이 열리고 다시 묻지 않는다(PR #320 codex)
   if (access?.kind === 'failed')
     throw new Error('영상 출입증을 받지 못했어요. 잠시 뒤 다시 열어 주세요');
+  if (access?.kind === 'expired' || isPlaybackExpired(broadcast.streamId))
+    throw new Error('보관 기간(60일)이 지나 이 방송의 영상을 볼 수 없어요');
   return recordingTimeline(
     // 녹화 재생 서버의 경로는 영상 키다(POK-233) — 방송 번호가 회차 번호면 그 이름의 녹화가 없다
     await fetchRecordingSpans(mediaStreamId(broadcast)),
@@ -298,6 +312,8 @@ type Status =
 
 function messageOf(e: unknown): string {
   if (e instanceof ClipApiError) {
+    if (e.status === 410 && e.code === 'vod_expired')
+      return '보관 기간(60일)이 지나 이 방송으로는 새 영상을 만들 수 없어요';
     if (e.status === 409 && e.code === 'source_not_ready')
       return '영상 조각이 아직 다 안 올라왔어요 — 잠시 뒤 다시';
     if (e.status === 503 && e.code === 'render_unavailable')
@@ -320,7 +336,10 @@ const UPLOAD_FIELD_MESSAGE: Required<UploadFieldErrors> = {
   title: '유튜브 제목을 확인해 주세요.',
   description: '설명을 확인해 주세요.',
   tags: '태그를 확인해 주세요.',
+  categoryId: '카테고리를 확인해 주세요.',
   privacyStatus: '공개 범위를 확인해 주세요.',
+  // clip은 「지금보다 뒤」만 본다. 창에서 고른 뒤 오래 두면 그 시각이 지나 걸린다
+  publishAt: '예약 시각이 지났어요. 다시 골라 주세요.',
   thumbnail: '썸네일을 확인해 주세요.',
 };
 
@@ -337,13 +356,21 @@ function uploadFieldErrorOf(e: unknown): UploadFieldErrors | null {
     : null;
 }
 
-/** 창의 값 → 렌더 주문의 업로드 정보. 장면 시각은 완성 영상 안으로 자른다 */
+/**
+ * 창의 값 → 렌더 주문의 업로드 정보. 장면 시각은 완성 영상 안으로 자른다. 예약이면 비공개 + 그 시각(유튜브는 비공개 영상에만
+ * 예약을 받는다, POK-381). 창이 보내기 전에 시각을 검사하므로 여기서 날짜가 틀릴 일은 없다
+ */
 function uploadInfoOf(draft: UploadDraft, cutLengthMs: number): UploadInfo {
+  const publishAt = draft.scheduled
+    ? scheduleInstant(draft.scheduleDate, draft.scheduleTime)
+    : null;
   return {
     title: draft.title.trim(),
     description: draft.description,
     tags: draft.tags,
-    privacyStatus: draft.privacyStatus,
+    categoryId: draft.categoryId,
+    privacyStatus: publishAt !== null ? 'private' : draft.privacyStatus,
+    ...(publishAt !== null ? { publishAt: publishAt.toISOString() } : {}),
     madeForKids: draft.madeForKids,
     thumbnail:
       draft.thumbnailSource === 'scene'
@@ -353,6 +380,25 @@ function uploadInfoOf(draft: UploadDraft, cutLengthMs: number): UploadInfo {
           }
         : { source: draft.thumbnailSource },
   };
+}
+
+/**
+ * 같은 판에 남은 업로드 의도 → 창의 처음 값(새로 고친 뒤 다시 열 때). 카테고리·예약도 되살린다: 빠지면 게임·「비공개」로 열려
+ * 그대로 다시 누르면 같은 판의 예약이 지워진다(PR #301 리뷰). 지난 예약 시각도 그대로 둔다 — 창이 보낼 때 다시 고르게 한다
+ */
+function draftFromSummary(summary: UploadRequestSummary, sceneOffsetMs: number): UploadDraft {
+  const base = emptyUploadDraft(sceneOffsetMs);
+  const draft: UploadDraft = {
+    ...base,
+    title: summary.title,
+    categoryId: summary.categoryId ?? base.categoryId,
+    privacyStatus: summary.privacyStatus,
+    thumbnailSource: summary.thumbnailSource,
+  };
+  const at = summary.publishAt != null ? new Date(summary.publishAt) : null;
+  if (at === null || Number.isNaN(at.getTime())) return draft;
+  const { date, time } = scheduleOf(at);
+  return { ...draft, scheduled: true, scheduleDate: date, scheduleTime: time };
 }
 
 async function loadFromCard(streamId: string, cardId: string): Promise<Status> {
@@ -522,6 +568,10 @@ interface PendingUpload {
   cutLengthMs: number;
   initial: UploadDraft;
   playheadOffsetMs: number | null;
+  /** 카드 시각(하이라이트)을 완성 영상 시각으로. 카드 없이 연 편집본이거나 영상 밖이면 null */
+  highlightOffsetMs: number | null;
+  /** 장면 그림을 뽑을 재료(편집기가 받아 둔 녹화 조각). 녹화가 없거나 아직 못 받았으면 null */
+  frameSource: SceneFrameSource | null;
 }
 
 function WiredStudio({
@@ -693,6 +743,9 @@ function WiredStudio({
   // 바뀌므로 ref로 읽는다(동작 콜백이 매 프레임 새로 만들어지지 않게)
   const playheadRef = useRef<number | null>(null);
   playheadRef.current = recording ? video.playback.currentSeconds : null;
+  // 받아 둔 녹화 조각과 그 시작 초. 창을 여는 순간에 읽는다(장면 그림 재료)
+  const videoRef = useRef({ src: video.src, windowStartSeconds: video.windowStartSeconds });
+  videoRef.current = { src: video.src, windowStartSeconds: video.windowStartSeconds };
 
   /** 「영상 만들기」 = 업로드 정보 창을 연다. 연 순간의 화면이 주문할 모양이다(창이 떠 있는 동안 편집기는 안 바뀐다) */
   const openUploadDialog = useCallback(
@@ -703,7 +756,26 @@ function WiredStudio({
       const cut = documentFor(recipe).cut!;
       const cutLengthMs = cut.outAtMs - cut.inAtMs;
       const rangeStart = recipe.range.startSeconds;
-      const scene = defaultSceneOffsetMs(playheadSeconds, rangeStart, cutLengthMs);
+      // 카드 시각은 기준점 축의 ms, 구간 시작은 같은 축의 초다(POK-255)
+      const highlightRaw = card ? Math.round(card.streamTimestampMs - rangeStart * 1000) : null;
+      const highlightOffsetMs =
+        highlightRaw !== null && highlightRaw >= 0 && highlightRaw < cutLengthMs
+          ? highlightRaw
+          : null;
+      // 처음 고른 장면은 추천 첫 장면(하이라이트). 모르면 재생 위치나 가운데(POK-381)
+      const scene =
+        highlightOffsetMs ?? defaultSceneOffsetMs(playheadSeconds, rangeStart, cutLengthMs);
+      // 창이 떠 있는 동안 편집기는 안 바뀌므로 조각·모양을 연 순간 값으로 쥔다
+      const loaded = videoRef.current;
+      const frameSource: SceneFrameSource | null =
+        recording && loaded.src !== ''
+          ? {
+              src: loaded.src,
+              videoSecondsAt: (offsetMs) =>
+                rangeStart + offsetMs / 1000 - loaded.windowStartSeconds,
+              output: outputFromLook(recipe),
+            }
+          : null;
       const remembered = lastDraft.current;
       const stored =
         current.uploadRequest !== null && current.uploadRequest.version === current.version
@@ -712,12 +784,7 @@ function WiredStudio({
       const initial: UploadDraft = remembered
         ? { ...remembered, sceneOffsetMs: Math.min(cutLengthMs - 1, remembered.sceneOffsetMs) }
         : stored
-          ? {
-              ...emptyUploadDraft(scene),
-              title: stored.title,
-              privacyStatus: stored.privacyStatus,
-              thumbnailSource: stored.thumbnailSource,
-            }
+          ? draftFromSummary(stored, scene)
           : emptyUploadDraft(scene);
       setUploadErrors({});
       setPending({
@@ -725,9 +792,11 @@ function WiredStudio({
         cutLengthMs,
         initial,
         playheadOffsetMs: sceneOffsetFromPlayhead(playheadSeconds, rangeStart, cutLengthMs),
+        highlightOffsetMs,
+        frameSource,
       });
     },
-    [documentFor],
+    [documentFor, card, recording],
   );
 
   /**
@@ -781,9 +850,11 @@ function WiredStudio({
           setPending(null);
           // 서버가 주문을 받은 뒤에 센다 — 거절된 제출은 세지 않아 DB 숫자와 맞는다. 제목·설명·태그는 싣지 않는다 (POK-357)
           track('video_render_requested', {
-            privacy_status: draft.privacyStatus,
+            privacy_status: upload.privacyStatus,
             thumbnail_source: draft.thumbnailSource,
             made_for_kids: draft.madeForKids,
+            category_id: upload.categoryId,
+            scheduled: upload.publishAt !== undefined,
           });
           // 200은 새 주문이 아니다: 같은 판이 만드는 중이면 끝난 뒤 이 정보로, 이미 만들어져 있으면 지금 올린다
           toast({
@@ -923,6 +994,8 @@ function WiredStudio({
           initial={pending.initial}
           cutLengthMs={pending.cutLengthMs}
           playheadOffsetMs={pending.playheadOffsetMs}
+          highlightOffsetMs={pending.highlightOffsetMs}
+          frameSource={pending.frameSource}
           serverErrors={uploadErrors}
           onCancel={() => setPending(null)}
           onSubmit={submitUpload}

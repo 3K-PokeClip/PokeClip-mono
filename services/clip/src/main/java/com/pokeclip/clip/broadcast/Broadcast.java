@@ -45,6 +45,20 @@ public class Broadcast {
     @Column(name = "ingest_stream_id", length = 128)
     private String ingestStreamId;
 
+    /**
+     * 플랫폼 코드(POK-398, {@link Platform}). 생명주기 편지 처리기는 줄이 생길 때 한 번 정하고 바꾸지 않는다. 방송 도중 플랫폼이
+     * 바뀔 일은 없으니 다른 값이 오면 발행 쪽 결함이고, 첫 값을 지킨다.
+     *
+     * <p>물리 키({@link #fillIngestStreamId})와 규칙이 다르다. 물리 키는 빈 칸을 뒤 편지가 채우지만 플랫폼에는 빈 칸이 없다:
+     * 칸을 안 실은 편지로 만든 줄은 {@code CHZZK}로 굳고, 뒤 편지가 {@code SOOP}을 실어도 안 바뀐다. 그래서 SOOP 방송은
+     * 시작·종료 등 모든 생명주기 편지에 이 칸을 실어야 한다(종료가 먼저 와 자리표시를 만들면 그 값으로 굳는다).
+     *
+     * <p>첫 값을 지키는 것은 <b>생명주기 편지 처리기만의 규칙</b>이다. 수집기가 SOOP 방송을 확인하고 플랫폼을 적는 clip 내부 창구
+     * (POK-397 PR3에서 만든다)는 이미 있는 줄의 값(기본값 {@code CHZZK} 포함)을 덮어쓸 수 있다.
+     */
+    @Column(name = "platform", nullable = false, length = 16)
+    private String platform;
+
     @Convert(converter = BroadcastStatusConverter.class)
     @Column(name = "status", nullable = false, length = 16)
     private BroadcastStatus status;
@@ -80,11 +94,12 @@ public class Broadcast {
     protected Broadcast() {
     }
 
-    private Broadcast(String streamId, String streamerId, String ingestStreamId, BroadcastStatus status,
+    private Broadcast(String streamId, String streamerId, String ingestStreamId, String platform, BroadcastStatus status,
                       Instant startedAt, Instant endedAt, String trackManifest, long lastSequence) {
         this.streamId = streamId;
         this.streamerId = streamerId;
         this.ingestStreamId = blankToNull(ingestStreamId);
+        this.platform = platform;
         this.status = status;
         this.startedAt = startedAt;
         this.endedAt = endedAt;
@@ -93,16 +108,29 @@ public class Broadcast {
         this.updatedAt = Instant.now();
     }
 
+    /** 치지직 방송. 플랫폼을 안 정하는 자리(시험·옛 호출부)가 쓴다. 편지 처리는 플랫폼을 받는 쪽을 부른다. */
     public static Broadcast startedNow(String streamId, String streamerId, String ingestStreamId, long sequence,
                                        Instant startedAt, String trackManifest) {
-        return new Broadcast(streamId, streamerId, ingestStreamId, BroadcastStatus.LIVE,
+        return startedNow(streamId, streamerId, ingestStreamId, sequence, startedAt, trackManifest, Platform.DEFAULT);
+    }
+
+    /** @param platform 형식을 이미 본 값({@link Platform}). 여기서는 다시 안 본다 */
+    public static Broadcast startedNow(String streamId, String streamerId, String ingestStreamId, long sequence,
+                                       Instant startedAt, String trackManifest, String platform) {
+        return new Broadcast(streamId, streamerId, ingestStreamId, platform, BroadcastStatus.LIVE,
                 startedAt, null, trackManifest, sequence);
     }
 
-    /** ADR-016의 ended placeholder — 시작을 못 본 채 끝을 먼저 받은 줄. */
+    /** 치지직 방송의 자리표시. 플랫폼을 받는 쪽과 쌍둥이다. */
     public static Broadcast endedPlaceholder(String streamId, String streamerId, String ingestStreamId,
                                              long sequence, Instant endedAt) {
-        Broadcast placeholder = new Broadcast(streamId, streamerId, ingestStreamId, BroadcastStatus.ENDED,
+        return endedPlaceholder(streamId, streamerId, ingestStreamId, sequence, endedAt, Platform.DEFAULT);
+    }
+
+    /** ADR-016의 ended placeholder(시작을 못 본 채 끝을 먼저 받은 줄). 플랫폼은 종료 편지의 값이다. */
+    public static Broadcast endedPlaceholder(String streamId, String streamerId, String ingestStreamId,
+                                             long sequence, Instant endedAt, String platform) {
+        Broadcast placeholder = new Broadcast(streamId, streamerId, ingestStreamId, platform, BroadcastStatus.ENDED,
                 null, endedAt, null, sequence);
         // 생성자에 칸을 더하지 않고 여기서 채운다 — startedNow는 endedAt이 null이라
         // 같은 식을 태울 수 없고, 생성자에 기한을 받는 칸을 열면 두 팩토리가 서로
@@ -225,6 +253,10 @@ public class Broadcast {
 
     private static String blankToNull(String value) {
         return value == null || value.isBlank() ? null : value;
+    }
+
+    public String getPlatform() {
+        return platform;
     }
 
     public BroadcastStatus getStatus() {

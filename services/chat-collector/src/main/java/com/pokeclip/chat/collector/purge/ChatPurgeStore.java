@@ -1,5 +1,7 @@
 package com.pokeclip.chat.collector.purge;
 
+import com.pokeclip.chat.collector.Platform;
+
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
@@ -10,6 +12,11 @@ import java.util.List;
 /**
  * 탈퇴 채널 명부와 지우기 SQL(POK-256). 지우기는 전부 {@code id IN (… LIMIT ?)} 묶음이다: 채팅 표는 방송 하나에
  * 수십만 줄이라 DELETE 하나로 지우면 그 사이 적재가 표 잠금에 밀리고 바구니가 차 라이브 채팅이 버려진다.
+ *
+ * <p>🔴 채널로 찾는 자리는 <b>전부 (플랫폼, 채널)</b>이다(POK-397). 채널 아이디는 플랫폼마다 따로 매겨서 치지직과 SOOP에 같은
+ * 아이디가 있을 수 있고, 한 자리라도 플랫폼을 빼면 한쪽 탈퇴가 다른 쪽 줄을 지운다. 그 자리는 명부 넷(적기·고르기·닫기)과 지우기
+ * 둘(표 셋 묶음·짝 지우기의 세 갈래)이다. 색인도 플랫폼이 앞이라(V314) 플랫폼을 빼면 색인을 못 타고 표를 다 훑는다
+ * ({@code ChatPurgePlanTest}).
  */
 @Repository
 public class ChatPurgeStore {
@@ -42,37 +49,42 @@ public class ChatPurgeStore {
      * <p>같은 탈퇴가 다시 와도(응답을 못 받은 발송기의 재시도) 첫 줄을 그대로 둔다. 끝난 줄에 <b>그 뒤 시각</b>의 알림이 오면
      * 새 탈퇴(같은 채널을 연동했던 다른 계정)라 다시 연다.
      */
-    public void request(String channelId, Instant since) {
+    public void request(Platform platform, String channelId, Instant since) {
         jdbc.update("""
-                INSERT INTO purged_channels (channel_id, requested_at) VALUES (?, ?)
-                ON CONFLICT (channel_id) DO UPDATE SET requested_at = EXCLUDED.requested_at, completed_at = NULL
+                INSERT INTO purged_channels (platform, channel_id, requested_at) VALUES (?, ?, ?)
+                ON CONFLICT (platform, channel_id) DO UPDATE SET requested_at = EXCLUDED.requested_at, completed_at = NULL
                  WHERE purged_channels.completed_at IS NOT NULL
                    AND EXCLUDED.requested_at > purged_channels.completed_at""",
-                channelId, Timestamp.from(since));
+                platform.name(), channelId, Timestamp.from(since));
     }
 
-    public record Due(String channelId, Instant requestedAt) {
+    public record Due(Platform platform, String channelId, Instant requestedAt) {
     }
 
     public List<Due> due(int limit) {
-        return jdbc.query("SELECT channel_id, requested_at FROM purged_channels WHERE completed_at IS NULL "
+        return jdbc.query("SELECT platform, channel_id, requested_at FROM purged_channels WHERE completed_at IS NULL "
                         + "ORDER BY requested_at LIMIT ?",
-                (rs, n) -> new Due(rs.getString(1), rs.getTimestamp(2).toInstant()), limit);
+                (rs, n) -> new Due(Platform.valueOf(rs.getString(1)), rs.getString(2), rs.getTimestamp(3).toInstant()),
+                limit);
     }
 
     /**
      * 이 채널 방송들의 「방송 번호 → 물리 키(스트림키)」 짝을 지운다(PR #220 codex P2). 그 표에는 채널 칸이 없어
      * 채팅·후원·방송 정보에 남은 방송 번호로 찾는다. 그래서 그 줄들을 지우기 <b>전에</b> 부른다.
      */
-    public int deleteIngestKeysOfChannel(String channelId, Instant before) {
+    public int deleteIngestKeysOfChannel(Platform platform, String channelId, Instant before) {
         Timestamp at = Timestamp.from(before);
-        return jdbc.update("""
-                DELETE FROM chat_ingest_keys WHERE stream_id IN (
-                    SELECT stream_id FROM chat_messages WHERE channel_id = ? AND received_at < ? AND stream_id IS NOT NULL
-                    UNION SELECT stream_id FROM chat_donations WHERE channel_id = ? AND received_at < ?
-                    UNION SELECT stream_id FROM broadcast_info WHERE channel_id = ? AND observed_at < ?)""",
-                channelId, at, channelId, at, channelId, at);
+        String p = platform.name();
+        return jdbc.update(INGEST_KEYS_OF_CHANNEL, p, channelId, at, p, channelId, at, p, channelId, at);
     }
+
+    /** 세 갈래 모두 플랫폼을 본다. 하나라도 빼면 그 갈래가 같은 아이디 다른 플랫폼 방송의 짝을 지운다(계획 검증 F2-5). */
+    static final String INGEST_KEYS_OF_CHANNEL = """
+            DELETE FROM chat_ingest_keys WHERE stream_id IN (
+                SELECT stream_id FROM chat_messages
+                 WHERE platform = ? AND channel_id = ? AND received_at < ? AND stream_id IS NOT NULL
+                UNION SELECT stream_id FROM chat_donations WHERE platform = ? AND channel_id = ? AND received_at < ?
+                UNION SELECT stream_id FROM broadcast_info WHERE platform = ? AND channel_id = ? AND observed_at < ?)""";
 
     /** 만든 지 기한이 지난 「방송 번호 → 물리 키」 짝. 방송 하나에 한 줄이라 묶음으로 자르지 않는다. */
     public int deleteExpiredIngestKeys(Instant cutoff) {
@@ -80,10 +92,13 @@ public class ChatPurgeStore {
     }
 
     /** 이 채널에서 {@code before} 전에 받은 줄을 한 묶음 지운다. 지운 수가 {@code limit}보다 작으면 다 지운 것이다. */
-    public int deleteChannelBatch(Table table, String channelId, Instant before, int limit) {
-        return jdbc.update("DELETE FROM " + table.name + " WHERE id IN (SELECT id FROM " + table.name
-                        + " WHERE channel_id = ? AND " + table.timeColumn + " < ? LIMIT ?)",
-                channelId, Timestamp.from(before), limit);
+    public int deleteChannelBatch(Table table, Platform platform, String channelId, Instant before, int limit) {
+        return jdbc.update(channelBatchSql(table), platform.name(), channelId, Timestamp.from(before), limit);
+    }
+
+    static String channelBatchSql(Table table) {
+        return "DELETE FROM " + table.name + " WHERE id IN (SELECT id FROM " + table.name
+                + " WHERE platform = ? AND channel_id = ? AND " + table.timeColumn + " < ? LIMIT ?)";
     }
 
     /**
@@ -106,8 +121,9 @@ public class ChatPurgeStore {
                 + " AS at FROM " + table.name + " ORDER BY id LIMIT ?) head WHERE head.at < ?)", limit, Timestamp.from(cutoff));
     }
 
-    public void complete(String channelId, Instant now) {
-        jdbc.update("UPDATE purged_channels SET completed_at = ? WHERE channel_id = ? AND completed_at IS NULL",
-                Timestamp.from(now), channelId);
+    public void complete(Platform platform, String channelId, Instant now) {
+        jdbc.update("UPDATE purged_channels SET completed_at = ? WHERE platform = ? AND channel_id = ? "
+                        + "AND completed_at IS NULL",
+                Timestamp.from(now), platform.name(), channelId);
     }
 }

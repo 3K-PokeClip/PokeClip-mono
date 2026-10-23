@@ -1,8 +1,12 @@
 'use client';
 
+import { trackApiActivity } from './client';
+
 // 녹화 재생 서버(MediaMTX playback, 로컬 시험용 9996) — 끝난 방송 다시보기와 편집기 미리보기가 쓴다.
-//   GET {base}/list?path=<방송>                                   녹화된 구간들(시작 시각·길이)
-//   GET {base}/get?path=<방송>&start=<RFC3339>&duration=<초>&format=mp4   그 구간의 영상 한 덩어리
+//   GET {base}/playback/<키>/list                                       녹화된 구간들(시작 시각·길이)
+//   GET {base}/playback/<키>/get?start=<RFC3339>&duration=<초>&format=mp4   그 구간의 영상 한 덩어리
+// 🔴 주소는 출입증 쿠키 경로(/playback/<키>) 아래다(POK-317). 재생 서버의 path 쿼리는 싣지 않는다: 쿠키 정책은 쿼리를 못 막아
+//    엣지(로컬은 app/media/playback 라우트)가 경로의 키로 path를 채운다(들어온 path는 버린다).
 // 방송 중에도 된다(이미 닫힌 4초 조각까지). 서버 주소는 env에만 둔다(하드코딩 금지 규칙).
 // 🔴 카드·조각의 위치(ms)는 「방송 시작 편지 시각」이 아니라 **녹화 첫 조각** 기준이다(조각 장부의 pts 축).
 //    그래서 절대 시각으로 옮길 때의 기준점은 여기 list의 첫 구간 start다.
@@ -37,6 +41,17 @@ export function markPlaybackCookiesIssued(): void {
   playbackCookiesIssued = true;
 }
 
+/**
+ * 녹화 목록이 403이면 부를 곳(PR #332 codex). 그 키의 쿠키가 브라우저에 없다는 뜻이다(만료 · 다른 탭이 쿠키 한도를 넘겨 지워짐 ·
+ * 사용자가 지움). 출입증을 들고 있는 쪽(clipEditor)이 그 키를 버려 다음에 다시 받는다. 출입증 쪽이 이 파일을 불러오므로 거꾸로
+ * 부르지 않고 알림을 건다
+ */
+let forbiddenListener: ((mediaKey: string) => void) | null = null;
+
+export function onPlaybackForbidden(listener: (mediaKey: string) => void): void {
+  forbiddenListener = listener;
+}
+
 /** fetch의 credentials 값. 출입증을 받기 전에는 fetch 기본값(same-origin) 그대로다 */
 export function mediaCredentials(): RequestCredentials {
   return playbackCookiesIssued ? 'include' : 'same-origin';
@@ -60,20 +75,24 @@ export function parseSpanStartMs(iso: string): number {
 export async function lookupRecordingSpans(streamId: string): Promise<RecordingSpan[] | null> {
   if (BASE === '') return null;
   if (!STREAM_ID_RE.test(streamId)) return [];
-  try {
-    const res = await fetch(`${BASE}/list?path=${encodeURIComponent(streamId)}`, {
-      signal: AbortSignal.timeout(LIST_TIMEOUT_MS),
-      credentials: mediaCredentials(),
-    });
-    if (res.status === 400 || res.status === 404) return [];
-    if (!res.ok) return null;
-    const body = (await res.json()) as { start: string; duration: number }[];
-    return body
-      .map((span) => ({ startMs: parseSpanStartMs(span.start), durationSeconds: span.duration }))
-      .filter((span) => Number.isFinite(span.startMs) && span.durationSeconds > 0);
-  } catch {
-    return null;
-  }
+  // apiFetch 밖 요청이라 직접 알린다(본문까지): 지난 방송 목록이 이것을 기다리니 채널 전환 화면도 기다린다(PR #342 2차 리뷰)
+  return trackApiActivity(async () => {
+    try {
+      const res = await fetch(`${playbackRoot(streamId)}/list`, {
+        signal: AbortSignal.timeout(LIST_TIMEOUT_MS),
+        credentials: mediaCredentials(),
+      });
+      if (res.status === 400 || res.status === 404) return [];
+      if (res.status === 403) forbiddenListener?.(streamId);
+      if (!res.ok) return null;
+      const body = (await res.json()) as { start: string; duration: number }[];
+      return body
+        .map((span) => ({ startMs: parseSpanStartMs(span.start), durationSeconds: span.duration }))
+        .filter((span) => Number.isFinite(span.startMs) && span.durationSeconds > 0);
+    } catch {
+      return null;
+    }
+  });
 }
 
 /** 녹화 구간. 재생 서버가 없거나 녹화가 없거나 묻지 못했으면 빈 배열이다(「있음」만 쓰는 목록·편집기) */
@@ -88,10 +107,14 @@ export function recordingClipUrl(
   durationSeconds: number,
 ): string {
   const qs = new URLSearchParams({
-    path: streamId,
     start: new Date(startMs).toISOString(),
     duration: durationSeconds.toFixed(3),
     format: 'mp4',
   });
-  return `${BASE}/get?${qs}`;
+  return `${playbackRoot(streamId)}/get?${qs}`;
+}
+
+/** 출입증 쿠키 경로와 같은 뿌리(POK-317) */
+function playbackRoot(streamId: string): string {
+  return `${BASE}/playback/${encodeURIComponent(streamId)}`;
 }

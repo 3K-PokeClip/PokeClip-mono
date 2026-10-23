@@ -70,7 +70,7 @@ export function ClipDetailPanel({
   const view = detailViewForClip(clip, status);
   const uploadFailure = uploadFailureText(clip);
   const thumbnailFailure = thumbnailFailureText(clip);
-  const privacyNote = privacyNoteText(clip);
+  const privacyNote = privacyNoteText(clip, now);
   const previousUploads = previousUploadsOf(clip.entry);
   const shown = clip.entry ? shownUploadOf(clip.entry) : null;
   const checkingUpload = shown?.status === 'checking' ? shown : null;

@@ -4,7 +4,8 @@ variable "region" {
   default     = "ap-northeast-2"
 }
 
-# janitor 저장소는 janitor 코드가 생길 때 더한다(계획 9-1 I1-4).
+# janitor 는 사이드카 이미지를 쓴다(entrypoint 로 명령을 고름) — 저장소를 따로
+# 두지 않는다.
 variable "repository_keys" {
   description = "ECR 저장소 키 집합. 저장소 이름은 pokeclip-prod/<키>."
   type        = set(string)
@@ -16,6 +17,8 @@ variable "repository_keys" {
     "media-mediamtx",
     "media-sidecar",
     "media-ingest-auth",
+    "media-loopback-sender",
+    "media-host-bundle",
     "render",
     "upload",
     "chat-collector",

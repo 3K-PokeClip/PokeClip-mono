@@ -161,6 +161,7 @@
         "POSTGRES_SSLMODE": "verify-full",
         "POSTGRES_SSLROOTCERT": "/etc/pokeclip/rds-ca/global-bundle.pem",
         "POSTGRES_USER": "media_indexer",
+        "REWIND_PUBLIC_BASE_URL": "https://media.pcbench-edge-proxy.invalid",
         "S3_BUCKET": "pcbench-edge-proxy-rewind",
         "SEGMENT_ROOT": "/recordings",
         "TZ": "UTC"

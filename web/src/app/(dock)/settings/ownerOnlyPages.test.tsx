@@ -34,6 +34,8 @@ beforeEach(() => {
         name: '나',
         profileImageUrl: null,
       });
+    // 안내 문구에 지금 채널 이름을 싣느라 참여 채널 목록은 읽는다(사이드바도 읽는 목록이다). 화면의 창구가 아니다
+    if (url === '/api/editor-delegations/as-editor') return jsonResponse(200, []);
     throw new Error(`막힌 페이지가 창구를 불렀다: ${url}`);
   });
 });
@@ -43,13 +45,14 @@ afterEach(() => {
 });
 
 describe('남의 채널에서 막는 설정 페이지', () => {
-  it.each(PAGES)('%s 페이지는 남의 채널이면 안내만 그린다', (_name, Page) => {
+  it.each(PAGES)('%s 페이지는 남의 채널이면 화면 이름과 안내만 그린다', (name, Page) => {
     renderWithProviders(
       <ChannelRelationContext.Provider value="EDITOR">
         <Page />
       </ChannelRelationContext.Provider>,
     );
 
-    expect(screen.getByText('이 채널에서는 열 수 없어요')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name })).toBeInTheDocument();
+    expect(screen.getByText('채널 주인만 볼 수 있는 화면이에요')).toBeInTheDocument();
   });
 });

@@ -1,6 +1,7 @@
 package com.pokeclip.chat.collector.broadcast;
 
 import com.pokeclip.chat.collector.ChzzkProperties;
+import com.pokeclip.chat.collector.Platform;
 import com.pokeclip.chat.collector.archive.ChatArchive;
 import com.pokeclip.chat.collector.fake.FakeChzzkBehavior;
 import com.pokeclip.chat.collector.fake.FakeChzzkTest;
@@ -65,7 +66,7 @@ class LinkedSessionStarterTest extends IntegrationTestSupport {
     }
 
     @Test
-    void 봉투_없이_방송_번호와_시작_시각만으로_붙일_수_있다() {
+    void 봉투_없이_방송_번호와_시작_시각만으로_붙일_수_있다() throws InterruptedException {
         auth = FakeAuth.start();
         auth.grants(7L, "channel-1", "token-1");
         registry = newRegistry();
@@ -79,6 +80,10 @@ class LinkedSessionStarterTest extends IntegrationTestSupport {
         // 버리고 상수를 넣은 구현도 통과한다.
         assertThat(registry.isStaleStart(7L, 시작.minusSeconds(1))).isTrue();
         assertThat(registry.isStaleStart(7L, 시작.plusSeconds(1))).isFalse();
+        // 치지직 연동으로 붙은 세션이다. 플랫폼이 갈리면 그 방송의 채팅·후원·방송 정보가 남의 플랫폼으로 적힌다.
+        awaitUntil(Duration.ofSeconds(10), () -> !registry.activeSessions().isEmpty());
+        assertThat(registry.activeSessions()).extracting(SessionRegistry.ActiveSession::platform)
+                .containsExactly(Platform.CHZZK);
     }
 
     /**

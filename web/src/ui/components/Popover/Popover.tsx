@@ -32,6 +32,8 @@ interface PopoverContextValue {
   contentId: string;
   side: Side;
   align: Align;
+  anchorRef?: RefObject<HTMLElement | null>;
+  offset?: number;
 }
 const PopoverContext = createContext<PopoverContextValue | null>(null);
 function usePopover(): PopoverContextValue {
@@ -47,6 +49,10 @@ export interface PopoverProps {
   onOpenChange?: (open: boolean) => void;
   side?: Side;
   align?: Align;
+  /** 위치 기준 요소. 없으면 트리거에 붙는다(트리거를 감싼 블록 바깥에 띄울 때 쓴다) */
+  anchorRef?: RefObject<HTMLElement | null>;
+  /** 기준 요소와의 간격(px). 없으면 useFloating 기본값 */
+  offset?: number;
 }
 
 function PopoverRoot({
@@ -56,6 +62,8 @@ function PopoverRoot({
   onOpenChange,
   side = 'bottom',
   align = 'center',
+  anchorRef,
+  offset,
 }: PopoverProps) {
   const [isOpen, setOpen] = useControllableState<boolean>({
     value: open,
@@ -67,7 +75,17 @@ function PopoverRoot({
   const contentId = useId();
   return (
     <PopoverContext.Provider
-      value={{ open: isOpen, setOpen, triggerRef, contentRef, contentId, side, align }}
+      value={{
+        open: isOpen,
+        setOpen,
+        triggerRef,
+        contentRef,
+        contentId,
+        side,
+        align,
+        anchorRef,
+        offset,
+      }}
     >
       {children}
     </PopoverContext.Provider>
@@ -102,9 +120,10 @@ const PopoverContent = forwardRef<HTMLDivElement, PopoverContentProps>(function 
   ref,
 ) {
   const ctx = usePopover();
-  const { coords, update } = useFloating(ctx.triggerRef, ctx.contentRef, {
+  const { coords, update } = useFloating(ctx.anchorRef ?? ctx.triggerRef, ctx.contentRef, {
     side: side ?? ctx.side,
     align: align ?? ctx.align,
+    offset: ctx.offset,
     open: ctx.open,
   });
   const measureRef = useMeasureOnAttach(update);

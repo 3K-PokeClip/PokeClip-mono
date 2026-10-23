@@ -35,8 +35,8 @@ export type FaqKey =
 export interface AnalyticsEvents {
   /** Google 로그인 콜백 성공. 처음 가입인지는 모른다 — 사람별 첫 이벤트로 센다 */
   login_completed: Record<string, never>;
-  platform_linked: { platform: 'chzzk' | 'youtube' };
-  platform_unlinked: { platform: 'chzzk' | 'youtube' };
+  platform_linked: { platform: 'chzzk' | 'youtube' | 'soop' };
+  platform_unlinked: { platform: 'chzzk' | 'youtube' | 'soop' };
   /** 플러그인 페어링 코드 발급(처음·재발급 모두) */
   pairing_code_issued: Record<string, never>;
   /**
@@ -51,6 +51,10 @@ export interface AnalyticsEvents {
     privacy_status: PrivacyStatus;
     thumbnail_source: ThumbnailSource;
     made_for_kids: boolean;
+    /** 유튜브 분류 번호(POK-381) */
+    category_id: string;
+    /** 예약 공개로 주문했나(POK-381). 예약이면 privacy_status는 private다 */
+    scheduled: boolean;
   };
   /** 편집자 초대(기한 연장 재초대 포함) */
   editor_invited: Record<string, never>;

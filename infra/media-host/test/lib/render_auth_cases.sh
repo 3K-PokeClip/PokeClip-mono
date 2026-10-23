@@ -11,7 +11,7 @@
 #   - 다른 파일과의 짝: mediamtx 응답기 모드(모드 일치) · 응답기 이미지의 고정
 #     자리(media/cmd/ingest-auth/main.go) · 시작 스크립트의 기본 경로 · 망 칸
 #     포트 · 계약 시험 compose(compose.ingest-auth.yml).
-#   - 옛 갈래: develop 6c90c935 렌더 골든(test/golden/compose.legacy.*.json).
+#   - 옛 갈래: develop 0d057a32 렌더 골든(test/golden/compose.legacy.*.json).
 #
 # env_file 은 compose 가 구성 JSON 에서 environment 로 풀어 버린다(5.5.0 실측 —
 # --no-normalize 도 그렇다). 그래서 env 정확 집합 · env_file 은 풀지 않은 구성
@@ -23,10 +23,12 @@ readonly AUTH_VARIANTS='b d'
 readonly LEGACY_VARIANTS='a c'
 readonly ENV_TEMPLATE="${MEDIA_HOST_DIR}/ingest-auth.env.tmpl"
 readonly IP_LIMIT_ENV_NAME='ingest-auth.env'
-# 옛 갈래 compose 골든(a · c) — develop 6c90c935 의 템플릿 · 변수로 렌더한
+# 옛 갈래 compose 골든(a · c) — develop 0d057a32 의 템플릿 · 변수로 렌더한
 # compose 를 compose 5.5.0 `config --no-normalize --format json` 으로 받아
 # `jq -S .` 로 정렬한 출력이다. 이 출력은 compose 판에 기대므로 판 고정을
-# 올리면 다시 만든다. 만든 명령 = M15 c4 실험 기록 make-golden.sh.
+# 올리면 다시 만든다. 기준을 6c90c935 에서 옮긴 것은 develop 병합(사이드카
+# REWIND_PUBLIC_BASE_URL 추가) 때문이다. 만든 명령 = M15 병합 실험 기록
+# merge-develop 의 make-golden.sh.
 readonly COMPOSE_GOLDEN_PREFIX="${TEST_DIR}/golden/compose.legacy"
 readonly START_SCRIPT="${MEDIA_HOST_DIR}/bin/start-media.sh"
 RESPONDER_MAIN="$(cd -- "${MEDIA_HOST_DIR}/../.." && pwd)"

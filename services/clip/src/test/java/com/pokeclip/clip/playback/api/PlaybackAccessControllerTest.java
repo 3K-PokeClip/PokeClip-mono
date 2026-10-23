@@ -97,13 +97,14 @@ class PlaybackAccessControllerTest extends IntegrationTestSupport {
         List<String> 자원 = new ArrayList<>();
         본문.get("resources").forEach(n -> 자원.add(n.asString()));
         assertThat(자원).containsExactly(
-                BASE + "/live/" + 내_방송 + "/*", BASE + "/dvr/" + 내_방송 + "/*", BASE + "/vod/" + 내_방송 + "/*");
+                BASE + "/live/" + 내_방송 + "/*", BASE + "/dvr/" + 내_방송 + "/*", BASE + "/vod/" + 내_방송 + "/*",
+                BASE + "/playback/" + 내_방송 + "/*");
         Instant 만료 = Instant.parse(본문.get("expiresAt").asString());
         assertThat(만료).isBetween(부르기_전.plus(TTL).minusSeconds(5), Instant.now().plus(TTL).plusSeconds(5));
 
         Map<String, Map<String, String>> 경로별 = 경로별_쿠키(응답);
         assertThat(경로별.keySet()).as("종류마다 Path가 갈린 셋")
-                .containsExactlyInAnyOrder("/live/" + 내_방송, "/dvr/" + 내_방송, "/vod/" + 내_방송);
+                .containsExactlyInAnyOrder("/live/" + 내_방송, "/dvr/" + 내_방송, "/vod/" + 내_방송, "/playback/" + 내_방송);
         for (Map.Entry<String, Map<String, String>> e : 경로별.entrySet()) {
             Map<String, String> 쿠키 = e.getValue();
             assertThat(쿠키.keySet()).containsExactlyInAnyOrder("CloudFront-Policy", "CloudFront-Signature", "CloudFront-Key-Pair-Id");
@@ -147,6 +148,23 @@ class PlaybackAccessControllerTest extends IntegrationTestSupport {
                 .as("양성 대조 — 옛 범위는 실제로 뚫린다. 이것이 거짓이면 매처가 규칙을 안 옮긴 것이다").isTrue();
     }
 
+    /**
+     * 녹화 재생 길(POK-317)은 경로의 키로만 열려야 한다. 🔴 <b>쿠키 정책은 쿼리를 못 막는다</b>. 내 키 경로에 남의 키를
+     * {@code path} 쿼리로 붙인 요청도 정책에 맞는다(양성 대조). 그래서 엣지(로컬은 웹 라우트)가 들어온 {@code path}를 버리고
+     * 경로의 키로 덮어야 한다. 남의 키 경로는 정책에 안 맞는다.
+     */
+    @Test
+    void 녹화_재생_길은_경로의_키로만_맞고_쿼리의_path는_정책이_못_막는다() throws Exception {
+        볼_수_있다("OWNER");
+        List<String> 자원 = new ArrayList<>();
+        MAPPER.readTree(부른다(내_방송).body()).get("resources").forEach(n -> 자원.add(n.asString()));
+
+        assertThat(자원).as("내 키 경로의 녹화 목록").anyMatch(r -> cloudFrontMatches(r, BASE + "/playback/" + 내_방송 + "/list"));
+        assertThat(자원).as("남의 키 경로").noneMatch(r -> cloudFrontMatches(r, BASE + "/playback/" + 남의_방송 + "/list"));
+        assertThat(자원).as("쿼리의 path는 정책이 못 막는다: 엣지가 경로 키로 덮어야 하는 이유")
+                .anyMatch(r -> cloudFrontMatches(r, BASE + "/playback/" + 내_방송 + "/list?path=" + 남의_방송));
+    }
+
     /** CloudFront 커스텀 정책 Resource 매칭 — {@code *}는 0자 이상, {@code ?}는 한 글자, 나머지는 글자 그대로. */
     private static boolean cloudFrontMatches(String resource, String url) {
         StringBuilder regex = new StringBuilder();
@@ -171,9 +189,9 @@ class PlaybackAccessControllerTest extends IntegrationTestSupport {
         HttpResponse<String> 응답 = 부른다(내_방송);
 
         List<String> 줄들 = 응답.headers().allValues("set-cookie");
-        assertThat(줄들).as("종류 셋 × 쿠키 셋").hasSize(9);
+        assertThat(줄들).as("종류 넷 × 쿠키 셋").hasSize(12);
         for (String 줄 : 줄들) {
-            assertThat(줄).matches(".*Path=/(live|dvr|vod)/" + java.util.regex.Pattern.quote(내_방송) + ";.*")
+            assertThat(줄).matches(".*Path=/(live|dvr|vod|playback)/" + java.util.regex.Pattern.quote(내_방송) + ";.*")
                     .contains("Secure").contains("HttpOnly")
                     .contains("SameSite=Lax").contains("Domain=" + DOMAIN)
                     .contains("Max-Age=" + TTL.toSeconds());
@@ -193,7 +211,7 @@ class PlaybackAccessControllerTest extends IntegrationTestSupport {
         HttpResponse<String> 응답 = 부른다("S-20260930-010000-key-p-1");
 
         assertThat(응답.statusCode()).isEqualTo(200);
-        assertThat(경로별_쿠키(응답).keySet()).containsExactly("/live/key-p", "/dvr/key-p", "/vod/key-p");
+        assertThat(경로별_쿠키(응답).keySet()).containsExactly("/live/key-p", "/dvr/key-p", "/vod/key-p", "/playback/key-p");
         assertThat(응답.body()).contains("\"streamId\":\"S-20260930-010000-key-p-1\"")
                 .contains("/live/key-p/*");
     }
@@ -202,6 +220,24 @@ class PlaybackAccessControllerTest extends IntegrationTestSupport {
      * 🔴 <b>이 카드가 막는 것: 로그인만 하면 남의 방송 영상을 받는 것.</b> 404 본문이 「없는 방송」과
      * 같고 <b>쿠키가 한 개도 안 나간다</b> — 404인데 쿠키가 실리면 상태 코드만 거절이다.
      */
+    /**
+     * 보관 기간(60일)이 지난 방송은 새 출입증을 안 준다(POK-335): 410 vod_expired, 쿠키 없음. 자격이 먼저다(없으면 404 그대로).
+     * 한계: 같은 물리 키의 안 만료된 방송으로 받은 쿠키는 그 키 전체를 여므로 이 410은 「만료된 방송으로 새 쿠키를 받는 길」만 막는다
+     */
+    @Test
+    void 만료된_방송이면_410이고_쿠키가_없다() throws Exception {
+        jdbc.update("UPDATE broadcasts SET ended_at = now() - interval '61 days', vod_expires_at = now() - interval '1 day' WHERE stream_id = ?", 내_방송);
+
+        볼_수_없다();
+        assertThat(부른다(내_방송).statusCode()).isEqualTo(404);
+
+        볼_수_있다("OWNER");
+        HttpResponse<String> 응답 = 부른다(내_방송);
+        assertThat(응답.statusCode()).isEqualTo(410);
+        assertThat(응답.body()).contains("\"error\":\"vod_expired\"");
+        assertThat(응답.headers().allValues("set-cookie")).isEmpty();
+    }
+
     @Test
     void 자격이_없으면_404이고_쿠키가_없다() throws Exception {
         볼_수_없다();

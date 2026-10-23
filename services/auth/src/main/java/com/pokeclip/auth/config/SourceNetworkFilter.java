@@ -18,8 +18,8 @@ import org.springframework.web.filter.OncePerRequestFilter;
  * 출발지가 허용 IPv4 대역 밖이면 403 으로 끝낸다. 본문도 로그도 남기지 않는다 — 인증 없이 부를 수 있는
  * 길이라 찍으면 미인증 트래픽이 로그를 무한히 만든다({@link InternalTokenFilter}와 같은 이유).
  *
- * <p>출발지는 소켓 주소({@code getRemoteAddr()})만 본다. 전달 헤더를 믿게 하는 설정은 {@link
- * StreamKeyResolveSecurityConfig}의 부팅 검사가 막는다.
+ * <p>출발지는 소켓 주소({@code getRemoteAddr()})만 본다. 전달 머리글을 달고 도착한 요청은 주소를 보기 전에 403 이다: 그
+ * 머리글로 {@code getRemoteAddr()}가 바뀌었을 수 있다({@link ForwardedHeaderMarkValve}가 표시한다, POK-316).
  *
  * <p>대역도 원격 주소도 IPv4 만 받는다. Spring Security 7.1 의 {@link IpAddressMatcher}는 주소 계열을 보지
  * 않는다(spring-projects/spring-security#19733) — IPv6 대역에 IPv4 주소를 대면 배열 범위 예외가 날 수 있고,
@@ -51,7 +51,9 @@ final class SourceNetworkFilter extends OncePerRequestFilter {
   protected void doFilterInternal(
       HttpServletRequest request, HttpServletResponse response, FilterChain chain)
       throws ServletException, IOException {
-    if (!isAllowed(request.getRemoteAddr())) {
+    // 전달 머리글을 달고 온 요청은 소켓 주소가 머리글 값으로 바뀌었을 수 있다(ForwardedHeaderMarkValve 머리 주석).
+    if (request.getAttribute(ForwardedHeaderMarkValve.ATTRIBUTE) != null
+        || !isAllowed(request.getRemoteAddr())) {
       response.setStatus(HttpStatus.FORBIDDEN.value());
       return;
     }

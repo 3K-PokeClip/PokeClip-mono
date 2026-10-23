@@ -500,4 +500,20 @@ class RenderRequestControllerTest extends IntegrationTestSupport {
     private static String 본문(ResultActions actions) throws Exception {
         return actions.andReturn().getResponse().getContentAsString();
     }
+
+    /** 보관 기간(60일)이 지난 방송은 새로 렌더할 수 없다(POK-335): 410 vod_expired, 큐 · 표에 아무것도 안 남는다. 자격이 먼저다 */
+    @Test
+    void 만료된_방송은_410이고_아무것도_안_남는다() throws Exception {
+        RenderFixtures.조각을_넣는다(jdbc, 내_방송, 0);
+        jdbc.update("UPDATE broadcasts SET ended_at = now() - interval '61 days', vod_expires_at = now() - interval '1 day' WHERE stream_id = ?", 내_방송);
+
+        볼_수_없다();
+        주문(내_방송, 편집본).andExpect(status().isNotFound());
+
+        볼_수_있다("OWNER");
+        주문(내_방송, 편집본).andExpect(status().isGone()).andExpect(jsonPath("$.error").value("vod_expired"));
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM clips", Integer.class)).isZero();
+        assertThat(LocalStackFixture.receiveAndDelete(큐.queueUrl())).isNull();
+    }
+
 }

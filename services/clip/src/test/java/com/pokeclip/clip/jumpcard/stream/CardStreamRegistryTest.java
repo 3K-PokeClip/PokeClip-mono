@@ -136,6 +136,36 @@ class CardStreamRegistryTest {
         assertThat(registry.connectionCount()).isZero();
     }
 
+    /**
+     * 방송 목록의 「접속 중인 편집자 수」(POK-398)가 읽는 재료. 연결 하나에 번호 하나이고 중복을 안 지운다:
+     * 같은 사람의 두 탭을 하나로 세는 것은 번호를 숫자로 읽는 {@code BroadcastListService} 한 자리에서 한다.
+     * 다른 방송의 연결이 섞이면 남의 방송 접속자가 내 띠에 세어진다.
+     */
+    @Test
+    void 방송별_접속자_번호는_그_방송의_연결마다_하나다() {
+        CardStreamRegistry registry = registry(props(4, 50, 500));
+        registry.open("s-1", "2401", Duration.ofMinutes(1));
+        registry.open("s-1", "2401", Duration.ofMinutes(1));
+        registry.open("s-1", "2402", Duration.ofMinutes(1));
+        registry.open("s-2", "2403", Duration.ofMinutes(1));
+
+        assertThat(registry.viewerIdsOf("s-1")).containsExactlyInAnyOrder("2401", "2401", "2402");
+        assertThat(registry.viewerIdsOf("s-2")).containsExactly("2403");
+        assertThat(registry.viewerIdsOf("s-없음")).isEmpty();
+    }
+
+    /** 끊긴 연결은 빠진다. 컨테이너가 부를 정리 콜백을 손으로 부른다(위 「콜백이 불리면」과 같은 방식). */
+    @Test
+    void 끊긴_연결의_번호는_빠진다() {
+        CardStreamRegistry registry = registry(props(4, 50, 500));
+        RecordingEmitter gone = (RecordingEmitter) registry.open("s-1", "2401", Duration.ofMinutes(1));
+        registry.open("s-1", "2402", Duration.ofMinutes(1));
+
+        gone.fireCompletion();
+
+        assertThat(registry.viewerIdsOf("s-1")).containsExactly("2402");
+    }
+
     @Test
     void publish는_그_방송의_연결에만_간다() {
         CardStreamRegistry registry = registry(props(4, 50, 500));

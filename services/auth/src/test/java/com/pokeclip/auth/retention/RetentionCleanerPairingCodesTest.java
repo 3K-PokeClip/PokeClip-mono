@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.sql.Timestamp;
@@ -44,10 +45,11 @@ class RetentionCleanerPairingCodesTest extends RetentionTestSupport {
     private final TokenService tokenService;
     private final UserRepository userRepository;
     private final JdbcTemplate jdbc;
+    private final TransactionTemplate tx;
 
     RetentionCleanerPairingCodesTest(RetentionCleaner cleaner, RetentionProperties properties, MockMvc mockMvc,
                                      TokenService tokenService, UserService userService, UserRepository userRepository,
-                                     JdbcTemplate jdbc) {
+                                     JdbcTemplate jdbc, TransactionTemplate tx) {
         super(userService);
         this.cleaner = cleaner;
         this.properties = properties;
@@ -55,6 +57,7 @@ class RetentionCleanerPairingCodesTest extends RetentionTestSupport {
         this.tokenService = tokenService;
         this.userRepository = userRepository;
         this.jdbc = jdbc;
+        this.tx = tx;
     }
 
     @BeforeEach
@@ -125,6 +128,19 @@ class RetentionCleanerPairingCodesTest extends RetentionTestSupport {
         assertThat(second.capped()).isFalse();
         assertThat(third.deleted()).isZero();
         assertThat(jdbc.queryForObject("SELECT count(*) FROM pairing_codes", Integer.class)).isZero();
+    }
+
+    /** 고르는 질의가 바깥 행마다 다시 도는 계획에서도 상한을 지킨다(POK-413, 까닭은 {@link RescanPlan}). */
+    @Test
+    void 고르는_질의를_다시_도는_계획에서도_상한만큼만_지운다() {
+        Instant base = Instant.now();
+        int limit = properties.batchLimit();
+        seedExpired(newUser(), limit + 500, base.minus(Duration.ofMinutes(61)));
+
+        RetentionCleaner.Result first = RescanPlan.forcing(tx, jdbc, () -> cleaner.cleanPairingCodes(base));
+
+        assertThat(first.deleted()).isEqualTo(limit);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM pairing_codes", Integer.class)).isEqualTo(500);
     }
 
     /**

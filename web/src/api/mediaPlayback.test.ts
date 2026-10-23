@@ -98,6 +98,28 @@ describe('lookupRecordingSpans: 녹화 없음과 물을 수 없음을 가른다(
     },
   );
 
+  it('apiFetch 밖 요청이라도 활동으로 알린다: 본문까지 받아야 끝이다 — 지난 방송 목록이 기다리니 채널 전환 화면도 기다린다(PR #342 2차 리뷰)', async () => {
+    let respond: (res: Response) => void = () => {};
+    const m = await load(
+      'http://pb',
+      () =>
+        new Promise<Response>((r) => {
+          respond = r;
+        }),
+    );
+    const { subscribeApiActivity } = await import('./client');
+    const events: string[] = [];
+    const off = subscribeApiActivity(({ type }) => events.push(type));
+
+    const done = m.lookupRecordingSpans('vod-1');
+    expect(events).toEqual(['start']);
+    respond(new Response('[]', { status: 200 }));
+    await done;
+
+    expect(events).toEqual(['start', 'end']);
+    off();
+  });
+
   it('녹화가 있으면 구간을 준다', async () => {
     const m = await load('http://pb', () =>
       Promise.resolve(
@@ -129,5 +151,51 @@ describe('녹화 목록 요청의 쿠키 싣기 (POK-317)', () => {
     await m.lookupRecordingSpans('vod-1');
 
     expect(spy.mock.calls.map(([, init]) => init?.credentials)).toEqual(['same-origin', 'include']);
+  });
+});
+
+describe('녹화 재생 주소는 출입증 경로 아래다 (POK-317)', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  async function load() {
+    vi.resetModules();
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_PLAYBACK_BASE_URL', 'https://media.test/');
+    const spy = stubFetch(() => Promise.resolve(jsonResponse(200, [])));
+    return { m: await import('./mediaPlayback'), spy };
+  }
+
+  it('녹화 목록은 {base}/playback/{키}/list 이고 키를 쿼리로 싣지 않는다: 쿠키 정책은 쿼리를 못 막아 엣지가 경로 키로 덮는다', async () => {
+    const { m, spy } = await load();
+    await m.lookupRecordingSpans('key-1');
+    expect(String(spy.mock.calls[0]?.[0])).toBe('https://media.test/playback/key-1/list');
+  });
+
+  it('영상 조각은 {base}/playback/{키}/get 이고 시작 · 길이 · 형식만 싣는다', async () => {
+    const { m } = await load();
+    const url = new URL(m.recordingClipUrl('key-1', Date.parse('2026-10-23T01:00:00Z'), 12.5));
+    expect(url.origin + url.pathname).toBe('https://media.test/playback/key-1/get');
+    expect([...url.searchParams.keys()].sort()).toEqual(['duration', 'format', 'start']);
+    expect(url.searchParams.get('start')).toBe('2026-10-23T01:00:00.000Z');
+  });
+});
+
+describe('녹화 목록이 403이면 그 키의 출입증을 버리게 알린다 (PR #332 codex)', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  it('403은 묻지 못함(null)이고, 알림을 받은 쪽이 그 키를 안다: 브라우저가 쿠키를 지웠으면 다시 받아야 한다', async () => {
+    vi.resetModules();
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_PLAYBACK_BASE_URL', 'https://media.test');
+    stubFetch(() => Promise.resolve(jsonResponse(403, {})));
+    const m = await import('./mediaPlayback');
+    const forbidden: string[] = [];
+    m.onPlaybackForbidden((key) => forbidden.push(key));
+    expect(await m.lookupRecordingSpans('key-1')).toBeNull();
+    expect(forbidden).toEqual(['key-1']);
   });
 });

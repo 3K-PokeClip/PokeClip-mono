@@ -7,6 +7,7 @@ import com.pokeclip.chat.collector.liveinfo.ChzzkLiveInfoClient.SettingResult;
 import com.pokeclip.chat.collector.relay.RelayPayload;
 import com.pokeclip.chat.collector.relay.RelaySink;
 import com.pokeclip.chat.collector.session.SessionRegistry;
+import com.pokeclip.chat.collector.Platform;
 import com.pokeclip.chat.collector.session.SessionRegistry.ActiveSession;
 import com.pokeclip.web.support.LogCaptor;
 import org.junit.jupiter.api.BeforeEach;
@@ -48,8 +49,8 @@ class BroadcastInfoCollectorTest {
     void setUp() {
         client = new FakeClient();
         when(registry.activeSessions()).thenReturn(List.of(
-                new ActiveSession("s-a", 1L, "c-a", "tok-a"),
-                new ActiveSession("s-b", 2L, "c-b", "tok-b")));
+                new ActiveSession(Platform.CHZZK, "s-a", 1L, "c-a", "tok-a"),
+                new ActiveSession(Platform.CHZZK, "s-b", 2L, "c-b", "tok-b")));
         when(registry.currentStreamIdOf(1L)).thenReturn("s-a");
         when(registry.currentStreamIdOf(2L)).thenReturn("s-b");
     }
@@ -79,6 +80,19 @@ class BroadcastInfoCollectorTest {
         assertThat(client.cursorsAsked).as("앞 장이 준 커서를 다음 요청에 그대로 넘긴다").containsExactly(null, "p2");
         assertThat(collector.lastPagesScanned()).isEqualTo(2);
         assertThat(relayed).containsExactly("s-a:broadcast-info", "s-b:broadcast-info");
+    }
+
+    /** 🔴 표의 기본값이 CHZZK라 SOOP 세션으로만 잰다. 방송 정보 줄은 세션 목록의 플랫폼을 그대로 싣는다. */
+    @Test
+    void 방송_정보_줄은_세션의_플랫폼을_싣는다() {
+        when(registry.activeSessions()).thenReturn(List.of(
+                new ActiveSession(Platform.SOOP, "s-a", 1L, "c-a", "tok-a")));
+        client.pages = List.of(new LivePage(List.of(entry("c-a", 300)), null));
+        client.settings.put("tok-a", new SettingResult(new LiveSetting("A", List.of(), null), 200));
+
+        collector().tick();
+
+        assertThat(stored).extracting(BroadcastInfo::platform).containsExactly(Platform.SOOP);
     }
 
     @Test

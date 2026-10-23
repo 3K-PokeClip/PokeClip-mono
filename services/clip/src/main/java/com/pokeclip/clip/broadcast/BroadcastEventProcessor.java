@@ -67,16 +67,19 @@ public class BroadcastEventProcessor {
         if (existing.isEmpty()) {
             // 줄이 없다. 동시에 둘이 만들려 하면 stream_id UNIQUE가 하나만 통과시키고,
             // 진 쪽은 트랜잭션이 통째로 되감긴 뒤 재전송으로 다시 온다.
+            // 플랫폼은 줄이 생길 때 한 번만 정한다. 이미 있는 줄에는 안 쓴다(뒤 편지가 다른 값을 실어도 첫 값을 지킨다).
+            // 물리 키와 달리 빈 칸이 없어서 칸 없는 편지로 만든 줄은 CHZZK로 굳는다. 덮어쓰기는 수집기용 내부 창구(POK-397)만 한다(Broadcast.platform)
+            String platform = platformOf(envelope);
             Broadcast created = switch (envelope.type()) {
                 case BROADCAST_STARTED -> Broadcast.startedNow(envelope.streamId(),
                         envelope.streamerId(), envelope.ingestStreamId(), envelope.sequence(), envelope.occurredAt(),
-                        envelope.trackManifestJson());
+                        envelope.trackManifestJson(), platform);
                 case BROADCAST_ENDED -> {
                     // ADR-016의 ended placeholder. 서버를 죽이지 않고 흔적을 남긴다.
                     log.warn("broadcast.ended_before_started streamId={} eventId={} sequence={}",
                             envelope.streamId(), envelope.eventId(), envelope.sequence());
                     yield Broadcast.endedPlaceholder(envelope.streamId(), envelope.streamerId(),
-                            envelope.ingestStreamId(), envelope.sequence(), envelope.occurredAt());
+                            envelope.ingestStreamId(), envelope.sequence(), envelope.occurredAt(), platform);
                 }
             };
             broadcasts.save(created);
@@ -107,5 +110,23 @@ public class BroadcastEventProcessor {
             return ProcessResult.IGNORED_STALE;
         }
         return ProcessResult.PROCESSED;
+    }
+
+    /**
+     * 편지의 플랫폼 칸(POK-398). 안 실었거나 비었으면 치지직이다(칸이 생기기 전 편지, 1번이 아직 안 싣는 편지).
+     * 형식 밖이면 편지를 버리지 않고 치지직으로 저장한다: 버리면 방송 줄이 안 생겨 그 방송이 통째로 사라진다.
+     * WARN에는 값 원문 대신 길이만 찍는다. 큐로 받은 값이라 개행이 섞이면 로그 한 줄을 위조할 수 있다.
+     */
+    private static String platformOf(LifecycleEnvelope envelope) {
+        String raw = envelope.platform();
+        if (raw == null || raw.isBlank()) {
+            return Platform.DEFAULT;
+        }
+        if (Platform.isWellFormed(raw)) {
+            return raw;
+        }
+        log.warn("broadcast.platform_invalid streamId={} eventId={} length={} stored={}",
+                envelope.streamId(), envelope.eventId(), raw.length(), Platform.DEFAULT);
+        return Platform.DEFAULT;
     }
 }
