@@ -68,4 +68,19 @@ variable "ingest_allowed_cidrs" {
     ])
     error_message = "ingest_allowed_cidrs 의 원소는 IPv4 CIDR(접두 길이 포함)이어야 한다."
   }
+
+  # /16 보다 넓은 출처(0.0.0.0/0 · /8 등)는 공개 승인 뒤에만 받는다 — 응답기
+  # 송출자별 한도(S1 게이트)가 없으면 전 세계 시도가 정상 송출을 막는다(설계 4-6).
+  validation {
+    condition = var.ingest_public_approved || alltrue([
+      for cidr in var.ingest_allowed_cidrs : try(tonumber(split("/", cidr)[1]) >= 16, false)
+    ])
+    error_message = "ingest_allowed_cidrs 에 /16 보다 넓은 CIDR 이 있다 — ingest_public_approved = true(S1 게이트 · 응답기 반영 뒤 8a 단계)일 때만 받는다."
+  }
+}
+
+variable "ingest_public_approved" {
+  description = "SRT 인그레스를 /16 보다 넓은 출처(0.0.0.0/0 등)로 여는 공개 승인. S1 게이트 · 응답기(M15) 반영 뒤 8a 단계에서만 true."
+  type        = bool
+  default     = false
 }

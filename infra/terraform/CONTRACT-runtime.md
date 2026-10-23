@@ -46,6 +46,10 @@ clip ↔ auth · RDS ← auth · clip · 로드밸런서 → Media 규칙은 위
     (`http://chat-collector.pokeclip.internal:8083`)을 부릅니다. 그 SG 짝(auth
     이그레스 · chat-collector 인그레스 8083)은 런타임 2단(POK-306)이
     `service_sg_ids.auth` 로 만듭니다. auth → clip 짝은 platform 이 갖습니다.
+*   **SRT 공개**: NLB 인그레스를 /16 보다 넓은 출처(0.0.0.0/0 등)로 여는
+    것은 platform `ingest_public_approved = true` 일 때만 됩니다
+    (`media_ingest` 검증). S1 게이트 · 응답기(M15)가 먼저 있어야 하고, 8a
+    단계의 별도 승인입니다(설계 4-6).
 *   **O7d 선행 확인 — POK-407 머지 여부**: auth · clip 의 IAM DB 인증
     코드가 머지되지 않았으면 platform tfvars 에서
     `app_db_auth = "password"` 로 두고, 런타임은 DB 비밀번호 그릇을
@@ -85,7 +89,8 @@ clip ↔ auth · RDS ← auth · clip · 로드밸런서 → Media 규칙은 위
 
 ### platform 이 정하는 env
 
-auth: `FORWARD_HEADERS_STRATEGY` · `STREAM_KEY_SECRET_REF_PREFIX` ·
+auth: `FORWARD_HEADERS_STRATEGY` · `STREAM_KEY_SECRET_STORE_TYPE` ·
+`STREAM_KEY_SECRET_RETIRE_FROM`(둘 다 `aws`) · `STREAM_KEY_SECRET_REF_PREFIX` ·
 `SERVER_TOMCAT_REMOTEIP_INTERNALPROXIES`(값이 있을 때) · `CORS_ALLOWED_ORIGINS`
 · `CLIP_BASE_URL` · `COLLECTOR_BASE_URL` · `POSTGRES_USER` · `POSTGRES_AUTH` ·
 `POSTGRES_SSLROOTCERT`(IAM 일 때).

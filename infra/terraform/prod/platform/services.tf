@@ -48,9 +48,13 @@ locals {
       local.db_env.auth,
       {
         # 로드밸런서 뒤 — 명시하지 않으면 application.yml 의 none 이 남는다.
-        FORWARD_HEADERS_STRATEGY     = "native"
-        STREAM_KEY_SECRET_REF_PREFIX = var.stream_key_secret_prefix
-        CORS_ALLOWED_ORIGINS         = var.cors_allowed_origins
+        FORWARD_HEADERS_STRATEGY = "native"
+        # prod 는 처음부터 Secrets Manager(PG 이관 없음) — 접두 · 작업 역할
+        # StreamKeySecrets 와 짝이다. application.yml 기본값은 postgres 다.
+        STREAM_KEY_SECRET_STORE_TYPE  = "aws"
+        STREAM_KEY_SECRET_RETIRE_FROM = "aws"
+        STREAM_KEY_SECRET_REF_PREFIX  = var.stream_key_secret_prefix
+        CORS_ALLOWED_ORIGINS          = var.cors_allowed_origins
         # 탈퇴 정리(withdrawal-purge) — 비면 부팅이 거부된다.
         CLIP_BASE_URL      = "http://clip.${local.discovery_domain}:${var.services.clip.port}"
         COLLECTOR_BASE_URL = local.collector_base_url

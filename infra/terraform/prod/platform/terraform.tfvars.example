@@ -24,6 +24,10 @@ media_health_path = "<MEDIA_HEALTH_PATH>"
 # 승인 지점이다(설계 4-6 — S1 게이트 + 응답기 선행).
 ingest_allowed_cidrs = ["<TEAM_IP_CIDR>"]
 
+# /16 보다 넓은 출처(0.0.0.0/0 등)는 이 값이 true 일 때만 받는다. S1 게이트 ·
+# 응답기(M15) 반영 뒤 8a 단계에서만 true 로 바꾼다.
+# ingest_public_approved = false
+
 # auth · clip 이미지 안 RDS CA 번들 경로(3번 이미지 — app_db_auth = iam 이면
 # 필수). O7d 전에 POK-407(IAM DB 인증 코드)이 머지되지 않았으면 아래 줄을
 # 켜고 이 값은 지운다 — 런타임이 DB 비밀번호 그릇을 준다.

@@ -181,6 +181,8 @@ module "nlb" {
   subnet_id            = local.nlb_subnet_id
   health_port          = local.nlb_health_port
   ingest_allowed_cidrs = var.ingest_allowed_cidrs
+
+  ingest_public_approved = var.ingest_public_approved
 }
 
 resource "aws_vpc_security_group_ingress_rule" "public_alb_https" {

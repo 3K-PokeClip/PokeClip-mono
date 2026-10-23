@@ -86,6 +86,8 @@ next 이미지를 다시 빌드해야 합니다.
 |---|---|---|
 | auth | `FORWARD_HEADERS_STRATEGY` | `native`(로드밸런서 뒤) |
 | auth | `SERVER_TOMCAT_REMOTEIP_INTERNALPROXIES` | `auth_internal_proxies` — 빈 값이면 넣지 않음(톰캣 기본 대역) |
+| auth | `STREAM_KEY_SECRET_STORE_TYPE` | `aws`(prod 는 처음부터 Secrets Manager — 앱 기본값 postgres) |
+| auth | `STREAM_KEY_SECRET_RETIRE_FROM` | `aws`(PG 이관이 없어 옛 암호도 Secrets Manager 에만 있다) |
 | auth | `STREAM_KEY_SECRET_REF_PREFIX` | `stream_key_secret_prefix`(작업 역할 정책과 같은 값) |
 | clip | `CLOUDFRONT_KEY_PAIR_ID` | secrets `public_key_id` |
 | clip | `MEDIA_BASE_URL` · `PLAYBACK_COOKIE_DOMAIN` | `https://media.pokeclip.com` · `.pokeclip.com` |
@@ -142,6 +144,7 @@ next 이미지를 다시 빌드해야 합니다.
 | `services` | next 3000 `/api/ping` 512/1024 · 60초, auth 8082 · clip 8081 `/actuator/health` 1024/2048 · 180초 | 포트 · 헬스 경로 · CPU · 메모리(MiB) · 기동 유예(Flyway) |
 | `app_db_auth` | `iam` | `password` 면 `rds-db:connect` · `POSTGRES_AUTH` 없음 |
 | `cors_allowed_origins` | `https://app.pokeclip.com` | auth · clip 부팅 필수 값(실사용 없음) |
+| `ingest_public_approved` | `false` | `ingest_allowed_cidrs` 에 /16 보다 넓은 CIDR(0.0.0.0/0 등)을 받을지 — S1 게이트 · 응답기(M15) 반영 뒤 8a 단계에서만 `true` |
 | `stream_key_secret_prefix` | `pokeclip/prod/stream-key/` | auth 스트림 키 비밀 이름 접두 |
 
 앞 루트 상태는 `state_bucket`(`pokeclip-tfstate-prod-apne2`) · `state_keys`

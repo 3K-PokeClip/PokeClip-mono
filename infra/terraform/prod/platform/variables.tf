@@ -148,6 +148,20 @@ variable "media_health_path" {
 variable "ingest_allowed_cidrs" {
   description = "SRT(NLB UDP 8890) 인그레스를 허용할 IPv4 CIDR — 지금은 팀 IP 만(설계 4-6)."
   type        = list(string)
+
+  # media_ingest 모듈과 같은 규칙을 루트에서 먼저 본다.
+  validation {
+    condition = var.ingest_public_approved || alltrue([
+      for cidr in var.ingest_allowed_cidrs : try(tonumber(split("/", cidr)[1]) >= 16, false)
+    ])
+    error_message = "ingest_allowed_cidrs 에 /16 보다 넓은 CIDR 이 있다 — ingest_public_approved = true(S1 게이트 · 응답기 반영 뒤 8a 단계)일 때만 받는다."
+  }
+}
+
+variable "ingest_public_approved" {
+  description = "SRT 인그레스를 /16 보다 넓은 출처(0.0.0.0/0 등)로 여는 공개 승인. S1 게이트 · 응답기(M15) 반영 뒤 8a 단계에서만 true."
+  type        = bool
+  default     = false
 }
 
 variable "media_base_url" {
