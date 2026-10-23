@@ -1,80 +1,52 @@
-import { Film, Image as ImageIcon, Mic, Music, SlidersHorizontal, Sparkles } from 'lucide-react';
+import { Check, Gamepad2, Mic, Music } from 'lucide-react';
 import type { ComponentType } from 'react';
-import { Slider } from '@/ui';
 import styles from './StudioScreen.module.css';
-import { TimelineClip } from './TimelineClip';
-import type { TimelineView } from '../timelineMath';
-import type { ClipEditorMockState, EditorTrack, EditorTrackKind } from '../useClipEditorMockState';
+import type { EditorTrack, EditorTrackKind } from '../useClipEditorMockState';
 
-// 시안 1d-a 타임라인 한 줄 — 라벨 열(172px) + 레인.
-// 레인을 어떻게 그릴지는 트랙 종류가 정한다: 영상은 필름스트립, 마이크·게임은 파형,
-// 나머지는 조각. 트랙 목록 자체는 데이터라서(E2) 여기서 늘리거나 줄이지 않는다.
+// 방송 소리 트랙 한 줄(POK-389) — 우리만 가진 「트랙별 소리」를 타임라인의 주인공으로 둔다.
+// 머리: 아이콘 · 이름 · 넣기 단추 · 음량 %. 뺀 줄은 흐리게 「안 넣음」. 음량 막대는 오디오 메뉴에 있다.
+// 파형은 아직 모양만이다 — 트랙별 파형 자료가 없다.
 
 const TRACK_ICONS: Record<EditorTrackKind, ComponentType<{ size?: number }>> = {
-  video: Film,
   mic: Mic,
-  game: SlidersHorizontal,
+  game: Gamepad2,
   bgm: Music,
-  sfx: Sparkles,
-  image: ImageIcon,
 };
 
 export function TimelineTrackRow({
   track,
-  view,
-  selectedClipId,
-  onSelectClip,
-  onVolumeChange,
-  gestureHandlers,
+  onToggleMute,
 }: {
   track: EditorTrack;
-  view: TimelineView;
-  selectedClipId: string | null;
-  onSelectClip: (clipId: string) => void;
-  onVolumeChange: (trackId: string, volume: number) => void;
-  /** 드래그 한 번을 실행취소 한 칸으로 묶는다 */
-  gestureHandlers: ClipEditorMockState['gestureHandlers'];
+  onToggleMute: (trackId: string) => void;
 }) {
   const Icon = TRACK_ICONS[track.kind];
-  const waveform = track.kind === 'mic' || track.kind === 'game';
 
   return (
-    <div className={styles.trackRow}>
+    <div
+      className={styles.trackRow}
+      data-track-row={track.id}
+      data-muted={track.muted || undefined}
+    >
       <span className={styles.trackLabel}>
         <Icon size={12} />
         <span data-row-label>{track.label}</span>
-        {track.volume !== null ? (
-          <span className={styles.trackControls}>
-            <Slider
-              className={styles.trackSlider}
-              label={`${track.label} 볼륨`}
-              value={track.volume}
-              {...gestureHandlers}
-              onValueChange={(volume) => onVolumeChange(track.id, volume)}
-            />
-            <span className={styles.trackValue}>{track.volume}%</span>
-          </span>
-        ) : null}
+        <span className={styles.trackControls}>
+          <button
+            type="button"
+            className={styles.trackToggle}
+            aria-pressed={!track.muted}
+            aria-label={`${track.label} 넣기`}
+            onClick={() => onToggleMute(track.id)}
+          >
+            {track.muted ? null : <Check size={10} aria-hidden />}
+          </button>
+          <span className={styles.trackValue}>{track.muted ? '안 넣음' : `${track.volume}%`}</span>
+        </span>
       </span>
 
       <div className={styles.lane} data-kind={track.kind}>
-        {track.kind === 'video' ? <div className={styles.laneFilmstrip} aria-hidden /> : null}
-        {waveform ? (
-          <div
-            className={`${styles.laneWave} ${track.muted ? styles.laneMuted : ''}`}
-            aria-hidden
-          />
-        ) : null}
-        {track.clips.map((clip) => (
-          <TimelineClip
-            key={clip.id}
-            clip={clip}
-            kind={track.kind}
-            view={view}
-            selected={clip.id === selectedClipId}
-            onSelect={() => onSelectClip(clip.id)}
-          />
-        ))}
+        <div className={`${styles.laneWave} ${track.muted ? styles.laneMuted : ''}`} aria-hidden />
       </div>
     </div>
   );

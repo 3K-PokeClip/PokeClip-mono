@@ -253,8 +253,32 @@
   gap: calc(6 * var(--pc-u));
 }
 
-.trackSlider {
-  width: calc(44 * var(--pc-u));
+.trackToggle {
+  display: grid;
+  place-items: center;
+  width: calc(14 * var(--pc-u));
+  height: calc(14 * var(--pc-u));
+  padding: 0;
+  border-radius: calc(3 * var(--pc-u));
+  border: 1px solid var(--pc-color-border-strong);
+  background: transparent;
+  color: var(--pc-color-text-on-accent);
+  cursor: pointer;
+}
+
+.trackToggle[aria-pressed='true'] {
+  border-color: var(--pc-color-accent);
+  background: var(--pc-color-accent);
+}
+
+.trackToggle:focus-visible {
+  outline: 2px solid var(--pc-color-focus-ring);
+  outline-offset: 1px;
+}
+
+.trackRow[data-muted] [data-row-label],
+.trackRow[data-muted] .trackValue {
+  color: var(--pc-color-text-disabled);
 }
 
 .trackValue {
@@ -301,76 +325,6 @@
 
 .laneMuted {
   opacity: 0.35;
-}
-
-/* ---------- 클립 ---------- */
-
-.clip {
-  position: absolute;
-  top: calc(3 * var(--pc-u));
-  bottom: calc(3 * var(--pc-u));
-  border-radius: calc(5 * var(--pc-u));
-  display: flex;
-  align-items: center;
-  gap: calc(5 * var(--pc-u));
-  padding: 0 calc(8 * var(--pc-u));
-  font-size: calc(10 * var(--pc-u));
-  line-height: 1;
-  font-weight: 650;
-  overflow: hidden;
-  white-space: nowrap;
-  cursor: grab;
-  border: 1px solid var(--pc-color-accent);
-  background: rgb(88 111 196 / 0.28);
-  color: var(--pc-color-accent-text);
-  font-family: inherit;
-}
-
-.clip[data-kind='sfx'] {
-  border-color: var(--pc-color-point);
-  background: rgb(212 70 151 / 0.3);
-  color: var(--pc-color-point-text);
-  justify-content: center;
-  padding: 0 calc(4 * var(--pc-u));
-}
-
-.clip[data-kind='image'] {
-  border: 1px dashed var(--pc-color-border-default);
-  background: rgb(255 255 255 / 0.05);
-  color: var(--pc-color-text-muted);
-  font-weight: 600;
-}
-
-.clip[aria-pressed='true'],
-.clip:focus-visible {
-  outline: 2px solid var(--pc-color-focus-ring);
-  outline-offset: 1px;
-}
-
-/* 트림 핸들은 시안대로 hover·포커스에서만 보인다 */
-.clipTrim {
-  position: absolute;
-  top: calc(2 * var(--pc-u));
-  bottom: calc(2 * var(--pc-u));
-  width: calc(5 * var(--pc-u));
-  border-radius: calc(3 * var(--pc-u));
-  background: var(--pc-color-accent);
-  box-shadow: 0 0 0 1px rgb(0 0 0 / 0.3);
-  cursor: col-resize;
-  opacity: 0;
-}
-
-.clip:hover .clipTrim,
-.clip:focus-visible .clipTrim {
-  opacity: 1;
-}
-
-.clipTrimStart {
-  left: calc(2 * var(--pc-u));
-}
-
-.clipTrimEnd {
-  right: calc(2 * var(--pc-u));
 }
 
 /* ---------- 구간 오버레이 · 플레이헤드 ---------- */

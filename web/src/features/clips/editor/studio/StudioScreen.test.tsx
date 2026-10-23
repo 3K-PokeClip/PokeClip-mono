@@ -45,6 +45,22 @@ describe('StudioScreen', () => {
     expect(container.querySelectorAll('[data-outside]')).toHaveLength(2);
   });
 
+  it('소리 트랙 줄 머리에서 바로 넣고 뺀다 — 오디오 메뉴와 같은 값이다(POK-389)', async () => {
+    const user = userEvent.setup();
+    const { container } = renderStudio();
+    const timeline = screen.getByRole('region', { name: '타임라인' });
+
+    const discord = within(timeline).getByRole('button', { name: '디스코드 넣기' });
+    expect(discord).toHaveAttribute('aria-pressed', 'true');
+    await user.click(discord);
+    expect(discord).toHaveAttribute('aria-pressed', 'false');
+    expect(within(timeline).getByText('안 넣음')).toBeInTheDocument();
+    expect(container.querySelector('[data-track-row="discord"]')).toHaveAttribute('data-muted');
+
+    await user.click(screen.getByRole('tab', { name: '오디오' }));
+    expect(screen.getByRole('checkbox', { name: '디스코드 넣기' })).not.toBeChecked();
+  });
+
   it('자막이 아직 없으면 자막 줄을 그리지 않는다', () => {
     const { container } = renderStudio({ initialSubtitleStatus: 'idle' });
     const labels = [...container.querySelectorAll('[data-row-label]')].map((el) => el.textContent);
@@ -520,8 +536,10 @@ describe('StudioScreen', () => {
     ).toBeLessThanOrEqual(180);
   });
 
-  it('볼륨 슬라이더가 포인터로 살아 있다 — 제스처 핸들러가 DS 핸들러를 덮지 않는다', () => {
+  it('볼륨 슬라이더가 포인터로 살아 있다 — 제스처 핸들러가 DS 핸들러를 덮지 않는다', async () => {
+    const user = userEvent.setup();
     renderStudio();
+    await user.click(screen.getByRole('tab', { name: '오디오' }));
 
     const [slider] = screen.getAllByRole('slider', { name: /볼륨/ });
     if (slider === undefined) throw new Error('볼륨 슬라이더가 없다');

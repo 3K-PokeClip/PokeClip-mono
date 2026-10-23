@@ -840,7 +840,6 @@ function WiredStudio({
         label: trackDisplayName(i, trackLabels?.[i]),
         volume: 100,
         muted: false,
-        clips: [],
       });
     }
     return { tracks, muted, volumes };

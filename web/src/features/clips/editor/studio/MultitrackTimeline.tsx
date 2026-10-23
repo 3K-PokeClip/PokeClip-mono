@@ -223,11 +223,7 @@ export function MultitrackTimeline({
                 <TimelineTrackRow
                   key={track.id}
                   track={track}
-                  view={state.view}
-                  selectedClipId={state.selectedClipId}
-                  onSelectClip={state.selectClip}
-                  onVolumeChange={state.setTrackVolume}
-                  gestureHandlers={state.gestureHandlers}
+                  onToggleMute={state.toggleTrackMute}
                 />
               ))}
             </div>

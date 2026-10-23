@@ -134,14 +134,8 @@ const samePip = sameRect;
 export type { EditorLayout } from './editorLayout';
 export type SubtitleMode = 'burn-cc' | 'burn' | 'cc';
 export type EditorTool = 'layout' | 'subtitle' | 'text' | 'audio' | 'image';
-export type EditorTrackKind = 'video' | 'mic' | 'game' | 'bgm' | 'sfx' | 'image';
-
-export interface EditorTrackClip {
-  id: string;
-  label: string;
-  startSeconds: number;
-  endSeconds: number;
-}
+/** 방송 소리 트랙의 모양(아이콘) — 영상 줄은 타임라인이 따로 그린다 */
+export type EditorTrackKind = 'mic' | 'game' | 'bgm';
 
 /** E2 — 존재하는 트랙만 온다(RMS 무음 필터). 화면은 이 배열을 그대로 그린다 */
 export interface EditorTrack {
@@ -151,7 +145,6 @@ export interface EditorTrack {
   /** 볼륨이 없는 트랙(영상·이미지)은 null */
   volume: number | null;
   muted: boolean;
-  clips: EditorTrackClip[];
 }
 
 export interface SubtitleItem {
@@ -250,10 +243,10 @@ const MOCK_SOURCE = {
  * 영상 줄은 타임라인이 늘 그리고, 음악·효과음·이미지는 기능이 생기면 줄이 생긴다.
  */
 const MOCK_TRACKS: readonly EditorTrack[] = [
-  { id: 'mic', kind: 'mic', label: '마이크', volume: 80, muted: false, clips: [] },
-  { id: 'game', kind: 'game', label: '게임', volume: 60, muted: false, clips: [] },
-  { id: 'discord', kind: 'mic', label: '디스코드', volume: 100, muted: false, clips: [] },
-  { id: 'bgm', kind: 'bgm', label: 'BGM', volume: 40, muted: false, clips: [] },
+  { id: 'mic', kind: 'mic', label: '마이크', volume: 80, muted: false },
+  { id: 'game', kind: 'game', label: '게임', volume: 60, muted: false },
+  { id: 'discord', kind: 'mic', label: '디스코드', volume: 100, muted: false },
+  { id: 'bgm', kind: 'bgm', label: 'BGM', volume: 40, muted: false },
 ];
 
 /** 목업 자막 — 타임코드(구간 시작 기준)에서 다음 줄 시작까지 화면에 선다. 소스 축 자리는 목업 구간 시작(4928.4)에 더한다 */
@@ -560,8 +553,6 @@ export interface ClipEditorMockState {
     unavailableReason: string | null;
   }[];
   applyAudioPreset: (preset: AudioPresetId) => void;
-  selectedClipId: string | null;
-  selectClip: (clipId: string | null) => void;
 
   // 자막 (E4)
   subtitle: SubtitleState;
@@ -657,7 +648,6 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     initialSubtitleStatus === 'ready' ? (subtitles[0]?.id ?? null) : null,
   );
 
-  const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
   const [selectedRegionId, setSelectedRegionId] = useState('top');
   // 시안 갱신분의 기본 도구는 레이아웃이다 (splitVals: tool ?? 'layout')
   const [activeTool, setActiveTool] = useState<EditorTool>('layout');
@@ -827,7 +817,6 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
         ...track,
         volume: track.volume === null ? null : (recipe.trackVolumes[track.id] ?? track.volume),
         muted: recipe.trackMuted[track.id] ?? false,
-        clips: [...track.clips],
       })),
     [options.tracks, real, recipe.trackVolumes, recipe.trackMuted],
   );
@@ -1197,8 +1186,6 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
       },
       [commit, tracks, options.mixTrackId],
     ),
-    selectedClipId,
-    selectClip: setSelectedClipId,
 
     subtitle,
     subtitleFontLabel: MOCK_SOURCE.subtitleFontLabel,
