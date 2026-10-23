@@ -334,6 +334,24 @@ describe('StudioScreen', () => {
     expect(burned!.style.getPropertyValue('--pc-edge')).toBe('70%');
   });
 
+  it('미리보기 위 막대가 비율·레이아웃을 말하고 안전 영역을 켜고 끈다 — 편집 기록은 안 바뀐다(POK-389)', async () => {
+    const user = userEvent.setup();
+    const { container } = renderStudio();
+    const bar = screen.getByRole('toolbar', { name: '미리보기 보기' });
+
+    expect(within(bar).getByText('9:16')).toBeInTheDocument();
+    expect(within(bar).getByText('상하 분할')).toBeInTheDocument();
+    expect(container.querySelector('[data-safe-zone]')).toBeNull();
+
+    await user.click(within(bar).getByRole('switch', { name: '안전 영역' }));
+    expect(container.querySelector('[data-safe-zone]')).not.toBeNull();
+    // 보는 방식일 뿐이라 되돌릴 거리가 생기지 않는다
+    expect(screen.getByRole('button', { name: '작업 이전으로' })).toBeDisabled();
+
+    await user.click(screen.getByRole('radio', { name: /전체/ }));
+    expect(within(bar).getByText('전체')).toBeInTheDocument();
+  });
+
   it('레이아웃은 폰 모양 타일 다섯이다 — 이름만 읽고 설명은 덧붙임으로(POK-389)', () => {
     renderStudio();
     const group = screen.getByRole('radiogroup', { name: '레이아웃 종류' });
