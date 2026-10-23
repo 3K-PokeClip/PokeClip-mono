@@ -415,6 +415,12 @@ function GlassPlayerBody({
       <div className={styles.videoSlot} aria-hidden>
         {videoNode ?? <span className={styles.videoLabel}>라이브 방송 화면</span>}
       </div>
+      {/* 재생이 멎은 까닭(POK-337). 컨트롤과 따로 서서 자동 숨김에 안 가려진다 */}
+      {sim.playbackError ? (
+        <div className={styles.playbackError} role="status">
+          {sim.playbackError}
+        </div>
+      ) : null}
       {/* 전체 화면에선 바깥 패널이 안 보인다 — 여는 버튼을 눌러도 아무 변화가 없으니 그때는 뺀다 */}
       <PlayerTopOverlay
         channelName={channelName}

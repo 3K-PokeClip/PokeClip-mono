@@ -158,6 +158,22 @@
   animation: none;
 }
 
+/* 재생이 멎은 까닭을 영상 가운데에 한 줄로(POK-337). 마지막 장면 위에 서므로 글자 뒤를 어둡게 깐다 */
+.playbackError {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  max-width: calc(100% - 32 * var(--pc-u));
+  padding: calc(8 * var(--pc-u)) calc(14 * var(--pc-u));
+  border-radius: calc(10 * var(--pc-u));
+  background: rgb(3 10 24 / 0.72);
+  color: rgb(224 242 254 / 0.9);
+  font-size: calc(13 * var(--pc-u));
+  text-align: center;
+  pointer-events: none;
+}
+
 /* media 서버가 없을 때 영상 자리에 서는 정직한 안내 */
 .noSignal {
   display: flex;
