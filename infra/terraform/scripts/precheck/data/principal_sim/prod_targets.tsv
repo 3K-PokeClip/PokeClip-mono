@@ -67,18 +67,20 @@ cert-use1	O7b	tag:acm:certificate	certificate	us-east-1	acm:DeleteCertificate,ac
 # 이름 패턴」. 이름이 고정이라 구체 ARN 으로 묻는다(자원이 생기기 전 단계에도
 # 물을 수 있다). 태그 동작은 넣지 않는다 — 태그 해석 행과 달리 태그를 바꿔도
 # 대상에서 빠지지 않는다.
-# SNS 주제 · SQS 큐의 정책은 읽는 방법이 없어 unread 다(판정 불가 —
-# RESOURCE_POLICY_UNREAD). 주제는 기본 주제 정책, 큐는 이 주제의 SendMessage
-# 허용 정책을 가진다.
+# SNS 주제 · SQS 큐의 정책은 직접 읽는다(sns · sqs — lib/principal_policy.sh
+# 머리 주석, kty 2026-10-24). 주제는 기본 주제 정책(Principal * ·
+# AWS:SourceOwner 조건), 원 큐는 이 주제의 SendMessage 허용 정책을 가지고
+# DLQ 는 정책이 없다. 첫 단계(runtime-1a) 직전에는 주제 · 큐가 아직 없어
+# 「자원 없음」 을 정책 없이 판정한다(런북 2-3 한계 A13).
 rds-instance	runtime-1a	arn:arn:aws:rds:ap-northeast-2:${ACCOUNT}:db:pokeclip-prod-db	db	ap-northeast-2	rds:DeleteDBInstance,rds:ModifyDBInstance,rds:RebootDBInstance,rds:StopDBInstance,rds:CreateDBSnapshot	none	-
 rds-parameter-group	runtime-1a	arn:arn:aws:rds:ap-northeast-2:${ACCOUNT}:pg:pokeclip-prod-pg17	pg	ap-northeast-2	rds:ModifyDBParameterGroup,rds:ResetDBParameterGroup,rds:DeleteDBParameterGroup	none	-
 rds-subnet-group	runtime-1a	arn:arn:aws:rds:ap-northeast-2:${ACCOUNT}:subgrp:pokeclip-prod-db	subgrp	ap-northeast-2	rds:ModifyDBSubnetGroup,rds:DeleteDBSubnetGroup	none	-
 rds-log-group	runtime-1a	arn:arn:aws:logs:ap-northeast-2:${ACCOUNT}:log-group:/aws/rds/instance/pokeclip-prod-db/postgresql	log-group	ap-northeast-2	logs:DeleteLogGroup,logs:PutRetentionPolicy,logs:DeleteRetentionPolicy	none	-
-broadcast-topic	runtime-1a	arn:arn:aws:sns:ap-northeast-2:${ACCOUNT}:pokeclip-prod-broadcast-lifecycle.fifo	topic	ap-northeast-2	sns:Publish,sns:Subscribe,sns:SetTopicAttributes,sns:AddPermission,sns:RemovePermission,sns:DeleteTopic	unread	-
-broadcast-queue-clip	runtime-1a	arn:arn:aws:sqs:ap-northeast-2:${ACCOUNT}:pokeclip-prod-broadcast-lifecycle-clip.fifo	queue	ap-northeast-2	sqs:SendMessage,sqs:ReceiveMessage,sqs:PurgeQueue,sqs:SetQueueAttributes,sqs:AddPermission,sqs:RemovePermission,sqs:DeleteQueue	unread	-
-broadcast-queue-chat	runtime-1a	arn:arn:aws:sqs:ap-northeast-2:${ACCOUNT}:pokeclip-prod-broadcast-lifecycle-chat.fifo	queue	ap-northeast-2	sqs:SendMessage,sqs:ReceiveMessage,sqs:PurgeQueue,sqs:SetQueueAttributes,sqs:AddPermission,sqs:RemovePermission,sqs:DeleteQueue	unread	-
-broadcast-dlq-clip	runtime-1a	arn:arn:aws:sqs:ap-northeast-2:${ACCOUNT}:pokeclip-prod-broadcast-lifecycle-clip-dlq.fifo	queue	ap-northeast-2	sqs:SendMessage,sqs:ReceiveMessage,sqs:PurgeQueue,sqs:SetQueueAttributes,sqs:AddPermission,sqs:RemovePermission,sqs:DeleteQueue	unread	-
-broadcast-dlq-chat	runtime-1a	arn:arn:aws:sqs:ap-northeast-2:${ACCOUNT}:pokeclip-prod-broadcast-lifecycle-chat-dlq.fifo	queue	ap-northeast-2	sqs:SendMessage,sqs:ReceiveMessage,sqs:PurgeQueue,sqs:SetQueueAttributes,sqs:AddPermission,sqs:RemovePermission,sqs:DeleteQueue	unread	-
+broadcast-topic	runtime-1a	arn:arn:aws:sns:ap-northeast-2:${ACCOUNT}:pokeclip-prod-broadcast-lifecycle.fifo	topic	ap-northeast-2	sns:Publish,sns:Subscribe,sns:SetTopicAttributes,sns:AddPermission,sns:RemovePermission,sns:DeleteTopic	sns	-
+broadcast-queue-clip	runtime-1a	arn:arn:aws:sqs:ap-northeast-2:${ACCOUNT}:pokeclip-prod-broadcast-lifecycle-clip.fifo	queue	ap-northeast-2	sqs:SendMessage,sqs:ReceiveMessage,sqs:PurgeQueue,sqs:SetQueueAttributes,sqs:AddPermission,sqs:RemovePermission,sqs:DeleteQueue	sqs	-
+broadcast-queue-chat	runtime-1a	arn:arn:aws:sqs:ap-northeast-2:${ACCOUNT}:pokeclip-prod-broadcast-lifecycle-chat.fifo	queue	ap-northeast-2	sqs:SendMessage,sqs:ReceiveMessage,sqs:PurgeQueue,sqs:SetQueueAttributes,sqs:AddPermission,sqs:RemovePermission,sqs:DeleteQueue	sqs	-
+broadcast-dlq-clip	runtime-1a	arn:arn:aws:sqs:ap-northeast-2:${ACCOUNT}:pokeclip-prod-broadcast-lifecycle-clip-dlq.fifo	queue	ap-northeast-2	sqs:SendMessage,sqs:ReceiveMessage,sqs:PurgeQueue,sqs:SetQueueAttributes,sqs:AddPermission,sqs:RemovePermission,sqs:DeleteQueue	sqs	-
+broadcast-dlq-chat	runtime-1a	arn:arn:aws:sqs:ap-northeast-2:${ACCOUNT}:pokeclip-prod-broadcast-lifecycle-chat-dlq.fifo	queue	ap-northeast-2	sqs:SendMessage,sqs:ReceiveMessage,sqs:PurgeQueue,sqs:SetQueueAttributes,sqs:AddPermission,sqs:RemovePermission,sqs:DeleteQueue	sqs	-
 
 # SQL 실행기 역할 · 인스턴스 프로필(켜진 동안만 있다 — 꺼져 있어도 묻는다).
 # 역할 넘기기는 EC2 로 넘기는 문맥으로 묻는다(dev 주체가 상자를 띄워 마스터

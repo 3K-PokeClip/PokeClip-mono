@@ -13,8 +13,8 @@
 # 바꿀 줄을 표 맨 위에 덧붙인다(맨 위에서 처음 맞는 줄을 쓴다).
 #
 # 유출 표식: 계정 ID · 호출 주체(testlib) 말고도 인스턴스 프로필 · 역할 ·
-# 사용자 · 그룹 · 고객 관리형 정책 · 버킷 · 저장소 · 비밀 · 존 이름에 서로
-# 다른 표식을 쓴다. 모든 사례가 끝에 표준 출력 · 표준 오류 · 가짜 aws argv ·
+# 사용자 · 그룹 · 고객 관리형 정책 · 버킷 · 저장소 · 비밀 · 존 · 주제 · 큐
+# 이름에 서로 다른 표식을 쓴다. 모든 사례가 끝에 표준 출력 · 표준 오류 · 가짜 aws argv ·
 # 증거 루트 밖 파일(사례의 HOME · 출력 · 작업 디렉터리)에 표식이 0건인지,
 # 표준 출력 · 표준 오류에 절대 경로가 0건인지 본다(사례 22). 래퍼는 사례의
 # cwd/ 를 작업 디렉터리로 삼아 돈다.
@@ -38,6 +38,8 @@ readonly MARK_BUCKET='qxbucket'
 readonly MARK_REPO='qxrepo'
 readonly MARK_SECRET='qxsecret'
 readonly MARK_ZONE='qxzone'
+readonly MARK_TOPIC='qxtopic'
+readonly MARK_QUEUE='qxqueue'
 readonly ACCOUNT_ARN="arn:aws:iam::${FAKE_ACCOUNT}"
 readonly ROLE_BOX="${ACCOUNT_ARN}:role/${MARK_ROLE}-box"
 readonly ROLE_OIDC="${ACCOUNT_ARN}:role/${MARK_ROLE}-oidc"
@@ -54,6 +56,11 @@ REPO_ARN="arn:aws:ecr:${SEOUL_ACCOUNT}:repository/pokeclip-prod/"
 REPO_ARN+="${MARK_REPO}-api"
 readonly REPO_ARN
 readonly RTB_ARN="arn:aws:ec2:${SEOUL_ACCOUNT}:route-table/rtb-0a1"
+readonly TOPIC_ARN="arn:aws:sns:${SEOUL_ACCOUNT}:${MARK_TOPIC}-events.fifo"
+readonly QUEUE_ARN="arn:aws:sqs:${SEOUL_ACCOUNT}:${MARK_QUEUE}-clip.fifo"
+QUEUE_URL="https://sqs.ap-northeast-2.amazonaws.com/${FAKE_ACCOUNT}/"
+QUEUE_URL+="${MARK_QUEUE}-clip.fifo"
+readonly QUEUE_URL
 readonly ZONE_NAME="media.${MARK_ZONE}.test."
 readonly DEV_RECORD="dev.${MARK_ZONE}.test."
 # Route 53 레코드 이름 문맥 키(추가 문맥 칸의 「키:형」 · 요청의 ContextKeyName).
@@ -342,7 +349,8 @@ expect_no_leak() {
     if grep -qF -e "${FAKE_ACCOUNT}" -e "${FAKE_USER}" -e "${MARK_PROFILE}" \
       -e "${MARK_ROLE}" -e "${MARK_USER}" -e "${MARK_GROUP}" \
       -e "${MARK_POLICY}" -e "${MARK_BUCKET}" -e "${MARK_REPO}" \
-      -e "${MARK_SECRET}" -e "${MARK_ZONE}" -e 'arn:aws' -- "${file}"; then
+      -e "${MARK_SECRET}" -e "${MARK_ZONE}" -e "${MARK_TOPIC}" \
+      -e "${MARK_QUEUE}" -e 'arn:aws' -- "${file}"; then
       leaked+=" ${file##*/}"
     fi
   done < <(find "${case_dir}/home" "${case_dir}/out" "${case_dir}/cwd" \

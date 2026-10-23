@@ -269,7 +269,7 @@ principal::target_fields_ok() {
     *) return 1 ;;
   esac
   case "${read}" in
-    s3 | secretsmanager | ecr | unread | none) ;;
+    s3 | secretsmanager | ecr | sns | sqs | unread | none) ;;
     *) return 1 ;;
   esac
   while [[ -n "${actions}" ]]; do

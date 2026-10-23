@@ -231,9 +231,9 @@ bash infra/terraform/scripts/precheck/scp-recheck.sh --accept O7f \
 (`data/principal_sim/dev_principals.tsv`), 자원은 상태 버킷 · 상태 객체 ·
 비밀 · ECR · network · 인증서 · 권한 변경 대상 · prod 런타임 자원(RDS ·
 SNS · SQS · rewind 버킷 · SQL 실행기 역할 · 프로필)입니다
-(`prod_targets.tsv`). SNS 주제 · SQS 큐는 자원 정책을 읽는 방법이 없어
-(`unread`) 허용이 아닌 질문이 모두 판정 불가(`RESOURCE_POLICY_UNREAD`)입니다.
-읽기만 하고 AWS 에 아무것도 만들지 않으며, 실제 접근을 시도하지 않습니다.
+(`prod_targets.tsv`). SNS 주제 · SQS 큐의 자원 정책도 직접 읽습니다(아래
+「해석 · 정책 읽기」). 읽기만 하고 AWS 에 아무것도 만들지 않으며, 실제
+접근을 시도하지 않습니다.
 
 판정은 증명이 아니라 그 시점의 사전 증거입니다. 보지 못하는 것은 아래
 「이 점검이 보장하지 않는 것」 에 있습니다. 시작 기준은 계획 3절 「단계
@@ -272,7 +272,11 @@ bash infra/terraform/scripts/precheck/principal-check.sh O7a
 1.  **해석 · 정책 읽기**: 주체 넷을 ARN 으로 풀고(같은 역할이면 하나로
     합침), 대상 행을 태그(`Environment = prod`) · 구체 ARN · prod 역할 경로
     (`/pokeclip/prod/`) · 붙은 고객 관리형 정책으로 풉니다. 상태 버킷 · 비밀
-    · ECR 은 자원 정책을 직접 읽습니다.
+    · ECR · SNS 주제 · SQS 큐는 자원 정책을 직접 읽습니다. 주제 · 큐가 아직
+    없으면(`NotFound` · `AWS.SimpleQueueService.NonExistentQueue` ·
+    `QueueDoesNotExist`) 그 행의 첫 단계일 때만 정책 없이 판정하고
+    `report.txt` 에 「자원 없음」 한 줄을 남깁니다(한계 A13). 첫 단계 뒤의
+    「자원 없음」 은 종료 2 입니다.
 1.  **PC2 주체 대조**: 주체마다 `positive_controls.tsv` 의 「허용이어야 하는
     dev 질문」 하나를 묻습니다. 허용이 아니면 그 주체의 행은 모두 판정
     불가입니다.
@@ -337,9 +341,11 @@ bash infra/terraform/scripts/precheck/principal-check.sh O7a
 *   종료 2 는 사용법 · 모르는 단계 · 데이터 꼴 · CLI 기록 켜짐 · 증거 경로
     거부 · 증거 쓰기 실패 · IAM 사용자 아닌 호출 주체 · 호출 실패 · 호출
     자체의 AccessDenied · 응답 꼴(역할 · 사용자 ARN 이 하나가 아님 · 최상위
-    판정이 값 하나가 아님 포함) · 정책 파일 꼴 · S3 · ECR 정책 응답의 `None` ·
+    판정이 값 하나가 아님 · 큐 속성 응답의 `None` · 요청과 다른 큐 ARN 포함) ·
+    정책 파일 꼴 · S3 · ECR · SNS 정책 응답의 `None` ·
     존 해석 2건 이상 · 잘린 존 목록 · PC0 · PC1 실패 · 옛 CLI · 조직 판정
-    False · 자원 정책 읽기의 「없음」 아닌 오류입니다.
+    False · 자원 정책 읽기의 「없음」 아닌 오류(첫 단계 뒤의 주제 · 큐 「자원
+    없음」 포함)입니다.
 *   ⑤ 보고에는 첫 줄 · 표 행 · 증거 디렉터리 이름 · `report.txt` 의 사유별
     건수와 갈래 줄을 냅니다.
 *   증거 디렉터리 `~/.pokeclip-precheck/principal-<단계>-<UTC 시각>`:
@@ -381,7 +387,7 @@ bash infra/terraform/scripts/precheck/principal-check.sh O7a
 | A10 사람 주체 | 좁게(범위 밖) | — |
 | A11 읽기 방법이 없는 자원 정책 종류 | 판정 불가로 받음 | `unread` · 자원 정책 서비스의 `none` 금지 |
 | A12 태그 없는 기본 네트워크 자원 | 좁게 | 범위 밖(결정 3) |
-| A13 그 단계가 새로 만드는 자원 | 좁게(그 단계 동안) | 다음 단계 직전 점검 |
+| A13 그 단계가 새로 만드는 자원 | 좁게(그 단계 동안) | 다음 단계 직전 점검. 첫 단계의 주제 · 큐 「자원 없음」 은 정책 없이 판정(`report.txt` 기록) |
 | A14 `Environment = prod` 태그가 빠진 prod 자원 | 좁게 | `default_tags` · 0건이면 `TARGET_NONE` |
 | A15 시뮬레이터와 실제의 차이 | 어느 쪽이든 | 실제 접근은 시도하지 않음 |
 | A16 점검 뒤 정책 변경 | 좁게 | ③ 이벤트 기록 · 단계마다 재실행 |

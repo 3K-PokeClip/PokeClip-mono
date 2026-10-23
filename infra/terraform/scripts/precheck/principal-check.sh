@@ -41,9 +41,12 @@
 # CLI 기록 켜짐 · 증거 경로 거부 · 증거 쓰기 실패 · IAM 사용자 아닌 호출
 # 주체 · 호출 실패(NoSuchEntity 를 뺀 주체 해석 오류 포함) · 호출 자체의
 # AccessDenied · 응답 꼴(역할 · 사용자 ARN 이 하나가 아님 · 최상위 판정이
-# 값 하나가 아님 포함) · 정책 파일 꼴 · S3 · ECR 정책 응답의 None · 존 해석
-# 2건 이상 · 잘린 존 목록 · PC0 · PC1 실패 · CLI 가 제외를 받지 않음(2.36.12
-# 이상 필요) · 조직 판정 False · 자원 정책 읽기의 「없음」 아닌 오류.
+# 값 하나가 아님 · 큐 속성 응답의 None · 요청과 다른 큐 ARN 포함) · 정책 파일
+# 꼴 · S3 · ECR · SNS 정책 응답의 None · 존 해석 2건 이상 · 잘린 존 목록 ·
+# PC0 · PC1 실패 · CLI 가 제외를 받지 않음(2.36.12 이상 필요) · 조직 판정
+# False · 자원 정책 읽기의 「없음」 아닌 오류(첫 단계 뒤의 주제 · 큐 「자원
+# 없음」 포함 — 첫 단계의 「자원 없음」 은 정책 없이 판정하고 report.txt 에
+# 남긴다).
 #
 # 증거 디렉터리 ~/.pokeclip-precheck/principal-<단계>-<UTC 시각>: sts.txt ·
 # principals.tsv · targets.tsv · policies.tsv · policy-<n>.json ·

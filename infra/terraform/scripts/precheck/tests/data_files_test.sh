@@ -76,7 +76,9 @@ PRINCIPAL_READS=('iam:GetInstanceProfile us-east-1' 'iam:GetRole us-east-1'
   'tag:GetResources us-east-1' 'route53:ListHostedZonesByName us-east-1'
   's3:GetBucketPolicy ap-northeast-2'
   'secretsmanager:GetResourcePolicy ap-northeast-2'
-  'ecr:GetRepositoryPolicy ap-northeast-2')
+  'ecr:GetRepositoryPolicy ap-northeast-2'
+  'sns:GetTopicAttributes ap-northeast-2'
+  'sqs:GetQueueAttributes ap-northeast-2')
 readonly PRINCIPAL_READS
 # 2-3 판정이 없는 묶음이 자기 단계 동작으로 가진 판정 읽기 동작(JUDGE_READS
 # · PRINCIPAL_READS 와 이름이 같은 「묶음 동작」). 「묶음 이름 + 동작」 정확
@@ -87,6 +89,9 @@ STAGE_OWN_READS=('lease-expiry route53:ListHostedZonesByName')
 readonly STAGE_OWN_READS
 # 자원 정책을 가지는 서비스(그 행은 정책 읽기 방법 none 을 쓸 수 없다).
 readonly POLICY_SERVICES=' s3 secretsmanager ecr sns sqs kms lambda '
+# 래퍼가 자원 정책을 읽는 서비스(그 행의 정책 읽기 방법은 서비스 이름 그대로
+# 다 — unread 를 쓸 수 없다. lib/principal_policy.sh 머리 주석).
+readonly READ_SERVICES=' s3 secretsmanager ecr sns sqs '
 # 런타임 1단-가가 만드는 자원의 대상 행(kty 2026-10-24 — 2-3 판정 대상에
 # 편입). 「자원 키 · 첫 단계 · 반드시 묻는 동작」 이고, 같은 색인의
 # RUNTIME_ARN_TAILS 가 그 행 ARN 의 꼬리다(이름 = prod/runtime/*.tf ·
@@ -823,9 +828,10 @@ method_problem() {
 #######################################
 # 데이터 단언: 대상 행마다 동작이 한 서비스이고, IAM · Route 53 행의 리전은
 # us-east-1, 유형은 그 서비스의 것, 해석 방법은 서비스 · 유형 · 계열과
-# 맞고, 자원 정책을 가지는 서비스 행에 정책 읽기 none 이 없다.
+# 맞고, 자원 정책을 가지는 서비스 행에 정책 읽기 none 이 없고, 래퍼가 정책을
+# 읽는 서비스 행의 정책 읽기는 그 서비스다.
 # Globals:
-#   POLICY_SERVICES
+#   POLICY_SERVICES, READ_SERVICES
 #######################################
 expect_target_rows_consistent() {
   local key method type region actions read service problem count=0
@@ -843,6 +849,9 @@ expect_target_rows_consistent() {
     elif [[ "${read}" == none &&
       "${POLICY_SERVICES}" == *" ${service} "* ]]; then
       problem='자원 정책 서비스인데 정책 읽기 none'
+    elif [[ "${READ_SERVICES}" == *" ${service} "* &&
+      "${read}" != "${service}" ]]; then
+      problem="정책을 읽는 서비스인데 정책 읽기가 ${read}"
     else
       problem="$(method_problem "${service}" "${method}" "${type}" \
         "${actions}")"
@@ -857,7 +866,7 @@ expect_target_rows_consistent() {
     return
   fi
   testlib::ok "targets → 서비스 · 리전 · 유형 · 해석 방법 · 계열 일치 ·" \
-    "자원 정책 서비스에 none 0"
+    "자원 정책 서비스에 none 0 · 읽는 서비스는 그 읽기"
 }
 
 #######################################
