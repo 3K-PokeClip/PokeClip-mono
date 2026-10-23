@@ -61,6 +61,8 @@ export interface GlassPlayerProps {
   viewersNote: string;
   /** HLS 재생 소스(m3u8) — 없으면 simulate에 따라 목업이나 「영상 신호 없음」이다 */
   src?: string | null;
+  /** 라이브 영상 키(출입증 쿠키의 경로). 영상 요청이 403이면 그 키의 출입증을 버린다(POK-410) */
+  mediaKey?: string;
   /** 끝난 방송의 녹화(재생 서버) — 있으면 HLS 대신 이것으로 다시보기를 튼다 */
   recorded?: RecordedSource | null;
   /** 녹화 다시보기를 이 자리(방송 기준 초)부터 튼다. 녹화 플레이어가 설 때 한 번만 읽는다(useRecordedPlayback) */
@@ -191,7 +193,13 @@ function RecordedGlassPlayer(props: GlassPlayerProps & { recorded: RecordedSourc
 
 function HlsGlassPlayer(props: GlassPlayerProps & { src: string }) {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const sim = useHlsPlayback(videoRef, props.src, props.simulationOptions, props.onSeek);
+  const sim = useHlsPlayback(
+    videoRef,
+    props.src,
+    props.simulationOptions,
+    props.onSeek,
+    props.mediaKey,
+  );
   // 초가 바뀌거나 시차가 바뀔 때만 알린다(재생기가 초로 내리고, 같은 값이면 같은 객체를 둔다)
   const { onLivePosition } = props;
   const { livePosition } = sim;

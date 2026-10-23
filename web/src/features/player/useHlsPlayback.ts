@@ -10,6 +10,7 @@ import {
   programDateAt,
   rewindWindowSeconds,
 } from './dvrWindow';
+import { recoverForbiddenRecording, reportPlaybackForbidden } from '@/api/playbackAccess';
 import { HLS_DVR_CONFIG } from './hlsConfig';
 import { behindFromSeekFraction, isAtEdge } from './playerMath';
 import { useControlsAutoHide } from './useControlsAutoHide';
@@ -24,7 +25,15 @@ import {
 // 실재생 훅 (POK-31) — usePlayerSimulation과 같은 PlayerSimulation 계약을 반환한다.
 // hls.js 인스턴스·<video> 바인딩은 전부 여기 있고, UI(GlassPlayer 이하)는 어느 훅인지 모른다.
 // jsdom엔 미디어 구현이 없어 이 훅만 따로 시험하지 않는다: src 없는 시험은 시뮬레이션 경로를 탄다. 라이브 화면 시험이
-// hls.js를 흉내 내 재생기의 자리(livePosition)·실제 시각으로 옮기기(seekToDate)·사람이 옮김(onSeek)을 잰다(POK-326).
+// hls.js를 흉내 내 재생기의 자리(livePosition)·실제 시각으로 옮기기(seekToDate)·사람이 옮김(onSeek)·멎은 까닭(playbackError)을
+// 잰다(POK-326 · POK-337).
+
+/** 재생이 멎은 까닭별 알림(POK-337) */
+const STOPPED_NOTES = {
+  // 출입증을 버렸으니 라이브 화면이 1분 안에 다시 받고 재생기를 새로 세운다(LiveScreen의 accessRecoveries)
+  forbidden: '영상 출입증이 끝나 다시 받고 있어요',
+  broken: '영상이 끊겼어요. 새로고침하면 다시 연결해요',
+} as const;
 
 /** 재생 위치에 영상 자료가 있다(HTMLMediaElement.HAVE_CURRENT_DATA) */
 const HAVE_CURRENT_DATA = 2;
@@ -45,12 +54,14 @@ export interface LivePosition {
 /**
  * @param onSeek 사람이 옮겼다(시크바·키·실시간으로·카드). 재생으로 흐를 때는 부르지 않는다: 라이브 채팅이 맨 아래(되감은 자리,
  *   실시간이면 최신)로 간다(POK-326)
+ * @param mediaKey 영상 키(출입증 쿠키의 경로). 영상 요청이 403이면 그 키의 출입증을 버린다(POK-410). 없으면 버리지 않는다
  */
 export function useHlsPlayback(
   videoRef: RefObject<HTMLVideoElement | null>,
   src: string,
   options: PlayerSimulationOptions = {},
   onSeek?: () => void,
+  mediaKey?: string,
 ): PlayerSimulation & { livePosition: LivePosition | null } {
   // playing은 video 이벤트로만 바꾼다 — 자동재생이 거부되면 false로 남아 재생 버튼이 노출된다
   const [playing, setPlaying] = useState(false);
@@ -68,6 +79,13 @@ export function useHlsPlayback(
   const [quality, setQuality] = useState<PlayerQuality>(PLAYER_QUALITIES[0]);
   const [lowLatency, setLowLatency] = useState(true);
   const [clipMarked, setClipMarked] = useState(false);
+  /** 복구를 포기한 주소와 까닭. 주소가 바뀌면 알림이 저절로 사라진다 */
+  const [stopped, setStopped] = useState<{ src: string; why: keyof typeof STOPPED_NOTES } | null>(
+    null,
+  );
+  // 키가 늦게 와도 재생기를 다시 세우지 않는다(효과는 src에만 걸린다): 오류가 난 그때의 키를 읽는다
+  const mediaKeyRef = useRef(mediaKey);
+  mediaKeyRef.current = mediaKey;
   const { controlsVisible, wake, sleep } = useControlsAutoHide(playing);
 
   const hlsRef = useRef<Hls | null>(null);
@@ -200,6 +218,8 @@ export function useHlsPlayback(
     let disposed = false;
     let recoveredNetwork = false;
     let recoveredMedia = false;
+    // 브라우저 기본 HLS(옛 iOS Safari)의 오류 처리. hls.js 갈래에서만 단다
+    let onNativeError: (() => void) | null = null;
 
     // src 전환(?stream= 변경) 시 이전 스트림의 상태가 남지 않게 초기화 — 첫 마운트에선
     // 같은 값이라 no-op. 새 소스의 자동재생이 거부되면 playing=false로 남아 재생 버튼이 노출된다.
@@ -263,7 +283,21 @@ export function useHlsPlayback(
         hlsRef.current = hls;
         hls.on(HlsCtor.Events.ERROR, (_event, data) => {
           if (!data.fatal) return;
-          // 스파이크 최소 복구 — 각 1회만 시도, 재발 시 정리하고 크게 남긴다
+          // 403은 출입증 쿠키가 없다는 뜻이다(만료 · 다른 탭이 쿠키 한도를 넘겨 지워짐). 다시 불러도 또 403이라 한 번 더 해 보지
+          // 않고 출입증을 버린다: 라이브 화면이 1분 안에 다시 받고 재생기를 새로 세운다(POK-410)
+          const key = mediaKeyRef.current;
+          if (
+            data.type === HlsCtor.ErrorTypes.NETWORK_ERROR &&
+            data.response?.code === 403 &&
+            key !== undefined
+          ) {
+            reportPlaybackForbidden(key);
+            setStopped({ src, why: 'forbidden' });
+            hls.destroy();
+            hlsRef.current = null;
+            return;
+          }
+          // 최소 복구: 각 1회만 시도, 재발 시 정리하고 영상 위에 알린다
           if (data.type === HlsCtor.ErrorTypes.NETWORK_ERROR && !recoveredNetwork) {
             recoveredNetwork = true;
             hls.startLoad();
@@ -274,9 +308,9 @@ export function useHlsPlayback(
             hls.recoverMediaError();
             return;
           }
-          // 화면은 마지막 프레임에서 멎고 로그만 남는다 — 사용자에게 보이는 에러 상태는
-          // PlayerSimulation 계약을 넓혀야 해 POK-23에서 다룬다
+          // 화면은 마지막 프레임에서 멎는다: 영상 위 덮개로 알리고(playbackError) 원인은 로그로 남긴다
           console.error('[player] 복구 불가 hls.js 오류:', data.type, data.details);
+          setStopped({ src, why: 'broken' });
           hls.destroy();
           hlsRef.current = null;
         });
@@ -289,6 +323,19 @@ export function useHlsPlayback(
         hls.loadSource(src);
       } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
         // Safari 네이티브 HLS — liveSyncPosition이 없어 엣지 스냅은 백오프 경로를 탄다
+        // <video>는 응답 코드를 못 읽어 첫 바이트를 물어 403인지 본다(다시보기와 같은 길). 403이면 출입증을 버리고 다시 받아 둔다:
+        // 라이브 화면이 1분 안에 재생기를 새로 세운다. 기본 재생은 스스로 다시 해 보므로 error가 왔으면 멎은 것이다(PR #347 codex)
+        onNativeError = () => {
+          const key = mediaKeyRef.current;
+          if (key === undefined) {
+            setStopped({ src, why: 'broken' });
+            return;
+          }
+          void recoverForbiddenRecording(src, key).then((forbidden) => {
+            if (!disposed) setStopped({ src, why: forbidden ? 'forbidden' : 'broken' });
+          });
+        };
+        video.addEventListener('error', onNativeError);
         video.src = src;
         video.play().catch(() => {});
       } else {
@@ -303,6 +350,7 @@ export function useHlsPlayback(
       video.removeEventListener('pause', onPause);
       video.removeEventListener('volumechange', onVolumeChange);
       video.removeEventListener('timeupdate', paint);
+      if (onNativeError !== null) video.removeEventListener('error', onNativeError);
       hlsRef.current?.destroy();
       hlsRef.current = null;
       // src 제거만으로는 네트워크·디코더가 붙어 있다 — load()까지 해야 리소스가 해제된다
@@ -331,12 +379,13 @@ export function useHlsPlayback(
     seekBy,
     seekToDate,
     returnToLive,
-    // 화질은 표시용 — hls.js 레벨 배선은 스파이크 범위 밖 (POK-23 이후). 렌디션이 하나라 메뉴를 안 보인다(POK-253)
+    // 화질은 표시용: 렌디션이 하나라 고를 것이 없어 메뉴를 안 보인다(POK-253)
     settingsMenu: false,
     replay: false,
+    playbackError: stopped !== null && stopped.src === src ? STOPPED_NOTES[stopped.why] : null,
     setQuality,
-    // 표시 전용 — lowLatencyMode는 Hls 생성자 전용 옵션이라 실반영엔 인스턴스 재생성이
-    // 필요하다. 시킹 위치 복원 등 엣지가 커서 스파이크 범위 밖 (POK-23 이후).
+    // 표시 전용: lowLatencyMode는 Hls 생성자 전용 옵션이라 실반영엔 인스턴스 재생성이
+    // 필요하다. 시킹 위치 복원 등 엣지가 커서 반영하지 않는다.
     toggleLowLatency: useCallback(() => setLowLatency((v) => !v), []),
     markClip,
     wake,
