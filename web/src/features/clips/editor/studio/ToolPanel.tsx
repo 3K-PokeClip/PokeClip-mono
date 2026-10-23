@@ -20,9 +20,7 @@ export function ToolPanel({ state }: { state: ClipEditorMockState }) {
       {state.activeTool === 'layout' ? <LayoutSection state={state} /> : null}
       {state.activeTool === 'subtitle' ? <SubtitleSection state={state} /> : null}
       {state.activeTool === 'text' ? <TextSection /> : null}
-      {state.activeTool === 'audio' ? (
-        <AudioSection state={state} kinds={['mic', 'game', 'bgm', 'sfx']} title="오디오" />
-      ) : null}
+      {state.activeTool === 'audio' ? <AudioSection state={state} /> : null}
       {state.activeTool === 'image' ? <ImageSection /> : null}
     </div>
   );

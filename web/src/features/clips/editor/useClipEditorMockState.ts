@@ -52,6 +52,11 @@ import {
   type PipBorder,
   type PipBox,
 } from './editorLayout';
+import {
+  applyAudioPreset as presetMix,
+  presetAvailability,
+  type AudioPresetId,
+} from './audioPresets';
 import type { EditorPlayback } from './editorPlayback';
 import { regionCropsOf, type EditorLook } from './recipeLook';
 import { useEditorPlaybackSimulation } from './useEditorPlaybackSimulation';
@@ -189,12 +194,6 @@ export interface EditorRegion {
   cropZoom?: number;
 }
 
-export interface EditorImageItem {
-  id: string;
-  name: string;
-  placement: string;
-}
-
 export type SubtitleState =
   | { status: 'idle'; estimateLabel: string }
   | { status: 'generating' }
@@ -282,21 +281,10 @@ const MOCK_TITLE_SUGGESTIONS: readonly TitleSuggestion[] = [
   { id: 'title-3', text: '이걸 쫓아온다고? 결말 실화' },
 ];
 
-const MOCK_IMAGES: readonly EditorImageItem[] = [
-  { id: 'img-1', name: '채널 로고.png', placement: '우측 상단 · 크기 12%' },
-];
-
-/** 시안 BGM·효과음 패널의 프리셋 */
-const MOCK_SFX_PRESETS = ['띠용', '박수', '두둥'] as const;
-
-const MOCK_BGM_LABEL = 'Neon Drive.mp3';
-
 /** 실제 모드의 빈 콘텐츠 — 줄 백엔드가 없다(파일 머리 주석) */
 const NO_SUBTITLES: readonly SubtitleItem[] = [];
 const NO_TRACKS: readonly EditorTrack[] = [];
 const NO_TITLE_SUGGESTIONS: readonly TitleSuggestion[] = [];
-const NO_IMAGES: readonly EditorImageItem[] = [];
-const NO_SFX_PRESETS: readonly string[] = [];
 
 /**
  * 고를 수 있는 값의 목록도 데이터다 — 화면에 배열을 박아두면
@@ -315,6 +303,14 @@ const SUBTITLE_MODE_NOTE: Record<SubtitleMode, string> = {
   cc: '자막 파일',
   'burn-cc': '영상+파일',
 };
+
+/** 오디오 「빠른 설정」 카드 넷(POK-389) — 값 계산은 audioPresets.ts */
+const AUDIO_PRESETS: readonly { value: AudioPresetId; label: string; hint: string }[] = [
+  { value: 'copyright-safe', label: '저작권 걱정 없이', hint: 'BGM 빼기' },
+  { value: 'voice-up', label: '목소리 크게', hint: '마이크 ↑ 게임 ↓' },
+  { value: 'game-up', label: '게임 소리 크게', hint: '게임 ↑' },
+  { value: 'original', label: '원래 소리', hint: '최종 믹스' },
+];
 
 /**
  * 시안 좌측 도구 레일 — 순서가 곧 화면 순서다. 쇼츠를 만드는 순서(배치 → 자막 → 글자 → 소리 → 이미지)를 따른다(POK-389).
@@ -554,6 +550,16 @@ export interface ClipEditorMockState {
   tracks: EditorTrack[];
   setTrackVolume: (trackId: string, volume: number) => void;
   toggleTrackMute: (trackId: string) => void;
+  /** 오디오 「빠른 설정」(POK-389) — 고른 카드. 트랙을 손으로 바꾸면 풀린다 */
+  audioPreset: AudioPresetId | null;
+  audioPresetOptions: readonly {
+    value: AudioPresetId;
+    label: string;
+    hint: string;
+    /** 맞는 트랙 이름이 없으면 못 고르고 그 이유 */
+    unavailableReason: string | null;
+  }[];
+  applyAudioPreset: (preset: AudioPresetId) => void;
   selectedClipId: string | null;
   selectClip: (clipId: string | null) => void;
 
@@ -575,11 +581,6 @@ export interface ClipEditorMockState {
   titleSuggestions: readonly TitleSuggestion[];
   selectedTitleId: string | null;
   selectTitle: (id: string) => void;
-
-  // BGM·효과음·이미지
-  bgmLabel: string | null;
-  sfxPresets: readonly string[];
-  images: readonly EditorImageItem[];
 
   // 타임라인 (보는 방식 — 되돌리기 대상 아님)
   sourceDurationSeconds: number;
@@ -818,6 +819,8 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     return { status: 'idle', estimateLabel: real ? NOT_AVAILABLE : '약 20초' };
   }, [subtitleStatus, subtitles, real]);
 
+  const [audioPreset, setAudioPreset] = useState<AudioPresetId | null>(null);
+
   const tracks = useMemo(
     () =>
       (options.tracks ?? (real ? NO_TRACKS : MOCK_TRACKS)).map((track) => ({
@@ -873,8 +876,15 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     canUndo: historyCanUndo(history),
     canRedo: historyCanRedo(history),
     // 되돌리면 구간이 다른 값이 되므로 직전 거부 안내는 더 이상 그 구간의 이야기가 아니다
-    undo: useCallback(() => setHistory(undoHistory), []),
-    redo: useCallback(() => setHistory(redoHistory), []),
+    // 되돌리면 트랙 값이 고른 빠른 설정과 달라질 수 있다 — 표시를 푼다
+    undo: useCallback(() => {
+      setHistory(undoHistory);
+      setAudioPreset(null);
+    }, []),
+    redo: useCallback(() => {
+      setHistory(redoHistory);
+      setAudioPreset(null);
+    }, []),
     // 저장·주문은 컨테이너가 준 실제 동작으로 간다. 없으면 목업 안내다
     saveDraft: useCallback(() => {
       if (actions?.saveDraft) actions.saveDraft(presentRef.current);
@@ -1128,11 +1138,13 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
 
     tracks,
     setTrackVolume: useCallback(
-      (trackId: string, volume: number) =>
+      (trackId: string, volume: number) => {
+        setAudioPreset(null);
         commit((current) => ({
           ...current,
           trackVolumes: { ...current.trackVolumes, [trackId]: volume },
-        })),
+        }));
+      },
       [commit],
     ),
     toggleTrackMute: useCallback(
@@ -1151,9 +1163,39 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
             return;
           }
         }
+        setAudioPreset(null);
         commit((cur) => ({ ...cur, trackMuted: muted }));
       },
       [commit, options.mixTrackId, options.tracks, toast],
+    ),
+    audioPreset,
+    audioPresetOptions: useMemo(
+      () =>
+        AUDIO_PRESETS.map((preset) => {
+          const availability = presetAvailability(preset.value, tracks, options.mixTrackId);
+          return {
+            ...preset,
+            unavailableReason: availability.available ? null : availability.reason,
+          };
+        }),
+      [tracks, options.mixTrackId],
+    ),
+    applyAudioPreset: useCallback(
+      (preset: AudioPresetId) => {
+        if (!presetAvailability(preset, tracks, options.mixTrackId).available) return;
+        const current = {
+          muted: Object.fromEntries(tracks.map((t) => [t.id, t.muted])),
+          volumes: Object.fromEntries(tracks.map((t) => [t.id, t.volume ?? 100])),
+        };
+        const next = presetMix(preset, tracks, options.mixTrackId, current);
+        setAudioPreset(preset);
+        commit((cur) => ({
+          ...cur,
+          trackMuted: { ...cur.trackMuted, ...next.muted },
+          trackVolumes: { ...cur.trackVolumes, ...next.volumes },
+        }));
+      },
+      [commit, tracks, options.mixTrackId],
     ),
     selectedClipId,
     selectClip: setSelectedClipId,
@@ -1185,10 +1227,6 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
         ),
       [commit],
     ),
-
-    bgmLabel: real ? null : MOCK_BGM_LABEL,
-    sfxPresets: real ? NO_SFX_PRESETS : MOCK_SFX_PRESETS,
-    images: real ? NO_IMAGES : MOCK_IMAGES,
 
     // 소스 길이의 정본은 목업 소스 하나다 — 구간 핸들 경계·타임라인 창도 같은 값을 본다.
     // 어댑터의 durationSeconds 는 어댑터 자신의 클램프용이라, 실제 소스가 오기 전엔 여기로 안 끌어온다

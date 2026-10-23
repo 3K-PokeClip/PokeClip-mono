@@ -66,6 +66,8 @@ const server = vi.hoisted(() => ({
   /** 저장된 자막. clip은 자막이 없으면 칸을 빼지 않고 null 로 준다 */
   savedSubtitles: null as unknown,
   relation: 'OWNER',
+  /** 내 트랙 이름(POK-240). 칸 i = trackId i, 빈 칸은 「트랙 n」 */
+  myTrackLabels: {} as unknown,
   /** 영상 경로의 키(POK-233). undefined면 이 칸을 모르는 옛 서버다 */
   ingest: undefined as string | undefined,
   delegations: [] as {
@@ -205,7 +207,8 @@ function handle(url: string, init?: RequestInit) {
   if (polled && method === 'GET' && server.clipPoll) return server.clipPoll(Number(polled[1]));
   if (path === '/api/auth/me')
     return jsonResponse(200, { id: 9, email: 'me@example.com', name: '나' });
-  if (path === '/api/streamers/9/audio-tracks') return jsonResponse(200, { labels: {} });
+  if (path === '/api/streamers/9/audio-tracks')
+    return jsonResponse(200, { labels: server.myTrackLabels });
   if (path.startsWith('/api/streamers/'))
     return jsonResponse(200, { labels: ['남의 트랙', null, null, null, null, null] });
   if (path === '/api/editor-delegations/as-editor') return jsonResponse(200, server.delegations);
@@ -224,6 +227,7 @@ beforeEach(() => {
   server.origin = null;
   server.savedSubtitles = null;
   server.relation = 'OWNER';
+  server.myTrackLabels = {};
   server.delegations = [];
   server.ingest = undefined;
   server.render = { status: 201, clip: {} };
@@ -360,7 +364,7 @@ describe('StudioScreen — 카드로 연 실제 편집기', () => {
     const save = await openFrom(`stream=${STREAM_ID}&card=5`);
 
     await user.click(screen.getByRole('tab', { name: '오디오' }));
-    await user.click(screen.getByRole('switch', { name: '트랙 2 사용' }));
+    await user.click(screen.getByRole('checkbox', { name: '트랙 2 넣기' }));
     await user.click(save);
 
     await waitFor(() =>
@@ -435,7 +439,7 @@ describe('StudioScreen — 카드로 연 실제 편집기', () => {
     expect(bodiesOf('PUT', `/api/clip/broadcasts/${STREAM_ID}/recipes/31`)).toHaveLength(0);
 
     await user.click(screen.getByRole('tab', { name: '오디오' }));
-    await user.click(screen.getByRole('switch', { name: '트랙 2 사용' }));
+    await user.click(screen.getByRole('checkbox', { name: '트랙 2 넣기' }));
     await orderVideo(user);
     await waitFor(() => expect(renders()).toBe(2));
     expect(bodiesOf('PUT', `/api/clip/broadcasts/${STREAM_ID}/recipes/31`)[0]?.audio).toEqual({
@@ -448,8 +452,8 @@ describe('StudioScreen — 카드로 연 실제 편집기', () => {
     const user = userEvent.setup();
     await openFrom(`stream=${STREAM_ID}&card=5`);
     await user.click(screen.getByRole('tab', { name: '오디오' }));
-    const mix = () => screen.getByRole('switch', { name: '최종 믹스(트랙 1) 사용' });
-    const track2 = () => screen.getByRole('switch', { name: '트랙 2 사용' });
+    const mix = () => screen.getByRole('checkbox', { name: '최종 믹스(트랙 1) 넣기' });
+    const track2 = () => screen.getByRole('checkbox', { name: '트랙 2 넣기' });
     expect(mix()).toBeChecked();
 
     await user.click(track2());
@@ -464,6 +468,69 @@ describe('StudioScreen — 카드로 연 실제 편집기', () => {
     await user.click(mix());
     expect(mix()).toBeChecked();
     expect(track2()).not.toBeChecked();
+  });
+});
+
+describe('StudioScreen — 오디오 빠른 설정(POK-389)', () => {
+  it('「저작권 걱정 없이」를 고르면 BGM 트랙만 빼고 나머지 소스 트랙을 섞어 저장한다', async () => {
+    server.myTrackLabels = [null, '마이크', '게임', '디스코드', 'BGM', null];
+    const user = userEvent.setup();
+    const save = await openFrom(`stream=${STREAM_ID}&card=5`);
+
+    await user.click(screen.getByRole('tab', { name: '오디오' }));
+    await user.click(screen.getByRole('radio', { name: /저작권 걱정 없이/ }));
+    expect(screen.getByRole('checkbox', { name: 'BGM 넣기' })).not.toBeChecked();
+    expect(screen.getByRole('checkbox', { name: '최종 믹스(트랙 1) 넣기' })).not.toBeChecked();
+    await user.click(save);
+
+    await waitFor(() =>
+      expect(bodiesOf('POST', `/api/clip/broadcasts/${STREAM_ID}/recipes`)).toHaveLength(1),
+    );
+    expect(bodiesOf('POST', `/api/clip/broadcasts/${STREAM_ID}/recipes`)[0]?.audio).toEqual({
+      tracks: [
+        { trackId: 1, gain: 1 },
+        { trackId: 2, gain: 1 },
+        { trackId: 3, gain: 1 },
+        { trackId: 5, gain: 1 },
+      ],
+    });
+  });
+
+  it('「목소리 크게」는 마이크 1.3배 · 게임 0.6배로 저장하고, 막대를 만지면 고른 표시가 풀린다', async () => {
+    server.myTrackLabels = [null, '마이크', '게임', null, null, null];
+    const user = userEvent.setup();
+    const save = await openFrom(`stream=${STREAM_ID}&card=5`);
+
+    await user.click(screen.getByRole('tab', { name: '오디오' }));
+    const voice = screen.getByRole('radio', { name: /목소리 크게/ });
+    await user.click(voice);
+    expect(voice).toBeChecked();
+    await user.click(save);
+
+    await waitFor(() =>
+      expect(bodiesOf('POST', `/api/clip/broadcasts/${STREAM_ID}/recipes`)).toHaveLength(1),
+    );
+    const tracks = (
+      bodiesOf('POST', `/api/clip/broadcasts/${STREAM_ID}/recipes`)[0]?.audio as {
+        tracks: { trackId: number; gain: number }[];
+      }
+    ).tracks;
+    expect(tracks.find((t) => t.trackId === 1)?.gain).toBeCloseTo(1.3);
+    expect(tracks.find((t) => t.trackId === 2)?.gain).toBeCloseTo(0.6);
+
+    await user.click(screen.getByRole('checkbox', { name: '트랙 4 넣기' }));
+    expect(voice).not.toBeChecked();
+  });
+
+  it('맞는 트랙 이름이 없으면 그 카드는 꺼지고 이유를 말한다', async () => {
+    const user = userEvent.setup();
+    await openFrom(`stream=${STREAM_ID}&card=5`);
+
+    await user.click(screen.getByRole('tab', { name: '오디오' }));
+    expect(screen.getByRole('radio', { name: /저작권 걱정 없이/ })).toBeDisabled();
+    expect(screen.getByText('트랙 이름에 BGM이 없어요')).toBeInTheDocument();
+    // 원래 소리(최종 믹스)는 언제나 고를 수 있다
+    expect(screen.getByRole('radio', { name: /원래 소리/ })).toBeEnabled();
   });
 });
 
@@ -961,8 +1028,8 @@ describe('StudioScreen: 영상 만들기 + 유튜브 올리기(POK-291)', () => 
     const user = userEvent.setup();
     await openFrom(`stream=${STREAM_ID}&card=5`);
     await user.click(screen.getByRole('tab', { name: '오디오' }));
-    await user.click(screen.getByRole('switch', { name: '트랙 2 사용' }));
-    expect(screen.getByRole('switch', { name: '트랙 2 사용' })).toBeChecked();
+    await user.click(screen.getByRole('checkbox', { name: '트랙 2 넣기' }));
+    expect(screen.getByRole('checkbox', { name: '트랙 2 넣기' })).toBeChecked();
 
     await user.click(screen.getByRole('button', { name: '영상 만들기' }));
     dialog().getByRole('switch', { name: '아동용 영상이에요' }).focus();
@@ -974,14 +1041,14 @@ describe('StudioScreen: 영상 만들기 + 유튜브 올리기(POK-291)', () => 
 
     await user.click(dialog().getByRole('button', { name: '취소' }));
     // ⌘Z가 창 뒤로 샜으면 트랙 2가 꺼져 있다
-    expect(screen.getByRole('switch', { name: '트랙 2 사용' })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: '트랙 2 넣기' })).toBeChecked();
   });
 
   it('카드로 연 편집기를 처음 저장하면 주소가 ?recipe= 로 바뀌고, 다시 읽지 않아 실행취소가 남는다', async () => {
     const user = userEvent.setup();
     const save = await openFrom(`stream=${STREAM_ID}&card=5`);
     await user.click(screen.getByRole('tab', { name: '오디오' }));
-    await user.click(screen.getByRole('switch', { name: '트랙 2 사용' }));
+    await user.click(screen.getByRole('checkbox', { name: '트랙 2 넣기' }));
 
     await user.click(save);
     await screen.findByText(/편집본 #31 v1 저장됨/);

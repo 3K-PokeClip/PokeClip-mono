@@ -550,18 +550,18 @@ describe('StudioScreen', () => {
     expect(screen.getByRole('slider', { name: '구간 끝점' })).toBeInTheDocument();
   });
 
-  it('스위치를 누른 뒤에도 ⌘Z가 먹는다 — DS Switch는 checkbox라 글자 입력이 아니다', async () => {
+  it('체크박스를 누른 뒤에도 ⌘Z가 먹는다 — 체크박스는 글자 입력이 아니다', async () => {
     const user = userEvent.setup();
     renderStudio();
 
     await user.click(screen.getByRole('tab', { name: '오디오' }));
-    const mic = screen.getByRole('switch', { name: '마이크 사용' });
+    const mic = screen.getByRole('checkbox', { name: '마이크 넣기' });
     await user.click(mic);
     expect(mic).not.toBeChecked();
 
-    // 포커스가 스위치(input)에 남은 채로 되돌린다
+    // 포커스가 체크박스(input)에 남은 채로 되돌린다
     await user.keyboard('{Meta>}z{/Meta}');
-    expect(screen.getByRole('switch', { name: '마이크 사용' })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: '마이크 넣기' })).toBeChecked();
   });
 
   it('키마다 주인이 다르다 — 버튼 위 화살표는 시킹, 슬라이더 위 Space는 재생', async () => {

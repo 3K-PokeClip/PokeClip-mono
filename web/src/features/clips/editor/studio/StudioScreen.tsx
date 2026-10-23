@@ -91,7 +91,8 @@ const TEXT_ENTRY =
  * 안 쓰는 키까지 양보한다(버튼은 화살표를 안 쓰고 슬라이더는 Space를 안 쓴다).
  */
 const KEY_OWNERS: Partial<Record<EditorIntent['kind'], string>> = {
-  togglePlay: 'button:not([role]), [role="button"], [role="switch"], [role="tab"], [role="radio"]',
+  togglePlay:
+    'button:not([role]), [role="button"], [role="switch"], [role="tab"], [role="radio"], input[type="checkbox"]',
   seekBy: '[role="slider"], [role="radiogroup"], [role="tablist"]',
 };
 
