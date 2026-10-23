@@ -330,6 +330,59 @@ web/                     # 단일 Next.js 앱 (App Router + TanStack Query + Zus
 대상을 바꾸려면 다시 빌드해야 한다. 백엔드 로컬 기동은
 [`docs/dev-environment.md`](../docs/dev-environment.md).
 
+### 컨테이너 이미지 (`Dockerfile`)
+
+운영(prod)에서는 공개 ALB 뒤 ECS Fargate 태스크가 이 이미지를 돌린다. `output: 'standalone'`
+빌드의 `server.js`를 비root 사용자 `node`로 띄우며, 포트는 `3000`이다. 올리는 절차는
+[`prod-artifacts.md`](../infra/terraform/runbooks/prod-artifacts.md)를 따른다.
+
+```bash
+docker build --platform linux/<태스크 아키텍처> -t pokeclip-web \
+  --build-arg AUTH_API_URL=… --build-arg CLIP_API_URL=… \
+  --build-arg NEXT_PUBLIC_GOOGLE_CLIENT_ID=… \
+  --build-arg NEXT_PUBLIC_MEDIA_LIVE_BASE_URL=… \
+  --build-arg NEXT_PUBLIC_MEDIA_PLAYBACK_BASE_URL=… \
+  web
+```
+
+**환경 값은 전부 빌드 인자다 — 실행 시점 env로는 바뀌지 않는다.** rewrites 대상은
+`next build`가 `.next/routes-manifest.json`에 박고, `NEXT_PUBLIC_*`는 번들에 인라이닝된다
+(2026-10-23 실측 — 빌드 때와 다른 `AUTH_API_URL`·`CLIP_API_URL`을 주고 `next start`와
+`server.js`를 띄워도 빌드 때 주소로 프록시했다). 그래서 환경마다 따로 빌드한다.
+
+| 빌드 인자                             | 비면                   | 값                                  |
+| ------------------------------------- | ---------------------- | ----------------------------------- |
+| `AUTH_API_URL`                        | **빌드 실패**          | auth 서버 내부 주소 (rewrites 대상) |
+| `CLIP_API_URL`                        | **빌드 실패**          | clip 서버 내부 주소 (rewrites 대상) |
+| `NEXT_PUBLIC_GOOGLE_CLIENT_ID`        | **빌드 실패**          | 백엔드 `GOOGLE_CLIENT_ID`와 같은 값 |
+| `NEXT_PUBLIC_MEDIA_LIVE_BASE_URL`     | **빌드 실패**          | LL-HLS 베이스                       |
+| `NEXT_PUBLIC_MEDIA_PLAYBACK_BASE_URL` | **빌드 실패**          | 녹화 재생 서버                      |
+| `NEXT_PUBLIC_POSTHOG_KEY` · `_HOST`   | 사용 통계 꺼짐         | 운영 값은 `.env.example` 주석       |
+| `NEXT_PUBLIC_POSTHOG_REPLAY`          | 세션 녹화 꺼짐         | `on`일 때만 켜짐                    |
+| `NEXT_PUBLIC_LANDING_URL`             | `https://pokeclip.com` | 랜딩 주소                           |
+
+`NEXT_PUBLIC_MEDIA_PLAYBACK_BASE_URL`은 prod 이미지가 다시보기·편집기 미리보기가 꺼진 채 나가지 않게
+필수로 둔다(로컬 개발은 위 환경변수 표대로 비워도 된다). prod 값은 I2-2에서 이것도 함께 정한다.
+
+선택 인자는 비어도 빌드가 멈추지 않으므로, 이름을 잘못 적으면 그 기능이 조용히 꺼진 채 빌드된다.
+
+- `NEXT_PUBLIC_MEDIA_STUB_URL`은 받지 않는다 — 배포 빌드에서는 반드시 비어야 한다. 같은 이유로
+  `.dockerignore`가 `.env*` 파일을 빌드 컨텍스트에서 뺀다(`.env.local`이 섞이면 `next build`가
+  읽어 굳힌다).
+- 실행 시점 env는 `PORT`(기본 `3000`)·`HOSTNAME`(기본 `0.0.0.0`)·`KEEP_ALIVE_TIMEOUT`(기본 `65000`ms)
+  셋이다. `KEEP_ALIVE_TIMEOUT`은 ALB idle timeout보다 길어야 한다 — SSE 때문에 M8에서 ALB idle을
+  늘리면 이 값도 그보다 크게 준다.
+- 헬스체크는 `/api/ping`이다(앱이 직접 답해 백엔드 상태와 무관). 이미지에 `HEALTHCHECK`로 넣어
+  뒀다.
+- `pnpm start`(`next start`)는 standalone 설정에서 경고를 내지만 동작은 한다. 운영과 같은 꼴로
+  띄우려면 Dockerfile이 하는 대로 `public`·`.next/static`을 standalone 폴더로 옮긴 뒤 띄운다
+  (standalone은 두 폴더를 싣지 않는다):
+
+  ```bash
+  cp -r public .next/standalone/ && cp -r .next/static .next/standalone/.next/
+  node .next/standalone/server.js
+  ```
+
 ### 세션·토큰 저장과 다중 탭
 
 - access(30분)는 **메모리에만**, refresh(14일)만 `localStorage`(`pc-auth`)에 둔다 — `stores/auth.ts`. localStorage의 refresh가 **정본**이다.
