@@ -114,7 +114,6 @@ export function useEditorVideoPlayback(options: {
     }
     const target = win;
     const abort = new AbortController();
-    let objectUrl: string | null = null;
     setFailed(false);
     // 출입증이 곧 만료되면 새로 받은 뒤 부른다(POK-317). 받아 둔 것이 쓸 만하면 기다리지 않는다
     const load = () => fetch(remoteUrl, { signal: abort.signal, credentials: mediaCredentials() });
@@ -132,18 +131,21 @@ export function useEditorVideoPlayback(options: {
         return res.blob();
       })
       .then((blob) => {
-        objectUrl = URL.createObjectURL(new Blob([blob], { type: 'video/mp4' }));
-        setSrc(objectUrl);
+        setSrc(URL.createObjectURL(new Blob([blob], { type: 'video/mp4' })));
         setSrcWindow(target);
       })
       .catch((e: unknown) => {
         if (!(e instanceof DOMException && e.name === 'AbortError')) setFailed(true);
       });
-    return () => {
-      abort.abort();
-      if (objectUrl !== null) URL.revokeObjectURL(objectUrl);
-    };
+    return () => abort.abort();
   }, [remoteUrl, streamId, recordingSeconds, win]);
+
+  // 옛 영상 주소는 새 영상이 들어간 뒤에(또는 화면을 떠날 때) 지운다: 새 창을 받는 동안에도 <video>는 옛 주소로 틀고
+  // 되감기 때문에, 받기를 시작할 때 지우면 그 사이 되감기가 브라우저에 따라 실패한다(PR #341 claude)
+  useEffect(() => {
+    if (src === '') return undefined;
+    return () => URL.revokeObjectURL(src);
+  }, [src]);
 
   const clampToWindow = useCallback((seconds: number) => {
     const w = winRef.current;

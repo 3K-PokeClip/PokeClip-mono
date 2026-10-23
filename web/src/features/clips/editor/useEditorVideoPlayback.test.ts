@@ -153,6 +153,58 @@ describe('useEditorVideoPlayback: 창 다시 받기 예약 (POK-389)', () => {
   });
 });
 
+describe('useEditorVideoPlayback: 옛 영상 주소 지우기 (POK-389)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it('새 창을 받는 동안에는 옛 영상 주소를 지우지 않고, 새 영상이 들어온 뒤에 지운다(PR #341 claude)', async () => {
+    vi.useFakeTimers();
+    const finishers: ((res: Response) => void)[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => new Promise<Response>((resolve) => finishers.push(resolve))),
+    );
+    let made = 0;
+    const revoke = vi.fn();
+    vi.stubGlobal(
+      'URL',
+      Object.assign(URL, { createObjectURL: () => `blob:${++made}`, revokeObjectURL: revoke }),
+    );
+    const { result } = renderHook(() =>
+      useEditorVideoPlayback({
+        streamId: 'key-1',
+        recordingStartMs: BASE,
+        recordingSeconds: 100,
+        initialRange: { startSeconds: 20, endSeconds: 30 },
+      }),
+    );
+    await act(async () => {
+      finishers[0]!(new Response('mp4', { status: 200 }));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(result.current.src).toBe('blob:1');
+
+    // 구간을 창 끝 너머로 늘리면 새 창을 받는다. 받는 동안 <video>는 옛 주소를 그대로 쓴다
+    await act(async () => {
+      result.current.playback.setBounds({ startSeconds: 20, endSeconds: 45, loop: true });
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(finishers).toHaveLength(2);
+    expect(result.current.src).toBe('blob:1');
+    expect(revoke).not.toHaveBeenCalledWith('blob:1');
+
+    await act(async () => {
+      finishers[1]!(new Response('mp4', { status: 200 }));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(result.current.src).toBe('blob:2');
+    expect(revoke).toHaveBeenCalledWith('blob:1');
+    expect(revoke).not.toHaveBeenCalledWith('blob:2');
+  });
+});
+
 describe('useEditorVideoPlayback: 출입증 쿠키 (POK-317)', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
