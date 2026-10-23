@@ -110,7 +110,9 @@ class RetentionCleanerAttemptsTest extends IntegrationTestSupport {
                     FOR UPDATE SKIP LOCKED)
                 """, cutoff, limit));
 
-        assertThat(deleted).isEqualTo(limit + 500);
+        assertThat(deleted)
+                .as("강제가 안 먹었다(PostgreSQL 판이 바뀌었나): 그러면 위 시험이 계획을 안 바꾸고 저절로 초록이다. RescanPlan을 다시 맞춘다")
+                .isEqualTo(limit + 500);
     }
 
     @Test

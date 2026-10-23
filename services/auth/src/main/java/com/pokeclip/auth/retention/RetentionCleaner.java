@@ -17,8 +17,8 @@ import java.time.Instant;
  * 롤백돼 500). 같은 시드로 pgbench 4클라이언트 15초: 원판 데드락 14회(30건 중 13 실패) → SKIP LOCKED 0회(298건 처리, 실패 0).
  *
  * <p>잠금은 고르는 질의 안의 {@code LockRows}가 {@code Limit} <b>아래</b>에서 스캔 순서(id)로 잡고, 바깥은 이미 잠긴
- * 행을 지우기만 한다. 그래도 {@code SKIP LOCKED}를 빼지 않는다: 그 순서 보장은 <b>실행 계획에 기대는 것</b>이라 계획이 바뀌는 날 데드락이 되살아난다. 건너뛴 행은
- * 다음 틱이 지운다(청소의 의미와 맞다).
+ * 행을 지우기만 한다. 그래도 {@code SKIP LOCKED}를 빼지 않는다: 그 순서 보장은 <b>실행 계획에 기대는 것</b>이라
+ * 계획이 바뀌는 날 데드락이 되살아난다. 건너뛴 행은 다음 틱이 지운다(청소의 의미와 맞다).
  *
  * <p>🔴 <b>지울 행은 {@code WITH … AS MATERIALIZED}로 먼저 고르고 그 결과로 지운다</b>(POK-413). 예전 모양
  * {@code DELETE … WHERE id IN (SELECT … LIMIT n FOR UPDATE SKIP LOCKED)}은 「하위 질의는 한 번만 돈다」가 그때의
