@@ -171,7 +171,7 @@ function SwitcherPanel({ onClose }: { onClose: () => void }) {
           )}
         </div>
         {(channelsFailed || invitesFailed) && (
-          // 못 읽은 것을 「없음」으로 숨기지 않는다: 기한 있는 초대를 놓친다(EditorInboxSection과 같은 이유)
+          // 못 읽은 것을 「없음」으로 숨기지 않는다: 기한 있는 초대를 놓친다(받은 초대에 답하는 곳은 이 창뿐이다)
           <div className={styles.fallback}>
             <span>
               {channelsFailed && invitesFailed
@@ -280,7 +280,7 @@ function ChannelRow({ name, photo, role, current, onClick, managing, onLeave }: 
   );
 }
 
-/** 실패는 토스트로만 알린다: 서버 문구를 그대로 보인다(EditorInboxSection과 같다) */
+/** 실패는 토스트로만 알린다: 서버 문구를 그대로 보인다 */
 function failedToast(toast: ReturnType<typeof useToast>['toast'], e: unknown) {
   toast({
     tone: 'error',
@@ -289,7 +289,7 @@ function failedToast(toast: ReturnType<typeof useToast>['toast'], e: unknown) {
   });
 }
 
-/** 수락·거절 공통: 함수와 무효화 키는 설정의 EditorInboxSection과 같다. */
+/** 수락·거절 공통: 끝나면 받은 초대와 참여 채널 목록을 다시 읽는다(수락하면 참여 채널이 는다). */
 function useInvitationAction(
   send: (id: number) => Promise<void>,
   doneTitle: string,
