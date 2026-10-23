@@ -75,8 +75,8 @@ tfvars 에 둡니다.
 
 *   nginx 포트 · 헬스 경로는 tfvars 에 두지 않습니다. 정본은 platform 이고
     (대상 그룹과 같은 값), 이 루트는 출력 `media_proxy_ports` ·
-    `media_health_path` 를 읽습니다. platform 에서 값을 바꾸면 이 루트도
-    설정 반영 교체로 새 상자를 띄웁니다 — 떠 있는 상자는 옛 포트로 듣습니다.
+    `media_health_path` 를 읽습니다. 바꿀 때는 일반 상자 교체와 다릅니다 —
+    아래 「포트 · 헬스 경로를 바꿀 때」.
 *   도구 판(`docker_version` · `ecr_credential_helper_version` ·
     `compose_version` · `compose_sha256`)은 예시 파일의 값을 그대로 씁니다
     (출처 · 날짜는 modules/media_host README 「판 고정」).
@@ -96,6 +96,34 @@ tfvars 에 둡니다.
 provider 의 `default_tags` 네 키(`TerraformRoot = prod/media`)는 태그를 받는
 자원(`tags_all` 이 있는 자원)에 붙습니다. mock 시험은 태그를 보지 못하므로
 plan 의 `tags_all` 로 확인합니다.
+
+apply 한 뒤 내리거나 이 루트의 코드를 되돌릴 때는
+[prod 철거 런북](/infra/terraform/runbooks/prod-teardown.md)을 따릅니다 —
+revert 전에, platform 보다 먼저 내립니다. 거부 목록 파라미터는
+`prevent_destroy` 라 그 런북의 두 갈래(상태에서 떼고 남기기 · 남김 없이
+지우기) 중 하나를 고릅니다.
+
+### 포트 · 헬스 경로를 바꿀 때
+
+일반 상자 교체(정상 교체 · 설정 반영 교체)는 이 루트만 바뀝니다 — 대상
+그룹은 그대로이고 등록만 새 상자로 옮깁니다. platform 의 `proxy_ports` ·
+`media_health_path` 를 바꾸는 것은 두 루트에 걸치고, 무엇을 바꾸느냐에 따라
+platform 대상 그룹이 교체될 수 있습니다(provider 6.68.0 기준 — 리뷰 장부
+6 검증).
+
+| 바꾸는 값 | 바뀌는 자원 | 결과 |
+|---|---|---|
+| `live` · `control` · `playback` 포트 | platform — 그 내부 ALB 대상 그룹의 `port` | **대상 그룹 교체**(새로 만듦). 옛 대상 그룹에 있던 Media 등록은 새 대상 그룹으로 넘어가지 않습니다. 이 루트가 새 대상 그룹에 다시 등록할 때까지 그 경로에는 등록된 대상이 없습니다 |
+| `health` 포트 · `media_health_path` | platform — 대상 그룹 헬스 설정(포트는 내부 ALB 셋 · NLB `ingest`, 경로는 내부 ALB 셋) | 제자리 수정. 등록은 남습니다. 떠 있는 상자는 옛 값으로 듣기 때문에 헬스가 실패할 수 있습니다 — 대상이 한 대뿐인 ALB 대상 그룹은 대상이 모두 unhealthy 면 그 대상에 그대로 보냅니다(fail-open) |
+| 위 포트 모두 | 이 루트 — Media SG 인그레스 · LB SG 이그레스 규칙의 포트 | 제자리 수정. 공유 자원이라 apply 하면 떠 있는 상자에도 곧바로 걸립니다 |
+
+*   떠 있는 상자는 user_data 가 바뀌지 않아(`ignore_changes`) 옛 포트 ·
+    경로로 듣습니다. 새 값은 설정 반영 교체로 띄운 새 상자에만 들어갑니다.
+*   대상 그룹이 교체되는 변경은 교체 런북 「plan 범위」 표에 없는 줄(대상
+    등록 생성 · SG 규칙 수정)을 냅니다. 방송 없는 시간대에 하고, platform ·
+    이 루트의 apply 순서와 걸음마다의 기대 목록은 그때 kty 와 정합니다 —
+    아직 절차가 없습니다. 교체 apply 가 실제로 어떤 순서로 도는지는 실물로
+    보지 않았습니다(O7d · O7e 때 확인).
 
 ## 출력
 

@@ -71,7 +71,7 @@ output "media_health_path" {
 }
 
 output "ecs_cluster_arn" {
-  description = "ECS 클러스터 ARN — 런타임 트랙 · 일꾼(POK-306) · chat(POK-408) 서비스가 같은 클러스터에 둔다."
+  description = "ECS 클러스터 ARN — 런타임 트랙 · 일꾼(POK-408) · chat(POK-306) 서비스가 같은 클러스터에 둔다."
   value       = aws_ecs_cluster.this.arn
 }
 

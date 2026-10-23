@@ -108,14 +108,37 @@ resource "terraform_data" "runtime_contract" {
       error_message = "런타임 출력 app_task_resource_arns 에 모르는 키가 있다(계약 키 이름 확인)."
     }
 
+    # SQS 큐 이름은 영숫자 · - · _ 이고 FIFO 큐만 .fifo 로 끝난다(SQS
+    # CreateQueue API 참조 QueueName). 점은 그 접미에만 허용한다.
     precondition {
       condition = alltrue(flatten([
         for arns in values(local.task_resource_arns) : [
           for key, arn in arns :
-          endswith(key, "_bucket_arn") ? can(regex("^arn:aws:s3:::[a-z0-9][a-z0-9.-]+$", arn)) : can(regex("^arn:aws:sqs:[a-z0-9-]+:[0-9]{12}:[A-Za-z0-9_-]+$", arn))
+          endswith(key, "_bucket_arn") ? can(regex("^arn:aws:s3:::[a-z0-9][a-z0-9.-]+$", arn)) : can(regex("^arn:aws:sqs:[a-z0-9-]+:[0-9]{12}:[A-Za-z0-9_-]+(\\.fifo)?$", arn))
         ]
       ]))
       error_message = "런타임 출력 app_task_resource_arns 의 값이 와일드카드 없는 S3 버킷 · SQS 큐 ARN 이 아니다."
+    }
+
+    # iam 에서 POSTGRES_PASSWORD 가 비어 있지 않으면 auth · clip 이 부팅을
+    # 거부한다(db-support DataSourceLoginConfiguration.rejectLeftoverPassword).
+    # env 든 secrets 든 같은 이름이면 앱이 읽는다.
+    precondition {
+      condition = var.app_db_auth != "iam" || alltrue([
+        for service in ["auth", "clip"] :
+        !contains(concat(keys(local.service_env[service]), keys(local.service_secrets[service])), "POSTGRES_PASSWORD")
+      ])
+      error_message = "app_db_auth = iam 인데 런타임 출력이 auth · clip 에 POSTGRES_PASSWORD 를 준다 — 앱이 부팅을 거부한다. 런타임 app_secret_arns · app_env 에서 지운다."
+    }
+
+    # auth 는 resolve 전용 토큰이 있으면 허용 대역이 빌 때 부팅을 거부한다
+    # (auth StreamKeyResolveSecurityConfig.requireSafeToOpen).
+    precondition {
+      condition = (
+        !contains(keys(local.service_secrets.auth), "STREAM_KEY_RESOLVE_TOKEN") ||
+        trimspace(lookup(local.service_env.auth, "STREAM_KEY_RESOLVE_ALLOWED_CIDRS", "")) != ""
+      )
+      error_message = "런타임 출력이 auth 에 STREAM_KEY_RESOLVE_TOKEN 을 주는데 app_env.auth 의 STREAM_KEY_RESOLVE_ALLOWED_CIDRS 가 없거나 비었다 — auth 가 부팅을 거부한다."
     }
   }
 }

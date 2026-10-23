@@ -65,7 +65,8 @@ prod 엣지 비밀의 값 입력 · 교체 절차는 [엣지 비밀 런북](runb
 [조직 · CT 도입(보류 — 결정 46)](runbooks/org-ct.md) ·
 [prod 산출물 올리기(이미지 푸시 · 랜딩 업로드)](runbooks/prod-artifacts.md) ·
 [ALB 교차 영역 실측(O7d)](runbooks/alb-cross-zone-bench.md) ·
-[Media 상자 교체](runbooks/media-swap.md).
+[Media 상자 교체](runbooks/media-swap.md) ·
+[prod 철거(platform · media 를 apply 뒤 내리기)](runbooks/prod-teardown.md).
 운영 단계마다 먼저 [단계 직전 점검](runbooks/stage-precheck.md)을 합니다.
 2-3 판정(dev 자동 주체 → prod 권한 없음, 정책 시뮬레이터)은
 `scripts/precheck/principal-check.sh` 입니다.

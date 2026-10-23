@@ -28,12 +28,11 @@ ingest_allowed_cidrs = ["<TEAM_IP_CIDR>"]
 # 응답기(M15) 반영 뒤 8a 단계에서만 true 로 바꾼다.
 # ingest_public_approved = false
 
-# auth · clip 이미지 안 RDS CA 번들 경로(3번 이미지 — app_db_auth = iam 이면
-# 필수). O7d 전에 POK-407(IAM DB 인증 코드)이 머지되지 않았으면 아래 줄을
-# 켜고 이 값은 지운다 — 런타임이 DB 비밀번호 그릇을 준다.
+# DB 접속은 IAM 인증(app_db_auth = iam)이 기본이다. O7d 전에 POK-407(IAM DB
+# 인증 코드)이 머지되지 않았으면 아래 줄을 켠다 — 런타임이 DB 비밀번호 그릇을
+# 준다.
 # app_db_auth = "password"
-postgres_sslrootcert = "<RDS_CA_BUNDLE_PATH_IN_IMAGE>"
 
-# auth 톰캣이 X-Forwarded-* 를 믿을 대역(정규식). 3번(POK-316)이 값을 정하면
-# 채운다. 비워 두면 톰캣 기본 대역(사설망 · 루프백)이다.
-# auth_internal_proxies = "<INTERNAL_PROXIES_REGEX>"
+# auth · clip 이미지 안 RDS CA 번들 경로. 기본값이 3번 이미지의 경로라 이미지가
+# 번들 자리를 옮길 때만 켠다.
+# postgres_sslrootcert = "/etc/pokeclip/rds-ca/global-bundle.pem"
