@@ -33,8 +33,9 @@
     inset 0 -1px 0 var(--dock-sheen-bottom),
     0 24px 60px rgb(3 10 24 / 0.55),
     0 4px 14px rgb(0 0 0 / 0.25);
-  /* 꾹 눌러 끄는 동안 글자 잡기·화면 밀기·길게 누르기 메뉴가 끼어들지 않게 — 독 위의 손짓은 독이 갖는다 */
-  touch-action: none;
+  /* 꾹 눌러 끄는 동안 글자 잡기·길게 누르기 메뉴가 끼어들지 않게. 가로 끌기는 독이, 세로 밀기는 화면 스크롤이
+     갖는다(ModeSegment와 같다) — 세로로 밀어 브라우저가 가져가면 pointercancel로 누름이 풀리고 알약은 제자리로 */
+  touch-action: pan-y;
   user-select: none;
   -webkit-user-select: none;
   -webkit-touch-callout: none;
