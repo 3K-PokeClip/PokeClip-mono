@@ -74,15 +74,22 @@ class RdsIamSpikeTest {
             print("S4", "pg_stat_ssl=" + ssl + " sslmode=" + RdsIamDataSourceConfiguration.SSL_MODE);
             assertThat(ssl.get("ssl")).isEqualTo(true);
 
-            // S3: 15초 걸리는 질의가 socketTimeout 10초에 끊기는지. 응답이 안 오는 상대와 같은 길이다
+            // S3: 40초 걸리는 질의가 socketTimeout 10초에 끊기는지. 응답이 안 오는 상대와 같은 길이다
             // (드라이버가 소켓 읽기에서 기다린다).
+            //
+            // 🔴 TLS에서는 호출자가 약 20초(시한의 두 배)를 기다린다(2026-10-23 실측: 평문 10.0초 · TLS 20.0초).
+            // 10초에 Read timed out이 난 뒤, 드라이버가 연결을 버리며 TLS 소켓을 닫는데 JDK가 닫기 전에 남은
+            // 입력을 한 번 더 읽어 비운다(SSLSocketImpl.close → bruteForceCloseInput, 스레드 덤프로 확인).
+            // 그 읽기에도 같은 시한이 걸려 상한은 두 배로 정해진다. 15초 질의면 서버가 15초에 답해 15초에 풀린다.
+            int sleepSeconds = Integer.parseInt(envOr("RDS_SPIKE_S3_SLEEP", "40"));
             Instant start = Instant.now();
-            Throwable thrown = catchThrowable(() -> jdbc.execute("SELECT pg_sleep(15)"));
+            Throwable thrown = catchThrowable(() -> jdbc.execute("SELECT pg_sleep(" + sleepSeconds + ")"));
             Duration held = Duration.between(start, Instant.now());
-            print("S3", "held=" + held.toMillis() + "ms sqlState=" + sqlStateOf(thrown)
-                    + " type=" + (thrown == null ? "none" : thrown.getClass().getSimpleName()));
-            assertThat(thrown).as("15초 질의가 끝까지 돌았다면 시한이 안 걸린 것이다").isNotNull();
-            assertThat(held).isBetween(Duration.ofSeconds(9), Duration.ofSeconds(14));
+            print("S3", "sleep=" + sleepSeconds + "s held=" + held.toMillis() + "ms sqlState=" + sqlStateOf(thrown)
+                    + " chain=" + causeChain(thrown));
+            assertThat(thrown).as("질의가 끝까지 돌았다면 시한이 안 걸린 것이다").isNotNull();
+            assertThat(causeChain(thrown)).contains("SocketTimeoutException");
+            assertThat(held).isBetween(Duration.ofSeconds(9), Duration.ofSeconds(25));
             assertThat(sqlStateOf(thrown)).startsWith("08");
         }
     }
@@ -176,6 +183,15 @@ class RdsIamSpikeTest {
             }
         }
         return "";
+    }
+
+    /** 예외 사슬의 종류와 문구. 드라이버 문구에는 비밀이 안 섞인다(접속 문자열 · 토큰을 싣지 않는다). */
+    private static String causeChain(Throwable thrown) {
+        StringBuilder chain = new StringBuilder();
+        for (Throwable t = thrown; t != null; t = t.getCause()) {
+            chain.append(" <- ").append(t.getClass().getSimpleName()).append(": ").append(t.getMessage());
+        }
+        return chain.toString();
     }
 
     private static String envOr(String name, String fallback) {
