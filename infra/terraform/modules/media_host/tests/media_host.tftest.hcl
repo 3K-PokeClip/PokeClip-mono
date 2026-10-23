@@ -57,7 +57,7 @@ variables {
   name             = "pokeclip-prod"
   vpc_id           = "vpc-0123456789abcdef0"
   subnet_id        = "subnet-0media0private000"
-  instance_type    = "example.large"
+  instance_type    = "c8gn.large"
   root_volume_size = 150
   instances = {
     a = { config_version = "1" }
@@ -113,7 +113,7 @@ run "places_instance_in_media_private_subnet_without_public_ip" {
   }
 
   assert {
-    condition     = aws_instance.this["a"].ami == "ami-0123456789abcdef0" && aws_instance.this["a"].instance_type == "example.large"
+    condition     = aws_instance.this["a"].ami == "ami-0123456789abcdef0" && aws_instance.this["a"].instance_type == "c8gn.large"
     error_message = "AMI 가 SSM 공개 파라미터 값이 아니거나 instance_type 이 입력과 다르다."
   }
 

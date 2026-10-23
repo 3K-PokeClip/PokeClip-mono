@@ -58,7 +58,7 @@ variables {
   name             = "pokeclip-prod"
   vpc_id           = "vpc-0123456789abcdef0"
   subnet_id        = "subnet-0media0private000"
-  instance_type    = "example.large"
+  instance_type    = "c8gn.large"
   root_volume_size = 150
   instances = {
     a = { config_version = "7" }

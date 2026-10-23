@@ -67,8 +67,16 @@ variable "http_active_key" {
 }
 
 variable "instance_type" {
-  description = "Media 상자 인스턴스 유형 — arm64(Graviton)만(prod 값 c8gn.large · kty 확정). AWS 가 답하는 지원 아키텍처로 확인한다."
+  description = "Media 상자 인스턴스 유형 — arm64(Graviton)만. 기본값 없음(prod 값 c8gn.large · kty 확정 — 루트 tfvars)."
   type        = string
+
+  # 입력 단계의 거름 — 계열 이름의 세대 숫자 바로 뒤가 g(Graviton 표지: c8gn ·
+  # c7g · t4g · m7g · im4gn). 확정 판정은 plan 때 AWS 가 답하는 지원
+  # 아키텍처다(main.tf 의 사전 조건).
+  validation {
+    condition     = can(regex("^(a1|[a-z]+[0-9]+g[a-z0-9-]*)\\.[a-z0-9]+$", var.instance_type))
+    error_message = "instance_type 은 Graviton(arm64) 계열이어야 한다(예: c8gn.large · c7g.large · t4g.small)."
+  }
 }
 
 variable "root_volume_size" {
@@ -86,9 +94,15 @@ variable "root_volume_throughput" {
   type        = number
   default     = 125
 
+  # gp3 는 125 부터이고 IOPS 당 0.25 MiB/s 까지다. 이 모듈은 IOPS 를 기본
+  # 3,000 으로 두므로 상한은 750 이다(AWS EBS 사용자 안내서 「General Purpose
+  # SSD volumes」 — 2026-10-23 확인).
   validation {
-    condition     = var.root_volume_throughput >= 125 && floor(var.root_volume_throughput) == var.root_volume_throughput
-    error_message = "root_volume_throughput 은 125 이상의 정수(MiB/s)여야 한다."
+    condition = (
+      var.root_volume_throughput >= 125 && var.root_volume_throughput <= 750 &&
+      floor(var.root_volume_throughput) == var.root_volume_throughput
+    )
+    error_message = "root_volume_throughput 은 125 부터 750 까지의 정수(MiB/s)여야 한다(IOPS 3,000 × 0.25)."
   }
 }
 

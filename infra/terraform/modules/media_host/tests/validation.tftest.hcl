@@ -52,7 +52,7 @@ variables {
   name             = "pokeclip-prod"
   vpc_id           = "vpc-0123456789abcdef0"
   subnet_id        = "subnet-0media0private000"
-  instance_type    = "example.large"
+  instance_type    = "c8gn.large"
   root_volume_size = 150
   instances = {
     a = { config_version = "1" }
@@ -279,6 +279,54 @@ run "rejects_low_root_volume_throughput" {
 
   variables {
     root_volume_throughput = 100
+  }
+
+  expect_failures = [var.root_volume_throughput]
+}
+
+# 계열 이름에 Graviton 표지 g 가 있어야 한다(AWS 답을 읽기 전, 입력 단계에서).
+run "accepts_graviton_instance_types" {
+  command = plan
+
+  variables {
+    instance_type = "c7g.large"
+  }
+}
+
+run "accepts_other_graviton_families" {
+  command = plan
+
+  variables {
+    instance_type = "t4g.small"
+  }
+}
+
+run "rejects_intel_instance_type_name" {
+  command = plan
+
+  variables {
+    instance_type = "c7i.large"
+  }
+
+  expect_failures = [var.instance_type]
+}
+
+run "rejects_burstable_x86_instance_type_name" {
+  command = plan
+
+  variables {
+    instance_type = "t3.micro"
+  }
+
+  expect_failures = [var.instance_type]
+}
+
+# IOPS 를 기본 3,000 으로 두므로 처리량 상한은 3,000 × 0.25 = 750 MiB/s 다.
+run "rejects_root_volume_throughput_above_iops_ratio" {
+  command = plan
+
+  variables {
+    root_volume_throughput = 800
   }
 
   expect_failures = [var.root_volume_throughput]
