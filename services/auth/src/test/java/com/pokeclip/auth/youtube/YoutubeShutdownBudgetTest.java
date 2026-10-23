@@ -113,6 +113,24 @@ class YoutubeShutdownBudgetTest {
     }
 
     /**
+     * dev compose의 auth 종료 유예가 README가 요구하는 값 이상인가. 예산 검사가 README만 보면 실제로 주는 유예가
+     * compose 기본값(10초)에 머물러도 초록이다(POK-396 이전 auth 블록에 이 줄이 없었다).
+     */
+    @Test
+    void dev_compose의_auth_종료_유예가_문서화한_값_이상이다() throws Exception {
+        String compose = Files.readString(SERVICES.resolve("docker-compose.dev.yml"));
+        int start = compose.indexOf("\n  auth:\n");
+        assertThat(start).as("dev compose에서 auth 서비스를 못 찾았다").isGreaterThan(0);
+        Matcher next = Pattern.compile("\n  [a-z][a-z0-9-]*:\n").matcher(compose);
+        String block = next.find(start + 1) ? compose.substring(start, next.start()) : compose.substring(start);
+        Matcher grace = Pattern.compile("(?m)^    stop_grace_period: (\\d+)s\\s*$").matcher(block);
+        assertThat(grace.find()).as("auth 블록에 stop_grace_period가 없다(compose 기본 10초가 된다)").isTrue();
+        assertThat(Duration.ofSeconds(Long.parseLong(grace.group(1))))
+                .as("auth 종료 유예가 README 「종료 유예 %s초 이상」보다 짧다", documentedGrace().toSeconds())
+                .isGreaterThanOrEqualTo(documentedGrace());
+    }
+
+    /**
      * 유튜브 쪽이 치지직보다 <b>짧아야</b> 한다는 것 자체를 굳힌다 — 「왜 여기만 3초지」 하고 되돌리는 것을 막는다.
      * 근거는 {@link YoutubeCleanupExecutor#SHUTDOWN_WAIT} 주석에 있다(외부 HTTP가 거의 사라졌다).
      */

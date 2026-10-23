@@ -43,6 +43,10 @@ services:
       dockerfile: auth/Dockerfile
     restart: unless-stopped
     mem_limit: 512m
+    # compose 기본은 10초인데 auth 종료 예산은 정리 풀 넷의 합 24초다(치지직 10 + 유튜브 4 + 탈퇴 6 + SOOP 4,
+    # README 「종료 유예 24초 이상」). 잘리면 커밋 뒤 토큰 삭제가 중간에 끊겨 secrets에 원문이 남는다.
+    # 예산 24 + 여유 1 = 25. 예산을 키우면 YoutubeShutdownBudgetTest가 이 값도 같이 본다.
+    stop_grace_period: 25s
     depends_on:
       postgres:
         condition: service_healthy   # Flyway 가 뜨자마자 붙으므로 DB가 준비된 뒤여야 한다

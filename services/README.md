@@ -2638,8 +2638,9 @@ DB 유니크 위반까지 간 경우 Hibernate 오류 로그에 `channel_id`가 
 
 **종료 유예 24초 이상**(`stop_grace_period` / `terminationGracePeriodSeconds`): 커밋 뒤 정리(옛 토큰 삭제·치지직
 revoke)가 전용 스레드 2개(`ChzzkCleanupExecutor`)에서 돌고 종료 시 최대 10초 기다린다. 도커 기본 10초에 잘리면
-대기 중 삭제가 유실돼 고아 secret이 남는다(무해하지만 쌓인다). chat-collector의 종료 유예 20초와 같은 부류이며
-`infra/`(1번)가 반영한다. **24초는 이 서버의 정리 풀 넷을 합한 값이다**: 스프링이 `@PreDestroy`를 순차로
+대기 중 삭제가 유실돼 고아 secret이 남는다(무해하지만 쌓인다). chat-collector의 종료 유예 20초와 같은 부류다.
+dev는 `docker-compose.dev.yml` auth 블록의 `stop_grace_period: 25s`(예산 24 + 여유 1, POK-396 전에는 줄이 없어 기본 10초였다)이고
+`YoutubeShutdownBudgetTest`가 README 값 이상인지 본다. 운영 태스크 정의(`terminationGracePeriodSeconds`)는 `infra/`(1번)가 반영한다. **24초는 이 서버의 정리 풀 넷을 합한 값이다**: 스프링이 `@PreDestroy`를 순차로
 부르므로 치지직 10초 + 유튜브 4초 + 탈퇴 6초 + SOOP 4초가 그대로 더해진다(아래 유튜브 절. SOOP 풀이 생기며 20초에서 올렸다, POK-396).
 
 로그는 `auth.chzzk.link.<event> userId=` 영어 한 줄이다(`created`·`relinked`·`unlinked`·`refreshed`·
