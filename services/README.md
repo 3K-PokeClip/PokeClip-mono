@@ -4,11 +4,12 @@
 
 ## 무엇이 들어가나
 
-**서버 4개**가 여기서 실행된다. `web-support/`는 서버가 아니다.
+**서버 4개**가 여기서 실행된다. `web-support/` · `db-support/`는 서버가 아니다.
 
 | 모듈 | 포트 | 역할 |
 |---|---|---|
 | `web-support/` | — | 여러 서버가 같이 쓰는 **웹 인프라**(CORS·상관 ID). 서버가 아니다 |
+| `db-support/` | — | 서버 넷이 같이 쓰는 **DB 로그인 장치**(비밀번호 · RDS IAM · `db_connected`, POK-407). 서버가 아니다 |
 | `clip/` | 8081 | 방송 세션 · **점프카드 저장·SSE 전송** · 세그먼트 인덱스 · 클립 · 승인 · SQS 잡 발행 |
 | `auth/` | 8082 | 로그인 · 스트림 키 · 채널 연동 · 유튜브 토큰 |
 | `chat-collector/` | 8083 | 치지직·SOOP 채팅 실시간 수집 · 시차 보정 · S3 아카이브 |
@@ -52,6 +53,11 @@ Java 21 · Spring Boot 4.1 · Gradle 멀티모듈 · PostgreSQL · Redis
 `LogCaptor`는 넷이 쓴다(`auth` 12 · `clip` 10 · `chat-collector` 31 · `chat-detector` 5).
 **`chat-detector`는 `testFixtures`만 가져온다** — 컴파일 의존으로 걸면 `CorsProperties`가
 딸려 와 `CORS_ALLOWED_ORIGINS` 없이는 부팅이 실패하는데, 그 서버는 브라우저 문이 없다.
+
+**DB 로그인 장치는 `db-support/`에 따로 둔다**(POK-407). 위 이유로 `web-support`에 넣으면 채팅 두 서버가 못 뜬다.
+서버마다 복사하지 않은 이유는 넷이 **같은 env 이름 · 같은 뜻**(사이드카와도 같다)이라 갈라질 일이 없는데, 보안 허용 목록을
+고칠 때 네 곳을 똑같이 고쳐야 해서다(POK-406에서 봇이 그 목록을 두 판 연속 잡았다). 계약(표 · 메시지 형식)이 아니라 접속
+장치라 「계약을 담는 모듈은 두지 않는다」와 부딪히지 않는다. 표 · 질의는 여기 두지 않는다. 쓰는 법은 아래 「DB 로그인 방식」.
 
 ## Gradle 루트는 저장소 루트가 아니라 여기다
 
@@ -123,7 +129,7 @@ set -a && . ../.env && set +a
 ```
 
 **PR에서는 `services-ci`가 돈다**(`.github/workflows/services-ci.yml`). `services/`를 고친 PR마다
-서버 넷의 시험을 따로 돌린다(auth 잡은 `web-support`도). 비밀은 넘기지 않아 실방송 탐침 시험은
+서버 넷의 시험을 따로 돌린다(auth 잡은 `web-support`도, chat-detector 잡은 `db-support`도). 비밀은 넘기지 않아 실방송 탐침 시험은
 건너뛰는 것이 정상이다. 필수 체크는 아니다.
 
 **`.env`를 싣는 줄을 빼먹으면 DB 접속이 실패한다.** `docker compose`는 `.env`를 자동으로
@@ -766,6 +772,36 @@ cd - && git worktree remove /tmp/pokeclip-image
 - 🔴 Mac(arm64)에서 `linux/amd64`로 구우면 Dockerfile 빌드 단계의 Gradle이 에뮬레이션으로 돌아 몇 배 느리다. 멈춘 것이 아니다
 - 이미지가 기대하는 환경변수: 서버별 목록은 POK-305 코멘트(prod 목표값)와 `services/docker-compose.dev.yml`의 각 서버 `environment`
 - 수집기·판별기 이미지도 같은 꼴이다(`services/chat-collector/Dockerfile`·`services/chat-detector/Dockerfile`). prod 배치는 POK-306
+
+## DB 로그인 방식 (POK-407)
+
+**`POSTGRES_AUTH` 하나로 고른다. 비어 있거나 `password`면 지금 그대로다**(로컬 compose · CI). `iam`이면 비밀번호 대신
+**새 연결마다** AWS SDK로 서명한 RDS IAM 토큰(15분 유효)으로 붙는다. 이름과 뜻은 media 사이드카(ADR-0006)와 같다.
+코드는 `db-support`의 `DataSourceLoginConfiguration`이고, 쓰는 서버의 `Application`이 `@Import` 한다.
+**🔴 지금 붙은 서버는 `chat-detector` 하나다.** auth · clip · chat-collector에는 아직 안 붙어 `POSTGRES_AUTH`를 줘도
+비밀번호로만 붙는다(POK-407 다음 PR에서 붙인다).
+
+| `iam`이면 | 왜 |
+|---|---|
+| 접속은 `sslmode=verify-full` 하나. CA 번들 경로 `POSTGRES_SSLROOTCERT`가 비거나 못 읽으면 부팅 거부 | 토큰은 15분 동안 다시 쓸 수 있는 자격이라 중간자에게 내줄 수 없다 |
+| **DB URL에 쿼리가 있으면 무엇이든 부팅 거부**. 드라이버 속성은 `socketTimeout` 하나만 받는다 | 키를 골라 막으면 `sslfactory` · `password=` · `PGHOST=` 같은 옆길이 판마다 나왔다(PR #336 봇 두 판) |
+| `POSTGRES_PASSWORD`가 남아 있으면 부팅 거부(값은 안 싣는다) | 안 쓰여도 장기 비밀번호가 태스크 정의에 실린 채 운영된다. POK-161 「기본값 없음」과 같은 결 |
+| 토큰 하나를 만드는 시한 10초. 넘으면 원인 종류만 싣고 실패 | 자격 증명 조회(ECS 태스크 역할)가 멈추면 연결 생성이 끝없이 매달려 풀이 바닥난다(media와 같은 값) |
+| 토큰 · URL 원문 · AWS 오류 문구는 로그 · 예외에 안 싣는다(원인 타입 이름만) | SDK 오류에는 프로필 이름 · 설정 파일 경로가 섞인다 |
+
+**CA 번들은 이미지의 `/etc/pokeclip/rds-global-bundle.pem`이다.** 원본은 `db-support/certs/`이고 media 사본
+(`media/certs/`)과 바이트가 같아야 한다(`RdsCaBundleTest`가 본다). 1번이 media 쪽을 갱신하면 그 시험이 빨개지고,
+고치는 법은 다시 복사하는 것이다.
+
+**기동 직후 `db_connected` 한 줄**(INFO): `auth · sslmode · tls · user · host · port · db`. 사이드카와 같은 이름 · 같은
+칸이고 배포 확인이 이 줄로 판정한다. `tls`는 설정값이 아니라 **실제 연결**이 TLS인가다(`pg_stat_ssl`의 자기 세션).
+두 방식 다 찍는다. 못 붙으면 줄 없이 `db_connect_failed`(WARN, 원인 종류만)이고 **기동은 막지 않는다.** 비밀번호 방식의
+동작을 바꾸지 않으려고다.
+
+**`socketTimeout`은 10초 그대로 둔다**(POK-406 S3에서 5초로 줄일지 검토, 2026-10-23 결정). TLS에서는 끊긴 뒤 한 번 더
+기다려 최악 20초다(`services/CLAUDE.md` 함정). 줄이지 않은 이유: Flyway도 같은 풀과 같은 시한을 쓴다. 운영 표가 커지면
+큰 색인 마이그레이션(V309 · V314 같은 동시 색인)이 그 시한에 끊길 수 있고, 5초면 그 가능성이 커진다.
+auth · clip에는 이 시한이 아예 없다(POK-414로 따로 넣는다).
 
 ## DB 마이그레이션
 
@@ -4703,8 +4739,8 @@ NPE를 던진다**(빈 Set도 그렇다 — 실측).
 | `POSTGRES_DB` | **없음** | ✅ | **기본값을 일부러 안 준다**(POK-161). 셸에 없으면 리터럴이 그대로 바인딩돼 `FATAL: password authentication failed`로 죽는다 |
 | `POSTGRES_USER` | **없음** | ✅ | 위와 같다 |
 | `POSTGRES_PASSWORD` | **없음** | ✅ | 위와 같다 |
-| `POSTGRES_AUTH` | `password` | — | DB 로그인 방식. `iam`이면 비밀번호 대신 **연결마다 RDS IAM 토큰**으로 붙고(POK-406 스파이크) `POSTGRES_PASSWORD`는 안 쓴다. 이름은 media 사이드카와 같다 |
-| `POSTGRES_SSLROOTCERT` | 빈 값 | — | `iam`에서만 쓴다. RDS CA 번들의 **절대 경로**. 비거나 못 읽으면 부팅 거부. 접속은 `verify-full` 하나로 고정이다. 토큰이 15분 동안 다시 쓸 수 있는 자격이라 중간자에게 내줄 수 없다 |
+| `POSTGRES_AUTH` | `password` | — | DB 로그인 방식. `iam`이면 비밀번호 대신 **연결마다 RDS IAM 토큰**으로 붙는다. 그때 `POSTGRES_PASSWORD`가 있으면 부팅 거부. 위 「DB 로그인 방식」 |
+| `POSTGRES_SSLROOTCERT` | 빈 값 | — | `iam`에서만 쓴다. RDS CA 번들의 **절대 경로**. 이미지 안은 `/etc/pokeclip/rds-global-bundle.pem`. 비거나 못 읽으면 부팅 거부. 접속은 `verify-full` 하나로 고정이다 |
 | `AWS_REGION` | `ap-northeast-2` | — | `iam` 토큰을 서명할 리전. 자격 증명은 환경변수에 없다. SDK 표준 체인(환경변수·프로파일·ECS 태스크 역할)이 찾는다 |
 | `INTERNAL_API_TOKEN` | 빈 값 | ✅ | clip·수집 서버의 `/internal/**`에 **보낼** 값. 그쪽에 준 것과 같아야 한다 |
 | `CLIP_BASE_URL` | `http://localhost:8081` | ✅ `http://clip:8081` | 점프카드를 넣는 곳 |

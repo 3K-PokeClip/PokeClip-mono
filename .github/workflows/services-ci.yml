@@ -52,11 +52,14 @@ jobs:
             reports: |
               services/chat-collector/build/reports/tests/
               services/chat-collector/build/test-results/
+          # db-support도 서버가 아니라 라이브러리다(DB 로그인 장치, POK-407). 가장 짧은 잡에 얹는다.
           - module: chat-detector
-            tasks: ':chat-detector:test'
+            tasks: ':chat-detector:test :db-support:test'
             reports: |
               services/chat-detector/build/reports/tests/
               services/chat-detector/build/test-results/
+              services/db-support/build/reports/tests/
+              services/db-support/build/test-results/
     defaults:
       run:
         # Gradle 루트는 저장소 루트가 아니라 services/다(settings.gradle이 여기 있다).
