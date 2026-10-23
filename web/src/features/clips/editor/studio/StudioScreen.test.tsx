@@ -250,6 +250,11 @@ describe('StudioScreen', () => {
     const bar = screen.getByRole('toolbar', { name: '재생과 구간' });
     // 범위보다 넓힐 수 없으니 축소 단추는 꺼져 있다
     expect(within(bar).getByRole('button', { name: '타임라인 축소' })).toBeDisabled();
+    // 막대도 100% 아래로 못 내린다: 25%·50%는 같은 폭이라 표시만 바뀐다(PR #341 codex)
+    const zoomBar = within(bar).getByRole('slider', { name: '타임라인 확대' });
+    expect(zoomBar).toHaveAttribute('aria-valuemin', '2');
+    fireEvent.keyDown(zoomBar, { key: 'Home' });
+    expect(within(bar).getByText('100%')).toBeInTheDocument();
 
     // 구간 늘리기: 끝점을 레인 오른쪽 끝까지 끌면 범위 끝(119초)까지 늘어난다
     const end = screen.getByRole('slider', { name: '구간 끝점' });

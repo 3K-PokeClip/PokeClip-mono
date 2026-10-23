@@ -198,6 +198,21 @@ export function zoomSpan(
 }
 
 /**
+ * 고를 수 있는 가장 낮은 배율. 잡을 수 있는 범위에 막혀 한 단계 줄여도 폭이 그대로면 그 아래는 고를 수 없다:
+ * 표시만 바뀌고 화면은 100%와 같다(PR #341 codex)
+ */
+export function lowestUsefulZoom(range: ClipRange, minSeconds: number, maxSeconds: number): number {
+  let index = ZOOM_LEVELS.indexOf(100);
+  while (
+    index > 0 &&
+    zoomSpan(range, ZOOM_LEVELS[index - 1]!, minSeconds, maxSeconds) >
+      zoomSpan(range, ZOOM_LEVELS[index]!, minSeconds, maxSeconds) + 1e-6
+  )
+    index -= 1;
+  return ZOOM_LEVELS[index]!;
+}
+
+/**
  * 확대 배율에서 보이는 창(POK-389). 폭은 zoomSpan.
  *
  * - 100% 이하: 구간 가운데에 둔다. 구간 손잡이가 늘 보인다.

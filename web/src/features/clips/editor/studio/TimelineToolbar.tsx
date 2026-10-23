@@ -108,7 +108,7 @@ export function TimelineToolbar({ state }: { state: ClipEditorMockState }) {
         <Slider
           className={styles.zoomSlider}
           label="타임라인 확대"
-          min={0}
+          min={Math.max(0, state.zoomLevels.indexOf(state.minZoom))}
           max={state.zoomLevels.length - 1}
           step={1}
           value={zoomIndex}

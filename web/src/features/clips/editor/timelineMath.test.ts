@@ -17,6 +17,7 @@ import {
   secondsFromPointer,
   secondsToFraction,
   zoomedView,
+  lowestUsefulZoom,
   zoomSpan,
   zoomStep,
 } from './timelineMath';
@@ -192,6 +193,11 @@ describe('줌·높이', () => {
       zoomSpan({ startSeconds: 2000, endSeconds: 2010 }, zoom, 0, DURATION),
     );
     expect(widths).toEqual([300, 150, 75, 37.5, 18.75]);
+  });
+
+  it('고를 수 있는 가장 낮은 배율: 범위에 막혀 안 넓어지면 100%, 넓힐 수 있으면 25%(PR #341 codex)', () => {
+    expect(lowestUsefulZoom({ startSeconds: 107, endSeconds: 112 }, 100, 119)).toBe(100);
+    expect(lowestUsefulZoom({ startSeconds: 2000, endSeconds: 2010 }, 0, DURATION)).toBe(25);
   });
 
   describe('100%를 넘기면 진짜로 키운다: 구간보다 좁아질 수 있고 재생 위치를 따라간다(POK-389)', () => {

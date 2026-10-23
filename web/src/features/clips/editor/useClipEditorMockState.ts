@@ -82,7 +82,7 @@ import {
   resolveRangeEdge,
   clampTimelineHeight,
   zoomedView,
-  zoomSpan,
+  lowestUsefulZoom,
   zoomStep,
   ZOOM_LEVELS,
   type ClipRange,
@@ -622,6 +622,8 @@ export interface ClipEditorMockState {
   zoomLevels: readonly number[];
   /** 한 단계 줄이면 실제로 더 넓어지는가(잡을 수 있는 범위에 막혀 같으면 false) */
   canZoomOut: boolean;
+  /** 고를 수 있는 가장 낮은 배율(%). 그 아래는 같은 폭이라 막대도 못 내린다 */
+  minZoom: number;
   setZoom: (zoom: number) => void;
 }
 
@@ -681,7 +683,7 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
   // 기본은 내용에 맞춘다 — 화면 배율(--pc-u)이 rem을 따라 커지면 레인도 함께 커지는데
   // 여기에 고정 픽셀 상한을 걸면 배율이 큰 화면에서 마지막 트랙이 잘린다.
   const [timelineHeight, setTimelineHeightState] = useState<number | null>(null);
-  const [zoom, setZoom] = useState(100);
+  const [storedZoom, setStoredZoom] = useState(100);
 
   // 언마운트 뒤 남은 목업 타이머가 상태를 건드리지 않게 잡아 둔다
   const subtitleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -868,6 +870,17 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
       tracks.map((track) => (track.muted || track.volume === null ? 0 : track.volume / 100)),
     );
   }, [trackPreview, tracks]);
+
+  // 범위에 막혀 더 넓어지지 않는 배율은 고르지 않는다: 저장된 배율이 그 아래면(구간을 줄였다 등) 하한으로 본다
+  const minZoom = lowestUsefulZoom(recipe.range, source.minSeconds ?? 0, source.durationSeconds);
+  const zoom = Math.max(storedZoom, minZoom);
+  const setZoom = useCallback(
+    (next: number | ((z: number) => number)) =>
+      setStoredZoom((z) =>
+        Math.max(typeof next === 'function' ? next(Math.max(z, minZoom)) : next, minZoom),
+      ),
+    [minZoom],
+  );
 
   // 바로 앞에 그린 창: 키운 상태에서 재생 위치가 그 안에 있으면 창을 그대로 둔다(zoomedView)
   const previousViewRef = useRef<TimelineView | null>(null);
@@ -1288,19 +1301,11 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     ),
     zoom,
     zoomLabel: `${zoom}%`,
-    zoomIn: useCallback(() => setZoom((z) => zoomStep(z, 'in')), []),
-    zoomOut: useCallback(() => setZoom((z) => zoomStep(z, 'out')), []),
+    zoomIn: useCallback(() => setZoom((z) => zoomStep(z, 'in')), [setZoom]),
+    zoomOut: useCallback(() => setZoom((z) => zoomStep(z, 'out')), [setZoom]),
     zoomLevels: ZOOM_LEVELS,
-    canZoomOut: (() => {
-      const index = ZOOM_LEVELS.indexOf(zoom as (typeof ZOOM_LEVELS)[number]);
-      const lower = ZOOM_LEVELS[index - 1];
-      if (index <= 0 || lower === undefined) return false;
-      const min = source.minSeconds ?? 0;
-      return (
-        zoomSpan(recipe.range, lower, min, source.durationSeconds) >
-        zoomSpan(recipe.range, zoom, min, source.durationSeconds) + 1e-6
-      );
-    })(),
+    canZoomOut: zoom > minZoom,
+    minZoom,
     setZoom,
   };
 }
