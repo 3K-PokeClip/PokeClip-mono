@@ -7,6 +7,14 @@
 const KEY_RE = /^[A-Za-z0-9_-]+$/;
 /** /get에서 재생 서버로 옮기는 쿼리. 이 밖은 버린다 */
 const GET_QUERY = ['start', 'duration', 'format'] as const;
+/** 재생 서버에 직접 붙던 때와 같게 옮기는 머리. 쿠키는 넘기지 않는다(재생 서버는 안 보고, 출입증이 샐 자리만 는다) */
+const REQUEST_HEADERS = ['range'] as const;
+const RESPONSE_HEADERS = [
+  'content-type',
+  'content-length',
+  'content-range',
+  'accept-ranges',
+] as const;
 
 export async function GET(
   request: Request,
@@ -27,10 +35,17 @@ export async function GET(
   query.set('path', key);
 
   try {
-    const res = await fetch(`${origin}/${op}?${query}`, { signal: request.signal });
+    const sent = new Headers();
+    for (const name of REQUEST_HEADERS) {
+      const value = request.headers.get(name);
+      if (value !== null) sent.set(name, value);
+    }
+    const res = await fetch(`${origin}/${op}?${query}`, { signal: request.signal, headers: sent });
     const headers = new Headers();
-    const type = res.headers.get('content-type');
-    if (type !== null) headers.set('content-type', type);
+    for (const name of RESPONSE_HEADERS) {
+      const value = res.headers.get(name);
+      if (value !== null) headers.set(name, value);
+    }
     return new Response(res.body, { status: res.status, headers });
   } catch {
     return new Response(null, { status: 502 });

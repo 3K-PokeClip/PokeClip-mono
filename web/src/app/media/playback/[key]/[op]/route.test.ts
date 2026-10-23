@@ -59,6 +59,37 @@ describe('로컬 녹화 재생 전달', () => {
     expect(await res.text()).toBe('mp4');
   });
 
+  it('영상 조각은 Range를 넘기고 길이 · 범위 머리를 돌려준다: 재생 서버에 직접 붙던 때와 같게 한다(로컬 리뷰 1라운드)', async () => {
+    vi.stubEnv('MEDIA_PLAYBACK_ORIGIN', 'http://localhost:9996');
+    const spy = stubFetch(
+      () =>
+        new Response('mp', {
+          status: 206,
+          headers: {
+            'content-type': 'video/mp4',
+            'content-length': '2',
+            'content-range': 'bytes 0-1/10',
+            'accept-ranges': 'bytes',
+            'set-cookie': 'x=1',
+          },
+        }),
+    );
+    const res = await GET(
+      new Request('http://x/media/playback/key-1/get?start=a&duration=1&format=mp4', {
+        headers: { range: 'bytes=0-1', cookie: 'CloudFront-Policy=secret' },
+      }),
+      { params: Promise.resolve({ key: 'key-1', op: 'get' }) },
+    );
+    const sent = new Headers(spy.mock.calls[0]?.[1]?.headers);
+    expect(sent.get('range')).toBe('bytes=0-1');
+    expect(sent.get('cookie')).toBeNull();
+    expect(res.status).toBe(206);
+    expect(res.headers.get('content-length')).toBe('2');
+    expect(res.headers.get('content-range')).toBe('bytes 0-1/10');
+    expect(res.headers.get('accept-ranges')).toBe('bytes');
+    expect(res.headers.get('set-cookie')).toBeNull();
+  });
+
   it('재생 서버의 상태를 그대로 넘긴다: 녹화 폴더가 없다는 400은 「녹화 없음」으로 읽힌다', async () => {
     vi.stubEnv('MEDIA_PLAYBACK_ORIGIN', 'http://localhost:9996');
     stubFetch(() => jsonResponse(400, { error: 'no recordings' }));

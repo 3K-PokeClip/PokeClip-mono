@@ -434,7 +434,7 @@ describe('영상 출입증 받기와 쿠키 싣기 (POK-317)', () => {
     expect(posts()).toHaveLength(12);
   });
 
-  it('목록 차례는 돌아간다: 자리가 나면 아직 못 받은 키부터, 그다음 받은 지 오래된 키 순이다(POK-317)', async () => {
+  it('목록 차례는 돌아간다: 옛 쿠키가 실제로 끝난 뒤에, 아직 못 받은 키부터, 그다음 받은 지 오래된 키 순이다(POK-317)', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(Date.parse('2026-10-23T00:00:00Z'));
     const { api, posts } = await load(() =>
@@ -445,9 +445,16 @@ describe('영상 출입증 받기와 쿠키 싣기 (POK-317)', () => {
       mediaKey: `k-${i}`,
     }));
     await Promise.all([...api.ensurePlaybackAccessForList(items).values()]);
+    expect(posts()).toHaveLength(12);
 
-    // 받은 것이 다 낡았다: 못 받았던 둘이 먼저 받는다
+    // 다시 쓸 시점(만료 5분 전)은 지났지만 쿠키는 아직 산다: 새로 받으면 쿠키가 상한의 두 배까지 쌓인다(로컬 리뷰 1라운드).
+    // 기다리는 키가 있으니 낡은 키도 갱신하지 않고 끝나게 둔다
     vi.setSystemTime(Date.parse('2026-10-23T00:56:00Z'));
+    await Promise.all([...api.ensurePlaybackAccessForList(items).values()]);
+    expect(posts()).toHaveLength(12);
+
+    // 옛 쿠키가 끝났다: 못 받았던 둘이 먼저 받는다
+    vi.setSystemTime(Date.parse('2026-10-23T01:00:01Z'));
     const again = api.ensurePlaybackAccessForList(items);
     await Promise.all([...again.values()]);
     const second = posts().slice(12);
@@ -458,6 +465,19 @@ describe('영상 출입증 받기와 쿠키 싣기 (POK-317)', () => {
     ]);
     expect(again.get('k-10')).toBeNull();
     expect(again.get('k-11')).toBeNull();
+  });
+
+  it('기다리는 키가 없으면 낡은 키는 끊기지 않게 미리 갱신한다(POK-317)', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.parse('2026-10-23T00:00:00Z'));
+    const { api, posts } = await load(() =>
+      jsonResponse(200, { expiresAt: new Date(Date.now() + 60 * 60_000).toISOString() }),
+    );
+    const items = Array.from({ length: 3 }, (_, i) => ({ streamId: `S-${i}`, mediaKey: `k-${i}` }));
+    await Promise.all([...api.ensurePlaybackAccessForList(items).values()]);
+    vi.setSystemTime(Date.parse('2026-10-23T00:56:00Z'));
+    await Promise.all([...api.ensurePlaybackAccessForList(items).values()]);
+    expect(posts()).toHaveLength(6);
   });
 
   it('「필요 없음」을 받은 방송은 목록 자리를 쓰지 않는다: 로컬 · dev는 상한에 안 걸린다', async () => {

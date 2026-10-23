@@ -771,41 +771,59 @@ const LIST_ACCESS_MAX_KEYS = 12;
 const listGrantedAt = new Map<string, number>();
 
 /**
- * 지난 방송 목록의 출입증 받기(POK-317). 지금 든 키(받는 중 포함)는 그대로 다시 쓰고, 빈자리(상한 − 든 키 수)만큼만 새로
- * 받는다. 「필요 없음」을 받은 방송은 자리를 안 쓴다. 차례가 안 온 키는 null이라 쿠키 없이 묻고 다음 주기에 다시 온다.
- * 값은 영상 키마다 하나다(같은 키의 방송은 쿠키가 같다)
+ * 지난 방송 목록의 출입증 받기(POK-317). 상한은 브라우저에 **쿠키가 살아 있는** 키로 센다(다시 쓸 시점이 아니라 만료까지):
+ * 다시 쓸 시점으로 세면 키를 돌리는 순간 옛 쿠키가 남은 5분 동안 새 키를 상한만큼 더 받아 쿠키가 두 배로 쌓였다(로컬 리뷰
+ * 1라운드). 아직 쓸 만한 키는 그대로 쓰고, 빈자리만큼 못 받은 키, 그다음 받은 지 오래된 키 순으로 받는다. 쿠키는 살았지만
+ * 다시 쓸 시점이 지난 키는 기다리는 키가 없을 때만 미리 갱신한다(있으면 끝나게 두어 자리를 넘긴다). 「필요 없음」을 받은 방송은
+ * 자리를 안 쓴다. 차례가 안 온 키는 null이라 쿠키 없이 묻고 다음 주기에 다시 온다. 값은 영상 키마다 하나다
  */
 export function ensurePlaybackAccessForList(
   items: { streamId: string; mediaKey: string }[],
 ): Map<string, Promise<PlaybackAccessResult> | null> {
   const now = Date.now();
-  const held = new Set<string>();
-  for (const entry of playbackAccessCache.values()) if (entry.until > now) held.add(entry.mediaKey);
+  const fresh = new Set<string>();
+  const alive = new Set<string>();
+  for (const entry of playbackAccessCache.values()) {
+    if (entry.until > now) fresh.add(entry.mediaKey);
+    if (entry.until + PLAYBACK_ACCESS_REUSE_MARGIN_MS > now) alive.add(entry.mediaKey);
+  }
   const byKey = new Map<string, string>();
   for (const { streamId, mediaKey } of items)
     if (!byKey.has(mediaKey)) byKey.set(mediaKey, streamId);
 
   const out = new Map<string, Promise<PlaybackAccessResult> | null>();
+  const stale: string[] = [];
   const waiting: string[] = [];
   for (const [mediaKey, streamId] of byKey) {
-    if (held.has(mediaKey) || playbackNotNeeded.has(streamId))
+    if (fresh.has(mediaKey) || playbackNotNeeded.has(streamId))
       out.set(mediaKey, ensurePlaybackAccess(streamId, mediaKey));
+    else if (alive.has(mediaKey)) stale.push(mediaKey);
     else waiting.push(mediaKey);
   }
-  // 정렬은 안정적이라 같은 차례끼리는 목록 순서다
-  waiting.sort((a, b) => (listGrantedAt.get(a) ?? -1) - (listGrantedAt.get(b) ?? -1));
-  let free = LIST_ACCESS_MAX_KEYS - held.size;
-  for (const mediaKey of waiting) {
-    if (free <= 0) {
-      out.set(mediaKey, null);
-      continue;
-    }
-    free -= 1;
+  const issue = (mediaKey: string) => {
     const result = ensurePlaybackAccess(byKey.get(mediaKey)!, mediaKey);
     out.set(mediaKey, result);
     void result?.then((r) => {
       if (r.kind === 'granted') listGrantedAt.set(mediaKey, Date.now());
     });
+  };
+  // 정렬은 안정적이라 같은 차례끼리는 목록 순서다
+  waiting.sort((a, b) => (listGrantedAt.get(a) ?? -1) - (listGrantedAt.get(b) ?? -1));
+  let free = LIST_ACCESS_MAX_KEYS - alive.size;
+  // 자리가 없어 못 받은 키가 있나. ensurePlaybackAccess의 null(필요 없음 · 재생 서버 없음)과 섞지 않으려고 따로 센다
+  let someoneWaits = false;
+  for (const mediaKey of waiting) {
+    if (free > 0) {
+      free -= 1;
+      issue(mediaKey);
+    } else {
+      out.set(mediaKey, null);
+      someoneWaits = true;
+    }
+  }
+  for (const mediaKey of stale) {
+    if (someoneWaits) out.set(mediaKey, null);
+    else issue(mediaKey);
   }
   return out;
 }
