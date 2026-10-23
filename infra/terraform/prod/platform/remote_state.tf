@@ -258,7 +258,7 @@ resource "terraform_data" "runtime_contract" {
           )
         ]
       ]))
-      error_message = "런타임 출력 app_env 값에 비밀을 싣는 꼴(키에 passw · pwd · secret · token 이 든 쿼리 매개변수 · 비밀 낱말이 든 -D 속성 · https://<토큰>@host)이 있다 — 비밀은 런타임 app_secret_arns 로 옮긴다."
+      error_message = "런타임 출력 app_env 값에 비밀을 싣는 꼴(키에 passw · pwd · secret · token 이 든 쿼리 · 프래그먼트 매개변수 · 비밀 낱말이 든 -D 속성 · https://<토큰>@host)이 있다 — 비밀은 런타임 app_secret_arns 로 옮긴다."
     }
   }
 }
