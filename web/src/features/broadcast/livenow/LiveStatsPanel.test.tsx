@@ -1,6 +1,7 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LiveStatsPanel, type TimelineCard } from './LiveStatsPanel';
+import styles from './LiveStatsPanel.module.css';
 import type { StatsChart } from './statsChart';
 import type { LiveStatsMockState } from './useLiveStatsMockState';
 
@@ -88,7 +89,16 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
+
+/** jsdom은 스크롤 폭을 재지 않는다 — 넘기는 상자의 보이는 폭·내용 폭을 박아 둔다 */
+function scrollBox(client: () => number, scrollWidth: number) {
+  vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockImplementation(client);
+  vi.spyOn(HTMLElement.prototype, 'scrollWidth', 'get').mockReturnValue(scrollWidth);
+}
+const scrollerOf = (container: HTMLElement) =>
+  container.querySelector<HTMLElement>(`.${styles.scroll}`)!;
 
 describe('LiveStatsPanel: 숫자 줄', () => {
   it('분당 평균 채팅·시청자·하이라이트·후원을 이름과 값으로 세운다', () => {
@@ -186,6 +196,81 @@ describe('LiveStatsPanel: 그래프', () => {
     panel();
     expect(screen.queryByRole('button', { name: /처음/ })).toBeNull();
   });
+
+  it('덜 찬 마지막 칸이 있어도 핀은 그 카드가 든 막대 위에 선다', () => {
+    // 30초 칸 269개 = 2분 칸 67개 + 30초. 막대만 같은 폭 칸으로 나누면 끝으로 갈수록 핀이 이웃 막대 위에 섰다(PR #316 리뷰)
+    const atMs = T0 + (264 * 30 + 60) * 1000; // 2분 칸 66번의 가운데
+    const { container } = panel({
+      stats: stats({ chart: chart(269) }),
+      cards: [{ ...CARDS[0]!, atMs }],
+    });
+    const pinX = parseFloat(screen.getByRole('button', { name: /^하이라이트 #12/ }).style.left);
+    const hot = container.querySelector(`.${styles.barHot}`)!;
+    const barX = Number(/^M([\d.e-]+),/.exec(hot.getAttribute('d')!)![1]);
+    const slot = (1040 * 120) / (269 * 30);
+    expect(Math.abs(pinX - (barX + (slot * 0.72) / 2))).toBeLessThan(slot / 2);
+  });
+
+  it('덜 찬 마지막 칸의 툴팁은 실제 길이와 끝 시각을 쓴다', () => {
+    panel({ stats: stats({ chart: chart(269) }), cards: [] });
+    fireEvent.keyDown(screen.getByRole('group'), { key: 'End' });
+    const tip = screen.getByRole('status');
+    // 19:30 + 2시간 14분 = 21:44, 마지막 칸은 30초어치다(「2분」·21:46:00이 아니다)
+    expect(tip).toHaveTextContent('21:44:00 – 21:44:30');
+    expect(tip).toHaveTextContent('채팅 (30초)');
+  });
+
+  it('키로 고른 칸이 화면 밖이면 그 칸까지 넘긴다', () => {
+    scrollBox(() => 1040, 1764);
+    const { container } = panel({
+      stats: stats({ chart: chart(504) }),
+      live: false,
+      ended: true,
+    });
+    const scroller = scrollerOf(container);
+    expect(scroller.scrollLeft).toBe(0);
+    fireEvent.keyDown(screen.getByRole('group'), { key: 'End' });
+    // 마지막 칸(1750–1764px)과 뒤 두 칸 여유가 보이게 — 키의 기본 스크롤은 막았으니 안 넘기면 툴팁이 화면 밖이었다
+    expect(scroller.scrollLeft).toBeGreaterThan(1764 - 1040 - 1);
+    fireEvent.keyDown(screen.getByRole('group'), { key: 'Home' });
+    expect(scroller.scrollLeft).toBe(0);
+  });
+
+  it('보이는 폭만 바뀌어도 끝에 붙어 있으면 다시 끝으로 붙는다', () => {
+    const observers: ((entries: { contentRect: { width: number } }[]) => void)[] = [];
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(cb: (entries: { contentRect: { width: number } }[]) => void) {
+          observers.push(cb);
+        }
+        observe() {}
+        disconnect() {}
+      },
+    );
+    let client = 1040;
+    scrollBox(() => client, 1764);
+    const { container } = panel({ stats: stats({ chart: chart(504) }) });
+    const scroller = scrollerOf(container);
+    expect(scroller.scrollLeft).toBe(1764);
+    // 브라우저는 폭이 줄어도 scrollLeft를 그대로 둔다(끝이 화면 밖으로 밀린다). 폭이 바뀌면 다시 끝으로 붙어야 한다(PR #316 리뷰)
+    scroller.scrollLeft = 724;
+    client = 840;
+    act(() => {
+      for (const cb of observers) cb([{ contentRect: { width: 892 } }]);
+    });
+    expect(scroller.scrollLeft).toBe(1764);
+  });
+
+  it('시청자 관측이 하나뿐이면 「기록 없음」이 아니라 점 하나다', () => {
+    const { container } = panel({
+      stats: stats({ viewers: [{ t: T0 + 60_000, v: 1200 }], noViewers: '기록 없음' }),
+      live: false,
+      ended: true,
+    });
+    expect(screen.queryByText('시청자 수 기록 없음')).toBeNull();
+    expect(container.querySelector('circle[data-single]')).not.toBeNull();
+  });
 });
 
 describe('LiveStatsPanel: 열쇠', () => {
@@ -193,6 +278,20 @@ describe('LiveStatsPanel: 열쇠', () => {
     // 2분짜리 방송은 시:분 눈금 글자가 겹친다(리뷰). 글자를 key로 쓰면 같은 key 경고가 난다
     const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     panel({ stats: stats({ chart: chart(4) }), live: false, ended: true, cards: [] });
+    expect(errors.mock.calls.some((args) => String(args[0]).includes('same key'))).toBe(false);
+  });
+
+  it('같은 칸의 수동 카드 둘은 툴팁에서 key가 겹치지 않고 두 줄로 선다', () => {
+    // 수동 카드는 글자(「수동」·「수동 마킹」)가 같다 — 글자로 key를 만들면 겹쳤다(PR #316 리뷰)
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    panel({
+      cards: [
+        { ...CARDS[1]!, id: 'card-20', atMs: T0 + 10_000 },
+        { ...CARDS[1]!, id: 'card-21', atMs: T0 + 40_000 },
+      ],
+    });
+    fireEvent.keyDown(screen.getByRole('group'), { key: 'Home' });
+    expect(within(screen.getByRole('status')).getAllByText('수동')).toHaveLength(2);
     expect(errors.mock.calls.some((args) => String(args[0]).includes('same key'))).toBe(false);
   });
 

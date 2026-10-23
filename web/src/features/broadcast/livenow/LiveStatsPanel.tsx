@@ -21,6 +21,7 @@ import {
   BAR_RATIO,
   areaPath,
   barPath,
+  bucketEnd,
   bucketIndexAt,
   categorySpans,
   clusterPins,
@@ -125,6 +126,8 @@ function headMeta(chart: StatsChart | null, scope: LiveStatsMockState['scope'], 
 }
 
 interface TipRow {
+  /** React key — 카드 줄은 카드 id다(같은 칸의 수동 카드 둘은 글자가 같다) */
+  id: string;
   key: 'bar' | 'line' | 'dot' | 'gold';
   value: string;
   label: string;
@@ -242,9 +245,13 @@ function Timeline({
 }) {
   const { view, scroll, contentW } = layoutFor(chart, visibleW, u);
   const n = view.buckets.length;
-  const slot = contentW / Math.max(1, n);
-  const xb = (i: number) => i * slot;
+  const span = view.t1 - view.t0;
+  // 막대·핀·눈금·호버가 모두 같은 시각 자(xt)를 쓴다. 막대만 같은 폭 칸으로 나누면 덜 찬 마지막 칸 때문에 핀이 이웃 막대 위에
+  // 서고, 그 핀에 호버하면 카드가 툴팁에 없었다(PR #316 리뷰). slot은 꽉 찬 칸 하나의 폭이다
   const xt = (t: number) => xOf(view, t, contentW);
+  const xb = (i: number) => xt(view.buckets[i]?.start ?? view.t1);
+  const wb = (i: number) => xt(bucketEnd(view, i)) - xb(i);
+  const slot = ((view.bucketSeconds * 1000) / Math.max(1, span)) * contentW;
   const pinRow = PIN_ROW * u;
   const viewerH = VIEWER_H * u;
   const gap = GAP * u;
@@ -287,11 +294,8 @@ function Timeline({
   const barW = Math.min(BAR_MAX * u, Math.max(2, slot * BAR_RATIO));
 
   const cats = categorySpans(stats.categories, view.t0, view.t1);
-  const crossX = shown !== null ? xb(shown) + slot / 2 : null;
-  const crossV =
-    shown !== null
-      ? viewersAt(stats.viewers, (view.buckets[shown]?.start ?? 0) + view.bucketSeconds * 1000)
-      : null;
+  const crossX = shown !== null ? xb(shown) + wb(shown) / 2 : null;
+  const crossV = shown !== null ? viewersAt(stats.viewers, bucketEnd(view, shown)) : null;
 
   const syncPos = useCallback(() => {
     const el = scrollRef.current;
@@ -302,13 +306,14 @@ function Timeline({
   }, []);
 
   // 방송 중이면 오른쪽 끝(지금)에서 시작하고, 끝에 붙어 있는 동안 새 칸이 와도 끝을 따라간다. 지난 구간을 보고 있으면 붙들지
-  // 않는다. 끝난 방송은 처음부터다
+  // 않는다. 끝난 방송은 처음부터다. 보이는 폭이 바뀔 때도 다시 잰다: 스크롤할 때 contentW는 폭과 무관해, 창·사이드바 폭만
+  // 바뀌면 끝 범위와 「지금」 단추가 옛 값으로 남았다(PR #316 리뷰)
   useLayoutEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
     if (nowEdge && followEnd.current) el.scrollLeft = el.scrollWidth;
     setPos({ left: el.scrollLeft, max: el.scrollWidth - el.clientWidth });
-  }, [contentW, nowEdge]);
+  }, [contentW, nowEdge, visibleW]);
 
   const scrollTo = (left: number) => scrollRef.current?.scrollTo({ left, behavior: 'smooth' });
 
@@ -331,7 +336,7 @@ function Timeline({
     }
     const rect = e.currentTarget.getBoundingClientRect();
     const ratio = (e.clientX - rect.left) / Math.max(1, rect.width);
-    setIndex(Math.min(n - 1, Math.max(0, Math.floor(ratio * n))));
+    setIndex(bucketIndexAt(view, view.t0 + ratio * span));
   };
   const endDrag = () => {
     setDragging(false);
@@ -340,37 +345,61 @@ function Timeline({
       drag.current = null;
     }, 0);
   };
+  // 키로 고른 칸이 화면 밖이면 그 칸까지 넘긴다(앞뒤 두 칸 여유). 키의 기본 스크롤은 막았으니 안 넘기면 십자선·툴팁이 화면
+  // 밖에 섰다(PR #316 리뷰)
+  const reveal = (i: number) => {
+    const el = scrollRef.current;
+    if (!el || !scroll) return;
+    const from = xb(i) - 2 * slot;
+    const to = xb(i) + wb(i) + 2 * slot;
+    if (from < el.scrollLeft) el.scrollLeft = Math.max(0, from);
+    else if (to > el.scrollLeft + el.clientWidth) el.scrollLeft = to - el.clientWidth;
+  };
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (e.key === 'ArrowLeft') setIndex((i) => Math.max(0, (i ?? n) - 1));
-    else if (e.key === 'ArrowRight') setIndex((i) => Math.min(n - 1, (i ?? -1) + 1));
-    else if (e.key === 'Home') setIndex(0);
-    else if (e.key === 'End') setIndex(n - 1);
-    else return;
+    const next =
+      e.key === 'ArrowLeft'
+        ? Math.max(0, (shown ?? n) - 1)
+        : e.key === 'ArrowRight'
+          ? Math.min(n - 1, (shown ?? -1) + 1)
+          : e.key === 'Home'
+            ? 0
+            : e.key === 'End'
+              ? n - 1
+              : null;
+    if (next === null) return;
     e.preventDefault();
+    setIndex(next);
+    reveal(next);
   };
 
   const tipRows = (i: number): TipRow[] => {
     const b = view.buckets[i];
     if (!b) return [];
+    const end = bucketEnd(view, i);
     const rows: TipRow[] = [
-      { key: 'bar', value: fmtNum(b.chats), label: `채팅 (${fmtSeconds(view.bucketSeconds)})` },
+      {
+        id: 'bar',
+        key: 'bar',
+        value: fmtNum(b.chats),
+        label: `채팅 (${fmtSeconds((end - b.start) / 1000)})`,
+      },
     ];
-    const v = viewersAt(stats.viewers, b.start + view.bucketSeconds * 1000);
-    if (v !== null) rows.push({ key: 'line', value: fmtNum(v), label: '시청자' });
+    const v = viewersAt(stats.viewers, end);
+    if (v !== null) rows.push({ id: 'line', key: 'line', value: fmtNum(v), label: '시청자' });
     for (const c of inView.filter((c) => bucketIndexAt(view, c.atMs) === i))
       rows.push({
+        id: c.id,
         key: 'dot',
         value: c.label,
         label: `${c.manual ? '수동' : '자동'} · ${c.reason}`,
       });
     if (b.donations > 0)
-      rows.push({ key: 'gold', value: `${fmtNum(b.donations)}회`, label: '후원' });
+      rows.push({ id: 'gold', key: 'gold', value: `${fmtNum(b.donations)}회`, label: '후원' });
     return rows;
   };
 
   const atStart = pos.left <= 2;
   const atEnd = pos.left >= pos.max - 2;
-  const span = view.t1 - view.t0;
   const viewFrom = view.t0 + (pos.left / Math.max(1, contentW)) * span;
   const viewTo = view.t0 + ((pos.left + visibleW) / Math.max(1, contentW)) * span;
   const tipFlip = crossX !== null && crossX > pos.left + visibleW - 200 * u;
@@ -485,11 +514,23 @@ function Timeline({
                 className={styles.grid}
               />
             ))}
+            {/* 관측이 하나뿐이면 선 대신 점이다 — 「수집 전」이라 하면 숫자 줄의 시청자 수와 어긋난다(PR #316 리뷰). 방송
+                중이면 마지막 점(맥박)이 그 점이다 */}
             {vScale && vPts.length > 1 ? (
               <g clipPath={`url(#${clipId})`}>
                 <path d={areaPath(vPts, vBase, vLine)} className={styles.viewerArea} />
                 <path d={vLine} className={styles.viewerLine} />
               </g>
+            ) : vScale && vLast ? (
+              live ? null : (
+                <circle
+                  cx={vLast[0]}
+                  cy={vLast[1]}
+                  r={4 * u}
+                  className={styles.viewerDot}
+                  data-single=""
+                />
+              )
             ) : (
               <text
                 x={pos.left + Math.min(contentW, visibleW) / 2}
@@ -501,14 +542,18 @@ function Timeline({
                 {`시청자 수 ${stats.noViewers}`}
               </text>
             )}
-            {view.buckets.map((b, i) => (
-              <path
-                key={b.start}
-                d={barPath(xb(i) + (slot - barW) / 2, barW, yC(b.chats), cBase, 3 * u)}
-                className={hot.has(i) ? styles.barHot : styles.bar}
-                data-dim={shown !== null && shown !== i ? '' : undefined}
-              />
-            ))}
+            {view.buckets.map((b, i) => {
+              // 덜 찬 마지막 칸은 그 폭만큼 좁게 선다
+              const w = Math.min(barW, Math.max(2, wb(i) * BAR_RATIO));
+              return (
+                <path
+                  key={b.start}
+                  d={barPath(xb(i) + (wb(i) - w) / 2, w, yC(b.chats), cBase, 3 * u)}
+                  className={hot.has(i) ? styles.barHot : styles.bar}
+                  data-dim={shown !== null && shown !== i ? '' : undefined}
+                />
+              );
+            })}
             {crossX !== null ? (
               crossV !== null && vScale ? (
                 <circle cx={crossX} cy={yV(crossV)} r={4 * u} className={styles.viewerDot} />
@@ -583,11 +628,10 @@ function Timeline({
               aria-live="polite"
             >
               <div className={styles.tipTitle}>
-                {fmtHMS(shownBucket.start)} –{' '}
-                {fmtHMS(shownBucket.start + view.bucketSeconds * 1000)}
+                {fmtHMS(shownBucket.start)} – {fmtHMS(bucketEnd(view, shown))}
               </div>
               {tipRows(shown).map((row) => (
-                <div key={`${row.key}-${row.value}-${row.label}`} className={styles.tipRow}>
+                <div key={row.id} className={styles.tipRow}>
                   <span className={TIP_KEY[row.key]} aria-hidden />
                   <b className={styles.tipValue}>{row.value}</b>
                   <span className={styles.tipLabel}>{row.label}</span>

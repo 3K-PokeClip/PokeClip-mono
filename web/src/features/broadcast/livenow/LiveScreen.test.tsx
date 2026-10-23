@@ -1565,6 +1565,10 @@ describe('LiveScreen — 실시간 통계', () => {
       .filter((u) => u.pathname === `/api/clip/broadcasts/${STREAM_ID}/broadcast-info`)
       .map((u) => u.searchParams.get('since'));
     expect(sinces).toContain(new Date(STARTED_AT).toISOString());
+    // 처음 한 번만 시작부터 받고, 그다음은 받아 둔 마지막 관측(1분 전)의 2분 앞부터만 묻는다 — 10초마다 방송 전체를 다시 받지
+    // 않는다(PR #316 리뷰). 받아 둔 앞 기록은 그대로라 최고 시청자가 남는다
+    expect(sinces.at(-1)).toBe(new Date(NOW - 3 * 60_000).toISOString());
+    expect(statValue('시청자')?.nextElementSibling).toHaveTextContent('최고 2,310');
   });
 
   it('수집기가 관측마다 카테고리를 실으면 그래프 아래 띠가 바뀐 구간마다 나뉜다', async () => {

@@ -45,7 +45,8 @@ export const BAR_RATIO = 0.72;
 export const BAR_MAX = 22;
 
 /**
- * 칸 길이를 seconds로 묶는다. 채팅·후원은 더하고 시각은 첫 칸을 쓴다. 서버 칸보다 짧게는 쪼개지 않는다
+ * 칸 길이를 seconds로 묶는다. 채팅·후원은 더하고 시각은 첫 칸을 쓴다. 서버 칸보다 짧게는 쪼개지 않는다. t1은 그대로라 마지막
+ * 묶음은 덜 찰 수 있다 — 그 칸의 끝은 bucketEnd로 읽는다
  */
 export function rebucketTo(chart: StatsChart, seconds: number): StatsChart {
   const k = Math.max(1, Math.round(seconds / chart.bucketSeconds));
@@ -78,7 +79,10 @@ export function layoutFor(chart: StatsChart, visibleW: number, u = 1) {
   );
   const scroll = visibleW > 0 && visibleW / (span / SCROLL_SECONDS) < scrollSlot;
   const view = rebucketTo(chart, scroll ? SCROLL_SECONDS : (fit ?? SCROLL_SECONDS));
-  const contentW = scroll ? view.buckets.length * scrollSlot : visibleW;
+  // 폭은 칸 수가 아니라 시간에 비례한다: 막대·핀·눈금이 모두 같은 시각 자(xOf)로 서야 덜 찬 마지막 칸에서도 어긋나지 않는다
+  const contentW = scroll
+    ? ((chart.t1 - chart.t0) / (SCROLL_SECONDS * 1000)) * scrollSlot
+    : visibleW;
   return { view, scroll, contentW };
 }
 
@@ -127,10 +131,17 @@ export const fmtTick = (n: number) =>
   n >= 10_000
     ? `${(n / 10_000).toLocaleString('ko-KR', { maximumFractionDigits: 1 })}만`
     : fmtNum(n);
-export const fmtSeconds = (sec: number) => (sec < 60 ? `${sec}초` : `${sec / 60}분`);
+/** 칸 길이 — 덜 찬 마지막 칸은 「1분 30초」처럼 나머지 초까지 쓴다 */
+export const fmtSeconds = (sec: number) => {
+  const s = Math.round(sec);
+  if (s < 60) return `${s}초`;
+  return s % 60 === 0 ? `${s / 60}분` : `${Math.floor(s / 60)}분 ${s % 60}초`;
+};
 export function fmtDuration(minutes: number) {
-  const h = Math.floor(minutes / 60);
-  const m = Math.round(minutes % 60);
+  // 분을 먼저 반올림한다 — 나머지를 반올림하면 119.5분이 「1시간 60분」이 됐다(PR #316 리뷰)
+  const total = Math.round(minutes);
+  const h = Math.floor(total / 60);
+  const m = total % 60;
   return h > 0 ? `${h}시간 ${m}분` : `${m}분`;
 }
 
@@ -165,6 +176,12 @@ export const xOf = (chart: StatsChart, t: number, width: number) =>
 export function bucketIndexAt(chart: StatsChart, t: number) {
   const i = Math.floor((t - chart.t0) / (chart.bucketSeconds * 1000));
   return Math.min(chart.buckets.length - 1, Math.max(0, i));
+}
+
+/** 칸 i의 끝 시각 — 묶은 마지막 칸은 덜 찼을 수 있어 t1에서 자른다(지금보다 뒤까지 그 칸이라고 하지 않는다) */
+export function bucketEnd(chart: StatsChart, i: number) {
+  const start = chart.buckets[i]?.start ?? chart.t1;
+  return Math.min(start + chart.bucketSeconds * 1000, chart.t1);
 }
 
 /** 그 시각까지 마지막으로 잰 시청자 — 관측은 1분마다라 칸과 정확히 겹치지 않는다 */

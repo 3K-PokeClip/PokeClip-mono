@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+  bucketEnd,
   categorySpans,
   clusterPins,
+  fmtDuration,
+  fmtSeconds,
   layoutFor,
   rangeScale,
   rebucketTo,
@@ -75,6 +78,35 @@ describe('statsChart: 칸 묶기', () => {
     expect(b.buckets[1]!.start).toBe(T0 + 4 * 30_000);
     const sum = (ch: StatsChart) => ch.buckets.reduce((a, x) => a + x.chats + x.donations, 0);
     expect(sum(b)).toBe(sum(c));
+  });
+
+  it('덜 찬 마지막 묶음의 끝은 t1이다 — 지금보다 뒤까지 그 칸이라고 하지 않는다', () => {
+    const b = rebucketTo(chart(9), 120);
+    expect(bucketEnd(b, 1)).toBe(T0 + 8 * 30_000);
+    expect(bucketEnd(b, 2)).toBe(T0 + 9 * 30_000);
+  });
+
+  it('스크롤 폭은 칸 수가 아니라 시간에 비례한다(덜 찬 마지막 칸은 그만큼 짧다)', () => {
+    // 4시간 12분 30초 = 2분 칸 126개 + 30초. 칸 수로 재면 127칸 폭이 되어 막대와 시각 눈금이 끝으로 갈수록 어긋났다(PR #316 리뷰)
+    const l = layoutFor(chart(505), 1040);
+    expect(l.scroll).toBe(true);
+    expect(l.view.buckets).toHaveLength(127);
+    expect(l.contentW).toBeCloseTo(126.25 * 14);
+  });
+});
+
+describe('statsChart: 글자', () => {
+  it('길이는 분을 먼저 반올림한다 — 「1시간 60분」이 나오지 않는다', () => {
+    expect(fmtDuration(119.5)).toBe('2시간 0분');
+    expect(fmtDuration(59.6)).toBe('1시간 0분');
+    expect(fmtDuration(38)).toBe('38분');
+    expect(fmtDuration(96.4)).toBe('1시간 36분');
+  });
+
+  it('칸 길이는 나머지 초까지 쓴다', () => {
+    expect(fmtSeconds(30)).toBe('30초');
+    expect(fmtSeconds(120)).toBe('2분');
+    expect(fmtSeconds(90)).toBe('1분 30초');
   });
 });
 

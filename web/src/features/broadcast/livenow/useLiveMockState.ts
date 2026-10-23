@@ -117,8 +117,9 @@ interface BroadcastInfoResponse {
     viewers?: number | null;
   } | null;
   /** category는 수집기가 관측마다 싣기 전엔 없다(지금은 latest에만 있다) — 오면 통계가 카테고리 구간을 나눈다 */
-  series: { observedAt: string; viewers: number | null; category?: string | null }[];
+  series: InfoPoint[];
 }
+type InfoPoint = { observedAt: string; viewers: number | null; category?: string | null };
 /** chat-chart 응답 한 장. 어느 창을 읽었는지(scope)는 부른 쪽이 안다 */
 type ChartPage = Omit<LiveChart, 'scope'>;
 /** 받아 둔 방송 정보. 시청자 기록을 어느 창으로 읽었는지(scope)를 같이 둔다 */
@@ -133,6 +134,8 @@ const ENDED_LIST_MS = 60_000;
  * 쓴다)와 마지막 관측(1분마다) 전 답을 받는다: 첫 답을 굳히면 꼬리가 빠진 채 남았다. 이만큼 지난 뒤 받은 답부터 굳힌다
  */
 const ENDED_SETTLE_MS = 2 * 60_000;
+/** 라이브 시청자 기록을 이어 받을 때 받아 둔 마지막 점보다 이만큼 앞부터 다시 묻는다(수집기의 늦은 적재를 놓치지 않게) */
+const INFO_OVERLAP_MS = 2 * 60_000;
 export interface CardActionResult {
   ok: boolean;
   status: number;
@@ -416,8 +419,13 @@ export function useLiveMockState(pastRoute: boolean): LiveMockState {
             chartReadLive = false;
             publishLiveData({ chart: null });
           }
+          const windows = chartWindows(start, end);
+          const keys = new Set(windows.map(([a, b]) => `${a}|${b}|${bucket}`));
+          // 지금 창에 없는 기억은 버린다: 6시간째에 칸이 30→60초로 바뀐 옛 열쇠, 12시간 꼬리에서 밀려난 창. 남겨 두면 탭을 닫을
+          // 때까지 쌓인다(PR #316 리뷰). 칸이 바뀐 순간 한 번은 창을 전부 다시 읽는다
+          for (const key of settledPages.keys()) if (!keys.has(key)) settledPages.delete(key);
           const pages = await Promise.all(
-            chartWindows(start, end).map(async ([a, b]) => {
+            windows.map(async ([a, b]) => {
               const key = `${a}|${b}|${bucket}`;
               const kept = settledPages.get(key);
               if (kept) return kept;
@@ -458,6 +466,11 @@ export function useLiveMockState(pastRoute: boolean): LiveMockState {
       }
     };
 
+    /**
+     * 라이브 시청자 기록(그 방송 시작의 것). 받아 둔 기록 뒤만 더 받아 이어 붙인다: 10초마다 방송 처음부터 다시 받으면 10시간
+     * 방송은 600점짜리 답이 10초마다 왔다(PR #316 리뷰)
+     */
+    let liveSeries: { startedAt: number; series: InfoPoint[] } | null = null;
     const loadInfo = async () => {
       const rg = rangeRef.current;
       // 꺼짐은 명부에 없는 방송이다(위임 회수·탈퇴): 볼 수 없게 된 방송이라 읽지 않는다. 시계가 명부를 다시 물어 방송이
@@ -468,11 +481,20 @@ export function useLiveMockState(pastRoute: boolean): LiveMockState {
       // 그래프와 같은 창의 시청자 기록을 달라고 한다: 안 주면 서버가 최근 1시간만 준다(PR #200 codex). 지난 방송은 그 방송의 창,
       // 라이브는 시작~지금이다(그래프가 처음부터라 선도 처음부터다). 시작을 모르는 라이브와 아직 모를 때는 최근 창으로 읽고 그렇다고
       // 표시한다. 제목·카테고리는 창과 무관해 명부 답을 기다리지 않는다(리뷰 4라운드)
+      const liveFrom =
+        rg.status === 'live' && rg.startedAt !== null
+          ? liveWindowStart(rg.startedAt, askedAt)
+          : null;
+      const kept = liveFrom !== null && liveSeries?.startedAt === rg.startedAt ? liveSeries : null;
+      const lastSeen = kept?.series.at(-1);
+      // 라이브에서 받아 둔 기록이 있으면 마지막 점 INFO_OVERLAP_MS 앞부터만 묻는다. 수집기가 관측을 늦게 적을 수 있어 조금 겹친다
       const sinceMs =
         rg.status === 'ended' && rg.endedAt !== null
           ? endedWindowStart(rg.startedAt, rg.endedAt)
-          : rg.status === 'live' && rg.startedAt !== null
-            ? liveWindowStart(rg.startedAt, askedAt)
+          : liveFrom !== null
+            ? lastSeen
+              ? Math.max(liveFrom, Date.parse(lastSeen.observedAt) - INFO_OVERLAP_MS)
+              : liveFrom
             : null;
       const since =
         sinceMs === null
@@ -482,7 +504,23 @@ export function useLiveMockState(pastRoute: boolean): LiveMockState {
         `/api/clip/broadcasts/${encodeURIComponent(streamId)}/broadcast-info${since}`,
       );
       if (page && stillCurrent(rg)) {
-        const loaded: LoadedInfo = { ...page, scope: sinceMs === null ? 'recent' : 'broadcast' };
+        let series = page.series;
+        if (liveFrom !== null && rg.startedAt !== null && sinceMs !== null) {
+          // 받아 둔 앞 기록 + 이번 답. 겹친 구간은 관측 시각으로 하나만 두고, 12시간 꼬리 밖으로 밀려난 점은 버린다
+          const byTime = new Map<string, InfoPoint>();
+          for (const p of kept?.series ?? [])
+            if (Date.parse(p.observedAt) <= sinceMs) byTime.set(p.observedAt, p);
+          for (const p of page.series) byTime.set(p.observedAt, p);
+          series = [...byTime.values()]
+            .filter((p) => Date.parse(p.observedAt) >= liveFrom)
+            .sort((a, b) => Date.parse(a.observedAt) - Date.parse(b.observedAt));
+          liveSeries = { startedAt: rg.startedAt, series };
+        }
+        const loaded: LoadedInfo = {
+          ...page,
+          series,
+          scope: sinceMs === null ? 'recent' : 'broadcast',
+        };
         setInfo(loaded);
         publishLiveData({ info: loaded });
         if (sinceMs !== null && rg.status === 'ended') infoDoneFor = settledKey(rg, askedAt);
