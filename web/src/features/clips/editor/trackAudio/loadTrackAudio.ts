@@ -1,7 +1,7 @@
 import type { SegmentAudioAccess } from '@/api/clipEditor';
 import { demuxAudioTracks, toAdts, type AacConfig, type AudioTrackFrames } from './fmp4Audio';
 
-// 구간의 녹화 조각을 받아 소리 트랙마다 풀어 둔다(POK-389). 조각마다 따로 풀지 않고 「이어진 조각끼리」 프레임을 이어 한 번에 푼다 —
+// 구간의 녹화 조각을 받아 소리 트랙마다 풀어 둔다(POK-389). 조각마다 따로 풀지 않고 「이어진 조각끼리」 프레임을 이어 한 번에 푼다.
 // AAC는 앞 프레임에 기대 풀리므로 조각마다 끊어 풀면 4초마다 이음매 소리가 난다. 사이가 빈 자리(덜 올라온 조각)에서만 끊는다.
 
 /** 트랙 하나의 한 덩어리. startSeconds는 편집기 시간축(기준점 기준 초)이다 */
@@ -53,7 +53,7 @@ async function inParallel<T, R>(items: readonly T[], work: (item: T) => Promise<
 }
 
 /**
- * @param baseMs 편집기 시간축의 0초(절대 ms) — 조각의 재생 축 시각을 편집기 초로 옮긴다
+ * @param baseMs 편집기 시간축의 0초(절대 ms): 조각의 재생 축 시각을 편집기 초로 옮긴다
  * @returns 트랙 번호(파일 순서) → 덩어리들. 소리 트랙을 하나도 못 꺼냈으면 빈 목록. 주소·내려받기·풀기가 실패하면 던진다
  */
 export async function loadTrackAudio(

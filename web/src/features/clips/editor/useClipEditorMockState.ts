@@ -135,7 +135,7 @@ const samePip = sameRect;
 export type { EditorLayout } from './editorLayout';
 export type SubtitleMode = 'burn-cc' | 'burn' | 'cc';
 export type EditorTool = 'layout' | 'subtitle' | 'text' | 'audio' | 'image';
-/** 방송 소리 트랙의 모양(아이콘) — 영상 줄은 타임라인이 따로 그린다 */
+/** 방송 소리 트랙의 모양(아이콘): 영상 줄은 타임라인이 따로 그린다 */
 export type EditorTrackKind = 'mic' | 'game' | 'bgm';
 
 /** E2 — 존재하는 트랙만 온다(RMS 무음 필터). 화면은 이 배열을 그대로 그린다 */
@@ -240,7 +240,7 @@ const MOCK_SOURCE = {
 } as const;
 
 /**
- * 목업의 방송 소리 트랙 — 실제 모드처럼 스트리머가 이름 붙인 소스 트랙들이다(POK-389).
+ * 목업의 방송 소리 트랙: 실제 모드처럼 스트리머가 이름 붙인 소스 트랙들이다(POK-389).
  * 영상 줄은 타임라인이 늘 그리고, 음악·효과음·이미지는 기능이 생기면 줄이 생긴다.
  */
 const MOCK_TRACKS: readonly EditorTrack[] = [
@@ -250,7 +250,7 @@ const MOCK_TRACKS: readonly EditorTrack[] = [
   { id: 'bgm', kind: 'bgm', label: 'BGM', volume: 40, muted: false },
 ];
 
-/** 목업 자막 — 타임코드(구간 시작 기준)에서 다음 줄 시작까지 화면에 선다. 소스 축 자리는 목업 구간 시작(4928.4)에 더한다 */
+/** 목업 자막: 타임코드(구간 시작 기준)에서 다음 줄 시작까지 화면에 선다. 소스 축 자리는 목업 구간 시작(4928.4)에 더한다 */
 const MOCK_SUBTITLES: readonly SubtitleItem[] = (
   [
     { id: 'sub-1', timecode: '02.1', text: '아 이게 된다고?? 미쳤다' },
@@ -291,14 +291,14 @@ export const SUBTITLE_MODE_OPTIONS: readonly { value: SubtitleMode; label: strin
   { value: 'burn-cc', label: '둘 다' },
 ];
 
-/** 미리보기 아래 설명 줄의 짧은 말 — 「자막 둘 다」처럼 읽히지 않게 따로 둔다 */
+/** 미리보기 아래 설명 줄의 짧은 말: 「자막 둘 다」처럼 읽히지 않게 따로 둔다 */
 const SUBTITLE_MODE_NOTE: Record<SubtitleMode, string> = {
   burn: '영상에 새김',
   cc: '자막 파일',
   'burn-cc': '영상+파일',
 };
 
-/** 오디오 「빠른 설정」 카드 넷(POK-389) — 값 계산은 audioPresets.ts */
+/** 오디오 「빠른 설정」 카드 넷(POK-389): 값 계산은 audioPresets.ts */
 const AUDIO_PRESETS: readonly { value: AudioPresetId; label: string; hint: string }[] = [
   { value: 'copyright-safe', label: '저작권 걱정 없이', hint: 'BGM 빼기' },
   { value: 'voice-up', label: '목소리 크게', hint: '마이크 ↑ 게임 ↓' },
@@ -307,7 +307,7 @@ const AUDIO_PRESETS: readonly { value: AudioPresetId; label: string; hint: strin
 ];
 
 /**
- * 시안 좌측 도구 레일 — 순서가 곧 화면 순서다. 쇼츠를 만드는 순서(배치 → 자막 → 글자 → 소리 → 이미지)를 따른다(POK-389).
+ * 시안 좌측 도구 레일: 순서가 곧 화면 순서다. 쇼츠를 만드는 순서(배치 → 자막 → 글자 → 소리 → 이미지)를 따른다(POK-389).
  * 「구간」은 타임라인 손잡이·재생 막대의 시작·끝과 같은 일이라 뺐고, BGM·효과음은 오디오 안으로 들어갔다.
  */
 export const TOOL_OPTIONS: readonly { value: EditorTool; label: string }[] = [
@@ -436,7 +436,7 @@ export interface ClipEditorMockState {
   playing: boolean;
   togglePlay: () => void;
   playheadSeconds: number;
-  /** 편집기에서 고른 썸네일 장면(소스 축 초) — 쇼츠 구간 밖으로 밀려나면 null(POK-389) */
+  /** 편집기에서 고른 썸네일 장면(소스 축 초): 쇼츠 구간 밖으로 밀려나면 null(POK-389) */
   thumbnailSeconds: number | null;
   /** 지금 재생 위치가 쇼츠 구간 안이라 썸네일로 고를 수 있는가 */
   canPickThumbnail: boolean;
@@ -557,7 +557,7 @@ export interface ClipEditorMockState {
   tracks: EditorTrack[];
   setTrackVolume: (trackId: string, volume: number) => void;
   toggleTrackMute: (trackId: string) => void;
-  /** 오디오 「빠른 설정」(POK-389) — 고른 카드. 트랙을 손으로 바꾸면 풀린다 */
+  /** 오디오 「빠른 설정」(POK-389): 고른 카드. 트랙을 손으로 바꾸면 풀린다 */
   audioPreset: AudioPresetId | null;
   audioPresetOptions: readonly {
     value: AudioPresetId;
@@ -576,7 +576,7 @@ export interface ClipEditorMockState {
   subtitleModeOptions: readonly { value: SubtitleMode; label: string }[];
   setSubtitleMode: (mode: SubtitleMode) => void;
   generateSubtitles: () => void;
-  /** AI 자막을 만들 서버 기능이 있는가 — 실제 모드에는 아직 없다(MVP 밖) */
+  /** AI 자막을 만들 서버 기능이 있는가: 실제 모드에는 아직 없다(MVP 밖) */
   subtitleGenerationAvailable: boolean;
   selectedSubtitleId: string | null;
   selectSubtitle: (id: string) => void;
@@ -608,7 +608,7 @@ export interface ClipEditorMockState {
   zoomLabel: string;
   zoomIn: () => void;
   zoomOut: () => void;
-  /** 확대 막대가 고르는 단계들(%) — 막대 값은 이 목록의 자리다 */
+  /** 확대 막대가 고르는 단계들(%): 막대 값은 이 목록의 자리다 */
   zoomLevels: readonly number[];
   setZoom: (zoom: number) => void;
 }
@@ -849,7 +849,7 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     [options.tracks, real, recipe.trackVolumes, recipe.trackMuted],
   );
 
-  // 미리 듣기 음량 — 저장할 소리와 같은 규칙(끈 트랙은 0, 음량은 %)
+  // 미리 듣기 음량: 저장할 소리와 같은 규칙(끈 트랙은 0, 음량은 %)
   const trackPreview = options.trackPreview;
   useEffect(() => {
     trackPreview?.setGains(
@@ -902,7 +902,7 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     canUndo: historyCanUndo(history),
     canRedo: historyCanRedo(history),
     // 되돌리면 구간이 다른 값이 되므로 직전 거부 안내는 더 이상 그 구간의 이야기가 아니다
-    // 되돌리면 트랙 값이 고른 빠른 설정과 달라질 수 있다 — 표시를 푼다
+    // 되돌리면 트랙 값이 고른 빠른 설정과 달라질 수 있다: 표시를 푼다
     undo: useCallback(() => {
       setHistory(undoHistory);
       setAudioPreset(null);

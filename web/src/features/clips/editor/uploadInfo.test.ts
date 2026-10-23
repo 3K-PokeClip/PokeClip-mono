@@ -114,7 +114,7 @@ describe('썸네일 이미지 파일', () => {
   });
 });
 
-describe('withPickedScene — 편집기에서 고른 썸네일 장면으로 창을 채운다(POK-389)', () => {
+describe('withPickedScene: 편집기에서 고른 썸네일 장면으로 창을 채운다(POK-389)', () => {
   const initial = { thumbnailSource: 'none' as const, sceneOffsetMs: 4_000, title: '그대로' };
 
   it('고른 장면이 있으면 「장면 고르기 · 그 시각」으로 바꾸고 나머지 칸은 그대로 둔다', () => {

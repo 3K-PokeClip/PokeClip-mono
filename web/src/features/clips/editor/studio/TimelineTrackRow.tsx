@@ -3,9 +3,9 @@ import type { ComponentType } from 'react';
 import styles from './StudioScreen.module.css';
 import type { EditorTrack, EditorTrackKind } from '../useClipEditorMockState';
 
-// 방송 소리 트랙 한 줄(POK-389) — 우리만 가진 「트랙별 소리」를 타임라인의 주인공으로 둔다.
+// 방송 소리 트랙 한 줄(POK-389): 우리만 가진 「트랙별 소리」를 타임라인의 주인공으로 둔다.
 // 머리: 아이콘 · 이름 · 넣기 단추 · 음량 %. 뺀 줄은 흐리게 「안 넣음」. 음량 막대는 오디오 메뉴에 있다.
-// 파형은 아직 모양만이다 — 트랙별 파형 자료가 없다.
+// 파형은 아직 모양만이다: 트랙별 파형 자료가 없다.
 
 const TRACK_ICONS: Record<EditorTrackKind, ComponentType<{ size?: number }>> = {
   mic: Mic,

@@ -356,7 +356,7 @@
   gap: calc(6 * var(--pc-u));
 }
 
-/* 폰 모양 타일 — 그림 위, 이름 아래(POK-389). 고른 표시는 예전 줄 카드와 같은 토큰을 쓴다 */
+/* 폰 모양 타일: 그림 위, 이름 아래(POK-389). 고른 표시는 예전 줄 카드와 같은 토큰을 쓴다 */
 .layoutTile {
   display: flex;
   flex-direction: column;

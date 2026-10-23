@@ -46,7 +46,7 @@ describe('useClipEditorMockState', () => {
     expect(result.current.rangeGaugeLabel).toBe('0:12.4 / 최대 3:00');
   });
 
-  it('목업 트랙은 방송 소리 넷이다 — 실제 모드처럼 스트리머가 이름 붙인 소스 트랙(POK-389)', () => {
+  it('목업 트랙은 방송 소리 넷이다: 실제 모드처럼 스트리머가 이름 붙인 소스 트랙(POK-389)', () => {
     const { result } = renderEditor();
 
     expect(result.current.tracks.map((t) => t.label)).toEqual([

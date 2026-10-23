@@ -579,7 +579,7 @@ export function requestFileAccess(streamId: string, clipId: number): Promise<Cli
 }
 
 /**
- * 원본 조각 주소(POK-389) — 편집기가 트랙별로 미리 들으려고 구간의 녹화 조각(방송 소리 트랙이 전부 든 파일)을 받는다.
+ * 원본 조각 주소(POK-389): 편집기가 트랙별로 미리 들으려고 구간의 녹화 조각(방송 소리 트랙이 전부 든 파일)을 받는다.
  * url은 5분짜리 서명 주소라 받자마자 내려받는다. startAtMs는 재생 축(편집본 cut과 같은 축)이고, 올라간 조각만 온다.
  * 400 {field: fromMs|toMs}(6분 넘는 구간 등) · 404 · 410 vod_expired · 503 render_unavailable.
  */

@@ -88,7 +88,7 @@ describe('useTrackPreview', () => {
     expect(node.muted).toBe(true);
   });
 
-  it('소리 문맥을 못 만들면(브라우저가 안 줌) 묻지도 않고 못 부름이다 — 영상 소리가 그대로 난다', async () => {
+  it('소리 문맥을 못 만들면(브라우저가 안 줌) 묻지도 않고 못 부름이다: 영상 소리가 그대로 난다', async () => {
     const node = video();
     const { result } = renderHook(() =>
       useTrackPreview({

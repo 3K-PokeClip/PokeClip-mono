@@ -564,7 +564,7 @@ function WiredStudio({
     pieces: recordingPieces,
     initialRange,
   });
-  // 트랙별 미리 듣기 — 영상이 받은 창과 같은 창의 녹화 조각(방송 소리 트랙 전부)을 받아 영상 노드를 따라 튼다(POK-389)
+  // 트랙별 미리 듣기: 영상이 받은 창과 같은 창의 녹화 조각(방송 소리 트랙 전부)을 받아 영상 노드를 따라 튼다(POK-389)
   const trackPreview = useTrackPreview({
     streamId,
     baseMs: base,
@@ -879,7 +879,7 @@ function WiredStudio({
         id: `saved-${i}`,
         timecode: (Math.max(0, seg.startAtMs - cut.inAtMs) / 1000).toFixed(1).padStart(4, '0'),
         text: seg.text,
-        // 타임라인 자막 줄의 자리 — 소스 축(기준점 + 초)이다
+        // 타임라인 자막 줄의 자리: 소스 축(기준점 + 초)이다
         startSeconds: (seg.startAtMs - base) / 1000,
         endSeconds: (seg.endAtMs - base) / 1000,
       }));

@@ -491,7 +491,7 @@
   color: var(--pc-color-text-secondary);
 }
 
-/* 안전 영역 — 오른쪽 세로 띠와 아래 띠 바깥을 점선으로 가른다. 영상에는 타지 않는 보조선이다 */
+/* 안전 영역: 오른쪽 세로 띠와 아래 띠 바깥을 점선으로 가른다. 영상에는 타지 않는 보조선이다 */
 .safeZone {
   position: absolute;
   inset: 0 var(--pc-safe-right) var(--pc-safe-bottom) 0;

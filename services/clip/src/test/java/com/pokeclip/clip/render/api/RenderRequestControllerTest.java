@@ -447,7 +447,7 @@ class RenderRequestControllerTest extends IntegrationTestSupport {
                     .andExpect(status().isOk())));
             String 서명 = 응답.get("segments").get(0).get("url").asString().replaceFirst(".*X-Amz-Signature=", "");
 
-            assertThat(로그.messages()).as("발급 줄이 안 찍혔다 — 아래 부정 단언이 빈 로그에 저절로 참이 된다")
+            assertThat(로그.messages()).as("발급 줄이 안 찍혔다: 아래 부정 단언이 빈 로그에 저절로 참이 된다")
                     .anyMatch(line -> line.contains("clip.segment_audio_access.issued"));
             assertThat(로그.messages()).noneMatch(line -> line.contains(서명) || line.contains("X-Amz-"));
             assertThat(로그.messages()).noneMatch(line -> line.contains("seg_2.m4s"));

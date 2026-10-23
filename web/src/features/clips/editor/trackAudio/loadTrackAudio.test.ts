@@ -5,7 +5,7 @@ import type { SegmentAudioAccess } from '@/api/clipEditor';
 import { loadTrackAudio } from './loadTrackAudio';
 
 // 조각 셋을 받아 트랙마다 「이어진 조각끼리 한 덩어리」로 푼다. 풀기(decodeAudioData)는 가짜다: ADTS 머리에서 표본 빈도
-// 번호와 프레임 수를 읽어 돌려준다 — 어느 트랙의 무엇을 넘겼는지가 값으로 드러난다.
+// 번호와 프레임 수를 읽어 돌려준다: 어느 트랙의 무엇을 넘겼는지가 값으로 드러난다.
 const fixture = readFileSync(join(__dirname, '__fixtures__', 'three-tracks.m4s'));
 const BASE = 1_000_000;
 
@@ -44,7 +44,7 @@ const source = (segments: SegmentAudioAccess) => ({
 });
 
 describe('loadTrackAudio', () => {
-  it('트랙 번호는 조각 안 소리 트랙의 파일 순서다 — 렌더의 [0:a:N]과 같다', async () => {
+  it('트랙 번호는 조각 안 소리 트랙의 파일 순서다: 렌더의 [0:a:N]과 같다', async () => {
     const tracks = await loadTrackAudio(source(access(BASE + 2000)), BASE);
     expect(tracks).toHaveLength(3);
     expect(
@@ -54,7 +54,7 @@ describe('loadTrackAudio', () => {
     ).toEqual([3, 4, 6]); // 48000 · 44100 · 24000
   });
 
-  it('이어진 조각은 트랙마다 한 덩어리로 푼다 — 조각마다 따로 풀면 4초마다 이음매 소리가 난다', async () => {
+  it('이어진 조각은 트랙마다 한 덩어리로 푼다: 조각마다 따로 풀면 4초마다 이음매 소리가 난다', async () => {
     const src = source(access(BASE + 2000, BASE + 3000, BASE + 4000));
     const tracks = await loadTrackAudio(src, BASE);
     expect(tracks.map((pieces) => pieces.length)).toEqual([1, 1, 1]);
@@ -63,7 +63,7 @@ describe('loadTrackAudio', () => {
     expect(src.decode).toHaveBeenCalledTimes(3);
   });
 
-  it('사이가 빈 조각(덜 올라온 조각이 빠진 자리)에서 덩어리를 끊는다 — 빈 자리는 소리 없이 둔다', async () => {
+  it('사이가 빈 조각(덜 올라온 조각이 빠진 자리)에서 덩어리를 끊는다: 빈 자리는 소리 없이 둔다', async () => {
     const tracks = await loadTrackAudio(
       source(access(BASE + 2000, BASE + 3000, BASE + 8000)),
       BASE,
@@ -71,7 +71,7 @@ describe('loadTrackAudio', () => {
     expect(tracks[1]!.map((piece) => piece.startSeconds)).toEqual([2, 8]);
   });
 
-  it('주소를 못 받으면 던진다 — 화면은 영상 소리로 돌아간다', async () => {
+  it('주소를 못 받으면 던진다: 화면은 영상 소리로 돌아간다', async () => {
     const src = source(access(BASE));
     src.fetchAccess.mockRejectedValueOnce(new Error('503'));
     await expect(loadTrackAudio(src, BASE)).rejects.toThrow('503');

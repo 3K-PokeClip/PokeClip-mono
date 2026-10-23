@@ -136,7 +136,7 @@ export function demuxAudioTracks(data: ArrayBuffer | Uint8Array): AudioTrackFram
   try {
     return demux(view, bytes);
   } catch {
-    // 잘린 파일 등에서 범위를 넘어 읽으면 RangeError다 — 화면은 빈 목록을 「못 꺼냄」으로 다룬다.
+    // 잘린 파일 등에서 범위를 넘어 읽으면 RangeError다: 화면은 빈 목록을 「못 꺼냄」으로 다룬다.
     return [];
   }
 }
@@ -165,7 +165,7 @@ function demux(view: DataView, bytes: Uint8Array): AudioTrackFrames[] {
     const handler = String.fromCharCode(...bytes.subarray(hdlr.start + 8, hdlr.start + 12));
     if (handler !== 'soun') continue;
     const config = mp4aConfig(view, stsd);
-    // 소리인데 못 읽는 트랙이 하나라도 있으면 번호가 밀린다 — 트랙 번호가 렌더와 어긋나느니 통째로 포기한다.
+    // 소리인데 못 읽는 트랙이 하나라도 있으면 번호가 밀린다: 트랙 번호가 렌더와 어긋나느니 통째로 포기한다.
     if (!config) return [];
     const id = view.getUint32(tkhd.start + (view.getUint8(tkhd.start) === 1 ? 20 : 12));
     tracks.push({ id, config, defaultSize: defaults.get(id) ?? 0 });
@@ -233,7 +233,7 @@ function readTraf(
   }
 }
 
-/** 프레임마다 ADTS 머리(보호 없음, 7바이트)를 붙여 이은다 — decodeAudioData가 그대로 받는다 */
+/** 프레임마다 ADTS 머리(보호 없음, 7바이트)를 붙여 이은다: decodeAudioData가 그대로 받는다 */
 export function toAdts(track: AudioTrackFrames): Uint8Array {
   const { objectType, frequencyIndex, channelConfig } = track.config;
   const total = track.frames.reduce((sum, frame) => sum + frame.length + 7, 0);

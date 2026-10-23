@@ -1,7 +1,7 @@
 import type { TrackPiece } from './loadTrackAudio';
 
 // 트랙별 미리 듣기 재생기(POK-389). 트랙마다 음량 노드 하나를 두고, 풀어 둔 덩어리를 「지금 자리」에 맞춰 건다.
-// 영상은 그대로 <video>가 틀고 소리만 여기서 난다 — followVideo가 영상 노드의 사건을 따라 다시 건다.
+// 영상은 그대로 <video>가 틀고 소리만 여기서 난다: followVideo가 영상 노드의 사건을 따라 다시 건다.
 
 export type AudioContextLike = Pick<
   AudioContext,
@@ -39,7 +39,7 @@ export class TrackAudioPlayer {
   /** 편집기 시간축 sourceSeconds부터 rate 배속으로 튼다. 앞에 걸어 둔 것은 세운다 */
   play(sourceSeconds: number, rate: number): void {
     this.stop();
-    // 브라우저는 사람의 조작 전에 만든 소리 문맥을 멈춰 둔다 — 재생 버튼 뒤에 깨운다
+    // 브라우저는 사람의 조작 전에 만든 소리 문맥을 멈춰 둔다: 재생 버튼 뒤에 깨운다
     if (this.ctx.state === 'suspended') void this.ctx.resume();
     const now = this.ctx.currentTime;
     this.tracks.forEach((pieces, i) => {
@@ -84,7 +84,7 @@ export class TrackAudioPlayer {
 /**
  * 소리를 영상 노드에 묶는다. 따라가는 동안 영상 소리는 끈다(두 소리가 겹치면 트랙을 꺼도 들린다).
  * @param sourceSeconds 영상 노드의 지금 자리를 편집기 초로(창 시작 + currentTime)
- * @returns 그만두기 — 소리를 세우고 영상 소리를 원래대로
+ * @returns 그만두기: 소리를 세우고 영상 소리를 원래대로
  */
 export function followVideo(
   player: TrackAudioPlayer,
@@ -101,7 +101,7 @@ export function followVideo(
   for (const name of resyncEvents) video.addEventListener(name, sync);
   for (const name of haltEvents) video.addEventListener(name, halt);
 
-  // 영상이 버벅이거나(버퍼링) 시계가 서로 조금씩 밀리면 소리가 앞서 간다 — 주기적으로 재서 맞춘다
+  // 영상이 버벅이거나(버퍼링) 시계가 서로 조금씩 밀리면 소리가 앞서 간다: 주기적으로 재서 맞춘다
   const timer = setInterval(() => {
     if (video.paused || video.seeking) return;
     const heard = player.position();

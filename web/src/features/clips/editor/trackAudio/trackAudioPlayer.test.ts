@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { followVideo, TrackAudioPlayer, type AudioContextLike } from './trackAudioPlayer';
 import type { TrackPiece } from './loadTrackAudio';
 
-// 가짜 AudioContext — 시계(currentTime)를 손으로 돌리고, 만든 소리 노드가 어디에 이어져 언제 무엇부터 트는지를 적는다.
+// 가짜 AudioContext: 시계(currentTime)를 손으로 돌리고, 만든 소리 노드가 어디에 이어져 언제 무엇부터 트는지를 적는다.
 interface FakeSource {
   buffer: AudioBuffer | null;
   playbackRate: { value: number };
@@ -59,7 +59,7 @@ function fakeContext() {
 }
 
 const buffer = (duration: number) => ({ duration }) as AudioBuffer;
-// 트랙 둘 — 0번은 10초부터 4초, 20초부터 4초 두 덩어리 · 1번은 10초부터 14초 한 덩어리
+// 트랙 둘: 0번은 10초부터 4초, 20초부터 4초 두 덩어리 · 1번은 10초부터 14초 한 덩어리
 const TRACKS: TrackPiece[][] = [
   [
     { startSeconds: 10, buffer: buffer(4) },
@@ -90,7 +90,7 @@ describe('TrackAudioPlayer', () => {
     expect(zero[0]!.playbackRate.value).toBe(2);
   });
 
-  it('트랙마다 음량을 따로 건다 — 끈 트랙은 0이다', () => {
+  it('트랙마다 음량을 따로 건다: 끈 트랙은 0이다', () => {
     const { ctx, gains } = fakeContext();
     const player = new TrackAudioPlayer(ctx, TRACKS);
     player.setGains([0, 1.3]);
@@ -111,7 +111,7 @@ describe('TrackAudioPlayer', () => {
   });
 });
 
-// 가짜 영상 노드 — 사건(재생·멈춤·이동·배속)을 손으로 쏜다
+// 가짜 영상 노드: 사건(재생·멈춤·이동·배속)을 손으로 쏜다
 function fakeVideo() {
   const target = new EventTarget();
   return Object.assign(target, {
@@ -123,7 +123,7 @@ function fakeVideo() {
   }) as unknown as HTMLVideoElement & EventTarget;
 }
 
-describe('followVideo — 소리를 영상 노드에 맞춰 튼다', () => {
+describe('followVideo: 소리를 영상 노드에 맞춰 튼다', () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
@@ -162,19 +162,19 @@ describe('followVideo — 소리를 영상 노드에 맞춰 튼다', () => {
     expect(player.position()).toBeNull();
   });
 
-  it('소리와 영상이 0.08초 넘게 벌어지면 영상 자리로 다시 맞춘다 — 그 안이면 그대로 둔다', () => {
+  it('소리와 영상이 0.08초 넘게 벌어지면 영상 자리로 다시 맞춘다: 그 안이면 그대로 둔다', () => {
     const { ctx, play, video } = setup();
     Object.assign(video, { paused: false, currentTime: 0 });
     video.dispatchEvent(new Event('playing'));
     expect(play).toHaveBeenCalledTimes(1);
 
-    // 소리 시계 1초, 영상 1.05초 — 0.05초 차이는 둔다
+    // 소리 시계 1초, 영상 1.05초: 0.05초 차이는 둔다
     ctx.currentTime += 1;
     video.currentTime = 1.05;
     vi.advanceTimersByTime(250);
     expect(play).toHaveBeenCalledTimes(1);
 
-    // 영상이 버벅여 0.9초 — 0.1초 차이면 다시 맞춘다
+    // 영상이 버벅여 0.9초: 0.1초 차이면 다시 맞춘다
     video.currentTime = 0.9;
     vi.advanceTimersByTime(250);
     expect(play).toHaveBeenCalledTimes(2);

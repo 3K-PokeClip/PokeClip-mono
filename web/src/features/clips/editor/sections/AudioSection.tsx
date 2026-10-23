@@ -7,7 +7,7 @@ import styles from './sections.module.css';
 import type { AudioPresetId } from '../audioPresets';
 import type { ClipEditorMockState } from '../useClipEditorMockState';
 
-// 오디오 도구(POK-389) — 우리만 가진 것: 방송 소리를 트랙별로 따로 받는다.
+// 오디오 도구(POK-389): 우리만 가진 것: 방송 소리를 트랙별로 따로 받는다.
 // 위: 빠른 설정 넷(트랙 넣기·음량을 한 번에) · 가운데: 방송 소리 트랙마다 넣기·음량 · 아래: 음악·효과음(준비 중).
 // 어떤 트랙이 있는지는 데이터가 정한다(스트리머가 적은 트랙 이름, POK-240).
 

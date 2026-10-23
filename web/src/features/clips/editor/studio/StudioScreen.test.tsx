@@ -22,7 +22,7 @@ describe('StudioScreen', () => {
       'href',
       '/clips/library',
     );
-    // 쇼츠 편집 화면에는 템플릿 저장이 없다(POK-389) — 저장은 편집본 저장 하나다
+    // 쇼츠 편집 화면에는 템플릿 저장이 없다(POK-389): 저장은 편집본 저장 하나다
     expect(screen.queryByRole('button', { name: '템플릿 저장' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: '업로드' })).toBeEnabled();
     // 아직 편집한 적이 없으니 되돌릴 곳도 없다
@@ -30,7 +30,7 @@ describe('StudioScreen', () => {
     expect(screen.getByRole('button', { name: '작업 앞으로' })).toBeDisabled();
   });
 
-  it('타임라인은 자막 · 영상 · 방송 소리 트랙 줄이다 — 준비 중인 음악·효과음·이미지 줄은 없다(POK-389)', () => {
+  it('타임라인은 자막 · 영상 · 방송 소리 트랙 줄이다: 준비 중인 음악·효과음·이미지 줄은 없다(POK-389)', () => {
     const { container } = renderStudio();
     const timeline = screen.getByRole('region', { name: '타임라인' });
 
@@ -45,7 +45,7 @@ describe('StudioScreen', () => {
     expect(container.querySelectorAll('[data-outside]')).toHaveLength(2);
   });
 
-  it('소리 트랙 줄 머리에서 바로 넣고 뺀다 — 오디오 메뉴와 같은 값이다(POK-389)', async () => {
+  it('소리 트랙 줄 머리에서 바로 넣고 뺀다: 오디오 메뉴와 같은 값이다(POK-389)', async () => {
     const user = userEvent.setup();
     const { container } = renderStudio();
     const timeline = screen.getByRole('region', { name: '타임라인' });
@@ -61,7 +61,7 @@ describe('StudioScreen', () => {
     expect(screen.getByRole('checkbox', { name: '디스코드 넣기' })).not.toBeChecked();
   });
 
-  it('트랙을 빼거나 음량을 바꾸면 미리 듣기 음량에도 바로 넘긴다 — 트랙 순서가 번호다(POK-389)', async () => {
+  it('트랙을 빼거나 음량을 바꾸면 미리 듣기 음량에도 바로 넘긴다: 트랙 순서가 번호다(POK-389)', async () => {
     const user = userEvent.setup();
     const setGains = vi.fn();
     renderStudio({ trackPreview: { status: 'ready', setGains } });
@@ -123,7 +123,7 @@ describe('StudioScreen', () => {
         { timeout: 3000 },
       ),
     ).toBeInTheDocument();
-    // 같은 문장이 타임라인 자막 줄에도 선다 — 자막 패널 안만 본다
+    // 같은 문장이 타임라인 자막 줄에도 선다: 자막 패널 안만 본다
     expect(
       within(screen.getByRole('region', { name: '자막' })).getByText('아 이게 된다고?? 미쳤다'),
     ).toBeInTheDocument();
@@ -147,7 +147,7 @@ describe('StudioScreen', () => {
     expect(screen.getByText('5초 미만, 3분 초과로는 핸들이 움직이지 않아요')).toBeInTheDocument();
   });
 
-  it('재생 조작은 타임라인 위 막대에 있다 — 미리보기 아래 재생 막대·배속·구간 반복은 없다(POK-389)', async () => {
+  it('재생 조작은 타임라인 위 막대에 있다: 미리보기 아래 재생 막대·배속·구간 반복은 없다(POK-389)', async () => {
     const user = userEvent.setup();
     renderStudio();
     const bar = screen.getByRole('toolbar', { name: '재생과 구간' });
@@ -180,7 +180,7 @@ describe('StudioScreen', () => {
     expect(within(timeline).getByRole('button', { name: '썸네일 장면 0:05' })).toBeInTheDocument();
   });
 
-  it('고른 썸네일 장면을 영상 만들기 요청에 실어 보낸다 — 창이 그 장면으로 채워진다', async () => {
+  it('고른 썸네일 장면을 영상 만들기 요청에 실어 보낸다: 창이 그 장면으로 채워진다', async () => {
     const user = userEvent.setup();
     const requestUpload = vi.fn();
     renderStudio({ actions: { requestUpload } });
@@ -263,7 +263,7 @@ describe('StudioScreen', () => {
     expect(screen.getByRole('radio', { name: /전체/ })).toBeChecked();
   });
 
-  it('도구는 쇼츠 만드는 순서대로 다섯이다 — 구간·BGM·효과·패널 위치는 없다(POK-389)', () => {
+  it('도구는 쇼츠 만드는 순서대로 다섯이다: 구간·BGM·효과·패널 위치는 없다(POK-389)', () => {
     renderStudio();
 
     const tabs = screen.getAllByRole('tab').map((t) => t.textContent);
@@ -389,7 +389,7 @@ describe('StudioScreen', () => {
     expect(input.value).toBe(undoCountBefore);
   });
 
-  it('자막 메뉴는 쉬운 말이다 — 번인·CC·경계 같은 말을 쓰지 않는다(POK-389)', async () => {
+  it('자막 메뉴는 쉬운 말이다: 번인·CC·경계 같은 말을 쓰지 않는다(POK-389)', async () => {
     const user = userEvent.setup();
     renderStudio();
     await user.click(screen.getByRole('tab', { name: '자막' }));
@@ -410,7 +410,7 @@ describe('StudioScreen', () => {
     expect(screen.queryByText(/번인|CC/)).not.toBeInTheDocument();
   });
 
-  it('자막 위치 「가운데」는 분할 경계를 따른다 — 50:50 이 아니면 한가운데가 아니다', async () => {
+  it('자막 위치 「가운데」는 분할 경계를 따른다: 50:50 이 아니면 한가운데가 아니다', async () => {
     const user = userEvent.setup();
     const { container } = renderStudio();
     await user.click(screen.getByRole('radio', { name: '70 : 30' }));
@@ -427,7 +427,7 @@ describe('StudioScreen', () => {
     expect(burned!.style.getPropertyValue('--pc-edge')).toBe('70%');
   });
 
-  it('미리보기 위 막대가 비율·레이아웃을 말하고 안전 영역을 켜고 끈다 — 편집 기록은 안 바뀐다(POK-389)', async () => {
+  it('미리보기 위 막대가 비율·레이아웃을 말하고 안전 영역을 켜고 끈다: 편집 기록은 안 바뀐다(POK-389)', async () => {
     const user = userEvent.setup();
     const { container } = renderStudio();
     const bar = screen.getByRole('toolbar', { name: '미리보기 보기' });
@@ -445,7 +445,7 @@ describe('StudioScreen', () => {
     expect(within(bar).getByText('전체')).toBeInTheDocument();
   });
 
-  it('레이아웃은 폰 모양 타일 다섯이다 — 이름만 읽고 설명은 덧붙임으로(POK-389)', () => {
+  it('레이아웃은 폰 모양 타일 다섯이다: 이름만 읽고 설명은 덧붙임으로(POK-389)', () => {
     renderStudio();
     const group = screen.getByRole('radiogroup', { name: '레이아웃 종류' });
     const tiles = within(group).getAllByRole('radio');
@@ -579,7 +579,7 @@ describe('StudioScreen', () => {
     ).toBeLessThanOrEqual(180);
   });
 
-  it('볼륨 슬라이더가 포인터로 살아 있다 — 제스처 핸들러가 DS 핸들러를 덮지 않는다', async () => {
+  it('볼륨 슬라이더가 포인터로 살아 있다: 제스처 핸들러가 DS 핸들러를 덮지 않는다', async () => {
     const user = userEvent.setup();
     renderStudio();
     await user.click(screen.getByRole('tab', { name: '오디오' }));
@@ -611,7 +611,7 @@ describe('StudioScreen', () => {
     expect(screen.getByRole('slider', { name: '구간 끝점' })).toBeInTheDocument();
   });
 
-  it('체크박스를 누른 뒤에도 ⌘Z가 먹는다 — 체크박스는 글자 입력이 아니다', async () => {
+  it('체크박스를 누른 뒤에도 ⌘Z가 먹는다: 체크박스는 글자 입력이 아니다', async () => {
     const user = userEvent.setup();
     renderStudio();
 

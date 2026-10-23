@@ -4,11 +4,11 @@ import styles from './StudioScreen.module.css';
 import { MAX_RANGE_TEXT } from '../timelineMath';
 import type { ClipEditorMockState } from '../useClipEditorMockState';
 
-// 타임라인 위 막대 — 쇼츠 서비스 셋(오퍼스클립·알파컷·피카클립)이 모두 재생 조작을 여기 가운데에 둔다(POK-389).
+// 타임라인 위 막대: 쇼츠 서비스 셋(오퍼스클립·알파컷·피카클립)이 모두 재생 조작을 여기 가운데에 둔다(POK-389).
 // 왼쪽: 쇼츠 구간 자르기(I·O 키와 같은 일) · 가운데: 시작으로·재생·쇼츠 안 시각 · 오른쪽: 쇼츠 길이·확대·접기.
 // 1초·5초 이동은 ←→(Shift) 키가 맡고, 구간 반복은 늘 켠 채 둔다.
 
-/** 쇼츠 안 시각 — 반올림하면 끝에서 「0:13 / 0:12」처럼 넘쳐 보이니 내림한다 */
+/** 쇼츠 안 시각: 반올림하면 끝에서 「0:13 / 0:12」처럼 넘쳐 보이니 내림한다 */
 export function shortClock(seconds: number): string {
   const s = Math.max(0, Math.floor(seconds));
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;

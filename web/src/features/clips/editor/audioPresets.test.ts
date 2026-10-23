@@ -30,7 +30,7 @@ const MIX_ONLY = {
   },
 };
 
-describe('trackRole — 스트리머가 적은 트랙 이름으로 역할을 짐작한다', () => {
+describe('trackRole: 스트리머가 적은 트랙 이름으로 역할을 짐작한다', () => {
   it.each([
     ['마이크', 'voice'],
     ['Mic', 'voice'],
@@ -100,7 +100,7 @@ describe('applyAudioPreset', () => {
   });
 });
 
-describe('presetAvailability — 맞는 트랙이 없으면 그 카드는 꺼지고 이유를 말한다', () => {
+describe('presetAvailability: 맞는 트랙이 없으면 그 카드는 꺼지고 이유를 말한다', () => {
   it('트랙 이름에 BGM이 없으면 「저작권 걱정 없이」를 못 고른다', () => {
     const noBgm = TRACKS.filter((t) => t.label !== 'BGM');
     expect(presetAvailability('copyright-safe', noBgm, MIX)).toEqual({
@@ -124,7 +124,7 @@ describe('presetAvailability — 맞는 트랙이 없으면 그 카드는 꺼지
     expect(presetAvailability('original', TRACKS, MIX).available).toBe(true);
   });
 
-  it('BGM 말고 남는 소스가 없으면 「저작권 걱정 없이」를 못 고른다 — 소리 없는 영상은 렌더가 거절한다', () => {
+  it('BGM 말고 남는 소스가 없으면 「저작권 걱정 없이」를 못 고른다: 소리 없는 영상은 렌더가 거절한다', () => {
     const onlyBgm: PresetTrack[] = [
       { id: 'track-0', label: '최종 믹스' },
       { id: 'track-1', label: 'BGM' },

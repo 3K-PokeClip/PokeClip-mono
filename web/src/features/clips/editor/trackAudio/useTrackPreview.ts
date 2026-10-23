@@ -5,10 +5,10 @@ import { requestSegmentAudioAccess } from '@/api/clipEditor';
 import { loadTrackAudio } from './loadTrackAudio';
 import { followVideo, TrackAudioPlayer, type AudioContextLike } from './trackAudioPlayer';
 
-// 트랙별 미리 듣기(POK-389) — 영상이 받은 창(구간 ± 여유)의 녹화 조각을 받아 트랙마다 풀고, 영상 노드를 따라 튼다.
+// 트랙별 미리 듣기(POK-389): 영상이 받은 창(구간 ± 여유)의 녹화 조각을 받아 트랙마다 풀고, 영상 노드를 따라 튼다.
 // 트랙을 끄거나 음량을 바꾸면 미리보기 소리에도 바로 들린다(저장·렌더와 같은 트랙 번호).
 //
-// 못 부르면(소리 문맥 없음·주소 실패·소리 트랙이 하나뿐) 「unavailable」이고 영상 소리가 그대로 난다 — 화면이 그 사실을 알린다.
+// 못 부르면(소리 문맥 없음·주소 실패·소리 트랙이 하나뿐) 「unavailable」이고 영상 소리가 그대로 난다: 화면이 그 사실을 알린다.
 
 export type TrackPreviewStatus = 'loading' | 'ready' | 'unavailable';
 
@@ -21,7 +21,7 @@ export interface TrackPreview {
 type DecodingContext = AudioContextLike & Pick<AudioContext, 'decodeAudioData' | 'close'>;
 
 /**
- * 풀어 둔 소리를 24kHz로 둔다 — 구간 3분 20초 × 트랙 여섯이면 48kHz는 수백 MB다. 미리 듣기에는 24kHz(12kHz까지의 소리)로 충분하다.
+ * 풀어 둔 소리를 24kHz로 둔다: 구간 3분 20초 × 트랙 여섯이면 48kHz는 수백 MB다. 미리 듣기에는 24kHz(12kHz까지의 소리)로 충분하다.
  * 브라우저에 소리 문맥이 없으면(시험 환경 등) 던지고, 훅은 그것을 「못 부름」으로 받는다.
  */
 const defaultContext = (): DecodingContext => new AudioContext({ sampleRate: 24_000 });
@@ -80,7 +80,7 @@ export function useTrackPreview(options: {
     )
       .then((tracks) => {
         if (cancelled) return;
-        // 트랙이 하나뿐이면(최종 믹스만) 영상 소리와 같다 — 트랙을 꺼도 고를 소리가 없다
+        // 트랙이 하나뿐이면(최종 믹스만) 영상 소리와 같다: 트랙을 꺼도 고를 소리가 없다
         if (tracks.length < 2) {
           setStatus('unavailable');
           return;

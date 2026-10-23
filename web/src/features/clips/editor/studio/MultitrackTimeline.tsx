@@ -46,7 +46,7 @@ export function MultitrackTimeline({
   const heightDragOrigin = useRef<{ y: number; height: number; ceiling: number } | null>(null);
 
   const startFraction = secondsToFraction(state.range.startSeconds, state.view);
-  // 자막 줄 조각 — 자리를 아는 줄만, 창 밖으로 완전히 벗어난 줄은 빼고
+  // 자막 줄 조각: 자리를 아는 줄만, 창 밖으로 완전히 벗어난 줄은 빼고
   const subtitleBlocks =
     state.subtitle.status === 'ready'
       ? state.subtitle.items.flatMap((item) => {
@@ -239,7 +239,7 @@ export function MultitrackTimeline({
             </div>
 
             <div className={styles.overlay} ref={overlayRef}>
-              {/* 쇼츠 밖은 양쪽을 흐리게 덮는다 — 쓰는 구간만 밝게(알파컷 방식, POK-389) */}
+              {/* 쇼츠 밖은 양쪽을 흐리게 덮는다: 쓰는 구간만 밝게(알파컷 방식, POK-389) */}
               <div
                 className={styles.outsideMask}
                 data-outside

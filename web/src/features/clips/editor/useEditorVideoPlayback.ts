@@ -56,7 +56,7 @@ export interface EditorVideoPlayback {
   videoRef: (element: HTMLVideoElement | null) => void;
   video: HTMLVideoElement | null;
   src: string;
-  /** 영상이 받은 창(편집기 초) — 트랙별 미리 듣기가 같은 창의 조각을 받는다(POK-389). 받을 녹화가 없으면 null */
+  /** 영상이 받은 창(편집기 초): 트랙별 미리 듣기가 같은 창의 조각을 받는다(POK-389). 받을 녹화가 없으면 null */
   window: { startSeconds: number; endSeconds: number } | null;
 }
 

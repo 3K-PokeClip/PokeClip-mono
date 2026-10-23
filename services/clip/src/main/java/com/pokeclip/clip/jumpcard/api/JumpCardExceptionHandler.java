@@ -245,7 +245,7 @@ public class JumpCardExceptionHandler {
         return json(HttpStatus.CONFLICT, error("clip_not_rendered"));
     }
 
-    /** 400. 원본 조각 주소(POK-389)의 구간이 잘못됐다 — {@code field}는 {@code fromMs}·{@code toMs}. */
+    /** 400. 원본 조각 주소(POK-389)의 구간이 잘못됐다: {@code field}는 {@code fromMs}·{@code toMs}. */
     @ExceptionHandler(RenderErrors.InvalidSegmentRangeException.class)
     ResponseEntity<Map<String, Object>> invalidSegmentRange(RenderErrors.InvalidSegmentRangeException e) {
         return json(HttpStatus.BAD_REQUEST, field(e.field()));

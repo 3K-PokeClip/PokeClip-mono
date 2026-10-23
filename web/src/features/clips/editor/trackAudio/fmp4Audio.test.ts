@@ -14,10 +14,10 @@ const FREQUENCIES = [
   96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000,
 ];
 
-describe('demuxAudioTracks — 조각 하나에서 소리 트랙을 파일 순서대로 꺼낸다', () => {
+describe('demuxAudioTracks: 조각 하나에서 소리 트랙을 파일 순서대로 꺼낸다', () => {
   const tracks = demuxAudioTracks(fixture);
 
-  it('영상 트랙은 빼고 소리 트랙 셋을 파일 순서대로 준다 — 렌더의 [0:a:N]과 같은 번호다', () => {
+  it('영상 트랙은 빼고 소리 트랙 셋을 파일 순서대로 준다: 렌더의 [0:a:N]과 같은 번호다', () => {
     expect(tracks).toHaveLength(3);
     expect(tracks.map((t) => FREQUENCIES[t.config.frequencyIndex])).toEqual([48000, 44100, 24000]);
     expect(tracks.map((t) => t.config.channelConfig)).toEqual([2, 1, 2]);
@@ -35,7 +35,7 @@ describe('demuxAudioTracks — 조각 하나에서 소리 트랙을 파일 순�
   });
 });
 
-describe('toAdts — 브라우저가 풀 수 있게 프레임마다 ADTS 머리(7바이트)를 붙인다', () => {
+describe('toAdts: 브라우저가 풀 수 있게 프레임마다 ADTS 머리(7바이트)를 붙인다', () => {
   it('머리의 동기 표시·길이·설정이 맞고 프레임이 이어 붙는다', () => {
     const first = demuxAudioTracks(fixture)[0]!;
     const adts = toAdts(first);

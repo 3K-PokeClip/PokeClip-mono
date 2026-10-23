@@ -22,7 +22,7 @@ import type { ClipEditorMockState } from './useClipEditorMockState';
 
 /**
  * 쇼츠 화면에서 플랫폼 버튼·설명에 가려지기 쉬운 자리(결과 폭·높이 대비). 유튜브 쇼츠의 오른쪽 버튼 줄과
- * 아래 제목·채널 줄을 어림한 값이다 — 알파컷 「데드존 표시」와 피카클립의 「쇼츠 안전영역」 안내를 참고했다(POK-389).
+ * 아래 제목·채널 줄을 어림한 값이다: 알파컷 「데드존 표시」와 피카클립의 「쇼츠 안전영역」 안내를 참고했다(POK-389).
  * 화면에만 그리는 보조선이라 영상에는 타지 않는다.
  */
 export const SAFE_ZONE = { right: 0.12, bottom: 0.2 } as const;

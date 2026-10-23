@@ -1,4 +1,4 @@
-// 오디오 메뉴 「빠른 설정」(POK-389). 우리는 방송 소리를 트랙별로 따로 받는다 — 쇼츠 서비스들이 AI로 짐작해 걷어 내는
+// 오디오 메뉴 「빠른 설정」(POK-389). 우리는 방송 소리를 트랙별로 따로 받는다: 쇼츠 서비스들이 AI로 짐작해 걷어 내는
 // 배경음악을 트랙째 뺄 수 있다. 빠른 설정은 그 트랙별 넣기·음량 값만 한 번에 바꾼다(저장 계약은 그대로).
 //
 // 트랙의 역할(목소리·게임·BGM)을 적는 칸이 서버에 없어서 스트리머가 적은 트랙 이름으로 짐작한다. 맞는 이름이 없으면
@@ -18,7 +18,7 @@ export interface TrackMix {
 }
 
 const ROLE_PATTERNS: readonly [Exclude<TrackRole, 'other'>, RegExp][] = [
-  // BGM을 먼저 본다 — 「게임 BGM」은 빼야 할 음악이다
+  // BGM을 먼저 본다: 「게임 BGM」은 빼야 할 음악이다
   ['bgm', /bgm|브금|음악|노래|music/i],
   ['voice', /마이크|목소리|보이스|mic|voice/i],
   ['game', /게임|game/i],
@@ -28,7 +28,7 @@ export function trackRole(label: string): TrackRole {
   return ROLE_PATTERNS.find(([, pattern]) => pattern.test(label))?.[0] ?? 'other';
 }
 
-/** 목소리 크게 · 게임 소리 크게의 음량(%) — 계약 범위 0~200 안. 누른 뒤에도 막대로 고칠 수 있다 */
+/** 목소리 크게 · 게임 소리 크게의 음량(%): 계약 범위 0~200 안. 누른 뒤에도 막대로 고칠 수 있다 */
 const BOOST = 130;
 const VOICE_UP_GAME = 60;
 const GAME_UP_VOICE = 80;
@@ -64,7 +64,7 @@ export function presetAvailability(
 
 /**
  * 빠른 설정을 적용한 넣기·음량. 최종 믹스만 켠 상태(저장 기본값)에서 소스 쪽 설정을 고르면 소스를 모두 켜고
- * 믹스를 끈 뒤 바꾼다 — 믹스와 소스는 함께 켤 수 없다(계약6). 이미 소스를 쓰고 있으면 켜고 끈 것은 그대로 둔다.
+ * 믹스를 끈 뒤 바꾼다: 믹스와 소스는 함께 켤 수 없다(계약6). 이미 소스를 쓰고 있으면 켜고 끈 것은 그대로 둔다.
  */
 export function applyAudioPreset(
   id: AudioPresetId,

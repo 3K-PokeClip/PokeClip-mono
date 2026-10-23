@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import { Camera } from 'lucide-react';
 import styles from './StudioScreen.module.css';
 
-// 영상 줄 앞 썸네일 칸(POK-389) — 쇼츠 서비스들의 「커버」 칸. 고른 순간의 미리보기 프레임을 작은 그림으로 남긴다.
+// 영상 줄 앞 썸네일 칸(POK-389): 쇼츠 서비스들의 「커버」 칸. 고른 순간의 미리보기 프레임을 작은 그림으로 남긴다.
 // 그림은 캔버스에 직접 옮겨 그리고 데이터 주소로 바꾸지 않는다(다른 출처 영상이라도 화면에 그리는 것은 된다).
 // 누르면 그 장면으로 간다.
 
