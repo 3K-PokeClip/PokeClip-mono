@@ -17,6 +17,7 @@
 #   - b: 응답기만 채움. c: janitor 만 켬.
 #   - d: 둘 다 채우고 · 켜고 detached_log_driver = json-file(로컬 실행 렌더 갈래).
 #   - nginx: control_upstream 빔(a) · 채움(e).
+#   - mediamtx: 옛 모드(a) · 응답기 모드(b).
 #
 # 드리프트: 시험 compose(test/compose.contract.yml)에서 템플릿과 이름이 같은
 # 서비스는 restart · network_mode · depends_on · security_opt · cap_drop ·
@@ -65,7 +66,7 @@ readonly COMPOSE_VARIANTS='a b c d'
 readonly SAMPLE_CONTROL_UPSTREAM='127.0.0.1:28190'
 readonly MIN_READ_TIMEOUT_SECONDS=15
 readonly CONFIG_TIMEOUT=60
-readonly CASE_COUNT=29
+readonly CASE_COUNT=34
 # 녹화 디렉터리 소유자의 정본 — MediaMTX 이미지 Dockerfile 의 최종 USER.
 MTXHOOK_DOCKERFILE="$(cd -- "${MEDIA_HOST_DIR}/../.." && pwd)/media/Dockerfile.mtxhook"
 readonly MTXHOOK_DOCKERFILE
@@ -120,8 +121,8 @@ vars_file() { printf '%s/vars-%s.json' "${scratch}" "$1"; }
 compose_render() { printf '%s/compose-%s.yml' "${scratch}" "$1"; }
 config_json() { printf '%s/compose-%s.json' "${scratch}" "$1"; }
 nginx_render() { printf '%s/nginx-%s.conf' "${scratch}" "$1"; }
-mtx_render() { printf '%s/mediamtx-a.yml' "${scratch}"; }
-mtx_json() { printf '%s/mediamtx-a.json' "${scratch}"; }
+mtx_render() { printf '%s/mediamtx-%s.yml' "${scratch}" "${1:-a}"; }
+mtx_json() { printf '%s/mediamtx-%s.json' "${scratch}" "${1:-a}"; }
 
 check_tools() {
   local ok=0 tool
@@ -199,16 +200,17 @@ render_all() {
     render_one "${NGINX_TEMPLATE}" "$(vars_file "${v}")" \
       "$(nginx_render "${v}")" || ok=1
   done
-  if render_one "${MTX_TEMPLATE}" "$(vars_file a)" "$(mtx_render)"; then
-    if ! render::yaml_json "$(mtx_render)" "$(vars_file a)" "$(mtx_json)" \
-      2>"$(mtx_json).err"; then
-      add_setup_reason "mediamtx 렌더 YAML 해석 실패: \
-$(harness::log_tail "$(mtx_json).err")"
+  for v in a b; do
+    if ! render_one "${MTX_TEMPLATE}" "$(vars_file "${v}")" \
+      "$(mtx_render "${v}")"; then
+      ok=1
+    elif ! render::yaml_json "$(mtx_render "${v}")" "$(vars_file "${v}")" \
+      "$(mtx_json "${v}")" 2>"$(mtx_json "${v}").err"; then
+      add_setup_reason "mediamtx 렌더 YAML 해석 실패(갈래 ${v}): \
+$(harness::log_tail "$(mtx_json "${v}").err")"
       ok=1
     fi
-  else
-    ok=1
-  fi
+  done
   return "${ok}"
 }
 
@@ -885,6 +887,18 @@ main() {
     'janitor_enabled 가 bool 로 바꿀 수 없는 값이면 렌더 실패(일부 문자열은 통과)' \
     check_case_28
   harness::run_case 29 '집계 — 읽기 실패는 0 건이 아님(정적)' check_case_29
+  harness::run_case 30 'mediamtx 옛 모드 — develop 골든과 같은 값' \
+    mtx_cases::check_30
+  harness::run_case 31 \
+    'mediamtx 응답기 모드 — http · Basic URL · exclude {playback} · 내부 사용자 빔' \
+    mtx_cases::check_31
+  harness::run_case 32 \
+    'mediamtx 응답기 모드 — 토큰 넷 각 1번 · API 비밀번호 0 · 따옴표 자리' \
+    mtx_cases::check_32
+  harness::run_case 33 'mediamtx 응답기 모드 — SRT 잠금 둘 · overridePublisher 끔' \
+    mtx_cases::check_33
+  harness::run_case 34 'mediamtx 두 모드 차이 키 = 인증 · pathDefaults 잠금뿐' \
+    mtx_cases::check_34
 
   if ! harness::summary "${CASE_COUNT}"; then
     exit 1
