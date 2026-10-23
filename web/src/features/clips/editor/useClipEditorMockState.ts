@@ -58,6 +58,7 @@ import {
   type AudioPresetId,
 } from './audioPresets';
 import type { EditorPlayback } from './editorPlayback';
+import type { TrackPreview, TrackPreviewStatus } from './trackAudio/useTrackPreview';
 import { regionCropsOf, type EditorLook } from './recipeLook';
 import { useEditorPlaybackSimulation } from './useEditorPlaybackSimulation';
 import {
@@ -378,6 +379,11 @@ export interface ClipEditorOptions {
    * 마지막으로 켜진 트랙은 끌 수 없다. 저장할 때 조용히 바꾸면 화면과 다른 소리가 렌더된다(PR #200 codex P1)
    */
   mixTrackId?: string;
+  /**
+   * 트랙별 미리 듣기(POK-389). 주면 트랙을 끄거나 음량을 바꿀 때마다 그 값(트랙 순서 = 번호)을 넘긴다.
+   * 못 불렀으면(status unavailable) 미리보기가 「영상 소리로 들린다」고 알린다
+   */
+  trackPreview?: TrackPreview;
   /** 저장된 편집본의 자막 줄(실제 모드). 마운트 값 — 있으면 자막 도구가 「생성됨」으로 열린다 */
   initialSubtitles?: readonly SubtitleItem[];
   /** 저장된 편집본의 모양(레이아웃·자르는 자리·자막 방식과 자리). 마운트 값 — 없는 칸은 편집기 기본값이다 */
@@ -423,6 +429,8 @@ export interface ClipEditorMockState {
   requestUpload: () => void;
   uploadLabel: string;
   previewVideo: HTMLVideoElement | null;
+  /** 트랙별 미리 듣기 상태. 실제 영상이 없으면 null */
+  trackPreviewStatus: TrackPreviewStatus | null;
 
   // 트랜스포트
   playing: boolean;
@@ -841,6 +849,14 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     [options.tracks, real, recipe.trackVolumes, recipe.trackMuted],
   );
 
+  // 미리 듣기 음량 — 저장할 소리와 같은 규칙(끈 트랙은 0, 음량은 %)
+  const trackPreview = options.trackPreview;
+  useEffect(() => {
+    trackPreview?.setGains(
+      tracks.map((track) => (track.muted || track.volume === null ? 0 : track.volume / 100)),
+    );
+  }, [trackPreview, tracks]);
+
   const liveView = useMemo(() => {
     const view = viewWindow(
       (recipe.range.startSeconds + recipe.range.endSeconds) / 2,
@@ -882,6 +898,7 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     autosaveLabel: options.autosaveLabel ?? (real ? '저장 전' : MOCK_SOURCE.autosaveLabel),
     uploadLabel: options.uploadLabel ?? '업로드',
     previewVideo: options.previewVideo ?? null,
+    trackPreviewStatus: options.trackPreview?.status ?? null,
     canUndo: historyCanUndo(history),
     canRedo: historyCanRedo(history),
     // 되돌리면 구간이 다른 값이 되므로 직전 거부 안내는 더 이상 그 구간의 이야기가 아니다

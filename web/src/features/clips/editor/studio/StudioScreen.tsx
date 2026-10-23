@@ -56,6 +56,7 @@ import {
   type RecordingTimeline,
 } from '@/features/player/recordingTimeline';
 import { useEditorVideoPlayback } from '../useEditorVideoPlayback';
+import { useTrackPreview } from '../trackAudio/useTrackPreview';
 import { lookFromDocument, outputsFor, sameRecipe, subtitlesFor } from '../recipeLook';
 import {
   emptyUploadDraft,
@@ -563,6 +564,13 @@ function WiredStudio({
     pieces: recordingPieces,
     initialRange,
   });
+  // 트랙별 미리 듣기 — 영상이 받은 창과 같은 창의 녹화 조각(방송 소리 트랙 전부)을 받아 영상 노드를 따라 튼다(POK-389)
+  const trackPreview = useTrackPreview({
+    streamId,
+    baseMs: base,
+    window: recording ? video.window : null,
+    video: recording ? video.video : null,
+  });
 
   const [save, setSave] = useState<SaveState>(() => ({
     recipeId: saved?.id ?? null,
@@ -901,6 +909,7 @@ function WiredStudio({
         autosaveLabel={label}
         uploadLabel="영상 만들기"
         mixTrackId={trackId(0)}
+        trackPreview={recording ? trackPreview : undefined}
         tracks={trackSetup.tracks}
         initialTrackMuted={trackSetup.muted}
         initialTrackVolumes={trackSetup.volumes}

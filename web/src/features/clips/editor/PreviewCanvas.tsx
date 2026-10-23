@@ -145,6 +145,11 @@ export function PreviewCanvas({ state }: { state: ClipEditorMockState }) {
             {editingLayout ? '' : '미리보기 · '}
             {state.layoutLabel} · 자막 {subtitleNote}
           </span>
+          {state.trackPreviewStatus === 'unavailable' ? (
+            <span className={styles.stageNote} role="status">
+              트랙별 미리 듣기를 못 불러왔어요 · 영상 소리로 들려요
+            </span>
+          ) : null}
         </section>
       </div>
     </div>
