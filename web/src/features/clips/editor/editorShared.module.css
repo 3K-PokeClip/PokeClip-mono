@@ -472,62 +472,6 @@
   color: var(--pc-color-accent-text);
 }
 
-/* ---------- 트랜스포트 ---------- */
-
-.transport {
-  display: flex;
-  align-items: center;
-  gap: calc(4 * var(--pc-u));
-  margin-top: calc(11 * var(--pc-u));
-  /* 미리보기와 형제 요소라 .preview의 패딩을 물려받지 못한다 — 같은 값을 직접 준다 */
-  padding: 0 calc(20 * var(--pc-u));
-  flex-wrap: wrap;
-  row-gap: calc(8 * var(--pc-u));
-}
-
-/* 재생 아이콘도 같은 이유로 디자인 단위로 잰다 — 되감기(21단위)보다 작아지면
-   가운데 주 버튼이 곁다리보다 작아 보인다. 버튼(md = 40단위)은 그대로다. */
-.transportPlayIcon {
-  width: calc(25 * var(--pc-u));
-  height: calc(25 * var(--pc-u));
-}
-
-.transportTime {
-  font:
-    600 calc(12 * var(--pc-u)) ui-monospace,
-    Menlo,
-    monospace;
-  margin-left: calc(6 * var(--pc-u));
-}
-
-.transportNote {
-  font-size: calc(11 * var(--pc-u));
-  color: var(--pc-color-text-muted);
-}
-
-.transportRight {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: calc(7 * var(--pc-u));
-}
-
-/* 시안은 라벨이 스위치 왼쪽에 온다. Switch가 <label>로 둘을 감싸고 있어
-   순서만 뒤집으면 글자를 눌러도 토글되는 성질이 그대로 남는다.
-   data-size로 특이도를 올려 DS의 .root 글꼴·색을 확실히 덮는다. */
-.loopSwitch[data-size='sm'] {
-  flex-direction: row-reverse;
-  gap: calc(7 * var(--pc-u));
-  font-size: calc(11 * var(--pc-u));
-  color: var(--pc-color-text-muted);
-}
-
-.transportDivider {
-  width: 1px;
-  height: calc(16 * var(--pc-u));
-  background: var(--pc-color-border-subtle);
-}
-
 /* ---------- 미리보기 위 막대 (POK-389) ---------- */
 
 .previewBar {

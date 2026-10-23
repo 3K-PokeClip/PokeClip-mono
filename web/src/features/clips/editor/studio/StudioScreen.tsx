@@ -28,7 +28,6 @@ import {
 } from '@/api/clipEditor';
 import { EditorHeader } from '../EditorHeader';
 import { PreviewCanvas } from '../PreviewCanvas';
-import { TransportBar } from '../TransportBar';
 import { MultitrackTimeline } from './MultitrackTimeline';
 import { ToolPanel } from './ToolPanel';
 import { ToolRail } from './ToolRail';
@@ -203,7 +202,6 @@ export function StudioEditor(options: ClipEditorOptions = {}) {
         <ToolPanel state={state} />
         <div className={styles.previewColumn} ref={previewColumnRef}>
           <PreviewCanvas state={state} />
-          <TransportBar state={state} showRangeLength />
         </div>
       </main>
       <MultitrackTimeline state={state} headroom={headroom} />

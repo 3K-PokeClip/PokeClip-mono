@@ -1,8 +1,7 @@
 import { useRef, type KeyboardEvent, type PointerEvent } from 'react';
-import { ChevronDown, ChevronUp } from 'lucide-react';
-import { IconButton } from '@/ui';
 import { formatUptime } from '@/features/player/playerMath';
 import styles from './StudioScreen.module.css';
+import { TimelineToolbar } from './TimelineToolbar';
 import { TimelineTrackRow } from './TimelineTrackRow';
 import {
   MAX_RANGE_SECONDS,
@@ -146,40 +145,16 @@ export function MultitrackTimeline({
         </button>
       ) : null}
 
-      <div className={styles.timelineHead}>
-        <span className={styles.timelineTitle}>타임라인</span>
-        {state.timelineCollapsed ? (
-          <span className={styles.timelineSummary}>
-            선택 구간{' '}
-            <b>
-              {formatUptime(state.range.startSeconds)} – {formatUptime(state.range.endSeconds)}
-            </b>{' '}
-            · {state.rangeLengthLabel}
-          </span>
-        ) : null}
-        <IconButton
-          variant="ghost"
-          size="sm"
-          aria-label={state.timelineCollapsed ? '타임라인 열기' : '타임라인 접기'}
-          onClick={state.toggleTimeline}
-        >
-          {state.timelineCollapsed ? (
-            <ChevronUp size={14} aria-hidden />
-          ) : (
-            <ChevronDown size={14} aria-hidden />
-          )}
-        </IconButton>
-
-        <div className={styles.zoomGroup}>
-          <IconButton variant="ghost" size="sm" aria-label="타임라인 축소" onClick={state.zoomOut}>
-            −
-          </IconButton>
-          <span className={styles.zoomValue}>{state.zoomLabel}</span>
-          <IconButton variant="ghost" size="sm" aria-label="타임라인 확대" onClick={state.zoomIn}>
-            ＋
-          </IconButton>
-        </div>
-      </div>
+      <TimelineToolbar state={state} />
+      {state.timelineCollapsed ? (
+        <span className={styles.timelineSummary}>
+          선택 구간{' '}
+          <b>
+            {formatUptime(state.range.startSeconds)} – {formatUptime(state.range.endSeconds)}
+          </b>{' '}
+          · {state.rangeLengthLabel}
+        </span>
+      ) : null}
 
       {!state.timelineCollapsed ? (
         <>

@@ -143,7 +143,7 @@ export function PreviewCanvas({ state }: { state: ClipEditorMockState }) {
           {result}
           <span className={styles.stageNote}>
             {editingLayout ? '' : '미리보기 · '}
-            {state.layoutLabel} · 자막 {subtitleNote} · {state.speed}× 배속
+            {state.layoutLabel} · 자막 {subtitleNote}
           </span>
         </section>
       </div>

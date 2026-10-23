@@ -75,6 +75,7 @@ import {
   clampTimelineHeight,
   viewWindow,
   zoomStep,
+  ZOOM_LEVELS,
   type ClipRange,
   type TimelineView,
 } from './timelineMath';
@@ -619,6 +620,9 @@ export interface ClipEditorMockState {
   zoomLabel: string;
   zoomIn: () => void;
   zoomOut: () => void;
+  /** 확대 막대가 고르는 단계들(%) — 막대 값은 이 목록의 자리다 */
+  zoomLevels: readonly number[];
+  setZoom: (zoom: number) => void;
 }
 
 const SPEED_OPTIONS = [0.5, 1, 1.5, 2] as const;
@@ -1224,5 +1228,7 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     zoomLabel: `${zoom}%`,
     zoomIn: useCallback(() => setZoom((z) => zoomStep(z, 'in')), []),
     zoomOut: useCallback(() => setZoom((z) => zoomStep(z, 'out')), []),
+    zoomLevels: ZOOM_LEVELS,
+    setZoom,
   };
 }

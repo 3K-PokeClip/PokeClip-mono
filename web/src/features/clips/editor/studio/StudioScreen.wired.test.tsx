@@ -795,7 +795,7 @@ describe('StudioScreen — 화면에서 고른 모양이 저장 본문에 그대
 
   it('자막이 없으면 결과 설명도 「자막 없음」이다: 고른 방식(번인+CC)만 적으면 자막이 들어갈 것처럼 읽힌다', async () => {
     await openFrom('recipe=31');
-    expect(screen.getByText(/자막 없음 · 1× 배속/)).toBeInTheDocument();
+    expect(screen.getByText(/자막 없음$/)).toBeInTheDocument();
     expect(screen.queryByText(/자막 영상\+파일/)).not.toBeInTheDocument();
   });
 
@@ -818,7 +818,7 @@ describe('StudioScreen — 화면에서 고른 모양이 저장 본문에 그대
       ],
     };
     await openFrom('recipe=31');
-    expect(screen.getByText(/자막 영상에 새김 · 1× 배속/)).toBeInTheDocument();
+    expect(screen.getByText(/자막 영상에 새김$/)).toBeInTheDocument();
   });
 });
 
