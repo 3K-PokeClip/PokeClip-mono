@@ -69,7 +69,11 @@ export async function unlinkSoop(): Promise<void> {
 }
 
 export type SoopLinkFailure =
-  'INVALID_STATE' | 'INVALID_CODE' | 'CHANNEL_ALREADY_LINKED' | 'SOOP_UNAVAILABLE';
+  | 'INVALID_STATE'
+  | 'INVALID_CODE'
+  | 'CHANNEL_ALREADY_LINKED'
+  | 'IDENTITY_UNAVAILABLE'
+  | 'SOOP_UNAVAILABLE';
 
 // 오류 본문은 {"reason": "<이름>"}(SoopLinkExceptionHandler). 판정 규칙은 chzzkLink.ts와 같다:
 // status도 짝으로 맞아야 그 실패로 읽는다.
@@ -77,6 +81,8 @@ const FAILURE_STATUS: Record<SoopLinkFailure, number> = {
   INVALID_STATE: 400,
   INVALID_CODE: 400,
   CHANNEL_ALREADY_LINKED: 409,
+  // 방송 중이 아니고 대표 이미지에서도 방송국 아이디를 못 꺼냈다(서버 SoopLinkFailure). 일시 장애가 아니다
+  IDENTITY_UNAVAILABLE: 422,
   SOOP_UNAVAILABLE: 502,
 };
 
@@ -108,6 +114,10 @@ const FAILURE_MESSAGE: Record<SoopLinkFailure, SoopLinkMessage> = {
     title: '이미 다른 계정에 연동된 방송국이에요',
     description:
       '이 SOOP 방송국은 다른 PokeClip 계정에 연결돼 있어요. 그 계정에서 연동을 해제한 뒤 다시 시도해 주세요.',
+  },
+  IDENTITY_UNAVAILABLE: {
+    title: 'SOOP 방송국을 확인하지 못했어요',
+    description: '방송을 켠 상태에서 다시 연동해 주세요',
   },
   SOOP_UNAVAILABLE: {
     title: 'SOOP과 연결하지 못했어요',

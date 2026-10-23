@@ -131,6 +131,7 @@ describe('SoopCallbackScreen', () => {
     [400, 'INVALID_CODE', '연동을 마치지 못했어요'],
     [409, 'CHANNEL_ALREADY_LINKED', '이미 다른 계정에 연동된 방송국이에요'],
     [502, 'SOOP_UNAVAILABLE', 'SOOP과 연결하지 못했어요'],
+    [422, 'IDENTITY_UNAVAILABLE', 'SOOP 방송국을 확인하지 못했어요'],
   ])('%i %s는 전용 문구로 알리고 채널 화면으로 되돌려보낸다', async (status, reason, title) => {
     stubFetch(() => jsonResponse(status, { reason }));
     renderScreen(<SoopCallbackScreen />);
@@ -139,6 +140,23 @@ describe('SoopCallbackScreen', () => {
     await waitFor(() => expect(replace).toHaveBeenCalledWith('/settings/channels'));
     expect(document.body.textContent).not.toContain(reason);
     expect(track).not.toHaveBeenCalled();
+  });
+
+  it('422 IDENTITY_UNAVAILABLE이면 방송을 켠 상태에서 다시 연동하라는 설명까지 보인다', async () => {
+    stubFetch(() => jsonResponse(422, { reason: 'IDENTITY_UNAVAILABLE' }));
+    renderScreen(<SoopCallbackScreen />);
+
+    expect(await screen.findByText('방송을 켠 상태에서 다시 연동해 주세요')).toBeInTheDocument();
+    await waitFor(() => expect(replace).toHaveBeenCalledWith('/settings/channels'));
+  });
+
+  it('422인데 reason이 다르면 폴백 문구다: 짝이 맞아야 그 실패로 읽는다', async () => {
+    stubFetch(() => jsonResponse(422, { reason: 'SOMETHING_ELSE' }));
+    renderScreen(<SoopCallbackScreen />);
+
+    expect(await screen.findByText('연동에 실패했어요')).toBeInTheDocument();
+    expect(screen.queryByText('SOOP 방송국을 확인하지 못했어요')).not.toBeInTheDocument();
+    await waitFor(() => expect(replace).toHaveBeenCalledWith('/settings/channels'));
   });
 
   it('code가 없으면 교환하지 않고 취소로 안내한다', async () => {

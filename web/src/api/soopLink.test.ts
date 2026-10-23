@@ -100,6 +100,15 @@ describe('soopLinkFailureOf', () => {
       'CHANNEL_ALREADY_LINKED',
     );
     expect(soopLinkFailureOf(new ApiError(502, 'SOOP_UNAVAILABLE'))).toBe('SOOP_UNAVAILABLE');
+    expect(soopLinkFailureOf(new ApiError(422, 'IDENTITY_UNAVAILABLE'))).toBe(
+      'IDENTITY_UNAVAILABLE',
+    );
+  });
+
+  it('IDENTITY_UNAVAILABLE은 422하고만 짝이다: 422라도 reason이 다르면 null', () => {
+    expect(soopLinkFailureOf(new ApiError(400, 'IDENTITY_UNAVAILABLE'))).toBeNull();
+    expect(soopLinkFailureOf(new ApiError(502, 'IDENTITY_UNAVAILABLE'))).toBeNull();
+    expect(soopLinkFailureOf(new ApiError(422, 'SOOP_UNAVAILABLE'))).toBeNull();
   });
 
   it('status가 어긋나거나 모르는 값이면 null이다', () => {
@@ -126,6 +135,17 @@ describe('soopLinkFailureMessage', () => {
     expect(soopLinkFailureMessage(new ApiError(502, 'SOOP_UNAVAILABLE')).title).toBe(
       'SOOP과 연결하지 못했어요',
     );
+  });
+
+  it('아이디를 못 읽으면 방송을 켠 상태에서 다시 연동하라고 안내한다', () => {
+    expect(soopLinkFailureMessage(new ApiError(422, 'IDENTITY_UNAVAILABLE'))).toEqual({
+      title: 'SOOP 방송국을 확인하지 못했어요',
+      description: '방송을 켠 상태에서 다시 연동해 주세요',
+    });
+  });
+
+  it('422인데 reason이 다르면 폴백이다', () => {
+    expect(soopLinkFailureMessage(new ApiError(422, 'SOMETHING')).title).toBe('연동에 실패했어요');
   });
 
   it('모르는 실패는 폴백 문구로: reason 원문을 노출하지 않는다', () => {
