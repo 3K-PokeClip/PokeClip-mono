@@ -249,7 +249,26 @@ principal::context_entries() {
 }
 
 #######################################
-# 대상 행의 해석 방법 · 정책 읽기 방법 · 동작을 검사한다.
+# input: 해석이 아는 입력 이름의 비밀 이름 접두를 낸다. 입력 파일은 비밀
+# (secretsmanager) 전체 ARN 만 담는다 — 이름을 모르는 입력은 기대 이름이
+# 없어 받지 않는다(데이터 꼴 · 종료 2).
+# Arguments:
+#   입력 이름.
+# Outputs:
+#   비밀 이름 접두.
+# Returns:
+#   모르는 이름이면 1.
+#######################################
+principal::input_name_prefix() {
+  case "$1" in
+    rds-master) printf '%s\n' 'rds!db-' ;;
+    *) return 1 ;;
+  esac
+}
+
+#######################################
+# 대상 행의 해석 방법 · 정책 읽기 방법 · 동작을 검사한다. input: 행은 아는
+# 입력 이름이고 동작이 모두 secretsmanager 여야 한다.
 # Globals:
 #   TAG_TYPE_PATTERN, ZONE_PATTERN, KEY_PATTERN, ACTION_PATTERN,
 #   POLICY_SERVICES
@@ -264,7 +283,9 @@ principal::target_fields_ok() {
     tag:*) [[ "${method#tag:}" =~ ${TAG_TYPE_PATTERN} ]] || return 1 ;;
     arn:*) principal::concrete_arn "${method#arn:}" || return 1 ;;
     zone:*) [[ "${method#zone:}" =~ ${ZONE_PATTERN} ]] || return 1 ;;
-    input:*) [[ "${method#input:}" =~ ${KEY_PATTERN} ]] || return 1 ;;
+    input:*)
+      principal::input_name_prefix "${method#input:}" >/dev/null || return 1
+      ;;
     self:role | self:user | self:group | prodrole | policy:attached)
       [[ "${read}" == none || "${read}" == unread ]] || return 1
       ;;
@@ -278,6 +299,8 @@ principal::target_fields_ok() {
     action="${actions%%,*}"
     actions="${actions#*,}"
     [[ "${action}" =~ ${ACTION_PATTERN} ]] || return 1
+    [[ "${method}" != input:* || "${action}" == secretsmanager:* ]] ||
+      return 1
     [[ "${read}" != none ||
       "${POLICY_SERVICES}" != *" ${action%%:*} "* ]] || return 1
   done

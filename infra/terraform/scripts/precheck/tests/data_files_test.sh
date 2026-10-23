@@ -133,9 +133,12 @@ readonly PASSED_TO_EC2_ENTRY
 # 켬 · apply 뒤에 정해지는 런타임 자원의 대상 행(rt1a 종결 r1 H2 · H4).
 # 「자원 키 · 첫 단계 · 해석 방법 · 반드시 묻는 동작(쉼표 구분)」 이다. 실행기
 # 인스턴스는 켤 때 ID 가 정해져 태그로 풀고, 관리형 마스터 비밀은 이름 끝이
-# 생성 때 정해져 apply 뒤 kty 가 적는 입력 파일로 푼다.
+# 생성 때 정해져 apply 뒤 kty 가 적는 입력 파일로 푼다. 인스턴스 행의 동작은
+# 켜진 상자에서 코드를 돌리는 SSM 길 가운데 instance 유형을 받는 것이다
+# (서비스 승인 참조 list_ssm.html — StartAutomationExecution 은 받지 않음).
 LATE_TARGETS=(
-  'prod-instance runtime-1a tag:ec2:instance ssm:SendCommand,ssm:StartSession'
+  'prod-instance runtime-1a tag:ec2:instance '\
+'ssm:SendCommand,ssm:StartSession,ssm:CreateAssociation'
   'rds-master-secret runtime-1a input:rds-master secretsmanager:GetSecretValue')
 readonly LATE_TARGETS
 
@@ -826,6 +829,8 @@ method_problem() {
     input:*)
       [[ "${method#input:}" =~ ^[a-z][a-z0-9-]*$ ]] ||
         printf 'input: 이름 꼴이 틀림\n'
+      [[ "${service}:${type}" == secretsmanager:secret ]] ||
+        printf 'input: 행이 secretsmanager secret 이 아님\n'
       ;;
     zone:*)
       [[ "${service}:${type}" == route53:hostedzone ]] ||

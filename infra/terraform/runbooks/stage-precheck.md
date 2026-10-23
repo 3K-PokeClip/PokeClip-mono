@@ -275,8 +275,10 @@ bash infra/terraform/scripts/precheck/principal-check.sh O7a
     (`/pokeclip/prod/`) · 붙은 고객 관리형 정책 · 입력 파일로 풉니다. 입력
     파일은 apply 뒤에야 ARN 이 정해지는 자원(관리형 마스터 비밀)을 kty 가
     증거 루트에 적은 `~/.pokeclip-precheck/input-<이름>.txt`(0600 — 줄마다
-    이 계정 · 행의 서비스 · 리전의 ARN 하나)입니다. 없으면 `TARGET_NONE`,
-    비었거나 꼴 밖 줄 · 0600 아님 · 링크면 종료 2 입니다. 상태 버킷 · 비밀
+    이 계정 · 행의 리전의 비밀 전체 ARN 하나 · 이름은 입력 이름의 접두로
+    시작하고 끝이 `-` + 영숫자 6자)입니다. 없으면 `TARGET_NONE`, 비었거나
+    꼴 밖 줄(부분 ARN · 기대 이름 밖 비밀 포함) · 0600 아님 · 링크면 종료
+    2 입니다. 비밀 정책 읽기 응답의 ARN 이 요청과 다르면 종료 2 입니다. 상태 버킷 · 비밀
     · ECR · SNS 주제 · SQS 큐는 자원 정책을 직접 읽습니다. 주제 · 큐가 아직
     없으면(`NotFound` · `AWS.SimpleQueueService.NonExistentQueue` ·
     `QueueDoesNotExist`) 그 행의 첫 단계일 때만 정책 없이 판정하고
@@ -349,7 +351,8 @@ bash infra/terraform/scripts/precheck/principal-check.sh O7a
 *   종료 2 는 사용법 · 모르는 단계 · 데이터 꼴 · CLI 기록 켜짐 · 증거 경로
     거부 · 증거 쓰기 실패 · IAM 사용자 아닌 호출 주체 · 호출 실패 · 호출
     자체의 AccessDenied · 응답 꼴(역할 · 사용자 ARN 이 하나가 아님 · 최상위
-    판정이 값 하나가 아님 · 큐 속성 응답의 `None` · 요청과 다른 큐 ARN 포함) ·
+    판정이 값 하나가 아님 · 큐 속성 · 비밀 응답의 `None` · 요청과 다른 큐 ·
+    비밀 ARN 포함) ·
     정책 파일 꼴 · S3 · ECR · SNS 정책 응답의 `None` ·
     존 해석 2건 이상 · 잘린 존 목록 · 입력 파일의 거부 · 빈 파일 · 꼴 밖
     줄 · PC0 · PC1 실패 · 옛 CLI · 조직 판정

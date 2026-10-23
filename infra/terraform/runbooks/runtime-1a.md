@@ -185,10 +185,18 @@ bash infra/terraform/scripts/precheck/principal-check.sh runtime-1a
 ```
 
 *   `INPUT OK` 가 아니면 4 로 가지 않습니다.
+*   입력 파일의 줄은 이 계정 · 서울 리전의 비밀 **전체 ARN** 이어야 합니다
+    — 이름이 `rds!db-` 로 시작하고 끝이 `-` + 영숫자 6자(Secrets Manager 가
+    이름 뒤에 붙이는 접미)입니다. 부분 ARN(접미 없음) · 다른 비밀(예:
+    `pokeclip/prod/` 앱 비밀)은 종료 2 입니다. 시뮬레이터는 없는 ARN 도
+    평가해, 부분 ARN 으로 물으면 전체 ARN 에만 걸린 dev 정책을 놓치기
+    때문입니다. 정책 읽기 응답의 ARN 이 입력 줄과 글자까지 같지 않아도 종료
+    2 입니다([ARN 꼴](https://docs.aws.amazon.com/secretsmanager/latest/userguide/whats-in-a-secret.html)).
 *   2-3 판정은 1 의 ② 대로 봅니다. 여기에 더해 `rds-master-secret` 행이
     `ALLOWED`(멈춤)이면 dev 주체가 마스터 비밀을 읽거나 바꿀 수 있다는
     뜻이니 4 로 가지 않고 보고합니다. 그 행이 아직 `TARGET_NONE` 이거나
-    종료 2 면(입력 파일을 읽지 못함 · 꼴 밖) 원인을 고친 뒤 다시 돌립니다.
+    종료 2 면(입력 파일을 읽지 못함 · 꼴 밖 · 응답 ARN 다름) 원인을 고친 뒤
+    다시 돌립니다.
     `prod-instance` 의 `TARGET_NONE` 은 실행기가 꺼져 있어 정상입니다.
 
 ## 4. 실행기 켬
@@ -229,9 +237,10 @@ bash infra/terraform/scripts/precheck/principal-check.sh runtime-1a
 
 1.  **켬 뒤 2-3 판정(SQL 보내기 전)**: 켜진 실행기는 이제 `prod-instance`
     행으로 풀립니다(인스턴스 ID 는 켤 때 정해져 `Environment = prod` 태그로
-    찾음). dev 주체가 이 상자에 명령(`ssm:SendCommand`)이나 세션
-    (`ssm:StartSession`)을 보낼 수 있으면 상자의 역할로 마스터 비밀을 읽을
-    수 있습니다. 저장소 뿌리에서 2-3 판정만 다시 돌립니다.
+    찾음). dev 주체가 이 상자에 명령(`ssm:SendCommand`) · 세션
+    (`ssm:StartSession`) · 상태 관리자 연결(`ssm:CreateAssociation`)을 보낼
+    수 있으면 상자의 역할로 마스터 비밀을 읽을 수 있습니다. 저장소 뿌리에서
+    2-3 판정만 다시 돌립니다.
 
     ```shell
     cd "$(git rev-parse --show-toplevel)"
@@ -242,7 +251,7 @@ bash infra/terraform/scripts/precheck/principal-check.sh runtime-1a
     가운데 하나면 SQL 을 보내지 않고 곧바로 7(끔)로 갑니다.
 
     *   `prod-instance` 행이 `ALLOWED`(멈춤) — dev 주체에 그 인스턴스의
-        명령 · 세션 권한이 있음.
+        명령 · 세션 · 연결 권한이 있음.
     *   `prod-instance` 행이 `TARGET_NONE` — 켰는데 태그로 풀리지 않음(한계
         A14). 판정하지 못했으니 보내지 않습니다.
     *   `report.txt` 에 「자원 없음」 줄 · `rds-master-secret` 의
@@ -645,8 +654,9 @@ send-command 상태가 `Success` 가 아니거나(`Failed` · `TimedOut` ·
 
 *   2-3 판정은 dev 주체가 실행기 역할을 EC2 에 넘길 수 있는지
     (`iam:PassRole` · `iam:PassedToService` — 1 의 ②), 켜진 실행기에 명령 ·
-    세션을 보낼 수 있는지(`ssm:SendCommand` · `ssm:StartSession` — 4 의 켬
-    뒤), 마스터 비밀을 읽을 수 있는지(3-1)를 묻지만, 판정은 그 시점 한
+    세션 · 연결을 보낼 수 있는지(`ssm:SendCommand` · `ssm:StartSession` ·
+    `ssm:CreateAssociation` — 4 의 켬 뒤), 마스터 비밀을 읽을 수
+    있는지(3-1)를 묻지만, 판정은 그 시점 한
     번씩입니다. 실행기가 켜진 동안 그 권한이 생기면 dev 주체가 마스터 비밀을
     읽을 수 있습니다. 그래서 SQL 직후 끄고, 잊어도 상자는 120분 뒤 스스로
     멈춥니다.
@@ -654,6 +664,11 @@ send-command 상태가 `Success` 가 아니거나(`Failed` · `TimedOut` ·
     묻지 않습니다. dev 배포 주체 둘은 그 문서 허용이 양성 대조라 갈리는
     쪽이 인스턴스이기 때문입니다. dev 정책이 인스턴스를 태그 조건으로 열면
     시뮬레이터가 누락 문맥을 내고 판정 불가(`MISSING_CONTEXT`)가 됩니다.
+*   자동화(`ssm:StartAutomationExecution`)로 켜진 상자에 명령을 보내는 길은
+    묻지 않습니다. 이 동작은 인스턴스 자원 유형을 받지 않아(자동화 문서 ·
+    실행만 — [서비스 승인 참조](https://docs.aws.amazon.com/service-authorization/latest/reference/list_ssm.html))
+    인스턴스 ARN 으로 물을 수 없습니다. 실행기가 켜진 동안(최대 120분)만
+    열린 길이라 위의 짧게 켜 두기가 이 한계도 좁힙니다.
 *   SQL 실적용 시험(CI)은 Go 메타 명령 처리기로 돌고 psql 자체가 아니며,
     대역은 `rds_superuser` 가 아닙니다. TLS · `rds.force_ssl` 은 CI 가 재지
     못합니다.

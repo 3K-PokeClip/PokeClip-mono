@@ -27,15 +27,24 @@
 # 이름 끝이 생성 때 정해짐)을 kty 가 증거 루트에 적은 입력 파일
 # input-<이름>.txt 로 푼다(rt1a 종결 r1 H4 · 런북 runtime-1a 3). 파일이
 # 없으면 TARGET_NONE 이다. 파일은 evidence::check_file 을 통과해야 하고(0700
-# 루트 · 링크 아닌 0600 일반 파일), 줄마다 이 계정 · 행의 서비스(동작 접두) ·
-# 행의 리전의 구체 ARN 이어야 한다. 빈 파일 · 꼴 밖 줄은 종료 2 다. 파일
-# 이름 말고는 표준 오류에 적지 않는다.
+# 루트 · 링크 아닌 0600 일반 파일), 줄마다 이 계정 · 행의 리전의 비밀 전체
+# ARN 이어야 한다 — 이름이 입력 이름의 접두(principal::input_name_prefix —
+# rds-master 는 rds!db-)로 시작하고, 끝이 「-」 + 영숫자 6자(Secrets Manager
+# 가 이름 뒤에 붙이는 접미)다. 부분 ARN(접미 없음)은 받지 않는다 — 시뮬레이터
+# 는 없는 자원도 평가해, 전체 ARN 에만 걸린 dev 정책을 놓친다. 빈 파일 · 꼴
+# 밖 줄은 종료 2 다. 파일 이름 말고는 표준 오류에 적지 않는다.
+# 참고: https://docs.aws.amazon.com/secretsmanager/latest/userguide/whats-in-a-secret.html
+# (ARN 꼴 SecretName-6RandomCharacters) ·
+# https://docs.aws.amazon.com/secretsmanager/latest/apireference/API_CreateSecret.html
+# (이름 글자 /_+=.@- · 접미는 「-」 + 6자).
 
 readonly PROD_ROLE_PATH='/pokeclip/prod/'
 readonly AWS_MANAGED_POLICY='arn:aws:iam::aws:policy/'
 readonly ZONE_ID_PATTERN='^/hostedzone/[A-Z0-9]+$'
 # input: 해석의 입력 파일 이름 앞부분(증거 루트 바로 아래).
 readonly INPUT_PREFIX='input-'
+# 비밀 ARN 의 이름 접두 뒤(이름 나머지 + 「-」 + 영숫자 6자 접미).
+readonly SECRET_TAIL_PATTERN='^[A-Za-z0-9/_+=.@-]+-[A-Za-z0-9]{6}$'
 # 존 목록 질의 — 첫 줄은 「IsTruncated<탭>NextDNSName」, 그 뒤 존마다 「이름<탭>
 # ID<탭>PrivateZone」(text 출력은 스칼라를 먼저, 목록을 줄마다 낸다).
 ZONE_QUERY='[IsTruncated,NextDNSName,'
@@ -233,16 +242,34 @@ principal::resolve_zone() {
 }
 
 #######################################
+# 입력 파일의 줄 하나가 이 계정 · 행의 리전의 기대 이름 비밀 전체 ARN 인지
+# 본다(머리 주석).
+# Arguments:
+#   줄, ARN 앞부분(이름 앞까지), 이름 접두.
+# Returns:
+#   맞으면 0.
+#######################################
+principal::input_arn_ok() {
+  local line="$1" head="$2" name_prefix="$3" tail
+  principal::concrete_arn "${line}" || return 1
+  [[ "${line}" == "${head}${name_prefix}"* ]] || return 1
+  tail="${line#"${head}${name_prefix}"}"
+  [[ "${tail}" =~ ${SECRET_TAIL_PATTERN} ]]
+}
+
+#######################################
 # input: 행을 증거 루트의 입력 파일로 푼다(머리 주석). 파일이 없으면
 # list_items 가 빈 값이다.
 # Globals:
-#   t_actions, t_region, list_items, account, INPUT_PREFIX
+#   t_region, list_items, account, INPUT_PREFIX
 # Arguments:
 #   t_* 색인, 입력 이름.
 #######################################
 principal::resolve_input() {
-  local t="$1" name="${INPUT_PREFIX}$2.txt" root file line prefix
-  prefix="arn:aws:${t_actions[t]%%:*}:${t_region[t]}:${account}:"
+  local t="$1" name="${INPUT_PREFIX}$2.txt" root file line head name_prefix
+  name_prefix="$(principal::input_name_prefix "$2")" ||
+    die "모르는 입력 이름(${name})"
+  head="arn:aws:secretsmanager:${t_region[t]}:${account}:secret:"
   root="$(evidence::root)" || exit 2
   file="${root}/${name}"
   list_items=""
@@ -250,11 +277,9 @@ principal::resolve_input() {
   evidence::check_file "${file}" || exit 2
   while IFS= read -r line || [[ -n "${line}" ]]; do
     [[ -n "${line}" ]] || continue
-    if [[ "${line}" != "${prefix}"?* ]] ||
-      ! principal::concrete_arn "${line}"; then
-      die "입력 파일의 줄이 이 계정 · 행의 서비스 · 리전의 구체 ARN 이" \
-        "아님(${name})"
-    fi
+    principal::input_arn_ok "${line}" "${head}" "${name_prefix}" ||
+      die "입력 파일의 줄이 이 계정 · 행의 리전 · 기대 이름의 비밀 전체 ARN" \
+        "이 아님(${name})"
     list_items+="${line}"$'\n'
   done <"${file}" || die "입력 파일을 읽지 못함(${name})"
   [[ -n "${list_items}" ]] || die "입력 파일이 비어 있음(${name})"

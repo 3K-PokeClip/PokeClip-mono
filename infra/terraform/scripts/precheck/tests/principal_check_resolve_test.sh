@@ -673,7 +673,7 @@ expect_topic_queue_shapes() {
         edit_lib "${case_dir}" principal_policy.sh \
           's/\["QueueArn","Policy"\]/["Policy"]/'
         set_topic_queue "${case_dir}" - "$(deny_policy "${QUEUE_ARN}")"
-        want='큐 응답의 ARN 이 요청과 다름'
+        want='큐 속성 응답의 ARN 이 요청과 다름'
         ;;
       topic-text)
         set_topic_queue "${case_dir}" 'Statement Allow' -

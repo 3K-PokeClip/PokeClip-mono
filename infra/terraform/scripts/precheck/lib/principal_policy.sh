@@ -10,7 +10,8 @@
 #
 #   s3             s3api get-bucket-policy(Bucket) --query Policy
 #   secretsmanager secretsmanager get-resource-policy(SecretId)
-#                  --query ResourcePolicy(칸이 없으면 None)
+#                  --query SECRET_QUERY → 「비밀 ARN<탭>정책」(정책이 없으면
+#                  None)
 #   ecr            ecr get-repository-policy(repositoryName) --query policyText
 #   sns            sns get-topic-attributes(TopicArn) --query Attributes.Policy
 #   sqs            sqs get-queue-attributes(QueueUrl — 큐 ARN 에서 만듦 ·
@@ -19,10 +20,13 @@
 # 다섯 모두 행의 리전(--region)으로 부른다. 「정책 없음」 = 버킷 정책 없음 ·
 # 저장소 정책 없음 오류 코드와 비밀 · 큐의 정책 None. None 을 「없음」 으로
 # 받는 것은 비밀 · 큐뿐이다 — S3 · ECR · SNS 의 성공 응답 None(정책 칸 없음 ·
-# 칸 이름 오타 — 주제에는 정책이 늘 있다)은 종료 2 다. 큐는 응답 전체가
-# None(속성 칸 없음 · 칸 이름 오타)이거나 큐 ARN 이 요청한 큐가 아니면 종료
-# 2 다 — 속성을 돌려받지 못한 것을 「정책 없음」 으로 읽지 않으려고 QueueArn
-# 을 같이 묻는다.
+# 칸 이름 오타 — 주제에는 정책이 늘 있다)은 종료 2 다. 큐 · 비밀은 응답
+# 전체가 None(속성 칸 없음 · 칸 이름 오타)이거나 응답의 ARN 이 요청한 ARN 과
+# 글자까지 같지 않으면 종료 2 다 — 큐는 속성을 돌려받지 못한 것을 「정책
+# 없음」 으로 읽지 않으려고 QueueArn 을, 비밀은 부분 ARN 을 서비스가 다른
+# 비밀로 푼 것을 놓치지 않으려고 ARN 을 같이 묻는다(GetResourcePolicy 는
+# 부분 ARN 도 받는다 —
+# https://docs.aws.amazon.com/secretsmanager/latest/apireference/API_GetResourcePolicy.html).
 #
 # 「자원 없음」(주제 NotFound · 큐 AWS.SimpleQueueService.NonExistentQueue ·
 # QueueDoesNotExist)은 이번 실행이 그 행의 첫 단계일 때만 받는다 — 그
@@ -45,6 +49,9 @@
 # 그 응답이 담을 속성.
 readonly QUEUE_QUERY='Attributes.[QueueArn,Policy]'
 readonly QUEUE_ATTRIBUTES='"AttributeNames":["QueueArn","Policy"]'
+# 비밀 정책 응답 꼴의 계약(tests/fakebin/aws 의 SECRET_QUERY 와 글자까지
+# 같다).
+readonly SECRET_QUERY='[ARN,ResourcePolicy]'
 
 # 읽은 정책(같은 색인): 읽기 방법 · 대상 · 상태 · 파일 · 이스케이프 여부(1).
 pol_read=()
@@ -127,7 +134,7 @@ principal::policy_call() {
       ;;
     secretsmanager)
       aws_call "{\"SecretId\":\"${subject}\"}" secretsmanager \
-        get-resource-policy --region "${region}" --query ResourcePolicy
+        get-resource-policy --region "${region}" --query "${SECRET_QUERY}"
       ;;
     ecr)
       absent_codes='(RepositoryPolicyNotFoundException)'
@@ -150,19 +157,18 @@ principal::policy_call() {
 }
 
 #######################################
-# 큐 응답 「큐 ARN<탭>정책」 을 검사하고 call_out 에 정책만 남긴다.
+# 큐 · 비밀 응답 「ARN<탭>정책」 을 검사하고 call_out 에 정책만 남긴다.
 # Globals:
 #   call_out, req_n
 # Arguments:
-#   요청한 큐 ARN.
+#   요청한 ARN, 응답 이름(큐 속성 · 비밀).
 #######################################
-principal::queue_policy() {
+principal::arn_policy() {
   [[ "${call_out}" != None ]] ||
-    die "큐 속성 응답이 None(res-${req_n}.txt — 속성 칸 없음)"
-  [[ "${call_out}" == *$'\t'* ]] ||
-    die "큐 속성 응답의 꼴이 다름(res-${req_n}.txt)"
+    die "$2 응답이 None(res-${req_n}.txt — 칸 없음)"
+  [[ "${call_out}" == *$'\t'* ]] || die "$2 응답의 꼴이 다름(res-${req_n}.txt)"
   [[ "${call_out%%$'\t'*}" == "$1" ]] ||
-    die "큐 응답의 ARN 이 요청과 다름(res-${req_n}.txt)"
+    die "$2 응답의 ARN 이 요청과 다름(res-${req_n}.txt)"
   call_out="${call_out#*$'\t'}"
 }
 
@@ -217,7 +223,11 @@ principal::read_policy() {
       fail_call "자원 정책 읽기"
     fi
   else
-    [[ "${read}" != sqs ]] || principal::queue_policy "${subject}"
+    case "${read}" in
+      sqs) principal::arn_policy "${subject}" '큐 속성' ;;
+      secretsmanager) principal::arn_policy "${subject}" 비밀 ;;
+      *) ;;
+    esac
     if [[ "${call_out}" == None ]]; then
       [[ "${read}" == secretsmanager || "${read}" == sqs ]] ||
         die "자원 정책 응답이 None(res-${req_n}.txt — 정책 칸 없음)"

@@ -92,15 +92,21 @@ sql-runner-profile	runtime-1a	arn:arn:aws:iam::${ACCOUNT}:instance-profile/pokec
 # *   EC2 인스턴스 — 켜진 SQL 실행기는 인스턴스 ID 가 켤 때 정해져
 #     Environment = prod 태그로 푼다(default_tags). O7e 뒤로는 같은 태그의
 #     media 상자도 함께 묻는다. 동작 × 유형 짝은 list_ssm.html — SendCommand
-#     는 document(필수) · instance, StartSession 은 document · instance 이고
-#     instance 의 ARN 이 EC2 인스턴스 ARN 이다. 문서(AWS-RunShellScript)는 묻지
-#     않는다 — dev 배포 주체 둘은 그 문서 허용이 양성 대조라, 갈리는 쪽은
-#     인스턴스다. 꺼져 있고 다른 prod 인스턴스도 없으면 TARGET_NONE 이다.
+#     는 document(필수) · instance, StartSession 은 document · instance,
+#     CreateAssociation(상태 관리자 연결 — 문서를 인스턴스에 돌림)은
+#     association · document(필수) · instance 이고 instance 의 ARN 이 EC2
+#     인스턴스 ARN 이다(대조 2026-10-24). StartAutomationExecution 은
+#     instance 유형을 받지 않아 두지 않는다(런북 runtime-1a 한계). 문서
+#     (AWS-RunShellScript)는 묻지 않는다 — dev 배포 주체 둘은 그 문서 허용이
+#     양성 대조라, 갈리는 쪽은 인스턴스다. 꺼져 있고 다른 prod 인스턴스도
+#     없으면 TARGET_NONE 이다.
 # *   RDS 관리형 마스터 비밀(rds!db-*) — 이름 끝이 생성 때 정해져 apply 뒤
-#     kty 가 terraform output 을 입력 파일로 적는다(input:rds-master). RDS 가
-#     이 비밀에 붙이는 태그는 AWS 문서로 확인하지 못해 태그로 풀지 않는다.
-#     동작은 secrets 행과 같다.
-prod-instance	runtime-1a	tag:ec2:instance	instance	ap-northeast-2	ssm:SendCommand,ssm:StartSession	none	-
+#     kty 가 terraform output 을 입력 파일로 적는다(input:rds-master). 입력
+#     줄은 이름이 rds!db- 로 시작하는 비밀 전체 ARN(끝 「-」 + 영숫자 6자)만
+#     받고, 정책 읽기 응답의 ARN 이 그 줄과 같아야 한다(lib/principal_resolve.sh
+#     · lib/principal_policy.sh 머리 주석). RDS 가 이 비밀에 붙이는 태그는 AWS
+#     문서로 확인하지 못해 태그로 풀지 않는다. 동작은 secrets 행과 같다.
+prod-instance	runtime-1a	tag:ec2:instance	instance	ap-northeast-2	ssm:SendCommand,ssm:StartSession,ssm:CreateAssociation	none	-
 rds-master-secret	runtime-1a	input:rds-master	secret	ap-northeast-2	secretsmanager:GetSecretValue,secretsmanager:PutSecretValue,secretsmanager:UpdateSecret,secretsmanager:DeleteSecret,secretsmanager:PutResourcePolicy,secretsmanager:DeleteResourcePolicy,secretsmanager:TagResource,secretsmanager:UntagResource	secretsmanager	-
 
 # rewind 버킷 · 객체 — 첫 단계는 버킷이 생긴 뒤인 O7d 다. runtime-1a 직전
