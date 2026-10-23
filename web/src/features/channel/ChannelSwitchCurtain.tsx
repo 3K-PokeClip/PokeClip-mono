@@ -89,6 +89,10 @@ function Cover({
     };
   }, []);
 
+  // 걷히기 전에 이 화면이 내려가면(전체 화면 편집기로 이동·로그아웃) 덮개도 지운다: 남기면 다음에 독 화면이 설 때 옛 덮개가
+  // 다시 서서 번쩍이고 「전환했어요」를 다시 읽는다(PR #342 리뷰 5). 다 걷힌 뒤라면 이미 지워져 아무 일도 안 한다
+  useEffect(() => () => clear(curtain.key), [clear, curtain.key]);
+
   const elapsed = now - curtain.shownAt;
   const pending = load.started - load.finished;
   const quiet = now - load.changedAt >= QUIET_MS;

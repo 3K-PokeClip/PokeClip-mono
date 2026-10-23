@@ -189,6 +189,17 @@ describe('ChannelSwitchCurtain', () => {
     expect(trigger).toHaveFocus();
   });
 
+  it('걷히기 전에 화면이 내려가면 덮개도 지운다: 다음에 다시 서서 번쩍이지 않는다(PR #342 리뷰 5)', () => {
+    const { unmount } = render(<ChannelSwitchCurtain />);
+    cover();
+    run(HOLD_MS);
+    expect(useSwitchCurtain.getState().curtain).not.toBeNull();
+
+    unmount();
+
+    expect(useSwitchCurtain.getState().curtain).toBeNull();
+  });
+
   it('응답 없이 멈춘 요청은 MAX_MS에서 끊고 걷는다: 화면을 막아 두지 않는다', () => {
     setup();
     cover();
