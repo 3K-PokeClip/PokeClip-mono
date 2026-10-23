@@ -3,7 +3,8 @@
 # 시작 · 정지 스크립트 시험 — 성공 · 실패 갈래와 restart 를 빠뜨린 서비스 · 렌더
 # 제자리 쓰기 · 중간에 끊긴 렌더의 임시 파일 · down 실패 뒤 렌더 삭제 · 비밀 변수
 # export, 그리고 사이드카 관측 자격(기동마다 만드는 API 비밀번호 · 토큰 둘 — 사례 30 – 35 는
-# lib/start_api_pass_cases.sh).
+# lib/start_api_pass_cases.sh)과 응답기 모드(토큰 집합 모드 판정 · 생성 셋 ·
+# 응답기 파일 · 정지 정리 — 사례 42 – 50 은 lib/start_ingest_auth_cases.sh).
 #
 # bin/start-media.sh · bin/stop-media.sh 를 빈 환경(env -i)에서 돌린다. PATH 맨
 # 앞에는 가짜 docker · chown(test/start_fakebin — argv 와 환경을 전부 기록)과
@@ -37,6 +38,8 @@ source "${TEST_DIR}/lib/render.sh"
 source "${TEST_DIR}/lib/start_api_pass_cases.sh"
 # shellcheck source=lib/stop_guard_cases.sh
 source "${TEST_DIR}/lib/stop_guard_cases.sh"
+# shellcheck source=lib/start_ingest_auth_cases.sh
+source "${TEST_DIR}/lib/start_ingest_auth_cases.sh"
 
 readonly COMPOSE_TEMPLATE="${MEDIA_HOST_DIR}/compose.yml.tmpl"
 readonly MTX_TEMPLATE="${TEST_DIR}/mediamtx.test.yml.tmpl"
@@ -53,7 +56,7 @@ readonly API_PASS_NAME='mtx_api_pass'
 readonly API_PASS_PATTERN='^[0-9a-f]{64}$'
 # 우회 플래그로 읽힐 문자열(대소문자 무시).
 readonly BYPASS_PATTERN='skip|bypass|no_prereq|prereq=0'
-readonly CASE_COUNT=41
+readonly CASE_COUNT=50
 
 #######################################
 # up 호출 argv 를 한 줄로 낸다(인자 사이 공백). 호출이 하나가 아니면 실패.
@@ -827,6 +830,23 @@ main() {
     stop::case_signal_during_fallback
   harness::run_case 40 'stop — 끝나지 않는 폴백 ps → 상한 뒤 FAIL · 렌더 삭제' \
     stop::case_fallback_bounded
+  harness::run_case 42 '응답기 모드 — 렌더 · 응답기 파일 · 소유 · 비밀 노출 0' \
+    auth_mode::case_success
+  harness::run_case 43 '모드 판정 표 — 옛 · 응답기 꼴만 받음' \
+    auth_mode::case_mode_table
+  harness::run_case 44 '@@@ 경계 — 토큰 자리만 바꿈' auth_mode::case_at_boundary
+  harness::run_case 45 '응답기 생성 셋 실패 → 기동 차단 · 잔여 0' \
+    auth_mode::case_generation_failure
+  harness::run_case 46 '응답기 파일 설치 실패 → 렌더 거부 · 잔여 0' \
+    auth_mode::case_install_failure
+  harness::run_case 47 '응답기 모드 상속 export 에도 비밀 노출 0' \
+    auth_mode::case_inherited_export
+  harness::run_case 48 '응답기 모드 재기동 — 새 값 · rename' \
+    auth_mode::case_rerun_fresh
+  harness::run_case 49 'stop — 응답기 비밀 · 임시 파일 삭제 · 상태 유지' \
+    auth_mode::case_stop_cleanup
+  harness::run_case 50 'stop — 응답기 비밀이 남으면 CLEANUP FAIL' \
+    auth_mode::case_stop_cleanup_fail
 
   if ! harness::summary "${CASE_COUNT}"; then
     exit 1
