@@ -468,8 +468,10 @@ func readEventsMismatch(t *testing.T, logs *logRecorder, protocol string, wantCo
 	return nil
 }
 
-// 거부된 read 는 실패 토큰 차례를 타지 않는다 — 판정 불가로 기억된 토큰과 같은 경로의 hls read 가 와도 재확인 칸을
-// 쓰지 않아, 바로 뒤 그 토큰의 publish 가 재확인을 받는다(resolve 1회 · 200).
+// 거부된 read 는 실패 토큰 차례를 타지 않는다 — 판정 불가로 기억된 토큰과 같은 경로의 hls read 가 와도 재확인 칸과
+// 그 토큰의 도착 시각을 건드리지 않아, 바로 뒤 그 토큰의 publish 가 재확인 칸을 받는다. publish 의 200 은 보지
+// 않는다 — 가짜 auth 는 실제 TCP 로 부르므로, 부하로 resolve 가 실패하면 차례와 무관한 401 이 나 거짓 실패가 된다.
+// 칸을 받았는지(recheck_wait 거절 없음 · 재확인 시각이 찍힘)만 본다.
 func TestHandlerReadDeniedSkipsTurn(t *testing.T) {
 	f := newHandlerFixture(t, fixtureOptions{})
 	f.auth.answerAll(answerUsable(10 * time.Millisecond))
@@ -479,11 +481,16 @@ func TestHandlerReadDeniedSkipsTurn(t *testing.T) {
 	if rr := f.serve(newAuthRequest(t, read)); rr.Code != http.StatusUnauthorized {
 		t.Fatalf("hls read on a remembered token's path = %d, want 401", rr.Code)
 	}
-	if rr := f.publish(t, testTokenA, testConnID(2)); rr.Code != http.StatusOK {
-		t.Errorf("publish of the remembered token right after an hls read = %d, want 200 (the read must not take the recheck slot)", rr.Code)
+	if at := lastRecheckOf(f.h.failed); !at.IsZero() {
+		t.Errorf("recheck slot time after an hls read = %v, want zero (the read must not take the recheck slot)", at)
 	}
-	if n := f.auth.callCount(); n != 1 {
-		t.Errorf("fake auth calls = %d, want 1 (the publish's recheck only)", n)
+	if e, ok := entryOf(f.h.failed, testTokenA); !ok || !e.arrivedAt.IsZero() {
+		t.Errorf("remembered entry after an hls read = %+v (found %t), want found with zero arrivedAt (the read must not arrive on the turn)", e, ok)
+	}
+	rr := f.publish(t, testTokenA, testConnID(2))
+	reasons := publishDeniedReasons(t, f.logs)
+	if taken := !lastRecheckOf(f.h.failed).IsZero(); reasons[reasonRecheckWait] != 0 || !taken {
+		t.Errorf("publish of the remembered token right after an hls read: recheck_wait denials = %d, recheck slot taken = %t, want 0 and true; publish code = %d, denial reasons = %v, fake auth calls = %d", reasons[reasonRecheckWait], taken, rr.Code, reasons, f.auth.callCount())
 	}
 }
 
