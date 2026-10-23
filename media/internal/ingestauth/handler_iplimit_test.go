@@ -257,7 +257,8 @@ func TestHandlerIPLimitSustainedFlood(t *testing.T) {
 	}
 }
 
-// H8 — api · read 행은 한도와 무관하다(설계 2-1 의 14).
+// H8 — api · read 행은 한도와 무관하다(설계 2-1 의 14). 한도에 걸린 IP 의 srt read 는 200, hls read 는 한도 거절이
+// 아니라 read 거부(401 · read_denied)다.
 func TestHandlerIPLimitIgnoresAPIAndRead(t *testing.T) {
 	f := newIPLimitFixture(t)
 	f.publishStatuses(t, testAttackerIP, testTokenA, testIPBurst+1)
@@ -265,9 +266,36 @@ func TestHandlerIPLimitIgnoresAPIAndRead(t *testing.T) {
 		t.Errorf("api from SelfIP while a publisher is limited = %d, want 200", rr.Code)
 	}
 	read := publishBody(testTokenA, testConnID(9999))
-	read.IP, read.Action = testAttackerIP, "read"
+	read.IP, read.Action, read.Protocol = testAttackerIP, "read", "srt"
 	if rr := f.serve(newAuthRequest(t, read)); rr.Code != http.StatusOK {
-		t.Errorf("read from the limited IP = %d, want 200", rr.Code)
+		t.Errorf("srt read from the limited IP = %d, want 200", rr.Code)
+	}
+	limitedBefore := len(handlerEvents(t, f.logs, "ingestauth_publish_denied"))
+	read.Protocol = "hls"
+	if rr := f.serve(newAuthRequest(t, read)); rr.Code != http.StatusUnauthorized {
+		t.Errorf("hls read from the limited IP = %d, want 401", rr.Code)
+	}
+	if n := len(handlerEvents(t, f.logs, "ingestauth_publish_denied")) - limitedBefore; n != 0 {
+		t.Errorf("publish_denied events for an hls read from the limited IP = %d, want 0 (read 거부는 한도 행이 아니다)", n)
+	}
+	if n := len(handlerEvents(t, f.logs, "ingestauth_read_denied")); n != 1 {
+		t.Errorf("read_denied events for an hls read from the limited IP = %d, want 1", n)
+	}
+}
+
+// 거부된 read 는 한도를 세지 않는다 — 한 IP 의 hls read 를 BURST 보다 많이 보낸 뒤에도 그 IP 의 publish 는 BURST 번
+// 모두 허용된다.
+func TestHandlerIPLimitSkipsDeniedRead(t *testing.T) {
+	f := newIPLimitFixture(t)
+	read := publishBody(testTokenA, testConnID(9999))
+	read.IP, read.Action, read.Protocol = testAttackerIP, "read", "hls"
+	for i := range 2 * testIPBurst {
+		if rr := f.serve(newAuthRequest(t, read)); rr.Code != http.StatusUnauthorized {
+			t.Fatalf("hls read %d = %d, want 401", i, rr.Code)
+		}
+	}
+	if ok, denied := f.publishStatuses(t, testAttackerIP, testTokenA, testIPBurst); ok != testIPBurst || denied != 0 {
+		t.Errorf("publishes after %d hls reads from the same IP = %d ok, %d denied, want all %d ok", 2*testIPBurst, ok, denied, testIPBurst)
 	}
 }
 

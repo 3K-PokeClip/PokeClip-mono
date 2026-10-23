@@ -42,7 +42,7 @@
 | 6 | 읽는 본문 필드 | `ip` · `action` · `path` · `protocol` · `id`. `user` · `password` 는 `action=api` 일 때만 해석한다. `token` · `query` · `userAgent` 등 나머지는 버린다 | `request.go:34-61,98-103` |
 | 7 | `ip` 필드 | IP 로 해석되지 않으면 400(`bad_ip`). **쓰임은 둘**이다 — `action=api` 행에서 SelfIP 와 견주고, publish 행에서 IP별 시도 한도의 키로 쓴다(아래 15). publish 로그에는 한도 사건에서만 싣는다(1-9 의 4) | `request.go` `readRequest` · `invalidIP` · `handler.go` `api` · `publish.go` `ipAdmit` · `ipTake` |
 | 8 | `id` 필드(연결 id) | null 이면 빈 값. 아니면 소문자 UUID 꼴이어야 하고 아니면 400(`bad_conn_id`) | `request.go:30-32,84-90` |
-| 9 | 행 가르기 | `action=api` → api 행 · `action=read` → 무조건 200 · **그 밖의 모든 action(playback · metrics · pprof 포함)은 publish 행으로 간다** | `handler.go:185-202` |
+| 9 | 행 가르기 | `action=api` → api 행 · `action=read` → read 행(`protocol` 이 정확히 `srt` 면 200, 그 밖은 401 — 1-2 의 2 · 8) · **그 밖의 모든 action(playback · metrics · pprof 포함)은 publish 행으로 간다**. read 행은 4C · 실패 토큰 차례 · IP 한도(15)를 타지 않는다 | `handler.go` `ServeHTTP` · `read` |
 | 10 | publish 형식 조건 | `action=publish` ∧ `protocol=srt` ∧ `path` 가 토큰 꼴(26자 Crockford 대문자) ∧ `id` 있음. 하나라도 아니면 401 | `publish.go:99-113` |
 | 11 | publish 판정 순서 | 형식 → **IP 한도 검사** → 거부 목록 → 예산 → 요청 ctx → 실패 토큰 차례 → **IP 한도 차감**(그 사건 로그를 쓰다 resolve 시한을 넘겼으면 resolve 없이 401 — 요청 ctx 행과 같은 갈래) → 4C resolve → 기억 갱신 → 연결 기록 추가 → 거부 목록 마지막 확인 → 200. 위에서 처음 맞는 행이 답이다. 이 순서는 4(출발지 403) · 14(호출자 Basic 401)를 지나 본문을 읽은 뒤다 | `publish.go` `publish` · `allowPublish` |
 | 12 | 예산 | auth 를 부르느라 MediaMTX 경로 관리자를 붙잡는 시간의 토큰 버킷: 한도 1.375초 · 초당 0.5초 보충. 출발지 · 호출자 Basic 검사(4 · 14)를 지난 요청마다 걸린 시간을 뺀다. api 행은 잔액 검사(`allow`)에 걸리지 않지만, 걸린 시간은 다른 요청처럼 차감된다 | `ingestauth/holdbudget.go` `holdBurst` · `holdRefill` · `handler.go` `layers` · `api` |
@@ -55,12 +55,13 @@
 | # | 상황 | 응답 | 근거 |
 |---|---|---|---|
 | 1 | publish 허용 | `200` · `Content-Type: application/json` · `Cache-Control: no-store` · 본문 `{"srtPassphrase":"<원문>"}`. passphrase 원문이 나가는 **유일한 자리** | `publish.go:225-241` · `ingestauth/doc.go:8-10` |
-| 2 | api 허용(출발지 = SelfIP ∧ 자격 일치) · read | `200` 빈 본문 | `handler.go:196-198,207-211` |
+| 2 | api 허용(출발지 = SelfIP ∧ 자격 일치) · read(`protocol=srt` — 소문자 정확히) | `200` 빈 본문 · 이벤트 없음(read) | `handler.go` `api` · `read` |
 | 3 | api 거부 · publish 의 모든 거부 · 호출자 Basic 실패(1-1 의 14) | `401` 본문 없음(MediaMTX 가 비-2xx 본문을 오류 문구에 싣기 때문) | `handler.go` `ServeHTTP` · `api` · `publish.go` `denyPublish` · `callerauth.go` `denyUnauthenticatedCaller` |
 | 4 | 본문 불량(크기 · JSON · ip · id) | `400` 본문 없음 | `handler.go:186-190` |
 | 5 | 호출자 불일치 | `403` 본문 없음 | `handler.go:177-179` |
 | 6 | 바깥 가드가 먼저 끝냄 | `503` 본문 `timeout`. 보통은 resolve 시한(가드보다 50ms 앞)이 먼저라 401 이다 | `handler.go:131` · `publish.go:88-97` |
 | 7 | publish 401 의 reason(닫힌 집합) | `not_publish` · `not_srt` · `not_token` · `no_conn_id` · `ip_limited` · `denylist_unreadable` · `denylisted` · `budget_exhausted` · `recheck_wait` · `undecided` · `malformed` · `not_found` · `revoked` · `rejected` · `connlog_unwritable` · `internal_error`. `ip_limited` 만 DEBUG 로 내고 auth 게이지(`denied_during`)에 세지 않는다 | `publish.go` 의 reason 상수 · `ipAdmit` |
+| 8 | read 거부(`protocol` 이 `srt` 가 아님 — `hls` · `webrtc` · `rtsp` · `rtmp` · 빈 값 · 대문자 `SRT` 포함) | `401` 본문 없음 + DEBUG `ingestauth_read_denied`(1-9 의 2). 정상 CDN 시청은 MediaMTX 가 인증을 건너뛰어(Bearer 일치 세션) 여기 오지 않는다 — Bearer 없는 LL-HLS 읽기를 막는 행이다(M15 계획 0-1 · kty 결정 1, 2026-10-23) | `handler.go` `read` |
 
 ### 1-3. 응답기 → auth (4C resolve)
 
@@ -163,7 +164,7 @@ JSON 한 줄씩 stdout(`slog`). 이벤트 이름은 `ingestauth_*`.
 | # | 구분 | 내용 | 근거 |
 |---|---|---|---|
 | 1 | 남는 것(허용) | `publish_allowed`: `path`(토큰) · `conn_id` · `user_id` · `resolve_ms` | `publish.go:201-208` |
-| 2 | 남는 것(거부) | `publish_denied`: `path`(**토큰 꼴일 때만**) · `conn_id` · `reason` · `resolve_status` · `resolve_ms` · `wait`(`reason=ip_limited` 은 DEBUG 이고 `path` · `conn_id` · `reason` 만). `caller_denied`(`remote_ip` = TCP 피어) · `caller_unauthenticated`(WARN — `remote_ip` = TCP 피어 · `reason` = `missing` · `malformed` · `mismatch`, 자격 값 없음) · `api_denied`(`ip` = 본문 ip) · `request_invalid`(reason 만). **IP 한도 사건**(WARN — 에피소드마다 한 줄): `ip_limited`(`ip` = 키 문자열, IPv6 는 /64 접두 · `ip_kind` = public · private · loopback · other · `burst` · `interval_ms`) · `ip_limit_released`(`ip` · `denied` · `limited_for_ms` — 통이 다시 다 찬 뒤 처음 보거나 정리할 때) · `ip_limit_released_summary`(`count` · `denied_total` — 정리 한 번에 32개를 넘은 몫) · `ip_limit_full` / `ip_limit_recovered`(`max_entries` · `state_seq` — 상한 전이의 순번. 로그 줄의 차례는 전이의 차례와 다를 수 있어 가장 큰 순번이 지금 상태다) · `ip_limit_unkeyed`(`ip_kind`). 토큰 · 연결 id · passphrase 는 싣지 않는다 | `publish.go` `denyPublish` · `identityAttrs` · `handler.go` `denyForeignCaller` · `api` · `callerauth.go` `denyUnauthenticatedCaller` · `request.go` 의 `invalid*` 상수 · `iplimit.go` `logEvents` |
+| 2 | 남는 것(거부) | `publish_denied`: `path`(**토큰 꼴일 때만**) · `conn_id` · `reason` · `resolve_status` · `resolve_ms` · `wait`(`reason=ip_limited` 은 DEBUG 이고 `path` · `conn_id` · `reason` 만). `caller_denied`(`remote_ip` = TCP 피어) · `caller_unauthenticated`(WARN — `remote_ip` = TCP 피어 · `reason` = `missing` · `malformed` · `mismatch`, 자격 값 없음) · `api_denied`(`ip` = 본문 ip) · `request_invalid`(reason 만 — `too_large` 는 **DEBUG**, 그 밖 reason 은 WARN) · `read_denied`(**DEBUG** — `protocol` 만, IP 없음). 두 DEBUG 줄은 공격 입력에서만 생기고 로그 쓰기 시간도 예산에서 빠지므로(`layers` 의 차감) `ip_limited` 전례를 따른다. **IP 한도 사건**(WARN — 에피소드마다 한 줄): `ip_limited`(`ip` = 키 문자열, IPv6 는 /64 접두 · `ip_kind` = public · private · loopback · other · `burst` · `interval_ms`) · `ip_limit_released`(`ip` · `denied` · `limited_for_ms` — 통이 다시 다 찬 뒤 처음 보거나 정리할 때) · `ip_limit_released_summary`(`count` · `denied_total` — 정리 한 번에 32개를 넘은 몫) · `ip_limit_full` / `ip_limit_recovered`(`max_entries` · `state_seq` — 상한 전이의 순번. 로그 줄의 차례는 전이의 차례와 다를 수 있어 가장 큰 순번이 지금 상태다) · `ip_limit_unkeyed`(`ip_kind`). 토큰 · 연결 id · passphrase 는 싣지 않는다 | `publish.go` `denyPublish` · `identityAttrs` · `handler.go` `denyForeignCaller` · `api` · `callerauth.go` `denyUnauthenticatedCaller` · `handler.go` `logInvalid` · `read` · `request.go` 의 `invalid*` 상수 · `iplimit.go` `logEvents` |
 | 3 | 남는 것(상태) | `started`(`listen` · `caller_ip` · `caller_auth`(`basic` · `off`) · `auth_host_kind` · `auth_port` · `auth_channel`(`resolve-token` · `internal-token`) · `deadline_ms` · `ip_limit` · `ip_limit_burst` · `ip_limit_interval_ms` · `health`) · `caller_basic_off`(WARN — 명시 끔으로 기동할 때마다 한 줄. prod 에서 보이면 설정 누락) · `denylist_changed`(개수만) · `denylist_error` / `recovered` · `connlog_rotated`(bytes) · `failed_cleared` · cut 출력 한 줄(`path` · 출처별 개수 · `kicked` …) | `serve.go` `serve`(`ingestauth_started` · `caller_basic_off`) · `denylist.go` `merge` · `setFailing` · `clearFailing` · `connlog.go` `rotateIfFull` · `cmd/ingest-auth/cut.go` `writeCutLine` |
 | 3b | 남는 것(장애 · 복구) | `auth_degraded`(ERROR — `reason` · `status`: 판정 불가가 처음 선 때) · `auth_recovered`(ERROR — `down_for` · `denied_during` · `budget_denied` · `recheck_denied`) · `connlog_error`(ERROR — `error`: 기록 쓰기 실패) · `connlog_recovered`(ERROR). healthcheck 는 auth 상태를 보지 않으므로 auth 장애의 유일한 신호다 | `ingestauth/gauge.go:43-74,90-101` |
 | 4 | 남지 않는 것 | passphrase 원문(200 본문 한 자리만) · 4C 출입증 · API 비밀번호 · 호출자 Basic 자격(`Authorization` 원문 포함) · 비밀 파일의 경로 · 거부 목록 줄 내용 · 토큰 꼴이 아닌 경로 · publish 요청의 `user` / `password` · **publish 한 송출자의 IP(IP 한도 사건만 예외 — 위 2, 결정 119차 Q2)** · 4C URL 의 주소(부류 · 포트만) · 에러 문구의 환경 변수 값(변수 이름만) | `ingestauth/doc.go` 패키지 주석 · `request.go` `mtxRequest` · `config.go` `authTarget` · `main.go` 패키지 주석 |
@@ -183,8 +184,8 @@ Basic · Control API 자격과 200 본문의 passphrase 가 암호화 없이 오
 `MTX_API_URL` 은 http 만 받는다(1-4 의 4). 이 구간을 바깥에서 엿볼 수 없게 가두는 것은 배치 몫이다 —
 dev 는 `internal` 제어망, prod 후보는 같은 netns 루프백(D1 · 2절 후보값 표 1).
 
-**1절 표 행 수**: 1-1 15행 · 1-2 7행 · 1-3 8행 · 1-4 7행 · 1-5 18행 · 1-6 7행 · 1-7 6행 ·
-1-8 4행 · 1-9 6행(3b 포함) = **78행**.
+**1절 표 행 수**: 1-1 15행 · 1-2 8행 · 1-3 8행 · 1-4 7행 · 1-5 18행 · 1-6 7행 · 1-7 6행 ·
+1-8 4행 · 1-9 6행(3b 포함) = **79행**.
 
 ---
 
@@ -199,13 +200,13 @@ prod 기대 = 계획 M2(Media 상자 compose) · M15(송출 인증 반영) · O8
 | D3 | Control API 인증: 계획은 `api` 를 응답기에서 제외, 실물은 응답기 경유 | 불필요 | 제외하면 Control API 무인증 |
 | D4 | 비밀 전달: 계획은 tmpfs 파일 경로, 기존 dev 가동판은 환경 변수만 | **필요** — 더했다(트랙 A, 1-5 의 6 · 9 · 13) | 기존 가동판엔 `_FILE` 입력이 없었고 이미지에 셸이 없다 |
 | D5 | 송출자 `ip`: 계획이 응답기 요청에서 검증하려는 것을 응답기는 안 남긴다 | 선택 | publish 판정 · 로그에 ip 를 쓰지 않는다 |
-| D6 | action 처리: 계획의 제외 목록에 `playback` 이 없다 | 불필요 | 그 밖의 action 은 전부 401 |
+| D6 | action 처리: 계획의 제외 목록에 `playback` 이 없다 · `read` 를 빼면 Bearer 없는 LL-HLS 가 열린다 | read 판정 변경(M15 c0 — SRT 만 200) | 그 밖의 action 은 전부 401 · 제외는 `playback` 하나 |
 | D7 | 거부 목록 · 상태의 저장 자리 | 불필요 | 상자 교체 시 거부 목록 소실 = 신호 없이 풀림 |
 | D8 | 재시작 단위: 계획 문구 vs M2 브랜치 vs dev 운영 절차 | 불필요 | 응답기만 다시 시작할 수 있어야 한다 |
 | D9 | 4C 호출 경로 · 인증 방식 · 출발지 잠금 | 창구 헤더를 설정으로 고르게 더했다(트랙 A, 1-3 의 2 · 1-5 의 15). auth 쪽은 3번 | 계약이 「운영 Media 경로 미정」, prod auth 의 `native` 와 전용 토큰 창구는 양립 불가 |
 | D10 | 시한 · 예산 상수가 환경 변수로 안 열린다 | 측정 뒤 판단 | prod 의 auth 왕복이 dev 와 다를 수 있다 |
 | D11 | compose 자리가 비어 있다(포트 · 볼륨 · healthcheck · 기동 순서) | 불필요 | M15 c2 가 채울 목록 |
-| D12 | prod MediaMTX 에 SRT 송출 · 읽기 경로 잠금과 `overridePublisher: no` 가 없다 | 불필요(MediaMTX 설정) | `read` 는 응답기가 늘 200 이라 SRT 읽기 방어는 이 잠금뿐 |
+| D12 | prod MediaMTX 에 SRT 송출 · 읽기 경로 잠금과 `overridePublisher: no` 가 없다 | 불필요(MediaMTX 설정) | SRT `read` 는 응답기가 200 이라 SRT 읽기 방어는 이 잠금뿐 |
 
 ### D1. 연결 꼴 — 루프백(같은 netns) vs 제어망
 
@@ -277,15 +278,15 @@ prod 기대 = 계획 M2(Media 상자 compose) · M15(송출 인증 반영) · O8
 - **계획이 가정한 것**: `authHTTPExclude` 에 `api` · `metrics` · `pprof`. read · playback 은 「c2 착수 때 포크 소스로 확인」(G17, 계획 1553 · 1924행).
 - **실물(코드로 확정)**: 응답기는 `api` 와 `read` 를 가르고 **나머지 action 은 전부 publish 행으로 보내 `not_publish` 401 로 거부**한다(`handler.go:192-201` · `publish.go:103-104`). 따라서:
   - `playback` 을 제외하지 않으면 9996 재생 서버가 401 이다(계획의 제외 목록에 없음). 계획 c6 은 루프백 한정 playback 내부 사용자 항목을 따로 두지만 `authMethod: http` 에서는 내부 사용자 목록이 쓰이지 않는다(계획 1553행 · `mediamtx.demo.yml.tmpl:46-48`).
-  - `read` 는 응답기가 **제외 여부와 무관하게 늘 200** 이다(`handler.go:195-198`). 제외하지 않으면 HLS 요청마다 응답기를 지나고(출발지 검사를 지난 요청의 시간이 차감된다 — `handler.go:140`), dev 는 그래서 제외한다. **SRT 읽기도 이 `read` 이므로, 제외하든 안 하든 응답기는 SRT 읽기를 막지 않는다.**
-  - **필수 전제 — 경로 잠금(D12)**: `read` 를 제외(또는 응답기가 무조건 200)해도 안전한 것은 MediaMTX 의 `srtReadPassphrase` 가 SRT 읽기를 막기 때문이다. prod 설정에 이 잠금이 없으면 공개 토큰을 아는 누구나 SRT read 로 원 스트림을 무암호로 읽는다. 그러므로 K4 의 `read` 제외 추천은 **D12 의 설정 이행이 선행**일 때만 성립한다. 이것은 응답기 코드가 아니라 MediaMTX 설정 변경이다.
+  - `read` 는 응답기가 **`protocol=srt` 만 200, 그 밖(HLS 등)은 401** 이다(M15 c0 — kty 결정 1, 2026-10-23 · `handler.go` `read`). 그 전에는 늘 200 이었다. 그래서 `authMethod: http` 에서 `read` 를 제외하거나 늘 200 을 주면 Bearer 없는 LL-HLS 읽기가 열린다 — CDN Bearer 와 같은 세션만 MediaMTX 가 인증을 건너뛰고(SkipAuth), 그 밖의 HLS 요청은 이 인증을 탄다(M15 계획 0-1 — 포크 `hls/http_server.go` · `session.go` · `auth/manager.go` 판독). 제외하지 않은 `read` 는 요청마다 응답기를 지나 그 처리 시간이 예산에서 빠진다(`handler.go` `layers` 의 차감 — 거부 줄이 DEBUG 인 까닭). dev 는 응답기 판정과 무관하게 `read` 를 제외한다(동작 불변). **SRT 읽기는 응답기가 200 이므로 막지 않는다.**
+  - **필수 전제 — 경로 잠금(D12)**: SRT `read` 를 응답기가 200 으로 답해도 안전한 것은 MediaMTX 의 `srtReadPassphrase` 가 SRT 읽기를 막기 때문이다. prod 설정에 이 잠금이 없으면 공개 토큰을 아는 누구나 SRT read 로 원 스트림을 무암호로 읽는다. 그러므로 SRT read 의 200 은 **D12 의 설정 이행이 선행**일 때만 성립한다. 이것은 응답기 코드가 아니라 MediaMTX 설정 변경이다.
   - `metrics` · `pprof` 도 제외하지 않으면 401 이다. 계획 c6 은 둘 다 `no` 로 명시하므로 prod 에서는 켜져 있을 때만 문제다.
   - `protocol != srt` 와 토큰 꼴이 아닌 `path` 의 publish 는 전부 401 이다. prod 계획 c6 은 `rtmp: no` 로 바꾸고 이름을 박은 시험 경로(`pokeclip-m4-test`)를 지우며 경로는 `all_others` 만 남긴다(계획 860~877행). 그래서 비-SRT 송출은 애초에 열려 있지 않고, 토큰 꼴이 아닌 경로의 송출은 응답기가 `not_token` 으로 거부한다. 루프백 시험 송출의 경로도 4C 로 풀리는 등록 키의 토큰 꼴이어야 한다 — 계획 c5 시험 송출 경로를 이에 맞춘다.
   - 포크의 action 이름 체계는 코드 주석(`request.go:13`)이 가리킨다. `playback` 이 `authHTTPExclude` 에서 쓰이는 이름인지는 계획이 `api` · `metrics` · `pprof` 를 같은 목록에 쓰는 것으로 미루어 같은 체계이나 이 조사에서 포크 소스를 열어 보지 않았다(미확인).
 - **선택지**:
   - (가) `authHTTPExclude` = `read` · `playback`(+ `metrics` · `pprof` 가 켜져 있으면 그것들, `api` 는 D3). **단 D12 의 잠금 이행을 같은 PR 의 전제로 한다.** 장: 코드 불변, dev 와 같은 원리. 단: playback 이 무인증이 되어, 재생 접근 통제는 nginx 의 `path` 대조(`map`)와 설계 3-3 의 루프백 한정 수단에 의존한다.
   - (나) 응답기 코드가 playback 을 판정하도록 확장. 장: 한 곳에서 통제. 단: 응답기 판정표(설계 2-4)에 없는 새 행, 시험 · 설계 변경. 권하지 않는다.
-- **응답기 코드 변경**: (가) 없음.
+- **응답기 코드 변경**: (가) 자체는 없음. 단 K4 가 `read` 를 제외 목록에서 뺐으므로(2026-10-23) read 판정을 SRT 만 200 으로 바꿨다(M15 c0).
 
 ### D7. 거부 목록 · 상태 디렉터리의 저장 자리
 
@@ -349,7 +350,7 @@ M2 브랜치의 응답기 자리는 이미지 · netns · `depends_on` · `resta
 ### D12. prod MediaMTX 에 SRT 경로 잠금이 없다 (D6 의 필수 전제)
 
 - **계획이 가정한 것**: c6 변경표(계획 860~877행)와 계획 전체에 `srtPublishPassphrase` · `srtReadPassphrase` · `overridePublisher` 가 **0건**이다. prod 의 송출 통제는 M15 에서 응답기로 바꾸고, 읽기는 CDN 모드 Bearer 로만이라고 적혀 있다.
-- **실물**: dev 템플릿은 `pathDefaults` 에 둘을 둔다 — `srtPublishPassphrase`(응답기의 2xx 에 값이 없으면 이 값으로 판정돼 거부 = 빈 응답 방어), `srtReadPassphrase`(SRT 읽기 잠금 — 경로 이름이 공개 토큰이라 막지 않으면 원 스트림을 무암호로 읽는다), `overridePublisher: no`(passphrase 를 아는 둘째 SRT 가 송출을 탈취하고 DVR 을 리셋하는 것을 막는다). 값은 렌더마다 새로 만들고 저장소 · `.env` · 로그 어디에도 없다(`mediamtx.demo.yml.tmpl:56-61` · `render.sh`). prod 바탕 `infra/compose/mediamtx.yml:90-95` 에는 이 셋이 없다. 응답기는 `read` 를 늘 200 으로 답하므로(`handler.go:195-198`) SRT 읽기의 방어는 **이 잠금뿐**이다. 포크 `v1.21.1-pokeclip.2` 의 SRT 읽기 경로는 값이 비면 통과시킨다고 검수가 확인했다(`internal/servers/srt/conn.go` — 이 조사에서 직접 열지 않았다).
+- **실물**: dev 템플릿은 `pathDefaults` 에 둘을 둔다 — `srtPublishPassphrase`(응답기의 2xx 에 값이 없으면 이 값으로 판정돼 거부 = 빈 응답 방어), `srtReadPassphrase`(SRT 읽기 잠금 — 경로 이름이 공개 토큰이라 막지 않으면 원 스트림을 무암호로 읽는다), `overridePublisher: no`(passphrase 를 아는 둘째 SRT 가 송출을 탈취하고 DVR 을 리셋하는 것을 막는다). 값은 렌더마다 새로 만들고 저장소 · `.env` · 로그 어디에도 없다(`mediamtx.demo.yml.tmpl:56-61` · `render.sh`). prod 바탕 `infra/compose/mediamtx.yml:90-95` 에는 이 셋이 없다. 응답기는 SRT `read` 를 200 으로 답하므로(`handler.go` `read`) SRT 읽기의 방어는 **이 잠금뿐**이다. 포크 `v1.21.1-pokeclip.2` 의 SRT 읽기 경로는 값이 비면 통과시킨다고 검수가 확인했다(`internal/servers/srt/conn.go` — 이 조사에서 직접 열지 않았다).
 - **실패 시나리오(정적 분석)**: O8a 로 SRT 를 공개한 뒤 공개 토큰을 아는 사용자가 SRT read 로 접속하면 CDN 접근 통제를 거치지 않고 원 스트림을 읽는다. 잠금이 없고 `overridePublisher` 기본값(허용)이면 송출 탈취 · DVR 리셋도 가능하다(passphrase 를 알아야 하므로 D2 의 오라클과 연결된다).
 - **선택지**:
   - (가) M15 c2 가 `mediamtx.yml.tmpl` 에 세 줄을 옮긴다: `pathDefaults` 의 `srtPublishPassphrase` · `srtReadPassphrase`(값은 시작 스크립트가 부팅마다 무작위로 만든 tmpfs 렌더 — 고정 토큰 치환이 하나 더 늘어 M2 c4 의 「토큰 1개 치환 · 잔여 0」 단언도 갱신) + `overridePublisher: no`. `pathDefaults` 가 `all_others` 에 상속되는지는 바탕 설정의 주석이 확인했다고 적고 있다(`infra/compose/mediamtx.yml:99`). 장: dev 와 같은 원리, 코드 변경 0. 단: 렌더 · 시험이 늘어난다.
@@ -382,7 +383,7 @@ M2 브랜치의 응답기 자리는 이미지 · netns · `depends_on` · `resta
 |---|---|---|---|---|
 | K1 · K2 | 호출자 구별 · Control API 인증 | **K1 = (라) Basic 자격** — `authHTTPAddress` URL 자격으로 응답기가 호출자를 검증(위 D2 — 포크 실측으로 **확인됨**). 잔여 위험: nginx 침해 → 막힘 / 사이드카 침해 → Basic 자격을 설정 조회로 읽고 전 계정 passphrase 가능(D2). **K2 = (나)** — `api` 는 응답기 경유(`authHTTPExclude` 에 넣지 않는다) | **Basic 검사 추가** — 트랙 A 가 더했다(1-1 의 14) | D2 · D3 |
 | K3 | 응답기 비밀 입력 | **(가) `_FILE` 입력 추가.** 받을 비밀은 **셋**: (1) 4C resolve 토큰 (2) Control API 비밀번호(`MTX_API_PASS` — 응답기 · 사이드카가 공유) (3) Basic 자격(MediaMTX → 응답기). 값 출처는 D4 · K1 에 따른다(resolve 토큰 = Secrets Manager, 나머지 둘 = 시작 스크립트가 부팅마다 생성한 tmpfs 렌더 — D4 의 「값의 출처」 조건 하에) | **필요** — 트랙 A 가 더했다(1-5 의 6 · 9 · 13) | D4 |
-| K4 | `authHTTPExclude` | **(가) `read` · `playback`** (+ 켜진 `metrics` · `pprof`). **D12 의 SRT 경로 잠금 이행을 같은 PR 의 전제로** | 없음 | D6 · D12 |
+| K4 | `authHTTPExclude` | **`playback` 하나**(kty 결정 1, 2026-10-23 — 2026-10-20 의 (가) `read` · `playback` 을 대체). `read` 를 빼면 Bearer 없는 LL-HLS 읽기가 열리기 때문이다(M15 계획 0-1). `metrics` · `pprof` 는 넣지 않는다 — prod 설정이 둘 다 `no` 다(`infra/media-host/mediamtx.yml.tmpl`). **D12 의 SRT 경로 잠금 이행을 같은 PR 의 전제로** | read 판정 변경(M15 c0 — SRT 만 200, 1-2 의 2 · 8) | D6 · D12 |
 | K5 | 거부 목록 정본 | **(나) 상자 밖 정본 + 부팅 시 렌더**(없거나 비면 기동 차단) | 없음 | D7 |
 | K6 | 4C 출발지 잠금 단위 | **(가) 고정 주소 `/32`** — 선행 조건(3번 합의) 뒤 | 없음 | D9 |
 | K7 | 송출자 `ip` 확인 수단 | **(가)** c1 의 가짜 응답기 + MediaMTX 연결 로그 | 없음 | D5 |

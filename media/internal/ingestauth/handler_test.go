@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -157,7 +158,7 @@ func TestHandlerChecksCaller(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newHandlerFixture(t, fixtureOptions{})
-			r := newAuthRequest(t, mtxAuthBody{IP: testPublisherIP, Action: "read"})
+			r := newAuthRequest(t, mtxAuthBody{IP: testPublisherIP, Action: "read", Protocol: "srt"})
 			r.RemoteAddr = tc.remoteAddr
 			rr := f.serve(r)
 			if rr.Code != tc.wantCode {
@@ -192,10 +193,14 @@ func TestHandlerChecksCaller(t *testing.T) {
 }
 
 // 본문을 받지 못하면 400(본문 없음)이고 request_invalid 의 reason 은 닫힌 집합이다(판정표 둘째 행). 16 KiB 를 넘는
-// 본문 · JSON 객체가 아님 · 필드 꼴 틀림(ip 해석 실패 · id 가 소문자 UUID 가 아님) · 읽기 실패.
+// 본문 · JSON 객체가 아님 · 필드 꼴 틀림(ip 해석 실패 · id 가 소문자 UUID 가 아님) · 읽기 실패. 등급은 too_large 만
+// DEBUG 이고 나머지는 WARN 이다 — too_large 는 Bearer 없는 HLS 요청이 쿼리 · User-Agent 를 JSON 이 늘려 쓰는 글자로
+// 채워야만 생기므로 공격이 만드는 줄이고(ip_limited 전례), 나머지는 MediaMTX 와의 계약이 깨졌다는 신호다.
 func TestHandlerRejectsInvalidRequest(t *testing.T) {
 	big := publishBody(testTokenA, testConnID(1))
 	big.UserAgent = strings.Repeat("x", 16<<10)
+	// json.Marshal 은 < · > · & 를 \u003c 꼴 6바이트로 쓴다 — 원문 3,000자가 본문에서 18,000바이트가 된다.
+	expanded := mtxAuthBody{IP: testPublisherIP, Action: "read", Protocol: "hls", Query: strings.Repeat("&", 1000), UserAgent: strings.Repeat("<", 2000)}
 	upperID := strings.ToUpper(testConnID(0xabc)) // 16진 글자가 있어야 대문자 꼴이 소문자 꼴과 다르다
 	emptyID := ""
 	badIDBody := publishBody(testTokenA, testConnID(1))
@@ -206,24 +211,29 @@ func TestHandlerRejectsInvalidRequest(t *testing.T) {
 		name       string
 		body       any
 		wantReason string
+		wantLevel  string
 	}{
-		{name: "JSON_아님", body: "not json", wantReason: "malformed"},
-		{name: "JSON_배열", body: "[]", wantReason: "malformed"},
-		{name: "JSON_null", body: "null", wantReason: "malformed"},
-		{name: "빈_본문", body: "", wantReason: "malformed"},
-		{name: "필드_꼴_틀림", body: `{"ip":"198.51.100.7","action":5}`, wantReason: "malformed"},
-		{name: "뒤에_군더더기", body: `{"ip":"198.51.100.7","action":"read"} {}`, wantReason: "malformed"},
-		{name: "16KiB_초과", body: big, wantReason: "too_large"},
-		{name: "ip_해석_불가", body: mtxAuthBody{IP: "not-an-ip", Action: "read"}, wantReason: "bad_ip"},
-		{name: "ip_없음", body: mtxAuthBody{Action: "read"}, wantReason: "bad_ip"},
-		{name: "id_대문자", body: badIDBody, wantReason: "bad_conn_id"},
-		{name: "id_빈_문자열", body: emptyIDBody, wantReason: "bad_conn_id"},
+		{name: "JSON_아님", body: "not json", wantReason: "malformed", wantLevel: "WARN"},
+		{name: "JSON_배열", body: "[]", wantReason: "malformed", wantLevel: "WARN"},
+		{name: "JSON_null", body: "null", wantReason: "malformed", wantLevel: "WARN"},
+		{name: "빈_본문", body: "", wantReason: "malformed", wantLevel: "WARN"},
+		{name: "필드_꼴_틀림", body: `{"ip":"198.51.100.7","action":5}`, wantReason: "malformed", wantLevel: "WARN"},
+		{name: "뒤에_군더더기", body: `{"ip":"198.51.100.7","action":"read"} {}`, wantReason: "malformed", wantLevel: "WARN"},
+		{name: "16KiB_초과", body: big, wantReason: "too_large", wantLevel: "DEBUG"},
+		{name: "16KiB_초과_JSON_확장_글자", body: expanded, wantReason: "too_large", wantLevel: "DEBUG"},
+		{name: "ip_해석_불가", body: mtxAuthBody{IP: "not-an-ip", Action: "read"}, wantReason: "bad_ip", wantLevel: "WARN"},
+		{name: "ip_없음", body: mtxAuthBody{Action: "read"}, wantReason: "bad_ip", wantLevel: "WARN"},
+		{name: "id_대문자", body: badIDBody, wantReason: "bad_conn_id", wantLevel: "WARN"},
+		{name: "id_빈_문자열", body: emptyIDBody, wantReason: "bad_conn_id", wantLevel: "WARN"},
+	}
+	if raw := mustJSON(t, expanded); len(raw) <= 16<<10 {
+		t.Fatalf("Setup: the expanded body is %d bytes, want more than %d", len(raw), 16<<10)
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newHandlerFixture(t, fixtureOptions{})
 			rr := f.serve(newAuthRequest(t, tc.body))
-			if err := requestInvalidMismatch(t, f, rr, tc.wantReason); err != nil {
+			if err := requestInvalidMismatch(t, f, rr, tc.wantReason, tc.wantLevel); err != nil {
 				t.Errorf("auth request %s: %v", tc.name, err)
 			}
 		})
@@ -233,7 +243,7 @@ func TestHandlerRejectsInvalidRequest(t *testing.T) {
 		r := newAuthRequest(t, "")
 		r.Body = failingBody{}
 		rr := f.serve(r)
-		if err := requestInvalidMismatch(t, f, rr, "read_error"); err != nil {
+		if err := requestInvalidMismatch(t, f, rr, "read_error", "WARN"); err != nil {
 			t.Errorf("auth request whose body read fails: %v", err)
 		}
 	})
@@ -245,9 +255,9 @@ type failingBody struct{}
 func (failingBody) Read([]byte) (int, error) { return 0, errors.New("synthetic read failure") }
 func (failingBody) Close() error             { return nil }
 
-// requestInvalidMismatch 는 rr · 로그 · 가짜 auth 가 「400 · 본문 없음 · request_invalid 하나(WARN · wantReason) · auth
-// 호출 0」과 다른 점을 돌려준다. 같으면 nil 이다.
-func requestInvalidMismatch(t *testing.T, f *handlerFixture, rr *httptest.ResponseRecorder, wantReason string) error {
+// requestInvalidMismatch 는 rr · 로그 · 가짜 auth 가 「400 · 본문 없음 · request_invalid 하나(wantLevel · wantReason) ·
+// auth 호출 0」과 다른 점을 돌려준다. 같으면 nil 이다.
+func requestInvalidMismatch(t *testing.T, f *handlerFixture, rr *httptest.ResponseRecorder, wantReason, wantLevel string) error {
 	t.Helper()
 	var errs []error
 	if rr.Code != http.StatusBadRequest {
@@ -257,8 +267,8 @@ func requestInvalidMismatch(t *testing.T, f *handlerFixture, rr *httptest.Respon
 		errs = append(errs, fmt.Errorf("400 has a body of %d bytes, want none", rr.Body.Len()))
 	}
 	got := handlerEvents(t, f.logs, "ingestauth_request_invalid")
-	if len(got) != 1 || got[0].Level != "WARN" || got[0].Reason != wantReason {
-		errs = append(errs, fmt.Errorf("request_invalid events = %+v, want one WARN with reason %q", got, wantReason))
+	if len(got) != 1 || got[0].Level != wantLevel || got[0].Reason != wantReason {
+		errs = append(errs, fmt.Errorf("request_invalid events = %+v, want one %s with reason %q", got, wantLevel, wantReason))
 	}
 	if n := f.auth.callCount(); n != 0 {
 		errs = append(errs, fmt.Errorf("fake auth calls = %d, want 0", n))
@@ -299,7 +309,7 @@ func TestHandlerReadsCredentialsOnlyForAPI(t *testing.T) {
 			t.Fatalf("Setup: the api body does not carry the non-string user")
 		}
 		rr := f.serve(newAuthRequest(t, raw))
-		if err := requestInvalidMismatch(t, f, rr, "malformed"); err != nil {
+		if err := requestInvalidMismatch(t, f, rr, "malformed", "WARN"); err != nil {
 			t.Errorf("api request whose user is not a JSON string: %v", err)
 		}
 	})
@@ -308,7 +318,7 @@ func TestHandlerReadsCredentialsOnlyForAPI(t *testing.T) {
 // 본문은 16 KiB 까지 받는다 — 정확히 16 KiB 인 본문은 판정표의 다음 행으로 간다(설계 2-4 「16 KiB 까지만 읽는다」).
 func TestHandlerReadsBodyUpTo16KiB(t *testing.T) {
 	f := newHandlerFixture(t, fixtureOptions{})
-	body := mtxAuthBody{IP: testPublisherIP, Action: "read"}
+	body := mtxAuthBody{IP: testPublisherIP, Action: "read", Protocol: "srt"}
 	raw := mustJSON(t, body)
 	body.UserAgent = strings.Repeat("x", 16<<10-len(raw))
 	raw = mustJSON(t, body)
@@ -376,7 +386,7 @@ func TestHandlerAPI(t *testing.T) {
 // 설정 주소(CallerIP · SelfIP)도 TCP 피어 · 본문 ip 와 같은 규칙으로 견준다 — IPv4-mapped 로 준 설정값은 IPv4 로 풀고,
 // zone 이 붙은 설정값은 풀지 않아 zone 없는 피어 · ip 와 다르다.
 func TestHandlerComparesConfiguredAddresses(t *testing.T) {
-	readBody := mtxAuthBody{IP: testPublisherIP, Action: "read"}
+	readBody := mtxAuthBody{IP: testPublisherIP, Action: "read", Protocol: "srt"}
 	tests := []struct {
 		name     string
 		opts     fixtureOptions
@@ -402,21 +412,78 @@ func TestHandlerComparesConfiguredAddresses(t *testing.T) {
 	}
 }
 
-// action=read 는 설정에서 제외하므로 오지 않는다. 오면 지금 동작(무인증 읽기)을 유지한다 — 200 · 본문 없음 · auth
-// 호출 0(판정표 read 행). SRT 읽기는 경로 잠금값이 막는다(설계 2-8).
-func TestHandlerAllowsRead(t *testing.T) {
+// action=read 는 protocol 이 정확히 srt 일 때만 200(본문 없음 · 이벤트 없음)이다 — SRT 읽기는 경로 잠금값이
+// 막는다(설계 2-8). 그 밖의 protocol(hls · webrtc · rtsp · rtmp · 빈 값 · 대문자 SRT)은 401(본문 없음)이고
+// ingestauth_read_denied 를 DEBUG 한 줄 낸다. 그 줄은 protocol 만 싣는다 — 시청자 · 송출자 IP 와 경로는 없다. 어느
+// 쪽이든 auth 호출 0 이다(판정표 read 두 행). 이 행이 없으면 Bearer 없는 LL-HLS 읽기가 열린다(계획 M15 0-1).
+func TestHandlerRead(t *testing.T) {
+	tests := []struct {
+		name     string
+		protocol string
+		wantCode int
+	}{
+		{name: "srt", protocol: "srt", wantCode: http.StatusOK},
+		{name: "hls", protocol: "hls", wantCode: http.StatusUnauthorized},
+		{name: "webrtc", protocol: "webrtc", wantCode: http.StatusUnauthorized},
+		{name: "rtsp", protocol: "rtsp", wantCode: http.StatusUnauthorized},
+		{name: "rtmp", protocol: "rtmp", wantCode: http.StatusUnauthorized},
+		{name: "빈_값", protocol: "", wantCode: http.StatusUnauthorized},
+		{name: "대문자_SRT", protocol: "SRT", wantCode: http.StatusUnauthorized},
+		{name: "앞_공백_srt", protocol: " srt", wantCode: http.StatusUnauthorized},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newHandlerFixture(t, fixtureOptions{})
+			body := publishBody(testTokenA, testConnID(1))
+			body.Action, body.Protocol = "read", tc.protocol
+			rr := f.serve(newAuthRequest(t, body))
+			if rr.Code != tc.wantCode || rr.Body.Len() != 0 {
+				t.Errorf("read request with protocol %q = %d with a %d-byte body, want %d without a body", tc.protocol, rr.Code, rr.Body.Len(), tc.wantCode)
+			}
+			if n := f.auth.callCount(); n != 0 {
+				t.Errorf("fake auth calls for a read request with protocol %q = %d, want 0", tc.protocol, n)
+			}
+			if err := readEventsMismatch(t, f.logs, tc.protocol, tc.wantCode); err != nil {
+				t.Errorf("read request with protocol %q: %v", tc.protocol, err)
+			}
+		})
+	}
+}
+
+// readEventsMismatch 는 read 요청 하나 뒤의 로그가 wantCode 의 행과 다른 점을 돌려준다 — 200 이면 이벤트 0, 401 이면
+// ingestauth_read_denied 하나(DEBUG · 키는 level · msg · protocol · time 뿐 · protocol 은 보낸 값)뿐이다. 같으면 nil 이다.
+func readEventsMismatch(t *testing.T, logs *logRecorder, protocol string, wantCode int) error {
+	t.Helper()
+	all := handlerEvents(t, logs, "")
+	if wantCode == http.StatusOK {
+		if len(all) != 0 {
+			return fmt.Errorf("events = %v, want none", all)
+		}
+		return nil
+	}
+	wantKeys := []string{"level", "msg", "protocol", "time"}
+	if len(all) != 1 || all[0].Msg != "ingestauth_read_denied" || all[0].Level != "DEBUG" || all[0].Protocol != protocol || !slices.Equal(all[0].Keys, wantKeys) {
+		return fmt.Errorf("events = %v, want one DEBUG ingestauth_read_denied with keys %v and the protocol sent", all, wantKeys)
+	}
+	return nil
+}
+
+// 거부된 read 는 실패 토큰 차례를 타지 않는다 — 판정 불가로 기억된 토큰과 같은 경로의 hls read 가 와도 재확인 칸을
+// 쓰지 않아, 바로 뒤 그 토큰의 publish 가 재확인을 받는다(resolve 1회 · 200).
+func TestHandlerReadDeniedSkipsTurn(t *testing.T) {
 	f := newHandlerFixture(t, fixtureOptions{})
-	body := publishBody(testTokenA, testConnID(1))
-	body.Action = "read"
-	rr := f.serve(newAuthRequest(t, body))
-	if rr.Code != http.StatusOK || rr.Body.Len() != 0 {
-		t.Errorf("read request = %d with a %d-byte body, want 200 without a body", rr.Code, rr.Body.Len())
+	f.auth.answerAll(answerUsable(10 * time.Millisecond))
+	f.h.failed.record(testTokenA, outcomeUndecided)
+	read := publishBody(testTokenA, testConnID(1))
+	read.Action, read.Protocol = "read", "hls"
+	if rr := f.serve(newAuthRequest(t, read)); rr.Code != http.StatusUnauthorized {
+		t.Fatalf("hls read on a remembered token's path = %d, want 401", rr.Code)
 	}
-	if n := f.auth.callCount(); n != 0 {
-		t.Errorf("fake auth calls for a read request = %d, want 0", n)
+	if rr := f.publish(t, testTokenA, testConnID(2)); rr.Code != http.StatusOK {
+		t.Errorf("publish of the remembered token right after an hls read = %d, want 200 (the read must not take the recheck slot)", rr.Code)
 	}
-	if names := eventNames(t, f.logs); len(names) != 0 {
-		t.Errorf("events for a read request = %v, want none", names)
+	if n := f.auth.callCount(); n != 1 {
+		t.Errorf("fake auth calls = %d, want 1 (the publish's recheck only)", n)
 	}
 }
 
