@@ -57,7 +57,7 @@ import {
   presetAvailability,
   type AudioPresetId,
 } from './audioPresets';
-import type { EditorPlayback } from './editorPlayback';
+import { playbackErrorMessage, type EditorPlayback } from './editorPlayback';
 import type { FilmstripSource } from './studio/VideoFilmstrip';
 import type { TrackLevels } from './trackAudio/trackLevels';
 import type { TrackPreview, TrackPreviewStatus } from './trackAudio/useTrackPreview';
@@ -436,6 +436,8 @@ export interface ClipEditorMockState {
   previewVideo: HTMLVideoElement | null;
   /** 트랙별 미리 듣기 상태. 실제 영상이 없으면 null */
   trackPreviewStatus: TrackPreviewStatus | null;
+  /** 미리보기 영상을 못 트는 이유(안내 문구). 틀 수 있으면 null */
+  previewError: string | null;
   /**
    * 소리 줄 파형(트랙 순서 = 번호). 목업이면 undefined(모양만 그린다), 실제인데 아직·못 불렀으면 null(빈 줄)
    */
@@ -925,6 +927,7 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     uploadLabel: options.uploadLabel ?? '업로드',
     previewVideo: options.previewVideo ?? null,
     trackPreviewStatus: options.trackPreview?.status ?? null,
+    previewError: playback.error === null ? null : playbackErrorMessage(playback.error),
     trackLevels: real ? (options.trackPreview?.levels ?? null) : undefined,
     filmstripSource: options.filmstripSource ?? null,
     canUndo: historyCanUndo(history),

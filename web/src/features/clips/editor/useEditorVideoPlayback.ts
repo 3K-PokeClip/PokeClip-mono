@@ -4,7 +4,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ensureMediaAccess, reportPlaybackForbidden } from '@/api/playbackAccess';
 import { mediaCredentials, recordingClipUrl } from '@/api/mediaPlayback';
 import { playableFrom, type RecordingPiece } from '@/features/player/recordingTimeline';
-import { boundaryAction, type EditorPlayback, type PlaybackBounds } from './editorPlayback';
+import {
+  boundaryAction,
+  type EditorPlayback,
+  type PlaybackBounds,
+  type PlaybackError,
+} from './editorPlayback';
 
 // 편집기의 실재생 어댑터(POK-251) — 녹화 재생 서버에서 「구간 앞뒤로 조금 넉넉한 창」을 mp4 한 덩어리로 받아
 // <video> 하나로 튼다. 방송 중이든 끝난 뒤든 같은 길이다(녹화 파일에서 읽는다).
@@ -19,6 +24,9 @@ import { boundaryAction, type EditorPlayback, type PlaybackBounds } from './edit
 
 const PAD_SECONDS = 10;
 const REWINDOW_DELAY_MS = 500;
+
+/** 출입증을 새로 받고도 녹화가 403이다 */
+class PlaybackForbiddenError extends Error {}
 
 interface Window {
   startSeconds: number;
@@ -80,7 +88,7 @@ export function useEditorVideoPlayback(options: {
   piecesRef.current = pieces;
   const [playing, setPlaying] = useState(false);
   const [currentSeconds, setCurrentSeconds] = useState(initialRange.startSeconds);
-  const [failed, setFailed] = useState(false);
+  const [failure, setFailure] = useState<PlaybackError | null>(null);
 
   const winRef = useRef(win);
   winRef.current = win;
@@ -107,14 +115,14 @@ export function useEditorVideoPlayback(options: {
   useEffect(() => {
     if (recordingSeconds <= 0) return undefined;
     if (win.empty) {
-      setFailed(true);
+      setFailure('no-recording');
       setSrc('');
       setSrcWindow(null);
       return undefined;
     }
     const target = win;
     const abort = new AbortController();
-    setFailed(false);
+    setFailure(null);
     // 출입증이 곧 만료되면 새로 받은 뒤 부른다(POK-317). 받아 둔 것이 쓸 만하면 기다리지 않는다
     const load = () => fetch(remoteUrl, { signal: abort.signal, credentials: mediaCredentials() });
     const access = ensureMediaAccess(streamId);
@@ -127,6 +135,8 @@ export function useEditorVideoPlayback(options: {
         return load();
       })
       .then((res) => {
+        // 출입증을 새로 받고도 403이면 다시 받을 길이 없다: 화면이 「출입증 거절」로 알린다
+        if (res.status === 403) throw new PlaybackForbiddenError();
         if (!res.ok) throw new Error(String(res.status));
         return res.blob();
       })
@@ -135,7 +145,8 @@ export function useEditorVideoPlayback(options: {
         setSrcWindow(target);
       })
       .catch((e: unknown) => {
-        if (!(e instanceof DOMException && e.name === 'AbortError')) setFailed(true);
+        if (e instanceof DOMException && e.name === 'AbortError') return;
+        setFailure(e instanceof PlaybackForbiddenError ? 'access' : 'fatal');
       });
     return () => abort.abort();
   }, [remoteUrl, streamId, recordingSeconds, win]);
@@ -156,7 +167,7 @@ export function useEditorVideoPlayback(options: {
     if (video === null) return undefined;
     const position = () => winRef.current.startSeconds + video.currentTime;
     const onLoaded = () => {
-      setFailed(false);
+      setFailure(null);
       const target = pendingSeekRef.current;
       pendingSeekRef.current = null;
       if (target !== null)
@@ -178,7 +189,7 @@ export function useEditorVideoPlayback(options: {
     };
     const onPlay = () => setPlaying(true);
     const onPause = () => setPlaying(false);
-    const onError = () => setFailed(true);
+    const onError = () => setFailure('fatal');
     video.addEventListener('loadedmetadata', onLoaded);
     // 리스너를 달기 전에 이미 메타데이터가 와 있을 수 있다(캐시된 영상) — 그러면 처음 자리로 못 간다.
     if (video.readyState >= 1 && pendingSeekRef.current !== null) onLoaded();
@@ -233,7 +244,10 @@ export function useEditorVideoPlayback(options: {
           clampToWindow(bounds.startSeconds) - winRef.current.startSeconds,
         );
       }
-      void video.play().catch(() => setFailed(true));
+      // 누르자마자 멈추거나 새 영상으로 갈아 끼우면 play()가 AbortError로 거절된다: 보통 조작이라 오류로 알리지 않는다
+      video.play().catch((e: unknown) => {
+        if (!(e instanceof DOMException && e.name === 'AbortError')) setFailure('fatal');
+      });
     } else {
       video.pause();
     }
@@ -311,7 +325,7 @@ export function useEditorVideoPlayback(options: {
       playing,
       currentSeconds,
       durationSeconds: recordingSeconds,
-      error: failed ? 'fatal' : null,
+      error: failure,
       togglePlay,
       seekTo,
       seekBy,
@@ -322,7 +336,7 @@ export function useEditorVideoPlayback(options: {
       playing,
       currentSeconds,
       recordingSeconds,
-      failed,
+      failure,
       togglePlay,
       seekTo,
       seekBy,

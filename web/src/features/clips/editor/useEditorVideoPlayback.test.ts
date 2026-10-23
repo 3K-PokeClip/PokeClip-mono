@@ -64,7 +64,8 @@ describe('useEditorVideoPlayback — 녹화 구간', () => {
       }),
     );
     expect(fetchSpy).not.toHaveBeenCalled();
-    expect(result.current.playback.error).toBe('fatal');
+    // 실패 이유가 「녹화 없음」이라 화면이 그대로 알린다(POK-389)
+    expect(result.current.playback.error).toBe('no-recording');
   });
 
   it('구간은 틈 안인데 여유만 다음 녹화에 닿아도 받지 않는다 — 고른 장면이 아닌 영상이다(PR #205 codex)', () => {
@@ -78,7 +79,8 @@ describe('useEditorVideoPlayback — 녹화 구간', () => {
       }),
     );
     expect(fetchSpy).not.toHaveBeenCalled();
-    expect(result.current.playback.error).toBe('fatal');
+    // 실패 이유가 「녹화 없음」이라 화면이 그대로 알린다(POK-389)
+    expect(result.current.playback.error).toBe('no-recording');
   });
 
   it('구간 목록이 없으면 전처럼 앞뒤 10초 여유다', () => {
@@ -205,6 +207,57 @@ describe('useEditorVideoPlayback: 옛 영상 주소 지우기 (POK-389)', () => 
   });
 });
 
+describe('useEditorVideoPlayback: 재생 거절 (POK-389)', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  function videoNode(play: () => Promise<void>) {
+    return Object.assign(document.createElement('video'), { play }) as HTMLVideoElement;
+  }
+  const props = {
+    streamId: 'key-1',
+    recordingStartMs: BASE,
+    recordingSeconds: 38,
+    pieces: PIECES,
+    initialRange: { startSeconds: 5, endSeconds: 10 },
+  };
+
+  it('재생을 누르자마자 멈춰 play()가 AbortError로 거절돼도 오류로 알리지 않는다: 보통 조작이다(로컬 리뷰 4라운드)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => new Promise<Response>(() => undefined)),
+    );
+    const { result } = renderHook(() => useEditorVideoPlayback(props));
+    act(() =>
+      result.current.videoRef(
+        videoNode(() => Promise.reject(new DOMException('interrupted', 'AbortError'))),
+      ),
+    );
+    await act(async () => {
+      result.current.playback.togglePlay();
+      await Promise.resolve();
+    });
+    expect(result.current.playback.error).toBeNull();
+  });
+
+  it('그 밖의 이유로 재생을 못 하면 「불러오지 못함」으로 알린다', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => new Promise<Response>(() => undefined)),
+    );
+    const { result } = renderHook(() => useEditorVideoPlayback(props));
+    act(() =>
+      result.current.videoRef(
+        videoNode(() => Promise.reject(new DOMException('bad', 'NotSupportedError'))),
+      ),
+    );
+    await act(async () => {
+      result.current.playback.togglePlay();
+      await Promise.resolve();
+    });
+    expect(result.current.playback.error).toBe('fatal');
+  });
+});
+
 describe('useEditorVideoPlayback: 출입증 쿠키 (POK-317)', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -284,5 +337,34 @@ describe('useEditorVideoPlayback: 출입증 쿠키 (POK-317)', () => {
       fetchSpy.mock.calls.filter(([url]) => String(url).endsWith('/playback-access')),
     ).toHaveLength(2);
     await waitFor(() => expect(result.current.playback.error).toBeNull());
+  });
+
+  it('출입증을 다시 받아도 403이면 「출입증 거절」로 알린다(POK-389)', async () => {
+    vi.resetModules();
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_PLAYBACK_BASE_URL', 'https://media.test');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) =>
+        Promise.resolve(
+          String(input).endsWith('/playback-access')
+            ? new Response(JSON.stringify({ expiresAt: '2999-01-01T00:00:00Z' }), { status: 200 })
+            : new Response(null, { status: 403 }),
+        ),
+      ),
+    );
+    const { ensurePlaybackAccess } = await import('@/api/playbackAccess');
+    const { useEditorVideoPlayback: hook } = await import('./useEditorVideoPlayback');
+    await ensurePlaybackAccess('S-1', 'key-1');
+
+    const { result } = renderHook(() =>
+      hook({
+        streamId: 'key-1',
+        recordingStartMs: BASE,
+        recordingSeconds: 38,
+        pieces: PIECES,
+        initialRange: { startSeconds: 5, endSeconds: 10 },
+      }),
+    );
+    await waitFor(() => expect(result.current.playback.error).toBe('access'));
   });
 });

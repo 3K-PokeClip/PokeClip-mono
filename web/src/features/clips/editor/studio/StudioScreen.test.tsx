@@ -224,6 +224,32 @@ describe('StudioScreen', () => {
     expect(zoomIn).toBeEnabled();
   });
 
+  it('미리보기 영상을 못 틀면 미리보기 아래에 이유를 알린다: 빈 화면만 남으면 왜 안 되는지 모른다(POK-389)', () => {
+    const playback = {
+      playing: false,
+      currentSeconds: 0,
+      durationSeconds: 60,
+      togglePlay: vi.fn(),
+      seekTo: vi.fn(),
+      seekBy: vi.fn(),
+      setRate: vi.fn(),
+      setBounds: vi.fn(),
+    };
+    const source = {
+      clipTitle: '카드',
+      sourceLabel: '방송',
+      durationSeconds: 60,
+      range: { startSeconds: 10, endSeconds: 20 },
+    };
+    const { unmount } = renderStudio({ source, playback: { ...playback, error: 'access' } });
+    expect(
+      screen.getByText('영상 출입증이 거절됐어요. 잠시 뒤 다시 열어 주세요'),
+    ).toBeInTheDocument();
+    unmount();
+    renderStudio({ source, playback: { ...playback, error: 'no-recording' } });
+    expect(screen.getByText('이 구간의 녹화가 없어 미리보기를 못 틀어요')).toBeInTheDocument();
+  });
+
   it('카드 범위가 좁아도 100%에서 손잡이를 범위 끝까지 끌어 구간을 늘리고, 확대는 그대로 된다(로컬 리뷰 3라운드)', async () => {
     const user = userEvent.setup();
     // 카드 창 100~119초에 5초 구간. 100% = 범위 전체(19초)
