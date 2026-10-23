@@ -14,6 +14,8 @@ import com.pokeclip.auth.chzzk.ChzzkMe;
 import com.pokeclip.auth.chzzk.ChzzkTokens;
 import com.pokeclip.auth.chzzk.api.dto.ChzzkResolveRequest;
 import com.pokeclip.auth.chzzk.api.dto.LinkRequest;
+import com.pokeclip.auth.soop.SoopCleanupExecutor;
+import com.pokeclip.auth.soop.SoopLinkStateCodec;
 import com.pokeclip.auth.streamkey.api.dto.ExchangeRequest;
 import com.pokeclip.auth.streamkey.api.dto.ResolveRequest;
 import com.pokeclip.auth.token.RefreshTokenRepository;
@@ -128,6 +130,16 @@ class SecretLeakTest extends IntegrationTestSupport {
     private static final String YT_CLIENT_SECRET = needle("youtube-client-secret");
     private static final String YT_CHANNEL_ID = needle("youtube-channel");
 
+    /** SOOP 바늘(POK-396). 토큰 둘·아이디·닉네임은 가짜 SOOP이 돌려주고, code는 요청에, 시크릿은 설정에서 온다. */
+    private static final String SOOP_ACCESS = needle("soop-access");
+    private static final String SOOP_REFRESH = needle("soop-refresh");
+    private static final String SOOP_CODE = needle("soop-code");
+    private static final String SOOP_CLIENT_SECRET = needle("soop-client-secret");
+    private static final String SOOP_USER_ID = needle("soop-user");
+    private static final String SOOP_NICK = needle("soop-nick");
+    /** 방송 중이 아닐 때 방송국 정보 주소에서 꺼내는 아이디(실측 꼴). 꺼낸 값도 로그·응답에 나오면 안 된다. */
+    private static final String SOOP_LOGO_ID = needle("soop-logo-user");
+
     /**
      * resolve 전용 출입증 바늘(계약4 4C). 토큰과 허용 대역은 설정(@DynamicPropertySource)에서 온다.
      * 대역 바늘은 망 주소(.0)다 — 요청을 보내는 주소(.7)와 글자가 달라야, 설정 값이 샌 것과 요청자
@@ -171,6 +183,8 @@ class SecretLeakTest extends IntegrationTestSupport {
     private final YoutubeLinkWriter youtubeWriter;
     private final YoutubeCleanupExecutor youtubeCleanup;
     private final com.pokeclip.auth.youtube.YoutubeChannelLinkRepository youtubeLinks;
+    private final SoopLinkStateCodec soopCodec;
+    private final SoopCleanupExecutor soopCleanup;
 
     SecretLeakTest(MockMvc mockMvc, TokenService tokenService, UserService userService,
                    UserRepository userRepository,
@@ -179,7 +193,8 @@ class SecretLeakTest extends IntegrationTestSupport {
                    ChzzkLinkStateCodec stateCodec, ChzzkLinkWriter linkWriter, ChzzkCleanupExecutor cleanup,
                    YoutubeLinkStateCodec youtubeCodec, YoutubeLinkWriter youtubeWriter,
                    YoutubeCleanupExecutor youtubeCleanup,
-                   com.pokeclip.auth.youtube.YoutubeChannelLinkRepository youtubeLinks) {
+                   com.pokeclip.auth.youtube.YoutubeChannelLinkRepository youtubeLinks,
+                   SoopLinkStateCodec soopCodec, SoopCleanupExecutor soopCleanup) {
         this.mockMvc = mockMvc;
         this.tokenService = tokenService;
         this.userService = userService;
@@ -194,6 +209,8 @@ class SecretLeakTest extends IntegrationTestSupport {
         this.youtubeWriter = youtubeWriter;
         this.youtubeCleanup = youtubeCleanup;
         this.youtubeLinks = youtubeLinks;
+        this.soopCodec = soopCodec;
+        this.soopCleanup = soopCleanup;
     }
 
     /**
@@ -208,6 +225,7 @@ class SecretLeakTest extends IntegrationTestSupport {
         registry.add("pokeclip.jwt.secret", () -> JWT_SECRET);
         registry.add("pokeclip.chzzk.app.client-secret", () -> CHZZK_CLIENT_SECRET);
         registry.add("pokeclip.youtube.app.client-secret", () -> YT_CLIENT_SECRET);
+        registry.add("pokeclip.soop.app.client-secret", () -> SOOP_CLIENT_SECRET);
         // 사진 창고를 여기서도 켠다. 창고를 끄면 S3 호출이 아예 안 일어나 아래 검사가
         // 「찾을 것이 없어서 통과」한다. 이 클래스는 이미 자기 @DynamicPropertySource를
         // 갖고 있으므로 컨텍스트가 더 늘지 않는다.
@@ -228,6 +246,7 @@ class SecretLeakTest extends IntegrationTestSupport {
     void setUp() {
         CHZZK.reset();   // 같은 static 가짜 서버를 다른 클래스와 나눠 쓴다. 여기서 심은 needle이 다음으로 새지 않게.
         YOUTUBE.reset();
+        SOOP.reset();
         clearStreamKeyChildren();
         refreshTokenRepository.deleteAll();
         userRepository.deleteAll();
@@ -238,6 +257,7 @@ class SecretLeakTest extends IntegrationTestSupport {
     void tearDown() {
         cleanup.awaitIdle(Duration.ofSeconds(5));   // 전용 스레드의 정리가 다음 클래스의 CHZZK.reset() 뒤에 도착하지 않게
         youtubeCleanup.awaitIdle(Duration.ofSeconds(5));   // 유튜브 쪽도 같은 이유 — 안 걸면 정리 로그가 다음 클래스로 샌다
+        soopCleanup.awaitIdle(Duration.ofSeconds(5));
         clearStreamKeyChildren();
         refreshTokenRepository.deleteAll();
     }
@@ -246,6 +266,7 @@ class SecretLeakTest extends IntegrationTestSupport {
     private void clearStreamKeyChildren() {
         jdbcTemplate.update("DELETE FROM chzzk_channel_links");
         jdbcTemplate.update("DELETE FROM youtube_channel_links");
+        jdbcTemplate.update("DELETE FROM soop_channel_links");
         jdbcTemplate.update("DELETE FROM pairing_exchange_attempts");
         jdbcTemplate.update("DELETE FROM pairing_codes");
         jdbcTemplate.update("DELETE FROM stream_keys");
@@ -567,6 +588,98 @@ class SecretLeakTest extends IntegrationTestSupport {
     }
 
     /**
+     * SOOP 연동 경로(POK-396). 치지직 시나리오의 쌍둥이다. 다른 점: 토큰을 버리는 HTTP가 없어 실패 뒤엔
+     * {@code token_orphaned} 한 줄만 남고, 응답에는 SOOP 아이디가 <b>없어야</b> 한다(닉네임만 있다).
+     * 닉네임도 로그에는 없어야 한다.
+     */
+    @Test
+    void SOOP_연동_경로를_돌려도_토큰_code_아이디_닉네임이_로그에_남지_않는다() throws Exception {
+        var user = userService.findOrCreate(needle("soop-sub"), "soop@example.com", "김태현", null);
+        String bearer = "Bearer " + tokenService.issue(user).accessToken();
+        String state = soopCodec.issue(user.getId(), Instant.now());
+        SOOP.tokenResponds(200, "{\"access_token\":\"" + SOOP_ACCESS + "\",\"refresh_token\":\"" + SOOP_REFRESH
+                + "\",\"token_type\":\"Bearer\",\"expires_in\":28800}");
+        SOOP.statusResponds(200, "{\"result\":1,\"data\":{\"user_id\":\"" + SOOP_USER_ID + "\",\"status\":\"streamend\"}}");
+        SOOP.stationResponds(200, "{\"result\":1,\"data\":{\"user_nick\":\"" + SOOP_NICK + "\"}}");
+        List<String> needles = List.of(SOOP_ACCESS, SOOP_REFRESH, SOOP_CODE, SOOP_CLIENT_SECRET, SOOP_USER_ID, SOOP_NICK,
+                SOOP_LOGO_ID, state, JWT_SECRET);
+
+        try (LogCaptor captor = new LogCaptor()) {
+            String startBody = mockMvc.perform(post("/api/soop-link/start").header("Authorization", bearer))
+                    .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+            assertThat(startBody).as("동의 URL에는 시크릿이 없다").doesNotContain(SOOP_CLIENT_SECRET);
+
+            // ① 정상 연동. 응답에는 닉네임만 있고 아이디·토큰은 없다.
+            String linked = mockMvc.perform(post("/api/soop-link").header("Authorization", bearer)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"code\":\"" + SOOP_CODE + "\",\"state\":\"" + state + "\"}"))
+                    .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
+            assertThat(linked).contains(SOOP_NICK).doesNotContain(SOOP_USER_ID)
+                    .doesNotContain(SOOP_ACCESS).doesNotContain(SOOP_REFRESH);
+            assertThat(SOOP.tokenRequests()).as("바늘이 실제로 SOOP으로 나갔다").anySatisfy(r ->
+                    assertThat(r).containsEntry("code", SOOP_CODE).containsEntry("client_secret", SOOP_CLIENT_SECRET));
+            String status = mockMvc.perform(get("/api/soop-link").header("Authorization", bearer))
+                    .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+            assertThat(status).contains(SOOP_NICK).doesNotContain(SOOP_USER_ID);
+
+            // ② 재연동: 옛 행 닫기·비우기 + 커밋 뒤 정리.
+            String state2 = soopCodec.issue(user.getId(), Instant.now());
+            mockMvc.perform(post("/api/soop-link").header("Authorization", bearer)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"code\":\"" + SOOP_CODE + "\",\"state\":\"" + state2 + "\"}"))
+                    .andExpect(status().isCreated());
+            assertThat(soopCleanup.awaitIdle(Duration.ofSeconds(5))).isTrue();
+
+            // ②-b 방송 중이 아닐 때의 재연동: 아이디를 방송국 정보 주소에서 꺼낸다. 꺼낸 값도 응답·로그에 없어야 한다.
+            SOOP.statusResponds(200, "{\"result\":1,\"data\":{\"broad_no\":\"0\",\"status\":\"streamend\"}}");
+            SOOP.stationResponds(200, com.pokeclip.auth.support.FakeSoopServer.stationBody(SOOP_NICK,
+                    com.pokeclip.auth.support.FakeSoopServer.logoUrl(SOOP_LOGO_ID)));
+            String stateLogo = soopCodec.issue(user.getId(), Instant.now());
+            String logoLinked = mockMvc.perform(post("/api/soop-link").header("Authorization", bearer)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"code\":\"" + SOOP_CODE + "\",\"state\":\"" + stateLogo + "\"}"))
+                    .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
+            assertThat(logoLinked).doesNotContain(SOOP_LOGO_ID);
+            assertThat(jdbcTemplate.queryForObject("SELECT soop_user_id FROM soop_channel_links WHERE user_id = ? "
+                    + "AND revoked_at IS NULL", String.class, user.getId())).as("바늘이 실제로 아이디로 저장됐다").isEqualTo(SOOP_LOGO_ID);
+            assertThat(soopCleanup.awaitIdle(Duration.ofSeconds(5))).isTrue();
+
+            // ③ 교환 400: 본문에 바늘. 에러 응답에도 로그에도 없어야 한다.
+            String state3 = soopCodec.issue(user.getId(), Instant.now());
+            SOOP.tokenResponds(400, "{\"error\":\"bad code " + SOOP_CODE + " secret " + SOOP_CLIENT_SECRET + "\"}");
+            String rejected = mockMvc.perform(post("/api/soop-link").header("Authorization", bearer)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"code\":\"" + SOOP_CODE + "\",\"state\":\"" + state3 + "\"}"))
+                    .andExpect(status().isBadRequest()).andReturn().getResponse().getContentAsString();
+            assertNoSecretsIn(rejected, needles);
+
+            // ④ 교환은 됐는데 아이디 조회가 거부: 받은 토큰은 버릴 길이 없어 한 줄만 남는다. msg에 바늘.
+            String state4 = soopCodec.issue(user.getId(), Instant.now());
+            SOOP.tokenResponds(200, "{\"access_token\":\"" + SOOP_ACCESS + "\",\"refresh_token\":\"" + SOOP_REFRESH
+                    + "\",\"expires_in\":28800}");
+            SOOP.statusResponds(200, "{\"result\":-1,\"msg\":\"" + SOOP_USER_ID + " " + SOOP_ACCESS + "\"}");
+            mockMvc.perform(post("/api/soop-link").header("Authorization", bearer)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"code\":\"" + SOOP_CODE + "\",\"state\":\"" + state4 + "\"}"))
+                    .andExpect(status().isBadRequest());
+
+            assertThat(captor.messages())
+                    .as("경로가 아예 안 돌았다. 그러면 아무것도 검사하지 않은 것이다")
+                    .anyMatch(m -> m.startsWith("auth.soop.link.created"))
+                    .anyMatch(m -> m.startsWith("auth.soop.link.relinked"))
+                    .anyMatch(m -> m.startsWith("auth.soop.link.rejected"))
+                    .anyMatch(m -> m.startsWith("auth.soop.link.token_orphaned"));
+            assertNoSecretsIn(captor, needles);
+            assertThat(String.join("\n", captor.messages()))
+                    .doesNotContain("SoopTokens[")
+                    .doesNotContain("SoopIdentity[")
+                    .doesNotContain("LinkResult[")
+                    .doesNotContain("LinkResponse[")
+                    .doesNotContain("LinkStatusResponse[");
+        }
+    }
+
+    /**
      * {@code org.hibernate.orm.jdbc.error}를 WARN으로 올리면 유니크 위반 메시지에 <b>컬럼 값이 그대로</b> 실린다
      * ({@code Key (channel_id)=(…) already exists}). 채널 ID는 로그에 안 찍는 값이므로 그 한 줄이 방어선이고,
      * 지금까지 어느 검사도 그것을 못박지 않았다(감사 1라운드 사소-D).
@@ -858,6 +971,10 @@ class SecretLeakTest extends IntegrationTestSupport {
         assertThat(constraintsOn(com.pokeclip.auth.youtube.api.dto.LinkRequest.class, "code"))
                 .containsExactly(NotBlank.class);
         assertThat(constraintsOn(com.pokeclip.auth.youtube.api.dto.LinkRequest.class, "state"))
+                .containsExactly(NotBlank.class);
+        assertThat(constraintsOn(com.pokeclip.auth.soop.api.dto.LinkRequest.class, "code"))
+                .containsExactly(NotBlank.class);
+        assertThat(constraintsOn(com.pokeclip.auth.soop.api.dto.LinkRequest.class, "state"))
                 .containsExactly(NotBlank.class);
     }
 

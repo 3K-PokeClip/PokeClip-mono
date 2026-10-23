@@ -35,8 +35,8 @@ export type FaqKey =
 export interface AnalyticsEvents {
   /** Google 로그인 콜백 성공. 처음 가입인지는 모른다 — 사람별 첫 이벤트로 센다 */
   login_completed: Record<string, never>;
-  platform_linked: { platform: 'chzzk' | 'youtube' };
-  platform_unlinked: { platform: 'chzzk' | 'youtube' };
+  platform_linked: { platform: 'chzzk' | 'youtube' | 'soop' };
+  platform_unlinked: { platform: 'chzzk' | 'youtube' | 'soop' };
   /** 플러그인 페어링 코드 발급(처음·재발급 모두) */
   pairing_code_issued: Record<string, never>;
   /**

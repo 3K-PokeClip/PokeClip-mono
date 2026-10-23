@@ -137,32 +137,32 @@ set -a && . ../.env && set +a
 | `chat-collector` | `./gradlew :chat-collector:bootRun` | http://localhost:8083/actuator/health |
 | `chat-detector` | `./gradlew :chat-detector:bootRun` | http://localhost:8084/actuator/health |
 
-**`auth`가 부팅 검증·배포 명부로 보는 환경변수는 스물여덟이다.**
-스물넷은 다섯 갈래로 나뉘고 갈래마다 「없으면 어떻게 되나」가 다르다.
+**`auth`가 부팅 검증·배포 명부로 보는 환경변수는 서른하나다.**
+스물일곱은 다섯 갈래로 나뉘고 갈래마다 「없으면 어떻게 되나」가 다르다.
 나머지 넷(`FORWARD_HEADERS_STRATEGY`와 스트림키 암호 저장소 셋)은 기본값이 있는 배포 변수라 표 아래에 따로 적는다.
 이 셈에 안 드는 셋이 더 있다: `DB_HOST`·`DB_PORT`(기본 `localhost`·`5432`, `.env`에 없어 기본값을 남겼다)·`AWS_REGION`(기본 `ap-northeast-2`).
 셋 다 없어도 뜨고 검사 대상도 아니라 세지 않는다.
 🔴 **`GOOGLE_REDIRECT_URI`도 안 든다.** yml에 기본값(`http://localhost:3000/auth/callback`)이 있어 부팅 검증에는 안 걸리는데,
 compose는 `${GOOGLE_REDIRECT_URI:?}`로 **없으면 컨테이너가 아예 안 뜨게** 걸어 뒀고 `.env.dev.example`에도 있다.
-즉 로컬 `bootRun`에는 없어도 되고 dev 배포에는 반드시 있어야 해서, 「앱 시크릿 열둘」에도 「안 드는 셋」에도 자리가 없다.
-**yml 실물은 서른둘이다**(위 스물여덟 + 안 드는 셋 + 이것).
+즉 로컬 `bootRun`에는 없어도 되고 dev 배포에는 반드시 있어야 해서, 「앱 시크릿 열다섯」에도 「안 드는 셋」에도 자리가 없다.
+**yml 실물은 서른다섯이다**(위 서른하나 + 안 드는 셋 + 이것).
 
 | 갈래 | 변수 | 없으면 | 어디서 얻나 |
 |---|---|---|---|
-| **앱 시크릿 열둘** | `JWT_SECRET` · `GOOGLE_CLIENT_ID` · `GOOGLE_CLIENT_SECRET` · `CORS_ALLOWED_ORIGINS` · `SECRET_STORE_KEY`(base64 32바이트) · `INTERNAL_API_TOKEN` · `CHZZK_CLIENT_ID` · `CHZZK_CLIENT_SECRET` · `CHZZK_REDIRECT_URI` · `YOUTUBE_CLIENT_ID` · `YOUTUBE_CLIENT_SECRET` · `YOUTUBE_REDIRECT_URI` | **부팅 실패** | **`.env.example`에 없다** — public 저장소라 예시 값도 두지 않는다. 각자 받아서 넣는다 |
+| **앱 시크릿 열다섯** | `JWT_SECRET` · `GOOGLE_CLIENT_ID` · `GOOGLE_CLIENT_SECRET` · `CORS_ALLOWED_ORIGINS` · `SECRET_STORE_KEY`(base64 32바이트) · `INTERNAL_API_TOKEN` · `CHZZK_CLIENT_ID` · `CHZZK_CLIENT_SECRET` · `CHZZK_REDIRECT_URI` · `YOUTUBE_CLIENT_ID` · `YOUTUBE_CLIENT_SECRET` · `YOUTUBE_REDIRECT_URI` · `SOOP_CLIENT_ID` · `SOOP_CLIENT_SECRET` · `SOOP_REDIRECT_URI` | **부팅 실패** | **`.env.example`에 없다** — public 저장소라 예시 값도 두지 않는다. 각자 받아서 넣는다 |
 | **DB 접속값 셋** | `POSTGRES_DB` · `POSTGRES_USER` · `POSTGRES_PASSWORD` | **부팅 실패**(DB가 접속을 거절한다) | `.env`에 있다. 위 실행 절차의 `set -a && . ../.env` 줄이 싣는다 |
 | **사진 창고 다섯**(POK-207) | `PROFILE_PHOTO_S3_BUCKET` · `PROFILE_PHOTO_TOKEN_SECRET` · `PROFILE_PHOTO_BASE_URL` · `PROFILE_PHOTO_S3_ENDPOINT` · `PROFILE_PHOTO_S3_FORCE_PATH_STYLE` | **그냥 뜬다. 사진 기능만 꺼진다** | 창고는 1번이 판다. 로컬은 가짜 저장소(LocalStack)를 띄워 쓴다 |
 | **탈퇴 정리 알림 주소 둘**(POK-256) | `CLIP_BASE_URL` · `COLLECTOR_BASE_URL` | **부팅 실패**(`@NotBlank`). 비어 있으면 탈퇴한 사람의 방송·채팅 기록이 **조용히 남기** 때문이다 | 서버끼리 붙는 주소다. compose 안은 기본값(`http://clip:8081` · `http://chat-collector:8083`)이라 `.env`는 비워 둔다. 로컬은 `http://localhost:8081` · `:8083` |
 | **resolve 전용 출입증 둘**(계약4 4C) | `STREAM_KEY_RESOLVE_TOKEN` · `STREAM_KEY_RESOLVE_ALLOWED_CIDRS` | **그냥 뜬다. 전용 창구만 닫힌다** — 토큰이 없으면 전용 헤더(`X-Stream-Key-Resolve-Token`) resolve 요청은 늘 401이다. 공용 `X-Internal-Token` resolve는 그대로다. 🔴 토큰을 채우면 조건이 붙는다 — 대역이 비었거나 IPv4 CIDR가 아니거나, `FORWARD_HEADERS_STRATEGY`가 `none`이 아니거나, 톰캣 remoteip 헤더 속성이 있거나, 토큰이 `INTERNAL_API_TOKEN`과 같으면 **부팅 실패** | 토큰은 `openssl rand -hex 32`, 대역은 media-dev 사설 주소 `/32` 하나다. dev는 1번이 두 박스(auth `.env` · media-dev)에 같은 토큰을 한 자리에서 넣는다. 운영 auth는 이 창구를 안 써서 비워 둔다 |
 
-**스물다섯 번째: `FORWARD_HEADERS_STRATEGY`(POK-89, 선택).**
+**스물여덟 번째: `FORWARD_HEADERS_STRATEGY`(POK-89, 선택).**
 없으면 `none`(프록시 헤더를 안 믿는다). `native`면
 사설망·루프백 소켓에서 온 요청의 `X-Forwarded-For`를 요청자 IP로 채택한다(아래 「운영 전 잔불 정리」 절).
 🔴 운영 ECS 태스크 정의에는 `native`를 반드시 넣는다(명시 `none`이 Boot의 ECS 자동 감지를 끈다). 비우지 않는다
 (빈 값은 `none`이 아니라 Boot 유추다). 둘 다 그 절에 있다.
 기본값이 있어 `DeploymentEnvVarsTest`의 「빈 기본값」 정규식엔 안 걸리고 **기본값 있는 변수 명부**가 잡는다.
 
-**스물여섯부터 스물여덟까지: 스트림키 암호 저장소 셋(POK-272).** 로컬은 셋 다 없어도 뜬다(기본은 PG에 두기).
+**스물아홉부터 서른하나까지: 스트림키 암호 저장소 셋(POK-272).** 로컬은 셋 다 없어도 뜬다(기본은 PG에 두기).
 dev는 `type`·`retire-from` 둘 다 `aws`다(아래 「스트림키 암호 이행」 절). 셋 다 기본값 있는 변수 명부에 있다.
 
 | 변수 | 기본 | 뜻 |
@@ -196,7 +196,7 @@ dev는 `type`·`retire-from` 둘 다 `aws`다(아래 「스트림키 암호 이�
 정규식을 넓히지 않는 이유는 `AWS_REGION`·`DB_HOST`처럼 일부러 기본값을 둔 것들이
 필수로 잡혀 예외 목록이 따라오기 때문이다.
 
-**막는 방식이 갈래마다 다르다.** 앱 시크릿 열둘은 빈 기본값(`${VAR:}`)을 주고 부팅 검증으로
+**막는 방식이 갈래마다 다르다.** 앱 시크릿 열다섯은 빈 기본값(`${VAR:}`)을 주고 부팅 검증으로
 잡는다 — 기본값을 아예 안 주면 리터럴 `"${VAR}"`이 바인딩돼 **서버는 뜨고 헬스체크도
 통과하는데 그 기능만 전부 실패하기** 때문이다. DB 접속값 셋은 반대로 기본값 자체를 없앴다(POK-161).
 그쪽은 서버가 실제로 접속을 시도하는 값이라 리터럴이 들어가도 접속 실패로 죽어 신호가 남는다.
@@ -207,7 +207,7 @@ dev는 `type`·`retire-from` 둘 다 `aws`다(아래 「스트림키 암호 이�
 **POK-121이 이 규칙을 그대로 어겼고**(유튜브 셋을 표에만 적었다) 봇 리뷰가 잡았다 —
 그래서 지금은 `DeploymentEnvVarsTest`가 auth의 필수 변수와 두 파일을 대조한다.
 
-**IDE로 띄운다면** 실행 구성의 환경변수에 위 열다섯(부팅에 필요한 것)을 넣거나, `.env`를 읽어 주는 플러그인을 쓴다.
+**IDE로 띄운다면** 실행 구성의 환경변수에 위 열여덟(부팅에 필요한 것)을 넣거나, `.env`를 읽어 주는 플러그인을 쓴다.
 `application-local.yml`(gitignore) 프로파일만으로는 부족하다 — 그 파일은 앱 시크릿만 채우고
 DB 접속값은 채우지 않는다.
 
@@ -227,8 +227,9 @@ DB 접속값은 채우지 않는다.
 | `GOOGLE_REDIRECT_URI` | `https://dev.pokeclip.com/auth/callback` | `https://app.pokeclip.com/auth/callback` |
 | `CHZZK_REDIRECT_URI` | `https://dev.pokeclip.com/oauth/chzzk/callback` | `https://app.pokeclip.com/oauth/chzzk/callback` |
 | `YOUTUBE_REDIRECT_URI` | `https://dev.pokeclip.com/oauth/youtube/callback` | `https://app.pokeclip.com/oauth/youtube/callback` |
+| `SOOP_REDIRECT_URI` | `https://dev.pokeclip.com/oauth/soop/callback` | `https://app.pokeclip.com/oauth/soop/callback` |
 
-치지직은 앱당 리다이렉트가 하나라 환경마다 앱이 따로다(prod 앱은 새로 만든다).
+치지직·SOOP은 앱당 리다이렉트가 하나라 환경마다 앱이 따로다(prod 앱은 새로 만든다).
 
 **치지직 셋은 한 덩어리로 검증한다.** 개발자 센터에 등록한 앱 하나의 값이라 하나만 빠져도
 연동이 통째로 안 되므로, 셋 중 무엇이 비든 같은 메시지 한 줄
@@ -257,6 +258,15 @@ refresh는 **7일 −1초**(실측: 교환 응답에 `refresh_token_expires_in: 
 그 뒤로는 갱신이 `invalid_grant`로 거부돼 연동이 `BROKEN`이 되고, 사용자가 **재동의**해야 풀린다.
 데모 계정은 주 1회 재연동이 필요하다는 뜻이다. 해소 수단은 **OAuth 동의 화면 심사 통과**뿐이다
 (우리 코드로 늘릴 수 없다). 우리는 그 필드를 읽지 않는다 — 판정은 갱신 거부로만 한다.
+
+**SOOP 셋도 한 덩어리다**(POK-396). 셋 중 무엇이 비든 한 메시지
+(`SOOP 앱 설정(SOOP_CLIENT_ID·SOOP_CLIENT_SECRET·SOOP_REDIRECT_URI)이 비었다`)로 죽는다. 값은 메시지에 넣지 않는다.
+
+| | 뜻 |
+|---|---|
+| `SOOP_CLIENT_ID` | SOOP 개발자 콘솔 앱의 Client ID. 동의 URL에 그대로 실린다 |
+| `SOOP_CLIENT_SECRET` | 그 앱의 Client Secret. 토큰 교환·갱신 요청의 form 본문에만 쓰고 URL·로그 어디에도 안 나간다 |
+| `SOOP_REDIRECT_URI` | 동의가 끝난 뒤 SOOP이 code를 돌려줄 주소. **웹 프론트의 콜백 라우트**(`/oauth/soop/callback`)다. **콘솔에 앱당 하나만 등록된다**(환경마다 앱을 따로 판다): 로컬 `http://localhost:3000/oauth/soop/callback` · dev `https://dev.pokeclip.com/oauth/soop/callback` · 운영 `https://app.pokeclip.com/oauth/soop/callback`. 토큰 교환 요청에 이 값을 실어 보낸다(동의 주소에는 안 싣는다) |
 
 **`clip`은 환경변수 없이는 부팅에 실패한다. 일곱이고, auth와 같은 두 갈래다.**
 **여덟째 `COLLECTOR_BASE_URL`(POK-234)은 그 목록에 안 든다** — 비어도 부팅은 살고 채팅 문 셋만 503이다(아래).
@@ -686,7 +696,7 @@ terminationGracePeriodSeconds: 20 # k8s (infra/ 는 1번 폴더라 여기서 못
 
 **셋에는 기본값이 없다**(POK-161). 커밋되는 파일에 비밀번호 기본값을 두면 **public
 저장소에 공개된 값으로 DB에 붙는 창**이 열리기 때문이다. 실행에 필요한 것은 위
-「환경변수 스물여덟」 표를 본다.
+「환경변수 서른하나」 표를 본다.
 
 **이 방식을 다른 시크릿에 확대하지 않는다.** 여기가 통하는 것은 서버가 실제로 접속을
 시도하는 값이라서다 — 값이 없으면 리터럴 `${POSTGRES_PASSWORD}`가 그대로 비밀번호가
@@ -855,7 +865,7 @@ chat-detector의 `V401`(`chat_metrics`, POK-120)이다.
 표는 열이다 — `users`·`refresh_tokens`(V101·V102) ·
 `secrets`·`stream_keys`·`pairing_codes`·`pairing_exchange_attempts`(V103~V106) ·
 `chzzk_channel_links`(V107) · `editor_invitations`·`editor_delegations`(V108) ·
-`youtube_channel_links`(V109).
+`youtube_channel_links`(V109) · `soop_channel_links`(V116, 철회 확인 후보 색인 V117, POK-396).
 **`V110`·`V111`은 표를 만들지 않는다** — `V110`이 `users`에 사진 칸 둘(`profile_photo_key`·
 `profile_photo_updated_at`)을, `V111`이 `deleted_at` 한 칸과 **그 사진 칸 둘이 반쪽만 차는 것을 막는
 CHECK 제약**을 더한다(POK-171).
@@ -2626,11 +2636,12 @@ DB 유니크 위반까지 간 경우 Hibernate 오류 로그에 `channel_id`가 
 (`matchIfMissing`) — 테스트 프로파일만 명시적으로 끈다. 꺼지면 갱신이 영영 안 돌고 증상은 24시간
 뒤에야 나온다.
 
-**종료 유예 20초 이상**(`stop_grace_period` / `terminationGracePeriodSeconds`) — 커밋 뒤 정리(옛 토큰 삭제·치지직
+**종료 유예 24초 이상**(`stop_grace_period` / `terminationGracePeriodSeconds`): 커밋 뒤 정리(옛 토큰 삭제·치지직
 revoke)가 전용 스레드 2개(`ChzzkCleanupExecutor`)에서 돌고 종료 시 최대 10초 기다린다. 도커 기본 10초에 잘리면
-대기 중 삭제가 유실돼 고아 secret이 남는다(무해하지만 쌓인다). chat-collector의 종료 유예 20초와 같은 부류이며
-`infra/`(1번)가 반영한다. **20초는 이 서버의 정리 풀 셋을 합한 값이다** — 스프링이 `@PreDestroy`를 순차로
-부르므로 치지직 10초 + 유튜브 4초 + 탈퇴 6초가 그대로 더해진다(아래 유튜브 절).
+대기 중 삭제가 유실돼 고아 secret이 남는다(무해하지만 쌓인다). chat-collector의 종료 유예 20초와 같은 부류다.
+dev는 `docker-compose.dev.yml` auth 블록의 `stop_grace_period: 25s`(예산 24 + 여유 1, POK-396 전에는 줄이 없어 기본 10초였다)이고
+`YoutubeShutdownBudgetTest`가 README 값 이상인지 본다. 운영 태스크 정의(`terminationGracePeriodSeconds`)는 `infra/`(1번)가 반영한다. **24초는 이 서버의 정리 풀 넷을 합한 값이다**: 스프링이 `@PreDestroy`를 순차로
+부르므로 치지직 10초 + 유튜브 4초 + 탈퇴 6초 + SOOP 4초가 그대로 더해진다(아래 유튜브 절. SOOP 풀이 생기며 20초에서 올렸다, POK-396).
 
 로그는 `auth.chzzk.link.<event> userId=` 영어 한 줄이다(`created`·`relinked`·`unlinked`·`refreshed`·
 `refresh_rejected`·`refresh_failed`·`refresh_tick_failed`·`rejected`·`unavailable`·`orphan_token`(WARN — 5xx·타임아웃,
@@ -2729,13 +2740,14 @@ revoke를 DB 락 안에 넣어야 해서(=트랜잭션 안 외부 호출) 포기
 드러내는 것이 목적이다. 회원당 구글 호출은 하루 1회다. `pokeclip.youtube.check.enabled`는 **기본
 켜짐**이고 프로퍼티를 빠뜨려도 켜진다(`matchIfMissing`) — 테스트 프로파일만 명시적으로 끈다.
 
-**종료 유예 20초 이상** — 치지직과 같은 이유다. 커밋 뒤 정리(secrets 삭제)가 전용 스레드
+**종료 유예 24초 이상**: 치지직과 같은 이유다. 커밋 뒤 정리(secrets 삭제)가 전용 스레드
 2개(`YoutubeCleanupExecutor`)에서 돌고 종료 시 최대 3초 기다린다(넘기면 인터럽트하고 1초 더).
-정리 풀이 **셋**이고 각자 스레드 2개를 쓰며, **치지직 10초 + 유튜브 4초 + 탈퇴 6초 = 20초**가 위 20초의
-근거다 — 스프링이 `@PreDestroy`를 순차로 부르므로 **합이 곧 예산**이다.
+정리 풀이 **넷**이고 각자 스레드 2개를 쓰며, **치지직 10초 + 유튜브 4초 + 탈퇴 6초 + SOOP 4초 = 24초**가 위 24초의
+근거다: 스프링이 `@PreDestroy`를 순차로 부르므로 **합이 곧 예산**이다. SOOP(`SoopCleanupExecutor`)은 유튜브 복제라
+3초 + 강제 1초이고 정리 잡에 외부 HTTP가 아예 없다(폐기 API 없음).
 유튜브가 짧은 이유는 정리 잡에 외부 HTTP가 거의 없기 때문이고(구글 revoke를 걷어냈다),
 탈퇴(`WithdrawalCleanupExecutor`, 5초 + 강제 1초)가 가장 긴 이유는 사진 창고 호출(최대 8초)을 기다리기
-때문이다. `YoutubeShutdownBudgetTest`가 셋과 이 문장을 대조한다.
+때문이다. `YoutubeShutdownBudgetTest`가 넷과 이 문장을 대조한다.
 
 로그는 `auth.youtube.link.<event> userId=` 영어 한 줄이다(`created`·`relinked`·`unlinked`·`refreshed`·
 `refresh_rejected`·`refresh_failed`·`check_tick_failed`·`check_batch_capped`(INFO — 후보가 틱당 상한 25를 넘어
@@ -2748,6 +2760,95 @@ revoke를 DB 락 안에 넣어야 해서(=트랜잭션 안 외부 호출) 포기
 
 **마이그레이션은 `V109__create_youtube_channel_links.sql`이다.** 살아있는 행에만 걸리는 부분 유니크
 둘(`channel_id`·`user_id`)이 최종 방어선이고, 점검 후보용 인덱스는 `last_refreshed_at` 축이다.
+
+### SOOP 채널 연동 (POK-396)
+
+**구글 로그인과 별개이고 치지직 연동과 같은 모양이다.** 로그인한 스트리머가 자기 SOOP 방송국을 한 번 묶어 두면
+수집기(POK-397)가 그 스트리머의 Access Token을 auth에서 받아 채팅을 읽는다. 왕복:
+`POST /api/soop-link/start`가 준 `authorizeUrl`(`client_id`·`state`만 싣는다, `redirect_uri`는 SOOP 콘솔에 등록한 값을 SOOP이 쓴다)로
+프론트가 사용자를 보내고, SOOP이 `SOOP_REDIRECT_URI`로 돌려준 `code`를 프론트가 `POST /api/soop-link {code, state}`로 넘긴다.
+방송국은 본문이 아니라 SOOP `validate/live/status`(방송 여부 체크)·`user/stationinfo`(방송국 정보, 닉네임)로 확정한다.
+**아이디는 방송 중이면 방송 여부 체크의 `user_id`, 아니면 방송국 정보 `profile_image` 주소(`…/LOGO/<두 글자>/<아이디>/<아이디>.jpg`)에서
+꺼낸다**(실측 2026-10-23: 방송 중이 아니면 방송 여부 체크가 아이디를 안 준다, 문서 예시와 다르다).
+**대표 이미지가 없으면(LOGO 꼴이 아니면) 방송 중에만 연동된다**: 422 `IDENTITY_UNAVAILABLE`이고 웹은 「방송을 켠 상태에서 다시 연동해 주세요」를
+보인다(사용자 결정 B. 동의는 유효했으니 「동의부터 다시」도 「잠시 뒤 다시」도 아니다). 로그는 `identity_unavailable` INFO와 `token_orphaned`.
+🔴 한계 둘: ① 문서에 없는 주소 꼴에 기대므로 SOOP이 그 꼴을 바꾸면 방송 중이 아닌 스트리머는 모두 이 422로 떨어진다
+② 방송 중 `user_id`와 이미지 주소에서 꺼낸 아이디의 대소문자가 같은지 아직 확인하지 않았다(다음 실계정 시험: 방송 중 연동). 다르면
+같은 방송국이 둘로 보여 중복 연동 검사(409)를 지난다.
+
+🔴 **치지직과 다른 점은 SOOP 개발자 약관 제11조 ⑰(연동 해제·철회 시 지체 없이 파기)에서 나온다.**
+연동이 닫히는 순간(해제 · 재연동 · 갱신 거절 · 탈퇴) 같은 UPDATE 한 문장에서 SOOP 아이디·닉네임을 비우고(V116),
+커밋 뒤 정리에서 토큰 둘을 secrets에서 지운다. 행 자체는 남긴다: 화면이 「SOOP 연동이 끊겼어요」를 그리려면
+「끊겼다는 사실과 사유」(`revoked_at`·`revoke_reason`)가 필요하다. SOOP에는 토큰 폐기 API가 없어 SOOP 쪽 토큰은
+수명(약 8시간)이 지나야 죽는다.
+
+| | 응답 |
+|---|---|
+| `POST /api/soop-link/start` | 200 `{authorizeUrl}`. `state`는 URL 안에 있다(표 없이 서명, 10분. 서명 접두가 치지직과 달라 치지직 state는 여기서 안 통한다) |
+| `POST /api/soop-link` `{code, state}` | 201 `{nickname, linkedAt}` · 400 `INVALID_STATE` · 400 `INVALID_CODE`(SOOP이 교환·조회를 400·401·403 또는 `result` 음수로 거부, **동의부터 다시**) · 409 `CHANNEL_ALREADY_LINKED` · 422 `IDENTITY_UNAVAILABLE`(방송 중이 아니고 대표 이미지가 없어 아이디를 못 읽음, **방송을 켠 상태에서 다시**) · 502 `SOOP_UNAVAILABLE`(5xx·시간 초과·형식 오류·그 밖의 4xx, 잠시 뒤 다시) |
+| `GET /api/soop-link` | 200 `{linked:false}` 또는 `{linked, nickname, status, linkedAt, lastRefreshedAt, accessExpiresAt}`. `status` ∈ `ACTIVE`·`EXPIRED`·`BROKEN`·`UNLINKED`(파생). `linked`는 `ACTIVE`·`EXPIRED`일 때만 true. **`BROKEN`·`UNLINKED`에는 `nickname`이 없다**(파기됐다). 화면은 `status`가 `BROKEN`이면 「SOOP 연동이 끊겼어요(다시 연동)」를 그린다 |
+| `DELETE /api/soop-link` | 204(없어도 204). 행은 남고(`revoked_at`+`USER_UNLINKED`, 아이디·닉네임 NULL) 커밋 뒤에 secrets 삭제. 외부 HTTP 없음 |
+| `POST /internal/soop-link/resolve` `{userId}` | **항상 200**, 아래 |
+
+**공개 응답 어디에도 SOOP 아이디가 없다**(닉네임만). 시험은 키 이름이 아니라 가짜 SOOP이 준 아이디 **값**이 본문에 없는지 본다.
+오류 본문은 `{"reason": "<위 코드>"}` 한 필드다. 토큰·code·state·아이디·닉네임은 로그 어디에도 안 남는다(`SecretLeakTest`).
+예외 하나는 치지직과 같다: 두 계정이 같은 방송국을 동시에 묶어 사전 조회를 지나 DB 유니크 위반까지 가면 Hibernate 오류 로그에
+`soop_user_id`가 한 줄 남을 수 있다(그 로거는 `error`로 눌러 두어 평시 0건).
+
+**`resolve`(수집기용) 계약.** `POST /internal/soop-link/resolve {userId}`, `X-Internal-Token` 헤더, `/internal/**` 체인
+(스트림키·치지직·유튜브 `resolve`와 같은 문, 설정 변경 없음). 우리 회원 번호(`users.id`)만 받는다. **항상 HTTP 200**이다:
+「연동 안 됨·끊김」(수집 안 함)과 「auth 장애」(판단 불가)는 조치가 정반대라 둘 다 4xx면 수집기가 못 가른다.
+`{valid:true, soopUserId, accessToken, expiresAt}` 또는 `{valid:false, reason}`. `soopUserId`는 수집기가 채팅방을 가리키는 데
+필요해 **이 내부 응답에만** 싣는다. `reason`은 넷:
+`NOT_LINKED`(연동한 적 없음) · `UNLINKED`(사용자 해제·탈퇴) · `BROKEN`(SOOP이 갱신을 거부, 스트리머가 재동의해야 풀린다) ·
+`REFRESH_UNAVAILABLE`(즉석 갱신 일시 실패, 임박한 토큰은 주지 않는다). 거절 응답에는 토큰·아이디 칸이 아예 없다.
+남은 수명이 1시간(`resolve-min-remaining`)보다 짧으면 넘기기 전에 즉석 갱신한다.
+🔴 **치지직(24시간 토큰, 「한 번 받으면 방송 끝까지」)과 달리 SOOP 토큰은 약 8시간이다**(문서 예시 `expires_in` 28800, 실값은 실계정
+시험에서 확인). **수집기는 `expiresAt` 전에 다시 부른다**(POK-397 몫). 즉석 갱신의 거절은 그대로 파기한다. 단 아래 브레이크가 선 뒤에는 파기하지 않고 `REFRESH_UNAVAILABLE`로 답한다.
+
+**갱신으로 철회를 확인한다.** SOOP은 사용자가 권한을 끊어도 알려 주지 않아, 갱신 거절로만 안다. `@Scheduled`가 **1시간마다**
+(`pokeclip.soop.check.interval=PT1H`) 살아 있는 연동 중 만료가 2시간(`refresh-ahead`) 안으로 남았거나 마지막 확인이
+24시간(`check.staleness`) 지난 것을 골라 회원마다 갱신한다. 회원 행 락 뒤 다시 읽어 이미 갱신됐으면 SOOP을 안 부른다.
+400·401·403이면 영구(`REFRESH_REJECTED` → `BROKEN`, 아이디·닉네임·토큰 파기), 그 밖은 행을 두고 다음 틱에 재시도한다.
+한 틱은 오래 확인 안 한 순 앞 **25명**(`check.batch-limit`)만 본다: 스프링 기본 스케줄러는 스레드 하나라 치지직·유튜브·청소 틱과 나눈다.
+SOOP 장애가 길면 오래된 순 앞 25가 매 틱 실패해(확인 시각이 안 바뀐다) 뒤쪽은 장애가 끝난 뒤 확인된다(유튜브 철회 점검의 구멍과 같은 성질).
+`pokeclip.soop.check.enabled`는 기본 켜짐이고 프로퍼티를 빠뜨려도 켜진다(`matchIfMissing`). 시험 프로파일만 끈다.
+
+🔴 **갱신 브레이크.** 갱신 거절을 **두 경로 모두**(스케줄러 점검 · 수집기 resolve 즉석 갱신) 한 셈에 센다. 연속 수가 **3**(`check.reject-brake`)에
+닿는 거절부터 파기하지 않고, **그 프로세스가 사는 동안 두 경로 모두 파기를 멈춘다**: 스케줄러는 그 틱의 남은 회원을 안 부르고 다시 틱을 서지
+않으며, resolve 즉석 갱신은 4xx를 받아도 닫지 않고 `REFRESH_UNAVAILABLE`로 답한다(로그 `refresh_rejected_braked status=` WARN).
+세기와 판정은 한 번의 원자 연산이라 거절이 동시에 몰려도 닫히는 것은 **2명(`reject-brake`−1)까지**다.
+연속 수를 0으로 돌리는 것은 **SOOP이 실제로 답한 성공(갱신됨)뿐**이다. 토큰이 신선해 SOOP을 안 부른 resolve·연동 없음·일시 장애는 셈을 그대로 둔다:
+비밀값이 틀린 배포에서도 신선한 회원의 resolve는 성공처럼 보이므로, 그것이 0으로 돌리면 브레이크가 영영 안 선다.
+로그 `auth.soop.link.refresh_reject_burst consecutive= lastUserId= action=…_then_redeploy`(ERROR) 한 줄이 서는 순간의 신호다(비밀값은 안 찍는다).
+이유: 치지직·유튜브는 앱 설정 오류(시크릿 오타·앱 교체)를 응답의 오류 코드로 가려 일시로 돌리지만, SOOP은 토큰 주소의 오류 꼴이
+문서에 없어 가를 수 없다. 브레이크가 없으면 비밀값 하나가 틀린 배포가 전 회원 연동을 닫고 토큰까지 지운다(되돌릴 수 없다).
+resolve도 세는 이유: 스케줄러만 세면 첫 틱(최대 1시간 뒤) 전에, 그리고 브레이크 뒤에도, 방송을 켜는 회원마다 resolve가 같은 설정 오류로 연동을
+하나씩 닫는다(감사 2회차 · PR #329 봇 지적). 대가 둘: 브레이크 전에 거절된 2명은 이미 닫혔다 · **브레이크가 선 동안 진짜로 동의를 철회한 회원의
+아이디·닉네임·토큰도 재배포 때까지 남는다**(약관 제11조 ⑰의 「지체 없이」에서 벗어나지만, 비상 상태라 짧다고 본다). 그동안 수집도 멈춘다(`REFRESH_UNAVAILABLE`).
+**푸는 법**: `SOOP_CLIENT_ID`·`SOOP_CLIENT_SECRET`·`SOOP_REDIRECT_URI`를 확인해 고치고 재배포한다(재시작이 브레이크를 푼다).
+실계정으로 확인할 것: 잘못된 `client_secret`으로 갱신하면 SOOP이 무엇을 돌려주는가.
+**거짓 경보도 있다**: 진짜 거절(철회·refresh 만료) 셋이 성공 없이 연달아 와도 브레이크가 선다. 그러면 재배포 때까지 정기 철회 확인과 파기가
+멈춘다. 같은 ERROR 줄이 신호이므로, 비밀값이 맞으면 원인을 확인한 뒤 재배포로 푼다.
+같은 이유로 **연동 단계에서는 앱 설정 오류와 사용자 쪽 거절을 가를 수 없다**: 비밀값이 틀린 배포에서 연동을 누르면 사용자에게는
+「다시 시도」 문구(`INVALID_CODE`)가 나가고 서버에는 `auth.soop.link.rejected status=` INFO만 남는다. 연동 거절이 몰리면 비밀값부터 본다.
+
+**동의 복귀의 state(웹).** SOOP은 콜백에 `state`를 돌려준다(2026-10-23 실계정 확인, 네 번 모두 `?code=…&state=…`). 웹은 쿼리의 `state`만 서버에 되돌려주고 대체 경로(세션 저장소)는 없다. `state`가 없으면 1회용 `code`를 서버에 보내지 않고 「연동 요청을 확인할 수 없어요」로 채널 화면에 돌려보낸다.
+
+**정리 실패 때 남는 것(한계).** 커밋 뒤 정리는 전용 스레드 2개(`SoopCleanupExecutor`, 종료 시 최대 3초 + 강제 1초)에서 돈다.
+access·refresh 삭제는 각각 시도한다(하나가 실패해도 나머지는 지운다). 그래도 아래 셋에서는 **토큰 원문(암호문)이 secrets에 남을 수
+있고 자동 회수 장치는 없다**: 정리 큐가 차서 거부됨(`auth.soop.cleanup.rejected userId= reason=`, WARN) · 종료 유예에 잘림
+(`auth.soop.cleanup.dropped userId=`, WARN) · 삭제 자체가 실패(`auth.soop.cleanup.failed userId= causeType=`, WARN) · 프로세스가
+죽음(로그 없음). **단서는 닫힌 행에 남은 ref 둘**(`access_token_ref`·`refresh_token_ref`)이다: 그 ref가 secrets에 아직 있으면
+지우면 된다. 아이디·닉네임은 닫는 문장에서 이미 비었으므로 이 경우에도 남지 않는다.
+
+로그는 `auth.soop.link.<사건> userId=` 영어 한 줄이다: `created` · `relinked` · `unlinked` · `withdrawn`(탈퇴. `relinked`·`unlinked`·`withdrawn` 셋은 secrets 정리 뒤에 찍힌다) · `refreshed` ·
+`refresh_rejected status=`(WARN, 정리 뒤) · `refresh_rejected_braked status=`(WARN, 브레이크 뒤라 안 닫음) · `refresh_failed causeType=`(WARN) · `refresh_tick_failed causeType=`(WARN) ·
+`refresh_reject_burst`(ERROR) · `rejected status=` · `identity_unavailable` · `unavailable causeType=`(WARN) · `token_orphaned`(교환 뒤 실패해 받은 토큰을
+버리지 못함, SOOP에 폐기 API가 없다) · `resolve_rejected reason=` · `failed reason=`. 정리 스레드는 `auth.soop.cleanup.*`다.
+
+풀 고갈 쌍둥이 시험(`ChzzkResolvePoolExhaustionTest`의 SOOP 판)은 두지 않았다: 갱신 HTTP를 회원 행 락·커넥션을 쥔 채 기다리는
+구조가 치지직과 같고 그 구조를 치지직 시험이 잰다. SOOP 코드가 그 구조를 바꾸면 그때 만든다.
 
 ### 회원정보 수정 — 표시 이름·프로필 사진 (POK-207)
 

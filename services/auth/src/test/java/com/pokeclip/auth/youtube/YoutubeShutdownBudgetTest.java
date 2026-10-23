@@ -19,6 +19,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 기다리므로 <b>합이 곧 예산</b>이다. 예전에는 10 + 10 + 강제 2 = <b>최대 22초</b>로 문서화한 15초를
  * 넘겼다(봇 4판 P2-3) — 넘기면 오케스트레이터가 SIGKILL로 끊어 <b>어차피 유실되면서 배포만 느려진다.</b>
  *
+ * <p>넷째 풀은 SOOP(POK-396)이다. 더하는 줄을 먼저 넣고 빨간불(24초 > 20초)을 본 뒤 문서값을 24초로 올렸다.
+ *
  * <p>🔴 <b>이 파일은 이름만 유튜브지 성격은 「전 서버 예산 검사」다.</b> 세 번째 풀(탈퇴, POK-171)이
  * 생겼을 때 이 검사는 <b>여전히 둘만 더해 14 ≤ 20을 재고 통과했다</b> — 이름과 목적이 둘 다 거짓이 되는
  * 자리라, 풀을 더하는 사람이 여기 한 줄을 같이 더해야 한다. 그것만은 기계가 대신 못 한다.
@@ -62,6 +64,12 @@ class YoutubeShutdownBudgetTest {
                 .plus(waitConstant("com.pokeclip.auth.withdrawal.WithdrawalCleanupExecutor", "FORCED_STOP_WAIT"));
     }
 
+    /** SOOP 풀(POK-396)도 같은 방식으로 읽는다. 유튜브 복제라 강제 대기까지 더한다. */
+    private static Duration soopWait() throws Exception {
+        return waitConstant("com.pokeclip.auth.soop.SoopCleanupExecutor", "SHUTDOWN_WAIT")
+                .plus(waitConstant("com.pokeclip.auth.soop.SoopCleanupExecutor", "FORCED_STOP_WAIT"));
+    }
+
     private static Duration waitConstant(String className, String field) throws Exception {
         Field f = Class.forName(className).getDeclaredField(field);
         f.setAccessible(true);
@@ -89,18 +97,37 @@ class YoutubeShutdownBudgetTest {
     }
 
     @Test
-    void 세_정리_풀의_대기_합이_문서화한_종료_유예_안이다() throws Exception {
+    void 네_정리_풀의_대기_합이_문서화한_종료_유예_안이다() throws Exception {
         Duration chzzk = chzzkShutdownWait();
         Duration youtube = YoutubeCleanupExecutor.SHUTDOWN_WAIT.plus(YoutubeCleanupExecutor.FORCED_STOP_WAIT);
         Duration withdrawal = withdrawalWait();
-        Duration total = chzzk.plus(youtube).plus(withdrawal);
+        Duration soop = soopWait();
+        Duration total = chzzk.plus(youtube).plus(withdrawal).plus(soop);
 
         assertThat(total)
-                .as("치지직 %s + 유튜브 %s + 탈퇴 %s = %s — 문서화한 종료 유예 %s를 넘는다. "
+                .as("치지직 %s + 유튜브 %s + 탈퇴 %s + SOOP %s = %s: 문서화한 종료 유예 %s를 넘는다. "
                         + "치지직은 revoke 2회가 남아 줄일 수 없고 탈퇴는 사진 창고(최대 8초)를 기다리니, "
                         + "줄일 수 있는 쪽부터 보고 그래도 안 되면 README와 인프라 요구를 함께 올려라",
-                        chzzk, youtube, withdrawal, total, documentedGrace())
+                        chzzk, youtube, withdrawal, soop, total, documentedGrace())
                 .isLessThanOrEqualTo(documentedGrace());
+    }
+
+    /**
+     * dev compose의 auth 종료 유예가 README가 요구하는 값 이상인가. 예산 검사가 README만 보면 실제로 주는 유예가
+     * compose 기본값(10초)에 머물러도 초록이다(POK-396 이전 auth 블록에 이 줄이 없었다).
+     */
+    @Test
+    void dev_compose의_auth_종료_유예가_문서화한_값_이상이다() throws Exception {
+        String compose = Files.readString(SERVICES.resolve("docker-compose.dev.yml"));
+        int start = compose.indexOf("\n  auth:\n");
+        assertThat(start).as("dev compose에서 auth 서비스를 못 찾았다").isGreaterThan(0);
+        Matcher next = Pattern.compile("\n  [a-z][a-z0-9-]*:\n").matcher(compose);
+        String block = next.find(start + 1) ? compose.substring(start, next.start()) : compose.substring(start);
+        Matcher grace = Pattern.compile("(?m)^    stop_grace_period: (\\d+)s\\s*$").matcher(block);
+        assertThat(grace.find()).as("auth 블록에 stop_grace_period가 없다(compose 기본 10초가 된다)").isTrue();
+        assertThat(Duration.ofSeconds(Long.parseLong(grace.group(1))))
+                .as("auth 종료 유예가 README 「종료 유예 %s초 이상」보다 짧다", documentedGrace().toSeconds())
+                .isGreaterThanOrEqualTo(documentedGrace());
     }
 
     /**

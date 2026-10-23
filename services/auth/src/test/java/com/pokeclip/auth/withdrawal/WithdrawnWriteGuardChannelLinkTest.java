@@ -5,6 +5,9 @@ import com.pokeclip.auth.chzzk.ChzzkCleanupExecutor;
 import com.pokeclip.auth.chzzk.ChzzkLinkWriter;
 import com.pokeclip.auth.chzzk.ChzzkMe;
 import com.pokeclip.auth.chzzk.ChzzkTokens;
+import com.pokeclip.auth.soop.SoopIdentity;
+import com.pokeclip.auth.soop.SoopLinkWriter;
+import com.pokeclip.auth.soop.SoopTokens;
 import com.pokeclip.auth.token.TokenService;
 import com.pokeclip.auth.user.User;
 import com.pokeclip.auth.user.UserService;
@@ -59,23 +62,28 @@ class WithdrawnWriteGuardChannelLinkTest extends WithdrawalTestSupport {
     /** 스파이 빈은 컨텍스트 수준에서 교체되므로 필드로 둔다 — 생성자 주입 대상이 아니다. */
     @MockitoSpyBean ChzzkLinkWriter chzzkWriterSpy;
 
+    /** SOOP 쪽 전제를 같은 방식으로 잰다(아래 SOOP 갈래). 같은 클래스의 스파이라 컨텍스트가 늘지 않는다. */
+    @MockitoSpyBean SoopLinkWriter soopWriterSpy;
+
     private final ChzzkLinkWriter chzzkWriter;
     private final YoutubeLinkWriter youtubeWriter;
     private final ChzzkCleanupExecutor chzzkCleanup;
     private final YoutubeCleanupExecutor youtubeCleanup;
     private final WithdrawalCleanupExecutor cleanup;
+    private final SoopLinkWriter soopWriter;
 
     WithdrawnWriteGuardChannelLinkTest(MockMvc mockMvc, UserService userService, TokenService tokenService,
                                        JdbcTemplate jdbc, ChzzkLinkWriter chzzkWriter,
                                        YoutubeLinkWriter youtubeWriter, ChzzkCleanupExecutor chzzkCleanup,
                                        YoutubeCleanupExecutor youtubeCleanup,
-                                       WithdrawalCleanupExecutor cleanup) {
+                                       WithdrawalCleanupExecutor cleanup, SoopLinkWriter soopWriter) {
         super(mockMvc, userService, tokenService, jdbc);
         this.chzzkWriter = chzzkWriter;
         this.youtubeWriter = youtubeWriter;
         this.chzzkCleanup = chzzkCleanup;
         this.youtubeCleanup = youtubeCleanup;
         this.cleanup = cleanup;
+        this.soopWriter = soopWriter;
     }
 
     /** 상위의 행 거두기보다 먼저 돈다 — 정리 스레드가 secrets를 지운 뒤에 행이 사라져야 한다. */
@@ -180,6 +188,53 @@ class WithdrawnWriteGuardChannelLinkTest extends WithdrawalTestSupport {
     private Timestamp deletedAt(User user) {
         return jdbc.queryForObject("SELECT deleted_at FROM users WHERE id = ?",
                 Timestamp.class, user.getId());
+    }
+
+    /**
+     * 셋째 쌍둥이(POK-396): 「SOOP 탈퇴용 닫기에 가드를 넣으면 안 된다」의 전제를 잰다. 치지직과 같이 그 닫기가 불리는
+     * 순간 {@code deleted_at}이 아직 비어 있어야 하고, 탈퇴는 SOOP 연동이 있어도 끝나야 한다.
+     */
+    @Test
+    void SOOP_연동을_가진_회원의_탈퇴는_자기_가드에_안_막히고_닫기가_불릴_때_탈퇴_시각은_비어_있다() throws Exception {
+        User user = newUser();
+        soopWriter.create(user.getId(), new SoopIdentity("soop-" + UUID.randomUUID(), "닉네임"),
+                new SoopTokens("soop-at-1", "soop-rt-1", Duration.ofHours(8), null));
+        assertThat(aliveLinks("soop_channel_links", user)).as("전제: SOOP 연동이 있다").isEqualTo(1);
+
+        AtomicReference<Timestamp> 닫기_시점의_탈퇴_시각 = new AtomicReference<>();
+        AtomicBoolean 불렸다 = new AtomicBoolean();
+        doAnswer(call -> {
+            불렸다.set(true);
+            닫기_시점의_탈퇴_시각.set(deletedAt(user));
+            return call.callRealMethod();
+        }).when(soopWriterSpy).revokeForWithdrawal(eq(user.getId()), any());
+
+        withdraw(user);
+
+        assertThat(불렸다).as("탈퇴가 SOOP 닫기를 아예 안 불렀다").isTrue();
+        assertThat(닫기_시점의_탈퇴_시각.get())
+                .as("🔴 SOOP 닫기보다 익명화가 먼저 돌았다: 거기에 「살아 있는 회원만」을 넣는 순간 탈퇴가 자기 가드에 막힌다")
+                .isNull();
+        assertThat(aliveLinks("soop_channel_links", user)).isZero();
+    }
+
+    /** 셋째 쌍둥이(POK-396). 같은 두 줄(가드+락)이 SOOP writer에도 있어야 한다. */
+    @Test
+    void 탈퇴한_회원에게는_SOOP_연동을_안_만들어_준다() throws Exception {
+        User user = newUser();
+        withdraw(user);
+        int secretsBefore = jdbc.queryForObject("SELECT count(*) FROM secrets", Integer.class);
+
+        assertThatThrownBy(() -> soopWriter.create(user.getId(),
+                new SoopIdentity("soop-" + UUID.randomUUID(), "닉네임"),
+                new SoopTokens("soop-at-late", "soop-rt-late", Duration.ofHours(8), null)))
+                .isInstanceOf(AuthException.class);
+
+        assertThat(aliveLinks("soop_channel_links", user))
+                .as("🔴 탈퇴한 계정에 살아 있는 SOOP 연동이 생겼다")
+                .isZero();
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM secrets", Integer.class))
+                .as("🔴 OAuth 원문이 secrets에 남았다").isEqualTo(secretsBefore);
     }
 
     private int aliveLinks(String table, User user) {
