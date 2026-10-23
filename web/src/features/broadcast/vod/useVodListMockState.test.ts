@@ -11,14 +11,31 @@ const MINE_START = Date.parse('2026-09-29T10:00:00Z');
 const api = vi.hoisted(() => ({
   spans: [] as { startMs: number; durationSeconds: number }[],
   asked: [] as string[],
+  /** 출입증 받기와 녹화 목록 묻기를 부른 순서(POK-317) */
+  order: [] as string[],
   /** 목록 끝에 더할 방송 줄 */
   extra: [] as Record<string, unknown>[],
 }));
 vi.mock('@/api/mediaPlayback', () => ({
   playbackConfigured: () => true,
+  onPlaybackForbidden: () => undefined,
   lookupRecordingSpans: (key: string) => {
     api.asked.push(key);
+    api.order.push(`list:${key}`);
     return Promise.resolve(api.spans);
+  },
+}));
+vi.mock('@/api/playbackAccess', () => ({
+  ensurePlaybackAccessForList: (items: { streamId: string; mediaKey: string }[]) => {
+    api.order.push(`access:${items.map((i) => i.mediaKey).join(',')}`);
+    // 출입증 답이 늦게 온다: 목록이 그 답을 기다리는지 잰다
+    const answer = new Promise<{ kind: 'granted'; expiresAtMs: null }>((resolve) =>
+      setTimeout(() => {
+        api.order.push('access-answered');
+        resolve({ kind: 'granted', expiresAtMs: null });
+      }, 0),
+    );
+    return new Map(items.map((i) => [i.mediaKey, answer]));
   },
 }));
 vi.mock('@/api/clipEditor', async (importOriginal) => ({
@@ -52,6 +69,7 @@ vi.mock('@/api/clipEditor', async (importOriginal) => ({
 afterEach(() => {
   api.spans = [];
   api.asked = [];
+  api.order = [];
   api.extra = [];
 });
 
@@ -80,6 +98,16 @@ describe('useVodListMockState — 녹화 있음 판정', () => {
     const { result } = renderHook(() => useVodListMockState(), { wrapper: withToastProvider });
     await waitFor(() => expect(result.current.totalCount).toBe(2));
     expect(api.asked).toEqual(['key-shared']);
+  });
+
+  it('녹화 목록을 묻기 전에 확인할 방송들의 출입증을 한 번에 받는다: CDN 뒤 녹화 목록은 쿠키가 없으면 403이다(POK-317)', async () => {
+    const { result } = renderHook(() => useVodListMockState(), { wrapper: withToastProvider });
+    await waitFor(() => expect(result.current.totalCount).toBe(2));
+    expect(api.order).toEqual([
+      'access:key-shared,key-shared',
+      'access-answered',
+      'list:key-shared',
+    ]);
   });
 
   it('행 제목은 치지직 제목이고, 제목이 없는 방송은 번호다(POK-259)', async () => {

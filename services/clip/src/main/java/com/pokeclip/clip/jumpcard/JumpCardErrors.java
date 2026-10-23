@@ -83,6 +83,32 @@ public final class JumpCardErrors {
         }
     }
 
+    /**
+     * 수동 마킹(4B)의 eventId가 이미 <b>남의 방송 카드</b>다(POK-391 계획 검증 E4). 그 카드를 내주면 남의 카드가
+     * 응답 본문에 실린다. 마킹 문이 400 {@code invalid_request}로 바꾼다.
+     *
+     * <p>🔴 <b>{@code JumpCardExceptionHandler}에 이 타입의 처리기를 두지 마라.</b> 그 조언은 전역이라 마킹 문의
+     * 좁힌 조언({@code assignableTypes})보다 먼저 잡고, 거절 본문이 4B 계약({@code {"reason":…}})이 아니게 된다
+     * (계획 검증 E1). 같은 이유로 마킹 길은 {@link BroadcastNotFoundException}을 안 쓴다.
+     */
+    public static class HotkeyEventOwnedByOtherException extends RuntimeException {
+
+        public HotkeyEventOwnedByOtherException() {
+            super("이 eventId는 다른 회원의 카드다");
+        }
+    }
+
+    /**
+     * 수동 마킹이 고른 방송이 잠그려는 사이 사라졌다(계획 검증 E8). 마킹 문이 404 {@code broadcast_not_found}로
+     * 바꾼다. 전역 조언에 두지 않는 이유는 {@link HotkeyEventOwnedByOtherException}과 같다.
+     */
+    public static class HotkeyBroadcastGoneException extends RuntimeException {
+
+        public HotkeyBroadcastGoneException() {
+            super("수동 카드를 넣을 방송이 없다");
+        }
+    }
+
     private JumpCardErrors() {
     }
 }

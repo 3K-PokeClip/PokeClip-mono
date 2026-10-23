@@ -1,6 +1,8 @@
 package com.pokeclip.clip.broadcast;
 
+import ch.qos.logback.classic.Level;
 import com.pokeclip.clip.support.IntegrationTestSupport;
+import com.pokeclip.web.support.LogCaptor;
 import org.junit.jupiter.api.BeforeEach;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.junit.jupiter.api.Test;
@@ -222,5 +224,90 @@ class BroadcastEventProcessorTest extends IntegrationTestSupport {
 
         assertThat(broadcasts.findByStreamId("S-w-2").orElseThrow().ingestKey())
                 .as("빈 값을 키로 쓰면 조각이 영영 안 나온다").isEqualTo("S-w-2");
+    }
+
+    // ── 플랫폼(POK-398) ── 편지의 선택 칸. 안 보내면 치지직이고, 방송 줄이 생길 때 한 번만 정한다
+
+    @Test
+    void 플랫폼_칸이_없는_편지는_치지직이다() {
+        processor.process(Envelopes.started("evt-p1", "S-p-1", 1L));
+
+        assertThat(저장된_플랫폼("S-p-1")).isEqualTo("CHZZK");
+    }
+
+    @Test
+    void 편지가_실은_플랫폼을_남긴다() {
+        processor.process(Envelopes.startedOn("evt-p2", "S-p-2", 1L, "SOOP"));
+
+        assertThat(저장된_플랫폼("S-p-2")).isEqualTo("SOOP");
+    }
+
+    /** 종료가 먼저 와 생긴 줄(자리표시)도 같은 칸을 채운다. 시작 편지와 쌍둥이다. */
+    @Test
+    void 종료가_먼저_와도_편지가_실은_플랫폼을_남긴다() {
+        processor.process(Envelopes.endedOn("evt-p3", "S-p-3", 2L, "SOOP"));
+
+        assertThat(저장된_플랫폼("S-p-3")).isEqualTo("SOOP");
+    }
+
+    /**
+     * 형식 밖이면 버리지 않고 치지직으로 저장한다. 편지를 버리면 방송 줄이 안 생겨 그 방송이 통째로 사라진다.
+     * WARN에는 값 원문을 안 찍는다: 큐로 받은 값이라 개행이 섞이면 로그 한 줄을 위조할 수 있다.
+     */
+    @Test
+    void 형식_밖의_플랫폼은_치지직으로_저장하고_WARN을_남긴다() {
+        try (LogCaptor logs = new LogCaptor()) {
+            processor.process(Envelopes.startedOn("evt-p4", "S-p-4", 1L, "chzzk!\nFAKE"));
+
+            assertThat(logs.levelOf("broadcast.platform_invalid")).isEqualTo(Level.WARN);
+            assertThat(logs.messages()).anyMatch(m -> m.contains("broadcast.platform_invalid")
+                    && m.contains("streamId=S-p-4") && m.contains("eventId=evt-p4"));
+            assertThat(logs.messages()).as("값 원문은 안 찍는다").noneMatch(m -> m.contains("chzzk!"));
+        }
+
+        assertThat(저장된_플랫폼("S-p-4")).isEqualTo("CHZZK");
+    }
+
+    /** 17자는 칸(16)을 넘는다. 그대로 넘기면 저장이 영영 실패해 같은 방송의 뒤 편지가 전부 막힌다. */
+    @Test
+    void 칸보다_긴_플랫폼도_치지직으로_저장한다() {
+        assertThat(processor.process(Envelopes.startedOn("evt-p5", "S-p-5", 1L, "ABCDEFGHIJKLMNOPQ")))
+                .isEqualTo(ProcessResult.PROCESSED);
+
+        assertThat(저장된_플랫폼("S-p-5")).isEqualTo("CHZZK");
+    }
+
+    /** 빈 값·공백은 안 보낸 것과 같다. 형식 오류가 아니라서 WARN도 없다. */
+    @Test
+    void 빈_플랫폼은_안_보낸_것과_같고_WARN이_없다() {
+        try (LogCaptor logs = new LogCaptor()) {
+            processor.process(Envelopes.startedOn("evt-p6", "S-p-6", 1L, "  "));
+
+            assertThat(logs.levelOf("broadcast.platform_invalid")).isNull();
+        }
+
+        assertThat(저장된_플랫폼("S-p-6")).isEqualTo("CHZZK");
+    }
+
+    /** 방송 도중 플랫폼이 바뀌지 않는다. 다른 값이 오면 발행 쪽 결함이고, 첫 값을 지킨다. */
+    @Test
+    void 시작_뒤에_다른_플랫폼_편지가_와도_첫_값을_지킨다() {
+        processor.process(Envelopes.startedOn("evt-p7", "S-p-7", 1L, "SOOP"));
+        processor.process(Envelopes.endedOn("evt-p8", "S-p-7", 2L, "CHZZK"));
+
+        assertThat(저장된_플랫폼("S-p-7")).isEqualTo("SOOP");
+    }
+
+    /** 칸이 없는 편지가 뒤에 와도 기본값(치지직)으로 덮지 않는다. */
+    @Test
+    void 플랫폼_칸이_없는_뒤_편지도_첫_값을_안_바꾼다() {
+        processor.process(Envelopes.endedOn("evt-p9", "S-p-9", 5L, "SOOP"));
+        processor.process(Envelopes.started("evt-p10", "S-p-9", 1L));
+
+        assertThat(저장된_플랫폼("S-p-9")).isEqualTo("SOOP");
+    }
+
+    private String 저장된_플랫폼(String streamId) {
+        return jdbc.queryForObject("SELECT platform FROM broadcasts WHERE stream_id = ?", String.class, streamId);
     }
 }

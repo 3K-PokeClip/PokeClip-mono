@@ -1,4 +1,4 @@
-import { renderHook } from '@testing-library/react';
+import { renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useEditorVideoPlayback } from './useEditorVideoPlayback';
 
@@ -111,7 +111,7 @@ describe('useEditorVideoPlayback: 출입증 쿠키 (POK-317)', () => {
         : new Promise<Response>(() => undefined),
     );
     vi.stubGlobal('fetch', fetchSpy);
-    const { ensurePlaybackAccess } = await import('@/api/clipEditor');
+    const { ensurePlaybackAccess } = await import('@/api/playbackAccess');
     const { useEditorVideoPlayback: hook } = await import('./useEditorVideoPlayback');
     const props = {
       streamId: 'key-1',
@@ -134,5 +134,44 @@ describe('useEditorVideoPlayback: 출입증 쿠키 (POK-317)', () => {
     expect(
       fetchSpy.mock.calls.filter(([url]) => String(url).endsWith('/playback-access')),
     ).toHaveLength(1);
+  });
+
+  it('영상 조각이 403이면 쿠키가 지워진 것이라 출입증을 버리고 다시 받아 한 번 더 부른다(PR #332 codex)', async () => {
+    vi.resetModules();
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_PLAYBACK_BASE_URL', 'https://media.test');
+    let gets = 0;
+    const fetchSpy = vi.fn((input: RequestInfo | URL, _init?: RequestInit) => {
+      if (String(input).endsWith('/playback-access'))
+        return Promise.resolve(
+          new Response(JSON.stringify({ expiresAt: '2999-01-01T00:00:00Z' }), { status: 200 }),
+        );
+      gets += 1;
+      return Promise.resolve(
+        new Response(gets === 1 ? null : 'mp4', { status: gets === 1 ? 403 : 200 }),
+      );
+    });
+    vi.stubGlobal('fetch', fetchSpy);
+    vi.stubGlobal(
+      'URL',
+      Object.assign(URL, { createObjectURL: () => 'blob:x', revokeObjectURL: () => undefined }),
+    );
+    const { ensurePlaybackAccess } = await import('@/api/playbackAccess');
+    const { useEditorVideoPlayback: hook } = await import('./useEditorVideoPlayback');
+    await ensurePlaybackAccess('S-1', 'key-1');
+
+    const { result } = renderHook(() =>
+      hook({
+        streamId: 'key-1',
+        recordingStartMs: BASE,
+        recordingSeconds: 38,
+        pieces: PIECES,
+        initialRange: { startSeconds: 5, endSeconds: 10 },
+      }),
+    );
+    await waitFor(() => expect(gets).toBe(2));
+    expect(
+      fetchSpy.mock.calls.filter(([url]) => String(url).endsWith('/playback-access')),
+    ).toHaveLength(2);
+    await waitFor(() => expect(result.current.playback.error).toBeNull());
   });
 });

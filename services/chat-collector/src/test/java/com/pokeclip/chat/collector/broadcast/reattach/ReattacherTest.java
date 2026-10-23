@@ -1,5 +1,7 @@
 package com.pokeclip.chat.collector.broadcast.reattach;
 
+import com.pokeclip.chat.collector.Platform;
+
 import ch.qos.logback.classic.Level;
 import com.pokeclip.chat.collector.ChzzkProperties;
 import com.pokeclip.chat.collector.StopReason;
@@ -945,7 +947,7 @@ class ReattacherTest extends IntegrationTestSupport {
 
     /** 실물 등록부에 세션을 하나 세운다 — 가짜 치지직이 받는다. */
     private void 열어둔다(String streamId, long streamerId, Instant startedAt) {
-        assertThat(registry.open(new SessionKey(streamId, streamerId, "channel-" + streamerId, startedAt),
+        assertThat(registry.open(new SessionKey(Platform.CHZZK, streamId, streamerId, "channel-" + streamerId, startedAt),
                 "token-" + streamerId)).isTrue();
     }
 

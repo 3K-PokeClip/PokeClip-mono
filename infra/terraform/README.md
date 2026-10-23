@@ -16,10 +16,11 @@ Terraform 코드입니다. 설계 정본은 「HTTPS · 엣지 인프라 설계�
 `prod/*` · `nonprod/*` 는 같은 리스 계정 안의 환경입니다(설계 3-1).
 아래는 **목표 구조**입니다 — 지금 있는 것은
 `modules/{state_bucket,secret_shells,cloudfront_public_key}` ·
-`modules/{network,acm_certificate}` · `policy/guard` · `scripts` · `runbooks` ·
-`nonprod/{bootstrap,dev,dns-legacy}` ·
-`prod/{bootstrap,secrets,network,runtime,certs,registry}` 뿐이고, 나머지 루트는
-계획의 후속 PR 이 더합니다.
+`modules/{network,acm_certificate}` ·
+`modules/{waf_acl,alb,media_ingest,ecs_service,media_host}` · `policy/guard` ·
+`scripts` · `runbooks` · `nonprod/{bootstrap,dev,dns-legacy}` ·
+`prod/{bootstrap,secrets,network,runtime,certs,registry,platform,media}`
+뿐이고, 나머지 루트(edge · records)는 계획의 후속 PR 이 더합니다.
 
 ```
 infra/terraform/
@@ -66,6 +67,8 @@ prod 엣지 비밀의 값 입력 · 교체 절차는 [엣지 비밀 런북](runb
 운영 단계 절차는 `runbooks/` 에 있습니다 —
 [조직 · CT 도입(보류 — 결정 46)](runbooks/org-ct.md) ·
 [prod 산출물 올리기(이미지 푸시 · 랜딩 업로드)](runbooks/prod-artifacts.md) ·
+[ALB 교차 영역 실측(O7d)](runbooks/alb-cross-zone-bench.md) ·
+[Media 상자 교체](runbooks/media-swap.md) ·
 [prod 런타임 1단-가(apply · SQL 적용)](runbooks/runtime-1a.md).
 운영 단계마다 먼저 [단계 직전 점검](runbooks/stage-precheck.md)을 합니다.
 2-3 판정(dev 자동 주체 → prod 권한 없음, 정책 시뮬레이터)은
@@ -89,6 +92,19 @@ prod 엣지 비밀의 값 입력 · 교체 절차는 [엣지 비밀 런북](runb
     않습니다.
 *   `init -backend-config=backend.hcl` 은 운영 단계(kty 승인)에서만
     실행합니다. 커밋 단계 검증은 `init -backend=false` 입니다.
+
+### ALB 규칙 조건 값 한도
+
+*   ALB 리스너 규칙 하나의 조건 값은 다섯까지(조정 불가), 조건 하나의 비교
+    문자열은 셋까지입니다(계획 P1 — AWS 문서 「Quotas for your Application
+    Load Balancers」 · 「Condition types for listener rules」 · 「Listener
+    rules」, 2026-10-08 대조). 와일드카드 수는 문서마다 6 · 5 로 달라 작은
+    값 5 를 씁니다.
+*   그래서 `modules/alb` 는 규칙 하나에 경로 값을 둘까지 넣고(host 1 + 경로
+    2), prod/platform 의 auth 규칙은 접두사마다 하나(아홉 개)입니다.
+*   이 계정의 실제 값은 O7d 선행 0(단계 직전 점검)에서 `aws elbv2
+    describe-account-limits`(읽기)로 대조합니다. 위 값과 다르면 O7d 를
+    시작하지 않고 kty 에게 보고합니다.
 
 ### 실제 값은 추적하지 않는다
 
@@ -140,6 +156,9 @@ import 루트(`nonprod/dev` · `nonprod/dns-legacy`)의 선언은 실물에 대�
     않습니다(guard R3).
 *   Terraform 이 만든 SG 에는 기본 이그레스가 없으므로, 필요한 이그레스도
     별도 규칙으로 적습니다.
+*   SRT NLB 인그레스(`modules/media_ingest`)는 /16 보다 넓은 출처를
+    `ingest_public_approved = true` 없이는 받지 않습니다 — 공개는 S1 게이트 ·
+    응답기 뒤 8a 단계의 승인입니다(설계 4-6).
 
 ### 비밀 값은 상태에 남기지 않는다
 
@@ -264,14 +283,15 @@ guard 는 Terraform 트리의 금지 규약을 검사합니다. 규칙 R1 ~ R13 
 | R3 | 전체 | `aws_security_group` 자원 안 `ingress` · `egress`(블록 · 속성 · `dynamic "ingress"` · `dynamic "egress"`) |
 | R4 | `modules/state_bucket/` | `aws_s3_bucket` 자원 없음, 또는 그 자원 중 `lifecycle { prevent_destroy = true }`(리터럴 `true`)가 없는 것 |
 | R6 | `modules/secret_shells/` | `aws_secretsmanager_secret_policy` 선언(`count = 0` 이어도) · `aws_secretsmanager_secret` 자원의 인라인 `policy` 인자(값과 무관 — kty 61차) · 이름이 `names` 가 아닌 `variable`(읽기 역할 등 다른 입력). 대상 경로에 `.tf` 가 없으면 건너뜀. 모듈 밖(다른 루트가 출력 ARN 으로 비밀에 정책을 붙이는 것)은 보지 않음 — 리뷰가 막음 |
+| R10 | `modules/media_host/` · `prod/media/` | **IAM 유형**: 허용 목록(`aws_iam_role` · `aws_iam_instance_profile` · `aws_iam_role_policy` · `aws_iam_role_policy_attachment` · data `aws_iam_policy_document`) 밖의 IAM 자원 · data(정책 조회 · 고객 관리 정책 포함). **관리형 연결**: 주소가 `managed` 하나가 아님 · `policy_arn` 이 `each.value` 가 아님 · `for_each` 가 `local.managed_policy_arns` 가 아님 · 그 지역값이 `{ AmazonSSMManagedInstanceCore = <그 ARN 리터럴> }` 하나가 아님 · 문자열 속 관리형 정책 ARN(`iam::aws:policy/<이름>`)의 이름이 그 리터럴이 아님. **정책 문서**: statement `actions` 원소가 `서비스:동작` 꼴(`^[a-z0-9-]+:[A-Za-z0-9]+$`)이 아님(허용 목록 — 와일드카드 · 템플릿 지시자 · 보간 · 공백 · 식 금지). **허용 속성**: IAM 자원(유형마다) · 정책 문서(`statement` · `version`) · statement(`sid` · `effect` · `actions` · `resources` · `condition`)가 허용 속성과 메타 인자 밖의 키를 씀 — `dynamic` 포함(역할 `inline_policy` · `managed_policy_arns` · `permissions_boundary`, 문서 합치기 `source_policy_documents` · `override_policy_documents`, statement `not_actions` · `not_resources` · `principals` 가 여기서 걸림). **역할 인라인 정책**: 정책 문서 `json` 이 아님(`jsonencode` 등 — 신뢰 정책 `assume_role_policy` 는 예외). **rds-db**: `dbuser:` 뒤 와일드카드(`*` · `?`) · 동작이 `rds-db:connect` 인 statement 의 Resource 가 `[for <u> in local.db_users : "…:dbuser:${var.rds_resource_id}/${<u>}"]` 꼴이 아님(파티션 · 리전 · 계정 자리만 참조 보간, 사용자 자리는 for 변수뿐) · 그 경로의 `local.db_users` 가 리터럴 목록 `["media_indexer", "media_janitor"]` 정확히가 아님 · rds-db 동작이 정책 문서 statement `actions` 밖에 있음. **lifecycle**: 거부 목록 그릇(`aws_ssm_parameter`)에 리터럴 `prevent_destroy` · `ignore_changes` 의 `value` 가 없음 · media_host 상자(`aws_instance`)의 `ignore_changes` 에 `ami` · `user_data_base64` 가 없음. **템플릿 지시자**: 대상 경로의 어느 문자열이든 `%{`(설명 · 맵 키 포함). 설명 문자열(`description`)은 rds-db 동작 이름 검사만 보지 않음(관리형 정책 ARN · dbuser 와일드카드 · 템플릿 지시자 검사는 설명도 봄). 대상 경로에 `.tf` 가 없으면 건너뜀. 모듈 밖(다른 모듈 · 다른 루트가 출력 `instance_role_arn` 의 역할에 정책을 붙이는 것)은 보지 않음 — 리뷰가 막음 |
 | R11 | `nonprod/dev/` | `aws_instance` · `aws_eip` · `aws_security_group` 중 없는 유형이 있음, 또는 그 자원 중 리터럴 `prevent_destroy = true` 가 없는 것 |
 | R12 | `nonprod/dns-legacy/` | 운영 트리: ① 그 루트 바로 아래 `.tf` 없음 ② 주소가 정확히 `aws_route53_zone.legacy` 인 선언 없음 ③ 그 루트의 `aws_route53_zone` 중 리터럴 `prevent_destroy = true` 가 없는 것. fixture 트리는 ① · ② 의 부재만 건너뜀(③ 은 그대로) |
 | R13 | 전체(`.tf` 만 — `*.example` · 시험 파일 · 주석은 리뷰) | 문자열 · 숫자 리터럴(맵 키 포함) 안의 계정 ID 꼴 숫자열 — 12자리 · 4-4-4 대시 표기(앞뒤가 숫자가 아님 — ARN 속 계정 ID 포함) · 이름을 소문자로 바꾸고 `-` · `_` 를 뺐을 때 `accountid` 가 드는 `variable`(`accountId` · `account-id` 포함). 위반 메시지는 그 숫자열을 가림 |
 
-`prevent_destroy` 는 `terraform test`(mock)로 관찰할 수 없어 R4 · R11 · R12 가
-맡습니다. conftest 는 식을 평가하지 않으므로 리터럴 `true` 만 인정합니다 —
-`true != true` · `var.keep` 같은 식과 문자열 `"true"` 는 위반입니다. R4 · R11 은
-대상 경로 아래 `.tf` 가 하나도 없는 트리(다른 규칙의 fixture)에서는 건너뜁니다.
+`prevent_destroy` 는 `terraform test`(mock)로 관찰할 수 없어 R4 · R10 · R11 ·
+R12 가 맡습니다. conftest 는 식을 평가하지 않으므로 리터럴 `true` 만 인정합니다 —
+`true != true` · `var.keep` 같은 식과 문자열 `"true"` 는 위반입니다. R4 · R10 ·
+R11 은 대상 경로 아래 `.tf` 가 하나도 없는 트리(다른 규칙의 fixture)에서는 건너뜁니다.
 dev SG 규칙 자원은 M12 가 8082 규칙을 지우므로 R11 대상이 아닙니다. dev 상자를
 없애는 PR 은 R11 을 함께 지웁니다.
 
@@ -284,9 +304,10 @@ dev SG 규칙 자원은 M12 가 8082 규칙을 지우므로 R11 대상이 아닙
 건너뛰고, 표지가 없거나 모르는 값이면 운영 트리로 봅니다. 루트를 옮기거나 존
 주소를 바꾸는 PR 은 R12 도 같은 PR 에서 고쳐야 통과합니다.
 
-R8 ~ R10 은 계획이 번호를 정해 둔 규칙이라, 그 규칙이 지키는 루트 ·
+R8 · R9 는 계획이 번호를 정해 둔 규칙이라, 그 규칙이 지키는 루트 ·
 모듈과 같은 PR 에서 그 번호로 `policy/guard/` 에 더합니다(정책 · `_test.rego` ·
-fixture 를 함께). R5 · R7 은 **보류**입니다 — R5 는 재개 키트(결정 46), R7 은
+fixture 를 함께). R10 은 그렇게 `modules/media_host` · `prod/media` 와 함께
+들어왔습니다. R5 · R7 은 **보류**입니다 — R5 는 재개 키트(결정 46), R7 은
 CI 자동 푸시를 켜는 후속 PR(40차)이 더합니다.
 
 ### 설치와 실행
@@ -347,7 +368,7 @@ bash infra/terraform/scripts/guard.sh                   # 실제 트리
 *   정책은 **이 트리에 직접 쓴 선언**만 봅니다. 직접 선언한 자원에
     `count` · `for_each` 를 붙여도 잡지만, 다른 이름 · 외부 모듈 안에 숨긴
     선언 · 모듈 호출로 만드는 자원은 못 봅니다. 그것은 리뷰가 막습니다.
-*   R4 · R11 은 대상 경로 아래 `.tf` 가 하나도 없으면 건너뜁니다(다른 규칙
+*   R4 · R10 · R11 은 대상 경로 아래 `.tf` 가 하나도 없으면 건너뜁니다(다른 규칙
     fixture 를 위해). 대상 디렉터리를 통째로 지우거나 옮기는 PR 은 규칙도 함께
     고쳐야 하며, 그것은 리뷰가 봅니다.
 *   이름이 `.terraform` 인 **디렉터리**는 깊이와 상관없이 검사에서
@@ -357,7 +378,7 @@ bash infra/terraform/scripts/guard.sh                   # 실제 트리
     Terraform 은 읽지만 guard 는 그 모듈을 보지 못합니다(검사에서 빼는
     디렉터리) — 리뷰 몫입니다.
 *   실제 트리보다 **상위** 디렉터리(`.` · `infra` 등)를 루트로 주면 경로 규칙
-    (R4 · R11 · R12)이 맞지 않고 `scripts/testdata` 도 빠지지 않아 fixture 위반이
+    (R4 · R10 · R11 · R12)이 맞지 않고 `scripts/testdata` 도 빠지지 않아 fixture 위반이
     쏟아집니다(종료 1 — 위반 0 으로 새지는 않음). 루트는 주지 않거나
     `infra/terraform` 으로 줍니다.
 *   모든 심볼릭 링크가 R0 입니다(`.tf` 가 아닌 문서 링크도, 이름이

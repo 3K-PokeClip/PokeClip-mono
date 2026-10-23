@@ -89,12 +89,15 @@ public class UploadRequestService {
         if (clip.getStatus() != ClipStatus.RENDERED || clip.getOutputs() == null) {
             throw new ClipNotRenderedException(clipId);
         }
-        // 옛 문(보관함 「업로드」, 의도 없는 영상)은 썸네일을 안 받는다(POK-291). 나머지 칸은 「영상 만들기」와 같은 규칙이다.
+        // 옛 문(보관함 「업로드」, 의도 없는 영상)은 썸네일을 안 받는다(POK-291). 카테고리·예약 공개도 안 받는다(POK-381, 게임·바로).
+        // 나머지 칸은 「영상 만들기」와 같은 규칙이다.
         UploadInfo info = new UploadInfo(
                 title(body == null ? null : body.title()),
                 description(body == null ? null : body.description()),
                 UploadInfoParser.tags(body == null ? null : body.tags()),
+                UploadInfo.GAMING,
                 UploadInfoParser.privacy(body == null ? null : body.privacyStatus()),
+                null,
                 body != null && Boolean.TRUE.equals(body.madeForKids()),
                 UploadInfo.Thumbnail.none());
         Video video = pickVideo(mapper.readTree(clip.getOutputs()), body == null ? null : body.outputId());

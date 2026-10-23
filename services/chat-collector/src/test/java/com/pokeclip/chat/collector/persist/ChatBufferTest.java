@@ -1,5 +1,7 @@
 package com.pokeclip.chat.collector.persist;
 
+import com.pokeclip.chat.collector.Platform;
+
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -7,7 +9,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class ChatBufferTest {
 
     private static PersistableChat chat(int i) {
-        return new PersistableChat(null, "ch", "s-" + i, "m" + i, 1000L + i, 2000L + i, null, null);
+        return new PersistableChat(Platform.CHZZK, null, "ch", "s-" + i, "m" + i, 1000L + i, 2000L + i, null, null);
     }
 
     @Test

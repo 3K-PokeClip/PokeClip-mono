@@ -95,6 +95,22 @@ class StreamKeyResolveSecurityConfigTest extends IntegrationTestSupport {
     }
 
     /**
+     * 도착 때 전달 머리글이 있었다고 표시된 요청은 허용 주소에서 와도 403 이다(POK-316). 톰캣 밸브는 X-Forwarded-For 를
+     * 읽고 지우므로 여기서는 머리글이 아니라 표시 밸브가 남긴 속성을 본다. MockMvc 는 밸브를 안 태워 속성을 손으로 심는다.
+     */
+    @Test
+    void markedForwardedRequestFromAllowedSource_isForbiddenWithoutBody() throws Exception {
+      mockMvc
+          .perform(
+              resolve()
+                  .header(RESOLVE_TOKEN_HEADER, RESOLVE_TOKEN)
+                  .requestAttr(ForwardedHeaderMarkValve.ATTRIBUTE, Boolean.TRUE)
+                  .with(from(ALLOWED_SOURCE)))
+          .andExpect(status().isForbidden())
+          .andExpect(content().string(""));
+    }
+
+    /**
      * 판정은 출발지 다음 토큰이다. 허용 밖에서 오면 토큰이 틀려도 403 이다 — 순서가 뒤집히면 이 요청은 401 이
      * 되어, 대역 밖에서도 응답 코드(401 · 403)로 토큰이 맞는지 가려 볼 수 있다.
      */
@@ -186,6 +202,18 @@ class StreamKeyResolveSecurityConfigTest extends IntegrationTestSupport {
               resolve()
                   .header(RESOLVE_TOKEN_HEADER, "")
                   .header("X-Internal-Token", INTERNAL_TOKEN)
+                  .with(from(ALLOWED_SOURCE)))
+          .andExpect(status().isUnauthorized());
+    }
+
+    /** 전달 머리글 표시가 있어도 닫힘은 401 이다. 닫힌 체인에 출발지 필터를 달면 403 으로 갈린다(POK-316). */
+    @Test
+    void markedForwardedRequest_isStillUnauthorized() throws Exception {
+      mockMvc
+          .perform(
+              resolve()
+                  .header(RESOLVE_TOKEN_HEADER, "")
+                  .requestAttr(ForwardedHeaderMarkValve.ATTRIBUTE, Boolean.TRUE)
                   .with(from(ALLOWED_SOURCE)))
           .andExpect(status().isUnauthorized());
     }

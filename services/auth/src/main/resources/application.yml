@@ -129,6 +129,13 @@ server:
   # 🔴 native는 X-Forwarded-For만이 아니다: Proto·Host·Port까지 처리해 HSTS가 붙는 자리가 있다. 서술은 위 README 절.
   # 그 절에 없는 실측 하나만 여기 남긴다: Valve가 request.setSecure(true)를 하고 HstsHeaderWriter가 isSecure()를 본다.
   forward-headers-strategy: ${FORWARD_HEADERS_STRATEGY:none}
+  tomcat:
+    remoteip:
+      # native일 때 믿는 프록시 대역(쉼표로 이은 CIDR). 운영은 FORWARD_HEADERS_TRUSTED_PROXIES로 VPC 안(ALB·웹)과
+      # CloudFront 원본 쪽 대역만 남긴다(POK-316). 기본값은 Boot 기본 대역을 글자 그대로 옮긴 것이다: 안 주면 전과 같다.
+      # RequiredPropertiesTest가 Boot 값과 같은지 본다. 🔴 빈 값은 「아무 프록시도 안 믿음」이다(한도가 전역으로 돌아간다).
+      # 🔴 주소 하나도 /32처럼 접두를 붙인다. 값 전체에 '/'가 없으면 톰캣이 목록을 정규식 하나로 읽어 아무 주소에도 안 맞는다.
+      internal-proxies: "${FORWARD_HEADERS_TRUSTED_PROXIES:192.168.0.0/16, 172.16.0.0/12, 169.254.0.0/16, fc00::/7, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, fe80::/10, ::1/128}"
 
 management:
   endpoints:
@@ -185,8 +192,8 @@ pokeclip:
     token: ${INTERNAL_API_TOKEN:}
     # resolve 전용 출입증(계약4 4C). Media가 이 토큰을 X-Stream-Key-Resolve-Token 헤더에 싣고 허용 대역(IPv4 CIDR,
     # 쉼표 목록) 안에서만 부른다. 토큰이 비면 창구가 닫힌다 — 전용 헤더 요청은 늘 401이고 auth는 그대로 뜬다.
-    # 운영 auth는 이 창구를 안 써서 비워 둔다. 토큰이 있으면 StreamKeyResolveSecurityConfig가 부팅을 검사한다
-    # (대역이 있고 IPv4 · 위 forward-headers-strategy가 none · 톰캣 remoteip 헤더 속성 없음 · 공용 토큰과 다름).
+    # 토큰이 있으면 StreamKeyResolveSecurityConfig가 부팅을 검사한다(대역이 있고 IPv4 · 위 forward-headers-strategy가
+    # none이나 native · 톰캣 remoteip 헤더 이름 속성 없음 · 공용 토큰과 다름). 전달 머리글을 단 전용 헤더 요청은 403이다.
     stream-key-resolve:
       token: ${STREAM_KEY_RESOLVE_TOKEN:}
       allowed-cidrs: ${STREAM_KEY_RESOLVE_ALLOWED_CIDRS:}
@@ -237,6 +244,32 @@ pokeclip:
       interval: PT1H
       # 이보다 오래 확인 안 한 연동만 점검한다.
       staleness: PT24H
+  soop:
+    # 앱 셋은 한 덩어리다(SoopProperties.App). 하나만 빠져도 부팅에서 죽는다.
+    # redirect-uri는 SOOP 개발자 콘솔에 앱당 하나다: 환경마다 앱이 다르다(치지직과 같다).
+    app:
+      client-id: ${SOOP_CLIENT_ID:}
+      client-secret: ${SOOP_CLIENT_SECRET:}
+      redirect-uri: ${SOOP_REDIRECT_URI:}
+    # 🔴 아래 값은 전부 여기에만 있다(SoopProperties에 Java 기본값 없음). 빠지면 @NotNull이 부팅을 세운다.
+    authorize-uri: https://openapi.sooplive.com/auth/code
+    api-base-uri: https://openapi.sooplive.com
+    # state 수명. 치지직과 같은 이유로 10분이다.
+    state-ttl: PT10M
+    # 스케줄러가 이만큼 남았을 때 미리 갱신한다. 문서 예시 토큰 수명 8시간 기준이라 1시간 틱이면 만료 전 한두 번 기회가 있다.
+    refresh-ahead: PT2H
+    # 수집기에 넘기기 전 최소 남은 수명. 이보다 적게 남았으면 resolve가 즉석 갱신해서 준다.
+    resolve-min-remaining: PT1H
+    check:
+      # 갱신 점검. 운영 기본 켜짐, 시험 프로파일만 끈다(치지직과 같은 이유).
+      enabled: true
+      interval: PT1H
+      # 만료가 멀어도 이보다 오래 확인 안 한 연동은 갱신해 본다(철회를 미리 안다).
+      staleness: PT24H
+      # 한 틱에서 갱신 거절이 연달아 이만큼 나면 그 틱을 멈춘다. 앱 설정 오류로 전 회원이 BROKEN 되는 것을 막는다.
+      reject-brake: 3
+      # 한 틱이 보는 후보 상한. 스프링 기본 스케줄러는 스레드 하나라 다른 틱과 나눈다(오래 확인 안 한 순 앞부터).
+      batch-limit: 25
   profile-photo:
     # 창고 이름이 비면 사진 기능이 통째로 꺼진다(chat-collector의 S3_BUCKET 관례). CI·팀원 로컬 기본.
     # 이름을 PROFILE_PHOTO_ 접두어로 두는 이유: S3_BUCKET은 chat-collector가 이미 쓴다.

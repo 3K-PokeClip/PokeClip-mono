@@ -173,8 +173,8 @@ public class UploadProcessor {
         }
 
         if (session == null) {
-            Start start = youtube.start(token.accessToken(), job.title(), job.description(), job.privacyStatus(),
-                    job.tags(), job.madeForKids(), size);
+            Start start = youtube.start(token.accessToken(), job.title(), job.description(), job.categoryId(),
+                    job.privacyStatus(), job.publishAt(), job.tags(), job.madeForKids(), size);
             switch (start) {
                 case Start.Session s -> {
                     session = clip.session(id, s.uri());

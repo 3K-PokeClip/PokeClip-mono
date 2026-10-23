@@ -3,6 +3,7 @@ package com.pokeclip.auth.config;
 import com.pokeclip.auth.chzzk.ChzzkProperties;
 import com.pokeclip.auth.google.GoogleAuthProperties;
 import com.pokeclip.auth.profile.PhotoProperties;
+import com.pokeclip.auth.soop.SoopProperties;
 import com.pokeclip.auth.streamkey.secret.SecretStoreConfig;
 import com.pokeclip.auth.streamkey.secret.SecretStoreProperties;
 import com.pokeclip.auth.token.JwtConfig;
@@ -14,6 +15,7 @@ import org.springframework.beans.factory.config.YamlPropertiesFactoryBean;
 import org.springframework.boot.autoconfigure.context.ConfigurationPropertiesAutoConfiguration;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springframework.boot.tomcat.autoconfigure.TomcatServerProperties;
 import org.springframework.core.io.ClassPathResource;
 
 import java.io.PrintWriter;
@@ -50,6 +52,9 @@ class RequiredPropertiesTest {
     private static final String[] VALID_YOUTUBE =
             youtube("ycid", "ycsecret", "http://localhost:8081/oauth/youtube/callback");
 
+    private static final String[] VALID_SOOP =
+            soop("scid", "scsecret", "http://localhost:3000/oauth/soop/callback");
+
     private final ApplicationContextRunner runner = new ApplicationContextRunner()
             .withConfiguration(org.springframework.boot.autoconfigure.AutoConfigurations.of(
                     ConfigurationPropertiesAutoConfiguration.class))
@@ -64,7 +69,8 @@ class RequiredPropertiesTest {
             .withPropertyValues(secretStore(VALID_SECRET_STORE_KEY))
             .withPropertyValues(internalApi(VALID_INTERNAL_TOKEN))
             .withPropertyValues(VALID_CHZZK)
-            .withPropertyValues(VALID_YOUTUBE);
+            .withPropertyValues(VALID_YOUTUBE)
+            .withPropertyValues(VALID_SOOP);
 
     @Test
     void JWT_시크릿이_비어_있으면_부팅이_실패한다() {
@@ -418,6 +424,25 @@ class RequiredPropertiesTest {
     }
 
     /**
+     * 신뢰 대역은 운영에서 {@code FORWARD_HEADERS_TRUSTED_PROXIES}로 좁힌다(POK-316). 비워 두면 전과 같아야 하므로 기본값은
+     * Boot 기본 대역을 글자 그대로 옮겨 적었다: Boot 판을 올려 그 값이 바뀌면 여기서 갈린다. 다른 시험은 기본값을 안 본다
+     * ({@code ProxyTrustNativeTest}는 좁힌 값을 넣고, 나머지 실서버 시험은 대역에 루프백이 있는지만 본다).
+     */
+    @Test
+    void 신뢰_대역의_운영_기본값이_Boot_기본_대역과_같다() {
+        YamlPropertiesFactoryBean yaml = new YamlPropertiesFactoryBean();
+        yaml.setResources(new ClassPathResource("application.yml"));
+        Properties properties = yaml.getObject();
+        String bootDefault = new TomcatServerProperties().getRemoteip().getInternalProxies();
+
+        assertThat(properties).as("application.yml을 읽지 못했다").isNotNull().isNotEmpty();
+
+        assertThat(properties.getProperty("server.tomcat.remoteip.internal-proxies"))
+                .as("환경변수 이름이 어긋났거나 기본값이 Boot 기본 대역과 갈렸다")
+                .isEqualTo("${FORWARD_HEADERS_TRUSTED_PROXIES:" + bootDefault + "}");
+    }
+
+    /**
      * 유튜브 앱 설정 셋도 치지직과 같은 이유로 한 덩어리다 — 하나만 빠지면 나머지가 무의미하고,
      * 실패 메시지에 시크릿이 남으면 안 된다. 치지직 앱과 <b>다른 GCP 앱</b>이라 값이 별개다.
      */
@@ -439,6 +464,75 @@ class RequiredPropertiesTest {
                                 .contains("YOUTUBE_CLIENT_ID·YOUTUBE_CLIENT_SECRET·YOUTUBE_REDIRECT_URI")
                                 .as("실패 메시지에 유튜브 시크릿이 평문으로 남았다")
                                 .doesNotContain(secretNeedle);
+                    });
+        }
+    }
+
+    /** SOOP 앱 셋도 치지직·유튜브와 같은 이유로 한 덩어리다. SOOP 콘솔에 앱당 리다이렉트가 하나라 환경마다 앱이 따로다. */
+    @Test
+    void SOOP_앱_설정_중_하나라도_비면_부팅이_실패하고_원인이_하나로_모인다() {
+        String secretNeedle = "LEAK-soop-secret-" + UUID.randomUUID();
+        for (String[] broken : List.of(
+                soop("", secretNeedle, "http://x"),
+                soop("i", "", "http://x"),
+                soop("i", secretNeedle, ""))) {
+            runner.withPropertyValues(jwt("test-only-secret-key-at-least-32-bytes-long!!"))
+                    .withPropertyValues(google("id", "secret"))
+                    .withPropertyValues(cors("http://localhost:3000"))
+                    .withPropertyValues(broken)
+                    .run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(stackTraceOf(context.getStartupFailure()))
+                                .as("SOOP 앱 설정이 아닌 다른 이유로 부팅이 실패했다")
+                                .contains("SOOP_CLIENT_ID·SOOP_CLIENT_SECRET·SOOP_REDIRECT_URI")
+                                .as("실패 메시지에 SOOP 시크릿이 평문으로 남았다")
+                                .doesNotContain(secretNeedle);
+                    });
+        }
+    }
+
+    /**
+     * 🔴 SOOP 설정은 Java 기본값이 없다(계획 검증 C5). 스케줄러의 {@code @Scheduled} 자리표시는 Environment에서
+     * 풀리므로 yml에 값이 없으면 운영에서만 부팅이 죽고 시험 프로파일(자기 yml이 채운다)은 초록이다. 그래서 운영 yml
+     * 원문을 YAML로 읽어 키가 다 있는지 잰다.
+     */
+    @Test
+    void SOOP_설정값이_운영_yml에_전부_적혀_있다() {
+        YamlPropertiesFactoryBean yaml = new YamlPropertiesFactoryBean();
+        yaml.setResources(new ClassPathResource("application.yml"));
+        Properties props = yaml.getObject();
+
+        assertThat(props).isNotNull();
+        assertThat(props.getProperty("pokeclip.soop.app.client-id")).isEqualTo("${SOOP_CLIENT_ID:}");
+        assertThat(props.getProperty("pokeclip.soop.app.client-secret")).isEqualTo("${SOOP_CLIENT_SECRET:}");
+        assertThat(props.getProperty("pokeclip.soop.app.redirect-uri")).isEqualTo("${SOOP_REDIRECT_URI:}");
+        assertThat(props.getProperty("pokeclip.soop.authorize-uri")).isEqualTo("https://openapi.sooplive.com/auth/code");
+        assertThat(props.getProperty("pokeclip.soop.api-base-uri")).isEqualTo("https://openapi.sooplive.com");
+        assertThat(props.getProperty("pokeclip.soop.state-ttl")).isEqualTo("PT10M");
+        assertThat(props.getProperty("pokeclip.soop.refresh-ahead")).isEqualTo("PT2H");
+        assertThat(props.getProperty("pokeclip.soop.resolve-min-remaining")).isEqualTo("PT1H");
+        assertThat(props.get("pokeclip.soop.check.enabled")).isEqualTo(true);
+        assertThat(props.getProperty("pokeclip.soop.check.interval")).isEqualTo("PT1H");
+        assertThat(props.getProperty("pokeclip.soop.check.staleness")).isEqualTo("PT24H");
+        assertThat(props.get("pokeclip.soop.check.reject-brake")).isEqualTo(3);
+        assertThat(props.get("pokeclip.soop.check.batch-limit")).isEqualTo(25);
+    }
+
+    /** 키 하나가 빠지면 {@code @NotNull}이 부팅을 세운다(기본값으로 조용히 뜨지 않는다). */
+    @Test
+    void SOOP_설정값이_하나라도_빠지면_부팅이_실패한다() {
+        for (String missing : List.of("pokeclip.soop.state-ttl=", "pokeclip.soop.refresh-ahead=",
+                "pokeclip.soop.resolve-min-remaining=", "pokeclip.soop.check.interval=",
+                "pokeclip.soop.check.staleness=", "pokeclip.soop.check.reject-brake=",
+                "pokeclip.soop.check.batch-limit=", "pokeclip.soop.check.batch-limit=0")) {
+            runner.withPropertyValues(jwt("test-only-secret-key-at-least-32-bytes-long!!"))
+                    .withPropertyValues(google("id", "secret"))
+                    .withPropertyValues(cors("http://localhost:3000"))
+                    .withPropertyValues(missing)
+                    .run(context -> {
+                        assertThat(context).as(missing).hasFailed();
+                        assertThat(stackTraceOf(context.getStartupFailure())).as(missing)
+                                .contains("pokeclip.soop");
                     });
         }
     }
@@ -529,6 +623,24 @@ class RequiredPropertiesTest {
                 "pokeclip.youtube.check.staleness=PT24H"};
     }
 
+    /** {@code @NotBlank}·{@code @NotNull}이 걸린 값을 <b>전부</b> 채운다(유튜브 헬퍼와 같은 이유). */
+    private static String[] soop(String clientId, String clientSecret, String redirectUri) {
+        return new String[]{
+                "pokeclip.soop.app.client-id=" + clientId,
+                "pokeclip.soop.app.client-secret=" + clientSecret,
+                "pokeclip.soop.app.redirect-uri=" + redirectUri,
+                "pokeclip.soop.authorize-uri=https://openapi.sooplive.com/auth/code",
+                "pokeclip.soop.api-base-uri=https://openapi.sooplive.com",
+                "pokeclip.soop.state-ttl=PT10M",
+                "pokeclip.soop.refresh-ahead=PT2H",
+                "pokeclip.soop.resolve-min-remaining=PT1H",
+                "pokeclip.soop.check.enabled=true",
+                "pokeclip.soop.check.interval=PT1H",
+                "pokeclip.soop.check.staleness=PT24H",
+                "pokeclip.soop.check.reject-brake=3",
+                "pokeclip.soop.check.batch-limit=25"};
+    }
+
     private String[] jwt(String secret) {
         return new String[]{
                 "pokeclip.jwt.secret=" + secret,
@@ -551,7 +663,7 @@ class RequiredPropertiesTest {
 
     @EnableConfigurationProperties({JwtProperties.class, GoogleAuthProperties.class, CorsProperties.class,
             SecretStoreProperties.class, InternalApiProperties.class, ChzzkProperties.class,
-            YoutubeProperties.class, PhotoProperties.class})
+            YoutubeProperties.class, PhotoProperties.class, SoopProperties.class})
     static class BoundProperties {
     }
 }

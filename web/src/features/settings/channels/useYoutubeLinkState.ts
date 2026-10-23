@@ -20,7 +20,7 @@ import {
 // 전부 여기서 하고 화면은 결과만 읽는다.
 //
 // 치지직과 달리 온보딩 플래그(useOnboardingHydration·setChannelLinked)를 쓰지 않는다 —
-// `channelLinked`는 방송 감지(치지직) 전용이다. 유튜브 연동은 홈 시작 가이드의
+// `channelLinked`는 방송 감지(치지직·SOOP) 전용이다. 유튜브 연동은 홈 시작 가이드의
 // 체크 대상이 아니므로 미러링 이펙트를 여기로 복사하지 말 것.
 
 /**

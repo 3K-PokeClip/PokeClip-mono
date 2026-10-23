@@ -2,8 +2,9 @@ import type { HomeLinks } from './useHomeMockState';
 
 // 첫 클립까지 가는 길(POK-378) — 방송 기록이 없는 계정의 큰 칸이 그린다. DOM을 모르는 순수 모델.
 // 방송 채널·플러그인은 순서가 없어 둘 다 버튼을 내민다. 방송은 웹에서 켤 수 없어 버튼이 없다.
-// 방송 채널은 치지직·SOOP·씨미 모두 되지만, 웹이 연동 상태를 읽을 수 있는 건 아직 치지직(/api/chzzk-link)뿐이다 —
-// 문구는 플랫폼을 가리지 않고, 완료 판정만 치지직으로 한다. SOOP·씨미 창구가 생기면 여기서 함께 본다.
+// 방송 채널 단계는 치지직·SOOP 둘 중 하나라도 연동이면 끝난다(POK-396). 씨미 창구가 생기면 여기서 함께 본다.
+// 하나를 못 읽어도 다른 하나가 연동이면 끝났다고 한다. 못 읽은 것이 있고 연동은 없으면 「확인 중」이다:
+// 못 읽은 쪽이 연동돼 있을 수 있어 「안 함」으로 단정하지 않는다.
 
 export type SetupStepId = 'chzzk' | 'plugin' | 'broadcast' | 'publish';
 
@@ -29,9 +30,9 @@ export function setupSteps(links: HomeLinks): SetupStep[] {
       id: 'chzzk',
       title: '방송 채널 연동',
       desc: '방송 플랫폼을 연결하면 방송을 알아서 찾아요',
-      doneNote: `${links.chzzk?.channelName ?? '채널'} 연결됨`,
-      done: links.chzzk?.linked === true,
-      unknown: links.chzzk === null,
+      doneNote: channelDoneNote(links),
+      done: isChannelLinked(links),
+      unknown: !isChannelLinked(links) && (links.chzzk === null || links.soop === null),
       action: { label: '채널 연동', href: '/settings/channels' },
     },
     {
@@ -67,5 +68,18 @@ export function setupSteps(links: HomeLinks): SetupStep[] {
 
 /** 방송 채널·플러그인이 끝났고 방송만 남았다 — 큰 칸이 「기다리는 중」으로 바뀐다 */
 export function isWaitingForBroadcast(links: HomeLinks): boolean {
-  return links.chzzk?.linked === true && links.streamKeyIssued === true;
+  return isChannelLinked(links) && links.streamKeyIssued === true;
+}
+
+function isChannelLinked(links: HomeLinks): boolean {
+  return links.chzzk?.linked === true || links.soop?.linked === true;
+}
+
+/** 치지직만이면 지금처럼 채널 이름, SOOP이 끼면 플랫폼 이름으로 적는다 */
+function channelDoneNote(links: HomeLinks): string {
+  const chzzk = links.chzzk?.linked === true;
+  const soop = links.soop?.linked === true;
+  if (chzzk && soop) return '치지직 · SOOP 연결됨';
+  if (soop) return 'SOOP 연결됨';
+  return `${links.chzzk?.channelName ?? '채널'} 연결됨`;
 }

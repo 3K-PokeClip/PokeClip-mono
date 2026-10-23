@@ -18,6 +18,7 @@ import {
   uploadTitleProblem,
 } from './libraryView';
 import { toLibraryClip } from './useLibraryMockState';
+import { instantLabel } from '@/features/clips/editor/uploadInfo';
 
 // 유튜브 업로드를 보관함에 잇는 규칙(POK-111). 서버 규약은 clip 업로드 문(POK-220)이다.
 
@@ -375,63 +376,168 @@ describe('privacyNoteText: 편집본 상태마다 그 범위로 올라가게 하
       ),
       '9',
     );
+  // 예약 시각(10/23 18:00)보다 앞인 지금. 지났는지에 따라 문구가 갈린다
+  const NOW = new Date('2026-10-20T00:00:00Z');
+  const note = (clip: Parameters<typeof privacyNoteText>[0]) => privacyNoteText(clip, NOW);
 
   it('올라갔으면 올릴 때의 범위와 바꾸는 곳을 말한다', () => {
-    expect(privacyNoteText(withUploadAt('uploaded', { privacyStatus: 'public' }))).toBe(
+    expect(note(withUploadAt('uploaded', { privacyStatus: 'public' }))).toBe(
       `「공개」(누구나 볼 수 있는 범위)로 올렸어요. ${CHANGE}`,
     );
-    expect(privacyNoteText(withUploadAt('uploaded', { privacyStatus: 'unlisted' }))).toBe(
+    expect(note(withUploadAt('uploaded', { privacyStatus: 'unlisted' }))).toBe(
       `「일부 공개」(주소를 아는 사람만 볼 수 있는 범위)로 올렸어요. ${CHANGE}`,
     );
   });
 
+  it('예약 공개(비공개 + 시각)면 그 시각을 말한다(POK-381)', () => {
+    const at = '2026-10-23T09:00:00Z';
+    const when = instantLabel(new Date(at));
+    expect(note(withUploadAt('uploaded', { privacyStatus: 'private', publishAt: at }))).toBe(
+      `「예약」 ${when}에 공개되도록 올렸어요. 그 전까지는 비공개예요. ${CHANGE}`,
+    );
+    expect(
+      note(
+        withUploadAt('uploading', { status: 'queued', privacyStatus: 'private', publishAt: at }),
+      ),
+    ).toBe(`「예약」 올라가면 ${when}에 공개로 바뀌어요. ${NOTIFY}`);
+    // 예약이 아닌 비공개는 지금처럼 말하지 않는다
+    expect(
+      note(withUploadAt('uploaded', { privacyStatus: 'private', publishAt: null })),
+    ).toBeNull();
+  });
+
+  it('업로드 줄이 생기기 전(렌더 중)엔 의도의 예약 시각을 말한다(PR #301 2차 리뷰)', () => {
+    const at = '2026-10-23T09:00:00Z';
+    const rendering = toLibraryClip(
+      {
+        ...entry('rendering', { ...snapshot(null), status: 'rendering' }),
+        uploadRequest: {
+          title: 't',
+          privacyStatus: 'private',
+          thumbnailSource: 'none',
+          publishAt: at,
+        },
+      },
+      '9',
+    );
+    expect(note(rendering)).toBe(
+      `「예약」 올라가면 ${instantLabel(new Date(at))}에 공개로 바뀌어요. ${NOTIFY}`,
+    );
+  });
+
+  it('렌더가 실패한 예약 주문은 「렌더 재시도」 뒤를 말하고, 시각이 지났으면 바로 공개된다고 경고한다(PR #301 3차 리뷰)', () => {
+    const at = '2026-10-23T09:00:00Z';
+    const when = instantLabel(new Date(at));
+    const renderFailed = toLibraryClip(
+      {
+        ...entry('failed', { ...snapshot(null), status: 'failed' }),
+        uploadRequest: {
+          title: 't',
+          privacyStatus: 'private',
+          thumbnailSource: 'none',
+          publishAt: at,
+        },
+      },
+      '9',
+    );
+    expect(note(renderFailed)).toBe(
+      `「렌더 재시도」가 끝나면 올라가고 「예약」 ${when}에 공개로 바뀌어요. ${NOTIFY}`,
+    );
+    expect(privacyNoteText(renderFailed, new Date('2026-10-24T00:00:00Z'))).toBe(
+      `「예약」 시각(${when})이 지나 「렌더 재시도」가 끝나면 바로 공개돼요. ${NOTIFY}`,
+    );
+  });
+
+  it('예약 시각이 지났으면 「올라가면 그 시각에」라고 하지 않고, 확인 필요면 단정하지 않는다(PR #301 2차 리뷰)', () => {
+    const at = '2026-10-23T09:00:00Z';
+    const when = instantLabel(new Date(at));
+    const later = new Date('2026-10-24T00:00:00Z');
+    // 쿼터로 실패한 예약 업로드를 그 시각이 지난 뒤 본다: 「다시 시도」는 같은 시각을 옮겨 유튜브가 바로 공개한다
+    const failedScheduled = withUploadAt('rendered', {
+      status: 'failed',
+      error: { code: 'QUOTA_EXCEEDED', message: null },
+      privacyStatus: 'private',
+      publishAt: at,
+    });
+    expect(privacyNoteText(failedScheduled, later)).toBe(
+      `「예약」 시각(${when})이 지나 올라가면 바로 공개돼요. ${NOTIFY}`,
+    );
+    const checking = withUploadAt('checking', {
+      status: 'checking',
+      privacyStatus: 'private',
+      publishAt: at,
+    });
+    expect(note(checking)).toBe(
+      `「예약」 ${when} 공개로 골랐어요. 올라갔다면 그 시각에 공개로 바뀌어요.`,
+    );
+    expect(privacyNoteText(checking, later)).toBe(
+      `「예약」 ${when} 공개로 골랐어요. 올라갔다면 이미 공개됐어요.`,
+    );
+    expect(
+      privacyNoteText(withUploadAt('uploaded', { privacyStatus: 'private', publishAt: at }), later),
+    ).toBe(`「예약」 ${when}에 공개되도록 올렸어요. ${CHANGE}`);
+  });
+
+  it('예약으로 올린 뒤 새 판을 저장해 편집 중이면 옛 판의 예약 시각을 말하지 않는다(PR #301 리뷰)', () => {
+    const at = '2026-10-23T09:00:00Z';
+    expect(note(withUploadAt('editing', { privacyStatus: 'private', publishAt: at }))).toBeNull();
+    expect(
+      note(
+        withUploadAt('editing', {
+          status: 'failed',
+          error: { code: 'QUOTA_EXCEEDED', message: null },
+          privacyStatus: 'private',
+          publishAt: at,
+        }),
+      ),
+    ).toBeNull();
+  });
+
   it('확인 필요면 고른 범위만 말한다: 올라갔는지 모른다', () => {
-    expect(
-      privacyNoteText(withUploadAt('checking', { status: 'checking', privacyStatus: 'public' })),
-    ).toBe('「공개」로 골랐어요. 올라갔다면 누구나 볼 수 있어요.');
-    expect(
-      privacyNoteText(withUploadAt('checking', { status: 'checking', privacyStatus: 'unlisted' })),
-    ).toBe('「일부 공개」로 골랐어요. 올라갔다면 주소를 아는 사람만 볼 수 있어요.');
+    expect(note(withUploadAt('checking', { status: 'checking', privacyStatus: 'public' }))).toBe(
+      '「공개」로 골랐어요. 올라갔다면 누구나 볼 수 있어요.',
+    );
+    expect(note(withUploadAt('checking', { status: 'checking', privacyStatus: 'unlisted' }))).toBe(
+      '「일부 공개」로 골랐어요. 올라갔다면 주소를 아는 사람만 볼 수 있어요.',
+    );
   });
 
   it('만드는 중·올리는 중이면 저절로 올라갈 범위를 말하고, 공개면 구독자 알림까지', () => {
+    expect(note(withUploadAt('uploading', { status: 'queued', privacyStatus: 'public' }))).toBe(
+      `「공개」로 올라가요. 올라가면 누구나 볼 수 있어요. ${NOTIFY}`,
+    );
     expect(
-      privacyNoteText(withUploadAt('uploading', { status: 'queued', privacyStatus: 'public' })),
-    ).toBe(`「공개」로 올라가요. 올라가면 누구나 볼 수 있어요. ${NOTIFY}`);
-    expect(
-      privacyNoteText(
-        withIntent('rendering', { ...snapshot(null), status: 'rendering' }, 'unlisted'),
-      ),
+      note(withIntent('rendering', { ...snapshot(null), status: 'rendering' }, 'unlisted')),
     ).toBe('「일부 공개」로 올라가요. 올라가면 주소를 아는 사람만 볼 수 있어요.');
   });
 
   it('눌러야 올라가면 그 단추를 말한다: 다시 시도 · 업로드 · 렌더 재시도', () => {
-    expect(privacyNoteText(failedAt('rendered', 'public'))).toBe(
+    expect(note(failedAt('rendered', 'public'))).toBe(
       `「다시 시도」를 누르면 「공개」로 올라가요. 올라가면 누구나 볼 수 있어요. ${NOTIFY}`,
     );
-    expect(privacyNoteText(failedAt('rendered', 'unlisted'))).toBe(
+    expect(note(failedAt('rendered', 'unlisted'))).toBe(
       '「다시 시도」를 누르면 「일부 공개」로 올라가요. 올라가면 주소를 아는 사람만 볼 수 있어요.',
     );
     // 자동 업로드를 건너뛴 완성 영상: 「업로드」가 그 판의 정보로 올린다
-    expect(privacyNoteText(withIntent('rendered', snapshot(null), 'public'))).toBe(
+    expect(note(withIntent('rendered', snapshot(null), 'public'))).toBe(
       `「업로드」를 누르면 「공개」로 올라가요. 올라가면 누구나 볼 수 있어요. ${NOTIFY}`,
     );
-    expect(
-      privacyNoteText(withIntent('failed', { ...snapshot(null), status: 'failed' }, 'public')),
-    ).toBe(`「렌더 재시도」가 끝나면 「공개」로 올라가요. 올라가면 누구나 볼 수 있어요. ${NOTIFY}`);
+    expect(note(withIntent('failed', { ...snapshot(null), status: 'failed' }, 'public'))).toBe(
+      `「렌더 재시도」가 끝나면 「공개」로 올라가요. 올라가면 누구나 볼 수 있어요. ${NOTIFY}`,
+    );
   });
 
   it('편집 중이면 말하지 않는다: latestClip은 옛 판이고 그 판을 다시 올리는 단추가 없다', () => {
     // 공개 업로드가 실패한 뒤 「이어서 편집」에서 고쳐 저장한 줄
-    expect(privacyNoteText(failedAt('editing', 'public'))).toBeNull();
+    expect(note(failedAt('editing', 'public'))).toBeNull();
     expect(
-      privacyNoteText(withUploadAt('editing', { status: 'checking', privacyStatus: 'public' })),
+      note(withUploadAt('editing', { status: 'checking', privacyStatus: 'public' })),
     ).toBeNull();
   });
 
   it('비공개거나 옛 서버(칸 없음)면 말하지 않는다', () => {
-    expect(privacyNoteText(withUploadAt('uploaded', { privacyStatus: 'private' }))).toBeNull();
-    expect(privacyNoteText(toLibraryClip(entry('uploaded', snapshot(uploaded())), '9'))).toBeNull();
+    expect(note(withUploadAt('uploaded', { privacyStatus: 'private' }))).toBeNull();
+    expect(note(toLibraryClip(entry('uploaded', snapshot(uploaded())), '9'))).toBeNull();
   });
 });
 
