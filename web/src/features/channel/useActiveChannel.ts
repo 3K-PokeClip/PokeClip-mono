@@ -120,8 +120,10 @@ export function useSwitchChannel() {
   const select = useChannelStore((s) => s.select);
   const cover = useSwitchCurtain((s) => s.cover);
 
+  // onSwitched: 「바꾼 다음」이어야 하는 일. 지금 채널에서 나간 뒤 참여 목록을 다시 읽는 일이 그렇다 — 바꾸기 전에 읽으면
+  // ChannelScope가 끊김으로 보고 「편집 권한이 없어져 내 채널로 돌아왔어요」 경고를 띄운다
   return useCallback(
-    (target: SwitchTarget) => {
+    (target: SwitchTarget, onSwitched?: () => void) => {
       if (!me) return;
       cover(
         {
@@ -130,7 +132,10 @@ export function useSwitchChannel() {
           // 남의 채널은 서버가 사진을 안 준다: 이름 글자 아바타
           photo: target.relation === 'OWNER' ? me.profileImageUrl : null,
         },
-        () => select(me.id, target.streamerId === me.id ? null : target.streamerId),
+        () => {
+          select(me.id, target.streamerId === me.id ? null : target.streamerId);
+          onSwitched?.();
+        },
       );
     },
     [me, select, cover],
