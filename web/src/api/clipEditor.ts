@@ -1,7 +1,11 @@
 'use client';
 
 import { ApiError, apiFetch } from './client';
-import { markPlaybackCookiesIssued, playbackConfigured } from './mediaPlayback';
+import {
+  markPlaybackCookiesIssued,
+  onPlaybackForbidden,
+  playbackConfigured,
+} from './mediaPlayback';
 import { notifyChannelGone } from '@/stores/channel';
 
 // clip 서버 창구(POK-251). 전부 로그인 세션의 apiFetch로 간다(Bearer 부착·401 회전).
@@ -841,6 +845,16 @@ export function ensurePlaybackAccessForList(
   }
   return out;
 }
+
+// 녹화 목록이 403이면 그 키의 쿠키가 브라우저에 없다(다른 탭 · 쿠키 한도 · 사용자가 지움). 받아 둔 출입증과 쿠키 셈을 버려
+// 다음에 다시 받는다(PR #332 codex). 탭마다 셈이 따로라 한도를 넘길 수 있는데, 넘겨 지워진 키는 이렇게 스스로 낫는다
+onPlaybackForbidden((mediaKey) => {
+  for (const [streamId, entry] of playbackAccessCache)
+    if (entry.mediaKey === mediaKey && entry.settled) {
+      playbackAccessCache.delete(streamId);
+      issuedCookieUntil.delete(streamId);
+    }
+});
 
 /** 영상 키만 아는 자리(편집기 미리보기)의 갱신. 그 키로 출입증을 받은 방송이 없으면 묻지 않는다 */
 export function ensureMediaAccess(mediaKey: string): Promise<PlaybackAccessResult> | null {

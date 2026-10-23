@@ -159,3 +159,21 @@ describe('녹화 재생 주소는 출입증 경로 아래다 (POK-317)', () => {
     expect(url.searchParams.get('start')).toBe('2026-10-23T01:00:00.000Z');
   });
 });
+
+describe('녹화 목록이 403이면 그 키의 출입증을 버리게 알린다 (PR #332 codex)', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  it('403은 묻지 못함(null)이고, 알림을 받은 쪽이 그 키를 안다: 브라우저가 쿠키를 지웠으면 다시 받아야 한다', async () => {
+    vi.resetModules();
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_PLAYBACK_BASE_URL', 'https://media.test');
+    stubFetch(() => Promise.resolve(jsonResponse(403, {})));
+    const m = await import('./mediaPlayback');
+    const forbidden: string[] = [];
+    m.onPlaybackForbidden((key) => forbidden.push(key));
+    expect(await m.lookupRecordingSpans('key-1')).toBeNull();
+    expect(forbidden).toEqual(['key-1']);
+  });
+});

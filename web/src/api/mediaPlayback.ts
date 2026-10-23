@@ -39,6 +39,17 @@ export function markPlaybackCookiesIssued(): void {
   playbackCookiesIssued = true;
 }
 
+/**
+ * 녹화 목록이 403이면 부를 곳(PR #332 codex). 그 키의 쿠키가 브라우저에 없다는 뜻이다(만료 · 다른 탭이 쿠키 한도를 넘겨 지워짐 ·
+ * 사용자가 지움). 출입증을 들고 있는 쪽(clipEditor)이 그 키를 버려 다음에 다시 받는다. 출입증 쪽이 이 파일을 불러오므로 거꾸로
+ * 부르지 않고 알림을 건다
+ */
+let forbiddenListener: ((mediaKey: string) => void) | null = null;
+
+export function onPlaybackForbidden(listener: (mediaKey: string) => void): void {
+  forbiddenListener = listener;
+}
+
 /** fetch의 credentials 값. 출입증을 받기 전에는 fetch 기본값(same-origin) 그대로다 */
 export function mediaCredentials(): RequestCredentials {
   return playbackCookiesIssued ? 'include' : 'same-origin';
@@ -68,6 +79,7 @@ export async function lookupRecordingSpans(streamId: string): Promise<RecordingS
       credentials: mediaCredentials(),
     });
     if (res.status === 400 || res.status === 404) return [];
+    if (res.status === 403) forbiddenListener?.(streamId);
     if (!res.ok) return null;
     const body = (await res.json()) as { start: string; duration: number }[];
     return body

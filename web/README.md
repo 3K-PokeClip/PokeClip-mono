@@ -139,6 +139,8 @@ web/                     # 단일 Next.js 앱 (App Router + TanStack Query + Zus
   - 지난 방송 목록은 녹화를 확인하기 직전에 `ensurePlaybackAccessForList`로 받는다. 키마다 쿠키 12장이라 **한 탭에 든 키는
     12개까지**(144장, 크롬 도메인당 약 180장)이고, 빈자리만큼 아직 못 받은 키, 그다음 받은 지 오래된 키 순으로 차례를 준다. 차례가
     안 온 키는 쿠키 없이 묻고 다음 주기에 다시 온다. 라이브 화면의 녹화 조회도 출입증 답 뒤에 한다.
+    상한은 라이브 화면이 직접 받은 출입증까지 센다. 탭마다 셈이 따로라 탭을 여럿 열면 한도를 넘길 수 있는데, 녹화 목록이
+    403이면(쿠키가 지워졌다) 그 키의 출입증을 버리고 다음에 다시 받아 스스로 낫는다(`onPlaybackForbidden`).
   - 쿠키는 **출입증이 실제로 발급된 뒤에만** 싣는다(`mediaCredentials()`: 녹화 목록·미리보기 fetch는 `credentials`, 라이브
     hls.js는 `xhrSetup`의 `withCredentials`, 다시보기 `<video>`는 원래 싣는다). 로컬·dev 영상 서버(MediaMTX)는
     `Access-Control-Allow-Origin: *`로만 답해 쿠키를 실으면 브라우저가 응답을 버리기 때문이다(2026-10-23 실측).

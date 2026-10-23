@@ -18,6 +18,7 @@ const api = vi.hoisted(() => ({
 }));
 vi.mock('@/api/mediaPlayback', () => ({
   playbackConfigured: () => true,
+  onPlaybackForbidden: () => undefined,
   lookupRecordingSpans: (key: string) => {
     api.asked.push(key);
     api.order.push(`list:${key}`);
