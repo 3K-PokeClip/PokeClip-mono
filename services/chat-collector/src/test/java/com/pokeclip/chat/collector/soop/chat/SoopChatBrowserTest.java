@@ -182,10 +182,38 @@ class SoopChatBrowserTest {
         sessions.ensure("s-2", "bj-2", TOKEN);
         await(() -> sdk.connects.size() >= 2);
 
-        browser.crashForTest();
+        sdk.script(Step.message("MESSAGE", "v1", "n1", "살아남"));
+        browser.crashBrowserForTest();
 
         await(() -> sdk.connects.size() >= 4);
         assertThat(sessions.size()).isEqualTo(2);
+        List<PersistableChat> chats = new ArrayList<>();
+        await(() -> {
+            chats.addAll(buffer.drain(100));
+            return !chats.isEmpty();
+        });
+        assertThat(chats).extracting(PersistableChat::content).containsExactly("살아남");
+    }
+
+    /** 첫 탭의 렌더러만 죽으면 그 탭을 버리고 다시 붙는다. 펌프가 깨진 페이지에 매여 헛돌지 않는다 */
+    @Test
+    void 페이지가_깨지면_그_탭만_다시_붙고_채팅을_받는다() {
+        start(10);
+        sessions.ensure("s-1", "bj-1", TOKEN);
+        await(() -> sdk.connects.size() >= 1);
+        sessions.ensure("s-2", "bj-2", TOKEN);
+        await(() -> sdk.connects.size() >= 2);
+
+        sdk.script(Step.message("MESSAGE", "v1", "n1", "다시"));
+        browser.crashPageForTest("s-1");
+
+        List<PersistableChat> chats = new ArrayList<>();
+        await(() -> {
+            chats.addAll(buffer.drain(100));
+            return !chats.isEmpty();
+        });
+        assertThat(chats).extracting(PersistableChat::streamId).containsExactly("s-1");
+        assertThat(sdk.connects).hasSize(3);
     }
 
     @Test

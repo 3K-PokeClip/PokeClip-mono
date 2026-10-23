@@ -86,8 +86,7 @@ public class SoopChatBrowser implements AutoCloseable {
                 if (command != null) {
                     command.run();
                 } else if (!tabs.isEmpty()) {
-                    // 펌프: 페이지가 부른 콜백이 이 호출 안에서 처리된다
-                    tabs.values().iterator().next().pages().getFirst().waitForTimeout(PUMP_MILLIS);
+                    pump();
                 }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
@@ -100,8 +99,54 @@ public class SoopChatBrowser implements AutoCloseable {
         shutdownBrowser();
     }
 
+    /**
+     * 펌프: 페이지가 부른 콜백이 이 호출 안에서 처리된다. 첫 탭에서 기다리지만 다른 탭의 콜백도 같이 온다(같은 연결이다).
+     * 🔴 그 탭의 페이지가 닫혔으면 매번 던진다. 그대로 두면 쉬지 않고 경고만 찍고 그 방송은 영영 안 붙는다. 탭을 버리고 오류로 알려
+     * 다시 붙기 줄에 태운다(렌더러 충돌은 던지지 않고 {@link #onPageCrashed}로 온다).
+     */
+    private void pump() {
+        Map.Entry<String, BrowserContext> first = tabs.entrySet().iterator().next();
+        try {
+            first.getValue().pages().getFirst().waitForTimeout(PUMP_MILLIS);
+        } catch (RuntimeException e) {
+            if (!tabs.containsKey(first.getKey())) {
+                return; // 펌프 중에 브라우저를 잃어 이미 알렸다
+            }
+            log.warn("soop.chat.page_lost stream={} causeType={}", first.getKey(), e.getClass().getSimpleName());
+            loseTab(first.getKey());
+        }
+    }
+
+    /**
+     * 이 탭의 렌더러가 죽었다(메모리 · 충돌, 브라우저 스레드). 🔴 깨진 페이지에서도 {@code waitForTimeout}은 그냥 기다려서 펌프로는 모른다
+     * (시험 실측). 사건으로 받아 그 탭만 버리고 다시 붙는다.
+     */
+    private void onPageCrashed(String streamId) {
+        if (!tabs.containsKey(streamId)) {
+            return;
+        }
+        log.warn("soop.chat.page_crashed stream={}", streamId);
+        loseTab(streamId);
+    }
+
+    private void loseTab(String streamId) {
+        doClose(streamId);
+        listener.onError(streamId, "PAGE_LOST");
+    }
+
     private void doOpen(String streamId, String token) {
         doClose(streamId);
+        try {
+            openTab(streamId, token);
+        } catch (RuntimeException e) {
+            // 브라우저를 못 띄웠거나 탭을 못 만들었다(막 끊긴 브라우저 등). 이대로 두면 세션은 남는데 탭이 없어 영영 안 붙는다
+            log.warn("soop.chat.tab_open_failed stream={} causeType={}", streamId, e.getClass().getSimpleName());
+            doClose(streamId);
+            listener.onError(streamId, "OPEN");
+        }
+    }
+
+    private void openTab(String streamId, String token) {
         if (browser != null && !browser.isConnected()) {
             // 끊긴 브라우저를 계속 쓰면 newContext가 영영 던진다(메모리 상한에 죽은 경우 등). 버리고 새로 띄운다
             discardBrowser();
@@ -121,6 +166,7 @@ public class SoopChatBrowser implements AutoCloseable {
             return null;
         });
         Page page = context.newPage();
+        page.onCrash(crashed -> onPageCrashed(streamId));
         String origin = properties.pageOrigin().replaceAll("/+$", "");
         page.route(origin + "/soop-chat", route -> route.fulfill(new Route.FulfillOptions()
                 .setStatus(200).setContentType("text/html; charset=utf-8").setBody(SoopChatPage.html(properties.sdkUrl()))));
@@ -162,12 +208,17 @@ public class SoopChatBrowser implements AutoCloseable {
         playwright = null;
     }
 
-    /** 시험용: 브라우저를 밖에서 끊긴 것처럼 닫는다(Chromium이 죽은 경우를 흉내). */
-    void crashForTest() {
+    /** 시험용: Chromium 프로세스를 실제로 죽인다(CDP {@code Browser.crash}). 정상 닫기와 달리 사건 순서가 실물 충돌과 같다. */
+    void crashBrowserForTest() {
+        commands.add(() -> browser.newBrowserCDPSession().send("Browser.crash"));
+    }
+
+    /** 시험용: 이 방송 탭의 렌더러만 죽인다(CDP {@code Page.crash}). 브라우저는 산다. */
+    void crashPageForTest(String streamId) {
         commands.add(() -> {
-            if (browser != null) {
-                browser.close();
-            }
+            BrowserContext context = tabs.get(streamId);
+            Page page = context.pages().getFirst();
+            context.newCDPSession(page).send("Page.crash");
         });
     }
 
