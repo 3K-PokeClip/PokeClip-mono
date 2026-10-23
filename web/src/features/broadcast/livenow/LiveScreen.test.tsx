@@ -239,6 +239,17 @@ const CARDS: Card[] = [
   card(1, { eventSeq: 10 }),
 ];
 
+/** 수동 마킹 문이 돌려주는 새 수동 카드(지금 = 방송 5,043초) */
+const MARK_CARD = card(9, {
+  source: 'hotkey',
+  score: null,
+  evidence: null,
+  eventSeq: 90,
+  streamTimestampMs: 5_043_000,
+  window: { startMs: 5_003_000, endMs: 5_063_000 },
+  createdAt: new Date(NOW).toISOString(),
+});
+
 const chatAt = (secondsAgo: number) => new Date(NOW - secondsAgo * 1000).toISOString();
 const CHAT = [
   {
@@ -323,6 +334,14 @@ const INFO = {
 };
 
 const server = vi.hoisted(() => ({
+  /** 수동 마킹 문(POK-392)이 받은 본문들 */
+  markBodies: [] as Record<string, unknown>[],
+  /** 수동 마킹 문의 답. 기본은 201 새 카드 */
+  markReply: null as { status: number; body: unknown } | null,
+  /** 이것이 풀릴 때까지 수동 마킹 답을 붙든다(「카드 만드는 중」 자리를 보려고) */
+  markGate: null as Promise<void> | null,
+  /** 통로(SSE)가 이 카드들을 card 이벤트로 보내고 닫는다. null이면 통로는 용량 초과(503)다 */
+  sseCards: null as Card[] | null,
   live: true,
   failLive: false,
   relation: 'OWNER',
@@ -626,6 +645,14 @@ function handle(url: string, init?: RequestInit): Response | Promise<Response> {
     return server.listGate && u.searchParams.get('limit') !== '1'
       ? server.listGate.then(() => listResponse(u))
       : listResponse(u);
+  if (path.endsWith('/marks') && init?.method === 'POST') {
+    server.markBodies.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+    const reply = () => {
+      const r = server.markReply ?? { status: 201, body: MARK_CARD };
+      return jsonResponse(r.status, r.body);
+    };
+    return server.markGate ? server.markGate.then(reply) : reply();
+  }
   if (path.endsWith('/jump-cards')) {
     if (server.cards === 'fail') return jsonResponse(503, { error: 'unavailable' });
     const cards = server.cards === 'none' ? [] : [...CARDS, ...server.extraCards];
@@ -707,6 +734,11 @@ function handle(url: string, init?: RequestInit): Response | Promise<Response> {
       });
     return jsonResponse(200, { items: CHAT, nextCursor: null, appliedOffsetMs: 0 });
   }
+  if (path.endsWith('/events') && server.sseCards)
+    return new Response(
+      server.sseCards.map((c) => `event: card\ndata: ${JSON.stringify(c)}\n\n`).join(''),
+      { status: 200, headers: { 'Content-Type': 'text/event-stream' } },
+    );
   // 통로는 용량 초과로 답한다 — 폴링이 카드를 채운다(통로 자체는 useLiveMockState의 몫)
   if (path.endsWith('/events')) return jsonResponse(503, { error: 'sse_capacity' });
   if (path.endsWith('/playback-access') && server.playbackGate) {
@@ -803,6 +835,10 @@ beforeEach(() => {
   mediaCalls.spans = [];
   mediaCalls.answer = null;
   mediaCalls.configured = false;
+  server.markBodies = [];
+  server.markReply = null;
+  server.markGate = null;
+  server.sseCards = null;
   server.live = true;
   server.failLive = false;
   server.relation = 'OWNER';
@@ -1597,32 +1633,176 @@ describe('LiveScreen: 라이브 문구', () => {
 describe('LiveScreen — 수동 마킹', () => {
   // 이 파일은 전부 fireEvent다 — userEvent는 가짜 시계와 엉켜 멈춘다(GlassPlayer 자동 숨김 케이스와 같은 이유).
   //
-  // 누른 순간을 서버에 카드로 남기는 길이 아직 없다(POK-257, MVP 밖). 화면에만 카드를 세우면 새로 고침에 사라지고 편집도
-  // 못 하는 가짜 성공이다(QA 2026-10-11). 준비 중이라고만 말한다.
+  // 라이브는 누른 때·보낸 때를 서버에 보내고 서버가 시각을 정한다(POK-392). 답이 올 때까지 「카드 만드는 중」 자리가 서고,
+  // 답의 카드가 목록에 들어온다. 지난 방송의 위치 갈래는 태스크 3이라 지금은 준비 중 안내 그대로다.
   const PREPARING = '수동 마킹은 아직 준비 중이에요. 준비되면 알려드릴게요.';
+  const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
-  it('버튼을 누르면 준비 중이라고 알리고 카드를 만들지 않는다', async () => {
+  /** 답을 붙들어 둔다. 돌려준 함수를 부르면 풀린다 */
+  function holdMark() {
+    let release!: () => void;
+    server.markGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    return async () => {
+      release();
+      await settle();
+    };
+  }
+
+  it('버튼을 누르면 누른 때·보낸 때를 한 번 보내고, 만드는 중 자리가 선 뒤 받은 카드로 바뀐다', async () => {
     await renderLive();
+    const release = holdMark();
 
     fireEvent.click(screen.getByRole('button', { name: /수동 마킹/ }));
-    expect(screen.getByText(PREPARING)).toBeInTheDocument();
+    await settle();
 
-    act(() => {
-      vi.advanceTimersByTime(5_000);
-    });
+    expect(server.markBodies).toHaveLength(1);
+    const body = server.markBodies[0]!;
+    expect(Object.keys(body).sort()).toEqual(['eventId', 'pressedAt', 'sentAt']);
+    expect(body.eventId).toMatch(UUID_V4);
+    expect(body.pressedAt).toBe(NOW);
+    expect(body.sentAt).toBe(NOW);
+    const post = fetchSpy.mock.calls.find(([u]) => String(u).endsWith('/marks'));
+    expect(String(post?.[0])).toContain(`/api/clip/broadcasts/${STREAM_ID}/marks`);
+    // 자리: 누른 순간의 방송 시계(시안 1b 글자 그대로)
+    expect(screen.getByText('1:24:03 마킹됨 · 카드 생성 중')).toBeInTheDocument();
+    expect(screen.getByText('카드 만드는 중…')).toBeInTheDocument();
+
+    await release();
+
     expect(screen.queryByText('카드 만드는 중…')).not.toBeInTheDocument();
     expect(screen.queryByText(/마킹됨 · 카드 생성 중/)).not.toBeInTheDocument();
-    // 카드 수·필터·지표가 그대로다. 서버에 없는 카드를 세지 않는다
-    expect(screen.getByRole('button', { name: '전체 8' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '수동 2' })).toBeInTheDocument();
-    expect(screen.getByText('자동 6 · 수동 2')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '전체 9' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '수동 3' })).toBeInTheDocument();
   });
 
-  it('F8도 어디에 포커스가 있든 같은 안내다', async () => {
+  it('F8도 어디에 포커스가 있든 같은 요청이다', async () => {
     await renderLive();
 
     fireEvent.keyDown(document, { key: 'F8' });
-    expect(screen.getByText(PREPARING)).toBeInTheDocument();
+    await settle();
+
+    expect(server.markBodies).toHaveLength(1);
+    expect(server.markBodies[0]!.eventId).toMatch(UUID_V4);
+    expect(screen.getByRole('button', { name: '수동 3' })).toBeInTheDocument();
+  });
+
+  it('같은 카드가 목록으로 다시 와도 하나다', async () => {
+    await renderLive();
+    fireEvent.keyDown(document, { key: 'F8' });
+    await settle();
+    expect(screen.getByRole('button', { name: '전체 9' })).toBeInTheDocument();
+
+    const listReads = () =>
+      fetchSpy.mock.calls.filter(([u]) => String(u).includes('/jump-cards')).length;
+    const before = listReads();
+    server.extraCards = [MARK_CARD];
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    await settle();
+
+    expect(listReads(), '목록을 다시 안 읽었다: 이 갈래는 아무것도 안 잰다').toBeGreaterThan(
+      before,
+    );
+    expect(screen.getByRole('button', { name: '전체 9' })).toBeInTheDocument();
+  });
+
+  // 감사 1회차 m3: PRD 「통로로 같은 카드가 와도 하나」. 통로 카드는 목록과 다른 길(fromStream, 사진 지키기)로 들어온다
+  it('같은 카드가 통로로 다시 와도 하나다', async () => {
+    await renderLive();
+    fireEvent.keyDown(document, { key: 'F8' });
+    await settle();
+    expect(screen.getByRole('button', { name: '전체 9' })).toBeInTheDocument();
+
+    const sseReads = () =>
+      fetchSpy.mock.calls.filter(([u]) => String(u).endsWith('/events')).length;
+    const before = sseReads();
+    // 같은 카드와 함께 새 카드 하나를 보낸다: 새 카드가 서야 통로가 실제로 카드를 넣었다는 증거다(양성 대조)
+    server.sseCards = [MARK_CARD, card(10, { eventSeq: 100, streamTimestampMs: 5_040_000 })];
+    // 첫 통로는 용량 초과(503)라 60초 쉬고 다시 붙는다
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(61_000);
+    });
+    await settle();
+
+    expect(sseReads(), '통로에 다시 안 붙었다: 이 갈래는 아무것도 안 잰다').toBeGreaterThan(before);
+    expect(screen.getByRole('button', { name: '전체 10' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '수동 3' })).toBeInTheDocument();
+  });
+
+  it('다른 방송의 카드가 답으로 오면 목록에 안 넣는다', async () => {
+    await renderLive();
+    server.markReply = { status: 201, body: { ...MARK_CARD, streamId: 'live-2' } };
+
+    fireEvent.keyDown(document, { key: 'F8' });
+    await settle();
+
+    expect(screen.getByRole('button', { name: '전체 8' })).toBeInTheDocument();
+  });
+
+  it('200(20초 안 앞 카드)이면 가까운 카드가 이미 있다고 알리고 새 카드를 세지 않는다', async () => {
+    await renderLive();
+    server.markReply = { status: 200, body: CARDS[1] };
+
+    fireEvent.click(screen.getByRole('button', { name: /수동 마킹/ }));
+    await settle();
+
+    expect(screen.getByText('가까운 카드가 이미 있어요')).toBeInTheDocument();
+    expect(screen.queryByText('카드 만드는 중…')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '전체 8' })).toBeInTheDocument();
+  });
+
+  it('503 timeline_not_ready면 영상 기준을 못 정했다고 알리고 자리를 치운다', async () => {
+    await renderLive();
+    server.markReply = { status: 503, body: { error: 'timeline_not_ready' } };
+
+    fireEvent.click(screen.getByRole('button', { name: /수동 마킹/ }));
+    await settle();
+
+    expect(
+      screen.getByText('아직 영상 기준을 못 정했어요. 잠시 뒤 다시 눌러 주세요'),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('카드 만드는 중…')).not.toBeInTheDocument();
+    expect(screen.queryByText(/마킹됨 · 카드 생성 중/)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '전체 8' })).toBeInTheDocument();
+  });
+
+  it.each([
+    [404, { error: 'broadcast_not_found' }],
+    [500, { error: 'boom' }],
+    [503, { error: 'authorization_unavailable' }],
+  ])('%i이면 카드를 만들지 못했다고 알리고 자리를 치운다', async (status, body) => {
+    await renderLive();
+    server.markReply = { status, body };
+
+    fireEvent.click(screen.getByRole('button', { name: /수동 마킹/ }));
+    await settle();
+
+    expect(screen.getByText('카드를 만들지 못했어요')).toBeInTheDocument();
+    expect(screen.queryByText('카드 만드는 중…')).not.toBeInTheDocument();
+    expect(screen.queryByText(/마킹됨 · 카드 생성 중/)).not.toBeInTheDocument();
+  });
+
+  it('보내는 중에 또 누르면 무시한다(자리는 하나)', async () => {
+    await renderLive();
+    const release = holdMark();
+
+    fireEvent.click(screen.getByRole('button', { name: /수동 마킹/ }));
+    await settle();
+    fireEvent.keyDown(document, { key: 'F8' });
+    fireEvent.click(screen.getByRole('button', { name: /수동 마킹/ }));
+    await settle();
+
+    expect(server.markBodies).toHaveLength(1);
+    expect(screen.getAllByText('카드 만드는 중…')).toHaveLength(1);
+    await release();
+
+    // 답을 받은 뒤에는 다시 누를 수 있다
+    fireEvent.keyDown(document, { key: 'F8' });
+    await settle();
+    expect(server.markBodies).toHaveLength(2);
   });
 
   it('자동반복과 입력 중인 곳에서 누른 F8은 무시한다', async () => {
@@ -1635,20 +1815,21 @@ describe('LiveScreen — 수동 마킹', () => {
     document.body.appendChild(input);
     fireEvent.keyDown(input, { key: 'F8' });
     input.remove();
+    await settle();
 
-    expect(screen.queryByText(PREPARING)).not.toBeInTheDocument();
+    expect(server.markBodies).toHaveLength(0);
   });
 
-  it('지난 방송에서도 같다: 방송 끝 시각에 카드가 생기지 않는다', async () => {
+  it('지난 방송에서는 아직 준비 중 안내다: 라이브 갈래를 보내지 않는다', async () => {
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
     await renderLive();
 
     fireEvent.click(screen.getByRole('button', { name: /수동 마킹/ }));
-    expect(screen.getByText(PREPARING)).toBeInTheDocument();
-    act(() => {
-      vi.advanceTimersByTime(5_000);
-    });
-    expect(screen.queryByRole('heading', { name: /수동 마킹$/ })).not.toBeInTheDocument();
+    fireEvent.keyDown(document, { key: 'F8' });
+    await settle();
+
+    expect(screen.getAllByText(PREPARING).length).toBeGreaterThan(0);
+    expect(server.markBodies).toHaveLength(0);
     expect(screen.getByRole('button', { name: '수동 2' })).toBeInTheDocument();
   });
 

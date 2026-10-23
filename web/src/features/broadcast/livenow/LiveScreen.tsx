@@ -366,7 +366,7 @@ function LiveDashboard() {
   // 주소는 usePathname으로 읽는다: 넘어온 직후 첫 그리기의 window.location은 옛 주소다
   const vodRouteId = vodStreamIdFromPathname(usePathname() ?? '');
   const pastRoute = vodRouteId !== null;
-  const { stream, highlights, cardsStatus, chatWarning } = useLiveMockState(pastRoute);
+  const { stream, highlights, cardsStatus, chatWarning, mergeCard } = useLiveMockState(pastRoute);
   const { streamMeta, cardVisuals } = useLiveDetailsMockState();
   const liveData = useLiveData();
   const { streamId, info } = liveData;
@@ -390,8 +390,13 @@ function LiveDashboard() {
 
   const uptimeSeconds = clock.uptimeSeconds;
   const uptimeLabel = uptimeSeconds === null ? null : formatUptime(uptimeSeconds);
-  // 서버에 남길 길이 생길 때까지 준비 중이라고만 말한다(POK-257). 카드를 만들지 않는다
-  const marking = useManualMarking();
+  // 라이브는 서버에 카드를 만든다(POK-392). 지난 방송은 아직 준비 중 안내다(재생 위치 갈래가 따로 붙는다)
+  const marking = useManualMarking({
+    streamId,
+    live: viewStatus === 'live',
+    clockLabel: uptimeLabel,
+    onCard: mergeCard,
+  });
   // 접으면 패널 자체가 사라지므로 되살릴 통로는 플레이어 상단 오버레이의 여는 버튼이다
   const [chatPanelOpen, setChatPanelOpen] = useState(true);
   const toggleChatPanel = useCallback(() => setChatPanelOpen((open) => !open), []);
@@ -649,15 +654,14 @@ function LiveDashboard() {
             uptimeLabel={uptimeLabel}
             uptimeNote={UPTIME_NOTE[viewStatus]}
             metaNote={`방송 정보 ${missingWord(viewStatus, info !== null)}`}
-            // 만드는 중 자리는 수동 마킹이 서버에 남을 때(POK-257) 쓴다
-            pendingLabel={null}
+            pendingLabel={marking.pendingLabel}
             onMark={marking.mark}
           />
           <HighlightCardPanel
             highlights={highlights}
             stream={streamForCards}
             visuals={cardVisuals}
-            pendingLabel={null}
+            pendingLabel={marking.pendingLabel}
             detectionPaused={chatWarning}
             ended={ended}
             listStatus={cardsStatus}
