@@ -6,7 +6,7 @@ import { Button } from '@/ui';
 import { useMe } from '@/features/auth/useSession';
 import { SettingsPageHeader } from '@/features/settings/SettingsPageHeader';
 import { useChannelRelation } from './ChannelScope';
-import { useSwitchChannel } from './useActiveChannel';
+import { useActiveChannel, useSwitchChannel } from './useActiveChannel';
 import styles from './OwnerOnly.module.css';
 
 // 채널 주인만 여는 설정 화면(채널 연동 · 편집자 관리 · 플러그인, POK-390). 남의 채널에서 주소로 바로 와도 그 채널의 설정이
@@ -24,7 +24,10 @@ export function OwnerOnly({ title, children }: { title: string; children: ReactN
  */
 function Blocked({ title }: { title: string }) {
   const me = useMe().data;
+  const active = useActiveChannel();
   const switchTo = useSwitchChannel();
+  // 남의 채널 이름을 아직 못 읽었으면(새로고침 직후 등) 이름 없이 말한다
+  const where = active.ready && active.relation === 'EDITOR' ? `${active.name} 채널` : '남의 채널';
   return (
     <div className={styles.root}>
       <SettingsPageHeader title={title} />
@@ -33,7 +36,7 @@ function Blocked({ title }: { title: string }) {
           <Lock />
         </span>
         <p className={styles.title}>채널 주인만 볼 수 있는 화면이에요</p>
-        <p className={styles.text}>지금은 남의 채널에서 편집자로 일하는 중이에요</p>
+        <p className={styles.text}>지금은 {where}에서 편집자로 일하는 중이에요</p>
         <Button
           variant="solid"
           size="sm"
