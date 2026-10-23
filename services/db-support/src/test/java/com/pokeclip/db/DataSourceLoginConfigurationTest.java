@@ -142,6 +142,20 @@ class DataSourceLoginConfigurationTest extends PostgresTestBase {
         }
     }
 
+    /**
+     * 거부 오류에는 키만 싣는다. 값 안의 {@code %26}(인코딩된 &)이 풀린 뒤 쪼개지면 값 조각이 키처럼 실린다
+     * (PR #340 codex P2: {@code password=abc%26secret-token} → 키 {@code secret-token}).
+     */
+    @Test
+    void iam인데_URL_쿼리를_거부할_때_인코딩된_값_조각을_키로_싣지_않는다() {
+        Path ca = IamBootSupport.fakeCaFile(tmp);
+        Throwable thrown = catchThrowable(() -> bootIam(ca, new AtomicInteger(),
+                withQuery("password=abc%26secret-token")).close());
+
+        assertThat(thrown).hasStackTraceContaining("URL 쿼리");
+        assertThat(stackTraceOf(thrown)).doesNotContain("secret-token").doesNotContain("abc");
+    }
+
     /** 드라이버 속성은 yml의 socketTimeout 하나만 받는다. TLS 이름이 아니어도 접속을 바꾸는 키가 있다. */
     @Test
     void iam인데_드라이버_속성에_허용_밖_키가_있으면_부팅을_거부한다() {

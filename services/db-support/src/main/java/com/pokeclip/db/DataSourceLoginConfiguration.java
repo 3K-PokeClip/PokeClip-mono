@@ -109,8 +109,9 @@ public class DataSourceLoginConfiguration {
      * 오류 문구에는 키만 싣고 값은 안 싣는다.
      */
     private static void rejectOverrides(URI uri, HikariDataSource ds) {
-        if (uri.getQuery() != null) {
-            List<String> keys = Arrays.stream(uri.getQuery().split("&")).map(pair -> pair.split("=", 2)[0]).toList();
+        if (uri.getRawQuery() != null) {
+            // 인코딩된 채로 쪼갠다. getQuery()는 값 안의 %26을 &로 풀어, 값 조각이 키처럼 오류에 실린다(PR #340 codex P2).
+            List<String> keys = Arrays.stream(uri.getRawQuery().split("&")).map(pair -> pair.split("=", 2)[0]).toList();
             throw new IllegalStateException("iam에서는 DB URL 쿼리를 받지 않는다(접속 값은 이 서버가 정한다). 받은 키: " + keys);
         }
         Set<String> extra = new TreeSet<>(ds.getDataSourceProperties().stringPropertyNames());
