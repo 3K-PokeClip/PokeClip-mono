@@ -29,10 +29,9 @@ export interface LayoutOption {
 }
 
 export const LAYOUT_OPTIONS: readonly LayoutOption[] = [
-  // 이름은 결과 모양으로 말한다(POK-389). 설명은 타일에 마우스를 올리면 보인다
-  { value: 'vert', label: '전체', hint: '세로 화면을 꽉 채움' },
-  { value: 'split', label: '상하 분할', hint: '위 · 아래 두 칸' },
-  { value: 'center', label: '중앙', hint: '원본 비율 그대로' },
+  { value: 'vert', label: '세로', hint: '9:16 꽉 채움' },
+  { value: 'split', label: '분할', hint: '상단 · 하단 2영역' },
+  { value: 'center', label: '중앙', hint: '원본 비율 유지' },
   { value: 'crop', label: '크롭', hint: '메인 + 작은 화면' },
   // 가로는 아직 열지 않는다 — 자리는 시안대로 두되 고를 수는 없다
   { value: 'horiz', label: '가로', hint: '16:9 원본', disabled: true },

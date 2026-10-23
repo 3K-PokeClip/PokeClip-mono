@@ -39,9 +39,7 @@ function LayoutCard({
       onKeyDown={roving.onKeyDown}
       // 포커스만으로는 고르지 않는다 — 창을 떠났다 돌아올 때 브라우저가 활성 요소에 focus 를 다시
       // 쏘는데, 그때 ⌘Z 로 되돌린 레이아웃이 조용히 다시 커밋되면 안 된다 (칩·스와치와 같은 규약)
-      className={styles.layoutTile}
-      // 타일은 이름만 적는다: 설명은 마우스를 올리면 보이고, 읽기 프로그램에는 덧붙임으로 간다
-      title={hint}
+      className={styles.layoutRow}
       onClick={onSelect}
     >
       {/* 어떤 모양이 되는지 그림으로 — 라벨만으로는 「중앙」과 「크롭」이 안 갈린다 (시안 diag) */}
@@ -51,7 +49,10 @@ function LayoutCard({
           <span className={styles.layoutFill} data-slot="2" />
         </span>
       </span>
-      <span className={styles.layoutLabel}>{label}</span>
+      <span className={styles.layoutText}>
+        <span className={styles.layoutLabel}>{label}</span>
+        <span className={styles.layoutHint}>{hint}</span>
+      </span>
     </button>
   );
 }
@@ -213,7 +214,7 @@ export function LayoutSection({ state }: { state: ClipEditorMockState }) {
         onActiveChange={(value) => state.setLayout(value as EditorLayout)}
         orientation="vertical"
       >
-        <div className={styles.layoutGrid} role="radiogroup" aria-label="레이아웃 종류">
+        <div className={styles.layoutList} role="radiogroup" aria-label="레이아웃 종류">
           {state.layoutOptions.map((option) => (
             <LayoutCard
               key={option.value}

@@ -510,10 +510,10 @@ describe('StudioScreen', () => {
     const user = userEvent.setup();
     renderStudio();
 
-    expect(screen.getByText('상하 분할 · 자막 영상+파일')).toBeInTheDocument();
+    expect(screen.getByText('분할 · 자막 영상+파일')).toBeInTheDocument();
 
-    await user.click(screen.getByRole('radio', { name: /전체/ }));
-    expect(screen.getByRole('radio', { name: /전체/ })).toBeChecked();
+    await user.click(screen.getByRole('radio', { name: /세로/ }));
+    expect(screen.getByRole('radio', { name: /세로/ })).toBeChecked();
   });
 
   it('도구는 쇼츠 만드는 순서대로 다섯이다: 구간·BGM·효과·패널 위치는 없다(POK-389)', () => {
@@ -543,8 +543,8 @@ describe('StudioScreen', () => {
     const user = userEvent.setup();
     renderStudio();
 
-    await user.click(screen.getByRole('radio', { name: /전체/ }));
-    expect(screen.getByRole('radio', { name: /전체/ })).toBeChecked();
+    await user.click(screen.getByRole('radio', { name: /세로/ }));
+    expect(screen.getByRole('radio', { name: /세로/ })).toBeChecked();
 
     // 클릭한 버튼에 포커스가 남은 채로 되돌린다
     await user.keyboard('{Meta>}z{/Meta}');
@@ -686,7 +686,7 @@ describe('StudioScreen', () => {
     const bar = screen.getByRole('toolbar', { name: '미리보기 보기' });
 
     expect(within(bar).getByText('9:16')).toBeInTheDocument();
-    expect(within(bar).getByText('상하 분할')).toBeInTheDocument();
+    expect(within(bar).getByText('분할')).toBeInTheDocument();
     expect(container.querySelector('[data-safe-zone]')).toBeNull();
 
     await user.click(within(bar).getByRole('switch', { name: '안전 영역' }));
@@ -694,27 +694,26 @@ describe('StudioScreen', () => {
     // 보는 방식일 뿐이라 되돌릴 거리가 생기지 않는다
     expect(screen.getByRole('button', { name: '작업 이전으로' })).toBeDisabled();
 
-    await user.click(screen.getByRole('radio', { name: /전체/ }));
-    expect(within(bar).getByText('전체')).toBeInTheDocument();
+    await user.click(screen.getByRole('radio', { name: /세로/ }));
+    expect(within(bar).getByText('세로')).toBeInTheDocument();
   });
 
-  it('레이아웃은 폰 모양 타일 다섯이다: 이름만 읽고 설명은 덧붙임으로(POK-389)', () => {
+  it('레이아웃은 세로 목록 다섯이다: 줄마다 이름 아래 설명이 보인다', () => {
     renderStudio();
     const group = screen.getByRole('radiogroup', { name: '레이아웃 종류' });
-    const tiles = within(group).getAllByRole('radio');
-    expect(tiles.map((tile) => tile.textContent)).toEqual([
-      '전체',
-      '상하 분할',
-      '중앙',
-      '크롭',
-      '가로',
+    const rows = within(group).getAllByRole('radio');
+    expect(rows.map((row) => row.textContent)).toEqual([
+      '세로9:16 꽉 채움',
+      '분할상단 · 하단 2영역',
+      '중앙원본 비율 유지',
+      '크롭메인 + 작은 화면',
+      '가로16:9 원본',
     ]);
-    expect(tiles[1]).toHaveAccessibleDescription('위 · 아래 두 칸');
   });
 
   it('레이아웃 카드에 포커스만 옮겨서는 레이아웃이 바뀌지 않는다 — 창 복귀 재포커스가 편집을 되살리면 안 된다', () => {
     renderStudio();
-    screen.getByRole('radio', { name: /전체/ }).focus();
+    screen.getByRole('radio', { name: /세로/ }).focus();
     expect(screen.getByRole('radio', { name: /분할/ })).toBeChecked();
   });
 
@@ -740,7 +739,7 @@ describe('StudioScreen', () => {
     // 시안 순서: 세로 · 분할 · 중앙 · 크롭 · 가로 — 세로 목록이라 위아래 화살표다
     screen.getByRole('radio', { name: /분할/ }).focus();
     await user.keyboard('{ArrowUp}');
-    expect(screen.getByRole('radio', { name: /전체/ })).toBeChecked();
+    expect(screen.getByRole('radio', { name: /세로/ })).toBeChecked();
 
     await user.keyboard('{ArrowDown}{ArrowDown}');
     expect(screen.getByRole('radio', { name: /중앙/ })).toBeChecked();
