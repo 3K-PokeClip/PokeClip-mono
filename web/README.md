@@ -361,14 +361,24 @@ docker build --platform linux/<태스크 아키텍처> -t pokeclip-web \
 | `NEXT_PUBLIC_POSTHOG_REPLAY`          | 세션 녹화 꺼짐         | `on`일 때만 켜짐                    |
 | `NEXT_PUBLIC_LANDING_URL`             | `https://pokeclip.com` | 랜딩 주소                           |
 
+선택 인자는 비어도 빌드가 멈추지 않으므로, 이름을 잘못 적으면 그 기능이 조용히 꺼진 채 빌드된다.
+
 - `NEXT_PUBLIC_MEDIA_STUB_URL`은 받지 않는다 — 배포 빌드에서는 반드시 비어야 한다. 같은 이유로
   `.dockerignore`가 `.env*` 파일을 빌드 컨텍스트에서 뺀다(`.env.local`이 섞이면 `next build`가
   읽어 굳힌다).
-- 실행 시점 env는 `PORT`(기본 `3000`)·`HOSTNAME`(기본 `0.0.0.0`)뿐이다.
+- 실행 시점 env는 `PORT`(기본 `3000`)·`HOSTNAME`(기본 `0.0.0.0`)·`KEEP_ALIVE_TIMEOUT`(기본 `65000`ms)
+  셋이다. `KEEP_ALIVE_TIMEOUT`은 ALB idle timeout보다 길어야 한다 — SSE 때문에 M8에서 ALB idle을
+  늘리면 이 값도 그보다 크게 준다.
 - 헬스체크는 `/api/ping`이다(앱이 직접 답해 백엔드 상태와 무관). 이미지에 `HEALTHCHECK`로 넣어
   뒀다.
 - `pnpm start`(`next start`)는 standalone 설정에서 경고를 내지만 동작은 한다. 운영과 같은 꼴로
-  띄우려면 `node .next/standalone/server.js`.
+  띄우려면 Dockerfile이 하는 대로 `public`·`.next/static`을 standalone 폴더로 옮긴 뒤 띄운다
+  (standalone은 두 폴더를 싣지 않는다):
+
+  ```bash
+  cp -r public .next/standalone/ && cp -r .next/static .next/standalone/.next/
+  node .next/standalone/server.js
+  ```
 
 ### 세션·토큰 저장과 다중 탭
 

@@ -8,8 +8,9 @@
 # next start · server.js 둘 다 빌드 때 값으로 프록시). NEXT_PUBLIC_* 도 번들에 인라이닝된다.
 # 그래서 환경마다 빌드 인자를 따로 주고 다시 빌드한다.
 
-# Node 판은 .node-version 과 같게 유지한다.
-FROM node:24.18.0-trixie-slim AS base
+# Node 판은 .node-version 과 같게 유지한다. 다이제스트는 멀티 아키텍처 인덱스의 것이라
+# --platform 으로 amd64 · arm64 를 고를 수 있다(태그를 바꾸면 다이제스트도 같이 바꾼다).
+FROM node:24.18.0-trixie-slim@sha256:ae91dcc111a68c9d2d81ff2a17bda61be126426176fde6fe7d08ab13b7f50573 AS base
 ENV NEXT_TELEMETRY_DISABLED=1 \
     COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 # pnpm 판은 package.json 의 packageManager(pnpm@11.12.0)를 corepack 이 따른다.
@@ -45,11 +46,14 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN pnpm build
 
-FROM node:24.18.0-trixie-slim AS run
+FROM node:24.18.0-trixie-slim@sha256:ae91dcc111a68c9d2d81ff2a17bda61be126426176fde6fe7d08ab13b7f50573 AS run
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
     PORT=3000 \
-    HOSTNAME=0.0.0.0
+    HOSTNAME=0.0.0.0 \
+    KEEP_ALIVE_TIMEOUT=65000
+# KEEP_ALIVE_TIMEOUT(ms) 가 없으면 server.js 가 Node 기본 5초를 쓴다. ALB idle timeout(기본 60초)보다
+# 짧으면 서버가 먼저 연결을 닫아 간헐 502 가 난다 — ALB idle 보다 크게 둔다.
 WORKDIR /app
 # standalone 은 public · .next/static 을 싣지 않으므로 따로 옮긴다(Next output 문서).
 # 실행 중 .next/cache 에 쓰므로 비root 사용자 node(이미지 기본 제공)가 소유한다.
