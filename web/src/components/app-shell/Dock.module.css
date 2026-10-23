@@ -33,6 +33,18 @@
     inset 0 -1px 0 var(--dock-sheen-bottom),
     0 24px 60px rgb(3 10 24 / 0.55),
     0 4px 14px rgb(0 0 0 / 0.25);
+  /* 꾹 눌러 끄는 동안 글자 잡기·화면 밀기·길게 누르기 메뉴가 끼어들지 않게 — 독 위의 손짓은 독이 갖는다 */
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* 알약을 잡고 끄는 동안만 — 다른 칸을 누르고 있을 때는 아무것도 끌지 않는다 */
+.dock[data-grabbing],
+.dock[data-grabbing] .item {
+  cursor: grabbing;
 }
 /* 독에는 view-transition-name을 주지 않는다 (이유는 Dock.tsx 주석 참고).
    혹시 나중에 붙일 일이 생기면 CSS 모듈이 아니라 인라인 style로 걸어야 한다 —
@@ -69,7 +81,13 @@
   cursor: pointer;
   transition:
     background var(--pc-duration-normal) var(--pc-ease-standard),
-    color var(--pc-duration-normal) var(--pc-ease-standard);
+    color var(--pc-duration-normal) var(--pc-ease-standard),
+    opacity var(--pc-duration-fast) var(--pc-ease-standard);
+}
+
+/* 알약이 아닌 칸을 누르고 있는 동안 */
+.item[data-dimmed] {
+  opacity: 0.5;
 }
 
 .item:hover {
@@ -94,13 +112,24 @@
   box-shadow:
     inset 0 1px 0 rgb(255 255 255 / 0.28),
     0 2px 14px rgb(var(--pc-primary-500-rgb) / 0.38);
+  transition: scale var(--pc-duration-fast) var(--pc-ease-standard);
+}
+
+/* 잡으면 살짝 작아진다(ModeSegment 손잡이의 눌림) */
+.pill[data-grabbed] {
+  scale: 0.94;
 }
 
 /* 배경·테두리는 .pill이 그린다. 여기엔 글자 표현만 남긴다.
-   예전의 padding 9u 오버라이드는 뺐다 — 활성 전환마다 항목 폭이 2u씩 튀었다. */
+   예전의 padding 9u 오버라이드는 뺐다 — 활성 전환마다 항목 폭이 2u씩 튀었다.
+   흰 글자는 알약을 따라간다(끄는 동안 손가락 아래 칸). 굵기는 지금 탭에 둔다 — 끄는 동안 칸 폭이 바뀌면
+   손가락 아래 칸이 달라진다. */
 .item[aria-current='page'] {
-  color: var(--pc-white);
   font-weight: 650;
+}
+
+.item[data-pill] {
+  color: var(--pc-white);
 }
 
 .item:focus-visible {
