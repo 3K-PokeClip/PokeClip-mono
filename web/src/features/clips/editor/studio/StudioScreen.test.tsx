@@ -506,14 +506,12 @@ describe('StudioScreen', () => {
     expect(screen.queryByText('Space')).not.toBeInTheDocument();
   });
 
-  it('레이아웃을 고르면 미리보기 안내가 따라온다', async () => {
-    const user = userEvent.setup();
+  it('가운데 화면에는 판만 있다: 위 막대(비율·레이아웃·안전 영역)와 결과 아래 요약 줄이 없다', () => {
     renderStudio();
 
-    expect(screen.getByText('분할 · 자막 영상+파일')).toBeInTheDocument();
-
-    await user.click(screen.getByRole('radio', { name: /세로/ }));
-    expect(screen.getByRole('radio', { name: /세로/ })).toBeChecked();
+    expect(screen.queryByRole('toolbar', { name: '미리보기 보기' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('switch', { name: '안전 영역' })).not.toBeInTheDocument();
+    expect(screen.queryByText(/· 자막 /)).not.toBeInTheDocument();
   });
 
   it('도구는 쇼츠 만드는 순서대로 다섯이다: 구간·BGM·효과는 없고 패널 위치는 탭 묶음에 끼지 않는다(POK-389)', () => {
@@ -696,24 +694,6 @@ describe('StudioScreen', () => {
     const burned = container.querySelector<HTMLElement>('[data-position="edge"]');
     expect(burned).not.toBeNull();
     expect(burned!.style.getPropertyValue('--pc-edge')).toBe('70%');
-  });
-
-  it('미리보기 위 막대가 비율·레이아웃을 말하고 안전 영역을 켜고 끈다: 편집 기록은 안 바뀐다(POK-389)', async () => {
-    const user = userEvent.setup();
-    const { container } = renderStudio();
-    const bar = screen.getByRole('toolbar', { name: '미리보기 보기' });
-
-    expect(within(bar).getByText('9:16')).toBeInTheDocument();
-    expect(within(bar).getByText('분할')).toBeInTheDocument();
-    expect(container.querySelector('[data-safe-zone]')).toBeNull();
-
-    await user.click(within(bar).getByRole('switch', { name: '안전 영역' }));
-    expect(container.querySelector('[data-safe-zone]')).not.toBeNull();
-    // 보는 방식일 뿐이라 되돌릴 거리가 생기지 않는다
-    expect(screen.getByRole('button', { name: '작업 이전으로' })).toBeDisabled();
-
-    await user.click(screen.getByRole('radio', { name: /세로/ }));
-    expect(within(bar).getByText('세로')).toBeInTheDocument();
   });
 
   it('레이아웃은 세로 목록 다섯이다: 줄마다 이름 아래 설명이 보인다', () => {

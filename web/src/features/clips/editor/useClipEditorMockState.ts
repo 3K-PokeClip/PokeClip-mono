@@ -314,13 +314,6 @@ export const SUBTITLE_MODE_OPTIONS: readonly { value: SubtitleMode; label: strin
   { value: 'burn-cc', label: '둘 다' },
 ];
 
-/** 미리보기 아래 설명 줄의 짧은 말: 「자막 둘 다」처럼 읽히지 않게 따로 둔다 */
-const SUBTITLE_MODE_NOTE: Record<SubtitleMode, string> = {
-  burn: '영상에 새김',
-  cc: '자막 파일',
-  'burn-cc': '영상+파일',
-};
-
 /** 오디오 「빠른 설정」 카드 넷(POK-389): 값 계산은 audioPresets.ts */
 const AUDIO_PRESETS: readonly { value: AudioPresetId; label: string; hint: string }[] = [
   { value: 'copyright-safe', label: '저작권 걱정 없이', hint: 'BGM 빼기' },
@@ -527,8 +520,6 @@ export interface ClipEditorMockState {
   regions: readonly EditorRegion[];
   /** 결과 화면의 비율(가로/세로). 가로 모드만 16:9 다 */
   resultAspect: number;
-  /** 지금 고른 레이아웃의 이름 — 「미리보기 · 분할」처럼 배지에 쓴다 */
-  layoutLabel: string;
   /** 지금 손대고 있는 영역. 선택된 것만 테두리가 진하고 바깥이 어두워진다 */
   selectedRegionId: string;
   selectRegion: (regionId: string) => void;
@@ -604,7 +595,6 @@ export interface ClipEditorMockState {
   subtitle: SubtitleState;
   subtitleFontLabel: string;
   subtitleMode: SubtitleMode;
-  subtitleModeLabel: string;
   subtitleModeOptions: readonly { value: SubtitleMode; label: string }[];
   setSubtitleMode: (mode: SubtitleMode) => void;
   generateSubtitles: () => void;
@@ -1103,7 +1093,6 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
       recipe.centerFill,
     ]),
     resultAspect: resultAspect(recipe.layout),
-    layoutLabel: LAYOUT_OPTIONS.find((option) => option.value === recipe.layout)?.label ?? '',
     selectedRegionId: regionIds.includes(selectedRegionId)
       ? selectedRegionId
       : (regionIds[0] ?? 'main'),
@@ -1304,7 +1293,6 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     subtitle,
     subtitleFontLabel: MOCK_SOURCE.subtitleFontLabel,
     subtitleMode: recipe.subtitleMode,
-    subtitleModeLabel: SUBTITLE_MODE_NOTE[recipe.subtitleMode],
     subtitleModeOptions: SUBTITLE_MODE_OPTIONS,
     setSubtitleMode: useCallback(
       (mode: SubtitleMode) =>

@@ -981,12 +981,6 @@ describe('StudioScreen — 화면에서 고른 모양이 저장 본문에 그대
     expect(screen.queryByText('“자막 파일에만”')).not.toBeInTheDocument();
   });
 
-  it('자막이 없으면 결과 설명도 「자막 없음」이다: 고른 방식(번인+CC)만 적으면 자막이 들어갈 것처럼 읽힌다', async () => {
-    await openFrom('recipe=31');
-    expect(screen.getByText(/자막 없음$/)).toBeInTheDocument();
-    expect(screen.queryByText(/자막 영상\+파일/)).not.toBeInTheDocument();
-  });
-
   it('AI 자막 만들기는 서버 기능이 없어 꺼져 있고 준비 중이라고 말한다(POK-389)', async () => {
     const user = userEvent.setup();
     await openFrom('recipe=31');
@@ -996,17 +990,6 @@ describe('StudioScreen — 화면에서 고른 모양이 저장 본문에 그대
     expect(
       within(screen.getByRole('region', { name: 'AI 자막' })).getByText('준비 중'),
     ).toBeInTheDocument();
-  });
-
-  it('저장된 자막이 있으면 결과 설명은 고른 방식을 적는다', async () => {
-    server.savedSubtitles = {
-      mode: 'BURN_ONLY',
-      segments: [
-        { startAtMs: STARTED_AT + 121_500, endAtMs: STARTED_AT + 123_000, text: '저장된 첫 자막' },
-      ],
-    };
-    await openFrom('recipe=31');
-    expect(screen.getByText(/자막 영상에 새김$/)).toBeInTheDocument();
   });
 });
 

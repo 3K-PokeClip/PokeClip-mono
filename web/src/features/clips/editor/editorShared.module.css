@@ -403,7 +403,7 @@
   transform: translateY(-50%);
 }
 
-/* 결과 판 바로 아래 한 줄 — 지금 무엇이 나오는지 요약한다 */
+/* 결과 판 바로 아래 한 줄 — 미리보기를 못 틀거나 트랙별로 못 들을 때 이유를 알린다 */
 .stageNote {
   /* 결과 칸은 무대 폭의 1/4 뿐이라 한 줄이 칸보다 넓어질 수 있다 — 넘쳐서 원본 판을 덮지 않게 줄인다 */
   max-width: 100%;
@@ -470,33 +470,4 @@
 .segmented[data-size='sm'] .segment[aria-checked='true'] {
   background: var(--pc-color-accent-subtle);
   color: var(--pc-color-accent-text);
-}
-
-/* ---------- 미리보기 위 막대 (POK-389) ---------- */
-
-.previewBar {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: calc(8 * var(--pc-u));
-  flex: none;
-}
-
-.previewChip {
-  padding: calc(3 * var(--pc-u)) calc(9 * var(--pc-u));
-  border-radius: calc(7 * var(--pc-u));
-  border: 1px solid var(--pc-color-border-default);
-  font-size: calc(11 * var(--pc-u));
-  font-weight: 600;
-  color: var(--pc-color-text-secondary);
-}
-
-/* 안전 영역: 오른쪽 세로 띠와 아래 띠 바깥을 점선으로 가른다. 영상에는 타지 않는 보조선이다 */
-.safeZone {
-  position: absolute;
-  inset: 0 var(--pc-safe-right) var(--pc-safe-bottom) 0;
-  border-right: 1px dashed var(--pc-color-text-muted);
-  border-bottom: 1px dashed var(--pc-color-text-muted);
-  pointer-events: none;
-  z-index: 2;
 }

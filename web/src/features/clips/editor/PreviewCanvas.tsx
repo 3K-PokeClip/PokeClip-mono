@@ -1,7 +1,6 @@
 'use client';
 
-import { useRef, useState } from 'react';
-import { Switch } from '@/ui';
+import { useRef } from 'react';
 import { CropOverlay } from './CropOverlay';
 import { CropResult } from './CropResult';
 import { VideoSurface } from './VideoSurface';
@@ -19,25 +18,12 @@ import type { ClipEditorMockState } from './useClipEditorMockState';
 //
 // 원본 판은 아직 자리 표시자다 — 실제 영상은 미디어 경로가 이어지면 이 자리에 깔린다.
 // 사각형은 판 기준 %로 놓이므로 그때도 좌표는 그대로다.
-
-/**
- * 쇼츠 화면에서 플랫폼 버튼·설명에 가려지기 쉬운 자리(결과 폭·높이 대비). 유튜브 쇼츠의 오른쪽 버튼 줄과
- * 아래 제목·채널 줄을 어림한 값이다: 알파컷 「데드존 표시」와 피카클립의 「쇼츠 안전영역」 안내를 참고했다(POK-389).
- * 화면에만 그리는 보조선이라 영상에는 타지 않는다.
- */
-export const SAFE_ZONE = { right: 0.12, bottom: 0.2 } as const;
-
-/** 결과 비율 → 막대에 적는 말 */
-function aspectLabel(aspect: number): string {
-  if (Math.abs(aspect - 9 / 16) < 0.01) return '9:16';
-  if (Math.abs(aspect - 1) < 0.01) return '1:1';
-  return aspect < 1 ? '세로' : '가로';
-}
+//
+// 가운데 화면에는 판만 둔다: 위 막대(비율 · 레이아웃 · 안전 영역)와 결과 아래 요약 줄은 걷었다.
+// 결과 아래에는 미리보기를 못 틀 때의 이유만 뜬다.
 
 export function PreviewCanvas({ state }: { state: ClipEditorMockState }) {
   const panelRef = useRef<HTMLDivElement>(null);
-  // 보는 방식이라 편집 기록(실행취소)에 넣지 않는다
-  const [safeZone, setSafeZone] = useState(false);
   const editingLayout = state.activeTool === 'layout';
 
   // CC만 고르면 영상에 글자가 타지 않는다 — 번인 미리보기도 그리지 않는다(렌더와 같다)
@@ -45,14 +31,6 @@ export function PreviewCanvas({ state }: { state: ClipEditorMockState }) {
     state.subtitle.status === 'ready' && state.subtitleMode !== 'cc'
       ? (state.subtitle.items.find((item) => item.id === state.selectedSubtitleId)?.text ?? null)
       : null;
-  // 결과 설명은 결과에 실제로 들어갈 것을 말한다: 자막이 없는데 고른 방식(번인+CC)만 적으면 자막이 들어갈 것처럼
-  // 읽힌다(QA 2026-10-11)
-  const subtitleNote =
-    state.subtitle.status === 'ready' && state.subtitle.items.length > 0
-      ? state.subtitleModeLabel
-      : state.subtitle.status === 'generating'
-        ? '만드는 중'
-        : '없음';
 
   const result = (
     <div
@@ -79,32 +57,11 @@ export function PreviewCanvas({ state }: { state: ClipEditorMockState }) {
           “{subtitleText}”
         </span>
       ) : null}
-      {safeZone ? (
-        <span
-          className={styles.safeZone}
-          data-safe-zone
-          aria-hidden
-          style={{
-            ['--pc-safe-right' as string]: `${SAFE_ZONE.right * 100}%`,
-            ['--pc-safe-bottom' as string]: `${SAFE_ZONE.bottom * 100}%`,
-          }}
-        />
-      ) : null}
     </div>
   );
 
   return (
     <div className={styles.preview}>
-      <div className={styles.previewBar} role="toolbar" aria-label="미리보기 보기">
-        <span className={styles.previewChip}>{aspectLabel(state.resultAspect)}</span>
-        <span className={styles.previewChip}>{state.layoutLabel}</span>
-        <Switch
-          size="sm"
-          label="안전 영역"
-          checked={safeZone}
-          onChange={() => setSafeZone((on) => !on)}
-        />
-      </div>
       {/* data-preview-stage: 타임라인 높이 상한을 재는 표식. 미리보기 칸에서 신축하는 건
           이 무대뿐이라, 여기 남은 여유가 곧 타임라인이 더 커질 수 있는 양이다 (POK-237). */}
       <div className={styles.stage} data-preview-stage>
@@ -141,10 +98,6 @@ export function PreviewCanvas({ state }: { state: ClipEditorMockState }) {
         >
           {editingLayout ? <span className={styles.sideLabel}>결과</span> : null}
           {result}
-          <span className={styles.stageNote}>
-            {editingLayout ? '' : '미리보기 · '}
-            {state.layoutLabel} · 자막 {subtitleNote}
-          </span>
           {state.previewError !== null ? (
             <span className={styles.stageNote} role="status">
               {state.previewError}
