@@ -377,6 +377,9 @@
 /* ---------- 구간 오버레이 · 플레이헤드 ---------- */
 
 .overlay {
+  /* 키운 창 밖으로 나간 구간 상자·핸들은 가로로 잘라 감춘다(가장자리 표시가 대신 알린다). 세로는 재생선 머리가 위로 나간다 */
+  overflow-x: clip;
+  overflow-y: visible;
   position: absolute;
   left: calc(180 * var(--pc-u));
   right: 0;
@@ -421,6 +424,34 @@
 .rangeHandle:focus-visible {
   outline: 2px solid var(--pc-color-focus-ring);
   outline-offset: 2px;
+}
+
+/* 키운 창 밖으로 나간 구간 끝 표시(POK-389). 누르면 그리로 간다 */
+.edgeMarker {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: calc(2 * var(--pc-u));
+  padding: calc(3 * var(--pc-u)) calc(7 * var(--pc-u));
+  border: 0;
+  border-radius: calc(999 * var(--pc-u));
+  background: var(--pc-color-accent);
+  color: var(--pc-white);
+  font-size: calc(10.5 * var(--pc-u));
+  font-weight: 600;
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.edgeMarkerStart {
+  left: calc(4 * var(--pc-u));
+}
+
+.edgeMarkerEnd {
+  right: calc(4 * var(--pc-u));
 }
 
 /* 누르거나 끌어 재생 위치를 옮기는 바닥(덮개는 누르기를 통과시키고 이것만 받는다) */

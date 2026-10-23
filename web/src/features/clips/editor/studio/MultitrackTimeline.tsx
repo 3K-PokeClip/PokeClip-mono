@@ -1,5 +1,5 @@
 import { useRef, type KeyboardEvent, type PointerEvent } from 'react';
-import { Camera, Captions, Film } from 'lucide-react';
+import { Camera, Captions, ChevronLeft, ChevronRight, Film } from 'lucide-react';
 import { formatUptime } from '@/features/player/playerMath';
 import styles from './StudioScreen.module.css';
 import { ThumbnailTile } from './ThumbnailTile';
@@ -82,15 +82,46 @@ export function MultitrackTimeline({
     if (seconds !== null) state.seekTo(seconds);
   };
 
+  // 끄는 동안은 창을 붙잡는다: 키운 창은 재생 위치를 따라 넘어가므로, 안 붙잡으면 끌던 자리 밑에서 창이 움직인다
+  const scrubGesture = useRef<number | null>(null);
   const onScrubPointerDown = (event: PointerEvent<HTMLElement>) => {
     event.currentTarget.setPointerCapture(event.pointerId);
     seekFromPointer(event.clientX);
+    scrubGesture.current = state.beginGesture();
   };
 
   const onScrubPointerMove = (event: PointerEvent<HTMLElement>) => {
     if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
     seekFromPointer(event.clientX);
   };
+
+  const onScrubPointerUp = () => {
+    if (scrubGesture.current !== null) state.endGesture(scrubGesture.current);
+    scrubGesture.current = null;
+  };
+
+  // 키운 창 밖으로 나간 구간 끝(POK-389): 가장자리에 표시하고 누르면 그리로 간다(손잡이를 잃지 않게)
+  const outside = (seconds: number) =>
+    seconds < state.view.startSeconds || seconds > state.view.endSeconds;
+  const startHidden = outside(state.range.startSeconds);
+  const endHidden = outside(state.range.endSeconds);
+  // 왼쪽 표시: 시작점이 왼쪽 밖이면 「시작점」, 구간이 통째로 왼쪽 밖이면 「구간」. 오른쪽도 같다
+  const leftMarker =
+    state.range.endSeconds < state.view.startSeconds
+      ? { label: '구간', seconds: state.range.startSeconds }
+      : state.range.startSeconds < state.view.startSeconds
+        ? { label: '시작점', seconds: state.range.startSeconds }
+        : null;
+  const rightMarker =
+    state.range.startSeconds > state.view.endSeconds
+      ? { label: '구간', seconds: state.range.startSeconds }
+      : state.range.endSeconds > state.view.endSeconds
+        ? // 끝 바로 앞으로: 끝에 서면 구간 반복이 처음으로 되돌린다
+          {
+            label: '끝점',
+            seconds: Math.max(state.range.startSeconds, state.range.endSeconds - 0.1),
+          }
+        : null;
 
   const onHandlePointerDown = (edge: 'start' | 'end') => (event: PointerEvent<HTMLElement>) => {
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -197,6 +228,9 @@ export function MultitrackTimeline({
             data-ruler
             onPointerDown={onScrubPointerDown}
             onPointerMove={onScrubPointerMove}
+            onPointerUp={onScrubPointerUp}
+            onPointerCancel={onScrubPointerUp}
+            onLostPointerCapture={onScrubPointerUp}
           >
             {rulerTicks(state.view).map((tick) => (
               <span key={tick}>{formatUptime(tick)}</span>
@@ -291,6 +325,9 @@ export function MultitrackTimeline({
                 aria-hidden
                 onPointerDown={onScrubPointerDown}
                 onPointerMove={onScrubPointerMove}
+                onPointerUp={onScrubPointerUp}
+                onPointerCancel={onScrubPointerUp}
+                onLostPointerCapture={onScrubPointerUp}
               />
               {/* 쇼츠 밖은 양쪽을 흐리게 덮는다: 쓰는 구간만 밝게(알파컷 방식, POK-389) */}
               <div
@@ -313,48 +350,72 @@ export function MultitrackTimeline({
                   width: `${(endFraction - startFraction) * 100}%`,
                 }}
               >
-                {/* 핸들은 늘 그린다. 창이 구간을 품도록 잡혀 있어 밖으로 밀려나지 않고,
-                    숨기면 구간이 창보다 길어지는 순간 둘 다 사라져 조작 자체가 막힌다. */}
-                {(['start', 'end'] as const).map((edge) => (
-                  <button
-                    key={edge}
-                    type="button"
-                    role="slider"
-                    aria-label={edge === 'start' ? '구간 시작점' : '구간 끝점'}
-                    // 이름·키 조작이 「경계 위치」를 뜻하므로 값도 위치로 읽어 준다.
-                    // 길이를 실으면 시작점에서 ArrowRight(증가)에 값이 줄어드는 모순이 생기고
-                    // 두 핸들이 늘 같은 숫자를 말한다.
-                    // 길이 상한(3분)까지 반영한다 — 안 하면 「0부터」라 안내해 놓고
-                    // 그쪽으로는 값이 움직이지 않는다
-                    aria-valuemin={
-                      edge === 'start'
-                        ? Math.max(0, state.range.endSeconds - MAX_RANGE_SECONDS)
-                        : state.range.startSeconds + MIN_RANGE_SECONDS
-                    }
-                    aria-valuemax={
-                      edge === 'start'
-                        ? state.range.endSeconds - MIN_RANGE_SECONDS
-                        : Math.min(
-                            state.sourceDurationSeconds,
-                            state.range.startSeconds + MAX_RANGE_SECONDS,
-                          )
-                    }
-                    aria-valuenow={
-                      edge === 'start' ? state.range.startSeconds : state.range.endSeconds
-                    }
-                    aria-valuetext={`${edge === 'start' ? state.rangeStartLabel : state.rangeEndLabel} · 구간 ${state.rangeLengthLabel}`}
-                    className={`${styles.rangeHandle} ${
-                      edge === 'start' ? styles.rangeHandleStart : styles.rangeHandleEnd
-                    }`}
-                    onPointerDown={onHandlePointerDown(edge)}
-                    onPointerMove={onHandlePointerMove}
-                    onPointerUp={onHandlePointerUp}
-                    onPointerCancel={onHandlePointerUp}
-                    onLostPointerCapture={onHandlePointerUp}
-                    onKeyDown={onHandleKeyDown(edge)}
-                  />
-                ))}
+                {/* 핸들은 창 안에 있을 때만 그린다(100% 이하에서는 창이 구간을 품어 늘 보인다). 키워서 창 밖으로 나간
+                    끝은 가장자리 표시가 대신한다: 덮개가 가로로 잘라 밖의 핸들은 어차피 안 보인다 */}
+                {(['start', 'end'] as const)
+                  .filter((edge) => !(edge === 'start' ? startHidden : endHidden))
+                  .map((edge) => (
+                    <button
+                      key={edge}
+                      type="button"
+                      role="slider"
+                      aria-label={edge === 'start' ? '구간 시작점' : '구간 끝점'}
+                      // 이름·키 조작이 「경계 위치」를 뜻하므로 값도 위치로 읽어 준다.
+                      // 길이를 실으면 시작점에서 ArrowRight(증가)에 값이 줄어드는 모순이 생기고
+                      // 두 핸들이 늘 같은 숫자를 말한다.
+                      // 길이 상한(3분)까지 반영한다. 안 하면 「0부터」라 안내해 놓고
+                      // 그쪽으로는 값이 움직이지 않는다
+                      aria-valuemin={
+                        edge === 'start'
+                          ? Math.max(0, state.range.endSeconds - MAX_RANGE_SECONDS)
+                          : state.range.startSeconds + MIN_RANGE_SECONDS
+                      }
+                      aria-valuemax={
+                        edge === 'start'
+                          ? state.range.endSeconds - MIN_RANGE_SECONDS
+                          : Math.min(
+                              state.sourceDurationSeconds,
+                              state.range.startSeconds + MAX_RANGE_SECONDS,
+                            )
+                      }
+                      aria-valuenow={
+                        edge === 'start' ? state.range.startSeconds : state.range.endSeconds
+                      }
+                      aria-valuetext={`${edge === 'start' ? state.rangeStartLabel : state.rangeEndLabel} · 구간 ${state.rangeLengthLabel}`}
+                      className={`${styles.rangeHandle} ${
+                        edge === 'start' ? styles.rangeHandleStart : styles.rangeHandleEnd
+                      }`}
+                      onPointerDown={onHandlePointerDown(edge)}
+                      onPointerMove={onHandlePointerMove}
+                      onPointerUp={onHandlePointerUp}
+                      onPointerCancel={onHandlePointerUp}
+                      onLostPointerCapture={onHandlePointerUp}
+                      onKeyDown={onHandleKeyDown(edge)}
+                    />
+                  ))}
               </div>
+              {leftMarker !== null ? (
+                <button
+                  type="button"
+                  className={`${styles.edgeMarker} ${styles.edgeMarkerStart}`}
+                  aria-label={`${leftMarker.label}으로 가기`}
+                  onClick={() => state.seekTo(leftMarker.seconds)}
+                >
+                  <ChevronLeft size={11} aria-hidden />
+                  {leftMarker.label}
+                </button>
+              ) : null}
+              {rightMarker !== null ? (
+                <button
+                  type="button"
+                  className={`${styles.edgeMarker} ${styles.edgeMarkerEnd}`}
+                  aria-label={`${rightMarker.label}으로 가기`}
+                  onClick={() => state.seekTo(rightMarker.seconds)}
+                >
+                  {rightMarker.label}
+                  <ChevronRight size={11} aria-hidden />
+                </button>
+              ) : null}
               {/* 창 밖이면 그리지 않는다. 클램프된 채 두면 눈금 가장자리에 딱 붙어
                   실제와 다른 시각을 현재 위치처럼 읽게 한다. */}
               {state.thumbnailSeconds !== null ? (

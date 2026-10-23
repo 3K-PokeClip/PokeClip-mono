@@ -224,6 +224,43 @@ describe('StudioScreen', () => {
     expect(zoomIn).toBeEnabled();
   });
 
+  it('키우면 구간보다 좁게 재생 위치 둘레만 보이고, 밖으로 나간 끝은 가장자리 표시가 대신한다(POK-389)', async () => {
+    const user = userEvent.setup();
+    const seekTo = vi.fn();
+    renderStudio({
+      source: {
+        clipTitle: '카드',
+        sourceLabel: '방송',
+        durationSeconds: 400,
+        range: { startSeconds: 100, endSeconds: 160 },
+      },
+      playback: {
+        playing: false,
+        currentSeconds: 130,
+        durationSeconds: 400,
+        error: null,
+        togglePlay: vi.fn(),
+        seekTo,
+        seekBy: vi.fn(),
+        setRate: vi.fn(),
+        setBounds: vi.fn(),
+      },
+    });
+    const bar = screen.getByRole('toolbar', { name: '재생과 구간' });
+    // 100%: 1분 구간 전체가 보이고 손잡이 둘이 다 있다
+    expect(screen.getAllByRole('slider', { name: /구간 (시작|끝)점/ })).toHaveLength(2);
+    expect(screen.queryByRole('button', { name: /으로 가기/ })).not.toBeInTheDocument();
+
+    await user.click(within(bar).getByRole('button', { name: '타임라인 한 단계 확대' }));
+    await user.click(within(bar).getByRole('button', { name: '타임라인 한 단계 확대' }));
+    // 400%: 18.75초 창(121~139초)이라 두 끝이 다 밖이다
+    expect(screen.queryAllByRole('slider', { name: /구간 (시작|끝)점/ })).toHaveLength(0);
+    await user.click(screen.getByRole('button', { name: '시작점으로 가기' }));
+    expect(seekTo).toHaveBeenLastCalledWith(100);
+    await user.click(screen.getByRole('button', { name: '끝점으로 가기' }));
+    expect(seekTo).toHaveBeenLastCalledWith(159.9);
+  });
+
   it('단축키로 재생을 토글하고 되돌린다', async () => {
     const user = userEvent.setup();
     renderStudio();

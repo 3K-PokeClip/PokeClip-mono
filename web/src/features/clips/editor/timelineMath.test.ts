@@ -15,7 +15,7 @@ import {
   rulerTicks,
   secondsFromPointer,
   secondsToFraction,
-  viewWindow,
+  zoomedView,
   zoomStep,
 } from './timelineMath';
 
@@ -137,12 +137,23 @@ describe('창 환산', () => {
     expect(rulerTicks(view, 6)).toEqual([4900, 4915, 4930, 4945, 4960, 4975]);
   });
 
-  it('보이는 창은 중심을 따라가되 원본 밖으로 나가지 않는다', () => {
-    expect(viewWindow(10, 100, DURATION).startSeconds).toBe(0);
-    const end = viewWindow(DURATION, 100, DURATION);
-    expect(end.endSeconds).toBe(DURATION);
+  it('100% 이하는 구간 가운데에 두되 원본 밖으로 나가지 않는다', () => {
+    const at = (range: { startSeconds: number; endSeconds: number }, max = DURATION) =>
+      zoomedView({
+        range,
+        playheadSeconds: range.startSeconds,
+        zoom: 100,
+        minSeconds: 0,
+        maxSeconds: max,
+        previous: null,
+      });
+    expect(at({ startSeconds: 5, endSeconds: 15 }).startSeconds).toBe(0);
+    expect(at({ startSeconds: DURATION - 10, endSeconds: DURATION }).endSeconds).toBe(DURATION);
     // 원본이 창보다 짧으면 전체를 보여준다
-    expect(viewWindow(5, 100, 30)).toEqual({ startSeconds: 0, endSeconds: 30 });
+    expect(at({ startSeconds: 5, endSeconds: 15 }, 30)).toEqual({
+      startSeconds: 0,
+      endSeconds: 30,
+    });
   });
 });
 
@@ -154,9 +165,46 @@ describe('줌·높이', () => {
     expect(zoomStep(400, 'in')).toBe(400);
   });
 
-  it('가장 넓은 줌에서는 창이 최대 구간보다 넓다 — 마우스로 3:00에 닿는 길', () => {
-    const widest = viewWindow(2000, ZOOM_LEVELS[0], DURATION);
+  it('가장 넓은 줌에서는 창이 최대 구간보다 넓다: 마우스로 3:00에 닿는 길', () => {
+    const widest = zoomedView({
+      range: { startSeconds: 2000, endSeconds: 2010 },
+      playheadSeconds: 2000,
+      zoom: ZOOM_LEVELS[0],
+      minSeconds: 0,
+      maxSeconds: DURATION,
+      previous: null,
+    });
     expect(widest.endSeconds - widest.startSeconds).toBeGreaterThan(MAX_RANGE_SECONDS);
+  });
+
+  describe('100%를 넘기면 진짜로 키운다: 구간보다 좁아질 수 있고 재생 위치를 따라간다(POK-389)', () => {
+    // 1분 구간(카드 하나). 100%는 구간 × 1.15와 기본 75초 중 큰 폭이다
+    const range = { startSeconds: 100, endSeconds: 160 };
+    const base = { range, minSeconds: 70, maxSeconds: 190 };
+
+    it('처음 키우면 재생 위치를 가운데에 두고 폭이 배율만큼 줄어든다', () => {
+      const view = zoomedView({ ...base, playheadSeconds: 130, zoom: 400, previous: null });
+      expect(view).toEqual({ startSeconds: 120.625, endSeconds: 139.375 }); // 75 / 4 = 18.75초
+    });
+
+    it('창 안에서 재생 위치를 옮기면 창은 그대로다(누를 때마다 출렁이지 않게)', () => {
+      const previous = { startSeconds: 120.625, endSeconds: 139.375 };
+      expect(zoomedView({ ...base, playheadSeconds: 137, zoom: 400, previous })).toEqual(previous);
+    });
+
+    it('재생 위치가 창을 앞으로 벗어나면 그 자리가 창의 10%에 오게 넘기고, 뒤로 벗어나면 90%에 오게 넘긴다', () => {
+      const previous = { startSeconds: 120.625, endSeconds: 139.375 };
+      const ahead = zoomedView({ ...base, playheadSeconds: 140, zoom: 400, previous });
+      expect(ahead.startSeconds).toBeCloseTo(140 - 18.75 * 0.1);
+      const behind = zoomedView({ ...base, playheadSeconds: 110, zoom: 400, previous });
+      expect(behind.startSeconds).toBeCloseTo(110 - 18.75 * 0.9);
+    });
+
+    it('잡을 수 있는 범위(min~max) 밖으로는 넘기지 않는다', () => {
+      const view = zoomedView({ ...base, playheadSeconds: 189, zoom: 400, previous: null });
+      expect(view.endSeconds).toBe(190);
+      expect(view.endSeconds - view.startSeconds).toBeCloseTo(18.75);
+    });
   });
 
   it('타임라인 높이는 범위 안으로 자른다', () => {

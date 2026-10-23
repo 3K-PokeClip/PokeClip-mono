@@ -81,7 +81,7 @@ import {
   rangeLengthSeconds,
   resolveRangeEdge,
   clampTimelineHeight,
-  viewWindow,
+  zoomedView,
   zoomStep,
   ZOOM_LEVELS,
   type ClipRange,
@@ -866,26 +866,24 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     );
   }, [trackPreview, tracks]);
 
-  const liveView = useMemo(() => {
-    const view = viewWindow(
-      (recipe.range.startSeconds + recipe.range.endSeconds) / 2,
-      zoom,
-      source.durationSeconds,
-      // 구간보다 조금 넉넉하게 — 양쪽에 핸들을 끌어 넣을 여백이 남는다
-      (recipe.range.endSeconds - recipe.range.startSeconds) * 1.15,
-    );
-    // 잡을 수 없는 왼쪽(하이라이트 범위 밖)은 눈금자에도 안 보인다 — 창을 오른쪽으로 민다
-    const min = source.minSeconds ?? 0;
-    if (view.startSeconds >= min) return view;
-    const span = Math.min(view.endSeconds - view.startSeconds, source.durationSeconds - min);
-    return { startSeconds: min, endSeconds: min + span };
-  }, [
-    recipe.range.startSeconds,
-    recipe.range.endSeconds,
-    zoom,
-    source.durationSeconds,
-    source.minSeconds,
-  ]);
+  // 바로 앞에 그린 창: 키운 상태에서 재생 위치가 그 안에 있으면 창을 그대로 둔다(zoomedView)
+  const previousViewRef = useRef<TimelineView | null>(null);
+  // 100% 이하에서는 재생 위치가 창을 안 바꾼다: 그때는 재생할 때마다 다시 셀 필요가 없다
+  const followedPlayhead = zoom > 100 ? playheadSeconds : null;
+  const liveView = useMemo(
+    () =>
+      zoomedView({
+        range: recipe.range,
+        playheadSeconds: followedPlayhead ?? recipe.range.startSeconds,
+        zoom,
+        // 잡을 수 없는 왼쪽(하이라이트 범위 밖)은 눈금자에도 안 보인다
+        minSeconds: source.minSeconds ?? 0,
+        maxSeconds: source.durationSeconds,
+        previous: previousViewRef.current,
+      }),
+    [recipe.range, followedPlayhead, zoom, source.durationSeconds, source.minSeconds],
+  );
+  previousViewRef.current = liveView;
   // 제스처가 시작될 때의 창을 그대로 붙잡아 둔다
   const liveViewRef = useRef(liveView);
   liveViewRef.current = liveView;

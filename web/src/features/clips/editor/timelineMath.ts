@@ -177,25 +177,45 @@ export function secondsFromPointer(
 }
 
 /**
- * 줌 배율에서 보이는 창. 중심(플레이헤드·구간)을 가운데 두되 원본 밖으로는 나가지 않는다 —
- * 창이 원본보다 넓으면 원본 전체를 보여준다.
+ * 확대 배율에서 보이는 창(POK-389). 100%는 구간을 다 품는 폭(구간 × 1.15와 기본 폭 중 큰 것)이고 배율만큼 좁히거나 넓힌다.
+ *
+ * - 100% 이하: 구간 가운데에 둔다. 구간 손잡이가 늘 보인다.
+ * - 100% 초과: 구간보다 좁아질 수 있어(캡컷처럼 진짜 확대) 재생 위치를 따라간다. 앞 창 안에 재생 위치가 있으면 그대로 두고
+ *   (누를 때마다 출렁이지 않게), 앞으로 벗어나면 그 자리가 창의 10%에, 뒤로 벗어나면 90%에 오게 넘긴다. 앞 창이 없거나
+ *   폭이 바뀌었으면(배율을 바꿨으면) 재생 위치를 가운데에 둔다. 밖으로 나간 손잡이는 화면이 가장자리 표시로 알린다.
+ *
+ * 어느 쪽이든 잡을 수 있는 범위(min~max) 밖으로는 나가지 않고, 범위가 창보다 좁으면 범위 전체를 보여 준다.
  */
-export function viewWindow(
-  centerSeconds: number,
-  zoom: number,
-  durationSeconds: number,
-  /**
-   * 창이 최소한 이만큼은 보여야 한다 — 선택 구간을 넣어 준다.
-   * 구간보다 좁은 창은 핸들을 창 밖으로 밀어내고, 그러면 그 핸들은
-   * 가장자리에 붙어 엉뚱한 시각을 가리키거나 아예 조작할 수 없게 된다.
-   */
-  minSpanSeconds = 0,
-): TimelineView {
-  const zoomSpan = (BASE_VIEW_SECONDS * 100) / zoom;
-  const span = Math.min(durationSeconds, Math.max(zoomSpan, minSpanSeconds));
-  const half = span / 2;
-  const start = Math.min(Math.max(0, centerSeconds - half), Math.max(0, durationSeconds - span));
-  return { startSeconds: roundMs(start), endSeconds: roundMs(start + span) };
+export function zoomedView({
+  range,
+  playheadSeconds,
+  zoom,
+  minSeconds,
+  maxSeconds,
+  previous,
+}: {
+  range: ClipRange;
+  playheadSeconds: number;
+  zoom: number;
+  minSeconds: number;
+  maxSeconds: number;
+  /** 바로 앞에 그린 창. 처음이면 null */
+  previous: TimelineView | null;
+}): TimelineView {
+  const fitSpan = Math.max(BASE_VIEW_SECONDS, (range.endSeconds - range.startSeconds) * 1.15);
+  const available = Math.max(0, maxSeconds - minSeconds);
+  const span = Math.min(available, (fitSpan * 100) / zoom);
+  const place = (start: number) => {
+    const clamped = Math.min(Math.max(minSeconds, start), maxSeconds - span);
+    return { startSeconds: roundMs(clamped), endSeconds: roundMs(clamped + span) };
+  };
+  if (zoom <= 100) return place((range.startSeconds + range.endSeconds) / 2 - span / 2);
+  const sameSpan =
+    previous !== null && Math.abs(previous.endSeconds - previous.startSeconds - span) < 1e-6;
+  if (!sameSpan) return place(playheadSeconds - span / 2);
+  if (playheadSeconds > previous.endSeconds) return place(playheadSeconds - span * 0.1);
+  if (playheadSeconds < previous.startSeconds) return place(playheadSeconds - span * 0.9);
+  return place(previous.startSeconds);
 }
 
 /** 줌 한 단계 — 끝에서 더 누르면 그대로 (버튼 비활성 판단도 이 값으로 한다) */
