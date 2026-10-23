@@ -998,6 +998,22 @@ describe('LiveScreen — 영상 출입증', () => {
     expect(hlsFake.loads).toBe(2);
   });
 
+  it('끝난 방송의 녹화 조회도 출입증 답 뒤에 한다: CDN 뒤 녹화 목록은 쿠키가 없으면 403이다(POK-317)', async () => {
+    mediaCalls.configured = true;
+    server.playback = 'grant';
+    let release!: () => void;
+    server.playbackGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    await renderLive();
+    expect(mediaCalls.spans).toEqual([]);
+
+    release();
+    await settle();
+    expect(mediaCalls.spans.length).toBeGreaterThan(0);
+  });
+
   it('출입증이 필요 없는 곳(로컬·dev)은 첫 화면이 서는 사이에 라이브 영상을 부른다: 기다림이 재생 시작을 늦추지 않는다', async () => {
     stubMediaElement();
     vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', 'http://live.test');

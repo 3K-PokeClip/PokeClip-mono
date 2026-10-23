@@ -2,6 +2,7 @@
 
 import {
   broadcastTitle,
+  ensurePlaybackAccessForList,
   fetchAllBroadcasts,
   fetchAllJumpCards,
   mediaStreamId,
@@ -241,10 +242,17 @@ export function useVodListMockState(options: VodListOptions = {}): VodListMockSt
         // 한 번만 묻는다. 방송마다 물으면 방송이 쌓인 계정은 같은 큰 요청을 주기마다 여러 번 보낸다(PR #208 codex)
         // 묻지 못했으면(오류·시한) null이다: 「녹화 없음」과 가른다(리뷰 1라운드)
         const spansByKey = new Map<string, ReturnType<typeof lookupRecordingSpans>>();
+        // CDN 뒤 녹화 목록은 출입증 쿠키가 있어야 열린다(POK-317). 한 탭에 든 키는 12개까지라 차례가 안 온 키는 쿠키 없이 묻고
+        // 다음 주기에 다시 온다
+        const access = ensurePlaybackAccessForList(
+          all
+            .filter(checkRecording)
+            .map((b) => ({ streamId: b.streamId, mediaKey: mediaStreamId(b) })),
+        );
         const spansOf = (key: string) => {
           let found = spansByKey.get(key);
           if (found === undefined) {
-            found = lookupRecordingSpans(key);
+            found = Promise.resolve(access.get(key)).then(() => lookupRecordingSpans(key));
             spansByKey.set(key, found);
           }
           return found;

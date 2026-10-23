@@ -412,6 +412,67 @@ describe('영상 출입증 받기와 쿠키 싣기 (POK-317)', () => {
     expect(posts()).toHaveLength(0);
   });
 
+  it('목록은 한 탭에 영상 키 12개까지만 출입증을 들고, 이미 든 키는 다시 받지 않는다: 키마다 쿠키 12장이다(POK-317)', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.parse('2026-10-23T00:00:00Z'));
+    const { api, posts } = await load(granted('2026-10-23T01:00:00Z'));
+    const items = Array.from({ length: 14 }, (_, i) => ({
+      streamId: `S-${i}`,
+      mediaKey: `k-${i}`,
+    }));
+
+    const first = api.ensurePlaybackAccessForList([
+      ...items,
+      { streamId: 'S-0b', mediaKey: 'k-0' },
+    ]);
+    await Promise.all([...first.values()]);
+    expect(posts()).toHaveLength(12);
+    expect(first.get('k-12')).toBeNull();
+    expect(first.get('k-13')).toBeNull();
+
+    await Promise.all([...api.ensurePlaybackAccessForList(items).values()]);
+    expect(posts()).toHaveLength(12);
+  });
+
+  it('목록 차례는 돌아간다: 자리가 나면 아직 못 받은 키부터, 그다음 받은 지 오래된 키 순이다(POK-317)', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.parse('2026-10-23T00:00:00Z'));
+    const { api, posts } = await load(() =>
+      jsonResponse(200, { expiresAt: new Date(Date.now() + 60 * 60_000).toISOString() }),
+    );
+    const items = Array.from({ length: 14 }, (_, i) => ({
+      streamId: `S-${i}`,
+      mediaKey: `k-${i}`,
+    }));
+    await Promise.all([...api.ensurePlaybackAccessForList(items).values()]);
+
+    // 받은 것이 다 낡았다: 못 받았던 둘이 먼저 받는다
+    vi.setSystemTime(Date.parse('2026-10-23T00:56:00Z'));
+    const again = api.ensurePlaybackAccessForList(items);
+    await Promise.all([...again.values()]);
+    const second = posts().slice(12);
+    expect(second).toHaveLength(12);
+    expect(second.slice(0, 2)).toEqual([
+      '/api/clip/broadcasts/S-12/playback-access',
+      '/api/clip/broadcasts/S-13/playback-access',
+    ]);
+    expect(again.get('k-10')).toBeNull();
+    expect(again.get('k-11')).toBeNull();
+  });
+
+  it('「필요 없음」을 받은 방송은 목록 자리를 쓰지 않는다: 로컬 · dev는 상한에 안 걸린다', async () => {
+    const { api, posts } = await load(() =>
+      jsonResponse(503, { error: 'playback_signing_unavailable' }),
+    );
+    const items = Array.from({ length: 14 }, (_, i) => ({
+      streamId: `S-${i}`,
+      mediaKey: `k-${i}`,
+    }));
+    await Promise.all([...api.ensurePlaybackAccessForList(items).values()]);
+    await Promise.all([...api.ensurePlaybackAccessForList(items).values()]);
+    expect(posts()).toHaveLength(14);
+  });
+
   it('영상 키로 부르면 그 키로 받아 둔 방송의 출입증을 다시 쓰거나 새로 받는다: 모르는 키면 묻지 않는다', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(Date.parse('2026-10-23T00:00:00Z'));

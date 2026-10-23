@@ -762,6 +762,54 @@ export function ensurePlaybackAccess(
   return result;
 }
 
+/**
+ * 지난 방송 목록이 한 탭에서 동시에 들고 있는 영상 키 상한(POK-317). 출입증 하나가 쿠키 12장이라 12개면 144장이고, 넘기면
+ * 도메인당 쿠키 한도(크롬 약 180장)를 넘어 브라우저가 앞 출입증을 지운다
+ */
+const LIST_ACCESS_MAX_KEYS = 12;
+/** 영상 키 → 목록이 마지막으로 출입증을 받은 시각. 자리가 나면 못 받은 키, 그다음 오래된 키 순으로 차례를 준다 */
+const listGrantedAt = new Map<string, number>();
+
+/**
+ * 지난 방송 목록의 출입증 받기(POK-317). 지금 든 키(받는 중 포함)는 그대로 다시 쓰고, 빈자리(상한 − 든 키 수)만큼만 새로
+ * 받는다. 「필요 없음」을 받은 방송은 자리를 안 쓴다. 차례가 안 온 키는 null이라 쿠키 없이 묻고 다음 주기에 다시 온다.
+ * 값은 영상 키마다 하나다(같은 키의 방송은 쿠키가 같다)
+ */
+export function ensurePlaybackAccessForList(
+  items: { streamId: string; mediaKey: string }[],
+): Map<string, Promise<PlaybackAccessResult> | null> {
+  const now = Date.now();
+  const held = new Set<string>();
+  for (const entry of playbackAccessCache.values()) if (entry.until > now) held.add(entry.mediaKey);
+  const byKey = new Map<string, string>();
+  for (const { streamId, mediaKey } of items)
+    if (!byKey.has(mediaKey)) byKey.set(mediaKey, streamId);
+
+  const out = new Map<string, Promise<PlaybackAccessResult> | null>();
+  const waiting: string[] = [];
+  for (const [mediaKey, streamId] of byKey) {
+    if (held.has(mediaKey) || playbackNotNeeded.has(streamId))
+      out.set(mediaKey, ensurePlaybackAccess(streamId, mediaKey));
+    else waiting.push(mediaKey);
+  }
+  // 정렬은 안정적이라 같은 차례끼리는 목록 순서다
+  waiting.sort((a, b) => (listGrantedAt.get(a) ?? -1) - (listGrantedAt.get(b) ?? -1));
+  let free = LIST_ACCESS_MAX_KEYS - held.size;
+  for (const mediaKey of waiting) {
+    if (free <= 0) {
+      out.set(mediaKey, null);
+      continue;
+    }
+    free -= 1;
+    const result = ensurePlaybackAccess(byKey.get(mediaKey)!, mediaKey);
+    out.set(mediaKey, result);
+    void result?.then((r) => {
+      if (r.kind === 'granted') listGrantedAt.set(mediaKey, Date.now());
+    });
+  }
+  return out;
+}
+
 /** 영상 키만 아는 자리(편집기 미리보기)의 갱신. 그 키로 출입증을 받은 방송이 없으면 묻지 않는다 */
 export function ensureMediaAccess(mediaKey: string): Promise<PlaybackAccessResult> | null {
   const streamId = playbackAccessByMediaKey.get(mediaKey);

@@ -176,11 +176,19 @@ function LivePlayer({
   const mediaKey = ingestStreamId ?? liveStreamId;
   const src = useMediaSource(mediaKey);
   // 끝난 방송은 LL-HLS 주소가 닫힌다 — 녹화 재생 서버에서 다시보기를 튼다(있을 때만).
+  // 출입증을 받았거나 필요 없다는 답이 온 방송(아래 출입증 효과가 채운다). 라이브 재생과 녹화 조회가 이것을 기다린다(POK-317)
+  const [accessReadyFor, setAccessReadyFor] = useState<string | null>(null);
   const [lookup, setLookup] = useState<RecordingLookup>({ kind: 'pending' });
   useEffect(() => {
     setLookup({ kind: 'pending' });
     publishLiveData({ timeBaseMs: null });
-    if (broadcastStatus !== 'ended' || !mediaKey) return undefined;
+    // CDN 뒤 녹화 목록은 출입증 쿠키가 있어야 열린다: 출입증 답 뒤에 묻는다(POK-317)
+    if (
+      broadcastStatus !== 'ended' ||
+      !mediaKey ||
+      (liveStreamId && accessReadyFor !== liveStreamId)
+    )
+      return undefined;
     let alive = true;
     let retry: number | undefined;
     // 시작 시각을 모르는 방송(자리표시)은 그래프와 같은 끝 12시간 안에서만 찾는다: 하한이 없으면 같은 송출 키로 한 다른 날 방송의
@@ -215,7 +223,16 @@ function LivePlayer({
       alive = false;
       window.clearTimeout(retry);
     };
-  }, [broadcastStatus, mediaKey, startedAt, endedAt, originMs, onRecordingLookupStart]);
+  }, [
+    broadcastStatus,
+    mediaKey,
+    liveStreamId,
+    accessReadyFor,
+    startedAt,
+    endedAt,
+    originMs,
+    onRecordingLookupStart,
+  ]);
   const recorded = lookup.kind === 'found' ? lookup.source : null;
   useEffect(() => {
     if (recorded !== null) onRecordedReady();
@@ -241,7 +258,6 @@ function LivePlayer({
   // 출입증을 받거나(받음) 필요 없다는 답(로컬·dev의 503)이 오기 전에는 라이브 주소를 넘기지 않는다(POK-317). 먼저 넘기면 CDN 뒤 첫
   // 요청이 쿠키 없이 403이고 hls.js는 한 번만 다시 시도한 뒤 멈춘다. 실패는 열지 않고 1분 뒤 다시 받은 답을 기다린다(PR #320 codex).
   // 로컬·dev는 503이 곧바로 와서 재생 시작이 왕복 한 번만큼만 늦다
-  const [accessReadyFor, setAccessReadyFor] = useState<string | null>(null);
   // 열린 뒤 갱신이 실패하다가 다시 받아진 횟수. 그 사이 쿠키가 끝나 멈춘 hls.js는 새 쿠키로 저절로 안 살아나서 재생기를 새로
   // 세운다(PR #320 codex). 정상 갱신에는 안 늘어 재생이 끊기지 않는다
   const [accessRecoveries, setAccessRecoveries] = useState(0);
