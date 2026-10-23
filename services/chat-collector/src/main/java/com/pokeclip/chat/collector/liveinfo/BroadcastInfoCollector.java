@@ -84,6 +84,8 @@ public class BroadcastInfoCollector {
         if (active.isEmpty()) {
             return;
         }
+        // 🔴 남은 한계(POK-397 감사 L2·F10): 플랫폼을 안 가리고 모든 세션의 채널을 치지직 목록에서 찾는다.
+        // SOOP 세션이 생기기 전(PR3)에 치지직 세션만 훑게 한다.
         Map<String, LiveEntry> found = scanLives(active.stream().map(ActiveSession::channelId)
                 .collect(Collectors.toSet()), now);
 

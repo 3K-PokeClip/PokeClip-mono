@@ -33,7 +33,7 @@ Java 21 · Spring Boot 4.1 · Gradle 멀티모듈 · PostgreSQL · Redis
 |---|---|
 | `auth` | `users` · `refresh_tokens` · `secrets` · `stream_keys` · `pairing_codes` · `pairing_exchange_attempts` |
 | `clip` | `broadcasts` · `broadcast_events` (V201) · `jump_cards` (V202) · `broadcasts.vod_expires_at` (V203, POK-117) · `recipes` (V206, POK-124) · `clips` · `render_jobs` · `render_job_events` (V207, POK-125) · **`clips` 색인 `idx_clips_recipe` (V208, POK-243)** |
-| chat 계열 | `chat_messages` (V301 · `stream_id` 칸은 V302 · **닉네임·역할 칸은 V306**) · `chat_ended_streams` (V303) · **`chat_donations` (V307)** · **`broadcast_info` (V308)** · **`chat_ingest_keys` (V310, POK-233)** — **collector가 쓰고 detector가 읽는다.** 같은 담당(3번)·같은 V3xx 대역의 공동 소유라, 아래 "서로의 표를 직접 읽지 않는다"의 예외가 아니라 한 소유자의 두 프로세스다 |
+| chat 계열 | `chat_messages` (V301 · `stream_id` 칸은 V302 · **닉네임·역할 칸은 V306**) · `chat_ended_streams` (V303) · **`chat_donations` (V307)** · **`broadcast_info` (V308)** · **`chat_ingest_keys` (V310, POK-233)** · **`purged_channels` (V311, POK-256)** · **표 넷의 `platform` 칸과 플랫폼을 앞에 둔 색인 (V313~V315, POK-397)** — **collector가 쓰고 detector가 읽는다.** 같은 담당(3번)·같은 V3xx 대역의 공동 소유라, 아래 "서로의 표를 직접 읽지 않는다"의 예외가 아니라 한 소유자의 두 프로세스다 |
 | `chat-detector` | `chat_metrics` (V401, POK-120) — **판별 서버 단독 소유다.** 위 `chat_messages`와 달리 공동 소유가 아니라 이 서버만 읽고 쓴다 |
 
 **서로의 표를 직접 읽지 않는다.** 필요하면 계약4의 `POST /internal/stream-keys/resolve`로
@@ -773,17 +773,28 @@ Flyway 마이그레이션은 앱이 뜰 때 실행돼야 하므로 **코드 옆(
 서버마다 자기 Flyway를 돌리고 **이력 테이블을 나눈다**(`flyway_schema_history_auth` ·
 `..._clip` · `..._chat` · `..._chat_detector`). 기본 이름을 쓰면 나중에 뜬 쪽이 남의 이력을 자기 것으로 읽고 부팅에 실패한다.
 마이그레이션 번호는 모듈별 대역을 쓴다 — `V1xx` auth · `V2xx` clip · `V3xx` chat-collector · `V4xx` chat-detector.
-지금까지 나간 것은 auth의 `V101`~`V112`(`V110`·`V111`은 칸, **`V112`는 인덱스 넷과 표 주석 둘**, POK-89) · clip의 `V201`(`broadcasts`·`broadcast_events`)과
+지금까지 나간 것은 auth의 `V101`~`V118`(`V110`·`V111`은 칸, **`V112`는 인덱스 넷과 표 주석 둘**, POK-89 · `V113` 오디오 트랙 이름 · `V114` 탈퇴 장부 · `V115` 연동 채널 칸 NULL 허용 · `V116`·`V117` SOOP 연동 · **`V118` 탈퇴 장부의 `platform` 칸, POK-397**) · clip의 `V201`(`broadcasts`·`broadcast_events`)과
 `V202`(`jump_cards`, POK-118)·`V203`(`broadcasts.vod_expires_at`, POK-117)·`V204`(색인 둘, POK-174)·
 **`V205`(방송 중 부분 색인, POK-218)** · `V206`(`recipes`, POK-124) · `V207`(`clips`·`render_jobs`·`render_job_events`, POK-125) · **`V208`(`clips (recipe_id, id DESC)` 색인 하나, POK-243)** ·
-`V209`~`V213` · **`V214`(`jump_cards.hidden_reason` · `jump_card_actions` · `recipes.source_card_id`, POK-338)** · **`V216`(`jump_card_actions`가 `open`도 받는다, POK-393)** · chat-collector의 `V301`(`chat_messages`)~**`V308`** ·
+`V209`~`V213` · **`V214`(`jump_cards.hidden_reason` · `jump_card_actions` · `recipes.source_card_id`, POK-338)** · **`V216`(`jump_card_actions`가 `open`도 받는다, POK-393)** · chat-collector의 `V301`(`chat_messages`)~**`V315`** ·
 chat-detector의 `V401`(`chat_metrics`, POK-120)이다.
 
 **chat-collector 대역 열:** `V301`(`chat_messages`) · `V302`(`stream_id` 칸) ·
 `V303`(`chat_ended_streams`) · `V304`(`stop_reason` 칸) · `V305`(`received_at` 색인 — 아래) ·
 **`V306`**(`nickname`·`user_role` 칸 + `(stream_id, message_time)` 부분 색인, POK-234) ·
 **`V307`**(`chat_donations` — 후원, POK-234) · **`V308`**(`broadcast_info` — 방송 정보 관측 이력, POK-234) ·
-`V309`(`(stream_id, message_time)` 색인을 `CONCURRENTLY`로, POK-234) · **`V310`**(`chat_ingest_keys` — 방송 번호 → 물리 키, POK-233).
+`V309`(`(stream_id, message_time)` 색인을 `CONCURRENTLY`로, POK-234) · **`V310`**(`chat_ingest_keys` — 방송 번호 → 물리 키, POK-233) ·
+`V311`(`purged_channels`, POK-256) · `V312`(정리 색인 셋, `CONCURRENTLY`) ·
+**`V313`**(표 넷에 `platform` 칸 + CHECK `NOT VALID` + 명부 PK `(platform, channel_id)`, POK-397) ·
+**`V314`**(플랫폼을 앞에 둔 색인 넷, `CONCURRENTLY`) · **`V315`**(지문 제약을 같은 이름으로 플랫폼 색인에 옮김 · 옛 채널 색인 셋 삭제 · CHECK 검증).
+
+🔴 **`-- executeInTransaction=false` 주석은 Flyway가 읽지 않는다**(Flyway 12.4 OSS, POK-397에서 확인). 스크립트 설정은
+**같은 폴더의 `<파일 이름>.conf`**에서만 읽는다. `V309`·`V312`가 주석만으로 트랜잭션 밖에서 돈 것은 문장이 전부 `CONCURRENTLY`라
+Flyway가 스스로 그렇게 판정했기 때문이다(우연). `V315`처럼 트랜잭션 가능 문장(DO 블록·`VALIDATE`)과 불가 문장(`DROP INDEX CONCURRENTLY`)이
+섞이면 주석만으로는 `Detected both transactional and non-transactional statements`로 부팅이 실패한다. 그래서
+**`V315__chat_platform_swap_and_validate.sql.conf`**(`executeInTransaction=false`)를 둔다. 🔴 **번호를 다시 매기면 `.conf` 이름도 같이 바꾼다**
+(안 바꾸면 같은 실패). `V315`는 트랜잭션 밖이라 중간에 끊기면 실패 줄이 이력에 남는다. 문장마다 다시 돌려도 같은 결과라
+`flyway repair`로 실패 줄을 지우고 다시 부팅하면 된다. 지문 교체가 잠금 시한(`55P03`, 5초)에 걸려 실패한 경우도 같다(그대로 다시 부팅하면 「Detected failed migration」으로 막힌다). `V314`의 INVALID 색인 확인법은 그 파일 머리말에 있다.
 
 🔴 **Flyway 잠금을 세션 잠금으로 둔다**(`spring.flyway.postgresql.transactional-lock: false`, POK-233). 기본은 잠금을 다른 연결의
 트랜잭션으로 쥐는데, `V309`의 `CONCURRENTLY`는 그 트랜잭션이 끝나기를 기다리다 `socketTimeout`(10초)에 끊겼다. 부팅은 재시도로
@@ -3430,12 +3441,16 @@ OBS는 트랙 여섯을 항상 다 보내고 트랙에 이름이 없다(계약9�
 | clip 표 | 그 회원의 방송 · 방송 편지 기록 · 카드 · 편집본 · **렌더 뒤 업로드 의도(`upload_requests`, 편집본보다 먼저)** · 완성 영상 · 렌더 주문·보고 · 업로드 기록 · 썸네일 줄 | 알림 뒤 15초 안 |
 | clip 창고 `CLIPS_BUCKET` | `clips/{clipId}/` · `thumbnails/{live,card,clip}/…jpg` · **`upload-thumbnails/{streamerUserId}/`**(사용자가 올린 썸네일 그림, 스트리머 접두사 하나라 아무 줄도 안 가리키는 그림까지 덮는다, POK-291) | 표 다음 |
 | 1번 장부·창고 `SEGMENT_BUCKET` | 녹화 조각 줄(`stream_segments`)과 그 파일(원본·재생용 사본) · 회차 머리 파일(init) | 창고 다음, 500줄씩 |
-| 수집기 표 | 그 회원이 연동했던 치지직 채널의 채팅 · 후원 · 방송 정보 | 알림 뒤 15초 안, 늦게 적재된 것까지 10분 동안 |
+| 수집기 표 | 그 회원이 연동했던 치지직 채널과 탈퇴 때 살아 있던 SOOP 연동 아이디의 채팅 · 후원 · 방송 정보 | 알림 뒤 15초 안, 늦게 적재된 것까지 10분 동안 |
 | 수집기 창고 `S3_BUCKET` | 채팅 원본 `chat/{PLATFORM}/{channelId}/`(치지직은 옛 경로 `chat/{channelId}/`도) | 표 다음 |
 
 **흐름은 장부 셋이다.**
 1. auth 탈퇴 트랜잭션이 **`withdrawal_purge_jobs`(`V114`)에 「지울 일」을 적는다** — clip 한 줄, 연동했던 치지직 채널마다
    수집기 한 줄. 🔴 **지금 다른 회원이 살아 있는 연동으로 쥔 채널은 뺀다**(같은 사람이 새 구글 계정으로 다시 연동했을 수 있다).
+   **수집기 줄에는 플랫폼을 적는다(`V118`, POK-397).** 치지직 줄은 `CHZZK`, SOOP 연동이 살아 있으면 그 SOOP 아이디로 `SOOP` 한 줄.
+   SOOP 연동은 닫는 순간 아이디를 비우므로(약관) **닫기 전에** 읽어 적는다. 🔴 이미 해제한 SOOP 연동은 아이디가 없어 장부에 못 오르고,
+   그 채팅은 60일 보관으로만 지워진다(남은 한계). 발송기는 수집기 주소에 `&platform=`을 싣는다. 플랫폼 칸 전의 auth가 적은 줄
+   (NULL)은 치지직으로 보낸다.
 2. auth 발송기(`PurgeDispatcher`, 자기 스레드 하나, 15초)가 두 서버의 지우기 문을 부르고 **받을 때까지 다시 보낸다**
    (15초부터 두 배, 상한 1시간). 커밋 뒤 정리 스레드에 맡기지 않은 이유: 그쪽은 재시도가 없어 clip이 잠깐 죽어 있던 탈퇴는
    기록이 영영 남는다.
@@ -3511,6 +3526,56 @@ OBS는 트랙 여섯을 항상 다 보내고 트랙에 이름이 없다(계약9�
   ③ 🔴 **영상 서버(1번)가 올리던 조각이 정리 뒤에 창고에 다시 생길 수 있다** — media 업로더가 창고에 먼저 올리고 장부를 나중에 고쳐서,
   정리가 그 사이에 끼면 줄 없는 파일이 남는다. 1번 코드라 1번에게 알렸다(장부에 줄이 없으면 방금 올린 파일을 지우는 처리).
   「clip·수집기가 3xx로 답하면 발송기가 성공으로 닫는다」는 재현되지 않았다(지금 구성의 RestClient는 302도 예외로 던진다). 시험 한 갈래를 그물로 남겼다. 옛 단일 채널 경로(`CHZZK_ENABLED`) 세션은 채널 번호가 없어 닫을 대상을 못 고른다(개발용).
+
+### 수집기 저장소의 플랫폼 칸 (POK-397 PR2)
+
+**채팅·후원·방송 정보·탈퇴 명부에 `platform`(`CHZZK`·`SOOP`) 칸을 더하고, 채널로 찾거나 지우는 자리를 전부 (플랫폼, 채널)로 바꿨다.**
+채널 아이디는 플랫폼마다 따로 매겨서 치지직과 SOOP에 같은 아이디가 있을 수 있다. 칸은 수집기 `V313`~`V315`, auth `V118`이다.
+플랫폼은 프레임이 아니라 **세션 키(`SessionKey.platform`)**에서 와서 저장 셋·원본 파일 폴더(`chat/{PLATFORM}/…`)·1분 창 열쇠에 들어간다.
+SOOP 수신은 다음 PR이고, 지금 세션을 여는 곳(연동 시작)은 치지직뿐이다.
+
+**🔴 배포 순서: 수집기 먼저, auth 나중.**
+- 이유: 옛 수집기는 모르는 `platform` 쿼리를 무시한다. 새 auth가 SOOP 정리를 먼저 보내면 옛 수집기는 같은 아이디의 **치지직** 데이터를
+  지우고 202로 답해 장부 줄이 닫힌다. 지금은 SOOP 연동 탈퇴가 드물고 아이디가 겹칠 일도 거의 없지만 순서로 막는다.
+- 수집기 배포 중(옛·새 인스턴스가 함께 도는 동안): 옛 코드는 플랫폼 없이 넣고 표의 기본값 `CHZZK`가 채운다. `V315` 뒤에도 지문 제약 이름이
+  같아 옛 `ON CONFLICT ON CONSTRAINT uq_chat_messages_fingerprint`가 산다(계획 검증 실측).
+- 🔴 **겹침 1(수집기, 계획 검증 F4)**: `V313`이 명부 PK를 `(platform, channel_id)`로 바꾼 뒤 옛 인스턴스의 탈퇴 창구는 `ON CONFLICT (channel_id)`가
+  맞지 않아 **500을 낸다.** auth 발송기가 백오프(15초부터)로 다시 보내 새 인스턴스에 닿으므로 유실은 없다. 같은 동안 옛 인스턴스의 정리 묶음은
+  옛 채널 색인이 지워져(`V315`) Seq Scan이 된다. 탈퇴 때만 돌아 겹치는 동안만 참는다.
+- 🔴 **겹침 2(auth, F5)**: 옛 auth 발송기는 플랫폼을 모른다. 새 auth가 적은 SOOP 줄을 옛 인스턴스가 집으면 `platform` 없이 보내고, 새 수집기는
+  그것을 치지직으로 지운 뒤 202로 답해 줄이 닫힌다(SOOP 데이터는 60일 보관으로만 지워진다). **auth 배포가 끝난 직후 한 번** 그 줄을 다시 연다.
+  실행은 배포 담당 몫이다(이 문서는 명령만 적는다). 배포 시작·끝 시각을 넣는다:
+
+  ```sql
+  UPDATE withdrawal_purge_jobs
+     SET done_at = NULL, next_attempt_at = now()
+   WHERE target = 'COLLECTOR' AND platform = 'SOOP'
+     AND done_at BETWEEN :deploy_started_at AND :deploy_finished_at;
+  ```
+
+  다시 열린 줄은 새 발송기가 `platform=SOOP`으로 보낸다. 새 auth가 이미 바르게 보낸 줄도 함께 열려 한 번 더 가지만, 수집기 명부가 같은 탈퇴 시각으로 접어 결과는 같다. 같은 아이디의 치지직 데이터가 잘못 지워졌다면 되돌릴 길은 없다(백업 없음).
+
+**옛 원본 파일 이전(관리 세션이 실행, dev `S3_BUCKET`).** 새 수집기는 `chat/{PLATFORM}/{channelId}/…`에 쓰고, 그 전 파일은 옛 경로
+`chat/{channelId}/…`에 있다(전부 치지직). 탈퇴 정리는 치지직이면 **옛·새 경로를 둘 다** 같은 분 판정으로 지우므로 이전 전·중·후 언제 탈퇴가
+와도 남지 않는다.
+1. 새 수집기 배포 **뒤에**(옛 인스턴스가 다 내려간 뒤. 옛 코드는 옛 경로에 쓴다) 옛 접두사 목록과 개수를 뽑는다(`chat/` 바로 아래에서 `CHZZK/`·`SOOP/`가 아닌 폴더)
+2. 채널마다 `aws s3 cp --recursive s3://$BUCKET/chat/{ch}/ s3://$BUCKET/chat/CHZZK/{ch}/`
+3. 채널마다 옛·새 키 목록을 대조한다(접두사를 뗀 상대 키 집합이 같아야 한다)
+4. 같을 때만 옛 경로를 `aws s3 rm --recursive`로 지운다
+5. 옛 접두사가 0개인지 다시 확인한다
+- 🔴 **보관 기한이 늘어난다**: 수명 규칙은 객체를 만든 날로 세므로 복사본은 이전한 날부터 다시 60일 산다. 관리 세션이 이전 스크립트와 함께
+  「이전 60일 뒤, 키의 날짜 폴더가 60일 넘은 파일을 지우는」 한 번짜리 명령을 보내고 실행 날짜를 스크립트 머리에 적는다(관리 세션 결정 A).
+- 옛 경로 읽기 코드(`ArchiveKey.legacyPrefix`와 정리의 옛 경로 갈래)는 이전을 확인한 뒤 다음 PR에서 지운다.
+
+**남은 한계.**
+- **이미 해제한 SOOP 연동은 장부에 못 오른다**(F9). SOOP 연동은 닫히는 순간(해제·재연동·갱신 거절) 아이디를 비우므로, 해제한 뒤 탈퇴한
+  회원의 SOOP 채팅은 60일 보관으로만 지워진다. 치지직은 닫힌 연동 줄에도 채널이 남아 과거 채널까지 잡는다.
+- **방송 정보 수집기가 플랫폼을 안 가리고 치지직 목록을 훑는다**(F10·감사 L2). SOOP 세션이 생기면 같은 아이디 치지직 방송의 제목·시청자 수가
+  그 세션의 줄에 섞인다. SOOP 세션이 생기기 전(PR3)에 치지직 세션만 훑게 한다(`BroadcastInfoCollector` 주석).
+- **세션 자리가 스트리머 번호 하나다**(감사 L1). 같은 회원이 치지직 세션을 쥔 채 SOOP 시작 편지가 오면 갈아끼움으로 받아 치지직 소켓의 채팅이
+  SOOP으로 찍힌다. 지금은 여는 곳이 치지직뿐이라 도달 불가. PR4에서 자리 열쇠에 플랫폼을 넣는다(`SessionRegistry.retargetOrSkip` 주석).
+- **표의 기본값 `CHZZK`가 빠뜨림을 감춘다.** 새 코드가 플랫폼을 빠뜨려도 오류 없이 치지직이 된다(시험은 SOOP 값으로만 잰다). 옛 인스턴스가 다
+  내려간 뒤 기본값을 지우는 것과, auth `V118`의 CHECK를 「수집기 줄이면 플랫폼 필수」로 올리는 것(채우기 + `VALIDATE`)은 다음 PR이다.
 
 ### 운영 전 잔불 정리: 보관 기한 청소·프록시 IP (POK-89)
 

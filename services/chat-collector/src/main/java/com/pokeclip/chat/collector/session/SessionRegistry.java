@@ -409,6 +409,8 @@ public class SessionRegistry {
      *         그 편지가 지워져야 하기 때문이다
      */
     private boolean retargetOrSkip(Entry seated, SessionKey key) {
+        // 🔴 남은 한계(POK-397 감사 L1): 자리가 스트리머 번호 하나라 플랫폼이 다른 시작 편지도 갈아끼움으로 받는다.
+        // 지금은 여는 곳이 치지직뿐이라 도달 불가, PR4에서 자리 열쇠에 플랫폼을 넣는다.
         SessionKey current = seated.session().key();
         if (current.streamId().equals(key.streamId())) {
             log.info("chat.registry.open_skipped stream={} reason=ALREADY_OPEN", key.streamId());

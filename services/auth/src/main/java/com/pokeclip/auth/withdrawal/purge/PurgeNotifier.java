@@ -29,8 +29,10 @@ class PurgeNotifier {
             case CLIP -> clip.delete().uri("/internal/streamers/{userId}/data", job.userId())
                     .retrieve().toBodilessEntity();
             // 탈퇴 시각을 싣는다. 다시 보내거나 늦게 보내도 수집기가 지우는 범위가 뒤로 밀리지 않는다(PR #220 codex P1).
-            case COLLECTOR -> collector.delete().uri("/internal/channels/{channelId}/chat-data?since={since}",
-                            job.channelId(), job.createdAt().toString())
+            // 플랫폼도 싣는다(POK-397). 수집기가 (플랫폼, 채널)로 지운다. 🔴 옛 수집기는 이 값을 모르고 무시해 치지직으로
+            // 지우므로 배포는 수집기 먼저다(README 배포 순서).
+            case COLLECTOR -> collector.delete().uri("/internal/channels/{channelId}/chat-data?since={since}&platform={platform}",
+                            job.channelId(), job.createdAt().toString(), job.platform())
                     .retrieve().toBodilessEntity();
         }
     }
