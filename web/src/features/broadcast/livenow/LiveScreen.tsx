@@ -180,6 +180,8 @@ function LivePlayer({
   // 새 키의 출입증 전에 쿠키 없이 부르고 403을 받았다(PR #332 codex P1)
   const accessKey = liveStreamId ? `${liveStreamId}|${mediaKey ?? liveStreamId}` : null;
   const [accessReadyFor, setAccessReadyFor] = useState<string | null>(null);
+  // 보관 기간(60일)이 지나 출입증을 안 주는 방송(410, POK-335). 녹화를 찾지 않고 그렇다고 알린다
+  const [accessExpiredFor, setAccessExpiredFor] = useState<string | null>(null);
   const [lookup, setLookup] = useState<RecordingLookup>({ kind: 'pending' });
   useEffect(() => {
     setLookup({ kind: 'pending' });
@@ -247,13 +249,15 @@ function LivePlayer({
   // 연결되지 않았어요」가 맞다: 그때 「찾지 못했어요」라 하면 녹화가 지워진 것처럼 읽혔다(dev·운영은 재생 서버 주소가 비어 있다,
   // 리뷰 6라운드)
   const noSignalNote =
-    displayStatus !== 'ended' || !playbackConfigured()
-      ? undefined
-      : recordingMayPlay(lookup.kind)
-        ? '녹화 영상을 확인하고 있어요'
-        : lookup.kind === 'none'
-          ? '녹화 영상을 찾지 못했어요'
-          : undefined;
+    displayStatus === 'ended' && accessKey !== null && accessExpiredFor === accessKey
+      ? '보관 기간(60일)이 지나 녹화 영상을 볼 수 없어요'
+      : displayStatus !== 'ended' || !playbackConfigured()
+        ? undefined
+        : recordingMayPlay(lookup.kind)
+          ? '녹화 영상을 확인하고 있어요'
+          : lookup.kind === 'none'
+            ? '녹화 영상을 찾지 못했어요'
+            : undefined;
   // 영상 출입증(POK-122). 방송을 열 때 받고, 1분마다 다시 본다(playbackAccess 한 곳에서 받는다: 만료 5분 전이면 새로 받고,
   // 실패했거나 다른 화면이 403으로 버렸으면 다시 받는다, POK-317). 쿠키 수명(운영 60분)이 지나면 새 조각이 403이 되어 재생이
   // 멈춘다(PR #200 codex P1). 서명 재료가 없는 서버(503)는 출입증이 필요 없는 곳이라(로컬·dev) 다시 묻지 않는다.
@@ -272,6 +276,11 @@ function LivePlayer({
     const ask = () => {
       void ensureLiveAccess(liveStreamId, mediaKey ?? liveStreamId).then((result) => {
         if (!alive) return;
+        if (result.kind === 'expired') {
+          // 다시 받아도 같다: 더 묻지 않는다
+          setAccessExpiredFor(`${liveStreamId}|${mediaKey ?? liveStreamId}`);
+          return;
+        }
         if (result.kind === 'failed') failedSinceOpen = opened;
         else {
           // 버려진 것은 한 번 읽으면 지워진다: 열기 전이어도 읽어 둔다

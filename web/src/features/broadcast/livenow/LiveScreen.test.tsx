@@ -329,7 +329,7 @@ const server = vi.hoisted(() => ({
   /** 후원 줄의 서버 id를 첫 채팅 id와 같게 준다: 채팅·후원은 표가 달라 번호가 겹친다(POK-254) */
   chatIdClash: false,
   /** 출입증: 'off'는 서명 재료 없음(503), 'grant'는 10분짜리, 'fail'은 500 */
-  playback: 'off' as 'off' | 'grant' | 'fail',
+  playback: 'off' as 'off' | 'grant' | 'fail' | 'expired',
   /** 있으면 출입증 답을 이것이 풀릴 때까지 붙잡는다(POK-317) */
   playbackGate: null as Promise<void> | null,
   /** 지난 방송의 시각 기준점(POK-255). null이면 서버가 모른다 */
@@ -711,6 +711,7 @@ function handle(url: string, init?: RequestInit): Response | Promise<Response> {
         expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
       });
     if (server.playback === 'fail') return jsonResponse(500, { error: 'boom' });
+    if (server.playback === 'expired') return jsonResponse(410, { error: 'vod_expired' });
     return jsonResponse(503, { error: 'playback_signing_unavailable' });
   }
   if (path === '/api/chzzk-link')
@@ -1118,6 +1119,20 @@ describe('LiveScreen — 영상 출입증', () => {
     release();
     await settle();
     expect(hlsFake.loads).toBe(2);
+  });
+
+  it('보관 기간이 지난 방송이면 녹화를 찾지 않고 그렇다고 알린다(POK-335)', async () => {
+    mediaCalls.configured = true;
+    server.playback = 'expired';
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    await renderLive();
+    expect(screen.getByText('보관 기간(60일)이 지나 녹화 영상을 볼 수 없어요')).toBeInTheDocument();
+    expect(mediaCalls.spans).toEqual([]);
+    const before = accessCalls();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3 * 60_000);
+    });
+    expect(accessCalls()).toBe(before);
   });
 
   it('출입증이 필요 없는 곳(로컬·dev)은 첫 화면이 서는 사이에 라이브 영상을 부른다: 기다림이 재생 시작을 늦추지 않는다', async () => {

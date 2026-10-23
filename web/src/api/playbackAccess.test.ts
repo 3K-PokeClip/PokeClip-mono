@@ -312,4 +312,12 @@ describe('영상 출입증 받기와 쿠키 싣기 (POK-317)', () => {
     await Promise.all([...api.ensurePlaybackAccessForList(items).values()]);
     expect(posts().slice(12)).toEqual(['/api/clip/broadcasts/S-12/playback-access']);
   });
+
+  it('보관 기간이 지난 방송(410 vod_expired)은 「만료」이고 그 방송은 더 묻지 않는다(POK-335)', async () => {
+    const { api, posts } = await load(() => jsonResponse(410, { error: 'vod_expired' }));
+    expect(await api.ensureLiveAccess('S-old', 'k-old')).toEqual({ kind: 'expired' });
+    expect(await api.ensureLiveAccess('S-old', 'k-old')).toEqual({ kind: 'expired' });
+    expect(api.ensurePlaybackAccess('S-old', 'k-old')).toBeNull();
+    expect(posts()).toHaveLength(1);
+  });
 });

@@ -701,7 +701,11 @@ export function cutFromWindow(
  */
 /** 출입증 결과 — 받았으면 만료 시각(모르면 null), 서명 재료가 없는 서버(503)면 필요 없음, 그 밖은 실패 */
 export type PlaybackAccessResult =
-  { kind: 'granted'; expiresAtMs: number | null } | { kind: 'not_needed' } | { kind: 'failed' };
+  | { kind: 'granted'; expiresAtMs: number | null }
+  | { kind: 'not_needed' }
+  | { kind: 'failed' }
+  /** 보관 기간(60일)이 지난 방송(410 vod_expired, POK-335). 조각을 지우므로 다시 받아도 같다 */
+  | { kind: 'expired' };
 
 /** 문 한 번 부르기. 받아 둔 출입증 · 다시 쓰기 · 403 처리는 playbackAccess.ts 한 곳이 한다(POK-317) */
 export async function requestPlaybackAccess(streamId: string): Promise<PlaybackAccessResult> {
@@ -728,6 +732,8 @@ export async function requestPlaybackAccess(streamId: string): Promise<PlaybackA
     // auth가 잠깐 멈춘 사이 연 화면이 다시 묻지 않아 prod 재생이 403으로 굳었다(POK-317)
     if (e instanceof ApiError && e.status === 503 && e.code === 'playback_signing_unavailable')
       return { kind: 'not_needed' };
+    if (e instanceof ApiError && e.status === 410 && e.code === 'vod_expired')
+      return { kind: 'expired' };
     return { kind: 'failed' };
   }
 }
