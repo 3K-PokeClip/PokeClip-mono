@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ensureMediaAccess } from '@/api/clipEditor';
+import { ensureMediaAccess, reportPlaybackForbidden } from '@/api/playbackAccess';
 import { mediaCredentials, recordingClipUrl } from '@/api/mediaPlayback';
 import { playableFrom, type RecordingPiece } from '@/features/player/recordingTimeline';
 import { boundaryAction, type EditorPlayback, type PlaybackBounds } from './editorPlayback';
@@ -116,6 +116,13 @@ export function useEditorVideoPlayback(options: {
     const load = () => fetch(remoteUrl, { signal: abort.signal, credentials: mediaCredentials() });
     const access = ensureMediaAccess(streamId);
     (access === null ? load() : access.then(load))
+      .then(async (res) => {
+        // 403이면 쿠키가 지워졌다(다른 탭 · 쿠키 한도 · 사용자가 지움): 출입증을 버리고 다시 받아 한 번 더 부른다(PR #332 codex)
+        if (res.status !== 403) return res;
+        reportPlaybackForbidden(streamId);
+        await ensureMediaAccess(streamId);
+        return load();
+      })
       .then((res) => {
         if (!res.ok) throw new Error(String(res.status));
         return res.blob();

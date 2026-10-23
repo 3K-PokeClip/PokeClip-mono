@@ -8,7 +8,6 @@ import { EmptyState, useToast } from '@/ui';
 import {
   ClipApiError,
   createRecipe,
-  ensurePlaybackAccess,
   fetchBroadcast,
   fetchClip,
   fetchJumpCard,
@@ -28,6 +27,7 @@ import {
   type UploadInfo,
   type UploadRequestSummary,
 } from '@/api/clipEditor';
+import { ensurePlaybackAccess } from '@/api/playbackAccess';
 import { EditorHeader } from '../EditorHeader';
 import { PreviewCanvas } from '../PreviewCanvas';
 import { MultitrackTimeline } from './MultitrackTimeline';

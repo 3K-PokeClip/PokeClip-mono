@@ -5,7 +5,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 출입증 한 장 = 경로 종류마다 쿠키 셋 하나. 종류 셋({@code live}·{@code dvr}·{@code vod})이라 쿠키 아홉 장이다.
+ * 출입증 한 장 = 경로 종류마다 쿠키 셋 하나. 종류 넷({@code live}·{@code dvr}·{@code vod}·{@code playback})이라 쿠키 열두 장이다.
  *
  * <p><b>왜 셋으로 나누나</b> — 정책 {@code Resource}에 앞 와일드카드({@code /*&#47;{streamId}/*})를 쓰면 CloudFront는
  * 경로 구분자를 안 보고 문자열로만 맞추므로 {@code /live/남의방송/x?q=/내방송/} 같은 URL이 통과한다(봇 리뷰 2판, claude).

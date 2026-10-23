@@ -36,7 +36,7 @@ import java.util.Map;
  * <p><b>POST인 이유</b>: 응답이 브라우저 상태(쿠키)를 바꾼다. 갱신도 같은 문을 다시 부른다 —
  * 새 쿠키가 옛 쿠키를 덮는다(이름이 같다).
  *
- * <p><b>쿠키 속성</b>: {@code Path=/{kind}/{streamId}}(종류마다 셋 — 아홉 장. 브라우저가 요청 경로에 맞는 셋만 보낸다.
+ * <p><b>쿠키 속성</b>: {@code Path=/{kind}/{streamId}}(종류마다 셋, 열두 장. 브라우저가 요청 경로에 맞는 셋만 보낸다.
  * {@code Path=/} 하나로 덮으면 정책에 앞 와일드카드가 필요하고 그것이 남의 방송을 열었다, 봇 리뷰 2판) ·
  * {@code Secure} · {@code HttpOnly}(hls.js는 쿠키를 읽지 않는다, 브라우저가 붙인다) ·
  * {@code SameSite=Lax}(앱과 미디어가 같은 사이트 {@code pokeclip.com} 아래다) ·
