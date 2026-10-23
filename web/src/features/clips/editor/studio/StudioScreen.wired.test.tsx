@@ -630,6 +630,10 @@ describe('StudioScreen: 오디오 빠른 설정(POK-389)', () => {
     ).tracks;
     expect(tracks.find((t) => t.trackId === 1)?.gain).toBeCloseTo(1.3);
     expect(tracks.find((t) => t.trackId === 2)?.gain).toBeCloseTo(0.6);
+    // 130%가 막대 범위 안이어야 손으로 한 칸 옮겨도 100%로 잘리지 않는다(PR #341 codex)
+    const micSlider = screen.getByRole('slider', { name: '마이크 볼륨' });
+    expect(Number(micSlider.getAttribute('aria-valuemax'))).toBeGreaterThanOrEqual(130);
+    expect(micSlider).toHaveAttribute('aria-valuenow', '130');
 
     await user.click(screen.getByRole('checkbox', { name: '트랙 4 넣기' }));
     expect(voice).not.toBeChecked();

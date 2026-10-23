@@ -107,6 +107,8 @@ export function AudioSection({ state }: { state: ClipEditorMockState }) {
             className={styles.trackSlider}
             label={`${track.label} 볼륨`}
             value={track.volume ?? 0}
+            // 저장 계약의 음량은 0~200%다. 빠른 설정이 130%를 넣으므로 100에서 자르면 손으로 옮기는 순간 줄어든다
+            max={200}
             {...state.gestureHandlers}
             onValueChange={(volume) => state.setTrackVolume(track.id, volume)}
           />
