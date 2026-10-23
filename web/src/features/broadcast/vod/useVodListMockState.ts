@@ -2,11 +2,11 @@
 
 import {
   broadcastTitle,
-  ensurePlaybackAccessForList,
   fetchAllBroadcasts,
   fetchAllJumpCards,
   mediaStreamId,
 } from '@/api/clipEditor';
+import { ensurePlaybackAccessForList } from '@/api/playbackAccess';
 
 /** 지난 방송 목록을 다시 읽는 간격 — 끝난 방송이라 자주 볼 까닭이 없다 */
 const LIST_POLL_MS = 60_000;

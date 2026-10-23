@@ -25,9 +25,7 @@ vi.mock('@/api/mediaPlayback', () => ({
     return Promise.resolve(api.spans);
   },
 }));
-vi.mock('@/api/clipEditor', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@/api/clipEditor')>()),
-  fetchAllJumpCards: () => Promise.resolve([]),
+vi.mock('@/api/playbackAccess', () => ({
   ensurePlaybackAccessForList: (items: { streamId: string; mediaKey: string }[]) => {
     api.order.push(`access:${items.map((i) => i.mediaKey).join(',')}`);
     // 출입증 답이 늦게 온다: 목록이 그 답을 기다리는지 잰다
@@ -39,6 +37,10 @@ vi.mock('@/api/clipEditor', async (importOriginal) => ({
     );
     return new Map(items.map((i) => [i.mediaKey, answer]));
   },
+}));
+vi.mock('@/api/clipEditor', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/api/clipEditor')>()),
+  fetchAllJumpCards: () => Promise.resolve([]),
   fetchAllBroadcasts: () =>
     Promise.resolve([
       {

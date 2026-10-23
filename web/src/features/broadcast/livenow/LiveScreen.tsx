@@ -21,7 +21,7 @@ import { LiveOfflineScreen } from './LiveOfflineScreen';
 import { LiveStatsPanel } from './LiveStatsPanel';
 import { StreamInfoBar } from './StreamInfoBar';
 import { notFound, usePathname, useSearchParams } from 'next/navigation';
-import { requestPlaybackAccess } from '@/api/clipEditor';
+import { ensureLiveAccess, takePlaybackDrop } from '@/api/playbackAccess';
 import { useToast } from '@/ui';
 import { vodStreamIdFromPathname } from '@/features/broadcast/streamSelection';
 import { recordingSearchFrom } from '@/features/broadcast/endedWindow';
@@ -64,8 +64,6 @@ import { useManualMarking } from './useManualMarking';
 // (dock) 서브트리를 통째로 null로 만들기 때문이다(.next/server/app/broadcast/livenow.html로 확인).
 // 경계를 좁힌 이득은 AuthGuard가 서버에서도 그릴 수 있게 되는 시점에 생긴다.
 // 이 주석을 LCP·SEO 근거로 쓰지 말 것.
-/** 출입증을 만료 몇 분 전에 다시 받을지 */
-const PLAYBACK_ACCESS_MARGIN_MS = 5 * 60_000;
 /** 경과 뒤에 붙는 말. 경과를 모르면 이 말만 선다(지난 방송 주소는 명부 답 전에도 「방송함」이다) */
 const UPTIME_NOTE: Record<BroadcastStatus, string> = {
   live: '스트리밍 중',
@@ -102,10 +100,11 @@ function recordingMayPlay(kind: RecordingLookup['kind']): boolean {
   return kind === 'pending' || kind === 'found';
 }
 
-/** 출입증 실패 뒤 다시 받기까지 */
-const PLAYBACK_ACCESS_RETRY_MS = 60_000;
-/** 만료 시각을 모를 때 다시 받는 간격 — 운영 쿠키 수명 60분보다 짧게 */
-const PLAYBACK_ACCESS_DEFAULT_RENEW_MS = 50 * 60_000;
+/**
+ * 출입증을 이 간격으로 다시 본다. 받아 둔 것이 쓸 만하면 요청이 없고(만료 5분 전에 새로 받는 것은 playbackAccess가 정한다), 실패했거나
+ * 쿠키가 지워져(403) 버려졌으면 이 간격 안에 다시 받는다
+ */
+const PLAYBACK_ACCESS_CHECK_MS = 60_000;
 
 function LivePlayer({
   stream,
@@ -252,14 +251,14 @@ function LivePlayer({
         : lookup.kind === 'none'
           ? '녹화 영상을 찾지 못했어요'
           : undefined;
-  // 영상 출입증(POK-122) — 방송을 열 때 받고, 만료 5분 전에 다시 받는다. 쿠키 수명(운영 60분)이 지나면 새 조각이
-  // 403이 되어 재생이 멈춘다(PR #200 codex P1). 실패하면 1분 뒤 다시 받는다. 서명 재료가 없는 서버(503)는
-  // 출입증이 필요 없는 곳이라(로컬·dev) 다시 묻지 않는다. 실패면 라이브를 열지 않는다(아래).
+  // 영상 출입증(POK-122). 방송을 열 때 받고, 1분마다 다시 본다(playbackAccess 한 곳에서 받는다: 만료 5분 전이면 새로 받고,
+  // 실패했거나 다른 화면이 403으로 버렸으면 다시 받는다, POK-317). 쿠키 수명(운영 60분)이 지나면 새 조각이 403이 되어 재생이
+  // 멈춘다(PR #200 codex P1). 서명 재료가 없는 서버(503)는 출입증이 필요 없는 곳이라(로컬·dev) 다시 묻지 않는다.
   // 출입증을 받거나(받음) 필요 없다는 답(로컬·dev의 503)이 오기 전에는 라이브 주소를 넘기지 않는다(POK-317). 먼저 넘기면 CDN 뒤 첫
   // 요청이 쿠키 없이 403이고 hls.js는 한 번만 다시 시도한 뒤 멈춘다. 실패는 열지 않고 1분 뒤 다시 받은 답을 기다린다(PR #320 codex).
   // 로컬·dev는 503이 곧바로 와서 재생 시작이 왕복 한 번만큼만 늦다
-  // 열린 뒤 갱신이 실패하다가 다시 받아진 횟수. 그 사이 쿠키가 끝나 멈춘 hls.js는 새 쿠키로 저절로 안 살아나서 재생기를 새로
-  // 세운다(PR #320 codex). 정상 갱신에는 안 늘어 재생이 끊기지 않는다
+  // 열린 뒤 갱신이 실패하다가, 또는 쿠키가 지워져(403) 버린 뒤 다시 받아진 횟수. 그 사이 멈춘 hls.js는 새 쿠키로 저절로 안
+  // 살아나서 재생기를 새로 세운다(PR #320 · #332 codex). 정상 갱신에는 안 늘어 재생이 끊기지 않는다
   const [accessRecoveries, setAccessRecoveries] = useState(0);
   useEffect(() => {
     if (!liveStreamId) return undefined;
@@ -268,25 +267,19 @@ function LivePlayer({
     let opened = false;
     let failedSinceOpen = false;
     const ask = () => {
-      void requestPlaybackAccess(liveStreamId).then((result) => {
-        if (alive && result.kind === 'failed') failedSinceOpen = opened;
-        if (alive && result.kind !== 'failed') {
-          if (failedSinceOpen) setAccessRecoveries((n) => n + 1);
+      void ensureLiveAccess(liveStreamId, mediaKey ?? liveStreamId).then((result) => {
+        if (!alive) return;
+        if (result.kind === 'failed') failedSinceOpen = opened;
+        else {
+          // 버려진 것은 한 번 읽으면 지워진다: 열기 전이어도 읽어 둔다
+          const droppedBefore = takePlaybackDrop(liveStreamId);
+          if (opened && (failedSinceOpen || droppedBefore)) setAccessRecoveries((n) => n + 1);
           failedSinceOpen = false;
           opened = true;
           setAccessReadyFor(liveStreamId);
         }
-        if (!alive || result.kind === 'not_needed') return;
-        const wait =
-          result.kind === 'failed'
-            ? PLAYBACK_ACCESS_RETRY_MS
-            : result.expiresAtMs === null
-              ? PLAYBACK_ACCESS_DEFAULT_RENEW_MS
-              : Math.max(
-                  PLAYBACK_ACCESS_RETRY_MS,
-                  result.expiresAtMs - Date.now() - PLAYBACK_ACCESS_MARGIN_MS,
-                );
-        timer = window.setTimeout(ask, wait);
+        if (result.kind === 'not_needed') return;
+        timer = window.setTimeout(ask, PLAYBACK_ACCESS_CHECK_MS);
       });
     };
     ask();
@@ -294,7 +287,7 @@ function LivePlayer({
       alive = false;
       window.clearTimeout(timer);
     };
-  }, [liveStreamId]);
+  }, [liveStreamId, mediaKey]);
   return (
     <GlassPlayer
       // 실재생 훅은 경과 시드를 마운트 때 한 번만 읽는다 — startedAt이 도착하면 한 번 다시 세운다

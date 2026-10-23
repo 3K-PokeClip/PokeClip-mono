@@ -9,6 +9,7 @@ import {
 import { fireEvent, screen, within } from '@testing-library/react';
 import { axe } from 'jest-axe';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { reportPlaybackForbidden, resetPlaybackAccessForTests } from '@/api/playbackAccess';
 import { LiveScreen } from '@/features/broadcast/livenow/LiveScreen';
 import { ChatReplayLoader } from '@/features/broadcast/livenow/chatReplay';
 import { CHAT_PAGE_MAX, LIVE_REREAD_MS } from '@/features/broadcast/livenow/chatCollector';
@@ -753,6 +754,7 @@ beforeEach(() => {
   server.chatIdClash = false;
   server.playback = 'off';
   server.playbackGate = null;
+  resetPlaybackAccessForTests();
   hlsFake.loads = 0;
   notFound.mockClear();
   // env는 셸에서 그대로 상속된다 — 로컬/CI 셸에 NEXT_PUBLIC_MEDIA_*가 export돼 있어도 소스가 null이게 고정한다.
@@ -1012,6 +1014,24 @@ describe('LiveScreen — 영상 출입증', () => {
     release();
     await settle();
     expect(mediaCalls.spans.length).toBeGreaterThan(0);
+  });
+
+  it('다른 화면이 403으로 출입증을 버리면 1분 안에 다시 받고 재생기를 새로 세운다: 쿠키가 지워져 멈춘 hls.js는 저절로 안 산다(PR #332 codex)', async () => {
+    stubMediaElement();
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', 'http://live.test');
+    server.playback = 'grant';
+    await renderLive();
+    expect(hlsFake.loads).toBe(1);
+    const before = accessCalls();
+
+    // 영상 키는 방송 번호다(옛 서버라 ingest 칸이 없다)
+    reportPlaybackForbidden(STREAM_ID);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    await settle();
+    expect(accessCalls()).toBe(before + 1);
+    expect(hlsFake.loads).toBe(2);
   });
 
   it('출입증이 필요 없는 곳(로컬·dev)은 첫 화면이 서는 사이에 라이브 영상을 부른다: 기다림이 재생 시작을 늦추지 않는다', async () => {
