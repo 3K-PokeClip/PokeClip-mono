@@ -199,11 +199,13 @@ export function useVodListMockState(options: VodListOptions = {}): VodListMockSt
   useEffect(() => {
     if (options.broadcasts) return;
     let stopped = false;
+    // 내려가면(채널 전환 등) 넘기던 쪽·카드 읽기를 끊는다: 이어 가면 채널 전환 화면이 옛 채널 요청까지 기다린다(PR #342 2차 리뷰)
+    const abort = new AbortController();
     const load = async () => {
       try {
         // 목록을 끝까지 넘긴다 — 한 쪽만 읽으면 51번째부터 조용히 사라진다(POK-251 리뷰).
         // 실패하면 바깥 catch가 받아 지금 목록을 그대로 두고 다음 주기에 다시 한다
-        const all: WireBroadcast[] = await fetchAllBroadcasts('past', streamerId);
+        const all: WireBroadcast[] = await fetchAllBroadcasts('past', streamerId, abort.signal);
         if (stopped) return;
         // 방송마다 카드 수·녹화 여부는 재서 기억한다. 카드 수는 낡으면(countStale) 다시 센다
         const cache = rowCache.current;
@@ -266,7 +268,7 @@ export function useVodListMockState(options: VodListOptions = {}): VodListMockSt
               const [fetched, spans] = await Promise.all([
                 known !== undefined && !recount
                   ? Promise.resolve(known.cardCount)
-                  : fetchAllJumpCards(b.streamId).then(
+                  : fetchAllJumpCards(b.streamId, abort.signal).then(
                       (cards) => cards.length,
                       () => null,
                     ),
@@ -336,6 +338,7 @@ export function useVodListMockState(options: VodListOptions = {}): VodListMockSt
     const t = window.setInterval(load, LIST_POLL_MS);
     return () => {
       stopped = true;
+      abort.abort();
       window.clearInterval(t);
     };
   }, [options.broadcasts, streamerId]);
