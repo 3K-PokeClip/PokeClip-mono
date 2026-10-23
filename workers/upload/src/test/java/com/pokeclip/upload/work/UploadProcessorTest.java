@@ -134,6 +134,18 @@ class UploadProcessorTest {
         assertThat(internal.results).containsExactly("UPLOADED:vid1");
     }
 
+    /** 카테고리와 예약 공개(POK-381)가 시작 본문의 snippet.categoryId·status.publishAt으로 간다. 예약이 없으면 칸이 없다. */
+    @Test
+    void 시작_본문에_카테고리와_예약_시각이_실린다() {
+        processor().process(주문서("""
+                "categoryId":"24","privacyStatus":"private","publishAt":"2026-10-23T09:00:00Z\"""", "null"));
+
+        FakeYoutube.Session s = youtube.session(internal.sessionUri);
+        assertThat(s.categoryId).isEqualTo("24");
+        assertThat(s.privacy).isEqualTo("private");
+        assertThat(s.publishAt).isEqualTo("2026-10-23T09:00:00Z");
+    }
+
     @Test
     void 공개를_고르면_공개로_싣는다() {
         processor().process(주문서("""
@@ -143,6 +155,8 @@ class UploadProcessorTest {
         assertThat(s.privacy).isEqualTo("public");
         assertThat(s.madeForKids).isFalse();
         assertThat(s.tags).isNull();
+        assertThat(s.categoryId).as("주문서에 없으면 게임").isEqualTo("20");
+        assertThat(s.publishAt).isNull();
     }
 
     /**

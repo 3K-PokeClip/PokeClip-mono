@@ -97,21 +97,25 @@ public class ResumableUploader {
      * @param privacyStatus 주문서 값(주문한 사람이 고른 것, ADR-084). 유튜브가 이 범위를 쓰는 사정(문서 둘이 어긋나고 실측은
      *                      테스트 상태 앱 하나다)은 services/README.md 업로드 절
      * @param tags          비었으면 칸을 아예 안 싣는다
+     * @param categoryId    유튜브 분류 번호(POK-381, 주문서 값. 없으면 20 = 게임)
+     * @param publishAt     예약 공개 시각(POK-381). null이면 칸을 안 싣는다. 있으면 {@code privacyStatus}는 private다
      */
-    public Start start(String accessToken, String title, String description, String privacyStatus, List<String> tags,
-                       boolean madeForKids, long size) {
+    public Start start(String accessToken, String title, String description, String categoryId, String privacyStatus,
+                       String publishAt, List<String> tags, boolean madeForKids, long size) {
         ObjectNode body = mapper.createObjectNode();
         ObjectNode snippet = body.putObject("snippet");
         snippet.put("title", title);
         snippet.put("description", description);
-        // 20 = Gaming. MVP 게임은 LoL 하나다.
-        snippet.put("categoryId", "20");
+        snippet.put("categoryId", categoryId);
         if (!tags.isEmpty()) {
             ArrayNode array = snippet.putArray("tags");
             tags.forEach(array::add);
         }
         ObjectNode status = body.putObject("status");
         status.put("privacyStatus", privacyStatus);
+        if (publishAt != null) {
+            status.put("publishAt", publishAt);
+        }
         status.put("selfDeclaredMadeForKids", madeForKids);
         try {
             HttpResponse<String> response = http.send(HttpRequest.newBuilder(

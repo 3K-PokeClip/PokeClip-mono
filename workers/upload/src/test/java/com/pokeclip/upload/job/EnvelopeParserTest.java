@@ -50,6 +50,33 @@ class EnvelopeParserTest {
         assertThat(job.thumbnail()).isNull();
         assertThat(job.privacyStatus()).isEqualTo("private");
         assertThat(job.description()).isEmpty();
+        assertThat(job.categoryId()).as("POK-381 전 주문서는 게임").isEqualTo("20");
+        assertThat(job.publishAt()).isNull();
+    }
+
+    /** 카테고리와 예약 공개(POK-381). 예약 시각은 같은 순간의 UTC 표기로 맞춘다. */
+    @Test
+    void 카테고리와_예약_시각을_읽는다() {
+        UploadEnvelope job = parser.parse(주문서("""
+                "categoryId":"24","privacyStatus":"private","publishAt":"2026-10-23T09:00:00.000Z\"""", "null"));
+
+        assertThat(job.categoryId()).isEqualTo("24");
+        assertThat(job.privacyStatus()).isEqualTo("private");
+        assertThat(job.publishAt()).isEqualTo("2026-10-23T09:00:00Z");
+    }
+
+    /** 🔴 틀린 칸으로 쪽지를 버리지 않는다: 분류는 게임으로, 예약은 빼고 올린다. 비공개가 아닌 예약도 뺀다(유튜브가 거절한다). */
+    @Test
+    void 틀린_카테고리와_예약은_기본값으로_떨어진다() {
+        UploadEnvelope job = parser.parse(주문서("""
+                "categoryId":"게임","privacyStatus":"private","publishAt":"내일\"""", "null"));
+        assertThat(job.categoryId()).isEqualTo("20");
+        assertThat(job.publishAt()).isNull();
+
+        UploadEnvelope 공개 = parser.parse(주문서("""
+                "categoryId":24,"privacyStatus":"public","publishAt":"2026-10-23T09:00:00Z\"""", "null"));
+        assertThat(공개.categoryId()).isEqualTo("20");
+        assertThat(공개.publishAt()).as("비공개가 아니면 예약을 뺀다").isNull();
     }
 
     @Test

@@ -2163,7 +2163,8 @@ JSON **그대로**이고 칸 이름을 한 글자도 안 바꾼다 — 코드가
 
 **봉투**: `{"id","streamId","recipeId","recipeVersion","requestedBy","status","progress":{"percent","stage","attempt","jobId"},"outputs","error":{"code","message"},"createdAt","updatedAt","upload","uploadRequest"}`.
 `upload`는 가장 최근 유튜브 업로드(아래 「유튜브 업로드 주문」 절의 봉투)이고 한 번도 안 올렸으면 `null`이다(POK-220).
-`uploadRequest`는 그 영상의 판(편집본·판 번호)에 걸린 「렌더 뒤 업로드」 의도 요약 `{"title","privacyStatus","thumbnailSource"}`이고 없으면 `null`이다(POK-291).
+`uploadRequest`는 그 영상의 판(편집본·판 번호)에 걸린 「렌더 뒤 업로드」 의도 요약 `{"title","privacyStatus","thumbnailSource","categoryId","publishAt"}`이고 없으면 `null`이다(POK-291).
+`categoryId`·`publishAt`(예약이 아니면 `null`)은 POK-381: 화면이 창을 다시 열 때 이 둘까지 되살려야 같은 판을 다시 눌러도 예약이 안 지워진다.
 완성과 업로드 줄은 한 트랜잭션이라, 완성인데 `uploadRequest`가 있고 `upload`가 없으면 **자동 업로드를 건너뛴 것**이다(업로드 줄 꺼짐 ·
 같은 판이 이미 올라감). 화면은 「업로드는 시작되지 않았어요」로 보고 묻기를 멈춘다(보관함의 「업로드」가 다시 시도 문으로 저장된 정보로 올린다).
 `status`는 **`queued`(주문됨) → `rendering`(만드는 중) → `rendered`(완성) | `failed`(실패)** 넷 — 2번 화면의 거르기 값이라 이름을 바꾸지 않는다.
@@ -2236,12 +2237,15 @@ JSON **그대로**이고 칸 이름을 한 글자도 안 바꾼다 — 코드가
   그림은 JSON으로 못 보낸다(400 `field=thumbnail`). multipart인데 `request`가 없으면 400 `field=request`.
 
 ```json
-UploadInfo = {"title":"필수","description":null,"tags":["…"],"privacyStatus":"private|unlisted|public|null(→private)",
+UploadInfo = {"title":"필수","description":null,"tags":["…"],"categoryId":"20|…|null(→20)",
+              "privacyStatus":"private|unlisted|public|null(→private)","publishAt":"2026-10-23T18:00:00+09:00|null",
               "madeForKids":false,"thumbnail":null | {"source":"none"} | {"source":"scene","offsetMs":12000} | {"source":"file"}}
 ```
 
 **검사(전부 트랜잭션 전, 걸리면 아무것도 안 남는다)**: 제목·설명은 업로드 문과 같은 규칙 · 태그는 앞뒤 공백을 걷고 빈 태그·`<`·`>`·`,` 거절,
 똑같은 태그는 하나로(순서 유지), 합계 = Σ(코드포인트 + 공백이 든 태그면 2) + (개수 − 1) ≤ 500 · 공개 범위는 세 값 · `madeForKids`는 불리언 ·
+`categoryId`는 사람이 고를 수 있는 유튜브 분류 열다섯(`1 2 10 15 17 19 20 22 23 24 25 26 27 28 29`, videoCategories `assignable`. POK-381) ·
+`publishAt`은 시간대가 붙은 ISO-8601이고 **공개 범위가 `private`일 때만**, **지금보다 뒤**만(유튜브가 비공개 영상에만 예약을 받고, 지난 시각이면 바로 공개한다) ·
 장면은 **정수** `0 ≤ offsetMs < 컷 길이`(완성 영상 첫 장면 기준, 컷이 없으면 거절) · 그림은 **10MB**(`spring.servlet.multipart.max-file-size`, 요청 상한
 11MB. 같게 두면 정확히 10MB가 413이다) 초과면 **413** `payload_too_large`, 첫 바이트가 JPEG(`FF D8 FF`)·PNG(`89 50 4E 47 0D 0A 1A 0A`)가 아니면
 **415** `unsupported_image`. 형식은 첫 바이트로 정한다(보낸 쪽이 밝힌 형식·이름은 안 믿는다).
@@ -2321,7 +2325,8 @@ UploadInfo = {"title":"필수","description":null,"tags":["…"],"privacyStatus"
 | `POST /internal/uploads/{id}/heartbeat` (본문 없음, POK-333) | `X-Internal-Token` | 200 `{"status","touched"}`: 일꾼이 처리 중이라는 신호. 상태는 안 바꾸고 `updated_at`만 옮긴다. 끝난 줄(올림 · 실패)은 안 건드린다(`touched:false`). 몇 번 와도 같다 · 404 `upload_not_found` |
 | `POST /internal/uploads/{id}/result` `{outcome, videoId?, errorCode?, errorMessage?, thumbnailOutcome?, thumbnailErrorCode?}` | `X-Internal-Token` | 200 `{"status"}`(같은 끝 보고가 다시 와도 200. 주소가 적힌 줄의 `FAILED`는 `checking`으로 받는다) · 409 `TERMINAL`(다른 끝으로 덮기. `checking`→`UPLOADED`만 허용)·`NOT_STARTED` · 400 |
 
-**봉투**: `{"id","clipId","outputId","title","status","videoId","error":{"code","message"},"requestedBy","createdAt","updatedAt","privacyStatus","madeForKids","tags":[…],"thumbnail":{"source","status","errorCode"},"resolvedBy","resolvedAt"}`.
+**봉투**: `{"id","clipId","outputId","title","status","videoId","error":{"code","message"},"requestedBy","createdAt","updatedAt","privacyStatus","madeForKids","tags":[…],"thumbnail":{"source","status","errorCode"},"resolvedBy","resolvedAt","categoryId","publishAt"}`.
+`categoryId`·`publishAt`은 POK-381(`V217`). 예약이 아니면 `publishAt`은 `null`이고, 그 전 줄의 분류는 `20`이다.
 `resolvedBy`·`resolvedAt`은 「확인 필요」를 사람이 풀었을 때만 차고(POK-333, `V215`) 일꾼이 끝낸 줄은 `null`이다.
 설명은 안 싣는다(보관함 목록 폴링이 무거워진다). `thumbnail.status`는 `none`(붙일 것 없음) · `pending`(결과 전) · `set` · `failed`(POK-291).
 `status`는 `queued` → `uploading` → `uploaded` | `failed` | `checking`. 🔴 **이어 올리기 주소(`session_uri`)는 봉투에 없다** :
@@ -2358,7 +2363,9 @@ UploadInfo = {"title":"필수","description":null,"tags":["…"],"privacyStatus"
 - **제목·설명은 유튜브 규칙을 먼저 본다**: 제목 1~100자(코드포인트, 앞뒤 공백 걷음), 설명 5000바이트, 둘 다 `<`·`>` 금지.
   줄에 실린 뒤 유튜브가 거절하면 늦다. 제목은 이 줄에 남는다(편집본(계약6)에는 제목 칸이 없다).
 - **벌 고르기**: 영상 파일이 하나면 그것, 여럿이면 `outputId` 필수(무엇을 올릴지 우리가 정하지 않는다). 지금 편집 화면은 편집본마다 한 벌만 만든다.
-- **주문서**: `{"schemaVersion":1,"jobType":"UPLOAD","uploadId","clipId","streamId","channelOwnerUserId","source":{"bucket","s3Key","outputId"},"video":{"title","description","privacyStatus","tags":[…],"madeForKids"},"thumbnail":null|{"source":"scene","offsetMs"}|{"source":"file","bucket","s3Key","contentType"},"requestedAt"}`.
+- **주문서**: `{"schemaVersion":1,"jobType":"UPLOAD","uploadId","clipId","streamId","channelOwnerUserId","source":{"bucket","s3Key","outputId"},"video":{"title","description","categoryId","privacyStatus","publishAt"?,"tags":[…],"madeForKids"},"thumbnail":null|{"source":"scene","offsetMs"}|{"source":"file","bucket","s3Key","contentType"},"requestedAt"}`.
+  `categoryId`·`publishAt`은 POK-381. `publishAt`(UTC ISO-8601)은 예약일 때만 싣고, 그때 `privacyStatus`는 `private`다.
+  옛 문(보관함 「업로드」)은 분류 20·예약 없음으로 싣는다. 다시 시도는 실패한 줄의 분류·예약을 그대로 옮긴다: 예약 시각이 이미 지났으면 유튜브가 올리자마자 공개한다.
   `schemaVersion`은 1 그대로다(POK-291): 새 칸은 선택 칸이고, 판을 올리면 옛 일꾼이 못 읽는다며 지워 줄이 `queued`로 영원히 남는다. 쓰는 자리는 하나다(`UploadPayload`).
   선기록·후발행(outbox)은 렌더와 같다. 줄을 만든 트랜잭션의 **커밋 뒤 훅은 전용 스레드(`upload-publish-N`, 둘)에 발행을 제출만 한다**
   (`UploadPublishExecutor`, POK-291 로컬 리뷰 1라운드). 🔴 커밋 뒤 훅은 원 커넥션을 돌려주기 **전**에 돈다: 그 안에서 발행 트랜잭션을 열면 요청 하나가
@@ -2378,6 +2385,7 @@ UploadInfo = {"title":"필수","description":null,"tags":["…"],"privacyStatus"
 **🔴 배포 순서(POK-291): 업로드 일꾼 → auth → clip → web.**
 - 일꾼이 먼저인 이유: 옛 일꾼은 새 주문서 칸을 모르는 칸으로 버리는데, 무해하지 않다. `madeForKids`를 읽지 않고 `false`로 덮어 올리고(아동용 신고가 틀린다),
   태그를 빼고, 썸네일을 안 붙인다(clip에는 `THUMBNAIL_NOT_REPORTED`로만 남는다). 그 사이 clip 줄과 화면은 고른 값을 말해 채널과 어긋난다.
+  POK-381도 같다: `categoryId`·`publishAt`을 모르는 일꾼은 게임으로, **예약 없이 비공개로** 올린다(예약 시각이 와도 공개로 안 바뀐다).
 - auth가 clip보다 먼저인 이유: 새 clip이 연결 확인 문(`/internal/youtube-link/status`)을 묻는다. 옛 auth면 확인을 건너뛰고 진행하지만(막지는 않는다) 확인이 빠진다.
 - clip이 web보다 먼저인 이유: 옛 clip의 렌더 주문 문은 본문을 안 받아 업로드 정보를 무시하고 렌더만 한 뒤 201을 준다. 화면은 「올릴게요」라고 하는데 아무것도 안 올라간다.
 
@@ -2453,7 +2461,7 @@ UploadInfo = {"title":"필수","description":null,"tags":["…"],"privacyStatus"
 
 **줄 한 개** — `{"recipeId","streamId","creatorId","recipeVersion","cut":{"inAtMs","outAtMs"}|null,"status",
 "broadcast":{"status","startedAt","endedAt","vodExpiresAt"},"latestClip":<주문 문의 봉투 그대로>|null,"createdAt","updatedAt","thumbnailUrl"|null,
-"uploadRequest":{"title","privacyStatus","thumbnailSource"}|null,"liveUploads":[{"id","clipId","recipeVersion","outputId","title","status","videoId","createdAt","updatedAt"}]}`.
+"uploadRequest":{"title","privacyStatus","thumbnailSource","categoryId","publishAt"}|null,"liveUploads":[{"id","clipId","recipeVersion","outputId","title","status","videoId","createdAt","updatedAt"}]}`.
 `liveUploads`는 이 편집본 **모든 판**의 살아 있는 업로드(실패만 빼고 `queued`·`uploading`·`checking`·`uploaded`), 최근 것이 앞이고 없으면 빈 목록이다(POK-334).
 새 판 영상을 주문하면 `latestClip`이 그 영상으로 바뀌어 옛 판의 업로드가 `latestClip.upload`에서 빠지는데, 여기에는 남는다. `clipId`는 그 업로드가 올린
 **옛 영상 번호**라 영상 조회 문(`GET /api/clip/broadcasts/{streamId}/clips/{clipId}`)의 열쇠가 된다. `status`·`latestClip`의 뜻과 「발행됨」(`?status=uploaded`) 거르기는 그대로다(목록 칸으로만 보인다).

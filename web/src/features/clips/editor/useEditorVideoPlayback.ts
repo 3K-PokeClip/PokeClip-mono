@@ -57,6 +57,8 @@ export interface EditorVideoPlayback {
   videoRef: (element: HTMLVideoElement | null) => void;
   video: HTMLVideoElement | null;
   src: string;
+  /** 받아 둔 조각(src)의 첫 장면이 이 훅의 시간축으로 몇 초인가. 조각 안 초 = 시간축 초 − 이 값 */
+  windowStartSeconds: number;
 }
 
 export function useEditorVideoPlayback(options: {
@@ -304,5 +306,5 @@ export function useEditorVideoPlayback(options: {
     ],
   );
 
-  return { playback, videoRef: setVideo, video, src };
+  return { playback, videoRef: setVideo, video, src, windowStartSeconds: win.startSeconds };
 }
