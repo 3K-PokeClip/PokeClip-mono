@@ -18,7 +18,7 @@ import { formatUptime, parseClockLabel } from '@/features/player/playerMath';
 import { ChatPanel } from './ChatPanel';
 import { HighlightCardPanel } from './HighlightCardPanel';
 import { LiveOfflineScreen } from './LiveOfflineScreen';
-import { LiveStatsPanel } from './LiveStatsPanel';
+import { LiveStatsPanel, type TimelineCard } from './LiveStatsPanel';
 import { StreamInfoBar } from './StreamInfoBar';
 import { notFound, usePathname, useSearchParams } from 'next/navigation';
 import { requestPlaybackAccess } from '@/api/clipEditor';
@@ -337,7 +337,7 @@ function LiveDashboard() {
   // 주소는 usePathname으로 읽는다: 넘어온 직후 첫 그리기의 window.location은 옛 주소다
   const vodRouteId = vodStreamIdFromPathname(usePathname() ?? '');
   const pastRoute = vodRouteId !== null;
-  const { stream, highlights, cardsStatus, chatVolume, chatWarning } = useLiveMockState(pastRoute);
+  const { stream, highlights, cardsStatus, chatWarning } = useLiveMockState(pastRoute);
   const { streamMeta, cardVisuals } = useLiveDetailsMockState();
   const liveData = useLiveData();
   const { streamId, info } = liveData;
@@ -434,10 +434,41 @@ function LiveDashboard() {
   // 필터 개수도 통계의 하이라이트 줄도 같은 카드 목록에서 센다. 어느 한쪽을 따로 세면 두 표기가 언젠가 어긋난다.
   //
   // 경과 표기 때문에 이 컴포넌트는 매초 다시 그려진다. 요약이 매번 새 객체면
-  // 아래 패널들의 memo가 통째로 무력해지므로 여기서 정체성을 붙잡아 둔다.
-  const highlightSummary = useMemo(() => {
-    const manual = highlights.filter((card) => card.source === 'manual').length;
-    return { total: highlights.length, auto: highlights.length - manual, manual };
+  // 아래 패널들의 memo가 통째로 무력해지므로 여기서 정체성을 붙잡아 둔다. highlights 자체가 경과 표기(「n초 전」) 때문에 매초 새
+  // 배열이라, 그것에 묶지 않고 센 수에 묶는다(PR #316 리뷰)
+  const manualCount = highlights.filter((card) => card.source === 'manual').length;
+  const highlightSummary = useMemo(
+    () => ({
+      total: highlights.length,
+      auto: highlights.length - manualCount,
+      manual: manualCount,
+    }),
+    [highlights.length, manualCount],
+  );
+  // 통계 그래프의 핀도 같은 카드 목록이다(숨긴 카드는 없다). 자동 카드는 제목의 번호(채팅이 튄 순간 #12)로, 수동 카드는 제목에
+  // 번호가 없어 「수동」으로 선다. 누르면 카드를 누른 것과 같이 그 시점으로 간다(handleSeek). 핀에 쓰는 값이 그대로면 앞 배열을
+  // 그대로 돌려준다 — 매초 새 배열이면 그래프(memo)가 매초 칸 묶기·선 보간·막대 수백 개를 다시 그렸다(PR #316 리뷰)
+  const pinCache = useRef<{ key: string; cards: TimelineCard[] }>({ key: '', cards: [] });
+  const timelineCards = useMemo(() => {
+    const next = highlights.flatMap((card): TimelineCard[] =>
+      card.atMs === undefined
+        ? []
+        : [
+            {
+              id: card.id,
+              atMs: card.atMs,
+              timestamp: card.timestamp,
+              label: card.source === 'manual' ? '수동' : `#${card.id.replace('card-', '')}`,
+              manual: card.source === 'manual',
+              reason: card.reason ?? card.title,
+            },
+          ],
+    );
+    const key = next
+      .map((c) => `${c.id}|${c.atMs}|${c.timestamp}|${c.label}|${c.reason}`)
+      .join('\n');
+    if (key !== pinCache.current.key) pinCache.current = { key, cards: next };
+    return pinCache.current.cards;
   }, [highlights]);
 
   // 녹화는 방송을 연 뒤에 찾는다. 그 전에 고른 시점은 옮길 플레이어가 없어(자리 표시) 그냥 사라지고, 뒤늦게 선 녹화는
@@ -624,14 +655,15 @@ function LiveDashboard() {
         ) : null}
       </div>
       {/* 전폭 — 스크롤로 내려와 만나는 자리다 */}
+      {/* 방송이 바뀌면 처음부터 다시 그린다 — 스크롤 위치·끝 따라가기를 앞 방송에서 이어받지 않는다 */}
       <LiveStatsPanel
-        chatVolume={chatVolume}
-        viewerLine={stats.viewerLine}
-        donations={stats.donations}
-        categorySegments={stats.categorySegments}
-        metrics={stats.metrics}
+        key={streamId}
+        stats={stats}
+        cards={timelineCards}
         highlightSummary={highlightSummary}
+        live={viewStatus === 'live'}
         ended={ended}
+        onSeekCard={handleSeek}
       />
     </main>
   );
