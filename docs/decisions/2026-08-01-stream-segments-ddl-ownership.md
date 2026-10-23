@@ -37,3 +37,24 @@
 - **운영 규칙:** 결정 1 · 2 의 소유 · 승인 규칙은 그대로다. `ddl.go` 가 바뀌면 dev 재적용은 1번 몫이다. 3번은 이 표를 읽기만 한다. dev 에서는 인덱서가 없으므로 치우개(`BROADCAST_REAPER_ENABLED`)를 켜지 않는다. 지울 때는 시험 줄을 먼저 지우고, 치우개 · 썸네일(`THUMBNAIL_ENABLED`) · 떼기(`CHAT_DETACH_ENABLED`) 스위치가 꺼진 것을 확인한 뒤 표 넷과 함수를 지운다.
 - **나중에 정할 것:** dev 에 인덱서가 붙는 날 이 표를 이어 쓸지는 그때 정한다.
 - **기록:** POK-368 코멘트.
+
+## 추기 2026-10-23 — prod 적용은 `prod/runtime/sql/` 의 psql 스크립트로 한다(POK-304)
+
+- **무엇:** 결정 3 의 「RDS(프로덕션) 적용 절차」 를 이 추기로 정한다. 적용 원본은
+    `infra/terraform/prod/runtime/sql/` 이다. 순서는 `00_preflight` → `10_roles` →
+    `20_schema`(`media_owner` 로 바꿔 `stream_schema.sql` 을 읽는다) →
+    `30_grants` → `40_verify` 이고, 각 파일을 마스터 사용자로 `psql -1` 한 번씩
+    돌린다. `50_advisory_probe` 는 확인만 하고 되돌린다. 실행 절차는
+    `infra/terraform/runbooks/runtime-1a.md` 에 둔다.
+- **사본과 정본:** `stream_schema.sql` 의 표지 사이는 `ddl.go` 의 `schemaDDL` 과
+    바이트가 같다. `30_grants.sql` 의 GRANT 는 `pgtest.MediaIndexerGrantSQL` ·
+    `lcRoleGrants` 와 같은 집합이다. 둘 다
+    `media/internal/index/prod_sql_contract_test.go` 가 강제하고, 비superuser
+    마스터 대역으로 실제로 적용하는 시험은 `prod_sql_apply_pg_test.go` 다.
+    media-ci 의 paths 에 이 디렉터리가 있어 SQL 만 고쳐도 시험이 돈다.
+- **dev 재적용:** 추기 2026-10-19 의 dev 재적용도 이 사본(`stream_schema.sql`)을
+    원본으로 쓴다. 고정 커밋의 `ddl.go` 에서 손으로 뽑지 않는다.
+- **운영 규칙:** 결정 1 · 2 는 그대로다. `ddl.go` 를 바꾸는 PR 은 같은 PR 에서
+    사본을 고친다(안 고치면 media-ci 가 깨진다). 부팅 시 `ENSURE_SCHEMA` 는 로컬
+    compose 전용으로 남는다.
+- **기록:** POK-304 코멘트.

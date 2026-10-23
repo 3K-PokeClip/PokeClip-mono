@@ -1,0 +1,24 @@
+-- 30 권한 — 두 계정에 표 단위 권한을 준다(POK-311 목록 · ALTER DEFAULT PRIVILEGES 는 쓰지 않는다).
+--
+-- 실행: psql -1 -v ON_ERROR_STOP=1 -f 30_grants.sql (마스터 사용자). 다시 돌려도 같다.
+--
+-- 마스터는 media_owner 의 권한을 상속하지 않으므로(10 의 INHERIT FALSE) 표 소유자로 바꿔서 준다.
+-- 감싸는 두 줄을 빼면 42501 이다(H2).
+--
+-- 목록 정본은 media 쪽이다. media_indexer = media/internal/pgtest/role.go 의 mediaIndexerGrants,
+-- media_janitor = media/internal/index/local_cleanup_role_pg_test.go 의 lcRoleGrants. 이 파일의 GRANT 가
+-- 두 목록과 같은 집합인지는 media 의 prod_sql_contract_test.go 가 강제한다.
+-- 트랜잭션 문을 쓰지 않는다 — 원자성은 psql -1 이 준다.
+\set ON_ERROR_STOP on
+
+SET ROLE media_owner;
+
+GRANT SELECT, INSERT, UPDATE ON stream_segments TO media_indexer;
+GRANT SELECT, INSERT, UPDATE ON stream_sessions TO media_indexer;
+GRANT SELECT, INSERT ON stream_cutoffs TO media_indexer;
+GRANT SELECT, INSERT, UPDATE ON stream_published_gaps TO media_indexer;
+
+GRANT SELECT ON stream_segments, stream_sessions, stream_cutoffs TO media_janitor;
+GRANT UPDATE (local_path) ON stream_segments TO media_janitor;
+
+RESET ROLE;
