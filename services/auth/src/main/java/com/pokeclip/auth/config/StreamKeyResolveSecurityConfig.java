@@ -1,7 +1,12 @@
 package com.pokeclip.auth.config;
 
+import java.util.ArrayList;
+import java.util.List;
+import org.apache.catalina.Valve;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.boot.tomcat.autoconfigure.TomcatServerProperties;
+import org.springframework.boot.tomcat.servlet.TomcatServletWebServerFactory;
+import org.springframework.boot.web.server.WebServerFactoryCustomizer;
 import org.springframework.boot.web.server.autoconfigure.ServerProperties;
 import org.springframework.boot.web.server.autoconfigure.ServerProperties.ForwardHeadersStrategy;
 import org.springframework.context.annotation.Bean;
@@ -26,8 +31,11 @@ import org.springframework.util.StringUtils;
  * InternalSecurityConfig}의 공용 체인이 받는다. 그래서 한 체인에 인증 수단 둘이 섞이지 않는다.
  *
  * <p>전용 토큰이 비면 창구를 닫는다. 체인은 그대로 두고 {@link DenyAllFilter}만 단다 — 출발지 필터도 달지
- * 않아, 허용 대역까지 비어 있어도 닫힘은 늘 401 이다. 부팅 검사도 토큰이 있을 때만 한다. 운영 ECS 는 전달 헤더
- * 전략을 {@code native}로 띄우는데, 이 창구를 쓰지 않는 그 auth 가 검사에 걸려 죽으면 안 된다.
+ * 않아, 허용 대역까지 비어 있어도 닫힘은 늘 401 이다. 부팅 검사도 토큰이 있을 때만 한다.
+ *
+ * <p>운영 ECS 는 전달 헤더 전략을 {@code native}로 띄운다. 창구는 그 위에서도 열린다(POK-316): 전달 머리글을 달고 온
+ * 요청은 {@link ForwardedHeaderMarkValve}가 톰캣 {@code RemoteIpValve}보다 먼저 표시하고 출발지 필터가 403 으로 끝낸다.
+ * Media 는 auth 에 직접 붙어 그 머리글을 안 싣는다.
  *
  * <p>웹 앱일 때만 있다. 웹이 없는 컨텍스트에는 {@code HttpSecurity} 빈이 없어 이 설정이 있으면 못 뜬다. 공용
  * 체인 · 기본 체인과 같은 조건이다(POK-272 이행 실행기 때 달았다).
@@ -78,6 +86,20 @@ public class StreamKeyResolveSecurityConfig {
   }
 
   /**
+   * 표시 밸브를 엔진 밸브 맨 앞에 넣는다. Boot 는 {@code RemoteIpValve}를 뒤에 덧붙이므로({@code
+   * TomcatWebServerFactoryCustomizer}의 {@code addEngineValves}) 이 커스터마이저가 먼저 돌든 나중에 돌든 순서가 같다. 창구가
+   * 닫혀도 단다: 속성 하나를 적을 뿐이고, 표시를 읽는 것은 열린 창구의 출발지 필터뿐이다.
+   */
+  @Bean
+  WebServerFactoryCustomizer<TomcatServletWebServerFactory> forwardedHeaderMarkValveFirst() {
+    return factory -> {
+      List<Valve> valves = new ArrayList<>(factory.getEngineValves());
+      valves.addFirst(new ForwardedHeaderMarkValve());
+      factory.setEngineValves(valves);
+    };
+  }
+
+  /**
    * 창구를 열어도 되는지 본다. 어긋나면 부팅을 세운다. 값은 메시지에 싣지 않는다 — 부팅 실패 메시지는 로그와
    * CI 출력에 남는다. IPv4 가 아닌 대역은 {@link SourceNetworkFilter}가 거부한다.
    */
@@ -98,22 +120,23 @@ public class StreamKeyResolveSecurityConfig {
     }
     // 아래 두 검사는 Boot 4.1.0 TomcatWebServerFactoryCustomizer.customizeRemoteIpValve 의 밸브 조건에서
     // 왔다. Boot 판을 올리면 그 조건과 다시 대조한다.
-    // 빈 값은 none 이 아니라 미설정(null)이다. 미설정이면 Boot 가 클라우드 플랫폼을 감지해 native 를 켤 수 있다.
+    // native 는 톰캣 RemoteIpValve 가 기본 이름의 머리글만 읽어, 표시 밸브가 그 머리글을 먼저 본다. framework 는
+    // Spring 필터가 X-Forwarded-Prefix 같은 다른 이름까지 읽는다. 빈 값은 none 이 아니라 미설정(null)이다. 미설정이면
+    // Boot 가 클라우드 플랫폼을 감지해 전략을 고른다.
     ForwardHeadersStrategy strategy = server.getForwardHeadersStrategy();
-    if (strategy != ForwardHeadersStrategy.NONE) {
+    if (strategy != ForwardHeadersStrategy.NONE && strategy != ForwardHeadersStrategy.NATIVE) {
       throw new IllegalStateException(
-          "server.forward-headers-strategy 가 정확히 none 이 아니다(지금 "
+          "server.forward-headers-strategy 가 none 이나 native 가 아니다(지금 "
               + (strategy == null ? "미설정" : strategy)
-              + "): 전달 헤더를 믿으면 출발지 잠금이 헤더 한 줄로 뚫린다");
+              + "): 표시 밸브가 안 보는 전달 헤더로 출발지 잠금이 뚫릴 수 있다");
     }
-    // strategy 가 none 이어도 둘 가운데 하나만 있으면 톰캣이 RemoteIpValve 를 단다(Boot 4.1
-    // TomcatWebServerFactoryCustomizer). 그 밸브가 믿는 기본 대역 172.16.0.0/12 에 Docker 브리지
-    // 게이트웨이가 든다.
+    // 이 둘에 이름을 적으면 RemoteIpValve 가 그 이름의 머리글을 읽는데, 표시 밸브는 기본 이름만 본다. 같은 이름을
+    // 적어도 거부한다: 이름이 같은지 가려 줄 이유가 없다(native 기본은 둘 다 비어 있다).
     if (StringUtils.hasText(remoteIp.getRemoteIpHeader())
         || StringUtils.hasText(remoteIp.getProtocolHeader())) {
       throw new IllegalStateException(
-          "server.tomcat.remoteip.remote-ip-header 나 protocol-header 에 값이 있다: 톰캣이 전달 헤더를"
-              + " 믿는 밸브를 달아 출발지 잠금이 뚫린다");
+          "server.tomcat.remoteip.remote-ip-header 나 protocol-header 에 값이 있다: 톰캣이 표시 밸브가"
+              + " 안 보는 이름의 전달 헤더를 믿어 출발지 잠금이 뚫릴 수 있다");
     }
   }
 }
