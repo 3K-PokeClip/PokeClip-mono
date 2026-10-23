@@ -92,8 +92,9 @@
   width: calc(228 * var(--pc-u));
 }
 
-/* 좁은 카드에선 세그먼트가 제목을 누르지 않게 아래 줄로 — 칸은 줄 폭을 다 채운다 */
-@container (max-width: 600px) {
+/* 좁은 카드에선 세그먼트가 제목을 누르지 않게 아래 줄로 — 칸은 줄 폭을 다 채운다.
+   기준도 rem이다 — 세그먼트 폭·패딩이 --pc-u(rem)라 px로 박으면 글꼴을 키울 때 기준만 안 따라온다 */
+@container (max-width: 37.5rem) {
   .row {
     flex-wrap: wrap;
   }

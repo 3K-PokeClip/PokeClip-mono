@@ -103,6 +103,52 @@ describe('ModeSegment', () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 
+  it('포인터로 고르면 그 칸의 라디오로 포커스가 옮겨 간다 — 키보드로 와 있던 다른 줄에 남지 않는다', () => {
+    // 포커스가 앞 줄에 남으면 이어서 누른 방향키가 그 줄을 바꾼다(PR #317 리뷰)
+    function Row({ id, title }: { id: string; title: string }) {
+      const [value, setValue] = useState<Mode>('on');
+      return (
+        <>
+          <span id={id}>{title}</span>
+          <ModeSegment options={OPTIONS} value={value} onChange={setValue} labelledBy={id} />
+        </>
+      );
+    }
+    render(
+      <>
+        <Row id="top" title="위 줄" />
+        <Row id="bottom" title="아래 줄" />
+      </>,
+    );
+    const top = screen.getByRole('radiogroup', { name: '위 줄' });
+    const bottom = screen.getByRole('radiogroup', { name: '아래 줄' });
+    vi.spyOn(top, 'getBoundingClientRect').mockReturnValue({
+      ...RECT,
+      toJSON: () => RECT,
+    } as DOMRect);
+
+    // 키보드로 아래 줄에 와 있다
+    within(bottom).getByRole('radio', { name: '받기' }).focus();
+
+    fireEvent.pointerDown(top, { pointerId: 1, clientX: X[0], clientY: Y });
+    fireEvent.pointerUp(top, { pointerId: 1, clientX: X[0], clientY: Y });
+
+    const topOff = within(top).getByRole('radio', { name: '끔' });
+    expect(topOff).toBeChecked();
+    expect(topOff).toHaveFocus();
+  });
+
+  it('벗어나 놓아 취소하면 포커스도 옮기지 않는다', () => {
+    const { group } = setup('important');
+    const before = within(group).getByRole('radio', { name: '중요' });
+    before.focus();
+
+    fireEvent.pointerDown(group, { pointerId: 1, clientX: X[2], clientY: Y });
+    fireEvent.pointerUp(group, { pointerId: 1, clientX: X[0], clientY: Y + 120 });
+
+    expect(before).toHaveFocus();
+  });
+
   it('키보드·낭독기는 숨긴 라디오로 고른다', () => {
     const { group, onChange, checked } = setup('on');
 

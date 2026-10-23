@@ -11,6 +11,8 @@ import styles from './ModeSegment.module.css';
 // - 다른 칸을 누르면 그 칸만 흐려졌다가 놓을 때 손잡이가 그리로 미끄러진다(누른 채 옆 칸으로 끌면 놓는 칸).
 // - 위아래로 CANCEL_SLOP 넘게 벗어나 놓으면 취소. 세로로 밀면 화면 스크롤로 넘긴다(touch-action: pan-y).
 // - 키보드는 숨긴 진짜 라디오가 맡는다 — 방향키로 바꿔도 손잡이가 같은 애니메이션으로 옮겨 간다.
+//   포인터로 고르면 그 칸의 라디오로 포커스를 옮긴다(아래 onPointerUp) — 안 옮기면 키보드로 와 있던
+//   다른 줄에 포커스가 남아, 이어서 누른 방향키가 그 줄을 바꾼다.
 //
 // 지금은 알림 설정 하나만 쓴다. 다른 화면이 같은 것을 원하면 그때 ui/로 올린다.
 
@@ -48,6 +50,7 @@ export function ModeSegment<T extends string>({
 }) {
   const name = useId();
   const ref = useRef<HTMLDivElement>(null);
+  const inputs = useRef<(HTMLInputElement | null)[]>([]);
   const [press, setPress] = useState<Press | null>(null);
 
   const selected = options.findIndex((o) => o.key === value);
@@ -87,7 +90,10 @@ export function ModeSegment<T extends string>({
     if (!press || e.pointerId !== press.pointerId) return;
     setPress(null);
     if (isOutside(e.clientY)) return;
-    const next = options[indexAt(e.clientX)]!;
+    const index = indexAt(e.clientX);
+    // pointerdown의 preventDefault와 포인터 캡처로 라벨 클릭이 라디오에 닿지 않는다 — 포커스를 직접 옮긴다
+    inputs.current[index]?.focus({ preventScroll: true });
+    const next = options[index]!;
     if (next.key !== value) onChange(next.key);
   };
 
@@ -115,6 +121,9 @@ export function ModeSegment<T extends string>({
           data-dimmed={press && !press.grabbed && press.index === i ? '' : undefined}
         >
           <input
+            ref={(el) => {
+              inputs.current[i] = el;
+            }}
             type="radio"
             name={name}
             className={styles.input}

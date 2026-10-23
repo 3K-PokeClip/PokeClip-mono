@@ -1,6 +1,8 @@
+import type { QueryClient } from '@tanstack/react-query';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { axe } from 'jest-axe';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { delegationsAsEditorQueryOptions } from '@/api/editors';
 import { NotificationSettingsScreen } from '@/features/settings/notifications/NotificationSettingsScreen';
 import { useAuthStore } from '@/stores/auth';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
@@ -22,6 +24,16 @@ function stubAsEditor(body: unknown[] | 'error') {
     }
     throw new Error(`unexpected fetch: ${url}`);
   });
+}
+
+// 맡은 채널 조회가 끝날 때까지 기다린다 — fetch가 불린 것만 보면 응답이 반영되기 전(pending)에 단언이
+// 끝나, 편집자 줄이 pending이라 숨은 것인지 응답 때문에 숨은 것인지 가리지 못한다
+async function settled(queryClient: QueryClient, status: 'success' | 'error') {
+  await waitFor(() =>
+    expect(queryClient.getQueryState(delegationsAsEditorQueryOptions.queryKey)?.status).toBe(
+      status,
+    ),
+  );
 }
 
 const segment = (title: string) => screen.getByRole('radiogroup', { name: title });
@@ -68,9 +80,9 @@ describe('NotificationSettingsScreen', () => {
   });
 
   it('맡은 채널이 없는 계정엔 여섯 줄 — 기능이 없는 알림과 편집자 초대는 목록에 없다', async () => {
-    const spy = stubAsEditor([]);
-    renderWithProviders(<NotificationSettingsScreen />);
-    await waitFor(() => expect(spy).toHaveBeenCalled());
+    stubAsEditor([]);
+    const { queryClient } = renderWithProviders(<NotificationSettingsScreen />);
+    await settled(queryClient, 'success');
 
     expect(screen.getAllByRole('radiogroup')).toHaveLength(6);
     for (const title of STREAMER_ROWS) {
@@ -93,9 +105,9 @@ describe('NotificationSettingsScreen', () => {
   });
 
   it('맡은 채널을 못 불러오면 편집자용 줄을 숨긴다', async () => {
-    const spy = stubAsEditor('error');
-    renderWithProviders(<NotificationSettingsScreen />);
-    await waitFor(() => expect(spy).toHaveBeenCalled());
+    stubAsEditor('error');
+    const { queryClient } = renderWithProviders(<NotificationSettingsScreen />);
+    await settled(queryClient, 'error');
 
     expect(screen.queryByRole('radiogroup', { name: EDITOR_ROW })).toBeNull();
     expect(screen.getAllByRole('radiogroup')).toHaveLength(6);
