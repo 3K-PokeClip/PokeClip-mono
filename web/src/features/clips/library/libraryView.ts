@@ -551,25 +551,42 @@ export function thumbnailFailureText(clip: LibraryClip): string | null {
  * 범위다: 스트리머가 스튜디오에서 바꾸면 모른다(services README 알려진 한계). 편집 중이면 latestClip이 옛 판이라 말하지 않는다
  * (그 판의 다시 시도 단추도 없고, 새 판은 창에서 다시 고른다). 비공개거나 고른 것이 없으면 null.
  */
-export function privacyNoteText(clip: LibraryClip): string | null {
+export function privacyNoteText(clip: LibraryClip, now: Date): string | null {
   const entry = clip.entry;
   if (entry === undefined) return null;
   const upload = entry.latestClip?.upload;
   const privacy =
     upload != null ? upload.privacyStatus : (entry.uploadRequest?.privacyStatus ?? undefined);
-  // 예약 공개(POK-381): 비공개로 올리고 그 시각에 유튜브가 공개로 바꾼다. 업로드 줄이 생긴 뒤에만 시각을 안다.
-  // 편집 중이면 latestClip이 옛 판이라 아래 switch처럼 말하지 않는다(새 판엔 예약이 없다, PR #301 리뷰)
-  const publishAt = upload?.publishAt ?? null;
+  // 예약 공개(POK-381): 비공개로 올리고 그 시각에 유튜브가 공개로 바꾼다. 시각은 공개 범위와 같은 곳에서 읽는다 — 업로드 줄이
+  // 생기기 전(렌더 중)엔 의도의 시각이다(PR #301 2차 리뷰). 편집 중이면 latestClip이 옛 판이라 아래 switch처럼 말하지 않는다
+  // (새 판엔 예약이 없다, PR #301 리뷰)
+  const publishAt =
+    upload != null ? (upload.publishAt ?? null) : (entry.uploadRequest?.publishAt ?? null);
   if (
     privacy === 'private' &&
     publishAt !== null &&
     entry.status !== 'failed' &&
     entry.status !== 'editing'
   ) {
-    const when = instantLabel(new Date(publishAt));
-    return entry.status === 'uploaded'
-      ? `「예약」 ${when}에 공개되도록 올렸어요. 그 전까지는 비공개예요. ${PRIVACY_CHANGE_NOTE}`
-      : `「예약」 올라가면 ${when}에 공개로 바뀌어요. ${PUBLIC_NOTIFY_NOTE}`;
+    const at = new Date(publishAt);
+    const when = instantLabel(at);
+    const passed = at.getTime() <= now.getTime();
+    switch (entry.status) {
+      case 'uploaded':
+        return passed
+          ? `「예약」 ${when}에 공개되도록 올렸어요. ${PRIVACY_CHANGE_NOTE}`
+          : `「예약」 ${when}에 공개되도록 올렸어요. 그 전까지는 비공개예요. ${PRIVACY_CHANGE_NOTE}`;
+      case 'checking':
+        // 올라갔는지 모른다(채널에서 보라는 안내가 따로 뜬다): 「올라가면」으로 단정하지 않는다
+        return passed
+          ? `「예약」 ${when} 공개로 골랐어요. 올라갔다면 이미 공개됐어요.`
+          : `「예약」 ${when} 공개로 골랐어요. 올라갔다면 그 시각에 공개로 바뀌어요.`;
+      default:
+        // 아직 안 올라갔다. 그 시각이 지났으면 유튜브가 올리자마자 공개한다(다시 시도 · 업로드도 저장된 시각을 그대로 쓴다)
+        return passed
+          ? `「예약」 시각(${when})이 지나 올라가면 바로 공개돼요. ${PUBLIC_NOTIFY_NOTE}`
+          : `「예약」 올라가면 ${when}에 공개로 바뀌어요. ${PUBLIC_NOTIFY_NOTE}`;
+    }
   }
   if (privacy === undefined || privacy === 'private') return null;
   const label = `「${PRIVACY_LABEL[privacy]}」`;
