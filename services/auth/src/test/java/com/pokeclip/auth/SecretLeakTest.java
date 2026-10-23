@@ -1081,7 +1081,21 @@ class SecretLeakTest extends IntegrationTestSupport {
      */
     @Test
     void 창고_SDK_로거는_root를_TRACE로_내려도_INFO_아래로_안_간다() {
-        for (String logger : STORAGE_QUIET_LOGGERS) {
+        박혀서_root를_안_따라간다(STORAGE_QUIET_LOGGERS);
+    }
+
+    /**
+     * DB 로거 트리 셋(POK-409). root TRACE에서 읽은 칸 값 · JdbcTemplate 매개변수 · 드라이버가 보내는 값을 찍는다. 이 서버는 비밀을
+     * 해시 · 암호문으로만 저장해 원문은 안 가지만 회원 이메일 · 이름이 지나간다. 값을 실제로 흘려 보는 시험은 clip
+     * {@code DbValueTraceLeakTest}에 있고, 여기서는 이 서버 yml에서 세 줄이 박혀 있는지를 창고 로거와 같은 모양으로 지킨다.
+     */
+    @Test
+    void DB_로거_트리_셋은_root를_TRACE로_내려도_INFO_아래로_안_간다() {
+        박혀서_root를_안_따라간다(List.of("org.hibernate.orm", "org.springframework.jdbc", "org.postgresql"));
+    }
+
+    private void 박혀서_root를_안_따라간다(List<String> loggers) {
+        for (String logger : loggers) {
             String level = environment.getProperty("logging.level." + logger);
             assertThat(level)
                     .as(logger + " 레벨이 application.yml에 박혀 있어야 root를 내려도 버틴다")
@@ -1100,7 +1114,7 @@ class SecretLeakTest extends IntegrationTestSupport {
         assertThat(rootBefore).as("root에 명시 레벨이 없으면 아래 복원이 상속을 지운다").isNotNull();
         try {
             setLevel(Logger.ROOT_LOGGER_NAME, Level.TRACE);
-            for (String logger : STORAGE_QUIET_LOGGERS) {
+            for (String logger : loggers) {
                 assertThat(effectiveLevelOf(logger).toInt())
                         .as(logger + "가 root=TRACE를 그대로 물려받았다 — 세 줄 중 이 줄이 없다")
                         .isGreaterThanOrEqualTo(Level.INFO.toInt());

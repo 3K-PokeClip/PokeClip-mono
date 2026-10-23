@@ -875,6 +875,19 @@ README의 `GRANT ... TO app_*;` 줄과 시험의 목록이 다르면 빨간불�
 **재지 않는 것**: 자기 표의 전체 저장 경로를 그 역할로 다 돌리지는 않는다(소유자라 표 권한이 다 있다). 시퀀스 ·
 트리거 함수 · advisory 잠금 · `pg_stat_ssl` 자기 행은 소유 또는 PUBLIC 기본으로 충분하다.
 
+### DB 로거 셋은 info로 박혀 있다 (POK-409)
+
+**서버 넷 다 `org.hibernate.orm` · `org.springframework.jdbc` · `org.postgresql` 트리를 `application.yml`에서 info로 박는다.**
+로그 수준을 DEBUG · TRACE로 올려도 DB를 오가는 값이 안 찍히게 하려는 것이다. clip에서 root TRACE로 방송을 읽어 보니 넷이 값을
+찍었다: 읽은 칸 값(`org.hibernate.orm.jdbc.extract`) · 엔티티 통째(`org.hibernate.orm.core`, DEBUG에서도) · JdbcTemplate 매개변수
+(`StatementCreatorUtils`) · 드라이버가 보내는 값(`QueryExecutorImpl`). 방송의 물리 키는 지금 스트림키와 같아 그대로 새는 값이다.
+clip `DbValueTraceLeakTest` · 수집 서버 `IngestKeyTraceLeakTest`가 root TRACE에서 안 새는지와, 막이를 풀면 실제로 새는지(대조)를 잰다.
+auth는 비밀을 해시 · 암호문으로만 저장해 원문이 DB로 안 가므로 값을 흘려 보는 시험은 두지 않고, `SecretLeakTest`가 세 줄이 박혀 root TRACE를 안 따라가는지만 지킨다(회원 이메일 같은 개인정보는 이 막이가 덮는다).
+
+**디버그 로그가 꼭 필요하면 env로 그 트리만 잠깐 켠다**: `LOGGING_LEVEL_ORG_HIBERNATE_ORM=debug` ·
+`LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_JDBC=debug` · `LOGGING_LEVEL_ORG_POSTGRESQL=debug`. 켜는 동안은 그 값들이 로그에 남는다는 뜻이니
+보고 나면 끈다.
+
 ## DB 마이그레이션
 
 Flyway 마이그레이션은 앱이 뜰 때 실행돼야 하므로 **코드 옆(`auth/src/main/resources/db/migration/`)에 둔다.**

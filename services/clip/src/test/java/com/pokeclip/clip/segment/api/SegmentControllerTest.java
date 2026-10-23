@@ -189,7 +189,11 @@ class SegmentControllerTest extends IntegrationTestSupport {
 
         try (LogCaptor 로그 = new LogCaptor()) {
             Level 원래_root = AuthClientTokenLeakTest.levelOf(org.slf4j.Logger.ROOT_LOGGER_NAME);
+            // org.springframework.jdbc는 yml이 info로 박는다(POK-409). 이 검사는 그 막이와 따로 「조각을 읽는 JDBC 경로가 s3Key를
+            // 안 찍는다」를 보므로 그 트리를 일부러 TRACE로 푼다. 안 풀면 아래 양성 대조가 빈손이다.
+            Level 원래_jdbc = AuthClientTokenLeakTest.levelOf("org.springframework.jdbc");
             AuthClientTokenLeakTest.setLevel(org.slf4j.Logger.ROOT_LOGGER_NAME, Level.TRACE);
+            AuthClientTokenLeakTest.setLevel("org.springframework.jdbc", Level.TRACE);
             try {
                 // 조각이 실린 것을 먼저 못 박는다 — 빈 200이면 아래 부정 단언이 자동으로 참이다.
                 요청("s-s3log", 5000, 11_000)
@@ -197,6 +201,7 @@ class SegmentControllerTest extends IntegrationTestSupport {
                         .andExpect(jsonPath("$.segments.length()").value(2));
             } finally {
                 AuthClientTokenLeakTest.setLevel(org.slf4j.Logger.ROOT_LOGGER_NAME, 원래_root);
+                AuthClientTokenLeakTest.setLevel("org.springframework.jdbc", 원래_jdbc);
             }
 
             // 양성 대조 — 조각을 읽어 온 그 경로가 실제로 로그에 잡혔다. 이게 없으면
