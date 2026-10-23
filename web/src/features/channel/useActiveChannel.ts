@@ -104,6 +104,16 @@ export function useActiveChannel(): ActiveChannel {
   };
 }
 
+export interface SwitchOptions {
+  /**
+   * 「바꾼 다음」이어야 하는 일. 지금 채널에서 나간 뒤 참여 목록을 다시 읽는 일이 그렇다 — 바꾸기 전에 읽으면
+   * ChannelScope가 끊김으로 보고 「편집 권한이 없어져 내 채널로 돌아왔어요」 경고를 띄운다
+   */
+  onSwitched?: () => void;
+  /** 스스로 나간 채널: 덮는 동안 그 채널 요청이 404로 와도 끊김 경고를 띄우지 않는다(PR #342 리뷰 4) */
+  leftStreamerId?: number;
+}
+
 export interface SwitchTarget {
   streamerId: number;
   name: string;
@@ -120,10 +130,8 @@ export function useSwitchChannel() {
   const select = useChannelStore((s) => s.select);
   const cover = useSwitchCurtain((s) => s.cover);
 
-  // onSwitched: 「바꾼 다음」이어야 하는 일. 지금 채널에서 나간 뒤 참여 목록을 다시 읽는 일이 그렇다 — 바꾸기 전에 읽으면
-  // ChannelScope가 끊김으로 보고 「편집 권한이 없어져 내 채널로 돌아왔어요」 경고를 띄운다
   return useCallback(
-    (target: SwitchTarget, onSwitched?: () => void) => {
+    (target: SwitchTarget, options: SwitchOptions = {}) => {
       if (!me) return;
       cover(
         {
@@ -131,10 +139,11 @@ export function useSwitchChannel() {
           relation: target.relation,
           // 남의 채널은 서버가 사진을 안 준다: 이름 글자 아바타
           photo: target.relation === 'OWNER' ? me.profileImageUrl : null,
+          leftStreamerId: options.leftStreamerId,
         },
         () => {
           select(me.id, target.streamerId === me.id ? null : target.streamerId);
-          onSwitched?.();
+          options.onSwitched?.();
         },
       );
     },

@@ -482,7 +482,12 @@ describe('ChannelSwitcher: 관리 모드에서 참여 채널 나가기', () => {
     );
 
     await waitFor(() => expect(deletes(spy)).toEqual(['/api/editor-delegations/21']));
-    expect(useSwitchCurtain.getState().curtain).toMatchObject({ name: '나', relation: 'OWNER' });
+    // 스스로 나간 채널을 적어 둔다: 덮는 동안 그 채널 404가 와도 ChannelScope가 끊김 경고를 띄우지 않는다
+    expect(useSwitchCurtain.getState().curtain).toMatchObject({
+      name: '나',
+      relation: 'OWNER',
+      leftStreamerId: 3,
+    });
     await waitFor(() =>
       expect(screen.queryByRole('dialog', { name: '계정 전환' })).not.toBeInTheDocument(),
     );

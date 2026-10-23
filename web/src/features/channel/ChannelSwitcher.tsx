@@ -132,8 +132,12 @@ function SwitcherPanel({
       refresh();
       return;
     }
-    // 지금 들어가 있는 채널에서 나왔으면 전환 화면과 함께 내 채널로 돌아간다. 목록은 바꾼 뒤에 다시 읽는다(useSwitchChannel)
-    switchTo({ streamerId: me.id, name: me.name, relation: 'OWNER' }, refresh);
+    // 지금 들어가 있는 채널에서 나왔으면 전환 화면과 함께 내 채널로 돌아간다. 목록은 바꾼 뒤에 다시 읽고, 덮는 동안
+    // 그 채널 요청이 404로 와도 끊김 경고는 띄우지 않는다(useSwitchChannel의 SwitchOptions)
+    switchTo(
+      { streamerId: me.id, name: me.name, relation: 'OWNER' },
+      { onSwitched: refresh, leftStreamerId: channel.streamerId },
+    );
     onClose();
   };
 

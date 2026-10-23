@@ -16,6 +16,8 @@ export interface SwitchCurtain {
   relation: ChannelRelation;
   photo: string | null;
   shownAt: number;
+  /** 이 전환이 그 채널에서 스스로 나가서 일어났다: 그 채널의 끊김 경고를 띄우지 않는다(ChannelScope) */
+  leftStreamerId?: number;
 }
 
 interface SwitchCurtainState {
