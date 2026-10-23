@@ -52,6 +52,8 @@ interface Server {
   receivedFails?: boolean;
   /** 참여 채널 목록을 읽을 때마다 부른다(읽는 순서를 재는 시험용) */
   onAsEditor?: () => void;
+  /** 거절·나가기 응답을 이 약속이 풀릴 때까지 붙잡는다(요청 중 상태를 재는 시험용) */
+  hold?: Promise<void>;
 }
 
 function stub(server: Server) {
@@ -60,8 +62,10 @@ function stub(server: Server) {
     if (url === '/api/auth/me') return jsonResponse(200, ME);
     const leave = /^\/api\/editor-delegations\/(\d+)$/.exec(url);
     if (leave && method === 'DELETE') {
-      server.delegations = server.delegations.filter((d) => d.id !== Number(leave[1]));
-      return new Response(null, { status: 204 });
+      return (server.hold ?? Promise.resolve()).then(() => {
+        server.delegations = server.delegations.filter((d) => d.id !== Number(leave[1]));
+        return new Response(null, { status: 204 });
+      });
     }
     if (url === '/api/editor-delegations/as-editor') {
       server.onAsEditor?.();
@@ -80,8 +84,10 @@ function stub(server: Server) {
       return new Response(null, { status: 204 });
     }
     if (url === '/api/editor-invitations/11/decline' && method === 'POST') {
-      server.invitations = [];
-      return new Response(null, { status: 204 });
+      return (server.hold ?? Promise.resolve()).then(() => {
+        server.invitations = [];
+        return new Response(null, { status: 204 });
+      });
     }
     if (url === '/api/auth/logout') return new Response(null, { status: 204 });
     throw new Error(`unexpected fetch: ${method} ${url}`);
@@ -215,6 +221,38 @@ describe('ChannelSwitcher: 펼친 패널', () => {
       expect(panel.queryByRole('group', { name: /받은 초대/ })).not.toBeInTheDocument(),
     );
     expect(panel.queryByRole('alertdialog')).not.toBeInTheDocument();
+  });
+
+  it('거절 요청이 나가 있는 동안엔 Esc·바깥 클릭으로도 창이 닫히지 않는다: 덮개가 결과까지 남는다', async () => {
+    let release: () => void = () => {};
+    const spy = stub({
+      delegations: [],
+      invitations: [invitation(18)],
+      hold: new Promise<void>((r) => {
+        release = r;
+      }),
+    });
+    const user = userEvent.setup();
+    const panel = within(await open(user));
+
+    await user.click(await panel.findByRole('button', { name: '거절' }));
+    await user.click(
+      within(await panel.findByRole('alertdialog')).getByRole('button', { name: '거절하기' }),
+    );
+    await waitFor(() => expect(posts(spy)).toEqual(['/api/editor-invitations/11/decline']));
+
+    await user.keyboard('{Escape}');
+    await user.click(document.body);
+    expect(screen.getByRole('dialog', { name: '계정 전환' })).toBeInTheDocument();
+    expect(panel.getByRole('alertdialog')).toBeInTheDocument();
+
+    await act(async () => release());
+    await waitFor(() => expect(panel.queryByRole('alertdialog')).not.toBeInTheDocument());
+    // 끝난 뒤에는 다시 닫힌다
+    await user.keyboard('{Escape}');
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: '계정 전환' })).not.toBeInTheDocument(),
+    );
   });
 
   it('거절 확인에서 Esc는 덮개만 닫는다: 창은 그대로 열려 있다', async () => {

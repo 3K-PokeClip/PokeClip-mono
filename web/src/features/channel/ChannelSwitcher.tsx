@@ -65,10 +65,16 @@ export function ChannelSwitcher({
   offset,
 }: ChannelSwitcherProps) {
   const [open, setOpen] = useState(false);
+  // 거절·나가기 요청이 나가 있는 동안은 창을 닫지 않는다: 바깥 클릭·Esc·트리거로 닫히면 확인 덮개가 같이 사라져
+  // 취소된 줄 알았다가 결과 토스트를 보게 된다(PR #342 리뷰 1)
+  const [busy, setBusy] = useState(false);
   return (
     <Popover
       open={open}
-      onOpenChange={setOpen}
+      onOpenChange={(next) => {
+        if (!next && busy) return;
+        setOpen(next);
+      }}
       side={side}
       align={align}
       anchorRef={anchorRef}
@@ -77,13 +83,19 @@ export function ChannelSwitcher({
       <Popover.Trigger>{children}</Popover.Trigger>
       <Popover.Content className={styles.panel} aria-label="계정 전환">
         {/* 본문은 열렸을 때만 선다: 쿼리·로그아웃 훅이 닫힌 트리거마다 돌지 않게 */}
-        <SwitcherPanel onClose={() => setOpen(false)} />
+        <SwitcherPanel onClose={() => setOpen(false)} onBusyChange={setBusy} />
       </Popover.Content>
     </Popover>
   );
 }
 
-function SwitcherPanel({ onClose }: { onClose: () => void }) {
+function SwitcherPanel({
+  onClose,
+  onBusyChange,
+}: {
+  onClose: () => void;
+  onBusyChange: (busy: boolean) => void;
+}) {
   const me = useMe().data;
   const active = useActiveChannel();
   const switchTo = useSwitchChannel();
@@ -214,6 +226,7 @@ function SwitcherPanel({ onClose }: { onClose: () => void }) {
           invitation={asking.invitation}
           opener={asking.opener}
           onClose={() => setAsking(null)}
+          onBusyChange={onBusyChange}
         />
       )}
       {asking?.kind === 'leave' && (
@@ -221,6 +234,7 @@ function SwitcherPanel({ onClose }: { onClose: () => void }) {
           channel={asking.channel}
           opener={asking.opener}
           onClose={() => setAsking(null)}
+          onBusyChange={onBusyChange}
           onLeft={(refresh) => left(asking.channel, refresh)}
         />
       )}
@@ -361,10 +375,12 @@ function DeclineConfirm({
   invitation,
   opener,
   onClose,
+  onBusyChange,
 }: {
   invitation: ReceivedInvitation;
   opener: HTMLElement;
   onClose: () => void;
+  onBusyChange: (busy: boolean) => void;
 }) {
   const decline = useInvitationAction(declineInvitation, '초대를 거절했어요', onClose);
   return (
@@ -376,6 +392,7 @@ function DeclineConfirm({
       opener={opener}
       onConfirm={() => decline.mutate(invitation.id)}
       onClose={onClose}
+      onBusyChange={onBusyChange}
     />
   );
 }
@@ -388,11 +405,13 @@ function LeaveConfirm({
   channel,
   opener,
   onClose,
+  onBusyChange,
   onLeft,
 }: {
   channel: StreamerDelegation;
   opener: HTMLElement;
   onClose: () => void;
+  onBusyChange: (busy: boolean) => void;
   onLeft: (refresh: () => void) => void;
 }) {
   const { toast } = useToast();
@@ -414,6 +433,7 @@ function LeaveConfirm({
       opener={opener}
       onConfirm={() => leave.mutate()}
       onClose={onClose}
+      onBusyChange={onBusyChange}
     />
   );
 }
@@ -431,6 +451,7 @@ function PanelConfirm({
   opener,
   onConfirm,
   onClose,
+  onBusyChange,
 }: {
   title: string;
   text: string;
@@ -439,6 +460,8 @@ function PanelConfirm({
   opener: HTMLElement;
   onConfirm: () => void;
   onClose: () => void;
+  /** 요청이 나가 있는지 창(Popover)에 알린다: 그동안은 창도 닫히지 않는다 */
+  onBusyChange: (busy: boolean) => void;
 }) {
   const titleId = useId();
   const textId = useId();
@@ -452,6 +475,11 @@ function PanelConfirm({
       if (opener.isConnected) opener.focus();
     };
   }, [opener]);
+
+  useEffect(() => {
+    onBusyChange(busy);
+    return () => onBusyChange(false);
+  }, [busy, onBusyChange]);
 
   // 요청이 나간 뒤에는 닫지 않는다: 결과가 오기 전에 사라지면 취소된 줄 안다(ConfirmDialog와 같다)
   const cancel = () => {
