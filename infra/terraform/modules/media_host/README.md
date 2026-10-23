@@ -18,8 +18,22 @@ Media 상자[^box] 모듈입니다(설계 3-3 · 3-3-1 · 5-3 · 5-5, 계획 M9)
     이그레스 → Media 도 이 모듈이 만듭니다(한 apply 에 짝이 생깁니다).
     MediaMTX 루프백 포트(8888 · 9996 · 9997)는 열지 않습니다.
 *   **인스턴스 역할:** 경로 `/pokeclip/prod/`. 관리형 정책은
-    `AmazonSSMManagedInstanceCore` 하나이고, guard R10 이 그 밖의 관리형
-    정책 · dbuser 와일드카드를 막습니다.
+    `AmazonSSMManagedInstanceCore` 하나이고, 권한 정책은 정책 문서
+    (`aws_iam_policy_document`)를 역할 인라인 정책으로 붙입니다. guard R10
+    (`policy/guard/media_role.rego`)이 이 꼴을 지킵니다.
+    *   관리형 정책: 문자열 속 `iam::aws:policy/<이름>` 은 SSM Core 만 · 연결은
+        주소 `managed` 하나(`for_each = local.managed_policy_arns` ·
+        `policy_arn = each.value`, 지역값은 SSM Core 하나) · 정책 조회
+        (`data "aws_iam_policy"`) · 고객 관리 정책 · 다른 IAM 정책 유형 금지.
+    *   정책 문서: `not_actions` · `not_resources` · 다른 문서 합치기 ·
+        `dynamic` 금지. 역할 인라인 정책은 정책 문서 json 으로만(jsonencode ·
+        역할의 `inline_policy` · `managed_policy_arns` 금지 — 신뢰 정책은
+        예외).
+    *   DB: `rds-db:connect` 는 정책 문서 statement 에만 · Resource 는
+        와일드카드 없는 dbuser ARN 만.
+    *   lifecycle: 거부 목록 파라미터는 `prevent_destroy = true`(리터럴) ·
+        `ignore_changes` 에 `value`, 상자는 `ignore_changes` 에 `ami` ·
+        `user_data_base64`.
 
 ## 설치 경로 — 설치 묶음 이미지
 
@@ -125,9 +139,9 @@ kty 확정(2026-10-23): `c8gn.large`(네트워크 최적화 Graviton) · 루트 
     같은지, 템플릿 변수 키 집합은 `infra/media-host/test/render_vars.json` 과
     같은지 봅니다.
 *   **시험으로 볼 수 없는 것:** `lifecycle` 의 `ignore_changes` ·
-    `prevent_destroy`(plan 결과에 나오지 않음), 상자 위 동작(부트스트랩 ·
-    drop-in · ExecStartPre 실패 뒤 재시작). 앞의 것은 guard 로 보는 안을
-    제안했고, 뒤의 것은 O7e 에서 상자로 확인합니다.
+    `prevent_destroy` 는 plan 결과에 나오지 않아 guard R10 이 선언을 봅니다.
+    상자 위 동작(부트스트랩 · drop-in · ExecStartPre 실패 뒤 재시작)은 O7e
+    에서 상자로 확인합니다.
 
 [^box]: **상자** — prod 미디어 서버를 돌리는 EC2 인스턴스 한 대.
 [^netns]: **망 칸** — 리눅스 네트워크 네임스페이스. compose 의 nginx · 사이드카

@@ -14,10 +14,22 @@
 # ③ rds-db 동작은 그 statement 의 actions 에만 적는다 — jsonencode 인라인
 #    정책 · dynamic 블록에 있으면 Resource 를 대조할 수 없어 위반이다. 설명
 #    문자열(description)은 문서라 보지 않는다.
-# 응답기 거부 목록 그릇(modules/media_host 의 aws_ssm_parameter)은 lifecycle
-# ignore_changes 에 value 가 있어야 한다 — 없으면 다음 apply 가 운영자가 고친
-# 목록을 초기값으로 덮어 거부가 조용히 풀린다. prevent_destroy 는
-# prevent_destroy.rego 의 보호 대상(R10 줄)이 본다.
+#
+# 위 문자열 대조를 비켜 가는 길은 꼴로 막는다(아래 「꼴」 절).
+# ④ IAM 유형은 역할 · 인스턴스 프로필 · 역할 인라인 정책 · 관리형 정책 연결 ·
+#    정책 문서만(정책 조회 data "aws_iam_policy" · 고객 관리 정책 금지).
+# ⑤ 관리형 정책 연결은 주소 managed 하나 · for_each = local.managed_policy_arns ·
+#    policy_arn = each.value 이고, 그 지역값은 키 · 값 모두 SSM Core 하나다.
+# ⑥ 정책 문서에 not_actions · not_resources · 다른 문서 합치기 · dynamic 금지.
+# ⑦ 역할 인라인 정책은 정책 문서 json 으로만 붙인다(jsonencode 등 금지). 역할의
+#    inline_policy · managed_policy_arns 도 금지. 신뢰 정책(assume_role_policy)은
+#    예외다.
+#
+# lifecycle(modules/media_host): 응답기 거부 목록 그릇(aws_ssm_parameter)은
+# ignore_changes 에 value — 없으면 다음 apply 가 운영자가 고친 목록을 초기값으로
+# 덮어 거부가 조용히 풀린다(prevent_destroy 는 prevent_destroy.rego 의 R10 줄).
+# 상자(aws_instance)는 ignore_changes 에 ami · user_data_base64 — 설계 5-3 은
+# 떠 있는 상자를 두고 새 구성을 새 키로 띄운다.
 # 대상 경로에 파일이 없는 트리(다른 규칙의 fixture)는 위반이 없다.
 package main
 
@@ -121,9 +133,10 @@ deny contains msg if {
 	)
 }
 
-ignores_value(body) if {
+# lifecycle ignore_changes 에 속성 attr(리터럴 목록 원소 "${attr}")이 있는지.
+ignores(body, attr) if {
 	some lifecycle in body.lifecycle
-	"${value}" in lifecycle.ignore_changes
+	sprintf("${%s}", [attr]) in lifecycle.ignore_changes
 }
 
 deny contains msg if {
@@ -131,9 +144,152 @@ deny contains msg if {
 	in_dir(decl.path, "modules/media_host")
 	decl.kind == "resource"
 	decl.type == "aws_ssm_parameter"
-	not ignores_value(decl.body)
+	not ignores(decl.body, "value")
 	msg := sprintf(
 		"R10 %s: %s 의 lifecycle ignore_changes 에 value 없음(운영자가 고친 거부 목록을 apply 가 덮음)",
 		[decl.path, label(decl)],
+	)
+}
+
+deny contains msg if {
+	some decl in declarations
+	in_dir(decl.path, "modules/media_host")
+	decl.kind == "resource"
+	decl.type == "aws_instance"
+	missing := [attr | some attr in ["ami", "user_data_base64"]; not ignores(decl.body, attr)]
+	count(missing) > 0
+	msg := sprintf(
+		"R10 %s: %s 의 lifecycle ignore_changes 에 %s 없음(설계 5-3 — 새 구성은 새 키로)",
+		[decl.path, label(decl), concat(" · ", missing)],
+	)
+}
+
+# ---- 꼴: 문자열 대조를 비켜 가는 길 ----
+
+media_role_decls contains decl if {
+	some decl in declarations
+	some dir in media_role_dirs
+	in_dir(decl.path, dir)
+}
+
+allowed_iam_types := {
+	"resource": {
+		"aws_iam_role",
+		"aws_iam_instance_profile",
+		"aws_iam_role_policy",
+		"aws_iam_role_policy_attachment",
+	},
+	"data": {"aws_iam_policy_document"},
+}
+
+deny contains msg if {
+	some decl in media_role_decls
+	startswith(decl.type, "aws_iam_")
+	not decl.type in allowed_iam_types[decl.kind]
+	msg := sprintf(
+		"R10 %s: %s — IAM 유형은 역할 · 인스턴스 프로필 · 역할 인라인 정책 · 관리형 정책 연결 · 정책 문서만",
+		[decl.path, label(decl)],
+	)
+}
+
+managed_attachments contains decl if {
+	some decl in media_role_decls
+	decl.kind == "resource"
+	decl.type == "aws_iam_role_policy_attachment"
+}
+
+deny contains msg if {
+	some decl in managed_attachments
+	decl.name != "managed"
+	msg := sprintf("R10 %s: %s — 관리형 정책 연결 주소는 managed 하나만", [decl.path, label(decl)])
+}
+
+deny contains msg if {
+	some decl in managed_attachments
+	object.get(decl.body, "policy_arn", null) != "${each.value}"
+	msg := sprintf("R10 %s: %s 의 policy_arn 은 each.value 만", [decl.path, label(decl)])
+}
+
+deny contains msg if {
+	some decl in managed_attachments
+	object.get(decl.body, "for_each", null) != "${local.managed_policy_arns}"
+	msg := sprintf("R10 %s: %s 의 for_each 는 local.managed_policy_arns 만", [decl.path, label(decl)])
+}
+
+# 연결이 있는 대상 경로마다 그 경로의 managed_policy_arns 지역값.
+managed_policy_locals(dir) := [value |
+	some file in input
+	in_dir(file.path, dir)
+	some block in file.contents.locals
+	value := block.managed_policy_arns
+]
+
+ssm_core_arn_pattern := `^arn:(aws|\$\{local\.partition\}|\$\{data\.aws_partition\.[a-z0-9_]+\.partition\}):iam::aws:policy/AmazonSSMManagedInstanceCore$`
+
+ssm_core_only(value) if {
+	is_object(value)
+	object.keys(value) == {"AmazonSSMManagedInstanceCore"}
+	regex.match(ssm_core_arn_pattern, value.AmazonSSMManagedInstanceCore)
+}
+
+deny contains msg if {
+	some dir in media_role_dirs
+	some decl in managed_attachments
+	in_dir(decl.path, dir)
+	count(managed_policy_locals(dir)) == 0
+	msg := sprintf("R10 %s: managed_policy_arns 지역값 없음 — 관리형 정책 연결의 대상", [dir])
+}
+
+deny contains msg if {
+	some dir in media_role_dirs
+	some decl in managed_attachments
+	in_dir(decl.path, dir)
+	some value in managed_policy_locals(dir)
+	not ssm_core_only(value)
+	msg := sprintf(
+		"R10 %s: managed_policy_arns 는 { AmazonSSMManagedInstanceCore = <그 ARN 리터럴> } 하나만",
+		[dir],
+	)
+}
+
+policy_documents contains decl if {
+	some decl in media_role_decls
+	decl.kind == "data"
+	decl.type == "aws_iam_policy_document"
+}
+
+deny contains msg if {
+	some decl in policy_documents
+	some key in ["source_policy_documents", "override_policy_documents", "dynamic"]
+	key in object.keys(decl.body)
+	msg := sprintf("R10 %s: %s — 정책 문서에 %s 금지(문을 그대로 적는다)", [decl.path, label(decl), key])
+}
+
+deny contains msg if {
+	some item in policy_statements
+	some key in ["not_actions", "not_resources"]
+	key in object.keys(item.statement)
+	msg := sprintf("R10 %s: %s 의 statement 에 %s 금지", [item.decl.path, label(item.decl), key])
+}
+
+policy_document_json_pattern := `^\$\{data\.aws_iam_policy_document\.[A-Za-z0-9_-]+\.json\}$`
+
+deny contains msg if {
+	some decl in media_role_decls
+	decl.kind == "resource"
+	decl.type == "aws_iam_role_policy"
+	not regex.match(policy_document_json_pattern, object.get(decl.body, "policy", ""))
+	msg := sprintf("R10 %s: %s — 역할 인라인 정책은 정책 문서 json 으로만", [decl.path, label(decl)])
+}
+
+deny contains msg if {
+	some decl in media_role_decls
+	decl.kind == "resource"
+	decl.type == "aws_iam_role"
+	some key in ["inline_policy", "managed_policy_arns"]
+	key in object.keys(decl.body)
+	msg := sprintf(
+		"R10 %s: %s 의 %s 금지 — 권한은 인라인 정책(정책 문서) · 관리형은 연결 managed 로만",
+		[decl.path, label(decl), key],
 	)
 }
