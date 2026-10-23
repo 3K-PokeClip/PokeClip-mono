@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { RecipeOutputV2 } from '@/api/clipEditor';
 import { BLUR_SIGMA_AT_FULL } from './recipeLook';
 
@@ -26,16 +26,31 @@ const FRAME_WIDTH = 360;
 const FRAME_HEIGHT = 640;
 /** 옮기기가 이만큼 안 끝나면 그 시각은 건너뛴다(손상된 조각에서 줄이 멈추지 않게) */
 const SEEK_TIMEOUT_MS = 4_000;
+/**
+ * 띠에 올리거나 끌며 뽑은 그림(추천 · 띠 칸 · 고른 장면 밖)은 최근 이만큼만 남긴다. 장당 수십 KB라 3분 구간(720칸)을 다
+ * 훑으면 수십 MB가 창을 닫을 때까지 남았다(PR #301 리뷰). 지운 자리에 다시 올리면 다시 뽑는다
+ */
+const EXTRA_FRAMES_KEPT = 24;
+/** 못 뽑은 시각의 표시(옮기기 실패 · 시간 초과 · 그릴 수 없음). 같은 조각이면 또 실패하므로 다시 뽑지 않는다 */
+const FAILED = '';
+
+export interface SceneFrames {
+  /** 뽑아 둔 그림 주소. 아직이거나 못 뽑았으면 null */
+  frameOf: (offsetMs: number) => string | null;
+  /** 그 시각의 그림을 못 얻는다(재료가 없거나 뽑기가 실패). 아직 뽑는 중이면 false */
+  failed: (offsetMs: number) => boolean;
+}
 
 /**
  * `wanted`의 시각들을 차례로 뽑고, `urgent`(띠에 올린 자리·고른 장면)는 줄 맨 앞에 끼운다(새 것이 오면 옛 것을 버린다).
- * 돌려주는 함수는 뽑아 둔 그림 주소를 찾는다. 아직이면 null.
+ * `wanted`와 `keep`(고른 장면)의 그림은 계속 두고, 나머지는 최근 {@link EXTRA_FRAMES_KEPT}장만 둔다.
  */
 export function useSceneFrames(
   source: SceneFrameSource | null,
   wanted: readonly number[],
   urgent: number | null,
-): (offsetMs: number) => string | null {
+  keep: number | null = null,
+): SceneFrames {
   const [frames, setFrames] = useState<ReadonlyMap<number, string>>(() => new Map());
   const done = useRef(new Map<number, string>());
   const queue = useRef<number[]>([]);
@@ -45,6 +60,17 @@ export function useSceneFrames(
   const busy = useRef(false);
   const sourceRef = useRef(source);
   sourceRef.current = source;
+  const pinned = useRef<ReadonlySet<number>>(new Set());
+  pinned.current = new Set(keep === null ? wanted : [...wanted, keep]);
+
+  const remember = useCallback((offsetMs: number, url: string) => {
+    const map = done.current;
+    map.set(offsetMs, url);
+    // Map은 넣은 순서라 앞이 오래된 것이다
+    const extra = [...map.keys()].filter((ms) => !pinned.current.has(ms));
+    for (const ms of extra.slice(0, Math.max(0, extra.length - EXTRA_FRAMES_KEPT))) map.delete(ms);
+    setFrames(new Map(map));
+  }, []);
 
   const pump = useCallback(() => {
     const el = video.current;
@@ -61,17 +87,15 @@ export function useSceneFrames(
     seekTo(el, src.videoSecondsAt(next))
       .then((ok) => {
         // 옮기는 사이 재료가 바뀌었으면 옛 노드의 그림이다: 버린다
-        if (!ok || video.current !== el) return;
-        const url = drawFrame(el, src.output);
-        if (url === null) return;
-        done.current.set(next, url);
-        setFrames(new Map(done.current));
+        if (video.current !== el) return;
+        // 못 뽑은 것도 적는다: 안 적으면 창이 「불러오는 중」에서 멈춘다(PR #301 리뷰)
+        remember(next, (ok ? drawFrame(el, src.output) : null) ?? FAILED);
       })
       .finally(() => {
         busy.current = false;
         pump();
       });
-  }, []);
+  }, [remember]);
 
   // 재료마다 영상 노드 하나. 재료가 바뀌면(편집기가 조각을 갈아 끼우면) 뽑아 둔 그림도 버린다
   const src = source?.src ?? null;
@@ -117,7 +141,18 @@ export function useSceneFrames(
     pump();
   }, [src, urgent, pump]);
 
-  return useCallback((offsetMs: number) => frames.get(offsetMs) ?? null, [frames]);
+  const frameOf = useCallback(
+    (offsetMs: number) => {
+      const url = frames.get(offsetMs);
+      return url === undefined || url === FAILED ? null : url;
+    },
+    [frames],
+  );
+  const failed = useCallback(
+    (offsetMs: number) => src === null || frames.get(offsetMs) === FAILED,
+    [frames, src],
+  );
+  return useMemo(() => ({ frameOf, failed }), [frameOf, failed]);
 }
 
 /** 영상을 그 초로 옮기고 그 장면을 그릴 수 있게 되면 true. 시간 안에 안 되면 false */

@@ -37,6 +37,7 @@ import {
   localDate,
   privacyNote,
   quickSchedules,
+  sceneLabel,
   scenePicks,
   scheduleLabel,
   scheduleProblem,
@@ -234,10 +235,12 @@ function UploadInfoForm({
     () => [...picks.map((p) => p.offsetMs), ...stripTileTimes(cutLengthMs)],
     [picks, cutLengthMs],
   );
-  const frameOf = useSceneFrames(
+  const chosenScene = draft.thumbnailSource === 'scene' ? draft.sceneOffsetMs : null;
+  const { frameOf, failed: frameFailed } = useSceneFrames(
     frameSource,
     wanted,
-    hover ?? (draft.thumbnailSource === 'scene' ? draft.sceneOffsetMs : null),
+    hover ?? chosenScene,
+    chosenScene,
   );
 
   const clearError = (field: keyof UploadFieldErrors) =>
@@ -388,7 +391,9 @@ function UploadInfoForm({
                   ? '유튜브가 영상에서 골라요'
                   : draft.thumbnailSource === 'file'
                     ? '고른 이미지가 여기 보여요'
-                    : '장면을 불러오는 중이에요'}
+                    : frameFailed(draft.sceneOffsetMs)
+                      ? `장면 그림을 못 불러와요 · ${sceneLabel(draft.sceneOffsetMs)}`
+                      : '장면을 불러오는 중이에요'}
               </span>
             )}
             {draft.scheduled && schedule !== '' ? (

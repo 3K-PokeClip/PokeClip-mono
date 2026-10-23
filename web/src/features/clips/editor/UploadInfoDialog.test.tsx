@@ -47,6 +47,13 @@ async function upload(user: ReturnType<typeof userEvent.setup>, dialog: Dialog) 
 }
 
 describe('UploadInfoDialog', () => {
+  it('장면 그림 재료가 없으면 미리보기가 「불러오는 중」에 머물지 않고 못 불러온다고 말한다(PR #301 리뷰)', () => {
+    const { dialog } = renderDialog();
+
+    expect(dialog().getByText('장면 그림을 못 불러와요 · 0:06.2')).toBeInTheDocument();
+    expect(dialog().queryByText('장면을 불러오는 중이에요')).not.toBeInTheDocument();
+  });
+
   it('처음 값: 정보 탭 · 빈 칸 · 카테고리 게임 · 썸네일은 장면 · 비공개 · 아동용 아님', async () => {
     const user = userEvent.setup();
     const { dialog } = renderDialog();
