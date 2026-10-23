@@ -250,6 +250,12 @@ run "clip_env_carries_playback_signing_values" {
     error_message = "clip AUTH_BASE_URL 이 auth 의 Cloud Map 이름 · 포트가 아니다."
   }
 
+  # 셋 중 하나라도 빠지면 부팅을 거부한다(POK-321 — prod 정본).
+  assert {
+    condition     = local.service_env.clip["PLAYBACK_REQUIRED"] == "true"
+    error_message = "clip PLAYBACK_REQUIRED 가 true 가 아니다."
+  }
+
   assert {
     condition = (
       local.service_env.clip["BROADCAST_QUEUE_URL"] == "https://sqs.ap-northeast-2.amazonaws.com/111122223333/pokeclip-prod-broadcast-clip" &&
@@ -276,15 +282,17 @@ run "clip_env_carries_playback_signing_values" {
   }
 }
 
-# 브라우저는 api 를 부르지 않는다(설계 4-3 · ADR-089 ③).
-run "adds_no_browser_cors_env" {
+# 브라우저는 api 를 부르지 않는다(설계 4-3 · ADR-089 ③). 그래도 auth · clip 은
+# 허용 출처가 비면 부팅하지 않아(CorsProperties @NotEmpty) app 오리진 하나만
+# 둔다(kty 확정).
+run "cors_allows_app_origin_only" {
   command = plan
 
   assert {
     condition = alltrue([
-      for service in ["auth", "clip"] : !contains(keys(local.service_env[service]), "CORS_ALLOWED_ORIGINS")
+      for service in ["auth", "clip"] : local.service_env[service]["CORS_ALLOWED_ORIGINS"] == "https://app.pokeclip.com"
     ])
-    error_message = "auth · clip env 에 CORS_ALLOWED_ORIGINS 가 있다."
+    error_message = "auth · clip env CORS_ALLOWED_ORIGINS 가 https://app.pokeclip.com 하나가 아니다."
   }
 }
 
@@ -300,6 +308,15 @@ run "auth_trusts_forwarded_headers_natively" {
   assert {
     condition     = !contains(keys(local.service_env.auth), "SERVER_TOMCAT_REMOTEIP_INTERNALPROXIES")
     error_message = "auth_internal_proxies 가 빈 값인데 internal-proxies env 가 있다."
+  }
+
+  # 탈퇴 정리(withdrawal-purge)가 부르는 주소 — 비면 auth 가 부팅하지 않는다.
+  assert {
+    condition = (
+      local.service_env.auth["CLIP_BASE_URL"] == "http://clip.pokeclip.internal:8081" &&
+      local.service_env.auth["COLLECTOR_BASE_URL"] == "http://chat-collector.pokeclip.internal:8083"
+    )
+    error_message = "auth CLIP_BASE_URL · COLLECTOR_BASE_URL 이 clip · chat-collector 의 Cloud Map 이름 · 포트가 아니다."
   }
 
   assert {
@@ -549,6 +566,18 @@ run "security_group_rules_pair_services_lb_and_rds" {
       aws_vpc_security_group_ingress_rule.auth_from_clip.from_port == 8082
     )
     error_message = "clip → auth 8082 이그레스 · auth 인그레스 ← clip 짝이 없다."
+  }
+
+  # auth → clip 8081 짝(탈퇴 정리). auth → chat-collector 는 런타임 2단 몫.
+  assert {
+    condition = (
+      local.egress_targets.auth.clip.port == 8081 &&
+      local.egress_targets.auth.clip.security_group_id == module.clip.sg_id &&
+      aws_vpc_security_group_ingress_rule.clip_from_auth.security_group_id == module.clip.sg_id &&
+      aws_vpc_security_group_ingress_rule.clip_from_auth.referenced_security_group_id == module.auth.sg_id &&
+      aws_vpc_security_group_ingress_rule.clip_from_auth.from_port == 8081
+    )
+    error_message = "auth → clip 8081 이그레스 · clip 인그레스 ← auth 짝이 없다."
   }
 
   # Next rewrite → auth · clip(Cloud Map).

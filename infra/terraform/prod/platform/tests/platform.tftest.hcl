@@ -287,6 +287,12 @@ run "routes_app_host_to_next_only" {
     condition     = local.alb_idle_timeout == 60
     error_message = "공개 ALB idle_timeout 이 60 이 아니다."
   }
+
+  # 요청 밀수(request smuggling)에 쓰이는 잘못된 헤더를 공개 ALB 가 버린다.
+  assert {
+    condition     = local.public_alb_drop_invalid_header_fields == true
+    error_message = "공개 ALB drop_invalid_header_fields 가 true 가 아니다."
+  }
 }
 
 run "public_target_groups_are_services_only" {
@@ -365,6 +371,26 @@ run "internal_alb_routes_media_paths" {
 
 run "media_target_groups_check_proxy_health_port" {
   command = plan
+
+  # media 루트는 이 두 출력을 remote_state 로 읽어 nginx 를 띄운다 — 대상 그룹과
+  # 상자가 한 값에서 나온다.
+  assert {
+    condition = (
+      output.media_proxy_ports == tomap({ live = 28181, playback = 28182, control = 28183, health = 28184 }) &&
+      output.media_health_path == "/example-proxy-health"
+    )
+    error_message = "출력 media_proxy_ports · media_health_path 가 입력과 다르다."
+  }
+
+  assert {
+    condition = alltrue([
+      for name, group in local.internal_target_groups :
+      group.port == output.media_proxy_ports[name] &&
+      group.health_check.port == tostring(output.media_proxy_ports["health"]) &&
+      group.health_check.path == output.media_health_path
+    ])
+    error_message = "Media 대상 그룹 포트 · 헬스가 출력 media_proxy_ports · media_health_path 에서 나오지 않는다."
+  }
 
   assert {
     condition     = toset(keys(local.internal_target_groups)) == toset(["live", "control", "playback"])
