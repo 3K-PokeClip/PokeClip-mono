@@ -18,8 +18,8 @@ Terraform 코드입니다. 설계 정본은 「HTTPS · 엣지 인프라 설계�
 `modules/{state_bucket,secret_shells,cloudfront_public_key}` ·
 `modules/{network,acm_certificate}` · `policy/guard` · `scripts` · `runbooks` ·
 `nonprod/{bootstrap,dev,dns-legacy}` ·
-`prod/{bootstrap,secrets,network,certs,registry}` 뿐이고, 나머지 루트는 계획의
-후속 PR 이 더합니다.
+`prod/{bootstrap,secrets,network,runtime,certs,registry}` 뿐이고, 나머지 루트는
+계획의 후속 PR 이 더합니다.
 
 ```
 infra/terraform/
@@ -42,6 +42,7 @@ infra/terraform/
     ├── secrets/                   # ② CloudFront 공개키 · 엣지 비밀 그릇 3개(값 · 리소스 정책 없음)
     ├── dns/                       # ③ 새 존 · 이전용 레코드 복사본 · dev 위임 NS(보류 — 결정 46 · 재개 키트)
     ├── network/                   # ④ VPC · 서브넷(2 AZ) · NAT 1개 · S3 Gateway EP
+    ├── runtime/                   # ⑤ 런타임 1단 — RDS · 앱 비밀 그릇 · 계약9 SNS/SQS · rewind 버킷 · SQL 실행기 스위치
     ├── certs/                     # ⑥ ACM 서울 · us-east-1 + 검증 레코드 한 벌(존 = 이름 조회)
     ├── registry/                  # ⑦ ECR 11개(CI 역할은 쓰기로 할 때 — 40차)
     ├── platform/                  # ⑧ 공개 ALB · WAF · 내부 ALB · NLB · ECS
@@ -50,9 +51,11 @@ infra/terraform/
     └── records/                   # ⑫ 운영 별칭 레코드
 ```
 
-⑤ · ⑪ 은 prod 런타임 트랙(별도)이 소유합니다. 그 트랙과 주고받는 출력
-이름 · 소유 경계는 [런타임 트랙 인터페이스 계약](CONTRACT-runtime.md)이
-정본입니다. 운영 측(ISB)이 만든 것(SCP ·
+⑤ · ⑪ 은 prod 런타임 트랙이 소유합니다 — ⑤ 런타임 1단은 `prod/runtime` 이고,
+⑪ 런타임 2단(rewind 버킷 정책 · Media ↔ auth SG 규칙)은 후속 PR 입니다. 그
+트랙과 주고받는 출력 이름 · 소유 경계는
+[런타임 트랙 인터페이스 계약](CONTRACT-runtime.md)이 정본입니다.
+운영 측(ISB)이 만든 것(SCP ·
 OU · 운영 측 역할)과 기존 수동 자원(IAM 사용자 · dev 자동 주체 · GitHub OIDC
 공급자)은 이 트리가 소유하지 않습니다. `infra/dev-media/` 는 이 트리 밖이며
 건드리지 않습니다.
@@ -62,7 +65,8 @@ prod 엣지 비밀의 값 입력 · 교체 절차는 [엣지 비밀 런북](runb
 
 운영 단계 절차는 `runbooks/` 에 있습니다 —
 [조직 · CT 도입(보류 — 결정 46)](runbooks/org-ct.md) ·
-[prod 산출물 올리기(이미지 푸시 · 랜딩 업로드)](runbooks/prod-artifacts.md).
+[prod 산출물 올리기(이미지 푸시 · 랜딩 업로드)](runbooks/prod-artifacts.md) ·
+[prod 런타임 1단-가(apply · SQL 적용)](runbooks/runtime-1a.md).
 운영 단계마다 먼저 [단계 직전 점검](runbooks/stage-precheck.md)을 합니다.
 2-3 판정(dev 자동 주체 → prod 권한 없음, 정책 시뮬레이터)은
 `scripts/precheck/principal-check.sh` 입니다.

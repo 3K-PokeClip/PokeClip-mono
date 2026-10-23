@@ -1,0 +1,140 @@
+# prod/runtime
+
+prod 런타임 1단(설계 3-1 의 ⑤)을 만드는 루트입니다 — RDS PostgreSQL 17 ·
+앱 비밀 그릇 일곱 · 계약9 SNS FIFO 주제와 SQS FIFO 큐 · rewind 버킷 · SQL
+실행기 스위치. platform · media · edge 는 이 루트의 상태(키
+`prod/runtime/terraform.tfstate`)를 `terraform_remote_state` 로 읽습니다.
+
+출력 이름과 소유 경계의 정본은
+[런타임 트랙 인터페이스 계약](../../CONTRACT-runtime.md)입니다. 이 루트가
+만들지 않는 것은 다음과 같습니다.
+
+*   SG 규칙(RDS ← SQL 실행기 5432 규칙만 예외 — 실행기가 켜진 동안), 비밀
+    읽기 · DB 접속 · 발행 · 수신 정책. 소비 루트가 자기 역할에 붙입니다.
+*   rewind 버킷 정책(OAC 허용문). edge 배포 ARN 이 있어야 해서 런타임 2단이
+    만듭니다.
+*   media DB 계정 · `stream_*` 스키마 · 권한. Terraform 이 아니라 `sql/` 과
+    [runtime-1a 런북](../../runbooks/runtime-1a.md)으로 적용합니다.
+*   비밀 값. 그릇만 만들고 값은 운영 단계에서 Terraform 밖으로 넣습니다
+    (guard R1 · R6). 마스터 비밀번호는 RDS 관리형 비밀이라 상태에 값이
+    없습니다.
+
+## 파일 배치
+
+파일 하나가 티켓 하나입니다(병렬로 개발할 때 충돌을 없애려고 — 다른 루트의
+`main.tf` 관례와 다른 이유). 출력은 그 파일 안에 둡니다. `variables.tf` 에는
+루트 공통 변수(`region` · `network_state_*`)만 두고, 티켓 변수는 각 파일
+머리에 둡니다. tflint 는 설정 파일이 없어 recommended 묶음으로 돌고, 표준
+모듈 구조 규칙(`terraform_standard_module_structure`)은 그 묶음에 없습니다.
+
+| 파일 | 담는 것 | 티켓 |
+|---|---|---|
+| `versions.tf` · `providers.tf` · `backend.tf` · `variables.tf` | 규약 · default_tags(`TerraformRoot = prod/runtime`) · 루트 공통 변수 | POK-304 |
+| `network_state.tf` | prod/network 원격 상태 → `vpc_id` · `private_subnet_ids` · `media_az` · `media_private_subnet_id` | POK-304 |
+| `rds.tf` | RDS 인스턴스 · 서브넷 그룹 · 파라미터 그룹 · 로그 그룹(30일) · RDS SG(규칙 0) | POK-304 |
+| `app_secrets.tf` | 앱 비밀 그릇 일곱과 서비스별 ARN 지도 | POK-305 |
+| `rewind_bucket.tf` | rewind 버킷(공개 차단 · SSE-S3 · 미완료 업로드 정리) | POK-308 |
+| `broadcast_events.tf` · `app_env.tf` | 계약9 주제 · 큐 · DLQ · 구독 · 큐 정책 · 서비스별 env | POK-309 |
+| `sql_runner.tf` | SQL 실행기 스위치(꺼짐이 기본) | POK-304 |
+| `sql/` | media DB 계정 · `stream_*` 스키마 · 권한 · 확인 · advisory 확인 SQL | POK-304 |
+| `tests/` | 파일마다 mock 시험 · 공유 mock 기본값(`tests/mocks/`) | — |
+
+## 적용
+
+절차 · 승인 지점은 [runtime-1a 런북](../../runbooks/runtime-1a.md)입니다.
+`terraform.tfvars` 가 필요 없습니다(기본값). 백엔드는 `backend.hcl.example` 을
+`backend.hcl` 로 복사하고 `bucket` 자리표시자 `<STATE_BUCKET_PROD>` 를
+`pokeclip-tfstate-prod-apne2` 로 고친 뒤 `init -backend-config=backend.hcl` 로
+엽니다(운영 단계 · kty 승인).
+
+provider 의 `default_tags` 네 키는 태그를 받는 자원에 붙습니다. mock 시험은
+`tags_all` 을 보지 못하므로 plan 으로 확인합니다. RDS 관리형 마스터 비밀에
+default_tags 가 붙는지는 미확인이고, 런북 「운영 확인」 에서 봅니다.
+
+## 출력
+
+소비 루트와의 계약입니다. 이름을 바꾸지 않습니다.
+
+| 출력 | 쓰는 곳 |
+|---|---|
+| `rds_sg_id` | platform — RDS ← auth · clip 규칙 · media — Media ↔ RDS 5432 규칙 |
+| `rds_endpoint` | media 사이드카 · janitor 의 DB 주소 · `app_env` 의 `DB_HOST`(호스트만 — 포트는 5432) |
+| `rds_db_name` | media · `app_env` 의 `POSTGRES_DB` |
+| `rds_resource_id` | media — 인스턴스 역할 `rds-db:connect` 의 대상 |
+| `rewind_bucket_name` · `rewind_bucket_arn` · `rewind_bucket_regional_domain_name` | edge — `rewind-s3` 오리진 · media — 업로드 정책 · 런타임 2단 — 버킷 정책 |
+| `app_secret_arns`(서비스 → env 이름 → 전체 ARN) | platform — `ecs_service.secrets` · 실행 역할 읽기 정책. auth 일곱 · clip 둘(`JWT_SECRET` · `INTERNAL_API_TOKEN`) · chat-collector 둘(`INTERNAL_API_TOKEN` · `CHZZK_CLIENT_SECRET`) · chat-detector 하나(`INTERNAL_API_TOKEN`) |
+| `media_secret_arns` | media — 인스턴스 역할 읽기 정책 · 응답기 시작 스크립트. `INTERNAL_API_TOKEN` 하나(앱과 같은 그릇) |
+| `app_env`(서비스 → env 이름 → 값) | platform — `ecs_service.environment`. 네 서버 모두 `DB_HOST` · `DB_PORT` · `POSTGRES_DB`, auth 는 `STREAM_KEY_SECRET_REF_PREFIX`, clip · chat-collector 는 자기 큐의 `BROADCAST_QUEUE_URL`. 수신 스위치 `BROADCAST_INTAKE_ENABLED` 와 `AUTH_BASE_URL` 은 여기 없고 2단 platform 이 넣는다 — 스위치가 빠지면 큐를 읽지 않아 편지가 보관 기간 뒤 사라진다 |
+| `broadcast_topic_arn` | media — 사이드카 역할의 `sns:Publish` 대상 |
+| `broadcast_queue_arns`(소비자 clip · chat → 큐 ARN) | platform — clip · chat-collector 의 수신 정책 대상 |
+| `rds_master_user_secret_arn` | 운영 전용(계약 아님) — SQL 실행기 역할 정책 · 런북 |
+| `sql_runner_instance_id` | 운영 전용(계약 아님) — send-command 대상. 꺼져 있으면 null |
+
+비밀은 전체 ARN 으로만 지정합니다. 이름 끝의 「-secret」 을 부분 ARN 의
+접미로 오인하는 혼동을 피합니다([prod/secrets](../secrets/README.md)).
+
+## SQL 실행기 스위치
+
+`sql_runner_enabled`(기본 `false`)를 켜면 SQL 을 RDS 에 적용할 작은 상자가
+생깁니다 — 역할 · 인스턴스 프로필(경로 `/pokeclip/prod/`) · SG · 규칙 셋 ·
+`t4g.micro` AL2023 arm64 인스턴스. 접속은 SSM send-command 뿐입니다(키 · 공인
+IP · 인그레스 없음, IMDSv2 필수, 루트 볼륨 암호화). 역할은 SSM 관리형 정책과
+관리형 마스터 비밀 하나의 `GetSecretValue` 만 가집니다.
+
+SQL 을 적용한 뒤 곧바로 끕니다. 켜진 동안 `iam:PassRole` 을 가진 dev 주체가
+이 프로필로 상자를 띄워 마스터 비밀을 읽을 수 있기 때문입니다. 이 노출의
+판정은 POK-365 입니다.
+
+## 대안
+
+| 대안 | 고르지 않은 이유 |
+|---|---|
+| 마스터 비밀을 고객 관리 키(CMK)로 암호화 | 키 정책 · 비용 · 삭제 대기라는 표면이 늘고, 실행기 역할에 kms 권한을 따로 줘야 한다. AWS 관리 키 `aws/secretsmanager` 로 충분하다 |
+| `engine_version` 을 부판까지 고정(`17.x`) | AWS 가 부판을 강제로 올리면(보안 · 지원 종료) 다음 apply 가 옛 부판으로 되돌리려다 실패한다. 메이저 `17` 만 고정하면 provider 가 점 경계 접두를 같은 판으로 본다 |
+| `lifecycle { ignore_changes = [engine_version] }` | 코드가 실제 판에 대해 거짓말을 하게 되고, 의도한 메이저 업그레이드 때 lifecycle 을 다시 풀어야 한다 |
+
+메이저만 고정한 대가로, 생성 때 부판은 AWS 의 17 기본 부판이라 최신이 아닐
+수 있습니다. 실제 값은 런북 「운영 확인」 에서 기록합니다. 이 전제(점 경계
+접두 비교)는 mock 시험으로 재지 않습니다.
+
+## 1단-나 이월
+
+런타임 1단-나(앱 서버 DB 사용자 등)로 넘긴 일입니다. 잊지 않도록 여기 둡니다
+(설계 9절 · Jira POK-304 코멘트와 같은 목록).
+
+1.  **advisory 함수 권한 회수(K7)** — `pg_advisory_lock` ·
+    `pg_advisory_xact_lock` 등을 PUBLIC 에서 회수할지 정합니다.
+    *   미룬 이유 — 쓰는 쪽이 둘입니다. ① 사이드카 `media_indexer` 가 컷오프
+        경로에서 `pg_advisory_xact_lock(hashtext('pc_cutoff_' || …))` 을
+        씁니다(`media/internal/index/store.go:206` 의 `lockCutoffStreamSQL`).
+        권한 정본은 「advisory 잠금은 PUBLIC 기본으로 충분」 을 전제로 GRANT 를
+        두지 않습니다(`media/internal/pgtest/role.go:41`). ② 3번 서버 넷의
+        Flyway 가 advisory 잠금으로 마이그레이션을 직렬화합니다(Flyway 일반
+        거동 — 3번 코드는 아직 대조하지 않음). PUBLIC 에서 회수만 하면 사이드카
+        컷오프가 42501 로 실패하고 앱 서버 부팅이 실패할 수 있습니다.
+    *   회수한다면 재부여 대상에 `media_indexer` 를 넣고, `role.go` 의 전제
+        주석과 권한 시험을 함께 고칩니다. 재부여를 잊으면 `sql/40_verify.sql`
+        의 `advisory_xact_lock_media_indexer` 단언이 깨집니다.
+    *   재료: 1단-가 운영에서 돌린 `sql/50_advisory_probe.sql` 의 출력(마스터로
+        회수가 되는지 · 문구 · `has_function_privilege`) — 볼트 raw 에
+        있습니다.
+    *   1단-나에서 할 일: ① 3번 서버 넷의 advisory 사용 실물 대조(Flyway 판 ·
+        코드) ② 회수하면 PUBLIC 에서 회수하고 필요한 계정에만 EXECUTE 를 다시
+        줌 ③ 회수하지 않으면 사유를 기록.
+1.  앱 서버 DB 사용자 · GRANT 와 `app_env` 의 `POSTGRES_USER`(POK-406 · 407
+    결과).
+1.  앱 서버 사용자에게 `public` 스키마 CREATE 부여(Flyway).
+1.  IAM 인증을 못 쓰는 대체 갈래면 `POSTGRES_PASSWORD` 그릇.
+1.  POK-365 — 런타임 자원을 2-3 판정 대상에 넣기(O7e 전 권장).
+1.  `scripts/put-secret-from-file.sh` 의 비밀 종류 확장(O7d 앞).
+1.  응답기 비밀 최소 권한(K1) — 응답기가 앱과 같은 `INTERNAL_API_TOKEN` 을
+    써서 Media 상자가 auth `/internal/**` 전부에 통하는 열쇠를 가집니다. 전용
+    토큰으로 옮길지는 3번과 다시 합의해야 합니다(auth
+    `FORWARD_HEADERS_STRATEGY` 제약).
+
+## See also
+
+*   [런타임 트랙 인터페이스 계약](../../CONTRACT-runtime.md)
+*   [runtime-1a 런북](../../runbooks/runtime-1a.md) ·
+    [단계 직전 점검](../../runbooks/stage-precheck.md)
+*   [ADR-0001 stream_segments DDL 소유권](../../../../docs/decisions/2026-08-01-stream-segments-ddl-ownership.md)
