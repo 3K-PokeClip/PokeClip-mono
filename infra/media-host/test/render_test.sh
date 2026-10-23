@@ -482,7 +482,8 @@ check_case_10() {
        MTX_API_URL: "http://127.0.0.1:9997",
        MTX_API_USER: "pokeclip-sidecar",
        MTX_API_PASS_FILE: "/run/secrets/mtx_api_pass",
-       S3_BUCKET: .rewind_bucket_name})}
+       S3_BUCKET: .rewind_bucket_name,
+       REWIND_PUBLIC_BASE_URL: .rewind_public_base_url})}
     + (if .janitor_enabled
        then {janitor: (db_env + {POSTGRES_USER: "media_janitor",
          JANITOR_ENABLED: "true", SEGMENT_ROOT: "/recordings"})}

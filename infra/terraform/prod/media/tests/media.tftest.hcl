@@ -276,6 +276,29 @@ run "passes_control_upstream_and_janitor_off" {
   }
 }
 
+# 사이드카 되감기 목록 앞머리 — 기본은 영상 CDN 주소(설계 4-5 /dvr/* → rewind-s3).
+run "defaults_rewind_public_base_url_to_media_cdn" {
+  command = plan
+
+  assert {
+    condition     = module.media_host.template_vars.rewind_public_base_url == "https://media.pokeclip.com"
+    error_message = "rewind_public_base_url 기본값이 https://media.pokeclip.com 이 아니다."
+  }
+}
+
+run "passes_rewind_public_base_url_input" {
+  command = plan
+
+  variables {
+    rewind_public_base_url = "https://cdn.example.com/rewind"
+  }
+
+  assert {
+    condition     = module.media_host.template_vars.rewind_public_base_url == "https://cdn.example.com/rewind"
+    error_message = "rewind_public_base_url 입력이 모듈에 그대로 가지 않는다."
+  }
+}
+
 # --- 출력(설계 3-2) ---
 
 # id 는 계산 속성이다. apply 로 돌려 mock 이 자원마다 다른 값을 만들게 한다.

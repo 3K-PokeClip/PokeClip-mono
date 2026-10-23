@@ -247,6 +247,82 @@ run "renders_compose_and_nginx_from_repository_templates" {
   }
 }
 
+# 사이드카는 S3_BUCKET 이 있으면 REWIND_PUBLIC_BASE_URL 이 없을 때 기동을 거부한다
+# (media/internal/config/config.go). 목록 줄 = 앞머리 + "/" + S3 키(dvr/…) — 기본은
+# 영상 CDN 주소다(설계 4-5 /dvr/* → rewind-s3).
+run "renders_rewind_public_base_url_for_sidecar" {
+  command = plan
+
+  assert {
+    condition = (
+      output.template_vars.rewind_public_base_url == "https://media.pokeclip.com" &&
+      strcontains(one([
+        for file in yamldecode(output.rendered_user_data["a"]).write_files :
+        file.content if file.path == "/etc/pokeclip-media/compose.yml"
+      ]), "REWIND_PUBLIC_BASE_URL: \"https://media.pokeclip.com\"")
+    )
+    error_message = "사이드카 env 에 REWIND_PUBLIC_BASE_URL(기본 https://media.pokeclip.com)이 없다."
+  }
+}
+
+run "passes_rewind_public_base_url_input" {
+  command = plan
+
+  variables {
+    rewind_public_base_url = "https://cdn.example.com/rewind"
+  }
+
+  assert {
+    condition = strcontains(one([
+      for file in yamldecode(output.rendered_user_data["a"]).write_files :
+      file.content if file.path == "/etc/pokeclip-media/compose.yml"
+    ]), "REWIND_PUBLIC_BASE_URL: \"https://cdn.example.com/rewind\"")
+    error_message = "rewind_public_base_url 입력이 사이드카 env 에 그대로 가지 않는다."
+  }
+}
+
+# 사이드카 검증(https · 끝 / 없음 · query · fragment · dot 세그먼트 거부)보다 먼저
+# plan 에서 막는다 — 상자에서 막히면 사이드카가 재시작을 되풀이한다.
+run "rejects_http_rewind_public_base_url" {
+  command = plan
+
+  variables {
+    rewind_public_base_url = "http://media.pokeclip.com"
+  }
+
+  expect_failures = [var.rewind_public_base_url]
+}
+
+run "rejects_trailing_slash_rewind_public_base_url" {
+  command = plan
+
+  variables {
+    rewind_public_base_url = "https://media.pokeclip.com/"
+  }
+
+  expect_failures = [var.rewind_public_base_url]
+}
+
+run "rejects_query_rewind_public_base_url" {
+  command = plan
+
+  variables {
+    rewind_public_base_url = "https://media.pokeclip.com?x=1"
+  }
+
+  expect_failures = [var.rewind_public_base_url]
+}
+
+run "rejects_dot_segment_rewind_public_base_url" {
+  command = plan
+
+  variables {
+    rewind_public_base_url = "https://media.pokeclip.com/a/../b"
+  }
+
+  expect_failures = [var.rewind_public_base_url]
+}
+
 run "toggles_optional_services_and_control_upstream" {
   command = plan
 
