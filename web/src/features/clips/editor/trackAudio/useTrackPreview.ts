@@ -107,7 +107,9 @@ export function useTrackPreview(options: {
           setStatus('unavailable');
           return;
         }
-        made = new TrackAudioPlayer(decoder, tracks);
+        made = new TrackAudioPlayer(decoder, tracks, () => {
+          if (!cancelled) setStatus('unavailable');
+        });
         made.setGains(gainsRef.current);
         setPlayer(made);
         setStatus('ready');

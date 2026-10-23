@@ -104,6 +104,34 @@ describe('useTrackPreview', () => {
     expect(result.current.levels?.tracks[0]![0]).toBeCloseTo(0.5);
   });
 
+  it('소리 문맥을 깨우지 못하면 「못 부름」으로 바꿔 영상 소리를 되살린다(PR #341 codex)', async () => {
+    const { ctx } = fakeContext();
+    Object.assign(ctx, {
+      state: 'suspended',
+      resume: vi.fn(() => Promise.reject(new DOMException('closed', 'InvalidStateError'))),
+    });
+    const node = Object.assign(video(), { readyState: 4 });
+    const { result } = renderHook(() =>
+      useTrackPreview({
+        streamId: 's-1',
+        baseMs: BASE,
+        window: WINDOW,
+        video: node,
+        createContext: () => ctx as never,
+      }),
+    );
+    await waitFor(() => expect(result.current.status).toBe('ready'));
+    expect(node.muted).toBe(true);
+
+    act(() => {
+      Object.assign(node, { paused: false });
+      node.dispatchEvent(new Event('playing'));
+    });
+    await waitFor(() => expect(result.current.status).toBe('unavailable'));
+    expect(ctx.resume).toHaveBeenCalled();
+    expect(node.muted).toBe(false);
+  });
+
   it('붙였다 떼었다 다시 붙여도(개발 모드 StrictMode) 닫힌 소리 문맥을 쓰지 않는다', async () => {
     // 닫힌 문맥은 시계가 0에 멈춰 소리가 안 나고, 어긋남 검사가 0.25초마다 다시 건다(로컬 실화면에서 소리 없음으로 재현)
     const made: ReturnType<typeof fakeContext>['ctx'][] = [];

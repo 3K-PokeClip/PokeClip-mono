@@ -69,6 +69,17 @@ const TRACKS: TrackPiece[][] = [
 ];
 
 describe('TrackAudioPlayer', () => {
+  it('멈춰 둔 소리 문맥을 깨우지 못하면 알린다: 영상 소리를 꺼 둔 채면 아무 소리도 안 난다(PR #341 codex)', async () => {
+    const { ctx } = fakeContext();
+    Object.assign(ctx, {
+      state: 'suspended',
+      resume: vi.fn(() => Promise.reject(new DOMException('closed', 'InvalidStateError'))),
+    });
+    const onBroken = vi.fn();
+    new TrackAudioPlayer(ctx, TRACKS, onBroken).play(0, 1);
+    await vi.waitFor(() => expect(onBroken).toHaveBeenCalledTimes(1));
+  });
+
   it('지금 자리부터 덩어리마다 틀 시각·시작점을 맞춰 그 트랙의 음량 노드에 잇는다', () => {
     const { ctx, sources } = fakeContext();
     const player = new TrackAudioPlayer(ctx, TRACKS);

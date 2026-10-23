@@ -20,6 +20,8 @@ export class TrackAudioPlayer {
   constructor(
     private readonly ctx: AudioContextLike,
     private readonly tracks: readonly (readonly TrackPiece[])[],
+    /** 소리 문맥을 깨우지 못했다. 미리 듣기를 접고 영상 소리로 물러나야 한다(영상은 꺼 둔 채라 아무 소리도 안 난다) */
+    private readonly onBroken: () => void = () => {},
   ) {
     this.gains = tracks.map(() => {
       const gain = ctx.createGain();
@@ -40,7 +42,7 @@ export class TrackAudioPlayer {
   play(sourceSeconds: number, rate: number): void {
     this.stop();
     // 브라우저는 사람의 조작 전에 만든 소리 문맥을 멈춰 둔다: 재생 버튼 뒤에 깨운다
-    if (this.ctx.state === 'suspended') void this.ctx.resume();
+    if (this.ctx.state === 'suspended') this.ctx.resume().catch(() => this.onBroken());
     const now = this.ctx.currentTime;
     this.tracks.forEach((pieces, i) => {
       const gain = this.gains[i]!; // 트랙마다 하나씩 만들었다(생성자)
