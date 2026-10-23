@@ -676,6 +676,10 @@ class BroadcastListControllerTest extends IntegrationTestSupport {
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.broadcasts[0].streamId").value("s-sick"))
                     .andExpect(jsonPath("$.broadcasts[0].title").value(nullValue()))
+                    // 플랫폼 칸은 그대로 나가고 시청자 수만 빈다(POK-397)
+                    .andExpect(jsonPath("$.broadcasts[0].platforms.length()").value(1))
+                    .andExpect(jsonPath("$.broadcasts[0].platforms[0].platform").value("CHZZK"))
+                    .andExpect(jsonPath("$.broadcasts[0].platforms[0].viewers").value(nullValue()))
                     .andExpect(jsonPath("$.broadcasts[0].timelineOriginAt").value(시작_시각.plusSeconds(5).toString()));
         }
     }
@@ -832,6 +836,321 @@ class BroadcastListControllerTest extends IntegrationTestSupport {
                 .andExpect(jsonPath("$.broadcasts[1].platform").value("CHZZK"));
     }
 
+    // ── 켜진 플랫폼과 플랫폼별 시청자 수(POK-397) ──
+
+    /**
+     * 한 방송을 치지직·SOOP에 같이 내보내면 {@code platforms}가 둘이고 플랫폼마다 시청자 수가 따로다. 묶음 표에 SOOP만 있어도 수집기가 치지직 값을
+     * 봤으면 편지 플랫폼(CHZZK)이 빠지지 않는다(계획 검증 M6: 치지직 목록 훑기가 실패한 분에는 수집기가 CHZZK를 묶음에 못 알리지만, 방송 정보
+     * 줄은 남는다). 옛 칸 {@code platform}은 편지 값 그대로다(L2).
+     */
+    @Test
+    void 동시_방송은_플랫폼마다_시청자_수가_따로_실린다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("s-dual", TestIds.STREAMER, "live");
+        묶음("s-dual", "SOOP");
+        COLLECTOR.respondWith(TITLES, 200, """
+                {"titles":{"s-dual":{"title":"치지직 제목","category":"LoL"}},
+                 "platforms":{"s-dual":[
+                   {"platform":"CHZZK","title":"치지직 제목","category":"LoL","viewers":100,"observedAt":"2026-08-25T00:05:00Z"},
+                   {"platform":"SOOP","title":null,"category":null,"viewers":30,"observedAt":"2026-08-25T00:04:00Z"}]}}""");
+
+        목록("?state=live")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.broadcasts[0].platform").value("CHZZK"))
+                .andExpect(jsonPath("$.broadcasts[0].platforms.length()").value(2))
+                .andExpect(jsonPath("$.broadcasts[0].platforms[0].platform").value("CHZZK"))
+                .andExpect(jsonPath("$.broadcasts[0].platforms[0].viewers").value(100))
+                .andExpect(jsonPath("$.broadcasts[0].platforms[0].observedAt").value("2026-08-25T00:05:00Z"))
+                .andExpect(jsonPath("$.broadcasts[0].platforms[1].platform").value("SOOP"))
+                .andExpect(jsonPath("$.broadcasts[0].platforms[1].viewers").value(30))
+                .andExpect(jsonPath("$.broadcasts[0].platforms[1].observedAt").value("2026-08-25T00:04:00Z"))
+                .andExpect(jsonPath("$.broadcasts[0].title").value("치지직 제목"));
+        assertThat(COLLECTOR.callCount()).as("시청자 수도 같은 한 번의 왕복에서 온다").isEqualTo(1);
+    }
+
+    /** 순서는 CHZZK → SOOP → 그 밖 이름순이다. 편지가 SOOP이어도 순서는 같고, 옛 칸은 편지 값(SOOP) 그대로다. */
+    @Test
+    void 플랫폼_순서는_치지직_숲_그_밖_이름순이고_옛_칸은_켜진_플랫폼_첫째다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_플랫폼으로_넣는다("s-order", "SOOP");
+        묶음("s-order", "YOUTUBE");
+        묶음("s-order", "AFREECA_OLD");
+        묶음("s-order", "CHZZK");
+        묶음("s-order", "SOOP");
+
+        목록("?state=live")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.broadcasts[0].platform").value("CHZZK")) // 편지 값(SOOP)과 다를 수 있다
+                .andExpect(jsonPath("$.broadcasts[0].platforms[*].platform").value(
+                        org.hamcrest.Matchers.contains("CHZZK", "SOOP", "AFREECA_OLD", "YOUTUBE")))
+                .andExpect(jsonPath("$.broadcasts[0].platforms[0].viewers").value(nullValue()))
+                .andExpect(jsonPath("$.broadcasts[0].platforms[0].observedAt").value(nullValue()));
+    }
+
+    /**
+     * 묶음 표가 비면 편지 플랫폼 하나다. 수집기가 그 플랫폼 값을 주면 실리고, 다른 방송 값은 안 섞인다. 묶음에 SOOP만 있고 수집기도 SOOP만 봤으면
+     * SOOP 하나다(편지 플랫폼 CHZZK를 안 붙인다, 아래 시험).
+     */
+    @Test
+    void 묶음이_없으면_편지_플랫폼_하나다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("s-one", TestIds.STREAMER, "live");
+        방송을_넣는다("s-two", TestIds.STREAMER, "live");
+        묶음("s-two", "SOOP");
+        COLLECTOR.respondWith(TITLES, 200, """
+                {"titles":{},"platforms":{
+                  "s-one":[{"platform":"CHZZK","title":null,"category":null,"viewers":7,"observedAt":"2026-08-25T00:01:00Z"}],
+                  "s-two":[{"platform":"SOOP","title":null,"category":null,"viewers":9,"observedAt":"2026-08-25T00:02:00Z"}]}}""");
+
+        목록("?state=live")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.broadcasts[1].streamId").value("s-one"))
+                .andExpect(jsonPath("$.broadcasts[1].platforms.length()").value(1))
+                .andExpect(jsonPath("$.broadcasts[1].platforms[0].platform").value("CHZZK"))
+                .andExpect(jsonPath("$.broadcasts[1].platforms[0].viewers").value(7))
+                .andExpect(jsonPath("$.broadcasts[0].streamId").value("s-two"))
+                .andExpect(jsonPath("$.broadcasts[0].platforms.length()").value(1))
+                .andExpect(jsonPath("$.broadcasts[0].platforms[0].platform").value("SOOP"))
+                .andExpect(jsonPath("$.broadcasts[0].platforms[0].viewers").value(9));
+    }
+
+    /**
+     * 편지 플랫폼은 ① 묶음 표가 비었거나 ② 묶음 표에 있거나 ③ 수집기가 그 플랫폼 값을 봤을 때만 넣는다(로컬 리뷰 1라운드).
+     * 🔴 Media는 지금 편지에 {@code platform}을 안 싣는다. 그래서 {@code broadcasts.platform}은 늘 CHZZK이고, 편지 플랫폼을 무조건 넣으면 SOOP만
+     * 하는 방송에도 시청자 수 없는 치지직이 붙는다. 옛 칸 {@code platform}은 켜진 플랫폼의 첫째다(편지 값 CHZZK가 아니다).
+     */
+    @Test
+    void 편지_플랫폼은_묶음이_비었거나_묶음이나_수집기에_있을_때만_넣는다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("s-soop-only", TestIds.STREAMER, "live");
+        묶음("s-soop-only", "SOOP");
+        방송을_넣는다("s-dual-seen", TestIds.STREAMER, "live");
+        묶음("s-dual-seen", "SOOP");
+        방송을_넣는다("s-empty", TestIds.STREAMER, "live");
+        방송을_넣는다("s-both", TestIds.STREAMER, "live");
+        묶음("s-both", "CHZZK");
+        묶음("s-both", "SOOP");
+        COLLECTOR.respondWith(TITLES, 200, """
+                {"titles":{},"platforms":{
+                  "s-soop-only":[{"platform":"SOOP","viewers":5,"observedAt":"2026-08-25T00:01:00Z"}],
+                  "s-dual-seen":[{"platform":"CHZZK","viewers":7,"observedAt":"2026-08-25T00:01:00Z"},
+                                 {"platform":"SOOP","viewers":8,"observedAt":"2026-08-25T00:01:00Z"}]}}""");
+
+        목록("?state=live")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.broadcasts[3].streamId").value("s-soop-only"))
+                .andExpect(jsonPath("$.broadcasts[3].platform").value("SOOP")) // 옛 칸은 켜진 플랫폼 첫째(재시험 결함)
+                .andExpect(jsonPath("$.broadcasts[3].platforms[*].platform").value(org.hamcrest.Matchers.contains("SOOP")))
+                .andExpect(jsonPath("$.broadcasts[2].streamId").value("s-dual-seen"))
+                .andExpect(jsonPath("$.broadcasts[2].platforms[*].platform").value(org.hamcrest.Matchers.contains("CHZZK", "SOOP")))
+                .andExpect(jsonPath("$.broadcasts[2].platforms[0].viewers").value(7))
+                .andExpect(jsonPath("$.broadcasts[1].streamId").value("s-empty"))
+                .andExpect(jsonPath("$.broadcasts[1].platforms[*].platform").value(org.hamcrest.Matchers.contains("CHZZK")))
+                .andExpect(jsonPath("$.broadcasts[0].streamId").value("s-both"))
+                .andExpect(jsonPath("$.broadcasts[0].platforms[*].platform").value(org.hamcrest.Matchers.contains("CHZZK", "SOOP")));
+    }
+
+    /**
+     * 제목은 <b>목록에 실린 플랫폼 중 켜진 것</b>에서 고른다. 켜짐 = 그 방송의 가장 최근 관측에서 3분 안에 관측된 플랫폼이다(웹의 「관측 3분 안」과
+     * 같은 폭, 끝난 방송도 마지막에 켜져 있던 것을 고르게 지금 시각이 아니라 마지막 관측에 잰다). 켜진 것 중 시청자가 많은 쪽, 같으면 CHZZK → SOOP
+     * 순서이고, 그 플랫폼에 제목이 없으면 다음 켜진 플랫폼이다. 켜진 플랫폼에 제목이 없으면 꺼진 플랫폼·옛 칸 제목도 안 쓴다. 카테고리는 고른 제목과
+     * 같은 플랫폼 값이다.
+     */
+    @Test
+    void 제목은_켜진_플랫폼_중_시청자_많은_쪽이고_꺼진_플랫폼_제목은_안_쓴다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_플랫폼으로_넣는다("s-t1", "SOOP");
+        방송을_플랫폼으로_넣는다("s-t2", "SOOP");
+        방송을_플랫폼으로_넣는다("s-t3", "SOOP");
+        묶음("s-t1", "CHZZK");
+        묶음("s-t2", "CHZZK");
+        묶음("s-t2", "SOOP");
+        COLLECTOR.respondWith(TITLES, 200, """
+                {"titles":{"s-t1":{"title":"치지직 제목","category":"LoL"},"s-t2":{"title":"옛 칸 둘","category":"Talk"},
+                           "s-t3":{"title":"옛 칸 제목","category":"Talk"}},
+                 "platforms":{
+                  "s-t1":[{"platform":"CHZZK","title":"치지직 제목","category":"LoL","viewers":1,"observedAt":"2026-08-25T00:09:00Z"},
+                          {"platform":"SOOP","title":"숲 제목","category":"Just Chatting","viewers":2,"observedAt":"2026-08-25T00:01:00Z"}],
+                  "s-t2":[{"platform":"CHZZK","title":"치지직 둘","category":"LoL","viewers":1,"observedAt":"2026-08-25T00:09:00Z"},
+                          {"platform":"SOOP","title":null,"category":null,"viewers":2,"observedAt":"2026-08-25T00:08:00Z"}],
+                  "s-t3":[{"platform":"SOOP","title":"  ","category":null,"viewers":2,"observedAt":"2026-08-25T00:01:00Z"}]}}""");
+
+        목록("?state=live")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.broadcasts[2].streamId").value("s-t1"))
+                .andExpect(jsonPath("$.broadcasts[2].title").value("치지직 제목")) // SOOP은 8분 전 관측이라 꺼짐
+                .andExpect(jsonPath("$.broadcasts[2].category").value("LoL"))
+                .andExpect(jsonPath("$.broadcasts[1].streamId").value("s-t2"))
+                .andExpect(jsonPath("$.broadcasts[1].title").value("치지직 둘")) // 시청자 많은 SOOP에 제목이 없으면 다음 켜진 플랫폼
+                .andExpect(jsonPath("$.broadcasts[1].category").value("LoL"))
+                .andExpect(jsonPath("$.broadcasts[0].streamId").value("s-t3"))
+                .andExpect(jsonPath("$.broadcasts[0].title").value(nullValue())) // 켜진 SOOP에 제목이 없으면 옛 칸도 안 쓴다
+                .andExpect(jsonPath("$.broadcasts[0].category").value(nullValue()));
+    }
+
+    /**
+     * 웹 PR3b 로컬 리뷰 결함(POK-397): 치지직으로 잠깐 켰다 끄고 SOOP으로만 방송하면 묶음에 CHZZK가 남고 편지 플랫폼은 늘 CHZZK라, 「편지 플랫폼 먼저」
+     * 규칙이 꺼진 치지직 제목을 골랐다. 꺼진 플랫폼은 시청자가 많았어도 제목 후보가 아니다.
+     */
+    @Test
+    void 치지직을_잠깐_켰다_끄고_SOOP으로만_방송하면_SOOP_제목이다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("s-switch", TestIds.STREAMER, "live");
+        묶음("s-switch", "CHZZK");
+        묶음("s-switch", "SOOP");
+        COLLECTOR.respondWith(TITLES, 200, """
+                {"titles":{"s-switch":{"title":"숲 제목","category":null}},
+                 "platforms":{"s-switch":[
+                   {"platform":"CHZZK","title":"꺼진 치지직 제목","category":"LoL","viewers":50,"observedAt":"2026-08-25T00:02:00Z"},
+                   {"platform":"SOOP","title":"숲 제목","category":null,"viewers":3,"observedAt":"2026-08-25T00:10:00Z"}]}}""");
+
+        목록("?state=live")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.broadcasts[0].title").value("숲 제목"))
+                .andExpect(jsonPath("$.broadcasts[0].category").value(nullValue()))
+                // 옛 칸(PR3b 전 웹 홈 태그)도 같은 규칙이다. 묶음 순서의 첫째(CHZZK)면 SOOP 제목에 치지직 태그가 붙는다(로컬 리뷰 4라운드)
+                .andExpect(jsonPath("$.broadcasts[0].platform").value("SOOP"))
+                .andExpect(jsonPath("$.broadcasts[0].platforms[*].platform").value(
+                        org.hamcrest.Matchers.contains("CHZZK", "SOOP")));
+    }
+
+    /** 켜짐 폭의 끝: 마지막 관측에서 정확히 3분 전 관측은 켜짐, 3분 1초 전은 꺼짐이다. */
+    @Test
+    void 마지막_관측에서_정확히_3분_전은_켜짐이고_그보다_앞은_꺼짐이다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("s-edge-in", TestIds.STREAMER, "live");
+        묶음("s-edge-in", "CHZZK");
+        묶음("s-edge-in", "SOOP");
+        방송을_넣는다("s-edge-out", TestIds.STREAMER, "live");
+        묶음("s-edge-out", "CHZZK");
+        묶음("s-edge-out", "SOOP");
+        COLLECTOR.respondWith(TITLES, 200, """
+                {"titles":{},
+                 "platforms":{
+                  "s-edge-in":[{"platform":"CHZZK","title":"치지직","viewers":1,"observedAt":"2026-08-25T00:10:00Z"},
+                               {"platform":"SOOP","title":"숲","viewers":9,"observedAt":"2026-08-25T00:07:00Z"}],
+                  "s-edge-out":[{"platform":"CHZZK","title":"치지직","viewers":1,"observedAt":"2026-08-25T00:10:00Z"},
+                                {"platform":"SOOP","title":"숲","viewers":9,"observedAt":"2026-08-25T00:06:59Z"}]}}""");
+
+        목록("?state=live")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.broadcasts[1].streamId").value("s-edge-in"))
+                .andExpect(jsonPath("$.broadcasts[1].title").value("숲"))
+                .andExpect(jsonPath("$.broadcasts[1].platform").value("SOOP"))
+                .andExpect(jsonPath("$.broadcasts[0].streamId").value("s-edge-out"))
+                .andExpect(jsonPath("$.broadcasts[0].title").value("치지직"))
+                .andExpect(jsonPath("$.broadcasts[0].platform").value("CHZZK"));
+    }
+
+    /** 둘 다 켜져 있으면 시청자가 많은 쪽 제목·옛 칸 {@code platform}이다(편지 플랫폼 CHZZK가 먼저가 아니다). 같으면 CHZZK → SOOP. */
+    @Test
+    void 동시_방송이면_시청자_많은_플랫폼_제목과_옛_칸이고_같으면_치지직이다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("s-more-soop", TestIds.STREAMER, "live");
+        묶음("s-more-soop", "CHZZK");
+        묶음("s-more-soop", "SOOP");
+        방송을_넣는다("s-tie", TestIds.STREAMER, "live");
+        묶음("s-tie", "CHZZK");
+        묶음("s-tie", "SOOP");
+        COLLECTOR.respondWith(TITLES, 200, """
+                {"titles":{},
+                 "platforms":{
+                  "s-more-soop":[{"platform":"CHZZK","title":"치지직 제목","category":"LoL","viewers":10,"observedAt":"2026-08-25T00:10:00Z"},
+                                 {"platform":"SOOP","title":"숲 제목","category":null,"viewers":40,"observedAt":"2026-08-25T00:09:00Z"}],
+                  "s-tie":[{"platform":"SOOP","title":"숲 같음","category":null,"viewers":5,"observedAt":"2026-08-25T00:10:00Z"},
+                           {"platform":"CHZZK","title":"치지직 같음","category":"LoL","viewers":5,"observedAt":"2026-08-25T00:10:00Z"}]}}""");
+
+        목록("?state=live")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.broadcasts[1].streamId").value("s-more-soop"))
+                .andExpect(jsonPath("$.broadcasts[1].title").value("숲 제목"))
+                .andExpect(jsonPath("$.broadcasts[1].platform").value("SOOP"))
+                .andExpect(jsonPath("$.broadcasts[0].streamId").value("s-tie"))
+                .andExpect(jsonPath("$.broadcasts[0].title").value("치지직 같음"))
+                .andExpect(jsonPath("$.broadcasts[0].platform").value("CHZZK"));
+    }
+
+    /**
+     * 재시험 결함(POK-397): SOOP으로만 방송하는데 치지직 세션이 붙어 있으면 옛 칸 제목이 치지직 설정 제목이었다. 묶음 [SOOP] · 수집기 SOOP만이면
+     * 목록 [SOOP], 제목은 SOOP 쪽, 옛 칸 {@code platform}도 SOOP이다. 옛 칸 제목(치지직)은 안 쓴다.
+     */
+    @Test
+    void SOOP_전용_방송은_SOOP_제목과_SOOP_플랫폼만_싣는다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("s-soop", TestIds.STREAMER, "live");
+        묶음("s-soop", "SOOP");
+        COLLECTOR.respondWith(TITLES, 200, """
+                {"titles":{"s-soop":{"title":"꺼진 치지직 제목","category":"LoL"}},
+                 "platforms":{"s-soop":[{"platform":"SOOP","title":"숲 제목","category":null,"viewers":12,
+                                         "observedAt":"2026-08-25T00:05:00Z"}]}}""");
+
+        목록("?state=live")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.broadcasts[0].platform").value("SOOP"))
+                .andExpect(jsonPath("$.broadcasts[0].platforms[*].platform").value(org.hamcrest.Matchers.contains("SOOP")))
+                .andExpect(jsonPath("$.broadcasts[0].title").value("숲 제목"))
+                .andExpect(jsonPath("$.broadcasts[0].category").value(nullValue()));
+    }
+
+    /**
+     * 목록에 안 실린 플랫폼(수집기는 봤지만 묶음에 없고 편지 플랫폼도 아님, 예: clip 알림이 아직 실패 중)의 제목은 안 쓴다. 제목과 태그가 다른
+     * 플랫폼을 가리키면 화면이 거짓말을 한다(주입 T1이 처음엔 초록이라 넣었다).
+     */
+    @Test
+    void 실리지_않은_플랫폼의_제목은_안_쓴다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("s-unlisted", TestIds.STREAMER, "live");
+        묶음("s-unlisted", "CHZZK");
+        COLLECTOR.respondWith(TITLES, 200, """
+                {"titles":{"s-unlisted":{"title":"숲 제목","category":null}},
+                 "platforms":{"s-unlisted":[
+                   {"platform":"CHZZK","title":null,"viewers":3,"observedAt":"2026-08-25T00:05:00Z"},
+                   {"platform":"SOOP","title":"숲 제목","viewers":4,"observedAt":"2026-08-25T00:05:00Z"}]}}""");
+
+        목록("?state=live")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.broadcasts[0].platforms[*].platform").value(org.hamcrest.Matchers.contains("CHZZK")))
+                .andExpect(jsonPath("$.broadcasts[0].title").value(nullValue()));
+    }
+
+    /** 옛 수집기(응답에 {@code platforms}가 없다)면 지금과 같다: 제목은 옛 칸, 플랫폼은 편지 값 하나, 시청자 수는 null. */
+    @Test
+    void 옛_수집기_응답이면_지금과_같다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("s-legacy", TestIds.STREAMER, "live");
+        COLLECTOR.respondWith(TITLES, 200, "{\"titles\":{\"s-legacy\":{\"title\":\"옛 제목\",\"category\":\"LoL\"}}}");
+
+        목록("?state=live")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.broadcasts[0].title").value("옛 제목"))
+                .andExpect(jsonPath("$.broadcasts[0].category").value("LoL"))
+                .andExpect(jsonPath("$.broadcasts[0].platform").value("CHZZK"))
+                .andExpect(jsonPath("$.broadcasts[0].platforms.length()").value(1))
+                .andExpect(jsonPath("$.broadcasts[0].platforms[0].platform").value("CHZZK"))
+                .andExpect(jsonPath("$.broadcasts[0].platforms[0].viewers").value(nullValue()));
+    }
+
+    /** 수집기 응답의 플랫폼 원소 하나가 이상해도 그 원소만 버린다. 나머지 방송·원소와 목록은 그대로 나간다. */
+    @Test
+    void 플랫폼_원소가_이상하면_그_원소만_버린다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("s-odd", TestIds.STREAMER, "live");
+        묶음("s-odd", "SOOP");
+        COLLECTOR.respondWith(TITLES, 200, """
+                {"titles":{},"platforms":{"s-odd":[
+                  {"platform":7,"viewers":1},
+                  {"platform":"CHZZK","viewers":"많음","observedAt":"어제"},
+                  {"platform":"SOOP","viewers":4,"observedAt":"2026-08-25T00:03:00Z"}]}}""");
+
+        목록("?state=live")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.broadcasts[0].platforms[0].platform").value("CHZZK"))
+                .andExpect(jsonPath("$.broadcasts[0].platforms[0].viewers").value(nullValue()))
+                .andExpect(jsonPath("$.broadcasts[0].platforms[0].observedAt").value(nullValue()))
+                .andExpect(jsonPath("$.broadcasts[0].platforms[1].platform").value("SOOP"))
+                .andExpect(jsonPath("$.broadcasts[0].platforms[1].viewers").value(4));
+    }
+
     // ── 접속 중인 편집자 수(POK-398) ── 셈 규칙은 EditorsOnlineCountTest, 실제 연결은 EditorsOnlineEndToEndTest가 잰다
 
     /**
@@ -897,6 +1216,18 @@ class BroadcastListControllerTest extends IntegrationTestSupport {
                 startedAt == null ? null : OffsetDateTime.ofInstant(startedAt, ZoneOffset.UTC),
                 endedAt == null ? null : OffsetDateTime.ofInstant(endedAt, ZoneOffset.UTC),
                 vodExpiresAt == null ? null : OffsetDateTime.ofInstant(vodExpiresAt, ZoneOffset.UTC));
+    }
+
+    private void 방송을_플랫폼으로_넣는다(String streamId, String platform) {
+        jdbc.update("""
+                        INSERT INTO broadcasts (stream_id, streamer_id, status, started_at, last_sequence, platform)
+                        VALUES (?, ?, 'live', ?, 1, ?)""",
+                streamId, TestIds.STREAMER, OffsetDateTime.ofInstant(시작_시각, ZoneOffset.UTC), platform);
+    }
+
+    private void 묶음(String streamId, String platform) {
+        jdbc.update("INSERT INTO broadcast_platforms (stream_id, platform, first_seen_at, last_seen_at) "
+                + "VALUES (?, ?, now(), now())", streamId, platform);
     }
 
     private void 조각을_넣는다(String streamId, long seq, long startPtsMs, Instant playbackPdt, Instant wall) {

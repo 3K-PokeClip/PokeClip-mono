@@ -2,10 +2,10 @@ spring:
   task:
     scheduling:
       pool:
-        # @Scheduled가 다섯이다(끝난 방송 치우기 · 재부착 · 방송 정보 · 탈퇴 채널 정리 · 60일 정리). 기본 1이면 방송 정보가
-        # 목록을 훑는 동안 재부착이 밀린다(ReattachScheduler 주석이 예고한 자리). 정리 둘이 큰 표를 지우는 동안에도
-        # 앞의 셋이 안 밀리게 하나씩 몫을 준다.
-        size: 5
+        # @Scheduled가 여섯이다(끝난 방송 치우기 · 재부착 · 방송 정보 · 탈퇴 채널 정리 · 60일 정리 · SOOP 지켜보기, POK-397). 기본 1이면
+        # 방송 정보가 목록을 훑는 동안 재부착이 밀린다(ReattachScheduler 주석이 예고한 자리). 정리 둘이 큰 표를 지우는 동안에도
+        # 앞의 셋이 안 밀리게 하나씩 몫을 준다. SOOP 지켜보기는 방송마다 SOOP을 부르므로 방송 정보와 몫을 가른다.
+        size: 6
   application:
     name: pokeclip-chat-collector
   datasource:
@@ -264,6 +264,23 @@ pokeclip:
     # 재부착과 같은 clip 주소를 받되 값은 따로 든다 — 재부착이 꺼진 배포에서도 중계는 켤 수 있다.
     # 켜져 있는데 비면 ClipRelayClient 생성자가 부팅을 죽인다.
     clip-base-url: ${CLIP_BASE_URL:http://localhost:8081}
+  platforms:
+    # clip 내부 창구 주소(POK-397). 수집기가 그 플랫폼에서 방송을 확인하면 clip 플랫폼 묶음(PUT …/platforms/{P})에 알린다.
+    # 재부착·중계와 같은 환경변수를 받되 값은 따로 든다. 방송 정보(liveinfo)가 켜져 있는데 비면 ClipPlatformClient 생성자가 부팅을 죽인다.
+    clip-base-url: ${CLIP_BASE_URL:http://localhost:8081}
+  soop:
+    # SOOP 방송 지켜보기(POK-397). 켜면 SOOP 연동 스트리머의 방송을 1분마다 확인해 방송 정보(platform SOOP)를 남기고 화면에 밀고
+    # clip 플랫폼 묶음에 SOOP을 알린다. 채팅 세션 자리는 안 쓴다(SOOP 채팅은 PR4).
+    # 🔴 기본 꺼짐. PR3b(웹이 플랫폼별로 읽기) 배포 뒤에 켠다. 먼저 켜면 플랫폼을 모르는 화면의 숫자·그래프가 두 플랫폼 사이를 오간다.
+    # 켜면 내부 토큰(INTERNAL_API_TOKEN)·auth 주소·clip 주소가 필요하다(비면 부팅이 죽는다).
+    watch-enabled: ${SOOP_WATCH_ENABLED:false}
+    # 켜면 방송 여부 응답 data의 키 이름과 status 값만 INFO 한 줄(soop.live.diagnose)로 남긴다. 값은 안 찍는다. 실방송 진단용, 기본 꺼짐.
+    diagnose-response: ${SOOP_DIAGNOSE_RESPONSE:false}
+    api-base-uri: ${SOOP_API_BASE_URI:https://openapi.sooplive.com}
+    interval: PT1M
+    initial-delay: PT20S
+    # 동시에 지켜보는 방송 상한(설계 전제 동시 사용자 100명). 한 틱 시간이 이것에 비례한다(방송마다 SOOP 시한 접속 1초·읽기 2초 최대 두 번).
+    max-watched: 100
   liveinfo:
     # 켜면 걷고 있는 방송마다 1분에 한 번 제목·태그·카테고리·시청자 수를 broadcast_info에 남기고
     # (중계가 켜져 있으면) 화면에 broadcast-info로 민다(POK-234 PR-C). 기본 꺼짐.

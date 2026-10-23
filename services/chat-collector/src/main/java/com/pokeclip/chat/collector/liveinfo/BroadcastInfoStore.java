@@ -80,6 +80,41 @@ public class BroadcastInfoStore {
                      ORDER BY b.observed_at DESC, b.id DESC
                      LIMIT 1) i""";
 
+    /**
+     * 여러 방송의 플랫폼마다 최신 값(POK-397). 한 방송을 치지직·SOOP에 같이 내보내면 줄이 번갈아 쌓이므로 플랫폼마다 따로 고른다.
+     * 시청자 수·관측 시각은 그 플랫폼의 <b>최신 줄</b>이고 제목 조건이 없다: SOOP은 방송 중이 아니거나 칸을 못 얻으면 제목 없이
+     * 시청자 수만 남을 수 있는데, 제목 있는 줄에서 꺼내면 그 플랫폼 숫자가 통째로 사라진다(계획 검증 M1). 제목·카테고리는
+     * {@link #LATEST_TITLES}와 같은 이유로 그 플랫폼의 <b>제목 있는</b> 최신 줄 것이다(없으면 null).
+     *
+     * <p>방송 × 플랫폼 열거를 {@code LATERAL}로 돈다. {@code DISTINCT ON (stream_id, platform)}은 방송의 줄을 전부 읽어 정렬해 한 장
+     * 100방송에 200ms쯤이라 버렸다(계획 검증 실측). V317 색인 {@code (stream_id, platform, observed_at)}이 있어야 플랫폼까지 범위로
+     * 찾는다. 없으면 SOOP을 중간에 끈 방송·SOOP 없는 방송에서 그 방송 이력을 처음까지 훑는다. {@code BroadcastTitlePlanTest}가 잰다.
+     * 줄이 없는 (방송, 플랫폼)은 결과에 없다. 순서는 방송은 받은 순, 플랫폼은 열거 순이다.
+     */
+    static final String LATEST_BY_PLATFORM = """
+            SELECT s.stream_id, p.platform, l.observed_at, l.concurrent_users, t.live_title, t.category
+              FROM unnest(?::text[]) WITH ORDINALITY AS s(stream_id, ord)
+              CROSS JOIN unnest(?::text[]) WITH ORDINALITY AS p(platform, pord)
+              CROSS JOIN LATERAL (
+                    SELECT b.observed_at, b.concurrent_users
+                      FROM broadcast_info b
+                     WHERE b.stream_id = s.stream_id
+                       AND b.platform = p.platform
+                     ORDER BY b.observed_at DESC, b.id DESC
+                     LIMIT 1) l
+              LEFT JOIN LATERAL (
+                    SELECT b.live_title, b.category
+                      FROM broadcast_info b
+                     WHERE b.stream_id = s.stream_id
+                       AND b.platform = p.platform
+                       AND b.live_title ~ '\\S'
+                     ORDER BY b.observed_at DESC, b.id DESC
+                     LIMIT 1) t ON true
+             ORDER BY s.ord, p.pord""";
+
+    private static final String[] PLATFORMS =
+            java.util.Arrays.stream(Platform.values()).map(Platform::name).toArray(String[]::new);
+
     private static final RowMapper<BroadcastInfo> MAPPER = BroadcastInfoStore::toInfo;
 
     private final JdbcTemplate jdbc;
@@ -138,6 +173,38 @@ public class BroadcastInfoStore {
 
     /** 방송 하나의 마지막 제목과 같은 관측의 카테고리. 카테고리는 비어 있을 수 있다 */
     public record Title(String title, String category) {
+    }
+
+    /**
+     * @return 방송 번호 → 플랫폼마다 최신 값(플랫폼 열거 순). 관측이 하나도 없는 방송은 맵에 없다. 제목 앞뒤 공백은 깎는다
+     */
+    public Map<String, List<PlatformLatest>> latestByPlatform(List<String> streamIds) {
+        Map<String, List<PlatformLatest>> latest = new LinkedHashMap<>();
+        if (streamIds.isEmpty()) {
+            return latest;
+        }
+        jdbc.query(connection -> {
+            java.sql.PreparedStatement ps = connection.prepareStatement(LATEST_BY_PLATFORM);
+            ps.setArray(1, connection.createArrayOf("text", streamIds.toArray(String[]::new)));
+            ps.setArray(2, connection.createArrayOf("text", PLATFORMS));
+            return ps;
+        }, rs -> {
+            String title = rs.getString("live_title");
+            latest.computeIfAbsent(rs.getString("stream_id"), id -> new ArrayList<>()).add(new PlatformLatest(
+                    Platform.valueOf(rs.getString("platform")),
+                    title == null ? null : title.strip(),
+                    rs.getString("category"),
+                    rs.getObject("concurrent_users", Integer.class),
+                    rs.getTimestamp("observed_at").toInstant()));
+        });
+        return latest;
+    }
+
+    /**
+     * 한 방송의 한 플랫폼 최신 값. {@code viewers}·{@code observedAt}은 최신 줄, {@code title}·{@code category}는 제목 있는 최신 줄이라
+     * 두 시점이 다를 수 있다. {@code viewers}의 null은 「못 찾았다」이지 0명이 아니다({@link BroadcastInfo}).
+     */
+    public record PlatformLatest(Platform platform, String title, String category, Integer viewers, Instant observedAt) {
     }
 
     /** @param max 이 값보다 많으면 <b>먼 과거부터</b> 잘린다(위 {@code SERIES} 주석) */

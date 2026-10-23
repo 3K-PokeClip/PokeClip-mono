@@ -9,6 +9,7 @@ import com.pokeclip.chat.collector.broadcast.attach.LaneKey;
 import com.pokeclip.chat.collector.broadcast.attach.StreamerSerialExecutor;
 import com.pokeclip.chat.collector.session.SessionRegistry;
 import com.pokeclip.chat.collector.status.CollectionState;
+import com.pokeclip.chat.collector.soop.SoopWatch;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -140,6 +141,8 @@ public class Reattacher {
     private final Supplier<Instant> clock;
     /** 떼기 유예(POK-244). null이면 떼지 않는다 — 옛 생성자와 같은 뜻이다. */
     private final Duration detachGrace;
+    /** SOOP 방송 지켜보기(POK-397). 명부의 줄을 넣고, 떼기 회차에 명부에 없는 것을 뺀다. */
+    private final SoopWatch soop;
 
     /**
      * 숫자로 못 읽은 스트리머 식별자의 수. <b>1번이 식별자 체계를 바꾸면 모든 방송이 이 길이다</b> —
@@ -157,6 +160,13 @@ public class Reattacher {
     public Reattacher(LiveBroadcastClient client, SessionRegistry registry, EndedStreamStore store,
                       GapMeasurer measurer, StreamerSerialExecutor lanes,
                       BroadcastSessions sessions, Supplier<Instant> clock, Duration detachGrace) {
+        this(client, registry, store, measurer, lanes, sessions, clock, detachGrace, SoopWatch.NONE);
+    }
+
+    public Reattacher(LiveBroadcastClient client, SessionRegistry registry, EndedStreamStore store,
+                      GapMeasurer measurer, StreamerSerialExecutor lanes,
+                      BroadcastSessions sessions, Supplier<Instant> clock, Duration detachGrace, SoopWatch soop) {
+        this.soop = soop;
         this.client = client;
         this.registry = registry;
         this.store = store;
@@ -254,9 +264,12 @@ public class Reattacher {
                 .filter(item -> !attached.contains(item.streamId()))
                 .toList();
         detachMissing(live, readable, nullRows + missingStreamIds);
-        // 메모 조회는 한 번이다 — 낱개로 물으면 방송 수만큼 왕복한다.
+        // 메모 조회는 한 번이다 — 낱개로 물으면 방송 수만큼 왕복한다. SOOP 지켜보기가 켜져 있으면 붙은 방송까지 넣으므로 읽을 수 있는 줄 전부를,
+        // 꺼져 있으면(기본) 옛 범위 그대로 후보만 묻는다(PR #363 봇: 꺼진 배포에서 붙은 방송 수만큼 조회가 커지지 않게).
+        List<LiveBroadcasts.Item> asked = soop == SoopWatch.NONE ? candidates : readable;
         Map<String, EndedStream> memos = store.findAll(
-                candidates.stream().map(LiveBroadcasts.Item::streamId).toList());
+                asked.stream().map(LiveBroadcasts.Item::streamId).toList());
+        watchSoop(readable, memos);
 
         int submitted = 0;
         int deferred = 0;
@@ -300,6 +313,38 @@ public class Reattacher {
         }
         log.info("chat.reattach.swept received={} candidates={} submitted={} deferred={} relink={}",
                 live.broadcasts().size(), candidates.size(), submitted, deferred, relink);
+    }
+
+    /**
+     * 명부의 <b>모든</b> 읽을 수 있는 줄을 SOOP 지켜보기에 넣는다(POK-397 계획 검증 M4). 치지직이 붙어 있어도(위 후보 거름망을 타면 SOOP을 못 넣은
+     * 채 붙은 방송이 영영 안 들어온다), 치지직 포기 메모가 있어도 넣는다. 종료 메모만 뺀다. 넣기는 멱등이고 I/O가 없다.
+     */
+    private void watchSoop(List<LiveBroadcasts.Item> readable, Map<String, EndedStream> memos) {
+        if (soop == SoopWatch.NONE) {
+            return;   // 꺼진 배포(기본)에서 아래 다시 보기 조회를 안 태운다
+        }
+        List<LiveBroadcasts.Item> toWatch = new ArrayList<>();
+        for (LiveBroadcasts.Item item : readable) {
+            EndedStream memo = memos.get(item.streamId());
+            if ((memo == null || memo.stopped()) && StreamerId.parse(item.streamerId()).valid()) {
+                toWatch.add(item);
+            }
+        }
+        if (toWatch.isEmpty()) {
+            return;
+        }
+        // 넣기 직전에 종료 메모를 다시 본다(감사 2회차 n5). 위 묶음 조회 뒤 종료 편지가 메모를 쓰고 지켜보기를 빼면, 묶음만 믿은 넣기가 끝난 방송을
+        // 되살린다. 후보를 모아 묶음 조회 한 번으로 묻는다(지켜보기 틱의 거르기와 같은 조회, 줄마다 낱개로 묻지 않는다). 이 조회와 넣는 순간 사이의
+        // 좁은 틈은 지켜보기 틱이 종료 메모로 다시 걸러 메운다.
+        Map<String, EndedStream> fresh = store.findAll(toWatch.stream().map(LiveBroadcasts.Item::streamId).toList());
+        for (LiveBroadcasts.Item item : toWatch) {
+            EndedStream memo = fresh.get(item.streamId());
+            if (memo != null && !memo.stopped()) {
+                continue;
+            }
+            soop.watch(item.streamId(), StreamerId.parse(item.streamerId()).value(),
+                    item.startedAt() != null ? item.startedAt() : Instant.EPOCH);
+        }
     }
 
     /** 연동을 다시 하면 풀리는 사유로 포기한 메모인가. 종료 메모는 사유가 없어 false다. */
@@ -353,6 +398,8 @@ public class Reattacher {
             }
         }
         Instant cutoff = clock.get().minus(detachGrace);
+        // SOOP 지켜보기도 같은 판정으로 치운다(L7). 등록부 세션이 없는 SOOP 단독 방송은 아래 반복에 안 걸린다.
+        soop.retainListed(listedStreams, cutoff);
         int submitted = 0;
         int deferred = 0;
         for (SessionRegistry.ActiveStart mine : registry.activeStreamStarts()) {

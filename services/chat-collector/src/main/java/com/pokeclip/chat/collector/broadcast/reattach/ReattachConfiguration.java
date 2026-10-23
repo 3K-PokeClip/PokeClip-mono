@@ -6,6 +6,7 @@ import com.pokeclip.chat.collector.broadcast.attach.StreamerSerialExecutor;
 import com.pokeclip.chat.collector.broadcast.intake.IntakeProperties;
 import com.pokeclip.chat.collector.link.LinkProperties;
 import com.pokeclip.chat.collector.session.SessionRegistry;
+import com.pokeclip.chat.collector.soop.SoopWatch;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
@@ -77,10 +78,10 @@ public class ReattachConfiguration {
     public Reattacher reattacher(LiveBroadcastClient client, SessionRegistry registry,
                                  EndedStreamStore store, GapMeasurer measurer,
                                  StreamerSerialExecutor lanes, BroadcastSessions sessions,
-                                 ReattachProperties reattach) {
+                                 ReattachProperties reattach, SoopWatch soop) {
         // 떼기(POK-244)는 켜졌을 때만 유예를 넘긴다 — null이면 Reattacher가 떼지 않는다.
         return new Reattacher(client, registry, store, measurer, lanes, sessions, Instant::now,
-                reattach.detachGraceOrNull());
+                reattach.detachGraceOrNull(), soop);
     }
 
     @Bean

@@ -10,6 +10,8 @@ import java.util.regex.Pattern;
  * 영영 실패해 같은 방송의 뒤 편지가 전부 막힌다(FIFO).
  *
  * <p>소문자는 대문자로 올려 받지 않는다. 받는 쪽이 고쳐 주면 발행 쪽 실수가 안 드러난다.
+ *
+ * <p>편지 처리기와 플랫폼 묶음 창구(POK-397, 다른 패키지)가 같이 쓴다. 그래서 판정이 공개다.
  */
 public final class Platform {
 
@@ -18,7 +20,7 @@ public final class Platform {
 
     private static final Pattern FORMAT = Pattern.compile("[A-Z0-9_]{1,16}");
 
-    static boolean isWellFormed(String value) {
+    public static boolean isWellFormed(String value) {
         return value != null && FORMAT.matcher(value).matches();
     }
 

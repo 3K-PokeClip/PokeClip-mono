@@ -49,6 +49,8 @@ class BroadcastEventProcessorTest extends IntegrationTestSupport {
     /** 판정기가 남긴 포기 메모. 실물은 {@code StoppedStreamRecorder::record}다. */
     private final List<String> 남긴것 = new ArrayList<>();
     private BroadcastEventProcessor processor;
+    /** SOOP 지켜보기에 들어간 것(POK-397). */
+    private final List<String> 지켜봄 = new ArrayList<>();
 
     BroadcastEventProcessorTest(EndedStreamStore store, JdbcTemplate jdbc) {
         this.store = store;
@@ -59,9 +61,57 @@ class BroadcastEventProcessorTest extends IntegrationTestSupport {
     void 표를_비우고_판정기를_새로_만든다() {
         jdbc.update("DELETE FROM chat_ended_streams");
         남긴것.clear();
+        지켜봄.clear();
         processor = new BroadcastEventProcessor(store, new IngestKeyStore(jdbc), sessions,
-                (streamId, reason) -> 남긴것.add(streamId + "/" + reason));
+                (streamId, reason) -> 남긴것.add(streamId + "/" + reason), new com.pokeclip.chat.collector.soop.SoopWatch() {
+                    @Override
+                    public void watch(String streamId, long streamerId, Instant startedAt) {
+                        지켜봄.add("watch:" + streamId + ":" + streamerId + ":" + startedAt);
+                    }
+
+                    @Override
+                    public void unwatch(String streamId) {
+                        지켜봄.add("unwatch:" + streamId);
+                    }
+
+                    @Override
+                    public void unwatchChannel(com.pokeclip.chat.collector.Platform platform, String channelId,
+                                               Instant startedBefore) {
+                    }
+
+                    @Override
+                    public void retainListed(java.util.Set<String> listedStreamIds, Instant startedBefore) {
+                    }
+                });
         sessions.reset();
+    }
+
+    // ── SOOP 지켜보기(POK-397) ──
+
+    /**
+     * 시작 편지는 치지직 결과와 무관하게 SOOP 지켜보기에 넣는다(계획 검증 M4). 치지직을 연동 안 한 SOOP 단독 스트리머는 치지직 쪽이
+     * 연동 거절로 편지를 지우는데, 그때 안 넣으면 그 방송은 SOOP 값이 영영 안 남는다. 편지의 시작 시각을 그대로 넘긴다.
+     */
+    @Test
+    void 시작_편지는_치지직_결과와_무관하게_SOOP_지켜보기에_넣는다() {
+        sessions.willReturn(ProcessResult.LINK_REFUSED);
+        assertThat(processor.process(started("s-soop", 1))).isEqualTo(ProcessResult.LINK_REFUSED);
+        sessions.willReturn(ProcessResult.RETRY_LATER);
+        processor.process(started("s-retry", 1));
+        sessions.willReturn(ProcessResult.PROCESSED);
+        processor.process(started("s-ok", 1));
+
+        assertThat(지켜봄).containsExactly("watch:s-soop:42:" + 종료시각, "watch:s-retry:42:" + 종료시각,
+                "watch:s-ok:42:" + 종료시각);
+    }
+
+    /** 끝난 방송의 시작(재전송·늦은 편지)은 지켜보기에 안 넣는다. 종료 편지는 지켜보기를 멈춘다. */
+    @Test
+    void 끝난_방송은_안_넣고_종료_편지는_멈춘다() {
+        processor.process(ended("s1", 5));
+        processor.process(started("s1", 9));
+
+        assertThat(지켜봄).containsExactly("unwatch:s1");
     }
 
     // 문항 4: 번호만 옮기고 종료 시각은 지금 시각으로 넣는 구현도 지시서 단언을 통과한다 —
