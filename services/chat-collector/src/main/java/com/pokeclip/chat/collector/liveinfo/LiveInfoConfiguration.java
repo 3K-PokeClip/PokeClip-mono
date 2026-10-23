@@ -1,10 +1,14 @@
 package com.pokeclip.chat.collector.liveinfo;
 
 import com.pokeclip.chat.collector.ChzzkProperties;
+import com.pokeclip.chat.collector.link.LinkProperties;
+import com.pokeclip.chat.collector.platforms.ClipPlatformClient;
+import com.pokeclip.chat.collector.platforms.PlatformsProperties;
 import com.pokeclip.chat.collector.relay.RelaySink;
 import com.pokeclip.chat.collector.session.SessionRegistry;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.boot.http.client.ClientHttpRequestFactoryBuilder;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -18,17 +22,21 @@ import java.time.Clock;
  */
 @Configuration
 @ConditionalOnProperty(prefix = "pokeclip.liveinfo", name = "enabled", havingValue = "true")
-@EnableConfigurationProperties(LiveInfoProperties.class)
+@EnableConfigurationProperties({LiveInfoProperties.class, PlatformsProperties.class, LinkProperties.class})
 public class LiveInfoConfiguration {
 
     @Bean
     public BroadcastInfoCollector broadcastInfoCollector(SessionRegistry registry, RestClient.Builder builder,
                                                          ChzzkProperties chzzk, LiveInfoProperties properties,
-                                                         BroadcastInfoStore store, RelaySink relay) {
+                                                         BroadcastInfoStore store, RelaySink relay,
+                                                         ClientHttpRequestFactoryBuilder<?> factoryBuilder,
+                                                         PlatformsProperties platforms, LinkProperties link) {
         properties.validate();
         ChzzkLiveInfoClient client = new ChzzkLiveInfoClient(builder.build(), chzzk.baseUrl(),
                 properties.clientId(), properties.clientSecret());
-        return new BroadcastInfoCollector(registry, client, store::insert, relay, properties, Clock.systemUTC());
+        // 복제해서 시한을 건다. 받은 빌더에 직접 걸면 치지직 클라이언트와 시한이 섞여 읽기 어렵다(치지직은 전역 시한을 쓴다).
+        ClipPlatformClient clip = ClipPlatformClient.create(builder.clone(), factoryBuilder, platforms, link);
+        return new BroadcastInfoCollector(registry, client, store::insert, relay, clip, properties, Clock.systemUTC());
     }
 
     @Bean
