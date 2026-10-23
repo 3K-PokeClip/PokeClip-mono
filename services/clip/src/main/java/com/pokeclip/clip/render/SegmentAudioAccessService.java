@@ -2,6 +2,7 @@ package com.pokeclip.clip.render;
 
 import com.pokeclip.clip.broadcast.BroadcastRepository;
 import com.pokeclip.clip.delegation.BroadcastAccessGuard;
+import com.pokeclip.clip.recipe.RecipeValidator;
 import com.pokeclip.clip.render.RenderErrors.InvalidSegmentRangeException;
 import com.pokeclip.clip.render.RenderErrors.RenderUnavailableException;
 import com.pokeclip.clip.render.RenderErrors.SegmentsExpiredException;
@@ -55,7 +56,8 @@ public class SegmentAudioAccessService {
             throw new InvalidSegmentRangeException("fromMs");
         }
         // 뺄셈이 안 넘친다: fromMs >= 0 이고 toMs > fromMs 이면 toMs - fromMs <= toMs다.
-        if (toMs <= fromMs || toMs - fromMs > MAX_RANGE_MS) {
+        // 먼 미래는 DB 시각으로 못 바꿔 조회가 500이다: 편집본 검사와 같은 상한에서 거절한다
+        if (toMs <= fromMs || toMs - fromMs > MAX_RANGE_MS || toMs > RecipeValidator.MAX_EPOCH_MS) {
             throw new InvalidSegmentRangeException("toMs");
         }
         guard.requireViewable(requesterSubject, streamId);

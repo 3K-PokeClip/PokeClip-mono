@@ -464,6 +464,9 @@ class RenderRequestControllerTest extends IntegrationTestSupport {
         조각_주소(내_방송, in, in - 1).andExpect(status().isBadRequest()).andExpect(jsonPath("$.field").value("toMs"));
         조각_주소(내_방송, in, in + 360_001).andExpect(status().isBadRequest()).andExpect(jsonPath("$.field").value("toMs"));
         조각_주소(내_방송, in, in + 360_000).andExpect(status().isOk());
+        // 길이는 6분 안이어도 DB가 못 받는 먼 미래면 조회에서 500이 났다(PR #341 codex)
+        조각_주소(내_방송, Long.MAX_VALUE - 100, Long.MAX_VALUE).andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.field").value("toMs"));
     }
 
     /** 자격이 없으면 방송이 없는 것과 같은 404다. 보관 기한이 지난 방송은 자격 확인 뒤에 410이다(조각 조회 문과 같은 순서). */

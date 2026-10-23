@@ -44,8 +44,9 @@ public class RecipeValidator {
     /**
      * 절대 시각 상한 — 3000-01-01 UTC. 계약6은 상한을 안 정하지만 PostgreSQL {@code to_timestamp}가 받는 범위가 {@code long}보다
      * 훨씬 좁아, 그 밖의 값은 조각 조회에서 500이 난다(PR #188 1판 codex). 컷과 자막 시각에 같이 건다.
+     * 편집기 미리 듣기 조각 주소 문도 같은 상한을 쓴다(SegmentAudioAccessService).
      */
-    static final long MAX_EPOCH_MS = 32_503_680_000_000L;
+    public static final long MAX_EPOCH_MS = 32_503_680_000_000L;
 
     /** 계약6 1절 — {@code outputId} 형식. */
     private static final Pattern OUTPUT_ID = Pattern.compile("[a-z0-9-]{1,32}");
