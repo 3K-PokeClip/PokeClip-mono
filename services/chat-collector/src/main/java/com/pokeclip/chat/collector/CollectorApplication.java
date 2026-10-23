@@ -12,6 +12,7 @@ import com.pokeclip.chat.collector.persist.ChatPersister;
 import com.pokeclip.chat.collector.persist.DonationPersister;
 import com.pokeclip.chat.collector.reconnect.ReconnectPolicy;
 import com.pokeclip.chat.collector.session.SessionRegistry;
+import com.pokeclip.db.DataSourceLoginConfiguration;
 import org.flywaydb.core.Flyway;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -25,6 +26,7 @@ import org.springframework.context.ApplicationContext;
 import org.springframework.context.ApplicationContextAware;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Import;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.web.client.RestClient;
 
@@ -40,6 +42,8 @@ import java.util.concurrent.TimeUnit;
 @SpringBootApplication
 // 끝난 방송 메모 치우기(EndedStreamSweeper). 없으면 @Scheduled가 애노테이션만 남고 아무것도 안 돈다.
 @EnableScheduling
+// DB 로그인 방식(POSTGRES_AUTH)과 db_connected 줄. db-support 패키지는 이 앱의 컴포넌트 스캔 밖이라 끌어온다(POK-407).
+@Import(DataSourceLoginConfiguration.class)
 public class CollectorApplication {
 
     private static final Logger log = LoggerFactory.getLogger(CollectorApplication.class);

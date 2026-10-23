@@ -1,5 +1,6 @@
 package com.pokeclip.clip;
 
+import com.pokeclip.db.DataSourceLoginConfiguration;
 import com.pokeclip.web.CorsConfig;
 import com.pokeclip.web.WebConfig;
 import org.springframework.boot.SpringApplication;
@@ -17,7 +18,8 @@ import org.springframework.context.annotation.Import;
  */
 @SpringBootApplication
 @ConfigurationPropertiesScan({"com.pokeclip.clip", "com.pokeclip.web"})
-@Import({CorsConfig.class, WebConfig.class})
+// DataSourceLoginConfiguration: DB 로그인 방식(POSTGRES_AUTH)과 db_connected 줄(POK-407, db-support).
+@Import({CorsConfig.class, WebConfig.class, DataSourceLoginConfiguration.class})
 public class ClipApplication {
 
     public static void main(String[] args) {

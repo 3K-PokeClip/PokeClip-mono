@@ -43,9 +43,11 @@ dependencies {
 }
 
 tasks.named('test') {
-    // RdsCaBundleTest가 읽는 두 파일이다. 선언하지 않으면 번들만 바뀐 실행에서 test가 UP-TO-DATE로 건너뛴다
+    // RdsCaBundleTest가 읽는 파일들이다(번들 두 사본 · 번들을 넣는 Dockerfile 다섯). 선언하지 않으면 번들만 바뀐 실행에서 test가 UP-TO-DATE로 건너뛴다
     // (chat-collector DocumentedEnvVarsTest와 같은 이유).
-    inputs.files('certs/rds-global-bundle.pem', rootProject.file('../media/certs/rds-global-bundle.pem'))
+    inputs.files('certs/rds-global-bundle.pem', rootProject.file('../media/certs/rds-global-bundle.pem'),
+            rootProject.file('../media/Dockerfile'),
+            rootProject.files('auth/Dockerfile', 'clip/Dockerfile', 'chat-collector/Dockerfile', 'chat-detector/Dockerfile'))
             .withPropertyName('rdsCaBundles')
             .withPathSensitivity(PathSensitivity.NONE)
 }

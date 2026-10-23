@@ -63,7 +63,7 @@ pokeclip:
     # iam 토큰을 서명할 리전. 수집 서버와 같은 변수다.
     region: ${AWS_REGION:ap-northeast-2}
     # iam에서만 쓴다. RDS CA 번들의 절대 경로. verify-full이 서버 인증서를 이것으로 검증한다.
-    # 이미지에는 /etc/pokeclip/rds-global-bundle.pem 으로 들어 있다(Dockerfile).
+    # 이미지에는 /etc/pokeclip/rds-ca/global-bundle.pem 으로 들어 있다(Dockerfile).
     ssl-root-cert: ${POSTGRES_SSLROOTCERT:}
 
   internal-api:
