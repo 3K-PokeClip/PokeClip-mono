@@ -43,7 +43,7 @@ infra/terraform/
     ├── dns/                       # ③ 새 존 · 이전용 레코드 복사본 · dev 위임 NS(보류 — 결정 46 · 재개 키트)
     ├── network/                   # ④ VPC · 서브넷(2 AZ) · NAT 1개 · S3 Gateway EP
     ├── certs/                     # ⑥ ACM 서울 · us-east-1 + 검증 레코드 한 벌(존 = 이름 조회)
-    ├── registry/                  # ⑦ ECR 7개(CI 역할은 쓰기로 할 때 — 40차)
+    ├── registry/                  # ⑦ ECR 11개(CI 역할은 쓰기로 할 때 — 40차)
     ├── platform/                  # ⑧ 공개 ALB · WAF · 내부 ALB · NLB · ECS
     ├── media/                     # ⑨ Media EC2 · 인스턴스 역할 · Media SG
     ├── edge/                      # ⑩ CloudFront 배포 · WAF · KVS · CF Function

@@ -229,6 +229,9 @@ func newLocalTarget(t *testing.T, dir, streamID string, seq int64) index.UploadT
 //
 // 되감기 발행 몫의 둘(체크리스트 474 A-3 3 · 판단 J74)도 같은 규칙이다 — 발행자 풀은 up.Shutdown 보다 먼저, fence
 // 반납(rewind.stop — 차선 ctx 취소 → 작업 대기 → 반납)보다 늦게 닫혀야 한다. 반납 문장이 그 풀로 나간다.
+//
+// 풀 관측의 stop 둘(POK-388)도 같다 — 관측 고루틴이 풀을 읽으므로 각자 자기 풀의 Close 보다 뒤에 등록돼
+// 먼저 실행돼야 한다.
 func TestShutdownDeferRegistrationOrder(t *testing.T) {
 	src, err := os.ReadFile("main.go")
 	if err != nil {
@@ -236,8 +239,8 @@ func TestShutdownDeferRegistrationOrder(t *testing.T) {
 	}
 	text := string(src)
 
-	order := []string{"defer pool.Close()", "defer root.Close()", "defer up.Shutdown()",
-		"defer pubPool.Close()", "defer rewind.stop(ctx, cancelLanes)"}
+	order := []string{"defer pool.Close()", "defer stopIndexerStats()", "defer root.Close()", "defer up.Shutdown()",
+		"defer pubPool.Close()", "defer stopPublisherStats()", "defer rewind.stop(ctx, cancelLanes)"}
 	prev := -1
 	for _, want := range order {
 		at := strings.Index(text, want)
@@ -246,7 +249,8 @@ func TestShutdownDeferRegistrationOrder(t *testing.T) {
 		}
 		if at <= prev {
 			t.Fatalf("%q 의 등록 위치가 앞선다. 등록 순서는 %v 여야 하고, LIFO 이므로 실행은 그 역순"+
-				"(rewind.stop -> pubPool.Close -> Shutdown -> root.Close -> pool.Close)이다", want, order)
+				"(rewind.stop -> stopPublisherStats -> pubPool.Close -> Shutdown -> root.Close -> stopIndexerStats -> "+
+				"pool.Close)이다", want, order)
 		}
 		prev = at
 	}
@@ -254,6 +258,23 @@ func TestShutdownDeferRegistrationOrder(t *testing.T) {
 	// rewind.stop 이 차선 작업을 끊지 못하고 기다림에 매달린다.
 	if !strings.Contains(text, "loop(laneCtx, deps)") || strings.Contains(text, "loop(ctx, deps)") {
 		t.Error("loop 에 차선 ctx(laneCtx)가 아닌 ctx 를 넘긴다 — 오류 종료 때 rewind.stop 이 차선 작업을 끊지 못한다")
+	}
+}
+
+// P11 — 풀 관측은 풀마다 자기 이름으로 붙는다(POK-388). 이름이 엇갈리면 폐기 지표가 다른 풀의 것으로 읽히고,
+// 호출이 빠지면 그 풀의 폐기가 보이지 않는다. run() 은 단위 시험이 불가능하므로(위 시험) 호출 문자열을 본다.
+func TestPoolStatsStartedPerPool(t *testing.T) {
+	src, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("main.go 를 읽지 못했다: %v", err)
+	}
+	for _, want := range []string{
+		`stopIndexerStats := poolstat.Start(ctx, pool, "indexer", log)`,
+		`stopPublisherStats := poolstat.Start(ctx, pubPool, "publisher", log)`,
+	} {
+		if n := strings.Count(string(src), want); n != 1 {
+			t.Errorf("main.go 에 %q 가 %d번 있다, want 1 — 풀과 관측 이름의 짝이 바뀌었거나 호출이 빠졌다", want, n)
+		}
 	}
 }
 

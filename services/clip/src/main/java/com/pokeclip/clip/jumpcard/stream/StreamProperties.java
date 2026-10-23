@@ -14,8 +14,7 @@ import java.time.Duration;
  * (2026-08-23 실측) — {@code send()}와 {@code completeWithError()}가 같은 {@code writeLock}을 써서
  * 끊으러 간 스레드가 같이 멈춘다. 막힌 연결은 스트라이프 격리로 가두고 서버의 write timeout이 푼다.
  *
- * <p><b>이 클래스는 잘못된 값을 던지지 않고 덮는다.</b> {@code JumpCardProperties}·
- * {@code IntakeProperties}는 던진다 — 불일치가 아니라 클래스마다 이미 서 있던 정책을 따른
+ * <p><b>이 클래스는 잘못된 값을 던지지 않고 덮는다.</b> {@code IntakeProperties}는 던진다: 불일치가 아니라 클래스마다 이미 서 있던 정책을 따른
  * 결과다. 통일은 별도 카드다.
  *
  * <p>🔴 <b>설정을 새로 추가하는 사람이 읽을 것 — 판정 기준은 「잘린 값을 쓰는 <u>하류</u>가
@@ -49,22 +48,16 @@ import java.time.Duration;
  *   <tr><td>{@code maxPerUser}·{@code maxPerStream}·{@code maxTotal}</td><td>비교에만 쓴다</td>
  *       <td><b>안 터진다</b>(셋 다 {@code 2147483647}로 실기동 + SSE 200 확인)</td>
  *       <td>하한만</td></tr>
- *   <tr><td>{@code JumpCardProperties.claimTtl}</td>
- *       <td>{@code toSeconds()} → 점유 SQL · {@code claimedAt.plus(ttl)}</td>
- *       <td>🔴 0이면 <b>모든 점유가 즉시 탈취 가능</b>. 아주 크면 DB가 SQLState <b>22008</b>로
- *           터져 <b>claim이 전부 500</b>이고, 더 크면 읽기(SSE 스냅샷)까지 500이 된다</td>
- *       <td>하한·상한 둘 다({@code JumpCardProperties.MAX_CLAIM_TTL} 주석에 하류 셋의 한계가 있다)</td></tr>
  *   <tr><td>{@code IntakeProperties.waitTime}·{@code maxMessages}</td>
  *       <td>{@code (int) toSeconds()} → SQS</td>
  *       <td>범위 밖이면 <b>호출이 거부돼 폴링이 매번 실패</b>한다(부팅은 된다)</td>
  *       <td>{@code IntakeProperties}가 던진다 / {@code @Min}·{@code @Max}</td></tr>
  * </table>
  *
- * <p><b>망가지는 방향이 자리마다 달라서</b>(연결이 안 죽는다 · 부팅이 죽는다 · 점유가 탈취된다 ·
+ * <p><b>망가지는 방향이 자리마다 달라서</b>(연결이 안 죽는다 · 부팅이 죽는다 ·
  * 요청이 500이 된다) 「하나 고쳤으니 됐다」가 성립하지 않는다. PR #111에서 셋 중 둘만 닫았고,
  * PR #113에서 {@code heartbeat} 상한만 닫았으며, 여기까지 오는 데 <b>판정 기준 자체를 고쳐야</b> 했다.
- * <b>자르는 쪽과 재는 쪽의 단위를 맞춘다</b> — 여기 둘은 1ms 하한, {@code claimTtl}은
- * 초 단위로 떨어질 것을 요구한다.
+ * <b>자르는 쪽과 재는 쪽의 단위를 맞춘다</b>: 여기 둘은 1ms 하한이다.
  */
 @ConfigurationProperties(prefix = "pokeclip.jump-card.stream")
 public record StreamProperties(Duration heartbeat, Duration timeout, int stripes, int queueCapacity,
@@ -151,8 +144,7 @@ public record StreamProperties(Duration heartbeat, Duration timeout, int stripes
         // PT0.0005S는 0도 음수도 아닌데 잘리면 0이 되어 똑같이 「시한 없음」이 된다.
         // 2026-08-23 재현(PR #111 봇 지적 ④): 이 값으로 부팅해 진짜 HTTP로 연결하니 20초 뒤에도
         // 안 닫혔고 하트비트를 20개 받았다(설정 시한의 4만 배). PT2S를 주면 2995ms에 닫힌다.
-        // 자르기 전 값만 보던 것이 원인이고, 위 heartbeat·JumpCardProperties의 toSeconds()와
-        // 뿌리가 같다(클래스 주석의 세 자리).
+        // 자르기 전 값만 보던 것이 원인이고, 위 heartbeat와 뿌리가 같다(클래스 주석의 표).
         if (timeout == null || timeout.compareTo(MIN_MILLIS) < 0) {
             // 🔴 이 하나만 로그를 남긴다. 대칭을 깬 것이 아니라 결과의 종류가 다르다 —
             // stripes·큐·상한 셋이 틀리면 느려지거나 거부가 늘어 운영자가 겪어서 알고,

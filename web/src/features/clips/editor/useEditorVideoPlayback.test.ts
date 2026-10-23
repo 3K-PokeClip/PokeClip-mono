@@ -93,3 +93,46 @@ describe('useEditorVideoPlayback — 녹화 구간', () => {
     expect(requestedWindow(fetchSpy)).toEqual({ fromSeconds: 20, toSeconds: 50 });
   });
 });
+
+describe('useEditorVideoPlayback: 출입증 쿠키 (POK-317)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  it('출입증을 받기 전에는 쿠키를 안 싣고, 받은 뒤에는 싣는다: CDN 뒤 미리보기는 쿠키가 없으면 403이다', async () => {
+    vi.resetModules();
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_PLAYBACK_BASE_URL', 'https://media.test');
+    const fetchSpy = vi.fn((input: RequestInfo | URL, _init?: RequestInit) =>
+      String(input).endsWith('/playback-access')
+        ? Promise.resolve(
+            new Response(JSON.stringify({ expiresAt: '2999-01-01T00:00:00Z' }), { status: 200 }),
+          )
+        : new Promise<Response>(() => undefined),
+    );
+    vi.stubGlobal('fetch', fetchSpy);
+    const { ensurePlaybackAccess } = await import('@/api/clipEditor');
+    const { useEditorVideoPlayback: hook } = await import('./useEditorVideoPlayback');
+    const props = {
+      streamId: 'key-1',
+      recordingStartMs: BASE,
+      recordingSeconds: 38,
+      pieces: PIECES,
+      initialRange: { startSeconds: 5, endSeconds: 10 },
+    };
+    const credentialsOfLastClip = () =>
+      fetchSpy.mock.calls.filter(([url]) => !String(url).endsWith('/playback-access')).at(-1)?.[1]
+        ?.credentials;
+
+    renderHook(() => hook(props)).unmount();
+    expect(credentialsOfLastClip()).toBe('same-origin');
+
+    await ensurePlaybackAccess('S-1', 'key-1');
+    renderHook(() => hook(props));
+    // 받아 둔 출입증이 쓸 만하면 기다리지 않고 바로 부른다
+    expect(credentialsOfLastClip()).toBe('include');
+    expect(
+      fetchSpy.mock.calls.filter(([url]) => String(url).endsWith('/playback-access')),
+    ).toHaveLength(1);
+  });
+});

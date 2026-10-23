@@ -1,0 +1,182 @@
+/* 채널 스위처 패널: 시안 1u ①②의 치수. 포털로 떠서 사이드바의 셸 단위(--u) 밖이라 콘텐츠 단위(--pc-u)를 쓴다.
+   Popover 기본 .content(안쪽 여백·최소 폭)를 덮어야 해서 [role]로 명시도를 한 단계 올린다. */
+.panel[role='dialog'] {
+  /* 좁은 화면에서 넘치지 않게: 위치 계산이 좌우에 8px씩 여백을 둔다(PR #323 codex 2차) */
+  width: min(calc(296 * var(--pc-u)), calc(100vw - 16px));
+  padding: 0;
+  border-radius: var(--pc-radius-xl);
+  /* 참여 채널·받은 초대가 많으면 화면보다 길어진다. 위치 계산은 위 끝만 화면 안으로 당기므로(positioning.ts의
+     VIEWPORT_PAD 8px 위아래) 높이를 화면 안으로 묶고 패널 안에서 스크롤한다: 안 그러면 아래 줄·로그아웃을 못 누른다 */
+  max-height: calc(100vh - 16px);
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.head {
+  padding: calc(12 * var(--pc-u)) calc(14 * var(--pc-u)) calc(10 * var(--pc-u));
+  font-size: calc(12 * var(--pc-u));
+  font-weight: 750;
+}
+
+.section {
+  padding: calc(9 * var(--pc-u)) calc(8 * var(--pc-u)) calc(2 * var(--pc-u));
+}
+
+.sectionTitle {
+  padding: calc(9 * var(--pc-u)) calc(6 * var(--pc-u)) calc(5 * var(--pc-u));
+  font-size: calc(10 * var(--pc-u));
+  font-weight: 700;
+  color: var(--pc-color-text-muted);
+}
+
+.sectionTitle:first-child {
+  padding-top: 0;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: calc(10 * var(--pc-u));
+  width: 100%;
+  padding: calc(7 * var(--pc-u)) calc(8 * var(--pc-u));
+  border: 0;
+  border-radius: calc(11 * var(--pc-u));
+  background: transparent;
+  color: var(--pc-color-text-primary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.row:hover {
+  background: var(--pc-color-bg-surface-hover);
+}
+
+.row[aria-current='true'] {
+  background: var(--pc-color-accent-subtle);
+}
+
+.row:focus-visible {
+  outline: 2px solid var(--pc-color-focus-ring);
+  outline-offset: -2px;
+}
+
+.row .rowAvatar[data-size] {
+  width: calc(32 * var(--pc-u));
+  height: calc(32 * var(--pc-u));
+  font-size: calc(12 * var(--pc-u));
+  flex-shrink: 0;
+}
+
+.rowText {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.rowName {
+  font-size: calc(12.5 * var(--pc-u));
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rowMeta {
+  font-size: calc(10.5 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}
+
+.rowCheck {
+  width: calc(14 * var(--pc-u));
+  height: calc(14 * var(--pc-u));
+  flex-shrink: 0;
+}
+
+.invites {
+  margin: calc(8 * var(--pc-u)) calc(10 * var(--pc-u)) calc(2 * var(--pc-u));
+  padding: calc(10 * var(--pc-u)) calc(11 * var(--pc-u)) calc(11 * var(--pc-u));
+  border: 1.5px dashed var(--pc-color-border-default);
+  border-radius: var(--pc-radius-lg);
+  background: var(--pc-color-bg-inset);
+}
+
+.sectionTitleFlat {
+  font-size: calc(10 * var(--pc-u));
+  font-weight: 700;
+  color: var(--pc-color-text-muted);
+}
+
+.invite + .invite {
+  margin-top: calc(10 * var(--pc-u));
+  padding-top: calc(10 * var(--pc-u));
+  border-top: 1px solid var(--pc-color-border-subtle);
+}
+
+.inviteName {
+  margin-top: calc(6 * var(--pc-u));
+  font-size: calc(12 * var(--pc-u));
+  font-weight: 700;
+}
+
+.inviteMeta {
+  margin-top: calc(2 * var(--pc-u));
+  font-size: calc(10.5 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}
+
+.inviteActions {
+  display: flex;
+  gap: calc(6 * var(--pc-u));
+  margin-top: calc(9 * var(--pc-u));
+}
+
+.fallback {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: calc(8 * var(--pc-u));
+  margin: calc(8 * var(--pc-u)) calc(10 * var(--pc-u)) calc(2 * var(--pc-u));
+  font-size: calc(11 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}
+
+.foot {
+  display: flex;
+  align-items: center;
+  gap: calc(10 * var(--pc-u));
+  margin-top: calc(9 * var(--pc-u));
+  padding: calc(10 * var(--pc-u)) calc(14 * var(--pc-u)) calc(11 * var(--pc-u));
+  border-top: 1px solid var(--pc-color-border-subtle);
+  font-size: calc(10.5 * var(--pc-u));
+}
+
+.email {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--pc-color-text-muted);
+}
+
+.footLink {
+  font-weight: 650;
+  color: var(--pc-color-accent-text);
+  text-decoration: none;
+}
+
+.footButton {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-weight: 650;
+  color: var(--pc-color-text-muted);
+  cursor: pointer;
+}
+
+.footLink:hover,
+.footButton:hover {
+  text-decoration: underline;
+}

@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/pgtest"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -484,7 +485,7 @@ func TestLedgerLoadRollsBackWithLiveContext(t *testing.T) {
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			var rollbacks []error
-			pool := hookedPool(t, base, traceSQLEnd{
+			pool := pgtest.TracedPool(t.Context(), t, base, traceSQLEnd{
 				start: func(sctx context.Context, _ *pgx.Conn, sql string) context.Context {
 					if sql == rewindRowsSQL {
 						return tc.inject(sctx, cancel)

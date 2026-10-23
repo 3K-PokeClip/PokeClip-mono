@@ -8,11 +8,13 @@ import { EmptyState, useToast } from '@/ui';
 import {
   ClipApiError,
   createRecipe,
+  ensurePlaybackAccess,
   fetchBroadcast,
   fetchClip,
   fetchJumpCard,
   fetchLibraryDetail,
   fetchMeLoose,
+  openJumpCard,
   requestRender,
   mediaStreamId,
   timelineBaseMs,
@@ -253,6 +255,11 @@ interface Loaded {
  * 2라운드). 구간 목록은 미리보기 창이 틈에 걸리지 않게 쓴다(POK-253). 재생 서버가 없거나 녹화가 없으면 null
  */
 async function loadRecording(broadcast: BroadcastRow): Promise<RecordingTimeline | null> {
+  // CDN 뒤 녹화 목록·미리보기는 출입증 쿠키가 있어야 열린다(POK-317). 미리보기 창은 이 키로 갱신한다(ensureMediaAccess)
+  const access = await ensurePlaybackAccess(broadcast.streamId, mediaStreamId(broadcast));
+  // 못 받았는데 녹화를 물으면 CDN 403이 「녹화 없음」으로 접혀 미리보기 없이 열리고 다시 묻지 않는다(PR #320 codex)
+  if (access?.kind === 'failed')
+    throw new Error('영상 출입증을 받지 못했어요. 잠시 뒤 다시 열어 주세요');
   return recordingTimeline(
     // 녹화 재생 서버의 경로는 영상 키다(POK-233) — 방송 번호가 회차 번호면 그 이름의 녹화가 없다
     await fetchRecordingSpans(mediaStreamId(broadcast)),
@@ -531,14 +538,18 @@ function WiredStudio({
   const startedAt = broadcast.startedAt!;
 
   // 편집기 진입을 센다 (POK-357). 편집 대상마다 새로 마운트되므로 마운트당 한 번 —
-  // StrictMode의 이중 이펙트와 첫 저장 뒤 ?recipe= 로 주소만 바뀌는 것은 세지 않는다
+  // StrictMode의 이중 이펙트와 첫 저장 뒤 ?recipe= 로 주소만 바뀌는 것은 세지 않는다.
+  // 카드에서 열었으면 같은 보호 아래 서버 행동 기록에도 열기 한 줄을 남긴다(POK-393). 불러오기에 실패한 화면은 여기까지
+  // 안 오므로 「열었다」로 세지지 않는다. 기록 실패는 openJumpCard가 삼킨다
   const openedTracked = useRef(false);
   const openedFrom = card ? 'card' : 'recipe';
+  const openedCardId = card ? String(card.id) : null;
   useEffect(() => {
     if (openedTracked.current) return;
     openedTracked.current = true;
     track('clip_editor_opened', { source: openedFrom });
-  }, [openedFrom]);
+    if (openedCardId !== null) void openJumpCard(openedCardId);
+  }, [openedFrom, openedCardId]);
   // 🔴 카드·조각 ms의 0초 = 시각 기준점(서버 → 녹화 재생 서버 → 방송 시작, POK-255). 저장·다시 열기가 같은 값을 써야 제자리다.
   //    방송 시작 편지 시각과 수십 초 갈리고, 조각 장부의 위치 값은 방송을 넘어 이어지므로 녹화 시작과도 갈릴 수 있다
   const base = timelineBaseMs(broadcast, recording?.startMs ?? null);

@@ -32,7 +32,6 @@ function renderPanel(props: {
   ended?: boolean;
   listStatus?: CardListStatus;
   highlights?: LiveHighlight[];
-  hiddenHighlights?: LiveHighlight[];
 }) {
   return renderWithProviders(
     <HighlightCardPanel
@@ -135,22 +134,5 @@ describe('HighlightCardPanel: 빈 카드 줄', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: '자동 0' }));
     expect(screen.getByRole('status')).toHaveTextContent('자동 감지한 카드가 없어요.');
-  });
-
-  it('숨김 칩이 비면 숨긴 카드가 없다고 말한다', () => {
-    renderPanel({ detectionPaused: false, highlights: [highlight(1)] });
-    fireEvent.click(screen.getByRole('button', { name: '숨김 0' }));
-    expect(screen.getByRole('status')).toHaveTextContent('숨긴 카드가 없어요.');
-  });
-
-  it('전부 숨겼으면 아직 없다고 하지 않고 「숨김」에 있다고 알려 준다', () => {
-    renderPanel({
-      detectionPaused: false,
-      hiddenHighlights: [highlight(1, { hidden: true }), highlight(2, { hidden: true })],
-    });
-    expect(screen.getByRole('status')).toHaveTextContent(
-      '보이는 카드가 없어요. 숨긴 카드는 「숨김」에서 볼 수 있어요.',
-    );
-    expect(screen.queryByText(/감지된 하이라이트가 없어요/)).not.toBeInTheDocument();
   });
 });

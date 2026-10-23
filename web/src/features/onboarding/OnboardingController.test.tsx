@@ -5,6 +5,7 @@ import { HomeScreen } from '@/features/home/HomeScreen';
 import { OnboardingController } from '@/features/onboarding/OnboardingController';
 import { useOnboardingStore } from '@/stores/onboarding';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
+import { ChannelRelationContext } from '@/features/channel/ChannelScope';
 
 const push = vi.fn();
 vi.mock('next/navigation', () => ({
@@ -122,6 +123,21 @@ describe('OnboardingController', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '연동 코드 발급' }));
     expect(push).toHaveBeenCalledWith('/settings/plugin');
+  });
+
+  it('남의 채널이면 채널 연동·코드 발급 CTA가 비활성이다(POK-390): 그 화면은 그 채널에서 막혀 있다', async () => {
+    render(
+      <ChannelRelationContext.Provider value="EDITOR">
+        <HomeScreen />
+        <OnboardingController />
+      </ChannelRelationContext.Provider>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: '둘러보기 시작' }));
+    expect(screen.getByRole('button', { name: '채널 연동하기' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: '다음' }));
+    expect(screen.getByRole('button', { name: '연동 코드 발급' })).toBeDisabled();
+    expect(push).not.toHaveBeenCalled();
   });
 
   it('채널 연동 뒤 홈 복귀 — 웰컴 1단계와 투어 1단계 카드에 완료가 표시된다 (DoD)', async () => {

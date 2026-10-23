@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { usePathname, useSearchParams } from 'next/navigation';
 import { resolveLiveStreamId, vodStreamIdFromPathname } from '@/features/broadcast/streamSelection';
 import { publishLiveData, useLiveData } from './liveDataStore';
+import { useChannelStreamerId } from '@/features/channel/ChannelScope';
 
 // 라이브 화면이 볼 방송 번호를 정한다(POK-251). 정한 번호는 liveDataStore에 올려 대시보드 훅들이 같이 쓴다.
 //
@@ -31,6 +32,8 @@ export function useLiveStreamSelection(): LiveStreamSelection {
   const pathname = usePathname();
   const streamParam = useSearchParams().get('stream');
   const pinned = vodStreamIdFromPathname(pathname ?? '') ?? (streamParam || null);
+  // 고른 채널(POK-390): 그 채널에서 방송 중인 것을 묻는다
+  const streamerId = useChannelStreamerId();
 
   useEffect(() => {
     if (pinned !== null) {
@@ -41,7 +44,7 @@ export function useLiveStreamSelection(): LiveStreamSelection {
     }
     let alive = true;
     const resolve = (fresh: boolean) =>
-      void resolveLiveStreamId(fresh).then((id) => {
+      void resolveLiveStreamId(streamerId, fresh).then((id) => {
         // 모르면(오류) 지금 보던 것을 그대로 둔다 — 꺼짐으로 바꾸지 않는다
         if (!alive || id === null) return;
         setSelection((prev) =>
@@ -54,15 +57,15 @@ export function useLiveStreamSelection(): LiveStreamSelection {
       alive = false;
       window.clearInterval(t);
     };
-  }, [pinned]);
+  }, [pinned, streamerId]);
 
   useEffect(() => {
     if (status !== 'ended' || pinned !== null) return;
-    void resolveLiveStreamId(true).then((id) => {
+    void resolveLiveStreamId(streamerId, true).then((id) => {
       if (id === null) return;
       setSelection((prev) => (prev.streamId === id ? prev : { streamId: id, resolved: true }));
     });
-  }, [status, pinned]);
+  }, [status, pinned, streamerId]);
 
   useEffect(() => {
     publishLiveData({ streamId: selection.streamId });

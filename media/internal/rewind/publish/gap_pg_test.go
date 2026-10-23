@@ -18,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/pgtest"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/rewind"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/rewind/boundary"
 )
@@ -678,7 +679,7 @@ func TestGapTickRollsBackWithLiveContext(t *testing.T) {
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			var rollbacks []error
-			pool := hookedPool(t, l.pub.pool, traceSQLEnd{
+			pool := pgtest.TracedPool(t.Context(), t, l.pub.pool, traceSQLEnd{
 				start: func(sctx context.Context, _ *pgx.Conn, sql string) context.Context {
 					if sql == gapRecordSQL {
 						return tc.inject(sctx, cancel)

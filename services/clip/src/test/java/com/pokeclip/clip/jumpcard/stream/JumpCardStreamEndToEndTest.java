@@ -76,16 +76,15 @@ class JumpCardStreamEndToEndTest extends IntegrationTestSupport {
     /**
      * 🔴 <b>뜻이 뒤집힌 갈래.</b> 전에는 「연결 직후 그 방송 카드 전부가 순번 순으로 온다」였고,
      * 지금은 <b>하나도 안 온다</b>(POK-174). 지우지 않고 뒤집는 이유는 지우면 통로가 지난 카드를
-     * 다시 흘려도 이 층에서 아무도 모르기 때문이다. 순번 순·{@code hidden} 표시는 목록 문의
+     * 다시 흘려도 이 층에서 아무도 모르기 때문이다. 순번 순은 목록 문의
      * 계약이 되어 {@code JumpCardListControllerTest}가 잰다.
      *
      * <p>헤더 단언 둘은 그대로 산다 — 카드가 없어도 주석이 첫 쓰기라 헤더는 바로 나가야 한다.
      */
     @Test
     void 연결_직후에는_카드가_안_오고_헤더는_바로_온다() throws Exception {
-        long first = service.record("s-1", auto("evt-1", 1_000_000L)).card().id();
+        service.record("s-1", auto("evt-1", 1_000_000L));
         service.record("s-1", auto("evt-2", 2_000_000L));
-        service.hide(first, "1702", null);
 
         try (SseReader reader = open("s-1", TestTokens.access("1701"))) {
             assertThat(reader.statusCode()).isEqualTo(200);
@@ -274,49 +273,6 @@ class JumpCardStreamEndToEndTest extends IntegrationTestSupport {
         }
     }
 
-    /** 점유는 남에게 보여야 의미가 있다 — 안 보이면 둘이 같은 카드를 잡는다. */
-    @Test
-    void 집으면_다른_연결에도_card가_온다() {
-        long id = service.record("s-1", auto("evt-claim", 3_000_000L)).card().id();
-
-        try (SseReader watcher = open("s-1", TestTokens.access("1711"))) {
-            // 연결이 명부에 오른 뒤라야 발행이 도착한다. 카드는 더 이상 초기 전송으로 안 오므로
-            // 주석으로 확인한다(POK-174).
-            assertThat(watcher.await(1, Duration.ofSeconds(3))).isTrue();
-            int before = watcher.named().size();
-
-            service.claim(id, "1712");
-
-            assertThat(watcher.awaitName("card", Duration.ofSeconds(3))).isTrue();
-            awaitUntil(() -> watcher.named().size() > before, Duration.ofSeconds(3));
-            assertThat(MAPPER.readTree(마지막_card(watcher).data()).get("claimedBy").asString())
-                    .isEqualTo("1712");
-        }
-    }
-
-    /**
-     * <b>놓기가 나갈 때 {@code claimedBy}가 비어 있어야 한다.</b> 네이티브 UPDATE 뒤 1차 캐시에
-     * 낡은 엔티티가 남으면 「놓았는데 아직 잡혀 있는」 카드가 화면에 뜬다 —
-     * {@code @Modifying(clearAutomatically = true)}가 그것을 막는다.
-     * 태스크 5까지는 {@code publishAfterCommit}이 비어 있어 이 자리가 가려져 있었다.
-     */
-    @Test
-    void 놓으면_비어_있는_카드가_나간다() {
-        long id = service.record("s-1", auto("evt-release", 4_000_000L)).card().id();
-        service.claim(id, "1714");
-
-        try (SseReader watcher = open("s-1", TestTokens.access("1713"))) {
-            assertThat(watcher.await(1, Duration.ofSeconds(3))).isTrue();
-            int before = watcher.named().size();
-
-            service.release(id, "1714");
-
-            awaitUntil(() -> watcher.named().size() > before, Duration.ofSeconds(3));
-            assertThat(MAPPER.readTree(마지막_card(watcher).data()).get("claimedBy").isNull())
-                    .as("놓았는데 잡힌 채로 나가면 아무도 그 카드를 못 집는다").isTrue();
-        }
-    }
-
     /**
      * 「안 온다」를 재기 전에 <b>같은 대기로 긍정 경로를 먼저 잰다</b> — 그래야 그 대기 시간이
      * 충분하다는 증거가 생긴다(async-test-reality 문항 4(가)).
@@ -416,11 +372,6 @@ class JumpCardStreamEndToEndTest extends IntegrationTestSupport {
                 .findFirst().orElseThrow();
     }
 
-    private SseReader.Event 마지막_card(SseReader reader) {
-        return reader.events().stream().filter(e -> "card".equals(e.name()))
-                .reduce((a, b) -> b).orElseThrow();
-    }
-
     private void post2A(String streamId, String eventId, long start) {
         String body = """
                 {"eventId":"%s","source":"auto","streamTimestampMs":%d,
@@ -451,8 +402,7 @@ class JumpCardStreamEndToEndTest extends IntegrationTestSupport {
     /** 같은 카드의 <b>다음</b> 상태. 순번만 바꾼다 — record라 복사 생성자가 없다. */
     private JumpCardSnapshot 순번을_올린다(JumpCardSnapshot card, long eventSeq) {
         return new JumpCardSnapshot(card.id(), card.streamId(), card.source(), card.streamTimestampMs(),
-                card.window(), card.score(), card.evidence(), card.claimedBy(), card.claimedAt(),
-                card.claimExpiresAt(), card.hidden(), card.hiddenBy(), card.hiddenReason(), eventSeq, card.createdAt(), null);
+                card.window(), card.score(), card.evidence(), eventSeq, card.createdAt(), null);
     }
 
     private HighlightRequest auto(String eventId, long start) {

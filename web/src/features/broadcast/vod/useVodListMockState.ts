@@ -25,6 +25,7 @@ import { lookupRecordingSpans, playbackConfigured } from '@/api/mediaPlayback';
 import { recordingTimeline } from '@/features/player/recordingTimeline';
 import { recordingSearchFrom } from '@/features/broadcast/endedWindow';
 import { excludeLive, filterByPeriod, isJustEnded } from './vodListView';
+import { useChannelStreamerId } from '@/features/channel/ChannelScope';
 
 // 시안 1f 지난 방송 목록의 상태. 목록은 clip `GET /api/clip/broadcasts`(POK-174·ADR-055)에서 온다(POK-251).
 // VOD 준비 상태를 줄 백엔드(B5)가 아직 없어, 녹화 재생 서버가 설정된 곳에서만 끝난 방송을 「다시 보기 가능」으로 본다.
@@ -167,6 +168,8 @@ function isoMs(iso: string | null): number | null {
 }
 
 export function useVodListMockState(options: VodListOptions = {}): VodListMockState {
+  // 고른 채널(POK-390). ChannelScope가 채널이 바뀌면 화면을 다시 세운다
+  const streamerId = useChannelStreamerId();
   const { toast } = useToast();
   const [filter, setFilter] = useState<VodPeriodFilter>('all');
   const [customRange, setCustomRange] = useState<VodCustomRange>(EMPTY_RANGE);
@@ -199,7 +202,7 @@ export function useVodListMockState(options: VodListOptions = {}): VodListMockSt
       try {
         // 목록을 끝까지 넘긴다 — 한 쪽만 읽으면 51번째부터 조용히 사라진다(POK-251 리뷰).
         // 실패하면 바깥 catch가 받아 지금 목록을 그대로 두고 다음 주기에 다시 한다
-        const all: WireBroadcast[] = await fetchAllBroadcasts('past');
+        const all: WireBroadcast[] = await fetchAllBroadcasts('past', streamerId);
         if (stopped) return;
         // 방송마다 카드 수·녹화 여부는 재서 기억한다. 카드 수는 낡으면(countStale) 다시 센다
         const cache = rowCache.current;
@@ -327,7 +330,7 @@ export function useVodListMockState(options: VodListOptions = {}): VodListMockSt
       stopped = true;
       window.clearInterval(t);
     };
-  }, [options.broadcasts]);
+  }, [options.broadcasts, streamerId]);
 
   const source = options.broadcasts ?? fetched;
   const visuals = options.visuals ?? fetchedVisuals;

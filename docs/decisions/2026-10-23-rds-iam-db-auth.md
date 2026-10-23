@@ -172,9 +172,9 @@ kty 는 「사이드카나 janitor 만 업데이트할 때 불편하지 않나�
     목록). DDL 소유 · 열 변경 승인 규칙은 그대로다. 운영은 `ENSURE_SCHEMA=false` 이고
     DDL 은 `media_indexer` 가 아니라 별도 역할이 적용한다.
 *   **ADR-0003**(media 비특권) — 번들은 root 소유 0644, 상위 디렉터리 755 다.
-    사이드카와 janitor 는 같은 이미지(`USER 10001`)이고, 로컬 compose 는 janitor 를
-    녹화 소유자와 같은 10002 로 덮어 띄운다(운영 템플릿의 janitor 슬롯은 아직
-    `user` 를 덮지 않는다 — 녹화 삭제 권한과 함께 엣지 후속이 정한다). 어느 쪽이든
+    사이드카와 janitor 는 같은 이미지(`USER 10001`)이고, 로컬 compose 와 운영
+    템플릿(`infra/media-host/compose.yml.tmpl` — `janitor_enabled` 가 참일 때)은
+    janitor 를 녹화 소유자와 같은 10002 로 덮어 띄운다. 어느 쪽이든
     비특권 계정이라 번들을 읽기만 한다. 따라서 현재 이미지 경로 · 권한을 전제로,
     비특권 실행 계정은 신뢰 앵커를 바꿔 칠 수 없다.
 *   **팀 위키 ADR-103**(Media 상자 기동 모델) — 사이드카는 DB 에 못 닿으면 끝나고
