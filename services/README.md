@@ -418,6 +418,9 @@ CHZZK_ENABLED=true CHZZK_ACCESS_TOKEN=<유저 Access Token> ./gradlew :chat-coll
 | `CHAT_RELAY_ENABLED` | `false` | ✅ | 켜면 받은 채팅·후원을 **저장과 따로** clip의 `POST /internal/broadcasts/{streamId}/chat-events`로 바로 민다(POK-234 PR-B, 라이브 화면 SSE). clip이 죽어도 표 적재는 그대로이고 중계는 재시도 없이 버리고 센다. 주소는 위 `CLIP_BASE_URL`, 토큰은 `INTERNAL_API_TOKEN`을 같이 쓴다 — **켜졌는데 둘 중 하나가 비면 부팅이 죽는다** |
 | `CHAT_RELAY_BUFFER_MAX` | `10000` | — | 수신 → 중계 바구니 상한(건). 넘치면 오래된 것부터 버리고 센다 |
 | `BROADCAST_INFO_ENABLED` | `false` | ✅ | 켜면 걷고 있는 방송마다 주기적으로 제목·태그·카테고리·시청자 수를 `broadcast_info`에 남기고, 중계가 켜져 있으면 화면에 `event: broadcast-info`로 민다(POK-234 PR-C). 켜져 있는데 아래 둘이 비면 **부팅이 죽는다**. **치지직 세션만 걷는다**(POK-397, 목록·설정이 치지직 창구다). 목록에서 찾은 방송은 clip 플랫폼 묶음에 `CHZZK`를 알린다(`PUT /internal/broadcasts/{streamId}/platforms/CHZZK`, 주소는 `CLIP_BASE_URL`(`pokeclip.platforms.clip-base-url`), 토큰은 `INTERNAL_API_TOKEN`, 켜졌는데 둘 중 하나가 비면 부팅이 죽는다). (방송, 플랫폼)마다 204를 받을 때까지만 보내고 주기 갱신은 없다. 실패(404·5xx·시한 접속 500ms·읽기 1초)면 다음 관측에 다시 보내고 경고는 (방송, 플랫폼)마다 첫 번만 WARN `platforms.notify_failed`, 뒤는 DEBUG. 받았다는 메모는 메모리라 재시작하면 한 번씩 다시 알린다(창구가 멱등). 알림은 그 틱의 저장·중계가 다 끝난 뒤에 보내고, 한 틱의 알림 합계가 3초를 넘으면 남은 것은 다음 틱에 먼저 보낸다(WARN `liveinfo.notify_deferred`, clip이 받고 답을 안 주면 틱이 방송 수 × 1.5초만큼 늘던 것을 막는다). 알림이 실패해도 정보 저장·중계는 그대로다 |
+| `SOOP_WATCH_ENABLED` | `false` | ✅ | 켜면 SOOP 연동 스트리머의 방송을 1분마다 확인해 방송 정보(`platform` `SOOP`)를 남기고 화면에 `event: broadcast-info`로 밀고 clip 플랫폼 묶음에 `SOOP`을 알린다(POK-397, 아래 「SOOP 방송 지켜보기」 절). 🔴 **PR3b(웹이 플랫폼별로 읽기) 배포 뒤에 켠다.** 먼저 켜면 플랫폼을 모르는 화면의 숫자·그래프가 두 플랫폼 사이를 오간다. 켜졌는데 `INTERNAL_API_TOKEN`·`AUTH_BASE_URL`·`CLIP_BASE_URL` 중 하나가 비면 부팅이 죽는다 |
+| `SOOP_DIAGNOSE_RESPONSE` | `false` | ✅ | 켜면 SOOP 방송 여부 응답 `data`의 **키 이름과 `status` 값만** INFO `soop.live.diagnose` 한 줄로 남긴다(값은 안 찍는다). 응답 칸이 바뀌었는지 볼 때 켜는 진단용이다(2026-10-24 실측으로 칸을 확정했다) |
+| `SOOP_API_BASE_URI` | `https://openapi.sooplive.com` | ✅ | SOOP 오픈 API 주소. 시험은 가짜 서버로 바꾼다 |
 | `BROADCAST_INFO_INTERVAL` | `PT1M` | — | 방송 정보 주기. 목록이 429를 주면 그 회차 시작부터 이 값(이어지면 두 배씩, 최대 5분)이 지나기 전 회차를 건너뛴다. 다음 회차가 앞 회차 끝 + 주기에 오므로 첫 429는 건너뛰는 회차가 없고 연속 둘째부터 건너뛴다 |
 | `CHZZK_CLIENT_ID` · `CHZZK_CLIENT_SECRET` | 빈 값 | ✅ | 🔴 **비밀.** 시청자 수를 얻는 전체 라이브 목록이 **앱 인증**이라 필요하다(채널 하나를 묻는 공식 창구가 없다). auth와 같은 치지직 앱 값이다 |
 | `CHAT_SYNC_OFFSET_MS` | `3900` | — | 채팅 시각에서 빼는 보정값(ms). **2026-08-24 로컬 실측값이다**(표본 20개 중앙값 3,884ms를 반올림). **음수를 허용하고 크기는 ±600000(10분)까지다.** 운영에서는 다시 잰다 — 아래 참고 |
@@ -3624,6 +3627,31 @@ SOOP 수신은 다음 PR이고, 지금 세션을 여는 곳(연동 시작)은 �
   SOOP으로 찍힌다. 지금은 여는 곳이 치지직뿐이라 도달 불가. PR4에서 자리 열쇠에 플랫폼을 넣는다(`SessionRegistry.retargetOrSkip` 주석).
 - **표의 기본값 `CHZZK`가 빠뜨림을 감춘다.** 새 코드가 플랫폼을 빠뜨려도 오류 없이 치지직이 된다(시험은 SOOP 값으로만 잰다). 옛 인스턴스가 다
   내려간 뒤 기본값을 지우는 것과, auth `V118`의 CHECK를 「수집기 줄이면 플랫폼 필수」로 올리는 것(채우기 + `VALIDATE`)은 다음 PR이다.
+
+### 수집기: SOOP 방송 지켜보기 (POK-397 PR3a)
+
+**SOOP 연동 스트리머의 방송을 1분마다 확인해 방송 정보를 남긴다.** 채팅 세션 자리(등록부)는 안 쓴다. SOOP 채팅 수집은 PR4다.
+스위치 `SOOP_WATCH_ENABLED`(기본 꺼짐), 진단 `SOOP_DIAGNOSE_RESPONSE`, 상한 `pokeclip.soop.max-watched`(100, **확인 중인 것만 센다**: 연동 없음 등으로 멈춘 지켜보기는 자리를 안 먹고 남아 다시 안 묻는다), 주기 1분.
+
+- **넣는 곳 둘**: 시작 편지(종료 메모만 지나면 **치지직 붙이기 결과와 무관하게**. 치지직을 연동 안 한 SOOP 단독 스트리머는 치지직 쪽이 편지를 지운다) ·
+  재부착(clip 방송 중 명부의 **모든** 읽을 수 있는 줄. 치지직이 붙어 있거나 치지직 포기 메모가 있어도 넣고, 종료 메모만 뺀다. 넣기 직전에 그 방송의 종료 메모를 다시 본다: 회차 처음 조회와 넣기 사이에 종료 편지가 오면 끝난 방송을 되살리던 자리다). 스트리머마다 하나이고
+  더 늦게 시작한 방송이 갈아낀다(시각 없는 재부착 줄은 못 갈아낀다).
+- **빼는 곳 넷**: 종료 편지 · 지켜보기 틱(종료 메모가 생긴 방송, 떼기 꺼짐과 무관) · 재부착 떼기 회차(명부가 온전하고 `CHAT_DETACH_ENABLED`일 때, 명부에 없고 유예보다 먼저 시작한 것) ·
+  **탈퇴 정리**(`(SOOP, SOOP 아이디)`, 탈퇴 시각 전에 시작한 것). SOOP에는 폐기 API가 없어 탈퇴 뒤에도 토큰이 만료(약 8시간)까지 살아 있으므로
+  정리기가 등록부 세션과 함께 지켜보기를 닫는다. 뺄 때 등록부에 그 방송 세션이 없으면 중계 번호 카운터도 치운다.
+- **한 틱**: 토큰이 없거나 만료 10분 전이면 auth `POST /internal/soop-link/resolve`로 받는다. 영구 거절(`NOT_LINKED`·`UNLINKED`·`BROKEN`)이면 그 방송 동안
+  다시 안 묻고, 그 밖(`REFRESH_UNAVAILABLE`·auth 장애)은 다음 틱에 다시 묻는다. 그다음 SOOP `POST /validate/live/status`(토큰은 form 본문 `access_token`에만,
+  시한 접속 1초·읽기 2초). **거부**(HTTP 200 + `result` 음수 · 400·401·403)면 곧바로 한 번 다시 받아 새 토큰으로 묻고, 새 토큰도 거부면 그 방송을 멈춘다
+  (WARN `soop.watch.stopped reason=REJECTED`). 다시 받은 토큰이 **같은 토큰**이면(auth가 아직 안 갈았다) 멈추지 않고 다음 틱에 다시 받는다. 같은 토큰 거부가 세 번 이어지면 멈춘다(`reason=SAME_TOKEN_REJECTED`), 그 사이 한 번 받아들여지면 센 수를 지운다. 그 밖 상태·못 읽는 본문은 일시라 다음 틱에 다시 본다. 아는 값(`streaming`·`streamend`) 밖의 `status`는 「방송 아님」으로 두고 값마다 첫 번 WARN `soop.live.unknown_status value=(32자까지) length=`를 남긴다. 방송 중(`status` `streaming`)이면
+  `broadcast_info` 한 줄(`platform` `SOOP`, `channel_id` = SOOP 아이디) · SSE `broadcast-info`(`platform` `SOOP`) · clip `PUT …/platforms/SOOP`(위 방송 정보 줄과 같은 알림 규칙).
+  확인하는 사이 빠진 방송은 남기지 않는다.
+- **응답 칸은 실방송으로 확정했다**(2026-10-24 진단, 키 이름만). 방송 중 `data`: `broad_cate_no`·`broad_no`·`broad_start`·`broad_thumb`·`broad_title`·
+  `current_view_cnt`·`language`·`link`·`paid_promotion`·`status`·`user_id`, `status` `streaming`(문서와 같다). 방송 아님: `broad_no`·`status`, `status` `streamend`.
+  제목 `broad_title`, 시청자 수 `current_view_cnt`(숫자 또는 숫자 글자). 카테고리는 `broad_cate_no`로 **번호만** 오고 이름 표가 없어 읽지 않는다(`null`).
+  🔴 첫 판은 잠정 값 `onair`·`current_sum_viewer`를 써서 방송 중을 하나도 못 알아봤다(clip 알림 0건). 진단 스위치는 칸이 바뀌는지 볼 때 다시 켠다.
+- **로그에 토큰·SOOP 아이디를 안 싣는다.** 방송 번호·회원 번호·사유·상태 코드·원인 타입만. 연동 record의 `toString`도 가린다.
+- **한 틱 시간 예산 45초**(clip 알림 포함). 넘으면 남은 방송은 다음 틱으로 미루고(WARN `soop.watch.deferred`) 다음 틱은 미룬 것부터 본다. 스케줄러 풀은 6(이 틱이 여섯째)이다.
+- 남은 한계: 세션 자리가 스트리머 번호 하나라 SOOP 채팅은 아직 못 걷는다(PR4). 꺼진 플랫폼도 clip 묶음에 남는다(꺼짐은 관측 시각으로 판정).
 
 ### 운영 전 잔불 정리: 보관 기한 청소·프록시 IP (POK-89)
 

@@ -1,6 +1,7 @@
 package com.pokeclip.chat.collector.broadcast;
 
 import com.pokeclip.chat.collector.StopReason;
+import com.pokeclip.chat.collector.soop.SoopWatch;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -51,16 +52,25 @@ public class BroadcastEventProcessor {
      */
     private final BiConsumer<String, StopReason> recorder;
 
+    /** SOOP 방송 지켜보기(POK-397). 시작 편지가 넣고 종료 편지가 뺀다. 꺼져 있으면 {@link SoopWatch#NONE}. */
+    private final SoopWatch soop;
+
     private final AtomicLong unreadableStreamerIds = new AtomicLong();
     private final AtomicLong unknownTypes = new AtomicLong();
     private final AtomicLong malformedEnvelopes = new AtomicLong();
 
     public BroadcastEventProcessor(EndedStreamStore store, IngestKeyStore ingestKeys, BroadcastSessions sessions,
                                    BiConsumer<String, StopReason> recorder) {
+        this(store, ingestKeys, sessions, recorder, SoopWatch.NONE);
+    }
+
+    public BroadcastEventProcessor(EndedStreamStore store, IngestKeyStore ingestKeys, BroadcastSessions sessions,
+                                   BiConsumer<String, StopReason> recorder, SoopWatch soop) {
         this.store = store;
         this.ingestKeys = ingestKeys;
         this.sessions = sessions;
         this.recorder = recorder;
+        this.soop = soop;
     }
 
     public ProcessResult process(LifecycleEnvelope envelope) {
@@ -180,6 +190,7 @@ public class BroadcastEventProcessor {
         // 뜨기 전에 시작한 방송은 애초에 연 적이 없다. 그것을 RETRY_LATER로 돌리면
         // 영원히 다시 받는다.
         sessions.stop(envelope.streamId());
+        soop.unwatch(envelope.streamId());
         return ProcessResult.PROCESSED;
     }
 
@@ -204,6 +215,10 @@ public class BroadcastEventProcessor {
             }
             return ProcessResult.IGNORED_STALE;
         }
+        // 🔴 치지직 붙이기 결과와 무관하게 SOOP 지켜보기에 넣는다(POK-397 계획 검증 M4). 치지직을 연동 안 한 SOOP 단독 스트리머는
+        // 아래가 LINK_REFUSED라 편지가 지워지는데, 그 뒤에는 이 방송을 다시 알려 줄 편지가 없다. 넣기만 하고 I/O는 없다. 앞에 두는 것은
+        // 아래가 던져 편지가 다시 와도 넣기가 멱등이라서다.
+        soop.watch(envelope.streamId(), streamer.value(), envelope.occurredAt());
         ProcessResult result = sessions.start(envelope.streamId(), streamer, envelope.occurredAt());
         if (result == ProcessResult.LINK_REFUSED) {
             // <b>지우기 전에 남긴다.</b> 편지가 이 방송의 유일한 트리거라, 메모 없이 지우면
