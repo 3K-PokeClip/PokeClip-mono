@@ -148,26 +148,25 @@ class JumpCardListControllerTest extends IntegrationTestSupport {
                 .andExpect(jsonPath("$.cards[1].source").value("hotkey"));
     }
 
-    /** 숨김은 표시 여부이지 삭제가 아니다 — 두 방향을 같은 갈래에서 재야 {@code includeHidden}이 갈린다. */
+    /**
+     * 숨기기는 없어졌다(POK-393). <b>숨김 칸이 찬 옛 카드도 그대로 나오고</b>, 응답에 점유·숨김 칸이 없다.
+     * 칸 자체는 POK-394가 지울 때까지 표에 남아 있어서, 거르기가 남으면 옛 숨김 카드가 영영 안 보인다.
+     */
     @Test
-    void 숨긴_카드는_기본으로_빠지고_달라고_하면_나온다() throws Exception {
+    void 숨김_칸이_찬_카드도_나오고_응답에_점유_숨김_칸이_없다() throws Exception {
         볼_수_있다("OWNER");
-        카드를_넣는다(내_방송, 1000, "auto");
-        숨긴다(카드를_넣는다(내_방송, 2000, "auto"));
+        long 보이는 = 카드를_넣는다(내_방송, 1000, "auto");
+        long 숨긴 = 카드를_넣는다(내_방송, 2000, "auto");
+        숨긴다(숨긴);
 
-        목록("?includeHidden=false")
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.cards.length()").value(1))
-                .andExpect(jsonPath("$.cards[0].streamTimestampMs").value(1000));
+        Map<String, Object> 응답 = 맵(본문(목록("").andExpect(status().isOk())));
 
-        목록("?includeHidden=true")
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.cards.length()").value(2))
-                .andExpect(jsonPath("$.cards[1].hidden").value(true));
-
-        목록("")
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.cards.length()").value(1));
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> 카드들 = (List<Map<String, Object>>) 응답.get("cards");
+        assertThat(카드들).extracting(c -> ((Number) c.get("id")).longValue()).containsExactly(보이는, 숨긴);
+        for (String 옛_칸 : List.of("claimedBy", "claimedAt", "claimExpiresAt", "hidden", "hiddenBy", "hiddenReason")) {
+            assertThat(카드들.get(1)).as(옛_칸).doesNotContainKey(옛_칸);
+        }
     }
 
     // ── 개수와 이어받기 ─────────────────────────────────────────

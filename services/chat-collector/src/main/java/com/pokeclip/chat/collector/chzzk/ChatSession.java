@@ -428,7 +428,12 @@ public class ChatSession implements AutoCloseable {
         // <b>이 수립의 종료 표시를 붙잡아 둔다.</b> 필드를 매 바퀴 읽으면 다음 수립이 갈아
         // 끼운 새 표시를 보게 되어, 이미 반납된 키로 구독을 쏘는 스레드가 되살아난다.
         AtomicBoolean myStopping = stopping;
-        donationRetry = Thread.ofVirtual().name("chzzk-donation-retry").start(() -> {
+        // 🔴 <b>필드에 먼저 싣고 나서 띄운다</b>(봇 codex). 띄운 뒤에 실으면 그 사이에 온 멈춤이
+        // 옛 값(null)을 읽고 지나가, 이 스레드는 멈춤 표시를 못 본 채 한 주기를 잔다. 멈춤은
+        // 인터럽트를 한 번만 보내므로(stopDonationRetry) 뒤에 다시 잡아 줄 사람이 없다.
+        // 먼저 실으면 멈춤이 이 스레드를 보고 깨우거나, 못 봤다면 그 멈춤은 시작보다 앞이라
+        // 첫 조건에서 끝난다.
+        Thread retry = Thread.ofVirtual().name("chzzk-donation-retry").unstarted(() -> {
             while (!myStopping.get()) {
                 try {
                     Thread.sleep(donationRetryPeriod);
@@ -502,6 +507,8 @@ public class ChatSession implements AutoCloseable {
                 }
             }
         });
+        donationRetry = retry;
+        retry.start();
     }
 
     /**
@@ -543,9 +550,18 @@ public class ChatSession implements AutoCloseable {
         }
     }
 
-    /** 재시도를 멈춘다. <b>기다리지 않는다</b> — 위 javadoc의 예산 이유. */
+    /**
+     * 재시도를 멈춘다. <b>기다리지 않는다</b> — 위 javadoc의 예산 이유.
+     *
+     * <p>🔴 <b>인터럽트는 한 번만 보낸다.</b> {@code releaseAndClose} 는 처음에 여기를 부르고 끝의
+     * {@code close()} 에서 또 부른다. 첫 인터럽트를 받은 재시도 스레드는 표시를 지우고 후원 반납을
+     * 쏘는데({@link #releaseDonationQuietly}), 두 번째 인터럽트가 그 요청이 서버에 닿기 전에 오면
+     * 요청이 죽어 그 구독은 아무도 거두지 않는다(PR #320 CI 에서 반납 0회로 드러남).
+     */
     private void stopDonationRetry() {
-        stopping.set(true);
+        if (!stopping.compareAndSet(false, true)) {
+            return;
+        }
         Thread retry = donationRetry;
         if (retry != null) {
             retry.interrupt();

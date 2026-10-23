@@ -544,8 +544,7 @@ public class CardStreamRegistry implements EndedListener {
      * <b>놓은 카드가 집힌 것으로 남았다.</b>
      *
      * <p><b>같은 순번도 버린다</b>({@code <=}). 같은 {@code eventSeq}면 내용도 같으므로
-     * 다시 보내 봐야 화면이 헛돌 뿐이다 — {@code toggleHidden}이 「안 바뀌었으면 발행 안 함」으로
-     * 막는 것과 같은 이유다.
+     * 다시 보내 봐야 화면이 헛돌 뿐이다.
      *
      * <p><b>중간 이벤트가 빠질 수 있다.</b> 낡은 것을 버리므로 화면은 N+1만 받고 N을 못 본다.
      * 무해하다 — 카드는 <b>상태</b>이지 사건의 나열이 아니고, 최신이 맞으면 화면이 맞다.

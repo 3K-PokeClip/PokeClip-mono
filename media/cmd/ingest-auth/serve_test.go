@@ -653,6 +653,7 @@ func TestRunServesWithCallerBasic(t *testing.T) {
 		if status, body := mustPostAuth(t, r.listen, publishBody(testToken, testConnID(2)), http.Header{"Authorization": nil}); status != http.StatusUnauthorized || body != "" {
 			t.Errorf("POST publish without the caller Basic = %d with a %d-byte body, want 401 without a body", status, len(body))
 		}
+		// 기다릴 줄이 없어 지금까지의 출력만 본다 — 늦게 찍히는 WARN 은 이 단언이 놓칠 수 있다.
 		if n := len(logEvents(r.stdout.String(), "ingestauth_caller_basic_off")); n != 0 {
 			t.Errorf("ingestauth_caller_basic_off events = %d, want 0 while caller Basic is on", n)
 		}
@@ -667,6 +668,9 @@ func TestRunServesWithCallerBasic(t *testing.T) {
 		if got := logEvents(r.stdout.String(), "ingestauth_started")[0]["caller_auth"]; got != "off" {
 			t.Errorf("ingestauth_started caller_auth = %s, want \"off\"", shown(got))
 		}
+		// run 은 ingestauth_started 를 찍은 뒤에 이 WARN 을 찍는다 — startResponder 는 started 까지만 기다리므로
+		// 여기서 따로 기다린다(상한 5초).
+		waitForEvent(t, r.stdout, "ingestauth_caller_basic_off", r.done, 5*time.Second)
 		if warns := logEvents(r.stdout.String(), "ingestauth_caller_basic_off"); len(warns) != 1 || warns[0]["level"] != "WARN" {
 			t.Errorf("ingestauth_caller_basic_off events = %s, want one at WARN", eventsSummary(warns))
 		}

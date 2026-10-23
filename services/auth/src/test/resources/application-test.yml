@@ -93,6 +93,24 @@ pokeclip:
       enabled: false
       interval: PT1H
       staleness: PT24H
+  soop:
+    app:
+      client-id: test-soop-client-id
+      client-secret: test-soop-client-secret
+      redirect-uri: http://localhost:3000/oauth/soop/callback
+    authorize-uri: https://openapi.sooplive.com/auth/code
+    # 자리표시다. 실제 주소는 IntegrationTestSupport·RealServerTestSupport가 가짜 서버(FakeSoopServer)로 덮어쓴다.
+    api-base-uri: http://127.0.0.1:1
+    state-ttl: PT10M
+    refresh-ahead: PT2H
+    resolve-min-remaining: PT1H
+    check:
+      # 치지직 갱신 스케줄러와 같은 이유로 끈다. 배선은 전용 시험이 잰다.
+      enabled: false
+      interval: PT1H
+      staleness: PT24H
+      reject-brake: 3
+      batch-limit: 25
   retention:
     # 컨텍스트마다 틱이 돌면 다른 시험이 심은 행을 지운다. 배선은 RetentionCleanupSchedulerTest가 잰다.
     enabled: false

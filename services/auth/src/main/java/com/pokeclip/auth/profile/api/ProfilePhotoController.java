@@ -83,7 +83,7 @@ public class ProfilePhotoController {
      *
      * <h4>전수 명부 — auth에서 {@code Long.valueOf(jwt.getSubject())}를 하는 자리</h4>
      *
-     * <p><b>전수 12자리 · 11파일 · 감싼 것 5 · 안 감싼 것 7</b> (2026-09-15, POK-240 기준).
+     * <p><b>전수 13자리 · 12파일 · 감싼 것 5 · 안 감싼 것 8</b> (2026-10-23, POK-396 기준).
      * 이 줄은 {@code TokenSubjectRegistryTest}가 기계로 대조한다 — <b>자리가 늘거나 줄면 빨간불</b>이다.
      *
      * <p>🔴 <b>숫자는 이 한 줄에만 둔다.</b> 아래 목록도, 다른 파일의 설명도 세어 둔 수를 다시 적지 않는다 —
@@ -100,7 +100,7 @@ public class ProfilePhotoController {
      * </ul>
      *
      * <p><b>안 감싼 자리 — 그대로다.</b>
-     * {@code ChzzkLinkController:60} · {@code YoutubeLinkController:70} ·
+     * {@code ChzzkLinkController:60} · {@code YoutubeLinkController:70} · {@code SoopLinkController:62} ·
      * <b>{@code StreamKeyController:27}·{@code :38}(한 파일에 두 자리다)</b> ·
      * {@code PairingCodeController:30} · {@code EditorDelegationController:43} ·
      * {@code EditorInvitationController:74}. 이것들은 {@code NumberFormatException}을 그대로 흘려

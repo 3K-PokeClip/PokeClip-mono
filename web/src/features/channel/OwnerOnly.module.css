@@ -1,0 +1,7 @@
+.root {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--pc-space-4);
+  padding: calc(64 * var(--pc-u)) var(--pc-space-4);
+}

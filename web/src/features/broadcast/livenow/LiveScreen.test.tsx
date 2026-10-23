@@ -106,6 +106,8 @@ vi.mock('@/features/player/GlassPlayer', async (importOriginal) => {
 // 라이브 재생기(hls.js) 흉내(POK-326): 목록의 조각 하나가 영상 0초(지금 1시간 전, MEDIA_ZERO)부터 지금까지를 덮고, 재생기는 그
 // 조각의 시각 표시(PDT)로 실제 시각을 센다. 영상 주소가 없는 시험(대부분)은 라이브 재생기가 서지 않아 이 흉내를 타지 않는다
 const hlsFake = vi.hoisted(() => ({
+  /** 라이브 영상 목록을 부른 횟수(POK-317) */
+  loads: 0,
   /** 목록에 시각 표시(PDT)가 있나 */
   pdt: true,
   /**
@@ -140,6 +142,7 @@ vi.mock('hls.js', () => {
     }
     attachMedia() {}
     loadSource() {
+      hlsFake.loads += 1;
       this.handlers.get('hlsManifestParsed')?.();
     }
     startLoad() {}
@@ -190,8 +193,6 @@ interface Card {
   window: { startMs: number; endMs: number };
   score: number | null;
   evidence: Record<string, unknown> | null;
-  claimedBy: string | null;
-  hidden: boolean;
   eventSeq: number;
   createdAt: string;
 }
@@ -205,8 +206,6 @@ function card(id: number, over: Partial<Card>): Card {
     window: { startMs: id * 60_000 - 20_000, endMs: id * 60_000 + 22_000 },
     score: 80,
     evidence: { ratio: 3.2, count: 120 },
-    claimedBy: null,
-    hidden: false,
     eventSeq: id,
     // 만든 시각은 전부 차트(최근 10분) 밖이다 — 마커는 만든 시각이 아니라 카드가 가리키는 방송 시점에
     // 찍혀야 하므로(PR #200 codex), 만든 시각 기준이면 「하이라이트 4곳」 시험이 깨진다
@@ -215,7 +214,7 @@ function card(id: number, over: Partial<Card>): Card {
   };
 }
 
-// 자동 6 · 수동 2. eventSeq가 큰 것이 앞에 선다.
+// 자동 6 · 수동 2. 방송 시각이 늦은 것이 앞에 선다.
 const CARDS: Card[] = [
   card(8, { score: 97, streamTimestampMs: 5_000_000, eventSeq: 80 }),
   // 차트(최근 10분)에 마커가 서는 넷: 8·7·6·5 — 마커는 카드가 가리키는 방송 시점에 찍힌다
@@ -226,8 +225,8 @@ const CARDS: Card[] = [
     eventSeq: 70,
     streamTimestampMs: 4_900_000,
   }),
-  card(6, { claimedBy: '5', eventSeq: 60, streamTimestampMs: 4_800_000 }),
-  card(5, { claimedBy: ME, eventSeq: 50, streamTimestampMs: 4_700_000 }),
+  card(6, { eventSeq: 60, streamTimestampMs: 4_800_000 }),
+  card(5, { eventSeq: 50, streamTimestampMs: 4_700_000 }),
   card(4, { streamTimestampMs: 2_842_000, eventSeq: 40 }),
   card(3, { source: 'hotkey', score: null, evidence: null, eventSeq: 30 }),
   card(2, { eventSeq: 20 }),
@@ -321,14 +320,17 @@ const server = vi.hoisted(() => ({
   live: true,
   failLive: false,
   relation: 'OWNER',
-  hidden: new Set<number>(),
-  /** 놓은 카드(POK-338) — 목록에서 집은 사람이 빈다 */
-  released: new Set<number>(),
+  /** 나중에 생긴 카드: 다음 목록 읽기부터 실린다 */
+  extraCards: [] as Card[],
+  /** 옛 서버처럼 점유·숨김 칸(claimedBy·hidden)을 실어 보낸다(POK-393 배포 사이) */
+  legacyFields: false,
   chatPaged: false,
   /** 후원 줄의 서버 id를 첫 채팅 id와 같게 준다: 채팅·후원은 표가 달라 번호가 겹친다(POK-254) */
   chatIdClash: false,
   /** 출입증: 'off'는 서명 재료 없음(503), 'grant'는 10분짜리, 'fail'은 500 */
   playback: 'off' as 'off' | 'grant' | 'fail',
+  /** 있으면 출입증 답을 이것이 풀릴 때까지 붙잡는다(POK-317) */
+  playbackGate: null as Promise<void> | null,
   /** 지난 방송의 시각 기준점(POK-255). null이면 서버가 모른다 */
   vodOrigin: null as number | null,
   /** 영상 경로의 키(POK-233). undefined면 이 칸을 모르는 옛 서버다 */
@@ -396,6 +398,8 @@ const server = vi.hoisted(() => ({
   liveOffsetMs: 0,
   /** 라이브 줄에 시작 시각이 없고 시각 기준점만 있다(명부가 시작을 모르는 라이브) */
   liveStartUnknown: false,
+  /** 수집기가 관측마다 카테고리를 싣는다(아직 안 싣는다 — 실으면 통계가 바뀐 구간을 나눈다) */
+  infoCategoryChange: false,
   /** 라이브 줄의 시각 기준점(카드 0초). 서버 기준점은 첫 조각의 PDT − pts라 ms 자리가 있다. 없으면 싣지 않는다 */
   liveOriginMs: null as number | null,
   /** 라이브 다시 보기 물음(한 쪽 CHAT_PAGE_MAX줄)에 503을 준다. 폴링(200줄)은 그대로다 */
@@ -553,6 +557,29 @@ function listResponse(u: URL): Response {
   });
 }
 
+/**
+ * 라이브 방송의 차트 한 장 — 수집기처럼 물은 창(영상 축)을 칸으로 다 채운다(빈 칸은 0, 칸 시작은 표 축 = 영상 축 + 보정).
+ * 최근 10분 고정 차트(CHART)의 칸은 그 시각이 든 칸에 얹는다. 라이브도 방송 처음부터 1시간 창으로 나눠 읽으므로, 창마다 같은
+ * 차트를 주면 칸이 겹친다
+ */
+function liveChartPage(u: URL, base: typeof CHART.buckets, offsetMs: number) {
+  const from = Date.parse(u.searchParams.get('from') ?? '');
+  const to = Date.parse(u.searchParams.get('to') ?? '');
+  const bucket = Number(u.searchParams.get('bucket'));
+  const span = bucket * 1000;
+  const buckets: { start: string; chats: number; donations: number }[] = [];
+  for (let t = from; t < to; t += span)
+    buckets.push({ start: new Date(t + offsetMs).toISOString(), chats: 0, donations: 0 });
+  for (const b of base) {
+    const i = Math.floor((Date.parse(b.start) - (from + offsetMs)) / span);
+    const hit = buckets[i];
+    if (!hit) continue;
+    hit.chats += b.chats;
+    hit.donations += b.donations;
+  }
+  return { bucketSeconds: bucket, appliedOffsetMs: offsetMs, buckets };
+}
+
 /** 방송 정보의 답. 수집기는 since가 없으면 최근 1시간만 준다(DEFAULT_WINDOW): 몇 시간 전에 끝난 지난 방송은 기록이 비어 온다 */
 function infoResponse(path: string, noSince: boolean): Response {
   if (server.infoSinceFail && !noSince) return jsonResponse(503, { error: 'unavailable' });
@@ -561,11 +588,20 @@ function infoResponse(path: string, noSince: boolean): Response {
     : server.infoTitleMissing
       ? { ...INFO, latest: { ...INFO.latest, title: null } }
       : INFO;
+  const withCategory = server.infoCategoryChange
+    ? {
+        ...info,
+        series: info.series.map((p, i) => ({
+          ...p,
+          category: i < 2 ? '저스트 채팅' : '리그 오브 레전드',
+        })),
+      }
+    : info;
   const body = server.infoNoViewers
-    ? { ...info, series: info.series.map((p) => ({ ...p, viewers: null })) }
+    ? { ...withCategory, series: withCategory.series.map((p) => ({ ...p, viewers: null })) }
     : server.infoLastNull
       ? { ...info, series: [...info.series.slice(0, -1), { ...info.series[2], viewers: null }] }
-      : info;
+      : withCategory;
   return jsonResponse(
     200,
     noSince && path.includes(`/${VOD_ID}/`) ? { ...body, series: [] } : body,
@@ -581,14 +617,12 @@ function handle(url: string, init?: RequestInit): Response | Promise<Response> {
       : listResponse(u);
   if (path.endsWith('/jump-cards')) {
     if (server.cards === 'fail') return jsonResponse(503, { error: 'unavailable' });
-    // 숨긴 카드는 includeHidden일 때만 hidden:true로 온다(서버 기본은 뺀다)
-    const withHidden = u.searchParams.get('includeHidden') === 'true';
-    const cards = (server.cards === 'none' ? [] : CARDS).map((c) => ({
-      ...c,
-      hidden: server.hidden.has(c.id),
-      claimedBy: server.released.has(c.id) ? null : c.claimedBy,
-    }));
-    return jsonResponse(200, { cards: withHidden ? cards : cards.filter((c) => !c.hidden) });
+    const cards = server.cards === 'none' ? [] : [...CARDS, ...server.extraCards];
+    return jsonResponse(200, {
+      cards: server.legacyFields
+        ? cards.map((c) => ({ ...c, hidden: true, claimedBy: '99' }))
+        : cards,
+    });
   }
   if (path.endsWith('/chat-chart') && server.chartRecentGate) {
     const gate = server.chartRecentGate;
@@ -622,15 +656,21 @@ function handle(url: string, init?: RequestInit): Response | Promise<Response> {
         buckets: CHART.buckets.map((b, i) => ({ ...b, chats: i === 0 ? first : 0, donations: 0 })),
       });
     }
-    if (server.vodChartFail && Date.parse(u.searchParams.get('from')!) < NOW - 3_600_000)
+    // 지난 방송 그래프가 실패한다: 지난 방송 주소는 1시간보다 앞 창이, 끝난 라이브는 모든 창이(라이브 동안 받아 둔 다 지난 창은
+    // 다시 묻지 않으므로 끝 창까지 실패해야 「못 받은」 상태다). 라이브 동안은 읽힌다
+    if (
+      server.vodChartFail &&
+      ((path.includes(`/${VOD_ID}/`) &&
+        Date.parse(u.searchParams.get('from')!) < NOW - 3_600_000) ||
+        (path.includes(`/${STREAM_ID}/`) && server.liveEnded))
+    )
       return jsonResponse(503, { error: 'unavailable' });
     // 라이브 되감기 보정 시험(POK-326)은 라이브 채팅과 같은 보정을 차트에도 싣는다
-    if (server.liveChartSparse)
-      return jsonResponse(200, {
-        ...CHART,
-        appliedOffsetMs: server.liveOffsetMs,
-        buckets: CHART.buckets.map((b) => ({ ...b, chats: 1, donations: 0 })),
-      });
+    const liveBuckets = server.liveChartSparse
+      ? CHART.buckets.map((b) => ({ ...b, chats: 1, donations: 0 }))
+      : CHART.buckets;
+    if (path.includes(`/${STREAM_ID}/`))
+      return jsonResponse(200, liveChartPage(u, liveBuckets, server.liveOffsetMs));
     return jsonResponse(200, { ...CHART, appliedOffsetMs: server.liveOffsetMs });
   }
   if (path.endsWith('/broadcast-info')) {
@@ -658,6 +698,11 @@ function handle(url: string, init?: RequestInit): Response | Promise<Response> {
   }
   // 통로는 용량 초과로 답한다 — 폴링이 카드를 채운다(통로 자체는 useLiveMockState의 몫)
   if (path.endsWith('/events')) return jsonResponse(503, { error: 'sse_capacity' });
+  if (path.endsWith('/playback-access') && server.playbackGate) {
+    const gate = server.playbackGate;
+    server.playbackGate = null;
+    return gate.then(() => handle(url, init));
+  }
   if (path.endsWith('/playback-access')) {
     if (server.playback === 'grant')
       return jsonResponse(200, {
@@ -665,7 +710,7 @@ function handle(url: string, init?: RequestInit): Response | Promise<Response> {
         expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
       });
     if (server.playback === 'fail') return jsonResponse(500, { error: 'boom' });
-    return jsonResponse(503, { error: 'signing_unavailable' });
+    return jsonResponse(503, { error: 'playback_signing_unavailable' });
   }
   if (path === '/api/chzzk-link')
     return jsonResponse(200, { linked: true, channelName: '게임하는너구리', status: 'ACTIVE' });
@@ -676,20 +721,10 @@ function handle(url: string, init?: RequestInit): Response | Promise<Response> {
       name: '박편집',
       profileImageUrl: null,
     });
-  if (path.endsWith('/hide')) {
-    const id = Number(path.split('/')[4]);
-    if (init?.method === 'DELETE') server.hidden.delete(id);
-    else server.hidden.add(id);
-    return new Response(null, { status: 204 });
-  }
-  if (path.endsWith('/claim')) {
-    if (init?.method === 'DELETE') server.released.add(Number(path.split('/')[4]));
-    return new Response(null, { status: 204 });
-  }
   return jsonResponse(404, { error: 'unexpected_call' });
 }
 
-/** sub=9인 access 토큰 — 카드의 claimedBy와 견줘 「내가 편집 중」을 가른다 */
+/** sub=9인 access 토큰 */
 function tokenFor(sub: string) {
   const b64 = (v: object) => btoa(JSON.stringify(v)).replace(/=+$/, '');
   return `${b64({ alg: 'none' })}.${b64({ sub })}.sig`;
@@ -730,6 +765,7 @@ beforeEach(() => {
   server.liveChatTimeline = false;
   server.liveAsks = [];
   server.liveStartUnknown = false;
+  server.infoCategoryChange = false;
   server.liveOffsetMs = 0;
   server.liveOriginMs = null;
   server.liveReplayFail = false;
@@ -752,11 +788,13 @@ beforeEach(() => {
   server.live = true;
   server.failLive = false;
   server.relation = 'OWNER';
-  server.hidden = new Set();
-  server.released = new Set();
+  server.extraCards = [];
+  server.legacyFields = false;
   server.chatPaged = false;
   server.chatIdClash = false;
   server.playback = 'off';
+  server.playbackGate = null;
+  hlsFake.loads = 0;
   notFound.mockClear();
   // env는 셸에서 그대로 상속된다 — 로컬/CI 셸에 NEXT_PUBLIC_MEDIA_*가 export돼 있어도 소스가 null이게 고정한다.
   vi.stubEnv('NEXT_PUBLIC_MEDIA_STUB_URL', '');
@@ -783,6 +821,26 @@ async function settle() {
       await vi.advanceTimersByTimeAsync(0);
     });
   }
+}
+
+/** jsdom은 폭이 0이다 — 통계 그래프는 폭을 재고서야 그린다. 그래프 안(「지금」·타임라인)을 보는 시험은 넓은 화면의 패널 폭을 준다 */
+function graphWidth() {
+  vi.spyOn(Element.prototype, 'getBoundingClientRect').mockReturnValue({
+    width: 1092,
+    height: 300,
+    top: 0,
+    left: 0,
+    right: 1092,
+    bottom: 300,
+    x: 0,
+    y: 0,
+    toJSON: () => ({}),
+  } as DOMRect);
+}
+
+/** 통계 숫자 줄 한 칸의 값(이름 dt 다음 dd) */
+function statValue(label: string) {
+  return screen.getByText(label, { selector: 'dt' }).nextElementSibling;
 }
 
 async function renderLive() {
@@ -943,6 +1001,71 @@ describe('LiveScreen — 영상 출입증', () => {
     expect(accessCalls()).toBe(2);
   });
 
+  it('첫 출입증 답을 받기 전에는 라이브 영상을 부르지 않는다: 먼저 부르면 CDN 뒤 첫 요청이 쿠키 없이 403이다(POK-317)', async () => {
+    stubMediaElement();
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', 'http://live.test');
+    server.playback = 'grant';
+    let release!: () => void;
+    server.playbackGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await renderLive();
+    expect(hlsFake.loads).toBe(0);
+
+    release();
+    await settle();
+    expect(hlsFake.loads).toBeGreaterThan(0);
+  });
+
+  it('출입증을 못 받았으면 라이브를 열지 않고, 다시 받아진 뒤에 연다: 쿠키 없이 열면 hls.js가 한 번 다시 해 보고 포기한다(PR #320 codex)', async () => {
+    stubMediaElement();
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', 'http://live.test');
+    server.playback = 'fail';
+    await renderLive();
+    expect(hlsFake.loads).toBe(0);
+
+    server.playback = 'grant';
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    await settle();
+    expect(hlsFake.loads).toBeGreaterThan(0);
+  });
+
+  it('갱신이 실패하다가 다시 받아지면 재생기를 새로 세운다: 쿠키가 끝난 사이 멈춘 hls.js는 새 쿠키로 저절로 안 살아난다(PR #320 codex)', async () => {
+    stubMediaElement();
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', 'http://live.test');
+    server.playback = 'grant';
+    await renderLive();
+    expect(hlsFake.loads).toBe(1);
+
+    // 정상 갱신(만료 5분 전)은 재생기를 다시 세우지 않는다
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6 * 60_000);
+    });
+    await settle();
+    expect(hlsFake.loads).toBe(1);
+
+    // 다음 갱신이 실패하고, 1분 뒤 다시 받아진다
+    server.playback = 'fail';
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+    });
+    server.playback = 'grant';
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    await settle();
+    expect(hlsFake.loads).toBe(2);
+  });
+
+  it('출입증이 필요 없는 곳(로컬·dev)은 첫 화면이 서는 사이에 라이브 영상을 부른다: 기다림이 재생 시작을 늦추지 않는다', async () => {
+    stubMediaElement();
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', 'http://live.test');
+    await renderLive();
+    expect(hlsFake.loads).toBeGreaterThan(0);
+  });
+
   it('서명 재료가 없는 서버(503)에는 다시 묻지 않는다 — 출입증이 필요 없는 곳이다', async () => {
     await renderLive();
     await act(async () => {
@@ -1027,40 +1150,68 @@ describe('LiveScreen — 방송 정보 바', () => {
 });
 
 describe('LiveScreen — 하이라이트 카드', () => {
-  it('상태 배지를 카드 원본에 맞춰 그린다 — 점수·남이 집음·내가 집음', async () => {
+  it('상태 배지는 점수와 검토 대기다: 「편집 중」 배지가 없다 (POK-393)', async () => {
     await renderLive();
 
     expect(screen.getByText('97점')).toBeInTheDocument();
-    expect(screen.getByText('편집 중')).toBeInTheDocument();
-    expect(screen.getByText('내가 편집 중')).toBeInTheDocument();
+    expect(screen.queryByText(/편집 중/)).not.toBeInTheDocument();
   });
 
-  it('"편집"은 그 카드의 방송·카드 번호를 싣고 편집기로 가고, 누르면 카드를 집는다', async () => {
+  it('"편집"은 그 카드의 방송·카드 번호를 싣고 편집기로 가고, 누를 때 집기 요청을 보내지 않는다 (POK-393)', async () => {
     await renderLive();
 
     const edits = screen.getAllByRole('link', { name: '편집' });
     expect(edits[0]).toHaveAttribute('href', `/clips/editor?stream=${STREAM_ID}&card=8`);
     fireEvent.click(edits[0] as HTMLElement);
     await settle();
-    expect(
-      fetchSpy.mock.calls.some(
-        ([url, init]) => url === '/api/clip/jump-cards/8/claim' && init?.method === 'POST',
-      ),
-    ).toBe(true);
-    // 업로드 라우트는 아직 없다 — 자리만 두고 비활성
+    expect(fetchSpy.mock.calls.filter(([url]) => String(url).includes('/claim'))).toHaveLength(0);
+    // 업로드 라우트는 아직 없다: 자리만 두고 비활성
     expect(screen.getAllByRole('button', { name: '원클릭 업로드' })[0]).toBeDisabled();
   });
 
-  it('남이 집은 카드는 편집 단추를 감추고, 내가 집은 카드는 다시 들어갈 수 있다', async () => {
+  it('카드에는 편집만 있다: 모든 카드에 편집이 있고 놓기·숨기기·숨김 칩이 없다 (POK-393)', async () => {
     await renderLive();
-    // 8장 중 남이 집은 1장만 단추가 없다
-    expect(screen.getAllByRole('link', { name: '편집' })).toHaveLength(7);
+
+    expect(screen.getAllByRole('link', { name: '편집' })).toHaveLength(8);
+    const first = screen.getAllByRole('article')[0] as HTMLElement;
+    expect(within(first).queryByRole('button', { name: '놓기' })).not.toBeInTheDocument();
+    expect(within(first).queryByRole('button', { name: '이 카드 숨기기' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^숨김 / })).not.toBeInTheDocument();
+  });
+
+  it('점유·숨김 칸이 실린 옛 응답이 와도 카드가 다 보이고 「편집 중」이 아니다 (POK-393)', async () => {
+    server.legacyFields = true;
+    await renderLive();
+
+    expect(screen.getAllByRole('link', { name: '편집' })).toHaveLength(8);
+    expect(screen.getByRole('button', { name: '전체 8' })).toBeInTheDocument();
+    expect(screen.queryByText(/편집 중/)).not.toBeInTheDocument();
   });
 
   it('점수가 보이는 곳에만 있지 않다 — 듣는 쪽에도 남긴다', async () => {
     // 시안상 점수는 썸네일 위에만 있는데 그쪽은 aria-hidden이라 어디서도 안 읽혔다
     await renderLive();
     expect(screen.getByText(/^97점 · /)).toBeInTheDocument();
+  });
+
+  it('카드는 방송 시각이 늦은 것부터다: 순번이 큰 옛 숨김 카드가 맨 앞에 와서 강조를 받지 않는다 (POK-393)', async () => {
+    // 옛 숨김 카드는 숨길 때 트리거가 순번을 올려 놓았다: 방송 시각은 가장 이른데 순번은 가장 크다
+    // 같은 방송 시각이면 번호가 큰 쪽이 앞이다(10번은 8번과 시각이 같고 순번은 작다)
+    server.extraCards = [
+      card(9, { eventSeq: 999, streamTimestampMs: 30_000 }),
+      card(10, { eventSeq: 1, streamTimestampMs: 5_000_000 }),
+    ];
+    const { container } = await renderLive();
+
+    const titles = screen
+      .getAllByRole('article')
+      .map((a) => within(a).getByRole('heading').textContent);
+    expect(titles[0]).toBe('채팅이 튄 순간 #10');
+    expect(titles[1]).toBe('채팅이 튄 순간 #8');
+    expect(titles[titles.length - 1]).toBe('채팅이 튄 순간 #9');
+    const emphasized = container.querySelectorAll('[class*="cardEmphasized"]');
+    expect(emphasized).toHaveLength(1);
+    expect(emphasized[0]).toHaveTextContent('채팅이 튄 순간 #10');
   });
 
   it('강조는 맨 앞 카드 하나뿐이다: 여럿이면 「방금」이라는 뜻을 잃는다', async () => {
@@ -1104,100 +1255,7 @@ describe('LiveScreen — 하이라이트 카드', () => {
       screen.getByText('영상은 아직 없어요 · 채팅을 그 시점으로 옮겼어요'),
     ).toBeInTheDocument();
   });
-
-  it('숨긴 카드는 통로가 없어도 다음 폴링에서 목록에서 빠진다', async () => {
-    // 통로(SSE)는 이 시험에서 503이다 — 폴링이 숨김을 반영해야 한다(PR #200 codex)
-    await renderLive();
-    expect(screen.getByText('채팅이 튄 순간 #8')).toBeInTheDocument();
-
-    await 숨긴다('하이라이트 아님');
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(3_000);
-    });
-    await settle();
-    expect(screen.queryByText('채팅이 튄 순간 #8')).not.toBeInTheDocument();
-  });
-
-  it('숨기기는 이유를 고르게 하고 고른 이유를 실어 보낸다 (POK-338)', async () => {
-    await renderLive();
-
-    fireEvent.click(screen.getAllByRole('button', { name: '이 카드 숨기기' })[0] as HTMLElement);
-    expect(screen.getByRole('menuitem', { name: '하이라이트 아님' })).toBeInTheDocument();
-    expect(screen.getByRole('menuitem', { name: '기타' })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('menuitem', { name: '중복' }));
-    await settle();
-
-    const sent = fetchSpy.mock.calls.find(
-      ([url, init]) => url === '/api/clip/jump-cards/8/hide' && init?.method === 'POST',
-    );
-    expect(sent).toBeDefined();
-    expect(JSON.parse(String(sent?.[1]?.body))).toEqual({ reason: 'duplicate' });
-  });
-
-  it('숨긴 카드는 「숨김」 칩에 모이고 거기서 되돌린다 (POK-338)', async () => {
-    await renderLive();
-    expect(screen.getByRole('button', { name: '숨김 0' })).toBeInTheDocument();
-
-    await 숨긴다('하이라이트 아님');
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(3_000);
-    });
-    await settle();
-    fireEvent.click(screen.getByRole('button', { name: '숨김 1' }));
-    expect(screen.getByText('채팅이 튄 순간 #8')).toBeInTheDocument();
-    // 숨긴 카드에는 편집·숨기기가 없고 숨김 해제만 있다
-    expect(screen.queryByRole('link', { name: '편집' })).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: '숨김 해제' }));
-    await settle();
-    expect(
-      fetchSpy.mock.calls.some(
-        ([url, init]) => url === '/api/clip/jump-cards/8/hide' && init?.method === 'DELETE',
-      ),
-    ).toBe(true);
-  });
-
-  it('「놓기」는 내가 집은 카드에만 있고 누르면 집기를 푼다 (POK-338)', async () => {
-    await renderLive();
-
-    // 내가 집은 카드는 5번 하나뿐이다(6번은 남이 집었다)
-    const releases = screen.getAllByRole('button', { name: '놓기' });
-    expect(releases).toHaveLength(1);
-    fireEvent.click(releases[0] as HTMLElement);
-    await settle();
-    expect(
-      fetchSpy.mock.calls.some(
-        ([url, init]) => url === '/api/clip/jump-cards/5/claim' && init?.method === 'DELETE',
-      ),
-    ).toBe(true);
-  });
 });
-
-describe('LiveScreen — 끝난 방송의 카드 동작 (POK-338)', () => {
-  it('놓기·숨김 해제는 다음 목록 주기를 기다리지 않고 바로 반영된다', async () => {
-    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
-    await renderLive();
-
-    // 시계를 움직이지 않는다(settle은 0초) — 주기 읽기가 아니라 동작 뒤 다시 읽기만 반영할 수 있다
-    fireEvent.click(screen.getByRole('button', { name: '놓기' }));
-    await settle();
-    expect(screen.queryByRole('button', { name: '놓기' })).not.toBeInTheDocument();
-
-    await 숨긴다('중복');
-    expect(screen.getByRole('button', { name: '숨김 1' })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: '숨김 1' }));
-    fireEvent.click(screen.getByRole('button', { name: '숨김 해제' }));
-    await settle();
-    expect(screen.getByRole('button', { name: '숨김 0' })).toBeInTheDocument();
-  });
-});
-
-/** 맨 앞 카드(8번)를 고른 이유로 숨긴다: 숨기기는 이유 메뉴를 거친다(POK-338) */
-async function 숨긴다(이유: string) {
-  fireEvent.click(screen.getAllByRole('button', { name: '이 카드 숨기기' })[0] as HTMLElement);
-  fireEvent.click(screen.getByRole('menuitem', { name: 이유 }));
-  await settle();
-}
 
 describe('LiveScreen: 카드가 없을 때', () => {
   it('카드가 하나도 없으면 카드 줄 자리에 아직 없다고 말한다', async () => {
@@ -1233,14 +1291,16 @@ describe('LiveScreen: 카드가 없을 때', () => {
 
 describe('LiveScreen: 라이브 문구', () => {
   it('방송 중에는 라이브 문구 그대로다: 실시간 채팅·실시간 통계·자동 감지 중·그래프 끝 「지금」', async () => {
+    graphWidth();
     await renderLive();
 
     expect(screen.getByRole('complementary', { name: '실시간 채팅' })).toBeInTheDocument();
     expect(screen.getByRole('region', { name: '실시간 통계' })).toBeInTheDocument();
     expect(screen.getByText('자동 감지 중 · 카드 클릭 = 시점 이동')).toBeInTheDocument();
     expect(screen.getByText('지금')).toBeInTheDocument();
-    // 채팅 수 이름은 차트가 읽은 창대로다: 라이브는 지금 기준 최근 창이다
-    expect(screen.getByText('최근 10분 채팅')).toBeInTheDocument();
+    // 채팅 수 이름은 차트가 읽은 창대로다: 라이브도 방송 처음부터 지금까지 읽는다
+    expect(screen.getByText(/^방송 중 채팅 [\d,]+개$/)).toBeInTheDocument();
+    expect(screen.queryByText(/^최근 \d+분 채팅/)).toBeNull();
   });
 });
 
@@ -1412,43 +1472,54 @@ describe('LiveScreen — 실시간 통계', () => {
   it('지표를 방송 정보와 채팅 차트에서 센다', async () => {
     await renderLive();
 
-    expect(screen.getByText('최고 시청자')).toBeInTheDocument();
-    expect(screen.getByText('2,310')).toBeInTheDocument();
-    expect(screen.getByText('분당 평균 채팅')).toBeInTheDocument();
-    expect(screen.getByText('2회')).toBeInTheDocument();
+    // 라이브 시청자 칸은 지금 값이다(정보 바 「1,842명 시청 중」과 같은 수). 최고·평균은 그 아래
+    expect(statValue('시청자')).toHaveTextContent('1,842');
+    expect(screen.getByText('최고 2,310 · 평균 1,884')).toBeInTheDocument();
+    expect(statValue('분당 평균 채팅')).toBeInTheDocument();
+    expect(statValue('후원')).toHaveTextContent('2회');
   });
 
-  it('타임라인이 채팅량·시청자·하이라이트·후원을 한 그림으로 알린다', async () => {
+  it('타임라인이 채팅·시청자·하이라이트·후원을 한 그림으로 알린다: 방송 처음부터라 카드 여덟 장이 다 선다', async () => {
+    graphWidth();
     await renderLive();
 
     expect(
-      screen.getByRole('img', {
-        name: '방송 타임라인 — 채팅량과 시청자 추이, 하이라이트 4곳, 후원 2회',
+      screen.getByRole('group', {
+        name: /^방송 타임라인 — 채팅·시청자, 하이라이트 8곳, 후원 2회/,
       }),
     ).toBeInTheDocument();
   });
 
-  it('하이라이트 내역은 총계 앞에 선다 — 총계가 다른 지표와 같은 오른쪽 끝에 맞는다', async () => {
+  it('하이라이트 칸은 총계와 자동·수동 내역을 같이 보인다', async () => {
     await renderLive();
 
-    const note = screen.getByText('자동 6 · 수동 2');
-    const value = note.parentElement;
-    expect(value?.textContent).toBe('자동 6 · 수동 28');
-    expect(note.nextElementSibling).toHaveTextContent('8');
+    expect(statValue('하이라이트')).toHaveTextContent('8');
+    expect(screen.getByText('자동 6 · 수동 2')).toBeInTheDocument();
   });
 
-  it('카드를 숨기면 지표와 필터 칩이 같이 준다: 요약이 첫 값에 굳지 않는다', async () => {
+  it('그래프의 하이라이트 핀을 누르면 카드를 누른 것과 같이 그 시점으로 간다', async () => {
+    graphWidth();
+    await renderLive();
+
+    const pins = screen.getAllByRole('button', { name: /^하이라이트 (#\d+|수동) — / });
+    expect(pins.length).toBeGreaterThan(0);
+    expect(
+      screen.getByRole('button', { name: /^하이라이트 #8 — .*1:23:20로 이동$/ }),
+    ).toBeInTheDocument();
+  });
+
+  it('새 카드가 들어오면 지표와 필터 칩이 같이 는다: 요약이 첫 값에 굳지 않는다', async () => {
     await renderLive();
     expect(screen.getByText('자동 6 · 수동 2')).toBeInTheDocument();
 
-    await 숨긴다('하이라이트 아님');
+    server.extraCards = [card(9, { eventSeq: 90, streamTimestampMs: 5_100_000 })];
     await act(async () => {
       await vi.advanceTimersByTimeAsync(3_000);
     });
     await settle();
 
-    expect(screen.getByText('자동 5 · 수동 2')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '자동 5' })).toBeInTheDocument();
+    expect(screen.getByText('자동 7 · 수동 2')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '자동 7' })).toBeInTheDocument();
   });
 
   it('하이라이트 지표는 카드 목록에서 센다: 필터 칩과 같은 수다', async () => {
@@ -1457,6 +1528,54 @@ describe('LiveScreen — 실시간 통계', () => {
     expect(screen.getByText('자동 6 · 수동 2')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '자동 6' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '수동 2' })).toBeInTheDocument();
+  });
+
+  it('방송 중에도 그래프를 처음부터 1시간 창으로 나눠 읽고, 다 지난 창은 10초마다 다시 묻지 않는다: 시청자 기록도 시작부터다', async () => {
+    await renderLive();
+    const charts = () =>
+      fetchSpy.mock.calls
+        .map(([url]) => new URL(String(url), 'http://localhost'))
+        .filter((u) => u.pathname === `/api/clip/broadcasts/${STREAM_ID}/chat-chart`);
+    const range = (u: URL) => [
+      Date.parse(u.searchParams.get('from')!),
+      Date.parse(u.searchParams.get('to')!),
+    ];
+    const opened = charts();
+    expect(Math.min(...opened.map((u) => range(u)[0]!))).toBe(STARTED_AT);
+    for (const u of opened) expect(range(u)[1]! - range(u)[0]!).toBeLessThanOrEqual(3_600_000);
+    // 방송 1시간 24분: 30초 칸이고 창은 시작~1시간, 1시간~지금 둘이다
+    expect(opened.some((u) => range(u)[0] === STARTED_AT + 3_600_000)).toBe(true);
+    expect(opened.every((u) => u.searchParams.get('bucket') === '30')).toBe(true);
+
+    const before = charts().length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    await settle();
+    const polled = charts().slice(before);
+    expect(polled.length).toBeGreaterThan(0);
+    // 다 지난 첫 창(시작~1시간)은 다시 묻지 않고 끝 창만 묻는다
+    for (const u of polled) expect(range(u)[0]).toBe(STARTED_AT + 3_600_000);
+
+    const sinces = fetchSpy.mock.calls
+      .map(([url]) => new URL(String(url), 'http://localhost'))
+      .filter((u) => u.pathname === `/api/clip/broadcasts/${STREAM_ID}/broadcast-info`)
+      .map((u) => u.searchParams.get('since'));
+    expect(sinces).toContain(new Date(STARTED_AT).toISOString());
+    // 처음 한 번만 시작부터 받고, 그다음은 받아 둔 마지막 관측(1분 전)의 2분 앞부터만 묻는다 — 10초마다 방송 전체를 다시 받지
+    // 않는다(PR #316 리뷰). 받아 둔 앞 기록은 그대로라 최고 시청자가 남는다
+    expect(sinces.at(-1)).toBe(new Date(NOW - 3 * 60_000).toISOString());
+    expect(statValue('시청자')?.nextElementSibling).toHaveTextContent('최고 2,310');
+  });
+
+  it('수집기가 관측마다 카테고리를 실으면 그래프 아래 띠가 바뀐 구간마다 나뉜다', async () => {
+    server.infoCategoryChange = true;
+    graphWidth();
+    await renderLive();
+
+    // 관측: 8분 전·5분 전 저스트 채팅, 1분 전 리그 오브 레전드. 처음 관측 앞은 모른다(띠를 지어내지 않는다)
+    expect(screen.getByTitle('저스트 채팅 · 7분')).toBeInTheDocument();
+    expect(screen.getByTitle(/^리그 오브 레전드 · /)).toBeInTheDocument();
   });
 });
 
@@ -2552,7 +2671,7 @@ describe('LiveScreen — 지난 방송 상세', () => {
 
     expect(vodCalls('chat-chart')).toBe(before.chart);
     expect(vodCalls('broadcast-info')).toBe(before.info);
-    // 다른 편집자의 집기·숨김과 50분짜리 사진 주소는 바뀌므로 카드 목록은 1분마다 읽는다
+    // 50분짜리 사진 주소는 바뀌므로 카드 목록은 1분마다 읽는다
     expect(vodCalls('jump-cards') - before.cards).toBe(2);
     expect(vodCalls('events')).toBe(before.events);
   });
@@ -2639,10 +2758,10 @@ describe('LiveScreen — 지난 방송 상세', () => {
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
     await renderLive();
 
-    expect(screen.queryByText(/^최근 \d+분 채팅$/)).toBeNull();
-    expect(screen.queryByText('방송 중 채팅')).toBeNull();
+    expect(screen.queryByText(/^최근 \d+분 채팅/)).toBeNull();
+    expect(screen.queryByText(/^방송 중 채팅/)).toBeNull();
     expect(screen.queryByText('지금')).toBeNull();
-    expect(screen.getAllByText('확인 중').length).toBeGreaterThan(0);
+    expect(statValue('분당 평균 채팅')).toHaveTextContent('확인 중');
   });
 
   it('라이브가 끝난 뒤 방송 전체 그래프를 못 받으면 라이브 때의 최근 그래프를 「지금」으로 남기지 않는다', async () => {
@@ -2650,6 +2769,7 @@ describe('LiveScreen — 지난 방송 상세', () => {
     server.vodChartFail = true;
     nav.search = `?stream=${STREAM_ID}`;
     window.history.pushState({}, '', `/broadcast/livenow?stream=${STREAM_ID}`);
+    graphWidth();
     await renderLive();
     expect(screen.getByText('지금')).toBeInTheDocument();
 
@@ -2661,7 +2781,8 @@ describe('LiveScreen — 지난 방송 상세', () => {
 
     expect(screen.getByText('방송함')).toBeInTheDocument();
     expect(screen.queryByText('지금')).toBeNull();
-    expect(screen.queryByText(/^최근 \d+분 채팅$/)).toBeNull();
+    expect(screen.queryByText(/^최근 \d+분 채팅/)).toBeNull();
+    expect(screen.queryByText(/^방송 중 채팅/)).toBeNull();
   });
 
   it('12시간 넘는 방송은 끝 12시간만 읽으므로 그 채팅 수를 방송 전체라고 하지 않는다', async () => {
@@ -2670,8 +2791,8 @@ describe('LiveScreen — 지난 방송 상세', () => {
     await renderLive();
 
     // 시험 서버는 칸 크기와 무관하게 창마다 30초 칸 20개(10분)를 준다: 1시간 창 12개면 120분이다
-    expect(screen.getByText('마지막 120분 채팅')).toBeInTheDocument();
-    expect(screen.queryByText('방송 중 채팅')).toBeNull();
+    expect(screen.getByText(/^마지막 120분 채팅 [\d,]+개$/)).toBeInTheDocument();
+    expect(screen.queryByText(/^방송 중 채팅/)).toBeNull();
   });
 
   it('12시간 넘는 방송의 분당 채팅은 읽은 끝 12시간으로 나눈다: 방송 전체 길이로 나누면 줄어 보인다', async () => {
@@ -2769,8 +2890,7 @@ describe('LiveScreen — 지난 방송 상세', () => {
     await renderLive();
 
     expect(screen.queryByText('수집 전')).toBeNull();
-    expect(screen.getByText('최고 시청자').nextElementSibling).toHaveTextContent('확인 중');
-    expect(screen.getByText('평균 시청자').nextElementSibling).toHaveTextContent('확인 중');
+    expect(statValue('평균 시청자')).toHaveTextContent('확인 중');
   });
 
   it('시청자 기록이 전부 빈 지난 방송은 정보 바와 통계가 같은 말이다: 「기록 없음」', async () => {
@@ -2780,7 +2900,7 @@ describe('LiveScreen — 지난 방송 상세', () => {
 
     expect(screen.getAllByText('시청자 수 기록 없음').length).toBeGreaterThan(0);
     expect(screen.queryByText('수집 전')).toBeNull();
-    expect(screen.getByText('최고 시청자').nextElementSibling).toHaveTextContent('기록 없음');
+    expect(statValue('평균 시청자')).toHaveTextContent('기록 없음');
   });
 
   it('명부 답보다 먼저 온 최근 창의 시청자 기록을 끝난 방송의 기록으로 보지 않는다: since 답이 실패해도 「기록 없음」이 아니다', async () => {
@@ -2866,15 +2986,16 @@ describe('LiveScreen — 지난 방송 상세', () => {
     });
     nav.search = `?stream=${VOD_ID}`;
     window.history.pushState({}, '', `/broadcast/livenow?stream=${VOD_ID}`);
+    graphWidth();
     await renderLive();
-    expect(screen.getByText('방송 중 채팅')).toBeInTheDocument();
+    expect(screen.getByText(/^방송 중 채팅 [\d,]+개$/)).toBeInTheDocument();
 
     await act(async () => {
       releaseChart();
     });
     await settle();
 
-    expect(screen.getByText('방송 중 채팅')).toBeInTheDocument();
+    expect(screen.getByText(/^방송 중 채팅 [\d,]+개$/)).toBeInTheDocument();
     expect(screen.queryByText('지금')).toBeNull();
   });
 
@@ -2914,19 +3035,22 @@ describe('LiveScreen — 지난 방송 상세', () => {
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
     await renderLive();
 
-    expect(screen.getByText('방송 중 채팅')).toBeInTheDocument();
-    expect(screen.queryByText(/^최근 \d+분 채팅$/)).toBeNull();
+    expect(screen.getByText(/^방송 중 채팅 [\d,]+개$/)).toBeInTheDocument();
+    expect(screen.queryByText(/^최근 \d+분 채팅/)).toBeNull();
   });
 
   it('시작 시각을 모르는 지난 방송은 그래프·채팅·시청자 기록을 같은 창(끝 12시간)으로 읽는다', async () => {
     // 그래프만 지금 기준 최근 10분을 읽으면 끝난 지 한참 된 방송은 늘 비고, 시청자 기록과 다른 창이라 최고·평균은 있는데
     // 선이 없다. 채팅은 아예 읽지 않았다(리뷰 4라운드)
     server.vodStartUnknown = true;
+    // 그래프 폭을 줘야 그래프가 선다 — 폭 0이면 「지금」이 없다는 단언이 늘 참이다(PR #316 리뷰 2라운드)
+    graphWidth();
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
     await renderLive();
 
+    expect(screen.getByRole('group', { name: /^방송 타임라인/ })).toBeInTheDocument();
     expect(screen.queryByText('지금')).toBeNull();
-    expect(screen.getByText('마지막 120분 채팅')).toBeInTheDocument();
+    expect(screen.getByText(/^마지막 120분 채팅 [\d,]+개$/)).toBeInTheDocument();
     // 채팅도 읽는다(전에는 아예 읽지 않았다). 시작 시각을 모르니 하한(녹화를 찾는 끝 12시간에서 보정 여유 60초 앞, ADR-092)보다
     // 앞은 읽지 않는다
     const froms = chatFroms();
@@ -2936,8 +3060,10 @@ describe('LiveScreen — 지난 방송 상세', () => {
   });
 
   it('지난 방송은 라이브 문구를 쓰지 않는다: 채팅 기록·방송 통계, 감지 중 안내 없음, 그래프 끝은 끝난 시각', async () => {
+    graphWidth();
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
     await renderLive();
+    expect(screen.getByRole('group', { name: /^방송 타임라인/ })).toBeInTheDocument();
 
     expect(screen.getByRole('complementary', { name: '채팅 기록' })).toBeInTheDocument();
     expect(screen.queryByRole('complementary', { name: '실시간 채팅' })).toBeNull();
@@ -3104,7 +3230,7 @@ describe('LiveScreen: 값이 없을 때의 말(리뷰 5라운드)', () => {
     expect(screen.getByText('방송 정보 확인 중')).toBeInTheDocument();
     expect(screen.getAllByText('시청자 수 확인 중').length).toBeGreaterThan(0);
     expect(screen.queryByText(/수집 전/)).toBeNull();
-    expect(screen.getByText('최고 시청자').nextElementSibling).toHaveTextContent('확인 중');
+    expect(statValue('시청자')).toHaveTextContent('확인 중');
   });
 
   it('라이브 주소로 연 방송도 명부 답 전에는 「수집 전」이라 하지 않는다: 라이브인지 아직 모른다', async () => {
@@ -3267,10 +3393,10 @@ describe('LiveScreen: 라이브 되감기 채팅(POK-326)', () => {
     // 지금 62초 전(방송 4981초)
     expect(within(chatPanel()).getByText('라이브 4975초')).toBeInTheDocument();
     expect(within(chatPanel()).queryByText('라이브 4985초')).toBeNull();
-    // 앞 줄은 라이브 차트(최근 10분)로 그 앞 300줄이 차는 칸(지금 480초 전, 방송 4563초)부터 읽는다: 60초 앞부터만 읽으면
-    // 채팅이 뜸한 방송은 되감는 순간 300줄이 몇 줄로 줄었다
-    expect(within(chatPanel()).getByText('라이브 4565초')).toBeInTheDocument();
-    expect(within(chatPanel()).queryByText('라이브 4555초')).toBeNull();
+    // 앞 줄은 라이브 차트(방송 처음부터, 방송 시작에 맞춘 30초 칸)로 그 앞 300줄이 차는 칸(방송 4620초)부터 읽는다: 60초 앞부터만
+    // 읽으면 채팅이 뜸한 방송은 되감는 순간 300줄이 몇 줄로 줄었다. 시험 차트(지금 기준 30초 칸)는 3초 앞 칸에 얹힌다
+    expect(within(chatPanel()).getByText('라이브 4625초')).toBeInTheDocument();
+    expect(within(chatPanel()).queryByText('라이브 4615초')).toBeNull();
 
     await playFor(container, 20);
     expect(within(chatPanel()).getByText('라이브 4995초')).toBeInTheDocument();

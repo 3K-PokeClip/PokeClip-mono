@@ -30,7 +30,8 @@ export interface LiveChart {
 export type LiveInfoScope = 'broadcast' | 'recent';
 export interface LiveInfo {
   latest: { title: string | null; tags: string[]; category: string | null } | null;
-  series: { observedAt: string; viewers: number | null }[];
+  /** category는 수집기가 관측마다 싣기 전엔 없다 — 오면 통계가 카테고리가 바뀐 구간을 나눈다 */
+  series: { observedAt: string; viewers: number | null; category?: string | null }[];
   scope: LiveInfoScope;
 }
 export type LiveBroadcastStatus = 'live' | 'ended' | 'offline' | 'unknown';

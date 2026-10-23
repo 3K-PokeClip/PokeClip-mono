@@ -25,6 +25,7 @@ import (
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/janitor"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/pgconf"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/poolstat"
 )
 
 const (
@@ -125,6 +126,10 @@ func start(ctx context.Context, cfg config, runID string, base *slog.Logger, d d
 	if err := requirePG17(ctx, pool, log, d); err != nil {
 		return err
 	}
+	// 연결 폐기 관측(POK-388) — run_id 로거로 낸다. 기동 줄이 정리기의 게이지 시작 덤프보다 앞선다.
+	// 관측 고루틴이 풀을 읽으므로 pool.Close 보다 뒤에 등록해 먼저 멈춘다.
+	stopPoolStats := poolstat.Start(ctx, pool, "janitor", log)
+	defer stopPoolStats()
 	root, err := d.openRoot(cfg.segmentRoot) // 기한 없음 — 한계 L20
 	if err != nil {
 		return fmt.Errorf("세그먼트 루트 열기 실패 root=%q: %w", cfg.segmentRoot, err)

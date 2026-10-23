@@ -2,34 +2,32 @@ package com.pokeclip.clip.jumpcard.api;
 
 import com.pokeclip.clip.broadcast.Broadcast;
 import com.pokeclip.clip.broadcast.BroadcastRepository;
-import com.pokeclip.clip.jumpcard.JumpCardRepository;
 import com.pokeclip.clip.jumpcard.JumpCardService;
 import com.pokeclip.clip.support.IntegrationTestSupport;
 import com.pokeclip.clip.support.TestIds;
 import com.pokeclip.clip.support.TestTokens;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
-import org.springframework.http.MediaType;
+import org.springframework.http.HttpMethod;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.web.servlet.MockMvc;
-import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 import tools.jackson.databind.ObjectMapper;
 
 import java.time.Instant;
-import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.hamcrest.Matchers.nullValue;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.request;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * 편집자가 쓰는 문 넷. 사용자 번호는 <b>토큰의 subject에서만</b> 온다 — 본문이나 쿼리로 받으면
- * 남의 번호로 집을 수 있다.
+ * 편집자가 카드에 쓰는 문. 집기·놓기·숨기기·되돌리기는 없어졌고(POK-393) 열기 하나가 남았다.
+ * 열기의 자격 판정·기록은 {@code JumpCardOpenTest}가 잰다. 여기는 <b>옛 문이 정말 닫혔나</b>와
+ * 경로·토큰 수준의 응답을 본다.
  */
 @AutoConfigureMockMvc
 class JumpCardControllerTest extends IntegrationTestSupport {
@@ -40,15 +38,12 @@ class JumpCardControllerTest extends IntegrationTestSupport {
 
     private final MockMvc mvc;
     private final JumpCardService service;
-    private final JumpCardRepository cards;
     private final BroadcastRepository broadcasts;
     private final JdbcTemplate jdbc;
 
-    JumpCardControllerTest(MockMvc mvc, JumpCardService service, JumpCardRepository cards,
-                           BroadcastRepository broadcasts, JdbcTemplate jdbc) {
+    JumpCardControllerTest(MockMvc mvc, JumpCardService service, BroadcastRepository broadcasts, JdbcTemplate jdbc) {
         this.mvc = mvc;
         this.service = service;
-        this.cards = cards;
         this.broadcasts = broadcasts;
         this.jdbc = jdbc;
     }
@@ -61,143 +56,43 @@ class JumpCardControllerTest extends IntegrationTestSupport {
         AUTH.respondWith(RESOLVE, 200, "{\"relation\":\"OWNER\"}");
     }
 
-    @Test
-    void 집으면_200과_카드가_오고_claimedBy는_내_번호다() throws Exception {
+    /**
+     * 자격이 있는 사람이 실재하는 카드에 옛 문을 두드려도 404이고 아무것도 안 남는다.
+     * 옛 웹이 배포 사이에 부를 수 있다. 그때 카드가 바뀌거나 기록이 남으면 안 된다.
+     */
+    @ParameterizedTest
+    @CsvSource({"POST,/claim", "DELETE,/claim", "POST,/hide", "DELETE,/hide"})
+    void 옛_문_넷은_없다(String method, String path) throws Exception {
         long id = 카드();
 
-        mvc.perform(post("/api/clip/jump-cards/" + id + "/claim").header("Authorization", bearer("17")))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.claimedBy").value("17"))
-                .andExpect(jsonPath("$.claimExpiresAt").exists());
-    }
+        int status = mvc.perform(request(HttpMethod.valueOf(method), "/api/clip/jump-cards/" + id + path)
+                .header("Authorization", bearer("17"))).andReturn().getResponse().getStatus();
 
-    /** 409에 현재 카드를 실어야 웹이 새로고침 없이 "누가 잡고 있는지"를 띄운다. */
-    @Test
-    void 남이_잡은_카드를_집으면_409와_현재_카드가_온다() throws Exception {
-        long id = 카드();
-        mvc.perform(post("/api/clip/jump-cards/" + id + "/claim").header("Authorization", bearer("17")))
-                .andExpect(status().isOk());
-
-        mvc.perform(post("/api/clip/jump-cards/" + id + "/claim").header("Authorization", bearer("18")))
-                .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.claimedBy").value("17"))
-                .andExpect(jsonPath("$.id").value(id));
-    }
-
-    @Test
-    void 놓기_본인_204_남_403() throws Exception {
-        long id = 카드();
-        mvc.perform(post("/api/clip/jump-cards/" + id + "/claim").header("Authorization", bearer("17")))
-                .andExpect(status().isOk());
-
-        mvc.perform(delete("/api/clip/jump-cards/" + id + "/claim").header("Authorization", bearer("18")))
-                .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.error").value("not_claim_owner"));
-
-        mvc.perform(delete("/api/clip/jump-cards/" + id + "/claim").header("Authorization", bearer("17")))
-                .andExpect(status().isNoContent());
-
-        assertThat(cards.findById(id).orElseThrow().getClaimedBy()).isNull();
-    }
-
-    @Test
-    void 숨기기_200_hidden_true_hiddenBy_내_번호_되돌리기_200_false() throws Exception {
-        long id = 카드();
-
-        mvc.perform(post("/api/clip/jump-cards/" + id + "/hide").header("Authorization", bearer("17")))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.hidden").value(true))
-                .andExpect(jsonPath("$.hiddenBy").value("17"));
-
-        mvc.perform(delete("/api/clip/jump-cards/" + id + "/hide").header("Authorization", bearer("18")))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.hidden").value(false))
-                .andExpect(jsonPath("$.hiddenBy").value(nullValue()));
-    }
-
-    /** POK-338. 사유는 응답·목록에 실리고, 되돌리면 숨김 표시와 함께 비워진다. */
-    @Test
-    void 사유를_실어_숨기면_응답과_목록에_실리고_되돌리면_비워진다() throws Exception {
-        long id = 카드();
-
-        mvc.perform(post("/api/clip/jump-cards/" + id + "/hide").header("Authorization", bearer("17"))
-                        .contentType(MediaType.APPLICATION_JSON).content("{\"reason\":\"duplicate\"}"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.hidden").value(true))
-                .andExpect(jsonPath("$.hiddenReason").value("duplicate"));
-        mvc.perform(get("/api/clip/broadcasts/s-1/jump-cards?includeHidden=true").header("Authorization", bearer("17")))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.cards[0].hiddenReason").value("duplicate"));
-
-        mvc.perform(delete("/api/clip/jump-cards/" + id + "/hide").header("Authorization", bearer("18")))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.hiddenReason").value(nullValue()));
-        assertThat(cards.findById(id).orElseThrow().getHiddenReason()).isNull();
-    }
-
-    /** 옛 호출(본문 없음)과 사유 없는 본문은 그대로 동작한다. 사유 칸은 비어 남는다. */
-    @Test
-    void 본문이_없거나_사유가_없으면_사유_없이_숨긴다() throws Exception {
-        long first = 카드();
-        mvc.perform(post("/api/clip/jump-cards/" + first + "/hide").header("Authorization", bearer("17")))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.hidden").value(true))
-                .andExpect(jsonPath("$.hiddenReason").value(nullValue()));
-
-        long second = service.record("s-1", new HighlightRequest("evt-2", "auto", 9_500L,
-                new HighlightRequest.Window(9_000L, 10_000L), 90, null)).card().id();
-        mvc.perform(post("/api/clip/jump-cards/" + second + "/hide").header("Authorization", bearer("17"))
-                        .contentType(MediaType.APPLICATION_JSON).content("{}"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.hidden").value(true))
-                .andExpect(jsonPath("$.hiddenReason").value(nullValue()));
-    }
-
-    @Test
-    void 모르는_사유는_400이고_자격을_묻지도_숨기지도_않는다() throws Exception {
-        long id = 카드();
-        AUTH.reset();
-        AUTH.respondWith(RESOLVE, 200, "{\"relation\":\"OWNER\"}");
-
-        mvc.perform(post("/api/clip/jump-cards/" + id + "/hide").header("Authorization", bearer("17"))
-                        .contentType(MediaType.APPLICATION_JSON).content("{\"reason\":\"boring\"}"))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.error").value("invalid_request"))
-                .andExpect(jsonPath("$.field").value("reason"));
-
-        assertThat(AUTH.callCount()).as("형식 오류가 auth 왕복을 태우면 안 된다").isZero();
-        assertThat(cards.findById(id).orElseThrow().getHiddenAt()).isNull();
+        assertThat(status).isEqualTo(404);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM jump_card_actions", Long.class)).isZero();
+        assertThat(jdbc.queryForObject(
+                "SELECT count(*) FROM jump_cards WHERE claimed_by IS NOT NULL OR hidden_at IS NOT NULL", Long.class))
+                .isZero();
     }
 
     @Test
     void 없는_카드는_404다() throws Exception {
-        mvc.perform(post("/api/clip/jump-cards/999999/claim").header("Authorization", bearer("17")))
+        mvc.perform(post("/api/clip/jump-cards/999999/open").header("Authorization", bearer("17")))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.error").value("jump_card_not_found"));
     }
 
     /**
-     * 🔴 <b>이 400 봉투는 POK-174가 문 넷에 새로 붙인 것이다.</b> 경로 조각이 숫자가 아니면
-     * 컨트롤러 메서드에 들어오기 전에 끝나는데, {@code develop}에서는 그 예외를 다루는 조언이
-     * {@code SegmentController}로 <b>좁혀져 있어</b> 스프링 기본 {@code /error} 봉투로 나갔다.
-     * 목록 문 둘 때문에 전역으로 옮기면서 <b>카드 문 넷까지 범위에 딸려 들어왔다</b> —
-     * 방향은 개선(봉투가 한 벌로 통일된다)이지만 <b>웹에 약속하는 것이 하나 늘었다</b>.
-     *
-     * <p>문 넷을 다 재는 이유는 셋만 재면 나머지 하나가 조용히 갈려도 안 보이기 때문이다.
-     * 유출은 없다 — {@code id}는 우리 시그니처의 조각 이름이지 웹이 보낸 값이 아니다.
+     * 🔴 <b>이 400 봉투는 POK-174가 카드 문에 붙인 것이다.</b> 경로 조각이 숫자가 아니면 컨트롤러
+     * 메서드에 들어오기 전에 끝나는데, 그 예외를 다루는 조언을 전역으로 옮기면서 카드 문까지
+     * 범위에 딸려 들어왔다. 유출은 없다: {@code id}는 우리 시그니처의 조각 이름이지 웹이 보낸 값이 아니다.
      */
     @Test
-    void 카드_번호가_숫자가_아니면_문_넷이_같은_400_봉투를_낸다() throws Exception {
-        for (MockHttpServletRequestBuilder 요청 : List.of(
-                post("/api/clip/jump-cards/abc/claim"),
-                delete("/api/clip/jump-cards/abc/claim"),
-                post("/api/clip/jump-cards/abc/hide"),
-                delete("/api/clip/jump-cards/abc/hide"))) {
-            mvc.perform(요청.header("Authorization", bearer("17")))
-                    .andExpect(status().isBadRequest())
-                    .andExpect(jsonPath("$.error").value("invalid_request"))
-                    .andExpect(jsonPath("$.field").value("id"));
-        }
+    void 카드_번호가_숫자가_아니면_400_봉투를_낸다() throws Exception {
+        mvc.perform(post("/api/clip/jump-cards/abc/open").header("Authorization", bearer("17")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("invalid_request"))
+                .andExpect(jsonPath("$.field").value("id"));
 
         assertThat(AUTH.callCount())
                 .as("칸이 안 읽히는데 자격 창구를 두드리면 형식 오류가 auth 왕복을 태운다").isZero();
@@ -207,10 +102,10 @@ class JumpCardControllerTest extends IntegrationTestSupport {
     void 토큰_없이는_401이다() throws Exception {
         long id = 카드();
 
-        mvc.perform(post("/api/clip/jump-cards/" + id + "/claim")).andExpect(status().isUnauthorized());
+        mvc.perform(post("/api/clip/jump-cards/" + id + "/open")).andExpect(status().isUnauthorized());
 
-        assertThat(cards.findById(id).orElseThrow().getClaimedBy())
-                .as("401인데 집혔으면 체인이 컨트롤러 뒤에 선 것이다").isNull();
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM jump_card_actions", Long.class))
+                .as("401인데 기록이 남았으면 체인이 컨트롤러 뒤에 선 것이다").isZero();
     }
 
     private long 카드() {

@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   chzzkLinkQueryOptions,
@@ -9,7 +9,6 @@ import {
   type ChzzkLinkState,
 } from '@/api/chzzkLink';
 import { track } from '@/lib/analytics';
-import { useOnboardingHydration, useOnboardingStore } from '@/stores/onboarding';
 import { useToast } from '@/ui';
 import { assertChzzkConsentUrl, goToChzzkConsent, warnIfCallbackMismatch } from './chzzkOAuth';
 
@@ -27,6 +26,8 @@ export type ChzzkView = 'loading' | 'unavailable' | 'none' | 'active' | 'expired
 
 export interface ChzzkLinkViewState {
   view: ChzzkView;
+  /** 서버의 linked. 아직 모르면 undefined. 온보딩 플래그는 SOOP과 합쳐 ChannelSettingsScreen이 쓴다(POK-396). */
+  linked?: boolean;
   /** `none`·`loading`·`unavailable`에서는 없다 — 미연동 화면에 채널명이 남지 않게. */
   channelName?: string;
   /** 동의 URL 발급 중 — 버튼 잠금. */
@@ -46,14 +47,8 @@ export interface ChzzkLinkViewState {
 }
 
 export function useChzzkLinkState(): ChzzkLinkViewState {
-  // 아래 미러링이 저장된 값과 비교하므로 스토어가 먼저 서 있어야 한다. 이 훅을 부르지
-  // 않으면 온보딩 스토어를 세우는 곳이 /home의 OnboardingController뿐이라, 이 화면으로
-  // 직접 들어오면 정적 기본값(false)과 비교하게 되고 stale 플래그가 그대로 살아남는다.
-  // 선언 순서상 이 훅의 이펙트가 아래 미러링 이펙트보다 먼저 돈다.
-  useOnboardingHydration();
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const setChannelLinked = useOnboardingStore((s) => s.setChannelLinked);
   const status = useQuery(chzzkLinkQueryOptions);
   const [confirmOpen, setConfirmOpen] = useState(false);
 
@@ -110,15 +105,6 @@ export function useChzzkLinkState(): ChzzkLinkViewState {
     },
   });
 
-  // 홈 시작 가이드 1단계 체크는 이 플래그를 본다. 필자는 이 이펙트 하나뿐이고,
-  // 계약의 `linked`(ACTIVE·EXPIRED만 true)를 그대로 따라간다 — 쓰는 곳이 둘이면 갈라진다.
-  const linked = status.data?.linked;
-  useEffect(() => {
-    if (linked === undefined) return; // 모르는 동안엔 건드리지 않는다
-    if (useOnboardingStore.getState().channelLinked === linked) return; // 불필요한 localStorage 쓰기 차단
-    setChannelLinked(linked);
-  }, [linked, setChannelLinked]);
-
   const { mutate } = start;
   const startLink = useCallback(() => mutate(), [mutate]);
   const { mutate: mutateUnlink } = unlink;
@@ -135,6 +121,7 @@ export function useChzzkLinkState(): ChzzkLinkViewState {
 
   return {
     view,
+    linked: status.data?.linked,
     channelName: named ? status.data?.channelName : undefined,
     starting: start.isPending,
     // isPending이 아닌 isFetching이다 — 최초 조회는 view가 'loading'이라 겹치지 않고,

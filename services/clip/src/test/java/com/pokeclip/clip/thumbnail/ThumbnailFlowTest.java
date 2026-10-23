@@ -281,6 +281,23 @@ class ThumbnailFlowTest extends IntegrationTestSupport {
         assertThat(job.path("source").path("offsetMs").asLong()).isEqualTo(25_000);
     }
 
+    /** 숨기기는 POK-393에서 없앴다. 숨김 칸이 찬 옛 카드도 점수가 가장 높으면 그 장면을 찍는다(칸은 POK-394가 지운다). */
+    @Test
+    void 완성_영상은_숨김_칸이_찬_옛_카드도_최고_점수면_그_장면을_찍는다() {
+        방송("S-v", "S-v", "ended", 시작, 시작.plus(Duration.ofMinutes(30)));
+        조각("S-v", 1, 100_000, 시작, "uploaded", "seg/1");
+        long cutIn = 시작.toEpochMilli() + 5_000;
+        카드("S-v", 100_000 + 20_000, 70);                 // 영상 15초 자리
+        long 옛_숨김 = 카드("S-v", 100_000 + 30_000, 90);   // 영상 25초 자리, 가장 높다
+        jdbc.update("UPDATE jump_cards SET hidden_at = now(), hidden_by = '1' WHERE id = ?", 옛_숨김);
+        완성_영상("S-v", cutIn, cutIn + 40_000, "[{\"outputId\":\"o1\",\"kind\":\"video\",\"s3Key\":\"clips/9/t/o1.mp4\"}]");
+
+        sweeper().sweepClips();
+
+        assertThat(sent).extracting(job -> job.path("source").path("offsetMs").asLong())
+                .as("숨김 칸으로 거르면 옛 숨김 카드를 건너뛰고 15초 자리를 찍는다").containsExactly(25_000L);
+    }
+
     @Test
     void 구간_안에_카드가_없으면_가운데를_찍는다() {
         방송("S-v", "S-v", "ended", 시작, 시작.plus(Duration.ofMinutes(30)));
@@ -310,16 +327,16 @@ class ThumbnailFlowTest extends IntegrationTestSupport {
 
     /**
      * 끝난 방송은 최고 점수 카드 사진, 카드 사진이 없으면 마지막 라이브 사진. 방송 중이면 카드가 있어도 최신 라이브 사진이다.
-     * 숨긴 카드는 대표가 아니다.
+     * 숨김 칸이 찬 옛 카드도 대표가 될 수 있다(POK-393, 숨기기가 없어졌다).
      */
     @Test
     void 방송_사진은_상태에_따라_고른다() {
         방송("S-end", "S-end", "ended", 시작, 시작.plus(Duration.ofMinutes(30)));
         long low = 카드("S-end", 1_000, 50);
         long high = 카드("S-end", 2_000, 90);
-        long hidden = 카드("S-end", 3_000, 99);
-        jdbc.update("UPDATE jump_cards SET hidden_at = now(), hidden_by = '1' WHERE id = ?", hidden);
-        for (long id : List.of(low, high, hidden)) {
+        long hiddenOld = 카드("S-end", 3_000, 99);
+        jdbc.update("UPDATE jump_cards SET hidden_at = now(), hidden_by = '1' WHERE id = ?", hiddenOld);
+        for (long id : List.of(low, high, hiddenOld)) {
             thumbnails.saveCaptured(ThumbnailKind.CARD, String.valueOf(id), now, now);
         }
         thumbnails.saveCaptured(ThumbnailKind.LIVE, "S-end", now, now);
@@ -334,7 +351,8 @@ class ThumbnailFlowTest extends IntegrationTestSupport {
 
         Map<String, String> urls = urls(true).ofBroadcasts(List.of("S-on", "S-none"), List.of("S-end", "S-nocard"));
 
-        assertThat(urls.get("S-end")).contains("thumbnails/card/" + high + ".jpg");
+        assertThat(urls.get("S-end")).as("숨김 칸으로 거르면 옛 숨김 카드가 대표에서 영영 빠진다")
+                .contains("thumbnails/card/" + hiddenOld + ".jpg");
         assertThat(urls.get("S-nocard")).contains("thumbnails/live/S-nocard.jpg");
         assertThat(urls.get("S-on")).contains("thumbnails/live/S-on.jpg");
         assertThat(urls).doesNotContainKey("S-none");

@@ -63,6 +63,9 @@ public abstract class IntegrationTestSupport {
     /** 가짜 구글도 같은 이유로 static 하나다. 상태는 각 테스트 클래스가 {@code @BeforeEach}에서 reset()한다. */
     protected static final FakeYoutubeServer YOUTUBE = FakeYoutubeServer.start();
 
+    /** 가짜 SOOP도 같은 이유로 static 하나다. RealServerTestSupport도 이것을 쓴다(따로 띄우지 않는다). */
+    protected static final FakeSoopServer SOOP = FakeSoopServer.start();
+
     static {
         POSTGRES.start();
         seedNonEmptySchema();
@@ -97,5 +100,6 @@ public abstract class IntegrationTestSupport {
         registry.add("pokeclip.youtube.token-uri", YOUTUBE::tokenUri);
         registry.add("pokeclip.youtube.revoke-uri", YOUTUBE::revokeUri);
         registry.add("pokeclip.youtube.api-base-uri", YOUTUBE::baseUrl);
+        registry.add("pokeclip.soop.api-base-uri", SOOP::baseUrl);
     }
 }

@@ -1,5 +1,6 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { StrictMode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
 import { renderWithProviders } from '@/test/testProviders';
@@ -38,10 +39,12 @@ const tracked = (name: string) =>
 
 // 녹화 목록을 어느 키로 물었는지 잰다(POK-233) — 실제 구현을 그대로 부른다(재생 서버 주소가 없어 빈 목록이다)
 const spansAsked = vi.hoisted(() => [] as string[]);
+const playbackOn = vi.hoisted(() => ({ value: false }));
 vi.mock('@/api/mediaPlayback', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/api/mediaPlayback')>();
   return {
     ...actual,
+    playbackConfigured: () => playbackOn.value,
     fetchRecordingSpans: (streamId: string) => {
       spansAsked.push(streamId);
       return actual.fetchRecordingSpans(streamId);
@@ -53,6 +56,8 @@ const STREAM_ID = 'stream-1';
 const STARTED_AT = Date.parse('2026-09-20T10:00:00Z');
 
 const server = vi.hoisted(() => ({
+  /** 출입증 답(POK-317) */
+  playbackAccess: 'grant' as 'grant' | 'fail',
   cardWindow: { startMs: 60_000, endMs: 72_400 },
   savedTracks: [{ trackId: 0, gain: 1 }] as { trackId: number; gain: number }[],
   /** 저장된 편집본의 판 — 1이면 옛 모양(crop 하나), 2면 편집기가 지금 저장하는 모양 */
@@ -83,6 +88,8 @@ const server = vi.hoisted(() => ({
   savedUploadRequest: null as unknown,
   /** 영상 상태 묻기(폴링)의 답. 시험이 준 약속이 풀릴 때 답한다 */
   clipPoll: null as null | ((clipId: number) => Promise<Response>),
+  /** 카드 열기 기록(POK-393)의 답 */
+  openStatus: 204,
 }));
 
 /** 원본(16:9)에서 9:16 을 오른쪽으로 치우쳐 잡은 자리 — 편집기 계산과 같은 정확한 비율 */
@@ -132,8 +139,6 @@ function handle(url: string, init?: RequestInit) {
           window: server.cardWindow,
           score: 80,
           evidence: null,
-          claimedBy: null,
-          hidden: false,
           eventSeq: 1,
           createdAt: '2026-09-20T10:01:00Z',
         },
@@ -205,6 +210,14 @@ function handle(url: string, init?: RequestInit) {
   }
   const polled = path.match(new RegExp(`^/api/clip/broadcasts/${STREAM_ID}/clips/(\\d+)$`));
   if (polled && method === 'GET' && server.clipPoll) return server.clipPoll(Number(polled[1]));
+  if (path === `/api/clip/broadcasts/${STREAM_ID}/playback-access` && method === 'POST')
+    return server.playbackAccess === 'grant'
+      ? jsonResponse(200, {
+          streamId: STREAM_ID,
+          // 1분짜리라 만료 5분 전 여유에 걸려 다시 쓰지 않는다: 받아 둔 것이 다음 시험으로 새지 않는다
+          expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        })
+      : jsonResponse(500, { error: 'boom' });
   if (path === '/api/auth/me')
     return jsonResponse(200, { id: 9, email: 'me@example.com', name: '나' });
   if (path === '/api/streamers/9/audio-tracks')
@@ -212,6 +225,10 @@ function handle(url: string, init?: RequestInit) {
   if (path.startsWith('/api/streamers/'))
     return jsonResponse(200, { labels: ['남의 트랙', null, null, null, null, null] });
   if (path === '/api/editor-delegations/as-editor') return jsonResponse(200, server.delegations);
+  if (/^\/api\/clip\/jump-cards\/\d+\/open$/.test(path) && method === 'POST')
+    return server.openStatus === 204
+      ? new Response(null, { status: 204 })
+      : jsonResponse(server.openStatus, { error: 'unavailable' });
   return jsonResponse(404, { error: 'unexpected_call' });
 }
 
@@ -228,12 +245,14 @@ beforeEach(() => {
   server.savedSubtitles = null;
   server.relation = 'OWNER';
   server.myTrackLabels = {};
+  server.playbackAccess = 'grant';
   server.delegations = [];
   server.ingest = undefined;
   server.render = { status: 201, clip: {} };
   server.renderError = null;
   server.savedUploadRequest = null;
   server.clipPoll = null;
+  server.openStatus = 204;
   spansAsked.length = 0;
   nav.pushed.length = 0;
   fetchSpy = stubFetch(handle);
@@ -250,6 +269,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  playbackOn.value = false;
 });
 
 function bodiesOf(method: string, path: string) {
@@ -258,20 +278,35 @@ function bodiesOf(method: string, path: string) {
     .map(([, init]) => JSON.parse(String(init?.body)) as Record<string, unknown>);
 }
 
+/** 카드 열기 기록 요청(POK-393). 본문이 없어 bodiesOf로는 못 센다 */
+function openCalls() {
+  return fetchSpy.mock.calls.filter(
+    ([url, init]) =>
+      /\/api\/clip\/jump-cards\/\d+\/open$/.test(String(url)) && init?.method === 'POST',
+  );
+}
+
 async function openFrom(search: string) {
   nav.search = search;
   renderWithProviders(<StudioScreen />);
   return screen.findByRole('button', { name: '편집본 저장' });
 }
 
-/** 「영상 만들기」 → 업로드 정보 창에 제목을 적고 「만들고 올리기」 */
+/** 업로드 창의 공개 탭을 열고 「업로드」. 업로드 단추는 공개 탭에만 있다(POK-381) */
+async function uploadFromPublishTab(user: ReturnType<typeof userEvent.setup>) {
+  const dialog = within(screen.getByRole('dialog', { name: '유튜브에 올리기' }));
+  await user.click(dialog.getByRole('tab', { name: '공개' }));
+  await user.click(dialog.getByRole('button', { name: '업로드' }));
+}
+
+/** 「영상 만들기」 → 업로드 창 정보 탭에 제목을 적고 공개 탭에서 「업로드」 */
 async function orderVideo(user: ReturnType<typeof userEvent.setup>, title = '보스 막타') {
   await user.click(screen.getByRole('button', { name: '영상 만들기' }));
-  const dialog = within(screen.getByRole('dialog', { name: '유튜브 업로드 정보' }));
+  const dialog = within(screen.getByRole('dialog', { name: '유튜브에 올리기' }));
   const field = dialog.getByRole('textbox', { name: /제목/ });
   await user.clear(field);
   await user.type(field, title);
-  await user.click(dialog.getByRole('button', { name: '만들고 올리기' }));
+  await uploadFromPublishTab(user);
 }
 
 const RENDERS = `/api/clip/broadcasts/${STREAM_ID}/recipes/31/renders`;
@@ -298,6 +333,64 @@ describe('StudioScreen — 영상 경로의 키(POK-233)', () => {
   it('칸을 모르는 옛 서버면 방송 번호로 찾는다', async () => {
     await openFrom(`?stream=${STREAM_ID}&card=5`);
     expect(spansAsked).toEqual([STREAM_ID]);
+  });
+
+  it('녹화를 찾기 전에 출입증을 받는다: 문은 방송 번호다(POK-317, CDN 뒤 녹화는 쿠키가 없으면 403)', async () => {
+    // 녹화 재생 서버가 있는 곳에서만 받는다. 모듈이 주소를 읽어 두므로 흉내 낸 함수만 주소가 있다고 답하게 한다
+    playbackOn.value = true;
+    server.ingest = 'key-studio';
+    await openFrom(`?stream=${STREAM_ID}&card=5`);
+    expect(
+      fetchSpy.mock.calls.filter(
+        ([url, init]) =>
+          url === `/api/clip/broadcasts/${STREAM_ID}/playback-access` && init?.method === 'POST',
+      ),
+    ).toHaveLength(1);
+  });
+
+  it('출입증을 못 받으면 녹화 없음으로 열지 않고 다시 열라고 알린다: 쿠키 없는 조회는 403이 「녹화 없음」으로 접힌다(PR #320 codex)', async () => {
+    playbackOn.value = true;
+    server.playbackAccess = 'fail';
+    nav.search = `?stream=${STREAM_ID}&card=5`;
+    renderWithProviders(<StudioScreen />);
+    expect(await screen.findByText(/영상 출입증을 받지 못했어요/)).toBeInTheDocument();
+    expect(spansAsked).toEqual([]);
+  });
+});
+
+describe('StudioScreen: 카드 열기 기록(POK-393)', () => {
+  it('카드에서 열면 그 카드의 열기 기록을 한 번 보낸다', async () => {
+    await openFrom(`stream=${STREAM_ID}&card=5`);
+
+    await waitFor(() => expect(openCalls()).toHaveLength(1));
+    expect(String(openCalls()[0]?.[0])).toBe('/api/clip/jump-cards/5/open');
+  });
+
+  it('개발 모드(StrictMode)에서 효과가 두 번 돌아도 한 번이다', async () => {
+    nav.search = `stream=${STREAM_ID}&card=5`;
+    renderWithProviders(
+      <StrictMode>
+        <StudioScreen />
+      </StrictMode>,
+    );
+    await screen.findByRole('button', { name: '편집본 저장' });
+
+    await waitFor(() => expect(openCalls()).toHaveLength(1));
+  });
+
+  it('열기 기록이 실패해도 편집기는 열리고 오류를 말하지 않는다', async () => {
+    server.openStatus = 503;
+    await openFrom(`stream=${STREAM_ID}&card=5`);
+
+    await waitFor(() => expect(openCalls()).toHaveLength(1));
+    expect(screen.getByRole('button', { name: '편집본 저장' })).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('편집본으로 열면 열기 기록을 안 보낸다', async () => {
+    await openFrom('recipe=31');
+
+    expect(openCalls()).toHaveLength(0);
   });
 });
 
@@ -418,11 +511,15 @@ describe('StudioScreen — 카드로 연 실제 편집기', () => {
     // 사용 통계 — 진입은 한 번(첫 저장으로 주소가 ?recipe= 로 바뀌어도 다시 세지 않는다), 주문은 서버가 받은 뒤
     // 한 번이고 열거형 속성만 싣는다(제목·설명·태그 없음)
     expect(tracked('clip_editor_opened')).toEqual([{ source: 'card' }]);
+    // 열기 기록도 같다: 첫 저장으로 주소가 바뀌어도 다시 안 보낸다(POK-393)
+    expect(openCalls()).toHaveLength(1);
     const orders = tracked('video_render_requested');
     expect(orders).toHaveLength(1);
     expect(Object.keys(orders[0] ?? {}).sort()).toEqual([
+      'category_id',
       'made_for_kids',
       'privacy_status',
+      'scheduled',
       'thumbnail_source',
     ]);
   });
@@ -483,8 +580,9 @@ describe('StudioScreen: 편집기에서 고른 썸네일 장면(POK-389)', () =>
 
     await user.click(screen.getByRole('button', { name: '영상 만들기' }));
     const dialog = within(await screen.findByRole('dialog'));
-    expect(dialog.getByRole('radio', { name: '자동(유튜브가 고름)' })).toBeChecked();
-    expect(dialog.queryByText('편집기에서 고른 장면')).not.toBeInTheDocument();
+    await user.click(dialog.getByRole('tab', { name: '썸네일' }));
+    expect(dialog.getByRole('radio', { name: /영상 장면/ })).toBeChecked();
+    expect(dialog.queryByRole('button', { name: /편집기에서 고름/ })).not.toBeInTheDocument();
   });
 });
 
@@ -913,7 +1011,7 @@ describe('StudioScreen — 화면에서 고른 모양이 저장 본문에 그대
 describe('StudioScreen: 영상 만들기 + 유튜브 올리기(POK-291)', () => {
   const renders = () =>
     fetchSpy.mock.calls.filter(([url, init]) => url === RENDERS && init?.method === 'POST').length;
-  const dialog = () => within(screen.getByRole('dialog', { name: '유튜브 업로드 정보' }));
+  const dialog = () => within(screen.getByRole('dialog', { name: '유튜브에 올리기' }));
 
   it('「영상 만들기」는 창만 연다: 확인하면 저장하고, 고른 정보가 multipart request 파트로 실린다', async () => {
     const user = userEvent.setup();
@@ -926,27 +1024,33 @@ describe('StudioScreen: 영상 만들기 + 유튜브 올리기(POK-291)', () => 
     await user.type(dialog().getByRole('textbox', { name: /제목/ }), ' 보스 막타 ');
     await user.type(dialog().getByRole('textbox', { name: /설명/ }), '역전');
     await user.type(dialog().getByRole('textbox', { name: /태그/ }), '롤,보스 막타{Enter}');
+    // 카드에서 연 편집기: 처음 고른 장면은 하이라이트(카드 시각 = 구간 시작 + 5초, POK-381)
+    await user.click(dialog().getByRole('tab', { name: '썸네일' }));
+    expect(dialog().getByRole('button', { name: '하이라이트 0:05.0' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    await user.click(dialog().getByRole('tab', { name: '공개' }));
     await user.click(dialog().getByRole('radio', { name: '공개' }));
-    await user.click(dialog().getByRole('radio', { name: '장면 고르기' }));
-    await user.click(dialog().getByRole('button', { name: '만들고 올리기' }));
+    await user.click(dialog().getByRole('button', { name: '업로드' }));
 
     await waitFor(() => expect(renders()).toBe(1));
     expect(bodiesOf('POST', `/api/clip/broadcasts/${STREAM_ID}/recipes`)).toHaveLength(1);
     const { request, thumbnail } = await renderPartsOf();
-    // 녹화가 없어 재생 위치를 모른다: 장면은 컷(12.4초)의 가운데
     expect(request).toEqual({
       upload: {
         title: '보스 막타',
         description: '역전',
         tags: ['롤', '보스 막타'],
+        categoryId: '20',
         privacyStatus: 'public',
         madeForKids: false,
-        thumbnail: { source: 'scene', offsetMs: 6_200 },
+        thumbnail: { source: 'scene', offsetMs: 5_000 },
       },
     });
     expect(thumbnail).toBeNull();
     await waitFor(() =>
-      expect(screen.queryByRole('dialog', { name: '유튜브 업로드 정보' })).not.toBeInTheDocument(),
+      expect(screen.queryByRole('dialog', { name: '유튜브에 올리기' })).not.toBeInTheDocument(),
     );
 
     expect(await screen.findByText('영상을 만들고 유튜브에 올릴게요')).toBeInTheDocument();
@@ -959,12 +1063,13 @@ describe('StudioScreen: 영상 만들기 + 유튜브 올리기(POK-291)', () => 
     await openFrom(`stream=${STREAM_ID}&card=5`);
     await user.click(screen.getByRole('button', { name: '영상 만들기' }));
     await user.type(dialog().getByRole('textbox', { name: /제목/ }), '제목');
-    await user.click(dialog().getByRole('radio', { name: '이미지 올리기' }));
+    await user.click(dialog().getByRole('tab', { name: '썸네일' }));
+    await user.click(dialog().getByRole('radio', { name: /내 이미지/ }));
     const file = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], 'cover.png', {
       type: 'image/png',
     });
     await user.upload(document.querySelector('input[type="file"]') as HTMLInputElement, file);
-    await user.click(dialog().getByRole('button', { name: '만들고 올리기' }));
+    await uploadFromPublishTab(user);
 
     await waitFor(() => expect(renders()).toBe(1));
     const { request, thumbnail } = await renderPartsOf();
@@ -996,7 +1101,7 @@ describe('StudioScreen: 영상 만들기 + 유튜브 올리기(POK-291)', () => 
     expect(
       await screen.findByText('이미 올린 편집본이에요. 고친 뒤 다시 만들어 주세요'),
     ).toBeInTheDocument();
-    expect(screen.queryByRole('dialog', { name: '유튜브 업로드 정보' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: '유튜브에 올리기' })).not.toBeInTheDocument();
 
     server.renderError = { status: 409, body: { error: 'youtube_not_linked', reason: 'UNLINKED' } };
     await orderVideo(user);
@@ -1016,12 +1121,14 @@ describe('StudioScreen: 영상 만들기 + 유튜브 올리기(POK-291)', () => 
       ),
     );
 
+    // 걸린 칸이 있는 탭(태그 → 정보)이 열린다. 썸네일 사유는 썸네일 탭에 보인다
     server.renderError = { status: 413, body: { error: 'payload_too_large' } };
-    await user.click(dialog().getByRole('button', { name: '만들고 올리기' }));
+    await uploadFromPublishTab(user);
     expect(await dialog().findByText('이미지는 10MB까지 올릴 수 있어요')).toBeInTheDocument();
+    expect(dialog().getByRole('tab', { name: /썸네일/ })).toHaveAttribute('aria-selected', 'true');
 
     server.renderError = { status: 415, body: { error: 'unsupported_image' } };
-    await user.click(dialog().getByRole('button', { name: '만들고 올리기' }));
+    await uploadFromPublishTab(user);
     expect(await dialog().findByText('JPG나 PNG만 올릴 수 있어요')).toBeInTheDocument();
   });
 
@@ -1036,7 +1143,7 @@ describe('StudioScreen: 영상 만들기 + 유튜브 올리기(POK-291)', () => 
     await user.type(title(), '!');
     expect(title()).not.toHaveAccessibleDescription(/제목을 확인해 주세요/);
 
-    await user.click(dialog().getByRole('button', { name: '만들고 올리기' }));
+    await uploadFromPublishTab(user);
     await waitFor(() => expect(renders()).toBe(2));
     await waitFor(() => expect(title()).toHaveAccessibleDescription(/제목을 확인해 주세요/));
   });
@@ -1049,13 +1156,18 @@ describe('StudioScreen: 영상 만들기 + 유튜브 올리기(POK-291)', () => 
     expect(screen.getByRole('checkbox', { name: '트랙 2 넣기' })).toBeChecked();
 
     await user.click(screen.getByRole('button', { name: '영상 만들기' }));
-    dialog().getByRole('switch', { name: '아동용 영상이에요' }).focus();
+    await user.click(dialog().getByRole('tab', { name: '공개' }));
+    dialog()
+      .getByRole('switch', { name: /아동용 영상으로 올리기/ })
+      .focus();
     await user.keyboard('{Meta>}z{/Meta}');
     const unlisted = dialog().getByRole('radio', { name: '일부 공개' });
     unlisted.focus();
     await user.keyboard(' ');
     expect(unlisted).toBeChecked();
 
+    // 「취소」는 첫 탭(정보)에 있다
+    await user.click(dialog().getByRole('tab', { name: '정보' }));
     await user.click(dialog().getByRole('button', { name: '취소' }));
     // ⌘Z가 창 뒤로 샜으면 트랙 2가 꺼져 있다
     expect(screen.getByRole('checkbox', { name: '트랙 2 넣기' })).toBeChecked();
@@ -1144,7 +1256,38 @@ describe('StudioScreen: 영상 만들기 + 유튜브 올리기(POK-291)', () => 
     await user.click(screen.getByRole('button', { name: '영상 만들기' }));
 
     expect(dialog().getByRole('textbox', { name: /제목/ })).toHaveValue('먼저 적은 제목');
+    await user.click(dialog().getByRole('tab', { name: '공개' }));
     expect(dialog().getByRole('radio', { name: '일부 공개' })).toBeChecked();
-    expect(dialog().getByRole('radio', { name: '장면 고르기' })).toBeChecked();
+    await user.click(dialog().getByRole('tab', { name: '썸네일' }));
+    expect(dialog().getByRole('radio', { name: /영상 장면/ })).toBeChecked();
+  });
+
+  it('남은 의도가 예약이면 카테고리·예약 시각까지 되살려, 그대로 다시 올려도 예약이 안 지워진다(PR #301 리뷰)', async () => {
+    server.savedUploadRequest = {
+      title: '예약한 제목',
+      privacyStatus: 'private',
+      thumbnailSource: 'scene',
+      categoryId: '24',
+      publishAt: '2099-01-01T09:00:00Z',
+    };
+    const user = userEvent.setup();
+    await openFrom('recipe=31');
+    await user.click(screen.getByRole('button', { name: '영상 만들기' }));
+
+    expect(dialog().getByRole('combobox', { name: '카테고리' })).toHaveTextContent('엔터테인먼트');
+    await user.click(dialog().getByRole('tab', { name: '공개' }));
+    expect(dialog().getByRole('radio', { name: '예약' })).toBeChecked();
+    // 시험은 Asia/Seoul(vitest.config): 09:00Z = 18:00
+    expect(dialog().getByLabelText('공개 날짜')).toHaveValue('2099-01-01');
+    expect(dialog().getByLabelText('공개 시각')).toHaveValue('18:00');
+    await user.click(dialog().getByRole('button', { name: '예약 업로드' }));
+
+    await waitFor(() => expect(renders()).toBe(1));
+    const { request } = await renderPartsOf();
+    expect(request.upload).toMatchObject({
+      categoryId: '24',
+      privacyStatus: 'private',
+      publishAt: '2099-01-01T09:00:00.000Z',
+    });
   });
 });

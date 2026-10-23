@@ -74,10 +74,10 @@ public class ThumbnailTargets {
              ORDER BY cl.id DESC
              LIMIT ?""";
 
-    /** 구간 안에서 점수가 가장 높은 카드의 시각. 점수가 없는 카드는 뒤로, 같으면 먼저 생긴 카드. 숨긴 카드는 안 본다. */
+    /** 구간 안에서 점수가 가장 높은 카드의 시각. 점수가 없는 카드는 뒤로, 같으면 먼저 생긴 카드. */
     static final String TOP_CARD_IN = """
             SELECT stream_timestamp_ms FROM jump_cards
-             WHERE stream_id = ? AND hidden_at IS NULL
+             WHERE stream_id = ?
                AND stream_timestamp_ms >= ? AND stream_timestamp_ms < ?
              ORDER BY score DESC NULLS LAST, id
              LIMIT 1""";

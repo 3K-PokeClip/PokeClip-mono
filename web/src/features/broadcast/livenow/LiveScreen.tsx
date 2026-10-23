@@ -18,7 +18,7 @@ import { formatUptime, parseClockLabel } from '@/features/player/playerMath';
 import { ChatPanel } from './ChatPanel';
 import { HighlightCardPanel } from './HighlightCardPanel';
 import { LiveOfflineScreen } from './LiveOfflineScreen';
-import { LiveStatsPanel } from './LiveStatsPanel';
+import { LiveStatsPanel, type TimelineCard } from './LiveStatsPanel';
 import { StreamInfoBar } from './StreamInfoBar';
 import { notFound, usePathname, useSearchParams } from 'next/navigation';
 import { requestPlaybackAccess } from '@/api/clipEditor';
@@ -237,13 +237,29 @@ function LivePlayer({
           : undefined;
   // 영상 출입증(POK-122) — 방송을 열 때 받고, 만료 5분 전에 다시 받는다. 쿠키 수명(운영 60분)이 지나면 새 조각이
   // 403이 되어 재생이 멈춘다(PR #200 codex P1). 실패하면 1분 뒤 다시 받는다. 서명 재료가 없는 서버(503)는
-  // 출입증이 필요 없는 곳이라(로컬·dev) 다시 묻지 않는다. 실패해도 재생은 시도한다(로컬 media는 쿠키를 안 본다).
+  // 출입증이 필요 없는 곳이라(로컬·dev) 다시 묻지 않는다. 실패면 라이브를 열지 않는다(아래).
+  // 출입증을 받거나(받음) 필요 없다는 답(로컬·dev의 503)이 오기 전에는 라이브 주소를 넘기지 않는다(POK-317). 먼저 넘기면 CDN 뒤 첫
+  // 요청이 쿠키 없이 403이고 hls.js는 한 번만 다시 시도한 뒤 멈춘다. 실패는 열지 않고 1분 뒤 다시 받은 답을 기다린다(PR #320 codex).
+  // 로컬·dev는 503이 곧바로 와서 재생 시작이 왕복 한 번만큼만 늦다
+  const [accessReadyFor, setAccessReadyFor] = useState<string | null>(null);
+  // 열린 뒤 갱신이 실패하다가 다시 받아진 횟수. 그 사이 쿠키가 끝나 멈춘 hls.js는 새 쿠키로 저절로 안 살아나서 재생기를 새로
+  // 세운다(PR #320 codex). 정상 갱신에는 안 늘어 재생이 끊기지 않는다
+  const [accessRecoveries, setAccessRecoveries] = useState(0);
   useEffect(() => {
     if (!liveStreamId) return undefined;
     let alive = true;
     let timer: number | undefined;
+    let opened = false;
+    let failedSinceOpen = false;
     const ask = () => {
       void requestPlaybackAccess(liveStreamId).then((result) => {
+        if (alive && result.kind === 'failed') failedSinceOpen = opened;
+        if (alive && result.kind !== 'failed') {
+          if (failedSinceOpen) setAccessRecoveries((n) => n + 1);
+          failedSinceOpen = false;
+          opened = true;
+          setAccessReadyFor(liveStreamId);
+        }
         if (!alive || result.kind === 'not_needed') return;
         const wait =
           result.kind === 'failed'
@@ -266,14 +282,19 @@ function LivePlayer({
   return (
     <GlassPlayer
       // 실재생 훅은 경과 시드를 마운트 때 한 번만 읽는다 — startedAt이 도착하면 한 번 다시 세운다
-      key={uptimeSeconds === null ? 'clock-pending' : 'clock-known'}
+      // 출입증 갱신이 실패하다가 다시 받아져도 다시 세운다(accessRecoveries)
+      key={`${uptimeSeconds === null ? 'clock-pending' : 'clock-known'}-${accessRecoveries}`}
       channelName={stream.channelName}
       viewersNote={viewersNote}
       broadcastStatus={displayStatus}
       noSignalNote={noSignalNote}
       // 라이브 주소는 방송 중일 때만 — 끝난 방송의 LL-HLS는 닫혀 있어 검은 화면과 오류만 남는다(PR #200 codex).
       // 끝난 방송은 녹화가 있으면 recorded로, 없으면 「지난 방송 영상」 자리를 그린다
-      src={broadcastStatus === 'live' ? src : null}
+      src={
+        broadcastStatus === 'live' && (!liveStreamId || accessReadyFor === liveStreamId)
+          ? src
+          : null
+      }
       recorded={recorded}
       startAtSeconds={startAtSeconds}
       onPlaybackPosition={onPlaybackPosition}
@@ -316,8 +337,7 @@ function LiveDashboard() {
   // 주소는 usePathname으로 읽는다: 넘어온 직후 첫 그리기의 window.location은 옛 주소다
   const vodRouteId = vodStreamIdFromPathname(usePathname() ?? '');
   const pastRoute = vodRouteId !== null;
-  const { stream, highlights, hiddenHighlights, cardsStatus, chatVolume, chatWarning } =
-    useLiveMockState(pastRoute);
+  const { stream, highlights, cardsStatus, chatWarning } = useLiveMockState(pastRoute);
   const { streamMeta, cardVisuals } = useLiveDetailsMockState();
   const liveData = useLiveData();
   const { streamId, info } = liveData;
@@ -414,10 +434,41 @@ function LiveDashboard() {
   // 필터 개수도 통계의 하이라이트 줄도 같은 카드 목록에서 센다. 어느 한쪽을 따로 세면 두 표기가 언젠가 어긋난다.
   //
   // 경과 표기 때문에 이 컴포넌트는 매초 다시 그려진다. 요약이 매번 새 객체면
-  // 아래 패널들의 memo가 통째로 무력해지므로 여기서 정체성을 붙잡아 둔다.
-  const highlightSummary = useMemo(() => {
-    const manual = highlights.filter((card) => card.source === 'manual').length;
-    return { total: highlights.length, auto: highlights.length - manual, manual };
+  // 아래 패널들의 memo가 통째로 무력해지므로 여기서 정체성을 붙잡아 둔다. highlights 자체가 경과 표기(「n초 전」) 때문에 매초 새
+  // 배열이라, 그것에 묶지 않고 센 수에 묶는다(PR #316 리뷰)
+  const manualCount = highlights.filter((card) => card.source === 'manual').length;
+  const highlightSummary = useMemo(
+    () => ({
+      total: highlights.length,
+      auto: highlights.length - manualCount,
+      manual: manualCount,
+    }),
+    [highlights.length, manualCount],
+  );
+  // 통계 그래프의 핀도 같은 카드 목록이다(숨긴 카드는 없다). 자동 카드는 제목의 번호(채팅이 튄 순간 #12)로, 수동 카드는 제목에
+  // 번호가 없어 「수동」으로 선다. 누르면 카드를 누른 것과 같이 그 시점으로 간다(handleSeek). 핀에 쓰는 값이 그대로면 앞 배열을
+  // 그대로 돌려준다 — 매초 새 배열이면 그래프(memo)가 매초 칸 묶기·선 보간·막대 수백 개를 다시 그렸다(PR #316 리뷰)
+  const pinCache = useRef<{ key: string; cards: TimelineCard[] }>({ key: '', cards: [] });
+  const timelineCards = useMemo(() => {
+    const next = highlights.flatMap((card): TimelineCard[] =>
+      card.atMs === undefined
+        ? []
+        : [
+            {
+              id: card.id,
+              atMs: card.atMs,
+              timestamp: card.timestamp,
+              label: card.source === 'manual' ? '수동' : `#${card.id.replace('card-', '')}`,
+              manual: card.source === 'manual',
+              reason: card.reason ?? card.title,
+            },
+          ],
+    );
+    const key = next
+      .map((c) => `${c.id}|${c.atMs}|${c.timestamp}|${c.label}|${c.reason}`)
+      .join('\n');
+    if (key !== pinCache.current.key) pinCache.current = { key, cards: next };
+    return pinCache.current.cards;
   }, [highlights]);
 
   // 녹화는 방송을 연 뒤에 찾는다. 그 전에 고른 시점은 옮길 플레이어가 없어(자리 표시) 그냥 사라지고, 뒤늦게 선 녹화는
@@ -575,7 +626,6 @@ function LiveDashboard() {
           />
           <HighlightCardPanel
             highlights={highlights}
-            hiddenHighlights={hiddenHighlights}
             stream={streamForCards}
             visuals={cardVisuals}
             pendingLabel={null}
@@ -605,14 +655,15 @@ function LiveDashboard() {
         ) : null}
       </div>
       {/* 전폭 — 스크롤로 내려와 만나는 자리다 */}
+      {/* 방송이 바뀌면 처음부터 다시 그린다 — 스크롤 위치·끝 따라가기를 앞 방송에서 이어받지 않는다 */}
       <LiveStatsPanel
-        chatVolume={chatVolume}
-        viewerLine={stats.viewerLine}
-        donations={stats.donations}
-        categorySegments={stats.categorySegments}
-        metrics={stats.metrics}
+        key={streamId}
+        stats={stats}
+        cards={timelineCards}
         highlightSummary={highlightSummary}
+        live={viewStatus === 'live'}
         ended={ended}
+        onSeekCard={handleSeek}
       />
     </main>
   );

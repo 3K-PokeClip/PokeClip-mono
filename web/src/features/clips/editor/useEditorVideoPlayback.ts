@@ -1,7 +1,8 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { recordingClipUrl } from '@/api/mediaPlayback';
+import { ensureMediaAccess } from '@/api/clipEditor';
+import { mediaCredentials, recordingClipUrl } from '@/api/mediaPlayback';
 import { playableFrom, type RecordingPiece } from '@/features/player/recordingTimeline';
 import { boundaryAction, type EditorPlayback, type PlaybackBounds } from './editorPlayback';
 
@@ -58,6 +59,8 @@ export interface EditorVideoPlayback {
   src: string;
   /** 영상이 받은 창(편집기 초): 트랙별 미리 듣기가 같은 창의 조각을 받는다(POK-389). 받을 녹화가 없으면 null */
   window: { startSeconds: number; endSeconds: number } | null;
+  /** 받아 둔 조각(src)의 첫 장면이 이 훅의 시간축으로 몇 초인가. 조각 안 초 = 시간축 초 − 이 값 */
+  windowStartSeconds: number;
 }
 
 export function useEditorVideoPlayback(options: {
@@ -109,7 +112,10 @@ export function useEditorVideoPlayback(options: {
     const abort = new AbortController();
     let objectUrl: string | null = null;
     setFailed(false);
-    fetch(remoteUrl, { signal: abort.signal })
+    // 출입증이 곧 만료되면 새로 받은 뒤 부른다(POK-317). 받아 둔 것이 쓸 만하면 기다리지 않는다
+    const load = () => fetch(remoteUrl, { signal: abort.signal, credentials: mediaCredentials() });
+    const access = ensureMediaAccess(streamId);
+    (access === null ? load() : access.then(load))
       .then((res) => {
         if (!res.ok) throw new Error(String(res.status));
         return res.blob();
@@ -125,7 +131,7 @@ export function useEditorVideoPlayback(options: {
       abort.abort();
       if (objectUrl !== null) URL.revokeObjectURL(objectUrl);
     };
-  }, [remoteUrl, recordingSeconds, win.empty]);
+  }, [remoteUrl, streamId, recordingSeconds, win.empty]);
 
   const clampToWindow = useCallback((seconds: number) => {
     const w = winRef.current;
@@ -310,5 +316,12 @@ export function useEditorVideoPlayback(options: {
     [win, recordingSeconds],
   );
 
-  return { playback, videoRef: setVideo, video, src, window: loadedWindow };
+  return {
+    playback,
+    videoRef: setVideo,
+    video,
+    src,
+    window: loadedWindow,
+    windowStartSeconds: win.startSeconds,
+  };
 }

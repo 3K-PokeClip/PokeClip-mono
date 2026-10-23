@@ -1,15 +1,110 @@
 import { describe, expect, it } from 'vitest';
 import {
   addTags,
+  CATEGORIES,
   defaultSceneOffsetMs,
   descriptionBytes,
   descriptionProblem,
+  quickSchedules,
+  sceneLabel,
   sceneOffsetFromPlayhead,
+  scenePicks,
+  scheduleInstant,
+  scheduleLabel,
+  scheduleOf,
+  scheduleProblem,
   tagsLength,
   thumbnailFileProblem,
   THUMBNAIL_MAX_BYTES,
   withPickedScene,
 } from './uploadInfo';
+
+describe('추천 장면(POK-381): 하이라이트 · 시작 · 재생 위치 · 중간 · 마지막', () => {
+  const ids = (picks: ReturnType<typeof scenePicks>) => picks.map((p) => `${p.id}:${p.offsetMs}`);
+
+  it('다 알면 다섯, 순서는 하이라이트가 먼저', () => {
+    expect(ids(scenePicks(12_400, 8_000, 3_250))).toEqual([
+      'highlight:8000',
+      'start:0',
+      'playhead:3250',
+      'middle:6200',
+      'end:12399',
+    ]);
+  });
+
+  it('모르거나 영상 밖이면 빼고, 앞의 것과 한 눈금(0.25초) 안으로 겹치면 뒤의 것을 뺀다', () => {
+    expect(ids(scenePicks(12_400, null, null))).toEqual(['start:0', 'middle:6200', 'end:12399']);
+    expect(ids(scenePicks(12_400, 20_000, -1))).toEqual(['start:0', 'middle:6200', 'end:12399']);
+    // 재생 위치가 처음(0.1초)이면 「시작」과 같은 그림이고, 하이라이트가 가운데 근처면 「중간」과 같다
+    expect(ids(scenePicks(12_400, 6_300, 100))).toEqual(['highlight:6300', 'start:0', 'end:12399']);
+  });
+
+  it('시각 표기는 분:초.십분의일초', () => {
+    expect(sceneLabel(3_250)).toBe('0:03.2');
+    expect(sceneLabel(65_400)).toBe('1:05.4');
+  });
+});
+
+describe('예약 공개(POK-381): 지금부터 1시간 뒤부터', () => {
+  // 2026-10-22 20:30(이 기기 시각)
+  const now = new Date(2026, 9, 22, 20, 30).getTime();
+
+  it('날짜·시각이 틀렸거나 1시간 안이면 까닭을 말한다', () => {
+    expect(scheduleProblem('', '18:00', now)).toBe('날짜와 시각을 골라 주세요');
+    expect(scheduleProblem('2026-10-22', '21:00', now)).toBe(
+      '지금부터 1시간 뒤부터 고를 수 있어요',
+    );
+    expect(scheduleProblem('2026-10-22', '21:30', now)).toBeNull();
+    expect(scheduleProblem('2026-10-21', '23:00', now)).toBe(
+      '지금부터 1시간 뒤부터 고를 수 있어요',
+    );
+  });
+
+  it('빠른 고르기는 1시간이 안 남은 것을 뺀다(저녁 늦게 열면 「오늘 21:00」이 없다)', () => {
+    expect(quickSchedules(now).map((q) => q.label)).toEqual(['내일 18:00', '내일 21:00']);
+    const morning = new Date(2026, 9, 22, 9, 0).getTime();
+    expect(quickSchedules(morning).map((q) => q.label)).toEqual([
+      '오늘 21:00',
+      '내일 18:00',
+      '내일 21:00',
+    ]);
+  });
+
+  it('표기: 10월 23일 (금) 18:00', () => {
+    expect(scheduleLabel('2026-10-23', '18:00')).toBe('10월 23일 (금) 18:00');
+    expect(scheduleLabel('2026-13-40', '18:00')).toBe('');
+  });
+
+  it('저장된 예약 시각 → 예약 칸 값(이 기기 시각), 다시 순간으로 돌리면 같다', () => {
+    const at = new Date('2026-10-23T09:05:00Z');
+    expect(scheduleOf(at)).toEqual({ date: '2026-10-23', time: '18:05' });
+    const { date, time } = scheduleOf(at);
+    expect(scheduleInstant(date, time)?.toISOString()).toBe('2026-10-23T09:05:00.000Z');
+  });
+});
+
+describe('카테고리(POK-381)', () => {
+  it('clip이 받는 목록과 같다(UploadInfoParser.CATEGORIES) · 처음 값 게임이 맨 앞', () => {
+    expect(CATEGORIES.map((c) => c.value).sort((a, b) => Number(a) - Number(b))).toEqual([
+      '1',
+      '2',
+      '10',
+      '15',
+      '17',
+      '19',
+      '20',
+      '22',
+      '23',
+      '24',
+      '25',
+      '26',
+      '27',
+      '28',
+      '29',
+    ]);
+    expect(CATEGORIES[0]).toEqual({ value: '20', label: '게임' });
+  });
+});
 
 // 업로드 정보 창(POK-291)의 규칙. 서버(clip 렌더 주문 문)가 같은 것을 400으로 거절하지만 보내기 전에 창 안에서 말한다.
 

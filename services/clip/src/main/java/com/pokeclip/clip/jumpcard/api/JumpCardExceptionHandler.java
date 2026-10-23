@@ -3,13 +3,10 @@ package com.pokeclip.clip.jumpcard.api;
 import com.pokeclip.clip.collector.CollectorErrors;
 import com.pokeclip.clip.delegation.AccessErrors;
 import com.pokeclip.clip.jumpcard.JumpCardErrors.BroadcastNotFoundException;
-import com.pokeclip.clip.jumpcard.JumpCardErrors.ClaimedByOtherException;
 import com.pokeclip.clip.jumpcard.JumpCardErrors.InvalidHighlightException;
 import com.pokeclip.clip.jumpcard.JumpCardErrors.JumpCardNotFoundException;
-import com.pokeclip.clip.jumpcard.JumpCardErrors.NotClaimOwnerException;
 import com.pokeclip.clip.jumpcard.JumpCardErrors.StreamLimitExceededException;
 import com.pokeclip.clip.jumpcard.JumpCardErrors.TokenAlreadyExpiredException;
-import com.pokeclip.clip.jumpcard.JumpCardSnapshot;
 import com.pokeclip.clip.paging.InvalidCursorException;
 import com.pokeclip.clip.paging.InvalidListParamException;
 import com.pokeclip.clip.playback.PlaybackErrors;
@@ -82,21 +79,6 @@ public class JumpCardExceptionHandler {
                                                          HttpServletRequest request) {
         NotFoundFloor.awaitFloorIfMarked(request);
         return json(HttpStatus.NOT_FOUND, error("jump_card_not_found"));
-    }
-
-    /**
-     * 409의 본문은 오류 봉투가 아니라 <b>현재 카드 스냅샷</b>이다 — 웹이 "누가 잡고 있는지"를
-     * 새로고침 없이 바로 띄워야 편집자가 상황을 안다.
-     */
-    @ExceptionHandler(ClaimedByOtherException.class)
-    ResponseEntity<JumpCardSnapshot> claimedByOther(ClaimedByOtherException e) {
-        return ResponseEntity.status(HttpStatus.CONFLICT)
-                .contentType(MediaType.APPLICATION_JSON).body(e.current());
-    }
-
-    @ExceptionHandler(NotClaimOwnerException.class)
-    ResponseEntity<Map<String, Object>> notClaimOwner(NotClaimOwnerException e) {
-        return json(HttpStatus.FORBIDDEN, error("not_claim_owner"));
     }
 
     /**

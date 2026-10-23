@@ -9,22 +9,25 @@ import (
 	"testing"
 	"time"
 
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/pgtest"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// rollbackProbe 는 문장마다 부르는 추적기다(pgx.QueryTracer). 주조 문장(insertSeedSQL)이 서버로 나가기 전에
+// rollbackProbe 는 문장마다 부르는 추적기다(pgx.QueryTracer). 주입 문장(injectSQL)이 서버로 나가기 전에
 // inject 로 그 문장의 ctx 를 끝내고, 되돌림 문장("rollback" — pgx 가 Rollback 에서 보내는 문장)이 나간 ctx 와
 // 결과를 적는다. 적기만 하고 판정은 시험 본문이 한다. pgx 는 문장을 보내는 고루틴에서 추적기를 부르므로 이
 // 시험에서는 전부 시험 고루틴이다.
 type rollbackProbe struct {
-	inject func(ctx context.Context) context.Context
+	// injectSQL 은 ctx 를 끝낼 문장이고, bound 는 그 문장 ctx 에 지금부터 있어야 할 시한의 상한이다.
+	injectSQL string
+	bound     time.Duration
+	inject    func(ctx context.Context) context.Context
 
 	injects  int       // 주입 횟수
 	failedAt time.Time // 주입이 돌아온 시각 — 트랜잭션이 실패한 시각
-	// seedUnbounded 는 주조 문장 ctx 에 지금부터 TxnDeadline 이내의 시한이 없어 주입하지 않았다는 표시다 —
+	// unbounded 는 주입 문장 ctx 에 지금부터 bound 이내의 시한이 없어 주입하지 않았다는 표시다 —
 	// 끝을 기다리는 주입이 그런 ctx 를 붙잡으면 시험이 -timeout 까지 매달린다.
-	seedUnbounded bool
+	unbounded bool
 
 	rollbackStarts   int       // 되돌림 문장 시작 횟수
 	rollbackAt       time.Time // 되돌림 문장 시작 시각
@@ -45,9 +48,9 @@ type probeSQLKey struct{}
 
 func (p *rollbackProbe) TraceQueryStart(ctx context.Context, _ *pgx.Conn, d pgx.TraceQueryStartData) context.Context {
 	switch d.SQL {
-	case insertSeedSQL:
-		if deadline, ok := ctx.Deadline(); !ok || time.Until(deadline) > TxnDeadline {
-			p.seedUnbounded = true // 주입하지 않는다 — 판정은 시험 본문이 한다
+	case p.injectSQL:
+		if deadline, ok := ctx.Deadline(); !ok || time.Until(deadline) > p.bound {
+			p.unbounded = true // 주입하지 않는다 — 판정은 시험 본문이 한다
 			break
 		}
 		ctx = p.inject(ctx)
@@ -66,30 +69,6 @@ func (p *rollbackProbe) TraceQueryEnd(ctx context.Context, _ *pgx.Conn, d pgx.Tr
 	if sql, _ := ctx.Value(probeSQLKey{}).(string); sql == "rollback" {
 		p.rollbackErrs = append(p.rollbackErrs, d.Err)
 	}
-}
-
-// newTracedPool 은 pool 과 같은 테스트 DB 에 붙되 문장마다 tracer 를 거치는 새 풀이다(pool.Config 는 사본이라
-// pool 은 그대로다). 풀은 t.Cleanup 이 닫는다.
-//
-// 되돌림 말고는 연결을 세우거나 버리지 않게 풀 설정을 못 박는다 — PG_DSN 에 pool_min_conns ·
-// pool_max_conn_lifetime · pool_health_check_period 같은 매개변수가 있어도 새 연결 수를 흔들지 않는다.
-// 최소 연결 수 0 은 배경에서 서는 연결을 막는다. 수명(지터 0) · 유휴 한도 · 점검 주기는 시험 한 번보다 훨씬
-// 길게 둔다. 수명이 다한 연결은 반납 · 획득 · 점검 때 버려지고, 점검은 한도보다 오래 논 연결을 버린다. 점검이
-// 도는 동안은 유휴 연결을 모두 빌려 가 있어서 그 사이의 획득이 새 연결을 세운다. 그래서 이 풀은 버린 연결을
-// 다음 문장이 나갈 때에야 다시 세운다.
-func newTracedPool(ctx context.Context, t *testing.T, pool *pgxpool.Pool, tracer pgx.QueryTracer) *pgxpool.Pool {
-	t.Helper()
-	cfg := pool.Config()
-	cfg.ConnConfig.Tracer = tracer
-	cfg.MinConns, cfg.MinIdleConns = 0, 0
-	cfg.MaxConnLifetime, cfg.MaxConnLifetimeJitter = time.Hour, 0
-	cfg.MaxConnIdleTime, cfg.HealthCheckPeriod = time.Hour, time.Hour
-	traced, err := pgxpool.NewWithConfig(ctx, cfg)
-	if err != nil {
-		t.Fatalf("추적 풀 생성 실패: %v", err)
-	}
-	t.Cleanup(traced.Close)
-	return traced
 }
 
 // 되돌림 ctx — 실패한 주조 트랜잭션은 되돌리는 순간에 만든 끝나지 않은 ctx 로 되돌린다. 끝난 ctx 로 되돌리면
@@ -128,10 +107,10 @@ func TestInsertRollsBackWithLiveContext(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.WithValue(t.Context(), callerValueKey{}, tc.name))
 			defer cancel()
-			probe := &rollbackProbe{inject: func(sctx context.Context) context.Context {
+			probe := &rollbackProbe{injectSQL: insertSeedSQL, bound: TxnDeadline, inject: func(sctx context.Context) context.Context {
 				return tc.inject(sctx, cancel)
 			}}
-			pool := newTracedPool(t.Context(), t, newTestPool(t), probe)
+			pool := pgtest.TracedPool(t.Context(), t, newTestPool(t), probe)
 			if _, err := pool.Exec(t.Context(), "select 1"); err != nil { // 연결 하나를 세워 둔다
 				t.Fatalf("풀 데우기 실패: %v", err)
 			}
@@ -141,9 +120,9 @@ func TestInsertRollsBackWithLiveContext(t *testing.T) {
 			// 세션 개시 갈래다 — 주입 전에 상한 설정 · 세션 INSERT · 되읽기가 이미 서버에 나가 있다.
 			_, _, err := newSessionStore(pool).Insert(ctx, segAt(stream, 0, sessionBase, 4000), Seed{}, liveIngress())
 
-			if probe.seedUnbounded {
-				t.Fatalf("주조 문장 ctx 시한(문장 시작부터 TxnDeadline %v 이내) = 없음, want 있음 — 트랜잭션 상한이 주조 문장에 걸리지 않아 주입하지 않았다",
-					TxnDeadline)
+			if probe.unbounded {
+				t.Fatalf("주조 문장 ctx 시한(문장 시작부터 %v 이내) = 없음, want 있음 — 트랜잭션 상한이 주조 문장에 걸리지 않아 주입하지 않았다",
+					probe.bound)
 			}
 			if probe.injects != 1 {
 				t.Fatalf("주조 문장 주입 = %d번, want 1번 — 주입이 없으면 아래 단언은 아무것도 재지 않는다", probe.injects)

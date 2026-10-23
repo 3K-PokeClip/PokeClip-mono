@@ -1,49 +1,77 @@
-/* 디자인 1n 설정 · 알림 — 카드 2개, 각 카드가 「이름 / 인앱 / 이메일」 3열 격자다. */
-
-/* 시안의 제목-카드 간격은 20u인데 SettingsPageHeader가 자체로 4u를 든다 */
-.header {
-  margin-bottom: calc(16 * var(--pc-u));
-}
+/* 설정 · 알림 — 맨 위 방해 금지 카드 + 알림 목록 카드. 줄마다 「끔 · 받기 · 중요」 세그먼트. */
 
 /* 본문 폭은 가두지 않되(사이드바 화면 공통 규칙, docs/DESIGN_SYSTEM.md 「셸 · 본문 폭」) 카드는
-   시안 폭을 지킨다 — 「1fr 84u 84u」 격자라 전폭으로 늘면 이름 열만 비고 스위치가 멀어진다 */
+   시안 폭을 지킨다 — 전폭으로 늘면 제목만 비고 세그먼트가 멀어진다.
+   카드가 좁아지면 세그먼트를 제목 아래로 내리려고 카드를 컨테이너로 둔다 */
 .card {
   max-width: calc(860 * var(--pc-u));
   border: 1px solid var(--pc-color-border-subtle);
   border-radius: calc(14 * var(--pc-u));
   background: var(--pc-color-bg-surface);
   overflow: hidden;
+  container-type: inline-size;
 }
 
-.criticalCard {
+.cardGap {
   margin-bottom: calc(12 * var(--pc-u));
 }
 
-/* 열 폭 84u는 두 카드가 공유한다 — 갈리면 스위치 열이 어긋난다 */
-.columnHeader,
-.row {
+/* 카드 제목(계정 화면 1p의 카드 제목과 같은 13u) */
+.cardTitle {
+  margin: 0;
+  padding: calc(14 * var(--pc-u)) calc(16 * var(--pc-u)) calc(10 * var(--pc-u));
+  border-bottom: 1px solid var(--pc-color-border-subtle);
+  font-size: calc(13 * var(--pc-u));
+  font-weight: 750;
+}
+
+/* ---------- 방해 금지 ---------- */
+
+.dnd {
+  display: flex;
+  align-items: center;
+  gap: calc(12 * var(--pc-u));
+  padding: calc(14 * var(--pc-u)) calc(16 * var(--pc-u));
+}
+
+.dndIcon {
+  flex: none;
   display: grid;
-  grid-template-columns: 1fr calc(84 * var(--pc-u)) calc(84 * var(--pc-u));
+  place-items: center;
+  width: calc(34 * var(--pc-u));
+  height: calc(34 * var(--pc-u));
+  border-radius: calc(10 * var(--pc-u));
+  background: var(--pc-color-bg-inset);
+  color: var(--pc-color-text-secondary);
+}
+
+/* lucide size prop은 px 고정 — 유닛에 태운다 */
+.dndIcon svg {
+  width: calc(16 * var(--pc-u));
+  height: calc(16 * var(--pc-u));
+}
+
+.dndTitle {
+  font-size: calc(13 * var(--pc-u));
+  font-weight: 750;
+}
+
+/* ---------- 알림 줄 ---------- */
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: calc(12 * var(--pc-u));
+  padding: calc(12 * var(--pc-u)) calc(16 * var(--pc-u));
   border-bottom: 1px solid var(--pc-color-border-subtle);
 }
 
-.columnHeader {
-  padding: calc(11 * var(--pc-u)) calc(16 * var(--pc-u));
-  font-size: calc(11 * var(--pc-u));
-  font-weight: 700;
-  color: var(--pc-color-text-muted);
-}
-
-.channelHead {
-  text-align: center;
-}
-
-.row {
-  align-items: center;
-  padding: calc(12 * var(--pc-u)) calc(16 * var(--pc-u));
+.row:last-child {
+  border-bottom: 0;
 }
 
 .rowBody {
+  flex: 1;
   min-width: 0;
   line-height: 1.4;
 }
@@ -59,36 +87,23 @@
   color: var(--pc-color-text-muted);
 }
 
-.switchCell {
-  display: flex;
-  justify-content: center;
-}
-
-.lockNote {
-  display: flex;
-  align-items: center;
-  gap: calc(7 * var(--pc-u));
-  margin: 0;
-  padding: calc(10 * var(--pc-u)) calc(16 * var(--pc-u));
-  font-size: calc(10.5 * var(--pc-u));
-  color: var(--pc-color-text-muted);
-}
-
-/* lucide size prop은 px 고정 — 유닛에 태운다 */
-.lockNote svg {
-  width: calc(12 * var(--pc-u));
-  height: calc(12 * var(--pc-u));
+.segment {
   flex: none;
+  width: calc(228 * var(--pc-u));
 }
 
-/* 방해 금지는 종류가 아니라 그 위에 걸리는 규칙이라 3열 격자를 쓰지 않는다 */
-.dndRow {
-  display: flex;
-  align-items: center;
-  gap: calc(10 * var(--pc-u));
-  padding: calc(12 * var(--pc-u)) calc(16 * var(--pc-u));
-}
+/* 좁은 카드에선 세그먼트가 제목을 누르지 않게 아래 줄로 — 칸은 줄 폭을 다 채운다.
+   기준도 rem이다 — 세그먼트 폭·패딩이 --pc-u(rem)라 px로 박으면 글꼴을 키울 때 기준만 안 따라온다 */
+@container (max-width: 37.5rem) {
+  .row {
+    flex-wrap: wrap;
+  }
 
-.dndRow .rowBody {
-  flex: 1;
+  .row .rowBody {
+    flex-basis: 100%;
+  }
+
+  .segment {
+    width: 100%;
+  }
 }
