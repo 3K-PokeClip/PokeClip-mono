@@ -196,6 +196,51 @@ describe('영상 출입증 받기와 쿠키 싣기 (POK-317)', () => {
     expect(posts().filter((url) => url.includes('/S-'))).toHaveLength(8);
   });
 
+  it('같은 영상 키를 쓰는 방송 여럿의 출입증은 상한에 한 칸이다: 쿠키 경로가 영상 키라 브라우저에는 한 벌만 산다(POK-411)', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.parse('2026-10-23T00:00:00Z'));
+    const { api, posts } = await load(granted('2026-10-23T01:00:00Z'));
+    // 같은 송출 키로 한 방송 넷(POK-233): 받은 출입증 넷이 같은 경로의 쿠키를 덮는다
+    for (const id of ['L-1', 'L-2', 'L-3', 'L-4']) await api.ensureLiveAccess(id, 'lk-shared');
+    const items = Array.from({ length: 14 }, (_, i) => ({
+      streamId: `S-${i}`,
+      mediaKey: `k-${i}`,
+    }));
+    await Promise.all([...api.ensurePlaybackAccessForList(items).values()]);
+    expect(posts().filter((url) => url.includes('/S-'))).toHaveLength(11);
+  });
+
+  it('403으로 쿠키가 지워진 키는 상한 자리를 비운다: 브라우저에 그 쿠키가 없다(POK-411)', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.parse('2026-10-23T00:00:00Z'));
+    const { api, posts } = await load(granted('2026-10-23T01:00:00Z'));
+    // 라이브 화면 열둘이 자리를 다 쓴다
+    for (let i = 0; i < 12; i++) await api.ensureLiveAccess(`L-${i}`, `lk-${i}`);
+    const items = [{ streamId: 'S-0', mediaKey: 'k-0' }];
+    await Promise.all([...api.ensurePlaybackAccessForList(items).values()]);
+    expect(posts().filter((url) => url.includes('/S-'))).toHaveLength(0);
+
+    api.reportPlaybackForbidden('lk-3');
+    await Promise.all([...api.ensurePlaybackAccessForList(items).values()]);
+    expect(posts().filter((url) => url.includes('/S-'))).toHaveLength(1);
+  });
+
+  it('받는 중인 출입증도 영상 키로 센다: 같은 키 방송 둘을 동시에 받아도 한 칸이다(POK-411)', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.parse('2026-10-23T00:00:00Z'));
+    const { api, posts } = await load(granted('2026-10-23T01:00:00Z'));
+    const pending = [
+      api.ensureLiveAccess('L-1', 'lk-shared'),
+      api.ensureLiveAccess('L-2', 'lk-shared'),
+    ];
+    const items = Array.from({ length: 14 }, (_, i) => ({
+      streamId: `S-${i}`,
+      mediaKey: `k-${i}`,
+    }));
+    await Promise.all([...pending, ...api.ensurePlaybackAccessForList(items).values()]);
+    expect(posts().filter((url) => url.includes('/S-'))).toHaveLength(11);
+  });
+
   it('녹화 목록이 403이면 받아 둔 출입증을 버리고 다음에 다시 받는다: 다른 탭이나 쿠키 한도로 브라우저가 쿠키를 지웠다(PR #332 codex)', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(Date.parse('2026-10-23T00:00:00Z'));
