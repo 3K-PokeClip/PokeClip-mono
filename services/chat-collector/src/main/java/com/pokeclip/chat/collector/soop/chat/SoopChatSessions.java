@@ -89,8 +89,13 @@ public class SoopChatSessions implements SoopChat, SoopChatBrowser.Listener {
         this.tabs = tabs;
     }
 
+    /**
+     * 붙이기 · 떼기 · 다시 붙기는 이 객체의 자물쇠 하나로 줄 세운다. 🔴 다시 붙기 예약이 「아직 그 세션인가」를 본 직후 떼기가 세션을 빼고
+     * 탭 닫기를 넣으면, 예약이 뒤이어 탭 열기를 넣어 명부에 없는 방송의 탭이 남는다(다음 떼기도 명부에 없어 못 닫는다). 탭 명령은 줄에
+     * 넣기만 하므로 자물쇠를 오래 쥐지 않는다.
+     */
     @Override
-    public void ensure(String streamId, String channelId, String token) {
+    public synchronized void ensure(String streamId, String channelId, String token) {
         if (streamId == null || channelId == null || token == null) {
             return;
         }
@@ -120,7 +125,7 @@ public class SoopChatSessions implements SoopChat, SoopChatBrowser.Listener {
     }
 
     @Override
-    public void close(String streamId) {
+    public synchronized void close(String streamId) {
         Session removed = sessions.remove(streamId);
         if (removed == null) {
             return;
@@ -181,7 +186,7 @@ public class SoopChatSessions implements SoopChat, SoopChatBrowser.Listener {
         retries.schedule(() -> reopen(session), delay.toMillis(), TimeUnit.MILLISECONDS);
     }
 
-    private void reopen(Session session) {
+    private synchronized void reopen(Session session) {
         // 그 사이 떼였거나 같은 방송으로 새 세션이 섰으면 이 예약은 버린다
         if (sessions.get(session.streamId) != session) {
             return;
