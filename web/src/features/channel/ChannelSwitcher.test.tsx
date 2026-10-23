@@ -403,8 +403,11 @@ describe('ChannelSwitcher: 관리 모드에서 참여 채널 나가기', () => {
     await panel.findByText('편집 참여 중 · 2');
     expect(panel.queryByRole('button', { name: /채널에서 나가기/ })).not.toBeInTheDocument();
 
+    // 이름이 상태를 말한다: 눌림 상태를 따로 두지 않는다(리뷰 7)
+    expect(panel.getByRole('button', { name: '관리' })).not.toHaveAttribute('aria-pressed');
     await user.click(panel.getByRole('button', { name: '관리' }));
 
+    expect(panel.getByRole('button', { name: '완료' })).not.toHaveAttribute('aria-pressed');
     expect(panel.getByRole('button', { name: '별하 채널에서 나가기' })).toBeInTheDocument();
     expect(panel.getByRole('button', { name: '콩스타 채널에서 나가기' })).toBeInTheDocument();
     await user.click(rowOf(panel, '별하'));

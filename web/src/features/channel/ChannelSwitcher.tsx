@@ -186,7 +186,8 @@ function SwitcherPanel({
                   ref={manageRef}
                   type="button"
                   className={styles.manage}
-                  aria-pressed={managing}
+                  // 눌림 상태(aria-pressed)는 두지 않는다: 이름이 관리↔완료로 바뀌며 상태를 말해, 둘 다 두면 낭독기가
+                  // 「완료, 눌림」처럼 서로 다른 말을 한다(PR #342 리뷰 7)
                   onClick={() => setManaging((m) => !m)}
                 >
                   {managing ? '완료' : '관리'}
