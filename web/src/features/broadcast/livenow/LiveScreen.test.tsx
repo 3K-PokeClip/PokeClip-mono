@@ -1811,8 +1811,12 @@ describe('LiveScreen: 주소로 고른 카드로 들어오기', () => {
     mediaCalls.answer = Promise.resolve(null);
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
     const { container } = await renderLive();
-    expect(screen.getByText('영상 서버에 아직 연결되지 않았어요')).toBeInTheDocument();
+    // 묻지 못한 것은 묻지 못했다고 알린다: 「아직 연결되지 않았어요」는 기다리면 저절로 붙을 것처럼 읽혔다(POK-337)
+    expect(
+      screen.getByText('녹화 영상을 불러오지 못했어요. 1분 뒤 다시 확인해요'),
+    ).toBeInTheDocument();
     expect(screen.queryByText('녹화 영상을 찾지 못했어요')).toBeNull();
+    expect(screen.queryByText(/아직 연결되지 않았어요/)).toBeNull();
 
     mediaCalls.answer = Promise.resolve([{ startMs: VOD_STARTED, durationSeconds: 9_000 }]);
     await act(async () => {
