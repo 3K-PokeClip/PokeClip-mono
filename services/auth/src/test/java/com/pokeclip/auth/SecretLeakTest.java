@@ -137,6 +137,8 @@ class SecretLeakTest extends IntegrationTestSupport {
     private static final String SOOP_CLIENT_SECRET = needle("soop-client-secret");
     private static final String SOOP_USER_ID = needle("soop-user");
     private static final String SOOP_NICK = needle("soop-nick");
+    /** 방송 중이 아닐 때 방송국 정보 주소에서 꺼내는 아이디(실측 꼴). 꺼낸 값도 로그·응답에 나오면 안 된다. */
+    private static final String SOOP_LOGO_ID = needle("soop-logo-user");
 
     /**
      * resolve 전용 출입증 바늘(계약4 4C). 토큰과 허용 대역은 설정(@DynamicPropertySource)에서 온다.
@@ -600,7 +602,7 @@ class SecretLeakTest extends IntegrationTestSupport {
         SOOP.statusResponds(200, "{\"result\":1,\"data\":{\"user_id\":\"" + SOOP_USER_ID + "\",\"status\":\"streamend\"}}");
         SOOP.stationResponds(200, "{\"result\":1,\"data\":{\"user_nick\":\"" + SOOP_NICK + "\"}}");
         List<String> needles = List.of(SOOP_ACCESS, SOOP_REFRESH, SOOP_CODE, SOOP_CLIENT_SECRET, SOOP_USER_ID, SOOP_NICK,
-                state, JWT_SECRET);
+                SOOP_LOGO_ID, state, JWT_SECRET);
 
         try (LogCaptor captor = new LogCaptor()) {
             String startBody = mockMvc.perform(post("/api/soop-link/start").header("Authorization", bearer))
@@ -626,6 +628,20 @@ class SecretLeakTest extends IntegrationTestSupport {
                             .contentType(MediaType.APPLICATION_JSON)
                             .content("{\"code\":\"" + SOOP_CODE + "\",\"state\":\"" + state2 + "\"}"))
                     .andExpect(status().isCreated());
+            assertThat(soopCleanup.awaitIdle(Duration.ofSeconds(5))).isTrue();
+
+            // ②-b 방송 중이 아닐 때의 재연동: 아이디를 방송국 정보 주소에서 꺼낸다. 꺼낸 값도 응답·로그에 없어야 한다.
+            SOOP.statusResponds(200, "{\"result\":1,\"data\":{\"broad_no\":\"0\",\"status\":\"streamend\"}}");
+            SOOP.stationResponds(200, com.pokeclip.auth.support.FakeSoopServer.stationBody(SOOP_NICK,
+                    com.pokeclip.auth.support.FakeSoopServer.logoUrl(SOOP_LOGO_ID)));
+            String stateLogo = soopCodec.issue(user.getId(), Instant.now());
+            String logoLinked = mockMvc.perform(post("/api/soop-link").header("Authorization", bearer)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"code\":\"" + SOOP_CODE + "\",\"state\":\"" + stateLogo + "\"}"))
+                    .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
+            assertThat(logoLinked).doesNotContain(SOOP_LOGO_ID);
+            assertThat(jdbcTemplate.queryForObject("SELECT soop_user_id FROM soop_channel_links WHERE user_id = ? "
+                    + "AND revoked_at IS NULL", String.class, user.getId())).as("바늘이 실제로 아이디로 저장됐다").isEqualTo(SOOP_LOGO_ID);
             assertThat(soopCleanup.awaitIdle(Duration.ofSeconds(5))).isTrue();
 
             // ③ 교환 400: 본문에 바늘. 에러 응답에도 로그에도 없어야 한다.

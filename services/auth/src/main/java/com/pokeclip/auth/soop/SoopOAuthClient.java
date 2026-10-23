@@ -11,6 +11,8 @@ import org.springframework.web.client.RestClientResponseException;
 import java.time.Duration;
 import java.util.Map;
 import java.util.function.Supplier;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * SOOP HTTP 셋: 교환·갱신({@code /auth/token}) · 아이디·닉네임({@code /validate/live/status} + {@code /user/stationinfo}).
@@ -51,20 +53,37 @@ public class SoopOAuthClient {
     }
 
     /**
-     * 아이디(validate/live/status: 방송 중이 아니어도 user_id가 온다)와 닉네임(user/stationinfo)을 합친다.
-     * 아이디를 못 받으면 닉네임은 묻지 않는다.
+     * 방송국 정보 {@code profile_image}의 대표 이미지 주소 꼴: {@code …/LOGO/<두 글자>/<아이디>/<아이디>.<확장자>…}(실측 2026-10-23).
+     * 두 자리의 아이디가 같을 때만 믿는다(역참조 {@code \1}). 문서에 없는 꼴이라 SOOP이 바꾸면 여기서 못 읽는다(README 한계).
+     */
+    private static final Pattern LOGO_ID = Pattern.compile(".*/LOGO/[^/]+/([^/]+)/\\1\\.(jpg|png|jpeg|webp).*");
+
+    /**
+     * 아이디와 닉네임을 합친다. 아이디를 정하는 순서(실측 2026-10-23):
+     * ① 방송 여부 체크의 {@code user_id}(빈 값 아님). 🔴 문서 예시와 달리 방송 중이 아니면 data가 {@code broad_no}·{@code status}뿐이라
+     * 아이디가 없다 ② 없으면 방송국 정보 {@code profile_image} 주소에서 꺼낸다 ③ 둘 다 안 되면 <b>일시 장애</b>
+     * ({@code IdentityUnavailable}): 동의는 유효한데 우리가 누구인지 못 읽은 것이라 거부(「동의부터 다시」)로 보내면 사용자가 헛수고한다.
+     * 어느 주소든 {@code result} 음수는 지금처럼 거부다. 방송 여부 체크가 거부면 방송국 정보는 묻지 않는다.
      */
     public SoopIdentity fetchIdentity(String accessToken) {
         Map<?, ?> status = data(post("/validate/live/status", accessTokenForm(accessToken)));
-        if (!(status.get("user_id") instanceof String userId) || userId.isBlank()) {
-            // 성공(result ≥ 0)인데 누구인지 없다: 이 토큰으로는 연동을 못 만든다. 일시가 아니라 거부로 본다.
-            throw new SoopRejectedException(200);
-        }
         Map<?, ?> station = data(post("/user/stationinfo", accessTokenForm(accessToken)));
         if (!(station.get("user_nick") instanceof String nick)) {
             throw malformed("user_nick", station.get("user_nick"));
         }
+        String userId = status.get("user_id") instanceof String s && !s.isBlank() ? s : idFromProfileImage(station);
+        if (userId == null) {
+            throw new SoopUnavailableException("IdentityUnavailable");   // 값은 안 싣는다
+        }
         return new SoopIdentity(userId, nick);
+    }
+
+    private static String idFromProfileImage(Map<?, ?> station) {
+        if (!(station.get("profile_image") instanceof String image)) {
+            return null;
+        }
+        Matcher m = LOGO_ID.matcher(image);
+        return m.matches() ? m.group(1) : null;
     }
 
     private SoopTokens tokens(MultiValueMap<String, String> form) {

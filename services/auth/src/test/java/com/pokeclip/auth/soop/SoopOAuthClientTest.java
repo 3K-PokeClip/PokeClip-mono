@@ -197,12 +197,39 @@ class SoopOAuthClientTest {
                 .satisfies(e -> assertThat(((SoopRejectedException) e).status()).isEqualTo(200));
     }
 
+    /** 방송 중이면 방송 여부 체크가 user_id를 준다. 그것을 쓴다(방송국 정보 주소보다 먼저). */
     @Test
-    void 아이디가_비었으면_Rejected() {
-        for (String data : new String[]{"{\"user_id\":\"\"}", "{\"user_id\":\"   \"}", "{}"}) {
+    void 방송_중이면_방송_여부_체크의_아이디를_쓴다() {
+        soop.statusOnAir("onair-id");
+
+        assertThat(client.fetchIdentity("at").soopUserId()).isEqualTo("onair-id");
+    }
+
+    /**
+     * 🔴 실측(2026-10-23): 방송 중이 아니면 방송 여부 체크의 data가 {@code broad_no}·{@code status}뿐이라 아이디가 없다.
+     * 그때는 방송국 정보 {@code profile_image}의 LOGO 꼴 주소에서 꺼낸다(두 자리가 같은 값일 때만). 빈 user_id도 없는 것과 같다.
+     */
+    @Test
+    void 방송_중이_아니면_방송국_정보_주소에서_아이디를_꺼낸다() {
+        assertThat(client.fetchIdentity("at").soopUserId()).isEqualTo(FakeSoopServer.DEFAULT_USER_ID);
+        for (String data : new String[]{"{\"user_id\":\"\"}", "{\"user_id\":\"   \"}", "{\"broad_no\":\"0\"}"}) {
             soop.statusResponds(200, "{\"result\":1,\"data\":" + data + "}");
-            assertThatThrownBy(() -> client.fetchIdentity("at")).as(data)
-                    .isInstanceOf(SoopRejectedException.class);
+            assertThat(client.fetchIdentity("at").soopUserId()).as(data).isEqualTo(FakeSoopServer.DEFAULT_USER_ID);
+        }
+    }
+
+    /**
+     * 둘 다 안 되면 거부가 아니라 일시 장애다: 동의는 유효한데 우리가 누구인지 못 읽은 것이다. 거부로 보내면 화면이
+     * 「동의부터 다시」(INVALID_CODE)를 그려 사용자가 헛수고한다. 원인은 타입 이름만 남긴다.
+     */
+    @Test
+    void 아이디를_어디서도_못_읽으면_일시_장애다() {
+        for (String image : new String[]{null, "https://x.test/plain.jpg",
+                "https://x.test/LOGO/so/soop-a/soop-b.jpg", "https://x.test/LOGO/so/soop-a/soop-a.gif"}) {
+            soop.stationResponds(200, FakeSoopServer.stationBody("닉", image));
+            assertThatThrownBy(() -> client.fetchIdentity("at")).as(String.valueOf(image))
+                    .isInstanceOf(SoopUnavailableException.class)
+                    .satisfies(e -> assertThat(((SoopUnavailableException) e).causeType()).isEqualTo("IdentityUnavailable"));
         }
     }
 
@@ -214,7 +241,7 @@ class SoopOAuthClientTest {
                         .isEqualTo("MalformedResponse field=user_nick type=Integer"));
 
         soop.reset();
-        soop.statusResponds(200, "{\"data\":{\"user_id\":\"u\"}}");
+        soop.statusResponds(200, "{\"data\":{\"broad_no\":\"0\"}}");
         assertThatThrownBy(() -> client.fetchIdentity("at")).isInstanceOf(SoopUnavailableException.class)
                 .satisfies(e -> assertThat(((SoopUnavailableException) e).causeType())
                         .isEqualTo("MalformedResponse field=result type=null"));

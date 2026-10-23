@@ -30,7 +30,11 @@ import static java.nio.charset.StandardCharsets.UTF_8;
  */
 public final class FakeSoopServer implements AutoCloseable {
 
-    /** 기본 응답의 SOOP 아이디. 공개 API 응답에 이 값이 새는지 값으로 찾는다(계획 검증 C7). */
+    /**
+     * 기본 응답의 SOOP 아이디. 공개 API 응답에 이 값이 새는지 값으로 찾는다(계획 검증 C7).
+     * 🔴 기본 꼴은 실측(2026-10-23)이다: 방송 중이 아니면 방송 여부 체크가 아이디를 안 주므로, 이 값은 방송국 정보의
+     * {@code profile_image} 주소({@code …/LOGO/<두 글자>/<아이디>/<아이디>.jpg})에만 실린다.
+     */
     public static final String DEFAULT_USER_ID = "soop-user-a1";
     public static final String DEFAULT_NICK = "숲닉네임";
 
@@ -85,15 +89,30 @@ public final class FakeSoopServer implements AutoCloseable {
         statusCounter.set(0);
         stationCounter.set(0);
         tokenResponse.set(null);
-        statusResponse.set(new Response(200,
-                "{\"result\":1,\"data\":{\"user_id\":\"" + DEFAULT_USER_ID + "\",\"status\":\"streamend\"}}"));
-        stationResponse.set(new Response(200,
-                "{\"result\":1,\"data\":{\"user_nick\":\"" + DEFAULT_NICK + "\",\"station_name\":\"방송국\"}}"));
+        statusResponse.set(new Response(200, "{\"result\":1,\"data\":{\"broad_no\":\"0\",\"status\":\"streamend\"}}"));
+        stationResponse.set(new Response(200, stationBody(DEFAULT_NICK, logoUrl(DEFAULT_USER_ID))));
         tokenDelay.set(Duration.ZERO);
         tokenRequests.clear();
         statusRequests.clear();
         stationRequests.clear();
         lastTokenContentType.set(null);
+    }
+
+    /** 실측 꼴의 방송국 정보 본문(다섯 칸). profileImage가 null이면 그 칸을 뺀다. */
+    public static String stationBody(String nick, String profileImage) {
+        return "{\"result\":1,\"data\":{\"user_nick\":\"" + nick + "\",\"station_name\":\"방송국\","
+                + (profileImage == null ? "" : "\"profile_image\":\"" + profileImage + "\",")
+                + "\"lately_broad_date\":\"2026-10-23 12:00:00\",\"favorite_cnt\":3}}";
+    }
+
+    /** 실측 꼴의 대표 이미지 주소. 아이디가 두 자리에 들어간다. */
+    public static String logoUrl(String userId) {
+        return "https://profile.img.example.test/LOGO/" + userId.substring(0, 2) + "/" + userId + "/" + userId + ".jpg?v=1";
+    }
+
+    /** 방송 중일 때의 방송 여부 체크 본문(이때만 user_id가 온다). */
+    public void statusOnAir(String userId) {
+        statusResponds(200, "{\"result\":1,\"data\":{\"broad_no\":\"123\",\"status\":\"onair\",\"user_id\":\"" + userId + "\"}}");
     }
 
     /** 다음 호출부터 이 응답. 기본(카운터 토큰)으로 돌리려면 reset(). */

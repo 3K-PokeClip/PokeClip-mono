@@ -164,6 +164,33 @@ class SoopLinkStartAndLinkTest extends SoopLinkTestSupport {
         assertThat(linkRepository.findFirstByUserIdOrderByCreatedAtDesc(user.getId())).isEmpty();
     }
 
+    /**
+     * 🔴 아이디를 어디서도 못 읽으면(방송 중이 아니고 방송국 정보 주소도 꼴이 다름) 502 SOOP_UNAVAILABLE이다. 400 INVALID_CODE로
+     * 나가면 화면이 「동의부터 다시」를 그리는데 동의는 유효했다(실계정 시험에서 막힌 자리, 2026-10-23). 표·secrets는 그대로다.
+     */
+    @Test
+    void 아이디를_못_읽으면_502_SOOP_UNAVAILABLE이고_아무것도_안_남는다() throws Exception {
+        User user = newUser();
+        SOOP.stationResponds(200, FakeSoopServer.stationBody("닉", null));
+
+        mockMvc.perform(link(user)).andExpect(status().isBadGateway())
+                .andExpect(jsonPath("$.reason").value("SOOP_UNAVAILABLE"));
+
+        assertThat(linkRepository.findFirstByUserIdOrderByCreatedAtDesc(user.getId())).isEmpty();
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM secrets", Integer.class)).isZero();
+    }
+
+    @Test
+    void 방송_중이면_방송_여부_체크의_아이디로_연동된다() throws Exception {
+        User user = newUser();
+        SOOP.statusOnAir("onair-id");
+
+        mockMvc.perform(link(user)).andExpect(status().isCreated());
+
+        assertThat(linkRepository.findByUserIdAndRevokedAtIsNull(user.getId()).orElseThrow().getSoopUserId())
+                .isEqualTo("onair-id");
+    }
+
     @Test
     void 닉네임_조회가_5xx면_502() throws Exception {
         User user = newUser();
