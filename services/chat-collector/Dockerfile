@@ -5,7 +5,8 @@ WORKDIR /app
 COPY . .
 RUN ./gradlew :chat-collector:bootJar --no-daemon
 
-FROM eclipse-temurin:21-jre
+# 실행 단계는 Ubuntu 24.04(noble)에 고정한다. 꼬리표 없는 21-jre가 26.04로 넘어가자 Playwright 1.52가 그 판을 몰라 브라우저 설치가 실패했다(로컬 빌드 실측)
+FROM eclipse-temurin:21-jre-noble
 WORKDIR /app
 COPY --from=build /app/chat-collector/build/libs/*.jar app.jar
 # RDS 통합 CA 번들. POSTGRES_AUTH=iam이면 POSTGRES_SSLROOTCERT가 이 경로를 가리킨다(verify-full, POK-407). 경로는 media 사이드카 이미지와 같다.
