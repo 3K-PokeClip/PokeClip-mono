@@ -175,7 +175,10 @@ function LivePlayer({
   const mediaKey = ingestStreamId ?? liveStreamId;
   const src = useMediaSource(mediaKey);
   // 끝난 방송은 LL-HLS 주소가 닫힌다 — 녹화 재생 서버에서 다시보기를 튼다(있을 때만).
-  // 출입증을 받았거나 필요 없다는 답이 온 방송(아래 출입증 효과가 채운다). 라이브 재생과 녹화 조회가 이것을 기다린다(POK-317)
+  // 출입증을 받았거나 필요 없다는 답이 온 (방송 번호, 영상 키)(아래 출입증 효과가 채운다). 라이브 재생과 녹화 조회가 이것을
+  // 기다린다(POK-317). 영상 키까지 같이 보는 이유: 키가 늦게 오거나 바뀌면 옛 키 쿠키는 새 주소에 안 실려, 방송 번호만 보면
+  // 새 키의 출입증 전에 쿠키 없이 부르고 403을 받았다(PR #332 codex P1)
+  const accessKey = liveStreamId ? `${liveStreamId}|${mediaKey ?? liveStreamId}` : null;
   const [accessReadyFor, setAccessReadyFor] = useState<string | null>(null);
   const [lookup, setLookup] = useState<RecordingLookup>({ kind: 'pending' });
   useEffect(() => {
@@ -185,7 +188,7 @@ function LivePlayer({
     if (
       broadcastStatus !== 'ended' ||
       !mediaKey ||
-      (liveStreamId && accessReadyFor !== liveStreamId)
+      (accessKey !== null && accessReadyFor !== accessKey)
     )
       return undefined;
     let alive = true;
@@ -225,7 +228,7 @@ function LivePlayer({
   }, [
     broadcastStatus,
     mediaKey,
-    liveStreamId,
+    accessKey,
     accessReadyFor,
     startedAt,
     endedAt,
@@ -276,7 +279,7 @@ function LivePlayer({
           if (opened && (failedSinceOpen || droppedBefore)) setAccessRecoveries((n) => n + 1);
           failedSinceOpen = false;
           opened = true;
-          setAccessReadyFor(liveStreamId);
+          setAccessReadyFor(`${liveStreamId}|${mediaKey ?? liveStreamId}`);
         }
         if (result.kind === 'not_needed') return;
         timer = window.setTimeout(ask, PLAYBACK_ACCESS_CHECK_MS);
@@ -300,7 +303,7 @@ function LivePlayer({
       // 라이브 주소는 방송 중일 때만 — 끝난 방송의 LL-HLS는 닫혀 있어 검은 화면과 오류만 남는다(PR #200 codex).
       // 끝난 방송은 녹화가 있으면 recorded로, 없으면 「지난 방송 영상」 자리를 그린다
       src={
-        broadcastStatus === 'live' && (!liveStreamId || accessReadyFor === liveStreamId)
+        broadcastStatus === 'live' && (accessKey === null || accessReadyFor === accessKey)
           ? src
           : null
       }

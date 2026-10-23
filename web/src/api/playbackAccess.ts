@@ -36,8 +36,11 @@ const streamIdByMediaKey = new Map<string, string>();
 const notNeeded = new Set<string>();
 /** 방송 번호 → 이 탭이 받은 쿠키가 끝나는 시각. 지난 방송 목록의 상한은 누가 받았든 다 센다 */
 const cookieUntil = new Map<string, number>();
-/** 영상 키 → 목록이 마지막으로 출입증을 받은 시각. 자리가 나면 못 받은 키, 그다음 오래된 키 순으로 차례를 준다 */
-const listGrantedAt = new Map<string, number>();
+/**
+ * 영상 키 → 목록이 마지막으로 출입증을 받으려 한 시각(실패 포함). 자리가 나면 한 번도 안 해 본 키, 그다음 오래전에 해 본 키 순으로
+ * 차례를 준다. 받은 시각만 적으면 계속 실패하는 키가 매 주기 맨 앞을 차지해 뒤 키가 영영 못 받았다(PR #332 codex)
+ */
+const listTriedAt = new Map<string, number>();
 /** 쿠키가 지워져(403) 출입증을 버린 방송. 라이브 화면이 다시 받은 뒤 재생기를 새로 세울지 본다 */
 const dropped = new Set<string>();
 
@@ -107,7 +110,7 @@ export function ensureMediaAccess(mediaKey: string): Promise<PlaybackAccessResul
 /**
  * 지난 방송 목록의 출입증 받기. 상한은 브라우저에 **쿠키가 살아 있는** 키로 센다(다시 쓸 시점이 아니라 만료까지, 라이브 화면 ·
  * 편집기가 받은 것까지): 다시 쓸 시점으로 세면 키를 돌리는 순간 옛 쿠키가 남은 5분 동안 새 키를 상한만큼 더 받아 쿠키가 두 배로
- * 쌓였다(로컬 리뷰 1라운드). 아직 쓸 만한 키는 그대로 쓰고, 빈자리만큼 못 받은 키, 그다음 받은 지 오래된 키 순으로 받는다.
+ * 쌓였다(로컬 리뷰 1라운드). 아직 쓸 만한 키는 그대로 쓰고, 빈자리만큼 한 번도 안 해 본 키, 그다음 오래전에 해 본 키 순으로 받는다.
  * 쿠키는 살았지만 다시 쓸 시점이 지난 키는 기다리는 키가 없을 때만 미리 갱신한다(있으면 끝나게 두어 자리를 넘긴다). 「필요 없음」을
  * 받은 방송은 자리를 안 쓴다. 차례가 안 온 키는 null이라 쿠키 없이 묻고 다음 주기에 다시 온다. 값은 영상 키마다 하나다.
  * 탭마다 셈이 따로라 탭을 여럿 열면 한도를 넘길 수 있는데, 그때 지워진 키는 403이 나면 버리고 다시 받아 스스로 낫는다
@@ -142,12 +145,10 @@ export function ensurePlaybackAccessForList(
   const issue = (mediaKey: string) => {
     const result = ensurePlaybackAccess(byKey.get(mediaKey)!, mediaKey);
     out.set(mediaKey, result);
-    void result?.then((r) => {
-      if (r.kind === 'granted') listGrantedAt.set(mediaKey, Date.now());
-    });
+    void result?.then(() => listTriedAt.set(mediaKey, Date.now()));
   };
   // 정렬은 안정적이라 같은 차례끼리는 목록 순서다
-  waiting.sort((a, b) => (listGrantedAt.get(a) ?? -1) - (listGrantedAt.get(b) ?? -1));
+  waiting.sort((a, b) => (listTriedAt.get(a) ?? -1) - (listTriedAt.get(b) ?? -1));
   let free = LIST_MAX_KEYS - aliveCookies;
   // 자리가 없어 못 받은 키가 있나. ensurePlaybackAccess의 null(필요 없음 · 재생 서버 없음)과 섞지 않으려고 따로 센다
   let someoneWaits = false;
@@ -215,6 +216,6 @@ export function resetPlaybackAccessForTests(): void {
   streamIdByMediaKey.clear();
   notNeeded.clear();
   cookieUntil.clear();
-  listGrantedAt.clear();
+  listTriedAt.clear();
   dropped.clear();
 }

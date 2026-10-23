@@ -292,4 +292,24 @@ describe('영상 출입증 받기와 쿠키 싣기 (POK-317)', () => {
     expect(await api.recoverForbiddenRecording(url, 'k-1')).toBe(true);
     expect(posts()).toHaveLength(2);
   });
+
+  it('실패한 키도 차례를 뒤로 보낸다: 계속 실패하는 키가 매 주기 맨 앞을 차지하면 뒤 키가 영영 못 받는다(PR #332 codex)', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.parse('2026-10-23T00:00:00Z'));
+    const { api, posts } = await load((url) =>
+      url.includes('/S-0/')
+        ? jsonResponse(500, {})
+        : jsonResponse(200, { expiresAt: '2026-10-23T01:00:00Z' }),
+    );
+    const items = Array.from({ length: 14 }, (_, i) => ({
+      streamId: `S-${i}`,
+      mediaKey: `k-${i}`,
+    }));
+    await Promise.all([...api.ensurePlaybackAccessForList(items).values()]);
+    expect(posts()).toHaveLength(12);
+
+    // 쿠키는 11개(S-0은 실패)라 빈자리가 하나다: 실패한 S-0이 아니라 아직 못 받은 S-12가 받는다
+    await Promise.all([...api.ensurePlaybackAccessForList(items).values()]);
+    expect(posts().slice(12)).toEqual(['/api/clip/broadcasts/S-12/playback-access']);
+  });
 });

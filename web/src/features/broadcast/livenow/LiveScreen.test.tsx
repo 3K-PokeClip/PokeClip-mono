@@ -1034,6 +1034,31 @@ describe('LiveScreen — 영상 출입증', () => {
     expect(hlsFake.loads).toBe(2);
   });
 
+  it('영상 키가 늦게 오면 새 키의 출입증을 받기 전에는 라이브 영상을 다시 부르지 않는다: 옛 키 쿠키는 새 주소에 안 실린다(PR #332 codex P1)', async () => {
+    stubMediaElement();
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', 'http://live.test');
+    server.playback = 'grant';
+    await renderLive();
+    expect(hlsFake.loads).toBe(1);
+
+    // 방송 줄에 영상 키가 새로 실려 온다. 그 키의 출입증 답은 붙잡아 둔다
+    server.ingest = 'key-late';
+    let release!: () => void;
+    server.playbackGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    await settle();
+    expect(mediaCalls.keys.at(-1)).toBe('key-late');
+    expect(hlsFake.loads).toBe(1);
+
+    release();
+    await settle();
+    expect(hlsFake.loads).toBe(2);
+  });
+
   it('출입증이 필요 없는 곳(로컬·dev)은 첫 화면이 서는 사이에 라이브 영상을 부른다: 기다림이 재생 시작을 늦추지 않는다', async () => {
     stubMediaElement();
     vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', 'http://live.test');
