@@ -154,7 +154,13 @@ public class SoopChatBrowser implements AutoCloseable {
         if (browser == null) {
             playwright = Playwright.create();
             BrowserType.LaunchOptions options = new BrowserType.LaunchOptions().setHeadless(true);
-            browser = playwright.chromium().launch(options);
+            try {
+                browser = playwright.chromium().launch(options);
+            } catch (RuntimeException e) {
+                // 못 띄웠으면 Playwright(드라이버 프로세스)도 치운다. 안 치우면 다시 붙기마다 드라이버가 하나씩 쌓인다
+                discardBrowser();
+                throw e;
+            }
             // 🔴 Chromium이 죽으면(메모리 상한 · 충돌) 모든 탭이 조용히 멈춘다. 탭마다 오류로 알려 다시 붙기 줄에 태우고 브라우저를 버린다
             browser.onDisconnected(gone -> onBrowserLost());
             log.info("soop.chat.browser_started");
@@ -210,7 +216,12 @@ public class SoopChatBrowser implements AutoCloseable {
 
     /** 시험용: Chromium 프로세스를 실제로 죽인다(CDP {@code Browser.crash}). 정상 닫기와 달리 사건 순서가 실물 충돌과 같다. */
     void crashBrowserForTest() {
-        commands.add(() -> browser.newBrowserCDPSession().send("Browser.crash"));
+        commands.add(() -> {
+            if (browser == null) {
+                throw new IllegalStateException("crash before launch");
+            }
+            browser.newBrowserCDPSession().send("Browser.crash");
+        });
     }
 
     /** 시험용: 이 방송 탭의 렌더러만 죽인다(CDP {@code Page.crash}). 브라우저는 산다. */
