@@ -777,7 +777,7 @@ Flyway 마이그레이션은 앱이 뜰 때 실행돼야 하므로 **코드 옆(
 지금까지 나간 것은 auth의 `V101`~`V118`(`V110`·`V111`은 칸, **`V112`는 인덱스 넷과 표 주석 둘**, POK-89 · `V113` 오디오 트랙 이름 · `V114` 탈퇴 장부 · `V115` 연동 채널 칸 NULL 허용 · `V116`·`V117` SOOP 연동 · **`V118` 탈퇴 장부의 `platform` 칸, POK-397**) · clip의 `V201`(`broadcasts`·`broadcast_events`)과
 `V202`(`jump_cards`, POK-118)·`V203`(`broadcasts.vod_expires_at`, POK-117)·`V204`(색인 둘, POK-174)·
 **`V205`(방송 중 부분 색인, POK-218)** · `V206`(`recipes`, POK-124) · `V207`(`clips`·`render_jobs`·`render_job_events`, POK-125) · **`V208`(`clips (recipe_id, id DESC)` 색인 하나, POK-243)** ·
-`V209`~`V213` · **`V214`(`jump_cards.hidden_reason` · `jump_card_actions` · `recipes.source_card_id`, POK-338)** · **`V216`(`jump_card_actions`가 `open`도 받는다, POK-393)** · `V217`(`upload_requests`의 카테고리·예약 공개, POK-381) · `V218`(`broadcasts.platform`, POK-398) · chat-collector의 `V301`(`chat_messages`)~**`V315`** ·
+`V209`~`V213` · **`V214`(`jump_cards.hidden_reason` · `jump_card_actions` · `recipes.source_card_id`, POK-338)** · **`V216`(`jump_card_actions`가 `open`도 받는다, POK-393)** · `V217`(`upload_requests`의 카테고리·예약 공개, POK-381) · `V218`(`broadcasts.platform`, POK-398) · **`V219`(카드 유일 제약을 자동 창·수동 eventId 부분 색인 둘로, POK-391: 되돌릴 때 주의는 「OBS 수동 마킹 받기」 절)** · chat-collector의 `V301`(`chat_messages`)~**`V315`** ·
 chat-detector의 `V401`(`chat_metrics`, POK-120)이다.
 
 **chat-collector 대역 열:** `V301`(`chat_messages`) · `V302`(`stream_id` 칸) ·
@@ -1370,8 +1370,8 @@ the event type buffer to the empty string and return"* 이라 `MessageEvent`를 
   막은 뒤 3xx는 `UNAVAILABLE`로 접힌다(거절 쪽) — 다만 **로그 사유가 파싱 예외 이름으로
   찍혀 「리다이렉트를 만났다」가 안 보인다.** 알고 넣었다
 
-**아직 없는 것:** 핫키 카드 생성(POK-119) · 만료 정리 배치 · Redis 팬아웃 ·
-`clipped`·`expired` 상태. **카드 목록 API는 POK-174에서 생겼다**(아래 절).
+**아직 없는 것:** 만료 정리 배치 · Redis 팬아웃 ·
+`clipped`·`expired` 상태. **카드 목록 API는 POK-174에서 생겼다**(아래 절). **수동(핫키) 카드는 POK-391에서 생겼다**(「OBS 수동 마킹 받기」 절).
 
 ### clip — 구간→세그먼트 변환 (POK-117)
 
@@ -2638,6 +2638,48 @@ SELECT editor,
 ```
 
 두 SQL은 `CardMetricsQueryTest`가 이 README에서 그대로 꺼내 돌려 숫자를 맞춘다: 여기를 고치면 그 시험이 같이 본다.
+
+### clip: OBS 수동 마킹 받기 (POK-391)
+
+OBS 플러그인의 핫키(계약4 4B/2B)를 받아 **그 회원의 켜진 방송에 수동 카드**를 만든다. 로그인(JWT) 밖이다:
+자격은 본문의 스트림키(`streamid`)와 그 파생 값(`Authorization: Bearer`)이다. 보안 체인은 이 경로 하나만 가져가는
+전용 체인(`MarkSecurityConfig`, 필터 없음)이고 판정과 거절 본문은 문이 만든다.
+
+| 문 | 응답 |
+|---|---|
+| `POST /api/clip/marks` (헤더 `Authorization: Bearer <파생 값>` · `Idempotency-Key: <eventId>`) | **201** 새 카드 · **200** 같은 eventId 카드 또는 20초 안 앞 카드(본문은 2A와 같은 카드 모양) · **400** `{"reason":"invalid_request"}`(본문·헤더가 계약 모양이 아니다 · 헤더 eventId ≠ 본문 · auth가 streamid를 못 읽음 · 그 eventId가 남의 카드 · 시각이 넘침·48시간 넘음 · 누른 때가 고른 방송 시작보다 2분 넘게 앞 · 본문 4KB 초과 · streamid 256자 초과) · **401** `{"reason":"invalid_stream_key"}`(키 없음·폐기 · 파생 값 다름 · Bearer 없음) · **404** `{"reason":"broadcast_not_found"}`(이 회원의 켜진 방송이 없다 · 고른 방송이 잠그는 사이 사라졌다) · **503** `{"reason":"timeline_not_ready"}` + `Retry-After: 5`(첫 조각이 아직 없다) · **503** 본문 없음(auth를 못 물었다) |
+
+본문: `{"streamid":"<원문>","eventId":"<UUID v4>","pressedAt":<epoch ms>,"sentAt":<epoch ms>}`. 모르는 칸은 무시한다.
+**키를 확인하기 전에 본문을 읽으므로 상한이 있다**: 본문 4KB(그 넘는 바이트는 안 읽는다)·streamid 256자.
+**늦은 마크가 404가 아니라 400인 이유**: 누른 시각은 다시 보내도 안 바뀐다. 404면 플러그인이 10분 동안 같은 거절을 받으며 다시 보낸다.
+파생 값은 `HMAC-SHA256(key = passphrase, message = "pokeclip-4b-v1")`의 소문자 hex이고 상수 시간으로 맞댄다
+(계약4 시험 벡터 `EXAMPLE-4b-test-vector-not-a-key` → `136ef57b…04315`). passphrase는 auth의 `POST /internal/stream-keys/resolve`로 받는다.
+
+**처리 순서가 계약이다.** 본문(400) → 헤더 대조(400) → Bearer 있나(401) → 키 확인(400·401·503) → 파생 값(401) →
+같은 eventId 카드(200·400) → 방송 고르기(404) → 늦은 마크(400) → 기준점(503) → 시각 환산(400) → 저장(201·200).
+키를 확인하기 전에는 방송·카드를 안 읽는다. 같은 eventId 카드는 방송을 고르기 **전에** 본다: 방송이 끝난 뒤 온 재전송도 같은 카드 200이다.
+
+- **20초 규칙**: 같은 방송에서 앞 수동 카드와 누른 시각이 **|차| < 20초**면 새로 안 만들고 가장 가까운 앞 카드를 200으로 준다
+  (19,999ms는 무시, 20,000ms는 새 카드, 늦게 온 앞 시각도 같다). 자동 카드는 이 판정에 안 든다. 429는 없다
+- **동시성**: 같은 방송의 마킹은 방송 행 잠금(`FOR NO KEY UPDATE`)으로 줄 세운다. 2A 저장의 FK 검사와는 안 부딪힌다.
+  eventId 부분 유일 색인(`uq_jump_cards_hotkey_event`)이 마지막 방어선이다(다른 방송으로 같은 eventId가 동시에 올 때)
+- **시각 환산**: 서버 시각 = `pressedAt + (받은 시각 − sentAt)`, 받은 시각보다 미래면 받은 시각. 받은 시각은 문에 들어올 때 한 번 읽는다.
+  카드 ms = 서버 시각 − 기준점(POK-255 `TimelineOriginReader`), 기준점보다 앞이면 0. 구간은 `[max(0, T − 40초), T + 20초]`
+- **방송 고르기**: 그 회원의 `live` 방송. 둘 이상이면 물리 키(`COALESCE(ingest_stream_id, stream_id)`)가 streamid의 `r=` 토큰인 방송,
+  없으면 가장 늦게 시작한 방송. 🔴 **물리 키가 스트림키 토큰과 같다는 전제다**(오늘 media가 그렇게 쓴다). 바뀌면 맞대기가 빗나가
+  「가장 늦게 시작한 방송」으로 떨어진다
+- **로그**: streamid·Authorization·파생 값·passphrase를 어떤 로그에도 안 남긴다. 회원 번호·카드 번호·사유만
+- **2A는 자동 카드만 받는다**: `source`가 `hotkey`면 400 `field:"source"`
+- **streamid에 `r=`가 둘 이상이면 400**이다(auth를 안 부른다). 우리는 첫 `r=`로 방송을 고르고 auth는 마지막 `r=`로 키를 찾아, 둘이 갈리면 한 키로 확인받고 다른 키의 방송을 고를 수 있다
+- **`V219`가 옛 hotkey 줄을 정리한다**: 그 전에는 2A가 hotkey도 받아 같은 eventId 줄이 여럿일 수 있다. id가 가장 작은 줄만 값을 지키고 나머지는 `event_id`를 비운다(줄은 안 지운다). 그렇지 않으면 색인 생성이 실패해 부팅이 막힌다
+
+**알려진 한계**: 20초 안이라 앞 카드를 돌려준 마킹의 eventId는 **저장하지 않는다**. 그 응답을 잃은 플러그인이 방송이 끝난 뒤 같은 eventId로 다시 보내면 선조회가 그 카드를 못 찾고 켜진 방송도 없어 **404**를 받는다(플러그인은 10분 동안 다시 보내다 버린다). 카드는 앞 카드로 이미 있어 잃는 것은 없다(PR #338 codex, 미룸)
+
+🔴 **배포·되돌리기 주의 (`V219`).** 유일 제약을 출처별 부분 색인 둘로 바꿨다. 이 마이그레이션 위에서 **옛 clip 이미지는 2A 저장이 42P10으로 실패한다**
+(`ON CONFLICT (stream_id, source, window_start_ms)`에 맞는 제약이 없다). 판별기는 재시도 뒤 포기하므로 **옛 컨테이너가 겹쳐 도는 동안과
+이미지만 되돌린 동안 자동 카드가 버려진다.** 되돌릴 때는 이 마이그레이션도 함께 되돌린다(색인 둘을 지우고 옛 제약을 다시 만든다 :
+그 전에 수동 카드 중 `(stream_id, source, window_start_ms)`가 겹치는 행이 없는지 본다).
+
 
 ### 치지직 채널 연동 (POK-93)
 

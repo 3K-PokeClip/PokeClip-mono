@@ -177,6 +177,16 @@ public class JumpCardService {
         });
     }
 
+    /**
+     * 같은 eventId의 수동 카드가 이미 있으면 그것(마킹 문의 선조회, 방송 고르기 앞). 방송이 끝난 뒤 온 재전송도
+     * 같은 카드 200을 받게 하려고 방송을 고르기 전에 본다. 그 카드가 이 회원의 방송 카드가 아니면 거절한다.
+     *
+     * @throws HotkeyEventOwnedByOtherException eventId가 남의 방송 카드다(400 갈래)
+     */
+    public Optional<RecordResult> existingHotkey(String eventId, String userId) {
+        return cards.findHotkeyByEventId(eventId).map(card -> existing(card, userId));
+    }
+
     /** eventId로 찾은 카드를 돌려준다. 그 카드의 방송 주인이 이 회원이 아니면 거절한다(계획 검증 E4). */
     private RecordResult existing(JumpCard card, String userId) {
         String owner = broadcasts.findStreamerIdByStreamId(card.getStreamId()).orElse(null);

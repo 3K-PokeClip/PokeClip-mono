@@ -129,4 +129,17 @@ public interface BroadcastRepository extends JpaRepository<Broadcast, Long> {
     @Query(value = "SELECT b.vod_expires_at IS NOT NULL AND b.vod_expires_at < now() "
             + "FROM broadcasts b WHERE b.stream_id = :streamId", nativeQuery = true)
     Boolean isVodExpired(@Param("streamId") String streamId);
+
+    /**
+     * 이 회원의 켜진 방송 전부, 늦게 시작한 것부터(POK-391 수동 마킹이 방송을 고른다). 시작 시각을 모르는 줄은 뒤로.
+     * 보통 하나이고, 둘 이상은 종료 편지를 놓친 줄이 남은 경우다(정리기 POK-244가 치우기 전).
+     * 회원 번호 색인 {@code idx_broadcasts_streamer_id_desc}(V204)로 좁힐 수 있다(계획은 안 쟀다). 엔티티로 받는다: 기준점 조회가
+     * {@link Broadcast}를 받는다.
+     */
+    @Query(value = """
+            SELECT * FROM broadcasts
+             WHERE streamer_id = :streamerId AND status = 'live'
+             ORDER BY started_at DESC NULLS LAST, id DESC
+            """, nativeQuery = true)
+    List<Broadcast> findLiveByStreamerId(@Param("streamerId") String streamerId);
 }
