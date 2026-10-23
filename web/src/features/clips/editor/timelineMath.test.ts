@@ -210,6 +210,19 @@ describe('줌·높이', () => {
       expect(zoomedView({ ...base, playheadSeconds: 137, zoom: 400, previous })).toEqual(previous);
     });
 
+    it('창 폭이 밀리초로 안 나눠떨어져도 앞 창을 같은 폭으로 본다: 아니면 재생 내내 가운데로 다시 맞춰 흘러간다(PR #341 codex)', () => {
+      // 잡을 수 있는 범위 60.001초(카드 창) → 400% 폭 15.00025초, 양 끝을 ms로 반올림하면 폭이 1ms 안쪽으로 달라진다
+      const odd = {
+        range: { startSeconds: 10, endSeconds: 20 },
+        minSeconds: 0,
+        maxSeconds: 60.001,
+      };
+      const first = zoomedView({ ...odd, playheadSeconds: 30, zoom: 400, previous: null });
+      expect(zoomedView({ ...odd, playheadSeconds: 31, zoom: 400, previous: first })).toEqual(
+        first,
+      );
+    });
+
     it('재생 위치가 창을 앞으로 벗어나면 그 자리가 창의 10%에 오게 넘기고, 뒤로 벗어나면 90%에 오게 넘긴다', () => {
       const previous = { startSeconds: 130 - span / 2, endSeconds: 130 + span / 2 };
       const ahead = zoomedView({ ...base, playheadSeconds: 140, zoom: 400, previous });

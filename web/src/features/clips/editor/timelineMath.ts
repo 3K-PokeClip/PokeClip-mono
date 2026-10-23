@@ -229,8 +229,9 @@ export function zoomedView({
     return { startSeconds: roundMs(clamped), endSeconds: roundMs(clamped + span) };
   };
   if (zoom <= 100) return place((range.startSeconds + range.endSeconds) / 2 - span / 2);
+  // 앞 창은 양 끝을 ms로 반올림해 두어 폭이 최대 1ms 다를 수 있다. 그보다 엄격하면 재생 틱마다 가운데로 다시 맞춘다
   const sameSpan =
-    previous !== null && Math.abs(previous.endSeconds - previous.startSeconds - span) < 1e-6;
+    previous !== null && Math.abs(previous.endSeconds - previous.startSeconds - span) < 0.002;
   if (!sameSpan) return place(playheadSeconds - span / 2);
   if (playheadSeconds > previous.endSeconds) return place(playheadSeconds - span * 0.1);
   if (playheadSeconds < previous.startSeconds) return place(playheadSeconds - span * 0.9);
