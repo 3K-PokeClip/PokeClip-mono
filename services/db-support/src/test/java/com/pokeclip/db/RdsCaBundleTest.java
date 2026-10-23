@@ -8,6 +8,9 @@ import java.nio.file.Path;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
 import java.util.Collection;
+import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -36,6 +39,27 @@ class RdsCaBundleTest {
                 .allSatisfy(cert -> assertThat(cert.getBasicConstraints()).as("CA 인증서여야 한다").isNotNegative());
         assertThat(certs).anySatisfy(cert ->
                 assertThat(cert.getSubjectX500Principal().getName()).contains("ap-northeast-2"));
+    }
+
+    /**
+     * 서버 넷 이미지가 번들을 사이드카 이미지와 같은 경로에 둔다(PR #343 codex P1). 운영 태스크 정의는 서버 넷과
+     * 사이드카에 같은 {@code POSTGRES_SSLROOTCERT}를 넘긴다. 경로가 갈리면 iam에서 그 서버만 「못 읽는 경로」로
+     * 부팅을 거부한다.
+     */
+    @Test
+    void 서버_넷_이미지가_사이드카와_같은_경로에_번들을_둔다() throws Exception {
+        String sidecarPath = bundleDestination(Path.of("..", "..", "media", "Dockerfile"));
+
+        for (String server : List.of("auth", "clip", "chat-collector", "chat-detector")) {
+            assertThat(bundleDestination(Path.of("..", server, "Dockerfile"))).as(server).isEqualTo(sidecarPath);
+        }
+    }
+
+    /** {@code COPY ... rds-global-bundle.pem <목적지>} 줄의 목적지. */
+    private static String bundleDestination(Path dockerfile) throws Exception {
+        Matcher m = Pattern.compile("(?m)^COPY .*rds-global-bundle\\.pem (\\S+)\\s*$").matcher(Files.readString(dockerfile));
+        assertThat(m.find()).as(dockerfile + "에 번들 COPY 줄이 없다").isTrue();
+        return m.group(1);
     }
 
     @Test

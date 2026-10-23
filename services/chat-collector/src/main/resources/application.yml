@@ -127,7 +127,7 @@ pokeclip:
     auth: ${POSTGRES_AUTH:password}
     # iam 토큰을 서명할 리전.
     region: ${AWS_REGION:ap-northeast-2}
-    # iam에서만 쓴다. RDS CA 번들의 절대 경로. 이미지에는 /etc/pokeclip/rds-global-bundle.pem 으로 들어 있다.
+    # iam에서만 쓴다. RDS CA 번들의 절대 경로. 이미지에는 /etc/pokeclip/rds-ca/global-bundle.pem 으로 들어 있다.
     ssl-root-cert: ${POSTGRES_SSLROOTCERT:}
 
   chzzk:
