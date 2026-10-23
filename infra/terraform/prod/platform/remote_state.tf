@@ -132,13 +132,20 @@ resource "terraform_data" "runtime_contract" {
     }
 
     # auth 는 resolve 전용 토큰이 있으면 허용 대역이 빌 때 부팅을 거부한다
-    # (auth StreamKeyResolveSecurityConfig.requireSafeToOpen).
+    # (auth StreamKeyResolveSecurityConfig.requireSafeToOpen). 앱은 env 든
+    # secrets 든 같은 이름이면 읽는다. secrets 값은 plan 에서 볼 수 없어 키가
+    # 있으면 값이 있다고 보고, env 값은 공백뿐이면 빈 값으로 본다(앱의
+    # isBlank 와 같다).
     precondition {
       condition = (
-        !contains(keys(local.service_secrets.auth), "STREAM_KEY_RESOLVE_TOKEN") ||
+        !(
+          contains(keys(local.service_secrets.auth), "STREAM_KEY_RESOLVE_TOKEN") ||
+          trimspace(lookup(local.service_env.auth, "STREAM_KEY_RESOLVE_TOKEN", "")) != ""
+        ) ||
+        contains(keys(local.service_secrets.auth), "STREAM_KEY_RESOLVE_ALLOWED_CIDRS") ||
         trimspace(lookup(local.service_env.auth, "STREAM_KEY_RESOLVE_ALLOWED_CIDRS", "")) != ""
       )
-      error_message = "런타임 출력이 auth 에 STREAM_KEY_RESOLVE_TOKEN 을 주는데 app_env.auth 의 STREAM_KEY_RESOLVE_ALLOWED_CIDRS 가 없거나 비었다 — auth 가 부팅을 거부한다."
+      error_message = "런타임 출력이 auth 에 STREAM_KEY_RESOLVE_TOKEN 을 주는데(app_secret_arns · app_env 어느 쪽이든) STREAM_KEY_RESOLVE_ALLOWED_CIDRS 가 둘 다에 없거나 app_env 값이 비었다 — auth 가 부팅을 거부한다."
     }
   }
 }

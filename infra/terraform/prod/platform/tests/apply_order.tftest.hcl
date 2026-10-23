@@ -6,7 +6,9 @@
 # terraform test 는 의존 간선(depends_on)을 볼 수 없다. 그래서 서비스가 받는
 # 대상 그룹 ARN 이 리스너 규칙을 기다리는 다리(terraform_data)를 거쳐 오는지를
 # 단언한다 — 다리의 출력을 시험용 표지 ARN 으로 덮어써, 모듈 출력을 곧장 넘기면
-# 값이 달라 실패한다. 실제 생성 순서는 O7d plan 에서 본다.
+# 값이 달라 실패한다. 다리의 depends_on = [module.public_alb] 선언은 guard
+# R14 가 본다. 실제 생성 순서는 apply 로그에서 본다(plan 은 적용 순서를 보여
+# 주지 않는다).
 #
 # 앞 루트 상태 흉내 · 가짜 값은 services.tftest.hcl 과 같다(시험 파일마다
 # 따로 둬야 한다).

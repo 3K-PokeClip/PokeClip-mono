@@ -226,6 +226,56 @@ run "rejects_postgres_password_secret_under_iam" {
   expect_failures = [terraform_data.runtime_contract]
 }
 
+run "rejects_postgres_password_auth_secret_under_iam" {
+  command = plan
+
+  override_data {
+    target = data.terraform_remote_state.runtime
+    values = {
+      outputs = {
+        rds_sg_id         = "sg-0rds"
+        rds_resource_id   = "db-ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        rewind_bucket_arn = "arn:aws:s3:::pokeclip-prod-rewind-example"
+        app_db_users      = { auth = "app_auth", clip = "app_clip" }
+        app_env           = { auth = {}, clip = {} }
+        app_secret_arns = {
+          auth = { POSTGRES_PASSWORD = "arn:aws:secretsmanager:ap-northeast-2:111122223333:secret:pokeclip/prod/db-password-KlMnOp" }
+          clip = {}
+        }
+        app_task_resource_arns = { auth = {}, clip = {} }
+      }
+    }
+  }
+
+  expect_failures = [terraform_data.runtime_contract]
+}
+
+# app_env 의 POSTGRES_PASSWORD 도 앱이 읽는다. 장부 16 검사(평문 env 의 비밀
+# 이름)가 먼저 막지 않게 그 이름을 비밀 아님 목록에 넣어, 이 검사만 본다.
+run "rejects_postgres_password_app_env_under_iam" {
+  command = plan
+
+  variables {
+  }
+
+  override_data {
+    target = data.terraform_remote_state.runtime
+    values = {
+      outputs = {
+        rds_sg_id              = "sg-0rds"
+        rds_resource_id        = "db-ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        rewind_bucket_arn      = "arn:aws:s3:::pokeclip-prod-rewind-example"
+        app_db_users           = { auth = "app_auth", clip = "app_clip" }
+        app_env                = { auth = {}, clip = { POSTGRES_PASSWORD = "fixture-password" } }
+        app_secret_arns        = { auth = {}, clip = {} }
+        app_task_resource_arns = { auth = {}, clip = {} }
+      }
+    }
+  }
+
+  expect_failures = [terraform_data.runtime_contract]
+}
+
 # password 모드에서는 POSTGRES_PASSWORD 가 접속 비밀번호다 — 막지 않는다.
 run "allows_postgres_password_secret_under_password_auth" {
   command = plan
@@ -332,5 +382,93 @@ run "allows_resolve_token_with_allowed_cidrs" {
   assert {
     condition     = local.service_env.auth["STREAM_KEY_RESOLVE_ALLOWED_CIDRS"] == "192.0.2.0/24"
     error_message = "허용 대역이 auth env 로 넘어가지 않는다."
+  }
+}
+
+# 토큰이 계약과 달리 app_env 로 와도 앱은 같은 이름으로 읽는다. 장부 16
+# 검사(평문 env 의 비밀 이름)가 먼저 막지 않게 그 이름을 비밀 아님 목록에 넣어,
+# 이 검사만 본다.
+run "rejects_resolve_token_from_env_without_allowed_cidrs" {
+  command = plan
+
+  variables {
+  }
+
+  override_data {
+    target = data.terraform_remote_state.runtime
+    values = {
+      outputs = {
+        rds_sg_id              = "sg-0rds"
+        rds_resource_id        = "db-ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        rewind_bucket_arn      = "arn:aws:s3:::pokeclip-prod-rewind-example"
+        app_db_users           = { auth = "app_auth", clip = "app_clip" }
+        app_env                = { auth = { STREAM_KEY_RESOLVE_TOKEN = "fixture-resolve-token" }, clip = {} }
+        app_secret_arns        = { auth = {}, clip = {} }
+        app_task_resource_arns = { auth = {}, clip = {} }
+      }
+    }
+  }
+
+  expect_failures = [terraform_data.runtime_contract]
+}
+
+# 빈 토큰(공백뿐 포함)이면 창구가 닫혀 허용 대역을 요구하지 않는다(auth
+# StreamKeyResolveAccessProperties — token.isBlank()).
+run "allows_blank_resolve_token_from_env_without_allowed_cidrs" {
+  command = plan
+
+  variables {
+  }
+
+  override_data {
+    target = data.terraform_remote_state.runtime
+    values = {
+      outputs = {
+        rds_sg_id              = "sg-0rds"
+        rds_resource_id        = "db-ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        rewind_bucket_arn      = "arn:aws:s3:::pokeclip-prod-rewind-example"
+        app_db_users           = { auth = "app_auth", clip = "app_clip" }
+        app_env                = { auth = { STREAM_KEY_RESOLVE_TOKEN = " " }, clip = {} }
+        app_secret_arns        = { auth = {}, clip = {} }
+        app_task_resource_arns = { auth = {}, clip = {} }
+      }
+    }
+  }
+
+  assert {
+    condition     = local.service_env.auth["STREAM_KEY_RESOLVE_TOKEN"] == " "
+    error_message = "빈 resolve 토큰이 auth env 로 넘어가지 않는다."
+  }
+}
+
+# 허용 대역을 비밀로 줘도 앱은 같은 이름으로 읽는다 — 값은 plan 에서 볼 수
+# 없으므로 있으면 인정한다.
+run "allows_resolve_token_with_allowed_cidrs_secret" {
+  command = plan
+
+  override_data {
+    target = data.terraform_remote_state.runtime
+    values = {
+      outputs = {
+        rds_sg_id         = "sg-0rds"
+        rds_resource_id   = "db-ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        rewind_bucket_arn = "arn:aws:s3:::pokeclip-prod-rewind-example"
+        app_db_users      = { auth = "app_auth", clip = "app_clip" }
+        app_env           = { auth = {}, clip = {} }
+        app_secret_arns = {
+          auth = {
+            STREAM_KEY_RESOLVE_TOKEN         = "arn:aws:secretsmanager:ap-northeast-2:111122223333:secret:pokeclip/prod/stream-key-resolve-token-QrStUv"
+            STREAM_KEY_RESOLVE_ALLOWED_CIDRS = "arn:aws:secretsmanager:ap-northeast-2:111122223333:secret:pokeclip/prod/stream-key-resolve-cidrs-WxYzAb"
+          }
+          clip = {}
+        }
+        app_task_resource_arns = { auth = {}, clip = {} }
+      }
+    }
+  }
+
+  assert {
+    condition     = local.service_secrets.auth["STREAM_KEY_RESOLVE_ALLOWED_CIDRS"] == "arn:aws:secretsmanager:ap-northeast-2:111122223333:secret:pokeclip/prod/stream-key-resolve-cidrs-WxYzAb"
+    error_message = "비밀로 준 허용 대역이 auth secrets 로 넘어가지 않는다."
   }
 }
