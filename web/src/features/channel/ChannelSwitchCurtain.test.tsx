@@ -1,3 +1,4 @@
+import { StrictMode } from 'react';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { apiFetch } from '@/api/client';
@@ -196,8 +197,22 @@ describe('ChannelSwitchCurtain', () => {
     expect(useSwitchCurtain.getState().curtain).not.toBeNull();
 
     unmount();
+    run(50);
 
     expect(useSwitchCurtain.getState().curtain).toBeNull();
+  });
+
+  it('StrictMode에서도 막 선 덮개를 지우지 않는다: 개발 모드는 효과를 붙였다 떼었다 다시 붙인다', () => {
+    render(
+      <StrictMode>
+        <ChannelSwitchCurtain />
+      </StrictMode>,
+    );
+    cover();
+    run(100);
+
+    expect(useSwitchCurtain.getState().curtain).not.toBeNull();
+    expect(shown()).toBe(true);
   });
 
   it('응답 없이 멈춘 요청은 MAX_MS에서 끊고 걷는다: 화면을 막아 두지 않는다', () => {

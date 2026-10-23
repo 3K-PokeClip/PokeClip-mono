@@ -26,6 +26,12 @@ export const MAX_MS = 10_000;
 export const QUIET_MS = 250;
 const TICK_MS = 100;
 
+/**
+ * 내려간 덮개 지우기를 한 박자 미뤄 둔 타이머. 개발 모드 StrictMode는 효과를 「붙임 → 정리 → 다시 붙임」으로 두 번 돌려, 정리에서
+ * 바로 지우면 막 선 덮개가 곧장 사라진다(실측: 전환 화면이 안 뜸). 다시 붙으면 미룬 지우기를 거둔다
+ */
+let pendingClear: ReturnType<typeof setTimeout> | undefined;
+
 export function ChannelSwitchCurtain() {
   const curtain = useSwitchCurtain((s) => s.curtain);
   // 걷힐 때 「전환했어요」를 화면 낭독기에 알린다(토스트가 하던 일). 영역은 늘 떠 있어야 바뀐 글이 읽힌다
@@ -91,7 +97,12 @@ function Cover({
 
   // 걷히기 전에 이 화면이 내려가면(전체 화면 편집기로 이동·로그아웃) 덮개도 지운다: 남기면 다음에 독 화면이 설 때 옛 덮개가
   // 다시 서서 번쩍이고 「전환했어요」를 다시 읽는다(PR #342 리뷰 5). 다 걷힌 뒤라면 이미 지워져 아무 일도 안 한다
-  useEffect(() => () => clear(curtain.key), [clear, curtain.key]);
+  useEffect(() => {
+    clearTimeout(pendingClear);
+    return () => {
+      pendingClear = setTimeout(() => clear(curtain.key), 0);
+    };
+  }, [clear, curtain.key]);
 
   const elapsed = now - curtain.shownAt;
   const pending = load.started - load.finished;
