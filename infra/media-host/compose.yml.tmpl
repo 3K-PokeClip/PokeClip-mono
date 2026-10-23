@@ -22,6 +22,10 @@
 #   rds_endpoint · rds_db_name
 #                        사이드카 · janitor DB 접속(IAM 인증 — 비밀 아님).
 #   rewind_bucket_name   되감기 버킷 이름(사이드카 S3_BUCKET).
+#   rewind_public_base_url
+#                        되감기 목록 URI 앞머리(사이드카 REWIND_PUBLIC_BASE_URL —
+#                        https 절대 URL · 끝 / 없음). S3_BUCKET 이 있으면 사이드카가
+#                        이 값 없이 기동하지 않는다.
 #   detached_log_driver  비부착 서비스의 로깅 드라이버. "json-file" 이면 회전
 #                        json-file, 그 밖의 값은 모두 journald 다(prod 는
 #                        "journald" — 오타가 나도 prod 쪽으로 떨어진다).
@@ -184,6 +188,8 @@ services:
       # 토큰 없는 옛 메타데이터 요청(IMDSv1)으로 내려가는 길을 막는다.
       AWS_EC2_METADATA_V1_DISABLED: "true"
       S3_BUCKET: ${rewind_bucket_name}
+      # 목록 줄 = 이 앞머리 + "/" + S3 키(dvr/…) — 영상 CDN 의 /dvr/* 가 버킷이다.
+      REWIND_PUBLIC_BASE_URL: "${rewind_public_base_url}"
     volumes:
       - recordings:/recordings:ro
       - hooks:/hooks:ro

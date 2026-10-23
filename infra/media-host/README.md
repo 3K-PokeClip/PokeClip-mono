@@ -32,6 +32,7 @@ compose 로 한 묶음으로 돌리고, systemd 유닛 하나가 그 묶음 전�
 | (M9 이 씀) | `/etc/pokeclip-media/media.env` | 유닛 `EnvironmentFile` · 운영 확인 스크립트 |
 | (M9 이 씀) | `/root/.docker/config.json`(ECR 자격 도우미 설정) | docker · 시작 스크립트 선행 점검 |
 | (시작 스크립트가 씀) | `/run/pokeclip-media/mediamtx.yml` · `mtx_api_pass` | MediaMTX · 사이드카(읽기 전용 bind — 원본이 없으면 만들지 않음: `create_host_path: false`, 그 컨테이너 기동만 실패) |
+| `bundle/Dockerfile` | 설치하지 않음 — 설치 묶음 이미지(`pokeclip-prod/media-host-bundle`)를 만든다. 위 `bin/` · `bin/lib/` · `mediamtx.yml.tmpl` 은 이 이미지에 담겨 상자에 온다 | O7c 빌드 · M9 부트스트랩(`docker create` · `docker cp` 로 꺼내 설치) |
 | `ops/force-diff.sh` | 설치하지 않음 | kty 로컬(force 복구 대조) |
 | `images.json` | 설치하지 않음 | 시험 · O7c 미러링 |
 | `test/` | 설치하지 않음 | 로컬 · CI 시험 |
@@ -70,6 +71,12 @@ compose 프로젝트 이름은 `pokeclip-media` 다(유닛의 `MEDIA_COMPOSE_PRO
     그 경로를 그대로 넘긴다. 제어면 포트의 그 밖 경로는 언제나 404 다.
 *   **nginx 는 9997(관리 API)로 넘기는 설정을 두지 않는다.** 렌더 결과에 그 번호가
     한 번도 나오지 않는지 `render_test.sh` 가 본다.
+*   **`rewind_public_base_url`**(compose 템플릿 변수): 사이드카
+    `REWIND_PUBLIC_BASE_URL` — 되감기 목록 URI 앞머리다. 목록 줄은 이 값 +
+    `/` + S3 키(`dvr/…`)이고, prod 는 영상 CDN 주소 `https://media.pokeclip.com`
+    (CDN 의 `/dvr/*` 가 rewind 버킷 — 설계 4-5)다. 사이드카는 `S3_BUCKET` 이
+    있으면 이 값 없이 기동하지 않으므로(재시작 반복) 늘 넘긴다. https 절대
+    URL · 끝 `/` 없음은 M9 모듈이 plan 에서 검증한다.
 *   **`detached_log_driver`**(compose 템플릿 변수): prod 는 `"journald"`.
     `"json-file"` 은 journald 가 없는 로컬 엔진에서 띄울 때만 쓴다. 그 밖의 값은
     모두 journald 로 떨어진다.
@@ -285,7 +292,11 @@ set -a; . /etc/pokeclip-media/media.env; set +a
 1.  force 1 에서 A 상자의 `paths-list.sh` 표준 출력을
     `force-<시각>-A.txt` 로 저장하고, 표준 오류의 `PATHS LIST <n>` 의 n 을
     함께 적어 둔다. **종료 0 일 때만 저장한다** — 실패하면 표준 출력이 비어
-    있어, 저장하면 「송출 중 0」 처럼 읽힌다.
+    있어, 저장하면 「송출 중 0」 처럼 읽힌다. 같은 자리에
+    `force-<시각>-ended.txt` 가 **없을 때만** 빈 파일로 만든다(`[ -e
+    force-<시각>-ended.txt ] || : > force-<시각>-ended.txt`). `force-diff.sh` 는
+    세 파일이 모두 있어야 대조하고(없으면 `FORCE FAIL input ended`), 다시 이어
+    할 때 이미 적은 종료 확인을 지우면 안 된다.
 1.  **SSM 출력 한도(표준 출력 24,000자)에 닿은 출력은 저장하지 않는다** — 뒤가
     잘린 목록이다. 놓쳐도 다음 단계가 거부한다 — 줄 수가 개수와 다르거나,
     마지막 ID 가 가운데에서 잘려 끝 줄바꿈이 없으면 대조하지 않는다. 저장할 때
@@ -509,9 +520,10 @@ compose 는 이미지를 모두 `<ECR 저장소 URL>@<다이제스트>` 로 가�
 *   올리는 절차(O7c)는 [prod 산출물 올리기 런북](../terraform/runbooks/prod-artifacts.md)
     이다. 푸시한 다이제스트를 tfvars 에 넣는다 — `images.json` 의 핀과 다를 수
     있다(한 플랫폼만 올리면 매니페스트가 달라진다).
-*   **arm64 주의:** kty 로컬(Apple Silicon)에서 받거나 빌드하면 기본이 arm64 다.
-    상자가 amd64 면 기동이 실패한다. 받을 때 `--platform` 을 상자 플랫폼으로
-    지정하고, 런북의 아키텍처 확인을 거친다.
+*   **arm64:** prod 상자는 `linux/arm64` 하나다(결정 146 — Graviton ·
+    AL2023 arm64). 이미지는 arm64 한 변형만 올린다. kty 로컬(Apple Silicon)
+    에서는 네이티브로 빌드되지만, 미러는 받을 때 `--platform linux/arm64` 를
+    지정하고 런북의 아키텍처 확인을 거친다.
 
 ### images.json 갱신
 
@@ -526,8 +538,8 @@ compose 는 이미지를 모두 `<ECR 저장소 URL>@<다이제스트>` 로 가�
     ```
 
 1.  출력의 `Digest:` 가 인덱스 다이제스트다. 그 아래 `Manifests:` 에
-    `linux/amd64` · `linux/arm64` 가 **둘 다** 있는지 본다. 하나라도 없으면 쓰지
-    않는다(상자 아키텍처가 아직 정해지지 않았다).
+    `linux/arm64` 가 있는지 본다. 없으면 쓰지 않는다(prod 는 arm64 하나 —
+    결정 146).
 1.  `images.json` 의 `source`(태그까지 적은 참조)와 `digest` 를 함께 고친다.
 1.  `images.json` 을 읽는 시험을 돌린다 — `proxy_contract.sh` · `loopback_test.sh`
     (사례 10 핀 꼴) · `unit_restart_test.sh`(CI).
@@ -543,7 +555,7 @@ prod 상자에 깔 도구의 판이다. M9 user_data 가 같은 값으로 설치
 |---|---|---|
 | docker compose 플러그인 | **5.5.0** | 공식 릴리스 `docker/compose` v5.5.0(2026-10-20 확인). `sha256` — `docker-compose-linux-x86_64`: `c57ab918abd5b05ca7e7d0f275875dd1330a695074f309dc9eab1b49efafcd4b` · `docker-compose-linux-aarch64`: `ff42489f5a9b879d5d117c5ffea6defc27390b3286da8ad52cbc9c6ab5df590e` |
 | `amazon-ecr-credential-helper` | **0.12.0-3.amzn2023** | Amazon Linux 2023 저장소(release 2023.12.20260930 기준 최신 · 2026-10-20 `dnf` 조회) |
-| docker | M9 이 정함 | M2 탐침 상자(AL2023 · systemd 252)는 25.0.16 으로 재기동 시험을 통과했다 |
+| docker | **25.0.16**(`modules/media_host` · `prod/media` tfvars 예시) | M2 탐침 상자(AL2023 · systemd 252)는 25.0.16 으로 재기동 시험을 통과했다. AL2023 **arm64** 저장소에 이 판이 있는지는 O7e 에서 확인한다 |
 
 *   Compose 의 `--abort-on-container-exit` · `--attach` · `--force-recreate`
     동작과 bind 의 `create_host_path: false`(원본이 없으면 디렉터리를 만들지
@@ -637,24 +649,24 @@ prod 상자에 깔 도구의 판이다. M9 user_data 가 같은 값으로 설치
 
 | 받는 쪽 | 할 일 |
 |---|---|
-| M9 | 템플릿 변수 키 집합에 `detached_log_driver` · `janitor_enabled` 를 넣고, 모듈이 문자 그대로 `"journald"` 를 넘기는지 · `janitor_enabled` 를 bool 로 넘기는지 단언한다(문자열 `"true"` · `"false"` 도 렌더는 되므로 꼴은 모듈 쪽에서 막는다). `daemon.json` 로그 옵션에 `env` · `labels` 계열 0 |
-| M9 | 이미지 변수 꼴 `^[^@]+@sha256:[0-9a-f]{64}$`. 참조가 ECR 레지스트리 호스트(`media.env` 의 `ECR_REGISTRY_HOST` 와 같은 값) + `/` 로 시작하는지도 단언한다. 다이제스트가 비면 `…@` 로 조립하지 않고 빈 문자열을 넘긴다(응답기) |
-| M9 | Media SG 인그레스 단언(위 「SG 가 유일한 경계」). 인그레스 포트에 8888 · 9996 · 9997 0 |
-| M9 | prod 프록시 포트 넷(nginx 템플릿 변수)을 모듈이 넘기고 모듈 시험에서 단언한다. user_data 렌더본은 렌더 파일 · nginx 설정 bind 의 긴 문법(`create_host_path: false`)을 그대로 쓴다 — 원본이 없으면 그 컨테이너만 기동에 실패한다. 이 PR 의 유닛 · 스크립트 · compose 템플릿을 함께 설치한다 |
-| M9 | 설치 단언: `bin/lib/` 두 파일이 스크립트와 같은 상대 위치에 있고 내용이 저장소와 같다. `bin/` · `bin/lib/` 소유 `root:root`, 스크립트 0755 · lib 0644. `media.env`(유닛 `EnvironmentFile`)의 소유 · 모드(root 만 쓰기). `/etc/pokeclip-media/`(디렉터리 · `mediamtx.yml.tmpl` · `compose.yml` · `nginx.conf`)와 유닛 파일도 소유 `root:root` · 그룹 · 기타 쓰기 불가. 압축 user_data 16 KiB 게이트를 다시 잰다 |
-| M9 | prod 엔진의 비특권 포트 하한(`net.ipv4.ip_unprivileged_port_start`)을 상자에서 잰다. nginx 는 cap CHOWN · SETGID · SETUID 만 받고 `NET_BIND_SERVICE` 가 없다 — 프록시 포트가 하한보다 낮으면 nginx 가 기동하지 못한다 |
+| M9 | 템플릿 변수 키 집합에 `detached_log_driver` · `janitor_enabled` 를 넣고, 모듈이 문자 그대로 `"journald"` 를 넘기는지 · `janitor_enabled` 를 bool 로 넘기는지 단언한다(문자열 `"true"` · `"false"` 도 렌더는 되므로 꼴은 모듈 쪽에서 막는다). `daemon.json` 로그 옵션에 `env` · `labels` 계열 0 — **처리(M9):** 모듈이 `"journald"` 를 문자 그대로, `janitor_enabled` 를 bool 변수로 넘기고 user_data 시험이 키 집합(`render_vars.json`)과 함께 단언한다. `daemon.json` 은 쓰지 않는다(로그 드라이버는 compose 서비스마다) |
+| M9 | 이미지 변수 꼴 `^[^@]+@sha256:[0-9a-f]{64}$`. 참조가 ECR 레지스트리 호스트(`media.env` 의 `ECR_REGISTRY_HOST` 와 같은 값) + `/` 로 시작하는지도 단언한다. 다이제스트가 비면 `…@` 로 조립하지 않고 빈 문자열을 넘긴다(응답기) — **처리(M9):** 모듈 변수 검증(꼴) · 인스턴스 사전 조건(이 계정 레지스트리 호스트로 시작) · `prod/media` 가 빈 응답기 다이제스트를 빈 문자열로 넘긴다(루트 시험) |
+| M9 | Media SG 인그레스 단언(위 「SG 가 유일한 경계」). 인그레스 포트에 8888 · 9996 · 9997 0 — **처리(M9):** `modules/media_host` 시험 `media_sg_ingress_matches_design` |
+| M9 | prod 프록시 포트 넷(nginx 템플릿 변수)을 모듈이 넘기고 모듈 시험에서 단언한다. user_data 렌더본은 렌더 파일 · nginx 설정 bind 의 긴 문법(`create_host_path: false`)을 그대로 쓴다 — 원본이 없으면 그 컨테이너만 기동에 실패한다. 이 PR 의 유닛 · 스크립트 · compose 템플릿을 함께 설치한다 — **처리(M9):** 모듈이 `proxy_ports` 를 넘기고 검증한다. 렌더본은 저장소 템플릿을 같은 변수로 다시 렌더한 값과 같다(시험). 유닛 · compose · nginx 는 user_data, 스크립트 · MediaMTX 템플릿은 설치 묶음 이미지로 설치한다(kty 결정 2026-10-23 — user_data 16 KiB) |
+| M9 | 설치 단언: `bin/lib/` 두 파일이 스크립트와 같은 상대 위치에 있고 내용이 저장소와 같다. `bin/` · `bin/lib/` 소유 `root:root`, 스크립트 0755 · lib 0644. `media.env`(유닛 `EnvironmentFile`)의 소유 · 모드(root 만 쓰기). `/etc/pokeclip-media/`(디렉터리 · `mediamtx.yml.tmpl` · `compose.yml` · `nginx.conf`)와 유닛 파일도 소유 `root:root` · 그룹 · 기타 쓰기 불가. 압축 user_data 16 KiB 게이트를 다시 잰다 — **처리(M9):** user_data 파일 소유 · 모드 시험(`root:root` · 0644 · `config.json` 0600 · 부트스트랩 0700), 부트스트랩이 `bin/` 0755 · `bin/lib/` 0644 로 설치(시험이 그 줄을 본다) · `/etc/pokeclip-media/` 는 0755(부트스트랩 — 시험 밖), 묶음 내용 = 저장소(Dockerfile 이 그대로 COPY · 2026-10-23 로컬 빌드 9파일 sha256 일치), 압축 user_data 12,381 바이트(최대 렌더 12,453 — 시험이 매번 잰다) |
+| M9 | prod 엔진의 비특권 포트 하한(`net.ipv4.ip_unprivileged_port_start`)을 상자에서 잰다. nginx 는 cap CHOWN · SETGID · SETUID 만 받고 `NET_BIND_SERVICE` 가 없다 — 프록시 포트가 하한보다 낮으면 nginx 가 기동하지 못한다 — **넘김(M9):** 값을 넣지 않고 [교체 런북](../terraform/runbooks/media-swap.md) 「O7e 뒤 측정 · 기록」 으로 |
 | M9 · O7f · edge-secrets 런북 | CDN 비밀 생성 형식을 고정한다: 16진 또는 패딩 없는 base64url. 허용 글자는 `[A-Za-z0-9._+=-]` 이고 표준 base64 의 `/` 는 MediaMTX 가 거부해 기동이 막힌다. 입력 도구 · 런북 문구에 반영 |
-| M9 | 유닛 하드닝 지시어(지금은 `LimitCORE=0` 뿐)를 상자에서 정한다 — docker CLI · `/run` 쓰기와 부딪히지 않는 지시어만 실측으로 고른다 |
-| M9 | `media.env` 키에 `LOOPBACK_SENDER_IMAGE` · `MEDIA_LIVE_PORT` · `TEST_STREAM_KEY_SECRET_ARN` 을 더한다. ECR 읽기 Resource 에 송출기 저장소 하나 |
-| M9 | `bin/lib/` 두 파일을 스크립트와 같은 상대 위치에 설치. nginx 렌더본을 `/etc/pokeclip-media/nginx.conf` 에. journald 보존 설정. 위 「판 고정」 값으로 설치 |
-| M9 | 사이드카 `S3_BUCKET` 은 버킷 **이름**(`rewind_bucket_name`)이다. 런타임 출력은 `rewind_bucket_arn` 뿐이라 이름을 꺼내거나 출력을 더한다 |
-| M9 | prod 인스턴스 아키텍처를 정한다(O7c 플랫폼 · 위 arm64 주의) |
-| M9 런북 · O7e 5 | 사이드카 기동 판정은 태그 저널(`-t pokeclip-media-sidecar`)로. DB 장애 때는 compose 전체가 아니라 사이드카만 다시 뜬다(송출 유지) — 「5분 MainPID 무변화」 는 mediamtx · nginx 감시로만 읽는다. 판정 조건에 「관찰 창 5분 동안 사이드카 태그 저널의 종료 줄 0 건」 을 넣고, 먼저 `docker info` 로 로그 드라이버(journald)를 확인한다 |
-| M7 · O7c | 루프백 송출기 ECR 저장소 · 미러 하나를 더한다 |
-| M9 | 하드닝 — 상시 서비스에 `read_only`(쓰는 자리는 tmpfs · 볼륨으로 — janitor 는 이미 있음) · `pids_limit` · 메모리 상한을 둔다. 값은 상자에서 서비스별 쓰기 자리 · 기동 메모리를 재서 정하고 `render_test.sh` 에 단언을 더한다 |
-| M9 · 런타임 | janitor 를 켜기(`janitor_enabled`) 전 전제: RDS PostgreSQL 17 이상(미만이면 janitor 가 기동을 거부해 엔진이 계속 다시 띄운다) · DB 사용자 `media_janitor` 와 `GRANT rds_iam` · 스키마 배치 · 인스턴스 역할 `rds-db:connect`(`media_janitor`) · 권한은 세 표 `SELECT` 와 `stream_segments` 의 `UPDATE (local_path)` 뿐이다(사이드카처럼 표 단위 UPDATE 를 주지 않는다 — 정본은 [media/README.md](../../media/README.md) 「DB 요구 — PostgreSQL 17 이상 · 계정 · TLS」 의 「운영 계정 `media_janitor` 권한」). 켠 뒤 상자에서 태그 저널의 `db_connected`(pool=janitor) · `janitor_started` 를 보고, IAM 경로에서 읽기 전용 루트로 기동되는지 확인한다(로컬은 비밀번호 경로로만 확인됨) |
+| M9 | 유닛 하드닝 지시어(지금은 `LimitCORE=0` 뿐)를 상자에서 정한다 — docker CLI · `/run` 쓰기와 부딪히지 않는 지시어만 실측으로 고른다 — **넘김(M9):** 교체 런북 「O7e 뒤 측정 · 기록」 |
+| M9 | `media.env` 키에 `LOOPBACK_SENDER_IMAGE` · `MEDIA_LIVE_PORT` · `TEST_STREAM_KEY_SECRET_ARN` 을 더한다. ECR 읽기 Resource 에 송출기 저장소 하나 — **처리(M9):** `media.env` 에 세 키(시험) · ECR 읽기 Resource 에 `media-loopback-sender`(시험 · 저장소는 `prod/registry` 에 더함) |
+| M9 | `bin/lib/` 두 파일을 스크립트와 같은 상대 위치에 설치. nginx 렌더본을 `/etc/pokeclip-media/nginx.conf` 에. journald 보존 설정. 위 「판 고정」 값으로 설치 — **처리(M9):** `bin/lib/` 는 설치 묶음으로 같은 상대 위치에 · nginx 렌더본은 user_data 로 · journald 는 `Storage=persistent`(크기 · 보존 상한은 교체 런북 측정으로 넘김) · docker 25.0.16 · 자격 도우미 0.12.0-3 · compose 5.5.0(aarch64 sha256)로 설치. AL2023 arm64 저장소에 그 판이 있는지는 O7e 에서 확인 |
+| M9 | 사이드카 `S3_BUCKET` 은 버킷 **이름**(`rewind_bucket_name`)이다. 런타임 출력은 `rewind_bucket_arn` 뿐이라 이름을 꺼내거나 출력을 더한다 — **처리(M9):** ARN 에서 이름을 꺼낸다(시험) |
+| M9 | prod 인스턴스 아키텍처를 정한다(O7c 플랫폼 · 위 arm64 주의) — **처리:** `linux/arm64` 하나(결정 146 · 2026-10-23). `c8gn.large` · AL2023 arm64 AMI · 이미지 arm64 한 변형 |
+| M9 런북 · O7e 5 | 사이드카 기동 판정은 태그 저널(`-t pokeclip-media-sidecar`)로. DB 장애 때는 compose 전체가 아니라 사이드카만 다시 뜬다(송출 유지) — 「5분 MainPID 무변화」 는 mediamtx · nginx 감시로만 읽는다. 판정 조건에 「관찰 창 5분 동안 사이드카 태그 저널의 종료 줄 0 건」 을 넣고, 먼저 `docker info` 로 로그 드라이버(journald)를 확인한다 — **처리(M9):** [교체 런북](../terraform/runbooks/media-swap.md) 의 기동 판정 · 관찰 판정 |
+| M7 · O7c | 루프백 송출기 ECR 저장소 · 미러 하나를 더한다 — **처리(M9):** `prod/registry` 키 `media-loopback-sender` · 산출물 런북 「설치 묶음 · 루프백 송출기」 |
+| M9 | 하드닝 — 상시 서비스에 `read_only`(쓰는 자리는 tmpfs · 볼륨으로 — janitor 는 이미 있음) · `pids_limit` · 메모리 상한을 둔다. 값은 상자에서 서비스별 쓰기 자리 · 기동 메모리를 재서 정하고 `render_test.sh` 에 단언을 더한다 — **넘김(M9):** 교체 런북 「O7e 뒤 측정 · 기록」 |
+| M9 · 런타임 | janitor 를 켜기(`janitor_enabled`) 전 전제: RDS PostgreSQL 17 이상(미만이면 janitor 가 기동을 거부해 엔진이 계속 다시 띄운다) · DB 사용자 `media_janitor` 와 `GRANT rds_iam` · 스키마 배치 · 인스턴스 역할 `rds-db:connect`(`media_janitor`) · 권한은 세 표 `SELECT` 와 `stream_segments` 의 `UPDATE (local_path)` 뿐이다(사이드카처럼 표 단위 UPDATE 를 주지 않는다 — 정본은 [media/README.md](../../media/README.md) 「DB 요구 — PostgreSQL 17 이상 · 계정 · TLS」 의 「운영 계정 `media_janitor` 권한」). 켠 뒤 상자에서 태그 저널의 `db_connected`(pool=janitor) · `janitor_started` 를 보고, IAM 경로에서 읽기 전용 루트로 기동되는지 확인한다(로컬은 비밀번호 경로로만 확인됨) — **처리(M9 몫):** 인스턴스 역할 `rds-db:connect`(`media_janitor`) · 교체 런북 기동 판정의 `JANITOR_*` 줄 · O7e 선행 확인 ③. 런타임 몫(PostgreSQL 17 · 사용자 · GRANT)은 런타임 트랙 |
 | I1-1 | 반영됨(POK-311). `compose.yml.tmpl` 사이드카 · janitor env 에 RDS CA 번들 경로(`POSTGRES_SSLROOTCERT` — 이미지 안 `/etc/pokeclip/rds-ca/global-bundle.pem`)와 `AWS_EC2_METADATA_V1_DISABLED: "true"` 를 넣고 `render_test.sh` 사례 10 이 단언한다. DB 연결 성공 고정 줄은 `db_connected`(media/README 「DB 연결 성공 줄」) |
-| 범위 밖(제안) | `media/cmd/janitor` 의 compose 계약 시험을 이 템플릿까지 넓힌다 — `media/Dockerfile.mtxhook` 의 USER 가 바뀌어도 infra-ci(경로 필터 `infra/media-host/**`)는 돌지 않아, `render_test.sh` 사례 9 의 대조가 다음 infra 변경 때에야 돈다. `infra/terraform/prod/registry` 의 「janitor 저장소는 janitor 코드가 생길 때 더한다」 문장은 사이드카 이미지를 쓰는 지금 결정과 어긋나 정리한다 |
+| 범위 밖(제안) | `media/cmd/janitor` 의 compose 계약 시험을 이 템플릿까지 넓힌다 — `media/Dockerfile.mtxhook` 의 USER 가 바뀌어도 infra-ci(경로 필터 `infra/media-host/**`)는 돌지 않아, `render_test.sh` 사례 9 의 대조가 다음 infra 변경 때에야 돈다. `infra/terraform/prod/registry` 의 「janitor 저장소는 janitor 코드가 생길 때 더한다」 문장은 사이드카 이미지를 쓰는 지금 결정과 어긋나 정리한다 — **처리(M9 — 문장만):** `prod/registry` README · 변수 주석을 고쳤다. compose 계약 시험 확대는 남음 |
 | I1-6 | 제어면 서버가 생기면 `control_upstream` 을 채운다. control 헬스는 nginx 경로라, 사이드카가 다시 뜨는 동안에도 healthy 로 보이고 제어면은 502 를 낸다 |
 | kty · 보안 | 보안 런북: 침해 대응 — 증거 보존 방식 · 저널 영속 여부(M9 의 journald 저장 방식 — 휘발 저널은 격리 뒤 꺼낼 길이 없다) · **정지 전 컨테이너 증거 보존 여부**(서비스를 멈추면 compose down 이 컨테이너 파일 시스템과 json-file 로그를 지운다 · 정지 승인을 기다리는 동안 서비스는 계속 돈다) · 격리 수단(IMDS 차단 필수 · 기존 연결 차단) · 역할 세션 취소 뒤 인라인 정책 정리 시점 · 비밀 교체와 상자 교체 순서 |
 | 포크 mediamtx 트랙 | 다음 포크 태그에서 설정 조회 응답의 `hlsCDNSecret` 을 가리고(redact), 응답에 비밀이 새지 않는지 회귀 시험을 둔다(위 「받아들인 위험」). ADR 로 남길지는 kty |
