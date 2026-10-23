@@ -8,6 +8,7 @@ import {
   fetchLibraryAll,
   mediaStreamId,
   openJumpCard,
+  platformLabel,
   requestRender,
   retryUpload,
   type UploadInfo,
@@ -225,6 +226,20 @@ describe('broadcastTitle — 방송을 보일 이름(POK-259)', () => {
     expect(broadcastTitle({ streamId: 'S-1', title: '   ' })).toBe('S-1');
     expect(broadcastTitle({ streamId: 'S-1', title: null })).toBe('S-1');
     expect(broadcastTitle({ streamId: 'S-1' })).toBe('S-1');
+  });
+});
+
+describe('platformLabel: 방송 플랫폼 표시 이름(POK-398)', () => {
+  it.each([
+    ['CHZZK', '치지직'],
+    ['SOOP', 'SOOP'],
+  ])('%s → %s', (code, label) => {
+    expect(platformLabel(code)).toBe(label);
+  });
+
+  // 모르는 코드를 치지직이라 적지 않는다. 태그를 숨긴다
+  it.each([['CIME'], ['chzzk'], [''], [null], [undefined]])('%s → null', (code) => {
+    expect(platformLabel(code)).toBeNull();
   });
 });
 

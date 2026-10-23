@@ -35,7 +35,11 @@ export function LiveNowBand({ live }: { live: LiveNow }) {
                 {live.platform}
               </Tag>
             ) : null}
-            <span className={styles.liveMetaText}>{live.startedNote}</span>
+            <span className={styles.liveMetaText}>
+              {live.editorsOnline
+                ? `${live.startedNote} · 편집자 ${live.editorsOnline}명 접속 중`
+                : live.startedNote}
+            </span>
           </div>
           <div className={styles.liveTitle}>{live.title}</div>
           <div className={styles.liveStats}>
