@@ -13,6 +13,7 @@ import org.springframework.context.support.GenericApplicationContext;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.SQLException;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
 
@@ -90,11 +91,36 @@ class RdsIamWiringTest extends IntegrationTestSupport {
         assertThat(thrown).hasStackTraceContaining("sslfactory");
     }
 
+    /**
+     * 비밀번호 · 접속 대상도 URL로 바뀐다. {@code password=}면 iam인데 장기 비밀번호로 붙고,
+     * {@code PGHOST=}면 토큰을 서명한 호스트와 실제 접속 대상이 갈린다(PR #336 codex 2판 P1).
+     * 키를 하나씩 막으면 옆길이 계속 나와 쿼리를 통째로 안 받는다.
+     */
+    @Test
+    void iam인데_URL에_쿼리가_있으면_무엇이든_부팅을_거부한다() throws Exception {
+        Path ca = caFile();
+        for (String param : List.of("password=long-lived", "PGHOST=evil.example.com", "loggerLevel=OFF")) {
+            Throwable thrown = catchThrowable(() -> bootIam(ca, new AtomicInteger(), withQuery(param)).close());
+
+            assertThat(thrown).as(param).hasStackTraceContaining("URL 쿼리");
+        }
+    }
+
+    /** 드라이버 속성은 yml의 socketTimeout 하나만 받는다. TLS 이름이 아니어도 접속을 바꾸는 키가 있다. */
+    @Test
+    void iam인데_드라이버_속성에_허용_밖_키가_있으면_부팅을_거부한다() throws Exception {
+        Path ca = caFile();
+        Throwable thrown = catchThrowable(() -> bootIam(ca, new AtomicInteger(), plainUrl(),
+                "--spring.datasource.hikari.data-source-properties.gssEncMode=prefer").close());
+
+        assertThat(thrown).hasStackTraceContaining("gssEncMode");
+    }
+
     /** URL이 아니라 yml의 드라이버 속성으로 들어와도 같다. */
     @Test
     void iam인데_드라이버_속성에_ssl_설정이_있으면_부팅을_거부한다() throws Exception {
         Path ca = caFile();
-        Throwable thrown = catchThrowable(() -> bootIam(ca, new AtomicInteger(), POSTGRES.getJdbcUrl(),
+        Throwable thrown = catchThrowable(() -> bootIam(ca, new AtomicInteger(), plainUrl(),
                 "--spring.datasource.hikari.data-source-properties.sslhostnameverifier=x.AllowAll").close());
 
         assertThat(thrown).hasStackTraceContaining("sslhostnameverifier");
@@ -115,10 +141,14 @@ class RdsIamWiringTest extends IntegrationTestSupport {
         assertThat(thrown).hasStackTraceContaining("POSTGRES_AUTH");
     }
 
-    /** 시험 컨테이너 URL에는 이미 쿼리({@code ?loggerLevel=OFF})가 있다. {@code ?}를 또 붙이면 드라이버도 키로 안 읽는다. */
+    /** 시험 컨테이너 URL에는 쿼리({@code ?loggerLevel=OFF})가 붙어 온다. iam은 쿼리를 안 받으므로 뗀 꼴을 쓴다. */
+    private static String plainUrl() {
+        return "jdbc:postgresql://" + POSTGRES.getHost() + ":" + POSTGRES.getMappedPort(5432)
+                + "/" + POSTGRES.getDatabaseName();
+    }
+
     private static String withQuery(String param) {
-        String url = POSTGRES.getJdbcUrl();
-        return url + (url.contains("?") ? "&" : "?") + param;
+        return plainUrl() + "?" + param;
     }
 
     private Path caFile() throws Exception {
@@ -130,7 +160,7 @@ class RdsIamWiringTest extends IntegrationTestSupport {
     }
 
     private ConfigurableApplicationContext bootIam(Path ca, AtomicInteger signed) {
-        return bootIam(ca, signed, POSTGRES.getJdbcUrl());
+        return bootIam(ca, signed, plainUrl());
     }
 
     /** 서명기는 가짜다. 이 시험이 실제 AWS 자격 증명을 찾아 나가면 안 된다. */

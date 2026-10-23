@@ -14,8 +14,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Locale;
-import java.util.stream.Stream;
+import java.util.Set;
+import java.util.TreeSet;
 
 /**
  * {@code POSTGRES_AUTH=iam}이면 Boot가 만든 Hikari 풀에 토큰 공급자와 TLS 설정을 건다(POK-406 스파이크).
@@ -33,6 +33,9 @@ public class RdsIamDataSourceConfiguration {
      * 건다. 서버 인증서를 CA 번들로 검증하고 호스트 이름까지 맞춘다(media pgconf와 같은 규칙).
      */
     static final String SSL_MODE = "verify-full";
+
+    /** yml이 넣는 드라이버 속성. 반개방 스톨을 끊는 유일한 장치라 iam에서도 그대로 받는다. */
+    private static final Set<String> ALLOWED_DRIVER_PROPERTIES = Set.of("socketTimeout");
 
     /** 후처리기는 static으로 둔다. 다른 빈보다 먼저 만들어져야 해서 설정 클래스를 끌어오면 안 된다. */
     @Bean
@@ -69,7 +72,7 @@ public class RdsIamDataSourceConfiguration {
             // 여러 호스트 · 유닉스 소켓 꼴이면 토큰을 서명한 대상과 실제 접속 대상이 갈라진다.
             throw new IllegalStateException("iam에서는 DB_HOST가 TCP 호스트 하나여야 한다");
         }
-        rejectOwnSslSettings(uri, ds);
+        rejectOverrides(uri, ds);
         int port = uri.getPort() == -1 ? 5432 : uri.getPort();
         Region region = Region.of(env.getProperty("pokeclip.datasource.region", "ap-northeast-2"));
 
@@ -82,23 +85,25 @@ public class RdsIamDataSourceConfiguration {
     }
 
     /**
-     * TLS 설정은 이 클래스가 넣는 둘(sslmode · sslrootcert)뿐이어야 한다. 그래서 URL 쿼리와 yml 드라이버 속성
-     * 어디서든 {@code ssl}로 시작하는 키가 오면 부팅을 거부한다.
+     * iam이면 접속을 바꾸는 값은 이 클래스가 넣는 것뿐이어야 한다. 그래서 막을 키를 고르지 않고 받을 것만 정한다.
+     * URL 쿼리는 아예 안 받고, 드라이버 속성은 yml의 socketTimeout 하나만 받는다.
      *
-     * <p>키 몇 개만 골라 막으면 옆길이 남는다. pgjdbc는 URL 쿼리 값을 속성보다 앞세우고(sslmode가 풀린다),
-     * {@code sslfactory=NonValidatingFactory} · {@code sslhostnameverifier}는 verify-full을 둔 채로 인증서
-     * 검증을 건너뛴다. 어느 쪽이든 가짜 서버가 15분 동안 다시 쓸 수 있는 토큰을 받는다(PR #336 codex P1).
+     * <p>키를 골라 막으면 옆길이 계속 나왔다(PR #336 codex 1판 · 2판 P1). pgjdbc는 URL 쿼리 값을 속성보다
+     * 앞세우므로 {@code sslmode}는 verify-full을 풀고, {@code sslfactory=NonValidatingFactory}는 인증서 검증을
+     * 건너뛰고, {@code password=}는 iam인데 장기 비밀번호로 붙게 하고, {@code PGHOST=}는 토큰을 서명한 호스트와
+     * 실제 접속 대상을 가른다. 어느 쪽이든 15분 동안 다시 쓸 수 있는 토큰이나 비밀번호가 엉뚱한 곳으로 간다.
+     * 오류 문구에는 키만 싣고 값은 안 싣는다.
      */
-    private static void rejectOwnSslSettings(URI uri, HikariDataSource ds) {
-        Stream<String> urlKeys = uri.getQuery() == null ? Stream.empty()
-                : Arrays.stream(uri.getQuery().split("&")).map(pair -> pair.split("=", 2)[0]);
-        Stream<String> propertyKeys = ds.getDataSourceProperties().stringPropertyNames().stream();
-        List<String> sslKeys = Stream.concat(urlKeys, propertyKeys)
-                .filter(key -> key.toLowerCase(Locale.ROOT).startsWith("ssl"))
-                .toList();
-        if (!sslKeys.isEmpty()) {
-            throw new IllegalStateException("iam에서는 DB URL · 드라이버 속성에 TLS 설정을 적지 않는다(verify-full 고정). 받은 키: "
-                    + sslKeys);
+    private static void rejectOverrides(URI uri, HikariDataSource ds) {
+        if (uri.getQuery() != null) {
+            List<String> keys = Arrays.stream(uri.getQuery().split("&")).map(pair -> pair.split("=", 2)[0]).toList();
+            throw new IllegalStateException("iam에서는 DB URL 쿼리를 받지 않는다(접속 값은 이 서버가 정한다). 받은 키: " + keys);
+        }
+        Set<String> extra = new TreeSet<>(ds.getDataSourceProperties().stringPropertyNames());
+        extra.removeAll(ALLOWED_DRIVER_PROPERTIES);
+        if (!extra.isEmpty()) {
+            throw new IllegalStateException("iam에서는 드라이버 속성으로 " + ALLOWED_DRIVER_PROPERTIES
+                    + "만 받는다. 받은 키: " + extra);
         }
     }
 
