@@ -41,11 +41,13 @@ public abstract class SoopLinkTestSupport extends IntegrationTestSupport {
     protected final SoopLinkWriter writer;
     protected final JdbcTemplate jdbc;
     protected final SoopCleanupExecutor cleanup;
+    protected final SoopRefreshBrake brake;
 
     protected SoopLinkTestSupport(MockMvc mockMvc, UserService userService, UserRepository userRepository,
                                   TokenService tokenService, SoopLinkStateCodec codec,
                                   SoopChannelLinkRepository linkRepository, SecretStore secretStore,
-                                  SoopLinkWriter writer, JdbcTemplate jdbc, SoopCleanupExecutor cleanup) {
+                                  SoopLinkWriter writer, JdbcTemplate jdbc, SoopCleanupExecutor cleanup,
+                                  SoopRefreshBrake brake) {
         this.mockMvc = mockMvc;
         this.userService = userService;
         this.userRepository = userRepository;
@@ -56,11 +58,17 @@ public abstract class SoopLinkTestSupport extends IntegrationTestSupport {
         this.writer = writer;
         this.jdbc = jdbc;
         this.cleanup = cleanup;
+        this.brake = brake;
     }
 
+    /**
+     * 브레이크는 공유 컨텍스트의 싱글턴이고 연속 거절 수를 시험을 넘어 쥔다. 앞 시험의 거절 둘이 남으면 이 시험의 첫 거절이
+     * 브레이크를 세워 「파기된다」 시험이 엉뚱하게 갈린다. 시험마다 비운다.
+     */
     @BeforeEach
     void resetAll() {
         SOOP.reset();
+        brake.release();
         clear();
     }
 

@@ -7,6 +7,7 @@ import com.pokeclip.auth.soop.SoopCleanupExecutor;
 import com.pokeclip.auth.soop.SoopLinkStateCodec;
 import com.pokeclip.auth.soop.SoopLinkTestSupport;
 import com.pokeclip.auth.soop.SoopLinkWriter;
+import com.pokeclip.auth.soop.SoopRefreshBrake;
 import com.pokeclip.auth.streamkey.secret.SecretStore;
 import com.pokeclip.auth.support.FakeSoopServer;
 import com.pokeclip.auth.token.TokenService;
@@ -33,8 +34,9 @@ class SoopLinkStartAndLinkTest extends SoopLinkTestSupport {
     SoopLinkStartAndLinkTest(MockMvc mockMvc, UserService userService, UserRepository userRepository,
                              TokenService tokenService, SoopLinkStateCodec codec,
                              SoopChannelLinkRepository linkRepository, SecretStore secretStore,
-                             SoopLinkWriter writer, JdbcTemplate jdbc, SoopCleanupExecutor cleanup) {
-        super(mockMvc, userService, userRepository, tokenService, codec, linkRepository, secretStore, writer, jdbc, cleanup);
+                             SoopLinkWriter writer, JdbcTemplate jdbc, SoopCleanupExecutor cleanup,
+                    SoopRefreshBrake brake) {
+        super(mockMvc, userService, userRepository, tokenService, codec, linkRepository, secretStore, writer, jdbc, cleanup, brake);
     }
 
     /** SOOP 문서대로 client_id·state만 싣는다(계획 검증 M10). redirect_uri·시크릿은 없다. */

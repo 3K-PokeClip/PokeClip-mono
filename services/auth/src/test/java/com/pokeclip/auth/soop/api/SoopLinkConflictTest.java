@@ -8,6 +8,7 @@ import com.pokeclip.auth.soop.SoopLinkTestSupport;
 import com.pokeclip.auth.soop.SoopIdentity;
 import com.pokeclip.auth.soop.SoopLinkException;
 import com.pokeclip.auth.soop.SoopLinkWriter;
+import com.pokeclip.auth.soop.SoopRefreshBrake;
 import com.pokeclip.auth.soop.SoopTokens;
 import com.pokeclip.auth.soop.RevokeReason;
 import com.pokeclip.auth.streamkey.secret.SecretStore;
@@ -34,8 +35,9 @@ class SoopLinkConflictTest extends SoopLinkTestSupport {
     SoopLinkConflictTest(MockMvc mockMvc, UserService userService, UserRepository userRepository,
                          TokenService tokenService, SoopLinkStateCodec codec,
                          SoopChannelLinkRepository linkRepository, SecretStore secretStore,
-                         SoopLinkWriter writer, JdbcTemplate jdbc, SoopCleanupExecutor cleanup) {
-        super(mockMvc, userService, userRepository, tokenService, codec, linkRepository, secretStore, writer, jdbc, cleanup);
+                         SoopLinkWriter writer, JdbcTemplate jdbc, SoopCleanupExecutor cleanup,
+                    SoopRefreshBrake brake) {
+        super(mockMvc, userService, userRepository, tokenService, codec, linkRepository, secretStore, writer, jdbc, cleanup, brake);
     }
 
     /** 다른 계정 중복은 앞선 조회(로그 위생)와 DB 부분 유니크가 막는다. 롤백돼 우리 표·secrets는 그대로다. */

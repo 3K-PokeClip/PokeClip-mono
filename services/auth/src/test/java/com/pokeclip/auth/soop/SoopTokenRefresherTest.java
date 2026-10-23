@@ -31,16 +31,15 @@ class SoopTokenRefresherTest extends SoopLinkTestSupport {
     private static final Duration AHEAD = Duration.ofHours(2);
 
     private final SoopTokenRefresher refresher;
-    private final SoopRefreshBrake brake;
 
     SoopTokenRefresherTest(MockMvc mockMvc, UserService userService, UserRepository userRepository,
                            TokenService tokenService, SoopLinkStateCodec codec,
                            SoopChannelLinkRepository linkRepository, SecretStore secretStore,
                            SoopLinkWriter writer, JdbcTemplate jdbc, SoopCleanupExecutor cleanup,
-                           SoopTokenRefresher refresher, SoopRefreshBrake brake) {
-        super(mockMvc, userService, userRepository, tokenService, codec, linkRepository, secretStore, writer, jdbc, cleanup);
+                    SoopRefreshBrake brake,
+                           SoopTokenRefresher refresher) {
+        super(mockMvc, userService, userRepository, tokenService, codec, linkRepository, secretStore, writer, jdbc, cleanup, brake);
         this.refresher = refresher;
-        this.brake = brake;
     }
 
     private void lastCheckedAgo(SoopChannelLink link, Duration ago) {

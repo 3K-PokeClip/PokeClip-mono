@@ -7,6 +7,7 @@ import com.pokeclip.auth.soop.SoopCleanupExecutor;
 import com.pokeclip.auth.soop.SoopLinkStateCodec;
 import com.pokeclip.auth.soop.SoopLinkTestSupport;
 import com.pokeclip.auth.soop.SoopLinkWriter;
+import com.pokeclip.auth.soop.SoopTokenRefresher;
 import com.pokeclip.auth.soop.SoopRefreshBrake;
 import com.pokeclip.auth.streamkey.secret.SecretStore;
 import com.pokeclip.auth.token.TokenService;
@@ -39,16 +40,17 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class SoopLinkResolveTest extends SoopLinkTestSupport {
 
     private final TransactionTemplate tx;
-    private final SoopRefreshBrake brake;
+    private final SoopTokenRefresher refresher;
 
     SoopLinkResolveTest(MockMvc mockMvc, UserService userService, UserRepository userRepository,
                         TokenService tokenService, SoopLinkStateCodec codec,
                         SoopChannelLinkRepository linkRepository, SecretStore secretStore,
                         SoopLinkWriter writer, JdbcTemplate jdbc, SoopCleanupExecutor cleanup,
-                        PlatformTransactionManager transactionManager, SoopRefreshBrake brake) {
-        super(mockMvc, userService, userRepository, tokenService, codec, linkRepository, secretStore, writer, jdbc, cleanup);
+                    SoopRefreshBrake brake,
+                        PlatformTransactionManager transactionManager, SoopTokenRefresher refresher) {
+        super(mockMvc, userService, userRepository, tokenService, codec, linkRepository, secretStore, writer, jdbc, cleanup, brake);
         this.tx = new TransactionTemplate(transactionManager);
-        this.brake = brake;
+        this.refresher = refresher;
     }
 
     private String body(User u) throws Exception {
@@ -140,6 +142,109 @@ class SoopLinkResolveTest extends SoopLinkTestSupport {
         }
         assertThat(linkRepository.findByUserIdAndRevokedAtIsNull(u.getId())).as("🔴 브레이크 뒤 resolve가 연동을 닫았다").isPresent();
         assertThat(secretStore.get(link.getRefreshTokenRef())).contains("rt-old");
+    }
+
+    private String reasonOf(User u) throws Exception {
+        return com.jayway.jsonpath.JsonPath.read(body(u), "$.reason");
+    }
+
+    private boolean alive(User u) {
+        return linkRepository.findByUserIdAndRevokedAtIsNull(u.getId()).isPresent();
+    }
+
+    /**
+     * 🔴 비밀값이 틀린 배포에서 첫 스케줄러 틱(1시간 뒤) 전에 resolve가 방송하는 회원마다 파기하던 구멍(PR #329 봇 지적 P1).
+     * resolve 거절도 브레이크가 센다: 셋째 거절부터 파기하지 않고 REFRESH_UNAVAILABLE이다. 닫히는 것은 rejectBrake-1(2)명까지.
+     */
+    @Test
+    void resolve_거절도_세어_셋째부터는_파기하지_않는다() throws Exception {
+        SOOP.tokenResponds(401, "{}");
+        User a = newUser(), b = newUser(), c = newUser(), d = newUser();
+        for (User u : java.util.List.of(a, b, c, d)) {
+            linked(u, Duration.ofMinutes(10));
+        }
+
+        assertThat(reasonOf(a)).isEqualTo("BROKEN");
+        assertThat(reasonOf(b)).isEqualTo("BROKEN");
+        assertThat(reasonOf(c)).as("셋째 거절은 브레이크를 세우고 파기하지 않는다").isEqualTo("REFRESH_UNAVAILABLE");
+        assertThat(reasonOf(d)).isEqualTo("REFRESH_UNAVAILABLE");
+        awaitCleanup();
+        assertThat(alive(c)).isTrue();
+        assertThat(alive(d)).isTrue();
+        assertThat(brake.engaged()).isTrue();
+    }
+
+    /** 두 경로가 같은 셈을 쓴다: resolve 거절 둘 + 스케줄러 점검 거절 하나 = 셋이면 선다. */
+    @Test
+    void resolve_둘과_스케줄러_하나가_합쳐_셋이면_선다() throws Exception {
+        SOOP.tokenResponds(401, "{}");
+        User a = newUser(), b = newUser(), c = newUser();
+        for (User u : java.util.List.of(a, b, c)) {
+            linked(u, Duration.ofMinutes(10));
+        }
+
+        reasonOf(a);
+        reasonOf(b);
+        refresher.refreshForCheck(c.getId());
+
+        assertThat(brake.engaged()).isTrue();
+        awaitCleanup();
+        assertThat(alive(c)).as("스케줄러의 셋째 거절도 파기하지 않는다").isTrue();
+    }
+
+    /**
+     * 토큰이 신선한 회원의 resolve(SKIPPED_FRESH, SOOP 호출 없음)가 거절 사이사이에 끼어도 셈은 이어진다.
+     * 그것이 0으로 돌리면 비밀값이 틀린 배포에서 브레이크가 영영 안 선다(신선한 회원이 대다수다).
+     */
+    @Test
+    void 거절_사이사이_신선한_회원의_resolve가_끼어도_셋째_거절에서_선다() throws Exception {
+        User fresh = newUser();
+        linked(fresh, Duration.ofHours(8));
+        User a = newUser(), b = newUser(), c = newUser();
+        for (User u : java.util.List.of(a, b, c)) {
+            linked(u, Duration.ofMinutes(10));
+        }
+        SOOP.tokenResponds(401, "{}");
+
+        reasonOf(a);
+        assertThat(body(fresh)).contains("\"valid\":true");
+        reasonOf(b);
+        assertThat(body(fresh)).contains("\"valid\":true");
+
+        assertThat(reasonOf(c)).isEqualTo("REFRESH_UNAVAILABLE");
+        assertThat(brake.engaged()).isTrue();
+    }
+
+    /** 세고 판정하는 것이 원자적이라, 거절 다섯이 동시에 와도 파기는 두 건 이하다. */
+    @Test
+    void 동시_resolve_다섯이_동시에_거절받아도_파기는_두_건_이하다() throws Exception {
+        SOOP.tokenResponds(401, "{}");
+        SOOP.tokenDelays(Duration.ofMillis(300));   // 다섯이 같은 순간에 거절을 받게 창을 벌린다
+        java.util.List<User> users = new java.util.ArrayList<>();
+        for (int i = 0; i < 5; i++) {
+            User u = newUser();
+            linked(u, Duration.ofMinutes(10));
+            users.add(u);
+        }
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(5);
+        java.util.concurrent.CountDownLatch go = new java.util.concurrent.CountDownLatch(1);
+        java.util.List<java.util.concurrent.Future<String>> results = new java.util.ArrayList<>();
+        for (User u : users) {
+            results.add(pool.submit(() -> {
+                go.await();
+                return reasonOf(u);
+            }));
+        }
+        go.countDown();
+        int broken = 0;
+        for (var f : results) {
+            broken += "BROKEN".equals(f.get(30, java.util.concurrent.TimeUnit.SECONDS)) ? 1 : 0;
+        }
+        pool.shutdown();
+        awaitCleanup();
+
+        assertThat(broken).isLessThanOrEqualTo(2);
+        assertThat(users.stream().filter(u -> !alive(u)).count()).as("🔴 브레이크를 넘어 닫혔다").isLessThanOrEqualTo(2);
     }
 
     @Test

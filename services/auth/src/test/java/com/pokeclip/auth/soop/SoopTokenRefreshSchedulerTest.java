@@ -21,6 +21,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -32,7 +33,7 @@ class SoopTokenRefreshSchedulerTest {
 
     private final SoopChannelLinkRepository links = mock(SoopChannelLinkRepository.class);
     private final SoopTokenRefresher refresher = mock(SoopTokenRefresher.class);
-    private final SoopRefreshBrake brake = new SoopRefreshBrake();
+    private final SoopRefreshBrake brake = new SoopRefreshBrake(testProps());
     private final SoopTokenRefreshScheduler scheduler = new SoopTokenRefreshScheduler(links, refresher, testProps(), brake);
 
     /** 운영에서 조용히 꺼지지 않는다: 프로퍼티가 없으면 켜진다(matchIfMissing). 꺼짐은 명시적으로만. */
@@ -43,7 +44,7 @@ class SoopTokenRefreshSchedulerTest {
                 .withBean(SoopChannelLinkRepository.class, () -> mock(SoopChannelLinkRepository.class))
                 .withBean(SoopTokenRefresher.class, () -> mock(SoopTokenRefresher.class))
                 .withBean(SoopProperties.class, SoopTokenRefreshSchedulerTest::testProps)
-                .withBean(SoopRefreshBrake.class, SoopRefreshBrake::new);
+                .withBean(SoopRefreshBrake.class, () -> new SoopRefreshBrake(testProps()));
         runner.run(c -> assertThat(c).hasSingleBean(SoopTokenRefreshScheduler.class));
         runner.withPropertyValues("pokeclip.soop.check.enabled=false")
                 .run(c -> assertThat(c).doesNotHaveBean(SoopTokenRefreshScheduler.class));
@@ -57,7 +58,7 @@ class SoopTokenRefreshSchedulerTest {
                 .withBean(SoopChannelLinkRepository.class, () -> mock(SoopChannelLinkRepository.class))
                 .withBean(SoopTokenRefresher.class, () -> mock(SoopTokenRefresher.class))
                 .withBean(SoopProperties.class, SoopTokenRefreshSchedulerTest::testProps)
-                .withBean(SoopRefreshBrake.class, SoopRefreshBrake::new)
+                .withBean(SoopRefreshBrake.class, () -> new SoopRefreshBrake(testProps()))
                 .withPropertyValues("pokeclip.soop.check.interval=PT1H")
                 .run(c -> {
                     assertThat(c).hasNotFailed();
@@ -111,71 +112,39 @@ class SoopTokenRefreshSchedulerTest {
         assertThat(page.getValue().getPageSize()).isEqualTo(25);
     }
 
-    /** 총합이 아니라 「연속」을 센다(계획 검증 M9): 사이에 성공이 끼면 0으로 돌아가 다섯 다 처리된다. */
-    @Test
-    void 거절_사이에_성공이_끼면_멈추지_않는다() {
-        when(links.findIdsExpiringOrStale(any(), any(), any())).thenReturn(List.of(1L, 2L, 3L, 4L, 5L));
-        when(refresher.refreshForCheck(1L)).thenReturn(REJ);
-        when(refresher.refreshForCheck(2L)).thenReturn(REJ);
-        when(refresher.refreshForCheck(3L)).thenReturn(OK);
-        when(refresher.refreshForCheck(4L)).thenReturn(REJ);
-        when(refresher.refreshForCheck(5L)).thenReturn(REJ);
-
-        try (LogCaptor logs = new LogCaptor()) {
-            scheduler.tick();
-            assertThat(logs.messages()).noneMatch(m -> m.startsWith("auth.soop.link.refresh_reject_burst"));
-        }
-
-        verify(refresher).refreshForCheck(5L);
-        assertThat(brake.engaged()).isFalse();
-        scheduler.tick();
-        verify(links, org.mockito.Mockito.times(2)).findIdsExpiringOrStale(any(), any(), any());
-    }
-
     /**
-     * 일시 장애(UNAVAILABLE)는 연속 수를 0으로 되돌리지 않는다(그대로 둔다, 계획 검증 M9): 앱 비밀값이 틀리면
-     * 5xx가 섞여 와도 멈춰야 한다. 셋째 거절에서 멈추고 그 뒤 회원은 안 부르며, 다음 틱도 서지 않는다.
+     * 브레이크가 서면(세는 것은 갱신기와 {@link SoopRefreshBrake}가 한다) 그 틱의 남은 회원을 안 부르고, 다음 틱도 서지 않는다.
+     * 연속 거절 셈 자체는 {@code SoopRefreshBrakeTest}가 잰다.
      */
     @Test
-    void 거절이_연달아_브레이크_수에_닿으면_그_틱과_이후_틱을_멈춘다() {
+    void 브레이크가_서면_그_틱과_이후_틱을_멈춘다() {
         when(links.findIdsExpiringOrStale(any(), any(), any())).thenReturn(List.of(1L, 2L, 3L, 4L, 5L));
-        when(refresher.refreshForCheck(1L)).thenReturn(REJ);
-        when(refresher.refreshForCheck(2L)).thenReturn(UNAVAILABLE);
-        when(refresher.refreshForCheck(3L)).thenReturn(REJ);
-        when(refresher.refreshForCheck(4L)).thenReturn(REJ);
-        when(refresher.refreshForCheck(5L)).thenReturn(OK);
+        when(refresher.refreshForCheck(anyLong())).thenReturn(OK);
+        when(refresher.refreshForCheck(3L)).thenAnswer(call -> {
+            brake.engage();   // 갱신기가 셋째 거절을 세며 브레이크를 세운 것과 같다
+            return UNAVAILABLE;
+        });
 
-        try (LogCaptor logs = new LogCaptor()) {
-            scheduler.tick();
-            assertThat(logs.messages()).anyMatch(m -> m.startsWith("auth.soop.link.refresh_reject_burst"));
-            assertThat(logs.levelOf("auth.soop.link.refresh_reject_burst")).isEqualTo(Level.ERROR);
-            assertThat(logs.messages()).anyMatch(m -> m.startsWith("auth.soop.link.refresh_reject_burst")
-                    && m.contains("SOOP_CLIENT_SECRET") && m.contains("redeploy"));
-        }
-        assertThat(brake.engaged()).as("갱신기도 보는 브레이크 상태가 서야 한다").isTrue();
+        scheduler.tick();
 
-        verify(refresher).refreshForCheck(4L);
+        verify(refresher).refreshForCheck(3L);
+        verify(refresher, never()).refreshForCheck(4L);
         verify(refresher, never()).refreshForCheck(5L);
-
         // 한 번만 막고 풀리는 구현을 떨어뜨리려고 세 번 더 친다(프로세스 수명 동안 서 있어야 한다).
         scheduler.tick();
         scheduler.tick();
         scheduler.tick();
-        verify(links, org.mockito.Mockito.times(1)).findIdsExpiringOrStale(any(), any(), any());
-        verify(refresher, never()).refreshForCheck(5L);
+        verify(links, times(1)).findIdsExpiringOrStale(any(), any(), any());
     }
 
-    /** 틱 안에서만 센다: 앞 틱 끝의 거절 둘이 다음 틱 첫 거절과 이어지지 않는다. */
     @Test
-    void 연속_수는_틱마다_새로_센다() {
-        when(links.findIdsExpiringOrStale(any(), any(), any())).thenReturn(List.of(1L, 2L));
+    void 브레이크가_안_서면_후보를_다_본다() {
+        when(links.findIdsExpiringOrStale(any(), any(), any())).thenReturn(List.of(1L, 2L, 3L));
         when(refresher.refreshForCheck(anyLong())).thenReturn(REJ);
 
         scheduler.tick();
-        scheduler.tick();
-        scheduler.tick();
 
-        verify(links, org.mockito.Mockito.times(3)).findIdsExpiringOrStale(any(), any(), any());
+        verify(refresher).refreshForCheck(3L);
     }
 
     static SoopProperties testProps() {

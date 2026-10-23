@@ -25,9 +25,8 @@ import java.util.Optional;
  * 본다(SOOP은 철회를 알려 주지 않아 갱신 거절로만 안다) ② 4xx는 엔티티가 아니라 {@link SoopLinkWriter#closeAndPurge}로
  * 닫고 아이디·닉네임까지 같은 문장에서 비운다 ③ 정리에 외부 HTTP가 없다(폐기 API 없음).
  *
- * <p>🔴 연속 거절을 <b>세는</b> 것은 스케줄러다. 여기는 브레이크가 <b>섰는지</b>만 본다({@link SoopRefreshBrake}): 선 뒤에는
- * 4xx를 받아도 파기하지 않고 UNAVAILABLE로 답한다(브레이크는 앱 설정 오류를 뜻하므로 그 4xx는 그 회원의 철회가 아니다,
- * 감사 2회차 중대). 브레이크 전의 4xx는 그대로 파기한다.
+ * <p>🔴 연속 거절은 여기서 두 경로(점검 · resolve) 모두 {@link SoopRefreshBrake}에 센다. 브레이크가 서면(이 거절이 세운 것
+ * 포함) 4xx를 받아도 파기하지 않고 UNAVAILABLE로 답한다(브레이크는 앱 설정 오류를 뜻하므로 그 4xx는 그 회원의 철회가 아니다).
  */
 @Component
 @RequiredArgsConstructor
@@ -90,8 +89,9 @@ public class SoopTokenRefresher {
         try {
             tokens = oauthClient.refresh(refreshToken);
         } catch (SoopRejectedException e) {
-            if (brake.engaged()) {
-                // 대가: 브레이크가 선 동안 진짜로 동의를 철회한 회원도 재배포 때까지 안 닫힌다(비상 상태라 짧다고 본다).
+            if (!brake.recordReject(userId)) {
+                // 브레이크가 섰다(이 거절이 세운 것일 수도 있다). 대가: 선 동안 진짜로 동의를 철회한 회원도 재배포 때까지
+                // 안 닫힌다(비상 상태라 짧다고 본다).
                 log.warn("auth.soop.link.refresh_rejected_braked userId={} status={}", userId, e.status());
                 return RefreshResult.of(RefreshOutcome.UNAVAILABLE);
             }
@@ -113,6 +113,7 @@ public class SoopTokenRefresher {
             secretStore.put(link.getRefreshTokenRef(), tokens.refreshToken());
         }
         link.refreshed(now.plus(tokens.expiresIn()), tokens.scope(), now);
+        brake.recordSuccess();   // SOOP이 실제로 답한 성공만 연속 거절 수를 0으로 돌린다
         logAfterCommit(() -> log.info("auth.soop.link.refreshed userId={}", userId));
         return RefreshResult.of(RefreshOutcome.REFRESHED, link, tokens.accessToken());
     }
