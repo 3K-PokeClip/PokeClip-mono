@@ -18,6 +18,8 @@
 --                                   membership_<계정> 이 잡는다)
 --   schema_create_<계정>            계정의 public 스키마 CREATE 가 기대와 같다 — media 두 계정은 없고(직접 부여
 --                                   포함), 앱 사용자는 있다(Flyway 가 자기 표를 만든다)
+--   schema_usage_<계정>             계정이 public 스키마 USAGE 를 가진다(PUBLIC 기본) — 없으면 표 권한이 있어도
+--                                   stream_* · 자기 표의 이름을 풀지 못한다
 --   public_create_revoked           PUBLIC 이 public 스키마에 CREATE 를 갖지 않는다
 --   media_owner_schema              media_owner 가 public 스키마에 USAGE · CREATE 를 가진다
 --   owner:<표 · 함수>               소유자가 media_owner 다(없으면 이것이 실패한다)
@@ -32,7 +34,8 @@
 -- 마지막 단언은 사이드카 컷오프 잠금(media/internal/index/store.go 의 lockCutoffStreamSQL)의 전제다.
 -- 권한 정본(media/internal/pgtest/role.go)은 「advisory 잠금은 PUBLIC 기본으로 충분」 이라 GRANT 를 두지
 -- 않는다. 1단-나가 PUBLIC 에서 회수하면서 media_indexer 에 다시 주는 것을 잊으면 여기서 깨진다(K7 · H3).
--- connect 도 같은 전제다 — 계정의 CONNECT 는 PUBLIC 기본이라, PUBLIC 에서 회수하면 여기서 깨진다.
+-- connect · schema_usage 도 같은 전제다 — 계정의 CONNECT · public 스키마 USAGE 는 PUBLIC 기본이라, PUBLIC 에서
+-- 회수하면 여기서 깨진다.
 -- 10 은 남는 멤버십 · 직접 부여를 회수하지 않는다. 무엇이 왜 붙어 있는지 모르므로 여기서 실패로 드러내고
 -- 운영자가 판단한다.
 --
@@ -141,6 +144,11 @@ BEGIN
         SELECT 'schema_create_' || a,
                EXISTS (SELECT 1 FROM pg_roles WHERE rolname = a)
                AND has_schema_privilege(a, 'public', 'CREATE') = schema_create
+          FROM accounts
+        UNION ALL
+        SELECT 'schema_usage_' || a,
+               EXISTS (SELECT 1 FROM pg_roles WHERE rolname = a)
+               AND has_schema_privilege(a, 'public', 'USAGE')
           FROM accounts
         UNION ALL
         SELECT 'public_create_revoked', NOT has_schema_privilege('public', 'public', 'CREATE')

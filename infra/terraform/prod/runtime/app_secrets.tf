@@ -65,9 +65,10 @@ output "app_secret_arns" {
 
 # 응답기(ingest-auth)는 앱과 같은 INTERNAL_API_TOKEN 그릇을 쓴다(K1 — 새 그릇
 # 없음). 한계: Media 상자가 auth 의 /internal/** 전부에 통하는 열쇠를 가진다.
+# 꼴은 소비자 modules/media_host 의 변수 media_secret_arns(list(string))와 같다.
 output "media_secret_arns" {
-  description = "env 이름 → 비밀 전체 ARN — media 의 인스턴스 역할 읽기 정책 · 응답기 시작 스크립트."
-  value = {
-    INTERNAL_API_TOKEN = module.secret_shells.secret_arns[local.app_secret_shell_names["INTERNAL_API_TOKEN"]]
-  }
+  description = "비밀 전체 ARN 목록 — media 의 인스턴스 역할 읽기 정책. 지금은 INTERNAL_API_TOKEN 그릇 하나."
+  value = [
+    module.secret_shells.secret_arns[local.app_secret_shell_names["INTERNAL_API_TOKEN"]],
+  ]
 }

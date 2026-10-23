@@ -82,10 +82,8 @@ run "maps_services_to_secret_env_names" {
   }
 
   assert {
-    condition = toset(keys(output.media_secret_arns)) == toset([
-      "INTERNAL_API_TOKEN",
-    ])
-    error_message = "media_secret_arns 의 env 이름 집합이 INTERNAL_API_TOKEN 하나가 아니다."
+    condition     = length(output.media_secret_arns) == 1
+    error_message = "media_secret_arns 의 원소가 INTERNAL_API_TOKEN 그릇 하나가 아니다."
   }
 }
 
@@ -97,7 +95,7 @@ run "omits_secrets_owned_elsewhere" {
 
   assert {
     condition = alltrue([
-      for env_arns in concat(values(output.app_secret_arns), [output.media_secret_arns]) :
+      for env_arns in values(output.app_secret_arns) :
       length(setintersection(toset(keys(env_arns)), toset([
         "CLOUDFRONT_PRIVATE_KEY_PEM",
         "STREAM_KEY_RESOLVE_TOKEN",
@@ -141,9 +139,34 @@ run "points_each_env_name_at_its_shell" {
     error_message = "같은 env 이름이 서비스에 따라 다른 ARN 을 가리킨다."
   }
 
-  # 응답기는 앱과 같은 INTERNAL_API_TOKEN 그릇을 쓴다(K1 — 새 그릇 없음).
+  # 응답기는 앱과 같은 INTERNAL_API_TOKEN 그릇을 쓴다(K1 — 새 그릇 없음). 소비자
+  # media_host 의 변수가 list(string) 이라 목록과 같은지로 꼴도 함께 본다.
   assert {
-    condition     = output.media_secret_arns["INTERNAL_API_TOKEN"] == output.app_secret_arns["auth"]["INTERNAL_API_TOKEN"]
-    error_message = "media_secret_arns.INTERNAL_API_TOKEN 이 auth 의 INTERNAL_API_TOKEN ARN 과 다르다."
+    condition     = output.media_secret_arns == [output.app_secret_arns["auth"]["INTERNAL_API_TOKEN"]]
+    error_message = "media_secret_arns 가 auth 의 INTERNAL_API_TOKEN ARN 하나만 든 목록이 아니다."
+  }
+}
+
+# 소비자 modules/media_host 의 변수 media_secret_arns 검증과 같은 정규식이다.
+# 바꾸면 두 곳을 함께 고친다. mock ARN 은 임의 문자열이라 이 run 에서만 그릇에
+# ARN 꼴 값을 준다(계정 자리는 한 자리 — 계정 ID 숫자열 없음). 앞 run 이 만든
+# 그릇은 상태에 이미 있어 override 가 닿지 않으므로 상태를 따로 쓴다.
+run "media_secret_arns_pass_media_host_validation" {
+  command   = apply
+  state_key = "media_arn_shape"
+
+  override_resource {
+    target = module.secret_shells.aws_secretsmanager_secret.this
+    values = {
+      arn = "arn:aws:secretsmanager:ap-northeast-2:0:secret:pokeclip/prod/internal-api-token-AbCdEf"
+    }
+  }
+
+  assert {
+    condition = alltrue([
+      for arn in output.media_secret_arns :
+      can(regex("^arn:aws[a-z-]*:secretsmanager:[a-z0-9-]+:[0-9]+:secret:[A-Za-z0-9/_+=.@-]+$", arn))
+    ])
+    error_message = "media_secret_arns 의 원소가 media_host 의 Secrets Manager ARN 검증을 통과하지 못한다."
   }
 }

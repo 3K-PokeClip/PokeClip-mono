@@ -66,7 +66,7 @@ default_tags 가 붙는지는 미확인이고, 런북 「운영 확인」 에서
 | `rds_resource_id` | media — 인스턴스 역할 `rds-db:connect` 의 대상 |
 | `rewind_bucket_name` · `rewind_bucket_arn` · `rewind_bucket_regional_domain_name` | edge — `rewind-s3` 오리진 · media — 업로드 정책 · 런타임 2단 — 버킷 정책 |
 | `app_secret_arns`(서비스 → env 이름 → 전체 ARN) | platform — `ecs_service.secrets` · 실행 역할 읽기 정책. auth 일곱 · clip 둘(`JWT_SECRET` · `INTERNAL_API_TOKEN`) · chat-collector 둘(`INTERNAL_API_TOKEN` · `CHZZK_CLIENT_SECRET`) · chat-detector 하나(`INTERNAL_API_TOKEN`) |
-| `media_secret_arns` | media — 인스턴스 역할 읽기 정책 · 응답기 시작 스크립트. `INTERNAL_API_TOKEN` 하나(앱과 같은 그릇) |
+| `media_secret_arns`(비밀 전체 ARN 목록 — `list(string)`) | media — 인스턴스 역할 읽기 정책(media_host 변수 `media_secret_arns` 와 같은 꼴). 원소는 `INTERNAL_API_TOKEN` 그릇 하나(앱과 같은 그릇) |
 | `app_env`(서비스 → env 이름 → 값) | platform — `ecs_service.environment`. 네 서버 모두 `DB_HOST` · `DB_PORT` · `POSTGRES_DB`, auth 는 `STREAM_KEY_SECRET_REF_PREFIX`, clip · chat-collector 는 자기 큐의 `BROADCAST_QUEUE_URL`, clip 은 수신 스위치 `BROADCAST_INTAKE_ENABLED = "true"`(문자열 — 빠지면 큐를 읽지 않아 편지가 보관 기간 뒤 사라진다). `AUTH_BASE_URL` 은 platform 이 넣는다. chat-collector 의 스위치는 배치(POK-306)가 `AUTH_BASE_URL` · `INTERNAL_API_TOKEN` 과 함께 정한다 |
 | `broadcast_topic_arn` | media — 사이드카 역할의 `sns:Publish` 대상(신원 정책 — 주제 정책은 계정 루트만 주체로 둔다) |
 | `broadcast_queue_arns`(소비자 clip · chat → 큐 ARN) | chat-collector(POK-306)의 수신 정책 대상. clip 은 `app_task_resource_arns` 를 쓴다 |
@@ -147,6 +147,9 @@ CREATE 는 1단-가가 했습니다(POK-407 · kty 2026-10-24). 잊지 않도록
     써서 Media 상자가 auth `/internal/**` 전부에 통하는 열쇠를 가집니다. 전용
     토큰으로 옮길지는 3번과 다시 합의해야 합니다(auth
     `FORWARD_HEADERS_STRATEGY` 제약).
+1.  앱별 스키마 — 앱 사용자 넷에게 `public` CREATE 대신 자기 스키마를 주고
+    (3번 Flyway 의 스키마 설정과 함께) `public` CREATE 를 회수해, 한계 절의
+    이름 해석 가로채기를 닫습니다.
 
 ## 한계
 
@@ -168,6 +171,13 @@ CREATE 는 1단-가가 했습니다(POK-407 · kty 2026-10-24). 잊지 않도록
 *   관리형 마스터 비밀(`rds!db-*`)의 생성 · 태그 동작은 `runtime-1a` 묶음이
     그릇 경로(`pokeclip/prod/*`)로 대신 판정합니다. SCP 가 그 이름만 거부하면
     점검은 통과하고 apply 가 거부로 멈춥니다(런북 2).
+*   앱 사용자 넷이 `public` CREATE 를 가져, 같은 DB 의 media 계정 세션이 맨
+    이름으로 부르는 함수를 가로챌 수 있습니다(CVE-2018-1058 계열). 사이드카 ·
+    janitor SQL 은 스키마를 한정하지 않고 `search_path` 도 고정하지 않습니다 —
+    로컬 PG 17 에서 `public.pg_advisory_xact_lock(integer)` 를 만들면 컷오프
+    잠금(`media/internal/index/store.go` 의 `lockCutoffStreamSQL`)이 그 함수를
+    media 계정 신분으로 부릅니다(2026-10-24 실측). 막는 안은 1단-나 이월의
+    앱별 스키마입니다.
 
 ## See also
 

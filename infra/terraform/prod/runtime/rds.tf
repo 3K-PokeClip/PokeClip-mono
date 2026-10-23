@@ -1,7 +1,8 @@
 # POK-304 prod RDS PostgreSQL 17(설계 D1 · D2). 사이드카 · janitor 는 IAM DB
-# 인증으로, 앱 서버는 1단-나가 정하는 사용자로 접속한다. 이 파일은 RDS 와 그
-# 전용 SG 만 만들고, SG 규칙 · 접속 정책은 소비 루트가 만든다(CONTRACT-runtime.md
-# 「출력과 소유 경계」).
+# 인증으로 접속한다. 앱 서버 넷도 IAM DB 인증이 기본이고(대체 갈래는 비밀번호),
+# 사용자는 sql/10_roles.sql 이 만들며 출력 app_db_users 가 그 이름을 낸다
+# (POK-407). 이 파일은 RDS 와 그 전용 SG 만 만들고, SG 규칙 · 접속 정책은 소비
+# 루트가 만든다(CONTRACT-runtime.md 「출력과 소유 경계」).
 #
 # 판은 메이저만 고정한다(H4). provider 는 설정한 판이 실제 판의 점 경계
 # 접두이면("17" 과 "17.6") 차이로 보지 않는다 — internal/service/rds/verify.go

@@ -515,6 +515,15 @@ func TestProdSQLVerifyCatchesPrivilegeDrift(t *testing.T) {
 			},
 		},
 		{
+			// 계정의 public 스키마 USAGE 는 PUBLIC 기본이다 — 회수되면 표 권한이 있어도 이름을 풀지 못한다.
+			name:   "schema USAGE revoked from PUBLIC",
+			tamper: "REVOKE USAGE ON SCHEMA public FROM PUBLIC",
+			want: []string{
+				"schema_usage_app_auth", "schema_usage_app_chat_collector", "schema_usage_app_chat_detector",
+				"schema_usage_app_clip", "schema_usage_media_indexer", "schema_usage_media_janitor",
+			},
+		},
+		{
 			name:   "app cross grant beyond the list",
 			tamper: "GRANT UPDATE ON stream_segments TO app_clip",
 			want:   []string{"privilege:app_clip:stream_segments:UPDATE"},
