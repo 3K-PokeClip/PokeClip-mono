@@ -29,12 +29,16 @@ public class ExpiredBroadcastController {
     public ExpiredBroadcastsResponse expired(@RequestParam(required = false) String before,
                                              @RequestParam(required = false) String cursor) {
         ExpiredBroadcastService.ExpiredBroadcastPage page = service.list(before, cursor);
-        return new ExpiredBroadcastsResponse(page.rows().stream().map(Item::from).toList(), page.nextCursor());
+        return new ExpiredBroadcastsResponse(page.rows().stream().map(Item::from).toList(), page.nextCursor(),
+                page.hasMore());
     }
 
-    /** 끝이면 {@code nextCursor}는 null이다(칸은 늘 있다: 1번이 「칸 없음」과 「끝」을 가르지 않아도 되게). */
+    /**
+     * {@code nextCursor}는 이 장 마지막 줄의 자리라 1번이 저장해 두고 다음 폴링에 넘긴다(빈 장이면 받은 표시 그대로, 첫 장이
+     * 비었으면 null). {@code hasMore}가 참이면 지금 바로 그 표시로 이어 부른다. 칸은 늘 있다.
+     */
     @JsonInclude(JsonInclude.Include.ALWAYS)
-    public record ExpiredBroadcastsResponse(List<Item> broadcasts, String nextCursor) {
+    public record ExpiredBroadcastsResponse(List<Item> broadcasts, String nextCursor, boolean hasMore) {
     }
 
     /**

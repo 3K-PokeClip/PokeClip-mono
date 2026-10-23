@@ -17,10 +17,12 @@ import java.util.List;
  * <pre>
  *   구간 = [max(앞 방송 끝, 이 방송 자리 − 2분), 뒤 방송 자리 − 2분)
  *   앞 방송 없음 = 처음부터(null) · 앞 방송이 안 끝났으면(종료 편지를 놓친 줄) 이 방송 자리 − 2분부터
- *   뒤 방송 없음 = 끝 + 10분 · 끝이 시작보다 앞이면(겹친 방송) 빈 구간(아무것도 안 지움)
+ *   뒤 방송 없음 = 끝 + 10분(끝이 비었으면 자리 + 10분) · 끝이 시작보다 앞이면(겹친 방송) 빈 구간(아무것도 안 지움)
  * </pre>
  * 방송의 「자리」는 시작 시각, 없으면(자리표시) 끝 시각, 그것도 없으면 줄이 생긴 시각이다. 같은 자리는 줄 번호 순이다.
  * 2분은 조각이 시작 편지보다 먼저 생기는 여유이고, 10분은 끝 편지 뒤 남는 조각의 여유다(시각 기준점 POK-255와 같은 창).
+ * 끝이 빈 채 기한만 찬 줄(지금 코드로는 안 생기지만 손 보정 · 치우개가 기한만 채우면)은 자리 + 10분까지만 지운다: 끝을 몰라
+ * 「끝없이」를 낼 수는 없고, 적게 지우는 쪽이 안전하다(PR #348 claude).
  * 이렇게 자르면 조각 하나가 정확히 한 방송에만 속하고, 안 만료된 이웃 방송의 조각(자리 − 2분부터)은 어느 구간에도 안 든다.
  *
  * <p>시각은 조각 장부의 벽시계 칸({@code start_wall_utc})으로 쓰라고 계약에 적는다. 이 클래스는 구간만 계산하고 장부를 안 읽는다.
@@ -49,7 +51,7 @@ public class ExpiredBroadcastReader {
                    CASE WHEN prev.id IS NULL THEN NULL
                         WHEN prev.ended_at IS NULL THEN p.pos - INTERVAL '2 minutes'
                         ELSE GREATEST(prev.ended_at, p.pos - INTERVAL '2 minutes') END AS segments_from,
-                   CASE WHEN nxt.id IS NULL THEN p.ended_at + INTERVAL '10 minutes'
+                   CASE WHEN nxt.id IS NULL THEN COALESCE(p.ended_at, p.pos) + INTERVAL '10 minutes'
                         ELSE nxt.pos - INTERVAL '2 minutes' END AS segments_until
               FROM page p
               LEFT JOIN LATERAL (

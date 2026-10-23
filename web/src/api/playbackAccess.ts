@@ -93,6 +93,14 @@ export function ensurePlaybackAccess(
 }
 
 /**
+ * 보관 기간이 지나 서버가 410을 준 방송인가. 받아 둔 만료는 ensurePlaybackAccess가 null(묻지 않음)로 돌려줘 부른 쪽이 그것만으로는
+ * 만료를 모른다: 같은 탭에서 다시 연 편집기가 녹화를 묻지 않게 이것으로 먼저 본다(PR #348 codex)
+ */
+export function isPlaybackExpired(streamId: string): boolean {
+  return expired.has(streamId);
+}
+
+/**
  * 라이브 화면(라이브 · 끝난 방송 다시보기)의 출입증. 늘 답을 준다: 받아 둔 것이 쓸 만하면 그 답이고 요청은 없다. 라이브는 녹화 재생
  * 서버가 없어도 쿠키가 필요해 그 주소를 안 본다
  */

@@ -1,5 +1,6 @@
 package com.pokeclip.clip.broadcast.api;
 
+import com.pokeclip.clip.paging.CursorCodec;
 import com.pokeclip.clip.support.IntegrationTestSupport;
 import com.pokeclip.clip.support.TestIds;
 import com.pokeclip.clip.support.TestTokens;
@@ -85,6 +86,14 @@ class ExpiredBroadcastControllerTest extends IntegrationTestSupport {
                 .andExpect(status().isBadRequest()).andExpect(jsonPath("$.field").value("cursor"));
     }
 
+    /** 형식은 맞는데 기한이 시각 범위 밖인 표시는 DB까지 가면 500이다: 그 전에 400으로 접는다(PR #348 claude) */
+    @Test
+    void 기한이_시각_범위_밖인_표시는_400이다() throws Exception {
+        String 표시 = CursorCodec.encode(CursorCodec.Kind.EXPIRED, Long.MAX_VALUE, 1);
+        mvc.perform(get(창구 + "?before=" + 지금 + "&cursor=" + 표시).header("X-Internal-Token", INTERNAL))
+                .andExpect(status().isBadRequest()).andExpect(jsonPath("$.field").value("cursor"));
+    }
+
     // ── 무엇이 나오나 ───────────────────────────────────────────
 
     /** 기한이 비었거나(안 끝남) before와 같거나 뒤인 방송은 안 나온다. 「같으면 안 냄」이 경계다 */
@@ -98,7 +107,7 @@ class ExpiredBroadcastControllerTest extends IntegrationTestSupport {
 
         JsonNode body = 부른다(경계, null);
         assertThat(번호들(body)).containsExactly("S-past");
-        assertThat(body.get("nextCursor").isNull()).isTrue();
+        assertThat(body.get("hasMore").asBoolean()).isFalse();
     }
 
     @Test
@@ -294,16 +303,48 @@ class ExpiredBroadcastControllerTest extends IntegrationTestSupport {
         JsonNode 첫_장 = 부른다(지금, null);
         assertThat(첫_장.get("broadcasts")).hasSize(500);
         String 표시 = 첫_장.get("nextCursor").asString();
+        assertThat(첫_장.get("hasMore").asBoolean()).isTrue();
         JsonNode 둘째_장 = 부른다(지금, 표시);
         assertThat(둘째_장.get("broadcasts")).hasSize(1);
-        assertThat(둘째_장.get("nextCursor").isNull()).isTrue();
+        assertThat(둘째_장.get("hasMore").asBoolean()).isFalse();
 
         Set<String> 모두 = new HashSet<>(번호들(첫_장));
         모두.addAll(번호들(둘째_장));
         assertThat(모두).hasSize(501);
     }
 
-    /** 표시는 다음 장이 있을 때만 준다: 딱 상한만큼이면 null이다 */
+    /**
+     * 끝 장에도 마지막 줄의 표시를 준다: 1번이 저장해 10분 뒤 이어 부르면 새로 만료된 것만 받는다(PR #348 codex).
+     * 그때 새것이 없으면 빈 장과 받은 표시 그대로다(저장한 지점을 잃지 않는다)
+     */
+    @Test
+    void 끝_장에도_표시를_주고_이어_부르면_새로_만료된_것만_온다() throws Exception {
+        Instant 처음 = Instant.parse("2026-09-01T00:00:00Z");
+        방송("S-1", "k-1", T0, T0.plusSeconds(60), 처음.minusSeconds(60));
+        JsonNode 첫 = 부른다(처음, null);
+        assertThat(번호들(첫)).containsExactly("S-1");
+        assertThat(첫.get("hasMore").asBoolean()).isFalse();
+        String 저장 = 첫.get("nextCursor").asString();
+        assertThat(저장).isNotNull();
+
+        JsonNode 빈 = 부른다(처음.plusSeconds(600), 저장);
+        assertThat(빈.get("broadcasts")).isEmpty();
+        assertThat(빈.get("nextCursor").asString()).isEqualTo(저장);
+
+        방송("S-2", "k-2", T0, T0.plusSeconds(60), 처음.plusSeconds(300));
+        JsonNode 다음 = 부른다(처음.plusSeconds(600), 저장);
+        assertThat(번호들(다음)).containsExactly("S-2");
+    }
+
+    /** 끝이 빈 채 기한만 찬 줄(손 보정 등)은 「끝없이」가 아니라 자리 + 10분까지다(PR #348 claude) */
+    @Test
+    void 끝이_빈_줄은_자리에서_10분까지만_지운다() throws Exception {
+        방송("S-noend", "k-1", T0, null, 지금.minusSeconds(60));
+        JsonNode 줄 = 부른다(지금, null).get("broadcasts").get(0);
+        assertThat(줄.get("segmentsUntil").asString()).isEqualTo(T0.plus(Duration.ofMinutes(10)).toString());
+    }
+
+    /** 딱 상한만큼이면 지금 더 없다(hasMore 거짓) */
     @Test
     void 딱_상한만큼이면_다음_표시가_없다() throws Exception {
         jdbc.update("""
@@ -313,7 +354,8 @@ class ExpiredBroadcastControllerTest extends IntegrationTestSupport {
                 OffsetDateTime.ofInstant(Instant.parse("2026-08-01T00:00:00Z"), ZoneOffset.UTC));
         JsonNode body = 부른다(지금, null);
         assertThat(body.get("broadcasts")).hasSize(500);
-        assertThat(body.get("nextCursor").isNull()).isTrue();
+        assertThat(body.get("hasMore").asBoolean()).isFalse();
+        assertThat(부른다(지금, body.get("nextCursor").asString()).get("broadcasts")).isEmpty();
     }
 
     // ── 도우미 ────────────────────────────────────────────────

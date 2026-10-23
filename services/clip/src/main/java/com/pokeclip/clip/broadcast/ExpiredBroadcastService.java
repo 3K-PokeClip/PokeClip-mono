@@ -1,6 +1,7 @@
 package com.pokeclip.clip.broadcast;
 
 import com.pokeclip.clip.paging.CursorCodec;
+import com.pokeclip.clip.paging.InvalidCursorException;
 import com.pokeclip.clip.paging.InvalidListParamException;
 import org.springframework.stereotype.Service;
 
@@ -24,28 +25,43 @@ public class ExpiredBroadcastService {
     /** 한 장 상한. 방송 중 목록 창구(POK-218)와 같은 크기다. 값의 정본은 커밋되는 services/README.md */
     static final int MAX_ROWS = 500;
 
+    /** 표시의 기한 범위: 1년 1월 1일 ~ 9999년 끝(epoch 마이크로초). 밖이면 형식 오류와 같은 400이다 */
+    private static final long MIN_MICROS = -62_135_596_800_000_000L;
+    private static final long MAX_MICROS = 253_402_300_799_999_999L;
+
     private final ExpiredBroadcastReader reader;
 
     ExpiredBroadcastService(ExpiredBroadcastReader reader) {
         this.reader = reader;
     }
 
-    /** @throws InvalidListParamException before가 없거나 시각(ISO-8601)이 아니다 · {@code InvalidCursorException} 표시가 틀렸다 */
+    /**
+     * 표시는 장이 비지 않았으면 늘 그 장 마지막 줄의 자리다(다음 장이 없어도). 1번이 처리한 지점을 저장해 10분 뒤 그
+     * 표시로 이어 부르면 새로 만료된 것만 받는다(PR #348 codex: 끝 장에서 null을 주면 저장할 지점이 없어 매번 처음부터
+     * 다시 훑었다). 빈 장이면 받은 표시를 그대로 돌려준다. 지금 더 있는지는 {@code hasMore}가 따로 말한다.
+     *
+     * @throws InvalidListParamException before가 없거나 시각(ISO-8601)이 아니다 · {@code InvalidCursorException} 표시가 틀렸다
+     */
     public ExpiredBroadcastPage list(String before, String cursor) {
         Instant at = parseBefore(before);
         List<Long> after = CursorCodec.decodeOrFirstPage(CursorCodec.Kind.EXPIRED, cursor);
         long afterMicros = after == null ? Long.MIN_VALUE : after.get(0);
         long afterId = after == null ? 0 : after.get(1);
+        if (after != null && (afterMicros < MIN_MICROS || afterMicros > MAX_MICROS)) {
+            // 형식은 맞는데 DB 시각 범위 밖이면 질의가 500으로 터진다(PR #348 claude)
+            throw new InvalidCursorException("표시의 기한이 시각 범위 밖이다");
+        }
 
         // 하나 더 읽어 다음 장이 있는지 본다(개수를 따로 세면 질의가 하나 더 돈다)
         List<ExpiredBroadcastRow> rows = reader.read(at, afterMicros, afterId, MAX_ROWS + 1);
-        if (rows.size() <= MAX_ROWS) {
-            return new ExpiredBroadcastPage(rows, null);
+        boolean hasMore = rows.size() > MAX_ROWS;
+        List<ExpiredBroadcastRow> page = hasMore ? rows.subList(0, MAX_ROWS) : rows;
+        if (page.isEmpty()) {
+            return new ExpiredBroadcastPage(page, cursor, false);
         }
-        List<ExpiredBroadcastRow> page = rows.subList(0, MAX_ROWS);
         ExpiredBroadcastRow last = page.get(page.size() - 1);
         return new ExpiredBroadcastPage(page,
-                CursorCodec.encode(CursorCodec.Kind.EXPIRED, last.expiresMicros(), last.id()));
+                CursorCodec.encode(CursorCodec.Kind.EXPIRED, last.expiresMicros(), last.id()), hasMore);
     }
 
     private static Instant parseBefore(String before) {
@@ -59,7 +75,7 @@ public class ExpiredBroadcastService {
         }
     }
 
-    /** 한 장 + 다음 장 표시(없으면 null). */
-    public record ExpiredBroadcastPage(List<ExpiredBroadcastRow> rows, String nextCursor) {
+    /** 한 장 + 이어 부를 표시(첫 장이 비었으면 null) + 지금 더 있는가. */
+    public record ExpiredBroadcastPage(List<ExpiredBroadcastRow> rows, String nextCursor, boolean hasMore) {
     }
 }

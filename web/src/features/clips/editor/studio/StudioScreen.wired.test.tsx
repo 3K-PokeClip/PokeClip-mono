@@ -360,6 +360,21 @@ describe('StudioScreen — 영상 경로의 키(POK-233)', () => {
     expect(spansAsked).toEqual([]);
   });
 
+  it('같은 탭에서 다시 열어도 받아 둔 만료로 알리고 녹화를 찾지 않는다(PR #348 codex)', async () => {
+    playbackOn.value = true;
+    server.playbackAccess = 'expired';
+    nav.search = `?stream=${STREAM_ID}&card=5`;
+    const first = renderWithProviders(<StudioScreen />);
+    await screen.findByText(/보관 기간\(60일\)이 지나 이 방송의 영상을 볼 수 없어요/);
+    first.unmount();
+
+    renderWithProviders(<StudioScreen />);
+    expect(
+      await screen.findByText(/보관 기간\(60일\)이 지나 이 방송의 영상을 볼 수 없어요/),
+    ).toBeInTheDocument();
+    expect(spansAsked).toEqual([]);
+  });
+
   it('출입증을 못 받으면 녹화 없음으로 열지 않고 다시 열라고 알린다: 쿠키 없는 조회는 403이 「녹화 없음」으로 접힌다(PR #320 codex)', async () => {
     playbackOn.value = true;
     server.playbackAccess = 'fail';
