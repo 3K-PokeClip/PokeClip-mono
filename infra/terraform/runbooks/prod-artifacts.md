@@ -64,7 +64,7 @@ aws ecr get-login-password --region ap-northeast-2 \
 | `media-mediamtx` | `media/Dockerfile.mtxhook`(1번 빌드 · 컨텍스트 `media/`) | 아래 「MediaMTX 확인」 |
 | `media-sidecar` | `media/Dockerfile`(1번 빌드 · 컨텍스트 `media/`) | I1-1(IAM 인증 · `POSTGRES_AUTH` 전환 · CA 번들) 머지본 |
 | `media-ingest-auth` | `media/Dockerfile.ingest-auth`(1번 빌드 · 컨텍스트 `media/`) | 응답기 코드가 준비됐을 때만 |
-| `render` | `workers/render/Dockerfile`(담당 미정 · 컨텍스트 `workers/render/`) | 담당 확정 · 이 이미지를 돌릴 ECS 태스크 정의가 생겼을 때만 |
+| `render` | `workers/render/Dockerfile`(3번 빌드 · 컨텍스트 `workers/render/`) | 3번의 준비 · 이 이미지를 돌릴 ECS 태스크 정의가 생겼을 때만 |
 | `upload` | `workers/upload/Dockerfile`(3번 빌드 · 컨텍스트 `workers/upload/`) | 3번의 준비 · 이 이미지를 돌릴 ECS 태스크 정의가 생겼을 때만 |
 | `chat-collector` | `services/chat-collector/Dockerfile`(3번 빌드 · 컨텍스트 `services/`) | 3번의 준비 · 이 이미지를 돌릴 ECS 태스크 정의가 생겼을 때만 |
 | `chat-detector` | `services/chat-detector/Dockerfile`(3번 빌드 · 컨텍스트 `services/`) | 3번의 준비 · 이 이미지를 돌릴 ECS 태스크 정의가 생겼을 때만 |
