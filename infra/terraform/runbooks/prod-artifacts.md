@@ -80,9 +80,11 @@ aws ecr get-login-password --region ap-northeast-2 \
 *   **태그 = 빌드한 커밋 SHA 의 짧은 꼴**입니다. 저장소가 태그 불변이라 같은
     태그를 다시 푸시하면 실패하는 것이 정상입니다 — 다른 내용을 같은 태그로
     덮지 않습니다.
-*   **아키텍처**: 빌드 대상 플랫폼을 실행할 곳(ECS 태스크 · Media 상자)의
-    아키텍처와 맞춥니다(`docker build --platform`). kty 로컬(Apple
-    Silicon)의 기본은 arm64 입니다.
+*   **아키텍처**: prod 는 `linux/arm64` 하나입니다(결정 146 — ECS 태스크 ·
+    Media 상자 모두 Graviton). `--platform linux/arm64` 로 빌드하고 arm64 한
+    변형만 올립니다 — 멀티 아키텍처 인덱스는 쓰지 않습니다. kty 로컬(Apple
+    Silicon)에서 네이티브로 빌드되고, 실행 이미지는 푸시 전에 로컬에서 돌려
+    기동을 확인합니다.
 
 빌드한 이미지를 올리는 꼴입니다(`<키>` · `<태그>` 는 표의 값).
 
@@ -92,13 +94,12 @@ docker push "${registry_host}/pokeclip-prod/<키>:<태그>"
 ```
 
 nginx 는 빌드 대신 핀 다이제스트로 받아 다시 태그합니다. 받을 때 Media 상자의
-플랫폼을 꼭 지정합니다 — 핀이 여러 아키텍처를 묶은 인덱스 다이제스트면 한
-변형만 로컬에 받아지고(지정하지 않으면 호스트 것), 다시 태그해 푸시하면 그
-변형 하나만 올라갑니다.
+플랫폼을 꼭 지정합니다 — 핀은 여러 아키텍처를 묶은 인덱스 다이제스트라 지정한
+변형 하나만 로컬에 받아지고(지정하지 않으면 호스트 것), 다시 태그해 푸시하면
+그 변형 하나만 올라갑니다. arm64 한 변형만 올리는 것이 정책입니다(결정 146).
 
-*   `<Media 상자 플랫폼>` 은 `linux/amd64` 또는 `linux/arm64` 입니다. 설계 ·
-    계획에 아직 정해져 있지 않으므로 O7c 전에 `prod/media` 의 인스턴스
-    유형으로 확인해 적습니다.
+*   `<Media 상자 플랫폼>` 은 `linux/arm64` 입니다(결정 146 — `prod/media` 의
+    Graviton 유형).
 *   같은 핀의 다른 변형이 이미 로컬에 있으면 pull 이 「cannot overwrite
     digest」 로 실패하고 옛 변형이 남습니다. 아래 확인이 그것을 잡습니다 —
     다르면 푸시하지 않고, 그 로컬 이미지를 지운 뒤 다시 받습니다.
@@ -135,6 +136,58 @@ cid="$(docker create <로컬 이미지>)"
 docker export "${cid}" | tar -t | grep -x 'hooks-bin/mtxhookwrite'
 docker rm "${cid}"
 ```
+
+### 설치 묶음 · 루프백 송출기
+
+M9 에서 `prod/registry` 에 더한 저장소 둘입니다. 둘 다 `prod/media` apply
+(O7e)의 입력이라 O7e 전에 올립니다. 먼저 `prod/registry` 재적용(저장소 둘
+생성)이 끝나야 합니다([prod/registry](../prod/registry/README.md) 「적용」).
+위 「언제」 · 아래 「기록」 의 6종에 이 둘을 더해 셉니다.
+
+| 저장소 키 | 원천 | 선행 |
+|---|---|---|
+| `media-host-bundle` | `infra/media-host/bundle/Dockerfile`(빌드 · 컨텍스트 `infra/media-host`) | 그 Dockerfile 이 머지된 커밋 |
+| `media-loopback-sender` | `linuxserver/ffmpeg` 공식 이미지 — **빌드하지 않습니다** | `infra/media-host/images.json` 의 `loopback_sender` 핀 |
+
+**설치 묶음**은 실행하지 않는 이미지(`FROM scratch`)입니다. 상자의 첫 부팅
+설치가 `docker create` · `docker cp` 로 스크립트 · MediaMTX 템플릿을 꺼내
+설치합니다. 묶음 내용이 그 커밋의 저장소와 같아야 하므로 `infra/media-host`
+에 고친 파일이 없는 체크아웃에서 빌드합니다. 증명(attestation) 매니페스트가
+붙으면 인덱스가 되므로 끕니다.
+
+```shell
+git status --porcelain -- infra/media-host   # 빈 출력이어야 함
+docker buildx build --platform linux/arm64 --provenance=false --sbom=false \
+  --load -t pokeclip-media-host-bundle:<태그> \
+  -f infra/media-host/bundle/Dockerfile infra/media-host
+docker image inspect --format '{{.Os}}/{{.Architecture}}' \
+  pokeclip-media-host-bundle:<태그>   # linux/arm64
+cid="$(docker create pokeclip-media-host-bundle:<태그> /bundle-not-run)"
+docker export "${cid}" | tar -t | grep -c '^bundle/.*[^/]$'   # 9
+docker rm "${cid}"
+docker tag pokeclip-media-host-bundle:<태그> \
+  "${registry_host}/pokeclip-prod/media-host-bundle:<태그>"
+docker push "${registry_host}/pokeclip-prod/media-host-bundle:<태그>"
+```
+
+*   파일 9개는 `bin/` 의 스크립트 여섯 · `bin/lib/` 둘 · `mediamtx.yml.tmpl`
+    입니다(상자 부트스트랩의 필수 목록 — `modules/media_host`
+    `templates/bootstrap.sh.tftpl`). 수가 다르면 푸시하지 않습니다.
+
+**루프백 송출기**는 nginx 와 같은 꼴로 핀을 받아 다시 태그합니다.
+
+```shell
+docker pull --platform linux/arm64 linuxserver/ffmpeg@<images.json 의 loopback_sender 핀>
+docker image inspect --format '{{.Os}}/{{.Architecture}}' \
+  linuxserver/ffmpeg@<images.json 의 loopback_sender 핀>   # linux/arm64
+docker tag linuxserver/ffmpeg@<images.json 의 loopback_sender 핀> \
+  "${registry_host}/pokeclip-prod/media-loopback-sender:<태그>"
+docker push --platform linux/arm64 \
+  "${registry_host}/pokeclip-prod/media-loopback-sender:<태그>"
+```
+
+푸시한 두 다이제스트는 `prod/media` 의 tfvars `image_digests.bundle` ·
+`image_digests.loopback_sender` 에 넣습니다.
 
 ## 기록
 
