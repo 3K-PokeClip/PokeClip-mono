@@ -85,10 +85,14 @@ public abstract class WithdrawalTestSupport extends IntegrationTestSupport {
             jdbc.update("DELETE FROM secrets WHERE ref IN "
                     + "(SELECT access_token_ref FROM youtube_channel_links WHERE user_id = ? "
                     + "UNION SELECT refresh_token_ref FROM youtube_channel_links WHERE user_id = ?)", id, id);
+            jdbc.update("DELETE FROM secrets WHERE ref IN "
+                    + "(SELECT access_token_ref FROM soop_channel_links WHERE user_id = ? "
+                    + "UNION SELECT refresh_token_ref FROM soop_channel_links WHERE user_id = ?)", id, id);
             jdbc.update("DELETE FROM pairing_codes WHERE user_id = ?", id);
             jdbc.update("DELETE FROM stream_keys WHERE user_id = ?", id);
             jdbc.update("DELETE FROM chzzk_channel_links WHERE user_id = ?", id);
             jdbc.update("DELETE FROM youtube_channel_links WHERE user_id = ?", id);
+            jdbc.update("DELETE FROM soop_channel_links WHERE user_id = ?", id);
             // 🔴 위임을 초대보다 먼저 지운다 — editor_delegations.invitation_id가 초대를 가리킨다.
             // 그리고 둘 다 회원을 두 칸(streamer_id·editor_id / streamer_id·invitee_id)으로
             // 가리키므로 한 칸만 지우면 상대 쪽 회원의 정리가 외래키에 막힌다.

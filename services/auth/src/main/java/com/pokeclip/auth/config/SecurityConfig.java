@@ -14,7 +14,7 @@ import org.springframework.security.oauth2.server.resource.web.authentication.Be
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.HttpStatusEntryPoint;
 
-// 웹 앱일 때만 있다. 이행 실행기(web-application-type: none)는 HttpSecurity 빈이 없어 이것이 있으면 못 뜬다(POK-272)
+// 웹 앱일 때만 있다. 웹이 없는 컨텍스트에는 HttpSecurity 빈이 없어 이것이 있으면 못 뜬다(POK-272 이행 실행기 때 달았다)
 @Configuration
 @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
 public class SecurityConfig {

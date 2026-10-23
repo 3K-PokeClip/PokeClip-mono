@@ -56,7 +56,7 @@
 | `(stream_id, local_path)` UNIQUE | 재기동 후 같은 파일이 두 번 들어가는 것을 막는 최후 방어선 | **해소** — DDL 소유가 1번으로 위임되며 정본에 포함 확정 (U12 종결) |
 | UNIQUE 인덱스 이름 | `stream_segments_local_path_uq` — 이름으로 "정상 멱등"과 "번호 충돌"을 가르므로 이름 자체가 계약 | **정본 사양** — 변경 시 store.go 분류 로직 동시 수정 필요 |
 | 경로 이력 메모리 | 스트림의 기록된 경로 전부를 메모리에 올린다. 창 제한이 없어 장기 실행 시 계속 자란다 | 이월 |
-| DB 권한 | 사이드카가 `POSTGRES_USER`를 그대로 쓴다. 이 표만 다루는 전용 롤이 바람직하다 | 이월 |
+| DB 권한 | 사이드카가 `POSTGRES_USER`를 그대로 쓴다. 이 표만 다루는 전용 롤이 바람직하다 | **해소** — POK-311. 아래 "사이드카 DB 계정 media_indexer 권한" 절(GRANT 목록 · 실 PG 역할 시험) |
 | 파일명 파서 fuzz | 화이트리스트와 정규식에 대한 fuzz 테스트가 없다 | 이월 |
 | 끝내 안정되지 않는 파일 | 되돌리기가 `DeferMaxCycles`(기본 3) 사이클을 넘으면 그 파일을 붙잡지 않고 흘려보낸다. 스트림 전체가 그 파일 하나 때문에 멈추는 것을 막기 위해서다. 그 결과 해당 4초는 `late_segment_skipped` ERROR와 함께 인덱스에서 빠지며, **자동 복구는 없다** — 파일은 `:ro`로 남아 있으니 로그의 경로를 보고 수동 복구한다 | 이월(L5) |
 | 중첩 `%path` | `live/kr/demo` 같은 슬래시 포함 스트림 이름은 거부한다. 필요해지면 `internal/recording/name.go`의 화이트리스트만 고치면 된다 | U9 확정 시 |
@@ -149,16 +149,18 @@ MediaMTX가 이벤트마다 컨테이너 안의 작은 명령을 실행하고(`m
 | 이름 | 의미 |
 |---|---|
 | `POSTGRES_USER` | DB 사용자 |
-| `POSTGRES_PASSWORD` | DB 비밀번호. 빈 문자열도 누락으로 취급한다 |
+| `POSTGRES_PASSWORD` | DB 비밀번호 — **password 모드에서만 필수**(빈 문자열도 누락으로 취급한다). `POSTGRES_AUTH=iam` 이면 **비워야 한다**(있으면 기동 거부) |
 | `POSTGRES_DB` | DB 이름 |
 
 **선택 — 기본값이 있다.**
 
 | 이름 | 기본값 | 의미 |
 |---|---|---|
-| `POSTGRES_HOST` | `postgres` | DB 호스트 |
+| `POSTGRES_HOST` | `postgres` | DB 호스트. **iam 이면 TCP 호스트 하나여야 한다** — `/`(유닉스 소켓) · 쉼표(여러 호스트) · 공백 · 대괄호 없는 IPv6 는 기동 거부 |
 | `POSTGRES_PORT` | `5432` | DB 포트 |
-| `POSTGRES_SSLMODE` | `prefer` | DB 접속 TLS 모드. `prefer`는 가능하면 TLS, 안 되면 평문. 네트워크를 건너는 배포에서는 `require` 이상으로 올린다 |
+| `POSTGRES_AUTH` | (빈값 = `password`) | DB 로그인 방식. `password`(빈 값) = `POSTGRES_PASSWORD` 로 로그인 — 로컬 compose 의 방식. `iam` = 연결마다 RDS IAM 인증 토큰(15분 유효)을 새로 만들어 로그인한다(자격 증명 = AWS 기본 사슬 · 인스턴스 역할). 그 밖 값(대소문자가 다른 `IAM` 포함)은 기동 거부 |
+| `POSTGRES_SSLMODE` | `prefer` (iam 은 `verify-full`) | DB 접속 TLS 모드. `prefer`는 가능하면 TLS, 안 되면 평문. 네트워크를 건너는 배포에서는 `verify-full` + `POSTGRES_SSLROOTCERT` 로 올린다(CA 없는 `require` 는 암호화만 하고 서버를 확인하지 않는다). **iam 은 `verify-full` 만 받는다** — 그 밖 값은 기동 거부 |
+| `POSTGRES_SSLROOTCERT` | (빈값 = 지정 없음) | 서버 인증서를 검증할 CA 번들의 **절대 경로**. 기동 때 일반 파일 · PEM 인증서 1개 이상을 확인한다. **iam 이면 필수.** password 모드에서도 이 값을 주면 `POSTGRES_SSLMODE` 는 `verify-ca` · `verify-full` 만 받는다 — 그 밖 값은 검증 강도를 값으로 밝히지 않으므로 기동 거부. **`verify-ca` 는 체인만 검증하고 호스트 이름은 보지 않는다 — 운영은 `verify-full`.** `PGSSLROOTCERT` 는 쓰지 않는다 — 이 값이 빈 채 `PGSSLROOTCERT` 만 있으면 기동 거부 |
 | `SEGMENT_ROOT` | `/recordings` | 감시할 녹화 루트. 컨테이너에 읽기 전용으로 붙는다 |
 | `ENSURE_SCHEMA` | `false` | true면 기동 시 정본 DDL(1번 소유)로 `stream_segments`를 만든다. 로컬 compose 전용 — RDS/마이그레이션 도구 도입 시 끈다 |
 | `TZ` | (미설정) | 컨테이너 시간대. **UTC로 고정한다.** 저장 값은 코드가 UTC로 강제하지만 로그 시각도 UTC로 맞춘다 |
@@ -280,7 +282,7 @@ M4 ⓒ 이관 기록」의 알려진 한계 「관측 끔」). 인덱싱·업로
 | 이름 | 기본값 | 의미 |
 |---|---|---|
 | `S3_BUCKET` | (빈값 = 비활성) | 업로드 대상 버킷. **버킷 판정이 다른 S3 값 검증보다 앞이라, 비워 두면 나머지 S3 설정이 틀려도 인덱싱은 산다** |
-| `AWS_REGION` | `ap-northeast-2` | 버킷 리전 |
+| `AWS_REGION` | `ap-northeast-2` | 버킷 리전. **DB IAM 토큰(`POSTGRES_AUTH=iam`)을 서명하는 리전도 같은 값이다** — 이 값은 버킷이 비어 있어도 그 용도로 읽힌다 |
 | `S3_ENDPOINT` | (미설정 = AWS 기본) | 호환 스토리지(MinIO 등)용 엔드포인트 URL. scheme+호스트 필수. https 여야 한다 — http 는 SDK 서명 단계에서 PUT 이 거부된다(2026-09-24 실측) |
 | `S3_FORCE_PATH_STYLE` | `false` | 호환 스토리지용 path-style 주소 지정 |
 | `SEGMENT_UPLOAD_RETRY_MAX` | `4` | 조각 1개당 PUT 시도 상한(지수 백오프). 소진하면 `failed` 기록 후 스위퍼가 회수 |
@@ -295,9 +297,163 @@ M4 ⓒ 이관 기록」의 알려진 한계 「관측 끔」). 인덱싱·업로
 `AWS_PROFILE`은 `~/.aws` 마운트 폴백을 켤 때만 함께 넣는다 — 마운트 없이 넣으면
 SDK가 존재하지 않는 프로필을 요구해 기동이 죽는다(2026-08-04 실측).
 
-위 표가 `internal/config/config.go`가 읽는 전부다(`TZ` 제외 44개). 잘못된 값(숫자 자리에 문자,
+위 표가 `internal/config/config.go`가 읽는 전부다(`TZ` 제외 46개 — `POSTGRES_*` · DB 몫 `AWS_REGION` 은
+`internal/pgconf` 가 janitor 와 같은 규칙으로 읽는다). 잘못된 값(숫자 자리에 문자,
 음수, 파싱 불가한 기간)은 조용히 기본값으로 넘어가지 않고 기동에 실패한다.
 `SEGMENT_SUSPECT_BELOW_MS`가 `SEGMENT_EXPECTED_DURATION_MS`보다 크면 기동 단계에서 거부한다.
+
+### DB 연결 성공 줄 `db_connected` (POK-311)
+
+사이드카(인덱서 풀)와 janitor 는 기동 때 DB 연결 하나를 잡아 Ping 하고, 성공하면
+INFO `db_connected` 한 줄을 남긴다. 실패하면 이 줄 없이 기동이 실패한다(사이드카 =
+종료 코드 1 · janitor = `janitor_failed`). 배포 확인은 이 줄로 한다 — 예를 들어 RDS IAM
+배포는 `"msg":"db_connected"` 이면서 `"auth":"iam"` · `"tls":true` 인 줄이 있어야 한다.
+사이드카의 발행자 풀은 같은 설정으로 따로 열리지만 이 줄을 내지 않는다(인덱서 풀 한 줄로
+판정한다).
+
+| 필드 | 뜻 |
+|---|---|
+| `pool` | `indexer`(사이드카) · `janitor` |
+| `auth` | `password` · `iam` |
+| `sslmode` | 설정한 TLS 모드 |
+| `tls` | **실제 연결이 TLS 인가** — `prefer` 는 평문으로 내려갈 수 있어 설정값만으로는 모른다 |
+| `user` · `host` · `port` · `db` | 접속 대상 |
+
+비밀번호 · IAM 토큰 · DSN · CA 파일 내용은 싣지 않는다.
+
+한계: 사이드카 쪽 시험은 `openIndexerPool` 단위 시험(실 PG 에서 줄 한 줄 ·
+닿지 않는 DB 에서 줄 0)과, `run()` 이 비밀번호 파일을 읽은 뒤 이 단계를
+부르는지 보는 소스 순서 시험뿐이다. `run()` 을 끝까지 돌려 줄을 확인하는
+시험은 없다 — 배포 확인과 로컬 compose 실측이 그 몫이다.
+
+### DB 접속 운영 전제 (POK-311)
+
+로컬 compose 밖(운영)에서 사이드카 · janitor 가 DB 에 붙을 때 지킬 것이다.
+코드가 기동 때 거부하지 못하는 조건이라 배포 정의 · 인스턴스 설정이 맡는다.
+
+- **운영은 반드시 `POSTGRES_AUTH=iam` + `POSTGRES_SSLMODE=verify-full`.**
+  password 모드의 기본 `prefer` 는 서버가 TLS 를 받지 않으면 평문으로
+  내려간다. 배포 뒤 `db_connected` 줄의 `tls` 가 `true` 인지 본다.
+  IAM 토큰의 공식 유효 시간은 15분이지만 RDS 는 그 뒤에도 얼마간 받는다
+  (2026-10-22 실험 RDS 서울 1대 · 1회 실측: 서명 뒤 19분 30초 수용 · 20분 30초
+  거부 — 보장 값이 아니고 더 길 수 있다). 토큰이 새면 그동안 쓸 수 있으므로
+  중간자가 토큰을 못 보게 `verify-full` 이 필요하다.
+- **정적 키 환경 변수는 0개.** AWS SDK 의 자격 증명 사슬(credential chain —
+  SDK 가 자격 증명을 찾는 차례)은 환경 변수의 정적 키를 맨 앞에, 인스턴스
+  역할(IMDS — EC2 메타데이터 서비스)을 맨 뒤에 둔다. 컨테이너에
+  `AWS_ACCESS_KEY_ID` · `AWS_SECRET_ACCESS_KEY` · `AWS_SESSION_TOKEN` 이 있으면
+  인스턴스 역할 대신 그 키로 토큰을 서명한다. 공유 자격 증명 파일
+  (`~/.aws/credentials`)의 정적 키도 인스턴스 역할보다 앞서므로, 운영
+  컨테이너에는 `~/.aws` 를 마운트하지 않는다(로컬 실험용 마운트를 운영 정의에
+  옮기지 않는다).
+- **`AWS_EC2_METADATA_V1_DISABLED=true`** 를 준다 — 토큰 없는 옛 메타데이터
+  요청(IMDSv1)으로 내려가는 길을 막는다.
+- **`credential_process`(외부 명령에서 자격 증명을 받는 SDK 설정)를 쓴다면
+  그 명령은 stderr 에 비밀을 쓰지 않아야 한다.** SDK 는 그 명령의 stderr 를
+  컨테이너 stderr 에 그대로 잇는다. pgconf 의 오류 정제(원인 오류의 타입
+  이름만 싣기)는 이 출력에 닿지 않는다.
+- **`rds-db:connect` 는 DB 사용자별 ARN 으로 준다** —
+  `arn:aws:rds-db:<리전>:<계정>:dbuser:<리소스 ID>/media_indexer` 처럼 사용자
+  이름까지 적는다. `dbuser:<리소스 ID>/*` 면 인스턴스 역할이 그 DB 의 어느
+  `rds_iam` 사용자로도 로그인한다.
+- **기동 상한은 SDK 설정 파일 읽기를 덮지 못한다.** 풀 설정 조립과 연결
+  확인에는 단계마다 20초 상한이 서지만, AWS 설정을 적재하며 파일을 읽는
+  동작은 취소를 따르지 않는다. `AWS_CONFIG_FILE` ·
+  `AWS_SHARED_CREDENTIALS_FILE` 이 FIFO 나 멈춘 네트워크 파일 시스템을
+  가리키면 기동이 상한 뒤에도 멈춰 있다. 운영에서는 이 변수를 두지 않거나
+  일반 파일을 가리킨다.
+
+## 사이드카 DB 계정 media_indexer 권한
+
+운영 사이드카(segment-indexer · 업로더 · 세션 결정 · 되감기 발행자)는 DB 에
+`media_indexer` 로 붙는다. 이 계정에는 아래 권한만 준다(POK-311). 단위는
+표다 — 열 단위로 주면 3번이 승인한 열이 추가될 때마다 운영 GRANT 가 깨진다.
+
+```sql
+GRANT SELECT, INSERT, UPDATE ON stream_segments TO media_indexer;
+GRANT SELECT, INSERT, UPDATE ON stream_sessions TO media_indexer;
+GRANT SELECT, INSERT ON stream_cutoffs TO media_indexer;
+GRANT SELECT, INSERT, UPDATE ON stream_published_gaps TO media_indexer;
+```
+
+- **DELETE · TRUNCATE 없음.** 사이드카는 행을 지우지 않는다.
+  `stream_cutoffs` 에는 UPDATE 도 없다 — 컷오프는 주조 때 한 번 넣고
+  (`ON CONFLICT DO NOTHING`) 고치지 않는다.
+- **DDL 없음 — `ENSURE_SCHEMA=false`.** 스키마(`internal/index/ddl.go`)는
+  별도 역할이 적용한다. 이 계정으로 `ENSURE_SCHEMA=true` 를 켜면 기동 때
+  42501 로 막힌다.
+- **그 밖에 이 계정에 따로 주는 권한은 없다 — 대신 PUBLIC(모든 계정)
+  기본 권한에 기댄다.** 시퀀스는 없고(DDL 에 `SERIAL` · `IDENTITY` 0),
+  트리거 함수 · advisory 잠금 · `set_config` 는 PUBLIC 기본 권한으로 돈다.
+  DB `CONNECT` · `public` 스키마 `USAGE` 도 PUBLIC 기본값에 기댄다 — 이것을
+  거둔 DB 라면 따로 준다. 반대로 PUBLIC 기본값이 이 목록보다 넓은 DB 가
+  있으므로 아래 사전 확인을 한다.
+- **`FOR UPDATE` 는 `stream_sessions` 에 있다**(init 업로드 확정). 행 잠금에도
+  UPDATE 권한이 필요하다. `stream_segments` 의 `FOR UPDATE NOWAIT` 는
+  janitor(`media_janitor`) 몫이다.
+- **`stream_published_gaps` 는 GAP 원장(되감기 목록에 끊김 표시로 발행한
+  조각의 장부)이다.** 되감기 발행자가 발행 전에 INSERT 로 `recorded` 를
+  기록하고, P4(목록 PUT 확정) 단계가 UPDATE 로 `put_confirmed` 를 찍는다.
+
+계정(`CREATE ROLE media_indexer LOGIN …`, IAM 인증이면 `rds_iam` 부여)은 DB
+관리자가 만든다. 비밀번호를 쓴다면 비밀 관리자에만 둔다.
+
+**운영 DB 사전 확인.** GRANT 전에 DB 관리자가 본다.
+
+```sql
+SELECT has_schema_privilege('media_indexer', 'public', 'CREATE');  -- false 여야 한다
+```
+
+- 결과가 true 면(PostgreSQL 14 이하이거나 누가 되돌린 DB) 이 계정도 표를
+  만들 수 있다 — PG15 부터 `public` 스키마 CREATE 가 PUBLIC 에서 빠졌다.
+  `REVOKE CREATE ON SCHEMA public FROM PUBLIC;` 을 하고, 임시 표도 막으려면
+  `REVOKE TEMP ON DATABASE <DB 이름> FROM PUBLIC;` 을 한다. 역할 시험의
+  「CREATE TABLE 42501」 도 이 PG15+ 기본값을 전제로 한다.
+- **계정 하드닝**(만들 때 확인): `NOSUPERUSER` · `NOCREATEDB` ·
+  `NOCREATEROLE` · `rds_superuser` 비소속 · `CONNECTION LIMIT`(사이드카 두
+  풀의 최대 연결 수에 여유를 더한 값) · 역할 단위 `statement_timeout`
+  (`ALTER ROLE media_indexer SET statement_timeout = …`).
+- **표 소유자는 DDL 역할이다.** `media_indexer` 가 표를 소유하면 소유자는
+  GRANT 와 상관없이 모든 권한을 가지므로 이 목록이 무의미해진다.
+- **새 표 · 열이 생기면 이 목록을 다시 본다.** 새 표는 GRANT 를 더하고
+  (`internal/pgtest/role.go` · 위 블록 · 운영 GRANT 를 함께), 새 열은 표
+  단위 권한을 자동으로 받으므로 사이드카가 그 열을 고쳐도 되는지 본다.
+
+**잔여 위험.** 이 목록이 막지 못하는 것이다.
+
+- **표 단위 UPDATE 는 사이드카가 쓰지 않는 열도 연다.** 예:
+  `stream_sessions` 의 `dvr_*` · `vod_*`, `stream_segments` 의 `s3_key`.
+  사이드카 자격이 새면 이 열을 고칠 수 있다. 열 단위 GRANT · 트리거는 열
+  추가마다 운영 GRANT 가 깨지므로 넣지 않았다.
+- **advisory 잠금은 이 목록이 막지 않는다.** 잠금 함수(`pg_advisory_*`)는
+  기본값으로 PUBLIC 이 실행할 수 있고, 키 단위 권한은 없다. 그래서 이 DB 에
+  로그인하는 다른 계정이 컷오프 주조 잠금 키(`hashtext('pc_cutoff_' || stream_id)`)를
+  쥐고 놓지 않으면, 그 스트림의 컷오프 주조가 `lock_timeout` 으로 실패를
+  되풀이한다. 방어는 둘이다: 이 DB 의 로그인 계정 수를 줄이는 것, 그리고 잠금
+  함수의 `EXECUTE` 를 PUBLIC 에서 회수하고 사이드카 계정에만 주는 것(함수 소유자
+  권한이 필요하다 — RDS 의 마스터 사용자로 되는지는 아직 확인하지 않았다).
+  회수에는 두 전제가 붙는다. 이 DB 에서 advisory 잠금을 쓰는 다른 계정(마이그레이션
+  도구 등)에도 함께 허용해야 그 계정이 깨지지 않는다. `GRANT` · `REVOKE` 는 DB
+  마다 따로 적용된다 — 이 DB 하나에만 하면 다른 DB 는 그대로다. 새로 만드는
+  DB 는 `template1` 을 복제하므로 새 DB 까지 막으려면 `template1` 에도 한다.
+  운영에 앞서 스테이징 DB 에서 회수와 관련 도구 동작을 먼저 확인한다.
+  함수를 허용받은 계정끼리는 키 단위로 막을 수 없다.
+- **`stream_cutoffs` 가 오염되면 DBA 가 손으로 고친다.** 이 계정에는
+  UPDATE · DELETE 가 없어 잘못 들어간 컷오프를 사이드카가 고칠 수 없다.
+
+**시험 경로.** 목록의 정본은 `internal/pgtest/role.go` 한 곳이고, 위 블록과
+같다는 것을 `internal/pgtest/role_test.go` 가 단언한다. SQL 이 사는 패키지마다
+같은 권한만 가진 시험 역할로 사이드카 저장 경로 전부를 실 PG 에서 돌린다
+(문장마다 성공 확인 · 상태 전이 단언 · 권한 하나를 거두면 42501 인 음성 대조).
+
+- `internal/index/media_indexer_role_pg_test.go` — 장부 기록 · 업로드 장부 ·
+  되감기 읽기
+- `internal/session/media_indexer_role_pg_test.go` — 세션 결정 · 개시
+- `internal/rewind/publish/media_indexer_role_pg_test.go` — fence · P0 ·
+  P2′ · P4 · 화해 · GAP 원장
+
+로컬 compose 는 소유자 계정(`POSTGRES_USER`)으로 붙어 이 경계를 확인하지
+못한다 — 위 시험이 그 몫이다.
 
 ## 되감기 M3 이관 기록 (POK-195)
 
@@ -1718,7 +1874,8 @@ PR ⓒ 가 시험 함수 368개를 더했다(TestMain 제외 991 → 1,359 — d
 
 #### ⓒ 커버리지 게이트
 
-CI(`media-ci`)의 80% 게이트는 열네 패키지다. ⓒ 가 `internal/rewind/publish` 를
+ⓒ 시점 CI(`media-ci`)의 80% 게이트는 열네 패키지였다(지금은 janitor 를 더해
+열다섯 — 아래 PG 시험 절). ⓒ 가 `internal/rewind/publish` 를
 더했고, develop 의 ingest-auth 응답기가 `streamkey` · `keyresolve` · `ingestauth` ·
 `mtxctl` 넷을 더했다(병합으로 합쳐졌다). 아래 값은 커밋 8 의 CI 동일 실행(PG 켬 · `-race`) 프로파일에 CI 판정식을
 다시 돌린 것이다. 표가 열 패키지뿐인 것은 그 프로파일이 병합 전 것이라 develop 이
@@ -1829,14 +1986,14 @@ CI(`media-ci`)의 80% 게이트는 열네 패키지다. ⓒ 가 `internal/rewind
 cd media && go test ./...
 ```
 
-`internal/index`·`internal/session`·`internal/indexer`·`cmd/segment-indexer`·`internal/upload`·`internal/rewind/cache`·`internal/rewind/publish`의 통합 테스트와
+`internal/index`·`internal/session`·`internal/indexer`·`cmd/segment-indexer`·`internal/upload`·`internal/rewind/cache`·`internal/rewind/publish`·`internal/janitor`·`cmd/janitor`의 통합 테스트와
 `internal/pgtest`의 자기 테스트는 **실제 PostgreSQL이 필요**하다. `PG_DSN`이 없으면 해당 케이스는 전부 `skip`되고 나머지는 그대로
 돈다 — 즉 `PG_DSN` 없이 돌린 결과만으로는 DB 계층이 검증되지 않는다.
 
 ```bash
 set -a; . ../.env; set +a
 export PG_DSN="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@localhost:5432/$POSTGRES_DB"
-go test ./internal/index/ ./internal/session/ ./internal/indexer/ ./cmd/segment-indexer/ ./internal/upload/ ./internal/rewind/cache/ ./internal/rewind/publish/ ./internal/pgtest/ -v
+go test ./internal/index/ ./internal/session/ ./internal/indexer/ ./cmd/segment-indexer/ ./internal/upload/ ./internal/rewind/cache/ ./internal/rewind/publish/ ./internal/janitor/ ./cmd/janitor/ ./internal/pgtest/ -v
 ```
 
 이 통합 테스트들은 `PG_DSN`이 가리키는 DB에 **쓰지 않는다.** `PG_DSN`은 관리 접속으로만
@@ -1845,8 +2002,15 @@ go test ./internal/index/ ./internal/session/ ./internal/indexer/ ./cmd/segment-
 `go test ./...`는 패키지별 테스트 바이너리를 병렬로 띄우므로 한 DB를 나눠 쓰면 서로의 표를
 비운다. 실제 이름은 `PG_TEST_DB`에 패키지 접미를 붙인 것으로, `internal/index`만 무접미
 (`pokeclip_uploadtest`)이고 `internal/session`은 `_session`, `internal/indexer`는 `_indexer`,
-`cmd/segment-indexer`는 `_cmd`, `internal/upload`는 `_upload`, `internal/rewind/cache`는 `_rewindcache`, `internal/rewind/publish`는 `_rewindpublish`, `internal/pgtest` 자기 테스트는 `_selftest`다. 그래서 개발 DB의 `stream_segments`는 오염되지 않는다(대신 `PG_DSN`
-롤에 `CREATEDB` 권한이 필요하고 — **로컬 compose와 CI(`media-ci`)의 postgres 서비스 컨테이너 둘 다 superuser라 이미 갖고 있다**, `PG_TEST_DB`를 개발 DB 이름과 같게
+`cmd/segment-indexer`는 `_cmd`, `internal/upload`는 `_upload`, `internal/rewind/cache`는 `_rewindcache`, `internal/rewind/publish`는 `_rewindpublish`, `internal/janitor`는 `_janitor`, `internal/pgtest` 자기 테스트는 `_selftest`다.
+`internal/index`는 로컬 정리 스키마 국면 시험용으로 `_lcempty`(빈 DB)·
+`_lcpartial`(판정 표 일부만)·`_lcmigrate`(옛 스키마 이행)도 만든다.
+`cmd/janitor`의 PG 시험은 전용 DB 없이 `PG_DSN`에 붙어 세션 설정·서버 버전을
+읽기만 한다. 그래서 개발 DB의 `stream_segments`는 오염되지 않는다(대신 `PG_DSN`
+롤에 `CREATEDB` 권한이 필요하고(`internal/index`의 janitor 최소 권한 시험은
+실행마다 이름이 다른 시험 역할을 만들고 지우므로 `CREATEROLE`도) — **로컬
+compose와 CI(`media-ci`)의 postgres 서비스 컨테이너 둘 다 superuser라 이미 갖고
+있다**, `PG_TEST_DB`를 개발 DB 이름과 같게
 주면 테스트가 기동 즉시 실패한다. `PG_DSN`에 DB 이름 자체를 안 적었을 때도 같은데, 단
 `PGDATABASE`가 설정된 환경에서는 그 값이 DB 이름으로 채워져 "이름이 비었다" 가드 대신 동일 이름
 가드가 판정한다).
@@ -1862,8 +2026,8 @@ go test ./internal/index/ ./internal/session/ ./internal/indexer/ ./cmd/segment-
 `media-ci`의 postgres는 잡마다 뜨고 함께 사라져 공유가 없다 — 규약을 완화한 것이 아니라 적용
 조건을 드러낸 것이다. `ddl.go`를 바꾼 뒤에는 전용 DB가 옛 스키마를 유지하므로
 (`CREATE TABLE IF NOT EXISTS`) **접미 DB 전부**를 지운 뒤 다시 돌린다 — `pokeclip_uploadtest`
-하나만 지우면 `internal/index`는 새 스키마로 통과하고 `_session`·`_indexer`·`_cmd`·`_upload`·`_rewindcache`·`_rewindpublish`는 옛
-스키마 그대로라 그 여섯 패키지만 "does not exist" 계열로 실패한다.
+하나만 지우면 `internal/index`는 새 스키마로 통과하고 `_session`·`_indexer`·`_cmd`·`_upload`·`_rewindcache`·`_rewindpublish`·`_janitor`는 옛
+스키마 그대로라 그 일곱 패키지만 "does not exist" 계열로 실패한다.
 
 **아래 루프는 소유 표식을 확인하지 않고 이름만 보고 지운다** — 밑이름이 기본 이름이거나 테스트가 새로 만든
 고유 이름일 때만 쓰고, 표식이 없어 실패한 DB는 실패 메시지대로 전용 테스트 DB가 맞는지 직접 확인한 뒤 하나씩 지운다.
@@ -1871,7 +2035,8 @@ go test ./internal/index/ ./internal/session/ ./internal/indexer/ ./cmd/segment-
 ```bash
 # PG_TEST_DB 를 바꿔 돌렸다면 그 이름이 밑이름이다 — 기본 이름만 지우면 실제 DB 는 남는다.
 base="${PG_TEST_DB:-pokeclip_uploadtest}"
-for suffix in "" _session _indexer _cmd _upload _rewindcache _rewindpublish _selftest; do
+for suffix in "" _session _indexer _cmd _upload _rewindcache _rewindpublish _janitor \
+  _lcempty _lcpartial _lcmigrate _selftest; do
   psql "$PG_DSN" -c "DROP DATABASE IF EXISTS ${base}${suffix}"
 done
 ```
@@ -1886,9 +2051,9 @@ CI(`media-ci`)는 `go test`에 `-coverprofile`을 붙여 패키지별 커버리�
 `internal/mtxstate`·`internal/playback`·`internal/rewind/boundary`·
 `internal/rewind`·`internal/rewind/cache`·`internal/rewind/publish`·
 `internal/streamkey`·`internal/keyresolve`·`internal/ingestauth`·
-`internal/mtxctl`
-**열네 패키지 중 하나라도 80% 미만이면 잡을 실패시킨다**(`session`·`mtxstate` 는 POK-195 M3에서,
-`playback` 은 M4 ⓐ 에서, `rewind/boundary`·`rewind`·`rewind/cache` 는 M4 ⓑ 에서, `rewind/publish` 는 M4 ⓒ 에서 추가 — 되감기 판정 로직과
+`internal/mtxctl`·`internal/janitor`
+**열다섯 패키지 중 하나라도 80% 미만이면 잡을 실패시킨다**(`session`·`mtxstate` 는 POK-195 M3에서,
+`playback` 은 M4 ⓐ 에서, `rewind/boundary`·`rewind`·`rewind/cache` 는 M4 ⓑ 에서, `rewind/publish` 는 M4 ⓒ 에서, `janitor` 는 POK-170 에서 추가 — 되감기 판정 로직과
 ③ 바이트를 만드는 층, 되감기 목록의 경계·본문·입력을 정하는 층이 그 안에 있다. 발행된 목록 줄은 고칠 수 없어
 여기서 틀린 것은 그 목록이 사는 동안 남는다). 나머지 패키지는 수치만 로그에 남고 게이트 대상이 아니다.
 
@@ -2132,3 +2297,301 @@ Homebrew `revision`이 비슷한 구분이다 — 다만 그 관례들은 상류
 6. `segment_indexed`의 `reason` 분포에 `5`(훅)가 남아 있는지 본다 — 사라졌으면 훅이 안 도는 것이다.
 7. 이상이 있으면 `HOOK_SPOOL_PATH`를 빈 값으로 두고 사이드카만 재기동해 즉시 롤백한다.
    그 상태로도 인덱싱은 정상이고, 재접속 검출만 현행 수준으로 돌아간다.
+
+## DB 연결 풀 관측 (POK-388)
+
+사이드카의 인덱서 · 발행자 풀과 janitor 풀은 1분마다 풀 통계를 보고, 버린
+연결이 늘면 WARN 으로 낸다. 지표의 뜻은 「버려졌거나 맺지 못한 연결」이다. 질의
+도중 기한이 끝나 닫힌 연결, 트랜잭션이 열린 채 반납된 연결, 점검에 실패한
+연결, 연결 시도 실패(DB 장애 · IAM 토큰 실패 포함)를 모두 센다. 수명 · 유휴
+한도에 따른 교체는 세지 않는다.
+관측은 풀 통계만 읽고 DB 에 아무것도 보내지 않는다.
+
+- `pg_pool_conn_discarded`(WARN · `pool`=indexer · publisher · janitor):
+  버린 연결이 늘어난 주기마다 value=1(`discarded` 구간 · `discarded_total`
+  누적 · `new_conns` 구간), 켜진 뒤 처음 늘지 않은 주기에 value=0 을 한 번
+  낸다. 기동하면 value=0 reason=startup 을 먼저 낸다. 셋 다 WARN 이라
+  `LOG_LEVEL=warn` 에서도 회복이 보인다.
+- `pg_pool_stats`(DEBUG): 매 주기 풀 통계 한 줄. `skipped=1` 은 그 주기를
+  세지 않았다는 뜻이다.
+- janitor 의 기동 줄은 게이지 7종 시작 덤프보다 먼저 나오며 7종 계약 밖이다.
+- 한계: 연결을 세우는 중이면 그 주기를 건너뛴다. DB 장애로 연결 시도가
+  이어지면 건너뜀이 계속되다가 장애가 끝난 뒤 한꺼번에 센다. 다만 연결
+  거부형 장애는 시도가 바로 끝나 주기마다 그 자리에서 센다. 기동 때 세 번
+  더 읽어도 연결을 세우는 중이면, 그 뒤 처음 건너뛰지 않은 주기가 기준점이
+  되어 그 사이 폐기는 세지 않는다. 시한 정렬을 판단할 때는 DB 장애 구간을
+  빼고 읽는다.
+- 스위치는 없다. 끄려면 이 변경을 되돌린다(revert). `LOG_LEVEL` 로 거르면
+  같은 등급의 다른 게이지도 함께 사라지므로 쓰지 않는다
+  (`janitor_backlog_capped` 는 통째로, `rewind_cutoff_absent` 는 들어올 때
+  줄과 해소 줄이).
+
+## 로컬 ② 정리기(janitor) 운영 (POK-170)
+
+janitor 는 업로드가 끝난 ② 로컬 녹화 파일을 지우고 장부 행의 `local_path` 를
+NULL 로 바꾼다. 행은 남는다. 삭제 조건은 인덱스 불변식 2(그레이스 8분 경과 ·
+② uploaded · ③ 컷오프 인지 술어)이고 조각마다 따로 판정한다. 회차의 첫
+조각과 init 재수거 원천은 보호 규칙으로 남긴다.
+
+- 실행 형태: 사이드카와 **같은 이미지**의 다른 명령(`/usr/local/bin/janitor`),
+  compose 서비스 `janitor`. 계정 `10002:10002`(MediaMTX 와 같은 소유자) ·
+  recordings 에 쓰기로 붙는 것은 media(MediaMTX)와 janitor · 사이드카는 `:ro` 그대로.
+- janitor 는 업로드가 끝난 조각을 MediaMTX 의 보존 기한(`recordDeleteAfter` —
+  설정에 없으면 기본 24시간)보다 먼저 지우는 쪽이다. 보존 기한 삭제는 MediaMTX
+  몫이라 janitor 를 꺼도 계속된다.
+- 삭제 순서: 행 잠금(`FOR UPDATE NOWAIT`) → 파일 삭제 → `local_path=NULL` →
+  COMMIT. 잠긴 행은 건너뛰고 다음 주기에 다시 본다.
+- 삭제마다 `segment_local_deleted` INFO 한 줄(stream_id · seq · path ·
+  axis=archive · outcome)이 남는다. 부채를 갚은 뒤 행이 아직 있는지 확인하지
+  못했으면(잠김 · 오류) `row_probe=unknown` 이 붙는다 — 그 행은 이미 지워졌을
+  수도 있다. 주기 요약은 `janitor_cycle_summary`.
+
+### janitor 끄고 켜는 법
+
+정본 끄기는 스위치다. 저장소 루트 `.env` 에 빈 값을 적고 서비스만 다시
+올린다.
+
+```sh
+# .env
+JANITOR_ENABLED=
+```
+
+```sh
+docker compose up -d --no-deps --no-build janitor
+```
+
+- 꺼지면 `janitor_disabled` WARN 한 줄을 내고 컨테이너는 떠 있는 채 대기한다.
+  DB · 파일은 건드리지 않는다. 다음 `docker compose up -d` 뒤에도 꺼져 있다.
+- 다시 켜려면 그 줄을 지우거나 주석으로 돌리고 같은 명령을 다시 쓴다
+  (미설정이면 compose 가 `true` 로 채운다). `false` · `0` 도 끔이다.
+- `docker compose stop janitor` 는 **일시 정지일 뿐**이다. 다음 `up -d` 에서
+  다시 켜진다.
+- 확인한 실행 기록: 전용 compose 프로젝트에서 janitor 만 띄워
+  빈 값 → `janitor_disabled` · 미설정 → `janitor_started` · 다시 빈 값 →
+  `janitor_disabled` 를 봤다(2026-10-20, POK-371 실험 기록
+  `readme-switch.txt`).
+
+### 스키마 이행 배포 때 janitor 끄기
+
+사이드카 기동마다 도는 `EnsureSchema` 가 컬럼 · 제약을 실제로 더하는
+배포(스키마 이행)에서는, 그 잠금과 janitor 의 행 잠금이 드물게 교착할 수
+있다. 교착에서 사이드카 쪽이 희생되면 사이드카가 재기동해 다시 시도한다.
+피하려면 이렇게 배포한다(한계 L26).
+
+1. `.env` 에 `JANITOR_ENABLED=` 를 적고
+   `docker compose up -d --no-deps --no-build janitor`.
+   로그에 `janitor_disabled` 가 나온 것을 본다.
+1. 사이드카를 새 판으로 올린다. 두 서비스는 같은 Dockerfile 이지만 이미지가
+   따로라, janitor 이미지도 이 단계에서 함께 빌드해 둔다(마지막 단계의
+   `--no-build` 는 이미 빌드한 이미지를 쓴다).
+
+    ```sh
+    docker compose build segment-indexer janitor
+    STARTED=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    docker compose up -d --no-deps --no-build segment-indexer
+    ```
+
+   빌드만으로는 떠 있는 사이드카가 바뀌지 않는다 — `up -d` 가 새 이미지로
+   사이드카를 다시 만들어야 기동 때 `EnsureSchema` 가 돈다. `--no-deps` 는
+   postgres · mediamtx 를 다시 만들지 않게 한다.
+1. 이행 성공을 확인한다 — **이번 기동 뒤** 사이드카 로그에 `schema_ensured`
+   INFO 가 있어야 한다(`ENSURE_SCHEMA=true` 인 로컬 compose 기준). 옛 기동의
+   줄에 속지 않도록 위에서 적어 둔 기동 시각 이후만 본다.
+
+    ```sh
+    docker compose logs --since "$STARTED" segment-indexer | grep schema_ensured
+    ```
+
+1. 확인한 뒤에만 `.env` 의 그 줄을 지우고
+   `docker compose up -d --no-deps --no-build janitor`.
+   로그에 `janitor_started` 가 나온다.
+
+이행이 없는 평소 배포에는 끌 필요가 없다.
+
+### janitor 게이지 7종
+
+게이지는 켜질 때(value=1)와 꺼질 때(value=0) 같은 등급으로 한 줄씩 낸다.
+기동하면 7종 모두 `value=0 reason=startup` 을 먼저 낸다(이 run_id 이전 값을
+모두 0 으로 본다는 뜻). `LOG_LEVEL=warn` 으로 모아도 켜짐 · 꺼짐이 둘 다
+보인다.
+
+| 게이지 | 등급 | 켜짐 | 먼저 볼 것 |
+|---|---|---|---|
+| `janitor_delete_failing` | ERROR | 삭제 실패(권한 · 읽기 전용 · 경로 거부)로 건너뛴 행이 있음 — items · sample | sample 행의 파일 소유 · 마운트 rw · `janitor_path_rejected` |
+| `janitor_cycle_failing` | ERROR | 주기가 DB 오류로 중단됨 — reason · SQLSTATE · stage. 종료 신호로 주기가 끊긴 것은 켜지 않고 `janitor_cycle_canceled` INFO 한 줄만 남는다 | DB 연결 · `statement_timeout` · 잠금 대기 |
+| `janitor_cutoff_invalid` | ERROR | 가리키는 행이 없는 컷오프 — 그 스트림 삭제 정지(stream_id 별) | `stream_cutoffs` 와 `stream_segments` 대조 |
+| `janitor_backlog_capped` | WARN | 한 주기 상한(`JANITOR_MAX_PER_CYCLE`)에 닿고도 남은 후보가 있음 | 일시적이면 정상. 계속되면 상한 · 주기 조정 |
+| `janitor_volume_suspect` | ERROR | 지웠어야 할 파일이 이미 없는 젊은 행이 3개 이상 — 다른 볼륨이 붙었을 수 있음 | 마운트된 볼륨이 MediaMTX 와 같은지 · sample 경로 |
+| `janitor_fs_suspended` | ERROR | 파일 삭제가 멈춰(stall) 파일 작업을 보류 중 — hold · stall_streak | 녹화 디스크 · 마운트 상태(`fs_op_stalled`) |
+| `janitor_reclaim_blocked` | ERROR | 삭제 뒤 장부 갱신을 못 한 행(부채)을 계속 못 갚음 — 새 삭제가 멈춘 상태 | 아래 절 |
+
+PG 가 비정상 종료된 뒤 `janitor_volume_suspect` 가 켜질 수 있다. 비동기
+커밋으로 확정된 삭제 기록 몇 건이 사라진 것이다(한계 L31 — 실측 KILL 1회에
+5건). 파일은 이미 지워졌고 장부만 경로를 들고 있다. 그 행들이 나이
+`JANITOR_RECORD_DELETE_AFTER` − 1h(기본 23h)를 넘기면 janitor 가 스스로
+정리하고 게이지가 꺼진다(최대 약 23h).
+
+다만 같은 게이지는 볼륨이 정말 잘못 붙었을 때도 켜진다. 기다리기 전에 둘을
+가른다. 둘 다 맞을 때만 L31 로 보고 자동 정리를 기다린다.
+
+1. 세 서비스의 `/recordings` 가 같은 볼륨인지 본다 — 출력된 볼륨 이름과
+   원본 경로(`Source`)가 셋 다 같아야 한다(파일 수 비교로는 가려지지 않는다).
+   바인드 마운트는 이름이 비므로 이름만 보면 둘 다 바인드일 때 같아 보인다 —
+   원본 경로까지 대조한다.
+
+    ```sh
+    for s in media segment-indexer janitor; do
+      printf '%s: ' "$s"
+      docker inspect -f '{{range .Mounts}}{{if eq .Destination "/recordings"}}{{.Name}} {{.Source}}{{end}}{{end}}' \
+        "$(docker compose ps -q "$s")"
+    done
+    ```
+
+    떠 있지 않은 서비스는 `docker compose ps -q` 가 비어 그 줄에서
+    `invalid container name or ID: value is empty` 오류가 난다 — 그 서비스를
+    먼저 띄우고 다시 본다.
+
+1. 게이지 줄의 표본(`sample_stream_id` · `sample_seq`)이 PG 종료 직전
+   `segment_local_deleted` 줄(같은 `stream_id` · `seq`)에 있는지 본다 — 있으면
+   janitor 가 지운 뒤 기록만 사라진 것(L31)이다.
+
+    ```sh
+    docker compose logs janitor | grep -E 'janitor_volume_suspect|segment_local_deleted'
+    ```
+
+볼륨 이름이 다르거나 표본이 삭제 로그에 없으면 오연결로 보고 janitor 를 끄고
+(위 「끄고 켜는 법」) 마운트를 고친다 — 그대로 두면 나이 기준을 넘긴 행의
+경로가 지워질 수 있다(한계 L17).
+
+### janitor_reclaim_blocked 대응
+
+janitor 는 파일을 지운 뒤 장부 갱신에 실패한 행을 「부채」로 들고, 갚기
+전에는 새 파일을 지우지 않는다(장부와 파일이 2개 이상 어긋나지 않게).
+`janitor_reclaim_blocked` 는 그 부채를 계속 못 갚는다는 뜻이다. 줄에
+`kind` · `stream_id` · `seq` · `path` · `failures` 가 실린다.
+
+- `kind=deleted`(10회 연속 실패) — 대개 다른 세션이 그 행을 오래 쥐고 있다.
+  그 표를 잠근 세션을 찾는다.
+
+    ```sql
+    SELECT a.pid, a.application_name, a.state,
+           date_trunc('second', now() - a.xact_start) AS xact_age,
+           l.mode, left(a.query, 60) AS query
+      FROM pg_locks l JOIN pg_stat_activity a USING (pid)
+     WHERE l.relation = 'stream_segments'::regclass
+       AND a.pid <> pg_backend_pid()
+     ORDER BY a.xact_start;
+    ```
+
+    오래된 트랜잭션(`xact_age` 가 큰 세션)이 원인이면 그 작업을 끝낸다.
+    풀리면 다음 주기에 부채를 갚고 게이지가 꺼지며 삭제가 다시 돈다.
+- `kind=maybe`(3회 연속 stall) — 파일 삭제 자체가 멈춘다. `janitor_fs_suspended`
+  · `fs_op_stalled` 와 함께 녹화 디스크를 본다.
+- 그동안 디스크는 MediaMTX 의 24시간 정리(`recordDeleteAfter`)가 상한을 지킨다.
+
+### DB 요구 — PostgreSQL 17 이상 · 계정 · TLS
+
+- **PostgreSQL 17 이상**이어야 한다. janitor 는 행 잠금 트랜잭션에
+  `transaction_timeout`(17 에서 생김) 8초를 걸어 잠금 보유 시간을 묶는다.
+  17 미만이면 `janitor_pg_version_unsupported` ERROR(server_version_num ·
+  required=170000)를 내고 종료 코드 1 로 끝난다 — compose 는
+  `restart: unless-stopped` 라 기동 거부를 되풀이한다.
+- **운영 계정 `media_janitor` 권한**은 이것만 준다. janitor 의 장부 질의가 이
+  권한 안에서 도는지는 실 PG 시험이 잰다
+  (`internal/index/local_cleanup_role_pg_test.go`).
+
+    ```sql
+    GRANT SELECT ON stream_segments, stream_sessions, stream_cutoffs TO media_janitor;
+    GRANT UPDATE (local_path) ON stream_segments TO media_janitor;
+    ```
+
+    계정(`CREATE ROLE media_janitor LOGIN …`)은 DB 관리자가 만들고 비밀번호는
+    비밀 관리자(Secrets Manager)에만 둔다(IAM 인증이면 비밀번호 없음) — 문서 ·
+    저장소 · compose 파일에 적지 않는다.
+
+    권한은 janitor 를 켜기 **전에** 준다. `UPDATE (local_path)` 가 없으면 행
+    잠금(`SELECT … FOR UPDATE NOWAIT`) 단계에서 42501 로 막혀 파일을 지우지 않고
+    매 주기 실패한다(`janitor_cycle_failing`). 지운 뒤 장부를 못 고쳐 부채가 되는
+    것은 잠금은 되는데 갱신 문장이 그 밖의 열을 건드릴 때다(시험 변이 VT3-3).
+- **로컬 compose 의 한계**: 로컬 janitor 는 `POSTGRES_USER`(DB 소유자 계정)로
+  붙는다. 최소 권한 경계는 로컬 실행으로는 확인되지 않는다 — 위 시험이 그
+  몫이다.
+- **운영 DSN 은 `POSTGRES_SSLMODE=verify-full`** 로 두고 CA 번들 경로를
+  `POSTGRES_SSLROOTCERT=/etc/pokeclip/rds-ca/global-bundle.pem` 으로 준다.
+  이 경로는 이미지에 든 RDS 통합 번들이다(아래 「RDS CA 번들」 절). 서버
+  인증서와 호스트 이름까지 검증해야 중간자를 막는다. 경로는 기동 때 확인한다
+  — 절대 경로 · 일반 파일 · PEM 인증서 1장 이상이 아니면 기동 오류다.
+  `PGSSLROOTCERT` 는 쓰지 않는다. 이것만 있고 `POSTGRES_SSLROOTCERT` 가 비면
+  기동 오류다(옛 방식 기록: pgx 가 `PGSSLROOTCERT` 를 읽는다는 2026-10-20
+  확인 — 실험 기록 `c21-pgsslrootcert.txt`). CA 를 주면 sslmode 는
+  `verify-ca` · `verify-full` 만 받는다(그 밖 값은 기동 오류).
+  **`verify-ca` 는 체인만 검증하고 호스트 이름은 보지 않는다 — 같은 CA 의
+  다른 서버를 막지 못하므로 운영은 `verify-full`.** RDS 통합 번들은 모든 AWS
+  고객의 RDS 가 쓰는 공용 CA 라, `verify-ca` 면 다른 고객의 RDS 인증서도
+  통과한다. `verify-ca` 는 운영자가
+  체인 검증만을 명시적으로 고른 경우라 허용한다. CA 를 준 `require` 는 pgx
+  가 암묵적으로 `verify-ca` 처럼 체인을 검증하지만 값이 검증을 밝히지 않고,
+  CA 없는 `require` 는 암호화만 하고 서버 인증서를 검증하지 않는다 — 그래서
+  CA 와 함께 주면 거부한다. 기본 `prefer` 는 TLS 를 못 쓰면
+  평문으로 내려간다. `require` 이상이면 TLS 를 받지 않는 서버에는 붙지 않고
+  기동 오류(`janitor_failed`)로 끝난다(2026-10-20 실행 확인 — 실험 기록
+  `c9-sslmode.txt`).
+- **`POSTGRES_AUTH=iam`**(RDS IAM 인증)이면 `POSTGRES_PASSWORD` 를 비운다 —
+  연결마다 새 IAM 토큰으로 로그인한다. sslmode 는 `verify-full` 만 받고
+  `POSTGRES_SSLROOTCERT` 는 필수다.
+- **password 로 되돌리기**: 코드 되돌림과 운영 인증 전환은 다르다.
+  `POSTGRES_AUTH` 를 비우는 것만으로는 운영 계정이 비밀번호로 붙지 않는다 —
+  `rds_iam` 을 가진 계정은 IAM 인증이 비밀번호보다 우선한다. 운영 전환에는
+  계정 비밀번호 설정 · `rds_iam` 회수 · 비밀 그릇(Secrets Manager) · 그 읽기
+  정책이 함께 필요하다(엣지 설계 r7.5.8 3-6절 「password 대비 갈래」 —
+  2026-10-22 원문 대조).
+
+### RDS CA 번들
+
+`POSTGRES_SSLROOTCERT` 가 가리킬 CA 번들을 이미지에 싣는다. 사이드카와
+janitor 가 같은 이미지라 둘 다 쓴다.
+
+| 항목 | 값 |
+|---|---|
+| 저장소 파일 | `media/certs/rds-global-bundle.pem` |
+| 이미지 안 경로 | `/etc/pokeclip/rds-ca/global-bundle.pem`(root 소유 0644 · 상위 디렉터리 755 — Dockerfile 이 디렉터리를 먼저 만들고 `COPY --chmod=0644` 로 파일 권한을 고정한다, 실행 계정 10001 이 읽는다) |
+| 출처 | https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem (AWS 문서 「Using SSL/TLS」의 전 상용 리전 통합 번들) |
+| 취득 | 2026-10-22 20:19 KST(서버 `last-modified` 2026-10-14 22:38:21 GMT) |
+| sha256 | `90a6f1a7978a1b1b096dca6c57511ca48d3b8cf052f8e704baf358f34ea2f21b`(174560 바이트) |
+| 인증서 | 114장 — 전부 자체 서명 루트 CA(중간 CA 0장) |
+| 가장 이른 만료 | 2061-05-18(Amazon RDS Preview us-east-2 Root CA RSA2048 G1) |
+
+- **sha256 정본은 `media/Dockerfile` 의 `sha256sum -c` 줄 하나다.** 위 표의
+  값은 옮겨 적은 것이다. 파일이 그 값과 다르면 이미지 빌드가 멈추고, 계약
+  시험(`internal/pgconf/rdsca_bundle_test.go`)도 실패한다.
+- **갱신**: 같은 URL 에서 다시 받아 파일 교체 · Dockerfile sha256 교체 · 위
+  표 갱신을 한 커밋에 한다. 이미지를 다시 배포해야 새 번들이 쓰인다(번들은
+  기동 때 읽는다). 받은 파일은 커밋 전에 따로 검증한다 — sha256 은 받은
+  파일을 고정할 뿐 그 파일이 맞는지는 말하지 않는다.
+    1.  이전 번들과 인증서 단위로 diff 한다(주체 · 만료 · 지문 목록 비교).
+    1.  새로 생긴 인증서는 하나씩 본다 — 주체가 Amazon RDS 루트 CA 이고
+        자체 서명인지, AWS 문서의 리전 · CA 목록과 맞는지.
+    1.  `PRIVATE KEY` 블록이 없는지 확인한다(`grep -c 'PRIVATE KEY'` = 0).
+- Dockerfile 에 `POSTGRES_SSLROOTCERT` 기본값(`ENV`)은 두지 않는다 — 로컬
+  compose 의 password · `prefer` 경로에 끼어들지 않게 배포 정의가 준다.
+
+### janitor 환경 변수
+
+| 변수 | 기본 | 범위 · 뜻 |
+|---|---|---|
+| `JANITOR_ENABLED` | compose 가 `true` 로 채움 | 참 값(`true` · `1` · `t` 등) = 실행. 빈 값 · 거짓 값(`false` · `0` · `f` 등) = 대기. 해석할 수 없는 값(예: `yes`)만 기동 거부 |
+| `JANITOR_INTERVAL` | `30s` | 주기. 1초 이상 |
+| `JANITOR_GRACE` | `8m` | 업로드 확정 뒤 기다리는 시간. 8분 미만은 기동 거부 |
+| `JANITOR_RECONNECT_WINDOW` | `300s` | 첫 조각 보호의 재접속 창. 300초 미만 거부 — 사이드카 재접속 창과 같아야 한다 |
+| `JANITOR_RECORD_DELETE_AFTER` | `24h` | MediaMTX `recordDeleteAfter` 와 맞춘다. 2시간 미만 거부 |
+| `JANITOR_BATCH` | `200` | 한 번에 읽는 행. 10000 이하 · `JANITOR_MAX_PER_CYCLE` 이하 |
+| `JANITOR_MAX_PER_CYCLE` | `2000` | 한 주기에 살펴보는 행 상한. 100000 이하 |
+| `FS_OP_TIMEOUT` | `5s` | 파일 작업 한 번의 상한. 100ms 이상 6초 이하 |
+| `POSTGRES_*` · `SEGMENT_ROOT` · `LOG_LEVEL` | 사이드카와 같음 | 위 사이드카 표 참조. `POSTGRES_*` 에는 `POSTGRES_AUTH` · `POSTGRES_SSLROOTCERT` 가 들고, iam 이면 `AWS_REGION`(기본 `ap-northeast-2`)도 읽는다 — 규칙은 사이드카와 같은 코드(`internal/pgconf`)다. 기동 때 Ping 성공 뒤 `db_connected` 한 줄(`pool=janitor`)을 남긴다 |
+
+로컬 compose 가 janitor 에 넘기는 것은 `JANITOR_ENABLED` 와 `POSTGRES_USER` ·
+`POSTGRES_PASSWORD` · `POSTGRES_DB`(호스트 · `SEGMENT_ROOT` · `TZ` 는 고정값)뿐이다
+— 나머지는 `.env` 에 적어도 전달되지 않아 기본값으로 돈다. 운영은 배포 정의에
+직접 지정한다.
+
+알려진 한계(L1~L33) 전문은 PR 본문 「알려진 한계」에 있다.

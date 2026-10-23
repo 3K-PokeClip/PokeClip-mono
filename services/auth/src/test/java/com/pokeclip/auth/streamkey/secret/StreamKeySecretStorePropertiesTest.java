@@ -23,14 +23,14 @@ class StreamKeySecretStorePropertiesTest {
         assertThat(local.usesAws()).isFalse();
 
         StreamKeySecretStoreProperties dev = bind(Map.of(
-                "type", "aws", "retire-from", "postgres,aws", "ref-prefix", "pokeclip/dev/stream-key/"));
+                "type", "aws", "retire-from", "aws", "ref-prefix", "pokeclip/dev/stream-key/"));
         assertThat(dev.type()).isEqualTo(Type.AWS);
-        assertThat(dev.retireFrom()).containsExactlyInAnyOrder(Type.POSTGRES, Type.AWS);
+        assertThat(dev.retireFrom()).containsExactly(Type.AWS);
         assertThat(dev.usesAws()).isTrue();
     }
 
     @Test
-    void 병행_중_postgres_상태도_aws를_만든다() {
+    void 롤백_중_postgres_상태도_aws를_만든다() {
         assertThat(bind(Map.of("retire-from", "postgres,aws")).usesAws()).isTrue();
     }
 

@@ -56,7 +56,7 @@ export function pickThumbnailUrl(
 
 /**
  * 카드 하나를 새 값으로 바꾸되 사진은 잃지 않는다. 통로(SSE)로 오는 카드는 사진 칸이 비어 오므로(서버가 통로에는 안 싣는다) 그대로
- * 덮으면 목록에서 받아 둔 사진이 집기·숨기기 때마다 사라졌다가 다음 목록에서 돌아온다.
+ * 덮으면 목록에서 받아 둔 사진이 통로로 같은 카드가 다시 올 때마다 사라졌다가 다음 목록에서 돌아온다.
  */
 export function keepKnownThumbnail<T extends { thumbnailUrl?: string | null }>(
   prev: T | undefined,

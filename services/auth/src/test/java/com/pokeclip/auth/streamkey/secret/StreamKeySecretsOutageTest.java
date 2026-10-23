@@ -51,7 +51,7 @@ class StreamKeySecretsOutageTest extends WithdrawalTestSupport {
         System.setProperty("aws.accessKeyId", "test");
         System.setProperty("aws.secretAccessKey", "test");
         registry.add("pokeclip.stream-key-secret-store.type", () -> "aws");
-        registry.add("pokeclip.stream-key-secret-store.retire-from", () -> "postgres,aws");
+        registry.add("pokeclip.stream-key-secret-store.retire-from", () -> "aws");
         registry.add("pokeclip.stream-key-secret-store.ref-prefix", () -> "pokeclip/test/stream-key/");
         registry.add("pokeclip.stream-key-secret-store.endpoint", FAKE::endpoint);
         registry.add("pokeclip.stream-key-secret-store.region", () -> "ap-northeast-2");
@@ -111,7 +111,7 @@ class StreamKeySecretsOutageTest extends WithdrawalTestSupport {
                     "auth.streamkey.secret.retire_failed userId=" + user.getId() + " causeType="));
         }
         assertThat(streamKeyService.findAlive(user.getId()).orElseThrow().getPassphraseRef()).isNotEqualTo(oldRef);
-        assertThat(FAKE.has(oldRef)).as("정리가 실패한 옛 사본은 남는다(이행 실행기가 지운다)").isTrue();
+        assertThat(FAKE.has(oldRef)).as("정리가 실패한 옛 사본은 남는다(WARN을 보고 손으로 지운다)").isTrue();
     }
 
     private ResultActions exchange(String code) throws Exception {

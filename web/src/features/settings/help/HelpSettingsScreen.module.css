@@ -1,0 +1,416 @@
+/* 디자인 1q 설정 · 도움말 문의 — 가이드 카드 3열 · FAQ 아코디언 카드 · 문의 카드. */
+
+/* 설명 위주로 읽는 화면이라 시안 폭 860u에 가둔다(docs/DESIGN_SYSTEM.md 「셸 · 본문 폭」) —
+   전폭으로 늘면 질문 한 줄이 너무 길어지고 펼침 화살표가 질문에서 멀어진다 */
+.screen {
+  max-width: calc(860 * var(--pc-u));
+}
+
+/* 시안의 제목-카드 간격은 20u인데 SettingsPageHeader가 자체로 4u를 든다 */
+.header {
+  margin-bottom: calc(16 * var(--pc-u));
+}
+
+/* ── 가이드 카드 ── */
+
+.guides {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: calc(12 * var(--pc-u));
+  margin: 0 0 calc(22 * var(--pc-u));
+  padding: 0;
+  list-style: none;
+}
+
+/* 카드 전체가 링크다 — 칸 높이를 채워 세 카드의 테두리가 같은 높이로 선다 */
+.guide {
+  display: block;
+  height: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--pc-color-border-subtle);
+  border-radius: calc(14 * var(--pc-u));
+  background: var(--pc-color-bg-surface);
+  padding: calc(16 * var(--pc-u));
+  color: inherit;
+  text-decoration: none;
+  transition: border-color 0.15s;
+}
+
+.guide:hover {
+  border-color: var(--pc-color-border-default);
+}
+
+.guide:focus-visible {
+  outline: 2px solid var(--pc-color-focus-ring);
+  outline-offset: 2px;
+}
+
+.guideIcon {
+  width: calc(36 * var(--pc-u));
+  height: calc(36 * var(--pc-u));
+  border-radius: calc(10 * var(--pc-u));
+  background: var(--pc-color-accent-subtle);
+  color: var(--pc-color-accent-text);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: calc(11 * var(--pc-u));
+}
+
+/* lucide size prop은 px 고정 — 유닛에 태운다 */
+.guideIcon svg {
+  width: calc(17 * var(--pc-u));
+  height: calc(17 * var(--pc-u));
+}
+
+.guideTitle {
+  display: block;
+  margin-bottom: calc(4 * var(--pc-u));
+  font-size: calc(13 * var(--pc-u));
+  font-weight: 700;
+}
+
+.guideDesc {
+  display: block;
+  font-size: calc(11.5 * var(--pc-u));
+  line-height: 1.5;
+  color: var(--pc-color-text-muted);
+}
+
+.sectionTitle {
+  margin: 0 0 calc(10 * var(--pc-u));
+  font-size: calc(13 * var(--pc-u));
+  font-weight: 750;
+}
+
+/* ── 자주 묻는 질문 — 주제 탭(칩) ── */
+
+/* UI Tabs의 밑줄 탭 모양을 칩으로 바꾼다. 클래스를 겹쳐 써서 Tabs.module.css보다 확실히 이긴다
+   (플러그인 다운로드 창 .downloadTab과 같은 방식) */
+.topicTabs.topicTabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(6 * var(--pc-u));
+  margin-bottom: calc(12 * var(--pc-u));
+  border-bottom: 0;
+}
+
+.topicTab.topicTab {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(6 * var(--pc-u));
+  height: calc(32 * var(--pc-u));
+  margin-bottom: 0;
+  padding: 0 calc(12 * var(--pc-u));
+  border: 1px solid var(--pc-color-border-subtle);
+  border-radius: 99px;
+  background: var(--pc-color-bg-surface);
+  color: var(--pc-color-text-secondary);
+  font-size: calc(12 * var(--pc-u));
+  font-weight: 650;
+  transition:
+    border-color 0.15s,
+    color 0.15s,
+    background 0.15s;
+}
+
+.topicTab.topicTab:hover {
+  border-color: var(--pc-color-border-default);
+  color: var(--pc-color-text-primary);
+}
+
+.topicTab.topicTab[data-selected] {
+  border-color: var(--pc-color-accent);
+  background: var(--pc-color-accent-subtle);
+  color: var(--pc-color-accent-text);
+}
+
+.topicTab svg {
+  width: calc(14 * var(--pc-u));
+  height: calc(14 * var(--pc-u));
+  flex: none;
+}
+
+.topicCount {
+  font-size: calc(11 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}
+
+.topicTab[data-selected] .topicCount {
+  color: inherit;
+}
+
+/* 패널은 키보드로 들어올 수 있게 Tabs가 tabIndex=0을 준다 — 포커스 링만 카드 모양에 맞춘다 */
+.topicPanel.topicPanel {
+  padding: 0;
+  border-radius: calc(14 * var(--pc-u));
+}
+
+.topicPanel:focus-visible {
+  outline: 2px solid var(--pc-color-focus-ring);
+  outline-offset: 2px;
+}
+
+/* ── 자주 묻는 질문 ── */
+
+.faqCard {
+  border: 1px solid var(--pc-color-border-subtle);
+  border-radius: calc(14 * var(--pc-u));
+  background: var(--pc-color-bg-surface);
+  overflow: hidden;
+  margin-bottom: calc(22 * var(--pc-u));
+}
+
+.faqRow {
+  border-bottom: 1px solid var(--pc-color-border-subtle);
+}
+
+/* 마지막 행의 선은 카드 테두리와 겹쳐 두 줄로 보인다 */
+.faqRow:last-child {
+  border-bottom: 0;
+}
+
+.faqHeading {
+  margin: 0;
+  font: inherit;
+}
+
+.faqToggle {
+  display: flex;
+  align-items: center;
+  gap: calc(12 * var(--pc-u));
+  width: 100%;
+  padding: calc(13 * var(--pc-u)) calc(16 * var(--pc-u));
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.faqToggle:hover {
+  background: var(--pc-color-bg-surface-hover);
+}
+
+.faqToggle:focus-visible {
+  outline: 2px solid var(--pc-color-focus-ring);
+  outline-offset: -2px;
+}
+
+.faqQuestion {
+  flex: 1;
+  min-width: 0;
+  font-size: calc(12.5 * var(--pc-u));
+  font-weight: 600;
+}
+
+.faqChevron {
+  flex: none;
+  width: calc(15 * var(--pc-u));
+  height: calc(15 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+  transition: transform 0.15s;
+}
+
+/* 시안은 열림·닫힘 아이콘을 따로 그리지만 같은 쉐브론을 뒤집어도 모양이 같다 */
+.faqToggle[aria-expanded='true'] .faqChevron {
+  transform: rotate(180deg);
+  color: var(--pc-color-accent-text);
+}
+
+.faqPanel {
+  display: flex;
+  flex-direction: column;
+  gap: calc(14 * var(--pc-u));
+  padding: calc(16 * var(--pc-u)) calc(16 * var(--pc-u)) calc(18 * var(--pc-u));
+  border-top: 1px solid var(--pc-color-border-subtle);
+  background: var(--pc-color-bg-inset);
+}
+
+.faqAnswer {
+  margin: 0;
+  font-size: calc(12 * var(--pc-u));
+  line-height: 1.75;
+  color: var(--pc-color-text-secondary);
+}
+
+.faqSteps {
+  display: flex;
+  flex-direction: column;
+  gap: calc(8 * var(--pc-u));
+  margin: 0;
+  padding: calc(12 * var(--pc-u)) calc(14 * var(--pc-u));
+  list-style: none;
+  border: 1px solid var(--pc-color-border-subtle);
+  border-radius: calc(10 * var(--pc-u));
+  background: var(--pc-color-bg-surface);
+}
+
+.faqStep {
+  display: flex;
+  align-items: flex-start;
+  gap: calc(9 * var(--pc-u));
+  font-size: calc(11.5 * var(--pc-u));
+  line-height: 1.55;
+  color: var(--pc-color-text-secondary);
+}
+
+.faqStepNum {
+  flex: none;
+  width: calc(16 * var(--pc-u));
+  height: calc(16 * var(--pc-u));
+  margin-top: calc(1 * var(--pc-u));
+  border-radius: 99px;
+  background: var(--pc-color-accent-subtle);
+  color: var(--pc-color-accent-text);
+  font-size: calc(9.5 * var(--pc-u));
+  font-weight: 750;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* 높이는 평가 버튼(28u)에 맞춰 둔다 — 버튼이 완료 문구로 바뀔 때 패널이 줄어들며 흔들리지 않게 */
+.faqFooter {
+  display: flex;
+  align-items: center;
+  gap: calc(8 * var(--pc-u));
+  min-height: calc(28 * var(--pc-u));
+  padding-top: calc(2 * var(--pc-u));
+}
+
+.faqVote {
+  display: flex;
+  align-items: center;
+  gap: calc(8 * var(--pc-u));
+  font-size: calc(11 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}
+
+.voteButton {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: calc(28 * var(--pc-u));
+  height: calc(28 * var(--pc-u));
+  padding: 0;
+  border: 1px solid var(--pc-color-border-subtle);
+  border-radius: calc(8 * var(--pc-u));
+  background: var(--pc-color-bg-surface);
+  color: var(--pc-color-text-muted);
+  cursor: pointer;
+  transition:
+    color 0.15s,
+    border-color 0.15s;
+}
+
+.voteButton:hover {
+  color: var(--pc-color-accent-text);
+  border-color: var(--pc-color-accent);
+}
+
+/* 「아니요」는 강조색을 쓰지 않는다 — 시안이 중립 테두리로만 반응한다 */
+.voteButton[data-tone='down']:hover {
+  color: var(--pc-color-text-primary);
+  border-color: var(--pc-color-border-default);
+}
+
+.voteButton:focus-visible {
+  outline: 2px solid var(--pc-color-focus-ring);
+  outline-offset: 2px;
+}
+
+.voteButton svg {
+  width: calc(14 * var(--pc-u));
+  height: calc(14 * var(--pc-u));
+}
+
+.faqThanks {
+  display: flex;
+  align-items: center;
+  gap: calc(7 * var(--pc-u));
+  margin: 0;
+  font-size: calc(11 * var(--pc-u));
+  color: var(--pc-color-text-secondary);
+}
+
+/* 포커스는 낭독을 위해 옮긴 것이라(누를 것이 아니다) 링을 그리지 않는다 */
+.faqThanks:focus {
+  outline: none;
+}
+
+.faqThanks svg {
+  flex: none;
+  width: calc(14 * var(--pc-u));
+  height: calc(14 * var(--pc-u));
+  color: var(--pc-color-success);
+}
+
+.faqLink {
+  margin-left: auto;
+  font-size: calc(11 * var(--pc-u));
+  font-weight: 650;
+  color: var(--pc-color-accent-text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.faqLink:hover {
+  filter: brightness(1.25);
+}
+
+.faqLink:focus-visible {
+  outline: 2px solid var(--pc-color-focus-ring);
+  outline-offset: 2px;
+}
+
+/* ── 문의 ── */
+
+.contact {
+  display: flex;
+  align-items: center;
+  gap: calc(16 * var(--pc-u));
+  padding: calc(18 * var(--pc-u));
+  border: 1px solid var(--pc-color-border-subtle);
+  border-radius: calc(14 * var(--pc-u));
+  background: var(--pc-color-bg-surface);
+}
+
+.contactBody {
+  flex: 1;
+  min-width: 0;
+  line-height: 1.5;
+}
+
+.contactTitle {
+  margin: 0 0 calc(3 * var(--pc-u));
+  font-size: calc(13 * var(--pc-u));
+  font-weight: 750;
+}
+
+.contactDesc {
+  margin: 0;
+  font-size: calc(11.5 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}
+
+.contactEmail {
+  color: var(--pc-color-text-secondary);
+  user-select: all;
+}
+
+/* 디스코드·이메일 버튼은 같은 폭 — 한쪽만 작으면 덜 중요한 길처럼 보인다 */
+.contactButtons {
+  flex: none;
+  display: grid;
+  grid-template-columns: repeat(2, calc(120 * var(--pc-u)));
+  gap: calc(8 * var(--pc-u));
+}
+
+/* LinkButton은 아이콘 크기를 정하지 않는다 — lucide 기본 24px·디스코드 SVG 원본 크기를 글자에 맞춘다 */
+.contactButtons svg {
+  width: calc(15 * var(--pc-u));
+  height: calc(15 * var(--pc-u));
+}

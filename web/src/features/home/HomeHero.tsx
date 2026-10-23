@@ -3,7 +3,7 @@
 import Image from 'next/image';
 import Link from 'next/link';
 import { Check } from 'lucide-react';
-import { LinkButton, Skeleton } from '@/ui';
+import { Button, LinkButton, Skeleton } from '@/ui';
 import { TOUR_TARGET } from '@/features/onboarding/tourSteps';
 import styles from './HomeScreen.module.css';
 import { isWaitingForBroadcast, setupSteps, type SetupStepId } from './setupSteps';
@@ -72,7 +72,27 @@ export function HeroSkeleton() {
   );
 }
 
-export function SetupHome({ userName, links }: { userName: string | null; links: HomeLinks }) {
+export function SetupHome({
+  userName,
+  links,
+  actionsDisabled = false,
+}: {
+  userName: string | null;
+  links: HomeLinks;
+  /** 남의 채널(POK-390): 단계 버튼은 남기되 누를 수 없게 */
+  actionsDisabled?: boolean;
+}) {
+  // 링크는 비활성을 못 나타낸다: 막을 때는 같은 모양의 비활성 버튼으로 바꾼다
+  const action = (href: string, label: string, variant: 'solid' | 'outline', className?: string) =>
+    actionsDisabled ? (
+      <Button variant={variant} size="sm" disabled className={className}>
+        {label}
+      </Button>
+    ) : (
+      <LinkButton as={Link} href={href} variant={variant} size="sm" className={className}>
+        {label}
+      </LinkButton>
+    );
   const steps = setupSteps(links);
   const left = steps.filter((x) => !x.done).length;
   // 못 읽은 단계가 있으면 남은 수를 단정하지 않는다 — 줄은 「확인 중…」인데 제목만 「4단계」라 하지 않게(리뷰 #299 2차)
@@ -121,34 +141,18 @@ export function SetupHome({ userName, links }: { userName: string | null; links:
                   {state === 'current' ? (
                     <span className={styles.trackDesc}>{step.desc}</span>
                   ) : null}
-                  {state === 'current' && step.action ? (
-                    <LinkButton
-                      as={Link}
-                      href={step.action.href}
-                      variant="solid"
-                      size="sm"
-                      className={styles.trackAction}
-                    >
-                      {step.action.label}
-                    </LinkButton>
-                  ) : null}
+                  {state === 'current' && step.action
+                    ? action(step.action.href, step.action.label, 'solid', styles.trackAction)
+                    : null}
                   {state === 'current' && step.id === 'broadcast' ? (
                     <span className={styles.trackWait}>
                       <span className={styles.pulse} aria-hidden /> 기다리는 중
                     </span>
                   ) : null}
                   {/* 방송 채널·플러그인은 순서가 없다 — 지금 단계가 아니어도 버튼을 둔다 */}
-                  {state === 'todo' && step.action && !step.unknown ? (
-                    <LinkButton
-                      as={Link}
-                      href={step.action.href}
-                      variant="outline"
-                      size="sm"
-                      className={styles.trackAction}
-                    >
-                      {step.action.label}
-                    </LinkButton>
-                  ) : null}
+                  {state === 'todo' && step.action && !step.unknown
+                    ? action(step.action.href, step.action.label, 'outline', styles.trackAction)
+                    : null}
                 </li>
               );
             })}
@@ -156,9 +160,7 @@ export function SetupHome({ userName, links }: { userName: string | null; links:
           {waiting && links.youtube !== null && !links.youtube.linked ? (
             <div className={styles.heroFoot}>
               유튜브도 연결해 두면 만든 클립을 바로 올릴 수 있어요.
-              <LinkButton as={Link} href="/settings/channels" variant="outline" size="sm">
-                유튜브 연동
-              </LinkButton>
+              {action('/settings/channels', '유튜브 연동', 'outline')}
             </div>
           ) : null}
         </div>

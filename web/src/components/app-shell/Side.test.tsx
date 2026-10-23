@@ -1,14 +1,18 @@
 import { screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Side } from '@/components/app-shell/Side';
+import { useAuthStore } from '@/stores/auth';
+import { useChannelStore } from '@/stores/channel';
 import { useSidebarStore } from '@/stores/sidebar';
+import { jsonResponse, stubFetch } from '@/test/mockFetch';
 import { renderWithProviders } from '@/test/testProviders';
 
 const nav = vi.hoisted(() => ({ pathname: '/settings/plugin' }));
 
 vi.mock('next/navigation', () => ({
   usePathname: () => nav.pathname,
+  useRouter: () => ({ replace: vi.fn(), push: vi.fn() }),
 }));
 
 // 접힘은 모듈 전역 스토어다 — 테스트 사이에 새지 않게 되돌린다
@@ -17,12 +21,12 @@ beforeEach(() => {
 });
 
 describe('Side — 설정', () => {
-  it('설정 메뉴 7개 중 채널 연동·편집자 관리·플러그인·알림 설정·계정만 링크이고 현재 경로를 활성으로 표시한다', () => {
+  it('설정 메뉴 7개 중 구독 · 결제만 빼고 링크이고 현재 경로를 활성으로 표시한다', () => {
     nav.pathname = '/settings/plugin';
     renderWithProviders(<Side menu="settings" />);
 
     const links = screen.getAllByRole('link');
-    expect(links).toHaveLength(5);
+    expect(links).toHaveLength(6);
     expect(links[0]).toHaveAttribute('href', '/settings/channels');
     expect(links[0]).not.toHaveAttribute('aria-current');
     expect(links[1]).toHaveAttribute('href', '/settings/editors');
@@ -33,11 +37,11 @@ describe('Side — 설정', () => {
     expect(links[3]).not.toHaveAttribute('aria-current');
     expect(links[4]).toHaveAttribute('href', '/settings/account');
     expect(links[4]).not.toHaveAttribute('aria-current');
+    expect(links[5]).toHaveAttribute('href', '/settings/help');
+    expect(links[5]).not.toHaveAttribute('aria-current');
 
-    // 나머지 2개는 비활성 (하위 티켓에서 라우트가 생기면 링크로 전환)
-    for (const label of ['구독 · 결제', '도움말 · 문의']) {
-      expect(screen.getByText(label).closest('[aria-disabled="true"]')).not.toBeNull();
-    }
+    // 구독 · 결제는 비활성 (라우트가 생기면 링크로 전환)
+    expect(screen.getByText('구독 · 결제').closest('[aria-disabled="true"]')).not.toBeNull();
   });
 
   it('알림 설정 화면에서 알림 설정이 활성이다', () => {
@@ -157,5 +161,117 @@ describe('Side — 클립', () => {
     expect(upstatus).toHaveTextContent('업로드 상태3');
     // 값을 안 준 항목에는 배지가 없다
     expect(screen.getByText('보관함').closest('a')).toHaveTextContent(/^보관함$/);
+  });
+});
+
+describe('Side: 채널 스위처 트리거(POK-390)', () => {
+  const ME = { id: 7, email: 'me@example.com', name: '나', profileImageUrl: null };
+  const BYEOLHA = {
+    id: 21,
+    counterpartId: 3,
+    counterpartName: '별하',
+    grantedAt: '2026-10-01T00:00:00Z',
+  };
+
+  function stubChannel() {
+    return stubFetch((url) => {
+      if (url === '/api/auth/me') return jsonResponse(200, ME);
+      if (url === '/api/editor-delegations/as-editor') return jsonResponse(200, [BYEOLHA]);
+      if (url === '/api/editor-invitations/received') return jsonResponse(200, []);
+      return jsonResponse(404);
+    });
+  }
+
+  beforeEach(() => {
+    window.localStorage.clear();
+    useChannelStore.setState({ userId: null, selected: null });
+    useAuthStore.setState({ accessToken: 'access-1', refreshToken: 'refresh-1', hydrated: true });
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('프로필 자리에 지금 채널 이름과 「스트리머」 칩이 나오고 누르면 스위처가 열린다', async () => {
+    nav.pathname = '/clips/library';
+    stubChannel();
+    const user = userEvent.setup();
+    renderWithProviders(<Side menu="clips" />);
+
+    const trigger = await screen.findByRole('button', { name: /계정 전환/ });
+    expect(await screen.findByText('나 채널')).toBeInTheDocument();
+    expect(screen.getByText('스트리머')).toBeInTheDocument();
+
+    await user.click(trigger);
+    expect(await screen.findByRole('dialog', { name: '계정 전환' })).toBeInTheDocument();
+  });
+
+  it('알림 버튼은 트리거 밖이다: 버튼 안 버튼을 만들지 않는다', async () => {
+    nav.pathname = '/clips/library';
+    stubChannel();
+    renderWithProviders(<Side menu="clips" />);
+
+    const trigger = await screen.findByRole('button', { name: /계정 전환/ });
+    expect(trigger).not.toContainElement(screen.getByRole('button', { name: '알림' }));
+  });
+
+  it('남의 채널이면 그 채널 이름과 「편집자」 칩이다', async () => {
+    window.localStorage.setItem('pc-channel', JSON.stringify({ '7': 3 }));
+    nav.pathname = '/clips/library';
+    stubChannel();
+    renderWithProviders(<Side menu="clips" />);
+
+    expect(await screen.findByText('별하 채널')).toBeInTheDocument();
+    expect(screen.getByText('편집자')).toBeInTheDocument();
+  });
+});
+
+describe('Side: 남의 채널에서 막는 메뉴(POK-390)', () => {
+  const ME = { id: 7, email: 'me@example.com', name: '나', profileImageUrl: null };
+  const BYEOLHA = {
+    id: 21,
+    counterpartId: 3,
+    counterpartName: '별하',
+    grantedAt: '2026-10-01T00:00:00Z',
+  };
+  const OWNER_ONLY = ['채널 연동', '편집자 관리', '플러그인'];
+  const PERSONAL = ['알림 설정', '계정'];
+
+  beforeEach(() => {
+    window.localStorage.clear();
+    useChannelStore.setState({ userId: null, selected: null });
+    useAuthStore.setState({ accessToken: 'access-1', refreshToken: 'refresh-1', hydrated: true });
+    stubFetch((url) => {
+      if (url === '/api/auth/me') return jsonResponse(200, ME);
+      if (url === '/api/editor-delegations/as-editor') return jsonResponse(200, [BYEOLHA]);
+      return jsonResponse(404);
+    });
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('편집자 채널이면 채널 연동·편집자 관리·플러그인이 비활성이고 링크가 아니다: 알림 설정·계정은 링크', async () => {
+    window.localStorage.setItem('pc-channel', JSON.stringify({ '7': 3 }));
+    nav.pathname = '/settings/notifications';
+    renderWithProviders(<Side menu="settings" />);
+    await screen.findByText('별하 채널');
+
+    for (const label of OWNER_ONLY) {
+      expect(screen.queryByRole('link', { name: new RegExp(label) })).not.toBeInTheDocument();
+      expect(screen.getByText(label).closest('[aria-disabled="true"]')).not.toBeNull();
+    }
+    for (const label of PERSONAL) {
+      expect(screen.getByRole('link', { name: new RegExp(label) })).toBeInTheDocument();
+    }
+  });
+
+  it('내 채널이면 그 셋도 링크다', async () => {
+    nav.pathname = '/settings/notifications';
+    renderWithProviders(<Side menu="settings" />);
+    await screen.findByText('나 채널');
+
+    for (const label of [...OWNER_ONLY, ...PERSONAL]) {
+      expect(screen.getByRole('link', { name: new RegExp(label) })).toBeInTheDocument();
+    }
   });
 });

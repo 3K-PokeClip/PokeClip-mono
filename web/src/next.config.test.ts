@@ -41,6 +41,11 @@ describe('next.config rewrites', () => {
         source: '/api/youtube-link/:path*',
         destination: 'http://auth.internal:8082/api/youtube-link/:path*',
       },
+      // SOOP 연동도 auth 서버 소유: 한 줄이 /api/soop-link 자체와 /start를 덮는다 (POK-396)
+      {
+        source: '/api/soop-link/:path*',
+        destination: 'http://auth.internal:8082/api/soop-link/:path*',
+      },
       // 편집자가 읽는 스트리머 오디오 트랙 이름(POK-240)과 프로필 사진도 auth 서버 소유 (POK-251)
       {
         source: '/api/streamers/:path*',

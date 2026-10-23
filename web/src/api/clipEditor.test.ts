@@ -5,11 +5,14 @@ import {
   fetchAllBroadcasts,
   fetchBroadcast,
   fetchJumpCard,
+  fetchLibraryAll,
   mediaStreamId,
+  openJumpCard,
   requestRender,
   retryUpload,
   type UploadInfo,
 } from '@/api/clipEditor';
+import { useChannelStore } from '@/stores/channel';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
 
 // clip 창구 호출은 로그인 세션의 apiFetch를 거친다(POK-251). 실패는 ClipApiError로 옮겨 사유 코드를 지킨다.
@@ -182,19 +185,36 @@ describe('방송 목록 쪽 넘기기', () => {
   });
 });
 
+describe('openJumpCard: 열기 기록 실패는 삼킨다(POK-393)', () => {
+  // 측정 재료 하나 때문에 편집을 막지 않는다: 부르는 쪽은 결과를 기다리지 않으므로 거부가 새면 처리 안 된 거부가 된다
+  it('서버가 503을 줘도 거부 없이 끝난다', async () => {
+    const spy = stubFetch(() => jsonResponse(503, { error: 'unavailable' }));
+    await expect(openJumpCard('5')).resolves.toBeUndefined();
+    expect(spy.mock.calls.map(([url, init]) => [String(url), init?.method])).toEqual([
+      ['/api/clip/jump-cards/5/open', 'POST'],
+    ]);
+  });
+
+  it('네트워크 오류여도 거부 없이 끝난다', async () => {
+    stubFetch(() => Promise.reject(new TypeError('Failed to fetch')));
+    await expect(openJumpCard('5')).resolves.toBeUndefined();
+  });
+});
+
 describe('카드 목록 쪽 넘기기', () => {
   // 카드 목록 기본 쪽 크기가 50이고 오래된 것부터 온다 — 한 쪽만 보면 51번째 카드를 편집기가 못 연다(PR #200 codex)
-  it('찾는 카드가 뒤쪽에 있으면 커서를 따라가 찾고, 숨긴 카드도 찾는다', async () => {
+  it('찾는 카드가 뒤쪽에 있으면 커서를 따라가 찾는다', async () => {
     const spy = stubFetch((url) =>
       url.includes('cursor=c2')
-        ? jsonResponse(200, { cards: [{ id: 77, hidden: true }], nextCursor: null })
-        : jsonResponse(200, { cards: [{ id: 1, hidden: false }], nextCursor: 'c2' }),
+        ? jsonResponse(200, { cards: [{ id: 77 }], nextCursor: null })
+        : jsonResponse(200, { cards: [{ id: 1 }], nextCursor: 'c2' }),
     );
 
     expect(await fetchJumpCard('s1', '77')).toMatchObject({ id: 77 });
     const urls = spy.mock.calls.map(([url]) => String(url));
     expect(urls).toHaveLength(2);
-    expect(urls[0]).toContain('includeHidden=true');
+    // 숨김 옵션은 POK-393에서 없앴다(서버가 안 받는다)
+    expect(urls[0]).not.toContain('includeHidden');
     expect(urls[0]).toContain('limit=200');
   });
 });
@@ -214,5 +234,202 @@ describe('mediaStreamId — 영상 주소의 키(POK-233)', () => {
     expect(mediaStreamId({ streamId: 'old-key' })).toBe('old-key');
     expect(mediaStreamId({ streamId: 'old-key', ingestStreamId: null })).toBe('old-key');
     expect(mediaStreamId({ streamId: 'old-key', ingestStreamId: '' })).toBe('old-key');
+  });
+});
+
+describe('고른 채널로 좁히기 (POK-390)', () => {
+  const goneSignal = () => useChannelStore.getState().goneSignal;
+
+  it('방송 전부 읽기는 쪽마다 streamerId를 싣는다', async () => {
+    const spy = stubFetch((url) =>
+      url.includes('cursor=p2')
+        ? jsonResponse(200, { broadcasts: [row('b')], nextCursor: null })
+        : jsonResponse(200, { broadcasts: [row('a')], nextCursor: 'p2' }),
+    );
+
+    await fetchAllBroadcasts('past', 3);
+
+    const urls = spy.mock.calls.map(([url]) => new URL(String(url), 'http://localhost'));
+    expect(urls).toHaveLength(2);
+    expect(urls.map((u) => u.searchParams.get('streamerId'))).toEqual(['3', '3']);
+  });
+
+  it('번호가 없으면 streamerId를 안 싣는다: 옛 호출(섞어서)과 같다', async () => {
+    const spy = stubFetch(() => jsonResponse(200, { broadcasts: [], nextCursor: null }));
+
+    await fetchAllBroadcasts('past');
+    await fetchAllBroadcasts('live', null);
+
+    for (const [url] of spy.mock.calls) expect(String(url)).not.toContain('streamerId');
+  });
+
+  it('보관함 전부 읽기도 쪽마다 streamerId를 싣는다', async () => {
+    const spy = stubFetch((url) =>
+      url.includes('cursor=p2')
+        ? jsonResponse(200, { items: [], nextCursor: null })
+        : jsonResponse(200, { items: [], nextCursor: 'p2' }),
+    );
+
+    await fetchLibraryAll(3);
+
+    const urls = spy.mock.calls.map(([url]) => new URL(String(url), 'http://localhost'));
+    expect(urls.map((u) => u.searchParams.get('streamerId'))).toEqual(['3', '3']);
+  });
+
+  it('방송 한 줄 찾기는 채널 제한 없이 그대로다: 남의 채널 방송 바로가기를 연다', async () => {
+    const spy = stubFetch(() => jsonResponse(200, { broadcasts: [row('x')], nextCursor: null }));
+
+    await fetchBroadcast('x');
+
+    for (const [url] of spy.mock.calls) expect(String(url)).not.toContain('streamerId');
+  });
+
+  it('고른 채널의 목록이 404면 끊김 신호를 한 번 보내고 오류는 그대로 던진다', async () => {
+    stubFetch(() => jsonResponse(404, { error: 'broadcast_not_found' }));
+    const before = goneSignal();
+
+    await expect(fetchAllBroadcasts('past', 3)).rejects.toBeInstanceOf(ClipApiError);
+    expect(goneSignal()).toBe(before + 1);
+    // 어느 번호로 물었는지 싣는다: 내 채널이면 ChannelScope가 끊김 대신 세션 어긋남으로 본다
+    expect(useChannelStore.getState().goneFor).toBe(3);
+
+    await expect(fetchLibraryAll(3)).rejects.toMatchObject({ status: 404 });
+    expect(goneSignal()).toBe(before + 2);
+  });
+
+  it('번호 없이 404거나 404가 아닌 실패는 신호를 안 보낸다', async () => {
+    const before = goneSignal();
+    stubFetch(() => jsonResponse(404, { error: 'broadcast_not_found' }));
+    await fetchAllBroadcasts('past').catch(() => null);
+    await fetchLibraryAll().catch(() => null);
+    vi.unstubAllGlobals();
+    stubFetch(() => jsonResponse(500, { error: 'boom' }));
+    await fetchAllBroadcasts('past', 3).catch(() => null);
+
+    expect(goneSignal()).toBe(before);
+  });
+});
+
+describe('영상 출입증 받기와 쿠키 싣기 (POK-317)', () => {
+  // 모듈 안 기억(받은 출입증 · 쿠키 표시)이 시험끼리 새지 않게 매번 새로 읽는다
+  async function load(answer: (url: string) => Response, playbackBase = 'https://media.test') {
+    vi.resetModules();
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_PLAYBACK_BASE_URL', playbackBase);
+    const spy = stubFetch((url) => Promise.resolve(answer(String(url))));
+    const api = await import('@/api/clipEditor');
+    const media = await import('@/api/mediaPlayback');
+    const posts = () =>
+      spy.mock.calls
+        .filter(([url]) => String(url).endsWith('/playback-access'))
+        .map(([url]) => String(url));
+    return { api, media, posts };
+  }
+  const granted = (expiresAt: string) => () => jsonResponse(200, { expiresAt });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllEnvs();
+  });
+
+  it('서명 재료가 없는 503만 「필요 없음」이다: 자격 확인이 안 되는 503은 실패라 다시 묻는다', async () => {
+    const off = await load(() => jsonResponse(503, { error: 'playback_signing_unavailable' }));
+    expect(await off.api.requestPlaybackAccess('s1')).toEqual({ kind: 'not_needed' });
+    const authDown = await load(() => jsonResponse(503, { error: 'authorization_unavailable' }));
+    expect(await authDown.api.requestPlaybackAccess('s1')).toEqual({ kind: 'failed' });
+  });
+
+  it('출입증을 실제로 받기 전에는 쿠키를 안 싣는다: 로컬 영상 서버는 Allow-Origin * 라 쿠키를 실으면 응답을 버린다', async () => {
+    const off = await load(() => jsonResponse(503, { error: 'playback_signing_unavailable' }));
+    expect(off.media.mediaCredentials()).toBe('same-origin');
+    await off.api.requestPlaybackAccess('s1');
+    expect(off.media.mediaCredentials()).toBe('same-origin');
+
+    const on = await load(granted('2026-10-23T01:00:00Z'));
+    await on.api.requestPlaybackAccess('s1');
+    expect(on.media.mediaCredentials()).toBe('include');
+  });
+
+  it('받은 출입증은 만료 5분 전까지 다시 쓴다: 그 뒤에는 다시 받는다', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.parse('2026-10-23T00:00:00Z'));
+    const { api, posts } = await load(granted('2026-10-23T01:00:00Z'));
+
+    await api.ensurePlaybackAccess('s1', 'key-1');
+    await api.ensurePlaybackAccess('s1', 'key-1');
+    expect(posts()).toHaveLength(1);
+
+    vi.setSystemTime(Date.parse('2026-10-23T00:54:59Z'));
+    await api.ensurePlaybackAccess('s1', 'key-1');
+    expect(posts()).toHaveLength(1);
+    vi.setSystemTime(Date.parse('2026-10-23T00:55:01Z'));
+    await api.ensurePlaybackAccess('s1', 'key-1');
+    expect(posts()).toHaveLength(2);
+  });
+
+  it('같은 방송이라도 영상 키가 바뀌면 다시 받는다: 쿠키 경로가 영상 키라 옛 키로 받은 것은 새 주소에 안 실린다(PR #320 codex)', async () => {
+    const { api, posts } = await load(granted('2999-01-01T00:00:00Z'));
+    await api.ensurePlaybackAccess('s1', 's1');
+    await api.ensurePlaybackAccess('s1', 's1');
+    expect(posts()).toHaveLength(1);
+    await api.ensurePlaybackAccess('s1', 'physical-key');
+    expect(posts()).toHaveLength(2);
+  });
+
+  it('동시에 여러 번 불러도 한 번만 묻는다: 편집기 화면과 미리보기가 같은 방송을 거의 동시에 부른다', async () => {
+    const { api, posts } = await load(granted('2026-10-23T01:00:00Z'));
+    await Promise.all([api.ensurePlaybackAccess('s1', 'k'), api.ensurePlaybackAccess('s1', 'k')]);
+    expect(posts()).toHaveLength(1);
+  });
+
+  it('실패는 기억하지 않는다: 다음에 부르면 다시 묻는다', async () => {
+    const { api, posts } = await load(() => jsonResponse(500, {}));
+    await api.ensurePlaybackAccess('s1', 'k');
+    await api.ensurePlaybackAccess('s1', 'k');
+    expect(posts()).toHaveLength(2);
+  });
+
+  it('「필요 없음」을 받은 방송은 더 묻지 않고, 다른 방송은 묻는다: 같은 사유 코드가 한 방송의 키 글자 검사 실패에도 온다(PR #320 codex)', async () => {
+    const { api, posts } = await load(() =>
+      jsonResponse(503, { error: 'playback_signing_unavailable' }),
+    );
+    await api.ensurePlaybackAccess('s1', 'k1');
+    await api.ensurePlaybackAccess('s1', 'k1');
+    expect(posts()).toHaveLength(1);
+    await api.ensurePlaybackAccess('s2', 'k2');
+    expect(posts()).toHaveLength(2);
+  });
+
+  it('라이브 화면이 받은 「필요 없음」도 기억한다: 목록·편집기가 같은 방송의 답을 받으러 다시 가지 않는다', async () => {
+    const { api, posts } = await load(() =>
+      jsonResponse(503, { error: 'playback_signing_unavailable' }),
+    );
+    await api.requestPlaybackAccess('s1');
+    expect(api.ensurePlaybackAccess('s1', 'k1')).toBeNull();
+    expect(posts()).toHaveLength(1);
+  });
+
+  it('녹화 재생 서버 주소가 없는 곳에서는 받지 않는다: 녹화를 부르지 않으니 쿠키도 필요 없다', async () => {
+    const { api, posts } = await load(granted('2026-10-23T01:00:00Z'), '');
+    expect(api.ensurePlaybackAccess('s1', 'k1')).toBeNull();
+    expect(posts()).toHaveLength(0);
+  });
+
+  it('영상 키로 부르면 그 키로 받아 둔 방송의 출입증을 다시 쓰거나 새로 받는다: 모르는 키면 묻지 않는다', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.parse('2026-10-23T00:00:00Z'));
+    const { api, posts } = await load(granted('2026-10-23T01:00:00Z'));
+
+    await api.ensureMediaAccess('unknown-key');
+    expect(posts()).toHaveLength(0);
+
+    await api.ensurePlaybackAccess('S-1', 'key-1');
+    await api.ensureMediaAccess('key-1');
+    expect(posts()).toHaveLength(1);
+    vi.setSystemTime(Date.parse('2026-10-23T00:56:00Z'));
+    await api.ensureMediaAccess('key-1');
+    expect(posts()).toEqual([
+      '/api/clip/broadcasts/S-1/playback-access',
+      '/api/clip/broadcasts/S-1/playback-access',
+    ]);
   });
 });

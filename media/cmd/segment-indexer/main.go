@@ -15,8 +15,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
-
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/config"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/fmp4meta"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
@@ -24,7 +22,9 @@ import (
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/mtxhook"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/mtxstate"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/playback"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/poolstat"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/recording"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/secretfile"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/upload"
 )
 
@@ -92,16 +92,11 @@ func run() error {
 	defer stop()
 
 	// --- 1. 기동: 설정 -> DB 연결 -> (개발 환경이면) 표 생성 ---
-	pool, err := pgxpool.New(ctx, cfg.PGDSN)
+	pool, dbConfig, err := openIndexerPool(ctx, cfg.PG, log, dbStepTimeout)
 	if err != nil {
-		// DSN 에는 비밀번호가 들어 있으므로 에러에 싣지 않는다.
-		return fmt.Errorf("DB 연결 풀 생성 실패: %w", err)
+		return err
 	}
 	defer pool.Close()
-
-	if err := pool.Ping(ctx); err != nil {
-		return fmt.Errorf("DB 접속 확인 실패: %w", err)
-	}
 	if cfg.EnsureSchema {
 		// EnsureSchema 는 Store 인터페이스 밖의 자유 함수다(D7).
 		// 정본 DDL(1번 소유 — ddl.go)을 부팅 시 보장한다. 마이그레이션 도구 도입 시 이 3줄과 ddl.go 만 바꾸면 된다(G7).
@@ -110,6 +105,9 @@ func run() error {
 		}
 		log.Info("schema_ensured", "note", "정본 DDL(1번 소유). 컬럼 변경은 3번 승인 — 계약-세그먼트인덱스 4절")
 	}
+	// 연결 폐기 관측(POK-388). 관측 고루틴이 풀을 읽으므로 pool.Close 보다 뒤에 등록해 먼저 멈춘다.
+	stopIndexerStats := poolstat.Start(ctx, pool, "indexer", log)
+	defer stopIndexerStats()
 
 	// 장부에 협력자 둘을 끼운다(계획 4.6): 세션 결정자와 ③ 키 파생.
 	// 세션 판정 정책·키 형상은 각각 자기 패키지에 있고, 여기서 이어 붙이는 것이 전부다.
@@ -211,10 +209,12 @@ func run() error {
 			return index.EndLive(ctx, pool, streamID)
 		},
 	}
-	if pubPool := assemblePublishing(ctx, cfg, up, rewind); pubPool != nil {
+	if pubPool := assemblePublishing(ctx, cfg, dbConfig.Copy(), up, rewind); pubPool != nil {
 		// ★ 등록 순서가 계약이다(위 up.Shutdown 주석과 같은 원리). 발행자 풀은 up.Shutdown 보다 먼저 닫히고 아래
 		//   rewind.stop(fence 반납)보다 늦게 닫힌다 — 반납 문장이 이 풀로 나간다(체크리스트 474 A-3 3).
 		defer pubPool.Close()
+		stopPublisherStats := poolstat.Start(ctx, pubPool, "publisher", log)
+		defer stopPublisherStats() // 위 인덱서 풀 관측과 같은 원리 — pubPool.Close 보다 먼저 멈춘다
 	}
 	// 루프의 ctx 가 곧 차선 ctx 다(rewindLoop 문서). run ctx 에서 떼어 두어, 루프가 오류로 끝나 run ctx 가 살아 있어도
 	// rewind.stop 이 작업을 끊고 기다린 뒤 fence 를 반납한다(판단 J74).
@@ -356,7 +356,7 @@ func observerOptions(cfg config.Config) (mtxstate.Options, error) {
 	if opt.APIURL == "" || cfg.MTXAPIPassFile == "" {
 		return opt, nil
 	}
-	pass, err := readSecretFile("MTX_API_PASS_FILE", cfg.MTXAPIPassFile)
+	pass, err := secretfile.Read("MTX_API_PASS_FILE", cfg.MTXAPIPassFile, secretfile.Options{ShowPath: true})
 	if err != nil {
 		return mtxstate.Options{}, err
 	}

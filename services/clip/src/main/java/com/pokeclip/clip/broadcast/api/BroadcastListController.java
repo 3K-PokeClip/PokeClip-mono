@@ -39,8 +39,9 @@ public class BroadcastListController {
     public BroadcastListResponse list(@RequestParam String state,
                                       @RequestParam(required = false) Integer limit,
                                       @RequestParam(required = false) String cursor,
+                                      @RequestParam(required = false) String streamerId,
                                       @AuthenticationPrincipal Jwt jwt) {
         return BroadcastListResponse.from(
-                service.list(jwt.getSubject(), BroadcastState.fromParam(state), limit, cursor));
+                service.list(jwt.getSubject(), BroadcastState.fromParam(state), limit, cursor, streamerId));
     }
 }

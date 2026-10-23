@@ -39,12 +39,14 @@ const (
 	testAPIUser      = "ingest-auth"
 	testAPIPass      = "synthetic-api-pass-c6-0001"
 	testPassphrase   = "Synthetic_Pass-phrase_c6_0123456789"
+	testCallerUser   = "mediamtx"                      // 호출자 Basic 사용자 — MediaMTX 의 authHTTPAddress URL 자격
+	testCallerPass   = "synthetic-caller-pass-c6-0001" // 호출자 Basic 비번(unreserved 문자만)
 	testPublisherIP  = "198.51.100.7"
 	testUserID       = 4242
 )
 
 // secretCanaries 는 stdout · stderr 어디에도 나와서는 안 되는 값이다. passphrase 는 허용 응답 본문에만 실린다.
-var secretCanaries = []string{testResolveToken, testAPIPass, testPassphrase}
+var secretCanaries = []string{testResolveToken, testAPIPass, testPassphrase, testCallerPass}
 
 // testConnID 는 n 번째 합성 연결 id 다(MediaMTX 가 싣는 꼴 — 소문자 UUID).
 func testConnID(n int) string {
@@ -56,7 +58,7 @@ func getenvFrom(env map[string]string) func(string) string {
 	return func(name string) string { return env[name] }
 }
 
-// configEnv 는 설정 시험의 환경 변수 일곱이다(합성). 인증 리스너는 시험 기계에 없는 문서용 주소라, 검사를 빠뜨린
+// configEnv 는 설정 시험의 환경 변수 아홉이다(합성). 인증 리스너는 시험 기계에 없는 문서용 주소라, 검사를 빠뜨린
 // 변이도 리스너를 열지 못하고 곧바로 끝난다(시험이 멈추지 않는다). 어느 주소에도 요청을 보내지 않는다.
 func configEnv() map[string]string {
 	return map[string]string{
@@ -67,6 +69,8 @@ func configEnv() map[string]string {
 		"MTX_API_PASS":             testAPIPass,
 		"STREAM_KEY_RESOLVE_URL":   "http://192.0.2.30:8082",
 		"STREAM_KEY_RESOLVE_TOKEN": testResolveToken,
+		"INGEST_AUTH_BASIC_USER":   testCallerUser,
+		"INGEST_AUTH_BASIC_PASS":   testCallerPass,
 	}
 }
 
@@ -394,15 +398,22 @@ func apiBody(ip, user, pass string) string {
 		ip, user, pass)
 }
 
-// postAuth 는 MediaMTX 처럼 addr 의 /mediamtx/auth 에 body 를 POST 한다 — 요청마다 새 연결이다(포크
-// auth/manager.go 227–237). 고루틴 안에서도 부르므로 t 를 받지 않고 에러를 돌려준다.
+// postAuth 는 MediaMTX 처럼 addr 의 /mediamtx/auth 에 body 를 POST 한다 — 요청마다 새 연결이고(포크
+// auth/manager.go 227–237), 호출자 Basic 자격(testCallerUser · testCallerPass)을 싣는다. header 의 값이 머리를
+// 덮고, 값이 빈 이름은 머리를 지운다(호출자 Basic 없이 보내는 시험). 고루틴 안에서도 부르므로 t 를 받지 않고 에러를
+// 돌려준다.
 func postAuth(ctx context.Context, addr, body string, header http.Header) (status int, respBody string, err error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+addr+"/mediamtx/auth", strings.NewReader(body))
 	if err != nil {
 		return 0, "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.SetBasicAuth(testCallerUser, testCallerPass)
 	for name, values := range header {
+		if len(values) == 0 {
+			req.Header.Del(name)
+			continue
+		}
 		req.Header[name] = values
 	}
 	client := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}}

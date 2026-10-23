@@ -148,6 +148,30 @@ class RecipeControllerTest extends IntegrationTestSupport {
         assertThat(출처(id)).as("고쳐도 출처는 그대로다").isEqualTo(card);
     }
 
+    /**
+     * 카드 찜(집기)이 없어졌으니(POK-393) 같은 카드에서 두 사람이 각자 편집본을 만든다. 둘 다 저장되고 출처가 같다.
+     *
+     * <p><b>처음부터 초록인 회귀 그물이다</b>(실패를 먼저 보는 대상이 아니다). 편집본 저장은 원래 카드 점유를
+     * 안 봤다. 나중에 누가 「한 카드에 편집본 하나」 같은 제약을 넣으면 여기가 빨갛게 된다.
+     */
+    @Test
+    void 같은_카드에서_두_사람이_각자_저장한다() throws Exception {
+        볼_수_있다("EDITOR");
+        long card = 카드를_넣는다(내_방송);
+
+        List<Long> 번호들 = new ArrayList<>();
+        for (String 사람 : List.of(요청자, "4999")) {
+            String 응답 = 본문(mvc.perform(post("/api/clip/broadcasts/" + 내_방송 + "/recipes?sourceCardId=" + card)
+                            .header("Authorization", "Bearer " + TestTokens.access(사람))
+                            .contentType(MediaType.APPLICATION_JSON).content(정상_레시피().toString()))
+                    .andExpect(status().isCreated()));
+            번호들.add(MAPPER.readTree(응답).get("id").asLong());
+        }
+
+        assertThat(번호들).doesNotHaveDuplicates();
+        assertThat(번호들).allSatisfy(id -> assertThat(출처(id)).isEqualTo(card));
+    }
+
     @Test
     void 출처_없이_저장하면_비어_있다() throws Exception {
         볼_수_있다("OWNER");

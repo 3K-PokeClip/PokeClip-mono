@@ -73,7 +73,7 @@ final class SecretsManagerSecretStore implements SecretStore, AutoCloseable {
 
     /**
      * CreateSecret, 이미 있으면 PutSecretValue(포트의 「덮어쓴다」 의미를 지킨다). 스트림키는 언제나 새 이름이라
-     * 운영에서 덮어쓰기는 이행 실행기의 재시도에서만 생긴다. 두 호출이 같은 시한을 나눠 쓴다.
+     * 운영에서 덮어쓰기 갈래는 포트의 뜻을 지키려고만 둔다. 두 호출이 같은 시한을 나눠 쓴다.
      *
      * <p>원격 호출이라 DB 롤백이 따라오지 않는다. 비밀 먼저 → 행 순서({@code StreamKeyCreator})라 최악이
      * 아무 행도 가리키지 않는 고아 비밀 하나다(월 $0.40, 송출에는 무해).
@@ -140,7 +140,7 @@ final class SecretsManagerSecretStore implements SecretStore, AutoCloseable {
             client.deleteSecret(b -> b.secretId(ref).forceDeleteWithoutRecovery(true)
                     .overrideConfiguration(timeoutsUntil(deadline)));
         } catch (ResourceNotFoundException alreadyGone) {
-            // 멱등이다. 재발급 정리가 두 번 와도, 이행 실행기의 폐기 행 정리가 다시 돌아도 같다
+            // 멱등이다. 재발급 정리와 탈퇴 정리가 같은 키를 두 번 지워도 같다
         } catch (SdkException e) {
             throw new SecretStoreUnavailableException("delete", e);
         }

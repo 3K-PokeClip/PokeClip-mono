@@ -25,26 +25,63 @@ import (
 // StreamKeyResolveSecurityConfig.HEADER 와 같은 이름이어야 한다.
 const Header = "X-Stream-Key-Resolve-Token"
 
+// InternalHeader 는 auth 의 공용 내부 출입증 헤더다. 전용 헤더가 없는 resolve 요청은 auth 의 공용 체인이 받는다
+// (StreamKeyResolveSecurityConfig · InternalTokenFilter).
+const InternalHeader = "X-Internal-Token"
+
+// Channel 은 4C 요청이 지나는 auth 의 보안 체인(창구)이다 — 출입증을 어느 헤더에 실을지 정한다. 헤더는 늘 하나만 싣는다
+// — 둘 다 실리면 auth 의 전용 체인이 가져가 공용 토큰을 전용 값과 견준다.
+type Channel int
+
+// Channel 의 값이다. 영값이 전용 창구다.
+const (
+	ChannelResolveToken  Channel = iota // 전용 창구 — Header(X-Stream-Key-Resolve-Token)
+	ChannelInternalToken                // 공용 창구 — InternalHeader(X-Internal-Token)
+)
+
+// String 은 창구의 설정 이름이다(resolve-token · internal-token). 모르는 값이면 channel(<수>)다.
+func (c Channel) String() string {
+	switch c {
+	case ChannelResolveToken:
+		return "resolve-token"
+	case ChannelInternalToken:
+		return "internal-token"
+	}
+	return fmt.Sprintf("channel(%d)", int(c))
+}
+
+// header 는 창구가 출입증을 싣는 헤더 이름이다. 모르는 값이면 거짓이다.
+func (c Channel) header() (string, bool) {
+	switch c {
+	case ChannelResolveToken:
+		return Header, true
+	case ChannelInternalToken:
+		return InternalHeader, true
+	}
+	return "", false
+}
+
 // resolvePath 는 4C 의 경로다(auth 쪽 StreamKeyResolveController).
 const resolvePath = "/internal/stream-keys/resolve"
 
 // ClientOptions 는 NewClient 의 설정이다. Token 은 Secret 이라 ClientOptions 를 어떻게 찍어도 출입증이 나오지 않는다.
 type ClientOptions struct {
-	BaseURL string // http://<dev EC2 사설 주소>:8082 — 값은 .env 에만. 비면 NewClient 가 거부
-	Token   Secret // auth 의 STREAM_KEY_RESOLVE_TOKEN 과 같은 값(NewSecret 으로 감싼다). 비면 거부
+	BaseURL string  // http://<dev EC2 사설 주소>:8082 — 값은 .env 에만. 비면 NewClient 가 거부
+	Token   Secret  // 고른 창구의 출입증(NewSecret 으로 감싼다). 비면 거부
+	Channel Channel // 출입증을 싣는 창구. 영값은 전용 창구. 모르는 값이면 거부
 }
 
 // Client 는 4C 를 부르는 클라이언트다. 여러 고루틴이 함께 써도 된다. 출입증은 요청 머리에 싣는 함수 안에만 있어서
 // Client 를 어떻게 찍어도 나오지 않는다.
 type Client struct {
 	endpoint   string
-	authorize  func(*http.Request) // 요청에 전용 출입증 머리를 싣는다
+	authorize  func(*http.Request) // 요청에 고른 창구의 출입증 머리 하나를 싣는다
 	httpClient *http.Client
 }
 
 // NewClient 는 opt 를 검사해 Client 를 만든다. BaseURL · Token 이 비었거나, BaseURL 이 http · https 의 절대 URL(호스트
 // 포함)이 아니거나 사용자 정보 · 질의 · 조각이 있으면 에러다. Token 에 제어 문자가 있거나 앞뒤가 공백이어도 에러다 —
-// 머리 값으로 그대로 실을 수 없다.
+// 머리 값으로 그대로 실을 수 없다. Channel 이 모르는 값이어도 에러다.
 //
 // 에러에는 BaseURL · Token 의 값도, url.Parse 의 에러 문구(입력 원문을 담는다)도 싣지 않는다 —
 // 설정을 잘못 넣으면 BaseURL 자리에 토큰이 들어갈 수 있다.
@@ -59,6 +96,10 @@ func NewClient(opt ClientOptions) (*Client, error) {
 	if !headerSafe(token) {
 		return nil, errors.New("keyresolve: Token 에 제어 문자가 있거나 앞뒤가 공백이다 — 머리 값으로 그대로 실을 수 없다")
 	}
+	header, ok := opt.Channel.header()
+	if !ok {
+		return nil, fmt.Errorf("keyresolve: 모르는 Channel 이다 — %v", opt.Channel)
+	}
 	base, err := url.Parse(opt.BaseURL)
 	if err != nil || (base.Scheme != "http" && base.Scheme != "https") || base.Hostname() == "" {
 		return nil, errors.New("keyresolve: BaseURL 은 http 또는 https 의 절대 URL(호스트 포함)이어야 한다")
@@ -69,7 +110,7 @@ func NewClient(opt ClientOptions) (*Client, error) {
 	}
 	return &Client{
 		endpoint:  base.JoinPath(resolvePath).String(),
-		authorize: func(r *http.Request) { r.Header.Set(Header, token) },
+		authorize: func(r *http.Request) { r.Header.Set(header, token) },
 		// Timeout 을 두지 않는다 — 시한은 Resolve 의 ctx 하나다.
 		httpClient: &http.Client{
 			// 기본 전송(http.DefaultTransport)은 HTTP_PROXY 같은 환경변수의 프록시를 탄다. 이 전송은

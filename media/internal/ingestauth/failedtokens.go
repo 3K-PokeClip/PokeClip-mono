@@ -49,10 +49,11 @@ const (
 // 풀린 토큰은 차례 없이 예산 갈래로 resolve 한다(3-8절 기억 수명 상한).
 //
 // 「마지막 판정 불가가 더 이른」은 기록 순번으로 가른다. 지금을 잠금 안에서 읽으므로 순번 순서는 시각
-// 순서와 같고, 같은 시각에 기록된 토큰은 먼저 기록된 쪽이 오래 기다렸다. 시험 시계가 뒤로 가면 지금을 새
-// 기준으로 삼는다 — 그때 이미 풀린 항목은 치우고(되살아나지 않는다) 그보다 늦게 적힌 시각을 모두 지금으로
-// 당겨, 칸은 길어야 failedRecheckGap 닫히고 기억은 길어야 failedForgetAfter 남고 활동은 길어야
-// failedWaitingWindow 이어진다. 여러 고루틴이 함께 불러도 된다.
+// 순서와 같고, 같은 시각에 기록된 토큰은 먼저 기록된 쪽이 오래 기다렸다. 예외 하나 — 차례를 받고 resolve
+// 를 부르지 못한 토큰(requeue)은 시각은 그대로 두고 순번만 맨 뒤로 받는다. 순번이 차례를 정한다.
+// 시험 시계가 뒤로 가면 지금을 새 기준으로 삼는다 — 그때 이미 풀린 항목은 치우고(되살아나지 않는다)
+// 그보다 늦게 적힌 시각을 모두 지금으로 당겨, 칸은 길어야 failedRecheckGap 닫히고 기억은 길어야
+// failedForgetAfter 남고 활동은 길어야 failedWaitingWindow 이어진다. 여러 고루틴이 함께 불러도 된다.
 type failedTokens struct {
 	now   func() time.Time
 	limit int // 풀리지 않은 기억의 상한 — failedTokensMax. 시험이 작게 준다
@@ -131,6 +132,21 @@ func (f *failedTokens) record(token string, o resolveOutcome) (scope string, cle
 		scope, cleared = clearedToken, 1
 	}
 	return scope, cleared
+}
+
+// requeue 는 차례를 받고도 resolve 를 부르지 못한 token(admit 이 참을 준 뒤 시한이 지났다)을 차례 맨 뒤로 보낸다 — 새
+// 순번만 매기고 마지막 판정 불가 시각은 그대로 둔다(auth 에 묻지 않았으니 새 판정 불가가 아니다). 보내지 않으면 그
+// 토큰이 맨 앞에 남아 다른 기억 토큰을 failedWaitingWindow 동안 양보시킨다. 풀리지 않은 기억에 없으면 아무것도 하지
+// 않는다 — 새로 기억하지 않는다. 재확인 시각(칸)은 쓴 그대로 둔다.
+func (f *failedTokens) requeue(token string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	e := f.live(token, f.readClock())
+	if e == nil {
+		return
+	}
+	f.seq++
+	e.seq = f.seq
 }
 
 // remember 는 token 의 판정 불가를 적는다. e 는 token 의 풀리지 않은 기억이고, 없으면 nil 이다. 이미

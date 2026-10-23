@@ -8,9 +8,9 @@ import java.util.regex.Pattern;
 /**
  * 스트림키 암호 저장소 설정(POK-272, 1번 설계 8-A 3)).
  *
- * <p><b>읽기·쓰기 저장소({@code type})와 폐기 정리 대상({@code retireFrom})을 가른다.</b> 이행·병행·롤백 중에는
- * 어느 저장소에서 읽든 재발급·탈퇴가 <b>양쪽 사본을 함께</b> 지워야 해서다. 병행 기간에 dev는
- * {@code retireFrom=postgres,aws}다.
+ * <p><b>읽기·쓰기 저장소({@code type})와 폐기 정리 대상({@code retireFrom})을 가른다.</b> 롤백 중에는 같은 키의
+ * 사본이 양쪽에 있을 수 있어 재발급·탈퇴가 <b>양쪽 사본을 함께</b> 지워야 한다. 병행이 끝난 dev는
+ * {@code type=aws}·{@code retireFrom=aws}다(POK-329). 로컬은 둘 다 postgres다.
  *
  * <p>검사는 컴팩트 생성자가 한다. 어기면 부팅이 선다:
  * <ul>

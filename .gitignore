@@ -8,6 +8,8 @@
 # 개인 override — .example 을 cp 해서 쓴다. 자격증명 보간이 들어가므로 커밋 금지
 docker-compose.override.yml
 *.pem
+# 공개 인증서만 되돌린다 — AWS 가 공개 배포하는 RDS CA 번들(키 없음 · media/README.md CA 번들 절).
+!media/certs/rds-global-bundle.pem
 *.p12
 **/application-local.yml
 

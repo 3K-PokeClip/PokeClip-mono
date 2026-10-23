@@ -25,6 +25,7 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 
 import static com.pokeclip.auth.support.SecretsLocalStackFixture.PREFIX;
@@ -34,9 +35,10 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * 스트림키 저장소를 <b>aws</b>로 켠 컨텍스트(POK-272). 병행 기간 dev와 같게 {@code retire-from=postgres,aws}다.
+ * 스트림키 저장소를 <b>aws</b>로 켠 컨텍스트(POK-272). 병행이 끝난 dev와 같게 {@code retire-from=aws}다.
  *
- * <p>여기서 재는 것은 셋이다. 바인딩(유튜브·치지직은 그대로 PG인가), 정리(재발급·탈퇴가 양쪽 사본을 다 지우는가),
+ * <p>여기서 재는 것은 셋이다. 바인딩(유튜브·치지직은 그대로 PG인가), 정리(재발급·탈퇴가 Secrets Manager의 사본을
+ * 지우고 PG는 안 부르는가),
  * 누설(Secrets Manager 경로의 로그에 값·이름이 없는가). 컨텍스트가 하나 더 뜬다.
  */
 class StreamKeySecretsAwsTest extends AwsSecretStoreTestSupport {
@@ -66,8 +68,10 @@ class StreamKeySecretsAwsTest extends AwsSecretStoreTestSupport {
         assertThat(storeOf(StreamKeyService.class)).isInstanceOf(SecretsManagerSecretStore.class);
         assertThat(storeOf(classNamed("com.pokeclip.auth.streamkey.StreamKeyCreator")))
                 .isInstanceOf(SecretsManagerSecretStore.class);
-        assertThat(ReflectionTestUtils.getField(target(WithdrawalService.class), "secretRetirer"))
-                .isInstanceOf(StreamKeySecretRetirer.class);
+        Object retirer = ReflectionTestUtils.getField(target(WithdrawalService.class), "secretRetirer");
+        assertThat(retirer).isInstanceOf(StreamKeySecretRetirer.class);
+        assertThat((List<?>) ReflectionTestUtils.getField(retirer, "stores")).as("retire-from=aws")
+                .singleElement().isInstanceOf(SecretsManagerSecretStore.class);
     }
 
     @Test
@@ -97,11 +101,13 @@ class StreamKeySecretsAwsTest extends AwsSecretStoreTestSupport {
     }
 
     /**
-     * 이행 전 이름({@code streamkey:<uuid>}) 행을 재발급하면 <b>세 이름 모두</b> 양쪽에서 지운다. 병행 기간에 PG의 옛
-     * 이름 사본과 Secrets Manager의 새 이름 사본이 같이 있는 키가 그 모양이다.
+     * 이행 전 이름({@code streamkey:<uuid>}) 행을 재발급하면 Secrets Manager의 사본을 지우고 <b>PG는 안 부른다</b>.
+     * 병행이 끝나 {@code retire-from=aws}라서다. PG에 남은 사본은 병행 종료 때 손으로 지운다(POK-329). 두 저장소를
+     * 다 지우는 롤백 상태는 {@link StreamKeySecretRetirerTest}가 정리기 단위로 잰다. 그 상태로 컨텍스트를 하나 더
+     * 띄우지 않는 이유는 {@code IntegrationTestSupport}의 연결 수 여유다.
      */
     @Test
-    void 옛_이름_행을_재발급하면_양쪽_사본이_전부_지워진다() throws Exception {
+    void 옛_이름_행을_재발급하면_Secrets_Manager_사본만_지우고_PG는_그대로다() throws Exception {
         User user = newUser();
         String uuid = UUID.randomUUID().toString();
         String legacy = "streamkey:" + uuid;
@@ -112,28 +118,37 @@ class StreamKeySecretsAwsTest extends AwsSecretStoreTestSupport {
         pg.put(PREFIX + uuid, "token:old");
         SecretsLocalStackFixture.write(PREFIX + uuid, "token:old");
 
-        mockMvc.perform(post("/api/stream-keys/rotate").header("Authorization", bearer(user)))
-                .andExpect(status().isOk());
+        try {
+            mockMvc.perform(post("/api/stream-keys/rotate").header("Authorization", bearer(user)))
+                    .andExpect(status().isOk());
 
-        assertThat(pg.get(legacy)).isEmpty();
-        assertThat(pg.get(PREFIX + uuid)).isEmpty();
-        assertThat(SecretsLocalStackFixture.read(PREFIX + uuid)).isEmpty();
+            assertThat(SecretsLocalStackFixture.read(PREFIX + uuid)).isEmpty();
+            assertThat(pg.get(legacy)).as("retire-from=aws는 PG를 안 부른다").isPresent();
+            assertThat(pg.get(PREFIX + uuid)).isPresent();
+        } finally {
+            pg.delete(legacy);
+            pg.delete(PREFIX + uuid);
+        }
     }
 
-    /** aws 상태 탈퇴 → PG 병행 사본까지 0. 정리기가 {@code retire-from}의 두 저장소를 다 돈다. */
+    /** aws 상태 탈퇴는 Secrets Manager의 사본을 지우고 PG는 안 부른다({@code retire-from=aws}). */
     @Test
-    void aws_상태_탈퇴는_양쪽_사본을_지운다() throws Exception {
+    void aws_상태_탈퇴는_Secrets_Manager_사본을_지우고_PG는_그대로다() throws Exception {
         User user = newUser();
         streamKeyService.ensureKey(user.getId());
         String ref = aliveRef(user);
         pg.put(ref, "token:copy");
 
-        mockMvc.perform(delete("/api/auth/me").header("Authorization", bearer(user)))
-                .andExpect(status().isNoContent());
-        assertThat(cleanup.awaitIdle(Duration.ofSeconds(20))).isTrue();
+        try {
+            mockMvc.perform(delete("/api/auth/me").header("Authorization", bearer(user)))
+                    .andExpect(status().isNoContent());
+            assertThat(cleanup.awaitIdle(Duration.ofSeconds(20))).isTrue();
 
-        assertThat(SecretsLocalStackFixture.read(ref)).isEmpty();
-        assertThat(pg.get(ref)).isEmpty();
+            assertThat(SecretsLocalStackFixture.read(ref)).isEmpty();
+            assertThat(pg.get(ref)).as("retire-from=aws는 PG를 안 부른다").isPresent();
+        } finally {
+            pg.delete(ref);
+        }
     }
 
     /**

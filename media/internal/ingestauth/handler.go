@@ -20,7 +20,7 @@ import (
 // 올리려면 B_obs 를 다시 재야 한다.
 const MaxDeadline = 1125 * time.Millisecond
 
-// Options 는 NewHandler 의 설정이다. APIPass 는 Secret 이라 Options 를 어떻게 찍어도 API 비번이 나오지 않는다.
+// Options 는 NewHandler 의 설정이다. APIPass · CallerPass 는 Secret 이라 Options 를 어떻게 찍어도 비번이 나오지 않는다.
 type Options struct {
 	CallerIP netip.Addr       // MediaMTX 의 제어망 주소 <A_mtx>. TCP 피어가 다르면 403(본문 없음)
 	SelfIP   netip.Addr       // 응답기 자신의 제어망 주소 <A_auth>. action=api 는 이 출발지(cut)만 허용
@@ -29,15 +29,28 @@ type Options struct {
 	Deadline time.Duration    // 0 < Deadline ≤ MaxDeadline. 0 이면 MaxDeadline. 시험만 짧게 준다
 	Now      func() time.Time // nil 이면 time.Now. 시험이 예산 · 실패 토큰 차례의 시각을 돌린다
 	Log      *slog.Logger     // nil 이면 slog.Default()
+	IPLimit  IPLimit          // publish 송출자 IP별 resolve 시도 한도. 영값이면 꺼짐(트랙 B 설계 2-1 의 13)
+
+	// CallerUser · CallerPass 는 호출자(MediaMTX) Basic 자격이다 — MediaMTX 가 authHTTPAddress 의 URL 자격을 요청마다
+	// Authorization: Basic 으로 싣는다(계약 D2). 같은 netns 의 다른 프로세스는 TCP 피어가 같아 출발지 검사로 가려지지
+	// 않으므로 자격으로 가른다. 둘 다 있거나 CallerBasicOff 가 참이어야 한다 — 아무것도 없으면 NewHandler 가 거부한다.
+	CallerUser string
+	CallerPass Secret // NewSecret 으로 감싼다. 처리기는 원문을 쥐지 않는다(SHA-256 만)
+	// CallerBasicOff 는 호출자 Basic 검사를 명시로 끈다 — 제어망이 따로 있어 출발지 검사가 MediaMTX 를 가르는 배치
+	// (dev-media)만 쓴다. 자격과 함께 주면 NewHandler 가 거부한다.
+	CallerBasicOff bool
 }
 
-// NewHandler 는 처리기를 바깥 층으로 싸서 돌려준다 — 출발지 검사(판정표 첫 행 — 403 은 예산 · 가드 밖) → 예산
-// 차감(요청마다 걸린 시간을 defer 로 뺀다) → 바깥 시한 가드(http.TimeoutHandler — Deadline + 50ms, 본문 "timeout") →
-// 안쪽 처리기. 구체 타입을 내보내면 가드나 차감 없이 쓰는 길이 열리기 때문이다. 안쪽 처리기는 resolve 를
-// 부르기 전에 요청 ctx 를 본다 — 바깥 가드가 이미 끝낸 요청이면 부르지 않는다.
+// NewHandler 는 처리기를 바깥 층으로 싸서 돌려준다 — 출발지 검사(판정표 첫 행 — 403 은 예산 · 가드 밖) → 호출자
+// Basic 검사(401 — 403 과 같이 예산 · 가드 밖) → 예산 차감(요청마다 걸린 시간을 defer 로 뺀다) → 바깥 시한
+// 가드(http.TimeoutHandler — Deadline + 50ms, 본문 "timeout") → 안쪽 처리기. 구체 타입을 내보내면 가드나 차감 없이
+// 쓰는 길이 열리기 때문이다. 안쪽 처리기는 resolve 를 부르기 전에 요청 ctx 를 본다 — 바깥 가드가 이미 끝낸 요청이면
+// 부르지 않는다.
 //
 // r · deny · conns 가 nil 이거나, CallerIP · SelfIP 가 영값이거나, APIUser · APIPass 가 비었거나, Deadline 이 0
-// 이상 MaxDeadline 이하가 아니면 에러다. 에러에는 자격 값을 싣지 않는다.
+// 이상 MaxDeadline 이하가 아니거나, IPLimit 이 영값도 범위 안도 아니면 에러다. 호출자 자격은 CallerUser ·
+// CallerPass 둘 다 있거나 CallerBasicOff 만 참이어야 한다 — 짝이 안 맞거나, 아무것도 없거나, 자격과 끔이 함께면
+// 에러다. 에러에는 자격 값을 싣지 않는다.
 func NewHandler(r *keyresolve.Client, deny *DenyList, conns *ConnLog, opt Options) (http.Handler, error) {
 	h, err := newHandler(r, deny, conns, opt)
 	if err != nil {
@@ -60,8 +73,14 @@ type handler struct {
 	now        func() time.Time
 	log        *slog.Logger
 
+	// callerBasic 이 참이면 호출자 Basic 을 본다. 자격은 다이제스트로만 쥔다.
+	callerBasic   bool
+	callerUserSum [sha256.Size]byte
+	callerPassSum [sha256.Size]byte
+
 	budget    *holdBudget
 	failed    *failedTokens
+	ipLimit   *ipLimiter // nil 이면 IP 한도 꺼짐
 	authGauge *authGauge
 	connGauge *connLogGauge
 }
@@ -84,6 +103,13 @@ func newHandler(r *keyresolve.Client, deny *DenyList, conns *ConnLog, opt Option
 	case opt.Deadline < 0 || opt.Deadline > MaxDeadline:
 		return nil, fmt.Errorf("ingestauth: Deadline 은 0 이상 MaxDeadline(%v) 이하여야 한다 — %v", MaxDeadline, opt.Deadline)
 	}
+	if err := opt.IPLimit.validate(); err != nil {
+		return nil, err
+	}
+	callerBasic, err := callerBasicOn(opt)
+	if err != nil {
+		return nil, err
+	}
 	h := &handler{
 		resolver:   r,
 		deny:       deny,
@@ -95,6 +121,10 @@ func newHandler(r *keyresolve.Client, deny *DenyList, conns *ConnLog, opt Option
 		deadline:   opt.Deadline,
 		now:        opt.Now,
 		log:        opt.Log,
+
+		callerBasic:   callerBasic,
+		callerUserSum: sha256.Sum256([]byte(opt.CallerUser)),
+		callerPassSum: sha256.Sum256([]byte(opt.CallerPass.reveal())),
 	}
 	if h.deadline == 0 {
 		h.deadline = MaxDeadline
@@ -107,14 +137,15 @@ func newHandler(r *keyresolve.Client, deny *DenyList, conns *ConnLog, opt Option
 	}
 	h.budget = newHoldBudget(h.now)
 	h.failed = newFailedTokens(h.now)
+	h.ipLimit = newIPLimiter(opt.IPLimit, h.now)
 	h.authGauge = &authGauge{now: h.now, log: h.log}
 	h.connGauge = &connLogGauge{log: h.log}
 	return h, nil
 }
 
-// layers 는 h 를 바깥 층으로 싼 처리기다 — 출발지 검사 → 도착 시각 → 예산 차감 → 바깥 시한 가드(http.TimeoutHandler —
-// Deadline + guardMargin, 본문 "timeout") → h. 출발지 검사를 지난 요청만 예산에서 뺀다 — 한 번이고 그 밖의 행 · 결과와
-// 무관하다(설계 2-4 예산 차감). 가드가 끝낸 요청은 가드 시각까지, 패닉으로 끝난 요청은 패닉 시각까지 뺀다 —
+// layers 는 h 를 바깥 층으로 싼 처리기다 — 출발지 검사 → 호출자 Basic 검사 → 도착 시각 → 예산 차감 → 바깥 시한
+// 가드(http.TimeoutHandler — Deadline + guardMargin, 본문 "timeout") → h. 두 검사를 지난 요청만 예산에서 뺀다 — 한
+// 번이고 그 밖의 행 · 결과와 무관하다(설계 2-4 예산 차감). 가드가 끝낸 요청은 가드 시각까지, 패닉으로 끝난 요청은 패닉 시각까지 뺀다 —
 // TimeoutHandler 가 안쪽 패닉을 이 고루틴으로 다시 던지므로 defer 가 돈다. 가드 뒤에 늦게 끝난 안쪽 처리기는 예산을
 // 만지지 않는다(안쪽은 allow 만 부른다).
 //
@@ -131,6 +162,9 @@ func (h *handler) layers() http.Handler {
 	guard := http.TimeoutHandler(h, h.deadline+guardMargin, "timeout")
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if h.denyForeignCaller(w, r.RemoteAddr) {
+			return
+		}
+		if h.denyUnauthenticatedCaller(w, r) {
 			return
 		}
 		guardBy := time.Now().Add(h.deadline + guardMargin)

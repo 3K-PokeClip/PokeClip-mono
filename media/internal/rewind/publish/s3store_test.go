@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -22,6 +23,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/rewind"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/s3errbody"
 )
 
 const testBucket = "pokeclip-test"
@@ -63,8 +65,9 @@ func (s *s3Stub) only(t *testing.T) s3Request {
 //
 // 클라이언트는 조립점이 LoadDefaultConfig 로 만들 클라이언트의 기본값을 그대로 가진다 — 재시도 3회 ·
 // 요청 체크섬 WhenSupported. 시도 수와 본문 모양을 S3Store 가 요청마다 고정하는지 보려면 그 기본값이 살아
-// 있어야 한다. 자격증명은 서명에만 쓰는 가짜 값이다.
-func newStubbedStore(t *testing.T, respond http.HandlerFunc) (*S3Store, *s3Stub) {
+// 있어야 한다. 자격증명은 서명에만 쓰는 가짜 값이다. optFns 는 조립점이 클라이언트에 붙이는 옵션 함수다
+// (예: s3errbody.Limit).
+func newStubbedStore(t *testing.T, respond http.HandlerFunc, optFns ...func(*s3.Options)) (*S3Store, *s3Stub) {
 	t.Helper()
 	stub := &s3Stub{}
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -88,7 +91,7 @@ func newStubbedStore(t *testing.T, respond http.HandlerFunc) (*S3Store, *s3Stub)
 			return aws.Credentials{AccessKeyID: "test", SecretAccessKey: "test", Source: "publish-test"}, nil
 		}),
 		RequestChecksumCalculation: aws.RequestChecksumCalculationWhenSupported,
-	})
+	}, optFns...)
 	return NewS3Store(client, testBucket), stub
 }
 
@@ -394,4 +397,146 @@ func TestS3StoreGetStopsReadingPastLimit(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("상한을 넘겼는데 Get 이 본문 끝을 기다린다 — 상한에서 읽기를 멈추지 않는다")
 	}
+}
+
+// hugeChunk 는 거대 오류 본문 흉내 서버가 되풀이해 쓰는 32KiB 조각이다 — 한 번만 할당한다.
+var hugeChunk = bytes.Repeat([]byte{'x'}, 32<<10)
+
+// respondHuge 는 status 와 hugeChunk 를 128번 이은 4MiB 본문(상한 s3errbody.MaxBytes 의 64배)으로 답한다. HEAD 에는 본문이 없다
+// — S3 도 그렇다. 클라이언트가 먼저 닫으면 쓰기를 멈춘다.
+func respondHuge(status int) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/xml")
+		w.WriteHeader(status)
+		if r.Method == http.MethodHead {
+			return
+		}
+		for range 128 {
+			if _, err := w.Write(hugeChunk); err != nil {
+				return
+			}
+		}
+	}
+}
+
+// rawBodyCounter 는 SDK 가 확정한 HTTP 클라이언트를 감싸 원 응답 본문에서 읽은 바이트를 센다. 옵션 함수 option 을 s3errbody.Limit
+// 앞에 두면 Limit 의 감싸개 아래(원 본문)에서 잰다.
+type rawBodyCounter struct {
+	next s3.HTTPClient
+	read atomic.Int64
+}
+
+func (c *rawBodyCounter) option(o *s3.Options) {
+	c.next = o.HTTPClient
+	o.HTTPClient = c
+}
+
+func (c *rawBodyCounter) Do(r *http.Request) (*http.Response, error) {
+	resp, err := c.next.Do(r)
+	if err != nil || resp == nil || resp.Body == nil {
+		return resp, err
+	}
+	resp.Body = &countedBody{ReadCloser: resp.Body, read: &c.read}
+	return resp, nil
+}
+
+// countedBody 는 Read 한 바이트를 read 에 더하는 응답 본문이다.
+type countedBody struct {
+	io.ReadCloser
+	read *atomic.Int64
+}
+
+func (b *countedBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	b.read.Add(int64(n))
+	return n, err
+}
+
+// D7 · D8 — 조립점처럼 s3errbody.Limit 을 붙인 클라이언트에서 상한을 넘는 오류 본문은 상한까지만 읽히고(오류 문장에
+// ErrTooLarge), 상태 코드 센티널(412 · 409 · 404)은 그대로다. 거대 본문의 404 는 코드를 잃어 키 부재(ErrNotFound)로 읽힌다(수용 —
+// 실 S3 의 NoSuchBucket 본문은 상한의 백분의 일). 403 · 500 은 센티널이 아니고 ErrTooLarge 를 errors.Is 로 볼 수 있다. 시도는
+// 한 번이다.
+func TestS3StoreKeepsClassOnHugeErrorBody(t *testing.T) {
+	cases := []struct {
+		name   string
+		get    bool
+		status int
+		// want 는 errors.Is 가 참이어야 할 센티널이다. nil 이면 어느 센티널도 아니고 ErrTooLarge 가 errors.Is 로 보여야 한다.
+		want error
+	}{
+		{name: "PUT_412", status: http.StatusPreconditionFailed, want: ErrPreconditionFailed},
+		{name: "PUT_409", status: http.StatusConflict, want: ErrConflict},
+		{name: "GET_404", get: true, status: http.StatusNotFound, want: ErrNotFound},
+		{name: "GET_403", get: true, status: http.StatusForbidden},
+		{name: "GET_500", get: true, status: http.StatusInternalServerError},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var raw rawBodyCounter
+			store, stub := newStubbedStore(t, respondHuge(tc.status), raw.option, s3errbody.Limit)
+
+			var err error
+			if tc.get {
+				_, err = store.Get(context.Background(), testKey)
+			} else {
+				_, err = store.Put(context.Background(), testKey, IfMatch(`"prev-etag"`), bodyA, nil)
+			}
+			if err == nil {
+				t.Fatalf("거대 본문 %d 응답에 오류가 없다", tc.status)
+			}
+			for _, s := range sentinels {
+				if got, want := errors.Is(err, s), s == tc.want; got != want {
+					t.Errorf("errors.Is(%v, %v) = %t, want %t", err, s, got, want)
+				}
+			}
+			// 센티널 갈래는 원 오류를 문장으로만 싣는다(storeError) — 상한이 실제로 작동했는지는 문장으로 본다.
+			if !strings.Contains(err.Error(), s3errbody.ErrTooLarge.Error()) {
+				t.Errorf("오류 %q 에 %q 가 없다 — 상한이 작동하지 않았다", err, s3errbody.ErrTooLarge)
+			}
+			if tc.want == nil && !errors.Is(err, s3errbody.ErrTooLarge) {
+				t.Errorf("errors.Is(%v, ErrTooLarge) = false, want true", err)
+			}
+			if n := raw.read.Load(); n > s3errbody.MaxBytes+1 {
+				t.Errorf("원 본문에서 %d바이트 읽음, want %d 이하", n, s3errbody.MaxBytes+1)
+			}
+			stub.only(t)
+		})
+	}
+}
+
+// D7 · D1 — s3errbody.Limit 을 붙여도 상한 아래의 오류 본문과 2xx 본문, HEAD 의 판정은 그대로다: 작은 404 NoSuchBucket 은 코드가
+// 남아 ErrNotFound 가 아니고, HEAD 404 는 부재이며, 상한보다 큰 2xx GET 본문(100KiB)은 바이트 그대로 읽힌다.
+func TestS3StoreWithLimitKeepsSmallErrorsAndSuccessBodies(t *testing.T) {
+	t.Run("GET_404_NoSuchBucket", func(t *testing.T) {
+		store, stub := newStubbedStore(t, respondError(http.StatusNotFound, "NoSuchBucket"), s3errbody.Limit)
+
+		_, err := store.Get(context.Background(), testKey)
+
+		if err == nil || errors.Is(err, ErrNotFound) || errors.Is(err, s3errbody.ErrTooLarge) {
+			t.Errorf("Get(404 NoSuchBucket) 오류 = %v, want ErrNotFound · ErrTooLarge 아닌 오류", err)
+		}
+		stub.only(t)
+	})
+	t.Run("HEAD_404_absent", func(t *testing.T) {
+		// HEAD 라 본문이 없다 — 거대 본문 서버여도 작은 404 와 같은 시험이다.
+		store, stub := newStubbedStore(t, respondHuge(http.StatusNotFound), s3errbody.Limit)
+
+		st, err := store.Head(context.Background(), testKey)
+
+		if err != nil || !sameStat(st, Stat{}) {
+			t.Errorf("Head(404) = %+v · %v, want 부재 · nil", st, err)
+		}
+		stub.only(t)
+	})
+	t.Run("GET_200_100KiB", func(t *testing.T) {
+		want := bytes.Repeat([]byte("0123456789abcdef"), 100<<10/16)
+		store, stub := newStubbedStore(t, respondObject(`"e1"`, nil, want), s3errbody.Limit)
+
+		got, err := store.Get(context.Background(), testKey)
+
+		if err != nil || !bytes.Equal(got, want) {
+			t.Errorf("Get(200) = %d바이트 · %v, want %d바이트 그대로 · nil", len(got), err, len(want))
+		}
+		stub.only(t)
+	})
 }

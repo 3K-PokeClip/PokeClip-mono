@@ -20,6 +20,7 @@ import (
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/config"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/rewind/cache"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/rewind/publish"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/s3errbody"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/upload"
 )
 
@@ -37,7 +38,7 @@ import (
 // 칸이 경합한다. AttachDirty 는 업로더 워커가 뜨기(Start) 전이다 — 뒤에 부르면 조용히 아무것도 하지 않아 ③ · init 결과가 루프에
 // 닿지 않는다. forgetSession(끝난 회차의 업로더 메모리 — 판단 J86)도 발행 몫과 함께 채운다: 버킷이 비면 업로더가 비활성이라
 // 어차피 할 일이 없다.
-func assemblePublishing(ctx context.Context, cfg config.Config, up *upload.Uploader, r *rewindLoop) *pgxpool.Pool {
+func assemblePublishing(ctx context.Context, cfg config.Config, db *pgxpool.Config, up *upload.Uploader, r *rewindLoop) *pgxpool.Pool {
 	if cfg.S3.Bucket == "" {
 		r.log.Info("rewind_publish_disabled", "note", "S3_BUCKET 미설정 — 되감기 목록을 발행하지 않는다. 4.1 종료 전이는 그대로 돈다")
 		return nil
@@ -47,7 +48,7 @@ func assemblePublishing(ctx context.Context, cfg config.Config, up *upload.Uploa
 	// SEED_ALARM_AFTER 는 재스캔 주기의 두 배 이상이어야 한다(점멸 방지 — 판단 J85 ⑵ · ArmFallback 산식 선례). 재스캔 주기는 env 로
 	// 바뀌고 설계값(10분)은 기본 재스캔 5분의 두 배다.
 	opt.SeedAlarmAfter = max(opt.SeedAlarmAfter, 2*cfg.Watcher.RescanEvery)
-	pub, pool, endpoint, err := newPublisher(ctx, cfg, opt)
+	pub, pool, endpoint, err := newPublisher(ctx, cfg, db, opt)
 	if err != nil {
 		r.log.Error("rewind_publish_degraded", "bucket", cfg.S3.Bucket, "region", cfg.S3.Region,
 			"endpoint", endpoint, "err", err,
@@ -74,19 +75,11 @@ func assemblePublishing(ctx context.Context, cfg config.Config, up *upload.Uploa
 // 운영에 실리면 시청자 브라우저가 자기 컴퓨터를 부르므로 기동 로그로 바로 보이게 한다. writer 는 이 프로세스의 fence 토큰이다
 // (DB 의 writer_fence 와 맞춰 볼 수 있게). 셋째 반환값은 켜짐 · 강등 줄의 endpoint 칸이다 — 클라이언트의 실효 엔드포인트에서
 // userinfo 를 뗀 값이고(7c 검수 C7c-1), 클라이언트를 만들기 전에 실패하면 설정값이다.
-func newPublisher(ctx context.Context, cfg config.Config, opt publish.Options) (*publish.Publisher, *pgxpool.Pool, string, error) {
-	loadOpts := []func(*awsconfig.LoadOptions) error{
-		awsconfig.WithRegion(cfg.S3.Region),
-		awsconfig.WithRetryMaxAttempts(1), // 버킷 확인은 한 번이다 — 목록 요청의 시도 수는 S3Store 가 요청마다 고정한다
-	}
-	if cfg.S3.Endpoint != "" {
-		loadOpts = append(loadOpts, awsconfig.WithBaseEndpoint(cfg.S3.Endpoint))
-	}
-	awsCfg, err := awsconfig.LoadDefaultConfig(ctx, loadOpts...)
+func newPublisher(ctx context.Context, cfg config.Config, db *pgxpool.Config, opt publish.Options) (*publish.Publisher, *pgxpool.Pool, string, error) {
+	awsCfg, client, err := newPublishS3Client(ctx, cfg)
 	if err != nil {
-		return nil, nil, cfg.S3.Endpoint, fmt.Errorf("AWS 설정 적재 실패: %w", err)
+		return nil, nil, cfg.S3.Endpoint, err
 	}
-	client := s3.NewFromConfig(awsCfg, func(o *s3.Options) { o.UsePathStyle = cfg.S3.ForcePathStyle })
 	ep := aws.ToString(client.Options().BaseEndpoint)
 	endpoint := endpointForLog(ep)
 	if err := requireHTTPS(ep); err != nil {
@@ -98,9 +91,8 @@ func newPublisher(ctx context.Context, cfg config.Config, opt publish.Options) (
 	}
 	// 발행자 풀은 인덱서 풀과 따로다(판단 J76) — 문장마다 락을 최대 10초 기다리는 동안 연결을 잡으므로 인덱싱 · 4.1 전이와 연결을
 	// 다투지 않게 한다. pgx 기본값(MaxConns · Deadline 처리기 · CancelRequest)은 그대로다 — 되돌림 뒤 잠금 해제가 거기에 기댄다.
-	pool, err := pgxpool.New(ctx, cfg.PGDSN)
+	pool, err := pgxpool.NewWithConfig(ctx, db)
 	if err != nil {
-		// DSN 에는 비밀번호가 들어 있으므로 에러에 싣지 않는다(인덱서 풀과 같은 규칙).
 		return nil, nil, endpoint, fmt.Errorf("발행자 DB 연결 풀 생성 실패: %w", err)
 	}
 	pub, err := publish.New(pool, publish.NewS3Store(client, cfg.S3.Bucket), opt)
@@ -111,6 +103,26 @@ func newPublisher(ctx context.Context, cfg config.Config, opt publish.Options) (
 	opt.Log.Info("rewind_publish_started", "bucket", cfg.S3.Bucket, "region", cfg.S3.Region,
 		"endpoint", endpoint, "provider", provider, "base_url", opt.BaseURL, "writer", opt.Writer)
 	return pub, pool, endpoint, nil
+}
+
+// newPublishS3Client 는 발행용 S3 클라이언트(업로더와 따로)와 그 AWS 설정을 만든다 — 설정은 부팅 버킷 확인이 자격증명 provider
+// 이름을 읽는 데 쓴다. newPublisher 에서 뗀 것은 시험이 이 조립점의 클라이언트를 직접 부르게 하려서다(부팅 때 닿는 요청은 본문
+// 없는 HEAD 뿐이다).
+func newPublishS3Client(ctx context.Context, cfg config.Config) (aws.Config, *s3.Client, error) {
+	loadOpts := []func(*awsconfig.LoadOptions) error{
+		awsconfig.WithRegion(cfg.S3.Region),
+		awsconfig.WithRetryMaxAttempts(1), // 버킷 확인은 한 번이다 — 목록 요청의 시도 수는 S3Store 가 요청마다 고정한다
+	}
+	if cfg.S3.Endpoint != "" {
+		loadOpts = append(loadOpts, awsconfig.WithBaseEndpoint(cfg.S3.Endpoint))
+	}
+	awsCfg, err := awsconfig.LoadDefaultConfig(ctx, loadOpts...)
+	if err != nil {
+		return aws.Config{}, nil, fmt.Errorf("AWS 설정 적재 실패: %w", err)
+	}
+	// 오류 응답 본문은 상한까지만 읽는다(s3errbody — 업로더와 같다).
+	client := s3.NewFromConfig(awsCfg, func(o *s3.Options) { o.UsePathStyle = cfg.S3.ForcePathStyle }, s3errbody.Limit)
+	return awsCfg, client, nil
 }
 
 // requireHTTPS 는 발행용 S3 클라이언트의 실효 엔드포인트(client.Options().BaseEndpoint)가 https 인지 본다(판단 J77 ⑵ · 계획

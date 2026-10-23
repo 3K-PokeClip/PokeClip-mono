@@ -27,6 +27,22 @@ export function playbackConfigured(): boolean {
 }
 
 /**
+ * 영상 요청에 출입증 쿠키를 실을지(POK-317). clip이 출입증을 실제로 내준 뒤에만 싣는다: CDN 뒤(prod)는 쿠키가 없으면 403이고,
+ * 로컬·dev 영상 서버(MediaMTX)는 Allow-Origin * 로만 답해 쿠키를 실은 요청의 응답을 브라우저가 버린다(2026-10-23 로컬 실측).
+ * 서명 재료가 없는 clip(로컬·dev)은 출입증을 안 내주므로 따로 맞출 설정이 없다
+ */
+let playbackCookiesIssued = false;
+
+export function markPlaybackCookiesIssued(): void {
+  playbackCookiesIssued = true;
+}
+
+/** fetch의 credentials 값. 출입증을 받기 전에는 fetch 기본값(same-origin) 그대로다 */
+export function mediaCredentials(): RequestCredentials {
+  return playbackCookiesIssued ? 'include' : 'same-origin';
+}
+
+/**
  * 녹화 시작 시각을 ms로 **올림**해 읽는다. 재생 서버는 마이크로초까지 주는데(`…16.372191Z`) Date.parse는 ms로 내린다 —
  * 내린 값으로 두 번째 구간부터 달라 하면 요청이 틈 안으로 0.2ms 들어가 404다(2026-09-30 로컬 실측, POK-253).
  */
@@ -47,6 +63,7 @@ export async function lookupRecordingSpans(streamId: string): Promise<RecordingS
   try {
     const res = await fetch(`${BASE}/list?path=${encodeURIComponent(streamId)}`, {
       signal: AbortSignal.timeout(LIST_TIMEOUT_MS),
+      credentials: mediaCredentials(),
     });
     if (res.status === 400 || res.status === 404) return [];
     if (!res.ok) return null;

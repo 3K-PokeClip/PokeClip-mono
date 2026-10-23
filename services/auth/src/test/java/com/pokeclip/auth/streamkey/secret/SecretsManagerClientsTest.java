@@ -41,17 +41,6 @@ class SecretsManagerClientsTest {
         }
     }
 
-    @Test
-    void 이행_클라이언트는_따로_30초다() {
-        try (SecretsManagerClient client = SecretsManagerClients.forMigration(props("http://localhost:14566"))) {
-            SecretsManagerServiceClientConfiguration c = client.serviceClientConfiguration();
-            assertThat(c.endpointOverride()).contains(URI.create("http://localhost:14566"));
-            assertThat(c.overrideConfiguration().apiCallTimeout()).contains(Duration.ofSeconds(30));
-            assertThat(c.overrideConfiguration().retryStrategy()).get()
-                    .extracting(strategy -> strategy.maxAttempts()).isEqualTo(3);
-        }
-    }
-
     /** 웹 경로의 HTTP 시한은 시도 시한(1초)보다 짧다. 기본값 2초·30초면 시도 시한보다 길다. */
     @Test
     void 웹_경로_HTTP_시한은_시도_시한보다_짧다() {

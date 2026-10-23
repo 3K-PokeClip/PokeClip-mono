@@ -15,6 +15,8 @@ import {
   type Rect,
 } from './tourSteps';
 import { hasTargetInDom, isHomePending } from './tourDom';
+import { useChannelRelation } from '@/features/channel/ChannelScope';
+import { isOwnerOnlyPath } from '@/features/channel/ownerOnlyPaths';
 import styles from './Onboarding.module.css';
 
 // 코치마크 투어 오버레이 (디자인 1a ②·④ 규칙).
@@ -50,6 +52,8 @@ export function TourOverlay({
   pending: boolean;
 }) {
   const router = useRouter();
+  // 남의 채널이면 주인 전용 화면으로 가는 CTA는 비활성(POK-390): 안내 글과 다음 단계는 그대로
+  const othersChannel = useChannelRelation() === 'EDITOR';
   const setTourStep = useOnboardingStore((s) => s.setTourStep);
   const skipTour = useOnboardingStore((s) => s.skipTour);
   const completeTour = useOnboardingStore((s) => s.completeTour);
@@ -258,7 +262,12 @@ export function TourOverlay({
               </Button>
             )}
             {step.cta && (
-              <Button variant="outline" size="sm" onClick={() => router.push(step.cta!.href)}>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={othersChannel && isOwnerOnlyPath(step.cta.href)}
+                onClick={() => router.push(step.cta!.href)}
+              >
                 {step.cta.label}
               </Button>
             )}

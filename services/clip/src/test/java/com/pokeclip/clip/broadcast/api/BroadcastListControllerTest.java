@@ -708,6 +708,113 @@ class BroadcastListControllerTest extends IntegrationTestSupport {
                 .andExpect(jsonPath("$.error").value("authorization_unavailable"));
     }
 
+    // ── 한 스트리머로 좁히기(POK-390 채널 스위처) ─────────────────
+
+    /**
+     * 화면이 고른 채널 하나의 방송만 나온다. <b>내 방송을 같이 심어 둔다</b>: 안 심으면 인자를 무시하는
+     * 구현도 1건이라 초록이다. auth는 여전히 한 번 묻는다(좁히는 재료가 그 답이다).
+     */
+    @Test
+    void 스트리머를_고르면_그_채널_방송만_나온다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"), 줄(남의_스트리머, "EDITOR"));
+        방송을_넣는다("s-mine", TestIds.STREAMER, "live");
+        방송을_넣는다("s-delegated", 남의_스트리머, "live");
+
+        목록("?state=live&streamerId=" + 남의_스트리머)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.broadcasts.length()").value(1))
+                .andExpect(jsonPath("$.broadcasts[0].streamId").value("s-delegated"))
+                .andExpect(jsonPath("$.broadcasts[0].relation").value("EDITOR"));
+
+        assertThat(AUTH.callCount()).as("좁혀도 자격 창구는 거친다").isEqualTo(1);
+    }
+
+    /**
+     * 볼 수 없는 채널을 고르면 <b>404</b>다(200 빈 목록이 아니다). 빈 목록이면 위임이 끊긴 편집자 화면이
+     * 「방송이 없다」로 남아 내 채널로 못 돌아간다. 본문은 「없는 번호」와 「권한 없음」을 안 가른다.
+     * 🔴 그 채널의 방송을 실제로 심어 둔다: 안 심으면 거르기가 통째로 빠져도 「안 나간다」가 참이다.
+     */
+    @Test
+    void 볼_수_없는_스트리머를_고르면_404이고_남의_방송이_안_나간다() throws Exception {
+        볼_수_있는_스트리머(줄(요청자, "OWNER"));
+        방송을_넣는다("s-others", 남의_스트리머, "live");
+
+        String 본문 = 본문(목록("?state=live&streamerId=" + 남의_스트리머)
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error").value("broadcast_not_found")));
+
+        assertThat(본문).doesNotContain("s-others").doesNotContain("broadcasts");
+    }
+
+    /**
+     * 볼 수 있는 채널인데 방송이 0건이면 <b>200 빈 목록</b>이다(404가 아니다). 웹은 목록 404를 「위임 끊김」으로 읽어
+     * 내 채널로 돌려보낸다: 라이브가 없는 채널을 고를 때마다 튕겨 나가면 안 된다(감사 1회차 지적 1).
+     * 내 채널에는 방송을 심어 둔다: 섞여 나오지 않는 것까지 같이 잰다.
+     */
+    @Test
+    void 볼_수_있는_스트리머의_방송이_0건이면_200에_빈_목록이다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"), 줄(남의_스트리머, "EDITOR"));
+        방송을_넣는다("s-mine", TestIds.STREAMER, "live");
+
+        목록("?state=live&streamerId=" + 남의_스트리머)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.broadcasts.length()").value(0))
+                .andExpect(jsonPath("$.nextCursor").value(nullValue()));
+    }
+
+    /** 번호는 숫자로 비교한다: 문자열로 비교하면 {@code 0003}이 404가 된다(auth 답은 숫자 3이다). */
+    @Test
+    void 선행_0이_붙은_번호도_같은_채널이다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"), 줄(남의_스트리머, "EDITOR"));
+        방송을_넣는다("s-mine", TestIds.STREAMER, "live");
+        방송을_넣는다("s-delegated", 남의_스트리머, "live");
+
+        목록("?state=live&streamerId=000" + 남의_스트리머)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.broadcasts.length()").value(1))
+                .andExpect(jsonPath("$.broadcasts[0].streamId").value("s-delegated"));
+    }
+
+    /** 형식 오류는 auth 왕복 전에 400이다: 다른 칸과 같은 봉투. long을 넘는 숫자도 형식 오류다. */
+    @Test
+    void 숫자가_아닌_스트리머는_400이고_auth를_안_부른다() throws Exception {
+        for (String 값 : List.of("abc", "3abc", "99999999999999999999")) {
+            목록("?state=live&streamerId=" + 값)
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.error").value("invalid_request"))
+                    .andExpect(jsonPath("$.field").value("streamerId"));
+        }
+
+        assertThat(AUTH.callCount()).as("형식 오류에 auth 왕복을 태우면 안 된다").isZero();
+    }
+
+    /** 빈 값·공백만은 「안 줬다」다: {@code cursor}와 같은 규칙(계획 검증 m3). 섞인 목록이 그대로 나온다. */
+    @Test
+    void 빈_스트리머는_안_준_것과_같다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"), 줄(남의_스트리머, "EDITOR"));
+        방송을_넣는다("s-mine", TestIds.STREAMER, "live");
+        방송을_넣는다("s-delegated", 남의_스트리머, "live");
+
+        // 🔴 주소에 %20을 직접 쓰면 MockMvc가 % 를 한 번 더 바꿔 글자 「%20」이 들어간다: 값은 param으로 넣는다.
+        for (String 값 : List.of("", "  ")) {
+            mvc.perform(get("/api/clip/broadcasts?state=live").param("streamerId", 값)
+                            .header("Authorization", "Bearer " + TestTokens.access(요청자)))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.broadcasts.length()").value(2));
+        }
+    }
+
+    /** auth를 못 물었으면 채널을 골라도 <b>503</b>이다: 좁힌 빈 목록을 「볼 수 없다」(404)로 읽으면 안 된다. */
+    @Test
+    void auth를_못_물으면_스트리머를_골라도_503이다() throws Exception {
+        AUTH.respondWith(ACCESSIBLE, 500, "");
+        방송을_넣는다("s-delegated", 남의_스트리머, "live");
+
+        목록("?state=live&streamerId=" + 남의_스트리머)
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.error").value("authorization_unavailable"));
+    }
+
     // ── 도우미 ──────────────────────────────────────────────────
 
     private void 볼_수_있는_스트리머(String... 줄들) {

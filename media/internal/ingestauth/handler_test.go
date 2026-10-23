@@ -20,7 +20,14 @@ import (
 
 // validOptions 는 NewHandler 가 받는 선택값이다 — 시험이 한 칸씩 망가뜨린다.
 func validOptions() Options {
-	return Options{CallerIP: testCallerIP, SelfIP: testSelfIP, APIUser: testAPIUser, APIPass: NewSecret(testAPIPass)}
+	return Options{
+		CallerIP:   testCallerIP,
+		SelfIP:     testSelfIP,
+		APIUser:    testAPIUser,
+		APIPass:    NewSecret(testAPIPass),
+		CallerUser: testCallerUser,
+		CallerPass: NewSecret(testCallerPass),
+	}
 }
 
 // NewHandler 는 쓸 수 없는 선택값이면 에러다(설계 2-6 「필수값이 비면 기동 실패」). 빈 자격을 받으면 SelfIP 의 누구나
@@ -44,6 +51,11 @@ func TestNewHandlerRejectsBadOptions(t *testing.T) {
 		{name: "APIUser_빈_값", resolver: resolver, deny: deny, conns: conns, edit: func(o *Options) { o.APIUser = "" }},
 		{name: "APIPass_빈_값", resolver: resolver, deny: deny, conns: conns, edit: func(o *Options) { o.APIPass = NewSecret("") }},
 		{name: "APIPass_영값", resolver: resolver, deny: deny, conns: conns, edit: func(o *Options) { o.APIPass = Secret{} }},
+		{name: "Caller_자격_없고_끔도_없음", resolver: resolver, deny: deny, conns: conns, edit: func(o *Options) { o.CallerUser, o.CallerPass = "", Secret{} }},
+		{name: "CallerUser_만", resolver: resolver, deny: deny, conns: conns, edit: func(o *Options) { o.CallerPass = Secret{} }},
+		{name: "CallerPass_만", resolver: resolver, deny: deny, conns: conns, edit: func(o *Options) { o.CallerUser = "" }},
+		{name: "CallerPass_빈_값", resolver: resolver, deny: deny, conns: conns, edit: func(o *Options) { o.CallerPass = NewSecret("") }},
+		{name: "Caller_자격과_끔이_함께", resolver: resolver, deny: deny, conns: conns, edit: func(o *Options) { o.CallerBasicOff = true }},
 		{name: "Deadline_음수", resolver: resolver, deny: deny, conns: conns, edit: func(o *Options) { o.Deadline = -time.Millisecond }},
 		{name: "Deadline_MaxDeadline_초과", resolver: resolver, deny: deny, conns: conns, edit: func(o *Options) { o.Deadline = MaxDeadline + time.Nanosecond }},
 	}
@@ -62,6 +74,9 @@ func TestNewHandlerRejectsBadOptions(t *testing.T) {
 			}
 			if strings.Contains(err.Error(), testAPIPass) {
 				t.Errorf("NewHandler with %s: error carries the API password", tc.name)
+			}
+			if strings.Contains(err.Error(), testCallerPass) {
+				t.Errorf("NewHandler with %s: error carries the caller password", tc.name)
 			}
 		})
 	}

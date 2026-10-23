@@ -43,6 +43,10 @@ services:
       dockerfile: auth/Dockerfile
     restart: unless-stopped
     mem_limit: 512m
+    # compose 기본은 10초인데 auth 종료 예산은 정리 풀 넷의 합 24초다(치지직 10 + 유튜브 4 + 탈퇴 6 + SOOP 4,
+    # README 「종료 유예 24초 이상」). 잘리면 커밋 뒤 토큰 삭제가 중간에 끊겨 secrets에 원문이 남는다.
+    # 예산 24 + 여유 1 = 25. 예산을 키우면 YoutubeShutdownBudgetTest가 이 값도 같이 본다.
+    stop_grace_period: 25s
     depends_on:
       postgres:
         condition: service_healthy   # Flyway 가 뜨자마자 붙으므로 DB가 준비된 뒤여야 한다
@@ -81,6 +85,11 @@ services:
       YOUTUBE_CLIENT_ID: ${YOUTUBE_CLIENT_ID:?}
       YOUTUBE_CLIENT_SECRET: ${YOUTUBE_CLIENT_SECRET:?}
       YOUTUBE_REDIRECT_URI: ${YOUTUBE_REDIRECT_URI:?}
+      # SOOP 셋(POK-396). 셋 중 하나만 비어도 SoopProperties.App이 부팅을 세운다.
+      # 🔴 :? 라 dev .env 에 셋이 없으면 compose 파일 전체가 멈춘다. 이 줄이 머지되기 전에 1번이 값을 넣는다.
+      SOOP_CLIENT_ID: ${SOOP_CLIENT_ID:?}
+      SOOP_CLIENT_SECRET: ${SOOP_CLIENT_SECRET:?}
+      SOOP_REDIRECT_URI: ${SOOP_REDIRECT_URI:?}
       # 프로필 사진(POK-207). 창고 이름이 비면 사진 기능만 꺼진다 — 그래서 :? 가 아니라 :- 다.
       # 나머지 셋은 창고 이름이 차 있을 때만 필수이고, 그 판정은 PhotoProperties가 부팅에서 한다.
       # 🔴 FORCE_PATH_STYLE은 앱에 기본값(false)이 있어 DeploymentEnvVarsTest의 정규식(${VAR:})에
@@ -95,8 +104,10 @@ services:
       # 로컬 기본값(pokeclip/local/stream-key/)으로 뜨면 재발급·탈퇴의 Secrets Manager 삭제가 권한 거부로 실패한다.
       # 🔴 이 줄이 :? 라서 dev .env 에 세 줄이 먼저 들어간 뒤에 코드를 머지한다. 빠지면 compose 가 파일 전체 보간에서
       # 멈춰 auth 만이 아니라 같은 배포 명령의 서버 넷이 다 안 올라간다.
-      STREAM_KEY_SECRET_STORE_TYPE: ${STREAM_KEY_SECRET_STORE_TYPE:-postgres}
-      STREAM_KEY_SECRET_RETIRE_FROM: ${STREAM_KEY_SECRET_RETIRE_FROM:-postgres}
+      # 저장소 둘의 기본은 aws 다(병행 종료, POK-329). PG 에 스트림키 사본이 없어 .env 줄이 빠진 채 postgres 로 뜨면
+      # 오류 없이 resolve 가 전부 valid:false 가 된다.
+      STREAM_KEY_SECRET_STORE_TYPE: ${STREAM_KEY_SECRET_STORE_TYPE:-aws}
+      STREAM_KEY_SECRET_RETIRE_FROM: ${STREAM_KEY_SECRET_RETIRE_FROM:-aws}
       STREAM_KEY_SECRET_REF_PREFIX: ${STREAM_KEY_SECRET_REF_PREFIX:?}
       # resolve 전용 출입증(계약4 4C — Media 가 X-Stream-Key-Resolve-Token 헤더로 부른다). :? 가 아니라 :- 다.
       # 토큰이 비면 그 창구만 닫히고(전용 헤더 요청은 늘 401) auth 는 뜬다 — 값을 넣기 전에 머지돼도 배포가 auth 를
@@ -167,7 +178,7 @@ services:
       MEDIA_BASE_URL: ${MEDIA_BASE_URL:-}
       PLAYBACK_COOKIE_DOMAIN: ${PLAYBACK_COOKIE_DOMAIN:-}
       PLAYBACK_ACCESS_TTL: ${PLAYBACK_ACCESS_TTL:-PT60M}
-      PLAYBACK_REQUIRED: ${PLAYBACK_REQUIRED:-false}   # prod만 true(POK-321). 켜면 서명 설정 셋이 다 빈 「꺼짐」도 부팅 거부
+      PLAYBACK_REQUIRED: ${PLAYBACK_REQUIRED:-false}   # prod만 true(POK-321). 켜면 서명 설정 셋이 다 빈 「꺼짐」도, 쿠키 도메인 빈 값도 부팅 거부(POK-317)
       # 영상 만들기 주문(POK-125). 켜면 큐 둘·창고 둘이 필수다. 자격증명은 EC2 역할(인라인 정책 pokeclip-render-queue-and-clips).
       RENDER_ENABLED: ${RENDER_ENABLED:-false}
       RENDER_QUEUE_URL: ${RENDER_QUEUE_URL:-}

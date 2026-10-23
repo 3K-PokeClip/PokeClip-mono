@@ -14,6 +14,7 @@ import com.pokeclip.auth.streamkey.secret.StreamKeySecretRetirer;
 import com.pokeclip.auth.token.RefreshTokenRepository;
 import com.pokeclip.auth.user.User;
 import com.pokeclip.auth.user.UserRepository;
+import com.pokeclip.auth.soop.SoopLinkWriter;
 import com.pokeclip.auth.youtube.YoutubeChannelLinkRepository;
 import com.pokeclip.auth.youtube.YoutubeLinkWriter;
 import com.pokeclip.auth.withdrawal.purge.PurgeJobRepository;
@@ -52,6 +53,7 @@ public class WithdrawalService {
     private final PairingCodeRepository pairingCodeRepository;
     private final ChzzkLinkWriter chzzkLinkWriter;
     private final YoutubeLinkWriter youtubeLinkWriter;
+    private final SoopLinkWriter soopLinkWriter;
     private final ChzzkChannelLinkRepository chzzkLinks;
     private final YoutubeChannelLinkRepository youtubeLinks;
     private final EditorDelegationRepository delegationRepository;
@@ -117,6 +119,8 @@ public class WithdrawalService {
         // (구글 revoke는 「그 토큰」이 아니라 그 계정이 우리 앱에 준 동의 전부를 죽여, 같은 채널을
         // 방금 연동한 다른 회원의 grant까지 끊는다 — POK-121 실측·결정. YoutubeLinkWriter javadoc.)
         // 사유를 WITHDRAWN 같은 새 값으로 바꾸면 그쪽 상태 파생과 resolve의 UNLINKED 매핑이 갈린다.
+        // 예외는 SOOP(POK-396) 하나다: SOOP은 WITHDRAWN으로 닫는다. 커밋 뒤 정리에 외부 호출이 없어 사유로 갈릴 정책이
+        // 없고, 닫는 순간 아이디·닉네임을 비우므로 「왜 비었나」를 남긴다. 상태 파생·resolve는 WITHDRAWN을 UNLINKED로 본다.
         //
         // 🔴 둘 다 @Transactional(REQUIRED)이라 이 트랜잭션에 참여한다. 각자 users를 다시
         // findByIdForUpdate 하지만 같은 트랜잭션이라 락 재진입이고 무해하다.
@@ -125,6 +129,9 @@ public class WithdrawalService {
         // 경합 상대와 엇갈려 데드락 후보가 된다.
         chzzkLinkWriter.revoke(userId, now);
         youtubeLinkWriter.revoke(userId, now);
+        // SOOP은 닫는 문장이 아이디·닉네임까지 비운다(약관 제11조 ⑰). 아래 POK-341 비우기 줄과 별개다(그 줄은 두 연동 표만).
+        // 탈퇴 장부(withdrawal_purge_jobs)에는 안 적는다: SOOP 채팅 데이터가 아직 없다(POK-397이 수집기 몫을 더한다).
+        soopLinkWriter.revokeForWithdrawal(userId, now);
 
         // 🔴 편집자 관계는 양쪽 방향을 다 닫는다. 이 회원은 남의 편집자이기도 하고 자기 방송의
         // 스트리머이기도 하므로, 한 방향만 닫으면 반대쪽이 통째로 남는다 — 탈퇴자가 남의 방송을

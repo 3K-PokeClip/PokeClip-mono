@@ -164,7 +164,7 @@ pokeclip:
     # 스트림키 암호를 어디서 읽고 쓰나(POK-272, ADR-018). postgres | aws. 위 secret-store(PG)는 유튜브·치지직
     # 토큰이 계속 쓰므로 SECRET_STORE_KEY는 aws로 바꿔도 필수다.
     type: ${STREAM_KEY_SECRET_STORE_TYPE:postgres}
-    # 재발급·탈퇴 때 옛 암호를 지울 저장소(쉼표 목록). type을 반드시 포함한다. 이행 병행 기간 dev는 postgres,aws.
+    # 재발급·탈퇴 때 옛 암호를 지울 저장소(쉼표 목록). type을 반드시 포함한다. dev는 aws(병행 종료, POK-329).
     retire-from: ${STREAM_KEY_SECRET_RETIRE_FROM:postgres}
     # 새 암호 이름의 앞부분 = Secrets Manager 비밀 이름 접두. '/'로 끝난다. dev는 pokeclip/dev/stream-key/ 이고
     # dev compose가 비면 기동을 거부한다(:?). IAM 정책이 이 접두 안만 허용한다.
@@ -237,6 +237,32 @@ pokeclip:
       interval: PT1H
       # 이보다 오래 확인 안 한 연동만 점검한다.
       staleness: PT24H
+  soop:
+    # 앱 셋은 한 덩어리다(SoopProperties.App). 하나만 빠져도 부팅에서 죽는다.
+    # redirect-uri는 SOOP 개발자 콘솔에 앱당 하나다: 환경마다 앱이 다르다(치지직과 같다).
+    app:
+      client-id: ${SOOP_CLIENT_ID:}
+      client-secret: ${SOOP_CLIENT_SECRET:}
+      redirect-uri: ${SOOP_REDIRECT_URI:}
+    # 🔴 아래 값은 전부 여기에만 있다(SoopProperties에 Java 기본값 없음). 빠지면 @NotNull이 부팅을 세운다.
+    authorize-uri: https://openapi.sooplive.com/auth/code
+    api-base-uri: https://openapi.sooplive.com
+    # state 수명. 치지직과 같은 이유로 10분이다.
+    state-ttl: PT10M
+    # 스케줄러가 이만큼 남았을 때 미리 갱신한다. 문서 예시 토큰 수명 8시간 기준이라 1시간 틱이면 만료 전 한두 번 기회가 있다.
+    refresh-ahead: PT2H
+    # 수집기에 넘기기 전 최소 남은 수명. 이보다 적게 남았으면 resolve가 즉석 갱신해서 준다.
+    resolve-min-remaining: PT1H
+    check:
+      # 갱신 점검. 운영 기본 켜짐, 시험 프로파일만 끈다(치지직과 같은 이유).
+      enabled: true
+      interval: PT1H
+      # 만료가 멀어도 이보다 오래 확인 안 한 연동은 갱신해 본다(철회를 미리 안다).
+      staleness: PT24H
+      # 한 틱에서 갱신 거절이 연달아 이만큼 나면 그 틱을 멈춘다. 앱 설정 오류로 전 회원이 BROKEN 되는 것을 막는다.
+      reject-brake: 3
+      # 한 틱이 보는 후보 상한. 스프링 기본 스케줄러는 스레드 하나라 다른 틱과 나눈다(오래 확인 안 한 순 앞부터).
+      batch-limit: 25
   profile-photo:
     # 창고 이름이 비면 사진 기능이 통째로 꺼진다(chat-collector의 S3_BUCKET 관례). CI·팀원 로컬 기본.
     # 이름을 PROFILE_PHOTO_ 접두어로 두는 이유: S3_BUCKET은 chat-collector가 이미 쓴다.

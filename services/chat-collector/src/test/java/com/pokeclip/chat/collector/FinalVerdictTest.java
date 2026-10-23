@@ -151,7 +151,7 @@ class FinalVerdictTest extends IntegrationTestSupport {
         try (LogCaptor captor = new LogCaptor()) {
             CollectionStatus status = start();
             // 영구 정지와 그 판정은 재연결 스레드가 낸다. 안 기다리면 아직 창 밖이다.
-            awaitState(status, CollectionStatus.State.STOPPED);
+            awaitVerdict(captor);
             assertThat(status.state()).isEqualTo(CollectionStatus.State.STOPPED);
 
             assertThat(captor.messages()).anyMatch(m -> m.startsWith("chat.session.stopped"));
@@ -209,10 +209,17 @@ class FinalVerdictTest extends IntegrationTestSupport {
         return status;
     }
 
-    private static void awaitState(CollectionStatus status, CollectionStatus.State state)
-            throws Exception {
+    /**
+     * <b>STOPPED가 아니라 판정 줄을 기다린다.</b> 영구 정지는 상태를 먼저 찍고
+     * ({@code status.stopped}) 그 뒤에 잔량 대기 · 저장기 닫기를 지나 판정을 낸다
+     * ({@code CollectorRunner.onPermanentStop}). 상태만 보고 단언하면 느린 CI에서
+     * 판정 줄이 아직 없다. PR #255의 services-ci에서 한 번 빨갛게 났다.
+     */
+    private void awaitVerdict(LogCaptor captor) throws Exception {
         long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
-        while (status.state() != state && System.nanoTime() < deadline) {
+        while (captor.messages().stream().noneMatch(m -> m.startsWith(
+                        "chat.session.verdict session=" + runner.lastSessionNo() + " "))
+                && System.nanoTime() < deadline) {
             Thread.sleep(20);
         }
     }

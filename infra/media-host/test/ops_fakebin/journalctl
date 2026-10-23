@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+#
+# secret-count 시험 전용 가짜 journalctl — argv · 환경을 기록하고 심어 둔
+# 저널을 낸다.
+#
+# 받는 꼴(그 밖은 종료 2):
+#   -u <유닛> -q --no-pager -o cat   state/journal.u.<유닛>
+#   -t <태그> -q --no-pager -o cat   state/journal.t.<태그>
+# 파일이 없으면 빈 출력(그 저널에 줄이 없음). state/journal.fail 이 있으면
+# 종료 1.
+#
+# 시험이 주는 값: PCBENCH_FAKE_LIB · PCBENCH_FAKE_LOG_DIR · PCBENCH_FAKE_STATE_DIR.
+
+# 아래 source= 경로를 이 파일 위치 기준으로 찾게 한다.
+# shellcheck source-path=SCRIPTDIR
+
+set -euo pipefail
+
+# shellcheck source=record.sh
+source "${PCBENCH_FAKE_LIB:?가짜 journalctl: PCBENCH_FAKE_LIB 없음}"
+
+readonly STATE="${PCBENCH_FAKE_STATE_DIR:?PCBENCH_FAKE_STATE_DIR 없음}"
+
+main() {
+  fake::record journalctl "$@"
+  if (( $# != 6 )) || [[ "$1" != -u && "$1" != -t ]] || [[ -z "$2" \
+    || "$3 $4 $5 $6" != '-q --no-pager -o cat' ]]; then
+    fake::unknown journalctl
+  fi
+  if [[ -e "${STATE}/journal.fail" ]]; then
+    printf '가짜 journalctl: 저널 읽기 실패(시험)\n' >&2
+    exit 1
+  fi
+  local file="${STATE}/journal.${1#-}.$2"
+  if [[ -f "${file}" ]]; then
+    cat -- "${file}"
+  fi
+}
+
+main "$@"

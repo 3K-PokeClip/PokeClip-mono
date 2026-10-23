@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { Check } from 'lucide-react';
-import { Card, LinkButton } from '@/ui';
+import { Button, Card, LinkButton } from '@/ui';
 import { TOUR_TARGET } from '@/features/onboarding/tourSteps';
 import styles from './HomeScreen.module.css';
 import type { HomeLinks } from './useHomeMockState';
@@ -10,8 +10,8 @@ import type { HomeLinks } from './useHomeMockState';
 // OBS 플러그인은 「연결됨」이라 하지 않는다 — 웹은 플러그인의 지금 연결 상태를 모르고 `issued`는 키 발급 여부일 뿐이다
 // (web/README 「플러그인 화면 계약」, #298). 발급했으면 무채색 「코드 발급됨」만 적고 연결 확인은 OBS 독에 맡긴다.
 // 플러그인 → 서버 신호(연결 시각 등)가 생기면 그때 「연결됨」으로 올린다.
-// 방송 채널은 치지직·SOOP·씨미 모두 되지만 웹이 상태를 읽을 수 있는 건 아직 치지직뿐이다 — 줄 이름은 「방송 채널」로 두고
-// 연결된 플랫폼을 설명 앞에 붙인다. SOOP·씨미 창구가 생기면 같은 줄에 함께 센다.
+// 방송 채널은 치지직·SOOP을 한 줄(「방송 채널」)에 함께 센다(POK-396, 사용자 결정): 둘 중 하나라도 연동이면 연결됨이고
+// 연결된 플랫폼을 설명 앞에 붙인다. 씨미 창구가 생기면 같은 줄에 더한다.
 
 /** ok=연결됨(서버가 확인) · ready=할 일은 끝났지만 연결은 웹이 모른다 · off=할 일 남음 · unknown=못 읽음 */
 type RowState = 'ok' | 'ready' | 'off' | 'unknown';
@@ -76,11 +76,42 @@ function rowsOf(links: HomeLinks): Row[] {
             state: 'off',
             action: { label: '코드 받기', href: '/settings/plugin' },
           };
-  return [
-    channel('chzzk', '방송 채널', links.chzzk, '치지직'),
-    plugin,
-    channel('youtube', '유튜브', links.youtube),
-  ];
+  return [broadcastChannel(links, channel), plugin, channel('youtube', '유튜브', links.youtube)];
+}
+
+/**
+ * 「방송 채널」 한 줄. 끊긴 연동이 먼저다: 다른 쪽이 살아 있어도 끊긴 쪽은 손을 써야 감지가 돌아온다.
+ * 그다음 하나라도 연동이면 연결됨, 하나라도 못 읽었으면 확인 중(못 읽은 쪽이 연동돼 있을 수 있다), 둘 다 아니면 연동 권유.
+ * 키는 'chzzk' 그대로다: 시작 가이드 표적(TOUR_TARGET.homeChannel)이 그 키로 붙는다.
+ */
+function broadcastChannel(
+  links: HomeLinks,
+  channel: (key: string, name: string, link: HomeLinks['chzzk'], via?: string) => Row,
+): Row {
+  const { chzzk, soop } = links;
+  const key = 'chzzk';
+  const name = '방송 채널';
+  // SOOP은 끊기면 닉네임이 지워져 온다(서버가 파기): 이름 없이 플랫폼만 말한다
+  if (soop?.status === 'BROKEN')
+    return {
+      key,
+      name,
+      detail: 'SOOP 연동이 끊겼어요',
+      state: 'off',
+      action: { label: '다시 연동', href: '/settings/channels' },
+    };
+  if (chzzk?.status === 'BROKEN') return channel(key, name, chzzk, '치지직');
+  if (chzzk?.linked && soop?.linked) return { key, name, detail: '치지직 · SOOP', state: 'ok' };
+  if (soop?.linked)
+    return {
+      key,
+      name,
+      detail: ['SOOP', soop.nickname].filter(Boolean).join(' · '),
+      state: 'ok',
+    };
+  if (chzzk?.linked) return channel(key, name, chzzk, '치지직');
+  if (chzzk === null || soop === null) return { key, name, detail: '확인 중…', state: 'unknown' };
+  return channel(key, name, chzzk, '치지직');
 }
 
 /** 시작 가이드 1·2단계가 짚는 줄(방송 기록이 없는 계정이면 큰 칸의 준비 단계 줄이 같은 id를 단다) */
@@ -89,7 +120,14 @@ const ROW_TOUR_TARGET: Record<string, string | undefined> = {
   plugin: TOUR_TARGET.homePlugin,
 };
 
-export function ConnectionCard({ links }: { links: HomeLinks }) {
+export function ConnectionCard({
+  links,
+  actionsDisabled = false,
+}: {
+  links: HomeLinks;
+  /** 남의 채널(POK-390): 버튼은 남기되 누를 수 없게. 링크면 비활성을 못 나타낸다 */
+  actionsDisabled?: boolean;
+}) {
   const rows = rowsOf(links);
   // 플러그인은 연결을 모르므로 「모두 연결됨」이 아니라 「준비 완료」라 한다
   const note = rows.every((r) => r.state === 'ok' || r.state === 'ready')
@@ -116,6 +154,10 @@ export function ConnectionCard({ links }: { links: HomeLinks }) {
               </span>
             ) : r.state === 'ready' ? (
               <span className={styles.connReady}>{r.readyLabel}</span>
+            ) : r.action && actionsDisabled ? (
+              <Button variant="outline" size="sm" disabled className={styles.connAction}>
+                {r.action.label}
+              </Button>
             ) : r.action ? (
               <LinkButton
                 as={Link}

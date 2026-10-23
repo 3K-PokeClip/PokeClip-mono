@@ -1,5 +1,6 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { StrictMode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
 import { renderWithProviders } from '@/test/testProviders';
@@ -38,10 +39,12 @@ const tracked = (name: string) =>
 
 // 녹화 목록을 어느 키로 물었는지 잰다(POK-233) — 실제 구현을 그대로 부른다(재생 서버 주소가 없어 빈 목록이다)
 const spansAsked = vi.hoisted(() => [] as string[]);
+const playbackOn = vi.hoisted(() => ({ value: false }));
 vi.mock('@/api/mediaPlayback', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/api/mediaPlayback')>();
   return {
     ...actual,
+    playbackConfigured: () => playbackOn.value,
     fetchRecordingSpans: (streamId: string) => {
       spansAsked.push(streamId);
       return actual.fetchRecordingSpans(streamId);
@@ -53,6 +56,8 @@ const STREAM_ID = 'stream-1';
 const STARTED_AT = Date.parse('2026-09-20T10:00:00Z');
 
 const server = vi.hoisted(() => ({
+  /** 출입증 답(POK-317) */
+  playbackAccess: 'grant' as 'grant' | 'fail',
   cardWindow: { startMs: 60_000, endMs: 72_400 },
   savedTracks: [{ trackId: 0, gain: 1 }] as { trackId: number; gain: number }[],
   /** 저장된 편집본의 판 — 1이면 옛 모양(crop 하나), 2면 편집기가 지금 저장하는 모양 */
@@ -81,6 +86,8 @@ const server = vi.hoisted(() => ({
   savedUploadRequest: null as unknown,
   /** 영상 상태 묻기(폴링)의 답. 시험이 준 약속이 풀릴 때 답한다 */
   clipPoll: null as null | ((clipId: number) => Promise<Response>),
+  /** 카드 열기 기록(POK-393)의 답 */
+  openStatus: 204,
 }));
 
 /** 원본(16:9)에서 9:16 을 오른쪽으로 치우쳐 잡은 자리 — 편집기 계산과 같은 정확한 비율 */
@@ -130,8 +137,6 @@ function handle(url: string, init?: RequestInit) {
           window: server.cardWindow,
           score: 80,
           evidence: null,
-          claimedBy: null,
-          hidden: false,
           eventSeq: 1,
           createdAt: '2026-09-20T10:01:00Z',
         },
@@ -203,12 +208,24 @@ function handle(url: string, init?: RequestInit) {
   }
   const polled = path.match(new RegExp(`^/api/clip/broadcasts/${STREAM_ID}/clips/(\\d+)$`));
   if (polled && method === 'GET' && server.clipPoll) return server.clipPoll(Number(polled[1]));
+  if (path === `/api/clip/broadcasts/${STREAM_ID}/playback-access` && method === 'POST')
+    return server.playbackAccess === 'grant'
+      ? jsonResponse(200, {
+          streamId: STREAM_ID,
+          // 1분짜리라 만료 5분 전 여유에 걸려 다시 쓰지 않는다: 받아 둔 것이 다음 시험으로 새지 않는다
+          expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        })
+      : jsonResponse(500, { error: 'boom' });
   if (path === '/api/auth/me')
     return jsonResponse(200, { id: 9, email: 'me@example.com', name: '나' });
   if (path === '/api/streamers/9/audio-tracks') return jsonResponse(200, { labels: {} });
   if (path.startsWith('/api/streamers/'))
     return jsonResponse(200, { labels: ['남의 트랙', null, null, null, null, null] });
   if (path === '/api/editor-delegations/as-editor') return jsonResponse(200, server.delegations);
+  if (/^\/api\/clip\/jump-cards\/\d+\/open$/.test(path) && method === 'POST')
+    return server.openStatus === 204
+      ? new Response(null, { status: 204 })
+      : jsonResponse(server.openStatus, { error: 'unavailable' });
   return jsonResponse(404, { error: 'unexpected_call' });
 }
 
@@ -224,12 +241,14 @@ beforeEach(() => {
   server.origin = null;
   server.savedSubtitles = null;
   server.relation = 'OWNER';
+  server.playbackAccess = 'grant';
   server.delegations = [];
   server.ingest = undefined;
   server.render = { status: 201, clip: {} };
   server.renderError = null;
   server.savedUploadRequest = null;
   server.clipPoll = null;
+  server.openStatus = 204;
   spansAsked.length = 0;
   nav.pushed.length = 0;
   fetchSpy = stubFetch(handle);
@@ -246,12 +265,21 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  playbackOn.value = false;
 });
 
 function bodiesOf(method: string, path: string) {
   return fetchSpy.mock.calls
     .filter(([url, init]) => String(url).split('?')[0] === path && init?.method === method)
     .map(([, init]) => JSON.parse(String(init?.body)) as Record<string, unknown>);
+}
+
+/** 카드 열기 기록 요청(POK-393). 본문이 없어 bodiesOf로는 못 센다 */
+function openCalls() {
+  return fetchSpy.mock.calls.filter(
+    ([url, init]) =>
+      /\/api\/clip\/jump-cards\/\d+\/open$/.test(String(url)) && init?.method === 'POST',
+  );
 }
 
 async function openFrom(search: string) {
@@ -301,6 +329,64 @@ describe('StudioScreen — 영상 경로의 키(POK-233)', () => {
   it('칸을 모르는 옛 서버면 방송 번호로 찾는다', async () => {
     await openFrom(`?stream=${STREAM_ID}&card=5`);
     expect(spansAsked).toEqual([STREAM_ID]);
+  });
+
+  it('녹화를 찾기 전에 출입증을 받는다: 문은 방송 번호다(POK-317, CDN 뒤 녹화는 쿠키가 없으면 403)', async () => {
+    // 녹화 재생 서버가 있는 곳에서만 받는다. 모듈이 주소를 읽어 두므로 흉내 낸 함수만 주소가 있다고 답하게 한다
+    playbackOn.value = true;
+    server.ingest = 'key-studio';
+    await openFrom(`?stream=${STREAM_ID}&card=5`);
+    expect(
+      fetchSpy.mock.calls.filter(
+        ([url, init]) =>
+          url === `/api/clip/broadcasts/${STREAM_ID}/playback-access` && init?.method === 'POST',
+      ),
+    ).toHaveLength(1);
+  });
+
+  it('출입증을 못 받으면 녹화 없음으로 열지 않고 다시 열라고 알린다: 쿠키 없는 조회는 403이 「녹화 없음」으로 접힌다(PR #320 codex)', async () => {
+    playbackOn.value = true;
+    server.playbackAccess = 'fail';
+    nav.search = `?stream=${STREAM_ID}&card=5`;
+    renderWithProviders(<StudioScreen />);
+    expect(await screen.findByText(/영상 출입증을 받지 못했어요/)).toBeInTheDocument();
+    expect(spansAsked).toEqual([]);
+  });
+});
+
+describe('StudioScreen: 카드 열기 기록(POK-393)', () => {
+  it('카드에서 열면 그 카드의 열기 기록을 한 번 보낸다', async () => {
+    await openFrom(`stream=${STREAM_ID}&card=5`);
+
+    await waitFor(() => expect(openCalls()).toHaveLength(1));
+    expect(String(openCalls()[0]?.[0])).toBe('/api/clip/jump-cards/5/open');
+  });
+
+  it('개발 모드(StrictMode)에서 효과가 두 번 돌아도 한 번이다', async () => {
+    nav.search = `stream=${STREAM_ID}&card=5`;
+    renderWithProviders(
+      <StrictMode>
+        <StudioScreen />
+      </StrictMode>,
+    );
+    await screen.findByRole('button', { name: '편집본 저장' });
+
+    await waitFor(() => expect(openCalls()).toHaveLength(1));
+  });
+
+  it('열기 기록이 실패해도 편집기는 열리고 오류를 말하지 않는다', async () => {
+    server.openStatus = 503;
+    await openFrom(`stream=${STREAM_ID}&card=5`);
+
+    await waitFor(() => expect(openCalls()).toHaveLength(1));
+    expect(screen.getByRole('button', { name: '편집본 저장' })).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('편집본으로 열면 열기 기록을 안 보낸다', async () => {
+    await openFrom('recipe=31');
+
+    expect(openCalls()).toHaveLength(0);
   });
 });
 
@@ -421,6 +507,8 @@ describe('StudioScreen — 카드로 연 실제 편집기', () => {
     // 사용 통계 — 진입은 한 번(첫 저장으로 주소가 ?recipe= 로 바뀌어도 다시 세지 않는다), 주문은 서버가 받은 뒤
     // 한 번이고 열거형 속성만 싣는다(제목·설명·태그 없음)
     expect(tracked('clip_editor_opened')).toEqual([{ source: 'card' }]);
+    // 열기 기록도 같다: 첫 저장으로 주소가 바뀌어도 다시 안 보낸다(POK-393)
+    expect(openCalls()).toHaveLength(1);
     const orders = tracked('video_render_requested');
     expect(orders).toHaveLength(1);
     expect(Object.keys(orders[0] ?? {}).sort()).toEqual([

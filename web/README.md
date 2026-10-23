@@ -129,6 +129,21 @@ web/                     # 단일 Next.js 앱 (App Router + TanStack Query + Zus
   그래서 `recordingTimeline`이 **방송 시간 [시작, 종료]와 실제로 겹치는** 구간들(여유 없음 — 여유를 두면 같은 키로 그 안에 이어
   켠 앞뒤 방송이 섞인다. 켜자마자 끊긴 아주 짧은 첫 구간은 빠진다)을 한 축(첫 구간 시작 ~ 마지막 구간 끝, **틈 포함** —
   접으면 틈 뒤 카드가 어긋난다)에 놓고, 다시보기는 **한 구간씩** 받아 끝나면 다음 구간을 이어 튼다(틈을 누르면 다음 구간 시작).
+- 🔴 **영상 요청은 출입증을 받은 뒤에만 쿠키를 싣는다 (POK-317).** CDN 뒤(prod) 영상은 clip이 주는 CloudFront 서명 쿠키가
+  없으면 403이다.
+  - 라이브 화면은 제 타이머로 출입증을 받고, **받음이나 필요 없음(503) 답이 오기 전에는 라이브 주소를 재생기에 넘기지 않는다**.
+    먼저 넘기면 첫 요청이 쿠키 없이 403이고 hls.js는 한 번만 다시 시도한 뒤 멈춘다. 실패면 1분 뒤 다시 받은 답을 기다린다.
+  - 편집기는 녹화 목록을 묻기 직전에 `ensurePlaybackAccess(방송 번호, 영상 키)`로 받는다. 만료 5분 전까지 다시 쓰고(영상 키가
+    바뀌면 다시 받는다), 미리보기 창은 `ensureMediaAccess(영상 키)`로 갱신한다. 출입증을 못 받으면 「녹화 없음」으로 열지 않고 다시
+    열라고 알린다. **지난 방송 목록은 아직 출입증을 받지 않는다**: 키마다 쿠키 9장이라 목록 전체를 받으면 도메인당 쿠키 한도를 넘고,
+    받을 차례를 돌리는 방법까지 녹화 재생 주소와 함께 정한다(POK-317 다음 PR).
+  - 쿠키는 **출입증이 실제로 발급된 뒤에만** 싣는다(`mediaCredentials()`: 녹화 목록·미리보기 fetch는 `credentials`, 라이브
+    hls.js는 `xhrSetup`의 `withCredentials`, 다시보기 `<video>`는 원래 싣는다). 로컬·dev 영상 서버(MediaMTX)는
+    `Access-Control-Allow-Origin: *`로만 답해 쿠키를 실으면 브라우저가 응답을 버리기 때문이다(2026-10-23 실측).
+  - 503 `playback_signing_unavailable`(서명 재료 없음, 또는 그 방송의 영상 키가 정책에 못 들어감)을 받은 **방송은** 더 묻지 않는다.
+    자격 확인이 안 되는 503(`authorization_unavailable`)은 실패라 다시 묻는다.
+  - 🔴 **녹화 목록·미리보기 주소(`{base}/list?path=키`)는 쿠키 경로(`/{kind}/{키}`) 밖이라 CDN 뒤에서는 아직 쿠키가 안
+    실린다**: 주소 모양은 1번과 정하는 중이다(POK-317 다음 PR).
 - 🔴 **영상 주소는 방송 번호가 아니라 영상 경로의 키로 만든다 (POK-233).** 1번이 편지의 방송 번호를 방송마다 새 회차 번호로
   바꾸면 라이브·녹화 경로(스트림키)와 갈린다. clip이 방송 줄에 `ingestStreamId`를 실어 주고, 라이브 LL-HLS·녹화 목록·다시보기·
   편집기 미리보기는 `mediaStreamId(row)`(= `ingestStreamId`, 없거나 비면 방송 번호)를 쓴다. **API 경로·출입증·채팅·카드는 방송
@@ -240,11 +255,14 @@ web/                     # 단일 Next.js 앱 (App Router + TanStack Query + Zus
   틀었다(실기동에서 찾음).
   플레이어 가위 단추는 서버로 보내는 길이 없어 「준비 중」이라고만 한다. 화질·저지연 설정 메뉴는 실재생(라이브·다시보기)에서
   안 보인다 — 렌디션이 하나라 고를 것이 없다(계약3 2절, 목업 재생에서만 보인다).
-- **카드 숨기기 이유 · 놓기 · 숨김 되돌리기 (POK-338).** 카드의 숨기기(눈 아이콘)는 이유 메뉴(하이라이트 아님 · 중복 · 기타)를
-  거쳐 `{"reason"}`을 실어 보낸다. 「하이라이트 아님」 비율이 자동 감지의 거짓양성률이라 시범 운영 측정 재료다(집계는 `services/README.md`
-  「시범 운영 측정 재료」). 내가 집은 카드에는 「놓기」(집기 해제)가, 패널 필터의 「숨김 N」 칩에는 숨긴 카드와 「숨김 되돌리기」가 있다.
-  카드에서 연 편집기는 첫 저장에 그 카드 번호를 `?sourceCardId=`로 싣는다(계약6 본문은 그대로). 모양은 기존 메뉴·단추이고
-  시안이 나오면 모양만 바꾼다. 옛 clip은 숨기기 본문과 그 쿼리를 무시하므로 배포 순서는 상관없다.
+- **카드에는 편집만 (POK-393).** 카드 찜(집기·놓기)과 숨기기·숨김 해제·「숨김 N」 칩·「편집 중」 배지를 없앴다. 「편집」은 서버를 부르지
+  않고 바로 편집기로 간다. 여러 편집자가 같은 카드를 동시에 각자 편집한다. 시안의 카드 모양(점수 배지 · 원클릭 업로드 · 보관함 저장)은
+  그대로다. 카드에서 연 편집기는 첫 저장에 그 카드 번호를 `?sourceCardId=`로 싣는다(계약6 본문은 그대로, 시범 운영 측정 재료:
+  `services/README.md` 「시범 운영 측정 재료」). 옛 clip이 `claimedBy`·`hidden`을 실어 보내도 화면은 그 칸을 안 본다(숨김 칸이 찬 카드도
+  보이고 홈 카드 수에도 든다). 목록 요청에 `includeHidden`을 더는 안 싣는다.
+  편집기를 카드에서 열면 열기 기록(`POST /api/clip/jump-cards/{id}/open`)을 마운트당 한 번 보낸다(실패해도 편집은 된다).
+  **배포 순서: clip을 웹보다 먼저 올린다.** 새 웹이 옛 clip에 붙으면 숨겼던 카드를 주소로 열 때 「찾지 못했어요」가 뜬다(`includeHidden`을
+  더는 안 보내서 옛 clip이 그 카드를 목록에서 뺀다).
 - **「영상 만들기」 = 렌더 + 유튜브 바로 올리기 (POK-291).** 편집기의 「영상 만들기」는 **업로드 정보 창**(`UploadInfoDialog`)을
   연다: 제목 · 설명(5000바이트) · 태그(Enter·쉼표로 넣고, 공백 든 태그는 따옴표 두 글자를 더해 합계 500자) · 공개 범위(비공개 ·
   일부 공개 · 공개, 기본 비공개) · 아동용 · 썸네일(자동 · 완성 영상의 장면 · JPG/PNG 10MB 이미지). 「만들고 올리기」를 누르면
@@ -329,6 +347,59 @@ web/                     # 단일 Next.js 앱 (App Router + TanStack Query + Zus
 **빌드 시점에 굳는다** — `next start`는 실행 시점 env를 읽지 않으므로, 운영 빌드의 프록시
 대상을 바꾸려면 다시 빌드해야 한다. 백엔드 로컬 기동은
 [`docs/dev-environment.md`](../docs/dev-environment.md).
+
+### 컨테이너 이미지 (`Dockerfile`)
+
+운영(prod)에서는 공개 ALB 뒤 ECS Fargate 태스크가 이 이미지를 돌린다. `output: 'standalone'`
+빌드의 `server.js`를 비root 사용자 `node`로 띄우며, 포트는 `3000`이다. 올리는 절차는
+[`prod-artifacts.md`](../infra/terraform/runbooks/prod-artifacts.md)를 따른다.
+
+```bash
+docker build --platform linux/<태스크 아키텍처> -t pokeclip-web \
+  --build-arg AUTH_API_URL=… --build-arg CLIP_API_URL=… \
+  --build-arg NEXT_PUBLIC_GOOGLE_CLIENT_ID=… \
+  --build-arg NEXT_PUBLIC_MEDIA_LIVE_BASE_URL=… \
+  --build-arg NEXT_PUBLIC_MEDIA_PLAYBACK_BASE_URL=… \
+  web
+```
+
+**환경 값은 전부 빌드 인자다 — 실행 시점 env로는 바뀌지 않는다.** rewrites 대상은
+`next build`가 `.next/routes-manifest.json`에 박고, `NEXT_PUBLIC_*`는 번들에 인라이닝된다
+(2026-10-23 실측 — 빌드 때와 다른 `AUTH_API_URL`·`CLIP_API_URL`을 주고 `next start`와
+`server.js`를 띄워도 빌드 때 주소로 프록시했다). 그래서 환경마다 따로 빌드한다.
+
+| 빌드 인자                             | 비면                   | 값                                  |
+| ------------------------------------- | ---------------------- | ----------------------------------- |
+| `AUTH_API_URL`                        | **빌드 실패**          | auth 서버 내부 주소 (rewrites 대상) |
+| `CLIP_API_URL`                        | **빌드 실패**          | clip 서버 내부 주소 (rewrites 대상) |
+| `NEXT_PUBLIC_GOOGLE_CLIENT_ID`        | **빌드 실패**          | 백엔드 `GOOGLE_CLIENT_ID`와 같은 값 |
+| `NEXT_PUBLIC_MEDIA_LIVE_BASE_URL`     | **빌드 실패**          | LL-HLS 베이스                       |
+| `NEXT_PUBLIC_MEDIA_PLAYBACK_BASE_URL` | **빌드 실패**          | 녹화 재생 서버                      |
+| `NEXT_PUBLIC_POSTHOG_KEY` · `_HOST`   | 사용 통계 꺼짐         | 운영 값은 `.env.example` 주석       |
+| `NEXT_PUBLIC_POSTHOG_REPLAY`          | 세션 녹화 꺼짐         | `on`일 때만 켜짐                    |
+| `NEXT_PUBLIC_LANDING_URL`             | `https://pokeclip.com` | 랜딩 주소                           |
+
+`NEXT_PUBLIC_MEDIA_PLAYBACK_BASE_URL`은 prod 이미지가 다시보기·편집기 미리보기가 꺼진 채 나가지 않게
+필수로 둔다(로컬 개발은 위 환경변수 표대로 비워도 된다). prod 값은 I2-2에서 이것도 함께 정한다.
+
+선택 인자는 비어도 빌드가 멈추지 않으므로, 이름을 잘못 적으면 그 기능이 조용히 꺼진 채 빌드된다.
+
+- `NEXT_PUBLIC_MEDIA_STUB_URL`은 받지 않는다 — 배포 빌드에서는 반드시 비어야 한다. 같은 이유로
+  `.dockerignore`가 `.env*` 파일을 빌드 컨텍스트에서 뺀다(`.env.local`이 섞이면 `next build`가
+  읽어 굳힌다).
+- 실행 시점 env는 `PORT`(기본 `3000`)·`HOSTNAME`(기본 `0.0.0.0`)·`KEEP_ALIVE_TIMEOUT`(기본 `65000`ms)
+  셋이다. `KEEP_ALIVE_TIMEOUT`은 ALB idle timeout보다 길어야 한다 — SSE 때문에 M8에서 ALB idle을
+  늘리면 이 값도 그보다 크게 준다.
+- 헬스체크는 `/api/ping`이다(앱이 직접 답해 백엔드 상태와 무관). 이미지에 `HEALTHCHECK`로 넣어
+  뒀다.
+- `pnpm start`(`next start`)는 standalone 설정에서 경고를 내지만 동작은 한다. 운영과 같은 꼴로
+  띄우려면 Dockerfile이 하는 대로 `public`·`.next/static`을 standalone 폴더로 옮긴 뒤 띄운다
+  (standalone은 두 폴더를 싣지 않는다):
+
+  ```bash
+  cp -r public .next/standalone/ && cp -r .next/static .next/standalone/.next/
+  node .next/standalone/server.js
+  ```
 
 ### 세션·토큰 저장과 다중 탭
 

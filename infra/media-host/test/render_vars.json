@@ -1,0 +1,17 @@
+{
+  "control_upstream": "",
+  "detached_log_driver": "journald",
+  "ingest_auth_image": "",
+  "janitor_enabled": false,
+  "media_health_path": "/pcbench-edge-proxy-health",
+  "mediamtx_image": "registry.pcbench-edge-proxy.invalid/media-mediamtx@sha256:1111111111111111111111111111111111111111111111111111111111111111",
+  "nginx_image": "registry.pcbench-edge-proxy.invalid/media-nginx@sha256:2222222222222222222222222222222222222222222222222222222222222222",
+  "proxy_control_port": 28183,
+  "proxy_health_port": 28184,
+  "proxy_live_port": 28181,
+  "proxy_playback_port": 28182,
+  "rds_db_name": "pcbench_edge_proxy",
+  "rds_endpoint": "db.pcbench-edge-proxy.invalid",
+  "rewind_bucket_name": "pcbench-edge-proxy-rewind",
+  "sidecar_image": "registry.pcbench-edge-proxy.invalid/media-sidecar@sha256:3333333333333333333333333333333333333333333333333333333333333333"
+}
