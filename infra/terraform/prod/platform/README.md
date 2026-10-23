@@ -12,8 +12,8 @@ prod 의 요청 입구와 앱 서비스를 만드는 루트입니다(설계 3-1 
 *   **ECS**: 클러스터 `pokeclip-prod` · Fargate arm64 서비스 셋(next · auth ·
     clip) · Cloud Map 네임스페이스 `pokeclip.internal`(`auth` · `clip` ·
     `next`).
-*   **SG 규칙**: 공개 ALB 인그레스 · 이그레스, 서비스 인그레스, RDS 인그레스
-    ← auth · clip(설계 5-5).
+*   **SG 규칙**: 공개 ALB 인그레스 · 이그레스, 서비스 인그레스(clip ↔ auth
+    두 방향 포함), RDS 인그레스 ← auth · clip(설계 5-5).
 
 두 ALB 리스너(HTTPS 443 · 서울 인증서)의 기본 동작은 고정 404 입니다. 규칙에
 걸린 요청만 대상에 닿습니다 — api 호스트의 규칙 밖 경로와 모르는 Host 는
@@ -25,7 +25,7 @@ prod 의 요청 입구와 앱 서비스를 만드는 루트입니다(설계 3-1 
 |---|---|
 | 내부 ALB 인그레스 ← CloudFront VPC origin | edge |
 | 내부 ALB · NLB 이그레스 → Media · Media 대상 등록 · Media ↔ RDS | media |
-| Media ↔ auth · chat ↔ auth · clip 규칙 | 런타임 2단 |
+| Media ↔ auth · chat ↔ auth · clip 규칙(auth → chat-collector 8083 포함) | 런타임 2단(POK-306) |
 | 일꾼 · chat 서비스 | POK-306 · POK-408(출력 `ecs_cluster_arn` · `discovery_namespace_id` · `service_sg_ids` 를 씀) |
 
 용어:
@@ -53,8 +53,14 @@ auth 접두사는 `web/next.config.ts` 에서 `AUTH_API_URL` 로 가는 줄과 �
 ALB 규칙 하나에는 조건 값이 다섯까지라(계획 P1) 접두사 하나가 규칙 하나입니다.
 
 clip-sse 는 같은 clip 서비스입니다. 긴 SSE 연결이 clip 그룹의 응답 시간
-지표를 흐리지 않게 대상 그룹만 뗍니다. 브라우저는 api 를 부르지 않으므로
-(ADR-089 ③) auth · clip 에 브라우저 CORS env 를 넣지 않습니다.
+지표를 흐리지 않게 대상 그룹만 뗍니다.
+
+브라우저는 api 를 부르지 않습니다(ADR-089 ③ — 브라우저 API 는 app 같은
+오리진 → Next rewrite). 그래서 CORS 는 실제로 쓰이지 않지만, auth · clip 은
+허용 출처가 비면 부팅하지 않습니다(`web-support` `CorsProperties` 의
+`@NotEmpty`). 계획(「CORS env 를 넣지 않는다」)과 달리
+`CORS_ALLOWED_ORIGINS = https://app.pokeclip.com` 하나만 둡니다(kty 확정 —
+변수 `cors_allowed_origins`).
 
 ## Next 이미지 빌드 인자
 
@@ -83,7 +89,10 @@ next 이미지를 다시 빌드해야 합니다.
 | auth | `STREAM_KEY_SECRET_REF_PREFIX` | `stream_key_secret_prefix`(작업 역할 정책과 같은 값) |
 | clip | `CLOUDFRONT_KEY_PAIR_ID` | secrets `public_key_id` |
 | clip | `MEDIA_BASE_URL` · `PLAYBACK_COOKIE_DOMAIN` | `https://media.pokeclip.com` · `.pokeclip.com` |
+| auth | `CLIP_BASE_URL` · `COLLECTOR_BASE_URL` | `http://clip.pokeclip.internal:8081` · `http://chat-collector.pokeclip.internal:8083`(탈퇴 정리 — 비면 부팅 거부. chat-collector 등록은 POK-408) |
+| auth · clip | `CORS_ALLOWED_ORIGINS` | `cors_allowed_origins`(기본 `https://app.pokeclip.com` — 위 「공개 ALB 규칙」) |
 | clip | `AUTH_BASE_URL` | `http://auth.pokeclip.internal:8082`(clip → auth 자격 판정) |
+| clip | `PLAYBACK_REQUIRED` | `true`(서명 값 셋 중 하나라도 빠지면 부팅 거부 — POK-321) |
 | clip | `CLOUDFRONT_PRIVATE_KEY_PEM`(비밀) | secrets `signing_key_secret_arn` |
 | auth · clip | `POSTGRES_USER` | 런타임 `app_db_users` 의 자기 사용자 |
 | auth · clip | `POSTGRES_AUTH` · `POSTGRES_SSLROOTCERT` | `iam` · `postgres_sslrootcert` — `app_db_auth = "iam"` 일 때만 |
@@ -121,8 +130,9 @@ next 이미지를 다시 빌드해야 합니다.
 `image_digests` · `proxy_ports` · `media_health_path` · `ingest_allowed_cidrs`
 · `postgres_sslrootcert` 는 기본값이 없습니다. `terraform.tfvars.example` 을
 `terraform.tfvars`(추적 안 함)로 복사해 채웁니다. `proxy_ports` ·
-`media_health_path` 는 prod/media 와 같은 값이어야 합니다 — 어긋나면 Media
-대상이 unhealthy 입니다.
+`media_health_path` 는 Media 상자 nginx 포트 · 헬스 경로의 정본입니다 —
+대상 그룹이 이 값을 쓰고, 같은 값을 출력(`media_proxy_ports` ·
+`media_health_path`)으로 내보내 prod/media 가 remote_state 로 읽습니다.
 
 | 변수 | 기본값 | 뜻 |
 |---|---|---|
@@ -131,11 +141,17 @@ next 이미지를 다시 빌드해야 합니다.
 | `waf_rate_limit` | 2000 | IP 하나당 5분 요청 수 |
 | `services` | next 3000 `/api/ping` 512/1024 · 60초, auth 8082 · clip 8081 `/actuator/health` 1024/2048 · 180초 | 포트 · 헬스 경로 · CPU · 메모리(MiB) · 기동 유예(Flyway) |
 | `app_db_auth` | `iam` | `password` 면 `rds-db:connect` · `POSTGRES_AUTH` 없음 |
+| `cors_allowed_origins` | `https://app.pokeclip.com` | auth · clip 부팅 필수 값(실사용 없음) |
 | `stream_key_secret_prefix` | `pokeclip/prod/stream-key/` | auth 스트림 키 비밀 이름 접두 |
 
 앞 루트 상태는 `state_bucket`(`pokeclip-tfstate-prod-apne2`) · `state_keys`
 (network · certs · secrets · registry · runtime)로 읽습니다. 런타임 1단 키는
 `prod/runtime/terraform.tfstate` 로 고정입니다(CONTRACT-runtime.md).
+
+**O7d 선행 확인 — POK-407 머지 여부**: auth · clip 의 IAM DB 인증 코드
+(`POSTGRES_AUTH=iam`)가 머지되지 않았으면 tfvars 에서
+`app_db_auth = "password"` 로 둡니다. 그때는 런타임이 DB 비밀번호 그릇을
+`app_secret_arns` 로 줍니다.
 
 적용은 O7d(kty 승인)입니다. 그 전에 [단계 직전 점검](/infra/terraform/runbooks/stage-precheck.md)
 과 [ALB 교차 영역 실측](/infra/terraform/runbooks/alb-cross-zone-bench.md)을
@@ -158,5 +174,6 @@ provider 의 `default_tags` 네 키(`TerraformRoot = prod/platform`)는 태그�
 | `internal_alb_{arn,dns_name,sg_id}` | edge(VPC origin · 인그레스) · media(이그레스 → Media) |
 | `nlb_{dns_name,zone_id,sg_id}` | records(ingest 별칭) · media(이그레스 → Media) |
 | `target_group_arns`(ingest · live · control · playback) | media — Media 상자 등록 |
+| `media_proxy_ports`(live · control · playback · health) · `media_health_path` | media — 상자 nginx 포트 · 헬스 경로(대상 그룹과 같은 값) |
 | `ecs_cluster_arn` · `discovery_namespace_id` · `service_sg_ids`(auth · clip · next) | 런타임 2단 · 일꾼(POK-306) · chat(POK-408) |
 | `clip_execution_role_arn` | 런타임 2단 |

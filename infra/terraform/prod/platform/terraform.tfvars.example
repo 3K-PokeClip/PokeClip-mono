@@ -10,8 +10,8 @@ image_digests = {
   clip = "sha256:<CLIP_DIGEST>"
 }
 
-# Media 상자 nginx 듣기 포트 · 헬스 경로 — prod/media 의 tfvars 와 같은 값.
-# 1024 이상 · 서로 다름 · 8080 · 8081 · 8888 · 9996 · 9997 이 아님.
+# Media 상자 nginx 듣기 포트 · 헬스 경로의 정본 — 대상 그룹이 쓰고, 출력으로
+# 내보내 prod/media 가 읽는다. 1024 이상 · 서로 다름 · 8080 · 8081 · 8888 · 9996 · 9997 이 아님.
 proxy_ports = {
   live     = <PROXY_LIVE_PORT>
   playback = <PROXY_PLAYBACK_PORT>
@@ -25,7 +25,9 @@ media_health_path = "<MEDIA_HEALTH_PATH>"
 ingest_allowed_cidrs = ["<TEAM_IP_CIDR>"]
 
 # auth · clip 이미지 안 RDS CA 번들 경로(3번 이미지 — app_db_auth = iam 이면
-# 필수).
+# 필수). O7d 전에 POK-407(IAM DB 인증 코드)이 머지되지 않았으면 아래 줄을
+# 켜고 이 값은 지운다 — 런타임이 DB 비밀번호 그릇을 준다.
+# app_db_auth = "password"
 postgres_sslrootcert = "<RDS_CA_BUNDLE_PATH_IN_IMAGE>"
 
 # auth 톰캣이 X-Forwarded-* 를 믿을 대역(정규식). 3번(POK-316)이 값을 정하면

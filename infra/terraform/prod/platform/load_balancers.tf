@@ -9,6 +9,9 @@ locals {
   # next 의 keep-alive 65초 · clip SSE 하트비트 20초보다 짧다.
   alb_idle_timeout = 60
 
+  # 공개 ALB 는 잘못된 헤더(HTTP 헤더 이름 규칙 밖)를 버린다 — 요청 밀수 방어.
+  public_alb_drop_invalid_header_fields = true
+
   # web/next.config.ts 에서 AUTH_API_URL 로 가는 접두사(7 · 9 · 14 · 18 · 19 ·
   # 24 · 26 · 29 · 30행). 그 파일에 줄이 늘면 여기도 늘린다.
   auth_path_prefixes = [
@@ -78,16 +81,21 @@ locals {
     }
   }
 
+  # Media 상자 nginx 포트 · 헬스 경로의 정본 — 출력으로 내보내 media 루트가
+  # 같은 값으로 상자를 띄운다.
+  media_proxy_ports = tomap(var.proxy_ports)
+  media_health_path = var.media_health_path
+
   # 헬스는 프록시 헬스 포트 · 경로다(traffic-port 아님) — 제어면 서버가 없어도
   # control 이 healthy 다(설계 3-3-1).
   internal_target_groups = {
     for name in ["live", "control", "playback"] : name => {
-      port        = var.proxy_ports[name]
+      port        = local.media_proxy_ports[name]
       protocol    = "HTTP"
       target_type = "instance"
       health_check = {
-        port = tostring(var.proxy_ports.health)
-        path = var.media_health_path
+        port = tostring(local.media_proxy_ports["health"])
+        path = local.media_health_path
       }
     }
   }
@@ -120,7 +128,7 @@ locals {
   }
 
   nlb_subnet_id   = local.network.media_public_subnet_id
-  nlb_health_port = var.proxy_ports.health
+  nlb_health_port = local.media_proxy_ports["health"]
 }
 
 module "waf" {
@@ -143,6 +151,8 @@ module "public_alb" {
   idle_timeout    = local.alb_idle_timeout
   target_groups   = local.public_target_groups
   listener_rules  = local.public_listener_rules
+
+  drop_invalid_header_fields = local.public_alb_drop_invalid_header_fields
 }
 
 resource "aws_wafv2_web_acl_association" "public" {

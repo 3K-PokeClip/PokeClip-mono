@@ -30,7 +30,8 @@
 | 런타임 1단 → platform | `rds_resource_id` | auth · clip 작업 역할의 `rds-db:connect`(대상 = `dbuser:<rds_resource_id>/<사용자>`) — platform `app_db_auth = "iam"` 일 때 | RDS = 런타임, 접속 정책 = platform |
 | 런타임 1단 → platform | `app_db_users`(`auth` · `clip` → DB 사용자 이름 — 가칭 `app_auth` · `app_clip`, 3번 POK-407 확정) | 태스크 env `POSTGRES_USER` · `rds-db:connect` 의 사용자 자리(서비스마다 하나, 와일드카드 없음) | DB 사용자 · `rds_iam` · GRANT = 런타임 |
 | 런타임 1단 → platform | `app_task_resource_arns`(서비스 → 키 → ARN — 아래 「작업 역할 대상」) | auth · clip 작업 역할 정책 Resource. 키가 없으면(기능 꺼짐) 그 문장을 만들지 않는다 | 자원 = 런타임, 작업 역할 정책 = platform |
-| platform → 런타임 · 일꾼 · chat | `ecs_cluster_arn` · `discovery_namespace_id` · `service_sg_ids`(auth · clip · next) | 같은 클러스터 · Cloud Map 네임스페이스(`pokeclip.internal`)에 서비스를 두고, 상대 SG 규칙을 만든다(POK-306 일꾼 · POK-408 chat) | 클러스터 · 네임스페이스 · 서비스 SG = platform, 새 서비스 · 그 규칙 = 그 PR
+| platform → 런타임 · 일꾼 · chat | `ecs_cluster_arn` · `discovery_namespace_id` · `service_sg_ids`(auth · clip · next) | 같은 클러스터 · Cloud Map 네임스페이스(`pokeclip.internal`)에 서비스를 두고, 상대 SG 규칙을 만든다(POK-306 일꾼 · POK-408 chat) | 클러스터 · 네임스페이스 · 서비스 SG = platform, 새 서비스 · 그 규칙 = 그 PR |
+| platform → media | `media_proxy_ports`(live · control · playback · health) · `media_health_path` | Media 상자 nginx 포트 · 헬스 경로 — platform 대상 그룹과 같은 값(정본 = platform) | platform |
 | 런타임 1단 → media | `rds_endpoint` · `rds_db_name` · `rds_resource_id` · `rds_sg_id` · `rewind_bucket_arn` | 사이드카 · janitor env(주소 · DB 이름) · Media 인스턴스 역할의 `rds-db:connect`(대상 = `rds_resource_id`) · Media ↔ RDS 5432 규칙 한 쌍 · 사이드카 S3(rewind) 업로드 정책(대상 = `rewind_bucket_arn/*`) | RDS · DB 사용자 · GRANT = 런타임, 접속 정책 · SG 규칙 · 업로드 정책 = media |
 | 런타임 1단 → media | `media_secret_arns`(INTERNAL_API_TOKEN 등) | Media 인스턴스 역할 읽기 정책 | 그릇 · 값 = 런타임, 읽기 정책 = media |
 | 런타임 1단 → edge | `rewind_bucket_{name,arn,regional_domain_name}` | `cdn_media` 의 `rewind-s3` 오리진 | 버킷 = 런타임 |
@@ -40,6 +41,15 @@
 
 clip ↔ auth · RDS ← auth · clip · 로드밸런서 → Media 규칙은 위 표의 런타임
 2단 행이 아닙니다(platform · media 가 가짐 — 설계 5-5).
+
+*   **auth → chat-collector**: auth 탈퇴 정리가 `COLLECTOR_BASE_URL`
+    (`http://chat-collector.pokeclip.internal:8083`)을 부릅니다. 그 SG 짝(auth
+    이그레스 · chat-collector 인그레스 8083)은 런타임 2단(POK-306)이
+    `service_sg_ids.auth` 로 만듭니다. auth → clip 짝은 platform 이 갖습니다.
+*   **O7d 선행 확인 — POK-407 머지 여부**: auth · clip 의 IAM DB 인증
+    코드가 머지되지 않았으면 platform tfvars 에서
+    `app_db_auth = "password"` 로 두고, 런타임은 DB 비밀번호 그릇을
+    `app_secret_arns` 로 줍니다.
 
 *   **rewind 버킷 이름**: media 는 이름 출력을 따로 받지 않고
     `rewind_bucket_arn`(`arn:aws:s3:::<이름>`)에서 꺼냅니다.
@@ -76,11 +86,13 @@ clip ↔ auth · RDS ← auth · clip · 로드밸런서 → Media 규칙은 위
 ### platform 이 정하는 env
 
 auth: `FORWARD_HEADERS_STRATEGY` · `STREAM_KEY_SECRET_REF_PREFIX` ·
-`SERVER_TOMCAT_REMOTEIP_INTERNALPROXIES`(값이 있을 때) · `POSTGRES_USER` ·
-`POSTGRES_AUTH` · `POSTGRES_SSLROOTCERT`(IAM 일 때).
+`SERVER_TOMCAT_REMOTEIP_INTERNALPROXIES`(값이 있을 때) · `CORS_ALLOWED_ORIGINS`
+· `CLIP_BASE_URL` · `COLLECTOR_BASE_URL` · `POSTGRES_USER` · `POSTGRES_AUTH` ·
+`POSTGRES_SSLROOTCERT`(IAM 일 때).
 clip: `CLOUDFRONT_KEY_PAIR_ID` · `MEDIA_BASE_URL` · `PLAYBACK_COOKIE_DOMAIN` ·
-`AUTH_BASE_URL` · `POSTGRES_USER` · `POSTGRES_AUTH` · `POSTGRES_SSLROOTCERT`
-(IAM 일 때), 비밀 `CLOUDFRONT_PRIVATE_KEY_PEM`. 런타임 `app_env` 에는 이
+`AUTH_BASE_URL` · `CORS_ALLOWED_ORIGINS` · `PLAYBACK_REQUIRED` ·
+`POSTGRES_USER` · `POSTGRES_AUTH` · `POSTGRES_SSLROOTCERT`(IAM 일 때), 비밀
+`CLOUDFRONT_PRIVATE_KEY_PEM`. 런타임 `app_env` 에는 이
 이름을 넣지 않습니다.
 
 ### 응답기 비밀

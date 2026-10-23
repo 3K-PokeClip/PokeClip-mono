@@ -110,8 +110,8 @@ variable "image_digests" {
   }
 }
 
-# media 루트(Media 상자 nginx)와 같은 값을 둔다 — 대상 그룹 포트 · 헬스가
-# 상자의 듣기 포트와 어긋나면 대상이 unhealthy 다.
+# Media 상자 nginx 포트의 정본 — 대상 그룹 포트 · 헬스가 이 값에서 나오고,
+# 출력 media_proxy_ports 로 media 루트가 같은 값으로 상자를 띄운다.
 variable "proxy_ports" {
   description = "Media 상자 nginx 듣기 포트 넷(live · playback · control · health). 1024 이상 · 서로 다름 · 응답기(8080 · 8081)와 MediaMTX 루프백(8888 · 9996 · 9997) 밖."
   type = object({
@@ -160,6 +160,19 @@ variable "playback_cookie_domain" {
   description = "clip 서명 쿠키 Domain(PLAYBACK_COOKIE_DOMAIN)."
   type        = string
   default     = ".pokeclip.com"
+}
+
+# 브라우저는 api 를 부르지 않지만(같은 오리진 — ADR-089 ③) auth · clip 은 허용
+# 출처가 비면 부팅하지 않는다(CorsProperties @NotEmpty).
+variable "cors_allowed_origins" {
+  description = "auth · clip CORS_ALLOWED_ORIGINS(쉼표 목록 · 와일드카드 금지)."
+  type        = string
+  default     = "https://app.pokeclip.com"
+
+  validation {
+    condition     = var.cors_allowed_origins != "" && !strcontains(var.cors_allowed_origins, "*")
+    error_message = "cors_allowed_origins 는 비어 있지 않고 와일드카드가 없어야 한다."
+  }
 }
 
 variable "app_db_auth" {

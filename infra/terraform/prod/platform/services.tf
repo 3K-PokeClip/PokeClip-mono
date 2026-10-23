@@ -11,6 +11,9 @@ locals {
   log_retention_days = 30
   discovery_domain   = "pokeclip.internal"
 
+  # chat-collector 는 POK-408 이 같은 네임스페이스에 등록한다(이름 · 포트 계약).
+  collector_base_url = "http://chat-collector.${local.discovery_domain}:8083"
+
   account_id = data.aws_caller_identity.current.account_id
   region     = data.aws_region.current.region
 
@@ -47,6 +50,10 @@ locals {
         # 로드밸런서 뒤 — 명시하지 않으면 application.yml 의 none 이 남는다.
         FORWARD_HEADERS_STRATEGY     = "native"
         STREAM_KEY_SECRET_REF_PREFIX = var.stream_key_secret_prefix
+        CORS_ALLOWED_ORIGINS         = var.cors_allowed_origins
+        # 탈퇴 정리(withdrawal-purge) — 비면 부팅이 거부된다.
+        CLIP_BASE_URL      = "http://clip.${local.discovery_domain}:${var.services.clip.port}"
+        COLLECTOR_BASE_URL = local.collector_base_url
       },
       { for key, value in { SERVER_TOMCAT_REMOTEIP_INTERNALPROXIES = var.auth_internal_proxies } : key => value if value != "" },
     )
@@ -58,6 +65,9 @@ locals {
         MEDIA_BASE_URL         = var.media_base_url
         PLAYBACK_COOKIE_DOMAIN = var.playback_cookie_domain
         AUTH_BASE_URL          = "http://auth.${local.discovery_domain}:${var.services.auth.port}"
+        CORS_ALLOWED_ORIGINS   = var.cors_allowed_origins
+        # 서명 값 셋 중 하나라도 빠지면 부팅을 거부한다(POK-321).
+        PLAYBACK_REQUIRED = "true"
       },
     )
   }
@@ -82,7 +92,8 @@ locals {
       clip = { port = var.services.clip.port, security_group_id = module.clip.sg_id, description = "Next rewrite to clip" }
     })
     auth = merge(local.common_egress, {
-      rds = { port = 5432, security_group_id = local.runtime.rds_sg_id, description = "RDS" }
+      rds  = { port = 5432, security_group_id = local.runtime.rds_sg_id, description = "RDS" }
+      clip = { port = var.services.clip.port, security_group_id = module.clip.sg_id, description = "auth to clip purge" }
     })
     clip = merge(local.common_egress, {
       rds  = { port = 5432, security_group_id = local.runtime.rds_sg_id, description = "RDS" }
@@ -205,6 +216,17 @@ resource "aws_vpc_security_group_ingress_rule" "auth_from_clip" {
   from_port                    = var.services.auth.port
   to_port                      = var.services.auth.port
   referenced_security_group_id = module.clip.sg_id
+}
+
+# auth → clip 탈퇴 정리(WithdrawalPurge)의 짝. auth → chat-collector 는 런타임
+# 2단(POK-306) 몫이다.
+resource "aws_vpc_security_group_ingress_rule" "clip_from_auth" {
+  security_group_id            = module.clip.sg_id
+  description                  = "auth to clip purge"
+  ip_protocol                  = "tcp"
+  from_port                    = var.services.clip.port
+  to_port                      = var.services.clip.port
+  referenced_security_group_id = module.auth.sg_id
 }
 
 # RDS SG 는 런타임 1단이 만들고, auth · clip SG 를 아는 이 루트가 규칙을

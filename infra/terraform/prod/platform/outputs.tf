@@ -60,6 +60,16 @@ output "target_group_arns" {
   }
 }
 
+output "media_proxy_ports" {
+  description = "Media 상자 nginx 듣기 포트(live · control · playback · health) — 대상 그룹 포트 · 헬스와 같은 값. media 가 상자 설정에 쓴다."
+  value       = local.media_proxy_ports
+}
+
+output "media_health_path" {
+  description = "Media nginx 헬스 경로 — 대상 그룹 헬스와 같은 값. media 가 상자 설정에 쓴다."
+  value       = local.media_health_path
+}
+
 output "ecs_cluster_arn" {
   description = "ECS 클러스터 ARN — 런타임 트랙 · 일꾼(POK-306) · chat(POK-408) 서비스가 같은 클러스터에 둔다."
   value       = aws_ecs_cluster.this.arn
