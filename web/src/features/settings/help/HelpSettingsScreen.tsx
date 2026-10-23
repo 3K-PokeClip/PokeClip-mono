@@ -13,7 +13,7 @@ import {
   Users,
   type LucideIcon,
 } from 'lucide-react';
-import { LinkButton, Tabs } from '@/ui';
+import { LinkButton, Tabs, VisuallyHidden } from '@/ui';
 import { useOnboardingStore } from '@/stores/onboarding';
 import { SettingsPageHeader } from '../SettingsPageHeader';
 import { DiscordMark } from './DiscordMark';
@@ -160,7 +160,11 @@ function FaqTopics() {
             <Tabs.Trigger key={key} value={key} className={styles.topicTab}>
               <Icon aria-hidden />
               {label}
-              <span className={styles.topicCount}>{count}</span>
+              {/* 숫자만 붙이면 접근 이름이 「플러그인5」가 된다 — 화면엔 숫자, 낭독엔 「, 질문 5개」 */}
+              <span className={styles.topicCount} aria-hidden>
+                {count}
+              </span>
+              <VisuallyHidden>, 질문 {count}개</VisuallyHidden>
             </Tabs.Trigger>
           );
         })}

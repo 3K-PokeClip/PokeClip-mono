@@ -1,7 +1,7 @@
 import type { AnchorHTMLAttributes, ReactNode } from 'react';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { axe } from 'jest-axe';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
 import { FaqList } from './FaqList';
 import { useOnboardingStore } from '@/stores/onboarding';
 import { FAQ_ITEMS, FAQ_TOPICS, type FaqKey } from './faqItems';
@@ -82,9 +82,12 @@ describe('HelpSettingsScreen', () => {
     render(<HelpSettingsScreen />);
 
     const tabs = screen.getAllByRole('tab');
-    expect(tabs.map((t) => t.textContent)).toEqual(
-      FAQ_TOPICS.map((t) => `${t.label}${inTopic(t.key).length}`),
-    );
+    // 낭독 이름은 「플러그인, 질문 5개」 — 화면의 숫자만 붙으면 「플러그인5」로 읽힌다
+    tabs.forEach((tab, i) => {
+      const t = FAQ_TOPICS[i]!;
+      expect(tab).toHaveAccessibleName(`${t.label}, 질문 ${inTopic(t.key).length}개`);
+    });
+    expect(tabs).toHaveLength(FAQ_TOPICS.length);
     expect(tabs[0]).toHaveAttribute('aria-selected', 'true');
     // 모든 질문이 어느 한 주제에 들어 있다 — 주제 없는 질문은 화면에서 사라진다
     expect(FAQ_TOPICS.reduce((n, t) => n + inTopic(t.key).length, 0)).toBe(FAQ_ITEMS.length);
@@ -126,12 +129,22 @@ describe('HelpSettingsScreen', () => {
     fireEvent.click(screen.getByRole('tab', { name: /플러그인/ }));
     fireEvent.click(screen.getByRole('tab', { name: /시작하기/ }));
 
-    // 돌아온 주제에서 같은 질문을 열면 버튼 대신 완료 문구다 — 다시 보낼 길이 없다
+    // 돌아오면 펼침은 닫혀 있다(시안 ① 전부 닫힘) — 평가 기록만 남는다
     const toggle = question(FAQ_ITEMS[0].q);
-    if (toggle.getAttribute('aria-expanded') !== 'true') fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+
+    // 같은 질문을 다시 열면 버튼 대신 완료 문구다 — 다시 보낼 길이 없다
+    fireEvent.click(toggle);
     expect(screen.getByText('피드백을 보냈어요 · 더 나은 답변에 반영할게요')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '도움이 되었어요' })).toBeNull();
     expect(track).toHaveBeenCalledTimes(1);
+  });
+
+  it('평가 이벤트의 질문 key 목록(events.ts FaqKey)과 화면 질문이 양쪽으로 같다', () => {
+    // 화면 쪽 ⊆ FaqKey는 faqItems.ts의 satisfies가, FaqKey ⊆ 화면 쪽은 이 줄이 컴파일 때 잡는다 —
+    // 질문을 지우며 events.ts를 그대로 두면 다시 오지 않는 key가 열거에 남는다
+    expectTypeOf<Exclude<FaqKey, (typeof FAQ_ITEMS)[number]['key']>>().toEqualTypeOf<never>();
+    expect(new Set(FAQ_ITEMS.map((item) => item.key)).size).toBe(FAQ_ITEMS.length);
   });
 
   it('다른 가이드 카드는 투어를 건드리지 않는다', () => {

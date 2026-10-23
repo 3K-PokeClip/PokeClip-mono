@@ -16,6 +16,16 @@ export function FaqList({ items }: { items: readonly FaqItem[] }) {
   const [openKey, setOpenKey] = useState<FaqKey | null>(null);
   const [voted, setVoted] = useState<ReadonlySet<FaqKey>>(() => new Set());
 
+  // 주제 탭을 바꿔도 이 목록은 언마운트되지 않는다(평가 기록을 지키려고 — HelpSettingsScreen의 패널 주석).
+  // 펼침만은 주제가 바뀌면 닫는다: 다른 주제를 다녀왔는데 전에 펼친 질문이 열려 있으면 시안 ①(전부 닫힘)과 어긋난다.
+  // 렌더 중에 맞추는 이유는 effect로 하면 열린 채 한 번 그려진 뒤 닫히기 때문이다(React 「prop이 바뀔 때 state 맞추기」)
+  const itemsKey = items.map((item) => item.key).join('|');
+  const [shownItemsKey, setShownItemsKey] = useState(itemsKey);
+  if (shownItemsKey !== itemsKey) {
+    setShownItemsKey(itemsKey);
+    setOpenKey(null);
+  }
+
   const vote = (key: FaqKey, helpful: boolean) => {
     track('faq_feedback_sent', { faq: key, helpful });
     setVoted((prev) => new Set(prev).add(key));

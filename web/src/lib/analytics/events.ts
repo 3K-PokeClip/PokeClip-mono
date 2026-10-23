@@ -4,7 +4,8 @@ import { withAnalytics } from './client';
 /**
  * 도움말 · 문의 「자주 묻는 질문」의 질문 식별자 — `faq_feedback_sent`의 `faq` 속성 열거.
  * 정본은 여기다: 공용 analytics가 화면(features)을 가져오지 않도록 화면 쪽 `faqItems.ts`가 이 목록을 따른다
- * (key가 여기 없으면 그쪽에서 타입 오류). 질문을 더하면 여기부터 더한다(PR #318 리뷰).
+ * (key가 여기 없으면 그쪽 satisfies에서, 화면에서 지운 key가 여기 남으면 HelpSettingsScreen 테스트의 타입 검사에서
+ * 오류가 난다). 질문을 더하거나 뺄 때는 여기부터 고친다(PR #318 리뷰).
  */
 export type FaqKey =
   | 'requirements'
