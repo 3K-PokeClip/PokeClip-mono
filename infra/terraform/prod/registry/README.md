@@ -12,6 +12,10 @@ prod 이미지를 담는 ECR 저장소를 만드는 루트입니다(설계 3-1 �
 | `pokeclip-prod/media-mediamtx` | MediaMTX(`media/Dockerfile.mtxhook` 빌드) |
 | `pokeclip-prod/media-sidecar` | 사이드카(`media/Dockerfile` 빌드) |
 | `pokeclip-prod/media-ingest-auth` | 응답기(`media/Dockerfile.ingest-auth` 빌드) |
+| `pokeclip-prod/render` | 3번 렌더 워커(`workers/render/Dockerfile` 빌드) |
+| `pokeclip-prod/upload` | 3번 업로드 워커(`workers/upload/Dockerfile` 빌드) |
+| `pokeclip-prod/chat-collector` | 3번 채팅 수집 서버(`services/chat-collector/Dockerfile` 빌드) |
+| `pokeclip-prod/chat-detector` | 3번 채팅 판별 서버(`services/chat-detector/Dockerfile` 빌드) |
 
 janitor 저장소는 janitor 코드가 생길 때 `repository_keys` 에 더합니다.
 
