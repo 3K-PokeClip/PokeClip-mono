@@ -1393,6 +1393,28 @@ run "rejects_access_token_query_parameter_in_app_env_value" {
   expect_failures = [terraform_data.runtime_contract]
 }
 
+# 프래그먼트로 싣는 토큰(OAuth implicit 흐름의 #access_token=)도 멈춘다.
+run "rejects_access_token_fragment_parameter_in_app_env_value" {
+  command = plan
+
+  override_data {
+    target = data.terraform_remote_state.runtime
+    values = {
+      outputs = {
+        rds_sg_id              = "sg-0rds"
+        rds_resource_id        = "db-ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        rewind_bucket_arn      = "arn:aws:s3:::pokeclip-prod-rewind-example"
+        app_db_users           = { auth = "app_auth", clip = "app_clip" }
+        app_env                = { auth = { DB_URL = "https://app.example.invalid/auth/callback#access_token=example-not-a-token" }, clip = {} }
+        app_secret_arns        = { auth = {}, clip = {} }
+        app_task_resource_arns = { auth = {}, clip = {} }
+      }
+    }
+  }
+
+  expect_failures = [terraform_data.runtime_contract]
+}
+
 # 값 운반 꼴 — 비밀 낱말이 든 JVM 시스템 속성(-D, 속성 이름은 대소문자 무관).
 run "rejects_jvm_secret_property_in_app_env_value" {
   command = plan

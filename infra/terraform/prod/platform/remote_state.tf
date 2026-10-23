@@ -233,9 +233,10 @@ resource "terraform_data" "runtime_contract" {
     }
 
     # 값 운반 꼴: 이름이 무엇이든 값에 비밀을 싣는 꼴 셋을 멈춘다.
-    # (1) URL 쿼리의 비밀 매개변수 — ? · & · ; 뒤 키 이름에 passw · pwd ·
-    # secret · token 이 들면(passwd · sslpassword · client_secret ·
-    # access_token 등, 대소문자 무관). 알려진 한계(오탐): token_type ·
+    # (1) URL 쿼리 · 프래그먼트의 비밀 매개변수 — ? · & · ; · # 뒤 키
+    # 이름에 passw · pwd · secret · token 이 들면(passwd · sslpassword ·
+    # client_secret · OAuth implicit 의 #access_token 등, 대소문자 무관).
+    # 키=값 꼴이 아닌 프래그먼트(#section)는 걸지 않는다. 알려진 한계(오탐): token_type ·
     # page_token 처럼 비밀 아닌 키도 멈춘다. (2) 비밀 낱말이 든
     # JVM 시스템 속성 -D…(속성 이름은 대소문자 무관). JVM 은 옵션을 공백으로
     # 나누므로 -D 는 값 처음 · 공백 · 따옴표 뒤만 본다 — pokeclip-Data-token
@@ -248,7 +249,7 @@ resource "terraform_data" "runtime_contract" {
       condition = alltrue(flatten([
         for env in values(try(local.runtime.app_env, {})) : [
           for value in values(env) : !(
-            can(regex("(?i)[?&;][^=&;#?]*(passw|pwd|secret|token)[^=&;#?]*=", value)) ||
+            can(regex("(?i)[?&;#][^=&;#?]*(passw|pwd|secret|token)[^=&;#?]*=", value)) ||
             can(regex("(^|[\\s\"'])-D[^ =]*(?i:secret|password|token)", value)) ||
             anytrue([
               for i, seg in split("://", value) :
