@@ -18,6 +18,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.DisabledIfEnvironmentVariable;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -195,8 +196,17 @@ class SoopChatBrowserTest {
         assertThat(chats).extracting(PersistableChat::content).containsExactly("살아남");
     }
 
-    /** 첫 탭의 렌더러만 죽으면 그 탭을 버리고 다시 붙는다. 펌프가 깨진 페이지에 매여 헛돌지 않는다 */
+    /**
+     * 첫 탭의 렌더러만 죽으면 그 탭을 버리고 다시 붙는다. 펌프가 깨진 페이지에 매여 헛돌지 않는다.
+     *
+     * <p>🔴 GitHub Actions에서는 건너뛴다. 러너가 Ubuntu 26이라 Playwright 1.52가 지원하지 않고(설치 때 경고) 브라우저 시스템 꾸러미가
+     * 빠져 있어, 렌더러가 죽어도 충돌 사건이 안 왔다(CDP {@code Page.crash} · {@code chrome://crash} 둘 다 30초 시한, CI 두 번 실측).
+     * 운영 이미지와 같은 조건(Ubuntu 24.04 + {@code --with-deps}, Playwright 공식 이미지 {@code playwright/java:v1.52.0-noble})에서는
+     * 통과한다(로컬 컨테이너 실측). 다른 브라우저 시험 10건은 CI에서도 돈다.
+     */
     @Test
+    @DisabledIfEnvironmentVariable(named = "GITHUB_ACTIONS", matches = "true",
+            disabledReason = "CI 러너(Ubuntu 26)에서 렌더러 충돌 사건이 안 온다. 운영과 같은 noble+deps 컨테이너에서 통과")
     void 페이지가_깨지면_그_탭만_다시_붙고_채팅을_받는다() {
         start(10);
         sessions.ensure("s-1", "bj-1", TOKEN);
