@@ -2766,7 +2766,11 @@ revoke를 DB 락 안에 넣어야 해서(=트랜잭션 안 외부 호출) 포기
 수집기(POK-397)가 그 스트리머의 Access Token을 auth에서 받아 채팅을 읽는다. 왕복:
 `POST /api/soop-link/start`가 준 `authorizeUrl`(`client_id`·`state`만 싣는다, `redirect_uri`는 SOOP 콘솔에 등록한 값을 SOOP이 쓴다)로
 프론트가 사용자를 보내고, SOOP이 `SOOP_REDIRECT_URI`로 돌려준 `code`를 프론트가 `POST /api/soop-link {code, state}`로 넘긴다.
-방송국은 본문이 아니라 SOOP `validate/live/status`(아이디)·`user/stationinfo`(닉네임)로 확정한다.
+방송국은 본문이 아니라 SOOP `validate/live/status`(방송 여부 체크)·`user/stationinfo`(방송국 정보, 닉네임)로 확정한다.
+**아이디는 방송 중이면 방송 여부 체크의 `user_id`, 아니면 방송국 정보 `profile_image` 주소(`…/LOGO/<두 글자>/<아이디>/<아이디>.jpg`)에서
+꺼낸다**(실측 2026-10-23: 방송 중이 아니면 방송 여부 체크가 아이디를 안 준다, 문서 예시와 다르다). 둘 다 안 되면 502 `SOOP_UNAVAILABLE`이다
+(동의는 유효했으니 「동의부터 다시」가 아니다). 🔴 한계: 문서에 없는 주소 꼴에 기대므로 SOOP이 그 꼴을 바꾸면 방송 중이 아닌 스트리머의
+연동이 일시 장애로 떨어진다.
 
 🔴 **치지직과 다른 점은 SOOP 개발자 약관 제11조 ⑰(연동 해제·철회 시 지체 없이 파기)에서 나온다.**
 연동이 닫히는 순간(해제 · 재연동 · 갱신 거절 · 탈퇴) 같은 UPDATE 한 문장에서 SOOP 아이디·닉네임을 비우고(V116),
@@ -2777,7 +2781,7 @@ revoke를 DB 락 안에 넣어야 해서(=트랜잭션 안 외부 호출) 포기
 | | 응답 |
 |---|---|
 | `POST /api/soop-link/start` | 200 `{authorizeUrl}`. `state`는 URL 안에 있다(표 없이 서명, 10분. 서명 접두가 치지직과 달라 치지직 state는 여기서 안 통한다) |
-| `POST /api/soop-link` `{code, state}` | 201 `{nickname, linkedAt}` · 400 `INVALID_STATE` · 400 `INVALID_CODE`(SOOP이 교환·조회를 400·401·403 또는 `result` 음수로 거부, **동의부터 다시**) · 409 `CHANNEL_ALREADY_LINKED` · 502 `SOOP_UNAVAILABLE`(5xx·시간 초과·형식 오류·그 밖의 4xx, 잠시 뒤 다시) |
+| `POST /api/soop-link` `{code, state}` | 201 `{nickname, linkedAt}` · 400 `INVALID_STATE` · 400 `INVALID_CODE`(SOOP이 교환·조회를 400·401·403 또는 `result` 음수로 거부, **동의부터 다시**) · 409 `CHANNEL_ALREADY_LINKED` · 502 `SOOP_UNAVAILABLE`(5xx·시간 초과·형식 오류·그 밖의 4xx·아이디를 못 읽음, 잠시 뒤 다시) |
 | `GET /api/soop-link` | 200 `{linked:false}` 또는 `{linked, nickname, status, linkedAt, lastRefreshedAt, accessExpiresAt}`. `status` ∈ `ACTIVE`·`EXPIRED`·`BROKEN`·`UNLINKED`(파생). `linked`는 `ACTIVE`·`EXPIRED`일 때만 true. **`BROKEN`·`UNLINKED`에는 `nickname`이 없다**(파기됐다). 화면은 `status`가 `BROKEN`이면 「SOOP 연동이 끊겼어요(다시 연동)」를 그린다 |
 | `DELETE /api/soop-link` | 204(없어도 204). 행은 남고(`revoked_at`+`USER_UNLINKED`, 아이디·닉네임 NULL) 커밋 뒤에 secrets 삭제. 외부 HTTP 없음 |
 | `POST /internal/soop-link/resolve` `{userId}` | **항상 200**, 아래 |
@@ -2802,29 +2806,30 @@ revoke를 DB 락 안에 넣어야 해서(=트랜잭션 안 외부 호출) 포기
 (`pokeclip.soop.check.interval=PT1H`) 살아 있는 연동 중 만료가 2시간(`refresh-ahead`) 안으로 남았거나 마지막 확인이
 24시간(`check.staleness`) 지난 것을 골라 회원마다 갱신한다. 회원 행 락 뒤 다시 읽어 이미 갱신됐으면 SOOP을 안 부른다.
 400·401·403이면 영구(`REFRESH_REJECTED` → `BROKEN`, 아이디·닉네임·토큰 파기), 그 밖은 행을 두고 다음 틱에 재시도한다.
+한 틱은 오래 확인 안 한 순 앞 **25명**(`check.batch-limit`)만 본다: 스프링 기본 스케줄러는 스레드 하나라 치지직·유튜브·청소 틱과 나눈다.
+SOOP 장애가 길면 오래된 순 앞 25가 매 틱 실패해(확인 시각이 안 바뀐다) 뒤쪽은 장애가 끝난 뒤 확인된다(유튜브 철회 점검의 구멍과 같은 성질).
 `pokeclip.soop.check.enabled`는 기본 켜짐이고 프로퍼티를 빠뜨려도 켜진다(`matchIfMissing`). 시험 프로파일만 끈다.
 
-🔴 **갱신 브레이크.** 스케줄러의 한 틱에서 거절이 **연달아 3번**(`check.reject-brake`) 나면 그 틱을 멈추고, **그 프로세스가 사는 동안
-두 경로 모두 파기를 멈춘다**: 스케줄러는 다시 틱을 서지 않고, 수집기 resolve의 즉석 갱신은 4xx를 받아도 닫지 않고
-`REFRESH_UNAVAILABLE`로 답한다(로그 `refresh_rejected_braked status=` WARN). 연속 거절은 스케줄러 틱 안에서만 센다(resolve 거절은 안 센다).
-로그 `auth.soop.link.refresh_reject_burst consecutive= lastUserId= action=…_then_redeploy`(ERROR) 한 줄이 서는 신호다(비밀값은 안 찍는다).
+🔴 **갱신 브레이크.** 갱신 거절을 **두 경로 모두**(스케줄러 점검 · 수집기 resolve 즉석 갱신) 한 셈에 센다. 연속 수가 **3**(`check.reject-brake`)에
+닿는 거절부터 파기하지 않고, **그 프로세스가 사는 동안 두 경로 모두 파기를 멈춘다**: 스케줄러는 그 틱의 남은 회원을 안 부르고 다시 틱을 서지
+않으며, resolve 즉석 갱신은 4xx를 받아도 닫지 않고 `REFRESH_UNAVAILABLE`로 답한다(로그 `refresh_rejected_braked status=` WARN).
+세기와 판정은 한 번의 원자 연산이라 거절이 동시에 몰려도 닫히는 것은 **2명(`reject-brake`−1)까지**다.
+연속 수를 0으로 돌리는 것은 **SOOP이 실제로 답한 성공(갱신됨)뿐**이다. 토큰이 신선해 SOOP을 안 부른 resolve·연동 없음·일시 장애는 셈을 그대로 둔다:
+비밀값이 틀린 배포에서도 신선한 회원의 resolve는 성공처럼 보이므로, 그것이 0으로 돌리면 브레이크가 영영 안 선다.
+로그 `auth.soop.link.refresh_reject_burst consecutive= lastUserId= action=…_then_redeploy`(ERROR) 한 줄이 서는 순간의 신호다(비밀값은 안 찍는다).
 이유: 치지직·유튜브는 앱 설정 오류(시크릿 오타·앱 교체)를 응답의 오류 코드로 가려 일시로 돌리지만, SOOP은 토큰 주소의 오류 꼴이
-문서에 없어 가를 수 없다. 브레이크가 없으면 비밀값 하나가 틀린 배포가 틱 한 번에 전 회원 연동을 닫고 토큰까지 지운다(되돌릴 수 없다).
-브레이크를 resolve까지 넓힌 이유: 스케줄러만 멈추면 미리 갱신하는 주체가 사라져, 토큰 남은 수명이 1시간 아래로 내려간 회원부터
-방송을 켤 때마다 resolve가 같은 설정 오류로 연동을 하나씩 닫는다(감사 2회차). 성공이 끼면 연속 수가 0으로 돌아가고, 일시 장애는 연속 수를
-그대로 둔다. 대가 둘: 브레이크 전에 거절된 3명은 이미 닫혔다 · **브레이크가 선 동안 진짜로 동의를 철회한 회원의 아이디·닉네임·토큰도
-재배포 때까지 남는다**(약관 제11조 ⑰의 「지체 없이」에서 벗어나지만, 비상 상태라 짧다고 본다). 그동안 수집도 멈춘다(`REFRESH_UNAVAILABLE`).
+문서에 없어 가를 수 없다. 브레이크가 없으면 비밀값 하나가 틀린 배포가 전 회원 연동을 닫고 토큰까지 지운다(되돌릴 수 없다).
+resolve도 세는 이유: 스케줄러만 세면 첫 틱(최대 1시간 뒤) 전에, 그리고 브레이크 뒤에도, 방송을 켜는 회원마다 resolve가 같은 설정 오류로 연동을
+하나씩 닫는다(감사 2회차 · PR #329 봇 지적). 대가 둘: 브레이크 전에 거절된 2명은 이미 닫혔다 · **브레이크가 선 동안 진짜로 동의를 철회한 회원의
+아이디·닉네임·토큰도 재배포 때까지 남는다**(약관 제11조 ⑰의 「지체 없이」에서 벗어나지만, 비상 상태라 짧다고 본다). 그동안 수집도 멈춘다(`REFRESH_UNAVAILABLE`).
 **푸는 법**: `SOOP_CLIENT_ID`·`SOOP_CLIENT_SECRET`·`SOOP_REDIRECT_URI`를 확인해 고치고 재배포한다(재시작이 브레이크를 푼다).
 실계정으로 확인할 것: 잘못된 `client_secret`으로 갱신하면 SOOP이 무엇을 돌려주는가.
-**거짓 경보도 있다**: 진짜 거절(철회·refresh 만료) 셋이 후보 순서상 연달아 와도 브레이크가 선다. 그러면 재배포 때까지 정기 철회 확인이
+**거짓 경보도 있다**: 진짜 거절(철회·refresh 만료) 셋이 성공 없이 연달아 와도 브레이크가 선다. 그러면 재배포 때까지 정기 철회 확인과 파기가
 멈춘다. 같은 ERROR 줄이 신호이므로, 비밀값이 맞으면 원인을 확인한 뒤 재배포로 푼다.
 같은 이유로 **연동 단계에서는 앱 설정 오류와 사용자 쪽 거절을 가를 수 없다**: 비밀값이 틀린 배포에서 연동을 누르면 사용자에게는
 「다시 시도」 문구(`INVALID_CODE`)가 나가고 서버에는 `auth.soop.link.rejected status=` INFO만 남는다. 연동 거절이 몰리면 비밀값부터 본다.
 
-**동의 복귀의 state(웹).** SOOP 문서에 동의 뒤 state를 돌려준다는 말이 없어, 웹은 시작 때 state를 브라우저 세션 저장소
-(`pokeclip.soop.state`, 탭마다 따로)에 두고 콜백 쿼리에 state가 없으면 그 값으로 완료한다. 대가: 연동을 시작했다가 그만둔 탭에서
-10분 안에 남이 만든 콜백 주소(`?code=`만 있는)를 열면 남의 SOOP 방송국이 내 계정에 묶일 수 있다. **실계정 시험에서 SOOP이 state를
-돌려주는 것이 확인되면 이 대체 경로를 지운다**(`web/src/features/settings/channels/soopOAuth.ts`의 `takeSoopState`).
+**동의 복귀의 state(웹).** SOOP은 콜백에 `state`를 돌려준다(2026-10-23 실계정 확인, 네 번 모두 `?code=…&state=…`). 웹은 쿼리의 `state`만 서버에 되돌려주고 대체 경로(세션 저장소)는 없다. `state`가 없으면 1회용 `code`를 서버에 보내지 않고 「연동 요청을 확인할 수 없어요」로 채널 화면에 돌려보낸다.
 
 **정리 실패 때 남는 것(한계).** 커밋 뒤 정리는 전용 스레드 2개(`SoopCleanupExecutor`, 종료 시 최대 3초 + 강제 1초)에서 돈다.
 access·refresh 삭제는 각각 시도한다(하나가 실패해도 나머지는 지운다). 그래도 아래 셋에서는 **토큰 원문(암호문)이 secrets에 남을 수
