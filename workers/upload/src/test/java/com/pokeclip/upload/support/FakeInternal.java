@@ -15,7 +15,8 @@ import java.util.regex.Pattern;
 
 /**
  * clip 일꾼 문 셋과 auth resolve를 한 서버로 흉내 낸다. clip 쪽 판정은 진짜 clip({@code UploadReportService})과 같은 규칙이다:
- * 끝난 주문은 {@code proceed:false}, 주소는 처음 적힌 것만 남는다.
+ * 끝난 주문은 {@code proceed:false}, 주소는 처음 적힌 것만 남는다, 주소가 적힌 줄의 {@code FAILED}는 {@code checking}으로 받고
+ * {@code onlyIfNoSession}이면 상태를 안 바꾸고 409 {@code SESSION_EXISTS}와 주소를 준다(POK-250).
  */
 public class FakeInternal implements AutoCloseable {
 
@@ -32,9 +33,14 @@ public class FakeInternal implements AutoCloseable {
     public volatile int clipDown;
     /** 설정하면 session 문이 이 주소를 먼저 적힌 것으로 둔다(겹친 일꾼 흉내). */
     public volatile String preRecordOnSession;
-    /** 설정하면 두 번째 start부터 이 주소가 적혀 있다(이 일꾼이 시작하는 사이 다른 일꾼이 적었다). */
-    public volatile String lateSession;
+    /** 설정하면 첫 result 직전에 주소가 비어 있을 때 이 주소를 적는다(실패를 보내는 사이 겹친 일꾼이 적었다, POK-250). */
+    public volatile String sessionBeforeResult;
+    /** true면 {@code onlyIfNoSession} 칸을 모르는 옛 clip이다(칸을 무시한다). */
+    public volatile boolean oldClip;
+    /** 실제로 반영된 끝 보고. 주소가 적힌 줄의 FAILED는 반영된 대로 {@code CHECKING:코드}로 남는다. */
     public final List<String> results = new ArrayList<>();
+    /** 상태를 안 바꾸고 409로 돌려보낸 끝 보고의 사유(예: {@code SESSION_EXISTS}). */
+    public final List<String> refusedResults = new ArrayList<>();
     /** UPLOADED 보고에 실린 썸네일 결과. {@code "SET"} · {@code "FAILED:코드"} · {@code "NONE"} · 칸이 없으면 {@code "null"}. */
     public final List<String> thumbnailResults = new ArrayList<>();
     /** result 문이 5xx를 줄 횟수(clip이 보고를 못 받는다 = 일꾼이 보고 전에 멈춘 것과 같다). */
@@ -84,9 +90,6 @@ public class FakeInternal implements AutoCloseable {
                     return;
                 }
                 status = "uploading";
-                if (starts >= 1 && lateSession != null && sessionUri == null) {
-                    sessionUri = lateSession;
-                }
                 starts++;
                 reply(ex, 200, "{\"proceed\":true,\"status\":\"uploading\",\"attempt\":" + starts + ",\"sessionUri\":"
                         + (sessionUri == null ? "null" : "\"" + sessionUri + "\"") + "}");
@@ -114,7 +117,18 @@ public class FakeInternal implements AutoCloseable {
                     reply(ex, 409, "{\"reason\":\"TERMINAL\"}");
                     return;
                 }
+                if (sessionBeforeResult != null && sessionUri == null) {
+                    sessionUri = sessionBeforeResult;
+                }
                 String outcome = field(body, "outcome");
+                if ("FAILED".equals(outcome) && sessionUri != null) {
+                    if (!oldClip && body.contains("\"onlyIfNoSession\":true")) {
+                        refusedResults.add("SESSION_EXISTS");
+                        reply(ex, 409, "{\"reason\":\"SESSION_EXISTS\",\"sessionUri\":\"" + sessionUri + "\"}");
+                        return;
+                    }
+                    outcome = "CHECKING";   // 진짜 clip: 주소가 적힌 줄의 실패는 확인 중이다
+                }
                 String detail = "UPLOADED".equals(outcome) ? field(body, "videoId") : field(body, "errorCode");
                 results.add(outcome + ":" + detail);
                 if ("UPLOADED".equals(outcome)) {

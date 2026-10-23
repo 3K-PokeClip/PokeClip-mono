@@ -540,20 +540,63 @@ class UploadProcessorTest {
     }
 
     /**
-     * 🔴 이 일꾼이 시작을 청하는 사이 다른 일꾼이 주소를 적어 두었다. 이 일꾼은 한도에 걸렸지만 실패를 보내면 안 된다: 그 주소로 이어
-     * 갈 길이 막힌다(PR #199 codex). 실패 전에 clip에 다시 물어 적힌 주소가 있으면 그 주소로 잇는다.
+     * 🔴 이 일꾼이 한도에 걸려 실패를 보내는 순간 겹친 일꾼이 주소를 적었다(PR #199 codex · POK-250). 실패가 반영되면 clip이 확인 중으로
+     * 받고 쪽지가 지워져 아무도 그 주소를 잇지 않는다. 실패를 「주소가 없을 때만」으로 보내 clip이 돌려준 주소로 이어 올린다. 영상 하나.
+     * 옛 코드는 실패 직전에 clip에 다시 물었지만 그 물음과 실패 사이에 적히면 못 잡았다: 이 시험은 그 틈에 적는다.
      */
     @Test
-    void 한도에_걸려도_그사이_다른_일꾼이_적은_주소가_있으면_그리로_잇는다() {
+    void 한도에_걸려도_실패를_보내는_순간_주소가_생기면_그_주소로_잇는다() {
         String 다른_일꾼 = youtube.openSession(SIZE);
-        internal.lateSession = 다른_일꾼;
+        internal.sessionBeforeResult = 다른_일꾼;
         youtube.quotaOnStart = true;
 
         processor().process(주문서());
 
+        assertThat(internal.refusedResults).containsExactly("SESSION_EXISTS");
         assertThat(internal.results).containsExactly("UPLOADED:vid1");
         assertThat(youtube.session(다른_일꾼).bytes.toByteArray()).isEqualTo(video);
         assertThat(youtube.videosCreated()).isEqualTo(1);
+    }
+
+    /** clip 왕복이 하나 준다: 실패 직전의 다시 묻기(start 두 번째)가 없다(POK-250). */
+    @Test
+    void 한도_실패는_start를_한_번만_부른다() {
+        youtube.quotaOnStart = true;
+
+        processor().process(주문서());
+
+        assertThat(internal.results).containsExactly("FAILED:QUOTA_EXCEEDED");
+        assertThat(internal.starts).isEqualTo(1);
+    }
+
+    /**
+     * 칸을 모르는 옛 clip은 주소 있는 줄의 실패를 200 {@code checking}으로 받는다. 일꾼은 그것을 「끝난 주문」으로 본다(실패로 닫혔다고
+     * 읽지 않는다). 쪽지를 지우는 것은 지금 결함과 같은 결과다: 배포 순서(clip 먼저)가 이 틈을 없앤다.
+     */
+    @Test
+    void 옛_clip이_실패를_확인_중으로_받으면_끝난_주문으로_본다() {
+        internal.oldClip = true;
+        internal.sessionBeforeResult = youtube.openSession(SIZE);
+        internal.status = "uploading";   // 일꾼이 잡은 줄
+
+        assertThat(clipApi().failIfNoSession(UPLOAD_ID, "QUOTA_EXCEEDED", "한도"))
+                .isInstanceOf(ClipUploadApi.FailOutcome.Terminal.class);
+        assertThat(internal.results).containsExactly("CHECKING:QUOTA_EXCEEDED");
+    }
+
+    /** 새 clip이 주소 없는 줄의 실패를 받으면 실패다. 이미 끝난 줄이면 끝난 주문이다. */
+    @Test
+    void 주소가_없을_때만_실패의_답을_셋으로_가른다() {
+        internal.status = "uploading";   // 일꾼이 잡은 줄
+        assertThat(clipApi().failIfNoSession(UPLOAD_ID, "QUOTA_EXCEEDED", "한도"))
+                .isInstanceOf(ClipUploadApi.FailOutcome.Failed.class);
+        assertThat(clipApi().failIfNoSession(UPLOAD_ID, "QUOTA_EXCEEDED", "한도"))
+                .as("끝난 줄(409 TERMINAL)").isInstanceOf(ClipUploadApi.FailOutcome.Terminal.class);
+
+        internal.status = "uploading";
+        internal.sessionUri = "https://upload.example/s1";
+        assertThat(clipApi().failIfNoSession(UPLOAD_ID, "QUOTA_EXCEEDED", "한도"))
+                .isEqualTo(new ClipUploadApi.FailOutcome.SessionExists("https://upload.example/s1"));
     }
 
     /** 조각 전송 중 403 속도 제한도 거절이 아니다. 주소에 다시 물어 받은 데부터 잇는다(PR #199 codex 3판). */
@@ -577,17 +620,20 @@ class UploadProcessorTest {
     }
 
     /**
-     * 🔴 연동이 끊겨 실패를 보내려는데, 그사이 겹친 일꾼이 주소를 적어 두었다. 실패를 보내면 clip이 확인 중으로 닫고 쪽지가 지워져 그 주소로
-     * 이어 갈 길이 막힌다(PR #199 codex 2판). 실패를 보내지 않고 쪽지를 남긴다.
+     * 🔴 연동이 끊겨 실패를 보내는 순간 겹친 일꾼이 주소를 적었다(PR #199 codex 2판 · POK-250). 실패가 반영되면 clip이 확인 중으로 닫고
+     * 쪽지가 지워져 그 주소로 이어 갈 길이 막힌다. 이 일꾼은 토큰이 없어 이을 수 없으니 실패를 안 남기고 쪽지를 남긴다(그 일꾼이 끝내거나
+     * 다음 배달이 잇는다).
      */
     @Test
-    void 연동이_끊겨도_그사이_적힌_주소가_있으면_실패를_안_보낸다() {
+    void 연동이_끊겨_실패를_보내는_순간_주소가_생기면_쪽지를_남긴다() {
         internal.accessToken = null;
         internal.refusal = "BROKEN";
-        internal.lateSession = youtube.openSession(SIZE);
+        internal.sessionBeforeResult = youtube.openSession(SIZE);
 
         assertThat(processor().process(주문서()).kind()).isEqualTo(Disposition.Kind.DELAY);
         assertThat(internal.results).isEmpty();
+        assertThat(internal.refusedResults).containsExactly("SESSION_EXISTS");
+        assertThat(internal.status).isEqualTo("uploading");
     }
 
     /** 연동이 끊긴 채널: 주소가 없으면 영상도 없으니 실패. 잠깐의 갱신 실패는 다시 온다(아무것도 보고 안 한다). */
@@ -682,6 +728,14 @@ class UploadProcessorTest {
     }
 
     // ── 도우미 ──────────────────────────────────────────────────
+
+    /** 주문서의 uploadId. */
+    private static final long UPLOAD_ID = 41;
+
+    private ClipUploadApi clipApi() {
+        return new ClipUploadApi(new InternalHttp(new ObjectMapper(), FakeInternal.TOKEN, List.of(Duration.ZERO), d -> { }),
+                internal.baseUrl());
+    }
 
     private UploadProcessor processor() {
         return processor(new ResumableUploader(new ObjectMapper(), youtube.startUrl(), youtube.thumbnailUrl()));

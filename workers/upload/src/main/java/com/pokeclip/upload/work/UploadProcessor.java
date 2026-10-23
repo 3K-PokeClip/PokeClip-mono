@@ -27,7 +27,8 @@ import java.util.stream.Stream;
  * <ol>
  *   <li>바이트는 clip에 적힌 이어 올리기 주소 하나로만 보낸다. 새 주소를 받으면 clip에 적고 <b>clip이 돌려준 주소</b>(먼저 적힌 것)를 쓴다.</li>
  *   <li>보내기 전에 그 주소에 「어디까지 받았나」를 먼저 묻는다. 이미 다 받았으면(재배달·응답 유실) 영상 번호만 보고한다.</li>
- *   <li>{@code FAILED}는 <b>주소를 받기 전</b>의 실패에만 보낸다(바이트가 갈 곳이 없었으니 영상이 없다). 주소가 생긴 뒤 더 못 가면
+ *   <li>{@code FAILED}는 <b>주소를 받기 전</b>의 실패에만, 「주소가 없을 때만」으로 보낸다(바이트가 갈 곳이 없었으니 영상이 없다.
+ *       보내는 사이 주소가 생기면 clip이 그 주소를 돌려준다, POK-250). 주소가 생긴 뒤 더 못 가면
  *       주소에 물어 다 받았으면 올림, 아니면 {@code CHECKING}이다: 같은 주소로 다른 일꾼이 아직 올리는 중일 수 있어 「덜 받았다」도
  *       영상이 없다는 증거가 못 된다(PR #198 codex P1, clip도 같은 규칙으로 받는다). 모르면 쪽지를 남긴다.</li>
  * </ol>
@@ -143,18 +144,17 @@ public class UploadProcessor {
                 return retryLater();
             }
             if (session == null) {
-                // 🔴 실패 전에 다시 묻는다. 그사이 겹친 일꾼이 주소를 적었으면 실패가 그 주소로 이어 갈 길을 막는다(PR #199 codex 2판).
-                // 이 일꾼은 토큰이 없어 이을 수 없으니 쪽지를 남긴다. 그 일꾼이 끝내면 끝난 주문이 되고, 멈췄으면 다음 배달이 주소에 묻는다.
-                ClipUploadApi.Start again = clip.start(id);
-                if (!again.found() || !again.proceed()) {
-                    return Disposition.DELETE;
-                }
-                if (again.sessionUri() != null) {
-                    log.info("upload.session_appeared_while_unlinked uploadId={}", id);
-                    return retryLater();
-                }
-                clip.failed(id, code, message);
-                return Disposition.DELETE;
+                // 🔴 「주소가 없을 때만 실패」로 보낸다(POK-250). 그사이 겹친 일꾼이 주소를 적었으면 실패가 그 주소로 이어 갈 길을 막는다
+                // (PR #199 codex 2판). 판정은 clip이 줄 잠금 안에서 한 번에 한다: 다시 묻고 나서 실패하면 그 사이에 적힌 주소를 못 잡는다.
+                return switch (clip.failIfNoSession(id, code, message)) {
+                    case ClipUploadApi.FailOutcome.Failed f -> Disposition.DELETE;
+                    case ClipUploadApi.FailOutcome.Terminal t -> Disposition.DELETE;
+                    case ClipUploadApi.FailOutcome.SessionExists s -> {
+                        // 이 일꾼은 토큰이 없어 이을 수 없다. 그 일꾼이 끝내면 끝난 주문이 되고, 멈췄으면 다음 배달이 주소에 묻는다.
+                        log.info("upload.session_appeared_while_unlinked uploadId={}", id);
+                        yield retryLater();
+                    }
+                };
             }
         }
 
@@ -256,22 +256,21 @@ public class UploadProcessor {
     }
 
     /**
-     * 시작이 거절됐다. 🔴 실패를 보내기 전에 clip에 다시 묻는다: 이 일꾼이 시작을 청하는 사이 겹친 일꾼이 주소를 적어 두었으면
-     * 실패 보고는 그 주소로 이어 갈 길을 막는다(clip이 확인 중으로 닫고 쪽지가 지워진다, PR #199 codex). 적힌 주소가 있으면 그리로 잇는다.
+     * 시작이 거절됐다. 🔴 실패를 「주소가 없을 때만」으로 보낸다(POK-250): 이 일꾼이 시작을 청하는 사이 겹친 일꾼이 주소를 적어 두었으면
+     * 실패 보고는 그 주소로 이어 갈 길을 막는다(clip이 확인 중으로 닫고 쪽지가 지워진다, PR #199 codex). 그때 clip은 상태를 안 바꾸고
+     * 주소를 돌려주므로 그리로 잇는다. 토큰이 없으면 이을 수 없어 쪽지를 남긴다.
      */
     private Disposition failUnlessAdopted(UploadEnvelope job, String token, Path file, long size, String code,
                                           String message) {
         long id = job.uploadId();
-        ClipUploadApi.Start again = clip.start(id);
-        if (!again.found() || !again.proceed()) {
-            return Disposition.DELETE;
-        }
-        if (again.sessionUri() != null) {
-            log.info("upload.adopt_session uploadId={} after={}", id, code);
-            return drive(job, again.sessionUri(), token, file, size);
-        }
-        clip.failed(id, code, message);
-        return Disposition.DELETE;
+        return switch (clip.failIfNoSession(id, code, message)) {
+            case ClipUploadApi.FailOutcome.SessionExists s -> {
+                log.info("upload.adopt_session uploadId={} after={}", id, code);
+                yield token == null ? retryLater() : drive(job, s.sessionUri(), token, file, size);
+            }
+            case ClipUploadApi.FailOutcome.Failed f -> Disposition.DELETE;
+            case ClipUploadApi.FailOutcome.Terminal t -> Disposition.DELETE;
+        };
     }
 
     /**
