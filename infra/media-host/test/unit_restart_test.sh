@@ -4,9 +4,9 @@
 # 정지 · 데몬 흔들기 · 크래시 경로에서 유닛과 컨테이너가 기대대로 움직이는지 본다.
 #
 # 사례 1 – 3 · 20 · 21 은 systemd 없이 돈다(유닛 파일 지시어 · 시험 compose 구성 ·
-# 가짜 aws 상태 파일 · 저널 건수 · 렌더 자리 건수 도구). 사례 4 – 19 는 리눅스 ·
-# systemd · sudo 가 있는 곳(infra-ci ubuntu 러너)에서만 돈다. 없으면 그 사례들은
-# FAIL 이다 — 건너뛰는 갈래는 없다.
+# 가짜 aws 상태 파일 · 저널 건수 · 렌더 자리 건수 도구). 사례 4 – 19 · 22 · 23 은
+# 리눅스 · systemd · sudo 가 있는 곳(infra-ci ubuntu 러너)에서만 돈다. 없으면 그
+# 사례들은 FAIL 이다 — 건너뛰는 갈래는 없다.
 #
 # 사례 13 – 17 은 호스트를 흔든다(docker 엔진 재시작 · dockerd kill -9 · 유닛
 # cgroup · compose 플러그인 SIGKILL · 유닛 밖 스택). 그래서 CI 러너
@@ -34,7 +34,8 @@
 # 정지다. 사례 22 · 23 은 응답기 모드 D8(응답기만 재생성 · 양성 대조 — 부착
 # 서비스 재생성)이고 lib/unit_ingest_auth_cases.sh 에 있다.
 #
-# 한 바퀴 약 8분이다. 반복(N=3)은 부르는 쪽(CI)이 이 시험을 여러 번 돌린다.
+# 한 바퀴 약 10분이다(사례 22 · 23 을 더한 c7 상자 실측 9분 40초). 반복(N=3)은
+# 부르는 쪽(CI)이 이 시험을 여러 번 돌린다.
 #
 # 사용: bash infra/media-host/test/unit_restart_test.sh
 # 종료 코드: 0 전부 통과 / 1 하나라도 실패
@@ -259,6 +260,16 @@ call_fake_aws() {
     --output text
 }
 
+# 명령(인자 전부)을 돌려 「0:출력」 · 「실패:출력」 한 값으로 낸다(사례 20 · 21).
+tagged_run() {
+  local out status=0
+  out="$("$@")" || status=$?
+  case "${status}" in
+    0) printf '0:%s' "${out}" ;;
+    *) printf '실패:%s' "${out}" ;;
+  esac
+}
+
 #######################################
 # 사례 20 — 저널 건수 도구(unit::journal_count)는 조회 실패를 0 건으로 바꾸지
 # 않는다. 가짜 sudo · journalctl 을 PATH 맨 앞에 두고 세 갈래를 본다: 조회
@@ -266,7 +277,7 @@ call_fake_aws() {
 # 2. systemd 없이 돈다.
 #######################################
 check_case_20() {
-  local ok=0 dir="${scratch}/journal-fake" mode out status want
+  local ok=0 dir="${scratch}/journal-fake" mode out want
   mkdir -p -- "${dir}"
   # shellcheck disable=SC2016 # 가짜 sudo 의 본문이다 — 그 셸이 펼친다.
   printf '%s\n' '#!/bin/sh' '[ "$1" = -n ] && shift' 'exec "$@"' \
@@ -284,10 +295,8 @@ check_case_20() {
       empty) want='0:0' ;;
       *) want='0:2' ;;
     esac
-    status=0
     out="$(PATH="${dir}:${PATH}" PCBENCH_FAKE_JOURNAL="${mode}" \
-      unit::journal_count -u pcbench-none 0 'MEDIA START FAIL')" || status=$?
-    case "${status}" in 0) out="0:${out}" ;; *) out="실패:${out}" ;; esac
+      tagged_run unit::journal_count -u pcbench-none 0 'MEDIA START FAIL')"
     if [[ "${out}" != "${want}" ]]; then
       harness::add_reason "갈래 ${mode}: 「${out}」(기대 「${want}」)"
       ok=1
@@ -304,7 +313,7 @@ check_case_20() {
 # 「확인 불가」 · 종료 1, 빈 결과 → 0, 한 건 → 1. systemd 없이 돈다.
 #######################################
 check_case_21() {
-  local ok=0 dir="${scratch}/render-fake" mode out status want
+  local ok=0 dir="${scratch}/render-fake" mode out want
   local runtime_dir="${scratch}/render-fake-runtime"
   mkdir -p -- "${dir}" "${runtime_dir}"
   # shellcheck disable=SC2016 # 가짜 sudo 의 본문이다 — 그 셸이 펼친다.
@@ -323,41 +332,37 @@ check_case_21() {
       one) want='0:1' ;;
       *) want='0:0' ;;
     esac
-    status=0
     if [[ "${mode}" == absent ]]; then
       out="$(runtime_dir="${scratch}/render-fake-none" PATH="${dir}:${PATH}" \
-        PCBENCH_FAKE_FIND=fail unit::render_count -name mediamtx.yml)" \
-        || status=$?
+        PCBENCH_FAKE_FIND=fail \
+        tagged_run unit::render_count -name mediamtx.yml)"
     else
       out="$(PATH="${dir}:${PATH}" PCBENCH_FAKE_FIND="${mode}" \
-        unit::render_count -name mediamtx.yml)" || status=$?
+        tagged_run unit::render_count -name mediamtx.yml)"
     fi
-    case "${status}" in 0) out="0:${out}" ;; *) out="실패:${out}" ;; esac
     if [[ "${out}" != "${want}" ]]; then
       harness::add_reason "렌더 파일 갈래 ${mode}: 「${out}」(기대 「${want}」)"
       ok=1
     fi
   done
   for mode in sudo-fail only-true empty one; do
-    status=0
     case "${mode}" in
       sudo-fail)
         want='실패:확인 불가'
         out="$(PATH="${dir}:${PATH}" PCBENCH_FAKE_SUDO_FAIL=1 \
-          crash::render_dirs)" || status=$?
+          tagged_run crash::render_dirs)"
         ;;
       only-true)
         want='실패:확인 불가'
         out="$(PATH="${dir}:${PATH}" PCBENCH_FAKE_SUDO_ONLY_TRUE=1 \
-          PCBENCH_FAKE_FIND=one crash::render_dirs)" || status=$?
+          PCBENCH_FAKE_FIND=one tagged_run crash::render_dirs)"
         ;;
       *)
         if [[ "${mode}" == one ]]; then want='0:1'; else want='0:0'; fi
         out="$(PATH="${dir}:${PATH}" PCBENCH_FAKE_FIND="${mode}" \
-          crash::render_dirs)" || status=$?
+          tagged_run crash::render_dirs)"
         ;;
     esac
-    case "${status}" in 0) out="0:${out}" ;; *) out="실패:${out}" ;; esac
     if [[ "${out}" != "${want}" ]]; then
       harness::add_reason "렌더 자리 디렉터리 갈래 ${mode}: 「${out}」(기대 「${want}」)"
       ok=1
