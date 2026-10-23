@@ -363,7 +363,27 @@ run "rejects_stream_key_resolve_url_with_query" {
   command = plan
 
   variables {
-    stream_key_resolve_url = "http://auth.pokeclip.internal:8085/?channel=x"
+    stream_key_resolve_url = "http://auth.pokeclip.internal:8085?channel=x"
+  }
+
+  expect_failures = [var.stream_key_resolve_url]
+}
+
+run "rejects_stream_key_resolve_url_with_fragment" {
+  command = plan
+
+  variables {
+    stream_key_resolve_url = "http://auth.pokeclip.internal:8085#x"
+  }
+
+  expect_failures = [var.stream_key_resolve_url]
+}
+
+run "rejects_stream_key_resolve_url_with_space" {
+  command = plan
+
+  variables {
+    stream_key_resolve_url = "http://auth pokeclip:8085"
   }
 
   expect_failures = [var.stream_key_resolve_url]
