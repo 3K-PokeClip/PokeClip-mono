@@ -44,7 +44,7 @@ media_host_clean_files := [
 		db_statement(["rds-db:connect"], db_users_resources),
 		db_statement(["ecr:GetAuthorizationToken"], ["*"]),
 	]),
-	attachment_file("modules/media_host/main.tf", managed_locals, "managed", managed_body),
+	attachment_file("modules/media_host/main.tf", object.union(managed_locals, db_users_locals), "managed", managed_body),
 	tf("modules/media_host/role.tf", {"resource": {
 		"aws_iam_role": {"media": [{
 			"name": "pokeclip-prod-media",
@@ -197,37 +197,101 @@ test_r10_inline_policy_not_from_document if {
 	}
 }
 
+# 어느 자리의 문자열이든 dbuser 뒤 와일드카드는 위반이다.
 test_r10_dbuser_wildcards if {
-	every resource in [
+	every arn in [
 		"arn:aws:rds-db:ap-northeast-2:${data.aws_caller_identity.current.account_id}:dbuser:*/*",
 		"arn:aws:rds-db:ap-northeast-2:${data.aws_caller_identity.current.account_id}:dbuser:${var.rds_resource_id}/*",
 		"arn:aws:rds-db:ap-northeast-2:${data.aws_caller_identity.current.account_id}:dbuser:*/media_indexer",
 		"arn:aws:rds-db:ap-northeast-2:${data.aws_caller_identity.current.account_id}:dbuser:${var.rds_resource_id}/media_?",
 	] {
-		files := [policy_document_file(media_host_path, [db_statement(["rds-db:connect"], [resource])])]
-		one_hit(files, "와일드카드")
+		one_hit([locals_file(media_host_path, arn)], "와일드카드")
 	}
 }
 
-# rds-db:connect 를 덮는 문은 Resource 가 모두 dbuser ARN 이어야 한다.
-test_r10_db_statement_resource_not_dbuser if {
-	every resources in [["*"], "${var.db_resource_arns}", ["arn:aws:rds-db:*"]] {
-		files := [policy_document_file(media_root_path, [db_statement(["rds-db:connect"], resources)])]
-		count(role_hits(files)) >= 1
+# rds-db:connect 문과 그 DB 사용자 지역값을 함께 든 파일.
+db_users_locals := {"db_users": ["media_indexer", "media_janitor"]}
+
+db_file(locals, resources) := tf(media_host_path, {
+	"locals": [locals],
+	"data": {"aws_iam_policy_document": {"media": [{"statement": [db_statement(["rds-db:connect"], resources)]}]}},
+})
+
+test_r10_db_statement_accepts_db_users_loop if {
+	every resources in [
+		db_users_resources,
+		"${[\n      for user in local.db_users :\n      \"arn:${local.partition}:rds-db:${local.region}:${local.account_id}:dbuser:${var.rds_resource_id}/${user}\"\n    ]}",
+	] {
+		count(role_hits([db_file(db_users_locals, resources)])) == 0
+	}
+}
+
+# rds-db:connect 의 Resource 는 local.db_users 를 도는 꼴만 — 목록 리터럴 · 변수 ·
+# 다른 목록 · dbuser 자리의 다른 보간 · resources 없음은 위반이다.
+test_r10_db_statement_resource_not_db_users_loop if {
+	every resources in [
+		["*"],
+		"${var.db_resource_arns}",
+		["arn:aws:rds-db:ap-northeast-2:${data.aws_caller_identity.current.account_id}:dbuser:${var.rds_resource_id}/media_indexer"],
+		"${[for u in var.db_users : \"arn:${local.partition}:rds-db:${local.region}:${local.account_id}:dbuser:${var.rds_resource_id}/${u}\"]}",
+		"${[for u in local.db_users : \"arn:${local.partition}:rds-db:${local.region}:${local.account_id}:dbuser:${var.rds_resource_id}/${var.u}\"]}",
+		"${[for u in local.db_users : \"arn:${local.partition}:rds-db:${local.region}:${local.account_id}:dbuser:${var.cluster}/${u}\"]}",
+		"${[for u in local.db_users : \"arn:${local.partition}:rds-db:${local.region}:${local.account_id}:dbuser:${var.rds_resource_id}/${u}x\"]}",
+		"${concat([for u in local.db_users : \"arn:${local.partition}:rds-db:${local.region}:${local.account_id}:dbuser:${var.rds_resource_id}/${u}\"], var.extra)}",
+	] {
+		one_hit([db_file(db_users_locals, resources)], "local.db_users")
+	}
+}
+
+test_r10_db_statement_without_resources if {
+	statement := {"actions": ["rds-db:connect"]}
+	one_hit(
+		[tf(media_host_path, {
+			"locals": [db_users_locals],
+			"data": {"aws_iam_policy_document": {"media": [{"statement": [statement]}]}},
+		})],
+		"local.db_users",
+	)
+}
+
+# DB 사용자 지역값은 두 이름 리터럴 목록 정확히.
+test_r10_db_users_not_two_literal_names if {
+	every locals in [
+		{"db_users": ["*"]},
+		{"db_users": ["media_indexer"]},
+		{"db_users": ["media_indexer", "media_janitor", "admin"]},
+		{"db_users": "${var.db_users}"},
+		{"db_users": ["media_indexer", "${var.u}"]},
+		{"other": "x"},
+	] {
+		one_hit([db_file(locals, db_users_resources)], "db_users")
 	}
 }
 
 # 동작 와일드카드(`rds-db:*` · `*`)도 rds-db:connect 를 덮는다.
 test_r10_db_statement_action_wildcard if {
 	every actions in [["rds-db:*"], ["*"], ["RDS-DB:Connect"]] {
-		files := [policy_document_file(media_host_path, [db_statement(actions, ["*"])])]
-		one_hit(files, "dbuser ARN 만")
+		files := [tf(media_host_path, {
+			"locals": [db_users_locals],
+			"data": {"aws_iam_policy_document": {"media": [{"statement": [db_statement(actions, ["*"])]}]}},
+		})]
+		one_hit(files, "local.db_users")
 	}
 }
 
-test_r10_db_statement_without_resources if {
-	statement := {"actions": ["rds-db:connect"]}
-	one_hit([policy_document_file(media_host_path, [statement])], "resources 없음")
+# 정책 문서 statement 의 actions 는 리터럴 목록만 — 식이면 rds-db:connect 를
+# 덮는지 대조할 수 없다.
+test_r10_statement_actions_not_literal_list if {
+	every actions in [
+		"${local.acts}",
+		"${var.acts}",
+		["${var.a}"],
+		"${concat([\"s3:GetObject\"], var.more)}",
+		"${toset([\"*\"])}",
+		["${format(\"%s:%s\", \"rds-db\", \"connect\")}"],
+	] {
+		one_hit([policy_document_file(media_root_path, [db_statement(actions, ["*"])])], "리터럴 목록")
+	}
 }
 
 # 정책 문서 statement 밖의 rds-db 동작은 Resource 를 대조할 수 없어 위반이다.

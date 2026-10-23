@@ -9,11 +9,14 @@
 # 식을 평가하지 않으므로 이렇게 본다.
 # ① 어느 문자열이든 `dbuser:` 뒤에 IAM 와일드카드(`*` · `?`)가 있으면 위반.
 # ② 정책 문서(data "aws_iam_policy_document")의 statement 중 동작이
-#    rds-db:connect 를 덮으면(`rds-db:*` · `*` 포함, 대소문자 무관) Resource 가
-#    모두 dbuser ARN 이어야 한다(`*` · 변수 통째 · resources 없음은 위반).
-# ③ rds-db 동작은 그 statement 의 actions 에만 적는다 — jsonencode 인라인
-#    정책 · dynamic 블록에 있으면 Resource 를 대조할 수 없어 위반이다. 설명
-#    문자열(description)은 문서라 보지 않는다.
+#    rds-db:connect 를 덮으면(`rds-db:*` · `*` 포함, 대소문자 무관) Resource 는
+#    `[for <u> in local.db_users : "arn:…:dbuser:${var.rds_resource_id}/${<u>}"]`
+#    꼴만이다 — 파티션 · 리전 · 계정 자리만 참조 보간을 받고, 사용자 자리는 for
+#    변수뿐이다. 그 경로의 local.db_users 는 리터럴 목록으로 정확히
+#    ["media_indexer", "media_janitor"] 다.
+# ③ statement 의 actions 는 리터럴 목록만(식이면 rds-db:connect 를 덮는지 대조할
+#    수 없다). rds-db 동작은 그 actions 에만 적는다 — 지역값 · jsonencode 등
+#    다른 자리에 있으면 위반이다. 설명 문자열(description)은 문서라 보지 않는다.
 #
 # 위 문자열 대조를 비켜 가는 길은 꼴로 막는다(아래 「꼴」 절).
 # ④ IAM 유형은 역할 · 인스턴스 프로필 · 역할 인라인 정책 · 관리형 정책 연결 ·
@@ -90,23 +93,73 @@ db_statements contains item if {
 	covers_db_connect(action)
 }
 
-deny contains msg if {
-	some item in db_statements
-	not "resources" in object.keys(item.statement)
-	msg := sprintf(
-		"R10 %s: %s 의 rds-db:connect 문에 resources 없음 — dbuser ARN 으로 좁힌다",
-		[item.decl.path, label(item.decl)],
-	)
+# rds-db:connect Resource 의 유일한 꼴(hcl2 가 남긴 for 식 문자열). 캡처 둘 =
+# for 변수 · dbuser 사용자 자리 — 같아야 한다(RE2 에는 역참조가 없다).
+db_users_loop_pattern := concat("", [
+	`^\$\{\[\s*for\s+([a-z_][a-z0-9_]*)\s+in\s+local\.db_users\s*:\s*"arn:`,
+	`(?:aws|\$\{[a-z0-9_.]+\}):rds-db:(?:[a-z0-9-]+|\$\{[a-z0-9_.]+\}):\$\{[a-z0-9_.]+\}:`,
+	`dbuser:\$\{var\.rds_resource_id\}/\$\{([a-z_][a-z0-9_]*)\}"\s*\]\}$`,
+])
+
+db_users_loop(value) if {
+	is_string(value)
+	some match in regex.find_all_string_submatch_n(db_users_loop_pattern, value, 1)
+	match[1] == match[2]
 }
 
 deny contains msg if {
 	some item in db_statements
-	some resource in as_list(item.statement.resources)
-	not contains(resource, ":dbuser:")
+	not db_users_loop(object.get(item.statement, "resources", null))
 	msg := sprintf(
-		"R10 %s: %s 의 rds-db:connect Resource %q — dbuser ARN 만",
-		[item.decl.path, label(item.decl), resource],
+		"R10 %s: %s 의 rds-db:connect Resource 는 [for <u> in local.db_users : \"…:dbuser:${var.rds_resource_id}/${<u>}\"] 꼴만",
+		[item.decl.path, label(item.decl)],
 	)
+}
+
+# rds-db:connect 문이 있는 경로마다 그 경로의 db_users 지역값.
+media_db_users(dir) := [value |
+	some file in input
+	in_dir(file.path, dir)
+	some block in file.contents.locals
+	value := block.db_users
+]
+
+two_db_users(value) if {
+	is_array(value)
+	count(value) == 2
+	{user | some user in value} == {"media_indexer", "media_janitor"}
+}
+
+deny contains msg if {
+	some dir in media_role_dirs
+	some item in db_statements
+	in_dir(item.decl.path, dir)
+	count(media_db_users(dir)) == 0
+	msg := sprintf("R10 %s: db_users 지역값 없음 — rds-db:connect 의 대상", [dir])
+}
+
+deny contains msg if {
+	some dir in media_role_dirs
+	some item in db_statements
+	in_dir(item.decl.path, dir)
+	some value in media_db_users(dir)
+	not two_db_users(value)
+	msg := sprintf("R10 %s: db_users 는 [\"media_indexer\", \"media_janitor\"] 리터럴 목록만", [dir])
+}
+
+literal_list(value) if {
+	is_array(value)
+	every element in value {
+		is_string(element)
+		not contains(element, "${")
+	}
+}
+
+deny contains msg if {
+	some item in policy_statements
+	"actions" in object.keys(item.statement)
+	not literal_list(item.statement.actions)
+	msg := sprintf("R10 %s: %s 의 statement actions 는 리터럴 목록만", [item.decl.path, label(item.decl)])
 }
 
 # hcl2 JSON 에서 정책 문서 statement 의 actions 자리:

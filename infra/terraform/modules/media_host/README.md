@@ -29,8 +29,9 @@ Media 상자[^box] 모듈입니다(설계 3-3 · 3-3-1 · 5-3 · 5-5, 계획 M9)
         `dynamic` 금지. 역할 인라인 정책은 정책 문서 json 으로만(jsonencode ·
         역할의 `inline_policy` · `managed_policy_arns` 금지 — 신뢰 정책은
         예외).
-    *   DB: `rds-db:connect` 는 정책 문서 statement 에만 · Resource 는
-        와일드카드 없는 dbuser ARN 만.
+    *   DB: `rds-db:connect` 는 정책 문서 statement 에만(statement `actions` 는
+        리터럴 목록만) · Resource 는 `local.db_users` 를 도는 for 식만 ·
+        `db_users` 는 두 이름(`media_indexer` · `media_janitor`) 리터럴.
     *   lifecycle: 거부 목록 파라미터는 `prevent_destroy = true`(리터럴) ·
         `ignore_changes` 에 `value`, 상자는 `ignore_changes` 에 `ami` ·
         `user_data_base64`.
