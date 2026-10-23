@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+#
+# 운영 스크립트 시험 전용 가짜 chown — argv 와 환경을 기록하고 소유는 바꾸지
+# 않는다(시험은 root 가 아니다 — 단언은 기록으로 한다).
+#
+# PCBENCH_FAKE_CHOWN_STATUS: 종료 코드(기본 0 — 0 아니면 실패 흉내).
+#
+# 시험이 주는 값: PCBENCH_FAKE_LIB · PCBENCH_FAKE_LOG_DIR.
+
+# 아래 source= 경로를 이 파일 위치 기준으로 찾게 한다.
+# shellcheck source-path=SCRIPTDIR
+
+set -euo pipefail
+
+# shellcheck source=record.sh
+source "${PCBENCH_FAKE_LIB:?가짜 chown: PCBENCH_FAKE_LIB 없음}"
+
+main() {
+  fake::record chown "$@"
+  exit "${PCBENCH_FAKE_CHOWN_STATUS:-0}"
+}
+
+main "$@"

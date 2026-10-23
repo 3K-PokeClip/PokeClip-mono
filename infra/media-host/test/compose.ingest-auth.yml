@@ -4,7 +4,7 @@
 # 층마다 띄우는 서비스가 다르다(profiles):
 #   - 기본(프로필 없음): mediamtx 하나 — C0 설정 수용 탐침 · 층 L(옛 모드).
 #   - stub: + authstub(에코의 가짜 응답기) — 층 A.
-#   - real: + ingest-auth(실물 응답기) · ingest-auth-prep(비밀 · 거부 목록 ·
+#   - real: + ingest-auth(실물 응답기) · ingest-auth-prep(비밀 ·
 #     상태 디렉터리의 소유 · 모드를 맞추는 일회성 도우미) · resolvestub(에코의
 #     가짜 4C) · poller(기동 직후 관리 API 폴 — C16 기록) — 층 B.
 #   - tools: sender(SRT 송출 · 읽기 — 기본 망) · netprobe(망 칸 안 curl).
@@ -22,10 +22,16 @@
 #   - MediaMTX 설정: 층마다 다른 파일(PCBENCH_MTX_CONFIG)이다. 한 경로를 층
 #     사이에 덮어쓰면 로컬 엔진(OrbStack)의 단일 파일 bind 가 바로 다음 기동에
 #     빈 내용을 보여 MediaMTX 가 기본값으로 뜬 일이 있다(2026-10-23 실측).
-#   - 응답기 비밀 · 거부 목록 · 상태: prod 는 호스트 tmpfs · 디스크 bind 이고,
-#     여기서는 named volume 에 도우미가 prod 와 같은 소유 · 모드(비밀 10003
-#     0400 · 거부 목록 root:10003 0640 / 디렉터리 0750 · 상태 10003 0700)로
-#     넣는다 — 로컬 엔진의 bind 는 호스트 소유를 그대로 옮기지 못한다.
+#   - 응답기 비밀 · 상태: prod 는 호스트 tmpfs bind 이고, 여기서는 named
+#     volume 에 도우미가 prod 와 같은 소유 · 모드(비밀 10003 0400 · 상태 10003
+#     0700)로 넣는다 — 로컬 엔진의 bind 는 호스트 소유를 그대로 옮기지 못한다.
+#   - 거부 목록: prod 와 같이 호스트 디렉터리(RUNTIME_DIR/ingest-auth-deny)
+#     bind 다 — 운영 스크립트(deny-sync)가 그 안에서 rename 한다(C15 ·
+#     C18). 소유는 바꾸지 못한다 — 로컬 엔진 OrbStack 은 bind 파일을 읽는
+#     컨테이너 uid 의 것으로 보여, 0750 · 0640 이면 응답기가 읽는다
+#     (2026-10-24 실측).
+#   - env_file: 이 파일 옆 ingest-auth.env(prod 와 같은 상대 경로) — 시험은 이
+#     파일을 scratch 에 복사해 그 옆에 env 파일을 둔다.
 #   - healthcheck: prod 꼴에 start_interval 2s 를 더한다(시작 유예 안에서
 #     빨리 healthy 가 되게 — 시험 시간 단축).
 #
@@ -92,7 +98,7 @@ services:
       core: 0
     labels: *bench-labels
 
-  # 층 B — 응답기 비밀 · 거부 목록 · 상태 디렉터리를 prod 와 같은 소유 · 모드로
+  # 층 B — 응답기 비밀 · 상태 디렉터리를 prod 와 같은 소유 · 모드로
   # 맞추고 끝난다. 원본은 시험이 RUNTIME_DIR 에 쓴 가짜 값이다.
   ingest-auth-prep:
     profiles:
@@ -112,10 +118,6 @@ services:
           /secrets/stream_key_resolve_token
         chmod 0400 /secrets/ingest_basic_pass /secrets/mtx_api_pass \
           /secrets/stream_key_resolve_token
-        cp deny-tokens /deny/deny-tokens
-        chown 0:10003 /deny /deny/deny-tokens
-        chmod 0750 /deny
-        chmod 0640 /deny/deny-tokens
         chown 10003:10003 /state
         chmod 0700 /state
     volumes:
@@ -126,7 +128,6 @@ services:
         bind:
           create_host_path: false
       - ia-secrets:/secrets
-      - ia-deny:/deny
       - ia-state:/state
     labels: *bench-labels
 
@@ -163,11 +164,16 @@ services:
       INGEST_AUTH_BASIC_USER: pokeclip-mediamtx
       INGEST_AUTH_BASIC_PASS_FILE: /run/secrets/ingest_basic_pass
     env_file:
-      - path: ${RUNTIME_DIR:?}/ingest-auth.env
+      - path: ingest-auth.env
         required: true
     volumes:
       - ia-secrets:/run/secrets:ro
-      - ia-deny:/etc/ingest-auth:ro
+      - type: bind
+        source: ${RUNTIME_DIR:?}/ingest-auth-deny
+        target: /etc/ingest-auth
+        read_only: true
+        bind:
+          create_host_path: false
       - ia-state:/var/lib/ingest-auth
     healthcheck:
       test: ["CMD", "/ingest-auth", "healthcheck"]
@@ -273,8 +279,6 @@ volumes:
   dvr:
     labels: *bench-labels
   ia-secrets:
-    labels: *bench-labels
-  ia-deny:
     labels: *bench-labels
   ia-state:
     labels: *bench-labels

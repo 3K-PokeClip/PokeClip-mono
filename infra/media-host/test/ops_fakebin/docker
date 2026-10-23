@@ -4,11 +4,23 @@
 # 상태 디렉터리의 파일로 답한다. 진짜 컨테이너는 띄우지 않는다.
 #
 # 받는 꼴(그 밖은 종료 2 — 스크립트가 다른 하위 명령 · 옵션을 쓰면 드러난다):
-#   ps [-a] -q --no-trunc [--filter status=running]
+#   ps [-a] -q --no-trunc [--filter status=running | --filter health=healthy]
 #      --filter label=com.docker.compose.project=<P>
 #      --filter label=com.docker.compose.service=<S>
-#        state/ps.<S> 의 「<id> <running|exited>」 줄에서 고른다. P 가
-#        PCBENCH_FAKE_PROJECT 와 다르면 빈 출력. state/ps.fail 이 있으면 종료 1.
+#        state/ps.<S> 의 「<id> <running|exited>」 줄에서 고른다. health 필터면
+#        state/healthy.<S> 의 ID 줄을 낸다. P 가 PCBENCH_FAKE_PROJECT 와 다르면
+#        빈 출력. state/ps.fail 이 있으면 종료 1.
+#   compose -p <P> -f <F> up -d --no-deps --force-recreate <S>
+#        재생성을 흉내 낸다 — 새 ID(pcbenchrecreated<n>)를 state/ps.<S> 의 단
+#        하나의 running 줄로 두고, state/health.never 가 없으면
+#        state/healthy.<S> 에도 둔다. 새 컨테이너의 저널
+#        state/journal.c.<새 ID> 에 started 줄을 쓴다 — ip_limit 값은 만들 때
+#        F 옆 ingest-auth.env 를 읽은 값이다(env_file 은 만들 때만 읽힌다).
+#        PCBENCH_FAKE_STALE_ENV 가 있으면 반대 값을 쓴다(반영 안 됨 흉내).
+#        state/journal.none 이 있으면 저널을 쓰지 않는다. state/compose.up.fail
+#        이 있으면 종료 1, state/compose.up.hang 이 있으면 오래 잔다.
+#   compose -p <P> -f <F> exec -T <S> /ingest-auth healthcheck
+#        state/health.exec.fail 이 있으면 종료 1.
 #   ps -a -q --no-trunc --filter label=com.pokeclip.loopback=<이름>
 #        송출기 컨테이너(state/sender.<이름>)가 있으면 그 이름.
 #   exec <id> sh -c <스크립트>
@@ -59,7 +71,7 @@ readonly SENDER_LABEL='label=com.pokeclip.loopback='
 #######################################
 fake_ps() {
   local all=0 running=0 project="" service="" saw_q=0 saw_trunc=0 id status
-  local sender=""
+  local sender="" healthy=0
   while (( $# > 0 )); do
     case "$1" in
       -a) all=1 ;;
@@ -69,6 +81,7 @@ fake_ps() {
         (( $# >= 2 )) || fake::unknown docker
         case "$2" in
           status=running) running=1 ;;
+          health=healthy) healthy=1 ;;
           "${PROJECT_LABEL}"*) project="${2#"${PROJECT_LABEL}"}" ;;
           "${SERVICE_LABEL}"*) service="${2#"${SERVICE_LABEL}"}" ;;
           "${SENDER_LABEL}"*) sender="${2#"${SENDER_LABEL}"}" ;;
@@ -91,7 +104,8 @@ fake_ps() {
     return 0
   fi
   if (( !saw_q || !saw_trunc )) || [[ -z "${project}" || -z "${service}" ]] \
-    || (( all == running )); then
+    || (( healthy && (all || running) )) || (( !healthy && all == running ))
+  then
     fake::unknown docker
   fi
   if [[ -e "${STATE}/ps.fail" ]]; then
@@ -99,6 +113,11 @@ fake_ps() {
     exit 1
   fi
   [[ "${project}" == "${PCBENCH_FAKE_PROJECT:-}" ]] || return 0
+  if (( healthy )); then
+    [[ ! -f "${STATE}/healthy.${service}" ]] \
+      || cat -- "${STATE}/healthy.${service}"
+    return 0
+  fi
   [[ -f "${STATE}/ps.${service}" ]] || return 0
   while read -r id status; do
     [[ -n "${id}" ]] || continue
@@ -237,6 +256,63 @@ fake_pull() {
   fi
 }
 
+#######################################
+# compose up — 재생성을 흉내 낸다.
+# Arguments:
+#   compose 파일, 서비스.
+#######################################
+fake_recreate() {
+  local file="$1" service="$2" n=1 id value
+  if [[ -e "${STATE}/compose.up.hang" ]]; then
+    exec sleep 60
+  fi
+  if [[ -e "${STATE}/compose.up.fail" ]]; then
+    printf '가짜 docker: compose up 실패(시험)\n' >&2
+    exit 1
+  fi
+  while [[ -e "${STATE}/journal.c.pcbenchrecreated${n}" \
+    || -e "${STATE}/made.pcbenchrecreated${n}" ]]; do
+    n=$((n + 1))
+  done
+  id="pcbenchrecreated${n}"
+  : >"${STATE}/made.${id}"
+  printf '%s running\n' "${id}" >"${STATE}/ps.${service}"
+  rm -f -- "${STATE}/healthy.${service}"
+  [[ -e "${STATE}/health.never" ]] \
+    || printf '%s\n' "${id}" >"${STATE}/healthy.${service}"
+  [[ ! -e "${STATE}/journal.none" ]] || return 0
+  value="$(sed -n 's/^INGEST_AUTH_IP_LIMIT=//p' \
+    "$(dirname -- "${file}")/ingest-auth.env" 2>/dev/null)" || value=""
+  if [[ -n "${PCBENCH_FAKE_STALE_ENV:-}" ]]; then
+    [[ "${value}" == on ]] && value=off || value=on
+  fi
+  printf '{"level":"INFO","msg":"ingestauth_started","ip_limit":"%s",%s}\n' \
+    "${value}" '"ip_limit_burst":30' >"${STATE}/journal.c.${id}"
+}
+
+#######################################
+# compose — up(재생성) · exec(healthcheck) 두 꼴만 받는다.
+# Arguments:
+#   compose 뒤의 argv.
+#######################################
+fake_compose() {
+  if (( $# < 5 )) || [[ "$1" != -p || "$3" != -f ]]; then
+    fake::unknown docker
+  fi
+  local file="$4"
+  shift 4
+  if [[ "$*" == 'up -d --no-deps --force-recreate ingest-auth' ]]; then
+    fake_recreate "${file}" ingest-auth
+  elif [[ "$*" == 'exec -T ingest-auth /ingest-auth healthcheck' ]]; then
+    if [[ -e "${STATE}/health.exec.fail" ]]; then
+      printf 'ingest-auth: /healthz 의 답이 200 이 아니다 — HTTP 503\n' >&2
+      exit 1
+    fi
+  else
+    fake::unknown docker
+  fi
+}
+
 main() {
   fake::record docker "$@"
   (( $# > 0 )) || fake::unknown docker
@@ -249,6 +325,7 @@ main() {
     run) fake_run "$@" ;;
     rm) fake_rm "$@" ;;
     pull) fake_pull "$@" ;;
+    compose) fake_compose "$@" ;;
     *) fake::unknown docker ;;
   esac
 }

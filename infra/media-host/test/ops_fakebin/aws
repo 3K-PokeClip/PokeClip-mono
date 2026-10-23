@@ -8,6 +8,9 @@
 #     --output text
 #       state/secret.<ARN> 내용 + 줄바꿈(aws text 출력 꼴). 파일이 없으면
 #       종료 254(AccessDenied 흉내).
+#   ssm get-parameter --name <이름> --query Parameter.Value --output text
+#       state/ssm.param.<이름> 내용 + 줄바꿈(aws text 출력 꼴). 없으면 종료
+#       254.
 #   ssm list-commands --command-id <ID> --query Commands[].Status
 #     --output text
 #       state/ssm.command 내용(없으면 Success) + 줄바꿈.
@@ -134,6 +137,10 @@ main() {
     && [[ "${head}" == 'secretsmanager get-secret-value --secret-id' \
     && -n "$4" && "${tail}" == '--query SecretString --output text' ]]; then
     answer "${STATE}/secret.$4" 1
+  elif (( $# == 8 )) \
+    && [[ "${head}" == 'ssm get-parameter --name' && -n "$4" \
+    && "${tail}" == '--query Parameter.Value --output text' ]]; then
+    answer "${STATE}/ssm.param.$4" 1
   elif (( $# == 8 )) \
     && [[ "${head}" == 'ssm list-commands --command-id' \
     && "${tail}" == '--query Commands[].Status --output text' ]]; then

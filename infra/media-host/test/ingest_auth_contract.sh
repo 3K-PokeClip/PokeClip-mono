@@ -25,8 +25,12 @@
 # 응답기 모드 렌더가 실패하면 층 A · B 만 준비 실패이고 C0 · 층 L 은 돈다(옛
 # 모드 렌더 실패는 층 L 만 막는다). 시험 compose 의 응답기 서비스(env · 마운트
 # 대상 · healthcheck 등)는 render_test 사례 44 가 운영 compose 렌더본과
-# 대조한다. c5 운영 스크립트가 필요한 사례(C13 · C15 · C18)는 스크립트가
-# 없으면 「없음」 으로 실패한다. 건너뛰는 갈래는 없다.
+# 대조한다. 운영 스크립트 사례(C13 · C15 · C18)는 bin/ 의 실물 스크립트를
+# 시험 이음매(lib 의 ia::configure_ops — 가짜 SSM · 기록만 하는 chown · docker
+# logs 저널)로 돌린다. compose 파일은 scratch 사본이다 — 응답기 env_file 이
+# compose 파일 옆 ingest-auth.env(운영 스크립트의 규칙)이게. 거부 목록은 scratch
+# 의 호스트 디렉터리를 bind 한다. 스크립트가 없으면 「없음」 으로 실패한다.
+# 건너뛰는 갈래는 없다.
 #
 # 실험 식별: compose 프로젝트 pcbench-m15-ingest-auth · 라벨
 # com.pokeclip.bench=m15-ingest-auth(컨테이너 · 망 · 볼륨). 호스트 포트 게시 0.
@@ -69,8 +73,6 @@ readonly HELPER_IMAGE='alpine:3.22'
 readonly INGEST_AUTH_IMAGE_REF="registry.pcbench-m15.invalid/media-ingest-auth@\
 sha256:4444444444444444444444444444444444444444444444444444444444444444"
 readonly MTX_TEMPLATE_REL='mediamtx.yml.tmpl'
-readonly IP_LIMIT_SCRIPT_REL='bin/ingest-auth-ip-limit.sh'
-readonly DENY_SYNC_SCRIPT_REL='bin/ingest-auth-deny-sync.sh'
 # 이미지 빌드 한 번의 상한(초) — 첫 빌드는 모듈 받기를 품는다.
 readonly BUILD_TIMEOUT=600
 # MediaMTX 관리 API 가 답할 때까지 · 응답기가 healthy 가 될 때까지(초).
@@ -84,6 +86,10 @@ mtx_built=0
 ia_built=0
 ia_build_reason=""
 sender_image=""
+# 시험 compose 의 scratch 사본(export_compose_env 가 만든다).
+ia_compose_copy=""
+# 응답기 /etc/ingest-auth 에 bind 하는 거부 목록 호스트 디렉터리.
+deny_dir=""
 # 층별 준비 실패 원인 — 옛 모드 렌더(층 L) · 응답기 모드 렌더(층 A · B).
 legacy_reason=""
 auth_reason=""
@@ -238,25 +244,31 @@ build_images() {
 }
 
 #######################################
-# 응답기 원본 파일(가짜 비밀 · 거부 목록 머리 줄 · IP 한도 env 파일)을
-# RUNTIME_DIR 에 쓴다. 소유 · 모드는 ingest-auth-prep 이 볼륨에서 맞춘다.
+# 응답기 원본 파일을 쓴다 — 가짜 비밀은 RUNTIME_DIR(소유 · 모드는
+# ingest-auth-prep 이 볼륨에서 맞춘다), 거부 목록(머리 줄)은 bind 하는 호스트
+# 디렉터리(0750 · 0640 — 로컬 엔진 OrbStack 의 bind 는 파일을 읽는 컨테이너
+# uid 의 것으로 보이게 해 응답기가 읽는다 · 2026-10-24 실측), IP 한도 env
+# 파일은 compose 사본 옆.
 # Globals:
-#   RUNTIME_DIR
+#   RUNTIME_DIR, deny_dir, ia_compose_copy
 #######################################
 write_responder_inputs() {
   local src="${RUNTIME_DIR}/ingest-auth-src"
-  mkdir -p -- "${src}"
+  mkdir -p -- "${src}" "${deny_dir}"
   printf '%s\n' "${IA_BASIC_PASS}" >"${src}/ingest_basic_pass"
   printf '%s\n' "${IA_API_PASS}" >"${src}/mtx_api_pass"
   printf '%s\n' "${IA_INTERNAL_TOKEN}" >"${src}/stream_key_resolve_token"
-  printf '# pokeclip deny-tokens v1\n' >"${src}/deny-tokens"
-  printf 'INGEST_AUTH_IP_LIMIT=on\n' >"${RUNTIME_DIR}/ingest-auth.env"
+  printf '# pokeclip deny-tokens v1\n' >"${deny_dir}/deny-tokens"
+  chmod 0750 "${deny_dir}"
+  chmod 0640 "${deny_dir}/deny-tokens"
+  printf 'INGEST_AUTH_IP_LIMIT=on\n' \
+    >"$(dirname -- "${ia_compose_copy}")/ingest-auth.env"
 }
 
 #######################################
 # 시험 compose 가 읽는 값을 export 한다.
 # Globals:
-#   PCBENCH_*, RUNTIME_DIR, scratch, sender_image
+#   PCBENCH_*, RUNTIME_DIR, scratch, sender_image, ia_compose_copy
 #######################################
 export_compose_env() {
   export PCBENCH_MTX_IMAGE="${MTX_IMAGE}"
@@ -271,7 +283,11 @@ export_compose_env() {
   export PCBENCH_RESOLVE_URL='http://resolvestub:28082'
   export PCBENCH_MTX_CONFIG="${scratch}/mediamtx.c0.yml"
   export RUNTIME_DIR="${scratch}/runtime"
-  mkdir -p -- "${RUNTIME_DIR}"
+  # 시험 compose 의 거부 목록 bind 원본(RUNTIME_DIR 아래 고정 이름).
+  deny_dir="${RUNTIME_DIR}/ingest-auth-deny"
+  ia_compose_copy="${scratch}/compose/${IA_COMPOSE##*/}"
+  mkdir -p -- "${RUNTIME_DIR}" "${ia_compose_copy%/*}"
+  cp -- "${IA_COMPOSE}" "${ia_compose_copy}"
   write_responder_inputs
 }
 
@@ -412,7 +428,8 @@ setup() {
   write_c0_config "${scratch}/mediamtx.c0.yml"
   env_ready=1
   export_compose_env
-  ia::configure "${PROJECT}" "${IA_COMPOSE}"
+  ia::configure "${PROJECT}" "${ia_compose_copy}"
+  ia::configure_ops "${MEDIA_HOST_DIR}" "${scratch}/ops" "${deny_dir}"
   render_configs
   (( mtx_built )) || return 1
 }
@@ -586,18 +603,6 @@ run_layer_b() {
   harness::run_case C11 'inspect · 로그에 비밀 여섯 · passphrase 0' check_c11
   ia::sender_stop b-c9
   layer_down B
-}
-
-check_c13() {
-  require_ops_scripts "${MEDIA_HOST_DIR}" "${IP_LIMIT_SCRIPT_REL}"
-}
-
-check_c15() {
-  require_ops_scripts "${MEDIA_HOST_DIR}" "${DENY_SYNC_SCRIPT_REL}"
-}
-
-check_c18() {
-  require_ops_scripts "${MEDIA_HOST_DIR}" "${DENY_SYNC_SCRIPT_REL}"
 }
 
 main() {

@@ -98,6 +98,7 @@ env:
   MEDIA_HOST_SHELL_TESTS: >-
     start_test.sh loopback_test.sh paths_count_test.sh paths_list_test.sh
     secret_count_test.sh force_diff_test.sh harness_selftest.sh query_guard_selftest.sh
+    ingest_auth_ops_test.sh
   MEDIA_HOST_RENDER_TEST: render_test.sh
   MEDIA_HOST_UNIT_TEST: unit_restart_test.sh
   # Media 상자 두 잡이 설치하는 docker compose 판과 x86_64 자산 sha256 — 한 곳에만 적는다(두 잡의

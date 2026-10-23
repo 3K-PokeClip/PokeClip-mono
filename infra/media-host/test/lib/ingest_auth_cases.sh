@@ -52,9 +52,22 @@ readonly IA_BODY_LIMIT=16384
 # (< — 6바이트씩).
 readonly IA_BIG_QUERY_PAIRS=2000
 readonly IA_BIG_UA_CHARS=3000
+# 운영 스크립트(C13 · C15 · C18 — media-host 디렉터리 기준)와 가짜 SSM 거부
+# 목록 파라미터 이름 · 실행 한 번의 상한(초 — 재생성 healthy 대기 120초를
+# 품는다).
+readonly IA_IP_LIMIT_SCRIPT='bin/ingest-auth-ip-limit.sh'
+readonly IA_DENY_SYNC_SCRIPT='bin/ingest-auth-deny-sync.sh'
+readonly IA_DENY_PARAM='pcbench-m15-deny-tokens'
+readonly IA_OPS_TIMEOUT=200
+# 보조 컨테이너 라벨(본 파일의 정리 대상과 같다).
+readonly IA_BENCH_LABEL='com.pokeclip.bench=m15-ingest-auth'
 
 ia_project=""
 ia_compose_file=""
+# 운영 스크립트 사례의 이음매 — ia::configure_ops 가 채운다.
+ia_ops_media_dir=""
+ia_ops_work=""
+ia_ops_deny_dir=""
 # 지금 떠 있는 층(C0 · L · A · B)과 준비 결과 — 본 파일의 stack_up 이 채운다.
 ia_layer=""
 ia_layer_ok=0
@@ -617,25 +630,272 @@ User-Agent ${ia_big_ua_body} 바이트(기대 > ${IA_BODY_LIMIT})"
 }
 
 #######################################
-# c5 운영 스크립트가 필요한 사례(C13 · C15 · C18). 스크립트가 없으면 「없음」
-# 으로 실패한다 — 건너뛰지 않는다. 있으면 이음매(시험 compose · 경로)를 c5 가
-# 정해 이 사례 본문을 채울 때까지 실패로 남는다.
+# 운영 스크립트 사례(C13 · C15 · C18)의 이음매를 정한다. 본 파일이 층 B 를
+# 띄우기 전에 부른다.
+#   - 스크립트는 media-host 디렉터리의 bin/ 에서 돌린다(compose 프로젝트 ·
+#     파일은 ia::configure 의 것 — env 파일은 그 compose 파일 옆
+#     ingest-auth.env 여야 응답기가 읽는다).
+#   - 거부 목록 디렉터리는 응답기 /etc/ingest-auth 에 묶인 호스트 디렉터리다.
+#   - PATH 앞에 둘 이음매: aws(test/ops_fakebin/aws — 거부 목록 SSM 값은
+#     <작업 디렉터리>/state/ssm.param.<이름>) · chown(기록만 — root 아님) ·
+#     journalctl(컨테이너 ID 로 거른 docker logs).
+# Globals:
+#   ia_ops_media_dir, ia_ops_work, ia_ops_deny_dir
 # Arguments:
-#   media-host 디렉터리, 스크립트 상대 경로 …
+#   media-host 디렉터리, 작업 디렉터리(비어 있는 새 디렉터리), 거부 목록
+#   디렉터리.
+#######################################
+ia::configure_ops() {
+  local fake="$1/test/ops_fakebin"
+  ia_ops_media_dir="$1"
+  ia_ops_work="$2"
+  ia_ops_deny_dir="$3"
+  mkdir -p -- "$2/bin" "$2/state" "$2/log"
+  ln -sf -- "${fake}/aws" "$2/bin/aws"
+  ln -sf -- "${fake}/chown" "$2/bin/chown"
+  ln -sf -- "${fake}/journalctl_docker" "$2/bin/journalctl"
+}
+
+#######################################
+# 운영 스크립트 사례의 선행 조건 — 층 B · 이음매(ia::configure_ops) · 스크립트
+# 실행 파일 · env 파일 자리. 옛 호출 꼴(첫 인자가 디렉터리)은 실패로 남긴다 —
+# 본 파일이 check_c13 · c15 · c18 을 따로 정의해 이 lib 의 본문을 가리면
+# 본문 없이 통과하지 않게.
+# Arguments:
+#   스크립트 상대 경로 ….
 #######################################
 require_ops_scripts() {
-  local dir="$1" rel missing=""
-  shift
+  local rel missing=""
   ia::require_layer B || return 1
-  for rel in "$@"; do
-    [[ -f "${dir}/${rel}" ]] || missing="${missing:+${missing} · }${rel}"
-  done
-  if [[ -n "${missing}" ]]; then
-    harness::add_reason "없음(c5 전) — ${missing}"
+  if [[ "${1:-}" == /* ]]; then
+    harness::add_reason "옛 호출 꼴 — ingest_auth_contract.sh 의 check_c13 · \
+c15 · c18 정의를 지워야 lib 본문이 돈다"
     return 1
   fi
-  harness::add_reason '스크립트는 있으나 시험 이음매가 없음 — c5 가 이 사례 본문을 채운다'
-  return 1
+  if [[ -z "${ia_ops_work}" || ! -d "${ia_ops_deny_dir}" ]]; then
+    harness::add_reason '운영 스크립트 이음매 없음(ia::configure_ops 미호출)'
+    return 1
+  fi
+  for rel in "$@"; do
+    [[ -x "${ia_ops_media_dir}/${rel}" ]] \
+      || missing="${missing:+${missing} · }${rel}"
+  done
+  if [[ -n "${missing}" ]]; then
+    harness::add_reason "없음 — ${missing}"
+    return 1
+  fi
+  if [[ ! -f "$(dirname -- "${ia_compose_file}")/ingest-auth.env" ]]; then
+    harness::add_reason 'compose 파일 옆 ingest-auth.env 없음(응답기 env_file 자리)'
+    return 1
+  fi
+}
+
+#######################################
+# 운영 스크립트를 시험 이음매로 돌리고 판정 줄을 낸다.
+# Globals:
+#   ia_ops_media_dir, ia_ops_work, ia_ops_deny_dir, ia_project, ia_compose_file
+# Arguments:
+#   스크립트 상대 경로, 인자 ….
+# Outputs:
+#   표준 출력(판정 줄).
+#######################################
+ia::run_ops() {
+  local script="${ia_ops_media_dir}/$1"
+  shift
+  PATH="${ia_ops_work}/bin:${PATH}" \
+    PCBENCH_FAKE_LIB="${ia_ops_media_dir}/test/ops_fakebin/record.sh" \
+    PCBENCH_FAKE_LOG_DIR="${ia_ops_work}/log" \
+    PCBENCH_FAKE_STATE_DIR="${ia_ops_work}/state" \
+    MEDIA_COMPOSE_PROJECT="${ia_project}" MEDIA_COMPOSE_FILE="${ia_compose_file}" \
+    INGEST_AUTH_DENY_DIR="${ia_ops_deny_dir}" \
+    INGEST_AUTH_DENYLIST_PARAM="${IA_DENY_PARAM}" INGEST_AUTH_GID=10003 \
+    harness::bounded "${IA_OPS_TIMEOUT}" "${script}" "$@" \
+    2>"${ia_ops_work}/ops.err" || true
+}
+
+#######################################
+# 운영 스크립트의 판정 줄이 기대와 같은지 본다.
+# Arguments:
+#   기대 줄, 스크립트 상대 경로, 인자 ….
+#######################################
+ia::expect_ops() {
+  local want="$1" got
+  shift
+  got="$(ia::run_ops "$@")"
+  if [[ "${got}" != "${want}" ]]; then
+    harness::add_reason "$* → 「${got}」(기대 「${want}」): $(harness::log_tail \
+"${ia_ops_work}/ops.err")"
+    return 1
+  fi
+}
+
+# 가짜 SSM 거부 목록 값(머리 줄 + 토큰 줄 …)을 둔다.
+ia::ssm_deny() {
+  printf '%s\n' '# pokeclip deny-tokens v1' "$@" \
+    >"${ia_ops_work}/state/ssm.param.${IA_DENY_PARAM}"
+}
+
+# 서비스 컨테이너 ID(실행 중 하나).
+ia::service_id() { ia::compose ps -q "$1" 2>/dev/null; }
+
+# 컨테이너 시작 시각.
+ia::started_at() {
+  docker inspect -f '{{.State.StartedAt}}' "$1" 2>/dev/null
+}
+
+# 시험 경로의 받은 바이트 수(관리 API — 못 읽으면 빈 값).
+ia::bytes_received() {
+  ia::api_get "/v3/paths/get/${IA_STREAM_TOKEN}" \
+    | jq -r '.bytesReceived // empty' 2>/dev/null
+}
+
+#######################################
+# 응답기 상태 디렉터리의 connlog.jsonl 줄 수(보조 컨테이너로 읽는다 — 응답기
+# 이미지에는 셸이 없다).
+# Outputs:
+#   줄 수(못 읽으면 실패).
+#######################################
+ia::connlog_lines() {
+  local id
+  id="$(ia::service_id ingest-auth)" || return 1
+  [[ -n "${id}" ]] || return 1
+  docker run --rm --label "${IA_BENCH_LABEL}" --volumes-from "${id}:ro" \
+    --entrypoint /bin/sh "${PCBENCH_HELPER_IMAGE:-alpine:3.22}" -c \
+    'wc -l </var/lib/ingest-auth/connlog.jsonl' 2>/dev/null | tr -d ' '
+}
+
+#######################################
+# 응답기 인증 수신 자리(망 칸 127.0.0.1:8080)를 1초 간격으로 찔러 코드와 시각을
+# 파일에 남긴다 — 멈춤 표식이 생길 때까지(배경 실행).
+# Arguments:
+#   기록 파일, 멈춤 표식.
+#######################################
+ia::probe_window() {
+  local code
+  while [[ ! -e "$2" ]]; do
+    code="$(ia::http_code -X POST http://127.0.0.1:8080/mediamtx/auth)"
+    printf '%s %s\n' "${SECONDS}" "${code}" >>"$1"
+    sleep 1
+  done
+}
+
+#######################################
+# C13 — 송출 중 IP 한도 끄기. 기존 송출은 끊기지 않고(받은 바이트 증가 · 송출기
+# 생존), mediamtx 는 그대로(ID · 시작 시각), 응답기만 바뀌고, connlog 가
+# 남고, 재생성 창(인증 자리 000)을 기록하고, 끝난 뒤 새 송출이 받아들여진다.
+#######################################
+check_c13() {
+  local ok=0 mtx_id mtx_at ia_id bytes0 bytes1 log0 log1 probe stop
+  require_ops_scripts "${IA_IP_LIMIT_SCRIPT}" || return 1
+  if ! ia::running b-c9 || ! ia::path_ready; then
+    harness::add_reason '기존 송출(b-c9)이 없음(C9 선행)'
+    return 1
+  fi
+  mtx_id="$(ia::service_id mediamtx)"
+  mtx_at="$(ia::started_at "${mtx_id}")"
+  ia_id="$(ia::service_id ingest-auth)"
+  bytes0="$(ia::bytes_received)"
+  log0="$(ia::connlog_lines)" || log0=""
+  probe="${ia_ops_work}/c13-window.txt"
+  stop="${ia_ops_work}/c13-stop"
+  ia::probe_window "${probe}" "${stop}" &
+  ia::expect_ops 'INGEST AUTH IP LIMIT OK off' "${IA_IP_LIMIT_SCRIPT}" off \
+    || ok=1
+  : >"${stop}"
+  wait || true
+  printf '기록 C13 창 — 인증 자리 000 %s회(1초 간격 탐침 %s회)\n' \
+    "$(grep -c ' 000$' "${probe}" || true)" \
+    "$(awk 'END { print NR }' "${probe}")"
+  if [[ "$(ia::http_code -X POST http://127.0.0.1:8080/mediamtx/auth)" == 000 ]]
+  then
+    harness::add_reason '스크립트 성공 뒤에도 인증 자리 접속 실패'
+    ok=1
+  fi
+  if [[ -z "${mtx_id}" || "$(ia::service_id mediamtx)" != "${mtx_id}" \
+    || "$(ia::started_at "${mtx_id}")" != "${mtx_at}" ]]; then
+    harness::add_reason 'mediamtx 컨테이너 ID · 시작 시각이 바뀜'
+    ok=1
+  fi
+  if [[ "$(ia::service_id ingest-auth)" == "${ia_id}" ]]; then
+    harness::add_reason '응답기 컨테이너 ID 가 그대로(재생성 안 됨)'
+    ok=1
+  fi
+  sleep 2
+  bytes1="$(ia::bytes_received)"
+  if ! ia::running b-c9 || [[ -z "${bytes0}" || -z "${bytes1}" ]] \
+    || (( bytes1 <= bytes0 )); then
+    harness::add_reason "기존 송출이 끊김(바이트 ${bytes0:-?} → ${bytes1:-?})"
+    ok=1
+  fi
+  log1="$(ia::connlog_lines)" || log1=""
+  if [[ -z "${log0}" || -z "${log1}" ]] || (( log1 < log0 )); then
+    harness::add_reason "connlog.jsonl 줄 ${log0:-?} → ${log1:-?}(유지 아님)"
+    ok=1
+  fi
+  ia::sender_stop b-c9
+  ia::expect_accepted b-c13 "${IA_PASSPHRASE}" '재생성 뒤 새 송출' || ok=1
+  return "${ok}"
+}
+
+#######################################
+# C15 — 거부 목록 덧붙임 → deny-sync → 재시작 없이 거부 → 목록에서 빼도
+# (재생성 없이는) 거부 유지 → --release 뒤 풀림.
+#######################################
+check_c15() {
+  local ok=0 ia_id
+  require_ops_scripts "${IA_DENY_SYNC_SCRIPT}" || return 1
+  ia::sender_stop b-c13
+  ia_id="$(ia::service_id ingest-auth)"
+  ia::ssm_deny "${IA_STREAM_TOKEN}"
+  ia::expect_ops 'INGEST AUTH DENY SYNC OK tokens=1' "${IA_DENY_SYNC_SCRIPT}" \
+    || ok=1
+  if [[ -z "${ia_id}" || "$(ia::service_id ingest-auth)" != "${ia_id}" ]]; then
+    harness::add_reason 'deny-sync(--release 없음)가 응답기를 바꿈'
+    ok=1
+  fi
+  ia::expect_rejected b-c15a "${IA_PASSPHRASE}" '덧붙인 토큰 송출' || ok=1
+  ia::ssm_deny
+  ia::expect_ops 'INGEST AUTH DENY SYNC OK tokens=0' "${IA_DENY_SYNC_SCRIPT}" \
+    || ok=1
+  ia::expect_rejected b-c15b "${IA_PASSPHRASE}" '목록에서 뺀 뒤(재생성 전)' \
+    || ok=1
+  ia::expect_ops 'INGEST AUTH DENY SYNC OK release tokens=0' \
+    "${IA_DENY_SYNC_SCRIPT}" --release || ok=1
+  ia::expect_accepted b-c15c "${IA_PASSPHRASE}" '--release 뒤 송출' || ok=1
+  return "${ok}"
+}
+
+#######################################
+# C18 — 허용된 송출 중 토큰을 덧붙여 deny-sync 한 뒤 실물 cut: kicked=1 · 그
+# 연결이 사라짐 · 같은 토큰 재송출 거부.
+#######################################
+check_c18() {
+  local ok=0 out deadline
+  require_ops_scripts "${IA_DENY_SYNC_SCRIPT}" || return 1
+  if ! ia::running b-c15c || ! ia::path_ready; then
+    harness::add_reason '허용된 송출(b-c15c)이 없음(C15 선행)'
+    return 1
+  fi
+  ia::ssm_deny "${IA_STREAM_TOKEN}"
+  ia::expect_ops 'INGEST AUTH DENY SYNC OK tokens=1' "${IA_DENY_SYNC_SCRIPT}" \
+    || ok=1
+  out="$(ia::compose exec -T ingest-auth /ingest-auth cut \
+    "${IA_STREAM_TOKEN}" 2>&1)" || true
+  if ! grep -q -E '"kicked":1[,}]' <<<"${out}"; then
+    harness::add_reason "cut 출력에 kicked=1 없음: ${out:0:200}"
+    ok=1
+  fi
+  deadline=$((SECONDS + IA_REJECT_TIMEOUT))
+  while (( SECONDS < deadline )) && ia::path_ready; do
+    sleep 0.5
+  done
+  if ia::path_ready; then
+    harness::add_reason 'cut 뒤에도 경로가 ready(연결이 남음)'
+    ok=1
+  fi
+  ia::sender_stop b-c15c
+  ia::expect_rejected b-c18 "${IA_PASSPHRASE}" 'cut 뒤 같은 토큰 재송출' || ok=1
+  return "${ok}"
 }
 
 check_c11() {

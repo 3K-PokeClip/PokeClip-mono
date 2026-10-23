@@ -1,8 +1,9 @@
 # shellcheck shell=bash
 #
-# Media 상자 운영 확인 스크립트(loopback-health · paths-count · paths-list ·
-# secret-count)가 함께 쓰는 부품 — 상한 시간이 있는 실행 · 스크래치 디렉터리 ·
-# compose 서비스 컨테이너 찾기 · Secrets Manager 비밀 읽기.
+# Media 상자 운영 스크립트(loopback-health · paths-count · paths-list ·
+# secret-count · ingest-auth-deny-sync · ingest-auth-ip-limit)가 함께 쓰는
+# 부품 — 상한 시간이 있는 실행 · 스크래치 디렉터리 · compose 서비스 컨테이너
+# 찾기 · Secrets Manager 비밀 읽기 · 응답기만 재생성.
 #
 # 이 파일은 source 해서 쓴다(실행하지 않는다). 상자(AL2023 · bash 5)와 kty
 # 로컬(macOS · bash 3.2) 양쪽에서 돈다 — bash 3.2 문법과 두 계열에 공통인 도구
@@ -13,6 +14,11 @@
 #                           (초, 1–600). 기본 30.
 #   MEDIA_COMPOSE_PROJECT   compose 프로젝트 이름. 기본 pokeclip-media(시작
 #                           스크립트와 같은 기본값).
+#   MEDIA_COMPOSE_FILE      compose 파일(절대 경로). 기본
+#                           /etc/pokeclip-media/compose.yml(시작 스크립트와
+#                           같은 기본값). 응답기 재생성만 쓴다.
+#   MEDIA_OPS_HEALTH_WAIT   응답기 재생성 뒤 healthy 를 기다리는 상한(초,
+#                           1–600). 기본 120. 응답기 재생성만 쓴다.
 
 readonly OPS_DEFAULT_TIMEOUT=30
 readonly OPS_MAX_TIMEOUT=600
@@ -30,6 +36,9 @@ readonly OPS_CDN_SECRET_PATTERN='^[A-Za-z0-9._+=-]+$'
 readonly OPS_PASSPHRASE_PATTERN='^[A-Za-z0-9._~-]{10,79}$'
 readonly OPS_PROJECT_LABEL='label=com.docker.compose.project='
 readonly OPS_SERVICE_LABEL='label=com.docker.compose.service='
+readonly OPS_DEFAULT_HEALTH_WAIT=120
+# 송출 인증 응답기의 compose 서비스 이름.
+readonly OPS_INGEST_AUTH_SERVICE='ingest-auth'
 
 ops_scratch=""
 ops_child_pid=""
@@ -56,6 +65,31 @@ ops::timeout() {
   [[ "${value}" =~ ^[1-9][0-9]{0,2}$ ]] || return 1
   (( value <= OPS_MAX_TIMEOUT )) || return 1
   printf '%s\n' "${value}"
+}
+
+#######################################
+# 응답기 재생성 뒤 healthy 대기 상한(초)을 낸다. 값이 틀리면 실패한다.
+# Globals:
+#   MEDIA_OPS_HEALTH_WAIT
+# Outputs:
+#   상한(초).
+#######################################
+ops::health_wait() {
+  local value="${MEDIA_OPS_HEALTH_WAIT:-${OPS_DEFAULT_HEALTH_WAIT}}"
+  [[ "${value}" =~ ^[1-9][0-9]{0,2}$ ]] || return 1
+  (( value <= OPS_MAX_TIMEOUT )) || return 1
+  printf '%s\n' "${value}"
+}
+
+#######################################
+# compose 파일 경로를 낸다. 절대 경로가 아니면 실패한다.
+# Globals:
+#   MEDIA_COMPOSE_FILE
+#######################################
+ops::compose_file() {
+  local file="${MEDIA_COMPOSE_FILE:-/etc/pokeclip-media/compose.yml}"
+  [[ "${file}" == /?* ]] || return 1
+  printf '%s\n' "${file}"
 }
 
 #######################################
@@ -207,4 +241,56 @@ ops::read_secret() {
     return 1
   fi
   printf '%s' "${value}"
+}
+
+#######################################
+# compose 서비스의 healthy 컨테이너 ID 를 낸다(한 줄에 하나). docker 조회가
+# 실패하거나 ID 꼴이 아닌 줄이 있으면 실패한다.
+# Arguments:
+#   서비스 이름, 상한(초).
+# Outputs:
+#   ID(0 개 이상).
+#######################################
+ops::healthy_ids() {
+  local out id project
+  project="$(ops::project)"
+  out="$(ops::bounded "$2" docker ps -q --no-trunc --filter health=healthy \
+    --filter "${OPS_PROJECT_LABEL}${project}" \
+    --filter "${OPS_SERVICE_LABEL}$1" </dev/null 2>/dev/null)" || return 1
+  for id in ${out}; do
+    [[ "${id}" =~ ^[0-9A-Za-z]+$ ]] || return 1
+    printf '%s\n' "${id}"
+  done
+}
+
+#######################################
+# 송출 인증 응답기만 재생성하고(--no-deps — mediamtx 등 다른 서비스와 시작
+# 스크립트의 부착 up 은 그대로) healthy 가 될 때까지 기다린다. env_file 은
+# 컨테이너를 만들 때만 읽히므로 restart 가 아니라 재생성이다. compose 출력은
+# 표준 오류로 보낸다(표준 출력은 판정 줄 자리).
+# Arguments:
+#   compose 파일, 명령 한 번의 상한(초), healthy 대기 상한(초).
+# Outputs:
+#   healthy 가 된 컨테이너 ID(성공했을 때만).
+# Returns:
+#   0 healthy / 1 재생성 실패 · 상한 초과 / 2 상한 안에 healthy 가 정확히
+#   하나가 아님.
+#######################################
+ops::recreate_ingest_auth() {
+  local file="$1" limit="$2" deadline ids project
+  project="$(ops::project)"
+  ops::bounded "${limit}" docker compose -p "${project}" -f "${file}" \
+    up -d --no-deps --force-recreate "${OPS_INGEST_AUTH_SERVICE}" \
+    </dev/null >&2 || return 1
+  deadline=$((SECONDS + $3))
+  while (( SECONDS < deadline )); do
+    ids="$(ops::healthy_ids "${OPS_INGEST_AUTH_SERVICE}" "${limit}")" \
+      || ids=""
+    if [[ -n "${ids}" && "${ids}" != *$'\n'* ]]; then
+      printf '%s\n' "${ids}"
+      return 0
+    fi
+    sleep 1
+  done
+  return 2
 }
