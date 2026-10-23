@@ -35,6 +35,7 @@ function stats(over: Partial<LiveStatsMockState> = {}): LiveStatsMockState {
     donation: { label: '후원', value: '6회', sub: '방송 전체 · 마지막 21:40' },
     lastViewers: 1290,
     noViewers: '수집 전',
+    noChart: '그래프를 불러오고 있어요',
     ...over,
   };
 }
@@ -260,6 +261,59 @@ describe('LiveStatsPanel: 그래프', () => {
       for (const cb of observers) cb([{ contentRect: { width: 892 } }]);
     });
     expect(scroller.scrollLeft).toBe(1764);
+  });
+
+  it('좁은 화면에서도 툴팁은 보이는 구간 안에 선다', () => {
+    // 그래프 폭 240px·30초 칸 16개에서 넷째 칸을 고르면 「오른쪽 끝 200u」 기준으로 뒤집혀 왼쪽 끝이 −127.5px였다(리뷰 2라운드)
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockReturnValue({
+      width: 292,
+      height: 300,
+      top: 0,
+      left: 0,
+      right: 292,
+      bottom: 300,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    } as DOMRect);
+    panel({ stats: stats({ chart: chart(16) }), cards: [] });
+    const group = screen.getByRole('group');
+    fireEvent.keyDown(group, { key: 'Home' });
+    for (let k = 0; k < 3; k++) fireEvent.keyDown(group, { key: 'ArrowRight' });
+    const tip = screen.getByRole('status');
+    const left = parseFloat(tip.style.left);
+    expect(tip.style.transform).toBe('');
+    expect(left).toBeGreaterThanOrEqual(0);
+    expect(left + 168).toBeLessThanOrEqual(240);
+  });
+
+  it('핀 위에서는 마우스 좌표가 아니라 그 카드의 칸을 고른다', () => {
+    // 핀은 칸보다 넓어, 좌표로 고르면 핀 오른쪽에서 옆 칸이 잡혀 툴팁에 그 카드가 없었다(리뷰 2라운드)
+    const { container } = panel();
+    fireEvent.pointerMove(screen.getByRole('button', { name: /^하이라이트 수동/ }), { clientX: 0 });
+    const tip = container.querySelector(`.${styles.tip}`)!;
+    expect(tip).toHaveTextContent('수동 · 수동 마킹');
+  });
+
+  it('마우스로 고른 칸은 스크린 리더에 낭독하지 않고, 키로 옮긴 칸만 알린다', () => {
+    const { container } = panel();
+    const group = screen.getByRole('group');
+    fireEvent.pointerMove(group, { clientX: 500 });
+    expect(container.querySelector(`.${styles.tip}`)).not.toBeNull();
+    expect(screen.queryByRole('status')).toBeNull();
+    fireEvent.keyDown(group, { key: 'ArrowRight' });
+    expect(screen.getByRole('status')).toBeInTheDocument();
+  });
+
+  it('볼 수 없게 된 방송은 그래프를 불러온다고 하지 않는다', () => {
+    panel({
+      stats: stats({ chart: null, noChart: '볼 수 없는 방송이에요' }),
+      live: false,
+      ended: true,
+    });
+    expect(screen.getByText('볼 수 없는 방송이에요')).toBeInTheDocument();
+    expect(screen.queryByText('그래프를 불러오고 있어요')).toBeNull();
+    expect(screen.queryByText('그래프 확인 중')).toBeNull();
   });
 
   it('시청자 관측이 하나뿐이면 「기록 없음」이 아니라 점 하나다', () => {

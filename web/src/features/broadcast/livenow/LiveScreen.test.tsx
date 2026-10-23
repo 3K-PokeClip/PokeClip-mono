@@ -3043,9 +3043,12 @@ describe('LiveScreen — 지난 방송 상세', () => {
     // 그래프만 지금 기준 최근 10분을 읽으면 끝난 지 한참 된 방송은 늘 비고, 시청자 기록과 다른 창이라 최고·평균은 있는데
     // 선이 없다. 채팅은 아예 읽지 않았다(리뷰 4라운드)
     server.vodStartUnknown = true;
+    // 그래프 폭을 줘야 그래프가 선다 — 폭 0이면 「지금」이 없다는 단언이 늘 참이다(PR #316 리뷰 2라운드)
+    graphWidth();
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
     await renderLive();
 
+    expect(screen.getByRole('group', { name: /^방송 타임라인/ })).toBeInTheDocument();
     expect(screen.queryByText('지금')).toBeNull();
     expect(screen.getByText(/^마지막 120분 채팅 [\d,]+개$/)).toBeInTheDocument();
     // 채팅도 읽는다(전에는 아예 읽지 않았다). 시작 시각을 모르니 하한(녹화를 찾는 끝 12시간에서 보정 여유 60초 앞, ADR-092)보다
@@ -3057,8 +3060,10 @@ describe('LiveScreen — 지난 방송 상세', () => {
   });
 
   it('지난 방송은 라이브 문구를 쓰지 않는다: 채팅 기록·방송 통계, 감지 중 안내 없음, 그래프 끝은 끝난 시각', async () => {
+    graphWidth();
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
     await renderLive();
+    expect(screen.getByRole('group', { name: /^방송 타임라인/ })).toBeInTheDocument();
 
     expect(screen.getByRole('complementary', { name: '채팅 기록' })).toBeInTheDocument();
     expect(screen.queryByRole('complementary', { name: '실시간 채팅' })).toBeNull();

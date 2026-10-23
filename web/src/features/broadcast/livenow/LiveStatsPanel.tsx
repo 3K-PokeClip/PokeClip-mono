@@ -10,6 +10,7 @@ import {
   useCallback,
   useId,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type KeyboardEvent,
@@ -116,8 +117,9 @@ function Cell({ cell, keyClass }: { cell: StatsCell; keyClass: string | undefine
   );
 }
 
+/** 머리줄의 창 설명. 그래프가 없으면 비운다 — 그 까닭은 그래프 자리 한 곳에서만 말한다(stats.noChart) */
 function headMeta(chart: StatsChart | null, scope: LiveStatsMockState['scope'], live: boolean) {
-  if (!chart || !scope) return '그래프 확인 중';
+  if (!chart || !scope) return null;
   const minutes = (chart.t1 - chart.t0) / 60_000;
   const refresh = live ? ' · 10초마다 갱신' : '';
   if (scope === 'recent') return `최근 ${Math.round(minutes)}분${refresh}`;
@@ -211,7 +213,7 @@ export const LiveStatsPanel = memo(function LiveStatsPanel({
               className={styles.empty}
               style={{ height: (PIN_ROW + VIEWER_H + GAP + CHAT_H) * u }}
             >
-              {chart ? '' : '그래프를 불러오고 있어요'}
+              {chart ? '' : stats.noChart}
             </div>
           )}
         </div>
@@ -243,7 +245,12 @@ function Timeline({
   clipId: string;
   onSeekCard: (timestamp: string) => void;
 }) {
-  const { view, scroll, contentW } = layoutFor(chart, visibleW, u);
+  // 무거운 계산(칸 묶기·핀 묶기·선 보간·막대 모양·눈금)은 그래프 값이나 폭이 바뀔 때만 한다. 마우스·스크롤마다 다시 그리는 것은
+  // 십자선·툴팁·스크롤 위치뿐이다 — 전에는 이동 이벤트마다 12시간 그래프 전체를 다시 계산했다(PR #316 리뷰 2라운드)
+  const { view, scroll, contentW } = useMemo(
+    () => layoutFor(chart, visibleW, u),
+    [chart, visibleW, u],
+  );
   const n = view.buckets.length;
   const span = view.t1 - view.t0;
   // 막대·핀·눈금·호버가 모두 같은 시각 자(xt)를 쓴다. 막대만 같은 폭 칸으로 나누면 덜 찬 마지막 칸 때문에 핀이 이웃 막대 위에
@@ -265,35 +272,70 @@ function Timeline({
   const [dragging, setDragging] = useState(false);
   const followEnd = useRef(true);
   const shown = index !== null && index < n ? index : null;
+  // 툴팁을 스크린 리더에 알리는 것은 키로 칸을 옮겼을 때뿐이다 — 마우스가 지나갈 때마다 칸을 낭독하면 다른 안내를 덮었다(리뷰 2라운드)
+  const [viaKey, setViaKey] = useState(false);
+  const tipRef = useRef<HTMLDivElement>(null);
+  const [tipW, setTipW] = useState(0);
 
-  const inView = cards.filter((c) => c.atMs >= view.t0 && c.atMs <= view.t1);
-  const hot = new Set(inView.map((c) => bucketIndexAt(view, c.atMs)));
-  const pins = clusterPins(
-    inView.map((c) => ({ card: c, x: xt(c.atMs) })),
-    PIN_GAP * u,
-  );
+  const { inView, hot, pins } = useMemo(() => {
+    const cardsIn = cards.filter((c) => c.atMs >= view.t0 && c.atMs <= view.t1);
+    return {
+      inView: cardsIn,
+      hot: new Set(cardsIn.map((c) => bucketIndexAt(view, c.atMs))),
+      pins: clusterPins(
+        cardsIn.map((c) => ({ card: c, x: xOf(view, c.atMs, contentW) })),
+        PIN_GAP * u,
+      ),
+    };
+  }, [cards, view, contentW, u]);
 
   // 위층 — 시청자. 눈금은 방송 전체 기록으로 잡는다(넘길 때마다 눈금이 바뀌면 선이 출렁인다)
-  const vw = viewerWindow(stats.viewers, view.t0, view.t1);
-  const vScale = vw.length
-    ? rangeScale(Math.min(...vw.map((p) => p.v)), Math.max(...vw.map((p) => p.v)), 3)
-    : null;
-  const vTop = 10 * u;
-  const vBase = viewerH - 2 * u;
-  const yV = (v: number) =>
-    vScale ? vBase - ((v - vScale.min) / (vScale.max - vScale.min)) * (vBase - vTop) : vBase;
-  const vPts = vw.map((p) => [xt(p.t), yV(p.v)] as const);
-  const vLine = smoothPath(vPts);
+  const viewer = useMemo(() => {
+    const vw = viewerWindow(stats.viewers, view.t0, view.t1);
+    const scale = vw.length
+      ? rangeScale(Math.min(...vw.map((p) => p.v)), Math.max(...vw.map((p) => p.v)), 3)
+      : null;
+    const base = VIEWER_H * u - 2 * u;
+    const top = 10 * u;
+    const y = (v: number) =>
+      scale ? base - ((v - scale.min) / (scale.max - scale.min)) * (base - top) : base;
+    const pts = vw.map((p) => [xOf(view, p.t, contentW), y(p.v)] as const);
+    const line = smoothPath(pts);
+    return { scale, y, pts, line, area: areaPath(pts, base, line) };
+  }, [stats.viewers, view, contentW, u]);
+  const vScale = viewer.scale;
+  const yV = viewer.y;
+  const vPts = viewer.pts;
   const vLast = vPts.at(-1);
 
   // 아래층 — 채팅(막대는 0에서)
   const cTop = viewerH + gap + 8 * u;
   const cBase = viewerH + gap + chatH;
-  const cScale = zeroScale(Math.max(1, ...view.buckets.map((b) => b.chats)), 3);
+  const cScale = useMemo(
+    () => zeroScale(Math.max(1, ...view.buckets.map((b) => b.chats)), 3),
+    [view],
+  );
   const yC = (v: number) => cBase - (v / cScale.max) * (cBase - cTop);
-  const barW = Math.min(BAR_MAX * u, Math.max(2, slot * BAR_RATIO));
+  const bars = useMemo(() => {
+    const full = ((view.bucketSeconds * 1000) / Math.max(1, view.t1 - view.t0)) * contentW;
+    const barW = Math.min(BAR_MAX * u, Math.max(2, full * BAR_RATIO));
+    const top = (VIEWER_H + GAP + 8) * u;
+    const base = (VIEWER_H + GAP + CHAT_H) * u;
+    return view.buckets.map((b, i) => {
+      const x = xOf(view, b.start, contentW);
+      const w = xOf(view, bucketEnd(view, i), contentW) - x;
+      // 덜 찬 마지막 칸은 그 폭만큼 좁게 선다
+      const bw = Math.min(barW, Math.max(2, w * BAR_RATIO));
+      const y = base - (b.chats / cScale.max) * (base - top);
+      return barPath(x + (w - bw) / 2, bw, y, base, 3 * u);
+    });
+  }, [view, contentW, u, cScale]);
 
-  const cats = categorySpans(stats.categories, view.t0, view.t1);
+  const cats = useMemo(
+    () => categorySpans(stats.categories, view.t0, view.t1),
+    [stats.categories, view],
+  );
+  const ticks = useMemo(() => timeTicks(view, contentW, nowEdge), [view, contentW, nowEdge]);
   const crossX = shown !== null ? xb(shown) + wb(shown) / 2 : null;
   const crossV = shown !== null ? viewersAt(stats.viewers, bucketEnd(view, shown)) : null;
 
@@ -336,7 +378,16 @@ function Timeline({
     }
     const rect = e.currentTarget.getBoundingClientRect();
     const ratio = (e.clientX - rect.left) / Math.max(1, rect.width);
+    setViaKey(false);
     setIndex(bucketIndexAt(view, view.t0 + ratio * span));
+  };
+  // 핀은 칸보다 넓다(스크롤하면 칸 14px). 핀 위에서는 마우스 좌표가 아니라 그 카드의 칸을 고른다 — 좌표로 고르면 핀 오른쪽에서
+  // 옆 칸이 잡혀 툴팁에 그 카드가 없었다(리뷰 2라운드). 누른 채 끌 때는 타임라인이 넘기도록 그대로 올려 보낸다
+  const onPinPointerMove = (e: PointerEvent<HTMLButtonElement>, card: TimelineCard) => {
+    if (drag.current && e.buttons === 1) return;
+    e.stopPropagation();
+    setViaKey(false);
+    setIndex(bucketIndexAt(view, card.atMs));
   };
   const endDrag = () => {
     setDragging(false);
@@ -368,6 +419,7 @@ function Timeline({
               : null;
     if (next === null) return;
     e.preventDefault();
+    setViaKey(true);
     setIndex(next);
     reveal(next);
   };
@@ -402,8 +454,23 @@ function Timeline({
   const atEnd = pos.left >= pos.max - 2;
   const viewFrom = view.t0 + (pos.left / Math.max(1, contentW)) * span;
   const viewTo = view.t0 + ((pos.left + visibleW) / Math.max(1, contentW)) * span;
-  const tipFlip = crossX !== null && crossX > pos.left + visibleW - 200 * u;
   const shownBucket = shown !== null ? view.buckets[shown] : undefined;
+  // 툴팁은 십자선 오른쪽, 자리가 모자라면 왼쪽에 서고, 어느 쪽이든 보이는 구간 안으로 맞춘다. 「오른쪽 끝에서 200u」 하나로만
+  // 뒤집으면 좁은 화면(휴대폰)에서 왼쪽 밖으로 나가 잘렸다(리뷰 2라운드). 폭을 못 재면(jsdom) 최소 폭으로 친다
+  const tipWidth = tipW || 168 * u;
+  const tipMin = pos.left + 4 * u;
+  const tipMax = pos.left + visibleW - tipWidth - 4 * u;
+  const tipLeft =
+    crossX === null
+      ? 0
+      : Math.max(
+          tipMin,
+          Math.min(crossX + 12 <= tipMax ? crossX + 12 : crossX - 12 - tipWidth, tipMax),
+        );
+  useLayoutEffect(() => {
+    const w = tipRef.current?.offsetWidth ?? 0;
+    if (w > 0 && w !== tipW) setTipW(w);
+  }, [shown, dragging, tipW]);
 
   return (
     <>
@@ -439,6 +506,7 @@ function Timeline({
                 type="button"
                 className={first.card.manual ? styles.pinManual : styles.pin}
                 style={{ left: x }}
+                onPointerMove={(e) => onPinPointerMove(e, first.card)}
                 onClick={() => {
                   if (drag.current?.moved) return;
                   onSeekCard(first.card.timestamp);
@@ -518,8 +586,8 @@ function Timeline({
                 중이면 마지막 점(맥박)이 그 점이다 */}
             {vScale && vPts.length > 1 ? (
               <g clipPath={`url(#${clipId})`}>
-                <path d={areaPath(vPts, vBase, vLine)} className={styles.viewerArea} />
-                <path d={vLine} className={styles.viewerLine} />
+                <path d={viewer.area} className={styles.viewerArea} />
+                <path d={viewer.line} className={styles.viewerLine} />
               </g>
             ) : vScale && vLast ? (
               live ? null : (
@@ -542,18 +610,14 @@ function Timeline({
                 {`시청자 수 ${stats.noViewers}`}
               </text>
             )}
-            {view.buckets.map((b, i) => {
-              // 덜 찬 마지막 칸은 그 폭만큼 좁게 선다
-              const w = Math.min(barW, Math.max(2, wb(i) * BAR_RATIO));
-              return (
-                <path
-                  key={b.start}
-                  d={barPath(xb(i) + (wb(i) - w) / 2, w, yC(b.chats), cBase, 3 * u)}
-                  className={hot.has(i) ? styles.barHot : styles.bar}
-                  data-dim={shown !== null && shown !== i ? '' : undefined}
-                />
-              );
-            })}
+            {view.buckets.map((b, i) => (
+              <path
+                key={b.start}
+                d={bars[i]}
+                className={hot.has(i) ? styles.barHot : styles.bar}
+                data-dim={shown !== null && shown !== i ? '' : undefined}
+              />
+            ))}
             {crossX !== null ? (
               crossV !== null && vScale ? (
                 <circle cx={crossX} cy={yV(crossV)} r={4 * u} className={styles.viewerDot} />
@@ -598,7 +662,7 @@ function Timeline({
             {cats.length === 0 ? <span className={styles.rowEmpty}>카테고리 확인 중</span> : null}
           </div>
           <div className={styles.timeAxis} aria-hidden>
-            {timeTicks(view, contentW, nowEdge).map((tick) => (
+            {ticks.map((tick) => (
               <span
                 key={tick.t}
                 className={styles.timeTick}
@@ -618,14 +682,12 @@ function Timeline({
           ) : null}
           {shown !== null && shownBucket && crossX !== null && !dragging ? (
             <div
+              ref={tipRef}
               className={styles.tip}
-              style={
-                tipFlip
-                  ? { left: crossX - 12, transform: 'translateX(-100%)' }
-                  : { left: crossX + 12 }
-              }
-              role="status"
-              aria-live="polite"
+              style={{ left: tipLeft }}
+              role={viaKey ? 'status' : undefined}
+              aria-live={viaKey ? 'polite' : undefined}
+              aria-hidden={viaKey ? undefined : true}
             >
               <div className={styles.tipTitle}>
                 {fmtHMS(shownBucket.start)} – {fmtHMS(bucketEnd(view, shown))}

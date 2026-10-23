@@ -118,6 +118,12 @@ describe('statsChart: 눈금', () => {
     expect(s.ticks).toEqual([0, 25, 50, 75]);
   });
 
+  it('정수인 수에는 소수 눈금(2.5)을 세우지 않는다', () => {
+    // 2분 칸 최대 채팅이 7개인 한산한 방송은 0 · 2.5 · 5 · 7.5가 섰다(PR #316 리뷰 2라운드)
+    expect(zeroScale(7, 3).ticks).toEqual([0, 5, 10]);
+    expect(rangeScale(1200, 1207, 3).ticks.every(Number.isInteger)).toBe(true);
+  });
+
   it('시청자 눈금은 값이 있는 범위만 잡는다', () => {
     const s = rangeScale(1200, 1300, 2);
     expect(s.min).toBeGreaterThan(0);

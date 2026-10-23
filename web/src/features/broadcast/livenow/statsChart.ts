@@ -90,7 +90,8 @@ function niceStep(raw: number): number {
   if (raw <= 0) return 1;
   const pow = 10 ** Math.floor(Math.log10(raw));
   const f = raw / pow;
-  const step = f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10;
+  // 2.5 단계는 십의 자리부터다: 채팅·시청자 수는 정수라 한 자리에서 2.5를 쓰면 「2.5」「7.5」 눈금이 섰다(PR #316 리뷰 2라운드)
+  const step = f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 && pow >= 10 ? 2.5 : f <= 5 ? 5 : 10;
   return Math.max(1, step * pow);
 }
 

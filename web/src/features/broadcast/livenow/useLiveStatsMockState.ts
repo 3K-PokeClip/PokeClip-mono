@@ -40,6 +40,11 @@ export interface LiveStatsMockState {
   lastViewers: number | null;
   /** 시청자 값이 없을 때의 말(missingWord). 통계 칸과 정보 바가 같은 말을 한다 */
   noViewers: string;
+  /**
+   * 그래프가 없을 때의 말. 볼 수 없게 된 방송(명부에 없다 — 위임 회수·탈퇴)은 그래프를 다시 읽지 않으니 「불러오고 있어요」라
+   * 하지 않는다(PR #316 리뷰 2라운드)
+   */
+  noChart: string;
 }
 
 /** 채팅 수의 이름은 차트가 실제로 읽은 창대로다(QA 2026-10-11 리뷰): 방송 전체, 끝 12시간(그보다 긴 방송), 지금 기준 최근 창 */
@@ -62,10 +67,11 @@ const DONATION_SCOPE: Record<LiveChartScope, (minutes: number) => string> = {
  *   한 화면에 「확인 중」과 「수집 전」이 섰다(리뷰 4·5라운드)
  */
 export function useLiveStatsMockState(view: LiveBroadcastStatus): LiveStatsMockState {
-  const data = useLiveData();
+  // 저장소 전체가 아니라 쓰는 칸에만 묶는다: 지난 방송을 트는 동안 재생 위치(playheadMs)가 매초 바뀌어, 통째로 묶으면 그래프(memo)가
+  // 매초 다시 그려졌다(PR #316 리뷰 2라운드)
+  const { chart: raw, info, status } = useLiveData();
 
   return useMemo(() => {
-    const raw = data.chart;
     const first = raw?.buckets[0];
     const last = raw?.buckets.at(-1);
     const chart: StatsChart | null =
@@ -82,7 +88,7 @@ export function useLiveStatsMockState(view: LiveBroadcastStatus): LiveStatsMockS
           }
         : null;
 
-    const trusted = trustedViewerSeries(view, data.info);
+    const trusted = trustedViewerSeries(view, info);
     const viewers: ViewerPoint[] = (trusted ?? [])
       .filter((p): p is typeof p & { viewers: number } => p.viewers !== null)
       .map((p) => ({ t: Date.parse(p.observedAt), v: p.viewers }));
@@ -99,7 +105,7 @@ export function useLiveStatsMockState(view: LiveBroadcastStatus): LiveStatsMockS
       if (!p.category || categories.at(-1)?.name === p.category) continue;
       categories.push({ t: Date.parse(p.observedAt), name: p.category });
     }
-    const latestCategory = data.info?.latest?.category ?? null;
+    const latestCategory = info?.latest?.category ?? null;
     if (categories.length === 0 && latestCategory && chart)
       categories.push({ t: chart.t0, name: latestCategory });
 
@@ -154,6 +160,7 @@ export function useLiveStatsMockState(view: LiveBroadcastStatus): LiveStatsMockS
       donation,
       lastViewers,
       noViewers,
+      noChart: status === 'offline' ? '볼 수 없는 방송이에요' : '그래프를 불러오고 있어요',
     };
-  }, [data, view]);
+  }, [raw, info, status, view]);
 }
