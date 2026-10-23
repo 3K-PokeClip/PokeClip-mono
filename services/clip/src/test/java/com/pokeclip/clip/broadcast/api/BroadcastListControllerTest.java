@@ -24,6 +24,8 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.allOf;
+import static org.hamcrest.Matchers.hasKey;
 import static org.hamcrest.Matchers.nullValue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
@@ -46,6 +48,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class BroadcastListControllerTest extends IntegrationTestSupport {
 
     private static final String ACCESSIBLE = "/internal/editor-delegations/accessible";
+
+    /** auth의 스트리머 채널 이름 창구(POK-430). */
+    private static final String NAMES = "/internal/streamer-channel-names";
 
     /** 수집기의 「여러 방송의 마지막 제목」 창구(POK-259). */
     private static final String TITLES = "/internal/broadcast-info/latest";
@@ -94,8 +99,8 @@ class BroadcastListControllerTest extends IntegrationTestSupport {
                 .andExpect(jsonPath("$.broadcasts[0].streamId").value("s-2"))
                 .andExpect(jsonPath("$.broadcasts[1].streamId").value("s-1"));
 
-        assertThat(AUTH.callCount()).as("자격 창구를 안 거쳤다 — 이 갈래는 판정을 안 재고 있다").isEqualTo(1);
-        assertThat(AUTH.lastPath()).isEqualTo(ACCESSIBLE);
+        // 경로별로 센다: 줄이 있는 장은 이름 창구(POK-430)도 한 번 불러 총합은 2다
+        assertThat(AUTH.callCount(ACCESSIBLE)).as("자격 창구를 안 거쳤다 — 이 갈래는 판정을 안 재고 있다").isEqualTo(1);
     }
 
     /**
@@ -730,7 +735,7 @@ class BroadcastListControllerTest extends IntegrationTestSupport {
                 .andExpect(jsonPath("$.broadcasts[0].streamId").value("s-delegated"))
                 .andExpect(jsonPath("$.broadcasts[0].relation").value("EDITOR"));
 
-        assertThat(AUTH.callCount()).as("좁혀도 자격 창구는 거친다").isEqualTo(1);
+        assertThat(AUTH.callCount(ACCESSIBLE)).as("좁혀도 자격 창구는 거친다").isEqualTo(1);
     }
 
     /**
@@ -1171,10 +1176,103 @@ class BroadcastListControllerTest extends IntegrationTestSupport {
                 .andExpect(jsonPath("$.broadcasts[0].editorsOnline").value(nullValue()));
     }
 
+    // ── 스트리머 채널 이름(POK-430) ─────────────────────────────
+
+    /**
+     * 내 줄(OWNER)과 맡은 줄(EDITOR) 모두 그 스트리머의 이름이 실린다. 편집자 화면이 남의 방송에도 주인 화면과 같은 이름을 그리는 재료다.
+     *
+     * <p>🔴 <b>볼 수 있지만 이 장에 방송이 없는 스트리머(11)를 같이 심는다.</b> 안 심으면 「볼 수 있는 스트리머 전부를 보낸다」는 틀린
+     * 구현도 같은 본문을 보내 초록이다. 이름 창구에는 이 장에 줄이 있는 스트리머만 간다.
+     */
+    @Test
+    void 내_줄과_맡은_줄_모두_스트리머_채널_이름이_실린다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"), 줄(남의_스트리머, "EDITOR"), 줄("11", "EDITOR"));
+        방송을_넣는다("s-mine", TestIds.STREAMER, "live");
+        방송을_넣는다("s-delegated", 남의_스트리머, "live");
+        AUTH.respondWith(NAMES, 200, """
+                {"names":{"7":{"chzzk":"내 치지직","soop":null},"3":{"chzzk":null,"soop":"남의 숲"},"11":{"chzzk":"방송 없는 채널","soop":null}}}""");
+
+        목록("?state=live")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.broadcasts[0].streamId").value("s-delegated"))
+                .andExpect(jsonPath("$.broadcasts[0].relation").value("EDITOR"))
+                .andExpect(jsonPath("$.broadcasts[0].channelNames.CHZZK").value(nullValue()))
+                .andExpect(jsonPath("$.broadcasts[0].channelNames.SOOP").value("남의 숲"))
+                .andExpect(jsonPath("$.broadcasts[1].streamId").value("s-mine"))
+                .andExpect(jsonPath("$.broadcasts[1].relation").value("OWNER"))
+                .andExpect(jsonPath("$.broadcasts[1].channelNames.CHZZK").value("내 치지직"))
+                .andExpect(jsonPath("$.broadcasts[1].channelNames.SOOP").value(nullValue()));
+
+        assertThat(AUTH.callCount(NAMES)).as("스트리머마다 묻지 않고 한 장을 한 번에 묻는다").isEqualTo(1);
+        assertThat(보낸_스트리머_번호()).containsExactlyInAnyOrder(7L, 3L);
+    }
+
+    /** 개수로 잘려 이 장에 안 나온 스트리머도 이름 창구에 안 간다(다음 장에서 묻는다). */
+    @Test
+    void 개수로_잘린_줄의_스트리머는_묻지_않는다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"), 줄(남의_스트리머, "EDITOR"));
+        방송을_넣는다("s-mine", TestIds.STREAMER, "live");
+        방송을_넣는다("s-delegated", 남의_스트리머, "live");
+        AUTH.respondWith(NAMES, 200, "{\"names\":{}}");
+
+        목록("?state=live&limit=1")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.broadcasts.length()").value(1))
+                .andExpect(jsonPath("$.broadcasts[0].streamId").value("s-delegated"));
+
+        assertThat(보낸_스트리머_번호()).containsExactly(3L);
+    }
+
+    /**
+     * 이름은 부가 칸이다. auth 이름 창구가 죽었거나(5xx) 모르는 모양을 줘도 목록은 200이고 두 칸이 null로 남는다(키는 그대로).
+     *
+     * <p>🔴 가짜 auth는 안 정한 경로에 503을 주므로 다른 목록 시험은 전부 「이름 창구 503」으로 돈다. 그래서 여기서는 회차마다
+     * <b>이름 창구가 실제로 불렸다</b>를 같이 잰다(안 불러도 초록인 시험이 되지 않게). 성공 짝은 위 시험이다.
+     */
+    @Test
+    void 이름_창구가_아프면_목록은_나가고_이름만_빈다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("s-sick", TestIds.STREAMER, "live");
+
+        int 회차 = 0;
+        for (String[] 이름_창구 : new String[][] {{"500", ""}, {"503", ""}, {"400", "{}"}, {"200", "이름 아님"}, {"200", ""},
+                {"200", "[]"}, {"200", "{\"names\":[]}"}, {"200", "{\"names\":{\"7\":{\"chzzk\":5,\"soop\":[]}}}"}}) {
+            AUTH.respondWith(NAMES, Integer.parseInt(이름_창구[0]), 이름_창구[1]);
+            목록("?state=live")
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.broadcasts[0].streamId").value("s-sick"))
+                    // 값이 null인 키는 exists()가 「없음」으로 본다: 키가 남는지는 hasKey로 잰다
+                    .andExpect(jsonPath("$.broadcasts[0].channelNames", allOf(hasKey("CHZZK"), hasKey("SOOP"))))
+                    .andExpect(jsonPath("$.broadcasts[0].channelNames.CHZZK").value(nullValue()))
+                    .andExpect(jsonPath("$.broadcasts[0].channelNames.SOOP").value(nullValue()));
+            회차++;
+            assertThat(AUTH.callCount(NAMES)).as("이름 창구를 안 불렀다 — 이 회차는 실패 처리를 안 재고 있다(%s)", 이름_창구[0])
+                    .isEqualTo(회차);
+        }
+    }
+
+    /** 이 장에 줄이 없으면 이름 창구를 안 부른다(빈 목록에 왕복 하나를 태울 이유가 없다). */
+    @Test
+    void 방송이_없으면_이름_창구를_안_부른다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+
+        목록("?state=live").andExpect(status().isOk()).andExpect(jsonPath("$.broadcasts.length()").value(0));
+        assertThat(AUTH.callCount(ACCESSIBLE)).isEqualTo(1);
+        assertThat(AUTH.callCount(NAMES)).isZero();
+    }
+
     // ── 도우미 ──────────────────────────────────────────────────
 
     private void 볼_수_있는_스트리머(String... 줄들) {
         AUTH.respondWith(ACCESSIBLE, 200, "{\"streamers\":[" + String.join(",", 줄들) + "]}");
+    }
+
+    /** 이름 창구가 마지막으로 받은 번호들. 숫자로 읽어 비교한다(문자열 모양에 기대지 않는다). */
+    @SuppressWarnings("unchecked")
+    private static List<Long> 보낸_스트리머_번호() {
+        String 받은_본문 = AUTH.lastBodyOf(NAMES);
+        assertThat(받은_본문).as("이름 창구를 안 불렀다").isNotNull();
+        return ((List<Number>) 맵(받은_본문).get("streamerUserIds")).stream().map(Number::longValue).toList();
     }
 
     private static String 줄(String streamerUserId, String relation) {

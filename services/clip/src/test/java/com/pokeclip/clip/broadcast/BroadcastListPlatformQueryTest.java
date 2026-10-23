@@ -2,6 +2,7 @@ package com.pokeclip.clip.broadcast;
 
 import com.pokeclip.clip.collector.BroadcastTitleClient;
 import com.pokeclip.clip.delegation.DelegationResolveClient;
+import com.pokeclip.clip.delegation.StreamerChannelNameClient;
 import com.pokeclip.clip.segment.TimelineOriginReader;
 import com.pokeclip.clip.support.IntegrationTestSupport;
 import com.pokeclip.clip.support.TestIds;
@@ -37,10 +38,11 @@ class BroadcastListPlatformQueryTest extends IntegrationTestSupport {
     private final ThumbnailUrls thumbnails;
     private final BroadcastTitleClient titles;
     private final ViewerPresence viewers;
+    private final StreamerChannelNameClient channelNames;
 
     BroadcastListPlatformQueryTest(JdbcTemplate jdbc, BroadcastRepository broadcasts, DelegationResolveClient delegation,
                                    TimelineOriginReader origins, ThumbnailUrls thumbnails, BroadcastTitleClient titles,
-                                   ViewerPresence viewers) {
+                                   ViewerPresence viewers, StreamerChannelNameClient channelNames) {
         this.jdbc = jdbc;
         this.broadcasts = broadcasts;
         this.delegation = delegation;
@@ -48,6 +50,7 @@ class BroadcastListPlatformQueryTest extends IntegrationTestSupport {
         this.thumbnails = thumbnails;
         this.titles = titles;
         this.viewers = viewers;
+        this.channelNames = channelNames;
     }
 
     @BeforeEach
@@ -104,6 +107,6 @@ class BroadcastListPlatformQueryTest extends IntegrationTestSupport {
     }
 
     private BroadcastListService service(BroadcastPlatformStore store) {
-        return new BroadcastListService(broadcasts, delegation, origins, thumbnails, titles, viewers, store);
+        return new BroadcastListService(broadcasts, delegation, origins, thumbnails, titles, viewers, store, channelNames);
     }
 }

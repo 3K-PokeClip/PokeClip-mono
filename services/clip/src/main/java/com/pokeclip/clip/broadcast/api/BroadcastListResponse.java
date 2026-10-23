@@ -4,6 +4,7 @@ import com.pokeclip.clip.broadcast.Broadcast;
 import com.pokeclip.clip.broadcast.BroadcastPage;
 import com.pokeclip.clip.broadcast.PlatformViewers;
 import com.pokeclip.clip.collector.BroadcastTitle;
+import com.pokeclip.clip.delegation.ChannelNames;
 import com.pokeclip.clip.delegation.ResolveResult;
 
 import java.time.Instant;
@@ -59,6 +60,10 @@ public record BroadcastListResponse(List<Item> broadcasts, String nextCursor) {
      * 같은 사람의 여러 탭은 한 명이다. 방송 중 줄만 숫자(아무도 없으면 0)이고 끝난 줄은 {@code null}이다. clip 한 대 전제다
      * ({@code BroadcastListService}).
      *
+     * <p>{@code channelNames}는 그 방송 스트리머의 플랫폼 채널 이름이다(POK-430, {@code {"CHZZK":..,"SOOP":..}}). 키는 늘 둘이고 값은
+     * auth에 저장된 <b>지금 연동된</b> 이름(치지직 채널 이름 · SOOP 닉네임)이다. 연동이 없거나 해제됐거나 auth에 못 물었으면 그 칸이
+     * {@code null}이다. 내 줄(OWNER)과 맡은 줄(EDITOR) 모두 싣는다: 편집자 화면이 남의 방송에도 이름을 그리는 재료다.
+     *
      * <p>줄 번호는 안 싣는다 — 이어받기가 표시로 끝나므로 웹이 쓸 데가 없고,
      * 방송을 가리키는 이름은 {@code streamId}다(카드 목록 문이 그 값을 받는다).
      */
@@ -75,7 +80,8 @@ public record BroadcastListResponse(List<Item> broadcasts, String nextCursor) {
                        String category,
                        String platform,
                        List<PlatformViewers> platforms,
-                       Integer editorsOnline) {
+                       Integer editorsOnline,
+                       ChannelNames channelNames) {
     }
 
     /**
@@ -118,6 +124,7 @@ public record BroadcastListResponse(List<Item> broadcasts, String nextCursor) {
                 title == null ? null : title.category(),
                 platformOf(row, page),
                 page.platforms().getOrDefault(row.getStreamId(), List.of()),
-                page.editorsOnline().get(row.getStreamId()));
+                page.editorsOnline().get(row.getStreamId()),
+                page.channelNames().getOrDefault(row.getStreamerId(), ChannelNames.UNKNOWN));
     }
 }
