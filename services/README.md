@@ -777,7 +777,7 @@ Flyway 마이그레이션은 앱이 뜰 때 실행돼야 하므로 **코드 옆(
 지금까지 나간 것은 auth의 `V101`~`V118`(`V110`·`V111`은 칸, **`V112`는 인덱스 넷과 표 주석 둘**, POK-89 · `V113` 오디오 트랙 이름 · `V114` 탈퇴 장부 · `V115` 연동 채널 칸 NULL 허용 · `V116`·`V117` SOOP 연동 · **`V118` 탈퇴 장부의 `platform` 칸, POK-397**) · clip의 `V201`(`broadcasts`·`broadcast_events`)과
 `V202`(`jump_cards`, POK-118)·`V203`(`broadcasts.vod_expires_at`, POK-117)·`V204`(색인 둘, POK-174)·
 **`V205`(방송 중 부분 색인, POK-218)** · `V206`(`recipes`, POK-124) · `V207`(`clips`·`render_jobs`·`render_job_events`, POK-125) · **`V208`(`clips (recipe_id, id DESC)` 색인 하나, POK-243)** ·
-`V209`~`V213` · **`V214`(`jump_cards.hidden_reason` · `jump_card_actions` · `recipes.source_card_id`, POK-338)** · **`V216`(`jump_card_actions`가 `open`도 받는다, POK-393)** · chat-collector의 `V301`(`chat_messages`)~**`V315`** ·
+`V209`~`V213` · **`V214`(`jump_cards.hidden_reason` · `jump_card_actions` · `recipes.source_card_id`, POK-338)** · **`V216`(`jump_card_actions`가 `open`도 받는다, POK-393)** · **`V220`(`broadcast_platforms`, POK-397)** · chat-collector의 `V301`(`chat_messages`)~**`V315`** ·
 chat-detector의 `V401`(`chat_metrics`, POK-120)이다.
 
 **chat-collector 대역 열:** `V301`(`chat_messages`) · `V302`(`stream_id` 칸) ·
@@ -1029,8 +1029,8 @@ Media는 auth에 직접 붙어 이 머리글을 안 싣는다. 머리글은 Spri
 **줄이 생길 때 한 번만 정한다.** 시작 편지든 먼저 온 종료 편지든 첫 편지의 값이고, 뒤 편지가 다른 값을 실어도 안 바꾼다.
 물리 키(아래 POK-233 절)와 규칙이 다르다: 물리 키는 빈 칸을 뒤 편지가 채우지만, 플랫폼은 칸을 안 실은 편지로 만든 줄이 `CHZZK`로 굳는다.
 **SOOP 방송은 시작·종료 등 모든 생명주기 편지에 `platform`을 실어야 한다**(종료가 먼저 와 자리표시를 만들면 그 값으로 굳는다).
-첫 값을 지키는 것은 **생명주기 편지 처리기만의 규칙**이다. 수집기가 SOOP 방송을 확인하고 `platform`을 적는 clip 내부 창구
-(POK-397 PR3에서 만든다)는 이미 있는 줄의 값(기본값 `CHZZK` 포함)을 덮어쓸 수 있다.
+첫 값은 **생명주기 편지 처리기만** 정한다. 수집기가 그 플랫폼에서 방송을 확인하고 부르는 clip 내부 창구(POK-397,
+아래 「clip: 플랫폼 묶음」 절)는 `broadcasts.platform`을 안 바꾸고 묶음 표 `broadcast_platforms`에 더한다.
 
 `streamer_id`에 FK를 걸지 않는다 — 그 표는 auth 소유이고, 서로의 표를 직접 참조하지
 않는 것이 ADR-022의 경계다.
@@ -2553,6 +2553,21 @@ auth가 탈퇴를 알리는 내부 문 하나: **`DELETE /internal/streamers/{st
 **대상 줄을 `FOR KEY SHARE`로 잡은 채 확인하고 적는다** — 정리가 그 줄을 `FOR UPDATE`로 먼저 잡으므로 둘이 겹치면 한쪽이 기다린다
 (확인과 적기를 가르면 그 사이에 정리가 끼어 대상 없는 줄이 남았다, PR #220 codex).
 
+### clip: 플랫폼 묶음 (POK-397)
+
+한 방송을 치지직과 SOOP에 같이 내보내면 그 방송에 켜진 플랫폼이 둘이다. 수집기가 그 플랫폼에서 방송을 확인하면 알리는 내부 문 하나:
+**`PUT /internal/broadcasts/{streamId}/platforms/{platform}`** (`X-Internal-Token`), 본문 `{"seenAt": ISO}`는 선택(없으면 지금).
+묶음 표 `broadcast_platforms`(`V220`, 기본 키 `(stream_id, platform)`)에 적는다. 편지가 정한 `broadcasts.platform`은 안 바꾼다.
+
+- **204**: 처음이면 줄이 생기고(`first_seen_at` = `last_seen_at` = `seenAt`), 다시 오면 줄은 그대로 하나에 `last_seen_at`만 앞으로 간다
+  (늦게 온 이른 시각은 되돌리지 않는다). 수집기는 같은 것을 여러 번 불러도 된다.
+- **400** `{"error":"invalid_platform"}`: 형식(대문자 영문·숫자·밑줄 1~16자) 밖. 소문자도 형식 밖이다(편지와 같은 판정 한 자리).
+  **400** `{"error":"invalid_seen_at"}`: 시각을 못 읽는다.
+- **404** `{"error":"broadcast_not_found"}`: 방송 줄이 없다(시작 편지보다 알림이 먼저 왔거나 탈퇴로 지워졌다). 줄을 안 만든다.
+  탈퇴 정리가 방송 줄을 잡고 지우는 중에 겹치면 알림이 기다렸다가 외래키 위반을 맞는데, 그것도 404로 답한다(500이 아니다).
+- 방송 줄을 지우면 묶음도 같이 지워진다(`ON DELETE CASCADE`). 정리 코드에 이 표를 지우는 줄이 따로 없다.
+- **꺼진 플랫폼도 줄이 남는다.** 꺼짐은 수집기 방송 정보의 관측 시각으로 판정한다.
+
 ### clip: 시범 운영 측정 재료 (POK-338 · POK-393)
 
 **중간평가에서 약속한 숫자 둘을 정의대로 재려고 남기는 기록이다.** 지나간 기록은 나중에 되살릴 수 없어 시범 운영 전에 쌓기 시작한다.
@@ -3466,7 +3481,7 @@ OBS는 트랙 여섯을 항상 다 보내고 트랙에 이름이 없다(계약9�
 
 | 어디 | 지우는 것 | 언제 |
 |---|---|---|
-| clip 표 | 그 회원의 방송 · 방송 편지 기록 · 카드 · 편집본 · **렌더 뒤 업로드 의도(`upload_requests`, 편집본보다 먼저)** · 완성 영상 · 렌더 주문·보고 · 업로드 기록 · 썸네일 줄 | 알림 뒤 15초 안 |
+| clip 표 | 그 회원의 방송 · 방송 편지 기록 · 카드 · 편집본 · **렌더 뒤 업로드 의도(`upload_requests`, 편집본보다 먼저)** · 완성 영상 · 렌더 주문·보고 · 업로드 기록 · 썸네일 줄 · 플랫폼 묶음(`broadcast_platforms`, 방송 줄 외래키 `ON DELETE CASCADE`로 같이) | 알림 뒤 15초 안 |
 | clip 창고 `CLIPS_BUCKET` | `clips/{clipId}/` · `thumbnails/{live,card,clip}/…jpg` · **`upload-thumbnails/{streamerUserId}/`**(사용자가 올린 썸네일 그림, 스트리머 접두사 하나라 아무 줄도 안 가리키는 그림까지 덮는다, POK-291) | 표 다음 |
 | 1번 장부·창고 `SEGMENT_BUCKET` | 녹화 조각 줄(`stream_segments`)과 그 파일(원본·재생용 사본) · 회차 머리 파일(init) | 창고 다음, 500줄씩 |
 | 수집기 표 | 그 회원이 연동했던 치지직 채널과 탈퇴 때 살아 있던 SOOP 연동 아이디의 채팅 · 후원 · 방송 정보 | 알림 뒤 15초 안, 늦게 적재된 것까지 10분 동안 |
