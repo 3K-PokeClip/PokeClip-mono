@@ -37,11 +37,15 @@ CREATE UNIQUE INDEX IF NOT EXISTS stream_segments_local_path_uq
 -- ACCESS EXCLUSIVE 락부터 잡는다 — 기동마다 실행되는 EnsureSchema 특성상, 장기 SELECT 뒤에
 -- ALTER 가 큐잉되면 그 뒤 모든 쿼리가 줄줄이 막힌다. CHECK 와 같은 DO 블록 패턴으로
 -- 카탈로그를 먼저 보고, 컬럼이 없을 때(사실상 최초 1회)만 ALTER 를 실행한다.
+--
+-- 카탈로그 확인의 비교는 형을 맞춘다(sql_identifier 열은 ::name, oid 열 쪽 regclass 는 ::oid). 맞추지 않으면
+-- pg_catalog 에 정확한 판이 없어, 앱 사용자가 public 에 심은 같은 형의 = 연산자가 먼저 골린다 — 이 문장은
+-- 운영에서 media_owner 로 돈다(search_path 가로채기, media/README.md).
 DO $do$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns
-                   WHERE table_name = 'stream_segments'
-                     AND column_name = 'playback_s3_key') THEN
+                   WHERE table_name::name = 'stream_segments'
+                     AND column_name::name = 'playback_s3_key') THEN
         ALTER TABLE stream_segments
             ADD COLUMN playback_s3_key        text,
             ADD COLUMN playback_upload_state  text        NOT NULL DEFAULT 'pending',
@@ -58,7 +62,7 @@ END $do$;
 DO $do$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_constraint
-                   WHERE conrelid = 'stream_segments'::regclass
+                   WHERE conrelid = 'stream_segments'::regclass::oid
                      AND conname  = 'stream_segments_upload_state_chk'
                      AND contype  = 'c') THEN
         ALTER TABLE stream_segments
@@ -70,7 +74,7 @@ END $do$;
 DO $do$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_constraint
-                   WHERE conrelid = 'stream_segments'::regclass
+                   WHERE conrelid = 'stream_segments'::regclass::oid
                      AND conname  = 'stream_segments_playback_upload_state_chk'
                      AND contype  = 'c') THEN
         ALTER TABLE stream_segments
@@ -126,8 +130,8 @@ CREATE INDEX IF NOT EXISTS stream_sessions_freezing_idx
 DO $do$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns
-                   WHERE table_name  = 'stream_segments'
-                     AND column_name = 'session_id') THEN
+                   WHERE table_name::name  = 'stream_segments'
+                     AND column_name::name = 'session_id') THEN
         ALTER TABLE stream_segments
             ADD COLUMN session_id   text,
             ADD COLUMN playback_pdt timestamptz;
@@ -147,7 +151,7 @@ CREATE INDEX IF NOT EXISTS stream_segments_wall_idx
 DO $do$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_constraint
-                   WHERE conrelid = 'stream_segments'::regclass
+                   WHERE conrelid = 'stream_segments'::regclass::oid
                      AND conname  = 'stream_segments_session_fk' AND contype = 'f') THEN
         ALTER TABLE stream_segments
             ADD CONSTRAINT stream_segments_session_fk
@@ -175,7 +179,7 @@ END $fn$ LANGUAGE plpgsql;
 DO $do$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_trigger
-                   WHERE tgrelid = 'stream_segments'::regclass
+                   WHERE tgrelid = 'stream_segments'::regclass::oid
                      AND tgname  = 'stream_segments_immutable_axes_tg') THEN
         CREATE TRIGGER stream_segments_immutable_axes_tg
             BEFORE UPDATE ON stream_segments
@@ -189,7 +193,7 @@ END $do$;
 CREATE TABLE IF NOT EXISTS stream_cutoffs (
     stream_id    text        PRIMARY KEY,
     cutoff_seq   bigint      NOT NULL,
-    seeded_at    timestamptz NOT NULL DEFAULT now(),
+    seeded_at    timestamptz NOT NULL DEFAULT pg_catalog.now(),
     seed_reason  text        NOT NULL,
     seed_channel text        NOT NULL,
     CONSTRAINT stream_cutoffs_seed_reason_chk  CHECK (seed_reason  IN ('live_ingress','state_obs')),
@@ -203,7 +207,7 @@ CREATE TABLE IF NOT EXISTS stream_published_gaps (
     session_id text NOT NULL REFERENCES stream_sessions(session_id),
     reason text NOT NULL,
     published_state text NOT NULL DEFAULT 'recorded',
-    recorded_at timestamptz NOT NULL DEFAULT now(), put_confirmed_at timestamptz,
+    recorded_at timestamptz NOT NULL DEFAULT pg_catalog.now(), put_confirmed_at timestamptz,
     PRIMARY KEY (stream_id, seq),
     CONSTRAINT stream_published_gaps_reason_chk CHECK (reason IN ('upload_stall','slate','settle_deadline','mixed_boundary')),
     CONSTRAINT stream_published_gaps_state_chk  CHECK (published_state IN ('recorded','put_confirmed','vod_abandoned'))

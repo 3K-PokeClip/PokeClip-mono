@@ -20,7 +20,7 @@ UPDATE stream_sessions
        published_seq      = GREATEST(published_seq, $4),
        manifest_etag      = $5,
        discontinuity_base = $6
- WHERE session_id = $1 AND writer_fence = $2 AND fence_expires_at > now()
+ WHERE session_id = $1 AND writer_fence = $2 AND fence_expires_at > pg_catalog.now()
 RETURNING manifest_gen`
 
 // r4ClearETagSQL 은 R4 다(설계 4.4.3 R4 「최초 생성 경로로 표시」 · 체크리스트 J15) — 객체가 없으면 DB
@@ -30,7 +30,7 @@ RETURNING manifest_gen`
 const r4ClearETagSQL = `
 UPDATE stream_sessions
    SET manifest_etag = NULL
- WHERE session_id = $1 AND writer_fence = $2 AND fence_expires_at > now()
+ WHERE session_id = $1 AND writer_fence = $2 AND fence_expires_at > pg_catalog.now()
 RETURNING manifest_gen`
 
 // reconcile 은 R1 부터 한 번 화해한다 — Head 는 T_pub 마감의 ctx 로 부른다(판단 J8 · 커밋 2 리뷰 인계 — Store 는

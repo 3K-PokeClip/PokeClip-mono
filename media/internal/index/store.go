@@ -181,12 +181,12 @@ WITH ins AS (
        AND i.session_id      IS NOT NULL
        AND i.playback_pdt    IS NOT NULL
        AND i.playback_s3_key IS NOT NULL
-       AND clock_timestamp() - $17::timestamptz <= $18::interval
+       AND pg_catalog.clock_timestamp() - $17::timestamptz <= $18::interval
     ON CONFLICT (stream_id) DO NOTHING
     RETURNING 1
 )
-SELECT (SELECT count(*) FROM ins)  AS inserted,
-       (SELECT count(*) FROM seed) AS seeded`
+SELECT (SELECT pg_catalog.count(*) FROM ins)  AS inserted,
+       (SELECT pg_catalog.count(*) FROM seed) AS seeded`
 
 // setTxnLimitsSQL 은 트랜잭션 지역 상한이자 **판정 시각의 채취 지점**이다.
 // lock_timeout 5s 는 OBS_FRESH(30초)보다 충분히 작아 공시가 성립하고,
@@ -195,15 +195,17 @@ SELECT (SELECT count(*) FROM ins)  AS inserted,
 // 시각을 같은 문장에 실어 왕복을 늘리지 않는다. FROM 절의 하위 질의가 먼저 평가되므로
 // 상한이 걸린 **뒤**의 시각인 것이 문장 구조로 보장된다.
 const setTxnLimitsSQL = `
-SELECT clock_timestamp()
-  FROM (SELECT set_config('lock_timeout','5s',true),
-               set_config('statement_timeout','10s',true)) AS _limits`
+SELECT pg_catalog.clock_timestamp()
+  FROM (SELECT pg_catalog.set_config('lock_timeout','5s',true),
+               pg_catalog.set_config('statement_timeout','10s',true)) AS _limits`
 
 // lockCutoffStreamSQL 은 주조 직렬화 락이자 **락 대기 뒤 판정 시각**의 채취다.
 // 마찬가지로 FROM 절이 먼저 평가되므로 시각은 언제나 락 획득 이후다.
+// hashtext 는 integer 를 내고 pg_catalog 의 잠금 함수는 bigint 판뿐이라 ::bigint 로 정확히 맞춘다 — 맞추지 않으면
+// public 의 integer 판(앱 사용자가 만들 수 있다)이 먼저 골린다. 값은 암묵 변환과 같아 잠금 열쇠는 그대로다.
 const lockCutoffStreamSQL = `
-SELECT clock_timestamp()
-  FROM (SELECT pg_advisory_xact_lock(hashtext('pc_cutoff_' || $1::text))) AS _lock`
+SELECT pg_catalog.clock_timestamp()
+  FROM (SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtext('pc_cutoff_' || $1::text)::bigint)) AS _lock`
 
 const cutoffExistsSQL = `SELECT EXISTS (SELECT 1 FROM stream_cutoffs WHERE stream_id = $1)`
 
@@ -547,7 +549,7 @@ UPDATE stream_segments
    SET duration_ms = $3, bytes = $4
  WHERE stream_id = $1
    AND seq = $2
-   AND seq = (SELECT max(seq) FROM stream_segments WHERE stream_id = $1)
+   AND seq = (SELECT pg_catalog.max(seq) FROM stream_segments WHERE stream_id = $1)
    AND upload_state = 'pending'`
 
 func (s *pgStore) UpdateTail(ctx context.Context, streamID string, seq int64, durationMS int32, bytes int64) (bool, error) {
@@ -565,7 +567,7 @@ func (s *pgStore) UpdateTail(ctx context.Context, streamID string, seq int64, du
 // 불일치 결속 CTE 와 같은 술어이고, 세 문장은 session/end_session_pg_test.go 가 대조한다(계획 부기 21).
 const endLiveSQL = `
 UPDATE stream_sessions
-   SET state = 'ending', ending_at = now(), end_reason = 'offline'
+   SET state = 'ending', ending_at = pg_catalog.now(), end_reason = 'offline'
  WHERE stream_id = $1 AND state = 'live'
 RETURNING session_id`
 

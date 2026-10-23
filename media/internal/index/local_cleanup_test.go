@@ -82,7 +82,7 @@ func TestRowLockTxnSetsLimitsBeforeLocking(t *testing.T) {
 // E1 — 외부 삭제 나이는 조각 **시작** 시각으로 잰다. MediaMTX 정리기가 파일명의 시작 시각으로
 // 판정하기 때문이다(_workspace/07 2 · 5항). 끝 시각으로 재면 조각 길이만큼 늦게 인정한다.
 func TestDeletableSegmentsExternalDueIsMeasuredFromStart(t *testing.T) {
-	const want = "t.start_wall_utc < now() - make_interval(secs => $6::double precision) AS external_delete_due"
+	const want = "t.start_wall_utc < pg_catalog.now() - pg_catalog.make_interval(secs => $6::double precision) AS external_delete_due"
 	if !strings.Contains(oneLine(deletableSegmentsSQL), want) {
 		t.Fatalf("deletableSegmentsSQL 에 %q 가 없다", want)
 	}

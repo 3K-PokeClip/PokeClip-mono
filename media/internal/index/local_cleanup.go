@@ -63,20 +63,22 @@ const cutoffRowExists = `EXISTS (SELECT 1 FROM stream_segments c
 //     'infinity' 로 펴서 보호를 유지한다.
 //
 // 정렬은 (stream_id, seq) 키셋이다. 커서 비교는 ORDER BY 와 같은 순서여야 한다.
+// duration_ms(integer) 는 ::double precision 으로 맞춘다 — pg_catalog 에는 integer * interval 이 없어, 맞추지 않으면
+// public 의 integer 판 연산자(앱 사용자가 만들 수 있다)가 먼저 골린다. 값은 암묵 변환과 같다.
 const deletableSegmentsSQL = `
 SELECT t.stream_id, t.seq, t.local_path, b.grace_basis,
-       t.start_wall_utc < now() - make_interval(secs => $6::double precision) AS external_delete_due
+       t.start_wall_utc < pg_catalog.now() - pg_catalog.make_interval(secs => $6::double precision) AS external_delete_due
   FROM stream_segments t
   LEFT JOIN stream_cutoffs cut ON cut.stream_id = t.stream_id
   CROSS JOIN LATERAL (
        SELECT GREATEST(t.uploaded_at, t.playback_uploaded_at,
-                       t.start_wall_utc + t.duration_ms * interval '1 millisecond') AS grace_basis) b
+                       t.start_wall_utc + t.duration_ms::double precision * interval '1 millisecond') AS grace_basis) b
  WHERE t.local_path IS NOT NULL
    AND t.upload_state = 'uploaded'
    AND ( cut.stream_id IS NULL OR t.seq < cut.cutoff_seq
          OR t.playback_upload_state = 'uploaded' )
    AND ( cut.stream_id IS NULL OR ` + cutoffRowExists + ` )
-   AND b.grace_basis < now() - make_interval(secs => $1::double precision)
+   AND b.grace_basis < pg_catalog.now() - pg_catalog.make_interval(secs => $1::double precision)
    AND NOT EXISTS (
        SELECT 1 FROM stream_sessions s
         WHERE s.session_id = t.session_id
@@ -93,12 +95,12 @@ SELECT t.stream_id, t.seq, t.local_path, b.grace_basis,
                         ORDER BY g.seq LIMIT 1)
           AND ( s.state = 'live'
                 OR COALESCE(GREATEST(s.ending_at, s.ended_at,
-                       (SELECT g.start_wall_utc + g.duration_ms * interval '1 millisecond'
+                       (SELECT g.start_wall_utc + g.duration_ms::double precision * interval '1 millisecond'
                           FROM stream_segments g
                          WHERE g.stream_id = s.stream_id AND g.session_id = s.session_id
                          ORDER BY g.seq DESC LIMIT 1)),
                      'infinity'::timestamptz)
-                   >= now() - make_interval(secs => $2::double precision + $1::double precision)
+                   >= pg_catalog.now() - pg_catalog.make_interval(secs => $2::double precision + $1::double precision)
                 OR EXISTS (SELECT 1 FROM stream_sessions h
                             WHERE h.stream_id = s.stream_id
                               AND h.inherits_session = s.session_id
@@ -122,9 +124,9 @@ UPDATE stream_segments SET local_path = NULL
 // schemaReadySQL — 판정이 쓰는 표 셋이 모두 보이는가. EnsureSchema 는 한 트랜잭션이라
 // 셋이 보이면 DDL 이 커밋된 것이다.
 const schemaReadySQL = `
-SELECT to_regclass('stream_segments') IS NOT NULL
-   AND to_regclass('stream_sessions') IS NOT NULL
-   AND to_regclass('stream_cutoffs')  IS NOT NULL`
+SELECT pg_catalog.to_regclass('stream_segments') IS NOT NULL
+   AND pg_catalog.to_regclass('stream_sessions') IS NOT NULL
+   AND pg_catalog.to_regclass('stream_cutoffs')  IS NOT NULL`
 
 // 잠금 트랜잭션의 세 문장 — 순서가 계약이다(lockRow).
 //
@@ -138,8 +140,8 @@ SELECT to_regclass('stream_segments') IS NOT NULL
 //   - 선잠금은 한 표 한 행이고(JOIN 0 — D36) NOWAIT 다: 잠금 경합은 파일을 건드리기 전에
 //     55P03 으로 갈라진다. 비교는 Go 에서 한다 — 0행 · 다른 값을 한 왕복에 가른다.
 const (
-	setRowLockTxnTimeoutSQL  = `SELECT set_config('transaction_timeout', $1, true)`
-	setRowLockAsyncCommitSQL = `SELECT set_config('synchronous_commit','off',true)`
+	setRowLockTxnTimeoutSQL  = `SELECT pg_catalog.set_config('transaction_timeout', $1, true)`
+	setRowLockAsyncCommitSQL = `SELECT pg_catalog.set_config('synchronous_commit','off',true)`
 	rowLockSQL               = `SELECT local_path FROM stream_segments WHERE stream_id = $1 AND seq = $2 FOR UPDATE NOWAIT`
 )
 

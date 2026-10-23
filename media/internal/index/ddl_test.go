@@ -3,6 +3,8 @@ package index
 import (
 	"context"
 	"testing"
+
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/pgtest"
 )
 
 // EnsureSchema 는 기동마다 실행된다 — 멱등이 아니면 "두 번째 기동"이 죽는다.
@@ -17,6 +19,20 @@ func TestEnsureSchemaIsIdempotent(t *testing.T) {
 			t.Fatalf("EnsureSchema 재실행 %d회차 실패 — 멱등이 깨졌다(기동마다 실행되는 함수다): %v", i+2, err)
 		}
 	}
+}
+
+// 운영 스키마 적용(stream_schema.sql — schemaDDL 의 사본)은 마스터가 media_owner 로 돌리고, 다시 돌려도 같은 상태로
+// 수렴하므로 앱 사용자가 public 에 덫을 심은 뒤에도 돈다. 재실행이 카탈로그 확인 DO 블록을 지날 때 덫(oid = regclass
+// · sql_identifier = 문자열 등)을 하나도 부르지 않는다.
+func TestEnsureSchemaRerunIgnoresSearchPathTraps(t *testing.T) {
+	pool := newTestPool(t)
+	traps := pgtest.PlantSearchPathTraps(t, pool)
+
+	if err := EnsureSchema(context.Background(), pool); err != nil {
+		t.Fatalf("덫이 있는 DB 의 EnsureSchema 재실행 오류 = %v, want nil", err)
+	}
+
+	traps.RequireNotCalled(t)
 }
 
 // CHECK 2종이 실물에 있어야 한다 (upload_state = 계약 5-3, playback_upload_state = 5-5).

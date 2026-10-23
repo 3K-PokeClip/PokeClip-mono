@@ -419,6 +419,13 @@ SELECT has_schema_privilege('media_indexer', 'public', 'CREATE');  -- false 여�
   (`internal/pgtest/role.go` · 위 블록 · 운영 GRANT 를 함께), 새 열은 표
   단위 권한을 자동으로 받으므로 사이드카가 그 열을 고쳐도 되는지 본다.
 
+**SQL 규약 — 내장 함수는 `pg_catalog` 로 한정한다.** 운영 DB 의 앱 사용자
+넷은 `public` CREATE 를 가져 맨 이름 함수 · 연산자를 가로챌 수 있다
+(CVE-2018-1058 계열). 새 SQL(사이드카 · janitor · `ddl.go`)은
+`pg_catalog.now()` 꼴로 쓰고, `pg_catalog` 에 정확한 판이 없는 형은 캐스트로
+맞춘다(`::bigint` · `::double precision` · `::oid` · `::name`). 시험은
+`internal/pgtest/searchpath.go` 의 덫이다.
+
 **잔여 위험.** 이 목록이 막지 못하는 것이다.
 
 - **표 단위 UPDATE 는 사이드카가 쓰지 않는 열도 연다.** 예:

@@ -77,6 +77,7 @@ func stateOfSession(t *testing.T, pool *pgxpool.Pool, id string) (string, string
 // 돌고 회차 표가 기대대로 바뀐다.
 func TestMediaIndexerRoleDecidesAndOpensSessions(t *testing.T) {
 	admin := newTestPool(t)
+	traps := pgtest.PlantSearchPathTraps(t, admin)
 	role := pgtest.NewMediaIndexerRole(t, admin)
 	t.Cleanup(func() { role.RequireNoneDenied(t) })
 	stream := "role-sess"
@@ -107,6 +108,7 @@ func TestMediaIndexerRoleDecidesAndOpensSessions(t *testing.T) {
 		"currentLiveSQL": currentLiveSQL, "previousSessionSQL": previousSessionSQL,
 		"endSessionSQL": endSessionSQL, "openSessionSQL": openSessionSQL,
 	})
+	traps.RequireNotCalled(t)
 }
 
 // 음성 대조 — 권한 하나를 거두면 그 권한을 쓰는 문장이 42501 이다.

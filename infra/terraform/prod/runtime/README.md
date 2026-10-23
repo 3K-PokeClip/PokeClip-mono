@@ -171,13 +171,11 @@ CREATE 는 1단-가가 했습니다(POK-407 · kty 2026-10-24). 잊지 않도록
 *   관리형 마스터 비밀(`rds!db-*`)의 생성 · 태그 동작은 `runtime-1a` 묶음이
     그릇 경로(`pokeclip/prod/*`)로 대신 판정합니다. SCP 가 그 이름만 거부하면
     점검은 통과하고 apply 가 거부로 멈춥니다(런북 2).
-*   앱 사용자 넷이 `public` CREATE 를 가져, 같은 DB 의 media 계정 세션이 맨
-    이름으로 부르는 함수를 가로챌 수 있습니다(CVE-2018-1058 계열). 사이드카 ·
-    janitor SQL 은 스키마를 한정하지 않고 `search_path` 도 고정하지 않습니다 —
-    로컬 PG 17 에서 `public.pg_advisory_xact_lock(integer)` 를 만들면 컷오프
-    잠금(`media/internal/index/store.go` 의 `lockCutoffStreamSQL`)이 그 함수를
-    media 계정 신분으로 부릅니다(2026-10-24 실측). 막는 안은 1단-나 이월의
-    앱별 스키마입니다.
+*   앱 사용자 넷이 `public` CREATE 를 가져, 같은 DB 의 다른 계정 세션이 맨
+    이름으로 부르는 함수 · 연산자를 가로챌 수 있습니다(CVE-2018-1058 계열).
+    사이드카 · janitor SQL 과 스키마 사본(`sql/stream_schema.sql`)은 이 PR 에서
+    `pg_catalog` 로 한정하고 형을 맞췄습니다(규약은 `media/README.md`) —
+    근본(앱별 스키마)은 1단-나 · 3번 협의입니다.
 
 ## See also
 
