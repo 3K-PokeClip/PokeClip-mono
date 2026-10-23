@@ -11,6 +11,7 @@ const STORAGE_KEY = 'pc-auth';
 interface Tab {
   store: AuthModule['useAuthStore'];
   onSessionChange: (listener: () => void) => void;
+  captureSession: AuthModule['captureSession'];
   close: () => void;
 }
 
@@ -25,6 +26,7 @@ async function openTab(): Promise<Tab> {
     onSessionChange: (listener) => {
       offs.push(mod.onCrossTabSessionChange(listener));
     },
+    captureSession: mod.captureSession,
     // 모듈 스코프의 window 리스너는 떼어낼 수 없어 고아 인스턴스가 남는다. 수신·폴백 경로는
     // localStorage를 쓰지도 메시지를 보내지도 않으므로 무해하지만, 테스트가 건 구독자(회전을
     // 일으킨다)는 반드시 푼다 — 하나라도 남으면 다음 테스트가 핑퐁한다.
@@ -248,5 +250,99 @@ describe('다중 탭 세션 동기화 (POK-211)', () => {
 
     expect(b.store.getState()).toMatchObject({ accessToken: null, refreshToken: 'refresh-1' });
     expect(listener).toHaveBeenCalledTimes(1);
+  });
+});
+
+// 세션 세대 (POK-222): 연동 왕복처럼 응답이 늦게 오는 작업이 「시작한 세션이 아직 그대로인가」를
+// 묻는다. 계정이 바뀌었을 수 있는 순간(로그인·로그아웃·폴백 동기화)에만 바뀌고, 같은 세션의
+// 회전에는 안 바뀐다: 회전까지 막으면 30분마다 정상 왕복이 결과를 잃는다.
+describe('세션 세대 (POK-222)', () => {
+  it('다른 탭의 회전은 같은 세션이다: 채널로 이어받아도 세대가 그대로다', async () => {
+    const a = await openTab();
+    const b = await openTab();
+    vi.useFakeTimers();
+    seedSession('refresh-0', [
+      [a, 'a-access-0'],
+      [b, 'b-access-0'],
+    ]);
+    const isCurrent = b.captureSession();
+
+    a.store.getState().rotateTokens({ accessToken: 'access-1', refreshToken: 'refresh-1' });
+    fireStorage();
+    await vi.advanceTimersByTimeAsync(200);
+
+    expect(b.store.getState().refreshToken).toBe('refresh-1'); // 회전을 실제로 이어받았다
+    expect(isCurrent()).toBe(true);
+  });
+
+  it('다른 탭의 로그인은 세대를 바꾼다', async () => {
+    const a = await openTab();
+    const b = await openTab();
+    seedSession('refresh-0', [
+      [a, 'a-access-0'],
+      [b, 'b-access-0'],
+    ]);
+    const isCurrent = b.captureSession();
+
+    a.store.getState().setTokens({ accessToken: 'other-access', refreshToken: 'other-refresh' });
+
+    expect(isCurrent()).toBe(false);
+  });
+
+  it('다른 탭의 로그아웃은 세대를 바꾼다', async () => {
+    const a = await openTab();
+    const b = await openTab();
+    seedSession('refresh-0', [
+      [a, 'a-access-0'],
+      [b, 'b-access-0'],
+    ]);
+    const isCurrent = b.captureSession();
+
+    a.store.getState().clearTokens();
+
+    expect(isCurrent()).toBe(false);
+  });
+
+  it('메시지를 놓쳐 정본으로 맞출 때는 회전인지 교체인지 모르므로 세대를 바꾼다', async () => {
+    const b = await openTab();
+    vi.useFakeTimers();
+    seedSession('refresh-0', [[b, 'b-access-0']]);
+    const isCurrent = b.captureSession();
+
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ v: 1, refreshToken: 'refresh-9' }));
+    fireStorage();
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(b.store.getState().refreshToken).toBe('refresh-9');
+    expect(isCurrent()).toBe(false);
+  });
+
+  it('정본이 이미 같으면 폴백이 돌아도 세대는 그대로다', async () => {
+    const b = await openTab();
+    vi.useFakeTimers();
+    seedSession('refresh-0', [[b, 'b-access-0']]);
+    const isCurrent = b.captureSession();
+
+    fireStorage();
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(isCurrent()).toBe(true);
+  });
+
+  it('이 탭의 회전은 세대를 안 바꾸고, 이 탭의 로그인·로그아웃은 바꾼다', async () => {
+    const a = await openTab();
+    seedSession('refresh-0', [[a, 'a-access-0']]);
+
+    const beforeRotate = a.captureSession();
+    a.store.getState().rotateTokens({ accessToken: 'access-1', refreshToken: 'refresh-1' });
+    expect(beforeRotate()).toBe(true);
+
+    const beforeLogin = a.captureSession();
+    a.store.getState().setTokens({ accessToken: 'other-access', refreshToken: 'other-refresh' });
+    expect(beforeLogin()).toBe(false);
+
+    const beforeLogout = a.captureSession();
+    a.store.getState().clearTokens();
+    expect(beforeLogout()).toBe(false);
   });
 });

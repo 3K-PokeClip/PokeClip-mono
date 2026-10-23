@@ -139,7 +139,26 @@ export function onCrossTabSessionChange(listener: () => void): () => void {
 }
 
 function notifySessionChanged() {
+  advanceSession();
   crossTabListeners.forEach((listener) => listener());
+}
+
+// 세션 세대 (POK-222): 응답이 늦게 오는 작업(채널 연동 콜백·해제)이 「시작한 세션이 아직
+// 그대로인가」를 묻는 근거다. 그 사이 다른 탭이 계정을 바꾸면 Providers가 캐시를 비우는데,
+// 앞 계정의 응답이 그 뒤에 도착해 채널명을 토스트로 띄우거나 캐시에 값을 되심으면 다음
+// 사람 화면에 남의 연동이 그려진다. 계정이 바뀌었을 수 있는 순간(로그인·로그아웃·폴백
+// 동기화)에만 올리고 같은 세션의 회전에는 안 올린다: 회전마다 올리면 정상 왕복이 30분마다
+// 결과를 잃는다. 폴백은 회전이었을 수도 있지만 구분할 수 없어 캐시 비움과 같은 쪽에 선다.
+let sessionGeneration = 0;
+
+function advanceSession() {
+  sessionGeneration += 1;
+}
+
+/** 지금 세션을 적어 두고, 나중에 「아직 같은 세션인가」를 답하는 함수를 돌려준다. */
+export function captureSession(): () => boolean {
+  const captured = sessionGeneration;
+  return () => captured === sessionGeneration;
 }
 
 // ── 채널 ─────────────────────────────────────────────────────────────────────
@@ -268,6 +287,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
     const next = pickPair(pair);
     // 방금 서버가 준 값이 정본이다 — localStorage를 읽을 필요가 없으니 hydrated도 세운다.
     set({ ...next, hydrated: true, rotatedFrom: null });
+    advanceSession();
     persistRefreshToken(next.refreshToken); // 정본 먼저 — 여기서 탭이 죽어도 새 refresh가 남는다
     post({ v: 1, type: 'login', pair: next });
   },
@@ -287,6 +307,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
   clearTokens: () => {
     bindCrossTabSync();
     set({ accessToken: null, refreshToken: null, hydrated: true, rotatedFrom: null });
+    advanceSession();
     persistRefreshToken(null);
     post({ v: 1, type: 'logout' });
   },

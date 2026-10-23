@@ -9,6 +9,7 @@ import {
   type YoutubeLinkState,
 } from '@/api/youtubeLink';
 import { track } from '@/lib/analytics';
+import { captureSession } from '@/stores/auth';
 import { useToast } from '@/ui';
 import {
   assertYoutubeConsentUrl,
@@ -68,12 +69,17 @@ export function useYoutubeLinkState(): YoutubeLinkViewState {
       assertYoutubeConsentUrl(authorizeUrl);
       return authorizeUrl;
     },
-    onSuccess: (authorizeUrl) => {
+    // 동의 주소는 요청한 회원 몫이다(state가 회원에 묶인다, POK-222): 보낼 때의 세션을 적어 둔다.
+    onMutate: () => ({ isSameSession: captureSession() }),
+    onSuccess: (authorizeUrl, _variables, sent) => {
+      // 그 사이 계정이 바뀌었으면 다음 사람을 앞 계정의 동의 화면으로 보내지 않는다.
+      if (!sent.isSameSession()) return;
       // 등록 주소가 어긋나 있으면 동의를 다 마친 뒤에야 증상이 나온다 — 개발 빌드에서 미리 알린다.
       warnIfCallbackMismatch(authorizeUrl);
       goToYoutubeConsent(authorizeUrl);
     },
-    onError: () => {
+    onError: (_error, _variables, sent) => {
+      if (sent?.isSameSession() === false) return;
       // 401은 apiFetch가 회전을 시도하고 AuthGuard가 /login으로 보낸다 — 별도 문구 없음.
       toast({
         tone: 'error',
@@ -85,7 +91,12 @@ export function useYoutubeLinkState(): YoutubeLinkViewState {
 
   const unlink = useMutation({
     mutationFn: unlinkYoutube,
-    onSuccess: () => {
+    // 응답을 기다리는 사이 다른 탭이 계정을 바꿀 수 있다 (POK-222): 보낼 때의 세션을 적어 둔다.
+    onMutate: () => ({ isSameSession: captureSession() }),
+    onSuccess: (_data, _variables, sent) => {
+      // 계정이 바뀌었으면 아무것도 반영하지 않는다. 크로스탭 핸들러가 비운 캐시에 앞 계정의
+      // 「미연동」을 되심으면, 이어지는 재조회가 실패할 때 그 값이 다음 사람의 연동을 덮는다.
+      if (!sent.isSameSession()) return;
       // 재조회가 끝나기 전에도 행이 미연동으로 서게 캐시를 먼저 갱신한다.
       queryClient.setQueryData<YoutubeLinkState>(youtubeLinkQueryOptions.queryKey, {
         linked: false,
@@ -107,7 +118,9 @@ export function useYoutubeLinkState(): YoutubeLinkViewState {
         },
       });
     },
-    onError: () => {
+    onError: (_error, _variables, sent) => {
+      // 앞 계정의 실패도 다음 사람에게는 엉뚱한 안내다.
+      if (sent?.isSameSession() === false) return;
       toast({
         tone: 'error',
         title: '연동 해제에 실패했어요',
