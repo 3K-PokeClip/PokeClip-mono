@@ -191,20 +191,27 @@ export function takePlaybackDrop(streamId: string): boolean {
 }
 
 /**
- * 다시보기 &lt;video&gt;가 오류를 냈을 때: 응답 코드를 못 읽으므로 같은 주소의 첫 바이트를 물어 403인지 본다. 403이면 출입증을 버리고
- * 다시 받은 뒤 true(부른 쪽이 그 주소를 다시 붙인다). 403이 아니면(틈 · 서버 오류) false
+ * &lt;video&gt;는 응답 코드를 못 읽으므로 같은 주소의 첫 바이트를 물어 403인지 본다. 묻지 못했으면(네트워크 오류) 403이 아니다
  */
-export async function recoverForbiddenRecording(url: string, mediaKey: string): Promise<boolean> {
+export async function isPlaybackForbidden(url: string): Promise<boolean> {
   try {
     const res = await fetch(url, {
       credentials: mediaCredentials(),
       headers: { range: 'bytes=0-0' },
     });
     void res.body?.cancel();
-    if (res.status !== 403) return false;
+    return res.status === 403;
   } catch {
     return false;
   }
+}
+
+/**
+ * 다시보기 &lt;video&gt;가 오류를 냈을 때: 403인지 물어(isPlaybackForbidden) 403이면 출입증을 버리고 다시 받은 뒤 true(부른 쪽이 그
+ * 주소를 다시 붙인다). 403이 아니면(틈 · 서버 오류) false
+ */
+export async function recoverForbiddenRecording(url: string, mediaKey: string): Promise<boolean> {
+  if (!(await isPlaybackForbidden(url))) return false;
   reportPlaybackForbidden(mediaKey);
   await ensureMediaAccess(mediaKey);
   return true;

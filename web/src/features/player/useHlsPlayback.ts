@@ -10,7 +10,11 @@ import {
   programDateAt,
   rewindWindowSeconds,
 } from './dvrWindow';
-import { recoverForbiddenRecording, reportPlaybackForbidden } from '@/api/playbackAccess';
+import {
+  isPlaybackForbidden,
+  recoverForbiddenRecording,
+  reportPlaybackForbidden,
+} from '@/api/playbackAccess';
 import { HLS_DVR_CONFIG } from './hlsConfig';
 import { behindFromSeekFraction, isAtEdge } from './playerMath';
 import { useControlsAutoHide } from './useControlsAutoHide';
@@ -33,6 +37,8 @@ const STOPPED_NOTES = {
   // 출입증을 버렸으니 라이브 화면이 1분 안에 다시 받고 재생기를 새로 세운다(LiveScreen의 accessRecoveries)
   forbidden: '영상 출입증이 끝나 다시 받고 있어요',
   broken: '영상이 끊겼어요. 새로고침하면 다시 연결해요',
+  // 다시 받고 새로 선 재생기도 403이다: 서명 설정 문제라 더 받아도 같다(계약3 재시도 정책, POK-419)
+  denied: '영상에 접근할 수 없어요. 새로고침해 주세요',
 } as const;
 
 /** 재생 위치에 영상 자료가 있다(HTMLMediaElement.HAVE_CURRENT_DATA) */
@@ -55,6 +61,8 @@ export interface LivePosition {
  * @param onSeek 사람이 옮겼다(시크바·키·실시간으로·카드). 재생으로 흐를 때는 부르지 않는다: 라이브 채팅이 맨 아래(되감은 자리,
  *   실시간이면 최신)로 간다(POK-326)
  * @param mediaKey 영상 키(출입증 쿠키의 경로). 영상 요청이 403이면 그 키의 출입증을 버린다(POK-410). 없으면 버리지 않는다
+ * @param afterForbidden 이 재생기는 403으로 출입증을 다시 받은 뒤 새로 섰다. 영상 조각을 하나도 못 받은 채 또 403이면 더 받지 않고
+ *   멈춘다(계약3 재시도 정책: 재호출 1회 뒤에도 403이면 접근 불가, POK-419). 한 번이라도 받았으면 회복한 것이라 다음 403은 다시 받는다
  */
 export function useHlsPlayback(
   videoRef: RefObject<HTMLVideoElement | null>,
@@ -62,6 +70,7 @@ export function useHlsPlayback(
   options: PlayerSimulationOptions = {},
   onSeek?: () => void,
   mediaKey?: string,
+  afterForbidden = false,
 ): PlayerSimulation & { livePosition: LivePosition | null } {
   // playing은 video 이벤트로만 바꾼다 — 자동재생이 거부되면 false로 남아 재생 버튼이 노출된다
   const [playing, setPlaying] = useState(false);
@@ -86,6 +95,8 @@ export function useHlsPlayback(
   // 키가 늦게 와도 재생기를 다시 세우지 않는다(효과는 src에만 걸린다): 오류가 난 그때의 키를 읽는다
   const mediaKeyRef = useRef(mediaKey);
   mediaKeyRef.current = mediaKey;
+  const afterForbiddenRef = useRef(afterForbidden);
+  afterForbiddenRef.current = afterForbidden;
   const { controlsVisible, wake, sleep } = useControlsAutoHide(playing);
 
   const hlsRef = useRef<Hls | null>(null);
@@ -220,6 +231,14 @@ export function useHlsPlayback(
     let recoveredMedia = false;
     // 브라우저 기본 HLS(옛 iOS Safari)의 오류 처리. hls.js 갈래에서만 단다
     let onNativeError: (() => void) | null = null;
+    // 영상 조각을 한 번이라도 받았나(hls.js 조각 받기 완료 · 기본 재생 loadeddata). 받았으면 403에서 회복한 것이다. 목록 읽기로
+    // 가르면 목록만 열리고 조각이 403인 곳에서 1분마다 다시 받았다(로컬 리뷰 1라운드)
+    let healed = false;
+    const onHealed = () => {
+      healed = true;
+    };
+    // 다시 받은 뒤에도 그대로 403이면 더 받지 않는다(POK-419)
+    const stillForbidden = () => afterForbiddenRef.current && !healed;
 
     // src 전환(?stream= 변경) 시 이전 스트림의 상태가 남지 않게 초기화 — 첫 마운트에선
     // 같은 값이라 no-op. 새 소스의 자동재생이 거부되면 playing=false로 남아 재생 버튼이 노출된다.
@@ -291,8 +310,12 @@ export function useHlsPlayback(
             data.response?.code === 403 &&
             key !== undefined
           ) {
-            reportPlaybackForbidden(key);
-            setStopped({ src, why: 'forbidden' });
+            if (stillForbidden()) {
+              setStopped({ src, why: 'denied' });
+            } else {
+              reportPlaybackForbidden(key);
+              setStopped({ src, why: 'forbidden' });
+            }
             hls.destroy();
             hlsRef.current = null;
             return;
@@ -314,6 +337,7 @@ export function useHlsPlayback(
           hls.destroy();
           hlsRef.current = null;
         });
+        hls.on(HlsCtor.Events.FRAG_LOADED, onHealed);
         hls.on(HlsCtor.Events.MANIFEST_PARSED, () => {
           // 자동재생 거부는 reject로 온다 — playing=false로 남아 재생 버튼이 노출된다
           video.play().catch(() => {});
@@ -331,11 +355,18 @@ export function useHlsPlayback(
             setStopped({ src, why: 'broken' });
             return;
           }
+          if (stillForbidden()) {
+            void isPlaybackForbidden(src).then((forbidden) => {
+              if (!disposed) setStopped({ src, why: forbidden ? 'denied' : 'broken' });
+            });
+            return;
+          }
           void recoverForbiddenRecording(src, key).then((forbidden) => {
             if (!disposed) setStopped({ src, why: forbidden ? 'forbidden' : 'broken' });
           });
         };
         video.addEventListener('error', onNativeError);
+        video.addEventListener('loadeddata', onHealed);
         video.src = src;
         video.play().catch(() => {});
       } else {
@@ -351,6 +382,7 @@ export function useHlsPlayback(
       video.removeEventListener('volumechange', onVolumeChange);
       video.removeEventListener('timeupdate', paint);
       if (onNativeError !== null) video.removeEventListener('error', onNativeError);
+      video.removeEventListener('loadeddata', onHealed);
       hlsRef.current?.destroy();
       hlsRef.current = null;
       // src 제거만으로는 네트워크·디코더가 붙어 있다 — load()까지 해야 리소스가 해제된다

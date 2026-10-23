@@ -129,6 +129,10 @@ const hlsFake = vi.hoisted(() => ({
   error: null as ((event: string, data: unknown) => void) | null,
   /** hls.js를 쓸 수 있나. 아니면 브라우저 기본 HLS(옛 iOS Safari)로 튼다 */
   supported: true,
+  /** 영상 목록을 읽어 내나. 아니면 목록 읽기 완료(MANIFEST_PARSED)가 오지 않는다(CDN이 계속 403인 곳, POK-419) */
+  manifest: true,
+  /** 영상 조각을 받아 내나. 아니면 조각 받기 완료(FRAG_LOADED)가 오지 않는다(목록만 열리고 조각이 403인 곳, POK-419) */
+  frags: true,
 }));
 /** 재생기가 서는 라이브 끝(영상 초): 영상 끝(지금)에서 2초 뒤다 */
 function liveSyncSeconds(): number {
@@ -139,7 +143,11 @@ vi.mock('hls.js', () => {
     static isSupported() {
       return hlsFake.supported;
     }
-    static Events = { ERROR: 'hlsError', MANIFEST_PARSED: 'hlsManifestParsed' };
+    static Events = {
+      ERROR: 'hlsError',
+      MANIFEST_PARSED: 'hlsManifestParsed',
+      FRAG_LOADED: 'hlsFragLoaded',
+    };
     static ErrorTypes = { NETWORK_ERROR: 'networkError', MEDIA_ERROR: 'mediaError' };
     private readonly handlers = new Map<string, () => void>();
     on(event: string, handler: () => void) {
@@ -149,7 +157,8 @@ vi.mock('hls.js', () => {
     attachMedia() {}
     loadSource() {
       hlsFake.loads += 1;
-      this.handlers.get('hlsManifestParsed')?.();
+      if (hlsFake.manifest) this.handlers.get('hlsManifestParsed')?.();
+      if (hlsFake.manifest && hlsFake.frags) this.handlers.get('hlsFragLoaded')?.();
     }
     startLoad() {}
     recoverMediaError() {}
@@ -794,6 +803,8 @@ beforeEach(() => {
   hlsFake.seekableEnd = null;
   hlsFake.error = null;
   hlsFake.supported = true;
+  hlsFake.manifest = true;
+  hlsFake.frags = true;
   chatModes.length = 0;
   chatTexts.length = 0;
   playerStatuses.length = 0;
@@ -1177,6 +1188,197 @@ describe('LiveScreen — 영상 출입증', () => {
     expect(accessCalls()).toBe(before + 1);
     expect(hlsFake.loads).toBe(2);
     expect(screen.queryByText('영상 출입증이 끝나 다시 받고 있어요')).toBeNull();
+  });
+
+  it('다시 받아 새로 세운 재생기도 영상 목록을 못 읽고 또 403이면 멈추고 접근할 수 없다고 알린다: 계약3 재시도 정책(POK-419)', async () => {
+    // 서명 설정이 틀린 곳은 출입증을 몇 번 받아도 403이다. 전에는 1분마다 다시 받으며 「다시 받고 있어요」를 끝없이 보였다
+    stubMediaElement();
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', 'http://live.test');
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    server.playback = 'grant';
+    await renderLive();
+    const forbidden = {
+      fatal: true,
+      type: 'networkError',
+      details: 'manifestLoadError',
+      response: { code: 403 },
+    };
+    act(() => hlsFake.error?.('hlsError', forbidden));
+    hlsFake.manifest = false;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    await settle();
+    expect(hlsFake.loads).toBe(2);
+    const calls = accessCalls();
+
+    act(() => hlsFake.error?.('hlsError', forbidden));
+    expect(screen.getByText('영상에 접근할 수 없어요. 새로고침해 주세요')).toBeInTheDocument();
+    expect(screen.queryByText('영상 출입증이 끝나 다시 받고 있어요')).toBeNull();
+
+    // 출입증을 버리지 않아 더 받지도, 재생기를 다시 세우지도 않는다
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120_000);
+    });
+    await settle();
+    expect(hlsFake.loads).toBe(2);
+    expect(accessCalls()).toBe(calls);
+    expect(screen.getByText('영상에 접근할 수 없어요. 새로고침해 주세요')).toBeInTheDocument();
+  });
+
+  it('hls.js가 없는 브라우저도 다시 받아 새로 세운 재생기가 또 403이면 멈추고 접근할 수 없다고 알린다(POK-419)', async () => {
+    stubMediaElement();
+    vi.spyOn(HTMLMediaElement.prototype, 'canPlayType').mockReturnValue('maybe');
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', 'http://live.test');
+    hlsFake.supported = false;
+    server.playback = 'grant';
+    server.liveStatus = 403;
+    const { container } = await renderLive();
+    const first = container.querySelector('video')!;
+    await act(async () => {
+      first.dispatchEvent(new Event('error'));
+    });
+    await settle();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    await settle();
+    const second = container.querySelector('video')!;
+    expect(second).not.toBe(first);
+    const calls = accessCalls();
+
+    // 영상을 하나도 못 받았다(loadeddata 없음): 묻기만 하고 출입증은 버리지 않는다
+    await act(async () => {
+      second.dispatchEvent(new Event('error'));
+    });
+    await settle();
+    expect(screen.getByText('영상에 접근할 수 없어요. 새로고침해 주세요')).toBeInTheDocument();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120_000);
+    });
+    await settle();
+    expect(container.querySelector('video')).toBe(second);
+    expect(accessCalls()).toBe(calls);
+  });
+
+  it('다시 세운 재생기가 영상 목록은 읽어도 조각을 하나도 못 받고 또 403이면 멈춘다: 목록만 열리는 곳에서 1분마다 다시 받지 않는다(POK-419 로컬 리뷰)', async () => {
+    stubMediaElement();
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', 'http://live.test');
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    server.playback = 'grant';
+    await renderLive();
+    const forbidden = {
+      fatal: true,
+      type: 'networkError',
+      details: 'fragLoadError',
+      response: { code: 403 },
+    };
+    act(() => hlsFake.error?.('hlsError', forbidden));
+    hlsFake.frags = false;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    await settle();
+    expect(hlsFake.loads).toBe(2);
+
+    act(() => hlsFake.error?.('hlsError', forbidden));
+    expect(screen.getByText('영상에 접근할 수 없어요. 새로고침해 주세요')).toBeInTheDocument();
+  });
+
+  it('갱신 실패로 다시 세운 재생기는 첫 403에서 출입증을 한 번 다시 받는다: 403 때문에 다시 세운 것만 멈출 까닭이다(POK-419)', async () => {
+    stubMediaElement();
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', 'http://live.test');
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    server.playback = 'grant';
+    // 5분 30초짜리라 1분마다 새로 받는다
+    server.playbackTtlMs = 5 * 60_000 + 30_000;
+    await renderLive();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(65_000);
+    });
+    server.playback = 'fail';
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    server.playback = 'grant';
+    hlsFake.manifest = false;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    await settle();
+    expect(hlsFake.loads).toBe(2);
+
+    act(() =>
+      hlsFake.error?.('hlsError', {
+        fatal: true,
+        type: 'networkError',
+        details: 'manifestLoadError',
+        response: { code: 403 },
+      }),
+    );
+    expect(screen.getByText('영상 출입증이 끝나 다시 받고 있어요')).toBeInTheDocument();
+    expect(screen.queryByText('영상에 접근할 수 없어요. 새로고침해 주세요')).toBeNull();
+  });
+
+  it('hls.js가 없는 브라우저도 다시 세운 재생기가 목록을 읽어 회복했으면 나중의 403은 다시 한 번 받아 본다(POK-419)', async () => {
+    stubMediaElement();
+    vi.spyOn(HTMLMediaElement.prototype, 'canPlayType').mockReturnValue('maybe');
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', 'http://live.test');
+    hlsFake.supported = false;
+    server.playback = 'grant';
+    server.liveStatus = 403;
+    const { container } = await renderLive();
+    await act(async () => {
+      container.querySelector('video')!.dispatchEvent(new Event('error'));
+    });
+    await settle();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    await settle();
+    const second = container.querySelector('video')!;
+    act(() => {
+      second.dispatchEvent(new Event('loadeddata'));
+    });
+
+    await act(async () => {
+      second.dispatchEvent(new Event('error'));
+    });
+    await settle();
+    expect(screen.getByText('영상 출입증이 끝나 다시 받고 있어요')).toBeInTheDocument();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    await settle();
+    expect(container.querySelector('video')).not.toBe(second);
+  });
+
+  it('다시 세운 재생기가 영상 목록을 읽어 회복했으면 나중의 403은 다시 한 번 받아 본다: 쿠키가 또 지워진 것이다(POK-419)', async () => {
+    stubMediaElement();
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', 'http://live.test');
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    server.playback = 'grant';
+    await renderLive();
+    const forbidden = {
+      fatal: true,
+      type: 'networkError',
+      details: 'fragLoadError',
+      response: { code: 403 },
+    };
+    act(() => hlsFake.error?.('hlsError', forbidden));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    await settle();
+    expect(hlsFake.loads).toBe(2);
+
+    act(() => hlsFake.error?.('hlsError', forbidden));
+    expect(screen.getByText('영상 출입증이 끝나 다시 받고 있어요')).toBeInTheDocument();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    await settle();
+    expect(hlsFake.loads).toBe(3);
   });
 
   it('출입증을 새로 받는 중에 라이브가 403으로 멎어도 받은 뒤 재생기를 새로 세운다: 받는 중인 것은 버리지 않아 다시 세울 신호가 없었다(로컬 리뷰 1라운드)', async () => {
