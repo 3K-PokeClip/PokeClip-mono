@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { StrictMode } from 'react';
 import { renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { requestSegmentAudioAccess } from '@/api/clipEditor';
@@ -20,7 +21,10 @@ function fakeContext() {
       state: 'running',
       destination: {},
       resume: vi.fn(),
-      close: vi.fn(() => Promise.resolve()),
+      close: vi.fn(function (this: { state: string }) {
+        this.state = 'closed';
+        return Promise.resolve();
+      }),
       decodeAudioData: vi.fn(() => Promise.resolve({ duration: 1 } as AudioBuffer)),
       createGain() {
         const node = { gain: { value: 1 }, connect: vi.fn(), disconnect: vi.fn() };
@@ -86,6 +90,30 @@ describe('useTrackPreview', () => {
     result.current.setGains([1, 0, 0]);
     expect(gains.map((g) => g.gain.value)).toEqual([1, 0, 0]);
     expect(node.muted).toBe(true);
+  });
+
+  it('붙였다 떼었다 다시 붙여도(개발 모드 StrictMode) 닫힌 소리 문맥을 쓰지 않는다', async () => {
+    // 닫힌 문맥은 시계가 0에 멈춰 소리가 안 나고, 어긋남 검사가 0.25초마다 다시 건다(로컬 실화면에서 소리 없음으로 재현)
+    const made: ReturnType<typeof fakeContext>['ctx'][] = [];
+    const { result } = renderHook(
+      () =>
+        useTrackPreview({
+          streamId: 's-1',
+          baseMs: BASE,
+          window: WINDOW,
+          video: video(),
+          createContext: () => {
+            const { ctx } = fakeContext();
+            made.push(ctx);
+            return ctx as never;
+          },
+        }),
+      { wrapper: StrictMode },
+    );
+    await waitFor(() => expect(result.current.status).toBe('ready'));
+    const used = made.filter((ctx) => ctx.decodeAudioData.mock.calls.length > 0);
+    expect(used.length).toBeGreaterThan(0);
+    expect(used.at(-1)!.state).toBe('running');
   });
 
   it('소리 문맥을 못 만들면(브라우저가 안 줌) 묻지도 않고 못 부름이다: 영상 소리가 그대로 난다', async () => {

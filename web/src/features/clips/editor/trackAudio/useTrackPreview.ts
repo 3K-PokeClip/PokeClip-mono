@@ -101,7 +101,10 @@ export function useTrackPreview(options: {
 
   useEffect(
     () => () => {
+      // 닫은 문맥은 다시 못 쓴다(시계가 0에 멈춰 소리가 안 난다). 비워 둬야 다시 붙을 때 새로 만든다:
+      // 개발 모드(StrictMode)는 붙였다 떼었다 다시 붙인다
       void contextRef.current?.close();
+      contextRef.current = null;
     },
     [],
   );
