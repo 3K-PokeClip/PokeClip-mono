@@ -1,9 +1,8 @@
 import { AudioSection } from '../sections/AudioSection';
-import { BgmSfxSection } from '../sections/BgmSfxSection';
 import { ImageSection } from '../sections/ImageSection';
 import { LayoutSection } from '../sections/LayoutSection';
-import { RangeSection } from '../sections/RangeSection';
 import { SubtitleSection } from '../sections/SubtitleSection';
+import { TextSection } from '../sections/TextSection';
 import styles from './StudioScreen.module.css';
 import type { ClipEditorMockState } from '../useClipEditorMockState';
 
@@ -19,13 +18,12 @@ export function ToolPanel({ state }: { state: ClipEditorMockState }) {
       tabIndex={-1}
     >
       {state.activeTool === 'layout' ? <LayoutSection state={state} /> : null}
-      {state.activeTool === 'range' ? <RangeSection state={state} /> : null}
       {state.activeTool === 'subtitle' ? <SubtitleSection state={state} /> : null}
+      {state.activeTool === 'text' ? <TextSection /> : null}
       {state.activeTool === 'audio' ? (
-        <AudioSection state={state} kinds={['mic', 'game']} title="오디오" />
+        <AudioSection state={state} kinds={['mic', 'game', 'bgm', 'sfx']} title="오디오" />
       ) : null}
-      {state.activeTool === 'bgm' ? <BgmSfxSection state={state} /> : null}
-      {state.activeTool === 'image' ? <ImageSection state={state} /> : null}
+      {state.activeTool === 'image' ? <ImageSection /> : null}
     </div>
   );
 }

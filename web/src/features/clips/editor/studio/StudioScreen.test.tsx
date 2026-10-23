@@ -22,7 +22,8 @@ describe('StudioScreen', () => {
       'href',
       '/clips/library',
     );
-    expect(screen.getByRole('button', { name: '템플릿 저장' })).toBeEnabled();
+    // 쇼츠 편집 화면에는 템플릿 저장이 없다(POK-389) — 저장은 편집본 저장 하나다
+    expect(screen.queryByRole('button', { name: '템플릿 저장' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: '업로드' })).toBeEnabled();
     // 아직 편집한 적이 없으니 되돌릴 곳도 없다
     expect(screen.getByRole('button', { name: '작업 이전으로' })).toBeDisabled();
@@ -169,30 +170,27 @@ describe('StudioScreen', () => {
     expect(screen.getByRole('radio', { name: /세로/ })).toBeChecked();
   });
 
-  it('패널 위치 버튼이 레일과 패널을 좌우로 옮긴다 — 미리보기·타임라인은 그대로', async () => {
-    const user = userEvent.setup();
-    renderStudio();
-
-    await user.click(screen.getByRole('tab', { name: '자막' }));
-    const body = screen.getByRole('main');
-    expect(body).toHaveAttribute('data-panel-side', 'left');
-
-    const toggle = screen.getByRole('button', { name: '패널 위치 · 오른쪽으로 옮기기' });
-    await user.click(toggle);
-
-    expect(body).toHaveAttribute('data-panel-side', 'right');
-    // 다시 누르면 돌아갈 수 있게 안내가 뒤집힌다
-    expect(screen.getByRole('button', { name: '패널 위치 · 왼쪽으로 옮기기' })).toBeInTheDocument();
-    // 옮겨도 도구·타임라인은 그대로 선다
-    expect(screen.getByRole('region', { name: '자막' })).toBeInTheDocument();
-    expect(screen.getByRole('region', { name: '타임라인' })).toBeInTheDocument();
-  });
-
-  it('패널 위치는 도구 탭 묶음에 끼지 않는다', () => {
+  it('도구는 쇼츠 만드는 순서대로 다섯이다 — 구간·BGM·효과·패널 위치는 없다(POK-389)', () => {
     renderStudio();
 
     const tabs = screen.getAllByRole('tab').map((t) => t.textContent);
-    expect(tabs).toEqual(['레이아웃', '구간', '자막', '오디오', 'BGM·효과', '이미지']);
+    expect(tabs).toEqual(['레이아웃', '자막', '텍스트', '오디오', '이미지']);
+    expect(screen.queryByRole('button', { name: /패널 위치/ })).not.toBeInTheDocument();
+  });
+
+  it('텍스트·이미지는 준비 중이라 누를 수 있는 버튼이 꺼져 있다', async () => {
+    const user = userEvent.setup();
+    renderStudio();
+
+    await user.click(screen.getByRole('tab', { name: '텍스트' }));
+    const text = screen.getByRole('region', { name: '텍스트' });
+    expect(within(text).getByText('준비 중')).toBeInTheDocument();
+    expect(within(text).getByRole('button', { name: /제목 넣기/ })).toBeDisabled();
+
+    await user.click(screen.getByRole('tab', { name: '이미지' }));
+    const image = screen.getByRole('region', { name: '이미지' });
+    expect(within(image).getByText('준비 중')).toBeInTheDocument();
+    expect(within(image).getByRole('button', { name: /로고 · 스티커 올리기/ })).toBeDisabled();
   });
 
   it('버튼을 누른 뒤에도 ⌘Z가 먹는다 — 포커스가 버튼에 남는 것이 정상 흐름이다', async () => {

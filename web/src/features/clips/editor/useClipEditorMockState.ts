@@ -125,29 +125,9 @@ function sameRect(a: CropRect, b: CropRect): boolean {
 }
 const samePip = sameRect;
 
-/**
- * 도구 레일 + 패널이 붙는 쪽. 시안은 계정 설정에서 온다고 적는다 —
- * 설정 API가 서기 전까지는 브라우저에 적어 두어 "저장된다"는 약속만 지킨다.
- * 배선 티켓에서 이 읽고 쓰는 자리만 설정 API로 갈아끼우면 화면은 그대로다.
- */
-export type EditorPanelSide = 'left' | 'right';
-
-const PANEL_SIDE_STORAGE_KEY = 'pc-editor-panel-side';
-
-function readStoredPanelSide(): EditorPanelSide | null {
-  if (typeof window === 'undefined') return null;
-  try {
-    const raw = window.localStorage.getItem(PANEL_SIDE_STORAGE_KEY);
-    return raw === 'left' || raw === 'right' ? raw : null;
-  } catch {
-    /* 저장소를 못 읽는 브라우저 — 기본값(왼쪽)으로 간다 */
-    return null;
-  }
-}
-
 export type { EditorLayout } from './editorLayout';
 export type SubtitleMode = 'burn-cc' | 'burn' | 'cc';
-export type EditorTool = 'layout' | 'range' | 'subtitle' | 'audio' | 'bgm' | 'image';
+export type EditorTool = 'layout' | 'subtitle' | 'text' | 'audio' | 'image';
 export type EditorTrackKind = 'video' | 'mic' | 'game' | 'bgm' | 'sfx' | 'image';
 
 export interface EditorTrackClip {
@@ -345,14 +325,16 @@ export const SUBTITLE_MODE_OPTIONS: readonly { value: SubtitleMode; label: strin
   { value: 'cc', label: 'CC' },
 ];
 
-/** 시안 좌측 도구 레일 — 순서가 곧 화면 순서다 */
+/**
+ * 시안 좌측 도구 레일 — 순서가 곧 화면 순서다. 쇼츠를 만드는 순서(배치 → 자막 → 글자 → 소리 → 이미지)를 따른다(POK-389).
+ * 「구간」은 타임라인 손잡이·재생 막대의 시작·끝과 같은 일이라 뺐고, BGM·효과음은 오디오 안으로 들어갔다.
+ */
 export const TOOL_OPTIONS: readonly { value: EditorTool; label: string }[] = [
   // 시안 갱신분: 레일 맨 위에 레이아웃이 왔다. 이 도구일 때만 가운데가 원본·결과 2판이 된다.
   { value: 'layout', label: '레이아웃' },
-  { value: 'range', label: '구간' },
   { value: 'subtitle', label: '자막' },
+  { value: 'text', label: '텍스트' },
   { value: 'audio', label: '오디오' },
-  { value: 'bgm', label: 'BGM·효과' },
   { value: 'image', label: '이미지' },
 ];
 
@@ -456,7 +438,6 @@ export interface ClipEditorMockState {
   canRedo: boolean;
   undo: () => void;
   redo: () => void;
-  saveTemplate: () => void;
   saveDraft: () => void;
   requestUpload: () => void;
   uploadLabel: string;
@@ -615,10 +596,6 @@ export interface ClipEditorMockState {
   activeTool: EditorTool;
   toolOptions: readonly { value: EditorTool; label: string }[];
   setActiveTool: (tool: EditorTool) => void;
-  panelSide: EditorPanelSide;
-  /** 버튼에 붙는 안내 — 지금 위치가 아니라 "누르면 갈 곳"을 말한다 */
-  panelSideTip: string;
-  togglePanelSide: () => void;
   timelineCollapsed: boolean;
   toggleTimeline: () => void;
   /** 사용자가 끌어 정한 높이(px). null이면 트랙 수에 맞춘 기본 높이다 */
@@ -692,25 +669,6 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
   // 여기에 고정 픽셀 상한을 걸면 배율이 큰 화면에서 마지막 트랙이 잘린다.
   const [timelineHeight, setTimelineHeightState] = useState<number | null>(null);
   const [zoom, setZoom] = useState(100);
-  // 초기값은 시안 기본(왼쪽). 저장된 값은 마운트 뒤에 읽는다 —
-  // 모듈 스코프나 초기화 함수에서 읽으면 서버가 그린 HTML과 어긋난다(onboarding 스토어 선례).
-  const [panelSide, setPanelSide] = useState<EditorPanelSide>('left');
-  useEffect(() => {
-    const stored = readStoredPanelSide();
-    if (stored !== null) setPanelSide(stored);
-  }, []);
-
-  const togglePanelSide = useCallback(() => {
-    setPanelSide((current) => {
-      const next: EditorPanelSide = current === 'right' ? 'left' : 'right';
-      try {
-        window.localStorage.setItem(PANEL_SIDE_STORAGE_KEY, next);
-      } catch {
-        /* 저장 실패 — 이번 세션에서만 옮겨진 채로 둔다 */
-      }
-      return next;
-    });
-  }, []);
 
   // 언마운트 뒤 남은 목업 타이머가 상태를 건드리지 않게 잡아 둔다
   const subtitleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -921,13 +879,6 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     // 되돌리면 구간이 다른 값이 되므로 직전 거부 안내는 더 이상 그 구간의 이야기가 아니다
     undo: useCallback(() => setHistory(undoHistory), []),
     redo: useCallback(() => setHistory(redoHistory), []),
-    saveTemplate: useCallback(
-      () =>
-        real
-          ? toast({ tone: 'info', title: `템플릿 저장 · ${NOT_AVAILABLE}` })
-          : toast({ tone: 'success', title: '템플릿으로 저장했어요' }),
-      [real, toast],
-    ),
     // 저장·주문은 컨테이너가 준 실제 동작으로 간다. 없으면 목업 안내다
     saveDraft: useCallback(() => {
       if (actions?.saveDraft) actions.saveDraft(presentRef.current);
@@ -1251,10 +1202,6 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     activeTool,
     toolOptions: TOOL_OPTIONS,
     setActiveTool,
-    panelSide,
-    panelSideTip:
-      panelSide === 'right' ? '패널 위치 · 왼쪽으로 옮기기' : '패널 위치 · 오른쪽으로 옮기기',
-    togglePanelSide,
     timelineCollapsed,
     toggleTimeline: useCallback(() => setTimelineCollapsed((v) => !v), []),
     timelineHeight,
