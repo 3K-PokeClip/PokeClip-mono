@@ -16,12 +16,11 @@ import { restoreReturnPath } from '@/components/app-shell/AuthGuard';
 import { track } from '@/lib/analytics';
 import { useAuthHydration, useAuthStore } from '@/stores/auth';
 import { CHANNEL_SETTINGS_PATH } from './chzzkOAuth';
-import { takeSoopState } from './soopOAuth';
 import styles from './ChzzkCallbackScreen.module.css';
 
 // SOOP 동의 복귀 처리 (POK-396). ChzzkCallbackScreen의 쌍둥이다(1회용 code의 ref 가드, replace로
 // 주소창 code 지우기, 캐시를 심지 않고 비우기, 토큰이 실제로 비었을 때만 로그인 안내).
-// 다른 점은 state 하나: SOOP이 돌려주지 않을 수 있어 시작 때 둔 값으로 채운다(soopOAuth.ts).
+// 다른 점 하나: state가 없으면 1회용 code를 서버에 보내지 않고 돌려보낸다(SOOP은 state를 돌려준다, soopOAuth.ts).
 
 export function SoopCallbackScreen() {
   useAuthHydration();
@@ -39,9 +38,6 @@ export function SoopCallbackScreen() {
     if (startedRef.current) return;
     startedRef.current = true;
 
-    // 어느 갈래로 끝나든 둔 state는 여기서 한 번 꺼내 지운다: 다음 시도에 옛 값이 섞이지 않게.
-    const state = takeSoopState(params.get('state'));
-
     if (refreshToken === null) {
       restoreReturnPath(CHANNEL_SETTINGS_PATH);
       setSignedOut(true);
@@ -51,6 +47,7 @@ export function SoopCallbackScreen() {
     const back = () => router.replace(CHANNEL_SETTINGS_PATH);
 
     const code = params.get('code');
+    const state = params.get('state');
     if (params.get('error') !== null || !code) {
       toast({
         tone: 'error',
@@ -60,7 +57,7 @@ export function SoopCallbackScreen() {
       back();
       return;
     }
-    if (state === null) {
+    if (!state) {
       // 서버에 물어도 INVALID_STATE다. 1회용 code를 헛되이 보내지 않는다.
       toast({ tone: 'error', ...soopLinkMessageOf('INVALID_STATE') });
       back();

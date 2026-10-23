@@ -34,8 +34,6 @@ vi.mock('next/link', () => ({
   ),
 }));
 
-const STATE_KEY = 'pokeclip.soop.state';
-
 function renderScreen(ui: ReactElement) {
   const queryClient = createTestQueryClient();
   render(
@@ -70,35 +68,30 @@ afterEach(() => {
 
 describe('SoopCallbackScreen', () => {
   it('code·state로 완료를 부르고 채널 화면으로 replace한다: 캐시를 비우고 아이디를 그리지 않는다', async () => {
-    window.sessionStorage.setItem(STATE_KEY, 'stored-state');
     const spy = stubFetch(() => jsonResponse(201, linkedBody));
     const queryClient = renderScreen(<SoopCallbackScreen />);
 
     await waitFor(() => expect(replace).toHaveBeenCalledWith('/settings/channels'));
     expect(await screen.findByText('SOOP 방송국을 연동했어요')).toBeInTheDocument();
-    // 쿼리 state가 저장값보다 앞이다
     expect(JSON.parse(String(exchangeCalls(spy)[0]?.[1]?.body))).toEqual({
       code: 'code-1',
       state: 'state-1',
     });
-    expect(window.sessionStorage.getItem(STATE_KEY)).toBeNull();
     expect(queryClient.getQueryData(soopLinkQueryOptions.queryKey)).toBeUndefined();
     expect(document.body.innerHTML).not.toContain('soop-user-a1');
     expect(track.mock.calls).toEqual([['platform_linked', { platform: 'soop' }]]);
   });
 
-  it('SOOP이 state를 돌려주지 않으면 시작 때 둔 값으로 완료한다', async () => {
+  it('쿼리에 state가 없으면 저장소에 옛 값이 있어도 쓰지 않는다: 교환하지 않고 확인 불가로 안내한다', async () => {
     searchRef.current = new URLSearchParams('code=code-1');
-    window.sessionStorage.setItem(STATE_KEY, 'stored-state');
+    // 지난 판(대체 경로)이 남겼을 수 있는 값. 이제는 읽지 않는다
+    window.sessionStorage.setItem('pokeclip.soop.state', 'stored-state');
     const spy = stubFetch(() => jsonResponse(201, linkedBody));
     renderScreen(<SoopCallbackScreen />);
 
+    expect(await screen.findByText('연동 요청을 확인할 수 없어요')).toBeInTheDocument();
     await waitFor(() => expect(replace).toHaveBeenCalledWith('/settings/channels'));
-    expect(JSON.parse(String(exchangeCalls(spy)[0]?.[1]?.body))).toEqual({
-      code: 'code-1',
-      state: 'stored-state',
-    });
-    expect(window.sessionStorage.getItem(STATE_KEY)).toBeNull();
+    expect(exchangeCalls(spy)).toHaveLength(0);
   });
 
   it('StrictMode 이중 마운트에도 교환은 정확히 한 번이다: code는 1회용이다', async () => {
@@ -148,16 +141,14 @@ describe('SoopCallbackScreen', () => {
     expect(track).not.toHaveBeenCalled();
   });
 
-  it('code가 없으면 교환하지 않고 취소로 안내한다: 남은 state도 지운다', async () => {
+  it('code가 없으면 교환하지 않고 취소로 안내한다', async () => {
     searchRef.current = new URLSearchParams('error=access_denied');
-    window.sessionStorage.setItem(STATE_KEY, 'stored-state');
     const spy = stubFetch(() => jsonResponse(500));
     renderScreen(<SoopCallbackScreen />);
 
     expect(await screen.findByText('연동이 취소됐어요')).toBeInTheDocument();
     await waitFor(() => expect(replace).toHaveBeenCalledWith('/settings/channels'));
     expect(exchangeCalls(spy)).toHaveLength(0);
-    expect(window.sessionStorage.getItem(STATE_KEY)).toBeNull();
   });
 
   it('code는 있는데 state가 쿼리에도 저장소에도 없으면 교환하지 않고 확인 불가로 안내한다', async () => {

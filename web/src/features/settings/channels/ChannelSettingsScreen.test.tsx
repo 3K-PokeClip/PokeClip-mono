@@ -432,7 +432,7 @@ describe('ChannelSettingsScreen: SOOP 행 (POK-396)', () => {
     expect(soop().queryByRole('button', { name: '연동' })).not.toBeInTheDocument();
   });
 
-  it('「연동」을 누르면 state를 두고 서버가 준 동의 주소로 나간다', async () => {
+  it('「연동」을 누르면 서버가 준 동의 주소로 나간다: 세션 저장소에 아무것도 안 쓴다', async () => {
     const user = userEvent.setup();
     const spy = stubSoop({ linked: false });
     renderWithProviders(<ChannelSettingsScreen />);
@@ -440,7 +440,8 @@ describe('ChannelSettingsScreen: SOOP 행 (POK-396)', () => {
     await user.click(await soop().findByRole('button', { name: '연동' }));
 
     await waitFor(() => expect(goToSoopConsent).toHaveBeenCalledWith(SOOP_AUTHORIZE_URL));
-    expect(window.sessionStorage.getItem('pokeclip.soop.state')).toBe('soop-signed');
+    // SOOP이 콜백에 state를 돌려준다(실계정 확인). 나르는 대체 경로가 없다
+    expect(window.sessionStorage.length).toBe(0);
     expect(
       spy.mock.calls.filter(([url, init]) => url === SOOP_START_URL && init?.method === 'POST'),
     ).toHaveLength(1);
@@ -460,7 +461,7 @@ describe('ChannelSettingsScreen: SOOP 행 (POK-396)', () => {
 
     expect(await screen.findByText('연동을 시작하지 못했어요')).toBeInTheDocument();
     expect(goToSoopConsent).not.toHaveBeenCalled();
-    expect(window.sessionStorage.getItem('pokeclip.soop.state')).toBeNull();
+    expect(window.sessionStorage.length).toBe(0);
   });
 
   it('해제는 확인 창을 거친다: 문구 셋, 확인하면 DELETE 한 번과 토스트', async () => {

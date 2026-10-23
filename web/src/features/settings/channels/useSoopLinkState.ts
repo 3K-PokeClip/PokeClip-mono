@@ -10,7 +10,7 @@ import {
 } from '@/api/soopLink';
 import { track } from '@/lib/analytics';
 import { useToast } from '@/ui';
-import { assertSoopConsentUrl, goToSoopConsent, rememberSoopState } from './soopOAuth';
+import { assertSoopConsentUrl, goToSoopConsent } from './soopOAuth';
 
 // SOOP 연동 실상태 훅 (POK-396). useChzzkLinkState의 쌍둥이다. 다른 점:
 // - 온보딩 「채널 연동됨」 플래그는 쓰지 않는다. 두 플랫폼을 같이 보고 ChannelSettingsScreen이 쓴다(C8).
@@ -42,12 +42,10 @@ export function useSoopLinkState(): SoopLinkViewState {
   const [confirmOpen, setConfirmOpen] = useState(false);
 
   const start = useMutation({
-    // 검증과 state 보관을 mutationFn 안에서 한다: 던지면 onError의 문구로 흐르고, https가 아닌
-    // 주소의 state는 남지 않는다(검증이 보관보다 먼저다).
+    // 검증을 mutationFn 안에서 한다: 던지면 onError의 문구로 흐른다(onSuccess에서 던지면 안 잡힌다).
     mutationFn: async () => {
       const authorizeUrl = await startSoopLink();
       assertSoopConsentUrl(authorizeUrl);
-      rememberSoopState(authorizeUrl);
       return authorizeUrl;
     },
     onSuccess: (authorizeUrl) => goToSoopConsent(authorizeUrl),
