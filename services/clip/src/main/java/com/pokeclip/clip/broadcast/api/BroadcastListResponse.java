@@ -46,6 +46,9 @@ public record BroadcastListResponse(List<Item> broadcasts, String nextCursor) {
      * 마지막 관측을 고르고, 카테고리는 같은 관측의 값이다. 관측이 없거나 수집기 표를 못 읽으면 둘 다 {@code null}이고 화면은 방송 번호를
      * 보인다. 수집기에 한 장을 한 번에 묻는다({@code BroadcastTitleClient}).
      *
+     * <p>{@code platform}은 방송 플랫폼 코드다(POK-398, {@code CHZZK}·{@code SOOP}, 늘 있다). 칸이 생기기 전 방송과
+     * 플랫폼을 안 실은 편지로 만든 줄은 {@code CHZZK}다. 화면은 이 값으로 라이브 띠의 플랫폼 태그를 그린다.
+     *
      * <p>줄 번호는 안 싣는다 — 이어받기가 표시로 끝나므로 웹이 쓸 데가 없고,
      * 방송을 가리키는 이름은 {@code streamId}다(카드 목록 문이 그 값을 받는다).
      */
@@ -59,7 +62,8 @@ public record BroadcastListResponse(List<Item> broadcasts, String nextCursor) {
                        Instant timelineOriginAt,
                        String thumbnailUrl,
                        String title,
-                       String category) {
+                       String category,
+                       String platform) {
     }
 
     public static BroadcastListResponse from(BroadcastPage page) {
@@ -85,6 +89,7 @@ public record BroadcastListResponse(List<Item> broadcasts, String nextCursor) {
                 page.origins().get(row.getStreamId()),
                 page.thumbnails().get(row.getStreamId()),
                 title == null ? null : title.title(),
-                title == null ? null : title.category());
+                title == null ? null : title.category(),
+                row.getPlatform());
     }
 }

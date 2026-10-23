@@ -815,6 +815,23 @@ class BroadcastListControllerTest extends IntegrationTestSupport {
                 .andExpect(jsonPath("$.error").value("authorization_unavailable"));
     }
 
+    // ── 플랫폼(POK-398) ──
+
+    /** 칸이 없던 줄(기존 방송, 플랫폼을 안 실은 편지)은 치지직으로 나간다. 화면은 이 값으로 띠의 플랫폼 태그를 그린다. */
+    @Test
+    void 방송마다_플랫폼이_실리고_안_적힌_줄은_치지직이다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("s-old", TestIds.STREAMER, "live");
+        processor.process(Envelopes.startedOn("evt-soop", "s-soop", 1L, "SOOP"));
+
+        목록("?state=live")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.broadcasts[0].streamId").value("s-soop"))
+                .andExpect(jsonPath("$.broadcasts[0].platform").value("SOOP"))
+                .andExpect(jsonPath("$.broadcasts[1].streamId").value("s-old"))
+                .andExpect(jsonPath("$.broadcasts[1].platform").value("CHZZK"));
+    }
+
     // ── 도우미 ──────────────────────────────────────────────────
 
     private void 볼_수_있는_스트리머(String... 줄들) {
