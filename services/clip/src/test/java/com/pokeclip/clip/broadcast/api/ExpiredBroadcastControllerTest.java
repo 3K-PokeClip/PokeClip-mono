@@ -279,6 +279,18 @@ class ExpiredBroadcastControllerTest extends IntegrationTestSupport {
         assertThat(Instant.parse(a.get("segmentsUntil").asString())).isEqualTo(a끝.plus(Duration.ofMinutes(10)));
     }
 
+    /** 둘 중 이른 쪽의 다른 갈래: 자리표시가 앞 방송 끝 + 10분보다 일찍 끝났으면 그 자리 − 2분에서 멈춘다 */
+    @Test
+    void 뒤_자리표시가_일찍_끝났으면_그_자리_2분_전에서_멈춘다() throws Exception {
+        Instant a끝 = T0.plusSeconds(3600);
+        Instant p끝 = a끝.plus(Duration.ofMinutes(5));
+        방송("S-a", "key", T0, a끝, a끝.plus(Duration.ofDays(60)));
+        방송("S-place", "key", null, p끝, 지금.plus(Duration.ofDays(1)));
+
+        JsonNode a = 부른다(지금, null).get("broadcasts").get(0);
+        assertThat(Instant.parse(a.get("segmentsUntil").asString())).isEqualTo(p끝.minus(Duration.ofMinutes(2)));
+    }
+
     /** 다른 물리 키의 방송은 이웃이 아니다 */
     @Test
     void 다른_물리_키의_방송은_구간에_영향이_없다() throws Exception {
