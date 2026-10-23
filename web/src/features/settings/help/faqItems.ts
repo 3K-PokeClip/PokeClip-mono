@@ -6,6 +6,11 @@
 // 문항은 2026-10-22 후보 45개에서 사용자가 고른 20개다. 시안 1q의 목업 5문항(자동 처리 시간·SOOP 대기 목록·
 // 편집자 승인 등)은 실제 제품과 달라 쓰지 않는다. 답은 「준비 중」인 기능에 날짜를 약속하지 않는다.
 
+import type { FaqKey } from '@/lib/analytics';
+
+// key 목록의 정본은 analytics 이벤트 쪽이다 — 화면 코드는 여기서 계속 가져다 쓴다
+export type { FaqKey };
+
 /**
  * 질문 주제 — 화면 위 탭의 순서가 곧 배열 순서다. 20문항을 한 줄로 늘어놓으면 찾기 어렵다는 지적(2026-10-23)으로
  * 주제 탭을 두고 한 번에 한 주제만 보인다(시안 A안).
@@ -22,7 +27,7 @@ export const FAQ_TOPICS = [
 export type FaqTopic = (typeof FAQ_TOPICS)[number]['key'];
 
 export interface FaqItem {
-  key: string;
+  key: FaqKey;
   topic: FaqTopic;
   q: string;
   a: string;
@@ -182,6 +187,3 @@ export const FAQ_ITEMS = [
     a: '하이라이트를 찾으려고 받은 채팅·후원 기록은 받은 지 60일이 지나면 지워요.',
   },
 ] as const satisfies readonly FaqItem[];
-
-/** 평가 이벤트에 싣는 질문 식별자 — 자유 문자열이 아니라 이 목록의 key만 받는다 */
-export type FaqKey = (typeof FAQ_ITEMS)[number]['key'];

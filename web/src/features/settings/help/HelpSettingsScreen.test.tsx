@@ -105,6 +105,35 @@ describe('HelpSettingsScreen', () => {
     expect(useOnboardingStore.getState().tourStep).toBe(0);
   });
 
+  it('수정 키를 누른 클릭(새 탭·창)은 투어를 켜지 않는다 — 이 탭은 홈으로 가지 않는다', () => {
+    useOnboardingStore.setState({ tourStep: null });
+    render(<HelpSettingsScreen />);
+
+    const start = screen.getByRole('link', { name: /시작 가이드/ });
+    for (const modifier of ['metaKey', 'ctrlKey', 'shiftKey', 'altKey'] as const) {
+      fireEvent.click(start, { [modifier]: true });
+      expect(useOnboardingStore.getState().tourStep).toBeNull();
+    }
+  });
+
+  it('주제 탭을 오가도 평가는 질문마다 한 번이다 — 탭을 바꿔도 평가 기록이 남는다', () => {
+    render(<HelpSettingsScreen />);
+
+    fireEvent.click(question(FAQ_ITEMS[0].q));
+    fireEvent.click(screen.getByRole('button', { name: '도움이 되었어요' }));
+    expect(track).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole('tab', { name: /플러그인/ }));
+    fireEvent.click(screen.getByRole('tab', { name: /시작하기/ }));
+
+    // 돌아온 주제에서 같은 질문을 열면 버튼 대신 완료 문구다 — 다시 보낼 길이 없다
+    const toggle = question(FAQ_ITEMS[0].q);
+    if (toggle.getAttribute('aria-expanded') !== 'true') fireEvent.click(toggle);
+    expect(screen.getByText('피드백을 보냈어요 · 더 나은 답변에 반영할게요')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '도움이 되었어요' })).toBeNull();
+    expect(track).toHaveBeenCalledTimes(1);
+  });
+
   it('다른 가이드 카드는 투어를 건드리지 않는다', () => {
     useOnboardingStore.setState({ tourStep: null });
     render(<HelpSettingsScreen />);
@@ -160,6 +189,8 @@ describe('FaqList', () => {
 
     fireEvent.click(question('순서가 있는 질문'));
     const panel = within(screen.getByRole('region'));
+    // list-style: none 목록은 Safari가 목록 의미를 벗긴다 — 역할을 명시해야 VoiceOver가 순서를 읽는다
+    expect(panel.getByRole('list')).toHaveAttribute('role', 'list');
     expect(panel.getAllByRole('listitem').map((li) => li.textContent)).toEqual([
       '1첫째 할 일',
       '2둘째 할 일',

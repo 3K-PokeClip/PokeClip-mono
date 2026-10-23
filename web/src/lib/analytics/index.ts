@@ -6,4 +6,4 @@ export {
   REPLAY_BLOCK_CLASS,
   resetIdentity,
 } from './client';
-export { track, type AnalyticsEvents } from './events';
+export { track, type AnalyticsEvents, type FaqKey } from './events';

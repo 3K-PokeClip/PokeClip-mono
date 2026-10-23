@@ -83,11 +83,20 @@ export function HelpSettingsScreen() {
       <ul className={styles.guides}>
         {GUIDES.map(({ key, title, desc, href, Icon }) => (
           <li key={key}>
-            {/* 투어는 이동 전에 켠다 — 홈이 마운트되며 tourStep을 읽어 바로 첫 단계를 띄운다 */}
+            {/* 투어는 이동 전에 켠다 — 홈이 마운트되며 tourStep을 읽어 바로 첫 단계를 띄운다.
+                수정 키를 누른 클릭은 새 탭·창으로 열려 이 탭은 홈으로 가지 않는다. 그때 켜면 tourStep(메모리 전용)이
+                이 탭에 남아 나중에 홈에서 뜬금없이 투어가 뜨고, welcomeSeen까지 참으로 굳는다(PR #318 리뷰) */}
             <Link
               href={href}
               className={styles.guide}
-              onClick={key === 'start' ? startTour : undefined}
+              onClick={
+                key === 'start'
+                  ? (e) => {
+                      if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+                      startTour();
+                    }
+                  : undefined
+              }
             >
               <span className={styles.guideIcon}>
                 <Icon aria-hidden />
@@ -156,11 +165,12 @@ function FaqTopics() {
           );
         })}
       </Tabs.List>
-      {FAQ_TOPICS.map(({ key }) => (
-        <Tabs.Panel key={key} value={key} className={styles.topicPanel}>
-          <FaqList items={FAQ_ITEMS.filter((item) => item.topic === key)} />
-        </Tabs.Panel>
-      ))}
+      {/* 패널은 주제마다 두지 않고 하나만 두어 내용만 바꾼다. Tabs.Panel은 고르지 않은 패널을 그리지 않으므로,
+          주제마다 따로 두면 탭을 옮길 때 FaqList가 언마운트돼 평가 기록이 날아가고 같은 질문을 또 평가할 수 있다
+          (faq_feedback_sent 중복 집계 — PR #318 리뷰). 같은 자리의 같은 컴포넌트라 FaqList는 화면을 떠날 때까지 산다 */}
+      <Tabs.Panel value={topic} className={styles.topicPanel}>
+        <FaqList items={FAQ_ITEMS.filter((item) => item.topic === topic)} />
+      </Tabs.Panel>
     </Tabs>
   );
 }

@@ -12,9 +12,7 @@ import styles from './HelpSettingsScreen.module.css';
 // 평가는 질문마다 한 번이다. 보낸 질문은 다시 열어도 버튼 대신 완료 문구를 보이고, 화면을 떠나면 잊는다 —
 // 같은 사람이 같은 질문에 두 번 답했다는 건 이벤트 쪽에서 가려낼 수 없으니 화면이 막는다.
 
-type Item = FaqItem & { key: FaqKey };
-
-export function FaqList({ items }: { items: readonly Item[] }) {
+export function FaqList({ items }: { items: readonly FaqItem[] }) {
   const [openKey, setOpenKey] = useState<FaqKey | null>(null);
   const [voted, setVoted] = useState<ReadonlySet<FaqKey>>(() => new Set());
 
@@ -46,7 +44,7 @@ function FaqRow({
   onToggle,
   onVote,
 }: {
-  item: Item;
+  item: FaqItem;
   open: boolean;
   voted: boolean;
   onToggle: () => void;
@@ -88,7 +86,9 @@ function FaqRow({
         <div id={panelId} role="region" aria-labelledby={buttonId} className={styles.faqPanel}>
           <p className={styles.faqAnswer}>{item.a}</p>
           {item.steps && (
-            <ol className={styles.faqSteps}>
+            // role="list"는 겹쳐 보여도 지우지 않는다 — list-style: none인 목록은 Safari가 목록 의미를 벗겨,
+            // 번호 원까지 aria-hidden인 이 목록은 VoiceOver에서 순서가 전혀 읽히지 않는다(PluginDownloadPanel과 같다)
+            <ol role="list" className={styles.faqSteps}>
               {item.steps.map((step, i) => (
                 <li key={step} className={styles.faqStep}>
                   {/* 번호는 ol이 이미 읽는다 — 원은 보이기만 한다 */}

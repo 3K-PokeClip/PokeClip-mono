@@ -1,6 +1,32 @@
 import type { PrivacyStatus, ThumbnailSource } from '@/api/clipEditor';
-import type { FaqKey } from '@/features/settings/help/faqItems';
 import { withAnalytics } from './client';
+
+/**
+ * 도움말 · 문의 「자주 묻는 질문」의 질문 식별자 — `faq_feedback_sent`의 `faq` 속성 열거.
+ * 정본은 여기다: 공용 analytics가 화면(features)을 가져오지 않도록 화면 쪽 `faqItems.ts`가 이 목록을 따른다
+ * (key가 여기 없으면 그쪽에서 타입 오류). 질문을 더하면 여기부터 더한다(PR #318 리뷰).
+ */
+export type FaqKey =
+  | 'requirements'
+  | 'getting-started'
+  | 'replay-tour'
+  | 'plugin-download'
+  | 'install-warning'
+  | 'pairing-code'
+  | 'pc-performance'
+  | 'relay-disconnected'
+  | 'unlink-channel'
+  | 'channel-already-linked'
+  | 'no-highlight-cards'
+  | 'retention'
+  | 'full-vod-download'
+  | 'landscape-video'
+  | 'privacy-after-upload'
+  | 'invitation-not-received'
+  | 'editor-permissions'
+  | 'remove-editor'
+  | 'profile'
+  | 'chat-retention';
 
 // 행동 이벤트 목록 (POK-357). 이름은 「대상_동사」 snake_case, 속성은 열거형·boolean·number만 —
 // 자유 문자열(이메일·채널 이름·채팅·제목·토큰·페어링 코드)이 들어갈 자리를 타입으로 없앤다(처리방침 2절).
