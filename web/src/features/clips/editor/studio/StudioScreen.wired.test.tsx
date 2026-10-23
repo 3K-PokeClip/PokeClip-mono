@@ -1,5 +1,6 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { StrictMode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
 import { renderWithProviders } from '@/test/testProviders';
@@ -81,6 +82,8 @@ const server = vi.hoisted(() => ({
   savedUploadRequest: null as unknown,
   /** 영상 상태 묻기(폴링)의 답. 시험이 준 약속이 풀릴 때 답한다 */
   clipPoll: null as null | ((clipId: number) => Promise<Response>),
+  /** 카드 열기 기록(POK-393)의 답 */
+  openStatus: 204,
 }));
 
 /** 원본(16:9)에서 9:16 을 오른쪽으로 치우쳐 잡은 자리 — 편집기 계산과 같은 정확한 비율 */
@@ -130,8 +133,6 @@ function handle(url: string, init?: RequestInit) {
           window: server.cardWindow,
           score: 80,
           evidence: null,
-          claimedBy: null,
-          hidden: false,
           eventSeq: 1,
           createdAt: '2026-09-20T10:01:00Z',
         },
@@ -209,6 +210,10 @@ function handle(url: string, init?: RequestInit) {
   if (path.startsWith('/api/streamers/'))
     return jsonResponse(200, { labels: ['남의 트랙', null, null, null, null, null] });
   if (path === '/api/editor-delegations/as-editor') return jsonResponse(200, server.delegations);
+  if (/^\/api\/clip\/jump-cards\/\d+\/open$/.test(path) && method === 'POST')
+    return server.openStatus === 204
+      ? new Response(null, { status: 204 })
+      : jsonResponse(server.openStatus, { error: 'unavailable' });
   return jsonResponse(404, { error: 'unexpected_call' });
 }
 
@@ -230,6 +235,7 @@ beforeEach(() => {
   server.renderError = null;
   server.savedUploadRequest = null;
   server.clipPoll = null;
+  server.openStatus = 204;
   spansAsked.length = 0;
   nav.pushed.length = 0;
   fetchSpy = stubFetch(handle);
@@ -252,6 +258,14 @@ function bodiesOf(method: string, path: string) {
   return fetchSpy.mock.calls
     .filter(([url, init]) => String(url).split('?')[0] === path && init?.method === method)
     .map(([, init]) => JSON.parse(String(init?.body)) as Record<string, unknown>);
+}
+
+/** 카드 열기 기록 요청(POK-393). 본문이 없어 bodiesOf로는 못 센다 */
+function openCalls() {
+  return fetchSpy.mock.calls.filter(
+    ([url, init]) =>
+      /\/api\/clip\/jump-cards\/\d+\/open$/.test(String(url)) && init?.method === 'POST',
+  );
 }
 
 async function openFrom(search: string) {
@@ -294,6 +308,42 @@ describe('StudioScreen — 영상 경로의 키(POK-233)', () => {
   it('칸을 모르는 옛 서버면 방송 번호로 찾는다', async () => {
     await openFrom(`?stream=${STREAM_ID}&card=5`);
     expect(spansAsked).toEqual([STREAM_ID]);
+  });
+});
+
+describe('StudioScreen: 카드 열기 기록(POK-393)', () => {
+  it('카드에서 열면 그 카드의 열기 기록을 한 번 보낸다', async () => {
+    await openFrom(`stream=${STREAM_ID}&card=5`);
+
+    await waitFor(() => expect(openCalls()).toHaveLength(1));
+    expect(String(openCalls()[0]?.[0])).toBe('/api/clip/jump-cards/5/open');
+  });
+
+  it('개발 모드(StrictMode)에서 효과가 두 번 돌아도 한 번이다', async () => {
+    nav.search = `stream=${STREAM_ID}&card=5`;
+    renderWithProviders(
+      <StrictMode>
+        <StudioScreen />
+      </StrictMode>,
+    );
+    await screen.findByRole('button', { name: '편집본 저장' });
+
+    await waitFor(() => expect(openCalls()).toHaveLength(1));
+  });
+
+  it('열기 기록이 실패해도 편집기는 열리고 오류를 말하지 않는다', async () => {
+    server.openStatus = 503;
+    await openFrom(`stream=${STREAM_ID}&card=5`);
+
+    await waitFor(() => expect(openCalls()).toHaveLength(1));
+    expect(screen.getByRole('button', { name: '편집본 저장' })).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('편집본으로 열면 열기 기록을 안 보낸다', async () => {
+    await openFrom('recipe=31');
+
+    expect(openCalls()).toHaveLength(0);
   });
 });
 
@@ -414,6 +464,8 @@ describe('StudioScreen — 카드로 연 실제 편집기', () => {
     // 사용 통계 — 진입은 한 번(첫 저장으로 주소가 ?recipe= 로 바뀌어도 다시 세지 않는다), 주문은 서버가 받은 뒤
     // 한 번이고 열거형 속성만 싣는다(제목·설명·태그 없음)
     expect(tracked('clip_editor_opened')).toEqual([{ source: 'card' }]);
+    // 열기 기록도 같다: 첫 저장으로 주소가 바뀌어도 다시 안 보낸다(POK-393)
+    expect(openCalls()).toHaveLength(1);
     const orders = tracked('video_render_requested');
     expect(orders).toHaveLength(1);
     expect(Object.keys(orders[0] ?? {}).sort()).toEqual([

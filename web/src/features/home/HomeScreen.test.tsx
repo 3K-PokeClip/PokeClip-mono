@@ -234,7 +234,7 @@ describe('HomeScreen', () => {
       serve({
         past: [pastRow('this-week', at(10, 20)), pastRow('last-week', at(10, 14))],
         cards: {
-          // 숨긴 카드는 세지 않는다
+          // 숨김 칸이 찬 옛 카드도 센다: 숨기기는 POK-393에서 없앴다
           'this-week': [card(1), card(2), card(3, true)],
           'last-week': [card(4), card(5)],
         },
@@ -261,7 +261,7 @@ describe('HomeScreen', () => {
 
       const hero = await screen.findByRole('region', { name: '이번 주' });
       expect(
-        within(hero).getByRole('heading', { level: 1, name: '방송 1번에서 카드 2장을 찾았어요' }),
+        within(hero).getByRole('heading', { level: 1, name: '방송 1번에서 카드 3장을 찾았어요' }),
       ).toBeInTheDocument();
       expect(hero).toHaveTextContent('만든 클립2개');
       expect(hero).toHaveTextContent('유튜브 발행1개');

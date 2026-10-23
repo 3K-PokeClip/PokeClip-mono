@@ -22,8 +22,6 @@ export interface JumpCard {
   window: { startMs: number; endMs: number };
   score: number | null;
   evidence: unknown;
-  claimedBy: string | null;
-  hidden: boolean;
   eventSeq: number | null;
   /** 카드 시점 장면 사진(POK-277). 목록 문만 싣는다. 통로(SSE)로 온 카드는 비어 있다 */
   thumbnailUrl?: string | null;
@@ -105,17 +103,13 @@ const CARD_PAGE = 200;
 
 /**
  * 방송의 카드를 쪽마다 끝까지 읽는다. 한 쪽만 읽으면 51번째 카드부터 없는 것이 된다(기본 쪽 크기 50,
- * 오래된 것부터 온다 — PR #200 codex). `includeHidden`이면 숨긴 카드도 받는다(숨김 반영·편집기 열기).
+ * 오래된 것부터 온다: PR #200 codex).
  */
-export async function fetchAllJumpCards<T = JumpCard>(
-  streamId: string,
-  { includeHidden = false }: { includeHidden?: boolean } = {},
-): Promise<T[]> {
+export async function fetchAllJumpCards<T = JumpCard>(streamId: string): Promise<T[]> {
   const all: T[] = [];
   let cursor: string | null = null;
   do {
     const qs = new URLSearchParams({ limit: String(CARD_PAGE) });
-    if (includeHidden) qs.set('includeHidden', 'true');
     if (cursor) qs.set('cursor', cursor);
     const page: { cards: T[]; nextCursor?: string | null } = await getJson(
       `/api/clip/broadcasts/${encodeURIComponent(streamId)}/jump-cards?${qs}`,
@@ -127,8 +121,7 @@ export async function fetchAllJumpCards<T = JumpCard>(
 }
 
 export async function fetchJumpCard(streamId: string, cardId: string): Promise<JumpCard | null> {
-  // 숨긴 카드도 편집기로는 열 수 있다 — 숨김은 목록에서 빼는 것이지 지우는 것이 아니다
-  const cards = await fetchAllJumpCards(streamId, { includeHidden: true });
+  const cards = await fetchAllJumpCards(streamId);
   return cards.find((card) => String(card.id) === cardId) ?? null;
 }
 
@@ -219,6 +212,18 @@ export async function clipFetch(path: string, init?: RequestInit): Promise<Respo
   } catch (e) {
     if (e instanceof ApiError) throw new ClipApiError(e.status, e.code, e.field);
     throw e;
+  }
+}
+
+/**
+ * 편집기가 카드를 열었다고 남긴다(POK-393, 시범 운영 측정 재료). 실패는 삼킨다: 기록 하나 때문에 편집을 막지 않는다.
+ * 네트워크 오류도 같이 삼킨다(clipFetch가 그대로 던진다)
+ */
+export async function openJumpCard(cardId: string): Promise<void> {
+  try {
+    await clipFetch(`/api/clip/jump-cards/${encodeURIComponent(cardId)}/open`, { method: 'POST' });
+  } catch {
+    // 기록 실패는 무시한다
   }
 }
 
