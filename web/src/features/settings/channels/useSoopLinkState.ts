@@ -9,6 +9,7 @@ import {
   type SoopLinkState,
 } from '@/api/soopLink';
 import { track } from '@/lib/analytics';
+import { captureSession } from '@/stores/auth';
 import { useToast } from '@/ui';
 import { assertSoopConsentUrl, goToSoopConsent } from './soopOAuth';
 
@@ -60,7 +61,12 @@ export function useSoopLinkState(): SoopLinkViewState {
 
   const unlink = useMutation({
     mutationFn: unlinkSoop,
-    onSuccess: () => {
+    // 응답을 기다리는 사이 다른 탭이 계정을 바꿀 수 있다 (POK-222): 보낼 때의 세션을 적어 둔다.
+    onMutate: () => ({ isSameSession: captureSession() }),
+    onSuccess: (_data, _variables, sent) => {
+      // 계정이 바뀌었으면 아무것도 반영하지 않는다. 크로스탭 핸들러가 비운 캐시에 앞 계정의
+      // 「미연동」을 되심으면, 이어지는 재조회가 실패할 때 그 값이 다음 사람의 연동을 덮는다.
+      if (sent.isSameSession() === false) return;
       queryClient.setQueryData<SoopLinkState>(soopLinkQueryOptions.queryKey, { linked: false });
       track('platform_unlinked', { platform: 'soop' });
       // 되돌릴 수 없다: 서버가 토큰과 받은 방송국 정보를 바로 지운다.
@@ -71,7 +77,9 @@ export function useSoopLinkState(): SoopLinkViewState {
         description: '하이라이트 감지가 중단됐어요.',
       });
     },
-    onError: () => {
+    onError: (_error, _variables, sent) => {
+      // 앞 계정의 실패도 다음 사람에게는 엉뚱한 안내다.
+      if (sent?.isSameSession() === false) return;
       toast({
         tone: 'error',
         title: '연동 해제에 실패했어요',
