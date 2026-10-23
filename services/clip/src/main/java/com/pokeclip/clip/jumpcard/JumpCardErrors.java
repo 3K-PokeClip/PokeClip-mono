@@ -109,6 +109,25 @@ public final class JumpCardErrors {
         }
     }
 
+    /**
+     * 503. 웹 수동 마킹(POK-392)의 방송에 첫 조각이 아직 없어 시각 기준점이 없다. {@code Retry-After}를 단다.
+     *
+     * <p>전역 조언에 처리기를 둬도 되는 이유: OBS 마킹 문은 이 타입을 안 던진다(그쪽 503은 {@code MarkErrors}다). 그래서
+     * 전역이 OBS 문의 {@code {"reason":…}} 봉투를 가로채는 일이 없다({@link HotkeyEventOwnedByOtherException} 주석과 반대 사정).
+     */
+    public static class TimelineNotReadyException extends RuntimeException {
+        private final int retryAfterSeconds;
+
+        public TimelineNotReadyException(int retryAfterSeconds) {
+            super("시각 기준점이 아직 없다");
+            this.retryAfterSeconds = retryAfterSeconds;
+        }
+
+        public int retryAfterSeconds() {
+            return retryAfterSeconds;
+        }
+    }
+
     private JumpCardErrors() {
     }
 }

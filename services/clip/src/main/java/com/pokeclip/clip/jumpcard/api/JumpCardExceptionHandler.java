@@ -6,6 +6,7 @@ import com.pokeclip.clip.jumpcard.JumpCardErrors.BroadcastNotFoundException;
 import com.pokeclip.clip.jumpcard.JumpCardErrors.InvalidHighlightException;
 import com.pokeclip.clip.jumpcard.JumpCardErrors.JumpCardNotFoundException;
 import com.pokeclip.clip.jumpcard.JumpCardErrors.StreamLimitExceededException;
+import com.pokeclip.clip.jumpcard.JumpCardErrors.TimelineNotReadyException;
 import com.pokeclip.clip.jumpcard.JumpCardErrors.TokenAlreadyExpiredException;
 import com.pokeclip.clip.paging.InvalidCursorException;
 import com.pokeclip.clip.paging.InvalidListParamException;
@@ -17,6 +18,7 @@ import com.pokeclip.clip.support.NotFoundFloor;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -90,6 +92,15 @@ public class JumpCardExceptionHandler {
         Map<String, Object> body = error("stream_limit");
         body.put("scope", e.scope());
         return json(HttpStatus.SERVICE_UNAVAILABLE, body);
+    }
+
+    /** 503. 웹 마킹(POK-392)의 방송에 시각 기준점이 아직 없다. 첫 조각은 방송 시작 뒤 수 초 안에 생겨 잠시 뒤 다시 누르면 된다. */
+    @ExceptionHandler(TimelineNotReadyException.class)
+    ResponseEntity<Map<String, Object>> timelineNotReady(TimelineNotReadyException e) {
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .header(HttpHeaders.RETRY_AFTER, String.valueOf(e.retryAfterSeconds()))
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(error("timeline_not_ready"));
     }
 
     /** 401. 다른 401(체인이 내는 것)과 상태 코드가 같아야 프론트가 한 갈래로 처리한다. */

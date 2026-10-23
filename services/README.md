@@ -1592,6 +1592,7 @@ JSON 트리를 맞대어 지킨다). 화면이 같은 것을 두 벌로 처리�
 | `GET …/{streamId}/clips/{clipId}` (POK-125) | 같음 → 영상이 그 방송 것인가 | 같음 · **404** `clip_not_found` |
 | `POST …/{streamId}/clips/{clipId}/file-access` (POK-247) | 같음 | 같음 |
 | `POST …/{streamId}/clips/{clipId}/uploads` (POK-220) | 같음 | 같음 |
+| `POST …/{streamId}/marks` (POK-392, 웹 수동 마킹) | `BroadcastAccessGuard`: **본문 형식 검사 뒤, 방송 읽기·저장 앞** | **404** `broadcast_not_found` |
 | `GET /api/clip/library` (POK-243) | auth `accessible`: **방송 목록과 같은 판정**(볼 수 있는 스트리머 번호로만 조회) | 그 줄이 목록에 **안 나온다**(200). `streamerId`로 고른 채널이 그 번호들에 없으면 **404** `broadcast_not_found`(POK-390, 방송 목록과 같은 이름) |
 | `GET /api/clip/library/{recipeId}` (POK-243) | 편집본 → 그 편집본의 방송 → `BroadcastAccessGuard` | **404** `recipe_not_found` — `broadcast_not_found`로 안 나간다(그 번호의 편집본이 있다는 것이 샌다) |
 
@@ -2767,6 +2768,37 @@ OBS 플러그인의 핫키(계약4 4B/2B)를 받아 **그 회원의 켜진 방�
 이미지만 되돌린 동안 자동 카드가 버려진다.** 되돌릴 때는 이 마이그레이션도 함께 되돌린다(색인 둘을 지우고 옛 제약을 다시 만든다 :
 그 전에 수동 카드 중 `(stream_id, source, window_start_ms)`가 겹치는 행이 없는지 본다).
 
+
+### clip: 웹 수동 마킹 받기 (POK-392)
+
+웹 방송 화면의 「수동 마킹」(라이브 F8·단추)과 지난 방송의 「이 시점 카드 추가」를 **그 방송의 수동 카드**로 만든다.
+로그인(JWT) 문이고 자격은 다른 카드 문과 같다: **주인·편집자 모두**(`OWNER`·`EDITOR`를 안 가른다). 저장과 20초 판정은
+OBS 문(위 절)과 같은 `recordHotkey`라 **두 문의 카드가 한 판정을 같이 쓴다**(출처가 둘 다 `hotkey`).
+
+| 문 | 응답 |
+|---|---|
+| `POST /api/clip/broadcasts/{streamId}/marks` (헤더 `Authorization: Bearer <JWT>`) | **201** 새 카드 · **200** 같은 eventId 카드 또는 20초 안 앞 카드(본문은 목록·통로와 같은 카드 모양) · **400** `{"error":"invalid_request","field":…}` · **401**(토큰 없음, 체인) · **404** `{"error":"broadcast_not_found"}`(없는 방송 · 자격 없음 · 저장하려는 사이 사라짐, 본문이 같고 25ms 바닥을 같이 탄다) · **503** `{"error":"authorization_unavailable"}`(자격을 못 물었다) · **503** `{"error":"timeline_not_ready"}` + `Retry-After: 5`(첫 조각이 아직 없어 기준점이 없다) |
+
+본문은 갈래가 둘이고 **하나만** 온다. 모르는 칸은 무시한다. 본문 상한 4KB.
+
+| 갈래 | 본문 | 카드 ms |
+|---|---|---|
+| 라이브(방송이 `live`) | `{"eventId":"<UUID v4>","pressedAt":<epoch ms>,"sentAt":<epoch ms>}`(브라우저 시계) | OBS 문과 같은 식: 서버 시각 = `pressedAt + (받은 시각 − sentAt)`, 받은 시각보다 미래면 받은 시각. 카드 ms = 서버 시각 − 기준점, 앞이면 0 |
+| 지난 방송(방송이 `live`가 아님) | `{"eventId":"<UUID v4>","positionMs":<정수 ms>}`(기준점 축 재생 위치) | 위치 그대로. 기준점 앞 10분까지(음수)는 0으로 접는다 |
+
+**400 `field`**: `body`(JSON 객체가 아님 · 4KB 초과 · 갈래가 없거나 둘 다) · `eventId`(UUID v4가 아님 · 그 eventId가 남의 방송 카드) ·
+`pressedAt`·`sentAt`(0 초과 정수가 아님 · 시각이 넘침·48시간 넘음 · **지난 방송에 보냄**) ·
+`positionMs`(정수가 아님(소수도 거절, 반올림은 웹이 한다) · −10분 아래 · 상한 넘음 · **라이브에 보냄**).
+위치 상한은 `(종료 시각 − 기준점) + 10분`(녹화가 종료 편지 뒤까지 이어질 수 있다), 종료 시각을 모르면 48시간.
+
+**처리 순서가 계약이다.** 받은 시각 읽기 → 본문(400) → 자격(404·503, **트랜잭션 밖**) → 방송(404) → 갈래와 방송 상태(400) →
+기준점(503) → 시각·위치(400) → 저장(201·200). 본문이 자격 앞인 것은 형식 오류가 auth 왕복(최대 7초)을 태우지 않게, 자격이
+방송 읽기·저장 앞인 것은 자격 없는 요청이 남의 방송을 읽거나 카드를 남기지 않게 하려는 것이다. 받은 시각은 문에 들어오자마자 한 번 읽는다.
+
+- 🔴 **저장에는 요청자가 아니라 방송 주인 번호를 넘긴다.** `recordHotkey`가 「방송 주인이 이 회원인가」를 보므로 편집자 번호를 넘기면 편집자의 마킹이 전부 404다
+- **거절 봉투가 OBS 문과 다르다**: 이 문은 전역 `{"error":…}` 봉투다. OBS 거절 타입(`MarkRejectedException`)은 이 문에서 안 나가고, 시각 식(`MarkService.serverPressedAt`·`cardMillis`)도 그 타입을 안 던진다(두 문이 같이 쓴다)
+- **`timeline_not_ready`는 전역 조언에 처리기가 있다.** OBS 문은 이 타입을 안 던져(그쪽 503은 `MarkErrors`) OBS 봉투를 안 뺏는다
+- **로그**: `clip.webmark.created`·`clip.webmark.suppressed`에 `by=<요청자>`·`owner=<주인>`·`cardId`
 
 ### 치지직 채널 연동 (POK-93)
 
