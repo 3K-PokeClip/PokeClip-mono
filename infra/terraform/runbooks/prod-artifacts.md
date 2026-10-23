@@ -23,7 +23,7 @@ prod 이미지를 ECR 에 올리고 apex 랜딩을 S3 에 올리는 절차입니
 
 | 단계 | 하는 일 | 선행 |
 |---|---|---|
-| O7c | 이미지 6종(응답기를 하면 7종) 푸시 · 다이제스트 기록 | M2 머지 · `prod/registry` 적용(O7b) · 이미지별 선행(아래 표) |
+| O7c | 이미지 6종(응답기 · 워커 · 채팅 이미지를 하면 그만큼 더 — 최대 11종) 푸시 · 다이제스트 기록 | M2 머지 · `prod/registry` 적용(O7b) · 이미지별 선행(아래 표) |
 | O7f 의 5 | apex 랜딩 업로드 · 무효화 | `prod/edge` 적용 · 2번의 업로드 제외 경로 확인(I2-8) |
 
 O7c 는 O7d(next · auth · clip 태스크 정의가 다이제스트를 씀)와 O7e(Media
@@ -64,10 +64,17 @@ aws ecr get-login-password --region ap-northeast-2 \
 | `media-mediamtx` | `media/Dockerfile.mtxhook`(1번 빌드 · 컨텍스트 `media/`) | 아래 「MediaMTX 확인」 |
 | `media-sidecar` | `media/Dockerfile`(1번 빌드 · 컨텍스트 `media/`) | I1-1(IAM 인증 · `POSTGRES_AUTH` 전환 · CA 번들) 머지본 |
 | `media-ingest-auth` | `media/Dockerfile.ingest-auth`(1번 빌드 · 컨텍스트 `media/`) | 응답기 코드가 준비됐을 때만 |
+| `render` | `workers/render/Dockerfile`(담당 미정 · 컨텍스트 `workers/render/`) | 담당 확정 · 이 이미지를 돌릴 ECS 태스크 정의가 생겼을 때만 |
+| `upload` | `workers/upload/Dockerfile`(3번 빌드 · 컨텍스트 `workers/upload/`) | 3번의 준비 · 이 이미지를 돌릴 ECS 태스크 정의가 생겼을 때만 |
+| `chat-collector` | `services/chat-collector/Dockerfile`(3번 빌드 · 컨텍스트 `services/`) | 3번의 준비 · 이 이미지를 돌릴 ECS 태스크 정의가 생겼을 때만 |
+| `chat-detector` | `services/chat-detector/Dockerfile`(3번 빌드 · 컨텍스트 `services/`) | 3번의 준비 · 이 이미지를 돌릴 ECS 태스크 정의가 생겼을 때만 |
 
 *   next · auth · clip 의 준비가 안 됐으면 O7d 를 시작하지 않습니다.
 *   응답기가 준비되지 않았으면 건너뛰고, tfvars 의 응답기 다이제스트를 비워
     둡니다(compose 렌더에서 빠짐). M15 · O8a 에서 다시 합니다.
+*   워커 · 채팅 이미지 4종(`render` · `upload` · `chat-collector` ·
+    `chat-detector`)은 ECS 로 돌릴 이미지입니다. 돌릴 태스크 정의가 아직
+    없으면 건너뜁니다 — O7c 의 조건이 아닙니다.
 *   제어면 서버(I1-6)는 O7c 의 조건이 아닙니다. 없으면 nginx 가 404 를
     냅니다.
 *   **태그 = 빌드한 커밋 SHA 의 짧은 꼴**입니다. 저장소가 태그 불변이라 같은
@@ -142,8 +149,8 @@ aws ecr describe-images --region ap-northeast-2 \
 ```
 
 다이제스트는 `prod/platform` · `prod/media` 의 tfvars(추적하지 않음)에
-넣습니다. O7c 의 통과 조건은 푸시한 6종(응답기를 했으면 7종)의 다이제스트가
-모두 기록 · 기입된 것입니다.
+넣습니다. O7c 의 통과 조건은 푸시한 6종(응답기 · 워커 · 채팅 이미지를 했으면
+그것까지)의 다이제스트가 모두 기록 · 기입된 것입니다.
 
 푸시가 다 끝나면 로그아웃합니다. `docker login` 은 토큰(12시간)을 Docker
 자격 증명 저장소(설정에 따라 `~/.docker/config.json`)에 남깁니다.
