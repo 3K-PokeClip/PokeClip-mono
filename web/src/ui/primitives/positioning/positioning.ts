@@ -74,14 +74,17 @@ export function useFloating(
     const t = triggerRef.current;
     const c = contentRef.current;
     if (!t || !c) return;
-    setCoords(
-      compute(
-        t.getBoundingClientRect(),
-        { width: c.offsetWidth, height: c.offsetHeight },
-        side,
-        align,
-        offset,
-      ),
+    const next = compute(
+      t.getBoundingClientRect(),
+      { width: c.offsetWidth, height: c.offsetHeight },
+      side,
+      align,
+      offset,
+    );
+    // 같은 자리면 그대로 둔다: ResizeObserver는 관찰을 시작하자마자 한 번 알리고, 스크롤·리사이즈도 자리가 안 바뀌는 일이
+    // 잦다 — 새 객체를 넣으면 팝업 아래 전체가 같은 좌표로 한 번 더 그려진다(PR #342 리뷰 9)
+    setCoords((prev) =>
+      prev.top === next.top && prev.left === next.left && prev.side === next.side ? prev : next,
     );
   }, [triggerRef, contentRef, side, align, offset]);
 

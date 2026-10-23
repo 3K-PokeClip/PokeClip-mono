@@ -17,6 +17,13 @@ class FakeResizeObserver {
 }
 
 let contentHeight = 100;
+/** 팝업 안쪽(자식)이 그려진 횟수: 같은 좌표면 React가 자식까지는 다시 그리지 않는다 */
+let childRenders = 0;
+
+function Inside() {
+  childRenders += 1;
+  return null;
+}
 
 beforeEach(() => {
   observers.length = 0;
@@ -59,7 +66,9 @@ function Floating() {
       <button ref={triggerRef} type="button">
         트리거
       </button>
-      <div ref={ref} data-testid="content" style={{ top: coords.top }} />
+      <div ref={ref} data-testid="content" style={{ top: coords.top }}>
+        <Inside />
+      </div>
     </>
   );
 }
@@ -74,6 +83,16 @@ describe('useMeasureOnAttach: 붙은 뒤 크기가 바뀌면 다시 잰다', () 
     act(() => observers.forEach((o) => o.fire()));
 
     expect(content).toHaveStyle({ top: '390px' }); // 700 - 300 - 10
+  });
+
+  it('자리가 그대로면 다시 그리지 않는다: 관찰 시작 알림·같은 크기 알림에 같은 좌표로 또 그리지 않는다(PR #342 리뷰 9)', () => {
+    render(<Floating />);
+    const settled = childRenders;
+
+    act(() => observers.forEach((o) => o.fire()));
+    act(() => observers.forEach((o) => o.fire()));
+
+    expect(childRenders).toBe(settled);
   });
 
   it('떨어지면 관찰을 멈춘다', () => {
