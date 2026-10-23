@@ -11,6 +11,8 @@ public enum SoopLinkFailure {
     INVALID_CODE,
     /** 다른 계정에 이미 묶인 SOOP 방송국. 409 */
     CHANNEL_ALREADY_LINKED,
+    /** 토큰은 받았는데 아이디를 못 읽음(방송 중이 아니고 대표 이미지가 LOGO 꼴이 아님). 방송을 켠 상태에서 다시. 422 */
+    IDENTITY_UNAVAILABLE,
     /** SOOP 5xx·시간 초과·형식 오류·그 밖의 4xx. 502 */
     SOOP_UNAVAILABLE
 }

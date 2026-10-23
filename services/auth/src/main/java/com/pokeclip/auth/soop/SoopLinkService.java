@@ -61,6 +61,10 @@ public class SoopLinkService {
             orphaned(userId, tokens);
             log.info("auth.soop.link.rejected userId={} status={}", userId, e.status());
             throw new SoopLinkException(SoopLinkFailure.INVALID_CODE, "SOOP이 교환 또는 방송국 조회를 거부했다");
+        } catch (SoopIdentityUnavailableException e) {
+            orphaned(userId, tokens);
+            log.info("auth.soop.link.identity_unavailable userId={}", userId);
+            throw new SoopLinkException(SoopLinkFailure.IDENTITY_UNAVAILABLE, "방송 중이 아니고 대표 이미지가 없어 SOOP 아이디를 못 읽었다");
         } catch (SoopUnavailableException e) {
             orphaned(userId, tokens);
             log.warn("auth.soop.link.unavailable userId={} causeType={}", userId, e.causeType());

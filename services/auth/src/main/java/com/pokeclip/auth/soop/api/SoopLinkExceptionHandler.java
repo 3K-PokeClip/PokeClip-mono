@@ -31,6 +31,7 @@ public class SoopLinkExceptionHandler {
         return switch (failure) {
             case INVALID_STATE, INVALID_CODE -> HttpStatus.BAD_REQUEST;
             case CHANNEL_ALREADY_LINKED -> HttpStatus.CONFLICT;
+            case IDENTITY_UNAVAILABLE -> HttpStatus.UNPROCESSABLE_CONTENT;
             case SOOP_UNAVAILABLE -> HttpStatus.BAD_GATEWAY;
         };
     }

@@ -165,19 +165,28 @@ class SoopLinkStartAndLinkTest extends SoopLinkTestSupport {
     }
 
     /**
-     * 🔴 아이디를 어디서도 못 읽으면(방송 중이 아니고 방송국 정보 주소도 꼴이 다름) 502 SOOP_UNAVAILABLE이다. 400 INVALID_CODE로
-     * 나가면 화면이 「동의부터 다시」를 그리는데 동의는 유효했다(실계정 시험에서 막힌 자리, 2026-10-23). 표·secrets는 그대로다.
+     * 🔴 아이디를 어디서도 못 읽으면(방송 중이 아니고 대표 이미지가 LOGO 꼴이 아님·없음) 422 IDENTITY_UNAVAILABLE이다(사용자 결정 B).
+     * 400 INVALID_CODE면 화면이 「동의부터 다시」를, 502면 「잠시 뒤 다시」를 그리는데 둘 다 틀린 안내다: 방송을 켜야 풀린다.
+     * 표·secrets는 그대로고, 받은 토큰은 버릴 길이 없어 그 사실만 남긴다.
      */
     @Test
-    void 아이디를_못_읽으면_502_SOOP_UNAVAILABLE이고_아무것도_안_남는다() throws Exception {
-        User user = newUser();
-        SOOP.stationResponds(200, FakeSoopServer.stationBody("닉", null));
+    void 아이디를_못_읽으면_422_IDENTITY_UNAVAILABLE이고_아무것도_안_남는다() throws Exception {
+        for (String image : new String[]{FakeSoopServer.DEFAULT_PROFILE_IMAGE, null}) {
+            User user = newUser();
+            SOOP.reset();
+            SOOP.stationResponds(200, FakeSoopServer.stationBody("닉", image));
 
-        mockMvc.perform(link(user)).andExpect(status().isBadGateway())
-                .andExpect(jsonPath("$.reason").value("SOOP_UNAVAILABLE"));
+            try (LogCaptor logs = new LogCaptor()) {
+                mockMvc.perform(link(user)).andExpect(status().isUnprocessableEntity())
+                        .andExpect(jsonPath("$.reason").value("IDENTITY_UNAVAILABLE"));
+                assertThat(logs.messages()).as(String.valueOf(image))
+                        .contains("auth.soop.link.identity_unavailable userId=" + user.getId())
+                        .contains("auth.soop.link.token_orphaned userId=" + user.getId());
+            }
 
-        assertThat(linkRepository.findFirstByUserIdOrderByCreatedAtDesc(user.getId())).isEmpty();
-        assertThat(jdbc.queryForObject("SELECT count(*) FROM secrets", Integer.class)).isZero();
+            assertThat(linkRepository.findFirstByUserIdOrderByCreatedAtDesc(user.getId())).isEmpty();
+            assertThat(jdbc.queryForObject("SELECT count(*) FROM secrets", Integer.class)).isZero();
+        }
     }
 
     @Test

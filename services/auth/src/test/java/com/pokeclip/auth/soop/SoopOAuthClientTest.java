@@ -219,17 +219,19 @@ class SoopOAuthClientTest {
     }
 
     /**
-     * 둘 다 안 되면 거부가 아니라 일시 장애다: 동의는 유효한데 우리가 누구인지 못 읽은 것이다. 거부로 보내면 화면이
+     * 둘 다 안 되면 거부도 일시 장애도 아닌 전용 실패다(사용자 결정 B, 2026-10-23): 대표 이미지가 없는 방송국은 방송 중에만
+     * 아이디가 오므로 「방송을 켠 상태에서 다시」가 답이다. (옛 판단: 둘 다 안 되면 거부가 아니라 일시 장애다: 동의는 유효한데 우리가 누구인지 못 읽은 것이다. 거부로 보내면 화면이
      * 「동의부터 다시」(INVALID_CODE)를 그려 사용자가 헛수고한다. 원인은 타입 이름만 남긴다.
      */
     @Test
-    void 아이디를_어디서도_못_읽으면_일시_장애다() {
-        for (String image : new String[]{null, "https://x.test/plain.jpg",
+    void 아이디를_어디서도_못_읽으면_전용_실패다() {
+        for (String image : new String[]{null, FakeSoopServer.DEFAULT_PROFILE_IMAGE, "https://x.test/plain.jpg",
                 "https://x.test/LOGO/so/soop-a/soop-b.jpg", "https://x.test/LOGO/so/soop-a/soop-a.gif"}) {
             soop.stationResponds(200, FakeSoopServer.stationBody("닉", image));
             assertThatThrownBy(() -> client.fetchIdentity("at")).as(String.valueOf(image))
-                    .isInstanceOf(SoopUnavailableException.class)
-                    .satisfies(e -> assertThat(((SoopUnavailableException) e).causeType()).isEqualTo("IdentityUnavailable"));
+                    .isInstanceOf(SoopIdentityUnavailableException.class)
+                    .isNotInstanceOf(SoopUnavailableException.class)
+                    .isNotInstanceOf(SoopRejectedException.class);
         }
     }
 

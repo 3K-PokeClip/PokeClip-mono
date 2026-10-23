@@ -2768,9 +2768,12 @@ revoke를 DB 락 안에 넣어야 해서(=트랜잭션 안 외부 호출) 포기
 프론트가 사용자를 보내고, SOOP이 `SOOP_REDIRECT_URI`로 돌려준 `code`를 프론트가 `POST /api/soop-link {code, state}`로 넘긴다.
 방송국은 본문이 아니라 SOOP `validate/live/status`(방송 여부 체크)·`user/stationinfo`(방송국 정보, 닉네임)로 확정한다.
 **아이디는 방송 중이면 방송 여부 체크의 `user_id`, 아니면 방송국 정보 `profile_image` 주소(`…/LOGO/<두 글자>/<아이디>/<아이디>.jpg`)에서
-꺼낸다**(실측 2026-10-23: 방송 중이 아니면 방송 여부 체크가 아이디를 안 준다, 문서 예시와 다르다). 둘 다 안 되면 502 `SOOP_UNAVAILABLE`이다
-(동의는 유효했으니 「동의부터 다시」가 아니다). 🔴 한계: 문서에 없는 주소 꼴에 기대므로 SOOP이 그 꼴을 바꾸면 방송 중이 아닌 스트리머의
-연동이 일시 장애로 떨어진다.
+꺼낸다**(실측 2026-10-23: 방송 중이 아니면 방송 여부 체크가 아이디를 안 준다, 문서 예시와 다르다).
+**대표 이미지가 없으면(LOGO 꼴이 아니면) 방송 중에만 연동된다**: 422 `IDENTITY_UNAVAILABLE`이고 웹은 「방송을 켠 상태에서 다시 연동해 주세요」를
+보인다(사용자 결정 B. 동의는 유효했으니 「동의부터 다시」도 「잠시 뒤 다시」도 아니다). 로그는 `identity_unavailable` INFO와 `token_orphaned`.
+🔴 한계 둘: ① 문서에 없는 주소 꼴에 기대므로 SOOP이 그 꼴을 바꾸면 방송 중이 아닌 스트리머는 모두 이 422로 떨어진다
+② 방송 중 `user_id`와 이미지 주소에서 꺼낸 아이디의 대소문자가 같은지 아직 확인하지 않았다(다음 실계정 시험: 방송 중 연동). 다르면
+같은 방송국이 둘로 보여 중복 연동 검사(409)를 지난다.
 
 🔴 **치지직과 다른 점은 SOOP 개발자 약관 제11조 ⑰(연동 해제·철회 시 지체 없이 파기)에서 나온다.**
 연동이 닫히는 순간(해제 · 재연동 · 갱신 거절 · 탈퇴) 같은 UPDATE 한 문장에서 SOOP 아이디·닉네임을 비우고(V116),
@@ -2781,7 +2784,7 @@ revoke를 DB 락 안에 넣어야 해서(=트랜잭션 안 외부 호출) 포기
 | | 응답 |
 |---|---|
 | `POST /api/soop-link/start` | 200 `{authorizeUrl}`. `state`는 URL 안에 있다(표 없이 서명, 10분. 서명 접두가 치지직과 달라 치지직 state는 여기서 안 통한다) |
-| `POST /api/soop-link` `{code, state}` | 201 `{nickname, linkedAt}` · 400 `INVALID_STATE` · 400 `INVALID_CODE`(SOOP이 교환·조회를 400·401·403 또는 `result` 음수로 거부, **동의부터 다시**) · 409 `CHANNEL_ALREADY_LINKED` · 502 `SOOP_UNAVAILABLE`(5xx·시간 초과·형식 오류·그 밖의 4xx·아이디를 못 읽음, 잠시 뒤 다시) |
+| `POST /api/soop-link` `{code, state}` | 201 `{nickname, linkedAt}` · 400 `INVALID_STATE` · 400 `INVALID_CODE`(SOOP이 교환·조회를 400·401·403 또는 `result` 음수로 거부, **동의부터 다시**) · 409 `CHANNEL_ALREADY_LINKED` · 422 `IDENTITY_UNAVAILABLE`(방송 중이 아니고 대표 이미지가 없어 아이디를 못 읽음, **방송을 켠 상태에서 다시**) · 502 `SOOP_UNAVAILABLE`(5xx·시간 초과·형식 오류·그 밖의 4xx, 잠시 뒤 다시) |
 | `GET /api/soop-link` | 200 `{linked:false}` 또는 `{linked, nickname, status, linkedAt, lastRefreshedAt, accessExpiresAt}`. `status` ∈ `ACTIVE`·`EXPIRED`·`BROKEN`·`UNLINKED`(파생). `linked`는 `ACTIVE`·`EXPIRED`일 때만 true. **`BROKEN`·`UNLINKED`에는 `nickname`이 없다**(파기됐다). 화면은 `status`가 `BROKEN`이면 「SOOP 연동이 끊겼어요(다시 연동)」를 그린다 |
 | `DELETE /api/soop-link` | 204(없어도 204). 행은 남고(`revoked_at`+`USER_UNLINKED`, 아이디·닉네임 NULL) 커밋 뒤에 secrets 삭제. 외부 HTTP 없음 |
 | `POST /internal/soop-link/resolve` `{userId}` | **항상 200**, 아래 |
@@ -2840,7 +2843,7 @@ access·refresh 삭제는 각각 시도한다(하나가 실패해도 나머지�
 
 로그는 `auth.soop.link.<사건> userId=` 영어 한 줄이다: `created` · `relinked` · `unlinked` · `withdrawn`(탈퇴. `relinked`·`unlinked`·`withdrawn` 셋은 secrets 정리 뒤에 찍힌다) · `refreshed` ·
 `refresh_rejected status=`(WARN, 정리 뒤) · `refresh_rejected_braked status=`(WARN, 브레이크 뒤라 안 닫음) · `refresh_failed causeType=`(WARN) · `refresh_tick_failed causeType=`(WARN) ·
-`refresh_reject_burst`(ERROR) · `rejected status=` · `unavailable causeType=`(WARN) · `token_orphaned`(교환 뒤 실패해 받은 토큰을
+`refresh_reject_burst`(ERROR) · `rejected status=` · `identity_unavailable` · `unavailable causeType=`(WARN) · `token_orphaned`(교환 뒤 실패해 받은 토큰을
 버리지 못함, SOOP에 폐기 API가 없다) · `resolve_rejected reason=` · `failed reason=`. 정리 스레드는 `auth.soop.cleanup.*`다.
 
 풀 고갈 쌍둥이 시험(`ChzzkResolvePoolExhaustionTest`의 SOOP 판)은 두지 않았다: 갱신 HTTP를 회원 행 락·커넥션을 쥔 채 기다리는

@@ -61,8 +61,9 @@ public class SoopOAuthClient {
     /**
      * 아이디와 닉네임을 합친다. 아이디를 정하는 순서(실측 2026-10-23):
      * ① 방송 여부 체크의 {@code user_id}(빈 값 아님). 🔴 문서 예시와 달리 방송 중이 아니면 data가 {@code broad_no}·{@code status}뿐이라
-     * 아이디가 없다 ② 없으면 방송국 정보 {@code profile_image} 주소에서 꺼낸다 ③ 둘 다 안 되면 <b>일시 장애</b>
-     * ({@code IdentityUnavailable}): 동의는 유효한데 우리가 누구인지 못 읽은 것이라 거부(「동의부터 다시」)로 보내면 사용자가 헛수고한다.
+     * 아이디가 없다 ② 없으면 방송국 정보 {@code profile_image} 주소에서 꺼낸다 ③ 둘 다 안 되면 {@link SoopIdentityUnavailableException}:
+     * 대표 이미지가 없는 방송국은 방송 중에만 아이디가 온다. 거부로 보내면 「동의부터 다시」, 일시 장애로 보내면 「잠시 뒤 다시」라
+     * 둘 다 틀린 안내다(사용자 결정 B, 2026-10-23).
      * 어느 주소든 {@code result} 음수는 지금처럼 거부다. 방송 여부 체크가 거부면 방송국 정보는 묻지 않는다.
      */
     public SoopIdentity fetchIdentity(String accessToken) {
@@ -73,7 +74,7 @@ public class SoopOAuthClient {
         }
         String userId = status.get("user_id") instanceof String s && !s.isBlank() ? s : idFromProfileImage(station);
         if (userId == null) {
-            throw new SoopUnavailableException("IdentityUnavailable");   // 값은 안 싣는다
+            throw new SoopIdentityUnavailableException();   // 값은 안 싣는다
         }
         return new SoopIdentity(userId, nick);
     }

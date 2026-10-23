@@ -98,6 +98,11 @@ public final class FakeSoopServer implements AutoCloseable {
         lastTokenContentType.set(null);
     }
 
+    /**
+     * 대표 이미지를 안 올린 방송국의 기본 이미지 주소(가짜). 실물 꼴은 모른다: 판정은 「LOGO 꼴이 아니면 아이디를 못 꺼낸다」다.
+     */
+    public static final String DEFAULT_PROFILE_IMAGE = "//res.example.test/images/profile_default.png";
+
     /** 실측 꼴의 방송국 정보 본문(다섯 칸). profileImage가 null이면 그 칸을 뺀다. */
     public static String stationBody(String nick, String profileImage) {
         return "{\"result\":1,\"data\":{\"user_nick\":\"" + nick + "\",\"station_name\":\"방송국\","
