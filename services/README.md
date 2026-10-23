@@ -2319,6 +2319,9 @@ UploadInfo = {"title":"필수","description":null,"tags":["…"],"privacyStatus"
 - **POST이고 주소는 로그에 안 찍는다**(완성 영상 주소와 같다). 로그는 `clip.segment_audio_access.issued streamId userId segments expiresAt`.
 - 수명은 `pokeclip.render.segment-audio-url-ttl`(기본 `PT5M`, 0초 초과 7일 이하). 화면은 받자마자 내려받는다.
   조각 창고는 `SEGMENT_BUCKET`이고 주문줄(`RENDER_ENABLED`)과 같이 켜진다: 운영 역할에 조각 창고 `s3:GetObject`가 있어야 주소가 통한다.
+- 🔴 **배포 조건: 조각 창고에 웹 주소를 허락하는 CORS 규칙(GET·HEAD)이 있어야 한다.** 화면이 이 주소를 `fetch`로 받아 푼다.
+  썸네일·완성 영상은 `<img>`·`<video>`로 열어 CORS가 필요 없었지만 이 기능은 처음으로 창고 파일을 코드로 읽는다. 규칙이 없으면
+  브라우저가 응답을 막고(로컬 실측: `net::ERR_FAILED`, 창고에 CORS 설정 없음) 화면은 영상 소리로 물러난다. 로컬 LocalStack 창고에도 같은 규칙이 필요하다.
 
 ### clip: 유튜브 업로드 주문 (POK-220)
 
