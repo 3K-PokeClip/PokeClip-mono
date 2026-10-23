@@ -5,7 +5,7 @@
 
 mock_provider "aws" {}
 
-run "declares_eleven_prod_repositories" {
+run "declares_thirteen_prod_repositories" {
   command = plan
 
   assert {
@@ -17,12 +17,14 @@ run "declares_eleven_prod_repositories" {
       "media-mediamtx",
       "media-sidecar",
       "media-ingest-auth",
+      "media-loopback-sender",
+      "media-host-bundle",
       "render",
       "upload",
       "chat-collector",
       "chat-detector",
     ])
-    error_message = "저장소 키 집합이 next · auth · clip · media-{nginx,mediamtx,sidecar,ingest-auth} · render · upload · chat-{collector,detector} 와 다르다."
+    error_message = "저장소 키 집합이 next · auth · clip · media-{nginx,mediamtx,sidecar,ingest-auth,loopback-sender,host-bundle} · render · upload · chat-{collector,detector} 와 다르다."
   }
 
   assert {
