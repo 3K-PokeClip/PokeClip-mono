@@ -31,14 +31,16 @@ class SoopTokenRefresherTest extends SoopLinkTestSupport {
     private static final Duration AHEAD = Duration.ofHours(2);
 
     private final SoopTokenRefresher refresher;
+    private final SoopRefreshBrake brake;
 
     SoopTokenRefresherTest(MockMvc mockMvc, UserService userService, UserRepository userRepository,
                            TokenService tokenService, SoopLinkStateCodec codec,
                            SoopChannelLinkRepository linkRepository, SecretStore secretStore,
                            SoopLinkWriter writer, JdbcTemplate jdbc, SoopCleanupExecutor cleanup,
-                           SoopTokenRefresher refresher) {
+                           SoopTokenRefresher refresher, SoopRefreshBrake brake) {
         super(mockMvc, userService, userRepository, tokenService, codec, linkRepository, secretStore, writer, jdbc, cleanup);
         this.refresher = refresher;
+        this.brake = brake;
     }
 
     private void lastCheckedAgo(SoopChannelLink link, Duration ago) {
@@ -144,6 +146,29 @@ class SoopTokenRefresherTest extends SoopLinkTestSupport {
 
         assertThat(refresher.refreshIfExpiringWithin(u.getId(), AHEAD).outcome()).isEqualTo(RefreshOutcome.NOT_LINKED);
         assertThat(SOOP.tokenCalls()).as("닫힌 연동은 다시 부르지 않는다").isEqualTo(1);
+    }
+
+    /**
+     * 🔴 브레이크가 선 뒤에는 거절을 받아도 파기하지 않는다(감사 2회차 중대). 브레이크는 「앱 설정 오류」를 뜻하므로 그 4xx는
+     * 그 회원의 철회가 아니다. 파기하면 수집기 resolve가 방송하는 스트리머마다 연동을 하나씩 닫는다. 일시 실패로 답한다.
+     */
+    @Test
+    void 브레이크가_선_뒤의_4xx는_파기하지_않고_UNAVAILABLE이다() {
+        User u = newUser();
+        SoopChannelLink link = linked(u, Duration.ofHours(1));
+        Map<String, Object> before = jdbc.queryForMap("SELECT * FROM soop_channel_links WHERE id = ?", link.getId());
+        SOOP.tokenResponds(401, "{}");
+        brake.engage();
+        try {
+            assertThat(refresher.refreshIfExpiringWithin(u.getId(), AHEAD).outcome()).isEqualTo(RefreshOutcome.UNAVAILABLE);
+            awaitCleanup();
+        } finally {
+            brake.release();   // 컨텍스트 공유 빈이다: 세운 채 두면 다른 클래스의 거절 시험이 전부 갈린다
+        }
+        assertThat(jdbc.queryForMap("SELECT * FROM soop_channel_links WHERE id = ?", link.getId()))
+                .as("🔴 브레이크가 섰는데 행이 닫히거나 아이디·닉네임이 비었다").isEqualTo(before);
+        assertThat(secretStore.get(link.getAccessTokenRef())).contains("at-old");
+        assertThat(secretStore.get(link.getRefreshTokenRef())).contains("rt-old");
     }
 
     @Test

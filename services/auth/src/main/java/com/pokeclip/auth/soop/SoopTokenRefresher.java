@@ -25,8 +25,9 @@ import java.util.Optional;
  * 본다(SOOP은 철회를 알려 주지 않아 갱신 거절로만 안다) ② 4xx는 엔티티가 아니라 {@link SoopLinkWriter#closeAndPurge}로
  * 닫고 아이디·닉네임까지 같은 문장에서 비운다 ③ 정리에 외부 HTTP가 없다(폐기 API 없음).
  *
- * <p>🔴 연속 거절 브레이크는 여기가 아니라 스케줄러에만 있다. resolve(수집기가 부르는 즉석 갱신)의 4xx는 한 사람 일이라
- * 그대로 파기한다.
+ * <p>🔴 연속 거절을 <b>세는</b> 것은 스케줄러다. 여기는 브레이크가 <b>섰는지</b>만 본다({@link SoopRefreshBrake}): 선 뒤에는
+ * 4xx를 받아도 파기하지 않고 UNAVAILABLE로 답한다(브레이크는 앱 설정 오류를 뜻하므로 그 4xx는 그 회원의 철회가 아니다,
+ * 감사 2회차 중대). 브레이크 전의 4xx는 그대로 파기한다.
  */
 @Component
 @RequiredArgsConstructor
@@ -40,6 +41,7 @@ public class SoopTokenRefresher {
     private final SoopOAuthClient oauthClient;
     private final SoopLinkWriter writer;
     private final SoopProperties properties;
+    private final SoopRefreshBrake brake;
 
     /** resolve용. 남은 수명이 minRemaining보다 짧을 때만 SOOP을 부른다. 신선도는 안 본다. */
     @Transactional
@@ -85,6 +87,11 @@ public class SoopTokenRefresher {
         try {
             tokens = oauthClient.refresh(refreshToken);
         } catch (SoopRejectedException e) {
+            if (brake.engaged()) {
+                // 대가: 브레이크가 선 동안 진짜로 동의를 철회한 회원도 재배포 때까지 안 닫힌다(비상 상태라 짧다고 본다).
+                log.warn("auth.soop.link.refresh_rejected_braked userId={} status={}", userId, e.status());
+                return RefreshResult.of(RefreshOutcome.UNAVAILABLE);
+            }
             // 철회·만료. 다시 시도해도 같다. 닫고(아이디·닉네임도 비운다) 커밋 뒤에 secrets를 지운다(약관 제11조 ⑰).
             // 닫는 문장이 영속성 컨텍스트를 비우므로 이 뒤로 link를 쓰지 않는다.
             int status = e.status();

@@ -2796,7 +2796,7 @@ revoke를 DB 락 안에 넣어야 해서(=트랜잭션 안 외부 호출) 포기
 `REFRESH_UNAVAILABLE`(즉석 갱신 일시 실패, 임박한 토큰은 주지 않는다). 거절 응답에는 토큰·아이디 칸이 아예 없다.
 남은 수명이 1시간(`resolve-min-remaining`)보다 짧으면 넘기기 전에 즉석 갱신한다.
 🔴 **치지직(24시간 토큰, 「한 번 받으면 방송 끝까지」)과 달리 SOOP 토큰은 약 8시간이다**(문서 예시 `expires_in` 28800, 실값은 실계정
-시험에서 확인). **수집기는 `expiresAt` 전에 다시 부른다**(POK-397 몫). 즉석 갱신의 거절은 아래 브레이크 없이 그대로 파기한다(한 사람 일이다).
+시험에서 확인). **수집기는 `expiresAt` 전에 다시 부른다**(POK-397 몫). 즉석 갱신의 거절은 그대로 파기한다. 단 아래 브레이크가 선 뒤에는 파기하지 않고 `REFRESH_UNAVAILABLE`로 답한다.
 
 **갱신으로 철회를 확인한다.** SOOP은 사용자가 권한을 끊어도 알려 주지 않아, 갱신 거절로만 안다. `@Scheduled`가 **1시간마다**
 (`pokeclip.soop.check.interval=PT1H`) 살아 있는 연동 중 만료가 2시간(`refresh-ahead`) 안으로 남았거나 마지막 확인이
@@ -2804,11 +2804,16 @@ revoke를 DB 락 안에 넣어야 해서(=트랜잭션 안 외부 호출) 포기
 400·401·403이면 영구(`REFRESH_REJECTED` → `BROKEN`, 아이디·닉네임·토큰 파기), 그 밖은 행을 두고 다음 틱에 재시도한다.
 `pokeclip.soop.check.enabled`는 기본 켜짐이고 프로퍼티를 빠뜨려도 켜진다(`matchIfMissing`). 시험 프로파일만 끈다.
 
-🔴 **갱신 브레이크.** 한 틱에서 거절이 **연달아 3번**(`check.reject-brake`) 나면 그 틱을 멈추고 **그 프로세스가 사는 동안
-자동 갱신·파기를 다시 하지 않는다.** 로그 `auth.soop.link.refresh_reject_burst consecutive= lastUserId=`(ERROR) 한 줄.
+🔴 **갱신 브레이크.** 스케줄러의 한 틱에서 거절이 **연달아 3번**(`check.reject-brake`) 나면 그 틱을 멈추고, **그 프로세스가 사는 동안
+두 경로 모두 파기를 멈춘다**: 스케줄러는 다시 틱을 서지 않고, 수집기 resolve의 즉석 갱신은 4xx를 받아도 닫지 않고
+`REFRESH_UNAVAILABLE`로 답한다(로그 `refresh_rejected_braked status=` WARN). 연속 거절은 스케줄러 틱 안에서만 센다(resolve 거절은 안 센다).
+로그 `auth.soop.link.refresh_reject_burst consecutive= lastUserId= action=…_then_redeploy`(ERROR) 한 줄이 서는 신호다(비밀값은 안 찍는다).
 이유: 치지직·유튜브는 앱 설정 오류(시크릿 오타·앱 교체)를 응답의 오류 코드로 가려 일시로 돌리지만, SOOP은 토큰 주소의 오류 꼴이
 문서에 없어 가를 수 없다. 브레이크가 없으면 비밀값 하나가 틀린 배포가 틱 한 번에 전 회원 연동을 닫고 토큰까지 지운다(되돌릴 수 없다).
-성공이 끼면 연속 수가 0으로 돌아가고, 일시 장애는 연속 수를 그대로 둔다. 대가: 브레이크 전에 거절된 3명은 이미 닫혔다.
+브레이크를 resolve까지 넓힌 이유: 스케줄러만 멈추면 미리 갱신하는 주체가 사라져, 토큰 남은 수명이 1시간 아래로 내려간 회원부터
+방송을 켤 때마다 resolve가 같은 설정 오류로 연동을 하나씩 닫는다(감사 2회차). 성공이 끼면 연속 수가 0으로 돌아가고, 일시 장애는 연속 수를
+그대로 둔다. 대가 둘: 브레이크 전에 거절된 3명은 이미 닫혔다 · **브레이크가 선 동안 진짜로 동의를 철회한 회원의 아이디·닉네임·토큰도
+재배포 때까지 남는다**(약관 제11조 ⑰의 「지체 없이」에서 벗어나지만, 비상 상태라 짧다고 본다). 그동안 수집도 멈춘다(`REFRESH_UNAVAILABLE`).
 **푸는 법**: `SOOP_CLIENT_ID`·`SOOP_CLIENT_SECRET`·`SOOP_REDIRECT_URI`를 확인해 고치고 재배포한다(재시작이 브레이크를 푼다).
 실계정으로 확인할 것: 잘못된 `client_secret`으로 갱신하면 SOOP이 무엇을 돌려주는가.
 
@@ -2819,8 +2824,8 @@ access·refresh 삭제는 각각 시도한다(하나가 실패해도 나머지�
 죽음(로그 없음). **단서는 닫힌 행에 남은 ref 둘**(`access_token_ref`·`refresh_token_ref`)이다: 그 ref가 secrets에 아직 있으면
 지우면 된다. 아이디·닉네임은 닫는 문장에서 이미 비었으므로 이 경우에도 남지 않는다.
 
-로그는 `auth.soop.link.<사건> userId=` 영어 한 줄이다: `created` · `relinked` · `unlinked` · `withdrawn`(탈퇴, 셋 다 정리 뒤) · `refreshed` ·
-`refresh_rejected status=`(WARN, 정리 뒤) · `refresh_failed causeType=`(WARN) · `refresh_tick_failed causeType=`(WARN) ·
+로그는 `auth.soop.link.<사건> userId=` 영어 한 줄이다: `created` · `relinked` · `unlinked` · `withdrawn`(탈퇴. `relinked`·`unlinked`·`withdrawn` 셋은 secrets 정리 뒤에 찍힌다) · `refreshed` ·
+`refresh_rejected status=`(WARN, 정리 뒤) · `refresh_rejected_braked status=`(WARN, 브레이크 뒤라 안 닫음) · `refresh_failed causeType=`(WARN) · `refresh_tick_failed causeType=`(WARN) ·
 `refresh_reject_burst`(ERROR) · `rejected status=` · `unavailable causeType=`(WARN) · `token_orphaned`(교환 뒤 실패해 받은 토큰을
 버리지 못함, SOOP에 폐기 API가 없다) · `resolve_rejected reason=` · `failed reason=`. 정리 스레드는 `auth.soop.cleanup.*`다.
 

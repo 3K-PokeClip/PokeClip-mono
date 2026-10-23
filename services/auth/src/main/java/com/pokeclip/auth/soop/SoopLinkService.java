@@ -108,7 +108,8 @@ public class SoopLinkService {
      *
      * <p>트랜잭션이 없다: refresher가 최상단이어야 한다. 갱신 뒤 행도 secrets도 두 번째로 읽지 않고 refresher가 락 안에서
      * 만든 스냅샷만 쓴다(그 사이 해제가 끼면 500이 되는 분기를 없앤다, 치지직과 같다).
-     * 즉석 갱신의 4xx는 브레이크 없이 그대로 파기된다(한 사람 일이다).
+     * 즉석 갱신의 4xx는 그대로 파기된다. 단 갱신 브레이크({@link SoopRefreshBrake})가 선 뒤에는 갱신기가 UNAVAILABLE로
+     * 돌려 {@code REFRESH_UNAVAILABLE}이 된다(앱 설정 오류로 방송하는 스트리머마다 파기되는 것을 막는다, 감사 2회차).
      */
     public SoopResolveResult resolve(Long userId) {
         RefreshResult r = refresher.refreshIfExpiringWithin(userId, properties.resolveMinRemaining());

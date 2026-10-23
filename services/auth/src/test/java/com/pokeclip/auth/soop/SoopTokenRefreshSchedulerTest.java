@@ -32,7 +32,8 @@ class SoopTokenRefreshSchedulerTest {
 
     private final SoopChannelLinkRepository links = mock(SoopChannelLinkRepository.class);
     private final SoopTokenRefresher refresher = mock(SoopTokenRefresher.class);
-    private final SoopTokenRefreshScheduler scheduler = new SoopTokenRefreshScheduler(links, refresher, testProps());
+    private final SoopRefreshBrake brake = new SoopRefreshBrake();
+    private final SoopTokenRefreshScheduler scheduler = new SoopTokenRefreshScheduler(links, refresher, testProps(), brake);
 
     /** 운영에서 조용히 꺼지지 않는다: 프로퍼티가 없으면 켜진다(matchIfMissing). 꺼짐은 명시적으로만. */
     @Test
@@ -41,7 +42,8 @@ class SoopTokenRefreshSchedulerTest {
                 .withUserConfiguration(SoopTokenRefreshScheduler.class)
                 .withBean(SoopChannelLinkRepository.class, () -> mock(SoopChannelLinkRepository.class))
                 .withBean(SoopTokenRefresher.class, () -> mock(SoopTokenRefresher.class))
-                .withBean(SoopProperties.class, SoopTokenRefreshSchedulerTest::testProps);
+                .withBean(SoopProperties.class, SoopTokenRefreshSchedulerTest::testProps)
+                .withBean(SoopRefreshBrake.class, SoopRefreshBrake::new);
         runner.run(c -> assertThat(c).hasSingleBean(SoopTokenRefreshScheduler.class));
         runner.withPropertyValues("pokeclip.soop.check.enabled=false")
                 .run(c -> assertThat(c).doesNotHaveBean(SoopTokenRefreshScheduler.class));
@@ -55,6 +57,7 @@ class SoopTokenRefreshSchedulerTest {
                 .withBean(SoopChannelLinkRepository.class, () -> mock(SoopChannelLinkRepository.class))
                 .withBean(SoopTokenRefresher.class, () -> mock(SoopTokenRefresher.class))
                 .withBean(SoopProperties.class, SoopTokenRefreshSchedulerTest::testProps)
+                .withBean(SoopRefreshBrake.class, SoopRefreshBrake::new)
                 .withPropertyValues("pokeclip.soop.check.interval=PT1H")
                 .run(c -> {
                     assertThat(c).hasNotFailed();
@@ -107,6 +110,7 @@ class SoopTokenRefreshSchedulerTest {
         }
 
         verify(refresher).refreshForCheck(5L);
+        assertThat(brake.engaged()).isFalse();
         scheduler.tick();
         verify(links, org.mockito.Mockito.times(2)).findIdsExpiringOrStale(any(), any(), any());
     }
@@ -128,7 +132,10 @@ class SoopTokenRefreshSchedulerTest {
             scheduler.tick();
             assertThat(logs.messages()).anyMatch(m -> m.startsWith("auth.soop.link.refresh_reject_burst"));
             assertThat(logs.levelOf("auth.soop.link.refresh_reject_burst")).isEqualTo(Level.ERROR);
+            assertThat(logs.messages()).anyMatch(m -> m.startsWith("auth.soop.link.refresh_reject_burst")
+                    && m.contains("SOOP_CLIENT_SECRET") && m.contains("redeploy"));
         }
+        assertThat(brake.engaged()).as("갱신기도 보는 브레이크 상태가 서야 한다").isTrue();
 
         verify(refresher).refreshForCheck(4L);
         verify(refresher, never()).refreshForCheck(5L);

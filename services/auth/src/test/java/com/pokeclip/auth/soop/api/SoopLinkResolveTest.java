@@ -7,6 +7,7 @@ import com.pokeclip.auth.soop.SoopCleanupExecutor;
 import com.pokeclip.auth.soop.SoopLinkStateCodec;
 import com.pokeclip.auth.soop.SoopLinkTestSupport;
 import com.pokeclip.auth.soop.SoopLinkWriter;
+import com.pokeclip.auth.soop.SoopRefreshBrake;
 import com.pokeclip.auth.streamkey.secret.SecretStore;
 import com.pokeclip.auth.token.TokenService;
 import com.pokeclip.auth.user.User;
@@ -15,6 +16,7 @@ import com.pokeclip.auth.user.UserService;
 import com.pokeclip.web.support.LogCaptor;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -37,14 +39,16 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class SoopLinkResolveTest extends SoopLinkTestSupport {
 
     private final TransactionTemplate tx;
+    private final SoopRefreshBrake brake;
 
     SoopLinkResolveTest(MockMvc mockMvc, UserService userService, UserRepository userRepository,
                         TokenService tokenService, SoopLinkStateCodec codec,
                         SoopChannelLinkRepository linkRepository, SecretStore secretStore,
                         SoopLinkWriter writer, JdbcTemplate jdbc, SoopCleanupExecutor cleanup,
-                        PlatformTransactionManager transactionManager) {
+                        PlatformTransactionManager transactionManager, SoopRefreshBrake brake) {
         super(mockMvc, userService, userRepository, tokenService, codec, linkRepository, secretStore, writer, jdbc, cleanup);
         this.tx = new TransactionTemplate(transactionManager);
+        this.brake = brake;
     }
 
     private String body(User u) throws Exception {
@@ -104,7 +108,7 @@ class SoopLinkResolveTest extends SoopLinkTestSupport {
         assertThat(body(u)).doesNotContain("accessToken").doesNotContain("at-old");
     }
 
-    /** 즉석 갱신의 4xx는 한 사람 일이라 브레이크 없이 그대로 파기한다. 다음 호출은 다시 안 부른다. */
+    /** 브레이크 전의 즉석 갱신 4xx는 그대로 파기한다. 다음 호출은 다시 안 부른다. */
     @Test
     void 즉석_갱신이_4xx면_BROKEN이고_파기된다() throws Exception {
         User u = newUser();
@@ -116,6 +120,26 @@ class SoopLinkResolveTest extends SoopLinkTestSupport {
         awaitCleanup();
         assertThat(secretStore.get(link.getAccessTokenRef())).isEmpty();
         assertThat(secretStore.get(link.getRefreshTokenRef())).isEmpty();
+    }
+
+    /** 브레이크가 선 뒤의 즉석 갱신 4xx는 파기하지 않고 REFRESH_UNAVAILABLE이다(수집은 멈추되 연동은 지킨다). */
+    @Test
+    void 브레이크가_선_뒤의_즉석_갱신_4xx는_파기하지_않고_REFRESH_UNAVAILABLE() throws Exception {
+        User u = newUser();
+        SoopChannelLink link = linked(u, Duration.ofMinutes(10));
+        SOOP.tokenResponds(401, "{}");
+        // engage·release는 package-private이다(운영에 세우기 문을 열지 않는다). 다른 패키지라 리플렉션으로 부른다.
+        ReflectionTestUtils.invokeMethod(brake, "engage");
+        try {
+            mockMvc.perform(resolve(u.getId())).andExpect(status().isOk())
+                    .andExpect(jsonPath("$.valid").value(false))
+                    .andExpect(jsonPath("$.reason").value("REFRESH_UNAVAILABLE"));
+            awaitCleanup();
+        } finally {
+            ReflectionTestUtils.invokeMethod(brake, "release");
+        }
+        assertThat(linkRepository.findByUserIdAndRevokedAtIsNull(u.getId())).as("🔴 브레이크 뒤 resolve가 연동을 닫았다").isPresent();
+        assertThat(secretStore.get(link.getRefreshTokenRef())).contains("rt-old");
     }
 
     @Test
