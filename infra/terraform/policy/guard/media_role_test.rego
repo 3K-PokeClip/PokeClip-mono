@@ -540,8 +540,12 @@ test_r10_denylist_rules_other_dir_ignored if {
 }
 
 # 5-3 교체 모델: 떠 있는 상자의 AMI · user_data 는 바꾸지 않는다.
+# IMDSv2 강제(http_tokens 리터럴 "required") — 상자 시험의 기본 블록.
+imds_v2 := [{"http_tokens": "required"}]
+
 instance_file(ignore) := resource_file("modules/media_host/main.tf", "aws_instance", {
 	"ami": "${data.aws_ssm_parameter.ami.insecure_value}",
+	"metadata_options": imds_v2,
 	"lifecycle": [{"ignore_changes": ignore}],
 })
 
@@ -556,7 +560,7 @@ test_r10_instance_missing_ignore_changes if {
 }
 
 test_r10_instance_other_dir_ignored if {
-	file := resource_file(media_root_path, "aws_instance", {"ami": "ami-x"})
+	file := resource_file(media_root_path, "aws_instance", {"ami": "ami-x", "metadata_options": imds_v2})
 	count(role_hits([file])) == 0
 }
 
@@ -611,6 +615,7 @@ test_r10_role_other_dir_ignored if {
 profile_instance_file(path, profile) := resource_file(path, "aws_instance", {
 	"ami": "${data.aws_ssm_parameter.ami.insecure_value}",
 	"iam_instance_profile": profile,
+	"metadata_options": imds_v2,
 	"lifecycle": [{"ignore_changes": ["${ami}", "${user_data_base64}"]}],
 })
 
@@ -686,4 +691,81 @@ test_r10_provisioner_or_connection if {
 test_r10_provisioner_other_dir_ignored if {
 	body := {"provisioner": {"local-exec": [{"command": "x"}]}}
 	count(role_hits([resource_file("modules/ecs_service/main.tf", "aws_security_group", body)])) == 0
+}
+
+# 상자(aws_instance)의 launch_template 은 위반이다 — 시작 템플릿에 달린 다른
+# 인스턴스 프로필로 상자를 띄워 iam_instance_profile 참조 검사를 비켜 간다.
+# dynamic 꼴도 같다. 두 경로 모두 본다.
+launch_template_bodies := [
+	{"launch_template": [{"id": "lt-0123456789abcdef0"}]},
+	{"launch_template": [{"name": "${var.launch_template_name}", "version": "$Latest"}]},
+	{"dynamic": {"launch_template": [{"for_each": "${var.x}", "content": [{}]}]}},
+]
+
+# 다른 R10 검사에 걸리지 않는 상자 본문(media_host 의 ignore_changes 포함).
+instance_base_body := {
+	"ami": "${data.aws_ssm_parameter.ami.insecure_value}",
+	"metadata_options": imds_v2,
+	"lifecycle": [{"ignore_changes": ["${ami}", "${user_data_base64}"]}],
+}
+
+test_r10_instance_launch_template if {
+	every path in ["modules/media_host/main.tf", media_root_path] {
+		every body in launch_template_bodies {
+			file := resource_file(path, "aws_instance", object.union(instance_base_body, body))
+			one_hit([file], "launch_template")
+		}
+	}
+}
+
+test_r10_instance_launch_template_other_dir_ignored if {
+	body := {"launch_template": [{"id": "lt-0123456789abcdef0"}]}
+	count(role_hits([resource_file("modules/ecs_service/main.tf", "aws_instance", body)])) == 0
+}
+
+# 상자의 key_name(SSH 키 쌍)은 위반이다 — SSM 세션 감사 밖의 접속 신분이 생긴다.
+# 두 경로 모두 본다.
+test_r10_instance_key_name if {
+	every path in ["modules/media_host/main.tf", media_root_path] {
+		every key_name in ["pokeclip-ops", "${var.key_name}", ""] {
+			file := resource_file(path, "aws_instance", object.union(instance_base_body, {"key_name": key_name}))
+			one_hit([file], "key_name")
+		}
+	}
+}
+
+test_r10_instance_key_name_other_dir_ignored if {
+	body := {"key_name": "pokeclip-ops"}
+	count(role_hits([resource_file("modules/ecs_service/main.tf", "aws_instance", body)])) == 0
+}
+
+# 상자는 metadata_options 블록 하나에 http_tokens = "required"(리터럴)를 명시한다 —
+# IMDSv1 은 SSRF 로 역할 자격을 내준다. 블록 · 속성이 없거나(기본값은 AMI ·
+# 계정 설정에 따라 optional), 식이거나, dynamic 이면 위반이다.
+imds_violation_bodies := [
+	{"metadata_options": []},
+	{"metadata_options": [{}]},
+	{"metadata_options": [{"http_tokens": "optional"}]},
+	{"metadata_options": [{"http_tokens": "${var.http_tokens}"}]},
+	{"metadata_options": [{"http_tokens": "required"}, {"http_tokens": "optional"}]},
+	{"metadata_options": [{"http_tokens": "required"}], "dynamic": {"metadata_options": [{"for_each": "${var.x}", "content": [{}]}]}},
+]
+
+test_r10_instance_imds_not_required if {
+	every path in ["modules/media_host/main.tf", media_root_path] {
+		one_hit([resource_file(path, "aws_instance", object.remove(instance_base_body, ["metadata_options"]))], "http_tokens")
+		every body in imds_violation_bodies {
+			one_hit([resource_file(path, "aws_instance", object.union(instance_base_body, body))], "http_tokens")
+		}
+	}
+}
+
+test_r10_instance_imds_required_accepted if {
+	body := object.union(instance_base_body, {"metadata_options": [{"http_endpoint": "enabled", "http_tokens": "required", "http_put_response_hop_limit": 2}]})
+	count(role_hits([resource_file("modules/media_host/main.tf", "aws_instance", body)])) == 0
+}
+
+test_r10_instance_imds_other_dir_ignored if {
+	body := {"metadata_options": [{"http_tokens": "optional"}]}
+	count(role_hits([resource_file("modules/ecs_service/main.tf", "aws_instance", body)])) == 0
 }

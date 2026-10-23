@@ -45,7 +45,11 @@ Media 상자[^box] 모듈입니다(설계 3-3 · 3-3-1 · 5-3 · 5-5, 계획 M9)
     *   역할 참조: 인라인 정책 · 인스턴스 프로필 · 관리형 정책 연결의 `role` 은
         같은 경로의 `aws_iam_role.<이름>.name` · `.id` 만, 상자의
         `iam_instance_profile` 은 `aws_iam_instance_profile.<이름>.name` 만
-        (리터럴 이름 · 변수로 다른 역할 · 프로필을 겨누지 못하게).
+        (리터럴 이름 · 변수로 다른 역할 · 프로필을 겨누지 못하게). 상자에
+        `launch_template` 금지(`dynamic` 포함 — 템플릿의 프로필로 비켜 간다).
+    *   상자 접속 · 자격: `key_name`(SSH 키 쌍) 금지 · `metadata_options` 에
+        `http_tokens = "required"` 리터럴 명시 필수(IMDSv2 — 없음 · 식 ·
+        `dynamic` 위반).
     *   명령 블록: 자원 본문에 `provisioner`(`local-exec` · `remote-exec` ·
         `file`) · `connection` 금지(`dynamic` 포함).
     *   lifecycle: 거부 목록 파라미터는 `prevent_destroy = true`(리터럴) ·

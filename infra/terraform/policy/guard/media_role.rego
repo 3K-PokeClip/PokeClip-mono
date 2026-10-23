@@ -40,7 +40,10 @@
 # ⑧ 역할 · 프로필을 받는 자리는 같은 경로의 참조만이다 — 인라인 정책 · 인스턴스
 #    프로필 · 관리형 정책 연결의 role 은 aws_iam_role.<이름>.name · .id, 상자의
 #    iam_instance_profile 은 aws_iam_instance_profile.<이름>.name(리터럴 이름 ·
-#    변수로 다른 서비스 역할 · 이미 있는 특권 프로필을 겨누지 못하게).
+#    변수로 다른 서비스 역할 · 이미 있는 특권 프로필을 겨누지 못하게). 상자는
+#    launch_template 을 쓰지 않는다(dynamic 포함 — 템플릿의 프로필로 비켜 간다).
+# ⑧-1 상자는 key_name(SSH 키 쌍)을 쓰지 않고, metadata_options 블록 하나에
+#    http_tokens = "required" 리터럴을 명시한다(IMDSv2 — 없음 · 식 · dynamic 위반).
 # ⑨ statement actions 에 iam · sts 동작은 없다(서비스째 — 아래 규칙 주석).
 # ⑩ 자원 본문에 provisioner · connection 은 없다(dynamic 포함).
 #
@@ -499,6 +502,56 @@ deny contains msg if {
 	not regex.match(instance_profile_reference_pattern, decl.body.iam_instance_profile)
 	msg := sprintf(
 		"R10 %s: %s 의 iam_instance_profile 은 같은 경로의 aws_iam_instance_profile.<이름>.name 참조만",
+		[decl.path, label(decl)],
+	)
+}
+
+# 본문에 키 key 가 있다 — 그대로든 dynamic 블록으로든.
+has_key_or_dynamic(body, key) if key in object.keys(body)
+
+has_key_or_dynamic(body, key) if key in object.keys(object.get(body, "dynamic", {}))
+
+media_instances contains decl if {
+	some decl in media_role_decls
+	decl.kind == "resource"
+	decl.type == "aws_instance"
+}
+
+# 상자는 시작 템플릿(launch_template)으로 띄우지 않는다 — 템플릿에 달린 다른
+# 인스턴스 프로필이 붙어 위 참조 검사를 비켜 간다. dynamic 꼴도 같다.
+deny contains msg if {
+	some decl in media_instances
+	has_key_or_dynamic(decl.body, "launch_template")
+	msg := sprintf(
+		"R10 %s: %s 의 launch_template — 상자의 인스턴스 프로필은 iam_instance_profile 참조로만(dynamic 포함)",
+		[decl.path, label(decl)],
+	)
+}
+
+# 상자에 SSH 키 쌍(key_name)을 달지 않는다 — 접속은 SSM 세션(감사됨)으로만.
+deny contains msg if {
+	some decl in media_instances
+	has_key_or_dynamic(decl.body, "key_name")
+	msg := sprintf("R10 %s: %s 의 key_name — 상자 접속은 SSM 세션으로만(SSH 키 쌍 금지)", [decl.path, label(decl)])
+}
+
+# 상자는 IMDSv2 만 연다 — metadata_options 블록 하나에 http_tokens = "required"
+# 리터럴을 명시한다. 없으면 기본값이 AMI · 계정 설정을 따라 optional(IMDSv1)일
+# 수 있고, IMDSv1 은 SSRF 로 역할 자격을 내준다. dynamic 꼴은 대조할 수 없어
+# 위반이다.
+imds_v2_required(body) if {
+	blocks := object.get(body, "metadata_options", [])
+	is_array(blocks)
+	count(blocks) == 1
+	object.get(blocks[0], "http_tokens", null) == "required"
+	not "metadata_options" in object.keys(object.get(body, "dynamic", {}))
+}
+
+deny contains msg if {
+	some decl in media_instances
+	not imds_v2_required(decl.body)
+	msg := sprintf(
+		"R10 %s: %s 의 metadata_options 에 http_tokens = \"required\" 리터럴 명시 필요(IMDSv1 금지 · dynamic 금지)",
 		[decl.path, label(decl)],
 	)
 }

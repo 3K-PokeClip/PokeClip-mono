@@ -192,24 +192,72 @@ resource "terraform_data" "runtime_contract" {
 
     # 값: URL 의 user:pass@ 는 이름과 무관하게 비밀이다. app_env_non_secret_names
     # 는 이름 검사만 풀고 이 검사는 풀지 않는다. 판정은 :// 마다 그 뒤 조각에
-    # 따로 한다 — 쿼리 안에 넣은 URL 의 자격 증명도 잡으려고. 첫 식은 / 앞의
-    # :…@ 를 넓게 잡는다 — libpq 처럼 인코딩 없는 ? · # 를 비밀번호에 받는
-    # 클라이언트가 있어 ? · # 에서 끊지 않는다. 둘째 식은 호스트(+숫자 포트)
-    # 바로 뒤에 ? · # 가 오는 꼴, 곧 쿼리 · 프래그먼트 속 @ 만 빼 준다. 알려진
-    # 한계: 숫자만인 비밀번호 뒤 원문 ?(https://u:123?x@h)는 통과하고, IPv6
-    # 호스트 + 쿼리 속 :…@(https://[2001:db8::1]?a=b:c@d)는 멈춘다.
+    # 따로 한다 — 쿼리 안에 넣은 URL 의 자격 증명도 잡으려고. / 앞의 :…@ 를
+    # 넓게 잡고 ? · # 에서 끊지 않는다 — libpq 처럼 인코딩 없는 ? · # 를
+    # 비밀번호에 받는 클라이언트가 있다. 「호스트(+포트) 뒤 ? · # 면 쿼리」
+    # 로 빼 주지 않는다 — https://h:443?q@x 와 postgres://u:5432?비밀@h 는
+    # 글자로 구별되지 않아 면제가 곧 우회다. 알려진 한계(오탐): 쿼리 ·
+    # 프래그먼트 속 user:x@ 꼴(https://h:443?owner=ops@x)도 멈춘다 — 그런
+    # 값은 app_secret_arns 로 옮긴다.
     precondition {
       condition = alltrue(flatten([
         for env in values(try(local.runtime.app_env, {})) : [
           for value in values(env) : !anytrue([
             for i, seg in split("://", value) :
-            i > 0 &&
-            can(regex("^[^/@]*:[^/@]*@", seg)) &&
-            !can(regex("^[^/?#@:]*(:[0-9]*)?[?#]", seg))
+            i > 0 && can(regex("^[^/@]*:[^/@]*@", seg))
           ])
         ]
       ]))
       error_message = "런타임 출력 app_env 값에 URL 자격 증명(scheme://user:pass@)이 있다 — 자격 증명은 런타임 app_secret_arns 로 옮긴다."
+    }
+
+    # 값 운반 이름: 값 하나에 여러 속성을 싣는 env 는 이름 검사를 통째로
+    # 비켜 간다 — SPRING_APPLICATION_JSON(Spring Boot 가 JSON 을 속성으로
+    # 편다) · JAVA_TOOL_OPTIONS(JVM) · JDK_JAVA_OPTIONS(java 실행기, JDK 9+) ·
+    # JAVA_OPTS(셸 시작 스크립트 관례 — 지금 이미지의 exec 꼴 java -jar 는
+    # 읽지 않지만 시작 스크립트로 바뀌면 실린다). 같은 부류 _JAVA_OPTIONS
+    # (HotSpot) 와 소문자 변형은 위 이름 꼴 검사가 이미 막는다.
+    # app_env_non_secret_names 로 풀지 않는다.
+    precondition {
+      condition = alltrue(flatten([
+        for env in values(try(local.runtime.app_env, {})) : [
+          for name in keys(env) : !contains([
+            "SPRING_APPLICATION_JSON",
+            "JAVA_TOOL_OPTIONS",
+            "JDK_JAVA_OPTIONS",
+            "JAVA_OPTS",
+          ], name)
+        ]
+      ]))
+      error_message = "런타임 출력 app_env 에 값 운반 이름(SPRING_APPLICATION_JSON · JAVA_TOOL_OPTIONS · JDK_JAVA_OPTIONS · JAVA_OPTS)이 있다 — 속성은 앱이 읽는 이름 하나씩 넣고, 비밀은 런타임 app_secret_arns 로 옮긴다."
+    }
+
+    # 값 운반 꼴: 이름이 무엇이든 값에 비밀을 싣는 꼴 셋을 멈춘다.
+    # (1) URL 쿼리의 비밀 매개변수 — ? · & · ; 뒤 키 이름에 passw · pwd ·
+    # secret · token 이 들면(passwd · sslpassword · client_secret ·
+    # access_token 등, 대소문자 무관). 알려진 한계(오탐): token_type ·
+    # page_token 처럼 비밀 아닌 키도 멈춘다. (2) 비밀 낱말이 든
+    # JVM 시스템 속성 -D…(속성 이름은 대소문자 무관). JVM 은 옵션을 공백으로
+    # 나누므로 -D 는 값 처음 · 공백 · 따옴표 뒤만 본다 — pokeclip-Data-token
+    # 같은 하이픈 이름은 걸지 않는다. -d 는 시스템 속성이 아니다. (3) 콜론
+    # 없는 userinfo(https://<토큰>@host). 알려진 한계(오탐): ssh://git@host
+    # 처럼 비밀 아닌 사용자 이름만 둔 URL 과 쿼리 속 @(https://h?owner=ops@x)
+    # 도 멈춘다 — 계약 이름의 값 꼴(주소 · 큐 URL · 버킷 · 대역 · 기간)에는
+    # 없다.
+    precondition {
+      condition = alltrue(flatten([
+        for env in values(try(local.runtime.app_env, {})) : [
+          for value in values(env) : !(
+            can(regex("(?i)[?&;][^=&;#?]*(passw|pwd|secret|token)[^=&;#?]*=", value)) ||
+            can(regex("(^|[\\s\"'])-D[^ =]*(?i:secret|password|token)", value)) ||
+            anytrue([
+              for i, seg in split("://", value) :
+              i > 0 && can(regex("^[^/@:]+@", seg))
+            ])
+          )
+        ]
+      ]))
+      error_message = "런타임 출력 app_env 값에 비밀을 싣는 꼴(키에 passw · pwd · secret · token 이 든 쿼리 매개변수 · 비밀 낱말이 든 -D 속성 · https://<토큰>@host)이 있다 — 비밀은 런타임 app_secret_arns 로 옮긴다."
     }
   }
 }

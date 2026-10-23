@@ -148,6 +148,11 @@ clip: `CLOUDFRONT_KEY_PAIR_ID` · `MEDIA_BASE_URL` · `PLAYBACK_COOKIE_DOMAIN` �
 
 *   `*_ENDPOINT` 는 `PROFILE_PHOTO_S3_ENDPOINT` · `BROADCAST_QUEUE_ENDPOINT` ·
     `RENDER_QUEUE_ENDPOINT` 입니다.
+*   `app_env` 에 넣지 않는 이름 · 값: 값 하나에 여러 속성을 싣는 이름
+    (`SPRING_APPLICATION_JSON` · `JAVA_TOOL_OPTIONS` · `JDK_JAVA_OPTIONS` ·
+    `JAVA_OPTS`)과 URL 자격 증명 · 쿼리 `password=` · 비밀 `-D` 속성이 든
+    값은 platform plan 이 멈춥니다. 쿼리 · 프래그먼트에 `@` 가 든 URL 도
+    멈추므로(알려진 오탐) 그런 값은 `app_secret_arns` 로 넣습니다.
 *   표에 없는 이름은 미확인입니다. 위 파일 밖(Java 코드의 직접 env 조회 등)은
     `services/auth` · `services/clip` 의 `src/main` 에서
     `getenv` · `@Value` 검색으로 더 찾지 못했습니다.

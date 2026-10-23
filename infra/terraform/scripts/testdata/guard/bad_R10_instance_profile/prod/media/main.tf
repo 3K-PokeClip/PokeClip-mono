@@ -4,4 +4,8 @@ resource "aws_instance" "this" {
   ami                  = "ami-0123456789abcdef0"
   instance_type        = "c8gn.large"
   iam_instance_profile = "pokeclip-prod-admin"
+
+  metadata_options {
+    http_tokens = "required"
+  }
 }
