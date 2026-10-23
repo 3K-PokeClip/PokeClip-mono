@@ -90,9 +90,13 @@ class BroadcastInfoCollectorTest {
         client.pages = List.of(new LivePage(List.of(entry("c-a", 300)), null));
         client.settings.put("tok-a", new SettingResult(new LiveSetting("A", List.of(), null), 200));
 
-        collector().tick();
+        List<RelayPayload> payloads = new ArrayList<>();
+        new BroadcastInfoCollector(registry, client, stored::add, (streamId, payload) -> payloads.add(payload), PROPS, clock)
+                .tick();
 
         assertThat(stored).extracting(BroadcastInfo::platform).containsExactly(Platform.SOOP);
+        assertThat(payloads).as("SSE 방송 정보에도 같은 플랫폼이 실린다(POK-397)").singleElement()
+                .isInstanceOfSatisfying(RelayPayload.Info.class, info -> assertThat(info.platform()).isEqualTo(Platform.SOOP));
     }
 
     @Test

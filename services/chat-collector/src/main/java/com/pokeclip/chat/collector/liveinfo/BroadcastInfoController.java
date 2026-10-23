@@ -63,13 +63,15 @@ public class BroadcastInfoController {
                 : WindowRequest.parseAt(since);
 
         List<Point> series = store.series(streamId, from, MAX_POINTS).stream()
-                .map(info -> new Point(info.observedAt(), info.viewers()))
+                .map(info -> new Point(info.observedAt(), info.viewers(), info.platform()))
                 .toList();
         Latest latest = store.latest(streamId)
                 .map(info -> new Latest(info.title(), info.tags(), info.category(),
                         info.viewers(), info.observedAt()))
                 .orElse(null);
-        return new Response(latest, series);
+        List<BroadcastInfoStore.PlatformLatest> platforms =
+                store.latestByPlatform(List.of(streamId)).getOrDefault(streamId, List.of());
+        return new Response(latest, platforms, series);
     }
 
     /**
@@ -89,30 +91,41 @@ public class BroadcastInfoController {
         if (ids.size() > MAX_STREAMS) {
             return ResponseEntity.badRequest().body(Map.of("error", "too_many"));
         }
-        return ResponseEntity.ok(new Titles(store.latestTitles(ids)));
+        return ResponseEntity.ok(new Titles(store.latestTitles(ids), store.latestByPlatform(ids)));
     }
 
     /** 제목 창구 요청 본문. */
     public record TitlesRequest(List<String> streamIds) {
     }
 
-    /** {@code titles}: 방송 번호 → 마지막 제목. */
-    public record Titles(Map<String, BroadcastInfoStore.Title> titles) {
+    /**
+     * {@code titles}: 방송 번호 → 마지막 제목(플랫폼 무관, 옛 clip이 읽는 칸이라 모양 그대로). {@code platforms}: 방송 번호 → 플랫폼마다
+     * 최신 값(POK-397). 둘을 <b>나란히</b> 둔다: {@code titles}는 제목 있는 방송만 키를 가져서, 그 안에 두면 제목 없는 SOOP 방송의
+     * 시청자 수가 사라진다(계획 검증 M1).
+     */
+    public record Titles(Map<String, BroadcastInfoStore.Title> titles,
+                         Map<String, List<BroadcastInfoStore.PlatformLatest>> platforms) {
     }
 
     /**
      * <b>{@code latest}는 {@code series}의 마지막 줄이 아니다.</b> {@code since}가 늦으면
      * 추이는 비어도 최신 제목은 있다 — 화면 위쪽의 제목·카테고리는 구간과 무관하게 보여야 한다.
      */
-    public record Response(Latest latest, List<Point> series) {
+    public record Response(Latest latest, List<BroadcastInfoStore.PlatformLatest> platforms, List<Point> series) {
     }
 
-    /** 화면 위쪽. {@code observedAt}은 <b>우리 시계</b>다({@link BroadcastInfo}). */
+    /**
+     * 화면 위쪽. {@code observedAt}은 <b>우리 시계</b>다({@link BroadcastInfo}). 플랫폼과 무관한 최신 한 줄이다(옛 모양 그대로).
+     * 플랫폼마다 보려면 {@code platforms}를 본다(POK-397).
+     */
     public record Latest(String title, List<String> tags, String category,
                          Integer viewers, Instant observedAt) {
     }
 
-    /** 추이 한 점. <b>{@code viewers}가 {@code null}이면 그 회차에 못 찾은 것</b>이지 0이 아니다. */
-    public record Point(Instant observedAt, Integer viewers) {
+    /**
+     * 추이 한 점. <b>{@code viewers}가 {@code null}이면 그 회차에 못 찾은 것</b>이지 0이 아니다. {@code platform}은 그 줄을 남긴 플랫폼이다
+     * (POK-397). 두 플랫폼에 같이 내보내면 줄이 번갈아 오므로 화면은 플랫폼으로 갈라 그린다.
+     */
+    public record Point(Instant observedAt, Integer viewers, com.pokeclip.chat.collector.Platform platform) {
     }
 }

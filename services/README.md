@@ -33,7 +33,7 @@ Java 21 · Spring Boot 4.1 · Gradle 멀티모듈 · PostgreSQL · Redis
 |---|---|
 | `auth` | `users` · `refresh_tokens` · `secrets` · `stream_keys` · `pairing_codes` · `pairing_exchange_attempts` |
 | `clip` | `broadcasts` · `broadcast_events` (V201) · `jump_cards` (V202) · `broadcasts.vod_expires_at` (V203, POK-117) · `recipes` (V206, POK-124) · `clips` · `render_jobs` · `render_job_events` (V207, POK-125) · **`clips` 색인 `idx_clips_recipe` (V208, POK-243)** |
-| chat 계열 | `chat_messages` (V301 · `stream_id` 칸은 V302 · **닉네임·역할 칸은 V306**) · `chat_ended_streams` (V303) · **`chat_donations` (V307)** · **`broadcast_info` (V308)** · **`chat_ingest_keys` (V310, POK-233)** · **`purged_channels` (V311, POK-256)** · **표 넷의 `platform` 칸과 플랫폼을 앞에 둔 색인 (V313~V315, POK-397)** — **collector가 쓰고 detector가 읽는다.** 같은 담당(3번)·같은 V3xx 대역의 공동 소유라, 아래 "서로의 표를 직접 읽지 않는다"의 예외가 아니라 한 소유자의 두 프로세스다 |
+| chat 계열 | `chat_messages` (V301 · `stream_id` 칸은 V302 · **닉네임·역할 칸은 V306**) · `chat_ended_streams` (V303) · **`chat_donations` (V307)** · **`broadcast_info` (V308)** · **`chat_ingest_keys` (V310, POK-233)** · **`purged_channels` (V311, POK-256)** · **표 넷의 `platform` 칸과 플랫폼을 앞에 둔 색인 (V313~V315, POK-397)** · **방송 정보 플랫폼별 최신 색인 (V316, POK-397)** — **collector가 쓰고 detector가 읽는다.** 같은 담당(3번)·같은 V3xx 대역의 공동 소유라, 아래 "서로의 표를 직접 읽지 않는다"의 예외가 아니라 한 소유자의 두 프로세스다 |
 | `chat-detector` | `chat_metrics` (V401, POK-120) — **판별 서버 단독 소유다.** 위 `chat_messages`와 달리 공동 소유가 아니라 이 서버만 읽고 쓴다 |
 
 **서로의 표를 직접 읽지 않는다.** 필요하면 계약4의 `POST /internal/stream-keys/resolve`로
@@ -777,7 +777,7 @@ Flyway 마이그레이션은 앱이 뜰 때 실행돼야 하므로 **코드 옆(
 지금까지 나간 것은 auth의 `V101`~`V118`(`V110`·`V111`은 칸, **`V112`는 인덱스 넷과 표 주석 둘**, POK-89 · `V113` 오디오 트랙 이름 · `V114` 탈퇴 장부 · `V115` 연동 채널 칸 NULL 허용 · `V116`·`V117` SOOP 연동 · **`V118` 탈퇴 장부의 `platform` 칸, POK-397**) · clip의 `V201`(`broadcasts`·`broadcast_events`)과
 `V202`(`jump_cards`, POK-118)·`V203`(`broadcasts.vod_expires_at`, POK-117)·`V204`(색인 둘, POK-174)·
 **`V205`(방송 중 부분 색인, POK-218)** · `V206`(`recipes`, POK-124) · `V207`(`clips`·`render_jobs`·`render_job_events`, POK-125) · **`V208`(`clips (recipe_id, id DESC)` 색인 하나, POK-243)** ·
-`V209`~`V213` · **`V214`(`jump_cards.hidden_reason` · `jump_card_actions` · `recipes.source_card_id`, POK-338)** · **`V216`(`jump_card_actions`가 `open`도 받는다, POK-393)** · **`V220`(`broadcast_platforms`, POK-397)** · chat-collector의 `V301`(`chat_messages`)~**`V315`** ·
+`V209`~`V213` · **`V214`(`jump_cards.hidden_reason` · `jump_card_actions` · `recipes.source_card_id`, POK-338)** · **`V216`(`jump_card_actions`가 `open`도 받는다, POK-393)** · **`V220`(`broadcast_platforms`, POK-397)** · chat-collector의 `V301`(`chat_messages`)~**`V316`** ·
 chat-detector의 `V401`(`chat_metrics`, POK-120)이다.
 
 **chat-collector 대역 열:** `V301`(`chat_messages`) · `V302`(`stream_id` 칸) ·
@@ -787,7 +787,8 @@ chat-detector의 `V401`(`chat_metrics`, POK-120)이다.
 `V309`(`(stream_id, message_time)` 색인을 `CONCURRENTLY`로, POK-234) · **`V310`**(`chat_ingest_keys` — 방송 번호 → 물리 키, POK-233) ·
 `V311`(`purged_channels`, POK-256) · `V312`(정리 색인 셋, `CONCURRENTLY`) ·
 **`V313`**(표 넷에 `platform` 칸 + CHECK `NOT VALID` + 명부 PK `(platform, channel_id)`, POK-397) ·
-**`V314`**(플랫폼을 앞에 둔 색인 넷, `CONCURRENTLY`) · **`V315`**(지문 제약을 같은 이름으로 플랫폼 색인에 옮김 · 옛 채널 색인 셋 삭제 · CHECK 검증).
+**`V314`**(플랫폼을 앞에 둔 색인 넷, `CONCURRENTLY`) · **`V315`**(지문 제약을 같은 이름으로 플랫폼 색인에 옮김 · 옛 채널 색인 셋 삭제 · CHECK 검증) ·
+**`V316`**(`broadcast_info (stream_id, platform, observed_at)` 색인 하나, `CONCURRENTLY`, 플랫폼별 최신 방송 정보, POK-397).
 
 🔴 **`-- executeInTransaction=false` 주석은 Flyway가 읽지 않는다**(Flyway 12.4 OSS, POK-397에서 확인). 스크립트 설정은
 **같은 폴더의 `<파일 이름>.conf`**에서만 읽는다. `V309`·`V312`가 주석만으로 트랜잭션 밖에서 돈 것은 문장이 전부 `CONCURRENTLY`라
@@ -2005,6 +2006,7 @@ health `relay`와 종료 판정 줄에 실린다. 🔴 **health UP/DOWN에는 �
 
 **`event: broadcast-info`**(POK-234 PR-C, `BROADCAST_INFO_ENABLED`) — 걷는 방송마다 1분에 한 번. 같은 `seq`·`seqEpoch`를 나눠 쓴다.
 `time`은 **우리가 물어본 시각**(`timeBasis:"observed"`)이고 창구 칸 대신 제목·태그·카테고리·시청자 수가 찬다.
+**`platform`**(`CHZZK`·`SOOP`)은 그 관측을 남긴 플랫폼이다(POK-397). 한 방송을 두 플랫폼에 같이 내보내면 이벤트가 플랫폼마다 따로 오므로 화면은 이것으로 숫자를 가른다.
 🔴 **`viewers`가 `null`이면 「못 찾았다」이지 0명이 아니다** — 시청자 수는 치지직 전체 라이브 목록(시청자 수 내림차순)을 훑어 얻고,
 목록이 429를 주거나 그 밖 이유로 실패하거나 상한(500장)에 닿을 때까지 그 방송을 못 찾으면 비운다(실패한 장 앞에서 찾은 방송은 찬다).
 제목·태그·카테고리는 방송 설정(스트리머 토큰)이 이기고, 설정이 거부되면 목록 값으로 채운다.
@@ -2015,7 +2017,7 @@ health `relay`와 종료 판정 줄에 실린다. 🔴 **health UP/DOWN에는 �
 
 ```json
 {"seq":13,"seqEpoch":1789300000000,"kind":"broadcast-info","time":"2026-09-13T10:01:00Z","timeBasis":"observed",
- "title":"…","tags":["…"],"category":"리그 오브 레전드","viewers":340}
+ "title":"…","tags":["…"],"category":"리그 오브 레전드","viewers":340,"platform":"CHZZK"}
 ```
 
 #### 🔴 웹이 지켜야 하는 것 넷
@@ -4115,6 +4117,10 @@ DB가 거절해 500이 되고, **입력 오류가 장애로 오인된다**(epoch
 **`broadcast-info`의 `latest`는 `series`의 마지막 줄이 아니다.** `since`가 늦으면 추이는 비어도
 최신 제목은 있다 — 화면 위쪽의 제목·카테고리는 구간과 무관하게 보여야 한다.
 **`viewers`가 `null`이면 그 회차에 못 찾은 것**이지 0명이 아니다.
+**`latest`는 플랫폼과 무관한 최신 한 줄**(옛 모양 그대로)이고, 플랫폼마다 보려면 **`platforms`**를 본다(POK-397):
+`[{"platform":"CHZZK","title":…,"category":…,"viewers":…,"observedAt":…}, …]`(플랫폼 열거 순, 관측이 없는 플랫폼은 안 나온다).
+`viewers`·`observedAt`은 그 플랫폼의 **최신 줄**(제목 조건 없음), `title`·`category`는 그 플랫폼의 **제목 있는 최신 줄**이라 두 시점이 다를 수 있다
+(제목을 한 번도 못 얻었으면 둘 다 `null`). 추이 `series`의 점마다 `platform`이 실린다(`{"observedAt":…,"viewers":…,"platform":"SOOP"}`).
 
 **제목 창구(`/internal/broadcast-info/latest`, POK-259)는 여러 방송의 마지막 제목을 한 번에 준다.** clip 방송 목록이
 한 장(최대 100개)마다 한 번 부른다. 위 창구는 방송 하나씩이라 한 장에 100번 왕복이 된다.
@@ -4124,6 +4130,10 @@ DB가 거절해 500이 되고, **입력 오류가 장애로 오인된다**(epoch
 건너뛴다), 카테고리는 같은 관측의 값이다. 제목 앞뒤 공백은 깎는다. **100개를 넘으면 잘라 주지 않고 400 `too_many`**다
 (잘라 주면 뒤 방송 제목이 「없다」로 보인다). 질의 한 번(`unnest` + `LATERAL`)이고 `(stream_id, observed_at)` 색인을 최신부터 탄다
 (`BroadcastTitlePlanTest`). 🔴 제목이 거의 다 빈 방송이 있으면 그 방송만 색인을 끝까지 훑는다(관측 수에 비례).
+**`titles`와 나란히 `platforms`**(POK-397): `{"titles":{…위와 같음…},"platforms":{"<방송 번호>":[{"platform","title","category","viewers","observedAt"}, …]}}`.
+값 규칙은 위 단건 창구의 `platforms`와 같다. `titles` 안에 두지 않은 것은 `titles`가 제목 있는 방송만 키를 가져서, 제목 없이 시청자 수만 있는
+SOOP 방송이 통째로 빠지기 때문이다. 옛 clip은 `titles`만 읽으므로 그대로 돈다. 방송 × 플랫폼 `LATERAL`이고 `V316` 색인
+`(stream_id, platform, observed_at)`을 플랫폼까지 범위로 탄다(없으면 SOOP을 중간에 끈 방송·SOOP 없는 방송에서 이력을 처음까지 훑는다).
 
 **설정은 환경변수가 아니라 yml이다**(`pokeclip.query.window-max` 1시간 · `page-default` 200 ·
 `page-max` 500 · `chart-max-buckets` 720). 운영자가 만질 값이 아니라 **clip·프론트와의 계약값**이고,

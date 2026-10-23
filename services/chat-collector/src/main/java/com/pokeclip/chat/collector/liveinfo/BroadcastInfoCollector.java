@@ -108,7 +108,7 @@ public class BroadcastInfoCollector {
                 // 🔴 목록·설정을 묻는 사이 세션이 닫히거나 방송이 바뀌었으면 민다(PR #180 codex) — 닫힐 때 등록부가
                 // 잊은 번호 카운터를 되살려 끝난 방송에 이벤트가 가고 카운터가 샌다. 확인과 넣기 사이의 좁은 창은 남는다.
                 if (session.streamId().equals(registry.currentStreamIdOf(session.streamerId()))) {
-                    relay.offer(info.streamId(), new RelayPayload.Info(info.observedAt(), info.title(), info.tags(),
+                    relay.offer(info.streamId(), new RelayPayload.Info(info.platform(), info.observedAt(), info.title(), info.tags(),
                             info.category(), info.viewers()));
                 }
             } catch (RuntimeException e) {
