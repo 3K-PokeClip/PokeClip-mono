@@ -152,6 +152,9 @@ import 루트(`nonprod/dev` · `nonprod/dns-legacy`)의 선언은 실물에 대�
     않습니다(guard R3).
 *   Terraform 이 만든 SG 에는 기본 이그레스가 없으므로, 필요한 이그레스도
     별도 규칙으로 적습니다.
+*   SRT NLB 인그레스(`modules/media_ingest`)는 /16 보다 넓은 출처를
+    `ingest_public_approved = true` 없이는 받지 않습니다 — 공개는 S1 게이트 ·
+    응답기 뒤 8a 단계의 승인입니다(설계 4-6).
 
 ### 비밀 값은 상태에 남기지 않는다
 
@@ -276,7 +279,7 @@ guard 는 Terraform 트리의 금지 규약을 검사합니다. 규칙 R1 ~ R13 
 | R3 | 전체 | `aws_security_group` 자원 안 `ingress` · `egress`(블록 · 속성 · `dynamic "ingress"` · `dynamic "egress"`) |
 | R4 | `modules/state_bucket/` | `aws_s3_bucket` 자원 없음, 또는 그 자원 중 `lifecycle { prevent_destroy = true }`(리터럴 `true`)가 없는 것 |
 | R6 | `modules/secret_shells/` | `aws_secretsmanager_secret_policy` 선언(`count = 0` 이어도) · `aws_secretsmanager_secret` 자원의 인라인 `policy` 인자(값과 무관 — kty 61차) · 이름이 `names` 가 아닌 `variable`(읽기 역할 등 다른 입력). 대상 경로에 `.tf` 가 없으면 건너뜀. 모듈 밖(다른 루트가 출력 ARN 으로 비밀에 정책을 붙이는 것)은 보지 않음 — 리뷰가 막음 |
-| R10 | `modules/media_host/` · `prod/media/` | 문자열 속 관리형 정책 ARN(`iam::aws:policy/<이름>`)의 이름이 `AmazonSSMManagedInstanceCore` 리터럴이 아님 · `dbuser:` 뒤 와일드카드(`*` · `?`) · `rds-db:connect` 를 덮는 정책 문서 statement 의 Resource 가 dbuser ARN 이 아니거나 없음 · rds-db 동작이 정책 문서 statement actions 밖(인라인 · dynamic)에 있음 · media_host 의 `aws_ssm_parameter` 에 리터럴 `prevent_destroy` · `ignore_changes` 에 `value`. 대상 경로에 `.tf` 가 없으면 건너뜀 |
+| R10 | `modules/media_host/` · `prod/media/` | **IAM 유형**: 허용 목록(`aws_iam_role` · `aws_iam_instance_profile` · `aws_iam_role_policy` · `aws_iam_role_policy_attachment` · data `aws_iam_policy_document`) 밖의 IAM 자원 · data(정책 조회 · 고객 관리 정책 포함). **관리형 연결**: 주소가 `managed` 하나가 아님 · `policy_arn` 이 `each.value` 가 아님 · `for_each` 가 `local.managed_policy_arns` 가 아님 · 그 지역값이 `{ AmazonSSMManagedInstanceCore = <그 ARN 리터럴> }` 하나가 아님 · 문자열 속 관리형 정책 ARN(`iam::aws:policy/<이름>`)의 이름이 그 리터럴이 아님. **정책 문서**: `not_actions` · `not_resources` · 다른 문서 합치기(`source_policy_documents` · `override_policy_documents`) · `dynamic`. **역할 인라인 정책**: 정책 문서 `json` 이 아님(`jsonencode` 등 — 신뢰 정책 `assume_role_policy` 는 예외) · 역할의 `inline_policy` · `managed_policy_arns`. **rds-db**: `dbuser:` 뒤 와일드카드(`*` · `?`) · `rds-db:connect` 를 덮는 statement 의 Resource 가 dbuser ARN 이 아니거나 없음 · rds-db 동작이 정책 문서 statement `actions` 밖에 있음. **lifecycle**: 거부 목록 그릇(`aws_ssm_parameter`)에 리터럴 `prevent_destroy` · `ignore_changes` 의 `value` 가 없음 · media_host 상자(`aws_instance`)의 `ignore_changes` 에 `ami` · `user_data_base64` 가 없음. 설명 문자열(`description`)은 보지 않음. 대상 경로에 `.tf` 가 없으면 건너뜀 |
 | R11 | `nonprod/dev/` | `aws_instance` · `aws_eip` · `aws_security_group` 중 없는 유형이 있음, 또는 그 자원 중 리터럴 `prevent_destroy = true` 가 없는 것 |
 | R12 | `nonprod/dns-legacy/` | 운영 트리: ① 그 루트 바로 아래 `.tf` 없음 ② 주소가 정확히 `aws_route53_zone.legacy` 인 선언 없음 ③ 그 루트의 `aws_route53_zone` 중 리터럴 `prevent_destroy = true` 가 없는 것. fixture 트리는 ① · ② 의 부재만 건너뜀(③ 은 그대로) |
 | R13 | 전체(`.tf` 만 — `*.example` · 시험 파일 · 주석은 리뷰) | 문자열 · 숫자 리터럴(맵 키 포함) 안의 계정 ID 꼴 숫자열 — 12자리 · 4-4-4 대시 표기(앞뒤가 숫자가 아님 — ARN 속 계정 ID 포함) · 이름을 소문자로 바꾸고 `-` · `_` 를 뺐을 때 `accountid` 가 드는 `variable`(`accountId` · `account-id` 포함). 위반 메시지는 그 숫자열을 가림 |
