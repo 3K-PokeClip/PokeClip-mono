@@ -1,0 +1,570 @@
+/* 유튜브 업로드 창(POK-381, 시안 C3 + 썸네일 T2). 왼쪽은 쇼츠에서 보일 모습, 오른쪽은 탭(정보 · 썸네일 · 공개) */
+
+/* DS 창의 폭(480)을 이긴다: 클래스를 겹쳐 쓴다(설정 화면 창들과 같은 방식) */
+.dialog.dialog {
+  width: calc(960 * var(--pc-u));
+  /* 100%는 창을 담은 격자 칸(내용만큼 늘어난다)을 따라가 좁은 화면에서 넘친다: 화면 폭으로 막는다 */
+  max-width: calc(100vw - 2 * var(--pc-space-4));
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  /* 낮은 화면에서는 가운데만 스크롤하고 머리·아래 단추 줄은 늘 보인다 */
+  overflow: hidden;
+}
+
+.head {
+  padding: var(--pc-space-5) var(--pc-space-6) 0;
+}
+
+.form {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.body {
+  display: flex;
+  gap: var(--pc-space-6);
+  padding: var(--pc-space-5) var(--pc-space-6);
+  align-items: flex-start;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.left {
+  flex: none;
+  width: calc(264 * var(--pc-u));
+  display: flex;
+  flex-direction: column;
+  gap: var(--pc-space-2);
+}
+
+.right {
+  flex: 1;
+  min-width: 0;
+}
+
+.label {
+  display: block;
+  font-size: var(--pc-font-size-sm);
+  font-weight: var(--pc-weight-medium);
+  color: var(--pc-color-text-primary);
+}
+
+/* 탭 셋이 칸 폭을 같은 크기로 나눠 채운다(시안 C3). 탭마다 밑줄이 있고 고른 탭만 강조색. 클래스를 겹쳐 DS 탭을 이긴다 */
+.tabs.tabs {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--pc-space-2);
+  border-bottom: 0;
+}
+
+.tab.tab {
+  text-align: left;
+  padding: var(--pc-space-2) 0;
+  margin-bottom: 0;
+  font-size: var(--pc-font-size-sm);
+  color: var(--pc-color-text-muted);
+  border-bottom: 2px solid var(--pc-color-border-subtle);
+}
+
+.tab.tab:hover:not(:disabled) {
+  color: var(--pc-color-text-primary);
+}
+
+.tab.tab[data-selected] {
+  color: var(--pc-color-text-primary);
+  font-weight: var(--pc-weight-semibold);
+  border-bottom-color: var(--pc-color-accent);
+}
+
+/* 탭을 바꿔도 창 높이가 덜 출렁이게 */
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pc-space-4);
+  min-height: calc(500 * var(--pc-u));
+  padding-top: var(--pc-space-4);
+}
+
+.tabError {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-left: var(--pc-space-1);
+  border-radius: 50%;
+  background: var(--pc-color-danger);
+  vertical-align: middle;
+}
+
+.foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--pc-space-4);
+  padding: var(--pc-space-4) var(--pc-space-6);
+  border-top: 1px solid var(--pc-color-border-subtle);
+}
+
+.footNote {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--pc-space-2);
+  font-size: var(--pc-font-size-sm);
+  color: var(--pc-color-text-muted);
+}
+
+/* ---------- 쇼츠 미리보기 ---------- */
+
+.shorts {
+  position: relative;
+  aspect-ratio: 9 / 16;
+  border-radius: var(--pc-radius-lg);
+  overflow: hidden;
+  background: var(--pc-color-bg-inset);
+  border: 1px solid var(--pc-color-border-default);
+}
+
+.shorts > img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.shortsEmpty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: var(--pc-space-4);
+  text-align: center;
+  font-size: var(--pc-font-size-sm);
+  color: var(--pc-color-text-secondary);
+  background: repeating-linear-gradient(
+    135deg,
+    var(--pc-color-bg-inset) 0 12px,
+    var(--pc-color-bg-surface) 12px 24px
+  );
+}
+
+.shortsBadge {
+  position: absolute;
+  top: var(--pc-space-2);
+  left: var(--pc-space-2);
+  padding: 2px var(--pc-space-2);
+  border-radius: var(--pc-radius-pill);
+  background: rgb(0 0 0 / 0.7);
+  color: #fff;
+  font-size: var(--pc-font-size-2xs);
+}
+
+.shortsShade {
+  position: absolute;
+  inset: auto 0 0 0;
+  padding: var(--pc-space-8) var(--pc-space-3) var(--pc-space-3);
+  background: linear-gradient(transparent, rgb(0 0 0 / 0.85));
+}
+
+.shortsTitle {
+  margin: 0;
+  color: #fff;
+  font-size: var(--pc-font-size-sm);
+  font-weight: var(--pc-weight-semibold);
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+/* ---------- 썸네일 펼치는 목록(T2) ---------- */
+
+.thumbList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pc-space-2);
+}
+
+.thumbItem {
+  border: 1px solid var(--pc-color-border-default);
+  border-radius: var(--pc-radius-lg);
+  background: var(--pc-color-bg-inset);
+}
+
+.thumbItem[data-on] {
+  border-color: var(--pc-color-accent);
+}
+
+.thumbHead {
+  display: flex;
+  width: 100%;
+  padding: var(--pc-space-3) var(--pc-space-4);
+  box-sizing: border-box;
+}
+
+.thumbHead > span:last-child {
+  flex: 1;
+  min-width: 0;
+}
+
+.thumbHeadText {
+  display: flex;
+  align-items: center;
+  gap: var(--pc-space-3);
+}
+
+.thumbTitle {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.thumbTitle b {
+  font-size: var(--pc-font-size-sm);
+  font-weight: var(--pc-weight-semibold);
+  color: var(--pc-color-text-primary);
+}
+
+.thumbTitle span {
+  font-size: var(--pc-font-size-xs);
+  color: var(--pc-color-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thumbMini {
+  flex: none;
+  width: 22px;
+  height: 39px;
+  border-radius: var(--pc-radius-sm);
+  object-fit: cover;
+}
+
+.thumbBody {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pc-space-4);
+  padding: 0 var(--pc-space-4) var(--pc-space-4);
+}
+
+/* 추천 장면: 세로 사진 타일 한 줄 */
+.picks {
+  display: grid;
+  gap: var(--pc-space-2);
+}
+
+.pick {
+  position: relative;
+  aspect-ratio: 9 / 16;
+  padding: 0;
+  border: 1px solid var(--pc-color-border-default);
+  border-radius: var(--pc-radius-md);
+  overflow: hidden;
+  background: var(--pc-color-bg-surface);
+  color: var(--pc-color-text-secondary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.pick[aria-pressed='true'] {
+  border-color: var(--pc-color-accent);
+  box-shadow: 0 0 0 2px var(--pc-color-accent);
+}
+
+.pick:focus-visible {
+  outline: 2px solid var(--pc-color-focus-ring);
+  outline-offset: 2px;
+}
+
+.pick > img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.pickTime {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: var(--pc-font-size-xs);
+}
+
+.pickLabel {
+  position: absolute;
+  inset: auto 0 0 0;
+  padding: var(--pc-space-4) 4px 4px;
+  background: linear-gradient(transparent, rgb(0 0 0 / 0.8));
+  color: #fff;
+  font-size: var(--pc-font-size-2xs);
+  text-align: center;
+}
+
+.pickCheck {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--pc-color-accent);
+  color: var(--pc-color-text-on-accent);
+}
+
+/* 장면 띠: 끌어서 0.25초 단위로 */
+.strip {
+  position: relative;
+  height: calc(96 * var(--pc-u));
+  margin-top: var(--pc-space-3);
+  border-radius: var(--pc-radius-md);
+  background: var(--pc-color-bg-surface);
+  cursor: pointer;
+  touch-action: none;
+  user-select: none;
+}
+
+.strip:focus-visible {
+  outline: 2px solid var(--pc-color-focus-ring);
+  outline-offset: 2px;
+}
+
+.stripTiles {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  border-radius: var(--pc-radius-md);
+  overflow: hidden;
+}
+
+.stripTiles > * {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  object-fit: cover;
+  border-right: 1px solid rgb(0 0 0 / 0.35);
+}
+
+.stripMark {
+  position: absolute;
+  top: calc(-1 * var(--pc-space-3));
+  width: 5px;
+  height: 5px;
+  margin-left: -2.5px;
+  border-radius: 50%;
+  background: var(--pc-color-text-muted);
+}
+
+.stripHandle {
+  position: absolute;
+  top: -4px;
+  bottom: -4px;
+  width: 3px;
+  margin-left: -1.5px;
+  border-radius: 2px;
+  background: var(--pc-color-accent);
+  pointer-events: none;
+}
+
+.stripHandle[data-off] {
+  opacity: 0.3;
+}
+
+.stripTime {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 1px 6px;
+  border-radius: var(--pc-radius-sm);
+  background: var(--pc-color-accent);
+  color: var(--pc-color-text-on-accent);
+  font-size: var(--pc-font-size-2xs);
+  white-space: nowrap;
+}
+
+.stripHover {
+  position: absolute;
+  bottom: calc(100% + var(--pc-space-2));
+  width: calc(90 * var(--pc-u));
+  margin-left: calc(-45 * var(--pc-u));
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.stripHover > img,
+.stripHover > .stripHoverEmpty {
+  width: 100%;
+  aspect-ratio: 9 / 16;
+  object-fit: cover;
+  border-radius: var(--pc-radius-sm);
+  border: 2px solid var(--pc-color-bg-surface);
+  box-shadow: var(--pc-shadow-xl);
+  background: var(--pc-color-bg-inset);
+}
+
+.stripHover > span {
+  font-size: var(--pc-font-size-2xs);
+  color: var(--pc-color-text-secondary);
+}
+
+.stripHint {
+  margin-top: var(--pc-space-6);
+}
+
+/* 이미지 놓는 자리 */
+.drop {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--pc-space-1);
+  min-height: calc(140 * var(--pc-u));
+  padding: var(--pc-space-4);
+  border: 1.5px dashed var(--pc-color-border-strong);
+  border-radius: var(--pc-radius-lg);
+  background: var(--pc-color-bg-surface);
+  color: var(--pc-color-text-secondary);
+  text-align: center;
+  cursor: pointer;
+}
+
+.drop[data-over] {
+  border-color: var(--pc-color-accent);
+  background: var(--pc-color-accent-subtle);
+}
+
+.drop:focus-visible {
+  outline: 2px solid var(--pc-color-focus-ring);
+  outline-offset: 2px;
+}
+
+.drop img {
+  max-height: calc(220 * var(--pc-u));
+  max-width: 100%;
+  border-radius: var(--pc-radius-md);
+}
+
+/* ---------- 공개 탭 ---------- */
+
+/* 공개 범위 넷을 같은 폭 단추로. 속은 DS 라디오라 화살표 키가 그대로 된다 */
+.segmented {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 2px;
+  padding: 3px;
+  border-radius: var(--pc-radius-md);
+  background: var(--pc-color-bg-inset);
+  border: 1px solid var(--pc-color-border-subtle);
+}
+
+.segment {
+  justify-content: center;
+  padding: var(--pc-space-2) var(--pc-space-2);
+  border-radius: var(--pc-radius-sm);
+  font-size: var(--pc-font-size-sm);
+  color: var(--pc-color-text-secondary);
+}
+
+.segment > span[aria-hidden='true'] {
+  display: none;
+}
+
+.segment:has(input:checked) {
+  background: var(--pc-color-bg-surface-raised);
+  color: var(--pc-color-text-primary);
+  font-weight: var(--pc-weight-semibold);
+}
+
+.segment:has(input:focus-visible) {
+  outline: 2px solid var(--pc-color-focus-ring);
+  outline-offset: 1px;
+}
+
+.schedule {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pc-space-3);
+  padding: var(--pc-space-4);
+  border-radius: var(--pc-radius-lg);
+  background: var(--pc-color-bg-inset);
+}
+
+.scheduleRow {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--pc-space-3);
+}
+
+/* 아동용 스위치: 한 줄 카드. 켜면 강조색 + 「아동용」 표 */
+.kids {
+  display: flex;
+  flex-direction: row-reverse;
+  justify-content: space-between;
+  gap: var(--pc-space-3);
+  width: 100%;
+  box-sizing: border-box;
+  padding: var(--pc-space-3) var(--pc-space-4);
+  border: 1px solid var(--pc-color-border-default);
+  border-radius: var(--pc-radius-lg);
+  background: var(--pc-color-bg-inset);
+}
+
+.kidsOn {
+  border-color: var(--pc-color-accent);
+  background: var(--pc-color-accent-subtle);
+}
+
+.kidsText {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.kidsTitle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--pc-space-2);
+  font-size: var(--pc-font-size-sm);
+  font-weight: var(--pc-weight-semibold);
+}
+
+.kidsDesc {
+  font-size: var(--pc-font-size-xs);
+  color: var(--pc-color-text-muted);
+}
+
+.kidsOn .kidsDesc {
+  color: var(--pc-color-text-secondary);
+}
+
+/* 좁은 화면: 미리보기를 빼고 탭만 */
+@media (max-width: 820px) {
+  .left {
+    display: none;
+  }
+  .head,
+  .body,
+  .foot {
+    padding-left: var(--pc-space-4);
+    padding-right: var(--pc-space-4);
+  }
+  .foot {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}

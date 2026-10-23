@@ -60,6 +60,19 @@ public final class Envelopes {
                 "trace-1", MAPPER.createObjectNode());
     }
 
+    /** 플랫폼 칸을 실은 시작 봉투(POK-398). 마지막 칸이 {@code platform}이다. */
+    public static LifecycleEnvelope startedOn(String eventId, String streamId, long sequence, String platform) {
+        return new LifecycleEnvelope(1, eventId, "broadcast.started",
+                Instant.parse("2026-08-18T00:00:00Z"), streamId, TestIds.STREAMER, null, sequence,
+                "trace-1", MAPPER.createObjectNode(), platform);
+    }
+
+    public static LifecycleEnvelope endedOn(String eventId, String streamId, long sequence, String platform) {
+        return new LifecycleEnvelope(1, eventId, "broadcast.ended",
+                Instant.parse("2026-08-18T01:00:00Z"), streamId, TestIds.STREAMER, null, sequence,
+                "trace-1", MAPPER.createObjectNode(), platform);
+    }
+
     /** streamerId가 없어 NOT NULL 제약에 걸린다 — 저장 실패 경로를 만든다. */
     public static LifecycleEnvelope startedWithoutStreamer(String eventId, String streamId, long sequence) {
         return new LifecycleEnvelope(1, eventId, "broadcast.started",

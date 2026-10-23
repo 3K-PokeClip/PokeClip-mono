@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ensureMediaAccess } from '@/api/clipEditor';
+import { ensureMediaAccess, reportPlaybackForbidden } from '@/api/playbackAccess';
 import { mediaCredentials, recordingClipUrl } from '@/api/mediaPlayback';
 import { playableFrom, type RecordingPiece } from '@/features/player/recordingTimeline';
 import { boundaryAction, type EditorPlayback, type PlaybackBounds } from './editorPlayback';
@@ -57,6 +57,8 @@ export interface EditorVideoPlayback {
   videoRef: (element: HTMLVideoElement | null) => void;
   video: HTMLVideoElement | null;
   src: string;
+  /** 받아 둔 조각(src)의 첫 장면이 이 훅의 시간축으로 몇 초인가. 조각 안 초 = 시간축 초 − 이 값 */
+  windowStartSeconds: number;
 }
 
 export function useEditorVideoPlayback(options: {
@@ -112,6 +114,13 @@ export function useEditorVideoPlayback(options: {
     const load = () => fetch(remoteUrl, { signal: abort.signal, credentials: mediaCredentials() });
     const access = ensureMediaAccess(streamId);
     (access === null ? load() : access.then(load))
+      .then(async (res) => {
+        // 403이면 쿠키가 지워졌다(다른 탭 · 쿠키 한도 · 사용자가 지움): 출입증을 버리고 다시 받아 한 번 더 부른다(PR #332 codex)
+        if (res.status !== 403) return res;
+        reportPlaybackForbidden(streamId);
+        await ensureMediaAccess(streamId);
+        return load();
+      })
       .then((res) => {
         if (!res.ok) throw new Error(String(res.status));
         return res.blob();
@@ -304,5 +313,5 @@ export function useEditorVideoPlayback(options: {
     ],
   );
 
-  return { playback, videoRef: setVideo, video, src };
+  return { playback, videoRef: setVideo, video, src, windowStartSeconds: win.startSeconds };
 }

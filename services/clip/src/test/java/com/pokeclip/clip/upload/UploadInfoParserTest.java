@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
+import java.time.Instant;
 import java.util.Arrays;
 import java.util.List;
 
@@ -18,6 +19,7 @@ class UploadInfoParserTest {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final long 컷 = 45_000;
+    private static final Instant 지금 = Instant.parse("2026-10-22T09:00:00Z");
 
     @Test
     void 비어_있는_칸은_기본값이다() {
@@ -29,6 +31,46 @@ class UploadInfoParserTest {
         assertThat(info.privacyStatus()).isEqualTo("private");
         assertThat(info.madeForKids()).isFalse();
         assertThat(info.thumbnail().source()).isEqualTo("none");
+        assertThat(info.categoryId()).as("POK-381 전처럼 게임").isEqualTo("20");
+        assertThat(info.publishAt()).isNull();
+    }
+
+    /** 카테고리와 예약 공개(POK-381). 예약 시각은 시간대가 붙은 ISO-8601이고 같은 순간으로 읽는다. */
+    @Test
+    void 카테고리와_예약_공개를_받는다() {
+        UploadInfo info = UploadInfoParser.parse(MAPPER.readTree("""
+                {"title":"t","categoryId":"24","privacyStatus":"private","publishAt":"2026-10-23T18:00:00+09:00"}"""),
+                컷, false, 지금);
+
+        assertThat(info.categoryId()).isEqualTo("24");
+        assertThat(info.privacyStatus()).isEqualTo("private");
+        assertThat(info.publishAt()).isEqualTo(Instant.parse("2026-10-23T09:00:00Z"));
+    }
+
+    /**
+     * 유튜브는 비공개 영상에만 예약을 받고, 지난 시각이면 바로 공개한다. 그래서 공개 범위가 비공개가 아니거나 지금보다 앞이면 400이다.
+     * 붙일 수 없는 분류(18 단편 영화 등)도 400이다: 유튜브가 업로드를 통째로 거절한다.
+     */
+    @Test
+    void 예약은_비공개의_앞날만이고_분류는_고를_수_있는_것만이다() {
+        예약_거절("{\"title\":\"t\",\"privacyStatus\":\"public\",\"publishAt\":\"2026-10-23T09:00:00Z\"}");
+        예약_거절("{\"title\":\"t\",\"publishAt\":\"2026-10-22T09:00:00Z\"}");
+        예약_거절("{\"title\":\"t\",\"publishAt\":\"2026-10-22T08:00:00Z\"}");
+        예약_거절("{\"title\":\"t\",\"publishAt\":\"2026-10-23T18:00:00\"}");
+        예약_거절("{\"title\":\"t\",\"publishAt\":\"내일\"}");
+        예약_거절("{\"title\":\"t\",\"publishAt\":1761210000}");
+        거절("{\"title\":\"t\",\"categoryId\":\"18\"}", "categoryId");
+        거절("{\"title\":\"t\",\"categoryId\":20}", "categoryId");
+        거절("{\"title\":\"t\",\"categoryId\":\"\"}", "categoryId");
+
+        assertThat(UploadInfoParser.parse(MAPPER.readTree("{\"title\":\"t\",\"publishAt\":\"2026-10-22T09:00:01Z\"}"), 컷, false, 지금)
+                .publishAt()).as("지금보다 1초 뒤는 받는다").isEqualTo(Instant.parse("2026-10-22T09:00:01Z"));
+    }
+
+    private static void 예약_거절(String json) {
+        assertThatThrownBy(() -> UploadInfoParser.parse(MAPPER.readTree(json), 컷, false, 지금))
+                .isInstanceOf(InvalidUploadRequestException.class)
+                .extracting(e -> ((InvalidUploadRequestException) e).field()).isEqualTo("publishAt");
     }
 
     @Test

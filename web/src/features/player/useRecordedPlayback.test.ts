@@ -2,6 +2,12 @@ import { StrictMode, useEffect, useRef } from 'react';
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { rebaseTimeline, recordingTimeline } from './recordingTimeline';
+
+// 다시보기 오류가 쿠키 지워짐(403)이면 출입증을 다시 받아 같은 줄기를 다시 붙인다(PR #332 codex). 확인 자체는 playbackAccess 시험이 잰다
+const access = vi.hoisted(() => ({
+  recover: vi.fn((_url: string, _key: string) => Promise.resolve(false)),
+}));
+vi.mock('@/api/playbackAccess', () => ({ recoverForbiddenRecording: access.recover }));
 import { useRecordedPlayback, type RecordedSource } from './useRecordedPlayback';
 
 // 끝난 방송 다시보기(POK-253). 재생 서버는 틈을 건너 주지 않으므로(실측) 한 구간씩 달라 하고 이어 튼다.
@@ -588,5 +594,51 @@ describe('useRecordedPlayback: 재생 위치(POK-324)', () => {
     expect(result.current.positionSeconds).toBe(12);
     // 받는 줄기는 녹화 시작부터다
     expect(requested(video).fromSeconds).toBe(0);
+  });
+});
+
+describe('useRecordedPlayback: 쿠키가 지워진 줄기 (PR #332 codex)', () => {
+  afterEach(() => access.recover.mockReset());
+
+  function setup() {
+    const { video } = fakeVideo();
+    const load = vi.fn();
+    Object.defineProperty(video, 'load', { value: load });
+    renderHook(() => useRecordedPlayback({ current: video }, source([[0, 14]])));
+    return { video, load, src: video.src };
+  }
+
+  it('재생 오류가 403이면 출입증을 다시 받은 뒤 같은 줄기를 다시 붙인다', async () => {
+    access.recover.mockResolvedValue(true);
+    const { video, load, src } = setup();
+    await act(async () => {
+      video.dispatchEvent(new Event('error'));
+    });
+    // 훅은 상대 주소를 넘기고 video.src는 절대 주소로 돌려준다: 같은 줄기인지 절대 주소로 비교한다
+    const [url, key] = access.recover.mock.calls[0] ?? [];
+    expect(new URL(String(url), document.baseURI).href).toBe(src);
+    expect(key).toBe('gaptest');
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(video.src).toBe(src);
+  });
+
+  it('403이 아니면(틈 · 서버 오류) 그대로 둔다', async () => {
+    access.recover.mockResolvedValue(false);
+    const { video, load } = setup();
+    await act(async () => {
+      video.dispatchEvent(new Event('error'));
+    });
+    expect(load).not.toHaveBeenCalled();
+  });
+
+  it('같은 줄기는 한 번만 다시 붙인다: 다시 받아도 403이면 끝없이 돌지 않는다', async () => {
+    access.recover.mockResolvedValue(true);
+    const { video, load } = setup();
+    for (let i = 0; i < 3; i++)
+      await act(async () => {
+        video.dispatchEvent(new Event('error'));
+      });
+    expect(access.recover).toHaveBeenCalledTimes(1);
+    expect(load).toHaveBeenCalledTimes(1);
   });
 });

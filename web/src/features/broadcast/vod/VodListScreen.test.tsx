@@ -487,7 +487,7 @@ describe('VodListScreen — 서버 목록', () => {
     const { VodListScreen: Fresh } = await import('./VodListScreen');
     const { renderWithProviders: renderFresh } = await import('@/test/testProviders');
     stubFetch((url) => {
-      if (url.startsWith('http://pb.test/list')) return jsonResponse(200, []);
+      if (/^http:\/\/pb\.test\/playback\/[^/]+\/list$/.test(url)) return jsonResponse(200, []);
       if (url.startsWith('/api/clip/broadcasts?'))
         return jsonResponse(200, {
           broadcasts: [
@@ -566,7 +566,7 @@ describe('VodListScreen — 서버 목록', () => {
     const withPlayback = await import('./VodListScreen');
     const providers = await import('@/test/testProviders');
     stubFetch((url) => {
-      if (url.startsWith('http://pb.test/list')) return jsonResponse(200, []);
+      if (/^http:\/\/pb\.test\/playback\/[^/]+\/list$/.test(url)) return jsonResponse(200, []);
       if (url.startsWith('/api/clip/broadcasts?')) return list();
       return jsonResponse(200, { cards: [], nextCursor: null });
     });
@@ -580,7 +580,8 @@ describe('VodListScreen — 서버 목록', () => {
     const failing = await import('./VodListScreen');
     const providersF = await import('@/test/testProviders');
     stubFetch((url) => {
-      if (url.startsWith('http://pb.test/list')) return jsonResponse(500, { error: 'boom' });
+      if (/^http:\/\/pb\.test\/playback\/[^/]+\/list$/.test(url))
+        return jsonResponse(500, { error: 'boom' });
       if (url.startsWith('/api/clip/broadcasts?')) return list();
       return jsonResponse(200, { cards: [], nextCursor: null });
     });
@@ -619,7 +620,7 @@ describe('VodListScreen — 서버 목록', () => {
     const endedAt = new Date(endedMs).toISOString();
     let recorded = false;
     stubFetch((url) => {
-      if (url.startsWith('http://pb.test/list'))
+      if (/^http:\/\/pb\.test\/playback\/[^/]+\/list$/.test(url))
         return jsonResponse(200, recorded ? [{ start: startedAt, duration: 3600 }] : []);
       if (url.startsWith('/api/clip/broadcasts?'))
         return jsonResponse(200, {

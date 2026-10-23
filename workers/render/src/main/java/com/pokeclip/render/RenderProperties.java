@@ -29,4 +29,18 @@ public record RenderProperties(String queueUrl, String queueEndpoint, String s3E
                                String region, String clipBaseUrl, String internalToken, Path workDir,
                                String ffmpeg, String ffprobe, Duration jobTimeout, Duration visibilityTimeout,
                                Duration pollWait, java.util.List<Duration> reportRetryDelays, String fontsDir) {
+
+    public RenderProperties {
+        // 줄을 보는데 열쇠가 없으면 clip이 보고마다 401을 주고 주문이 전부 실패한다. 일꾼은 멀쩡해 보여 prod에서 늦게 드러나므로
+        // 부팅에서 막는다(POK-408, upload 일꾼과 같은 검사). 사진 줄은 주소가 다른 레코드라 그 일꾼을 만드는 자리에서 같은 검사를 한다
+        if (queueUrl != null && !queueUrl.isBlank()) {
+            requireInternalToken("pokeclip.render.queue-url", internalToken);
+        }
+    }
+
+    static void requireInternalToken(String queueKey, String internalToken) {
+        if (internalToken == null || internalToken.isBlank()) {
+            throw new IllegalStateException(queueKey + "이 있는데 pokeclip.render.internal-token이 비어 있다. INTERNAL_API_TOKEN을 준다");
+        }
+    }
 }

@@ -195,15 +195,22 @@ class ChatPurgeTest extends IntegrationTestSupport {
         assertThat(store.due(10)).extracting(Due::channelId).contains(탈퇴_채널);
     }
 
+    /**
+     * 묶음을 2로 줄여 다섯 줄을 세 묶음(2·2·1)에 지운다. 운영 묶음(5000)을 넘기려고 1만 2천 줄을 심었더니
+     * CI 에서 그 DELETE 하나가 DB socketTimeout(10초)에 끊겼다(PR #320). 로컬은 CPU·디스크 부하를 줘도
+     * 30회 모두 0.2초 안이라 원인은 못 좁혔다. 줄 수는 이 검사가 재는 것이 아니라서 덜어 냈다.
+     */
     @Test
     void 묶음보다_많은_줄도_끝까지_지운다() {
         jdbc.update("""
                 INSERT INTO chat_messages (channel_id, sender_channel_id, content, message_time, received_at, content_sha256, stream_id)
-                SELECT ?, 'viewer', 'm' || g, ?, ?, md5(g::text), 'purge-stream' FROM generate_series(1, 12005) g""",
+                SELECT ?, 'viewer', 'm' || g, ?, ?, md5(g::text), 'purge-stream' FROM generate_series(1, 5) g""",
                 탈퇴_채널, Timestamp.from(요청.minusSeconds(60)), Timestamp.from(요청.minusSeconds(60)));
         store.request(Platform.CHZZK, 탈퇴_채널, 요청);
+        ChatPurgeProperties 작은_묶음 = new ChatPurgeProperties(properties.interval(), properties.lateWindow(),
+                properties.retain(), properties.retentionInterval(), 2);
 
-        purger((p, c, b) -> { }, 요청.plus(Duration.ofHours(1))).purge(due(탈퇴_채널));
+        purger((p, c, b) -> { }, 요청.plus(Duration.ofHours(1)), 작은_묶음).purge(due(탈퇴_채널));
 
         assertThat(count("chat_messages", 탈퇴_채널)).isZero();
     }
@@ -269,8 +276,12 @@ class ChatPurgeTest extends IntegrationTestSupport {
     // ── 도우미 ──────────────────────────────────────────────────────────────
 
     private ChannelPurger purger(ArchivePurge archive, Instant now) {
+        return purger(archive, now, properties);
+    }
+
+    private ChannelPurger purger(ArchivePurge archive, Instant now, ChatPurgeProperties purgeProperties) {
         AtomicReference<Instant> clock = new AtomicReference<>(now);
-        return new ChannelPurger(store, archive, (p, c, since) -> stopped.add(p + ":" + c + "@" + since), properties, clock::get);
+        return new ChannelPurger(store, archive, (p, c, since) -> stopped.add(p + ":" + c + "@" + since), purgeProperties, clock::get);
     }
 
     private Due due(String channelId) {

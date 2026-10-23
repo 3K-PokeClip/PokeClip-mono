@@ -15,6 +15,7 @@ import org.springframework.beans.factory.config.YamlPropertiesFactoryBean;
 import org.springframework.boot.autoconfigure.context.ConfigurationPropertiesAutoConfiguration;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springframework.boot.tomcat.autoconfigure.TomcatServerProperties;
 import org.springframework.core.io.ClassPathResource;
 
 import java.io.PrintWriter;
@@ -420,6 +421,25 @@ class RequiredPropertiesTest {
         assertThat(properties.getProperty("server.forward-headers-strategy"))
                 .as("프록시 헤더를 믿는 것이 기본이 됐다 — 프록시가 없는 환경에서 IP당 한도가 헤더로 우회된다")
                 .isEqualTo("${FORWARD_HEADERS_STRATEGY:none}");
+    }
+
+    /**
+     * 신뢰 대역은 운영에서 {@code FORWARD_HEADERS_TRUSTED_PROXIES}로 좁힌다(POK-316). 비워 두면 전과 같아야 하므로 기본값은
+     * Boot 기본 대역을 글자 그대로 옮겨 적었다: Boot 판을 올려 그 값이 바뀌면 여기서 갈린다. 다른 시험은 기본값을 안 본다
+     * ({@code ProxyTrustNativeTest}는 좁힌 값을 넣고, 나머지 실서버 시험은 대역에 루프백이 있는지만 본다).
+     */
+    @Test
+    void 신뢰_대역의_운영_기본값이_Boot_기본_대역과_같다() {
+        YamlPropertiesFactoryBean yaml = new YamlPropertiesFactoryBean();
+        yaml.setResources(new ClassPathResource("application.yml"));
+        Properties properties = yaml.getObject();
+        String bootDefault = new TomcatServerProperties().getRemoteip().getInternalProxies();
+
+        assertThat(properties).as("application.yml을 읽지 못했다").isNotNull().isNotEmpty();
+
+        assertThat(properties.getProperty("server.tomcat.remoteip.internal-proxies"))
+                .as("환경변수 이름이 어긋났거나 기본값이 Boot 기본 대역과 갈렸다")
+                .isEqualTo("${FORWARD_HEADERS_TRUSTED_PROXIES:" + bootDefault + "}");
     }
 
     /**
