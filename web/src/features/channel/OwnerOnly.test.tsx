@@ -8,6 +8,7 @@ import { jsonResponse, stubFetch } from '@/test/mockFetch';
 import { renderWithProviders } from '@/test/testProviders';
 import { ChannelRelationContext } from './ChannelScope';
 import { OwnerOnly } from './OwnerOnly';
+import { useSwitchCurtain } from './switchCurtain';
 
 const ME = { id: 7, email: 'me@example.com', name: '나', profileImageUrl: null };
 
@@ -34,6 +35,7 @@ function renderAs(relation: 'OWNER' | 'EDITOR' | null) {
 beforeEach(() => {
   mounts = 0;
   window.localStorage.clear();
+  useSwitchCurtain.getState().reset();
   useChannelStore.setState({ userId: 7, selected: 3 });
   useAuthStore.setState({ accessToken: 'access-1', refreshToken: 'refresh-1', hydrated: true });
   stubFetch((url) => (url === '/api/auth/me' ? jsonResponse(200, ME) : jsonResponse(404)));
@@ -55,10 +57,10 @@ describe('OwnerOnly', () => {
 
     await user.click(screen.getByRole('button', { name: '내 채널로 전환' }));
 
+    expect(useSwitchCurtain.getState().curtain).toMatchObject({ name: '나', relation: 'OWNER' });
     await waitFor(() =>
       expect(useChannelStore.getState()).toMatchObject({ userId: 7, selected: null }),
     );
-    expect(await screen.findByText('나 채널로 전환했어요')).toBeInTheDocument();
   });
 
   it('내 채널이면 화면 그대로다', () => {

@@ -10,7 +10,7 @@ import {
   useChannelStore,
   type ListSnapshot,
 } from '@/stores/channel';
-import { useToast } from '@/ui';
+import { useSwitchCurtain } from './switchCurtain';
 
 // 「지금 채널」(POK-390 채널 스위처): 고른 번호(store)를 me·as-editor와 맞대어 푼다.
 //
@@ -110,24 +110,29 @@ export interface SwitchTarget {
   relation: ChannelRelation;
 }
 
-/** 채널을 바꾸고 알린다. 내 채널이면 저장된 줄을 지운다(「내 채널」은 고른 것 없음과 같다). */
+/**
+ * 채널을 바꾸고 알린다. 내 채널이면 저장된 줄을 지운다(「내 채널」은 고른 것 없음과 같다).
+ * 전환 화면이 다 덮은 뒤에 바꾼다(switchCurtain.ts): 사이드바·본문이 툭 바뀌는 모습을 가린다. 알림도 전환 화면이
+ * 맡는다: 토스트까지 띄우면 같은 말을 두 번 한다.
+ */
 export function useSwitchChannel() {
   const me = useMe().data;
   const select = useChannelStore((s) => s.select);
-  const { toast } = useToast();
+  const cover = useSwitchCurtain((s) => s.cover);
 
   return useCallback(
     (target: SwitchTarget) => {
       if (!me) return;
-      select(me.id, target.streamerId === me.id ? null : target.streamerId);
-      toast({
-        tone: 'success',
-        title: `${target.name} 채널로 전환했어요`,
-        description: `${target.relation === 'OWNER' ? '스트리머' : '편집자'} · 메뉴와 권한이 바뀌었어요`,
-        // 연달아 바꾸면 쌓지 않고 최신 것으로: 키가 없으면 제목이 달라 쌓인다.
-        dedupeKey: 'channel-switch',
-      });
+      cover(
+        {
+          name: target.name,
+          relation: target.relation,
+          // 남의 채널은 서버가 사진을 안 준다: 이름 글자 아바타
+          photo: target.relation === 'OWNER' ? me.profileImageUrl : null,
+        },
+        () => select(me.id, target.streamerId === me.id ? null : target.streamerId),
+      );
     },
-    [me, select, toast],
+    [me, select, cover],
   );
 }

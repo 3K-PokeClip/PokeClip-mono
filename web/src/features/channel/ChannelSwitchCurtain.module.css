@@ -1,0 +1,83 @@
+/* 채널 전환 화면: 사이드바·헤더·독까지 화면 전체를 덮는다. 창(팝오버)·토스트보다는 아래라 그 사이 뜬 경고는 보인다 */
+.curtain {
+  position: fixed;
+  inset: 0;
+  z-index: var(--pc-z-modal);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: calc(10 * var(--pc-u));
+  background: var(--pc-color-bg-canvas);
+  color: var(--pc-color-text-primary);
+  /* COVER_IN_MS(140)와 같다: 다 덮은 뒤에 채널이 바뀐다 */
+  animation: curtain-in 140ms ease both;
+}
+
+/* 걷히는 동안은 아래를 누를 수 있다 */
+.curtain[data-leaving] {
+  pointer-events: none;
+  animation: curtain-out 220ms ease both;
+}
+
+.title {
+  margin-top: calc(12 * var(--pc-u));
+  font-size: calc(22 * var(--pc-u));
+  font-weight: 750;
+  letter-spacing: -0.02em;
+}
+
+.sub {
+  font-size: calc(15 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}
+
+.track {
+  width: calc(220 * var(--pc-u));
+  height: 4px;
+  margin-top: calc(14 * var(--pc-u));
+  border-radius: 99px;
+  background: var(--pc-color-border-subtle);
+  overflow: hidden;
+}
+
+/* 내 채널은 accent, 남의 채널은 point(창 안 지금 채널 줄과 같은 색) */
+.fill {
+  height: 100%;
+  background: var(--pc-color-accent);
+  transform-origin: left;
+  transition: transform 200ms linear;
+}
+
+.track[data-tone='editor'] .fill {
+  background: var(--pc-color-point);
+}
+
+@keyframes curtain-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes curtain-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .curtain,
+  .curtain[data-leaving] {
+    animation-duration: 1ms;
+  }
+
+  .fill {
+    transition: none;
+  }
+}

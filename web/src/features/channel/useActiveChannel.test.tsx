@@ -4,6 +4,7 @@ import { useAuthStore } from '@/stores/auth';
 import { useChannelStore } from '@/stores/channel';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
 import { createTestQueryClient, makeQueryWrapper } from '@/test/testProviders';
+import { COVER_IN_MS, useSwitchCurtain } from './switchCurtain';
 import { useActiveChannel, useSwitchChannel } from './useActiveChannel';
 
 const ME_URL = '/api/auth/me';
@@ -220,20 +221,31 @@ describe('useSwitchChannel: 전환', () => {
     });
   }
 
-  it('별하로 전환하면 저장되고 지금 채널이 바뀌고 토스트가 뜬다', async () => {
+  beforeEach(() => useSwitchCurtain.getState().reset());
+
+  it('별하로 전환하면 전환 화면이 서고, 다 덮은 뒤에 저장되고 지금 채널이 바뀐다', async () => {
     stub();
     const { result } = renderBoth();
     await waitFor(() => expect(result.current.active.ready).toBe(true));
 
     act(() => result.current.switchTo({ streamerId: 3, name: '별하', relation: 'EDITOR' }));
 
-    expect(JSON.parse(window.localStorage.getItem(STORAGE_KEY)!)).toEqual({ '7': 3 });
+    // 덮는 동안은 아직 그대로다: 바뀌는 모습이 덮개 너머로 비치지 않게
+    expect(useSwitchCurtain.getState().curtain).toMatchObject({
+      name: '별하',
+      relation: 'EDITOR',
+      photo: null,
+    });
+    expect(window.localStorage.getItem(STORAGE_KEY)).toBeNull();
+    await waitFor(() =>
+      expect(JSON.parse(window.localStorage.getItem(STORAGE_KEY)!)).toEqual({ '7': 3 }),
+    );
     await waitFor(() => expect(result.current.active.streamerId).toBe(3));
-    expect(await screen.findByText('별하 채널로 전환했어요')).toBeInTheDocument();
-    expect(screen.getByText('편집자 · 메뉴와 권한이 바뀌었어요')).toBeInTheDocument();
+    // 알림은 전환 화면이 맡는다: 토스트는 없다
+    expect(screen.queryByText(/전환했어요/)).not.toBeInTheDocument();
   });
 
-  it('내 채널로 전환하면 저장된 줄을 지우고 스트리머 문구다', async () => {
+  it('내 채널로 전환하면 저장된 줄을 지우고 전환 화면은 스트리머다', async () => {
     remembered({ '7': 3 });
     stub();
     const { result } = renderBoth();
@@ -241,13 +253,12 @@ describe('useSwitchChannel: 전환', () => {
 
     act(() => result.current.switchTo({ streamerId: 7, name: '나', relation: 'OWNER' }));
 
-    expect(JSON.parse(window.localStorage.getItem(STORAGE_KEY)!)).toEqual({});
+    expect(useSwitchCurtain.getState().curtain).toMatchObject({ name: '나', relation: 'OWNER' });
+    await waitFor(() => expect(JSON.parse(window.localStorage.getItem(STORAGE_KEY)!)).toEqual({}));
     await waitFor(() => expect(result.current.active.streamerId).toBe(7));
-    expect(await screen.findByText('나 채널로 전환했어요')).toBeInTheDocument();
-    expect(screen.getByText('스트리머 · 메뉴와 권한이 바뀌었어요')).toBeInTheDocument();
   });
 
-  it('연달아 전환하면 토스트가 쌓이지 않고 최신 것으로 바뀐다', async () => {
+  it('연달아 전환하면 마지막 것만 바뀐다: 앞 전환은 덮는 동안 버려진다', async () => {
     stub();
     const { result } = renderBoth();
     await waitFor(() => expect(result.current.active.ready).toBe(true));
@@ -255,7 +266,9 @@ describe('useSwitchChannel: 전환', () => {
     act(() => result.current.switchTo({ streamerId: 3, name: '별하', relation: 'EDITOR' }));
     act(() => result.current.switchTo({ streamerId: 7, name: '나', relation: 'OWNER' }));
 
-    expect(await screen.findByText('나 채널로 전환했어요')).toBeInTheDocument();
-    expect(screen.queryByText('별하 채널로 전환했어요')).not.toBeInTheDocument();
+    expect(useSwitchCurtain.getState().curtain).toMatchObject({ name: '나' });
+    await act(() => new Promise((resolve) => setTimeout(resolve, COVER_IN_MS + 50)));
+    expect(useChannelStore.getState().selected).toBeNull();
+    expect(result.current.active.streamerId).toBe(7);
   });
 });

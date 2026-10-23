@@ -205,11 +205,45 @@ function send(path: string, init: RequestInit): Promise<Response> {
   return fetch(path, { ...init, headers });
 }
 
+/** 보호 API 요청 하나가 나가고(start) 끝났다(end, 성공·실패 모두). 회전 재시도는 같은 요청이다. */
+export interface ApiActivity {
+  type: 'start' | 'end';
+  id: number;
+}
+
+const activityListeners = new Set<(event: ApiActivity) => void>();
+let lastActivityId = 0;
+
+/**
+ * 요청 활동을 듣는다. 채널 전환 화면이 「새 채널 화면이 부른 요청이 다 끝났나」를 보는 데 쓴다: 홈·지난 방송처럼
+ * react-query 밖에서 부르는 화면 훅도 이 진입점은 지나므로 쿼리 캐시가 아니라 여기서 센다.
+ */
+export function subscribeApiActivity(listener: (event: ApiActivity) => void): () => void {
+  activityListeners.add(listener);
+  return () => {
+    activityListeners.delete(listener);
+  };
+}
+
+function emitActivity(event: ApiActivity) {
+  for (const listener of activityListeners) listener(event);
+}
+
 /**
  * 보호 API 호출 진입점. 2xx가 아니면 ApiError를 던진다 — 호출부는 status로 분기한다
  * (예: 429 발급 제한 안내). 401은 여기서 refresh 회전 후 딱 한 번 재시도한다.
  */
 export async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
+  const id = ++lastActivityId;
+  emitActivity({ type: 'start', id });
+  try {
+    return await request(path, init);
+  } finally {
+    emitActivity({ type: 'end', id });
+  }
+}
+
+async function request(path: string, init: RequestInit): Promise<Response> {
   const res = await send(path, init);
   if (res.status !== 401) {
     if (!res.ok) throw await errorFrom(res);

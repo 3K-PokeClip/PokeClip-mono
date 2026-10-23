@@ -6,6 +6,7 @@ import { useChannelStore } from '@/stores/channel';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
 import { renderWithProviders } from '@/test/testProviders';
 import { ChannelSwitcher } from './ChannelSwitcher';
+import { useSwitchCurtain } from './switchCurtain';
 
 const nav = vi.hoisted(() => ({ replace: vi.fn() }));
 vi.mock('next/navigation', () => ({
@@ -99,6 +100,7 @@ async function openWithClient(user: ReturnType<typeof userEvent.setup>) {
 beforeEach(() => {
   nav.replace.mockReset();
   window.localStorage.clear();
+  useSwitchCurtain.getState().reset();
   useChannelStore.setState({ userId: null, selected: null });
   useAuthStore.setState({ accessToken: 'access-1', refreshToken: 'refresh-1', hydrated: true });
 });
@@ -147,17 +149,19 @@ describe('ChannelSwitcher: 펼친 패널', () => {
     );
   });
 
-  it('별하를 누르면 그 채널로 바뀌고 토스트가 뜨고 패널이 닫힌다', async () => {
+  it('별하를 누르면 전환 화면이 서고 패널이 닫히고, 다 덮은 뒤 그 채널로 바뀐다', async () => {
     stub({ delegations: [BYEOLHA], invitations: [] });
     const user = userEvent.setup();
     const panel = within(await open(user));
 
     await user.click(await panel.findByRole('button', { name: /별하 채널/ }));
 
-    expect(useChannelStore.getState()).toMatchObject({ userId: 7, selected: 3 });
-    expect(await screen.findByText('별하 채널로 전환했어요')).toBeInTheDocument();
+    expect(useSwitchCurtain.getState().curtain).toMatchObject({ name: '별하', relation: 'EDITOR' });
     await waitFor(() =>
       expect(screen.queryByRole('dialog', { name: '계정 전환' })).not.toBeInTheDocument(),
+    );
+    await waitFor(() =>
+      expect(useChannelStore.getState()).toMatchObject({ userId: 7, selected: 3 }),
     );
   });
 
@@ -314,8 +318,8 @@ describe('ChannelSwitcher: 저장된 남의 채널이 있는데 내 채널로 �
 
     expect(JSON.parse(window.localStorage.getItem('pc-channel')!)).toEqual({});
     expect(useChannelStore.getState().selected).toBeNull();
-    // 같은 채널로 보였으니 전환 토스트는 없다
-    expect(screen.queryByText('나 채널로 전환했어요')).not.toBeInTheDocument();
+    // 같은 채널로 보였으니 전환 화면은 없다
+    expect(useSwitchCurtain.getState().curtain).toBeNull();
 
     server.asEditorFails = false;
     const before = spy.mock.calls.filter(
