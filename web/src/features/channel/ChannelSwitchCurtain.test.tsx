@@ -1,4 +1,4 @@
-import { act, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { apiFetch } from '@/api/client';
 import {
@@ -143,6 +143,28 @@ describe('ChannelSwitchCurtain', () => {
     expect(progress()).toBeGreaterThanOrEqual(65);
     expect(progress()).toBeGreaterThan(before);
     expect(shown()).toBe(true);
+  });
+
+  it('덮는 동안 포커스를 덮개로 옮기고 Tab을 막는다: 아래 화면을 키보드로 못 건드리고, 걷히면 포커스를 돌려준다', () => {
+    render(
+      <>
+        <button type="button">프로필</button>
+        <ChannelSwitchCurtain />
+      </>,
+    );
+    const trigger = screen.getByRole('button', { name: '프로필' });
+    trigger.focus();
+    cover();
+
+    const curtain = screen.getByRole('dialog', { name: '별하 채널로 전환 중' });
+    expect(curtain).toHaveFocus();
+    // 기본 동작(다음 칸으로 포커스 옮기기)을 막았다
+    expect(fireEvent.keyDown(curtain, { key: 'Tab' })).toBe(false);
+    expect(curtain).toHaveFocus();
+
+    run(HOLD_MS + 100 + FINISH_MS + FADE_OUT_MS + 50);
+    expect(useSwitchCurtain.getState().curtain).toBeNull();
+    expect(trigger).toHaveFocus();
   });
 
   it('응답 없이 멈춘 요청은 MAX_MS에서 끊고 걷는다: 화면을 막아 두지 않는다', () => {

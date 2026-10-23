@@ -14,6 +14,11 @@
   animation: curtain-in 140ms ease both;
 }
 
+/* 덮는 동안 포커스를 받는다(키보드 가두기) — 테두리는 그리지 않는다 */
+.curtain:focus {
+  outline: none;
+}
+
 /* 걷히는 동안은 아래를 누를 수 있다 */
 .curtain[data-leaving] {
   pointer-events: none;

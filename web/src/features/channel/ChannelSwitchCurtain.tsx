@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { subscribeApiActivity } from '@/api/client';
 import { Avatar, VisuallyHidden } from '@/ui';
 import { useSwitchCurtain, type SwitchCurtain } from './switchCurtain';
@@ -47,6 +47,7 @@ function Cover({
   onLeave: (message: string) => void;
 }) {
   const clear = useSwitchCurtain((s) => s.clear);
+  const ref = useRef<HTMLDivElement>(null);
   const [now, setNow] = useState(() => Date.now());
   const [load, setLoad] = useState({ started: 0, finished: 0 });
   const [phase, setPhase] = useState<'loading' | 'finishing' | 'leaving'>('loading');
@@ -62,6 +63,23 @@ function Cover({
       else return;
       setLoad({ started: started.size, finished: finished.size });
     });
+  }, []);
+
+  // 덮는 동안 아래 화면을 키보드로도 못 건드리게 포커스를 덮개로 옮기고 Tab을 가둔다. 계정 전환 창이 닫히며 프로필로
+  // 돌아간 포커스에서 Enter를 누르면 창(z popover)이 전환 화면(z modal) 위로 다시 열렸다(PR #342 리뷰 2). 걷히면 돌려준다
+  useEffect(() => {
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    ref.current?.focus();
+    const trap = (e: KeyboardEvent) => {
+      if (e.key !== 'Tab') return;
+      e.preventDefault();
+      ref.current?.focus();
+    };
+    document.addEventListener('keydown', trap, true);
+    return () => {
+      document.removeEventListener('keydown', trap, true);
+      if (previous?.isConnected) previous.focus();
+    };
   }, []);
 
   const elapsed = now - curtain.shownAt;
@@ -94,7 +112,15 @@ function Cover({
   const progress = phase === 'loading' ? loadingProgress(elapsed, load) : 1;
 
   return (
-    <div className={styles.curtain} data-leaving={phase === 'leaving' || undefined}>
+    <div
+      ref={ref}
+      className={styles.curtain}
+      data-leaving={phase === 'leaving' || undefined}
+      role="dialog"
+      aria-modal="true"
+      aria-label={`${curtain.name} 채널로 전환 중`}
+      tabIndex={-1}
+    >
       <Avatar size="xl" src={curtain.photo ?? undefined} name={curtain.name} />
       <div className={styles.title}>{curtain.name} 채널로 전환 중</div>
       <div className={styles.sub}>{editor ? '편집자로 들어가요' : '스트리머로 돌아가요'}</div>
