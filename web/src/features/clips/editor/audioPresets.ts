@@ -82,7 +82,11 @@ export function applyAudioPreset(
   }
 
   const usingMix = mixTrackId !== undefined && !(current.muted[mixTrackId] ?? false);
-  const noSourceOn = sources.every((track) => current.muted[track.id] ?? false);
+  // 「저작권 걱정 없이」는 BGM을 끄므로 BGM 말고 켜진 소스가 없으면 다 켠다: 전부 꺼지면 저장이 최종 믹스로
+  // 물러나 뺀다던 BGM이 섞인다
+  const kept =
+    id === 'copyright-safe' ? sources.filter((track) => trackRole(track.label) !== 'bgm') : sources;
+  const noSourceOn = kept.every((track) => current.muted[track.id] ?? false);
   if (usingMix || noSourceOn) {
     for (const track of sources) muted[track.id] = false;
   }

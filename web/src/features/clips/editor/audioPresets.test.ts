@@ -75,6 +75,22 @@ describe('applyAudioPreset', () => {
     expect(next.volumes['track-1']).toBe(140);
   });
 
+  it('저작권 걱정 없이: BGM 소스만 켜 둔 상태면 BGM 말고 다른 소스를 켠다(전부 꺼지면 저장이 최종 믹스로 물러나 BGM이 섞인다)', () => {
+    const current = {
+      muted: { ...MIX_ONLY.muted, 'track-0': true, 'track-4': false },
+      volumes: MIX_ONLY.volumes,
+    };
+    const next = applyAudioPreset('copyright-safe', TRACKS, MIX, current);
+    expect(next.muted).toEqual({
+      'track-0': true,
+      'track-1': false,
+      'track-2': false,
+      'track-3': false,
+      'track-4': true,
+      'track-5': false,
+    });
+  });
+
   it('목소리 크게: 목소리 130%, 게임 60%로 맞추고 나머지 켬·음량은 그대로', () => {
     const next = applyAudioPreset('voice-up', TRACKS, MIX, MIX_ONLY);
     expect(next.muted['track-0']).toBe(true);
