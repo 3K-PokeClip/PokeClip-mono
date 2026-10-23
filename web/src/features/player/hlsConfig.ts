@@ -1,4 +1,5 @@
 import type { HlsConfig } from 'hls.js';
+import { mediaCredentials } from '@/api/mediaPlayback';
 import { LIVE_WINDOW_SECONDS } from './playerMath';
 
 // 계약3 4절 1번 "catch-up 끄기" — POK-31 스파이크에서 확정한 설정 (hls.js 1.7 기준 실측).
@@ -23,4 +24,9 @@ export const HLS_DVR_CONFIG = {
   // 되감기 창(3600s) + 여유 100s — 재생점 뒤 버퍼를 창 경계에서 잘라내지 않는다.
   // 정확히 3600이면 1시간 전으로 시크한 지점의 세그먼트가 이미 축출됐을 수 있다.
   backBufferLength: LIVE_WINDOW_SECONDS + 100,
+  // 출입증 쿠키(POK-317). CDN 뒤 조각은 쿠키가 없으면 403이다. 요청마다 읽으므로 출입증을 받은 뒤 요청부터 실린다.
+  // 받기 전(로컬·dev)에는 안 싣는다: 로컬 영상 서버는 Allow-Origin * 라 켜면 브라우저가 조각을 버린다
+  xhrSetup: (xhr: XMLHttpRequest) => {
+    xhr.withCredentials = mediaCredentials() === 'include';
+  },
 } as const satisfies Partial<HlsConfig>;

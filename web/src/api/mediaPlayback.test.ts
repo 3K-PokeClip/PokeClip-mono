@@ -111,3 +111,23 @@ describe('lookupRecordingSpans: 녹화 없음과 물을 수 없음을 가른다(
     ]);
   });
 });
+
+describe('녹화 목록 요청의 쿠키 싣기 (POK-317)', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  it('출입증이 발급된 뒤에만 쿠키를 싣는다: CDN 뒤 녹화 목록은 쿠키가 없으면 403이다', async () => {
+    vi.resetModules();
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_PLAYBACK_BASE_URL', 'https://media.test');
+    const spy = stubFetch(() => Promise.resolve(jsonResponse(200, [])));
+    const m = await import('./mediaPlayback');
+
+    await m.lookupRecordingSpans('vod-1');
+    m.markPlaybackCookiesIssued();
+    await m.lookupRecordingSpans('vod-1');
+
+    expect(spy.mock.calls.map(([, init]) => init?.credentials)).toEqual(['same-origin', 'include']);
+  });
+});

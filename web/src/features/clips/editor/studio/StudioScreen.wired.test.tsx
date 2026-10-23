@@ -39,10 +39,12 @@ const tracked = (name: string) =>
 
 // 녹화 목록을 어느 키로 물었는지 잰다(POK-233) — 실제 구현을 그대로 부른다(재생 서버 주소가 없어 빈 목록이다)
 const spansAsked = vi.hoisted(() => [] as string[]);
+const playbackOn = vi.hoisted(() => ({ value: false }));
 vi.mock('@/api/mediaPlayback', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/api/mediaPlayback')>();
   return {
     ...actual,
+    playbackConfigured: () => playbackOn.value,
     fetchRecordingSpans: (streamId: string) => {
       spansAsked.push(streamId);
       return actual.fetchRecordingSpans(streamId);
@@ -54,6 +56,8 @@ const STREAM_ID = 'stream-1';
 const STARTED_AT = Date.parse('2026-09-20T10:00:00Z');
 
 const server = vi.hoisted(() => ({
+  /** 출입증 답(POK-317) */
+  playbackAccess: 'grant' as 'grant' | 'fail',
   cardWindow: { startMs: 60_000, endMs: 72_400 },
   savedTracks: [{ trackId: 0, gain: 1 }] as { trackId: number; gain: number }[],
   /** 저장된 편집본의 판 — 1이면 옛 모양(crop 하나), 2면 편집기가 지금 저장하는 모양 */
@@ -204,6 +208,14 @@ function handle(url: string, init?: RequestInit) {
   }
   const polled = path.match(new RegExp(`^/api/clip/broadcasts/${STREAM_ID}/clips/(\\d+)$`));
   if (polled && method === 'GET' && server.clipPoll) return server.clipPoll(Number(polled[1]));
+  if (path === `/api/clip/broadcasts/${STREAM_ID}/playback-access` && method === 'POST')
+    return server.playbackAccess === 'grant'
+      ? jsonResponse(200, {
+          streamId: STREAM_ID,
+          // 1분짜리라 만료 5분 전 여유에 걸려 다시 쓰지 않는다: 받아 둔 것이 다음 시험으로 새지 않는다
+          expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        })
+      : jsonResponse(500, { error: 'boom' });
   if (path === '/api/auth/me')
     return jsonResponse(200, { id: 9, email: 'me@example.com', name: '나' });
   if (path === '/api/streamers/9/audio-tracks') return jsonResponse(200, { labels: {} });
@@ -229,6 +241,7 @@ beforeEach(() => {
   server.origin = null;
   server.savedSubtitles = null;
   server.relation = 'OWNER';
+  server.playbackAccess = 'grant';
   server.delegations = [];
   server.ingest = undefined;
   server.render = { status: 201, clip: {} };
@@ -252,6 +265,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  playbackOn.value = false;
 });
 
 function bodiesOf(method: string, path: string) {
@@ -308,6 +322,28 @@ describe('StudioScreen — 영상 경로의 키(POK-233)', () => {
   it('칸을 모르는 옛 서버면 방송 번호로 찾는다', async () => {
     await openFrom(`?stream=${STREAM_ID}&card=5`);
     expect(spansAsked).toEqual([STREAM_ID]);
+  });
+
+  it('녹화를 찾기 전에 출입증을 받는다: 문은 방송 번호다(POK-317, CDN 뒤 녹화는 쿠키가 없으면 403)', async () => {
+    // 녹화 재생 서버가 있는 곳에서만 받는다. 모듈이 주소를 읽어 두므로 흉내 낸 함수만 주소가 있다고 답하게 한다
+    playbackOn.value = true;
+    server.ingest = 'key-studio';
+    await openFrom(`?stream=${STREAM_ID}&card=5`);
+    expect(
+      fetchSpy.mock.calls.filter(
+        ([url, init]) =>
+          url === `/api/clip/broadcasts/${STREAM_ID}/playback-access` && init?.method === 'POST',
+      ),
+    ).toHaveLength(1);
+  });
+
+  it('출입증을 못 받으면 녹화 없음으로 열지 않고 다시 열라고 알린다: 쿠키 없는 조회는 403이 「녹화 없음」으로 접힌다(PR #320 codex)', async () => {
+    playbackOn.value = true;
+    server.playbackAccess = 'fail';
+    nav.search = `?stream=${STREAM_ID}&card=5`;
+    renderWithProviders(<StudioScreen />);
+    expect(await screen.findByText(/영상 출입증을 받지 못했어요/)).toBeInTheDocument();
+    expect(spansAsked).toEqual([]);
   });
 });
 

@@ -106,6 +106,8 @@ vi.mock('@/features/player/GlassPlayer', async (importOriginal) => {
 // 라이브 재생기(hls.js) 흉내(POK-326): 목록의 조각 하나가 영상 0초(지금 1시간 전, MEDIA_ZERO)부터 지금까지를 덮고, 재생기는 그
 // 조각의 시각 표시(PDT)로 실제 시각을 센다. 영상 주소가 없는 시험(대부분)은 라이브 재생기가 서지 않아 이 흉내를 타지 않는다
 const hlsFake = vi.hoisted(() => ({
+  /** 라이브 영상 목록을 부른 횟수(POK-317) */
+  loads: 0,
   /** 목록에 시각 표시(PDT)가 있나 */
   pdt: true,
   /**
@@ -140,6 +142,7 @@ vi.mock('hls.js', () => {
     }
     attachMedia() {}
     loadSource() {
+      hlsFake.loads += 1;
       this.handlers.get('hlsManifestParsed')?.();
     }
     startLoad() {}
@@ -326,6 +329,8 @@ const server = vi.hoisted(() => ({
   chatIdClash: false,
   /** 출입증: 'off'는 서명 재료 없음(503), 'grant'는 10분짜리, 'fail'은 500 */
   playback: 'off' as 'off' | 'grant' | 'fail',
+  /** 있으면 출입증 답을 이것이 풀릴 때까지 붙잡는다(POK-317) */
+  playbackGate: null as Promise<void> | null,
   /** 지난 방송의 시각 기준점(POK-255). null이면 서버가 모른다 */
   vodOrigin: null as number | null,
   /** 영상 경로의 키(POK-233). undefined면 이 칸을 모르는 옛 서버다 */
@@ -653,6 +658,11 @@ function handle(url: string, init?: RequestInit): Response | Promise<Response> {
   }
   // 통로는 용량 초과로 답한다 — 폴링이 카드를 채운다(통로 자체는 useLiveMockState의 몫)
   if (path.endsWith('/events')) return jsonResponse(503, { error: 'sse_capacity' });
+  if (path.endsWith('/playback-access') && server.playbackGate) {
+    const gate = server.playbackGate;
+    server.playbackGate = null;
+    return gate.then(() => handle(url, init));
+  }
   if (path.endsWith('/playback-access')) {
     if (server.playback === 'grant')
       return jsonResponse(200, {
@@ -660,7 +670,7 @@ function handle(url: string, init?: RequestInit): Response | Promise<Response> {
         expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
       });
     if (server.playback === 'fail') return jsonResponse(500, { error: 'boom' });
-    return jsonResponse(503, { error: 'signing_unavailable' });
+    return jsonResponse(503, { error: 'playback_signing_unavailable' });
   }
   if (path === '/api/chzzk-link')
     return jsonResponse(200, { linked: true, channelName: '게임하는너구리', status: 'ACTIVE' });
@@ -742,6 +752,8 @@ beforeEach(() => {
   server.chatPaged = false;
   server.chatIdClash = false;
   server.playback = 'off';
+  server.playbackGate = null;
+  hlsFake.loads = 0;
   notFound.mockClear();
   // env는 셸에서 그대로 상속된다 — 로컬/CI 셸에 NEXT_PUBLIC_MEDIA_*가 export돼 있어도 소스가 null이게 고정한다.
   vi.stubEnv('NEXT_PUBLIC_MEDIA_STUB_URL', '');
@@ -926,6 +938,71 @@ describe('LiveScreen — 영상 출입증', () => {
       await vi.advanceTimersByTimeAsync(60_000);
     });
     expect(accessCalls()).toBe(2);
+  });
+
+  it('첫 출입증 답을 받기 전에는 라이브 영상을 부르지 않는다: 먼저 부르면 CDN 뒤 첫 요청이 쿠키 없이 403이다(POK-317)', async () => {
+    stubMediaElement();
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', 'http://live.test');
+    server.playback = 'grant';
+    let release!: () => void;
+    server.playbackGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await renderLive();
+    expect(hlsFake.loads).toBe(0);
+
+    release();
+    await settle();
+    expect(hlsFake.loads).toBeGreaterThan(0);
+  });
+
+  it('출입증을 못 받았으면 라이브를 열지 않고, 다시 받아진 뒤에 연다: 쿠키 없이 열면 hls.js가 한 번 다시 해 보고 포기한다(PR #320 codex)', async () => {
+    stubMediaElement();
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', 'http://live.test');
+    server.playback = 'fail';
+    await renderLive();
+    expect(hlsFake.loads).toBe(0);
+
+    server.playback = 'grant';
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    await settle();
+    expect(hlsFake.loads).toBeGreaterThan(0);
+  });
+
+  it('갱신이 실패하다가 다시 받아지면 재생기를 새로 세운다: 쿠키가 끝난 사이 멈춘 hls.js는 새 쿠키로 저절로 안 살아난다(PR #320 codex)', async () => {
+    stubMediaElement();
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', 'http://live.test');
+    server.playback = 'grant';
+    await renderLive();
+    expect(hlsFake.loads).toBe(1);
+
+    // 정상 갱신(만료 5분 전)은 재생기를 다시 세우지 않는다
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6 * 60_000);
+    });
+    await settle();
+    expect(hlsFake.loads).toBe(1);
+
+    // 다음 갱신이 실패하고, 1분 뒤 다시 받아진다
+    server.playback = 'fail';
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+    });
+    server.playback = 'grant';
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    await settle();
+    expect(hlsFake.loads).toBe(2);
+  });
+
+  it('출입증이 필요 없는 곳(로컬·dev)은 첫 화면이 서는 사이에 라이브 영상을 부른다: 기다림이 재생 시작을 늦추지 않는다', async () => {
+    stubMediaElement();
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', 'http://live.test');
+    await renderLive();
+    expect(hlsFake.loads).toBeGreaterThan(0);
   });
 
   it('서명 재료가 없는 서버(503)에는 다시 묻지 않는다 — 출입증이 필요 없는 곳이다', async () => {

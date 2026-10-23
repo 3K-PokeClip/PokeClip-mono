@@ -237,13 +237,29 @@ function LivePlayer({
           : undefined;
   // 영상 출입증(POK-122) — 방송을 열 때 받고, 만료 5분 전에 다시 받는다. 쿠키 수명(운영 60분)이 지나면 새 조각이
   // 403이 되어 재생이 멈춘다(PR #200 codex P1). 실패하면 1분 뒤 다시 받는다. 서명 재료가 없는 서버(503)는
-  // 출입증이 필요 없는 곳이라(로컬·dev) 다시 묻지 않는다. 실패해도 재생은 시도한다(로컬 media는 쿠키를 안 본다).
+  // 출입증이 필요 없는 곳이라(로컬·dev) 다시 묻지 않는다. 실패면 라이브를 열지 않는다(아래).
+  // 출입증을 받거나(받음) 필요 없다는 답(로컬·dev의 503)이 오기 전에는 라이브 주소를 넘기지 않는다(POK-317). 먼저 넘기면 CDN 뒤 첫
+  // 요청이 쿠키 없이 403이고 hls.js는 한 번만 다시 시도한 뒤 멈춘다. 실패는 열지 않고 1분 뒤 다시 받은 답을 기다린다(PR #320 codex).
+  // 로컬·dev는 503이 곧바로 와서 재생 시작이 왕복 한 번만큼만 늦다
+  const [accessReadyFor, setAccessReadyFor] = useState<string | null>(null);
+  // 열린 뒤 갱신이 실패하다가 다시 받아진 횟수. 그 사이 쿠키가 끝나 멈춘 hls.js는 새 쿠키로 저절로 안 살아나서 재생기를 새로
+  // 세운다(PR #320 codex). 정상 갱신에는 안 늘어 재생이 끊기지 않는다
+  const [accessRecoveries, setAccessRecoveries] = useState(0);
   useEffect(() => {
     if (!liveStreamId) return undefined;
     let alive = true;
     let timer: number | undefined;
+    let opened = false;
+    let failedSinceOpen = false;
     const ask = () => {
       void requestPlaybackAccess(liveStreamId).then((result) => {
+        if (alive && result.kind === 'failed') failedSinceOpen = opened;
+        if (alive && result.kind !== 'failed') {
+          if (failedSinceOpen) setAccessRecoveries((n) => n + 1);
+          failedSinceOpen = false;
+          opened = true;
+          setAccessReadyFor(liveStreamId);
+        }
         if (!alive || result.kind === 'not_needed') return;
         const wait =
           result.kind === 'failed'
@@ -266,14 +282,19 @@ function LivePlayer({
   return (
     <GlassPlayer
       // 실재생 훅은 경과 시드를 마운트 때 한 번만 읽는다 — startedAt이 도착하면 한 번 다시 세운다
-      key={uptimeSeconds === null ? 'clock-pending' : 'clock-known'}
+      // 출입증 갱신이 실패하다가 다시 받아져도 다시 세운다(accessRecoveries)
+      key={`${uptimeSeconds === null ? 'clock-pending' : 'clock-known'}-${accessRecoveries}`}
       channelName={stream.channelName}
       viewersNote={viewersNote}
       broadcastStatus={displayStatus}
       noSignalNote={noSignalNote}
       // 라이브 주소는 방송 중일 때만 — 끝난 방송의 LL-HLS는 닫혀 있어 검은 화면과 오류만 남는다(PR #200 codex).
       // 끝난 방송은 녹화가 있으면 recorded로, 없으면 「지난 방송 영상」 자리를 그린다
-      src={broadcastStatus === 'live' ? src : null}
+      src={
+        broadcastStatus === 'live' && (!liveStreamId || accessReadyFor === liveStreamId)
+          ? src
+          : null
+      }
       recorded={recorded}
       startAtSeconds={startAtSeconds}
       onPlaybackPosition={onPlaybackPosition}
