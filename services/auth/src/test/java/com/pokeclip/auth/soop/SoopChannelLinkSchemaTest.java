@@ -331,4 +331,16 @@ class SoopChannelLinkSchemaTest extends IntegrationTestSupport {
         assertThat(repository.findIdsExpiringOrStale(expiringBefore, checkedBefore, PageRequest.of(0, 1)))
                 .containsExactly(stale);
     }
+
+    /**
+     * 철회 확인 후보는 {@code last_refreshed_at}으로 거르고 정렬한다(25명 상한). 그 칸에 살아 있는 행만의 색인이 없으면
+     * 연동이 늘수록 매 틱 살아 있는 행 전체를 훑고 정렬한다(유튜브 표는 같은 색인을 둔다, PR #331 codex).
+     */
+    @Test
+    void 갱신_후보_정렬_칸에_살아_있는_행만의_색인이_있다() {
+        String def = jdbc.queryForObject(
+                "SELECT indexdef FROM pg_indexes WHERE tablename = 'soop_channel_links' "
+                        + "AND indexname = 'idx_soop_links_alive_refreshed'", String.class);
+        assertThat(def).contains("(last_refreshed_at)").contains("WHERE (revoked_at IS NULL)");
+    }
 }

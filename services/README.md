@@ -861,7 +861,7 @@ chat-detector의 `V401`(`chat_metrics`, POK-120)이다.
 표는 열이다 — `users`·`refresh_tokens`(V101·V102) ·
 `secrets`·`stream_keys`·`pairing_codes`·`pairing_exchange_attempts`(V103~V106) ·
 `chzzk_channel_links`(V107) · `editor_invitations`·`editor_delegations`(V108) ·
-`youtube_channel_links`(V109) · `soop_channel_links`(V116, POK-396).
+`youtube_channel_links`(V109) · `soop_channel_links`(V116, 철회 확인 후보 색인 V117, POK-396).
 **`V110`·`V111`은 표를 만들지 않는다** — `V110`이 `users`에 사진 칸 둘(`profile_photo_key`·
 `profile_photo_updated_at`)을, `V111`이 `deleted_at` 한 칸과 **그 사진 칸 둘이 반쪽만 차는 것을 막는
 CHECK 제약**을 더한다(POK-171).
