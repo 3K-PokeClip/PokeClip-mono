@@ -2,6 +2,7 @@
 
 import { useEffect, useId, useRef, useState, type ReactElement, type RefObject } from 'react';
 import Link from 'next/link';
+import clsx from 'clsx';
 import { Check } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Avatar, Button, Popover, useToast } from '@/ui';
@@ -10,7 +11,9 @@ import {
   declineInvitation,
   delegationsAsEditorQueryOptions,
   receivedInvitationsQueryOptions,
+  revokeDelegation,
   type ReceivedInvitation,
+  type StreamerDelegation,
 } from '@/api/editors';
 import { useLogout, useMe } from '@/features/auth/useSession';
 import { expiresLabel } from '@/features/settings/editors/editorDates';
@@ -90,8 +93,10 @@ function SwitcherPanel({ onClose }: { onClose: () => void }) {
   const select = useChannelStore((s) => s.select);
   // 저장된 남의 채널이 있다(지금은 as-editor를 못 읽어 내 채널로 보일 수 있다)
   const storedOther = useChannelStore((s) => s.selected !== null && s.selected !== s.userId);
-  // 거절 확인은 창 안 덮개로 묻는다(시안 1u ③). 덮개가 스크롤 밖에 있어야 해서 상태를 목록이 아니라 여기 둔다
-  const [declining, setDeclining] = useState<Declining | null>(null);
+  // 거절·나가기 확인은 창 안 덮개로 묻는다(시안 1u ③). 덮개가 스크롤 밖에 있어야 해서 상태를 목록이 아니라 여기 둔다
+  const [asking, setAsking] = useState<Asking | null>(null);
+  // 관리 모드: 참여 채널마다 「나가기」를 꺼낸다(시안 비교 3안). 평소 창은 바꾸기만 해서 실수로 나갈 일이 없다
+  const [managing, setManaging] = useState(false);
 
   if (!me) return <div className={styles.head}>계정 전환</div>;
   const currentId = active.ready ? active.streamerId : me.id;
@@ -109,12 +114,22 @@ function SwitcherPanel({ onClose }: { onClose: () => void }) {
   const invitesFailed = received.data === undefined && received.isError;
   const channels = asEditor.data ?? [];
   const invitations = received.data ?? [];
+  const left = (channel: StreamerDelegation, refresh: () => void) => {
+    setAsking(null);
+    if (channel.streamerId !== currentId) {
+      refresh();
+      return;
+    }
+    // 지금 들어가 있는 채널에서 나왔으면 전환 화면과 함께 내 채널로 돌아간다. 목록은 바꾼 뒤에 다시 읽는다(useSwitchChannel)
+    switchTo({ streamerId: me.id, name: me.name, relation: 'OWNER' }, refresh);
+    onClose();
+  };
 
   return (
     <>
       {/* 패널이 아니라 이 칸이 스크롤한다: 덮개가 스크롤과 상관없이 보이는 칸을 덮게. 덮개가 떠 있는 동안 뒤는
           누를 수도 Tab으로 갈 수도 없다 */}
-      <div className={styles.scroll} inert={declining !== null}>
+      <div className={styles.scroll} inert={asking !== null}>
         <div className={styles.head}>계정 전환</div>
         <div className={styles.section}>
           <div className={styles.sectionTitle}>내 채널</div>
@@ -127,7 +142,17 @@ function SwitcherPanel({ onClose }: { onClose: () => void }) {
           />
           {channels.length > 0 && (
             <>
-              <div className={styles.sectionTitle}>편집 참여 중 · {channels.length}</div>
+              <div className={clsx(styles.sectionTitle, styles.sectionHead)}>
+                <span>편집 참여 중 · {channels.length}</span>
+                <button
+                  type="button"
+                  className={styles.manage}
+                  aria-pressed={managing}
+                  onClick={() => setManaging((m) => !m)}
+                >
+                  {managing ? '완료' : '관리'}
+                </button>
+              </div>
               {channels.map((d) => (
                 <ChannelRow
                   key={d.id}
@@ -135,6 +160,8 @@ function SwitcherPanel({ onClose }: { onClose: () => void }) {
                   photo={null}
                   role="편집자"
                   current={currentId === d.streamerId}
+                  managing={managing}
+                  onLeave={(opener) => setAsking({ kind: 'leave', channel: d, opener })}
                   onClick={() =>
                     pick({ streamerId: d.streamerId, name: d.streamerName, relation: 'EDITOR' })
                   }
@@ -169,7 +196,7 @@ function SwitcherPanel({ onClose }: { onClose: () => void }) {
         {invitations.length > 0 && (
           <Invitations
             invitations={invitations}
-            onDecline={(invitation, opener) => setDeclining({ invitation, opener })}
+            onDecline={(invitation, opener) => setAsking({ kind: 'decline', invitation, opener })}
           />
         )}
         <div className={styles.foot}>
@@ -182,7 +209,21 @@ function SwitcherPanel({ onClose }: { onClose: () => void }) {
           </button>
         </div>
       </div>
-      {declining && <DeclineConfirm {...declining} onClose={() => setDeclining(null)} />}
+      {asking?.kind === 'decline' && (
+        <DeclineConfirm
+          invitation={asking.invitation}
+          opener={asking.opener}
+          onClose={() => setAsking(null)}
+        />
+      )}
+      {asking?.kind === 'leave' && (
+        <LeaveConfirm
+          channel={asking.channel}
+          opener={asking.opener}
+          onClose={() => setAsking(null)}
+          onLeft={(refresh) => left(asking.channel, refresh)}
+        />
+      )}
     </>
   );
 }
@@ -193,17 +234,24 @@ interface ChannelRowProps {
   role: '스트리머' | '편집자';
   current: boolean;
   onClick: () => void;
+  /** 관리 모드: 줄을 눌러도 바꾸지 않고 오른쪽에 「나가기」를 둔다(참여 채널만) */
+  managing?: boolean;
+  onLeave?: (opener: HTMLElement) => void;
 }
 
-function ChannelRow({ name, photo, role, current, onClick }: ChannelRowProps) {
-  return (
+function ChannelRow({ name, photo, role, current, onClick, managing, onLeave }: ChannelRowProps) {
+  const leaving = Boolean(managing && onLeave);
+  const row = (
     <button
       type="button"
       className={styles.row}
       aria-current={current ? 'true' : undefined}
       // 남의 채널이 지금 채널이면 그 줄을 point로 칠한다: 내 채널(accent)과 색으로 갈린다
       data-others-channel={role === '편집자' || undefined}
-      onClick={onClick}
+      // 관리 중엔 줄을 눌러도 바꾸지 않는다: 나가려다 그 채널로 들어가는 일이 없게
+      data-managing={leaving || undefined}
+      aria-disabled={leaving || undefined}
+      onClick={leaving ? undefined : onClick}
     >
       {/* 남의 채널은 서버가 사진을 안 준다: 이름 글자 아바타 */}
       <Avatar size="sm" src={photo ?? undefined} name={name} className={styles.rowAvatar} />
@@ -211,8 +259,24 @@ function ChannelRow({ name, photo, role, current, onClick }: ChannelRowProps) {
         <span className={styles.rowName}>{name} 채널</span>
         <span className={styles.rowMeta}>{role}</span>
       </span>
-      {current && <Check aria-hidden className={styles.rowCheck} />}
+      {current && !leaving && <Check aria-hidden className={styles.rowCheck} />}
     </button>
+  );
+  if (!leaving) return row;
+  // 버튼 안에 버튼을 넣지 않으려고 줄 위에 겹쳐 둔다
+  return (
+    <div className={styles.rowWrap}>
+      {row}
+      <Button
+        className={styles.leave}
+        variant="outline"
+        size="sm"
+        aria-label={`${name} 채널에서 나가기`}
+        onClick={(e) => onLeave?.(e.currentTarget)}
+      >
+        나가기
+      </Button>
+    </div>
   );
 }
 
@@ -245,11 +309,10 @@ function useInvitationAction(
   });
 }
 
-/** 거절을 누른 초대와 그 버튼(확인을 닫으면 포커스가 돌아갈 곳) */
-interface Declining {
-  invitation: ReceivedInvitation;
-  opener: HTMLElement;
-}
+/** 창 안 덮개로 묻는 일과 누른 버튼(확인을 닫으면 포커스가 돌아갈 곳) */
+type Asking =
+  | { kind: 'decline'; invitation: ReceivedInvitation; opener: HTMLElement }
+  | { kind: 'leave'; channel: StreamerDelegation; opener: HTMLElement };
 
 /** 받은 초대: 수락은 바로 보내고, 거절만 덮개로 한 번 더 묻는다(되돌릴 수 없다). */
 function Invitations({
@@ -318,8 +381,47 @@ function DeclineConfirm({
 }
 
 /**
- * 창 안 확인 덮개(시안 1u ③, 시안 비교 B안). 화면 가운데 모달 대신 창 안에서 묻되, 덮개는 패널(position: fixed)을
- * 기준으로 보이는 칸 전체를 덮는다: 초대가 많아 창을 내려 둔 채로 눌러도 카드가 눈앞 가운데에 뜬다.
+ * 참여 채널 나가기 확인. 나간 뒤 무엇을 할지는 부르는 쪽(onLeft)이 정한다: 지금 채널이면 내 채널로 바꾼 뒤에 목록을
+ * 다시 읽어야 해서 다시 읽기(refresh)를 넘긴다.
+ */
+function LeaveConfirm({
+  channel,
+  opener,
+  onClose,
+  onLeft,
+}: {
+  channel: StreamerDelegation;
+  opener: HTMLElement;
+  onClose: () => void;
+  onLeft: (refresh: () => void) => void;
+}) {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const leave = useMutation({
+    mutationFn: () => revokeDelegation(channel.id),
+    onSuccess: () => {
+      toast({ tone: 'success', title: `${channel.streamerName} 채널에서 나왔어요` });
+      onLeft(() => void queryClient.invalidateQueries({ queryKey: ['editor-delegations'] }));
+    },
+    onError: (e: unknown) => failedToast(toast, e),
+  });
+  return (
+    <PanelConfirm
+      title={`${channel.streamerName} 채널의 편집자에서 나갈까요?`}
+      text="이 채널의 하이라이트·클립을 더 볼 수 없어요. 다시 들어가려면 새로 초대받아야 해요."
+      confirmLabel="나가기"
+      busy={leave.isPending}
+      opener={opener}
+      onConfirm={() => leave.mutate()}
+      onClose={onClose}
+    />
+  );
+}
+
+/**
+ * 창 안 확인 덮개(시안 1u ③, 시안 비교 B안) — 받은 초대 거절과 참여 채널 나가기가 같이 쓴다. 화면 가운데 모달 대신
+ * 창 안에서 묻되, 덮개는 패널(position: fixed)을 기준으로 보이는 칸 전체를 덮는다: 창을 내려 둔 채로 눌러도 카드가
+ * 눈앞 가운데에 뜬다.
  */
 function PanelConfirm({
   title,
@@ -342,7 +444,7 @@ function PanelConfirm({
   const textId = useId();
   const cancelRef = useRef<HTMLButtonElement>(null);
 
-  // 열리면 취소에 포커스(Enter 한 번에 거절되지 않게). 닫히면 누른 거절 버튼으로 돌아간다: passive effect의
+  // 열리면 취소에 포커스(Enter 한 번에 거절·나가기 되지 않게). 닫히면 누른 버튼으로 돌아간다: passive effect의
   // 정리는 뒤 칸의 inert가 풀린 뒤에 돌아 포커스가 들어간다
   useEffect(() => {
     cancelRef.current?.focus();

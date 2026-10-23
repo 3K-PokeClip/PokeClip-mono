@@ -7,6 +7,7 @@ import { jsonResponse, stubFetch } from '@/test/mockFetch';
 import { renderWithProviders } from '@/test/testProviders';
 import { ChannelSwitcher } from './ChannelSwitcher';
 import { useSwitchCurtain } from './switchCurtain';
+import { useActiveChannel } from './useActiveChannel';
 
 const nav = vi.hoisted(() => ({ replace: vi.fn() }));
 vi.mock('next/navigation', () => ({
@@ -45,17 +46,25 @@ function invitation(hoursLeft: number) {
 }
 
 interface Server {
-  delegations: unknown[];
+  delegations: Array<{ id: number }>;
   invitations: unknown[];
   asEditorFails?: boolean;
   receivedFails?: boolean;
+  /** 참여 채널 목록을 읽을 때마다 부른다(읽는 순서를 재는 시험용) */
+  onAsEditor?: () => void;
 }
 
 function stub(server: Server) {
   return stubFetch((url, init) => {
     const method = init?.method ?? 'GET';
     if (url === '/api/auth/me') return jsonResponse(200, ME);
+    const leave = /^\/api\/editor-delegations\/(\d+)$/.exec(url);
+    if (leave && method === 'DELETE') {
+      server.delegations = server.delegations.filter((d) => d.id !== Number(leave[1]));
+      return new Response(null, { status: 204 });
+    }
     if (url === '/api/editor-delegations/as-editor') {
+      server.onAsEditor?.();
       return server.asEditorFails
         ? jsonResponse(500, { error: 'boom' })
         : jsonResponse(200, server.delegations);
@@ -81,6 +90,8 @@ function stub(server: Server) {
 
 const posts = (spy: ReturnType<typeof stubFetch>) =>
   spy.mock.calls.filter(([, init]) => init?.method === 'POST').map(([url]) => String(url));
+const deletes = (spy: ReturnType<typeof stubFetch>) =>
+  spy.mock.calls.filter(([, init]) => init?.method === 'DELETE').map(([url]) => String(url));
 
 async function open(user: ReturnType<typeof userEvent.setup>) {
   return (await openWithClient(user)).panel;
@@ -334,5 +345,111 @@ describe('ChannelSwitcher: 저장된 남의 채널이 있는데 내 채널로 �
     );
     expect(queryClient.getQueryState(['editor-delegations', 'as-editor'])?.status).toBe('success');
     expect(useChannelStore.getState().selected).toBeNull();
+  });
+});
+
+describe('ChannelSwitcher: 관리 모드에서 참여 채널 나가기', () => {
+  /** 관리 중의 참여 채널 줄(전환 버튼). 「○○ 채널에서 나가기」 버튼과 이름이 겹쳐 글자로 고른다 */
+  const rowOf = (panel: ReturnType<typeof within>, name: string) =>
+    panel
+      .getAllByRole('button')
+      .find(
+        (b: HTMLElement) =>
+          b.textContent?.includes(`${name} 채널`) && !b.textContent.includes('나가기'),
+      )!;
+
+  it('관리를 누르면 참여 채널마다 나가기가 나오고, 관리 중엔 줄을 눌러도 바꾸지 않는다', async () => {
+    stub({ delegations: [BYEOLHA, KONGSTAR], invitations: [] });
+    const user = userEvent.setup();
+    const panel = within(await open(user));
+    await panel.findByText('편집 참여 중 · 2');
+    expect(panel.queryByRole('button', { name: /채널에서 나가기/ })).not.toBeInTheDocument();
+
+    await user.click(panel.getByRole('button', { name: '관리' }));
+
+    expect(panel.getByRole('button', { name: '별하 채널에서 나가기' })).toBeInTheDocument();
+    expect(panel.getByRole('button', { name: '콩스타 채널에서 나가기' })).toBeInTheDocument();
+    await user.click(rowOf(panel, '별하'));
+    expect(useSwitchCurtain.getState().curtain).toBeNull();
+    expect(screen.getByRole('dialog', { name: '계정 전환' })).toBeInTheDocument();
+
+    await user.click(panel.getByRole('button', { name: '완료' }));
+    expect(panel.queryByRole('button', { name: /채널에서 나가기/ })).not.toBeInTheDocument();
+  });
+
+  it('나가기는 창 안 덮개로 확인한 뒤에만 보낸다: 취소면 안 보내고, 나가면 그 줄만 사라지고 창은 그대로다', async () => {
+    const spy = stub({ delegations: [BYEOLHA, KONGSTAR], invitations: [] });
+    const user = userEvent.setup();
+    const panel = within(await open(user));
+    await panel.findByText('편집 참여 중 · 2');
+    await user.click(panel.getByRole('button', { name: '관리' }));
+
+    await user.click(panel.getByRole('button', { name: '콩스타 채널에서 나가기' }));
+    const confirm = within(
+      await panel.findByRole('alertdialog', { name: '콩스타 채널의 편집자에서 나갈까요?' }),
+    );
+    expect(confirm.getByRole('button', { name: '취소' })).toHaveFocus();
+    await user.click(confirm.getByRole('button', { name: '취소' }));
+    expect(deletes(spy)).toEqual([]);
+
+    await user.click(panel.getByRole('button', { name: '콩스타 채널에서 나가기' }));
+    await user.click(
+      within(await panel.findByRole('alertdialog')).getByRole('button', { name: '나가기' }),
+    );
+
+    await waitFor(() => expect(deletes(spy)).toEqual(['/api/editor-delegations/22']));
+    expect(await screen.findByText('콩스타 채널에서 나왔어요')).toBeInTheDocument();
+    await waitFor(() =>
+      expect(
+        panel.queryByRole('button', { name: '콩스타 채널에서 나가기' }),
+      ).not.toBeInTheDocument(),
+    );
+    // 지금 채널이 아니니 바꾸지 않고 창도 그대로다
+    expect(useSwitchCurtain.getState().curtain).toBeNull();
+    expect(screen.getByRole('dialog', { name: '계정 전환' })).toBeInTheDocument();
+  });
+
+  it('지금 들어가 있는 채널에서 나가면 창을 닫고 내 채널로 돌아간다: 참여 목록은 바꾼 뒤에 다시 읽는다', async () => {
+    window.localStorage.setItem('pc-channel', JSON.stringify({ '7': 3 }));
+    // 목록을 읽는 순간의 고른 채널을 적는다: 나간 뒤 읽기가 바꾸기보다 먼저면 ChannelScope가 끊김으로 보고 경고를 띄운다
+    const readsAfterLeave: Array<number | null> = [];
+    let left = false;
+    const server: Server = { delegations: [BYEOLHA], invitations: [] };
+    server.onAsEditor = () => {
+      if (left) readsAfterLeave.push(useChannelStore.getState().selected);
+    };
+    const spy = stub(server);
+    const user = userEvent.setup();
+    // 실제 앱에선 사이드바·ChannelScope가 참여 목록을 늘 지켜봐서 창이 닫혀도 다시 읽힌다. 그 자리를 하나 세운다
+    function Watcher() {
+      useActiveChannel();
+      return null;
+    }
+    renderWithProviders(
+      <>
+        <Watcher />
+        <ChannelSwitcher side="top" align="start">
+          <button type="button">열기</button>
+        </ChannelSwitcher>
+      </>,
+    );
+    await user.click(screen.getByRole('button', { name: '열기' }));
+    const panel = within(await screen.findByRole('dialog', { name: '계정 전환' }));
+    await waitFor(() => expect(rowOf(panel, '별하')).toHaveAttribute('aria-current', 'true'));
+    await user.click(panel.getByRole('button', { name: '관리' }));
+    await user.click(panel.getByRole('button', { name: '별하 채널에서 나가기' }));
+    left = true;
+    await user.click(
+      within(await panel.findByRole('alertdialog')).getByRole('button', { name: '나가기' }),
+    );
+
+    await waitFor(() => expect(deletes(spy)).toEqual(['/api/editor-delegations/21']));
+    expect(useSwitchCurtain.getState().curtain).toMatchObject({ name: '나', relation: 'OWNER' });
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: '계정 전환' })).not.toBeInTheDocument(),
+    );
+    await waitFor(() => expect(useChannelStore.getState().selected).toBeNull());
+    await waitFor(() => expect(readsAfterLeave.length).toBeGreaterThan(0));
+    expect(readsAfterLeave.every((selected) => selected === null)).toBe(true);
   });
 });
