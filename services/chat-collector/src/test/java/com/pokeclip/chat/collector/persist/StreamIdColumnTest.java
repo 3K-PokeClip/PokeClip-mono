@@ -1,5 +1,7 @@
 package com.pokeclip.chat.collector.persist;
 
+import com.pokeclip.chat.collector.Platform;
+
 import com.pokeclip.chat.collector.support.IntegrationTestSupport;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -57,7 +59,7 @@ class StreamIdColumnTest extends IntegrationTestSupport {
     void 딱_128자_방송_번호도_잘리지_않고_저장된다() {
         String streamId = "s".repeat(128);
         ChatBuffer buffer = new ChatBuffer(10);
-        buffer.offer(new PersistableChat(streamId, "ch-128", "u-128", "긴번호",
+        buffer.offer(new PersistableChat(Platform.CHZZK, streamId, "ch-128", "u-128", "긴번호",
                 1723600500000L, 1723600500175L, null, null));
         ChatPersister persister = new ChatPersister(jdbc, buffer);
 

@@ -20,10 +20,10 @@
 | 브라우저 독 | obs-browser(CEF) 패널에 `ui/` 페이지. 상태·전송 시간·비트레이트·송출 점검·연결 해제 확인·고급 설정. 화면은 claude.ai/design 시안 「PokeClip Plugin UI」 기준이고, web 디자인 토큰·브랜드 심볼을 그대로 쓴다 |
 | Qt 폴백 | obs-browser가 없거나(일부 Linux·Wayland) 페이지가 붙지 않으면 최소 Qt 패널 — 기능은 같다 |
 | 자동 재연결 (A5) | 우리 SRT가 송출 중에 끊기거나 처음부터 붙지 못하면 플러그인이 정책 표(300초 안 5초 → 30초 → 60초, 65분에 포기)대로 다시 붙인다. 본방은 그대로다. 독에 「M초 뒤 다시 시도해요 · N번째」와 「다시 시도」·「재시도 중지」·「다시 연결」 — 아래 「자동 재연결」 |
-| 핫키 마킹 (A4) | 단축키(기본 Ctrl+Shift+M)·독 버튼으로 「지금 이 순간」을 표시하면 누른 시각을 서버로 보낸다(재시도·중복 방지 포함). **받는 서버 창구는 아직 없다** — 아래 「핫키 마킹」 |
+| 핫키 마킹 (A4) | 단축키(기본 Ctrl+Shift+M)·독 버튼으로 「지금 이 순간」을 표시하면 누른 시각을 서버로 보낸다(재시도·중복 방지 포함). 받는 서버 창구는 clip `POST /api/clip/marks`(POK-391). 아래 「핫키 마킹」 |
 | 종료 신호 (A3·4D) | 스트리머가 본방을 끝내면(OBS 「방송 종료」·방송 중 OBS 닫기) 우리 SRT 출력이 실제로 멈춘 직후 Media에 `POST /api/ingest/end-signal`을 1회 보낸다 — Media가 그 회차를 바로 닫고 뒤 송출을 새 회차로 연다(보장 시간 300초를 기다리지 않는다). 오류·끊김·「재시도 중지」·포기·본방 자력 종료에는 보내지 않는다. **받는 Media 수신부는 아직 없다(1번 M6)** — 아래 「종료 신호」 |
 
-**아직 안 되는 것** — 종료 신호를 받는 Media 수신부(1번 M6 — 플러그인 쪽만 있다), 마크를 받는 서버 창구(POK-119 — 플러그인 쪽만 있다), SRT RTT 통계(A6), OS가 믿는 코드 서명·macOS 공증(A7 — 설치 파일은 있다, 공인 서명은 POK-360), 오디오 소스를 앱 단위(디스코드·게임·크롬)로 가르기(POK-290 — 지금은 OBS 소스 타입 6종류로만 가른다).
+**아직 안 되는 것**: 종료 신호를 받는 Media 수신부(1번 M6: 플러그인 쪽만 있다), SRT RTT 통계(A6), OS가 믿는 코드 서명·macOS 공증(A7: 설치 파일은 있다, 공인 서명은 POK-360), 오디오 소스를 앱 단위(디스코드·게임·크롬)로 가르기(POK-290: 지금은 OBS 소스 타입 6종류로만 가른다).
 
 ## 구조
 
@@ -234,15 +234,15 @@ OBS 트랙 1~6이 그대로 서버의 6트랙이 된다 (ADR-017, 계약9 `audio
 
 - **누르는 곳** — OBS 단축키 「PokeClip: 순간 표시」(기본 **Ctrl+Shift+M**, macOS도 Control 키) · 독 상태 카드의 「순간 표시」 버튼 · Qt 폴백 패널 버튼. 셋이 같은 대기열로 간다.
 - **언제** — 우리 송출이 `전송 중`·`재연결 중`일 때만. 아니면 독에 「PokeClip으로 전송 중일 때만 표시할 수 있어요」. 2초 안의 연타는 한 번으로 친다.
-- **보내는 것**(규격 정본 = 위키 [계약4](https://github.com/3K-PokeClip/PokeClip-LLM-WIKI/blob/main/contracts/%EA%B3%84%EC%95%BD4-OBS-Control-API.md) 2B절) — `POST {clip_api_base}/api/clip/marks`, `Authorization: Bearer <HMAC-SHA256(passphrase, "pokeclip-4b-v1") 소문자 hex 64자>`(passphrase 원문은 보내지 않는다 — 종료 신호 4D와 같은 방식이고 메시지만 다르다), `Idempotency-Key: <eventId>`, 본문 `{"streamid":"<SRT에 쓴 그 값>","eventId":"<UUID v4>","pressedAt":<epoch ms>,"sentAt":<epoch ms>}`. 방송은 경로가 아니라 본문 `streamid`로 가리킨다(4C·4D와 같다). 누른 순간 시각을 찍고, 다시 보낼 때는 `sentAt`만 새로 붙인다(`eventId`·`Idempotency-Key`는 그대로). 시계 어긋남 보정(`pressedAt + (서버 수신 − sentAt)`)·녹화 기준점 환산(POK-255 `TimelineOriginReader`)·카드 창 [T−30s, T+10s]은 서버 몫이다.
+- **보내는 것**(규격 정본 = 위키 [계약4](https://github.com/3K-PokeClip/PokeClip-LLM-WIKI/blob/main/contracts/%EA%B3%84%EC%95%BD4-OBS-Control-API.md) 2B절): `POST {clip_api_base}/api/clip/marks`, `Authorization: Bearer <HMAC-SHA256(passphrase, "pokeclip-4b-v1") 소문자 hex 64자>`(passphrase 원문은 보내지 않는다: 종료 신호 4D와 같은 방식이고 메시지만 다르다), `Idempotency-Key: <eventId>`, 본문 `{"streamid":"<SRT에 쓴 그 값>","eventId":"<UUID v4>","pressedAt":<epoch ms>,"sentAt":<epoch ms>}`. 방송은 경로가 아니라 본문 `streamid`로 가리킨다(4C·4D와 같다). 누른 순간 시각을 찍고, 다시 보낼 때는 `sentAt`만 새로 붙인다(`eventId`·`Idempotency-Key`는 그대로). 시계 어긋남 보정(`pressedAt + (서버 수신 − sentAt)`)·녹화 기준점 환산(POK-255 `TimelineOriginReader`)·카드 창(누른 시각 앞 40초·뒤 20초)과 「같은 방송에서 앞 수동 카드의 누른 시각 20초 안에 다시 누르면 새 카드 없이 앞 카드를 200으로 돌려준다」는 서버 몫이다(POK-391).
 - **다시 보내기** — 전용 작업 스레드가 보낸다. 네트워크 오류·5xx·429·`503 timeline_not_ready`·`404 broadcast_not_found`는 1·2·4·8…초(최대 30초, `Retry-After`가 더 길면 그것 — 최대 60초) 뒤 **같은 `eventId`로** 다시 보내고, 누른 지 10분이 지나면 버린다(대기열에서 밀려도 보내기 직전에 다시 확인한다). 대기열은 100개까지 — 넘치면 가장 먼저 누른 것부터 버린다. 응답 본문은 16KB까지만 읽는다(넘쳐도 상태 코드로 판정). 방송이 끝나도 남은 마크는 계속 보낸다. OBS를 끄면 못 보낸 마크는 버린다(로그에 개수만).
-- **바로 버리는 것** — `400`, `401 invalid_stream_key`. **사유 없는 401·404·405**는 「서버에 마크 창구가 아직 없다」(`mark_unsupported`)로 본다 — 지금 Clip은 `/api/clip/**` 전부에 JWT를 요구해 JWT가 아닌 Bearer에 본문 없는 401을 준다(2026-09-30 develop `SecurityConfig`).
+- **바로 버리는 것**: `400`, `401 invalid_stream_key`. **사유 없는 401·404·405**는 「서버에 마크 창구가 아직 없다」(`mark_unsupported`)로 본다. POK-391부터 Clip이 이 경로를 JWT 체인 밖으로 열어 정상 서버에서는 생기지 않는다(그 전 판 Clip은 `/api/clip/**` 전부에 JWT를 요구해 본문 없는 401을 줬다).
 - **단축키 저장** — OBS 설정 › 단축키에서 바꾸면 OBS가 프로필 `basic.ini`의 `[Hotkeys] PokeClip.MarkMoment`에 적는다(프론트엔드 단축키만). OBS는 플러그인 단축키를 다시 읽어 주지 않으므로 플러그인이 시작·프로필 전환 때 읽는다: 프로필 값 → `pokeclip.json`의 `mark_hotkey` 사본(마지막으로 쓴 키) → 기본 Ctrl+Shift+M. 지운 키(빈 목록)는 그대로 둔다.
 - **macOS 권한** — OBS가 뒤에 있을 때도 단축키를 받으려면 OBS에 「입력 모니터링」 권한이 있어야 한다(오래된 설치는 「손쉬운 사용」). OBS 앞에서는 권한 없이도 된다.
 - **독 표기** — 키 이름으로 적는다(macOS `⌃⇧M` · 그 밖 `Ctrl+Shift+M`). OBS 자체 표기는 macOS 입력 소스를 따라, 한글 자판이면 M을 「ㅡ」로 보여준다.
 - ⚠️ **다른 앱과 겹칠 수 있다** — OBS 단축키는 기본 설정(설정 › 고급 › 단축키 포커스 동작)에서 OBS가 뒤에 있어도 받는다. 다른 앱에서 같은 조합을 쓰면(Windows Discord 음소거 토글 기본값이 Ctrl+Shift+M인 것으로 안다 — 미확인) 방송 중 그 앱에서 누를 때마다 마크가 간다. 겹치면 OBS 설정 › 단축키에서 바꾼다. 기본 키는 2026-09-30 결정대로 둔다.
 
-🔴 **서버 선행 조건** — 지금은 받는 곳이 없다. ① Clip 창구(POK-119 — 규격은 계약4 2B절, 경로를 JWT 체인 밖으로 열고 4C resolve로 받은 passphrase로 같은 파생 값을 만들어 대조) ② 카드가 붙을 방송 명부 행을 만드는 1번의 `broadcast.started` 발행(계약9). 그 전에 dev로 보내면 `mark_unsupported`가 정상이다. 로컬에서는 계약대로 201·200(같은 eventId)·401·404·503을 돌려주는 목 서버를 띄우고 `clip_api_base`를 그쪽으로 둔다.
+🔴 **서버 선행 조건**: ① Clip 창구는 POK-391에서 생겼다(계약4 2B절: 경로를 JWT 체인 밖으로 열고 4C resolve로 받은 passphrase로 같은 파생 값을 만들어 대조) ② 카드가 붙을 방송 명부 행을 만드는 1번의 `broadcast.started` 발행(계약9). Clip이 POK-391 전 판이면 `mark_unsupported`가 정상이다. 로컬에서는 계약대로 201·200(같은 eventId)·401·404·503을 돌려주는 목 서버를 띄우고 `clip_api_base`를 그쪽으로 둔다.
 
 ## 자동 재연결 (A5)
 
@@ -393,7 +393,7 @@ OBS 본방  → rtmp://127.0.0.1:1935  key=main          (compose MediaMTX RTMP 
 | `audio_track_attach_failed` | 6트랙 중 일부가 출력에 안 붙음 — 반쯤 붙은 채 보내지 않고 시작을 멈춘다 |
 | `audio_off` · `main_stream_track` · `unknown_source` | 손 배정 거절 — 자동 배정이 적용 중이 아님(켜거나 방송·녹화가 끝나길 기다린다) · 본방 트랙(OBS에서 고른다) · 그 소스가 지금 없음 |
 | `mark_not_live` · `mark_too_soon` | 우리 송출 중이 아님 · 2초 안에 또 누름 |
-| `mark_unsupported` | 서버에 마크 창구가 아직 없다(사유 없는 401·404) — 위 「서버 선행 조건」 |
+| `mark_unsupported` | 서버에 마크 창구가 없다(사유 없는 401·404, POK-391 전 판 Clip): 위 「서버 선행 조건」 |
 | `mark_unauthorized` · `mark_rejected` | 서버가 스트림 키를 거절(다시 페어링) · 본문을 거절 |
 | `mark_no_broadcast` · `mark_not_ready` · `mark_rate_limited` | 서버가 아직 이 방송을 모름 · 첫 조각 전 · 서버가 잠시 거절(429) — 자동으로 다시 보낸다 |
 | `mark_expired` | 10분 동안 못 보내 버림 |

@@ -10,8 +10,8 @@ namespace pokeclip {
 // A4 핫키 마킹 — 스트리머가 단축키로 「지금 이 순간」을 표시하면 누른 시각을 서버로 보낸다.
 // 여기는 OBS·curl 없이 시험하는 규칙만 둔다(주소·파생 값·헤더·본문·재시도 간격·버림·응답 판정·연타 거르기).
 // 규격 정본 = 위키 계약4 2B절(4B, 2026-10-14 POK-286): POST /api/clip/marks, Authorization: Bearer <파생 값>,
-// Idempotency-Key: <eventId>, 본문 {streamid, eventId, pressedAt, sentAt}. 받는 Clip 창구는 아직 없다(POK-119).
-// 카드 창 [T−30s, T+10s]은 서버가 정한다.
+// Idempotency-Key: <eventId>, 본문 {streamid, eventId, pressedAt, sentAt}. 받는 Clip 창구는 POK-391에서 생겼다.
+// 카드 창(누른 시각 앞 40초·뒤 20초)과 20초 안 재누름 무시는 서버가 정한다(POK-391). 이 파일의 상수와는 무관하다.
 
 inline constexpr int64_t kMarkDebounceMs = 2000;         // 이보다 가까운 누름은 한 번으로 친다
 inline constexpr int64_t kMarkRetryFirstMs = 1000;       // 1·2·4·8…초

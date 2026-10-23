@@ -1047,8 +1047,9 @@ describe('ChatReplayLoader: 그 시각 둘레만 읽는다', () => {
   });
 
   it('한 번에 50쪽을 다 써도 영상 시각에 못 닿으면 1초 쉬고 이어 읽는다: 실패로 두지 않고, 영상이 없어도 「불러오고 있어요」에 갇히지 않는다', async () => {
-    // 1초에 3만 줄: 50쪽(2만 5천 줄)으로는 1초도 못 채운다
-    const srv = collector(steady(2, 30_000));
+    // 1초에 2천 줄 · 한 쪽 20줄: 50쪽(1천 줄)으로는 1초도 못 채운다. 예전엔 1초에 3만 줄 · 한 쪽 500줄이었는데, 쪽마다 6만 줄을
+    // 거르느라 바쁜 기계에서 5초 시한을 넘겼다(POK-415). 재는 것(50쪽 상한 · 1초 쉼 · 이어 읽기)은 같다
+    const srv = collector(steady(2, 2_000), 20);
     const loader = new ChatReplayLoader(srv.fetchPage, T0, T0 + HOUR);
     const view = () => replayView(loader.getSnapshot(), T0 + 1_000, T0 + HOUR, T0 + 1_000);
     loader.want(T0 + 1_000, T0);

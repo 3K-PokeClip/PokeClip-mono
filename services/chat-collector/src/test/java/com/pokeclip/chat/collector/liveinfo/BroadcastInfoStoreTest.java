@@ -1,5 +1,6 @@
 package com.pokeclip.chat.collector.liveinfo;
 
+import com.pokeclip.chat.collector.Platform;
 import com.pokeclip.chat.collector.support.IntegrationTestSupport;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -24,7 +25,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class BroadcastInfoStoreTest extends IntegrationTestSupport {
 
     private static final List<String> STREAMS =
-            List.of("bi-1", "bi-cap", "bi-tags", "bi-null-tag", "bi-null-write", "bi-title-a", "bi-title-b", "bi-title-gap");
+            List.of("bi-1", "bi-cap", "bi-tags", "bi-null-tag", "bi-null-write", "bi-title-a", "bi-title-b", "bi-title-gap", "bi-plat");
     private static final Instant T = Instant.parse("2026-09-03T15:00:00Z");
 
     private final BroadcastInfoStore store;
@@ -41,10 +42,21 @@ class BroadcastInfoStoreTest extends IntegrationTestSupport {
                 jdbc.update("DELETE FROM broadcast_info WHERE stream_id = ?", streamId));
     }
 
+    /** 🔴 표의 기본값이 CHZZK라 SOOP으로만 잰다. 쓰기와 읽기(매퍼)를 같이 본다. */
+    @Test
+    void 플랫폼을_적고_그대로_읽는다() {
+        store.insert(new BroadcastInfo(Platform.SOOP, "bi-plat", "CH", T, "제목", List.of(), null, null));
+
+        assertThat(jdbc.queryForObject("SELECT platform FROM broadcast_info WHERE stream_id = 'bi-plat'",
+                String.class)).isEqualTo("SOOP");
+        assertThat(store.latest("bi-plat")).get().extracting(BroadcastInfo::platform).isEqualTo(Platform.SOOP);
+        assertThat(store.series("bi-plat", T, 10)).extracting(BroadcastInfo::platform).containsExactly(Platform.SOOP);
+    }
+
     @Test
     void 최신과_추이를_준다() {
-        store.insert(new BroadcastInfo("bi-1", "CH", T, "제목1", List.of("롤"), "LoL", 100));
-        store.insert(new BroadcastInfo("bi-1", "CH", T.plusSeconds(60), "제목2",
+        store.insert(new BroadcastInfo(Platform.CHZZK, "bi-1", "CH", T, "제목1", List.of("롤"), "LoL", 100));
+        store.insert(new BroadcastInfo(Platform.CHZZK, "bi-1", "CH", T.plusSeconds(60), "제목2",
                 List.of("롤", "다이아"), "LoL", null));
 
         assertThat(store.latest("bi-1").orElseThrow().title()).isEqualTo("제목2");
@@ -62,9 +74,9 @@ class BroadcastInfoStoreTest extends IntegrationTestSupport {
      */
     @Test
     void 여러_방송의_마지막_제목을_한_번에_준다() {
-        store.insert(new BroadcastInfo("bi-title-a", "CH", T, "옛 제목", List.of(), "Talk", null));
-        store.insert(new BroadcastInfo("bi-title-a", "CH", T.plusSeconds(60), "  새 제목 ", List.of(), "LoL", null));
-        store.insert(new BroadcastInfo("bi-title-b", "CH", T, "다른 방송", List.of(), null, null));
+        store.insert(new BroadcastInfo(Platform.CHZZK, "bi-title-a", "CH", T, "옛 제목", List.of(), "Talk", null));
+        store.insert(new BroadcastInfo(Platform.CHZZK, "bi-title-a", "CH", T.plusSeconds(60), "  새 제목 ", List.of(), "LoL", null));
+        store.insert(new BroadcastInfo(Platform.CHZZK, "bi-title-b", "CH", T, "다른 방송", List.of(), null, null));
 
         assertThat(store.latestTitles(List.of("bi-title-a", "bi-title-b", "bi-없음")))
                 .containsOnlyKeys("bi-title-a", "bi-title-b")
@@ -79,9 +91,9 @@ class BroadcastInfoStoreTest extends IntegrationTestSupport {
      */
     @Test
     void 제목이_빈_관측은_건너뛰고_그_앞_제목을_준다() {
-        store.insert(new BroadcastInfo("bi-title-gap", "CH", T, "살아 있는 제목", List.of(), "Talk", null));
-        store.insert(new BroadcastInfo("bi-title-gap", "CH", T.plusSeconds(60), null, List.of(), "LoL", null));
-        store.insert(new BroadcastInfo("bi-title-gap", "CH", T.plusSeconds(120), " \t ", List.of(), "LoL", null));
+        store.insert(new BroadcastInfo(Platform.CHZZK, "bi-title-gap", "CH", T, "살아 있는 제목", List.of(), "Talk", null));
+        store.insert(new BroadcastInfo(Platform.CHZZK, "bi-title-gap", "CH", T.plusSeconds(60), null, List.of(), "LoL", null));
+        store.insert(new BroadcastInfo(Platform.CHZZK, "bi-title-gap", "CH", T.plusSeconds(120), " \t ", List.of(), "LoL", null));
 
         assertThat(store.latestTitles(List.of("bi-title-gap")))
                 .containsEntry("bi-title-gap", new BroadcastInfoStore.Title("살아 있는 제목", "Talk"));
@@ -93,7 +105,7 @@ class BroadcastInfoStoreTest extends IntegrationTestSupport {
      */
     @Test
     void 모르는_시청자_수는_0이_아니라_빈칸으로_돌아온다() {
-        store.insert(new BroadcastInfo("bi-1", "CH", T, "제목", List.of(), null, null));
+        store.insert(new BroadcastInfo(Platform.CHZZK, "bi-1", "CH", T, "제목", List.of(), null, null));
 
         assertThat(store.latest("bi-1").orElseThrow().viewers()).isNull();
     }
@@ -102,7 +114,7 @@ class BroadcastInfoStoreTest extends IntegrationTestSupport {
     @Test
     void 태그는_구분자가_들어_있어도_그대로_돌아온다() {
         List<String> tags = List.of("롤,LoL", "{중괄호}", "빈 칸 있음");
-        store.insert(new BroadcastInfo("bi-tags", "CH", T, "제목", tags, "LoL", 3));
+        store.insert(new BroadcastInfo(Platform.CHZZK, "bi-tags", "CH", T, "제목", tags, "LoL", 3));
 
         assertThat(store.latest("bi-tags").orElseThrow().tags()).isEqualTo(tags);
         assertThat(store.latest("bi-tags").orElseThrow().category()).isEqualTo("LoL");
@@ -115,7 +127,7 @@ class BroadcastInfoStoreTest extends IntegrationTestSupport {
     @Test
     void 상한을_넘으면_최근부터_남긴다() {
         for (int i = 0; i < 5; i++) {
-            store.insert(new BroadcastInfo("bi-cap", "CH", T.plusSeconds(i), "제목",
+            store.insert(new BroadcastInfo(Platform.CHZZK, "bi-cap", "CH", T.plusSeconds(i), "제목",
                     List.of(), "LoL", i));
         }
 
@@ -152,7 +164,7 @@ class BroadcastInfoStoreTest extends IntegrationTestSupport {
     void NULL_태그는_표에_안_들어간다() {
         List<String> 널이_섞인_태그 = java.util.Arrays.asList("롤", null, "랭크");
 
-        store.insert(new BroadcastInfo("bi-null-write", "CH", T, "제목", 널이_섞인_태그, "LoL", 1));
+        store.insert(new BroadcastInfo(Platform.CHZZK, "bi-null-write", "CH", T, "제목", 널이_섞인_태그, "LoL", 1));
 
         assertThat(jdbc.queryForObject(
                 "SELECT array_position(tags, NULL) IS NOT NULL FROM broadcast_info"
@@ -165,8 +177,8 @@ class BroadcastInfoStoreTest extends IntegrationTestSupport {
     /** {@code since}보다 이른 줄은 추이에 안 든다 — 안 그러면 상한이 무엇을 자르는지 흐려진다. */
     @Test
     void since보다_이른_줄은_추이에_안_든다() {
-        store.insert(new BroadcastInfo("bi-1", "CH", T, "옛것", List.of(), "LoL", 1));
-        store.insert(new BroadcastInfo("bi-1", "CH", T.plusSeconds(600), "새것", List.of(), "LoL", 2));
+        store.insert(new BroadcastInfo(Platform.CHZZK, "bi-1", "CH", T, "옛것", List.of(), "LoL", 1));
+        store.insert(new BroadcastInfo(Platform.CHZZK, "bi-1", "CH", T.plusSeconds(600), "새것", List.of(), "LoL", 2));
 
         assertThat(store.series("bi-1", T.plusSeconds(300), 720))
                 .extracting(BroadcastInfo::viewers).containsExactly(2);

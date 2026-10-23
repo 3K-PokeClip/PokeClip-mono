@@ -65,6 +65,32 @@ class LifecycleEnvelopeTest {
         assertThat(mapper.readValue(json, LifecycleEnvelope.class).trackManifestJson()).isNull();
     }
 
+    /**
+     * 플랫폼 칸(POK-398)은 선택이다. 칸을 더하려고 부 생성자를 하나 남겼는데, 생성자가 둘이면 Jackson이 어느 쪽으로 읽는지가
+     * 갈릴 수 있다. 짧은 쪽으로 읽으면 이 칸이 늘 null이라 SOOP 방송이 전부 치지직으로 저장된다. 그래서 JSON으로 잰다.
+     */
+    @Test
+    void 플랫폼_칸을_읽는다() {
+        String json = """
+                {"schemaVersion":1,"eventId":"evt-4","eventType":"broadcast.started",
+                 "occurredAt":"2026-08-18T00:00:00Z","streamId":"s","streamerId":"7",
+                 "sequence":1,"traceId":"t","payload":{},"platform":"SOOP"}
+                """;
+
+        assertThat(mapper.readValue(json, LifecycleEnvelope.class).platform()).isEqualTo("SOOP");
+    }
+
+    @Test
+    void 플랫폼_칸이_없으면_null이다() {
+        String json = """
+                {"schemaVersion":1,"eventId":"evt-5","eventType":"broadcast.started",
+                 "occurredAt":"2026-08-18T00:00:00Z","streamId":"s","streamerId":"7",
+                 "sequence":1,"traceId":"t","payload":{}}
+                """;
+
+        assertThat(mapper.readValue(json, LifecycleEnvelope.class).platform()).isNull();
+    }
+
     @Test
     void 모르는_이벤트_종류는_거부한다() {
         assertThatThrownBy(() -> LifecycleEventType.from("broadcast.paused"))

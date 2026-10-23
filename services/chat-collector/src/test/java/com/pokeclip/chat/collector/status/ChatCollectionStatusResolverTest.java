@@ -1,5 +1,7 @@
 package com.pokeclip.chat.collector.status;
 
+import com.pokeclip.chat.collector.Platform;
+
 import com.pokeclip.chat.collector.ChzzkProperties;
 import com.pokeclip.chat.collector.archive.ChatArchive;
 import com.pokeclip.chat.collector.broadcast.EndedStream;
@@ -316,6 +318,6 @@ class ChatCollectionStatusResolverTest extends IntegrationTestSupport {
     }
 
     private static SessionKey key(String streamId, long streamerId, String channelId) {
-        return new SessionKey(streamId, streamerId, channelId, Instant.EPOCH.plusSeconds(streamerId));
+        return new SessionKey(Platform.CHZZK, streamId, streamerId, channelId, Instant.EPOCH.plusSeconds(streamerId));
     }
 }

@@ -1,5 +1,7 @@
 package com.pokeclip.chat.collector.persist;
 
+import com.pokeclip.chat.collector.Platform;
+
 import com.pokeclip.chat.collector.support.IntegrationTestSupport;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -49,7 +51,7 @@ class DonationPersistenceWiringTest extends IntegrationTestSupport {
                 .as("넣기 전에 행이 있으면 아래 단언이 남의 행을 세는 것이다")
                 .isZero();
 
-        buffer.offer(new PersistableDonation(
+        buffer.offer(new PersistableDonation(Platform.CHZZK, 
                 "wiring-donation-stream", CHANNEL, "donator-w", "후원자",
                 "CHAT", 5000L, "고맙습니다", 1_723_600_900_000L, 1L));
 

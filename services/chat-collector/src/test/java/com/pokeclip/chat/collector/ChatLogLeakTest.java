@@ -293,7 +293,7 @@ public class ChatLogLeakTest extends IntegrationTestSupport {
     void 적재_경로가_돌아도_본문이_로그에_안_남는다() {
         try (LogCaptor captor = new LogCaptor()) {
             ChatBuffer buffer = new ChatBuffer(100);
-            buffer.offer(new PersistableChat(null, "leak-ch", SENDER, CONTENT,
+            buffer.offer(new PersistableChat(Platform.CHZZK, null, "leak-ch", SENDER, CONTENT,
                     1_754_300_000_000L, 1_754_300_000_175L, null, null));
             int saved = new ChatPersister(jdbc, buffer).flushOnce();
             // 양성 대조. 표까지 안 갔다면 적재 경로가 바늘을 나른 적이 없다.
@@ -308,7 +308,7 @@ public class ChatLogLeakTest extends IntegrationTestSupport {
                     throw new DataAccessResourceFailureException("db down");
                 }
             };
-            buffer.offer(new PersistableChat(null, "leak-ch", SENDER, CONTENT,
+            buffer.offer(new PersistableChat(Platform.CHZZK, null, "leak-ch", SENDER, CONTENT,
                     1_754_300_000_001L, 1_754_300_000_176L, null, null));
             assertThat(new ChatPersister(broken, buffer).flushOnce()).isZero();
             assertThat(renderAll(captor))
@@ -323,7 +323,7 @@ public class ChatLogLeakTest extends IntegrationTestSupport {
             new ChatPersister(jdbc, buffer).flushOnce();
             ChatPersister isolating = new ChatPersister(
                     TestPersistence.rejecting22(jdbc.getDataSource(), CONTENT), buffer);
-            buffer.offer(new PersistableChat(null, "leak-ch", SENDER, CONTENT,
+            buffer.offer(new PersistableChat(Platform.CHZZK, null, "leak-ch", SENDER, CONTENT,
                     1_754_300_000_002L, 1_754_300_000_177L, null, null));
             isolating.flushOnce();
             assertThat(isolating.poisonedCount())
@@ -382,7 +382,7 @@ public class ChatLogLeakTest extends IntegrationTestSupport {
                 // 감사 라운드 1 C2. 닉네임 바늘을 <b>실제로 태운다</b> — null을 넣으면
                 // 새 칸이 바인딩 로거를 지나간 적이 없어 아래 단언이 그 칸에 대해
                 // 자동으로 참이 된다(클래스 javadoc의 문장이 거짓이 된다).
-                buffer.offer(new PersistableChat(null, "leak-ch", SENDER, CONTENT,
+                buffer.offer(new PersistableChat(Platform.CHZZK, null, "leak-ch", SENDER, CONTENT,
                         1_754_300_000_010L, 1_754_300_000_185L, NICKNAME, "streamer"));
                 assertThat(persister.flushOnce())
                         .as("표까지 안 갔다면 바인딩 로거가 바늘을 나른 적이 없다").isEqualTo(1);
@@ -397,7 +397,7 @@ public class ChatLogLeakTest extends IntegrationTestSupport {
                 Level before = levelOf(pinned);
                 setLevel(pinned, Level.TRACE);
                 try {
-                    buffer.offer(new PersistableChat(null, "leak-ch", SENDER, CONTENT,
+                    buffer.offer(new PersistableChat(Platform.CHZZK, null, "leak-ch", SENDER, CONTENT,
                             1_754_300_000_011L, 1_754_300_000_186L, null, null));
                     assertThat(persister.flushOnce()).isEqualTo(1);
                 } finally {
@@ -439,7 +439,7 @@ public class ChatLogLeakTest extends IntegrationTestSupport {
             Level rootBefore = levelOf(Logger.ROOT_LOGGER_NAME);
             setLevel(Logger.ROOT_LOGGER_NAME, Level.TRACE);
             try {
-                buffer.offer(new PersistableDonation("leak-donation-stream", "leak-don-ch",
+                buffer.offer(new PersistableDonation(Platform.CHZZK, "leak-donation-stream", "leak-don-ch",
                         SENDER, DONATOR_NICKNAME, "CHAT", 1000L, DONATION_TEXT,
                         1_754_300_000_500L, 1L));
                 assertThat(persister.flushOnce())
@@ -473,7 +473,7 @@ public class ChatLogLeakTest extends IntegrationTestSupport {
             Level rootBefore = levelOf(Logger.ROOT_LOGGER_NAME);
             setLevel(Logger.ROOT_LOGGER_NAME, Level.TRACE);
             try {
-                buffer.offer(new PersistableDonation(tooLongStreamId, "leak-don-ch",
+                buffer.offer(new PersistableDonation(Platform.CHZZK, tooLongStreamId, "leak-don-ch",
                         SENDER, DONATOR_NICKNAME, "CHAT", 1000L, DONATION_TEXT,
                         1_754_300_000_500L, 2L));
                 assertThat(persister.flushOnce())

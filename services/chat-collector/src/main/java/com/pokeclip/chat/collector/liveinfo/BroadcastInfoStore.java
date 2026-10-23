@@ -1,5 +1,7 @@
 package com.pokeclip.chat.collector.liveinfo;
 
+import com.pokeclip.chat.collector.Platform;
+
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Component;
@@ -27,12 +29,12 @@ import java.util.Optional;
 public class BroadcastInfoStore {
 
     private static final String COLUMNS =
-            "stream_id, channel_id, observed_at, live_title, tags, category, concurrent_users";
+            "platform, stream_id, channel_id, observed_at, live_title, tags, category, concurrent_users";
 
     private static final String INSERT = """
             INSERT INTO broadcast_info
-              (stream_id, channel_id, observed_at, live_title, tags, category, concurrent_users)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+              (platform, stream_id, channel_id, observed_at, live_title, tags, category, concurrent_users)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """;
 
     /**
@@ -98,16 +100,17 @@ public class BroadcastInfoStore {
     public void insert(BroadcastInfo info) {
         jdbc.update(connection -> {
             java.sql.PreparedStatement ps = connection.prepareStatement(INSERT);
-            ps.setString(1, info.streamId());
-            ps.setString(2, info.channelId());
-            ps.setTimestamp(3, Timestamp.from(info.observedAt()));
-            ps.setString(4, info.title());
-            ps.setArray(5, connection.createArrayOf("text", nonNullTags(info.tags())));
-            ps.setString(6, info.category());
+            ps.setString(1, info.platform().name());
+            ps.setString(2, info.streamId());
+            ps.setString(3, info.channelId());
+            ps.setTimestamp(4, Timestamp.from(info.observedAt()));
+            ps.setString(5, info.title());
+            ps.setArray(6, connection.createArrayOf("text", nonNullTags(info.tags())));
+            ps.setString(7, info.category());
             if (info.viewers() == null) {
-                ps.setNull(7, java.sql.Types.INTEGER);
+                ps.setNull(8, java.sql.Types.INTEGER);
             } else {
-                ps.setInt(7, info.viewers());
+                ps.setInt(8, info.viewers());
             }
             return ps;
         });
@@ -170,6 +173,7 @@ public class BroadcastInfoStore {
     private static BroadcastInfo toInfo(ResultSet rs, int rowNum) throws SQLException {
         Array tags = rs.getArray("tags");
         return new BroadcastInfo(
+                Platform.valueOf(rs.getString("platform")),
                 rs.getString("stream_id"),
                 rs.getString("channel_id"),
                 rs.getTimestamp("observed_at").toInstant(),

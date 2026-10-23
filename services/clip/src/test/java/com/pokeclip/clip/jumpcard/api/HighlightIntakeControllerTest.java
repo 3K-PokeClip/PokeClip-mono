@@ -153,6 +153,21 @@ class HighlightIntakeControllerTest extends IntegrationTestSupport {
         assertThat(cards.findAll()).isEmpty();
     }
 
+    /**
+     * POK-391. 수동 카드는 4B(마킹 문)로만 만든다: 2A로 받으면 eventId·20초 규칙을 안 지나고, 자동 카드
+     * 유일 색인({@code WHERE source = 'auto'})도 안 걸려 같은 창 중복이 막히지 않는다.
+     */
+    @Test
+    void source가_hotkey면_400_field_source고_카드는_안_생긴다() throws Exception {
+        mvc.perform(post("/internal/broadcasts/s-1/highlights")
+                        .header("X-Internal-Token", INTERNAL).contentType(APPLICATION_JSON)
+                        .content(본문("evt-1", "hotkey", 1_500L, 1_000L, 2_000L)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("invalid_request"))
+                .andExpect(jsonPath("$.field").value("source"));
+        assertThat(cards.findAll()).isEmpty();
+    }
+
     @Test
     void 내부_토큰이_없으면_401이고_카드는_안_생긴다() throws Exception {
         mvc.perform(post("/internal/broadcasts/s-1/highlights").contentType(APPLICATION_JSON)

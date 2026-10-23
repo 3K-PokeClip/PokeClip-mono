@@ -1,5 +1,6 @@
 package com.pokeclip.clip.jumpcard.stream;
 
+import com.pokeclip.clip.broadcast.ViewerPresence;
 import com.pokeclip.clip.broadcast.intake.EndedListener;
 import com.pokeclip.clip.jumpcard.JumpCardErrors.StreamLimitExceededException;
 import com.pokeclip.clip.jumpcard.JumpCardSnapshot;
@@ -37,7 +38,7 @@ import java.util.function.Supplier;
  * 인터페이스를 미리 뽑지 않는다 — 껍데기만 남는다.
  */
 @Component
-public class CardStreamRegistry implements EndedListener {
+public class CardStreamRegistry implements EndedListener, ViewerPresence {
 
     private static final Logger log = LoggerFactory.getLogger(CardStreamRegistry.class);
 
@@ -839,6 +840,24 @@ public class CardStreamRegistry implements EndedListener {
             }
         }
         return false;
+    }
+
+    /**
+     * 그 방송 연결마다 회원 번호 하나(POK-398, {@link ViewerPresence}). 방송 목록 요청이 부른다.
+     *
+     * <p>자물쇠를 안 잡는다({@link #hasConnections}와 같다). 같은 모니터를 {@link #openWithSnapshot}이 DB 조회를 쥔 채 잡으므로,
+     * 잡으면 홈 목록 요청이 남의 연결 열기와 DB 지연 뒤에 줄을 선다. {@code conns}가 {@code ConcurrentHashMap}이라 순회는 안전하고,
+     * 그 대가로 수가 막 열리거나 닫힌 연결 하나만큼 낡을 수 있다(화면은 목록을 다시 받을 때 고쳐진다).
+     */
+    @Override
+    public List<String> viewerIdsOf(String streamId) {
+        List<String> ids = new ArrayList<>();
+        for (Conn conn : conns.values()) {
+            if (conn.streamId().equals(streamId)) {
+                ids.add(conn.userId());
+            }
+        }
+        return ids;
     }
 
     @PreDestroy

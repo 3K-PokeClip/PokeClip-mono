@@ -10,6 +10,8 @@ docker-compose.override.yml
 *.pem
 # 공개 인증서만 되돌린다 — AWS 가 공개 배포하는 RDS CA 번들(키 없음 · media/README.md CA 번들 절).
 !media/certs/rds-global-bundle.pem
+# 같은 번들의 서버 넷 사본(POK-407, services/README.md 「DB 로그인 방식」). 바이트가 같은지 RdsCaBundleTest가 본다.
+!services/db-support/certs/rds-global-bundle.pem
 *.p12
 **/application-local.yml
 

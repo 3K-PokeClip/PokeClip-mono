@@ -104,8 +104,8 @@ class JumpCardListQueryTest extends IntegrationTestSupport {
 
     /**
      * 🔴 <b>{@code id} tie-break를 재는 유일한 자리.</b> 자동으로 잡힌 것과 핫키로 잡힌 것이 같은
-     * {@code stream_timestamp_ms}를 가질 수 있다 — {@code uq_jump_cards_window}가
-     * {@code (stream_id, source, window_start_ms)}라 막지 않는다.
+     * {@code stream_timestamp_ms}를 가질 수 있다: 자동 카드 유일 색인({@code uq_jump_cards_auto_window},
+     * V219)은 자동 카드끼리만 막고 시각은 아예 안 본다.
      *
      * <p>한 장에 하나만 담기게 잘라, 그 둘이 <b>첫 장의 끝과 다음 장의 처음</b>에 오도록 만든다.
      * 정렬·이어받기가 방송 시간 하나뿐이면 여기서 <b>같은 카드가 두 번 나오거나</b>(조건이 {@code >=})
@@ -233,8 +233,8 @@ class JumpCardListQueryTest extends IntegrationTestSupport {
     /**
      * 창은 방송 시간을 중심으로 잡는다 — {@code ck_jump_cards_ts_in_window}가
      * {@code window_start_ms <= stream_timestamp_ms <= window_end_ms}를 강제한다.
-     * {@code source}를 받는 것은 {@code uq_jump_cards_window}가 {@code (방송, 출처, 창 시작)}이라
-     * <b>같은 방송 시간을 두 번 심으려면 출처가 달라야</b> 하기 때문이다.
+     * {@code source}를 받는 것은 자동 카드 유일 색인({@code uq_jump_cards_auto_window}, V219)이
+     * {@code (방송, 창 시작)}이라 <b>같은 방송 시간의 자동 카드를 두 번 심으려면 하나는 수동이어야</b> 하기 때문이다.
      */
     private long 카드를_넣는다(String streamId, long ts, String source) {
         return jdbc.queryForObject("""

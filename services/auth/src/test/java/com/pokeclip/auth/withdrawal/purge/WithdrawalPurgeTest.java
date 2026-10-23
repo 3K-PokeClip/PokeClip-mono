@@ -5,6 +5,11 @@ import com.pokeclip.auth.chzzk.ChzzkLinkWriter;
 import com.pokeclip.auth.chzzk.ChzzkMe;
 import com.pokeclip.auth.chzzk.ChzzkTokens;
 import com.pokeclip.auth.config.InternalApiProperties;
+import com.pokeclip.auth.soop.SoopChannelLink;
+import com.pokeclip.auth.soop.SoopCleanupExecutor;
+import com.pokeclip.auth.soop.SoopIdentity;
+import com.pokeclip.auth.soop.SoopLinkWriter;
+import com.pokeclip.auth.soop.SoopTokens;
 import com.pokeclip.auth.token.TokenService;
 import com.pokeclip.auth.user.User;
 import com.pokeclip.auth.user.UserService;
@@ -24,6 +29,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -43,6 +49,8 @@ class WithdrawalPurgeTest extends WithdrawalTestSupport {
     private final PurgeJobRepository jobs;
     private final RestClient.Builder restClientBuilder;
     private final InternalApiProperties internal;
+    private final SoopLinkWriter soopWriter;
+    private final SoopCleanupExecutor soopCleanup;
 
     private HttpServer server;
     private final List<String> received = new CopyOnWriteArrayList<>();
@@ -50,13 +58,16 @@ class WithdrawalPurgeTest extends WithdrawalTestSupport {
 
     WithdrawalPurgeTest(MockMvc mockMvc, UserService userService, TokenService tokenService, JdbcTemplate jdbc,
                         ChzzkLinkWriter chzzkWriter, ChzzkCleanupExecutor chzzkCleanup, PurgeJobRepository jobs,
-                        RestClient.Builder restClientBuilder, InternalApiProperties internal) {
+                        RestClient.Builder restClientBuilder, InternalApiProperties internal,
+                        SoopLinkWriter soopWriter, SoopCleanupExecutor soopCleanup) {
         super(mockMvc, userService, tokenService, jdbc);
         this.chzzkWriter = chzzkWriter;
         this.chzzkCleanup = chzzkCleanup;
         this.jobs = jobs;
         this.restClientBuilder = restClientBuilder;
         this.internal = internal;
+        this.soopWriter = soopWriter;
+        this.soopCleanup = soopCleanup;
     }
 
     /** clip과 수집기 노릇을 하는 서버 하나. 받은 「메서드 경로 토큰일치」를 적는다. 루프백에 붙인다(가로채기 방지). */
@@ -78,6 +89,7 @@ class WithdrawalPurgeTest extends WithdrawalTestSupport {
     void 내린다() {
         server.stop(0);
         chzzkCleanup.awaitIdle(Duration.ofSeconds(5));
+        soopCleanup.awaitIdle(Duration.ofSeconds(5));
     }
 
     @Test
@@ -93,7 +105,7 @@ class WithdrawalPurgeTest extends WithdrawalTestSupport {
 
         withdraw(user);
 
-        assertThat(jobsOf(user)).containsExactlyInAnyOrder("CLIP:", "COLLECTOR:" + current);
+        assertThat(jobsOf(user)).containsExactlyInAnyOrder("CLIP::", "COLLECTOR:CHZZK:" + current);
         assertThat(jobsOf(other)).isEmpty();
     }
 
@@ -105,7 +117,7 @@ class WithdrawalPurgeTest extends WithdrawalTestSupport {
         // 탈퇴한 회원은 두 번째 요청이 입구에서 401이라 장부를 직접 한 번 더 부른다(같은 탈퇴의 재시도와 같은 모양).
         jobs.enqueue(user.getId(), Instant.now());
 
-        assertThat(jobsOf(user)).containsExactly("CLIP:");
+        assertThat(jobsOf(user)).containsExactly("CLIP::");
     }
 
     @Test
@@ -122,7 +134,7 @@ class WithdrawalPurgeTest extends WithdrawalTestSupport {
                 java.sql.Timestamp.class, user.getId()).toInstant().toString();
         assertThat(received).containsExactlyInAnyOrder(
                 "DELETE /internal/streamers/" + user.getId() + "/data true",
-                "DELETE /internal/channels/" + channel + "/chat-data?since=" + since + " true");
+                "DELETE /internal/channels/" + channel + "/chat-data?since=" + since + "&platform=CHZZK true");
         assertThat(openJobs(user)).isZero();
     }
 
@@ -176,6 +188,67 @@ class WithdrawalPurgeTest extends WithdrawalTestSupport {
         assertThat(PurgeDispatcher.backoff(500)).isEqualTo(Duration.ofHours(1));
     }
 
+    /**
+     * 🔴 SOOP 연동이 살아 있는 회원(POK-397). 연동을 닫으면 아이디가 비워지므로(약관) 닫기 <b>전에</b> 읽어 장부에 넘긴다.
+     * 장부 줄의 플랫폼을 SOOP으로 보고, 발송 주소에 {@code platform=SOOP}이 실리는지 가짜 수집기가 받은 쿼리로 본다.
+     */
+    @Test
+    void SOOP_연동이_살아_있으면_장부에_SOOP_줄을_적고_platform_SOOP으로_보낸다() throws Exception {
+        User user = newUser();
+        String soopId = linkSoop(user).getSoopUserId();
+
+        withdraw(user);
+        assertThat(jobsOf(user)).containsExactlyInAnyOrder("CLIP::", "COLLECTOR:SOOP:" + soopId);
+
+        dispatcher().dispatchOnce();
+        String since = jdbc.queryForObject("SELECT created_at FROM withdrawal_purge_jobs WHERE user_id = ? AND target = 'COLLECTOR'",
+                java.sql.Timestamp.class, user.getId()).toInstant().toString();
+        assertThat(received).contains(
+                "DELETE /internal/channels/" + soopId + "/chat-data?since=" + since + "&platform=SOOP true");
+        assertThat(openJobs(user)).isZero();
+    }
+
+    /** 이미 해제한 SOOP 연동은 아이디가 비어 넘길 것이 없다(남은 한계: 그 채팅은 60일 보관으로만 지워진다, F9). */
+    @Test
+    void SOOP_연동이_없거나_이미_해제했으면_SOOP_줄을_안_적는다() throws Exception {
+        User none = newUser();
+        User unlinked = newUser();
+        linkSoop(unlinked);
+        soopWriter.revoke(unlinked.getId(), Instant.now());
+
+        withdraw(none);
+        withdraw(unlinked);
+
+        assertThat(jobsOf(none)).containsExactly("CLIP::");
+        assertThat(jobsOf(unlinked)).containsExactly("CLIP::");
+    }
+
+    /** 탈퇴한 회원은 두 번째 요청이 입구에서 막혀 장부를 직접 한 번 더 부른다(같은 탈퇴의 재시도와 같은 모양). */
+    @Test
+    void SOOP_줄은_다시_적어도_하나다() throws Exception {
+        User user = newUser();
+        String soopId = linkSoop(user).getSoopUserId();
+        withdraw(user);
+
+        jobs.enqueueSoop(user.getId(), soopId, Instant.now());
+
+        assertThat(jobsOf(user)).containsExactlyInAnyOrder("CLIP::", "COLLECTOR:SOOP:" + soopId);
+    }
+
+    /** 🔴 배포 겹침 동안 옛 auth가 플랫폼 없이 적은 수집기 줄. 치지직 줄이라 platform=CHZZK로 보낸다(F1). */
+    @Test
+    void 플랫폼_없는_옛_수집기_줄은_platform_CHZZK로_보낸다() throws Exception {
+        User user = newUser();
+        String channel = "chan-legacy-" + marker();
+        jdbc.update("INSERT INTO withdrawal_purge_jobs (user_id, target, channel_id, created_at, next_attempt_at)"
+                + " VALUES (?, 'COLLECTOR', ?, '2026-10-01T00:00:00Z', now())", user.getId(), channel);
+
+        dispatcher().dispatchOnce();
+
+        assertThat(received).contains("DELETE /internal/channels/" + channel
+                + "/chat-data?since=2026-10-01T00:00:00Z&platform=CHZZK true");
+    }
+
     // ── 도우미 ──────────────────────────────────────────────────────────────
 
     private PurgeDispatcher dispatcher() {
@@ -189,13 +262,19 @@ class WithdrawalPurgeTest extends WithdrawalTestSupport {
                 new ChzzkTokens("at-" + marker(), "rt-" + marker(), Duration.ofHours(24), "chat"));
     }
 
+    private SoopChannelLink linkSoop(User user) {
+        return soopWriter.create(user.getId(), new SoopIdentity("soop-" + UUID.randomUUID().toString().substring(0, 8), "숲닉"),
+                new SoopTokens("soop-at-" + marker(), "soop-rt-" + marker(), Duration.ofHours(8), null));
+    }
+
     private void withdraw(User user) throws Exception {
         mockMvc.perform(delete("/api/auth/me").header("Authorization", bearer(user)))
                 .andExpect(status().isNoContent());
     }
 
     private List<String> jobsOf(User user) {
-        return jdbc.queryForList("SELECT target || ':' || COALESCE(channel_id, '') FROM withdrawal_purge_jobs "
+        return jdbc.queryForList("SELECT target || ':' || COALESCE(platform, '') || ':' || COALESCE(channel_id, '')"
+                + " FROM withdrawal_purge_jobs "
                 + "WHERE user_id = ?", String.class, user.getId());
     }
 

@@ -330,6 +330,8 @@ const server = vi.hoisted(() => ({
   chatIdClash: false,
   /** 출입증: 'off'는 서명 재료 없음(503), 'grant'는 10분짜리, 'fail'은 500 */
   playback: 'off' as 'off' | 'grant' | 'fail',
+  /** 'grant' 출입증이 끝날 때까지의 시간. 갱신은 만료 5분 전이라, 갱신을 재는 시험은 짧게 주어 가짜 시계를 몇 분씩 돌리지 않는다(POK-415) */
+  playbackTtlMs: 10 * 60_000,
   /** 있으면 출입증 답을 이것이 풀릴 때까지 붙잡는다(POK-317) */
   playbackGate: null as Promise<void> | null,
   /** 지난 방송의 시각 기준점(POK-255). null이면 서버가 모른다 */
@@ -708,7 +710,7 @@ function handle(url: string, init?: RequestInit): Response | Promise<Response> {
     if (server.playback === 'grant')
       return jsonResponse(200, {
         streamId: STREAM_ID,
-        expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
+        expiresAt: new Date(Date.now() + server.playbackTtlMs).toISOString(),
       });
     if (server.playback === 'fail') return jsonResponse(500, { error: 'boom' });
     return jsonResponse(503, { error: 'playback_signing_unavailable' });
@@ -732,6 +734,11 @@ function tokenFor(sub: string) {
 }
 
 let fetchSpy: ReturnType<typeof stubFetch>;
+
+// 이 파일은 대시보드 전체를 그리고 가짜 시계로 몇십 초씩 돌린다. 혼자서는 시험 하나가 0.5초 안팎이지만, 웹 전체 시험이
+// 여러 벌 겹쳐 도는 바쁜 기계에서는 10배쯤 느려져 기본 5초를 넘긴다. vitest는 시한을 넘긴 시험을 멈추지 않아, 그 시험이 뒤에서
+// 계속 가짜 시계를 돌리며 다음 시험들을 150여 건씩 연쇄로 깨뜨렸다(POK-415). 기다리는 실제 시간은 없고 계산 시간뿐이라 넉넉히 준다
+vi.setConfig({ testTimeout: 15_000 });
 
 beforeEach(() => {
   nav.search = '';
@@ -794,6 +801,7 @@ beforeEach(() => {
   server.chatPaged = false;
   server.chatIdClash = false;
   server.playback = 'off';
+  server.playbackTtlMs = 10 * 60_000;
   server.playbackGate = null;
   resetPlaybackAccessForTests();
   hlsFake.loads = 0;
@@ -980,15 +988,19 @@ describe('LiveScreen — 영상 출입증', () => {
   it('출입증은 만료 5분 전에 다시 받는다 — 한 번만 받으면 한 시간 뒤 재생이 멈춘다', async () => {
     // 쿠키가 끝나면 새 영상 조각이 403이 된다(PR #200 codex P1)
     server.playback = 'grant';
+    // 7분짜리라 만료 5분 전은 2분째다. 화면은 1분마다 확인하므로 1분째엔 그대로 쓰고(만료 전엔 다시 받지 않는다) 2분째에 새로
+    // 받는다. 10분짜리로 6분을 돌리면 1초 주기 화면 갱신이 수백 번 돌아 바쁜 기계에서 5초 시한을 넘기고 뒤 시험들까지 연쇄로
+    // 깨뜨렸다(POK-415)
+    server.playbackTtlMs = 7 * 60_000;
     await renderLive();
     expect(accessCalls()).toBe(1);
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(4 * 60_000);
+      await vi.advanceTimersByTimeAsync(65_000);
     });
     expect(accessCalls()).toBe(1);
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(2 * 60_000);
+      await vi.advanceTimersByTimeAsync(60_000);
     });
     expect(accessCalls()).toBe(2);
   });
@@ -1038,21 +1050,25 @@ describe('LiveScreen — 영상 출입증', () => {
     stubMediaElement();
     vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', 'http://live.test');
     server.playback = 'grant';
+    // 5분 30초짜리라 1분마다 확인할 때마다 새로 받는다(POK-415: 몇 분씩 돌리지 않는다)
+    server.playbackTtlMs = 5 * 60_000 + 30_000;
     await renderLive();
     expect(hlsFake.loads).toBe(1);
 
     // 정상 갱신(만료 5분 전)은 재생기를 다시 세우지 않는다
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(6 * 60_000);
+      await vi.advanceTimersByTimeAsync(65_000);
     });
     await settle();
+    expect(accessCalls()).toBe(2);
     expect(hlsFake.loads).toBe(1);
 
     // 다음 갱신이 실패하고, 1분 뒤 다시 받아진다
     server.playback = 'fail';
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      await vi.advanceTimersByTimeAsync(60_000);
     });
+    expect(accessCalls()).toBe(3);
     server.playback = 'grant';
     await act(async () => {
       await vi.advanceTimersByTimeAsync(60_000);
@@ -1129,8 +1145,9 @@ describe('LiveScreen — 영상 출입증', () => {
 
   it('서명 재료가 없는 서버(503)에는 다시 묻지 않는다 — 출입증이 필요 없는 곳이다', async () => {
     await renderLive();
+    // 실패 재시도(1분)보다 넉넉히 길게만 본다
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      await vi.advanceTimersByTimeAsync(2 * 60_000);
     });
     expect(accessCalls()).toBe(1);
   });

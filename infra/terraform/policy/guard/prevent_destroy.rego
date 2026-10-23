@@ -1,4 +1,4 @@
-# R4 · R11: 지워지면 안 되는 자원은 lifecycle { prevent_destroy = true }.
+# R4 · R11 · R10(일부): 지워지면 안 되는 자원은 lifecycle { prevent_destroy = true }.
 #
 # 대상 경로 아래 파일이 하나라도 있으면, 대상 유형마다 자원이 하나 이상
 # 있어야 하고 그 자원이 모두 리터럴 true 여야 한다. 식(`true != true` ·
@@ -14,6 +14,8 @@ protected_targets := {
 	{"rule": "R11", "dir": "nonprod/dev", "type": "aws_instance"},
 	{"rule": "R11", "dir": "nonprod/dev", "type": "aws_eip"},
 	{"rule": "R11", "dir": "nonprod/dev", "type": "aws_security_group"},
+	# 응답기 거부 목록 그릇 — 운영자가 고친 목록이 destroy 로 사라지지 않게.
+	{"rule": "R10", "dir": "modules/media_host", "type": "aws_ssm_parameter"},
 }
 
 in_dir(path, dir) if startswith(path, concat("", [dir, "/"]))

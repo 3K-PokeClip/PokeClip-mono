@@ -1,5 +1,7 @@
 package com.pokeclip.chat.collector.session;
 
+import com.pokeclip.chat.collector.Platform;
+
 import java.time.Instant;
 
 /**
@@ -33,8 +35,12 @@ import java.time.Instant;
  * 못 뺏고(안전한 쪽), 계통적으로 늦으면 <b>재부착이 멀쩡한 세션을 자기 쪽으로 되돌린다.</b>
  * 조용히 어긋나므로 {@code chat.registry.retargeted}·{@code stale_start_rejected}가 이유 없이
  * 늘면 여기를 먼저 본다.
+ *
+ * <p>{@code platform}은 이 세션이 붙은 방송 플랫폼이다. 저장되는 채팅·후원·방송 정보의 플랫폼 칸이 여기서 온다(프레임에는
+ * 플랫폼이 없다). <b>플랫폼을 빼고 만드는 보조 생성자를 두지 않는다</b>: 두면 SOOP 세션이 그 생성자를 지나 조용히 치지직이
+ * 된다. 표의 기본값도 CHZZK라 오류가 안 난다(POK-397 계획 검증 F3).
  */
-public record SessionKey(String streamId, long streamerId, String channelId, Instant startedAt) {
+public record SessionKey(Platform platform, String streamId, long streamerId, String channelId, Instant startedAt) {
 
     /**
      * 설정 토큰 하나로 붙는 옛 경로({@code CHZZK_ENABLED})의 자리표.
@@ -42,8 +48,9 @@ public record SessionKey(String streamId, long streamerId, String channelId, Ins
      * <p>{@code startedAt}이 {@link Instant#EPOCH}인 이유는 <b>그 경로에 방송 경계가 아예
      * 없기 때문</b>이다 — 편지를 안 받으므로 갈아끼움도 없고, 따라서 이 값이 비교에 쓰이는
      * 길이 없다. null 대신 값을 두는 것은 비교하는 쪽이 널 검사를 하지 않아도 되게 하려는 것이다.
+     * 플랫폼이 CHZZK인 것은 이 경로가 치지직 설정 토큰으로만 붙기 때문이다.
      */
     public static SessionKey legacy() {
-        return new SessionKey(null, 0L, null, Instant.EPOCH);
+        return new SessionKey(Platform.CHZZK, null, 0L, null, Instant.EPOCH);
     }
 }
