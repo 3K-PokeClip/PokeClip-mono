@@ -32,8 +32,12 @@ class RdsIamCredentialsProviderTest extends PostgresTestBase {
 
         assertThat(token)
                 .startsWith("spike.example.ap-northeast-2.rds.amazonaws.com:5432/?")
-                .contains("Action=connect", "DBUser=detector_iam", "X-Amz-Expires=900")
+                .contains("Action=connect", "DBUser=detector_iam")
                 .doesNotContain("fake-secret");
+        // 🔴 유효 시간은 899 또는 900초다(POK-426). SDK가 만료 시각(지금 + 15분)과 서명 시각을 시계에서 따로 읽고 그 차이를 초로
+        // 잘라 적어서, 두 번 읽는 사이 초가 넘어가면 899가 된다. JVM의 첫 서명은 그 사이 SDK 클래스를 불러와 간격이 벌어지므로
+        // CI에서 간헐로 899가 나왔다(판별기 잡). 「15분짜리 토큰」이라는 것만 잰다.
+        assertThat(token).containsPattern("[?&]X-Amz-Expires=(899|900)(&|$)");
     }
 
     /**
