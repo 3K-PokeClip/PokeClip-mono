@@ -319,10 +319,67 @@ run "auth_trusts_forwarded_headers_natively" {
     error_message = "auth CLIP_BASE_URL · COLLECTOR_BASE_URL 이 clip · chat-collector 의 Cloud Map 이름 · 포트가 아니다."
   }
 
+  # prod 는 처음부터 Secrets Manager — 접두 · StreamKeySecrets 정책과 짝이다
+  # (application.yml 166–169 의 기본값은 postgres).
+  assert {
+    condition = (
+      local.service_env.auth["STREAM_KEY_SECRET_STORE_TYPE"] == "aws" &&
+      local.service_env.auth["STREAM_KEY_SECRET_RETIRE_FROM"] == "aws"
+    )
+    error_message = "auth STREAM_KEY_SECRET_STORE_TYPE · STREAM_KEY_SECRET_RETIRE_FROM 이 aws 가 아니다."
+  }
+
   assert {
     condition     = local.service_env.auth["STREAM_KEY_SECRET_REF_PREFIX"] == "pokeclip/prod/stream-key/"
     error_message = "auth STREAM_KEY_SECRET_REF_PREFIX 가 작업 역할 정책의 접두와 다르다."
   }
+}
+
+# 런타임 app_env 가 같은 이름을 다른 값으로 줘도 platform 값이 이긴다.
+run "platform_stream_key_env_wins_over_runtime_app_env" {
+  command = plan
+
+  override_data {
+    target = data.terraform_remote_state.runtime
+    values = {
+      outputs = {
+        rds_sg_id         = "sg-0rds"
+        rds_resource_id   = "db-ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        rewind_bucket_arn = "arn:aws:s3:::pokeclip-prod-rewind-example"
+        app_db_users      = { auth = "app_auth", clip = "app_clip" }
+        app_env = {
+          auth = {
+            STREAM_KEY_SECRET_STORE_TYPE  = "postgres"
+            STREAM_KEY_SECRET_RETIRE_FROM = "postgres"
+            STREAM_KEY_SECRET_REF_PREFIX  = "pokeclip/other/"
+          }
+          clip = {}
+        }
+        app_secret_arns        = { auth = {}, clip = {} }
+        app_task_resource_arns = { auth = {}, clip = {} }
+      }
+    }
+  }
+
+  assert {
+    condition = (
+      local.service_env.auth["STREAM_KEY_SECRET_STORE_TYPE"] == "aws" &&
+      local.service_env.auth["STREAM_KEY_SECRET_RETIRE_FROM"] == "aws" &&
+      local.service_env.auth["STREAM_KEY_SECRET_REF_PREFIX"] == "pokeclip/prod/stream-key/"
+    )
+    error_message = "런타임 app_env 의 스트림 키 저장소 env 가 platform 값을 덮었다."
+  }
+}
+
+# platform 루트가 공개 승인 변수를 media_ingest 에 넘긴다(기본 false).
+run "rejects_public_ingest_without_approval" {
+  command = plan
+
+  variables {
+    ingest_allowed_cidrs = ["0.0.0.0/0"]
+  }
+
+  expect_failures = [var.ingest_allowed_cidrs]
 }
 
 run "auth_internal_proxies_variable_sets_env" {

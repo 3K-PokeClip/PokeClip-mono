@@ -198,6 +198,55 @@ run "rejects_invalid_ingest_allowed_cidr" {
 }
 
 # 헬스는 트래픽과 다른 포트(TCP)여야 한다.
+# /16 보다 넓은 출처(0.0.0.0/0 등)는 공개 승인(S1 게이트 · 응답기 — 설계 4-6)
+# 뒤에만 받는다.
+run "rejects_wide_cidr_without_public_approval" {
+  command = plan
+
+  variables {
+    ingest_allowed_cidrs = ["0.0.0.0/0"]
+  }
+
+  expect_failures = [var.ingest_allowed_cidrs]
+}
+
+run "rejects_slash_8_without_public_approval" {
+  command = plan
+
+  variables {
+    ingest_allowed_cidrs = ["192.0.2.10/32", "10.0.0.0/8"]
+  }
+
+  expect_failures = [var.ingest_allowed_cidrs]
+}
+
+run "accepts_wide_cidr_with_public_approval" {
+  command = plan
+
+  variables {
+    ingest_allowed_cidrs   = ["0.0.0.0/0"]
+    ingest_public_approved = true
+  }
+
+  assert {
+    condition     = toset(keys(aws_vpc_security_group_ingress_rule.srt)) == toset(["0.0.0.0/0"])
+    error_message = "공개 승인 뒤에도 0.0.0.0/0 인그레스가 만들어지지 않는다."
+  }
+}
+
+run "accepts_slash_16_and_narrower_without_approval" {
+  command = plan
+
+  variables {
+    ingest_allowed_cidrs = ["198.51.0.0/16", "192.0.2.0/24"]
+  }
+
+  assert {
+    condition     = toset(keys(aws_vpc_security_group_ingress_rule.srt)) == toset(["198.51.0.0/16", "192.0.2.0/24"])
+    error_message = "/16 · /24 출처가 승인 없이 받아지지 않는다."
+  }
+}
+
 run "rejects_health_port_equal_to_srt_port" {
   command = plan
 
