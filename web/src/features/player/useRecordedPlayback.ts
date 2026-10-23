@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { recordingClipUrl } from '@/api/mediaPlayback';
+import { recoverForbiddenRecording } from '@/api/playbackAccess';
 import { AT_EDGE_THRESHOLD_SECONDS, behindFromSeekFraction } from './playerMath';
 import { useControlsAutoHide } from './useControlsAutoHide';
 import { PLAYER_QUALITIES, type PlayerQuality, type PlayerSimulation } from './usePlayerSimulation';
@@ -148,15 +149,35 @@ export function useRecordedPlayback(
       setPosition(next.fromSeconds);
       setOffset(next.fromSeconds);
     };
+    // 줄기 오류가 쿠키 지워짐(403)이면 출입증을 다시 받아 같은 줄기를 다시 붙인다(PR #332 codex). <video>는 응답 코드를 못 읽어
+    // 확인은 playbackAccess가 첫 바이트를 물어 한다. 줄기마다 한 번만: 다시 받아도 403이면 끝없이 돌지 않는다
+    let recovering = false;
+    let gone = false;
+    const onError = () => {
+      if (recovering) return;
+      recovering = true;
+      void recoverForbiddenRecording(src, recordedRef.current.streamId).then((retry) => {
+        if (!retry || gone) return;
+        video.src = src;
+        video.load();
+        if (wantPlayRef.current)
+          void video.play().catch(() => {
+            /* 자동재생 거부: 재생 버튼이 남는다 */
+          });
+      });
+    };
     video.addEventListener('timeupdate', onTime);
     video.addEventListener('play', onPlay);
     video.addEventListener('pause', onPause);
     video.addEventListener('ended', onEnded);
+    video.addEventListener('error', onError);
     return () => {
+      gone = true;
       video.removeEventListener('timeupdate', onTime);
       video.removeEventListener('play', onPlay);
       video.removeEventListener('pause', onPause);
       video.removeEventListener('ended', onEnded);
+      video.removeEventListener('error', onError);
     };
     // muted 는 아래 토글이 노드에 직접 쓴다 — 여기 의존성에 넣으면 음소거를 풀 때마다 영상이 처음부터 다시 온다
     // eslint-disable-next-line react-hooks/exhaustive-deps

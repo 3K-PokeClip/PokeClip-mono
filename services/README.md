@@ -2023,10 +2023,13 @@ health `relay`와 종료 판정 줄에 실린다. 🔴 **health UP/DOWN에는 �
 
 | 문 | 인증 | 응답 |
 |---|---|---|
-| `POST /api/clip/broadcasts/{streamId}/playback-access` | Bearer JWT | **200** `{"streamId":…,"expiresAt":…,"resources":[…3…]}` + `Set-Cookie` **아홉**(종류 셋 × 쿠키 셋) · 404 `{"error":"broadcast_not_found"}` · 401 · 503 `{"error":"authorization_unavailable"}` · **503 `{"error":"playback_signing_unavailable"}`**(아래) |
+| `POST /api/clip/broadcasts/{streamId}/playback-access` | Bearer JWT | **200** `{"streamId":…,"expiresAt":…,"resources":[…4…]}` + `Set-Cookie` **열둘**(종류 넷 × 쿠키 셋) · 404 `{"error":"broadcast_not_found"}` · 401 · 503 `{"error":"authorization_unavailable"}` · **503 `{"error":"playback_signing_unavailable"}`**(아래) |
 
 **쿠키 셋은 CloudFront가 정한 이름이다** — `CloudFront-Policy` · `CloudFront-Signature` · `CloudFront-Key-Pair-Id`.
-**경로 종류(`live`·`dvr`·`vod`)마다 한 셋, 아홉 장**이다. 속성은 `Path=/{kind}/{streamId}` · `Secure` · `HttpOnly` ·
+**경로 종류(`live`·`dvr`·`vod`·`playback`)마다 한 셋, 열두 장**이다. `playback`은 녹화 재생 서버의 목록 · 조각 길
+(`{MEDIA_BASE_URL}/playback/{키}/list` · `/get`, POK-317)이다. 🔴 **쿠키 정책은 쿼리를 못 막는다**: `/playback/{내키}/list?path={남의키}`도
+정책에 맞으므로 **엣지가 들어온 `path` 쿼리를 버리고 경로의 키로 덮어야 한다**(로컬은 웹 라우트가 같은 규칙, 시험
+`녹화_재생_길은_경로의_키로만_맞고_쿼리의_path는_정책이_못_막는다`). 속성은 `Path=/{kind}/{streamId}` · `Secure` · `HttpOnly` ·
 `SameSite=Lax` · `Max-Age=수명` · `Domain=PLAYBACK_COOKIE_DOMAIN`(비면 없음). 브라우저는 요청 경로에 맞는 셋만 보낸다.
 
 🔴 **왜 `Path=/` 한 셋이 아닌가 — 봇 리뷰 2판(claude)이 찾은 구멍.** 첫 판은 정책 `Resource`를
@@ -2082,8 +2085,8 @@ health `relay`와 종료 판정 줄에 실린다. 🔴 **health UP/DOWN에는 �
   세운 뒤 본다.
 - **즉시 회수가 없다.** 편집자 관계가 끊겨도 이미 받은 출입증은 수명(60분)까지 산다. 수명이 곧 회수 창이다.
 - ~~🔴 **한 번에 한 방송만 열린다.**~~ 2판에서 `Path`를 종류·방송으로 좁히면서 **사라졌다** — 다른 방송의 쿠키는
-  `Path`가 달라 나란히 산다. 대가는 방송 하나에 쿠키 아홉 장이다(브라우저 도메인당 상한은 보통 180장 안팎이라
-  동시에 열어 둔 방송 스무 개까지는 문제없고, 오래된 것은 `Max-Age`로 사라진다). 웹은 여전히 **방송 화면을 열 때마다
+  `Path`가 달라 나란히 산다. 대가는 영상 키 하나에 쿠키 열두 장이다(브라우저 도메인당 상한은 보통 180장 안팎이라
+  동시에 들고 있는 키 열다섯 개까지는 문제없고, 웹의 지난 방송 목록은 한 탭 12개로 묶는다(POK-317), 오래된 것은 `Max-Age`로 사라진다). 웹은 여전히 **방송 화면을 열 때마다
   이 문을 부르고 CDN 403이면 다시 부른다**(위 「지킬 것」 3).
 - 정책에 IP 제한을 안 건다(모바일·이동 중 IP가 바뀐다).
 

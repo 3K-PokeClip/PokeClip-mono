@@ -130,20 +130,34 @@ web/                     # 단일 Next.js 앱 (App Router + TanStack Query + Zus
   켠 앞뒤 방송이 섞인다. 켜자마자 끊긴 아주 짧은 첫 구간은 빠진다)을 한 축(첫 구간 시작 ~ 마지막 구간 끝, **틈 포함** —
   접으면 틈 뒤 카드가 어긋난다)에 놓고, 다시보기는 **한 구간씩** 받아 끝나면 다음 구간을 이어 튼다(틈을 누르면 다음 구간 시작).
 - 🔴 **영상 요청은 출입증을 받은 뒤에만 쿠키를 싣는다 (POK-317).** CDN 뒤(prod) 영상은 clip이 주는 CloudFront 서명 쿠키가
-  없으면 403이다.
-  - 라이브 화면은 제 타이머로 출입증을 받고, **받음이나 필요 없음(503) 답이 오기 전에는 라이브 주소를 재생기에 넘기지 않는다**.
-    먼저 넘기면 첫 요청이 쿠키 없이 403이고 hls.js는 한 번만 다시 시도한 뒤 멈춘다. 실패면 1분 뒤 다시 받은 답을 기다린다.
+  없으면 403이다. **출입증은 `src/api/playbackAccess.ts` 한 곳에서 받는다**(라이브 화면 · 지난 방송 목록 · 편집기 · 다시보기 모두).
+  받는 길이 둘이면 쿠키 셈과 403 처리가 한쪽만 보게 되어 고친 자리 옆에 구멍이 났다(PR #332 봇 리뷰 1~3판).
+  - 라이브 화면은 1분마다 `ensureLiveAccess`로 본다(쓸 만하면 요청 없음, 만료 5분 전이면 새로 받음). **받음이나 필요 없음(503) 답이
+    오기 전에는 라이브 주소를 재생기에 넘기지 않는다**. 먼저 넘기면 첫 요청이 쿠키 없이 403이고 hls.js는 한 번만 다시 시도한 뒤 멈춘다.
+    열린 뒤 갱신이 실패하다 회복했거나 다른 화면이 403으로 출입증을 버린 뒤 다시 받으면 재생기를 새로 세운다.
   - 편집기는 녹화 목록을 묻기 직전에 `ensurePlaybackAccess(방송 번호, 영상 키)`로 받는다. 만료 5분 전까지 다시 쓰고(영상 키가
     바뀌면 다시 받는다), 미리보기 창은 `ensureMediaAccess(영상 키)`로 갱신한다. 출입증을 못 받으면 「녹화 없음」으로 열지 않고 다시
-    열라고 알린다. **지난 방송 목록은 아직 출입증을 받지 않는다**: 키마다 쿠키 9장이라 목록 전체를 받으면 도메인당 쿠키 한도를 넘고,
-    받을 차례를 돌리는 방법까지 녹화 재생 주소와 함께 정한다(POK-317 다음 PR).
+    열라고 알린다.
+  - 지난 방송 목록은 녹화를 확인하기 직전에 `ensurePlaybackAccessForList`로 받는다. 키마다 쿠키 12장이라 **한 탭에 든 키는
+    12개까지**(144장, 크롬 도메인당 약 180장)이고, 빈자리만큼 한 번도 안 해 본 키, 그다음 오래전에 해 본 키(실패 포함) 순으로 차례를 준다. 차례가
+    안 온 키는 쿠키 없이 묻고 다음 주기에 다시 온다. 라이브 화면의 녹화 조회도 출입증 답 뒤에 한다.
+    상한은 라이브 화면 · 편집기가 받은 출입증까지 센다. 탭마다 셈이 따로라 탭을 여럿 열면 한도를 넘길 수 있다.
+  - **어느 영상 요청이든 403이면 쿠키가 지워진 것으로 보고 그 키의 출입증을 버린다**(`reportPlaybackForbidden`): 녹화 목록은 응답
+    코드로, 편집기 미리보기는 버린 뒤 다시 받아 한 번 더 부르고, 다시보기 `<video>`는 응답 코드를 못 읽어 오류가 나면 첫 바이트를
+    물어 403일 때만 다시 받아 같은 줄기를 다시 붙인다(줄기마다 한 번). 라이브 화면은 1분 안에 다시 받는다. 원인이 다른 탭이든
+    쿠키 한도든 사용자가 지운 것이든 스스로 낫는다.
   - 쿠키는 **출입증이 실제로 발급된 뒤에만** 싣는다(`mediaCredentials()`: 녹화 목록·미리보기 fetch는 `credentials`, 라이브
     hls.js는 `xhrSetup`의 `withCredentials`, 다시보기 `<video>`는 원래 싣는다). 로컬·dev 영상 서버(MediaMTX)는
     `Access-Control-Allow-Origin: *`로만 답해 쿠키를 실으면 브라우저가 응답을 버리기 때문이다(2026-10-23 실측).
+    🔴 **로컬은 clip 출입증 설정 셋(`CLOUDFRONT_KEY_PAIR_ID` · `CLOUDFRONT_PRIVATE_KEY_PEM` · `MEDIA_BASE_URL`)을 비워 두는 것이
+    기본이다.** 채우면 출입증이 실제로 나와 쿠키를 싣는데, 라이브(`:8888`)는 다른 출처라 막힌다(녹화는 `/media` 같은 출처 전달이라 된다).
+    출입증 흐름을 로컬에서 시험할 때만 켠다.
   - 503 `playback_signing_unavailable`(서명 재료 없음, 또는 그 방송의 영상 키가 정책에 못 들어감)을 받은 **방송은** 더 묻지 않는다.
     자격 확인이 안 되는 503(`authorization_unavailable`)은 실패라 다시 묻는다.
-  - 🔴 **녹화 목록·미리보기 주소(`{base}/list?path=키`)는 쿠키 경로(`/{kind}/{키}`) 밖이라 CDN 뒤에서는 아직 쿠키가 안
-    실린다**: 주소 모양은 1번과 정하는 중이다(POK-317 다음 PR).
+  - 🔴 **녹화 주소는 쿠키 경로 아래다**: `{base}/playback/{키}/list` · `/playback/{키}/get?start&duration&format`. 재생 서버의
+    `path` 쿼리는 싣지 않는다. 쿠키 정책은 쿼리를 못 막아(`/playback/{내키}/list?path={남의키}`도 맞는다) 엣지가 경로의 키로
+    `path`를 채우고 **들어온 `path`는 버린다**. 로컬은 `app/media/playback/[key]/[op]/route.ts`가 같은 규칙으로 재생 서버에
+    넘긴다(`MEDIA_PLAYBACK_ORIGIN`이 있을 때만, 없으면 404).
 - 🔴 **영상 주소는 방송 번호가 아니라 영상 경로의 키로 만든다 (POK-233).** 1번이 편지의 방송 번호를 방송마다 새 회차 번호로
   바꾸면 라이브·녹화 경로(스트림키)와 갈린다. clip이 방송 줄에 `ingestStreamId`를 실어 주고, 라이브 LL-HLS·녹화 목록·다시보기·
   편집기 미리보기는 `mediaStreamId(row)`(= `ingestStreamId`, 없거나 비면 방송 번호)를 쓴다. **API 경로·출입증·채팅·카드는 방송
@@ -340,17 +354,18 @@ web/                     # 단일 Next.js 앱 (App Router + TanStack Query + Zus
 
 ### 환경변수 (`.env.example` → `.env.local`)
 
-| 변수                                  | 값(로컬)                   | 용도                                                                            |
-| ------------------------------------- | -------------------------- | ------------------------------------------------------------------------------- |
-| `AUTH_API_URL`                        | `http://localhost:8082`    | auth 서버 — `/api/auth/*` rewrites 프록시 대상                                  |
-| `CLIP_API_URL`                        | `http://localhost:8081`    | clip 서버 — `/api/clip/*` rewrites 프록시 대상                                  |
-| `NEXT_PUBLIC_GOOGLE_CLIENT_ID`        | 구글 OAuth 클라이언트 ID   | 로그인 동의 URL 조립 — 백엔드 `GOOGLE_CLIENT_ID`와 같은 값                      |
-| `NEXT_PUBLIC_MEDIA_STUB_URL`          | 스텁 m3u8 주소             | 플레이어 개발용 정적 세그먼트 ([`infra/compose/stub/`](../infra/compose/stub/)) |
-| `NEXT_PUBLIC_MEDIA_LIVE_BASE_URL`     | LL-HLS 베이스              | 진짜 미디어 서버 (`{base}/{영상 경로 키}/index.m3u8`, POK-233)                  |
-| `NEXT_PUBLIC_MEDIA_PLAYBACK_BASE_URL` | 녹화 재생 서버 (비워도 됨) | 끝난 방송 다시보기·편집기 미리보기 (`{base}/list`·`{base}/get`, POK-251)        |
-| `NEXT_PUBLIC_POSTHOG_KEY`             | 비움                       | 사용 통계(PostHog) 프로젝트 공개 키 — 비면 SDK를 불러오지 않음 (POK-356)        |
-| `NEXT_PUBLIC_POSTHOG_HOST`            | 비움                       | PostHog 수집 주소(운영 `https://us.i.posthog.com`) — 규칙은 `docs/ANALYTICS.md` |
-| `NEXT_PUBLIC_POSTHOG_REPLAY`          | 비움                       | `on`일 때만 세션 녹화(POK-358) — 콘솔 녹화 토글도 켜야 시작                     |
+| 변수                                  | 값(로컬)                 | 용도                                                                                                         |
+| ------------------------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------ |
+| `AUTH_API_URL`                        | `http://localhost:8082`  | auth 서버 — `/api/auth/*` rewrites 프록시 대상                                                               |
+| `CLIP_API_URL`                        | `http://localhost:8081`  | clip 서버 — `/api/clip/*` rewrites 프록시 대상                                                               |
+| `NEXT_PUBLIC_GOOGLE_CLIENT_ID`        | 구글 OAuth 클라이언트 ID | 로그인 동의 URL 조립 — 백엔드 `GOOGLE_CLIENT_ID`와 같은 값                                                   |
+| `NEXT_PUBLIC_MEDIA_STUB_URL`          | 스텁 m3u8 주소           | 플레이어 개발용 정적 세그먼트 ([`infra/compose/stub/`](../infra/compose/stub/))                              |
+| `NEXT_PUBLIC_MEDIA_LIVE_BASE_URL`     | LL-HLS 베이스            | 진짜 미디어 서버 (`{base}/{영상 경로 키}/index.m3u8`, POK-233)                                               |
+| `NEXT_PUBLIC_MEDIA_PLAYBACK_BASE_URL` | 녹화 재생 (비워도 됨)    | 다시보기·편집기 미리보기 (`{base}/playback/{키}/list`·`/get`, POK-317). 로컬은 `http://localhost:3000/media` |
+| `MEDIA_PLAYBACK_ORIGIN`               | `http://localhost:9996`  | 로컬 전용 재생 서버. `/media/playback` 라우트가 넘긴다(비면 404). prod · dev는 비운다                        |
+| `NEXT_PUBLIC_POSTHOG_KEY`             | 비움                     | 사용 통계(PostHog) 프로젝트 공개 키 — 비면 SDK를 불러오지 않음 (POK-356)                                     |
+| `NEXT_PUBLIC_POSTHOG_HOST`            | 비움                     | PostHog 수집 주소(운영 `https://us.i.posthog.com`) — 규칙은 `docs/ANALYTICS.md`                              |
+| `NEXT_PUBLIC_POSTHOG_REPLAY`          | 비움                     | `on`일 때만 세션 녹화(POK-358) — 콘솔 녹화 토글도 켜야 시작                                                  |
 
 서버 주소는 **코드에 하드코딩하지 않는다** — env 참조만. env가 없으면 해당 rewrites가
 아예 걸리지 않으므로 백엔드 없이도 **기동·빌드는 된다**. 다만 env가 있는데 백엔드가 안
