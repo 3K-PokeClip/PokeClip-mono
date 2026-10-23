@@ -6,8 +6,17 @@
   padding: 0;
   border-radius: var(--pc-radius-xl);
   /* 참여 채널·받은 초대가 많으면 화면보다 길어진다. 위치 계산은 위 끝만 화면 안으로 당기므로(positioning.ts의
-     VIEWPORT_PAD 8px 위아래) 높이를 화면 안으로 묶고 패널 안에서 스크롤한다: 안 그러면 아래 줄·로그아웃을 못 누른다 */
+     VIEWPORT_PAD 8px 위아래) 높이를 화면 안으로 묶고 패널 안에서 스크롤한다: 안 그러면 아래 줄·로그아웃을 못 누른다.
+     스크롤은 패널이 아니라 안쪽 .scroll이 한다: 거절 확인 덮개(.confirm)가 스크롤과 상관없이 보이는 칸을 덮게 */
+  display: flex;
+  flex-direction: column;
   max-height: calc(100vh - 16px);
+  overflow: hidden;
+}
+
+.scroll {
+  flex: 0 1 auto;
+  min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
 }
@@ -33,6 +42,33 @@
   padding-top: 0;
 }
 
+/* 「편집 참여 중」 제목 줄: 오른쪽에 나가기를 꺼내는 「관리」 */
+.sectionHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.manage {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-weight: 700;
+  color: var(--pc-color-accent-text);
+  cursor: pointer;
+}
+
+.manage:hover {
+  text-decoration: underline;
+}
+
+.manage:focus-visible {
+  outline: 2px solid var(--pc-color-focus-ring);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
 .row {
   display: flex;
   align-items: center;
@@ -53,6 +89,38 @@
 
 .row[aria-current='true'] {
   background: var(--pc-color-accent-subtle);
+}
+
+/* 남의 채널(편집자)이 지금 채널이면 point로: 내 채널(accent)과 색으로 갈린다(시안 1u ⑤ 「라인과 라벨」, 역할 칩과 같은 색) */
+.row[data-others-channel][aria-current='true'] {
+  background: var(--pc-color-point-subtle);
+}
+
+.row[data-others-channel][aria-current='true'] .rowCheck {
+  color: var(--pc-color-point-text);
+}
+
+/* 관리 모드: 줄은 바꾸기를 멈추고(눌림 표시 없음) 오른쪽에 「나가기」 자리를 비운다 */
+.rowWrap {
+  position: relative;
+}
+
+.row[data-managing] {
+  padding-right: calc(76 * var(--pc-u));
+  cursor: default;
+}
+
+.row[data-managing]:not([aria-current='true']):hover {
+  background: transparent;
+}
+
+/* 세로 가운데는 transform 대신 위아래 auto margin으로: 버튼의 눌림 효과(transform)와 겹치지 않게 */
+.leave {
+  position: absolute;
+  top: 0;
+  right: calc(8 * var(--pc-u));
+  bottom: 0;
+  margin: auto 0;
 }
 
 .row:focus-visible {
@@ -179,4 +247,63 @@
 .footLink:hover,
 .footButton:hover {
   text-decoration: underline;
+}
+
+/* 거절 확인 덮개: 패널(position: fixed)이 기준이라 .scroll을 내려 둬도 보이는 칸 전체를 덮는다 */
+.confirm {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: calc(14 * var(--pc-u));
+  background: var(--pc-color-bg-overlay);
+  backdrop-filter: blur(2px);
+  animation: confirm-in var(--pc-duration-fast) var(--pc-ease-standard);
+}
+
+.confirmCard {
+  width: 100%;
+  padding: calc(15 * var(--pc-u)) calc(15 * var(--pc-u)) calc(14 * var(--pc-u));
+  border: 1px solid var(--pc-color-border-default);
+  border-radius: calc(14 * var(--pc-u));
+  background: var(--pc-color-bg-surface);
+  box-shadow: var(--pc-shadow-lg);
+}
+
+.confirmTitle {
+  font-size: calc(13 * var(--pc-u));
+  font-weight: 750;
+  line-height: 1.35;
+  letter-spacing: -0.01em;
+}
+
+.confirmText {
+  margin-top: calc(6 * var(--pc-u));
+  font-size: calc(10.5 * var(--pc-u));
+  line-height: 1.55;
+  color: var(--pc-color-text-muted);
+}
+
+.confirmActions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: calc(8 * var(--pc-u));
+  margin-top: calc(10 * var(--pc-u));
+}
+
+@keyframes confirm-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .confirm {
+    animation: none;
+  }
 }

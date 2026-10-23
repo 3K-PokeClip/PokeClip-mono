@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, apiFetch } from '@/api/client';
+import { ApiError, apiFetch, subscribeApiActivity, type ApiActivity } from '@/api/client';
 import { onCrossTabSessionChange, useAuthStore } from '@/stores/auth';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
 
@@ -460,5 +460,30 @@ describe('apiFetch', () => {
     expect(uploads).toHaveLength(2);
     expect(uploads.every(([, init]) => init?.body === form)).toBe(true);
     expect(bearerOf(uploads[1]?.[1])).toBe('Bearer new-access');
+  });
+});
+
+describe('subscribeApiActivity: 요청 활동(채널 전환 화면이 센다)', () => {
+  it('요청마다 start·end가 한 쌍이다: 성공·실패 모두, 401 회전 재시도는 같은 요청이다', async () => {
+    const events: ApiActivity[] = [];
+    const stop = subscribeApiActivity((event) => events.push(event));
+    stubFetch((url, init) => {
+      if (url === '/api/auth/refresh')
+        return jsonResponse(200, { accessToken: 'new-access', refreshToken: 'new-refresh' });
+      if (url === '/api/fails') return jsonResponse(500, { message: '서버 오류' });
+      return bearerOf(init) === 'Bearer new-access'
+        ? jsonResponse(200, { ok: true })
+        : jsonResponse(401, { message: '인증 실패' });
+    });
+
+    await apiFetch('/api/protected');
+    await apiFetch('/api/fails').catch(() => undefined);
+    stop();
+    await apiFetch('/api/protected');
+
+    expect(events.map((e) => e.type)).toEqual(['start', 'end', 'start', 'end']);
+    expect(events[0]!.id).toBe(events[1]!.id);
+    expect(events[2]!.id).toBe(events[3]!.id);
+    expect(events[2]!.id).not.toBe(events[0]!.id);
   });
 });

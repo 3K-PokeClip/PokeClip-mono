@@ -151,9 +151,6 @@ describe('EditorSettingsScreen — 목록', () => {
       if (url === DELEGATIONS_URL)
         return failing ? jsonResponse(500) : jsonResponse(200, DELEGATIONS);
       if (url === SENT_URL) return failing ? jsonResponse(500) : jsonResponse(200, SENT);
-      // 편집자 시점 초대함은 이 시험의 대상이 아니다 — 비어 있게 둔다
-      if (url === '/api/editor-invitations/received' || url === '/api/editor-delegations/as-editor')
-        return jsonResponse(200, []);
       throw new Error(`unexpected fetch: ${url}`);
     });
     const user = userEvent.setup();
@@ -489,73 +486,22 @@ async function findGroupName(name: string): Promise<string> {
   return name;
 }
 
-describe('EditorSettingsScreen — 받은 초대함', () => {
-  it('「나가기」는 확인 창을 거친다: 취소하면 DELETE가 안 나가고, 확인하면 나간다(POK-254)', async () => {
-    const spy = stubFetch((url, init) => {
+describe('EditorSettingsScreen — 편집자 시점은 다루지 않는다', () => {
+  it('받은 초대·내가 편집자인 채널은 여기 없다 — 초대 답하기와 나가기는 계정 전환 창에서 한다(POK-416)', async () => {
+    const spy = stubFetch((url) => {
       if (url === DELEGATIONS_URL) return jsonResponse(200, DELEGATIONS);
       if (url === SENT_URL) return jsonResponse(200, SENT);
-      if (url === '/api/editor-invitations/received') return jsonResponse(200, []);
-      if (url === '/api/editor-delegations/as-editor')
-        return jsonResponse(200, [
-          { id: 11, counterpartId: 3, counterpartName: '큰손', grantedAt: '2026-09-20T00:00:00Z' },
-        ]);
-      if (url === '/api/editor-delegations/11' && init?.method === 'DELETE')
-        return new Response(null, { status: 204 });
       throw new Error(`unexpected fetch: ${url}`);
     });
-    const deletes = () =>
-      spy.mock.calls.filter(([, init]) => (init as RequestInit)?.method === 'DELETE');
-    const user = userEvent.setup();
     renderWithProviders(<EditorSettingsScreen />);
 
-    await screen.findByText('큰손 채널의 편집자', {}, { timeout: 5000 });
-    await user.click(screen.getByRole('button', { name: '나가기' }));
-    const dialog = within(
-      await screen.findByRole('dialog', { name: '큰손 채널의 편집자에서 나갈까요?' }),
-    );
-    await user.click(dialog.getByRole('button', { name: '취소' }));
-    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
-    expect(deletes()).toHaveLength(0);
-
-    await user.click(screen.getByRole('button', { name: '나가기' }));
-    const again = within(
-      await screen.findByRole('dialog', { name: '큰손 채널의 편집자에서 나갈까요?' }),
-    );
-    await user.click(again.getByRole('button', { name: '나가기' }));
-    expect(await screen.findByText('편집자에서 나왔어요')).toBeInTheDocument();
-    expect(deletes().map(([url]) => url)).toEqual(['/api/editor-delegations/11']);
-    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
-  });
-
-  it('받은 초대를 못 읽으면 「초대 없음」으로 숨기지 않고 다시 시도를 준다', async () => {
-    // 기한 있는 초대를 놓치지 않게 — 실패와 빈 목록을 가른다(PR #200 codex)
-    let failing = true;
-    stubFetch((url) => {
-      if (url === DELEGATIONS_URL) return jsonResponse(200, DELEGATIONS);
-      if (url === SENT_URL) return jsonResponse(200, SENT);
-      if (url === '/api/editor-invitations/received')
-        return failing
-          ? jsonResponse(500)
-          : jsonResponse(200, [
-              {
-                id: 7,
-                streamerId: 3,
-                streamerName: '큰손',
-                expiresAt: '2026-10-01T00:00:00Z',
-                createdAt: '2026-09-20T00:00:00Z',
-              },
-            ]);
-      if (url === '/api/editor-delegations/as-editor') return jsonResponse(200, []);
-      throw new Error(`unexpected fetch: ${url}`);
-    });
-    const user = userEvent.setup();
-    renderWithProviders(<EditorSettingsScreen />);
-
-    expect(
-      await screen.findByText('받은 초대를 불러오지 못했어요', {}, { timeout: 5000 }),
-    ).toBeInTheDocument();
-    failing = false;
-    await user.click(screen.getByRole('button', { name: '다시 시도' }));
-    expect(await screen.findByText('큰손 님의 초대')).toBeInTheDocument();
+    expect(await screen.findByRole('group', { name: '박편집' })).toBeInTheDocument();
+    expect(screen.queryByText(/님의 초대$/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '수락' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '나가기' })).not.toBeInTheDocument();
+    // 편집자 시점 목록은 읽지도 않는다
+    const urls = spy.mock.calls.map(([url]) => url);
+    expect(urls).not.toContain('/api/editor-invitations/received');
+    expect(urls).not.toContain('/api/editor-delegations/as-editor');
   });
 });
