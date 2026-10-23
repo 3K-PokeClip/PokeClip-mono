@@ -1,0 +1,42 @@
+# terraform.tfvars 로 복사해 실제 값을 넣는다. terraform.tfvars 는 추적하지 않는다.
+
+# 상자 키 → 구성 판. 처음은 한 대(a)다. 교체 · 설정 반영은 새 키(b)에 올린
+# config_version 을 더한 뒤 runbooks/media-swap.md 를 따른다.
+instances = {
+  a = { config_version = "1" }
+}
+ingest_active_key = "a"
+http_active_key   = "a"
+
+# kty 확정(2026-10-23) — 네트워크 최적화 Graviton · DVR 1시간 × 30방송 몫
+# (modules/media_host README 「상자 크기」).
+instance_type    = "c8gn.large"
+root_volume_size = 150
+
+# nginx 듣기 포트 · 헬스 경로는 여기 두지 않는다 — prod/platform 출력
+# (media_proxy_ports · media_health_path)에서 읽는다.
+
+# O7c 에서 푸시한 이미지의 다이제스트(runbooks/prod-artifacts.md). 태그가 아니라
+# sha256:<64자리> 다. 응답기(ingest_auth)는 M15 · O8a 에서 채운다 — 비워 두면
+# compose 에 렌더하지 않는다.
+image_digests = {
+  bundle          = "sha256:<MEDIA_HOST_BUNDLE_DIGEST>"
+  mediamtx        = "sha256:<MEDIA_MEDIAMTX_DIGEST>"
+  nginx           = "sha256:<MEDIA_NGINX_DIGEST>"
+  sidecar         = "sha256:<MEDIA_SIDECAR_DIGEST>"
+  loopback_sender = "sha256:<MEDIA_LOOPBACK_SENDER_DIGEST>"
+}
+
+# 도구 판(modules/media_host README 「판 고정」 — 출처 · 조회 날짜). compose 판과
+# 체크섬은 함께 바꾼다.
+docker_version                = "25.0.16"
+ecr_credential_helper_version = "0.12.0-3.amzn2023"
+compose_version               = "5.5.0"
+compose_sha256                = "ff42489f5a9b879d5d117c5ffea6defc27390b3286da8ad52cbc9c6ab5df590e"
+
+# 기본값 — I1-6 배포 전에는 비워 둔다(nginx 제어면 404). 채우는 것은 설정 반영
+# 교체다.
+# control_upstream = "127.0.0.1:<제어면 포트>"
+
+# 기본 켬(kty 확정). 끄는 것도 설정 반영 교체다.
+# janitor_enabled = true
