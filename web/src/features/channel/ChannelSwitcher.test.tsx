@@ -140,6 +140,11 @@ describe('ChannelSwitcher: 펼친 패널', () => {
       ),
     );
     expect(panel.getByRole('button', { name: /나 채널/ })).not.toHaveAttribute('aria-current');
+    // 남의 채널 줄만 point로 칠할 표식을 단다: 내 채널(accent)과 색으로 갈린다
+    expect(panel.getByRole('button', { name: /별하 채널/ })).toHaveAttribute('data-others-channel');
+    expect(panel.getByRole('button', { name: /나 채널/ })).not.toHaveAttribute(
+      'data-others-channel',
+    );
   });
 
   it('별하를 누르면 그 채널로 바뀌고 토스트가 뜨고 패널이 닫힌다', async () => {
@@ -174,19 +179,46 @@ describe('ChannelSwitcher: 펼친 패널', () => {
     const user = userEvent.setup();
     const panel = within(await open(user));
 
-    await user.click(await panel.findByRole('button', { name: '거절' }));
-    const confirm = await screen.findByRole('dialog', { name: '감자대장님의 초대를 거절할까요?' });
-    await user.click(within(confirm).getByRole('button', { name: '취소' }));
+    const declineButton = await panel.findByRole('button', { name: '거절' });
+    await user.click(declineButton);
+    // 확인은 화면 가운데 모달이 아니라 창 안 덮개다(시안 1u ③). 실수로 Enter를 눌러도 거절되지 않게 취소에 포커스
+    const confirm = within(
+      await panel.findByRole('alertdialog', { name: '감자대장님의 초대를 거절할까요?' }),
+    );
+    expect(confirm.getByRole('button', { name: '취소' })).toHaveFocus();
+    await user.click(confirm.getByRole('button', { name: '취소' }));
     expect(posts(spy)).toEqual([]);
-    expect(screen.getByRole('dialog', { name: '계정 전환' })).toBeInTheDocument();
+    expect(panel.queryByRole('alertdialog')).not.toBeInTheDocument();
+    expect(declineButton).toHaveFocus();
 
     await user.click(panel.getByRole('button', { name: '거절' }));
-    const again = await screen.findByRole('dialog', { name: '감자대장님의 초대를 거절할까요?' });
-    await user.click(within(again).getByRole('button', { name: '거절하기' }));
+    const again = within(await panel.findByRole('alertdialog'));
+    await user.click(again.getByRole('button', { name: '거절하기' }));
 
     await waitFor(() => expect(posts(spy)).toEqual(['/api/editor-invitations/11/decline']));
     await waitFor(() =>
       expect(panel.queryByRole('group', { name: /받은 초대/ })).not.toBeInTheDocument(),
+    );
+    expect(panel.queryByRole('alertdialog')).not.toBeInTheDocument();
+  });
+
+  it('거절 확인에서 Esc는 덮개만 닫는다: 창은 그대로 열려 있다', async () => {
+    const spy = stub({ delegations: [], invitations: [invitation(18)] });
+    const user = userEvent.setup();
+    const panel = within(await open(user));
+
+    await user.click(await panel.findByRole('button', { name: '거절' }));
+    await panel.findByRole('alertdialog');
+    await user.keyboard('{Escape}');
+
+    expect(panel.queryByRole('alertdialog')).not.toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: '계정 전환' })).toBeInTheDocument();
+    expect(posts(spy)).toEqual([]);
+
+    // 덮개가 없을 때의 Esc는 그대로 창을 닫는다
+    await user.keyboard('{Escape}');
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: '계정 전환' })).not.toBeInTheDocument(),
     );
   });
 
