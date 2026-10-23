@@ -2537,7 +2537,7 @@ UploadInfo = {"title":"필수","description":null,"tags":["…"],"categoryId":"2
 | `POST /internal/uploads/{id}/start` | `X-Internal-Token` | 200 `{"proceed":true,"status","attempt","sessionUri"\|null}` 또는 `{"proceed":false,"status"}`(끝난 주문) · 404 `upload_not_found` |
 | `POST /internal/uploads/{id}/session` `{sessionUri}` | `X-Internal-Token` | 200 `{"sessionUri"}` = **먼저 적힌 주소**(일꾼은 자기 주소를 버리고 이것을 쓴다) · 409 `{"reason":"NOT_STARTED"\|"TERMINAL"}` · 400 |
 | `POST /internal/uploads/{id}/heartbeat` (본문 없음, POK-333) | `X-Internal-Token` | 200 `{"status","touched"}`: 일꾼이 처리 중이라는 신호. 상태는 안 바꾸고 `updated_at`만 옮긴다. 끝난 줄(올림 · 실패)은 안 건드린다(`touched:false`). 몇 번 와도 같다 · 404 `upload_not_found` |
-| `POST /internal/uploads/{id}/result` `{outcome, videoId?, errorCode?, errorMessage?, thumbnailOutcome?, thumbnailErrorCode?}` | `X-Internal-Token` | 200 `{"status"}`(같은 끝 보고가 다시 와도 200. 주소가 적힌 줄의 `FAILED`는 `checking`으로 받는다) · 409 `TERMINAL`(다른 끝으로 덮기. `checking`→`UPLOADED`만 허용)·`NOT_STARTED` · 400 |
+| `POST /internal/uploads/{id}/result` `{outcome, videoId?, errorCode?, errorMessage?, thumbnailOutcome?, thumbnailErrorCode?, onlyIfNoSession?}` | `X-Internal-Token` | 200 `{"status"}`(같은 끝 보고가 다시 와도 200. 주소가 적힌 줄의 `FAILED`는 `checking`으로 받는다) · 409 `TERMINAL`(다른 끝으로 덮기. `checking`→`UPLOADED`만 허용)·`NOT_STARTED` · **409 `{"reason":"SESSION_EXISTS","sessionUri"}`**(`onlyIfNoSession:true`인 `FAILED`가 주소 적힌 올리는 중 줄에 왔다. 상태는 그대로, 일꾼은 그 주소로 잇는다. POK-250) · 400 |
 
 **봉투**: `{"id","clipId","outputId","title","status","videoId","error":{"code","message"},"requestedBy","createdAt","updatedAt","privacyStatus","madeForKids","tags":[…],"thumbnail":{"source","status","errorCode"},"resolvedBy","resolvedAt","categoryId","publishAt"}`.
 `categoryId`·`publishAt`은 POK-381(`V217`). 예약이 아니면 `publishAt`은 `null`이고, 그 전 줄의 분류는 `20`이다.
@@ -2595,6 +2595,15 @@ UploadInfo = {"title":"필수","description":null,"tags":["…"],"categoryId":"2
   확인 중 → 올림 **두 전이 모두**에서 적는다. `SET` → `set`, `FAILED` → `failed` + 코드, `NONE`·칸 없음 → 줄이 `pending`이면 `failed` + `THUMBNAIL_NOT_REPORTED`
   (옛 일꾼), `none`이면 그대로. 🔴 **칸이 이상해도 400으로 거절하지 않는다**: 거절하면 일꾼이 같은 보고를 되풀이하다 실패 큐로 가고, 정리기가 영상이 있는데도
   확인 중으로 닫는다. 같은 끝 보고의 재전송은 처음 값이 이긴다. 코드는 일꾼이 정한다(`THUMBNAIL_FORBIDDEN` = 채널 전화 인증 필요 등, `workers/upload` README).
+
+**「주소가 없을 때만 실패」(`onlyIfNoSession`, POK-250).** 일꾼이 실패를 보내는 순간 겹친 일꾼이 주소를 적었으면, 옛 규칙은 그 실패를 `checking`으로
+받아 일꾼이 쪽지를 지우고 아무도 그 주소를 잇지 않았다. 이 칸이 `true`(불리언만. 모양이 틀리면 꺼짐, 400 없음)인 `FAILED`는 그때 상태를 안 바꾸고
+409 `SESSION_EXISTS`와 주소를 준다. 주소가 없으면 그대로 `failed`(재전송도 200)다. 이미 `checking`인 줄에 오면 「같은 보고」가 아니라 409 `TERMINAL`이다:
+200을 주면 일꾼이 주소 있는 줄을 실패로 닫혔다고 읽는다. 칸이 없는 옛 보고는 지금 규칙 그대로다.
+
+**🔴 배포 순서(POK-250): clip → auth → 업로드 일꾼. 필수다.**
+- clip이 일꾼보다 먼저인 이유: 새 일꾼은 실패 직전의 다시 묻기를 없애고 이 칸 하나에 기댄다. 옛 clip은 칸을 무시해 주소 있는 줄의 실패를 `checking`으로 받으므로, 유튜브 시작 요청 구간 전체가 확인 필요로 굳어 지금보다 확인 필요가 늘어난다.
+- auth가 일꾼보다 먼저인 이유: 옛 auth는 resolve의 `rejectedTokenSha256` 칸을 무시해 401을 받은 그 토큰을 그대로 돌려준다. 새 일꾼은 그것을 알아보고 잠시 뒤 다시 하지만(지금 동작과 같다), 401 복구가 auth 배포 전까지 안 된다.
 
 **🔴 배포 순서(POK-291): 업로드 일꾼 → auth → clip → web.**
 - 일꾼이 먼저인 이유: 옛 일꾼은 새 주문서 칸을 모르는 칸으로 버리는데, 무해하지 않다. `madeForKids`를 읽지 않고 `false`로 덮어 올리고(아동용 신고가 틀린다),
@@ -2973,7 +2982,7 @@ scope는 둘 — 업로드(`youtube.upload`)와 채널 조회(`youtube.readonly`
 | `POST /api/youtube-link` `{code, state}` | 201 `{channelId, channelName, linkedAt}` · 400 `INVALID_STATE` · 400 `INVALID_CODE`(구글이 교환·채널 조회를 4xx로 거부 — code 소모·만료·권한 부족, **동의부터 다시**) · 400 `SCOPE_MISSING`(업로드 권한 미동의) · 400 `NO_CHANNEL`(구글 계정에 유튜브 채널이 없다 — 먼저 만들어야 한다) · 409 `CHANNEL_ALREADY_LINKED` · 502 `YOUTUBE_UNAVAILABLE`(5xx·타임아웃·429·408·`invalid_client`·**403 할당량**) |
 | `GET /api/youtube-link` | 200 `{linked:false}` 또는 `{linked, channelId, channelName, status, linkedAt, lastRefreshedAt, accessExpiresAt}`. `status` ∈ `ACTIVE`·`BROKEN`·`UNLINKED`(파생). **치지직과 달리 `EXPIRED`가 없다** — 구글 access는 1시간짜리라 늘 만료돼 있고 갱신으로 항상 해소되므로 상태가 아니다. `linked`는 `ACTIVE`일 때만 true |
 | `DELETE /api/youtube-link` | 204 (없어도 204). 행은 남고(`revoked_at`+`USER_UNLINKED`) 커밋 뒤에 secrets 삭제. 🔴 **구글에는 revoke를 보내지 않는다** — 아래 |
-| `POST /internal/youtube-link/resolve` `{userId}` | **항상 200** — 아래 |
+| `POST /internal/youtube-link/resolve` `{userId, rejectedTokenSha256?}` | **항상 200** — 아래(지문 모양이 틀리면 400) |
 | `POST /internal/youtube-link/status` `{userId}` | **항상 200** `{"linked":true,"reason":null}` 또는 `{"linked":false,"reason":"NOT_LINKED"\|"UNLINKED"\|"BROKEN"}`. 회원 번호가 없으면 400. 아래 「`status`(clip용)」 |
 
 오류 본문은 `{"reason": "<위 코드>"}` 한 필드다. 토큰·code·state·채널 ID는 응답·로그 어디에도 안 남는다
@@ -3003,6 +3012,13 @@ scope는 둘 — 업로드(`youtube.upload`)와 채널 조회(`youtube.readonly`
 임박한 토큰은 주지 않는다, 잠시 뒤 다시 부르면 된다). 거절 응답에는 `accessToken` 필드가 아예 없다.
 **남은 수명이 30분(`resolve-min-remaining`)보다 짧으면 넘기기 전에 즉석 갱신한다** — 구글 access가
 1시간짜리라 치지직(12시간)과 자릿수가 다르다.
+
+**「거절된 토큰이면 새로 갱신」(`rejectedTokenSha256`, POK-250).** 업로드 일꾼이 유튜브에서 401을 받으면 그 access의 SHA-256(소문자 16진
+64자, 없어도 됨)을 함께 보낸다. 회원 행 락 안에서 지금 access와 비교해 **같으면 수명과 무관하게 갱신**하고 새 토큰을 준다(INFO
+`auth.youtube.link.forced_refresh`, 지문 값은 안 찍는다). **다르면 누가 이미 갱신한 것**이라 구글을 안 부르고 지금 규칙대로 준다:
+401이 겹쳐 열 일꾼이 같은 지문을 보내도 구글 갱신은 한 번이다. 갱신이 `invalid_grant`면 `BROKEN`, 일시 실패면 `REFRESH_UNAVAILABLE`로
+지문 없는 resolve와 같은 갈래다. 모양이 틀리면 400(`userId` 누락과 같은 길: 일꾼이 만드는 값이라 틀리면 우리 버그다). 지문이 없으면
+지금 그대로이고, 스케줄러 갱신 길은 access를 먼저 읽지 않는다.
 
 **`status`(clip용, POK-291) 계약.** `POST /internal/youtube-link/status {userId}`. 잠금은 `resolve`와 같은
 `/internal/**` 체인이다. clip이 「영상 만들기」 주문을 받으면 렌더 전에 **스트리머가 유튜브를 연결했나**만 묻는다.

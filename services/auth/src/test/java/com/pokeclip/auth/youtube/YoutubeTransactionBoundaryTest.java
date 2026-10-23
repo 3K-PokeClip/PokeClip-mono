@@ -31,10 +31,14 @@ class YoutubeTransactionBoundaryTest {
             YoutubeLinkController.class,
             YoutubeLinkResolveController.class);
 
-    /** 실제로 트랜잭션이어야 하는 쓰기 진입점. 이름이 어긋나면 여기가 먼저 빨간불이 된다. */
+    /**
+     * 실제로 트랜잭션이어야 하는 쓰기 진입점. 이름이 어긋나면 여기가 먼저 빨간불이 된다.
+     * 갱신기는 오버로드가 둘이라 둘 다 적는다(POK-250): 스케줄러는 2인자를 프록시로 부르고 그 안의 3인자 호출은 자기 호출이라
+     * 프록시를 안 지난다. 2인자에서 {@code @Transactional}을 빼면 스케줄러 갱신이 트랜잭션 밖에서 돈다.
+     */
     private static final List<String> MUST_BE_TRANSACTIONAL = List.of(
             "YoutubeLinkWriter#create", "YoutubeLinkWriter#revoke",
-            "YoutubeTokenRefresher#refreshIfExpiringWithin");
+            "YoutubeTokenRefresher#refreshIfExpiringWithin", "YoutubeTokenRefresher#refreshIfExpiringWithin");
 
     @Test
     void 조합부와_스케줄러와_컨트롤러에는_트랜잭션이_없다() {

@@ -2,6 +2,7 @@ package com.pokeclip.auth.youtube;
 
 import com.pokeclip.auth.streamkey.secret.SecretStore;
 import com.pokeclip.auth.support.FakeYoutubeServer;
+import com.pokeclip.auth.support.Sha256;
 import com.pokeclip.auth.token.TokenService;
 import com.pokeclip.auth.user.User;
 import com.pokeclip.auth.user.UserRepository;
@@ -291,5 +292,40 @@ class YoutubeTokenRefresherTest extends YoutubeLinkTestSupport {
         assertThat(YOUTUBE.tokenCalls()).as("락이 없으면 여럿이 동시에 구글을 부른다").isEqualTo(1);
         assertThat(outcomes).containsOnlyOnce(RefreshOutcome.REFRESHED);
         assertThat(outcomes.stream().filter(o -> o == RefreshOutcome.SKIPPED_FRESH).count()).isEqualTo(9);
+    }
+
+    /**
+     * 🔴 401이 겹쳐 열 일꾼이 같은 지문을 보내도 구글 갱신은 한 번이다(POK-250). 첫 스레드가 락 안에서 갱신하면 둘째부터는
+     * 바뀐 토큰을 보고(지문이 다르다) 지금 토큰을 받는다. 지문 비교가 락 밖이면 열이 전부 갱신한다.
+     */
+    @Test
+    void 같은_지문으로_10스레드가_동시에_와도_구글_호출은_1회다() throws Exception {
+        User u = newUser();
+        linked(u, "at-old", "rt-old");   // 수명 넉넉: 지문만이 갱신 이유다
+        YOUTUBE.tokenDelays(Duration.ofMillis(300));   // 경합 창을 벌린다
+        String sha = Sha256.hex("at-old");
+        ExecutorService pool = Executors.newFixedThreadPool(10);
+        CountDownLatch go = new CountDownLatch(1);
+        List<Future<RefreshResult>> results = new ArrayList<>();
+        for (int i = 0; i < 10; i++) {
+            results.add(pool.submit(() -> {
+                go.await();
+                return refresher.refreshIfExpiringWithin(u.getId(), Duration.ofMinutes(30), sha);
+            }));
+        }
+
+        go.countDown();
+        List<RefreshOutcome> outcomes = new ArrayList<>();
+        List<String> tokens = new ArrayList<>();
+        for (Future<RefreshResult> f : results) {
+            RefreshResult r = f.get(30, TimeUnit.SECONDS);
+            outcomes.add(r.outcome());
+            tokens.add(r.snapshot().accessToken());
+        }
+        pool.shutdown();
+
+        assertThat(YOUTUBE.tokenCalls()).as("지문 비교가 락 밖이면 여럿이 갱신한다").isEqualTo(1);
+        assertThat(outcomes).containsOnlyOnce(RefreshOutcome.REFRESHED);
+        assertThat(tokens).as("열 일꾼 모두 새 토큰을 받는다").containsOnly("at-1");
     }
 }

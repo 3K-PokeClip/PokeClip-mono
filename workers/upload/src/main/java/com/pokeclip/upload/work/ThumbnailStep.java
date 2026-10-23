@@ -100,7 +100,7 @@ public class ThumbnailStep {
             }
         }
 
-        String current = token != null ? token : resolveQuietly(job);
+        String current = token != null ? token : tokenQuietly(job, () -> auth.resolve(job.channelOwnerUserId()));
         if (current == null) {
             return ThumbnailReport.failed("THUMBNAIL_NO_TOKEN");
         }
@@ -121,8 +121,11 @@ public class ThumbnailStep {
                     sleeper.sleep(retryDelays.get(retries++));
                 }
                 case ThumbnailSet.Unauthorized u -> {
-                    // 긴 업로드 동안 토큰이 끝났을 수 있다. 한 번만 새로 받는다.
-                    String fresh = refreshed ? null : resolveQuietly(job);
+                    // 긴 업로드 동안 토큰이 끝났을 수 있다. 한 번만, 거절된 토큰의 지문을 실어 강제 갱신으로 새로 받는다(POK-250):
+                    // 지문 없이 물으면 auth가 수명이 넉넉하다고 보고 같은 토큰을 준다.
+                    String rejected = current;
+                    String fresh = refreshed ? null
+                            : tokenQuietly(job, () -> auth.resolveAfterRejection(job.channelOwnerUserId(), rejected));
                     refreshed = true;
                     if (fresh == null) {
                         return ThumbnailReport.failed("THUMBNAIL_UNAUTHORIZED");
@@ -133,10 +136,12 @@ public class ThumbnailStep {
         }
     }
 
-    /** @return 토큰. 못 받으면(거절·auth 무응답) null. auth가 답을 안 해도 쪽지를 남기지 않는다 */
-    private String resolveQuietly(UploadEnvelope job) {
+    /**
+     * 토큰을 받는다(처음 받기 · 401 뒤 강제 갱신 둘 다 이 자리). 못 받으면(거절 · 옛 auth · 무응답) null. auth가 답을 안 해도 쪽지를 남기지 않는다.
+     */
+    private String tokenQuietly(UploadEnvelope job, java.util.function.Supplier<YoutubeTokenClient.Token> ask) {
         try {
-            YoutubeTokenClient.Token token = auth.resolve(job.channelOwnerUserId());
+            YoutubeTokenClient.Token token = ask.get();
             return token.valid() ? token.accessToken() : null;
         } catch (RuntimeException e) {
             log.warn("upload.thumbnail_token_unavailable uploadId={} what={}", job.uploadId(),
