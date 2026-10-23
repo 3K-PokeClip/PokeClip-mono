@@ -72,11 +72,27 @@ export interface BroadcastRow {
    */
   title?: string | null;
   category?: string | null;
+  /**
+   * 방송 플랫폼 코드(POK-398). `CHZZK`·`SOOP`. 화면에 보일 이름은 {@link platformLabel}로 고른다. 이 칸을 모르는 옛 서버면 빠져 온다
+   */
+  platform?: string | null;
+  /**
+   * 이 방송의 라이브 대시보드를 지금 열어 둔 편집자 수(POK-398). 스트리머 본인과 나는 빼고 센다. 방송 중 줄만 숫자고 끝난 줄은 null,
+   * 옛 서버면 빠져 온다
+   */
+  editorsOnline?: number | null;
 }
 
 /** 방송을 사람에게 보일 이름(POK-259). 치지직 제목이 있으면 그것, 없으면 방송 번호 */
 export function broadcastTitle(row: Pick<BroadcastRow, 'streamId' | 'title'>): string {
   return row.title?.trim() || row.streamId;
+}
+
+/** 플랫폼 코드를 화면 이름으로(POK-398). 모르는 코드면 null이다: 치지직이라고 지어내지 않고 태그를 숨긴다 */
+export function platformLabel(code: string | null | undefined): string | null {
+  if (code === 'CHZZK') return '치지직';
+  if (code === 'SOOP') return 'SOOP';
+  return null;
 }
 
 /** 영상 주소(라이브 LL-HLS·녹화 재생)를 만드는 키. 방송을 가리키는 번호(API 경로·자격)에는 쓰지 않는다 */

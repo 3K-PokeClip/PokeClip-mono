@@ -17,9 +17,11 @@ import org.springframework.dao.DataAccessException;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * 「내가 볼 수 있는 스트리머의 방송」 한 장을 만든다.
@@ -84,14 +86,17 @@ public class BroadcastListService {
     private final TimelineOriginReader origins;
     private final ThumbnailUrls thumbnails;
     private final BroadcastTitleClient titles;
+    private final ViewerPresence viewers;
 
     BroadcastListService(BroadcastRepository broadcasts, DelegationResolveClient delegation,
-                         TimelineOriginReader origins, ThumbnailUrls thumbnails, BroadcastTitleClient titles) {
+                         TimelineOriginReader origins, ThumbnailUrls thumbnails, BroadcastTitleClient titles,
+                         ViewerPresence viewers) {
         this.broadcasts = broadcasts;
         this.delegation = delegation;
         this.origins = origins;
         this.thumbnails = thumbnails;
         this.titles = titles;
+        this.viewers = viewers;
     }
 
     /**
@@ -151,7 +156,54 @@ public class BroadcastListService {
                 : null;
         // 시각 기준점은 잘라 낸 한 장만 잰다(POK-255) — 「다음 장이 있나」를 보려고 더 받은 한 줄은 안 나간다
         return new BroadcastPage(page, relations, next, originsOrEmpty(page), thumbnailsOf(page),
-                titles.titlesOf(page.stream().map(Broadcast::getStreamId).toList()));
+                titles.titlesOf(page.stream().map(Broadcast::getStreamId).toList()), editorsOnlineOf(page, userId));
+    }
+
+    /**
+     * 방송 중 줄마다 「대시보드를 연 편집자 수」(POK-398). 끝난 줄은 안 넣는다(응답에서 null): 끝난 방송은 연결을 닫으므로 셀 것이 없다.
+     *
+     * <p>🔴 <b>clip 한 대 전제다.</b> 연결은 그 연결을 받은 서버의 메모리에만 있다. 여러 대로 늘리면 각 서버가 자기 몫만 세어
+     * 적게 나온다. 그때는 연결 목록을 모으는 곳(Redis 등)이 필요하다.
+     */
+    private Map<String, Integer> editorsOnlineOf(List<Broadcast> page, long requester) {
+        Map<String, Integer> counts = new LinkedHashMap<>();
+        for (Broadcast row : page) {
+            if (row.getStatus() == BroadcastStatus.LIVE) {
+                counts.put(row.getStreamId(),
+                        countEditors(viewers.viewerIdsOf(row.getStreamId()), row.getStreamerId(), requester));
+            }
+        }
+        return counts;
+    }
+
+    /**
+     * 연결 번호에서 스트리머 본인과 묻는 사람을 빼고 사람 수를 센다. <b>숫자로 읽어 비교한다</b>: 연결 번호는 JWT {@code sub} 원문인데
+     * 자격 판정이 {@code parseLong}으로 받아 {@code "007"}도 연결이 된다. 문자열로 비교하면 같은 사람이 둘로 세어지고 스트리머가 안 빠진다.
+     * 숫자가 아닌 번호는 셈에서 뺀다(자격 판정을 못 지나 연결이 될 수 없지만, 들어와도 목록 문을 죽이지 않는다).
+     * 줄의 스트리머 번호가 숫자가 아니면 뺄 사람이 없는 것으로 본다.
+     */
+    static int countEditors(List<String> viewerIds, String streamerId, long requester) {
+        Set<Long> people = new HashSet<>();
+        for (String id : viewerIds) {
+            Long number = numberOrNull(id);
+            if (number != null) {
+                people.add(number);
+            }
+        }
+        Long streamer = numberOrNull(streamerId);
+        if (streamer != null) {
+            people.remove(streamer);
+        }
+        people.remove(requester);
+        return people.size();
+    }
+
+    private static Long numberOrNull(String value) {
+        try {
+            return Long.parseLong(value);
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     /** 사진 주소(POK-277). 방송 중이면 최신 화면, 끝났으면 최고 점수 카드 장면. 부가 칸이라 못 읽으면 비운다({@link ThumbnailUrls}). */

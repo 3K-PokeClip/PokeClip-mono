@@ -6,7 +6,7 @@ import { fetchChzzkLink, type ChzzkLinkState } from '@/api/chzzkLink';
 import { fetchSoopLink, type SoopLinkState } from '@/api/soopLink';
 import { fetchStreamKeyStatus } from '@/api/streamKeys';
 import { fetchYoutubeLink, type YoutubeLinkState } from '@/api/youtubeLink';
-import { broadcastTitle } from '@/api/clipEditor';
+import { broadcastTitle, platformLabel } from '@/api/clipEditor';
 import { ddayFor, isJustEnded } from '@/features/broadcast/vod/vodListView';
 import {
   fetchAllBroadcasts,
@@ -33,8 +33,10 @@ import { useChannelStreamerId } from '@/features/channel/ChannelScope';
 export interface LiveNow {
   streamId: string;
   title: string;
-  /** 방송 플랫폼(치지직·SOOP·씨미). 방송 목록이 아직 알려 주지 않아 null — 모르는 플랫폼을 치지직이라 적지 않는다 */
+  /** 방송 플랫폼 표시 이름(치지직·SOOP). 방송 목록의 코드에서 고르고, 모르는 코드거나 옛 서버면 null(모르는 플랫폼을 치지직이라 적지 않는다) */
   platform: string | null;
+  /** 이 방송 대시보드를 지금 연 편집자 수(POK-398, 스트리머 본인과 나는 뺌). 0이거나 모르면(null·없음) 띠에 안 적는다 */
+  editorsOnline?: number | null;
   startedNote: string;
   /** 방송 경과 표기 — LIVE 배지 옆에 그대로 붙는다 */
   uptimeLabel: string;
@@ -294,7 +296,8 @@ async function loadHome(
     live = {
       streamId: liveBroadcast.streamId,
       title,
-      platform: null,
+      platform: platformLabel(liveBroadcast.platform),
+      editorsOnline: liveBroadcast.editorsOnline ?? null,
       startedNote: startedAt ? `${clockLabel(startedAt)} 시작` : '시작 시각 정보 없음',
       uptimeLabel: startedAt ? msToClock(now - Date.parse(startedAt)) : '--:--:--',
       // 수집기가 1분마다 채우는 시청자 수. 아직 없으면 null(「준비 중」)
