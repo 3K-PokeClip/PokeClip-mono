@@ -11,22 +11,24 @@ import java.time.Instant;
  * 보관 기한이 지난 행을 표당 상한만큼 지운다(POK-89). 표마다 메서드 하나, 각각 <b>자기 트랜잭션</b>이다 —
  * 한 표의 실패가 다른 표의 삭제를 되돌리지 않는다. 그래서 스케줄러에는 트랜잭션을 안 붙인다
  * ({@code YoutubeRevocationCheckScheduler}와 같은 이유).
- * 서브쿼리는 {@code FOR UPDATE SKIP LOCKED}다. <b>왜 두는가</b>: 이 모양이 되기 전에는 잠금 순서가 회수 UPDATE
+ * 고르는 질의는 {@code FOR UPDATE SKIP LOCKED}다. <b>왜 두는가</b>: 이 모양이 되기 전에는 잠금 순서가 회수 UPDATE
  * ({@code revokeAllOfUser}, {@code idx_refresh_tokens_expires_alive} 순서)와 어긋나, 같은 회원의 보관 기한이 지난
  * 미회수 만료 행이 둘 이상이면 사이클이 났다(리뷰 라운드 1 스크래치 재현 60회 중 30회 — rotate가 희생자면 봉쇄가
  * 롤백돼 500). 같은 시드로 pgbench 4클라이언트 15초: 원판 데드락 14회(30건 중 13 실패) → SKIP LOCKED 0회(298건 처리, 실패 0).
  *
- * <p>지금 실행 계획은 <b>id 순서로 잠근다</b>(리뷰 라운드 2 {@code EXPLAIN} 실측:
- * {@code Delete → Nested Loop → HashAggregate → Subquery Scan → Limit → LockRows → Index Scan pkey}).
- * 잠금은 서브쿼리 안의 {@code LockRows}가 {@code Limit} <b>아래</b>에서 스캔 순서(id)로 잡고, 바깥 {@code HashAggregate}는
- * 이미 잠긴 행을 지우기만 한다 — 예전 주석의 「해시 순서로 잠근다」는 틀린 서술이었다. 그래도 {@code SKIP LOCKED}를
- * 빼지 않는다: 그 순서 보장은 <b>실행 계획에 기대는 것</b>이라 계획이 바뀌는 날 데드락이 되살아난다. 건너뛴 행은
+ * <p>잠금은 고르는 질의 안의 {@code LockRows}가 {@code Limit} <b>아래</b>에서 스캔 순서(id)로 잡고, 바깥은 이미 잠긴
+ * 행을 지우기만 한다. 그래도 {@code SKIP LOCKED}를 빼지 않는다: 그 순서 보장은 <b>실행 계획에 기대는 것</b>이라 계획이 바뀌는 날 데드락이 되살아난다. 건너뛴 행은
  * 다음 틱이 지운다(청소의 의미와 맞다).
  *
- * <p>같은 실측에서 확인된 것 하나 더 — 서브쿼리는 한 번만 평가되고 {@code LockRows}가 {@code Limit} 아래라
- * <b>잠긴 행을 건너뛰어도 상한을 까먹지 않는다</b>(3행을 잠근 채 실행해도 정확히 1,000행 삭제).
+ * <p>🔴 <b>지울 행은 {@code WITH … AS MATERIALIZED}로 먼저 고르고 그 결과로 지운다</b>(POK-413). 예전 모양
+ * {@code DELETE … WHERE id IN (SELECT … LIMIT n FOR UPDATE SKIP LOCKED)}은 「하위 질의는 한 번만 돈다」가 그때의
+ * 실행 계획에 기댄 사실이었다. 표 통계에 따라 계획이 {@code Nested Loop Semi Join}의 안쪽에 그 질의를 두면 바깥 행마다
+ * 다시 돌고, 다시 돌 때마다 이 문장이 이미 지운 행을 건너뛰어(잠금이 「이미 바뀐 행」을 넘긴다) 다음 n개를 잠가 결국
+ * 대상 전부를 지웠다(CI에서 상한 1,000에 1,500 삭제 · 3회 연속, 같은 계획을 강제하면 매번 재현). 고른 결과를 한 번
+ * 담아 두는 CTE는 계획이 어떻든 다시 돌지 않는다. 잠긴 행을 건너뛰어도 상한을 까먹지 않는 것({@code LockRows}가
+ * {@code Limit} 아래)은 그대로다. 시험의 {@code RescanPlan}이 그 계획을 강제해 상한을 잰다.
  *
- * <p>PostgreSQL {@code DELETE}에는 {@code LIMIT}이 없어 {@code id IN (SELECT id … LIMIT n)}으로 상한을 건다.
+ * <p>PostgreSQL {@code DELETE}에는 {@code LIMIT}이 없어 고르는 쪽에 {@code LIMIT n}을 건다.
  * JPQL로는 이 모양을 못 만들어 {@code JdbcTemplate}을 쓴다({@code PairingAttemptRecorder}의 advisory lock이 선례).
  * native {@code @Query}로도 되지만 레포지토리 인터페이스에 {@code @Transactional}을 붙인 선례가 이 저장소에 없고
  * (인터페이스 선언 쿼리 메서드는 트랜잭션이 안 붙어 각 메서드에 직접 달아야 한다), 세 표의 삭제 조건을 한 파일에서
@@ -62,9 +64,10 @@ public class RetentionCleaner {
     public Result cleanPairingAttempts(Instant now) {
         Timestamp cutoff = Timestamp.from(now.minus(properties.pairingAttemptsKeepFor()));
         int deleted = jdbc.update("""
-                DELETE FROM pairing_exchange_attempts WHERE id IN (
+                WITH picked AS MATERIALIZED (
                     SELECT id FROM pairing_exchange_attempts WHERE attempted_at < ? ORDER BY id LIMIT ?
                     FOR UPDATE SKIP LOCKED)
+                DELETE FROM pairing_exchange_attempts t USING picked WHERE t.id = picked.id
                 """, cutoff, properties.batchLimit());
         return result(deleted);
     }
@@ -84,11 +87,12 @@ public class RetentionCleaner {
     public Result cleanRefreshTokens(Instant now) {
         Timestamp cutoff = Timestamp.from(now.minus(properties.refreshTokensKeepFor()));
         int deleted = jdbc.update("""
-                DELETE FROM refresh_tokens WHERE id IN (
+                WITH picked AS MATERIALIZED (
                     SELECT id FROM refresh_tokens
                     WHERE revoked_at < ? OR (revoked_at IS NULL AND expires_at < ?)
                     ORDER BY id LIMIT ?
                     FOR UPDATE SKIP LOCKED)
+                DELETE FROM refresh_tokens t USING picked WHERE t.id = picked.id
                 """, cutoff, cutoff, properties.batchLimit());
         return result(deleted);
     }
@@ -102,9 +106,10 @@ public class RetentionCleaner {
     public Result cleanPairingCodes(Instant now) {
         Timestamp cutoff = Timestamp.from(now.minus(properties.pairingCodesKeepFor()));
         int deleted = jdbc.update("""
-                DELETE FROM pairing_codes WHERE id IN (
+                WITH picked AS MATERIALIZED (
                     SELECT id FROM pairing_codes WHERE expires_at < ? ORDER BY id LIMIT ?
                     FOR UPDATE SKIP LOCKED)
+                DELETE FROM pairing_codes t USING picked WHERE t.id = picked.id
                 """, cutoff, properties.batchLimit());
         return result(deleted);
     }

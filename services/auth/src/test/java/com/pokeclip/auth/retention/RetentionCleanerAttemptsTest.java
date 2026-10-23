@@ -5,6 +5,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.sql.Timestamp;
 import java.time.Duration;
@@ -26,11 +27,14 @@ class RetentionCleanerAttemptsTest extends IntegrationTestSupport {
     private final RetentionCleaner cleaner;
     private final RetentionProperties properties;
     private final JdbcTemplate jdbc;
+    private final TransactionTemplate tx;
 
-    RetentionCleanerAttemptsTest(RetentionCleaner cleaner, RetentionProperties properties, JdbcTemplate jdbc) {
+    RetentionCleanerAttemptsTest(RetentionCleaner cleaner, RetentionProperties properties, JdbcTemplate jdbc,
+                                 TransactionTemplate tx) {
         this.cleaner = cleaner;
         this.properties = properties;
         this.jdbc = jdbc;
+        this.tx = tx;
     }
 
     /** 이 표는 자식이 없다. 그래도 남기면 다른 시험의 rate limit 판정(같은 IP 해시)이 흔들린다. */
@@ -71,6 +75,42 @@ class RetentionCleanerAttemptsTest extends IntegrationTestSupport {
         assertThat(second.capped()).isFalse();
         assertThat(third.deleted()).isZero();
         assertThat(count("stale")).isZero();
+    }
+
+    /**
+     * CI에서 위 시험이 「1,500」으로 흔들린 자리(POK-413). 고르는 질의가 바깥 행마다 다시 도는 계획을 강제해도 한 번에
+     * 상한만큼만 지워야 한다. 계획은 그때의 표 통계가 고르므로 위 시험만으로는 이 갈래가 가끔만 재어진다.
+     */
+    @Test
+    void 고르는_질의를_다시_도는_계획에서도_상한만큼만_지운다() {
+        Instant base = Instant.now();
+        int limit = properties.batchLimit();
+        seedAttempts("stale", limit + 500, base.minus(Duration.ofMinutes(61)));
+
+        RetentionCleaner.Result first = RescanPlan.forcing(tx, jdbc, () -> cleaner.cleanPairingAttempts(base));
+
+        assertThat(first.deleted()).isEqualTo(limit);
+        assertThat(count("stale")).isEqualTo(500);
+    }
+
+    /**
+     * 대조: 옛 모양({@code IN} 안의 하위 질의)은 같은 강제 아래에서 상한을 넘긴다. 이것이 초록이어야 위 시험이 계획을
+     * 실제로 바꿔서 재고 있다는 뜻이다(설정이 안 먹는 판에서는 위 시험이 저절로 초록이 된다).
+     */
+    @Test
+    void 대조_옛_모양은_다시_도는_계획에서_상한을_넘긴다() {
+        Instant base = Instant.now();
+        int limit = properties.batchLimit();
+        seedAttempts("stale", limit + 500, base.minus(Duration.ofMinutes(61)));
+        Timestamp cutoff = Timestamp.from(base.minus(properties.pairingAttemptsKeepFor()));
+
+        int deleted = RescanPlan.forcing(tx, jdbc, () -> jdbc.update("""
+                DELETE FROM pairing_exchange_attempts WHERE id IN (
+                    SELECT id FROM pairing_exchange_attempts WHERE attempted_at < ? ORDER BY id LIMIT ?
+                    FOR UPDATE SKIP LOCKED)
+                """, cutoff, limit));
+
+        assertThat(deleted).isEqualTo(limit + 500);
     }
 
     @Test
