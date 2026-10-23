@@ -300,8 +300,9 @@ check_case_20() {
 #######################################
 # 사례 21 — 렌더 자리 건수 도구(unit::render_count · crash::render_dirs)는 조회
 # 실패를 0 건으로 바꾸지 않는다. 가짜 sudo · find 를 PATH 맨 앞에 두고 본다:
-# find 실패 → 실패 · 출력 없음, 빈 결과 → 0, 한 건 → 1, 렌더 자리가 없음 → 0,
-# sudo 실패 → 디렉터리 수 「확인 불가」. systemd 없이 돈다.
+# find 실패 → 실패 · 출력 없음, 빈 결과 → 0, 한 건 → 1, 렌더 자리가 없음 → 0.
+# 디렉터리 수는 sudo 전체 실패 · sudo 는 되고 조회(true 밖의 명령)만 실패 →
+# 「확인 불가」 · 종료 1, 빈 결과 → 0, 한 건 → 1. systemd 없이 돈다.
 #######################################
 check_case_21() {
   local ok=0 dir="${scratch}/render-fake" mode out status want
@@ -309,7 +310,9 @@ check_case_21() {
   mkdir -p -- "${dir}" "${runtime_dir}"
   # shellcheck disable=SC2016 # 가짜 sudo 의 본문이다 — 그 셸이 펼친다.
   printf '%s\n' '#!/bin/sh' '[ -n "${PCBENCH_FAKE_SUDO_FAIL:-}" ] && exit 1' \
-    '[ "$1" = -n ] && shift' 'exec "$@"' >"${dir}/sudo"
+    '[ "$1" = -n ] && shift' \
+    '[ -n "${PCBENCH_FAKE_SUDO_ONLY_TRUE:-}" ] && [ "$1" != true ] && exit 1' \
+    'exec "$@"' >"${dir}/sudo"
   # shellcheck disable=SC2016 # 가짜 find 의 본문이다 — 그 셸이 펼친다.
   printf '%s\n' '#!/bin/sh' 'case "${PCBENCH_FAKE_FIND:-}" in' \
     '  fail) exit 1 ;;' '  one) printf "%s\n" "$1/mediamtx.yml" ;;' 'esac' \
@@ -340,11 +343,35 @@ check_case_21() {
       ok=1
     fi
   done
-  out="$(PATH="${dir}:${PATH}" PCBENCH_FAKE_SUDO_FAIL=1 crash::render_dirs)"
-  if [[ "${out}" == 0 ]]; then
-    harness::add_reason 'sudo 가 실패했는데 렌더 자리 디렉터리 0 으로 셈'
-    ok=1
-  fi
+  for mode in sudo-fail only-true empty one; do
+    status=0
+    case "${mode}" in
+      sudo-fail)
+        want='실패:확인 불가'
+        out="$(PATH="${dir}:${PATH}" PCBENCH_FAKE_SUDO_FAIL=1 \
+          crash::render_dirs)" || status=$?
+        ;;
+      only-true)
+        want='실패:확인 불가'
+        out="$(PATH="${dir}:${PATH}" PCBENCH_FAKE_SUDO_ONLY_TRUE=1 \
+          PCBENCH_FAKE_FIND=one crash::render_dirs)" || status=$?
+        ;;
+      *)
+        if [[ "${mode}" == one ]]; then want='0:1'; else want='0:0'; fi
+        out="$(PATH="${dir}:${PATH}" PCBENCH_FAKE_FIND="${mode}" \
+          crash::render_dirs)" || status=$?
+        ;;
+    esac
+    if (( status != 0 )); then
+      out="실패:${out}"
+    else
+      out="0:${out}"
+    fi
+    if [[ "${out}" != "${want}" ]]; then
+      harness::add_reason "렌더 자리 디렉터리 갈래 ${mode}: 「${out}」(기대 「${want}」)"
+      ok=1
+    fi
+  done
   return "${ok}"
 }
 

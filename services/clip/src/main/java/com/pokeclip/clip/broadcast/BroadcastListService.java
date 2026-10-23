@@ -8,6 +8,7 @@ import com.pokeclip.clip.delegation.ResolveResult;
 import com.pokeclip.clip.paging.CursorCodec;
 import com.pokeclip.clip.paging.InvalidListParamException;
 import com.pokeclip.clip.paging.ListLimit;
+import com.pokeclip.clip.paging.ListParams;
 import com.pokeclip.clip.segment.TimelineOriginReader;
 import com.pokeclip.clip.thumbnail.ThumbnailUrls;
 import org.slf4j.Logger;
@@ -97,15 +98,18 @@ public class BroadcastListService {
      * @param requesterSubject JWT {@code sub} — 우리가 발급·검증한 토큰의 회원 번호(문자열)
      * @param limit {@code null}이면 {@link #DEFAULT_LIMIT}
      * @param cursor {@code null}<b>이거나 빈 문자열이면</b> 첫 장 ({@code CursorCodec.decodeOrFirstPage})
-     * @throws InvalidListParamException 개수가 범위 밖이다 (400)
+     * @param streamerId 화면이 고른 채널(POK-390). {@code null}·빈 값이면 볼 수 있는 스트리머 전부를 섞는다
+     * @throws InvalidListParamException 개수가 범위 밖이거나 {@code streamerId}가 숫자가 아니다 (400)
      * @throws com.pokeclip.clip.paging.InvalidCursorException 이어받기 표시가 우리 모양이 아니다 (400)
-     * @throws AccessErrors.NotViewableException 토큰의 주체를 회원 번호로 못 읽는다 (404)
+     * @throws AccessErrors.NotViewableException 토큰의 주체를 회원 번호로 못 읽거나, 고른 채널을 볼 수 없다 (404)
      * @throws AccessErrors.AuthUnavailableException 볼 수 있는 스트리머를 물어보지 못했다 (503)
      */
-    public BroadcastPage list(String requesterSubject, BroadcastState state, Integer limit, String cursor) {
+    public BroadcastPage list(String requesterSubject, BroadcastState state, Integer limit, String cursor,
+                              String streamerId) {
         int size = ListLimit.resolve(limit, DEFAULT_LIMIT, MAX_LIMIT);
         List<Long> after = CursorCodec.decodeOrFirstPage(CursorCodec.Kind.BROADCAST, cursor);
         Long afterId = after == null ? null : after.get(0);
+        Long chosen = ListParams.streamerIdOrNull(streamerId);
         long userId = 요청자_번호(requesterSubject);
 
         AccessibleResult accessible = delegation.accessible(userId);
@@ -113,6 +117,12 @@ public class BroadcastListService {
             // 빈 목록으로 접지 않는다 — 화면이 「방송이 없다」고 단정하면 auth가 살아난 뒤에도
             // 편집자는 다시 시도하지 않는다(PRD 결정).
             throw new AccessErrors.AuthUnavailableException();
+        }
+        accessible = accessible.narrowTo(chosen);
+        if (chosen != null && accessible.streamers().isEmpty()) {
+            // 200 빈 목록으로 접지 않는다: 위임이 끊긴 편집자 화면이 「방송이 없다」로 남아 내 채널로 못 돌아간다.
+            // 「없는 번호」와 「권한 없음」을 안 가른다(같은 예외, 사유는 로그로만).
+            throw new AccessErrors.NotViewableException("streamer_not_accessible");
         }
 
         // 🔴 숫자를 문자열로 되돌린다. 그 변환이 관대하지 않다는 것(선행 0)은 findPage 주석에 있다.

@@ -32,6 +32,9 @@ const proxies = [
 ];
 
 const nextConfig: NextConfig = {
+  // 운영 이미지(Dockerfile)는 .next/standalone 의 server.js 만 싣는다 — node_modules 전체 없이 뜬다.
+  // pnpm dev·pnpm build 는 그대로 동작하고, 빌드 산출물에 standalone 폴더가 하나 더 생길 뿐이다.
+  output: 'standalone',
   // 라이브 카드 통로(SSE, text/event-stream)를 이 서버의 rewrite 프록시가 gzip으로 묶으면 조각이 버퍼에
   // 갇혀 브라우저에 한 바이트도 안 온다(2026-09-17 실측: 2초 동안 gzip 헤더 10바이트). 압축을 끈다(POK-251).
   compress: false,

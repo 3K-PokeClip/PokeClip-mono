@@ -4,7 +4,9 @@ import { useState } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
-import { IconButton, LinkButton } from '@/ui';
+import { Button, IconButton, LinkButton } from '@/ui';
+import { useChannelRelation } from '@/features/channel/ChannelScope';
+import { isOwnerOnlyPath } from '@/features/channel/ownerOnlyPaths';
 import styles from './HomeScreen.module.css';
 import { useRandomIndex } from './useRandomIndex';
 
@@ -41,6 +43,9 @@ export function TipCard() {
   const i = first === null ? null : (first + step) % TIPS.length;
   const tip = i === null ? undefined : TIPS[i];
   const move = (d: 1 | -1) => setStep((x) => (x + d + TIPS.length) % TIPS.length);
+  // 남의 채널이면 주인 전용 화면으로 가는 팁 버튼은 비활성(POK-390): 팁 글은 그대로 둔다
+  const blocked =
+    useChannelRelation() === 'EDITOR' && tip !== undefined && isOwnerOnlyPath(tip.action.href);
 
   return (
     <section className={styles.tipCard} aria-labelledby="home-tip-title">
@@ -68,7 +73,11 @@ export function TipCard() {
         </p>
       </div>
       <div className={styles.tipFoot}>
-        {tip ? (
+        {tip && blocked ? (
+          <Button variant="outline" size="sm" disabled className={styles.tipAction}>
+            {tip.action.label}
+          </Button>
+        ) : tip ? (
           <LinkButton
             as={Link}
             href={tip.action.href}

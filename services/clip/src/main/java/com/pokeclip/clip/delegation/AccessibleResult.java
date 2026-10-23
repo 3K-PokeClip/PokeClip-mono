@@ -31,4 +31,18 @@ public record AccessibleResult(boolean available, List<Entry> streamers) {
     public static AccessibleResult of(List<Entry> streamers) {
         return new AccessibleResult(true, List.copyOf(streamers));
     }
+
+    /**
+     * 한 스트리머로 좁힌다(채널 스위처, POK-390). {@code null}이면 그대로, 목록에 없으면 빈 목록이다:
+     * 호출부가 그것을 404로 접는다.
+     *
+     * <p>🔴 <b>물어보지 못한 답은 그대로 돌려준다.</b> {@link #of}로 새로 만들면 {@code available}이 참이 되어,
+     * 호출부가 이것을 {@code available()} 검사보다 먼저 부르는 날 auth 장애(503)가 「볼 수 없다」(404)로 둔갑한다.
+     */
+    public AccessibleResult narrowTo(Long streamerUserId) {
+        if (streamerUserId == null || !available) {
+            return this;
+        }
+        return of(streamers.stream().filter(e -> e.streamerUserId() == streamerUserId).toList());
+    }
 }

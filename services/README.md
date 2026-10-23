@@ -312,7 +312,7 @@ localhost가 딸려가고, 로컬에선 되고 운영에서만 막히는데 로�
 | `CLOUDFRONT_KEY_PAIR_ID` | 빈 값 | 영상 출입증(POK-122) 서명 키 번호. CloudFront 공개키를 등록하면 받는 `K…` 값 |
 | `CLOUDFRONT_PRIVATE_KEY_PEM` | 빈 값 | 그 공개키의 짝인 **PKCS#8 PEM 본문**(`BEGIN PRIVATE KEY`). 한 줄로 넣으면 리터럴 `\n`을 개행으로 읽는다. `BEGIN RSA PRIVATE KEY`(PKCS#1)는 부팅에서 변환 명령과 함께 거부한다 |
 | `MEDIA_BASE_URL` | 빈 값 | 영상이 나가는 CDN 주소(예 `https://media.pokeclip.com`, 끝 `/` 없음). 정책 범위가 종류마다 `{이 값}/{kind}/{streamId}/*`다 |
-| `PLAYBACK_COOKIE_DOMAIN` | 빈 값 | 출입증 쿠키의 `Domain`. 운영은 `.pokeclip.com`. 비면 호스트 전용(로컬) |
+| `PLAYBACK_COOKIE_DOMAIN` | 빈 값 | 출입증 쿠키의 `Domain`. 운영은 `.pokeclip.com`. 비면 호스트 전용(로컬). **`PLAYBACK_REQUIRED=true`인데 비면 부팅 거부**(POK-317) |
 | `RENDER_ENABLED` | `false` | 영상 만들기 주문(POK-125). 켜면 아래 넷이 필수고 하나라도 비면 부팅이 거부된다. 꺼져 있으면 주문 문과 완성 영상 주소 문(POK-247)이 503 `render_unavailable` |
 | `RENDER_QUEUE_URL` | 빈 값 | 주문줄(표준 SQS). 실물 `pokeclip-jobs-render`(2026-09-15) |
 | `RENDER_DLQ_URL` | 빈 값 | 실패 큐. 정리기가 1분마다 읽어 `SWEPT`로 닫는다. 실물 `pokeclip-jobs-render-dlq` |
@@ -328,7 +328,7 @@ localhost가 딸려가고, 로컬에선 되고 운영에서만 막히는데 로�
 | `THUMBNAIL_QUEUE_URL` | 빈 값 | 사진 주문줄(표준 SQS) `jobs-thumbnail` + 전용 DLQ. 🔴 **dev·운영에 아직 없다**(1번이 만든다). clip은 DLQ를 안 읽는다(다음 순회가 다시 찍는다) |
 | `THUMBNAIL_INTERVAL` | `PT1M` | 사진 주문을 훑는 주기. 라이브 사진이 이 간격으로 바뀐다(사용자 결정 1분) |
 | `PLAYBACK_ACCESS_TTL` | `PT60M` | 출입증 수명. 0 이하면 부팅 거부 |
-| `PLAYBACK_REQUIRED` | `false` | 켜면 출입증 셋이 다 빈 「꺼짐」도 부팅 거부(POK-321, 엣지 T9b 대체). **prod만 `true`** |
+| `PLAYBACK_REQUIRED` | `false` | 켜면 출입증 셋이 다 빈 「꺼짐」도, 켜졌는데 `PLAYBACK_COOKIE_DOMAIN`이 빈 것도 부팅 거부(POK-321 · POK-317, 엣지 T9b 대체). **prod만 `true`** |
 
 **출입증 셋(`CLOUDFRONT_KEY_PAIR_ID`·`CLOUDFRONT_PRIVATE_KEY_PEM`·`MEDIA_BASE_URL`)은 다 비면 「꺼짐」이고
 부팅은 산다** — 로컬에는 CloudFront가 없다. 꺼진 채로 출입증 문을 부르면 `503 playback_signing_unavailable`이다.
@@ -337,6 +337,10 @@ localhost가 딸려가고, 로컬에선 되고 운영에서만 막히는데 로�
 재생 문만 전부 503이다. 이 막도 기본값은 꺼짐이라, **prod 런타임 변수에서 `PLAYBACK_REQUIRED`를 빠뜨리면 지금처럼
 재생이 꺼진 채 조용히 뜬다**(대가). 시험: `PlaybackPropertiesContextTest`(실제 바인딩으로 부팅 거부 · 빠진 칸 이름 ·
 기본은 꺼짐 부팅 · yml이 이 환경변수를 그 키로 잇는지).
+🔴 **같은 표시가 쿠키 도메인 빈 값도 막는다**(POK-317). 비면 쿠키가 clip을 부른 호스트(`app.pokeclip.com`) 전용이라
+영상 도메인(`media.pokeclip.com`) 요청에 안 실리고, 재생이 전부 CDN 403인데 부팅은 초록이다. 로컬 · dev는 같은 호스트라
+빈 값이 정상이고 표시가 꺼져 있어 지금처럼 경고 한 줄(`clip.playback.cookie_domain_empty`)만 남긴다.
+**형식은 맞는데 틀린 값**(`.pokeclip.co`)은 못 막는다. prod 값 확인은 1번 몫이다.
 
 **`COLLECTOR_BASE_URL`은 서버끼리 붙는 주소다**(compose 안에서는 `http://chat-collector:8083`) —
 `AUTH_BASE_URL`과 같은 성격이고 `PROFILE_PHOTO_BASE_URL`(브라우저가 붙는 주소)과는 반대다.
@@ -772,7 +776,7 @@ Flyway 마이그레이션은 앱이 뜰 때 실행돼야 하므로 **코드 옆(
 지금까지 나간 것은 auth의 `V101`~`V112`(`V110`·`V111`은 칸, **`V112`는 인덱스 넷과 표 주석 둘**, POK-89) · clip의 `V201`(`broadcasts`·`broadcast_events`)과
 `V202`(`jump_cards`, POK-118)·`V203`(`broadcasts.vod_expires_at`, POK-117)·`V204`(색인 둘, POK-174)·
 **`V205`(방송 중 부분 색인, POK-218)** · `V206`(`recipes`, POK-124) · `V207`(`clips`·`render_jobs`·`render_job_events`, POK-125) · **`V208`(`clips (recipe_id, id DESC)` 색인 하나, POK-243)** ·
-`V209`~`V213` · **`V214`(`jump_cards.hidden_reason` · `jump_card_actions` · `recipes.source_card_id`, POK-338)** · chat-collector의 `V301`(`chat_messages`)~**`V308`** ·
+`V209`~`V213` · **`V214`(`jump_cards.hidden_reason` · `jump_card_actions` · `recipes.source_card_id`, POK-338)** · **`V216`(`jump_card_actions`가 `open`도 받는다, POK-393)** · chat-collector의 `V301`(`chat_messages`)~**`V308`** ·
 chat-detector의 `V401`(`chat_metrics`, POK-120)이다.
 
 **chat-collector 대역 열:** `V301`(`chat_messages`) · `V302`(`stream_id` 칸) ·
@@ -1033,8 +1037,9 @@ Media의 응답기(새 송출 연결을 받을지 판정하는 쪽)는 두 경�
 ### clip — 점프카드 저장·SSE 전송 (POK-118)
 
 판별기(`chat-detector`)가 「이 순간 채팅이 터졌다」고 보낸 지점을 **점프카드**로 보관하고,
-그 방송을 보고 있는 웹 화면에 **SSE로 실시간으로 밀어 넣으며**, 편집자 둘이 같은 카드를
-동시에 집지 못하게 **점유**를 건다. 표는 `jump_cards` 하나(`V202`).
+그 방송을 보고 있는 웹 화면에 **SSE로 실시간으로 밀어 넣는다.** 표는 `jump_cards` 하나(`V202`).
+처음에는 편집자 둘이 같은 카드를 동시에 집지 못하게 **점유**를 걸고 숨기기도 있었는데, **POK-393에서 둘 다 없앴다**
+(아래 「점유와 숨기기는 없앴다」).
 
 **clip의 첫 사람용 API이고, 첫 시큐리티이며, 첫 비동기 전송이다.**
 
@@ -1042,12 +1047,9 @@ Media의 응답기(새 송출 연결을 받을지 판정하는 쪽)는 두 경�
 |---|---|---|
 | `POST /internal/broadcasts/{streamId}/highlights` (계약 2A) | `X-Internal-Token` | **201** 새 카드 · **200** 같은 창이 이미 있음(기존 카드 그대로) · 404 `{"error":"broadcast_not_found"}` · 400 `{"error":"invalid_request","field":…}` · 401 |
 | `GET /api/clip/broadcasts/{streamId}/events` (계약 2B, SSE) | Bearer JWT | **200** `text/event-stream` · 404 `{"error":"broadcast_not_found"}` · 401 · **503** `{"error":"stream_limit","scope":"user\|stream\|total"}` 또는 `{"error":"authorization_unavailable"}` |
-| `POST /api/clip/jump-cards/{id}/claim` | Bearer JWT | 200 카드 · **409 본문이 현재 카드**(누가 잡고 있는지) · **400** `{"error":"invalid_request","field":"id"}`(번호가 숫자가 아니다) · 404 `{"error":"jump_card_not_found"}` · 503 `{"error":"authorization_unavailable"}` |
-| `DELETE /api/clip/jump-cards/{id}/claim` | Bearer JWT | **204** · 403 `{"error":"not_claim_owner"}` · **400**(위와 같음) · 404 · 503 |
-| `POST /api/clip/jump-cards/{id}/hide` | Bearer JWT | 200 카드(`hidden:true`, `hiddenReason`) · **400**(위와 같음, 또는 `"field":"reason"`: 이유가 셋 밖이다) · 404 · 503. 본문 `{"reason":"not_highlight"\|"duplicate"\|"other"}`은 고를 수 있다(POK-338). 본문이 없거나 `reason`이 없으면 이유 없이 숨긴다. 본문이 JSON이 아니면 스프링 기본 400이다(봉투가 다르다) |
-| `DELETE /api/clip/jump-cards/{id}/hide` | Bearer JWT | 200 카드(`hidden:false`, `hiddenReason:null`) · **400**(위와 같음) · 404 · 503 |
+| `POST /api/clip/jump-cards/{id}/open` | Bearer JWT | **204**(본문 없음, 행동 기록 `jump_card_actions`에 `open` 한 줄. 다시 열면 한 줄 더) · **400** `{"error":"invalid_request","field":"id"}`(번호가 숫자가 아니다) · 404 `{"error":"jump_card_not_found"}`(없거나 볼 수 없는 카드) · 503 `{"error":"authorization_unavailable"}` · 401. 편집기가 카드에서 열릴 때 부른다(POK-393) |
 
-**🔴 POK-174부터 문 다섯이 자격 판정을 지난다**(통로 + 카드 문 넷). 그래서 404의 뜻이 넓어지고
+**🔴 POK-174부터 통로와 카드 문이 자격 판정을 지난다**(카드 문은 그때 넷, POK-393부터 열기 하나). 그래서 404의 뜻이 넓어지고
 503 갈래가 하나 늘었다 — **`jump_card_not_found`는 이제 「없는 카드」가 아니라
 「없거나 볼 수 없는 카드」다.** 갈라 두면 카드 번호를 하나씩 넣어 보는 것만으로 그 카드의 실재를
 알 수 있다(번호가 `bigserial`이라 연속이다). 통로의 404도 같은 이유로 「없는 방송」과
@@ -1064,19 +1066,11 @@ UNIQUE가 아니다(재전송 때 값이 달라도 같은 창이면 같은 카�
 칸이 `VARCHAR(128)`이고, 검증이 없으면 DB까지 가서 **500**이 나가는데 그러면 판별기가 같은
 payload로 영영 재시도한다(2026-08-23 실측). **판별기 세션에 전할 것.**
 
-**점유는 집을 때 판정한다.** 만료를 치우는 배경 작업이 없다 — `UPDATE … WHERE id = ? AND
-(claimed_by IS NULL OR claimed_by = ? OR claimed_at < now() - interval)` 한 줄이 원자적이라
-동시 요청 둘 중 하나만 영향 행 1을 받는다. 시각 비교는 **DB 시계**다(앱 시계는 서버마다 다르다).
-본인 재호출은 **연장**이고, 아무도 안 잡은 카드를 놓는 것은 **성공**이다(멱등 — 403을 주면
-웹이 새로고침 뒤 놓기를 눌렀을 때 오류를 본다).
-
-**`claim-ttl`은 100년(`P36500D`)을 넘으면 부팅을 거부한다.** 상한이 없으면 아주 큰 값이 통과하고
-**서버는 멀쩡히 뜨는데 claim만 전부 500**이 된다 — `toSeconds()`가 넘긴 값을 DB가 못 받는다
-(`ERROR: interval out of range` · SQLState **22008**). 하류가 셋이고 한계가 다르다(실측):
-점유 SQL이 약 **6738년**에서 가장 먼저 터지고, `make_interval` 자체와 `claimedAt.plus(ttl)`은
-그보다 훨씬 위다. **가장 좁은 것이 PostgreSQL 구현 세부라 그 숫자 대신 67배 아래인 100년으로
-잡았다** — 편집자가 카드 하나를 100년 붙들 일은 없다. 셋의 정확한 경계는
-`JumpCardProperties.MAX_CLAIM_TTL` 주석에 있다.
+**점유와 숨기기는 없앴다(POK-393).** 집기·놓기·숨기기·되돌리기 문 넷과 그 예외(409 `ClaimedByOther`·403 `not_claim_owner`)·
+숨김 이유·점유 시간 설정(`pokeclip.jump-card.claim-ttl`)이 함께 사라졌다. 편집자 여럿이 같은 카드에서 **각자** 편집본을 만든다.
+옛 문을 두드리면 404다. 카드 응답(목록·통로·2A)에서 `claimedBy`·`claimedAt`·`claimExpiresAt`·`hidden`·`hiddenBy`·`hiddenReason`
+칸이 빠졌고, 목록 문은 `includeHidden`을 안 받는다(옛 웹이 보내도 무시). 표의 `claimed_*`·`hidden_*` 칸은
+**POK-394가 지울 때까지 남지만 아무도 안 쓰고 아무것도 안 거른다.** 그 칸이 찬 옛 카드도 목록·썸네일 대표에 나온다.
 
 **SSE 이벤트는 둘뿐이다 — `card`와 `ended`. 둘 다 `data:` 줄이 반드시 있다.**
 
@@ -1334,8 +1328,6 @@ the event type buffer to the empty string and return"* 이라 `MessageEvent`를 
 - **`jwt.getSubject()`가 null이면 상한 집계가 NPE**다. 「불가능」이 아니라
   **auth `TokenService`가 `subject(user.getId().toString())`를 넣는 한 줄에 걸려 있다** —
   남의 서버 코드다
-- **편집자 이름이 응답에 없다.** `claimedBy`는 사용자 번호다. **이름을 물어볼 창구는
-  생겼지만**(POK-175가 `develop`에 머지됐다, PR #106) **붙이는 것은 별도 카드다**
 - 내부 토큰에 길이 하한이 없고 `iss`·`typ`을 검증하지 않는다 — auth와 같은 상태다
 - **auth로 나가는 HTTP는 리다이렉트를 안 따라간다**(POK-174에서 껐다). 안 껐을 때
   실측: `307`·`308`은 원 요청을 그대로 다시 보내 **`X-Internal-Token`과 본문이 리다이렉트가
@@ -1426,11 +1418,16 @@ GET /api/clip/broadcasts/{streamId}/segments?startMs=&endMs=     Bearer JWT
 
 | 문 | 인증 | 응답 |
 |---|---|---|
-| `GET /api/clip/broadcasts?state=&limit=&cursor=` | Bearer JWT | **200** `{"broadcasts":[…],"nextCursor":…}` · 400 `{"error":"invalid_request","field":"state\|limit\|cursor"}` · 401 · 404 `{"error":"broadcast_not_found"}`(토큰의 `sub`가 숫자가 아닐 때뿐 — 아래 「알려진 한계」) · **503** `{"error":"authorization_unavailable"}` |
-| `GET /api/clip/broadcasts/{streamId}/jump-cards?includeHidden=&limit=&cursor=` | Bearer JWT | **200** `{"cards":[…],"nextCursor":…}` · 400 `{"error":"invalid_request","field":"limit\|cursor\|includeHidden"}` · **404** `{"error":"broadcast_not_found"}` · 401 · 503 |
+| `GET /api/clip/broadcasts?state=&limit=&cursor=&streamerId=` | Bearer JWT | **200** `{"broadcasts":[…],"nextCursor":…}` · 400 `{"error":"invalid_request","field":"state\|limit\|cursor\|streamerId"}` · 401 · 404 `{"error":"broadcast_not_found"}`(토큰의 `sub`가 숫자가 아닐 때: 아래 「알려진 한계」: 또는 `streamerId`가 볼 수 없는 채널일 때) · **503** `{"error":"authorization_unavailable"}` |
+| `GET /api/clip/broadcasts/{streamId}/jump-cards?limit=&cursor=` | Bearer JWT | **200** `{"cards":[…],"nextCursor":…}` · 400 `{"error":"invalid_request","field":"limit\|cursor"}` · **404** `{"error":"broadcast_not_found"}` · 401 · 503 |
 
 **`state`는 필수이고 소문자다** — `live`(방송 중) 또는 `past`(끝난 것: 표의 `ended`·`vod_ready`).
 **한 목록에 안 섞는다** — 섞으면 오래 켜둔 방송이 첫 장 밖으로 밀려 방송 중인데 라이브 띠가 안 뜬다.
+
+**`streamerId`는 선택이다**(POK-390 채널 스위처). 주면 볼 수 있는 스트리머 중 그 한 명의 방송만 나오고, 안 주거나 비우면
+지금처럼 전부 섞어서 나온다. 숫자로 읽어 비교한다(`0003`은 `3`). 숫자가 아니면 auth를 묻기 전에 400 `field=streamerId`,
+볼 수 없는 채널이면 **404**다(200 빈 목록이 아니다: 위임이 끊긴 편집자 화면이 「방송이 없다」로 남지 않게).
+「없는 번호」와 「권한 없음」은 안 가른다. 보관함 목록도 같은 칸·같은 규칙이다.
 
 **`limit`은 안 주면 기본, 넘겨 달라고 하면 상한에서 깎는다** — 방송 **20/100**, 카드 **50/200**.
 **0 이하는 400이다**(조용히 기본값으로 봐 주면 웹의 계산 실수가 안 드러난다).
@@ -1452,21 +1449,18 @@ JSON 트리를 맞대어 지킨다). 화면이 같은 것을 두 벌로 처리�
 
 **방송 목록은 「그 방송을 처음 안 순서」의 역순이다 — 시작 시각 순이 아니다.** 시작·종료 시각은
 뒤늦게 도착한 알림이 갱신하므로 정렬·이어받기 기준으로 쓰면 중복·누락이 난다.
-**카드 목록은 방송 시간 오름차순이다** — 순번(`event_seq`)이 아니다. 그 값은 카드를 숨기면
+**카드 목록은 방송 시간 오름차순이다**: 순번(`event_seq`)이 아니다. 그 값은 행이 바뀌면
 트리거가 올려서 자리가 바뀌고, 트랜잭션 밖에서 증가해 커밋 순서와도 다를 수 있다.
 
 #### 자격 판정 — 문 스물이 무엇을 보나
 
 | 문 | 무엇으로 판정하나 | 자격이 없으면 |
 |---|---|---|
-| `GET /api/clip/broadcasts` | auth `accessible` — **볼 수 있는 스트리머 번호를 먼저 받아 그 번호로만 조회한다** | 그 줄이 목록에 **안 나온다**(200) |
+| `GET /api/clip/broadcasts` | auth `accessible`: **볼 수 있는 스트리머 번호를 먼저 받아 그 번호로만 조회한다** | 그 줄이 목록에 **안 나온다**(200). `streamerId`로 고른 채널이 그 번호들에 없으면 **404** `broadcast_not_found`(POK-390) |
 | `GET …/{streamId}/jump-cards` | `BroadcastAccessGuard` — 명부에서 스트리머 번호 → auth `resolve` | **404** `broadcast_not_found` |
 | `GET …/{streamId}/events` (통로) | 같음 | **404** `broadcast_not_found` |
 | `GET …/{streamId}/segments` | `SegmentQueryService` — 구간 검증 → 방송 → 자격 → 만료 | **404** `broadcast_not_found` |
-| `POST …/jump-cards/{id}/claim` | 카드 → 그 카드의 방송 → `BroadcastAccessGuard` | **404** `jump_card_not_found` |
-| `DELETE …/jump-cards/{id}/claim` | 같음 | 같음 |
-| `POST …/jump-cards/{id}/hide` | 같음 | 같음 |
-| `DELETE …/jump-cards/{id}/hide` | 같음 | 같음 |
+| `POST …/jump-cards/{id}/open` (POK-393) | 카드 → 그 카드의 방송 → `BroadcastAccessGuard` | **404** `jump_card_not_found` |
 | `GET …/{streamId}/chat-messages` (POK-234) | `BroadcastAccessGuard` — 통로와 같은 판정 | **404** `broadcast_not_found` |
 | `GET …/{streamId}/chat-chart` (POK-234) | 같음 | 같음 |
 | `GET …/{streamId}/broadcast-info` (POK-234) | 같음 | 같음 |
@@ -1479,7 +1473,7 @@ JSON 트리를 맞대어 지킨다). 화면이 같은 것을 두 벌로 처리�
 | `GET …/{streamId}/clips/{clipId}` (POK-125) | 같음 → 영상이 그 방송 것인가 | 같음 · **404** `clip_not_found` |
 | `POST …/{streamId}/clips/{clipId}/file-access` (POK-247) | 같음 | 같음 |
 | `POST …/{streamId}/clips/{clipId}/uploads` (POK-220) | 같음 | 같음 |
-| `GET /api/clip/library` (POK-243) | auth `accessible` — **방송 목록과 같은 판정**(볼 수 있는 스트리머 번호로만 조회) | 그 줄이 목록에 **안 나온다**(200) |
+| `GET /api/clip/library` (POK-243) | auth `accessible`: **방송 목록과 같은 판정**(볼 수 있는 스트리머 번호로만 조회) | 그 줄이 목록에 **안 나온다**(200). `streamerId`로 고른 채널이 그 번호들에 없으면 **404** `broadcast_not_found`(POK-390, 방송 목록과 같은 이름) |
 | `GET /api/clip/library/{recipeId}` (POK-243) | 편집본 → 그 편집본의 방송 → `BroadcastAccessGuard` | **404** `recipe_not_found` — `broadcast_not_found`로 안 나간다(그 번호의 편집본이 있다는 것이 샌다) |
 
 **자격 판정이 없는 문은 셋이다 — 스물한 번째 `POST /internal/broadcasts/{streamId}/highlights`·
@@ -1495,8 +1489,8 @@ JSON 트리를 맞대어 지킨다). 화면이 같은 것을 두 벌로 처리�
 **순서가 계약이다 — 요청 칸 → 자격 → 조회.** 요청 칸이 맨 앞인 것은 형식 오류 하나가 auth 왕복
 (최대 7초 = connect 2s + read 5s)을 태우고 그러고도 400이 나가지 않게 하려는 것이고, 자격이
 조회보다 앞인 것은 남의 방송이 메모리에 올라오지 않게 하려는 것이다.
-**카드를 만지는 문 넷에서는 자격이 「다른 모든 판정보다」 앞이다** — 뒤로 밀면 남이 잡은 카드를
-집으려는 남남에게 **409 본문**이 나가는데 그 본문은 현재 카드 스냅샷이라 **누가 잡고 있는지**가 실린다.
+**카드 열기 문에서는 자격이 기록보다 앞이다.** 뒤로 밀면 자격 없는 사람의 열기가 행동 기록에 남는다.
+(POK-393 전에는 카드 문 넷이었고, 뒤로 밀면 남이 잡은 카드의 **409 본문**에 점유자가 실렸다.)
 
 🔴 **그 「최대 7초」가 참인 유일한 이유는 되걸기를 껐기 때문이다.** Apache HC5의 기본 재시도
 전략은 **429·503만** 한 번 되거는데(5xx 전체가 아니다), 하필 그 둘이 auth가 힘들 때 나오는
@@ -1515,18 +1509,18 @@ JSON 트리를 맞대어 지킨다). 화면이 같은 것을 두 벌로 처리�
 🔴 **auth 왕복은 전부 트랜잭션 <u>밖</u>에서 돈다.** 안에서 돌면 최대 7초 동안 DB 커넥션을 쥔다 —
 사람이 기다리는 요청 하나가 풀에서 자리를 그만큼 뺏는다. **`readOnly`를 빼도, 판정을 먼저 하고
 조회를 나중에 해도 안 풀린다**: 커넥션은 첫 질의가 아니라 **트랜잭션이 열릴 때** 잡힌다(실측).
-그래서 통로는 `StreamOpener`라는 별도 빈이, 카드 문 넷은 `TransactionTemplate`이 경계를 긋는다
+그래서 통로는 `StreamOpener`라는 별도 빈이, 카드 열기 문은 `TransactionTemplate`이 경계를 긋는다
 (자기 호출은 프록시를 안 타 한 클래스 안에서는 이 분리가 성립하지 않는다).
 `BroadcastListTransactionTest`가 **왕복 중 활성 커넥션 수**를 재서 이 불변식을 지킨다 —
 애너테이션이 아니라 효과를 재므로 순서나 획득 모드가 바뀌어도 빨간불이 된다.
 
 #### 🔴 `OWNER`와 `EDITOR`를 가르지 않는다
 
-**여덟 문 어디서도 주인과 편집자를 구분하지 않는다.** 자격이 있으면 카드를 집고, 숨기고,
-되돌리고, 목록을 보고, 통로를 연다.
+**어느 문에서도 주인과 편집자를 구분하지 않는다.** 자격이 있으면 카드를 열고, 목록을 보고,
+통로를 연다.
 
 **근거는 「누가 매일 쓰나」다.** 이 제품은 **돈 내는 쪽(스트리머)과 매일 쓰는 쪽(전담 편집자)이
-다르다.** 카드를 집어 편집하고 숨기는 것이 편집자의 본업인데, 스트리머만 되게 하면 스트리머가
+다르다.** 카드를 열어 편집하는 것이 편집자의 본업인데, 스트리머만 되게 하면 스트리머가
 매번 대신 눌러 줘야 하고 **편집자를 두는 의미가 없어진다.**
 
 **가르고 싶어지면 그때 새 규칙을 얹는다** — 넓은 것을 좁히는 것보다 좁은 것을 넓히는 편이
@@ -1547,13 +1541,11 @@ JSON 트리를 맞대어 지킨다). 화면이 같은 것을 두 벌로 처리�
 목록과 겹치는 카드는 같은 `id`로 합치면 된다(카드는 사건의 나열이 아니라 상태다).
 
 🔴 **겹칠 때는 `id`만 보지 말고 `eventSeq`가 큰 쪽을 남긴다 — 「나중에 도착한 쪽」이 아니다.**
-목록 질의가 카드를 읽은 뒤 그 응답이 화면에 닿기 전에 누가 그 카드를 집거나 숨기면,
-**통로가 새 상태를 먼저 보내고 늦게 도착한 목록이 낡은 상태로 덮어쓴다.** 그러면 이미 남이
-집어간 카드가 화면에는 「비어 있음」으로 보인다. `eventSeq`는 **목록 응답과 통로 이벤트가
-같은 모양으로 싣는 값**이라 그대로 비교하면 된다.
-
-**틀려도 데이터는 안 깨진다** — 그 카드를 누르면 `409`가 현재 상태를 본문에 실어 화면이 스스로
-고쳐진다. 다만 누르기 전까지는 틀린 상태가 보인다.
+목록 질의가 카드를 읽은 뒤 그 응답이 화면에 닿기 전에 그 카드가 바뀌면,
+**통로가 새 상태를 먼저 보내고 늦게 도착한 목록이 낡은 상태로 덮어쓴다.** `eventSeq`는 **목록 응답과
+통로 이벤트가 같은 모양으로 싣는 값**이라 그대로 비교하면 된다.
+**POK-393 뒤로는 저장된 카드를 바꾸는 문이 없어**(집기·숨기기를 없앴다) 지금은 이 경합이 생길 자리가 없다.
+규칙은 카드에 바뀌는 칸이 다시 생기는 날을 위해 남긴다.
 🔴 **실제로 그 순서가 뒤집히는 빈도는 안 쟀다** — 계약이 그 경우를 안 정하고 있었다는 것만 확정했다
 (PR #139 codex 지적).
 
@@ -1585,21 +1577,21 @@ JSON 트리를 맞대어 지킨다). 화면이 같은 것을 두 벌로 처리�
 **나머지 문은 스프링 기본 `/error` 봉투**(`timestamp`·`status`·`path`)로 나갔다 — 같은 400에
 웹이 모양이 다른 본문 둘을 받고 있었다.
 
-**그래서 `field` 값이 다섯이다** — `state` · `limit` · `cursor` · `includeHidden` · **`id`**.
-마지막 것은 **카드 문 넷**(`/api/clip/jump-cards/{id}/…`)에서 나온다:
-`POST …/jump-cards/abc/claim` → **400 `{"error":"invalid_request","field":"id"}`**.
+**그래서 `field` 값이 넷이다:** `state` · `limit` · `cursor` · **`id`**(`includeHidden`은 POK-393에서 문과 함께 빠졌다).
+마지막 것은 **카드 문**(`/api/clip/jump-cards/{id}/…`)에서 나온다:
+`POST …/jump-cards/abc/open` → **400 `{"error":"invalid_request","field":"id"}`**.
 값 자체는 안 싣는다(자유 입력을 되돌려주지 않는다). `id`는 우리 시그니처의 조각 이름이다.
 (🔴 이 예시의 경로 앞을 `…`로 줄인 것은 **아래 문 대조 스크립트가 예시를 문으로 세기 때문**이다 —
 온전히 적었더니 문서 쪽이 9에서 10이 됐다.)
 
 🔴 **이 조언을 다시 좁히지 마라.** 좁히면 새 문이 생길 때마다 그 문만 조용히 기본 봉투로 돌아간다.
 양쪽에 두는 것도 안 된다 — `assignableTypes`는 우선권을 주지 않아 전역이 이기고 좁힌 쪽이 죽는다.
-`JumpCardControllerTest.카드_번호가_숫자가_아니면_문_넷이_같은_400_봉투를_낸다`가 문 넷을 한꺼번에 잰다.
+`JumpCardControllerTest.카드_번호가_숫자가_아니면_400_봉투를_낸다`가 카드 문을 잰다.
 
 #### 404는 25ms 바닥 뒤에 나간다 — 이제 사람 문 <u>일곱</u>이 나눠 쓴다
 
 세그먼트 문에만 있던 장치(`NotFoundFloor`)가 `support` 패키지로 옮겨 왔다. 카드 목록·통로·카드
-문 넷이 같은 바닥을 쓴다 — **「없는 것」은 명부 조회 하나로 끝나고 「실재하지만 볼 자격이 없다」는
+열기 문이 같은 바닥을 쓴다(POK-393 전에는 카드 문 넷): **「없는 것」은 명부 조회 하나로 끝나고 「실재하지만 볼 자격이 없다」는
 auth 왕복을 타서 시간이 갈리기 때문이다**(세그먼트 문 실측 1,240회에서 중앙값 1.5ms 대 4.4ms,
 한 번만 재도 99.5% 구분). 본문을 같게 하는 것만으로는 안 갈린다.
 
@@ -1631,7 +1623,7 @@ auth 왕복을 타서 시간이 갈리기 때문이다**(세그먼트 문 실측
   - 🔴 **같은 뿌리에 더 나쁜 갈래가 있다 — `streamer_id`가 아예 숫자가 아니면 그 방송이 통째로
     막힌다.** 선행 0은 「목록에만 안 나오는」 어긋남이지만, 숫자로 못 읽는 값이면 **사람 문
     일곱이 전부 404**다(`BroadcastAccessGuard.parseNumeric` · `SegmentQueryService.parseNumeric`이
-    `NumberFormatException`을 `NotViewableException`으로 접는다 — 카드 목록·통로·카드 문 넷·
+    `NumberFormatException`을 `NotViewableException`으로 접는다: 카드 목록·통로·카드 문(POK-393부터 열기 하나)·
     세그먼트). 여덟 번째인 방송 목록 문은 404가 아니라 **그 줄이 아예 안 나온다**
     (`String.valueOf(long)`로 조회하므로 못 찾는다). 합치면 **스트리머 본인도 자기 방송을 못 연다.**
     - **발견 수단은 ERROR 로그 하나다** — `clip.access.identity_not_numeric` ·
@@ -1833,9 +1825,10 @@ auth 왕복을 타서 시간이 갈리기 때문이다**(세그먼트 문 실측
   - **실제 운영 분포** — 씨앗이 인공이다(스트리머 500 균등 · 1초 간격)
   - **`ended` 줄의 `vod_expires_at`이 전부 빈 것의 영향** — 이 창구가 그 칸을 안 읽어 무관하다고
     **봤고, 안 쟀다**
-- **형을 안 가리는 단언이 기존에 다섯 남아 있다** — `claimedBy`(3) · `hiddenBy`(1) · `id`(2),
-  전부 POK-118 코드다. 이 카드는 자기 자리를 닫았고(`streamerId`가 문자열인지 형까지 짚는다)
-  기존 다섯은 **범위 밖이라 안 고쳤다**. 🔴 「없다」가 아니라 **「안 고쳤다」**다.
+- **형을 안 가리는 단언이 기존에 하나 남아 있다:** `HighlightIntakeControllerTest`의 `id`(POK-118 코드).
+  이 카드는 자기 자리를 닫았고(`streamerId`가 문자열인지 형까지 짚는다) 기존 것은 **범위 밖이라 안 고쳤다**.
+  🔴 「없다」가 아니라 **「안 고쳤다」**다. (처음엔 다섯이었다. `claimedBy` 셋 · `hiddenBy` 하나 · `id` 하나는
+  POK-393에서 그 칸·시험과 함께 지웠다.)
 
 #### 이 절의 문 목록은 코드와 기계로 대조한다
 
@@ -2419,7 +2412,7 @@ UploadInfo = {"title":"필수","description":null,"tags":["…"],"privacyStatus"
 | 자리 | 사진 | 어디서 찍나 |
 |---|---|---|
 | 라이브(`state=live` 목록 `thumbnailUrl`) | 가장 최근에 올라간 조각의 가운데 | 조각 창고. 같은 조각이면 다시 안 찍는다(송출이 멈췄다) |
-| 지난 방송(`state=past` 목록 `thumbnailUrl`) | 숨기지 않은 카드 중 **점수가 가장 높은** 카드의 사진, 없으면 마지막 라이브 사진 | 읽을 때 고른다(따로 안 찍는다) |
+| 지난 방송(`state=past` 목록 `thumbnailUrl`) | 카드 중 **점수가 가장 높은** 카드의 사진(POK-393부터 옛 숨김 칸을 안 거른다), 없으면 마지막 라이브 사진 | 읽을 때 고른다(따로 안 찍는다) |
 | 카드(카드 목록 `thumbnailUrl`) | 카드 시각(`stream_timestamp_ms`, 조각 pts 축)이 든 조각의 그 자리 | 조각 창고. 조각이 올라온 뒤에 대상이 된다 |
 | 보관함(`library` 목록·상세 `thumbnailUrl`, `latestClip`의 사진) | 영상 구간 안 최고 점수 카드 시점(시각 기준점으로 재생 축에 맞춘다), 없으면 가운데 | **완성 영상 파일**(보관함은 세로 영상이라 결과물의 장면이어야 한다) |
 
@@ -2452,7 +2445,7 @@ UploadInfo = {"title":"필수","description":null,"tags":["…"],"privacyStatus"
 
 | 문 | 인증 | 응답 |
 |---|---|---|
-| `GET /api/clip/library?status=&limit=&cursor=` | Bearer JWT | **200** `{"items":[…],"nextCursor":…}` 최근 만든 순 · 400 `{"error":"invalid_request","field":"status\|limit\|cursor"}` · 401 · 404 `{"error":"broadcast_not_found"}`(토큰의 `sub`가 숫자가 아닐 때뿐 — 방송 목록과 같은 한계) · **503** `{"error":"authorization_unavailable"}` |
+| `GET /api/clip/library?status=&limit=&cursor=&streamerId=` | Bearer JWT | **200** `{"items":[…],"nextCursor":…}` 최근 만든 순 · 400 `{"error":"invalid_request","field":"status\|limit\|cursor\|streamerId"}` · 401 · 404 `{"error":"broadcast_not_found"}`(토큰의 `sub`가 숫자가 아닐 때: 방송 목록과 같은 한계: 또는 `streamerId`가 볼 수 없는 채널일 때. 보관함에서도 이 이름이다) · **503** `{"error":"authorization_unavailable"}` |
 | `GET /api/clip/library/{recipeId}` | Bearer JWT | **200** 위 줄의 칸 전부 + `recipe`(계약6 JSON 그대로) · **404** `{"error":"recipe_not_found"}`(없다·남의 것이 **같은 본문·같은 25ms 바닥**) · 401 · 503 |
 
 **`status`는 선택이고 소문자다.** 안 주거나 비우면 전부. `limit`은 방송 목록과 같다 — **20/100**, 0 이하는 400.
@@ -2521,62 +2514,69 @@ auth가 탈퇴를 알리는 내부 문 하나: **`DELETE /internal/streamers/{st
 **대상 줄을 `FOR KEY SHARE`로 잡은 채 확인하고 적는다** — 정리가 그 줄을 `FOR UPDATE`로 먼저 잡으므로 둘이 겹치면 한쪽이 기다린다
 (확인과 적기를 가르면 그 사이에 정리가 끼어 대상 없는 줄이 남았다, PR #220 codex).
 
-### clip: 시범 운영 측정 재료 (POK-338)
+### clip: 시범 운영 측정 재료 (POK-338 · POK-393)
 
 **중간평가에서 약속한 숫자 둘을 정의대로 재려고 남기는 기록이다.** 지나간 기록은 나중에 되살릴 수 없어 시범 운영 전에 쌓기 시작한다.
+POK-393에서 집기·숨기기를 없애면서 「열어 봤다」를 **편집기 열기**로 바꿨고, ①을 「하이라이트 아님으로 숨긴 비율」에서 **「클립 안 나온 카드 비율」**로 바꿨다.
 
 | 무엇 | 어디 | 언제 남나 |
 |---|---|---|
-| 숨긴 이유 | `jump_cards.hidden_reason`(`not_highlight` · `duplicate` · `other`, 없으면 NULL) | 숨기기 본문의 `reason`. 되돌리면 지운다 |
-| 카드 행동 | `jump_card_actions`(`card_id` · `action` · `actor` · `reason` · `at`), 덧붙이기만 | 집기 · 놓기 · 숨기기 · 되돌리기가 **카드 상태를 실제로 바꿨을 때**, 그 쓰기와 같은 트랜잭션에서 한 줄. 본인이 다시 집는 것(연장)도 남긴다 |
+| 카드 행동 | `jump_card_actions`(`card_id` · `action` · `actor` · `reason` · `at`), 덧붙이기만 | 편집기가 카드에서 열릴 때 `open` 한 줄(`POST /api/clip/jump-cards/{id}/open`). 다시 열면 한 줄 더 |
 | 편집본 출처 카드 | `recipes.source_card_id` | 첫 저장(`POST …/recipes?sourceCardId=N`). 이 방송의 카드가 아니거나 숫자가 아니면 **비운 채 저장한다**(측정 재료 때문에 저장이 실패하면 안 된다). 고쳐도 안 바뀐다 |
+| 렌더 주문 | `clips`(`recipe_id` · `created_at`) | 「영상 만들기」 주문 하나에 한 줄 |
 
-카드 표의 `claimed_*` · `hidden_*`는 다시 집거나 되돌리면 덮이고 지워진다. 「몇 번 열었나 · 언제 열었나」는 행동 기록으로만 잰다.
 행동 기록은 카드를 지우면 같이 지워진다(FK `ON DELETE CASCADE`, 탈퇴 정리도 이것에 맡긴다).
 
 **한계** (집계를 읽을 때 같이 본다)
 
-- **「열어 봤다」를 집기(claim)로 갈음한다**(2026-10-15 결정). 남이 이미 집은 카드를 연 경우는 409라 **안 센다**: 분모가 그만큼 작다.
-  카드 목록에서 열지 않고 숨긴 카드도 분모에 안 든다(정의가 「열어 보고 부적절로 표시한 비율」이다).
-- 웹은 「편집」을 누를 때마다 집는다. 같은 카드를 여러 번 열면 claim 줄이 여럿이라 **분모는 카드 수(`DISTINCT card_id`)로 센다.**
-- **점유가 만료로 끝난 것은 기록이 없다**(치우는 배경 작업이 없다). 점유 끝 = `release` 줄, 또는 마지막 `claim` + 점유 시간(`pokeclip.jump-card.claim-ttl`, 지금 30분).
-- 부적절 여부는 **지금 상태**(`hidden_reason`)로 센다. 숨겼다가 되돌린 카드는 부적절로 안 센다.
-  **이유 없이 숨긴 카드(NULL)도 안 센다**: 배포 중 열려 있던 옛 화면이나 본문 없는 호출이 그렇다.
-- 편집 시간의 시작은 **그 편집자가 첫 저장 직전에 마지막으로 집은 시각**이다. 업로드 완료 시각은 따로 없어 `clip_uploads.updated_at`(`uploaded`)을 쓴다.
-  편집자는 처음 저장한 사람(`recipes.creator_id`)만 남는다. 저장한 사람이 그 카드를 직접 집지 못했으면(남이 집어 409였거나
-  주소로 바로 들어왔다) 시작점이 없어 ②에서 빠진다.
+- **열어 봄 = 편집기가 카드를 띄운 것**이다. 카드 목록에서 누른 것이든 주소로 바로 들어온 것이든 센다. 같은 카드를 여러 번 열면
+  `open` 줄이 여럿이라 ①의 분모는 **카드 수(`DISTINCT card_id`)**로 센다.
+- **열기 기록이 실패해도 웹은 무시한다**(편집기는 그대로 열린다). 그만큼 분모가 작을 수 있다.
+- **렌더 주문은 결과를 안 본다.** 주문 뒤 렌더가 실패해도(`clips.status = 'failed'`) 「나왔다」로 센다: 이 비율은 「편집자가 영상으로 만들 만하다고 본 카드」를 재지, 렌더 성공률을 재지 않는다.
+- **렌더 주문은 기간 뒤에 생겨도 센다**(카드를 연 시각만 기간으로 거른다). 기간 끝 무렵에 연 카드는 아직 주문 전일 수 있으니
+  최근 기간은 집계를 늦게 읽는다.
+- **옛 `claim`·`release`·`hide`·`unhide` 줄과 `jump_cards.hidden_reason`은 더 쌓이지 않고 집계에 안 쓴다**(POK-393 전의 기록이다. 지우기는 POK-394).
+- **여러 편집자가 같은 카드로 각자 편집본을 만들 수 있다.** ①은 카드 단위라 영향이 없다(그중 하나라도 렌더 주문이 있으면 「나왔다」).
+  ②는 편집본 단위다.
+- 편집 시간의 시작은 **그 편집자가 첫 저장 직전에 마지막으로 연 시각**이다. 업로드 완료 시각은 따로 없어 `clip_uploads.updated_at`(`uploaded`)을 쓴다.
+  편집자는 처음 저장한 사람(`recipes.creator_id`)만 남는다. 저장한 사람의 열기 기록이 없으면(기록 실패, 또는 옛 `claim` 줄만 있다) 시작점이 없어 ②에서 빠진다.
 - ②는 **시계 둘을 섞는다**: 행동 기록 `at`은 DB 시계이고 `recipes.created_at` · `clips.created_at` · `clip_uploads.updated_at`은
-  앱 시계다. 서버와 DB의 시계 차(보통 1초 안)만큼 어긋난다. 그래서 「저장 직전 집기」를 저장 뒤 5초까지 받는다: 안 받으면 DB 시계가
-  앞선 서버에서 갓 집고 바로 저장한 편집본이 시작점을 잃고 빠진다. 대가로 저장 뒤 5초 안에 다시 집으면 그것이 시작점이 된다.
-- `actor`는 회원 번호다. 되돌리면 지워지는 `hidden_by`와 달리 이 기록은 카드가 있는 동안 남는다.
+  앱 시계다. 서버와 DB의 시계 차(보통 1초 안)만큼 어긋난다. 그리고 웹은 열기 기록을 기다리지 않고 보내며 서버는 **자격 판정(auth 최대
+  7초) 뒤에** 그 줄을 적는다. 그래서 「저장 직전 열기」를 **저장 뒤 15초까지** 받는다(자격 판정 7초 + 시계 차 여유): 안 받으면 갓 열고
+  바로 저장한 편집본이 시작점을 잃고 빠진다. 대가로 저장 뒤 15초 안에 같은 카드를 다시 열면 그것이 시작점이 된다.
+- `actor`는 회원 번호다. 이 기록은 카드가 있는 동안 남는다.
 
-**① 자동 카드 거짓양성률**: 기간(`:from` 이상 `:to` 미만)에 열어 본 자동 카드 중 「하이라이트 아님」으로 숨겨진 비율.
+**① 클립 안 나온 카드 비율**: 기간(`:from` 이상 `:to` 미만)에 편집기로 연 자동 카드 중 렌더 주문(`clips`)이 하나도 없는 비율.
+편집본만 저장하고 영상을 안 만든 카드도 「안 나왔다」로 센다.
 
 ```sql
--- POK-338 거짓양성률
+-- POK-393 클립 안 나온 카드 비율
 WITH opened AS (
     SELECT DISTINCT a.card_id
       FROM jump_card_actions a
       JOIN jump_cards c ON c.id = a.card_id
-     WHERE a.action = 'claim' AND c.source = 'auto'
+     WHERE a.action = 'open' AND c.source = 'auto'
        AND a.at >= :from AND a.at < :to
 )
 SELECT count(*) AS opened,
-       count(*) FILTER (WHERE c.hidden_reason = 'not_highlight') AS not_highlight,
-       round(100.0 * count(*) FILTER (WHERE c.hidden_reason = 'not_highlight') / NULLIF(count(*), 0), 1) AS false_positive_pct
-  FROM opened o
-  JOIN jump_cards c ON c.id = o.card_id;
+       count(*) FILTER (WHERE NOT EXISTS (
+           SELECT 1 FROM recipes r JOIN clips k ON k.recipe_id = r.id
+            WHERE r.source_card_id = o.card_id)) AS no_clip,
+       round(100.0 * count(*) FILTER (WHERE NOT EXISTS (
+           SELECT 1 FROM recipes r JOIN clips k ON k.recipe_id = r.id
+            WHERE r.source_card_id = o.card_id)) / NULLIF(count(*), 0), 1) AS no_clip_pct
+  FROM opened o;
 ```
 
-**② 편집자별 카드 → 영상 시간**: 기간에 처음 저장한, 카드에서 시작한 편집본. 초 단위 중앙값.
+**② 편집자별 카드 → 영상 시간**: 기간에 처음 저장한, 카드에서 시작한 편집본. 시작은 마지막 열기, 끝은 렌더 주문과 업로드 완료. 초 단위 중앙값.
 
 ```sql
--- POK-338 카드에서 영상까지
+-- POK-393 카드에서 영상까지
 WITH started AS (
     SELECT r.creator_id AS editor,
            (SELECT max(a.at) FROM jump_card_actions a
-             WHERE a.card_id = r.source_card_id AND a.action = 'claim'
-               AND a.actor = r.creator_id AND a.at <= r.created_at + interval '5 seconds') AS opened_at,
+             WHERE a.card_id = r.source_card_id AND a.action = 'open'
+               AND a.actor = r.creator_id AND a.at <= r.created_at + interval '15 seconds') AS opened_at,
            (SELECT min(c.created_at) FROM clips c WHERE c.recipe_id = r.id) AS ordered_at,
            (SELECT min(u.updated_at) FROM clips c JOIN clip_uploads u ON u.clip_id = c.id
              WHERE c.recipe_id = r.id AND u.status = 'uploaded') AS uploaded_at
@@ -3490,7 +3490,7 @@ OBS는 트랙 여섯을 항상 다 보내고 트랙에 이름이 없다(계약9�
 - **렌더도 업로드도 꺼진 배포는 창고 이름을 몰라 표만 지운다**(WARN `clip.purge.storage_unavailable`). 녹화 조각 줄도 안 지운다.
   **렌더만 끄고 업로드를 켠 배포**는 출력 창고(`CLIPS_BUCKET`)를 안다: 사용자가 올린 썸네일 그림(`upload-thumbnails/{streamerUserId}/`)을 포함해
   출력 접두사는 지우고, 녹화 조각 창고 이름(`SEGMENT_BUCKET`)을 모르면 조각은 파일도 줄도 안 지운다(WARN `clip.purge.segments_skipped`, POK-291).
-- **편집자가 남의 방송에 남긴 흔적은 그대로다**(카드를 집은 사람 · 편집본 작성자 = 회원 번호). 이름·이메일은 탈퇴 때 익명화된다(사용자 결정).
+- **편집자가 남의 방송에 남긴 흔적은 그대로다**(카드 행동 기록의 행위자 · 편집본 작성자 = 회원 번호). 이름·이메일은 탈퇴 때 익명화된다(사용자 결정).
 - **지운 기록은 되돌릴 수 없다.** 백업이 없다.
 - **이미 시작된 유튜브 업로드는 끝까지 간다.** 업로드 일꾼은 이어 올리기 주소를 받은 뒤 clip에 묻지 않고 조각을 보낸다. 탈퇴 전에
   스트리머가 직접 시작한 업로드이고, 「유튜브에 올린 영상은 채널의 것」(결정 2)과 같은 자리라 고치지 않았다(PR #220 codex P1 검토).

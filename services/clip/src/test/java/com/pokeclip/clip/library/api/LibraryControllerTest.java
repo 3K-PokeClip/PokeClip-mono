@@ -395,6 +395,97 @@ class LibraryControllerTest extends IntegrationTestSupport {
                 .andExpect(jsonPath("$.error").value("authorization_unavailable"));
     }
 
+    // ── 한 스트리머로 좁히기(POK-390 채널 스위처): 방송 목록과 같은 갈래 여섯 ──
+
+    /** 고른 채널의 편집본만 나온다. 내 편집본을 같이 심어야 인자를 무시하는 구현이 빨갛다. */
+    @Test
+    void 스트리머를_고르면_그_채널_편집본만_나온다() throws Exception {
+        편집본(내_방송);
+        long 남의것 = 편집본(남의_방송);
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"), 줄(남의_스트리머, "EDITOR"));
+
+        목록("?streamerId=" + 남의_스트리머)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items.length()").value(1))
+                .andExpect(jsonPath("$.items[0].recipeId").value(남의것));
+
+        assertThat(AUTH.callCount()).as("좁혀도 자격 창구는 거친다").isEqualTo(1);
+    }
+
+    /** 볼 수 없는 채널이면 404(빈 목록이 아니다). 본문 이름은 방송 목록과 같다: 처리기가 그 이름 하나만 낸다. */
+    @Test
+    void 볼_수_없는_스트리머를_고르면_404이고_남의_편집본이_안_나간다() throws Exception {
+        long 남의것 = 편집본(남의_방송);
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+
+        String 본문 = 본문(목록("?streamerId=" + 남의_스트리머)
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error").value("broadcast_not_found")));
+
+        assertThat(본문).doesNotContain(남의_방송).doesNotContain("\"recipeId\":" + 남의것);
+    }
+
+    /** 볼 수 있는 채널인데 편집본이 0건이면 200 빈 목록이다: 새 위임 채널의 보관함에서 내 채널로 튕기면 안 된다(감사 1회차 지적 1). */
+    @Test
+    void 볼_수_있는_스트리머의_편집본이_0건이면_200에_빈_목록이다() throws Exception {
+        편집본(내_방송);
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"), 줄(남의_스트리머, "EDITOR"));
+
+        목록("?streamerId=" + 남의_스트리머)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items.length()").value(0))
+                .andExpect(jsonPath("$.nextCursor").value(nullValue()));
+    }
+
+    @Test
+    void 선행_0이_붙은_번호도_같은_채널이다() throws Exception {
+        편집본(내_방송);
+        long 남의것 = 편집본(남의_방송);
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"), 줄(남의_스트리머, "EDITOR"));
+
+        목록("?streamerId=000" + 남의_스트리머)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items.length()").value(1))
+                .andExpect(jsonPath("$.items[0].recipeId").value(남의것));
+    }
+
+    @Test
+    void 숫자가_아닌_스트리머는_400이고_auth를_안_부른다() throws Exception {
+        for (String 값 : List.of("abc", "3abc", "99999999999999999999")) {
+            목록("?streamerId=" + 값)
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.error").value("invalid_request"))
+                    .andExpect(jsonPath("$.field").value("streamerId"));
+        }
+
+        assertThat(AUTH.callCount()).as("형식 오류에 auth 왕복을 태우면 안 된다").isZero();
+    }
+
+    @Test
+    void 빈_스트리머는_안_준_것과_같다() throws Exception {
+        편집본(내_방송);
+        편집본(남의_방송);
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"), 줄(남의_스트리머, "EDITOR"));
+
+        // 주소에 %20을 직접 쓰면 MockMvc가 한 번 더 바꾼다: 값은 param으로 넣는다(방송 목록 시험과 같은 이유).
+        for (String 값 : List.of("", "  ")) {
+            mvc.perform(get("/api/clip/library").param("streamerId", 값)
+                            .header("Authorization", "Bearer " + TestTokens.access(요청자)))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.items.length()").value(2));
+        }
+    }
+
+    @Test
+    void auth를_못_물으면_스트리머를_골라도_503이다() throws Exception {
+        편집본(남의_방송);
+        AUTH.respondWith(ACCESSIBLE, 500, "");
+
+        목록("?streamerId=" + 남의_스트리머)
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.error").value("authorization_unavailable"));
+    }
+
     // ── 도우미 ──────────────────────────────────────────────────
 
     private long 편집본(String streamId) {

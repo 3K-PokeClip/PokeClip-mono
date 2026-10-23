@@ -22,6 +22,7 @@ import (
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/mtxhook"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/mtxstate"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/playback"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/poolstat"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/recording"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/secretfile"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/upload"
@@ -104,6 +105,9 @@ func run() error {
 		}
 		log.Info("schema_ensured", "note", "정본 DDL(1번 소유). 컬럼 변경은 3번 승인 — 계약-세그먼트인덱스 4절")
 	}
+	// 연결 폐기 관측(POK-388). 관측 고루틴이 풀을 읽으므로 pool.Close 보다 뒤에 등록해 먼저 멈춘다.
+	stopIndexerStats := poolstat.Start(ctx, pool, "indexer", log)
+	defer stopIndexerStats()
 
 	// 장부에 협력자 둘을 끼운다(계획 4.6): 세션 결정자와 ③ 키 파생.
 	// 세션 판정 정책·키 형상은 각각 자기 패키지에 있고, 여기서 이어 붙이는 것이 전부다.
@@ -209,6 +213,8 @@ func run() error {
 		// ★ 등록 순서가 계약이다(위 up.Shutdown 주석과 같은 원리). 발행자 풀은 up.Shutdown 보다 먼저 닫히고 아래
 		//   rewind.stop(fence 반납)보다 늦게 닫힌다 — 반납 문장이 이 풀로 나간다(체크리스트 474 A-3 3).
 		defer pubPool.Close()
+		stopPublisherStats := poolstat.Start(ctx, pubPool, "publisher", log)
+		defer stopPublisherStats() // 위 인덱서 풀 관측과 같은 원리 — pubPool.Close 보다 먼저 멈춘다
 	}
 	// 루프의 ctx 가 곧 차선 ctx 다(rewindLoop 문서). run ctx 에서 떼어 두어, 루프가 오류로 끝나 run ctx 가 살아 있어도
 	// rewind.stop 이 작업을 끊고 기다린 뒤 fence 를 반납한다(판단 J74).

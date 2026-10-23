@@ -18,7 +18,7 @@ import java.util.List;
  *
  * <p>🔴 <b>자격 판정이 맨 앞이고 트랜잭션은 그 뒤에 연다.</b> auth 왕복이 최대 7초인데 트랜잭션 안에서 돌면
  * 그동안 커넥션을 쥔다. 자기 호출은 프록시를 안 타므로 {@code @Transactional}로는 그 경계를 못 만들고
- * {@link TransactionTemplate}을 쓴다({@code JumpCardService.claim}과 같은 모양).
+ * {@link TransactionTemplate}을 쓴다({@code JumpCardService.open}과 같은 모양).
  *
  * <p>본문 검증({@link RecipeValidator})도 자격 판정 <b>뒤</b>다 — 앞에 두면 없는 방송·남의 방송에 대고
  * 본문을 고쳐 가며 400과 404를 갈라 볼 수 있다. 404 두 갈래가 같은 본문·같은 바닥 시간인 것을 지키려면

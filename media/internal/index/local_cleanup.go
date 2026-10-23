@@ -305,14 +305,15 @@ func (s *LocalCleanupStore) InvalidCutoffs(ctx context.Context) ([]InvalidCutoff
 //
 // remove 는 그 행의 잠금을 쥔 동안에만, 한 번 불린다. 잠금 보유는 서버가 RowLockTxnTimeout 으로
 // 묶으므로 remove 가 오래 걸리면 COMMIT 단계가 세션 종료 오류로 실패한다(StageCommit).
-// 클라이언트 기한(연결 획득 포함)은 ctx 로 준다.
+// 클라이언트 기한(연결 획득 포함)은 ctx 로 준다. 되돌림은 ctx 의 취소 · 시한과 떼고 RowLockTxnTimeout 을
+// 새로 씌운다(rollbackRowLock).
 func (s *LocalCleanupStore) RemoveUnderRowLock(ctx context.Context, streamID string, seq int64, path string, remove func() (clear bool)) (RowLockResult, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return RowLockResult{Stage: StageAcquire}, fmt.Errorf("행 잠금 트랜잭션 시작 실패 stream_id=%q seq=%d: %w", streamID, seq, err)
 	}
 	// 커밋 뒤의 Rollback 은 무해한 no-op 이다. 잠금 실패 · 판정 갈래의 되돌림이 여기 하나다.
-	defer func() { _ = tx.Rollback(ctx) }()
+	defer func() { _ = rollbackRowLock(ctx, tx) }()
 
 	current, err := lockRow(ctx, tx, streamID, seq)
 	switch {
@@ -357,7 +358,7 @@ func lockRow(ctx context.Context, tx pgx.Tx, streamID string, seq int64) (*strin
 // finishRowLock 은 remove 뒤 단계다 — clear 면 local_path CAS 후 COMMIT, 아니면 ROLLBACK.
 func finishRowLock(ctx context.Context, tx pgx.Tx, streamID string, seq int64, path string, clear bool) error {
 	if !clear {
-		if err := tx.Rollback(ctx); err != nil {
+		if err := rollbackRowLock(ctx, tx); err != nil {
 			return fmt.Errorf("행 잠금 되돌림 실패 stream_id=%q seq=%d: %w", streamID, seq, err)
 		}
 		return nil
@@ -374,6 +375,18 @@ func finishRowLock(ctx context.Context, tx pgx.Tx, streamID string, seq int64, p
 		return fmt.Errorf("local_path 비우기 커밋 실패 stream_id=%q seq=%d: %w", streamID, seq, err)
 	}
 	return nil
+}
+
+// rollbackRowLock 은 행 잠금 트랜잭션을 되돌린다. 되돌림 ctx 는 되돌리는 순간에 만든다 — 부른 쪽 ctx 에서
+// 취소와 시한을 떼고 RowLockTxnTimeout 을 새로 씌운다. 끝난 ctx 로 부르면 pgx 는 ROLLBACK 을 보내지 못하고
+// 연결을 버리는데, 선잠금 문장이나 remove 가 부른 쪽 ctx 를 다 쓴 갈래에서 그 ctx 는 끝나 있다. 시한이
+// RowLockTxnTimeout 인 이유: 서버 상한(transaction_timeout)은 SET LOCAL 이 닿은 뒤에 걸려 그 트랜잭션은 그만큼을
+// 넘겨 살아 있지 못하고, 그 전에 ctx 가 끝난 갈래도 이 시한 뒤 pgx 가 연결을 버리면 서버 트랜잭션이 끝난다 —
+// 되돌리는 순간부터 그보다 오래 기다릴 쓸모가 없다. 닫힌 트랜잭션(커밋 · 되돌림 뒤)이면 문장을 보내지 않는다.
+func rollbackRowLock(ctx context.Context, tx pgx.Tx) error {
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), RowLockTxnTimeout)
+	defer cancel()
+	return tx.Rollback(rctx)
 }
 
 // ClearLocalPath 는 회수 전용 한 문장 CAS 다 — 파일을 지웠는데 COMMIT 을 확인하지 못한 행의

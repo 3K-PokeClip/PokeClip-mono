@@ -16,6 +16,7 @@ import {
   type LibraryEntry,
 } from '@/api/clipEditor';
 import { useOnboardingStore } from '@/stores/onboarding';
+import { useChannelStreamerId } from '@/features/channel/ChannelScope';
 
 // 홈 대시보드 상태 — clip·auth 창구 배선(POK-251), 화면 개편(POK-378).
 // 백엔드가 있는 것만 실값으로 채운다. 맨 위 큰 칸의 숫자는 새 API 없이 이미 읽는 목록을 날짜로 세기만 한다 —
@@ -102,8 +103,6 @@ interface WireCard {
   window: { startMs: number; endMs: number };
   score: number | null;
   evidence: unknown;
-  claimedBy: string | null;
-  hidden: boolean;
   eventSeq: number;
   createdAt: string;
 }
@@ -222,13 +221,17 @@ export interface CachedCards {
  * 빈 값으로 덮으면 clip이 잠깐 재시작해도 라이브 띠와 지난 방송이 사라진다(PR #200 codex).
  * cardCache는 상위 N개 밖 방송의 카드를 CARD_CACHE_MS 동안 기억한다 — 부른 쪽이 주기마다 같은 Map을 넘긴다.
  */
-async function loadHome(now: number, cardCache: Map<string, CachedCards>): Promise<Loaded | null> {
+async function loadHome(
+  now: number,
+  cardCache: Map<string, CachedCards>,
+  streamerId: number | null,
+): Promise<Loaded | null> {
   const [me, liveAll, pastAll] = await Promise.all([
     getJson<WireMe>('/api/auth/me'),
     // 라이브도 끝까지 — 여러 스트리머의 편집자면 동시에 여럿이 방송 중이다. 밴드는 첫 방송만, 이번 주 숫자는 전부 센다
-    fetchAllBroadcasts('live').catch(() => null),
+    fetchAllBroadcasts('live', streamerId).catch(() => null),
     // 지난 방송은 끝까지 읽는다 — 지난주 방송 수를 세려면 첫 쪽만으로는 모자랄 수 있다
-    fetchAllBroadcasts('past').catch(() => null),
+    fetchAllBroadcasts('past', streamerId).catch(() => null),
   ]);
   if (liveAll === null || pastAll === null) return null;
 
@@ -255,10 +258,8 @@ async function loadHome(now: number, cardCache: Map<string, CachedCards>): Promi
       }
       // 끝까지 넘긴다 — 기본 50장이고 오래된 것부터 와서, 첫 장만 읽으면 카드 수가 50에서 잘리고
       // 최근 카드가 통째로 빠진다(PR #200 codex)
-      const cards = await fetchAllJumpCards<WireCard>(streamId).then(
-        (list) => list.filter((c) => !c.hidden),
-        () => null,
-      );
+      // 옛 서버가 hidden을 실어 보내도 거르지 않는다: 숨기기는 POK-393에서 없앴다
+      const cards = await fetchAllJumpCards<WireCard>(streamId).catch(() => null);
       if (cards === null) {
         // 못 읽었으면 기억해 둔 값을(기한이 지났어도) 쓰고 기억은 건드리지 않는다 — 다음 주기에 다시 읽는다.
         // 빈 값을 기억하면 5분 동안 카드 수가 실제보다 적게 보인다(리뷰 #299 2차)
@@ -390,6 +391,8 @@ const EMPTY: Loaded = {
 const NO_LINKS: HomeLinks = { chzzk: null, soop: null, youtube: null, streamKeyIssued: null };
 
 export function useHomeMockState(): HomeMockState {
+  // 고른 채널(POK-390). ChannelScope가 채널이 바뀌면 화면을 다시 세우므로 마운트 동안은 안 바뀐다
+  const streamerId = useChannelStreamerId();
   const [data, setData] = useState<Loaded>(EMPTY);
   // 보관함(POK-243) — 클립 완료 수 · 만든 클립 · 유튜브 발행이 여기서 나온다. 못 읽으면 null(수는 「–」)
   const [library, setLibrary] = useState<LibraryEntry[] | null>(null);
@@ -411,8 +414,8 @@ export function useHomeMockState(): HomeMockState {
     const tick = async () => {
       const mine = ++started;
       const [loaded, entries] = await Promise.all([
-        loadHome(Date.now(), cardCache),
-        fetchLibraryAll().catch(() => null),
+        loadHome(Date.now(), cardCache, streamerId),
+        fetchLibraryAll(streamerId).catch(() => null),
       ]);
       if (stopped || mine < applied) return;
       applied = mine;
@@ -429,7 +432,7 @@ export function useHomeMockState(): HomeMockState {
       stopped = true;
       window.clearInterval(t);
     };
-  }, []);
+  }, [streamerId]);
 
   // 연동 상태는 방송 폴링과 따로 1분마다 — 같은 주기에 묶으면 방송 읽기가 10초를 넘길 때 다음 주기가 먼저 반영돼
   // 연동 결과가 통째로 버려진다(리뷰 #299). 못 읽은 칸은 지난 값을 둔다(방송 목록과 같은 정책)

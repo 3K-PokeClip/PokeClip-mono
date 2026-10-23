@@ -5,9 +5,10 @@ import { axe } from 'jest-axe';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { HomeScreen } from '@/features/home/HomeScreen';
 import { LiveNowBand } from '@/features/home/LiveNowBand';
-import { TIPS } from '@/features/home/TipCard';
+import { TipCard, TIPS } from '@/features/home/TipCard';
 import { daysAgoLabel, weekStarts, type LiveNow } from '@/features/home/useHomeMockState';
 import { useOnboardingStore } from '@/stores/onboarding';
+import { ChannelRelationContext } from '@/features/channel/ChannelScope';
 
 const LIVE: LiveNow = {
   streamId: 'stream-1',
@@ -250,7 +251,7 @@ describe('HomeScreen', () => {
       serve({
         past: [pastRow('this-week', at(10, 20)), pastRow('last-week', at(10, 14))],
         cards: {
-          // 숨긴 카드는 세지 않는다
+          // 숨김 칸이 찬 옛 카드도 센다: 숨기기는 POK-393에서 없앴다
           'this-week': [card(1), card(2), card(3, true)],
           'last-week': [card(4), card(5)],
         },
@@ -277,7 +278,7 @@ describe('HomeScreen', () => {
 
       const hero = await screen.findByRole('region', { name: '이번 주' });
       expect(
-        within(hero).getByRole('heading', { level: 1, name: '방송 1번에서 카드 2장을 찾았어요' }),
+        within(hero).getByRole('heading', { level: 1, name: '방송 1번에서 카드 3장을 찾았어요' }),
       ).toBeInTheDocument();
       expect(hero).toHaveTextContent('만든 클립2개');
       expect(hero).toHaveTextContent('유튜브 발행1개');
@@ -834,6 +835,112 @@ describe('HomeScreen', () => {
     await screen.findByRole('region', { name: '포키의 팁' });
     await act(async () => {
       expect(await axe(container)).toHaveNoViolations();
+    });
+  });
+});
+
+describe('HomeScreen: 남의 채널(POK-390)', () => {
+  beforeEach(() => {
+    resetOnboarding();
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function asEditor() {
+    return render(
+      <ChannelRelationContext.Provider value="EDITOR">
+        <HomeScreen />
+      </ChannelRelationContext.Provider>,
+    );
+  }
+
+  it('설정 가이드의 연동·코드 받기 버튼이 비활성이고 링크가 아니다: 인사·단계는 그대로', async () => {
+    serve();
+    asEditor();
+
+    const hero = await screen.findByRole('region', { name: '지금 할 일' });
+    expect(within(hero).getByText('방송 채널 연동')).toBeInTheDocument();
+    expect(within(hero).queryByRole('link')).not.toBeInTheDocument();
+    expect(within(hero).getByRole('button', { name: '채널 연동' })).toBeDisabled();
+    expect(within(hero).getByRole('button', { name: '코드 받기' })).toBeDisabled();
+  });
+
+  it('연결 상태 카드는 그대로 보이고 다시 연결·코드 받기 버튼만 비활성이다', async () => {
+    serve({
+      past: [pastRow('past-1', new Date(Date.now() - 86_400_000))],
+      chzzk: { linked: true, channelName: '재환의 방송', status: 'ACTIVE' },
+      youtube: { linked: false, channelName: '재환 클립', status: 'BROKEN' },
+      streamKey: { issued: false },
+    });
+    asEditor();
+
+    const aside = await screen.findByRole('complementary', { name: '연결 상태·팁' });
+    // 연동 상태는 방송 목록과 따로 온다: 줄이 다 찰 때까지 기다린 뒤 잰다(안 기다리면 「확인 중」 줄을 잰다)
+    await within(aside).findByRole('button', { name: '다시 연결' });
+    const rows = within(aside).getAllByRole('listitem');
+    expect(rows[0]).toHaveTextContent('방송 채널치지직 · 재환의 방송 연결됨');
+    // aside 전체가 아니라 연결 상태 줄만 본다: 같은 aside의 포키의 팁은 무작위로 링크를 가진다
+    for (const row of rows.slice(0, 3))
+      expect(within(row).queryByRole('link')).not.toBeInTheDocument();
+    expect(within(rows[1]!).getByRole('button', { name: '코드 받기' })).toBeDisabled();
+    expect(within(rows[2]!).getByRole('button', { name: '다시 연결' })).toBeDisabled();
+  });
+});
+
+describe('포키의 팁: 남의 채널(POK-390)', () => {
+  const OWNER_ONLY = ['/settings/plugin', '/settings/editors', '/settings/channels'];
+
+  /** 팁 다섯을 한 바퀴 돌며 지금 팁의 버튼을 잰다: 첫 팁은 무작위라 순서와 무관하게 전부 본다 */
+  async function eachTip(
+    relation: 'OWNER' | 'EDITOR',
+    check: (tip: (typeof TIPS)[number]) => void,
+  ) {
+    const user = userEvent.setup();
+    render(
+      <ChannelRelationContext.Provider value={relation}>
+        <TipCard />
+      </ChannelRelationContext.Provider>,
+    );
+    const seen = new Set<string>();
+    for (let k = 0; k < TIPS.length; k++) {
+      const tip = await waitForTip();
+      seen.add(tip.action.href);
+      check(tip);
+      await user.click(screen.getByRole('button', { name: '다음 팁' }));
+    }
+    expect(seen.size).toBe(TIPS.length);
+  }
+
+  async function waitForTip() {
+    let found: (typeof TIPS)[number] | undefined;
+    await vi.waitFor(() => {
+      found = TIPS.find((t) => screen.queryByText(t.text) !== null);
+      expect(found).toBeDefined();
+    });
+    return found!;
+  }
+
+  it('남의 채널이면 플러그인·편집자 초대·채널 연동 팁의 버튼은 비활성이고 링크가 아니다', async () => {
+    await eachTip('EDITOR', (tip) => {
+      if (OWNER_ONLY.includes(tip.action.href)) {
+        expect(screen.queryByRole('link', { name: tip.action.label })).not.toBeInTheDocument();
+        expect(screen.getByRole('button', { name: tip.action.label })).toBeDisabled();
+      } else {
+        expect(screen.getByRole('link', { name: tip.action.label })).toHaveAttribute(
+          'href',
+          tip.action.href,
+        );
+      }
+    });
+  });
+
+  it('내 채널이면 팁 버튼은 전부 링크다', async () => {
+    await eachTip('OWNER', (tip) => {
+      expect(screen.getByRole('link', { name: tip.action.label })).toHaveAttribute(
+        'href',
+        tip.action.href,
+      );
     });
   });
 });

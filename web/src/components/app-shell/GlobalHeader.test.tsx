@@ -3,6 +3,7 @@ import { axe } from 'jest-axe';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { GlobalHeader } from '@/components/app-shell/GlobalHeader';
 import { useAuthStore } from '@/stores/auth';
+import { useChannelStore } from '@/stores/channel';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
 import { renderWithProviders } from '@/test/testProviders';
 
@@ -10,6 +11,7 @@ const { replace } = vi.hoisted(() => ({ replace: vi.fn() }));
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ replace }),
+  usePathname: () => '/home',
 }));
 
 const ME = { id: 1, email: 'raccoon@example.com', name: '게임하는너구리', profileImageUrl: '' };
@@ -26,6 +28,7 @@ beforeEach(() => {
   window.localStorage.clear();
   replace.mockReset();
   useAuthStore.setState({ accessToken: 'access-1', refreshToken: 'refresh-1', hydrated: true });
+  useChannelStore.setState({ userId: null, selected: null });
 });
 
 afterEach(() => {
@@ -51,7 +54,8 @@ describe('GlobalHeader', () => {
     renderWithProviders(<GlobalHeader />);
 
     fireEvent.click(screen.getByRole('button', { name: '계정 메뉴' }));
-    fireEvent.click(await screen.findByRole('menuitem', { name: '로그아웃' }));
+    // 로그아웃은 채널 스위처 패널 아래 줄로 옮겼다(POK-390)
+    fireEvent.click(await screen.findByRole('button', { name: '로그아웃' }));
 
     await waitFor(() => expect(replace).toHaveBeenCalledWith('/login'));
     expect(spy.mock.calls.some(([url]) => url === '/api/auth/logout')).toBe(true);
@@ -70,11 +74,46 @@ describe('GlobalHeader', () => {
     renderWithProviders(<GlobalHeader />);
 
     fireEvent.click(screen.getByRole('button', { name: '계정 메뉴' }));
-    fireEvent.click(await screen.findByRole('menuitem', { name: '로그아웃' }));
+    // 로그아웃은 채널 스위처 패널 아래 줄로 옮겼다(POK-390)
+    fireEvent.click(await screen.findByRole('button', { name: '로그아웃' }));
 
     // 서버 응답을 기다렸다면 이 단언에 도달하지 못한다
     await waitFor(() => expect(replace).toHaveBeenCalledWith('/login'));
     expect(useAuthStore.getState().refreshToken).toBeNull();
+  });
+
+  it('계정 메뉴는 채널 스위처 패널을 연다(POK-390)', async () => {
+    stubAuthedFetch();
+    renderWithProviders(<GlobalHeader />);
+    await screen.findByText('게임');
+
+    fireEvent.click(screen.getByRole('button', { name: '계정 메뉴' }));
+
+    expect(await screen.findByRole('dialog', { name: '계정 전환' })).toBeInTheDocument();
+  });
+
+  it('남의 채널에 있으면 아바타 옆에 「편집자」 칩이 붙고 그 채널 글자 아바타다', async () => {
+    window.localStorage.setItem('pc-channel', JSON.stringify({ '1': 3 }));
+    stubFetch((url) => {
+      if (url === '/api/auth/me') return jsonResponse(200, ME);
+      if (url === '/api/editor-delegations/as-editor')
+        return jsonResponse(200, [
+          { id: 21, counterpartId: 3, counterpartName: '별하', grantedAt: '2026-10-01T00:00:00Z' },
+        ]);
+      return jsonResponse(404);
+    });
+    renderWithProviders(<GlobalHeader />);
+
+    expect(await screen.findByText('편집자')).toBeInTheDocument();
+    expect(screen.getByText('별하')).toBeInTheDocument();
+  });
+
+  it('내 채널이면 칩이 없다', async () => {
+    stubAuthedFetch();
+    renderWithProviders(<GlobalHeader />);
+    await screen.findByText('게임');
+
+    expect(screen.queryByText('편집자')).not.toBeInTheDocument();
   });
 
   it('접근성 위반이 없다', async () => {

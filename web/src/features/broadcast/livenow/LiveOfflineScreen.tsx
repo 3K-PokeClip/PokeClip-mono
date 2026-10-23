@@ -1,8 +1,12 @@
+'use client';
+
 import Image from 'next/image';
 import Link from 'next/link';
 // 경로는 리터럴이다(Side·온보딩 투어와 같다). chzzkOAuth의 CHANNEL_SETTINGS_PATH는 'use client' 모듈이라
 // 이 골격을 서버 컴포넌트로 올리는 날 문자열이 아니라 클라이언트 참조로 들어온다.
+import { Button } from '@/ui/components/Button';
 import { LinkButton } from '@/ui/components/LinkButton';
+import { useChannelRelation } from '@/features/channel/ChannelScope';
 import styles from './LiveOfflineScreen.module.css';
 
 // 디자인 1b 오프라인 프레임 — 방송 중이 아닐 때 라이브 자리에 선다 (POK-227).
@@ -15,6 +19,8 @@ import styles from './LiveOfflineScreen.module.css';
 // 문구는 시안 그대로다. 「연동을 다시 하면 복구」류는 쓰지 않는다 — 포기한 방송은 새 방송을 켜야
 // 다시 붙어서 실연동 뒤에 거짓이 된다(위키 ADR-048).
 export function LiveOfflineScreen() {
+  // 남의 채널이면 채널 연동 화면은 막혀 있다(POK-390): 버튼은 남기고 비활성으로
+  const othersChannel = useChannelRelation() === 'EDITOR';
   return (
     <main className={styles.screen}>
       <div className={styles.wash} aria-hidden />
@@ -37,9 +43,15 @@ export function LiveOfflineScreen() {
           <LinkButton as={Link} href="/broadcast/vod" variant="solid" size="md">
             지난 방송 보기
           </LinkButton>
-          <LinkButton as={Link} href="/settings/channels" variant="ghost" size="md">
-            연동 상태 확인
-          </LinkButton>
+          {othersChannel ? (
+            <Button variant="ghost" size="md" disabled>
+              연동 상태 확인
+            </Button>
+          ) : (
+            <LinkButton as={Link} href="/settings/channels" variant="ghost" size="md">
+              연동 상태 확인
+            </LinkButton>
+          )}
         </div>
       </div>
     </main>
