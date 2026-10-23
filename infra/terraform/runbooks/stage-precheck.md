@@ -41,7 +41,7 @@
 | O7a | `O7a` | — | 함 | 함 | dev VPC CIDR 비중첩 | apply |
 | O7b | `O7b` | — | 함 | 함 | 공유 존의 옛 ACM 검증 이름(`_` 로 시작하는 CNAME) | apply |
 | O7c | `O7c` | — | 함 | 함 | — | 푸시마다 |
-| runtime-1a | `runtime-1a` | — | 함(POK-365 완료 — 런타임 상태 객체가 이 단계부터 대상) | 함 | — | plan 승인마다(본 apply · 켬 · 끔) |
+| runtime-1a | `runtime-1a` | — | 함(POK-365 완료 — 런타임 상태 객체 · RDS · SNS · SQS · 실행기 역할 · 프로필이 이 단계부터, rewind 버킷은 O7d 부터 대상) | 함 | — | plan 승인마다(본 apply · 켬 · 끔) |
 | O7d | `O7d` | — | 함 | 함 | Cloud Map 사설 존 리전 조건 · 리스너 규칙 transform 속성 · ELB 한도 읽기 | (f) 실측 · 태스크 생성 |
 | O7e | `O7e` | `O7e-stop1`(멈춤 자리 ①) | 함 | 함 | — | apply · 기동 확인 · A1 |
 | O7f | `O7f` | `O7f-stop2`(멈춤 자리 ② — 값 입력 직전 · 7-R 직전에 다시). 부분 진행 중 하위 단계는 `O7f` · `testkey` · `loopback` 을 다시 | 함 | 함 | KVS 그릇 재조회 · Origin Shield · 로그 그룹 부수 동작 | apply · 값 · 시험 판정 · A2 |
@@ -229,7 +229,10 @@ bash infra/terraform/scripts/precheck/scp-recheck.sh --accept O7f \
 권한이 없는지 AWS 정책 시뮬레이터로 묻습니다. 주체는 dev 상자 · media-dev
 (같은 인스턴스 프로필) · dev 배포 사용자 · 옛 OIDC 역할이고
 (`data/principal_sim/dev_principals.tsv`), 자원은 상태 버킷 · 상태 객체 ·
-비밀 · ECR · network · 인증서 · 권한 변경 대상입니다(`prod_targets.tsv`).
+비밀 · ECR · network · 인증서 · 권한 변경 대상 · prod 런타임 자원(RDS ·
+SNS · SQS · rewind 버킷 · SQL 실행기 역할 · 프로필)입니다
+(`prod_targets.tsv`). SNS 주제 · SQS 큐는 자원 정책을 읽는 방법이 없어
+(`unread`) 허용이 아닌 질문이 모두 판정 불가(`RESOURCE_POLICY_UNREAD`)입니다.
 읽기만 하고 AWS 에 아무것도 만들지 않으며, 실제 접근을 시도하지 않습니다.
 
 판정은 증명이 아니라 그 시점의 사전 증거입니다. 보지 못하는 것은 아래

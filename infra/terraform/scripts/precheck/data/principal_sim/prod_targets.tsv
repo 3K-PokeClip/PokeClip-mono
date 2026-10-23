@@ -6,8 +6,8 @@
 #
 # 첫 단계 = 그 자원을 만드는 루트를 apply 하는 단계(런북 단계 표 ·
 # stage_actions 의 출처 주석): bootstrap · secrets = 5, network = O7a,
-# certs = O7b, registry = O7c, runtime = runtime-1a. 그 단계부터 뒤 단계마다
-# 묻는다.
+# certs = O7b, registry = O7c, runtime = runtime-1a(rewind 행만 예외 —
+# 그 행 위 주석). 그 단계부터 뒤 단계마다 묻는다.
 # 상태 객체 키 = 각 루트 backend.hcl.example 의 key, 상태 버킷 이름 =
 # prod/bootstrap 의 state_bucket_name 기본값.
 # 해석 tag:<서비스>:<유형> 은 Resource Groups Tagging API 의
@@ -17,13 +17,22 @@
 # (https://docs.aws.amazon.com/service-authorization/latest/reference/list_<prefix>.html
 # — prefix = amazons3 · awssecretsmanager · amazonelasticcontainerregistry ·
 # amazonec2 · awscertificatemanager · awsidentityandaccessmanagementiam).
+# prod/runtime 행은 대조 2026-10-24(같은 참조가 지금은 서비스 접두 이름 —
+# list_<접두>.html, 접두 = rds · logs · sns · sqs · s3 · iam).
 # 데이터 단언은 서비스 접두 · 계열만 본다 — 짝은 사람이 대조한다(A9).
 #
 # 두지 않는 행:
 # *   KMS — 상태 버킷은 SSE-S3, 비밀은 AWS 관리 키다. 고객 관리 키를 쓰게
 #     되면 키 행을 더한다.
-# *   SNS · SQS · Lambda · RDS · ALB · ECS · CloudFront — 그 단계 PR 이 행을
-#     더한다.
+# *   Lambda · ALB · ECS · CloudFront — 그 단계 PR 이 행을 더한다.
+# *   prod/runtime 의 앱 비밀 그릇(pokeclip/prod/*)과 RDS SG — 따로 두지
+#     않는다. Environment = prod 태그라 secrets · network-sg 행이 이미 푼다.
+# *   RDS 관리형 마스터 비밀(rds!db-*) — 이름 끝이 생성 때 정해져 구체 ARN 을
+#     적을 수 없고, 없는 ARN 은 정책 읽기가 실패한다. RDS 가 이 비밀에
+#     Environment = prod 를 다는지는 apply 뒤 실측이다(달면 secrets 행이
+#     푼다).
+# *   SQL 실행기 인스턴스 — 켜진 동안만 있다. 상자를 띄우는 길은
+#     sql-runner-role 의 역할 넘기기 질문이 받는다.
 # *   공유 공개 존의 prod 레코드(zone: · Route 53 레코드 이름 문맥) — prod
 #     레코드 이름이 저장소 Terraform 에 오르는 단계 PR 이 더한다.
 
@@ -53,6 +62,37 @@ network-s3-endpoint	O7a	tag:ec2:vpc-endpoint	vpc-endpoint	ap-northeast-2	ec2:Mod
 # prod/certs — 인증서 두 벌(서울 · us-east-1)
 cert-apne2	O7b	tag:acm:certificate	certificate	ap-northeast-2	acm:DeleteCertificate,acm:AddTagsToCertificate,acm:RemoveTagsFromCertificate	none	-
 cert-use1	O7b	tag:acm:certificate	certificate	us-east-1	acm:DeleteCertificate,acm:AddTagsToCertificate,acm:RemoveTagsFromCertificate	none	-
+
+# prod/runtime — 이름은 prod/runtime/*.tf · CONTRACT-runtime.md 「런타임 자원
+# 이름 패턴」. 이름이 고정이라 구체 ARN 으로 묻는다(자원이 생기기 전 단계에도
+# 물을 수 있다). 태그 동작은 넣지 않는다 — 태그 해석 행과 달리 태그를 바꿔도
+# 대상에서 빠지지 않는다.
+# SNS 주제 · SQS 큐의 정책은 읽는 방법이 없어 unread 다(판정 불가 —
+# RESOURCE_POLICY_UNREAD). 주제는 기본 주제 정책, 큐는 이 주제의 SendMessage
+# 허용 정책을 가진다.
+rds-instance	runtime-1a	arn:arn:aws:rds:ap-northeast-2:${ACCOUNT}:db:pokeclip-prod-db	db	ap-northeast-2	rds:DeleteDBInstance,rds:ModifyDBInstance,rds:RebootDBInstance,rds:StopDBInstance,rds:CreateDBSnapshot	none	-
+rds-parameter-group	runtime-1a	arn:arn:aws:rds:ap-northeast-2:${ACCOUNT}:pg:pokeclip-prod-pg17	pg	ap-northeast-2	rds:ModifyDBParameterGroup,rds:ResetDBParameterGroup,rds:DeleteDBParameterGroup	none	-
+rds-subnet-group	runtime-1a	arn:arn:aws:rds:ap-northeast-2:${ACCOUNT}:subgrp:pokeclip-prod-db	subgrp	ap-northeast-2	rds:ModifyDBSubnetGroup,rds:DeleteDBSubnetGroup	none	-
+rds-log-group	runtime-1a	arn:arn:aws:logs:ap-northeast-2:${ACCOUNT}:log-group:/aws/rds/instance/pokeclip-prod-db/postgresql	log-group	ap-northeast-2	logs:DeleteLogGroup,logs:PutRetentionPolicy,logs:DeleteRetentionPolicy	none	-
+broadcast-topic	runtime-1a	arn:arn:aws:sns:ap-northeast-2:${ACCOUNT}:pokeclip-prod-broadcast-lifecycle.fifo	topic	ap-northeast-2	sns:Publish,sns:Subscribe,sns:SetTopicAttributes,sns:AddPermission,sns:RemovePermission,sns:DeleteTopic	unread	-
+broadcast-queue-clip	runtime-1a	arn:arn:aws:sqs:ap-northeast-2:${ACCOUNT}:pokeclip-prod-broadcast-lifecycle-clip.fifo	queue	ap-northeast-2	sqs:SendMessage,sqs:ReceiveMessage,sqs:PurgeQueue,sqs:SetQueueAttributes,sqs:AddPermission,sqs:RemovePermission,sqs:DeleteQueue	unread	-
+broadcast-queue-chat	runtime-1a	arn:arn:aws:sqs:ap-northeast-2:${ACCOUNT}:pokeclip-prod-broadcast-lifecycle-chat.fifo	queue	ap-northeast-2	sqs:SendMessage,sqs:ReceiveMessage,sqs:PurgeQueue,sqs:SetQueueAttributes,sqs:AddPermission,sqs:RemovePermission,sqs:DeleteQueue	unread	-
+broadcast-dlq-clip	runtime-1a	arn:arn:aws:sqs:ap-northeast-2:${ACCOUNT}:pokeclip-prod-broadcast-lifecycle-clip-dlq.fifo	queue	ap-northeast-2	sqs:SendMessage,sqs:ReceiveMessage,sqs:PurgeQueue,sqs:SetQueueAttributes,sqs:AddPermission,sqs:RemovePermission,sqs:DeleteQueue	unread	-
+broadcast-dlq-chat	runtime-1a	arn:arn:aws:sqs:ap-northeast-2:${ACCOUNT}:pokeclip-prod-broadcast-lifecycle-chat-dlq.fifo	queue	ap-northeast-2	sqs:SendMessage,sqs:ReceiveMessage,sqs:PurgeQueue,sqs:SetQueueAttributes,sqs:AddPermission,sqs:RemovePermission,sqs:DeleteQueue	unread	-
+
+# SQL 실행기 역할 · 인스턴스 프로필(켜진 동안만 있다 — 꺼져 있어도 묻는다).
+# 역할 넘기기는 EC2 로 넘기는 문맥으로 묻는다(dev 주체가 상자를 띄워 마스터
+# 비밀을 읽는 길). 역할의 권한 변경은 prod-roles 행이 묻는다.
+sql-runner-role	runtime-1a	arn:arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/pokeclip-prod-sql-runner	role	us-east-1	iam:PassRole	none	iam:PassedToService:string:ec2.amazonaws.com
+sql-runner-profile	runtime-1a	arn:arn:aws:iam::${ACCOUNT}:instance-profile/pokeclip/prod/pokeclip-prod-sql-runner	instance-profile	us-east-1	iam:AddRoleToInstanceProfile,iam:RemoveRoleFromInstanceProfile,iam:DeleteInstanceProfile	none	-
+
+# rewind 버킷 · 객체 — 첫 단계는 버킷이 생긴 뒤인 O7d 다. runtime-1a 직전
+# 점검 때는 버킷이 없어 버킷 정책 읽기가 「정책 없음」 이 아닌 오류(종료 2)가
+# 된다. 그 단계 동안은 A13(그 단계가 새로 만드는 자원)이다. 객체 키는
+# 사이드카 목록 경로 꼴(dvr/<방송>/<세션>/index.m3u8)의 표본이다 —
+# 시뮬레이터는 객체가 있는지 보지 않는다.
+rewind-bucket	O7d	arn:arn:aws:s3:::pokeclip-prod-rewind-apne2	bucket	ap-northeast-2	s3:PutBucketPolicy,s3:DeleteBucketPolicy,s3:PutBucketPublicAccessBlock,s3:PutBucketOwnershipControls,s3:PutLifecycleConfiguration,s3:DeleteBucket	s3	-
+rewind-object	O7d	arn:arn:aws:s3:::pokeclip-prod-rewind-apne2/dvr/sample-stream/sample-session/index.m3u8	object	ap-northeast-2	s3:PutObject,s3:DeleteObject	s3	-
 
 # 권한 변경 — 주체 자신 · 사용자의 그룹 · prod 역할(경로 /pokeclip/prod/) ·
 # 붙은 고객 관리형 정책(IAM 은 us-east-1)

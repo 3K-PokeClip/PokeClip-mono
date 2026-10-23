@@ -84,8 +84,9 @@ IP · 인그레스 없음, IMDSv2 필수, 루트 볼륨 암호화). 역할은 SS
 
 SQL 을 적용한 뒤 곧바로 끕니다. 켜진 동안 `iam:PassRole` 을 가진 dev 주체가
 이 프로필로 상자를 띄워 마스터 비밀을 읽을 수 있기 때문입니다. 2-3
-판정(POK-365)은 이 `iam:PassRole` 을 묻지 않습니다. 잊어도 상자는 준비
-단계가 건 자동 종료로 120분 뒤 멈춥니다(런북 4 · 5-3).
+판정(principal-check)은 dev 주체가 실행기 역할을 EC2 에 넘길 수 있는지
+(`iam:PassRole` · `iam:PassedToService = ec2.amazonaws.com`)를 묻습니다.
+잊어도 상자는 준비 단계가 건 자동 종료로 120분 뒤 멈춥니다(런북 4 · 5-3).
 
 ## 대안
 
@@ -127,10 +128,13 @@ SQL 을 적용한 뒤 곧바로 끕니다. 켜진 동안 `iam:PassRole` 을 가�
     결과).
 1.  앱 서버 사용자에게 `public` 스키마 CREATE 부여(Flyway).
 1.  IAM 인증을 못 쓰는 대체 갈래면 `POSTGRES_PASSWORD` 그릇.
-1.  런타임 자원 행(RDS · SNS · SQS · rewind 버킷)을 2-3 판정 대상
-    (`scripts/precheck/data/principal_sim/prod_targets.tsv`)에 더하기. 설계
-    K5 는 바뀌었습니다 — POK-365 완료로 `runtime-1a` 는 2-3 판정 단계이고
-    (O7c 뒤 · O7d 앞, kty 2026-10-23), 지금 대상은 런타임 상태 객체입니다.
+1.  2-3 판정 대상의 남은 칸. 런타임 자원 행(RDS · 로그 그룹 · SNS · SQS ·
+    rewind 버킷 · 실행기 역할 · 프로필)은 이 PR 이 더했습니다(설계 K5 는
+    바뀌었습니다 — POK-365 완료로 `runtime-1a` 는 O7c 뒤 · O7d 앞의 2-3 판정
+    단계, kty 2026-10-23 · 10-24). 남은 것: rewind 행은 O7d 부터(runtime-1a
+    직전에는 버킷이 없음) · SNS · SQS 는 자원 정책을 읽지 못해 판정 불가
+    (`unread`) · RDS 관리형 비밀(`rds!db-*`)은 `Environment=prod` 태그가
+    붙는지 apply 뒤 실측.
 1.  `scripts/put-secret-from-file.sh` 의 비밀 종류 확장(O7d 앞).
 1.  응답기 비밀 최소 권한(K1) — 응답기가 앱과 같은 `INTERNAL_API_TOKEN` 을
     써서 Media 상자가 auth `/internal/**` 전부에 통하는 열쇠를 가집니다. 전용
