@@ -7,7 +7,7 @@
 # 이유: 로컬에 받아 둔 이미지가 이 태그라 시험이 망 없이 빌드된다.
 FROM golang:1.27-alpine3.24 AS build
 WORKDIR /src
-COPY go.mod main.go ./
+COPY go.mod *.go ./
 # CGO_ENABLED=0 = 순수 정적 바이너리. 실행 스테이지가 scratch 라 동적 링커가 없다.
 RUN CGO_ENABLED=0 go build -trimpath -o /out/echo .
 

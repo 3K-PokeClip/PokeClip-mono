@@ -5,6 +5,8 @@
 //	echo sidecar -owner_addr 127.0.0.1:8888 -exit_delay 4s
 //	echo probe -timeout 2s mediamtx:8888 mediamtx:9996
 //	echo fetch -method POST 'http://127.0.0.1:28199/exit?code=1'
+//	echo authstub -listen 127.0.0.1:8080 -admin 127.0.0.1:28199 -passphrase <P>
+//	echo resolvestub -listen :28082 -internal_token <T> -stream_token <토큰> -passphrase <P>
 //
 // serve 는 MediaMTX 자리(망 칸 주인)를 흉내 낸다. 받은 요청의 경로 · 쿼리 원문 · 메서드 ·
 // 본문 · 헤더를 JSON 으로 그대로 돌려주고, 포트별 호출 수를 센다. 관리 포트는 호출 수
@@ -19,6 +21,9 @@
 // probe 는 TCP 접속만 시도해 주소마다 OPEN 또는 CLOSED 한 줄을 낸다. fetch 는 HTTP 요청 하나를
 // 보내 응답 본문을 표준 출력에 낸다 — 셸도 curl 도 없는 scratch 이미지 안에서
 // `docker compose exec` 로 관리 포트를 부르기 위한 것이다.
+//
+// authstub · resolvestub 은 송출 인증 계약 시험(infra/media-host/test/ingest_auth_contract.sh)의 가짜
+// 응답기 · 가짜 4C 다(authstub.go · resolvestub.go).
 //
 // 요청 내용(헤더 값 · 본문)은 표준 출력 · 오류 어디에도 남기지 않는다. 시험이 로그에서 시험
 // 토큰을 셀 때 이 도구의 로그가 같은 토큰을 섞어 대조를 오염시키지 않게 하기 위해서다.
@@ -90,7 +95,7 @@ func main() {
 
 func run(args []string) int {
 	if len(args) == 0 {
-		log.Print("하위 명령이 없다: serve · sidecar · probe · fetch 가운데 하나")
+		log.Print("하위 명령이 없다: serve · sidecar · probe · fetch · authstub · resolvestub 가운데 하나")
 		return exitUsage
 	}
 	switch args[0] {
@@ -102,6 +107,10 @@ func run(args []string) int {
 		return runProbe(args[1:])
 	case "fetch":
 		return runFetch(args[1:])
+	case "authstub":
+		return runAuthstub(args[1:])
+	case "resolvestub":
+		return runResolvestub(args[1:])
 	}
 	log.Printf("모르는 하위 명령 %q", args[0])
 	return exitUsage

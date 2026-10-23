@@ -1,0 +1,279 @@
+# 송출 인증 계약 시험 compose — ingest_auth_contract.sh 가 띄운다(로컬 전용 ·
+# CI 상설 아님).
+#
+# 층마다 띄우는 서비스가 다르다(profiles):
+#   - 기본(프로필 없음): mediamtx 하나 — C0 설정 수용 탐침 · 층 L(옛 모드).
+#   - stub: + authstub(에코의 가짜 응답기) — 층 A.
+#   - real: + ingest-auth(실물 응답기) · ingest-auth-prep(비밀 · 거부 목록 ·
+#     상태 디렉터리의 소유 · 모드를 맞추는 일회성 도우미) · resolvestub(에코의
+#     가짜 4C) · poller(기동 직후 관리 API 폴 — C16 기록) — 층 B.
+#   - tools: sender(SRT 송출 · 읽기 — 기본 망) · netprobe(망 칸 안 curl).
+#     `docker compose run` 으로만 쓴다.
+#
+# mediamtx · 응답기 서비스의 망 칸 · 재시작 정책 · cap · ulimits · 읽기 전용
+# 여부는 prod 템플릿(compose.yml.tmpl)과 계획 4-c4 의 응답기 꼴을 따른다.
+# 다른 점:
+#   - 이미지: 시험이 로컬에서 빌드한 것(media/Dockerfile.mtxhook ·
+#     media/Dockerfile.ingest-auth · test/echo)과 images.json 의 송출기 핀.
+#   - 게시 포트: 없다. SRT 는 기본 망의 mediamtx:8890/udp 로, 루프백 포트
+#     (8888 · 9997)는 망 칸 안 netprobe 로 닿는다.
+#   - 로깅: 설정하지 않는다(엔진 기본값 — 로컬 엔진에 journald 가 없다).
+#   - MediaMTX 설정: 층마다 다른 파일(PCBENCH_MTX_CONFIG)이다. 한 경로를 층
+#     사이에 덮어쓰면 로컬 엔진(OrbStack)의 단일 파일 bind 가 바로 다음 기동에
+#     빈 내용을 보여 MediaMTX 가 기본값으로 뜬 일이 있다(2026-10-23 실측).
+#   - 응답기 비밀 · 거부 목록 · 상태: prod 는 호스트 tmpfs · 디스크 bind 이고,
+#     여기서는 named volume 에 도우미가 prod 와 같은 소유 · 모드(비밀 10003
+#     0400 · 거부 목록 root:10003 0640 / 디렉터리 0750 · 상태 10003 0700)로
+#     넣는다 — 로컬 엔진의 bind 는 호스트 소유를 그대로 옮기지 못한다.
+#   - healthcheck: prod 꼴에 start_interval 2s 를 더한다(시작 유예 안에서
+#     빨리 healthy 가 되게 — 시험 시간 단축).
+#
+# 값은 모두 실행하는 쪽이 넣는다(빈 값이면 compose 가 멈춘다). 비밀은 고정
+# 가짜 문자열이다.
+#
+# 실험 식별: 프로젝트 pcbench-m15-ingest-auth · 라벨
+# com.pokeclip.bench=m15-ingest-auth(컨테이너 · 망 · 볼륨).
+name: pcbench-m15-ingest-auth
+
+x-bench-labels: &bench-labels
+  com.pokeclip.bench: m15-ingest-auth
+
+x-mediamtx-dependency: &mediamtx-dependency
+  mediamtx:
+    condition: service_started
+    restart: true
+
+services:
+  # 망 칸 주인 — 실물 MediaMTX(포크 + 훅). 설정은 시험이 렌더한 파일이다.
+  mediamtx:
+    image: ${PCBENCH_MTX_IMAGE:?ingest_auth_contract.sh 가 넣는다}
+    pull_policy: never
+    restart: "no"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    ulimits:
+      core: 0
+    environment:
+      TZ: UTC
+    volumes:
+      - recordings:/recordings
+      - hooks:/hooks
+      - dvr:/dvr
+      - type: bind
+        source: ${PCBENCH_MTX_CONFIG:?}
+        target: /mediamtx.yml
+        read_only: true
+        bind:
+          create_host_path: false
+    labels: *bench-labels
+
+  # 층 A — 가짜 응답기. 응답기 자리(망 칸 127.0.0.1:8080)에 선다.
+  authstub:
+    profiles:
+      - stub
+    image: ${PCBENCH_ECHO_IMAGE:?}
+    pull_policy: never
+    command:
+      - authstub
+      - -listen=127.0.0.1:8080
+      - -admin=127.0.0.1:28199
+      - -passphrase=${PCBENCH_PASSPHRASE:?}
+    network_mode: "service:mediamtx"
+    depends_on: *mediamtx-dependency
+    restart: "no"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    ulimits:
+      core: 0
+    labels: *bench-labels
+
+  # 층 B — 응답기 비밀 · 거부 목록 · 상태 디렉터리를 prod 와 같은 소유 · 모드로
+  # 맞추고 끝난다. 원본은 시험이 RUNTIME_DIR 에 쓴 가짜 값이다.
+  ingest-auth-prep:
+    profiles:
+      - real
+    image: ${PCBENCH_HELPER_IMAGE:?}
+    pull_policy: never
+    restart: "no"
+    security_opt:
+      - no-new-privileges:true
+    command:
+      - sh
+      - -euc
+      - |
+        cd /src
+        cp ingest_basic_pass mtx_api_pass stream_key_resolve_token /secrets/
+        chown 10003:10003 /secrets/ingest_basic_pass /secrets/mtx_api_pass \
+          /secrets/stream_key_resolve_token
+        chmod 0400 /secrets/ingest_basic_pass /secrets/mtx_api_pass \
+          /secrets/stream_key_resolve_token
+        cp deny-tokens /deny/deny-tokens
+        chown 0:10003 /deny /deny/deny-tokens
+        chmod 0750 /deny
+        chmod 0640 /deny/deny-tokens
+        chown 10003:10003 /state
+        chmod 0700 /state
+    volumes:
+      - type: bind
+        source: ${RUNTIME_DIR:?}/ingest-auth-src
+        target: /src
+        read_only: true
+        bind:
+          create_host_path: false
+      - ia-secrets:/secrets
+      - ia-deny:/deny
+      - ia-state:/state
+    labels: *bench-labels
+
+  # 층 B — 실물 응답기(계획 4-c4 꼴). 4C 는 기본 망의 resolvestub 이다.
+  ingest-auth:
+    profiles:
+      - real
+    image: ${PCBENCH_INGEST_AUTH_IMAGE:?}
+    pull_policy: never
+    network_mode: "service:mediamtx"
+    depends_on:
+      <<: *mediamtx-dependency
+      ingest-auth-prep:
+        condition: service_completed_successfully
+      resolvestub:
+        condition: service_started
+    restart: on-failure
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    ulimits:
+      core: 0
+    environment:
+      INGEST_AUTH_LISTEN: 127.0.0.1:8080
+      INGEST_AUTH_CALLER_IP: 127.0.0.1
+      MTX_API_URL: http://127.0.0.1:9997
+      MTX_API_USER: pokeclip-sidecar
+      MTX_API_PASS_FILE: /run/secrets/mtx_api_pass
+      STREAM_KEY_RESOLVE_URL: ${PCBENCH_RESOLVE_URL:?}
+      STREAM_KEY_RESOLVE_CHANNEL: internal-token
+      STREAM_KEY_RESOLVE_TOKEN_FILE: /run/secrets/stream_key_resolve_token
+      INGEST_AUTH_BASIC_USER: pokeclip-mediamtx
+      INGEST_AUTH_BASIC_PASS_FILE: /run/secrets/ingest_basic_pass
+    env_file:
+      - path: ${RUNTIME_DIR:?}/ingest-auth.env
+        required: true
+    volumes:
+      - ia-secrets:/run/secrets:ro
+      - ia-deny:/etc/ingest-auth:ro
+      - ia-state:/var/lib/ingest-auth
+    healthcheck:
+      test: ["CMD", "/ingest-auth", "healthcheck"]
+      interval: 30s
+      retries: 3
+      start_period: 10s
+      start_interval: 2s
+    labels: *bench-labels
+
+  # 층 B — 가짜 4C. 기본 망에서 28082 를 듣는다(게시하지 않는다).
+  resolvestub:
+    profiles:
+      - real
+    image: ${PCBENCH_ECHO_IMAGE:?}
+    pull_policy: never
+    command:
+      - resolvestub
+      - -listen=:28082
+      - -admin=127.0.0.1:28199
+      - -internal_token=${PCBENCH_INTERNAL_TOKEN:?}
+      - -stream_token=${PCBENCH_STREAM_TOKEN:?}
+      - -passphrase=${PCBENCH_PASSPHRASE:?}
+    restart: "no"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    labels: *bench-labels
+
+  # 층 B — 기동 직후 사이드카 자격으로 관리 API 를 0.1초마다 묻고, 첫 200 에서
+  # 끝난다(C16 기록 — 줄마다 POLL <코드>).
+  poller:
+    profiles:
+      - real
+    image: ${PCBENCH_SENDER_IMAGE:?}
+    pull_policy: never
+    network_mode: "service:mediamtx"
+    depends_on: *mediamtx-dependency
+    restart: "no"
+    entrypoint:
+      - sh
+    command:
+      - -c
+      - |
+        i=0
+        while [ "$$i" -lt 300 ]; do
+          code="$$(curl -s -o /dev/null -w '%{http_code}' --max-time 1 \
+            -u "pokeclip-sidecar:$$API_PASS" \
+            http://127.0.0.1:9997/v3/paths/list)"
+          echo "POLL $$code"
+          [ "$$code" = 200 ] && exit 0
+          i=$$((i + 1))
+          sleep 0.1
+        done
+        exit 1
+    environment:
+      API_PASS: ${PCBENCH_API_PASS:?}
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    labels: *bench-labels
+
+  # SRT 송출 · 읽기(ffmpeg). 기본 망에서 srt://mediamtx:8890 으로 붙는다 — 본문
+  # ip 가 송출자 IP 인지(C5) 보려면 망 칸 밖이어야 한다.
+  sender:
+    profiles:
+      - tools
+    image: ${PCBENCH_SENDER_IMAGE:?}
+    pull_policy: never
+    restart: "no"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    labels: *bench-labels
+
+  # 망 칸 안 HTTP 탐침(curl) — 127.0.0.1:8888 · 9997 은 루프백에만 묶여 있다.
+  netprobe:
+    profiles:
+      - tools
+    image: ${PCBENCH_SENDER_IMAGE:?}
+    pull_policy: never
+    network_mode: "service:mediamtx"
+    entrypoint:
+      - curl
+    restart: "no"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    labels: *bench-labels
+
+networks:
+  default:
+    labels: *bench-labels
+
+volumes:
+  recordings:
+    labels: *bench-labels
+  hooks:
+    labels: *bench-labels
+  dvr:
+    labels: *bench-labels
+  ia-secrets:
+    labels: *bench-labels
+  ia-deny:
+    labels: *bench-labels
+  ia-state:
+    labels: *bench-labels
