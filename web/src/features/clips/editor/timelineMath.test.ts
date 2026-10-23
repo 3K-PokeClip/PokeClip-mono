@@ -146,6 +146,12 @@ describe('창 환산', () => {
     expect(rulerLabel(4907.99, 2)).toBe('1:21:47.9');
   });
 
+  it('15초 경계를 넘나들어도 같은 눈금의 초 자리가 안 바뀐다: 초 표기와 0.1초 표기가 같은 내림이다(로컬 리뷰 3라운드)', () => {
+    // 반올림이면 15초 창에서 1:21:48, 14.9초 창에서 1:21:47.6으로 앞자리가 달라 첫 눈금이 튀어 보였다
+    expect(rulerLabel(4907.6, 15)).toBe('1:21:47');
+    expect(rulerLabel(4907.6, 14.9)).toBe('1:21:47.6');
+  });
+
   it('100% 이하는 구간 가운데에 두되 원본 밖으로 나가지 않는다', () => {
     const at = (range: { startSeconds: number; endSeconds: number }, max = DURATION, zoom = 100) =>
       zoomedView({

@@ -278,20 +278,20 @@ export function clampTimelineHeight(px: number, ceiling = MAX_TIMELINE_HEIGHT): 
   return Math.round(Math.max(MIN_TIMELINE_HEIGHT, Math.min(top, px)));
 }
 
-/**
- * 눈금자 눈금 위치(초). 창을 균등 분할한다 —
- * 줌을 바꾸면 눈금도 따라 움직여야 해서 시안 값(1:21:40…1:22:55)을 박아둘 수 없다.
- */
 /** 눈금 글자. 창이 이보다 좁으면 0.1초까지 적는다(초만 적으면 같은 초가 되풀이된다) */
 const TENTHS_BELOW_SECONDS = 15;
 
 export function rulerLabel(seconds: number, spanSeconds: number): string {
-  if (spanSeconds >= TENTHS_BELOW_SECONDS) return formatUptime(seconds);
-  // 내림한다: 반올림하면 「:47.9」 다음 칸이 「:48.0」이 아니라 「:47.10」처럼 셀 수 있다
+  // 초 표기도 0.1초 표기도 내림한다: 한쪽만 반올림하면 15초 경계를 넘나들 때 같은 눈금의 초 자리가 바뀌어 튀어 보인다
   const tenths = Math.floor(seconds * 10 + 1e-6);
-  return `${formatUptime(Math.floor(tenths / 10))}.${tenths % 10}`;
+  const whole = formatUptime(Math.floor(tenths / 10));
+  return spanSeconds >= TENTHS_BELOW_SECONDS ? whole : `${whole}.${tenths % 10}`;
 }
 
+/**
+ * 눈금자 눈금 위치(초). 창을 균등 분할한다:
+ * 줌을 바꾸면 눈금도 따라 움직여야 해서 시안 값(1:21:40…1:22:55)을 박아둘 수 없다.
+ */
 export function rulerTicks(view: TimelineView, count = 6): number[] {
   if (count < 2) return [view.startSeconds];
   const span = view.endSeconds - view.startSeconds;
