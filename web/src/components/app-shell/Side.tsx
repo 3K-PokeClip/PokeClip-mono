@@ -124,7 +124,7 @@ const MENUS: Record<SideMenu, Group[]> = {
         { key: 'noti', label: '알림 설정', Icon: Bell, href: '/settings/notifications' },
         { key: 'billing', label: '구독 · 결제', Icon: CreditCard, ownerOnly: true },
         { key: 'account', label: '계정', Icon: User, href: '/settings/account' },
-        { key: 'help', label: '도움말 · 문의', Icon: HelpCircle },
+        { key: 'help', label: '도움말 · 문의', Icon: HelpCircle, href: '/settings/help' },
       ],
     },
   ],
