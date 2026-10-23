@@ -52,8 +52,7 @@ class JumpCardSchemaTest extends IntegrationTestSupport {
     void 카드를_넣으면_event_seq와_시각을_DB가_채운다() {
         insert("s-1", "auto", "evt-1", 5_043_000L, 5_020_000L, 5_062_000L, 97, "{\"multiplier\":4.2}");
 
-        JumpCard card = cards.findByStreamIdAndSourceAndWindowStartMs("s-1", JumpCardSource.AUTO, 5_020_000L)
-                .orElseThrow();
+        JumpCard card = cards.findAutoByStreamIdAndWindowStartMs("s-1", 5_020_000L).orElseThrow();
 
         assertThat(card.getEventSeq()).as("트리거가 명시한 0을 nextval로 덮어야 한다").isPositive();
         assertThat(card.getCreatedAt()).isNotNull();
@@ -76,12 +75,39 @@ class JumpCardSchemaTest extends IntegrationTestSupport {
     }
 
     @Test
-    void 같은_방송_출처_창시작은_두_번_못_넣는다() {
+    void 자동_카드는_같은_방송_창시작을_두_번_못_넣는다() {
         insert("s-1", "auto", "evt-1", 5_043_000L, 5_020_000L, 5_062_000L, 97, null);
 
         assertThatThrownBy(() -> insert("s-1", "auto", "evt-2", 5_043_000L, 5_020_000L, 5_062_000L, 97, null))
-                .as("중복 방어선은 uq_jump_cards_window 하나뿐이다")
+                .as("자동 카드 중복 방어선은 uq_jump_cards_auto_window 하나뿐이다")
                 .isInstanceOf(DuplicateKeyException.class);
+    }
+
+    /**
+     * POK-391(V219). 수동 카드는 구간 시작으로 막지 않는다: 방송 시각 40초 안의 수동 카드는 구간 시작이
+     * 0으로 잘려 같아지는데, 20초 넘게 떨어졌으면 둘 다 카드다. 수동 카드 중복은 eventId가 막는다.
+     */
+    @Test
+    void 자동_카드는_같은_창이면_막히고_수동은_안_막힌다() {
+        insert("s-1", "hotkey", "e-1", 5_000L, 0L, 25_000L, null, null);
+        insert("s-1", "hotkey", "e-2", 30_000L, 0L, 50_000L, null, null);
+        insert("s-1", "auto", "evt-1", 5_000L, 0L, 25_000L, null, null);
+
+        assertThatThrownBy(() -> insert("s-1", "auto", "evt-2", 30_000L, 0L, 50_000L, null, null))
+                .isInstanceOf(DuplicateKeyException.class);
+        assertThat(count()).isEqualTo(3);
+    }
+
+    /** POK-391(V219). 같은 eventId 수동 카드 둘은 방송이 달라도 막힌다(계약4: eventId는 전역 유일). */
+    @Test
+    void 수동_카드는_eventId가_겹치면_막힌다() {
+        broadcasts.save(Broadcast.startedNow("s-2", TestIds.STREAMER, null, 1L, Instant.parse("2026-08-23T00:00:00Z"), null));
+        insert("s-1", "hotkey", "e-1", 5_000L, 0L, 25_000L, null, null);
+
+        assertThatThrownBy(() -> insert("s-2", "hotkey", "e-1", 90_000L, 50_000L, 110_000L, null, null))
+                .isInstanceOf(DuplicateKeyException.class);
+        insert("s-1", "auto", "e-1", 90_000L, 50_000L, 110_000L, null, null);
+        assertThat(count()).as("자동 카드의 eventId는 추적용이라 겹쳐도 된다").isEqualTo(2);
     }
 
     @Test
@@ -110,7 +136,10 @@ class JumpCardSchemaTest extends IntegrationTestSupport {
                 .isInstanceOf(DataIntegrityViolationException.class);
     }
 
-    /** 핫키(POK-119)는 판별기 이벤트 번호가 없다. 추적용 칸이라 비어도 된다. */
+    /**
+     * 칸은 지금도 비어도 된다. 4B로 만드는 수동 카드는 늘 eventId를 채우지만(POK-391), 부분 유일 색인은
+     * NULL끼리 안 부딪혀 옛 행·시험 시드를 막지 않는다.
+     */
     @Test
     void event_id는_비워도_된다_핫키() {
         insert("s-1", "hotkey", null, 1_500L, 1_000L, 2_000L, null, null);

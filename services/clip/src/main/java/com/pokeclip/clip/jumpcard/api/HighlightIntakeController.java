@@ -36,9 +36,15 @@ public class HighlightIntakeController {
         }
         // 모르는 출처를 여기서 좁혀 던진다. 핸들러가 IllegalArgumentException을 통째로 400으로
         // 잡으면 내부 버그가 「요청이 잘못됐다」로 둔갑해 판별기가 재시도를 멈춘다.
+        JumpCardSource source;
         try {
-            JumpCardSource.fromDbValue(request.source());
+            source = JumpCardSource.fromDbValue(request.source());
         } catch (IllegalArgumentException e) {
+            throw new InvalidHighlightException("source");
+        }
+        // 수동 카드는 4B(마킹 문)로만 만든다(POK-391). 여기로 받으면 eventId·20초 규칙을 안 지나고
+        // 자동 카드 유일 색인(WHERE source = 'auto')에도 안 걸려 같은 창 중복이 막히지 않는다.
+        if (source != JumpCardSource.AUTO) {
             throw new InvalidHighlightException("source");
         }
 

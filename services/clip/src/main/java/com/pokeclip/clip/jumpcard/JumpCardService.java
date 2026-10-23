@@ -1,9 +1,12 @@
 package com.pokeclip.clip.jumpcard;
 
+import com.pokeclip.clip.broadcast.Broadcast;
 import com.pokeclip.clip.broadcast.BroadcastRepository;
 import com.pokeclip.clip.delegation.AccessErrors;
 import com.pokeclip.clip.delegation.BroadcastAccessGuard;
 import com.pokeclip.clip.jumpcard.JumpCardErrors.BroadcastNotFoundException;
+import com.pokeclip.clip.jumpcard.JumpCardErrors.HotkeyBroadcastGoneException;
+import com.pokeclip.clip.jumpcard.JumpCardErrors.HotkeyEventOwnedByOtherException;
 import com.pokeclip.clip.jumpcard.JumpCardErrors.JumpCardNotFoundException;
 import com.pokeclip.clip.jumpcard.api.HighlightRequest;
 import com.pokeclip.clip.jumpcard.stream.CardStreamRegistry;
@@ -21,6 +24,7 @@ import tools.jackson.databind.ObjectMapper;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /** 카드를 쓰는 유일한 자리. 쓰기는 전부 네이티브 SQL이라 DB 시계와 순번 트리거를 탄다. */
 @Service
@@ -42,6 +46,13 @@ public class JumpCardService {
 
     /** 넘겨 달라고 해도 여기서 깎는다(PRD 결정). 판정은 {@link ListLimit}에 있다 — 목록 문 둘이 나눠 쓴다. */
     private static final int MAX_LIST_LIMIT = 200;
+
+    /** 수동 카드 구간: 누른 시각 앞 40초 · 뒤 20초(PRD, 사용자 2026-10-22). */
+    private static final long HOTKEY_BEFORE_MS = 40_000L;
+    private static final long HOTKEY_AFTER_MS = 20_000L;
+
+    /** 같은 방송의 앞 수동 카드와 이만큼 안이면 새로 안 만든다. 양 끝 제외(19,999ms는 무시 · 20,000ms는 새 카드). */
+    private static final long HOTKEY_SUPPRESS_MS = 20_000L;
 
     private final JumpCardRepository cards;
     private final BroadcastRepository broadcasts;
@@ -68,30 +79,122 @@ public class JumpCardService {
         this.transactions = transactions;
     }
 
+    /**
+     * 자동 카드(2A). <b>자동만 받는다</b>(POK-391): 수동 카드는 {@link #recordHotkey}로만 만든다.
+     * 컨트롤러가 {@code hotkey}를 400으로 먼저 거절하므로 여기 오는 다른 출처는 우리 코드의 버그다.
+     */
     @Transactional
     public RecordResult record(String streamId, HighlightRequest request) {
+        if (JumpCardSource.fromDbValue(request.source()) != JumpCardSource.AUTO) {
+            throw new IllegalArgumentException("2A는 자동 카드만 받는다");
+        }
         // FK 위반으로 막는 대신 먼저 본다 — FK 위반은 "진짜 실패"로 분류돼 500이 되고,
         // 판별기는 404를 받아야 재시도 상한을 센다.
         broadcasts.findByStreamId(streamId).orElseThrow(() -> new BroadcastNotFoundException(streamId));
 
-        JumpCardSource source = JumpCardSource.fromDbValue(request.source());
         String evidence = request.evidence() == null ? null : mapper.writeValueAsString(request.evidence());
 
-        int inserted = cards.insertIfAbsent(streamId, source.dbValue(), request.eventId(),
+        int inserted = cards.insertAutoIfAbsent(streamId, request.eventId(),
                 request.streamTimestampMs(), request.window().startMs(), request.window().endMs(),
                 request.score(), evidence);
 
-        JumpCard card = cards.findByStreamIdAndSourceAndWindowStartMs(streamId, source, request.window().startMs())
-                .orElseThrow();
+        JumpCard card = cards.findAutoByStreamIdAndWindowStartMs(streamId, request.window().startMs()).orElseThrow();
         JumpCardSnapshot snapshot = snapshot(card);
 
         if (inserted == 1) {
             publishAfterCommit(snapshot);
         } else {
             log.info("jumpcard.duplicate_skipped streamId={} source={} windowStartMs={} eventId={}",
-                    streamId, source, request.window().startMs(), request.eventId());
+                    streamId, JumpCardSource.AUTO, request.window().startMs(), request.eventId());
         }
         return new RecordResult(inserted == 1, snapshot);
+    }
+
+    /**
+     * 수동 카드 한 장(POK-391, 계약4 4B). 순서가 규칙이다: 방송 행 잠금 → eventId → 20초 → 저장 → 커밋 뒤 발행.
+     *
+     * <ul>
+     *   <li>같은 eventId의 수동 카드가 있으면 그것({@code created=false}). 다른 방송의 카드여도 그것이다
+     *       (계약4: eventId는 전역 유일). <b>그 카드의 방송이 {@code userId}의 것이 아니면</b>
+     *       {@link HotkeyEventOwnedByOtherException}(계획 검증 E4)</li>
+     *   <li>같은 방송에 누른 시각이 {@code |T − 앞| < 20초}인 수동 카드가 있으면 가장 가까운 것({@code created=false})</li>
+     *   <li>아니면 새 카드. 구간은 {@code [max(0, T − 40초), T + 20초]}, {@code streamTimestampMs = T}</li>
+     * </ul>
+     *
+     * <p>🔴 <b>잠금이 20초 판정을 지킨다.</b> 다른 eventId 둘이 20초 안에 동시에 오면 유일 색인은 못 막는다 :
+     * 둘 다 「앞 카드 없음」을 보고 둘 다 넣는다. 그래서 같은 방송의 마킹을 방송 행으로 줄 세운다.
+     * {@code findByStreamIdForUpdate}는 PostgreSQL에서 {@code FOR NO KEY UPDATE}다(계획 검증 E8): 같은 잠금끼리는
+     * 줄을 서지만, 2A 저장의 FK 검사가 거는 {@code FOR KEY SHARE}와는 안 부딪혀 자동 카드 수신을 막지 않는다.
+     * 잠금을 기다린 뒤의 조회는 앞 트랜잭션이 커밋한 카드를 본다(READ COMMITTED는 문장마다 새로 읽는다).
+     *
+     * <p>넘겨받은 방송의 주인이 {@code userId}가 아니면 {@link HotkeyBroadcastGoneException}이다(404 갈래: 남의 방송의
+     * 존재를 안 흘린다). eventId로 찾은 카드는 그 카드 방송의 주인을 따로 본다.
+     *
+     * @param pressedMs 누른 시각을 영상 위치(방송 기준 ms)로 바꾼 값. 0 이상
+     * @throws HotkeyBroadcastGoneException 방송이 잠그려는 사이 사라졌거나 이 회원의 방송이 아니다(404 갈래)
+     * @throws HotkeyEventOwnedByOtherException eventId가 남의 방송 카드다(400 갈래)
+     * @throws IllegalArgumentException {@code pressedMs}가 음수다: 구간 CHECK({@code start ≤ ts})가 깨진다
+     */
+    public RecordResult recordHotkey(String streamId, String userId, String eventId, long pressedMs) {
+        if (pressedMs < 0) {
+            throw new IllegalArgumentException("누른 시각이 방송 시작 앞이다");
+        }
+        long start = Math.max(0, pressedMs - HOTKEY_BEFORE_MS);
+        long end = Math.addExact(pressedMs, HOTKEY_AFTER_MS);
+        return transactions.execute(status -> {
+            Broadcast locked = broadcasts.findByStreamIdForUpdate(streamId)
+                    .orElseThrow(HotkeyBroadcastGoneException::new);
+            // 넘겨받은 방송이 이 회원의 것이 아니면 「없다」로 접는다: 남의 방송의 존재를 안 흘린다.
+            // 지금 부르는 쪽(마킹 서비스)은 회원으로 방송을 고르지만, 다른 길로 방송을 넘기는 호출자가
+            // 생겨도 남의 방송에 카드가 안 붙게 여기서 본다(감사 1회차 A1).
+            if (!userId.equals(locked.getStreamerId())) {
+                throw new HotkeyBroadcastGoneException();
+            }
+
+            Optional<JumpCard> sameEvent = cards.findHotkeyByEventId(eventId);
+            if (sameEvent.isPresent()) {
+                return existing(sameEvent.get(), userId);
+            }
+
+            Optional<JumpCard> near = cards.findHotkeyNear(streamId, pressedMs, HOTKEY_SUPPRESS_MS);
+            if (near.isPresent()) {
+                JumpCard card = near.get();
+                log.info("jumpcard.hotkey_suppressed nearCardId={} deltaMs={}",
+                        card.getId(), pressedMs - card.getStreamTimestampMs());
+                return new RecordResult(false, snapshot(card));
+            }
+
+            int inserted = cards.insertHotkey(streamId, eventId, pressedMs, start, end);
+            JumpCard card = cards.findHotkeyByEventId(eventId).orElseThrow();
+            if (inserted == 0) {
+                // 잠금 밖에서 같은 eventId가 다른 방송으로 먼저 들어갔다. 색인이 막았고 그 카드를 다시 읽었다.
+                return existing(card, userId);
+            }
+            JumpCardSnapshot snapshot = snapshot(card);
+            publishAfterCommit(snapshot);
+            log.info("jumpcard.hotkey_created cardId={} by={}", card.getId(), userId);
+            return new RecordResult(true, snapshot);
+        });
+    }
+
+    /**
+     * 같은 eventId의 수동 카드가 이미 있으면 그것(마킹 문의 선조회, 방송 고르기 앞). 방송이 끝난 뒤 온 재전송도
+     * 같은 카드 200을 받게 하려고 방송을 고르기 전에 본다. 그 카드가 이 회원의 방송 카드가 아니면 거절한다.
+     *
+     * @throws HotkeyEventOwnedByOtherException eventId가 남의 방송 카드다(400 갈래)
+     */
+    public Optional<RecordResult> existingHotkey(String eventId, String userId) {
+        return cards.findHotkeyByEventId(eventId).map(card -> existing(card, userId));
+    }
+
+    /** eventId로 찾은 카드를 돌려준다. 그 카드의 방송 주인이 이 회원이 아니면 거절한다(계획 검증 E4). */
+    private RecordResult existing(JumpCard card, String userId) {
+        String owner = broadcasts.findStreamerIdByStreamId(card.getStreamId()).orElse(null);
+        if (!userId.equals(owner)) {
+            log.info("jumpcard.hotkey_event_owned_by_other cardId={} by={}", card.getId(), userId);
+            throw new HotkeyEventOwnedByOtherException();
+        }
+        return new RecordResult(false, snapshot(card));
     }
 
     /**
