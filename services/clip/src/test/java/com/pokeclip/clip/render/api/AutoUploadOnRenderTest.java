@@ -66,13 +66,15 @@ class AutoUploadOnRenderTest extends RenderUploadTestSupport {
 
     /**
      * 카테고리와 예약 공개(POK-381)가 의도 표 → 업로드 줄 → 주문서까지 그대로 간다. 예약은 비공개 + 시각이다(유튜브가 그 시각에 공개로
-     * 바꾼다).
+     * 바꾼다). 의도 요약에도 실린다: 화면이 창을 다시 열 때 이 둘을 되살려야 같은 판을 다시 눌러도 예약이 안 지워진다.
      */
     @Test
     void 카테고리와_예약_시각이_주문서까지_간다() throws Exception {
         long clipId = json(만들기(편집본, 업로드("""
                 {"title":"예약","categoryId":"24","privacyStatus":"private","publishAt":"2099-01-01T18:00:00+09:00"}"""))
-                .andExpect(status().isCreated())).get("id").asLong();
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.uploadRequest.categoryId").value("24"))
+                .andExpect(jsonPath("$.uploadRequest.publishAt").value("2099-01-01T09:00:00Z"))).get("id").asLong();
 
         완성시킨다(clipId, 영상_하나());
 

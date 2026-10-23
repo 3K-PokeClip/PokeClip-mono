@@ -101,14 +101,17 @@ public class UploadRequestStore {
         Array recipeIds = array("bigint", list.stream().map(Key::recipeId).toArray());
         Array versions = array("integer", list.stream().map(Key::recipeVersion).toArray());
         jdbc.query("""
-                SELECT r.recipe_id, r.recipe_version, r.title, r.privacy_status, r.thumbnail_source
+                SELECT r.recipe_id, r.recipe_version, r.title, r.privacy_status, r.thumbnail_source, r.category_id,
+                       r.publish_at
                   FROM upload_requests r
                   JOIN unnest(?, ?) AS k(recipe_id, recipe_version)
                     ON r.recipe_id = k.recipe_id AND r.recipe_version = k.recipe_version""",
                 rs -> {
+                    Timestamp publishAt = rs.getTimestamp("publish_at");
                     found.put(new Key(rs.getLong("recipe_id"), rs.getInt("recipe_version")),
                             new UploadRequestBrief(rs.getString("title"), rs.getString("privacy_status"),
-                                    rs.getString("thumbnail_source")));
+                                    rs.getString("thumbnail_source"), rs.getString("category_id"),
+                                    publishAt == null ? null : publishAt.toInstant()));
                 }, recipeIds, versions);
         return found;
     }
