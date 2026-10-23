@@ -639,8 +639,8 @@ class SessionRegistryTest extends IntegrationTestSupport {
      * <p>문항 5: 누계 이관을 {@code close()} 뒤로 되돌리면 0으로 빨간불(확인함 — 프로브
      * {@code F1ClosedReceivedProbeTest}가 그 상태를 재현해 이 검사를 만들었다).
      *
-     * <p>🔴 <b>이 검사가 드물게 빨간불일 수 있다. 그때 값은 반드시 0이고, 검사 문제가 아니라
-     * 코드에 실재하는 창이다 — 일부러 안 고쳤다.</b> {@code closeAll()}은 {@code sessions.remove}로
+     * <p>🔴 <b>코드에 실재하는 창이 있다 — 일부러 안 고쳤다.</b> 〔POK-426: 검사가 그 창에 걸려 CI에서 간헐로 0이 나와,
+     * 창을 지난 뒤 읽게 바꿨다(아래 단언 주석). 창 자체는 그대로다〕 {@code closeAll()}은 {@code sessions.remove}로
      * 자리를 <b>먼저</b> 빼고 <b>다음 문장</b>에서 {@code detach}로 누계를 옮긴다. 그 두 문장
      * 사이에서 총량은 그 세션 몫만큼 0으로 보이고, 아래가 {@code activeCount()==0}으로 창의
      * 시작을 잡으므로 {@code remove} 직후 그 스레드가 선점되면 폴링이 창 안에 들어온다.
@@ -679,13 +679,21 @@ class SessionRegistryTest extends IntegrationTestSupport {
         // 엉뚱한 자리에서 빨간불이 난다(실제로 그랬다).
         assertThat(registry.receivedTotal()).as("바늘이 흘렀는가").isEqualTo(5);
 
-        behavior.unsubscribeDelay = Duration.ofSeconds(3);
+        // 아래 「창을 지나기를 기다림」(3초)보다 넉넉히 길어야 기다린 뒤에도 아직 닫는 중이다.
+        behavior.unsubscribeDelay = Duration.ofSeconds(6);
         try {
             Thread closer = new Thread(registry::closeAll, "close-all");
             closer.start();
 
-            // 자리가 빠진 순간이 창의 시작이다. 여기서 총량을 읽는 것이 판정 줄이 하는 일이다.
+            // 자리가 빠진 뒤, 구독 해지(6초 지연)가 끝나기 전이 「닫는 중」이다. 여기서 총량을 읽는 것이 판정 줄이 하는 일이다.
+            //
+            // 🔴 자리가 빠진 순간 바로 읽지 않고 5가 되기를 잠깐 기다린다(POK-426). remove와 detach 사이 한 문장 동안은 총량이
+            // 0으로 보이는데(위 주석의 알려진 창), 바로 읽으면 그 몇 인스트럭션에 걸려 CI에서 간헐로 「5 대신 0」이 났다
+            // (PR #350). 이 단언이 재는 것은 「닫는 동안 누계가 사라지지 않는다」이므로 기다려도 뜻은 같다: 누계를 옮기지 않거나
+            // 구독 해지 뒤로 미루면 6초 내내 0이라 여전히 빨갛다. 기다린 뒤에도 아직 닫는 중인지를 같이 못박는다.
             awaitUntil(AWAIT, () -> registry.activeCount() == 0);
+            awaitUntil(Duration.ofSeconds(3), () -> registry.receivedTotal() >= 5);
+            assertThat(closer.isAlive()).as("아직 닫는 중이어야 이 값이 「닫는 중」의 값이다").isTrue();
             assertThat(registry.receivedTotal())
                     .as("닫는 중에 판정 줄이 읽으면 이 값이 나간다")
                     .isEqualTo(5);
