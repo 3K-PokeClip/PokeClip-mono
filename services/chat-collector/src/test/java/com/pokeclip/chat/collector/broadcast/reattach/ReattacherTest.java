@@ -1005,6 +1005,35 @@ class ReattacherTest extends IntegrationTestSupport {
         assertThat(singleFindsOnSweeper.get()).as("회차 스레드의 낱개 조회 0(줄 안의 붙이기 재확인은 따로다)").isZero();
     }
 
+    /**
+     * 메모 묶음 조회 범위(PR #363 봇): SOOP 지켜보기가 꺼져 있으면(기본) 옛 범위 그대로 <b>후보</b>(안 붙은 방송)만 묻는다. 켜져 있으면 지켜보기에
+     * 넣을 줄까지 보므로 읽을 수 있는 줄 전부를 묻는다. 꺼진 배포에서 붙은 방송 수만큼 조회가 커지지 않게 한다.
+     */
+    @Test
+    @Timeout(30)
+    void 지켜보기가_꺼지면_메모는_후보만_묻고_켜지면_읽을_수_있는_줄_전부를_묻는다() {
+        열어둔다(A001, 7L, 시작);
+        List<List<String>> asked = new CopyOnWriteArrayList<>();
+        EndedStreamStore counting = new EndedStreamStore(jdbc) {
+            @Override
+            public Map<String, EndedStream> findAll(java.util.Collection<String> streamIds) {
+                asked.add(List.copyOf(streamIds));
+                return super.findAll(streamIds);
+            }
+        };
+        returns(live(A001, "7", 시작), live(B001, "2", 시작));
+
+        new Reattacher(client, registry, counting, measurer, lanes, sessions, () -> 지금, null,
+                com.pokeclip.chat.collector.soop.SoopWatch.NONE).sweep();
+        assertThat(lanes.awaitIdle(IDLE_BUDGET)).isTrue();
+        assertThat(asked).as("꺼짐: 붙은 A001은 안 묻는다").containsExactly(List.of(B001));
+
+        asked.clear();
+        new Reattacher(client, registry, counting, measurer, lanes, sessions, () -> 지금, null, new RecordingWatch()).sweep();
+        assertThat(lanes.awaitIdle(IDLE_BUDGET)).isTrue();
+        assertThat(asked.getFirst()).as("켜짐: 읽을 수 있는 줄 전부").containsExactly(A001, B001);
+    }
+
     /** 떼기 갈래가 도는 회차(명부가 온전)에만 명부에 없는 지켜보기를 치운다. 잘린 명부에서는 안 치운다(살아 있는 방송이 사라진 것으로 보인다). */
     @Test
     @Timeout(30)

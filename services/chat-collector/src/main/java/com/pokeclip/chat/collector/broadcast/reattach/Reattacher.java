@@ -264,9 +264,11 @@ public class Reattacher {
                 .filter(item -> !attached.contains(item.streamId()))
                 .toList();
         detachMissing(live, readable, nullRows + missingStreamIds);
-        // 메모 조회는 한 번이다 — 낱개로 물으면 방송 수만큼 왕복한다. SOOP 지켜보기가 붙은 방송까지 보므로 읽을 수 있는 줄 전부를 묻는다.
+        // 메모 조회는 한 번이다 — 낱개로 물으면 방송 수만큼 왕복한다. SOOP 지켜보기가 켜져 있으면 붙은 방송까지 넣으므로 읽을 수 있는 줄 전부를,
+        // 꺼져 있으면(기본) 옛 범위 그대로 후보만 묻는다(PR #363 봇: 꺼진 배포에서 붙은 방송 수만큼 조회가 커지지 않게).
+        List<LiveBroadcasts.Item> asked = soop == SoopWatch.NONE ? candidates : readable;
         Map<String, EndedStream> memos = store.findAll(
-                readable.stream().map(LiveBroadcasts.Item::streamId).toList());
+                asked.stream().map(LiveBroadcasts.Item::streamId).toList());
         watchSoop(readable, memos);
 
         int submitted = 0;
