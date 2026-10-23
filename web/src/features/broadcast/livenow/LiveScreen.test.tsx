@@ -125,6 +125,10 @@ const hlsFake = vi.hoisted(() => ({
   sync: null as number | null,
   /** 되감기 창(seekable)의 끝(영상 초)을 이 값으로 둔다. 없으면 지금 */
   seekableEnd: null as number | null,
+  /** 마지막으로 선 재생기의 오류 처리기. 시험이 hls.js 오류를 쏜다(POK-337) */
+  error: null as ((event: string, data: unknown) => void) | null,
+  /** hls.js를 쓸 수 있나. 아니면 브라우저 기본 HLS(옛 iOS Safari)로 튼다 */
+  supported: true,
 }));
 /** 재생기가 서는 라이브 끝(영상 초): 영상 끝(지금)에서 2초 뒤다 */
 function liveSyncSeconds(): number {
@@ -133,13 +137,14 @@ function liveSyncSeconds(): number {
 vi.mock('hls.js', () => {
   class FakeHls {
     static isSupported() {
-      return true;
+      return hlsFake.supported;
     }
     static Events = { ERROR: 'hlsError', MANIFEST_PARSED: 'hlsManifestParsed' };
     static ErrorTypes = { NETWORK_ERROR: 'networkError', MEDIA_ERROR: 'mediaError' };
     private readonly handlers = new Map<string, () => void>();
     on(event: string, handler: () => void) {
       this.handlers.set(event, handler);
+      if (event === 'hlsError') hlsFake.error = handler;
     }
     attachMedia() {}
     loadSource() {
@@ -329,7 +334,11 @@ const server = vi.hoisted(() => ({
   /** 후원 줄의 서버 id를 첫 채팅 id와 같게 준다: 채팅·후원은 표가 달라 번호가 겹친다(POK-254) */
   chatIdClash: false,
   /** 출입증: 'off'는 서명 재료 없음(503), 'grant'는 10분짜리, 'fail'은 500 */
-  playback: 'off' as 'off' | 'grant' | 'fail',
+  playback: 'off' as 'off' | 'grant' | 'fail' | 'expired',
+  /** 'grant' 출입증이 끝날 때까지의 시간. 갱신은 만료 5분 전이라, 갱신을 재는 시험은 짧게 주어 가짜 시계를 몇 분씩 돌리지 않는다(POK-415) */
+  playbackTtlMs: 10 * 60_000,
+  /** 라이브 영상 서버(live.test)가 첫 바이트 물음에 주는 응답 코드(POK-337) */
+  liveStatus: 200,
   /** 있으면 출입증 답을 이것이 풀릴 때까지 붙잡는다(POK-317) */
   playbackGate: null as Promise<void> | null,
   /** 지난 방송의 시각 기준점(POK-255). null이면 서버가 모른다 */
@@ -612,6 +621,7 @@ function infoResponse(path: string, noSince: boolean): Response {
 function handle(url: string, init?: RequestInit): Response | Promise<Response> {
   const u = new URL(url, 'http://localhost');
   const path = u.pathname;
+  if (u.host === 'live.test') return new Response(null, { status: server.liveStatus });
   if (path === '/api/clip/broadcasts')
     return server.listGate && u.searchParams.get('limit') !== '1'
       ? server.listGate.then(() => listResponse(u))
@@ -708,9 +718,10 @@ function handle(url: string, init?: RequestInit): Response | Promise<Response> {
     if (server.playback === 'grant')
       return jsonResponse(200, {
         streamId: STREAM_ID,
-        expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
+        expiresAt: new Date(Date.now() + server.playbackTtlMs).toISOString(),
       });
     if (server.playback === 'fail') return jsonResponse(500, { error: 'boom' });
+    if (server.playback === 'expired') return jsonResponse(410, { error: 'vod_expired' });
     return jsonResponse(503, { error: 'playback_signing_unavailable' });
   }
   if (path === '/api/chzzk-link')
@@ -732,6 +743,11 @@ function tokenFor(sub: string) {
 }
 
 let fetchSpy: ReturnType<typeof stubFetch>;
+
+// 이 파일은 대시보드 전체를 그리고 가짜 시계로 몇십 초씩 돌린다. 혼자서는 시험 하나가 0.5초 안팎이지만, 웹 전체 시험이
+// 여러 벌 겹쳐 도는 바쁜 기계에서는 10배쯤 느려져 기본 5초를 넘긴다. vitest는 시한을 넘긴 시험을 멈추지 않아, 그 시험이 뒤에서
+// 계속 가짜 시계를 돌리며 다음 시험들을 150여 건씩 연쇄로 깨뜨렸다(POK-415). 기다리는 실제 시간은 없고 계산 시간뿐이라 넉넉히 준다
+vi.setConfig({ testTimeout: 15_000 });
 
 beforeEach(() => {
   nav.search = '';
@@ -777,6 +793,8 @@ beforeEach(() => {
   hlsFake.sliding = false;
   hlsFake.sync = null;
   hlsFake.seekableEnd = null;
+  hlsFake.error = null;
+  hlsFake.supported = true;
   chatModes.length = 0;
   chatTexts.length = 0;
   playerStatuses.length = 0;
@@ -794,7 +812,9 @@ beforeEach(() => {
   server.chatPaged = false;
   server.chatIdClash = false;
   server.playback = 'off';
+  server.playbackTtlMs = 10 * 60_000;
   server.playbackGate = null;
+  server.liveStatus = 200;
   resetPlaybackAccessForTests();
   hlsFake.loads = 0;
   notFound.mockClear();
@@ -980,15 +1000,19 @@ describe('LiveScreen — 영상 출입증', () => {
   it('출입증은 만료 5분 전에 다시 받는다 — 한 번만 받으면 한 시간 뒤 재생이 멈춘다', async () => {
     // 쿠키가 끝나면 새 영상 조각이 403이 된다(PR #200 codex P1)
     server.playback = 'grant';
+    // 7분짜리라 만료 5분 전은 2분째다. 화면은 1분마다 확인하므로 1분째엔 그대로 쓰고(만료 전엔 다시 받지 않는다) 2분째에 새로
+    // 받는다. 10분짜리로 6분을 돌리면 1초 주기 화면 갱신이 수백 번 돌아 바쁜 기계에서 5초 시한을 넘기고 뒤 시험들까지 연쇄로
+    // 깨뜨렸다(POK-415)
+    server.playbackTtlMs = 7 * 60_000;
     await renderLive();
     expect(accessCalls()).toBe(1);
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(4 * 60_000);
+      await vi.advanceTimersByTimeAsync(65_000);
     });
     expect(accessCalls()).toBe(1);
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(2 * 60_000);
+      await vi.advanceTimersByTimeAsync(60_000);
     });
     expect(accessCalls()).toBe(2);
   });
@@ -1038,21 +1062,25 @@ describe('LiveScreen — 영상 출입증', () => {
     stubMediaElement();
     vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', 'http://live.test');
     server.playback = 'grant';
+    // 5분 30초짜리라 1분마다 확인할 때마다 새로 받는다(POK-415: 몇 분씩 돌리지 않는다)
+    server.playbackTtlMs = 5 * 60_000 + 30_000;
     await renderLive();
     expect(hlsFake.loads).toBe(1);
 
     // 정상 갱신(만료 5분 전)은 재생기를 다시 세우지 않는다
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(6 * 60_000);
+      await vi.advanceTimersByTimeAsync(65_000);
     });
     await settle();
+    expect(accessCalls()).toBe(2);
     expect(hlsFake.loads).toBe(1);
 
     // 다음 갱신이 실패하고, 1분 뒤 다시 받아진다
     server.playback = 'fail';
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      await vi.advanceTimersByTimeAsync(60_000);
     });
+    expect(accessCalls()).toBe(3);
     server.playback = 'grant';
     await act(async () => {
       await vi.advanceTimersByTimeAsync(60_000);
@@ -1095,6 +1123,207 @@ describe('LiveScreen — 영상 출입증', () => {
     expect(hlsFake.loads).toBe(2);
   });
 
+  it('열기 전 출입증을 못 받으면 영상 자리에 그렇게 알리고, 다시 받으면 연다: 「아직 연결되지 않았어요」는 틀린 말이었다(POK-337)', async () => {
+    stubMediaElement();
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', 'http://live.test');
+    server.playback = 'fail';
+    await renderLive();
+    expect(screen.getByText('영상 출입증을 받지 못했어요. 1분 뒤 다시 받아요')).toBeInTheDocument();
+    expect(screen.queryByText(/아직 연결되지 않았어요/)).toBeNull();
+
+    server.playback = 'grant';
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    await settle();
+    expect(hlsFake.loads).toBe(1);
+    expect(screen.queryByText('영상 출입증을 받지 못했어요. 1분 뒤 다시 받아요')).toBeNull();
+
+    // 영상 키가 늦게 와 새 키의 출입증을 기다리는 동안 영상 자리가 다시 보인다: 지난 실패를 다시 말하지 않는다
+    server.ingest = 'key-late';
+    server.playbackGate = new Promise<void>(() => undefined);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    await settle();
+    expect(mediaCalls.keys.at(-1)).toBe('key-late');
+    expect(screen.getByText('영상 서버에 아직 연결되지 않았어요')).toBeInTheDocument();
+    expect(screen.queryByText('영상 출입증을 받지 못했어요. 1분 뒤 다시 받아요')).toBeNull();
+  });
+
+  it('라이브가 403으로 멎으면 출입증을 버리고 영상 위에 알린 뒤, 다시 받으면 재생기를 새로 세워 알림이 사라진다(POK-410)', async () => {
+    stubMediaElement();
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', 'http://live.test');
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    server.playback = 'grant';
+    await renderLive();
+    expect(hlsFake.loads).toBe(1);
+    const before = accessCalls();
+
+    // 같은 403을 다시 받아 봐야 쿠키가 없으니 또 403이다: 한 번 더 해 보지 않고 바로 버린다
+    act(() => {
+      hlsFake.error?.('hlsError', {
+        fatal: true,
+        type: 'networkError',
+        details: 'levelLoadError',
+        response: { code: 403 },
+      });
+    });
+    expect(screen.getByText('영상 출입증이 끝나 다시 받고 있어요')).toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    await settle();
+    expect(accessCalls()).toBe(before + 1);
+    expect(hlsFake.loads).toBe(2);
+    expect(screen.queryByText('영상 출입증이 끝나 다시 받고 있어요')).toBeNull();
+  });
+
+  it('출입증을 새로 받는 중에 라이브가 403으로 멎어도 받은 뒤 재생기를 새로 세운다: 받는 중인 것은 버리지 않아 다시 세울 신호가 없었다(로컬 리뷰 1라운드)', async () => {
+    stubMediaElement();
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', 'http://live.test');
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    server.playback = 'grant';
+    // 5분 30초짜리라 1분 뒤 확인에서 새로 받는다
+    server.playbackTtlMs = 5 * 60_000 + 30_000;
+    await renderLive();
+    expect(hlsFake.loads).toBe(1);
+
+    let release!: () => void;
+    server.playbackGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(65_000);
+    });
+    // 새 출입증을 받는 사이 쿠키가 지워져 영상이 403이다
+    act(() => {
+      hlsFake.error?.('hlsError', {
+        fatal: true,
+        type: 'networkError',
+        details: 'fragLoadError',
+        response: { code: 403 },
+      });
+    });
+    release();
+    await settle();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    await settle();
+    expect(hlsFake.loads).toBe(2);
+    expect(screen.queryByText('영상 출입증이 끝나 다시 받고 있어요')).toBeNull();
+  });
+
+  it('출입증이 필요 없는 곳(로컬·dev)의 403은 출입증 탓이 아니다: 「다시 받고 있어요」라 하지 않고 한 번 다시 해 본 뒤 끊겼다고 알린다(로컬 리뷰 1라운드)', async () => {
+    stubMediaElement();
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', 'http://live.test');
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    // 「필요 없음」(503)을 받으면 라이브 화면은 다시 묻지 않는다: 출입증을 버려도 다시 받을 길이 없다
+    server.playback = 'off';
+    await renderLive();
+    expect(hlsFake.loads).toBe(1);
+    const forbidden = {
+      fatal: true,
+      type: 'networkError',
+      details: 'levelLoadError',
+      response: { code: 403 },
+    };
+
+    act(() => hlsFake.error?.('hlsError', forbidden));
+    expect(screen.queryByText('영상 출입증이 끝나 다시 받고 있어요')).toBeNull();
+    act(() => hlsFake.error?.('hlsError', forbidden));
+    expect(screen.getByText('영상이 끊겼어요. 새로고침하면 다시 연결해요')).toBeInTheDocument();
+  });
+
+  it('hls.js가 없는 브라우저(옛 iOS Safari)의 기본 재생도 403이면 출입증을 버리고 알린 뒤, 다시 받으면 재생기를 새로 세운다(PR #347 codex)', async () => {
+    stubMediaElement();
+    vi.spyOn(HTMLMediaElement.prototype, 'canPlayType').mockReturnValue('maybe');
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', 'http://live.test');
+    hlsFake.supported = false;
+    server.playback = 'grant';
+    const { container } = await renderLive();
+    const video = container.querySelector('video')!;
+    expect(video.getAttribute('src')).toContain('http://live.test');
+
+    // 기본 재생은 응답 코드를 못 읽어 첫 바이트를 물어 403인지 본다
+    server.liveStatus = 403;
+    await act(async () => {
+      video.dispatchEvent(new Event('error'));
+    });
+    await settle();
+    expect(screen.getByText('영상 출입증이 끝나 다시 받고 있어요')).toBeInTheDocument();
+
+    server.liveStatus = 200;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    await settle();
+    expect(container.querySelector('video')).not.toBe(video);
+    expect(screen.queryByText('영상 출입증이 끝나 다시 받고 있어요')).toBeNull();
+  });
+
+  it('hls.js가 없는 브라우저의 기본 재생이 403이 아닌 까닭으로 멎으면 끊겼다고 알린다(PR #347 codex)', async () => {
+    stubMediaElement();
+    vi.spyOn(HTMLMediaElement.prototype, 'canPlayType').mockReturnValue('maybe');
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', 'http://live.test');
+    hlsFake.supported = false;
+    server.playback = 'grant';
+    const { container } = await renderLive();
+    const before = accessCalls();
+    server.liveStatus = 502;
+    await act(async () => {
+      container.querySelector('video')!.dispatchEvent(new Event('error'));
+    });
+    await settle();
+    expect(screen.getByText('영상이 끊겼어요. 새로고침하면 다시 연결해요')).toBeInTheDocument();
+    expect(accessCalls()).toBe(before);
+  });
+
+  it('403이 아닌 치명 오류는 한 번 다시 해 본 뒤 알린다: 출입증은 그대로 두고 재생기도 다시 세우지 않는다(POK-337)', async () => {
+    stubMediaElement();
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', 'http://live.test');
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    server.playback = 'grant';
+    await renderLive();
+    const before = accessCalls();
+    const fatal = {
+      fatal: true,
+      type: 'networkError',
+      details: 'fragLoadError',
+      response: { code: 502 },
+    };
+
+    act(() => hlsFake.error?.('hlsError', fatal));
+    expect(screen.queryByText('영상이 끊겼어요. 새로고침하면 다시 연결해요')).toBeNull();
+    act(() => hlsFake.error?.('hlsError', fatal));
+    expect(screen.getByText('영상이 끊겼어요. 새로고침하면 다시 연결해요')).toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    await settle();
+    expect(accessCalls()).toBe(before);
+    expect(hlsFake.loads).toBe(1);
+  });
+
+  it('치명이 아닌 오류는 알리지 않는다: hls.js가 스스로 다시 해 본다', async () => {
+    stubMediaElement();
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', 'http://live.test');
+    server.playback = 'grant';
+    await renderLive();
+    act(() =>
+      hlsFake.error?.('hlsError', {
+        fatal: false,
+        type: 'networkError',
+        details: 'fragLoadError',
+        response: { code: 403 },
+      }),
+    );
+    expect(screen.queryByText(/영상 출입증이 끝나|영상이 끊겼어요/)).toBeNull();
+  });
+
   it('영상 키가 늦게 오면 새 키의 출입증을 받기 전에는 라이브 영상을 다시 부르지 않는다: 옛 키 쿠키는 새 주소에 안 실린다(PR #332 codex P1)', async () => {
     stubMediaElement();
     vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', 'http://live.test');
@@ -1120,6 +1349,41 @@ describe('LiveScreen — 영상 출입증', () => {
     expect(hlsFake.loads).toBe(2);
   });
 
+  it('보관 기간이 지난 방송이면 녹화를 찾지 않고 그렇다고 알린다(POK-335)', async () => {
+    mediaCalls.configured = true;
+    server.playback = 'expired';
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    await renderLive();
+    expect(screen.getByText('보관 기간(60일)이 지나 녹화 영상을 볼 수 없어요')).toBeInTheDocument();
+    expect(mediaCalls.spans).toEqual([]);
+    const before = accessCalls();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3 * 60_000);
+    });
+    expect(accessCalls()).toBe(before);
+  });
+
+  it('녹화를 보는 중 갱신이 410이면 녹화를 내리고 만료를 알린다(PR #348 codex)', async () => {
+    stubMediaElement();
+    mediaCalls.configured = true;
+    mediaCalls.answer = Promise.resolve([{ startMs: VOD_STARTED, durationSeconds: 9_000 }]);
+    server.playback = 'grant';
+    server.playbackTtlMs = 5 * 60_000 + 30_000;
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    const { container } = await renderLive();
+    await settle();
+    // 녹화를 틀고 있다(요청한 시작 위치가 있다)
+    expect(container.querySelector('video')?.getAttribute('src') ?? '').toContain('/playback/');
+    expect(screen.queryByText('보관 기간(60일)이 지나 녹화 영상을 볼 수 없어요')).toBeNull();
+
+    server.playback = 'expired';
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(65_000);
+    });
+    await settle();
+    expect(screen.getByText('보관 기간(60일)이 지나 녹화 영상을 볼 수 없어요')).toBeInTheDocument();
+  });
+
   it('출입증이 필요 없는 곳(로컬·dev)은 첫 화면이 서는 사이에 라이브 영상을 부른다: 기다림이 재생 시작을 늦추지 않는다', async () => {
     stubMediaElement();
     vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', 'http://live.test');
@@ -1129,8 +1393,9 @@ describe('LiveScreen — 영상 출입증', () => {
 
   it('서명 재료가 없는 서버(503)에는 다시 묻지 않는다 — 출입증이 필요 없는 곳이다', async () => {
     await renderLive();
+    // 실패 재시도(1분)보다 넉넉히 길게만 본다
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      await vi.advanceTimersByTimeAsync(2 * 60_000);
     });
     expect(accessCalls()).toBe(1);
   });
@@ -1794,8 +2059,12 @@ describe('LiveScreen: 주소로 고른 카드로 들어오기', () => {
     mediaCalls.answer = Promise.resolve(null);
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
     const { container } = await renderLive();
-    expect(screen.getByText('영상 서버에 아직 연결되지 않았어요')).toBeInTheDocument();
+    // 묻지 못한 것은 묻지 못했다고 알린다: 「아직 연결되지 않았어요」는 기다리면 저절로 붙을 것처럼 읽혔다(POK-337)
+    expect(
+      screen.getByText('녹화 영상을 불러오지 못했어요. 1분 뒤 다시 확인해요'),
+    ).toBeInTheDocument();
     expect(screen.queryByText('녹화 영상을 찾지 못했어요')).toBeNull();
+    expect(screen.queryByText(/아직 연결되지 않았어요/)).toBeNull();
 
     mediaCalls.answer = Promise.resolve([{ startMs: VOD_STARTED, durationSeconds: 9_000 }]);
     await act(async () => {

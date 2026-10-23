@@ -46,14 +46,27 @@
   display: inline-flex;
 }
 
-/* 아바타를 메뉴 트리거로 감싸는 버튼 — 시각은 아바타 그대로, 포커스 링만 얹는다 */
+/* 아바타를 채널 스위처 트리거로 감싸는 상자 — 사이드바 프로필 상자처럼 호버·열림 때 배경을 깐다.
+   호버 상자는 옆 알림 버튼(IconButton md: 40u 정사각·radius-md)과 같은 크기·모서리로 맞춘다.
+   음수 margin으로 32u 아바타보다 커진 만큼을 되돌려 헤더 배치는 그대로다 */
 .avatarButton {
   display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: calc(40 * var(--pc-u));
+  height: calc(40 * var(--pc-u));
+  margin: calc(-4 * var(--pc-u));
   padding: 0;
   border: none;
   background: none;
   cursor: pointer;
-  border-radius: var(--pc-radius-circle);
+  border-radius: var(--pc-radius-md);
+  transition: background var(--pc-duration-fast) var(--pc-ease-standard);
+}
+
+.avatarButton:hover,
+.avatarButton[aria-expanded='true'] {
+  background: var(--pc-color-bg-surface-hover);
 }
 
 .avatarButton:focus-visible {

@@ -40,7 +40,9 @@ public final class CursorCodec {
         /** 카드 목록 — 방송 시간 + 줄 번호. 방송 시간이 유일하지 않아 둘이 함께여야 한다. */
         CARD("c", 2),
         /** 보관함 목록(POK-243) — 편집본 줄 번호 하나. 방송 목록과 같은 이유로 하나면 된다. */
-        LIBRARY("l", 1);
+        LIBRARY("l", 1),
+        /** 만료 목록(POK-335): 기한(epoch 마이크로초) + 방송 줄 번호. 기한이 유일하지 않아 둘이 함께여야 한다. */
+        EXPIRED("e", 2);
 
         private final String tag;
         private final int arity;

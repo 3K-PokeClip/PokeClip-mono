@@ -1,6 +1,8 @@
 package com.pokeclip.chat.detector.db;
 
 import com.pokeclip.chat.detector.DetectorApplication;
+import com.pokeclip.db.DataSourceLoginConfiguration;
+import com.pokeclip.db.RdsTokenSigner;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.boot.WebApplicationType;
@@ -45,9 +47,9 @@ class RdsIamSpikeTest {
     private static final String HOST = System.getenv("RDS_SPIKE_HOST");
     private static final String DB = envOr("RDS_SPIKE_DB", "pokeclip");
     private static final String USER = envOr("RDS_SPIKE_USER", "detector_iam");
-    /** media 이미지가 고정해 둔 RDS 통합 CA 번들이다. 작업 디렉터리는 services/chat-detector. */
+    /** 서버 넷 이미지에 넣는 RDS 통합 CA 번들이다(media 사본과 같다, RdsCaBundleTest). 작업 디렉터리는 services/chat-detector. */
     private static final Path CA_BUNDLE =
-            Path.of("..", "..", "media", "certs", "rds-global-bundle.pem").toAbsolutePath().normalize();
+            Path.of("..", "db-support", "certs", "rds-global-bundle.pem").toAbsolutePath().normalize();
 
     private final List<Instant> issuedAt = new CopyOnWriteArrayList<>();
 
@@ -71,7 +73,7 @@ class RdsIamSpikeTest {
             // S4: 실제 연결이 TLS인지. 설정이 아니라 서버가 본 연결 상태를 묻는다.
             Map<String, Object> ssl = jdbc.queryForMap(
                     "SELECT ssl, version, cipher FROM pg_stat_ssl WHERE pid = pg_backend_pid()");
-            print("S4", "pg_stat_ssl=" + ssl + " sslmode=" + RdsIamDataSourceConfiguration.SSL_MODE);
+            print("S4", "pg_stat_ssl=" + ssl + " sslmode=" + DataSourceLoginConfiguration.SSL_MODE);
             assertThat(ssl.get("ssl")).isEqualTo(true);
 
             // S3: 40초 걸리는 질의가 socketTimeout 10초에 끊기는지. 응답이 안 오는 상대와 같은 길이다

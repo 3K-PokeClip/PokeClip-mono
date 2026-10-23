@@ -27,7 +27,7 @@ import {
   type UploadInfo,
   type UploadRequestSummary,
 } from '@/api/clipEditor';
-import { ensurePlaybackAccess } from '@/api/playbackAccess';
+import { ensurePlaybackAccess, isPlaybackExpired } from '@/api/playbackAccess';
 import { EditorHeader } from '../EditorHeader';
 import { PreviewCanvas } from '../PreviewCanvas';
 import { TransportBar } from '../TransportBar';
@@ -272,6 +272,8 @@ async function loadRecording(broadcast: BroadcastRow): Promise<RecordingTimeline
   // 못 받았는데 녹화를 물으면 CDN 403이 「녹화 없음」으로 접혀 미리보기 없이 열리고 다시 묻지 않는다(PR #320 codex)
   if (access?.kind === 'failed')
     throw new Error('영상 출입증을 받지 못했어요. 잠시 뒤 다시 열어 주세요');
+  if (access?.kind === 'expired' || isPlaybackExpired(broadcast.streamId))
+    throw new Error('보관 기간(60일)이 지나 이 방송의 영상을 볼 수 없어요');
   return recordingTimeline(
     // 녹화 재생 서버의 경로는 영상 키다(POK-233) — 방송 번호가 회차 번호면 그 이름의 녹화가 없다
     await fetchRecordingSpans(mediaStreamId(broadcast)),
@@ -310,6 +312,8 @@ type Status =
 
 function messageOf(e: unknown): string {
   if (e instanceof ClipApiError) {
+    if (e.status === 410 && e.code === 'vod_expired')
+      return '보관 기간(60일)이 지나 이 방송으로는 새 영상을 만들 수 없어요';
     if (e.status === 409 && e.code === 'source_not_ready')
       return '영상 조각이 아직 다 안 올라왔어요 — 잠시 뒤 다시';
     if (e.status === 503 && e.code === 'render_unavailable')

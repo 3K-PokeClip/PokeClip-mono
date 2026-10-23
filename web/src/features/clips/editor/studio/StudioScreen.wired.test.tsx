@@ -1,3 +1,4 @@
+import { resetPlaybackAccessForTests } from '@/api/playbackAccess';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { StrictMode } from 'react';
@@ -57,7 +58,7 @@ const STARTED_AT = Date.parse('2026-09-20T10:00:00Z');
 
 const server = vi.hoisted(() => ({
   /** 출입증 답(POK-317) */
-  playbackAccess: 'grant' as 'grant' | 'fail',
+  playbackAccess: 'grant' as 'grant' | 'fail' | 'expired',
   cardWindow: { startMs: 60_000, endMs: 72_400 },
   savedTracks: [{ trackId: 0, gain: 1 }] as { trackId: number; gain: number }[],
   /** 저장된 편집본의 판 — 1이면 옛 모양(crop 하나), 2면 편집기가 지금 저장하는 모양 */
@@ -215,7 +216,9 @@ function handle(url: string, init?: RequestInit) {
           // 1분짜리라 만료 5분 전 여유에 걸려 다시 쓰지 않는다: 받아 둔 것이 다음 시험으로 새지 않는다
           expiresAt: new Date(Date.now() + 60_000).toISOString(),
         })
-      : jsonResponse(500, { error: 'boom' });
+      : server.playbackAccess === 'expired'
+        ? jsonResponse(410, { error: 'vod_expired' })
+        : jsonResponse(500, { error: 'boom' });
   if (path === '/api/auth/me')
     return jsonResponse(200, { id: 9, email: 'me@example.com', name: '나' });
   if (path === '/api/streamers/9/audio-tracks') return jsonResponse(200, { labels: {} });
@@ -266,6 +269,8 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   playbackOn.value = false;
+  // 출입증 기억(만료 · 필요 없음)이 다음 시험으로 새지 않게
+  resetPlaybackAccessForTests();
 });
 
 function bodiesOf(method: string, path: string) {
@@ -342,6 +347,32 @@ describe('StudioScreen — 영상 경로의 키(POK-233)', () => {
           url === `/api/clip/broadcasts/${STREAM_ID}/playback-access` && init?.method === 'POST',
       ),
     ).toHaveLength(1);
+  });
+
+  it('보관 기간이 지난 방송이면 그렇다고 알린다: 녹화를 찾지 않는다(POK-335)', async () => {
+    playbackOn.value = true;
+    server.playbackAccess = 'expired';
+    nav.search = `?stream=${STREAM_ID}&card=5`;
+    renderWithProviders(<StudioScreen />);
+    expect(
+      await screen.findByText(/보관 기간\(60일\)이 지나 이 방송의 영상을 볼 수 없어요/),
+    ).toBeInTheDocument();
+    expect(spansAsked).toEqual([]);
+  });
+
+  it('같은 탭에서 다시 열어도 받아 둔 만료로 알리고 녹화를 찾지 않는다(PR #348 codex)', async () => {
+    playbackOn.value = true;
+    server.playbackAccess = 'expired';
+    nav.search = `?stream=${STREAM_ID}&card=5`;
+    const first = renderWithProviders(<StudioScreen />);
+    await screen.findByText(/보관 기간\(60일\)이 지나 이 방송의 영상을 볼 수 없어요/);
+    first.unmount();
+
+    renderWithProviders(<StudioScreen />);
+    expect(
+      await screen.findByText(/보관 기간\(60일\)이 지나 이 방송의 영상을 볼 수 없어요/),
+    ).toBeInTheDocument();
+    expect(spansAsked).toEqual([]);
   });
 
   it('출입증을 못 받으면 녹화 없음으로 열지 않고 다시 열라고 알린다: 쿠키 없는 조회는 403이 「녹화 없음」으로 접힌다(PR #320 codex)', async () => {
@@ -1007,6 +1038,13 @@ describe('StudioScreen: 영상 만들기 + 유튜브 올리기(POK-291)', () => 
     await orderVideo(user);
     expect(
       await screen.findByText('스트리머의 유튜브 채널이 연결돼 있지 않아요'),
+    ).toBeInTheDocument();
+
+    // 보관 기간(60일)이 지난 방송은 새로 만들 수 없다(POK-335)
+    server.renderError = { status: 410, body: { error: 'vod_expired' } };
+    await orderVideo(user);
+    expect(
+      await screen.findByText('보관 기간(60일)이 지나 이 방송으로는 새 영상을 만들 수 없어요'),
     ).toBeInTheDocument();
   });
 

@@ -8,8 +8,16 @@ import { jsonResponse, stubFetch } from '@/test/mockFetch';
 import { renderWithProviders } from '@/test/testProviders';
 import { ChannelRelationContext } from './ChannelScope';
 import { OwnerOnly } from './OwnerOnly';
+import { useSwitchCurtain } from './switchCurtain';
 
 const ME = { id: 7, email: 'me@example.com', name: '나', profileImageUrl: null };
+/** 서버 모양 그대로: counterpartId가 스트리머 번호다 */
+const BYEOLHA = {
+  id: 21,
+  counterpartId: 3,
+  counterpartName: '별하',
+  grantedAt: '2026-10-01T00:00:00Z',
+};
 
 let mounts = 0;
 
@@ -24,7 +32,7 @@ function PluginScreen() {
 function renderAs(relation: 'OWNER' | 'EDITOR' | null) {
   return renderWithProviders(
     <ChannelRelationContext.Provider value={relation}>
-      <OwnerOnly>
+      <OwnerOnly title="플러그인">
         <PluginScreen />
       </OwnerOnly>
     </ChannelRelationContext.Provider>,
@@ -34,9 +42,14 @@ function renderAs(relation: 'OWNER' | 'EDITOR' | null) {
 beforeEach(() => {
   mounts = 0;
   window.localStorage.clear();
+  useSwitchCurtain.getState().reset();
   useChannelStore.setState({ userId: 7, selected: 3 });
   useAuthStore.setState({ accessToken: 'access-1', refreshToken: 'refresh-1', hydrated: true });
-  stubFetch((url) => (url === '/api/auth/me' ? jsonResponse(200, ME) : jsonResponse(404)));
+  stubFetch((url) => {
+    if (url === '/api/auth/me') return jsonResponse(200, ME);
+    if (url === '/api/editor-delegations/as-editor') return jsonResponse(200, [BYEOLHA]);
+    return jsonResponse(404);
+  });
 });
 
 afterEach(() => {
@@ -44,21 +57,26 @@ afterEach(() => {
 });
 
 describe('OwnerOnly', () => {
-  it('남의 채널이면 화면 대신 안내와 「내 채널로 전환」을 보이고, 누르면 내 채널로 돌아간다', async () => {
+  it('남의 채널이면 화면 대신 화면 이름 · 안내 · 「내 채널로 전환」을 보이고, 누르면 내 채널로 돌아간다', async () => {
     const user = userEvent.setup();
     renderAs('EDITOR');
 
     expect(screen.queryByText('플러그인 화면')).not.toBeInTheDocument();
-    expect(screen.getByText('이 채널에서는 열 수 없어요')).toBeInTheDocument();
+    // 어느 화면이 막혔는지는 제목으로, 지금 어느 채널인지는 안내 문구로 말한다
+    expect(screen.getByRole('heading', { name: '플러그인' })).toBeInTheDocument();
+    expect(screen.getByText('채널 주인만 볼 수 있는 화면이에요')).toBeInTheDocument();
+    expect(
+      await screen.findByText('지금은 별하 채널에서 편집자로 일하는 중이에요'),
+    ).toBeInTheDocument();
     // 한 번이라도 마운트하면 그 사이 내 키·연동을 읽는다: 그렸다 지우는 구현을 여기서 막는다(감사 3회차 지적 3)
     expect(mounts).toBe(0);
 
     await user.click(screen.getByRole('button', { name: '내 채널로 전환' }));
 
+    expect(useSwitchCurtain.getState().curtain).toMatchObject({ name: '나', relation: 'OWNER' });
     await waitFor(() =>
       expect(useChannelStore.getState()).toMatchObject({ userId: 7, selected: null }),
     );
-    expect(await screen.findByText('나 채널로 전환했어요')).toBeInTheDocument();
   });
 
   it('내 채널이면 화면 그대로다', () => {

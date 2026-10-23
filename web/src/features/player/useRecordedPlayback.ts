@@ -63,6 +63,8 @@ export function useRecordedPlayback(
   const [offset, setOffset] = useState(startAt);
   const [position, setPosition] = useState(startAt);
   const [quality, setQuality] = useState<PlayerQuality>(PLAYER_QUALITIES[0]);
+  /** 다시 붙이지 못한 줄기의 주소. 줄기가 바뀌면(옮김·다음 구간) 알림이 저절로 사라진다 */
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
   const { controlsVisible, wake, sleep } = useControlsAutoHide(playing);
   // 틈 안이면 다음 구간 시작, 녹화 끝을 지났으면 마지막 구간 끝 1초 앞(끝까지 본 뒤 다시 누른 경우)
   const piece = useMemo(() => {
@@ -150,14 +152,23 @@ export function useRecordedPlayback(
       setOffset(next.fromSeconds);
     };
     // 줄기 오류가 쿠키 지워짐(403)이면 출입증을 다시 받아 같은 줄기를 다시 붙인다(PR #332 codex). <video>는 응답 코드를 못 읽어
-    // 확인은 playbackAccess가 첫 바이트를 물어 한다. 줄기마다 한 번만: 다시 받아도 403이면 끝없이 돌지 않는다
+    // 확인은 playbackAccess가 첫 바이트를 물어 한다. 줄기마다 한 번만: 다시 받아도 403이면 끝없이 돌지 않는다.
+    // 다시 붙일 수 없으면(403이 아님, 또는 다시 붙인 줄기도 오류) 영상 위에 알린다: 전에는 마지막 장면에서 조용히 멎었다(POK-337)
     let recovering = false;
     let gone = false;
     const onError = () => {
-      if (recovering) return;
+      if (gone) return;
+      if (recovering) {
+        setFailedSrc(src);
+        return;
+      }
       recovering = true;
       void recoverForbiddenRecording(src, recordedRef.current.streamId).then((retry) => {
-        if (!retry || gone) return;
+        if (gone) return;
+        if (!retry) {
+          setFailedSrc(src);
+          return;
+        }
         video.src = src;
         video.load();
         if (wantPlayRef.current)
@@ -241,6 +252,7 @@ export function useRecordedPlayback(
     lowLatency: false,
     settingsMenu: false,
     replay: true,
+    playbackError: failedSrc === src ? '녹화 영상을 불러오지 못했어요' : null,
     clipMarked: false,
     controlsVisible,
     togglePlay: useCallback(() => {

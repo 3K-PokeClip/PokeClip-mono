@@ -1,4 +1,4 @@
-import { screen } from '@testing-library/react';
+import { screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Side } from '@/components/app-shell/Side';
@@ -191,7 +191,7 @@ describe('Side: 채널 스위처 트리거(POK-390)', () => {
     vi.unstubAllGlobals();
   });
 
-  it('프로필 자리에 지금 채널 이름과 「스트리머」 칩이 나오고 누르면 스위처가 열린다', async () => {
+  it('프로필 자리에 지금 채널 이름과 「스트리머」 글자가 나오고 누르면 스위처가 열린다', async () => {
     nav.pathname = '/clips/library';
     stubChannel();
     const user = userEvent.setup();
@@ -199,7 +199,8 @@ describe('Side: 채널 스위처 트리거(POK-390)', () => {
 
     const trigger = await screen.findByRole('button', { name: /계정 전환/ });
     expect(await screen.findByText('나 채널')).toBeInTheDocument();
-    expect(screen.getByText('스트리머')).toBeInTheDocument();
+    expect(within(trigger).getByText('스트리머')).toBeInTheDocument();
+    expect(trigger).toHaveAccessibleName('계정 전환 · 나 채널 · 스트리머');
 
     await user.click(trigger);
     expect(await screen.findByRole('dialog', { name: '계정 전환' })).toBeInTheDocument();
@@ -214,14 +215,15 @@ describe('Side: 채널 스위처 트리거(POK-390)', () => {
     expect(trigger).not.toContainElement(screen.getByRole('button', { name: '알림' }));
   });
 
-  it('남의 채널이면 그 채널 이름과 「편집자」 칩이다', async () => {
+  it('남의 채널이면 그 채널 이름과 「편집자」 글자다', async () => {
     window.localStorage.setItem('pc-channel', JSON.stringify({ '7': 3 }));
     nav.pathname = '/clips/library';
     stubChannel();
     renderWithProviders(<Side menu="clips" />);
 
     expect(await screen.findByText('별하 채널')).toBeInTheDocument();
-    expect(screen.getByText('편집자')).toBeInTheDocument();
+    const trigger = screen.getByRole('button', { name: '계정 전환 · 별하 채널 · 편집자' });
+    expect(within(trigger).getByText('편집자')).toBeInTheDocument();
   });
 });
 

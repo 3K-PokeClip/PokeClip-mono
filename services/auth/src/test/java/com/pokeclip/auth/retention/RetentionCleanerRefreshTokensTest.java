@@ -11,6 +11,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import javax.sql.DataSource;
 import java.sql.Connection;
@@ -44,10 +45,12 @@ class RetentionCleanerRefreshTokensTest extends RetentionTestSupport {
     private final UserRepository userRepository;
     private final JdbcTemplate jdbc;
     private final DataSource dataSource;
+    private final TransactionTemplate tx;
 
     RetentionCleanerRefreshTokensTest(RetentionCleaner cleaner, RetentionProperties properties,
                                       TokenService tokenService, UserService userService,
-                                      UserRepository userRepository, JdbcTemplate jdbc, DataSource dataSource) {
+                                      UserRepository userRepository, JdbcTemplate jdbc, DataSource dataSource,
+                                      TransactionTemplate tx) {
         super(userService);
         this.cleaner = cleaner;
         this.properties = properties;
@@ -55,6 +58,7 @@ class RetentionCleanerRefreshTokensTest extends RetentionTestSupport {
         this.userRepository = userRepository;
         this.jdbc = jdbc;
         this.dataSource = dataSource;
+        this.tx = tx;
     }
 
     /** refresh_tokens는 users의 자식이다 — 남기면 다른 시험의 users 정리가 FK로 터진다. */
@@ -128,6 +132,19 @@ class RetentionCleanerRefreshTokensTest extends RetentionTestSupport {
         assertThat(second.capped()).isFalse();
         assertThat(third.deleted()).isZero();
         assertThat(hashes()).isEmpty();
+    }
+
+    /** 고르는 질의가 바깥 행마다 다시 도는 계획에서도 상한을 지킨다(POK-413, 까닭은 {@link RescanPlan}). */
+    @Test
+    void 고르는_질의를_다시_도는_계획에서도_상한만큼만_지운다() {
+        Instant base = Instant.now();
+        int limit = properties.batchLimit();
+        seedRevoked(newUser(), limit + 500, base.minus(15, DAYS));
+
+        RetentionCleaner.Result first = RescanPlan.forcing(tx, jdbc, () -> cleaner.cleanRefreshTokens(base));
+
+        assertThat(first.deleted()).isEqualTo(limit);
+        assertThat(hashes()).hasSize(500);
     }
 
     @Test

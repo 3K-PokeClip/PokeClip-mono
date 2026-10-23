@@ -259,7 +259,8 @@
   display: flex;
   flex-direction: row;
   align-items: center;
-  gap: calc(10 * var(--u));
+  /* 프로필 상자의 위아래 화살표가 알림 옆에 붙어 보이게 좁힌다 */
+  gap: calc(4 * var(--u));
   padding: calc(12 * var(--u)) calc(4 * var(--u)) calc(2 * var(--u));
   border-top: 1px solid var(--pc-color-border-subtle);
 }
@@ -272,20 +273,30 @@
   gap: calc(7 * var(--u));
 }
 
+/* 시안 1u: 프로필은 둥근 상자이고, 호버·스위처가 열린 동안 메뉴 항목 호버와 같은 배경이 깔린다.
+   상자 여백 4u는 위·아래·왼쪽만 같은 크기의 음수 margin으로 되돌린다 — 아바타가 메뉴 아이콘 중심(20u)에서
+   벗어나지 않고 블록 높이도 그대로다. 오른쪽은 되돌리지 않아 상자가 알림 쪽으로 4u 덜 뻗는다. */
 .userTrigger {
   display: flex;
   align-items: center;
   gap: calc(10 * var(--u));
   flex: 1;
   min-width: 0;
-  padding: 0;
+  margin: calc(-4 * var(--u)) 0 calc(-4 * var(--u)) calc(-4 * var(--u));
+  padding: calc(4 * var(--u));
   border: 0;
-  border-radius: var(--pc-radius-md);
+  border-radius: calc(10 * var(--u));
   background: none;
   color: inherit;
   font: inherit;
   text-align: left;
   cursor: pointer;
+  transition: background var(--pc-duration-fast) var(--pc-ease-standard);
+}
+
+.userTrigger:hover,
+.userTrigger[aria-expanded='true'] {
+  background: var(--pc-color-bg-surface-hover);
 }
 
 .userTrigger:focus-visible {
@@ -293,9 +304,11 @@
   outline-offset: 2px;
 }
 
+/* 접힌 레일에선 아바타만 남으니 상자도 아바타 둘레 4u로 고르게 두르고, 같은 음수 margin으로 자리를 지킨다 */
 .sidebar[data-collapsed='true'] .userTrigger {
   flex: none;
   gap: 0;
+  margin: calc(-4 * var(--u));
 }
 
 .userText {
@@ -338,6 +351,26 @@
   font-size: calc(10.5 * var(--u));
   color: var(--pc-color-text-muted);
   white-space: nowrap;
+}
+
+/* 이름이 길면 이름이 줄고 화살표는 오른쪽 끝을 지킨다. 접힐 때는 라벨처럼 폭·투명도로 접는다 */
+.userChevron {
+  flex: none;
+  margin-left: auto;
+  width: calc(15 * var(--u));
+  height: calc(15 * var(--u));
+  max-width: calc(15 * var(--u));
+  color: var(--pc-color-text-muted);
+  opacity: 1;
+  transition:
+    max-width 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 0.22s ease;
+}
+
+.sidebar[data-collapsed='true'] .userChevron {
+  max-width: 0;
+  margin-left: 0;
+  opacity: 0;
 }
 
 /* DS IconButton·Avatar는 콘텐츠 유닛(--pc-u), 사이드바는 셸 유닛(--pc-shell-u) 기준이라

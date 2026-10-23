@@ -1,5 +1,6 @@
 package com.pokeclip.auth;
 
+import com.pokeclip.db.DataSourceLoginConfiguration;
 import com.pokeclip.web.CorsConfig;
 import com.pokeclip.web.WebConfig;
 import org.springframework.boot.SpringApplication;
@@ -19,7 +20,8 @@ import org.springframework.scheduling.annotation.EnableScheduling;
  */
 @SpringBootApplication
 @ConfigurationPropertiesScan({"com.pokeclip.auth", "com.pokeclip.web"})
-@Import({CorsConfig.class, WebConfig.class})
+// DataSourceLoginConfiguration: DB 로그인 방식(POSTGRES_AUTH)과 db_connected 줄(POK-407, db-support).
+@Import({CorsConfig.class, WebConfig.class, DataSourceLoginConfiguration.class})
 // 스케줄러 셋 — 치지직 토큰 갱신·유튜브 철회 점검·보관 기한 청소(retention). 테스트 프로파일은 그 빈들을 끈다.
 @EnableScheduling
 public class AuthApplication {

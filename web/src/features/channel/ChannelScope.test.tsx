@@ -7,6 +7,7 @@ import { notifyChannelGone, useChannelStore } from '@/stores/channel';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
 import { renderWithProviders } from '@/test/testProviders';
 import { ChannelScope, useChannelStreamerId } from './ChannelScope';
+import { useSwitchCurtain } from './switchCurtain';
 
 const nav = vi.hoisted(() => ({ pathname: '/home', replace: vi.fn() }));
 vi.mock('next/navigation', () => ({
@@ -77,6 +78,7 @@ beforeEach(() => {
   window.localStorage.clear();
   window.history.pushState({}, '', '/home');
   useChannelStore.setState({ userId: null, selected: null });
+  useSwitchCurtain.getState().reset();
   useAuthStore.setState({ accessToken: 'access-1', refreshToken: 'refresh-1', hydrated: true });
 });
 
@@ -194,6 +196,36 @@ describe('ChannelScope', () => {
     await waitFor(() => expect(asEditorCalls(spy)).toBe(before + 1));
     expect(await screen.findByText('채널 7')).toBeInTheDocument();
     expect(screen.getByText('편집 권한이 없어져 내 채널로 돌아왔어요')).toBeInTheDocument();
+  });
+
+  it('방금 스스로 나간 채널의 끊김은 경고하지 않고 내 채널로만 돌아간다(PR #342 리뷰 4)', async () => {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ '7': 3 }));
+    let delegations = [BYEOLHA];
+    const spy = stub({ asEditor: () => jsonResponse(200, delegations) });
+    renderScope();
+    await screen.findByText('채널 3');
+    const before = asEditorCalls(spy);
+
+    // 계정 전환 창에서 별하에서 나가 전환 화면이 덮는 중이다(아직 내 채널로 바꾸기 전). 그 사이 별하 요청이 404를 받았다
+    act(() =>
+      useSwitchCurtain.setState({
+        curtain: {
+          key: 1,
+          name: '나',
+          relation: 'OWNER',
+          photo: null,
+          shownAt: Date.now(),
+          leftStreamerId: 3,
+        },
+      }),
+    );
+    delegations = [];
+    act(() => notifyChannelGone(3));
+
+    await waitFor(() => expect(asEditorCalls(spy)).toBe(before + 1));
+    expect(await screen.findByText('채널 7')).toBeInTheDocument();
+    expect(screen.queryByText('편집 권한이 없어져 내 채널로 돌아왔어요')).not.toBeInTheDocument();
+    expect(JSON.parse(window.localStorage.getItem(STORAGE_KEY)!)).toEqual({});
   });
 });
 

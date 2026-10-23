@@ -58,11 +58,12 @@ management:
 pokeclip:
   datasource:
     # DB 로그인 방식. password(기본)면 위 POSTGRES_PASSWORD로, iam이면 비밀번호 대신 연결마다
-    # RDS IAM 토큰으로 붙는다(POK-406 스파이크, RdsIamDataSourceConfiguration). 이름은 media와 같다.
+    # RDS IAM 토큰으로 붙는다(POK-406 스파이크, POK-407에서 db-support의 DataSourceLoginConfiguration으로 옮김). 이름은 media와 같다.
     auth: ${POSTGRES_AUTH:password}
     # iam 토큰을 서명할 리전. 수집 서버와 같은 변수다.
     region: ${AWS_REGION:ap-northeast-2}
     # iam에서만 쓴다. RDS CA 번들의 절대 경로. verify-full이 서버 인증서를 이것으로 검증한다.
+    # 이미지에는 /etc/pokeclip/rds-ca/global-bundle.pem 으로 들어 있다(Dockerfile).
     ssl-root-cert: ${POSTGRES_SSLROOTCERT:}
 
   internal-api:

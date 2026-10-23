@@ -273,6 +273,19 @@ describe('영상 출입증 받기와 쿠키 싣기 (POK-317)', () => {
     expect(posts()).toHaveLength(2);
   });
 
+  it('받는 중인 출입증은 버리지 않되 403을 들었다고 적어 둔다: 받은 뒤 라이브 화면이 멎은 재생기를 새로 세운다(POK-337 로컬 리뷰)', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.parse('2026-10-23T00:00:00Z'));
+    const { api, posts } = await load(granted('2026-10-23T01:00:00Z'));
+    const pending = api.ensureLiveAccess('L-1', 'lk-1');
+    api.reportPlaybackForbidden('lk-1');
+    await pending;
+    // 받는 중이던 것을 그대로 쓴다: 곧 새 쿠키가 왔다
+    await api.ensureLiveAccess('L-1', 'lk-1');
+    expect(posts()).toHaveLength(1);
+    expect(api.takePlaybackDrop('L-1')).toBe(true);
+  });
+
   it('다시보기 오류는 첫 바이트를 물어 403일 때만 출입증을 버리고 다시 받는다: 틈 · 서버 오류는 그대로 둔다(PR #332 codex)', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(Date.parse('2026-10-23T00:00:00Z'));
@@ -311,5 +324,13 @@ describe('영상 출입증 받기와 쿠키 싣기 (POK-317)', () => {
     // 쿠키는 11개(S-0은 실패)라 빈자리가 하나다: 실패한 S-0이 아니라 아직 못 받은 S-12가 받는다
     await Promise.all([...api.ensurePlaybackAccessForList(items).values()]);
     expect(posts().slice(12)).toEqual(['/api/clip/broadcasts/S-12/playback-access']);
+  });
+
+  it('보관 기간이 지난 방송(410 vod_expired)은 「만료」이고 그 방송은 더 묻지 않는다(POK-335)', async () => {
+    const { api, posts } = await load(() => jsonResponse(410, { error: 'vod_expired' }));
+    expect(await api.ensureLiveAccess('S-old', 'k-old')).toEqual({ kind: 'expired' });
+    expect(await api.ensureLiveAccess('S-old', 'k-old')).toEqual({ kind: 'expired' });
+    expect(api.ensurePlaybackAccess('S-old', 'k-old')).toBeNull();
+    expect(posts()).toHaveLength(1);
   });
 });

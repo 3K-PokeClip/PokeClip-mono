@@ -10,6 +10,8 @@ dependencyManagement {
 
 dependencies {
     implementation project(':web-support')
+    // DB 로그인 방식(비밀번호 · RDS IAM)과 db_connected 줄(POK-407). 서버 넷이 같이 쓴다.
+    implementation project(':db-support')
 
     implementation 'org.springframework.boot:spring-boot-starter-webmvc'
     // RestClient 클래스 자체는 webmvc가 끌어오는 spring-web에 있지만, RestClient.Builder
@@ -61,6 +63,7 @@ dependencies {
 
     // LogCaptor. 경고가 실제로 찍히는지 로그에서 직접 확인한다(auth·chat-collector와 같은 방식).
     testImplementation testFixtures(project(':web-support'))
+    testImplementation testFixtures(project(':db-support'))
 }
 
 // CardMetricsQueryTest가 services/README.md의 집계 SQL을 읽는다(POK-338). 입력으로 알리지 않으면 README만 고친 판에서

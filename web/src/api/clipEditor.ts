@@ -11,8 +11,9 @@ import { notifyChannelGone } from '@/stores/channel';
 //   GET /api/clip/broadcasts/{id}/chat-messages 지난 방송 채팅 (절대 시각 창)
 // 그 밖에 편집본·영상 주문·보관함(아래 절).
 
-async function getJson<T>(path: string): Promise<T> {
-  const res = await clipFetch(path);
+/** signal: 부른 화면이 내려가면 끊는다(목록 읽기들, 아래 fetchAll*) */
+async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
+  const res = await clipFetch(path, signal ? { signal } : undefined);
   return res.json() as Promise<T>;
 }
 
@@ -20,9 +21,13 @@ async function getJson<T>(path: string): Promise<T> {
  * 고른 채널로 묻는 목록 읽기(POK-390). 404면 그 채널을 더는 볼 수 없다는 뜻일 수 있어 신호를 남기고 그대로 던진다.
  * 판정을 화면 훅마다 두지 않고 여기 한 자리에 둔다: 홈은 실패를 null로 삼켜 훅까지 404가 안 올라온다.
  */
-async function channelGetJson<T>(path: string, streamerId: number | null): Promise<T> {
+async function channelGetJson<T>(
+  path: string,
+  streamerId: number | null,
+  signal?: AbortSignal,
+): Promise<T> {
   try {
-    return await getJson<T>(path);
+    return await getJson<T>(path, signal);
   } catch (e) {
     if (streamerId !== null && e instanceof ClipApiError && e.status === 404)
       notifyChannelGone(streamerId);
@@ -137,7 +142,10 @@ const CARD_PAGE = 200;
  * 방송의 카드를 쪽마다 끝까지 읽는다. 한 쪽만 읽으면 51번째 카드부터 없는 것이 된다(기본 쪽 크기 50,
  * 오래된 것부터 온다: PR #200 codex).
  */
-export async function fetchAllJumpCards<T = JumpCard>(streamId: string): Promise<T[]> {
+export async function fetchAllJumpCards<T = JumpCard>(
+  streamId: string,
+  signal?: AbortSignal,
+): Promise<T[]> {
   const all: T[] = [];
   let cursor: string | null = null;
   do {
@@ -145,6 +153,7 @@ export async function fetchAllJumpCards<T = JumpCard>(streamId: string): Promise
     if (cursor) qs.set('cursor', cursor);
     const page: { cards: T[]; nextCursor?: string | null } = await getJson(
       `/api/clip/broadcasts/${encodeURIComponent(streamId)}/jump-cards?${qs}`,
+      signal,
     );
     all.push(...page.cards);
     cursor = page.nextCursor ?? null;
@@ -168,6 +177,7 @@ async function walkBroadcasts(
   state: 'live' | 'past',
   stop: (rows: BroadcastRow[]) => boolean = () => false,
   streamerId: number | null = null,
+  signal?: AbortSignal,
 ): Promise<BroadcastRow[]> {
   const all: BroadcastRow[] = [];
   let cursor: string | null = null;
@@ -178,6 +188,7 @@ async function walkBroadcasts(
     const page: { broadcasts: BroadcastRow[]; nextCursor: string | null } = await channelGetJson(
       `/api/clip/broadcasts?${qs}`,
       streamerId,
+      signal,
     );
     all.push(...page.broadcasts);
     if (stop(page.broadcasts)) break;
@@ -189,12 +200,14 @@ async function walkBroadcasts(
 /**
  * 그 상태의 방송 전부: 사람 규모라 몇 쪽이다.
  * @param streamerId 고른 채널(POK-390). null이면 볼 수 있는 채널 전부를 섞는다(옛 호출)
+ * @param signal 부른 화면이 내려가면 끊는다: 남은 쪽을 계속 넘기면 채널 전환 화면이 옛 채널 요청까지 기다린다(PR #342 2차 리뷰)
  */
 export function fetchAllBroadcasts(
   state: 'live' | 'past',
   streamerId: number | null = null,
+  signal?: AbortSignal,
 ): Promise<BroadcastRow[]> {
-  return walkBroadcasts(state, undefined, streamerId);
+  return walkBroadcasts(state, undefined, streamerId, signal);
 }
 
 /** 방송 한 줄 — 라이브 목록에서 먼저 찾고 없으면 지난 방송 목록을 끝까지 본다. */
@@ -638,8 +651,12 @@ export function requestFileAccess(streamId: string, clipId: number): Promise<Cli
 /**
  * 내가 볼 수 있는 방송들의 편집본 전부: 한 장씩 이어받아 끝까지 모은다(사람 규모라 몇 장이다).
  * @param streamerId 고른 채널(POK-390). null이면 섞어서
+ * @param signal 부른 화면이 내려가면 끊는다(fetchAllBroadcasts와 같다)
  */
-export async function fetchLibraryAll(streamerId: number | null = null): Promise<LibraryEntry[]> {
+export async function fetchLibraryAll(
+  streamerId: number | null = null,
+  signal?: AbortSignal,
+): Promise<LibraryEntry[]> {
   const items: LibraryEntry[] = [];
   let cursor: string | null = null;
   do {
@@ -649,6 +666,7 @@ export async function fetchLibraryAll(streamerId: number | null = null): Promise
     const page: { items: LibraryEntry[]; nextCursor: string | null } = await channelGetJson(
       `/api/clip/library?${qs}`,
       streamerId,
+      signal,
     );
     items.push(...page.items);
     cursor = page.nextCursor;
@@ -701,7 +719,11 @@ export function cutFromWindow(
  */
 /** 출입증 결과 — 받았으면 만료 시각(모르면 null), 서명 재료가 없는 서버(503)면 필요 없음, 그 밖은 실패 */
 export type PlaybackAccessResult =
-  { kind: 'granted'; expiresAtMs: number | null } | { kind: 'not_needed' } | { kind: 'failed' };
+  | { kind: 'granted'; expiresAtMs: number | null }
+  | { kind: 'not_needed' }
+  | { kind: 'failed' }
+  /** 보관 기간(60일)이 지난 방송(410 vod_expired, POK-335). 조각을 지우므로 다시 받아도 같다 */
+  | { kind: 'expired' };
 
 /** 문 한 번 부르기. 받아 둔 출입증 · 다시 쓰기 · 403 처리는 playbackAccess.ts 한 곳이 한다(POK-317) */
 export async function requestPlaybackAccess(streamId: string): Promise<PlaybackAccessResult> {
@@ -728,6 +750,8 @@ export async function requestPlaybackAccess(streamId: string): Promise<PlaybackA
     // auth가 잠깐 멈춘 사이 연 화면이 다시 묻지 않아 prod 재생이 403으로 굳었다(POK-317)
     if (e instanceof ApiError && e.status === 503 && e.code === 'playback_signing_unavailable')
       return { kind: 'not_needed' };
+    if (e instanceof ApiError && e.status === 410 && e.code === 'vod_expired')
+      return { kind: 'expired' };
     return { kind: 'failed' };
   }
 }

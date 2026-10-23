@@ -9,6 +9,7 @@ import com.pokeclip.clip.jumpcard.JumpCardErrors.StreamLimitExceededException;
 import com.pokeclip.clip.jumpcard.JumpCardErrors.TokenAlreadyExpiredException;
 import com.pokeclip.clip.paging.InvalidCursorException;
 import com.pokeclip.clip.paging.InvalidListParamException;
+import com.pokeclip.clip.segment.SegmentErrors.VodExpiredException;
 import com.pokeclip.clip.playback.PlaybackErrors;
 import com.pokeclip.clip.recipe.RecipeErrors;
 import com.pokeclip.clip.render.RenderErrors;
@@ -340,6 +341,17 @@ public class JumpCardExceptionHandler {
     @ExceptionHandler(InvalidCursorException.class)
     ResponseEntity<Map<String, Object>> invalidCursor(InvalidCursorException e) {
         return json(HttpStatus.BAD_REQUEST, field("cursor"));
+    }
+
+    /**
+     * 410 {@code vod_expired}. 보관 기간(60일)이 지난 방송: 세그먼트 미리보기 · 렌더 주문(새로 만드는 갈래) · 영상 출입증이 같은
+     * 본문을 낸다(POK-335). 이 응답은 <b>자격이 확인된 사람에게만</b> 도달한다: 「있었는데 없어졌다」는 뜻이라 그 자체로 방송의
+     * 실재를 말하기 때문이다. 순서(자격 판정 뒤)를 지키는 것은 부르는 쪽이다. 세그먼트 전용 조언에서 옮겨 왔다: 문 셋이 나눠 쓰고,
+     * 두 조언이 같은 예외를 잡으면 우선권 없이 전역이 이긴다
+     */
+    @ExceptionHandler(VodExpiredException.class)
+    ResponseEntity<Map<String, Object>> vodExpired(VodExpiredException e) {
+        return json(HttpStatus.GONE, error("vod_expired"));
     }
 
     /** 400. 목록 문의 요청 칸({@code state}·{@code limit})이 범위 밖이다. */
