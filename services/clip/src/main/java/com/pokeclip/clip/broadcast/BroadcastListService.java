@@ -1,5 +1,7 @@
 package com.pokeclip.clip.broadcast;
 
+import com.pokeclip.clip.collector.BroadcastLatest;
+import com.pokeclip.clip.collector.BroadcastTitle;
 import com.pokeclip.clip.collector.BroadcastTitleClient;
 import com.pokeclip.clip.delegation.AccessErrors;
 import com.pokeclip.clip.delegation.AccessibleResult;
@@ -16,12 +18,17 @@ import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessException;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
 
 /**
  * 「내가 볼 수 있는 스트리머의 방송」 한 장을 만든다.
@@ -87,17 +94,31 @@ public class BroadcastListService {
     private final ThumbnailUrls thumbnails;
     private final BroadcastTitleClient titles;
     private final ViewerPresence viewers;
+    private final BroadcastPlatformStore bundles;
 
     BroadcastListService(BroadcastRepository broadcasts, DelegationResolveClient delegation,
                          TimelineOriginReader origins, ThumbnailUrls thumbnails, BroadcastTitleClient titles,
-                         ViewerPresence viewers) {
+                         ViewerPresence viewers, BroadcastPlatformStore bundles) {
         this.broadcasts = broadcasts;
         this.delegation = delegation;
         this.origins = origins;
         this.thumbnails = thumbnails;
         this.titles = titles;
         this.viewers = viewers;
+        this.bundles = bundles;
     }
+
+    /** 플랫폼 순서(POK-397): 치지직 → SOOP → 그 밖 이름순. 화면이 같은 방송을 열 때마다 같은 순서로 그리게 한다. */
+    private static final Comparator<String> PLATFORM_ORDER = Comparator
+            .comparingInt((String platform) -> switch (platform) {
+                case "CHZZK" -> 0;
+                case "SOOP" -> 1;
+                default -> 2;
+            })
+            .thenComparing(Comparator.naturalOrder());
+
+    /** 제목 후보의 「켜짐」 폭(POK-397). 웹이 플랫폼을 꺼진 것으로 보는 「관측 3분」과 같다. 수집기 관측 주기(1분)의 세 배다. */
+    private static final Duration ON_AIR_WINDOW = Duration.ofMinutes(3);
 
     /**
      * @param requesterSubject JWT {@code sub} — 우리가 발급·검증한 토큰의 회원 번호(문자열)
@@ -155,8 +176,99 @@ public class BroadcastListService {
                 ? CursorCodec.encode(CursorCodec.Kind.BROADCAST, page.get(page.size() - 1).getId())
                 : null;
         // 시각 기준점은 잘라 낸 한 장만 잰다(POK-255) — 「다음 장이 있나」를 보려고 더 받은 한 줄은 안 나간다
+        List<String> streamIds = page.stream().map(Broadcast::getStreamId).toList();
+        BroadcastLatest latest = titles.latestOf(streamIds);
+        Map<String, List<String>> bundled = bundlesOrEmpty(streamIds);
+        Map<String, BroadcastTitle> chosenTitles = new HashMap<>();
+        Map<String, List<PlatformViewers>> platforms = new HashMap<>();
+        for (Broadcast row : page) {
+            List<BroadcastLatest.PlatformLatest> observed =
+                    latest.platforms().getOrDefault(row.getStreamId(), List.of());
+            List<PlatformViewers> listed = platformsOf(row, bundled.getOrDefault(row.getStreamId(), List.of()), observed);
+            platforms.put(row.getStreamId(), listed);
+            BroadcastTitle title = latest.platformAware()
+                    ? titleOf(listed, observed)
+                    : latest.titles().get(row.getStreamId());
+            if (title != null) {
+                chosenTitles.put(row.getStreamId(), title);
+            }
+        }
         return new BroadcastPage(page, relations, next, originsOrEmpty(page), thumbnailsOf(page),
-                titles.titlesOf(page.stream().map(Broadcast::getStreamId).toList()), editorsOnlineOf(page, userId));
+                chosenTitles, platforms, editorsOnlineOf(page, userId));
+    }
+
+    /**
+     * 켜진 플랫폼 = 묶음 표 + 편지 플랫폼(POK-397). 편지 플랫폼은 ① 묶음이 비었거나 ② 묶음에 있거나 ③ 수집기가 그 플랫폼 값을 봤을 때만 넣는다.
+     *
+     * <p>🔴 무조건 넣지 않는 이유: Media는 지금 편지에 {@code platform}을 안 싣는다. 그래서 {@code broadcasts.platform}은 늘 CHZZK이고, 무조건 넣으면
+     * SOOP만 하는 방송에도 시청자 수 없는 치지직이 붙는다(로컬 리뷰 1라운드). ③이 계획 검증 M6을 지킨다: 치지직 목록 훑기가 실패한 분에는 수집기가
+     * 묶음에 CHZZK를 못 알리지만 방송 정보 줄은 남아 여기 보인다. 옛 칸 {@code platform}은 이 규칙과 무관하게 편지 값이다.
+     * 시청자 수는 수집기의 그 플랫폼 최신 값이고 없으면 비운다.
+     */
+    private static List<PlatformViewers> platformsOf(Broadcast row, List<String> bundled,
+                                                     List<BroadcastLatest.PlatformLatest> observed) {
+        Set<String> names = new TreeSet<>(PLATFORM_ORDER);
+        names.addAll(bundled);
+        String letter = row.getPlatform();
+        if (bundled.isEmpty() || observed.stream().anyMatch(each -> letter.equals(each.platform()))) {
+            names.add(letter);
+        }
+        List<PlatformViewers> out = new ArrayList<>();
+        for (String name : names) {
+            BroadcastLatest.PlatformLatest seen = observed.stream()
+                    .filter(each -> name.equals(each.platform())).findFirst().orElse(null);
+            out.add(new PlatformViewers(name, seen == null ? null : seen.viewers(), seen == null ? null : seen.observedAt()));
+        }
+        return out;
+    }
+
+    /**
+     * 제목 규칙(POK-397): <b>목록에 실린 플랫폼 중 켜진 것</b>에서 시청자가 많은 쪽, 같으면 위 순서(CHZZK → SOOP)다. 그 플랫폼에 제목이 없으면 다음 켜진
+     * 플랫폼을 본다. 카테고리는 고른 제목과 같은 플랫폼 값이다. 웹이 띠·머리에 고르는 규칙과 같다.
+     *
+     * <p>켜짐 = 그 방송의 가장 최근 관측에서 {@link #ON_AIR_WINDOW} 안에 관측된 플랫폼. 웹의 「관측 3분 안」과 같은 폭이되 지금 시각이 아니라 마지막 관측에
+     * 잰다: 끝난 방송도 마지막에 켜져 있던 플랫폼의 제목을 낸다.
+     *
+     * <p>🔴 꺼진 플랫폼의 제목은 시청자가 많았어도 안 쓴다(웹 PR3b 로컬 리뷰). 치지직을 잠깐 켰다 끄고 SOOP으로만 방송하면 묶음에 CHZZK가 남는데, 전에는
+     * 편지 플랫폼(Media가 플랫폼을 안 실어 늘 CHZZK)을 먼저 골라 꺼진 치지직 제목이 떴다. 켜진 플랫폼에 제목이 없으면 옛 칸(플랫폼과 무관한 제목 있는
+     * 마지막 관측)도 안 쓴다(재시험 결함, 옛 칸도 꺼진 플랫폼 제목일 수 있다). 옛 수집기(플랫폼 값 없음)일 때만 부르는 쪽이 옛 칸을 쓴다.
+     */
+    private static BroadcastTitle titleOf(List<PlatformViewers> listed, List<BroadcastLatest.PlatformLatest> observed) {
+        Set<String> listedNames = new HashSet<>();
+        listed.forEach(each -> listedNames.add(each.platform()));
+        List<BroadcastLatest.PlatformLatest> seen = observed.stream()
+                .filter(each -> listedNames.contains(each.platform()) && each.observedAt() != null)
+                .toList();
+        Instant last = seen.stream().map(BroadcastLatest.PlatformLatest::observedAt).max(Comparator.naturalOrder()).orElse(null);
+        if (last == null) {
+            return null;
+        }
+        Instant onAirFrom = last.minus(ON_AIR_WINDOW);
+        List<BroadcastLatest.PlatformLatest> candidates = new ArrayList<>(seen.stream()
+                .filter(each -> !each.observedAt().isBefore(onAirFrom))
+                .toList());
+        candidates.sort(Comparator.comparing(BroadcastLatest.PlatformLatest::viewers,
+                        Comparator.nullsLast(Comparator.<Integer>reverseOrder()))
+                .thenComparing(BroadcastLatest.PlatformLatest::platform, PLATFORM_ORDER));
+        for (BroadcastLatest.PlatformLatest each : candidates) {
+            if (each.title() != null) {
+                return new BroadcastTitle(each.title(), each.category());
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 묶음은 부가 칸이다. 못 읽으면 칸을 비우고(편지 플랫폼 하나로 접힌다) 목록은 낸다. 여기서 던지면 홈·라이브·다시보기가 전부
+     * 500이다({@link #originsOrEmpty}와 같은 이유).
+     */
+    private Map<String, List<String>> bundlesOrEmpty(List<String> streamIds) {
+        try {
+            return bundles.platformsOf(streamIds);
+        } catch (DataAccessException e) {
+            log.warn("broadcast.platforms_failed rows={} reason={}", streamIds.size(), e.getClass().getSimpleName());
+            return Map.of();
+        }
     }
 
     /**

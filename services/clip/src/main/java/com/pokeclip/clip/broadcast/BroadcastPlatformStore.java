@@ -7,6 +7,10 @@ import org.springframework.stereotype.Repository;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
 /**
  * 방송마다 켜진 플랫폼 묶음 {@code broadcast_platforms}(V220, POK-397). 수집기가 그 플랫폼에서 방송을 확인하면 적는다.
@@ -48,5 +52,26 @@ public class BroadcastPlatformStore {
             }
             throw e;
         }
+    }
+
+    /**
+     * 방송 목록 한 장의 묶음을 질의 한 번으로 읽는다(줄마다 묻지 않는다). 기본 키 앞자리가 {@code stream_id}라 그 색인을 탄다.
+     *
+     * @return 방송 번호 → 묶음에 적힌 플랫폼(순서 없음). 줄이 없는 방송은 키가 없다
+     */
+    public Map<String, List<String>> platformsOf(List<String> streamIds) {
+        Map<String, List<String>> platforms = new HashMap<>();
+        if (streamIds.isEmpty()) {
+            return platforms;
+        }
+        jdbc.query(connection -> {
+            java.sql.PreparedStatement ps = connection.prepareStatement(
+                    "SELECT stream_id, platform FROM broadcast_platforms WHERE stream_id = ANY(?)");
+            ps.setArray(1, connection.createArrayOf("text", streamIds.toArray(String[]::new)));
+            return ps;
+        }, rs -> {
+            platforms.computeIfAbsent(rs.getString("stream_id"), id -> new ArrayList<>()).add(rs.getString("platform"));
+        });
+        return platforms;
     }
 }

@@ -2,6 +2,7 @@ package com.pokeclip.clip.broadcast.api;
 
 import com.pokeclip.clip.broadcast.Broadcast;
 import com.pokeclip.clip.broadcast.BroadcastPage;
+import com.pokeclip.clip.broadcast.PlatformViewers;
 import com.pokeclip.clip.collector.BroadcastTitle;
 import com.pokeclip.clip.delegation.ResolveResult;
 
@@ -46,8 +47,13 @@ public record BroadcastListResponse(List<Item> broadcasts, String nextCursor) {
      * 마지막 관측을 고르고, 카테고리는 같은 관측의 값이다. 관측이 없거나 수집기 표를 못 읽으면 둘 다 {@code null}이고 화면은 방송 번호를
      * 보인다. 수집기에 한 장을 한 번에 묻는다({@code BroadcastTitleClient}).
      *
-     * <p>{@code platform}은 방송 플랫폼 코드다(POK-398, {@code CHZZK}·{@code SOOP}, 늘 있다). 칸이 생기기 전 방송과
-     * 플랫폼을 안 실은 편지로 만든 줄은 {@code CHZZK}다. 화면은 이 값으로 라이브 띠의 플랫폼 태그를 그린다.
+     * <p>{@code platform}은 방송 플랫폼 코드다(POK-398, {@code CHZZK}·{@code SOOP}, 늘 있다). 켜진 플랫폼({@code platforms})의 첫째라 편지 값과
+     * 다를 수 있다(POK-397). 화면은 이 값으로 라이브 띠의 플랫폼 태그를 그린다.
+     *
+     * <p>{@code platforms}는 그 방송이 켜진 플랫폼과 플랫폼마다 시청자 수다(POK-397). 편지 플랫폼({@code platform})과 묶음 표
+     * ({@code broadcast_platforms}, 수집기가 확인할 때 적는다)의 합이라 늘 한 개 이상이고, 순서는 CHZZK → SOOP → 그 밖 이름순이다.
+     * 시청자 수·관측 시각은 수집기의 그 플랫폼 최신 줄이고 모르면 {@code null}이다. 꺼진 플랫폼도 묶음에 남으므로 화면은
+     * {@code observedAt}이 오래됐으면 꺼진 것으로 본다. {@code title}·{@code category}는 켜진 플랫폼 중 시청자가 많은 쪽 제목이다.
      *
      * <p>{@code editorsOnline}은 그 방송의 라이브 대시보드를 지금 열어 둔 편집자 수다(POK-398). 스트리머 본인과 묻는 사람은 빼고,
      * 같은 사람의 여러 탭은 한 명이다. 방송 중 줄만 숫자(아무도 없으면 0)이고 끝난 줄은 {@code null}이다. clip 한 대 전제다
@@ -68,7 +74,17 @@ public record BroadcastListResponse(List<Item> broadcasts, String nextCursor) {
                        String title,
                        String category,
                        String platform,
+                       List<PlatformViewers> platforms,
                        Integer editorsOnline) {
+    }
+
+    /**
+     * 옛 칸 {@code platform} = 켜진 플랫폼의 첫째(재시험 결함, POK-397). Media가 편지에 플랫폼을 안 실어 편지 값이 늘 CHZZK라, 편지 값을 그대로 실으면
+     * SOOP으로만 방송하는 방송에 치지직 태그가 떴다. 목록이 비는 일은 없지만(편지 플랫폼이나 묶음이 늘 있다) 비면 편지 값이다.
+     */
+    private static String platformOf(Broadcast row, BroadcastPage page) {
+        List<PlatformViewers> listed = page.platforms().getOrDefault(row.getStreamId(), List.of());
+        return listed.isEmpty() ? row.getPlatform() : listed.get(0).platform();
     }
 
     public static BroadcastListResponse from(BroadcastPage page) {
@@ -95,7 +111,8 @@ public record BroadcastListResponse(List<Item> broadcasts, String nextCursor) {
                 page.thumbnails().get(row.getStreamId()),
                 title == null ? null : title.title(),
                 title == null ? null : title.category(),
-                row.getPlatform(),
+                platformOf(row, page),
+                page.platforms().getOrDefault(row.getStreamId(), List.of()),
                 page.editorsOnline().get(row.getStreamId()));
     }
 }
