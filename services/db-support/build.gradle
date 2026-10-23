@@ -1,0 +1,53 @@
+// 서버가 아니라 라이브러리다. bootJar를 만들지 않으므로 spring-boot 플러그인을 붙이지 않는다.
+//
+// 여기는 서버 넷이 똑같이 쓰는 DB 로그인 장치만 둔다(POK-407): 로그인 방식 스위치 · RDS IAM 토큰 공급자 ·
+// verify-full 강제 · db_connected 판정 줄. 표 · 엔티티 · 질의는 두지 않는다. 표는 서버마다 자기 것이다.
+//
+// web-support에 넣지 않은 이유: 그 모듈을 컴파일 의존으로 걸면 CorsProperties가 딸려 와
+// CORS_ALLOWED_ORIGINS 없이는 부팅이 실패하는데, 채팅 두 서버는 브라우저 문이 없다.
+plugins {
+    id 'java-library'
+    // iam 배선 시험 도우미를 서버 넷에 넘겨주려고 켠다. 서버마다 복사하면 사본이 갈린다.
+    id 'java-test-fixtures'
+}
+
+dependencyManagement {
+    // Boot 4.1.0 BOM은 AWS SDK를 관리하지 않는다. 서버 넷과 같은 판으로 박는다.
+    imports { mavenBom 'software.amazon.awssdk:bom:2.46.7' }
+}
+
+dependencies {
+    // api인 이유: 서버가 DataSourceLoginConfiguration을 @Import 하려면 Hikari · 스프링 타입이
+    // 컴파일 클래스패스에 있어야 한다. 서버 넷은 어차피 이 스타터를 쓴다.
+    api 'org.springframework.boot:spring-boot-starter-jdbc'
+
+    // RDS IAM 토큰 서명(RdsUtilities)만 쓴다. 서명은 로컬 계산이라 SDK HTTP 클라이언트가 필요 없다.
+    // 🔴 HTTP 구현 둘을 뺀다. apache5-client가 httpclient5를 클래스패스에 올리면 Boot가 RestClient
+    // 스택을 바꾼다(chat-collector build.gradle 주석). 자격 증명 조회(ECS 태스크 역할 · IMDS)는
+    // SDK HTTP 클라이언트가 아니라 JDK 연결로 한다. s3 · sqs로 이미 그 둘을 쓰는 서버는 그대로다.
+    // api인 이유: RdsTokenSigner.rds(Region, AwsCredentialsProvider)가 SDK 타입을 받는다.
+    // 🔴 판(version)은 여기서 안 넘어간다. 쓰는 서버도 SDK BOM을 import 해야 이 좌표가 풀린다(서버 넷 다 있다).
+    api('software.amazon.awssdk:rds') {
+        exclude group: 'software.amazon.awssdk', module: 'apache5-client'
+        exclude group: 'software.amazon.awssdk', module: 'netty-nio-client'
+    }
+
+    runtimeOnly 'org.postgresql:postgresql'
+
+    testFixturesApi 'org.springframework.boot:spring-boot-starter-jdbc'
+    // 2.x 좌표다. 1.x의 org.testcontainers:postgresql가 아니다.
+    testFixturesApi 'org.testcontainers:testcontainers-postgresql'
+
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    testImplementation testFixtures(project(':web-support'))
+}
+
+tasks.named('test') {
+    // RdsCaBundleTest가 읽는 파일들이다(번들 두 사본 · 번들을 넣는 Dockerfile 다섯). 선언하지 않으면 번들만 바뀐 실행에서 test가 UP-TO-DATE로 건너뛴다
+    // (chat-collector DocumentedEnvVarsTest와 같은 이유).
+    inputs.files('certs/rds-global-bundle.pem', rootProject.file('../media/certs/rds-global-bundle.pem'),
+            rootProject.file('../media/Dockerfile'),
+            rootProject.files('auth/Dockerfile', 'clip/Dockerfile', 'chat-collector/Dockerfile', 'chat-detector/Dockerfile'))
+            .withPropertyName('rdsCaBundles')
+            .withPathSensitivity(PathSensitivity.NONE)
+}

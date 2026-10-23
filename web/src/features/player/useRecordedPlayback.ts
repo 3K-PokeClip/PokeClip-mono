@@ -18,7 +18,14 @@ import { playableBackFrom, playableFrom, type RecordingTimeline } from './record
 // 녹화가 구간 여럿이면(송출 끊김·녹화기 재시작) 한 번에 한 구간만 달라 한다 — 재생 서버는 틈을 건너 주지 않는다
 // (recordingTimeline). 한 구간이 끝나면 다음 구간을 이어 틀고, 틈 안을 누르면 다음 구간 시작으로 간다(POK-253).
 
-export type RecordedSource = RecordingTimeline & { streamId: string };
+export type RecordedSource = RecordingTimeline & {
+  streamId: string;
+  /**
+   * 재생기의 0초가 서버 기준점(카드·조각 ms의 0초, POK-255)인가. 기준점을 몰라 녹화 시작에 세웠으면 거짓이다: 그 자리를 카드
+   * 위치로 보내면 두 시작의 차만큼 어긋난다(POK-392 수동 마킹이 이 값 하나로 막는다)
+   */
+  originAxis?: boolean;
+};
 
 const SEEK_DEBOUNCE_MS = 250;
 
@@ -63,6 +70,8 @@ export function useRecordedPlayback(
   const [offset, setOffset] = useState(startAt);
   const [position, setPosition] = useState(startAt);
   const [quality, setQuality] = useState<PlayerQuality>(PLAYER_QUALITIES[0]);
+  /** 다시 붙이지 못한 줄기의 주소. 줄기가 바뀌면(옮김·다음 구간) 알림이 저절로 사라진다 */
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
   const { controlsVisible, wake, sleep } = useControlsAutoHide(playing);
   // 틈 안이면 다음 구간 시작, 녹화 끝을 지났으면 마지막 구간 끝 1초 앞(끝까지 본 뒤 다시 누른 경우)
   const piece = useMemo(() => {
@@ -150,14 +159,23 @@ export function useRecordedPlayback(
       setOffset(next.fromSeconds);
     };
     // 줄기 오류가 쿠키 지워짐(403)이면 출입증을 다시 받아 같은 줄기를 다시 붙인다(PR #332 codex). <video>는 응답 코드를 못 읽어
-    // 확인은 playbackAccess가 첫 바이트를 물어 한다. 줄기마다 한 번만: 다시 받아도 403이면 끝없이 돌지 않는다
+    // 확인은 playbackAccess가 첫 바이트를 물어 한다. 줄기마다 한 번만: 다시 받아도 403이면 끝없이 돌지 않는다.
+    // 다시 붙일 수 없으면(403이 아님, 또는 다시 붙인 줄기도 오류) 영상 위에 알린다: 전에는 마지막 장면에서 조용히 멎었다(POK-337)
     let recovering = false;
     let gone = false;
     const onError = () => {
-      if (recovering) return;
+      if (gone) return;
+      if (recovering) {
+        setFailedSrc(src);
+        return;
+      }
       recovering = true;
       void recoverForbiddenRecording(src, recordedRef.current.streamId).then((retry) => {
-        if (!retry || gone) return;
+        if (gone) return;
+        if (!retry) {
+          setFailedSrc(src);
+          return;
+        }
         video.src = src;
         video.load();
         if (wantPlayRef.current)
@@ -233,6 +251,8 @@ export function useRecordedPlayback(
     volume,
     /** 지금 자리(방송 기준 초). 옮기면 줄기가 붙기 전부터 옮긴 자리다 */
     positionSeconds: position,
+    // 초로 내린 positionSeconds가 아니라 영상 노드의 정확한 자리다(수동 마킹이 ms로 보낸다, POK-392)
+    currentPositionSeconds: now,
     behindSeconds,
     atEdge: behindSeconds < AT_EDGE_THRESHOLD_SECONDS,
     windowSeconds: total,
@@ -241,6 +261,7 @@ export function useRecordedPlayback(
     lowLatency: false,
     settingsMenu: false,
     replay: true,
+    playbackError: failedSrc === src ? '녹화 영상을 불러오지 못했어요' : null,
     clipMarked: false,
     controlsVisible,
     togglePlay: useCallback(() => {

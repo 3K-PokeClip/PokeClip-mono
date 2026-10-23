@@ -13,7 +13,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 방송마다 켜진 플랫폼 묶음 {@code broadcast_platforms}(V220, POK-397). 수집기가 그 플랫폼에서 방송을 확인하면 적는다.
+ * 방송마다 켜진 플랫폼 묶음 {@code broadcast_platforms}(V221, POK-397). 수집기가 그 플랫폼에서 방송을 확인하면 적는다.
  * {@code broadcasts.platform}(편지가 정한 첫 값)은 건드리지 않는다.
  */
 @Repository

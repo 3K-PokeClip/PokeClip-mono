@@ -13,7 +13,7 @@ import {
 import { ReplaceLink } from '@/components/ReplaceLink';
 import { restoreReturnPath } from '@/components/app-shell/AuthGuard';
 import { track } from '@/lib/analytics';
-import { useAuthHydration, useAuthStore } from '@/stores/auth';
+import { captureSession, useAuthHydration, useAuthStore } from '@/stores/auth';
 import { CHANNEL_SETTINGS_PATH } from './youtubeOAuth';
 import styles from './YoutubeCallbackScreen.module.css';
 
@@ -68,8 +68,16 @@ export function YoutubeCallbackScreen() {
       return;
     }
 
+    // 응답을 기다리는 사이 다른 탭이 계정을 바꿀 수 있다 (POK-222): 시작한 세션을 적어 둔다.
+    const isSameSession = captureSession();
     completeYoutubeLink({ code, state })
       .then((linked) => {
+        // 계정이 바뀌었으면 결과를 알리지 않고 돌아가기만 한다: 토스트의 채널명이 다음 사람에게
+        // 보이고 집계도 그 사람에게 붙는다. 캐시는 크로스탭 핸들러가 이미 비웠다.
+        if (!isSameSession()) {
+          back();
+          return;
+        }
         // 낙관 갱신으로 채널을 심지 않는다. 다른 탭이 계정을 바꾸면 크로스탭 핸들러가
         // 쿼리 캐시를 비우는데(Providers), 그 뒤 늦게 도착한 이 응답이 **이전 계정의**
         // 채널명을 되살린다 — 이어지는 재조회가 실패하면 unavailable 판정이
@@ -99,6 +107,11 @@ export function YoutubeCallbackScreen() {
         ) {
           restoreReturnPath(CHANNEL_SETTINGS_PATH);
           setSignedOut(true);
+          return;
+        }
+        // 앞 계정의 실패도 다음 사람에게는 엉뚱한 안내다. 위의 「로그인 필요」는 지금 상태라 그대로 둔다.
+        if (!isSameSession()) {
+          back();
           return;
         }
         // 액션(「다시 시도」)을 달지 않는다 — 곧 언마운트될 화면의 클로저를 붙들게 되고,

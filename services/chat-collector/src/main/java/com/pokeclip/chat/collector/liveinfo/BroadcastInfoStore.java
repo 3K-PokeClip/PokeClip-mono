@@ -87,7 +87,7 @@ public class BroadcastInfoStore {
      * {@link #LATEST_TITLES}와 같은 이유로 그 플랫폼의 <b>제목 있는</b> 최신 줄 것이다(없으면 null).
      *
      * <p>방송 × 플랫폼 열거를 {@code LATERAL}로 돈다. {@code DISTINCT ON (stream_id, platform)}은 방송의 줄을 전부 읽어 정렬해 한 장
-     * 100방송에 200ms쯤이라 버렸다(계획 검증 실측). V316 색인 {@code (stream_id, platform, observed_at)}이 있어야 플랫폼까지 범위로
+     * 100방송에 200ms쯤이라 버렸다(계획 검증 실측). V317 색인 {@code (stream_id, platform, observed_at)}이 있어야 플랫폼까지 범위로
      * 찾는다. 없으면 SOOP을 중간에 끈 방송·SOOP 없는 방송에서 그 방송 이력을 처음까지 훑는다. {@code BroadcastTitlePlanTest}가 잰다.
      * 줄이 없는 (방송, 플랫폼)은 결과에 없다. 순서는 방송은 받은 순, 플랫폼은 열거 순이다.
      */

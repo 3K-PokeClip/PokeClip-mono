@@ -183,3 +183,82 @@ describe('ChzzkCallbackScreen', () => {
     expect(window.sessionStorage.getItem('pc-auth-return')).toBe('/settings/channels');
   });
 });
+
+// 왕복 중 세션 변경 (POK-222): 교환을 기다리는 사이 다른 탭이 계정을 바꾸면, 늦게 온 응답의
+// 결과(채널명·성공·실패)를 다음 사람에게 알리지 않고 채널 화면으로만 보낸다. 같은 세션의
+// 회전은 계정이 그대로라 평소처럼 알린다.
+describe('ChzzkCallbackScreen: 왕복 중 세션 변경 (POK-222)', () => {
+  /** 교환 응답을 붙잡아 두었다가 시험이 정한 때에 푼다. */
+  function holdExchange() {
+    let release!: (res: Response) => void;
+    const pending = new Promise<Response>((resolve) => {
+      release = resolve;
+    });
+    const spy = stubFetch(() => pending);
+    return { spy, release };
+  }
+
+  /** 다른 탭이 보낸 세션 메시지: 실제 수신 경로(stores/auth의 채널)를 그대로 탄다. */
+  const fromOtherTab = (msg: unknown) => new BroadcastChannel('pc-auth').postMessage(msg);
+
+  it('다른 탭이 다른 계정으로 로그인하면 성공을 알리지 않는다: 앞 계정의 채널명이 안 보인다', async () => {
+    const { spy, release } = holdExchange();
+    renderScreen(<ChzzkCallbackScreen />);
+    await waitFor(() => expect(exchangeCalls(spy)).toHaveLength(1));
+
+    fromOtherTab({
+      v: 1,
+      type: 'login',
+      pair: { accessToken: 'b-access', refreshToken: 'b-refresh' },
+    });
+    release(
+      jsonResponse(201, {
+        channelId: 'chan-1',
+        channelName: '게임하는너구리',
+        linkedAt: '2026-08-21T03:00:00Z',
+      }),
+    );
+
+    await waitFor(() => expect(replace).toHaveBeenCalledWith('/settings/channels'));
+    expect(screen.queryByText('치지직 채널을 연동했어요')).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toContain('게임하는너구리');
+    expect(track).not.toHaveBeenCalled(); // 집계도 지금 로그인한 사람에게 붙는다
+  });
+
+  it('다른 탭이 로그아웃하면 늦게 온 실패도 알리지 않는다', async () => {
+    const { spy, release } = holdExchange();
+    renderScreen(<ChzzkCallbackScreen />);
+    await waitFor(() => expect(exchangeCalls(spy)).toHaveLength(1));
+
+    fromOtherTab({ v: 1, type: 'logout' });
+    release(jsonResponse(502, { reason: 'CHZZK_UNAVAILABLE' }));
+
+    await waitFor(() => expect(replace).toHaveBeenCalledWith('/settings/channels'));
+    expect(screen.queryByText('치지직과 연결하지 못했어요')).not.toBeInTheDocument();
+  });
+
+  it('같은 세션의 회전은 계정이 그대로라 성공을 평소처럼 알린다', async () => {
+    const { spy, release } = holdExchange();
+    renderScreen(<ChzzkCallbackScreen />);
+    await waitFor(() => expect(exchangeCalls(spy)).toHaveLength(1));
+
+    fromOtherTab({
+      v: 1,
+      type: 'rotate',
+      prev: 'refresh-1',
+      pair: { accessToken: 'access-2', refreshToken: 'refresh-2' },
+    });
+    expect(useAuthStore.getState().refreshToken).toBe('refresh-2'); // 회전을 실제로 이어받았다
+    release(
+      jsonResponse(201, {
+        channelId: 'chan-1',
+        channelName: '게임하는너구리',
+        linkedAt: '2026-08-21T03:00:00Z',
+      }),
+    );
+
+    expect(await screen.findByText('치지직 채널을 연동했어요')).toBeInTheDocument();
+    expect(replace).toHaveBeenCalledWith('/settings/channels');
+    expect(track.mock.calls).toEqual([['platform_linked', { platform: 'chzzk' }]]);
+  });
+});

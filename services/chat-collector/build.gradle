@@ -9,6 +9,9 @@ dependencyManagement {
 }
 
 dependencies {
+    // DB 로그인 방식(비밀번호 · RDS IAM)과 db_connected 줄(POK-407). 서버 넷이 같이 쓴다.
+    implementation project(':db-support')
+
 
     // 채팅 원본 1분 파일을 S3에 올린다(POK-116). s3가 runtime으로 끌어오는 HTTP 클라이언트는
     // Apache 5(apache-client 4가 아니다) — S3Clients가 시한을 박으려면 컴파일에서 보여야 해서 명시.
@@ -52,6 +55,7 @@ dependencies {
     // LogCaptor. 요약 한 줄이 실제로 찍히는지, 그리고 어느 레벨에서도 본문이
     // 안 새는지를 로그에서 직접 확인한다(auth의 SecretLeakTest와 같은 방식).
     testImplementation testFixtures(project(':web-support'))
+    testImplementation testFixtures(project(':db-support'))
 
     // 가짜 치지직 서버 전용. 운영 아티팩트에는 안 들어간다.
     // 임베디드 톰캣의 WsServerContainer 초기화는 spring-boot-tomcat이 이미 하므로

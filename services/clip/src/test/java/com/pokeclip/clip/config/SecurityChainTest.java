@@ -88,6 +88,18 @@ class SecurityChainTest extends IntegrationTestSupport {
     // 없는 경로의 404가 401로 둔갑하면 프론트가 "토큰 만료"로 오진해 재로그인 루프에 든다.
     // 그 갈래는 위 `유효한_토큰이면_인증을_지나_404까지_간다`가 isEqualTo(404)로 이미 정확히 잰다 —
     // 여기에 isNotEqualTo(401)을 더 두면 500도 통과시키는 더 약한 중복이 된다(문항 2·5).
+    /**
+     * POK-391. 마킹 체인({@code MarkSecurityConfig})은 {@code /api/clip/marks} <b>그 경로 하나</b>만 가져간다. 매처를
+     * {@code /api/clip/marks/**}나 {@code /api/clip/**}로 넓히면 그 아래 사람 문이 JWT 밖으로 나간다(감사 2회차 B4) :
+     * 그때 이 둘은 401이 아니라 404가 된다. 첫 줄은 양성 대조: 그 경로 자체는 토큰 없이 체인을 지나 문에 닿는다(GET이라 405).
+     */
+    @Test
+    void 마킹_체인은_그_경로_하나만_가져간다() {
+        assertThat(get("/api/clip/marks", Map.of()).statusCode()).isEqualTo(405);
+        assertThat(get("/api/clip/marks/x", Map.of()).statusCode()).isEqualTo(401);
+        assertThat(get("/api/clip/marksx", Map.of()).statusCode()).isEqualTo(401);
+    }
+
     @Test
     void health는_토큰_없이_열린다() {
         assertThat(get("/actuator/health", Map.of()).statusCode()).isEqualTo(200);

@@ -1,5 +1,5 @@
 import { act } from 'react';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -164,6 +164,35 @@ describe('HomeScreen', () => {
     vi.restoreAllMocks();
   });
 
+  it('내려가면 읽던 것을 끊는다: 채널을 바꿔 홈이 다시 그려지면 옛 채널 카드 요청을 이어 가지 않는다(PR #342 2차 리뷰)', async () => {
+    const s: Server = { past: [pastRow('S-old', new Date())] };
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const signals: AbortSignal[] = [];
+    const fetchSpy = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (!url.includes('state=past')) return Promise.resolve(route(url, s));
+      // 지난 방송 목록이 늦게 온다: 그 사이에 채널이 바뀌어 홈이 내려간다
+      if (init?.signal) signals.push(init.signal);
+      return gate.then(() => route(url, s));
+    });
+    vi.stubGlobal('fetch', fetchSpy);
+    const { unmount } = render(<HomeScreen />);
+    await waitFor(() => expect(signals).toHaveLength(1));
+
+    unmount();
+    expect(signals[0]!.aborted).toBe(true);
+    // 이 가짜 서버는 끊겨도 답한다: 답이 와도 다음 단계(카드)로 가지 않는다
+    await act(async () => {
+      release();
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    const asked = fetchSpy.mock.calls.map(([u]) => String(u));
+    expect(asked.filter((u) => u.includes('/jump-cards'))).toEqual([]);
+  });
+
   it('첫 응답 전에는 신규 계정 화면(준비 단계)을 보이지 않는다', () => {
     vi.stubGlobal(
       'fetch',
@@ -229,8 +258,11 @@ describe('HomeScreen', () => {
         'href',
         '/settings/channels',
       );
-      expect(useOnboardingStore.getState().channelLinked).toBe(true);
-      expect(useOnboardingStore.getState().pluginLinked).toBe(true);
+      // 시작 가이드 체크는 화면을 그린 뒤 도는 효과가 세운다: 제목이 뜬 순간엔 아직일 수 있어 기다린다(POK-412)
+      await waitFor(() => {
+        expect(useOnboardingStore.getState().channelLinked).toBe(true);
+        expect(useOnboardingStore.getState().pluginLinked).toBe(true);
+      });
     });
 
     it('SOOP만 연동해도 방송만 남았다고 하고 시작 가이드 1단계를 세운다 (POK-396)', async () => {
@@ -244,7 +276,7 @@ describe('HomeScreen', () => {
         await screen.findByRole('heading', { level: 1, name: '이제 방송만 켜면 돼요' }),
       ).toBeInTheDocument();
       expect(screen.getByText('SOOP 연결됨')).toBeInTheDocument();
-      expect(useOnboardingStore.getState().channelLinked).toBe(true);
+      await waitFor(() => expect(useOnboardingStore.getState().channelLinked).toBe(true));
     });
 
     it('이번 주 기록 — 방송·카드는 이번 주에 시작한 방송, 클립·발행은 이번 주에 만든·올린 것만 센다', async () => {

@@ -83,6 +83,13 @@ management:
 
 logging:
   level:
+    # DB 로거 트리 셋을 info로 박는다(POK-409). 로그 수준을 DEBUG · TRACE로 올려도 DB를 오가는 값이 안 찍히게 한다:
+    # root TRACE 실측(clip)에서 org.hibernate.orm.jdbc.extract가 읽은 칸 값을, org.hibernate.orm.core가 DEBUG에서
+    # 엔티티 통째를, org.springframework.jdbc.core.StatementCreatorUtils가 JdbcTemplate 매개변수를,
+    # org.postgresql.core.v3.QueryExecutorImpl이 보내는 값을 찍었다. 방송의 물리 키는 지금 스트림키와 같다.
+    # org.springframework.jdbc · org.postgresql 은 이 아래 줄들이 이미 박고 있다(POK-84 반개방 · 와이어 로거).
+    # 디버그 로그가 꼭 필요하면 env로 그 트리만 잠깐 켠다(예: LOGGING_LEVEL_ORG_HIBERNATE_ORM=debug).
+    org.hibernate.orm: info
     # auth와 같은 방어선. DEBUG로 켜면 나가는 요청 본문이 통째로 찍힌다.
     # 구체 로거 레벨이 root보다 우선하므로 LOGGING_LEVEL_ROOT=debug로도 안 뚫린다.
     org.springframework.web: info
@@ -121,6 +128,15 @@ logging:
     org.apache.coyote: info
 
 pokeclip:
+  datasource:
+    # DB 로그인 방식(POK-407, db-support의 DataSourceLoginConfiguration). password(기본)면 위 POSTGRES_PASSWORD로,
+    # iam이면 비밀번호 대신 연결마다 RDS IAM 토큰으로 붙는다. 이름과 뜻은 media 사이드카와 같다.
+    auth: ${POSTGRES_AUTH:password}
+    # iam 토큰을 서명할 리전.
+    region: ${AWS_REGION:ap-northeast-2}
+    # iam에서만 쓴다. RDS CA 번들의 절대 경로. 이미지에는 /etc/pokeclip/rds-ca/global-bundle.pem 으로 들어 있다.
+    ssl-root-cert: ${POSTGRES_SSLROOTCERT:}
+
   chzzk:
     # 편지 없이 설정에 적힌 토큰 하나로 한 채널만 붙이는 옛 경로다. 실측·디버깅용으로
     # 남긴다 — 운영에서는 꺼 두고 아래 broadcast.intake의 방송 편지로 붙는다.

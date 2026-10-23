@@ -47,6 +47,11 @@ export interface PlayerSimulation {
    * (ADR-081 8). 버튼·시크바 문구가 이 값으로 갈린다(QA 2026-10-11)
    */
   replay: boolean;
+  /**
+   * 실재생이 멎은 까닭을 영상 위에 한 줄로 알린다(POK-337). 없으면(null·목업) 덮개가 없다. 영상 서버를 아직 못 부른
+   * 자리(출입증·녹화 목록)는 이 칸이 아니라 영상 자리 아랫줄이 알린다
+   */
+  playbackError?: string | null;
   clipMarked: boolean;
   /** 자동 숨김 상태 — 일시정지 중엔 이 값과 무관하게 컨트롤을 보여준다 */
   controlsVisible: boolean;
@@ -62,6 +67,10 @@ export interface PlayerSimulation {
    * 단위로 반올림해 1초 안쪽 앞에 섰다(POK-324 리뷰 1라운드). 없으면 비율로 옮긴다
    */
   seekToPosition?: (seconds: number) => void;
+  /**
+   * 녹화 다시보기만: 지금 자리(방송 기준 초)를 내리지 않은 값으로 읽는다. 옮기는 중이면 도착점이다. 없으면 그 길이 없는 재생기다
+   */
+  currentPositionSeconds?: () => number;
   /**
    * 라이브 실재생만: 그 실제 시각(epoch ms)으로 옮긴다. 조각마다 그 조각의 시각 표시(PDT)로 영상 시각을 센다(계약3, POK-326).
    * 목록에 시각 표시가 없으면 false다(부르는 쪽이 방송 경과로 옮긴다). 없으면 그 길이 없는 재생기다

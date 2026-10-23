@@ -4,11 +4,12 @@
 
 ## 무엇이 들어가나
 
-**서버 4개**가 여기서 실행된다. `web-support/`는 서버가 아니다.
+**서버 4개**가 여기서 실행된다. `web-support/` · `db-support/`는 서버가 아니다.
 
 | 모듈 | 포트 | 역할 |
 |---|---|---|
 | `web-support/` | — | 여러 서버가 같이 쓰는 **웹 인프라**(CORS·상관 ID). 서버가 아니다 |
+| `db-support/` | — | 서버 넷이 같이 쓰는 **DB 로그인 장치**(비밀번호 · RDS IAM · `db_connected`, POK-407). 서버가 아니다 |
 | `clip/` | 8081 | 방송 세션 · **점프카드 저장·SSE 전송** · 세그먼트 인덱스 · 클립 · 승인 · SQS 잡 발행 |
 | `auth/` | 8082 | 로그인 · 스트림 키 · 채널 연동 · 유튜브 토큰 |
 | `chat-collector/` | 8083 | 치지직·SOOP 채팅 실시간 수집 · 시차 보정 · S3 아카이브 |
@@ -33,7 +34,7 @@ Java 21 · Spring Boot 4.1 · Gradle 멀티모듈 · PostgreSQL · Redis
 |---|---|
 | `auth` | `users` · `refresh_tokens` · `secrets` · `stream_keys` · `pairing_codes` · `pairing_exchange_attempts` |
 | `clip` | `broadcasts` · `broadcast_events` (V201) · `jump_cards` (V202) · `broadcasts.vod_expires_at` (V203, POK-117) · `recipes` (V206, POK-124) · `clips` · `render_jobs` · `render_job_events` (V207, POK-125) · **`clips` 색인 `idx_clips_recipe` (V208, POK-243)** |
-| chat 계열 | `chat_messages` (V301 · `stream_id` 칸은 V302 · **닉네임·역할 칸은 V306**) · `chat_ended_streams` (V303) · **`chat_donations` (V307)** · **`broadcast_info` (V308)** · **`chat_ingest_keys` (V310, POK-233)** · **`purged_channels` (V311, POK-256)** · **표 넷의 `platform` 칸과 플랫폼을 앞에 둔 색인 (V313~V315, POK-397)** · **방송 정보 플랫폼별 최신 색인 (V316, POK-397)** — **collector가 쓰고 detector가 읽는다.** 같은 담당(3번)·같은 V3xx 대역의 공동 소유라, 아래 "서로의 표를 직접 읽지 않는다"의 예외가 아니라 한 소유자의 두 프로세스다 |
+| chat 계열 | `chat_messages` (V301 · `stream_id` 칸은 V302 · **닉네임·역할 칸은 V306**) · `chat_ended_streams` (V303) · **`chat_donations` (V307)** · **`broadcast_info` (V308)** · **`chat_ingest_keys` (V310, POK-233)** · **`purged_channels` (V311, POK-256)** · **표 넷의 `platform` 칸과 플랫폼을 앞에 둔 색인 (V313~V315, POK-397)** · **방송 정보 플랫폼별 최신 색인 (V317, POK-397)** — **collector가 쓰고 detector가 읽는다.** 같은 담당(3번)·같은 V3xx 대역의 공동 소유라, 아래 "서로의 표를 직접 읽지 않는다"의 예외가 아니라 한 소유자의 두 프로세스다 |
 | `chat-detector` | `chat_metrics` (V401, POK-120) — **판별 서버 단독 소유다.** 위 `chat_messages`와 달리 공동 소유가 아니라 이 서버만 읽고 쓴다 |
 
 **서로의 표를 직접 읽지 않는다.** 필요하면 계약4의 `POST /internal/stream-keys/resolve`로
@@ -52,6 +53,11 @@ Java 21 · Spring Boot 4.1 · Gradle 멀티모듈 · PostgreSQL · Redis
 `LogCaptor`는 넷이 쓴다(`auth` 12 · `clip` 10 · `chat-collector` 31 · `chat-detector` 5).
 **`chat-detector`는 `testFixtures`만 가져온다** — 컴파일 의존으로 걸면 `CorsProperties`가
 딸려 와 `CORS_ALLOWED_ORIGINS` 없이는 부팅이 실패하는데, 그 서버는 브라우저 문이 없다.
+
+**DB 로그인 장치는 `db-support/`에 따로 둔다**(POK-407). 위 이유로 `web-support`에 넣으면 채팅 두 서버가 못 뜬다.
+서버마다 복사하지 않은 이유는 넷이 **같은 env 이름 · 같은 뜻**(사이드카와도 같다)이라 갈라질 일이 없는데, 보안 허용 목록을
+고칠 때 네 곳을 똑같이 고쳐야 해서다(POK-406에서 봇이 그 목록을 두 판 연속 잡았다). 계약(표 · 메시지 형식)이 아니라 접속
+장치라 「계약을 담는 모듈은 두지 않는다」와 부딪히지 않는다. 표 · 질의는 여기 두지 않는다. 쓰는 법은 아래 「DB 로그인 방식」.
 
 ## Gradle 루트는 저장소 루트가 아니라 여기다
 
@@ -123,7 +129,7 @@ set -a && . ../.env && set +a
 ```
 
 **PR에서는 `services-ci`가 돈다**(`.github/workflows/services-ci.yml`). `services/`를 고친 PR마다
-서버 넷의 시험을 따로 돌린다(auth 잡은 `web-support`도). 비밀은 넘기지 않아 실방송 탐침 시험은
+서버 넷의 시험을 따로 돌린다(auth 잡은 `web-support`도, chat-detector 잡은 `db-support`도). 비밀은 넘기지 않아 실방송 탐침 시험은
 건너뛰는 것이 정상이다. 필수 체크는 아니다.
 
 **`.env`를 싣는 줄을 빼먹으면 DB 접속이 실패한다.** `docker compose`는 `.env`를 자동으로
@@ -146,7 +152,10 @@ set -a && . ../.env && set +a
 🔴 **`GOOGLE_REDIRECT_URI`도 안 든다.** yml에 기본값(`http://localhost:3000/auth/callback`)이 있어 부팅 검증에는 안 걸리는데,
 compose는 `${GOOGLE_REDIRECT_URI:?}`로 **없으면 컨테이너가 아예 안 뜨게** 걸어 뒀고 `.env.dev.example`에도 있다.
 즉 로컬 `bootRun`에는 없어도 되고 dev 배포에는 반드시 있어야 해서, 「앱 시크릿 열다섯」에도 「안 드는 넷」에도 자리가 없다.
-**yml 실물은 서른여섯이다**(위 서른하나 + 안 드는 넷 + 이것).
+**DB 로그인 둘도 안 든다**(POK-407): `POSTGRES_AUTH`(기본 `password`) · `POSTGRES_SSLROOTCERT`(`iam`에서만 읽는다, 빈 값).
+없어도 뜨고 dev compose는 비밀번호 방식이라 넘길 값이 없다. `DeploymentEnvVarsTest`는 빈 기본값인 `POSTGRES_SSLROOTCERT`를
+「iam 전용」으로 필수에서 뺀다. 뜻은 아래 「DB 로그인 방식」.
+**yml 실물은 서른여덟이다**(위 서른하나 + 안 드는 넷 + 이것 + DB 로그인 둘).
 
 | 갈래 | 변수 | 없으면 | 어디서 얻나 |
 |---|---|---|---|
@@ -277,6 +286,8 @@ refresh는 **7일 −1초**(실측: 교환 응답에 `refresh_token_expires_in: 
 | **앱 시크릿 넷** | `CORS_ALLOWED_ORIGINS` · `JWT_SECRET` · `INTERNAL_API_TOKEN` · **`AUTH_BASE_URL`**(POK-117) | **`.env.example`에 값이 없다** — auth의 앱 시크릿 아홉과 같은 규칙이다. `.env`에 직접 넣는다. 다만 `AUTH_BASE_URL`은 시크릿이 아닌 주소라 예시 값이 적혀 있다(`http://localhost:8082`, compose 안에서는 `http://auth:8082`) |
 | **DB 접속값 셋** | `POSTGRES_DB` · `POSTGRES_USER` · `POSTGRES_PASSWORD` | `.env`에 있다(POK-82에서 POK-161의 규칙을 옮겼다) |
 
+**DB 로그인 방식 셋은 목록에 안 든다**(POK-407, auth · 수집기 · 판별기와 같다): `POSTGRES_AUTH`(기본 `password`) · `POSTGRES_SSLROOTCERT`(`iam`에서만) · `AWS_REGION`(기본 `ap-northeast-2`). 아래 「DB 로그인 방식」.
+
 **`JWT_SECRET`·`INTERNAL_API_TOKEN`은 auth와 <u>같은 값·같은 이름</u>이어야 한다**(POK-118).
 같은 이름인 이유는 `.env` 한 줄로 두 서버가 뜨게 하려는 것이고, 같은 값이어야 하는 이유는
 **auth가 서명한 토큰을 clip이 검증**하기 때문이다(대칭키 HS256, ADR-048). 값이 갈리면
@@ -400,6 +411,8 @@ CHZZK_ENABLED=true CHZZK_ACCESS_TOKEN=<유저 Access Token> ./gradlew :chat-coll
 | 변수 | 기본값 | compose | |
 |---|---|---|---|
 | `POSTGRES_DB` · `POSTGRES_USER` · `POSTGRES_PASSWORD` | **없음** | ✅ | auth · clip과 같다. 셸에 없으면 리터럴이 그대로 바인딩돼 DB가 접속을 거절한다 |
+| `POSTGRES_AUTH` | `password` | — | DB 로그인 방식. `iam`이면 연결마다 RDS IAM 토큰으로 붙고 `POSTGRES_PASSWORD`가 있으면 부팅 거부. 아래 「DB 로그인 방식」 |
+| `POSTGRES_SSLROOTCERT` | 빈 값 | — | `iam`에서만 쓴다. RDS CA 번들의 절대 경로(이미지 안 `/etc/pokeclip/rds-ca/global-bundle.pem`) |
 | `BROADCAST_INTAKE_ENABLED` | `false` | ✅ `CHAT_`\* | 켜면 편지 폴링 루프가 돈다 |
 | `BROADCAST_QUEUE_URL` | 빈 값 | ✅ `CHAT_`\* | 생명주기 FIFO 큐 주소. **켜져 있는데 비면 부팅이 죽는다** |
 | `BROADCAST_QUEUE_ENDPOINT` | 빈 값 | — | 비면 진짜 AWS. LocalStack 실측 때만 준다 |
@@ -409,7 +422,7 @@ CHZZK_ENABLED=true CHZZK_ACCESS_TOKEN=<유저 Access Token> ./gradlew :chat-coll
 | `INTERNAL_API_TOKEN` | 빈 값 | ✅ | auth의 `/internal/**`이 `X-Internal-Token`으로 보는 값. **auth에 준 것과 같아야 한다.** POK-128부터는 이 서버의 `/internal/*`도 같은 값으로 잠근다 — **필터가 접두 매핑이라 창구를 새로 열면 자동으로 걸린다**(지금 둘: 수집 상태 창구 · 영상 위치 창구). 비면 그 창구들이 전부 401이다 |
 | `BROADCAST_ENDED_SWEEP_INTERVAL` | `PT1H` | — | 끝난 방송 메모를 치우는 주기 |
 | `BROADCAST_ENDED_RETENTION` | `PT24H` | — | 그 메모의 보관 기간(ADR-016의 TTL 24h) |
-| `AWS_REGION` | `ap-northeast-2` | ✅ | 큐·S3 공용 |
+| `AWS_REGION` | `ap-northeast-2` | ✅ | 큐·S3 공용. `iam`이면 DB 토큰 서명 리전도 이것이다 |
 | `CHAT_REATTACH_ENABLED` | `false` | ✅ | 켜면 `clip`에 「지금 방송 중인 목록」을 주기적으로 물어 **붙어 있어야 하는데 안 붙은 방송**에 붙는다(POK-219). 🔴 **`BROADCAST_INTAKE_ENABLED=false`인 채로 이것만 켜면 부팅이 죽는다** — 붙이는 문을 편지 경로가 만들고, 알림 경로가 꺼져 있으면 애초에 주울 것이 없다 |
 | `CLIP_BASE_URL` | `http://localhost:8081` | ✅ | 그 목록을 물을 clip 주소. 컨테이너 안에서는 서비스 이름이다 — **기본값을 그대로 두면 컨테이너 안에서 자기 자신을 가리킨다.** 재부착이 켜졌는데 비면 부팅이 죽는다 |
 | `CHAT_DETACH_ENABLED` | `false` | ✅ | 켜면 재부착 회차에서 **내가 붙어 있는데 clip 명부에 없는 방송**의 세션을 반납한다(POK-244). clip 치우개(`BROADCAST_REAPER_ENABLED`)와 같이 켠다 — clip이 놓친 방송을 닫으면 다음 회차(1분)에 자리가 돌아온다. 🔴 **`CHAT_REATTACH_ENABLED=true`가 함께 있어야 한다** — 없으면 부팅 거부(이 갈래는 재부착 회차 안에서 돈다). 명부가 잘렸거나 읽을 수 없는 줄이 있는 회차는 통째로 건너뛴다 |
@@ -450,7 +463,7 @@ CHZZK_ENABLED=true CHZZK_ACCESS_TOKEN=<유저 Access Token> ./gradlew :chat-coll
 | 평균 · 범위 | 4,100ms · 3,746~4,977ms |
 | 수렴 | 표본 15개일 때 3,893 → 20개일 때 3,884 |
 | P₂ 판독 오차 | **±33ms** — 사람이 재생기로 읽지 않고 30fps 프레임 단위로 자동 검출했다 |
-| 측정 장소 | **로컬 개발 노트북**(EC2에는 조각 장부를 쓰는 구성이 없다) |
+| 측정 장소 | **로컬 개발 노트북**(측정 당시 EC2에는 조각 장부를 쓰는 구성이 없었다) |
 
 **배제한 표본은 셋이다** — 스트리머가 측정 중 「늦게 쳤다」고 먼저 신고한 1건과, 송출 재시작
 직후라 채팅이 화면보다 먼저인(물리적으로 불가능한) 음수 2건. **셋을 다 포함해도 중앙값은
@@ -464,7 +477,7 @@ CHZZK_ENABLED=true CHZZK_ACCESS_TOKEN=<유저 Access Token> ./gradlew :chat-coll
 
 **🔴 운영으로 옮길 때는 반드시 다시 잰다.** 이 값이 보증하지 않는 것 다섯:
 
-1. **로컬 노트북에서 쟀다** — EC2 dev에는 `segment-indexer`도 조각 장부 표도 없다
+1. **로컬 노트북에서 쟀다**: 측정 당시 EC2 dev에는 `segment-indexer`도 조각 장부 표도 없었다
 2. **시계 오프셋을 손으로 뺀 값이다** — 시계가 맞는 기계에는 그 항이 아예 없다
 3. **테스트 패턴 송출이다** — 실제 게임 화면은 인코딩 난이도가 달라 지연이 다를 수 있다
 4. **시청자 한 명(스트리머 본인)의 반응이다** — 여러 시청자의 분포는 더 넓다
@@ -529,6 +542,24 @@ CHZZK_ENABLED=true CHZZK_ACCESS_TOKEN=<유저 Access Token> ./gradlew :chat-coll
 > 「dev로 띄운」이 아니라 **「이 compose로 띄운」**이다. 2026-10-16(POK-331)부터 `services-deploy.yml`이 dev EC2에
 > 서버 넷을 다 올린다(그 전에는 `postgres`·`auth`·`clip` 셋뿐이라 dev에 수집기가 없었다). 그래서 이 구멍은 이제
 > dev 배포에서도 드러난다. compose와 예시 파일의 이름 대조는 auth `DeploymentEnvVarsTest`가 잰다.
+
+**렌더 · 업로드 일꾼도 같은 compose · 같은 배포로 뜬다**(POK-332). `render-worker` · `upload-worker` 두 서비스이고 빌드 폴더는
+각자 `workers/render` · `workers/upload`다(독립 Gradle 루트). `workers/render/**` · `workers/upload/**`가 바뀌어도 배포가 돈다.
+- **받는 쪽이 먼저**: 일꾼 둘을 올린 뒤 clip을 올린다(옛 일꾼이 새 주문서 칸을 버리지 않게).
+- **새 변수가 없다**: 일꾼은 clip과 같은 이름(`RENDER_QUEUE_URL` · `THUMBNAIL_QUEUE_URL` · `UPLOAD_QUEUE_URL` · `INTERNAL_API_TOKEN`)을
+  받는다. 주문하는 쪽과 받는 쪽이 같은 줄이어야 해서다. AWS 키는 안 넣는다(상자 역할), 창고 이름은 주문서로 받는다.
+- **배포 확인이 따로다**: 일꾼은 웹 문도 health 주소도 없다. 배포는 `running`이 아니면 실패하고, 컨테이너 안 큐 주소가
+  비었으면 경고만 찍는다(값은 안 찍는다). 🔴 큐 주소가 비면 일꾼은 그 줄을 안 보고 **떠 있기만** 한다: 「떠 있다」는 초록이 아니다.
+- **메모리**: render 768m(힙 192m) · upload 384m(힙 160m). ffmpeg가 힙 밖에서 돌아 상한을 크게 둔다. 서버 넷 · DB와 합한 상한
+  3,648MB(상자 4GiB, 예약 아님). 배포 끝 `free -m`으로 본다.
+- **디스크 · 시간**: 이미지가 render 약 1.3GB · upload 약 1.1GB다(ffmpeg · 한글 글꼴, 로컬 실측). 서버 넷(각 약 0.6GB)보다 커서
+  30GB 상자의 디스크 경고(80%)가 빨리 온다. 첫 배포는 캐시 없이 두 일꾼을 더 구워 SSM 시한(3,000초)에 가까울 수 있으니 그 판의
+  배포 시간을 본다.
+- **빌드 캐시는 크기로 묶는다**(POK-425). 배포가 굽기 전 · 뒤에 빌드 캐시를 6GB 아래로 줄이고, 굽기 전 남은 공간이 8GB 미만이면
+  캐시를 통째로 비운 뒤 굽는다(그 판은 처음부터 굽어 느리다). 옛 처방(24시간보다 오래된 캐시만 지움)은 하루 여러 번 배포하면
+  아무것도 안 지워 디스크가 두 번 100%가 됐다(10-16 · 10-24). 값은 `services-deploy.yml`의 `BUILD_CACHE_MAX` · `MIN_FREE_GB`.
+- **배포가 하던 일을 끊는다**: 배포는 일꾼 컨테이너를 새로 띄워 하던 렌더 · 업로드가 끊긴다. 주문은 줄(SQS)에 남아 숨김 시간
+  (렌더 600초 · 업로드 900초)이 지나면 다시 나온다: dev에서 배포 직후 렌더가 「만드는 중」으로 오래 머물면 그것이다.
 
 **`AUTH_BASE_URL`·`INTERNAL_API_TOKEN`이 비면 부팅이 죽는데, 켜져 있을 때만 그렇다.**
 둘을 쓰는 부품이 **큐가 켜졌을 때만 만들어지기** 때문이다 — 안 그러면 CI와 남의 로컬이
@@ -770,6 +801,99 @@ cd - && git worktree remove /tmp/pokeclip-image
 - 이미지가 기대하는 환경변수: 서버별 목록은 POK-305 코멘트(prod 목표값)와 `services/docker-compose.dev.yml`의 각 서버 `environment`
 - 수집기·판별기 이미지도 같은 꼴이다(`services/chat-collector/Dockerfile`·`services/chat-detector/Dockerfile`). prod 배치는 POK-306
 
+## DB 로그인 방식 (POK-407)
+
+**`POSTGRES_AUTH` 하나로 고른다. 비어 있거나 `password`면 지금 그대로다**(로컬 compose · CI). `iam`이면 비밀번호 대신
+**새 연결마다** AWS SDK로 서명한 RDS IAM 토큰(15분 유효)으로 붙는다. 이름과 뜻은 media 사이드카(ADR-0006)와 같다.
+코드는 `db-support`의 `DataSourceLoginConfiguration`이고, 서버 넷 각 `Application`이 `@Import` 한다. 서버마다 `DbLoginWiringTest`가
+iam 실부팅으로 그 배선이 풀까지 닿는지 잰다.
+
+| `iam`이면 | 왜 |
+|---|---|
+| 접속은 `sslmode=verify-full` 하나. CA 번들 경로 `POSTGRES_SSLROOTCERT`가 비거나 못 읽으면 부팅 거부 | 토큰은 15분 동안 다시 쓸 수 있는 자격이라 중간자에게 내줄 수 없다 |
+| **DB URL에 쿼리가 있으면 무엇이든 부팅 거부**. 드라이버 속성은 `socketTimeout` 하나만 받는다 | 키를 골라 막으면 `sslfactory` · `password=` · `PGHOST=` 같은 옆길이 판마다 나왔다(PR #336 봇 두 판) |
+| `POSTGRES_PASSWORD`가 남아 있으면 부팅 거부(값은 안 싣는다) | 안 쓰여도 장기 비밀번호가 태스크 정의에 실린 채 운영된다. POK-161 「기본값 없음」과 같은 결 |
+| 토큰 하나를 만드는 시한 10초. 넘으면 원인 종류만 싣고 실패 | 자격 증명 조회(ECS 태스크 역할)가 멈추면 연결 생성이 끝없이 매달려 풀이 바닥난다(media와 같은 값) |
+| 토큰 · URL 원문 · AWS 오류 문구는 로그 · 예외에 안 싣는다(원인 타입 이름만) | SDK 오류에는 프로필 이름 · 설정 파일 경로가 섞인다 |
+
+**CA 번들은 이미지의 `/etc/pokeclip/rds-ca/global-bundle.pem`이다.** 원본은 `db-support/certs/`이고 media 사본
+(`media/certs/`)과 바이트가 같아야 한다(`RdsCaBundleTest`가 본다). 1번이 media 쪽을 갱신하면 그 시험이 빨개지고,
+고치는 법은 다시 복사하는 것이다.
+
+**기동 직후 `db_connected` 한 줄**(INFO): `auth · sslmode · tls · user · host · port · db`. 사이드카와 같은 이름 · 같은
+칸이고 배포 확인이 이 줄로 판정한다. `tls`는 설정값이 아니라 **실제 연결**이 TLS인가다(`pg_stat_ssl`의 자기 세션).
+두 방식 다 찍는다. 못 붙으면 줄 없이 `db_connect_failed`(WARN, 원인 종류만)이고 **이 확인 줄은 기동을 막지 않는다.**
+비밀번호 방식의 동작을 바꾸지 않으려고다. 🔴 **DB 없이 서버가 뜬다는 뜻이 아니다**: DB에 못 붙으면 그 앞의 Flyway가 기동을
+멈춘다(네 서버 다 기동 때 마이그레이션을 돈다). 막지 않는 것은 이 확인 줄 하나뿐이다(ADR-113 같은 문장 정정과 맞춤).
+
+**`socketTimeout`은 10초 그대로 둔다**(POK-406 S3에서 5초로 줄일지 검토, 2026-10-23 결정). TLS에서는 끊긴 뒤 한 번 더
+기다려 최악 20초다(`services/CLAUDE.md` 함정). 줄이지 않은 이유: Flyway도 같은 풀과 같은 시한을 쓴다. 운영 표가 커지면
+큰 색인 마이그레이션(V309 · V314 같은 동시 색인)이 그 시한에 끊길 수 있고, 5초면 그 가능성이 커진다.
+auth · clip에도 같은 10초를 넣었다(POK-414). 전에는 없어서 DB가 연결만 받고 답을 안 하면 그 요청 스레드가 끝없이
+매달려 풀이 바닥나고 로그인 · 클립 화면이 통째로 멈출 수 있었다. 서버마다 `DatasourceTimeoutTest`가 응답을 삼키는
+중계기(db-support 시험 도우미 `StallingTcpProxy`)를 앞에 두고 실제로 끊기는지 잰다.
+🔴 이 시한은 반개방만이 아니라 **10초 넘게 답이 없는 모든 문장**을 끊는다: 잠금 기다림(`FOR UPDATE` · advisory lock)도
+10초가 넘으면 기다리지 않고 연결 오류로 끝난다. 지금 auth · clip의 문장은 다 이보다 훨씬 짧다(탈퇴 정리의 스트리머당 삭제도
+수천 줄). 스트리머당 줄 수가 크게 늘어 한 문장이 10초에 닿으면 그 삭제는 매번 끊겨 끝나지 않으니, 그때는 묶음으로 나눈다.
+
+### 서버별 DB 계정과 권한 (POK-407)
+
+**운영은 서버마다 DB 계정이 따로다.** 넷 다 `rds_iam`(IAM 토큰 로그인)을 받고, 각 서버가 **자기 표를 자기 계정으로
+만든다**(Flyway가 그 계정으로 돈다). 그래서 자기 표 권한은 소유로 충분하고, 목록에 남는 것은 표를 만들 자리
+(`CREATE ON SCHEMA public`, PG 15부터 기본으로 닫혔다)와 남의 표에 대한 교차 접근 넷뿐이다. `stream_*`는 media(1번) 표다.
+
+**계정 만들기와 GRANT 실행은 1번(런타임) 몫이다.** 순서가 있다.
+
+1. 계정 넷을 **서버가 처음 뜨기 전에** 만든다. `chat_messages` 읽기는 수집 서버 마이그레이션(`V316`)이 판별 서버 계정이
+   있을 때만 주므로, 그 계정이 늦게 생기면 그 줄이 건너뛰어진다(그때는 아래 수동 줄로 준다)
+2. `stream_*` 교차 권한은 media가 그 표를 만든 **뒤에** 준다
+
+```sql
+-- auth
+CREATE ROLE app_auth LOGIN;
+GRANT rds_iam TO app_auth;
+GRANT CREATE ON SCHEMA public TO app_auth;
+
+-- clip: 탈퇴 정리가 조각 장부를 읽고 지운다(StreamerPurgeStore) · 조각 조회 · 사진 대상 · 회차 머리 파일
+CREATE ROLE app_clip LOGIN;
+GRANT rds_iam TO app_clip;
+GRANT CREATE ON SCHEMA public TO app_clip;
+GRANT SELECT, DELETE ON stream_segments TO app_clip;
+GRANT SELECT ON stream_sessions TO app_clip;
+
+-- chat-collector: 채팅 시각을 영상 위치로 바꿀 때 조각 장부를 읽는다(SegmentLedger)
+CREATE ROLE app_chat_collector LOGIN;
+GRANT rds_iam TO app_chat_collector;
+GRANT CREATE ON SCHEMA public TO app_chat_collector;
+GRANT SELECT ON stream_segments TO app_chat_collector;
+
+-- chat-detector: 채팅 원문을 읽는다(ChatWindowReader). 아래 SELECT는 수집 서버 V316이 준다(표 주인이 준다).
+-- V316이 돌 때 이 계정이 없었다면 수집 서버 계정이나 마스터로 이 줄을 손으로 돌린다.
+CREATE ROLE app_chat_detector LOGIN;
+GRANT rds_iam TO app_chat_detector;
+GRANT CREATE ON SCHEMA public TO app_chat_detector;
+GRANT SELECT ON chat_messages TO app_chat_detector;
+```
+
+**이 목록은 서버마다 `DbRoleGrantsTest`가 그대로 잰다.** 빈 DB에 「이 줄들만 가진」 역할을 만들어 그 역할로 서버를 띄운다.
+마이그레이션이 끝까지 돌고 위 교차 접근 코드가 돈다. 한 줄씩 거두면 그 경로가 권한 부족(`42501`)으로 거절된다.
+README의 `GRANT ... TO app_*;` 줄과 시험의 목록이 다르면 빨간불이다.
+**재지 않는 것**: 자기 표의 전체 저장 경로를 그 역할로 다 돌리지는 않는다(소유자라 표 권한이 다 있다). 시퀀스 ·
+트리거 함수 · advisory 잠금 · `pg_stat_ssl` 자기 행은 소유 또는 PUBLIC 기본으로 충분하다.
+
+### DB 로거 셋은 info로 박혀 있다 (POK-409)
+
+**서버 넷 다 `org.hibernate.orm` · `org.springframework.jdbc` · `org.postgresql` 트리를 `application.yml`에서 info로 박는다.**
+로그 수준을 DEBUG · TRACE로 올려도 DB를 오가는 값이 안 찍히게 하려는 것이다. clip에서 root TRACE로 방송을 읽어 보니 넷이 값을
+찍었다: 읽은 칸 값(`org.hibernate.orm.jdbc.extract`) · 엔티티 통째(`org.hibernate.orm.core`, DEBUG에서도) · JdbcTemplate 매개변수
+(`StatementCreatorUtils`) · 드라이버가 보내는 값(`QueryExecutorImpl`). 방송의 물리 키는 지금 스트림키와 같아 그대로 새는 값이다.
+clip `DbValueTraceLeakTest` · 수집 서버 `IngestKeyTraceLeakTest`가 root TRACE에서 안 새는지와, 막이를 풀면 실제로 새는지(대조)를 잰다.
+auth는 비밀을 해시 · 암호문으로만 저장해 원문이 DB로 안 가므로 값을 흘려 보는 시험은 두지 않고, `SecretLeakTest`가 세 줄이 박혀 root TRACE를 안 따라가는지만 지킨다(회원 이메일 같은 개인정보는 이 막이가 덮는다).
+
+**디버그 로그가 꼭 필요하면 env로 그 트리만 잠깐 켠다**: `LOGGING_LEVEL_ORG_HIBERNATE_ORM=debug` ·
+`LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_JDBC=debug` · `LOGGING_LEVEL_ORG_POSTGRESQL=debug`. 켜는 동안은 그 값들이 로그에 남는다는 뜻이니
+보고 나면 끈다.
+
 ## DB 마이그레이션
 
 Flyway 마이그레이션은 앱이 뜰 때 실행돼야 하므로 **코드 옆(`auth/src/main/resources/db/migration/`)에 둔다.**
@@ -780,7 +904,7 @@ Flyway 마이그레이션은 앱이 뜰 때 실행돼야 하므로 **코드 옆(
 지금까지 나간 것은 auth의 `V101`~`V118`(`V110`·`V111`은 칸, **`V112`는 인덱스 넷과 표 주석 둘**, POK-89 · `V113` 오디오 트랙 이름 · `V114` 탈퇴 장부 · `V115` 연동 채널 칸 NULL 허용 · `V116`·`V117` SOOP 연동 · **`V118` 탈퇴 장부의 `platform` 칸, POK-397**) · clip의 `V201`(`broadcasts`·`broadcast_events`)과
 `V202`(`jump_cards`, POK-118)·`V203`(`broadcasts.vod_expires_at`, POK-117)·`V204`(색인 둘, POK-174)·
 **`V205`(방송 중 부분 색인, POK-218)** · `V206`(`recipes`, POK-124) · `V207`(`clips`·`render_jobs`·`render_job_events`, POK-125) · **`V208`(`clips (recipe_id, id DESC)` 색인 하나, POK-243)** ·
-`V209`~`V213` · **`V214`(`jump_cards.hidden_reason` · `jump_card_actions` · `recipes.source_card_id`, POK-338)** · **`V216`(`jump_card_actions`가 `open`도 받는다, POK-393)** · **`V220`(`broadcast_platforms`, POK-397)** · chat-collector의 `V301`(`chat_messages`)~**`V316`** ·
+`V209`~`V213` · **`V214`(`jump_cards.hidden_reason` · `jump_card_actions` · `recipes.source_card_id`, POK-338)** · **`V216`(`jump_card_actions`가 `open`도 받는다, POK-393)** · `V217`(`upload_requests`의 카테고리·예약 공개, POK-381) · `V218`(`broadcasts.platform`, POK-398) · **`V219`(카드 유일 제약을 자동 창·수동 eventId 부분 색인 둘로, POK-391: 되돌릴 때 주의는 「OBS 수동 마킹 받기」 절)** · `V220`(만료 방송 색인, POK-335) · **`V221`(`broadcast_platforms`, POK-397)** · chat-collector의 `V301`(`chat_messages`)~**`V317`** ·
 chat-detector의 `V401`(`chat_metrics`, POK-120)이다.
 
 **chat-collector 대역 열:** `V301`(`chat_messages`) · `V302`(`stream_id` 칸) ·
@@ -791,7 +915,7 @@ chat-detector의 `V401`(`chat_metrics`, POK-120)이다.
 `V311`(`purged_channels`, POK-256) · `V312`(정리 색인 셋, `CONCURRENTLY`) ·
 **`V313`**(표 넷에 `platform` 칸 + CHECK `NOT VALID` + 명부 PK `(platform, channel_id)`, POK-397) ·
 **`V314`**(플랫폼을 앞에 둔 색인 넷, `CONCURRENTLY`) · **`V315`**(지문 제약을 같은 이름으로 플랫폼 색인에 옮김 · 옛 채널 색인 셋 삭제 · CHECK 검증) ·
-**`V316`**(`broadcast_info (stream_id, platform, observed_at)` 색인 하나, `CONCURRENTLY`, 플랫폼별 최신 방송 정보, POK-397).
+`V316`(판별 서버 계정에 `chat_messages` 읽기, POK-407) · **`V317`**(`broadcast_info (stream_id, platform, observed_at)` 색인 하나, `CONCURRENTLY`, 플랫폼별 최신 방송 정보, POK-397).
 
 🔴 **`-- executeInTransaction=false` 주석은 Flyway가 읽지 않는다**(Flyway 12.4 OSS, POK-397에서 확인). 스크립트 설정은
 **같은 폴더의 `<파일 이름>.conf`**에서만 읽는다. `V309`·`V312`가 주석만으로 트랜잭션 밖에서 돈 것은 문장이 전부 `CONCURRENTLY`라
@@ -1075,7 +1199,7 @@ Media는 auth에 직접 붙어 이 머리글을 안 싣는다. 머리글은 Spri
 
 | 문 | 인증 | 응답 |
 |---|---|---|
-| `POST /internal/broadcasts/{streamId}/highlights` (계약 2A) | `X-Internal-Token` | **201** 새 카드 · **200** 같은 창이 이미 있음(기존 카드 그대로) · 404 `{"error":"broadcast_not_found"}` · 400 `{"error":"invalid_request","field":…}` · 401 |
+| `POST /internal/broadcasts/{streamId}/highlights` (계약 2A) | `X-Internal-Token` | **201** 새 카드 · **200** 같은 창의 자동 카드가 이미 있음(기존 카드 그대로) · 404 `{"error":"broadcast_not_found"}` · 400 `{"error":"invalid_request","field":…}`(**`source`가 `hotkey`여도 `field:"source"`**, 자동 카드만 받는다. POK-391) · 401 |
 | `GET /api/clip/broadcasts/{streamId}/events` (계약 2B, SSE) | Bearer JWT | **200** `text/event-stream` · 404 `{"error":"broadcast_not_found"}` · 401 · **503** `{"error":"stream_limit","scope":"user\|stream\|total"}` 또는 `{"error":"authorization_unavailable"}` |
 | `POST /api/clip/jump-cards/{id}/open` | Bearer JWT | **204**(본문 없음, 행동 기록 `jump_card_actions`에 `open` 한 줄. 다시 열면 한 줄 더) · **400** `{"error":"invalid_request","field":"id"}`(번호가 숫자가 아니다) · 404 `{"error":"jump_card_not_found"}`(없거나 볼 수 없는 카드) · 503 `{"error":"authorization_unavailable"}` · 401. 편집기가 카드에서 열릴 때 부른다(POK-393) |
 
@@ -1088,10 +1212,14 @@ Media는 auth에 직접 붙어 이 머리글을 안 싣는다. 머리글은 Spri
 **표의 400도 POK-174가 붙인 것이다** — 그 전에는 그 예외를 다루는 조언이 세그먼트 문으로 좁혀져
 있어 스프링 기본 `/error` 봉투로 나갔다. 전문은 아래 POK-174 절 **「거절 봉투는 한 벌이다」**.
 
-**중복 방어선은 `(stream_id, source, window_start_ms)` UNIQUE와 `ON CONFLICT … DO NOTHING`의
-영향 행 수 하나뿐이다.** POK-82와 같은 이유로 예외가 아니라 반환값으로 가른다 — 예외로 가르면
-FK·CHECK 위반이 중복으로 보고돼 판별기가 "성공"으로 읽고 다시 안 보낸다. `eventId`는 **추적용**이라
-UNIQUE가 아니다(재전송 때 값이 달라도 같은 창이면 같은 카드다).
+**자동 카드의 중복 방어선은 `(stream_id, window_start_ms) WHERE source = 'auto'` 부분 유일 색인
+(`uq_jump_cards_auto_window`, `V219`)과 `ON CONFLICT … WHERE source = 'auto' DO NOTHING`의 영향 행 수 하나뿐이다.**
+POK-82와 같은 이유로 예외가 아니라 반환값으로 가른다: 예외로 가르면
+FK·CHECK 위반이 중복으로 보고돼 판별기가 "성공"으로 읽고 다시 안 보낸다. 자동 카드의 `eventId`는 **추적용**이라
+유일하지 않다(재전송 때 값이 달라도 같은 창이면 같은 카드다).
+**`V219`(POK-391) 전에는 `(stream_id, source, window_start_ms)` UNIQUE 제약 `uq_jump_cards_window`였다.** 수동 카드는
+구간 시작이 0으로 잘려 부딪혀서 갈랐고, 수동 카드의 중복은 `event_id` 부분 유일 색인(`uq_jump_cards_hotkey_event`)이 막는다.
+🔴 그 색인 위에서 **옛 clip의 2A 저장은 42P10으로 실패한다**(고를 제약이 없다): 되돌리거나 옛 컨테이너가 겹쳐 도는 동안 자동 카드가 버려진다.
 **`eventId`는 128자 이내다** — 넘으면 400 `{"error":"invalid_request","field":"eventId"}`.
 칸이 `VARCHAR(128)`이고, 검증이 없으면 DB까지 가서 **500**이 나가는데 그러면 판별기가 같은
 payload로 영영 재시도한다(2026-08-23 실측). **판별기 세션에 전할 것.**
@@ -1370,8 +1498,8 @@ the event type buffer to the empty string and return"* 이라 `MessageEvent`를 
   막은 뒤 3xx는 `UNAVAILABLE`로 접힌다(거절 쪽) — 다만 **로그 사유가 파싱 예외 이름으로
   찍혀 「리다이렉트를 만났다」가 안 보인다.** 알고 넣었다
 
-**아직 없는 것:** 핫키 카드 생성(POK-119) · 만료 정리 배치 · Redis 팬아웃 ·
-`clipped`·`expired` 상태. **카드 목록 API는 POK-174에서 생겼다**(아래 절).
+**아직 없는 것:** 만료 정리 배치 · Redis 팬아웃 ·
+`clipped`·`expired` 상태. **카드 목록 API는 POK-174에서 생겼다**(아래 절). **수동(핫키) 카드는 POK-391에서 생겼다**(「OBS 수동 마킹 받기」 절).
 
 ### clip — 구간→세그먼트 변환 (POK-117)
 
@@ -1428,8 +1556,8 @@ GET /api/clip/broadcasts/{streamId}/segments?startMs=&endMs=     Bearer JWT
   25ms 바닥으로 못 덮는다. **503을 404로 접는 길은 일부러 안 골랐다** — 화면이 「없는 방송」으로
   단정하면 auth가 살아난 뒤에도 편집자가 다시 시도하지 않는다. 즉 이 구멍은 **auth 장애 중에만**
   열리고, 그때는 미리보기가 어차피 아무에게도 안 열린다
-- **개발용 compose에는 `stream_segments`가 없다**(그 파일에 media·인덱서가 없다). 거기서 이 API를
-  부르면 500이다. media가 뜨면 표가 생긴다 — 로컬에서는 media 컨테이너를 띄우거나 정본 DDL을 심는다
+- **장부 표(`stream_segments`)가 없는 DB에서 이 API를 부르면 500이다.** 표는 media 인덱서가 만든다. dev 공유 DB에는
+  1번이 표를 만들어 두었다(2026-10-19, media-dev가 쓴다. 3번은 읽기만). 로컬에서는 media 컨테이너를 띄우거나 정본 DDL을 심는다
 - **종료 이벤트가 유실된 방송은 기한이 영영 안 채워진다** — 만료 판정을 못 한다
 - **계약이 인정한 `failed` 고착 하나** — 실패한 조각이 그 스트림의 마지막인 채로 방송이 끝나면
   후속이 없어 자동 회복되지 않는다. 그 구간을 포함한 요청은 영원히 `complete=false`이고,
@@ -1448,7 +1576,7 @@ GET /api/clip/broadcasts/{streamId}/segments?startMs=&endMs=     Bearer JWT
 
 | 문 | 인증 | 응답 |
 |---|---|---|
-| `GET /api/clip/broadcasts?state=&limit=&cursor=&streamerId=` | Bearer JWT | **200** `{"broadcasts":[…],"nextCursor":…}` · 400 `{"error":"invalid_request","field":"state\|limit\|cursor\|streamerId"}` · 401 · 404 `{"error":"broadcast_not_found"}`(토큰의 `sub`가 숫자가 아닐 때: 아래 「알려진 한계」: 또는 `streamerId`가 볼 수 없는 채널일 때) · **503** `{"error":"authorization_unavailable"}` |
+| `GET /api/clip/broadcasts?state=&limit=&cursor=&streamerId=` | Bearer JWT | **200** `{"broadcasts":[…],"nextCursor":…,"hasMore":…}` · 400 `{"error":"invalid_request","field":"state\|limit\|cursor\|streamerId"}` · 401 · 404 `{"error":"broadcast_not_found"}`(토큰의 `sub`가 숫자가 아닐 때: 아래 「알려진 한계」: 또는 `streamerId`가 볼 수 없는 채널일 때) · **503** `{"error":"authorization_unavailable"}` |
 | `GET /api/clip/broadcasts/{streamId}/jump-cards?limit=&cursor=` | Bearer JWT | **200** `{"cards":[…],"nextCursor":…}` · 400 `{"error":"invalid_request","field":"limit\|cursor"}` · **404** `{"error":"broadcast_not_found"}` · 401 · 503 |
 
 **`state`는 필수이고 소문자다** — `live`(방송 중) 또는 `past`(끝난 것: 표의 `ended`·`vod_ready`).
@@ -1506,6 +1634,7 @@ JSON 트리를 맞대어 지킨다). 화면이 같은 것을 두 벌로 처리�
 | `GET …/{streamId}/clips/{clipId}` (POK-125) | 같음 → 영상이 그 방송 것인가 | 같음 · **404** `clip_not_found` |
 | `POST …/{streamId}/clips/{clipId}/file-access` (POK-247) | 같음 | 같음 |
 | `POST …/{streamId}/clips/{clipId}/uploads` (POK-220) | 같음 | 같음 |
+| `POST …/{streamId}/marks` (POK-392, 웹 수동 마킹) | `BroadcastAccessGuard`: **본문 형식 검사 뒤, 방송 읽기·저장 앞** | **404** `broadcast_not_found` |
 | `GET /api/clip/library` (POK-243) | auth `accessible`: **방송 목록과 같은 판정**(볼 수 있는 스트리머 번호로만 조회) | 그 줄이 목록에 **안 나온다**(200). `streamerId`로 고른 채널이 그 번호들에 없으면 **404** `broadcast_not_found`(POK-390, 방송 목록과 같은 이름) |
 | `GET /api/clip/library/{recipeId}` (POK-243) | 편집본 → 그 편집본의 방송 → `BroadcastAccessGuard` | **404** `recipe_not_found` — `broadcast_not_found`로 안 나간다(그 번호의 편집본이 있다는 것이 샌다) |
 
@@ -1887,6 +2016,58 @@ sed -n '/^### clip — 방송 생명주기 수신/,/^### 치지직 채널 연동
 - **개수가 같아도 짝이 맞는다는 뜻은 아니다** — 이번에는 양쪽 집합을 실제로 빼서 대조했고
   (양쪽 차집합 모두 비었다), 개수만 비교하면 「하나 지우고 하나 더한」 경우를 못 잡는다
 
+### clip: 만료 방송 목록 창구 (POK-335)
+
+**1번(영상 서버)이 60일 지난 방송의 녹화 조각을 지우려고 10분마다 묻는 문 하나**(계약-세그먼트인덱스 5-2 · 6-2). clip은 만료를
+판정하고 「지워도 되는 조각 구간」을 주고, 지우기(S3 두 벌 → 장부 행 → 컷오프 기록)는 1번이 한다.
+
+| 문 | 인증 | 응답 |
+|---|---|---|
+| `GET /internal/broadcasts/expired?before=…&cursor=…` | `X-Internal-Token` | **200** `{"broadcasts":[…],"nextCursor":…}` · **400** `{"field":"before"}` · `{"field":"cursor"}` · **401** |
+
+- **`before`(필수, ISO-8601 UTC 시각, 예 `2026-10-24T00:00:00Z`)**: 1번이 넘기는 「지금」. **기한 < before**인 방송만 낸다(같으면 안 냄). 판정 시각을 부르는 쪽 하나로
+  둬 두 서버 시계 차이로 갈리지 않는다. 빠지거나 시각이 아니면 400
+- **한 장 500줄** · `nextCursor`는 불투명한 문자열((기한 마이크로초, 줄 번호))이고 **장이 비지 않았으면 늘 그 장 마지막 줄의
+  자리**다(끝 장이어도). 빈 장이면 받은 표시를 그대로 돌려준다(첫 장이 비었으면 `null`). `hasMore`가 참이면 지금 바로 이어 부른다.
+  방송 줄은 만료 뒤에도 남아 「만료된 전부」는 끝없이 크므로 **1번이 처리를 끝낸 표시를 저장해 10분 뒤 그 표시로 부르면 새로
+  만료된 것만 받는다**(clip은 1번의 진행을 모른다). 형식은 맞는데 기한이 시각 범위 밖인 표시도 400 `cursor`다
+- 🔴 **1번은 하루 한 번 표시 없이 처음부터 훑는다.** 표시 뒤로만 읽으므로 **기한이 이미 지난 값으로 뒤늦게 채워진 줄**은 저장한
+  표시보다 앞이면 안 나온다. 놓친 방송 치우개(POK-244)가 그렇다: 마지막 신호 시각으로 방송을 닫고 기한을 그 시각 + 60일로 채워,
+  치우개를 늦게 켜거나 오래 놓친 종료를 정리하면 표시보다 앞선 기한이 생긴다(PR #348 codex). 지운 조각을 또 지우는 것은 무해하고
+  방송 줄 수는 하루 훑기에 충분히 작다
+- **렌더가 열려 있는(주문됨 · 만드는 중) 방송은 끝날 때까지 안 낸다**: 일꾼이 주문서의 조각 키를 나중에 읽는다(PR #348 codex).
+  끝나면 다음 폴링에 나오고, 표시가 그 줄을 지나쳤으면 하루 한 번 처음부터 훑기가 거둔다
+- 자격 판정 없음(부르는 쪽이 우리 서버, POK-218과 같다). 색인 `V220`: 만료 목록 부분 색인 `(vod_expires_at, id)` · 이웃 찾기
+  `(물리 키, 자리, id)`
+
+| 방송 한 줄 | |
+|---|---|
+| `streamId` · `ingestStreamId` | 방송 번호 · 물리 키(비면 방송 번호). **1번은 물리 키로 장부를 찾는다** |
+| `startedAt` · `endedAt` · `vodExpiresAt` | 시작 시각을 모르는 방송(자리표시)도 내고 `startedAt`이 `null`이다 |
+| `segmentsFrom` · `segmentsUntil` | **지워도 되는 조각 구간 [from, until)**, 조각 장부의 벽시계 칸(`start_wall_utc`)으로 잰다. `segmentsFrom`이 `null`이면 처음부터 |
+
+🔴 **구간 규칙: 물리 키를 여러 방송이 나눠 쓰므로 방송 번호만 주면 안 만료된 방송 조각까지 지운다.** 같은 물리 키의 방송을
+시간 순으로 나란히 놓고 **자르는 점 하나(뒤 방송 자리 − 2분)**로 칸을 나눈다. 구간 = [max(앞 방송 끝, 이 방송 자리 − 2분),
+뒤 방송 자리 − 2분). 방송의 자리 = 시작 시각, 없으면 끝, 그것도 없으면 줄이 생긴 시각.
+- 앞 방송 없음 = 처음부터(그 물리 키에 이 방송보다 앞선 조각 전부, 방송 줄 없이 남은 조각 포함) · 앞 방송이 안 끝났으면(종료 편지를
+  놓친 줄) 이 방송 자리 − 2분부터 · 뒤 방송 없음 = 끝 + 10분(끝이 빈 채 기한만 찬 줄은 자리 + 10분: 「끝없이」를 내지 않는다)
+- 뒤 방송이 시작을 모르면(자리표시) 앞 방송은 **자기 끝 + 10분과 뒤 방송 자리 − 2분 중 이른 쪽**에서 멈춘다. 자리표시의 자리(끝
+  시각)까지 늘리면 그 방송의 조각을 일찍 지운다(PR #348 codex P1). 그 사이는 어느 구간에도 안 들어 남는다(적게 지우는 쪽)
+- 두 방송이 겹치면(앞 끝이 뒤 자리 − 2분보다 늦음) 겹친 부분은 아무 구간에도 안 들고, 끝이 시작보다 앞이면 빈 구간(안 지움)
+- 그래서 조각 하나는 정확히 한 방송에만 속하고, 방송 사이 빈 시간(시험 송출 등)은 앞 방송 몫이며, 안 만료된 이웃 방송의 조각
+  (자리 − 2분부터)은 어느 구간에도 안 든다. 2분 · 10분은 시각 기준점(POK-255)과 같은 창이다
+- 시험: `ExpiredBroadcastControllerTest`(앞 · 가운데 · 뒤 세 방송에 경계 조각을 심어 각 조각이 정확히 한 구간에 드는지 · 뒤 방송
+  방송 중 · 앞 방송 안 끝남 · 자리표시 · 다른 물리 키 · 겹침) · `ExpiredBroadcastQueryTest`(두 색인을 타는지)
+
+**만료 410(같은 카드)**: 렌더 주문의 **새로 만드는 갈래**와 영상 출입증이 만료 방송에 `410 {"error":"vod_expired"}`를 낸다(자격 판정
+뒤, 세그먼트 미리보기와 같은 본문 · 처리는 전역 조언 한 곳). 이미 만든 영상을 돌려주는 갈래는 조각이 필요 없어 그대로다.
+🔴 **출입증 410의 한계**: 쿠키 정책은 물리 키 전체를 열므로 같은 키의 안 만료된 방송으로 받은 쿠키로는 만료된 방송의 남은 녹화도
+열린다. 410은 만료된 방송으로 새 쿠키를 받는 길만 막고, 근본은 1번의 삭제다.
+
+**다른 사람 몫(1번)**: 10분 폴링 · 받은 구간의 S3 두 벌(`s3_key` · `playback_s3_key`) → 장부 행 → 컷오프 기록 순 삭제 · 탈퇴
+정리는 1번의 컷오프 기록(`stream_cutoffs`)을 지우지 않는다(clip 코드에 그 표 0건). 종료 편지를 놓친 방송은 치우개(POK-244, 기본
+꺼짐)를 켜야 기한이 채워진다.
+
 ### clip — 놓친 방송 치우기 (POK-244)
 
 **종료 편지를 못 받은 방송이 영원히 「방송 중」으로 남지 않게, 마지막 살아있는 신호 뒤로 유예만큼 조용하면
@@ -1923,7 +2104,7 @@ clip이 그 방송을 `ended`로 굳힌다.** POK-218이 찾은 구멍이다 —
 | `ended_at` = **마지막 신호 시각**(지금이 아니다) | 방송은 그 근처에서 끝났고 VOD 보관 60일도 거기서 센다. 편지가 뒤늦게 오면 그 값으로 덮인다 |
 | 방송마다 **트랜잭션을 따로** 연다 | 하나가 실패해도 나머지는 닫힌다. 회차 자체는 `Throwable`까지 삼킨다 — `@Scheduled`는 한 번 던지면 영영 안 돈다 |
 | **락을 잡은 뒤 신호를 다시 읽는다** | 후보 목록은 락 밖 스냅샷이다. 그 뒤 락을 잡기 전에 새 조각이 들어오면 스냅샷은 낡았는데 줄은 아직 `live`라, 스냅샷대로 닫으면 **살아있는 방송을 닫는다**(봇 리뷰 1판 codex P1). 다시 읽은 신호가 유예 안이면 `broadcast.reaper.revived`를 남기고 안 닫는다. 시험이 다른 트랜잭션으로 행을 잠근 채 새 조각을 넣어 결정적으로 잰다 |
-| **켜져 있는데 장부 표가 없으면 부팅 거부** | 장부는 media 인덱서가 만든다(ADR-030). media 없는 배포(dev compose·`services-deploy.yml`)에서 켜면 매 회차 질의가 표 없음으로 터지고 회차가 삼켜 **clip은 초록인데 치우개는 영영 안 돈다**(codex P2). 기본 꺼짐이라 그런 배포의 부팅은 안 바뀐다 |
+| **켜져 있는데 장부 표가 없으면 부팅 거부** | 장부는 media 인덱서가 만든다(ADR-030). 장부 표가 없는 배포에서 켜면 매 회차 질의가 표 없음으로 터지고 회차가 삼켜 **clip은 초록인데 치우개는 영영 안 돈다**(codex P2). 기본 꺼짐이라 그런 배포의 부팅은 안 바뀐다. dev 공유 DB에는 표가 있지만(2026-10-19) dev에서는 켜지 않는다(1번 요청: 장부는 읽기만) |
 
 **비용은 방송 수에 비례한다.** 후보 질의는 `live` 부분 색인(`V205`)을 타고, 방송마다 장부 PK를 **뒤에서 한 줄**
 읽는다(`ORDER BY seq DESC LIMIT 1` — `MAX(start_wall_utc)`가 아니다. 조각이 수만 개라도 한 줄). 로컬 실행계획:
@@ -2565,7 +2746,7 @@ auth가 탈퇴를 알리는 내부 문 하나: **`DELETE /internal/streamers/{st
 
 한 방송을 치지직과 SOOP에 같이 내보내면 그 방송에 켜진 플랫폼이 둘이다. 수집기가 그 플랫폼에서 방송을 확인하면 알리는 내부 문 하나:
 **`PUT /internal/broadcasts/{streamId}/platforms/{platform}`** (`X-Internal-Token`), 본문 `{"seenAt": ISO}`는 선택(없으면 지금).
-묶음 표 `broadcast_platforms`(`V220`, 기본 키 `(stream_id, platform)`)에 적는다. 편지가 정한 `broadcasts.platform`은 안 바꾼다.
+묶음 표 `broadcast_platforms`(`V221`, 기본 키 `(stream_id, platform)`)에 적는다. 편지가 정한 `broadcasts.platform`은 안 바꾼다.
 
 - **204**: 처음이면 줄이 생기고(`first_seen_at` = `last_seen_at` = `seenAt`), 다시 오면 줄은 그대로 하나에 `last_seen_at`만 앞으로 간다
   (늦게 온 이른 시각은 되돌리지 않는다). 수집기는 같은 것을 여러 번 불러도 된다.
@@ -2657,6 +2838,79 @@ SELECT editor,
 ```
 
 두 SQL은 `CardMetricsQueryTest`가 이 README에서 그대로 꺼내 돌려 숫자를 맞춘다: 여기를 고치면 그 시험이 같이 본다.
+
+### clip: OBS 수동 마킹 받기 (POK-391)
+
+OBS 플러그인의 핫키(계약4 4B/2B)를 받아 **그 회원의 켜진 방송에 수동 카드**를 만든다. 로그인(JWT) 밖이다:
+자격은 본문의 스트림키(`streamid`)와 그 파생 값(`Authorization: Bearer`)이다. 보안 체인은 이 경로 하나만 가져가는
+전용 체인(`MarkSecurityConfig`, 필터 없음)이고 판정과 거절 본문은 문이 만든다.
+
+| 문 | 응답 |
+|---|---|
+| `POST /api/clip/marks` (헤더 `Authorization: Bearer <파생 값>` · `Idempotency-Key: <eventId>`) | **201** 새 카드 · **200** 같은 eventId 카드 또는 20초 안 앞 카드(본문은 2A와 같은 카드 모양) · **400** `{"reason":"invalid_request"}`(본문·헤더가 계약 모양이 아니다 · 헤더 eventId ≠ 본문 · auth가 streamid를 못 읽음 · 그 eventId가 남의 카드 · 시각이 넘침·48시간 넘음 · 누른 때가 고른 방송 시작보다 2분 넘게 앞 · 본문 4KB 초과 · streamid 256자 초과) · **401** `{"reason":"invalid_stream_key"}`(키 없음·폐기 · 파생 값 다름 · Bearer 없음) · **404** `{"reason":"broadcast_not_found"}`(이 회원의 켜진 방송이 없다 · 고른 방송이 잠그는 사이 사라졌다) · **503** `{"reason":"timeline_not_ready"}` + `Retry-After: 5`(첫 조각이 아직 없다) · **503** 본문 없음(auth를 못 물었다) |
+
+본문: `{"streamid":"<원문>","eventId":"<UUID v4>","pressedAt":<epoch ms>,"sentAt":<epoch ms>}`. 모르는 칸은 무시한다.
+**키를 확인하기 전에 본문을 읽으므로 상한이 있다**: 본문 4KB(그 넘는 바이트는 안 읽는다)·streamid 256자.
+**늦은 마크가 404가 아니라 400인 이유**: 누른 시각은 다시 보내도 안 바뀐다. 404면 플러그인이 10분 동안 같은 거절을 받으며 다시 보낸다.
+파생 값은 `HMAC-SHA256(key = passphrase, message = "pokeclip-4b-v1")`의 소문자 hex이고 상수 시간으로 맞댄다
+(계약4 시험 벡터 `EXAMPLE-4b-test-vector-not-a-key` → `136ef57b…04315`). passphrase는 auth의 `POST /internal/stream-keys/resolve`로 받는다.
+
+**처리 순서가 계약이다.** 본문(400) → 헤더 대조(400) → Bearer 있나(401) → 키 확인(400·401·503) → 파생 값(401) →
+같은 eventId 카드(200·400) → 방송 고르기(404) → 늦은 마크(400) → 기준점(503) → 시각 환산(400) → 저장(201·200).
+키를 확인하기 전에는 방송·카드를 안 읽는다. 같은 eventId 카드는 방송을 고르기 **전에** 본다: 방송이 끝난 뒤 온 재전송도 같은 카드 200이다.
+
+- **20초 규칙**: 같은 방송에서 앞 수동 카드와 누른 시각이 **|차| < 20초**면 새로 안 만들고 가장 가까운 앞 카드를 200으로 준다
+  (19,999ms는 무시, 20,000ms는 새 카드, 늦게 온 앞 시각도 같다). 자동 카드는 이 판정에 안 든다. 429는 없다
+- **동시성**: 같은 방송의 마킹은 방송 행 잠금(`FOR NO KEY UPDATE`)으로 줄 세운다. 2A 저장의 FK 검사와는 안 부딪힌다.
+  eventId 부분 유일 색인(`uq_jump_cards_hotkey_event`)이 마지막 방어선이다(다른 방송으로 같은 eventId가 동시에 올 때)
+- **시각 환산**: 서버 시각 = `pressedAt + (받은 시각 − sentAt)`, 받은 시각보다 미래면 받은 시각. 받은 시각은 문에 들어올 때 한 번 읽는다.
+  카드 ms = 서버 시각 − 기준점(POK-255 `TimelineOriginReader`), 기준점보다 앞이면 0. 구간은 `[max(0, T − 40초), T + 20초]`
+- **방송 고르기**: 그 회원의 `live` 방송. 둘 이상이면 물리 키(`COALESCE(ingest_stream_id, stream_id)`)가 streamid의 `r=` 토큰인 방송,
+  없으면 가장 늦게 시작한 방송. 🔴 **물리 키가 스트림키 토큰과 같다는 전제다**(오늘 media가 그렇게 쓴다). 바뀌면 맞대기가 빗나가
+  「가장 늦게 시작한 방송」으로 떨어진다
+- **로그**: streamid·Authorization·파생 값·passphrase를 어떤 로그에도 안 남긴다. 회원 번호·카드 번호·사유만
+- **2A는 자동 카드만 받는다**: `source`가 `hotkey`면 400 `field:"source"`
+- **streamid에 `r=`가 둘 이상이면 400**이다(auth를 안 부른다). 우리는 첫 `r=`로 방송을 고르고 auth는 마지막 `r=`로 키를 찾아, 둘이 갈리면 한 키로 확인받고 다른 키의 방송을 고를 수 있다
+- **`V219`가 옛 hotkey 줄을 정리한다**: 그 전에는 2A가 hotkey도 받아 같은 eventId 줄이 여럿일 수 있다. id가 가장 작은 줄만 값을 지키고 나머지는 `event_id`를 비운다(줄은 안 지운다). 그렇지 않으면 색인 생성이 실패해 부팅이 막힌다
+
+**알려진 한계**: 20초 안이라 앞 카드를 돌려준 마킹의 eventId는 **저장하지 않는다**. 그 응답을 잃은 플러그인이 방송이 끝난 뒤 같은 eventId로 다시 보내면 선조회가 그 카드를 못 찾고 켜진 방송도 없어 **404**를 받는다(플러그인은 10분 동안 다시 보내다 버린다). 카드는 앞 카드로 이미 있어 잃는 것은 없다(PR #338 codex, 미룸)
+
+🔴 **배포·되돌리기 주의 (`V219`).** 유일 제약을 출처별 부분 색인 둘로 바꿨다. 이 마이그레이션 위에서 **옛 clip 이미지는 2A 저장이 42P10으로 실패한다**
+(`ON CONFLICT (stream_id, source, window_start_ms)`에 맞는 제약이 없다). 판별기는 재시도 뒤 포기하므로 **옛 컨테이너가 겹쳐 도는 동안과
+이미지만 되돌린 동안 자동 카드가 버려진다.** 되돌릴 때는 이 마이그레이션도 함께 되돌린다(색인 둘을 지우고 옛 제약을 다시 만든다 :
+그 전에 수동 카드 중 `(stream_id, source, window_start_ms)`가 겹치는 행이 없는지 본다).
+
+
+### clip: 웹 수동 마킹 받기 (POK-392)
+
+웹 방송 화면의 「수동 마킹」(라이브 F8·단추)과 지난 방송의 「이 시점 카드 추가」를 **그 방송의 수동 카드**로 만든다.
+로그인(JWT) 문이고 자격은 다른 카드 문과 같다: **주인·편집자 모두**(`OWNER`·`EDITOR`를 안 가른다). 저장과 20초 판정은
+OBS 문(위 절)과 같은 `recordHotkey`라 **두 문의 카드가 한 판정을 같이 쓴다**(출처가 둘 다 `hotkey`).
+
+| 문 | 응답 |
+|---|---|
+| `POST /api/clip/broadcasts/{streamId}/marks` (헤더 `Authorization: Bearer <JWT>`) | **201** 새 카드 · **200** 같은 eventId 카드 또는 20초 안 앞 카드(본문은 목록·통로와 같은 카드 모양) · **400** `{"error":"invalid_request","field":…}` · **401**(토큰 없음, 체인) · **404** `{"error":"broadcast_not_found"}`(없는 방송 · 자격 없음 · 저장하려는 사이 사라짐, 본문이 같고 25ms 바닥을 같이 탄다) · **503** `{"error":"authorization_unavailable"}`(자격을 못 물었다) · **503** `{"error":"timeline_not_ready"}` + `Retry-After: 5`(첫 조각이 아직 없어 기준점이 없다) |
+
+본문은 갈래가 둘이고 **하나만** 온다. 모르는 칸은 무시한다. 본문 상한 4KB.
+
+| 갈래 | 본문 | 카드 ms |
+|---|---|---|
+| 라이브(방송이 `live`) | `{"eventId":"<UUID v4>","pressedAt":<epoch ms>,"sentAt":<epoch ms>}`(브라우저 시계) | OBS 문과 같은 식: 서버 시각 = `pressedAt + (받은 시각 − sentAt)`, 받은 시각보다 미래면 받은 시각. 카드 ms = 서버 시각 − 기준점, 앞이면 0 |
+| 지난 방송(방송이 `live`가 아님) | `{"eventId":"<UUID v4>","positionMs":<정수 ms>}`(기준점 축 재생 위치) | 위치 그대로. 기준점 앞 10분까지(음수)는 0으로 접는다 |
+
+**400 `field`**: `body`(JSON 객체가 아님 · 4KB 초과 · 갈래가 없거나 둘 다) · `eventId`(UUID v4가 아님 · 그 eventId가 남의 방송 카드) ·
+`pressedAt`·`sentAt`(0 초과 정수가 아님 · 시각이 넘침·48시간 넘음 · **지난 방송에 보냄**) ·
+`positionMs`(정수가 아님(소수도 거절, 반올림은 웹이 한다) · −10분 아래 · 상한 넘음 · **라이브에 보냄**).
+위치 상한은 `(종료 시각 − 기준점) + 10분`(녹화가 종료 편지 뒤까지 이어질 수 있다), 종료 시각을 모르면 48시간.
+
+**처리 순서가 계약이다.** 받은 시각 읽기 → 본문(400) → 자격(404·503, **트랜잭션 밖**) → 방송(404) → 갈래와 방송 상태(400) →
+기준점(503) → 시각·위치(400) → 저장(201·200). 본문이 자격 앞인 것은 형식 오류가 auth 왕복(최대 7초)을 태우지 않게, 자격이
+방송 읽기·저장 앞인 것은 자격 없는 요청이 남의 방송을 읽거나 카드를 남기지 않게 하려는 것이다. 받은 시각은 문에 들어오자마자 한 번 읽는다.
+
+- 🔴 **저장에는 요청자가 아니라 방송 주인 번호를 넘긴다.** `recordHotkey`가 「방송 주인이 이 회원인가」를 보므로 편집자 번호를 넘기면 편집자의 마킹이 전부 404다
+- **거절 봉투가 OBS 문과 다르다**: 이 문은 전역 `{"error":…}` 봉투다. OBS 거절 타입(`MarkRejectedException`)은 이 문에서 안 나가고, 시각 식(`MarkService.serverPressedAt`·`cardMillis`)도 그 타입을 안 던진다(두 문이 같이 쓴다)
+- **`timeline_not_ready`는 전역 조언에 처리기가 있다.** OBS 문은 이 타입을 안 던져(그쪽 503은 `MarkErrors`) OBS 봉투를 안 뺏는다
+- **로그**: `clip.webmark.created`·`clip.webmark.suppressed`에 `by=<요청자>`·`owner=<주인>`·`cardId`
 
 ### 치지직 채널 연동 (POK-93)
 
@@ -3719,7 +3973,11 @@ SOOP 수신은 다음 PR이고, 지금 세션을 여는 곳(연동 시작)은 �
 - **끄기**: `pokeclip.retention.enabled=false`(기본 켜짐, 환경변수 없음). 끄면 빈 자체가 없어 로그가 0줄이다. **보관 ≥ 수명 부팅 검증도 같이 꺼진다**: 청소가 안 돌면 회수 행을 지우는 코드가 없어 그 검사가 막으려는 일이 안 생긴다. 켜 둔 채로만 검사가 살면 장애 때 끄고 재기동하는 길이 그 검사에 막힌다
   (실기동 90초 확인). 테스트 프로파일은 끈다(컨텍스트마다 틱이 돌면 다른 시험이 심은 행을 지운다)
 - **지운 코드는 404다.** 409(이미 씀)·410(만료) 사유는 만료 뒤 1시간 안에서만 산다. 플러그인은 아직 그 사유를 안 쓴다
-- **다중 인스턴스에 분산 락은 없다.** 삭제는 두 대가 동시에 돌아도 결과가 같다(멱등). 삭제 셋 다 서브쿼리에 `FOR UPDATE SKIP LOCKED`가 붙어 **잠긴 행을 기다리지 않고 건너뛴다**(그 행은 다음 틱이 지운다). 그래서 두 대가 겹쳐도, 같은 행에 `revoked_at`을 찍는 재사용 봉쇄·탈퇴와 겹쳐도 서로 안 기다린다. 붙이기 전에는 그 겹침에서 데드락이 났다(리뷰 라운드 1 재현 60회 중 30회. 회전이 희생자로 뽑히면 봉쇄가 롤백돼 500이다. 같은 시드 pgbench 4클라이언트 15초: 원판 데드락 14회 → 0회). 빼면 되살아난다
+- **다중 인스턴스에 분산 락은 없다.** 삭제는 두 대가 동시에 돌아도 결과가 같다(멱등). 삭제 셋 다 지울 행을 고르는 질의에 `FOR UPDATE SKIP LOCKED`가 붙어 **잠긴 행을 기다리지 않고 건너뛴다**(그 행은 다음 틱이 지운다). 그래서 두 대가 겹쳐도, 같은 행에 `revoked_at`을 찍는 재사용 봉쇄·탈퇴와 겹쳐도 서로 안 기다린다. 붙이기 전에는 그 겹침에서 데드락이 났다(리뷰 라운드 1 재현 60회 중 30회. 회전이 희생자로 뽑히면 봉쇄가 롤백돼 500이다. 같은 시드 pgbench 4클라이언트 15초: 원판 데드락 14회 → 0회). 빼면 되살아난다
+- **지울 행은 `WITH … AS MATERIALIZED`로 먼저 고르고 그 결과로 지운다**(POK-413). 예전 모양 `DELETE … WHERE id IN (SELECT …
+  LIMIT 1000 FOR UPDATE SKIP LOCKED)`은 실행 계획이 고르는 질의를 바깥 행마다 다시 돌리면 다시 돌 때마다 이미 지운 행을 건너뛰고
+  다음 1,000개를 잠가 **상한 없이 대상 전부를 지웠다**(CI에서 1,000에 1,500, 같은 계획을 강제하면 매번). 지우는 행은 원래 지울
+  대상이라 데이터 손실은 아니고, 한 번의 잠금 · 부하 크기가 상한을 넘는다. 시험이 그 계획을 강제해 표 셋의 상한을 잰다
 - **인덱스 넷(`V112`)이 청소 조건을 받친다.** 🔴 **대상 행이 표 전부일 때(배포 직후 밀린 청소)는 인덱스를
   안 타는 것이 정상이다**: `ORDER BY id LIMIT 1000`이라 pkey 순서로 걷다 1,000개를 채우는 쪽이 더 싸다(실기동:
   3,000행 전부 대상일 때 `Index Scan using *_pkey`, 22버퍼·0.4ms). 평상시 모양(살아있는 행이 많고 대상이 적음)에서
@@ -4163,7 +4421,7 @@ DB가 거절해 500이 되고, **입력 오류가 장애로 오인된다**(epoch
 (`BroadcastTitlePlanTest`). 🔴 제목이 거의 다 빈 방송이 있으면 그 방송만 색인을 끝까지 훑는다(관측 수에 비례).
 **`titles`와 나란히 `platforms`**(POK-397): `{"titles":{…위와 같음…},"platforms":{"<방송 번호>":[{"platform","title","category","viewers","observedAt"}, …]}}`.
 값 규칙은 위 단건 창구의 `platforms`와 같다. `titles` 안에 두지 않은 것은 `titles`가 제목 있는 방송만 키를 가져서, 제목 없이 시청자 수만 있는
-SOOP 방송이 통째로 빠지기 때문이다. 옛 clip은 `titles`만 읽으므로 그대로 돈다. 방송 × 플랫폼 `LATERAL`이고 `V316` 색인
+SOOP 방송이 통째로 빠지기 때문이다. 옛 clip은 `titles`만 읽으므로 그대로 돈다. 방송 × 플랫폼 `LATERAL`이고 `V317` 색인
 `(stream_id, platform, observed_at)`을 플랫폼까지 범위로 탄다(없으면 SOOP을 중간에 끈 방송·SOOP 없는 방송에서 이력을 처음까지 훑는다).
 
 **설정은 환경변수가 아니라 yml이다**(`pokeclip.query.window-max` 1시간 · `page-default` 200 ·
@@ -4672,8 +4930,8 @@ NPE를 던진다**(빈 Set도 그렇다 — 실측).
 | `POSTGRES_DB` | **없음** | ✅ | **기본값을 일부러 안 준다**(POK-161). 셸에 없으면 리터럴이 그대로 바인딩돼 `FATAL: password authentication failed`로 죽는다 |
 | `POSTGRES_USER` | **없음** | ✅ | 위와 같다 |
 | `POSTGRES_PASSWORD` | **없음** | ✅ | 위와 같다 |
-| `POSTGRES_AUTH` | `password` | — | DB 로그인 방식. `iam`이면 비밀번호 대신 **연결마다 RDS IAM 토큰**으로 붙고(POK-406 스파이크) `POSTGRES_PASSWORD`는 안 쓴다. 이름은 media 사이드카와 같다 |
-| `POSTGRES_SSLROOTCERT` | 빈 값 | — | `iam`에서만 쓴다. RDS CA 번들의 **절대 경로**. 비거나 못 읽으면 부팅 거부. 접속은 `verify-full` 하나로 고정이다. 토큰이 15분 동안 다시 쓸 수 있는 자격이라 중간자에게 내줄 수 없다 |
+| `POSTGRES_AUTH` | `password` | — | DB 로그인 방식. `iam`이면 비밀번호 대신 **연결마다 RDS IAM 토큰**으로 붙는다. 그때 `POSTGRES_PASSWORD`가 있으면 부팅 거부. 위 「DB 로그인 방식」 |
+| `POSTGRES_SSLROOTCERT` | 빈 값 | — | `iam`에서만 쓴다. RDS CA 번들의 **절대 경로**. 이미지 안은 `/etc/pokeclip/rds-ca/global-bundle.pem`. 비거나 못 읽으면 부팅 거부. 접속은 `verify-full` 하나로 고정이다 |
 | `AWS_REGION` | `ap-northeast-2` | — | `iam` 토큰을 서명할 리전. 자격 증명은 환경변수에 없다. SDK 표준 체인(환경변수·프로파일·ECS 태스크 역할)이 찾는다 |
 | `INTERNAL_API_TOKEN` | 빈 값 | ✅ | clip·수집 서버의 `/internal/**`에 **보낼** 값. 그쪽에 준 것과 같아야 한다 |
 | `CLIP_BASE_URL` | `http://localhost:8081` | ✅ `http://clip:8081` | 점프카드를 넣는 곳 |

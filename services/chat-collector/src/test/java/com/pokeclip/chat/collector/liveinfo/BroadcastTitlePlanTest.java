@@ -82,7 +82,7 @@ class BroadcastTitlePlanTest extends IntegrationTestSupport {
     }
 
     /**
-     * 플랫폼별 최신(POK-397, {@link BroadcastInfoStore#LATEST_BY_PLATFORM})은 V316 색인 {@code (stream_id, platform, observed_at)}을 플랫폼까지
+     * 플랫폼별 최신(POK-397, {@link BroadcastInfoStore#LATEST_BY_PLATFORM})은 V317 색인 {@code (stream_id, platform, observed_at)}을 플랫폼까지
      * 범위로 탄다. 이 색인이 없으면 기존 {@code (stream_id, observed_at)}으로 최신부터 훑으며 다른 플랫폼 줄을 필터로 버린다.
      */
     @Test

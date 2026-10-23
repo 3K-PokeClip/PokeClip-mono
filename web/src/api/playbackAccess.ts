@@ -34,7 +34,12 @@ const streamIdByMediaKey = new Map<string, string>();
  * 영상 키가 정책에 못 들어갈 때(글자 검사 실패)도 와서, 한 방송의 답으로 다른 방송을 안 물으면 정상 방송의 쿠키까지 빠진다(PR #320 codex)
  */
 const notNeeded = new Set<string>();
-/** 방송 번호 → 이 탭이 받은 쿠키가 끝나는 시각. 지난 방송 목록의 상한은 누가 받았든 다 센다 */
+/** 보관 기간이 지난 방송(410, POK-335). 다시 받아도 같으므로 더 묻지 않는다 */
+const expired = new Set<string>();
+/**
+ * 영상 키 → 이 탭이 받은 쿠키가 끝나는 시각. 지난 방송 목록의 상한은 누가 받았든 다 센다. 쿠키 경로가 영상 키라 같은 키의 방송 여럿은
+ * 브라우저에 쿠키 한 벌이다: 방송 번호로 세면 같은 송출 키로 한 방송들이 한 벌을 여러 칸으로 세어 목록이 받을 키가 줄었다(POK-411)
+ */
 const cookieUntil = new Map<string, number>();
 /**
  * 영상 키 → 목록이 마지막으로 출입증을 받으려 한 시각(실패 포함). 자리가 나면 한 번도 안 해 본 키, 그다음 오래전에 해 본 키 순으로
@@ -44,11 +49,13 @@ const listTriedAt = new Map<string, number>();
 /** 쿠키가 지워져(403) 출입증을 버린 방송. 라이브 화면이 다시 받은 뒤 재생기를 새로 세울지 본다 */
 const dropped = new Set<string>();
 
-async function request(streamId: string): Promise<PlaybackAccessResult> {
+async function request(streamId: string, mediaKey: string): Promise<PlaybackAccessResult> {
   const result = await requestPlaybackAccess(streamId);
+  // 같은 키를 다른 방송으로 다시 받으면 같은 이름 · 같은 경로라 쿠키를 덮는다
   if (result.kind === 'granted')
-    cookieUntil.set(streamId, result.expiresAtMs ?? Date.now() + COOKIE_TTL_MS);
+    cookieUntil.set(mediaKey, result.expiresAtMs ?? Date.now() + COOKIE_TTL_MS);
   if (result.kind === 'not_needed') notNeeded.add(streamId);
+  if (result.kind === 'expired') expired.add(streamId);
   return result;
 }
 
@@ -61,7 +68,7 @@ function obtain(
   const known = cache.get(streamId);
   if (known !== undefined && known.mediaKey === mediaKey && known.until > Date.now())
     return { result: known.result, reused: known.settled };
-  const result = request(streamId);
+  const result = request(streamId, mediaKey);
   cache.set(streamId, { mediaKey, until: Number.POSITIVE_INFINITY, settled: false, result });
   void result.then((r) => {
     const until =
@@ -81,12 +88,20 @@ export function ensurePlaybackAccess(
   streamId: string,
   mediaKey: string,
 ): Promise<PlaybackAccessResult> | null {
-  if (notNeeded.has(streamId) || !playbackConfigured()) {
+  if (notNeeded.has(streamId) || expired.has(streamId) || !playbackConfigured()) {
     streamIdByMediaKey.set(mediaKey, streamId);
     return null;
   }
   const { result, reused } = obtain(streamId, mediaKey);
   return reused ? null : result;
+}
+
+/**
+ * 보관 기간이 지나 서버가 410을 준 방송인가. 받아 둔 만료는 ensurePlaybackAccess가 null(묻지 않음)로 돌려줘 부른 쪽이 그것만으로는
+ * 만료를 모른다: 같은 탭에서 다시 연 편집기가 녹화를 묻지 않게 이것으로 먼저 본다(PR #348 codex)
+ */
+export function isPlaybackExpired(streamId: string): boolean {
+  return expired.has(streamId);
 }
 
 /**
@@ -98,6 +113,7 @@ export function ensureLiveAccess(
   mediaKey: string,
 ): Promise<PlaybackAccessResult> {
   if (notNeeded.has(streamId)) return Promise.resolve({ kind: 'not_needed' });
+  if (expired.has(streamId)) return Promise.resolve({ kind: 'expired' });
   return obtain(streamId, mediaKey).result;
 }
 
@@ -121,14 +137,15 @@ export function ensurePlaybackAccessForList(
   const now = Date.now();
   const fresh = new Set<string>();
   const alive = new Set<string>();
-  // 받는 중인 것도 곧 쿠키가 되므로 자리를 쓴다
-  let aliveCookies = 0;
+  // 쿠키가 살아 있는 영상 키. 받는 중인 것도 곧 쿠키가 되므로 자리를 쓴다. 키로 세어 같은 키의 방송 여럿은 한 칸이다(POK-411)
+  const cookieKeys = new Set<string>();
   for (const entry of cache.values()) {
     if (entry.until > now) fresh.add(entry.mediaKey);
     if (entry.until + REUSE_MARGIN_MS > now) alive.add(entry.mediaKey);
-    if (!entry.settled) aliveCookies += 1;
+    if (!entry.settled) cookieKeys.add(entry.mediaKey);
   }
-  for (const until of cookieUntil.values()) if (until > now) aliveCookies += 1;
+  for (const [mediaKey, until] of cookieUntil) if (until > now) cookieKeys.add(mediaKey);
+  const aliveCookies = cookieKeys.size;
   const byKey = new Map<string, string>();
   for (const { streamId, mediaKey } of items)
     if (!byKey.has(mediaKey)) byKey.set(mediaKey, streamId);
@@ -137,7 +154,7 @@ export function ensurePlaybackAccessForList(
   const stale: string[] = [];
   const waiting: string[] = [];
   for (const [mediaKey, streamId] of byKey) {
-    if (fresh.has(mediaKey) || notNeeded.has(streamId))
+    if (fresh.has(mediaKey) || notNeeded.has(streamId) || expired.has(streamId))
       out.set(mediaKey, ensurePlaybackAccess(streamId, mediaKey));
     else if (alive.has(mediaKey)) stale.push(mediaKey);
     else waiting.push(mediaKey);
@@ -170,14 +187,17 @@ export function ensurePlaybackAccessForList(
 
 /**
  * 영상 요청(/list · /get · 라이브와 다시보기)이 403이면 그 키의 쿠키가 브라우저에 없다(다른 탭 · 쿠키 한도 · 사용자가 지움).
- * 받아 둔 출입증과 쿠키 셈을 버려 다음에 다시 받는다. 받는 중인 것은 버리지 않는다(곧 새 쿠키가 온다)
+ * 받아 둔 출입증과 쿠키 셈을 버려 다음에 다시 받는다. 받는 중인 것은 버리지 않는다(곧 새 쿠키가 온다). 어느 쪽이든 403을 들었다고
+ * 적어 둔다: 라이브 화면은 그 표시를 보고 403에 멎은 재생기를 새로 세운다. 받는 중이라고 안 적으면 새 쿠키가 와도 멎은 채였다
+ * (POK-337 로컬 리뷰)
  */
 export function reportPlaybackForbidden(mediaKey: string): void {
   for (const [streamId, entry] of cache)
-    if (entry.mediaKey === mediaKey && entry.settled) {
-      cache.delete(streamId);
-      cookieUntil.delete(streamId);
+    if (entry.mediaKey === mediaKey) {
       dropped.add(streamId);
+      if (!entry.settled) continue;
+      cache.delete(streamId);
+      cookieUntil.delete(mediaKey);
     }
 }
 onPlaybackForbidden(reportPlaybackForbidden);
@@ -188,20 +208,27 @@ export function takePlaybackDrop(streamId: string): boolean {
 }
 
 /**
- * 다시보기 &lt;video&gt;가 오류를 냈을 때: 응답 코드를 못 읽으므로 같은 주소의 첫 바이트를 물어 403인지 본다. 403이면 출입증을 버리고
- * 다시 받은 뒤 true(부른 쪽이 그 주소를 다시 붙인다). 403이 아니면(틈 · 서버 오류) false
+ * &lt;video&gt;는 응답 코드를 못 읽으므로 같은 주소의 첫 바이트를 물어 403인지 본다. 묻지 못했으면(네트워크 오류) 403이 아니다
  */
-export async function recoverForbiddenRecording(url: string, mediaKey: string): Promise<boolean> {
+export async function isPlaybackForbidden(url: string): Promise<boolean> {
   try {
     const res = await fetch(url, {
       credentials: mediaCredentials(),
       headers: { range: 'bytes=0-0' },
     });
     void res.body?.cancel();
-    if (res.status !== 403) return false;
+    return res.status === 403;
   } catch {
     return false;
   }
+}
+
+/**
+ * 다시보기 &lt;video&gt;가 오류를 냈을 때: 403인지 물어(isPlaybackForbidden) 403이면 출입증을 버리고 다시 받은 뒤 true(부른 쪽이 그
+ * 주소를 다시 붙인다). 403이 아니면(틈 · 서버 오류) false
+ */
+export async function recoverForbiddenRecording(url: string, mediaKey: string): Promise<boolean> {
+  if (!(await isPlaybackForbidden(url))) return false;
   reportPlaybackForbidden(mediaKey);
   await ensureMediaAccess(mediaKey);
   return true;
@@ -215,6 +242,7 @@ export function resetPlaybackAccessForTests(): void {
   cache.clear();
   streamIdByMediaKey.clear();
   notNeeded.clear();
+  expired.clear();
   cookieUntil.clear();
   listTriedAt.clear();
   dropped.clear();

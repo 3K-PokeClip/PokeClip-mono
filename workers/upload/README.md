@@ -114,7 +114,7 @@
 
 | 이름 | 기본 | 뜻 |
 |---|---|---|
-| `UPLOAD_QUEUE_URL` | 빈 값 | 주문 줄. 비면 줄을 안 본다(부품만 띄울 때). 실물 `pokeclip-jobs-upload` |
+| `UPLOAD_QUEUE_URL` | 빈 값 | 주문 줄. 비면 줄을 안 보고 경고 한 줄(`upload.worker_idle`)을 남긴 채 일 없이 떠 있는다(POK-332: 끝나 버리면 dev compose가 끝없이 다시 띄운다. 로컬에서는 Ctrl+C로 끈다). 실물 `pokeclip-jobs-upload` |
 | `UPLOAD_QUEUE_ENDPOINT` | 빈 값 | 가짜 SQS(LocalStack) 주소 |
 | `S3_ENDPOINT` · `S3_PATH_STYLE` | 빈 값 · `false` | 가짜 S3 주소. LocalStack은 `true` |
 | `AWS_REGION` | `ap-northeast-2` | |

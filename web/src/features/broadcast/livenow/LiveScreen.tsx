@@ -125,6 +125,7 @@ function LivePlayer({
   onPlaybackPosition,
   onLivePosition,
   onSeek,
+  onMarkableChange,
 }: {
   stream: LiveStream;
   viewersNote: string;
@@ -167,6 +168,11 @@ function LivePlayer({
    * 따라간다. 라이브 재생기도 부른다(실시간으로 포함)
    */
   onSeek: () => void;
+  /**
+   * 지난 방송에서 「이 시점 카드 추가」를 할 수 있나(POK-392): 녹화가 서 있고 그 0초가 서버 기준점이다. 재생기가 위치를 셀 때 쓰는
+   * 녹화 소스 하나에서 읽는다(계획 검증 m11): 녹화 조회 결과와 기준점을 따로 보면 둘이 갈리는 그리기가 생긴다
+   */
+  onMarkableChange: (markable: boolean) => void;
 }) {
   // env 미설정이면 null → GlassPlayer가 「영상 신호 없음」 자리 표시를 그린다.
   // 주소에 ?stream= 이 없으면 clip 명부에서 고른 방송(liveDataStore)의 영상을 튼다.
@@ -180,6 +186,8 @@ function LivePlayer({
   // 새 키의 출입증 전에 쿠키 없이 부르고 403을 받았다(PR #332 codex P1)
   const accessKey = liveStreamId ? `${liveStreamId}|${mediaKey ?? liveStreamId}` : null;
   const [accessReadyFor, setAccessReadyFor] = useState<string | null>(null);
+  // 보관 기간(60일)이 지나 출입증을 안 주는 방송(410, POK-335). 녹화를 찾지 않고 그렇다고 알린다
+  const [accessExpiredFor, setAccessExpiredFor] = useState<string | null>(null);
   const [lookup, setLookup] = useState<RecordingLookup>({ kind: 'pending' });
   useEffect(() => {
     setLookup({ kind: 'pending' });
@@ -215,7 +223,10 @@ function LivePlayer({
         // 재생기의 0초를 서버 기준점(카드·조각 위치의 0초, POK-255)에 세운다 — 녹화 시작에 세우면 두 시작의 차만큼 카드를
         // 누른 자리와 영상이 어긋난다(POK-253). 서버가 모르면(null) 녹화 시작
         const timeline = originMs === null ? found : rebaseTimeline(found, originMs);
-        setLookup({ kind: 'found', source: { streamId: mediaKey, ...timeline } });
+        setLookup({
+          kind: 'found',
+          source: { streamId: mediaKey, ...timeline, originAxis: originMs !== null },
+        });
         // 영상의 0초가 곧 카드 시점의 0초다 — 채팅도 이 기준으로 시점을 잡게 알린다
         publishLiveData({ timeBaseMs: timeline.startMs });
       });
@@ -236,24 +247,40 @@ function LivePlayer({
     onRecordingLookupStart,
   ]);
   const recorded = lookup.kind === 'found' ? lookup.source : null;
+  const markable = recorded?.originAxis === true;
+  useEffect(() => {
+    onMarkableChange(markable);
+  }, [markable, onMarkableChange]);
   useEffect(() => {
     if (recorded !== null) onRecordedReady();
   }, [recorded, onRecordedReady]);
   useEffect(() => {
     onRecordingLookup(lookup.kind);
   }, [lookup.kind, onRecordingLookup]);
+  // 출입증을 아직 한 번도 못 받아 라이브를 열지 못한 출입증 키(방송|영상 키, 아래 출입증 효과). 키로 두어 방송이나 영상 키가
+  // 바뀌면 앞 방송의 실패를 말하지 않는다(로컬 리뷰 1라운드)
+  const [accessFailedFor, setAccessFailedFor] = useState<string | null>(null);
+  // 출입증을 실제로 받은(쿠키를 실은) 출입증 키. 이 키의 라이브만 403을 쿠키 탓으로 보고 출입증을 버린다: 「필요 없음」을 받은
+  // 곳(로컬·dev)은 다시 받을 길이 없어 「다시 받고 있어요」가 거짓말이 된다(로컬 리뷰 1라운드)
+  const [cookieFor, setCookieFor] = useState<string | null>(null);
   // 끝난 방송의 영상 자리 아랫줄. 확인하는 동안 「확인하고 있어요」, 없으면 「찾지 못했어요」다(「아직 연결되지 않았어요」는
-  // 기다리면 나올 것처럼 읽혔다, 리뷰 4라운드 실기동). 재생 서버가 없거나 묻지 못했으면 플레이어의 기본 말 「영상 서버에 아직
-  // 연결되지 않았어요」가 맞다: 그때 「찾지 못했어요」라 하면 녹화가 지워진 것처럼 읽혔다(dev·운영은 재생 서버 주소가 비어 있다,
-  // 리뷰 6라운드)
+  // 기다리면 나올 것처럼 읽혔다, 리뷰 4라운드 실기동). 재생 서버가 없으면 플레이어의 기본 말 「영상 서버에 아직 연결되지
+  // 않았어요」가 맞다: 그때 「찾지 못했어요」라 하면 녹화가 지워진 것처럼 읽혔다(dev·운영은 재생 서버 주소가 비어 있다, 리뷰
+  // 6라운드). 서버는 있는데 묻지 못했으면(오류·시한·출입증 쿠키 없음 403) 그렇다고 알린다: 1분 뒤 다시 묻는다(POK-337)
   const noSignalNote =
-    displayStatus !== 'ended' || !playbackConfigured()
-      ? undefined
-      : recordingMayPlay(lookup.kind)
-        ? '녹화 영상을 확인하고 있어요'
-        : lookup.kind === 'none'
-          ? '녹화 영상을 찾지 못했어요'
-          : undefined;
+    displayStatus === 'ended' && accessKey !== null && accessExpiredFor === accessKey
+      ? '보관 기간(60일)이 지나 녹화 영상을 볼 수 없어요'
+      : displayStatus === 'live'
+        ? accessKey !== null && accessFailedFor === accessKey
+          ? '영상 출입증을 받지 못했어요. 1분 뒤 다시 받아요'
+          : undefined
+        : displayStatus !== 'ended' || !playbackConfigured()
+          ? undefined
+          : recordingMayPlay(lookup.kind)
+            ? '녹화 영상을 확인하고 있어요'
+            : lookup.kind === 'none'
+              ? '녹화 영상을 찾지 못했어요'
+              : '녹화 영상을 불러오지 못했어요. 1분 뒤 다시 확인해요';
   // 영상 출입증(POK-122). 방송을 열 때 받고, 1분마다 다시 본다(playbackAccess 한 곳에서 받는다: 만료 5분 전이면 새로 받고,
   // 실패했거나 다른 화면이 403으로 버렸으면 다시 받는다, POK-317). 쿠키 수명(운영 60분)이 지나면 새 조각이 403이 되어 재생이
   // 멈춘다(PR #200 codex P1). 서명 재료가 없는 서버(503)는 출입증이 필요 없는 곳이라(로컬·dev) 다시 묻지 않는다.
@@ -263,23 +290,43 @@ function LivePlayer({
   // 열린 뒤 갱신이 실패하다가, 또는 쿠키가 지워져(403) 버린 뒤 다시 받아진 횟수. 그 사이 멈춘 hls.js는 새 쿠키로 저절로 안
   // 살아나서 재생기를 새로 세운다(PR #320 · #332 codex). 정상 갱신에는 안 늘어 재생이 끊기지 않는다
   const [accessRecoveries, setAccessRecoveries] = useState(0);
+  // 403(출입증을 버림)으로 재생기를 새로 세운 출입증 키. 새 재생기가 또 403이면 더 받지 않고 멈춘다(POK-419). 키로 두어 방송이나
+  // 영상 키가 바뀌면 앞 방송의 403을 다음 방송에 들고 가지 않는다(LivePlayer는 방송마다 새로 서지 않는다, 로컬 리뷰 1라운드)
+  const [afterForbiddenFor, setAfterForbiddenFor] = useState<string | null>(null);
   useEffect(() => {
     if (!liveStreamId) return undefined;
     let alive = true;
     let timer: number | undefined;
     let opened = false;
     let failedSinceOpen = false;
+    const key = `${liveStreamId}|${mediaKey ?? liveStreamId}`;
     const ask = () => {
       void ensureLiveAccess(liveStreamId, mediaKey ?? liveStreamId).then((result) => {
         if (!alive) return;
-        if (result.kind === 'failed') failedSinceOpen = opened;
-        else {
+        if (result.kind === 'expired') {
+          // 다시 받아도 같다: 더 묻지 않는다. 보던 녹화가 있으면 내린다: 준비 표시를 비우면 녹화 효과가 찾은 녹화를 치운다
+          // (남기면 녹화가 안내보다 앞서 쿠키가 끝날 때까지 계속 돈다, PR #348 codex)
+          setAccessExpiredFor(key);
+          setAccessReadyFor(null);
+          setCookieFor(null);
+          return;
+        }
+        if (result.kind === 'failed') {
+          failedSinceOpen = opened;
+          // 열린 뒤의 갱신 실패는 알리지 않는다: 받아 둔 쿠키가 아직 살아 있어 재생은 이어진다
+          if (!opened) setAccessFailedFor(key);
+        } else {
+          setAccessFailedFor(null);
+          setCookieFor(result.kind === 'granted' ? key : null);
           // 버려진 것은 한 번 읽으면 지워진다: 열기 전이어도 읽어 둔다
           const droppedBefore = takePlaybackDrop(liveStreamId);
-          if (opened && (failedSinceOpen || droppedBefore)) setAccessRecoveries((n) => n + 1);
+          if (opened && (failedSinceOpen || droppedBefore)) {
+            setAccessRecoveries((n) => n + 1);
+            setAfterForbiddenFor(droppedBefore ? key : null);
+          }
           failedSinceOpen = false;
           opened = true;
-          setAccessReadyFor(`${liveStreamId}|${mediaKey ?? liveStreamId}`);
+          setAccessReadyFor(key);
         }
         if (result.kind === 'not_needed') return;
         timer = window.setTimeout(ask, PLAYBACK_ACCESS_CHECK_MS);
@@ -300,6 +347,8 @@ function LivePlayer({
       viewersNote={viewersNote}
       broadcastStatus={displayStatus}
       noSignalNote={noSignalNote}
+      mediaKey={liveStreamId && cookieFor === accessKey ? (mediaKey ?? liveStreamId) : undefined}
+      afterForbidden={accessKey !== null && afterForbiddenFor === accessKey}
       // 라이브 주소는 방송 중일 때만 — 끝난 방송의 LL-HLS는 닫혀 있어 검은 화면과 오류만 남는다(PR #200 codex).
       // 끝난 방송은 녹화가 있으면 recorded로, 없으면 「지난 방송 영상」 자리를 그린다
       src={
@@ -349,7 +398,7 @@ function LiveDashboard() {
   // 주소는 usePathname으로 읽는다: 넘어온 직후 첫 그리기의 window.location은 옛 주소다
   const vodRouteId = vodStreamIdFromPathname(usePathname() ?? '');
   const pastRoute = vodRouteId !== null;
-  const { stream, highlights, cardsStatus, chatWarning } = useLiveMockState(pastRoute);
+  const { stream, highlights, cardsStatus, chatWarning, mergeCard } = useLiveMockState(pastRoute);
   const { streamMeta, cardVisuals } = useLiveDetailsMockState();
   const liveData = useLiveData();
   const { streamId, info } = liveData;
@@ -373,8 +422,20 @@ function LiveDashboard() {
 
   const uptimeSeconds = clock.uptimeSeconds;
   const uptimeLabel = uptimeSeconds === null ? null : formatUptime(uptimeSeconds);
-  // 서버에 남길 길이 생길 때까지 준비 중이라고만 말한다(POK-257). 카드를 만들지 않는다
-  const marking = useManualMarking();
+  // 수동 마킹(POK-392). 라이브는 서버 시각, 지난 방송은 녹화 재생 위치로 카드를 만든다. 갈래는 명부가 답한 상태로만 고른다:
+  // 지난 방송 주소라도 상태를 모르는 동안(viewStatus는 그때 이미 ended로 그린다)에는 어느 갈래도 보내지 않는다(감사 1회차)
+  const [pastMarkable, setPastMarkable] = useState(false);
+  const markMode = clock.status === 'live' ? 'live' : clock.status === 'ended' ? 'past' : 'unknown';
+  const marking = useManualMarking({
+    streamId,
+    mode: markMode,
+    clockLabel: uptimeLabel,
+    positionMs: () => playerRef.current?.currentPositionMs?.() ?? null,
+    onCard: mergeCard,
+    onExistingCard: (card) => {
+      seekTo(card.streamTimestampMs / 1000);
+    },
+  });
   // 접으면 패널 자체가 사라지므로 되살릴 통로는 플레이어 상단 오버레이의 여는 버튼이다
   const [chatPanelOpen, setChatPanelOpen] = useState(true);
   const toggleChatPanel = useCallback(() => setChatPanelOpen((open) => !open), []);
@@ -622,6 +683,7 @@ function LiveDashboard() {
                 onPlaybackPosition={handlePlaybackPosition}
                 onLivePosition={handleLivePosition}
                 onSeek={handlePlayerSeek}
+                onMarkableChange={setPastMarkable}
               />
             </Suspense>
           </div>
@@ -632,15 +694,16 @@ function LiveDashboard() {
             uptimeLabel={uptimeLabel}
             uptimeNote={UPTIME_NOTE[viewStatus]}
             metaNote={`방송 정보 ${missingWord(viewStatus, info !== null)}`}
-            // 만드는 중 자리는 수동 마킹이 서버에 남을 때(POK-257) 쓴다
-            pendingLabel={null}
+            pendingLabel={marking.pendingLabel}
+            markMode={ended ? 'past' : 'live'}
+            markDisabled={markMode === 'unknown' || (markMode === 'past' && !pastMarkable)}
             onMark={marking.mark}
           />
           <HighlightCardPanel
             highlights={highlights}
             stream={streamForCards}
             visuals={cardVisuals}
-            pendingLabel={null}
+            pendingLabel={marking.pendingLabel}
             detectionPaused={chatWarning}
             ended={ended}
             listStatus={cardsStatus}

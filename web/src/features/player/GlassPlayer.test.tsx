@@ -443,6 +443,18 @@ describe('GlassPlayer: 녹화 다시보기', () => {
     });
   }
 
+  it('녹화를 다시 붙일 수 없으면 영상 위에 한 줄로 알린다: 전에는 마지막 장면에서 조용히 멎었다(POK-337)', async () => {
+    // 재생 서버가 답하지 않는다: 403인지 확인하지 못했으니 다시 붙일 수 없다
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('network'));
+    const { container } = renderRecorded();
+    expect(screen.queryByText('녹화 영상을 불러오지 못했어요')).toBeNull();
+
+    await act(async () => {
+      container.querySelector('video')!.dispatchEvent(new Event('error'));
+    });
+    expect(screen.getByRole('status')).toHaveTextContent('녹화 영상을 불러오지 못했어요');
+  });
+
   it('재생 위치가 초 단위로 바뀔 때마다 알린다: 지난 방송 채팅이 그 시각까지의 줄만 보인다(POK-324)', () => {
     const heard = vi.fn();
     const { container } = renderRecorded({ onPlaybackPosition: heard });

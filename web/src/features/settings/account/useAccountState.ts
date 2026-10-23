@@ -1,7 +1,8 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQueryClient } from '@tanstack/react-query';
+import { useSessionMutation } from '@/lib/useSessionMutation';
 import { meQueryOptions, type Me } from '@/api/auth';
 import {
   displayNameFailureMessage,
@@ -127,7 +128,7 @@ export function useAccountState(): AccountViewState {
     [queryClient, patchMe],
   );
 
-  const save = useMutation({
+  const save = useSessionMutation({
     mutationFn: updateDisplayName,
     onMutate: async () => {
       setServerNameError(null);

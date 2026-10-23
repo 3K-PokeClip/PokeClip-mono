@@ -6,9 +6,11 @@ import com.pokeclip.clip.jumpcard.JumpCardErrors.BroadcastNotFoundException;
 import com.pokeclip.clip.jumpcard.JumpCardErrors.InvalidHighlightException;
 import com.pokeclip.clip.jumpcard.JumpCardErrors.JumpCardNotFoundException;
 import com.pokeclip.clip.jumpcard.JumpCardErrors.StreamLimitExceededException;
+import com.pokeclip.clip.jumpcard.JumpCardErrors.TimelineNotReadyException;
 import com.pokeclip.clip.jumpcard.JumpCardErrors.TokenAlreadyExpiredException;
 import com.pokeclip.clip.paging.InvalidCursorException;
 import com.pokeclip.clip.paging.InvalidListParamException;
+import com.pokeclip.clip.segment.SegmentErrors.VodExpiredException;
 import com.pokeclip.clip.playback.PlaybackErrors;
 import com.pokeclip.clip.recipe.RecipeErrors;
 import com.pokeclip.clip.render.RenderErrors;
@@ -17,6 +19,7 @@ import com.pokeclip.clip.support.NotFoundFloor;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -90,6 +93,15 @@ public class JumpCardExceptionHandler {
         Map<String, Object> body = error("stream_limit");
         body.put("scope", e.scope());
         return json(HttpStatus.SERVICE_UNAVAILABLE, body);
+    }
+
+    /** 503. 웹 마킹(POK-392)의 방송에 시각 기준점이 아직 없다. 첫 조각은 방송 시작 뒤 수 초 안에 생겨 잠시 뒤 다시 누르면 된다. */
+    @ExceptionHandler(TimelineNotReadyException.class)
+    ResponseEntity<Map<String, Object>> timelineNotReady(TimelineNotReadyException e) {
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .header(HttpHeaders.RETRY_AFTER, String.valueOf(e.retryAfterSeconds()))
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(error("timeline_not_ready"));
     }
 
     /** 401. 다른 401(체인이 내는 것)과 상태 코드가 같아야 프론트가 한 갈래로 처리한다. */
@@ -340,6 +352,17 @@ public class JumpCardExceptionHandler {
     @ExceptionHandler(InvalidCursorException.class)
     ResponseEntity<Map<String, Object>> invalidCursor(InvalidCursorException e) {
         return json(HttpStatus.BAD_REQUEST, field("cursor"));
+    }
+
+    /**
+     * 410 {@code vod_expired}. 보관 기간(60일)이 지난 방송: 세그먼트 미리보기 · 렌더 주문(새로 만드는 갈래) · 영상 출입증이 같은
+     * 본문을 낸다(POK-335). 이 응답은 <b>자격이 확인된 사람에게만</b> 도달한다: 「있었는데 없어졌다」는 뜻이라 그 자체로 방송의
+     * 실재를 말하기 때문이다. 순서(자격 판정 뒤)를 지키는 것은 부르는 쪽이다. 세그먼트 전용 조언에서 옮겨 왔다: 문 셋이 나눠 쓰고,
+     * 두 조언이 같은 예외를 잡으면 우선권 없이 전역이 이긴다
+     */
+    @ExceptionHandler(VodExpiredException.class)
+    ResponseEntity<Map<String, Object>> vodExpired(VodExpiredException e) {
+        return json(HttpStatus.GONE, error("vod_expired"));
     }
 
     /** 400. 목록 문의 요청 칸({@code state}·{@code limit})이 범위 밖이다. */

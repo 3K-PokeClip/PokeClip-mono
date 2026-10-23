@@ -12,6 +12,8 @@ dependencyManagement {
 
 dependencies {
     implementation project(':web-support')
+    // DB 로그인 방식(비밀번호 · RDS IAM)과 db_connected 줄(POK-407). 서버 넷이 같이 쓴다.
+    implementation project(':db-support')
 
     // 프로필 사진을 S3에 둔다(POK-207). s3가 runtime으로 끌어오는 HTTP 클라이언트는 Apache 5인데,
     // 그것이 클래스패스에 오르면 Boot가 RestClient 스택을 JDK에서 Apache5로 조용히 바꾼다 —
@@ -41,6 +43,7 @@ dependencies {
 
     // LogCaptor는 web-support의 테스트 픽스처에 하나만 둔다.
     testImplementation testFixtures(project(':web-support'))
+    testImplementation testFixtures(project(':db-support'))
 
     testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
     testImplementation 'org.springframework.boot:spring-boot-starter-security-test'

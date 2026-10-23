@@ -5,6 +5,7 @@ import com.pokeclip.clip.delegation.BroadcastAccessGuard;
 import com.pokeclip.clip.playback.PlaybackAccess;
 import com.pokeclip.clip.playback.PlaybackAccessSigner;
 import com.pokeclip.clip.playback.PlaybackProperties;
+import com.pokeclip.clip.segment.SegmentErrors.VodExpiredException;
 import com.pokeclip.clip.support.NotFoundFloor;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
@@ -68,6 +69,11 @@ public class PlaybackAccessController {
                                               HttpServletRequest request) {
         NotFoundFloor.mark(request);
         guard.requireViewable(jwt.getSubject(), streamId);
+        // 보관 기간(60일)이 지난 방송으로는 새 출입증을 안 준다(POK-335, 자격 판정 뒤). 한계: 쿠키는 물리 키 전체를 열므로 같은 키의
+        // 안 만료된 방송으로 받은 쿠키로는 남은 녹화가 열린다. 이 410은 만료된 방송으로 새로 받는 길만 막고, 근본은 1번의 삭제다
+        if (Boolean.TRUE.equals(broadcasts.isVodExpired(streamId))) {
+            throw new VodExpiredException();
+        }
 
         // 쿠키 경로·정책은 영상 경로의 키다(POK-233). 미디어 주소의 {streamId} 자리는 물리 키라 방송 번호로 서명하면 CDN이 403이다
         String ingestKey = broadcasts.findIngestKeyByStreamId(streamId).orElse(streamId);
