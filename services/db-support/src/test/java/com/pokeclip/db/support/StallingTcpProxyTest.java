@@ -20,7 +20,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 스레드가 막힘을 보기 전에 응답을 넘겨 질의가 그냥 성공했다(예외가 없으니 SQLState도 없다).
  *
  * <p>그 틈을 넓혀 결정적으로 만든다: 표식을 길게, 그 앞을 표식과 거의 같은 글자로 채워 표식 찾기 자체를 느리게 한다.
- * 가짜 서버는 첫 바이트를 받자마자 답한다. 막힘을 보내기 전에 켜면 틈이 없어 늘 초록이다.
+ * 가짜 서버는 표식이 실린 요청을 끝까지 받자마자 답한다(앞부분만 받고 답하면 표식 전 응답이라 중계기가 넘기는 것이 맞는데
+ * 시험이 그것을 샌 것으로 센다, PR #369 codex). 막힘을 보내기 전에 켜면 틈이 없어 늘 초록이다.
  */
 class StallingTcpProxyTest {
 
@@ -32,7 +33,7 @@ class StallingTcpProxyTest {
         byte[] request = ("a".repeat(3_000) + marker).getBytes(StandardCharsets.US_ASCII);
 
         try (ServerSocket server = new ServerSocket(0, 50, InetAddress.getLoopbackAddress())) {
-            Thread replier = new Thread(() -> answerImmediately(server), "fake-db");
+            Thread replier = new Thread(() -> answerOnceReceived(server, request.length), "fake-db");
             replier.setDaemon(true);
             replier.start();
 
@@ -116,8 +117,8 @@ class StallingTcpProxyTest {
         }
     }
 
-    /** 연결마다 첫 바이트를 받자마자 답한다. 진짜 DB가 빠르게 답하는 경우를 흉내 낸다. */
-    private static void answerImmediately(ServerSocket server) {
+    /** 연결마다 요청을 {@code total}바이트 다 받자마자 답한다. 진짜 DB가 빠르게 답하는 경우를 흉내 낸다. */
+    private static void answerOnceReceived(ServerSocket server, int total) {
         while (!server.isClosed()) {
             try {
                 Socket s = server.accept();
@@ -125,8 +126,11 @@ class StallingTcpProxyTest {
                     try (s; InputStream in = s.getInputStream(); OutputStream out = s.getOutputStream()) {
                         byte[] buf = new byte[8192];
                         boolean answered = false;
-                        while (in.read(buf) >= 0) {
-                            if (!answered) {
+                        int seen = 0;
+                        int n;
+                        while ((n = in.read(buf)) >= 0) {
+                            seen += n;
+                            if (!answered && seen >= total) {
                                 out.write('Z');
                                 out.flush();
                                 answered = true;
