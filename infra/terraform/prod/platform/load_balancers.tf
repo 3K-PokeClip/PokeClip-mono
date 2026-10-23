@@ -138,6 +138,14 @@ module "waf" {
   scope               = "REGIONAL"
   managed_rule_groups = var.waf_managed_rule_groups
   rate_limit          = var.waf_rate_limit
+
+  # 차단된 요청만 남긴다(장부 17 · kty 결정). 보존은 ECS 로그(services.tf)와
+  # 같고, 자격 증명이 실리는 헤더는 가린다.
+  logging = {
+    log_group_name    = "aws-waf-logs-pokeclip-prod-public"
+    retention_in_days = local.log_retention_days
+    redacted_headers  = ["authorization", "cookie"]
+  }
 }
 
 module "public_alb" {

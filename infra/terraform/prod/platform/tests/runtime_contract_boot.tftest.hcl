@@ -256,6 +256,7 @@ run "rejects_postgres_password_app_env_under_iam" {
   command = plan
 
   variables {
+    app_env_non_secret_names = ["POSTGRES_PASSWORD"]
   }
 
   override_data {
@@ -392,6 +393,7 @@ run "rejects_resolve_token_from_env_without_allowed_cidrs" {
   command = plan
 
   variables {
+    app_env_non_secret_names = ["STREAM_KEY_RESOLVE_TOKEN"]
   }
 
   override_data {
@@ -418,6 +420,7 @@ run "allows_blank_resolve_token_from_env_without_allowed_cidrs" {
   command = plan
 
   variables {
+    app_env_non_secret_names = ["STREAM_KEY_RESOLVE_TOKEN"]
   }
 
   override_data {

@@ -23,8 +23,14 @@ Media 상자[^box] 모듈입니다(설계 3-3 · 3-3-1 · 5-3 · 5-5, 계획 M9)
     (`policy/guard/media_role.rego`)이 이 꼴을 지킵니다.
     *   관리형 정책: 문자열 속 `iam::aws:policy/<이름>` 은 SSM Core 만 · 연결은
         주소 `managed` 하나(`for_each = local.managed_policy_arns` ·
-        `policy_arn = each.value`, 지역값은 SSM Core 하나) · 정책 조회
-        (`data "aws_iam_policy"`) · 고객 관리 정책 · 다른 IAM 정책 유형 금지.
+        `policy_arn = each.value`, 지역값은 SSM Core 하나).
+    *   경로 전체 허용 목록: 이 모듈과 `prod/media` 의 자원 · data 는 지금
+        쓰는 유형만(정책 조회 `data "aws_iam_policy"` · 고객 관리 정책 ·
+        `awscc_*` · `aws_cloudformation_stack` 이 걸린다 — 새 유형은 guard
+        목록부터 고친다). 최상위 블록은 `terraform` · `provider` · `variable` ·
+        `output` · `locals` · `resource` · `data` · `module` 만(`ephemeral` ·
+        `check` 등 금지), `module` 은 `prod/media` 가 부르는 이 모듈 하나,
+        공급자는 `hashicorp/aws` 하나.
     *   허용 속성: IAM 자원 · 정책 문서 · statement 는 유형마다 정한 키와
         메타 인자만 쓴다(`dynamic` 금지 — 역할 `inline_policy` ·
         `managed_policy_arns`, 문서 합치기, `not_actions` · `not_resources` 가
@@ -64,7 +70,10 @@ Media 상자[^box] 모듈입니다(설계 3-3 · 3-3-1 · 5-3 · 5-5, 계획 M9)
 *   **설치 실패도 기동 차단:** 어느 단계가 실패해도 유닛은 enable · start
     합니다. 묶음 표지가 없으면 drop-in 이 `MEDIA PREREQ FAIL bundle`, 도구가
     빠졌으면 시작 스크립트가 `MEDIA PREREQ FAIL <항목>` 으로 막습니다. 둘 다
-    유닛 저널에 남고 20초마다 다시 시도합니다. 유닛을 묶음이 아니라
+    유닛 저널에 남습니다. 20초마다 다시 도는 것은 유닛 기동(drop-in 의 표지
+    확인과 시작 스크립트의 선행 점검)이지 설치가 아닙니다 — 부트스트랩은 첫
+    부팅에 cloud-init 이 한 번만 부르므로, 설치가 실패한 상자는 표지 · 도구가
+    생기기 전까지 매 시도가 같은 줄로 실패합니다. 유닛을 묶음이 아니라
     user_data 에 두는 이유가 이것입니다 — 묶음을 꺼내지 못해도 유닛이 있어야
     합니다.
 *   부트스트랩의 판정 줄(`MEDIA BOOTSTRAP OK|FAIL <단계>`)은 cloud-init 출력

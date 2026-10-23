@@ -3,7 +3,9 @@
 # 같은 (동작, 리전)은 한 행. 자원 패턴을 계획이 주지 않으면 *.
 # 출처: 계획 M8 「O7d 선행 0」(elb · ecs · servicediscovery · iam 역할 · wafv2
 # REGIONAL · ec2 SG 규칙) · 고유 확인(Cloud Map 사설 존 리전 조건 · ELB 한도) ·
-# 설계 13-1 미판정 행.
+# 설계 13-1 미판정 행 · REGIONAL WAF 트래픽 로그(장부 17 — WAF 개발자 안내서
+# 「Permissions required to publish logs to CloudWatch Logs」 · CloudWatch
+# Logs 안내서 「Logs sent to CloudWatch Logs」, 2026-10-24 확인).
 # 2-3 판정 래퍼 읽기(맨 아래 덩어리): M17b principal-check.sh.
 
 # 공개 ALB · 내부 ALB · NLB · 대상 그룹 · 리스너 규칙 · 한도 읽기
@@ -17,7 +19,8 @@ elasticloadbalancing:AddTags	ap-northeast-2	*
 elasticloadbalancing:DescribeLoadBalancers	ap-northeast-2	*
 elasticloadbalancing:DescribeAccountLimits	ap-northeast-2	*
 
-# ECS 클러스터 · 태스크 정의 · 서비스 · 로그 그룹
+# ECS 클러스터 · 태스크 정의 · 서비스 · 로그 그룹(WAF 로그 그룹도 같은 행 —
+# 같은 (동작, 리전)은 한 행)
 ecs:CreateCluster	ap-northeast-2	*
 ecs:RegisterTaskDefinition	ap-northeast-2	*
 ecs:CreateService	ap-northeast-2	*
@@ -55,6 +58,17 @@ wafv2:CreateWebACL	ap-northeast-2	*
 wafv2:GetWebACL	ap-northeast-2	*
 wafv2:AssociateWebACL	ap-northeast-2	*
 wafv2:TagResource	ap-northeast-2	*
+
+# REGIONAL WAF 트래픽 로그 — 로깅 설정과 CloudWatch Logs 전달. 로그 그룹 자원
+# 정책은 AWS 가 로깅을 켤 때 만든다(그래서 PutResourcePolicy ·
+# DescribeResourcePolicies · DescribeLogGroups 가 필요). 삭제 동작은 이 단계
+# (생성)에 넣지 않는다. GetLoggingConfiguration 은 provider 가 만든 뒤 읽는다.
+wafv2:PutLoggingConfiguration	ap-northeast-2	*
+wafv2:GetLoggingConfiguration	ap-northeast-2	*
+logs:CreateLogDelivery	ap-northeast-2	*
+logs:PutResourcePolicy	ap-northeast-2	*
+logs:DescribeResourcePolicies	ap-northeast-2	*
+logs:DescribeLogGroups	ap-northeast-2	*
 
 # SG · 규칙(별도 자원)
 ec2:CreateSecurityGroup	ap-northeast-2	*

@@ -161,6 +161,13 @@ set -a; . /etc/pokeclip-media/media.env || fail media-env; set +a
 since="$(systemctl show -P ActiveEnterTimestamp pokeclip-media)" || fail since
 [ -n "${since}" ] || fail since
 since_log() { journalctl -q "$@" --since "${since}" -o cat --no-pager; }
+# log_of <서비스> — 그 컨테이너가 실제로 쓰는 로그 드라이버와 tag.
+log_of() {
+  docker inspect --format \
+    '{{.HostConfig.LogConfig.Type}} {{index .HostConfig.LogConfig.Config "tag"}}' \
+    "$(docker ps -aq --filter label=com.docker.compose.project=pokeclip-media \
+      --filter "label=com.docker.compose.service=$1")" 2>/dev/null
+}
 unit_log="$(since_log -u pokeclip-media)" || fail journal
 sidecar_log="$(since_log -t pokeclip-media-sidecar)" || fail journal
 janitor_log="$(since_log -t pokeclip-media-janitor)" || fail journal
@@ -171,7 +178,7 @@ judge BUNDLE "$(test -f /var/lib/pokeclip-media/bundle-installed && echo present
 judge PREREQ_FAIL "$(count "${unit_log}" 'MEDIA PREREQ FAIL')" 0
 judge START_BLOCKED "$(count "${unit_log}" 'MEDIA START BLOCKED')" 0
 judge COMPOSE "$(docker compose version --short)" "${MEDIA_EXPECTED_COMPOSE_VERSION}"
-judge LOG_DRIVER "$(docker info --format '{{json .Plugins.Log}}' | grep -o '"journald"')" '"journald"'
+judge LOG_SIDECAR "$(log_of sidecar)" 'journald pokeclip-media-sidecar'
 judge RUN_FS "$(findmnt -n -o FSTYPE /run)" tmpfs
 judge SERVICES "$(docker ps --filter label=com.docker.compose.project=pokeclip-media \
   --filter status=running --format '{{.Label "com.docker.compose.service"}}' \
@@ -186,6 +193,7 @@ for pool in indexer publisher; do
 done
 case ",$1," in
   *,janitor,*)
+    judge LOG_JANITOR "$(log_of janitor)" 'journald pokeclip-media-janitor'
     at_least JANITOR_DB "$(count "${janitor_log}" '"msg":"db_connected"' \
       '"pool":"janitor"' "${iam}" "${ssl}" "${tls}")" 1
     at_least JANITOR_STARTED "$(count "${janitor_log}" '"msg":"janitor_started"')" 1
@@ -208,7 +216,7 @@ SH
 | `BOOTSTRAP_FAIL` · `BUNDLE` | `0` · `present` | 첫 부팅 설치(묶음 포함)가 끝남 — 실패 줄은 cloud-init 출력 |
 | `PREREQ_FAIL` · `START_BLOCKED` | `0` · `0` | 선행 점검 통과 · CDN 비밀 조회 성공 |
 | `COMPOSE` | `media.env` 의 기대 판 | compose 플러그인 판 |
-| `LOG_DRIVER` | `"journald"` | 엔진이 journald 로그 드라이버를 지원함 — 사이드카 · janitor 줄이 태그 저널로 감 |
+| `LOG_SIDECAR` · `LOG_JANITOR` | `journald pokeclip-media-sidecar` · `journald pokeclip-media-janitor` | 그 컨테이너가 실제로 journald 에 그 tag 로 로그를 냄(`docker inspect` 의 `HostConfig.LogConfig`) — 아래 `journalctl -t` 가 읽는 자리. 렌더가 json-file 갈래(`detached_log_driver`)로 떨어졌으면 여기서 걸린다. `LOG_JANITOR` 는 janitor 를 켰을 때만 |
 | `RUN_FS` | `tmpfs` | 렌더 비밀이 메모리에만 있음 |
 | `SERVICES` | 인자와 같음 | 떠 있는 컨테이너 집합 |
 | `SIDECAR_DB` | 1 이상 | 사이드카 DB 연결 — IAM · `verify-full` · 실제 TLS(`media/README.md` 「DB 연결 성공 줄」) |
@@ -339,8 +347,12 @@ RDS 인그레스 규칙의 `security_group_id` 가 런타임 `rds_sg_id` 와 같
 
 ### O7e 2 — T9a
 
-CDN 비밀 값이 아직 없으므로 유닛은 `MEDIA START BLOCKED: CDN secret
-unavailable` 로 멈추고 20초마다 다시 시도해야 합니다.
+CDN 비밀 값이 아직 없으므로 시작 스크립트가 `MEDIA START BLOCKED: CDN
+secret unavailable` 로 실패하고, 유닛(`Restart=always` · `RestartSec=20`)이
+20초 쉰 뒤 기동을 다시 시도해야 합니다. 다시 도는 것은 유닛 기동(drop-in 의
+설치 표지 확인 · 시작 스크립트의 선행 점검 · CDN 비밀 조회)이고, 설치
+(cloud-init 부트스트랩)는 다시 하지 않습니다. 20초는 시도 사이의 대기라
+비밀 조회가 걸려 있으면 간격이 더 길어집니다.
 
 ```shell
 cat > "${work}/t9a.sh" <<'SH'
@@ -677,7 +689,7 @@ mkdir -p "${measure_dir}" && chmod 700 "${measure_dir}"
 | journald 크기 | `journalctl --disk-usage` 를 하루 간격으로 · `/var/log/journal` 존재(영속) | `SystemMaxUse` · 보존 상한(지금은 `Storage=persistent` 만) |
 | AL2023 arm64 판 docker 25.0.16 | `rpm -q docker amazon-ecr-credential-helper` · `dnf list --showduplicates docker` | 고정 판이 arm64 저장소에 있는지 — 없으면 `BOOTSTRAP_FAIL`(`FAIL packages`)로 드러남, 있는 판으로 tfvars 를 바꿔 설정 반영 교체 |
 | 자격 도우미 존재 | `command -v docker-credential-ecr-login` · 유닛 저널의 `MEDIA PREREQ OK ecr-credential-helper` 건수 | — |
-| drop-in 재시도 | 등록하지 않은 상자에서 설치 표지를 잠시 옮기고(`mv` → `systemctl restart`) 1분 뒤 `MEDIA PREREQ FAIL bundle` 건수가 2 이상인지 → 표지를 되돌리고 재시작 → 기동 판정 | 묶음 실패가 20초마다 다시 시도되는지 |
+| drop-in 재시도 | 등록하지 않은 상자에서 설치 표지를 잠시 옮기고(`mv` → `systemctl restart`) 1분 뒤 `MEDIA PREREQ FAIL bundle` 건수가 2 이상인지 → 표지를 되돌리고 재시작 → 기동 판정 | 묶음 표지 확인이 유닛 기동마다 20초 간격으로 다시 도는지(`failed` 로 굳지 않음 · 설치는 다시 하지 않음 — 표지를 되돌리기 전까지 매 시도가 같은 줄로 실패) |
 | 동시 방송 부하(c8gn.large 30방송 가정) | 공개 전(NLB 가 팀 IP 만 받을 때) 팀 IP 에서 목표 비트레이트의 시험 송출 30개를 10분 · CloudWatch `CPUUtilization` · `NetworkIn` · `NetworkPacketsIn` · EBS 쓰기 바이트 · 상자의 `ethtool -S <ENA 장치>` 의 `bw_in_allowance_exceeded` · `pps_allowance_exceeded` 증가분 · `df -h /var/lib/docker` 증가율 | CPU 여유 · 대역폭 허용치 초과 0 · 1시간 DVR × 30 이 150 GiB 안인지 — 아니면 유형 · 디스크 재결정(kty) |
 
 ## 정리

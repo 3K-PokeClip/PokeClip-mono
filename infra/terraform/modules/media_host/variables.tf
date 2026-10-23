@@ -303,6 +303,15 @@ variable "rewind_public_base_url" {
     condition     = can(regex("^https://[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:[0-9]{1,5})?(/[A-Za-z0-9_~-][A-Za-z0-9._~-]*)*$", var.rewind_public_base_url))
     error_message = "rewind_public_base_url 은 https://<호스트>[/<경로>] 꼴이어야 한다(끝 / · query · fragment · . 으로 시작하는 경로 조각 금지)."
   }
+
+  # 포트 범위는 정규식이 아니라 숫자로 본다(사이드카 validPort 와 같은 1 – 65535).
+  validation {
+    condition = alltrue([
+      for port in regexall("^https://[^/:]+:([0-9]+)", var.rewind_public_base_url) :
+      tonumber(port[0]) >= 1 && tonumber(port[0]) <= 65535
+    ])
+    error_message = "rewind_public_base_url 의 포트는 1 부터 65535 까지여야 한다."
+  }
 }
 
 variable "cdn_secret_arn" {
@@ -380,7 +389,7 @@ variable "compose_sha256" {
 }
 
 variable "denylist_parameter_name" {
-  description = "응답기 거부 목록 SSM 파라미터 이름(후보 — M15 계획 게이트에서 확정되면 맞춘다)."
+  description = "응답기 거부 목록 SSM 파라미터 이름(M15 계획 확정값 — media.env 의 INGEST_AUTH_DENYLIST_PARAM)."
   type        = string
   default     = "/pokeclip/prod/media/ingest-auth-deny-tokens"
 

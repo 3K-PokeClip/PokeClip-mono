@@ -147,5 +147,20 @@ resource "terraform_data" "runtime_contract" {
       )
       error_message = "런타임 출력이 auth 에 STREAM_KEY_RESOLVE_TOKEN 을 주는데(app_secret_arns · app_env 어느 쪽이든) STREAM_KEY_RESOLVE_ALLOWED_CIDRS 가 둘 다에 없거나 app_env 값이 비었다 — auth 가 부팅을 거부한다."
     }
+
+    # 런타임 app_env 는 평문 태스크 env 로 들어가 태스크 정의를 읽는 누구에게나
+    # 보인다 — 비밀은 app_secret_arns 로 와야 한다(장부 16). 이름의 끝 토막만
+    # 보는 것은 STREAM_KEY_SECRET_STORE_TYPE · CLOUDFRONT_KEY_PAIR_ID 처럼 비밀
+    # 낱말이 가운데 든 설정 이름을 막지 않기 위해서다.
+    precondition {
+      condition = alltrue(flatten([
+        for env in values(try(local.runtime.app_env, {})) : [
+          for name in keys(env) :
+          contains(var.app_env_non_secret_names, name) ||
+          !contains(["PASSWORD", "PASSWD", "PASSPHRASE", "SECRET", "TOKEN", "KEY", "PEM", "CREDENTIAL", "CREDENTIALS"], reverse(split("_", upper(name)))[0])
+        ]
+      ]))
+      error_message = "런타임 출력 app_env 에 끝 토막이 PASSWORD · PASSWD · PASSPHRASE · SECRET · TOKEN · KEY · PEM · CREDENTIAL(S) 인 이름이 있다 — 비밀이면 런타임 app_secret_arns 로 옮기고, 비밀이 아니면 app_env_non_secret_names 에 적는다."
+    }
   }
 }

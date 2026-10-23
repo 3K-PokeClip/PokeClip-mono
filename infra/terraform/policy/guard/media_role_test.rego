@@ -105,17 +105,130 @@ test_r10_managed_policy_other_dir_ignored if {
 	count(role_hits(files)) == 0
 }
 
-# 관리형 정책 ARN 을 문자열로 적지 않는 길(정책 조회 · 고객 관리 정책 · 다른
-# 연결 자원)은 IAM 유형 허용 목록이 막는다.
-test_r10_iam_type_outside_allowlist if {
+# 대상 경로의 자원 · data 는 지금 쓰는 유형만 — 관리형 정책 ARN 을 문자열로
+# 적지 않는 길(정책 조회 · 고객 관리 정책 · 다른 연결 자원)과 다른 공급자 ·
+# 다른 서비스로 역할에 정책을 붙이는 길(awscc · CloudFormation 스택)을 막는다.
+test_r10_type_outside_allowlist if {
 	every file in [
 		tf(media_root_path, {"data": {"aws_iam_policy": {"admin": [{"name": "AdministratorAccess"}]}}}),
 		resource_file(media_root_path, "aws_iam_policy", {"policy": "${data.aws_iam_policy_document.media.json}"}),
 		resource_file(media_root_path, "aws_iam_policy_attachment", {"policy_arn": "${var.arn}"}),
 		resource_file(media_root_path, "aws_iam_role_policy_attachments_exclusive", {"policy_arns": "${var.arns}"}),
+		resource_file(media_root_path, "awscc_iam_role_policy", {
+			"role_name": "pokeclip-prod-media",
+			"policy_name": "x",
+			"policy_document": "${jsonencode({Statement = [{Effect = \"Allow\", Action = \"*\", Resource = \"*\"}]})}",
+		}),
+		resource_file(media_host_path, "aws_cloudformation_stack", {
+			"name": "x",
+			"template_body": "${jsonencode({Resources = {P = {Type = \"AWS::IAM::RolePolicy\"}}})}",
+		}),
+		resource_file(media_host_path, "terraform_data", {"input": "x"}),
+		tf(media_host_path, {"data": {"aws_secretsmanager_secret_version": {"x": [{"secret_id": "x"}]}}}),
+		tf(media_root_path, {"data": {"external": {"x": [{"program": ["sh"]}]}}}),
 	] {
-		one_hit([file], "IAM 유형")
+		one_hit([file], "유형 허용 목록")
 	}
+}
+
+# 두 경로가 지금 쓰는 자원 · data 유형은 유형 허용 목록에 걸리지 않는다(다른 R10
+# 검사는 이 시험의 대상이 아니다).
+test_r10_type_allowlist_accepts_used_types if {
+	resources := [
+		"aws_iam_role", "aws_iam_instance_profile", "aws_iam_role_policy",
+		"aws_iam_role_policy_attachment", "aws_security_group",
+		"aws_vpc_security_group_ingress_rule", "aws_vpc_security_group_egress_rule",
+		"aws_instance", "aws_lb_target_group_attachment", "aws_ssm_parameter",
+	]
+	data_sources := [
+		"aws_iam_policy_document", "aws_caller_identity", "aws_region",
+		"aws_partition", "aws_ssm_parameter", "aws_ec2_instance_type",
+		"terraform_remote_state",
+	]
+	files := array.concat(
+		[resource_file(media_root_path, type, {}) | some type in resources],
+		[tf(media_host_path, {"data": {type: {"this": [{}]}}}) | some type in data_sources],
+	)
+	count({msg | some msg in role_hits(files); contains(msg, "유형 허용 목록")}) == 0
+}
+
+test_r10_type_other_dir_ignored if {
+	files := [resource_file("modules/ecs_service/main.tf", "aws_cloudformation_stack", {"name": "x"})]
+	count(role_hits(files)) == 0
+}
+
+# 최상위 블록은 Terraform 설정이 쓰는 종류만 — ephemeral · action 은 자원 · data
+# 유형 허용 목록 밖에서 공급자 동작을 부르고, check 는 그 안에 data 를 숨긴다.
+# 나머지(import · moved · removed)도 지금 쓰지 않아 막는다.
+test_r10_block_kind_outside_allowlist if {
+	every file in [
+		tf(media_host_path, {"ephemeral": {"aws_lambda_invocation": {"x": [{"function_name": "f"}]}}}),
+		tf(media_host_path, {"action": {"aws_lambda_invoke": {"x": [{"config": [{"function_name": "f"}]}]}}}),
+		tf(media_root_path, {"check": {"c": [{"data": {"aws_iam_policy": {"p": [{"name": "x"}]}}}]}}),
+		tf(media_root_path, {"import": [{"to": "${aws_iam_role.b}", "id": "x"}]}),
+		tf(media_root_path, {"moved": [{"from": "${aws_iam_role.a}", "to": "${aws_iam_role.b}"}]}),
+		tf(media_root_path, {"removed": [{"from": "${aws_iam_role.c}"}]}),
+	] {
+		one_hit([file], "최상위 블록")
+	}
+}
+
+test_r10_block_kind_allowlist_accepts_used_kinds if {
+	files := [tf(media_root_path, {
+		"terraform": [{"required_version": ">= 1.10"}],
+		"provider": {"aws": [{"region": "${var.region}"}]},
+		"variable": {"region": [{"type": "${string}"}]},
+		"output": {"x": [{"value": "${var.region}"}]},
+		"locals": [{"x": "y"}],
+	})]
+	count(role_hits(files)) == 0
+}
+
+# module 은 prod/media 가 ../../modules/media_host 를 부르는 것만 — 다른 모듈은
+# 이 검사 밖의 자원으로 역할에 정책을 붙일 수 있다.
+test_r10_module_source_outside_allowlist if {
+	every file in [
+		tf(media_root_path, {"module": {"extra": [{"source": "../../modules/ecs_service"}]}}),
+		tf(media_root_path, {"module": {"extra": [{"source": "git::https://example.com/m.git"}]}}),
+		tf(media_root_path, {"module": {"extra": [{"source": "terraform-aws-modules/iam/aws", "version": "6.0.0"}]}}),
+		tf(media_root_path, {"module": {"extra": [{"version": "1.0.0"}]}}),
+		tf(media_host_path, {"module": {"self": [{"source": "../../modules/media_host"}]}}),
+	] {
+		one_hit([file], "module")
+	}
+}
+
+test_r10_module_media_host_accepted if {
+	files := [tf(media_root_path, {"module": {"media_host": [{
+		"source": "../../modules/media_host",
+		"rds_resource_id": "${var.rds_resource_id}",
+	}]}})]
+	count(role_hits(files)) == 0
+}
+
+# 공급자는 hashicorp/aws 하나 — 다른 공급자(awscc 등)를 들이는 길을 막는다.
+test_r10_provider_outside_aws if {
+	every file in [
+		tf(media_root_path, {"provider": {"awscc": [{"region": "${var.region}"}]}}),
+		tf(media_host_path, {"terraform": [{"required_providers": [{"awscc": {"source": "hashicorp/awscc"}}]}]}),
+		tf(media_host_path, {"terraform": [{"required_providers": [{"aws": {"source": "hashicorp/awscc"}}]}]}),
+		tf(media_host_path, {"terraform": [{"required_providers": [{"aws": {"source": "example.com/evil/aws"}}]}]}),
+		tf(media_host_path, {"terraform": [{"required_providers": [{"aws": {"version": ">= 6.19.0"}}]}]}),
+		tf(media_host_path, {"terraform": [{"required_providers": [{"aws": "~> 6.0"}]}]}),
+	] {
+		one_hit([file], "공급자")
+	}
+}
+
+test_r10_provider_aws_accepted if {
+	files := [
+		tf(media_root_path, {"provider": {"aws": [{"region": "${var.region}"}, {"alias": "use1", "region": "us-east-1"}]}}),
+		tf("modules/media_host/versions.tf", {"terraform": [{
+			"required_version": ">= 1.10",
+			"required_providers": [{"aws": {"source": "hashicorp/aws", "version": ">= 6.19.0"}}],
+		}]}),
+	]
+	count(role_hits(files)) == 0
 }
 
 test_r10_attachment_name_not_managed if {
@@ -274,6 +387,21 @@ test_r10_db_statement_without_resources if {
 		})],
 		"local.db_users",
 	)
+}
+
+# 동작 이름은 대소문자를 가리지 않는다 — `rds-db:Connect` 도 rds-db:connect 문으로
+# 보고 Resource 를 대조한다(covers_db_connect 의 lower).
+db_connect_mixed_case_file(resources) := tf(media_host_path, {
+	"locals": [db_users_locals],
+	"data": {"aws_iam_policy_document": {"media": [{"statement": [db_statement(["rds-db:Connect"], resources)]}]}},
+})
+
+test_r10_db_statement_mixed_case_action_checks_resource if {
+	one_hit([db_connect_mixed_case_file(["*"])], "local.db_users")
+}
+
+test_r10_db_statement_mixed_case_action_accepts_db_users_loop if {
+	count(role_hits([db_connect_mixed_case_file(db_users_resources)])) == 0
 }
 
 # DB 사용자 지역값은 두 이름 리터럴 목록 정확히.

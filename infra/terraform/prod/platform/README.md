@@ -130,6 +130,9 @@ next 이미지를 다시 빌드해야 합니다.
     auth · clip 에 `POSTGRES_PASSWORD` 가 오거나, auth 에
     `STREAM_KEY_RESOLVE_TOKEN` 이 오는데 `STREAM_KEY_RESOLVE_ALLOWED_CIDRS` 가
     비면 plan 이 멈춥니다.
+*   런타임 `app_env` 이름의 끝 토막이 `PASSWORD` · `SECRET` · `TOKEN` · `KEY`
+    등이면 plan 이 멈춥니다(평문 env 라 비밀은 `app_secret_arns` 로). 비밀이
+    아닌 그런 이름은 `app_env_non_secret_names` 에 적습니다.
 *   next 는 AWS 를 부르지 않아 작업 역할에 정책이 없습니다.
 
 ## 값과 적용

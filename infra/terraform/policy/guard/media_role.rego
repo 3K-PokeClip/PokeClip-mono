@@ -24,8 +24,11 @@
 #    대조를 지시자로 비켜 가지 못하게(actions 원소는 ③ 이 하나로 알린다).
 #
 # 위 문자열 대조를 비켜 가는 길은 꼴로 막는다(아래 「꼴」 절).
-# ④ IAM 유형은 역할 · 인스턴스 프로필 · 역할 인라인 정책 · 관리형 정책 연결 ·
-#    정책 문서만(정책 조회 data "aws_iam_policy" · 고객 관리 정책 금지).
+# ④ 두 경로 전체가 허용 목록이다 — 자원 · data 는 지금 쓰는 유형만(IAM 은 역할 ·
+#    인스턴스 프로필 · 역할 인라인 정책 · 관리형 정책 연결 · 정책 문서뿐이라 정책
+#    조회 · 고객 관리 정책 · awscc · CloudFormation 스택이 걸린다), 최상위 블록은
+#    Terraform 설정 종류만(ephemeral · action · check 등 금지), module 은 prod/media
+#    의 ../../modules/media_host 하나, 공급자는 hashicorp/aws 하나.
 # ⑤ 관리형 정책 연결은 주소 managed 하나 · for_each = local.managed_policy_arns ·
 #    policy_arn = each.value 이고, 그 지역값은 키 · 값 모두 SSM Core 하나다.
 # ⑥ IAM 자원 · 정책 문서 · statement 는 허용 속성만 쓴다(유형마다 정한 키 +
@@ -259,24 +262,95 @@ media_role_decls contains decl if {
 	in_dir(decl.path, dir)
 }
 
-allowed_iam_types := {
+# 두 경로가 지금 쓰는 자원 · data 유형(경로 전체 허용 목록). IAM 유형은 역할 ·
+# 인스턴스 프로필 · 역할 인라인 정책 · 관리형 정책 연결 · 정책 문서뿐이다.
+allowed_types := {
 	"resource": {
 		"aws_iam_role",
 		"aws_iam_instance_profile",
 		"aws_iam_role_policy",
 		"aws_iam_role_policy_attachment",
+		"aws_security_group",
+		"aws_vpc_security_group_ingress_rule",
+		"aws_vpc_security_group_egress_rule",
+		"aws_instance",
+		"aws_lb_target_group_attachment",
+		"aws_ssm_parameter",
 	},
-	"data": {"aws_iam_policy_document"},
+	"data": {
+		"aws_iam_policy_document",
+		"aws_caller_identity",
+		"aws_region",
+		"aws_partition",
+		"aws_ssm_parameter",
+		"aws_ec2_instance_type",
+		"terraform_remote_state",
+	},
 }
 
 deny contains msg if {
 	some decl in media_role_decls
-	startswith(decl.type, "aws_iam_")
-	not decl.type in allowed_iam_types[decl.kind]
+	not decl.type in allowed_types[decl.kind]
 	msg := sprintf(
-		"R10 %s: %s — IAM 유형은 역할 · 인스턴스 프로필 · 역할 인라인 정책 · 관리형 정책 연결 · 정책 문서만",
+		"R10 %s: %s — 대상 경로의 자원 · data 는 유형 허용 목록만(지금 쓰는 유형 — README R10)",
 		[decl.path, label(decl)],
 	)
+}
+
+# 최상위 블록 종류. ephemeral · action 은 자원 · data 밖에서 공급자 동작을 부르고
+# check 는 안에 data 를 숨기므로, import · moved · removed 와 함께 막는다.
+allowed_block_kinds := {"terraform", "provider", "variable", "output", "locals", "resource", "data", "module"}
+
+deny contains msg if {
+	some file in input
+	some dir in media_role_dirs
+	in_dir(file.path, dir)
+	some kind, _ in file.contents
+	not kind in allowed_block_kinds
+	msg := sprintf("R10 %s: 최상위 블록 %s — 대상 경로는 %s 만", [file.path, kind, concat(" · ", sort(allowed_block_kinds))])
+}
+
+# module 은 prod/media 가 media_host 를 부르는 것만(경로마다 허용 source 리터럴).
+allowed_module_sources := {
+	"modules/media_host": set(),
+	"prod/media": {"../../modules/media_host"},
+}
+
+deny contains msg if {
+	some file in input
+	some dir, sources in allowed_module_sources
+	in_dir(file.path, dir)
+	some name, bodies in file.contents.module
+	some body in bodies
+	not object.get(body, "source", null) in sources
+	msg := sprintf("R10 %s: module %q — 대상 경로의 module 은 prod/media 의 ../../modules/media_host 만", [file.path, name])
+}
+
+# 공급자는 hashicorp/aws 하나 — provider 블록 이름 · required_providers 항목 모두.
+deny contains msg if {
+	some file in input
+	some dir in media_role_dirs
+	in_dir(file.path, dir)
+	some name, _ in file.contents.provider
+	name != "aws"
+	msg := sprintf("R10 %s: provider %q — 대상 경로의 공급자는 hashicorp/aws 만", [file.path, name])
+}
+
+aws_requirement(name, requirement) if {
+	name == "aws"
+	is_object(requirement)
+	object.get(requirement, "source", null) == "hashicorp/aws"
+}
+
+deny contains msg if {
+	some file in input
+	some dir in media_role_dirs
+	in_dir(file.path, dir)
+	some block in file.contents.terraform
+	some providers in block.required_providers
+	some name, requirement in providers
+	not aws_requirement(name, requirement)
+	msg := sprintf("R10 %s: required_providers %q — 대상 경로의 공급자는 hashicorp/aws 만(source 리터럴)", [file.path, name])
 }
 
 managed_attachments contains decl if {

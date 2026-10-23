@@ -1,9 +1,23 @@
 # WAF Web ACL 모듈(설계 3-3 의 waf_acl · 계획 M8 c1)을 mock provider 로
 # 단언한다 — 범위(scope) · 관리 규칙 그룹 이름(AWS 제공 · 그룹의 동작을 그대로
-# 씀) · 속도 제한 값(IP 마다 5분 창 · 넘으면 차단) · 기본 동작 허용 · 출력.
-# 이름은 가짜 값이다.
+# 씀) · 속도 제한 값(IP 마다 5분 창 · 넘으면 차단) · 기본 동작 허용 · 출력 ·
+# 트래픽 로그(기본 꺼짐 · 켜면 CloudWatch Logs 로 차단만 · 헤더 가림).
+# 이름 · 계정 ID(111122223333)는 가짜 값이다.
 
-mock_provider "aws" {}
+mock_provider "aws" {
+  # apply 로 도는 run 에서 provider 가 ARN 꼴을 검사하는 참조에 쓸 값.
+  mock_resource "aws_wafv2_web_acl" {
+    defaults = {
+      arn = "arn:aws:wafv2:ap-northeast-2:111122223333:regional/webacl/example-regional/00000000-0000-0000-0000-000000000000"
+    }
+  }
+
+  mock_resource "aws_cloudwatch_log_group" {
+    defaults = {
+      arn = "arn:aws:logs:ap-northeast-2:111122223333:log-group:aws-waf-logs-example"
+    }
+  }
+}
 
 variables {
   name  = "example-regional"
@@ -202,4 +216,129 @@ run "rejects_fractional_rate_limit" {
   }
 
   expect_failures = [var.rate_limit]
+}
+
+# --- 트래픽 로그 ---
+
+# 같은 모듈을 CLOUDFRONT WAF 도 쓴다 — logging 을 주지 않은 호출은 로그 자원이
+# 생기지 않는다.
+run "logs_nothing_by_default" {
+  command = plan
+
+  assert {
+    condition = (
+      length(aws_cloudwatch_log_group.this) == 0 &&
+      length(aws_wafv2_web_acl_logging_configuration.this) == 0
+    )
+    error_message = "logging 을 주지 않았는데 로그 그룹이나 로깅 설정이 생긴다."
+  }
+
+  assert {
+    condition     = output.logging == null
+    error_message = "logging 을 주지 않았는데 출력 logging 이 null 이 아니다."
+  }
+}
+
+run "logs_blocked_requests_to_cloudwatch_when_enabled" {
+  command = apply
+
+  variables {
+    logging = {
+      log_group_name    = "aws-waf-logs-example"
+      retention_in_days = 30
+      redacted_headers  = ["authorization", "cookie"]
+    }
+  }
+
+  assert {
+    condition = (
+      aws_cloudwatch_log_group.this[0].name == "aws-waf-logs-example" &&
+      aws_cloudwatch_log_group.this[0].retention_in_days == 30
+    )
+    error_message = "로그 그룹 이름 · 보존 일수가 입력 logging 과 다르다."
+  }
+
+  assert {
+    condition = (
+      aws_wafv2_web_acl_logging_configuration.this[0].resource_arn == aws_wafv2_web_acl.this.arn &&
+      toset(aws_wafv2_web_acl_logging_configuration.this[0].log_destination_configs) == toset([aws_cloudwatch_log_group.this[0].arn])
+    )
+    error_message = "로깅 설정이 이 Web ACL 의 로그를 로그 그룹 하나로 보내지 않는다."
+  }
+
+  # 차단(BLOCK)된 요청만 남기고 나머지(허용 · 집계 등)는 버린다.
+  assert {
+    condition = (
+      aws_wafv2_web_acl_logging_configuration.this[0].logging_filter[0].default_behavior == "DROP" &&
+      length(aws_wafv2_web_acl_logging_configuration.this[0].logging_filter[0].filter) == 1 &&
+      alltrue([
+        for filter in aws_wafv2_web_acl_logging_configuration.this[0].logging_filter[0].filter :
+        filter.behavior == "KEEP" && [
+          for condition in filter.condition : condition.action_condition[0].action
+        ] == ["BLOCK"]
+      ])
+    )
+    error_message = "로그 필터가 차단(BLOCK)만 남기고 나머지를 버리지 않는다."
+  }
+
+  assert {
+    condition = toset([
+      for field in aws_wafv2_web_acl_logging_configuration.this[0].redacted_fields :
+      field.single_header[0].name
+    ]) == toset(["authorization", "cookie"])
+    error_message = "가린 헤더 집합이 입력 redacted_headers 와 다르다."
+  }
+
+  assert {
+    condition = (
+      output.logging.log_group_name == "aws-waf-logs-example" &&
+      output.logging.retention_in_days == 30 &&
+      toset(output.logging.redacted_headers) == toset(["authorization", "cookie"])
+    )
+    error_message = "출력 logging 이 만든 로그 그룹 · 보존 일수 · 가린 헤더와 다르다."
+  }
+}
+
+# WAF 는 CloudWatch Logs 로그 그룹 이름이 aws-waf-logs- 로 시작해야 받는다.
+run "rejects_log_group_without_waf_prefix" {
+  command = plan
+
+  variables {
+    logging = {
+      log_group_name    = "/pokeclip/waf"
+      retention_in_days = 30
+      redacted_headers  = []
+    }
+  }
+
+  expect_failures = [var.logging]
+}
+
+run "rejects_unsupported_log_retention" {
+  command = plan
+
+  variables {
+    logging = {
+      log_group_name    = "aws-waf-logs-example"
+      retention_in_days = 0
+      redacted_headers  = []
+    }
+  }
+
+  expect_failures = [var.logging]
+}
+
+# WAF 의 단일 헤더 이름은 소문자로 받는다(provider 문서 single_header).
+run "rejects_uppercase_redacted_header" {
+  command = plan
+
+  variables {
+    logging = {
+      log_group_name    = "aws-waf-logs-example"
+      retention_in_days = 30
+      redacted_headers  = ["Authorization"]
+    }
+  }
+
+  expect_failures = [var.logging]
 }
