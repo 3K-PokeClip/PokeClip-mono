@@ -63,15 +63,18 @@ public class DataSourceLoginConfiguration {
 
     /**
      * 오타(예: {@code IAM})가 password 모드로 조용히 떨어지면 빈 비밀번호로 접속하다 원인 없는
-     * 인증 실패만 남는다. 그래서 두 값 말고는 거부한다(media pgconf와 같은 규칙).
+     * 인증 실패만 남는다. 그래서 iam · password · 빈 값 말고는 거부한다(media pgconf와 같은 규칙).
+     *
+     * <p>빈 값은 password다. env가 빈 글자로 있으면 yml 기본값이 안 쓰이고 빈 글자가 오는데, 사이드카가 그것을
+     * password로 읽는다(같은 이름 · 같은 뜻).
      */
     static boolean isIam(Environment env) {
         String auth = env.getProperty("pokeclip.datasource.auth", "password");
         return switch (auth) {
             case "iam" -> true;
-            case "password" -> false;
+            case "password", "" -> false;
             default -> throw new IllegalStateException(
-                    "POSTGRES_AUTH(" + auth + ")는 iam · password 가운데 하나여야 한다(대소문자 구분)");
+                    "POSTGRES_AUTH(" + auth + ")는 iam · password · 빈 값(= password) 가운데 하나여야 한다(대소문자 구분)");
         };
     }
 

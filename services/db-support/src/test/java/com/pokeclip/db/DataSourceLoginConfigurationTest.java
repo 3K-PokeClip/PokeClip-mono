@@ -162,6 +162,24 @@ class DataSourceLoginConfigurationTest extends PostgresTestBase {
         assertThat(thrown).hasStackTraceContaining("sslhostnameverifier");
     }
 
+    /**
+     * env가 있는데 비어 있으면 yml 기본값({@code ${POSTGRES_AUTH:password}})이 안 쓰이고 빈 글자가 온다. 사이드카
+     * (media pgconf)는 빈 값을 password로 읽는다. 같은 이름 · 같은 뜻이어야 해서 여기도 그렇다(PR #340 codex P2).
+     */
+    @Test
+    void 로그인_방식이_빈_값이면_비밀번호로_붙는다() throws Exception {
+        try (ConfigurableApplicationContext context = boot(
+                "--spring.datasource.url=" + POSTGRES.getJdbcUrl(),
+                "--spring.datasource.username=" + POSTGRES.getUsername(),
+                "--spring.datasource.password=" + POSTGRES.getPassword(),
+                "--pokeclip.datasource.auth=");
+             Connection connection = context.getBean(HikariDataSource.class).getConnection()) {
+
+            assertThat(connection.isValid(1)).isTrue();
+            assertThat(context.getBean(HikariDataSource.class).getCredentialsProvider()).isNull();
+        }
+    }
+
     /** 오타가 password 모드로 조용히 떨어지면 원인 없는 인증 실패만 남는다. */
     @Test
     void 로그인_방식이_iam도_password도_아니면_부팅을_거부한다() {
