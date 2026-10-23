@@ -34,6 +34,12 @@ class DeploymentEnvVarsTest {
 
     private static final Path SERVICES = Path.of("..");
 
+    /**
+     * 빈 기본값이지만 필수가 아닌 변수. {@code POSTGRES_AUTH=iam}일 때만 읽고, 그때 비면 부팅을 거부한다(POK-407).
+     * dev compose는 비밀번호 방식이라 넘길 값이 없다. 여기서 빼지 않으면 dev에 쓸 일 없는 경로를 compose에 박게 된다.
+     */
+    private static final Set<String> IAM_ONLY = Set.of("POSTGRES_SSLROOTCERT");
+
     private static Set<String> requiredAppSecrets() throws IOException {
         String yml = Files.readString(SERVICES.resolve("auth/src/main/resources/application.yml"));
         Set<String> names = new LinkedHashSet<>();
@@ -41,6 +47,7 @@ class DeploymentEnvVarsTest {
         while (m.find()) {
             names.add(m.group(1));
         }
+        names.removeAll(IAM_ONLY);
         return names;
     }
 

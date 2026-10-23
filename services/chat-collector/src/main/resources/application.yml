@@ -121,6 +121,15 @@ logging:
     org.apache.coyote: info
 
 pokeclip:
+  datasource:
+    # DB 로그인 방식(POK-407, db-support의 DataSourceLoginConfiguration). password(기본)면 위 POSTGRES_PASSWORD로,
+    # iam이면 비밀번호 대신 연결마다 RDS IAM 토큰으로 붙는다. 이름과 뜻은 media 사이드카와 같다.
+    auth: ${POSTGRES_AUTH:password}
+    # iam 토큰을 서명할 리전.
+    region: ${AWS_REGION:ap-northeast-2}
+    # iam에서만 쓴다. RDS CA 번들의 절대 경로. 이미지에는 /etc/pokeclip/rds-ca/global-bundle.pem 으로 들어 있다.
+    ssl-root-cert: ${POSTGRES_SSLROOTCERT:}
+
   chzzk:
     # 편지 없이 설정에 적힌 토큰 하나로 한 채널만 붙이는 옛 경로다. 실측·디버깅용으로
     # 남긴다 — 운영에서는 꺼 두고 아래 broadcast.intake의 방송 편지로 붙는다.

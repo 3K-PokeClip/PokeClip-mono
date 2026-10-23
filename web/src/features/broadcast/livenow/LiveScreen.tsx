@@ -244,20 +244,30 @@ function LivePlayer({
   useEffect(() => {
     onRecordingLookup(lookup.kind);
   }, [lookup.kind, onRecordingLookup]);
+  // 출입증을 아직 한 번도 못 받아 라이브를 열지 못한 출입증 키(방송|영상 키, 아래 출입증 효과). 키로 두어 방송이나 영상 키가
+  // 바뀌면 앞 방송의 실패를 말하지 않는다(로컬 리뷰 1라운드)
+  const [accessFailedFor, setAccessFailedFor] = useState<string | null>(null);
+  // 출입증을 실제로 받은(쿠키를 실은) 출입증 키. 이 키의 라이브만 403을 쿠키 탓으로 보고 출입증을 버린다: 「필요 없음」을 받은
+  // 곳(로컬·dev)은 다시 받을 길이 없어 「다시 받고 있어요」가 거짓말이 된다(로컬 리뷰 1라운드)
+  const [cookieFor, setCookieFor] = useState<string | null>(null);
   // 끝난 방송의 영상 자리 아랫줄. 확인하는 동안 「확인하고 있어요」, 없으면 「찾지 못했어요」다(「아직 연결되지 않았어요」는
-  // 기다리면 나올 것처럼 읽혔다, 리뷰 4라운드 실기동). 재생 서버가 없거나 묻지 못했으면 플레이어의 기본 말 「영상 서버에 아직
-  // 연결되지 않았어요」가 맞다: 그때 「찾지 못했어요」라 하면 녹화가 지워진 것처럼 읽혔다(dev·운영은 재생 서버 주소가 비어 있다,
-  // 리뷰 6라운드)
+  // 기다리면 나올 것처럼 읽혔다, 리뷰 4라운드 실기동). 재생 서버가 없으면 플레이어의 기본 말 「영상 서버에 아직 연결되지
+  // 않았어요」가 맞다: 그때 「찾지 못했어요」라 하면 녹화가 지워진 것처럼 읽혔다(dev·운영은 재생 서버 주소가 비어 있다, 리뷰
+  // 6라운드). 서버는 있는데 묻지 못했으면(오류·시한·출입증 쿠키 없음 403) 그렇다고 알린다: 1분 뒤 다시 묻는다(POK-337)
   const noSignalNote =
     displayStatus === 'ended' && accessKey !== null && accessExpiredFor === accessKey
       ? '보관 기간(60일)이 지나 녹화 영상을 볼 수 없어요'
-      : displayStatus !== 'ended' || !playbackConfigured()
-        ? undefined
-        : recordingMayPlay(lookup.kind)
-          ? '녹화 영상을 확인하고 있어요'
-          : lookup.kind === 'none'
-            ? '녹화 영상을 찾지 못했어요'
-            : undefined;
+      : displayStatus === 'live'
+        ? accessKey !== null && accessFailedFor === accessKey
+          ? '영상 출입증을 받지 못했어요. 1분 뒤 다시 받아요'
+          : undefined
+        : displayStatus !== 'ended' || !playbackConfigured()
+          ? undefined
+          : recordingMayPlay(lookup.kind)
+            ? '녹화 영상을 확인하고 있어요'
+            : lookup.kind === 'none'
+              ? '녹화 영상을 찾지 못했어요'
+              : '녹화 영상을 불러오지 못했어요. 1분 뒤 다시 확인해요';
   // 영상 출입증(POK-122). 방송을 열 때 받고, 1분마다 다시 본다(playbackAccess 한 곳에서 받는다: 만료 5분 전이면 새로 받고,
   // 실패했거나 다른 화면이 403으로 버렸으면 다시 받는다, POK-317). 쿠키 수명(운영 60분)이 지나면 새 조각이 403이 되어 재생이
   // 멈춘다(PR #200 codex P1). 서명 재료가 없는 서버(503)는 출입증이 필요 없는 곳이라(로컬·dev) 다시 묻지 않는다.
@@ -273,22 +283,28 @@ function LivePlayer({
     let timer: number | undefined;
     let opened = false;
     let failedSinceOpen = false;
+    const key = `${liveStreamId}|${mediaKey ?? liveStreamId}`;
     const ask = () => {
       void ensureLiveAccess(liveStreamId, mediaKey ?? liveStreamId).then((result) => {
         if (!alive) return;
         if (result.kind === 'expired') {
           // 다시 받아도 같다: 더 묻지 않는다
-          setAccessExpiredFor(`${liveStreamId}|${mediaKey ?? liveStreamId}`);
+          setAccessExpiredFor(key);
           return;
         }
-        if (result.kind === 'failed') failedSinceOpen = opened;
-        else {
+        if (result.kind === 'failed') {
+          failedSinceOpen = opened;
+          // 열린 뒤의 갱신 실패는 알리지 않는다: 받아 둔 쿠키가 아직 살아 있어 재생은 이어진다
+          if (!opened) setAccessFailedFor(key);
+        } else {
+          setAccessFailedFor(null);
+          setCookieFor(result.kind === 'granted' ? key : null);
           // 버려진 것은 한 번 읽으면 지워진다: 열기 전이어도 읽어 둔다
           const droppedBefore = takePlaybackDrop(liveStreamId);
           if (opened && (failedSinceOpen || droppedBefore)) setAccessRecoveries((n) => n + 1);
           failedSinceOpen = false;
           opened = true;
-          setAccessReadyFor(`${liveStreamId}|${mediaKey ?? liveStreamId}`);
+          setAccessReadyFor(key);
         }
         if (result.kind === 'not_needed') return;
         timer = window.setTimeout(ask, PLAYBACK_ACCESS_CHECK_MS);
@@ -309,6 +325,7 @@ function LivePlayer({
       viewersNote={viewersNote}
       broadcastStatus={displayStatus}
       noSignalNote={noSignalNote}
+      mediaKey={liveStreamId && cookieFor === accessKey ? (mediaKey ?? liveStreamId) : undefined}
       // 라이브 주소는 방송 중일 때만 — 끝난 방송의 LL-HLS는 닫혀 있어 검은 화면과 오류만 남는다(PR #200 codex).
       // 끝난 방송은 녹화가 있으면 recorded로, 없으면 「지난 방송 영상」 자리를 그린다
       src={

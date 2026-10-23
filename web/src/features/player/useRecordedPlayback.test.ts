@@ -216,14 +216,20 @@ describe('useRecordedPlayback — 남은 재생기 결함(POK-253)', () => {
 
   it('보이는 볼륨(70%)을 영상에 싣는다 — 전에는 노드가 100%였다', () => {
     const { video } = fakeVideo();
-    const { result } = renderHook(() => useRecordedPlayback({ current: video }, source([[0, 14]])));
+    // 화면처럼 같은 ref를 넘긴다: 다시 그릴 때마다 새 ref면 줄기를 다시 붙여(효과 의존성) 한 번만 다시 붙이는지를 못 잰다
+    const ref = { current: video };
+    const recorded = source([[0, 14]]);
+    const { result } = renderHook(() => useRecordedPlayback(ref, recorded));
     expect(result.current.volume).toBe(70);
     expect(video.volume).toBeCloseTo(0.7);
   });
 
   it('화질·저지연 설정 메뉴를 안 보인다 — 렌디션이 하나라 거짓 선택지다', () => {
     const { video } = fakeVideo();
-    const { result } = renderHook(() => useRecordedPlayback({ current: video }, source([[0, 14]])));
+    // 화면처럼 같은 ref를 넘긴다: 다시 그릴 때마다 새 ref면 줄기를 다시 붙여(효과 의존성) 한 번만 다시 붙이는지를 못 잰다
+    const ref = { current: video };
+    const recorded = source([[0, 14]]);
+    const { result } = renderHook(() => useRecordedPlayback(ref, recorded));
     expect(result.current.settingsMenu).toBe(false);
   });
 
@@ -604,8 +610,11 @@ describe('useRecordedPlayback: 쿠키가 지워진 줄기 (PR #332 codex)', () =
     const { video } = fakeVideo();
     const load = vi.fn();
     Object.defineProperty(video, 'load', { value: load });
-    renderHook(() => useRecordedPlayback({ current: video }, source([[0, 14]])));
-    return { video, load, src: video.src };
+    // 화면처럼 같은 ref를 넘긴다: 다시 그릴 때마다 새 ref면 줄기를 다시 붙여(효과 의존성) 한 번만 다시 붙이는지를 못 잰다
+    const ref = { current: video };
+    const recorded = source([[0, 14]]);
+    const { result } = renderHook(() => useRecordedPlayback(ref, recorded));
+    return { video, load, src: video.src, result };
   }
 
   it('재생 오류가 403이면 출입증을 다시 받은 뒤 같은 줄기를 다시 붙인다', async () => {
@@ -622,13 +631,60 @@ describe('useRecordedPlayback: 쿠키가 지워진 줄기 (PR #332 codex)', () =
     expect(video.src).toBe(src);
   });
 
-  it('403이 아니면(틈 · 서버 오류) 그대로 둔다', async () => {
+  it('403이 아니면(틈 · 서버 오류) 다시 붙이지 않고 영상 위에 알린다', async () => {
     access.recover.mockResolvedValue(false);
-    const { video, load } = setup();
+    const { video, load, result } = setup();
+    expect(result.current.playbackError).toBeNull();
     await act(async () => {
       video.dispatchEvent(new Event('error'));
     });
     expect(load).not.toHaveBeenCalled();
+    expect(result.current.playbackError).toBe('녹화 영상을 불러오지 못했어요');
+  });
+
+  it('403을 다시 받아 붙이면 알리지 않는다', async () => {
+    access.recover.mockResolvedValue(true);
+    const { video, result } = setup();
+    await act(async () => {
+      video.dispatchEvent(new Event('error'));
+    });
+    expect(result.current.playbackError).toBeNull();
+  });
+
+  it('다시 붙인 줄기가 또 오류면 알린다: 전에는 조용히 멎었다', async () => {
+    access.recover.mockResolvedValue(true);
+    const { video, result } = setup();
+    await act(async () => {
+      video.dispatchEvent(new Event('error'));
+    });
+    await act(async () => {
+      video.dispatchEvent(new Event('error'));
+    });
+    expect(result.current.playbackError).toBe('녹화 영상을 불러오지 못했어요');
+  });
+
+  it('다른 구간으로 옮기면 알림을 지운다: 새 줄기는 아직 실패한 적이 없다', async () => {
+    access.recover.mockResolvedValue(false);
+    const { video } = fakeVideo();
+    const ref = { current: video };
+    const recorded = source([
+      [0, 14],
+      [24, 14],
+    ]);
+    const { result } = renderHook(() => useRecordedPlayback(ref, recorded));
+    await act(async () => {
+      video.dispatchEvent(new Event('error'));
+    });
+    expect(result.current.playbackError).not.toBeNull();
+    vi.useFakeTimers();
+    try {
+      act(() => result.current.seekToFraction(30 / 38));
+      act(() => vi.advanceTimersByTime(300));
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(requested(video).fromSeconds).toBeGreaterThanOrEqual(24);
+    expect(result.current.playbackError).toBeNull();
   });
 
   it('같은 줄기는 한 번만 다시 붙인다: 다시 받아도 403이면 끝없이 돌지 않는다', async () => {
