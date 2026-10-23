@@ -212,6 +212,16 @@ describe('Dock: 꾹 눌러 끌기', () => {
     expect(link(/클립/)).toHaveFocus();
   });
 
+  it('눌러 옮긴 포커스엔 포커스 링을 그리지 않는다 — 클릭마다 칸 둘레에 테두리가 남았다', () => {
+    const { nav } = setup();
+    // jsdom엔 :focus-visible이 없어 넘기는 옵션으로 본다
+    const focus = vi.spyOn(link(/홈/), 'focus');
+
+    fireEvent.pointerDown(nav, { pointerId: 1, clientX: X[0], clientY: Y });
+    fireEvent.pointerUp(nav, { pointerId: 1, clientX: X[0], clientY: Y });
+    expect(focus).toHaveBeenCalledWith(expect.objectContaining({ focusVisible: false }));
+  });
+
   it('끌어 놓은 이동을 다른 이동이 덮으면 붙든 칸을 놓는다 — 주소가 그대로여도(PR #346 리뷰)', () => {
     const { nav, pillLink } = setup();
     const dropOnClips = (pointerId: number) => {
