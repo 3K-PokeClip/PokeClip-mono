@@ -170,14 +170,17 @@ export function ensurePlaybackAccessForList(
 
 /**
  * 영상 요청(/list · /get · 라이브와 다시보기)이 403이면 그 키의 쿠키가 브라우저에 없다(다른 탭 · 쿠키 한도 · 사용자가 지움).
- * 받아 둔 출입증과 쿠키 셈을 버려 다음에 다시 받는다. 받는 중인 것은 버리지 않는다(곧 새 쿠키가 온다)
+ * 받아 둔 출입증과 쿠키 셈을 버려 다음에 다시 받는다. 받는 중인 것은 버리지 않는다(곧 새 쿠키가 온다). 어느 쪽이든 403을 들었다고
+ * 적어 둔다: 라이브 화면은 그 표시를 보고 403에 멎은 재생기를 새로 세운다. 받는 중이라고 안 적으면 새 쿠키가 와도 멎은 채였다
+ * (POK-337 로컬 리뷰)
  */
 export function reportPlaybackForbidden(mediaKey: string): void {
   for (const [streamId, entry] of cache)
-    if (entry.mediaKey === mediaKey && entry.settled) {
+    if (entry.mediaKey === mediaKey) {
+      dropped.add(streamId);
+      if (!entry.settled) continue;
       cache.delete(streamId);
       cookieUntil.delete(streamId);
-      dropped.add(streamId);
     }
 }
 onPlaybackForbidden(reportPlaybackForbidden);

@@ -47,6 +47,11 @@ export interface PlayerSimulation {
    * (ADR-081 8). 버튼·시크바 문구가 이 값으로 갈린다(QA 2026-10-11)
    */
   replay: boolean;
+  /**
+   * 실재생이 멎은 까닭을 영상 위에 한 줄로 알린다(POK-337). 없으면(null·목업) 덮개가 없다. 영상 서버를 아직 못 부른
+   * 자리(출입증·녹화 목록)는 이 칸이 아니라 영상 자리 아랫줄이 알린다
+   */
+  playbackError?: string | null;
   clipMarked: boolean;
   /** 자동 숨김 상태 — 일시정지 중엔 이 값과 무관하게 컨트롤을 보여준다 */
   controlsVisible: boolean;
