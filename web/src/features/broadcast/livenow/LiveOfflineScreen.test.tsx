@@ -1,9 +1,19 @@
 import { act } from 'react';
 import { render, screen } from '@testing-library/react';
 import { axe } from 'jest-axe';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { LiveOfflineScreen } from '@/features/broadcast/livenow/LiveOfflineScreen';
 import { ChannelRelationContext } from '@/features/channel/ChannelScope';
+
+// 주인 전용 목록에서 플러그인 설정을 뺀 경우를 흉내 내려고 목록 판정만 끌 수 있게 둔다(기본은 실제 목록)
+const ownerOnly = vi.hoisted(() => ({ listed: true }));
+vi.mock('@/features/channel/ownerOnlyPaths', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/features/channel/ownerOnlyPaths')>();
+  return {
+    ...actual,
+    isOwnerOnlyPath: (href: string) => ownerOnly.listed && actual.isOwnerOnlyPath(href),
+  };
+});
 
 describe('LiveOfflineScreen', () => {
   it('시안 1b 오프라인 문구를 그대로 쓴다', () => {
@@ -78,5 +88,25 @@ describe('LiveOfflineScreen: 남의 채널(POK-390)', () => {
       'href',
       '/settings/plugin',
     );
+  });
+
+  describe('주인 전용인지는 홈 팁·투어와 같은 목록(isOwnerOnlyPath)을 따른다(PR #345 리뷰)', () => {
+    afterEach(() => {
+      ownerOnly.listed = true;
+    });
+
+    it('목록에서 플러그인 설정이 빠지면 남의 채널이어도 링크다', () => {
+      ownerOnly.listed = false;
+      render(
+        <ChannelRelationContext.Provider value="EDITOR">
+          <LiveOfflineScreen />
+        </ChannelRelationContext.Provider>,
+      );
+
+      expect(screen.getByRole('link', { name: '플러그인 설정' })).toHaveAttribute(
+        'href',
+        '/settings/plugin',
+      );
+    });
   });
 });

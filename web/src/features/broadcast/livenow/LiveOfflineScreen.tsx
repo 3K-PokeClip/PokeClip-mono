@@ -2,11 +2,14 @@
 
 import Image from 'next/image';
 import Link from 'next/link';
-// 경로는 리터럴이다(Side·홈 팁 카드와 같다) — 플러그인 설정 경로 상수는 따로 없다.
 import { Button } from '@/ui/components/Button';
 import { LinkButton } from '@/ui/components/LinkButton';
 import { useChannelRelation } from '@/features/channel/ChannelScope';
+import { isOwnerOnlyPath } from '@/features/channel/ownerOnlyPaths';
 import styles from './LiveOfflineScreen.module.css';
+
+// 경로는 리터럴이다(Side·홈 팁 카드와 같다) — 앱 공용 플러그인 설정 경로 상수는 따로 없다.
+const PLUGIN_SETTINGS_PATH = '/settings/plugin';
 
 // 디자인 1b 오프라인 프레임 — 방송 중이 아닐 때 라이브 자리에 선다 (POK-227).
 // 이 상태가 하는 일은 둘이다: 방송을 켤 플러그인 설정으로 보내고, 지난 방송으로 보낸다.
@@ -20,8 +23,9 @@ import styles from './LiveOfflineScreen.module.css';
 // 「연동을 다시 하면 복구」류는 쓰지 않는다 — 포기한 방송은 새 방송을 켜야
 // 다시 붙어서 실연동 뒤에 거짓이 된다(위키 ADR-048).
 export function LiveOfflineScreen() {
-  // 남의 채널이면 플러그인 설정은 막혀 있다(OwnerOnly, POK-390): 버튼은 남기고 비활성으로
-  const othersChannel = useChannelRelation() === 'EDITOR';
+  // 남의 채널이면 주인 전용 화면으로 가는 버튼은 남기고 비활성으로(POK-390). 주인 전용인지는 홈 팁 카드·
+  // 온보딩 투어와 같은 목록(isOwnerOnlyPath)으로 가른다 — 이 화면에 따로 박아 두면 목록이 바뀔 때 혼자 어긋난다
+  const blocked = useChannelRelation() === 'EDITOR' && isOwnerOnlyPath(PLUGIN_SETTINGS_PATH);
   return (
     <main className={styles.screen}>
       <div className={styles.wash} aria-hidden />
@@ -44,12 +48,12 @@ export function LiveOfflineScreen() {
           <LinkButton as={Link} href="/broadcast/vod" variant="solid" size="md">
             지난 방송 보기
           </LinkButton>
-          {othersChannel ? (
+          {blocked ? (
             <Button variant="ghost" size="md" disabled>
               플러그인 설정
             </Button>
           ) : (
-            <LinkButton as={Link} href="/settings/plugin" variant="ghost" size="md">
+            <LinkButton as={Link} href={PLUGIN_SETTINGS_PATH} variant="ghost" size="md">
               플러그인 설정
             </LinkButton>
           )}
