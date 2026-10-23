@@ -1,5 +1,6 @@
 # prod/runtime 뼈대 — network 원격 상태에서 꺼낸 locals 넷, 원격 상태 위치
-# 기본값, default_tags 네 키를 단언한다. network 출력은 가짜 값이다.
+# 기본값, default_tags 네 키를 단언한다. network 출력은 가짜 값이다 — 값마다
+# 달라서 local 이 다른 출력(예: private_subnet_ids 의 원소)을 가리키면 깨진다.
 # override_data 가 원격 상태를 대신하므로 S3 를 읽지 않는다(AWS 호출 0).
 
 mock_provider "aws" {
@@ -13,7 +14,7 @@ override_data {
       vpc_id                  = "vpc-0example"
       private_subnet_ids      = ["subnet-0examplea", "subnet-0examplec"]
       media_az                = "ap-northeast-2c"
-      media_private_subnet_id = "subnet-0examplec"
+      media_private_subnet_id = "subnet-0examplemedia"
     }
   }
 }
@@ -37,7 +38,7 @@ run "exposes_network_outputs_as_locals" {
   }
 
   assert {
-    condition     = local.media_private_subnet_id == "subnet-0examplec"
+    condition     = local.media_private_subnet_id == "subnet-0examplemedia"
     error_message = "local.media_private_subnet_id 가 network 출력 media_private_subnet_id 와 다르다."
   }
 }

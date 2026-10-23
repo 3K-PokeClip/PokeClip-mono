@@ -16,15 +16,23 @@
 --   public_create_revoked           PUBLIC 이 public 스키마에 CREATE 를 갖지 않는다
 --   media_owner_schema              media_owner 가 public 스키마에 USAGE · CREATE 를 가진다
 --   owner:<표 · 함수>               소유자가 media_owner 다(없으면 이것이 실패한다)
---   privilege:<역할>:<표>:<권한>    표 단위 권한이 30 의 목록과 같다(PUBLIC 은 아무것도 없다)
---   column_update:media_janitor:<열> janitor 의 열 단위 UPDATE 는 local_path 하나뿐이다
+--   privilege:<역할>:<표>:<권한>    표 단위 권한이 30 의 목록과 같다(PUBLIC 은 아무것도 없다). 권한은 PG17 의
+--                                   MAINTAIN 까지 여덟이고, 끝에 +grant_option 이 붙은 것은 재부여 권한이다(모두 없다)
+--   column:<역할>:<표>.<열>:<권한>  열 단위 권한이 표 단위 권한과 같다 — 예외는 janitor 의 stream_segments.local_path
+--                                   UPDATE 하나다(+grant_option 은 위와 같다)
+--   connect:<계정>                  계정이 이 DB 에 CONNECT 할 수 있다
 --   advisory_xact_lock_media_indexer media_indexer 가 pg_advisory_xact_lock(bigint) 을 실행할 수 있다
 --
 -- 마지막 단언은 사이드카 컷오프 잠금(media/internal/index/store.go 의 lockCutoffStreamSQL)의 전제다.
 -- 권한 정본(media/internal/pgtest/role.go)은 「advisory 잠금은 PUBLIC 기본으로 충분」 이라 GRANT 를 두지
 -- 않는다. 1단-나가 PUBLIC 에서 회수하면서 media_indexer 에 다시 주는 것을 잊으면 여기서 깨진다(K7 · H3).
+-- connect 도 같은 전제다 — 두 계정의 CONNECT 는 PUBLIC 기본이라, 1단-나가 PUBLIC 에서 회수하면 여기서 깨진다.
 -- 10 은 남는 멤버십 · 직접 부여를 회수하지 않는다. 무엇이 왜 붙어 있는지 모르므로 여기서 실패로 드러내고
 -- 운영자가 판단한다.
+--
+-- 단언하지 않는 것: 두 계정의 TEMP · 다른 DB CONNECT 는 PUBLIC 기본으로 남는다. 회수는 같은 DB 를 쓰는 3번
+-- 서버 계정과 함께 1단-나가 정한다(여기서 「없음」 을 단언하면 회수 전까지 늘 실패한다). 비밀번호 없음도
+-- 보지 못한다 — 마스터는 pg_authid 를 읽지 못하고 pg_roles.rolpassword 는 늘 ******** 다.
 -- 트랜잭션 문을 쓰지 않는다 — 원자성은 psql -1 이 준다.
 \set ON_ERROR_STOP on
 
@@ -52,12 +60,28 @@ BEGIN
                ('media_janitor', 'stream_sessions', 'SELECT'),
                ('media_janitor', 'stream_cutoffs', 'SELECT')
     ),
-    matrix(r, t, p) AS (
-        SELECT r, t, p
-          FROM unnest(ARRAY['media_indexer', 'media_janitor', 'public']) AS r,
+    grantees(r) AS (
+        SELECT r
+          FROM unnest(ARRAY['media_indexer', 'media_janitor', 'public']) AS r
+         WHERE r = 'public' OR EXISTS (SELECT 1 FROM pg_roles WHERE rolname = r)
+    ),
+    -- go = 재부여 권한(WITH GRANT OPTION). 30 은 하나도 주지 않는다.
+    matrix(r, t, p, go) AS (
+        SELECT r, t, p, go
+          FROM grantees,
                tables,
-               unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER']) AS p
+               unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER',
+                            'MAINTAIN']) AS p,
+               unnest(ARRAY[false, true]) AS go
          WHERE to_regclass('public.' || t) IS NOT NULL
+    ),
+    column_matrix(r, t, c, p, go) AS (
+        SELECT r, t, a.attname::text, p, go
+          FROM grantees,
+               tables
+               JOIN pg_attribute a ON a.attrelid = to_regclass('public.' || t) AND a.attnum > 0 AND NOT a.attisdropped,
+               unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', 'REFERENCES']) AS p,
+               unnest(ARRAY[false, true]) AS go
     ),
     checks(id, ok) AS (
         SELECT 'role:media_owner',
@@ -116,18 +140,24 @@ BEGIN
                         WHERE oid = to_regprocedure('public.stream_segments_immutable_axes()')
                           AND pg_get_userbyid(proowner) = 'media_owner')
         UNION ALL
-        SELECT format('privilege:%s:%s:%s', m.r, m.t, m.p),
-               has_table_privilege(m.r, 'public.' || m.t, m.p)
-               = EXISTS (SELECT 1 FROM granted g WHERE (g.r, g.t, g.p) = (m.r, m.t, m.p))
+        SELECT format('privilege:%s:%s:%s%s', m.r, m.t, m.p, CASE WHEN m.go THEN '+grant_option' ELSE '' END),
+               has_table_privilege(m.r, 'public.' || m.t, m.p || CASE WHEN m.go THEN ' WITH GRANT OPTION' ELSE '' END)
+               = (NOT m.go AND EXISTS (SELECT 1 FROM granted g WHERE (g.r, g.t, g.p) = (m.r, m.t, m.p)))
           FROM matrix m
-         WHERE m.r = 'public' OR EXISTS (SELECT 1 FROM pg_roles WHERE rolname = m.r)
         UNION ALL
-        SELECT 'column_update:media_janitor:' || attname,
-               has_column_privilege('media_janitor', 'public.stream_segments', attname, 'UPDATE')
-               = (attname = 'local_path')
-          FROM pg_attribute
-         WHERE attrelid = to_regclass('public.stream_segments') AND attnum > 0 AND NOT attisdropped
-           AND EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'media_janitor')
+        -- 표 단위 권한이 있으면 열 단위도 참이다. 그래서 기대값은 표 단위 결과이고, 어긋나면 열에만 준 권한이다.
+        SELECT format('column:%s:%s.%s:%s%s', c.r, c.t, c.c, c.p, CASE WHEN c.go THEN '+grant_option' ELSE '' END),
+               has_column_privilege(c.r, 'public.' || c.t, c.c,
+                                    c.p || CASE WHEN c.go THEN ' WITH GRANT OPTION' ELSE '' END)
+               = (has_table_privilege(c.r, 'public.' || c.t,
+                                      c.p || CASE WHEN c.go THEN ' WITH GRANT OPTION' ELSE '' END)
+                  OR (c.r, c.t, c.c, c.p, c.go) = ('media_janitor', 'stream_segments', 'local_path', 'UPDATE', false))
+          FROM column_matrix c
+        UNION ALL
+        SELECT 'connect:' || a,
+               EXISTS (SELECT 1 FROM pg_roles WHERE rolname = a)
+               AND has_database_privilege(a, current_database(), 'CONNECT')
+          FROM unnest(ARRAY['media_indexer', 'media_janitor']) AS a
         UNION ALL
         SELECT 'advisory_xact_lock_media_indexer',
                EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'media_indexer')

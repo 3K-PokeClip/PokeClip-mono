@@ -61,12 +61,16 @@ type prodSQLEnv struct {
 	super *pgx.Conn
 	// masterName 은 대역 마스터 역할 이름이다.
 	masterName string
+	// dbName 은 이 사례가 만든 시험 DB 이름이다.
+	dbName string
 	// notices 는 master 연결이 받은 NOTICE · WARNING 이다.
 	notices []*pgconn.Notice
 }
 
 // newProdSQLEnv 는 PG_DSN(superuser 관리 접속)으로 대역 마스터와 그 대역이 소유한 새 DB 를 만들고 두 연결을
-// 돌려준다. 정리 순서 = 연결 닫기 → DB DROP(WITH FORCE) → 고정 역할 → 대역 → rds_iam(이 시험이 만든 경우에만).
+// 돌려준다. 정리는 만든 것마다 만든 직후에 등록한다 — 난수 이름이 이미 있는 역할 · DB 와 겹쳐 생성이 실패하면
+// 그 남의 것을 지우지 않는다(검수 c7 r1 이연 M). t.Cleanup 은 거꾸로 돌므로 정리 순서는 연결 닫기 → DB DROP
+// (WITH FORCE) → 고정 역할 → 대역 → rds_iam(이 시험이 만든 경우에만)이다.
 func newProdSQLEnv(t *testing.T) *prodSQLEnv {
 	t.Helper()
 	dsn := os.Getenv("PG_DSN")
@@ -84,9 +88,7 @@ func newProdSQLEnv(t *testing.T) *prodSQLEnv {
 
 	suffix := prodSQLRandHex(t, 4)
 	masterName, dbName := "pc_prodsql_master_"+suffix, "pc_prodsql_"+suffix
-	env := &prodSQLEnv{masterName: masterName}
-	createdIAM := false
-	t.Cleanup(func() { env.teardown(t, admin, dbName, masterName, createdIAM) })
+	env := &prodSQLEnv{masterName: masterName, dbName: dbName}
 
 	var hasIAM bool
 	if err := admin.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $1)`, rdsIAMRole).Scan(&hasIAM); err != nil {
@@ -94,7 +96,7 @@ func newProdSQLEnv(t *testing.T) *prodSQLEnv {
 	}
 	if !hasIAM {
 		mustAdminExec(t, admin, "CREATE ROLE "+rdsIAMRole+" NOLOGIN")
-		createdIAM = true
+		cleanupAdminExec(t, admin, "DROP ROLE IF EXISTS "+rdsIAMRole)
 	}
 	password := prodSQLRandHex(t, 16) // 16진 문자만 — 따옴표를 깰 글자가 없다
 	var validUntil string
@@ -102,9 +104,14 @@ func newProdSQLEnv(t *testing.T) *prodSQLEnv {
 		t.Fatalf("대역 만료 시각 계산 실패: %v", err)
 	}
 	mustAdminExec(t, admin, "CREATE ROLE "+masterName+" LOGIN CREATEROLE NOSUPERUSER PASSWORD '"+password+"' VALID UNTIL '"+validUntil+"'")
+	cleanupAdminExec(t, admin, "DROP ROLE IF EXISTS "+masterName)
+	// 고정 역할은 시작할 때 없음을 확인했으므로 이 사례의 SQL 이 만든 것이다.
+	cleanupAdminExec(t, admin, "DROP ROLE IF EXISTS "+strings.Join(prodFixedRoles, ", "))
 	mustAdminExec(t, admin, "GRANT "+rdsIAMRole+" TO "+masterName+" WITH ADMIN OPTION")
 	mustAdminExec(t, admin, "CREATE DATABASE "+dbName+" OWNER "+masterName)
+	cleanupAdminExec(t, admin, "DROP DATABASE IF EXISTS "+dbName+" WITH (FORCE)")
 
+	t.Cleanup(env.closeConns)
 	env.master = connectProdSQL(t, dsn, dbName, masterName, password, func(_ *pgconn.PgConn, n *pgconn.Notice) {
 		env.notices = append(env.notices, n)
 	})
@@ -174,28 +181,25 @@ func connectProdSQL(t *testing.T, dsn, db, user, password string, onNotice pgcon
 	return conn
 }
 
-// teardown 은 이 사례가 만든 것만 지운다. 지우지 못한 것은 오류로 남긴다(대역은 1시간 뒤 만료된다).
-func (e *prodSQLEnv) teardown(t *testing.T, admin *pgx.Conn, db, master string, createdIAM bool) {
-	t.Helper()
+// closeConns 는 열린 시험 DB 연결을 닫는다 — DB DROP 보다 먼저 돈다.
+func (e *prodSQLEnv) closeConns() {
 	ctx := context.Background()
 	for _, c := range []*pgx.Conn{e.master, e.super} {
 		if c != nil {
 			c.Close(ctx)
 		}
 	}
-	stmts := []string{
-		"DROP DATABASE IF EXISTS " + db + " WITH (FORCE)",
-		"DROP ROLE IF EXISTS " + strings.Join(prodFixedRoles, ", "),
-		"DROP ROLE IF EXISTS " + master,
-	}
-	if createdIAM {
-		stmts = append(stmts, "DROP ROLE IF EXISTS "+rdsIAMRole)
-	}
-	for _, s := range stmts {
-		if _, err := admin.Exec(ctx, s); err != nil {
-			t.Errorf("시험 환경 정리 실패(%s): %v", s, err)
+}
+
+// cleanupAdminExec 는 사례가 끝날 때 admin 으로 sql 을 돌리도록 등록한다. 실패는 오류로 남긴다(대역은 1시간 뒤
+// 만료된다).
+func cleanupAdminExec(t *testing.T, admin *pgx.Conn, sql string) {
+	t.Helper()
+	t.Cleanup(func() {
+		if _, err := admin.Exec(context.Background(), sql); err != nil {
+			t.Errorf("시험 환경 정리 실패(%s): %v", sql, err)
 		}
-	}
+	})
 }
 
 func mustAdminExec(t *testing.T, admin *pgx.Conn, sql string) {
@@ -467,6 +471,58 @@ func TestProdSQLVerifyCatchesDirectSchemaCreate(t *testing.T) {
 	got := env.verifyFailuresAfter(t, "GRANT CREATE ON SCHEMA public TO media_janitor")
 	if want := []string{"schema_create_media_janitor"}; !slices.Equal(got, want) {
 		t.Errorf("GRANT CREATE ON SCHEMA public TO media_janitor 뒤 40_verify.sql 실패 단언 = %q, want %q", got, want)
+	}
+}
+
+// 음성 대조 — 표 단위 행렬 밖의 권한 어긋남(검수 c7 r1 이연 M)도 40 이 바로 그 단언으로만 잡는다(CONNECT 회수는
+// 계정마다 하나). 사례끼리 상태를 나누지 않는다: verifyFailuresAfter 가 매번 ROLLBACK 하고 VERIFY OK 로
+// 되돌아왔는지 본다.
+func TestProdSQLVerifyCatchesPrivilegeDrift(t *testing.T) {
+	env := newProdSQLEnv(t)
+	env.mustApplyAll(t)
+	third := "pc_prodsql_third_" + prodSQLRandHex(t, 4)
+	tests := []struct {
+		name   string
+		tamper string
+		want   []string
+	}{
+		{
+			name:   "column grant on another table",
+			tamper: "GRANT UPDATE (state) ON stream_sessions TO media_janitor",
+			want:   []string{"column:media_janitor:stream_sessions.state:UPDATE"},
+		},
+		{
+			name:   "PG17 MAINTAIN",
+			tamper: "GRANT MAINTAIN ON stream_segments TO media_indexer",
+			want:   []string{"privilege:media_indexer:stream_segments:MAINTAIN"},
+		},
+		{
+			name:   "grant option",
+			tamper: "GRANT SELECT ON stream_cutoffs TO media_janitor WITH GRANT OPTION",
+			want:   []string{"privilege:media_janitor:stream_cutoffs:SELECT+grant_option"},
+		},
+		{
+			name:   "column grant option",
+			tamper: "GRANT UPDATE (local_path) ON stream_segments TO media_janitor WITH GRANT OPTION",
+			want:   []string{"column:media_janitor:stream_segments.local_path:UPDATE+grant_option"},
+		},
+		{
+			name:   "CONNECT revoked from PUBLIC",
+			tamper: "REVOKE CONNECT ON DATABASE " + env.dbName + " FROM PUBLIC",
+			want:   []string{"connect:media_indexer", "connect:media_janitor"},
+		},
+		{
+			name:   "third member of media_owner",
+			tamper: "CREATE ROLE " + third + " NOLOGIN; GRANT media_owner TO " + third,
+			want:   []string{"members_media_owner"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := env.verifyFailuresAfter(t, tt.tamper); !slices.Equal(got, tt.want) {
+				t.Errorf("%s 뒤 40_verify.sql 실패 단언 = %q, want %q", tt.tamper, got, tt.want)
+			}
+		})
 	}
 }
 

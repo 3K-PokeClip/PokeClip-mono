@@ -11,7 +11,8 @@
 # 경계」).
 #
 # 보안 메모: 켜진 동안 iam:PassRole 을 가진 dev 주체가 이 프로필로 상자를 띄워
-# 마스터 비밀을 읽을 수 있다. 그래서 SQL 직후 끈다. 판정은 POK-365 다.
+# 마스터 비밀을 읽을 수 있다. 그래서 SQL 직후 끈다. 켜기 전 2-3 판정은
+# runtime-1a 묶음으로 principal-check.sh 가 한다(runbooks/runtime-1a.md 1).
 
 variable "sql_runner_enabled" {
   description = "SQL 실행기(EC2 · 역할 · SG · RDS 5432 규칙)를 켠다. SQL 적용 동안만 true 로 두고 끝나면 false 로 되돌린다(runbooks/runtime-1a.md)."
@@ -141,10 +142,17 @@ resource "aws_instance" "sql_runner" {
   iam_instance_profile        = aws_iam_instance_profile.sql_runner[0].name
   associate_public_ip_address = false
 
-  # IMDSv2 필수 — SSM 에이전트가 역할 자격을 받는 길이라 끝점은 켠다.
+  # 상자 안에서 끄면(런북의 자동 종료 예약 포함) 지우지 않고 멈춘다. 지우면
+  # 상태와 어긋나 다음 plan 이 실행기를 다시 만들려 한다. 자원 정리는 여전히
+  # sql_runner_enabled = false 다.
+  instance_initiated_shutdown_behavior = "stop"
+
+  # IMDSv2 필수 — SSM 에이전트가 역할 자격을 받는 길이라 끝점은 켠다. 홉 상한 1
+  # 은 상자 밖(컨테이너 · 전달)으로 토큰 응답이 나가지 않게 한다.
   metadata_options {
-    http_endpoint = "enabled"
-    http_tokens   = "required"
+    http_endpoint               = "enabled"
+    http_tokens                 = "required"
+    http_put_response_hop_limit = 1
   }
 
   root_block_device {

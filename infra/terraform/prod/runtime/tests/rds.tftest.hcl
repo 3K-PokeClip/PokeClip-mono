@@ -205,14 +205,16 @@ run "forces_tls_and_logs_connections" {
     error_message = "파라미터 그룹이 pokeclip-prod-pg17 · postgres17 이 아니다."
   }
 
+  # 둘 다 재부팅 없이 바로 적용된다(Dynamic) — pending-reboot 면 다음 재부팅까지
+  # TLS 강제 · 접속 기록이 걸리지 않는다.
   assert {
     condition = {
-      for p in aws_db_parameter_group.this.parameter : p.name => p.value
+      for p in aws_db_parameter_group.this.parameter : p.name => [p.value, p.apply_method]
       } == {
-      "rds.force_ssl"   = "1"
-      "log_connections" = "1"
+      "rds.force_ssl"   = ["1", "immediate"]
+      "log_connections" = ["1", "immediate"]
     }
-    error_message = "파라미터가 정확히 rds.force_ssl=1 · log_connections=1 이 아니다."
+    error_message = "파라미터가 정확히 rds.force_ssl=1 · log_connections=1(둘 다 apply_method = immediate)이 아니다."
   }
 
   assert {
@@ -222,7 +224,8 @@ run "forces_tls_and_logs_connections" {
 }
 
 # 로그 그룹 이름은 RDS 가 내보내는 이름과 같아야 한다 — 다르면 RDS 가 보관
-# 무기한 그룹을 따로 만든다(K6 · P4).
+# 무기한 그룹을 따로 만든다(K6 · P4). 인스턴스의 depends_on(로그 그룹 먼저)은
+# 메타 인자라 시험이 값으로 볼 수 없다 — 시험 밖 한계다.
 run "exports_postgresql_log_to_30_day_group" {
   command = plan
 
