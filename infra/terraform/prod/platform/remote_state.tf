@@ -191,11 +191,13 @@ resource "terraform_data" "runtime_contract" {
     }
 
     # 값: URL 의 user:pass@ 는 이름과 무관하게 비밀이다. app_env_non_secret_names
-    # 는 이름 검사만 풀고 이 검사는 풀지 않는다.
+    # 는 이름 검사만 풀고 이 검사는 풀지 않는다. 문자 클래스에서 / ? # 를 빼
+    # authority(RFC 3986 3.2 — // 뒤 첫 / ? # 앞까지) 안만 본다 — 경로 · 쿼리 ·
+    # 프래그먼트 속 @ 는 자격 증명이 아니다.
     precondition {
       condition = alltrue(flatten([
         for env in values(try(local.runtime.app_env, {})) : [
-          for value in values(env) : !can(regex("://[^/@]*:[^/@]*@", value))
+          for value in values(env) : !can(regex("://[^/?#@]*:[^/?#@]*@", value))
         ]
       ]))
       error_message = "런타임 출력 app_env 값에 URL 자격 증명(scheme://user:pass@)이 있다 — 자격 증명은 런타임 app_secret_arns 로 옮긴다."

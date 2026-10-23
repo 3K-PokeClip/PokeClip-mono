@@ -986,6 +986,56 @@ run "rejects_url_credentials_even_for_listed_name" {
   expect_failures = [terraform_data.runtime_contract]
 }
 
+# 자격 증명이 없는 URL 의 쿼리 속 @ 는 통과한다 — 검사는 authority 안만 본다.
+run "allows_at_sign_in_url_query" {
+  command = plan
+
+  override_data {
+    target = data.terraform_remote_state.runtime
+    values = {
+      outputs = {
+        rds_sg_id              = "sg-0rds"
+        rds_resource_id        = "db-ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        rewind_bucket_arn      = "arn:aws:s3:::pokeclip-prod-rewind-example"
+        app_db_users           = { auth = "app_auth", clip = "app_clip" }
+        app_env                = { auth = {}, clip = { BROADCAST_QUEUE_URL = "https://example.invalid:443?owner=ops@example.invalid" } }
+        app_secret_arns        = { auth = {}, clip = {} }
+        app_task_resource_arns = { auth = {}, clip = {} }
+      }
+    }
+  }
+
+  assert {
+    condition     = local.service_env.clip["BROADCAST_QUEUE_URL"] == "https://example.invalid:443?owner=ops@example.invalid"
+    error_message = "authority 뒤의 @ 를 URL 자격 증명으로 오인해 멈췄다."
+  }
+}
+
+# 자격 증명이 없는 URL 의 프래그먼트 속 @ 는 통과한다 — 검사는 authority 안만 본다.
+run "allows_at_sign_in_url_fragment" {
+  command = plan
+
+  override_data {
+    target = data.terraform_remote_state.runtime
+    values = {
+      outputs = {
+        rds_sg_id              = "sg-0rds"
+        rds_resource_id        = "db-ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        rewind_bucket_arn      = "arn:aws:s3:::pokeclip-prod-rewind-example"
+        app_db_users           = { auth = "app_auth", clip = "app_clip" }
+        app_env                = { auth = {}, clip = { BROADCAST_QUEUE_URL = "https://example.invalid:443#ops@example.invalid" } }
+        app_secret_arns        = { auth = {}, clip = {} }
+        app_task_resource_arns = { auth = {}, clip = {} }
+      }
+    }
+  }
+
+  assert {
+    condition     = local.service_env.clip["BROADCAST_QUEUE_URL"] == "https://example.invalid:443#ops@example.invalid"
+    error_message = "authority 뒤의 @ 를 URL 자격 증명으로 오인해 멈췄다."
+  }
+}
+
 # 계약(CONTRACT-runtime.md)의 비밀 아닌 이름은 예외 목록 없이 통과한다 —
 # 오탐 방지. STREAM_KEY_RESOLVE_ALLOWED_CIDRS 는 런타임이 app_env 로 주는
 # 이름이고, 나머지는 platform 이 정해 런타임 값을 덮는 이름이다. 자격 증명이
