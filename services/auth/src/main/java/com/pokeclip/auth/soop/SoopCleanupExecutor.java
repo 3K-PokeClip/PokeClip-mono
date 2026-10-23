@@ -146,17 +146,23 @@ public class SoopCleanupExecutor {
                 List<Runnable> dropped = pool.shutdownNow();
                 log.warn("auth.soop.cleanup.shutdown_timeout dropped={} interrupted={}",
                         dropped.size(), interrupted);
-                for (Runnable job : dropped) {
-                    log.warn("auth.soop.cleanup.dropped userId={}", job instanceof Job j ? j.userId : null);
-                }
+                logDropped(dropped);
                 if (!pool.awaitTermination(FORCED_STOP_WAIT.toMillis(), TimeUnit.MILLISECONDS)) {
                     log.warn("auth.soop.cleanup.shutdown_forced dropped={} interrupted={}",
                             dropped.size(), interrupted);
                 }
             }
         } catch (InterruptedException e) {
-            pool.shutdownNow();
+            // 종료를 기다리던 스레드가 깨워졌다(컨테이너가 종료를 서두를 때). 여기서도 버려진 잡의 회원 번호를 남긴다:
+            // 반환값을 버리면 이 갈래에서만 「토큰이 안 지워진 회원」을 찾을 단서가 사라진다(PR #329 봇 지적).
+            logDropped(pool.shutdownNow());
             Thread.currentThread().interrupt();
+        }
+    }
+
+    private static void logDropped(List<Runnable> dropped) {
+        for (Runnable job : dropped) {
+            log.warn("auth.soop.cleanup.dropped userId={}", job instanceof Job j ? j.userId : null);
         }
     }
 

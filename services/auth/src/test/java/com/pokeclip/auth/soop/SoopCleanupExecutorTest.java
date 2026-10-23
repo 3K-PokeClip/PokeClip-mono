@@ -156,6 +156,45 @@ class SoopCleanupExecutorTest {
         }
     }
 
+    /**
+     * 🔴 종료를 기다리는 스레드가 <b>인터럽트되어도</b> 큐에서 버려진 잡의 회원 번호를 남긴다(PR #329 봇 지적).
+     * 시한 초과 갈래만 남기고 인터럽트 갈래는 {@code shutdownNow()} 반환값을 버리면, 컨테이너가 종료를 서두르는 날
+     * 「토큰이 안 지워진 회원」을 찾을 단서가 사라진다.
+     */
+    @Test
+    void 종료_대기가_인터럽트돼도_버려진_잡의_회원_번호를_남긴다() throws Exception {
+        SoopCleanupExecutor executor = new SoopCleanupExecutor();
+        CountDownLatch 워커가_잡혔다 = new CountDownLatch(SoopCleanupExecutor.THREADS);
+        CountDownLatch 놓아준다 = new CountDownLatch(1);
+        try (LogCaptor logs = new LogCaptor()) {
+            try {
+                for (int i = 0; i < SoopCleanupExecutor.THREADS; i++) {
+                    executor.submit(executor.new Job(1L, null, () -> {
+                        워커가_잡혔다.countDown();
+                        await(놓아준다);
+                    }));
+                }
+                assertThat(워커가_잡혔다.await(5, TimeUnit.SECONDS)).isTrue();
+                for (long userId : List.of(44L, 55L)) {
+                    executor.submit(executor.new Job(userId, null, () -> { }));
+                }
+
+                Thread stopper = new Thread(executor::shutdown, "soop-cleanup-test-stopper");
+                stopper.start();
+                Thread.sleep(300);   // 종료 대기(awaitTermination 3초) 안에 들어간 뒤에 깨운다
+                stopper.interrupt();
+                stopper.join(5_000);
+                assertThat(stopper.isAlive()).isFalse();
+
+                assertThat(logs.messages())
+                        .as("🔴 인터럽트 갈래에서 버려진 잡의 회원 번호가 로그에 없다")
+                        .contains("auth.soop.cleanup.dropped userId=44", "auth.soop.cleanup.dropped userId=55");
+            } finally {
+                놓아준다.countDown();
+            }
+        }
+    }
+
     private static void await(CountDownLatch latch) {
         try {
             latch.await();
