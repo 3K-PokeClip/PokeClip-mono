@@ -30,7 +30,11 @@ public abstract class IntegrationTestSupport {
      * <b>{@code FATAL: sorry, too many clients already}</b>로 컨텍스트 로딩이
      * 무너진다 — 30 × 컨텍스트 수가 100을 넘기 때문이다.
      *
-     * <p>🔴 <b>750으로 올렸다(POK-272).</b> 아래 「다음 카드가 컨텍스트를 하나라도 더하면 750」 지시대로다. 스트림키
+     * <p>🔴 <b>900으로 올렸다(POK-316).</b> 위 지시대로다: 2026-10-08 뒤 다른 카드가 남은 하나를 썼는지 몰라 먼저 올렸다.
+     * 이 카드는 {@code native} + 좁힌 신뢰 대역 + resolve 창구를 연 실서버 컨텍스트 하나({@code ProxyTrustNativeTest})를 더해
+     * <b>@@CONTEXTS@@</b>(2026-10-23 실측, 아래 grep). 다음 카드는 이 줄의 셈부터 다시 잰다.
+     *
+     * <p>(POK-316 전 문단) <b>750으로 올렸다(POK-272).</b> 아래 「다음 카드가 컨텍스트를 하나라도 더하면 750」 지시대로다. 스트림키
      * 저장소를 aws로 켠 컨텍스트 둘(LocalStack · 가짜 서버)에 resolve 전용 출입증 컨텍스트 하나(계약4 4C)가 더해져
      * <b>24개</b>다(2026-10-08 실측). 풀 10은 하나다 — 풀 고갈 시험 두 클래스(치지직 · 유튜브)가 한 컨텍스트를
      * 나눈다. 24 × 30 − 1 × 20 = <b>700</b>, 상한 747에서 여유 47(컨텍스트 하나). 하나는 더 들어가고, 그다음을
@@ -51,7 +55,7 @@ public abstract class IntegrationTestSupport {
      */
     protected static final PostgreSQLContainer POSTGRES =
             new PostgreSQLContainer("postgres:17")
-                    .withCommand("postgres", "-c", "max_connections=750");
+                    .withCommand("postgres", "-c", "max_connections=900");
 
     /**
      * 가짜 치지직도 static으로 하나만 띄운다. 모든 컨텍스트가 같은 api-base-uri를 받아야
