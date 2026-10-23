@@ -134,6 +134,7 @@ server:
       # native일 때 믿는 프록시 대역(쉼표로 이은 CIDR). 운영은 FORWARD_HEADERS_TRUSTED_PROXIES로 VPC 안(ALB·웹)과
       # CloudFront 원본 쪽 대역만 남긴다(POK-316). 기본값은 Boot 기본 대역을 글자 그대로 옮긴 것이다: 안 주면 전과 같다.
       # RequiredPropertiesTest가 Boot 값과 같은지 본다. 🔴 빈 값은 「아무 프록시도 안 믿음」이다(한도가 전역으로 돌아간다).
+      # 🔴 주소 하나도 /32처럼 접두를 붙인다. 값 전체에 '/'가 없으면 톰캣이 목록을 정규식 하나로 읽어 아무 주소에도 안 맞는다.
       internal-proxies: "${FORWARD_HEADERS_TRUSTED_PROXIES:192.168.0.0/16, 172.16.0.0/12, 169.254.0.0/16, fc00::/7, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, fe80::/10, ::1/128}"
 
 management:

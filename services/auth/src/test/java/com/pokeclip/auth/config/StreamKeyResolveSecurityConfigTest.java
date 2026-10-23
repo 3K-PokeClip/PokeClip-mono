@@ -205,6 +205,18 @@ class StreamKeyResolveSecurityConfigTest extends IntegrationTestSupport {
                   .with(from(ALLOWED_SOURCE)))
           .andExpect(status().isUnauthorized());
     }
+
+    /** 전달 머리글 표시가 있어도 닫힘은 401 이다. 닫힌 체인에 출발지 필터를 달면 403 으로 갈린다(POK-316). */
+    @Test
+    void markedForwardedRequest_isStillUnauthorized() throws Exception {
+      mockMvc
+          .perform(
+              resolve()
+                  .header(RESOLVE_TOKEN_HEADER, "")
+                  .requestAttr(ForwardedHeaderMarkValve.ATTRIBUTE, Boolean.TRUE)
+                  .with(from(ALLOWED_SOURCE)))
+          .andExpect(status().isUnauthorized());
+    }
   }
 
   private static MockHttpServletRequestBuilder resolve() {

@@ -3635,6 +3635,8 @@ OBS는 트랙 여섯을 항상 다 보내고 트랙에 이름이 없다(계약9�
 | `FORWARD_HEADERS_TRUSTED_PROXIES` | Boot 기본 신뢰 대역(사설망 · 루프백 등 아홉, yml에 글자 그대로) | **VPC 안(ALB · 웹) CIDR + CloudFront 원본 쪽 대역**(AWS 공개 IP 목록의 `CLOUDFRONT_ORIGIN_FACING`). 쉼표로 이은 CIDR, IPv6도 된다 |
 
 - **채우는 것은 인프라(1번) 몫이다.** 코드는 이름과 기본값만 둔다. CloudFront 대역은 AWS가 바꾸므로 목록이 바뀌면 다시 채운다
+- 🔴 **주소 하나도 `/32`처럼 접두를 붙인다.** 톰캣은 값 전체에 `/`가 하나도 없으면 목록을 **정규식 하나**로 읽는다(`RemoteIpValve.setInternalProxies`).
+  `10.0.1.5, 10.0.1.6`처럼 주면 어느 주소에도 안 맞아 아래 빈 값과 같은 꼴이 되는데 부팅은 성공한다
 - 🔴 **빈 값은 「아무 프록시도 안 믿음」이다.** 비우면 ALB가 붙인 머리글까지 무시해 한도가 다시 전역이 된다. 안 쓸 거면 변수를 아예 빼라(기본 대역으로 돌아간다)
 - **dev compose·`.env.dev.example`에는 넣지 않았다.** compose는 빈 값을 그대로 넘겨 위 함정이 되고, dev는 `none`이라 이 값을 안 쓴다
 - CloudFront → ALB 홉은 **HTTPS**여야 한다. ALB가 `X-Forwarded-Proto`를 자기가 받은 프로토콜로 덮어쓰므로, 그 홉이 http면 https 요청도 http로 읽혀 HSTS가 안 붙는다(인프라 몫)

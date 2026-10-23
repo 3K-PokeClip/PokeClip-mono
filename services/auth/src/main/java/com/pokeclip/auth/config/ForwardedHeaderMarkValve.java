@@ -37,8 +37,11 @@ final class ForwardedHeaderMarkValve extends ValveBase {
 
   @Override
   public void invoke(Request request, Response response) throws IOException, ServletException {
-    if (HEADERS.stream().anyMatch(name -> request.getHeader(name) != null)) {
-      request.setAttribute(ATTRIBUTE, Boolean.TRUE);
+    for (String name : HEADERS) {
+      if (request.getHeader(name) != null) {
+        request.setAttribute(ATTRIBUTE, Boolean.TRUE);
+        break;
+      }
     }
     getNext().invoke(request, response);
   }
