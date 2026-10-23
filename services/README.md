@@ -3612,8 +3612,8 @@ OBS는 트랙 여섯을 항상 다 보내고 트랙에 이름이 없다(계약9�
   null). compose의 `:-none`만 빈 값을 막는다
 - 🔴 **「대역 밖 소켓의 헤더는 무시」에는 한정 조건이 있다.** 요청자 자신이 신뢰 대역 안이면(사설망에서 ALB를 거쳐 오는
   호출자) ALB가 오른쪽에 붙인 사설 IP를 Valve가 건너뛰어 **왼쪽 위조 값이 채택된다.** 사설망에서 교환 창구를 부르는
-  호출자를 만들면 안 되고(지금은 없다: clip·chat-collector는 `/internal/**`를 직접 부르고 헤더를 안 싣는다), 운영
-  은 `internal-proxies`를 `FORWARD_HEADERS_TRUSTED_PROXIES`로 **좁힌다**(아래 「운영 신뢰 대역」, POK-316). `RemoteIpValveTrustTest`의
+  호출자를 만들면 안 되고(지금은 없다: clip·chat-collector는 `/internal/**`를 직접 부르고 헤더를 안 싣는다),
+  운영은 `internal-proxies`를 `FORWARD_HEADERS_TRUSTED_PROXIES`로 **좁힌다**(아래 「운영 신뢰 대역」, POK-316). `RemoteIpValveTrustTest`의
   `대역_안_소켓이_보낸_헤더의_오른쪽_값도_대역_안이면_왼쪽_값을_채택한다`가 이 갈래를 못박는다
 - 🔴 **`native`는 `X-Forwarded-Proto`·`Host`·`Port`도 같이 처리해 auth 전체의 요청 해석이 바뀐다.** 지금 요청에서
   주소를 유추하는 코드는 없다(사진 `PROFILE_PHOTO_BASE_URL`은 명시 설정이다). **프레임워크가 읽는 자리는 하나다:
