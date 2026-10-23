@@ -832,6 +832,26 @@ class BroadcastListControllerTest extends IntegrationTestSupport {
                 .andExpect(jsonPath("$.broadcasts[1].platform").value("CHZZK"));
     }
 
+    // ── 접속 중인 편집자 수(POK-398) ── 셈 규칙은 EditorsOnlineCountTest, 실제 연결은 EditorsOnlineEndToEndTest가 잰다
+
+    /**
+     * 방송 중 줄은 숫자(아무도 없으면 0), 끝난 줄은 null이다. 끝난 방송의 대시보드는 연결을 닫으므로 셀 것이 없고,
+     * 0으로 내면 화면이 「아무도 없다」와 「잴 수 없다」를 못 가른다.
+     */
+    @Test
+    void 방송_중_줄에는_편집자_수가_있고_끝난_줄은_null이다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("s-eo-live", TestIds.STREAMER, "live");
+        방송을_넣는다("s-eo-ended", TestIds.STREAMER, "ended", 시작_시각, 시작_시각.plusSeconds(60), 시작_시각.plus(육십일));
+
+        목록("?state=live")
+                .andExpect(jsonPath("$.broadcasts[0].streamId").value("s-eo-live"))
+                .andExpect(jsonPath("$.broadcasts[0].editorsOnline").value(0));
+        목록("?state=past")
+                .andExpect(jsonPath("$.broadcasts[0].streamId").value("s-eo-ended"))
+                .andExpect(jsonPath("$.broadcasts[0].editorsOnline").value(nullValue()));
+    }
+
     // ── 도우미 ──────────────────────────────────────────────────
 
     private void 볼_수_있는_스트리머(String... 줄들) {

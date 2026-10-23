@@ -49,6 +49,10 @@ public record BroadcastListResponse(List<Item> broadcasts, String nextCursor) {
      * <p>{@code platform}은 방송 플랫폼 코드다(POK-398, {@code CHZZK}·{@code SOOP}, 늘 있다). 칸이 생기기 전 방송과
      * 플랫폼을 안 실은 편지로 만든 줄은 {@code CHZZK}다. 화면은 이 값으로 라이브 띠의 플랫폼 태그를 그린다.
      *
+     * <p>{@code editorsOnline}은 그 방송의 라이브 대시보드를 지금 열어 둔 편집자 수다(POK-398). 스트리머 본인과 묻는 사람은 빼고,
+     * 같은 사람의 여러 탭은 한 명이다. 방송 중 줄만 숫자(아무도 없으면 0)이고 끝난 줄은 {@code null}이다. clip 한 대 전제다
+     * ({@code BroadcastListService}).
+     *
      * <p>줄 번호는 안 싣는다 — 이어받기가 표시로 끝나므로 웹이 쓸 데가 없고,
      * 방송을 가리키는 이름은 {@code streamId}다(카드 목록 문이 그 값을 받는다).
      */
@@ -63,7 +67,8 @@ public record BroadcastListResponse(List<Item> broadcasts, String nextCursor) {
                        String thumbnailUrl,
                        String title,
                        String category,
-                       String platform) {
+                       String platform,
+                       Integer editorsOnline) {
     }
 
     public static BroadcastListResponse from(BroadcastPage page) {
@@ -90,6 +95,7 @@ public record BroadcastListResponse(List<Item> broadcasts, String nextCursor) {
                 page.thumbnails().get(row.getStreamId()),
                 title == null ? null : title.title(),
                 title == null ? null : title.category(),
-                row.getPlatform());
+                row.getPlatform(),
+                page.editorsOnline().get(row.getStreamId()));
     }
 }
