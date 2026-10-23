@@ -268,29 +268,56 @@ test_r10_db_users_not_two_literal_names if {
 	}
 }
 
-# 동작 와일드카드(`rds-db:*` · `*`)도 rds-db:connect 를 덮는다.
-test_r10_db_statement_action_wildcard if {
-	every actions in [["rds-db:*"], ["*"], ["RDS-DB:Connect"]] {
-		files := [tf(media_host_path, {
-			"locals": [db_users_locals],
-			"data": {"aws_iam_policy_document": {"media": [{"statement": [db_statement(actions, ["*"])]}]}},
-		})]
-		one_hit(files, "local.db_users")
+# 정책 문서 statement 의 actions 원소는 `서비스:동작` 꼴(허용 목록)만 —
+# 와일드카드 · 템플릿 지시자 · 보간 · 공백 · 식은 rds-db:connect 를 덮는지 대조할
+# 수 없다. 메시지는 하나다(지시자 규칙 · rds-db 문 규칙과 겹치지 않는다).
+test_r10_statement_actions_outside_allowlist if {
+	every actions in [
+		["*"],
+		["rds-db:*"],
+		["s3:Get*"],
+		["rds-db:connec?"],
+		["RDS-DB:Connect"],
+		["%{if true}rds-db:connect%{endif}"],
+		["*%{if false}x%{endif}"],
+		["%{for a in var.acts}${a}%{endfor}"],
+		["s3: GetObject"],
+		["s3:GetObject "],
+		[""],
+		["${var.a}"],
+		["${format(\"%s:%s\", \"rds-db\", \"connect\")}"],
+		"${local.acts}",
+		"${var.acts}",
+		"${concat([\"s3:GetObject\"], var.more)}",
+		"${toset([\"*\"])}",
+	] {
+		one_hit(
+			[tf(media_host_path, {
+				"locals": [db_users_locals],
+				"data": {"aws_iam_policy_document": {"media": [{"statement": [db_statement(actions, ["*"])]}]}},
+			})],
+			"서비스:동작",
+		)
 	}
 }
 
-# 정책 문서 statement 의 actions 는 리터럴 목록만 — 식이면 rds-db:connect 를
-# 덮는지 대조할 수 없다.
-test_r10_statement_actions_not_literal_list if {
-	every actions in [
-		"${local.acts}",
-		"${var.acts}",
-		["${var.a}"],
-		"${concat([\"s3:GetObject\"], var.more)}",
-		"${toset([\"*\"])}",
-		["${format(\"%s:%s\", \"rds-db\", \"connect\")}"],
+test_r10_statement_actions_allowlist_accepts_service_action if {
+	statement := db_statement(["ecr:GetAuthorizationToken", "s3:PutObject", "rds-db:connect"], db_users_resources)
+	count(role_hits([tf(media_host_path, {
+		"locals": [db_users_locals],
+		"data": {"aws_iam_policy_document": {"media": [{"statement": [statement]}]}},
+	})])) == 0
+}
+
+# 대상 경로의 어느 문자열이든(설명 포함) 템플릿 지시자 `%{` 는 위반이다 — dbuser ·
+# rds-db 문자열 대조를 지시자로 비켜 가지 못하게.
+test_r10_template_directive_any_string if {
+	every file in [
+		locals_file(media_host_path, "%{if true}rds-db:connect%{endif}"),
+		locals_file(media_host_path, "arn:aws:rds-db:ap-northeast-2:${local.account_id}:dbuser:${var.rds_resource_id}/%{if true}*%{endif}"),
+		tf(media_root_path, {"variable": {"x": [{"description": "%{for a in var.x}${a}%{endfor}"}]}}),
 	] {
-		one_hit([policy_document_file(media_root_path, [db_statement(actions, ["*"])])], "리터럴 목록")
+		one_hit([file], "%{")
 	}
 }
 

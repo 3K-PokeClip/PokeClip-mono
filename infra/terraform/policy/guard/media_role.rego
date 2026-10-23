@@ -9,14 +9,19 @@
 # 식을 평가하지 않으므로 이렇게 본다.
 # ① 어느 문자열이든 `dbuser:` 뒤에 IAM 와일드카드(`*` · `?`)가 있으면 위반.
 # ② 정책 문서(data "aws_iam_policy_document")의 statement 중 동작이
-#    rds-db:connect 를 덮으면(`rds-db:*` · `*` 포함, 대소문자 무관) Resource 는
+#    rds-db:connect 인 문(대소문자 무관)의 Resource 는
 #    `[for <u> in local.db_users : "arn:…:dbuser:${var.rds_resource_id}/${<u>}"]`
 #    꼴만이다 — 파티션 · 리전 · 계정 자리만 참조 보간을 받고, 사용자 자리는 for
 #    변수뿐이다. 그 경로의 local.db_users 는 리터럴 목록으로 정확히
 #    ["media_indexer", "media_janitor"] 다.
-# ③ statement 의 actions 는 리터럴 목록만(식이면 rds-db:connect 를 덮는지 대조할
-#    수 없다). rds-db 동작은 그 actions 에만 적는다 — 지역값 · jsonencode 등
-#    다른 자리에 있으면 위반이다. 설명 문자열(description)은 문서라 보지 않는다.
+# ③ statement 의 actions 는 `서비스:동작` 꼴(^[a-z0-9-]+:[A-Za-z0-9]+$) 리터럴
+#    목록만이다(허용 목록 — 와일드카드 · 템플릿 지시자 · 보간 · 공백 · 식은
+#    rds-db:connect 를 덮는지 대조할 수 없다). rds-db 동작은 그 actions 에만
+#    적는다 — 지역값 · jsonencode 등 다른 자리에 있으면 위반이다. 이 동작 이름
+#    검사만 설명 문자열(description)을 보지 않는다(관리형 정책 ARN · dbuser
+#    와일드카드 · 템플릿 지시자 검사는 설명도 본다).
+# ③-1 대상 경로의 어느 문자열이든 템플릿 지시자 `%{` 는 위반이다 — 위 문자열
+#    대조를 지시자로 비켜 가지 못하게(actions 원소는 ③ 이 하나로 알린다).
 #
 # 위 문자열 대조를 비켜 가는 길은 꼴로 막는다(아래 「꼴」 절).
 # ④ IAM 유형은 역할 · 인스턴스 프로필 · 역할 인라인 정책 · 관리형 정책 연결 ·
@@ -70,11 +75,9 @@ deny contains msg if {
 	)
 }
 
-as_list(value) := value if is_array(value)
-
-as_list(value) := [value] if is_string(value)
-
-covers_db_connect(action) if glob.match(lower(action), [], "rds-db:connect")
+# 와일드카드 동작은 ③ 의 허용 목록이 막으므로 rds-db:connect 문은 그 동작을
+# 그대로 적은 문이다.
+covers_db_connect(action) if lower(action) == "rds-db:connect"
 
 # 정책 문서 statement 블록 하나하나.
 policy_statements contains item if {
@@ -87,9 +90,11 @@ policy_statements contains item if {
 	item := {"decl": decl, "statement": statement}
 }
 
+# 허용 목록을 어긴 문은 ③ 이 이미 알리므로 rds-db 문으로 다시 보지 않는다.
 db_statements contains item if {
 	some item in policy_statements
-	some action in as_list(item.statement.actions)
+	allowed_actions(item.statement.actions)
+	some action in item.statement.actions
 	covers_db_connect(action)
 }
 
@@ -147,19 +152,31 @@ deny contains msg if {
 	msg := sprintf("R10 %s: db_users 는 [\"media_indexer\", \"media_janitor\"] 리터럴 목록만", [dir])
 }
 
-literal_list(value) if {
+allowed_action_pattern := `^[a-z0-9-]+:[A-Za-z0-9]+$`
+
+allowed_actions(value) if {
 	is_array(value)
-	every element in value {
-		is_string(element)
-		not contains(element, "${")
+	every action in value {
+		is_string(action)
+		regex.match(allowed_action_pattern, action)
 	}
 }
 
 deny contains msg if {
 	some item in policy_statements
 	"actions" in object.keys(item.statement)
-	not literal_list(item.statement.actions)
-	msg := sprintf("R10 %s: %s 의 statement actions 는 리터럴 목록만", [item.decl.path, label(item.decl)])
+	not allowed_actions(item.statement.actions)
+	msg := sprintf(
+		"R10 %s: %s 의 statement actions 는 `서비스:동작` 꼴 리터럴 목록만(허용 목록 — 와일드카드 · 지시자 · 식 금지)",
+		[item.decl.path, label(item.decl)],
+	)
+}
+
+deny contains msg if {
+	some item in media_role_strings
+	contains(item.value, "%{")
+	not statement_actions_path(item.path)
+	msg := sprintf("R10 %s: 템플릿 지시자(%%{) 금지 — 문자열 대조를 비켜 간다", [item.file])
 }
 
 # hcl2 JSON 에서 정책 문서 statement 의 actions 자리:
@@ -180,6 +197,7 @@ deny contains msg if {
 	regex.match(`(?i)(^|[^:\w-])rds-db:[a-z*?]`, item.value)
 	not statement_actions_path(item.path)
 	not description_path(item.path)
+	not contains(item.value, "%{") # 지시자 규칙(③-1)이 알린다.
 	msg := sprintf(
 		"R10 %s: rds-db 동작은 aws_iam_policy_document statement 의 actions 에만(Resource 대조)",
 		[item.file],
