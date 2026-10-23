@@ -37,4 +37,20 @@ class DatasourceDefaultsTest {
                 .contains("${DB_HOST:localhost}")
                 .contains("${DB_PORT:5432}");
     }
+
+    /**
+     * DB 로그인 방식 셋(POK-407)이 yml에 사이드카와 같은 이름으로 있다. 기본은 password라 로컬 compose · CI가 지금 그대로
+     * 붙는다. 이름이 어긋나면 운영에서 POSTGRES_AUTH=iam을 줘도 조용히 비밀번호 방식으로 남는다.
+     */
+    @Test
+    void DB_로그인_방식_자리가_사이드카와_같은_이름으로_있다() {
+        YamlPropertiesFactoryBean yaml = new YamlPropertiesFactoryBean();
+        yaml.setResources(new ClassPathResource("application.yml"));
+        Properties properties = yaml.getObject();
+
+        assertThat(properties).as("application.yml을 읽지 못했다").isNotNull().isNotEmpty();
+        assertThat(properties.getProperty("pokeclip.datasource.auth")).isEqualTo("${POSTGRES_AUTH:password}");
+        assertThat(properties.getProperty("pokeclip.datasource.region")).isEqualTo("${AWS_REGION:ap-northeast-2}");
+        assertThat(properties.getProperty("pokeclip.datasource.ssl-root-cert")).isEqualTo("${POSTGRES_SSLROOTCERT:}");
+    }
 }
