@@ -1,11 +1,20 @@
-import { Camera, ChevronDown, ChevronUp, Pause, Play, SkipBack, ZoomIn } from 'lucide-react';
+import {
+  Camera,
+  ChevronDown,
+  ChevronUp,
+  Pause,
+  Play,
+  SkipBack,
+  ZoomIn,
+  ZoomOut,
+} from 'lucide-react';
 import { Button, IconButton, Slider } from '@/ui';
 import styles from './StudioScreen.module.css';
-import { MAX_RANGE_TEXT } from '../timelineMath';
 import type { ClipEditorMockState } from '../useClipEditorMockState';
 
 // 타임라인 위 막대: 쇼츠 서비스 셋(오퍼스클립·알파컷·피카클립)이 모두 재생 조작을 여기 가운데에 둔다(POK-389).
-// 왼쪽: 쇼츠 구간 자르기(I·O 키와 같은 일) · 가운데: 시작으로·재생·쇼츠 안 시각 · 오른쪽: 쇼츠 길이·확대·접기.
+// 왼쪽: 쇼츠 구간 자르기(I·O 키와 같은 일) · 가운데: 시작으로·재생·쇼츠 안 시각 · 오른쪽: 확대(캡컷처럼 − 막대 +)·접기.
+// 쇼츠 길이는 가운데 시각 칸이 보이므로 따로 두지 않는다(3분 상한 안내는 타임라인 아래 줄에 있다).
 // 1초·5초 이동은 ←→(Shift) 키가 맡고, 구간 반복은 늘 켠 채 둔다.
 
 /** 쇼츠 안 시각: 반올림하면 끝에서 「0:13 / 0:12」처럼 넘쳐 보이니 내림한다 */
@@ -62,13 +71,16 @@ export function TimelineToolbar({ state }: { state: ClipEditorMockState }) {
       </div>
 
       <div className={styles.toolbarGroupEnd}>
-        <span className={styles.toolbarChip}>
-          쇼츠 {state.rangeLengthLabel} · 최대 {MAX_RANGE_TEXT}
-        </span>
-        {/* 무엇을 키우는 막대인지 보이게(POK-389): 돋보기 + 마우스를 올리면 이름 */}
-        <span className={styles.zoomIcon} title="타임라인 확대" data-zoom-icon>
-          <ZoomIn size={13} aria-hidden />
-        </span>
+        <IconButton
+          variant="ghost"
+          size="sm"
+          aria-label="타임라인 축소"
+          title="타임라인 축소"
+          disabled={zoomIndex <= 0}
+          onClick={() => state.setZoom(state.zoomLevels[zoomIndex - 1] ?? state.zoom)}
+        >
+          <ZoomOut size={14} aria-hidden />
+        </IconButton>
         <Slider
           className={styles.zoomSlider}
           label="타임라인 확대"
@@ -78,6 +90,16 @@ export function TimelineToolbar({ state }: { state: ClipEditorMockState }) {
           value={zoomIndex}
           onValueChange={(index) => state.setZoom(state.zoomLevels[index] ?? state.zoom)}
         />
+        <IconButton
+          variant="ghost"
+          size="sm"
+          aria-label="타임라인 한 단계 확대"
+          title="타임라인 확대"
+          disabled={zoomIndex >= state.zoomLevels.length - 1}
+          onClick={() => state.setZoom(state.zoomLevels[zoomIndex + 1] ?? state.zoom)}
+        >
+          <ZoomIn size={14} aria-hidden />
+        </IconButton>
         <span className={styles.zoomValue}>{state.zoomLabel}</span>
         <IconButton
           variant="ghost"

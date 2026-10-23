@@ -154,14 +154,14 @@ describe('StudioScreen', () => {
 
     // 목업 구간 1:22:08.4 ~ 1:22:20.8(12.4초), 재생 위치 1:22:14 → 쇼츠 안 5.6초(내림 0:05)
     expect(within(bar).getByRole('status', { name: '재생 위치' })).toHaveTextContent('0:05 / 0:12');
-    expect(within(bar).getByText('쇼츠 12.4초 · 최대 3분')).toBeInTheDocument();
+    // 쇼츠 길이 칸은 뺐다(재생 위치 칸이 길이를 이미 보인다, POK-389)
+    expect(within(bar).queryByText(/최대 3분/)).not.toBeInTheDocument();
     expect(screen.queryByRole('radiogroup', { name: '재생 속도' })).not.toBeInTheDocument();
     expect(screen.queryByRole('switch', { name: '구간 반복' })).not.toBeInTheDocument();
 
     // 여기부터 = I 키: 시작이 재생 위치로 와서 쇼츠 안 0초가 된다
     await user.click(within(bar).getByRole('button', { name: /여기부터/ }));
     expect(within(bar).getByRole('status', { name: '재생 위치' })).toHaveTextContent('0:00 / 0:06');
-    expect(within(bar).getByText('쇼츠 6.8초 · 최대 3분')).toBeInTheDocument();
 
     // 시작으로 = 쇼츠 맨 앞으로
     await user.keyboard('{ArrowRight}{ArrowRight}');
@@ -203,8 +203,25 @@ describe('StudioScreen', () => {
     zoom.focus();
     await user.keyboard('{ArrowRight}');
     expect(within(bar).getByText('200%')).toBeInTheDocument();
-    // 무엇을 키우는 막대인지 돋보기가 말한다(POK-389)
-    expect(bar.querySelector('[data-zoom-icon]')).toHaveAttribute('title', '타임라인 확대');
+  });
+
+  it('막대 양쪽 돋보기(− · +)로 한 단계씩 줄이고 키우며, 끝 단계에서는 그쪽 단추가 꺼진다(POK-389)', async () => {
+    const user = userEvent.setup();
+    renderStudio();
+    const bar = screen.getByRole('toolbar', { name: '재생과 구간' });
+    const zoomOut = within(bar).getByRole('button', { name: '타임라인 축소' });
+    const zoomIn = within(bar).getByRole('button', { name: '타임라인 한 단계 확대' });
+
+    await user.click(zoomIn);
+    expect(within(bar).getByText('200%')).toBeInTheDocument();
+    await user.click(zoomIn);
+    expect(within(bar).getByText('400%')).toBeInTheDocument();
+    expect(zoomIn).toBeDisabled();
+
+    for (let i = 0; i < 4; i++) await user.click(zoomOut);
+    expect(within(bar).getByText('25%')).toBeInTheDocument();
+    expect(zoomOut).toBeDisabled();
+    expect(zoomIn).toBeEnabled();
   });
 
   it('단축키로 재생을 토글하고 되돌린다', async () => {

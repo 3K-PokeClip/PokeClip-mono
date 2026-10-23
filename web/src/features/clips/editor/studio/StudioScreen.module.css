@@ -183,20 +183,6 @@
   white-space: nowrap;
 }
 
-.toolbarChip {
-  padding: calc(3 * var(--pc-u)) calc(9 * var(--pc-u));
-  border-radius: calc(7 * var(--pc-u));
-  border: 1px solid var(--pc-color-border-default);
-  font-size: calc(11 * var(--pc-u));
-  color: var(--pc-color-text-secondary);
-  white-space: nowrap;
-}
-
-.zoomIcon {
-  display: inline-flex;
-  color: var(--pc-color-text-muted);
-}
-
 /* 디자인 시스템 Slider의 width: 100%와 같은 무게라 CSS를 불러온 순서에 따라 이기고 진다: 막대 안에서 두 단계로 걸어
    이 폭을 쓴다. 손잡이(18)가 양 끝에서 반만큼 밖으로 나가므로 그만큼 띄운다(오디오 메뉴 트랙 줄과 같은 처방) */
 .toolbarGroupEnd .zoomSlider {
