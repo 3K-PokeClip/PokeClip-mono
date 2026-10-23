@@ -58,6 +58,7 @@ import {
   type AudioPresetId,
 } from './audioPresets';
 import type { EditorPlayback } from './editorPlayback';
+import type { FilmstripSource } from './studio/VideoFilmstrip';
 import type { TrackLevels } from './trackAudio/trackLevels';
 import type { TrackPreview, TrackPreviewStatus } from './trackAudio/useTrackPreview';
 import { regionCropsOf, type EditorLook } from './recipeLook';
@@ -385,6 +386,8 @@ export interface ClipEditorOptions {
    * 못 불렀으면(status unavailable) 미리보기가 「영상 소리로 들린다」고 알린다
    */
   trackPreview?: TrackPreview;
+  /** 타임라인 영상 줄 필름띠의 재료(POK-389). 녹화를 받아 두었을 때만. 없으면 모양만 그린다 */
+  filmstripSource?: FilmstripSource | null;
   /** 저장된 편집본의 자막 줄(실제 모드). 마운트 값 — 있으면 자막 도구가 「생성됨」으로 열린다 */
   initialSubtitles?: readonly SubtitleItem[];
   /** 저장된 편집본의 모양(레이아웃·자르는 자리·자막 방식과 자리). 마운트 값 — 없는 칸은 편집기 기본값이다 */
@@ -436,6 +439,7 @@ export interface ClipEditorMockState {
    * 소리 줄 파형(트랙 순서 = 번호). 목업이면 undefined(모양만 그린다), 실제인데 아직·못 불렀으면 null(빈 줄)
    */
   trackLevels: TrackLevels | null | undefined;
+  filmstripSource: FilmstripSource | null;
 
   // 트랜스포트
   playing: boolean;
@@ -905,6 +909,7 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     previewVideo: options.previewVideo ?? null,
     trackPreviewStatus: options.trackPreview?.status ?? null,
     trackLevels: real ? (options.trackPreview?.levels ?? null) : undefined,
+    filmstripSource: options.filmstripSource ?? null,
     canUndo: historyCanUndo(history),
     canRedo: historyCanRedo(history),
     // 되돌리면 구간이 다른 값이 되므로 직전 거부 안내는 더 이상 그 구간의 이야기가 아니다

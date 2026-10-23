@@ -5,6 +5,7 @@ import styles from './StudioScreen.module.css';
 import { ThumbnailTile } from './ThumbnailTile';
 import { shortClock, TimelineToolbar } from './TimelineToolbar';
 import { TimelineTrackRow } from './TimelineTrackRow';
+import { VideoFilmstrip } from './VideoFilmstrip';
 import {
   MAX_RANGE_SECONDS,
   MAX_RANGE_TEXT,
@@ -250,7 +251,11 @@ export function MultitrackTimeline({
                   />
                 </span>
                 <div className={styles.lane} data-kind="video">
-                  <div className={styles.laneFilmstrip} aria-hidden />
+                  {state.filmstripSource !== null ? (
+                    <VideoFilmstrip source={state.filmstripSource} view={state.view} />
+                  ) : (
+                    <div className={styles.laneFilmstrip} aria-hidden />
+                  )}
                 </div>
               </div>
               {state.tracks.map((track, index) => {

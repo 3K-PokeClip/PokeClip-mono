@@ -318,6 +318,27 @@
   );
 }
 
+/* 영상 줄 필름띠(POK-389): 칸마다 그 시각 장면 그림 */
+.filmstrip {
+  display: flex;
+  width: 100%;
+  height: 100%;
+}
+
+.filmstripTile {
+  flex: 1;
+  min-width: 0;
+  background: rgb(120 140 210 / 0.12);
+  border-right: 1px solid rgb(0 0 0 / 0.35);
+}
+
+.filmstripTile img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
 .laneWave {
   width: 100%;
   height: 70%;

@@ -59,6 +59,7 @@ import {
 } from '@/features/player/recordingTimeline';
 import { useEditorVideoPlayback } from '../useEditorVideoPlayback';
 import { useTrackPreview } from '../trackAudio/useTrackPreview';
+import type { FilmstripSource } from './VideoFilmstrip';
 import {
   lookFromDocument,
   outputFromLook,
@@ -127,6 +128,13 @@ function timelineHeadroom(previewColumn: HTMLElement | null): number {
   const spilled = previewColumn.scrollHeight - previewColumn.clientHeight;
   return spare - spilled;
 }
+
+/** 필름띠 그림 모양: 원본 화면 전체를 그대로(층 하나, 자르지 않음) */
+const FULL_FRAME_OUTPUT: FilmstripSource['output'] = {
+  outputId: 'filmstrip',
+  aspect: 'VERT_9_16',
+  layers: [{ crop: { x: 0, y: 0, w: 1, h: 1 }, box: { x: 0, y: 0, w: 1, h: 1 } }],
+};
 
 /** 시안 그대로의 편집기 본체. 옵션(소스·동작)은 마운트 값이다 — 컨테이너가 key로 갈아 끼운다. */
 export function StudioEditor(options: ClipEditorOptions = {}) {
@@ -630,6 +638,22 @@ function WiredStudio({
     video: recording ? video.video : null,
   });
 
+  // 타임라인 필름띠(POK-389): 받아 둔 녹화 파일에서 원본 화면 그대로(자르지 않은 16:9) 칸마다 뽑는다
+  const loadedWindow = video.window;
+  const filmstripSource = useMemo<FilmstripSource | null>(
+    () =>
+      recording && video.src !== '' && loadedWindow !== null
+        ? {
+            src: video.src,
+            videoSecondsAt: (ms) => ms / 1000 - loadedWindow.startSeconds,
+            output: FULL_FRAME_OUTPUT,
+            fromSeconds: loadedWindow.startSeconds,
+            toSeconds: loadedWindow.endSeconds,
+          }
+        : null,
+    [recording, video.src, loadedWindow],
+  );
+
   const [save, setSave] = useState<SaveState>(() => ({
     recipeId: saved?.id ?? null,
     version: saved?.version ?? null,
@@ -989,6 +1013,7 @@ function WiredStudio({
         uploadLabel="영상 만들기"
         mixTrackId={trackId(0)}
         trackPreview={recording ? trackPreview : undefined}
+        filmstripSource={filmstripSource}
         tracks={trackSetup.tracks}
         initialTrackMuted={trackSetup.muted}
         initialTrackVolumes={trackSetup.volumes}
