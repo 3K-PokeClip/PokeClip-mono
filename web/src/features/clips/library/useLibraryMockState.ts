@@ -31,6 +31,7 @@ import {
   type LibrarySort,
 } from './libraryView';
 import { PRIVACY_LABEL } from '@/features/clips/editor/uploadInfo';
+import { useChannelStreamerId } from '@/features/channel/ChannelScope';
 
 // 시안 1g 보관함의 상태 (POK-251 — 실제 값).
 //
@@ -248,6 +249,8 @@ export interface LibraryMockState {
 }
 
 export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockState {
+  // 고른 채널(POK-390). ChannelScope가 채널이 바뀌면 화면을 다시 세운다
+  const streamerId = useChannelStreamerId();
   const { toast } = useToast();
   const [clips, setClips] = useState<LibraryClip[]>(() => options.clips ?? []);
   const [loading, setLoading] = useState(options.clips === undefined);
@@ -277,7 +280,7 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
     const generation = listGeneration.current;
     (async () => {
       try {
-        const [entries, me] = await Promise.all([fetchLibraryAll(), fetchMeLoose()]);
+        const [entries, me] = await Promise.all([fetchLibraryAll(streamerId), fetchMeLoose()]);
         if (!alive || generation !== listGeneration.current) return;
         const meId = me === null ? null : String(me.id);
         meIdRef.current = meId;
@@ -295,7 +298,7 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
     return () => {
       alive = false;
     };
-  }, [options.clips, tick]);
+  }, [options.clips, tick, streamerId]);
 
   // 만드는 중·올리는 중인 편집본이 있으면 10초마다 다시 읽는다 — 일꾼의 보고가 상태를 바꾼다.
   // 확인 중(checking)은 사람이 채널을 봐야 풀리므로 기다리지 않는다

@@ -3,6 +3,7 @@ import { render, screen } from '@testing-library/react';
 import { axe } from 'jest-axe';
 import { describe, expect, it } from 'vitest';
 import { LiveOfflineScreen } from '@/features/broadcast/livenow/LiveOfflineScreen';
+import { ChannelRelationContext } from '@/features/channel/ChannelScope';
 
 describe('LiveOfflineScreen', () => {
   it('시안 1b 오프라인 문구를 그대로 쓴다', () => {
@@ -50,5 +51,32 @@ describe('LiveOfflineScreen', () => {
     await act(async () => {
       expect(await axe(container)).toHaveNoViolations();
     });
+  });
+});
+
+describe('LiveOfflineScreen: 남의 채널(POK-390)', () => {
+  it('「연동 상태 확인」은 비활성 버튼이고 링크가 아니다: 지난 방송은 그대로 링크', () => {
+    render(
+      <ChannelRelationContext.Provider value="EDITOR">
+        <LiveOfflineScreen />
+      </ChannelRelationContext.Provider>,
+    );
+
+    expect(screen.getAllByRole('link')).toHaveLength(1);
+    expect(screen.getByRole('link', { name: '지난 방송 보기' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '연동 상태 확인' })).toBeDisabled();
+  });
+
+  it('내 채널이면 둘 다 링크다', () => {
+    render(
+      <ChannelRelationContext.Provider value="OWNER">
+        <LiveOfflineScreen />
+      </ChannelRelationContext.Provider>,
+    );
+
+    expect(screen.getByRole('link', { name: '연동 상태 확인' })).toHaveAttribute(
+      'href',
+      '/settings/channels',
+    );
   });
 });

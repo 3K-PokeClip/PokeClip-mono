@@ -32,8 +32,9 @@ public class LibraryController {
     public LibraryListResponse list(@RequestParam(required = false) String status,
                                     @RequestParam(required = false) Integer limit,
                                     @RequestParam(required = false) String cursor,
+                                    @RequestParam(required = false) String streamerId,
                                     @AuthenticationPrincipal Jwt jwt) {
-        return LibraryListResponse.from(service.list(jwt.getSubject(), status, limit, cursor));
+        return LibraryListResponse.from(service.list(jwt.getSubject(), status, limit, cursor, streamerId));
     }
 
     /** 404 두 갈래(없다·남의 것)가 같은 본문·같은 바닥 시간이다 — {@link NotFoundFloor}. */
