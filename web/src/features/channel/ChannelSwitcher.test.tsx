@@ -410,12 +410,17 @@ describe('ChannelSwitcher: 관리 모드에서 참여 채널 나가기', () => {
     expect(panel.getByRole('button', { name: '완료' })).not.toHaveAttribute('aria-pressed');
     expect(panel.getByRole('button', { name: '별하 채널에서 나가기' })).toBeInTheDocument();
     expect(panel.getByRole('button', { name: '콩스타 채널에서 나가기' })).toBeInTheDocument();
+    // 누를 수 없는 줄은 Tab에서 빠진다: 「완료」 다음은 곧장 「나가기」들이다(리뷰 8). jsdom은 배치가 없어 Tab 이동을
+    // 직접 재면 FocusScope가 창으로 돌린다 — 줄이 Tab 순서에서 빠졌는지로 본다
+    expect(rowOf(panel, '별하')).toHaveAttribute('tabindex', '-1');
+    expect(rowOf(panel, '콩스타')).toHaveAttribute('tabindex', '-1');
     await user.click(rowOf(panel, '별하'));
     expect(useSwitchCurtain.getState().curtain).toBeNull();
     expect(screen.getByRole('dialog', { name: '계정 전환' })).toBeInTheDocument();
 
     await user.click(panel.getByRole('button', { name: '완료' }));
     expect(panel.queryByRole('button', { name: /채널에서 나가기/ })).not.toBeInTheDocument();
+    expect(rowOf(panel, '별하')).not.toHaveAttribute('tabindex');
   });
 
   it('나가기는 창 안 덮개로 확인한 뒤에만 보낸다: 취소면 안 보내고, 나가면 그 줄만 사라지고 창은 그대로다', async () => {

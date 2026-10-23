@@ -305,6 +305,8 @@ function ChannelRow({
       // 관리 중엔 줄을 눌러도 바꾸지 않는다: 나가려다 그 채널로 들어가는 일이 없게
       data-managing={leaving || undefined}
       aria-disabled={leaving || undefined}
+      // Tab 순서에서도 뺀다: 누를 수 없는 줄이 채널 수만큼 정지점이 되면 「나가기」까지 멀어진다(PR #342 리뷰 8)
+      tabIndex={leaving ? -1 : undefined}
       onClick={leaving ? undefined : onClick}
     >
       {/* 남의 채널은 서버가 사진을 안 준다: 이름 글자 아바타 */}
