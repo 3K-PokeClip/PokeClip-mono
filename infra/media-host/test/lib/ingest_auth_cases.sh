@@ -63,13 +63,22 @@ readonly IA_DENY_PARAM='pcbench-m15-deny-tokens'
 readonly IA_OPS_TIMEOUT=200
 # 보조 컨테이너 라벨(본 파일의 정리 대상과 같다).
 readonly IA_BENCH_LABEL='com.pokeclip.bench=m15-ingest-auth'
+# 운영 스크립트 보조 컨테이너(ia::run_ops) 안에서 거부 목록 볼륨을 붙이는
+# 자리(운영 스크립트 기본값과 같다)와 그 컨테이너의 기본 PATH(Amazon Linux —
+# /bin · /sbin 은 /usr 아래를 가리킨다).
+readonly IA_OPS_DENY_DIR='/var/lib/pokeclip-media/ingest-auth/deny'
+readonly IA_OPS_BASE_PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin'
 
 ia_project=""
 ia_compose_file=""
 # 운영 스크립트 사례의 이음매 — ia::configure_ops 가 채운다.
 ia_ops_media_dir=""
+ia_ops_shared_dir=""
 ia_ops_work=""
-ia_ops_deny_dir=""
+ia_ops_deny_volume=""
+ia_ops_image=""
+# 운영 보조 이미지의 준비 실패 원인 — 본 파일이 채운다(비면 준비됨).
+ia_ops_image_reason=""
 # 지금 떠 있는 층(C0 · L · A · B)과 준비 결과 — 본 파일의 stack_up 이 채운다.
 ia_layer=""
 ia_layer_ok=0
@@ -749,33 +758,39 @@ User-Agent ${ia_big_ua_body} 바이트(기대 > ${IA_BODY_LIMIT})"
 #######################################
 # 운영 스크립트 사례(C13 · C15 · C18)의 이음매를 정한다. 본 파일이 층 B 를
 # 띄우기 전에 부른다.
-#   - 스크립트는 media-host 디렉터리의 bin/ 에서 돌린다(compose 프로젝트 ·
-#     파일은 ia::configure 의 것 — env 파일은 그 compose 파일 옆
-#     ingest-auth.env 여야 응답기가 읽는다).
-#   - 거부 목록 디렉터리는 응답기 /etc/ingest-auth 에 묶인 호스트 디렉터리다.
+#   - 스크립트는 보조 컨테이너(ia::run_ops) 안에서 media-host 디렉터리의 bin/
+#     으로 돈다(compose 프로젝트 · 파일은 ia::configure 의 것 — env 파일은 그
+#     compose 파일 옆 ingest-auth.env 여야 응답기가 읽는다).
+#   - 거부 목록은 응답기 /etc/ingest-auth 에 붙은 named volume 이다 — 보조
+#     컨테이너는 같은 볼륨을 IA_OPS_DENY_DIR 에 붙인다.
 #   - PATH 앞에 둘 이음매: aws(test/ops_fakebin/aws — 거부 목록 SSM 값은
-#     <작업 디렉터리>/state/ssm.param.<이름>) · chown(기록만 — root 아님) ·
-#     journalctl(컨테이너 ID 로 거른 docker logs).
+#     <작업 디렉터리>/state/ssm.param.<이름>) · journalctl(컨테이너 ID 로
+#     거른 docker logs). chown 은 진짜다 — 보조 컨테이너는 prod 처럼 root 다.
 # Globals:
-#   ia_ops_media_dir, ia_ops_work, ia_ops_deny_dir
+#   ia_ops_media_dir, ia_ops_shared_dir, ia_ops_work, ia_ops_deny_volume,
+#   ia_ops_image
 # Arguments:
-#   media-host 디렉터리, 작업 디렉터리(비어 있는 새 디렉터리), 거부 목록
-#   디렉터리.
+#   media-host 디렉터리, 보조 컨테이너에 같은 경로로 붙일 디렉터리(compose
+#   사본 · RUNTIME_DIR · MediaMTX 설정이 그 아래다 — 작업 디렉터리는 그 안
+#   ops/ 로 새로 만든다), 거부 목록 볼륨 이름, 보조 이미지.
 #######################################
 ia::configure_ops() {
   local fake="$1/test/ops_fakebin"
   ia_ops_media_dir="$1"
-  ia_ops_work="$2"
-  ia_ops_deny_dir="$3"
-  mkdir -p -- "$2/bin" "$2/state" "$2/log"
-  ln -sf -- "${fake}/aws" "$2/bin/aws"
-  ln -sf -- "${fake}/chown" "$2/bin/chown"
-  ln -sf -- "${fake}/journalctl_docker" "$2/bin/journalctl"
+  ia_ops_shared_dir="$2"
+  ia_ops_work="$2/ops"
+  ia_ops_deny_volume="$3"
+  ia_ops_image="$4"
+  mkdir -p -- "${ia_ops_work}/bin" "${ia_ops_work}/state" "${ia_ops_work}/log"
+  ln -sf -- "${fake}/aws" "${ia_ops_work}/bin/aws"
+  ln -sf -- "${fake}/journalctl_docker" "${ia_ops_work}/bin/journalctl"
 }
 
 #######################################
-# 운영 스크립트 사례의 선행 조건 — 층 B · 이음매(ia::configure_ops) · 스크립트
-# 실행 파일 · env 파일 자리. 옛 호출 꼴(첫 인자가 디렉터리)은 실패로 남긴다 —
+# 운영 스크립트 사례의 선행 조건 — 층 B · 이음매(ia::configure_ops) · 보조
+# 이미지 · 거부 목록 볼륨(없으면 docker run 이 라벨 없는 새 볼륨을 만든다) ·
+# 스크립트 실행 파일 · env 파일 자리. 옛 호출 꼴(첫 인자가 디렉터리)은 실패로
+# 남긴다 —
 # 본 파일이 check_c13 · c15 · c18 을 따로 정의해 이 lib 의 본문을 가리면
 # 본문 없이 통과하지 않게.
 # Arguments:
@@ -789,8 +804,16 @@ require_ops_scripts() {
 c15 · c18 정의를 지워야 lib 본문이 돈다"
     return 1
   fi
-  if [[ -z "${ia_ops_work}" || ! -d "${ia_ops_deny_dir}" ]]; then
+  if [[ -z "${ia_ops_work}" || -z "${ia_ops_deny_volume}" ]]; then
     harness::add_reason '운영 스크립트 이음매 없음(ia::configure_ops 미호출)'
+    return 1
+  fi
+  if [[ -n "${ia_ops_image_reason}" ]]; then
+    harness::add_reason "운영 보조 이미지 준비 실패 — ${ia_ops_image_reason}"
+    return 1
+  fi
+  if ! docker volume inspect "${ia_ops_deny_volume}" >/dev/null 2>&1; then
+    harness::add_reason "거부 목록 볼륨 ${ia_ops_deny_volume} 없음"
     return 1
   fi
   for rel in "$@"; do
@@ -808,27 +831,48 @@ c15 · c18 정의를 지워야 lib 본문이 돈다"
 }
 
 #######################################
-# 운영 스크립트를 시험 이음매로 돌리고 판정 줄을 낸다.
+# 운영 스크립트를 보조 컨테이너 안에서 시험 이음매로 돌리고 판정 줄을 낸다.
+# 보조 컨테이너는 docker.sock 으로 엔진을 쓰고, media-host 디렉터리(읽기
+# 전용)와 공유 디렉터리를 같은 경로로, 거부 목록 볼륨을 IA_OPS_DENY_DIR 에
+# 붙인다 — compose 파일 · env_file 상대 경로 · bind 원본이 호스트에서와 같게
+# 풀린다. compose 보간 값(PCBENCH_* · RUNTIME_DIR)과 시험 env(MEDIA_OPS_*)는
+# 이 셸이 export 한 것을 이름으로만 넘긴다(값을 argv 에 싣지 않는다).
 # Globals:
-#   ia_ops_media_dir, ia_ops_work, ia_ops_deny_dir, ia_project, ia_compose_file
+#   ia_ops_media_dir, ia_ops_shared_dir, ia_ops_work, ia_ops_deny_volume,
+#   ia_ops_image, ia_project, ia_compose_file
 # Arguments:
 #   스크립트 상대 경로, 인자 ….
 # Outputs:
 #   표준 출력(판정 줄).
 #######################################
 ia::run_ops() {
-  local script="${ia_ops_media_dir}/$1"
+  local script="${ia_ops_media_dir}/$1" name var
+  local -a args
   shift
-  PATH="${ia_ops_work}/bin:${PATH}" \
-    PCBENCH_FAKE_LIB="${ia_ops_media_dir}/test/ops_fakebin/record.sh" \
-    PCBENCH_FAKE_LOG_DIR="${ia_ops_work}/log" \
-    PCBENCH_FAKE_STATE_DIR="${ia_ops_work}/state" \
-    MEDIA_COMPOSE_PROJECT="${ia_project}" \
-    MEDIA_COMPOSE_FILE="${ia_compose_file}" \
-    INGEST_AUTH_DENY_DIR="${ia_ops_deny_dir}" \
-    INGEST_AUTH_DENYLIST_PARAM="${IA_DENY_PARAM}" INGEST_AUTH_GID=10003 \
-    harness::bounded "${IA_OPS_TIMEOUT}" "${script}" "$@" \
-    2>"${ia_ops_work}/ops.err" || true
+  name="$(ia::name ops)"
+  docker rm -f "${name}" >/dev/null 2>&1 || true
+  args=(run --rm --name "${name}" --label "${IA_BENCH_LABEL}" --network none
+    --security-opt no-new-privileges:true
+    -v /var/run/docker.sock:/var/run/docker.sock
+    -v "${ia_ops_media_dir}:${ia_ops_media_dir}:ro"
+    -v "${ia_ops_shared_dir}:${ia_ops_shared_dir}"
+    -v "${ia_ops_deny_volume}:${IA_OPS_DENY_DIR}"
+    -e "PATH=${ia_ops_work}/bin:${IA_OPS_BASE_PATH}"
+    -e "PCBENCH_FAKE_LIB=${ia_ops_media_dir}/test/ops_fakebin/record.sh"
+    -e "PCBENCH_FAKE_LOG_DIR=${ia_ops_work}/log"
+    -e "PCBENCH_FAKE_STATE_DIR=${ia_ops_work}/state"
+    -e "MEDIA_COMPOSE_PROJECT=${ia_project}"
+    -e "MEDIA_COMPOSE_FILE=${ia_compose_file}"
+    -e "INGEST_AUTH_DENY_DIR=${IA_OPS_DENY_DIR}"
+    -e "INGEST_AUTH_DENYLIST_PARAM=${IA_DENY_PARAM}" -e INGEST_AUTH_GID=10003)
+  for var in $(compgen -e); do
+    case "${var}" in
+      PCBENCH_FAKE_*) ;;
+      PCBENCH_* | RUNTIME_DIR | MEDIA_OPS_*) args+=(-e "${var}") ;;
+    esac
+  done
+  harness::bounded "${IA_OPS_TIMEOUT}" docker "${args[@]}" "${ia_ops_image}" \
+    "${script}" "$@" 2>"${ia_ops_work}/ops.err" || true
 }
 
 #######################################
@@ -847,10 +891,35 @@ ia::expect_ops() {
   fi
 }
 
-# 가짜 SSM 거부 목록 값(머리 줄 + 토큰 줄 …)을 둔다.
+#######################################
+# 가짜 SSM 거부 목록 값(머리 줄 + 토큰 줄 …)을 둔다. 읽는 쪽(보조 컨테이너의
+# 가짜 aws)과 같은 리눅스 커널에서 쓴다 — 맥 호스트가 쓴 파일을 컨테이너가
+# virtiofs 로 읽지 않게.
+# Arguments:
+#   토큰 ….
+#######################################
 ia::ssm_deny() {
-  printf '%s\n' '# pokeclip deny-tokens v1' "$@" \
-    >"${ia_ops_work}/state/ssm.param.${IA_DENY_PARAM}"
+  local file="${ia_ops_work}/state/ssm.param.${IA_DENY_PARAM}"
+  if ! printf '%s\n' '# pokeclip deny-tokens v1' "$@" | docker run --rm -i \
+    --label "${IA_BENCH_LABEL}" --network none \
+    -v "${ia_ops_work}/state:${ia_ops_work}/state" "${ia_ops_image}" \
+    bash -c 'cat >"$1"' bash "${file}"; then
+    harness::add_reason '가짜 SSM 거부 목록 값을 쓰지 못함'
+    return 1
+  fi
+}
+
+#######################################
+# 거부 목록 볼륨의 디렉터리 · 파일 소유와 모드를 보조 컨테이너로 읽는다(맥
+# 호스트에서 볼륨을 읽지 않는다).
+# Outputs:
+#   두 줄 「uid:gid 모드」(디렉터리 · 파일 순). 못 읽으면 실패.
+#######################################
+ia::deny_owner_modes() {
+  docker run --rm --label "${IA_BENCH_LABEL}" --network none \
+    -v "${ia_ops_deny_volume}:${IA_OPS_DENY_DIR}:ro" "${ia_ops_image}" \
+    stat -c '%u:%g %a' "${IA_OPS_DENY_DIR}" "${IA_OPS_DENY_DIR}/deny-tokens" \
+    2>/dev/null
 }
 
 # 서비스 컨테이너 ID(실행 중 하나).
@@ -967,25 +1036,33 @@ check_c13() {
 # (재생성 없이는) 거부 유지 → --release 뒤 풀림.
 #######################################
 check_c15() {
-  local ok=0 ia_id
+  local ok=0 ia_id owner changed=그대로
   require_ops_scripts "${IA_DENY_SYNC_SCRIPT}" || return 1
   ia::sender_stop b-c13
   ia_id="$(ia::service_id ingest-auth)"
-  ia::ssm_deny "${IA_STREAM_TOKEN}"
+  ia::ssm_deny "${IA_STREAM_TOKEN}" || ok=1
   ia::expect_ops 'INGEST AUTH DENY SYNC OK tokens=1' "${IA_DENY_SYNC_SCRIPT}" \
     || ok=1
+  owner="$(ia::deny_owner_modes)" || owner=""
+  if [[ "${owner}" != $'0:10003 750\n0:10003 640' ]]; then
+    harness::add_reason "거부 목록 소유 · 모드 「$(printf '%s' "${owner}" \
+      | tr '\n' ';')」(기대 0:10003 750;0:10003 640)"
+    ok=1
+  fi
   if [[ -z "${ia_id}" || "$(ia::service_id ingest-auth)" != "${ia_id}" ]]; then
     harness::add_reason 'deny-sync(--release 없음)가 응답기를 바꿈'
     ok=1
   fi
   ia::expect_rejected b-c15a "${IA_PASSPHRASE}" '덧붙인 토큰 송출' || ok=1
-  ia::ssm_deny
+  ia::ssm_deny || ok=1
   ia::expect_ops 'INGEST AUTH DENY SYNC OK tokens=0' "${IA_DENY_SYNC_SCRIPT}" \
     || ok=1
   ia::expect_rejected b-c15b "${IA_PASSPHRASE}" '목록에서 뺀 뒤(재생성 전)' \
     || ok=1
   ia::expect_ops 'INGEST AUTH DENY SYNC OK release tokens=0' \
     "${IA_DENY_SYNC_SCRIPT}" --release || ok=1
+  [[ "$(ia::service_id ingest-auth)" == "${ia_id}" ]] || changed=바뀜
+  printf '기록 C15 --release — 응답기 컨테이너 ID %s\n' "${changed}"
   ia::expect_accepted b-c15c "${IA_PASSPHRASE}" '--release 뒤 송출' || ok=1
   return "${ok}"
 }
@@ -1021,7 +1098,7 @@ check_c18() {
     harness::add_reason '허용된 송출(b-c15c)이 없음(C15 선행)'
     return 1
   fi
-  ia::ssm_deny "${IA_STREAM_TOKEN}"
+  ia::ssm_deny "${IA_STREAM_TOKEN}" || ok=1
   ia::expect_ops 'INGEST AUTH DENY SYNC OK tokens=1' "${IA_DENY_SYNC_SCRIPT}" \
     || ok=1
   out="$(ia::compose exec -T ingest-auth /ingest-auth cut \

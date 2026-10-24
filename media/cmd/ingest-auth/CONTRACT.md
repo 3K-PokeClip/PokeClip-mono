@@ -525,7 +525,10 @@ kty 결정이 아닌 **확인 · 실측 항목**(결정 없이 M15 착수 때 �
   401). **cut 도 닫힘**: C18(실물 cut — 출력의 `"kicked":1` · 그 연결이 사라짐 · 같은 토큰 재송출 거부,
   M15 c5 — 45616a46 에서 GREEN). 306f7a3e 부터 C18 은 cut 의 종료 0 ·
   `ingestauth_cut_completed` · `"kicked":1` · 조회 성공한 소멸(경로 상태 `idle` — `error` 는
-  조회 실패)까지 단언한다.
+  조회 실패)까지 단언한다. M15 c12 부터 C13 · C15 · C18 의 운영 스크립트는
+  보조 컨테이너 안에서 돌고 거부 목록은 named volume 이다 — 맥 호스트
+  bind(virtiofs)에서 rename 직후 첫 읽기가 잘려 C18 이 흔들린 시험 경로를
+  걷었다(제품 무변경).
 - 응답기 인증 포트(8080 대) · 고정 healthz 8081 이 prod 포트 값과 겹치지 않는지(D1). — **이관**: 렌더 시험이
   시험 값으로 보고, prod 값은 M9 모듈 단언(`infra/media-host/README.md` 「후속」 M9 행).
 - `docker compose restart ingest-auth` 가 시작 스크립트의 전체 종료를 건드리지 않는지(D8). — **닫힘**:

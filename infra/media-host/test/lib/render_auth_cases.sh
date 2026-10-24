@@ -474,14 +474,25 @@ auth_cases::check_43() {
 # 디렉터리(/run/secrets)이고 prod 대상이 그 아래 파일이면 덮는다고 친다(시험은
 # 비밀 셋을 디렉터리 볼륨 하나로 준다). 거부 목록 · 상태 디렉터리는 대상이
 # 정확히 같아야 한다 — 거부 목록을 파일 bind 로 바꾸면(원자 rename 이 반영되지
-# 않는다) 여기서도 FAIL 이다. 4C 주소 값 · 시험 전용 depends_on(도우미 · 가짜
+# 않는다) 여기서도 FAIL 이다. 응답기 마운트는 종류(bind · volume)도 같아야
+# 한다. 예외는 test_volume_targets 하나 — prod bind 를 시험이 named volume 으로
+# 주는 대상이다(대상 · ro 는 그대로 대조한다): 비밀 · 상태(로컬 엔진 bind 가
+# 소유를 옮기지 못한다)와 거부 목록(맥 virtiofs 로는 호스트 rename 직후 첫
+# 읽기가 잘린다 — M15 c12). 4C 주소 값 · 시험 전용 depends_on(도우미 · 가짜
 # 4C) · healthcheck start_interval 은 뺀다.
 # shellcheck disable=SC2016 # jq 프로그램 — $ 는 jq 변수다.
 readonly IA_DRIFT_PROGRAM='
 def mounts: [(.volumes // [])[] | {t: .target, ro: (.read_only // false)}];
+def typed_mounts: [(.volumes // [])[]
+  | {t: .target, ro: (.read_only // false), ty: (.type // null)}];
 def secret_dir: "/run/secrets";
+def test_volume_targets:
+  [secret_dir, "/var/lib/ingest-auth", "/etc/ingest-auth"];
 def covers($m; $n): $m.t == $n.t
   or ($n.t == secret_dir and ($m.t | startswith(secret_dir + "/")));
+def same_kind($m; $n): $m.ty == $n.ty
+  or ($m.ty == "bind" and $n.ty == "volume"
+    and (test_volume_targets | any(. == $n.t)));
 def core: {network_mode: (.network_mode // null),
   restart: (.restart // null), read_only: (.read_only // null),
   user: (.user // null), security_opt: ((.security_opt // []) | sort),
@@ -509,10 +520,13 @@ $p[0].services as $ps | $t[0].services as $ts
   else
     diff("ingest-auth"; $ps["ingest-auth"] | core; $ts["ingest-auth"] | core),
     diff("mediamtx"; $ps.mediamtx | mtx_core; $ts.mediamtx | mtx_core),
-    (($ps["ingest-auth"] | mounts) as $pm | ($ts["ingest-auth"] | mounts) as $tm
+    (($ps["ingest-auth"] | typed_mounts) as $pm
+     | ($ts["ingest-auth"] | typed_mounts) as $tm
      | ($pm[] as $m
-        | select([$tm[] | select(covers($m; .) and .ro == $m.ro)] | length != 1)
-        | "ingest-auth 마운트 \($m.t)(ro=\($m.ro)): 시험에서 덮는 마운트가 1개가 아님"),
+        | select([$tm[] | select(covers($m; .) and .ro == $m.ro
+            and same_kind($m; .))] | length != 1)
+        | "ingest-auth 마운트 \($m.t)(ro=\($m.ro) · \($m.ty)): "
+          + "시험에서 덮는 마운트가 1개가 아님"),
        ($tm[] as $n | select([$pm[] | select(covers(.; $n))] | length == 0)
         | "ingest-auth 시험 마운트 \($n.t): prod 에 대응 없음"))
   end

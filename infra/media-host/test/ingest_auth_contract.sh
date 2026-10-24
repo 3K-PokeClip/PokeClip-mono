@@ -16,7 +16,8 @@
 #       아니라 사례다 — 개수가 어긋나도 채워서 층을 띄운다.
 #
 # 이미지는 모두 이 트리에서 로컬 빌드한다(MediaMTX = media/Dockerfile.mtxhook ·
-# 응답기 = media/Dockerfile.ingest-auth · 에코 = test/echo). 송출기는 images.json
+# 응답기 = media/Dockerfile.ingest-auth · 에코 = test/echo · 운영 보조 =
+# test/ops_runner). 송출기는 images.json
 # 의 loopback_sender 핀이다(로컬에 없으면 받는다). compose 는
 # test/compose.ingest-auth.yml 이다.
 #
@@ -27,13 +28,16 @@
 # 실패는 층 L 만 막는다). 시험 compose 의 응답기 서비스(env · 마운트
 # 대상 · healthcheck 등)는 render_test 사례 44 가 운영 compose 렌더본과
 # 대조한다. 운영 스크립트 사례(C13 · C15 · C18)는 bin/ 의 실물 스크립트를
-# 시험 이음매(lib 의 ia::configure_ops — 가짜 SSM · 기록만 하는 chown · docker
-# logs 저널)로 돌린다. compose 파일은 scratch 사본이다 — 응답기 env_file 이
-# compose 파일 옆 ingest-auth.env(운영 스크립트의 규칙)이게. 거부 목록은 scratch
-# 의 호스트 디렉터리를 bind 한다. 가짜 chown 은 기록만 하므로 거부 목록의
-# root:10003 소유는 여기서 보지 않는다 — ops 시험(ingest_auth_ops_test.sh)의
-# chown argv 단언 몫이다. 스크립트가 없으면 「없음」 으로 실패한다. 건너뛰는
-# 갈래는 없다.
+# 보조 컨테이너(test/ops_runner — docker CLI · compose 가 든 이미지 · prod
+# 처럼 root) 안에서 시험 이음매(lib 의 ia::run_ops — 가짜 SSM · docker logs
+# 저널)로 돌린다. 보조 컨테이너는 scratch 와 media-host 디렉터리를 같은
+# 경로로 붙인다. compose 파일은 scratch 사본이다 — 응답기 env_file 이 compose
+# 파일 옆 ingest-auth.env(운영 스크립트의 규칙)이게. 거부 목록은 named
+# volume 이다 — 쓰는 쪽(deny-sync)과 읽는 쪽(응답기)이 한 리눅스 커널에 있게
+# (맥 호스트 디렉터리 bind 는 virtiofs 라 호스트 rename 직후 첫 읽기가 옛
+# 크기로 잘려 C18 이 흔들렸다 — M15 c18-flake 조사). chown 이 진짜라 거부
+# 목록의 root:10003 소유 · 모드도 C15 가 본다. 스크립트가 없으면 「없음」 으로
+# 실패한다. 건너뛰는 갈래는 없다.
 #
 # 실험 식별: compose 프로젝트 pcbench-m15-ingest-auth · 라벨
 # com.pokeclip.bench=m15-ingest-auth(컨테이너 · 망 · 볼륨). 호스트 포트 게시 0.
@@ -77,6 +81,9 @@ readonly IA_COMPOSE="${TEST_DIR}/compose.ingest-auth.yml"
 readonly MTX_IMAGE="${PROJECT}/mediamtx:local"
 readonly INGEST_AUTH_IMAGE="${PROJECT}/ingest-auth:local"
 readonly ECHO_IMAGE="${PROJECT}/echo:local"
+readonly OPS_IMAGE="${PROJECT}/ops:local"
+# 시험 compose 의 거부 목록 볼륨(ia-deny)이 엔진에서 갖는 이름.
+readonly DENY_VOLUME="${PROJECT}_ia-deny"
 readonly HELPER_IMAGE='alpine:3.22'
 readonly MTX_TEMPLATE_REL='mediamtx.yml.tmpl'
 # 이미지 빌드 한 번의 상한(초) — 첫 빌드는 모듈 받기를 품는다.
@@ -101,8 +108,6 @@ ia_build_reason=""
 sender_image=""
 # 시험 compose 의 scratch 사본(export_compose_env 가 만든다).
 ia_compose_copy=""
-# 응답기 /etc/ingest-auth 에 bind 하는 거부 목록 호스트 디렉터리.
-deny_dir=""
 # 층별 준비 실패 원인 — 옛 모드 고르기(층 L) · 응답기 모드 고르기(층 A · B).
 legacy_reason=""
 auth_reason=""
@@ -121,15 +126,17 @@ compose_all() {
 }
 
 #######################################
-# 이 프로젝트의 컨테이너(일회성 run 포함)를 모두 지우고 볼륨 · 망을 내린다.
+# 이 프로젝트의 컨테이너(일회성 run 포함)와 이 라벨의 보조 컨테이너를 모두
+# 지우고 볼륨 · 망을 내린다(보조 컨테이너가 거부 목록 볼륨을 쥐고 있으면 첫
+# down 이 볼륨을 못 지운다 — 지운 뒤 한 번 더 내린다).
 #######################################
 stack_down() {
   local ids
   compose_all down -v --remove-orphans >"${scratch}/down.log" 2>&1 \
     || printf '경고: compose down 실패: %s\n' \
       "$(harness::log_tail "${scratch}/down.log")" >&2
-  ids="$(docker ps -aq --filter "label=com.docker.compose.project=${PROJECT}" \
-    2>/dev/null)" || ids=""
+  ids="$(docker ps -aq --filter "label=${PROJECT_LABEL}" 2>/dev/null; \
+    docker ps -aq --filter "label=${BENCH_LABEL}" 2>/dev/null)" || ids=""
   if [[ -n "${ids}" ]]; then
     # shellcheck disable=SC2086 # ID 목록을 낱낱의 인자로 넘긴다.
     docker rm -f ${ids} >/dev/null 2>&1 || true
@@ -286,10 +293,11 @@ $(harness::log_tail "${scratch}/pull.log")"
 }
 
 #######################################
-# 이미지 셋을 빌드한다. MediaMTX · 에코가 없으면 모든 층이, 응답기가 없으면
-# 층 B 만 준비 실패다.
+# 이미지 넷을 빌드한다. MediaMTX · 에코가 없으면 모든 층이, 응답기가 없으면
+# 층 B 만, 운영 보조가 없으면 운영 스크립트 사례(C13 · C15 · C18)만 준비
+# 실패다.
 # Globals:
-#   mtx_built, ia_built, ia_build_reason
+#   mtx_built, ia_built, ia_build_reason, ia_ops_image_reason
 #######################################
 build_images() {
   local why
@@ -306,26 +314,24 @@ build_images() {
   else
     ia_build_reason="${why}"
   fi
+  if ! why="$(build_image "${OPS_IMAGE}" "${TEST_DIR}/ops_runner" '')"; then
+    ia_ops_image_reason="${why}"
+  fi
 }
 
 #######################################
 # 응답기 원본 파일을 쓴다 — 가짜 비밀은 RUNTIME_DIR(소유 · 모드는
-# ingest-auth-prep 이 볼륨에서 맞춘다), 거부 목록(머리 줄)은 bind 하는 호스트
-# 디렉터리(0750 · 0640 — 로컬 엔진 OrbStack 의 bind 는 파일을 읽는 컨테이너
-# uid 의 것으로 보이게 해 응답기가 읽는다 · 2026-10-24 실측), IP 한도 env
-# 파일은 compose 사본 옆.
+# ingest-auth-prep 이 볼륨에서 맞춘다 — 거부 목록 머리 줄도 그 도우미가
+# 볼륨에 둔다), IP 한도 env 파일은 compose 사본 옆.
 # Globals:
-#   RUNTIME_DIR, deny_dir, ia_compose_copy
+#   RUNTIME_DIR, ia_compose_copy
 #######################################
 write_responder_inputs() {
   local src="${RUNTIME_DIR}/ingest-auth-src"
-  mkdir -p -- "${src}" "${deny_dir}"
+  mkdir -p -- "${src}"
   printf '%s\n' "${IA_BASIC_PASS}" >"${src}/ingest_basic_pass"
   printf '%s\n' "${IA_API_PASS}" >"${src}/mtx_api_pass"
   printf '%s\n' "${IA_RESOLVE_TOKEN}" >"${src}/stream_key_resolve_token"
-  printf '# pokeclip deny-tokens v1\n' >"${deny_dir}/deny-tokens"
-  chmod 0750 "${deny_dir}"
-  chmod 0640 "${deny_dir}/deny-tokens"
   printf 'INGEST_AUTH_IP_LIMIT=on\n' \
     >"$(dirname -- "${ia_compose_copy}")/ingest-auth.env"
 }
@@ -348,8 +354,6 @@ export_compose_env() {
   export PCBENCH_RESOLVE_URL='http://resolvestub:28082'
   export PCBENCH_MTX_CONFIG="${scratch}/mediamtx.c0.yml"
   export RUNTIME_DIR="${scratch}/runtime"
-  # 시험 compose 의 거부 목록 bind 원본(RUNTIME_DIR 아래 고정 이름).
-  deny_dir="${RUNTIME_DIR}/ingest-auth-deny"
   ia_compose_copy="${scratch}/compose/${IA_COMPOSE##*/}"
   mkdir -p -- "${RUNTIME_DIR}" "${ia_compose_copy%/*}"
   cp -- "${IA_COMPOSE}" "${ia_compose_copy}"
@@ -493,7 +497,8 @@ setup() {
   env_ready=1
   export_compose_env
   ia::configure "${PROJECT}" "${ia_compose_copy}"
-  ia::configure_ops "${MEDIA_HOST_DIR}" "${scratch}/ops" "${deny_dir}"
+  ia::configure_ops "${MEDIA_HOST_DIR}" "${scratch}" "${DENY_VOLUME}" \
+    "${OPS_IMAGE}"
   render_configs
   (( mtx_built )) || return 1
 }

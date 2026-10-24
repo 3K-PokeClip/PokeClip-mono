@@ -25,13 +25,14 @@
 #   - 응답기 비밀 · 상태: prod 는 호스트 tmpfs bind 이고, 여기서는 named
 #     volume 에 도우미가 prod 와 같은 소유 · 모드(비밀 10003 0400 · 상태 10003
 #     0700)로 넣는다 — 로컬 엔진의 bind 는 호스트 소유를 그대로 옮기지 못한다.
-#   - 거부 목록: prod 와 같이 호스트 디렉터리(RUNTIME_DIR/ingest-auth-deny)
-#     bind 다 — 운영 스크립트(deny-sync)가 그 안에서 rename 한다(C15 ·
-#     C18). 소유는 바꾸지 못한다 — 로컬 엔진 OrbStack 은 bind 파일을 읽는
-#     컨테이너 uid 의 것으로 보여, 0750 · 0640 이면 응답기가 읽는다
-#     (2026-10-24 실측). 리눅스 엔진에서는 호스트 소유가 그대로 옮겨져
-#     응답기(uid 10003)가 못 읽어 층 B 준비가 실패할 수 있다 — 이 시험은 로컬
-#     OrbStack 전용이다.
+#   - 거부 목록: prod 는 호스트 디렉터리 bind 이고, 여기서는 named volume
+#     (ia-deny)이다. 운영 스크립트(deny-sync)는 보조 컨테이너 안에서 같은
+#     볼륨에 rename 한다(C15 · C18) — 쓰는 쪽과 읽는 쪽(응답기)이 한 리눅스
+#     커널에 있다. 맥 호스트 디렉터리 bind 는 virtiofs 라, 호스트가 rename 한
+#     직후 응답기의 첫 읽기가 옛 크기로 잘려 C18 이 흔들렸다(M15 c18-flake
+#     조사 · 2026-10-24). 처음 소유 · 모드(root:10003 · 0750 · 0640)는 도우미가
+#     시작 스크립트처럼 두고, 그 뒤는 운영 스크립트가 맞춘다. render_test 사례
+#     44 는 이 대상을 명시 예외로 둔다(대상 · ro 는 그대로 대조).
 #   - env_file: 이 파일 옆 ingest-auth.env(prod 와 같은 상대 경로) — 시험은 이
 #     파일을 scratch 에 복사해 그 옆에 env 파일을 둔다.
 #   - healthcheck: prod 꼴에 start_interval 2s 를 더한다(시작 유예 안에서
@@ -100,8 +101,9 @@ services:
       core: 0
     labels: *bench-labels
 
-  # 층 B — 응답기 비밀 · 상태 디렉터리를 prod 와 같은 소유 · 모드로
-  # 맞추고 끝난다. 원본은 시험이 RUNTIME_DIR 에 쓴 가짜 값이다.
+  # 층 B — 응답기 비밀 · 상태 · 거부 목록 디렉터리를 prod 와 같은 소유 ·
+  # 모드로 맞추고 끝난다. 비밀 원본은 시험이 RUNTIME_DIR 에 쓴 가짜 값이고,
+  # 거부 목록은 머리 줄만 둔다(토큰 0건).
   ingest-auth-prep:
     profiles:
       - real
@@ -122,6 +124,10 @@ services:
           /secrets/stream_key_resolve_token
         chown 10003:10003 /state
         chmod 0700 /state
+        printf '# pokeclip deny-tokens v1\n' >/deny/deny-tokens
+        chown 0:10003 /deny /deny/deny-tokens
+        chmod 0750 /deny
+        chmod 0640 /deny/deny-tokens
     volumes:
       - type: bind
         source: ${RUNTIME_DIR:?}/ingest-auth-src
@@ -131,6 +137,7 @@ services:
           create_host_path: false
       - ia-secrets:/secrets
       - ia-state:/state
+      - ia-deny:/deny
     labels: *bench-labels
 
   # 층 B — 실물 응답기(계획 4-c4 꼴). 4C 는 기본 망의 resolvestub 이다.
@@ -170,12 +177,7 @@ services:
         required: true
     volumes:
       - ia-secrets:/run/secrets:ro
-      - type: bind
-        source: ${RUNTIME_DIR:?}/ingest-auth-deny
-        target: /etc/ingest-auth
-        read_only: true
-        bind:
-          create_host_path: false
+      - ia-deny:/etc/ingest-auth:ro
       - ia-state:/var/lib/ingest-auth
     healthcheck:
       test: ["CMD", "/ingest-auth", "healthcheck"]
@@ -283,4 +285,6 @@ volumes:
   ia-secrets:
     labels: *bench-labels
   ia-state:
+    labels: *bench-labels
+  ia-deny:
     labels: *bench-labels
