@@ -216,16 +216,19 @@ run "forces_tls_and_logs_connections" {
     error_message = "파라미터 그룹이 pokeclip-prod-pg17 · postgres17 이 아니다."
   }
 
-  # 둘 다 재부팅 없이 바로 적용된다(Dynamic) — pending-reboot 면 다음 재부팅까지
-  # TLS 강제 · 접속 기록이 걸리지 않는다.
+  # log_connections 는 재부팅 없이 바로 적용된다(Dynamic) — pending-reboot 면
+  # 다음 재부팅까지 접속 기록이 걸리지 않는다. rds.force_ssl 은 값 1 이 PG17
+  # 엔진 기본값과 같아 AWS 가 source=system · pending-reboot 로 돌려주므로
+  # pending-reboot 로 맞춘다(immediate 면 apply 뒤 plan 이 늘 「1 to change」).
+  # 실제 값은 처음부터 1 이라 TLS 강제는 그대로다.
   assert {
     condition = {
       for p in aws_db_parameter_group.this.parameter : p.name => [p.value, p.apply_method]
       } == {
-      "rds.force_ssl"   = ["1", "immediate"]
+      "rds.force_ssl"   = ["1", "pending-reboot"]
       "log_connections" = ["1", "immediate"]
     }
-    error_message = "파라미터가 정확히 rds.force_ssl=1 · log_connections=1(둘 다 apply_method = immediate)이 아니다."
+    error_message = "파라미터가 정확히 rds.force_ssl=1(pending-reboot) · log_connections=1(immediate)이 아니다."
   }
 
   assert {
