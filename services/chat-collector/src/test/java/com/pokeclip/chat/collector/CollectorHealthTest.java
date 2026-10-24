@@ -396,8 +396,8 @@ class CollectorHealthTest extends IntegrationTestSupport {
                 Instant::now, donationBuffer, counters);
         assertThat(health.health().getDetails()).containsEntry("relay", "ok");
 
-        tiny.offer("s-relay", new RelayPayload.Chat(Instant.EPOCH, "n", "s", null, "keep"));
-        tiny.offer("s-relay", new RelayPayload.Chat(Instant.EPOCH, "n", "s", null, "dropped"));
+        tiny.offer("s-relay", new RelayPayload.Chat(Platform.CHZZK, Instant.EPOCH, "n", "s", null, "keep"));
+        tiny.offer("s-relay", new RelayPayload.Chat(Platform.CHZZK, Instant.EPOCH, "n", "s", null, "dropped"));
         assertThat(counters.relayDropped()).as("양성 대조 — clip 쪽 버림은 0이다, 켜진다면 바구니 갈래 때문이다").isZero();
         assertThat(counters.bufferDropped()).isEqualTo(1);
 

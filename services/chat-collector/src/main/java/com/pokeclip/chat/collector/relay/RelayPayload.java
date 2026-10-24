@@ -34,7 +34,11 @@ public sealed interface RelayPayload permits RelayPayload.Chat, RelayPayload.Don
 
     Instant time();
 
-    record Chat(Instant time, String nickname, String senderChannelId, String role, String text)
+    /**
+     * {@code platform}은 그 채팅이 들어온 플랫폼이다(POK-466). 한 방송을 치지직과 SOOP에 같이 내보내면 두 플랫폼 채팅이 한 줄기로
+     * 섞이므로 화면이 이것으로 줄마다 플랫폼을 보인다. 창구({@code ChatWindowItem})도 같은 이름으로 싣는다
+     */
+    record Chat(Platform platform, Instant time, String nickname, String senderChannelId, String role, String text)
             implements RelayPayload {
 
         public Chat {
@@ -58,8 +62,9 @@ public sealed interface RelayPayload permits RelayPayload.Chat, RelayPayload.Don
     /**
      * @param senderChannelId 후원자 채널({@code donatorChannelId}). 창구도 이 칸 이름으로 준다
      * @param amount          숫자로 못 읽었으면 null — 표와 같다
+     * @param platform        그 후원이 들어온 플랫폼(POK-466). 채팅과 같다
      */
-    record Donation(Instant time, String nickname, String senderChannelId, Long amount,
+    record Donation(Platform platform, Instant time, String nickname, String senderChannelId, Long amount,
                     String donationType, String text) implements RelayPayload {
 
         public Donation {

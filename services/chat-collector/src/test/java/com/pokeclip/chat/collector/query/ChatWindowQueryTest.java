@@ -1,5 +1,6 @@
 package com.pokeclip.chat.collector.query;
 
+import com.pokeclip.chat.collector.Platform;
 import com.pokeclip.chat.collector.query.ChatWindowCursor.Cursor;
 import com.pokeclip.chat.collector.support.IntegrationTestSupport;
 import com.pokeclip.chat.collector.sync.SyncProperties;
@@ -45,7 +46,7 @@ class ChatWindowQueryTest extends IntegrationTestSupport {
 
     private static final List<String> STREAMS =
             List.of("win-off", "win-same", "win-axis", "win-axis-d", "win-idx", "win-kinds",
-                    "win-prev", "win-this");
+                    "win-prev", "win-this", "win-dual");
 
     /** 지문(channel_id, sender_channel_id, message_time, content_sha256)이 겹치면 접힌다. */
     private static final AtomicInteger SEQ = new AtomicInteger();
@@ -251,6 +252,29 @@ class ChatWindowQueryTest extends IntegrationTestSupport {
     }
 
     /**
+     * 한 방송을 치지직과 SOOP에 같이 내보내면 두 플랫폼의 채팅·후원이 같은 방송 번호로 쌓인다(POK-466). 화면이 줄마다 어느
+     * 플랫폼인지 보이려면 창구가 그 줄의 플랫폼을 실어야 한다. 치지직만 심으면 기본값(CHZZK)과 구별이 안 되므로 SOOP 줄을 같이 심는다.
+     */
+    @Test
+    void 두_플랫폼_줄이_한_방송에_섞여도_줄마다_플랫폼을_싣는다() {
+        Instant start = Instant.parse("2026-10-25T12:00:00Z");
+        insertChat(Platform.CHZZK, "win-dual", start.plusSeconds(1), "치지직채팅");
+        insertChat(Platform.SOOP, "win-dual", start.plusSeconds(2), "SOOP채팅");
+        insertDonation(Platform.CHZZK, "win-dual", start.plusSeconds(3), "치지직후원");
+        insertDonation(Platform.SOOP, "win-dual", start.plusSeconds(4), "SOOP후원");
+        WindowRequest w = new WindowRequest(start, start.plusSeconds(60));
+
+        ChatWindowPage page = queryWith(0).find("win-dual", null, w, ALL, 200, null);
+
+        assertThat(page.items()).extracting(ChatWindowItem::text, ChatWindowItem::platform)
+                .containsExactly(
+                        org.assertj.core.groups.Tuple.tuple("치지직채팅", Platform.CHZZK),
+                        org.assertj.core.groups.Tuple.tuple("SOOP채팅", Platform.SOOP),
+                        org.assertj.core.groups.Tuple.tuple("치지직후원", Platform.CHZZK),
+                        org.assertj.core.groups.Tuple.tuple("SOOP후원", Platform.SOOP));
+    }
+
+    /**
      * 이 조회가 색인을 못 타면 채팅 표 전체를 훑는다. 방송이 길면 창구가 통째로 느려진다.
      *
      * <p>🔴 <b>SQL을 여기 다시 적지 마라 — {@link ChatWindowQuery#CHATS}를 그대로
@@ -319,28 +343,36 @@ class ChatWindowQueryTest extends IntegrationTestSupport {
     }
 
     private void insertChat(String streamId, Instant messageTime, String content) {
+        insertChat(Platform.CHZZK, streamId, messageTime, content);
+    }
+
+    private void insertChat(Platform platform, String streamId, Instant messageTime, String content) {
         int n = SEQ.incrementAndGet();
         jdbc.update("""
                 INSERT INTO chat_messages
-                  (channel_id, sender_channel_id, content, message_time, received_at,
+                  (platform, channel_id, sender_channel_id, content, message_time, received_at,
                    content_sha256, stream_id, nickname, user_role)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                "win-ch", "win-sender", content,
+                platform.name(), "win-ch", "win-sender", content,
                 Timestamp.from(messageTime), Timestamp.from(messageTime),
                 String.format("%064d", n), streamId, "닉" + n, "common_user");
     }
 
     private void insertDonation(String streamId, Instant receivedAt, String text) {
+        insertDonation(Platform.CHZZK, streamId, receivedAt, text);
+    }
+
+    private void insertDonation(Platform platform, String streamId, Instant receivedAt, String text) {
         jdbc.update("""
                 INSERT INTO chat_donations
-                  (stream_id, channel_id, donator_channel_id, donator_nickname,
+                  (platform, stream_id, channel_id, donator_channel_id, donator_nickname,
                    donation_type, pay_amount, donation_text, received_at, received_seq)
                 -- 순번은 매번 유일한 값이면 된다. 이 픽스처가 재는 것은 창구 조회이지
                 -- 중복 규칙이 아니다 — 그쪽은 DonationPersisterTest가 잰다.
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                streamId, "win-ch", "win-donator", "후원자", "CHAT", 1000L, text,
+                platform.name(), streamId, "win-ch", "win-donator", "후원자", "CHAT", 1000L, text,
                 Timestamp.from(receivedAt), DONATION_SEQ.incrementAndGet());
     }
 

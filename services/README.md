@@ -2194,8 +2194,11 @@ health `relay`와 종료 판정 줄에 실린다. 🔴 **health UP/DOWN에는 �
 
 ```json
 {"seq":12,"seqEpoch":1789300000000,"kind":"chat","time":"2026-09-13T10:00:04.120Z","timeBasis":"message",
- "nickname":"…","senderChannelId":"…","role":null,"text":"…","amount":null,"donationType":null}
+ "nickname":"…","senderChannelId":"…","role":null,"text":"…","amount":null,"donationType":null,"platform":"CHZZK"}
 ```
+
+**`platform`**(`CHZZK`·`SOOP`)은 그 채팅·후원이 들어온 플랫폼이다(POK-466). 한 방송을 치지직과 SOOP에 같이 내보내면 두 플랫폼 줄이
+한 줄기로 섞여 오므로 화면이 이것으로 줄마다 플랫폼을 보인다. 범위 창구 한 줄도 같은 칸을 싣는다.
 
 **`event: broadcast-info`**(POK-234 PR-C, `BROADCAST_INFO_ENABLED`) — 걷는 방송마다 1분에 한 번. 같은 `seq`·`seqEpoch`를 나눠 쓴다.
 `time`은 **우리가 물어본 시각**(`timeBasis:"observed"`)이고 창구 칸 대신 제목·태그·카테고리·시청자 수가 찬다.
@@ -4526,7 +4529,7 @@ DB가 거절해 500이 되고, **입력 오류가 장애로 오인된다**(epoch
 ```json
 {"items":[{"kind":"chat","id":41,"time":"2026-09-01T12:00:03Z","timeBasis":"message",
            "nickname":"…","senderChannelId":"…","role":"common_user","text":"ㅋㅋ",
-           "amount":null,"donationType":null}],
+           "amount":null,"donationType":null,"platform":"CHZZK"}],
  "nextCursor":"h:…","appliedOffsetMs":3900}
 {"bucketSeconds":10,"buckets":[{"start":"2026-09-01T12:00:00Z","chats":12,"donations":1}],
  "appliedOffsetMs":3900}

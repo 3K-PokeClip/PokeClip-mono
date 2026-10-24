@@ -1,5 +1,6 @@
 package com.pokeclip.chat.collector.query;
 
+import com.pokeclip.chat.collector.Platform;
 import java.time.Instant;
 
 /**
@@ -18,8 +19,10 @@ import java.time.Instant;
  *                   엉뚱한 자리에 끼어드는 것을 아무도 못 본다
  * @param amount     후원 금액(원). 채팅이거나 숫자로 못 읽은 금액이면 {@code null}
  * @param donationType 후원 종류. 채팅이면 {@code null}
+ * @param platform   그 줄이 들어온 플랫폼(POK-466). 한 방송을 치지직과 SOOP에 같이 내보내면 두 플랫폼 줄이 한 목록에 섞이므로
+ *                   화면이 이것으로 줄마다 플랫폼을 보인다. 중계({@code RelayPayload})도 같은 이름으로 싣는다
  */
 public record ChatWindowItem(String kind, long id, Instant time, String timeBasis,
                              String nickname, String senderChannelId, String role,
-                             String text, Long amount, String donationType) {
+                             String text, Long amount, String donationType, Platform platform) {
 }

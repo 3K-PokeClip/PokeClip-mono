@@ -1,5 +1,6 @@
 package com.pokeclip.chat.collector.query;
 
+import com.pokeclip.chat.collector.Platform;
 import com.pokeclip.chat.collector.query.ChatWindowCursor.Cursor;
 import com.pokeclip.chat.collector.sync.SyncProperties;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -46,7 +47,7 @@ public class ChatWindowQuery {
      */
     static final String CHATS = """
             SELECT 'c' AS kind, id, message_time AS t, nickname, sender_channel_id, user_role,
-                   content, NULL::bigint AS amount, NULL::varchar AS dtype
+                   content, NULL::bigint AS amount, NULL::varchar AS dtype, platform
               FROM chat_messages
              WHERE stream_id = ? AND message_time >= ? AND message_time < ?
                AND (message_time, id) > (?::timestamptz, ?::bigint)
@@ -56,7 +57,7 @@ public class ChatWindowQuery {
 
     static final String DONATIONS = """
             SELECT 'd' AS kind, id, received_at AS t, donator_nickname, donator_channel_id,
-                   NULL::varchar AS user_role, donation_text, pay_amount, donation_type
+                   NULL::varchar AS user_role, donation_text, pay_amount, donation_type, platform
               FROM chat_donations
              WHERE stream_id = ? AND received_at >= ? AND received_at < ?
                AND (received_at, id) > (?::timestamptz, ?::bigint)
@@ -163,6 +164,9 @@ public class ChatWindowQuery {
                 chat ? "message" : "received",
                 rs.getString(4), rs.getString(5), rs.getString(6), rs.getString(7),
                 amount == null ? null : rs.getLong(8),
-                rs.getString(9));
+                rs.getString(9),
+                // 모르는 이름(이 판이 모르는 새 플랫폼을 다음 판이 먼저 적은 경우)이면 null이다: 한 줄 때문에 쪽 전체를 500으로
+                // 만들지 않고, 치지직으로 지어내지도 않는다. 화면은 null이면 표시를 숨긴다
+                Platform.parse(rs.getString(10)).orElse(null));
     }
 }
