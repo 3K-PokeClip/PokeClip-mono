@@ -279,7 +279,7 @@ O7f 의 2(T6b)와 4(T0 · T8e 해석 · T11 404 · T2b)입니다. 아래 명령�
 | 언제 | 요청(쿠키) | 통과 조건 |
 |---|---|---|
 | T2b | `/live/../api/ingest/<표식>` · `/playback/../api/ingest/<표식>` · `/live/../api/streams/<표식>/rewind`(쿠키 없음) | 차단 계층 · 응답 코드 기록 · 엣지 차단이면 nginx 도달 0 · nginx 차단이면 거절 응답 + 보호 대상 상류 전달 0 |
-| T2 | `/live/<A>/../<B>/index.m3u8`(방송 A 쿠키) | 모든 사례가 CloudFront 가 낸 403(`server: CloudFront`) — 그 밖(nginx 응답 · `Miss` · 2xx · 5xx · 통신 실패)은 A 쿠키가 엣지를 통과한 것이라 실패 |
+| T2 | `/live/<A>/../<B>/index.m3u8`(방송 A 쿠키) | 앞뒤 양성 대조가 둘 다 유효(HTTP 응답이 왔고 `server` 가 CloudFront 가 아님 — 아니면 그 회차 무효)하고, 모든 사례가 CloudFront 가 낸 403(`server: CloudFront`)이며, 그 시각대 WAF 차단 로그의 시험 IP 건수가 0 — 사례가 그 밖(nginx 응답 · `Miss` · 2xx · 5xx · 통신 실패)이면 A 쿠키가 엣지를 통과한 것이라 실패 |
 
 *   **변형**: 각 사례의 `/../` 를 `/%2e%2e/` · `/..%2f` · `/..%5c` ·
     `//../` 로 바꾼 것도 같은 조건입니다.
@@ -314,11 +314,14 @@ O7f 의 2(T6b)와 4(T0 · T8e 해석 · T11 404 · T2b)입니다. 아래 명령�
     는 노출 그 자체입니다. 판정이 캐시 상태에 기대지 않으므로 예열은 하지
     않습니다.
 *   **A 쿠키 양성 대조를 먼저 합니다.** 같은 `jar_a` 로 A 자신의 목록
-    `/live/<A>/index.m3u8` 를 한 번 요청해, 응답이 CloudFront 403 이 아님(`server`
-    가 CloudFront 가 아님 — A 송출 여부와 무관)을 확인합니다. 대조가
-    CloudFront 403 이면 쿠키가 무효(만료 · 다른 방송 · 안 실림)라 경로 사례의
-    403 도 경로 때문인지 가를 수 없으므로 그 회차는 무효이고 판정을 적지
-    않습니다. 대조는 사례 뒤에 한 번 더 합니다.
+    `/live/<A>/index.m3u8` 를 한 번 요청합니다. 대조는 HTTP 응답이 왔고
+    (`control` 줄의 코드가 `000` 이 아님) `server:` 줄의 값이 CloudFront 가
+    아닐 때만 유효합니다(A 송출 여부와 무관 — 엣지 서명 검사를 지나 원본까지
+    갔다는 뜻). `server:` 줄이 없으면(출력 없음 · 코드 `000` — 통신 실패)
+    무효이고, `server: CloudFront` 여도 무효입니다(엣지에서 멈춤 — 403 이면
+    쿠키가 무효: 만료 · 다른 방송 · 안 실림). 무효면 경로 사례의 403 이 경로
+    때문인지 가를 수 없으므로 그 회차는 판정을 적지 않습니다. 대조는 사례
+    뒤에 한 번 더 하고, 앞뒤 대조의 출력도 사례와 같은 증거 파일에 남깁니다.
 
     ```shell
     control() {
@@ -327,21 +330,22 @@ O7f 의 2(T6b)와 4(T0 · T8e 해석 · T11 404 · T2b)입니다. 아래 명령�
         "https://media.pokeclip.com/live/${a_id}/index.m3u8" |
         grep -iE '^server:|^control '
     }
-    control
+    control | tee "${evidence}/t2-path.txt"
     for dots in /../ /%2e%2e/ /..%2f /..%5c //../; do
       req_path="/live/${a_id}${dots}${b_id}/index.m3u8"
       curl --path-as-is -b "${jar_a}" \
         --resolve "media.pokeclip.com:443:${edge_ip}" -sS -o /dev/null \
         -D - -w "${req_path} %{http_code}\n" "https://media.pokeclip.com${req_path}" |
         grep -iE '^server:|^x-cache:|^/live/'
-    done | tee "${evidence}/t2-path.txt"
+    done | tee -a "${evidence}/t2-path.txt"
     control | tee -a "${evidence}/t2-path.txt"
     rm -f "${jar_a}" && test ! -e "${jar_a}" && echo removed
     ```
 
 *   **판정 근거 = 응답 코드 + SSM 판정 줄의 건수**(건수만 · 실행 직전
-    승인 · T2 는 응답 코드와 `server` 헤더만 — 아래 T2 항목). Media
-    상자의 유닛 저널(nginx 접근 로그가 남는 곳 —
+    승인). T2 는 SSM 건수를 쓰지 않고 응답 코드 · `server` 헤더 · 앞뒤 양성
+    대조의 유효 · 그 시각대 WAF 차단 로그의 시험 IP 건수(0)로 판정합니다
+    (아래 T2 항목). Media 상자의 유닛 저널(nginx 접근 로그가 남는 곳 —
     [media-host README](/infra/media-host/README.md) 「로그」)에서 시작
     시각 뒤의 줄을 셉니다. 꼴은 그 README 「시작 · 정지」 의 건수 꼴(`awk` ·
     조회 실패는 0 건이 아니라 실패)을 따르고, 원문은 내지 않습니다.
@@ -361,12 +365,12 @@ O7f 의 2(T6b)와 4(T0 · T8e 해석 · T11 404 · T2b)입니다. 아래 명령�
         줄은 실패로 세지 않습니다 — `/…/../api/ingest/…` 가 정규화되면
         원래 서명 쿠키 없이 열린 `/api/ingest/…` 와 같은 요청입니다.
     *   T2: 모든 사례가 CloudFront 403(`server: CloudFront`)이어야 통과입니다
-        (위 「T2 는 엣지 서명 거절만 통과」) — 앞뒤 양성 대조가 CloudFront
-        403 이 아닐 때만 유효합니다. `results.tsv` 비고에는 대조 결과 · 응답
-        코드 · `server` · `x-cache` 와, 그 시각대 WAF 차단 로그의 시험 IP
-        건수(0 이어야 「서명 거절」 — WAF 403 도 `server: CloudFront`)를
-        적습니다. nginx 건수는 T2 판정에 쓰지
-        않습니다.
+        (위 「T2 는 엣지 서명 거절만 통과」) — 앞뒤 양성 대조가 둘 다
+        유효할 때(HTTP 응답이 왔고 `server` 가 CloudFront 가 아님)만
+        판정합니다. `results.tsv` 비고에는 대조 결과 · 응답 코드 · `server` ·
+        `x-cache` 와, 그 시각대 WAF 차단 로그의 시험 IP 건수(0 이어야 「서명
+        거절」 — WAF 403 도 `server: CloudFront`)를 적습니다. nginx 건수는 T2
+        판정에 쓰지 않습니다.
 *   **실패면 O8 을 중단합니다.** kty 에게 보고하고, 막는 자리(T2 면
     CloudFront 함수 등 엣지 · T2b 면 Media 상자 nginx)를 정해 고친 뒤 다시
     시험합니다(확인은
@@ -455,22 +459,50 @@ echo "exit=$?"
     컨테이너 안에서 `bind-utils` 를 판까지 고정해 설치합니다(Amazon Linux
     2023 저장소는 이미지 판에 묶여 같은 판이 나옵니다 — 2026-10-24 로컬
     확인: `bind-utils-9.18.50-1.amzn2023.0.4`, `bash` 있음).
-*   `~/.aws` 는 읽기 전용으로 붙이고 프로필 이름만 넘깁니다. 컨테이너는
-    끝나면 지워집니다(`--rm`).
+*   `~/.aws` 전체를 붙이지 않습니다. 쓰는 프로필 하나의 자격만
+    `aws configure export-credentials` 로 꺼내 임시 디렉터리(`mktemp -d` —
+    0700)의 `credentials` 파일 하나(`[default]` 한 절)에 쓰고, 그 파일만 읽기
+    전용으로 붙입니다. 자격 값은 파이프로만 지나가고 화면 · 명령 인자 · 환경
+    변수에 남지 않습니다. 리전은 스크립트가 `--region` 으로 정하므로 `config`
+    는 붙이지 않습니다.
+*   자격을 꺼내지 못하면(`CREDS FILE OK` 없음 — 프로필 · 로그인 확인 · 키
+    둘 중 하나라도 비면 여기서 멈춤) 컨테이너를 띄우지 않습니다.
+*   자격 디렉터리는 서브셸의 `EXIT` 트랩이 지웁니다 — 정상 · 실패 · 중단
+    (Ctrl-C · TERM · HUP) 모두 `removed` 가 나옵니다. 컨테이너는 끝나면
+    지워집니다(`--rm`). `--init` 과 `TINI_KILL_PROCESS_GROUP=1` 은 Ctrl-C 를
+    컨테이너 안 프로세스 묶음 전체에 넘겨 컨테이너도 끝나게 합니다(`--init`
+    만이면 PID 1 bash 가 신호를 받고도 자식을 기다려 끝나지 않습니다 —
+    2026-10-25 로컬 확인).
 
 ```shell
 image='amazon/aws-cli@sha256:733d5be1015825e4038c6016f3fa9954868ddee1f611b73be795a9cc2e706bfd'
 had_image=no
 docker image inspect "${image}" >/dev/null 2>&1 && had_image=yes
-docker run --rm --label com.pokeclip.bench=kvs-put \
-  --dns 1.1.1.1 --dns 8.8.8.8 \
-  -v "${HOME}/.aws:/root/.aws:ro" -e AWS_PROFILE \
-  -v "${PWD}/infra/terraform/scripts:/work:ro" \
-  --entrypoint /bin/bash "${image}" -c \
-  'dnf install -y -q bind-utils-9.18.50-1.amzn2023.0.4 >/dev/null &&
-    exec bash /work/kvs-put-cdn-secret.sh "$@"' _ \
-  --kvs-arn "${kvs_arn}" --secret-id "${secret_id}"
-echo "exit=$?"
+(
+  creds_dir="$(mktemp -d "${TMPDIR:-/tmp}/pokeclip-kvs-creds.XXXXXX")" || exit 1
+  cleanup='rm -rf -- "${creds_dir}" && test ! -e "${creds_dir}" && echo removed'
+  trap "${cleanup}" EXIT
+  trap 'exit 130' INT TERM HUP
+  umask 077
+  aws configure export-credentials --profile "${AWS_PROFILE:-default}" |
+    jq -er 'select((.AccessKeyId // "") != ""
+        and (.SecretAccessKey // "") != "")
+      | "[default]",
+        "aws_access_key_id = \(.AccessKeyId)",
+        "aws_secret_access_key = \(.SecretAccessKey)",
+        (.SessionToken // empty | "aws_session_token = \(.)")' \
+    > "${creds_dir}/credentials" || exit 1
+  echo "CREDS FILE OK"
+  docker run --rm --init -e TINI_KILL_PROCESS_GROUP=1 \
+    --label com.pokeclip.bench=kvs-put --dns 1.1.1.1 --dns 8.8.8.8 \
+    -v "${creds_dir}/credentials:/root/.aws/credentials:ro" \
+    -v "${PWD}/infra/terraform/scripts:/work:ro" \
+    --entrypoint /bin/bash "${image}" -c \
+    'dnf install -y -q bind-utils-9.18.50-1.amzn2023.0.4 >/dev/null &&
+      exec bash /work/kvs-put-cdn-secret.sh "$@"' _ \
+    --kvs-arn "${kvs_arn}" --secret-id "${secret_id}"
+  echo "exit=$?"
+)
 ```
 
 끝나면 잔여 0 을 확인합니다. 이 실행이 받은 이미지(전에 없던 것)만
@@ -478,6 +510,7 @@ echo "exit=$?"
 
 ```shell
 docker ps -a -q --filter label=com.pokeclip.bench=kvs-put | wc -l   # 0
+find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'pokeclip-kvs-creds.*' | wc -l   # 0
 if [ "${had_image}" = no ]; then docker image rm "${image}"; fi
 docker image inspect "${image}" >/dev/null 2>&1 && echo kept || echo removed
 # removed(전에 있었으면 kept)

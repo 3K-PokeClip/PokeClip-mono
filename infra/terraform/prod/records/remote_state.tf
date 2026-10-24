@@ -29,15 +29,17 @@ locals {
 # 이름을 열기 전에 계약 어긋남을 드러내려고. 존 id 는 Route 53 호스팅 존
 # id(Z…), DNS 이름은 자원 종류마다 AWS 가 주는 꼴이다 — ALB
 # <이름>.<리전>.elb.amazonaws.com · NLB <이름>.elb.<리전>.amazonaws.com ·
-# CloudFront d<영숫자>.cloudfront.net.
+# CloudFront d<영숫자>.cloudfront.net. 내부 ALB 는 꼴이 같고 이름이
+# internal- 로 시작하므로 따로 거른다(RE2 정규식에는 부정 전방 탐색이 없다).
 resource "terraform_data" "remote_contract" {
   lifecycle {
     precondition {
       condition = (
         can(regex("^[A-Za-z0-9-]+\\.[a-z0-9-]+\\.elb\\.amazonaws\\.com$", local.platform.public_alb_dns_name)) &&
+        !startswith(local.platform.public_alb_dns_name, "internal-") &&
         can(regex("^Z[A-Z0-9]+$", local.platform.public_alb_zone_id))
       )
-      error_message = "platform 출력 public_alb_dns_name · public_alb_zone_id 가 없거나 ALB DNS 이름(<이름>.<리전>.elb.amazonaws.com) · 존 id(Z…) 꼴이 아니다."
+      error_message = "platform 출력 public_alb_dns_name · public_alb_zone_id 가 없거나 공개 ALB DNS 이름(<이름>.<리전>.elb.amazonaws.com — internal- 로 시작하지 않음) · 존 id(Z…) 꼴이 아니다."
     }
 
     precondition {

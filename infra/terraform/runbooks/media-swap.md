@@ -69,7 +69,7 @@ media_ids() { terraform -chdir=infra/terraform/prod/media output -json instance_
 
 ```shell
 media_ssm() {  # media_ssm <상자 키> <스크립트 파일> [인자 …]
-  local id params cid status
+  local id params cid cmd_state
   id="$(media_ids | jq -er --arg k "$1" '.[$k]')" || return 2
   params="${work}/params.json"
   jq -n --rawfile script "$2" --args \
@@ -79,14 +79,14 @@ media_ssm() {  # media_ssm <상자 키> <스크립트 파일> [인자 …]
     --document-name AWS-RunShellScript --parameters "file://${params}" \
     --query Command.CommandId --output text)" || return 2
   while sleep 3; do
-    status="$(aws ssm get-command-invocation --command-id "${cid}" \
+    cmd_state="$(aws ssm get-command-invocation --command-id "${cid}" \
       --instance-id "${id}" --query Status --output text)" || return 2
-    case "${status}" in Pending | InProgress | Delayed) ;; *) break ;; esac
+    case "${cmd_state}" in Pending | InProgress | Delayed) ;; *) break ;; esac
   done
   aws ssm get-command-invocation --command-id "${cid}" --instance-id "${id}" \
     --query StandardOutputContent --output text
-  echo "SSM ${status}"
-  [ "${status}" = Success ]
+  echo "SSM ${cmd_state}"
+  [ "${cmd_state}" = Success ]
 }
 ```
 
@@ -593,7 +593,7 @@ SH
 
 ```shell
 force_list() {  # force_list <상자 키> <A|B>
-  local id cid status out
+  local id cid cmd_state out
   id="$(media_ids | jq -er --arg k "$1" '.[$k]')" || return 2
   jq -n --rawfile script "${work}/paths-list.sh" '{commands: [$script]}' \
     > "${work}/params.json"
@@ -601,12 +601,12 @@ force_list() {  # force_list <상자 키> <A|B>
     --document-name AWS-RunShellScript --parameters "file://${work}/params.json" \
     --query Command.CommandId --output text)" || return 2
   while sleep 3; do
-    status="$(aws ssm get-command-invocation --command-id "${cid}" \
+    cmd_state="$(aws ssm get-command-invocation --command-id "${cid}" \
       --instance-id "${id}" --query Status --output text)" || return 2
-    case "${status}" in Pending | InProgress | Delayed) ;; *) break ;; esac
+    case "${cmd_state}" in Pending | InProgress | Delayed) ;; *) break ;; esac
   done
-  echo "SSM ${status}"
-  [ "${status}" = Success ] || return 1
+  echo "SSM ${cmd_state}"
+  [ "${cmd_state}" = Success ] || return 1
   out="${force_dir}/force-${stamp}-$2.txt"
   aws ssm get-command-invocation --command-id "${cid}" --instance-id "${id}" \
     --query StandardOutputContent --output json | jq -j . > "${out}"

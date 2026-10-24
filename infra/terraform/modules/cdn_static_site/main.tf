@@ -63,7 +63,8 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "this" {
   }
 }
 
-# 이 배포만 OAC 로 객체를 읽는다 — 허용문은 이것 하나다.
+# 이 배포만 OAC 로 객체를 읽는다 — 허용문은 이것 하나다. 평문 HTTP 요청은
+# 누구에게나 거부한다(modules/state_bucket 과 같은 거부문).
 resource "aws_s3_bucket_policy" "this" {
   region = local.bucket_region
 
@@ -82,6 +83,14 @@ resource "aws_s3_bucket_policy" "this" {
             "AWS:SourceArn" = aws_cloudfront_distribution.this.arn
           }
         }
+      },
+      {
+        Sid       = "DenyInsecureTransport"
+        Effect    = "Deny"
+        Principal = "*"
+        Action    = "s3:*"
+        Resource  = [aws_s3_bucket.this.arn, "${aws_s3_bucket.this.arn}/*"]
+        Condition = { Bool = { "aws:SecureTransport" = "false" } }
       },
     ]
   })
