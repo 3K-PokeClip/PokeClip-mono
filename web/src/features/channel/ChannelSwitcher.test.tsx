@@ -10,10 +10,11 @@ import { useSwitchCurtain } from './switchCurtain';
 import { useActiveChannel } from './useActiveChannel';
 
 const nav = vi.hoisted(() => ({ replace: vi.fn() }));
-const { track } = vi.hoisted(() => ({ track: vi.fn() }));
+const { track, setActiveRole } = vi.hoisted(() => ({ track: vi.fn(), setActiveRole: vi.fn() }));
 vi.mock('@/lib/analytics', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/analytics')>()),
   track,
+  setActiveRole,
 }));
 /** 사용 통계로 나간 그 이벤트의 속성들 (POK-357) */
 const tracked = (name: string) =>
@@ -125,6 +126,7 @@ async function openWithClient(user: ReturnType<typeof userEvent.setup>) {
 beforeEach(() => {
   nav.replace.mockReset();
   track.mockReset();
+  setActiveRole.mockReset();
   window.localStorage.clear();
   useSwitchCurtain.getState().reset();
   useChannelStore.setState({ userId: null, selected: null });
@@ -216,6 +218,11 @@ describe('ChannelSwitcher: 펼친 패널', () => {
     );
     // 바꾼 뒤에 한 번 센다 — 상대 채널 번호는 싣지 않는다
     expect(tracked('channel_switched')).toEqual([{ to_role: 'editor', reason: 'picked' }]);
+    // 이벤트에 도착 역할이 실리도록 먼저 건다 — ChannelScope의 등록 이펙트보다 앞이다
+    expect(setActiveRole).toHaveBeenCalledWith('editor');
+    const switchedAt =
+      track.mock.invocationCallOrder[track.mock.calls.findIndex(([n]) => n === 'channel_switched')];
+    expect(setActiveRole.mock.invocationCallOrder[0]).toBeLessThan(switchedAt ?? 0);
   });
 
   it('초대를 수락하면 수락을 보내고 참여 채널을 다시 읽어 한 줄 늘어난다', async () => {
