@@ -23,6 +23,7 @@ import {
   Tag,
   Text,
   Textarea,
+  useFieldControlProps,
 } from '@/ui';
 import type { PrivacyStatus, ThumbnailSource } from '@/api/clipEditor';
 import { uploadTitleProblem } from '@/features/clips/library/libraryView';
@@ -469,36 +470,23 @@ function UploadInfoForm({
 
               <Field invalid={errorOf('tags') !== undefined}>
                 <Field.Label>태그</Field.Label>
-                <Input
-                  value={tagText}
-                  autoComplete="off"
-                  onChange={(e) => onTagChange(e.target.value)}
+                <TagBox
+                  tags={draft.tags}
+                  text={tagText}
+                  onText={onTagChange}
                   onKeyDown={onTagKeyDown}
+                  onRemove={(tag) =>
+                    set(
+                      'tags',
+                      draft.tags.filter((t) => t !== tag),
+                    )
+                  }
                 />
                 {errorOf('tags') ? (
                   <Field.Error>{errorOf('tags')}</Field.Error>
                 ) : (
                   <Field.Description>Enter나 쉼표로 넣어요. 합쳐서 500자까지예요</Field.Description>
                 )}
-                {draft.tags.length > 0 ? (
-                  <HStack gap={2} wrap>
-                    {draft.tags.map((tag) => (
-                      <Tag
-                        key={tag}
-                        size="sm"
-                        onRemove={() =>
-                          set(
-                            'tags',
-                            draft.tags.filter((t) => t !== tag),
-                          )
-                        }
-                        removeLabel={`태그 ${tag} 빼기`}
-                      >
-                        {tag}
-                      </Tag>
-                    ))}
-                  </HStack>
-                ) : null}
               </Field>
 
               <Field invalid={errorOf('categoryId') !== undefined}>
@@ -634,6 +622,65 @@ function UploadInfoForm({
         </HStack>
       </div>
     </form>
+  );
+}
+
+/** 태그 칸: 넣은 태그가 입력 칸 안, 치는 글자 앞에 쌓인다. 테두리·초점 링은 바깥 상자가 그리고 글자 칸은 남은 폭을 채운다.
+ *  Field 안에서 그려져야 라벨·설명·오류가 글자 칸에 붙는다 */
+function TagBox({
+  tags,
+  text,
+  onText,
+  onKeyDown,
+  onRemove,
+}: {
+  tags: string[];
+  text: string;
+  onText: (value: string) => void;
+  onKeyDown: (event: KeyboardEvent<HTMLInputElement>) => void;
+  onRemove: (tag: string) => void;
+}) {
+  const field = useFieldControlProps();
+  const inputRef = useRef<HTMLInputElement>(null);
+  return (
+    <div
+      className={styles.tagBox}
+      data-invalid={field['aria-invalid']}
+      // 상자 전체가 한 칸으로 보이므로 태그 사이·빈 자리를 눌러도 글자 칸으로 간다(빼기 단추와 글자 칸 자체는 그대로)
+      onMouseDown={(event) => {
+        const target = event.target as HTMLElement;
+        if (target === inputRef.current || target.closest('button') !== null) return;
+        event.preventDefault();
+        inputRef.current?.focus();
+      }}
+    >
+      {tags.map((tag) => (
+        <Tag
+          key={tag}
+          size="sm"
+          className={styles.tagChip}
+          // 칸보다 길어 말줄임된 태그도 올리면 다 보인다
+          title={tag}
+          onRemove={() => {
+            onRemove(tag);
+            // 누른 빼기 단추가 사라지며 초점이 창 밖으로 빠지지 않게 글자 칸으로 돌린다
+            inputRef.current?.focus();
+          }}
+          removeLabel={`태그 ${tag} 빼기`}
+        >
+          {tag}
+        </Tag>
+      ))}
+      <input
+        ref={inputRef}
+        {...field}
+        className={styles.tagInput}
+        value={text}
+        autoComplete="off"
+        onChange={(e) => onText(e.target.value)}
+        onKeyDown={onKeyDown}
+      />
+    </div>
   );
 }
 

@@ -236,6 +236,28 @@ describe('UploadInfoDialog', () => {
     expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ tags: ['보스', '남은 글자'] }));
   });
 
+  it('넣은 태그는 입력 칸 안, 치는 글자 앞에 쌓이고 칸의 빈 자리를 누르거나 태그를 빼면 글자 칸에 초점이 간다', async () => {
+    const user = userEvent.setup();
+    const { dialog } = renderDialog();
+    const input = dialog().getByRole('textbox', { name: /태그/ });
+    const box = input.parentElement as HTMLElement;
+
+    await user.type(input, '롤{Enter}보스{Enter}');
+    expect(within(box).getByText('롤')).toBeInTheDocument();
+    expect(
+      within(box).getByText('보스').compareDocumentPosition(input) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+
+    await user.click(dialog().getByRole('textbox', { name: /제목/ }));
+    await user.click(box);
+    expect(input).toHaveFocus();
+
+    await user.click(within(box).getByRole('button', { name: '태그 롤 빼기' }));
+    expect(within(box).queryByText('롤')).not.toBeInTheDocument();
+    expect(input).toHaveFocus();
+  });
+
   it('제목이 비었으면 보내지 않고 정보 탭을 열어 그 칸에 말한다', async () => {
     const user = userEvent.setup();
     const { dialog, onSubmit } = renderDialog();
