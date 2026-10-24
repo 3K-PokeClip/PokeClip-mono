@@ -233,7 +233,8 @@ class YoutubeRetentionJobTest extends YoutubeLinkTestSupport {
         store.sent(집은것, Instant.now());
 
         assertThat(장부()).as("늦춘 시각이 남아 있어야 한다").isEqualTo(1);
-        assertThat(jdbc.queryForObject("SELECT next_attempt_at <= now() FROM youtube_video_forget_jobs", Boolean.class))
+        // 「다음 시도 시각」은 시험 쪽 시계로 적고 DB 시계와 몇 ms 어긋날 수 있어 여유를 둔다(리스 5분보다 한참 작다)
+        assertThat(jdbc.queryForObject("SELECT next_attempt_at <= now() + interval '10 seconds' FROM youtube_video_forget_jobs", Boolean.class))
                 .as("곧바로 다시 보낸다").isTrue();
         store.sent(store.claim(Instant.now(), Duration.ofMinutes(5), 10).getFirst(), Instant.now());
         assertThat(장부()).isZero();

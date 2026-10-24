@@ -49,6 +49,10 @@ public class YoutubeCleanupExecutor {
      * (계정 단위라 남의 연동을 끊는다 — {@code YoutubeLinkWriter.closeAlive} javadoc) <b>남은 정리 잡은
      * 대부분 {@code secretStore.delete} 둘(DB)뿐</b>이고, revoke를 포함하는 것은 <b>갱신 거부 경로 하나</b>다.
      *
+     * <p>〔2026-10-24 POK-423: 해제 · 탈퇴 정리도 revoke(최대 5초)를 품는다. 3초를 그대로 둔 이유: 그 잡은 <b>secrets를 먼저 지우고</b>
+     * revoke를 뒤에 보내므로({@code YoutubeLinkWriter.revokeThenCleanUp}) 종료에 잘려도 남는 것은 보내지 못한 revoke뿐이다.
+     * revoke는 best-effort라(다시 안 보낸다) 기다려도 얻는 것이 그만큼이고, 예산을 늘리면 종료 유예 합(24초)을 넘는다.〕
+     *
      * <p><b>치지직은 여전히 10초가 필요하다</b> — 그쪽은 정리마다 revoke를 2회 부른다. 그래서 그 파일은
      * 건드리지 않는다. 스프링이 {@code @PreDestroy}를 순차로 부르므로 <b>합이 예산</b>이고,
      * 10 + 3 + 1 = <b>14초</b>로 문서화한 15초 안에 든다({@code YoutubeShutdownBudgetTest}가 셋을 대조한다).

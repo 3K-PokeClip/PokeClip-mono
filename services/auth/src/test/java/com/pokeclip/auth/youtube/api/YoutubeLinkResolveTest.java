@@ -228,7 +228,7 @@ class YoutubeLinkResolveTest extends YoutubeLinkTestSupport {
                 .andExpect(status().isNoContent());
         awaitCleanup();
 
-        assertThat(YOUTUBE.revokeCalls()).as("해제는 구글에 아무것도 보내지 않는다").isZero();
+        assertThat(YOUTUBE.revokeCalls()).as("해제는 구글에 revoke를 한 번 보낸다(POK-423)").isEqualTo(1);
         mockMvc.perform(resolve(u.getId())).andExpect(jsonPath("$.reason").value("UNLINKED"));
     }
 
