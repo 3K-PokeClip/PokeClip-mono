@@ -2803,9 +2803,10 @@ describe('LiveScreen — 실시간 통계', () => {
     const sseReads = () =>
       fetchSpy.mock.calls.filter(([u]) => String(u).endsWith('/events')).length;
     const before = sseReads();
+    // 관측 시각은 통로가 다시 붙기(61초 뒤) 30초쯤 앞이다: 그래프 끝에 붙으면 띠 폭이 0이 되어 아무것도 안 잰다
     server.sseInfo = [
       {
-        time: new Date(Date.now() + 60_000).toISOString(),
+        time: new Date(Date.now() + 30_000).toISOString(),
         title: INFO.latest.title,
         tags: [],
         category: '발로란트',
