@@ -298,6 +298,13 @@ run "turns_off_render_only" {
     ])
     error_message = "render 를 끄니 RENDER 큐 주소 · 창고 이름이 빠졌다 — 늘 낸다(D7)."
   }
+
+  # 키만 있고 값이 빈 문자열이면 위 단언은 통과한다. 탈퇴 정리는 render 가
+  # 꺼져도 segment 창고 이름으로 지우므로 값까지 rewind 버킷과 맞춘다(D7 · D13).
+  assert {
+    condition     = output.app_env["clip"]["SEGMENT_BUCKET"] == aws_s3_bucket.rewind.bucket
+    error_message = "render 를 끄니 SEGMENT_BUCKET 이 rewind 버킷 이름이 아니다 — 빈 값 회귀(D7)."
+  }
 }
 
 run "turns_off_upload_only" {
