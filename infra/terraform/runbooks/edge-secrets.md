@@ -85,15 +85,16 @@ bash infra/terraform/scripts/put-secret-from-file.sh <종류> <파일>
 
 *   종류는 prod 비밀 그릇 이름 `pokeclip/prod/<종류>` 의 용도 토막입니다.
     엣지 셋(`signing-key` · `cdn-secret` · `test-stream-key` —
-    `prod/secrets`)과 앱 여덟(`jwt-secret` · `secret-store-key` ·
+    `prod/secrets`)과 앱 아홉(`jwt-secret` · `secret-store-key` ·
     `internal-api-token` · `google-client-secret` · `youtube-client-secret` ·
     `chzzk-client-secret` · `profile-photo-token-secret` ·
-    `soop-client-secret` — `prod/runtime/app_secrets.tf`)만 받습니다. 목록 밖의
-    종류 · 전체 이름 · ARN 은 사용법 오류(종료 2)입니다. 이름으로
-    지정합니다(ARN 은 계정 ID 를 품으므로 쓰지 않습니다). 리전은
-    `ap-northeast-2` 고정입니다. `signing-key` 만 PEM 이고 나머지는 한 줄
-    비밀입니다. 앱 그릇 값 넣기 순서는 [runtime-1a 런북](runtime-1a.md)
-    「1단-다」 절입니다.
+    `soop-client-secret` · `stream-key-resolve-token` —
+    `prod/runtime/app_secrets.tf`)만 받습니다. 목록 밖의 종류 · 전체 이름 ·
+    ARN 은 사용법 오류(종료 2)입니다. 이름으로 지정합니다(ARN 은 계정 ID 를
+    품으므로 쓰지 않습니다). 리전은 `ap-northeast-2` 고정입니다.
+    `signing-key` 만 PEM 이고 나머지는 한 줄 비밀입니다. 앱 그릇 값 넣기
+    순서는 [runtime-1a 런북](runtime-1a.md) 「1단-다」 절입니다
+    (`stream-key-resolve-token` 은 「1단-나 ②」 절).
 *   비밀 이름은 `--secret-id` 인자로, 값은 파일 → 셸 변수 → 표준
     입력(`--secret-string file:///dev/stdin`)으로만 지나갑니다. 명령 인자 · 환경
     변수 · 임시 파일 · 출력에 값이 남지 않습니다.
