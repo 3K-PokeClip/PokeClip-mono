@@ -66,7 +66,7 @@ class BroadcastInfoEndpointTest extends IntegrationTestSupport {
         store.insert(new BroadcastInfo(Platform.CHZZK, STREAM, "CH", T.plusSeconds(60), "제목2",
                 List.of("롤", "다이아"), "LoL", null));
         store.insert(new BroadcastInfo(Platform.CHZZK, STREAM, "CH", T.plusSeconds(120), "제목2",
-                List.of("롤", "다이아"), "Just Chatting", 90));
+                List.of("롤", "다이아"), "Just Chatting", 90, "https://img.example/jc.jpg"));
 
         HttpResponse<String> response = 물어본다("since=" + T.minusSeconds(1), TOKEN);
 
@@ -76,9 +76,12 @@ class BroadcastInfoEndpointTest extends IntegrationTestSupport {
                         + "\"viewers\":90,\"observedAt\":\"2026-09-03T15:02:00Z\"}")
                 .as("추이는 오래된 것부터고 모르는 시청자 수는 null이다. 점마다 그 관측의 카테고리가 실린다(POK-402)")
                 .contains("\"series\":["
-                        + "{\"observedAt\":\"2026-09-03T15:00:00Z\",\"viewers\":100,\"platform\":\"CHZZK\",\"category\":\"LoL\"},"
-                        + "{\"observedAt\":\"2026-09-03T15:01:00Z\",\"viewers\":null,\"platform\":\"CHZZK\",\"category\":\"LoL\"},"
-                        + "{\"observedAt\":\"2026-09-03T15:02:00Z\",\"viewers\":90,\"platform\":\"CHZZK\",\"category\":\"Just Chatting\"}]");
+                        + "{\"observedAt\":\"2026-09-03T15:00:00Z\",\"viewers\":100,\"platform\":\"CHZZK\",\"category\":\"LoL\","
+                        + "\"title\":\"제목1\",\"tags\":[\"롤\"],\"categoryImageUrl\":null},"
+                        + "{\"observedAt\":\"2026-09-03T15:01:00Z\",\"viewers\":null,\"platform\":\"CHZZK\",\"category\":\"LoL\","
+                        + "\"title\":\"제목2\",\"tags\":[\"롤\",\"다이아\"],\"categoryImageUrl\":null},"
+                        + "{\"observedAt\":\"2026-09-03T15:02:00Z\",\"viewers\":90,\"platform\":\"CHZZK\",\"category\":\"Just Chatting\","
+                        + "\"title\":\"제목2\",\"tags\":[\"롤\",\"다이아\"],\"categoryImageUrl\":\"https://img.example/jc.jpg\"}]");
     }
 
     private HttpResponse<String> 구간을_물어본다(String streamId, String token) throws Exception {
@@ -145,7 +148,8 @@ class BroadcastInfoEndpointTest extends IntegrationTestSupport {
                         + "{\"platform\":\"SOOP\",\"title\":null,\"category\":null,"
                         + "\"viewers\":8,\"observedAt\":\"2026-09-03T15:01:00Z\"}]")
                 .as("카테고리를 못 얻은 관측은 null이다(POK-402)")
-                .contains("{\"observedAt\":\"2026-09-03T15:01:00Z\",\"viewers\":8,\"platform\":\"SOOP\",\"category\":null}");
+                .contains("{\"observedAt\":\"2026-09-03T15:01:00Z\",\"viewers\":8,\"platform\":\"SOOP\",\"category\":null,"
+                        + "\"title\":null,\"tags\":[],\"categoryImageUrl\":null}");
     }
 
     /**
