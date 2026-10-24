@@ -40,6 +40,11 @@ readonly IA_OTHER_BEARER='pcbench-m15-not-the-cdn-secret'
 # 기다리는 상한(초).
 readonly IA_ACCEPT_TIMEOUT=25
 readonly IA_REJECT_TIMEOUT=15
+# 앞 송출기를 지운 뒤(docker rm -f — 끊는다는 신호 없이 사라진다) 경로가 idle
+# 이 될 때까지 기다리는 상한(초). MediaMTX 는 그 송출자를 읽기 상한
+# (readTimeout 기본 10초)만큼 더 쥐고, 그동안 같은 경로의 새 송출은 경로
+# 점유(someone is already publishing)로 끊긴다.
+readonly IA_IDLE_TIMEOUT=25
 # LL-HLS 요청 한 번의 상한(초). 경로의 첫 재생목록 요청은 먹서를 만들고 첫
 # 조각들이 찰 때까지 기다리므로 몇 초가 걸린다(기본 5초로는 000).
 readonly IA_HLS_TIMEOUT=20
@@ -55,7 +60,8 @@ readonly IA_BODY_LIMIT=16384
 readonly IA_BIG_QUERY_PAIRS=2000
 readonly IA_BIG_UA_CHARS=3000
 # 운영 스크립트(C13 · C15 · C18 — media-host 디렉터리 기준)와 가짜 SSM 거부
-# 목록 파라미터 이름 · 실행 한 번의 상한(초 — 재생성 healthy 대기 120초를
+# 목록 파라미터 이름 · 보조 이미지 실행(운영 스크립트 · 가짜 SSM 값 쓰기 ·
+# 소유 읽기 · 볼륨 확인) 한 번의 상한(초 — 재생성 healthy 대기 120초를
 # 품는다).
 readonly IA_IP_LIMIT_SCRIPT='bin/ingest-auth-ip-limit.sh'
 readonly IA_DENY_SYNC_SCRIPT='bin/ingest-auth-deny-sync.sh'
@@ -437,6 +443,42 @@ ia::count_event() {
   printf '%s\n' "${logs}" | grep -c -F "\"msg\":\"$1\"" || true
 }
 
+#######################################
+# 응답기 로그에서 그 reason 의 publish 거절(ingestauth_publish_denied) 줄 수를
+# 낸다.
+# Arguments:
+#   reason(예: denylisted).
+# Outputs:
+#   줄 수(로그를 읽었을 때만).
+#######################################
+ia::count_denied() {
+  local logs
+  logs="$(ia::logs ingest-auth)" || return 1
+  printf '%s\n' "${logs}" | grep -F '"msg":"ingestauth_publish_denied"' \
+    | grep -c -F "\"reason\":\"$1\"" || true
+}
+
+#######################################
+# 앞서 센 뒤로 응답기가 그 reason 의 publish 거절을 더 냈는지 본다 — 송출의
+# 거부가 응답기의 그 판정에서 왔음을 가른다(경로 점유 · 다른 거절 사유가
+# 판정을 대신하지 않게).
+# Arguments:
+#   앞서 센 줄 수(ia::count_denied — 빈 값은 조회 실패), reason, 설명.
+#######################################
+ia::expect_denied_since() {
+  local now
+  now="$(ia::count_denied "$2")" || now=""
+  if [[ -z "$1" || -z "${now}" ]]; then
+    harness::add_reason "$3: 응답기 로그 조회 실패"
+    return 1
+  fi
+  if (( now <= $1 )); then
+    harness::add_reason "$3: 응답기 publish_denied reason=$2 가 늘지 않음\
+(${1} → ${now})"
+    return 1
+  fi
+}
+
 # C19 의 큰 쿼리(cookieCheck=1 + a=1 쌍).
 ia::big_query() {
   local i query='cookieCheck=1'
@@ -586,6 +628,9 @@ measure_big_bodies() {
 
 check_c2() {
   ia::require_layer A || return 1
+  # 앞 송출(a-c1)을 MediaMTX 가 아직 쥐고 있으면 경로 점유가 passphrase 판정을
+  # 대신한다.
+  ia::expect_path_idle '앞 송출(a-c1)을 지운 뒤' || return 1
   ia::expect_stub_rejected a-c2 "${IA_WRONG_PASSPHRASE}" '틀린 passphrase'
 }
 
@@ -787,12 +832,28 @@ ia::configure_ops() {
 }
 
 #######################################
-# 운영 스크립트 사례의 선행 조건 — 층 B · 이음매(ia::configure_ops) · 보조
-# 이미지 · 거부 목록 볼륨(없으면 docker run 이 라벨 없는 새 볼륨을 만든다) ·
+# 거부 목록 볼륨이 엔진에 있는지 본다. docker run -v 는 없는 이름이면 라벨 없는
+# 새 볼륨을 만들어(정리 계수에 잡히지 않는다) 빈 목록으로 돌므로, 그 볼륨을
+# 붙이는 docker run 앞에서 부른다.
+# Globals:
+#   ia_ops_deny_volume
+# Returns:
+#   0 있음 · 124 상한 초과 · 그 밖은 없음(또는 조회 실패).
+#######################################
+ia::deny_volume_present() {
+  harness::bounded "${IA_OPS_TIMEOUT}" \
+    docker volume inspect "${ia_ops_deny_volume}" >/dev/null 2>&1
+}
+
+#######################################
+# 운영 스크립트 사례의 선행 조건 — 층 B · 이음매(ia::configure ·
+# ia::configure_ops) · 보조 이미지 · 거부 목록 볼륨(ia::deny_volume_present) ·
 # 스크립트 실행 파일 · env 파일 자리. 옛 호출 꼴(첫 인자가 디렉터리)은 실패로
-# 남긴다 —
-# 본 파일이 check_c13 · c15 · c18 을 따로 정의해 이 lib 의 본문을 가리면
-# 본문 없이 통과하지 않게.
+# 남긴다 — 본 파일이 check_c13 · c15 · c18 을 따로 정의해 이 lib 의 본문을
+# 가리면 본문 없이 통과하지 않게.
+# Globals:
+#   ia_project, ia_compose_file, ia_ops_work, ia_ops_deny_volume,
+#   ia_ops_image_reason, ia_ops_media_dir
 # Arguments:
 #   스크립트 상대 경로 ….
 #######################################
@@ -804,6 +865,11 @@ require_ops_scripts() {
 c15 · c18 정의를 지워야 lib 본문이 돈다"
     return 1
   fi
+  # 비면 운영 스크립트가 기본값(실제 dev-media · prod 프로젝트)을 쓴다.
+  if [[ -z "${ia_project}" || -z "${ia_compose_file}" ]]; then
+    harness::add_reason 'compose 프로젝트 · 파일 없음(ia::configure 미호출)'
+    return 1
+  fi
   if [[ -z "${ia_ops_work}" || -z "${ia_ops_deny_volume}" ]]; then
     harness::add_reason '운영 스크립트 이음매 없음(ia::configure_ops 미호출)'
     return 1
@@ -812,7 +878,7 @@ c15 · c18 정의를 지워야 lib 본문이 돈다"
     harness::add_reason "운영 보조 이미지 준비 실패 — ${ia_ops_image_reason}"
     return 1
   fi
-  if ! docker volume inspect "${ia_ops_deny_volume}" >/dev/null 2>&1; then
+  if ! ia::deny_volume_present; then
     harness::add_reason "거부 목록 볼륨 ${ia_ops_deny_volume} 없음"
     return 1
   fi
@@ -837,21 +903,31 @@ c15 · c18 정의를 지워야 lib 본문이 돈다"
 # 붙인다 — compose 파일 · env_file 상대 경로 · bind 원본이 호스트에서와 같게
 # 풀린다. compose 보간 값(PCBENCH_* · RUNTIME_DIR)과 시험 env(MEDIA_OPS_*)는
 # 이 셸이 export 한 것을 이름으로만 넘긴다(값을 argv 에 싣지 않는다).
+# 격리가 아니다 — docker.sock 은 호스트 엔진 전권이라 시험 전용이다(CI ·
+# 공유 상자에서 돌리지 않는다). --network none 은 이 컨테이너의 직접 송신
+# (진짜 aws · IMDS)만 막고 소켓으로 엔진에 시키는 일은 막지 않는다.
 # Globals:
 #   ia_ops_media_dir, ia_ops_shared_dir, ia_ops_work, ia_ops_deny_volume,
 #   ia_ops_image, ia_project, ia_compose_file
 # Arguments:
 #   스크립트 상대 경로, 인자 ….
 # Outputs:
-#   표준 출력(판정 줄).
+#   표준 출력(판정 줄). 거부 목록 볼륨이 없으면 돌리지 않고 그 원인을
+#   ops.err 에 쓴다.
 #######################################
 ia::run_ops() {
   local script="${ia_ops_media_dir}/$1" name var
   local -a args
   shift
+  if ! ia::deny_volume_present; then
+    printf '거부 목록 볼륨 %s 없음\n' "${ia_ops_deny_volume}" \
+      >"${ia_ops_work}/ops.err"
+    return 1
+  fi
   name="$(ia::name ops)"
   docker rm -f "${name}" >/dev/null 2>&1 || true
-  args=(run --rm --name "${name}" --label "${IA_BENCH_LABEL}" --network none
+  args=(run --rm --pull never --name "${name}" --label "${IA_BENCH_LABEL}"
+    --network none
     --security-opt no-new-privileges:true
     -v /var/run/docker.sock:/var/run/docker.sock
     -v "${ia_ops_media_dir}:${ia_ops_media_dir}:ro"
@@ -895,31 +971,45 @@ ia::expect_ops() {
 # 가짜 SSM 거부 목록 값(머리 줄 + 토큰 줄 …)을 둔다. 읽는 쪽(보조 컨테이너의
 # 가짜 aws)과 같은 리눅스 커널에서 쓴다 — 맥 호스트가 쓴 파일을 컨테이너가
 # virtiofs 로 읽지 않게.
+# Globals:
+#   ia_ops_work, ia_ops_image
 # Arguments:
 #   토큰 ….
 #######################################
 ia::ssm_deny() {
-  local file="${ia_ops_work}/state/ssm.param.${IA_DENY_PARAM}"
-  if ! printf '%s\n' '# pokeclip deny-tokens v1' "$@" | docker run --rm -i \
-    --label "${IA_BENCH_LABEL}" --network none \
-    -v "${ia_ops_work}/state:${ia_ops_work}/state" "${ia_ops_image}" \
-    bash -c 'cat >"$1"' bash "${file}"; then
-    harness::add_reason '가짜 SSM 거부 목록 값을 쓰지 못함'
+  local file="${ia_ops_work}/state/ssm.param.${IA_DENY_PARAM}" status=0
+  # shellcheck disable=SC2016 # $1 은 보조 컨테이너 안의 bash 가 푼다.
+  printf '%s\n' '# pokeclip deny-tokens v1' "$@" \
+    | harness::bounded "${IA_OPS_TIMEOUT}" docker run --rm -i --pull never \
+      --label "${IA_BENCH_LABEL}" --network none \
+      -v "${ia_ops_work}/state:${ia_ops_work}/state" "${ia_ops_image}" \
+      bash -c 'cat >"$1"' bash "${file}" || status=$?
+  if (( status != 0 )); then
+    harness::add_reason "가짜 SSM 거부 목록 값을 쓰지 못함(종료 ${status} — \
+124 는 ${IA_OPS_TIMEOUT}초 상한 초과)"
     return 1
   fi
 }
 
 #######################################
 # 거부 목록 볼륨의 디렉터리 · 파일 소유와 모드를 보조 컨테이너로 읽는다(맥
-# 호스트에서 볼륨을 읽지 않는다).
+# 호스트에서 볼륨을 읽지 않는다). 볼륨이 없으면 돌리지 않는다.
+# Globals:
+#   ia_ops_deny_volume, ia_ops_image
 # Outputs:
-#   두 줄 「uid:gid 모드」(디렉터리 · 파일 순). 못 읽으면 실패.
+#   두 줄 「uid:gid 모드」(디렉터리 · 파일 순). 실패 원인은 표준 오류.
+# Returns:
+#   0 읽음 · 124 상한 초과 · 그 밖은 볼륨 없음 · 읽기 실패.
 #######################################
 ia::deny_owner_modes() {
-  docker run --rm --label "${IA_BENCH_LABEL}" --network none \
+  if ! ia::deny_volume_present; then
+    printf '거부 목록 볼륨 %s 없음\n' "${ia_ops_deny_volume}" >&2
+    return 1
+  fi
+  harness::bounded "${IA_OPS_TIMEOUT}" docker run --rm --pull never \
+    --label "${IA_BENCH_LABEL}" --network none \
     -v "${ia_ops_deny_volume}:${IA_OPS_DENY_DIR}:ro" "${ia_ops_image}" \
-    stat -c '%u:%g %a' "${IA_OPS_DENY_DIR}" "${IA_OPS_DENY_DIR}/deny-tokens" \
-    2>/dev/null
+    stat -c '%u:%g %a' "${IA_OPS_DENY_DIR}" "${IA_OPS_DENY_DIR}/deny-tokens"
 }
 
 # 서비스 컨테이너 ID(실행 중 하나).
@@ -1027,6 +1117,9 @@ check_c13() {
     ok=1
   fi
   ia::sender_stop b-c9
+  # b-c9 를 쥔 동안에는 경로가 ready 라 새 송출이 점유로 끊겨도 받아들여진
+  # 것으로 보인다.
+  ia::expect_path_idle '기존 송출(b-c9)을 지운 뒤' || ok=1
   ia::expect_accepted b-c13 "${IA_PASSPHRASE}" '재생성 뒤 새 송출' || ok=1
   return "${ok}"
 }
@@ -1036,24 +1129,31 @@ check_c13() {
 # (재생성 없이는) 거부 유지 → --release 뒤 풀림.
 #######################################
 check_c15() {
-  local ok=0 ia_id owner changed=그대로
+  local ok=0 ia_id owner status=0 denied changed=그대로
+  local err="${ia_ops_work}/owner.err"
   require_ops_scripts "${IA_DENY_SYNC_SCRIPT}" || return 1
   ia::sender_stop b-c13
   ia_id="$(ia::service_id ingest-auth)"
   ia::ssm_deny "${IA_STREAM_TOKEN}" || ok=1
   ia::expect_ops 'INGEST AUTH DENY SYNC OK tokens=1' "${IA_DENY_SYNC_SCRIPT}" \
     || ok=1
-  owner="$(ia::deny_owner_modes)" || owner=""
+  owner="$(ia::deny_owner_modes 2>"${err}")" || status=$?
   if [[ "${owner}" != $'0:10003 750\n0:10003 640' ]]; then
     harness::add_reason "거부 목록 소유 · 모드 「$(printf '%s' "${owner}" \
-      | tr '\n' ';')」(기대 0:10003 750;0:10003 640)"
+      | tr '\n' ';')」(기대 0:10003 750;0:10003 640 · 읽기 종료 ${status}: \
+$(harness::log_tail "${err}"))"
     ok=1
   fi
   if [[ -z "${ia_id}" || "$(ia::service_id ingest-auth)" != "${ia_id}" ]]; then
     harness::add_reason 'deny-sync(--release 없음)가 응답기를 바꿈'
     ok=1
   fi
+  # 거부가 점유(앞 송출을 MediaMTX 가 아직 쥠)나 다른 거절 사유가 아니라 거부
+  # 목록에서 왔음을 가른다.
+  ia::expect_path_idle '덧붙인 토큰 송출 전' || ok=1
+  denied="$(ia::count_denied denylisted)" || denied=""
   ia::expect_rejected b-c15a "${IA_PASSPHRASE}" '덧붙인 토큰 송출' || ok=1
+  ia::expect_denied_since "${denied}" denylisted '덧붙인 토큰 송출' || ok=1
   ia::ssm_deny || ok=1
   ia::expect_ops 'INGEST AUTH DENY SYNC OK tokens=0' "${IA_DENY_SYNC_SCRIPT}" \
     || ok=1
@@ -1087,12 +1187,32 @@ ia::path_state() {
 }
 
 #######################################
+# 시험 경로가 상한(IA_IDLE_TIMEOUT) 안에 idle 이 되는지 본다 — 마지막 상태가
+# idle 이 아니면(ready · error — error 는 조회 실패) 실패다.
+# Arguments:
+#   설명.
+#######################################
+ia::expect_path_idle() {
+  local deadline=$((SECONDS + IA_IDLE_TIMEOUT)) state
+  state="$(ia::path_state)"
+  while (( SECONDS < deadline )) && [[ "${state}" != idle ]]; do
+    sleep 0.5
+    state="$(ia::path_state)"
+  done
+  if [[ "${state}" != idle ]]; then
+    harness::add_reason "$1: ${IA_IDLE_TIMEOUT}초 뒤 경로 상태 ${state}(기대 \
+idle — error 는 조회 실패)"
+    return 1
+  fi
+}
+
+#######################################
 # C18 — 허용된 송출 중 토큰을 덧붙여 deny-sync 한 뒤 실물 cut: 종료 0 ·
 # ingestauth_cut_completed · kicked=1 · 성공한 조회로 그 연결이 사라짐을
 # 확인(조회 실패는 「사라짐」 이 아니다) · 같은 토큰 재송출 거부.
 #######################################
 check_c18() {
-  local ok=0 out status=0 deadline state
+  local ok=0 out status=0
   require_ops_scripts "${IA_DENY_SYNC_SCRIPT}" || return 1
   if ! ia::running b-c15c || ! ia::path_ready; then
     harness::add_reason '허용된 송출(b-c15c)이 없음(C15 선행)'
@@ -1110,16 +1230,7 @@ check_c18() {
 ${out:0:200}"
     ok=1
   fi
-  deadline=$((SECONDS + IA_REJECT_TIMEOUT))
-  state="$(ia::path_state)"
-  while (( SECONDS < deadline )) && [[ "${state}" != idle ]]; do
-    sleep 0.5
-    state="$(ia::path_state)"
-  done
-  if [[ "${state}" != idle ]]; then
-    harness::add_reason "cut 뒤 경로 상태 ${state}(기대 idle — error 는 조회 실패)"
-    ok=1
-  fi
+  ia::expect_path_idle 'cut 뒤' || ok=1
   ia::sender_stop b-c15c
   ia::expect_rejected b-c18 "${IA_PASSPHRASE}" 'cut 뒤 같은 토큰 재송출' || ok=1
   return "${ok}"
