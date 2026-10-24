@@ -201,6 +201,11 @@ public final class FakeAuth implements AutoCloseable {
         return at == null ? Duration.ZERO : Duration.between(at, Instant.now());
     }
 
+    /** 첫 요청이 서버에 도착한 시각. 안 왔으면 {@code null}. 순서를 재는 시험이 쓴다(POK-448). */
+    public Instant firstRequestAt() {
+        return firstRequestAt.get();
+    }
+
     private void handle(HttpExchange exchange) throws IOException {
         calls.incrementAndGet();
         firstRequestAt.compareAndSet(null, Instant.now());
