@@ -857,7 +857,9 @@ auth · clip에도 같은 10초를 넣었다(POK-414). 전에는 없어서 DB가
 -- auth
 CREATE ROLE app_auth LOGIN;
 GRANT rds_iam TO app_auth;
-GRANT CREATE ON SCHEMA public TO app_auth;
+CREATE SCHEMA app_auth;
+GRANT USAGE, CREATE ON SCHEMA app_auth TO app_auth;
+GRANT CONNECT ON DATABASE pokeclip TO app_auth;
 
 -- clip: 탈퇴 정리가 조각 장부를 읽고 지운다(StreamerPurgeStore) · 조각 조회 · 사진 대상 · 회차 머리 파일
 CREATE ROLE app_clip LOGIN;

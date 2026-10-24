@@ -36,7 +36,7 @@ class SchemaMigrationTest extends IntegrationTestSupport {
     @Test
     void Flyway가_users와_refresh_tokens_테이블을_만든다() {
         var tables = jdbc.queryForList(
-                "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'",
+                "SELECT table_name FROM information_schema.tables WHERE table_schema = 'app_auth'",
                 String.class);
 
         assertThat(tables).contains("users", "refresh_tokens");
@@ -45,7 +45,7 @@ class SchemaMigrationTest extends IntegrationTestSupport {
     @Test
     void Flyway가_스트림키와_페어링_테이블을_만든다() {
         var tables = jdbc.queryForList(
-                "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'",
+                "SELECT table_name FROM information_schema.tables WHERE table_schema = 'app_auth'",
                 String.class);
 
         assertThat(tables).contains(
@@ -88,7 +88,7 @@ class SchemaMigrationTest extends IntegrationTestSupport {
     @Test
     void Flyway_이력_테이블_이름이_모듈별로_분리돼_있다() {
         var tables = jdbc.queryForList(
-                "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'",
+                "SELECT table_name FROM information_schema.tables WHERE table_schema = 'app_auth'",
                 String.class);
 
         assertThat(tables).contains("flyway_schema_history_auth");
@@ -112,7 +112,7 @@ class SchemaMigrationTest extends IntegrationTestSupport {
     @Test
     void Flyway가_치지직_연동_표를_만든다() {
         var tables = jdbc.queryForList(
-                "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'",
+                "SELECT table_name FROM information_schema.tables WHERE table_schema = 'app_auth'",
                 String.class);
 
         assertThat(tables).contains("chzzk_channel_links");
@@ -157,7 +157,7 @@ class SchemaMigrationTest extends IntegrationTestSupport {
     @Test
     void Flyway가_초대와_위임_테이블을_만든다() {
         var tables = jdbc.queryForList(
-                "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'",
+                "SELECT table_name FROM information_schema.tables WHERE table_schema = 'app_auth'",
                 String.class);
 
         assertThat(tables).contains("editor_invitations", "editor_delegations");
