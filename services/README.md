@@ -873,7 +873,9 @@ GRANT SELECT ON stream_sessions TO app_clip;
 -- chat-collector: 채팅 시각을 영상 위치로 바꿀 때 조각 장부를 읽는다(SegmentLedger)
 CREATE ROLE app_chat_collector LOGIN;
 GRANT rds_iam TO app_chat_collector;
-GRANT CREATE ON SCHEMA public TO app_chat_collector;
+CREATE SCHEMA app_chat_collector;
+GRANT USAGE, CREATE ON SCHEMA app_chat_collector TO app_chat_collector;
+GRANT CONNECT ON DATABASE pokeclip TO app_chat_collector;
 GRANT SELECT ON stream_segments TO app_chat_collector;
 
 -- chat-detector: 채팅 원문을 읽는다(ChatWindowReader). 아래 SELECT는 수집 서버 V316이 준다(표 주인이 준다).

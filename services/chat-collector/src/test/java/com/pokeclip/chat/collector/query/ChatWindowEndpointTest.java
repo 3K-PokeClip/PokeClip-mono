@@ -353,7 +353,8 @@ class ChatWindowEndpointTest {
      * 컨테이너</b>의 표라, 되살릴 때 색인·identity 시퀀스까지 똑같이 안 되돌리면 뒤에 도는 검사가
      * 조용히 갈린다(문항 7).
      *
-     * <p>대신 <b>{@code search_path}를 없는 스키마로 돌린다.</b> DDL을 하나도 안 건드리고,
+     * <p>대신 <b>{@code search_path}를 없는 스키마로 돌린다</b>({@code pokeclip.datasource.schema} — 그 키가 Hikari
+     * {@code schema}를 정해 새 연결마다 {@code setSchema}로 경로를 바꾼다, POK-428). DDL을 하나도 안 건드리고,
      * 이 컨텍스트 안에서만 참이며, 질의는 실제로 {@code relation "chat_messages" does not exist}로
      * 죽는다 — <b>500 본문에 SQL 전문이 실릴 수 있는 진짜 상황</b>이다. Flyway는 꺼야 한다
      * (없는 스키마로 마이그레이션하려다 컨텍스트가 안 뜬다).
@@ -364,7 +365,7 @@ class ChatWindowEndpointTest {
     @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
             properties = {"pokeclip.link.internal-token=" + TOKEN,
                     "spring.flyway.enabled=false",
-                    "spring.datasource.hikari.data-source-properties.currentSchema=pokeclip_no_such_schema"})
+                    "pokeclip.datasource.schema=pokeclip_no_such_schema"})
     @ActiveProfiles("test")
     static class 표를_못_찾는_프로세스 extends IntegrationTestSupport {
 

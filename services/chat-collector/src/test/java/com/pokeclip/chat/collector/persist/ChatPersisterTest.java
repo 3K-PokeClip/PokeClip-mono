@@ -526,9 +526,10 @@ class ChatPersisterTest extends IntegrationTestSupport {
     @Test
     void 배치_결과에_행_수가_없으면_계상하지_않고_예외로_드러낸다() {
         // Hikari를 거치지 않는 DataSource — 부팅 검사가 못 보는 경로를 그대로 재현한다.
-        // Testcontainers URL에는 이미 ?loggerLevel=OFF가 있어 '&'로 잇는다('?'면 옵션이 무시된다).
+        // Testcontainers URL에는 이미 ?loggerLevel=OFF가 있어 '&'로 잇는다('?'면 옵션이 무시된다). Hikari가 아니라
+        // hikari.schema가 닿지 않으므로 경로(자기 스키마 — POK-428)를 URL로 준다.
         JdbcTemplate rewriting = new JdbcTemplate(new org.springframework.jdbc.datasource.DriverManagerDataSource(
-                POSTGRES.getJdbcUrl() + "&reWriteBatchedInserts=true",
+                POSTGRES.getJdbcUrl() + "&reWriteBatchedInserts=true&currentSchema=app_chat_collector",
                 POSTGRES.getUsername(), POSTGRES.getPassword()));
         ChatBuffer buffer = new ChatBuffer(100);
         ChatPersister persister = new ChatPersister(rewriting, buffer);
