@@ -16,9 +16,7 @@ export interface PlaybackBounds {
 }
 
 export type BoundaryAction =
-  | { kind: 'continue' }
-  | { kind: 'seek'; toSeconds: number }
-  | { kind: 'stop'; atSeconds: number };
+  { kind: 'continue' } | { kind: 'seek'; toSeconds: number } | { kind: 'stop'; atSeconds: number };
 
 /**
  * 지금 위치가 구간을 벗어났는지, 벗어났으면 무엇을 해야 하는지.
@@ -42,7 +40,25 @@ export type PlaybackError =
   /** 이 브라우저가 HLS 를 못 푼다 (hls.js 미지원 + 네이티브 HLS 없음) */
   | 'unsupported'
   /** 복구를 시도했는데도 재생이 끊겼다 */
-  | 'fatal';
+  | 'fatal'
+  /** 출입증을 다시 받아도 녹화가 403이다 */
+  | 'access'
+  /** 이 구간에 녹화가 없다(녹화 틈 안) */
+  | 'no-recording';
+
+/** 미리보기 아래에 보이는 안내(POK-389). 출입증을 못 받았을 때의 열기 실패 문구와 같은 결로 쓴다 */
+export function playbackErrorMessage(error: PlaybackError): string {
+  switch (error) {
+    case 'access':
+      return '영상 출입증이 거절됐어요. 잠시 뒤 다시 열어 주세요';
+    case 'no-recording':
+      return '이 구간의 녹화가 없어 미리보기를 못 틀어요';
+    case 'unsupported':
+      return '이 브라우저는 미리보기 영상을 못 틀어요';
+    case 'fatal':
+      return '미리보기 영상을 불러오지 못했어요. 잠시 뒤 다시 열어 주세요';
+  }
+}
 
 /**
  * 편집기가 재생에 대해 아는 전부.

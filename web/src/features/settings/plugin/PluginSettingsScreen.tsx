@@ -20,7 +20,7 @@ import styles from './PluginSettingsScreen.module.css';
 // 재발급 확인 모달은 없다 — rotate를 쓰지 않아 재발급이 방송 키를 죽이지 않으므로
 // 경고할 위험 자체가 사라졌다. 발급·재발급 모두 새 코드 1콜이다.
 export function PluginSettingsScreen() {
-  const { loading, error, retryStatus, code, busy, justIssued, clearJustIssued, issue } =
+  const { loading, error, retryStatus, retrying, code, busy, justIssued, clearJustIssued, issue } =
     useStreamKeyState();
   const detectedOs = useDetectedOs();
   const [downloadOpen, setDownloadOpen] = useState(false);
@@ -36,6 +36,7 @@ export function PluginSettingsScreen() {
           code={code}
           loading={loading}
           error={error}
+          retrying={retrying}
           busy={busy}
           onIssue={issue}
           onRetry={retryStatus}

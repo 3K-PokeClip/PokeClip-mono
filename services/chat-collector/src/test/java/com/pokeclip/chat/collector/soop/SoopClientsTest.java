@@ -229,6 +229,77 @@ class SoopClientsTest {
         return new SoopLinkClient(jdk(), new LinkProperties(fake.baseUrl(), "internal-token"));
     }
 
+    /**
+     * SOOP 카테고리 리스트(POK-462). 문서의 응답 모양 그대로: 대카테고리 아래 {@code child}가 있다. 자식까지 번호 → 이름으로 편다.
+     * 앱 아이디는 {@code client_id} 쿼리로 싣는다(문서 표는 {@code access_token}이라 적었지만 예시와 실서버가 {@code client_id}다:
+     * 인자 없이 부르면 -1100, 틀린 값이면 -1104 「invalid client」. 2026-10-25 실측).
+     */
+    @Test
+    void 카테고리_리스트를_자식까지_번호_이름으로_편다() {
+        fake.categoryAnswers(ok("""
+                {"broad_category":[{"cate_name":"토크/캠방","cate_no":"00130000","child":[]},
+                 {"cate_name":"게임","cate_no":"00040000","child":[{"cate_name":"LOL","cate_no":"00040019"},
+                  {"cate_name":"TFT","cate_no":"00040075"}]}]}"""));
+
+        java.util.Map<String, String> names = new SoopCategoryClient(jdk(), fake.baseUrl(), "app-id").fetch();
+
+        assertThat(names).containsExactlyInAnyOrderEntriesOf(java.util.Map.of(
+                "00130000", "토크/캠방", "00040000", "게임", "00040019", "LOL", "00040075", "TFT"));
+        FakeSoopHttp.Received request = fake.requests(FakeSoopHttp.CATEGORIES).getFirst();
+        assertThat(request.method()).isEqualTo("GET");
+        assertThat(request.rawQuery()).isEqualTo("client_id=app-id&locale=ko_KR");
+    }
+
+    /** 결과 코드가 음수거나(앱 아이디가 틀림) 목록이 없거나 HTTP가 실패하면 던진다. 부르는 쪽이 앞 표를 지키고 다시 묻는다. */
+    @Test
+    void 카테고리_리스트가_거절되거나_비면_던진다() {
+        SoopCategoryClient client = new SoopCategoryClient(jdk(), fake.baseUrl(), "app-id");
+        for (FakeSoopHttp.Response answer : List.of(ok("{\"result\":-1104,\"msg\":\"invalid client\"}"),
+                ok("{\"broad_category\":[]}"), new FakeSoopHttp.Response(503, "{}"))) {
+            fake.categoryAnswers(answer);
+            org.assertj.core.api.Assertions.assertThatThrownBy(client::fetch).as(answer.toString())
+                    .isInstanceOf(RuntimeException.class);
+        }
+    }
+
+    /** 방송 중 응답의 카테고리 번호를 이름 표로 바꾼다(POK-462). 번호가 숫자로 와도(문서 예시 40075) 8자리 글자로 맞춘다. */
+    @Test
+    void 방송_중이면_카테고리_번호를_이름으로_바꾼다() {
+        java.util.Map<String, String> names = java.util.Map.of("00040019", "LOL", "00040075", "TFT");
+        SoopLiveClient client = new SoopLiveClient(jdk(), fake.baseUrl(), false,
+                raw -> names.get(SoopCategoryNames.normalize(raw)), name -> "LOL".equals(name) ? "https://img.example/lol.jpg" : null);
+
+        fake.statusAnswers(ok(실측_방송_중));
+        SoopLiveStatus lol = client.check(TOKEN);
+        assertThat(lol.category()).isEqualTo("LOL");
+        assertThat(lol.categoryImageUrl()).as("이름으로 빌린 사진").isEqualTo("https://img.example/lol.jpg");
+        fake.statusAnswers(ok(실측_방송_중.replace("\"broad_cate_no\":\"00040019\"", "\"broad_cate_no\":40075")));
+        assertThat(client.check(TOKEN).category()).isEqualTo("TFT");
+        fake.statusAnswers(ok(실측_방송_중.replace("00040019", "00099999")));
+        SoopLiveStatus unknown = client.check(TOKEN);
+        assertThat(unknown.category()).as("표에 없는 번호").isNull();
+        assertThat(unknown.categoryImageUrl()).as("이름이 없으면 사진도 안 묻는다").isNull();
+    }
+
+    /**
+     * 앱 값이 비면 이름 표 받기 · 사진 검색을 아예 안 만든다(POK-462). 앱 값 없는 환경(CI · 팀원 로컬)이 빈 client_id로 SOOP · 치지직을
+     * 10분마다 두드리지 않게. 받기는 단일 스레드 실행기에서 도므로 그 뒤에 표지 작업을 넣고 끝나기를 기다리면 앞서 맡긴 것은 다 돈 뒤다.
+     * 양성 대조: 앱 값이 있으면 같은 길로 실제로 묻는다.
+     */
+    @Test
+    void 앱_값이_비면_이름_표와_사진_빌리기를_안_만든다() throws Exception {
+        fake.categoryAnswers(ok("{\"broad_category\":[{\"cate_name\":\"LOL\",\"cate_no\":\"00040019\"}]}"));
+
+        assertThat(SoopWatchConfiguration.Enabled.categoryNames(jdk(), fake.baseUrl(), " ").apply(40019)).isNull();
+        assertThat(SoopWatchConfiguration.Enabled.categoryImages(jdk(), fake.baseUrl(), "id", "").apply("LOL")).isNull();
+        SoopWatchConfiguration.CATEGORY_LOOKUPS.submit(() -> { }).get();
+        assertThat(fake.requests(FakeSoopHttp.CATEGORIES)).isEmpty();
+
+        SoopWatchConfiguration.Enabled.categoryNames(jdk(), fake.baseUrl(), "app-id").apply(40019);
+        SoopWatchConfiguration.CATEGORY_LOOKUPS.submit(() -> { }).get();
+        assertThat(fake.requests(FakeSoopHttp.CATEGORIES)).as("앱 값이 있으면 묻는다").hasSize(1);
+    }
+
     private SoopLiveClient liveClient(boolean diagnose) {
         return new SoopLiveClient(jdk(), fake.baseUrl(), diagnose);
     }

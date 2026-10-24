@@ -65,20 +65,67 @@ class BroadcastInfoEndpointTest extends IntegrationTestSupport {
         store.insert(new BroadcastInfo(Platform.CHZZK, STREAM, "CH", T, "제목1", List.of("롤"), "LoL", 100));
         store.insert(new BroadcastInfo(Platform.CHZZK, STREAM, "CH", T.plusSeconds(60), "제목2",
                 List.of("롤", "다이아"), "LoL", null));
+        store.insert(new BroadcastInfo(Platform.CHZZK, STREAM, "CH", T.plusSeconds(120), "제목2",
+                List.of("롤", "다이아"), "Just Chatting", 90, "https://img.example/jc.jpg"));
 
         HttpResponse<String> response = 물어본다("since=" + T.minusSeconds(1), TOKEN);
 
         assertThat(response.statusCode()).as(response.body()).isEqualTo(200);
         assertThat(response.body())
-                .contains("\"latest\":")
-                .contains("\"title\":\"제목2\"")
-                .contains("\"tags\":[\"롤\",\"다이아\"]")
-                .contains("\"category\":\"LoL\"")
-                .contains("\"observedAt\":\"2026-09-03T15:01:00Z\"")
-                .contains("\"series\":[")
-                .as("추이는 오래된 것부터고 모르는 시청자 수는 null이다")
-                .contains("{\"observedAt\":\"2026-09-03T15:00:00Z\",\"viewers\":100,\"platform\":\"CHZZK\"}")
-                .contains("{\"observedAt\":\"2026-09-03T15:01:00Z\",\"viewers\":null,\"platform\":\"CHZZK\"}");
+                .contains("\"latest\":{\"title\":\"제목2\",\"tags\":[\"롤\",\"다이아\"],\"category\":\"Just Chatting\","
+                        + "\"viewers\":90,\"observedAt\":\"2026-09-03T15:02:00Z\"}")
+                .as("추이는 오래된 것부터고 모르는 시청자 수는 null이다. 점마다 그 관측의 카테고리가 실린다(POK-402)")
+                .contains("\"series\":["
+                        + "{\"observedAt\":\"2026-09-03T15:00:00Z\",\"viewers\":100,\"platform\":\"CHZZK\",\"category\":\"LoL\","
+                        + "\"title\":\"제목1\",\"tags\":[\"롤\"],\"categoryImageUrl\":null},"
+                        + "{\"observedAt\":\"2026-09-03T15:01:00Z\",\"viewers\":null,\"platform\":\"CHZZK\",\"category\":\"LoL\","
+                        + "\"title\":\"제목2\",\"tags\":[\"롤\",\"다이아\"],\"categoryImageUrl\":null},"
+                        + "{\"observedAt\":\"2026-09-03T15:02:00Z\",\"viewers\":90,\"platform\":\"CHZZK\",\"category\":\"Just Chatting\","
+                        + "\"title\":\"제목2\",\"tags\":[\"롤\",\"다이아\"],\"categoryImageUrl\":\"https://img.example/jc.jpg\"}]");
+    }
+
+    private HttpResponse<String> 구간을_물어본다(String streamId, String token) throws Exception {
+        HttpRequest.Builder request = HttpRequest.newBuilder(URI.create(
+                "http://localhost:" + port + "/internal/streams/" + streamId + "/broadcast-info/timeline"));
+        if (token != null) request.header("X-Internal-Token", token);
+        return HttpClient.newHttpClient().send(request.GET().build(), HttpResponse.BodyHandlers.ofString());
+    }
+
+    /**
+     * 구간 창구(POK-462). 칸 이름과 순서는 웹 · 대시보드 카드와의 계약이라 글자로 못박는다. 실 PG에서 사진 칸까지 왕복해 접힌다.
+     */
+    @Test
+    void 구간_창구가_계약된_칸_이름으로_바뀐_곳마다_끊어_준다() throws Exception {
+        String stream = "api-bi-tl";
+        store.insert(new BroadcastInfo(Platform.CHZZK, stream, "CH", T, "랭크", List.of("롤"), "LoL", 100, "https://img.example/lol.jpg"));
+        store.insert(new BroadcastInfo(Platform.CHZZK, stream, "CH", T.plusSeconds(60), "랭크", List.of("롤"), "LoL", 90, null));
+        store.insert(new BroadcastInfo(Platform.CHZZK, stream, "CH", T.plusSeconds(120), "랭크", List.of("롤"), "Talk", 80, null));
+        store.insert(new BroadcastInfo(Platform.SOOP, stream, "SU", T.plusSeconds(30), "숲", List.of(), "LOL", 5));
+
+        HttpResponse<String> response = 구간을_물어본다(stream, TOKEN);
+
+        assertThat(response.statusCode()).as(response.body()).isEqualTo(200);
+        assertThat(response.body()).isEqualTo("{\"segments\":["
+                + "{\"platform\":\"CHZZK\",\"from\":\"2026-09-03T15:00:00Z\",\"until\":\"2026-09-03T15:02:00Z\","
+                + "\"lastObservedAt\":\"2026-09-03T15:01:00Z\",\"title\":\"랭크\",\"category\":\"LoL\","
+                + "\"categoryImageUrl\":\"https://img.example/lol.jpg\",\"tags\":[\"롤\"]},"
+                + "{\"platform\":\"SOOP\",\"from\":\"2026-09-03T15:00:30Z\",\"until\":null,"
+                + "\"lastObservedAt\":\"2026-09-03T15:00:30Z\",\"title\":\"숲\",\"category\":\"LOL\","
+                + "\"categoryImageUrl\":null,\"tags\":[]},"
+                + "{\"platform\":\"CHZZK\",\"from\":\"2026-09-03T15:02:00Z\",\"until\":null,"
+                + "\"lastObservedAt\":\"2026-09-03T15:02:00Z\",\"title\":\"랭크\",\"category\":\"Talk\","
+                + "\"categoryImageUrl\":null,\"tags\":[\"롤\"]}],"
+                + "\"truncated\":false}");
+    }
+
+    /** 모르는 방송도 200 + 빈 목록(위 창구와 같다). 토큰이 없으면 401. */
+    @Test
+    void 구간_창구는_모르는_방송에_빈_목록이고_토큰이_없으면_401이다() throws Exception {
+        HttpResponse<String> unknown = 구간을_물어본다("api-bi-없음", TOKEN);
+        assertThat(unknown.statusCode()).isEqualTo(200);
+        assertThat(unknown.body()).isEqualTo("{\"segments\":[],\"truncated\":false}");
+
+        assertThat(구간을_물어본다("api-bi-tl", null).statusCode()).isEqualTo(401);
     }
 
     /**
@@ -100,7 +147,9 @@ class BroadcastInfoEndpointTest extends IntegrationTestSupport {
                         + "\"viewers\":100,\"observedAt\":\"2026-09-03T15:00:00Z\"},"
                         + "{\"platform\":\"SOOP\",\"title\":null,\"category\":null,"
                         + "\"viewers\":8,\"observedAt\":\"2026-09-03T15:01:00Z\"}]")
-                .contains("{\"observedAt\":\"2026-09-03T15:01:00Z\",\"viewers\":8,\"platform\":\"SOOP\"}");
+                .as("카테고리를 못 얻은 관측은 null이다(POK-402)")
+                .contains("{\"observedAt\":\"2026-09-03T15:01:00Z\",\"viewers\":8,\"platform\":\"SOOP\",\"category\":null,"
+                        + "\"title\":null,\"tags\":[],\"categoryImageUrl\":null}");
     }
 
     /**

@@ -25,6 +25,7 @@ export * from './Checkbox';
 export * from './Switch';
 // Navigation / feedback (M5)
 export * from './RadioGroup';
+export * from './ModeSegment';
 export * from './Tabs';
 export * from './Breadcrumb';
 export * from './Pagination';

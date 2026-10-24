@@ -48,7 +48,7 @@
 .playerFrame {
   border-radius: calc(14 * var(--pc-u));
   overflow: hidden;
-  background: #08090c;
+  background: #08090c; /* 테마 고정 */
 }
 
 /* 플레이어 Suspense 폴백 — GlassPlayer 루트와 같은 16:9로 자리를 지킨다 */
@@ -69,19 +69,30 @@
   background: var(--pc-color-bg-surface);
 }
 
-/* 카테고리 이미지 창구가 없어 라벨만 든 자리 표시 */
+/* 스트리머 프로필 사진 동그라미(POK-457). Avatar lg(56u)와 같은 크기의 빈 자리라 누구인지 모를 때도 줄 모양이 안 흔들린다 */
 .infoThumb {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: calc(46 * var(--pc-u));
-  height: calc(61 * var(--pc-u));
-  border-radius: calc(9 * var(--pc-u));
+  width: calc(56 * var(--pc-u));
+  height: calc(56 * var(--pc-u));
+  border-radius: 50%;
   background: var(--pc-color-bg-inset);
-  color: var(--pc-color-text-muted);
-  font-size: calc(9 * var(--pc-u));
-  text-align: center;
   flex: none;
+}
+
+.infoCategoryThumb {
+  /* 카테고리 사진은 세로 포스터(3:4)다: 치지직 · SOOP 정보 줄과 같은 모양. 높이는 프로필 동그라미와 같다 */
+  width: calc(42 * var(--pc-u));
+  height: calc(56 * var(--pc-u));
+  border-radius: var(--pc-radius-sm);
+  overflow: hidden;
+  background: var(--pc-color-bg-inset);
+  flex: none;
+}
+
+.infoCategoryThumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
 }
 
 .infoBody {
@@ -196,7 +207,7 @@
   padding: calc(1 * var(--pc-u)) calc(4 * var(--pc-u));
   margin-left: calc(5 * var(--pc-u));
   border-radius: calc(4 * var(--pc-u));
-  background: rgb(255 255 255 / 0.22);
+  background: rgb(255 255 255 / 0.22); /* 테마 고정 */
 }
 
 .markNote {
@@ -335,8 +346,8 @@
 
 /* 방금 감지·마킹된 카드 */
 .cardEmphasized {
-  border-color: rgb(214 63 159 / 0.45);
-  background: rgb(214 63 159 / 0.05);
+  border-color: rgb(214 63 159 / 0.45); /* 테마 고정 */
+  background: rgb(214 63 159 / 0.05); /* 테마 고정 */
 }
 
 .cardDimmed {
@@ -388,7 +399,7 @@
   left: 0;
   right: 0;
   height: calc(3 * var(--pc-u));
-  background: rgb(255 255 255 / 0.14);
+  background: rgb(255 255 255 / 0.14); /* 테마 고정 */
 }
 
 .cardPosMark {
@@ -412,8 +423,8 @@
   right: calc(8 * var(--pc-u));
   padding: calc(2 * var(--pc-u)) calc(8 * var(--pc-u));
   border-radius: calc(99 * var(--pc-u));
-  background: rgb(0 0 0 / 0.55);
-  color: rgb(255 255 255 / 0.85);
+  background: rgb(0 0 0 / 0.55); /* 테마 고정 */
+  color: rgb(255 255 255 / 0.85); /* 테마 고정 */
   font-size: calc(10 * var(--pc-u));
   font-weight: 650;
 }
@@ -424,8 +435,8 @@
   bottom: calc(9 * var(--pc-u));
   padding: calc(1 * var(--pc-u)) calc(6 * var(--pc-u));
   border-radius: calc(5 * var(--pc-u));
-  background: rgb(0 0 0 / 0.62);
-  color: #fff;
+  background: rgb(0 0 0 / 0.62); /* 테마 고정 */
+  color: #fff; /* 테마 고정 */
   font-size: calc(10.5 * var(--pc-u));
   font-weight: 600;
 }
@@ -436,7 +447,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgb(0 0 0 / 0.72);
+  background: rgb(0 0 0 / 0.72); /* 테마 고정 */
 }
 
 .cardBody {
@@ -517,7 +528,7 @@
   min-height: calc(300 * var(--pc-u));
   border: calc(1.5 * var(--pc-u)) dashed var(--pc-color-point);
   border-radius: calc(14 * var(--pc-u));
-  background: rgb(214 63 159 / 0.06);
+  background: rgb(214 63 159 / 0.06); /* 테마 고정 */
 }
 
 .pendingLabel {
@@ -566,11 +577,11 @@
   width: calc(7 * var(--pc-u));
   height: calc(7 * var(--pc-u));
   border-radius: 99px;
-  background: var(--pc-color-success, #4cae7d);
+  background: var(--pc-color-success, #4cae7d); /* 테마 고정 */
 }
 
 .chatDotWarning {
-  background: var(--pc-color-warning, #e6a83c);
+  background: var(--pc-color-warning, #e6a83c); /* 테마 고정 */
 }
 
 .chatHeader {
@@ -673,6 +684,14 @@
   word-break: break-all;
 }
 
+/* 어느 플랫폼 채팅인지(POK-466) — 닉네임보다 한 단계 작고 흐리게: 줄을 읽는 흐름을 끊지 않는다 */
+.chatPlatform {
+  margin-right: calc(4 * var(--pc-u));
+  font-size: calc(10 * var(--pc-u));
+  font-weight: 650;
+  color: var(--pc-color-text-muted);
+}
+
 .chatName {
   font-weight: 700;
   color: var(--pc-color-text-secondary);
@@ -680,7 +699,8 @@
 
 /* 닉네임 색 로테이션 — 누가 말하는지 줄 단위로 갈라 보이게 하는 장치라 시안 값을 그대로 쓴다 */
 .chatName[data-color='1'] {
-  color: var(--pc-color-success, #4cae7d);
+  /* 글자라 채움 초록(라이트 2.99:1) 대신 글자용 — 다크는 같은 값 */
+  color: var(--pc-color-success-text);
 }
 
 .chatName[data-color='2'] {
@@ -688,11 +708,20 @@
 }
 
 .chatName[data-color='3'] {
-  color: #b48ef0;
+  color: #b48ef0; /* 라이트 덮음 */
+}
+
+/* 보라·앰버 닉네임은 흰 채팅 칸에서 2:1대 — 라이트는 진한 단계 */
+:global([data-theme='light']) .chatName[data-color='3'] {
+  color: #7a4fd8; /* 라이트 값 */
 }
 
 .chatName[data-color='4'] {
-  color: #e6a83c;
+  color: #e6a83c; /* 라이트 덮음 */
+}
+
+:global([data-theme='light']) .chatName[data-color='4'] {
+  color: var(--pc-color-warning-text);
 }
 
 .chatName[data-color='5'] {
@@ -709,14 +738,18 @@
   gap: calc(3 * var(--pc-u));
   padding: calc(8 * var(--pc-u)) calc(10 * var(--pc-u));
   border-radius: calc(10 * var(--pc-u));
-  border: 1px solid rgb(230 168 60 / 0.3);
-  background: rgb(230 168 60 / 0.1);
+  border: 1px solid rgb(230 168 60 / 0.3); /* 테마 고정 */
+  background: rgb(230 168 60 / 0.1); /* 테마 고정 */
 }
 
 .chatDonationHead {
   font-size: calc(11 * var(--pc-u));
   font-weight: 750;
-  color: #e6a83c;
+  color: #e6a83c; /* 라이트 덮음 */
+}
+
+:global([data-theme='light']) .chatDonationHead {
+  color: var(--pc-color-warning-text);
 }
 
 .chatDonationText {
@@ -727,7 +760,7 @@
 .chatSystem {
   padding: calc(7 * var(--pc-u)) calc(10 * var(--pc-u));
   border-radius: calc(10 * var(--pc-u));
-  background: rgb(214 63 159 / 0.08);
+  background: rgb(214 63 159 / 0.08); /* 테마 고정 */
   font-size: calc(11 * var(--pc-u));
   font-weight: 650;
   line-height: 1.45;

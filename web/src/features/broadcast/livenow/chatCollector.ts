@@ -19,6 +19,11 @@ export interface WireItem {
   amount: number | null;
   /** 후원 종류(채팅이면 null). 라벨은 {@link donationLabel}로 고른다. 옛 서버 · 시험 줄은 빠져 올 수 있다 */
   donationType?: string | null;
+  /**
+   * 그 줄이 들어온 플랫폼 코드(`CHZZK`·`SOOP`, POK-466). 한 방송을 두 플랫폼에 같이 내보내면 두 플랫폼 줄이 섞여 오므로 채팅 창이
+   * 줄마다 보인다. 옛 서버 · 시험 줄은 빠져 올 수 있다
+   */
+  platform?: string | null;
 }
 
 /**
@@ -61,14 +66,18 @@ export function donationLabel(
  */
 export const LIVE_REREAD_MS = 10_000;
 
-/** 겹친 구간 중복 제거 열쇠 — 채팅 표 지문 UNIQUE와 같다(README 「웹이 지켜야 하는 것 넷」 3) */
+/**
+ * 겹친 구간 중복 제거 열쇠 — 채팅 표 지문 UNIQUE와 같다(README 「웹이 지켜야 하는 것 넷」 3). 표 지문에 플랫폼이 들어 있으므로
+ * 여기도 넣는다(POK-466): 두 플랫폼에서 같은 글이 같은 시각에 오면 둘 다 보인다
+ */
 export function chatFingerprint(it: {
   kind: string;
   time: string;
   senderChannelId: string;
   text: string | null;
+  platform?: string | null;
 }): string {
-  return `${it.kind}|${it.time}|${it.senderChannelId}|${it.text ?? ''}`;
+  return `${it.kind}|${it.time}|${it.senderChannelId}|${it.text ?? ''}|${it.platform ?? ''}`;
 }
 
 /** chat-messages 한 쪽 */

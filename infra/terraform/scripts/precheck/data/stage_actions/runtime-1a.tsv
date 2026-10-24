@@ -3,7 +3,8 @@
 # 같은 (동작, 리전)은 한 행. 자원 패턴을 계획이 주지 않으면 *.
 # 출처: 계획 rt1a c6 · 착수 체크리스트 H1 · 설계 D11 · K5(prod/runtime 본
 # apply · 실행기 켬 · 끔 · SQL 실행). 2-3 판정 묶음이다 — POK-365 완료로
-# K5 가 바뀌었다(kty 2026-10-23 · 단계 순서는 O7c 뒤 · O7d 앞).
+# K5 가 바뀌었다(kty 2026-10-23 · 단계 순서는 O7c 뒤 · O7d 앞). 계획 rt1d
+# c2 · 설계 K4(런타임 data "aws_subnet" — 호출자 권한)로 한 행을 더했다.
 # rds-db:connect 는 넣지 않는다(결정 48 — O7e-stop1 에만).
 # 읽기 동작은 provider v6.19.0 소스(internal/service/{rds,iam,ec2,s3,sns,sqs,
 # secretsmanager,logs}) 의 호출에서 뽑았다(2026-10-23). 잠금 판 v6.68.0 대조로
@@ -13,16 +14,29 @@
 # (ec2/ec2_instance.go · vpc_security_group*.go · iam/{role,instance_profile,
 # role_policy_attachment}.go · ssm/parameter_data_source.go)의 호출은 아래
 # 행에 모두 있어 더한 것이 없다 — ec2:DescribeSubnets 는 그 경로가 부르지
-# 않는다. RDS 를 VPC 에 만드는 경로도 ec2 읽기를 더하지 않는다(2026-10-24
+# 않지만 이 루트의 data "aws_subnet" 이 부른다(아래 행). RDS 를 VPC 에 만드는 경로도 ec2 읽기를 더하지 않는다(2026-10-24
 # 대조): 잠금 판 v6.68.0 의 rds/instance.go · subnet_group.go ·
 # parameter_group.go 는 RDS 클라이언트만 부르고, 서비스 승인 참조
 # list_rds.html 의 CreateDBInstance · CreateDBSubnetGroup · ModifyDBInstance
 # 는 의존 동작이 없다. 서브넷 · AZ · VPC 속성 · 인터넷 게이트웨이 조회
 # (ec2:DescribeSubnets · DescribeAvailabilityZones · DescribeVpcAttribute ·
 # DescribeInternetGateways 등)는 RDS 서비스 연결 역할의 관리형 정책
-# AmazonRDSServiceRolePolicy 에 있다 — 호출자 권한이 아니다.
+# AmazonRDSServiceRolePolicy 에 있다 — RDS 경로에서는 호출자 권한이 아니다.
 # 판정 읽기와 이름이 같은 Terraform 자기 읽기는 제 덩어리에 자원 * 한 행으로
 # 둔다(같은 (동작, 리전)은 한 행 — * 가 prod 경로도 덮는다).
+# 1단-다(계획 rt1c c5 · 설계 9절 · K9)도 이 묶음이다. 잠금 판 v6.68.0 의
+# sqs/queue.go · queue_redrive_allow_policy.go · attribute_funcs.go 와
+# s3/bucket_lifecycle_configuration.go(만료 규칙)의 호출을 대조했다
+# (2026-10-24): 생성 · 읽기 길은 sqs:CreateQueue · GetQueueAttributes ·
+# SetQueueAttributes 와 s3:PutLifecycleConfiguration · GetLifecycleConfiguration
+# 뿐이고 모두 아래 행에 있다 — Terraform 동작 행 추가 0. 버킷 둘 · 그릇 하나는
+# 1단-가와 같은 길(s3 · secretsmanager 덩어리)이다. 더한 것은 값 넣기 한 행
+# (put-secret-from-file.sh — 1단-다)과 rewind 버킷 CORS 한 행이다. CORS 는
+# 잠금 판 v6.68.0 의 s3/bucket_cors_configuration.go 가 PutBucketCors(생성 ·
+# 갱신) · GetBucketCors(읽기 · 생성 뒤 대기) · DeleteBucketCors(삭제)를
+# 부른다(2026-10-24 대조). 삭제의 IAM 동작도 s3:PutBucketCORS 이고(서비스
+# 승인 참조 list_amazons3.html), 읽기 s3:GetBucketCORS 는 버킷 읽기 행에
+# 이미 있다 — 더한 것은 s3:PutBucketCORS 한 행이다.
 
 # RDS — 인스턴스 · 파라미터 그룹 · 서브넷 그룹 · 태그(D2)
 rds:CreateDBInstance	ap-northeast-2	*
@@ -40,15 +54,19 @@ rds:ListTagsForResource	ap-northeast-2	*
 # RDS 서비스 연결 역할(계정에 없을 때 첫 인스턴스 생성이 만든다)
 iam:CreateServiceLinkedRole	us-east-1	arn:aws:iam::${ACCOUNT}:role/aws-service-role/rds.amazonaws.com/AWSServiceRoleForRDS
 
-# 비밀 — 앱 비밀 그릇 일곱(c3) · RDS 관리형 마스터 비밀(D1). 관리형 비밀은
-# RDS 가 호출자 권한으로 kms:DescribeKey · secretsmanager:CreateSecret ·
-# secretsmanager:TagResource 를 쓴다(RDS 사용 설명서 「Permissions required for
-# Secrets Manager integration」 — 2026-10-23 확인). 그 비밀 이름은 rds!db-* 이지만
-# 같은 (동작, 리전)은 한 행이라 그릇 경로 pokeclip/prod/* 하나로 판정한다.
+# 비밀 — 앱 비밀 그릇(1단-가 일곱 · 1단-다 SOOP 로 여덟) · RDS 관리형 마스터
+# 비밀(D1). 관리형 비밀은 RDS 가 호출자 권한으로 kms:DescribeKey ·
+# secretsmanager:CreateSecret · secretsmanager:TagResource 를 쓴다(RDS 사용
+# 설명서 「Permissions required for Secrets Manager integration」 — 2026-10-23
+# 확인). 그 비밀 이름은 rds!db-* 이지만 같은 (동작, 리전)은 한 행이라 그릇
+# 경로 pokeclip/prod/* 하나로 판정한다.
 secretsmanager:CreateSecret	ap-northeast-2	arn:aws:secretsmanager:ap-northeast-2:${ACCOUNT}:secret:pokeclip/prod/*
 secretsmanager:TagResource	ap-northeast-2	arn:aws:secretsmanager:ap-northeast-2:${ACCOUNT}:secret:pokeclip/prod/*
 secretsmanager:DescribeSecret	ap-northeast-2	arn:aws:secretsmanager:ap-northeast-2:${ACCOUNT}:secret:pokeclip/prod/*
 secretsmanager:GetResourcePolicy	ap-northeast-2	*
+# 값 넣기(put-secret-from-file.sh — 1단-다 · 1단-나 ②) — apply 뒤 그릇 아홉에
+# 값을 넣는다.
+secretsmanager:PutSecretValue	ap-northeast-2	arn:aws:secretsmanager:ap-northeast-2:${ACCOUNT}:secret:pokeclip/prod/*
 kms:DescribeKey	ap-northeast-2	*
 
 # 실행기 루트 볼륨 암호화(EBS — 기본 키 aws/ebs). AWS EBS 사용 설명서
@@ -69,6 +87,10 @@ ec2:AuthorizeSecurityGroupEgress	ap-northeast-2	*
 ec2:RevokeSecurityGroupEgress	ap-northeast-2	*
 ec2:CreateTags	ap-northeast-2	*
 
+# auth 허용 대역 조회(계획 rt1d c2 · 설계 K4) — data "aws_subnet" 이 Media
+# 프라이빗 서브넷의 CIDR 을 읽는다(provider 잠금 판 소스 판독)
+ec2:DescribeSubnets	ap-northeast-2	*
+
 # rewind 버킷(D10 — 공개 차단 · 소유권 · SSE-S3 · 수명주기)
 s3:CreateBucket	ap-northeast-2	*
 s3:PutBucketTagging	ap-northeast-2	*
@@ -76,6 +98,7 @@ s3:PutBucketPublicAccessBlock	ap-northeast-2	*
 s3:PutBucketOwnershipControls	ap-northeast-2	*
 s3:PutEncryptionConfiguration	ap-northeast-2	*
 s3:PutLifecycleConfiguration	ap-northeast-2	*
+s3:PutBucketCORS	ap-northeast-2	*
 s3:GetBucketPolicy	ap-northeast-2	*
 s3:GetBucketAcl	ap-northeast-2	*
 s3:GetBucketCORS	ap-northeast-2	*

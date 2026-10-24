@@ -269,6 +269,15 @@ pokeclip:
       interval: PT1H
       # 이보다 오래 확인 안 한 연동만 점검한다.
       staleness: PT24H
+    retention:
+      # 유튜브 데이터 보관(POK-423, 처리방침 13절). 기한 셋은 처리방침 문장 그대로다: 바꾸면 처리방침도 바꾼다.
+      # 해제 7일 · 철회/갱신 불가 30일 뒤 채널 정보를 지우고 clip에 영상 번호 지우기를 알리며, 연동 중 30일마다 채널 이름을 다시 받는다.
+      # 구글에 권한 취소(revoke)는 안 보낸다(ADR-052). clip 주소는 withdrawal-purge.clip-base-url을 같이 쓴다.
+      run: true
+      interval: PT1H
+      unlinked-grace: P7D
+      broken-grace: P30D
+      channel-refresh-after: P30D
   soop:
     # 앱 셋은 한 덩어리다(SoopProperties.App). 하나만 빠져도 부팅에서 죽는다.
     # redirect-uri는 SOOP 개발자 콘솔에 앱당 하나다: 환경마다 앱이 다르다(치지직과 같다).

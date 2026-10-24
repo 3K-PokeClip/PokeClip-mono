@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # bin/loopback-health.sh 시험 — 비밀 노출 범위와 갈래: 공개 토큰은 인자, 기본은
-# passphrase 없이 송출(송출 인증 반영 전 상자는 익명 publish), passphrase 갈래는
+# passphrase 없이 송출(옛 모드 상자는 익명 publish), passphrase 갈래는
 # --passphrase. 송출기는 다이제스트 고정 linuxserver/ffmpeg 을 docker run --rm.
 #
 # 스크립트를 빈 환경(env -i)에서 돌린다. PATH 맨 앞에는 가짜 docker(ps · run —

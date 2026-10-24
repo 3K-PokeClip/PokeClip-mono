@@ -27,12 +27,13 @@ public class ThumbnailUrls {
 
     /**
      * 지난 방송마다 점수가 가장 높은 카드 중 사진이 있는 것. 점수가 없는 카드는 뒤로, 같으면 먼저 생긴 카드.
+     * 가린 카드(POK-463)는 대표로 안 쓴다.
      */
     static final String TOP_CARD_KEYS = """
             SELECT DISTINCT ON (c.stream_id) c.stream_id, t.s3_key
               FROM jump_cards c
               JOIN thumbnails t ON t.kind = 'card' AND t.target_id = c.id::text AND t.s3_key IS NOT NULL
-             WHERE c.stream_id = ANY(?)
+             WHERE c.stream_id = ANY(?) AND c.hidden_at IS NULL
              ORDER BY c.stream_id, c.score DESC NULLS LAST, c.id""";
 
     private final ObjectProvider<ThumbnailSigner> signer;

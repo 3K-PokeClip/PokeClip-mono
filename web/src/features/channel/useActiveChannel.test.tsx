@@ -62,13 +62,15 @@ describe('useActiveChannel: 지금 채널 해석', () => {
       streamerId: 7,
       relation: 'OWNER',
       name: '나',
+      photo: null,
       gone: false,
     });
   });
 
-  it('저장값 3이 as-editor에 있으면 그 채널이고 편집자다: 훅이 스스로 저장값을 읽는다', async () => {
+  it('저장값 3이 as-editor에 있으면 그 채널이고 편집자다(사진은 스트리머 것): 훅이 스스로 저장값을 읽는다', async () => {
     remembered({ '7': 3 });
-    stub();
+    const photo = 'https://img.example/byeolha.png';
+    stub(() => jsonResponse(200, [{ ...BYEOLHA, counterpartProfileImageUrl: photo }]));
     const { result } = renderActive();
 
     await waitFor(() => expect(result.current.ready).toBe(true));
@@ -77,6 +79,7 @@ describe('useActiveChannel: 지금 채널 해석', () => {
       streamerId: 3,
       relation: 'EDITOR',
       name: '별하',
+      photo,
       gone: false,
     });
   });
@@ -92,6 +95,7 @@ describe('useActiveChannel: 지금 채널 해석', () => {
       streamerId: 7,
       relation: 'OWNER',
       name: '나',
+      photo: null,
       gone: true,
     });
     expect(JSON.parse(window.localStorage.getItem(STORAGE_KEY)!)).toEqual({ '7': 3 });
@@ -109,6 +113,7 @@ describe('useActiveChannel: 지금 채널 해석', () => {
       streamerId: null,
       relation: null,
       name: null,
+      photo: null,
       gone: false,
     });
   });
@@ -124,6 +129,7 @@ describe('useActiveChannel: 지금 채널 해석', () => {
       streamerId: 7,
       relation: 'OWNER',
       name: '나',
+      photo: null,
       gone: false,
     });
     expect(JSON.parse(window.localStorage.getItem(STORAGE_KEY)!)).toEqual({ '7': 3 });
@@ -171,6 +177,7 @@ describe('useActiveChannel: 지금 채널 해석', () => {
       streamerId: 3,
       relation: 'EDITOR',
       name: '별하',
+      photo: null,
       gone: false,
     });
   });

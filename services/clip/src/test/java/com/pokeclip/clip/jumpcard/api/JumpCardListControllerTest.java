@@ -149,23 +149,28 @@ class JumpCardListControllerTest extends IntegrationTestSupport {
     }
 
     /**
-     * 숨기기는 없어졌다(POK-393). <b>숨김 칸이 찬 옛 카드도 그대로 나오고</b>, 응답에 점유·숨김 칸이 없다.
-     * 칸 자체는 POK-394가 지울 때까지 표에 남아 있어서, 거르기가 남으면 옛 숨김 카드가 영영 안 보인다.
+     * 숨긴 카드는 기본으로 빠지고 {@code includeHidden=true}면 섞여 나온다(POK-463). 카드마다 {@code hidden}이 실려
+     * 화면이 숨김 칸과 나머지 칸을 가른다. 점유 칸(POK-393에서 뺐다)과 숨긴 사람·이유는 응답에 없다.
      */
     @Test
-    void 숨김_칸이_찬_카드도_나오고_응답에_점유_숨김_칸이_없다() throws Exception {
+    void 숨긴_카드는_기본으로_빠지고_달라고_하면_hidden_표시와_함께_나온다() throws Exception {
         볼_수_있다("OWNER");
         long 보이는 = 카드를_넣는다(내_방송, 1000, "auto");
         long 숨긴 = 카드를_넣는다(내_방송, 2000, "auto");
         숨긴다(숨긴);
 
-        Map<String, Object> 응답 = 맵(본문(목록("").andExpect(status().isOk())));
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> 기본 = (List<Map<String, Object>>) 맵(본문(목록("").andExpect(status().isOk()))).get("cards");
+        assertThat(기본).extracting(c -> ((Number) c.get("id")).longValue()).containsExactly(보이는);
+        assertThat(기본.get(0)).containsEntry("hidden", false);
 
         @SuppressWarnings("unchecked")
-        List<Map<String, Object>> 카드들 = (List<Map<String, Object>>) 응답.get("cards");
-        assertThat(카드들).extracting(c -> ((Number) c.get("id")).longValue()).containsExactly(보이는, 숨긴);
-        for (String 옛_칸 : List.of("claimedBy", "claimedAt", "claimExpiresAt", "hidden", "hiddenBy", "hiddenReason")) {
-            assertThat(카드들.get(1)).as(옛_칸).doesNotContainKey(옛_칸);
+        List<Map<String, Object>> 전부 = (List<Map<String, Object>>) 맵(본문(목록("?includeHidden=true")
+                .andExpect(status().isOk()))).get("cards");
+        assertThat(전부).extracting(c -> ((Number) c.get("id")).longValue()).containsExactly(보이는, 숨긴);
+        assertThat(전부).extracting(c -> c.get("hidden")).containsExactly(false, true);
+        for (String 없는_칸 : List.of("claimedBy", "claimedAt", "claimExpiresAt", "hiddenBy", "hiddenReason")) {
+            assertThat(전부.get(1)).as(없는_칸).doesNotContainKey(없는_칸);
         }
     }
 
@@ -255,6 +260,17 @@ class JumpCardListControllerTest extends IntegrationTestSupport {
                     .andExpect(jsonPath("$.cards[0].streamTimestampMs").value(1000))
                     .andExpect(jsonPath("$.cards[1].streamTimestampMs").value(2000));
         }
+    }
+
+    /** 가린 카드 표시가 참·거짓이 아니면 같은 400 봉투다(POK-463). 형식 오류에 auth 왕복을 태우지 않는다. */
+    @Test
+    void 가린_카드_표시가_참거짓이_아니면_400이다() throws Exception {
+        목록("?includeHidden=abc")
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("invalid_request"))
+                .andExpect(jsonPath("$.field").value("includeHidden"));
+
+        assertThat(AUTH.callCount()).as("형식 오류에 auth 왕복을 태우면 안 된다").isZero();
     }
 
     /**

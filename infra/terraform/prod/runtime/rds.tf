@@ -35,16 +35,17 @@ resource "aws_db_subnet_group" "this" {
   subnet_ids = local.private_subnet_ids
 }
 
-# 두 파라미터는 RDS 파라미터 표에서 Dynamic 이라 재부팅 없이 적용된다.
+# 두 파라미터는 RDS 파라미터 표에서 Dynamic 이다(force_ssl 의 apply_method 는 아래 주석).
 resource "aws_db_parameter_group" "this" {
   name   = "pokeclip-prod-pg17"
   family = "postgres17"
 
   # TLS 를 강제한다(17 은 기본값도 1 이지만 계약으로 못 박는다).
   parameter {
-    name         = "rds.force_ssl"
-    value        = "1"
-    apply_method = "immediate"
+    name  = "rds.force_ssl"
+    value = "1"
+    # 값이 엔진 기본과 같아 AWS 가 source=system · pending-reboot 로 돌려준다 — immediate 면 plan 이 늘 바뀜을 낸다.
+    apply_method = "pending-reboot"
   }
 
   # IAM 인증 접속은 CloudTrail 에 남지 않아 이 로그로 감사한다.

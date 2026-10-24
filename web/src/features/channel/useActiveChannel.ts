@@ -21,12 +21,14 @@ import { useSwitchCurtain } from './switchCurtain';
 export type ChannelRelation = 'OWNER' | 'EDITOR';
 
 export type ActiveChannel =
-  | { ready: false; streamerId: null; relation: null; name: null; gone: false }
+  | { ready: false; streamerId: null; relation: null; name: null; photo: null; gone: false }
   | {
       ready: true;
       streamerId: number;
       relation: ChannelRelation;
       name: string;
+      /** 채널 주인의 프로필 사진. 없으면 null(이니셜) */
+      photo: string | null;
       /** 고른 채널이 as-editor에 없어 내 채널로 풀었다. 처리는 ChannelScope가 한다. */
       gone: boolean;
     };
@@ -36,6 +38,7 @@ const NOT_READY: ActiveChannel = {
   streamerId: null,
   relation: null,
   name: null,
+  photo: null,
   gone: false,
 };
 
@@ -74,6 +77,7 @@ export function useActiveChannel(): ActiveChannel {
     streamerId: me.id,
     relation: 'OWNER',
     name: me.name,
+    photo: me.profileImageUrl,
     gone: false,
   };
   if (selected === null || selected === me.id) return mine;
@@ -100,6 +104,7 @@ export function useActiveChannel(): ActiveChannel {
     streamerId: delegation.streamerId,
     relation: 'EDITOR',
     name: delegation.streamerName,
+    photo: delegation.streamerProfileImageUrl,
     gone: false,
   };
 }
@@ -120,6 +125,8 @@ export interface SwitchTarget {
   streamerId: number;
   name: string;
   relation: ChannelRelation;
+  /** 전환 화면에 그릴 남의 채널 사진(as-editor). 내 채널은 비워도 내 사진을 쓴다 */
+  photo?: string | null;
 }
 
 /**
@@ -139,8 +146,7 @@ export function useSwitchChannel() {
         {
           name: target.name,
           relation: target.relation,
-          // 남의 채널은 서버가 사진을 안 준다: 이름 글자 아바타
-          photo: target.relation === 'OWNER' ? me.profileImageUrl : null,
+          photo: target.relation === 'OWNER' ? me.profileImageUrl : (target.photo ?? null),
           leftStreamerId: options.leftStreamerId,
           returnFocus: options.returnFocus,
         },

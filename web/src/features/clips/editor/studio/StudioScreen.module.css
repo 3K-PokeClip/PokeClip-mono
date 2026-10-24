@@ -213,12 +213,20 @@
   color: var(--pc-color-text-muted);
   padding-left: calc(180 * var(--pc-u));
   margin-bottom: calc(5 * var(--pc-u));
+  /* 눌러서 재생 위치를 옮긴다(POK-389) */
+  cursor: pointer;
+  user-select: none;
 }
 
 .laneArea {
   position: relative;
   overflow-y: auto;
   scrollbar-width: thin;
+}
+
+/* 덮개(.overlay)가 재는 상자. 스크롤 내용 전체 높이라 줄여서 내려도 구간 상자가 아래 트랙까지 덮는다 */
+.laneContent {
+  position: relative;
 }
 
 .lanes {
@@ -246,25 +254,138 @@
   color: var(--pc-color-text-secondary);
 }
 
-.trackControls {
-  margin-left: auto;
+/* 줄 맨 앞 칸: 소리 줄은 넣기 스피커, 영상 · 자막 줄은 아이콘이 같은 폭으로 서서 이름이 한 줄로 맞는다 */
+.trackLead,
+.trackSpeaker {
+  flex: none;
+  width: calc(24 * var(--pc-u));
+  height: calc(24 * var(--pc-u));
+  display: grid;
+  place-items: center;
+  border-radius: calc(6 * var(--pc-u));
+}
+
+.trackLead {
+  color: var(--pc-color-text-muted);
+}
+
+/* 넣기: 켜면 강조색 바탕의 스피커, 빼면 바탕 없는 음소거 스피커 */
+.trackSpeaker {
+  padding: 0;
+  border: 0;
+  background: var(--pc-color-accent-subtle);
+  color: var(--pc-color-accent-text);
+  cursor: pointer;
+}
+
+.trackSpeaker[aria-pressed='false'] {
+  background: transparent;
+  color: var(--pc-color-text-muted);
+}
+
+.trackSpeaker:hover {
+  filter: brightness(1.15);
+}
+
+/* 라이트 아이콘은 이미 진해서 밝히면 흐려진다 — 어둡게 */
+:global([data-theme='light']) .trackSpeaker:hover {
+  filter: brightness(0.85);
+}
+
+/* 뺀 줄은 이름을 한 단계만 낮춘다 — 흐린 회색은 못 누르는 줄처럼 읽혔다 */
+.trackRow[data-muted] [data-row-label] {
+  color: var(--pc-color-text-muted);
+}
+
+/* 줄 이름은 한 줄로 줄인다: 이름 칸 폭이 정해져 있어 긴 이름이 넣기·음량 칸을 밀지 않게 */
+.trackLabel [data-row-label] {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 음량 숫자: 누르면 막대, 좌우로 끌면 바로 바뀐다. 비례폭 글꼴에 같은 폭 숫자(고정폭 글꼴은 띄엄띄엄 보였다) */
+.trackVolume {
+  flex: none;
+  width: calc(42 * var(--pc-u));
+  height: calc(22 * var(--pc-u));
+  padding: 0 calc(5 * var(--pc-u));
+  border: 1px solid transparent;
+  border-radius: calc(6 * var(--pc-u));
+  background: transparent;
+  color: var(--pc-color-text-secondary);
+  font-family: inherit;
+  font-size: calc(10.5 * var(--pc-u));
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  cursor: ew-resize;
+  touch-action: none;
+  user-select: none;
+}
+
+/* 바꿀 수 있다는 표시: 올리거나 연 동안 테두리 */
+.trackVolume:hover,
+.trackVolume[aria-expanded='true'] {
+  border-color: var(--pc-color-border-default);
+  background: var(--pc-color-bg-surface-hover);
+}
+
+.trackSpeaker:focus-visible,
+.trackVolume:focus-visible,
+.volumePreset:focus-visible {
+  outline: 2px solid var(--pc-color-focus-ring);
+  outline-offset: 1px;
+}
+
+/* 음량 막대 창 */
+.volumePopover {
+  width: calc(210 * var(--pc-u));
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  gap: calc(10 * var(--pc-u));
+  font-size: calc(12 * var(--pc-u));
+}
+
+.volumePopoverHead {
+  display: flex;
+  justify-content: space-between;
+  gap: calc(8 * var(--pc-u));
+  font-weight: 650;
+}
+
+.volumePopoverHead b {
+  font-variant-numeric: tabular-nums;
+}
+
+.volumePresets {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
   gap: calc(6 * var(--pc-u));
 }
 
-.trackSlider {
-  width: calc(44 * var(--pc-u));
+.volumePreset {
+  height: calc(26 * var(--pc-u));
+  border: 1px solid var(--pc-color-border-default);
+  border-radius: var(--pc-radius-pill);
+  background: transparent;
+  color: var(--pc-color-text-secondary);
+  font-family: inherit;
+  font-size: calc(11 * var(--pc-u));
+  font-weight: 650;
+  cursor: pointer;
 }
 
-.trackValue {
-  font:
-    600 calc(9.5 * var(--pc-u)) ui-monospace,
-    Menlo,
-    monospace;
-  color: var(--pc-color-text-muted);
-  width: calc(24 * var(--pc-u));
-  text-align: right;
+.volumePreset:hover {
+  background: var(--pc-color-bg-surface-hover);
+}
+
+.volumePreset[aria-pressed='true'] {
+  border-color: var(--pc-color-accent);
+  background: var(--pc-color-accent-subtle);
+  color: var(--pc-color-accent-text);
 }
 
 .lane {
@@ -286,9 +407,44 @@
   height: 100%;
   background: repeating-linear-gradient(
     90deg,
-    rgb(120 140 210 / 0.26) 0 calc(54 * var(--pc-u)),
-    rgb(120 140 210 / 0.1) calc(54 * var(--pc-u)) calc(56 * var(--pc-u))
+    rgb(120 140 210 / 0.26) 0 calc(54 * var(--pc-u)) /* 라이트 덮음 */,
+    rgb(120 140 210 / 0.1) calc(54 * var(--pc-u)) calc(56 * var(--pc-u)) /* 라이트 덮음 */
   );
+}
+
+/* 연한 남보라 레인은 흰 바탕에서 묻힌다 — 라이트는 브랜드 남색을 섞어 진하게 */
+:global([data-theme='light']) .laneFilmstrip {
+  background: repeating-linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--pc-color-accent) 22%, transparent) 0 calc(54 * var(--pc-u)),
+    color-mix(in srgb, var(--pc-color-accent) 8%, transparent) calc(54 * var(--pc-u))
+      calc(56 * var(--pc-u))
+  );
+}
+
+/* 영상 줄 필름띠(POK-389): 칸마다 그 시각 장면 그림 */
+.filmstrip {
+  display: flex;
+  width: 100%;
+  height: 100%;
+}
+
+.filmstripTile {
+  flex: 1;
+  min-width: 0;
+  background: rgb(120 140 210 / 0.12); /* 라이트 덮음 */
+  border-right: 1px solid rgb(0 0 0 / 0.35); /* 테마 고정 */
+}
+
+:global([data-theme='light']) .filmstripTile {
+  background: color-mix(in srgb, var(--pc-color-accent) 10%, transparent);
+}
+
+.filmstripTile img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .laneWave {
@@ -298,7 +454,15 @@
   border-radius: calc(3 * var(--pc-u));
   background: repeating-linear-gradient(
     90deg,
-    rgb(140 160 230 / 0.45) 0 2px,
+    rgb(140 160 230 / 0.45) 0 2px /* 라이트 덮음 */,
+    transparent 2px 5px
+  ); /* 라이트 덮음 */
+}
+
+:global([data-theme='light']) .laneWave {
+  background: repeating-linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--pc-color-accent) 55%, transparent) 0 2px,
     transparent 2px 5px
   );
 }
@@ -307,79 +471,35 @@
   opacity: 0.35;
 }
 
-/* ---------- 클립 ---------- */
-
-.clip {
-  position: absolute;
-  top: calc(3 * var(--pc-u));
-  bottom: calc(3 * var(--pc-u));
-  border-radius: calc(5 * var(--pc-u));
-  display: flex;
-  align-items: center;
-  gap: calc(5 * var(--pc-u));
-  padding: 0 calc(8 * var(--pc-u));
-  font-size: calc(10 * var(--pc-u));
-  line-height: 1;
-  font-weight: 650;
-  overflow: hidden;
-  white-space: nowrap;
-  cursor: grab;
-  border: 1px solid var(--pc-color-accent);
-  background: rgb(88 111 196 / 0.28);
-  color: var(--pc-color-accent-text);
-  font-family: inherit;
+/* 실제 파형(POK-389). 무음은 가는 선만 남고, 뺀 줄은 흐리게 */
+.laneWaveform {
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 
-.clip[data-kind='sfx'] {
-  border-color: var(--pc-color-point);
-  background: rgb(212 70 151 / 0.3);
-  color: var(--pc-color-point-text);
-  justify-content: center;
-  padding: 0 calc(4 * var(--pc-u));
+.laneWaveform path {
+  fill: rgb(140 160 230 / 0.6); /* 라이트 덮음 */
 }
 
-.clip[data-kind='image'] {
-  border: 1px dashed var(--pc-color-border-default);
-  background: rgb(255 255 255 / 0.05);
-  color: var(--pc-color-text-muted);
-  font-weight: 600;
+:global([data-theme='light']) .laneWaveform path {
+  fill: color-mix(in srgb, var(--pc-color-accent) 70%, transparent);
 }
 
-.clip[aria-pressed='true'],
-.clip:focus-visible {
-  outline: 2px solid var(--pc-color-focus-ring);
-  outline-offset: 1px;
+[data-muted] .laneWaveform path {
+  fill: rgb(140 160 230 / 0.25); /* 라이트 덮음 */
 }
 
-/* 트림 핸들은 시안대로 hover·포커스에서만 보인다 */
-.clipTrim {
-  position: absolute;
-  top: calc(2 * var(--pc-u));
-  bottom: calc(2 * var(--pc-u));
-  width: calc(5 * var(--pc-u));
-  border-radius: calc(3 * var(--pc-u));
-  background: var(--pc-color-accent);
-  box-shadow: 0 0 0 1px rgb(0 0 0 / 0.3);
-  cursor: col-resize;
-  opacity: 0;
-}
-
-.clip:hover .clipTrim,
-.clip:focus-visible .clipTrim {
-  opacity: 1;
-}
-
-.clipTrimStart {
-  left: calc(2 * var(--pc-u));
-}
-
-.clipTrimEnd {
-  right: calc(2 * var(--pc-u));
+:global([data-theme='light']) [data-muted] .laneWaveform path {
+  fill: color-mix(in srgb, var(--pc-color-accent) 30%, transparent);
 }
 
 /* ---------- 구간 오버레이 · 플레이헤드 ---------- */
 
 .overlay {
+  /* 키운 창 밖으로 나간 구간 상자·핸들은 가로로 잘라 감춘다(가장자리 표시가 대신 알린다). 세로는 재생선 머리가 위로 나간다 */
+  overflow-x: clip;
+  overflow-y: visible;
   position: absolute;
   left: calc(180 * var(--pc-u));
   right: 0;
@@ -393,7 +513,7 @@
   top: 0;
   bottom: 0;
   border: 2px solid var(--pc-color-accent);
-  background: rgb(88 111 196 / 0.1);
+  background: rgb(88 111 196 / 0.1); /* 테마 고정 */
   border-radius: calc(8 * var(--pc-u));
 }
 
@@ -426,24 +546,64 @@
   outline-offset: 2px;
 }
 
+/* 키운 창 밖으로 나간 구간 끝 표시(POK-389). 누르면 그리로 간다 */
+.edgeMarker {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: calc(2 * var(--pc-u));
+  padding: calc(3 * var(--pc-u)) calc(7 * var(--pc-u));
+  border: 0;
+  border-radius: calc(999 * var(--pc-u));
+  background: var(--pc-color-accent);
+  color: var(--pc-white); /* 테마 고정 — 브랜드 알약 위 글자 */
+  font-size: calc(10.5 * var(--pc-u));
+  font-weight: 600;
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.edgeMarkerStart {
+  left: calc(4 * var(--pc-u));
+}
+
+.edgeMarkerEnd {
+  right: calc(4 * var(--pc-u));
+}
+
+/* 누르거나 끌어 재생 위치를 옮기는 바닥(덮개는 누르기를 통과시키고 이것만 받는다) */
+.scrub {
+  position: absolute;
+  inset: 0;
+  pointer-events: auto;
+  cursor: pointer;
+}
+
 .playhead {
   position: absolute;
   top: 0;
   bottom: 0;
   width: 2px;
+  margin-left: -1px;
   background: var(--pc-color-point);
+  /* 누르기는 바닥이 받는다: 선 위를 눌러 끌어도 같은 일이다 */
+  pointer-events: none;
 }
 
+/* 재생 위치 머리: 잡을 자리가 보이게 동그랗게(이전 삼각형은 6px라 안 보였다) */
 .playheadTip {
   position: absolute;
-  top: calc(-5 * var(--pc-u));
+  top: calc(-7 * var(--pc-u));
   left: 50%;
   transform: translateX(-50%);
-  width: 0;
-  height: 0;
-  border-left: calc(5 * var(--pc-u)) solid transparent;
-  border-right: calc(5 * var(--pc-u)) solid transparent;
-  border-top: calc(6 * var(--pc-u)) solid var(--pc-color-point);
+  width: calc(11 * var(--pc-u));
+  height: calc(11 * var(--pc-u));
+  border-radius: 50%;
+  background: var(--pc-color-point);
+  box-shadow: 0 0 0 2px var(--pc-color-bg-surface);
 }
 
 /* ---------- 범례 ---------- */
@@ -467,11 +627,78 @@
   margin-left: auto;
 }
 
-
 .previewColumn {
   flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
-  padding-bottom: calc(14 * var(--pc-u));
+  padding-bottom: calc(8 * var(--pc-u));
+}
+
+/* ---------- 타임라인 줄 (POK-389) ---------- */
+
+.subtitleBlock {
+  position: absolute;
+  top: calc(3 * var(--pc-u));
+  bottom: calc(3 * var(--pc-u));
+  padding: 0 calc(6 * var(--pc-u));
+  border-radius: calc(4 * var(--pc-u));
+  background: var(--pc-color-accent-subtle);
+  border: 1px solid var(--pc-color-accent);
+  color: var(--pc-color-text-primary);
+  font-size: calc(10 * var(--pc-u));
+  line-height: calc(16 * var(--pc-u));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.outsideMask {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: var(--pc-color-bg-canvas);
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+/* ---------- 썸네일 장면 (POK-389) ---------- */
+
+.thumbnailTile {
+  position: relative;
+  margin-left: auto;
+  width: calc(36 * var(--pc-u));
+  height: calc(22 * var(--pc-u));
+  padding: 0;
+  border-radius: calc(4 * var(--pc-u));
+  border: 1px solid var(--pc-color-accent);
+  background: var(--pc-color-bg-inset);
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.thumbnailTile:focus-visible {
+  outline: 2px solid var(--pc-color-focus-ring);
+  outline-offset: 1px;
+}
+
+.thumbnailCanvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.thumbnailBadge {
+  position: absolute;
+  right: 1px;
+  bottom: 1px;
+  color: var(--pc-color-text-primary);
+}
+
+.thumbnailMarker {
+  position: absolute;
+  top: calc(-14 * var(--pc-u));
+  transform: translateX(-50%);
+  color: var(--pc-color-accent-text, var(--pc-color-accent));
 }

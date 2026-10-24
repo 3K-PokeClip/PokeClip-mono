@@ -76,10 +76,14 @@
   pointer-events: none;
 }
 .toast[data-tone='error'] {
-  border-color: rgb(var(--pc-red-400-rgb) / 0.42);
+  border-color: rgb(var(--pc-red-400-rgb) / 0.42); /* 테마 고정 — 흰·검은 토스트 모두 보임 */
 }
 .toast[data-tone='warning'] {
-  border-color: rgb(var(--pc-yellow-500-rgb) / 0.42);
+  border-color: rgb(var(--pc-yellow-500-rgb) / 0.42); /* 라이트 덮음 */
+}
+/* 노랑 0.42는 흰 토스트 위에서 거의 안 보인다 — 라이트는 진한 경고색으로 */
+:global([data-theme='light']) .toast[data-tone='warning'] {
+  border-color: color-mix(in srgb, var(--pc-color-warning) 55%, transparent);
 }
 
 .row {
@@ -94,13 +98,13 @@
   color: var(--pc-color-accent-text);
 }
 .toast[data-tone='success'] .icon {
-  color: var(--pc-color-success);
+  color: var(--pc-color-success-text);
 }
 .toast[data-tone='error'] .icon {
-  color: var(--pc-color-danger);
+  color: var(--pc-color-danger-text);
 }
 .toast[data-tone='warning'] .icon {
-  color: var(--pc-color-warning);
+  color: var(--pc-color-warning-text);
 }
 
 .body {

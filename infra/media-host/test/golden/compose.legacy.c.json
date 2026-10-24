@@ -1,0 +1,284 @@
+{
+  "name": "pcbench-edge-proxy",
+  "services": {
+    "janitor": {
+      "cap_drop": [
+        "ALL"
+      ],
+      "command": null,
+      "depends_on": {
+        "mediamtx": {
+          "condition": "service_started",
+          "required": true,
+          "restart": true
+        }
+      },
+      "entrypoint": [
+        "/usr/local/bin/janitor"
+      ],
+      "environment": {
+        "AWS_EC2_METADATA_V1_DISABLED": "true",
+        "AWS_REGION": "ap-northeast-2",
+        "JANITOR_ENABLED": "true",
+        "POSTGRES_AUTH": "iam",
+        "POSTGRES_DB": "pcbench_edge_proxy",
+        "POSTGRES_HOST": "db.pcbench-edge-proxy.invalid",
+        "POSTGRES_PORT": "5432",
+        "POSTGRES_SSLMODE": "verify-full",
+        "POSTGRES_SSLROOTCERT": "/etc/pokeclip/rds-ca/global-bundle.pem",
+        "POSTGRES_USER": "media_janitor",
+        "SEGMENT_ROOT": "/recordings",
+        "TZ": "UTC"
+      },
+      "image": "registry.pcbench-edge-proxy.invalid/media-sidecar@sha256:3333333333333333333333333333333333333333333333333333333333333333",
+      "logging": {
+        "driver": "journald",
+        "options": {
+          "tag": "pokeclip-media-janitor"
+        }
+      },
+      "network_mode": "service:mediamtx",
+      "read_only": true,
+      "restart": "on-failure",
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "ulimits": {
+        "core": {}
+      },
+      "user": "10002:10002",
+      "volumes": [
+        {
+          "source": "recordings",
+          "target": "/recordings",
+          "type": "volume",
+          "volume": {}
+        }
+      ]
+    },
+    "mediamtx": {
+      "cap_drop": [
+        "ALL"
+      ],
+      "command": null,
+      "entrypoint": null,
+      "environment": {
+        "TZ": "UTC"
+      },
+      "image": "registry.pcbench-edge-proxy.invalid/media-mediamtx@sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-file": "3",
+          "max-size": "10m"
+        }
+      },
+      "ports": [
+        {
+          "mode": "ingress",
+          "protocol": "tcp",
+          "published": "28181",
+          "target": 28181
+        },
+        {
+          "mode": "ingress",
+          "protocol": "tcp",
+          "published": "28182",
+          "target": 28182
+        },
+        {
+          "mode": "ingress",
+          "protocol": "tcp",
+          "published": "28183",
+          "target": 28183
+        },
+        {
+          "mode": "ingress",
+          "protocol": "tcp",
+          "published": "28184",
+          "target": 28184
+        },
+        {
+          "mode": "ingress",
+          "protocol": "udp",
+          "published": "8890",
+          "target": 8890
+        }
+      ],
+      "restart": "no",
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "ulimits": {
+        "core": {}
+      },
+      "volumes": [
+        {
+          "source": "recordings",
+          "target": "/recordings",
+          "type": "volume",
+          "volume": {}
+        },
+        {
+          "source": "hooks",
+          "target": "/hooks",
+          "type": "volume",
+          "volume": {}
+        },
+        {
+          "source": "dvr",
+          "target": "/dvr",
+          "type": "volume",
+          "volume": {}
+        },
+        {
+          "bind": {
+            "create_host_path": false
+          },
+          "read_only": true,
+          "source": "/run/pokeclip-media/mediamtx.yml",
+          "target": "/mediamtx.yml",
+          "type": "bind"
+        }
+      ]
+    },
+    "nginx": {
+      "cap_add": [
+        "CHOWN",
+        "SETGID",
+        "SETUID"
+      ],
+      "cap_drop": [
+        "ALL"
+      ],
+      "command": null,
+      "depends_on": {
+        "mediamtx": {
+          "condition": "service_started",
+          "required": true,
+          "restart": true
+        }
+      },
+      "entrypoint": null,
+      "image": "registry.pcbench-edge-proxy.invalid/media-nginx@sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-file": "3",
+          "max-size": "10m"
+        }
+      },
+      "network_mode": "service:mediamtx",
+      "restart": "no",
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "ulimits": {
+        "core": {}
+      },
+      "volumes": [
+        {
+          "bind": {
+            "create_host_path": false
+          },
+          "read_only": true,
+          "source": "/etc/pokeclip-media/nginx.conf",
+          "target": "/etc/nginx/nginx.conf",
+          "type": "bind"
+        }
+      ]
+    },
+    "sidecar": {
+      "cap_drop": [
+        "ALL"
+      ],
+      "command": null,
+      "depends_on": {
+        "mediamtx": {
+          "condition": "service_started",
+          "required": true,
+          "restart": true
+        }
+      },
+      "entrypoint": null,
+      "environment": {
+        "AWS_EC2_METADATA_V1_DISABLED": "true",
+        "AWS_REGION": "ap-northeast-2",
+        "ENSURE_SCHEMA": "false",
+        "HOOK_SPOOL_PATH": "/hooks/events.jsonl",
+        "MTX_API_PASS_FILE": "/run/secrets/mtx_api_pass",
+        "MTX_API_URL": "http://127.0.0.1:9997",
+        "MTX_API_USER": "pokeclip-sidecar",
+        "POSTGRES_AUTH": "iam",
+        "POSTGRES_DB": "pcbench_edge_proxy",
+        "POSTGRES_HOST": "db.pcbench-edge-proxy.invalid",
+        "POSTGRES_PORT": "5432",
+        "POSTGRES_SSLMODE": "verify-full",
+        "POSTGRES_SSLROOTCERT": "/etc/pokeclip/rds-ca/global-bundle.pem",
+        "POSTGRES_USER": "media_indexer",
+        "REWIND_PUBLIC_BASE_URL": "https://media.pcbench-edge-proxy.invalid",
+        "S3_BUCKET": "pcbench-edge-proxy-rewind",
+        "SEGMENT_ROOT": "/recordings",
+        "TZ": "UTC"
+      },
+      "image": "registry.pcbench-edge-proxy.invalid/media-sidecar@sha256:3333333333333333333333333333333333333333333333333333333333333333",
+      "logging": {
+        "driver": "journald",
+        "options": {
+          "tag": "pokeclip-media-sidecar"
+        }
+      },
+      "network_mode": "service:mediamtx",
+      "restart": "on-failure",
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "ulimits": {
+        "core": {}
+      },
+      "volumes": [
+        {
+          "read_only": true,
+          "source": "recordings",
+          "target": "/recordings",
+          "type": "volume",
+          "volume": {}
+        },
+        {
+          "read_only": true,
+          "source": "hooks",
+          "target": "/hooks",
+          "type": "volume",
+          "volume": {}
+        },
+        {
+          "bind": {
+            "create_host_path": false
+          },
+          "read_only": true,
+          "source": "/run/pokeclip-media/mtx_api_pass",
+          "target": "/run/secrets/mtx_api_pass",
+          "type": "bind"
+        }
+      ]
+    }
+  },
+  "volumes": {
+    "dvr": {},
+    "hooks": {},
+    "recordings": {}
+  },
+  "x-attached-logging": {
+    "driver": "json-file",
+    "options": {
+      "max-file": "3",
+      "max-size": "10m"
+    }
+  },
+  "x-mediamtx-dependency": {
+    "mediamtx": {
+      "condition": "service_started",
+      "restart": true
+    }
+  }
+}

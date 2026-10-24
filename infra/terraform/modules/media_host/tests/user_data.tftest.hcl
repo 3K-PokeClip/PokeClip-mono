@@ -491,6 +491,40 @@ run "bootstrap_pins_tools_and_extracts_bundle" {
   }
 }
 
+# 묶음 필수 목록(REQUIRED_FILES)이 묶음 파일 전부와 같다 — 런북의 푸시 전
+# 대조가 이 목록을 정본으로 쓴다(runbooks/prod-artifacts.md 「설치 묶음」).
+run "bootstrap_requires_every_bundle_file" {
+  command = plan
+
+  assert {
+    condition = [
+      for line in split("\n", trimspace(one(regex(
+        "readonly REQUIRED_FILES=\\(\\n([^)]*)\\)",
+        one([
+          for file in yamldecode(output.rendered_user_data["a"]).write_files :
+          file.content if file.path == "/usr/local/sbin/pokeclip-media-bootstrap"
+        ]),
+      )))) : trimspace(line)
+      ] == [
+      "bin/start-media.sh",
+      "bin/stop-media.sh",
+      "bin/loopback-health.sh",
+      "bin/paths-count.sh",
+      "bin/paths-list.sh",
+      "bin/secret-count.sh",
+      "bin/ingest-auth-deny-sync.sh",
+      "bin/ingest-auth-ip-limit.sh",
+      "bin/lib/ops.sh",
+      "bin/lib/mtx_paths.sh",
+      "bin/lib/deny_tokens.sh",
+      "bin/lib/docker_config.sh",
+      "bin/lib/render_files.sh",
+      "mediamtx.yml.tmpl",
+    ]
+    error_message = "부트스트랩의 REQUIRED_FILES 가 묶음 파일 14개(bin/ 여덟 · bin/lib/ 다섯 · mediamtx.yml.tmpl)와 다르다."
+  }
+}
+
 # 시험 이음매 값 · 비밀 계열 이름이 운영 렌더에 새지 않는다.
 run "leaks_no_test_seams" {
   command = plan

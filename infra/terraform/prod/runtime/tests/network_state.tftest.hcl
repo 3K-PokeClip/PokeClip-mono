@@ -7,6 +7,17 @@ mock_provider "aws" {
   source = "./tests/mocks"
 }
 
+# auth_oauth_apps 는 기본값이 없다(auth_settings.tf — tfvars 필수). 이 파일의
+# 모든 run 에 흐르는 예시 값이다(run 안의 variables 가 덮는 변수만 바뀐다).
+variables {
+  auth_oauth_apps = {
+    google  = { client_id = "example-google-client-id", redirect_uri = "https://app.pokeclip.com/auth/callback" }
+    chzzk   = { client_id = "example-chzzk-client-id", redirect_uri = "https://app.pokeclip.com/oauth/chzzk/callback" }
+    youtube = { client_id = "example-youtube-client-id", redirect_uri = "https://app.pokeclip.com/oauth/youtube/callback" }
+    soop    = { client_id = "example-soop-client-id", redirect_uri = "https://app.pokeclip.com/oauth/soop/callback" }
+  }
+}
+
 override_data {
   target = data.terraform_remote_state.network
   values = {
@@ -40,6 +51,18 @@ run "exposes_network_outputs_as_locals" {
   assert {
     condition     = local.media_private_subnet_id == "subnet-0examplemedia"
     error_message = "local.media_private_subnet_id 가 network 출력 media_private_subnet_id 와 다르다."
+  }
+}
+
+# auth 허용 대역의 출처(POK-429 · K4). 이 파일의 media_private_subnet_id 는
+# private_subnet_ids 의 어느 원소와도 달라서, 조회가 다른 서브넷을 가리키면
+# 깨진다.
+run "looks_up_media_private_subnet" {
+  command = plan
+
+  assert {
+    condition     = data.aws_subnet.media_private.id == "subnet-0examplemedia"
+    error_message = "data.aws_subnet.media_private 가 network 출력 media_private_subnet_id 를 조회하지 않는다."
   }
 }
 

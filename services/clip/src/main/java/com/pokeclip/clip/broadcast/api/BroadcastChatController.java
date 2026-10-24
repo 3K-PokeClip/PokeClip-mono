@@ -55,6 +55,9 @@ public class BroadcastChatController {
 
     private static final Set<String> 방송_정보_허용 = Set.of("since");
 
+    /** 구간 창구는 인자가 없다(방송 전체를 준다, POK-462). 아무것도 안 넘긴다. */
+    private static final Set<String> 방송_정보_구간_허용 = Set.of();
+
     private final BroadcastAccessGuard guard;
     private final CollectorClient collector;
 
@@ -85,6 +88,18 @@ public class BroadcastChatController {
                                          @AuthenticationPrincipal Jwt jwt,
                                          HttpServletRequest request) {
         return 넘긴다(streamId, "broadcast-info", 방송_정보_허용, query, jwt, request);
+    }
+
+    /**
+     * 방송 중 제목·카테고리·태그·카테고리 사진이 언제 무엇이었나(POK-462). 수집기 응답을 그대로 준다. 라이브 막대 · 지난 방송 화면 ·
+     * 대시보드가 같이 쓴다.
+     */
+    @GetMapping("/broadcast-info/timeline")
+    ResponseEntity<String> broadcastInfoTimeline(@PathVariable String streamId,
+                                                 @RequestParam MultiValueMap<String, String> query,
+                                                 @AuthenticationPrincipal Jwt jwt,
+                                                 HttpServletRequest request) {
+        return 넘긴다(streamId, "broadcast-info/timeline", 방송_정보_구간_허용, query, jwt, request);
     }
 
     private ResponseEntity<String> 넘긴다(String streamId, String 창구, Set<String> 허용,

@@ -1,5 +1,5 @@
-# infra 전용 CI: Terraform 트리 · guard 정책 · 단계 직전 점검 스크립트를 고친 PR에서
-# infra/terraform/README.md 「검증」 절의 명령을 모두 돌린다 (POK-312). Media 상자 설정
+# infra 전용 CI: Terraform 트리 · guard 정책 · 단계 직전 점검 스크립트 · CloudFront Function을 고친
+# PR에서 infra/terraform/README.md 「검증」 절의 명령을 모두 돌린다 (POK-312). Media 상자 설정
 # (infra/media-host)을 고친 PR에서는 그 셸 검사 · 시험(렌더 · 셸 · systemd 유닛 재기동)을
 # 돌린다 (POK-299 — 잡 media-host · media-host-systemd, shellcheck는 shell 잡).
 #
@@ -9,22 +9,24 @@
 # AWS에 닿지 않는다. secrets를 하나도 참조하지 않고 id-token 권한도 없어(OIDC로 역할을 받을 수
 # 없다) 러너에 AWS 자격 증명이 생길 길이 없다. terraform은 -backend=false와 mock provider로만
 # 돌고, 단계 직전 점검 시험이 부르는 aws는 가짜(precheck/tests/fakebin/aws)다. 러너의 진짜 aws에
-# 기대는 시험은 둘이다. put_secret_test의 실물 CLI 계약 사례는 진짜 aws를 부르되 가짜 자격 · 빈
-# 설정 · 메타데이터 조회 끔 · 닫힌 로컬 주소(엔드포인트와 프록시 모두 127.0.0.1:9)로 불러 요청이
-# 러너 밖으로 나가지 않는다. precheck testlib_test의 실행 비트 사례는 진짜 aws를 부르지 않고 PATH
-# 에서 이름만 푼다(shell 잡 「단계 직전 점검 시험」 주석). Media 상자 시험이 부르는 aws도 가짜
-# (infra/media-host/test/fakebin · ops_fakebin)다 — 시험 유닛도 drop-in PATH로 그 가짜를 쓴다.
+# 기대는 시험은 셋이다. put_secret_test · kvs_put_test의 실물 CLI 계약 사례는 진짜 aws를 부르되 가짜
+# 자격 · 빈 설정 · 메타데이터 조회 끔 · 닫힌 로컬 주소(엔드포인트와 프록시 모두 127.0.0.1:9)로 불러
+# 요청이 러너 밖으로 나가지 않는다(kvs_put_test는 KVS 주소 앞에 붙는 가짜 계정 번호 이름을 러너의
+# 리졸버에 묻고 못 풀어 연결 단계에서 끝난다). precheck testlib_test의 실행 비트 사례는 진짜 aws를
+# 부르지 않고 PATH에서 이름만 푼다(shell 잡 「단계 직전 점검 시험」 주석). Media 상자 시험이 부르는
+# aws도 가짜(infra/media-host/test/fakebin · ops_fakebin)다 — 시험 유닛도 drop-in PATH로 그 가짜를
+# 쓴다.
 #
-# 도구 다섯(terraform · tflint · conftest · shellcheck · docker compose)은 제3자 액션 없이 배포처에서
-# 직접 받아 아래에 적은 sha256과 맞을 때만 쓴다. 내려받기는 https만 따르고(리다이렉트 포함) 시간
-# 상한을 둔다. 판은 로컬에서 쓰는 판과 같다(2026-10-17 확인 · compose는 2026-10-20). 도구마다
-# RUNNER_TEMP 아래 제 디렉터리에 두고 GITHUB_PATH로 PATH 앞에 붙인다 — compose만 docker CLI
-# 플러그인 자리에 둔다(media-host 잡 「docker compose 설치」 주석).
+# 도구 여섯(terraform · tflint · conftest · shellcheck · docker compose · node)은 제3자 액션 없이
+# 배포처에서 직접 받아 아래에 적은 sha256과 맞을 때만 쓴다. 내려받기는 https만 따르고(리다이렉트 포함)
+# 시간 상한을 둔다. 판은 로컬에서 쓰는 판과 같다(2026-10-17 확인 · compose는 2026-10-20 · node는
+# 2026-10-24). 도구마다 RUNNER_TEMP 아래 제 디렉터리에 두고 GITHUB_PATH로 PATH 앞에 붙인다 —
+# compose만 docker CLI 플러그인 자리에 둔다(media-host 잡 「docker compose 설치」 주석).
 #
 # 판을 올릴 때:
 #   - 옛 판이 적힌 곳을 `git grep -n '<옛 판>'`으로 모두 찾아 함께 바꾼다. terraform · tflint ·
-#     conftest · shellcheck은 이 파일의 그 설치 단계(이름 · version · sha256 · 단계 위 출처 주석)와
-#     README 「검증」 절의 도구 목록에 있고, conftest만 README 「설치와 실행」 · 「한계」와
+#     conftest · shellcheck · node는 이 파일의 그 설치 단계(이름 · version · sha256 · 단계 위 출처
+#     주석)와 README 「검증」 절의 도구 목록에 있고, conftest만 README 「설치와 실행」 · 「한계」와
 #     scripts/guard.sh(머리 주석 · conftest 없음 오류 문구)에도 있다. guard.sh와 README 「한계」의
 #     conftest 문장은 그 판에서 확인한 거동이라 새 판에서 다시 확인한다. compose는 이 파일에서는
 #     워크플로 env(MEDIA_HOST_COMPOSE_VERSION · _SHA256) 한 곳에만 있고(두 잡의 설치 단계가 그 값을
@@ -49,6 +51,13 @@
 #                   checksums.txt의 그 줄 · 그 자산의 digest(API)와 셋이 같은지 본다(GitHub
 #                   attestation은 없다 — gh attestation verify가 404). 판은 prod 고정판과 같아야
 #                   한다 — infra/media-host/README.md 「판 고정」 표(두 아키텍처 sha256)도 함께 바꾼다.
+#                   렌더 시험 사례 43의 compose 골든(infra/media-host/test/golden/compose.legacy.*)은
+#                   5.5.0의 `docker compose config` 출력이라 새 판으로 다시 만든다 — 만드는 법은 그
+#                   README 「골든 · 실측 기록」.
+#       node        nodejs.org/dist/<판>/SHASUMS256.txt의 node-<판>-linux-x64.tar.gz 줄. 그 판의
+#                   SHASUMS256.txt.asc를 nodejs/release-keys 저장소의 gpg/pubring.kbx로
+#                   gpgv --keyring <pubring.kbx> --output - SHASUMS256.txt.asc
+#                   로 확인한 본문에서 옮긴다(서명 키가 node README 「Release keys」 목록에 있는지도 본다).
 #
 # 저장소가 공개라 이 로그도 공개다. 시험은 가짜 계정 ID · 가짜 이름만 쓴다.
 #
@@ -99,6 +108,7 @@ env:
   MEDIA_HOST_SHELL_TESTS: >-
     start_test.sh loopback_test.sh paths_count_test.sh paths_list_test.sh
     secret_count_test.sh force_diff_test.sh harness_selftest.sh query_guard_selftest.sh
+    ingest_auth_ops_test.sh
   MEDIA_HOST_RENDER_TEST: render_test.sh
   MEDIA_HOST_UNIT_TEST: unit_restart_test.sh
   # Media 상자 두 잡이 설치하는 docker compose 판과 x86_64 자산 sha256 — 한 곳에만 적는다(두 잡의
@@ -378,12 +388,14 @@ jobs:
       # 앞 세 명령은 infra/terraform README 「검증」 절 그대로다(저장소 루트에서 — source 경로가 루트
       # 기준이다). 넷째는 infra/media-host 의 셸 파일 전부(실행 스크립트 · 라이브러리 · 운영 스크립트 ·
       # 시험 · 시험 부품 · 가짜 명령)다. 그 시험 파일들은 source-path=SCRIPTDIR 지시를 두어 루트에서
-      # -x 로 따라간다. 가짜 명령 디렉터리는 확장자가 없어 디렉터리째 적는다.
+      # -x 로 따라간다. 가짜 명령 디렉터리는 확장자가 없어 디렉터리째 적는다(scripts/test 의
+      # kvs_fakebin 도 같다 — aws · dig · jq).
       - name: shellcheck
         run: |
           shellcheck infra/terraform/scripts/*.sh
           shellcheck infra/terraform/scripts/test/*.sh \
-            infra/terraform/scripts/test/fakebin/aws
+            infra/terraform/scripts/test/fakebin/aws \
+            infra/terraform/scripts/test/kvs_fakebin/*
           shellcheck -x infra/terraform/scripts/precheck/*.sh \
             infra/terraform/scripts/precheck/lib/*.sh \
             infra/terraform/scripts/precheck/tests/*.sh \
@@ -439,11 +451,11 @@ jobs:
             exit 1
           fi
 
-      # scripts/ 의 실행 스크립트 시험(scripts/test/*_test.sh — 지금은 put_secret_test)을 모두 돌린다.
-      # 규칙은 위 단계와 같다(끝까지 돌림 · 0개 · 돈 수 = 찾은 수 · stdin /dev/null). 더해서 건너뛴
-      # 사례가 하나라도 있으면 실패로 본다 — 러너(비root · C.utf8 · AWS CLI 있음)에서는 다 돌아야
-      # 하고, 특히 put_secret_test의 실물 CLI 계약 사례는 진짜 aws가 없으면 건너뛰어 초록이 되기
-      # 때문이다. 「skip:」이 든 줄은 대소문자 · 들여쓰기 · 괄호 유무와 상관없이 센다.
+      # scripts/ 의 실행 스크립트 시험(scripts/test/*_test.sh — 지금은 put_secret_test · kvs_put_test)을
+      # 모두 돌린다. 규칙은 위 단계와 같다(끝까지 돌림 · 0개 · 돈 수 = 찾은 수 · stdin /dev/null). 더해서
+      # 건너뛴 사례가 하나라도 있으면 실패로 본다 — 러너(비root · C.utf8 · AWS CLI 있음)에서는 다 돌아야
+      # 하고, 특히 두 시험의 실물 CLI 계약 사례(real-cli-contract)는 진짜 aws가 없으면 건너뛰어 초록이
+      # 되기 때문이다. 「skip:」이 든 줄은 대소문자 · 들여쓰기 · 괄호 유무와 상관없이 센다.
       - name: 스크립트 시험(scripts/test)
         run: |
           log="${RUNNER_TEMP}/script_tests.log"
@@ -485,6 +497,71 @@ jobs:
             exit 1
           fi
           echo "러너 HOME에 ${evidence_root##*/} 없음"
+
+  # CloudFront Function 셋(modules/cdn_media/functions · modules/cdn_static_site/functions)의 단위
+  # 시험이다. node 표준 라이브러리만 쓰고 패키지를 설치하지 않는다. 함수 원문은 cloudfront-js-2.0 꼴이라
+  # 시험 디렉터리의 로더가 원문을 읽어 가짜 cf 를 넣고 평가한다. node 는 실제 CloudFront 런타임이
+  # 아니다 — 런타임 거동은 O7f 시험(runbooks/edge-tests.md)이 본다.
+  cf-functions:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # sha256 출처: nodejs.org 의 v26.4.0 SHASUMS256.txt 중 node-v26.4.0-linux-x64.tar.gz 줄
+      # (2026-10-24 — 그 파일의 .asc 를 nodejs/release-keys 의 키로 gpgv 확인, 서명 키 지문
+      # 5BE8A3F6C8A5C01D106C0AD820B1A390B168D356). 판을 올리는 법은 머리 주석. 러너 이미지에 깔린
+      # node 는 이미지 갱신과 함께 판이 바뀌어 쓰지 않는다 — 이 판이 PATH 앞에 서고, 시험 단계가
+      # 그것을 확인한다. 실행 파일 하나(bin/node)만 꺼낸다(npm 은 쓰지 않는다).
+      - name: node 26.4.0 설치(sha256 고정)
+        run: |
+          version=v26.4.0
+          sha256=f221dab30d0e9d544332f06fbee2c62186c97d864d5cac8482dba34f1e38b8dc
+          archive="${RUNNER_TEMP}/node.tar.gz"
+          bin="${RUNNER_TEMP}/node-bin"
+          curl -fsSL --proto '=https' --tlsv1.2 --retry 3 --connect-timeout 20 --max-time 300 \
+            -o "${archive}" \
+            "https://nodejs.org/dist/${version}/node-${version}-linux-x64.tar.gz"
+          echo "${sha256}  ${archive}" | sha256sum --check --strict
+          mkdir -p -- "${bin}"
+          tar -xzf "${archive}" -C "${bin}" --strip-components=2 "node-${version}-linux-x64/bin/node"
+          "${bin}/node" --version
+          echo "${bin}" >>"${GITHUB_PATH}"
+
+      # README 「검증」 의 node --test 줄과 같은 글롭이다. 글롭은 셸이 풀어 파일 목록을 넘긴다 — node 는
+      # 맞는 파일이 없어도 시험 0개 · 종료 0 으로 끝나고, 디렉터리 인자는 node 26 에서 실패한다. 로더
+      # (cf-function-loader.mjs)는 이름이 달라 걸리지 않는다. 시험이 0개이거나 실패 · 취소 · 건너뜀 ·
+      # 할 일(todo)이 하나라도 있으면 실패로 본다(TAP 요약 줄 — 덜 잰 것을 초록으로 내지 않게).
+      - name: CloudFront Function 시험(node --test)
+        run: |
+          node_bin="$(command -v node)"
+          if [[ "${node_bin}" != "${RUNNER_TEMP}/node-bin/node" ]]; then
+            echo "PATH 의 node 가 설치 단계의 것이 아니다: ${node_bin}" >&2
+            exit 1
+          fi
+          shopt -s nullglob
+          tests=(infra/terraform/modules/*/functions/test/*.test.mjs)
+          shopt -u nullglob
+          if [[ "${#tests[@]}" -eq 0 ]]; then
+            echo "시험이 하나도 없다 — 글롭이나 경로가 깨졌다" >&2
+            exit 1
+          fi
+          echo "시험 파일 ${#tests[@]}개: ${tests[*]}"
+          tap="${RUNNER_TEMP}/cf_functions.tap"
+          node --test --test-reporter=spec --test-reporter-destination=stdout \
+            --test-reporter=tap --test-reporter-destination="${tap}" "${tests[@]}" </dev/null
+          for line in '# fail 0' '# cancelled 0' '# skipped 0' '# todo 0'; do
+            if ! grep -qxF -- "${line}" "${tap}"; then
+              echo "TAP 요약에 「${line}」 이 없다" >&2
+              exit 1
+            fi
+          done
+          if ! grep -qxE -- '# tests [1-9][0-9]*' "${tap}"; then
+            echo "TAP 요약의 시험 수가 0 이거나 없다" >&2
+            exit 1
+          fi
 
   media-host:
     runs-on: ubuntu-24.04
@@ -595,8 +672,9 @@ jobs:
   media-host-systemd:
     if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
-    # 상한: 탐침 상자(AL2023 arm64 · systemd 252) 실측 한 바퀴 약 8분 × 3 + 준비(이미지 빌드 ·
-    # 받기)에 여유를 둔 값이다. 첫 실제 러너 실행 시간으로 다시 본다.
+    # 상한: 로컬 상자(OrbStack 위 AL2023 arm64 · systemd 252) 실측 한 바퀴 9분 40초(사례 22 · 23
+    # 포함 — M15 c7) × 3 + 준비(이미지 빌드 · 받기)에 여유를 둔 값이다. 러너 실측은 사례 22 · 23
+    # 을 더하기 전 판의 잡 전체 약 25분(2026-10-24)뿐이라, 이 판의 CI 첫 실측 뒤 갱신한다.
     timeout-minutes: 50
     steps:
       - uses: actions/checkout@v7

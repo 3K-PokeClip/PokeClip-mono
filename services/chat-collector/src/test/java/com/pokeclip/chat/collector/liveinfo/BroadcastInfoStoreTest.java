@@ -55,6 +55,37 @@ class BroadcastInfoStoreTest extends IntegrationTestSupport {
         assertThat(store.series("bi-plat", T, 10)).extracting(BroadcastInfo::platform).containsExactly(Platform.SOOP);
     }
 
+    /** 카테고리 사진 칸(POK-462)의 왕복과, 칸이 생기기 전 줄(값 없음)이 null로 읽히는 것. */
+    @Test
+    void 카테고리_사진을_적고_읽는다_옛_줄은_null이다() {
+        // STREAMS에 안 넣는다: 그 목록을 통째로 묻는 검사가 있다
+        jdbc.update("DELETE FROM broadcast_info WHERE stream_id IN ('bi-img', 'bi-img-old')");
+        store.insert(new BroadcastInfo(Platform.CHZZK, "bi-img", "CH", T, "제목", List.of(), "LoL", null,
+                "https://img.example/lol.jpg"));
+        jdbc.update("INSERT INTO broadcast_info (stream_id, channel_id, observed_at) VALUES ('bi-img-old', 'CH', now())");
+
+        assertThat(store.latest("bi-img").orElseThrow().categoryImageUrl()).isEqualTo("https://img.example/lol.jpg");
+        assertThat(store.latest("bi-img-old").orElseThrow().categoryImageUrl()).isNull();
+    }
+
+    /** 구간 창구가 접을 줄(POK-462). 오름차순이고, 상한을 넘으면 오래된 줄을 버리고 truncated다. 딱 상한이면 안 잘렸다. */
+    @Test
+    void 구간용_줄은_오름차순이고_넘치면_오래된_줄을_버린다() {
+        jdbc.update("DELETE FROM broadcast_info WHERE stream_id = 'bi-tl'");
+        for (int minute = 0; minute < 4; minute++) {
+            store.insert(new BroadcastInfo(Platform.CHZZK, "bi-tl", "CH", T.plusSeconds(60L * minute), "t" + minute, List.of(), null, null));
+        }
+
+        BroadcastInfoStore.TimelineRows cut = store.timelineRows("bi-tl", 3);
+        assertThat(cut.truncated()).isTrue();
+        assertThat(cut.rows()).extracting(BroadcastInfo::title).containsExactly("t1", "t2", "t3");
+
+        BroadcastInfoStore.TimelineRows exact = store.timelineRows("bi-tl", 4);
+        assertThat(exact.truncated()).isFalse();
+        assertThat(exact.rows()).extracting(BroadcastInfo::title).containsExactly("t0", "t1", "t2", "t3");
+        assertThat(store.timelineRows("bi-없음", 4).rows()).isEmpty();
+    }
+
     @Test
     void 최신과_추이를_준다() {
         store.insert(new BroadcastInfo(Platform.CHZZK, "bi-1", "CH", T, "제목1", List.of("롤"), "LoL", 100));

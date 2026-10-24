@@ -1,4 +1,5 @@
-/* 교환 대기·실패 안내 — 구글 콜백(OAuthCallbackScreen)과 같은 캔버스 중앙 정렬. */
+/* 로그인 필요 안내 — 구글 콜백(OAuthCallbackScreen)과 같은 캔버스 중앙 정렬. 교환 대기는 CallbackPending(POK-442)이
+   같은 모양으로 그린다. SOOP 콜백도 이 파일을 쓴다. */
 .screen {
   min-height: 100dvh;
   display: flex;
@@ -10,11 +11,6 @@
   background: var(--pc-color-bg-canvas);
   color: var(--pc-color-text-primary);
   text-align: center;
-}
-
-.working {
-  font-size: calc(14 * var(--pc-u));
-  color: var(--pc-color-text-secondary);
 }
 
 .title {

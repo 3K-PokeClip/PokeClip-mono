@@ -13,8 +13,20 @@ const INVITE_URL = '/api/editor-invitations';
 
 // 서버 응답 원형(Wire) 그대로 — counterpartId·inviteeId가 화면에 새지 않는 것도 검증 대상이다.
 const DELEGATIONS = [
-  { id: 3, counterpartId: 71, counterpartName: '박편집', grantedAt: '2026-05-12T09:00:00Z' },
-  { id: 4, counterpartId: 72, counterpartName: '김컷', grantedAt: '2026-07-03T09:00:00Z' },
+  {
+    id: 3,
+    counterpartId: 71,
+    counterpartName: '박편집',
+    counterpartProfileImageUrl: 'https://img.example/park.png',
+    grantedAt: '2026-05-12T09:00:00Z',
+  },
+  {
+    id: 4,
+    counterpartId: 72,
+    counterpartName: '김컷',
+    counterpartProfileImageUrl: null,
+    grantedAt: '2026-07-03T09:00:00Z',
+  },
 ];
 
 /** 만료 라벨이 실시간 now를 쓰므로 기준 시각에서 상대값으로 만든다. */
@@ -111,6 +123,18 @@ describe('EditorSettingsScreen — 목록', () => {
     const pending = row(/cut\.master@gmail\.com/);
     expect(pending.getByText('7일 후 만료')).toBeInTheDocument();
     expect(pending.getByRole('button', { name: '취소' })).toBeInTheDocument();
+  });
+
+  it('편집자 행의 아바타는 프로필 사진을 그리고, 사진이 없으면 이니셜로 선다', async () => {
+    stubEditors();
+    renderWithProviders(<EditorSettingsScreen />);
+
+    const park = within(await screen.findByRole('group', { name: '박편집' }));
+    expect(park.getByRole('img', { name: '박편집' })).toHaveAttribute(
+      'src',
+      'https://img.example/park.png',
+    );
+    expect(row('김컷').queryByRole('img')).not.toBeInTheDocument();
   });
 
   it('sent 이력 중 PENDING만 그린다 — 수락·만료된 초대는 나오지 않는다', async () => {

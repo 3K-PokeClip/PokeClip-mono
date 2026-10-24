@@ -93,16 +93,12 @@ class YoutubeLinkWriterTest extends YoutubeLinkTestSupport {
     }
 
     /**
-     * 🔴 <b>해제도 구글에 revoke를 보내지 않는다</b>(2026-08-24 사용자 결정, 봇 3판 P1).
-     * 캐스케이드 모드를 켜 두면 revoke가 나가는 순간 그 계정의 grant가 통째로 죽는데,
-     * 여기서 아무것도 안 죽는다는 것이 「안 보냈다」의 실물 증거다.
-     *
-     * <p>왜 안 보내나 — 구글 revoke는 계정 단위라 같은 채널을 방금 연동한 <b>다른 회원</b>의 grant까지
-     * 죽이고, 그 창은 조건으로 못 막는다(가드 확인과 revoke 발사 사이는 락으로 직렬화되지 않는다).
-     * 대신 <b>참조를 지워 우리가 못 쓰게</b> 하고, 사용자는 구글 계정 화면에서 직접 지운다.
+     * 🔴 <b>해제는 구글에 revoke를 보낸다</b>(2026-10-24 사용자 재결정, POK-423 · ADR-116, 유튜브 정책 III.D.2.c). 그 전에는 안
+     * 보냈다(ADR-052). 캐스케이드 모드를 켜 두면 revoke가 나가는 순간 그 계정의 grant가 통째로 죽는다: 옛 refresh로 갱신이
+     * {@code invalid_grant}면 「보냈다」의 실물 증거다. 비밀값은 revoke 전에 지운다(종료에 잘려도 원문이 안 남게).
      */
     @Test
-    void 사용자_해제는_행을_닫고_secrets를_지우되_구글을_부르지_않는다() {
+    void 사용자_해제는_행을_닫고_secrets를_지우고_구글에_revoke를_보낸다() {
         YOUTUBE.cascadeOnRevoke(true);
         User u = newUser();
         YoutubeChannelLink link = linked(u, "at-1", "rt-1");
@@ -116,9 +112,24 @@ class YoutubeLinkWriterTest extends YoutubeLinkTestSupport {
         assertThat(closed.status()).isEqualTo(LinkStatus.UNLINKED);
         assertThat(secretStore.get(link.getAccessTokenRef())).as("참조를 지워 우리가 못 쓰게 한다").isEmpty();
         assertThat(secretStore.get(link.getRefreshTokenRef())).isEmpty();
-        assertThat(YOUTUBE.revokeCalls()).as("해제가 구글을 불렀다").isZero();
-        assertThat(oauthClient.refresh(refresh).accessToken())
-                .as("그 토큰이 구글에서 죽었다 = revoke가 나갔다는 뜻이다").isNotNull();
+        assertThat(YOUTUBE.revokedTokens()).as("refresh 하나로 한 번(계정 단위라 둘째는 무의미)").containsExactly("rt-1");
+        assertThatThrownBy(() -> oauthClient.refresh(refresh))
+                .as("그 토큰이 구글에서 죽었다 = revoke가 나갔다").isInstanceOf(YoutubeRejectedException.class);
+    }
+
+    /** revoke가 실패해도(구글 5xx) 비밀값은 지운다. 다시 보내지 않는다(원문을 남기지 않는다) */
+    @Test
+    void 해제_revoke가_실패해도_secrets는_지운다() {
+        YOUTUBE.revokeResponds(503, "{}");
+        User u = newUser();
+        YoutubeChannelLink link = linked(u, "at-1", "rt-1");
+
+        writer.revoke(u.getId(), Instant.now());
+        awaitCleanup();
+
+        assertThat(YOUTUBE.revokeCalls()).isEqualTo(1);
+        assertThat(secretStore.get(link.getAccessTokenRef())).isEmpty();
+        assertThat(secretStore.get(link.getRefreshTokenRef())).isEmpty();
     }
 
     @Test

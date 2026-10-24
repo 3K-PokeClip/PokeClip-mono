@@ -1,6 +1,7 @@
 import { StrictMode, type AnchorHTMLAttributes, type ReactElement, type ReactNode } from 'react';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import { QueryClientProvider } from '@tanstack/react-query';
+import { axe } from 'jest-axe';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SoopCallbackScreen } from '@/features/settings/channels/SoopCallbackScreen';
 import { soopLinkQueryOptions } from '@/api/soopLink';
@@ -67,6 +68,16 @@ afterEach(() => {
 });
 
 describe('SoopCallbackScreen', () => {
+  it('교환을 기다리는 동안 문장 한 줄을 status 하나로 알린다(POK-442)', async () => {
+    stubFetch(() => new Promise<Response>(() => {}));
+    renderScreen(<SoopCallbackScreen />);
+
+    // 스피너는 문장 옆이라 aria-hidden: 낭독기엔 문장만 한 번 들린다
+    expect(screen.getAllByRole('status')).toHaveLength(1);
+    expect(screen.getByRole('status')).toHaveTextContent('SOOP 방송국을 연동하는 중…');
+    expect(await axe(document.body)).toHaveNoViolations();
+  });
+
   it('code·state로 완료를 부르고 채널 화면으로 replace한다: 캐시를 비우고 아이디를 그리지 않는다', async () => {
     const spy = stubFetch(() => jsonResponse(201, linkedBody));
     const queryClient = renderScreen(<SoopCallbackScreen />);

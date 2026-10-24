@@ -287,6 +287,22 @@ class BroadcastInfoCollectorTest {
         assertThat(stored.get(0).title()).isEqualTo("목록 제목");
         assertThat(stored.get(0).tags()).containsExactly("t");
         assertThat(stored.get(0).viewers()).isEqualTo(77);
+        assertThat(stored.get(0).categoryImageUrl()).as("목록에는 카테고리 사진이 없다").isNull();
+    }
+
+    /** 설정이 준 카테고리 사진이 정보 줄과 SSE에 실린다(POK-462). */
+    @Test
+    void 설정의_카테고리_사진이_정보_줄과_중계에_실린다() {
+        java.util.List<com.pokeclip.chat.collector.relay.RelayPayload> payloads = new CopyOnWriteArrayList<>();
+        client.pages = List.of(new LivePage(List.of(entry("c-a", 3)), null));
+        client.settings.put("tok-a", new SettingResult(new LiveSetting("A", List.of(), "LoL", "https://img.example/lol.jpg"), 200));
+
+        new BroadcastInfoCollector(registry, client, stored::add, (streamId, payload) -> payloads.add(payload), notifier, PROPS, clock)
+                .tick();
+
+        assertThat(stored).singleElement().extracting(BroadcastInfo::categoryImageUrl).isEqualTo("https://img.example/lol.jpg");
+        assertThat(payloads).singleElement().isInstanceOfSatisfying(com.pokeclip.chat.collector.relay.RelayPayload.Info.class,
+                info -> assertThat(info.categoryImageUrl()).isEqualTo("https://img.example/lol.jpg"));
     }
 
     @Test

@@ -31,14 +31,39 @@ describe('fetchEditorDelegations', () => {
     stubFetch((url) => {
       expect(url).toBe('/api/editor-delegations/as-streamer');
       return jsonResponse(200, [
-        { id: 3, counterpartId: 77, counterpartName: '박편집', grantedAt: '2026-05-12T09:00:00Z' },
+        {
+          id: 3,
+          counterpartId: 77,
+          counterpartName: '박편집',
+          // 올린 사진 주소의 실제 모양: 회원 번호를 품는다(PhotoUrls)
+          counterpartProfileImageUrl: 'https://auth.example/api/profile-photos/77?token=t',
+          grantedAt: '2026-05-12T09:00:00Z',
+        },
+        // 사진 칸을 싣기 전 서버: 칸이 없어도 null로 받는다
+        { id: 4, counterpartId: 78, counterpartName: '김컷', grantedAt: '2026-07-03T09:00:00Z' },
       ]);
     });
 
     const delegations = await fetchEditorDelegations();
-    expect(delegations).toEqual([{ id: 3, name: '박편집', grantedAt: '2026-05-12T09:00:00Z' }]);
-    // counterpartId가 다른 이름으로도 딸려 오지 않는다 — 스프레드 금지 규약의 검증
-    expect(JSON.stringify(delegations)).not.toContain('77');
+    expect(delegations).toEqual([
+      {
+        id: 3,
+        name: '박편집',
+        profileImageUrl: 'https://auth.example/api/profile-photos/77?token=t',
+        grantedAt: '2026-05-12T09:00:00Z',
+      },
+      { id: 4, name: '김컷', profileImageUrl: null, grantedAt: '2026-07-03T09:00:00Z' },
+    ]);
+    // counterpartId가 다른 이름으로도 딸려 오지 않는다(스프레드 금지 규약): 칸 이름을 화이트리스트로 잰다. 회원 번호
+    // 글자로는 못 잰다 — 올린 사진 주소가 번호를 품는다(PR #372 리뷰)
+    for (const delegation of delegations) {
+      expect(Object.keys(delegation).sort()).toEqual([
+        'grantedAt',
+        'id',
+        'name',
+        'profileImageUrl',
+      ]);
+    }
   });
 });
 

@@ -1,11 +1,4 @@
-import {
-  Captions,
-  Image as ImageIcon,
-  LayoutTemplate,
-  Music,
-  Scissors,
-  SlidersHorizontal,
-} from 'lucide-react';
+import { Captions, Image as ImageIcon, LayoutTemplate, Music, Type } from 'lucide-react';
 import type { ComponentType } from 'react';
 import { RovingProvider, useRovingItem } from '@/ui/primitives';
 import { PanelSideIcon } from './PanelSideIcon';
@@ -17,10 +10,9 @@ import type { EditorPanelSide, EditorTool } from '../useClipEditorMockState';
 
 const TOOL_ICONS: Record<EditorTool, ComponentType<{ size?: number }>> = {
   layout: LayoutTemplate,
-  range: Scissors,
   subtitle: Captions,
-  audio: SlidersHorizontal,
-  bgm: Music,
+  text: Type,
+  audio: Music,
   image: ImageIcon,
 };
 
@@ -81,7 +73,12 @@ export function ToolRail({
         onActiveChange={(value) => onSelect(value as EditorTool)}
         orientation="vertical"
       >
-        <div className={styles.toolList} role="tablist" aria-label="편집 도구" aria-orientation="vertical">
+        <div
+          className={styles.toolList}
+          role="tablist"
+          aria-label="편집 도구"
+          aria-orientation="vertical"
+        >
           {tools.map((tool) => (
             <ToolButton
               key={tool.value}

@@ -71,20 +71,21 @@ class YoutubeRevokeDocTest {
                 .hasSameSizeAs(callSites);
     }
 
-    /** 그 하나가 <b>갱신 거부</b>인지까지 본다 — 개수만 맞고 자리가 다르면 문서가 여전히 거짓이다. */
+    /** 그 둘이 <b>갱신 거부</b>와 <b>해제</b>인지까지 본다(POK-423) — 개수만 맞고 자리가 다르면 문서가 여전히 거짓이다. */
     @Test
-    void 부른다로_적힌_행이_갱신_거부다() throws IOException {
-        assertThat(docRowsSayingCalls()).singleElement()
-                .as("「부른다」 행이 갱신 거부가 아니다 — 코드는 YoutubeTokenRefresher.reject 하나만 부른다")
-                .satisfies(row -> assertThat(row).contains("갱신 거부"));
-        assertThat(revokeCallSites()).singleElement()
-                .satisfies(site -> assertThat(site).startsWith("YoutubeTokenRefresher.java"));
+    void 부른다로_적힌_행이_갱신_거부와_해제다() throws IOException {
+        assertThat(docRowsSayingCalls()).hasSize(2)
+                .anySatisfy(row -> assertThat(row).contains("갱신 거부"))
+                .anySatisfy(row -> assertThat(row).contains("사용자 해제"));
+        assertThat(revokeCallSites()).hasSize(2)
+                .anySatisfy(site -> assertThat(site).startsWith("YoutubeTokenRefresher.java"))
+                .anySatisfy(site -> assertThat(site).startsWith("YoutubeLinkWriter.java"));
     }
 
     /** 표에 「안 부른다」 행이 실제로 있어야 한다 — 위 둘이 「표가 비어서」 통과하지 않게. */
     @Test
     void 표에_안_부른다_행도_있다() throws IOException {
         assertThat(tableRows()).filteredOn(row -> row.contains("**안 부른다**"))
-                .as("해제·재연동·실패 정리 셋이 있어야 한다").hasSize(3);
+                .as("재연동·실패 정리 둘이 있어야 한다").hasSize(2);
     }
 }

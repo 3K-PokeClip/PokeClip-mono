@@ -1,5 +1,6 @@
 package com.pokeclip.chat.collector.relay;
 
+import com.pokeclip.chat.collector.Platform;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
@@ -219,7 +220,7 @@ class RelayBufferTest {
 
     @Test
     void 채팅의_문자열_칸에서_NUL을_지운다() {
-        RelayPayload.Chat chat = new RelayPayload.Chat(Instant.EPOCH,
+        RelayPayload.Chat chat = new RelayPayload.Chat(Platform.CHZZK, Instant.EPOCH,
                 "닉\0네임", "sender\0id", "ro\0le", "본\0문");
 
         assertThat(chat.nickname()).isEqualTo("닉네임");
@@ -233,14 +234,14 @@ class RelayBufferTest {
     /**
      * 후원은 표({@code PersistableDonation})와 <b>같은 값</b>으로 정규화한다 — 종류·문구·
      * 보낸 사람이 null이면 표는 빈 문자열로 접는다. 여기서 null로 두면 겹침 열쇠
-     * ({@code kind, time, senderChannelId, text})가 창구와 SSE 사이에서 갈려 같은 후원이
+     * ({@code kind, time, senderChannelId, text, platform})가 창구와 SSE 사이에서 갈려 같은 후원이
      * 화면에 두 번 뜬다(F3).
      */
     @Test
     void 후원의_문자열_칸에서_NUL을_지우고_표와_같게_null을_접는다() {
-        RelayPayload.Donation withNul = new RelayPayload.Donation(Instant.EPOCH,
+        RelayPayload.Donation withNul = new RelayPayload.Donation(Platform.CHZZK, Instant.EPOCH,
                 "닉\0", "don\0ator", 1000L, "CH\0AT", "문\0구");
-        RelayPayload.Donation withNulls = new RelayPayload.Donation(Instant.EPOCH,
+        RelayPayload.Donation withNulls = new RelayPayload.Donation(Platform.CHZZK, Instant.EPOCH,
                 null, null, null, null, null);
 
         assertThat(withNul.nickname()).isEqualTo("닉");
@@ -258,6 +259,6 @@ class RelayBufferTest {
     }
 
     private static RelayPayload.Chat chat(String text) {
-        return new RelayPayload.Chat(Instant.EPOCH, "nick", "sender", null, text);
+        return new RelayPayload.Chat(Platform.CHZZK, Instant.EPOCH, "nick", "sender", null, text);
     }
 }

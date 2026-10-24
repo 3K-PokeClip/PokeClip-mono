@@ -25,6 +25,14 @@
 #   error         ResourceNotFoundException, 종료 254
 #   endpoint      네트워크 단계 실패(Read timeout on endpoint URL), 종료 255
 #   unparsed      오류 코드 · endpoint URL 이 없는 실패(SSL 검증), 종료 255
+#
+# aws configure get cli_history --no-cli-auto-prompt(CLI 기록 검사)는 값을 받지
+# 않는 호출이라 calls · argv 에 적지 않고, 받은 인자를 한 줄로 이어
+# history-calls 에 더한다. 표준 입력에 한 바이트라도 있으면 violation 에 적고
+# 실패한다(auto-prompt 가 표준 입력의 값을 키 입력으로 읽지 않게 스크립트가
+# </dev/null 로 부르는지). 그 뒤 FAKE_AWS_CLI_HISTORY 로 답한다
+# (precheck/tests/fakebin/aws 와 같은 뜻): 비면 값 없음(빈 출력 · 종료 1 —
+# 진짜 CLI), fail 이면 설정 읽기 실패(종료 255), 그 밖이면 그 값.
 
 set -uo pipefail
 # 물려받은 allexport · 추적 · verbose 를 끈다(SHELLOPTS). allexport 가 켜져
@@ -245,11 +253,42 @@ respond() {
   esac
 }
 
+#######################################
+# aws configure get cli_history 에 답하고 끝낸다(머리 주석).
+# Globals:
+#   FAKE_AWS_DIR, FAKE_AWS_CLI_HISTORY
+# Arguments:
+#   aws 가 받은 인자들.
+#######################################
+configure_get() {
+  local stub_stdin=""
+  printf '%s\n' "$*" >>"${FAKE_AWS_DIR}/history-calls"
+  IFS= read -r -d '' stub_stdin
+  [[ -z "${stub_stdin}" ]] ||
+    violation "configure get 의 표준 입력이 비어 있지 않음(</dev/null 아님)"
+  if [[ "$*" != 'configure get cli_history --no-cli-auto-prompt' ]]; then
+    printf 'fake aws: 모르는 설정 조회: %s\n' "$*" >&2
+    exit 99
+  fi
+  case "${FAKE_AWS_CLI_HISTORY:-}" in
+    '') exit 1 ;;
+    fail)
+      printf '\nThe config profile (example) could not be found\n' >&2
+      exit 255
+      ;;
+    *)
+      printf '%s\n' "${FAKE_AWS_CLI_HISTORY}"
+      exit 0
+      ;;
+  esac
+}
+
 main() {
   if [[ -z "${FAKE_AWS_DIR:-}" || ! -d "${FAKE_AWS_DIR}" ]]; then
     printf '%s\n' "fake aws: FAKE_AWS_DIR 가 없음" >&2
     exit 99
   fi
+  [[ "${1-}" != configure ]] || configure_get "$@"
   printf 'call\n' >>"${FAKE_AWS_DIR}/calls"
   printf '%s\n' "$@" >"${FAKE_AWS_DIR}/argv"
   record_env

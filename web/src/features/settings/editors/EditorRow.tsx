@@ -9,8 +9,8 @@ import styles from './EditorSettingsScreen.module.css';
 // 행마다 있어 이름만으로는 구분되지 않는다.
 //
 // 시안은 이름 아래 「이메일 · 가입일」을 그리지만 계약(DelegationResponse)이 이메일을
-// 의도적으로 주지 않는다 — POK-207이 보강할 때까지 합류일만 그린다. 아바타 이미지도
-// 계약에 없어 이니셜 폴백으로 선다.
+// 의도적으로 주지 않는다 — POK-207이 보강할 때까지 합류일만 그린다. 아바타는 편집자
+// 프로필 사진을 그리고, 사진이 없거나 못 불러오면 이니셜로 선다.
 export function EditorRow({
   editor,
   onRevoke,
@@ -22,7 +22,7 @@ export function EditorRow({
 
   return (
     <div className={styles.row} role="group" aria-labelledby={nameId}>
-      <Avatar size="md" name={editor.name} />
+      <Avatar size="md" src={editor.profileImageUrl ?? undefined} name={editor.name} />
       <div className={styles.rowBody}>
         <div className={styles.rowName} id={nameId}>
           {editor.name}

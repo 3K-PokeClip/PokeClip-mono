@@ -330,7 +330,7 @@ describe('VodListScreen — 서버 목록', () => {
     vi.unstubAllGlobals();
   });
 
-  it('처음 불러오는 동안은 「없다」가 아니라 「불러오는 중」이다: 비어 있는 목록은 아직 모르는 것이다', async () => {
+  it('처음 불러오는 동안은 「없다」가 아니라 행 스켈레톤이다: 비어 있는 목록은 아직 모르는 것이다', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     let answer: (response: Response) => void = () => undefined;
     stubFetch((url) =>
@@ -341,9 +341,14 @@ describe('VodListScreen — 서버 목록', () => {
         : jsonResponse(200, { cards: [], nextCursor: null }),
     );
 
-    renderWithProviders(<VodListScreen />);
-    expect(screen.getByText('불러오는 중…')).toBeInTheDocument();
+    const { container } = renderWithProviders(<VodListScreen />);
+    // 낭독기엔 스켈레톤 대신 status 한 줄만 들린다(POK-441)
+    expect(screen.getAllByRole('status')).toHaveLength(1);
+    expect(screen.getByRole('status')).toHaveTextContent('지난 방송을 불러오는 중');
     expect(screen.queryByText('아직 지난 방송이 없어요')).toBeNull();
+    await act(async () => {
+      expect(await axe(container)).toHaveNoViolations();
+    });
 
     await act(async () => {
       answer(jsonResponse(200, { broadcasts: [], nextCursor: null }));
@@ -351,19 +356,141 @@ describe('VodListScreen — 서버 목록', () => {
     });
     // 서버가 「없다」고 답한 뒤에야 빈 상태다
     expect(screen.getByText('아직 지난 방송이 없어요')).toBeInTheDocument();
-    expect(screen.queryByText('불러오는 중…')).toBeNull();
+    expect(screen.queryByText('지난 방송을 불러오는 중')).toBeNull();
   });
 
-  it('첫 조회가 실패하면 다음 주기까지 「불러오는 중」이다: 못 읽은 것을 「없다」고 하지 않는다', async () => {
+  it('첫 조회가 실패하면 「없다」도 「불러오는 중」도 아니라 못 불러왔다고 말하고, 다시 시도는 주기를 기다리지 않는다(POK-441)', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    stubFetch(() => jsonResponse(503, { error: 'unavailable' }));
+    let down = true;
+    stubFetch((url) =>
+      url.startsWith('/api/clip/broadcasts?') && down
+        ? jsonResponse(503, { error: 'unavailable' })
+        : url.startsWith('/api/clip/broadcasts?')
+          ? jsonResponse(200, { broadcasts: [], nextCursor: null })
+          : jsonResponse(200, { cards: [], nextCursor: null }),
+    );
+
+    const { container } = renderWithProviders(<VodListScreen />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100);
+    });
+    const firstAlert = screen.getByRole('alert');
+    expect(firstAlert).toHaveTextContent('지난 방송을 불러오지 못했어요');
+    expect(screen.queryByText('지난 방송을 불러오는 중')).toBeNull();
+    expect(screen.queryByText('아직 지난 방송이 없어요')).toBeNull();
+    await act(async () => {
+      expect(await axe(container)).toHaveNoViolations();
+    });
+
+    // 다시 실패하면 안내를 새로 그린다: 같은 alert 노드면 낭독기가 다시 읽지 않는다(PR #377 리뷰)
+    fireEvent.click(screen.getByRole('button', { name: '다시 시도' }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100);
+    });
+    expect(screen.getByRole('alert')).toHaveTextContent('지난 방송을 불러오지 못했어요');
+    expect(screen.getByRole('alert')).not.toBe(firstAlert);
+
+    down = false;
+    fireEvent.click(screen.getByRole('button', { name: '다시 시도' }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100);
+    });
+    // 60초 주기 전인데 다시 읽었다: 서버가 「없다」고 답했으니 이제 빈 상태다
+    expect(screen.getByText('아직 지난 방송이 없어요')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
+    // 버튼이 사라져 갈 곳 잃은 포커스는 제목으로 간다(PR #377 리뷰)
+    expect(screen.getByRole('heading', { level: 1, name: '지난 방송' })).toHaveFocus();
+  });
+
+  it('한 번 읽은 뒤의 실패는 옛 목록을 그대로 둔다: 못 불러왔다는 카드로 바꾸지 않는다', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let down = false;
+    stubFetch((url) =>
+      url.startsWith('/api/clip/broadcasts?') && down
+        ? jsonResponse(503, { error: 'unavailable' })
+        : url.startsWith('/api/clip/broadcasts?')
+          ? jsonResponse(200, {
+              broadcasts: [
+                {
+                  streamId: 'S-1',
+                  status: 'ended',
+                  relation: 'OWNER',
+                  startedAt: '2026-10-20T10:00:00Z',
+                  endedAt: '2026-10-20T12:00:00Z',
+                  vodExpiresAt: '2026-12-19T12:00:00Z',
+                },
+              ],
+              nextCursor: null,
+            })
+          : jsonResponse(200, { cards: [], nextCursor: null }),
+    );
 
     renderWithProviders(<VodListScreen />);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(100);
     });
-    expect(screen.getByText('불러오는 중…')).toBeInTheDocument();
-    expect(screen.queryByText('아직 지난 방송이 없어요')).toBeNull();
+    expect(rows()).toHaveLength(1);
+
+    down = true;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(rows()).toHaveLength(1);
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('읽기가 멈춰도 다음 주기에 새로 읽어 회복한다: 겹친 읽기를 하나로 묶지 않는다(PR #377 리뷰)', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let calls = 0;
+    stubFetch((url) => {
+      if (!url.startsWith('/api/clip/broadcasts?'))
+        return jsonResponse(200, { cards: [], nextCursor: null });
+      calls += 1;
+      // 첫 읽기는 영영 답하지 않는다(시한 없는 요청이 멈춘 꼴)
+      return calls === 1
+        ? new Promise<Response>(() => undefined)
+        : jsonResponse(200, { broadcasts: [], nextCursor: null });
+    });
+
+    renderWithProviders(<VodListScreen />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100);
+    });
+    expect(screen.getByRole('status')).toHaveTextContent('지난 방송을 불러오는 중');
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(screen.getByText('아직 지난 방송이 없어요')).toBeInTheDocument();
+  });
+
+  it('「다시 시도」가 도는 표시는 요청이 멈춰도 15초 뒤 풀린다: 버튼이 멈춘 요청에 묶이지 않는다', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let calls = 0;
+    stubFetch((url) => {
+      if (!url.startsWith('/api/clip/broadcasts?'))
+        return jsonResponse(200, { cards: [], nextCursor: null });
+      calls += 1;
+      return calls === 1
+        ? jsonResponse(503, { error: 'unavailable' })
+        : new Promise<Response>(() => undefined);
+    });
+
+    renderWithProviders(<VodListScreen />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100);
+    });
+    const button = screen.getByRole('button', { name: '다시 시도' });
+    fireEvent.click(button);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100);
+    });
+    expect(button).toHaveAttribute('aria-busy', 'true');
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000);
+    });
+    expect(button).not.toHaveAttribute('aria-busy');
   });
 
   it('카드 수는 낡으면 다시 센다: 끝난 지 한 시간 안이면 주기마다, 그 밖은 10분마다(POK-254)', async () => {

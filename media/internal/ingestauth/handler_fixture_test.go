@@ -477,6 +477,7 @@ type handlerEvent struct {
 	Msg           string `json:"msg"`
 	Path          string `json:"path"`
 	ConnID        string `json:"conn_id"`
+	Protocol      string `json:"protocol"`
 	Reason        string `json:"reason"`
 	ResolveStatus string `json:"resolve_status"`
 	ResolveMS     int64  `json:"resolve_ms"`
@@ -505,7 +506,7 @@ func (e handlerEvent) has(key string) bool {
 var closedWord = regexp.MustCompile(`^([a-z][a-z_]*|[0-9]{3})$`)
 
 // String 은 e 를 실패 문구용으로 줄인 것이다(%v · %+v 가 쓴다). 수는 그대로, 문자열은 꼴이 확인된 값 — 이벤트 이름 ·
-// 등급 · 닫힌 집합 꼴(reason · resolve_status · wait · scope) · 토큰 꼴 path · 연결 id 꼴 conn_id · IP 주소(ip ·
+// 등급 · 닫힌 집합 꼴(protocol · reason · resolve_status · wait · scope) · 토큰 꼴 path · 연결 id 꼴 conn_id · IP 주소(ip ·
 // remote_ip) · 키 이름 — 만 그대로 싣고 그 밖은 길이만 싣는다. 시험이 잡은 로그의 내용이 실패 문구로 새지 않게
 // 한다(누설 시험의 실패 문구 규칙과 같다 — 이름 · 자리 · 횟수 · 길이).
 func (e handlerEvent) String() string {
@@ -520,6 +521,7 @@ func (e handlerEvent) String() string {
 	}{
 		{"path", e.Path, streamkey.IsToken},
 		{"conn_id", e.ConnID, connIDPattern.MatchString},
+		{"protocol", e.Protocol, closedWord.MatchString},
 		{"reason", e.Reason, closedWord.MatchString},
 		{"resolve_status", e.ResolveStatus, closedWord.MatchString},
 		{"wait", e.Wait, closedWord.MatchString},

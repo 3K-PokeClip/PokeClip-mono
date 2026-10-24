@@ -17,6 +17,9 @@ set -uo pipefail
 # shellcheck source=infra/terraform/scripts/precheck/tests/testlib.sh
 source "$(dirname -- "${BASH_SOURCE[0]}")/testlib.sh"
 
+# CLI 기록 검사의 aws 인자(가짜 aws 기록 한 줄 — lib/precheck_common.sh 의
+# precheck::cli_history_state).
+readonly HISTORY_CALL='configure get cli_history --no-cli-auto-prompt'
 readonly OLD_SINCE='2000-01-01T00:00:00Z'
 # 고정 입력의 기대 출력(kty 59차 — 범주별 건수): 권한 변경 = ev-4 · ev-5,
 # 역할 받기 = ev-1 · ev-2.
@@ -489,7 +492,7 @@ expect_cli_history() {
     if [[ "${spec}" == disabled ]]; then
       if [[ "${run_status}" -ne 0 ||
         "$(cat -- "${run_out}.stdout")" != "${WANT_EVENTS}" ||
-        "$(sed -n 1p -- "${log}")" != 'configure get cli_history' ||
+        "$(sed -n 1p -- "${log}")" != "${HISTORY_CALL}" ||
         "$(sed -n 2p -- "${log}")" != 'cloudtrail lookup-events'* ]]; then
         testlib::fail "${name}: 종료 0 · 설정 조회 뒤 조회를 기대했으나" \
           "${run_status} — $(cat -- "${run_out}.stderr" "${log}")"
@@ -506,7 +509,7 @@ expect_cli_history() {
     want=1
     [[ "${spec}" == file ]] && want=0
     if [[ "${calls}" -ne "${want}" || ( "${want}" -eq 1 &&
-      "$(cat -- "${log}")" != 'configure get cli_history' ) ]] ||
+      "$(cat -- "${log}")" != "${HISTORY_CALL}" ) ]] ||
       grep -qF -e qxhistory -e enabled -- "${run_out}.stderr"; then
       testlib::fail "${name}: AWS 호출 ${calls}건(기대 ${want})이거나 값 ·" \
         "경로를 되울림 — $(cat -- "${run_out}.stderr")"

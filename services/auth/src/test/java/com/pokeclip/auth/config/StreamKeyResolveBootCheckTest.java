@@ -95,6 +95,24 @@ class StreamKeyResolveBootCheckTest {
   }
 
   /**
+   * prod 꼴이다(POK-429). 허용 대역은 /32 가 아니라 Media 프라이빗 서브넷 같은 /24 이고, platform 이 {@code
+   * FORWARD_HEADERS_TRUSTED_PROXIES = vpc_cidr} 로 넣는 신뢰 프록시 대역이 함께 있다. 신뢰 대역은 머리글 이름을 바꾸지
+   * 않으므로 부팅 검사를 걸지 않아야 한다.
+   */
+  @Test
+  void withToken_bootsUnderProdShape() {
+    web(
+            INTERNAL_TOKEN_SET,
+            RESOLVE_TOKEN_SET,
+            PREFIX + "allowed-cidrs=10.0.32.0/24",
+            STRATEGY_NATIVE,
+            "server.tomcat.remoteip.internal-proxies=10.0.0.0/16")
+        .run(
+            context ->
+                assertThat(context).hasNotFailed().hasBean("streamKeyResolveFilterChain"));
+  }
+
+  /**
    * none 이나 native 여야 한다. framework 는 Spring 필터가 표시 밸브가 안 보는 헤더(X-Forwarded-Prefix 등)까지 읽는다.
    * 빈 값은 none 이 아니라 미설정으로 읽혀 플랫폼 감지로 간다.
    */

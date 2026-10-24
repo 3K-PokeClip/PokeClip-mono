@@ -10,6 +10,7 @@ export function PairingCodeCard({
   code,
   loading,
   error,
+  retrying,
   busy,
   onIssue,
   onRetry,
@@ -19,6 +20,8 @@ export function PairingCodeCard({
   loading?: boolean;
   /** 상태를 한 번도 못 읽음 — 미발급으로 오인시키면 안 된다 (리뷰 #73). */
   error?: boolean;
+  /** 「다시 시도」로 다시 읽는 중 — 오류 카드를 둔 채 그 버튼만 돈다(POK-446). */
+  retrying?: boolean;
   /** 발급 진행 중 — 이중 클릭 방지. */
   busy?: boolean;
   onIssue: () => void;
@@ -44,7 +47,15 @@ export function PairingCodeCard({
       ) : error ? (
         <div className={styles.codeBoxEmpty}>
           <div className={styles.codeEmptyText}>연동 코드 상태를 불러오지 못했어요.</div>
-          <Button variant="soft" size="sm" onClick={onRetry}>
+          {/* 다시 읽는 동안 이 버튼만 돈다(POK-446) — 발급 버튼과 같이 라벨은 자리만 지켜 폭이 튀지 않는다(.busyButton) */}
+          <Button
+            variant="soft"
+            size="sm"
+            loading={retrying}
+            aria-label={retrying ? '다시 불러오는 중' : undefined}
+            className={styles.busyButton}
+            onClick={onRetry}
+          >
             다시 시도
           </Button>
         </div>

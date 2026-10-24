@@ -24,6 +24,11 @@
   margin: 0;
 }
 
+/* 「다시 시도」가 성공하면 포커스를 제목으로 옮긴다(낭독 위치 잡기용) — 누를 것이 아니라 테두리는 그리지 않는다 */
+.title:focus {
+  outline: none;
+}
+
 /* 필터 칩 — LiveScreen의 하이라이트 필터와 같은 모양이다. 세 번째 화면이 같은 칩을
    원하면 그때 공용 컴포넌트로 올린다(editorDates의 「세 번째가 원하면」 관행) */
 .filterGroup {
@@ -145,10 +150,10 @@
   pointer-events: none;
   padding: calc(1 * var(--pc-u)) calc(6 * var(--pc-u));
   border-radius: calc(5 * var(--pc-u));
-  background: rgb(0 0 0 / 0.62);
+  background: rgb(0 0 0 / 0.62); /* 테마 고정 */
   font-size: calc(10 * var(--pc-u));
   font-weight: 600;
-  color: #fff;
+  color: #fff; /* 테마 고정 */
 }
 
 /* ---------- 받는 중 · 썸네일 오버레이 (시안 1f ②) ---------- */
@@ -158,7 +163,7 @@
   inset: 0;
   z-index: 3;
   pointer-events: none;
-  background: rgb(16 17 21 / 0.66);
+  background: rgb(16 17 21 / 0.66); /* 테마 고정 */
   backdrop-filter: saturate(0.6) blur(1px);
 }
 
@@ -168,7 +173,7 @@
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgb(255 255 255 / 0.13);
+  background: rgb(255 255 255 / 0.13); /* 테마 고정 */
   border-top: 1.5px solid var(--pc-color-accent);
   transition: height 0.35s linear;
 }
@@ -181,7 +186,7 @@
   align-items: center;
   justify-content: center;
   gap: calc(1 * var(--pc-u));
-  color: #fff;
+  color: #fff; /* 테마 고정 */
 }
 
 .dlPercent {
@@ -196,7 +201,7 @@
   font-size: calc(9.5 * var(--pc-u));
   font-weight: 650;
   letter-spacing: 0.04em;
-  color: rgb(255 255 255 / 0.82);
+  color: rgb(255 255 255 / 0.82); /* 테마 고정 */
 }
 
 .rowText {
@@ -386,4 +391,11 @@
   margin: calc(6 * var(--pc-u)) 0 0;
   font-size: calc(12 * var(--pc-u));
   color: var(--pc-color-text-muted);
+}
+
+/* 첫 조회 실패 카드 아래 「다시 시도」 — 카드 가운데 줄에 맞춘다(POK-441) */
+.failAction {
+  display: flex;
+  justify-content: center;
+  margin-top: calc(12 * var(--pc-u));
 }

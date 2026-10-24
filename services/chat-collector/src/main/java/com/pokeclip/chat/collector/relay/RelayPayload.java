@@ -9,7 +9,7 @@ import java.time.Instant;
  * (계획 검증 F9). 부르는 쪽이 번호를 들 수 없게 타입으로 막는다.
  *
  * <p><b>칸 이름과 시각 축이 {@code query.ChatWindowItem}과 같다</b>(main 결정 F3). 프론트는
- * 범위 창구로 메운 구간과 SSE가 겹칠 때 {@code (kind, time, senderChannelId, text)}로 거르는데,
+ * 범위 창구로 메운 구간과 SSE가 겹칠 때 {@code (kind, time, senderChannelId, text, platform)}으로 거르는데,
  * 한쪽 값이 다르면 같은 채팅이 두 번 뜬다. 그래서:
  * <ul>
  *   <li>{@code time}은 <b>표에 저장되는 값</b>이다 — 채팅은 {@code message_time}(치지직 시각),
@@ -34,7 +34,11 @@ public sealed interface RelayPayload permits RelayPayload.Chat, RelayPayload.Don
 
     Instant time();
 
-    record Chat(Instant time, String nickname, String senderChannelId, String role, String text)
+    /**
+     * {@code platform}은 그 채팅이 들어온 플랫폼이다(POK-466). 한 방송을 치지직과 SOOP에 같이 내보내면 두 플랫폼 채팅이 한 줄기로
+     * 섞이므로 화면이 이것으로 줄마다 플랫폼을 보인다. 창구({@code ChatWindowItem})도 같은 이름으로 싣는다
+     */
+    record Chat(Platform platform, Instant time, String nickname, String senderChannelId, String role, String text)
             implements RelayPayload {
 
         public Chat {
@@ -58,8 +62,9 @@ public sealed interface RelayPayload permits RelayPayload.Chat, RelayPayload.Don
     /**
      * @param senderChannelId 후원자 채널({@code donatorChannelId}). 창구도 이 칸 이름으로 준다
      * @param amount          숫자로 못 읽었으면 null — 표와 같다
+     * @param platform        그 후원이 들어온 플랫폼(POK-466). 채팅과 같다
      */
-    record Donation(Instant time, String nickname, String senderChannelId, Long amount,
+    record Donation(Platform platform, Instant time, String nickname, String senderChannelId, Long amount,
                     String donationType, String text) implements RelayPayload {
 
         public Donation {
@@ -87,13 +92,15 @@ public sealed interface RelayPayload permits RelayPayload.Chat, RelayPayload.Don
      * 창구 칸(nickname 등)은 비고 {@code title}·{@code tags}·{@code category}·{@code viewers}가 찬다.
      * {@code viewers}의 {@code null}은 「목록에서 못 찾았다」이지 0명이 아니다({@code BroadcastInfo} 주석).
      * {@code platform}은 그 관측을 남긴 플랫폼이다(POK-397). 한 방송을 두 플랫폼에 같이 내보내면 화면이 이것으로 숫자를 가른다.
+     * {@code categoryImageUrl}은 카테고리 사진 주소다(POK-462, 치지직 방송 설정에서만 온다. 없으면 null).
      */
-    record Info(Platform platform, Instant time, String title, java.util.List<String> tags, String category, Integer viewers)
-            implements RelayPayload {
+    record Info(Platform platform, Instant time, String title, java.util.List<String> tags, String category, Integer viewers,
+                String categoryImageUrl) implements RelayPayload {
 
         public Info {
             title = stripNul(title);
             category = stripNul(category);
+            categoryImageUrl = stripNul(categoryImageUrl);
             tags = tags == null ? java.util.List.of()
                     : tags.stream().filter(java.util.Objects::nonNull).map(RelayPayload::stripNul).toList();
         }

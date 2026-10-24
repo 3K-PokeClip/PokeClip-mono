@@ -43,7 +43,12 @@ public record RenderProperties(
         /** 주문서 크기 상한(UTF-8 바이트). 계약1 2절 200KB. */
         @Min(1024) int maxMessageBytes,
         /** 완성 영상 주소(POK-247)의 수명. 재생 출입증과 같은 60분: 한 편을 보다가 끊기지 않을 만큼. */
-        @NotNull Duration fileUrlTtl
+        @NotNull Duration fileUrlTtl,
+        /**
+         * 원본 조각 주소(POK-389, 편집기의 트랙별 미리 듣기)의 수명. 5분: 화면은 받자마자 내려받아 풀고, 조각에는 방송 소리
+         * 트랙이 전부 들어 있어 오래 열어 둘 이유가 없다.
+         */
+        @NotNull Duration segmentAudioUrlTtl
 ) {
 
     /** S3 미리서명이 받는 가장 긴 수명. 넘기면 SDK가 서명 때 거절한다. */
@@ -52,10 +57,8 @@ public record RenderProperties(
     @PostConstruct
     void validateWhenEnabled() {
         // 켜짐과 무관하게 본다: 범위 밖이면 부팅은 살고 주소를 줄 때마다 500이 난다(PR #197 codex). 켜는 날 드러나면 늦다.
-        if (fileUrlTtl.isZero() || fileUrlTtl.isNegative() || fileUrlTtl.compareTo(MAX_FILE_URL_TTL) > 0) {
-            throw new IllegalStateException("pokeclip.render.file-url-ttl은 0초보다 크고 7일 이하여야 한다(S3 미리서명 한도): "
-                    + fileUrlTtl);
-        }
+        requireSignableTtl(fileUrlTtl, "file-url-ttl");
+        requireSignableTtl(segmentAudioUrlTtl, "segment-audio-url-ttl");
         if (!enabled) {
             return;
         }
@@ -63,6 +66,13 @@ public record RenderProperties(
         require(dlqUrl, "dlq-url", "RENDER_DLQ_URL");
         require(outputBucket, "output-bucket", "CLIPS_BUCKET");
         require(segmentBucket, "segment-bucket", "SEGMENT_BUCKET");
+    }
+
+    private static void requireSignableTtl(Duration ttl, String property) {
+        if (ttl.isZero() || ttl.isNegative() || ttl.compareTo(MAX_FILE_URL_TTL) > 0) {
+            throw new IllegalStateException("pokeclip.render." + property + "은 0초보다 크고 7일 이하여야 한다(S3 미리서명 한도): "
+                    + ttl);
+        }
     }
 
     private static void require(String value, String property, String env) {

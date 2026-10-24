@@ -15,7 +15,7 @@
   left: 0;
   right: 0;
   height: calc(220 * var(--pc-u));
-  background: linear-gradient(180deg, rgb(88 111 196 / 0.1), transparent);
+  background: linear-gradient(180deg, rgb(88 111 196 / 0.1), transparent); /* 테마 고정 */
   pointer-events: none;
   z-index: -1;
 }
@@ -50,11 +50,21 @@
   margin-top: calc(10 * var(--pc-u));
   padding: calc(28 * var(--pc-u)) calc(30 * var(--pc-u));
   border-radius: calc(22 * var(--pc-u));
-  border: 1px solid rgb(88 111 196 / 0.32);
+  --hero-edge: rgb(88 111 196 / 0.32); /* 라이트 덮음 */
+  --hero-glow: rgb(88 111 196 / 0.32); /* 라이트 덮음 */
+  --hero-wash: rgb(88 111 196 / 0.1); /* 라이트 덮음 */
+  border: 1px solid var(--hero-edge);
   background:
-    radial-gradient(circle at 88% 60%, rgb(88 111 196 / 0.32), transparent calc(260 * var(--pc-u))),
-    linear-gradient(160deg, rgb(88 111 196 / 0.1), transparent 70%), var(--pc-color-bg-surface);
+    radial-gradient(circle at 88% 60%, var(--hero-glow), transparent calc(260 * var(--pc-u))),
+    linear-gradient(160deg, var(--hero-wash), transparent 70%), var(--pc-color-bg-surface);
   overflow: hidden;
+}
+
+/* 다크용 브랜드 번짐(0.32)은 흰 카드에서 진한 보라 얼룩이 된다 — 라이트는 약 1/3 */
+:global([data-theme='light']) .hero {
+  --hero-edge: color-mix(in srgb, var(--pc-color-accent) 20%, transparent);
+  --hero-glow: color-mix(in srgb, var(--pc-color-accent) 12%, transparent);
+  --hero-wash: color-mix(in srgb, var(--pc-color-accent) 4%, transparent);
 }
 
 /* 포키가 칸 아래 테두리에 걸쳐 서 있게 아래로 조금 내린다(overflow로 잘림) */
@@ -231,10 +241,10 @@
 
 @keyframes pc-home-wait-pulse {
   0% {
-    box-shadow: 0 0 0 0 rgb(88 111 196 / 0.55);
+    box-shadow: 0 0 0 0 rgb(88 111 196 / 0.55); /* 테마 고정 */
   }
   100% {
-    box-shadow: 0 0 0 calc(9 * var(--pc-u)) rgb(88 111 196 / 0);
+    box-shadow: 0 0 0 calc(9 * var(--pc-u)) rgb(88 111 196 / 0); /* 테마 고정 */
   }
 }
 
@@ -381,11 +391,11 @@
   gap: calc(16 * var(--pc-u));
   padding: calc(14 * var(--pc-u));
   border-radius: calc(16 * var(--pc-u));
-  border: 1px solid rgb(214 63 159 / 0.38);
+  border: 1px solid rgb(214 63 159 / 0.38); /* 테마 고정 */
   background: linear-gradient(
     120deg,
-    rgb(214 63 159 / 0.09),
-    rgb(88 111 196 / 0.07) 55%,
+    rgb(214 63 159 / 0.09) /* 테마 고정 */,
+    rgb(88 111 196 / 0.07) 55% /* 테마 고정 */,
     transparent
   );
 }
@@ -407,7 +417,7 @@
   padding: calc(3 * var(--pc-u)) calc(9 * var(--pc-u));
   border-radius: calc(99 * var(--pc-u));
   background: var(--pc-color-point);
-  color: #fff;
+  color: #fff; /* 테마 고정 */
   font-size: calc(11 * var(--pc-u));
   font-weight: 750;
   letter-spacing: 0.03em;
@@ -421,8 +431,8 @@
   z-index: 2;
   padding: calc(2 * var(--pc-u)) calc(8 * var(--pc-u));
   border-radius: calc(6 * var(--pc-u));
-  background: rgb(0 0 0 / 0.6);
-  color: rgb(255 255 255 / 0.9);
+  background: rgb(0 0 0 / 0.6); /* 테마 고정 */
+  color: rgb(255 255 255 / 0.9); /* 테마 고정 */
   font-size: calc(11 * var(--pc-u));
   font-weight: 600;
 }
@@ -443,6 +453,42 @@
 
 .liveMetaText {
   font-size: calc(11.5 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}
+
+/* 방송 정보를 받기 전 배지의 점(POK-449). 받아 오는 중이라는 뜻으로 깜빡인다 */
+.connectingDot {
+  width: calc(6 * var(--pc-u));
+  height: calc(6 * var(--pc-u));
+  border-radius: calc(99 * var(--pc-u));
+  background: #fff; /* 테마 고정 — 썸네일 위 색 알약 안 점 */
+  animation: pc-home-live-pulse 1.2s ease-in-out infinite;
+}
+
+/* 움직임 줄이기는 이 규칙 뒤에 둬야 이긴다: 앞쪽 묶음에 넣으면 같은 세기라 뒤의 animation이 덮었다(PR #381 codex) */
+@media (prefers-reduced-motion: reduce) {
+  .connectingDot {
+    animation: none;
+  }
+}
+
+/* 시청자 필 안 막대 — 영상 위 어두운 필이라 테마 표면색이 묻힌다. 필처럼 테마 불변 raw 값 */
+.viewerPill .pillBar {
+  display: block;
+  margin: calc(2 * var(--pc-u)) 0;
+  background: rgb(255 255 255 / 0.28); /* 테마 고정 — 영상 위 어두운 필 안 */
+}
+
+.liveTitleBars {
+  display: flex;
+  flex-direction: column;
+  gap: calc(8 * var(--pc-u));
+  margin-top: calc(12 * var(--pc-u));
+}
+
+.liveInfoNote {
+  margin: calc(10 * var(--pc-u)) 0 0;
+  font-size: calc(12.5 * var(--pc-u));
   color: var(--pc-color-text-muted);
 }
 
@@ -469,12 +515,10 @@
   margin-top: auto;
   padding-top: calc(12 * var(--pc-u));
   display: flex;
-  gap: calc(8 * var(--pc-u));
 }
 
-/* 버튼처럼 보이는 링크 — DS Button(solid·ghost, md) 규격을 미러링 (LoginScreen.googleButton 선례) */
-.solidLink,
-.ghostLink {
+/* 버튼처럼 보이는 링크 — DS Button(solid, md) 규격을 미러링 (LoginScreen.googleButton 선례) */
+.solidLink {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -493,14 +537,6 @@
 
 .solidLink:hover {
   background: var(--pc-color-accent-hover);
-}
-
-.ghostLink {
-  color: var(--pc-color-text-primary);
-}
-
-.ghostLink:hover {
-  background: var(--pc-color-bg-surface-hover);
 }
 
 /* ---------- 지난 방송 · VOD ---------- */
@@ -568,10 +604,10 @@
   z-index: 2;
   padding: calc(2 * var(--pc-u)) calc(7 * var(--pc-u));
   border-radius: calc(99 * var(--pc-u));
-  background: rgb(0 0 0 / 0.6);
+  background: rgb(0 0 0 / 0.6); /* 테마 고정 */
   font-size: calc(10 * var(--pc-u));
   font-weight: 700;
-  color: #fff;
+  color: #fff; /* 테마 고정 */
 }
 
 .overlayTopLeft {
@@ -588,10 +624,10 @@
   z-index: 2;
   padding: calc(1 * var(--pc-u)) calc(6 * var(--pc-u));
   border-radius: calc(5 * var(--pc-u));
-  background: rgb(0 0 0 / 0.62);
+  background: rgb(0 0 0 / 0.62); /* 테마 고정 */
   font-size: calc(10 * var(--pc-u));
   font-weight: 600;
-  color: #fff;
+  color: #fff; /* 테마 고정 */
 }
 
 .vodText {
@@ -713,7 +749,15 @@
   border: 1px solid var(--pc-color-border-default);
   background: radial-gradient(
     circle at 86% 100%,
-    rgb(88 111 196 / 0.3),
+    rgb(88 111 196 / 0.3) /* 라이트 덮음 */,
+    transparent calc(150 * var(--pc-u))
+  );
+}
+
+:global([data-theme='light']) .tipCard {
+  background: radial-gradient(
+    circle at 86% 100%,
+    color-mix(in srgb, var(--pc-color-accent) 12%, transparent),
     transparent calc(150 * var(--pc-u))
   );
 }

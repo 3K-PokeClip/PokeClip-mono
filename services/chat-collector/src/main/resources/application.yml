@@ -4,7 +4,7 @@ spring:
       pool:
         # @Scheduled가 여섯이다(끝난 방송 치우기 · 재부착 · 방송 정보 · 탈퇴 채널 정리 · 60일 정리 · SOOP 지켜보기, POK-397). 기본 1이면
         # 방송 정보가 목록을 훑는 동안 재부착이 밀린다(ReattachScheduler 주석이 예고한 자리). 정리 둘이 큰 표를 지우는 동안에도
-        # 앞의 셋이 안 밀리게 하나씩 몫을 준다. SOOP 지켜보기는 방송마다 SOOP을 부르므로 방송 정보와 몫을 가른다.
+        # 앞의 셋이 안 밀리게 하나씩 몫을 준다. SOOP 지켜보기는 POK-456부터 전용 스레드(soop-watch)에서 돈다(넣는 순간 깨우려고).
         size: 6
   application:
     name: pokeclip-chat-collector
@@ -279,7 +279,12 @@ pokeclip:
     # 켜면 방송 여부 응답 data의 키 이름과 status 값만 INFO 한 줄(soop.live.diagnose)로 남긴다. 값은 안 찍는다. 실방송 진단용, 기본 꺼짐.
     diagnose-response: ${SOOP_DIAGNOSE_RESPONSE:false}
     api-base-uri: ${SOOP_API_BASE_URI:https://openapi.sooplive.com}
+    # 묻는 간격(POK-456). 넣은 뒤 fast-window 동안 「방송 중」을 볼 때까지 fast-interval마다, 그 뒤 interval마다 묻는다.
+    # SDK가 지난 채팅을 다시 주지 않아 시작 직후 늦게 붙으면 그만큼 잃는다. 틱은 전용 스레드에서 fast-interval마다 돌고,
+    # 새 방송을 넣는 순간 한 번 더 깬다. 호출 수 계산은 services/README.md 「SOOP 방송 지켜보기」.
     interval: PT1M
+    fast-interval: PT10S
+    fast-window: PT3M
     initial-delay: PT20S
     # 동시에 지켜보는 방송 상한(설계 전제 동시 사용자 100명). 한 틱 시간이 이것에 비례한다(방송마다 SOOP 시한 접속 1초·읽기 2초 최대 두 번).
     max-watched: 100

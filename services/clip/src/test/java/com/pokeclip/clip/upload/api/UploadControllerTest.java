@@ -373,6 +373,34 @@ class UploadControllerTest extends IntegrationTestSupport {
     }
 
     /**
+     * 올림 보고에 실린 채널을 적는다(POK-423). 연동을 해제하거나 다른 채널로 바꾸면 그 채널의 영상 번호만 골라 지워야 해서다.
+     * 늦은 올림(확인 중 → 올림)도 같다. 모양이 틀린 채널은 버리고 올림은 받는다: 거절하면 일꾼이 같은 보고를 되풀이하다 실패 큐로 간다
+     */
+    @Test
+    void 올림_보고의_채널을_적고_모양이_틀리면_버린다() throws Exception {
+        볼_수_있다();
+        long id = 주문한_업로드();
+        일꾼(id, "start", "{}");
+        일꾼(id, "result", "{\"outcome\":\"UPLOADED\",\"videoId\":\"abcDEF12345\",\"channelId\":\"UCabcdefghijklmnopqrstuv\"}")
+                .andExpect(status().isOk());
+        assertThat(채널(id)).isEqualTo("UCabcdefghijklmnopqrstuv");
+
+        jdbc.update("UPDATE clip_uploads SET status = 'checking', youtube_video_id = NULL, youtube_channel_id = NULL, "
+                + "error_code = 'X' WHERE id = ?", id);
+        일꾼(id, "result", "{\"outcome\":\"UPLOADED\",\"videoId\":\"abcDEF12345\",\"channelId\":\"채널 <script>\"}")
+                .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("uploaded"));
+        assertThat(채널(id)).as("모양이 틀린 채널은 버린다").isNull();
+        jdbc.update("UPDATE clip_uploads SET status = 'checking', youtube_video_id = NULL, error_code = 'X' WHERE id = ?", id);
+        일꾼(id, "result", "{\"outcome\":\"UPLOADED\",\"videoId\":\"abcDEF12345\",\"channelId\":\"UCzzzzzzzzzzzzzzzzzzzzzz\"}")
+                .andExpect(status().isOk());
+        assertThat(채널(id)).as("늦은 올림도 채널을 적는다").isEqualTo("UCzzzzzzzzzzzzzzzzzzzzzz");
+    }
+
+    private String 채널(long id) {
+        return jdbc.queryForObject("SELECT youtube_channel_id FROM clip_uploads WHERE id = ?", String.class, id);
+    }
+
+    /**
      * 🔴 주소가 적힌 뒤에는 「실패」로 닫지 않는다(PR #198 codex P1). 같은 주소로 두 일꾼이 올리는 중 하나가 실패를 보고해 자리가 비면,
      * 그 사이 다시 주문한 업로드와 늦게 끝난 쪽의 영상이 둘 뜬다. 그래서 실패 보고는 확인 중이 되고, 늦게 온 올림 보고는 확인 중을 이긴다.
      * 자리는 끝내 안 빈다.

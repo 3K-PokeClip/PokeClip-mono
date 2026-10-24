@@ -140,7 +140,7 @@ public class ClipRelayClient {
     }
 
     /**
-     * 창구({@code ChatWindowItem})의 칸 아홉(id 뺌) + {@code seq}·{@code seqEpoch}를 <b>늘 싣는다</b>(없는 칸은 null) —
+     * 창구({@code ChatWindowItem})의 칸 열(id 뺌, 플랫폼 포함) + {@code seq}·{@code seqEpoch}를 <b>늘 싣는다</b>(없는 칸은 null) —
      * 창구가 그렇게 준다.
      * 🔴 {@code id} 칸은 없다: 창구의 id는 표 PK라 같은 이름에 다른 값을 실으면 프론트가 짝짓는다.
      * 시각은 {@code Instant} 그대로 넘겨 창구와 같은 ISO-8601 문자열이 된다.
@@ -162,6 +162,7 @@ public class ClipRelayClient {
                     item.put("text", chat.text());
                     item.put("amount", null);
                     item.put("donationType", null);
+                    item.put("platform", chat.platform().name());
                 }
                 case RelayPayload.Donation donation -> {
                     item.put("nickname", donation.nickname());
@@ -170,6 +171,7 @@ public class ClipRelayClient {
                     item.put("text", donation.text());
                     item.put("amount", donation.amount());
                     item.put("donationType", donation.donationType());
+                    item.put("platform", donation.platform().name());
                 }
                 case RelayPayload.Info info -> {
                     item.put("title", info.title());
@@ -177,6 +179,8 @@ public class ClipRelayClient {
                     item.put("category", info.category());
                     item.put("viewers", info.viewers());
                     item.put("platform", info.platform().name());
+                    // 맨 뒤에 더한다(POK-462). clip은 칸을 해석하지 않고 통과시키므로 화면이 바로 받는다.
+                    item.put("categoryImageUrl", info.categoryImageUrl());
                 }
             }
             out.add(item);

@@ -29,8 +29,25 @@ class RenderPropertiesTest {
         assertThatCode(() -> 꺼진_설정(Duration.ofDays(7)).validateWhenEnabled()).doesNotThrowAnyException();
     }
 
+    /** 원본 조각 주소(POK-389)의 수명도 같은 한도다: 둘 다 S3 미리서명이다. */
+    @Test
+    void 조각_주소_수명도_0_이하거나_7일을_넘으면_부팅을_거부한다() {
+        for (Duration bad : new Duration[]{Duration.ZERO, Duration.ofDays(7).plusSeconds(1)}) {
+            assertThatThrownBy(() -> 꺼진_설정(Duration.ofMinutes(60), bad).validateWhenEnabled())
+                    .as(bad.toString())
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("segment-audio-url-ttl");
+        }
+        assertThatCode(() -> 꺼진_설정(Duration.ofMinutes(60), Duration.ofSeconds(1)).validateWhenEnabled())
+                .doesNotThrowAnyException();
+    }
+
     private static RenderProperties 꺼진_설정(Duration fileUrlTtl) {
+        return 꺼진_설정(fileUrlTtl, Duration.ofMinutes(5));
+    }
+
+    private static RenderProperties 꺼진_설정(Duration fileUrlTtl, Duration segmentAudioUrlTtl) {
         return new RenderProperties(false, null, null, "ap-northeast-2", null, null, null,
-                Duration.ofSeconds(30), Duration.ofMinutes(1), 3, 200_000, fileUrlTtl);
+                Duration.ofSeconds(30), Duration.ofMinutes(1), 3, 200_000, fileUrlTtl, segmentAudioUrlTtl);
     }
 }

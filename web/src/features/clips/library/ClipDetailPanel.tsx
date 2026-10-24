@@ -3,7 +3,16 @@
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { ExternalLink, Play, Trash2, X } from 'lucide-react';
-import { Badge, Button, IconButton, LinkButton, VisuallyHidden, useToast } from '@/ui';
+import {
+  Badge,
+  Button,
+  IconButton,
+  LinkButton,
+  Progress,
+  Spinner,
+  VisuallyHidden,
+  useToast,
+} from '@/ui';
 import { ddayFor } from '@/features/broadcast/vod/vodListView';
 import { InlineTitleInput } from './InlineTitleInput';
 import { UploadResolutionControls } from './UploadResolutionControls';
@@ -22,7 +31,7 @@ import {
   type PreviousUpload,
 } from './libraryView';
 import type { UploadResolution } from '@/api/clipEditor';
-import type { ClipStatus, LibraryClip } from './useLibraryMockState';
+import type { ClipStatus, LibraryClip, SendingAction } from './useLibraryMockState';
 import styles from './LibraryScreen.module.css';
 
 // 시안 1g 우측 상세 패널의 내용. 무엇을 그릴지는 detailViewFor가 정하고 여기는 그리기만 한다.
@@ -44,6 +53,8 @@ export function ClipDetailPanel({
   onDownload,
   onDelete,
   sending = false,
+  sendingAction = null,
+  downloading = false,
   loadPreview,
   loadAspect,
 }: {
@@ -60,8 +71,12 @@ export function ClipDetailPanel({
   onResolveUpload?: (uploadId: number, resolution: UploadResolution) => Promise<boolean>;
   onDownload: () => void;
   onDelete: () => void;
-  /** 업로드 주문·다시 시도를 보내는 중: 주 동작을 잠근다 */
+  /** 업로드 주문·다시 시도·확인 필요 풀기·렌더 재시도를 보내는 중: 주 동작을 잠근다 */
   sending?: boolean;
+  /** 보내는 중인 동작 — 그 단추만 돈다(POK-443). 다른 동작이 보내는 중이면 잠그기만 한다 */
+  sendingAction?: SendingAction | null;
+  /** 내려받을 주소를 받는 중: 다운로드 단추만 돈다(POK-443) */
+  downloading?: boolean;
   /** 완성 영상 주소를 받는다. 없으면(목업 줄) 미리보기는 장식이다 */
   loadPreview?: () => Promise<string | null>;
   /** 레시피 출력의 비율(「9:16」). 없으면(목업 줄) 비율을 모른다 */
@@ -190,6 +205,7 @@ export function ClipDetailPanel({
           primary={view.primary}
           youtubeUrl={clip.youtubeUrl}
           sending={sending}
+          sendingAction={sendingAction}
           onUpload={() => runTransition(onUpload)}
           onRetryRender={() => runTransition(onRetryRender)}
           onRetryUpload={() => runTransition(onRetryUpload)}
@@ -210,7 +226,14 @@ export function ClipDetailPanel({
           ) : null}
           {view.download ? (
             <div className={styles.grow}>
-              <Button variant="ghost" size="sm" fullWidth onClick={onDownload}>
+              {/* 서명 주소를 받는 동안만 돈다(POK-443) — 꽉 찬 폭이라 스피너가 서도 단추 폭은 그대로다 */}
+              <Button
+                variant="ghost"
+                size="sm"
+                fullWidth
+                loading={downloading}
+                onClick={onDownload}
+              >
                 다운로드
               </Button>
             </div>
@@ -228,7 +251,21 @@ export function ClipDetailPanel({
           </IconButton>
         </div>
         {/* 진행 한 줄(만드는 중 N% · 올리는 중)은 원래 안내 자리에 둔다: 「자막」 칸은 자막 정보 자리다(POK-291) */}
-        {clip.progressLabel ? <p className={styles.note}>{clip.progressLabel}</p> : null}
+        {clip.progressLabel ? (
+          <div className={styles.note}>
+            {clip.progressLabel}
+            {/* 만드는 중이면 글자 아래 막대(POK-443). 퍼센트가 아직 없으면 불확정 — 없는 값을 0%로 그리지 않는다.
+                이름을 「영상 만들기」로 못 박아 꽉 찬 막대가 업로드 끝으로 읽히지 않게 한다(업로드는 그 뒤에 따로 선다) */}
+            {clip.renderPercent !== undefined ? (
+              <Progress
+                size="sm"
+                value={clip.renderPercent}
+                label="영상 만들기 진행률"
+                className={styles.noteProgress}
+              />
+            ) : null}
+          </div>
+        ) : null}
         {view.note ? <p className={styles.note}>{noteText(view.note)}</p> : null}
         {/* 확인 필요를 사람이 푼다(POK-333): 위쪽이 보이는 업로드가 확인 필요일 때만 */}
         {checkingUpload && onResolveUpload ? (
@@ -298,6 +335,7 @@ function PrimaryControl({
   editHref,
   youtubeUrl,
   sending,
+  sendingAction,
   onUpload,
   onRetryRender,
   onRetryUpload,
@@ -306,6 +344,7 @@ function PrimaryControl({
   editHref: string;
   youtubeUrl: string | undefined;
   sending: boolean;
+  sendingAction: SendingAction | null;
   onUpload: () => void;
   onRetryRender: () => void;
   onRetryUpload: () => void;
@@ -345,12 +384,15 @@ function PrimaryControl({
       );
     }
     case 'action':
+      // 이 단추로 보낸 요청이면 돈다(POK-443). 같은 편집본의 다른 요청(확인 필요 풀기 등)이 나가 있으면 잠그기만 한다 —
+      // 누르지 않은 단추가 돌면 무엇이 진행 중인지 거짓이 된다. 꽉 찬 폭이라 스피너가 서도 단추 폭은 그대로다
       return (
         <Button
           variant="solid"
           size="md"
           fullWidth
-          disabled={primary.action !== 'retryRender' && sending}
+          loading={sendingAction === primary.action}
+          disabled={sending}
           onClick={
             primary.action === 'upload'
               ? onUpload
@@ -416,11 +458,13 @@ function PreviewPlayer({
       </div>
     );
   }
+  // 서명 주소를 받는 동안은 재생 글리프 자리에서 스피너가 돌고 aria-busy로 알린다(POK-443). 잠금(disabled)은 연타를 막는다
   return (
     <button
       type="button"
       className={styles.preview}
       aria-label="미리보기 재생"
+      aria-busy={loading || undefined}
       disabled={loading}
       onClick={() => {
         setLoading(true);
@@ -435,7 +479,7 @@ function PreviewPlayer({
         선택한 편집본 미리보기
       </span>
       <span className={styles.previewPlay} aria-hidden="true">
-        <Play size={18} fill="currentColor" />
+        {loading ? <Spinner size="sm" /> : <Play size={18} fill="currentColor" />}
       </span>
       {duration ? (
         <span className={styles.previewDuration} aria-hidden="true">

@@ -34,7 +34,13 @@ public class ChzzkLiveInfoClient {
         this.clientSecret = clientSecret;
     }
 
-    public record LiveSetting(String title, List<String> tags, String category) { }
+    /** @param categoryImageUrl 카테고리 사진 주소({@code category.posterImageUrl}, POK-462). 없으면 null */
+    public record LiveSetting(String title, List<String> tags, String category, String categoryImageUrl) {
+
+        public LiveSetting(String title, List<String> tags, String category) {
+            this(title, tags, category, null);
+        }
+    }
 
     /** @param setting 성공했을 때만 있다. {@code status}는 실패 갈래를 가르려고 준다(0 = 응답 없음) */
     public record SettingResult(LiveSetting setting, int status) {
@@ -46,6 +52,12 @@ public class ChzzkLiveInfoClient {
     public record LiveEntry(String channelId, String liveTitle, List<String> tags, String category, int viewers) { }
 
     public record LivePage(List<LiveEntry> entries, String next) { }
+
+    /** 카테고리 검색 한 줄(POK-462). {@code posterImageUrl}은 없으면 null. */
+    public record CategoryHit(String categoryValue, String posterImageUrl) { }
+
+    /** 카테고리 검색 한 번에 받는 상한(문서 최대). 이름을 「포함하는」 목록이라 같은 이름이 뒤에 있을 수 있다. */
+    static final int CATEGORY_PAGE_SIZE = 50;
 
     /** 목록이 429를 줬다. 부르는 쪽이 다음 회차를 미룬다. */
     public static class TooManyRequestsException extends RuntimeException {
@@ -80,7 +92,8 @@ public class ChzzkLiveInfoClient {
             return new SettingResult(new LiveSetting(
                     textOrNull(content.path("defaultLiveTitle")),
                     strings(content.path("tags")),
-                    textOrNull(content.path("category").path("categoryValue"))), 200);
+                    textOrNull(content.path("category").path("categoryValue")),
+                    textOrNull(content.path("category").path("posterImageUrl"))), 200);
         } catch (RestClientResponseException e) {
             return new SettingResult(null, e.getStatusCode().value());
         } catch (Exception e) {
@@ -130,6 +143,29 @@ public class ChzzkLiveInfoClient {
         }
         String nextPage = textOrNull(content.path("page").path("next"));
         return new LivePage(entries, nextPage == null || nextPage.isBlank() ? null : nextPage);
+    }
+
+    /**
+     * 카테고리 검색({@code GET /open/v1/categories/search}, 앱 인증, POK-462). SOOP 카테고리 사진을 빌리려고 이름으로 묻는다.
+     * 검색어는 값 자리({query})로 넘긴다: 이름에 공백 · 「/」 · 「+」가 들어 주소 틀에 바로 넣으면 깨진다({@link #lives}와 같은 이유).
+     *
+     * @throws RuntimeException HTTP 실패 · 연결 · 해석 실패. 응답 본문은 싣지 않는다(부르는 쪽이 타입 이름만 남긴다)
+     */
+    public List<CategoryHit> searchCategories(String query) {
+        String body = restClient.get()
+                .uri(UriComponentsBuilder.fromUriString(baseUrl + "/open/v1/categories/search")
+                        .queryParam("size", CATEGORY_PAGE_SIZE)
+                        .queryParam("query", "{query}")
+                        .encode().buildAndExpand(Map.of("query", query)).toUri())
+                .header("Client-Id", clientId)
+                .header("Client-Secret", clientSecret)
+                .retrieve()
+                .body(String.class);
+        List<CategoryHit> hits = new ArrayList<>();
+        for (JsonNode item : MAPPER.readTree(body).path("content").path("data")) {
+            hits.add(new CategoryHit(textOrNull(item.path("categoryValue")), textOrNull(item.path("posterImageUrl"))));
+        }
+        return hits;
     }
 
     private static String textOrNull(JsonNode node) {

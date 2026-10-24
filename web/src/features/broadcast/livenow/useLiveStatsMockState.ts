@@ -31,7 +31,7 @@ export interface LiveStatsMockState {
   scope: LiveChartScope | null;
   /** 믿는 시청자 기록 중 잰 값만(빈 관측은 뺀다) */
   viewers: ViewerPoint[];
-  /** 카테고리가 바뀐 기록. 수집기가 관측마다 카테고리를 싣기 전에는 마지막 카테고리 하나가 그래프 처음부터다 */
+  /** 카테고리가 바뀐 기록. 관측에 카테고리가 하나도 없으면(옛 서버) 마지막 카테고리 하나가 그래프 처음부터다 */
   categories: CategoryMark[];
   chat: StatsCell;
   viewerCell: StatsCell;
@@ -41,8 +41,13 @@ export interface LiveStatsMockState {
   /** 시청자 값이 없을 때의 말(missingWord). 통계 칸과 정보 바가 같은 말을 한다 */
   noViewers: string;
   /**
-   * 그래프가 없을 때의 말. 볼 수 없게 된 방송(명부에 없다 — 위임 회수·탈퇴)은 그래프를 다시 읽지 않으니 「불러오고 있어요」라
-   * 하지 않는다(PR #316 리뷰 2라운드)
+   * 그래프를 아직 받지 못했고 받을 방송이다. 그래프 자리에 같은 높이의 그래프 모양 스켈레톤이 선다(POK-445). 받기에 실패해도
+   * 다음 주기에 다시 읽으므로(useLiveMockState) 이 값이 그대로다
+   */
+  chartLoading: boolean;
+  /**
+   * 그래프를 받지 않을 때의 말(chartLoading이 아닌데 그래프가 없다). 볼 수 없게 된 방송(명부에 없다 — 위임 회수·탈퇴)은 그래프를
+   * 다시 읽지 않으니 불러온다고 하지 않는다(PR #316 리뷰 2라운드)
    */
   noChart: string;
 }
@@ -160,7 +165,8 @@ export function useLiveStatsMockState(view: LiveBroadcastStatus): LiveStatsMockS
       donation,
       lastViewers,
       noViewers,
-      noChart: status === 'offline' ? '볼 수 없는 방송이에요' : '그래프를 불러오고 있어요',
+      chartLoading: chart === null && status !== 'offline',
+      noChart: '볼 수 없는 방송이에요',
     };
   }, [raw, info, status, view]);
 }

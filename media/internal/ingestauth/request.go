@@ -18,7 +18,8 @@ const (
 	protocolSRT   = "srt"
 )
 
-// ingestauth_request_invalid 의 reason 이다 — 본문을 받지 못한 까닭의 닫힌 집합.
+// ingestauth_request_invalid 의 reason 이다 — 본문을 받지 못한 까닭의 닫힌 집합. 등급은 too_large 만 DEBUG 이고
+// 나머지는 WARN 이다(logInvalid).
 const (
 	invalidReadError = "read_error"  // 본문을 읽다가 실패했다
 	invalidTooLarge  = "too_large"   // maxRequestBytes 를 넘는다

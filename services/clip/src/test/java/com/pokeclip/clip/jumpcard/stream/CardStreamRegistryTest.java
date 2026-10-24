@@ -412,7 +412,7 @@ class CardStreamRegistryTest {
     /** 카드 번호와 순번을 따로 줘야 하는 시험용 — 순번 표가 <b>카드별</b>이라 둘이 갈려야 잰다. */
     private JumpCardSnapshot snapshot(String streamId, long id, long eventSeq) {
         return new JumpCardSnapshot(id, streamId, JumpCardSource.AUTO, 1_500L,
-                new JumpCardSnapshot.Window(1_000L, 2_000L), 97, null, eventSeq, Instant.parse("2026-08-23T00:00:00Z"), null);
+                new JumpCardSnapshot.Window(1_000L, 2_000L), 97, null, false, eventSeq, Instant.parse("2026-08-23T00:00:00Z"), null);
     }
 
     private void awaitUntil(BooleanSupplier condition) {

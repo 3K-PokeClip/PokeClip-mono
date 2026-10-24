@@ -96,6 +96,48 @@ describe('ChannelScope', () => {
     expect(await screen.findByText('채널 7')).toBeInTheDocument();
   });
 
+  it('지금 채널이 서기 전에는 자식 대신 fallback을 그리고, 서면 걷는다(POK-442)', async () => {
+    let release: (r: Response) => void = () => {};
+    stubFetch((url) => {
+      if (url === ME_URL) return new Promise<Response>((r) => (release = r));
+      if (url === AS_EDITOR_URL) return jsonResponse(200, [BYEOLHA]);
+      if (url.startsWith('/api/clip/broadcasts?'))
+        return jsonResponse(200, { broadcasts: [], nextCursor: null });
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    renderWithProviders(
+      <ChannelScope fallback={<p>본문 뼈대</p>}>
+        <Probe />
+      </ChannelScope>,
+    );
+
+    expect(screen.getByText('본문 뼈대')).toBeInTheDocument();
+    expect(screen.queryByText(/채널/)).not.toBeInTheDocument();
+    expect(mounts).toBe(0);
+
+    act(() => release(jsonResponse(200, ME)));
+
+    expect(await screen.findByText('채널 7')).toBeInTheDocument();
+    expect(screen.queryByText('본문 뼈대')).not.toBeInTheDocument();
+  });
+
+  it('방송을 못 박은 화면에서 바꿔 홈으로 떠나는 동안에도 fallback을 그린다(POK-442)', async () => {
+    nav.pathname = '/broadcast/vod/s-1';
+    stub();
+    renderWithProviders(
+      <ChannelScope fallback={<p>본문 뼈대</p>}>
+        <Probe />
+      </ChannelScope>,
+    );
+    await screen.findByText('채널 7');
+
+    act(() => useChannelStore.getState().select(7, 3));
+
+    await waitFor(() => expect(nav.replace).toHaveBeenCalledWith('/home'));
+    expect(screen.getByText('본문 뼈대')).toBeInTheDocument();
+    expect(screen.queryByText('채널 3')).not.toBeInTheDocument();
+  });
+
   it('me를 못 읽으면 화면을 막지 않고 번호 없이(섞어서) 그린다: 예전 동작', async () => {
     stubFetch((url) => {
       if (url === ME_URL) return jsonResponse(500, { error: 'boom' });

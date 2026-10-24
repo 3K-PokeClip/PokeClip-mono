@@ -72,10 +72,14 @@ public interface JumpCardRepository extends JpaRepository<JumpCard, Long> {
      * 뒷줄이 조용히 빠진다</b>(계획 검증 실측). 그것을 막는 자리는 여기가 아니라
      * {@code CursorCodec}의 칸 수 검사이고, 빠지는 모습 자체는
      * {@code JumpCardListQueryTest.afterId가_없으면_같은_방송_시간의_뒷줄이_빠진다}가 고정한다.
+     *
+     * <p>가린 카드(POK-463)는 {@code includeHidden}일 때만 나온다. 그 갈래를 SQL 안에 두는 이유는
+     * {@code BroadcastRepository.findPage}와 같다: 쿼리를 둘로 나누면 나머지 조건이 갈릴 자리가 생긴다.
      */
     @Query(value = """
             SELECT * FROM jump_cards
              WHERE stream_id = :streamId
+               AND (:includeHidden = TRUE OR hidden_at IS NULL)
                AND (CAST(:afterTs AS BIGINT) IS NULL
                     OR stream_timestamp_ms > CAST(:afterTs AS BIGINT)
                     OR (stream_timestamp_ms = CAST(:afterTs AS BIGINT) AND id > CAST(:afterId AS BIGINT)))
@@ -83,6 +87,7 @@ public interface JumpCardRepository extends JpaRepository<JumpCard, Long> {
              LIMIT :limit
             """, nativeQuery = true)
     List<JumpCard> findPage(@Param("streamId") String streamId,
+                            @Param("includeHidden") boolean includeHidden,
                             @Param("afterTs") Long afterTs,
                             @Param("afterId") Long afterId,
                             @Param("limit") int limit);
@@ -136,6 +141,38 @@ public interface JumpCardRepository extends JpaRepository<JumpCard, Long> {
                      @Param("ts") long ts,
                      @Param("start") long start,
                      @Param("end") long end);
+
+    /**
+     * 카드를 가린다(POK-463). 이미 가린 카드에는 0행이다: 가린 사람이 안 바뀌고, 순번 트리거가 안 돌아 헛된 발행이 없다.
+     */
+    @Modifying(clearAutomatically = true)
+    @Query(value = """
+            UPDATE jump_cards SET hidden_at = now(), hidden_by = :me
+             WHERE id = :id AND hidden_at IS NULL
+            """, nativeQuery = true)
+    int hide(@Param("id") long id, @Param("me") String me);
+
+    /**
+     * 되살리기는 누구나 한다: 가린 사람만 되살릴 수 있으면 그 사람이 자리를 비웠을 때 카드가 숨김 칸에 갇힌다.
+     * 안 가린 카드에는 0행이다.
+     */
+    @Modifying(clearAutomatically = true)
+    @Query(value = """
+            UPDATE jump_cards SET hidden_at = NULL, hidden_by = NULL
+             WHERE id = :id AND hidden_at IS NOT NULL
+            """, nativeQuery = true)
+    int unhide(@Param("id") long id);
+
+    /**
+     * 가리기·되살리기 한 줄(POK-463). 덧붙이기만 한다: 위 둘은 칸을 덮고 지워 이력이 안 남는다.
+     * 🔴 상태를 바꾼 <b>그 트랜잭션 안에서</b> 부른다. 밖에서 부르면 쓰기는 롤백됐는데 기록만 남거나 그 반대가 생긴다.
+     */
+    @Modifying
+    @Query(value = """
+            INSERT INTO jump_card_actions (card_id, action, actor)
+            VALUES (:cardId, :action, :actor)
+            """, nativeQuery = true)
+    void recordAction(@Param("cardId") long cardId, @Param("action") String action, @Param("actor") String actor);
 
     /**
      * 편집기가 카드를 열었다(POK-393). 같은 사람이 다시 열어도 한 줄 더 남긴다.

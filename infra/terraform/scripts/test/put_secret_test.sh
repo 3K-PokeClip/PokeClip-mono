@@ -17,6 +17,9 @@
 # 사례에서는 표준 오류가 정해진 줄과 바이트 그대로 같은지(끝 줄바꿈 · 빈 줄
 # 포함) 보고, aws 호출이 거부는 0회 · aws 실패는 1회인지 본다.
 # 추적(bash -x · SHELLOPTS)이나 allexport 를 켠 호출도 값을 내지 않는지 본다.
+# aws CLI 명령 기록이 켜져 있거나(프로필의 cli_history · AWS_CLI_HISTORY_FILE)
+# 그 검사를 하지 못하면 파일을 읽기 전에 종료 1 로 멈추는지 본다(가짜 aws 의
+# configure get 답 — fakebin/aws 머리 주석).
 # 호출자 셸의 환경(살아 있는 토큰 변수 등)은 사례 파일에 옮기지 않는다 — 가짜
 # aws 는 환경 중 시험이 보는 값만 적고(그 밖의 AWS_ 는 이름만), 시험은 표지
 # 변수가 남지 않는지 본다.
@@ -52,6 +55,7 @@ readonly PUT="${SCRIPT_DIR}/../put-secret-from-file.sh"
 readonly FAKEBIN="${SCRIPT_DIR}/fakebin"
 
 # put-secret-from-file.sh 의 종료 코드.
+readonly EXIT_HISTORY=1
 readonly EXIT_USAGE=2
 readonly EXIT_REJECTED=3
 readonly EXIT_DENIED=4
@@ -83,8 +87,22 @@ EXPECTED_ARGV_HEAD='secretsmanager put-secret-value --region ap-northeast-2'
 EXPECTED_ARGV_HEAD+=' --output json --no-cli-auto-prompt --secret-id'
 readonly EXPECTED_ARGV_HEAD
 readonly EXPECTED_ARGV_TAIL='--secret-string file:///dev/stdin'
+# CLI 기록 검사의 고정 줄(스크립트 머리 주석의 출력 표).
+# CLI 기록 검사의 aws 인자(가짜 aws 의 history-calls 한 줄).
+readonly HISTORY_ARGV='configure get cli_history --no-cli-auto-prompt'
+readonly HISTORY_ENABLED='CLI HISTORY ENABLED'
+readonly HISTORY_UNCHECKED='CLI HISTORY UNCHECKED'
+NOTE_HISTORY_PROFILE='프로필의 cli_history 가 enabled — 값을 읽지 않음 ·'
+NOTE_HISTORY_PROFILE+=' 기록을 끄고 다시'
+readonly NOTE_HISTORY_PROFILE
+NOTE_HISTORY_FILE='AWS_CLI_HISTORY_FILE 이 설정됨 — 값을 읽지 않음 ·'
+NOTE_HISTORY_FILE+=' 변수를 지우고 다시'
+readonly NOTE_HISTORY_FILE
+NOTE_HISTORY_FAIL='CLI 기록 설정(cli_history)을 읽지 못함 — 값을 읽지 않음 ·'
+NOTE_HISTORY_FAIL+=' 켜짐과 같이 멈춤'
+readonly NOTE_HISTORY_FAIL
 # 사례 수(ok · skip 줄의 수). 사례를 더하거나 빼면 함께 고친다.
-readonly EXPECTED_CASES=51
+readonly EXPECTED_CASES=62
 # 호출자 환경의 표지 변수(셸에 살아 있는 토큰 변수를 흉내 낸 가짜 값). 사례
 # 디렉터리 어디에도 남지 않아야 한다 — 가짜 aws 는 환경 중 시험이 보는
 # 이름만 적는다.
@@ -206,8 +224,10 @@ write_pem() {
 #   case_dir, out, err, status, utf8_locale
 # Arguments:
 #   셸 모드(plain · xtrace-flag · xtrace-env · allexport-env · secret-export
-#   — 호출자가 secret_value 를 export · no-aws — PATH 에 aws 없음), 가짜
-#   aws 모드, 스크립트 인자들.
+#   — 호출자가 secret_value 를 export · no-aws — PATH 에 aws 없음 ·
+#   history-file — AWS_CLI_HISTORY_FILE 설정 · history-<답> — 가짜 aws 의
+#   configure get 답 FAKE_AWS_CLI_HISTORY · stdin-fed — 표준 입력을
+#   /dev/null 대신 사례의 in/stdin-feed 로), 가짜 aws 모드, 스크립트 인자들.
 #######################################
 run_put_as() {
   local shell_mode="$1" mode="$2" var
@@ -242,6 +262,11 @@ run_put_as() {
         export SHELLOPTS
         ;;
       secret-export) export secret_value=FakeInheritedExport ;;
+      history-file)
+        export AWS_CLI_HISTORY_FILE="${case_dir}/in/qxhistory.db"
+        ;;
+      history-*) export FAKE_AWS_CLI_HISTORY="${shell_mode#history-}" ;;
+      stdin-fed) exec <"${case_dir}/in/stdin-feed" ;;
     esac
     exec "${BASH}" "${PUT}" "$@"
   ) </dev/null >"${case_dir}/stdout" 2>"${case_dir}/stderr"
@@ -457,10 +482,11 @@ expect_usage() {
 }
 
 #######################################
-# 성공 경로를 본다: 종료 0 · 이름 + VersionId 한 줄 · aws 1회 · 인자 · 받은
-# 값 · AWS_PAGER · 고정한 로캘(LC_ALL — 시험 로캘이 실제로 걸렸는지) · 사례
-# HOME · TMPDIR · SHELL(격리가 실제로 걸렸는지) · 호출자 환경의 표지 변수가
-# 사례 디렉터리에 없음 · 값과 계정 ID 0건 · 남은 것 없음.
+# 성공 경로를 본다: 종료 0 · 이름 + VersionId 한 줄 · aws 1회 · 인자 · CLI
+# 기록 검사 1회 · 받은 값 · AWS_PAGER · 고정한 로캘(LC_ALL — 시험 로캘이
+# 실제로 걸렸는지) · 사례 HOME · TMPDIR · SHELL(격리가 실제로 걸렸는지) ·
+# 호출자 환경의 표지 변수가 사례 디렉터리에 없음 · 값과 계정 ID 0건 · 남은 것
+# 없음.
 # Globals:
 #   case_dir, input, out, err, status, utf8_locale, PUT_SECRET_TEST_CANARY
 # Arguments:
@@ -487,6 +513,11 @@ expect_put() {
     "${argv}" != "${EXPECTED_ARGV_HEAD} ${secret_id} ${EXPECTED_ARGV_TAIL}" ]]
   then
     fail "${name}: aws 호출(1회) · 인자가 다름 — ${argv}"
+    return
+  fi
+  if [[ "$(contents_of "${case_dir}/aws/history-calls")" != \
+    "${HISTORY_ARGV}" ]]; then
+    fail "${name}: CLI 기록 검사(${HISTORY_ARGV} 1회)가 없음"
     return
   fi
   env=$'\n'"$(contents_of "${case_dir}/aws/env")"$'\n'
@@ -588,6 +619,55 @@ test_usage() {
   expect_usage usage-three-args cdn-secret "${tmp_root}/x" extra
   expect_usage usage-unknown-kind api-key "${tmp_root}/x"
   expect_usage usage-arn-kind "arn:aws:secretsmanager:example" "${tmp_root}/x"
+  # 종류는 그릇 이름의 용도 토막이다 — 전체 이름 · 경로 꼴은 받지 않는다.
+  expect_usage usage-full-name-kind pokeclip/prod/jwt-secret "${tmp_root}/x"
+  expect_usage usage-path-kind stream-key/x "${tmp_root}/x"
+}
+
+#######################################
+# 허용 목록(KINDS) · 머리 주석 표의 종류 열 · tf 그릇 이름(prod/secrets 의
+# 엣지 그릇 · prod/runtime/app_secrets.tf 의 앱 그릇)의 용도 토막이 같은
+# 집합인지 본다. 그릇을 더하는 PR 이 목록 · 주석 표 · 시험을 함께 고치게
+# 한다 — 하나라도 갈리면 실패다. 문서는 종류를 나열하는 자리가 남아 있을
+# 때만 한 줄 더한다(아니면 건드리지 않음).
+#######################################
+test_kinds_match_shells() {
+  local tf_root="${SCRIPT_DIR}/../.."
+  local edge_tf="${tf_root}/prod/secrets/main.tf"
+  local app_tf="${tf_root}/prod/runtime/app_secrets.tf"
+  local shells listed table count
+  if [[ ! -r "${edge_tf}" || ! -r "${app_tf}" || ! -r "${PUT}" ]]; then
+    fail "kinds-match-shells: tf 파일 · 스크립트를 읽을 수 없음"
+    return
+  fi
+  shells="$({
+    grep -E 'for purpose in \[' "${edge_tf}" | grep -oE '"[a-z0-9-]+"' |
+      tr -d '"'
+    grep -oE '"pokeclip/prod/[a-z0-9-]+"' "${app_tf}" |
+      sed -E 's|^"pokeclip/prod/||; s|"$||'
+  } | LC_ALL=C sort -u)"
+  listed="$(sed -n '/^readonly -a KINDS=(/,/^)$/p' "${PUT}" | sed '1d;$d' |
+    tr -d ' ' | LC_ALL=C sort -u)"
+  table="$(sed -n '1,/^set -uo pipefail$/p' "${PUT}" |
+    sed -nE 's/^#   ([a-z][a-z0-9-]*) +(PKCS#8 PEM|한 줄) — .*/\1/p' |
+    LC_ALL=C sort -u)"
+  if [[ -z "${shells}" || -z "${listed}" || -z "${table}" ]]; then
+    fail "kinds-match-shells: 빈 집합 — 그릇 「${shells//$'\n'/ }」 ·" \
+      "목록 「${listed//$'\n'/ }」 · 주석 표 「${table//$'\n'/ }」"
+    return
+  fi
+  if [[ "${listed}" != "${shells}" ]]; then
+    fail "kinds-match-shells: 허용 목록이 tf 그릇과 다름 —" \
+      "목록 「${listed//$'\n'/ }」 · 그릇 「${shells//$'\n'/ }」"
+    return
+  fi
+  if [[ "${table}" != "${shells}" ]]; then
+    fail "kinds-match-shells: 머리 주석 표의 종류가 tf 그릇과 다름 —" \
+      "표 「${table//$'\n'/ }」 · 그릇 「${shells//$'\n'/ }」"
+    return
+  fi
+  count="$(printf '%s\n' "${shells}" | grep -c .)"
+  pass "kinds-match-shells → 허용 목록 · 주석 표 · tf 그릇 ${count}개가 같음"
 }
 
 #######################################
@@ -693,6 +773,20 @@ test_one_line() {
   write_input '%s' "${ONE_LINE_VALUE}"
   expect_put one-line-no-newline test-stream-key "${expected}" \
     "${ONE_LINE_MARKER}"
+  # 앱 비밀 그릇(1단-다 — prod/runtime/app_secrets.tf)도 같은 한 줄 갈래다.
+  new_case || return
+  expected="${case_dir}/expected"
+  printf '%s' "${ONE_LINE_VALUE}" >"${expected}"
+  write_input '%s\n' "${ONE_LINE_VALUE}"
+  expect_put one-line-soop soop-client-secret "${expected}" \
+    "${ONE_LINE_MARKER}"
+  # resolve 전용 토큰 그릇(1단-나 ② — POK-429)도 같은 한 줄 갈래다.
+  new_case || return
+  expected="${case_dir}/expected"
+  printf '%s' "${ONE_LINE_VALUE}" >"${expected}"
+  write_input '%s\n' "${ONE_LINE_VALUE}"
+  expect_put one-line-resolve-token stream-key-resolve-token "${expected}" \
+    "${ONE_LINE_MARKER}"
   new_case || return
   write_input 'FakeFirst\nFakeSecond\n'
   expect_rejected multi-line cdn-secret "${multi_line}" "FakeSecond"
@@ -752,7 +846,8 @@ test_aws_failures() {
 }
 
 #######################################
-# PATH 에 aws 가 없으면 검사를 통과한 뒤 실패(종료 5)하고 값은 안 나온다 —
+# PATH 에 aws 가 없으면 CLI 기록 검사 · 파일 읽기 전에 실패(종료 5)하고 값은
+# 안 나온다 —
 # 표준 출력 없음 · 표준 오류는 고정 두 줄과 바이트 그대로 같다. 다른 사례와
 # 같이 격리한 셸(run_put_as)에서 돌리고 남은 것도 본다.
 # Globals:
@@ -771,6 +866,91 @@ test_aws_missing() {
   expect_absent aws-missing "${ONE_LINE_MARKER}" || return
   expect_no_leftovers aws-missing "${ONE_LINE_MARKER}" || return
   pass "aws-missing → 실패"
+}
+
+#######################################
+# CLI 기록이 켜졌거나 검사를 하지 못한 호출을 본다: 종료 1 · 표준 출력 없음 ·
+# 표준 오류가 고정 두 줄과 바이트 그대로 같음(기록 파일 경로를 되울리지 않음)
+# · secretsmanager 호출 0 · 값 0건 · 남은 것 없음.
+# Globals:
+#   input, out, err, status
+# Arguments:
+#   사례 이름, 셸 모드(history-*), 표준 오류의 기대 줄들.
+# Returns:
+#   어긋나면 1.
+#######################################
+expect_history_blocked() {
+  local name="$1" shell_mode="$2"
+  shift 2
+  run_put_as "${shell_mode}" ok cdn-secret "${input}"
+  if [[ "${status}" -ne "${EXIT_HISTORY}" || -n "${out}" ]] ||
+    ! stderr_is "$@"; then
+    fail "${name}: 종료 ${EXIT_HISTORY} · 「$*」 를 기대했으나 ${status} —" \
+      "${err}"
+    return 1
+  fi
+  if [[ "$(aws_calls)" -ne 0 ]]; then
+    fail "${name}: 기록 검사에서 멈췄는데 secretsmanager 를 부름"
+    return 1
+  fi
+  expect_absent "${name}" "${ONE_LINE_MARKER}" || return 1
+  expect_no_leftovers "${name}" "${ONE_LINE_MARKER}" || return 1
+  pass "${name} → 멈춤(종료 ${EXIT_HISTORY})"
+}
+
+#######################################
+# aws CLI 명령 기록: 프로필의 cli_history 가 enabled 이거나
+# AWS_CLI_HISTORY_FILE 이 설정돼 있으면 「CLI HISTORY ENABLED」, 설정을 읽지
+# 못하면 「CLI HISTORY UNCHECKED」 로 종료 1(값을 읽지 않음). 검사는 파일을
+# 읽기 전이다 — 없는 파일이어도 거부(종료 3)가 아니라 종료 1 이다. disabled ·
+# 값 없음(다른 성공 사례 — expect_put 이 검사 1회 · 인자를 봄)은 그대로
+# 넣는다. 검사는 auto-prompt 를 끄고(--no-cli-auto-prompt) 표준 입력을 닫고
+# 부른다.
+# Globals:
+#   case_dir, input, out, status
+#######################################
+test_cli_history() {
+  new_case || return
+  write_input '%s\n' "${ONE_LINE_VALUE}"
+  expect_history_blocked history-enabled history-enabled \
+    "${HISTORY_ENABLED}" "${NOTE_HISTORY_PROFILE}"
+  new_case || return
+  write_input '%s\n' "${ONE_LINE_VALUE}"
+  expect_history_blocked history-file history-file "${HISTORY_ENABLED}" \
+    "${NOTE_HISTORY_FILE}"
+  new_case || return
+  write_input '%s\n' "${ONE_LINE_VALUE}"
+  expect_history_blocked history-fail history-fail "${HISTORY_UNCHECKED}" \
+    "${NOTE_HISTORY_FAIL}"
+  new_case || return
+  input="${case_dir}/in/missing"
+  expect_history_blocked history-before-read history-enabled \
+    "${HISTORY_ENABLED}" "${NOTE_HISTORY_PROFILE}"
+  new_case || return
+  write_input '%s\n' "${ONE_LINE_VALUE}"
+  run_put_as history-disabled ok cdn-secret "${input}"
+  if [[ "${status}" -ne 0 ||
+    "${out}" != "SECRET PUT OK pokeclip/prod/cdn-secret ${VERSION_ID}" ||
+    "$(contents_of "${case_dir}/aws/history-calls")" != "${HISTORY_ARGV}" ]]
+  then
+    fail "history-disabled: 검사 1회 뒤 넣기를 기대했으나 ${status} — ${err}"
+    return
+  fi
+  pass "history-disabled → 넣음"
+  # 표준 입력에 바이트가 있는 호출(값을 /dev/stdin 으로 넘기는 꼴)에서도 기록
+  # 검사는 그 입력을 받지 않는다 — auto-prompt 가 켜져 있으면 받은 입력을 키
+  # 입력으로 읽어 prompt 기록에 남긴다. 가짜 aws 가 비지 않은 입력을 violation
+  # 에 적는다.
+  new_case || return
+  write_input '%s\n' "${ONE_LINE_VALUE}"
+  printf '%s\n' FakeStdinFeed >"${case_dir}/in/stdin-feed"
+  run_put_as stdin-fed ok cdn-secret "${input}"
+  expect_no_violation history-stdin-closed || return
+  if [[ "${status}" -ne 0 ]]; then
+    fail "history-stdin-closed: 종료 0 을 기대했으나 ${status} — ${err}"
+    return
+  fi
+  pass "history-stdin-closed → 기록 검사의 표준 입력이 비어 있음"
 }
 
 #######################################
@@ -1155,9 +1335,11 @@ main() {
   }
   test_locale
   test_usage
+  test_kinds_match_shells
   test_file_checks
   test_signing_key
   test_one_line
+  test_cli_history
   test_quiet_shells
   test_caller_aws_env
   test_fake_aws_no_trace

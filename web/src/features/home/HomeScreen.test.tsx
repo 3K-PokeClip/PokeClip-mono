@@ -12,11 +12,12 @@ import { ChannelRelationContext } from '@/features/channel/ChannelScope';
 
 const LIVE: LiveNow = {
   streamId: 'stream-1',
-  title: 'stream-1',
+  title: '롤 랭크 방송',
   platform: '치지직',
   startedNote: '오후 7:12 시작',
   uptimeLabel: '1:24:03',
-  viewers: null,
+  viewers: '1,842',
+  infoLate: false,
   detectedCards: 8,
   completedClips: null,
 };
@@ -711,6 +712,7 @@ describe('HomeScreen', () => {
           vodExpiresAt: null,
           title: '플랫폼 방송',
           platform: 'CHZZK',
+          platforms: [{ platform: 'CHZZK', viewers: 10, observedAt: new Date().toISOString() }],
           editorsOnline: 2,
         },
       ],
@@ -731,7 +733,16 @@ describe('HomeScreen', () => {
       vodExpiresAt: null,
     };
     serve({
-      live: [{ ...row, streamId: 'S-zero', title: '영 명', platform: 'SOOP', editorsOnline: 0 }],
+      live: [
+        {
+          ...row,
+          streamId: 'S-zero',
+          title: '영 명',
+          platform: 'SOOP',
+          platforms: [{ platform: 'SOOP', viewers: 3, observedAt: new Date().toISOString() }],
+          editorsOnline: 0,
+        },
+      ],
     });
     const { unmount } = render(<HomeScreen />);
     let band = await screen.findByRole('region', { name: '라이브' });
@@ -747,6 +758,80 @@ describe('HomeScreen', () => {
     expect(await within(band).findByText('옛 서버')).toBeInTheDocument();
     expect(within(band).queryByText('치지직')).toBeNull();
     expect(within(band).queryByText(/접속 중/)).toBeNull();
+  });
+
+  it('방송 정보가 아직 없으면 방송 번호 · 목록의 기본 플랫폼을 띠에 싣지 않고 받아 오는 중이라고 적는다(POK-449)', async () => {
+    // 2026-10-24 실방송: OBS를 켠 직후(시작 알림만 옴) 제목 자리에 방송 번호, SOOP 방송에 「치지직」이 떴다. 목록의 플랫폼 칸은
+    // 수집기가 보기 전에도 CHZZK다
+    serve({
+      live: [
+        {
+          streamId: 'live-6T5J-1024200705',
+          status: 'live',
+          relation: 'OWNER',
+          startedAt: new Date(Date.now() - 4_000).toISOString(),
+          endedAt: null,
+          vodExpiresAt: null,
+          title: null,
+          platform: 'CHZZK',
+          platforms: [],
+        },
+      ],
+      info: { latest: null, platforms: [], series: [] },
+    });
+    render(<HomeScreen />);
+
+    const band = await screen.findByRole('region', { name: '라이브' });
+    expect(await within(band).findByText('방송 정보를 받아 오고 있어요')).toBeInTheDocument();
+    expect(within(band).queryByText('live-6T5J-1024200705')).toBeNull();
+    expect(within(band).queryByText('치지직')).toBeNull();
+    expect(within(band).getByText('연결 중')).toBeInTheDocument();
+    expect(within(band).getByTestId('live-title-pending')).toBeInTheDocument();
+  });
+
+  it('시작 시각을 모르는 라이브는 기다릴 기준이 없어 막대 없이 처음부터 글자로 적는다(POK-449)', async () => {
+    serve({
+      live: [
+        {
+          streamId: 'live-nostart',
+          status: 'live',
+          relation: 'OWNER',
+          startedAt: null,
+          endedAt: null,
+          vodExpiresAt: null,
+          title: null,
+        },
+      ],
+    });
+    render(<HomeScreen />);
+
+    const band = await screen.findByRole('region', { name: '라이브' });
+    expect(await within(band).findByText('방송 정보를 아직 받지 못했어요')).toBeInTheDocument();
+    expect(within(band).queryByTestId('live-title-pending')).toBeNull();
+  });
+
+  it('방송 시작에서 2분이 지나도 정보가 없으면 막대를 걷고 못 받았다고 적는다(POK-449)', async () => {
+    serve({
+      live: [
+        {
+          streamId: 'live-late',
+          status: 'live',
+          relation: 'OWNER',
+          startedAt: new Date(Date.now() - 3 * 60_000).toISOString(),
+          endedAt: null,
+          vodExpiresAt: null,
+          title: null,
+          platform: 'CHZZK',
+        },
+      ],
+    });
+    render(<HomeScreen />);
+
+    const band = await screen.findByRole('region', { name: '라이브' });
+    expect(await within(band).findByText('방송 정보를 아직 받지 못했어요')).toBeInTheDocument();
+    expect(within(band).queryByText('live-late')).toBeNull();
+    expect(within(band).queryByTestId('live-title-pending')).toBeNull();
+    expect(within(band).getByText(/^LIVE /)).toBeInTheDocument();
   });
 
   it('SOOP로만 켠 방송은 라이브 띠의 플랫폼 · 제목 · 시청자 수가 SOOP 값이다: 묶음에 남은 치지직 값이 섞이지 않는다(POK-397)', async () => {
@@ -1142,11 +1227,12 @@ describe('LiveNowBand', () => {
       'http://localhost:4566/clips-local/thumbnails/live/stream-1.jpg?X-Amz-Date=20261004T101500Z';
     const { container, rerender } = render(<LiveNowBand live={{ ...LIVE, thumbnailUrl: src }} />);
     expect(container.querySelector('img')).toHaveAttribute('src', src);
-    expect(screen.queryByText('라이브 방송 화면')).not.toBeInTheDocument();
 
     rerender(<LiveNowBand live={LIVE} />);
     expect(container.querySelector('img')).toBeNull();
-    expect(screen.getByText('라이브 방송 화면')).toBeInTheDocument();
+    // 자리표시는 방송 아이콘이다: 「라이브 방송 화면」 같은 글자는 진짜 값처럼 읽혔다(POK-449)
+    expect(container.querySelector('svg')).not.toBeNull();
+    expect(screen.queryByText('라이브 방송 화면')).not.toBeInTheDocument();
   });
 
   it('플랫폼을 모르면 플랫폼 태그를 달지 않는다 — 치지직·SOOP·씨미 중 무엇인지 지어내지 않는다', () => {
@@ -1168,18 +1254,67 @@ describe('LiveNowBand', () => {
     }
   });
 
+  describe('방송 정보를 받기 전 (POK-449)', () => {
+    const NONE: LiveNow = { ...LIVE, title: null, platform: null, viewers: null };
+
+    it('아무 정보도 없으면 영상 칸 배지가 「연결 중」이고 플랫폼 · 제목 · 시청자는 회색 막대다', () => {
+      render(<LiveNowBand live={NONE} />);
+      expect(screen.getByText('연결 중')).toBeInTheDocument();
+      expect(screen.queryByText(/^LIVE/)).toBeNull();
+      expect(screen.getByTestId('live-platform-pending')).toBeInTheDocument();
+      expect(screen.getByTestId('live-title-pending')).toBeInTheDocument();
+      expect(screen.getByTestId('live-viewers-pending')).toBeInTheDocument();
+      expect(screen.getByRole('status')).toHaveTextContent('방송 정보를 받아 오고 있어요');
+      expect(screen.queryByText('치지직')).toBeNull();
+      expect(screen.queryByText('stream-1')).toBeNull();
+      // 버튼은 그대로다
+      expect(screen.getByRole('link', { name: '대시보드 열기' })).toBeInTheDocument();
+    });
+
+    it('일부만 왔으면 온 것은 그리고 빈 칸만 막대다: 배지는 LIVE로 돌아온다', () => {
+      render(<LiveNowBand live={{ ...NONE, title: '롤 랭크 방송' }} />);
+      expect(screen.getByText('롤 랭크 방송')).toBeInTheDocument();
+      expect(screen.getByText('LIVE 1:24:03')).toBeInTheDocument();
+      expect(screen.queryByText('연결 중')).toBeNull();
+      expect(screen.queryByTestId('live-title-pending')).toBeNull();
+      expect(screen.getByTestId('live-platform-pending')).toBeInTheDocument();
+      expect(screen.getByTestId('live-viewers-pending')).toBeInTheDocument();
+      expect(screen.getByText('방송 정보를 받아 오고 있어요')).toBeInTheDocument();
+    });
+
+    it('다 왔으면 막대도 안내 줄도 없다', () => {
+      render(<LiveNowBand live={LIVE} />);
+      expect(screen.queryByTestId(/-pending$/)).toBeNull();
+      expect(screen.queryByText(/방송 정보를/)).toBeNull();
+      expect(screen.getByText('롤 랭크 방송')).toBeInTheDocument();
+    });
+
+    it('2분이 지나도 비어 있으면 막대를 걷고 못 받았다고 적는다', () => {
+      render(<LiveNowBand live={{ ...NONE, infoLate: true }} />);
+      expect(screen.queryByTestId(/-pending$/)).toBeNull();
+      expect(screen.getByText('방송 정보를 아직 받지 못했어요')).toBeInTheDocument();
+      expect(screen.getByText('LIVE 1:24:03')).toBeInTheDocument();
+      expect(screen.queryByText('연결 중')).toBeNull();
+    });
+
+    it('2분 뒤 일부만 비었으면 빈 것만 이름 댄다: 보이는 제목 · 플랫폼과 어긋나지 않게', () => {
+      render(<LiveNowBand live={{ ...LIVE, viewers: null, infoLate: true }} />);
+      expect(screen.getByText('시청자 수 정보를 아직 받지 못했어요')).toBeInTheDocument();
+      expect(screen.queryByText('방송 정보를 아직 받지 못했어요')).toBeNull();
+    });
+  });
+
   it('방송 정보와 라이브 대시보드 진입 링크를 렌더한다', () => {
     render(<LiveNowBand live={LIVE} />);
 
     expect(screen.getByText('LIVE 1:24:03')).toBeInTheDocument();
-    expect(screen.getByText('시청자 준비 중')).toBeInTheDocument();
+    expect(screen.getByText('시청자 1,842')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: '대시보드 열기' })).toHaveAttribute(
       'href',
       '/broadcast/livenow?stream=stream-1',
     );
-    expect(screen.getByRole('link', { name: '카드 검토' })).toHaveAttribute(
-      'href',
-      '/broadcast/livenow?stream=stream-1',
-    );
+    // 「카드 검토」는 같은 대시보드로 가는 중복 버튼이라 뺐다(POK-464): 진입 링크는 하나뿐이다
+    expect(screen.getAllByRole('link')).toHaveLength(1);
+    expect(screen.queryByText('카드 검토')).toBeNull();
   });
 });

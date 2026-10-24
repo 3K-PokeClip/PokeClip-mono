@@ -29,11 +29,13 @@ final class FakeSoopHttp implements AutoCloseable {
 
     static final String RESOLVE = "/internal/soop-link/resolve";
     static final String STATUS = "/validate/live/status";
+    static final String CATEGORIES = "/broad/category/list";
 
     private final HttpServer server;
     private final List<Received> requests = new CopyOnWriteArrayList<>();
     private final Deque<Response> resolveAnswers = new ArrayDeque<>();
     private final Deque<Response> statusAnswers = new ArrayDeque<>();
+    private final Deque<Response> categoryAnswers = new ArrayDeque<>();
 
     private FakeSoopHttp(HttpServer server) {
         this.server = server;
@@ -50,6 +52,7 @@ final class FakeSoopHttp implements AutoCloseable {
             FakeSoopHttp fake = new FakeSoopHttp(server);
             server.createContext(RESOLVE, exchange -> fake.handle(exchange, fake.resolveAnswers));
             server.createContext(STATUS, exchange -> fake.handle(exchange, fake.statusAnswers));
+            server.createContext(CATEGORIES, exchange -> fake.handle(exchange, fake.categoryAnswers));
             server.start();
             return fake;
         } catch (IOException e) {
@@ -70,6 +73,12 @@ final class FakeSoopHttp implements AutoCloseable {
     synchronized FakeSoopHttp statusAnswers(Response... answers) {
         statusAnswers.clear();
         statusAnswers.addAll(List.of(answers));
+        return this;
+    }
+
+    synchronized FakeSoopHttp categoryAnswers(Response... answers) {
+        categoryAnswers.clear();
+        categoryAnswers.addAll(List.of(answers));
         return this;
     }
 

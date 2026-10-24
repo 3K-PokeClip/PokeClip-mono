@@ -1,5 +1,6 @@
 package com.pokeclip.chat.collector.relay;
 
+import com.pokeclip.chat.collector.Platform;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -293,7 +294,7 @@ class ChatRelayerTest {
     }
 
     private static RelayPayload.Chat chat(String text) {
-        return new RelayPayload.Chat(Instant.EPOCH, "n", "s", null, text);
+        return new RelayPayload.Chat(Platform.CHZZK, Instant.EPOCH, "n", "s", null, text);
     }
 
     private static void await(BooleanSupplier condition) throws InterruptedException {

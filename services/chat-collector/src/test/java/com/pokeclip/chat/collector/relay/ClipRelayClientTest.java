@@ -1,9 +1,8 @@
 package com.pokeclip.chat.collector.relay;
 
-import com.pokeclip.chat.collector.Platform;
-
 import ch.qos.logback.classic.Level;
 import com.pokeclip.chat.collector.ChatLogLeakTest;
+import com.pokeclip.chat.collector.Platform;
 import com.pokeclip.chat.collector.link.LinkProperties;
 import com.pokeclip.web.support.LogCaptor;
 import org.junit.jupiter.api.AfterEach;
@@ -106,8 +105,8 @@ class ClipRelayClientTest {
         Instant chatTime = Instant.parse("2026-09-03T15:00:01.123Z");
         Instant donationTime = Instant.parse("2026-09-03T15:00:02Z");
         List<RelayEvent> events = List.of(
-                new RelayEvent("live/A 1", 1, 1_757_000_000_000L, new RelayPayload.Chat(chatTime, "닉", "sender-1", "streamer", "ㅋㅋ")),
-                new RelayEvent("live/A 1", 2, 1_757_000_000_000L, new RelayPayload.Donation(donationTime, "후원자", "donator-1",
+                new RelayEvent("live/A 1", 1, 1_757_000_000_000L, new RelayPayload.Chat(Platform.CHZZK, chatTime, "닉", "sender-1", "streamer", "ㅋㅋ")),
+                new RelayEvent("live/A 1", 2, 1_757_000_000_000L, new RelayPayload.Donation(Platform.SOOP, donationTime, "후원자", "donator-1",
                         1000L, "CHAT", "응원")));
 
         assertThat(client().send("live/A 1", events)).isEqualTo(ClipRelayClient.Outcome.SENT);
@@ -123,7 +122,7 @@ class ClipRelayClientTest {
         assertThat(list.size()).isEqualTo(2);
         JsonNode chat = list.get(0);
         assertThat(fieldNames(chat)).containsExactly("seq", "seqEpoch", "kind", "time", "timeBasis", "nickname",
-                "senderChannelId", "role", "text", "amount", "donationType");
+                "senderChannelId", "role", "text", "amount", "donationType", "platform");
         assertThat(chat.get("seq").asLong()).isEqualTo(1);
         assertThat(chat.get("seqEpoch").asLong()).isEqualTo(1_757_000_000_000L);
         assertThat(chat.get("kind").asString()).isEqualTo("chat");
@@ -135,10 +134,12 @@ class ClipRelayClientTest {
         assertThat(chat.get("text").asString()).isEqualTo("ㅋㅋ");
         assertThat(chat.get("amount").isNull()).isTrue();
         assertThat(chat.get("donationType").isNull()).isTrue();
+        assertThat(chat.get("platform").asString()).as("두 플랫폼 채팅이 섞이면 화면이 줄마다 플랫폼을 보인다(POK-466)")
+                .isEqualTo("CHZZK");
 
         JsonNode donation = list.get(1);
         assertThat(fieldNames(donation)).containsExactly("seq", "seqEpoch", "kind", "time", "timeBasis", "nickname",
-                "senderChannelId", "role", "text", "amount", "donationType");
+                "senderChannelId", "role", "text", "amount", "donationType", "platform");
         assertThat(donation.get("seq").asLong()).isEqualTo(2);
         assertThat(donation.get("kind").asString()).isEqualTo("donation");
         // 창구 시험(ChatWindowEndpointTest)이 초가 딱 떨어질 때 "…:01Z" 모양을 단언한다 — 같은 모양이다.
@@ -149,6 +150,7 @@ class ClipRelayClientTest {
         assertThat(donation.get("text").asString()).isEqualTo("응원");
         assertThat(donation.get("amount").asLong()).isEqualTo(1000L);
         assertThat(donation.get("donationType").asString()).isEqualTo("CHAT");
+        assertThat(donation.get("platform").asString()).isEqualTo("SOOP");
         assertThat(received.body().has("id")).isFalse();
         assertThat(chat.has("id")).isFalse();
     }
@@ -159,13 +161,14 @@ class ClipRelayClientTest {
         clip.respondWith(200);
         Instant observed = Instant.parse("2026-09-03T15:01:00Z");
         List<RelayEvent> events = List.of(
-                new RelayEvent("s-1", 3, 7L, new RelayPayload.Info(Platform.SOOP, observed, "제목\0", java.util.Arrays.asList("롤", null), "LoL", null)));
+                new RelayEvent("s-1", 3, 7L, new RelayPayload.Info(Platform.SOOP, observed, "제목\0", java.util.Arrays.asList("롤", null), "LoL", null,
+                        "https://img.example/lol.jpg\0")));
 
         assertThat(client().send("s-1", events)).isEqualTo(ClipRelayClient.Outcome.SENT);
 
         JsonNode info = clip.requests().getFirst().body().get("events").get(0);
         assertThat(fieldNames(info)).containsExactly("seq", "seqEpoch", "kind", "time", "timeBasis",
-                "title", "tags", "category", "viewers", "platform");
+                "title", "tags", "category", "viewers", "platform", "categoryImageUrl");
         assertThat(info.get("kind").asString()).isEqualTo("broadcast-info");
         assertThat(info.get("timeBasis").asString()).isEqualTo("observed");
         assertThat(info.get("time").asString()).isEqualTo("2026-09-03T15:01:00Z");
@@ -174,6 +177,7 @@ class ClipRelayClientTest {
         assertThat(info.get("category").asString()).isEqualTo("LoL");
         assertThat(info.get("viewers").isNull()).isTrue();
         assertThat(info.get("platform").asString()).as("화면이 플랫폼마다 숫자를 가른다(POK-397)").isEqualTo("SOOP");
+        assertThat(info.get("categoryImageUrl").asString()).as("카테고리 사진(POK-462), NUL을 지운다").isEqualTo("https://img.example/lol.jpg");
     }
 
     /**
@@ -188,7 +192,7 @@ class ClipRelayClientTest {
         String sender = "relay-sender-" + System.nanoTime();
         try (LogCaptor captor = new LogCaptor()) {
             client().send("s-leak", List.of(new RelayEvent("s-leak", 1, 1L,
-                    new RelayPayload.Chat(Instant.EPOCH, nickname, sender, null, text))));
+                    new RelayPayload.Chat(Platform.CHZZK, Instant.EPOCH, nickname, sender, null, text))));
 
             // 양성 대조 — 경고가 한 줄도 없으면 아래 단언은 아무것도 안 본다.
             assertThat(captor.levelOf("chat.relay.send_failed")).isEqualTo(Level.WARN);
@@ -271,7 +275,7 @@ class ClipRelayClientTest {
     }
 
     private static RelayEvent chatEvent(String streamId, long seq) {
-        return new RelayEvent(streamId, seq, 1L, new RelayPayload.Chat(Instant.EPOCH, "n", "s", null, "t"));
+        return new RelayEvent(streamId, seq, 1L, new RelayPayload.Chat(Platform.CHZZK, Instant.EPOCH, "n", "s", null, "t"));
     }
 
     private static List<String> fieldNames(JsonNode node) {

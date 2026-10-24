@@ -1,7 +1,8 @@
 # WAF Web ACL 모듈(설계 3-3 의 waf_acl · 계획 M8 c1)을 mock provider 로
 # 단언한다 — 범위(scope) · 관리 규칙 그룹 이름(AWS 제공 · 그룹의 동작을 그대로
 # 씀) · 속도 제한 값(IP 마다 5분 창 · 넘으면 차단) · 기본 동작 허용 · 출력 ·
-# 트래픽 로그(기본 꺼짐 · 켜면 CloudWatch Logs 로 차단만 · 헤더 가림).
+# 트래픽 로그(기본 꺼짐 · 켜면 CloudWatch Logs 로 차단만 · 헤더 가림) · 웹 ACL
+# 데이터 보호(기본 꺼짐 · 켜면 헤더 값을 REDACTED 로 치환).
 # 이름 · 계정 ID(111122223333)는 가짜 값이다.
 
 mock_provider "aws" {
@@ -341,4 +342,88 @@ run "rejects_uppercase_redacted_header" {
   }
 
   expect_failures = [var.logging]
+}
+
+# --- 웹 ACL 데이터 보호 ---
+
+# protected_headers 를 주지 않은 호출은 데이터 보호 설정이 없다.
+run "protects_no_headers_by_default" {
+  command = plan
+
+  assert {
+    condition     = length(aws_wafv2_web_acl.this.data_protection_config) == 0
+    error_message = "protected_headers 를 주지 않았는데 데이터 보호 설정이 생긴다."
+  }
+
+  assert {
+    condition     = output.protected_headers == []
+    error_message = "protected_headers 를 주지 않았는데 출력 protected_headers 가 빈 목록이 아니다."
+  }
+}
+
+# 웹 ACL 수준 보호는 요청 샘플 · 로그 모두에 걸린다(AWS WAF API
+# 「VisibilityConfig」 · 「DataProtectionConfig」).
+run "substitutes_protected_headers_in_samples_and_logs" {
+  command = plan
+
+  variables {
+    protected_headers = ["authorization", "cookie"]
+  }
+
+  assert {
+    condition = (
+      length(aws_wafv2_web_acl.this.data_protection_config) == 1 &&
+      length(aws_wafv2_web_acl.this.data_protection_config[0].data_protection) == 1
+    )
+    error_message = "데이터 보호 설정이 하나(단일 헤더 항목 하나)가 아니다."
+  }
+
+  assert {
+    condition = alltrue([
+      for protection in aws_wafv2_web_acl.this.data_protection_config[0].data_protection :
+      (
+        protection.action == "SUBSTITUTION" &&
+        protection.field[0].field_type == "SINGLE_HEADER" &&
+        toset(protection.field[0].field_keys) == toset(["authorization", "cookie"])
+      )
+    ])
+    error_message = "데이터 보호가 authorization · cookie 단일 헤더를 SUBSTITUTION 으로 치환하지 않는다."
+  }
+
+  # 규칙 일치 · 속도 규칙 세부(로그의 RuleMatchDetails · rateBasedRuleList)도
+  # 가린다 — 예외를 켜면 그 자리에 값이 원문으로 남는다.
+  assert {
+    condition = alltrue([
+      for protection in aws_wafv2_web_acl.this.data_protection_config[0].data_protection :
+      protection.exclude_rule_match_details != true && protection.exclude_rate_based_details != true
+    ])
+    error_message = "데이터 보호가 규칙 일치 · 속도 규칙 세부를 예외로 둔다."
+  }
+
+  assert {
+    condition     = toset(output.protected_headers) == toset(["authorization", "cookie"])
+    error_message = "출력 protected_headers 가 데이터 보호로 가린 헤더와 다르다."
+  }
+}
+
+# FieldToProtect.FieldKeys 는 이름마다 1 ~ 64자이고 공백만으로 된 이름은 받지
+# 않는다(AWS WAF API).
+run "rejects_blank_protected_header" {
+  command = plan
+
+  variables {
+    protected_headers = [" "]
+  }
+
+  expect_failures = [var.protected_headers]
+}
+
+run "rejects_protected_header_over_64_chars" {
+  command = plan
+
+  variables {
+    protected_headers = [format("%065d", 0)]
+  }
+
+  expect_failures = [var.protected_headers]
 }
