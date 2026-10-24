@@ -15,13 +15,11 @@ export function VodListSkeleton() {
       <ul className={styles.list} aria-hidden="true">
         {Array.from({ length: ROWS }, (_, i) => (
           <li key={i} className={styles.row}>
-            {/* Skeleton은 폭·높이·반경을 인라인으로 덮으므로 .thumb의 값(150u·16:9·9u)을 다시 준다 */}
-            <Skeleton
-              className={styles.thumb}
-              width={u(150)}
-              height="auto"
-              style={{ borderRadius: u(9) }}
-            />
+            {/* 칸은 실제 .thumb(150u·16:9·9u)이고 막대는 그 안을 채운다. Skeleton에 .thumb를 얹으면 같은 특이도의 .skeleton과
+                배경·display가 CSS 삽입 순서로 갈린다(PR #377 리뷰) */}
+            <div className={styles.thumb}>
+              <Skeleton radius="none" height="100%" style={{ position: 'absolute', inset: 0 }} />
+            </div>
             <div className={styles.rowText}>
               <Skeleton width="55%" height={u(14)} />
               <Skeleton width="35%" height={u(11)} style={{ marginTop: u(8) }} />

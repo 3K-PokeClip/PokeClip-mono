@@ -14,8 +14,6 @@ const ROWS = 2;
  */
 const FALLBACK_CARDS = 8;
 
-const u = (n: number) => `calc(${n} * var(--pc-u))`;
-
 /**
  * 격자의 실제 열 수. auto-fill이 정한 트랙 목록(「213.6px 213.6px …」)을 센다. 배치 전이라 풀리지 않은 값(「repeat(…)」 ·
  * 빈 값 — jsdom은 이 칸을 모른다)이면 0
@@ -44,13 +42,11 @@ export function LibrarySkeleton({ panelOpen }: { panelOpen: boolean }) {
       <ul ref={gridRef} className={styles.grid} data-panel-open={panelOpen} aria-hidden="true">
         {Array.from({ length: cards }, (_, i) => (
           <li key={i} className={styles.cardItem}>
-            {/* Skeleton은 폭·높이·반경을 인라인으로 덮으므로 .card의 값(폭 100% · 높이는 9:16 비율 · 12u)을 다시 준다 */}
-            <Skeleton
-              className={clsx(styles.card, styles.cardSkeleton)}
-              width="100%"
-              height="auto"
-              style={{ borderRadius: u(12) }}
-            />
+            {/* 칸은 실제 .card(폭 100% · 9:16 · 12u · 테두리)이고 막대는 그 안을 채운다. Skeleton에 .card를 얹으면 같은
+                특이도의 .skeleton과 배경이 CSS 삽입 순서로 갈린다(PR #377 리뷰) */}
+            <div className={clsx(styles.card, styles.cardSkeleton)}>
+              <Skeleton radius="none" height="100%" style={{ position: 'absolute', inset: 0 }} />
+            </div>
           </li>
         ))}
       </ul>
