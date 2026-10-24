@@ -35,19 +35,19 @@ class TimelineOriginPlanTest extends IntegrationTestSupport {
     @BeforeEach
     void 이력이_긴_스트림키를_심는다() {
         방송과_카드를_비운다(jdbc);
-        jdbc.execute("CREATE INDEX IF NOT EXISTS stream_segments_wall_idx ON stream_segments (stream_id, start_wall_utc DESC)");
+        jdbc.execute("CREATE INDEX IF NOT EXISTS stream_segments_wall_idx ON public.stream_segments (stream_id, start_wall_utc DESC)");
         // 한 키에 4초 조각 2만 개(약 22시간) — 최근 방송은 맨 끝이다
         jdbc.update("""
-                INSERT INTO stream_segments (stream_id, seq, start_pts_ms, start_wall_utc, playback_pdt, duration_ms, s3_key, upload_state)
+                INSERT INTO public.stream_segments (stream_id, seq, start_pts_ms, start_wall_utc, playback_pdt, duration_ms, s3_key, upload_state)
                 SELECT ?, g, g * 4000, ?::timestamptz + make_interval(secs => g * 4), ?::timestamptz + make_interval(secs => g * 4),
                        4000, 'k' || g, 'uploaded'
                   FROM generate_series(0, 19999) g""", KEY, Timestamp.from(START), Timestamp.from(START));
-        jdbc.execute("ANALYZE stream_segments");
+        jdbc.execute("ANALYZE public.stream_segments");
     }
 
     @AfterEach
     void 치운다() {
-        jdbc.update("DELETE FROM stream_segments WHERE stream_id = ?", KEY);
+        jdbc.update("DELETE FROM public.stream_segments WHERE stream_id = ?", KEY);
     }
 
     @Test

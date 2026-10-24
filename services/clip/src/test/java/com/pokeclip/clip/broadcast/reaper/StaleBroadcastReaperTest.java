@@ -243,7 +243,7 @@ class StaleBroadcastReaperTest extends IntegrationTestSupport {
 
     /** 1번 장부에 조각 한 줄. 치우개가 읽는 것은 {@code seq} 최대 행의 {@code start_wall_utc}다. */
     private void 조각(String streamId, long seq, Instant startWall) {
-        jdbc.update("INSERT INTO stream_segments (stream_id, seq, start_pts_ms, start_wall_utc, duration_ms, s3_key) "
+        jdbc.update("INSERT INTO public.stream_segments (stream_id, seq, start_pts_ms, start_wall_utc, duration_ms, s3_key) "
                         + "VALUES (?, ?, ?, ?, 4000, ?)",
                 streamId, seq, seq * 4000, Timestamp.from(startWall), "k/" + streamId + "/" + seq);
     }

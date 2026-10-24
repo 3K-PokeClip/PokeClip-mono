@@ -52,7 +52,7 @@ public final class RenderFixtures {
         long seq = 1;
         for (long start = CUT_IN - SEGMENT_MS; start < CUT_OUT + SEGMENT_MS; start += SEGMENT_MS, seq++) {
             jdbc.update("""
-                            INSERT INTO stream_segments
+                            INSERT INTO public.stream_segments
                                 (stream_id, seq, start_pts_ms, start_wall_utc, playback_pdt, duration_ms, s3_key, upload_state)
                             VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                     streamId, seq, (seq - 1) * SEGMENT_MS,

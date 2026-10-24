@@ -192,7 +192,7 @@ class ThumbnailFlowTest extends IntegrationTestSupport {
         sweeper().sweepCards();
         assertThat(sent).isEmpty();
 
-        jdbc.update("UPDATE stream_segments SET upload_state = 'uploaded'");
+        jdbc.update("UPDATE public.stream_segments SET upload_state = 'uploaded'");
         sweeper().sweepCards();
         assertThat(sent).hasSize(1);
     }
@@ -473,7 +473,7 @@ class ThumbnailFlowTest extends IntegrationTestSupport {
 
     private void 조각(String key, long seq, long startPtsMs, Instant wall, String state, String s3Key) {
         jdbc.update("""
-                        INSERT INTO stream_segments (stream_id, seq, start_pts_ms, start_wall_utc, duration_ms, s3_key, upload_state)
+                        INSERT INTO public.stream_segments (stream_id, seq, start_pts_ms, start_wall_utc, duration_ms, s3_key, upload_state)
                         VALUES (?, ?, ?, ?, 4000, ?, ?)""",
                 key, seq, startPtsMs, Timestamp.from(wall), s3Key, state);
     }

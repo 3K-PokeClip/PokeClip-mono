@@ -101,7 +101,7 @@ class RenderRequestControllerTest extends IntegrationTestSupport {
         jdbc.update("DELETE FROM clips");
         jdbc.update("DELETE FROM upload_requests");
         jdbc.update("DELETE FROM recipes");
-        jdbc.update("DELETE FROM stream_segments");
+        jdbc.update("DELETE FROM public.stream_segments");
     }
 
     // ── 주문 ─────────────────────────────────────────────────────
@@ -216,7 +216,7 @@ class RenderRequestControllerTest extends IntegrationTestSupport {
     void 번호는_이어져도_재생_시각에_구멍이_있으면_409다() throws Exception {
         볼_수_있다("OWNER");
         RenderFixtures.조각을_넣는다(jdbc, 내_방송, 0);
-        jdbc.update("UPDATE stream_segments SET playback_pdt = playback_pdt + interval '10 seconds' WHERE stream_id = ? AND seq >= 7", 내_방송);
+        jdbc.update("UPDATE public.stream_segments SET playback_pdt = playback_pdt + interval '10 seconds' WHERE stream_id = ? AND seq >= 7", 내_방송);
 
         주문(내_방송, 편집본).andExpect(status().isConflict())
                 .andExpect(jsonPath("$.error").value("source_not_ready"));

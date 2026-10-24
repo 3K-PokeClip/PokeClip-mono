@@ -61,7 +61,7 @@ public class TimelineOriginReader {
               CROSS JOIN LATERAL (
                     SELECT (EXTRACT(EPOCH FROM COALESCE(s.playback_pdt, s.start_wall_utc)) * 1000)::bigint
                            - s.start_pts_ms AS origin_ms
-                      FROM stream_segments s
+                      FROM public.stream_segments s
                      WHERE s.stream_id = b.ingest_key
                        AND s.start_wall_utc >= COALESCE(b.lo, '-infinity'::timestamptz)
                        AND s.start_wall_utc <= COALESCE(b.hi, 'infinity'::timestamptz)

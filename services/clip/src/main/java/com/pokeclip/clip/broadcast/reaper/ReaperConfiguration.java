@@ -36,7 +36,7 @@ public class ReaperConfiguration {
      * 기본이 꺼짐이라 media 없는 배포의 부팅은 안 바뀐다.
      */
     static void requireSegmentLedger(JdbcTemplate jdbc) {
-        String found = jdbc.queryForObject("SELECT to_regclass('stream_segments')::text", String.class);
+        String found = jdbc.queryForObject("SELECT to_regclass('public.stream_segments')::text", String.class);
         if (found == null) {
             throw new IllegalStateException(
                     "pokeclip.broadcast.reaper.enabled=true인데 stream_segments 표가 없다. 치우개는 1번 장부의 마지막 조각을 "

@@ -717,7 +717,7 @@ class SegmentControllerTest extends IntegrationTestSupport {
     private void 조각을_넣는다(String streamId, long seq, long startPtsMs, int durationMs,
                         String state, boolean discontinuity, String s3Key) {
         jdbc.update("""
-                        INSERT INTO stream_segments
+                        INSERT INTO public.stream_segments
                             (stream_id, seq, start_pts_ms, start_wall_utc, duration_ms,
                              s3_key, upload_state, is_discontinuity)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",

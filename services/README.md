@@ -864,7 +864,9 @@ GRANT CONNECT ON DATABASE pokeclip TO app_auth;
 -- clip: 탈퇴 정리가 조각 장부를 읽고 지운다(StreamerPurgeStore) · 조각 조회 · 사진 대상 · 회차 머리 파일
 CREATE ROLE app_clip LOGIN;
 GRANT rds_iam TO app_clip;
-GRANT CREATE ON SCHEMA public TO app_clip;
+CREATE SCHEMA app_clip;
+GRANT USAGE, CREATE ON SCHEMA app_clip TO app_clip;
+GRANT CONNECT ON DATABASE pokeclip TO app_clip;
 GRANT SELECT, DELETE ON stream_segments TO app_clip;
 GRANT SELECT ON stream_sessions TO app_clip;
 
