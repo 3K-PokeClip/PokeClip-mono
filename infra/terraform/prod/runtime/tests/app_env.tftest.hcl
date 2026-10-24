@@ -7,6 +7,17 @@ mock_provider "aws" {
   source = "./tests/mocks"
 }
 
+# auth_oauth_apps 는 기본값이 없다(auth_settings.tf — tfvars 필수). 이 파일의
+# 모든 run 에 흐르는 예시 값이다(run 안의 variables 가 덮는 변수만 바뀐다).
+variables {
+  auth_oauth_apps = {
+    google  = { client_id = "example-google-client-id", redirect_uri = "https://app.pokeclip.com/auth/callback" }
+    chzzk   = { client_id = "example-chzzk-client-id", redirect_uri = "https://app.pokeclip.com/oauth/chzzk/callback" }
+    youtube = { client_id = "example-youtube-client-id", redirect_uri = "https://app.pokeclip.com/oauth/youtube/callback" }
+    soop    = { client_id = "example-soop-client-id", redirect_uri = "https://app.pokeclip.com/oauth/soop/callback" }
+  }
+}
+
 override_data {
   target = data.terraform_remote_state.network
   values = {
@@ -35,8 +46,13 @@ run "lists_env_names_per_service" {
   assert {
     condition = toset(keys(output.app_env["auth"])) == toset([
       "DB_HOST", "DB_PORT", "POSTGRES_DB", "STREAM_KEY_SECRET_REF_PREFIX",
+      "GOOGLE_CLIENT_ID", "GOOGLE_REDIRECT_URI",
+      "CHZZK_CLIENT_ID", "CHZZK_REDIRECT_URI",
+      "YOUTUBE_CLIENT_ID", "YOUTUBE_REDIRECT_URI",
+      "SOOP_CLIENT_ID", "SOOP_REDIRECT_URI",
+      "PROFILE_PHOTO_S3_BUCKET", "PROFILE_PHOTO_BASE_URL",
     ])
-    error_message = "auth 의 env 이름 집합이 DB_HOST · DB_PORT · POSTGRES_DB · STREAM_KEY_SECRET_REF_PREFIX 와 다르다."
+    error_message = "auth 의 env 이름 집합이 DB 셋 · STREAM_KEY_SECRET_REF_PREFIX · OAuth 네 덩어리의 CLIENT_ID · REDIRECT_URI 여덟 · 프로필 사진 둘과 다르다."
   }
 
   assert {
@@ -125,6 +141,22 @@ run "prefixes_stream_key_secrets_under_prod" {
   assert {
     condition     = output.app_env["auth"]["STREAM_KEY_SECRET_REF_PREFIX"] == "pokeclip/prod/stream-key/"
     error_message = "auth 의 STREAM_KEY_SECRET_REF_PREFIX 가 pokeclip/prod/stream-key/ 가 아니다."
+  }
+}
+
+# auth 의 프로필 사진 창고는 이 루트의 사진 버킷이다(D5 · D7). 주소는 변수
+# profile_photo_base_url 이다(K7).
+run "points_auth_profile_photo_env_at_bucket" {
+  command = apply
+
+  assert {
+    condition     = output.app_env["auth"]["PROFILE_PHOTO_S3_BUCKET"] == aws_s3_bucket.profile_photo.bucket
+    error_message = "auth 의 PROFILE_PHOTO_S3_BUCKET 이 프로필 사진 버킷 이름이 아니다."
+  }
+
+  assert {
+    condition     = output.app_env["auth"]["PROFILE_PHOTO_BASE_URL"] == var.profile_photo_base_url
+    error_message = "auth 의 PROFILE_PHOTO_BASE_URL 이 변수 profile_photo_base_url 이 아니다."
   }
 }
 

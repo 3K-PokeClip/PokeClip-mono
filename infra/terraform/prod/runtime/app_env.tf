@@ -26,7 +26,8 @@ locals {
 output "app_env" {
   description = "서비스 → env 이름 → 값(비밀 아님) — platform 의 ecs_service.environment."
   value = {
-    auth = merge(local.app_db_env, {
+    # OAuth 설정 · 프로필 사진 env 는 auth_settings.tf 의 locals 다.
+    auth = merge(local.app_db_env, local.auth_settings_env, {
       STREAM_KEY_SECRET_REF_PREFIX = "pokeclip/prod/stream-key/"
     })
     clip = merge(local.app_db_env, {
