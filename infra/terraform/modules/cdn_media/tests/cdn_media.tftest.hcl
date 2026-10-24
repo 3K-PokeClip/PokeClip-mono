@@ -442,9 +442,9 @@ run "sets_cors_with_credentials_for_media_and_without_for_rewind_api" {
       aws_cloudfront_response_headers_policy.media_cors.cors_config[0].access_control_allow_credentials == true &&
       aws_cloudfront_response_headers_policy.media_cors.cors_config[0].origin_override == true &&
       aws_cloudfront_response_headers_policy.media_cors.cors_config[0].access_control_allow_methods[0].items == toset(["GET", "HEAD", "OPTIONS"]) &&
-      length(aws_cloudfront_response_headers_policy.media_cors.cors_config[0].access_control_allow_headers[0].items) == 0
+      aws_cloudfront_response_headers_policy.media_cors.cors_config[0].access_control_allow_headers[0].items == toset(["range"])
     )
-    error_message = "media-cors 가 app 출처 · credentials 허용 · 원본 덮음 · GET/HEAD/OPTIONS · 허용 헤더 빈 목록이 아니다."
+    error_message = "media-cors 가 app 출처 · credentials 허용 · 원본 덮음 · GET/HEAD/OPTIONS · 허용 헤더 range 가 아니다."
   }
 
   assert {
@@ -452,9 +452,10 @@ run "sets_cors_with_credentials_for_media_and_without_for_rewind_api" {
       aws_cloudfront_response_headers_policy.rewind_cors.cors_config[0].access_control_allow_origins[0].items == toset(["https://app.pokeclip.com"]) &&
       aws_cloudfront_response_headers_policy.rewind_cors.cors_config[0].access_control_allow_credentials == false &&
       aws_cloudfront_response_headers_policy.rewind_cors.cors_config[0].origin_override == true &&
-      aws_cloudfront_response_headers_policy.rewind_cors.cors_config[0].access_control_allow_methods[0].items == toset(["GET", "HEAD", "OPTIONS"])
+      aws_cloudfront_response_headers_policy.rewind_cors.cors_config[0].access_control_allow_methods[0].items == toset(["GET", "HEAD", "OPTIONS"]) &&
+      aws_cloudfront_response_headers_policy.rewind_cors.cors_config[0].access_control_allow_headers[0].items == toset(["range"])
     )
-    error_message = "rewind-cors 가 app 출처 · credentials 없음 · 원본 덮음 · GET/HEAD/OPTIONS 가 아니다."
+    error_message = "rewind-cors 가 app 출처 · credentials 없음 · 원본 덮음 · GET/HEAD/OPTIONS · 허용 헤더 range 가 아니다."
   }
 }
 
@@ -491,6 +492,17 @@ run "rejects_wildcard_cors_allow_header" {
 
   variables {
     cors_allow_headers = ["*"]
+  }
+
+  expect_failures = [var.cors_allow_headers]
+}
+
+# provider 6.68.0 은 빈 목록이면 Quantity 를 보내지 않아 정책 생성이 실패한다.
+run "rejects_empty_cors_allow_headers" {
+  command = plan
+
+  variables {
+    cors_allow_headers = []
   }
 
   expect_failures = [var.cors_allow_headers]

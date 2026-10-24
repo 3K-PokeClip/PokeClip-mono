@@ -9,7 +9,8 @@
 # - 표준 로그 로그 그룹은 보존 = 변수이고, enable_standard_logs = false 면
 #   media 모듈에 null 을 넘기되 로그 그룹은 남는다.
 # - VPC origin 서비스 SG 는 서울 별칭으로 이름 · network vpc_id 로 조회하고,
-#   내부 ALB SG 에 그 SG 출처 443 인그레스 하나를 둔다.
+#   내부 ALB SG 에 그 SG 출처 443 인그레스 하나를 둔다. 조회는 VPC origin
+#   하나만 기다려, VPC origin 밖 media 변경 plan 에서도 출처 SG 가 정해져 있다.
 # - 앞 루트 출력의 꼴이 어긋나면 terraform_data.remote_contract 가 멈춘다.
 #
 # 앞 루트 상태는 override_data 로 흉내 낸다. ARN · id · 계정 ID(111122223333)는
@@ -369,6 +370,30 @@ run "internal_alb_accepts_https_from_vpc_origins" {
   assert {
     condition     = aws_vpc_security_group_ingress_rule.internal_alb_from_vpc_origins.security_group_rule_id == "sgr-0apne2"
     error_message = "인그레스 규칙을 서울 별칭(aws.apne2)이 아닌 provider 로 만든다."
+  }
+}
+
+# 앞 run 들이 apply 로 상태를 남긴 뒤, media 모듈의 VPC origin 밖 변경(여기서는
+# 표준 로그 끄기 — 전달 자원 삭제)만 있는 plan 이다. SG 조회가 media 모듈
+# 전체를 기다리면 조회가 apply 로 밀려 규칙의 출처 SG 가 미정이 되고, plan 에
+# 규칙 변경 예고가 끼어 런북 「전달 자원 삭제만 · 그 밖 0」 판정이 깨진다.
+run "standard_logs_off_plan_keeps_ingress_source_sg_known" {
+  command = plan
+
+  variables {
+    enable_standard_logs = false
+  }
+
+  assert {
+    condition     = aws_vpc_security_group_ingress_rule.internal_alb_from_vpc_origins.referenced_security_group_id == "sg-0vpcorigins"
+    error_message = "표준 로그 끄기 plan 에서 인그레스 규칙의 출처 SG 가 VPC origin 서비스 SG 로 정해져 있지 않다(SG 조회가 VPC origin 밖 media 변경에 끌려 apply 로 밀린다)."
+  }
+
+  # 첫 생성 때 조회를 VPC origin 뒤로 미루는 고리다 — 다른 출력에 걸리면
+  # 위 단언은 통과해도 첫 apply 에서 SG 가 생기기 전에 조회할 수 있다.
+  assert {
+    condition     = terraform_data.vpc_origin_ready.input == module.media.vpc_origin_id
+    error_message = "SG 조회가 기다리는 terraform_data.vpc_origin_ready 가 media 모듈의 VPC origin id 에 걸려 있지 않다."
   }
 }
 
