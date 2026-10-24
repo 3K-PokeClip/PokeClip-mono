@@ -10,6 +10,14 @@ import { useSwitchCurtain } from './switchCurtain';
 import { useActiveChannel } from './useActiveChannel';
 
 const nav = vi.hoisted(() => ({ replace: vi.fn() }));
+const { track } = vi.hoisted(() => ({ track: vi.fn() }));
+vi.mock('@/lib/analytics', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/analytics')>()),
+  track,
+}));
+/** 사용 통계로 나간 그 이벤트의 속성들 (POK-357) */
+const tracked = (name: string) =>
+  track.mock.calls.filter(([n]) => n === name).map(([, props]) => props as Record<string, unknown>);
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ replace: nav.replace, push: vi.fn() }),
   usePathname: () => '/home',
@@ -116,6 +124,7 @@ async function openWithClient(user: ReturnType<typeof userEvent.setup>) {
 
 beforeEach(() => {
   nav.replace.mockReset();
+  track.mockReset();
   window.localStorage.clear();
   useSwitchCurtain.getState().reset();
   useChannelStore.setState({ userId: null, selected: null });
@@ -205,6 +214,8 @@ describe('ChannelSwitcher: 펼친 패널', () => {
     await waitFor(() =>
       expect(useChannelStore.getState()).toMatchObject({ userId: 7, selected: 3 }),
     );
+    // 바꾼 뒤에 한 번 센다 — 상대 채널 번호는 싣지 않는다
+    expect(tracked('channel_switched')).toEqual([{ to_role: 'editor', reason: 'picked' }]);
   });
 
   it('초대를 수락하면 수락을 보내고 참여 채널을 다시 읽어 한 줄 늘어난다', async () => {
@@ -216,6 +227,7 @@ describe('ChannelSwitcher: 펼친 패널', () => {
 
     expect(posts(spy)).toEqual(['/api/editor-invitations/11/accept']);
     expect(await panel.findByText('편집 참여 중 · 3')).toBeInTheDocument();
+    expect(tracked('editor_invitation_responded')).toEqual([{ outcome: 'accepted' }]);
     expect(panel.getByRole('button', { name: /감자대장 채널/ })).toBeInTheDocument();
     expect(panel.queryByRole('group', { name: /받은 초대/ })).not.toBeInTheDocument();
   });
@@ -236,6 +248,7 @@ describe('ChannelSwitcher: 펼친 패널', () => {
     expect(posts(spy)).toEqual([]);
     expect(panel.queryByRole('alertdialog')).not.toBeInTheDocument();
     expect(declineButton).toHaveFocus();
+    expect(track).not.toHaveBeenCalled(); // 취소는 세지 않는다
 
     await user.click(panel.getByRole('button', { name: '거절' }));
     const again = within(await panel.findByRole('alertdialog'));
@@ -246,6 +259,7 @@ describe('ChannelSwitcher: 펼친 패널', () => {
       expect(panel.queryByRole('group', { name: /받은 초대/ })).not.toBeInTheDocument(),
     );
     expect(panel.queryByRole('alertdialog')).not.toBeInTheDocument();
+    expect(tracked('editor_invitation_responded')).toEqual([{ outcome: 'declined' }]);
   });
 
   it('거절 요청이 나가 있는 동안엔 Esc·바깥 클릭으로도 창이 닫히지 않는다: 덮개가 결과까지 남는다', async () => {
@@ -470,6 +484,7 @@ describe('ChannelSwitcher: 관리 모드에서 참여 채널 나가기', () => {
 
     await waitFor(() => expect(deletes(spy)).toEqual(['/api/editor-delegations/22']));
     expect(await screen.findByText('콩스타 채널에서 나왔어요')).toBeInTheDocument();
+    expect(tracked('editor_delegation_ended')).toEqual([{ initiator: 'editor' }]);
     await waitFor(() =>
       expect(
         panel.queryByRole('button', { name: '콩스타 채널에서 나가기' }),

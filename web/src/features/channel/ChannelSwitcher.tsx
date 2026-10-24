@@ -14,6 +14,7 @@ import Link from 'next/link';
 import clsx from 'clsx';
 import { Check } from 'lucide-react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { track } from '@/lib/analytics';
 import { useSessionMutation } from '@/lib/useSessionMutation';
 import { Avatar, Button, Popover, Slot, useToast } from '@/ui';
 import {
@@ -368,6 +369,7 @@ function failedToast(toast: ReturnType<typeof useToast>['toast'], e: unknown) {
 function useInvitationAction(
   send: (id: number) => Promise<void>,
   doneTitle: string,
+  outcome: 'accepted' | 'declined',
   onDone?: () => void,
 ) {
   const { toast } = useToast();
@@ -375,6 +377,7 @@ function useInvitationAction(
   return useSessionMutation({
     mutationFn: send,
     onSuccess: () => {
+      track('editor_invitation_responded', { outcome }); // 상대 이름·초대 번호는 싣지 않는다 (POK-357)
       toast({ tone: 'success', title: doneTitle });
       onDone?.();
       void queryClient.invalidateQueries({ queryKey: ['editor-invitations'] });
@@ -397,7 +400,7 @@ function Invitations({
   invitations: ReceivedInvitation[];
   onDecline: (invitation: ReceivedInvitation, opener: HTMLElement) => void;
 }) {
-  const accept = useInvitationAction(acceptInvitation, '초대를 수락했어요');
+  const accept = useInvitationAction(acceptInvitation, '초대를 수락했어요', 'accepted');
   const title = `받은 초대 ${invitations.length}`;
 
   return (
@@ -443,7 +446,7 @@ function DeclineConfirm({
   onClose: () => void;
   onBusyChange: (busy: boolean) => void;
 }) {
-  const decline = useInvitationAction(declineInvitation, '초대를 거절했어요', onClose);
+  const decline = useInvitationAction(declineInvitation, '초대를 거절했어요', 'declined', onClose);
   return (
     <PanelConfirm
       title={`${invitation.streamerName}님의 초대를 거절할까요?`}
@@ -483,6 +486,7 @@ function LeaveConfirm({
   const leave = useSessionMutation({
     mutationFn: () => revokeDelegation(channel.id),
     onSuccess: () => {
+      track('editor_delegation_ended', { initiator: 'editor' });
       toast({ tone: 'success', title: `${channel.streamerName} 채널에서 나왔어요` });
       onLeft(() => void queryClient.invalidateQueries({ queryKey: ['editor-delegations'] }));
     },

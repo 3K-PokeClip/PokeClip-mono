@@ -102,6 +102,7 @@ export function useEditorSettingsState(): EditorSettingsViewState {
     // 토스트 문구가 이름을 잃지 않는다.
     mutationFn: (target: EditorDelegation) => revokeDelegation(target.id),
     onSuccess: (_data, target) => {
+      track('editor_delegation_ended', { initiator: 'owner' }); // 상대 이름은 싣지 않는다 (POK-357)
       // destructive 표식이 undo를 컴파일 단계에서 막는다 (ADR-044). 실제로 되돌릴 수 없다 — 위임 기록이 지워진다.
       // 시안 ⑥ 부제의 「승인 요청 1건 무효」는 업로드 승인 게이트가 없어 뺐다(POK-254). 호칭은 시안 제목처럼 「님」을 붙인다.
       toast({

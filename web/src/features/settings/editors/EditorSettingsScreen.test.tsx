@@ -353,6 +353,8 @@ describe('EditorSettingsScreen — 내보내기', () => {
           url === '/api/editor-delegations/3' && (init as RequestInit)?.method === 'DELETE',
       ),
     ).toBe(true);
+    // 내보낸 뒤 한 번 센다 — 상대 이름은 싣지 않는다 (POK-357)
+    expect(track.mock.calls).toEqual([['editor_delegation_ended', { initiator: 'owner' }]]);
   });
 
   it('이미 내보낸 위임(404)은 오류 토스트로 알리고 목록을 갱신한다', async () => {
