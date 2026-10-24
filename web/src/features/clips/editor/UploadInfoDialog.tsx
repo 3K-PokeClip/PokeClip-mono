@@ -420,7 +420,11 @@ function UploadInfoForm({
         </div>
 
         <div className={styles.right}>
-          <Tabs value={tab} onValueChange={(v) => setTab(v as UploadTab)}>
+          <Tabs
+            value={tab}
+            onValueChange={(v) => setTab(v as UploadTab)}
+            className={styles.tabsRoot}
+          >
             <Tabs.List aria-label="업로드 정보" className={styles.tabs}>
               {TABS.map((t) => (
                 <Tabs.Trigger key={t.value} value={t.value} className={styles.tab}>

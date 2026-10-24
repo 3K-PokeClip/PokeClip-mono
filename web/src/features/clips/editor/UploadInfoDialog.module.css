@@ -3,12 +3,15 @@
 /* DS 창의 폭(480)을 이긴다: 클래스를 겹쳐 쓴다(설정 화면 창들과 같은 방식) */
 .dialog.dialog {
   width: calc(960 * var(--pc-u));
+  /* 크기를 고정한다: 탭을 넘길 때 내용 길이에 따라 창이 늘고 줄면 보기 안 좋다. 첫 탭(정보)이 스크롤 없이 들어가는
+     높이이고, 긴 탭(썸네일)은 안에서 스크롤한다. 낮은 화면에서는 화면 높이까지 */
+  height: min(calc(740 * var(--pc-u)), calc(100vh - 2 * var(--pc-space-6)));
   /* 100%는 창을 담은 격자 칸(내용만큼 늘어난다)을 따라가 좁은 화면에서 넘친다: 화면 폭으로 막는다 */
   max-width: calc(100vw - 2 * var(--pc-space-4));
   padding: 0;
   display: flex;
   flex-direction: column;
-  /* 낮은 화면에서는 가운데만 스크롤하고 머리·아래 단추 줄은 늘 보인다 */
+  /* 가운데만 스크롤하고 머리·아래 단추 줄은 늘 보인다 */
   overflow: hidden;
 }
 
@@ -23,13 +26,15 @@
   flex-direction: column;
 }
 
+/* 왼쪽 미리보기와 오른쪽 탭 줄은 그 자리에 두고, 탭 내용(.panel)만 스크롤한다 */
 .body {
+  flex: 1;
   display: flex;
   gap: var(--pc-space-6);
-  padding: var(--pc-space-5) var(--pc-space-6);
+  padding: var(--pc-space-5) var(--pc-space-6) 0;
   align-items: flex-start;
   min-height: 0;
-  overflow-y: auto;
+  overflow: hidden;
 }
 
 .left {
@@ -43,6 +48,16 @@
 .right {
   flex: 1;
   min-width: 0;
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* DS 탭 묶음(세로 flex)이 오른쪽 칸 높이를 다 쓰게 한다: 그래야 그 안의 탭 내용이 남는 높이에서 스크롤한다 */
+.tabsRoot {
+  flex: 1;
+  min-height: 0;
 }
 
 .label {
@@ -79,13 +94,23 @@
   border-bottom-color: var(--pc-color-accent);
 }
 
-/* 탭을 바꿔도 창 높이가 덜 출렁이게 */
+/* 탭 내용. 창 높이가 고정이라 긴 탭(썸네일)은 이 안에서 스크롤한다. 입력 칸의 초점 테두리가 스크롤 상자 가장자리에서
+   잘리지 않게 옆으로 숨 쉴 틈을 두고, 그만큼 바깥으로 당겨 탭 줄과 줄을 맞춘다 */
 .panel {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
   display: flex;
   flex-direction: column;
   gap: var(--pc-space-4);
-  min-height: calc(500 * var(--pc-u));
-  padding-top: var(--pc-space-4);
+  padding: var(--pc-space-3) var(--pc-space-1) var(--pc-space-2);
+  margin-inline: calc(-1 * var(--pc-space-1));
+}
+
+/* 스크롤 상자 안에서 칸이 줄어들지 않고 넘치게 한다(줄어들면 스크롤이 안 생기고 칸이 찌그러진다) */
+.panel > * {
+  flex-shrink: 0;
 }
 
 .tabError {
