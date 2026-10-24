@@ -105,6 +105,24 @@ describe('StudioScreen', () => {
     expect(within(timeline).getByRole('button', { name: '마이크 음량 150%' })).toBeInTheDocument();
   });
 
+  it('다른 편집 대상을 읽기 시작하면 열려 있던 음량 막대 창을 닫는다: 창은 inert 밖(포털)이다(PR #377 2차 리뷰)', async () => {
+    const user = userEvent.setup();
+    let startReload: () => void = () => undefined;
+    function Harness() {
+      const [reloading, setReloading] = useState(false);
+      startReload = () => setReloading(true);
+      return <StudioEditor reloading={reloading} />;
+    }
+    renderWithProviders(<Harness />);
+    const timeline = screen.getByRole('region', { name: '타임라인' });
+
+    await user.click(within(timeline).getByRole('button', { name: '마이크 음량 80%' }));
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    // 바깥을 누르지 않고 읽기만 시작한다 — 바깥 누르기는 원래도 창을 닫는다
+    await act(async () => startReload());
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
   it('음량 숫자를 좌우로 끌면 바로 바뀌고 막대 창은 안 뜬다: 끈 것은 실행취소 한 칸이다(POK-389)', () => {
     renderStudio();
     const timeline = screen.getByRole('region', { name: '타임라인' });

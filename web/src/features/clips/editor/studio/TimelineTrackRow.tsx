@@ -19,11 +19,14 @@ const DRAG_THRESHOLD_PX = 3;
 /** ← → 한 번에 바뀌는 음량(%) */
 const KEY_STEP = 5;
 
-type VolumeControls = Pick<ClipEditorMockState, 'setTrackVolume' | 'gestureHandlers'>;
+type VolumeControls = Pick<ClipEditorMockState, 'setTrackVolume' | 'gestureHandlers' | 'reloading'>;
 
 /** 음량 숫자: 누르면 막대 · 50/100/150%가 뜨고, 좌우로 끌면 1px = 1%로 바뀐다. 초점이 있으면 ← → 로 5%씩 */
 function VolumeValue({ track, controls }: { track: EditorTrack; controls: VolumeControls }) {
   const [open, setOpen] = useState(false);
+  // 다른 편집 대상을 읽기 시작하면 막대 창을 닫는다(PR #377 2차 리뷰): 창은 body로 포털돼 타임라인의 inert가 닿지 않아, 열어
+  // 두면 곧 사라질 화면의 음량을 계속 바꿀 수 있다(업로드 창을 닫는 것과 같은 이유)
+  if (controls.reloading && open) setOpen(false);
   const drag = useRef<{ x: number; start: number; moved: boolean } | null>(null);
   // 끈 뒤 따라오는 click은 막대를 열지 않는다. click이 안 오면(밖에서 놓음) 다음 틱에 풀어 다음 누르기를 먹지 않게 한다
   const swallowClick = useRef(false);
