@@ -343,7 +343,7 @@ public class SoopBroadcastWatcher implements SoopWatch {
         }
         Instant observedAt = clock.instant();
         BroadcastInfo info = new BroadcastInfo(Platform.SOOP, watch.streamId, watch.soopUserId, observedAt,
-                status.title(), List.of(), status.category(), status.viewers());
+                status.title(), List.of(), status.category(), status.viewers(), status.categoryImageUrl());
         try {
             store.insert(info);
         } catch (RuntimeException e) {
@@ -352,7 +352,7 @@ public class SoopBroadcastWatcher implements SoopWatch {
         }
         if (stillWatched(watch)) {
             relay.offer(watch.streamId, new RelayPayload.Info(Platform.SOOP, observedAt, info.title(), info.tags(),
-                    info.category(), info.viewers(), null));
+                    info.category(), info.viewers(), info.categoryImageUrl()));
         }
         platforms.seen(watch.streamId, Platform.SOOP, observedAt);
         // 채팅을 붙인다(이미 붙어 있으면 토큰만 새것으로). 확인 · 남기기 사이에 빠졌으면 안 붙인다.

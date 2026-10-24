@@ -37,6 +37,16 @@ public class SoopWatchConfiguration {
     static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(1);
     static final Duration READ_TIMEOUT = Duration.ofSeconds(2);
 
+    /**
+     * 카테고리 이름 표 받기 · 사진 검색을 돌리는 스레드 하나(POK-462). 지켜보기 틱이 기다리지 않게 따로 둔다. 데몬이라 종료를 막지 않고, 줄에 쌓이는 것은
+     * 이름마다 한 번이라 작다. 종료 중 실패한 받기는 다음 부팅이 다시 한다.
+     */
+    static final java.util.concurrent.ExecutorService CATEGORY_LOOKUPS = Executors.newSingleThreadExecutor(runnable -> {
+        Thread thread = new Thread(runnable, "soop-category");
+        thread.setDaemon(true);
+        return thread;
+    });
+
     @Configuration
     @ConditionalOnProperty(prefix = "pokeclip.soop", name = "watch-enabled", havingValue = "true")
     public static class Enabled {
@@ -50,13 +60,17 @@ public class SoopWatchConfiguration {
                                                          ClipPlatformClient platforms, SessionRegistry registry,
                                                          EndedStreamStore endedStreams,
                                                          ObjectProvider<SoopChat> chat,
-                                                         @Value("${pokeclip.soop.chat.client-id:}") String soopClientId) {
+                                                         @Value("${pokeclip.soop.chat.client-id:}") String soopClientId,
+                                                         @Value("${pokeclip.chzzk.base-url:}") String chzzkBaseUrl,
+                                                         @Value("${pokeclip.liveinfo.client-id:}") String chzzkClientId,
+                                                         @Value("${pokeclip.liveinfo.client-secret:}") String chzzkClientSecret) {
             properties.validate();
             SoopLinkClient links = new SoopLinkClient(builder.clone(), link);
             RestClient.Builder timed = builder.clone().requestFactory(factoryBuilder.build(
                     HttpClientSettings.defaults().withTimeouts(CONNECT_TIMEOUT, READ_TIMEOUT)));
             SoopLiveClient live = new SoopLiveClient(timed.clone(), properties.apiBaseUri(), properties.diagnoseResponse(),
-                    categoryNames(timed.clone(), properties.apiBaseUri(), soopClientId));
+                    categoryNames(timed.clone(), properties.apiBaseUri(), soopClientId),
+                    categoryImages(timed.clone(), chzzkBaseUrl, chzzkClientId, chzzkClientSecret));
             // 종료 메모는 정상 종료만(포기 메모는 치지직 쪽 사정이라 SOOP 지켜보기와 무관하다)
             SoopBroadcastWatcher watcher = new SoopBroadcastWatcher(links::resolve, live::check, store::insert, relay, platforms,
                     registry::activeStreamIds,
@@ -77,8 +91,27 @@ public class SoopWatchConfiguration {
                 return number -> null;
             }
             SoopCategoryNames names = new SoopCategoryNames(new SoopCategoryClient(builder, apiBaseUri, clientId)::fetch,
-                    Clock.systemUTC());
+                    CATEGORY_LOOKUPS, Clock.systemUTC());
+            names.prefetch();
             return names::nameOf;
+        }
+
+        /**
+         * SOOP 카테고리 사진을 치지직 카테고리 검색으로 빌린다(POK-462 사용자 결정). 앱 값은 방송 정보 수집과 같은 치지직 앱
+         * ({@code CHZZK_CLIENT_ID}·{@code CHZZK_CLIENT_SECRET})이다. 비면 사진은 늘 null이다.
+         */
+        static java.util.function.Function<String, String> categoryImages(RestClient.Builder builder, String chzzkBaseUrl,
+                                                                          String clientId, String clientSecret) {
+            if (isBlank(chzzkBaseUrl) || isBlank(clientId) || isBlank(clientSecret)) {
+                return name -> null;
+            }
+            com.pokeclip.chat.collector.liveinfo.ChzzkLiveInfoClient chzzk =
+                    new com.pokeclip.chat.collector.liveinfo.ChzzkLiveInfoClient(builder.build(), chzzkBaseUrl, clientId, clientSecret);
+            return new BorrowedCategoryImages(chzzk::searchCategories, CATEGORY_LOOKUPS, Clock.systemUTC())::imageOf;
+        }
+
+        private static boolean isBlank(String value) {
+            return value == null || value.isBlank();
         }
 
         @Bean(destroyMethod = "close")

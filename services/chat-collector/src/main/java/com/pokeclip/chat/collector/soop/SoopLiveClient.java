@@ -47,22 +47,26 @@ public class SoopLiveClient {
     private final String apiBaseUri;
     private final boolean diagnose;
     private final Function<Object, String> categoryName;
+    private final Function<String, String> categoryImage;
 
     /** 카테고리 이름 표 없이(카테고리는 늘 null). */
     public SoopLiveClient(RestClient.Builder builder, String apiBaseUri, boolean diagnose) {
-        this(builder, apiBaseUri, diagnose, number -> null);
+        this(builder, apiBaseUri, diagnose, number -> null, name -> null);
     }
 
     /**
      * @param builder      시한이 걸린 빌더({@link SoopWatchConfiguration}). {@code RestClient.create()}를 쓰지 않는다
      * @param diagnose     켜면 data의 키 이름과 status 값만 INFO 한 줄로 남긴다. 값(아이디·제목·시청자 수)은 안 찍는다
-     * @param categoryName {@value #CATEGORY_KEY} 값 그대로(숫자 또는 글자) → 이름, 모르면 null({@link SoopCategoryNames#nameOf})
+     * @param categoryName  {@value #CATEGORY_KEY} 값 그대로(숫자 또는 글자) → 이름, 모르면 null({@link SoopCategoryNames#nameOf})
+     * @param categoryImage 카테고리 이름 → 사진 주소, 모르면 null({@link BorrowedCategoryImages#imageOf}). 이름이 없으면 안 부른다
      */
-    public SoopLiveClient(RestClient.Builder builder, String apiBaseUri, boolean diagnose, Function<Object, String> categoryName) {
+    public SoopLiveClient(RestClient.Builder builder, String apiBaseUri, boolean diagnose, Function<Object, String> categoryName,
+                          Function<String, String> categoryImage) {
         this.restClient = builder.build();
         this.apiBaseUri = apiBaseUri;
         this.diagnose = diagnose;
         this.categoryName = categoryName;
+        this.categoryImage = categoryImage;
     }
 
     /** 던지지 않는다. 예외는 원인 타입 이름만 남긴다(메시지에 응답 본문이 실린다). */
@@ -117,14 +121,18 @@ public class SoopLiveClient {
             return SoopLiveStatus.of(SoopLiveStatus.Outcome.OFF_AIR);
         }
         Object title = data.get(TITLE_KEY);
+        String category = safely(categoryName, data.get(CATEGORY_KEY));
         return new SoopLiveStatus(SoopLiveStatus.Outcome.ON_AIR,
-                title instanceof String s && !s.isBlank() ? s : null, category(data.get(CATEGORY_KEY)), viewers(data.get(VIEWERS_KEY)));
+                title instanceof String s && !s.isBlank() ? s : null, category, viewers(data.get(VIEWERS_KEY)),
+                category == null ? null : safely(categoryImage, category));
     }
 
-    /** 이름 표가 던져도 방송 여부는 그대로 낸다(카테고리만 null). 표는 던지지 않게 짰지만 이 자리가 방송 감지를 막으면 안 된다. */
-    private String category(Object rawNumber) {
+    /**
+     * 이름 표 · 사진 빌리기가 던져도 방송 여부는 그대로 낸다(그 칸만 null). 둘 다 던지지 않게 짰지만 이 자리가 방송 감지를 막으면 안 된다.
+     */
+    private <T> String safely(Function<T, String> lookup, T key) {
         try {
-            return categoryName.apply(rawNumber);
+            return lookup.apply(key);
         } catch (RuntimeException e) {
             log.warn("soop.live.category_failed causeType={}", e.getClass().getSimpleName());
             return null;
