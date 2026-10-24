@@ -176,8 +176,8 @@ readonly LATE_TARGETS
 # media 상태 객체 · platform · media · edge 자원). 「자원 키 · 첫 단계 · 해석
 # 방법 · 반드시 묻는 동작(쉼표 구분) · 추가 문맥(없으면 생략)」 이다. 이름이
 # 고정인 자원은 구체 ARN, 이름 끝이 생성 때 정해지는 자원은 태그로 푼다. WAF
-# 의 ARN 끝(ID)은 생성 때 정해지고 Tagging API 지원 목록에도 없어 표본 ID 로
-# 묻는다(cf-kvs 와 같은 방식).
+# 의 ARN 끝(ID)은 생성 때 정해져 표본 ID 로 묻는다(cf-kvs 와 같은 방식 —
+# 근거는 prod_targets.tsv 의 platform 덩어리 주석).
 readonly STATE_OBJECT='arn:arn:aws:s3:::pokeclip-tfstate-prod-apne2/prod'
 # 상태 객체 행의 ARN 끝(루트 이름 뒤)과 반드시 묻는 동작.
 STATE_TAIL='terraform.tfstate s3:GetObject,s3:PutObject,s3:DeleteObject'
@@ -1340,6 +1340,58 @@ expect_runtime_rows_asked() {
 }
 
 #######################################
+# 실제 principal-check.sh 를 실제 데이터로 O7f 에 돌려(주체 넷이 풀리는 가짜
+# aws), 로그 그룹 ARN 행마다 이름 꼴과 「:log-stream:」 꼴 두 ARN 이 동작마다
+# 시뮬레이터 요청에 실리는지 본다. IAM 정책은 로그 그룹을 대개 「이름:*」 로
+# 적어서(CloudWatch Logs API 참조 LogGroup.arn), 이름 꼴만 물으면
+# 「log-group:*:*」 같은 허용을 놓친다. O7f 는 로그 그룹 행의 첫 단계
+# (runtime-1a · O7d · O7f) 뒤라 넷 모두 묻는다.
+# Globals:
+#   FAKE_USER, FAKE_ACCOUNT, run_status, run_out
+#######################################
+expect_log_group_forms_asked() {
+  local case_dir dir key method actions arn action form request count=0
+  case_dir="$(testlib::new_case)" || {
+    testlib::fail "log-group-forms: 시험 준비 실패"
+    return
+  }
+  principal_reads_table >"${case_dir}/in/reads.tsv"
+  testlib::tsv "${FAKE_USER}@*" allowed None - - - >"${case_dir}/in/sim.tsv"
+  testlib::run "${case_dir}" principal-O7f env \
+    FAKE_AWS_READS="${case_dir}/in/reads.tsv" \
+    FAKE_AWS_SIM_TABLE="${case_dir}/in/sim.tsv" bash "${WRAPPER}" O7f
+  dir="$(compgen -G "${case_dir}/home/.pokeclip-precheck/principal-O7f-*")"
+  if [[ "${run_status}" -ne 3 || ! -d "${dir}" ]]; then
+    testlib::fail "log-group-forms: O7f 실행이 종료 ${run_status} —" \
+      "$(cat -- "${run_out}.stderr")"
+    return
+  fi
+  while IFS=$'\t' read -r key _ method _ _ actions _; do
+    [[ "${method}" == arn:arn:aws:logs:*:log-group:* ]] || continue
+    count=$((count + 1))
+    # shellcheck disable=SC2016 # ${ACCOUNT} 는 펼치지 않는 글자 그대로다.
+    arn="$(printf '%s' "${method#arn:}" | sed "s/\${ACCOUNT}/${FAKE_ACCOUNT}/")"
+    for action in ${actions//,/ }; do
+      for form in "${arn}" "${arn}:log-stream:"; do
+        request="\"ActionNames\":[\"${action}\"],"
+        request+="\"ResourceArns\":[\"${form}\"]"
+        if ! grep -qF -- "${request}" "${dir}"/req-*.json; then
+          testlib::fail "log-group-forms: ${key} 의 ${action} 이" \
+            "${form##*:log-group:} 꼴로 물어지지 않음"
+          return
+        fi
+      done
+    done
+  done < <(principal_rows prod_targets.tsv)
+  if [[ "${count}" -eq 0 ]]; then
+    testlib::fail "log-group-forms: 로그 그룹 ARN 행이 없음"
+    return
+  fi
+  testlib::ok "log-group-forms → 로그 그룹 행 ${count}개가 이름 꼴 ·" \
+    ":log-stream: 꼴 두 ARN 으로 동작마다 물어짐"
+}
+
+#######################################
 # runtime-1a 묶음에 런타임 루트의 Terraform 이 호출자 권한으로 부르는 읽기가
 # 정확한 행으로 있는지 본다(계획 rt1d c2 · 설계 K4 — data "aws_subnet" 의
 # ec2:DescribeSubnets). 다른 단언은 행의 꼴 · 중복만 보고 누락은 못 잡는다.
@@ -1419,6 +1471,7 @@ main() {
   expect_followup_targets
   expect_stage_followup_rows
   expect_runtime_rows_asked
+  expect_log_group_forms_asked
   expect_runtime_terraform_reads
   expect_dev_principals
   expect_principal_reads

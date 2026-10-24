@@ -302,7 +302,9 @@ bash infra/terraform/scripts/precheck/principal-check.sh O7a
 *   **Q1 요청 꼴**: 요청 하나에 ARN 하나 · 동작 하나입니다. 모든 호출
     (시뮬레이터 · 해석 · 정책 읽기)은 요청 본문을 증거의 `req-<n>.json` 에
     쓰고 `--cli-input-json file://` 로 넘깁니다 — 명령 인자에 ARN · 계정
-    ID · 이름이 없습니다.
+    ID · 이름이 없습니다. 로그 그룹 ARN 행은 이름 꼴과 `:log-stream:` 을
+    붙인 꼴 두 ARN 을 따로 묻고, 하나라도 허용이면 멈춤입니다 — IAM 정책은
+    로그 그룹을 대개 `이름:*` 로 적어 이름 꼴만 물으면 그 허용을 놓칩니다.
 *   **Q2 고정 문맥**: `aws:RequestedRegion`(행의 리전) ·
     `aws:SecureTransport` true · S3 동작이면 `s3:TlsVersion` 1.3 을 넣고,
     행의 추가 문맥이 있으면 더합니다.

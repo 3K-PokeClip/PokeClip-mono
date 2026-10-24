@@ -15,7 +15,9 @@
 # ResourceTypeFilters 값이다(Environment = prod 태그로 찾음). 해석
 # input:<이름> 은 kty 가 apply 뒤 증거 루트에 적는 입력 파일
 # input-<이름>.txt 의 ARN 이다(lib/principal_resolve.sh 머리 주석 · 파일이
-# 없으면 TARGET_NONE).
+# 없으면 TARGET_NONE). 해석 arn: 이 로그 그룹 ARN 이면 이름 꼴과
+# 「:log-stream:」 을 붙인 꼴 두 ARN 을 묻는다(같은 머리 주석 — IAM 정책은
+# 로그 그룹을 대개 「이름:*」 로 적는다).
 #
 # 동작 이름과 동작 × 자원 유형 짝은 서비스 승인 참조 대조 2026-10-19
 # (https://docs.aws.amazon.com/service-authorization/latest/reference/list_<prefix>.html
@@ -161,11 +163,16 @@ profile-photo-object	O7d	arn:arn:aws:s3:::pokeclip-prod-profile-photos-apne2/pro
 # 태그 해석 행이라 태그 동작도 묻는다(태그를 지우면 대상에서 빠진다).
 # 첫 단계(O7d) 직전에는 자원이 없어 TARGET_NONE 이 정상이다. 리스너 규칙은
 # 두지 않는다(규칙 만들기는 리스너 행의 CreateRule 이 묻는다 — 한계).
-# REGIONAL WAF 는 Tagging API 지원 목록에 없고 ARN 끝(ID)이 생성 때 정해져
-# 표본 ID 로 묻는다(cf-kvs 와 같은 방식 · 같은 한계). 요청 샘플 읽기
+# REGIONAL WAF 는 ARN 끝(ID)이 생성 때 정해져 표본 ID 로 묻는다(cf-kvs 와
+# 같은 방식 · 같은 한계). 태그로 풀지 않는 근거: Resource Groups 지원 목록
+# 에 WAFv2 가 없다(AWS::WAF::* · AWS::WAFRegional::* 만). GetResources 가
+# 서비스 고유 API 로 태깅한 wafv2 웹 ACL 을 돌려주는지는 실측하지 않았다 —
+# 실측되면 tag: 로 바꾼다(후속). 첫 단계(O7d · O7f) 직전에는 웹 ACL 이 아직
+# 없어 태그로도 풀리지 않으므로 그때는 표본 말고 방법이 없다. 요청 샘플 읽기
 # (GetSampledRequests)도 묻는다 — 웹 ACL 데이터 보호(POK-459) 전에는 샘플에
 # Authorization · 서명 쿠키 원문이 있다. 로그 그룹은 이름이 고정이라 구체
-# ARN 이다(rds-log-group 과 같은 꼴 · 같은 동작).
+# ARN 이다(rds-log-group 과 같은 꼴 · 같은 동작 · 두 꼴로 묻는다 — 머리
+# 주석).
 platform-load-balancer	O7d	tag:elasticloadbalancing:loadbalancer	loadbalancer	ap-northeast-2	elasticloadbalancing:DeleteLoadBalancer,elasticloadbalancing:ModifyLoadBalancerAttributes,elasticloadbalancing:SetSecurityGroups,elasticloadbalancing:SetSubnets,elasticloadbalancing:CreateListener,elasticloadbalancing:AddTags,elasticloadbalancing:RemoveTags	none	-
 platform-target-group	O7d	tag:elasticloadbalancing:targetgroup	targetgroup	ap-northeast-2	elasticloadbalancing:RegisterTargets,elasticloadbalancing:DeregisterTargets,elasticloadbalancing:ModifyTargetGroup,elasticloadbalancing:ModifyTargetGroupAttributes,elasticloadbalancing:DeleteTargetGroup,elasticloadbalancing:AddTags,elasticloadbalancing:RemoveTags	none	-
 platform-listener	O7d	tag:elasticloadbalancing:listener	listener	ap-northeast-2	elasticloadbalancing:ModifyListener,elasticloadbalancing:DeleteListener,elasticloadbalancing:CreateRule,elasticloadbalancing:AddTags,elasticloadbalancing:RemoveTags	none	-
