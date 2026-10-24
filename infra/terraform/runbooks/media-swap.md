@@ -320,8 +320,10 @@ SH
     ([prod 산출물 올리기 런북](/infra/terraform/runbooks/prod-artifacts.md)).
     `prod/registry` 재적용(저장소 둘 추가)도 끝났습니다.
 1.  **런타임 1단 출력**: `rds_endpoint` · `rds_db_name` · `rds_resource_id` ·
-    `rds_sg_id` · `media_secret_arns` · `rewind_bucket_arn` 이 있습니다. 없으면
-    plan 이 그 이름으로 실패합니다.
+    `rds_sg_id` · `media_secret_arns` · `rewind_bucket_arn` ·
+    `ingest_auth_resolve_token_secret_arn` 이 있습니다. 없으면 plan 이 그
+    이름으로 실패합니다(옛 모드여도 — 루트가 늘 읽습니다). 마지막 출력은 런타임
+    1단-나 ②(POK-429)의 apply 뒤에 생깁니다.
 1.  **런타임의 DB 준비**: RDS IAM 인증 켬 · `media_indexer` · `media_janitor`
     (`rds_iam`) · DDL 역할로 스키마 배치 · GRANT 가 끝났다는 확인이 런타임
     스토리 티켓 코멘트에 있습니다([CONTRACT-runtime.md](/infra/terraform/CONTRACT-runtime.md)

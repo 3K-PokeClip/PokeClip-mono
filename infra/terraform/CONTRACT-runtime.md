@@ -35,7 +35,7 @@
 | platform → media | `media_proxy_ports`(live · control · playback · health) · `media_health_path` | Media 상자 nginx 포트 · 헬스 경로 — platform 대상 그룹과 같은 값(정본 = platform) | platform |
 | 런타임 1단 → media | `rds_endpoint` · `rds_db_name` · `rds_resource_id` · `rds_sg_id` · `rewind_bucket_arn` | 사이드카 · janitor env(주소 · DB 이름) · Media 인스턴스 역할의 `rds-db:connect`(대상 = `rds_resource_id`) · Media ↔ RDS 5432 규칙 한 쌍 · 사이드카 S3(rewind) 업로드 정책(대상 = `rewind_bucket_arn/*`) | RDS · DB 사용자 · GRANT = 런타임(DB 사용자 · GRANT 는 Terraform 이 아니라 `prod/runtime/sql/` 과 [runtime-1a 런북](runbooks/runtime-1a.md)), 접속 정책 · SG 규칙 · 업로드 정책 = media |
 | 런타임 1단 → media | `media_secret_arns`(비밀 전체 ARN 목록 `list(string)` — media_host 변수와 같은 꼴. resolve 전용 토큰 `pokeclip/prod/stream-key-resolve-token` 그릇 하나 — auth 의 `STREAM_KEY_RESOLVE_TOKEN` 과 같은 ARN. 공용 `INTERNAL_API_TOKEN` 은 없다, POK-429) | Media 인스턴스 역할 읽기 정책. 전용 토큰은 auth 의 `POST /internal/stream-keys/resolve` 하나만 열고, 출발지는 Media 프라이빗 서브넷 대역이어야 한다(auth `STREAM_KEY_RESOLVE_ALLOWED_CIDRS`) | 그릇 · 값 = 런타임, 읽기 정책 = media |
-| 런타임 1단 → media | `ingest_auth_resolve_token_secret_arn`(string — 위 그릇의 전체 ARN, `media_secret_arns` 의 원소와 같은 값) | 응답기 `media.env` 의 `STREAM_KEY_RESOLVE_TOKEN_SECRET_ARN` 렌더(M15). 목록의 순서에 기대지 않으려는 이름 있는 출력이다 | 출력 = 런타임, 키 · 렌더 = media(M15) |
+| 런타임 1단 → media | `ingest_auth_resolve_token_secret_arn`(string — 위 그릇의 전체 ARN, `media_secret_arns` 의 원소와 같은 값) | 응답기 `media.env` 의 `STREAM_KEY_RESOLVE_TOKEN_SECRET_ARN` 렌더(M9 user_data). 목록의 순서에 기대지 않으려는 이름 있는 출력이다 | 출력 = 런타임, 키 정의 · 읽기 = M15, 렌더 = M9(user_data) |
 | 런타임 1단 → media | `broadcast_topic_arn` | 사이드카 역할의 `sns:Publish` 대상(계약9 발행 — `MessageDeduplicationId = eventId`). 발행 권한은 media 역할의 신원 정책이다 — 주제 정책은 계정 루트만 주체로 둔다(기본 정책의 `Principal *` 없음) | 주제 · 주제 정책 = 런타임, 발행 정책 = media |
 | 런타임 1단 → edge | `rewind_bucket_regional_domain_name` | `cdn_media` 의 `rewind-s3` 오리진 도메인. edge 는 이 하나만 읽는다 — `rewind_bucket_name` · `rewind_bucket_arn` 은 런타임 2단 버킷 정책 몫이다 | 버킷 = 런타임 |
 | edge → 런타임 2단 | `media_distribution_arn` | rewind 버킷 정책의 OAC 허용문(조건 `AWS:SourceArn`) | 버킷 정책 = 런타임 2단 |
@@ -250,8 +250,9 @@ clip 의 큐 수신 스위치 `BROADCAST_INTAKE_ENABLED` 는 이 목록에 없�
 `media_secret_arns` 의 소비자는 Media 상자의 `ingest-auth`(응답기)
 컨테이너입니다. 원소는 resolve 전용 토큰 그릇
 `pokeclip/prod/stream-key-resolve-token` 하나이고, 응답기는 이름 있는 출력
-`ingest_auth_resolve_token_secret_arn` 으로 그 그릇을 찾습니다(M15 가
-`media.env` 의 `STREAM_KEY_RESOLVE_TOKEN_SECRET_ARN` 으로 렌더). 시작
+`ingest_auth_resolve_token_secret_arn` 으로 그 그릇을 찾습니다(`media.env`
+의 `STREAM_KEY_RESOLVE_TOKEN_SECRET_ARN` — 키 정의 · 읽기 = M15, 렌더 =
+M9(user_data)). 시작
 스크립트가 값을 tmpfs 파일로 렌더하고, 응답기는 **파일 경로**로 받습니다.
 환경변수로 넘기지 않습니다.
 
