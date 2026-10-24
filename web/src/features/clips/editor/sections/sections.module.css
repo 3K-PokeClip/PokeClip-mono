@@ -650,74 +650,7 @@
   outline-offset: calc(-10 * var(--pc-u));
 }
 
-/* ---------- 오디오 빠른 설정 (POK-389) ---------- */
-
-.presetGrid {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: calc(6 * var(--pc-u));
-}
-
-.presetCard {
-  display: flex;
-  align-items: center;
-  gap: calc(8 * var(--pc-u));
-  padding: calc(9 * var(--pc-u));
-  border-radius: calc(10 * var(--pc-u));
-  border: 1px solid var(--pc-color-border-subtle);
-  background: transparent;
-  color: var(--pc-color-text-secondary);
-  text-align: left;
-  cursor: pointer;
-  font-family: inherit;
-}
-
-.presetCard:hover:not(:disabled) {
-  background: var(--pc-color-bg-surface-hover);
-}
-
-.presetCard:focus-visible {
-  outline: 2px solid var(--pc-color-focus-ring);
-  outline-offset: 1px;
-}
-
-.presetCard:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.presetCard[aria-checked='true'] {
-  border-color: var(--pc-color-accent);
-  background: var(--pc-color-accent-subtle);
-  color: var(--pc-color-accent-text, var(--pc-color-text-primary));
-}
-
-.presetIcon {
-  flex: none;
-  display: grid;
-  place-items: center;
-  width: calc(28 * var(--pc-u));
-  height: calc(28 * var(--pc-u));
-  border-radius: calc(7 * var(--pc-u));
-  background: var(--pc-color-bg-inset);
-}
-
-.presetText {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  line-height: 1.3;
-}
-
-.presetLabel {
-  font-size: calc(11.5 * var(--pc-u));
-  font-weight: 700;
-}
-
-.presetHint {
-  font-size: calc(10 * var(--pc-u));
-  opacity: 0.75;
-}
+/* ---------- 오디오 트랙 줄 (POK-389) ---------- */
 
 .trackRow[data-muted] .trackName,
 .trackRow[data-muted] .trackValue {

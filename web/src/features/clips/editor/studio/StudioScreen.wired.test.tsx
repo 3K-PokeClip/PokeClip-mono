@@ -586,70 +586,19 @@ describe('StudioScreen: 편집기에서 고른 썸네일 장면(POK-389)', () =>
   });
 });
 
-describe('StudioScreen: 오디오 빠른 설정(POK-389)', () => {
-  it('「저작권 걱정 없이」를 고르면 BGM 트랙만 빼고 나머지 소스 트랙을 섞어 저장한다', async () => {
-    server.myTrackLabels = [null, '마이크', '게임', '디스코드', 'BGM', null];
-    const user = userEvent.setup();
-    const save = await openFrom(`stream=${STREAM_ID}&card=5`);
-
-    await user.click(screen.getByRole('tab', { name: '오디오' }));
-    await user.click(screen.getByRole('radio', { name: /저작권 걱정 없이/ }));
-    expect(screen.getByRole('checkbox', { name: 'BGM 넣기' })).not.toBeChecked();
-    expect(screen.getByRole('checkbox', { name: '최종 믹스(트랙 1) 넣기' })).not.toBeChecked();
-    await user.click(save);
-
-    await waitFor(() =>
-      expect(bodiesOf('POST', `/api/clip/broadcasts/${STREAM_ID}/recipes`)).toHaveLength(1),
-    );
-    expect(bodiesOf('POST', `/api/clip/broadcasts/${STREAM_ID}/recipes`)[0]?.audio).toEqual({
-      tracks: [
-        { trackId: 1, gain: 1 },
-        { trackId: 2, gain: 1 },
-        { trackId: 3, gain: 1 },
-        { trackId: 5, gain: 1 },
-      ],
-    });
-  });
-
-  it('「목소리 크게」는 마이크 1.3배 · 게임 0.6배로 저장하고, 막대를 만지면 고른 표시가 풀린다', async () => {
+describe('StudioScreen: 오디오 탭(POK-389)', () => {
+  it('트랙마다 넣기·음량만 있고 빠른 설정은 없다: 음량 막대는 저장 계약대로 200%까지다', async () => {
     server.myTrackLabels = [null, '마이크', '게임', null, null, null];
-    const user = userEvent.setup();
-    const save = await openFrom(`stream=${STREAM_ID}&card=5`);
-
-    await user.click(screen.getByRole('tab', { name: '오디오' }));
-    const voice = screen.getByRole('radio', { name: /목소리 크게/ });
-    await user.click(voice);
-    expect(voice).toBeChecked();
-    await user.click(save);
-
-    await waitFor(() =>
-      expect(bodiesOf('POST', `/api/clip/broadcasts/${STREAM_ID}/recipes`)).toHaveLength(1),
-    );
-    const tracks = (
-      bodiesOf('POST', `/api/clip/broadcasts/${STREAM_ID}/recipes`)[0]?.audio as {
-        tracks: { trackId: number; gain: number }[];
-      }
-    ).tracks;
-    expect(tracks.find((t) => t.trackId === 1)?.gain).toBeCloseTo(1.3);
-    expect(tracks.find((t) => t.trackId === 2)?.gain).toBeCloseTo(0.6);
-    // 130%가 막대 범위 안이어야 손으로 한 칸 옮겨도 100%로 잘리지 않는다(PR #341 codex)
-    const micSlider = screen.getByRole('slider', { name: '마이크 볼륨' });
-    expect(Number(micSlider.getAttribute('aria-valuemax'))).toBeGreaterThanOrEqual(130);
-    expect(micSlider).toHaveAttribute('aria-valuenow', '130');
-
-    await user.click(screen.getByRole('checkbox', { name: '트랙 4 넣기' }));
-    expect(voice).not.toBeChecked();
-  });
-
-  it('맞는 트랙 이름이 없으면 그 카드는 꺼지고 이유를 말한다', async () => {
     const user = userEvent.setup();
     await openFrom(`stream=${STREAM_ID}&card=5`);
 
     await user.click(screen.getByRole('tab', { name: '오디오' }));
-    expect(screen.getByRole('radio', { name: /저작권 걱정 없이/ })).toBeDisabled();
-    expect(screen.getByText('트랙 이름에 BGM이 없어요')).toBeInTheDocument();
-    // 원래 소리(최종 믹스)는 언제나 고를 수 있다
-    expect(screen.getByRole('radio', { name: /원래 소리/ })).toBeEnabled();
+    expect(screen.queryByRole('radiogroup', { name: '빠른 설정' })).not.toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: '마이크 넣기' })).toBeInTheDocument();
+    expect(screen.getByRole('slider', { name: '마이크 볼륨' })).toHaveAttribute(
+      'aria-valuemax',
+      '200',
+    );
   });
 });
 
