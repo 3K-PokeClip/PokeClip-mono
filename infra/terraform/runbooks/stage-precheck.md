@@ -42,9 +42,9 @@
 | O7b | `O7b` | — | 함 | 함 | 공유 존의 옛 ACM 검증 이름(`_` 로 시작하는 CNAME) | apply |
 | O7c | `O7c` | — | 함 | 함 | — | 푸시마다 |
 | runtime-1a | `runtime-1a` | — | 함(POK-365 완료 — 런타임 상태 객체 · RDS · SNS · SQS · 일 큐 셋과 DLQ(1단-다) · 실행기 역할 · 프로필 · prod EC2 인스턴스(켬 뒤 태그) · 관리형 마스터 비밀(apply 뒤 입력 파일)이 이 단계부터, rewind · clips · 프로필 사진 버킷과 그 객체는 O7d 부터 대상) | 함 | — | plan 승인마다(본 apply · 켬 · 끔) · 켬 직후 2-3 재판정 · 값 입력 |
-| O7d | `O7d` | — | 함 | 함 | Cloud Map 사설 존 리전 조건 · 리스너 규칙 transform 속성 · ELB 한도 읽기 | (f) 실측 · 태스크 생성 |
-| O7e | `O7e` | `O7e-stop1`(멈춤 자리 ①) | 함 | 함 | — | apply · 기동 확인 · A1 |
-| O7f | `O7f` | `O7f-stop2`(멈춤 자리 ② — 값 입력 직전 · 7-R 직전에 다시). 부분 진행 중 하위 단계는 `O7f` · `testkey` · `loopback` 을 다시 | 함 | 함 | KVS 그릇 재조회 · Origin Shield · 로그 그룹 부수 동작 | apply · 값 · 시험 판정 · A2 |
+| O7d | `O7d` | — | 함(platform 상태 객체 · ALB · NLB · 대상 그룹 · 리스너 · ECS 클러스터 · 서비스 · 작업 정의(태그 — 이 단계 직전에는 `TARGET_NONE`) · REGIONAL WAF · 그 로그 그룹이 이 단계부터 대상) | 함 | Cloud Map 사설 존 리전 조건 · 리스너 규칙 transform 속성 · ELB 한도 읽기 | (f) 실측 · 태스크 생성 |
+| O7e | `O7e` | `O7e-stop1`(멈춤 자리 ①) | 함(media 상태 객체 · media 역할(넘기기) · 인스턴스 프로필이 이 단계부터 대상. media 상자는 prod EC2 인스턴스 행이 태그로 푼다) | 함 | — | apply · 기동 확인 · A1 |
+| O7f | `O7f` | `O7f-stop2`(멈춤 자리 ② — 값 입력 직전 · 7-R 직전에 다시). 부분 진행 중 하위 단계는 `O7f` · `testkey` · `loopback` 을 다시 | 함(CloudFront 배포 · 함수 · KVS · CLOUDFRONT WAF · 그 로그 그룹 · media 표준 로그 그룹 · prod 버킷(태그 — apex 포함)이 이 단계부터 대상) | 함 | KVS 그릇 재조회 · Origin Shield · 로그 그룹 부수 동작 | apply · 값 · 시험 판정 · A2 |
 | 8(O8 — 이름마다) | `8` | — | 함(이름 되돌림 apply 때는 SCP 재판정만 — M11 O8) | 함 | 공유 존 이름 충돌 · 설계 12절 1 ① · 2 답 또는 kty 수용 기록 | 이름마다 |
 | 8a(O8a) | `8a` | — | 함(이 뒤로 주기 판정) | 함 | — | apply |
 | 9(각 상향) | `9` | — | 함 | 함 | — | 상향마다 |
@@ -231,7 +231,9 @@ bash infra/terraform/scripts/precheck/scp-recheck.sh --accept O7f \
 (`data/principal_sim/dev_principals.tsv`), 자원은 상태 버킷 · 상태 객체 ·
 비밀 · ECR · network · 인증서 · 권한 변경 대상 · prod 런타임 자원(RDS ·
 관리형 마스터 비밀 · SNS · SQS · rewind 버킷 · SQL 실행기 역할 · 프로필) ·
-prod EC2 인스턴스(켜진 SQL 실행기 · O7e 뒤 media 상자)입니다
+prod EC2 인스턴스(켜진 SQL 실행기 · O7e 뒤 media 상자) · platform(ALB ·
+NLB · 대상 그룹 · 리스너 · ECS · REGIONAL WAF · 그 로그 그룹) · media 역할 ·
+프로필 · edge(CloudFront · CLOUDFRONT WAF · 로그 그룹 · apex 버킷)입니다
 (`prod_targets.tsv`). SNS 주제 · SQS 큐의 자원 정책도 직접 읽습니다(아래
 「해석 · 정책 읽기」). 읽기만 하고 AWS 에 아무것도 만들지 않으며, 실제
 접근을 시도하지 않습니다.
@@ -332,6 +334,9 @@ bash infra/terraform/scripts/precheck/principal-check.sh O7a
 `TARGET_NONE`. 켬 · apply 뒤에야 생기는 대상(prod EC2 인스턴스 · 관리형
 마스터 비밀)은 그 전 실행에서 `TARGET_NONE` 이 정상입니다 — 언제 정상이고
 언제 멈추는지는 [runtime-1a 런북](runtime-1a.md) 1 · 3 · 4 에 있습니다.
+platform 의 태그 행(ALB · NLB · 대상 그룹 · 리스너 · ECS)도 첫 단계(O7d)
+직전 실행에서는 자원이 없어 `TARGET_NONE` 이 정상이고, O7d apply 뒤
+실행부터는 `TARGET_NONE` 이면 태그 · 이름을 확인합니다.
 
 ### 2-3 판정의 결과와 갈래
 

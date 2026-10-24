@@ -5,7 +5,8 @@
 # REGIONAL · ec2 SG 규칙) · 고유 확인(Cloud Map 사설 존 리전 조건 · ELB 한도) ·
 # 설계 13-1 미판정 행 · REGIONAL WAF 트래픽 로그(장부 17 — WAF 개발자 안내서
 # 「Permissions required to publish logs to CloudWatch Logs」 · CloudWatch
-# Logs 안내서 「Logs sent to CloudWatch Logs」, 2026-10-24 확인).
+# Logs 안내서 「Logs sent to CloudWatch Logs」, 2026-10-24 확인) · 웹 ACL
+# 데이터 보호의 UpdateWebACL(POK-459 — 묶음 행은 POK-460 이 더함).
 # 2-3 판정 래퍼 읽기(맨 아래 덩어리): M17b principal-check.sh.
 
 # 공개 ALB · 내부 ALB · NLB · 대상 그룹 · 리스너 규칙 · 한도 읽기
@@ -53,9 +54,10 @@ iam:TagRole	us-east-1	arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*
 iam:PassRole	us-east-1	arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*
 iam:CreateServiceLinkedRole	us-east-1	arn:aws:iam::${ACCOUNT}:role/aws-service-role/*
 
-# REGIONAL WAF
+# REGIONAL WAF — 웹 ACL 데이터 보호(POK-459)는 웹 ACL 갱신이다
 wafv2:CreateWebACL	ap-northeast-2	*
 wafv2:GetWebACL	ap-northeast-2	*
+wafv2:UpdateWebACL	ap-northeast-2	*
 wafv2:AssociateWebACL	ap-northeast-2	*
 wafv2:TagResource	ap-northeast-2	*
 
