@@ -334,6 +334,32 @@ describe('useTrackPreview', () => {
     expect(result.current.levels?.startSeconds).toBe(5);
   });
 
+  it('창을 다시 받다 실패하면 이어 틀던 앞 재생기도 버리고 영상 소리로 돌아간다: 꺼진 채 무음으로 남지 않게(PR #341 2차)', async () => {
+    const { ctx, gains } = fakeContext();
+    const node = video();
+    const { result, rerender } = renderHook(
+      ({ window }) =>
+        useTrackPreview({
+          streamId: 's-1',
+          baseMs: BASE,
+          window,
+          video: node,
+          createContext: () => ctx as never,
+        }),
+      { initialProps: { window: WINDOW } },
+    );
+    act(() => result.current.setGains([0, 1, 0]));
+    await waitFor(() => expect(result.current.status).toBe('ready'));
+    const firstPlayerGains = [...gains];
+
+    vi.mocked(requestSegmentAudioAccess).mockRejectedValueOnce(new Error('503'));
+    rerender({ window: { startSeconds: 5, endSeconds: 45 } });
+    await waitFor(() => expect(result.current.status).toBe('unavailable'));
+    for (const gain of firstPlayerGains) expect(gain.disconnect).toHaveBeenCalled();
+    expect(node.muted).toBe(false);
+    expect(result.current.levels).toBeNull();
+  });
+
   it('조각 받기가 멈춰 있으면 시한 뒤 「못 부름」으로 영상 소리를 되살린다(로컬 리뷰 2라운드)', async () => {
     vi.useFakeTimers();
     try {
