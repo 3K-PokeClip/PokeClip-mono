@@ -179,9 +179,10 @@ export function StudioEditor(options: ClipEditorOptions = {}) {
     function onKeyDown(event: globalThis.KeyboardEvent) {
       const target = event.target instanceof Element ? event.target : null;
       // 창(업로드 정보 등)이 떠 있는 동안에는 편집기 단축키를 통째로 끈다. 안 끄면 창 안 라디오 위 Space가 재생으로 새며
-      // 선택을 막고, 스위치·라디오 위 I·O·⌘Z가 창 뒤 편집기의 구간과 기록을 바꾼다(POK-291)
+      // 선택을 막고, 스위치·라디오 위 I·O·⌘Z가 창 뒤 편집기의 구간과 기록을 바꾼다(POK-291). 열린 메뉴(재생 속도) 안도
+      // 같다: 항목 위 Space가 고르기 대신 재생을 켜고 ← → · I · O가 메뉴 뒤 편집기로 샜다(PR #341 3차)
       if (
-        target?.closest('[role="dialog"]') != null ||
+        target?.closest('[role="dialog"], [role="menu"]') != null ||
         document.querySelector('[aria-modal="true"]') !== null
       )
         return;

@@ -287,6 +287,11 @@ describe('StudioScreen', () => {
     expect(document.activeElement).toBe(screen.getByRole('menuitem', { name: '0.5×' }));
     await user.keyboard('{ArrowDown}{Enter}');
     expect(screen.getByRole('button', { name: '재생 속도 1×' })).toHaveFocus();
+
+    // 메뉴 안 Space는 항목을 고른다: 편집기 단축키(재생 토글)로 새지 않는다(PR #341 3차)
+    await user.keyboard('{Enter}{ArrowDown}{ArrowDown} ');
+    expect(screen.getByRole('button', { name: '재생 속도 1.5×' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '재생' })).toBeInTheDocument();
   });
 
   it('되감기·감기 버튼이 아이콘 안의 초로 갈린다 — 방향만으로는 구분되지 않는다', () => {
