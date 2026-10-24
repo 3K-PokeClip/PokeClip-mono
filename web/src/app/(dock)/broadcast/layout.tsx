@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { ScreenTransition } from '@/components/app-shell/ScreenTransition';
-import { ScreenSkeleton } from '@/components/app-shell/ScreenSkeleton';
+import { DockScreenSkeleton } from '@/app/(dock)/DockScreenSkeleton';
 import { Side } from '@/components/app-shell/Side';
 import styles from '@/components/app-shell/dockShell.module.css';
 import { ChannelScope } from '@/features/channel/ChannelScope';
@@ -18,7 +18,7 @@ export default function BroadcastLayout({ children }: { children: ReactNode }) {
         <div className={styles.content}>
           {/* 채널 범위는 본문만 감싼다(POK-442): 채널이 서기 전에도 사이드바는 서고 본문은 뼈대로 기다린다.
               방송 고정 화면(지난 방송 상세 · ?stream=)에서 채널을 바꾸면 홈으로 보내는 일도 이 범위가 한다 */}
-          <ChannelScope fallback={<ScreenSkeleton />}>{children}</ChannelScope>
+          <ChannelScope fallback={<DockScreenSkeleton />}>{children}</ChannelScope>
         </div>
       </div>
     </ScreenTransition>

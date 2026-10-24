@@ -14,6 +14,8 @@ const ROWS = 2;
  */
 const FALLBACK_CARDS = 8;
 
+const u = (n: number) => `calc(${n} * var(--pc-u))`;
+
 /**
  * 격자의 실제 열 수. auto-fill이 정한 트랙 목록(「213.6px 213.6px …」)을 센다. 배치 전이라 풀리지 않은 값(「repeat(…)」 ·
  * 빈 값 — jsdom은 이 칸을 모른다)이면 0
@@ -21,6 +23,29 @@ const FALLBACK_CARDS = 8;
 function columnCount(grid: HTMLElement): number {
   const tracks = (getComputedStyle(grid).gridTemplateColumns ?? '').trim().split(/\s+/);
   return tracks.every((track) => /^\d+(\.\d+)?px$/.test(track)) ? tracks.length : 0;
+}
+
+/**
+ * 보관함 화면이 첫 로딩에 보이는 모습(제목 + 카드 격자 스켈레톤). 새로고침 직후 채널이 서기 전 레이아웃도 이것을 그려, 채널이
+ * 선 뒤 화면이 같은 격자를 이어 그린다 — 공통 뼈대(행 4줄)였다 카드 격자로 바뀌면 한 번 더 튄다(PR #377 2차 리뷰).
+ * LibraryScreen과 같은 틀(.screen · .main · .header · .title)이다. 검색·정렬 자리는 같은 크기(32u · 160u/130u) 막대로 잡는다 —
+ * 비워 두면 머리가 낮아 화면이 서는 순간 격자가 7px 내려갔다
+ */
+export function LibraryLoadingScreen() {
+  return (
+    <div className={styles.screen}>
+      <main className={styles.main}>
+        <div className={styles.header}>
+          <h1 className={styles.title}>보관함</h1>
+          <div className={styles.tools} aria-hidden="true">
+            <Skeleton width={u(160)} height={u(32)} radius="md" />
+            <Skeleton width={u(130)} height={u(32)} radius="md" />
+          </div>
+        </div>
+        <LibrarySkeleton panelOpen={false} />
+      </main>
+    </div>
+  );
 }
 
 // 첫 읽기가 끝나기 전의 보관함 격자(POK-443). 로드 뒤 격자와 같은 클래스(.grid · .cardItem · .card)를 그대로 써서, 데이터가

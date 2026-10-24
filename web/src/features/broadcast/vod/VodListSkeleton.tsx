@@ -6,6 +6,22 @@ const ROWS = 4;
 
 const u = (n: number) => `calc(${n} * var(--pc-u))`;
 
+/**
+ * 지난 방송 화면이 첫 로딩에 보이는 모습 그대로(제목 + 행 스켈레톤). 새로고침 직후 채널이 서기 전 레이아웃도 이것을 그려,
+ * 채널이 선 뒤 화면이 같은 뼈대를 이어 그린다 — 공통 뼈대였다 바뀌면 한 번 더 튄다(PR #377 2차 리뷰). VodListScreen의
+ * 로딩 분기와 같은 틀이어야 한다(.container · .header · .title)
+ */
+export function VodListLoadingScreen() {
+  return (
+    <main className={styles.container}>
+      <div className={styles.header}>
+        <h1 className={styles.title}>지난 방송</h1>
+      </div>
+      <VodListSkeleton />
+    </main>
+  );
+}
+
 // 첫 읽기가 끝나기 전의 지난 방송 목록(POK-441 시안 A). 로드 뒤 행과 같은 클래스(.list·.row·.thumb·.rowText·.rowActions)를
 // 그대로 써서, 데이터가 와도 행 높이·열 배치가 바뀌지 않는다. 헤더는 제목만 둔다: 개수 배지·기간 필터는 방송이 있을 때만
 // 서므로 미리 그리면 방송이 0개인 계정에서 거짓이 된다.

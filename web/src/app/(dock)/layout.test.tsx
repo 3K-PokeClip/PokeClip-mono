@@ -109,9 +109,11 @@ describe('(dock) 레이아웃: me를 기다리는 동안', () => {
     );
 
     expect(screen.getByRole('navigation', { name: '방송' })).toBeInTheDocument();
+    // 경로로 화면을 아니 그 화면의 첫 로딩 뼈대를 그대로 그린다: 채널이 선 뒤 뼈대가 한 번 더 바뀌지 않는다(PR #377 2차 리뷰)
     expect(within(screen.getByRole('main')).getByRole('status')).toHaveTextContent(
-      '화면을 불러오는 중',
+      '지난 방송을 불러오는 중',
     );
+    expect(screen.getByRole('heading', { level: 1, name: '지난 방송' })).toBeInTheDocument();
     expect(screen.queryByText('방송 본문')).not.toBeInTheDocument();
 
     release();
@@ -197,8 +199,9 @@ describe('(dock) 레이아웃: 채널이 바뀔 때', () => {
     await waitFor(() => expect(nav.replace).toHaveBeenCalledWith('/home'));
     expect(screen.queryByText('방송 상세')).not.toBeInTheDocument();
     expect(screen.getByRole('navigation', { name: '방송' })).toBeInTheDocument();
+    // 지난 방송 상세는 라이브 대시보드와 같은 화면이라 그 뼈대다
     expect(within(screen.getByRole('main')).getByRole('status')).toHaveTextContent(
-      '화면을 불러오는 중',
+      '라이브 대시보드를 불러오는 중',
     );
   });
 });
