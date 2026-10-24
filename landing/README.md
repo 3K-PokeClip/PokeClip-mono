@@ -139,8 +139,8 @@ ChatGPT 검색·Perplexity·Google AI 개요·네이버 AI 브리핑 같은 엔�
   ```bash
   curl -sL https://cdn.jsdelivr.net/npm/posthog-js@<판>/dist/array.js | openssl dgst -sha384 -binary | openssl base64 -A
   ```
-- 자동 수집·녹화는 끄고, 주소의 쿼리·해시는 보내기 전에 뗍니다(`before_send`). 홍보 링크의 `utm_*`는 SDK가 먼저 따로 뽑아 두므로 남습니다.
-- **설정을 바꾸면 처리방침 2·7·9절을 먼저 고칩니다.** 처리방침이 실제 동작과 다르면 위반입니다(아래 「문서 쓰는 원칙」).
+- 자동 수집·녹화는 끄고, 주소의 쿼리·해시는 보내기 전에 뗍니다(`before_send`). 우리 주소가 아닌 유입 주소는 origin만 남깁니다(방송 채널·영상 주소의 경로에 채널 ID·영상 ID가 실려서). 홍보 링크의 `utm_*`는 SDK가 먼저 따로 뽑아 두므로 남는데, 아래 「홍보 링크와 UTM」 표에 적은 값만 그대로 두고 나머지는 `other`로 바꿉니다. `utm_term`과 광고 클릭 식별자(`gclid`·`fbclid` 등)는 지웁니다. 표에 값을 더하면 `analytics.js`와 대시보드 `web/src/lib/analytics/scrub.ts`의 허용 목록도 함께 고칩니다. 정제 회귀 테스트는 `scripts/analytics.test.mjs`입니다.
+- **설정을 바꾸면 처리방침 2·3·4·6·7·9·13절을 먼저 고칩니다.** 처리방침이 실제 동작과 다르면 위반입니다(아래 「문서 쓰는 원칙」). `scripts/check-legal.mjs`가 그 절들의 PostHog 문장을 검사합니다.
 
 ## 홍보 링크와 UTM (POK-359)
 
@@ -157,7 +157,7 @@ ChatGPT 검색·Perplexity·Google AI 개요·네이버 AI 브리핑 같은 엔�
 https://pokeclip.com/?utm_source=chzzk&utm_medium=profile&utm_campaign=launch_2026_10
 ```
 
-- **사람을 알아볼 수 있는 값은 넣지 않습니다** — 스트리머 이름·채널명·이메일·받는 사람 ID 대신 위 고정값만 씁니다. 꼬리표 값은 분석 도구에 그대로 저장됩니다.
+- **사람을 알아볼 수 있는 값은 넣지 않습니다** — 스트리머 이름·채널명·이메일·받는 사람 ID 대신 위 고정값만 씁니다. 표 밖의 값은 보내기 전에 `other`로 바뀌어(`utm_campaign`은 `<yyyy>_<mm>_<이름>` 꼴, `utm_content`는 소문자·숫자·`_` 32자까지만 통과), 실수로 넣은 값도 저장되지 않습니다. 새 출처·자리가 필요하면 이 표와 두 허용 목록(`analytics.js`·`scrub.ts`)을 함께 고친 뒤 링크를 돌립니다.
 - 홍보 링크는 **랜딩**(`https://pokeclip.com/`)을 가리킵니다. 대시보드로 바로 보내면 랜딩 → 시작 버튼 단계가 빠집니다. 랜딩 안의 시작 버튼 링크에는 꼬리표를 붙이지 않습니다(처음 유입을 덮어씁니다).
 - 새 값이 필요하면 이 표부터 고칩니다. 같은 뜻을 다른 철자로 쓰면(`yt`·`youtube`) PostHog에서 따로 셉니다.
 
