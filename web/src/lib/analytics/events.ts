@@ -100,12 +100,33 @@ export interface AnalyticsEvents {
   faq_feedback_sent: { faq: FaqKey; helpful: boolean };
 }
 
+/** 열거 값의 모양 — 소문자·숫자·`_`·`-`만, 40자까지. 이메일·채널 이름·제목 같은 자유 문자열은 여기 맞지 않는다 */
+const ENUM_VALUE_RE = /^[a-z0-9_-]{1,40}$/;
+
+/**
+ * 타입이 막는 자유 문자열을 런타임에도 한 번 더 거른다 — 단언(as)이나 응답 객체 펼치기로 섞여 들어온 값.
+ * 열거 모양 문자열·boolean·유한한 number만 남기고 나머지는 속성째 뺀다(이벤트는 보낸다).
+ */
+function safeProperties(properties: object): Record<string, string | number | boolean> {
+  const safe: Record<string, string | number | boolean> = {};
+  for (const [key, value] of Object.entries(properties)) {
+    if (
+      typeof value === 'boolean' ||
+      (typeof value === 'number' && Number.isFinite(value)) ||
+      (typeof value === 'string' && ENUM_VALUE_RE.test(value))
+    ) {
+      safe[key] = value;
+    }
+  }
+  return safe;
+}
+
 /** 행동 이벤트를 보낸다. 분석이 꺼져 있으면(키 없음·SDK 차단) 아무 일도 하지 않는다. */
 export function track<K extends keyof AnalyticsEvents>(
   name: K,
   properties: AnalyticsEvents[K],
 ): void {
   withAnalytics((posthog) => {
-    posthog.capture(name, { ...properties });
+    posthog.capture(name, safeProperties(properties));
   });
 }

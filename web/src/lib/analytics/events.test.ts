@@ -54,7 +54,29 @@ describe('track — 행동 이벤트(POK-357)', () => {
     track('platform_linked', { platform: 'chzzk', channelName: '게임하는너구리' });
     // @ts-expect-error 목록에 없는 이벤트
     track('signed_up', {});
-    expect(posthog.capture).toHaveBeenCalledTimes(3); // 런타임은 막지 않는다 — 타입이 지킨다
+    expect(posthog.capture).toHaveBeenCalledTimes(3); // 이벤트는 런타임에 막지 않는다 — 타입이 지킨다
+    // 자유 문자열 속성은 런타임에도 빠진다
+    expect(posthog.capture.mock.calls[1]).toEqual(['platform_linked', { platform: 'chzzk' }]);
+  });
+
+  it('단언(as)으로 섞여 들어온 자유 문자열·객체·NaN은 런타임에도 속성째 뺀다', async () => {
+    const { track } = await load('phc_test');
+    track('video_render_requested', {
+      privacy_status: 'public',
+      thumbnail_source: 'scene',
+      made_for_kids: false,
+      category_id: 'a@b.c' as never,
+      scheduled: true,
+      title: '방송 하이라이트 모음',
+      raw: { email: 'a@b.c' },
+      ratio: Number.NaN,
+    } as never);
+    expect(posthog.capture).toHaveBeenCalledWith('video_render_requested', {
+      privacy_status: 'public',
+      thumbnail_source: 'scene',
+      made_for_kids: false,
+      scheduled: true,
+    });
   });
 
   it('유튜브 분류 번호는 목록 안이면 그대로, 밖이면 other로 좁힌다', async () => {
