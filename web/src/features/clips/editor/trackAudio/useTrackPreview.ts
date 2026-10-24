@@ -143,6 +143,8 @@ export function useTrackPreview(options: {
         setStatus('ready');
       })
       .catch(() => {
+        // 받는 중인 다른 조각도 멈춘다: 하나가 실패하면 결과를 버린다(PR #341 claude)
+        abort.abort();
         if (cancelled) return;
         setPlayer(null);
         setLevels(null);

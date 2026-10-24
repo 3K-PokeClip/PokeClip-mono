@@ -39,13 +39,20 @@ const sameConfig = (a: AacConfig, b: AacConfig) =>
   a.frequencyIndex === b.frequencyIndex &&
   a.channelConfig === b.channelConfig;
 
+/** 하나라도 실패하면 거기서 멈춘다: 결과는 버리는데 남은 조각을 끝까지 받으면 수십~백수십 MB를 헛받는다(PR #341 claude) */
 async function inParallel<T, R>(items: readonly T[], work: (item: T) => Promise<R>): Promise<R[]> {
   const results = new Array<R>(items.length);
   let next = 0;
+  let failed = false;
   const worker = async () => {
-    while (next < items.length) {
+    while (!failed && next < items.length) {
       const index = next++;
-      results[index] = await work(items[index]!);
+      try {
+        results[index] = await work(items[index]!);
+      } catch (error) {
+        failed = true;
+        throw error;
+      }
     }
   };
   await Promise.all(Array.from({ length: Math.min(PARALLEL, items.length) }, worker));

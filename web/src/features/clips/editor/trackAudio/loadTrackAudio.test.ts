@@ -39,7 +39,7 @@ function access(...starts: number[]): SegmentAudioAccess {
 
 const source = (segments: SegmentAudioAccess) => ({
   fetchAccess: vi.fn(() => Promise.resolve(segments)),
-  fetchBytes: vi.fn(() => Promise.resolve(new Uint8Array(fixture).buffer)),
+  fetchBytes: vi.fn((_url: string) => Promise.resolve(new Uint8Array(fixture).buffer)),
   decode: vi.fn(fakeDecode),
 });
 
@@ -75,6 +75,23 @@ describe('loadTrackAudio', () => {
     const src = source(access(BASE));
     src.fetchAccess.mockRejectedValueOnce(new Error('503'));
     await expect(loadTrackAudio(src, BASE)).rejects.toThrow('503');
+  });
+
+  it('조각 하나가 실패하면 남은 조각은 받지 않는다: 결과를 버리는데 끝까지 받으면 헛받기다(PR #341 claude)', async () => {
+    const src = source(access(...Array.from({ length: 10 }, (_, i) => BASE + i * 1000)));
+    // 다른 조각은 한 틱 늦게 온다(망): 실패가 먼저 알려진 뒤에 나머지가 도착한다
+    src.fetchBytes.mockImplementation((url: string) =>
+      url.endsWith('seg_2.m4s')
+        ? Promise.reject(new Error('segment 503'))
+        : new Promise<ArrayBuffer>((resolve) =>
+            setTimeout(() => resolve(new Uint8Array(fixture).buffer), 0),
+          ),
+    );
+    await expect(loadTrackAudio(src, BASE)).rejects.toThrow('segment 503');
+    // 거절은 바로 오지만 남은 작업자는 그 뒤에도 돈다: 받던 조각이 다 도착할 때까지 기다렸다 센다
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    // 동시에 받던 넷(1~4번)까지만: 실패 뒤에 새 조각을 집지 않는다
+    expect(src.fetchBytes).toHaveBeenCalledTimes(4);
   });
 
   it('소리 트랙을 못 꺼낸 조각만 있으면 빈 목록이다', async () => {

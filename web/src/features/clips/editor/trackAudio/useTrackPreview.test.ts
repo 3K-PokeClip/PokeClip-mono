@@ -317,6 +317,37 @@ describe('useTrackPreview', () => {
     expect(signals[0]!.aborted).toBe(true);
   });
 
+  it('조각 하나가 실패하면 받는 중인 다른 조각도 멈춘다(PR #341 claude)', async () => {
+    vi.mocked(requestSegmentAudioAccess).mockResolvedValue({
+      expiresAt: '2026-10-23T00:05:00Z',
+      segments: [1, 2, 3].map((seq) => ({
+        seq,
+        startAtMs: BASE + 9_000 + seq * 1000,
+        durationMs: 1000,
+        url: `https://s3/seg_${seq}.m4s`,
+      })),
+    });
+    const signals: AbortSignal[] = [];
+    vi.mocked(fetch).mockImplementation((url, init) => {
+      if (String(url).endsWith('seg_1.m4s'))
+        return Promise.resolve(new Response(null, { status: 503 }));
+      signals.push((init as RequestInit).signal!);
+      return new Promise<Response>(() => {});
+    });
+    const { result } = renderHook(() =>
+      useTrackPreview({
+        streamId: 's-1',
+        baseMs: BASE,
+        window: WINDOW,
+        video: video(),
+        createContext: () => fakeContext().ctx as never,
+      }),
+    );
+    await waitFor(() => expect(result.current.status).toBe('unavailable'));
+    expect(signals).toHaveLength(2);
+    for (const signal of signals) expect(signal.aborted).toBe(true);
+  });
+
   it('소리 문맥을 못 만들면(브라우저가 안 줌) 묻지도 않고 못 부름이다: 영상 소리가 그대로 난다', async () => {
     const node = video();
     const { result } = renderHook(() =>
