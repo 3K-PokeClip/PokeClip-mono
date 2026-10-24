@@ -136,7 +136,7 @@ class YoutubeResolvePoolExhaustionTest extends YoutubeLinkTestSupport {
         assertThat(elapsedMs).as("Hikari 30s 대기 타임아웃이 났다 = 풀 데드락").isLessThan(30_000);
         assertThat(cleanup.awaitIdle(Duration.ofSeconds(10))).isTrue();
         assertThat(secretCount()).as("고아 secret").isZero();
-        assertThat(YOUTUBE.revokeCalls()).as("해제는 구글에 아무것도 보내지 않는다").isZero();
+        assertThat(YOUTUBE.revokeCalls()).as("해제는 회원마다 구글에 revoke를 한 번 보낸다(POK-423)").isEqualTo(CALLERS);
         System.out.printf("youtube unlink 동시 %d · 풀 10 · 총 %dms%n", CALLERS, elapsedMs);
     }
 

@@ -111,6 +111,44 @@ public class YoutubeOAuthClient {
     }
 
     /**
+     * 이 영상들 중 유튜브에 아직 있는 것과 그 영상의 채널(POK-423, 30일 확인). {@code videos.list?part=snippet&id=…}: 1유닛 · 한 번에
+     * 50개까지(문서). 비공개 영상은 그 채널 토큰으로만 보이므로 영상 주인의 토큰으로 묻는다. 없는 번호는 오류가 아니라 목록에서 빠진다.
+     * 🔴 공개 영상은 다른 채널 토큰으로도 보인다: 그래서 「보였다」가 아니라 {@code snippet.channelId}로 주인을 가린다(PR #375 codex).
+     *
+     * @param videoIds 1~50개. 모양 검사는 부른 쪽이 한다
+     * @return 영상 번호 → 그 영상의 채널 번호
+     */
+    public Map<String, String> existingVideos(String accessToken, List<String> videoIds) {
+        String ids = String.join(",", videoIds);
+        Map<?, ?> body = call(() -> restClient.get()
+                .uri(properties.apiBaseUri() + "/youtube/v3/videos?part=snippet&fields=items(id,snippet/channelId)"
+                        + "&maxResults=50&id={ids}", ids)
+                .header("Authorization", "Bearer " + accessToken)
+                .retrieve().body(Map.class));
+        if (body == null) {
+            throw malformed("body", null);
+        }
+        Object items = body.get("items");
+        if (items == null) {
+            return Map.of();
+        }
+        if (!(items instanceof List<?> list)) {
+            throw malformed("items", items);
+        }
+        Map<String, String> found = new java.util.HashMap<>();
+        for (Object item : list) {
+            if (!(item instanceof Map<?, ?> map) || !(map.get("id") instanceof String id)) {
+                throw malformed("items[].id", item);
+            }
+            if (!(map.get("snippet") instanceof Map<?, ?> snippet) || !(snippet.get("channelId") instanceof String owner)) {
+                throw malformed("items[].snippet.channelId", map.get("snippet"));
+            }
+            found.put(id, owner);
+        }
+        return found;
+    }
+
+    /**
      * @param requireRefresh 교환이면 true — refresh_token이 없는 연동은 갱신할 수 없는 반쪽이라 실패로 다룬다.
      *                       갱신이면 false — 구글은 보통 refresh를 다시 주지 않고, 그것이 정상이다.
      */

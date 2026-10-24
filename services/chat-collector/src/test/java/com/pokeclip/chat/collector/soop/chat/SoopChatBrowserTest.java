@@ -426,6 +426,36 @@ class SoopChatBrowserTest {
         sessions = null;
     }
 
+    /**
+     * 시작이 던지면 그 JS 오류의 첫 줄을 남긴다(실방송에서 {@code causeType}만 남아 {@code s.init is not a function}을 못 봤다).
+     * 토큰 · 앱 값은 오류 글에 섞여 있어도 지운다
+     */
+    @Test
+    void 시작이_던지면_오류_첫_줄을_남기고_비밀값은_지운다() {
+        sdk.connectThrows(true);
+        try (LogCaptor captor = new LogCaptor()) {
+            start(10);
+            sessions.ensure("s-1", "bj-1", TOKEN);
+            await(() -> captor.messages().stream().anyMatch(m -> m.startsWith("soop.chat.page_failed")));
+            String line = captor.messages().stream().filter(m -> m.startsWith("soop.chat.page_failed")).findFirst().orElseThrow();
+            assertThat(line).contains("TypeError").contains("fake connect failed").doesNotContain(TOKEN)
+                    .doesNotContain("second line");
+        }
+    }
+
+    /** connect()가 비동기로 거절되면 SDK 오류 코드를 오류 코드에 붙여 남긴다(오류 글은 안 싣는다: 토큰이 섞일 수 있다) */
+    @Test
+    void 연결이_거절되면_SDK_오류_코드를_남긴다() {
+        sdk.connectRejectsWith("invalid-chat-info");
+        try (LogCaptor captor = new LogCaptor()) {
+            start(10);
+            sessions.ensure("s-1", "bj-1", TOKEN);
+            await(() -> captor.messages().stream().anyMatch(m -> m.startsWith("soop.chat.error")));
+            assertThat(captor.messages()).filteredOn(m -> m.startsWith("soop.chat.error")).first().asString()
+                    .isEqualTo("soop.chat.error stream=s-1 code=CONNECT_invalid-chat-info").doesNotContain(TOKEN);
+        }
+    }
+
     /** 토큰 · 앱 비밀값 · 본문 · 아이디 · 닉네임이 어느 로그 줄에도 없다(오류 · 다시 붙기 갈래까지 태운다) */
     @Test
     void 비밀값과_채팅이_로그에_안_남는다() {

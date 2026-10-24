@@ -1,8 +1,12 @@
 package com.pokeclip.chat.collector.soop.chat;
 
 /**
- * 탭에 띄우는 빈 페이지(POK-397 PR4). 공식 SDK 스크립트를 싣고, 시작 함수 하나({@code __pokeclipStart})를 둔다. 문서 예시 순서 그대로다:
- * {@code new SOOP.ChatSDK(앱 키, 비밀값)} → {@code init()} → {@code setAuth(토큰)} → {@code connect()}.
+ * 탭에 띄우는 빈 페이지(POK-397 PR4). 공식 SDK 스크립트를 싣고, 시작 함수 하나({@code __pokeclipStart})를 둔다:
+ * {@code new SOOP.ChatSDK(앱 키, 비밀값)} → {@code setAuth(토큰)} → {@code connect()}.
+ *
+ * <p>🔴 공식 문서 예시의 {@code init()}은 부르지 않는다. 배포된 SDK에 없어 {@code TypeError: s.init is not a function}으로 시작이
+ * 던지고, 탭마다 다시 붙기만 돌았다(실방송 2026-10-24). {@code connect()}는 채팅 정보 조회와 소켓 열기를 스스로 하고, 준비 신호
+ * ({@code handleReady})는 입장(JOIN)을 마친 뒤 오는 것이라 {@code connect()} 전에 기다릴 것이 없다(배포본 코드로 확인).
  *
  * <p>받은 것 중 채팅({@code MESSAGE} · {@code MANAGER_MESSAGE})과 후원 여섯({@link #DONATIONS}, POK-431)만 자바로 넘긴다. 입장 · 퇴장 ·
  * 공지 · 구독 · 미션 정산 · 퀵뷰 등은 버린다(사용자 결정 Q2 · POK-431 결정 1). 후원은 원본 파일에 안 넣으므로 원문(JSON)은 안 넘긴다.
@@ -31,7 +35,6 @@ final class SoopChatPage {
                     return;
                   }
                   var sdk = new window.SOOP.ChatSDK(cfg.clientId, cfg.clientSecret);
-                  sdk.init();
                   sdk.setAuth(cfg.token);
                   var donations = %s;
                   sdk.handleMessageReceived(function (action, message) {
@@ -52,8 +55,9 @@ final class SoopChatPage {
                   sdk.handleError(function (code) {
                     window.%s('error', String(code));
                   });
-                  Promise.resolve(sdk.connect()).catch(function () {
-                    window.%s('error', 'CONNECT');
+                  Promise.resolve(sdk.connect()).catch(function (e) {
+                    // SDK 오류 코드(예: invalid-chat-info)만 붙인다. 오류 글은 안 넘긴다(토큰이 섞일 수 있다)
+                    window.%s('error', 'CONNECT_' + String((e && (e.code || e.name)) || ''));
                   });
                 };
                 </script></body></html>

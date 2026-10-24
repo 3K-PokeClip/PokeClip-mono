@@ -140,7 +140,7 @@ class YoutubeLinkWriterConcurrencyTest extends YoutubeLinkTestSupport {
         hold.countDown();                                     // 이제 밀린 정리 잡이 발사된다
         awaitCleanup();
 
-        assertThat(YOUTUBE.revokeCalls()).as("해제 정리가 구글을 불렀다 — 되살아났다").isZero();
+        assertThat(YOUTUBE.revokeCalls()).as("해제 정리가 다시 연동한 것을 못 보고 revoke를 보냈다(POK-423의 건너뛰기)").isZero();
         String newRefresh = secretStore.get(fresh.getRefreshTokenRef()).orElseThrow();
         assertThat(oauthClient.refresh(newRefresh).accessToken())
                 .as("밀린 해제 정리의 revoke가 방금 만든 새 grant까지 죽였다").isNotNull();
