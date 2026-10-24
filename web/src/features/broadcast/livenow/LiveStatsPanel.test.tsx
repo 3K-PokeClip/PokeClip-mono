@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { axe } from 'jest-axe';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LiveStatsPanel, type TimelineCard } from './LiveStatsPanel';
 import styles from './LiveStatsPanel.module.css';
@@ -35,7 +36,8 @@ function stats(over: Partial<LiveStatsMockState> = {}): LiveStatsMockState {
     donation: { label: '후원', value: '6회', sub: '방송 전체 · 마지막 21:40' },
     lastViewers: 1290,
     noViewers: '수집 전',
-    noChart: '그래프를 불러오고 있어요',
+    chartLoading: c === null,
+    noChart: '볼 수 없는 방송이에요',
     ...over,
   };
 }
@@ -120,10 +122,18 @@ describe('LiveStatsPanel: 숫자 줄', () => {
     expect(screen.queryByText('지금')).toBeNull();
   });
 
-  it('차트를 받기 전에는 막대를 지어내지 않고 「그래프를 불러오고 있어요」다', () => {
-    panel({ stats: stats({ chart: null }) });
-    expect(screen.getByText('그래프를 불러오고 있어요')).toBeInTheDocument();
+  it('차트를 받기 전에는 막대를 지어내지 않고 그래프 자리에 그래프 모양 스켈레톤을 세운다(POK-445)', async () => {
+    const { container } = panel({ stats: stats({ chart: null }) });
+    // 「불러오고 있어요」 글자 한 줄이 아니라 스켈레톤이다. 낭독은 숨은 status 한 줄이다
+    expect(screen.getAllByRole('status')).toHaveLength(1);
+    expect(screen.getByRole('status')).toHaveTextContent('그래프를 불러오는 중');
+    expect(screen.queryByText('그래프를 불러오고 있어요')).toBeNull();
+    expect(screen.queryByText('볼 수 없는 방송이에요')).toBeNull();
     expect(screen.queryByRole('group')).toBeNull();
+    // 받은 그래프·빈 자리(.empty)와 같은 높이: 핀 줄 30 + 시청자 112 + 사이 14 + 채팅 78
+    const skeleton = container.querySelector<HTMLElement>(`.${styles.chartSkeleton}`);
+    expect(skeleton?.style.height).toBe('calc(234 * var(--pc-u))');
+    expect(await axe(container)).toHaveNoViolations();
   });
 });
 
@@ -347,13 +357,15 @@ describe('LiveStatsPanel: 그래프', () => {
 
   it('볼 수 없게 된 방송은 그래프를 불러온다고 하지 않는다', () => {
     panel({
-      stats: stats({ chart: null, noChart: '볼 수 없는 방송이에요' }),
+      stats: stats({ chart: null, chartLoading: false, noChart: '볼 수 없는 방송이에요' }),
       live: false,
       ended: true,
     });
     expect(screen.getByText('볼 수 없는 방송이에요')).toBeInTheDocument();
     expect(screen.queryByText('그래프를 불러오고 있어요')).toBeNull();
     expect(screen.queryByText('그래프 확인 중')).toBeNull();
+    // 다시 읽지 않을 그래프라 스켈레톤도 세우지 않는다(POK-445)
+    expect(screen.queryByText('그래프를 불러오는 중')).toBeNull();
   });
 
   it('시청자 관측이 하나뿐이면 「기록 없음」이 아니라 점 하나다', () => {

@@ -75,6 +75,31 @@ describe('VideoFilmstrip', () => {
     expect(container.querySelector('[data-kept]')).toHaveTextContent('data:frame-105500');
   });
 
+  it('뽑는 중인 칸만 스켈레톤이다: 받아 둔 영상 밖 칸 · 못 뽑은 칸은 빈 칸 그대로다(POK-444)', () => {
+    const { container } = render(
+      <VideoFilmstrip
+        times={[1_000, 2_000, 3_000, null]}
+        frames={{
+          frameOf: (ms) => (ms === 1_000 ? 'data:frame-1000' : null),
+          failed: (ms) => ms === 3_000,
+        }}
+      />,
+    );
+    const tiles = [...container.querySelectorAll('[data-filmstrip-tile]')];
+    expect(tiles.map((tile) => tile.querySelector('img') !== null)).toEqual([
+      true,
+      false,
+      false,
+      false,
+    ]);
+    expect(tiles.map((tile) => tile.querySelector('[data-frame-loading]') !== null)).toEqual([
+      false,
+      true,
+      false,
+      false,
+    ]);
+  });
+
   it('녹화를 아직 못 받았으면 칸이 없고 재료 없이 부른다', () => {
     const { container } = render(<Strip source={null} />);
     expect(container.querySelectorAll('[data-filmstrip-tile]')).toHaveLength(0);

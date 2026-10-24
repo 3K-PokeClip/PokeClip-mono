@@ -1,4 +1,4 @@
-import { fireEvent, screen } from '@testing-library/react';
+import { act, fireEvent, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PluginSettingsScreen } from '@/features/settings/plugin/PluginSettingsScreen';
 import { PLUGIN_DOWNLOADS } from '@/lib/pluginDownload';
@@ -178,6 +178,44 @@ describe('PluginSettingsScreen', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '다시 시도' }));
 
+    expect(await screen.findByText(/코드가 발급되어 있어요/)).toBeInTheDocument();
+  });
+
+  it('다시 시도는 응답까지 오류 카드를 둔 채 그 버튼만 돈다 — 스켈레톤으로 갈아끼우지 않는다 (POK-446)', async () => {
+    let statusCalls = 0;
+    let answer: (res: Response) => void = () => {};
+    stubFetch((url, init) => {
+      if (url === '/api/stream-keys' && (init?.method ?? 'GET') === 'GET') {
+        statusCalls += 1;
+        if (statusCalls === 3) return jsonResponse(200, { issued: true, createdAt: CREATED_AT });
+        // 첫 조회는 실패, 둘째(다시 시도)는 붙잡아 「다시 읽는 중」을 만든다
+        return statusCalls === 1
+          ? jsonResponse(500, { reason: '서버 오류' })
+          : new Promise<Response>((resolve) => (answer = resolve));
+      }
+      return jsonResponse(404);
+    });
+    renderWithProviders(<PluginSettingsScreen />);
+    const card = screen.getByRole('region', { name: '연동 코드' });
+
+    fireEvent.click(await screen.findByRole('button', { name: '다시 시도' }));
+
+    // 접근 이름은 aria-label이 대신한다(발급 버튼과 같은 .busyButton) — 응답까지 잠겨 두 번 보내지 않는다
+    const retrying = await screen.findByRole('button', { name: '다시 불러오는 중' });
+    expect(retrying).toHaveAttribute('aria-busy', 'true');
+    expect(retrying).toBeDisabled();
+    expect(card).toHaveTextContent('연동 코드 상태를 불러오지 못했어요');
+    // 다시 읽는 동안 쿼리는 pending으로 돌아가지만 코드 박스 스켈레톤(64u)으로 바뀌지 않는다
+    expect(card.querySelector('[style*="64 * var(--pc-u)"]')).toBeNull();
+    expect(statusCalls).toBe(2);
+
+    // 또 실패하면 다시 누를 수 있는 오류 카드로 돌아온다
+    await act(async () => answer(jsonResponse(500, { reason: '서버 오류' })));
+    const again = await screen.findByRole('button', { name: '다시 시도' });
+    expect(again).not.toHaveAttribute('aria-busy');
+    expect(again).toBeEnabled();
+
+    fireEvent.click(again);
     expect(await screen.findByText(/코드가 발급되어 있어요/)).toBeInTheDocument();
   });
 

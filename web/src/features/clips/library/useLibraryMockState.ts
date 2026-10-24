@@ -81,6 +81,11 @@ export interface LibraryClip {
   subtitleLabel: string;
   /** 서버 줄의 진행 한 줄(만드는 중 N% · 올리는 중 · 렌더 실패 사유). 패널이 배지 아래 안내 자리에 그린다. 목업 줄에는 없다 */
   progressLabel?: string | null;
+  /**
+   * 만드는 중인 영상의 진행률 0~100(POK-443). 일꾼이 퍼센트를 아직 안 보냈으면 null(모른다 — 0%가 아니다), 만드는 중이
+   * 아니면(주문만 된 것 포함) 없다. 패널이 진행 줄 아래 막대로 그린다. 목업 줄에는 없다
+   */
+  renderPercent?: number | null;
   /** ISO — 생성순 */
   createdAt: string;
   /** ISO — 최근 편집순 */
@@ -104,6 +109,16 @@ function sourceLabelOf(entry: LibraryEntry): string {
 }
 
 /**
+ * 만드는 중인 영상의 진행률(POK-443). 주문만 되고 차례를 기다리는 영상은 만드는 중이 아니라 undefined, 만드는 중인데 일꾼이
+ * 퍼센트를 아직 안 보냈으면 null이다 — 예전처럼 0%로 바꾸면 「멈춰 있다」는 거짓이 된다.
+ */
+function renderPercentOf(entry: LibraryEntry): number | null | undefined {
+  const clip = entry.latestClip;
+  if (entry.status !== 'rendering' || clip?.status !== 'rendering') return undefined;
+  return clip.progress?.percent ?? null;
+}
+
+/**
  * 진행 한 줄(POK-291). 예전에는 패널의 「자막」 칸에 들어갔는데 그 칸은 자막 정보 자리라 떼어 냈다. 배지가 이미 말하는
  * 상태(완성·확인 필요·업로드됨)는 되풀이하지 않는다: 확인 필요는 안내문이, 업로드 실패는 사유 문구가 말한다.
  */
@@ -115,10 +130,13 @@ function progressLabelOf(entry: LibraryEntry): string | null {
         ? null
         : `v${clip.recipeVersion} 영상 있음 · 지금은 v${entry.recipeVersion}`;
     case 'rendering': {
+      const percent = renderPercentOf(entry);
       const step =
-        clip?.status === 'rendering'
-          ? `영상 만드는 중 ${clip.progress?.percent ?? 0}%`
-          : '영상 주문됨 · 차례 기다리는 중';
+        percent === undefined
+          ? '영상 주문됨 · 차례 기다리는 중'
+          : percent === null
+            ? '영상 만드는 중'
+            : `영상 만드는 중 ${percent}%`;
       return entry.uploadRequest ? `${step} · 끝나면 유튜브에 올려요` : step;
     }
     case 'failed':
@@ -178,6 +196,7 @@ export function toLibraryClip(entry: LibraryEntry, meId: string | null): Library
     // 자막 정보는 목록에 없다: 지어내지 않는다
     subtitleLabel: '—',
     progressLabel: progressLabelOf(entry),
+    renderPercent: renderPercentOf(entry),
     createdAt: entry.createdAt,
     editedAt: entry.updatedAt,
     youtubeUrl: youtubeUrlOf(entry),
@@ -196,12 +215,20 @@ export interface LibraryOptions {
   now?: Date;
 }
 
+/** 답을 기다리는 동안 그 편집본의 단추를 잠그는 동작들 — 패널은 이 중 누른 단추만 돌린다(POK-443) */
+export type SendingAction = 'upload' | 'retryUpload' | 'resolve' | 'retryRender';
+
 export interface LibraryMockState {
   /** 모든 D-day·「어제」 계산의 기준 시각 */
   now: Date;
   /** 첫 응답 전 true — 빈 목록을 「없다」로 그리지 않기 위해 */
   loading: boolean;
-  /** 목록을 못 읽었을 때의 사유 */
+  /**
+   * 목록을 한 번이라도 받았다(주입 포함). 다시 읽기(폴링)가 실패해도 받아 둔 목록을 그대로 그리는 근거다 — 한 번도 못 받았을
+   * 때만 실패가 목록 자리를 차지한다(POK-443)
+   */
+  loaded: boolean;
+  /** 목록을 못 읽었을 때의 사유. 다음 읽기가 성공하면 지운다 */
   error: string | null;
   refresh: () => void;
   /** 검색 → 칩 → 정렬을 거친 목록 */
@@ -236,12 +263,23 @@ export interface LibraryMockState {
    * true, 거절이면 사유를 토스트로 알리고 false. 어느 쪽이든 목록을 다시 읽는다(다른 사람이 먼저 풀었을 수 있다)
    */
   resolveUpload: (id: string, uploadId: number, resolution: UploadResolution) => Promise<boolean>;
-  /** 업로드 주문·다시 시도를 보내고 답을 기다리는 편집본: 두 번 눌러 두 번 보내지 않게 패널이 단추를 잠근다 */
-  sendingIds: ReadonlySet<string>;
-  /** 렌더 실패 → 업로드 대기. 결과를 토스트로 흉내 내지 않는다 */
+  /**
+   * 업로드 주문·다시 시도·확인 필요 풀기·렌더 재시도를 보내고 답을 기다리는 편집본과 그 동작. 두 번 눌러 두 번 보내지 않게 패널이
+   * 그 편집본의 단추를 잠그고, 누른 단추만 돈다(POK-443). 답이 오거나 실패하면 빠진다
+   */
+  sendingIds: ReadonlyMap<string, SendingAction>;
+  /**
+   * 서버 줄: 같은 편집본을 다시 주문한다. 답을 기다리는 동안은 sendingIds에 들어 두 번 보내지 않는다(POK-443).
+   * 목업 줄: 렌더 실패 → 업로드 대기. 결과를 토스트로 흉내 내지 않는다
+   */
   retryRender: (id: string) => void;
   /** 서버 줄: 완성 영상 파일을 내려받는다(60분짜리 서명 주소). 목업 줄은 받을 파일이 없어 「준비 중」만 알린다 */
   download: (id: string) => void;
+  /**
+   * 내려받을 주소를 받는 중인 편집본(POK-443) — 다운로드 단추만 돌고 연타는 한 번만 보낸다. 주소를 받으면 빠진다(그 뒤 파일
+   * 받기는 브라우저 몫이다). 업로드 잠금(sendingIds)과 따로다: 주소를 받는 동안 올리기를 막을 까닭이 없다
+   */
+  downloadingIds: ReadonlySet<string>;
   /** 미리보기로 틀 완성 영상 주소. 영상이 없거나 못 받으면 null(사유는 토스트) */
   previewUrl: (id: string) => Promise<string | null>;
   /** 목록에서 뺀다. 선택 중이면 해제 — 확인은 화면(ConfirmDialog)이 먼저 받는다 */
@@ -254,6 +292,7 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
   const { toast } = useToast();
   const [clips, setClips] = useState<LibraryClip[]>(() => options.clips ?? []);
   const [loading, setLoading] = useState(options.clips === undefined);
+  const [loaded, setLoaded] = useState(options.clips !== undefined);
   const [error, setError] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
   const refresh = useCallback(() => setTick((t) => t + 1), []);
@@ -264,9 +303,11 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState<LibrarySort>('edited');
   const [selectedId, setSelectedId] = useState<string | null>(options.selectedId ?? null);
-  const [sendingIds, setSendingIds] = useState<ReadonlySet<string>>(() => new Set());
+  const [sendingIds, setSendingIds] = useState<ReadonlyMap<string, SendingAction>>(() => new Map());
   // 상태 갱신은 다음 렌더에야 보여서 같은 틱의 두 번째 클릭을 못 막는다 — 보내는 중 표시는 ref가 정본이다
-  const sending = useRef(new Set<string>());
+  const sending = useRef(new Map<string, SendingAction>());
+  const [downloadingIds, setDownloadingIds] = useState<ReadonlySet<string>>(() => new Set());
+  const downloading = useRef(new Set<string>());
   // 패널에서 고친 제목(업로드 제목의 초안). 다시 읽기(10초 폴링)가 서버 줄로 덮어도 남아야 한다
   const titleDrafts = useRef(new Map<string, string>());
   const meIdRef = useRef<string | null>(null);
@@ -287,6 +328,7 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
         setClips(
           entries.map((entry) => withDraft(toLibraryClip(entry, meId), titleDrafts.current)),
         );
+        setLoaded(true);
         setError(null);
       } catch (e) {
         if (!alive) return;
@@ -329,10 +371,17 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
     setClips((prev) => prev.map((clip) => (clip.id === id ? update(clip) : clip)));
   }, []);
 
-  const setSendingFlag = useCallback((id: string, on: boolean) => {
-    if (on) sending.current.add(id);
+  /** 보내는 동작을 적는다(null이면 지운다). 무엇을 보내는지까지 적어 패널이 누른 단추만 돌린다(POK-443) */
+  const setSendingFlag = useCallback((id: string, action: SendingAction | null) => {
+    if (action !== null) sending.current.set(id, action);
     else sending.current.delete(id);
-    setSendingIds(new Set(sending.current));
+    setSendingIds(new Map(sending.current));
+  }, []);
+
+  const setDownloadingFlag = useCallback((id: string, on: boolean) => {
+    if (on) downloading.current.add(id);
+    else downloading.current.delete(id);
+    setDownloadingIds(new Set(downloading.current));
   }, []);
 
   // 서버 줄은 가장 최근 영상을 올린다: 그 판의 업로드 정보가 있으면 그 정보로, 없으면 패널 제목으로(아래 fromIntent).
@@ -357,7 +406,7 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
           }
         }
         if (sending.current.has(id)) return;
-        setSendingFlag(id, true);
+        setSendingFlag(id, 'upload');
         const title = clip.title.trim();
         (fromIntent
           ? requestUploadRetry(entry.streamId, clipId)
@@ -398,7 +447,7 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
           .catch((e: unknown) => {
             toast({ tone: 'error', title: '업로드 주문 실패', description: uploadErrorMessage(e) });
           })
-          .finally(() => setSendingFlag(id, false));
+          .finally(() => setSendingFlag(id, null));
         return;
       }
       patch(id, (clip) => (clip.status === 'ready' ? { ...clip, status: 'published' } : clip));
@@ -421,7 +470,7 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
       )
         return;
       if (sending.current.has(id)) return;
-      setSendingFlag(id, true);
+      setSendingFlag(id, 'retryUpload');
       requestUploadRetry(entry.streamId, clipId)
         .then(({ created, upload: snap }) => {
           listGeneration.current += 1;
@@ -455,7 +504,7 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
         .catch((e: unknown) => {
           toast({ tone: 'error', title: '다시 시도 실패', description: uploadErrorMessage(e) });
         })
-        .finally(() => setSendingFlag(id, false));
+        .finally(() => setSendingFlag(id, null));
     },
     [clips, setSendingFlag, toast],
   );
@@ -468,7 +517,7 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
       const target =
         entry === undefined ? undefined : liveUploadsOf(entry).find((u) => u.id === uploadId);
       if (entry === undefined || target === undefined || sending.current.has(id)) return false;
-      setSendingFlag(id, true);
+      setSendingFlag(id, 'resolve');
       try {
         await requestUploadResolution(entry.streamId, target.clipId, uploadId, resolution);
         // 다시 시도 단추는 지금 영상(latestClip)에만 있다: 옛 판 업로드를 닫았으면 다시 올릴 길을 약속하지 않는다(PR #261 codex)
@@ -495,7 +544,7 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
       } finally {
         listGeneration.current += 1;
         refresh();
-        setSendingFlag(id, false);
+        setSendingFlag(id, null);
       }
     },
     [clips, refresh, setSendingFlag, toast],
@@ -503,6 +552,8 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
 
   // 렌더 재시도 = 같은 편집본을 다시 주문한다(POK-125: 끝난 영상은 자리를 비워 다시 주문할 수 있다).
   // 그 판의 업로드 정보가 서버에 남아 있으면 렌더가 끝나는 대로 clip이 이어서 올린다(POK-291).
+  // 서버가 진행 중인 같은 판을 돌려주므로(200) 겹쳐 눌러도 두 번 만들지 않지만, 업로드처럼 보내는 중에는 잠가 헛요청도 안
+  // 보내고 누른 단추만 돈다(POK-443).
   const retryRender = useCallback(
     (id: string) => {
       const entry = clips.find((c) => c.id === id)?.entry;
@@ -510,8 +561,27 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
         patch(id, (clip) => (clip.status === 'failed' ? { ...clip, status: 'ready' } : clip));
         return;
       }
+      if (sending.current.has(id)) return;
+      setSendingFlag(id, 'retryRender');
       requestRender(entry.streamId, entry.recipeId)
         .then(({ clip: snap }) => {
+          listGeneration.current += 1;
+          // 다음 읽기를 기다리지 않고 받은 영상으로 바로 옮긴다 — 잠금이 풀린 사이 단추가 다시 「렌더 재시도」로 돌아오지 않게
+          // (업로드 주문과 같다). 그사이 읽은 것이 더 새로우면(이미 실패가 아니면) 그대로 두고, 주문됨·만드는 중이 아닌 답은
+          // 보관함 상태를 웹이 정할 수 없어(업로드가 붙었을 수 있다) 다시 읽기에 맡긴다
+          setClips((prev) =>
+            prev.map((c) =>
+              c.id === id &&
+              c.entry !== undefined &&
+              c.entry.status === 'failed' &&
+              (snap.status === 'queued' || snap.status === 'rendering')
+                ? toLibraryClip(
+                    { ...c.entry, status: 'rendering', latestClip: snap },
+                    meIdRef.current,
+                  )
+                : c,
+            ),
+          );
           toast({ tone: 'success', title: `영상 #${snap.id} 다시 주문됨` });
           refresh();
         })
@@ -523,9 +593,10 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
                 ? e.message
                 : String(e);
           toast({ tone: 'error', title: '다시 주문 실패', description: message });
-        });
+        })
+        .finally(() => setSendingFlag(id, null));
     },
-    [clips, patch, refresh, toast],
+    [clips, patch, refresh, setSendingFlag, toast],
   );
 
   // 완성 영상의 서명 주소를 그때그때 받는다(60분이라 목록에 싣지 않는다). 영상이 없는 편집본은 받는 척하지 않는다.
@@ -567,6 +638,7 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
 
   // 목업 줄은 받을 파일이 없다 — 받는 척하고 멈춰 있느니 준비 중이라고 말한다(ADR-044의 「거짓말 금지」).
   // 서버 주소는 내려받기로 저장돼(Content-Disposition: attachment) 링크를 눌러 주기만 하면 된다.
+  // 주소를 받는 동안만 단추가 돈다(POK-443): 그 뒤 파일을 받는 진행은 브라우저의 내려받기 표시가 맡는다.
   const download = useCallback(
     (id: string) => {
       if (clips.find((c) => c.id === id)?.entry === undefined) {
@@ -577,17 +649,21 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
         });
         return;
       }
-      void videoUrlOf(id, '내려받기').then((url) => {
-        if (url === null) return;
-        const a = document.createElement('a');
-        a.href = url;
-        a.rel = 'noopener';
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-      });
+      if (downloading.current.has(id)) return;
+      setDownloadingFlag(id, true);
+      void videoUrlOf(id, '내려받기')
+        .then((url) => {
+          if (url === null) return;
+          const a = document.createElement('a');
+          a.href = url;
+          a.rel = 'noopener';
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+        })
+        .finally(() => setDownloadingFlag(id, false));
     },
-    [clips, toast, videoUrlOf],
+    [clips, setDownloadingFlag, toast, videoUrlOf],
   );
 
   const previewUrl = useCallback((id: string) => videoUrlOf(id, '미리보기'), [videoUrlOf]);
@@ -616,6 +692,7 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
   return {
     now,
     loading,
+    loaded,
     error,
     refresh,
     clips: visible,
@@ -638,6 +715,7 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
     sendingIds,
     retryRender,
     download,
+    downloadingIds,
     previewUrl,
     remove,
   };

@@ -8,6 +8,7 @@ import {
   consumeReturnPath,
   restoreReturnPath,
 } from '@/components/app-shell/AuthGuard';
+import { BrandSymbol } from '@/components/app-shell/BrandSymbol';
 import { LEGAL_URLS } from '@/features/legal/legalInfo';
 import { useAuthHydration, useAuthStore } from '@/stores/auth';
 import { GoogleGIcon } from './GoogleGIcon';
@@ -53,7 +54,7 @@ export function LoginScreen() {
       <section className={styles.left}>
         <div className={styles.column}>
           <div className={styles.brand}>
-            <Image src="/brand/pokeclip-symbol.svg" alt="" width={36} height={36} priority />
+            <BrandSymbol size={36} className={styles.brandSymbol} />
             <span className={styles.wordmark}>PokeClip</span>
             <span className={styles.beta}>BETA</span>
           </div>

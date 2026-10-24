@@ -80,14 +80,19 @@
   height: calc(52 * var(--pc-u));
   border: none;
   border-radius: calc(10 * var(--pc-u));
-  background: #fff;
-  color: #1f1f1f;
+  background: #fff; /* 테마 고정 */
+  color: #1f1f1f; /* 테마 고정 */
   font-family: var(--pc-font-sans);
   font-size: calc(15 * var(--pc-u));
   font-weight: 700;
   text-decoration: none;
   cursor: pointer;
   transition: filter var(--pc-duration-fast) var(--pc-ease-standard);
+}
+
+/* 구글 라이트 버튼 규격 — 흰 바탕에선 회색 테두리를 두른다 */
+:global([data-theme='light']) .googleButton {
+  box-shadow: inset 0 0 0 1px #747775; /* 라이트 값 */
 }
 
 .googleButton:hover {
@@ -104,7 +109,7 @@
   margin-top: calc(12 * var(--pc-u));
   font-size: calc(12.5 * var(--pc-u));
   text-align: center;
-  color: var(--pc-color-danger);
+  color: var(--pc-color-danger-text);
 }
 
 .terms {
@@ -145,7 +150,7 @@
   position: relative;
   flex: none;
   width: 40vw;
-  background: linear-gradient(160deg, #1a1040 0%, #2a1660 55%, #12093a 100%);
+  background: linear-gradient(160deg, #1a1040 0%, #2a1660 55%, #12093a 100%); /* 테마 고정 */
   overflow: hidden;
   transition:
     width var(--pc-duration-slow) var(--pc-ease-decelerate),
@@ -160,7 +165,7 @@
 /* ---------- 아이콘·로고 스케일 ----------
    next/image·svg의 width 속성은 px 고정이라 CSS로 유닛에 태운다 */
 
-.brand img {
+.brandSymbol {
   width: calc(36 * var(--pc-u));
   height: calc(36 * var(--pc-u));
 }

@@ -3,12 +3,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useQueryClient } from '@tanstack/react-query';
-import { LinkButton, Spinner } from '@/ui';
+import { LinkButton } from '@/ui';
 import { ReplaceLink } from '@/components/ReplaceLink';
 import { loginWithGoogle } from '@/api/auth';
 import { ApiError } from '@/api/client';
 import { track } from '@/lib/analytics';
 import { useAuthStore } from '@/stores/auth';
+import { CALLBACK_PENDING_LABEL, CallbackPending } from './CallbackPending';
 import { consumeOAuthState } from './googleOAuth';
 import styles from './OAuthCallbackScreen.module.css';
 
@@ -107,14 +108,7 @@ export function OAuthCallbackScreen() {
       });
   }, [params, queryClient, router]);
 
-  if (phase.kind === 'working') {
-    return (
-      <main className={styles.screen}>
-        <Spinner size="lg" />
-        <p className={styles.working}>로그인하는 중…</p>
-      </main>
-    );
-  }
+  if (phase.kind === 'working') return <CallbackPending label={CALLBACK_PENDING_LABEL.login} />;
 
   return (
     <main className={styles.screen}>

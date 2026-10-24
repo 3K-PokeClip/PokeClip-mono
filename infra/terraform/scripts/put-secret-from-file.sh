@@ -1,19 +1,34 @@
 #!/usr/bin/env bash
 #
-# 파일 하나의 내용을 prod 엣지 비밀(Secrets Manager)의 새 버전으로 넣는다
-# (runbooks/edge-secrets.md). 값은 파일 → 셸 변수 → 표준 입력(--secret-string
-# file:///dev/stdin)으로만 지나간다 — 명령 인자 · 환경 변수 · 임시 파일 · 출력에
-# 두지 않는다. 그래서 here-doc · here-string(bash 3.2 는 본문을 임시 파일에
-# 씀)과 jq 를 쓰지 않고, 값은 셸 내장 printf 의 파이프로만 넘긴다.
+# 파일 하나의 내용을 prod 비밀(Secrets Manager — 엣지 · 앱 그릇)의 새 버전으로
+# 넣는다(runbooks/edge-secrets.md · runbooks/runtime-1a.md). 값은 파일 → 셸
+# 변수 → 표준 입력(--secret-string file:///dev/stdin)으로만 지나간다 — 명령
+# 인자 · 환경 변수 · 임시 파일 · 출력에 두지 않는다. 그래서 here-doc ·
+# here-string(bash 3.2 는 본문을 임시 파일에 씀)과 jq 를 쓰지 않고, 값은 셸
+# 내장 printf 의 파이프로만 넘긴다.
 # --cli-input-json file:///dev/stdin 은 쓰지 않는다 — aws-cli 가 file:// 값을 두
 # 번 읽어 파이프의 둘째 읽기가 비고 ParamValidation 으로 실패한다(2026-10-17
 # aws-cli 2.36.7 실측).
 #
 # 사용: put-secret-from-file.sh <종류> <파일>
-#   종류            비밀 이름(SecretId)             파일 내용
-#   signing-key     pokeclip/prod/signing-key       PKCS#8 PEM — 그대로 넣음
-#   cdn-secret      pokeclip/prod/cdn-secret        한 줄 — 끝 줄바꿈 하나를 뗌
-#   test-stream-key pokeclip/prod/test-stream-key   한 줄 — 끝 줄바꿈 하나를 뗌
+#   종류는 비밀 이름(SecretId) pokeclip/prod/<종류> 의 용도 토막이고, 아래
+#   허용 목록(KINDS)뿐이다 — 엣지 그릇(prod/secrets/main.tf)과 앱 그릇
+#   (prod/runtime/app_secrets.tf). 그릇을 더하는 PR 이 KINDS · 이 표 · 시험
+#   (put_secret_test.sh 의 kinds-match-shells · 정상 사례)을 함께 고친다.
+#   문서는 종류를 나열하는 자리가 남아 있을 때만 한 줄 더하고, 아니면 건드리지
+#   않는다.
+#   종류                         파일 내용
+#   signing-key                  PKCS#8 PEM — 그대로 넣음
+#   cdn-secret                   한 줄 — 끝 줄바꿈 하나를 뗌
+#   test-stream-key              한 줄 — 끝 줄바꿈 하나를 뗌
+#   jwt-secret                   한 줄 — 끝 줄바꿈 하나를 뗌
+#   secret-store-key             한 줄 — 끝 줄바꿈 하나를 뗌
+#   internal-api-token           한 줄 — 끝 줄바꿈 하나를 뗌
+#   google-client-secret         한 줄 — 끝 줄바꿈 하나를 뗌
+#   youtube-client-secret        한 줄 — 끝 줄바꿈 하나를 뗌
+#   chzzk-client-secret          한 줄 — 끝 줄바꿈 하나를 뗌
+#   profile-photo-token-secret   한 줄 — 끝 줄바꿈 하나를 뗌
+#   soop-client-secret           한 줄 — 끝 줄바꿈 하나를 뗌
 #   비밀 이름으로 지정한다(ARN 은 계정 ID 를 품으므로 쓰지 않음). 리전은
 #   ap-northeast-2 고정이다. 이미 값이 있으면 새 버전이 되고 옛 값은
 #   AWSPREVIOUS 로 남는다.
@@ -63,6 +78,21 @@ readonly ERROR_CODE_PATTERN='An error occurred \(([A-Za-z0-9]+)\)'
 # 코드 없는 네트워크 단계 실패(Could not connect to · Read timeout on 등)의 원문.
 readonly ENDPOINT_PATTERN='endpoint URL'
 readonly VERSION_ID_PATTERN='"VersionId": *"([A-Za-z0-9-]+)"'
+# 받는 종류(머리 주석 표와 같은 집합 — 시험 kinds-match-shells 가 tf 그릇과
+# 대조한다). signing-key 만 PEM 이고 나머지는 한 줄 비밀이다.
+readonly -a KINDS=(
+  signing-key
+  cdn-secret
+  test-stream-key
+  jwt-secret
+  secret-store-key
+  internal-api-token
+  google-client-secret
+  youtube-client-secret
+  chzzk-client-secret
+  profile-photo-token-secret
+  soop-client-secret
+)
 
 # 비밀 값. 함수 인자로 넘기지 않고 전역으로만 다룬다. 호출자가 같은 이름을
 # export 해 두었으면 대입만으로는 export 속성이 남아 값이 aws 의 환경으로 가므로,
@@ -74,9 +104,25 @@ secret_value=""
 # 사용법을 알리고 끝낸다.
 #######################################
 usage() {
-  printf '%s\n' "사용: put-secret-from-file.sh" \
-    "  <signing-key|cdn-secret|test-stream-key> <파일>" >&2
+  local IFS='|'
+  printf '%s\n' "사용: put-secret-from-file.sh <종류> <파일>" \
+    "  종류: ${KINDS[*]}" >&2
   exit "${EXIT_USAGE}"
+}
+
+#######################################
+# 종류가 허용 목록에 있는지 본다.
+# Arguments:
+#   종류.
+# Returns:
+#   있으면 0.
+#######################################
+is_known_kind() {
+  local known
+  for known in "${KINDS[@]}"; do
+    [[ "$1" == "${known}" ]] && return 0
+  done
+  return 1
 }
 
 #######################################
@@ -205,10 +251,7 @@ main() {
   local kind name
   [[ "$#" -eq 2 ]] || usage
   kind="$1"
-  case "${kind}" in
-    signing-key | cdn-secret | test-stream-key) ;;
-    *) usage ;;
-  esac
+  is_known_kind "${kind}" || usage
   name="${SECRET_PREFIX}${kind}"
   read_secret_file "$2"
   if [[ "${kind}" == signing-key ]]; then

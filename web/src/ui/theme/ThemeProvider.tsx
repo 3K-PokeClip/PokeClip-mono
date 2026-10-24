@@ -1,7 +1,13 @@
 import { createContext, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import {
+  DEFAULT_THEME,
+  THEME_STORAGE_KEY,
+  isTheme,
+  type ResolvedTheme,
+  type Theme,
+} from './themeConfig';
 
-export type Theme = 'light' | 'dark' | 'system';
-export type ResolvedTheme = 'light' | 'dark';
+export type { ResolvedTheme, Theme } from './themeConfig';
 
 export interface ThemeContextValue {
   /** The user's selected preference ('system' follows the OS). */
@@ -13,8 +19,6 @@ export interface ThemeContextValue {
 
 export const ThemeContext = createContext<ThemeContextValue | null>(null);
 
-const STORAGE_KEY = 'pc-theme';
-
 function getSystemTheme(): ResolvedTheme {
   if (typeof window === 'undefined' || !window.matchMedia) return 'dark';
   return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
@@ -23,8 +27,8 @@ function getSystemTheme(): ResolvedTheme {
 function readStoredTheme(): Theme | null {
   if (typeof window === 'undefined') return null;
   try {
-    const v = window.localStorage.getItem(STORAGE_KEY);
-    if (v === 'light' || v === 'dark' || v === 'system') return v;
+    const v = window.localStorage.getItem(THEME_STORAGE_KEY);
+    if (isTheme(v)) return v;
   } catch {
     /* localStorage may be unavailable (private mode, SSR) */
   }
@@ -35,7 +39,7 @@ export interface ThemeProviderProps {
   children: ReactNode;
   /** Theme used when nothing is stored. Default `'dark'` (dark-first). */
   defaultTheme?: Theme;
-  /** Persist the user's choice to localStorage. Default `true`. */
+  /** Read, persist and cross-tab sync the choice via localStorage. Default `true`. */
   enablePersistence?: boolean;
   /** Element that receives the `data-theme` attribute. Default `document.documentElement`. */
   attributeTarget?: HTMLElement;
@@ -43,11 +47,13 @@ export interface ThemeProviderProps {
 
 export function ThemeProvider({
   children,
-  defaultTheme = 'dark',
+  defaultTheme = DEFAULT_THEME,
   enablePersistence = true,
   attributeTarget,
 }: ThemeProviderProps) {
-  const [theme, setThemeState] = useState<Theme>(() => readStoredTheme() ?? defaultTheme);
+  const [theme, setThemeState] = useState<Theme>(
+    () => (enablePersistence ? readStoredTheme() : null) ?? defaultTheme,
+  );
   const [systemTheme, setSystemTheme] = useState<ResolvedTheme>(getSystemTheme);
 
   const resolvedTheme: ResolvedTheme = theme === 'system' ? systemTheme : theme;
@@ -57,9 +63,28 @@ export function ThemeProvider({
     if (typeof window === 'undefined' || !window.matchMedia) return;
     const mql = window.matchMedia('(prefers-color-scheme: light)');
     const onChange = () => setSystemTheme(mql.matches ? 'light' : 'dark');
-    mql.addEventListener('change', onChange);
-    return () => mql.removeEventListener('change', onChange);
+    // Safari < 14 only has the deprecated addListener; partial mocks may have neither.
+    if (typeof mql.addEventListener === 'function') {
+      mql.addEventListener('change', onChange);
+      return () => mql.removeEventListener('change', onChange);
+    }
+    if (typeof mql.addListener === 'function') {
+      mql.addListener(onChange);
+      return () => mql.removeListener(onChange);
+    }
   }, []);
+
+  // Follow changes made in other tabs (the `storage` event never fires in the tab that wrote).
+  useEffect(() => {
+    if (!enablePersistence) return;
+    const onStorage = (e: StorageEvent) => {
+      // key === null: the whole storage was cleared.
+      if (e.key !== null && e.key !== THEME_STORAGE_KEY) return;
+      setThemeState(isTheme(e.newValue) ? e.newValue : defaultTheme);
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, [enablePersistence, defaultTheme]);
 
   // Reflect the resolved theme onto the DOM attribute.
   useEffect(() => {
@@ -72,9 +97,9 @@ export function ThemeProvider({
       setThemeState(next);
       if (enablePersistence) {
         try {
-          window.localStorage.setItem(STORAGE_KEY, next);
+          window.localStorage.setItem(THEME_STORAGE_KEY, next);
         } catch {
-          /* ignore persistence failures */
+          /* ignore persistence failures — the current tab still switches */
         }
       }
     },

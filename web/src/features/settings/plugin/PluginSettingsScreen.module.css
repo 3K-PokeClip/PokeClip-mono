@@ -42,10 +42,14 @@
 
 .codeCheck {
   flex: none;
-  color: #3dbf7f;
+  color: #3dbf7f; /* 라이트 덮음 */
   /* lucide size prop은 px 고정 — 유닛에 태운다 */
   width: calc(16 * var(--pc-u));
   height: calc(16 * var(--pc-u));
+}
+
+:global([data-theme='light']) .codeCheck {
+  color: var(--pc-color-success-text);
 }
 
 .codeBody {
@@ -163,7 +167,7 @@
 .downloadTab.downloadTab[data-selected] {
   background: var(--pc-color-bg-surface-raised);
   color: var(--pc-color-text-primary);
-  box-shadow: 0 1px 3px rgb(0 0 0 / 0.18);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.18); /* 테마 고정 */
 }
 
 .downloadTabPanel.downloadTabPanel {
@@ -335,7 +339,11 @@
 
 /* 복사 성공 체크 — 연결됨과 같은 상태색 (디자인 값) */
 .issueCopyWrap[data-copied] svg {
-  color: #3dbf7f;
+  color: #3dbf7f; /* 라이트 덮음 */
+}
+
+:global([data-theme='light']) .issueCopyWrap[data-copied] svg {
+  color: var(--pc-color-success-text);
 }
 
 /* 복사 성공 툴팁 — DS Tooltip은 hover 전용(제어 불가)이라 성공 피드백 말풍선을 직접 그린다 */
@@ -367,8 +375,8 @@
   margin-top: calc(14 * var(--pc-u));
   padding: calc(11 * var(--pc-u)) calc(13 * var(--pc-u));
   border-radius: calc(10 * var(--pc-u));
-  background: rgb(240 173 78 / 0.1);
-  border: 1px solid rgb(240 173 78 / 0.3);
+  background: rgb(240 173 78 / 0.1); /* 테마 고정 */
+  border: 1px solid rgb(240 173 78 / 0.3); /* 테마 고정 */
   font-size: calc(11.5 * var(--pc-u));
   line-height: 1.55;
   color: var(--pc-color-text-secondary);
@@ -380,7 +388,12 @@
   width: calc(15 * var(--pc-u));
   height: calc(15 * var(--pc-u));
   margin-top: calc(1 * var(--pc-u));
-  color: #f0ad4e;
+  color: #f0ad4e; /* 라이트 덮음 */
+}
+
+/* 앰버 #f0ad4e는 흰 바탕에서 1.9:1 — 라이트는 경고 글자색 */
+:global([data-theme='light']) .issueWarningIcon {
+  color: var(--pc-color-warning-text);
 }
 
 .issueWarning b {

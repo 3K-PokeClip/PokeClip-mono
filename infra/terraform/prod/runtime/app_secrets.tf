@@ -1,4 +1,5 @@
-# prod 앱 비밀 그릇 일곱(값 없음)과 서비스별 ARN 지도(POK-305).
+# prod 앱 비밀 그릇 여덟(값 없음)과 서비스별 ARN 지도(POK-305 · POK-427 ·
+# POK-408).
 # 비밀 값은 운영 단계에서 Terraform 밖으로 넣는다 — 상태에 남기지 않는다(R1).
 # 읽기 정책은 두지 않는다 — platform(실행 역할) · media(인스턴스 역할)가 자기
 # 정책으로 붙인다(R6 · CONTRACT-runtime.md 「출력과 소유 경계」).
@@ -19,9 +20,12 @@ locals {
     YOUTUBE_CLIENT_SECRET      = "pokeclip/prod/youtube-client-secret"
     CHZZK_CLIENT_SECRET        = "pokeclip/prod/chzzk-client-secret"
     PROFILE_PHOTO_TOKEN_SECRET = "pokeclip/prod/profile-photo-token-secret"
+    SOOP_CLIENT_SECRET         = "pokeclip/prod/soop-client-secret"
   }
 
-  # 서비스 → 그 서비스가 읽는 env 이름(application.yml 실물).
+  # 서비스 → 그 서비스가 읽는 env 이름(application.yml 실물). 일꾼 render ·
+  # upload 는 서버 넷과 같은 INTERNAL_API_TOKEN 하나다(비면 부팅 거부 — 일꾼
+  # README). platform 은 auth · clip 만 읽고, 일꾼 키는 배치 루트가 읽는다(K1).
   app_secret_env_names = {
     auth = [
       "JWT_SECRET",
@@ -31,10 +35,13 @@ locals {
       "YOUTUBE_CLIENT_SECRET",
       "CHZZK_CLIENT_SECRET",
       "PROFILE_PHOTO_TOKEN_SECRET",
+      "SOOP_CLIENT_SECRET",
     ]
     clip             = ["JWT_SECRET", "INTERNAL_API_TOKEN"]
     "chat-collector" = ["INTERNAL_API_TOKEN", "CHZZK_CLIENT_SECRET"]
     "chat-detector"  = ["INTERNAL_API_TOKEN"]
+    render           = ["INTERNAL_API_TOKEN"]
+    upload           = ["INTERNAL_API_TOKEN"]
   }
 
   # 서비스 → env 이름 → 그릇 이름.

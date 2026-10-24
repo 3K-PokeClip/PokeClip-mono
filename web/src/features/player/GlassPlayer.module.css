@@ -5,13 +5,13 @@
   position: relative;
   width: 100%;
   aspect-ratio: 16 / 9;
-  background: linear-gradient(160deg, #0b1626, #0d1a2e 55%, #0e2233);
+  background: linear-gradient(160deg, #0b1626, #0d1a2e 55%, #0e2233); /* 테마 고정 */
   border-radius: calc(14 * var(--pc-u));
   overflow: hidden;
-  border: 1px solid rgb(255 255 255 / 0.1);
+  border: 1px solid rgb(255 255 255 / 0.1); /* 테마 고정 */
   box-shadow:
-    0 24px 60px rgb(3 10 24 / 0.55),
-    inset 0 1px 0 rgb(255 255 255 / 0.08);
+    0 24px 60px rgb(3 10 24 / 0.55) /* 테마 고정 */,
+    inset 0 1px 0 rgb(255 255 255 / 0.08); /* 테마 고정 */
 }
 
 /* 전역 시킹 단축키를 받으려고 tabIndex=-1을 준다 — 클릭으로 포커스가 들어오지만
@@ -37,7 +37,7 @@
 
 .videoLabel {
   font-size: calc(12 * var(--pc-u));
-  color: rgb(224 242 254 / 0.45);
+  color: rgb(224 242 254 / 0.45); /* 테마 고정 */
 }
 
 /* 실재생 <video> — videoSlot을 꽉 채우고, 비율이 다르면 검은 여백으로 감싼다 */
@@ -47,7 +47,7 @@
   width: 100%;
   height: 100%;
   object-fit: contain;
-  background: #000;
+  background: #000; /* 테마 고정 */
 }
 
 /* ---------- 오버레이 표시/숨김 ---------- */
@@ -87,7 +87,7 @@
   align-items: flex-start;
   justify-content: space-between;
   gap: calc(16 * var(--pc-u));
-  background: linear-gradient(180deg, rgb(6 12 24 / 0.55), rgb(6 12 24 / 0));
+  background: linear-gradient(180deg, rgb(6 12 24 / 0.55), rgb(6 12 24 / 0)); /* 테마 고정 */
 }
 
 .channelPill {
@@ -96,10 +96,10 @@
   gap: calc(12 * var(--pc-u));
   padding: calc(7 * var(--pc-u)) calc(16 * var(--pc-u)) calc(7 * var(--pc-u)) calc(8 * var(--pc-u));
   border-radius: calc(999 * var(--pc-u));
-  border: 1px solid rgb(255 255 255 / 0.16);
-  background: linear-gradient(150deg, rgb(20 34 56 / 0.55), rgb(14 24 42 / 0.35));
+  border: 1px solid rgb(255 255 255 / 0.16); /* 테마 고정 */
+  background: linear-gradient(150deg, rgb(20 34 56 / 0.55), rgb(14 24 42 / 0.35)); /* 테마 고정 */
   backdrop-filter: blur(16px);
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.14);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.14); /* 테마 고정 */
   min-width: 0;
 }
 
@@ -114,7 +114,7 @@
 }
 
 .channelName {
-  color: #f2f9ff;
+  color: #f2f9ff; /* 테마 고정 */
   font-size: calc(14 * var(--pc-u));
   font-weight: 700;
   white-space: nowrap;
@@ -126,9 +126,13 @@
   display: inline-flex;
   align-items: center;
   gap: calc(5 * var(--pc-u));
-  border: 1px solid rgb(255 255 255 / 0.2);
-  background: linear-gradient(150deg, rgb(248 113 113 / 0.35), rgb(248 113 113 / 0.12));
-  color: #ffe4e6;
+  border: 1px solid rgb(255 255 255 / 0.2); /* 테마 고정 */
+  background: linear-gradient(
+    150deg,
+    rgb(248 113 113 / 0.35) /* 테마 고정 */,
+    rgb(248 113 113 / 0.12) /* 테마 고정 */
+  ); /* 테마 고정 */
+  color: #ffe4e6; /* 테마 고정 */
   font-size: calc(10 * var(--pc-u));
   font-weight: 800;
   letter-spacing: 0.06em;
@@ -141,20 +145,20 @@
   width: calc(6 * var(--pc-u));
   height: calc(6 * var(--pc-u));
   border-radius: 50%;
-  background: #f87171;
+  background: #f87171; /* 테마 고정 */
   animation: pc-player-pulse 2s ease infinite;
 }
 
 /* 방송 중이 아닐 때의 배지 — 붉은 맥동 대신 회색으로 멎는다 */
 .liveBadge[data-status='ended'],
 .liveBadge[data-status='unknown'] {
-  background: rgb(148 163 184 / 0.22);
-  color: rgb(226 232 240 / 0.85);
+  background: rgb(148 163 184 / 0.22); /* 테마 고정 */
+  color: rgb(226 232 240 / 0.85); /* 테마 고정 */
 }
 
 .liveBadge[data-status='ended'] .liveBadgeDot,
 .liveBadge[data-status='unknown'] .liveBadgeDot {
-  background: #94a3b8;
+  background: #94a3b8; /* 테마 고정 */
   animation: none;
 }
 
@@ -167,8 +171,8 @@
   max-width: calc(100% - 32 * var(--pc-u));
   padding: calc(8 * var(--pc-u)) calc(14 * var(--pc-u));
   border-radius: calc(10 * var(--pc-u));
-  background: rgb(3 10 24 / 0.72);
-  color: rgb(224 242 254 / 0.9);
+  background: rgb(3 10 24 / 0.72); /* 테마 고정 */
+  color: rgb(224 242 254 / 0.9); /* 테마 고정 */
   font-size: calc(13 * var(--pc-u));
   text-align: center;
   pointer-events: none;
@@ -186,16 +190,16 @@
 .noSignalTitle {
   font-size: calc(14 * var(--pc-u));
   font-weight: 700;
-  color: rgb(224 242 254 / 0.7);
+  color: rgb(224 242 254 / 0.7); /* 테마 고정 */
 }
 
 .noSignalSub {
   font-size: calc(12 * var(--pc-u));
-  color: rgb(224 242 254 / 0.45);
+  color: rgb(224 242 254 / 0.45); /* 테마 고정 */
 }
 
 .channelSub {
-  color: rgb(224 242 254 / 0.75);
+  color: rgb(224 242 254 / 0.75); /* 테마 고정 */
   font-size: calc(12 * var(--pc-u));
   margin-top: calc(2 * var(--pc-u));
   white-space: nowrap;
@@ -211,24 +215,32 @@
   justify-content: center;
   width: calc(40 * var(--pc-u));
   height: calc(40 * var(--pc-u));
-  border: 1px solid rgb(255 255 255 / 0.22);
-  background: linear-gradient(150deg, rgb(255 255 255 / 0.18), rgb(255 255 255 / 0.04));
+  border: 1px solid rgb(255 255 255 / 0.22); /* 테마 고정 */
+  background: linear-gradient(
+    150deg,
+    rgb(255 255 255 / 0.18) /* 테마 고정 */,
+    rgb(255 255 255 / 0.04) /* 테마 고정 */
+  ); /* 테마 고정 */
   backdrop-filter: blur(14px);
   border-radius: 50%;
   padding: 0;
   flex-shrink: 0;
-  color: #eaf6ff;
+  color: #eaf6ff; /* 테마 고정 */
   cursor: pointer;
   box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.3),
-    0 6px 18px rgb(4 12 28 / 0.28);
+    inset 0 1px 0 rgb(255 255 255 / 0.3) /* 테마 고정 */,
+    0 6px 18px rgb(4 12 28 / 0.28); /* 테마 고정 */
   transition:
     transform 0.15s ease,
     background 0.15s ease;
 }
 
 .chatOpenBtn:hover {
-  background: linear-gradient(150deg, rgb(255 255 255 / 0.28), rgb(255 255 255 / 0.1));
+  background: linear-gradient(
+    150deg,
+    rgb(255 255 255 / 0.28) /* 테마 고정 */,
+    rgb(255 255 255 / 0.1) /* 테마 고정 */
+  ); /* 테마 고정 */
   transform: translateY(calc(-1 * var(--pc-u)));
 }
 
@@ -259,8 +271,8 @@
 
 .chatBubble {
   max-width: 100%;
-  border: 1px solid rgb(255 255 255 / 0.1);
-  background: linear-gradient(150deg, rgb(16 28 48 / 0.55), rgb(12 22 40 / 0.38));
+  border: 1px solid rgb(255 255 255 / 0.1); /* 테마 고정 */
+  background: linear-gradient(150deg, rgb(16 28 48 / 0.55), rgb(12 22 40 / 0.38)); /* 테마 고정 */
   backdrop-filter: blur(10px);
   border-radius: calc(12 * var(--pc-u));
   padding: calc(6 * var(--pc-u)) calc(11 * var(--pc-u));
@@ -268,7 +280,7 @@
   line-height: 1.45;
   animation: pc-player-chat-in 0.25s ease;
   text-align: right;
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.08);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.08); /* 테마 고정 */
 }
 
 .chatName {
@@ -277,20 +289,20 @@
 }
 
 .chatColor0 {
-  color: #a5b4fc;
+  color: #a5b4fc; /* 테마 고정 */
 }
 .chatColor1 {
-  color: #c7d2fe;
+  color: #c7d2fe; /* 테마 고정 */
 }
 .chatColor2 {
-  color: #f0abcf;
+  color: #f0abcf; /* 테마 고정 */
 }
 .chatColor3 {
-  color: #818cf8;
+  color: #818cf8; /* 테마 고정 */
 }
 
 .chatText {
-  color: rgb(236 248 255 / 0.92);
+  color: rgb(236 248 255 / 0.92); /* 테마 고정 */
 }
 
 /* ---------- 하단 컨트롤 ---------- */
@@ -301,7 +313,7 @@
   right: 0;
   bottom: 0;
   padding: calc(36 * var(--pc-u)) calc(16 * var(--pc-u)) calc(12 * var(--pc-u));
-  background: linear-gradient(0deg, rgb(6 12 24 / 0.75), rgb(6 12 24 / 0));
+  background: linear-gradient(0deg, rgb(6 12 24 / 0.75), rgb(6 12 24 / 0)); /* 테마 고정 */
 }
 
 /* 시크바 — 계약3 4절 커스텀 시크바 */
@@ -329,15 +341,15 @@
   width: 100%;
   height: calc(5 * var(--pc-u));
   border-radius: calc(3 * var(--pc-u));
-  background: rgb(255 255 255 / 0.14);
-  box-shadow: inset 0 1px 2px rgb(3 10 24 / 0.4);
+  background: rgb(255 255 255 / 0.14); /* 테마 고정 */
+  box-shadow: inset 0 1px 2px rgb(3 10 24 / 0.4); /* 테마 고정 */
 }
 
 .buffer {
   position: absolute;
   inset: 0;
   width: 100%;
-  background: rgb(255 255 255 / 0.2);
+  background: rgb(255 255 255 / 0.2); /* 테마 고정 */
   border-radius: calc(3 * var(--pc-u));
 }
 
@@ -346,21 +358,25 @@
   left: 0;
   top: 0;
   bottom: 0;
-  background: var(--pc-primary-400, #7d93d9);
+  background: var(--pc-primary-400, #7d93d9); /* 테마 고정 */
   border-radius: calc(3 * var(--pc-u));
 }
 
 .progress[data-at-edge] {
-  background: linear-gradient(90deg, var(--pc-point-500, #d63f9f), var(--pc-point-300, #ed9ed3));
-  box-shadow: 0 0 10px rgb(214 63 159 / 0.5);
+  background: linear-gradient(
+    90deg,
+    var(--pc-point-500, #d63f9f) /* 테마 고정 */,
+    var(--pc-point-300, #ed9ed3) /* 테마 고정 */
+  ); /* 테마 고정 */
+  box-shadow: 0 0 10px rgb(214 63 159 / 0.5); /* 테마 고정 */
 }
 
 .clipRange {
   position: absolute;
   top: calc(-2 * var(--pc-u));
   bottom: calc(-2 * var(--pc-u));
-  background: rgb(214 63 159 / 0.45);
-  border: 1px solid var(--pc-point-300, #ed9ed3);
+  background: rgb(214 63 159 / 0.45); /* 테마 고정 */
+  border: 1px solid var(--pc-point-300, #ed9ed3); /* 테마 고정 */
   border-radius: calc(4 * var(--pc-u));
 }
 
@@ -371,10 +387,10 @@
   width: calc(13 * var(--pc-u));
   height: calc(13 * var(--pc-u));
   border-radius: 50%;
-  background: linear-gradient(150deg, #ffffff, #cfeefc);
+  background: linear-gradient(150deg, #ffffff, #cfeefc); /* 테마 고정 */
   box-shadow:
-    0 1px 5px rgb(3 10 24 / 0.5),
-    inset 0 1px 0 rgb(255 255 255 / 0.8);
+    0 1px 5px rgb(3 10 24 / 0.5) /* 테마 고정 */,
+    inset 0 1px 0 rgb(255 255 255 / 0.8); /* 테마 고정 */
 }
 
 .buttonRow {
@@ -398,21 +414,29 @@
   justify-content: center;
   width: calc(40 * var(--pc-u));
   height: calc(40 * var(--pc-u));
-  border: 1px solid rgb(255 255 255 / 0.2);
-  background: linear-gradient(150deg, rgb(255 255 255 / 0.16), rgb(255 255 255 / 0.03));
-  color: #eaf6ff;
+  border: 1px solid rgb(255 255 255 / 0.2); /* 테마 고정 */
+  background: linear-gradient(
+    150deg,
+    rgb(255 255 255 / 0.16) /* 테마 고정 */,
+    rgb(255 255 255 / 0.03) /* 테마 고정 */
+  ); /* 테마 고정 */
+  color: #eaf6ff; /* 테마 고정 */
   border-radius: 50%;
   cursor: pointer;
   padding: 0;
   backdrop-filter: blur(10px);
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.26);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.26); /* 테마 고정 */
   transition:
     transform 0.15s ease,
     background 0.15s ease;
 }
 
 .glassBtn:hover {
-  background: linear-gradient(150deg, rgb(255 255 255 / 0.26), rgb(255 255 255 / 0.08));
+  background: linear-gradient(
+    150deg,
+    rgb(255 255 255 / 0.26) /* 테마 고정 */,
+    rgb(255 255 255 / 0.08) /* 테마 고정 */
+  ); /* 테마 고정 */
   transform: translateY(-1px);
 }
 
@@ -422,8 +446,8 @@
 }
 
 .glassBtnActive {
-  background: rgb(88 111 196 / 0.4);
-  color: #e0f5ff;
+  background: rgb(88 111 196 / 0.4); /* 테마 고정 */
+  color: #e0f5ff; /* 테마 고정 */
 }
 
 /* 볼륨 — 호버 시 슬라이더 펼침 */
@@ -432,10 +456,14 @@
   align-items: center;
   height: calc(40 * var(--pc-u));
   border-radius: calc(999 * var(--pc-u));
-  border: 1px solid rgb(255 255 255 / 0.2);
-  background: linear-gradient(150deg, rgb(255 255 255 / 0.16), rgb(255 255 255 / 0.03));
+  border: 1px solid rgb(255 255 255 / 0.2); /* 테마 고정 */
+  background: linear-gradient(
+    150deg,
+    rgb(255 255 255 / 0.16) /* 테마 고정 */,
+    rgb(255 255 255 / 0.03) /* 테마 고정 */
+  ); /* 테마 고정 */
   backdrop-filter: blur(10px);
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.26);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.26); /* 테마 고정 */
 }
 
 .volumeBtn {
@@ -446,7 +474,7 @@
   height: calc(34 * var(--pc-u));
   border: none;
   background: transparent;
-  color: #eaf6ff;
+  color: #eaf6ff; /* 테마 고정 */
   border-radius: 50%;
   cursor: pointer;
   padding: 0;
@@ -454,7 +482,7 @@
 }
 
 .volumeBtn:hover {
-  background: rgb(255 255 255 / 0.12);
+  background: rgb(255 255 255 / 0.12); /* 테마 고정 */
 }
 
 .volumeSlider {
@@ -463,7 +491,7 @@
   transition:
     width 0.2s ease,
     opacity 0.2s ease;
-  accent-color: #fff;
+  accent-color: #fff; /* 테마 고정 */
   margin: 0;
 }
 
@@ -480,9 +508,13 @@
   align-items: center;
   gap: calc(7 * var(--pc-u));
   height: calc(40 * var(--pc-u));
-  border: 1px solid rgb(255 255 255 / 0.18);
-  background: linear-gradient(150deg, rgb(255 255 255 / 0.12), rgb(255 255 255 / 0.02));
-  color: #eaf6ff;
+  border: 1px solid rgb(255 255 255 / 0.18); /* 테마 고정 */
+  background: linear-gradient(
+    150deg,
+    rgb(255 255 255 / 0.12) /* 테마 고정 */,
+    rgb(255 255 255 / 0.02) /* 테마 고정 */
+  ); /* 테마 고정 */
+  color: #eaf6ff; /* 테마 고정 */
   border-radius: calc(999 * var(--pc-u));
   cursor: pointer;
   padding: 0 calc(14 * var(--pc-u));
@@ -490,11 +522,15 @@
   font-weight: 700;
   font-family: inherit;
   backdrop-filter: blur(10px);
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.2);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.2); /* 테마 고정 */
 }
 
 .livePillBtn:hover {
-  background: linear-gradient(150deg, rgb(255 255 255 / 0.22), rgb(255 255 255 / 0.06));
+  background: linear-gradient(
+    150deg,
+    rgb(255 255 255 / 0.22) /* 테마 고정 */,
+    rgb(255 255 255 / 0.06) /* 테마 고정 */
+  ); /* 테마 고정 */
 }
 
 .livePillBtn:focus-visible {
@@ -506,12 +542,12 @@
   width: calc(8 * var(--pc-u));
   height: calc(8 * var(--pc-u));
   border-radius: 50%;
-  background: rgb(255 255 255 / 0.45);
+  background: rgb(255 255 255 / 0.45); /* 테마 고정 */
 }
 
 .livePillDot[data-at-edge] {
-  background: var(--pc-point-400, #e26eb9);
-  box-shadow: 0 0 8px var(--pc-point-400, #e26eb9);
+  background: var(--pc-point-400, #e26eb9); /* 테마 고정 */
+  box-shadow: 0 0 8px var(--pc-point-400, #e26eb9); /* 테마 고정 */
   animation: pc-player-pulse 2s ease infinite;
 }
 

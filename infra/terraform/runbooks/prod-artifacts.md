@@ -62,7 +62,7 @@ aws ecr get-login-password --region ap-northeast-2 \
 | `auth` · `clip` | 3번 Dockerfile · 빌드 방법 | 3번의 준비(I3-8) |
 | `media-nginx` | nginx 공식 이미지 — **빌드하지 않습니다** | M2 머지본의 핀 다이제스트 |
 | `media-mediamtx` | `media/Dockerfile.mtxhook`(1번 빌드 · 컨텍스트 `media/`) | 아래 「MediaMTX 확인」 |
-| `media-sidecar` | `media/Dockerfile`(1번 빌드 · 컨텍스트 `media/`) | I1-1(IAM 인증 · `POSTGRES_AUTH` 전환 · CA 번들) 머지본 |
+| `media-sidecar` | `media/Dockerfile`(1번 빌드 · 컨텍스트 `media/`) | I1-1(IAM 인증 · `POSTGRES_AUTH` 전환 · CA 번들) 머지본 · 1단-가(3K-PokeClip/PokeClip-mono#365) 머지본 이후 — 사이드카 SQL 의 내장 함수 `pg_catalog` 한정(앱 사용자 `public` CREATE 가로채기 차단). 그 앞 커밋으로 빌드한 사이드카는 가로채기에 열린다 |
 | `media-ingest-auth` | `media/Dockerfile.ingest-auth`(1번 빌드 · 컨텍스트 `media/`) | 응답기 코드가 준비됐을 때만 |
 | `render` | `workers/render/Dockerfile`(3번 빌드 · 컨텍스트 `workers/render/`) | 3번의 준비 · 이 이미지를 돌릴 ECS 태스크 정의가 생겼을 때만 |
 | `upload` | `workers/upload/Dockerfile`(3번 빌드 · 컨텍스트 `workers/upload/`) | 3번의 준비 · 이 이미지를 돌릴 ECS 태스크 정의가 생겼을 때만 |

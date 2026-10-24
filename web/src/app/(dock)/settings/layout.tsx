@@ -1,7 +1,9 @@
 import type { ReactNode } from 'react';
 import { ScreenTransition } from '@/components/app-shell/ScreenTransition';
+import { ScreenSkeleton } from '@/components/app-shell/ScreenSkeleton';
 import { Side } from '@/components/app-shell/Side';
 import styles from '@/components/app-shell/dockShell.module.css';
+import { ChannelScope } from '@/features/channel/ChannelScope';
 
 // 설정 하위 화면 공용 셸 — 좌측 사이드바 + 콘텐츠 (디자인 Side 이식)
 //
@@ -15,7 +17,11 @@ export default function SettingsLayout({ children }: { children: ReactNode }) {
         <Side menu="settings" />
         {/* 본문 랜드마크 — 사이드바 없는 화면은 ScreenContainer가 같은 역할을 한다 */}
         {/* 설정은 본문 패딩을 레이아웃이 잡는 유일한 그룹이다 — 방송·클립은 화면이 잡는다 */}
-        <main className={styles.contentPadded}>{children}</main>
+        <main className={styles.contentPadded}>
+          {/* 채널 범위는 본문만 감싼다(POK-442): 채널이 서기 전에도 사이드바는 서고 본문은 뼈대로 기다린다.
+              패딩은 이 <main>이 이미 주므로 패딩 없는 뼈대다 */}
+          <ChannelScope fallback={<ScreenSkeleton padded={false} />}>{children}</ChannelScope>
+        </main>
       </div>
     </ScreenTransition>
   );

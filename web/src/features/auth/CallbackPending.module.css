@@ -1,0 +1,19 @@
+/* 콜백 대기 화면(POK-442) — 실패 안내 화면(OAuthCallbackScreen·채널 연동 콜백의 .screen)과 같은 캔버스 중앙 정렬이라
+   대기 → 실패로 바뀌어도 자리가 튀지 않는다. */
+.screen {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: calc(14 * var(--pc-u));
+  padding: calc(24 * var(--pc-u));
+  background: var(--pc-color-bg-canvas);
+  color: var(--pc-color-text-primary);
+  text-align: center;
+}
+
+.working {
+  font-size: calc(14 * var(--pc-u));
+  color: var(--pc-color-text-secondary);
+}

@@ -9,7 +9,7 @@
   --sp-viewer: var(--pc-color-text-primary);
   --sp-grid: var(--pc-color-border-subtle);
   --sp-surface: var(--pc-color-bg-surface);
-  --sp-gold: #bf8a1f;
+  --sp-gold: #bf8a1f; /* 라이트 덮음 */
 
   border: 1px solid var(--pc-color-border-subtle);
   border-radius: calc(14 * var(--pc-u));
@@ -17,13 +17,7 @@
 }
 
 :global([data-theme='light']) .panel {
-  --sp-gold: #a87610;
-}
-
-@media (prefers-color-scheme: light) {
-  :global(:root:not([data-theme])) .panel {
-    --sp-gold: #a87610;
-  }
+  --sp-gold: #a87610; /* 라이트 값 */
 }
 
 /* ---------- 머리줄 ---------- */
@@ -196,6 +190,20 @@
   color: var(--pc-color-text-muted);
 }
 
+/* 그래프를 받기 전의 두 층 막대(POK-445). 높이·핀 줄·눈금 칸 여백은 그래프 치수 상수에서 인라인으로 받는다 —
+   여백까지 높이에 넣어야 .empty·그래프와 같은 높이다 */
+.chartSkeleton {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+}
+
+.skeletonLayer {
+  display: flex;
+  align-items: flex-end;
+  gap: calc(4 * var(--pc-u));
+}
+
 .scroll {
   overflow-x: auto;
   overflow-y: hidden;
@@ -357,7 +365,7 @@
 .pin {
   border: 0;
   background: var(--sp-hl);
-  color: var(--pc-color-text-on-accent, #fff);
+  color: var(--pc-color-text-on-accent, #fff); /* 테마 고정 */
 }
 
 .pinManual {
@@ -487,7 +495,7 @@
   border-radius: calc(10 * var(--pc-u));
   background: var(--pc-color-bg-surface-raised);
   border: 1px solid var(--pc-color-border-default);
-  box-shadow: 0 8px 24px rgb(0 0 0 / 0.2);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.2); /* 테마 고정 */
   pointer-events: none;
   display: grid;
   gap: calc(4 * var(--pc-u));

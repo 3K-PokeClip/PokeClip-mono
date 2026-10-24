@@ -1,9 +1,20 @@
-# prod 앱 비밀 그릇 일곱(pokeclip/prod/<용도>)과 출력 둘(CONTRACT-runtime.md
+# prod 앱 비밀 그릇 여덟(pokeclip/prod/<용도>)과 출력 둘(CONTRACT-runtime.md
 # 「런타임 1단 → platform · media」 행)을 단언한다. network 출력은 가짜 값이다.
 # override_data 가 원격 상태를 대신하므로 S3 를 읽지 않는다(AWS 호출 0).
 
 mock_provider "aws" {
   source = "./tests/mocks"
+}
+
+# auth_oauth_apps 는 기본값이 없다(auth_settings.tf — tfvars 필수). 이 파일의
+# 모든 run 에 흐르는 예시 값이다(run 안의 variables 가 덮는 변수만 바뀐다).
+variables {
+  auth_oauth_apps = {
+    google  = { client_id = "example-google-client-id", redirect_uri = "https://app.pokeclip.com/auth/callback" }
+    chzzk   = { client_id = "example-chzzk-client-id", redirect_uri = "https://app.pokeclip.com/oauth/chzzk/callback" }
+    youtube = { client_id = "example-youtube-client-id", redirect_uri = "https://app.pokeclip.com/oauth/youtube/callback" }
+    soop    = { client_id = "example-soop-client-id", redirect_uri = "https://app.pokeclip.com/oauth/soop/callback" }
+  }
 }
 
 override_data {
@@ -18,7 +29,7 @@ override_data {
   }
 }
 
-run "creates_seven_app_secret_shells" {
+run "creates_eight_app_secret_shells" {
   command = plan
 
   assert {
@@ -30,8 +41,9 @@ run "creates_seven_app_secret_shells" {
       "pokeclip/prod/youtube-client-secret",
       "pokeclip/prod/chzzk-client-secret",
       "pokeclip/prod/profile-photo-token-secret",
+      "pokeclip/prod/soop-client-secret",
     ])
-    error_message = "비밀 그릇 이름 집합이 pokeclip/prod/ 아래 일곱과 다르다."
+    error_message = "비밀 그릇 이름 집합이 pokeclip/prod/ 아래 여덟과 다르다."
   }
 }
 
@@ -42,9 +54,9 @@ run "maps_services_to_secret_env_names" {
 
   assert {
     condition = toset(keys(output.app_secret_arns)) == toset([
-      "auth", "clip", "chat-collector", "chat-detector",
+      "auth", "clip", "chat-collector", "chat-detector", "render", "upload",
     ])
-    error_message = "app_secret_arns 의 서비스 집합이 auth · clip · chat-collector · chat-detector 와 다르다."
+    error_message = "app_secret_arns 의 서비스 집합이 auth · clip · chat-collector · chat-detector · render · upload 와 다르다."
   }
 
   assert {
@@ -56,8 +68,9 @@ run "maps_services_to_secret_env_names" {
       "YOUTUBE_CLIENT_SECRET",
       "CHZZK_CLIENT_SECRET",
       "PROFILE_PHOTO_TOKEN_SECRET",
+      "SOOP_CLIENT_SECRET",
     ])
-    error_message = "auth 의 env 이름 집합이 일곱(JWT_SECRET 부터 PROFILE_PHOTO_TOKEN_SECRET)과 다르다."
+    error_message = "auth 의 env 이름 집합이 여덟(JWT_SECRET 부터 SOOP_CLIENT_SECRET)과 다르다."
   }
 
   assert {
@@ -79,6 +92,16 @@ run "maps_services_to_secret_env_names" {
       "INTERNAL_API_TOKEN",
     ])
     error_message = "chat-detector 의 env 이름 집합이 INTERNAL_API_TOKEN 하나가 아니다."
+  }
+
+  # 일꾼 둘은 서버 넷과 같은 INTERNAL_API_TOKEN 하나만 읽는다(D6 — 비면 부팅
+  # 거부). platform 은 auth · clip 만 읽고, 일꾼 키는 배치 루트가 읽는다(K1).
+  assert {
+    condition = alltrue([
+      for worker in ["render", "upload"] :
+      toset(keys(output.app_secret_arns[worker])) == toset(["INTERNAL_API_TOKEN"])
+    ])
+    error_message = "render · upload 의 env 이름 집합이 INTERNAL_API_TOKEN 하나가 아니다."
   }
 
   assert {
@@ -110,8 +133,8 @@ run "points_each_env_name_at_its_shell" {
   command = apply
 
   assert {
-    condition     = length(distinct(values(module.secret_shells.secret_arns))) == 7
-    error_message = "mock 이 그릇 일곱에 서로 다른 ARN 을 주지 않았다 — 아래 단언이 의미를 잃는다."
+    condition     = length(distinct(values(module.secret_shells.secret_arns))) == 8
+    error_message = "mock 이 그릇 여덟에 서로 다른 ARN 을 주지 않았다 — 아래 단언이 의미를 잃는다."
   }
 
   assert {
@@ -123,12 +146,14 @@ run "points_each_env_name_at_its_shell" {
       YOUTUBE_CLIENT_SECRET      = module.secret_shells.secret_arns["pokeclip/prod/youtube-client-secret"]
       CHZZK_CLIENT_SECRET        = module.secret_shells.secret_arns["pokeclip/prod/chzzk-client-secret"]
       PROFILE_PHOTO_TOKEN_SECRET = module.secret_shells.secret_arns["pokeclip/prod/profile-photo-token-secret"]
+      SOOP_CLIENT_SECRET         = module.secret_shells.secret_arns["pokeclip/prod/soop-client-secret"]
     }
     error_message = "auth 의 env 이름이 같은 용도의 그릇 ARN 을 가리키지 않는다."
   }
 
-  # 같은 env 이름은 서비스가 달라도 같은 그릇(같은 ARN)이다. auth 가 일곱을
-  # 모두 가지므로 auth 를 기준으로 본다.
+  # 같은 env 이름은 서비스가 달라도 같은 그릇(같은 ARN)이다. auth 가 여덟을
+  # 모두 가지므로 auth 를 기준으로 본다 — 일꾼의 INTERNAL_API_TOKEN 도 auth 의
+  # 것과 같은 ARN 이다(1단-가 K1).
   assert {
     condition = alltrue(flatten([
       for service, env_arns in output.app_secret_arns : [

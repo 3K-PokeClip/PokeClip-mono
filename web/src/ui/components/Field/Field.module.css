@@ -9,7 +9,7 @@
   color: var(--pc-color-text-primary);
 }
 .required {
-  color: var(--pc-color-danger);
+  color: var(--pc-color-danger-text);
 }
 .description {
   font-size: var(--pc-font-size-sm);
@@ -18,7 +18,7 @@
 }
 .error {
   font-size: var(--pc-font-size-sm);
-  color: var(--pc-color-danger);
+  color: var(--pc-color-danger-text);
   margin: 0;
 }
 .field[data-disabled] .label {

@@ -402,6 +402,18 @@ export interface ClipEditorOptions {
   /** 오른쪽 주 버튼 문구 */
   uploadLabel?: string;
   /**
+   * 서버에 보내는 중인 헤더 동작(POK-444). 그 버튼만 돌고, 다른 쪽은 끈다 — 컨테이너가 보내는 동안 둘 다 받지 않는다.
+   * 없으면(목업) 둘 다 바로 누를 수 있다
+   */
+  busyAction?: 'save' | 'render' | null;
+  /** 헤더 문구 아래 영상 진행 막대(POK-444). value가 null이면 불확정이다. 없으면 막대를 세우지 않는다 */
+  clipProgress?: { value: number | null } | null;
+  /**
+   * 주소가 바뀌어 다른 편집 대상을 읽는 중이다(POK-444). 화면은 그대로 두되 만질 수 없게 하고 헤더 아래에 막대 한 줄만
+   * 띄운다 — 다 읽으면 컨테이너가 이 화면을 새 것으로 갈아 끼우므로, 그 사이 고친 것은 남지 않는다
+   */
+  reloading?: boolean;
+  /**
    * 자막 초기 상태. 시안 1d-a는 "생성 후"를 보여주므로 기본값이 ready다 —
    * 생성 전 → 후 전이는 idle로 마운트해 확인한다(테스트가 쓰는 문).
    */
@@ -433,6 +445,12 @@ export interface ClipEditorMockState {
   saveDraft: () => void;
   requestUpload: () => void;
   uploadLabel: string;
+  /** 보내는 중인 헤더 동작(POK-444). ClipEditorOptions.busyAction 참고 */
+  busyAction: 'save' | 'render' | null;
+  /** 헤더 문구 아래 영상 진행 막대(POK-444). 없으면 null */
+  clipProgress: { value: number | null } | null;
+  /** 다른 편집 대상을 읽는 중이라 이 화면을 만질 수 없다(POK-444) */
+  reloading: boolean;
   previewVideo: HTMLVideoElement | null;
   /** 트랙별 미리 듣기 상태. 실제 영상이 없으면 null */
   trackPreviewStatus: TrackPreviewStatus | null;
@@ -935,6 +953,9 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     sourceLabel: source.sourceLabel,
     autosaveLabel: options.autosaveLabel ?? (real ? '저장 전' : MOCK_SOURCE.autosaveLabel),
     uploadLabel: options.uploadLabel ?? '업로드',
+    busyAction: options.busyAction ?? null,
+    clipProgress: options.clipProgress ?? null,
+    reloading: options.reloading ?? false,
     previewVideo: options.previewVideo ?? null,
     trackPreviewStatus: options.trackPreview?.status ?? null,
     previewError: playback.error === null ? null : playbackErrorMessage(playback.error),

@@ -148,6 +148,11 @@
   filter: brightness(1.25);
 }
 
+/* 라이트 링크는 이미 진한 색이라 밝히면 대비가 떨어진다 — 어둡게 */
+:global([data-theme='light']) .compareTrigger:hover {
+  filter: brightness(0.8);
+}
+
 /* DS Popover 기본(최소 폭 200·안쪽 여백)을 1l ② 값으로 덮는다 — 특이도 더블링 이유는
    ConfirmDialog.module.css 참조 */
 .comparePanel.comparePanel {
@@ -195,9 +200,9 @@
 
 /* 신뢰 열 강조 — 시안 ②의 accent 틴트. 토큰에 알파 변형이 없어 시안의 원값을 그대로 쓴다 */
 .compareTrusted {
-  border-left-color: rgb(88 111 196 / 0.3) !important;
-  border-top-color: rgb(88 111 196 / 0.2) !important;
-  background: rgb(88 111 196 / 0.07);
+  border-left-color: rgb(88 111 196 / 0.3) !important; /* 테마 고정 */
+  border-top-color: rgb(88 111 196 / 0.2) !important; /* 테마 고정 */
+  background: rgb(88 111 196 / 0.07); /* 테마 고정 */
 }
 
 .compareTable th,
@@ -250,7 +255,7 @@
 
 .compareYes {
   display: block;
-  color: var(--pc-color-success);
+  color: var(--pc-color-success-text);
 }
 
 .compareNo {

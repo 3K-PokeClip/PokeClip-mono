@@ -93,20 +93,20 @@ RGB 채널: `--pc-cyan-500-rgb: 0 223 255` · `--pc-yellow-500-rgb: 255 214 7` �
 
 ## 2. Semantic 토큰 (역할 기반)
 
-> 컴포넌트가 소비하는 유일한 계층. 다크가 기본값이며, 라이트는 명시적 opt-in(`[data-theme='light']`) 또는 OS 선호도 폴백.
+> 컴포넌트가 소비하는 유일한 계층. 다크가 기본값이며, 라이트는 `[data-theme='light']`로만 켠다(OS 선호도 폴백 없음 — `system`은 init 스크립트가 푼다).
 
 각 시맨틱 토큰이 다크/라이트에서 어떤 원시값으로 매핑되는지:
 
 ### Backgrounds — 계층(elevation)은 점점 밝아지는 그레이로 표현
 
-| 시맨틱 토큰                    | Dark               | Light              |
-| ------------------------------ | ------------------ | ------------------ |
-| `--pc-color-bg-canvas`         | `gray-1000`        | `gray-50`          |
-| `--pc-color-bg-surface`        | `gray-900`         | `white`            |
-| `--pc-color-bg-surface-hover`  | `gray-800`         | `gray-50`          |
-| `--pc-color-bg-surface-raised` | `gray-800`         | `white`            |
-| `--pc-color-bg-inset`          | `gray-950`         | `gray-100`         |
-| `--pc-color-bg-overlay`        | `gray-1000 / 0.72` | `gray-1000 / 0.48` |
+| 시맨틱 토큰                    | Dark               | Light                  |
+| ------------------------------ | ------------------ | ---------------------- |
+| `--pc-color-bg-canvas`         | `gray-1000`        | `#f3f5fc`(인디고 기운) |
+| `--pc-color-bg-surface`        | `gray-900`         | `white`                |
+| `--pc-color-bg-surface-hover`  | `gray-800`         | `#eef1fa`              |
+| `--pc-color-bg-surface-raised` | `gray-800`         | `white`                |
+| `--pc-color-bg-inset`          | `gray-950`         | `#e9edf8`              |
+| `--pc-color-bg-overlay`        | `gray-1000 / 0.72` | `gray-1000 / 0.48`     |
 
 ### Text
 
@@ -121,11 +121,11 @@ RGB 채널: `--pc-cyan-500-rgb: 0 223 255` · `--pc-yellow-500-rgb: 255 214 7` �
 
 ### Borders
 
-| 시맨틱 토큰                 | Dark       | Light      |
-| --------------------------- | ---------- | ---------- |
-| `--pc-color-border-subtle`  | `gray-800` | `gray-100` |
-| `--pc-color-border-default` | `gray-700` | `gray-200` |
-| `--pc-color-border-strong`  | `gray-600` | `gray-300` |
+| 시맨틱 토큰                 | Dark       | Light     |
+| --------------------------- | ---------- | --------- |
+| `--pc-color-border-subtle`  | `gray-800` | `#e3e7f3` |
+| `--pc-color-border-default` | `gray-700` | `#d3d9ea` |
+| `--pc-color-border-strong`  | `gray-600` | `#b6bed6` |
 
 ### Accent (Brand — 인디고)
 
@@ -167,8 +167,23 @@ RGB 채널: `--pc-cyan-500-rgb: 0 223 255` · `--pc-yellow-500-rgb: 255 214 7` �
 | `--pc-color-warning-subtle` | `yellow-500 / 0.16` | `yellow-500 / 0.16` |
 | `--pc-color-info`           | `cyan-500`          | `teal-500`          |
 | `--pc-color-info-subtle`    | `cyan-500 / 0.16`   | `cyan-500 / 0.12`   |
+| `--pc-color-danger-text`    | = `danger`          | `#c80026`           |
+| `--pc-color-success-text`   | = `success`         | `#1f7a08`           |
+| `--pc-color-warning-text`   | = `warning`         | `#8a6300`           |
+| `--pc-color-info-text`      | = `info`            | `#067486`           |
 
-> **라이트 테마 참고:** `[data-theme='light']`로 명시 지정 시 위 라이트 값이 적용됩니다. 앱이 테마를 명시하지 않은 경우(`:root:not([data-theme])`)에는 `@media (prefers-color-scheme: light)` 폴백이 일부 토큰을 라이트로 전환합니다.
+`-text`는 상태색을 **작은 글자·아이콘**으로 쓸 때다. 라이트의 채움색(green-600 2.99:1 · teal-500 2.61:1 · `#b8860b` 3.25:1 · red-500 3.97:1)은 흰 바탕 글자로 부족해 더 진한 단계를 둔다(`bg-inset` 위에서도 4.6:1 이상).
+
+### Brand · Elevation
+
+| 토큰                      | Dark                              | Light                                 |
+| ------------------------- | --------------------------------- | ------------------------------------- |
+| `--pc-color-brand-mark`   | `white`                           | `gray-1000`                           |
+| `--pc-shadow-sm/md/lg/xl` | `gray-1000` 0.4~0.6(`shadow.css`) | `gray-1000` 0.08 · 0.10 · 0.14 · 0.18 |
+
+`brand-mark`는 심볼 재생 마크(`BrandSymbol`) 색이다. 라이트 그림자는 `theme-light.css`가 `shadow.css` 값을 덮는다.
+
+> **라이트 테마 참고:** 라이트 값은 `[data-theme='light']`에서만 적용된다. 앱은 항상 `data-theme`을 세우므로(서버 기본 `dark`, init 스크립트가 저장값으로 덮음) OS 선호도 폴백 블록은 두지 않는다. 고르는 곳·저장·CSS 규칙은 `DESIGN_SYSTEM.md` 「테마」.
 
 ---
 

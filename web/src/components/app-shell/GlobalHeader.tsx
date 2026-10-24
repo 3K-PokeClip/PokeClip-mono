@@ -1,9 +1,9 @@
 'use client';
 
-import Image from 'next/image';
 import { Avatar, IconButton } from '@/ui';
 import { Bell } from 'lucide-react';
 import { ChannelSwitcher, useChannelIdentity } from '@/features/channel/ChannelSwitcher';
+import { BrandSymbol } from './BrandSymbol';
 import styles from './GlobalHeader.module.css';
 
 // 전역 헤더 — 디자인 1a 상단(심볼 로고 + 워드마크 + 알림 + 프로필).
@@ -16,7 +16,7 @@ export function GlobalHeader() {
     <header>
       <div className={styles.inner}>
         <span className={styles.brand}>
-          <Image src="/brand/pokeclip-symbol.svg" alt="" width={34} height={34} />
+          <BrandSymbol size={34} className={styles.brandSymbol} />
           <span className={styles.wordmark}>PokeClip</span>
         </span>
         <div className={styles.actions}>

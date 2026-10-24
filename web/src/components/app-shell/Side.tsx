@@ -1,7 +1,6 @@
 'use client';
 
 import { useRef } from 'react';
-import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
@@ -24,6 +23,7 @@ import {
 import { Avatar, IconButton } from '@/ui';
 import { ChannelSwitcher, useChannelIdentity } from '@/features/channel/ChannelSwitcher';
 import { useSidebarStore } from '@/stores/sidebar';
+import { BrandSymbol } from './BrandSymbol';
 import { isDockHrefActive } from './dockTransition';
 import styles from './Side.module.css';
 
@@ -147,13 +147,7 @@ export function Side({ menu, badges }: { menu: SideMenu; badges?: SideBadges }) 
     <aside className={styles.sidebar} data-collapsed={collapsed}>
       <div className={styles.brand}>
         <span className={styles.brandMark}>
-          <Image
-            src="/brand/pokeclip-symbol.svg"
-            alt=""
-            width={28}
-            height={28}
-            className={styles.brandLogo}
-          />
+          <BrandSymbol size={28} className={styles.brandLogo} />
         </span>
         <span className={styles.brandName}>PokeClip</span>
         <span className={styles.brandToggle}>
