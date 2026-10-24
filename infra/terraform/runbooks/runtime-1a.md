@@ -668,8 +668,8 @@ send-command 상태가 `Success` 가 아니거나(`Failed` · `TimedOut` ·
 *   자동화(`ssm:StartAutomationExecution`)로 켜진 상자에 명령을 보내는 길은
     묻지 않습니다. 이 동작은 인스턴스 자원 유형을 받지 않아(자동화 문서 ·
     실행만 — [서비스 승인 참조](https://docs.aws.amazon.com/service-authorization/latest/reference/list_ssm.html))
-    인스턴스 ARN 으로 물을 수 없습니다. 실행기가 켜진 동안(최대 120분)만
-    열린 길이라 위의 짧게 켜 두기가 이 한계도 좁힙니다.
+    인스턴스 ARN 으로 물을 수 없습니다. 실행기가 켜진 동안(5-3 뒤로는 최대
+    120분)만 열린 길이라 위의 짧게 켜 두기가 이 한계도 좁힙니다.
 *   SQL 실적용 시험(CI)은 Go 메타 명령 처리기로 돌고 psql 자체가 아니며,
     대역은 `rds_superuser` 가 아닙니다. TLS · `rds.force_ssl` 은 CI 가 재지
     못합니다.
