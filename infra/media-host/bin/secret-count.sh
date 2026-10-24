@@ -21,15 +21,15 @@
 #       여러 바이트 글자가 많으면 한도보다 일찍 실패할 수 있다 — 안전한 쪽).
 #
 # 대조 값: CDN 비밀(CDN_SECRET_ARN). --passphrase 면 시험 스트림 키 passphrase
-# (TEST_STREAM_KEY_SECRET_ARN)도 — passphrase 를 싣는 루프백은 송출 인증(M15)
-# 반영 뒤에만 돈다. 값은 Secrets Manager 에서 직접 읽어 셸 변수에만
-# 둔다(argv 에는 ARN 만). box 면 사이드카의 MediaMTX API 비밀번호(시작 스크립트가
-# RUNTIME_DIR/mtx_api_pass 에 둔 이번 기동의 값 — root 로 읽는다)와 그 Basic
-# 값(「pokeclip-sidecar:<비밀번호>」 의 base64 — 줄바꿈 없이)도 대조한다. 그
-# 파일이 없거나 꼴 밖이면 실패다 — box 는 스택이 떠 있을 때만 쓴다(정상 정지
-# 뒤에는 compose down 이 컨테이너를 지워 셀 로그가 없다). 한계:
-# 비밀번호는 기동마다 새로 만들어지므로 이전 기동의 로그에 남은 옛 비밀번호는
-# 대조하지 못하고, ssm 은 그 파일을 읽을 수 없어 대조하지 않는다.
+# (TEST_STREAM_KEY_SECRET_ARN)도 — passphrase 를 싣는 루프백은 응답기
+# 모드(ingest_auth_image 찬 구성) 상자에서만 돈다. 값은 Secrets Manager 에서
+# 직접 읽어 셸 변수에만 둔다(argv 에는 ARN 만). box 면 사이드카의 MediaMTX API
+# 비밀번호(시작 스크립트가 RUNTIME_DIR/mtx_api_pass 에 둔 이번 기동의 값 —
+# root 로 읽는다)와 그 Basic 값(「pokeclip-sidecar:<비밀번호>」 의 base64 —
+# 줄바꿈 없이)도 대조한다. 그 파일이 없거나 꼴 밖이면 실패다 — box 는 스택이
+# 떠 있을 때만 쓴다(정상 정지 뒤에는 compose down 이 컨테이너를 지워 셀 로그가
+# 없다). 한계: 비밀번호는 기동마다 새로 만들어지므로 이전 기동의 로그에 남은 옛
+# 비밀번호는 대조하지 못하고, ssm 은 그 파일을 읽을 수 없어 대조하지 않는다.
 #
 # box 응답기 모드: RUNTIME_DIR/ingest-auth 의 ingest_basic_pass ·
 # stream_key_resolve_token 과 렌더본 RUNTIME_DIR/mediamtx.yml 의 잠금 두 줄
