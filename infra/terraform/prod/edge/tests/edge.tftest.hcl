@@ -3,9 +3,10 @@
 # - 출력 여덟은 records · 런타임 2단 · 값 입력 · 랜딩 업로드가 쓰는 계약
 #   이름이고, 값은 모듈(apex · media) 출력에서 온다.
 # - CLOUDFRONT WAF 는 platform 과 같은 관리 그룹 둘 · 속도 기본 20000 · 차단
-#   로그(가림 authorization · cookie)다. 루트 시험은 모듈 안 자원을 주소로 볼
-#   수 없어, 이름 · 범위 · 관리 그룹 · 속도는 모듈 인자의 유일한 출처인
-#   local.cloudfront_waf 로, 로그는 waf_acl 출력 logging 으로 본다.
+#   로그(가림 authorization · cookie) · 같은 두 헤더의 웹 ACL 데이터 보호다.
+#   루트 시험은 모듈 안 자원을 주소로 볼 수 없어, 이름 · 범위 · 관리 그룹 ·
+#   속도는 모듈 인자의 유일한 출처인 local.cloudfront_waf 로, 로그는 waf_acl
+#   출력 logging 으로, 데이터 보호는 출력 protected_headers 로 본다.
 # - 표준 로그 로그 그룹은 보존 = 변수이고, enable_standard_logs = false 면
 #   media 모듈에 null 을 넘기되 로그 그룹은 남는다.
 # - VPC origin 서비스 SG 는 서울 별칭으로 이름 · network vpc_id 로 조회하고,
@@ -261,6 +262,17 @@ run "waf_logs_blocks_with_redacted_credentials" {
   assert {
     condition     = toset(module.waf.logging.redacted_headers) == toset(["authorization", "cookie"])
     error_message = "CLOUDFRONT WAF 로그가 authorization · cookie 헤더만 가리지 않는다."
+  }
+}
+
+# 요청 샘플에 media 시청자의 서명 쿠키 · Authorization 이 원문으로 남지 않게
+# 웹 ACL 데이터 보호로 두 헤더를 가린다(POK-459).
+run "waf_protects_credentials_in_samples" {
+  command = plan
+
+  assert {
+    condition     = toset(module.waf.protected_headers) == toset(["authorization", "cookie"])
+    error_message = "CLOUDFRONT WAF 데이터 보호가 authorization · cookie 헤더만 가리지 않는다."
   }
 }
 
