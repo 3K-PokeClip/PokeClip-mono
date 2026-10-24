@@ -98,6 +98,41 @@ export interface AnalyticsEvents {
   };
   /** 도움말 · 문의의 「이 답변이 도움이 되었나요?」에 답함. 질문은 문구가 아니라 고정 key로 싣는다 */
   faq_feedback_sent: { faq: FaqKey; helpful: boolean };
+
+  // ── 2026-10-24 핵심 행동(서비스 전체 PostHog 계획 5a) ─────────────────────────────
+
+  /** 채널 스위처로 다른 채널로 옮김. picked=골라서, left=편집자로 있던 채널에서 나와서 내 채널로. 처음 자동 선택은 세지 않는다 */
+  channel_switched: { to_role: 'owner' | 'editor'; reason: 'picked' | 'left' };
+  /**
+   * 편집기 「저장」 성공. 영상 주문에 딸린 자동 저장은 세지 않는다. 열거는 화면 타입과 같다(바뀌면 부르는 쪽에서 컴파일이 깨진다).
+   * cut_seconds는 자른 길이(정수 초)
+   */
+  clip_recipe_saved: {
+    first_save: boolean;
+    source: 'card' | 'recipe';
+    layout: 'vert' | 'split' | 'center' | 'crop' | 'horiz';
+    caption_position: 'top' | 'edge' | 'bottom';
+    subtitle_mode: 'burn-cc' | 'burn' | 'cc';
+    cut_seconds: number;
+  };
+  /** 보관함에서 유튜브 업로드를 새로 주문함(서버가 새 주문을 받았을 때만). intent=영상 만들기 창에서 고른 정보로, title=제목만 */
+  video_upload_requested: { via: 'intent' | 'title' };
+  /** 실패한 영상을 서버가 다시 주문 받음 */
+  video_render_retried: Record<string, never>;
+  /** 실패한 업로드를 새로 다시 주문함(서버가 새 주문을 만들었을 때만) */
+  video_upload_retried: Record<string, never>;
+  /** 「확인 필요」 업로드를 회원이 직접 정리함 — 올라감·안 올라감 */
+  video_upload_resolved: { result: 'uploaded' | 'not_uploaded' };
+  /** 영상 받기 주소를 받아 브라우저에 넘김 — 저장이 끝났는지는 웹이 모른다 */
+  clip_download_requested: Record<string, never>;
+  /** 플레이어가 그 방송을 처음 재생함(방송마다 한 번). live=생방송, vod=끝난 방송 다시보기 */
+  broadcast_playback_started: { mode: 'live' | 'vod' };
+  /** 받은 편집자 초대에 답함 */
+  editor_invitation_responded: { outcome: 'accepted' | 'declined' };
+  /** 편집자 위임이 끝남. owner=스트리머가 내보냄, editor=편집자가 나감 */
+  editor_delegation_ended: { initiator: 'owner' | 'editor' };
+  /** 라이브·다시보기 화면에서 수동 마킹으로 카드가 새로 생김(가까운 카드가 이미 있으면 세지 않는다) */
+  highlight_marked: { mode: 'live' | 'past' };
 }
 
 /** 열거 값의 모양 — 소문자·숫자·`_`·`-`만, 40자까지. 이메일·채널 이름·제목 같은 자유 문자열은 여기 맞지 않는다 */
