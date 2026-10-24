@@ -411,7 +411,8 @@ function LiveDashboard() {
   // 주소는 usePathname으로 읽는다: 넘어온 직후 첫 그리기의 window.location은 옛 주소다
   const vodRouteId = vodStreamIdFromPathname(usePathname() ?? '');
   const pastRoute = vodRouteId !== null;
-  const { stream, highlights, cardsStatus, chatWarning, mergeCard } = useLiveMockState(pastRoute);
+  const { stream, highlights, hiddenHighlights, cardsStatus, chatWarning, mergeCard } =
+    useLiveMockState(pastRoute);
   const { streamMeta, cardVisuals } = useLiveDetailsMockState();
   const liveData = useLiveData();
   const { streamId, info } = liveData;
@@ -654,12 +655,13 @@ function LiveDashboard() {
   const linkedDoneRef = useRef<string | null>(null);
   useEffect(() => {
     if (linkedCardId === null || linkedDoneRef.current === linkedCardId) return;
-    const card = highlights.find((h) => h.id === `card-${linkedCardId}`);
+    // 가린 카드도 찾는다(POK-463): 주소를 받은 뒤 누가 가렸어도 그 시점으로는 간다
+    const card = [...highlights, ...hiddenHighlights].find((h) => h.id === `card-${linkedCardId}`);
     const seconds = card ? parseClockLabel(card.timestamp) : null;
     if (seconds === null) return;
     linkedDoneRef.current = linkedCardId;
     seekTo(seconds);
-  }, [highlights, linkedCardId, seekTo]);
+  }, [highlights, hiddenHighlights, linkedCardId, seekTo]);
 
   const handleSeek = useCallback(
     (timestamp: string) => {
@@ -729,6 +731,7 @@ function LiveDashboard() {
           />
           <HighlightCardPanel
             highlights={highlights}
+            hiddenHighlights={hiddenHighlights}
             stream={streamForCards}
             visuals={cardVisuals}
             pendingLabel={marking.pendingLabel}
@@ -736,6 +739,7 @@ function LiveDashboard() {
             ended={ended}
             listStatus={cardsStatus}
             onSeek={handleSeek}
+            onCardChange={mergeCard}
           />
         </div>
         {/* 칸이 행 높이를 받고 그 안에서 채팅이 sticky로 붙는다 — 칸의 역할은 CSS .chatCol 주석.
