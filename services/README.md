@@ -4472,7 +4472,8 @@ DB가 거절해 500이 되고, **입력 오류가 장애로 오인된다**(epoch
  "appliedOffsetMs":3900}
 {"latest":{"title":"…","tags":["롤"],"category":"League of Legends","viewers":1203,
            "observedAt":"2026-09-01T12:00:00Z"},
- "series":[{"observedAt":"2026-09-01T12:00:00Z","viewers":1203}]}
+ "series":[{"observedAt":"2026-09-01T12:00:00Z","viewers":1203,"platform":"CHZZK",
+             "category":"League of Legends"}]}
 ```
 
 🔴 **위 예시의 `role`은 실물에서 늘 `null`이다**(2026-09-08 실측). 치지직이 `userRoleCode`를
@@ -4521,7 +4522,8 @@ DB가 거절해 500이 되고, **입력 오류가 장애로 오인된다**(epoch
 **`latest`는 플랫폼과 무관한 최신 한 줄**(옛 모양 그대로)이고, 플랫폼마다 보려면 **`platforms`**를 본다(POK-397):
 `[{"platform":"CHZZK","title":…,"category":…,"viewers":…,"observedAt":…}, …]`(플랫폼 열거 순, 관측이 없는 플랫폼은 안 나온다).
 `viewers`·`observedAt`은 그 플랫폼의 **최신 줄**(제목 조건 없음), `title`·`category`는 그 플랫폼의 **제목 있는 최신 줄**이라 두 시점이 다를 수 있다
-(제목을 한 번도 못 얻었으면 둘 다 `null`). 추이 `series`의 점마다 `platform`이 실린다(`{"observedAt":…,"viewers":…,"platform":"SOOP"}`).
+(제목을 한 번도 못 얻었으면 둘 다 `null`). 추이 `series`의 점마다 `platform`과 그 관측의 `category`가 실린다(`{"observedAt":…,"viewers":…,"platform":"SOOP","category":…}`,
+카테고리를 못 얻은 관측은 `null`, POK-402). 화면은 카테고리가 바뀐 구간마다 통계 그래프 아래 띠를 나눈다.
 
 **제목 창구(`/internal/broadcast-info/latest`, POK-259)는 여러 방송의 마지막 제목을 한 번에 준다.** clip 방송 목록이
 한 장(최대 100개)마다 한 번 부른다. 위 창구는 방송 하나씩이라 한 장에 100번 왕복이 된다.
