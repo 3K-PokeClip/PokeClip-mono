@@ -36,22 +36,27 @@ class YoutubeVideoCheckControllerTest extends YoutubeLinkTestSupport {
                 cleanup);
     }
 
-    /** 그 회원 토큰으로 묻고, 물은 것 중 있는 것과 그 토큰의 채널을 준다. 토큰은 응답에 없다 */
+    /**
+     * 그 회원 토큰으로 묻고, 물은 것 중 있는 것과 각 영상의 주인 채널 · 그 토큰의 채널을 준다. 공개 영상은 다른 채널 토큰으로도 보여
+     * 주인 채널을 따로 준다(PR #375 codex). 토큰은 응답에 없다
+     */
     @Test
-    void 그_회원_토큰으로_묻고_있는_것과_채널을_준다() throws Exception {
+    void 그_회원_토큰으로_묻고_있는_것과_주인_채널을_준다() throws Exception {
         User user = newUser();
         YoutubeChannelLink link = linked(user);
-        YOUTUBE.videosExist("vidAAAAAAA1");
+        YOUTUBE.videosExist(link.getChannelId(), "vidAAAAAAA1");
+        YOUTUBE.videosExist("UC-someone-else", "vidCCCCCCC3");
 
-        String body = 묻는다(user.getId(), "[\"vidAAAAAAA1\",\"vidBBBBBBB2\"]")
+        String body = 묻는다(user.getId(), "[\"vidAAAAAAA1\",\"vidBBBBBBB2\",\"vidCCCCCCC3\"]")
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.linked").value(true))
                 .andExpect(jsonPath("$.channelId").value(link.getChannelId()))
-                .andExpect(jsonPath("$.existing", contains("vidAAAAAAA1")))
+                .andExpect(jsonPath("$.videos[*].id", contains("vidAAAAAAA1", "vidCCCCCCC3")))
+                .andExpect(jsonPath("$.videos[*].channelId", contains(link.getChannelId(), "UC-someone-else")))
                 .andReturn().getResponse().getContentAsString();
 
         assertThat(YOUTUBE.lastVideosBearer()).isEqualTo("Bearer at-old");
-        assertThat(YOUTUBE.lastVideosQuery()).contains("part=id", "id=vidAAAAAAA1,vidBBBBBBB2");
+        assertThat(YOUTUBE.lastVideosQuery()).contains("part=snippet", "id=vidAAAAAAA1,vidBBBBBBB2,vidCCCCCCC3");
         assertThat(body).doesNotContain("at-old");
     }
 

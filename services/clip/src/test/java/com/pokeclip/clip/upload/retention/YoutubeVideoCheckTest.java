@@ -58,17 +58,21 @@ class YoutubeVideoCheckTest extends IntegrationTestSupport {
 
     /**
      * 30일이 지난 것만 묻는다. 없다는 답은 지금 채널 · 채널 모름 줄만 지우고(다른 채널 영상은 지금 토큰으로 안 보여 「없음」이 근거가
-     * 아니다), 있다는 답은 확인 시각을 적고 채널 모름 줄에 지금 채널을 채운다
+     * 아니다), 있다는 답은 확인 시각을 적고 채널 모름 줄에 <b>그 영상의 주인 채널</b>을 채운다. 🔴 지금 채널로 채우지 않는다: 공개 영상은
+     * 다른 채널 토큰으로도 보여 옛 채널 영상이 새 채널 것으로 붙으면 옛 채널 지우기에서 빠진다(PR #375 codex)
      */
     @Test
     void 지난_것만_묻고_없는_것은_지우고_있는_것은_채널을_채운다() throws Exception {
         long 있음 = 업로드("vidKEEP0001", 지금_채널, 31);
         long 모름_있음 = 업로드("vidUNKNOWN1", null, 31);
+        long 모름_옛채널 = 업로드("vidOLDPUBLIC", null, 31);
         long 없음 = 업로드("vidGONE0001", 지금_채널, 40);
         long 다른것 = 업로드("vidOTHER001", 다른_채널, 31);
         long 최근 = 업로드("vidRECENT01", 지금_채널, 3);
-        AUTH.respondWith(CHECK, 200, "{\"linked\":true,\"channelId\":\"" + 지금_채널
-                + "\",\"existing\":[\"vidKEEP0001\",\"vidUNKNOWN1\"]}");
+        AUTH.respondWith(CHECK, 200, "{\"linked\":true,\"channelId\":\"" + 지금_채널 + "\",\"videos\":["
+                + "{\"id\":\"vidKEEP0001\",\"channelId\":\"" + 지금_채널 + "\"},"
+                + "{\"id\":\"vidUNKNOWN1\",\"channelId\":\"" + 지금_채널 + "\"},"
+                + "{\"id\":\"vidOLDPUBLIC\",\"channelId\":\"" + 다른_채널 + "\"}]}");
 
         checker.checkDue(Instant.now());
 
@@ -76,10 +80,11 @@ class YoutubeVideoCheckTest extends IntegrationTestSupport {
         assertThat(보낸것.get("userId").asLong()).isEqualTo(Long.parseLong(주인));
         List<String> 번호 = new ArrayList<>();
         보낸것.get("videoIds").forEach(n -> 번호.add(n.asString()));
-        assertThat(번호).containsExactlyInAnyOrder("vidKEEP0001", "vidUNKNOWN1", "vidGONE0001", "vidOTHER001");
+        assertThat(번호).containsExactlyInAnyOrder("vidKEEP0001", "vidUNKNOWN1", "vidOLDPUBLIC", "vidGONE0001", "vidOTHER001");
 
         assertThat(줄(있음)).isEqualTo("vidKEEP0001:" + 지금_채널 + ":checked");
-        assertThat(줄(모름_있음)).as("있으면 지금 채널 것이다").isEqualTo("vidUNKNOWN1:" + 지금_채널 + ":checked");
+        assertThat(줄(모름_있음)).as("주인 채널로 채운다").isEqualTo("vidUNKNOWN1:" + 지금_채널 + ":checked");
+        assertThat(줄(모름_옛채널)).as("보여도 지금 채널이 아니라 주인 채널로 채운다").isEqualTo("vidOLDPUBLIC:" + 다른_채널 + ":checked");
         assertThat(줄(없음)).isEqualTo("null:null:forgotten");
         assertThat(줄(다른것)).as("다른 채널 영상은 지금 토큰으로 안 보여도 안 지운다").isEqualTo("vidOTHER001:" + 다른_채널 + ":checked");
         assertThat(줄(최근)).isEqualTo("vidRECENT01:" + 지금_채널 + ":unchecked");
@@ -104,9 +109,9 @@ class YoutubeVideoCheckTest extends IntegrationTestSupport {
         checker.checkDue(Instant.now());
         assertThat(줄(옛것)).isEqualTo("vidKEEP0001:" + 지금_채널 + ":unchecked");
 
-        AUTH.respondWith(CHECK, 200, "{\"linked\":true,\"existing\":\"vidKEEP0001\"}");
+        AUTH.respondWith(CHECK, 200, "{\"linked\":true,\"channelId\":\"x\",\"videos\":\"vidKEEP0001\"}");
         checker.checkDue(Instant.now());
-        assertThat(줄(옛것)).as("existing이 배열이 아니면 모른다").isEqualTo("vidKEEP0001:" + 지금_채널 + ":unchecked");
+        assertThat(줄(옛것)).as("videos가 배열이 아니면 모른다").isEqualTo("vidKEEP0001:" + 지금_채널 + ":unchecked");
     }
 
     /** 한 번에 50개까지 묻는다(유튜브 videos.list 한 번의 상한). 남은 것은 같은 순회의 다음 묶음이 묻는다 */
@@ -115,7 +120,7 @@ class YoutubeVideoCheckTest extends IntegrationTestSupport {
         for (int i = 0; i < 51; i++) {
             업로드(String.format("vid%08d", i), 지금_채널, 31);
         }
-        AUTH.respondWith(CHECK, 200, "{\"linked\":true,\"channelId\":\"" + 지금_채널 + "\",\"existing\":[]}");
+        AUTH.respondWith(CHECK, 200, "{\"linked\":true,\"channelId\":\"" + 지금_채널 + "\",\"videos\":[]}");
 
         checker.checkDue(Instant.now());
 

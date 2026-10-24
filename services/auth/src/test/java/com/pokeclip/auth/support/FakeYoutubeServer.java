@@ -45,8 +45,8 @@ public final class FakeYoutubeServer implements AutoCloseable {
     private final AtomicInteger revokeCounter = new AtomicInteger();
     private final AtomicInteger channelsCounter = new AtomicInteger();
     private final AtomicInteger videosCounter = new AtomicInteger();
-    /** videos.list(POK-423)가 「있다」고 답할 영상 번호. 물은 것 중 여기 있는 것만 돌려준다. */
-    private final java.util.Set<String> existingVideos = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    /** videos.list(POK-423)가 「있다」고 답할 영상 번호 → 그 영상의 채널. 물은 것 중 여기 있는 것만 돌려준다. */
+    private final Map<String, String> existingVideos = new java.util.concurrent.ConcurrentHashMap<>();
     private final AtomicReference<Response> videosResponse = new AtomicReference<>();
     private final AtomicReference<String> lastVideosQuery = new AtomicReference<>();
     private final AtomicReference<String> lastVideosBearer = new AtomicReference<>();
@@ -192,9 +192,11 @@ public final class FakeYoutubeServer implements AutoCloseable {
         return lastTokenContentType.get();
     }
 
-    /** videos.list가 「있다」고 답할 영상 번호를 더한다(POK-423). */
-    public void videosExist(String... ids) {
-        existingVideos.addAll(List.of(ids));
+    /** videos.list가 「있다」고 답할 영상 번호를 더한다(POK-423). 주인 채널은 {@code channelId}다. */
+    public void videosExist(String channelId, String... ids) {
+        for (String id : ids) {
+            existingVideos.put(id, channelId);
+        }
     }
 
     /** videos.list가 다음 호출부터 이 응답을 준다. 기본(물은 것 ∩ 있는 것)으로 돌리려면 reset(). */
@@ -279,8 +281,9 @@ public final class FakeYoutubeServer implements AutoCloseable {
                 continue;
             }
             for (String id : URLDecoder.decode(pair.substring(3), UTF_8).split(",")) {
-                if (existingVideos.contains(id)) {
-                    items.append(items.isEmpty() ? "" : ",").append("{\"kind\":\"youtube#video\",\"id\":\"").append(id).append("\"}");
+                if (existingVideos.containsKey(id)) {
+                    items.append(items.isEmpty() ? "" : ",").append("{\"id\":\"").append(id)
+                            .append("\",\"snippet\":{\"channelId\":\"").append(existingVideos.get(id)).append("\"}}");
                 }
             }
         }

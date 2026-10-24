@@ -111,15 +111,18 @@ public class YoutubeOAuthClient {
     }
 
     /**
-     * 이 영상들 중 유튜브에 아직 있는 것(POK-423, 30일 확인). {@code videos.list?part=id&id=…}: 1유닛 · 한 번에 50개까지(문서).
-     * 비공개 영상은 그 채널 토큰으로만 보이므로 반드시 영상 주인의 토큰으로 묻는다. 없는 번호는 오류가 아니라 목록에서 빠진다.
+     * 이 영상들 중 유튜브에 아직 있는 것과 그 영상의 채널(POK-423, 30일 확인). {@code videos.list?part=snippet&id=…}: 1유닛 · 한 번에
+     * 50개까지(문서). 비공개 영상은 그 채널 토큰으로만 보이므로 영상 주인의 토큰으로 묻는다. 없는 번호는 오류가 아니라 목록에서 빠진다.
+     * 🔴 공개 영상은 다른 채널 토큰으로도 보인다: 그래서 「보였다」가 아니라 {@code snippet.channelId}로 주인을 가린다(PR #375 codex).
      *
      * @param videoIds 1~50개. 모양 검사는 부른 쪽이 한다
+     * @return 영상 번호 → 그 영상의 채널 번호
      */
-    public java.util.Set<String> existingVideos(String accessToken, List<String> videoIds) {
+    public Map<String, String> existingVideos(String accessToken, List<String> videoIds) {
         String ids = String.join(",", videoIds);
         Map<?, ?> body = call(() -> restClient.get()
-                .uri(properties.apiBaseUri() + "/youtube/v3/videos?part=id&maxResults=50&id={ids}", ids)
+                .uri(properties.apiBaseUri() + "/youtube/v3/videos?part=snippet&fields=items(id,snippet/channelId)"
+                        + "&maxResults=50&id={ids}", ids)
                 .header("Authorization", "Bearer " + accessToken)
                 .retrieve().body(Map.class));
         if (body == null) {
@@ -127,17 +130,20 @@ public class YoutubeOAuthClient {
         }
         Object items = body.get("items");
         if (items == null) {
-            return java.util.Set.of();
+            return Map.of();
         }
         if (!(items instanceof List<?> list)) {
             throw malformed("items", items);
         }
-        java.util.Set<String> found = new java.util.HashSet<>();
+        Map<String, String> found = new java.util.HashMap<>();
         for (Object item : list) {
             if (!(item instanceof Map<?, ?> map) || !(map.get("id") instanceof String id)) {
                 throw malformed("items[].id", item);
             }
-            found.add(id);
+            if (!(map.get("snippet") instanceof Map<?, ?> snippet) || !(snippet.get("channelId") instanceof String owner)) {
+                throw malformed("items[].snippet.channelId", map.get("snippet"));
+            }
+            found.put(id, owner);
         }
         return found;
     }

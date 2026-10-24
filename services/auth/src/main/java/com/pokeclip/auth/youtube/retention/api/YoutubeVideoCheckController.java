@@ -13,7 +13,6 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.regex.Pattern;
 
 /**
@@ -22,8 +21,9 @@ import java.util.regex.Pattern;
  *
  * <p>답:
  * <ul>
- *   <li>200 {@code {"linked":true,"channelId","existing":[…]}}: 그 토큰의 채널과, 물은 것 중 유튜브에 있는 것. 비공개 영상은 그 채널
- *       토큰으로만 보이므로 다른 채널 영상은 「없음」으로 나온다(clip이 채널을 견줘 안 지운다)</li>
+ *   <li>200 {@code {"linked":true,"channelId","videos":[{"id","channelId"}…]}}: 그 토큰의 채널과, 물은 것 중 유튜브에 있는 것과
+ *       각 영상의 주인 채널. 비공개 영상은 그 채널 토큰으로만 보여 다른 채널 비공개 영상은 「없음」으로 나온다(clip이 채널을 견줘
+ *       안 지운다). 공개 영상은 다른 채널 것도 보여 주인 채널을 같이 준다(clip이 채널 모르는 줄을 그것으로 채운다)</li>
  *   <li>200 {@code {"linked":false}}: 연동이 없거나 끊겼다(지우는 것은 해제 기한이 한다)</li>
  *   <li>503: 지금은 못 묻는다(갱신 일시 실패 · 구글 장애 · 할당량). clip은 다음 바퀴에 다시 묻는다</li>
  *   <li>400: 모양이 틀렸다(번호 1~50개, 영상 번호 모양)</li>
@@ -62,7 +62,7 @@ public class YoutubeVideoCheckController {
             }
             return ResponseEntity.ok(Map.of("linked", false));
         }
-        Set<String> existing;
+        Map<String, String> existing;
         try {
             existing = youtube.existingVideos(token.accessToken(), request.videoIds());
         } catch (RuntimeException e) {
@@ -72,7 +72,9 @@ public class YoutubeVideoCheckController {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("linked", true);
         body.put("channelId", token.channelId());
-        body.put("existing", existing.stream().filter(request.videoIds()::contains).sorted().toList());
+        body.put("videos", existing.entrySet().stream().filter(e -> request.videoIds().contains(e.getKey()))
+                .sorted(Map.Entry.comparingByKey())
+                .map(e -> Map.of("id", e.getKey(), "channelId", e.getValue())).toList());
         log.info("auth.youtube.video_check userId={} asked={} existing={}",
                 request.userId(), request.videoIds().size(), existing.size());
         return ResponseEntity.ok(body);
