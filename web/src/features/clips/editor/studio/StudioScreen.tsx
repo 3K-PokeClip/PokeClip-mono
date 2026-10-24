@@ -764,6 +764,15 @@ function WiredStudio({
             label: `편집본 #${snap.id} v${snap.recipeVersion} 저장됨`,
           }));
           toast({ tone: 'success', title: `편집본 #${snap.id} 저장됨 (v${snap.recipeVersion})` });
+          // 사람이 누른 저장만 센다 — 영상 주문(submitUpload)도 persist를 거치지만 여기로 오지 않는다 (POK-357)
+          track('clip_recipe_saved', {
+            first_save: current.recipeId === null,
+            source: openedFrom,
+            layout: recipe.layout,
+            caption_position: recipe.captionPosition,
+            subtitle_mode: recipe.subtitleMode,
+            cut_seconds: Math.round(recipe.range.endSeconds - recipe.range.startSeconds),
+          });
         })
         .catch((e: unknown) => {
           const message = messageOf(e);
@@ -771,7 +780,7 @@ function WiredStudio({
           toast({ tone: 'error', title: '저장 실패', description: message });
         });
     },
-    [documentFor, persist, toast],
+    [documentFor, persist, toast, openedFrom],
   );
 
   const [pending, setPending] = useState<PendingUpload | null>(null);

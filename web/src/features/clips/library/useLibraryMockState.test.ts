@@ -5,6 +5,16 @@ import { withToastProvider } from '@/test/testProviders';
 import { LIBRARY_FIXTURE } from './libraryFixture';
 import { useLibraryMockState, type LibraryOptions } from './useLibraryMockState';
 
+const { track } = vi.hoisted(() => ({ track: vi.fn() }));
+vi.mock('@/lib/analytics', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/analytics')>()),
+  track,
+}));
+/** 사용 통계로 나간 그 이벤트의 속성들 (POK-357) */
+const tracked = (name: string) =>
+  track.mock.calls.filter(([n]) => n === name).map(([, props]) => props as Record<string, unknown>);
+afterEach(() => track.mockReset());
+
 // 시안 1g 목업 8건과 얼린 시각을 주입한다 — 주입하지 않으면 훅이 clip 보관함 문을 부른다
 function renderLibrary(options?: LibraryOptions) {
   return renderHook(() => useLibraryMockState({ ...LIBRARY_FIXTURE, ...options }), {
@@ -94,6 +104,8 @@ describe('useLibraryMockState', () => {
     act(() => result.current.select('lib2-1'));
     act(() => result.current.retryRender('lib2-1'));
     expect(result.current.selectedClip?.status).toBe('editing');
+    // 시안(fixture) 분기는 서버에 주문하지 않으니 세지 않는다 (POK-357)
+    expect(tracked('video_render_retried')).toEqual([]);
   });
 
   it('삭제는 목록에서 빼고 선택도 푼다', () => {
@@ -310,6 +322,8 @@ describe('useLibraryMockState — 유튜브 업로드·내려받기 (POK-111)', 
     expect(result.current.clips[0]?.entry?.status).toBe('uploading');
     expect(result.current.clips[0]?.progressLabel).toBe('유튜브에 올리는 중');
     expect(result.current.clips[0]?.title).toBe('보스 막타');
+    // 새 주문만 센다 — 제목은 싣지 않는다 (POK-357)
+    expect(tracked('video_upload_requested')).toEqual([{ via: 'title' }]);
   });
 
   it('답을 기다리는 동안 다시 눌러도 한 번만 보낸다', async () => {
@@ -373,6 +387,7 @@ describe('useLibraryMockState — 유튜브 업로드·내려받기 (POK-111)', 
     expect(result.current.clips[0]?.title).toBe('먼저 올린 제목');
     expect(document.body.textContent).toContain('이미 주문된 업로드가 있어요');
     expect(document.body.textContent).not.toContain('유튜브 업로드를 시작했어요');
+    expect(tracked('video_upload_requested')).toEqual([]); // 먼저 들어온 주문은 새 주문이 아니다
   });
 
   it('남은 제목 초안은 완성(올릴 수 있는) 편집본에만 얹는다 — 올린 뒤에는 서버 제목이 정본', async () => {
@@ -562,12 +577,15 @@ describe('useLibraryMockState — 유튜브 업로드·내려받기 (POK-111)', 
 
     await expect(result.current.previewUrl('12')).resolves.toBe('https://s3.example/a.mp4');
     expect(posts(spy)[0]?.[0]).toBe('/api/clip/broadcasts/s%201/clips/5/file-access');
+    expect(tracked('clip_download_requested')).toEqual([]); // 미리보기는 받기가 아니다
 
     const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
     act(() => result.current.download('12'));
     await vi.waitFor(() => expect(click).toHaveBeenCalledTimes(1));
     expect((click.mock.contexts[0] as HTMLAnchorElement).href).toBe('https://s3.example/a.mp4');
     click.mockRestore();
+    // 주소는 싣지 않는다 (POK-357)
+    expect(tracked('clip_download_requested')).toEqual([{}]);
   });
 
   it('영상이 없으면 주소를 묻지 않는다', async () => {
@@ -666,6 +684,7 @@ describe('useLibraryMockState: 업로드 다시 시도 (POK-291)', () => {
     expect(init?.body).toBeUndefined();
     expect(result.current.clips[0]?.status).toBe('uploading');
     expect(document.body.textContent).toContain('다시 올리기 시작했어요');
+    expect(tracked('video_upload_retried')).toEqual([{}]);
   });
 
   it('답을 기다리는 동안 연타해도 한 번만 보낸다', async () => {
@@ -835,6 +854,7 @@ describe('useLibraryMockState: 업로드 정보가 있는데 업로드가 안 �
     expect(posts(spy)).toHaveLength(1);
     expect(result.current.clips[0]?.status).toBe('uploading');
     expect(document.body.textContent).toContain('유튜브 업로드를 시작했어요');
+    expect(tracked('video_upload_requested')).toEqual([{ via: 'intent' }]);
   });
 
   it('답을 기다리는 동안 연타해도 한 번만 보낸다', async () => {
