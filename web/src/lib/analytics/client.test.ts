@@ -9,7 +9,7 @@ const posthog = vi.hoisted(() => ({
   get_distinct_id: vi.fn(() => 'anon-1'),
   get_explicit_consent_status: vi.fn((): 'granted' | 'denied' | 'pending' => 'pending'),
   opt_out_capturing: vi.fn(),
-  clear_opt_in_out_capturing: vi.fn(),
+  opt_in_capturing: vi.fn(),
   stopSessionRecording: vi.fn(),
   register: vi.fn(),
 }));
@@ -208,21 +208,22 @@ describe('identifyUser — 「이용 분석 참여」 꺼짐(처리방침 7·9�
     expect(posthog.identify).not.toHaveBeenCalled();
   });
 
-  it('다시 켜면 꺼 둔 선택만 지우고 식별한다 — opt_in이 아니라 추적 금지는 SDK가 그대로 지킨다', async () => {
+  it('다시 켜면 opt_in으로 전송을 되살린 뒤 식별한다 — $opt_in 이벤트는 보내지 않는다', async () => {
     const client = await ready();
     posthog.get_explicit_consent_status.mockReturnValue('denied');
     client.identifyUser(7, false);
-    expect(posthog.clear_opt_in_out_capturing).toHaveBeenCalledTimes(1);
-    const [clearAt] = posthog.clear_opt_in_out_capturing.mock.invocationCallOrder;
+    // clear(선택만 지우기)는 SDK 전송 대기열을 다시 시작하지 않는다 — 꺼진 채 연 페이지에서 아무것도 안 나갔다(실측)
+    expect(posthog.opt_in_capturing.mock.calls).toEqual([[{ captureEventName: false }]]);
+    const [optInAt] = posthog.opt_in_capturing.mock.invocationCallOrder;
     const [identifyAt] = posthog.identify.mock.invocationCallOrder;
-    expect(clearAt).toBeLessThan(identifyAt ?? 0);
+    expect(optInAt).toBeLessThan(identifyAt ?? 0);
     expect(posthog.identify).toHaveBeenCalledWith('7');
   });
 
   it('켠 회원이 선택한 적 없으면 동의 쿠키를 만들지 않는다', async () => {
     const client = await ready();
     client.identifyUser(7);
-    expect(posthog.clear_opt_in_out_capturing).not.toHaveBeenCalled();
+    expect(posthog.opt_in_capturing).not.toHaveBeenCalled();
     expect(posthog.opt_out_capturing).not.toHaveBeenCalled();
   });
 

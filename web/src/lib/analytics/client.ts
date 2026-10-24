@@ -160,8 +160,9 @@ function resetKeepingOptOut(posthog: PostHog): void {
  * SDK는 식별된 사람 위에 다른 번호로 identify하면 둘을 합치지 않고 번호만 바꾸므로, 지우지 않으면 앞사람의 기기 식별자를 잇는다.
  *
  * `optOut`은 그 회원의 「이용 분석 참여」 꺼짐(`me.analyticsOptOut`, 처리방침 7·9절)이다. identify보다 **먼저** 맞춘다 —
- * 순서가 바뀌면 끈 회원의 `$identify`가 새어 나간다. 끄면 이벤트·녹화를 멈추고 식별도 하지 않는다. 다시 켜면 그 선택만
- * 지운다(opt_in이 아니다: 추적 금지는 SDK가 그대로 따로 지키고, 켠 회원에게 동의 쿠키를 남기지 않는다).
+ * 순서가 바뀌면 끈 회원의 `$identify`가 새어 나간다. 끄면 이벤트·녹화를 멈추고 식별도 하지 않는다. 다시 켜면 opt_in이다 —
+ * 선택만 지우는 clear는 SDK의 전송 대기열을 다시 시작하지 않아, 꺼진 채 연 페이지에서는 새로고침 전까지 아무것도 안 나갔다
+ * (2026-10-24 실측). `$opt_in` 이벤트는 보내지 않는다. 추적 금지는 저장된 선택과 무관하게 SDK가 먼저 막는다(소스 확인).
  * 로그아웃·다른 회원 로그인의 reset은 끈 선택을 지키고(resetKeepingOptOut), 다음에 식별할 때 그 회원의 값을 다시 건다.
  */
 export function identifyUser(userId: number, optOut = false): void {
@@ -176,7 +177,7 @@ export function identifyUser(userId: number, optOut = false): void {
       }
       return;
     }
-    if (denied) posthog.clear_opt_in_out_capturing();
+    if (denied) posthog.opt_in_capturing({ captureEventName: false });
     posthog.identify(id);
   });
 }
