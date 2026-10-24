@@ -20,12 +20,6 @@
   --sp-gold: #a87610;
 }
 
-@media (prefers-color-scheme: light) {
-  :global(:root:not([data-theme])) .panel {
-    --sp-gold: #a87610;
-  }
-}
-
 /* ---------- 머리줄 ---------- */
 
 .head {

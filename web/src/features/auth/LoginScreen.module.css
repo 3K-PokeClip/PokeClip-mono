@@ -160,7 +160,7 @@
 /* ---------- 아이콘·로고 스케일 ----------
    next/image·svg의 width 속성은 px 고정이라 CSS로 유닛에 태운다 */
 
-.brand img {
+.brandSymbol {
   width: calc(36 * var(--pc-u));
   height: calc(36 * var(--pc-u));
 }

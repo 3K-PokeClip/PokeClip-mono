@@ -9,8 +9,25 @@
   position: absolute;
   inset: 0;
   transform: translateX(-100%);
-  background: linear-gradient(90deg, transparent, rgb(var(--pc-gray-50-rgb) / 0.06), transparent);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgb(var(--pc-gray-50-rgb) / 0.06) /* 라이트 덮음 */,
+    transparent
+  );
   animation: pc-shimmer 1.4s infinite;
+}
+/* 라이트에선 surface-hover가 캔버스와 거의 같고 흰 반짝임도 안 보인다 — 글자색을 섞은 바탕 + 흰 반짝임 */
+:global([data-theme='light']) .skeleton {
+  background: color-mix(in srgb, var(--pc-color-text-primary) 7%, var(--pc-color-bg-surface));
+}
+:global([data-theme='light']) .skeleton::after {
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--pc-white) 60%, transparent),
+    transparent
+  );
 }
 @keyframes pc-shimmer {
   to {

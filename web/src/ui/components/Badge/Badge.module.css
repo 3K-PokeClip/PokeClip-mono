@@ -41,7 +41,7 @@
 .badge[data-tone='warning'] {
   --_c: var(--pc-color-warning);
   --_bg: var(--pc-color-warning-subtle);
-  --_on: var(--pc-gray-1000);
+  --_on: var(--pc-gray-1000); /* 테마 고정 — 밝은 채움 위 글자 */
 }
 .badge[data-tone='danger'] {
   --_c: var(--pc-color-danger);
@@ -51,7 +51,7 @@
 .badge[data-tone='info'] {
   --_c: var(--pc-color-info);
   --_bg: var(--pc-color-info-subtle);
-  --_on: var(--pc-gray-1000);
+  --_on: var(--pc-gray-1000); /* 테마 고정 — 밝은 채움 위 글자 */
 }
 .badge[data-variant='solid'] {
   background: var(--_c);
