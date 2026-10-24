@@ -8,6 +8,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.server.ServerHttpRequest;
 import org.springframework.http.server.ServerHttpResponse;
+import org.springframework.http.server.ServletServerHttpResponse;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -60,23 +61,24 @@ public class FakeChzzkServer implements WebSocketConfigurer {
         // 통합 경로에서 한 번도 안 밟는다. 프로브 시도 #1을 깨뜨린 자리다.
         FakeChzzkBehavior behavior = fakeChzzkBehavior();
         registry.addHandler(fakeSocketHandler(behavior), "/socket.io/")
-                // 업그레이드 응답(101) 전에 센다. 클라이언트의 open()은 101만 받고 돌아오므로, 서버가 그 소켓을
+                // 업그레이드가 정해진 자리에서 센다. 클라이언트의 open()은 101만 받고 돌아오므로, 서버가 그 소켓을
                 // afterConnectionEstablished에서 등록하기 전에 테스트가 닫고 reset()까지 갈 수 있다. 등록으로만 세면
-                // reset()이 빈 자리를 보고 지나가고, 늦게 등록된 소켓의 종료 프레임 "1"이 다음 시행에 남는다(POK-468)
+                // reset()이 빈 자리를 보고 지나가고, 늦게 등록된 소켓의 종료 프레임 "1"이 다음 시행에 남는다(POK-468).
+                // 톰캣은 101을 이 처리기가 돌아간 뒤에 보내므로 여기서 세면 클라이언트보다 앞선다. 101일 때만 센다:
+                // 거절된 요청은 afterConnectionClosed가 안 와서 센 것이 영영 안 줄어든다
                 .addInterceptors(new HandshakeInterceptor() {
                     @Override
                     public boolean beforeHandshake(ServerHttpRequest request, ServerHttpResponse response,
                                                    WebSocketHandler wsHandler, Map<String, Object> attributes) {
-                        behavior.socketAccepted();
                         return true;
                     }
 
                     @Override
                     public void afterHandshake(ServerHttpRequest request, ServerHttpResponse response,
                                                WebSocketHandler wsHandler, Exception exception) {
-                        // 업그레이드가 실패하면 afterConnectionClosed가 안 온다. 센 것을 여기서 되돌린다
-                        if (exception != null) {
-                            behavior.socketGone();
+                        if (exception == null && response instanceof ServletServerHttpResponse servlet
+                                && servlet.getServletResponse().getStatus() == HttpStatus.SWITCHING_PROTOCOLS.value()) {
+                            behavior.socketAccepted();
                         }
                     }
                 })
