@@ -361,6 +361,11 @@
   filter: brightness(1.25);
 }
 
+/* 라이트 링크는 이미 진한 색이라 밝히면 대비가 떨어진다 — 어둡게 */
+:global([data-theme='light']) .faqLink:hover {
+  filter: brightness(0.8);
+}
+
 .faqLink:focus-visible {
   outline: 2px solid var(--pc-color-focus-ring);
   outline-offset: 2px;

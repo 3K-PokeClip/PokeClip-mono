@@ -5,7 +5,7 @@
   z-index: var(--pc-z-modal);
   display: grid;
   place-items: center;
-  background: rgb(5 7 13 / 0.58);
+  background: rgb(5 7 13 / 0.58); /* 테마 고정 */
   padding: calc(24 * var(--pc-u));
 }
 
@@ -112,7 +112,7 @@
   z-index: var(--pc-z-modal);
   display: grid;
   place-items: center;
-  background: rgb(5 7 13 / 0.55);
+  background: rgb(5 7 13 / 0.55); /* 테마 고정 */
   padding: calc(24 * var(--pc-u));
 }
 
@@ -216,10 +216,10 @@
 .spotRing {
   position: fixed;
   /* 헤어라인 계열은 리터럴 px — 유닛에 태우면 띠로 두꺼워진다 */
-  border: 1.5px solid rgb(var(--pc-primary-500-rgb) / 0.9);
+  border: 1.5px solid rgb(var(--pc-primary-500-rgb) / 0.9); /* 테마 고정 */
   border-radius: calc(18 * var(--pc-u));
   /* 컷아웃 트릭 — 링 밖 전체를 딤으로 덮는다 */
-  box-shadow: 0 0 0 200vmax rgb(5 7 13 / 0.55);
+  box-shadow: 0 0 0 200vmax rgb(5 7 13 / 0.55); /* 테마 고정 */
   pointer-events: none;
   transition:
     top 0.35s var(--pc-ease-standard),

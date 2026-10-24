@@ -4,15 +4,15 @@
 .dock {
   --u: var(--pc-shell-u);
 
-  --dock-fill-top: rgb(255 255 255 / 0.1);
-  --dock-fill-bottom: rgb(255 255 255 / 0.02);
-  --dock-border: rgb(255 255 255 / 0.14);
-  --dock-sheen: rgb(255 255 255 / 0.16);
-  --dock-sheen-bottom: rgb(255 255 255 / 0.04);
-  --dock-item: rgb(255 255 255 / 0.62);
-  --dock-item-hover: rgb(255 255 255 / 0.9);
-  --dock-item-hover-top: rgb(255 255 255 / 0.14);
-  --dock-item-hover-bottom: rgb(255 255 255 / 0.04);
+  --dock-fill-top: rgb(255 255 255 / 0.1); /* 라이트 덮음 */
+  --dock-fill-bottom: rgb(255 255 255 / 0.02); /* 라이트 덮음 */
+  --dock-border: rgb(255 255 255 / 0.14); /* 라이트 덮음 */
+  --dock-sheen: rgb(255 255 255 / 0.16); /* 라이트 덮음 */
+  --dock-sheen-bottom: rgb(255 255 255 / 0.04); /* 라이트 덮음 */
+  --dock-item: rgb(255 255 255 / 0.62); /* 라이트 덮음 */
+  --dock-item-hover: rgb(255 255 255 / 0.9); /* 라이트 덮음 */
+  --dock-item-hover-top: rgb(255 255 255 / 0.14); /* 라이트 덮음 */
+  --dock-item-hover-bottom: rgb(255 255 255 / 0.04); /* 라이트 덮음 */
 
   position: fixed;
   bottom: calc(18 * var(--u));
@@ -31,8 +31,8 @@
   box-shadow:
     inset 0 1px 0 var(--dock-sheen),
     inset 0 -1px 0 var(--dock-sheen-bottom),
-    0 24px 60px rgb(3 10 24 / 0.55),
-    0 4px 14px rgb(0 0 0 / 0.25);
+    0 24px 60px rgb(3 10 24 / 0.55) /* 라이트 덮음 */,
+    0 4px 14px rgb(0 0 0 / 0.25); /* 라이트 덮음 */
   /* 꾹 눌러 끄는 동안 글자 잡기·길게 누르기 메뉴가 끼어들지 않게. 가로 끌기는 독이, 세로 밀기는 화면 스크롤이
      갖는다(ModeSegment와 같다) — 세로로 밀어 브라우저가 가져가면 pointercancel로 누름이 풀리고 알약은 제자리로 */
   touch-action: pan-y;
@@ -52,20 +52,20 @@
    모듈은 값까지 스코프해 `Dock-module__해시__이름`으로 바꿔버린다. */
 
 :global([data-theme='light']) .dock {
-  --dock-fill-top: rgb(255 255 255 / 0.75);
-  --dock-fill-bottom: rgb(255 255 255 / 0.5);
-  --dock-border: rgb(15 20 32 / 0.1);
-  --dock-sheen: rgb(255 255 255 / 0.7);
-  --dock-sheen-bottom: rgb(15 20 32 / 0.03);
-  --dock-item: rgb(15 20 32 / 0.62);
-  --dock-item-hover: rgb(15 20 32 / 0.92);
-  --dock-item-hover-top: rgb(15 20 32 / 0.08);
-  --dock-item-hover-bottom: rgb(15 20 32 / 0.03);
+  --dock-fill-top: rgb(255 255 255 / 0.75); /* 라이트 값 */
+  --dock-fill-bottom: rgb(255 255 255 / 0.5); /* 라이트 값 */
+  --dock-border: rgb(15 20 32 / 0.1); /* 라이트 값 */
+  --dock-sheen: rgb(255 255 255 / 0.7); /* 라이트 값 */
+  --dock-sheen-bottom: rgb(15 20 32 / 0.03); /* 라이트 값 */
+  --dock-item: rgb(15 20 32 / 0.62); /* 라이트 값 */
+  --dock-item-hover: rgb(15 20 32 / 0.92); /* 라이트 값 */
+  --dock-item-hover-top: rgb(15 20 32 / 0.08); /* 라이트 값 */
+  --dock-item-hover-bottom: rgb(15 20 32 / 0.03); /* 라이트 값 */
 
   box-shadow:
     inset 0 1px 0 var(--dock-sheen),
-    0 24px 60px rgb(15 20 32 / 0.16),
-    0 4px 14px rgb(15 20 32 / 0.08);
+    0 24px 60px rgb(15 20 32 / 0.16) /* 라이트 값 */,
+    0 4px 14px rgb(15 20 32 / 0.08); /* 라이트 값 */
 }
 
 .item {
@@ -104,15 +104,15 @@
   position: absolute;
   inset: -1px;
   border-radius: var(--pc-radius-pill);
-  border: 1px solid rgb(255 255 255 / 0.16);
+  border: 1px solid rgb(255 255 255 / 0.16); /* 테마 고정 */
   background: linear-gradient(
     150deg,
-    rgb(var(--pc-primary-400-rgb) / 0.55),
-    rgb(var(--pc-primary-500-rgb) / 0.34)
+    rgb(var(--pc-primary-400-rgb) / 0.55) /* 테마 고정 */,
+    rgb(var(--pc-primary-500-rgb) / 0.34) /* 테마 고정 */
   );
   box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.28),
-    0 2px 14px rgb(var(--pc-primary-500-rgb) / 0.38);
+    inset 0 1px 0 rgb(255 255 255 / 0.28) /* 테마 고정 */,
+    0 2px 14px rgb(var(--pc-primary-500-rgb) / 0.38); /* 테마 고정 */
   transition: scale var(--pc-duration-fast) var(--pc-ease-standard);
 }
 
