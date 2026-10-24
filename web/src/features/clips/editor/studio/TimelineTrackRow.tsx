@@ -90,6 +90,8 @@ function VolumeValue({ track, controls }: { track: EditorTrack; controls: Volume
           }}
           onPointerUp={endDrag}
           onPointerCancel={endDrag}
+          // 캡처를 잃어도 끝이다: up·cancel 없이 끝나면 제스처가 열린 채 남아 다음 편집들이 한 실행취소 칸에 섞인다(PR #341 claude)
+          onLostPointerCapture={endDrag}
           onKeyDown={onKeyDown}
         >
           {value}%

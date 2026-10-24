@@ -124,6 +124,26 @@ describe('StudioScreen', () => {
     expect(within(timeline).getByRole('button', { name: '마이크 음량 80%' })).toBeInTheDocument();
   });
 
+  it('음량 숫자를 끄는 중 포인터 캡처를 잃어도 끌기를 끝낸다: 다음 편집이 같은 실행취소 칸에 섞이지 않는다(PR #341 claude)', () => {
+    renderStudio();
+    const timeline = screen.getByRole('region', { name: '타임라인' });
+    const mic = within(timeline).getByRole('button', { name: '마이크 음량 80%' });
+
+    fireEvent.pointerDown(mic, { clientX: 100, pointerId: 1, button: 0 });
+    fireEvent.pointerMove(mic, { clientX: 130, pointerId: 1 });
+    // pointerup·pointercancel 없이 캡처만 잃는다(다른 요소가 캡처를 가져가는 등)
+    fireEvent.lostPointerCapture(mic, { pointerId: 1 });
+    expect(within(timeline).getByRole('button', { name: '마이크 음량 110%' })).toBeInTheDocument();
+
+    const discord = within(timeline).getByRole('button', { name: '디스코드 넣기' });
+    fireEvent.click(discord);
+    expect(discord).toHaveAttribute('aria-pressed', 'false');
+    // 되돌리기 한 번은 넣기만 되돌린다: 끈 음량은 그대로다
+    fireEvent.click(screen.getByRole('button', { name: '작업 이전으로' }));
+    expect(discord).toHaveAttribute('aria-pressed', 'true');
+    expect(within(timeline).getByRole('button', { name: '마이크 음량 110%' })).toBeInTheDocument();
+  });
+
   it('음량 숫자에 초점이 있으면 ← → 가 5%씩 바꾸고 재생 위치는 안 움직인다(POK-389)', async () => {
     const user = userEvent.setup();
     renderStudio();
