@@ -834,8 +834,10 @@ done
       --output text
     ```
 
-*   그릇 여덟: 모두 `prod` 입니다. 2-3 판정의 `secrets` 행이 이 태그로
-    그릇을 풉니다.
+*   그릇 여덟(위 반복의 종류): 모두 `prod` 입니다. 2-3 판정의 `secrets`
+    행이 이 태그로 그릇을 풉니다. 1단-나 ② 가 들어간 판이면 그릇은
+    아홉이고, 아홉째(`stream-key-resolve-token`)는 이 걸음이 아니라
+    「1단-나 ② 2」 의 2-3 재판정이 봅니다.
 *   결과 줄을 볼트 raw 로 옮깁니다(비밀 값 훑기 뒤 · 계정 ID · ARN 가림).
 
 ### 1단-다 4. apply 뒤 2-3 재판정
@@ -1325,6 +1327,8 @@ plan 이 역할을 새로 만드는지 고치는지로 드러나고, 어느 쪽�
       done
     )
     rm -r "${sim}"
+    # (b2) 의 media_ssm 은 저장소 뿌리 기준 경로를 쓴다 — 뿌리로 돌아간다.
+    cd "$(git rev-parse --show-toplevel)"
     ```
 
     *   통과 = `shared implicitDeny` · `resolve allowed`. 전용은 양성
@@ -1476,7 +1480,7 @@ plan 이 역할을 새로 만드는지 고치는지로 드러나고, 어느 쪽�
         continue
       fi
       code="$(printf 'X-Stream-Key-Resolve-Token: %s\n' "${token}" |
-        curl -sS -o /dev/null -w '%{http_code}' -H @- \
+        curl -q -sS -o /dev/null -w '%{http_code}' -H @- \
           -H 'Content-Type: application/json' \
           -d '{"streamid":"#!::r=7ZK3M9QW2XJ4NB6TC8VDFG5HRP,m=publish"}' \
           "http://auth.pokeclip.internal:8082${api_path}")"
@@ -1492,7 +1496,8 @@ plan 이 역할을 새로 만드는지 고치는지로 드러나고, 어느 쪽�
     ```
 
     `token-probe AWSCURRENT rc=0 code=401` · `SSM Success` 이면 통과입니다.
-    `curl` 에 `-v` · `--trace` 를 붙이지 않습니다(헤더가 찍힘). 「멈춤」 줄 ·
+    `curl` 에 `-v` · `--trace` 를 붙이지 않습니다(헤더가 찍힘). `-q` 는
+    첫 인자여야 `.curlrc` 를 읽지 않으므로 앞에 둡니다. 「멈춤」 줄 ·
     `rc` 가 0 아님 · 401 밖의 코드는 판정 불가 · 멈춤입니다.
 *   **옛 공용 토큰**(8 의 완료 조건 ②): 상자는 공용 그릇을 못 읽으므로
     상자에서 보내지 않습니다. kty 가 세션 밖 터미널에서 Media 상자를 거치는
@@ -1505,6 +1510,7 @@ plan 이 역할을 새로 만드는지 고치는지로 드러나고, 어느 쪽�
     ```shell
     # 하위 셸 — 값 변수 · 추적 끔 · INT 트랩이 터미널 셸에 남지 않는다.
     # token 은 export 하지 않고, curl 에 -v · --trace 를 붙이지 않는다.
+    # curl 의 -q 는 첫 인자라야 .curlrc 를 읽지 않는다.
     (
       set +o xtrace +o allexport
       unset token
@@ -1520,7 +1526,7 @@ plan 이 역할을 새로 만드는지 고치는지로 드러나고, 어느 쪽�
           break
         fi
         code="$(printf 'X-Internal-Token: %s\n' "${token}" |
-          curl -s -o /dev/null -w '%{http_code}' -H @- \
+          curl -q -s -o /dev/null -w '%{http_code}' -H @- \
             -H 'Content-Type: application/json' \
             -d '{"streamid":"#!::r=7ZK3M9QW2XJ4NB6TC8VDFG5HRP,m=publish"}' \
             "http://localhost:<로컬 포트>/internal/stream-keys/resolve")"

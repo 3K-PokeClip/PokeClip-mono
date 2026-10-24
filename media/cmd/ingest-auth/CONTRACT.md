@@ -390,7 +390,7 @@ M2 브랜치의 응답기 자리는 이미지 · netns · `depends_on` · `resta
 | K3 | 응답기 비밀 입력 | **(가) `_FILE` 입력 추가.** 받을 비밀은 **셋**: (1) 4C resolve 토큰 (2) Control API 비밀번호(`MTX_API_PASS` — 응답기 · 사이드카가 공유) (3) Basic 자격(MediaMTX → 응답기). 값 출처는 D4 · K1 에 따른다(resolve 토큰 = Secrets Manager, 나머지 둘 = 시작 스크립트가 부팅마다 생성한 tmpfs 렌더 — D4 의 「값의 출처」 조건 하에) | **필요** — 트랙 A 가 더했다(1-5 의 6 · 9 · 13) | D4 |
 | K4 | `authHTTPExclude` | **(가) `read` · `playback`** (+ 켜진 `metrics` · `pprof`). **D12 의 SRT 경로 잠금 이행을 같은 PR 의 전제로** | 없음 | D6 · D12 |
 | K5 | 거부 목록 정본 | **(나) 상자 밖 정본 + 부팅 시 렌더**(없거나 비면 기동 차단) | 없음 | D7 |
-| K6 | 4C 출발지 잠금 단위 | **(가) 고정 주소 `/32`** — 선행 조건(3번 합의) 뒤 | 없음 | D9 |
+| K6 | 4C 출발지 잠금 단위 | **(나) Media 프라이빗 서브넷 CIDR**(POK-429 · kty 2026-10-24 — 2026-10-20 의 (가) 고정 주소 `/32` 를 대체). 값은 런타임이 넣는다 — `app_env.auth` 의 `STREAM_KEY_RESOLVE_ALLOWED_CIDRS` = 서브넷 조회(`data.aws_subnet.media_private`) 결과 | 없음 | D9 |
 | K7 | 송출자 `ip` 확인 수단 | **(가)** c1 의 가짜 응답기 + MediaMTX 연결 로그 | 없음 | D5 |
 | K8 | 포트 · 비밀 파일 경로 | **2절 끝 후보값 표를 후보값으로 채택**(Basic 자격 파일이 하나 늘어 비밀 파일은 응답기 쪽 `/run/secrets/` 아래 셋 · 사이드카 쪽 `mtx_api_pass` 하나 · MediaMTX 쪽은 `mediamtx.yml` 의 `authHTTPAddress` 렌더 — 위 후보 표 3 · 4 · 4b). 포트 충돌은 prod 포트 값 확인 뒤 | 없음(K3 가 전제) | D11 |
 
