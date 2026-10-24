@@ -280,6 +280,13 @@ describe('StudioScreen', () => {
     await user.click(screen.getByRole('button', { name: '재생 속도 1×' }));
     await user.click(screen.getByRole('menuitem', { name: '2×' }));
     expect(screen.getByRole('button', { name: '재생 속도 2×' })).toBeInTheDocument();
+
+    // 키보드로도 고른다: 열면 첫 항목(0.5×)에 초점이 가고 ↓ 한 번이 1×다(PR #341 2차)
+    screen.getByRole('button', { name: '재생 속도 2×' }).focus();
+    await user.keyboard('{Enter}');
+    expect(document.activeElement).toBe(screen.getByRole('menuitem', { name: '0.5×' }));
+    await user.keyboard('{ArrowDown}{Enter}');
+    expect(screen.getByRole('button', { name: '재생 속도 1×' })).toHaveFocus();
   });
 
   it('되감기·감기 버튼이 아이콘 안의 초로 갈린다 — 방향만으로는 구분되지 않는다', () => {
