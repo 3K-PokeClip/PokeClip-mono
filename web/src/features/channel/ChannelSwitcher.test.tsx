@@ -372,7 +372,9 @@ describe('ChannelSwitcher: 첫 로딩과 요청 중 표시(POK-446)', () => {
     // 낭독기엔 둘을 같이 말하는 status 한 줄만 들린다 — 막대는 모두 숨는다
     expect(p.getAllByRole('status')).toHaveLength(1);
     expect(p.getByRole('status')).toHaveTextContent('참여 채널과 받은 초대를 불러오는 중');
-    expect(p.getByRole('status').parentElement).toHaveAttribute('aria-busy', 'true');
+    // status는 busy 영역 밖, 바로 옆 형제가 막대 묶음이다(PR #377 리뷰: busy 안이면 낭독이 미뤄진다)
+    expect(p.getByRole('status').closest('[aria-busy="true"]')).toBeNull();
+    expect(p.getByRole('status').nextElementSibling).toHaveAttribute('aria-busy', 'true');
     // 응답 전엔 빈 목록이 아니라 모르는 것이다: 구역 제목·개수를 미리 쓰지 않는다
     expect(p.queryByText(/편집 참여 중/)).not.toBeInTheDocument();
     expect(p.queryByRole('group', { name: /받은 초대/ })).not.toBeInTheDocument();

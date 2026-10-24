@@ -58,5 +58,5 @@ pnpm test          # 유닛/접근성 테스트
 - **로딩이 아닌 것은 로더를 붙이지 않는다.** 실패·「확인 중」·「준비 중」·「기록 없음」 같은 값 부재 문구는 그대로 둔다. 실패를 로딩으로 가리지 않는다: 한 번도 못 읽었는데 실패했으면 못 불러왔다고 말하고 「다시 시도」를 준다.
 - **주기적인 다시 읽기(폴링)는 옛 화면을 둔다.** 로더는 첫 로딩에만 선다.
 - **타이밍**: 스켈레톤은 바로 보인다. 지연·최소 표시 시간을 두지 않는다 — 빈칸 → 스켈레톤 → 화면 3단계가 더 거슬린다.
-- **낭독**: 스켈레톤 묶음은 `LoadingRegion`으로 감싼다 — `aria-busy`와 숨은 `role="status"` 한 줄(「지난 방송을 불러오는 중」)만 읽히고 막대는 모두 `aria-hidden`이다. 목록 모양이면 `ul`을 `LoadingRegion` 안에 둔다(`ul` 바로 아래엔 `li`만 선다). 문장 옆에 `Spinner`를 두면 `Spinner`에 `aria-hidden`을 준다(같은 말이 두 번 읽힌다).
+- **낭독**: 스켈레톤 묶음은 `LoadingRegion`으로 감싼다 — 숨은 `role="status"` 한 줄(「지난 방송을 불러오는 중」)만 읽히고 막대는 모두 `aria-hidden`이다. status는 `aria-busy` 영역의 형제로 둔다(busy 안이면 busy를 따르는 낭독기가 영역이 내려갈 때까지 읽기를 미뤄 끝내 안 읽힌다). 목록 모양이면 `ul`을 `LoadingRegion` 안에 둔다(`ul` 바로 아래엔 `li`만 선다). 문장 옆에 `Spinner`를 두면 `Spinner`에 `aria-hidden`을 준다(같은 말이 두 번 읽힌다).
 - **테스트**: status 역할은 이름을 내용에서 얻지 않으므로 `getByRole('status', { name })`가 아니라 `getByRole('status')` + `toHaveTextContent(…)`로 본다. 한 화면에 status가 하나인지(`getAllByRole('status')` 길이)도 본다.

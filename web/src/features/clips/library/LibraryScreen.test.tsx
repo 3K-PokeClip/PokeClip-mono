@@ -1341,7 +1341,7 @@ describe('LibraryScreen — 목록 로딩·실패 (POK-443)', () => {
     expect(screen.getAllByRole('status')).toHaveLength(1);
     expect(screen.getByRole('status')).toHaveTextContent('편집본을 불러오는 중');
     // 로드 뒤 격자와 같은 9:16 카드 자리 — 열 수를 못 재는 jsdom에서는 8장
-    const region = screen.getByRole('status').closest('[aria-busy="true"]')!;
+    const region = container.querySelector('[aria-busy="true"]')!;
     expect(region.querySelectorAll('li')).toHaveLength(8);
     expect(region.querySelector('ul')).toHaveAttribute('data-panel-open', 'false');
     // 칩 줄·빈 상태는 편집본이 있어야(없어야) 서는 자리라 미리 그리지 않는다

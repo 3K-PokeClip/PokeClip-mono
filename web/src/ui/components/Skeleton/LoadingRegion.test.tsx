@@ -18,6 +18,8 @@ describe('LoadingRegion', () => {
     expect(screen.getAllByRole('status')).toHaveLength(1);
     expect(screen.getByRole('status')).toHaveTextContent('지난 방송을 불러오는 중');
     expect(screen.getByTestId('region')).toHaveAttribute('aria-busy', 'true');
+    // status는 busy 영역 밖(형제)이다: busy 안이면 busy를 따르는 낭독기가 영역이 내려갈 때까지 읽기를 미룬다(PR #377 리뷰)
+    expect(screen.getByRole('status').closest('[aria-busy="true"]')).toBeNull();
   });
 
   it('className·나머지 속성·ref가 루트 div로 간다', () => {
