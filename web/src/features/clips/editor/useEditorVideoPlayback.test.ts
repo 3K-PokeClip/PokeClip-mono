@@ -119,6 +119,8 @@ describe('useEditorVideoPlayback: 받은 창 알리기 (POK-389)', () => {
       }),
     );
     expect(result.current.window).toBeNull();
+    // 받으려는 창은 처음부터 있다: 미리 듣기가 영상과 함께 조각을 받기 시작한다(PR #341 2차)
+    expect(result.current.targetWindow).toEqual({ startSeconds: 0, endSeconds: 14 });
 
     finish(new Response('mp4', { status: 200 }));
     await waitFor(() => expect(result.current.src).toBe('blob:x'));

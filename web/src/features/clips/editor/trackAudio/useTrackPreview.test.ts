@@ -147,6 +147,34 @@ describe('useTrackPreview', () => {
     expect(gains.map((g) => g.gain.value)).toEqual([1, 0, 0]);
   });
 
+  it('영상을 다 받기 전에도 조각을 받기 시작하고, 따라 틀기는 영상이 받은 창이 생기면 시작한다(PR #341 2차)', async () => {
+    const { ctx } = fakeContext();
+    const sources = vi.spyOn(ctx, 'createBufferSource');
+    const node = Object.assign(video(), { paused: false, readyState: 4 });
+    const { result, rerender } = renderHook(
+      ({ playingFromSeconds }: { playingFromSeconds: number | null }) =>
+        useTrackPreview({
+          streamId: 's-1',
+          baseMs: BASE,
+          window: WINDOW,
+          video: node,
+          playingFromSeconds,
+          createContext: () => ctx as never,
+        }),
+      { initialProps: { playingFromSeconds: null as number | null } },
+    );
+    // 영상 창이 아직 없어도 받을 창으로 조각을 묻는다
+    await waitFor(() => expect(result.current.status).toBe('ready'));
+    expect(requestSegmentAudioAccess).toHaveBeenCalledWith('s-1', BASE + 10_000, BASE + 40_000);
+    // 영상이 아직 돌지 않으니(받은 창 없음) 소리를 걸지 않는다
+    act(() => node.dispatchEvent(new Event('playing')));
+    expect(sources).not.toHaveBeenCalled();
+
+    // 영상이 창을 받아 돌기 시작하면 그 창으로 옮겨 따라 튼다
+    rerender({ playingFromSeconds: 10 });
+    expect(sources).toHaveBeenCalled();
+  });
+
   it('소리 문맥을 깨우지 못하면 「못 부름」으로 바꿔 영상 소리를 되살린다(PR #341 codex)', async () => {
     const { ctx } = fakeContext();
     Object.assign(ctx, {

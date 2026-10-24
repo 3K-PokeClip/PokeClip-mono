@@ -65,8 +65,13 @@ export interface EditorVideoPlayback {
   videoRef: (element: HTMLVideoElement | null) => void;
   video: HTMLVideoElement | null;
   src: string;
-  /** 영상이 받은 창(편집기 초): 트랙별 미리 듣기가 같은 창의 조각을 받는다(POK-389). 받을 녹화가 없으면 null */
+  /** 영상이 받은 창(편집기 초): 영상 노드의 0초가 이 창의 시작이다(POK-389). 아직 못 받았거나 받을 녹화가 없으면 null */
   window: { startSeconds: number; endSeconds: number } | null;
+  /**
+   * 지금 받으려는 창(편집기 초). 영상을 다 받기 전에도 있다: 트랙별 미리 듣기가 같은 창의 조각을 영상과 함께 받기 시작한다
+   * (PR #341 2차 — 받은 창을 기다리면 영상 수신 + 조각 수신이 이어서 걸렸다). 녹화가 없는 구간이면 null
+   */
+  targetWindow: { startSeconds: number; endSeconds: number } | null;
   /** 받아 둔 조각(src)의 첫 장면이 이 훅의 시간축으로 몇 초인가. 조각 안 초 = 시간축 초 − 이 값 */
   windowStartSeconds: number;
 }
@@ -357,6 +362,13 @@ export function useEditorVideoPlayback(options: {
         : { startSeconds: srcWindow.startSeconds, endSeconds: srcWindow.endSeconds },
     [srcWindow, recordingSeconds],
   );
+  const targetWindow = useMemo(
+    () =>
+      win.empty || recordingSeconds <= 0
+        ? null
+        : { startSeconds: win.startSeconds, endSeconds: win.endSeconds },
+    [win, recordingSeconds],
+  );
 
   return {
     playback,
@@ -364,6 +376,7 @@ export function useEditorVideoPlayback(options: {
     video,
     src,
     window: loadedWindow,
+    targetWindow,
     windowStartSeconds: srcWindow?.startSeconds ?? win.startSeconds,
   };
 }

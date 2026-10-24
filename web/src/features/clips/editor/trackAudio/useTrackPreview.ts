@@ -12,7 +12,7 @@ import { followVideo, TrackAudioPlayer, type AudioContextLike } from './trackAud
 // 못 부르면(소리 문맥 없음·주소·받기·풀기 실패) 「unavailable」이고 영상 소리가 그대로 난다: 화면이 그 사실을 알린다.
 
 /**
- * - idle: 받을 창이 없다(첫 영상 창을 받는 중 · 녹화가 없는 구간). 알릴 것이 없다
+ * - idle: 받을 창이 없다(녹화가 없는 구간 · 녹화 없음). 알릴 것이 없다
  * - unavailable: 못 불렀다. 영상 소리로 들린다고 화면이 알린다
  */
 export type TrackPreviewStatus = 'idle' | 'loading' | 'ready' | 'unavailable';
@@ -53,14 +53,21 @@ export function useTrackPreview(options: {
   streamId: string;
   /** 편집기 시간축 0초의 절대 ms */
   baseMs: number;
-  /** 영상이 받은 창(편집기 초). 녹화가 없으면 null */
+  /** 조각을 받을 창(편집기 초): 영상이 받으려는 창이라 영상 받기와 함께 시작한다. 녹화가 없으면 null */
   window: { startSeconds: number; endSeconds: number } | null;
   video: HTMLVideoElement | null;
+  /**
+   * 영상 노드의 0초가 편집기 몇 초인가(영상이 실제로 받아 튼 창의 시작). 영상이 아직 없으면 null이고 따라 틀기를 기다린다.
+   * 생략하면 받을 창의 시작이다(영상과 소리가 늘 같은 창일 때)
+   */
+  playingFromSeconds?: number | null;
   createContext?: () => DecodingContext;
 }): TrackPreview {
   const { streamId, baseMs, video, createContext = defaultContext } = options;
   const startSeconds = options.window?.startSeconds ?? null;
   const endSeconds = options.window?.endSeconds ?? null;
+  const playingFrom =
+    options.playingFromSeconds === undefined ? startSeconds : options.playingFromSeconds;
   const [status, setStatus] = useState<TrackPreviewStatus>('idle');
   const [player, setPlayer] = useState<TrackAudioPlayer | null>(null);
   const [levels, setLevels] = useState<TrackLevels | null>(null);
@@ -74,7 +81,7 @@ export function useTrackPreview(options: {
   playerRef.current = player;
 
   useEffect(() => {
-    // 영상이 아직 창을 못 받았거나(첫 창을 받는 중) 녹화가 없는 구간이다: 실패가 아니라 들을 것이 없다(PR #341 claude)
+    // 녹화가 없는 구간(받을 창 없음)이다: 실패가 아니라 들을 것이 없다(PR #341 claude)
     if (startSeconds === null || endSeconds === null) {
       setStatus('idle');
       setPlayer(null);
@@ -217,10 +224,11 @@ export function useTrackPreview(options: {
     };
   }, [video, muteVideo]);
 
+  // 소리는 편집기 초로 들고 있어, 받을 창보다 영상이 늦게(또는 앞 창 그대로) 돌아도 영상의 창으로 옮기면 제자리다
   useEffect(() => {
-    if (player === null || video === null || startSeconds === null) return undefined;
-    return followVideo(player, video, () => startSeconds + video.currentTime);
-  }, [player, video, startSeconds]);
+    if (player === null || video === null || playingFrom === null) return undefined;
+    return followVideo(player, video, () => playingFrom + video.currentTime);
+  }, [player, video, playingFrom]);
 
   const setGains = useCallback((next: readonly number[]) => setGainsState(next), []);
 

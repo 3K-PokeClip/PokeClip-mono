@@ -635,12 +635,14 @@ function WiredStudio({
     pieces: recordingPieces,
     initialRange,
   });
-  // 트랙별 미리 듣기: 영상이 받은 창과 같은 창의 녹화 조각(방송 소리 트랙 전부)을 받아 영상 노드를 따라 튼다(POK-389)
+  // 트랙별 미리 듣기: 영상이 받으려는 창과 같은 창의 녹화 조각(방송 소리 트랙 전부)을 영상과 함께 받기 시작해, 영상 노드를
+  // 따라 튼다(POK-389). 따라 틀기는 영상이 실제로 받아 튼 창으로 옮긴다
   const trackPreview = useTrackPreview({
     streamId,
     baseMs: base,
-    window: recording ? video.window : null,
+    window: recording ? video.targetWindow : null,
     video: recording ? video.video : null,
+    playingFromSeconds: recording ? (video.window?.startSeconds ?? null) : null,
   });
 
   // 타임라인 필름띠(POK-389): 받아 둔 녹화 파일에서 원본 화면 그대로(자르지 않은 16:9) 칸마다 뽑는다
