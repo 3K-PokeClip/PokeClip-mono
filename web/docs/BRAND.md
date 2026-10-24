@@ -37,6 +37,7 @@ PokeClip은 흘러가 버릴 그 순간을 발견하고, 바로 꺼내볼 수 �
 
 - 워드마크 서체: **Pretendard SemiBold(600)** 아웃라인 — UI 서체와 동일 계열. 재생성: `node scripts/build-wordmark.mjs` (PretendardVariable.woff2에서 패스 생성, Figma 불필요)
 - 워드마크는 **단색**만 사용한다 — 다크 배경 화이트 / 라이트 배경 `#141517`(gray-1000). 색은 심볼이 담당한다.
+- 앱 안의 심볼은 `components/app-shell/BrandSymbol.tsx`로 그린다 — 같은 도형을 인라인으로 그리고 재생 마크만 `--pc-color-brand-mark`(다크 화이트 / 라이트 `#141517`)를 따라 테마에 맞춘다. `pokeclip-symbol.svg`(다크 배경 전용)는 파비콘·앱 아이콘 생성 입력으로 남는다.
 
 ## 3. 컬러 규정
 

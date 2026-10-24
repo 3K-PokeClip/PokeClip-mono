@@ -32,8 +32,8 @@
   border-radius: calc(7 * var(--pc-u));
   background: var(--pc-color-bg-surface);
   box-shadow:
-    0 1px 2px rgb(0 0 0 / 0.18),
-    0 0 0 0.5px rgb(0 0 0 / 0.06);
+    0 1px 2px rgb(0 0 0 / 0.18) /* 테마 고정 */,
+    0 0 0 0.5px rgb(0 0 0 / 0.06); /* 테마 고정 */
   transform: translateX(calc(var(--seg-i) * 100%));
   /* 끝에서 부드럽게 서는 감속 곡선 */
   transition:

@@ -53,4 +53,13 @@
   --pc-color-warning-subtle: rgb(var(--pc-yellow-500-rgb) / 0.16);
   --pc-color-info: var(--pc-cyan-500);
   --pc-color-info-subtle: rgb(var(--pc-cyan-500-rgb) / 0.16);
+
+  /* status as small text/icons — on dark the fill color already reads, so they match */
+  --pc-color-danger-text: var(--pc-color-danger);
+  --pc-color-success-text: var(--pc-color-success);
+  --pc-color-warning-text: var(--pc-color-warning);
+  --pc-color-info-text: var(--pc-color-info);
+
+  /* brand symbol play mark (docs/BRAND.md — white on dark) */
+  --pc-color-brand-mark: var(--pc-white);
 }

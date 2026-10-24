@@ -37,6 +37,21 @@ pnpm test          # 유닛/접근성 테스트
 
 디자인 무드: 다크 우선(dark-first) · 인디고 메인 컬러 + 마젠타 포인트 컬러.
 
+## 테마 (다크 · 라이트)
+
+- **고르는 곳:** 설정 › 계정 「화면 테마」(`시스템 · 라이트 · 다크`, `features/settings/account/ThemeCard.tsx`). 기본은 **다크** — 라이트는 사용자가 켠다.
+- **저장:** 이 브라우저의 `localStorage` `pc-theme`만(서버 저장 없음). 다른 탭에서 바꾸면 `storage` 이벤트로 따라온다.
+- **적용:** 서버는 `<html data-theme="dark">`로 그리고, `<head>`의 init 스크립트(`ui/theme/getThemeInitScript.ts`)가 첫 페인트 전에 저장값으로 덮는다. `system`은 스크립트·`ThemeProvider`가 `prefers-color-scheme`으로 푼다 — CSS에는 OS 폴백이 없다. 키·기본값·유효값은 `ui/theme/themeConfig.ts` 한곳.
+- **테마에 따라 JS로 다르게 그리지 않는다** — 서버 렌더(다크)와 어긋난다. 전부 CSS `[data-theme]`로 한다.
+
+### CSS 작성 규칙
+
+1. 시맨틱 토큰(`--pc-color-…`)을 먼저 쓴다. 상태색을 작은 글자·아이콘으로 쓸 땐 `--pc-color-{success,warning,info,danger}-text`(라이트에서 흰 바탕 4.5:1 이상).
+2. 토큰으로 못 그리는 재질(유리·틴트·차트색)은 모듈 변수로 두고 `:global([data-theme='light']) .x { --var: … }`로 덮는다(`Dock.module.css`·`HomeScreen.module.css` `.hero`). 브랜드 색을 옅게 섞을 땐 `color-mix(in srgb, var(--pc-color-accent) N%, transparent)`.
+3. 영상·썸네일 위처럼 **통째로 어두워야 하는 곳**은 요소에 `data-theme="dark"`를 달아 안의 토큰을 다크로 묶는다(편집기 무대 `PreviewCanvas.tsx`, 플레이어 설정 팝오버 — 포털이라 내용에 직접).
+4. 색을 직접 박은 줄에는 같은 줄에 표식을 단다 — `/* 테마 고정 */`(두 테마 같은 색), `/* 라이트 덮음 */`(다크 값, 라이트 규칙이 덮음), `/* 라이트 값 */`(라이트 규칙 안). `ui/styles/themeGuard.test.ts`가 표식 없는 hex·`rgb(숫자)`·프리미티브 참조를 잡는다.
+5. 다크 값은 바꾸지 않는다 — 라이트 대응은 라이트 규칙을 **더해서** 한다.
+
 ## 셸 · 본문 폭 (사이드바 화면)
 
 방송·클립·설정처럼 좌측 사이드바(`Side`)를 두는 화면의 본문 규칙이다. 사이드바는 펼침 244 · 접힘 68(`--pc-shell-u`)로 폭이 바뀌고, 접힘 상태는 세 그룹이 하나(`src/stores/sidebar.ts`)를 공유한다.

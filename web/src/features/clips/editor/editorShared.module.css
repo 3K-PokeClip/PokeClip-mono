@@ -244,7 +244,7 @@
 
 /* 선택된 프레임만 바깥을 덮는다 — 시안의 box-shadow 0 0 0 9999px */
 .cropRect[data-scrim='on'] {
-  box-shadow: 0 0 0 9999px rgb(0 0 0 / 0.5);
+  box-shadow: 0 0 0 9999px rgb(0 0 0 / 0.5); /* 테마 고정 */
 }
 
 /* 사각형 안 */
@@ -276,7 +276,7 @@
   font-weight: 700;
   padding: calc(2 * var(--pc-u)) calc(5 * var(--pc-u));
   border-radius: calc(4 * var(--pc-u));
-  background: rgb(0 0 0 / 0.55);
+  background: rgb(0 0 0 / 0.55); /* 테마 고정 */
   color: var(--pc-color-text-primary);
   white-space: nowrap;
 }
@@ -300,7 +300,7 @@
   z-index: 4;
   border: calc(2 * var(--pc-u)) solid var(--pc-color-point);
   border-radius: calc(4 * var(--pc-u));
-  background: rgb(212 70 151 / 0.28);
+  background: rgb(212 70 151 / 0.28); /* 테마 고정 */
 }
 
 .pipBody {
@@ -384,7 +384,7 @@
   overflow: hidden;
   border: 1px solid var(--pc-color-border-default);
   box-shadow: var(--pc-shadow-lg);
-  background: #000;
+  background: #000; /* 테마 고정 */
 }
 
 .resultPane {
@@ -442,8 +442,8 @@
   font-size: calc(var(--pc-fu) * 11);
   font-weight: 800;
   line-height: 1.25;
-  color: #fff;
-  text-shadow: 0 var(--pc-fu) calc(var(--pc-fu) * 3) rgb(0 0 0 / 0.9);
+  color: #fff; /* 테마 고정 */
+  text-shadow: 0 var(--pc-fu) calc(var(--pc-fu) * 3) rgb(0 0 0 / 0.9); /* 테마 고정 */
   pointer-events: none;
   /* 긴 자막이 결과 화면을 넘지 않게 — 넘치면 잘라 보여준다 */
   max-height: 40%;
@@ -473,8 +473,8 @@
   font-size: calc(10.5 * var(--pc-u));
   padding: calc(3 * var(--pc-u)) calc(11 * var(--pc-u));
   border-radius: var(--pc-radius-pill);
-  background: rgb(0 0 0 / 0.55);
-  color: rgb(255 255 255 / 0.85);
+  background: rgb(0 0 0 / 0.55); /* 테마 고정 */
+  color: rgb(255 255 255 / 0.85); /* 테마 고정 */
 }
 
 /* ---------- 세그먼트 컨트롤 (레이아웃·배속 공용) ---------- */
