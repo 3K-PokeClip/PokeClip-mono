@@ -929,6 +929,8 @@ SELECT pg_catalog.pg_database_size(pg_catalog.current_database());
     뒤이은 `up -d` 가 새 이미지로 서버 넷을 띄운다.
 *   `::error::schema move: … bytes free, need …` — 디스크가 모자라 아무것도
     멈추지 않았다. 옛 컨테이너가 그대로 돈다.
+*   `::error::schema move: could not drop pokeclip_move_fence; nothing stopped`
+    — 앞선 실패가 남긴 울타리(아래)를 못 지웠다. 아무것도 멈추지 않았다.
 *   `schema move: failed before commit, restarting old containers` — 이전 전에
     실패해 옛 컨테이너를 다시 띄웠다. 자료는 public 그대로다.
 *   `::error::schema move committed but a later step failed; old containers NOT
@@ -937,6 +939,13 @@ SELECT pg_catalog.pg_database_size(pg_catalog.current_database());
     SSM 은 kty 승인 뒤에 보낸다. 판정 불가에는 이전 psql 이 90초 안에 끝나지
     않은 경우도 든다 — 그때는 `pg_stat_activity` 에 `application_name` 이
     `pokeclip-dev-move` 인 세션이 없어진 뒤에 이력 표를 읽어 판정한다.
+
+**울타리.** 실패 갈래의 복구는 판정 전에 스키마 `pokeclip_move_fence` 를 먼저
+만든다. 이전 SQL 은 같은 트랜잭션의 첫 문장으로 이 스키마가 있으면 실패하므로,
+호스트 연결이 끊긴 뒤 데몬이 늦게 시작한 이전도 옛 컨테이너가 뜬 뒤에 자료를
+바꾸지 못한다. 울타리를 못 만들면 판정 불가로 친다. 울타리는 실패 뒤 dev DB 에
+남고 다음 앞방향 실행이 서비스를 세우기 전에 지운다(건너뜀 갈래는 지우지 않는다
+— public 밖의 빈 스키마라 이전 · 역이전 SQL 이 보지 않는다).
 
 **백업 정리.** 백업은 상자의 `/home/ec2-user/pokeclip-backup/public-<UTC
 시각>.sql`(파일 0600 · 디렉터리 0700)이다. 계정 · 방송 · 암호문이 들어 있으므로
@@ -1023,7 +1032,8 @@ kty 승인을 받고, 거절 · 승인은 필수 검토자인 kty 가 직접 누
 1.  **역이전(kty 승인 SSM).** 서버 넷 · 일꾼 둘 정지 → DB 전체 `pg_dump`
     백업(`-n` 없이 · 앞방향 백업과 같은 디렉터리에 `umask 077`) →
     `scripts/dev-move-back-to-public.sql`(한 트랜잭션) → 확인 질의(public 에
-    이력 표 넷 · `app_*` 넷이 빔). 이때 옮겨 올 앱 자료 · Flyway 이력 · clip
+    이력 표 넷 · `app_*` 넷이 빔). 울타리 `pokeclip_move_fence` 가 남아 있어도
+    역이전에는 상관없다. 이때 옮겨 올 앱 자료 · Flyway 이력 · clip
     독립 객체는 `app_*` 넷에 있으므로 `-n public` 백업에는 빠진다. 앞방향 이전
     때의 백업에도 그 뒤의 변경은 없다.
 1.  **revert PR 머지.** 그 push 의 실행이 승인 대기에 선다. 머지 전 push 로 생긴
