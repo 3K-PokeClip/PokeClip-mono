@@ -52,7 +52,7 @@ import {
 } from '@/api/audioTracks';
 import { fetchDelegationsAsEditor } from '@/api/editors';
 import { fetchRecordingSpans } from '@/api/mediaPlayback';
-import { toYoutubeCategoryId, track } from '@/lib/analytics';
+import { setActiveRole, toYoutubeCategoryId, track } from '@/lib/analytics';
 import {
   rebaseTimeline,
   recordingTimeline,
@@ -600,6 +600,14 @@ function WiredStudio({
   const router = useRouter();
   const { streamId, card, broadcast, window, saved, latestClip, trackLabels, recording } = data;
   const startedAt = broadcast.startedAt!;
+
+  // 사용 통계의 역할 속성(active_role) — 편집기는 독(ChannelScope) 밖이라, 링크로 바로 열면 등록이 없거나 그 브라우저의 옛
+  // 값이었다(PR #382 2차 리뷰). 연 방송에서의 관계로 건다. 아래 진입 이벤트보다 먼저 돈다(효과는 적힌 순서로 돈다)
+  const role =
+    broadcast.relation === 'OWNER' ? 'owner' : broadcast.relation === 'EDITOR' ? 'editor' : null;
+  useEffect(() => {
+    if (role !== null) setActiveRole(role);
+  }, [role]);
 
   // 편집기 진입을 센다 (POK-357). 편집 대상마다 새로 마운트되므로 마운트당 한 번 —
   // StrictMode의 이중 이펙트와 첫 저장 뒤 ?recipe= 로 주소만 바뀌는 것은 세지 않는다.

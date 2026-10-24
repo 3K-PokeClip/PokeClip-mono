@@ -33,10 +33,11 @@ vi.mock('next/navigation', async () => {
 });
 
 // 사용 통계(POK-357) — 편집기 진입·영상 만들기 이벤트를 잰다
-const { track } = vi.hoisted(() => ({ track: vi.fn() }));
+const { track, setActiveRole } = vi.hoisted(() => ({ track: vi.fn(), setActiveRole: vi.fn() }));
 vi.mock('@/lib/analytics', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/analytics')>()),
   track,
+  setActiveRole,
   identifyUser: vi.fn(),
 }));
 const tracked = (name: string) =>
@@ -752,6 +753,28 @@ describe('StudioScreen — 편집본으로 다시 연 실제 편집기', () => {
     await user.click(screen.getByRole('tab', { name: '오디오' }));
     expect(await screen.findAllByText('남의 트랙')).not.toHaveLength(0);
   });
+
+  it.each([
+    ['OWNER', 'owner'],
+    ['EDITOR', 'editor'],
+  ])(
+    '편집기를 바로 열어도 연 방송의 관계(%s)로 역할 속성을 건다 — 진입 이벤트보다 먼저 (PR #382 2차 리뷰)',
+    async (relation, role) => {
+      server.relation = relation;
+      setActiveRole.mockClear();
+      track.mockClear();
+      await openFrom(`stream=${STREAM_ID}&card=5`);
+
+      await waitFor(() => expect(tracked('clip_editor_opened')).toHaveLength(1));
+      expect(setActiveRole.mock.calls).toEqual([[role]]);
+      const [roleAt] = setActiveRole.mock.invocationCallOrder;
+      const openedAt =
+        track.mock.invocationCallOrder[
+          track.mock.calls.findIndex(([name]) => name === 'clip_editor_opened')
+        ];
+      expect(roleAt).toBeLessThan(openedAt ?? 0);
+    },
+  );
 
   it('주소에 열 것이 없으면 시작하는 곳을 안내한다', async () => {
     nav.search = '';
