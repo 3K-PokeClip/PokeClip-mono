@@ -18,6 +18,12 @@
 #   Secrets Manager 리전은 ap-northeast-2, KVS 호출 리전은 us-east-1 고정이다.
 #
 # 순서(앞 단계가 실패하면 뒤 단계를 부르지 않는다 · 다시 시도하지 않는다):
+#   0. aws CLI 명령 기록 검사(aws configure get cli_history). 켜져 있으면
+#      GetSecretValue 응답 · PutKey 요청 본문(값)이 ~/.aws/cli/history/
+#      history.db 에 평문으로 남는다. 판정 규칙은 단계 직전 점검 도구와 같다
+#      (precheck/lib/precheck_common.sh 의 precheck::cli_history_state —
+#      프로필의 cli_history = enabled · AWS_CLI_HISTORY_FILE 설정됨). 검사를
+#      하지 못해도(설정 읽기 실패 · 공용 함수를 읽지 못함) 켜짐과 같이 멈춘다.
 #   1. KVS 데이터면 호스트 이름 풀이(dig +short <계정>.cloudfront-kvs.global.
 #      api.aws). 호스트 꼴과 계정 번호는 SDK 의 KVS 엔드포인트 규칙과 같다 —
 #      계정 번호는 KVS ARN 의 계정 칸이다(sts 를 부르지 않는다 · 출력하지
@@ -29,6 +35,9 @@
 #
 # 출력(값 · 계정 번호 · ARN 은 어떤 경로로도 내보내지 않는다 — aws 원문도):
 #   성공      표준 출력 「KVS PUT OK」 한 줄
+#   기록 켜짐 표준 오류 「CLI HISTORY ENABLED」 + 어느 쪽이 켰는지 한 줄
+#   기록 검사 표준 오류 「CLI HISTORY UNCHECKED」 + 사유 한 줄
+#   실패
 #   이름 풀이 표준 오류 「KVS HOST UNRESOLVED」 + 사유 한 줄(dig 실패 · KVS
 #             호출의 Could not connect). SCP 거부와 섞지 않는다.
 #   KVS 거부  표준 오류 「KVS PUT DENIED」 + SCP 멈춤 안내
@@ -41,7 +50,8 @@
 #
 # 종료 코드:
 #   0 넣음
-#   1 그 밖의 실패(값 검사 포함) — 다시 시도하지 말고 kty 에게 보고
+#   1 그 밖의 실패(값 검사 포함) — 다시 시도하지 말고 kty 에게 보고. 단 CLI
+#     기록 켜짐 · 기록 검사 실패(값 읽기 · KVS 호출 0)는 기록을 끄고 다시
 #   2 사용법 오류(인자 · KVS ARN 꼴 arn:aws:cloudfront::<12자리>:key-value-store/
 #     <id> · 비밀 ID 꼴)
 #   3 이름 풀이 실패 · KVS 엔드포인트 연결 실패 — 런북의 우회 절차로
@@ -77,6 +87,32 @@ readonly CONNECT_PATTERN='Could not connect to the endpoint URL'
 readonly NOTE_DIG='이름 풀이(dig) 실패 — 값을 넣지 않음 · 런북의 우회 절차로'
 readonly NOTE_CONNECT='KVS 엔드포인트 연결 실패(Could not connect) — SCP 거부 아님'
 readonly NOTE_DENIED='SCP 멈춤 규칙 — 다시 시도하지 말고 kty 에게 보고'
+readonly HISTORY_ENABLED='CLI HISTORY ENABLED'
+readonly HISTORY_UNCHECKED='CLI HISTORY UNCHECKED'
+NOTE_HISTORY_PROFILE='프로필의 cli_history 가 enabled — 값을 읽지 않음 ·'
+NOTE_HISTORY_PROFILE+=' 기록을 끄고 다시'
+readonly NOTE_HISTORY_PROFILE
+NOTE_HISTORY_FILE='AWS_CLI_HISTORY_FILE 이 설정됨 — 값을 읽지 않음 ·'
+NOTE_HISTORY_FILE+=' 변수를 지우고 다시'
+readonly NOTE_HISTORY_FILE
+NOTE_HISTORY_FAIL='CLI 기록 설정(cli_history)을 읽지 못함 — 값을 읽지 않음 ·'
+NOTE_HISTORY_FAIL+=' 켜짐과 같이 멈춤'
+readonly NOTE_HISTORY_FAIL
+
+# CLI 기록 판정(precheck::cli_history_state)은 단계 직전 점검 도구와 같은 공용
+# 함수를 쓴다. 이 파일의 디렉터리는 외부 명령(dirname) 없이 얻는다. 읽지
+# 못하면 bash 의 원시 진단(절대 경로가 든다)은 버리고 고정 줄로 멈춘다.
+SCRIPT_DIR="${BASH_SOURCE[0]%/*}"
+[[ "${SCRIPT_DIR}" != "${BASH_SOURCE[0]}" ]] || SCRIPT_DIR=.
+readonly SCRIPT_DIR
+# infra-ci 의 shellcheck 는 이 파일을 -x 없이 본다(lib 는 따로 -x 로 봄).
+# shellcheck source-path=SCRIPTDIR disable=SC1091
+# shellcheck source=precheck/lib/precheck_common.sh
+source "${SCRIPT_DIR}/precheck/lib/precheck_common.sh" 2>/dev/null || {
+  printf '%s\n' "${HISTORY_UNCHECKED}" \
+    "공용 함수(precheck_common.sh)를 읽지 못함 — 값을 읽지 않음" >&2
+  exit "${EXIT_FAILED}"
+}
 
 # 비밀 값. 함수 인자로 넘기지 않고 전역으로만 다룬다. 호출자가 같은 이름을
 # export 해 두었으면 대입만으로는 export 속성이 남아 값이 aws 의 환경으로 가므로,
@@ -152,6 +188,23 @@ die_kvs_failure() {
     die "${EXIT_KVS_DENIED}" "KVS PUT DENIED" "${NOTE_DENIED}"
   fi
   die "${EXIT_FAILED}" "KVS PUT FAILED $1 $(aws_error_code)"
+}
+
+#######################################
+# aws CLI 명령 기록이 꺼져 있는지 본다(이름 풀이 · 값 읽기 전). 켜져 있거나
+# 검사를 하지 못하면 값을 읽지 않고 끝낸다.
+#######################################
+require_cli_history_off() {
+  local state
+  state="$(precheck::cli_history_state)"
+  case "${state}" in
+    off) return 0 ;;
+    env) die "${EXIT_FAILED}" "${HISTORY_ENABLED}" "${NOTE_HISTORY_FILE}" ;;
+    profile)
+      die "${EXIT_FAILED}" "${HISTORY_ENABLED}" "${NOTE_HISTORY_PROFILE}"
+      ;;
+    *) die "${EXIT_FAILED}" "${HISTORY_UNCHECKED}" "${NOTE_HISTORY_FAIL}" ;;
+  esac
 }
 
 #######################################
@@ -296,6 +349,7 @@ main() {
     command -v "${tool}" >/dev/null 2>&1 ||
       die "${EXIT_FAILED}" "KVS PUT FAILED PREREQ ${tool}"
   done
+  require_cli_history_off
   check_kvs_host "${kvs_account}"
   read_secret "${secret_id}"
   check_secret_value

@@ -6,7 +6,9 @@
 # 세 도구에서 같고, 구현은 여기 한 곳이다. 증거 경로 검사는 갖지 않는다
 # (lib/evidence.sh 가 한 곳이다).
 #
-# 부르는 쪽 계약:
+# 부르는 쪽 계약(precheck::cli_history_state 만 부르는 쪽 — 비밀 입력
+# 스크립트 put-secret-from-file.sh · kvs-put-cdn-secret.sh — 은 die · umask 가
+# 필요 없다. 그 함수는 멈추지 않고 파일도 쓰지 않는다):
 #   - die <설명> 을 정의한다(표준 오류에 「검사 불가」 를 적고 종료 2). 이
 #     파일의 함수는 멈출 일에 die 를 부른다.
 #   - `umask 077` 로 돈다 — 증거 파일의 0600 은 부르는 쪽 umask 가 정한다.
@@ -121,27 +123,57 @@ precheck::caller_identity() {
 }
 
 #######################################
-# CLI 기록이 꺼져 있는지 본다 — 켜져 있으면 요청 · 응답 원문이 증거 밖 기록
-# 파일에 남는다. 첫 AWS 호출 전에 부른다. 값 · 경로는 되울리지 않는다.
+# CLI 기록 상태를 판정한다 — 켜져 있으면 요청 · 응답 원문이 기록 파일에
+# 남는다. 판정 규칙의 한 곳이고, 멈추지 않고 상태 낱말만 낸다(멈춤 · 문구는
+# 부르는 쪽 몫). 첫 AWS 호출 전에 부른다. 값 · 경로는 내지 않는다.
 # AWS_CLI_HISTORY_FILE 은 기록 위치 변수다(aws CLI 2.38.1
 # customizations/history/__init__.py:50-55) — 켜짐 증거가 아니라 보수적
 # 거부다. aws 호출에 --profile 을 붙이게 되면 configure get 에도 같은
 # --profile 을 붙인다(둘 다 그 프로필 범위의 설정을 읽는다).
 # Globals:
 #   AWS_CLI_HISTORY_FILE
+# Outputs:
+#   off(꺼짐 — 설정 없음 · enabled 밖의 값) · env(AWS_CLI_HISTORY_FILE
+#   설정됨) · profile(프로필의 cli_history 가 enabled) · unreadable(설정을
+#   읽지 못함 — aws 없음 포함) 중 하나.
 #######################################
-precheck::check_cli_history() {
+precheck::cli_history_state() {
   local value status=0
   if [[ -n "${AWS_CLI_HISTORY_FILE+set}" ]]; then
-    die "CLI 기록이 켜져 있음 — 증거 밖에 원문이 남음(AWS_CLI_HISTORY_FILE" \
-      "설정됨)"
+    printf '%s\n' env
+    return 0
   fi
-  # 값이 없으면 aws configure get 은 빈 출력 · 종료 1 이다.
-  value="$(aws configure get cli_history 2>/dev/null)" || status=$?
+  # 값이 없으면 aws configure get 은 빈 출력 · 종료 1 이다. auto-prompt
+  # (cli_auto_prompt = on · AWS_CLI_AUTO_PROMPT)는 끄고 표준 입력은 닫는다 —
+  # 켜진 채면 부르는 쪽의 표준 입력(/dev/stdin 으로 넘긴 값)을 키 입력으로
+  # 읽어 prompt 기록(~/.aws/cli/cache/prompt_history.json)에 남긴다.
+  value="$(aws configure get cli_history --no-cli-auto-prompt </dev/null \
+    2>/dev/null)" || status=$?
   if [[ "${status}" -ne 0 && "${status}" -ne 1 ]]; then
-    die "CLI 기록 설정(cli_history)을 읽지 못함"
+    printf '%s\n' unreadable
+  elif [[ "${value}" == enabled ]]; then
+    printf '%s\n' profile
+  else
+    printf '%s\n' off
   fi
-  if [[ "${value}" == enabled ]]; then
-    die "CLI 기록이 켜져 있음 — 증거 밖에 원문이 남음(프로필의 cli_history)"
-  fi
+}
+
+#######################################
+# CLI 기록이 꺼져 있는지 본다(판정은 precheck::cli_history_state) — 켜져
+# 있으면 원문이 증거 밖 기록 파일에 남으므로 멈춘다. 첫 AWS 호출 전에 부른다.
+#######################################
+precheck::check_cli_history() {
+  local state
+  state="$(precheck::cli_history_state)"
+  case "${state}" in
+    off) ;;
+    env)
+      die "CLI 기록이 켜져 있음 — 증거 밖에 원문이 남음(AWS_CLI_HISTORY_FILE" \
+        "설정됨)"
+      ;;
+    profile)
+      die "CLI 기록이 켜져 있음 — 증거 밖에 원문이 남음(프로필의 cli_history)"
+      ;;
+    *) die "CLI 기록 설정(cli_history)을 읽지 못함" ;;
+  esac
 }

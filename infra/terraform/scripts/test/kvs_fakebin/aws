@@ -32,6 +32,11 @@
 # sts get-caller-identity 는 스크립트가 부르지 않는다. 불리면 KVS ARN(시험의
 # 123456789012)과 다른 계정 번호(STUB_ACCOUNT)를 낸다 — 스크립트가 sts 의
 # 계정으로 이름 풀이 호스트를 만들면 시험의 인자 대조 · 계정 0건 검사가 잡는다.
+# aws configure get cli_history --no-cli-auto-prompt(CLI 기록 검사)는 그 인자
+# 그대로일 때만 FAKE_AWS_CLI_HISTORY 로 답한다
+# (precheck/tests/fakebin/aws 와 같은 뜻 — calls 에는 「aws configure get」,
+# 인자는 get.argv): 비면 값 없음(빈 출력 · 종료 1 — 진짜 CLI), fail 이면 설정
+# 읽기 실패(종료 255), 그 밖이면 그 값.
 # FAKE_AWS_REAL: 진짜 aws 의 절대 경로. 주면 put-key 를 그 aws 에 --debug 를
 #   붙여 넘기고(표준 입력은 그대로 물려줌), 디버그 출력은 real-debug 에 적고
 #   「aws: [ERROR]」 줄만 표준 오류로 되낸다. 가짜 값으로만 쓴다.
@@ -166,6 +171,31 @@ forward_put_to_real() {
 }
 
 #######################################
+# aws configure get cli_history 에 답하고 끝낸다(머리 주석).
+# Globals:
+#   FAKE_AWS_CLI_HISTORY
+# Arguments:
+#   aws 가 받은 인자들.
+#######################################
+configure_get() {
+  if [[ "$*" != 'configure get cli_history --no-cli-auto-prompt' ]]; then
+    printf 'fake aws: 모르는 설정 조회: %s\n' "$*" >&2
+    exit 99
+  fi
+  case "${FAKE_AWS_CLI_HISTORY:-}" in
+    '') exit 1 ;;
+    fail)
+      printf '\nThe config profile (example) could not be found\n' >&2
+      exit 255
+      ;;
+    *)
+      printf '%s\n' "${FAKE_AWS_CLI_HISTORY}"
+      exit 0
+      ;;
+  esac
+}
+
+#######################################
 # 동작마다 FAKE_AWS_MODE 에 맞는 응답을 낸다.
 # Globals:
 #   FAKE_AWS_MODE, FAKE_CMD_DIR, stub_op
@@ -237,6 +267,7 @@ main() {
   printf '%s\n' "$@" >"${FAKE_CMD_DIR}/${stub_op}.argv"
   printf 'AWS_PAGER=%s\n' "${AWS_PAGER-(unset)}" \
     >"${FAKE_CMD_DIR}/${stub_op}.pager"
+  [[ "${1-}" != configure ]] || configure_get "$@"
   if [[ "${stub_op}" == put-key ]]; then
     receive_put_value "$@"
     [[ -z "${FAKE_AWS_REAL:-}" ]] || forward_put_to_real "$@"
