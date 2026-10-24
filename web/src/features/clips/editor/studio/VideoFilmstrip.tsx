@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { useSceneFrames, type SceneFrameSource } from '../useSceneFrames';
+import { useSceneFrames, type SceneFrameSource, type SceneFrames } from '../useSceneFrames';
 import styles from './StudioScreen.module.css';
 
 // 타임라인 영상 줄의 필름띠(POK-389, 캡컷처럼 구간을 따라 장면 그림을 이어 붙인다). 그림은 업로드 창의 장면 그림 훅(POK-381)을
@@ -9,7 +9,7 @@ import styles from './StudioScreen.module.css';
 export const FILMSTRIP_TILES = 20;
 /** 칸 시각 눈금. 확대·이동으로 창이 조금 움직여도 같은 시각 그림을 다시 쓴다 */
 const SNAP_MS = 250;
-/** 뽑는 그림 크기(16:9, 줄 높이의 두 배쯤이라 고밀도 화면에서도 덜 흐리다) */
+/** 뽑는 그림 크기(16:9, 줄 높이의 두 배쯤이라 고밀도 화면에서도 덜 흐리다). 썸네일 칸도 같은 크기다 */
 const TILE_SIZE = { width: 96, height: 54 };
 
 export interface FilmstripSource extends Omit<SceneFrameSource, 'size'> {
@@ -32,27 +32,39 @@ export function filmstripTimesMs(
   });
 }
 
-export function VideoFilmstrip({
-  source,
-  view,
-}: {
-  source: FilmstripSource;
-  view: { startSeconds: number; endSeconds: number };
-}) {
+/**
+ * 필름띠 칸과 썸네일 칸(고른 장면)이 같이 쓰는 장면 그림. 숨은 영상 노드를 하나만 둔다: 썸네일 칸이 따로 뽑으면 편집기 본체·
+ * 필름띠·썸네일 해서 노드 셋이 같은 녹화 파일을 붙잡았다(PR #341 claude). 고른 장면은 `keep`으로 뽑아 계속 둔다.
+ * @param keepMs 고른 썸네일 장면(편집기 ms). 없으면 null
+ */
+export function useFilmstripFrames(
+  source: FilmstripSource | null,
+  view: { startSeconds: number; endSeconds: number },
+  keepMs: number | null,
+): { times: (number | null)[]; frames: SceneFrames } {
   const times = useMemo(
-    () => filmstripTimesMs(view, source),
+    () => (source === null ? [] : filmstripTimesMs(view, source)),
     // 창이 바뀔 때만 다시 나눈다(재료 함수는 매번 새로 와도 덮는 구간이 같으면 칸은 같다)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [view.startSeconds, view.endSeconds, source.fromSeconds, source.toSeconds],
+    [view.startSeconds, view.endSeconds, source?.fromSeconds, source?.toSeconds],
   );
   const wanted = useMemo(() => times.filter((t): t is number => t !== null), [times]);
   const frameSource = useMemo(
-    () => ({ ...source, size: TILE_SIZE }),
+    () => (source === null ? null : { ...source, size: TILE_SIZE }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [source.src, source.fromSeconds],
+    [source?.src, source?.fromSeconds],
   );
-  const frames = useSceneFrames(frameSource, wanted, null);
+  const frames = useSceneFrames(frameSource, wanted, null, keepMs);
+  return { times, frames };
+}
 
+export function VideoFilmstrip({
+  times,
+  frames,
+}: {
+  times: readonly (number | null)[];
+  frames: SceneFrames;
+}) {
   return (
     <div className={styles.filmstrip} aria-hidden>
       {times.map((ms, i) => {

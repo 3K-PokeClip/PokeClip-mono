@@ -13,7 +13,7 @@ import { formatUptime } from '@/features/player/playerMath';
 import styles from './StudioScreen.module.css';
 import { ThumbnailTile } from './ThumbnailTile';
 import { TimelineTrackRow } from './TimelineTrackRow';
-import { VideoFilmstrip } from './VideoFilmstrip';
+import { VideoFilmstrip, useFilmstripFrames } from './VideoFilmstrip';
 import {
   MAX_RANGE_SECONDS,
   MAX_RANGE_TEXT,
@@ -80,6 +80,10 @@ export function MultitrackTimeline({
   const boxStart = secondsToViewOffset(state.range.startSeconds, state.view);
   const boxEnd = secondsToViewOffset(state.range.endSeconds, state.view);
   const playheadFraction = secondsToFraction(state.playheadSeconds, state.view);
+  // 필름띠와 썸네일 칸은 장면 그림 훅 하나(숨은 영상 노드 하나)를 같이 쓴다
+  const thumbnailMs =
+    state.thumbnailSeconds === null ? null : Math.round(state.thumbnailSeconds * 1000);
+  const filmstrip = useFilmstripFrames(state.filmstripSource, state.view, thumbnailMs);
   const playheadVisible =
     state.playheadSeconds >= state.view.startSeconds &&
     state.playheadSeconds <= state.view.endSeconds;
@@ -345,13 +349,13 @@ export function MultitrackTimeline({
                         (state.thumbnailSeconds ?? state.range.startSeconds) -
                           state.range.startSeconds,
                       )}
-                      source={state.filmstripSource}
+                      frameUrl={thumbnailMs === null ? null : filmstrip.frames.frameOf(thumbnailMs)}
                       onSeek={state.seekTo}
                     />
                   </span>
                   <div className={styles.lane} data-kind="video">
                     {state.filmstripSource !== null ? (
-                      <VideoFilmstrip source={state.filmstripSource} view={state.view} />
+                      <VideoFilmstrip times={filmstrip.times} frames={filmstrip.frames} />
                     ) : (
                       <div className={styles.laneFilmstrip} aria-hidden />
                     )}
