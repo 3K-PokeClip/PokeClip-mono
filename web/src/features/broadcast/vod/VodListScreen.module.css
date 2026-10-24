@@ -24,6 +24,11 @@
   margin: 0;
 }
 
+/* 「다시 시도」가 성공하면 포커스를 제목으로 옮긴다(낭독 위치 잡기용) — 누를 것이 아니라 테두리는 그리지 않는다 */
+.title:focus {
+  outline: none;
+}
+
 /* 필터 칩 — LiveScreen의 하이라이트 필터와 같은 모양이다. 세 번째 화면이 같은 칩을
    원하면 그때 공용 컴포넌트로 올린다(editorDates의 「세 번째가 원하면」 관행) */
 .filterGroup {
@@ -386,4 +391,11 @@
   margin: calc(6 * var(--pc-u)) 0 0;
   font-size: calc(12 * var(--pc-u));
   color: var(--pc-color-text-muted);
+}
+
+/* 첫 조회 실패 카드 아래 「다시 시도」 — 카드 가운데 줄에 맞춘다(POK-441) */
+.failAction {
+  display: flex;
+  justify-content: center;
+  margin-top: calc(12 * var(--pc-u));
 }

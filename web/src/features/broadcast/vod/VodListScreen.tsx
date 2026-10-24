@@ -1,8 +1,10 @@
 'use client';
 
-import { Video } from 'lucide-react';
-import { Badge, EmptyState } from '@/ui';
+import { useEffect, useRef } from 'react';
+import { CloudOff, Video } from 'lucide-react';
+import { Badge, Button, EmptyState } from '@/ui';
 import { useVodListMockState, VOD_DOWNLOAD_IDLE, type VodListOptions } from './useVodListMockState';
+import { VodListSkeleton } from './VodListSkeleton';
 import { VodPeriodFilter } from './VodPeriodFilter';
 import { VodRow } from './VodRow';
 import styles from './VodListScreen.module.css';
@@ -21,6 +23,10 @@ export function VodListScreen(options: VodListOptions = {}) {
     broadcasts,
     totalCount,
     loading,
+    failed,
+    failCount,
+    retrying,
+    retry,
     visuals,
     filter,
     setFilter,
@@ -32,10 +38,24 @@ export function VodListScreen(options: VodListOptions = {}) {
     resetDownload,
   } = useVodListMockState(options);
 
+  // 「다시 시도」가 성공하면 버튼이 사라져 포커스가 body로 떨어진다: 제목으로 옮겨 낭독기가 화면이 바뀐 것을 알게 한다
+  // (PR #377 리뷰). 사용자가 이미 다른 곳에 포커스를 뒀으면 건드리지 않는다
+  const titleRef = useRef<HTMLHeadingElement>(null);
+  const wasFailed = useRef(failed);
+  useEffect(() => {
+    if (wasFailed.current && !failed) {
+      const active = document.activeElement;
+      if (active === null || active === document.body) titleRef.current?.focus();
+    }
+    wasFailed.current = failed;
+  }, [failed]);
+
   return (
     <main className={styles.container}>
       <div className={styles.header}>
-        <h1 className={styles.title}>지난 방송</h1>
+        <h1 ref={titleRef} tabIndex={-1} className={styles.title}>
+          지난 방송
+        </h1>
         {totalCount > 0 ? (
           <Badge tone="neutral" variant="soft" size="sm">
             {totalCount}
@@ -51,12 +71,34 @@ export function VodListScreen(options: VodListOptions = {}) {
         ) : null}
       </div>
 
-      {loading ? (
+      {failed ? (
+        // 한 번도 못 읽었는데 실패했다: 다음 주기(60초)까지 스켈레톤으로 가리지 않고 바로 다시 시도하게 한다(POK-441).
+        // 「없다」가 아니라 「못 불러왔다」다 — 빈 상태와 같은 카드 틀이지만 문구로 가른다
+        <>
+          {/* 다시 실패하면 안내를 새로 그린다(key): 같은 내용의 alert는 낭독기가 다시 읽지 않는다(PR #377 리뷰) */}
+          <div role="alert" key={failCount}>
+            <EmptyState
+              icon={<CloudOff size={21} />}
+              title="지난 방송을 불러오지 못했어요"
+              description={
+                <>
+                  인터넷 연결을 확인하고 다시 시도해 주세요.
+                  <br />
+                  1분 뒤에도 자동으로 다시 불러와요.
+                </>
+              }
+            />
+          </div>
+          <div className={styles.failAction}>
+            <Button size="sm" variant="soft" loading={retrying} onClick={retry}>
+              다시 시도
+            </Button>
+          </div>
+        </>
+      ) : loading ? (
         // 첫 읽기가 끝나기 전의 빈 목록은 「모른다」다: 빈 상태를 먼저 보이면 방송이 없는 줄 안다(QA 2026-10-11).
-        // 글자 한 줄로만 말한다(홈 「불러오는 중…」과 같은 방식)
-        <p className={styles.filterEmpty} role="status">
-          불러오는 중…
-        </p>
+        // 로드 뒤 행과 같은 치수의 스켈레톤으로 자리를 잡는다(POK-441)
+        <VodListSkeleton />
       ) : totalCount === 0 ? (
         <EmptyState
           icon={<Video size={21} />}

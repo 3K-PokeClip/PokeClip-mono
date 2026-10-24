@@ -186,6 +186,12 @@
   outline-offset: 2px;
 }
 
+/* 첫 로딩의 자리표시 카드(LibrarySkeleton, POK-443) — .card의 호버(테두리·그림자)·손가락 커서는 누를 수 있다는 신호라
+   누를 것이 없는 자리표시에서는 끈다 */
+.cardSkeleton {
+  pointer-events: none;
+}
+
 /* 원본 만료 카드 — 70%로 가라앉는다(ADR-004). 배지는 「발행됨」 그대로, 만료는 패널이 말한다 */
 .cardDimmed {
   opacity: 0.7;
@@ -537,4 +543,16 @@ button.preview:focus-visible {
   margin: calc(6 * var(--pc-u)) 0 0;
   font-size: calc(12 * var(--pc-u));
   color: var(--pc-color-text-muted);
+}
+
+/* 다시 읽기(폴링)가 실패했을 때 격자 위에 서는 한 줄(POK-443) — 받아 둔 목록은 아래에 그대로 남는다 */
+.refreshError {
+  margin: 0 0 calc(12 * var(--pc-u));
+  font-size: calc(12 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}
+
+/* 진행 줄(만드는 중 N%) 아래의 막대(POK-443) */
+.noteProgress {
+  margin-top: calc(6 * var(--pc-u));
 }

@@ -3,6 +3,7 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
 import { describe, expect, it, vi } from 'vitest';
+import type { RecipeOutputV2 } from '@/api/clipEditor';
 import { renderWithProviders } from '@/test/testProviders';
 import { emptyUploadDraft, UploadInfoDialog, type UploadDraft } from './UploadInfoDialog';
 import { THUMBNAIL_MAX_BYTES } from './uploadInfo';
@@ -52,6 +53,45 @@ describe('UploadInfoDialog', () => {
 
     expect(dialog().getByText('장면 그림을 못 불러와요 · 0:06.2')).toBeInTheDocument();
     expect(dialog().queryByText('장면을 불러오는 중이에요')).not.toBeInTheDocument();
+    // 못 불러온 자리는 정적 자리다 — 로더(스켈레톤)를 붙이지 않는다(POK-444)
+    expect(
+      screen.getByRole('dialog', { name: '유튜브에 올리기' }).querySelector('[data-frame-loading]'),
+    ).toBeNull();
+  });
+
+  it('장면을 뽑는 중이면 미리보기 자리를 스켈레톤으로 채우고 문장은 그대로 둔다(POK-444)', async () => {
+    // 조각을 다 읽기 전의 영상 노드: 첫 장면(loadeddata)이 아직 안 왔다
+    const create = document.createElement.bind(document);
+    const spy = vi
+      .spyOn(document, 'createElement')
+      .mockImplementation(((tag: string) =>
+        tag === 'video'
+          ? Object.assign(new EventTarget(), { removeAttribute() {}, load() {} })
+          : create(tag)) as typeof document.createElement);
+    try {
+      const user = userEvent.setup();
+      const { dialog } = renderDialog({
+        frameSource: {
+          src: 'blob:recording',
+          videoSecondsAt: (ms) => ms / 1000,
+          output: { layers: [] } as unknown as RecipeOutputV2,
+        },
+      });
+
+      expect(dialog().getByText('장면을 불러오는 중이에요')).toBeInTheDocument();
+      expect(dialog().queryByText(/장면 그림을 못 불러와요/)).not.toBeInTheDocument();
+      const shorts = dialog().getByText('장면을 불러오는 중이에요').parentElement!;
+      // 스켈레톤은 그림일 뿐이라 낭독에서 빠진다
+      expect(shorts.querySelector('[data-frame-loading]')).toHaveAttribute('aria-hidden', 'true');
+
+      // 썸네일 탭의 추천 타일도 뽑는 중이라 스켈레톤 위에 시각을 남긴다
+      await openTab(user, dialog, '썸네일');
+      const middle = dialog().getByRole('button', { name: '중간 0:06.2' });
+      expect(middle.querySelector('[data-frame-loading]')).not.toBeNull();
+      expect(middle).toHaveTextContent('0:06.2');
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('편집기에서 고른 장면은 추천 맨 앞 「편집기에서 고름」으로 골라져 있다(POK-389)', async () => {

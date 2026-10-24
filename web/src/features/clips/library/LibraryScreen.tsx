@@ -7,6 +7,7 @@ import { ClipCard, clipCardDomId } from './ClipCard';
 import { ClipDetailPanel } from './ClipDetailPanel';
 import { DeleteClipDialog } from './DeleteClipDialog';
 import { LibraryFilterChips } from './LibraryFilterChips';
+import { LibrarySkeleton } from './LibrarySkeleton';
 import { SORT_OPTIONS, isLibrarySort, statusFor } from './libraryView';
 import {
   aspectLabelOf,
@@ -28,6 +29,7 @@ export function LibraryScreen(options: LibraryOptions = {}) {
   const {
     now,
     loading,
+    loaded,
     error,
     clips,
     totalCount,
@@ -48,6 +50,7 @@ export function LibraryScreen(options: LibraryOptions = {}) {
     resolveUpload,
     retryRender,
     download,
+    downloadingIds,
     previewUrl,
     sendingIds,
     remove,
@@ -143,14 +146,21 @@ export function LibraryScreen(options: LibraryOptions = {}) {
           </div>
         ) : null}
 
-        {error !== null ? (
+        {/* 다시 읽기(폴링)가 실패해도 받아 둔 목록은 그대로 둔다 — 격자를 통째로 지우면 잠깐의 끊김에 보관함이 비어
+            보인다. 위에 한 줄만 알린다(POK-443) */}
+        {error !== null && loaded ? (
+          <p className={styles.refreshError} role="alert">
+            편집본 목록을 새로 읽지 못했어요: {error} · 마지막으로 읽은 목록이에요
+          </p>
+        ) : null}
+
+        {error !== null && !loaded ? (
           <p className={styles.filterEmpty} role="alert">
             편집본 목록을 못 읽었어요: {error}
           </p>
         ) : loading ? (
-          <p className={styles.filterEmpty} role="status">
-            편집본을 불러오는 중…
-          </p>
+          // 첫 응답 전의 빈 목록은 「모른다」다: 로드 뒤 격자와 같은 치수의 카드 자리로 기다린다(POK-443)
+          <LibrarySkeleton panelOpen={open} />
         ) : totalCount === 0 ? (
           <EmptyState
             icon={<FolderOpen size={21} />}
@@ -195,7 +205,9 @@ export function LibraryScreen(options: LibraryOptions = {}) {
                 resolveUpload(panelClip.id, uploadId, resolution)
               }
               onDownload={() => download(panelClip.id)}
+              downloading={downloadingIds.has(panelClip.id)}
               sending={sendingIds.has(panelClip.id)}
+              sendingAction={sendingIds.get(panelClip.id) ?? null}
               loadPreview={panelClip.entry ? () => previewUrl(panelClip.id) : undefined}
               loadAspect={panelEntry ? () => aspectLabelOf(panelEntry) : undefined}
               onDelete={() => setPendingDelete(panelClip)}

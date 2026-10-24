@@ -18,6 +18,7 @@ import { formatUptime, parseClockLabel } from '@/features/player/playerMath';
 import { ChatPanel } from './ChatPanel';
 import { HighlightCardPanel } from './HighlightCardPanel';
 import { LiveOfflineScreen } from './LiveOfflineScreen';
+import { LiveScreenSkeleton } from './LiveScreenSkeleton';
 import { LiveStatsPanel, type TimelineCard } from './LiveStatsPanel';
 import { StreamInfoBar } from './StreamInfoBar';
 import { notFound, usePathname, useSearchParams } from 'next/navigation';
@@ -395,8 +396,15 @@ export function LiveScreen() {
 function LiveScreenBody() {
   const { status } = useLiveStatusMockState();
   const selection = useLiveStreamSelection();
+  // 대시보드의 훅들이 보는 방송 번호. 고른 번호는 효과에서 저장소에 오르므로(useLiveStreamSelection) 정한 직후 한 그리기는 비어 있다
+  const { streamId } = useLiveData();
   const offline = status === 'offline' || (selection.resolved && selection.streamId === '');
-  return offline ? <LiveOfflineScreen /> : <LiveDashboard />;
+  if (offline) return <LiveOfflineScreen />;
+  // 방송을 정하기 전, 그리고 정한 번호가 저장소에 오르기 전에는 대시보드를 세우지 않고 같은 모양의 스켈레톤을 둔다(POK-445). 빈
+  // 번호로 세우면 시계(useBroadcastClock)가 「꺼짐」을 퍼뜨려 정보 바에 「방송 중이 아니에요」가 먼저 떴다가 바뀌었다. 방송 목록을
+  // 못 읽으면 10초마다 다시 묻고(LIVE_RESELECT_MS) 답이 오면 선다. 한 번 선 뒤 방송이 바뀌면(A → B) 저장소가 비지 않으니 내리지 않는다
+  if (!selection.resolved || streamId === '') return <LiveScreenSkeleton />;
+  return <LiveDashboard />;
 }
 
 function LiveDashboard() {
