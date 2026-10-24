@@ -580,12 +580,21 @@ public class FakeChzzkBehavior {
     void remember(WebSocketSession s) { session.set(s); }
 
     /**
+     * 업그레이드를 받아 준 뒤 아직 안 닫힌 소켓 수. {@link #reset()}이 이것이 0이 되기를 기다린다. 세션 자리(session · byToken)는
+     * afterConnectionEstablished에서야 차서, 그보다 먼저 닫힌 소켓을 못 본다(POK-468). 물리 상태라 reset()이 지우지 않는다
+     */
+    private final AtomicInteger openSockets = new AtomicInteger();
+    void socketAccepted() { openSockets.incrementAndGet(); }
+    void socketGone() { openSockets.decrementAndGet(); }
+
+    /**
      * 끊긴 세션을 현재 세션 자리에서 치운다. <b>같은 세션일 때만</b> 치운다 —
      * 앞 접속이 늦게 끊기면서 이미 들어온 새 접속을 지우면, 뒤 테스트가
      * "열린 세션이 없다"로 간헐 실패한다. 실제로 그렇게 났다.
      */
     void forget(WebSocketSession s) {
         closedSessions.incrementAndGet();
+        socketGone();
         session.compareAndSet(s, null);
         // 값으로 지운다. 토큰으로 지우면 <b>같은 스트리머가 재연결한 새 소켓을</b>
         // 늦게 끊긴 앞 소켓이 지워, 그 뒤 emit/close가 "붙어 있는데 없다"로 터진다.
@@ -689,7 +698,7 @@ public class FakeChzzkBehavior {
         long deadline = System.nanoTime() + AWAIT_CLOSED_TIMEOUT.toNanos();
         // 토큰 자리도 같이 본다 — 스트리머가 여럿이면 최근 세션 하나만 비어도
         // 나머지 소켓이 살아서 다음 테스트로 프레임을 흘린다(POK-127 태스크 9).
-        while ((session.get() != null || !byToken.isEmpty()) && System.nanoTime() < deadline) {
+        while ((session.get() != null || !byToken.isEmpty() || openSockets.get() > 0) && System.nanoTime() < deadline) {
             try {
                 Thread.sleep(10);
             } catch (InterruptedException e) {
@@ -697,10 +706,10 @@ public class FakeChzzkBehavior {
                 return;
             }
         }
-        if (session.get() != null || !byToken.isEmpty()) {
+        if (session.get() != null || !byToken.isEmpty() || openSockets.get() > 0) {
             throw new IllegalStateException("앞 세션이 " + AWAIT_CLOSED_TIMEOUT.toSeconds()
                     + "초 안에 안 닫혔다. 닫지 않고 끝낸 테스트가 있으면 그 프레임이 다음 테스트로 넘어간다"
-                    + " (남은 토큰=" + byToken.keySet() + ")");
+                    + " (남은 토큰=" + byToken.keySet() + ", 열린 소켓=" + openSockets.get() + ")");
         }
     }
 

@@ -6,18 +6,23 @@ import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.server.ServerHttpRequest;
+import org.springframework.http.server.ServerHttpResponse;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
+import org.springframework.web.socket.WebSocketHandler;
 import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.config.annotation.EnableWebSocket;
 import org.springframework.web.socket.config.annotation.WebSocketConfigurer;
 import org.springframework.web.socket.config.annotation.WebSocketHandlerRegistry;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
+import org.springframework.web.socket.server.HandshakeInterceptor;
 
+import java.util.Map;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -53,7 +58,28 @@ public class FakeChzzkServer implements WebSocketConfigurer {
         // 실서버와 같은 경로다. /fake/... 로 두면 SessionUrl이 "경로가 이미 있는"
         // 분기를 타서, 실서버가 실제로 타는 "경로 없음 → /socket.io/ 부착" 분기를
         // 통합 경로에서 한 번도 안 밟는다. 프로브 시도 #1을 깨뜨린 자리다.
-        registry.addHandler(fakeSocketHandler(fakeChzzkBehavior()), "/socket.io/")
+        FakeChzzkBehavior behavior = fakeChzzkBehavior();
+        registry.addHandler(fakeSocketHandler(behavior), "/socket.io/")
+                // 업그레이드 응답(101) 전에 센다. 클라이언트의 open()은 101만 받고 돌아오므로, 서버가 그 소켓을
+                // afterConnectionEstablished에서 등록하기 전에 테스트가 닫고 reset()까지 갈 수 있다. 등록으로만 세면
+                // reset()이 빈 자리를 보고 지나가고, 늦게 등록된 소켓의 종료 프레임 "1"이 다음 시행에 남는다(POK-468)
+                .addInterceptors(new HandshakeInterceptor() {
+                    @Override
+                    public boolean beforeHandshake(ServerHttpRequest request, ServerHttpResponse response,
+                                                   WebSocketHandler wsHandler, Map<String, Object> attributes) {
+                        behavior.socketAccepted();
+                        return true;
+                    }
+
+                    @Override
+                    public void afterHandshake(ServerHttpRequest request, ServerHttpResponse response,
+                                               WebSocketHandler wsHandler, Exception exception) {
+                        // 업그레이드가 실패하면 afterConnectionClosed가 안 온다. 센 것을 여기서 되돌린다
+                        if (exception != null) {
+                            behavior.socketGone();
+                        }
+                    }
+                })
                 .setAllowedOrigins("*");
     }
 
