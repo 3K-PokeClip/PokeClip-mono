@@ -30,6 +30,18 @@
   margin: 0 0 calc(14 * var(--pc-u));
 }
 
+/* ---------- 화면 테마 카드 ---------- */
+.themeSegment {
+  width: calc(228 * var(--pc-u)); /* 알림 설정 세그먼트와 같은 폭 */
+  max-width: 100%;
+}
+
+.themeNote {
+  margin: calc(10 * var(--pc-u)) 0 0;
+  font-size: calc(12 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}
+
 .cardActions {
   display: flex;
   justify-content: flex-end;
