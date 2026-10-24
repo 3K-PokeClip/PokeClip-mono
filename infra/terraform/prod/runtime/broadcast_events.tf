@@ -62,43 +62,31 @@ resource "aws_sns_topic" "broadcast_lifecycle" {
   content_based_deduplication = false
 }
 
-# 계정 루트 주체 = 이 계정의 IAM 신원 정책이 허용한 주체만. 동작은 기본
-# 정책의 여덟이다(provider 기본 정책의 SNS:Receive 는 SNS 정책 동작이 아니라
-# 뺀다). 같은 계정 주체는 신원 정책만으로 접근하므로 이 정책이 교체되는
-# 동안에도 발행 · 구독이 끊기지 않는다 — 구독과 순서를 두지 않는다.
+# 계정 루트 주체 = 이 계정의 IAM 신원 정책이 허용한 주체만. 같은 계정
+# 주체는 신원 정책만으로 접근하므로(발행은 media 역할, 관리(Terraform)는 kty
+# IAM 사용자) 이 정책이 교체되는 동안에도 발행 · 구독이 끊기지 않는다 —
+# 구독과 순서를 두지 않는다.
 #
-# 조건(aws:PrincipalArn = prod 역할): 1단-다 직전 점검 2-3 의 정책
-# 시뮬레이터는 계정 루트 문장을 같은 계정 호출자 전부에 맞춰, 리스 계정의
-# dev 주체도 이 주제에 ALLOWED 로 판정했다. 실제 AWS 는 계정 루트 문장을
-# 신원 정책에 위임하므로 동작은 바뀌지 않는다 — 발행은 media 역할, 관리
-# (Terraform)는 kty IAM 사용자의 신원 정책이 연다.
+# 동작은 읽기(SNS:GetTopicAttributes) 하나다. 1단-다 직전 점검 2-3 의 정책
+# 시뮬레이터는 계정 루트 문장을 같은 계정 dev 주체에도 맞춰, 이 문장에 든
+# 동작을 dev 주체에 ALLOWED 로 판정한다. 그래서 변경 · 삭제 · 구독 · 발행을
+# 정책에서 뺀다. 실제 접근은 위 신원 정책이 정해 동작은 같다. 조건 키
+# (aws:PrincipalArn = prod 역할)로 좁히는 길은 버렸다 — 시뮬레이터가 그 문맥을
+# 채우지 않아 확인된 거부가 아니라 문맥 누락으로 나오고, prod 역할은 IAM 경로
+# /pokeclip/prod/ 아래라 이름 패턴이 경로까지 맞춰야 한다.
 resource "aws_sns_topic_policy" "broadcast_lifecycle" {
   arn = aws_sns_topic.broadcast_lifecycle.arn
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
       {
-        Sid    = "AllowAccountIdentityPolicies"
+        Sid    = "AllowAccountReadTopicAttributes"
         Effect = "Allow"
         Principal = {
           AWS = "arn:${data.aws_partition.broadcast.partition}:iam::${data.aws_caller_identity.current.account_id}:root"
         }
-        Action = [
-          "SNS:GetTopicAttributes",
-          "SNS:SetTopicAttributes",
-          "SNS:AddPermission",
-          "SNS:RemovePermission",
-          "SNS:DeleteTopic",
-          "SNS:Subscribe",
-          "SNS:ListSubscriptionsByTopic",
-          "SNS:Publish",
-        ]
+        Action   = ["SNS:GetTopicAttributes"]
         Resource = aws_sns_topic.broadcast_lifecycle.arn
-        Condition = {
-          ArnLike = {
-            "aws:PrincipalArn" = "arn:${data.aws_partition.broadcast.partition}:iam::${data.aws_caller_identity.current.account_id}:role/pokeclip-prod-*"
-          }
-        }
       },
     ]
   })
