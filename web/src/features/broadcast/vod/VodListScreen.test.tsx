@@ -425,6 +425,60 @@ describe('VodListScreen — 서버 목록', () => {
     expect(screen.queryByRole('alert')).toBeNull();
   });
 
+  it('읽기가 멈춰도 다음 주기에 새로 읽어 회복한다: 겹친 읽기를 하나로 묶지 않는다(PR #377 리뷰)', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let calls = 0;
+    stubFetch((url) => {
+      if (!url.startsWith('/api/clip/broadcasts?'))
+        return jsonResponse(200, { cards: [], nextCursor: null });
+      calls += 1;
+      // 첫 읽기는 영영 답하지 않는다(시한 없는 요청이 멈춘 꼴)
+      return calls === 1
+        ? new Promise<Response>(() => undefined)
+        : jsonResponse(200, { broadcasts: [], nextCursor: null });
+    });
+
+    renderWithProviders(<VodListScreen />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100);
+    });
+    expect(screen.getByRole('status')).toHaveTextContent('지난 방송을 불러오는 중');
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(screen.getByText('아직 지난 방송이 없어요')).toBeInTheDocument();
+  });
+
+  it('「다시 시도」가 도는 표시는 요청이 멈춰도 15초 뒤 풀린다: 버튼이 멈춘 요청에 묶이지 않는다', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let calls = 0;
+    stubFetch((url) => {
+      if (!url.startsWith('/api/clip/broadcasts?'))
+        return jsonResponse(200, { cards: [], nextCursor: null });
+      calls += 1;
+      return calls === 1
+        ? jsonResponse(503, { error: 'unavailable' })
+        : new Promise<Response>(() => undefined);
+    });
+
+    renderWithProviders(<VodListScreen />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100);
+    });
+    const button = screen.getByRole('button', { name: '다시 시도' });
+    fireEvent.click(button);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100);
+    });
+    expect(button).toHaveAttribute('aria-busy', 'true');
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000);
+    });
+    expect(button).not.toHaveAttribute('aria-busy');
+  });
+
   it('카드 수는 낡으면 다시 센다: 끝난 지 한 시간 안이면 주기마다, 그 밖은 10분마다(POK-254)', async () => {
     // 끝난 뒤에도 카드는 늦게 뜨거나 숨겨진다. 처음 잰 수를 영영 쓰면 목록이 실제와 갈린다
     vi.useFakeTimers({ shouldAdvanceTime: true });

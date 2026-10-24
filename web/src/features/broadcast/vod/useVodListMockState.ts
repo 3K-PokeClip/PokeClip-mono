@@ -10,6 +10,8 @@ import { ensurePlaybackAccessForList } from '@/api/playbackAccess';
 
 /** 지난 방송 목록을 다시 읽는 간격 — 끝난 방송이라 자주 볼 까닭이 없다 */
 const LIST_POLL_MS = 60_000;
+/** 「다시 시도」가 도는 표시의 상한. 읽기에 시한이 없어, 멈춘 요청에 버튼이 영영 묶이지 않게 한다(PR #377 리뷰) */
+const RETRY_SPINNER_MAX_MS = 15_000;
 /**
  * 기억한 카드 수를 다시 세는 간격(POK-254). 끝난 뒤에도 카드는 늦게 뜨거나 숨겨진다. 방금 끝난 방송은 주기마다,
  * 나머지는 이만큼 지나면 센다: 주기마다 전체 이력을 세면 계정이 오래될수록 요청이 끝없이 는다(PR #200 codex).
@@ -121,7 +123,7 @@ export interface VodListMockState {
   failed: boolean;
   /** 「다시 시도」로 부른 읽기가 도는 중 */
   retrying: boolean;
-  /** 지금 바로 다시 읽는다. 이미 읽는 중이면 그 읽기를 기다린다 */
+  /** 지금 바로 새로 읽는다(주기 읽기와 겹쳐도 따로 읽는다) */
   retry: () => void;
   visuals: Record<string, VodRowVisual>;
   filter: VodPeriodFilter;
@@ -351,15 +353,11 @@ export function useVodListMockState(options: VodListOptions = {}): VodListMockSt
         if (!stopped && !everLoaded) setFailed(true);
       }
     };
-    // 읽기는 한 번에 하나만: 「다시 시도」나 주기가 도는 읽기와 겹치면 그 읽기를 기다린다
-    let inflight: Promise<void> | null = null;
-    const run = () =>
-      (inflight ??= load().finally(() => {
-        inflight = null;
-      }));
-    runRef.current = run;
-    void run();
-    const t = window.setInterval(() => void run(), LIST_POLL_MS);
+    // 주기마다 새로 읽는다(겹쳐도 묶지 않는다): 요청에 시한이 없어, 묶으면 멈춘 요청 하나가 그 뒤 주기·「다시 시도」를 모두
+    // 붙잡는다(PR #377 리뷰). 늦게 온 답이 앞 답을 덮을 수 있는 것은 원래 주기 읽기와 같다
+    runRef.current = load;
+    void load();
+    const t = window.setInterval(load, LIST_POLL_MS);
     return () => {
       stopped = true;
       runRef.current = null;
@@ -393,7 +391,12 @@ export function useVodListMockState(options: VodListOptions = {}): VodListMockSt
     const run = runRef.current;
     if (run === null) return;
     setRetrying(true);
-    void run().finally(() => setRetrying(false));
+    // 읽기에는 시한이 없다: 요청이 멈춰도 버튼이 영영 돌지 않게 도는 표시에만 상한을 둔다. 멈춘 읽기는 그대로 두고 다음 주기나
+    // 다음 클릭이 새로 읽는다
+    void Promise.race([
+      run(),
+      new Promise<void>((resolve) => window.setTimeout(resolve, RETRY_SPINNER_MAX_MS)),
+    ]).finally(() => setRetrying(false));
   }, []);
 
   const past = useMemo(() => excludeLive(source), [source]);
