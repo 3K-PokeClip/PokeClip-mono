@@ -9,6 +9,8 @@
 #   출력 logging 으로, 데이터 보호는 출력 protected_headers 로 본다.
 # - 표준 로그 로그 그룹은 보존 = 변수이고, enable_standard_logs = false 면
 #   media 모듈에 null 을 넘기되 로그 그룹은 남는다.
+# - CloudFront Function 로그 그룹 셋은 /aws/cloudfront/function/<함수 이름>
+#   · us-east-1 · 보존 = WAF 차단 로그(30일)다.
 # - VPC origin 서비스 SG 는 서울 별칭으로 이름 · network vpc_id 로 조회하고,
 #   내부 ALB SG 에 그 SG 출처 443 인그레스 하나를 둔다. 조회는 VPC origin
 #   하나만 기다려, VPC origin 밖 media 변경 plan 에서도 출처 SG 가 정해져 있다.
@@ -342,6 +344,41 @@ run "standard_log_retention_rejects_non_cloudwatch_value" {
   }
 
   expect_failures = [var.log_retention_days]
+}
+
+# --- CloudFront Function 로그 그룹(POK-469 · PR 387 보안 L2) ---
+
+# 함수 셋의 console.log 가 가는 us-east-1 로그 그룹을 이 루트가 미리 만들어
+# 보존을 건다. 이름은 /aws/cloudfront/function/<함수 이름>, 보존은 WAF 차단
+# 로그와 같다. ARN 앞머리로 기본(us-east-1) provider 인지 본다 — 서울 별칭
+# mock 에는 로그 그룹 기본값이 없어 다른 값이 나온다.
+run "cloudfront_function_log_groups_keep_waf_retention" {
+  assert {
+    condition = {
+      for key, group in aws_cloudwatch_log_group.cloudfront_function : key => group.name
+      } == {
+      live_auth    = "/aws/cloudfront/function/pokeclip-prod-live-auth"
+      deny_default = "/aws/cloudfront/function/pokeclip-prod-deny-default"
+      apex_request = "/aws/cloudfront/function/pokeclip-prod-apex-request"
+    }
+    error_message = "함수 로그 그룹이 /aws/cloudfront/function/ + 함수 셋(live-auth · deny-default · apex-request)의 이름이 아니다."
+  }
+
+  assert {
+    condition = alltrue([
+      for group in aws_cloudwatch_log_group.cloudfront_function :
+      group.retention_in_days == 30 && group.retention_in_days == local.waf_log_retention_days
+    ])
+    error_message = "함수 로그 그룹 보존이 WAF 차단 로그와 같은 30일(local.waf_log_retention_days)이 아니다."
+  }
+
+  assert {
+    condition = alltrue([
+      for group in aws_cloudwatch_log_group.cloudfront_function :
+      startswith(group.arn, "arn:aws:logs:us-east-1:")
+    ])
+    error_message = "함수 로그 그룹을 기본(us-east-1) provider 가 아닌 provider 로 만든다."
+  }
 }
 
 # --- VPC origin 서비스 SG → 내부 ALB 인그레스(계획 c8) ---
