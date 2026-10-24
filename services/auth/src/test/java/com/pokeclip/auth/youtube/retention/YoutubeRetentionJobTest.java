@@ -218,6 +218,27 @@ class YoutubeRetentionJobTest extends YoutubeLinkTestSupport {
                 .isEqualTo(나중);
     }
 
+    /** 보내는 사이 다른 닫힘이 기준 시각을 늦췄으면 보낸 줄을 지우지 않고 곧바로 다시 보낸다(늦춘 시각을 잃지 않게) */
+    @Test
+    void 보내는_사이_기준_시각이_늦춰지면_장부를_안_지운다() {
+        User user = newUser();
+        연동(user, "UC-race-");
+        닫는다(user, "USER_UNLINKED", Duration.ofDays(8));
+        answer.set(503);
+        job.runOnce(Instant.now());
+        jdbc.update("UPDATE youtube_video_forget_jobs SET next_attempt_at = now() - interval '1 second'");
+        YoutubeRetentionStore.ForgetJob 집은것 = store.claim(Instant.now(), Duration.ofMinutes(5), 10).getFirst();
+        jdbc.update("UPDATE youtube_video_forget_jobs SET created_at = created_at + interval '1 day'");
+
+        store.sent(집은것, Instant.now());
+
+        assertThat(장부()).as("늦춘 시각이 남아 있어야 한다").isEqualTo(1);
+        assertThat(jdbc.queryForObject("SELECT next_attempt_at <= now() FROM youtube_video_forget_jobs", Boolean.class))
+                .as("곧바로 다시 보낸다").isTrue();
+        store.sent(store.claim(Instant.now(), Duration.ofMinutes(5), 10).getFirst(), Instant.now());
+        assertThat(장부()).isZero();
+    }
+
     /** 연동 중 30일이 지나면 channels.list로 채널 이름을 다시 받는다. 30일 전이면 안 묻는다 */
     @Test
     void 연동_중_30일마다_채널_이름을_다시_받는다() {

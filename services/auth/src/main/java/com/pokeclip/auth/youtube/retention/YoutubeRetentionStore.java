@@ -99,9 +99,15 @@ public class YoutubeRetentionStore {
         return jobs;
     }
 
-    /** clip이 받았다. 줄째 지운다: 채널 번호를 남기지 않는다. */
-    public void sent(long jobId) {
-        jdbc.update("DELETE FROM youtube_video_forget_jobs WHERE id = ?", jobId);
+    /**
+     * clip이 받았다. 줄째 지운다: 채널 번호를 남기지 않는다. 🔴 보내는 사이 다른 닫힘이 기준 시각을 늦췄으면(같은 채널) 안 지우고 곧바로
+     * 다시 보낸다: 지우면 늦춘 시각이 사라져 그 사이 주문한 업로드가 지우는 범위에서 빠진다.
+     */
+    public void sent(ForgetJob job, Instant now) {
+        if (jdbc.update("DELETE FROM youtube_video_forget_jobs WHERE id = ? AND created_at = ?",
+                job.id(), Timestamp.from(job.createdAt())) == 0) {
+            jdbc.update("UPDATE youtube_video_forget_jobs SET next_attempt_at = ? WHERE id = ?", Timestamp.from(now), job.id());
+        }
     }
 
     public void retryLater(long jobId, Instant next) {

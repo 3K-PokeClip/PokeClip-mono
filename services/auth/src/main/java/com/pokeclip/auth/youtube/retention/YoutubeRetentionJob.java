@@ -117,7 +117,7 @@ public class YoutubeRetentionJob {
         for (ForgetJob job : store.claim(now, LEASE, SEND_BATCH)) {
             try {
                 notifier.send(job);
-                store.sent(job.id());
+                store.sent(job, clock.instant());
                 log.info("auth.youtube.retention.forget_sent userId={}", job.userId());
             } catch (Exception e) {
                 store.retryLater(job.id(), clock.instant().plus(backoff(job.attempts())));
