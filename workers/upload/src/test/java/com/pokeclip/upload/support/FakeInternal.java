@@ -41,6 +41,9 @@ public class FakeInternal implements AutoCloseable {
     public final List<String> results = new ArrayList<>();
     /** 올림 보고에 실린 채널(POK-423). 칸이 없으면 "null". */
     public final List<String> reportedChannels = new ArrayList<>();
+    /** 강제 갱신(401 뒤) 때 연동 채널이 이것으로 바뀐다(POK-423: 그 사이 다른 채널로 다시 연동한 경우). null이면 그대로 UC1 */
+    public volatile String channelAfterForce;
+    private volatile String channel = "UC1";
     /** 상태를 안 바꾸고 409로 돌려보낸 끝 보고의 사유(예: {@code SESSION_EXISTS}). */
     public final List<String> refusedResults = new ArrayList<>();
     /** UPLOADED 보고에 실린 썸네일 결과. {@code "SET"} · {@code "FAILED:코드"} · {@code "NONE"} · 칸이 없으면 {@code "null"}. */
@@ -183,6 +186,9 @@ public class FakeInternal implements AutoCloseable {
                 reply(ex, 500, "{}");
                 return;
             }
+            if (channelAfterForce != null) {
+                channel = channelAfterForce;
+            }
             // 진짜 auth처럼 회원 행 잠금 안에서 지금 토큰의 지문과 견준다. 다르면 누가 이미 갱신했다: 지금 토큰을 준다.
             if (accessToken != null && sha256(accessToken).equals(rejected)) {
                 if (refusalOnForce != null) {
@@ -196,7 +202,7 @@ public class FakeInternal implements AutoCloseable {
             accessToken = accessTokenAfterFirst;
         }
         if (accessToken != null) {
-            reply(ex, 200, "{\"valid\":true,\"channelId\":\"UC1\",\"accessToken\":\"" + accessToken + "\"}");
+            reply(ex, 200, "{\"valid\":true,\"channelId\":\"" + channel + "\",\"accessToken\":\"" + accessToken + "\"}");
         } else {
             reply(ex, 200, "{\"valid\":false,\"reason\":\"" + refusal + "\"}");
         }

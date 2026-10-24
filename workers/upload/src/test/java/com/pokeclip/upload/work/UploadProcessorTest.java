@@ -639,6 +639,19 @@ class UploadProcessorTest {
         assertThat(youtube.videosCreated()).isEqualTo(1);
     }
 
+    /** 시작 401 뒤 새 토큰이 다른 채널이면(그 사이 다시 연동) 새 주소는 그 채널 것이라 그 채널을 싣는다(PR #375 codex 2판) */
+    @Test
+    void 시작_401_뒤_새_토큰의_채널을_싣는다() {
+        youtube.acceptedToken = "ya29.fresh";
+        internal.refreshedToken = "ya29.fresh";
+        internal.channelAfterForce = "UC2";
+
+        processor().process(주문서());
+
+        assertThat(internal.results).containsExactly("UPLOADED:vid1");
+        assertThat(internal.reportedChannels).containsExactly("UC2");
+    }
+
     /** 🔴 올리는 도중 401: 그 전에는 쪽지만 남기고 다음 배달도 같은 토큰이었다. 새 토큰으로 주소에 먼저 묻고 받은 데부터 잇는다. 영상 하나. */
     @Test
     void 조각_전송이_401이면_새_토큰으로_받은_데부터_잇는다() {

@@ -199,6 +199,8 @@ public class UploadProcessor {
                             : failUnlessAdopted(job, null, file, size, "YOUTUBE_" + fresh.reason(), message, true);
                 }
                 access = fresh.accessToken();
+                // 새 주소를 이 새 토큰으로 만든다. 그 사이 다른 채널로 다시 연동했으면 채널도 바뀐다(PR #375 codex 2판)
+                channel = fresh.channelId();
                 start = youtube.start(access, job.title(), job.description(), job.categoryId(),
                         job.privacyStatus(), job.publishAt(), job.tags(), job.madeForKids(), size);
             }
