@@ -720,7 +720,7 @@ function LiveDashboard() {
             detectionPaused={chatWarning}
             ended={ended}
             listStatus={cardsStatus}
-            onSeek={handlePinSeek}
+            onSeek={handleCardSeek}
           />
         </div>
         {/* 칸이 행 높이를 받고 그 안에서 채팅이 sticky로 붙는다 — 칸의 역할은 CSS .chatCol 주석.
@@ -751,7 +751,7 @@ function LiveDashboard() {
         highlightSummary={highlightSummary}
         live={viewStatus === 'live'}
         ended={ended}
-        onSeekCard={handleCardSeek}
+        onSeekCard={handlePinSeek}
       />
     </main>
   );

@@ -2000,6 +2000,10 @@ describe('LiveScreen — 하이라이트 카드', () => {
     // 옮겼어요」는 거짓이다(리뷰 2라운드)
     expect(screen.getByText('영상은 아직 없어요')).toBeInTheDocument();
     expect(screen.queryByText(/채팅을 그 시점으로 옮겼어요/)).not.toBeInTheDocument();
+    // 카드 목록에서 누른 이동이다 — 통계 핀과 갈라 센다 (POK-357)
+    expect(track.mock.calls.filter(([n]) => n === 'highlight_card_seeked')).toEqual([
+      ['highlight_card_seeked', { from: 'card', mode: 'live' }],
+    ]);
   });
 
   it('지난 방송에서는 영상이 없어도 채팅을 그 시점으로 옮기고 그렇다고 말한다', async () => {
@@ -2634,6 +2638,12 @@ describe('LiveScreen — 실시간 통계', () => {
     expect(
       screen.getByRole('button', { name: /^하이라이트 #8 — .*1:23:20로 이동$/ }),
     ).toBeInTheDocument();
+
+    // 핀에서 누른 이동은 카드 목록과 갈라 센다 (POK-357)
+    fireEvent.click(screen.getByRole('button', { name: /^하이라이트 #8 — .*1:23:20로 이동$/ }));
+    expect(track.mock.calls.filter(([n]) => n === 'highlight_card_seeked')).toEqual([
+      ['highlight_card_seeked', { from: 'stats_pin', mode: 'live' }],
+    ]);
   });
 
   it('새 카드가 들어오면 지표와 필터 칩이 같이 는다: 요약이 첫 값에 굳지 않는다', async () => {
