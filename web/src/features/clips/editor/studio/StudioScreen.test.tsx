@@ -535,8 +535,10 @@ describe('StudioScreen', () => {
         setBounds: vi.fn(),
       },
     });
-    // 100%: 1분 구간 전체가 보이고 손잡이 둘이 다 있다
-    expect(screen.getAllByRole('slider', { name: /구간 (시작|끝)점/ })).toHaveLength(2);
+    // 100%: 1분 구간 전체가 보이고 손잡이 둘이 다 있다(Tab으로 간다)
+    const handles = () => screen.getAllByRole('slider', { name: /구간 (시작|끝)점/ });
+    expect(handles()).toHaveLength(2);
+    for (const handle of handles()) expect(handle).toHaveAttribute('tabindex', '0');
     expect(screen.queryByRole('button', { name: /으로 가기/ })).not.toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: '타임라인 확대' }));
@@ -548,6 +550,8 @@ describe('StudioScreen', () => {
     const box = document.querySelector<HTMLElement>('[class*="rangeBox"]')!;
     expect(parseFloat(box.style.left)).toBeCloseTo(-110, 0);
     expect(parseFloat(box.style.width)).toBeCloseTo(320, 0);
+    // 잘려 안 보이는 손잡이는 Tab 차례에서 빠진다: 초점 표시 없이 경계를 바꾸지 않게(PR #341 2차)
+    for (const handle of handles()) expect(handle).toHaveAttribute('tabindex', '-1');
     await user.click(screen.getByRole('button', { name: '시작점으로 가기' }));
     expect(seekTo).toHaveBeenLastCalledWith(100);
     await user.click(screen.getByRole('button', { name: '끝점으로 가기' }));

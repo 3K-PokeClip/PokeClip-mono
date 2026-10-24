@@ -79,6 +79,8 @@ export function MultitrackTimeline({
   // 구간 상자는 자르지 않은 자리에 그린다: 키운 창보다 넓으면 창 밖으로 나가고 덮개가 잘라 감춘다(손잡이도 같이 숨는다)
   const boxStart = secondsToViewOffset(state.range.startSeconds, state.view);
   const boxEnd = secondsToViewOffset(state.range.endSeconds, state.view);
+  /** 창 밖으로 나가 덮개에 잘린 자리인가 */
+  const offView = (offset: number) => offset < 0 || offset > 1;
   const playheadFraction = secondsToFraction(state.playheadSeconds, state.view);
   // 필름띠와 썸네일 칸은 장면 그림 훅 하나(숨은 영상 노드 하나)를 같이 쓴다
   const thumbnailMs =
@@ -421,11 +423,14 @@ export function MultitrackTimeline({
                   }}
                 >
                   {/* 핸들은 늘 그린다. 키워서 창 밖으로 나간 핸들은 덮개가 가로로 잘라 안 보이고 가장자리 표시가 대신한다.
-                    빼 버리면 그 핸들에 있던 키보드 초점이 사라진다(로컬 리뷰 1라운드) */}
+                    빼 버리면 그 핸들에 있던 키보드 초점이 사라진다(로컬 리뷰 1라운드). 다만 창 밖 핸들은 Tab 차례에서 뺀다:
+                    안 보이는 핸들에 초점이 가면 초점 표시 없이 ← → 로 경계가 바뀐다. 가장자리 표시를 누르면 그리로 가서
+                    다시 차례에 든다(PR #341 2차) */}
                   {(['start', 'end'] as const).map((edge) => (
                     <button
                       key={edge}
                       type="button"
+                      tabIndex={offView(edge === 'start' ? boxStart : boxEnd) ? -1 : 0}
                       role="slider"
                       aria-label={edge === 'start' ? '구간 시작점' : '구간 끝점'}
                       // 이름·키 조작이 「경계 위치」를 뜻하므로 값도 위치로 읽어 준다.
