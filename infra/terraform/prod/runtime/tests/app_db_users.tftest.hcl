@@ -9,6 +9,17 @@ mock_provider "aws" {
   source = "./tests/mocks"
 }
 
+# auth_oauth_apps 는 기본값이 없다(auth_settings.tf — tfvars 필수). 이 파일의
+# 모든 run 에 흐르는 예시 값이다(run 안의 variables 가 덮는 변수만 바뀐다).
+variables {
+  auth_oauth_apps = {
+    google  = { client_id = "example-google-client-id", redirect_uri = "https://app.pokeclip.com/auth/callback" }
+    chzzk   = { client_id = "example-chzzk-client-id", redirect_uri = "https://app.pokeclip.com/oauth/chzzk/callback" }
+    youtube = { client_id = "example-youtube-client-id", redirect_uri = "https://app.pokeclip.com/oauth/youtube/callback" }
+    soop    = { client_id = "example-soop-client-id", redirect_uri = "https://app.pokeclip.com/oauth/soop/callback" }
+  }
+}
+
 override_data {
   target = data.terraform_remote_state.network
   values = {
@@ -21,7 +32,8 @@ override_data {
   }
 }
 
-# 키는 app_env · app_secret_arns 와 같은 서비스 이름이다. platform 은 auth ·
+# 키는 DB 를 쓰는 서비스 넷의 이름이다 — app_env · app_secret_arns 서비스 키의
+# 부분집합이다(일꾼 render · upload 는 DB 를 쓰지 않는다). platform 은 auth ·
 # clip 만 읽고 모르는 키를 거부하지 않는다 — chat 두 서버 키는 배치(POK-306)가
 # 같은 출력에서 읽는다.
 run "names_one_db_user_per_server" {
@@ -38,8 +50,8 @@ run "names_one_db_user_per_server" {
   }
 
   assert {
-    condition     = toset(keys(output.app_db_users)) == toset(keys(output.app_secret_arns))
-    error_message = "app_db_users 의 서비스 키가 app_secret_arns 의 서비스 키와 다르다."
+    condition     = length(setsubtract(keys(output.app_db_users), keys(output.app_secret_arns))) == 0
+    error_message = "app_db_users 에 app_secret_arns 에 없는 서비스 키가 있다."
   }
 }
 

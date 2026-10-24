@@ -181,13 +181,3 @@ output "broadcast_queue_arns" {
   description = "소비자(clip · chat) → 계약9 SQS FIFO 큐 ARN. chat-collector(POK-306) 수신 정책 대상이고, clip 은 app_task_resource_arns 를 쓴다. 큐 URL 은 app_env 에 있다."
   value       = { for consumer, queue in aws_sqs_queue.broadcast : consumer => queue.arn }
 }
-
-# platform 이 clip 작업 역할 정책을 만드는 지도(CONTRACT-runtime.md 「작업
-# 역할 대상」). 키는 platform 의 task_resource_keys 와 같은 이름이고, 일 큐 ·
-# 버킷 키는 런타임 다음 PR 이 더한다(kty 2026-10-23).
-output "app_task_resource_arns" {
-  description = "서비스 → 키 → ARN(와일드카드 없음) — platform 작업 역할 정책 Resource. 지금은 clip 의 broadcast_queue_arn 하나."
-  value = {
-    clip = { broadcast_queue_arn = aws_sqs_queue.broadcast["clip"].arn }
-  }
-}

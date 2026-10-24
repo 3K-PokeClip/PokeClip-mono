@@ -84,7 +84,7 @@ EXPECTED_ARGV_HEAD+=' --output json --no-cli-auto-prompt --secret-id'
 readonly EXPECTED_ARGV_HEAD
 readonly EXPECTED_ARGV_TAIL='--secret-string file:///dev/stdin'
 # 사례 수(ok · skip 줄의 수). 사례를 더하거나 빼면 함께 고친다.
-readonly EXPECTED_CASES=51
+readonly EXPECTED_CASES=55
 # 호출자 환경의 표지 변수(셸에 살아 있는 토큰 변수를 흉내 낸 가짜 값). 사례
 # 디렉터리 어디에도 남지 않아야 한다 — 가짜 aws 는 환경 중 시험이 보는
 # 이름만 적는다.
@@ -588,6 +588,55 @@ test_usage() {
   expect_usage usage-three-args cdn-secret "${tmp_root}/x" extra
   expect_usage usage-unknown-kind api-key "${tmp_root}/x"
   expect_usage usage-arn-kind "arn:aws:secretsmanager:example" "${tmp_root}/x"
+  # 종류는 그릇 이름의 용도 토막이다 — 전체 이름 · 경로 꼴은 받지 않는다.
+  expect_usage usage-full-name-kind pokeclip/prod/jwt-secret "${tmp_root}/x"
+  expect_usage usage-path-kind stream-key/x "${tmp_root}/x"
+}
+
+#######################################
+# 허용 목록(KINDS) · 머리 주석 표의 종류 열 · tf 그릇 이름(prod/secrets 의
+# 엣지 그릇 · prod/runtime/app_secrets.tf 의 앱 그릇)의 용도 토막이 같은
+# 집합인지 본다. 그릇을 더하는 PR 이 목록 · 주석 표 · 시험을 함께 고치게
+# 한다 — 하나라도 갈리면 실패다. 문서는 종류를 나열하는 자리가 남아 있을
+# 때만 한 줄 더한다(아니면 건드리지 않음).
+#######################################
+test_kinds_match_shells() {
+  local tf_root="${SCRIPT_DIR}/../.."
+  local edge_tf="${tf_root}/prod/secrets/main.tf"
+  local app_tf="${tf_root}/prod/runtime/app_secrets.tf"
+  local shells listed table count
+  if [[ ! -r "${edge_tf}" || ! -r "${app_tf}" || ! -r "${PUT}" ]]; then
+    fail "kinds-match-shells: tf 파일 · 스크립트를 읽을 수 없음"
+    return
+  fi
+  shells="$({
+    grep -E 'for purpose in \[' "${edge_tf}" | grep -oE '"[a-z0-9-]+"' |
+      tr -d '"'
+    grep -oE '"pokeclip/prod/[a-z0-9-]+"' "${app_tf}" |
+      sed -E 's|^"pokeclip/prod/||; s|"$||'
+  } | LC_ALL=C sort -u)"
+  listed="$(sed -n '/^readonly -a KINDS=(/,/^)$/p' "${PUT}" | sed '1d;$d' |
+    tr -d ' ' | LC_ALL=C sort -u)"
+  table="$(sed -n '1,/^set -uo pipefail$/p' "${PUT}" |
+    sed -nE 's/^#   ([a-z][a-z0-9-]*) +(PKCS#8 PEM|한 줄) — .*/\1/p' |
+    LC_ALL=C sort -u)"
+  if [[ -z "${shells}" || -z "${listed}" || -z "${table}" ]]; then
+    fail "kinds-match-shells: 빈 집합 — 그릇 「${shells//$'\n'/ }」 ·" \
+      "목록 「${listed//$'\n'/ }」 · 주석 표 「${table//$'\n'/ }」"
+    return
+  fi
+  if [[ "${listed}" != "${shells}" ]]; then
+    fail "kinds-match-shells: 허용 목록이 tf 그릇과 다름 —" \
+      "목록 「${listed//$'\n'/ }」 · 그릇 「${shells//$'\n'/ }」"
+    return
+  fi
+  if [[ "${table}" != "${shells}" ]]; then
+    fail "kinds-match-shells: 머리 주석 표의 종류가 tf 그릇과 다름 —" \
+      "표 「${table//$'\n'/ }」 · 그릇 「${shells//$'\n'/ }」"
+    return
+  fi
+  count="$(printf '%s\n' "${shells}" | grep -c .)"
+  pass "kinds-match-shells → 허용 목록 · 주석 표 · tf 그릇 ${count}개가 같음"
 }
 
 #######################################
@@ -692,6 +741,13 @@ test_one_line() {
   printf '%s' "${ONE_LINE_VALUE}" >"${expected}"
   write_input '%s' "${ONE_LINE_VALUE}"
   expect_put one-line-no-newline test-stream-key "${expected}" \
+    "${ONE_LINE_MARKER}"
+  # 앱 비밀 그릇(1단-다 — prod/runtime/app_secrets.tf)도 같은 한 줄 갈래다.
+  new_case || return
+  expected="${case_dir}/expected"
+  printf '%s' "${ONE_LINE_VALUE}" >"${expected}"
+  write_input '%s\n' "${ONE_LINE_VALUE}"
+  expect_put one-line-soop soop-client-secret "${expected}" \
     "${ONE_LINE_MARKER}"
   new_case || return
   write_input 'FakeFirst\nFakeSecond\n'
@@ -1155,6 +1211,7 @@ main() {
   }
   test_locale
   test_usage
+  test_kinds_match_shells
   test_file_checks
   test_signing_key
   test_one_line
