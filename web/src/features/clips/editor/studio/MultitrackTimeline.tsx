@@ -1,4 +1,4 @@
-import { useRef, type KeyboardEvent, type PointerEvent } from 'react';
+import { useEffect, useRef, type KeyboardEvent, type PointerEvent } from 'react';
 import {
   Camera,
   Captions,
@@ -46,6 +46,11 @@ function shortClock(seconds: number): string {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
+/** 보이는 창 기준 자리(secondsToViewOffset)가 창 밖이라 덮개에 잘렸는가 */
+function offView(offset: number): boolean {
+  return offset < 0 || offset > 1;
+}
+
 export function MultitrackTimeline({
   state,
   headroom,
@@ -79,8 +84,24 @@ export function MultitrackTimeline({
   // 구간 상자는 자르지 않은 자리에 그린다: 키운 창보다 넓으면 창 밖으로 나가고 덮개가 잘라 감춘다(손잡이도 같이 숨는다)
   const boxStart = secondsToViewOffset(state.range.startSeconds, state.view);
   const boxEnd = secondsToViewOffset(state.range.endSeconds, state.view);
-  /** 창 밖으로 나가 덮개에 잘린 자리인가 */
-  const offView = (offset: number) => offset < 0 || offset > 1;
+  const handleRefs = useRef<Record<'start' | 'end', HTMLButtonElement | null>>({
+    start: null,
+    end: null,
+  });
+  const leftMarkerRef = useRef<HTMLButtonElement>(null);
+  const rightMarkerRef = useRef<HTMLButtonElement>(null);
+  // 초점을 가진 손잡이가 창 밖으로 밀려나면(재생으로 창이 넘어감 · 화살표로 밀어냄) 그쪽 가장자리 표시로 초점을 옮긴다:
+  // 잘려 안 보이는 손잡이에 초점이 남으면 초점 표시 없이 ← → 로 경계가 바뀐다(PR #341 3차). 표시를 누르면 그리로 간다
+  useEffect(() => {
+    for (const edge of ['start', 'end'] as const) {
+      const handle = handleRefs.current[edge];
+      const offset = edge === 'start' ? boxStart : boxEnd;
+      if (handle === null || document.activeElement !== handle || !offView(offset)) continue;
+      const marker = offset < 0 ? leftMarkerRef.current : rightMarkerRef.current;
+      if (marker !== null) marker.focus();
+      else handle.blur();
+    }
+  }, [boxStart, boxEnd]);
   const playheadFraction = secondsToFraction(state.playheadSeconds, state.view);
   // 필름띠와 썸네일 칸은 장면 그림 훅 하나(숨은 영상 노드 하나)를 같이 쓴다
   const thumbnailMs =
@@ -429,6 +450,9 @@ export function MultitrackTimeline({
                   {(['start', 'end'] as const).map((edge) => (
                     <button
                       key={edge}
+                      ref={(element) => {
+                        handleRefs.current[edge] = element;
+                      }}
                       type="button"
                       tabIndex={offView(edge === 'start' ? boxStart : boxEnd) ? -1 : 0}
                       role="slider"
@@ -470,6 +494,7 @@ export function MultitrackTimeline({
                 {leftMarker !== null ? (
                   <button
                     type="button"
+                    ref={leftMarkerRef}
                     className={`${styles.edgeMarker} ${styles.edgeMarkerStart}`}
                     aria-label={`${leftMarker.label}으로 가기`}
                     onClick={() => state.seekTo(leftMarker.seconds)}
@@ -481,6 +506,7 @@ export function MultitrackTimeline({
                 {rightMarker !== null ? (
                   <button
                     type="button"
+                    ref={rightMarkerRef}
                     className={`${styles.edgeMarker} ${styles.edgeMarkerEnd}`}
                     aria-label={`${rightMarker.label}으로 가기`}
                     onClick={() => state.seekTo(rightMarker.seconds)}

@@ -563,6 +563,40 @@ describe('StudioScreen', () => {
     expect(seekTo).toHaveBeenLastCalledWith(159.9);
   });
 
+  it('초점을 가진 손잡이가 키운 창 밖으로 밀려나면 그쪽 가장자리 표시로 초점이 간다: 안 보이는 손잡이에 남지 않게(PR #341 3차)', async () => {
+    const user = userEvent.setup();
+    renderStudio({
+      source: {
+        clipTitle: '카드',
+        sourceLabel: '방송',
+        durationSeconds: 400,
+        range: { startSeconds: 125, endSeconds: 135 },
+      },
+      playback: {
+        playing: false,
+        currentSeconds: 130,
+        durationSeconds: 400,
+        error: null,
+        togglePlay: vi.fn(),
+        seekTo: vi.fn(),
+        seekBy: vi.fn(),
+        setRate: vi.fn(),
+        setBounds: vi.fn(),
+      },
+    });
+    await user.click(screen.getByRole('button', { name: '타임라인 확대' }));
+    await user.click(screen.getByRole('button', { name: '타임라인 확대' }));
+    // 400%: 창 ≈120.6~139.4초라 끝점(135초)은 창 안이다
+    const end = screen.getByRole('slider', { name: '구간 끝점' });
+    expect(end).toHaveAttribute('tabindex', '0');
+    end.focus();
+
+    // 끝점을 5초 밀면 140초 → 창 밖: 초점이 「끝점으로 가기」로 옮겨 간다
+    await user.keyboard('{Shift>}{ArrowRight}{/Shift}');
+    expect(end).toHaveAttribute('aria-valuenow', '140');
+    expect(screen.getByRole('button', { name: '끝점으로 가기' })).toHaveFocus();
+  });
+
   it('단축키로 재생을 토글하고 되돌린다', async () => {
     const user = userEvent.setup();
     renderStudio();
