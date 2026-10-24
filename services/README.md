@@ -934,7 +934,9 @@ SELECT pg_catalog.pg_database_size(pg_catalog.current_database());
 *   `::error::schema move committed but a later step failed; old containers NOT
     restarted` 또는 `::error::schema move state unknown; …` — 옮긴 뒤(또는 판정
     불가) 실패했다. 서버는 멈춘 채다. kty 에게 보고하고, 새 이미지로 `up -d` 하는
-    SSM 은 kty 승인 뒤에 보낸다.
+    SSM 은 kty 승인 뒤에 보낸다. 판정 불가에는 이전 psql 이 90초 안에 끝나지
+    않은 경우도 든다 — 그때는 `pg_stat_activity` 에 `application_name` 이
+    `pokeclip-dev-move` 인 세션이 없어진 뒤에 이력 표를 읽어 판정한다.
 
 **백업 정리.** 백업은 상자의 `/home/ec2-user/pokeclip-backup/public-<UTC
 시각>.sql`(파일 0600 · 디렉터리 0700)이다. 계정 · 방송 · 암호문이 들어 있으므로
@@ -1018,9 +1020,12 @@ kty 승인을 받고, 거절 · 승인은 필수 검토자인 kty 가 직접 누
 
     읽기 1 · 2 는 (시간)을 마치거나 (생략 판정)으로 건너뛴 뒤, 걸음 4 의 정지
     명령 바로 앞에 이 순서로 한다.
-1.  **역이전(kty 승인 SSM).** 서버 넷 · 일꾼 둘 정지 → `pg_dump -n public` 백업
-    → `scripts/dev-move-back-to-public.sql`(한 트랜잭션) → 확인 질의(public 에
-    이력 표 넷 · `app_*` 넷이 빔).
+1.  **역이전(kty 승인 SSM).** 서버 넷 · 일꾼 둘 정지 → DB 전체 `pg_dump`
+    백업(`-n` 없이 · 앞방향 백업과 같은 디렉터리에 `umask 077`) →
+    `scripts/dev-move-back-to-public.sql`(한 트랜잭션) → 확인 질의(public 에
+    이력 표 넷 · `app_*` 넷이 빔). 이때 옮겨 올 앱 자료 · Flyway 이력 · clip
+    독립 객체는 `app_*` 넷에 있으므로 `-n public` 백업에는 빠진다. 앞방향 이전
+    때의 백업에도 그 뒤의 변경은 없다.
 1.  **revert PR 머지.** 그 push 의 실행이 승인 대기에 선다. 머지 전 push 로 생긴
     대기 실행은 **거절**하고(그 workflow 파일은 이전 단계가 있는 새 코드다),
     **revert 를 포함한 가장 새 대기 실행** 하나만 승인한다 — 한 concurrency

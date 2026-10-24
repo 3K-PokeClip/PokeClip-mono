@@ -16,10 +16,13 @@
 #   옮김    서버 넷 · 일꾼 둘 정지 → public 백업(0600) → 이전 SQL(한 트랜잭션).
 #           `schema move: moved` · 종료 0. 뒤이은 워크플로의 up -d 가 새 이미지로
 #           다시 만든다.
-#   실패    정지 뒤의 어느 실패든 restore 가 이전이 커밋됐는지 읽는다.
+#   실패    정지 뒤의 어느 실패든 restore 가 이전 psql 이 끝나기를 기다린 뒤
+#           (호스트의 exec 연결만 끊겨도 안의 psql 은 계속 돌아 나중에 커밋할 수
+#           있다) 이전이 커밋됐는지 읽는다.
 #           커밋 전(이력 표가 public 에 그대로) → 여섯을 다시 start · 종료 1.
-#           커밋 뒤 · 판정 불가 → 옛 컨테이너를 띄우지 않는다(옛 Flyway 가 public
-#           에 빈 표를 만들어 자료가 갈린다) · ::error:: 한 줄 · 종료 1.
+#           커밋 뒤 · 판정 불가(상한 안에 안 끝남 포함) → 옛 컨테이너를 띄우지
+#           않는다(옛 Flyway 가 public 에 빈 표를 만들어 자료가 갈린다) ·
+#           ::error:: 한 줄 · 종료 1.
 #
 # 되돌리기 순서 · 백업 정리는 services/README.md 「dev 앱별 스키마 이전과
 # 되돌리기」. 이전 단계를 지우는 후속 PR 에서 이 파일도 지운다.
@@ -39,6 +42,16 @@ readonly HISTORY_TABLES="'flyway_schema_history_auth', \
 'flyway_schema_history_clip', 'flyway_schema_history_chat', \
 'flyway_schema_history_chat_detector'"
 readonly ONE_GB=1073741824
+# 이전 psql 의 표식. 그 프로세스의 argv 와 세션의 application_name 에 실려,
+# restore 가 이전이 정말 끝났는지 이 이름으로 본다.
+readonly MOVE_APP_NAME='pokeclip-dev-move'
+# 이전 SQL 의 문장 상한. 잠금 대기도 이 안에 든다 — 그래서 lock_timeout 을 따로
+# 두지 않는다. 옮기기는 카탈로그만 바꿔 평소 1초 안쪽이다.
+readonly MOVE_STATEMENT_TIMEOUT='60s'
+# restore 가 이전 psql 이 끝나기를 기다리는 상한(2초 × 45 = 90초). 문장 상한보다
+# 길어 도는 이전은 이 안에 커밋하거나 되돌린다.
+readonly MOVE_WAIT_TRIES=45
+readonly MOVE_WAIT_SECONDS=2
 
 # 걸음 1 에서 public 에 있다고 읽은 이력 표(restore 가 커밋 여부를 가를 때 쓴다).
 history_before=''
@@ -63,6 +76,43 @@ psql_in_db() {
   compose exec -T postgres sh -c \
     'psql -X -q -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" "$@"' \
     psql "$@"
+}
+
+#######################################
+# 이전 SQL 을 한 트랜잭션으로 돈다. 표식(MOVE_APP_NAME)을 psql argv 의
+# application_name 에 싣고, 문장 상한을 PGOPTIONS 로 준다.
+#######################################
+run_move_sql() {
+  # shellcheck disable=SC2016 # 컨테이너 안의 셸이 풀 변수다.
+  compose exec -T postgres sh -c \
+    'PGOPTIONS="-c statement_timeout=$2" psql -X -q -v ON_ERROR_STOP=1 \
+-U "$POSTGRES_USER" -d "application_name=$1 dbname=$POSTGRES_DB" -1 -f -' \
+    sh "${MOVE_APP_NAME}" "${MOVE_STATEMENT_TIMEOUT}" < "${MOVE_SQL}"
+}
+
+#######################################
+# 이전 psql 이 끝나기를 상한 있게 기다린다. postgres 컨테이너에 그 프로세스가
+# 없고(접속 전인 것까지) DB 에 그 세션도 없으면(프로세스가 죽은 뒤 커밋 · 롤백
+# 중인 백엔드까지) 끝난 것이다. 프로세스는 다시 생기지 않으므로 이 차례로 보면
+# 끝난 뒤의 이력 표만 읽게 된다.
+# Returns:
+#   0 끝남, 1 상한을 넘김 · 읽기 실패.
+#######################################
+wait_for_move_end() {
+  local i procs sessions
+  for (( i = 0; i < MOVE_WAIT_TRIES; i++ )); do
+    procs="$(compose top postgres)" || return 1
+    if [[ "${procs}" != *"${MOVE_APP_NAME}"* ]]; then
+      sessions="$(psql_in_db -At -c "SELECT pg_catalog.count(*) \
+FROM pg_catalog.pg_stat_activity \
+WHERE application_name = '${MOVE_APP_NAME}'")" || return 1
+      if [[ "${sessions}" == '0' ]]; then
+        return 0
+      fi
+    fi
+    sleep "${MOVE_WAIT_SECONDS}"
+  done
+  return 1
 }
 
 #######################################
@@ -117,8 +167,10 @@ require_disk_for_backup() {
 }
 
 #######################################
-# 실패 뒤 복구. 이전이 커밋됐는지부터 읽는다 — 커밋 뒤에 옛 컨테이너를 띄우면 옛
-# Flyway 가 public 에 빈 표를 만들어 자료가 갈린다.
+# 실패 뒤 복구. 이전 psql 이 끝나기를 기다린 뒤 이전이 커밋됐는지 읽는다 — 커밋
+# 뒤에 옛 컨테이너를 띄우면 옛 Flyway 가 public 에 빈 표를 만들어 자료가 갈린다.
+# 끝나기 전에 읽으면 커밋 전 모습이 보여 그 오판을 한다(일반 SELECT 는 남의
+# 미커밋 변경을 보지 않는다).
 # Globals:
 #   history_before
 #######################################
@@ -126,7 +178,11 @@ restore() {
   local now state
   trap - EXIT
   set +e
-  now="$(history_in_public)" || state='unknown'
+  if wait_for_move_end; then
+    now="$(history_in_public)" || state='unknown'
+  else
+    state='unknown'
+  fi
   if [[ -z "${state:-}" ]]; then
     if [[ "${now}" == "${history_before}" ]]; then
       state='before_commit'
@@ -173,11 +229,14 @@ main() {
   umask 077
   mkdir -p "${BACKUP_DIR}"
   backup_file="${BACKUP_DIR}/public-$(date -u '+%Y%m%dT%H%M%SZ').sql"
+  # public 만으로 넉넉하다 — 이전 SQL 은 public 의 객체를 옮겨 낼 뿐 app_* 에
+  # 이미 있던 것은 바꾸지 않는다(같은 이름이 있으면 ALTER 가 실패해 전부
+  # 되돌린다). 역이전 직전 백업은 DB 전체다(README).
   # shellcheck disable=SC2016 # 컨테이너 안의 셸이 풀 변수다.
   compose exec -T postgres sh -c \
     'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -n public' > "${backup_file}"
 
-  psql_in_db -1 -f - < "${MOVE_SQL}"
+  run_move_sql
 
   trap - EXIT
   echo 'schema move: moved'
