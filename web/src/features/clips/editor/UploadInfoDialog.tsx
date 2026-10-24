@@ -24,6 +24,7 @@ import {
   Text,
   Textarea,
   useFieldControlProps,
+  VisuallyHidden,
 } from '@/ui';
 import type { PrivacyStatus, ThumbnailSource } from '@/api/clipEditor';
 import { uploadTitleProblem } from '@/features/clips/library/libraryView';
@@ -651,8 +652,13 @@ function TagBox({
   const focusChip = (index: number) =>
     boxRef.current?.querySelectorAll<HTMLButtonElement>('button')[index]?.focus();
 
+  // 태그가 빠졌다고 낭독기에 알린다: 칩은 Tab 순서 밖이고 Backspace로도 빠져서, 알리지 않으면 무엇이 빠졌는지 모른다.
+  // 비웠다가 다음 프레임에 채운다(DS LiveRegion과 같은 방식): 같은 문구가 연달아 와도 다시 읽게
+  const [notice, setNotice] = useState('');
   const remove = (tag: string) => {
     onRemove(tag);
+    setNotice('');
+    requestAnimationFrame(() => setNotice(`${tag} 태그를 뺐어요`));
     // 누른 빼기 단추가 사라지며 초점이 창 밖으로 빠지지 않게 글자 칸으로 돌린다
     inputRef.current?.focus();
   };
@@ -729,6 +735,7 @@ function TagBox({
         onChange={(e) => onText(e.target.value)}
         onKeyDown={onInputKeyDown}
       />
+      <VisuallyHidden role="status">{notice}</VisuallyHidden>
     </div>
   );
 }

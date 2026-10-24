@@ -1,5 +1,5 @@
 import { act } from 'react';
-import { fireEvent, screen, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
 import { describe, expect, it, vi } from 'vitest';
@@ -303,6 +303,10 @@ describe('UploadInfoDialog', () => {
     expect(dialog().queryByText('보스')).not.toBeInTheDocument();
     expect(input).toHaveFocus();
     expect(input).toHaveValue('a');
+    // 칩은 Tab 순서 밖이라 무엇이 빠졌는지 낭독기에 알린다
+    await waitFor(() =>
+      expect(dialog().getByRole('status')).toHaveTextContent('보스 태그를 뺐어요'),
+    );
 
     // 마지막 태그에서 →는 글자 칸으로 돌아온다
     await user.keyboard('{Home}{ArrowLeft}');
