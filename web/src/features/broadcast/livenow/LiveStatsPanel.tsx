@@ -16,6 +16,7 @@ import {
   type KeyboardEvent,
   type PointerEvent,
 } from 'react';
+import { LoadingRegion, Skeleton } from '@/ui';
 import styles from './LiveStatsPanel.module.css';
 import {
   BAR_MAX,
@@ -208,6 +209,8 @@ export const LiveStatsPanel = memo(function LiveStatsPanel({
               clipId={clipId}
               onSeekCard={onSeekCard}
             />
+          ) : !chart && stats.chartLoading ? (
+            <ChartSkeleton />
           ) : (
             <div
               className={styles.empty}
@@ -221,6 +224,57 @@ export const LiveStatsPanel = memo(function LiveStatsPanel({
     </section>
   );
 });
+
+const pcu = (n: number) => `calc(${n} * var(--pc-u))`;
+
+/**
+ * 그래프 스켈레톤 막대의 높이(층 높이 대비). 고정 무늬다: 그릴 때마다 바뀌면 기다리는 동안 그래프가 움직이는 것처럼 보인다.
+ * 시청자 층은 완만하게 오르고 채팅 층은 들쭉날쭉하다 — 두 층이 무엇인지 모양으로만 귀띔한다
+ */
+const SKELETON_VIEWER_BARS = [
+  0.5, 0.54, 0.57, 0.6, 0.64, 0.66, 0.7, 0.72, 0.75, 0.78, 0.77, 0.8, 0.83, 0.81, 0.79, 0.82, 0.86,
+  0.85, 0.82, 0.8, 0.83, 0.86, 0.84, 0.82,
+];
+const SKELETON_CHAT_BARS = [
+  0.42, 0.55, 0.48, 0.66, 0.52, 0.74, 0.6, 0.45, 0.68, 0.82, 0.62, 0.5, 0.7, 0.56, 0.44, 0.6, 0.76,
+  0.54, 0.47, 0.65, 0.58, 0.43, 0.63, 0.51,
+];
+
+function SkeletonLayer({ bars, height }: { bars: readonly number[]; height: number }) {
+  return (
+    <div className={styles.skeletonLayer} style={{ height: pcu(height) }} aria-hidden>
+      {bars.map((ratio, i) => (
+        <Skeleton
+          key={i}
+          width="auto"
+          height={`${Math.round(ratio * 100)}%`}
+          radius="xs"
+          style={{ flex: 1 }}
+        />
+      ))}
+    </div>
+  );
+}
+
+// 그래프를 받기 전(POK-445) — 「그래프를 불러오고 있어요」 한 줄 대신 그래프 모양(시청자·채팅 두 층 막대)을 그래프 자리와 같은
+// 높이로 세운다. 핀 줄과 오른쪽 눈금 칸만큼 비워 두 층이 받은 그래프의 층과 같은 자리에 선다
+function ChartSkeleton() {
+  return (
+    <LoadingRegion
+      label="그래프를 불러오는 중"
+      className={styles.chartSkeleton}
+      style={{
+        height: pcu(PIN_ROW + VIEWER_H + GAP + CHAT_H),
+        paddingTop: pcu(PIN_ROW),
+        paddingRight: pcu(RIGHT),
+        rowGap: pcu(GAP),
+      }}
+    >
+      <SkeletonLayer bars={SKELETON_VIEWER_BARS} height={VIEWER_H} />
+      <SkeletonLayer bars={SKELETON_CHAT_BARS} height={CHAT_H} />
+    </LoadingRegion>
+  );
+}
 
 function Timeline({
   chart,

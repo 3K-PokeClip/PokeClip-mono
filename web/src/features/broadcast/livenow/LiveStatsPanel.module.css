@@ -196,6 +196,20 @@
   color: var(--pc-color-text-muted);
 }
 
+/* 그래프를 받기 전의 두 층 막대(POK-445). 높이·핀 줄·눈금 칸 여백은 그래프 치수 상수에서 인라인으로 받는다 —
+   여백까지 높이에 넣어야 .empty·그래프와 같은 높이다 */
+.chartSkeleton {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+}
+
+.skeletonLayer {
+  display: flex;
+  align-items: flex-end;
+  gap: calc(4 * var(--pc-u));
+}
+
 .scroll {
   overflow-x: auto;
   overflow-y: hidden;
