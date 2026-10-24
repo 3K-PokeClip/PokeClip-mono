@@ -461,7 +461,7 @@
   width: calc(6 * var(--pc-u));
   height: calc(6 * var(--pc-u));
   border-radius: calc(99 * var(--pc-u));
-  background: #fff;
+  background: #fff; /* 테마 고정 — 썸네일 위 색 알약 안 점 */
   animation: pc-home-live-pulse 1.2s ease-in-out infinite;
 }
 
@@ -476,7 +476,7 @@
 .viewerPill .pillBar {
   display: block;
   margin: calc(2 * var(--pc-u)) 0;
-  background: rgb(255 255 255 / 0.28);
+  background: rgb(255 255 255 / 0.28); /* 테마 고정 — 영상 위 어두운 필 안 */
 }
 
 .liveTitleBars {
