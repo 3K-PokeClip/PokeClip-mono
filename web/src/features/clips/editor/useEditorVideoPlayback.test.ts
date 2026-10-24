@@ -207,6 +207,73 @@ describe('useEditorVideoPlayback: 옛 영상 주소 지우기 (POK-389)', () => 
   });
 });
 
+describe('useEditorVideoPlayback: 새 창을 받는 동안의 시각 (POK-389)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it('새 창을 받는 동안은 아직 도는 옛 영상의 창으로 시각을 옮기고, 새 영상이 들어오면 새 창으로 옮긴다(PR #341 claude)', async () => {
+    vi.useFakeTimers();
+    const finishers: ((res: Response) => void)[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => new Promise<Response>((resolve) => finishers.push(resolve))),
+    );
+    let made = 0;
+    vi.stubGlobal(
+      'URL',
+      Object.assign(URL, { createObjectURL: () => `blob:${++made}`, revokeObjectURL: () => {} }),
+    );
+    const node = Object.assign(new EventTarget(), {
+      currentTime: 0,
+      paused: true,
+      readyState: 0,
+      playbackRate: 1,
+    }) as unknown as HTMLVideoElement;
+    const { result } = renderHook(() =>
+      useEditorVideoPlayback({
+        streamId: 'key-1',
+        recordingStartMs: BASE,
+        recordingSeconds: 100,
+        initialRange: { startSeconds: 20, endSeconds: 30 },
+      }),
+    );
+    act(() => result.current.videoRef(node));
+    // 첫 창: 구간 앞뒤 10초(10~40초)
+    await act(async () => {
+      finishers[0]!(new Response('mp4', { status: 200 }));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(result.current.window).toEqual({ startSeconds: 10, endSeconds: 40 });
+    act(() => {
+      node.currentTime = 15;
+      node.dispatchEvent(new Event('timeupdate'));
+    });
+    expect(result.current.playback.currentSeconds).toBe(25);
+
+    // 시작을 창 앞쪽 끝까지 당기면 새 창(0.2~40초)을 받는다. 받는 동안 <video>는 옛 창(10~40초) 영상 그대로다
+    await act(async () => {
+      result.current.playback.setBounds({ startSeconds: 10.2, endSeconds: 30, loop: true });
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(finishers).toHaveLength(2);
+    act(() => node.dispatchEvent(new Event('timeupdate')));
+    expect(result.current.playback.currentSeconds).toBe(25);
+    act(() => result.current.playback.seekTo(28));
+    expect(node.currentTime).toBe(18);
+
+    // 새 영상이 들어오면 새 창으로 옮기고, 구간 시작으로 간다
+    await act(async () => {
+      finishers[1]!(new Response('mp4', { status: 200 }));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    act(() => node.dispatchEvent(new Event('loadedmetadata')));
+    expect(node.currentTime).toBeCloseTo(10);
+    expect(result.current.playback.currentSeconds).toBeCloseTo(10.2);
+  });
+});
+
 describe('useEditorVideoPlayback: 재생 거절 (POK-389)', () => {
   afterEach(() => vi.unstubAllGlobals());
 

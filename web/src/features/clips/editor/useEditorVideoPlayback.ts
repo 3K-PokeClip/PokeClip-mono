@@ -112,6 +112,11 @@ export function useEditorVideoPlayback(options: {
   const [src, setSrc] = useState('');
   // src에 실제로 담긴 창. 새 창을 받는 동안은 옛 영상이 그대로라 새 창을 알리면 옛 장면을 새 시각으로 읽는다
   const [srcWindow, setSrcWindow] = useState<Window | null>(null);
+  // 영상 안 초 ↔ 편집기 초는 지금 <video>에 담긴 창으로 옮긴다: 새 창을 받는 몇 초 동안에도 옛 영상이 돌아서, 목표 창(win)으로
+  // 옮기면 재생 시각이 창이 움직인 만큼 어긋나고 경계 검사가 옛 영상을 엉뚱한 자리로 되감는다(PR #341 claude). 아직 아무것도
+  // 못 받았으면 목표 창이다(첫 영상이 곧 그 창이다). 창을 다시 받을지는 목표 창(winRef)으로 정한다
+  const loadedRef = useRef<Window>(win);
+  loadedRef.current = srcWindow ?? win;
   useEffect(() => {
     if (recordingSeconds <= 0) return undefined;
     if (win.empty) {
@@ -159,19 +164,19 @@ export function useEditorVideoPlayback(options: {
   }, [src]);
 
   const clampToWindow = useCallback((seconds: number) => {
-    const w = winRef.current;
+    const w = loadedRef.current;
     return Math.min(w.endSeconds - 0.05, Math.max(w.startSeconds, seconds));
   }, []);
 
   useEffect(() => {
     if (video === null) return undefined;
-    const position = () => winRef.current.startSeconds + video.currentTime;
+    const position = () => loadedRef.current.startSeconds + video.currentTime;
     const onLoaded = () => {
       setFailure(null);
       const target = pendingSeekRef.current;
       pendingSeekRef.current = null;
       if (target !== null)
-        video.currentTime = Math.max(0, clampToWindow(target) - winRef.current.startSeconds);
+        video.currentTime = Math.max(0, clampToWindow(target) - loadedRef.current.startSeconds);
       setCurrentSeconds(position());
     };
     const onTime = () => {
@@ -180,7 +185,7 @@ export function useEditorVideoPlayback(options: {
       if (action.kind === 'seek') {
         video.currentTime = Math.max(
           0,
-          clampToWindow(action.toSeconds) - winRef.current.startSeconds,
+          clampToWindow(action.toSeconds) - loadedRef.current.startSeconds,
         );
       } else if (action.kind === 'stop' && !video.paused) {
         video.pause();
@@ -216,12 +221,12 @@ export function useEditorVideoPlayback(options: {
     let raf = 0;
     const tick = () => {
       raf = requestAnimationFrame(tick);
-      const now = winRef.current.startSeconds + video.currentTime;
+      const now = loadedRef.current.startSeconds + video.currentTime;
       const action = boundaryAction(now, boundsRef.current);
       if (action.kind === 'seek') {
         video.currentTime = Math.max(
           0,
-          clampToWindow(action.toSeconds) - winRef.current.startSeconds,
+          clampToWindow(action.toSeconds) - loadedRef.current.startSeconds,
         );
       } else if (action.kind === 'stop') {
         video.pause();
@@ -236,12 +241,12 @@ export function useEditorVideoPlayback(options: {
     if (video === null) return;
     if (video.paused) {
       const bounds = boundsRef.current;
-      const now = winRef.current.startSeconds + video.currentTime;
+      const now = loadedRef.current.startSeconds + video.currentTime;
       // 구간 끝에 서 있으면 처음부터 다시 — 끝에서 재생을 누르면 곧바로 멈춰 아무 일도 없는 것처럼 보인다
       if (now >= bounds.endSeconds - 0.05 || now < bounds.startSeconds) {
         video.currentTime = Math.max(
           0,
-          clampToWindow(bounds.startSeconds) - winRef.current.startSeconds,
+          clampToWindow(bounds.startSeconds) - loadedRef.current.startSeconds,
         );
       }
       // 누르자마자 멈추거나 새 영상으로 갈아 끼우면 play()가 AbortError로 거절된다: 보통 조작이라 오류로 알리지 않는다
@@ -257,7 +262,7 @@ export function useEditorVideoPlayback(options: {
     (seconds: number) => {
       if (video === null) return;
       const target = clampToWindow(seconds);
-      video.currentTime = Math.max(0, target - winRef.current.startSeconds);
+      video.currentTime = Math.max(0, target - loadedRef.current.startSeconds);
       setCurrentSeconds(target);
     },
     [video, clampToWindow],
@@ -266,7 +271,7 @@ export function useEditorVideoPlayback(options: {
   const seekBy = useCallback(
     (delta: number) => {
       if (video === null) return;
-      seekTo(winRef.current.startSeconds + video.currentTime + delta);
+      seekTo(loadedRef.current.startSeconds + video.currentTime + delta);
     },
     [video, seekTo],
   );
