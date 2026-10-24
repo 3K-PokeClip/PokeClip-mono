@@ -111,6 +111,38 @@ public class YoutubeOAuthClient {
     }
 
     /**
+     * 이 영상들 중 유튜브에 아직 있는 것(POK-423, 30일 확인). {@code videos.list?part=id&id=…}: 1유닛 · 한 번에 50개까지(문서).
+     * 비공개 영상은 그 채널 토큰으로만 보이므로 반드시 영상 주인의 토큰으로 묻는다. 없는 번호는 오류가 아니라 목록에서 빠진다.
+     *
+     * @param videoIds 1~50개. 모양 검사는 부른 쪽이 한다
+     */
+    public java.util.Set<String> existingVideos(String accessToken, List<String> videoIds) {
+        String ids = String.join(",", videoIds);
+        Map<?, ?> body = call(() -> restClient.get()
+                .uri(properties.apiBaseUri() + "/youtube/v3/videos?part=id&maxResults=50&id={ids}", ids)
+                .header("Authorization", "Bearer " + accessToken)
+                .retrieve().body(Map.class));
+        if (body == null) {
+            throw malformed("body", null);
+        }
+        Object items = body.get("items");
+        if (items == null) {
+            return java.util.Set.of();
+        }
+        if (!(items instanceof List<?> list)) {
+            throw malformed("items", items);
+        }
+        java.util.Set<String> found = new java.util.HashSet<>();
+        for (Object item : list) {
+            if (!(item instanceof Map<?, ?> map) || !(map.get("id") instanceof String id)) {
+                throw malformed("items[].id", item);
+            }
+            found.add(id);
+        }
+        return found;
+    }
+
+    /**
      * @param requireRefresh 교환이면 true — refresh_token이 없는 연동은 갱신할 수 없는 반쪽이라 실패로 다룬다.
      *                       갱신이면 false — 구글은 보통 refresh를 다시 주지 않고, 그것이 정상이다.
      */
