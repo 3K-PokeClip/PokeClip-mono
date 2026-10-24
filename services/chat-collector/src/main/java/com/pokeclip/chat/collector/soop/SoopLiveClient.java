@@ -10,6 +10,7 @@ import org.springframework.web.client.RestClientResponseException;
 
 import java.util.Map;
 import java.util.TreeSet;
+import java.util.function.Function;
 
 /**
  * SOOP 방송 여부 체크({@code POST /validate/live/status}, POK-397). 스트리머 토큰 하나로 그 방송국이 지금 방송 중인지와 방송 정보를 받는다.
@@ -22,8 +23,9 @@ import java.util.TreeSet;
  * <p><b>응답 칸은 실방송으로 확정했다</b>(2026-10-24 진단 로그, 키 이름만). 방송 중 data의 키:
  * {@code broad_cate_no, broad_no, broad_start, broad_thumb, broad_title, current_view_cnt, language, link, paid_promotion, status, user_id},
  * status {@value #ON_AIR}(문서와 같다). 방송 아님은 {@code broad_no}·{@code status}뿐이고 status {@value #STREAM_END}.
- * 제목 {@value #TITLE_KEY}, 시청자 수 {@value #VIEWERS_KEY}(숫자 또는 숫자 글자). 카테고리는 {@code broad_cate_no}로 <b>번호만</b> 오고 번호를
- * 이름으로 바꿀 표가 없어 읽지 않는다(null). 🔴 첫 판은 잠정 값 {@code onair}·{@code current_sum_viewer}를 써서 방송 중을 하나도 못 알아봤다.
+ * 제목 {@value #TITLE_KEY}, 시청자 수 {@value #VIEWERS_KEY}(숫자 또는 숫자 글자). 카테고리는 {@value #CATEGORY_KEY}로 <b>번호만</b> 오고, 받은
+ * 이름 표({@link SoopCategoryNames}, POK-462)로 이름으로 바꾼다. 표가 없거나 표에 없으면 null. 🔴 첫 판은 잠정 값 {@code onair}·{@code current_sum_viewer}를
+ * 써서 방송 중을 하나도 못 알아봤다.
  */
 public class SoopLiveClient {
 
@@ -39,19 +41,28 @@ public class SoopLiveClient {
     private final java.util.Set<String> warnedStatuses = java.util.concurrent.ConcurrentHashMap.newKeySet();
     static final String TITLE_KEY = "broad_title";
     static final String VIEWERS_KEY = "current_view_cnt";
+    static final String CATEGORY_KEY = "broad_cate_no";
 
     private final RestClient restClient;
     private final String apiBaseUri;
     private final boolean diagnose;
+    private final Function<Object, String> categoryName;
+
+    /** 카테고리 이름 표 없이(카테고리는 늘 null). */
+    public SoopLiveClient(RestClient.Builder builder, String apiBaseUri, boolean diagnose) {
+        this(builder, apiBaseUri, diagnose, number -> null);
+    }
 
     /**
-     * @param builder  시한이 걸린 빌더({@link SoopWatchConfiguration}). {@code RestClient.create()}를 쓰지 않는다
-     * @param diagnose 켜면 data의 키 이름과 status 값만 INFO 한 줄로 남긴다. 값(아이디·제목·시청자 수)은 안 찍는다
+     * @param builder      시한이 걸린 빌더({@link SoopWatchConfiguration}). {@code RestClient.create()}를 쓰지 않는다
+     * @param diagnose     켜면 data의 키 이름과 status 값만 INFO 한 줄로 남긴다. 값(아이디·제목·시청자 수)은 안 찍는다
+     * @param categoryName {@value #CATEGORY_KEY} 값 그대로(숫자 또는 글자) → 이름, 모르면 null({@link SoopCategoryNames#nameOf})
      */
-    public SoopLiveClient(RestClient.Builder builder, String apiBaseUri, boolean diagnose) {
+    public SoopLiveClient(RestClient.Builder builder, String apiBaseUri, boolean diagnose, Function<Object, String> categoryName) {
         this.restClient = builder.build();
         this.apiBaseUri = apiBaseUri;
         this.diagnose = diagnose;
+        this.categoryName = categoryName;
     }
 
     /** 던지지 않는다. 예외는 원인 타입 이름만 남긴다(메시지에 응답 본문이 실린다). */
@@ -107,7 +118,17 @@ public class SoopLiveClient {
         }
         Object title = data.get(TITLE_KEY);
         return new SoopLiveStatus(SoopLiveStatus.Outcome.ON_AIR,
-                title instanceof String s && !s.isBlank() ? s : null, null, viewers(data.get(VIEWERS_KEY)));
+                title instanceof String s && !s.isBlank() ? s : null, category(data.get(CATEGORY_KEY)), viewers(data.get(VIEWERS_KEY)));
+    }
+
+    /** 이름 표가 던져도 방송 여부는 그대로 낸다(카테고리만 null). 표는 던지지 않게 짰지만 이 자리가 방송 감지를 막으면 안 된다. */
+    private String category(Object rawNumber) {
+        try {
+            return categoryName.apply(rawNumber);
+        } catch (RuntimeException e) {
+            log.warn("soop.live.category_failed causeType={}", e.getClass().getSimpleName());
+            return null;
+        }
     }
 
     /**

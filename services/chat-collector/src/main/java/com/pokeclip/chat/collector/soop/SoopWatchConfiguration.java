@@ -9,6 +9,7 @@ import com.pokeclip.chat.collector.relay.RelaySink;
 import com.pokeclip.chat.collector.session.SessionRegistry;
 import com.pokeclip.chat.collector.soop.chat.SoopChat;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.http.client.ClientHttpRequestFactoryBuilder;
@@ -48,12 +49,14 @@ public class SoopWatchConfiguration {
                                                          BroadcastInfoStore store, RelaySink relay,
                                                          ClipPlatformClient platforms, SessionRegistry registry,
                                                          EndedStreamStore endedStreams,
-                                                         ObjectProvider<SoopChat> chat) {
+                                                         ObjectProvider<SoopChat> chat,
+                                                         @Value("${pokeclip.soop.chat.client-id:}") String soopClientId) {
             properties.validate();
             SoopLinkClient links = new SoopLinkClient(builder.clone(), link);
-            SoopLiveClient live = new SoopLiveClient(builder.clone().requestFactory(factoryBuilder.build(
-                    HttpClientSettings.defaults().withTimeouts(CONNECT_TIMEOUT, READ_TIMEOUT))),
-                    properties.apiBaseUri(), properties.diagnoseResponse());
+            RestClient.Builder timed = builder.clone().requestFactory(factoryBuilder.build(
+                    HttpClientSettings.defaults().withTimeouts(CONNECT_TIMEOUT, READ_TIMEOUT)));
+            SoopLiveClient live = new SoopLiveClient(timed.clone(), properties.apiBaseUri(), properties.diagnoseResponse(),
+                    categoryNames(timed.clone(), properties.apiBaseUri(), soopClientId));
             // 종료 메모는 정상 종료만(포기 메모는 치지직 쪽 사정이라 SOOP 지켜보기와 무관하다)
             SoopBroadcastWatcher watcher = new SoopBroadcastWatcher(links::resolve, live::check, store::insert, relay, platforms,
                     registry::activeStreamIds,
@@ -63,6 +66,19 @@ public class SoopWatchConfiguration {
             // 채팅 받기(PR4). 꺼져 있으면 SoopChat.NONE이라 아무 일도 안 한다
             watcher.attachChat(chat.getIfAvailable(() -> SoopChat.NONE));
             return watcher;
+        }
+
+        /**
+         * 카테고리 이름 표(POK-462). 앱 아이디는 채팅 받기와 같은 SOOP 앱 값({@code SOOP_CLIENT_ID})이다. 비면 표 없이 카테고리는 null이다
+         * (지켜보기만 켜고 앱 값을 안 넣은 환경이 지금처럼 돈다).
+         */
+        static java.util.function.Function<Object, String> categoryNames(RestClient.Builder builder, String apiBaseUri, String clientId) {
+            if (clientId == null || clientId.isBlank()) {
+                return number -> null;
+            }
+            SoopCategoryNames names = new SoopCategoryNames(new SoopCategoryClient(builder, apiBaseUri, clientId)::fetch,
+                    Clock.systemUTC());
+            return names::nameOf;
         }
 
         @Bean(destroyMethod = "close")
