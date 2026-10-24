@@ -2672,7 +2672,7 @@ UploadInfo = {"title":"필수","description":null,"tags":["…"],"categoryId":"2
 `POST /internal/youtube-videos/forget {owner, channelId, before}`를 보내면 그 채널 줄과 채널 모르는 줄 중 `before` 전에 주문한 것의 번호 ·
 채널을 비운다(200 `{forgotten}` · 400 · 401, 몇 번 불러도 같다). ② 1시간마다 30일 지난 영상 번호를 50개씩 auth `POST /internal/youtube-videos/check`에
 넘겨 유튜브에 아직 있는지 묻고(토큰은 auth 밖으로 안 나간다), 없으면 지운다. 🔴 지금 연동 채널이 아닌 줄은 「안 보임」이어도 안 지운다(비공개
-영상은 그 채널 토큰으로만 보인다. ①이 지운다). 보이면 채널 모르는 줄에 지금 채널을 채운다. 연동이 없으면 확인 시각만 미루고, 못 물었으면
+영상은 그 채널 토큰으로만 보인다. ①이 지운다). 보이면 채널 모르는 줄에 유튜브가 알려 준 **그 영상의 주인 채널**을 채운다(공개 영상은 다른 채널 토큰으로도 보여 지금 채널로 채우면 옛 채널 지우기에서 빠진다). 이 확인은 **자기 스레드**(`youtube-video-check`)에서 돈다(공용 스케줄러 스레드를 썸네일 · 재발행이 쓴다). 연동이 없으면 확인 시각만 미루고, 못 물었으면
 아무것도 안 바꾼다. 🔴 번호를 지운 줄은 **올림 그대로**다(`video_forgotten_at`): 상태를 바꾸면 같은 영상을 다시 올릴 자리가 열린다. 화면은 번호
 없는 올림을 링크 없이 보인다. 로그 `clip.youtube_video.<event>`: `forgotten owner= count=` · `checked owner= linked= checked= forgotten=` ·
 `check_skipped`(WARN) · `check_failed` · `sweep_failed`.
@@ -3149,14 +3149,15 @@ revoke가 실패하면(5xx · 시간 초과) 허락이 남을 수 있다. 사용
   받으면 **줄째 지운다**(탈퇴 장부와 달리 남기지 않는다: 채널 번호가 개인정보다). ③ 30일 지난 살아 있는 연동의 채널 이름을
   다시 받는다(resolve로 토큰 + channels.list). 목록에 그 채널이 없으면 이름은 그대로 두고 받은 시각만 적는다
 - **기한 안에 같은 채널로 다시 연동하면 영상 번호는 남는다**(살아 있는 연동이 그 채널이라 장부를 안 적는다. 닫힌 옛 줄의 채널
-  번호만 지운다). 기한 뒤 같은 채널로 다시 연동했으면 그 전 영상 번호는 지운다: clip은 장부를 적은 시각(`before`) **전에 주문한**
+  번호만 지운다). 같은 채널의 **더 늦게 닫힌 줄**이 있어도 장부를 안 적는다: 그 줄의 기한이 남았을 수 있고 그 줄이 기한에 적는다
+  (0일 해제 → 1일 재연동 → 6일 해제면 7일째가 아니라 13일째에 지운다, PR #375 codex). 기한 뒤 같은 채널로 다시 연동했으면 그 전 영상 번호는 지운다: clip은 장부를 적은 시각(`before`) **전에 주문한**
   업로드만 지운다
 - **다른 채널로 바꾼 회원**: 옛 채널 줄이 7일 뒤 장부를 적고, clip은 그 채널 줄과 **채널을 모르는 줄**(사람이 「올라갔다」로 푼 줄 ·
   `V222` 전 줄)을 같이 지운다. 🔴 대가: 채널을 바꾼 회원은 옛 업로드의 유튜브 링크가 7일 뒤 사라진다(처리방침을 지키는 쪽으로
   정했다. 2026-10-24 관리 세션 추천안)
 - **해제 · 탈퇴하면 구글에 권한 취소(revoke)를 보낸다**(2026-10-24 사용자 재결정, ADR-052 대체, 유튜브 정책 III.D.2.c). 위 「유튜브 채널
   연동」의 revoke 표. 처리방침 13절 「Google에도 권한 취소를 요청」과 같은 말이다
-- **영상 확인 문(`POST /internal/youtube-videos/check`, clip이 부른다)**: `{userId, videoIds(1~50)}` → 200 `{linked:true, channelId, existing}` ·
+- **영상 확인 문(`POST /internal/youtube-videos/check`, clip이 부른다)**: `{userId, videoIds(1~50)}` → 200 `{linked:true, channelId, videos:[{id, channelId}]}`(있는 것과 각 영상의 주인 채널, `videos.list part=snippet`) ·
   200 `{linked:false}` · 503(갱신 일시 실패 · 구글 장애 · 할당량: 「없음」으로 답하면 clip이 멀쩡한 번호를 지운다) · 400. 토큰은
   auth 밖으로 안 나간다
 - **쿼터**(유튜브 Data API 하루 10,000유닛): channels.list 1유닛 × (살아 있는 연동 수 / 30) + videos.list 1유닛 × (올린 영상 수 / 50 / 30)
@@ -3167,7 +3168,7 @@ revoke가 실패하면(5xx · 시간 초과) 허락이 남을 수 있다. 사용
   기본(읽기 5초)이라 구글이 느린 날은 clip이 끊고 다음 바퀴에 다시 묻는다
 - 로그: `auth.youtube.retention.<event>`: `closed_out links= forgetJobs=` · `forget_sent` · `forget_retry`(WARN) · `close_out_failed` ·
   `channel_refresh_skipped reason=` · `channel_missing`(WARN) · `channel_refresh_failed` · `run_failed`, 영상 확인은
-  `auth.youtube.video_check asked= existing=` · `video_check_unavailable`(WARN). 채널 번호는 안 찍는다
+  `auth.youtube.video_check asked= existing=`(있는 수) · `video_check_unavailable`(WARN). 채널 번호는 안 찍는다
 
 ### SOOP 채널 연동 (POK-396)
 
