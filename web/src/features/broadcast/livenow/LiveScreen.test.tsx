@@ -448,6 +448,8 @@ const server = vi.hoisted(() => ({
   chartRecentGate: null as Promise<void> | null,
   /** 방송 정보에 최신 관측이 없다(수집기가 그 방송을 한 번도 못 쟀다) */
   infoNoLatest: false,
+  /** 라이브 방송을 막 켰다: 시작 시각이 시험 시작(NOW)에서 4초 전이다(POK-449, 방송 정보를 받아 오는 중) */
+  liveJustStarted: false,
   /** 지난 방송 채팅을 VOD_CHAT으로 준다(영상 축으로 묻고 표 축으로 답한다, 쪽·커서까지) */
   vodChat: false,
   /** vodChat 답을 이 약속이 풀릴 때까지 붙든다 */
@@ -612,7 +614,9 @@ function listResponse(u: URL): Response {
     streamId: server.liveStream2 ? 'live-2' : STREAM_ID,
     status: 'live',
     relation: server.liveStream2 ? 'EDITOR' : server.relation,
-    startedAt: server.liveStartUnknown ? null : new Date(STARTED_AT).toISOString(),
+    startedAt: server.liveStartUnknown
+      ? null
+      : new Date(server.liveJustStarted ? NOW - 4_000 : STARTED_AT).toISOString(),
     endedAt: null,
     ...(server.liveStartUnknown || server.liveOriginMs !== null
       ? { timelineOriginAt: new Date(server.liveOriginMs ?? STARTED_AT).toISOString() }
@@ -896,6 +900,7 @@ beforeEach(() => {
   server.infoNoViewers = false;
   server.chartRecentGate = null;
   server.infoNoLatest = false;
+  server.liveJustStarted = false;
   server.vodChat = false;
   server.vodChatGate = null;
   server.vodChatHoldBefore = null;
@@ -4340,6 +4345,89 @@ describe('LiveScreen — 지난 방송 상세', () => {
   });
 });
 
+describe('LiveScreen: 방송 정보를 받기 전 (POK-449)', () => {
+  it('막 켠 방송에 방송 정보가 없으면 왼쪽 위 채널 · 시청자, 정보 바 제목 · 태그 · 시청자가 회색 막대다: 방송 번호 · 치지직 채널 이름을 쓰지 않는다', async () => {
+    server.liveJustStarted = true;
+    server.infoNoLatest = true;
+    await renderLive();
+
+    expect(screen.getByTestId('player-channel-pending')).toBeInTheDocument();
+    expect(screen.getByTestId('player-viewers-pending')).toBeInTheDocument();
+    expect(screen.getByTestId('info-title-pending')).toBeInTheDocument();
+    expect(screen.getByTestId('info-meta-pending')).toBeInTheDocument();
+    expect(screen.getByTestId('info-viewers-pending')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: STREAM_ID })).toBeNull();
+    expect(screen.queryByText(STREAM_ID)).toBeNull();
+    // 내 치지직 연동 이름이다: 어느 플랫폼 방송인지 모르는 동안 붙이면 SOOP 방송에도 뜬다
+    expect(screen.queryByText('게임하는너구리')).toBeNull();
+    expect(screen.queryByText(/시청자 수 (확인 중|수집 전)/)).toBeNull();
+  });
+
+  it('2분이 지나도 비어 있으면 막대를 걷고 까닭을 글자로 적는다: 제목 자리에도 방송 번호가 아니다', async () => {
+    server.liveJustStarted = true;
+    server.infoNoLatest = true;
+    await renderLive();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2 * 60_000);
+    });
+    await settle();
+
+    expect(document.querySelector('[data-testid$="-pending"]')).toBeNull();
+    expect(screen.getByRole('heading', { name: '제목 수집 전' })).toBeInTheDocument();
+    expect(screen.getAllByText('시청자 수 수집 전').length).toBeGreaterThan(0);
+    expect(screen.getByText('방송 정보 수집 전')).toBeInTheDocument();
+    expect(screen.queryByText(STREAM_ID)).toBeNull();
+  });
+
+  // 가짜 방송 정보의 시청자 기록은 이 방송 시작보다 앞이라 믿지 않는다(방송 창 밖): 시청자 칸은 여기서 재지 않는다
+  it('방송 정보가 오면 제목 · 태그 · 채널 이름이 원래 값으로 바뀐다(막대 없음)', async () => {
+    server.liveJustStarted = true;
+    await renderLive();
+
+    for (const id of ['info-title-pending', 'info-meta-pending', 'player-channel-pending'])
+      expect(screen.queryByTestId(id)).toBeNull();
+    expect(
+      screen.getByRole('heading', { name: '새벽 랭크 올리기 — 다이아 승급전 가보자' }),
+    ).toBeInTheDocument();
+    expect(screen.getByText('게임하는너구리')).toBeInTheDocument();
+  });
+
+  it('명부가 계속 답하지 않아도(상태 · 시작 시각 모름) 화면을 연 지 2분이 지나면 막대를 걷는다', async () => {
+    server.listGate = new Promise(() => undefined);
+    server.infoNoLatest = true;
+    await renderLive();
+    expect(screen.getByTestId('info-title-pending')).toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2 * 60_000);
+    });
+    await settle();
+    expect(document.querySelector('[data-testid$="-pending"]')).toBeNull();
+    expect(screen.getByRole('heading', { name: '제목 확인 중' })).toBeInTheDocument();
+  });
+
+  it('정보 없이 끝난 지난 방송은 채널 이름을 그대로 둔다: 막 켠 라이브에서만 비운다', async () => {
+    server.infoNoLatest = true;
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    await renderLive();
+
+    expect(screen.getByText('게임하는너구리')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '제목 기록 없음' })).toBeInTheDocument();
+    expect(screen.queryByText(VOD_ID)).toBeNull();
+  });
+
+  it('제목만 비었으면 제목 자리만 막대고 태그 · 채널 이름은 온 값이다', async () => {
+    server.liveJustStarted = true;
+    server.infoTitleMissing = true;
+    await renderLive();
+
+    expect(screen.getByTestId('info-title-pending')).toBeInTheDocument();
+    expect(screen.queryByTestId('info-meta-pending')).toBeNull();
+    expect(screen.getByText('게임하는너구리')).toBeInTheDocument();
+    expect(screen.queryByText(STREAM_ID)).toBeNull();
+  });
+});
+
 describe('LiveScreen: 값이 없을 때의 말(리뷰 5라운드)', () => {
   // 「확인 중」은 모른다, 「기록 없음」은 끝난 방송에 없다, 「수집 전」은 라이브에서 받았는데 아직 못 쟀다. 네 칸이 이 말을 따로
   // 정해서 한 화면에 「확인 중」과 「수집 전」이 같이 섰다
@@ -4360,7 +4448,8 @@ describe('LiveScreen: 값이 없을 때의 말(리뷰 5라운드)', () => {
     window.history.pushState({}, '', `/broadcast?stream=${VOD_ID}`);
     await renderLive();
 
-    expect(screen.getAllByText('시청자 수 확인 중').length).toBeGreaterThan(0);
+    // 상태를 모르는 동안은 받아 오는 중이라 시청자 칸이 회색 막대다(POK-449)
+    expect(screen.getByTestId('info-viewers-pending')).toBeInTheDocument();
     expect(screen.queryByText(/수집 전/)).toBeNull();
     // 경과 칸도 모른다고 쓴다: 꺼짐 말이 아니다
     expect(screen.queryByText('방송 중이 아니에요')).toBeNull();
@@ -4373,7 +4462,9 @@ describe('LiveScreen: 값이 없을 때의 말(리뷰 5라운드)', () => {
     window.history.pushState({}, '', `/broadcast?stream=${VOD_ID}`);
     await renderLive();
 
-    expect(screen.getByText('방송 정보 확인 중')).toBeInTheDocument();
+    // 받아 오는 중이라 태그 자리가 회색 막대다(POK-449). 「수집 전」은 아니다
+    expect(screen.getByTestId('info-meta-pending')).toBeInTheDocument();
+    expect(screen.queryByText(/수집 전/)).toBeNull();
   });
 
   it('주소에 박힌 라이브가 명부에서 사라지면 경과 시간을 지운다: 「방송 중이 아니에요」 옆에서 시계가 흐르지 않는다', async () => {

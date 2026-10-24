@@ -1,5 +1,5 @@
 import { MessageSquare } from 'lucide-react';
-import { Avatar } from '@/ui';
+import { Avatar, Skeleton } from '@/ui';
 import styles from './GlassPlayer.module.css';
 
 // 플레이어 상단 오버레이 — 채널 필 + 채팅 열기 (시안 영상 플레이어 글래스).
@@ -23,6 +23,7 @@ export function PlayerTopOverlay({
   channelName,
   viewersNote,
   status = 'live',
+  infoPending = false,
   chatPanelOpen,
   onToggleChatPanel,
 }: {
@@ -30,6 +31,11 @@ export function PlayerTopOverlay({
   /** 필 아래 줄 — 라이브는 「1,842명 시청 중」 */
   viewersNote: string;
   status?: PlayerBroadcastStatus;
+  /**
+   * 방송 정보를 받아 오는 중이다(POK-449). 이때 빈 채널 이름 · 시청자 줄은 번쩍이는 회색 막대로 둔다: 수집기가 방송을 찾기 전이라
+   * 비었을 뿐이고, 곧 채워진다
+   */
+  infoPending?: boolean;
   /** 바깥 채팅 패널이 열려 있는가 — 닫혀 있을 때만 여는 버튼이 뜬다 */
   chatPanelOpen?: boolean;
   onToggleChatPanel?: () => void;
@@ -40,13 +46,23 @@ export function PlayerTopOverlay({
         <Avatar size="sm" name={channelName} />
         <div className={styles.channelText}>
           <div className={styles.channelRow}>
-            <span className={styles.channelName}>{channelName}</span>
+            {infoPending && !channelName ? (
+              <Skeleton width={84} height={12} data-testid="player-channel-pending" />
+            ) : (
+              <span className={styles.channelName}>{channelName}</span>
+            )}
             <span className={styles.liveBadge} data-status={status}>
               <span className={styles.liveBadgeDot} aria-hidden />
               {BADGE_LABEL[status]}
             </span>
           </div>
-          <div className={styles.channelSub}>{viewersNote}</div>
+          <div className={styles.channelSub}>
+            {infoPending && !viewersNote ? (
+              <Skeleton width={64} height={10} data-testid="player-viewers-pending" />
+            ) : (
+              viewersNote
+            )}
+          </div>
         </div>
       </div>
       {/* 패널은 플레이어 밖이라 접으면 되살릴 곳이 없다 — 닫혔을 때만 이 자리에 통로가 선다 */}
