@@ -28,9 +28,9 @@ import (
 const p0ReserveSQL = `
 UPDATE stream_sessions
    SET manifest_gen     = manifest_gen + 1,
-       fence_expires_at = now() + $4::interval
+       fence_expires_at = pg_catalog.now() + $4::interval
  WHERE session_id = $1 AND writer_fence = $2
-   AND fence_expires_at > now()
+   AND fence_expires_at > pg_catalog.now()
    AND manifest_gen = $3 AND dvr_state = 'open'
    AND state = 'live' AND init_uploaded_at IS NOT NULL
 RETURNING manifest_gen, manifest_etag`
@@ -41,7 +41,7 @@ const p2RevokeSQL = `
 UPDATE stream_sessions
    SET inherits_session = NULL, discontinuity_base = 0
  WHERE session_id = $1 AND writer_fence = $2 AND manifest_gen = $3
-   AND fence_expires_at > now()
+   AND fence_expires_at > pg_catalog.now()
    AND state = 'live' AND manifest_etag IS NULL AND inherits_session IS NOT NULL
 RETURNING discontinuity_base`
 
@@ -58,16 +58,16 @@ WITH p4 AS (
     UPDATE stream_sessions
        SET manifest_etag = $4, discontinuity_base = $5, published_seq = $6
      WHERE session_id = $1 AND writer_fence = $2 AND manifest_gen = $3
-       AND fence_expires_at > now()
+       AND fence_expires_at > pg_catalog.now()
     RETURNING stream_id
 ), confirmed AS (
     UPDATE stream_published_gaps g
-       SET published_state = 'put_confirmed', put_confirmed_at = now()
+       SET published_state = 'put_confirmed', put_confirmed_at = pg_catalog.now()
       FROM p4
      WHERE g.stream_id = p4.stream_id AND g.seq BETWEEN $7 AND $6
        AND g.published_state = 'recorded'
 )
-SELECT count(*) FROM p4`
+SELECT pg_catalog.count(*) FROM p4`
 
 // TickInput 은 발행 한 틱의 렌더 입력이다 — 루프가 캐시로 만든 값이다(워커는 캐시를 만지지 않는다 — 계획 4.5
 // A3 결정 1).

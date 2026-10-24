@@ -34,6 +34,7 @@ import (
 type roleFix struct {
 	l     *loop
 	role  *pgtest.Role
+	traps *pgtest.SearchPathTraps
 	store *fakeStore
 	admin *pgxpool.Pool
 }
@@ -43,10 +44,11 @@ func newRoleLoop(t *testing.T, f *fixture) roleFix {
 	t.Helper()
 	admin := newPool(t)
 	insertSessions(t, admin, f)
+	traps := pgtest.PlantSearchPathTraps(t, admin)
 	role := pgtest.NewMediaIndexerRole(t, admin)
 	store := newFakeStore(t)
 	l := &loop{t: t, pub: newPublisher(t, role.Pool, store, "w-me", &logRecorder{}), fx: f}
-	return roleFix{l: l, role: role, store: store, admin: admin}
+	return roleFix{l: l, role: role, traps: traps, store: store, admin: admin}
 }
 
 // 발행 경로 — 획득 · R4 화해 · P0 · P4(GAP 확정 포함) · GAP 트랜잭션 · 반납 · 다른 writer 의 획득 뒤 R3 화해 ·
@@ -95,6 +97,7 @@ func TestMediaIndexerRolePublishes(t *testing.T) {
 		"p0ReserveSQL": p0ReserveSQL, "p4ConfirmSQL": p4ConfirmSQL, "r3ReconcileSQL": r3ReconcileSQL,
 		"r4ClearETagSQL": r4ClearETagSQL, "gapRecordSQL": gapRecordSQL,
 	})
+	rf.traps.RequireNotCalled(t)
 }
 
 // 계승 취소 경로 — 직전 init 이 착지하지 않은 계승 회차의 첫 PUT 앞 P2′ 가 media_indexer 권한만으로 돈다.
@@ -113,6 +116,7 @@ func TestMediaIndexerRoleRevokesInheritance(t *testing.T) {
 		t.Errorf("DB 계승 %s · base %d, want NULL · 0", strOrNil(row.inherits), row.base)
 	}
 	role.RequireSent(t, map[string]string{"p2RevokeSQL": p2RevokeSQL})
+	rf.traps.RequireNotCalled(t)
 }
 
 // 음성 대조 — 권한 하나를 거두면 그 권한을 쓰는 발행자 문장이 42501 이다.

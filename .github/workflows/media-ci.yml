@@ -15,8 +15,11 @@ on:
       # media 계약 테스트 2개가 저장소 루트의 compose를 직접 읽고, 못 읽으면 fail한다
       # (internal/mtxhook/runtime_identity_contract_test.go, cmd/mtxhookwrite/contract_test.go).
       # 이 줄이 없으면 compose만 고치는 PR에서 드리프트 탐지 계약이 통째로 잠든다.
-      # media 테스트가 media/ 밖에서 읽는 파일은 현재 이 하나뿐이다 — 새로 생기면 여기도 늘린다.
+      # media 테스트가 media/ 밖에서 읽는 파일은 현재 이것과 아래 prod SQL 둘뿐이다 — 새로 생기면 여기도 늘린다.
       - 'docker-compose.yml'
+      # prod SQL 은 ddl.go · 권한 목록의 사본이다. internal/index/prod_sql_contract_test.go 가 바이트 · GRANT
+      # 집합을 대조하고 prod_sql_apply_pg_test.go 가 실제로 적용한다 — SQL 만 고치는 PR 에서도 돌아야 한다.
+      - 'infra/terraform/prod/runtime/sql/**'
       # paths는 PR의 변경 파일 3,000개까지만 본다. 그 뒤에 놓인 media 파일은 감지되지 않아
       # 이 워크플로가 안 돌고, 필수 체크도 아니라 검사 없이 머지된다(fail-open). 그런 PR은 쪼갠다.
 

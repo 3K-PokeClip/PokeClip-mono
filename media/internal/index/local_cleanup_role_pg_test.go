@@ -18,6 +18,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/pgtest"
 )
 
 // lcRolePrefix 는 media_janitor 와 같은 권한을 받는 시험 역할 이름의 앞부분이다 — 실행마다 난수
@@ -110,6 +112,7 @@ func lcIsPrivilegeError(err error) bool {
 func TestLocalCleanupRunsWithJanitorLeastPrivilegeRole(t *testing.T) {
 	admin := newTestPool(t)
 	lcPut(t, admin, lcRow{stream: "lc-role", seq: 0}, lcRow{stream: "lc-role", seq: 1})
+	traps := pgtest.PlantSearchPathTraps(t, admin)
 	pool, _ := lcRolePool(t, admin)
 	store := NewLocalCleanupStore(pool)
 	ctx := context.Background()
@@ -141,6 +144,7 @@ func TestLocalCleanupRunsWithJanitorLeastPrivilegeRole(t *testing.T) {
 			t.Errorf("seq %d local_path = %q, want NULL", seq, *p)
 		}
 	}
+	traps.RequireNotCalled(t)
 }
 
 // 음성 대조 — 시험이 권한 경계를 실제로 재는지 본다. UPDATE (local_path) 를 거두면 선잠금

@@ -26,12 +26,13 @@ source "$(dirname -- "${BASH_SOURCE[0]}")/testlib.sh"
 readonly DATA_DIR="${PRECHECK_DIR}/data"
 readonly STAGE_DIR="${DATA_DIR}/stage_actions"
 readonly EVENT_NAMES="${DATA_DIR}/event_names.txt"
-# 계획 M17a 「데이터」 의 묶음 이름 전부.
+# 계획 M17a 「데이터」 의 묶음 이름 전부 + prod 런타임 1단-가(runtime-1a).
 BUNDLES=(1b 5 O7a O7b O7c O7d O7e O7e-stop1 O7f O7f-stop2 testkey loopback 8
-  8a 9 ci-followup lease-expiry)
+  8a 9 ci-followup lease-expiry runtime-1a)
 readonly BUNDLES
-# 2-3 판정을 하는 묶음과 하지 않는 묶음(계획 3절 · 5절 표).
-JUDGED_BUNDLES=(5 O7a O7b O7c O7d O7e O7f 8 8a 9 ci-followup)
+# 2-3 판정을 하는 묶음과 하지 않는 묶음(계획 3절 · 5절 표). runtime-1a 는
+# POK-365 완료로 판정 묶음이다(kty 2026-10-23 — O7c 뒤 · O7d 앞).
+JUDGED_BUNDLES=(5 O7a O7b O7c runtime-1a O7d O7e O7f 8 8a 9 ci-followup)
 readonly JUDGED_BUNDLES
 UNJUDGED_BUNDLES=(1b O7e-stop1 O7f-stop2 testkey loopback lease-expiry)
 readonly UNJUDGED_BUNDLES
@@ -75,14 +76,71 @@ PRINCIPAL_READS=('iam:GetInstanceProfile us-east-1' 'iam:GetRole us-east-1'
   'tag:GetResources us-east-1' 'route53:ListHostedZonesByName us-east-1'
   's3:GetBucketPolicy ap-northeast-2'
   'secretsmanager:GetResourcePolicy ap-northeast-2'
-  'ecr:GetRepositoryPolicy ap-northeast-2')
+  'ecr:GetRepositoryPolicy ap-northeast-2'
+  'sns:GetTopicAttributes ap-northeast-2'
+  'sqs:GetQueueAttributes ap-northeast-2')
 readonly PRINCIPAL_READS
-# 2-3 판정이 없는 묶음이 자기 단계 동작으로 가진 PRINCIPAL_READS 동작
-# (「묶음 동작」 — lease-expiry 의 공유 존 조회).
+# 2-3 판정이 없는 묶음이 자기 단계 동작으로 가진 판정 읽기 동작(JUDGE_READS
+# · PRINCIPAL_READS 와 이름이 같은 「묶음 동작」). 「묶음 이름 + 동작」 정확
+# 일치 쌍만 받는다 — 와일드카드 · 동작만 쓰는 예외는 없다(계획 rt1a H1).
+# lease-expiry 는 공유 존 조회다. 쌍마다 묶음 · 동작 · 필요는
+# expect_stage_own_reads_scoped 가 본다.
 STAGE_OWN_READS=('lease-expiry route53:ListHostedZonesByName')
 readonly STAGE_OWN_READS
 # 자원 정책을 가지는 서비스(그 행은 정책 읽기 방법 none 을 쓸 수 없다).
 readonly POLICY_SERVICES=' s3 secretsmanager ecr sns sqs kms lambda '
+# 래퍼가 자원 정책을 읽는 서비스(그 행의 정책 읽기 방법은 서비스 이름 그대로
+# 다 — unread 를 쓸 수 없다. lib/principal_policy.sh 머리 주석).
+readonly READ_SERVICES=' s3 secretsmanager ecr sns sqs '
+# 런타임 1단-가가 만드는 자원의 대상 행(kty 2026-10-24 — 2-3 판정 대상에
+# 편입). 「자원 키 · 첫 단계 · 반드시 묻는 동작」 이고, 같은 색인의
+# RUNTIME_ARN_TAILS 가 그 행 ARN 의 꼬리다(이름 = prod/runtime/*.tf ·
+# CONTRACT-runtime.md 「런타임 자원 이름 패턴」). rewind 둘은 버킷이 생긴
+# 뒤 단계(O7d)부터 묻는다(prod_targets.tsv 머리 주석).
+RUNTIME_TARGETS=('rds-instance runtime-1a rds:DeleteDBInstance'
+  'rds-parameter-group runtime-1a rds:ModifyDBParameterGroup'
+  'rds-subnet-group runtime-1a rds:DeleteDBSubnetGroup'
+  'rds-log-group runtime-1a logs:DeleteLogGroup'
+  'broadcast-topic runtime-1a sns:Publish'
+  'broadcast-queue-clip runtime-1a sqs:ReceiveMessage'
+  'broadcast-queue-chat runtime-1a sqs:ReceiveMessage'
+  'broadcast-dlq-clip runtime-1a sqs:ReceiveMessage'
+  'broadcast-dlq-chat runtime-1a sqs:ReceiveMessage'
+  'sql-runner-role runtime-1a iam:PassRole'
+  'sql-runner-profile runtime-1a iam:AddRoleToInstanceProfile'
+  'rewind-bucket O7d s3:PutBucketPolicy'
+  'rewind-object O7d s3:PutObject')
+readonly RUNTIME_TARGETS
+RUNTIME_ARN_TAILS=(':db:pokeclip-prod-db' ':pg:pokeclip-prod-pg17'
+  ':subgrp:pokeclip-prod-db'
+  ':log-group:/aws/rds/instance/pokeclip-prod-db/postgresql'
+  ':pokeclip-prod-broadcast-lifecycle.fifo'
+  ':pokeclip-prod-broadcast-lifecycle-clip.fifo'
+  ':pokeclip-prod-broadcast-lifecycle-chat.fifo'
+  ':pokeclip-prod-broadcast-lifecycle-clip-dlq.fifo'
+  ':pokeclip-prod-broadcast-lifecycle-chat-dlq.fifo'
+  ':role/pokeclip/prod/pokeclip-prod-sql-runner'
+  ':instance-profile/pokeclip/prod/pokeclip-prod-sql-runner'
+  ':::pokeclip-prod-rewind-apne2' ':::pokeclip-prod-rewind-apne2/?*')
+readonly RUNTIME_ARN_TAILS
+# 실행기 역할 넘기기는 EC2 에 넘기는 질문이다(추가 문맥).
+readonly PASSED_TO_EC2='iam:PassedToService:string:ec2.amazonaws.com'
+# 그 문맥이 시뮬레이터 요청에 실린 꼴.
+PASSED_TO_EC2_ENTRY='{"ContextKeyName":"iam:PassedToService",'
+PASSED_TO_EC2_ENTRY+='"ContextKeyValues":["ec2.amazonaws.com"],'
+PASSED_TO_EC2_ENTRY+='"ContextKeyType":"string"}'
+readonly PASSED_TO_EC2_ENTRY
+# 켬 · apply 뒤에 정해지는 런타임 자원의 대상 행(rt1a 종결 r1 H2 · H4).
+# 「자원 키 · 첫 단계 · 해석 방법 · 반드시 묻는 동작(쉼표 구분)」 이다. 실행기
+# 인스턴스는 켤 때 ID 가 정해져 태그로 풀고, 관리형 마스터 비밀은 이름 끝이
+# 생성 때 정해져 apply 뒤 kty 가 적는 입력 파일로 푼다. 인스턴스 행의 동작은
+# 켜진 상자에서 코드를 돌리는 SSM 길 가운데 instance 유형을 받는 것이다
+# (서비스 승인 참조 list_ssm.html — StartAutomationExecution 은 받지 않음).
+LATE_TARGETS=(
+  'prod-instance runtime-1a tag:ec2:instance '\
+'ssm:SendCommand,ssm:StartSession,ssm:CreateAssociation'
+  'rds-master-secret runtime-1a input:rds-master secretsmanager:GetSecretValue')
+readonly LATE_TARGETS
 
 #######################################
 # 데이터 파일의 행(주석 · 빈 줄 뺌)을 낸다.
@@ -146,7 +204,7 @@ expect_bundle_set() {
       "${got}" | tr '\n' ' ')"
     return
   fi
-  testlib::ok "bundle-set → 묶음 파일 17개 = 계획 M17a 묶음"
+  testlib::ok "bundle-set → 묶음 파일 18개 = 계획 M17a 묶음 + runtime-1a"
 }
 
 #######################################
@@ -251,13 +309,15 @@ expect_stop_point_split() {
 }
 
 #######################################
-# 2-3 판정 읽기 동작은 2-3 판정 묶음에만 있다. ec2:DescribeRegions 는
-# 어디에도 없다(kty 45차).
+# 2-3 판정 읽기 동작은 2-3 판정 묶음에만 있다 — 판정이 없는 묶음에서는
+# STAGE_OWN_READS 의 「묶음 이름 + 동작」 쌍만 예외다(계획 rt1a H1).
+# ec2:DescribeRegions 는 어디에도 없다(kty 45차).
 # Globals:
-#   JUDGED_BUNDLES, JUDGE_READS, UNJUDGED_BUNDLES, BUNDLES
+#   JUDGED_BUNDLES, JUDGE_READS, UNJUDGED_BUNDLES, STAGE_OWN_READS, BUNDLES
 #######################################
 expect_judge_reads() {
-  local bundle action actions
+  local bundle action actions own
+  own="$(printf '%s\n' "${STAGE_OWN_READS[@]}")"
   for bundle in "${JUDGED_BUNDLES[@]}"; do
     actions="$(bundle_actions "${bundle}")"
     for action in "${JUDGE_READS[@]}"; do
@@ -270,6 +330,7 @@ expect_judge_reads() {
   for bundle in "${UNJUDGED_BUNDLES[@]}"; do
     actions="$(bundle_actions "${bundle}")"
     for action in "${JUDGE_READS[@]}"; do
+      has_line "${own}" "${bundle} ${action}" && continue
       if has_line "${actions}" "${action}"; then
         testlib::fail "judge-reads: 2-3 판정이 없는 ${bundle} 에 ${action}"
         return
@@ -282,7 +343,50 @@ expect_judge_reads() {
       return
     fi
   done
-  testlib::ok "judge-reads → 2-3 판정 묶음 11개에만 · DescribeRegions 0"
+  testlib::ok "judge-reads → 2-3 판정 묶음" \
+    "${#JUDGED_BUNDLES[@]}개에만(묶음 자기 동작 쌍 뺌) · DescribeRegions 0"
+}
+
+#######################################
+# STAGE_OWN_READS 의 쌍마다: 꼴이 「묶음 이름 + 동작」 하나(와일드카드 0)이고,
+# 묶음이 UNJUDGED_BUNDLES 에 있고, 동작이 그 묶음 파일에 실제로 있으며(죽은
+# 예외 0), 동작이 JUDGE_READS ∪ PRINCIPAL_READS(리전 뺌)에 든다(필요 없는
+# 예외 0 — 계획 rt1a H1).
+# Globals:
+#   STAGE_OWN_READS, UNJUDGED_BUNDLES, JUDGE_READS, PRINCIPAL_READS,
+#   ACTION_PATTERN, STAGE_DIR
+#######################################
+expect_stage_own_reads_scoped() {
+  local pair bundle action reads read unjudged
+  reads="$(printf '%s\n' "${JUDGE_READS[@]}")"
+  for read in "${PRINCIPAL_READS[@]}"; do
+    reads+=$'\n'"${read% *}"
+  done
+  unjudged="$(printf '%s\n' "${UNJUDGED_BUNDLES[@]}")"
+  for pair in "${STAGE_OWN_READS[@]}"; do
+    bundle="${pair%% *}"
+    action="${pair#* }"
+    if [[ "${pair}" != *' '* ]] ||
+      ! [[ "${action}" =~ ${ACTION_PATTERN} ]]; then
+      testlib::fail "own-reads: 「${pair}」 가 「묶음 이름 + 동작」 꼴이 아님"
+      return
+    fi
+    if ! has_line "${unjudged}" "${bundle}"; then
+      testlib::fail "own-reads: ${pair} — ${bundle} 은 판정이 없는 묶음이 아님"
+      return
+    fi
+    if [[ ! -f "${STAGE_DIR}/${bundle}.tsv" ]] ||
+      ! has_line "$(bundle_actions "${bundle}")" "${action}"; then
+      testlib::fail "own-reads: ${pair} — 묶음 파일에 없는 동작(죽은 예외)"
+      return
+    fi
+    if ! has_line "${reads}" "${action}"; then
+      testlib::fail "own-reads: ${pair} — 판정 읽기 동작이 아님(필요 없는 예외)"
+      return
+    fi
+  done
+  testlib::ok "own-reads → 예외 쌍 ${#STAGE_OWN_READS[@]}개 모두 판정 없는 묶음" \
+    "· 그 묶음 파일에 있음 · 판정 읽기 동작"
 }
 
 #######################################
@@ -523,7 +627,7 @@ expect_real_scripts_accept_data() {
     testlib::fail "real-scripts: 증거 루트 밖 유출"
     return
   fi
-  testlib::ok "real-scripts → 묶음 17개 모두 판정됨 · 이벤트 ${rows}행을 그 리전에서 조회"
+  testlib::ok "real-scripts → 묶음 18개 모두 판정됨 · 이벤트 ${rows}행을 그 리전에서 조회"
 }
 
 #######################################
@@ -632,7 +736,12 @@ service_types() {
       ;;
     acm) printf ' certificate \n' ;;
     route53) printf ' hostedzone \n' ;;
-    iam) printf ' role user group policy \n' ;;
+    iam) printf ' role user group policy instance-profile \n' ;;
+    rds) printf ' db pg subgrp \n' ;;
+    logs) printf ' log-group \n' ;;
+    sns) printf ' topic \n' ;;
+    sqs) printf ' queue \n' ;;
+    ssm) printf ' instance \n' ;;
     *) ;;
   esac
 }
@@ -708,8 +817,20 @@ method_problem() {
       fi
       ;;
     tag:*)
-      [[ "${method}" == "tag:${service}:${type}" ]] ||
+      # SSM 의 instance 유형은 EC2 인스턴스 ARN 이다(서비스 승인 참조
+      # list_ssm.html 「Resource types」) — 태그 해석도 ec2:instance 로 한다.
+      if [[ "${service}:${type}" == ssm:instance ]]; then
+        [[ "${method}" == tag:ec2:instance ]] ||
+          printf 'ssm instance 행의 tag: 유형 조각이 ec2:instance 가 아님\n'
+      elif [[ "${method}" != "tag:${service}:${type}" ]]; then
         printf 'tag: 유형 조각이 서비스 · 유형과 다름\n'
+      fi
+      ;;
+    input:*)
+      [[ "${method#input:}" =~ ^[a-z][a-z0-9-]*$ ]] ||
+        printf 'input: 이름 꼴이 틀림\n'
+      [[ "${service}:${type}" == secretsmanager:secret ]] ||
+        printf 'input: 행이 secretsmanager secret 이 아님\n'
       ;;
     zone:*)
       [[ "${service}:${type}" == route53:hostedzone ]] ||
@@ -731,9 +852,10 @@ method_problem() {
 #######################################
 # 데이터 단언: 대상 행마다 동작이 한 서비스이고, IAM · Route 53 행의 리전은
 # us-east-1, 유형은 그 서비스의 것, 해석 방법은 서비스 · 유형 · 계열과
-# 맞고, 자원 정책을 가지는 서비스 행에 정책 읽기 none 이 없다.
+# 맞고, 자원 정책을 가지는 서비스 행에 정책 읽기 none 이 없고, 래퍼가 정책을
+# 읽는 서비스 행의 정책 읽기는 그 서비스다.
 # Globals:
-#   POLICY_SERVICES
+#   POLICY_SERVICES, READ_SERVICES
 #######################################
 expect_target_rows_consistent() {
   local key method type region actions read service problem count=0
@@ -751,6 +873,9 @@ expect_target_rows_consistent() {
     elif [[ "${read}" == none &&
       "${POLICY_SERVICES}" == *" ${service} "* ]]; then
       problem='자원 정책 서비스인데 정책 읽기 none'
+    elif [[ "${READ_SERVICES}" == *" ${service} "* &&
+      "${read}" != "${service}" ]]; then
+      problem="정책을 읽는 서비스인데 정책 읽기가 ${read}"
     else
       problem="$(method_problem "${service}" "${method}" "${type}" \
         "${actions}")"
@@ -765,7 +890,7 @@ expect_target_rows_consistent() {
     return
   fi
   testlib::ok "targets → 서비스 · 리전 · 유형 · 해석 방법 · 계열 일치 ·" \
-    "자원 정책 서비스에 none 0"
+    "자원 정책 서비스에 none 0 · 읽는 서비스는 그 읽기"
 }
 
 #######################################
@@ -792,7 +917,7 @@ expect_dev_principals() {
 }
 
 #######################################
-# 데이터 단언: PRINCIPAL_READS(동작 · 리전)가 판정 묶음 11개 모두에 자원
+# 데이터 단언: PRINCIPAL_READS(동작 · 리전)가 판정 묶음 모두에 자원
 # 「*」 로 있고(래퍼가 읽는 dev 주체 · 대상은 단계 자원 경로 밖이다 — 예 dev
 # 역할의 get-role), 판정이 없는 묶음에는 그 동작이 없다(STAGE_OWN_READS 의
 # 묶음 동작은 뺌).
@@ -824,7 +949,8 @@ expect_principal_reads() {
       fi
     done
   done
-  testlib::ok "principal-reads → 래퍼 읽기 동작 · 리전이 자원 * 로 판정 묶음 11개에만"
+  testlib::ok "principal-reads → 래퍼 읽기 동작 · 리전이 자원 * 로" \
+    "판정 묶음 ${#JUDGED_BUNDLES[@]}개에만"
 }
 
 #######################################
@@ -853,8 +979,191 @@ expect_wrapper_accepts_data() {
       return
     fi
   done
-  testlib::ok "wrapper-data → 실제 래퍼가 실제 데이터를 판정 단계 11개 모두" \
-    "받음"
+  testlib::ok "wrapper-data → 실제 래퍼가 실제 데이터를 판정 단계" \
+    "${#JUDGED_BUNDLES[@]}개 모두 받음"
+}
+
+#######################################
+# 대상 행 하나(자원 키)를 「첫 단계<탭>해석 방법<탭>동작<탭>추가 문맥」 으로
+# 낸다.
+# Arguments:
+#   자원 키.
+# Outputs:
+#   그 행의 네 칸(없으면 빈 출력).
+#######################################
+target_row() {
+  principal_rows prod_targets.tsv | awk -F '\t' -v k="$1" \
+    '$1 == k { print $2 "\t" $3 "\t" $6 "\t" $8 }'
+}
+
+#######################################
+# 데이터 단언: 런타임 1단-가 자원 행(RUNTIME_TARGETS)이 그 첫 단계 ·
+# 구체 ARN(이름 꼬리)으로 있고 반드시 묻는 동작을 담는다. 실행기 역할 행은
+# EC2 로 넘기는 문맥을 단다.
+# Globals:
+#   RUNTIME_TARGETS, RUNTIME_ARN_TAILS, PASSED_TO_EC2
+#######################################
+expect_runtime_targets() {
+  local i key want_stage action tail stage method actions context
+  if [[ "${#RUNTIME_TARGETS[@]}" -ne "${#RUNTIME_ARN_TAILS[@]}" ]]; then
+    testlib::fail "runtime-targets: 시험 표 둘의 길이가 다름"
+    return
+  fi
+  for i in "${!RUNTIME_TARGETS[@]}"; do
+    read -r key want_stage action <<<"${RUNTIME_TARGETS[i]}"
+    tail="${RUNTIME_ARN_TAILS[i]}"
+    IFS=$'\t' read -r stage method actions context <<<"$(target_row "${key}")"
+    if [[ "${stage}" != "${want_stage}" ]]; then
+      testlib::fail "runtime-targets: ${key} 의 첫 단계가 ${want_stage} 이" \
+        "아님 — 「${stage}」"
+      return
+    fi
+    # 꼬리는 글롭(rewind 객체의 ?*)이라 따옴표로 감싸지 않는다.
+    if [[ "${method}" != arn:* || "${method}" != *${tail} ]]; then
+      testlib::fail "runtime-targets: ${key} 의 ARN 이 ${tail} 로 끝나지 않음"
+      return
+    fi
+    if [[ ",${actions}," != *",${action},"* ]]; then
+      testlib::fail "runtime-targets: ${key} 에 ${action} 이 없음"
+      return
+    fi
+    if [[ "${key}" == sql-runner-role && "${context}" != "${PASSED_TO_EC2}" ]]
+    then
+      testlib::fail "runtime-targets: ${key} 의 추가 문맥이 EC2 넘기기가 아님"
+      return
+    fi
+  done
+  testlib::ok "runtime-targets → 런타임 자원 ${#RUNTIME_TARGETS[@]}행이" \
+    "첫 단계 · 이름 · 핵심 동작대로"
+}
+
+#######################################
+# 데이터 단언: 켬 · apply 뒤에 정해지는 런타임 자원 행(LATE_TARGETS)이 그
+# 첫 단계 · 해석 방법으로 있고 반드시 묻는 동작을 모두 담는다(rt1a 종결 r1
+# H2 · H4).
+# Globals:
+#   LATE_TARGETS
+#######################################
+expect_late_targets() {
+  local entry key want_stage want_method want_actions action stage method
+  local actions
+  for entry in "${LATE_TARGETS[@]}"; do
+    read -r key want_stage want_method want_actions <<<"${entry}"
+    IFS=$'\t' read -r stage method actions _ <<<"$(target_row "${key}")"
+    if [[ "${stage}" != "${want_stage}" || "${method}" != "${want_method}" ]]
+    then
+      testlib::fail "late-targets: ${key} 의 첫 단계 · 해석 방법이" \
+        "${want_stage} · ${want_method} 가 아님 — 「${stage} · ${method}」"
+      return
+    fi
+    for action in ${want_actions//,/ }; do
+      if [[ ",${actions}," != *",${action},"* ]]; then
+        testlib::fail "late-targets: ${key} 에 ${action} 이 없음"
+        return
+      fi
+    done
+  done
+  testlib::ok "late-targets → 실행기 인스턴스(태그) · 관리형 마스터 비밀" \
+    "(입력 파일) 행이 첫 단계 · 해석 방법 · 핵심 동작대로"
+}
+
+#######################################
+# 실제 dev 주체 이름을 가짜 aws 의 주체 해석 답(FAKE_AWS_READS 표)으로 낸다
+# (인스턴스 프로필은 같은 이름의 역할).
+# Outputs:
+#   표 줄들.
+#######################################
+principal_reads_table() {
+  local key kind name arn="arn:aws:iam::${FAKE_ACCOUNT}"
+  while IFS=$'\t' read -r key kind name; do
+    case "${kind}" in
+      instance-profile)
+        testlib::tsv get-instance-profile "${name}" "${arn}:role/${name}"
+        ;;
+      role) testlib::tsv get-role "${name}" "${arn}:role/${name}" ;;
+      *) testlib::tsv get-user "${name}" "${arn}:user/${name}" ;;
+    esac
+  done < <(principal_rows dev_principals.tsv)
+}
+
+#######################################
+# 런타임 자원 행 하나가 그 단계 실행의 요청(req-*.json)에 동작마다 실렸는지
+# (또는 첫 단계 전이라 하나도 안 실렸는지) 본다.
+# Globals:
+#   FAKE_ACCOUNT, PASSED_TO_EC2, PASSED_TO_EC2_ENTRY
+# Arguments:
+#   증거 디렉터리, 자원 키, 실려야 하면 1.
+# Outputs:
+#   틀린 까닭(맞으면 빈 출력).
+#######################################
+runtime_row_problem() {
+  local dir="$1" key="$2" want="$3" stage method actions context arn action
+  local request
+  IFS=$'\t' read -r stage method actions context <<<"$(target_row "${key}")"
+  if [[ -z "${actions}" ]]; then
+    printf '%s 행이 없음\n' "${key}"
+    return
+  fi
+  # shellcheck disable=SC2016 # ${ACCOUNT} 는 펼치지 않는 글자 그대로다.
+  arn="$(printf '%s' "${method#arn:}" | sed "s/\${ACCOUNT}/${FAKE_ACCOUNT}/")"
+  if [[ "${want}" -eq 0 ]]; then
+    if grep -qF -- "\"ResourceArns\":[\"${arn}\"]" "${dir}"/req-*.json; then
+      printf '%s 가 첫 단계 %s 전에 물어짐\n' "${key}" "${stage}"
+    fi
+    return
+  fi
+  for action in ${actions//,/ }; do
+    request="\"ActionNames\":[\"${action}\"],\"ResourceArns\":[\"${arn}\"]"
+    if ! grep -qF -- "${request}" "${dir}"/req-*.json; then
+      printf '%s 의 %s 가 요청에 없음\n' "${key}" "${action}"
+      return
+    fi
+  done
+  if [[ "${context}" == "${PASSED_TO_EC2}" ]] &&
+    ! grep -qF -- "${PASSED_TO_EC2_ENTRY}" "${dir}"/req-*.json; then
+    printf '%s 의 EC2 넘기기 문맥이 요청에 없음\n' "${key}"
+  fi
+}
+
+#######################################
+# 실제 principal-check.sh 를 실제 데이터로 runtime-1a · O7d 에 돌려(주체 넷이
+# 풀리는 가짜 aws), 런타임 자원 행이 첫 단계부터 시뮬레이터 요청에 실리고
+# 그 전에는 실리지 않는지 본다.
+# Globals:
+#   RUNTIME_TARGETS, FAKE_USER, run_status, run_out
+#######################################
+expect_runtime_rows_asked() {
+  local case_dir stage dir entry key first want problem
+  case_dir="$(testlib::new_case)" || {
+    testlib::fail "runtime-asked: 시험 준비 실패"
+    return
+  }
+  principal_reads_table >"${case_dir}/in/reads.tsv"
+  testlib::tsv "${FAKE_USER}@*" allowed None - - - >"${case_dir}/in/sim.tsv"
+  for stage in runtime-1a O7d; do
+    testlib::run "${case_dir}" "principal-${stage}" env \
+      FAKE_AWS_READS="${case_dir}/in/reads.tsv" \
+      FAKE_AWS_SIM_TABLE="${case_dir}/in/sim.tsv" bash "${WRAPPER}" "${stage}"
+    dir="$(compgen -G \
+      "${case_dir}/home/.pokeclip-precheck/principal-${stage}-*")"
+    if [[ "${run_status}" -ne 3 || ! -d "${dir}" ]]; then
+      testlib::fail "runtime-asked: ${stage} 실행이 종료 ${run_status} —" \
+        "$(cat -- "${run_out}.stderr")"
+      return
+    fi
+    for entry in "${RUNTIME_TARGETS[@]}"; do
+      read -r key first _ <<<"${entry}"
+      want=1
+      [[ "${stage}" == runtime-1a && "${first}" != runtime-1a ]] && want=0
+      problem="$(runtime_row_problem "${dir}" "${key}" "${want}")"
+      if [[ -n "${problem}" ]]; then
+        testlib::fail "runtime-asked: ${stage} — ${problem}"
+        return
+      fi
+    done
+  done
+  testlib::ok "runtime-asked → 런타임 자원 행이 첫 단계부터 동작마다" \
+    "시뮬레이터 요청에 실림(그 전 단계 0)"
 }
 
 main() {
@@ -871,8 +1180,12 @@ main() {
   expect_principal_files_wellformed
   expect_stage_order_matches_wrapper
   expect_target_rows_consistent
+  expect_runtime_targets
+  expect_late_targets
+  expect_runtime_rows_asked
   expect_dev_principals
   expect_principal_reads
+  expect_stage_own_reads_scoped
   expect_wrapper_accepts_data
   testlib::finish data_files_test
 }
