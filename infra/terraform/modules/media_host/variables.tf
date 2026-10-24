@@ -137,6 +137,16 @@ variable "rds_sg_id" {
   type        = string
 }
 
+variable "auth_sg_id" {
+  description = "auth 서비스 SG id(platform 출력 service_sg_ids.auth) — Media 이그레스와 auth 인그레스 ← Media(4C resolve)의 한 쌍."
+  type        = string
+}
+
+variable "auth_port" {
+  description = "auth 서비스 포트(platform 출력 service_ports.auth) — 위 한 쌍의 TCP 포트."
+  type        = number
+}
+
 variable "s3_prefix_list_id" {
   description = "S3 관리형 prefix list id(network 출력) — 이그레스 443."
   type        = string

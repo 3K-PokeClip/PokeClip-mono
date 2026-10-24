@@ -1467,8 +1467,9 @@ plan 이 역할을 새로 만드는지 고치는지로 드러나고, 어느 쪽�
 
 ### 1단-나 ② 9. 응답기 기동 · 교체
 
-선행 조건: 런타임 2단의 Media ↔ auth 8082 SG 짝([계약](../CONTRACT-runtime.md)
-「platform · media → 런타임 2단」 행)이 적용됨. 없으면 기다립니다. M15 의
+선행 조건: Media ↔ auth 8082 SG 짝(prod/media 가 만듦 — kty 결정 2026-10-25
+(나), [계약](../CONTRACT-runtime.md) 「platform → media」 `service_ports.auth`
+행)이 적용됨. 없으면 기다립니다. M15 의
 렌더 · `config_version` 으로 응답기를 다시 띄우고(send-command **kty
 승인**) 아래를 봅니다.
 

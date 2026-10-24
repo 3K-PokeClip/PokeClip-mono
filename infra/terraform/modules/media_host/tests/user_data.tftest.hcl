@@ -74,6 +74,8 @@ variables {
   internal_alb_sg_id = "sg-0internalalb000000"
   nlb_sg_id          = "sg-0nlb0000000000000"
   rds_sg_id          = "sg-0rds0000000000000"
+  auth_sg_id         = "sg-0auth000000000000"
+  auth_port          = 18086
   s3_prefix_list_id  = "pl-0123456789abcdef0"
   proxy_ports = {
     live     = 18081

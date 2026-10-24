@@ -10,7 +10,7 @@
 *   **런타임 1단**: 엣지 platform · media · edge 보다 먼저 적용하는 런타임
     루트입니다(RDS · 앱 비밀 · SNS/SQS · rewind 버킷).
 *   **런타임 2단**: edge 뒤에 적용하는 런타임 루트입니다(rewind 버킷 OAC
-    정책 · Media ↔ auth SG 규칙).
+    정책 · chat ↔ auth · clip SG 규칙).
 
 ## 상태 위치
 
@@ -33,17 +33,20 @@
 | 런타임 1단 → platform | `broadcast_queue_arns`(소비자 clip · chat → 계약9 SQS FIFO 큐 ARN) | chat-collector(POK-306)의 수신 정책 대상(큐 URL 은 `app_env` 의 `BROADCAST_QUEUE_URL`). clip 은 `app_task_resource_arns` 의 `broadcast_queue_arn` 을 쓴다 | 큐 = 런타임, 수신 정책 = platform |
 | platform → 런타임 · 일꾼 · chat | `ecs_cluster_arn` · `discovery_namespace_id` · `service_sg_ids`(auth · clip · next) | 같은 클러스터 · Cloud Map 네임스페이스(`pokeclip.internal`)에 서비스를 두고, 상대 SG 규칙을 만든다(POK-408 일꾼 · POK-306 chat) | 클러스터 · 네임스페이스 · 서비스 SG = platform, 새 서비스 · 그 규칙 = 그 PR |
 | platform → media | `media_proxy_ports`(live · control · playback · health) · `media_health_path` | Media 상자 nginx 포트 · 헬스 경로 — platform 대상 그룹과 같은 값(정본 = platform) | platform |
+| platform → media | `service_sg_ids.auth` · `service_ports.auth` | Media 이그레스 → auth · auth 인그레스 ← Media(응답기의 4C resolve) 한 쌍 — kty 결정 2026-10-25 (나) | 서비스 SG · 포트 = platform, SG 규칙 = media |
 | 런타임 1단 → media | `rds_endpoint` · `rds_db_name` · `rds_resource_id` · `rds_sg_id` · `rewind_bucket_arn` | 사이드카 · janitor env(주소 · DB 이름) · Media 인스턴스 역할의 `rds-db:connect`(대상 = `rds_resource_id`) · Media ↔ RDS 5432 규칙 한 쌍 · 사이드카 S3(rewind) 업로드 정책(대상 = `rewind_bucket_arn/*`) | RDS · DB 사용자 · GRANT = 런타임(DB 사용자 · GRANT 는 Terraform 이 아니라 `prod/runtime/sql/` 과 [runtime-1a 런북](runbooks/runtime-1a.md)), 접속 정책 · SG 규칙 · 업로드 정책 = media |
 | 런타임 1단 → media | `media_secret_arns`(비밀 전체 ARN 목록 `list(string)` — media_host 변수와 같은 꼴. resolve 전용 토큰 `pokeclip/prod/stream-key-resolve-token` 그릇 하나 — auth 의 `STREAM_KEY_RESOLVE_TOKEN` 과 같은 ARN. 공용 `INTERNAL_API_TOKEN` 은 없다, POK-429) | Media 인스턴스 역할 읽기 정책. 전용 토큰은 auth 의 `POST /internal/stream-keys/resolve` 하나만 열고, 출발지는 Media 프라이빗 서브넷 대역이어야 한다(auth `STREAM_KEY_RESOLVE_ALLOWED_CIDRS`) | 그릇 · 값 = 런타임, 읽기 정책 = media |
 | 런타임 1단 → media | `ingest_auth_resolve_token_secret_arn`(string — 위 그릇의 전체 ARN, `media_secret_arns` 의 원소와 같은 값) | 응답기 `media.env` 의 `STREAM_KEY_RESOLVE_TOKEN_SECRET_ARN` 렌더(M9 user_data). 목록의 순서에 기대지 않으려는 이름 있는 출력이다 | 출력 = 런타임, 키 정의 · 읽기 = M15, 렌더 = M9(user_data) |
 | 런타임 1단 → media | `broadcast_topic_arn` | 사이드카 역할의 `sns:Publish` 대상(계약9 발행 — `MessageDeduplicationId = eventId`). 발행 권한은 media 역할의 신원 정책이다 — 주제 정책은 계정 루트만 주체로 둔다(기본 정책의 `Principal *` 없음) | 주제 · 주제 정책 = 런타임, 발행 정책 = media |
 | 런타임 1단 → edge | `rewind_bucket_regional_domain_name` | `cdn_media` 의 `rewind-s3` 오리진 도메인. edge 는 이 하나만 읽는다 — `rewind_bucket_name` · `rewind_bucket_arn` 은 런타임 2단 버킷 정책 몫이다 | 버킷 = 런타임 |
 | edge → 런타임 2단 | `media_distribution_arn` | rewind 버킷 정책의 OAC 허용문(조건 `AWS:SourceArn`) | 버킷 정책 = 런타임 2단 |
-| platform · media → 런타임 2단 | `service_sg_ids`(auth · clip · next) · `media_sg_id` | Media 이그레스 → auth · auth 인그레스 ← Media(내부 resolve), chat-collector · chat-detector ↔ auth · clip 규칙 | SG 규칙 = 런타임 2단 |
+| platform → 런타임 2단 | `service_sg_ids`(auth · clip · next) | chat-collector · chat-detector ↔ auth · clip 규칙(POK-306) | SG 규칙 = 런타임 2단 |
 | 런타임 → 엣지 시험 | 시험 계정 · 계약9 억제 조건 | 루프백 · T1 부터 T3 · T8 | 런타임 |
 
-clip ↔ auth · RDS ← auth · clip · 로드밸런서 → Media 규칙은 위 표의 런타임
-2단 행이 아닙니다(platform · media 가 가짐 — 설계 5-5).
+clip ↔ auth · RDS ← auth · clip · 로드밸런서 → Media · Media ↔ auth 규칙은
+위 표의 런타임 2단 행이 아닙니다(platform · media 가 가짐 — 설계 5-5). Media
+↔ auth 는 설계서가 런타임 2단 몫으로 적었지만 kty 결정 2026-10-25 (나)로
+media 가 RDS 짝과 같은 꼴로 만듭니다.
 
 *   **auth → chat-collector**: auth 탈퇴 정리가 `COLLECTOR_BASE_URL`
     (`http://chat-collector.pokeclip.internal:8083`)을 부릅니다. 그 SG 짝(auth

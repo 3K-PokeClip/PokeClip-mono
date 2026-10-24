@@ -5,8 +5,9 @@
 #
 # 앞 루트의 상태는 override_data 로 흉내 낸다. 계정 ID 는 가짜 12자리
 # (111122223333)다. 루트 시험은 하위 모듈 안의 자원(SG 규칙 · 인스턴스 ·
-# 정책)을 주소로 볼 수 없어 모듈 출력(template_vars · rendered_user_data)과
-# 루트 출력만 본다. 모듈 안 동작은 modules/media_host 시험이 맡는다.
+# 정책)을 주소로 볼 수 없어 모듈 출력(template_vars · rendered_user_data ·
+# auth_resolve_rules)과 루트 출력만 본다. 모듈 안 동작은 modules/media_host
+# 시험이 맡는다.
 
 mock_provider "aws" {
   mock_data "aws_caller_identity" {
@@ -79,6 +80,16 @@ override_data {
         health   = 28184
       }
       media_health_path = "/example-proxy-health"
+      service_sg_ids = {
+        next = "sg-0next"
+        auth = "sg-0auth"
+        clip = "sg-0clip"
+      }
+      service_ports = {
+        next = 23000
+        auth = 28082
+        clip = 28081
+      }
       target_group_arns = {
         ingest   = "arn:aws:elasticloadbalancing:ap-northeast-2:111122223333:targetgroup/pokeclip-prod-ingest/0000000000000001"
         live     = "arn:aws:elasticloadbalancing:ap-northeast-2:111122223333:targetgroup/pokeclip-prod-internal-live/0000000000000002"
@@ -295,6 +306,20 @@ run "reads_proxy_ports_and_health_path_from_platform" {
       module.media_host.template_vars.media_health_path == "/example-proxy-health"
     )
     error_message = "nginx 포트 넷 · 헬스 경로가 platform 출력 media_proxy_ports · media_health_path 와 다르다."
+  }
+}
+
+# Media → auth(4C resolve) SG 짝은 media 가 만든다(kty 결정 2026-10-25 (나)).
+# auth SG · 포트의 정본은 platform 이다(services.auth).
+run "reads_auth_sg_and_port_from_platform" {
+  command = plan
+
+  assert {
+    condition = module.media_host.auth_resolve_rules == {
+      egress  = { auth_sg_id = "sg-0auth", port = 28082 }
+      ingress = { auth_sg_id = "sg-0auth", port = 28082 }
+    }
+    error_message = "Media → auth 이그레스 · auth 인그레스 ← Media 의 SG · 포트가 platform 출력 service_sg_ids.auth · service_ports.auth 와 다르다."
   }
 }
 
