@@ -2,13 +2,23 @@
 
 import Link from 'next/link';
 
-import { Bookmark } from 'lucide-react';
+import { Bookmark, EyeOff } from 'lucide-react';
 import clsx from 'clsx';
-import { Badge, Button, IconButton, LinkButton, Progress, Spinner, VisuallyHidden } from '@/ui';
+import {
+  Badge,
+  Button,
+  IconButton,
+  LinkButton,
+  Progress,
+  Spinner,
+  VisuallyHidden,
+  useToast,
+} from '@/ui';
+import { setJumpCardHidden } from '@/api/clipEditor';
 import styles from './LiveScreen.module.css';
 import { cardViewFor, cardVisualFor } from './highlightCardView';
 import type { CardVisual } from './useLiveDetailsMockState';
-import type { LiveHighlight, LiveStream } from './useLiveMockState';
+import type { LiveCardSnapshot, LiveHighlight, LiveStream } from './useLiveMockState';
 import { ThumbnailImage } from '@/features/thumbnail/ThumbnailImage';
 import { useLiveData } from './liveDataStore';
 
@@ -35,18 +45,34 @@ export function HighlightCard({
   stream,
   visuals,
   onSeek,
+  onCardChange,
 }: {
   highlight: LiveHighlight;
   stream: LiveStream;
   visuals: Record<string, CardVisual>;
   onSeek: (timestamp: string) => void;
+  /** 가리기·되살리기 답을 목록에 넣는다. 통로가 끊겼거나 끝난 방송이면 다음 목록 읽기(1분)까지 기다리지 않게 */
+  onCardChange?: (card: LiveCardSnapshot) => void;
 }) {
+  const { toast } = useToast();
   const view = cardViewFor(highlight);
   const visual = cardVisualFor(highlight, stream, visuals);
   const processing = view.state === 'processing';
   // 편집기는 방송 번호와 카드 번호(`card-23` → 23)로 클립을 연다
   const { streamId } = useLiveData();
-  const editorHref = `/clips/editor?stream=${encodeURIComponent(streamId)}&card=${highlight.id.replace(/^card-/, '')}`;
+  const cardId = highlight.id.replace(/^card-/, '');
+  const editorHref = `/clips/editor?stream=${encodeURIComponent(streamId)}&card=${cardId}`;
+  // 가리기·되살리기(POK-463). 실패는 카드가 제 칸에 그대로 남으니 토스트로만 알린다
+  const setHidden = (hidden: boolean) => {
+    setJumpCardHidden<LiveCardSnapshot>(cardId, hidden).then(
+      (card) => onCardChange?.(card),
+      () =>
+        toast({
+          tone: 'error',
+          title: hidden ? '카드를 가리지 못했어요' : '카드를 되살리지 못했어요',
+        }),
+    );
+  };
 
   return (
     <article
@@ -132,7 +158,14 @@ export function HighlightCard({
             <span className={styles.cardProgressValue}>{visual.progress}%</span>
           </div>
         ) : null}
-        {view.showActions ? (
+        {highlight.hidden ? (
+          // 가린 카드는 되살리기만 한다. 되살리기는 누구나 한다(가린 사람이 자리를 비워도 막히지 않게, 서버와 같은 규칙)
+          <div className={styles.cardActions}>
+            <Button variant="soft" size="sm" onClick={() => setHidden(false)}>
+              되살리기
+            </Button>
+          </div>
+        ) : view.showActions ? (
           // 「편집」은 이 카드의 방송·카드 번호를 싣고 편집기로 들어간다. 카드를 찜하는 일은 없다(POK-393): 여러 편집자가
           // 같은 카드를 각자 편집한다. 업로드·보관함 저장은 각자 라우트가 설 때까지 비활성으로 둔다.
           <div className={styles.cardActions}>
@@ -145,6 +178,15 @@ export function HighlightCard({
             </Button>
             <IconButton variant="ghost" size="sm" aria-label="보관함에 저장" disabled>
               <Bookmark size={15} aria-hidden />
+            </IconButton>
+            {/* 가리기(POK-463): 시안에 카드별 단추가 없어 같은 줄의 작은 아이콘 하나로 둔다. 가린 카드는 패널의 「숨김」 칸이 모은다 */}
+            <IconButton
+              variant="ghost"
+              size="sm"
+              aria-label="이 카드 가리기"
+              onClick={() => setHidden(true)}
+            >
+              <EyeOff size={15} aria-hidden />
             </IconButton>
           </div>
         ) : null}

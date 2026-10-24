@@ -401,8 +401,20 @@ const server = vi.hoisted(() => ({
   relation: 'OWNER',
   /** 나중에 생긴 카드: 다음 목록 읽기부터 실린다 */
   extraCards: [] as Card[],
-  /** 옛 서버처럼 점유·숨김 칸(claimedBy·hidden)을 실어 보낸다(POK-393 배포 사이) */
+  /** 옛 서버처럼 점유 칸(claimedBy)을 실어 보낸다(POK-393 배포 사이) */
   legacyFields: false,
+  /** 가린 카드 번호와 그 카드의 순번(POK-463). 목록은 includeHidden일 때만 hidden:true로 싣는다(서버 기본은 뺀다) */
+  hidden: new Map<number, number>(),
+  /** 되살린 카드의 순번(가리기·되살리기마다 순번이 오른다) */
+  touched: new Map<number, number>(),
+  /** 이것이 풀릴 때까지 카드 목록 답을 붙든다. 답은 요청을 받은 때의 상태다 */
+  cardsGate: null as Promise<void> | null,
+  /** 이것이 풀릴 때까지 가리기(POST) 답을 붙든다. 서버 상태는 요청을 받은 때 바뀐다 */
+  hideGate: null as Promise<void> | null,
+  /** 가리기·되살리기 문이 503이다 */
+  hideFail: false,
+  /** 마지막으로 카드 목록을 읽은 방송 */
+  cardsStream: '',
   chatPaged: false,
   /** 후원 줄의 서버 id를 첫 채팅 id와 같게 준다: 채팅·후원은 표가 달라 번호가 겹친다(POK-254) */
   chatIdClash: false,
@@ -739,14 +751,37 @@ function handle(url: string, init?: RequestInit): Response | Promise<Response> {
     };
     return server.markGate ? server.markGate.then(reply) : reply();
   }
+  if (path.endsWith('/hide')) {
+    if (server.hideFail) return jsonResponse(503, { error: 'authorization_unavailable' });
+    const id = Number(path.split('/')[4]);
+    // 카드는 화면이 지금 보는 방송의 것이다: 시험 카드는 방송 번호를 하나만 갖고 있어 마지막으로 목록을 읽은 방송으로 싣는다
+    const target = {
+      ...[...CARDS, ...server.extraCards].find((c) => c.id === id)!,
+      streamId: server.cardsStream,
+    };
+    const seq = 1_000 + server.hidden.size + server.touched.size;
+    if (init?.method === 'DELETE') {
+      server.hidden.delete(id);
+      server.touched.set(id, seq);
+    } else server.hidden.set(id, seq);
+    const reply = () =>
+      jsonResponse(200, { ...target, eventSeq: seq, hidden: init?.method !== 'DELETE' });
+    return server.hideGate && init?.method !== 'DELETE' ? server.hideGate.then(reply) : reply();
+  }
   if (path.endsWith('/jump-cards')) {
     if (server.cards === 'fail') return jsonResponse(503, { error: 'unavailable' });
-    const cards = server.cards === 'none' ? [] : [...CARDS, ...server.extraCards];
-    return jsonResponse(200, {
-      cards: server.legacyFields
-        ? cards.map((c) => ({ ...c, hidden: true, claimedBy: '99' }))
-        : cards,
-    });
+    server.cardsStream = path.split('/')[4]!;
+    const withHidden = u.searchParams.get('includeHidden') === 'true';
+    const cards = (server.cards === 'none' ? [] : [...CARDS, ...server.extraCards])
+      .map((c) => ({
+        ...c,
+        eventSeq: server.hidden.get(c.id) ?? server.touched.get(c.id) ?? c.eventSeq,
+        hidden: server.hidden.has(c.id),
+      }))
+      .filter((c) => withHidden || !c.hidden)
+      .map((c) => (server.legacyFields ? { ...c, claimedBy: '99' } : c));
+    const reply = () => jsonResponse(200, { cards });
+    return server.cardsGate ? server.cardsGate.then(reply) : reply();
   }
   if (path.endsWith('/chat-chart') && server.chartRecentGate) {
     const gate = server.chartRecentGate;
@@ -996,6 +1031,12 @@ beforeEach(() => {
   server.relation = 'OWNER';
   server.extraCards = [];
   server.legacyFields = false;
+  server.hidden = new Map();
+  server.touched = new Map();
+  server.cardsGate = null;
+  server.cardsStream = '';
+  server.hideFail = false;
+  server.hideGate = null;
   server.chatPaged = false;
   server.chatIdClash = false;
   server.playback = 'off';
@@ -1056,6 +1097,12 @@ async function renderLive() {
   const result = renderWithProviders(<LiveScreen />);
   await settle();
   return result;
+}
+
+/** 맨 앞 카드(8번)를 가린다(POK-463) */
+async function 가린다() {
+  fireEvent.click(screen.getAllByRole('button', { name: '이 카드 가리기' })[0] as HTMLElement);
+  await settle();
 }
 
 /**
@@ -2036,17 +2083,114 @@ describe('LiveScreen — 하이라이트 카드', () => {
     expect(screen.getAllByRole('button', { name: '원클릭 업로드' })[0]).toBeDisabled();
   });
 
-  it('카드에는 편집만 있다: 모든 카드에 편집이 있고 놓기·숨기기·숨김 칩이 없다 (POK-393)', async () => {
+  it('모든 카드에 편집·가리기가 있고 놓기는 없다: 숨김 칸은 처음엔 0이다 (POK-393 · POK-463)', async () => {
     await renderLive();
 
     expect(screen.getAllByRole('link', { name: '편집' })).toHaveLength(8);
+    expect(screen.getAllByRole('button', { name: '이 카드 가리기' })).toHaveLength(8);
     const first = screen.getAllByRole('article')[0] as HTMLElement;
     expect(within(first).queryByRole('button', { name: '놓기' })).not.toBeInTheDocument();
-    expect(within(first).queryByRole('button', { name: '이 카드 숨기기' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /^숨김 / })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '숨김 0' })).toBeInTheDocument();
   });
 
-  it('점유·숨김 칸이 실린 옛 응답이 와도 카드가 다 보이고 「편집 중」이 아니다 (POK-393)', async () => {
+  it('가리면 숨김 칸으로 옮기고 다른 칸에서 빠지며, 되살리면 제 칸으로 돌아온다 (POK-463)', async () => {
+    await renderLive();
+
+    await 가린다();
+    expect(screen.queryByText('채팅이 튄 순간 #8')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '전체 7' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '자동 5' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '숨김 1' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '숨김 1' }));
+    expect(screen.getByText('채팅이 튄 순간 #8')).toBeInTheDocument();
+    // 가린 카드에는 편집·가리기가 없고 되살리기만 있다
+    expect(screen.queryByRole('link', { name: '편집' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '되살리기' }));
+    await settle();
+
+    expect(
+      fetchSpy.mock.calls.some(
+        ([url, init]) => url === '/api/clip/jump-cards/8/hide' && init?.method === 'DELETE',
+      ),
+    ).toBe(true);
+    expect(screen.getByRole('button', { name: '숨김 0' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '전체 8' }));
+    expect(screen.getByText('채팅이 튄 순간 #8')).toBeInTheDocument();
+  });
+
+  it('새로 열어도 가린 카드는 숨김 칸에 있다: 목록을 가린 카드까지 달라고 읽는다 (POK-463)', async () => {
+    server.hidden.set(8, 1_000);
+    await renderLive();
+
+    const lists = fetchSpy.mock.calls
+      .map(([url]) => new URL(String(url), 'http://localhost'))
+      .filter((u) => u.pathname.endsWith('/jump-cards'));
+    expect(lists.length).toBeGreaterThan(0);
+    for (const u of lists) expect(u.searchParams.get('includeHidden')).toBe('true');
+    expect(screen.getByRole('button', { name: '숨김 1' })).toBeInTheDocument();
+    expect(screen.queryByText('채팅이 튄 순간 #8')).not.toBeInTheDocument();
+  });
+
+  it('가리기 답보다 늦게 온 옛 목록이 카드를 제 칸으로 되돌리지 않는다 (POK-463)', async () => {
+    await renderLive();
+    let release!: () => void;
+    server.cardsGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    // 가리기 전에 떠난 목록 읽기(3초 주기)를 붙들어 둔다. 답은 가리기 전 상태다
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3_000);
+    });
+
+    await 가린다();
+    expect(screen.getByRole('button', { name: '숨김 1' })).toBeInTheDocument();
+    server.cardsGate = null;
+    release();
+    await settle();
+
+    expect(screen.getByRole('button', { name: '숨김 1' })).toBeInTheDocument();
+    expect(screen.queryByText('채팅이 튄 순간 #8')).not.toBeInTheDocument();
+  });
+
+  it('늦게 온 가리기 답이 그 뒤의 되살리기를 덮지 않는다: 같은 카드는 순번이 낮은 판을 버린다 (POK-463)', async () => {
+    await renderLive();
+    let release!: () => void;
+    server.hideGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    // 가리기 답을 붙든다. 서버는 이미 가렸으므로 다음 목록 읽기(3초)가 카드를 숨김 칸으로 옮긴다
+    fireEvent.click(screen.getAllByRole('button', { name: '이 카드 가리기' })[0] as HTMLElement);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3_000);
+    });
+    await settle();
+    expect(screen.getByRole('button', { name: '숨김 1' })).toBeInTheDocument();
+
+    server.hideGate = null;
+    fireEvent.click(screen.getByRole('button', { name: '숨김 1' }));
+    fireEvent.click(screen.getByRole('button', { name: '되살리기' }));
+    await settle();
+    expect(screen.getByRole('button', { name: '숨김 0' })).toBeInTheDocument();
+
+    release();
+    await settle();
+    expect(screen.getByRole('button', { name: '숨김 0' })).toBeInTheDocument();
+  });
+
+  it('가리지 못하면 알리고 카드는 제 칸에 남는다 (POK-463)', async () => {
+    await renderLive();
+    server.hideFail = true;
+
+    fireEvent.click(screen.getAllByRole('button', { name: '이 카드 가리기' })[0] as HTMLElement);
+    await settle();
+
+    expect(screen.getByText('카드를 가리지 못했어요')).toBeInTheDocument();
+    expect(screen.getByText('채팅이 튄 순간 #8')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '숨김 0' })).toBeInTheDocument();
+  });
+
+  it('점유 칸이 실린 옛 응답이 와도 카드가 다 보이고 「편집 중」이 아니다 (POK-393)', async () => {
     server.legacyFields = true;
     await renderLive();
 
@@ -2292,6 +2436,18 @@ describe('LiveScreen — 수동 마킹', () => {
     expect(screen.getByText('가까운 카드가 이미 있어요')).toBeInTheDocument();
     expect(screen.queryByText('카드 만드는 중…')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: '전체 8' })).toBeInTheDocument();
+  });
+
+  it('200의 앞 카드가 가린 카드면 숨김 칸에 있다고 알린다: 보이는 칸에 없어 실패한 것처럼 읽히지 않게 (POK-463)', async () => {
+    server.hidden.set(7, 1_000);
+    await renderLive();
+    server.markReply = { status: 200, body: { ...CARDS[1], eventSeq: 1_000, hidden: true } };
+
+    fireEvent.click(screen.getByRole('button', { name: /수동 마킹/ }));
+    await settle();
+
+    expect(screen.getByText('가까운 카드가 숨김 칸에 있어요')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '숨김 1' })).toBeInTheDocument();
   });
 
   it('503 timeline_not_ready면 영상 기준을 못 정했다고 알리고 자리를 치운다', async () => {
@@ -2803,6 +2959,14 @@ describe('LiveScreen — 실시간 통계', () => {
     expect(screen.getByRole('button', { name: '수동 2' })).toBeInTheDocument();
   });
 
+  it('가린 카드는 지표에서도 빠진다: 칩과 같은 수다 (POK-463)', async () => {
+    await renderLive();
+
+    await 가린다();
+    expect(screen.getByText('자동 5 · 수동 2')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '자동 5' })).toBeInTheDocument();
+  });
+
   it('방송 중에도 그래프를 처음부터 1시간 창으로 나눠 읽고, 다 지난 창은 10초마다 다시 묻지 않는다: 시청자 기록도 시작부터다', async () => {
     await renderLive();
     const charts = () =>
@@ -2984,6 +3148,15 @@ describe('LiveScreen: 주소로 고른 카드로 들어오기', () => {
     await settle();
     return result;
   }
+
+  it('주소의 카드가 가린 카드여도 그 시점으로 간다 (POK-463)', async () => {
+    server.vodOrigin = VOD_STARTED + 32_000;
+    server.hidden.set(4, 1_000);
+    openFromHome(4);
+    await renderLive();
+
+    expect(screen.getByText(/^0:47:22 시점까지 보는 중/)).toBeInTheDocument();
+  });
 
   it('녹화가 없으면 채팅이 그 카드 시점까지에서 멈춘다: 서버 기준점 축으로 그 둘레를 읽는다', async () => {
     server.vodOrigin = VOD_STARTED + 32_000;
@@ -3922,6 +4095,19 @@ describe('LiveScreen: 지난 방송 채팅 다시 보기(POK-324)', () => {
 });
 
 describe('LiveScreen — 지난 방송 상세', () => {
+  it('끝난 방송에서 가리고 되살리면 다음 목록 읽기(1분)를 기다리지 않고 바로 옮긴다 (POK-463)', async () => {
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    await renderLive();
+
+    // 시계를 움직이지 않는다(settle은 0초): 주기 읽기가 아니라 가리기 답만 반영할 수 있다
+    await 가린다();
+    expect(screen.getByRole('button', { name: '숨김 1' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '숨김 1' }));
+    fireEvent.click(screen.getByRole('button', { name: '되살리기' }));
+    await settle();
+    expect(screen.getByRole('button', { name: '숨김 0' })).toBeInTheDocument();
+  });
+
   it('방금 끝난 방송은 수집기가 마지막 줄을 다 쓰도록 2분 동안 차트·방송 정보를 계속 읽은 뒤 멈춘다(PR #256 codex)', async () => {
     // 명부가 끝을 먼저 알리면 수집기의 마지막 적재(1초마다 몰아 쓴다) 전 차트를 받는다: 첫 답을 굳히면 꼬리가 빠진다
     server.vodEndShiftMs = Date.now() - 30_000 - VOD_ENDED;

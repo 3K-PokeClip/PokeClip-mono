@@ -24,7 +24,7 @@ import org.springframework.web.bind.annotation.RestController;
  * <p>사용자 번호는 <b>토큰의 subject에서만</b> 온다 — 쿼리로 받으면 남의 번호로 남의 방송을 연다.
  *
  * <p>{@code limit}이 {@code Integer}(박스형)인 것은 <b>「안 줬다」와 「0을 줬다」를 갈라야</b> 하기
- * 때문이다. 옛 웹이 보내는 {@code includeHidden}(POK-393에서 뺐다)은 스프링이 무시한다.
+ * 때문이다. {@code includeHidden}(POK-463)은 반대로 기본값이 있어도 잃을 구분이 없다: 안 주면 「가린 카드는 빼 달라」다.
  */
 @RestController
 @RequestMapping("/api/clip/broadcasts/{streamId}/jump-cards")
@@ -38,6 +38,7 @@ public class JumpCardListController {
 
     @GetMapping
     public JumpCardListResponse list(@PathVariable String streamId,
+                                     @RequestParam(defaultValue = "false") boolean includeHidden,
                                      @RequestParam(required = false) Integer limit,
                                      @RequestParam(required = false) String cursor,
                                      @AuthenticationPrincipal Jwt jwt,
@@ -49,6 +50,6 @@ public class JumpCardListController {
         // 더 근본적으로는 감출 상대가 있는 것이 <b>사람 문</b>뿐이기 때문이다.
         NotFoundFloor.mark(request);
         return JumpCardListResponse.from(
-                service.listOf(jwt.getSubject(), streamId, limit, cursor));
+                service.listOf(jwt.getSubject(), streamId, includeHidden, limit, cursor));
     }
 }

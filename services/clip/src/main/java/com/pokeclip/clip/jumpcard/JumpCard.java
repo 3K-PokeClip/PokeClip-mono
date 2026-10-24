@@ -54,8 +54,12 @@ public class JumpCard {
     @Column(name = "evidence", columnDefinition = "jsonb")
     private String evidence;
 
-    // claimed_*·hidden_* 칸은 매핑하지 않는다(POK-393, 집기·숨기기 철거). 칸 자체는 POK-394가 지울 때까지
-    // 표에 남는다. 여기서 매핑을 먼저 빼 두어야 칸을 지우는 날 이 판 서버가 validate에서 안 깨진다.
+    // 가린 시각(POK-463). 되살리면 NULL이다. 가린 사람(hidden_by)은 SQL이 쓰기만 하고 응답에 안 싣는다.
+    @Column(name = "hidden_at")
+    private Instant hiddenAt;
+
+    // claimed_*·hidden_by·hidden_reason 칸은 매핑하지 않는다(POK-393 집기 철거, POK-463은 이유를 안 받는다). 칸 자체는 POK-394가
+    // 지울 때까지 표에 남는다. 여기서 매핑을 빼 두어야 칸을 지우는 날 이 판 서버가 validate에서 안 깨진다.
 
     @Column(name = "event_seq", nullable = false)
     private long eventSeq;
@@ -103,6 +107,10 @@ public class JumpCard {
 
     public String getEvidence() {
         return evidence;
+    }
+
+    public Instant getHiddenAt() {
+        return hiddenAt;
     }
 
     public long getEventSeq() {

@@ -3,6 +3,7 @@ import {
   broadcastTitle,
   ClipApiError,
   fetchAllBroadcasts,
+  fetchAllJumpCards,
   fetchBroadcast,
   fetchJumpCard,
   fetchLibraryAll,
@@ -11,6 +12,7 @@ import {
   platformLabel,
   requestRender,
   retryUpload,
+  setJumpCardHidden,
   type UploadInfo,
 } from '@/api/clipEditor';
 import { useChannelStore } from '@/stores/channel';
@@ -214,9 +216,38 @@ describe('카드 목록 쪽 넘기기', () => {
     expect(await fetchJumpCard('s1', '77')).toMatchObject({ id: 77 });
     const urls = spy.mock.calls.map(([url]) => String(url));
     expect(urls).toHaveLength(2);
-    // 숨김 옵션은 POK-393에서 없앴다(서버가 안 받는다)
-    expect(urls[0]).not.toContain('includeHidden');
+    // 가린 카드도 편집기로는 연다(POK-463): 쪽마다 가린 카드까지 달라고 한다
+    for (const u of urls) expect(u).toContain('includeHidden=true');
     expect(urls[0]).toContain('limit=200');
+  });
+
+  it('기본은 가린 카드를 달라고 하지 않는다: 홈·지난 방송 목록의 카드 수에서 빠진다 (POK-463)', async () => {
+    const spy = stubFetch(() => jsonResponse(200, { cards: [], nextCursor: null }));
+
+    await fetchAllJumpCards('s1');
+
+    expect(String(spy.mock.calls[0]?.[0])).not.toContain('includeHidden');
+  });
+});
+
+describe('카드 가리기 · 되살리기 (POK-463)', () => {
+  it('가리기는 POST, 되살리기는 DELETE이고 답의 카드를 돌려준다', async () => {
+    const spy = stubFetch((_url, init) =>
+      jsonResponse(200, { id: 8, hidden: init?.method === 'POST', eventSeq: 9 }),
+    );
+
+    expect(await setJumpCardHidden('8', true)).toMatchObject({ id: 8, hidden: true });
+    expect(await setJumpCardHidden('8', false)).toMatchObject({ id: 8, hidden: false });
+    expect(spy.mock.calls.map(([url, init]) => [String(url), init?.method])).toEqual([
+      ['/api/clip/jump-cards/8/hide', 'POST'],
+      ['/api/clip/jump-cards/8/hide', 'DELETE'],
+    ]);
+  });
+
+  it('실패는 던진다: 화면이 알린다', async () => {
+    stubFetch(() => jsonResponse(503, { error: 'authorization_unavailable' }));
+
+    await expect(setJumpCardHidden('8', true)).rejects.toThrow();
   });
 });
 

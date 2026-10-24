@@ -151,7 +151,7 @@ class BroadcastListTransactionTest extends IntegrationTestSupport {
 
         AtomicInteger 최대 = new AtomicInteger();
         Thread 요청 = new Thread(
-                () -> cardService.listOf(요청자, "s-tx-card", 20, null), "tx-probe-card");
+                () -> cardService.listOf(요청자, "s-tx-card", false, 20, null), "tx-probe-card");
         try {
             요청.start();
             auth에_도착할_때까지_기다린다();
