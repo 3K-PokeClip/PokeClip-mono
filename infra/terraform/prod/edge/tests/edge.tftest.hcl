@@ -402,7 +402,7 @@ run "standard_logs_off_plan_keeps_ingress_source_sg_known" {
   }
 
   # 고리의 input 이 VPC origin id 인지만 본다. data 의 depends_on 줄 자체는
-  # mock 으로 순서를 볼 수 없어 이 시험이 잡지 못한다(주석 · 리뷰가 지킨다).
+  # mock 으로 순서를 볼 수 없어 이 시험이 잡지 못한다(guard R15 가 지킨다).
   assert {
     condition     = terraform_data.vpc_origin_ready.input == module.media.vpc_origin_id
     error_message = "SG 조회가 기다리는 terraform_data.vpc_origin_ready 가 media 모듈의 VPC origin id 에 걸려 있지 않다."

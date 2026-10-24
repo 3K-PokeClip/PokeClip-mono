@@ -1,8 +1,8 @@
 # apex 정적 사이트 모듈(계획 M10 c3 · 설계 3-3 cdn_static_site)을 mock
-# provider 로 단언한다 — S3 버킷(서울) 보호 설정 · OAC 허용문 하나뿐인 버킷
-# 정책 · OAC · 별칭 apex · www · us-east-1 인증서 · CLOUDFRONT WAF ·
-# viewer-request = apex-request · index.html · IPv6 · HSTS 응답 헤더 정책
-# (includeSubDomains · preload · CSP 없음) · redirect-to-https.
+# provider 로 단언한다 — S3 버킷(서울) 보호 설정 · OAC 허용문 하나와 평문
+# HTTP 거부문으로 된 버킷 정책 · OAC · 별칭 apex · www · us-east-1 인증서 ·
+# CLOUDFRONT WAF · viewer-request = apex-request · index.html · IPv6 · HSTS
+# 응답 헤더 정책(includeSubDomains · preload · CSP 없음) · redirect-to-https.
 #
 # 모듈은 기본 provider(us-east-1) 하나만 받는다. 버킷과 그 부속 자원은 자원
 # 인자 region 으로 서울에 둔다. mock 은 region 을 설정하지 않은 자원에
@@ -161,7 +161,7 @@ run "uses_bucket_prefix_input" {
   }
 }
 
-run "bucket_policy_allows_only_this_distribution_through_oac" {
+run "bucket_policy_allows_only_oac_and_denies_insecure_transport" {
   command = plan
 
   assert {
@@ -185,9 +185,20 @@ run "bucket_policy_allows_only_this_distribution_through_oac" {
             }
           }
         },
+        {
+          Sid       = "DenyInsecureTransport"
+          Effect    = "Deny"
+          Principal = "*"
+          Action    = "s3:*"
+          Resource = [
+            "arn:aws:s3:::pokeclip-prod-apex-example",
+            "arn:aws:s3:::pokeclip-prod-apex-example/*",
+          ]
+          Condition = { Bool = { "aws:SecureTransport" = "false" } }
+        },
       ]
     }))
-    error_message = "버킷 정책이 이 배포만 OAC 로 읽게 하는 허용문 하나가 아니다."
+    error_message = "버킷 정책이 이 배포만 OAC 로 읽게 하는 허용문 하나와 평문 HTTP(aws:SecureTransport = false) 거부문이 아니다."
   }
 }
 
@@ -375,12 +386,11 @@ run "outputs_distribution_and_bucket" {
   assert {
     condition = (
       output.distribution_id == "E0EXAMPLEAPEX" &&
-      output.distribution_arn == "arn:aws:cloudfront::111122223333:distribution/E0EXAMPLEAPEX" &&
       output.domain_name == "d0example.cloudfront.net" &&
       output.hosted_zone_id == "Z2FDTNDATAQYW2" &&
       output.bucket_name == "pokeclip-prod-apex-example"
     )
-    error_message = "출력(distribution_id · distribution_arn · domain_name · hosted_zone_id · bucket_name)이 배포 · 버킷 값과 다르다."
+    error_message = "출력(distribution_id · domain_name · hosted_zone_id · bucket_name)이 배포 · 버킷 값과 다르다."
   }
 }
 

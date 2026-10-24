@@ -3,11 +3,6 @@ output "distribution_id" {
   value       = aws_cloudfront_distribution.this.id
 }
 
-output "distribution_arn" {
-  description = "apex 배포 ARN."
-  value       = aws_cloudfront_distribution.this.arn
-}
-
 output "domain_name" {
   description = "apex 배포 도메인(*.cloudfront.net — 별칭 레코드의 대상)."
   value       = aws_cloudfront_distribution.this.domain_name

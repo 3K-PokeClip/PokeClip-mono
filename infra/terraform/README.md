@@ -199,7 +199,7 @@ bash infra/terraform/scripts/test/kvs_put_test.sh
 shellcheck infra/terraform/scripts/test/*.sh \
   infra/terraform/scripts/test/fakebin/aws \
   infra/terraform/scripts/test/kvs_fakebin/*
-node --test 'infra/terraform/modules/*/functions/test/*.test.mjs'
+node --test infra/terraform/modules/*/functions/test/*.test.mjs
 for d in infra/terraform/modules/*/ infra/terraform/nonprod/*/ \
   infra/terraform/prod/*/; do tflint --chdir="$d" || printf 'FAIL %s\n' "$d"; done
 shellcheck infra/terraform/scripts/*.sh
@@ -218,9 +218,13 @@ terraform 규칙 묶음)는 루트 · 모듈마다 돌립니다. `--recursive` �
 에 닿지 않음), 없으면 skip 으로 셉니다.
 
 `node --test` 는 CloudFront Function 셋의 단위 시험입니다(node 26 · 표준
-라이브러리만 — 패키지 설치 없음). 글롭은 따옴표로 감싸 node 가 풉니다 —
-디렉터리를 인자로 주면 node 26 은 실패하고, 맞는 파일이 없으면 시험 0개로
-종료 0 이므로 요약의 `tests` 수를 봅니다. node 는 실제 CloudFront 런타임이
+라이브러리만 — 패키지 설치 없음). 글롭은 따옴표 없이 두어 셸이 풀고, 파일
+목록을 node 에 넘깁니다(CI 의 cf-functions 잡과 같음). 디렉터리를 인자로 주면
+node 26 은 실패합니다. 맞는 파일이 없을 때 CI 는 빈 목록을 보고 실패하고,
+TAP 요약의 시험 수가 0 이거나 실패 · 취소 · 건너뜀 · 할 일이 하나라도 있어도
+실패로 봅니다. 손으로 돌릴 때 zsh 는 맞는 파일이 없으면 명령 전에 멈추지만,
+bash 는 풀리지 않은 글롭을 그대로 넘기고 node 는 그것을 시험 0개 · 종료 0 으로
+끝내므로 요약의 `tests` 수를 봅니다. node 는 실제 CloudFront 런타임이
 아닙니다 — 런타임 거동은 [엣지 시험 런북](runbooks/edge-tests.md)이 봅니다.
 
 `put_secret_test.sh` 의 정적 검사(`no-file-writes` · `no-external-commands` ·
@@ -282,7 +286,7 @@ CI 의 한계는 다음과 같습니다.
 
 ## guard 규칙
 
-guard 는 Terraform 트리의 금지 규약을 검사합니다. 규칙 R1 ~ R14 는
+guard 는 Terraform 트리의 금지 규약을 검사합니다. 규칙 R1 부터 R15 는
 [conftest](https://www.conftest.dev/)(`--parser hcl2`)로 돌리는 Rego 정책
 `policy/guard/*.rego` 가 판정합니다. `scripts/guard.sh` 는 얇은 실행기입니다.
 파서가 볼 수 없는 R0 를 직접 보고, 파일마다 파싱이 되는지 먼저 가린 뒤, 트리
@@ -306,6 +310,7 @@ guard 는 Terraform 트리의 금지 규약을 검사합니다. 규칙 R1 ~ R14 
 | R12 | `nonprod/dns-legacy/` | 운영 트리: ① 그 루트 바로 아래 `.tf` 없음 ② 주소가 정확히 `aws_route53_zone.legacy` 인 선언 없음 ③ 그 루트의 `aws_route53_zone` 중 리터럴 `prevent_destroy = true` 가 없는 것. fixture 트리는 ① · ② 의 부재만 건너뜀(③ 은 그대로) |
 | R13 | 전체(`.tf` 만 — `*.example` · 시험 파일 · 주석은 리뷰) | 문자열 · 숫자 리터럴(맵 키 포함) 안의 계정 ID 꼴 숫자열 — 12자리 · 4-4-4 대시 표기(앞뒤가 숫자가 아님 — ARN 속 계정 ID 포함) · 이름을 소문자로 바꾸고 `-` · `_` 를 뺐을 때 `accountid` 가 드는 `variable`(`accountId` · `account-id` 포함). 위반 메시지는 그 숫자열을 가림 |
 | R14 | `prod/platform/`(루트 바로 아래 `.tf` 만) | 주소가 정확히 `terraform_data.public_routed_target_groups` 인 자원 없음(ECS 서비스가 공개 ALB 리스너 규칙을 기다리는 다리), 또는 그 자원의 `depends_on` 에 `module.public_alb` 참조가 없음(따옴표 문자열 · 다른 참조만 있음 포함). `terraform test` 는 의존 간선을 못 보므로 선언을 여기서 봄 — 서비스가 다리 출력을 받는지는 `prod/platform/tests/apply_order.tftest.hcl`, 실제 생성 순서는 apply 로그. 대상 경로에 `.tf` 가 없으면 건너뜀 |
+| R15 | `prod/edge/`(루트 바로 아래 `.tf` 만) | `data "aws_security_group" "vpc_origin_service"`(VPC origin 관리형 SG 조회)의 `depends_on` 이 정확히 `[terraform_data.vpc_origin_ready]` 가 아님(없음 · 빈 목록 · 따옴표 문자열 · `module.media` 등 다른 참조가 있음 포함). 기다리지 않으면 첫 apply 에서 SG 를 찾지 못하고, media 모듈 전체를 기다리면 VPC origin 밖 변경마다 인그레스 규칙 변경 예고가 plan 에 낀다. `terraform test` 는 의존 간선을 못 보므로 선언을 여기서 봄 — 고리의 `input` 이 VPC origin id 인지는 `prod/edge/tests/edge.tftest.hcl`. 조회가 없으면 건너뜀(같은 시험이 그 주소를 읽음) |
 
 `prevent_destroy` 는 `terraform test`(mock)로 관찰할 수 없어 R4 · R10 · R11 ·
 R12 가 맡습니다. conftest 는 식을 평가하지 않으므로 리터럴 `true` 만 인정합니다 —
