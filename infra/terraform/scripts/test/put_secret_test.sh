@@ -88,6 +88,8 @@ EXPECTED_ARGV_HEAD+=' --output json --no-cli-auto-prompt --secret-id'
 readonly EXPECTED_ARGV_HEAD
 readonly EXPECTED_ARGV_TAIL='--secret-string file:///dev/stdin'
 # CLI 기록 검사의 고정 줄(스크립트 머리 주석의 출력 표).
+# CLI 기록 검사의 aws 인자(가짜 aws 의 history-calls 한 줄).
+readonly HISTORY_ARGV='configure get cli_history --no-cli-auto-prompt'
 readonly HISTORY_ENABLED='CLI HISTORY ENABLED'
 readonly HISTORY_UNCHECKED='CLI HISTORY UNCHECKED'
 NOTE_HISTORY_PROFILE='프로필의 cli_history 가 enabled — 값을 읽지 않음 ·'
@@ -100,7 +102,7 @@ NOTE_HISTORY_FAIL='CLI 기록 설정(cli_history)을 읽지 못함 — 값을 �
 NOTE_HISTORY_FAIL+=' 켜짐과 같이 멈춤'
 readonly NOTE_HISTORY_FAIL
 # 사례 수(ok · skip 줄의 수). 사례를 더하거나 빼면 함께 고친다.
-readonly EXPECTED_CASES=61
+readonly EXPECTED_CASES=62
 # 호출자 환경의 표지 변수(셸에 살아 있는 토큰 변수를 흉내 낸 가짜 값). 사례
 # 디렉터리 어디에도 남지 않아야 한다 — 가짜 aws 는 환경 중 시험이 보는
 # 이름만 적는다.
@@ -224,7 +226,8 @@ write_pem() {
 #   셸 모드(plain · xtrace-flag · xtrace-env · allexport-env · secret-export
 #   — 호출자가 secret_value 를 export · no-aws — PATH 에 aws 없음 ·
 #   history-file — AWS_CLI_HISTORY_FILE 설정 · history-<답> — 가짜 aws 의
-#   configure get 답 FAKE_AWS_CLI_HISTORY), 가짜 aws 모드, 스크립트 인자들.
+#   configure get 답 FAKE_AWS_CLI_HISTORY · stdin-fed — 표준 입력을
+#   /dev/null 대신 사례의 in/stdin-feed 로), 가짜 aws 모드, 스크립트 인자들.
 #######################################
 run_put_as() {
   local shell_mode="$1" mode="$2" var
@@ -263,6 +266,7 @@ run_put_as() {
         export AWS_CLI_HISTORY_FILE="${case_dir}/in/qxhistory.db"
         ;;
       history-*) export FAKE_AWS_CLI_HISTORY="${shell_mode#history-}" ;;
+      stdin-fed) exec <"${case_dir}/in/stdin-feed" ;;
     esac
     exec "${BASH}" "${PUT}" "$@"
   ) </dev/null >"${case_dir}/stdout" 2>"${case_dir}/stderr"
@@ -512,8 +516,8 @@ expect_put() {
     return
   fi
   if [[ "$(contents_of "${case_dir}/aws/history-calls")" != \
-    'configure get cli_history' ]]; then
-    fail "${name}: CLI 기록 검사(configure get cli_history 1회)가 없음"
+    "${HISTORY_ARGV}" ]]; then
+    fail "${name}: CLI 기록 검사(${HISTORY_ARGV} 1회)가 없음"
     return
   fi
   env=$'\n'"$(contents_of "${case_dir}/aws/env")"$'\n'
@@ -899,7 +903,9 @@ expect_history_blocked() {
 # AWS_CLI_HISTORY_FILE 이 설정돼 있으면 「CLI HISTORY ENABLED」, 설정을 읽지
 # 못하면 「CLI HISTORY UNCHECKED」 로 종료 1(값을 읽지 않음). 검사는 파일을
 # 읽기 전이다 — 없는 파일이어도 거부(종료 3)가 아니라 종료 1 이다. disabled ·
-# 값 없음(다른 성공 사례 — expect_put 이 검사 1회를 봄)은 그대로 넣는다.
+# 값 없음(다른 성공 사례 — expect_put 이 검사 1회 · 인자를 봄)은 그대로
+# 넣는다. 검사는 auto-prompt 를 끄고(--no-cli-auto-prompt) 표준 입력을 닫고
+# 부른다.
 # Globals:
 #   case_dir, input, out, status
 #######################################
@@ -925,12 +931,26 @@ test_cli_history() {
   run_put_as history-disabled ok cdn-secret "${input}"
   if [[ "${status}" -ne 0 ||
     "${out}" != "SECRET PUT OK pokeclip/prod/cdn-secret ${VERSION_ID}" ||
-    "$(contents_of "${case_dir}/aws/history-calls")" != \
-    'configure get cli_history' ]]; then
+    "$(contents_of "${case_dir}/aws/history-calls")" != "${HISTORY_ARGV}" ]]
+  then
     fail "history-disabled: 검사 1회 뒤 넣기를 기대했으나 ${status} — ${err}"
     return
   fi
   pass "history-disabled → 넣음"
+  # 표준 입력에 바이트가 있는 호출(값을 /dev/stdin 으로 넘기는 꼴)에서도 기록
+  # 검사는 그 입력을 받지 않는다 — auto-prompt 가 켜져 있으면 받은 입력을 키
+  # 입력으로 읽어 prompt 기록에 남긴다. 가짜 aws 가 비지 않은 입력을 violation
+  # 에 적는다.
+  new_case || return
+  write_input '%s\n' "${ONE_LINE_VALUE}"
+  printf '%s\n' FakeStdinFeed >"${case_dir}/in/stdin-feed"
+  run_put_as stdin-fed ok cdn-secret "${input}"
+  expect_no_violation history-stdin-closed || return
+  if [[ "${status}" -ne 0 ]]; then
+    fail "history-stdin-closed: 종료 0 을 기대했으나 ${status} — ${err}"
+    return
+  fi
+  pass "history-stdin-closed → 기록 검사의 표준 입력이 비어 있음"
 }
 
 #######################################

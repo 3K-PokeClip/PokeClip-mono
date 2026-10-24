@@ -143,8 +143,12 @@ precheck::cli_history_state() {
     printf '%s\n' env
     return 0
   fi
-  # 값이 없으면 aws configure get 은 빈 출력 · 종료 1 이다.
-  value="$(aws configure get cli_history 2>/dev/null)" || status=$?
+  # 값이 없으면 aws configure get 은 빈 출력 · 종료 1 이다. auto-prompt
+  # (cli_auto_prompt = on · AWS_CLI_AUTO_PROMPT)는 끄고 표준 입력은 닫는다 —
+  # 켜진 채면 부르는 쪽의 표준 입력(/dev/stdin 으로 넘긴 값)을 키 입력으로
+  # 읽어 prompt 기록(~/.aws/cli/cache/prompt_history.json)에 남긴다.
+  value="$(aws configure get cli_history --no-cli-auto-prompt </dev/null \
+    2>/dev/null)" || status=$?
   if [[ "${status}" -ne 0 && "${status}" -ne 1 ]]; then
     printf '%s\n' unreadable
   elif [[ "${value}" == enabled ]]; then

@@ -83,7 +83,7 @@ readonly SECRET_MARKER='FakeCdnSecret'
 
 # 부른 동작마다 기대하는 인자(한 줄로 이은 것). CLI 기록 검사(aws configure
 # get)의 인자는 get.argv 에 적힌다.
-readonly ARGV_HISTORY='configure get cli_history'
+readonly ARGV_HISTORY='configure get cli_history --no-cli-auto-prompt'
 readonly ARGV_DIG="+short ${ARN_ACCOUNT}.cloudfront-kvs.global.api.aws"
 ARGV_SECRET='secretsmanager get-secret-value --region ap-northeast-2'
 ARGV_SECRET+=" --no-cli-auto-prompt --secret-id ${SECRET_ID}"

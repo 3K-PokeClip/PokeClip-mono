@@ -32,7 +32,8 @@
 # sts get-caller-identity 는 스크립트가 부르지 않는다. 불리면 KVS ARN(시험의
 # 123456789012)과 다른 계정 번호(STUB_ACCOUNT)를 낸다 — 스크립트가 sts 의
 # 계정으로 이름 풀이 호스트를 만들면 시험의 인자 대조 · 계정 0건 검사가 잡는다.
-# aws configure get cli_history(CLI 기록 검사)는 FAKE_AWS_CLI_HISTORY 로 답한다
+# aws configure get cli_history --no-cli-auto-prompt(CLI 기록 검사)는 그 인자
+# 그대로일 때만 FAKE_AWS_CLI_HISTORY 로 답한다
 # (precheck/tests/fakebin/aws 와 같은 뜻 — calls 에는 「aws configure get」,
 # 인자는 get.argv): 비면 값 없음(빈 출력 · 종료 1 — 진짜 CLI), fail 이면 설정
 # 읽기 실패(종료 255), 그 밖이면 그 값.
@@ -177,7 +178,7 @@ forward_put_to_real() {
 #   aws 가 받은 인자들.
 #######################################
 configure_get() {
-  if [[ "$*" != 'configure get cli_history' ]]; then
+  if [[ "$*" != 'configure get cli_history --no-cli-auto-prompt' ]]; then
     printf 'fake aws: 모르는 설정 조회: %s\n' "$*" >&2
     exit 99
   fi

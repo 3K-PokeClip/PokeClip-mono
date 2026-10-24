@@ -15,6 +15,12 @@ set -uo pipefail
 # shellcheck source=infra/terraform/scripts/precheck/tests/principal_testlib.sh
 source "$(dirname -- "${BASH_SOURCE[0]}")/principal_testlib.sh"
 
+# CLI 기록 검사의 aws 인자(가짜 aws 기록 한 줄 — lib/precheck_common.sh 의
+# precheck::cli_history_state).
+readonly HISTORY_CALL='configure get cli_history --no-cli-auto-prompt'
+# 시뮬레이터 밖에서 허용하는 호출(호출 주체 확인 · CLI 기록 검사)의 줄 패턴.
+readonly SETUP_CALLS_RE="^(sts get-caller-identity |${HISTORY_CALL}\$)"
+
 #######################################
 # 증거 디렉터리의 시뮬레이터 요청 파일(PolicySourceArn 이 든 req-*.json)을
 # 번호 순서로 낸다.
@@ -121,8 +127,7 @@ expect_pc0_pc1_order() {
     expect_unverifiable "${name}" || return
     log="${case_dir}/out/aws.log"
     sims="$(testlib::count "${log}" 'iam simulate-principal-policy')"
-    others="$(grep -vE -- \
-      '^(sts get-caller-identity |configure get cli_history$)' "${log}" |
+    others="$(grep -vE -- "${SETUP_CALLS_RE}" "${log}" |
       grep -cvE -- '^iam simulate-principal-policy ')"
     # PC1 은 리전 둘(ap-northeast-2 · us-east-1) — 거부가 첫 리전이면 2회.
     if [[ "${others}" -ne 0 ]] ||
@@ -166,8 +171,8 @@ expect_request_shape() {
     testlib::fail "request-shape: 요청 계약 위반 —${problems:- 요청 없음}"
     return
   fi
-  bad="$(grep -vE -- '^(sts get-caller-identity |configure get cli_history$)' \
-    "${case_dir}/out/aws.log" | grep -cvF -- '--cli-input-json file://')"
+  bad="$(grep -vE -- "${SETUP_CALLS_RE}" "${case_dir}/out/aws.log" |
+    grep -cvF -- '--cli-input-json file://')"
   if [[ "${bad}" -ne 0 ]]; then
     testlib::fail "request-shape: --cli-input-json file:// 아닌 호출 ${bad}건"
     return
@@ -245,7 +250,7 @@ expect_cli_history() {
     log="${case_dir}/out/aws.log"
     if [[ "${spec}" == disabled ]]; then
       expect_result "${name}" 0 "PRINCIPAL CHECK PASS ${NORMAL_ROWS}" || return
-      if [[ "$(sed -n 1p -- "${log}")" != 'configure get cli_history' ||
+      if [[ "$(sed -n 1p -- "${log}")" != "${HISTORY_CALL}" ||
         "$(sed -n 2p -- "${log}")" != 'sts get-caller-identity'* ]]; then
         testlib::fail "${name}: 설정 조회 · 호출 주체 확인 순서가 아님 —" \
           "$(head -n 2 -- "${log}")"

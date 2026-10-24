@@ -16,6 +16,10 @@ set -uo pipefail
 # shellcheck source=infra/terraform/scripts/precheck/tests/scp_testlib.sh
 source "$(dirname -- "${BASH_SOURCE[0]}")/scp_testlib.sh"
 
+# CLI 기록 검사의 aws 인자(가짜 aws 기록 한 줄 — lib/precheck_common.sh 의
+# precheck::cli_history_state).
+readonly HISTORY_CALL='configure get cli_history --no-cli-auto-prompt'
+
 #######################################
 # 완료 표지 · 승인 기록은 다 쓴 뒤에만 생긴다(cc r2 지적 2): 기록에 넣을
 # UTC 시각을 읽지 못하면(date 실패) 종료 2 이고 빈 complete.txt · 시각 칸이
@@ -207,7 +211,7 @@ expect_cli_history() {
     esac
     if [[ "${spec}" == disabled ]]; then
       expect_result "${name}" 0 'SCP RECHECK OK 3' 3 || return
-      if [[ "$(sed -n 1p -- "${log}")" != 'configure get cli_history' ||
+      if [[ "$(sed -n 1p -- "${log}")" != "${HISTORY_CALL}" ||
         "$(sed -n 2p -- "${log}")" != 'sts get-caller-identity'* ]]; then
         testlib::fail "${name}: 설정 조회 · 호출 주체 확인 순서가 아님 —" \
           "$(cat -- "${log}")"
@@ -220,7 +224,7 @@ expect_cli_history() {
     want=1
     [[ "${spec}" == file ]] && want=0
     if [[ "${calls}" -ne "${want}" || ( "${want}" -eq 1 &&
-      "$(cat -- "${log}")" != 'configure get cli_history' ) ]] ||
+      "$(cat -- "${log}")" != "${HISTORY_CALL}" ) ]] ||
       grep -qF -e qxhistory -e enabled -- "${run_out}.stderr"; then
       testlib::fail "${name}: AWS 호출 ${calls}건(기대 ${want})이거나 값 ·" \
         "경로를 되울림 — $(cat -- "${run_out}.stderr")"
