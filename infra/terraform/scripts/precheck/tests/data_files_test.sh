@@ -218,7 +218,8 @@ readonly FOLLOWUP_TARGETS
 # O7f 다섯은 묶음 C 의 edge apply 가 부르는데 빠져 있던 동작(리뷰가 찾은
 # 누락만 — 결정 65 의 예외), UpdateWebACL 둘은 웹 ACL 데이터 보호(POK-459)
 # apply 가 부르는 동작이다. 뒤의 여섯(O7f 의 CreateTags · WAF 로그에 딸린
-# 동작)은 리뷰가 찾은 누락이다(kty 2026-10-25 가).
+# 동작)은 리뷰가 찾은 누락이다(kty 2026-10-25 가). 끝의 셋(로그 그룹 태그
+# 동작)도 리뷰가 찾은 누락이다(kty 2026-10-25 넣고 PR).
 # shellcheck disable=SC2016 # ${ACCOUNT} 는 펼치지 않는 글자 그대로다.
 STAGE_FOLLOWUP_ROWS=(
   $'O7f\tec2:AuthorizeSecurityGroupIngress\tap-northeast-2\t*'
@@ -234,7 +235,10 @@ STAGE_FOLLOWUP_ROWS=(
   $'O7f\tlogs:CreateLogDelivery\tus-east-1\t*'
   $'O7f\tlogs:DescribeResourcePolicies\tus-east-1\t*'
   $'O7f\tlogs:DescribeLogGroups\tus-east-1\t*'
-  $'O7f\tlogs:TagResource\tus-east-1\t*')
+  $'O7f\tlogs:TagResource\tus-east-1\t*'
+  $'O7f\tlogs:ListTagsForResource\tus-east-1\t*'
+  $'O7d\tlogs:TagResource\tap-northeast-2\t*'
+  $'O7d\tlogs:ListTagsForResource\tap-northeast-2\t*')
 readonly STAGE_FOLLOWUP_ROWS
 
 #######################################

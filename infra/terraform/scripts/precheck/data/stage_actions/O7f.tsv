@@ -6,8 +6,9 @@
 # 재조회 · Origin Shield · 로그 그룹 생성 · 보존 설정) · O7f 5 랜딩 업로드
 # (M7 c5) · 묶음 C 리뷰가 찾은 누락 다섯(POK-460 — 결정 65 의 예외, 찾은
 # 것만 더함) · 웹 ACL 데이터 보호의 UpdateWebACL(POK-459) · 리뷰가 찾은
-# 누락 여섯(결정 65 예외 · kty 2026-10-25 가 — 아래 두 덩어리의 주석). KVS
-# 값 동작은 O7f-stop2 에만.
+# 누락 여섯(결정 65 예외 · kty 2026-10-25 가 — 아래 두 덩어리의 주석) ·
+# 로그 그룹 태그 읽기(결정 65 예외 · 리뷰가 찾은 누락 · kty 2026-10-25 넣고
+# PR). KVS 값 동작은 O7f-stop2 에만.
 # 2-3 판정 래퍼 읽기(맨 아래 덩어리): M17b principal-check.sh.
 
 # CloudFront 제어면(KVS 그릇 생성 · 재조회 포함 — 값 동작 아님)
@@ -56,6 +57,9 @@ logs:CreateLogDelivery	us-east-1	*
 logs:DescribeResourcePolicies	us-east-1	*
 logs:DescribeLogGroups	us-east-1	*
 logs:TagResource	us-east-1	*
+# 태그 짝(결정 65 예외 · 리뷰가 찾은 누락 · kty 2026-10-25 넣고 PR) —
+# runtime-1a 의 RDS 로그 그룹 덩어리와 같은 꼴.
+logs:ListTagsForResource	us-east-1	*
 
 # apex 버킷(edge) — 객체 동작은 아래 상태 버킷 행이 함께 덮는다(랜딩 sync)
 s3:CreateBucket	ap-northeast-2	*
