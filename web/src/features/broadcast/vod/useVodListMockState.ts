@@ -21,6 +21,7 @@ const CARD_COUNT_TTL_MS = 10 * 60_000;
  */
 const CARD_RECOUNT_PER_POLL = 20;
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { track } from '@/lib/analytics';
 import { useToast } from '@/ui';
 import { lookupRecordingSpans, playbackConfigured } from '@/api/mediaPlayback';
 import { recordingTimeline } from '@/features/player/recordingTimeline';
@@ -350,6 +351,7 @@ export function useVodListMockState(options: VodListOptions = {}): VodListMockSt
     setDownloads((prev) => ({ ...prev, [streamId]: state }));
   }, []);
   const requestDownload = useCallback(() => {
+    track('pending_feature_clicked', { feature: 'vod_download' }); // 수요를 본다 (POK-357)
     toast({
       tone: 'info',
       title: '준비 중인 기능이에요',
