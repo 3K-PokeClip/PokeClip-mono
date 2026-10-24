@@ -188,6 +188,10 @@ S1(송출자 IP별 시도 한도 — 1-1 의 15)은 본문을 읽은 뒤에 돌�
 Basic · Control API 자격과 200 본문의 passphrase 가 암호화 없이 오간다. 응답기에는 TLS 리스너가 없고
 `MTX_API_URL` 은 http 만 받는다(1-4 의 4). 이 구간을 바깥에서 엿볼 수 없게 가두는 것은 배치 몫이다 —
 dev 는 `internal` 제어망, prod 후보는 같은 netns 루프백(D1 · 2절 후보값 표 1).
+prod 의 응답기 → auth 4C 호출도 호스트 간 VPC 구간을 http 평문으로 지난다 — 요청에 `X-Internal-Token`
+출입증이 실리고 응답 본문에 passphrase 가 온다. 출발지는 보안 그룹으로 잠기고(D9), 사설 DNS 이름을 http 로 부르는 것은
+플랫폼 전체 관례다(`infra/terraform/prod/platform/README.md` 의
+`http://auth.pokeclip.internal`). 이 구간의 TLS 는 플랫폼 결정 때 함께 정한다.
 
 **1절 표 행 수**: 1-1 15행 · 1-2 8행 · 1-3 8행 · 1-4 7행 · 1-5 18행 · 1-6 7행 · 1-7 6행 ·
 1-8 4행 · 1-9 6행(3b 포함) = **79행**.
@@ -297,8 +301,18 @@ prod 기대 = 계획 M2(Media 상자 compose) · M15(송출 인증 반영) · O8
 - **계획이 가정한 것**: `authHTTPExclude` 에 `api` · `metrics` · `pprof`. read · playback 은 「c2 착수 때 포크 소스로 확인」(G17, 계획 1553 · 1924행).
 - **실물(코드로 확정)**: 응답기는 `api` 와 `read` 를 가르고 **나머지 action 은 전부 publish 행으로 보내 `not_publish` 401 로 거부**한다(`handler.go:192-201` · `publish.go:103-104`). 따라서:
   - `playback` 을 제외하지 않으면 9996 재생 서버가 401 이다(계획의 제외 목록에 없음). 계획 c6 은 루프백 한정 playback 내부 사용자 항목을 따로 두지만 `authMethod: http` 에서는 내부 사용자 목록이 쓰이지 않는다(계획 1553행 · `mediamtx.demo.yml.tmpl:46-48`).
-  - `read` 는 응답기가 **`protocol=srt` 만 200, 그 밖(HLS 등)은 401** 이다(M15 c0 — kty 결정 1, 2026-10-23 · `handler.go` `read`). 그 전에는 늘 200 이었다. 그래서 `authMethod: http` 에서 `read` 를 제외하거나 늘 200 을 주면 Bearer 없는 LL-HLS 읽기가 열린다 — CDN Bearer 와 같은 세션만 MediaMTX 가 인증을 건너뛰고(SkipAuth), 그 밖의 HLS 요청은 이 인증을 탄다(M15 계획 0-1 — 포크 `hls/http_server.go` · `session.go` · `auth/manager.go` 판독). 제외하지 않은 `read` 는 요청마다 응답기를 지나 그 처리 시간이 예산에서 빠진다(`handler.go` `layers` 의 차감 — 거부 줄이 DEBUG 인 까닭). dev 는 응답기 판정과 무관하게 `read` 를 제외한다(동작 불변). **SRT 읽기는 응답기가 200 이므로 막지 않는다.**
-  - **필수 전제 — 경로 잠금(D12)**: SRT `read` 를 응답기가 200 으로 답해도 안전한 것은 MediaMTX 의 `srtReadPassphrase` 가 SRT 읽기를 막기 때문이다. prod 설정에 이 잠금이 없으면 공개 토큰을 아는 누구나 SRT read 로 원 스트림을 무암호로 읽는다. 그러므로 SRT read 의 200 은 **D12 의 설정 이행이 선행**일 때만 성립한다. 이것은 응답기 코드가 아니라 MediaMTX 설정 변경이다.
+  - `read` 는 응답기가 **`protocol=srt` 만 200, 그 밖(HLS 등)은 401** 이다(M15 c0 — kty 결정
+    1, 2026-10-23 · `handler.go` `read`). 그 전에는 늘 200 이었다. 그래서
+    `authMethod: http` 에서 `read` 를 제외하거나 늘 200 을 주면 Bearer 없는 LL-HLS 읽기가 열린다 —
+    CDN Bearer 와 같은 세션만 MediaMTX 가 인증을 건너뛰고(SkipAuth), 그 밖의 HLS 요청은 이 인증을 탄다(M15
+    계획 0-1 — 포크 `hls/http_server.go` · `session.go` · `auth/manager.go` 판독).
+    제외하지 않은 `read` 는 요청마다 응답기를 지나 그 처리 시간이 예산에서 빠진다(`handler.go` `layers` 의 차감 —
+    거부 줄이 DEBUG 인 까닭). dev 는 응답기 판정과 무관하게 `read` 를 제외한다(동작 불변). **SRT 읽기는 응답기가
+    200 이므로 막지 않는다.**
+  - **필수 전제 — 경로 잠금(D12)**: SRT `read` 를 응답기가 200 으로 답해도 안전한 것은 MediaMTX 의
+    `srtReadPassphrase` 가 SRT 읽기를 막기 때문이다. prod 설정에 이 잠금이 없으면 공개 토큰을 아는 누구나 SRT
+    read 로 원 스트림을 무암호로 읽는다. 그러므로 SRT read 의 200 은 **D12 의 설정 이행이 선행**일 때만 성립한다.
+    이것은 응답기 코드가 아니라 MediaMTX 설정 변경이다.
   - `metrics` · `pprof` 도 제외하지 않으면 401 이다. 계획 c6 은 둘 다 `no` 로 명시하므로 prod 에서는 켜져 있을 때만 문제다.
   - `protocol != srt` 와 토큰 꼴이 아닌 `path` 의 publish 는 전부 401 이다. prod 계획 c6 은 `rtmp: no` 로 바꾸고 이름을 박은 시험 경로(`pokeclip-m4-test`)를 지우며 경로는 `all_others` 만 남긴다(계획 860~877행). 그래서 비-SRT 송출은 애초에 열려 있지 않고, 토큰 꼴이 아닌 경로의 송출은 응답기가 `not_token` 으로 거부한다. 루프백 시험 송출의 경로도 4C 로 풀리는 등록 키의 토큰 꼴이어야 한다 — 계획 c5 시험 송출 경로를 이에 맞춘다.
   - 포크의 action 이름 체계는 코드 주석(`request.go:13`)이 가리킨다. **확인됨(M15, 2026-10-23 포크
@@ -426,7 +440,15 @@ compose 드리프트(M15 c4 — 2cd4ee4b · 45 · 46 은 77e3f537). 43 은 옛 �
 ### D12. prod MediaMTX 에 SRT 경로 잠금이 없다 (D6 의 필수 전제)
 
 - **계획이 가정한 것**: c6 변경표(계획 860~877행)와 계획 전체에 `srtPublishPassphrase` · `srtReadPassphrase` · `overridePublisher` 가 **0건**이다. prod 의 송출 통제는 M15 에서 응답기로 바꾸고, 읽기는 CDN 모드 Bearer 로만이라고 적혀 있다.
-- **실물**: dev 템플릿은 `pathDefaults` 에 둘을 둔다 — `srtPublishPassphrase`(응답기의 2xx 에 값이 없으면 이 값으로 판정돼 거부 = 빈 응답 방어), `srtReadPassphrase`(SRT 읽기 잠금 — 경로 이름이 공개 토큰이라 막지 않으면 원 스트림을 무암호로 읽는다), `overridePublisher: no`(passphrase 를 아는 둘째 SRT 가 송출을 탈취하고 DVR 을 리셋하는 것을 막는다). 값은 렌더마다 새로 만들고 저장소 · `.env` · 로그 어디에도 없다(`mediamtx.demo.yml.tmpl:56-61` · `render.sh`). prod 바탕 `infra/compose/mediamtx.yml:90-95` 에는 이 셋이 없다. 응답기는 SRT `read` 를 200 으로 답하므로(`handler.go` `read`) SRT 읽기의 방어는 **이 잠금뿐**이다. 포크 `v1.21.1-pokeclip.2` 의 SRT 읽기 경로는 값이 비면 통과시킨다고 검수가 확인했다(`internal/servers/srt/conn.go` — 이 조사에서 직접 열지 않았다).
+- **실물**: dev 템플릿은 `pathDefaults` 에 둘을 둔다 — `srtPublishPassphrase`(응답기의 2xx 에 값이
+  없으면 이 값으로 판정돼 거부 = 빈 응답 방어), `srtReadPassphrase`(SRT 읽기 잠금 — 경로 이름이 공개 토큰이라 막지
+  않으면 원 스트림을 무암호로 읽는다), `overridePublisher: no`(passphrase 를 아는 둘째 SRT 가 송출을
+  탈취하고 DVR 을 리셋하는 것을 막는다). 값은 렌더마다 새로 만들고 저장소 · `.env` · 로그 어디에도
+  없다(`mediamtx.demo.yml.tmpl:56-61` · `render.sh`). prod 바탕
+  `infra/compose/mediamtx.yml:90-95` 에는 이 셋이 없다. 응답기는 SRT `read` 를 200 으로
+  답하므로(`handler.go` `read`) SRT 읽기의 방어는 **이 잠금뿐**이다. 포크 `v1.21.1-pokeclip.2` 의
+  SRT 읽기 경로는 값이 비면 통과시킨다고 검수가 확인했다(`internal/servers/srt/conn.go` — 이 조사에서 직접 열지
+  않았다).
 - **실패 시나리오(정적 분석)**: O8a 로 SRT 를 공개한 뒤 공개 토큰을 아는 사용자가 SRT read 로 접속하면 CDN 접근 통제를 거치지 않고 원 스트림을 읽는다. 잠금이 없고 `overridePublisher` 기본값(허용)이면 송출 탈취 · DVR 리셋도 가능하다(passphrase 를 알아야 하므로 D2 의 오라클과 연결된다).
 - **선택지**:
   - (가) M15 c2 가 `mediamtx.yml.tmpl` 에 세 줄을 옮긴다: `pathDefaults` 의 `srtPublishPassphrase` · `srtReadPassphrase`(값은 시작 스크립트가 부팅마다 무작위로 만든 tmpfs 렌더 — 고정 토큰 치환이 하나 더 늘어 M2 c4 의 「토큰 1개 치환 · 잔여 0」 단언도 갱신) + `overridePublisher: no`. `pathDefaults` 가 `all_others` 에 상속되는지는 바탕 설정의 주석이 확인했다고 적고 있다(`infra/compose/mediamtx.yml:99`). 장: dev 와 같은 원리, 코드 변경 0. 단: 렌더 · 시험이 늘어난다.
@@ -487,8 +509,9 @@ kty 결정이 아닌 **확인 · 실측 항목**(결정 없이 M15 착수 때 �
   이 도는지(D1 · D11 의 7). — **publish · api 닫힘**: c1 계약 시험 층 B C9(실물 경유 송출 ·
   `caller_auth=basic` · `auth_channel=internal-token`) · C12(사이드카 자격 200 · 무자격
   401). **cut 도 닫힘**: C18(실물 cut — 출력의 `"kicked":1` · 그 연결이 사라짐 · 같은 토큰 재송출 거부,
-  M15 c5 — 45616a46 에서 GREEN). C18 은 cut 의 종료 코드 · `ingestauth_cut_completed` 를
-  따로 단언하지 않는다(PR 단계 보강).
+  M15 c5 — 45616a46 에서 GREEN). 306f7a3e 부터 C18 은 cut 의 종료 0 ·
+  `ingestauth_cut_completed` · `"kicked":1` · 조회 성공한 소멸(경로 상태 `idle` — `error` 는
+  조회 실패)까지 단언한다.
 - 응답기 인증 포트(8080 대) · 고정 healthz 8081 이 prod 포트 값과 겹치지 않는지(D1). — **이관**: 렌더 시험이
   시험 값으로 보고, prod 값은 M9 모듈 단언(`infra/media-host/README.md` 「후속」 M9 행).
 - `docker compose restart ingest-auth` 가 시작 스크립트의 전체 종료를 건드리지 않는지(D8). — **닫힘**:
