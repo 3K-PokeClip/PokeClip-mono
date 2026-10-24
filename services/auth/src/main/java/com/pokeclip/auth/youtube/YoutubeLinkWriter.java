@@ -28,10 +28,11 @@ public class YoutubeLinkWriter {
     private final UserRepository users;
     private final ActiveUserGuard activeUserGuard;
     private final YoutubeCleanupExecutor cleanup;
+    private final YoutubeTokenDiscarder discarder;
 
     /**
      * 회원 행 락 → 채널 중복 확인 → (살아있는 내 연동 폐기) → secrets put 2 → INSERT. 한 커밋.
-     * 커밋 뒤: 옛 secrets 삭제 → 로그. <b>구글 revoke는 어느 경로에도 없다</b>(아래 {@link #closeAlive} 참고).
+     * 커밋 뒤: 옛 secrets 삭제 → 로그. <b>재연동은 구글 revoke를 안 보낸다</b>(새 토큰까지 죽는다, 아래 {@link #closeAlive} 참고).
      *
      * <p>채널 중복은 DB 부분 유니크(uq_youtube_links_alive_channel)가 최종 방어다 — 앱 락은
      * 인스턴스가 여럿이면 성립하지 않는다. 그런데도 앞서 조회로 한 번 거르는 이유는 로그 위생이다:
@@ -60,7 +61,7 @@ public class YoutubeLinkWriter {
                     throw new YoutubeLinkException(YoutubeLinkFailure.CHANNEL_ALREADY_LINKED, "다른 계정에 묶인 채널이다");
                 });
         // 재연동 — 옛 행을 닫되 옛 토큰은 구글에 그대로 둔다(revokeOldToken=false).
-        closeAlive(userId, now, "auth.youtube.link.relinked");
+        closeAlive(userId, now, "auth.youtube.link.relinked", false);
         String accessRef = "youtube-access:" + UUID.randomUUID();
         String refreshRef = "youtube-refresh:" + UUID.randomUUID();
         secretStore.put(accessRef, tokens.accessToken());
@@ -85,46 +86,70 @@ public class YoutubeLinkWriter {
     public void revoke(Long userId, Instant now) {
         users.findByIdForUpdate(userId)
                 .orElseThrow(() -> new IllegalStateException("사용자가 없다 userId=" + userId));
-        closeAlive(userId, now, "auth.youtube.link.unlinked");
+        closeAlive(userId, now, "auth.youtube.link.unlinked", true);
     }
 
     /**
-     * 살아있는 내 연동을 닫고, 커밋 뒤에 secrets 삭제 → 로그. 락 뒤에 부른다.
+     * 살아있는 내 연동을 닫고, 커밋 뒤에 (해제면 구글 revoke →) secrets 삭제 → 로그. 락 뒤에 부른다.
      *
-     * <p>🔴 <b>구글에 revoke를 보내지 않는다 — 해제(DELETE)도 마찬가지다.</b> 「해제인데 구글에서 안 지운다고?」가
-     * 당연한 물음이라 근거를 적어 둔다(2026-08-24 사용자 결정, 봇 3판 P1):
+     * <p>🔴 <b>해제(사용자 {@code DELETE} · 탈퇴)는 구글에 revoke를 보낸다</b>(2026-10-24 사용자 재결정, POK-423 · ADR-116,
+     * 유튜브 개발자 정책 III.D.2.c). 그 전(2026-08-24 · ADR-052)에는 안 보냈다. 이유는 아직 참이고 대가로 받아들였다:
      *
      * <ul>
-     *   <li><b>ⓐ 구글 revoke는 계정 단위다.</b> 「그 토큰 쌍」이 아니라 그 <b>구글 계정</b>이 우리 앱에 준 동의
-     *       전부를 죽인다(실측 A ⑥). 그래서 같은 채널을 방금 연동한 <b>다른 회원</b>(또는 같은 사람의 새 PokeClip 계정)의
-     *       grant까지 함께 죽는다 — 우리가 만들지도 않았고 우리 것도 아닌 토큰이다.</li>
-     *   <li><b>ⓑ 조건으로는 못 막는다.</b> 가드가 「이 채널을 남이 쓰나」를 확인한 <b>뒤</b> revoke가 나가기 <b>전</b>
-     *       사이에 다른 회원이 커밋하면 그만이다(재현함). 그 회원은 <b>다른 users 행</b>을 잠그므로 우리 락은
-     *       직렬화하지 못한다. 채널 단위 직렬화로 창을 닫으려면 <b>revoke를 락 안에 넣어야</b> 하는데,
-     *       그것은 트랜잭션 안에서 외부 HTTP를 기다리는 것 — 이 PR이 두 번 피한 풀 고갈 패턴이다.</li>
-     *   <li><b>ⓒ 대신 참조를 지운다.</b> secrets에서 원문이 사라지므로 <b>우리는 그 토큰을 다시 못 쓴다</b>.
-     *       access는 1시간이면 죽고, 사용자는 구글 계정 화면에서 직접 지울 수 있다
-     *       (<a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a> — 웹이 그 링크를 안내한다).</li>
+     *   <li><b>ⓐ 구글 revoke는 계정 단위다.</b> 「그 토큰 쌍」이 아니라 그 <b>구글 계정</b>이 우리 앱에 준 동의 전부를 죽인다
+     *       (실측 A ⑥). 해제한 회원은 다음 로그인 · 재연동 때 구글 동의 화면을 한 번 더 본다. 같은 구글 계정으로 다른 채널을
+     *       연동한 <b>다른 회원</b>의 grant도 함께 죽는다(다음 갱신에서 BROKEN, 다시 연동해야 한다).</li>
+     *   <li><b>ⓑ 해제 직후 같은 회원이 다시 연동하면</b> 밀린 revoke가 새 grant를 죽인다. 그래서 정리 잡이 revoke 직전에
+     *       「그 회원의 살아 있는 연동이 생겼나」를 보고 생겼으면 안 보낸다({@link #revokeThenCleanUp}). 확인과 발사 사이의 좁은
+     *       창은 남는다(락 안에서 외부 HTTP를 기다리지 않으려고 받아들였다).</li>
      * </ul>
      *
-     * <p><b>revoke가 남는 자리는 갱신 거부 하나뿐이다</b>({@code YoutubeTokenRefresher.reject}) —
-     * 그 토큰은 이미 {@code invalid_grant}로 죽어 있어 아무의 grant도 끊지 못한다.
+     * <p><b>재연동은 안 보낸다</b>: 새 동의가 옛 grant를 대체하고, 보내면 방금 저장한 새 토큰이 죽는다.
      *
      * <p>정리는 afterCommit에서 <b>제출만</b> 하고 전용 스레드({@link YoutubeCleanupExecutor})가 돈다 —
      * afterCommit 안에서 REQUIRES_NEW delete를 직접 부르면 원 커넥션을 쥔 채 두 번째를 요구해 풀 데드락이 된다.
+     * revoke 실패(5xx · 시간 초과)는 갱신 거부 자리와 같이 best-effort다: WARN {@code orphan_token}을 남기고 다시 보내지 않는다
+     * (다시 보내려면 토큰 원문을 남겨야 하는데 처리방침은 해제하면 바로 지운다. 사용자는 구글 계정 설정에서 직접 철회할 수 있다).
      */
-    private void closeAlive(Long userId, Instant now, String event) {
+    private void closeAlive(Long userId, Instant now, String event, boolean revokeAtGoogle) {
         links.findByUserIdAndRevokedAtIsNull(userId).ifPresent(old -> {
             links.revokeAlive(userId, now, RevokeReason.USER_UNLINKED);
             String accessRef = old.getAccessTokenRef();
             String refreshRef = old.getRefreshTokenRef();
-            cleanup.afterCommit(userId, () -> cleanupOld(userId, accessRef, refreshRef, event));
+            cleanup.afterCommit(userId, revokeAtGoogle
+                    ? () -> revokeThenCleanUp(userId, accessRef, refreshRef, event)
+                    : () -> cleanupOld(userId, accessRef, refreshRef, event));
         });
     }
 
     /**
+     * 해제의 정리 잡(전용 스레드). refresh 원문을 읽어 두고 <b>secrets를 먼저 지운 뒤</b> 구글에 revoke를 보낸다. 순서가 뒤라야 종료
+     * 유예(유튜브 4초)에 잘려도 남는 것이 보내지 못한 revoke뿐이다(비밀값은 이미 지웠다). 🔴 그 사이 같은 회원이 다시 연동했으면 revoke를
+     * 건너뛴다: 계정 단위라 새 grant까지 죽는다(같은 구글 계정일 수 있다).
+     */
+    void revokeThenCleanUp(Long userId, String accessRef, String refreshRef, String event) {
+        String refresh = null;
+        try {
+            refresh = secretStore.get(refreshRef).orElse(null);
+        } catch (RuntimeException e) {
+            log.warn("auth.youtube.link.orphan_token userId={} causeType={}", userId, e.getClass().getSimpleName());
+        }
+        try {
+            cleanupOld(userId, accessRef, refreshRef, event);
+        } finally {
+            if (refresh != null) {
+                if (links.findByUserIdAndRevokedAtIsNull(userId).isPresent()) {
+                    log.info("auth.youtube.link.unlink_revoke_skipped_relinked userId={}", userId);
+                } else {
+                    discarder.discard(userId, refresh);
+                }
+            }
+        }
+    }
+
+    /**
      * 정리 잡 본문(전용 스레드). secrets 두 개를 지우고 「정리까지 끝났다」를 로그로 남긴다.
-     * <b>구글 호출은 없다</b> — 왜 없는지는 {@link #closeAlive} javadoc에 있다.
+     * 구글 호출은 없다(해제는 {@link #revokeThenCleanUp}이 먼저 revoke를 보내고 이것을 부른다).
      * package-private은 단위 테스트용.
      */
     void cleanupOld(Long userId, String accessRef, String refreshRef, String event) {

@@ -46,7 +46,7 @@ export function WithdrawDialog({
   open: boolean;
   name: string;
   facts: typeof WITHDRAW_FACTS;
-  /** 탈퇴 왕복 중 — 확정을 두 번 못 누르게 잠근다 */
+  /** 탈퇴 왕복 중 — 확정을 두 번 못 누르게 잠그고, 결과가 올 때까지 닫히지 않는다 */
   busy?: boolean;
   onCancel: () => void;
   onConfirm: () => void;
@@ -54,7 +54,9 @@ export function WithdrawDialog({
   const bodyId = useId();
 
   return (
-    <Dialog open={open} onOpenChange={(next) => !next && onCancel()}>
+    // 탈퇴 요청이 나간 뒤엔 Esc·바깥 클릭으로도 닫지 않는다(POK-446): 결과 전에 모달만 사라지면
+    // 취소된 줄 안다(ConfirmDialog와 같다)
+    <Dialog open={open} onOpenChange={(next) => !next && !busy && onCancel()}>
       {/* 판단 재료는 각주가 아니라 결과 목록이다 — describedby를 본문으로 돌린다 */}
       <Dialog.Content className={styles.withdrawDialog} aria-describedby={bodyId}>
         <div className={styles.dialogHead}>
@@ -123,13 +125,14 @@ export function WithdrawDialog({
           </p>
         </div>
 
-        {/* 1p는 취소 1 : 탈퇴 2 폭이고 확인이 solid다 — danger 변형이 아니다 */}
+        {/* 1p는 취소 1 : 탈퇴 2 폭이고 확인이 solid다 — danger 변형이 아니다.
+            처리 중엔 누른 탈퇴 버튼만 돌고(라벨은 그대로) 취소도 잠근다(POK-446) */}
         <div className={styles.dialogActions}>
-          <Button variant="outline" size="md" fullWidth onClick={onCancel}>
+          <Button variant="outline" size="md" fullWidth disabled={busy} onClick={onCancel}>
             취소
           </Button>
-          <Button variant="solid" size="md" fullWidth disabled={busy} onClick={onConfirm}>
-            {busy ? '탈퇴 처리 중…' : '탈퇴하기'}
+          <Button variant="solid" size="md" fullWidth loading={busy} onClick={onConfirm}>
+            탈퇴하기
           </Button>
         </div>
       </Dialog.Content>

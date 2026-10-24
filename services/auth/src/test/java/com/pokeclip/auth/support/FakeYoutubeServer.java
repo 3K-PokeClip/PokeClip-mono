@@ -44,6 +44,12 @@ public final class FakeYoutubeServer implements AutoCloseable {
     private final AtomicInteger tokenCounter = new AtomicInteger();
     private final AtomicInteger revokeCounter = new AtomicInteger();
     private final AtomicInteger channelsCounter = new AtomicInteger();
+    private final AtomicInteger videosCounter = new AtomicInteger();
+    /** videos.list(POK-423)가 「있다」고 답할 영상 번호 → 그 영상의 채널. 물은 것 중 여기 있는 것만 돌려준다. */
+    private final Map<String, String> existingVideos = new java.util.concurrent.ConcurrentHashMap<>();
+    private final AtomicReference<Response> videosResponse = new AtomicReference<>();
+    private final AtomicReference<String> lastVideosQuery = new AtomicReference<>();
+    private final AtomicReference<String> lastVideosBearer = new AtomicReference<>();
     private final AtomicReference<Response> tokenResponse = new AtomicReference<>();
     private final AtomicReference<Response> revokeResponse = new AtomicReference<>();
     private final AtomicReference<Response> channelsResponse = new AtomicReference<>();
@@ -78,6 +84,7 @@ public final class FakeYoutubeServer implements AutoCloseable {
             server.createContext("/token", fake::handleToken);
             server.createContext("/revoke", fake::handleRevoke);
             server.createContext("/youtube/v3/channels", fake::handleChannels);
+            server.createContext("/youtube/v3/videos", fake::handleVideos);
             server.setExecutor(java.util.concurrent.Executors.newCachedThreadPool());
             server.start();
             return fake;
@@ -106,6 +113,11 @@ public final class FakeYoutubeServer implements AutoCloseable {
         tokenCounter.set(0);
         revokeCounter.set(0);
         channelsCounter.set(0);
+        videosCounter.set(0);
+        existingVideos.clear();
+        videosResponse.set(null);
+        lastVideosQuery.set(null);
+        lastVideosBearer.set(null);
         tokenResponse.set(null);
         revokeResponse.set(new Response(200, "{}"));
         channelsResponse.set(new Response(200,
@@ -180,6 +192,30 @@ public final class FakeYoutubeServer implements AutoCloseable {
         return lastTokenContentType.get();
     }
 
+    /** videos.list가 「있다」고 답할 영상 번호를 더한다(POK-423). 주인 채널은 {@code channelId}다. */
+    public void videosExist(String channelId, String... ids) {
+        for (String id : ids) {
+            existingVideos.put(id, channelId);
+        }
+    }
+
+    /** videos.list가 다음 호출부터 이 응답을 준다. 기본(물은 것 ∩ 있는 것)으로 돌리려면 reset(). */
+    public void videosResponds(int status, String body) {
+        videosResponse.set(new Response(status, body));
+    }
+
+    public int videosCalls() {
+        return videosCounter.get();
+    }
+
+    public String lastVideosQuery() {
+        return lastVideosQuery.get();
+    }
+
+    public String lastVideosBearer() {
+        return lastVideosBearer.get();
+    }
+
     /** channels가 마지막으로 받은 Authorization 헤더 값. */
     public String lastChannelsBearer() {
         return lastChannelsBearer.get();
@@ -226,6 +262,32 @@ public final class FakeYoutubeServer implements AutoCloseable {
         lastChannelsQuery.set(exchange.getRequestURI().getQuery());
         exchange.getRequestBody().readAllBytes();
         respond(exchange, channelsResponse.get());
+    }
+
+    private void handleVideos(HttpExchange exchange) throws IOException {
+        videosCounter.incrementAndGet();
+        lastVideosBearer.set(exchange.getRequestHeaders().getFirst("Authorization"));
+        String query = exchange.getRequestURI().getQuery();
+        lastVideosQuery.set(query);
+        exchange.getRequestBody().readAllBytes();
+        Response fixed = videosResponse.get();
+        if (fixed != null) {
+            respond(exchange, fixed);
+            return;
+        }
+        StringBuilder items = new StringBuilder();
+        for (String pair : query == null ? new String[0] : query.split("&")) {
+            if (!pair.startsWith("id=")) {
+                continue;
+            }
+            for (String id : URLDecoder.decode(pair.substring(3), UTF_8).split(",")) {
+                if (existingVideos.containsKey(id)) {
+                    items.append(items.isEmpty() ? "" : ",").append("{\"id\":\"").append(id)
+                            .append("\",\"snippet\":{\"channelId\":\"").append(existingVideos.get(id)).append("\"}}");
+                }
+            }
+        }
+        respond(exchange, new Response(200, "{\"kind\":\"youtube#videoListResponse\",\"items\":[" + items + "]}"));
     }
 
     /** application/x-www-form-urlencoded 본문을 평탄한 맵으로. 같은 키가 두 번 오면 마지막 값이 남는다. */

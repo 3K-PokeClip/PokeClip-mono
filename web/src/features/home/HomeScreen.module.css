@@ -456,6 +456,42 @@
   color: var(--pc-color-text-muted);
 }
 
+/* 방송 정보를 받기 전 배지의 점(POK-449). 받아 오는 중이라는 뜻으로 깜빡인다 */
+.connectingDot {
+  width: calc(6 * var(--pc-u));
+  height: calc(6 * var(--pc-u));
+  border-radius: calc(99 * var(--pc-u));
+  background: #fff;
+  animation: pc-home-live-pulse 1.2s ease-in-out infinite;
+}
+
+/* 움직임 줄이기는 이 규칙 뒤에 둬야 이긴다: 앞쪽 묶음에 넣으면 같은 세기라 뒤의 animation이 덮었다(PR #381 codex) */
+@media (prefers-reduced-motion: reduce) {
+  .connectingDot {
+    animation: none;
+  }
+}
+
+/* 시청자 필 안 막대 — 영상 위 어두운 필이라 테마 표면색이 묻힌다. 필처럼 테마 불변 raw 값 */
+.viewerPill .pillBar {
+  display: block;
+  margin: calc(2 * var(--pc-u)) 0;
+  background: rgb(255 255 255 / 0.28);
+}
+
+.liveTitleBars {
+  display: flex;
+  flex-direction: column;
+  gap: calc(8 * var(--pc-u));
+  margin-top: calc(12 * var(--pc-u));
+}
+
+.liveInfoNote {
+  margin: calc(10 * var(--pc-u)) 0 0;
+  font-size: calc(12.5 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}
+
 .liveTitle {
   font-size: calc(18 * var(--pc-u));
   font-weight: 750;

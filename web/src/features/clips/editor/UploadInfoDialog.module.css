@@ -256,6 +256,24 @@
   );
 }
 
+/* 장면을 뽑는 중(POK-444): 자리 전체를 스켈레톤으로 덮고 문장은 그 위에 줄무늬 없이 선다. 줄무늬(.shortsEmpty)는
+   못 뽑았거나 고를 그림이 없는 정적 자리다. DS Skeleton의 자리(position: relative)를 이기려 부모를 붙여 쓴다 */
+.shorts > .shortsSkeleton {
+  position: absolute;
+  inset: 0;
+}
+
+.shortsLoading {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: var(--pc-space-4);
+  text-align: center;
+  font-size: var(--pc-font-size-sm);
+  color: var(--pc-color-text-secondary);
+}
+
 .shortsBadge {
   position: absolute;
   top: var(--pc-space-2);
@@ -395,6 +413,12 @@
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+
+/* 장면을 뽑는 중인 타일(POK-444): 타일 전체를 덮고 시각 · 이름표는 그 위에 남는다 */
+.pick > .pickSkeleton {
+  position: absolute;
+  inset: 0;
 }
 
 .pickTime {

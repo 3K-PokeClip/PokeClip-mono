@@ -1,4 +1,5 @@
 import { Camera } from 'lucide-react';
+import { Skeleton } from '@/ui';
 import styles from './StudioScreen.module.css';
 
 // 영상 줄 앞 썸네일 칸(POK-389): 쇼츠 서비스들의 「커버」 칸. 고른 장면을 작은 그림으로 보인다.
@@ -9,6 +10,7 @@ export function ThumbnailTile({
   seconds,
   label,
   frameUrl,
+  frameLoading = false,
   onSeek,
 }: {
   /** 고른 장면(소스 축 초). 없으면 칸을 그리지 않는다 */
@@ -17,6 +19,11 @@ export function ThumbnailTile({
   label: string;
   /** 고른 장면의 그림. 아직이거나 못 뽑았으면(목업·녹화를 아직 못 받음) null이고 그림 없이 칸만 보인다 */
   frameUrl: string | null;
+  /**
+   * 그림을 뽑는 중이다(POK-444). 그동안 칸을 스켈레톤으로 채운다. 못 뽑았거나 재료가 없으면(목업 · 녹화 없음) false —
+   * 빈 칸 그대로다(로더가 아니다)
+   */
+  frameLoading?: boolean;
   onSeek: (seconds: number) => void;
 }) {
   if (seconds === null) return null;
@@ -28,9 +35,13 @@ export function ThumbnailTile({
       title={`썸네일 장면 ${label}`}
       onClick={() => onSeek(seconds)}
     >
-      {/* 뽑은 장면(data:)이라 next/image가 다룰 대상이 아니다 */}
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      {frameUrl !== null ? <img src={frameUrl} alt="" className={styles.thumbnailCanvas} /> : null}
+      {frameUrl !== null ? (
+        // 뽑은 장면(data:)이라 next/image가 다룰 대상이 아니다
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={frameUrl} alt="" className={styles.thumbnailCanvas} />
+      ) : frameLoading ? (
+        <Skeleton height="100%" radius="none" data-frame-loading />
+      ) : null}
       <Camera size={10} className={styles.thumbnailBadge} aria-hidden />
     </button>
   );

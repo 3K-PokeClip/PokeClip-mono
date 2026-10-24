@@ -22,16 +22,16 @@ export interface LiveStreamSelection {
 export const LIVE_RESELECT_MS = 10_000;
 
 export function useLiveStreamSelection(): LiveStreamSelection {
-  const [selection, setSelection] = useState<LiveStreamSelection>({
-    streamId: '',
-    resolved: false,
-  });
   const { status } = useLiveData();
   // 주소가 못 박은 방송. Next 값으로 읽는다: 같은 화면에서 ?stream=만 바뀌면(사이드바 「라이브 대시보드」, 뒤로·앞으로) 화면이
   // 다시 서지 않아, 처음 한 번 주소창에서 읽던 값이 남았다(POK-254)
   const pathname = usePathname();
   const streamParam = useSearchParams().get('stream');
   const pinned = vodStreamIdFromPathname(pathname ?? '') ?? (streamParam || null);
+  // 주소가 못 박았으면 처음부터 그 방송이다: 효과를 한 번 기다리면 그동안 화면이 스켈레톤을 한 번 더 그린다(지난 방송 상세, POK-445)
+  const [selection, setSelection] = useState<LiveStreamSelection>(() =>
+    pinned !== null ? { streamId: pinned, resolved: true } : { streamId: '', resolved: false },
+  );
   // 고른 채널(POK-390): 그 채널에서 방송 중인 것을 묻는다
   const streamerId = useChannelStreamerId();
 

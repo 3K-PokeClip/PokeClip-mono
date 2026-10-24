@@ -237,7 +237,8 @@ export function MultitrackTimeline({
   };
 
   return (
-    <section className={styles.timeline} aria-label="타임라인">
+    // 다른 편집 대상을 읽는 동안(POK-444)은 보이기만 한다 — 편집기 본문과 같다
+    <section className={styles.timeline} aria-label="타임라인" inert={state.reloading}>
       {!state.timelineCollapsed ? (
         <button
           type="button"
@@ -373,6 +374,11 @@ export function MultitrackTimeline({
                           state.range.startSeconds,
                       )}
                       frameUrl={thumbnailMs === null ? null : filmstrip.frames.frameOf(thumbnailMs)}
+                      frameLoading={
+                        thumbnailMs !== null &&
+                        filmstrip.frames.frameOf(thumbnailMs) === null &&
+                        !filmstrip.frames.failed(thumbnailMs)
+                      }
                       onSeek={state.seekTo}
                     />
                   </span>
@@ -405,6 +411,7 @@ export function MultitrackTimeline({
                             : null
                       }
                       view={state.view}
+                      levelsLoading={state.trackPreviewStatus === 'loading'}
                     />
                   );
                 })}

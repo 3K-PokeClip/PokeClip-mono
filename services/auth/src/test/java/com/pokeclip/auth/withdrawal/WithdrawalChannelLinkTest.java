@@ -211,9 +211,9 @@ class WithdrawalChannelLinkTest extends WithdrawalTestSupport {
         assertThat(resolveBody(youtubeResolve(user)))
                 .as("🔴 탈퇴자의 유튜브 토큰이 아직 업로드 워커에 나간다")
                 .contains("\"valid\":false").contains("UNLINKED").doesNotContain("yt-at-old");
-        assertThat(YOUTUBE.revokeCalls())
-                .as("구글에 철회를 보내면 그 계정이 우리 앱에 준 동의 전부가 죽는다 — 남의 연동까지 끊긴다")
-                .isZero();
+        assertThat(YOUTUBE.revokedTokens())
+                .as("탈퇴도 해제와 같이 구글에 revoke를 보낸다(POK-423, 유튜브 정책 III.D.2.c)")
+                .containsExactly("yt-rt-old");
     }
 
     /**

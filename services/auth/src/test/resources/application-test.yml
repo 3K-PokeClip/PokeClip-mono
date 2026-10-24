@@ -93,6 +93,13 @@ pokeclip:
       enabled: false
       interval: PT1H
       staleness: PT24H
+    retention:
+      # 컨텍스트마다 바퀴가 돌면 다른 시험이 심은 행을 지운다. YoutubeRetentionJobTest가 한 바퀴를 손으로 부른다.
+      run: false
+      interval: PT1H
+      unlinked-grace: P7D
+      broken-grace: P30D
+      channel-refresh-after: P30D
   soop:
     app:
       client-id: test-soop-client-id
