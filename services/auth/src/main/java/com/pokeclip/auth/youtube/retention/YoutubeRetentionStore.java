@@ -43,8 +43,10 @@ public class YoutubeRetentionStore {
     }
 
     /**
-     * 닫힌 줄 하나의 채널 번호 · 이름을 지운다. 그 회원의 살아 있는 연동이 <b>같은 채널이 아니면</b> clip에 그 채널의 영상 번호를
-     * 지우라고 장부에 적는다. 같은 채널이면(기한 안에 다시 연동했다) 영상 번호는 살아 있는 연동의 것이라 남긴다.
+     * 닫힌 줄 하나의 채널 번호 · 이름을 지운다. 그 회원에게 <b>같은 채널의 더 새 줄</b>(살아 있거나, 이 줄보다 늦게 닫힌 것)이 없을 때만
+     * clip에 그 채널의 영상 번호를 지우라고 장부에 적는다. 살아 있으면(기한 안에 다시 연동했다) 영상 번호는 그 연동의 것이라 남기고,
+     * 더 늦게 닫힌 줄이 있으면 그 줄의 기한이 아직 남았을 수 있어 그 줄이 기한에 적는다: 옛 줄이 새 줄의 7일을 깎으면 안 된다
+     * (PR #375 codex. 0일 해제 → 1일 재연동 → 6일 해제면 7일째에 6일 뒤 올린 영상까지 지우던 자리).
      *
      * <p>줄을 잠그고 채널이 아직 남았는지 다시 본다: 같은 줄을 두 인스턴스가 집어도 한 번만 한다. 장부와 지우기가 한 트랜잭션이라
      * 「채널은 지웠는데 영상 번호 지우기를 못 적었다」가 없다.
@@ -62,9 +64,11 @@ public class YoutubeRetentionStore {
         }
         long userId = (Long) rows.getFirst()[0];
         String channelId = (String) rows.getFirst()[1];
-        List<String> alive = jdbc.queryForList(
-                "SELECT channel_id FROM youtube_channel_links WHERE user_id = ? AND revoked_at IS NULL", String.class, userId);
-        boolean forget = alive.isEmpty() || !channelId.equals(alive.getFirst());
+        boolean newer = Boolean.TRUE.equals(jdbc.queryForObject("""
+                SELECT EXISTS (SELECT 1 FROM youtube_channel_links n, youtube_channel_links me
+                                WHERE me.id = ? AND n.user_id = me.user_id AND n.channel_id = me.channel_id AND n.id <> me.id
+                                  AND (n.revoked_at IS NULL OR n.revoked_at > me.revoked_at))""", Boolean.class, linkId));
+        boolean forget = !newer;
         if (forget) {
             Timestamp at = Timestamp.from(now);
             // 같은 채널 줄이 아직 안 보내졌으면 기준 시각만 늦춘다. 버리면 그 사이(같은 채널로 다시 연동했다 다시 해제한 동안) 주문한

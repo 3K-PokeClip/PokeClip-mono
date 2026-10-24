@@ -155,6 +155,30 @@ class YoutubeRetentionJobTest extends YoutubeLinkTestSupport {
         assertThat(남은_채널(user)).containsExactlyInAnyOrder("null:null", 새 + ":채널");
     }
 
+    /**
+     * 0일 해제 → 1일 같은 채널 재연동 → 6일 해제면, 7일째에 옛 줄이 기한이어도 새 줄의 7일이 남았다. 옛 줄은 채널만 비우고 장부는 새 줄이
+     * 기한에 적는다(옛 줄이 새 줄의 기한을 깎으면 재연동 뒤 올린 영상까지 지운다, PR #375 codex)
+     */
+    @Test
+    void 같은_채널의_더_늦게_닫힌_줄이_있으면_그_줄의_기한까지_미룬다() {
+        User user = newUser();
+        String 채널 = 연동(user, "UC-twice-close-");
+        닫는다(user, "USER_UNLINKED", Duration.ofDays(8));
+        writer.create(user.getId(), new YoutubeChannel(채널, "채널"), new YoutubeTokens("at-2", "rt-2", Duration.ofHours(1), null));
+        닫는다(user, "USER_UNLINKED", Duration.ofDays(2));
+
+        job.runOnce(Instant.now());
+
+        assertThat(남은_채널(user)).containsExactlyInAnyOrder("null:null", 채널 + ":채널");
+        assertThat(received).as("새 줄의 기한이 남았다").isEmpty();
+        assertThat(장부()).isZero();
+
+        job.runOnce(Instant.now().plus(Duration.ofDays(6)));
+
+        assertThat(남은_채널(user)).containsExactly("null:null", "null:null");
+        assertThat(received).singleElement().satisfies(r -> assertThat(r).contains("\"channelId\":\"" + 채널 + "\""));
+    }
+
     /** 구글 쪽 철회 · 갱신 불가(REFRESH_REJECTED)는 30일이다 */
     @Test
     void 끊김은_30일이_지나야_지운다() {
