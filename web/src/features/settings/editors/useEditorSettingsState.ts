@@ -140,6 +140,7 @@ export function useEditorSettingsState(): EditorSettingsViewState {
       setCancelingIds((prev) => new Set(prev).add(invitation.id));
     },
     onSuccess: () => {
+      track('editor_invitation_canceled', {}); // 상대 이메일은 싣지 않는다 (POK-357)
       toast({
         tone: 'success',
         title: '초대를 취소했어요',

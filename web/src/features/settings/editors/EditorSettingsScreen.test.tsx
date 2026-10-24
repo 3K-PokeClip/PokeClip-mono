@@ -397,6 +397,8 @@ describe('EditorSettingsScreen — 초대 취소', () => {
           url === '/api/editor-invitations/11' && (init as RequestInit)?.method === 'DELETE',
       ),
     ).toBe(true);
+    // 취소 성공 뒤 한 번 센다 — 상대 이메일은 싣지 않는다 (POK-357)
+    expect(track.mock.calls).toEqual([['editor_invitation_canceled', {}]]);
   });
 });
 

@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { track } from '@/lib/analytics';
 import { Button, Input, useToast } from '@/ui';
 import {
   TRACK_COUNT,
@@ -40,6 +41,10 @@ export function AudioTrackNamesCard() {
     saveMyTrackLabels(labels.map((label) => (label && label.trim() ? label : null)))
       .then((saved) => {
         setLabels(saved);
+        // 이름은 싣지 않는다 — 이름이 있는 칸 수(0~6)만 (POK-357)
+        track('audio_track_names_saved', {
+          named_count: saved.filter((label) => label !== null).length,
+        });
         toast({ tone: 'success', title: '트랙 이름을 저장했어요' });
       })
       .catch((e: unknown) => {

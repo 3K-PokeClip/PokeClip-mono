@@ -22,6 +22,7 @@ import { LiveStatsPanel, type TimelineCard } from './LiveStatsPanel';
 import { StreamInfoBar } from './StreamInfoBar';
 import { notFound, usePathname, useSearchParams } from 'next/navigation';
 import { ensureLiveAccess, takePlaybackDrop } from '@/api/playbackAccess';
+import { track } from '@/lib/analytics';
 import { useToast } from '@/ui';
 import { vodStreamIdFromPathname } from '@/features/broadcast/streamSelection';
 import { recordingSearchFrom } from '@/features/broadcast/endedWindow';
@@ -637,9 +638,11 @@ function LiveDashboard() {
   }, [highlights, linkedCardId, seekTo]);
 
   const handleSeek = useCallback(
-    (timestamp: string) => {
+    (timestamp: string, from: 'card' | 'stats_pin') => {
       const seconds = parseClockLabel(timestamp);
       if (seconds === null) return;
+      // 사람이 누른 이동만 센다(주소의 카드로 옮기는 것은 위 효과) — 카드 번호·시각은 싣지 않는다 (POK-357)
+      track('highlight_card_seeked', { from, mode: live ? 'live' : 'past' });
       linkedDoneRef.current = linkedCardId;
       // 사람이 누른 것만 알린다. 주소의 카드로 옮길 때는 녹화를 찾는 중일 뿐이라 말하지 않는다(리뷰).
       // 영상 없이 채팅만 그 시점으로 가는 것은 지난 방송뿐이다: 라이브 채팅은 옮긴 영상의 시각을 따르므로(POK-326) 영상이 못 옮기면
@@ -654,7 +657,17 @@ function LiveDashboard() {
           }`,
         });
     },
-    [linkedCardId, seekTo, toast, chat.followsPlayhead, recordingMissing],
+    [linkedCardId, seekTo, toast, chat.followsPlayhead, recordingMissing, live],
+  );
+  /** 하이라이트 카드 목록에서 누른 이동 */
+  const handleCardSeek = useCallback(
+    (timestamp: string) => handleSeek(timestamp, 'card'),
+    [handleSeek],
+  );
+  /** 실시간 통계의 카드 핀에서 누른 이동 */
+  const handlePinSeek = useCallback(
+    (timestamp: string) => handleSeek(timestamp, 'stats_pin'),
+    [handleSeek],
   );
 
   return (
@@ -707,7 +720,7 @@ function LiveDashboard() {
             detectionPaused={chatWarning}
             ended={ended}
             listStatus={cardsStatus}
-            onSeek={handleSeek}
+            onSeek={handlePinSeek}
           />
         </div>
         {/* 칸이 행 높이를 받고 그 안에서 채팅이 sticky로 붙는다 — 칸의 역할은 CSS .chatCol 주석.
@@ -738,7 +751,7 @@ function LiveDashboard() {
         highlightSummary={highlightSummary}
         live={viewStatus === 'live'}
         ended={ended}
-        onSeekCard={handleSeek}
+        onSeekCard={handleCardSeek}
       />
     </main>
   );

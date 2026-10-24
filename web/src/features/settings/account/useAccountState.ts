@@ -13,6 +13,7 @@ import {
   uploadProfilePhoto,
 } from '@/api/profile';
 import { useMe } from '@/features/auth/useSession';
+import { track } from '@/lib/analytics';
 import { useToast } from '@/ui';
 
 // 설정 · 계정의 실상태 훅 (POK-208 ← 서버 POK-207) — 표시 이름·프로필 사진 저장이 auth 서버로
@@ -143,6 +144,7 @@ export function useAccountState(): AccountViewState {
       if (queryClient.getQueryData<Me>(meQueryOptions.queryKey)?.id !== next.id) return;
       // 왕복 중 더 친 입력은 살린다 — 제출한 값 그대로일 때만 me를 다시 따라가게 되돌린다.
       setTyped((cur) => (cur !== null && normalizeDisplayName(cur) === submitted ? null : cur));
+      track('profile_name_changed', {}); // 이름은 싣지 않는다 (POK-357)
       toast({ tone: 'success', title: '표시 이름을 변경했습니다' });
     },
     onError: (e, submitted) => {

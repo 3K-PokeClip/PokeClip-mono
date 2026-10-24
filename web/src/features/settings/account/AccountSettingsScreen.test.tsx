@@ -9,6 +9,11 @@ import { jsonResponse, stubFetch, type FetchHandler } from '@/test/mockFetch';
 import { renderWithProviders } from '@/test/testProviders';
 
 const nav = vi.hoisted(() => ({ search: '', replace: vi.fn(), push: vi.fn() }));
+const { track } = vi.hoisted(() => ({ track: vi.fn() }));
+vi.mock('@/lib/analytics', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/analytics')>()),
+  track,
+}));
 
 // jsdom은 라우팅을 못 흉내 낸다 — 이동 여부만 확인한다.
 // 차단 상태 목업은 쿼리로 켜지므로 useSearchParams도 여기서 갈아 끼운다.
@@ -73,6 +78,7 @@ function stubCanvas() {
 
 beforeEach(() => {
   window.localStorage.clear();
+  track.mockReset();
   nav.search = '';
   nav.replace.mockReset();
   nav.push.mockReset();
@@ -192,6 +198,8 @@ describe('AccountSettingsScreen — 표시 이름 저장', () => {
     // 저장한 값이 곧 현재 값이 되므로 입력은 응답을 따라가고 저장은 다시 잠긴다
     expect(screen.getByLabelText('표시 이름')).toHaveValue('너구리씨');
     expect(screen.getByRole('button', { name: '저장' })).toBeDisabled();
+    // 바꾼 뒤 한 번 센다 — 이름은 싣지 않는다 (POK-357)
+    expect(track.mock.calls).toEqual([['profile_name_changed', {}]]);
   });
 
   it('응답을 기다리는 동안 저장 버튼이 잠기고 바쁨을 알린다', async () => {
@@ -451,6 +459,8 @@ describe('AccountSettingsScreen — 프로필 사진', () => {
     // 헤더·사이드바가 읽는 캐시가 서버 응답의 새 주소를 갖는다 — 재조회 없이
     expect(queryClient.getQueryData<Me>(ME_KEY)?.profileImageUrl).toBe(NEW_URL);
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    // 기본 아바타를 골라 적용했다 — 사진·파일 이름은 싣지 않는다 (POK-357)
+    expect(track.mock.calls).toEqual([['profile_photo_changed', { source: 'preset' }]]);
   });
 
   it('사진 창고가 꺼져 있으면(503) 모달을 닫지 않고 사유를 알리며 캐시는 그대로다', async () => {
