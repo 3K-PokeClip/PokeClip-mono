@@ -516,8 +516,9 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
         return;
       }
       requestRender(entry.streamId, entry.recipeId)
-        .then(({ clip: snap }) => {
-          track('video_render_retried', {});
+        .then(({ created, clip: snap }) => {
+          // 새 주문만 센다 — 연타·두 탭의 같은 재주문(200, created=false)은 DB 숫자와 어긋난다 (POK-357)
+          if (created) track('video_render_retried', {});
           toast({ tone: 'success', title: `영상 #${snap.id} 다시 주문됨` });
           refresh();
         })

@@ -668,6 +668,25 @@ describe('useLibraryMockState: 업로드 다시 시도 (POK-291)', () => {
     vi.unstubAllGlobals();
   });
 
+  it.each([
+    [201, [{}]],
+    [200, []],
+  ])(
+    '영상 다시 주문은 새 주문일 때만 센다(%i) — 연타·두 탭의 같은 재주문은 세지 않는다 (POK-357)',
+    async (status, expected) => {
+      serve(
+        () => listEntry('failed', clipWith(null)),
+        () => jsonResponse(status, clipWith(null, 6)),
+      );
+      const { result } = await mount();
+
+      act(() => result.current.retryRender('12'));
+      await vi.waitFor(() => expect(document.body.textContent).toContain('다시 주문됨'));
+
+      expect(tracked('video_render_retried')).toEqual(expected);
+    },
+  );
+
   it('업로드 실패는 화면 「업로드 실패」이고, 다시 시도는 본문 없이 보내 답을 받자마자 올리는 중이 된다', async () => {
     const spy = serve(
       () => listEntry('rendered', clipWith(failedUpload)),
