@@ -743,10 +743,11 @@ AccessDenied(접근 거부 · SCP 거부)가 나면 다시 시도하지 않고 �
     걸리면 plan 이 멈춥니다 — tfvars 를 고칩니다.
 1.  **확인 · 승인**: 아래를 모두 확인하고 kty 승인을 받습니다. 하나라도
     다르면 apply 하지 않습니다.
-    *   1단-가를 이미 적용했으면 `Plan: 20 to add, 0 to change, 0 to
+    *   1단-가를 이미 적용했으면 `Plan: 21 to add, 0 to change, 0 to
         destroy` — 일 큐 · DLQ 여섯 · 재처리 허용 셋 · clips 버킷 다섯 ·
-        프로필 사진 버킷 다섯 · 그릇 하나(`pokeclip/prod/soop-client-secret`).
-        1단-가와 함께면 `49 to add`(29 + 20)입니다.
+        프로필 사진 버킷 다섯 · 그릇 하나(`pokeclip/prod/soop-client-secret`)
+        · rewind 버킷 CORS 하나(`aws_s3_bucket_cors_configuration.rewind`).
+        1단-가와 함께면 `50 to add`(29 + 21)입니다.
     *   바뀐 출력이 `app_env` · `app_secret_arns` ·
         `app_task_resource_arns` 입니다. `app_env.auth` 에
         `STREAM_KEY_SECRET_REF_PREFIX` 가 없습니다(platform 이 넣음).
@@ -801,6 +802,15 @@ done
     `expire-after-60-days Enabled 60` 과
     `abort-incomplete-multipart-upload Enabled … 7`, 프로필 사진은
     `abort-incomplete-multipart-upload` 하나입니다.
+*   rewind 버킷 CORS: 아래 명령이 `GET HEAD https://app.pokeclip.com`
+    (`app_origin` 을 바꿨으면 그 값) 한 줄만 냅니다.
+
+    ```shell
+    aws s3api get-bucket-cors --bucket pokeclip-prod-rewind-apne2 \
+      --query 'CORSRules[].[join(`" "`, AllowedMethods), join(`" "`, AllowedOrigins)]' \
+      --output text
+    ```
+
 *   그릇 여덟: 모두 `prod` 입니다. 2-3 판정의 `secrets` 행이 이 태그로
     그릇을 풉니다.
 *   결과 줄을 볼트 raw 로 옮깁니다(비밀 값 훑기 뒤 · 계정 ID · ARN 가림).
@@ -880,6 +890,9 @@ platform 의 O7d 는 이 뒤입니다. O7d 운영 확인에서 아래를 봅니�
     (`PurgeConfiguration.java:55-56`)가 있고 `clip.purge.storage_unavailable`
     이 0 입니다. `segments=false` 면 탈퇴 정리가 녹화 조각을 지우지
     않습니다.
+*   편집기 트랙별 미리 듣기가 조각을 받습니다. 「못 불러왔어요」 로만
+    뜨면 브라우저 콘솔의 CORS 거부부터 봅니다 — rewind 버킷 CORS(1단-다 3)의
+    출처가 앱 출처와 다른 경우입니다.
 *   관측 신호(경보 후보): render · upload DLQ 깊이(clip 정리기가 1분마다
     비움) · 썸네일 DLQ 깊이(clip 이 읽지 않음 — 쌓이면 일꾼 문제) · 원 큐의
     가장 오래된 메시지 나이(`ApproximateAgeOfOldestMessage` — 일꾼 배치

@@ -30,7 +30,12 @@
 # SetQueueAttributes 와 s3:PutLifecycleConfiguration · GetLifecycleConfiguration
 # 뿐이고 모두 아래 행에 있다 — Terraform 동작 행 추가 0. 버킷 둘 · 그릇 하나는
 # 1단-가와 같은 길(s3 · secretsmanager 덩어리)이다. 더한 것은 값 넣기 한 행
-# (put-secret-from-file.sh — 1단-다)이다.
+# (put-secret-from-file.sh — 1단-다)과 rewind 버킷 CORS 한 행이다. CORS 는
+# 잠금 판 v6.68.0 의 s3/bucket_cors_configuration.go 가 PutBucketCors(생성 ·
+# 갱신) · GetBucketCors(읽기 · 생성 뒤 대기) · DeleteBucketCors(삭제)를
+# 부른다(2026-10-24 대조). 삭제의 IAM 동작도 s3:PutBucketCORS 이고(서비스
+# 승인 참조 list_amazons3.html), 읽기 s3:GetBucketCORS 는 버킷 읽기 행에
+# 이미 있다 — 더한 것은 s3:PutBucketCORS 한 행이다.
 
 # RDS — 인스턴스 · 파라미터 그룹 · 서브넷 그룹 · 태그(D2)
 rds:CreateDBInstance	ap-northeast-2	*
@@ -87,6 +92,7 @@ s3:PutBucketPublicAccessBlock	ap-northeast-2	*
 s3:PutBucketOwnershipControls	ap-northeast-2	*
 s3:PutEncryptionConfiguration	ap-northeast-2	*
 s3:PutLifecycleConfiguration	ap-northeast-2	*
+s3:PutBucketCORS	ap-northeast-2	*
 s3:GetBucketPolicy	ap-northeast-2	*
 s3:GetBucketAcl	ap-northeast-2	*
 s3:GetBucketCORS	ap-northeast-2	*

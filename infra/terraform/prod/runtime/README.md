@@ -37,7 +37,7 @@ prod 런타임 1단(설계 3-1 의 ⑤)을 만드는 루트입니다 — RDS Pos
 | `network_state.tf` | prod/network 원격 상태 → `vpc_id` · `private_subnet_ids` · `media_az` · `media_private_subnet_id` | POK-304 |
 | `rds.tf` | RDS 인스턴스 · 서브넷 그룹 · 파라미터 그룹 · 로그 그룹(30일) · RDS SG(규칙 0) | POK-304 |
 | `app_secrets.tf` | 앱 비밀 그릇 여덟과 서비스별 ARN 지도(일꾼 render · upload 포함) | POK-305 · POK-427 · POK-408 |
-| `rewind_bucket.tf` | rewind 버킷(공개 차단 · SSE-S3 · 미완료 업로드 정리) — segment 창고를 겸함 | POK-308 |
+| `rewind_bucket.tf` | rewind 버킷(공개 차단 · SSE-S3 · 미완료 업로드 정리 · 앱 출처 `app_origin` 의 GET · HEAD CORS) — segment 창고를 겸함 | POK-308 · POK-427 |
 | `broadcast_events.tf` · `app_env.tf` | 계약9 주제 · 주제 정책 · 큐 · DLQ · 구독 · 큐 정책 · 서비스별 env · clip 일 스위치 변수 `clip_job_features` | POK-309 · POK-408 |
 | `job_queues.tf` | 일 큐 셋(render · thumbnail · upload — 표준 SQS)과 DLQ · redrive | POK-408 |
 | `clips_bucket.tf` | clips 버킷(공개 차단 · SSE-S3 · 만료 60일 · 미완료 업로드 정리) | POK-408 |

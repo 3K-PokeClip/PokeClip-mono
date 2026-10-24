@@ -122,6 +122,9 @@ rds-master-secret	runtime-1a	input:rds-master	secret	ap-northeast-2	secretsmanag
 # 자원)이다. 시뮬레이터는 객체가 있는지 보지 않는다 — 객체 키는 코드 꼴의
 # 표본이다. 객체 행은 읽기(s3:GetObject)도 묻는다 — 세 버킷 모두 비공개
 # 자료(녹화 조각 · 완성 클립 · 프로필 사진)라 dev 주체의 읽기가 곧 유출이다.
+# 버킷 행은 CORS 쓰기(s3:PutBucketCORS — 규칙 지우기도 이 동작)도 묻는다.
+# rewind 의 CORS 규칙(1단-다)을 dev 주체가 바꾸면 허용 출처가 넓어지거나
+# 편집기 미리 듣기가 멈춘다. 세 버킷의 변조 동작은 같게 둔다.
 # rewind 는 표본이 둘이다: 목록 경로(dvr/<방송>/<세션>/index.m3u8 —
 # 사이드카 목록 발행)는 목록 경로로 열린 dev 정책을, 원본 조각
 # (streams/<id>/<날짜>/<시>/seg_N.m4s — media/internal/upload/worker.go 의
@@ -129,12 +132,12 @@ rds-master-secret	runtime-1a	input:rds-master	secret	ap-northeast-2	secretsmanag
 # 묻는다. clips 객체는 clip 의 출력 접두(clips/<clipId>/<실행 토큰>/ —
 # RenderEnvelope · JobEventService), 사진은 auth 의 키
 # (profile-photos/<id>/<자리> — PhotoStorage)다.
-rewind-bucket	O7d	arn:arn:aws:s3:::pokeclip-prod-rewind-apne2	bucket	ap-northeast-2	s3:PutBucketPolicy,s3:DeleteBucketPolicy,s3:PutBucketPublicAccessBlock,s3:PutBucketOwnershipControls,s3:PutLifecycleConfiguration,s3:DeleteBucket	s3	-
+rewind-bucket	O7d	arn:arn:aws:s3:::pokeclip-prod-rewind-apne2	bucket	ap-northeast-2	s3:PutBucketPolicy,s3:DeleteBucketPolicy,s3:PutBucketPublicAccessBlock,s3:PutBucketOwnershipControls,s3:PutLifecycleConfiguration,s3:PutBucketCORS,s3:DeleteBucket	s3	-
 rewind-object	O7d	arn:arn:aws:s3:::pokeclip-prod-rewind-apne2/dvr/sample-stream/sample-session/index.m3u8	object	ap-northeast-2	s3:GetObject,s3:PutObject,s3:DeleteObject	s3	-
 rewind-segment-object	O7d	arn:arn:aws:s3:::pokeclip-prod-rewind-apne2/streams/sample-stream/2026-01-01/00/seg_000001.m4s	object	ap-northeast-2	s3:GetObject,s3:PutObject,s3:DeleteObject	s3	-
-clips-bucket	O7d	arn:arn:aws:s3:::pokeclip-prod-clips-apne2	bucket	ap-northeast-2	s3:PutBucketPolicy,s3:DeleteBucketPolicy,s3:PutBucketPublicAccessBlock,s3:PutBucketOwnershipControls,s3:PutLifecycleConfiguration,s3:DeleteBucket	s3	-
+clips-bucket	O7d	arn:arn:aws:s3:::pokeclip-prod-clips-apne2	bucket	ap-northeast-2	s3:PutBucketPolicy,s3:DeleteBucketPolicy,s3:PutBucketPublicAccessBlock,s3:PutBucketOwnershipControls,s3:PutLifecycleConfiguration,s3:PutBucketCORS,s3:DeleteBucket	s3	-
 clips-object	O7d	arn:arn:aws:s3:::pokeclip-prod-clips-apne2/clips/1/sample-token/sample.mp4	object	ap-northeast-2	s3:GetObject,s3:PutObject,s3:DeleteObject	s3	-
-profile-photo-bucket	O7d	arn:arn:aws:s3:::pokeclip-prod-profile-photos-apne2	bucket	ap-northeast-2	s3:PutBucketPolicy,s3:DeleteBucketPolicy,s3:PutBucketPublicAccessBlock,s3:PutBucketOwnershipControls,s3:PutLifecycleConfiguration,s3:DeleteBucket	s3	-
+profile-photo-bucket	O7d	arn:arn:aws:s3:::pokeclip-prod-profile-photos-apne2	bucket	ap-northeast-2	s3:PutBucketPolicy,s3:DeleteBucketPolicy,s3:PutBucketPublicAccessBlock,s3:PutBucketOwnershipControls,s3:PutLifecycleConfiguration,s3:PutBucketCORS,s3:DeleteBucket	s3	-
 profile-photo-object	O7d	arn:arn:aws:s3:::pokeclip-prod-profile-photos-apne2/profile-photos/1/0	object	ap-northeast-2	s3:GetObject,s3:PutObject,s3:DeleteObject	s3	-
 
 # 권한 변경 — 주체 자신 · 사용자의 그룹 · prod 역할(경로 /pokeclip/prod/) ·

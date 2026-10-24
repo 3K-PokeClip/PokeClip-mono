@@ -115,12 +115,12 @@ RUNTIME_TARGETS=('rds-instance runtime-1a rds:DeleteDBInstance'
   'jobs-upload-dlq runtime-1a sqs:ReceiveMessage'
   'sql-runner-role runtime-1a iam:PassRole'
   'sql-runner-profile runtime-1a iam:AddRoleToInstanceProfile'
-  'rewind-bucket O7d s3:PutBucketPolicy'
+  'rewind-bucket O7d s3:PutBucketPolicy,s3:PutBucketCORS'
   'rewind-object O7d s3:GetObject,s3:PutObject'
   'rewind-segment-object O7d s3:GetObject,s3:PutObject'
-  'clips-bucket O7d s3:PutBucketPolicy'
+  'clips-bucket O7d s3:PutBucketPolicy,s3:PutBucketCORS'
   'clips-object O7d s3:GetObject,s3:PutObject'
-  'profile-photo-bucket O7d s3:PutBucketPolicy'
+  'profile-photo-bucket O7d s3:PutBucketPolicy,s3:PutBucketCORS'
   'profile-photo-object O7d s3:GetObject,s3:PutObject')
 readonly RUNTIME_TARGETS
 RUNTIME_ARN_TAILS=(':db:pokeclip-prod-db' ':pg:pokeclip-prod-pg17'
@@ -150,6 +150,10 @@ RUNTIME_PUT_SECRET_ROW+='arn:aws:secretsmanager:ap-northeast-2:'
 # shellcheck disable=SC2016
 RUNTIME_PUT_SECRET_ROW+='${ACCOUNT}:secret:pokeclip/prod/*'
 readonly RUNTIME_PUT_SECRET_ROW
+# rewind 버킷 CORS(aws_s3_bucket_cors_configuration — 1단-다)의 Terraform
+# 생성 · 갱신 · 삭제 동작 행. 읽기(s3:GetBucketCORS)는 1단-가 버킷 읽기
+# 행으로 이미 있다.
+readonly RUNTIME_PUT_CORS_ROW='s3:PutBucketCORS'$'\t''ap-northeast-2'$'\t''*'
 # 실행기 역할 넘기기는 EC2 에 넘기는 질문이다(추가 문맥).
 readonly PASSED_TO_EC2='iam:PassedToService:string:ec2.amazonaws.com'
 # 그 문맥이 시뮬레이터 요청에 실린 꼴.
@@ -1213,6 +1217,29 @@ expect_runtime_bundle_puts_secret_value() {
   testlib::ok "runtime-put-secret → runtime-1a 묶음에 값 넣기 행 하나"
 }
 
+#######################################
+# 데이터 단언: runtime-1a 묶음에 rewind 버킷 CORS 의 쓰기 행(PutBucketCORS)
+# 과 읽기 행(GetBucketCORS)이 있다(provider 잠금 판 v6.68.0 의
+# s3/bucket_cors_configuration.go — PutBucketCors · GetBucketCors ·
+# DeleteBucketCors, 삭제의 IAM 동작은 PutBucketCORS).
+# Globals:
+#   STAGE_DIR, RUNTIME_PUT_CORS_ROW
+#######################################
+expect_runtime_bundle_puts_bucket_cors() {
+  local rows
+  rows="$(data_rows "${STAGE_DIR}/runtime-1a.tsv")"
+  if ! has_line "${rows}" "${RUNTIME_PUT_CORS_ROW}"; then
+    testlib::fail "runtime-cors: runtime-1a 묶음에 s3:PutBucketCORS 행이 없음"
+    return
+  fi
+  if ! has_line "${rows}" \
+    's3:GetBucketCORS'$'\t''ap-northeast-2'$'\t''*'; then
+    testlib::fail "runtime-cors: runtime-1a 묶음에 s3:GetBucketCORS 행이 없음"
+    return
+  fi
+  testlib::ok "runtime-cors → runtime-1a 묶음에 버킷 CORS 쓰기 · 읽기 행"
+}
+
 main() {
   testlib::init data_files_test
   expect_bundle_set
@@ -1229,6 +1256,7 @@ main() {
   expect_target_rows_consistent
   expect_runtime_targets
   expect_runtime_bundle_puts_secret_value
+  expect_runtime_bundle_puts_bucket_cors
   expect_late_targets
   expect_runtime_rows_asked
   expect_dev_principals

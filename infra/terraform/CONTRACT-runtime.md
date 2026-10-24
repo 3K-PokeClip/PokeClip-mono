@@ -103,12 +103,14 @@ DLQ 는 키를 내지 않습니다(clip 이 읽지 않음).
 *   큐 · 버킷은 SSE-SQS · SSE-S3(AWS 관리 키)를 전제합니다. 고객 관리 KMS
     키면 작업 역할에 그 키 권한이 더 필요합니다 — platform 과 같은 PR 에서
     고칩니다.
-*   **조각 창고(`segment_bucket_arn`)에는 CORS 규칙이 있어야 합니다** —
-    앱 출처(`https://<app_host>`, 기본 `app.pokeclip.com`)에 `GET` · `HEAD`
-    를 허락하는 규칙. 편집기의 트랙별 미리 듣기가 clip 이 서명한 조각 주소를
-    브라우저 `fetch` 로 받습니다(POK-389). 창고는 런타임 1단이 만들므로
-    규칙도 런타임 몫이고, 없으면 `SegmentRead` 권한이 있어도 브라우저가
-    응답을 막아 미리 듣기가 「못 불러왔어요」로만 뜹니다.
+*   **조각 창고(`segment_bucket_arn`)의 CORS 규칙은 런타임이 둡니다** —
+    앱 출처(런타임 변수 `app_origin`, 기본 `https://app.pokeclip.com`)에
+    `GET` · `HEAD` 만 허락하는 규칙 하나(`prod/runtime/rewind_bucket.tf`).
+    편집기의 트랙별 미리 듣기가 clip 이 서명한 조각 주소를 브라우저
+    `fetch` 로 받습니다(POK-389). 규칙이 없으면 `SegmentRead` 권한이 있어도
+    브라우저가 응답을 막아 미리 듣기가 「못 불러왔어요」로만 뜹니다. 앱
+    호스트를 바꾸면 `app_origin` 과 platform 의 `app_host` ·
+    `cors_allowed_origins` 를 함께 바꿉니다.
 
 ### 일꾼 작업 역할 대상
 
