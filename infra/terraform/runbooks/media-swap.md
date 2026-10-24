@@ -335,7 +335,8 @@ SH
 `terraform.tfvars` 는 `terraform.tfvars.example` 대로 채웁니다(이미지 =
 O7c 다이제스트 · `control_upstream` 빈 값 · 응답기 다이제스트 없음). 첫
 apply 라 plan 은 생성뿐입니다 — 인스턴스 · Media SG 와 규칙 · RDS 인그레스 ←
-Media · LB 이그레스 → Media · 인스턴스 역할 · 프로필 · 정책 · 관리형 정책
+Media · auth 인그레스 ← Media(kty 결정 2026-10-25 (나)) · LB 이그레스 →
+Media · 인스턴스 역할 · 프로필 · 정책 · 관리형 정책
 연결 하나 · 거부 목록 파라미터 · 대상 등록 넷. 변경 · 삭제가 있으면 apply
 하지 않습니다.
 
@@ -435,8 +436,8 @@ tg_health
 ## 정상 교체
 
 방송이 없는 시간대에 합니다(설계 5-3). 선행: 루프백 헬스(3)는 런타임 트랙
-(Media → auth resolve)과 시험 스트림 키 입력(설계 5-4 의 11)이 끝난 뒤에만 할
-수 있습니다.
+(auth 의 resolve 창구 — Media ↔ auth SG 짝은 이 루트 몫, kty 결정 2026-10-25
+(나))과 시험 스트림 키 입력(설계 5-4 의 11)이 끝난 뒤에만 할 수 있습니다.
 
 | # | 동작 | 통과 |
 |---|---|---|

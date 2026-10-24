@@ -24,8 +24,8 @@ prod 의 요청 입구와 앱 서비스를 만드는 루트입니다(설계 3-1 
 | 자원 | 루트 |
 |---|---|
 | 내부 ALB 인그레스 ← CloudFront VPC origin | edge |
-| 내부 ALB · NLB 이그레스 → Media · Media 대상 등록 · Media ↔ RDS | media |
-| Media ↔ auth · chat ↔ auth · clip 규칙(auth → chat-collector 8083 포함) | 런타임 2단(POK-306) |
+| 내부 ALB · NLB 이그레스 → Media · Media 대상 등록 · Media ↔ RDS · Media ↔ auth(출력 `service_sg_ids.auth` · `service_ports.auth` 를 씀 — kty 결정 2026-10-25 (나)) | media |
+| chat ↔ auth · clip 규칙(auth → chat-collector 8083 포함) | 런타임 2단(POK-306) |
 | 일꾼 · chat 서비스 | POK-408 · POK-306(출력 `ecs_cluster_arn` · `discovery_namespace_id` · `service_sg_ids` 를 씀) |
 
 용어:
@@ -209,5 +209,6 @@ plan 요지를 kty 가 보고 승인합니다.
 | `nlb_{dns_name,zone_id,sg_id}` | records(ingest 별칭) · media(이그레스 → Media) |
 | `target_group_arns`(ingest · live · control · playback) | media — Media 상자 등록 |
 | `media_proxy_ports`(live · control · playback · health) · `media_health_path` | media — 상자 nginx 포트 · 헬스 경로(대상 그룹과 같은 값) |
-| `ecs_cluster_arn` · `discovery_namespace_id` · `service_sg_ids`(auth · clip · next) | 런타임 2단 · 일꾼(POK-408) · chat(POK-306) |
+| `ecs_cluster_arn` · `discovery_namespace_id` · `service_sg_ids`(auth · clip · next) | 런타임 2단 · 일꾼(POK-408) · chat(POK-306) · media(`service_sg_ids.auth` — Media ↔ auth) |
+| `service_ports`(auth · clip · next — `services` 의 포트) | media — Media ↔ auth 규칙의 포트(kty 결정 2026-10-25 (나)) |
 | `clip_execution_role_arn` | 런타임 2단 |
