@@ -35,6 +35,8 @@ export function PreviewCanvas({ state }: { state: ClipEditorMockState }) {
   const result = (
     <div
       className={styles.resultFrame}
+      // 영상 위 무대는 라이트에서도 어둡게 — 안의 토큰(글자·테두리)을 다크 값으로 묶는다
+      data-theme="dark"
       style={{ ['--pc-ar' as string]: String(state.resultAspect) }}
       data-border={state.layout === 'split' && state.splitBorder ? 'on' : undefined}
     >
@@ -70,6 +72,8 @@ export function PreviewCanvas({ state }: { state: ClipEditorMockState }) {
             <span className={styles.sideLabel}>원본</span>
             <div
               className={styles.sourcePanel}
+              // 영상 위 크롭 배지·손잡이·포커스 테두리가 라이트 토큰을 타면 검은 알약에 검은 글자가 된다
+              data-theme="dark"
               ref={panelRef}
               // 프레임은 판 기준 %로 놓인다 — 판이 소스와 다른 비율이면 영상 위에서 어긋난다
               style={{ ['--pc-ar' as string]: String(state.sourceAspect) }}

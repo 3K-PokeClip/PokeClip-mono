@@ -21,8 +21,8 @@ export interface EmptyStateProps extends Omit<
   icon: ReactNode;
   /** 「아직 ~이 없어요」 한 줄. 헤딩이 아니라 문단이다. */
   title: string;
-  /** 무엇을 하면 채워지는지 — 한두 문장. */
-  description: string;
+  /** 무엇을 하면 채워지는지 — 한두 문장. 문장 사이에서 줄을 나누려면 `<br />`을 넣는다. */
+  description: ReactNode;
 }
 
 export const EmptyState = forwardRef<HTMLDivElement, EmptyStateProps>(function EmptyState(

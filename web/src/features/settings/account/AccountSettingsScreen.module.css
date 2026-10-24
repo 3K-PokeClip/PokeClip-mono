@@ -30,6 +30,18 @@
   margin: 0 0 calc(14 * var(--pc-u));
 }
 
+/* ---------- 화면 테마 카드 ---------- */
+.themeSegment {
+  width: calc(228 * var(--pc-u)); /* 알림 설정 세그먼트와 같은 폭 */
+  max-width: 100%;
+}
+
+.themeNote {
+  margin: calc(10 * var(--pc-u)) 0 0;
+  font-size: calc(12 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}
+
 .cardActions {
   display: flex;
   justify-content: flex-end;
@@ -93,7 +105,12 @@
   align-items: center;
   justify-content: center;
   border-radius: calc(10 * var(--pc-u));
-  background: #fff;
+  background: #fff; /* 테마 고정 */
+}
+
+/* 흰 카드 위 흰 타일이 사라지지 않게 — 라이트만 테두리 */
+:global([data-theme='light']) .googleTile {
+  box-shadow: inset 0 0 0 1px var(--pc-color-border-default);
 }
 
 /* 시안 1p 값 그대로. 공식 마크가 viewBox를 꽉 채우므로 보정이 필요 없다 */
@@ -178,7 +195,7 @@
 /* 시인성은 호버에서만 준다 — 평소에 눈에 띄면 실수로 눌린다 */
 .withdrawLink:hover:enabled,
 .withdrawLink:focus-visible {
-  color: var(--pc-color-danger);
+  color: var(--pc-color-danger-text);
   text-decoration-color: var(--pc-color-danger);
 }
 
@@ -383,7 +400,7 @@
 .unpaidValue {
   margin-left: auto;
   font: 700 calc(13 * var(--pc-u)) var(--pc-font-mono);
-  color: var(--pc-color-danger);
+  color: var(--pc-color-danger-text);
 }
 
 .blockedActions {
@@ -583,13 +600,13 @@
   width: calc(24 * var(--pc-u));
   height: calc(24 * var(--pc-u));
   stroke-width: 1.7;
-  color: var(--pc-color-danger);
+  color: var(--pc-color-danger-text);
 }
 
 .errorTitle {
   font-size: calc(12.5 * var(--pc-u));
   font-weight: 700;
-  color: var(--pc-color-danger);
+  color: var(--pc-color-danger-text);
 }
 
 .errorHint {
@@ -630,7 +647,7 @@
   border-radius: calc(14 * var(--pc-u));
   overflow: hidden;
   /* 마스크 밖을 어둡게 깔아 잘릴 자리를 눈으로 가른다 (1p) */
-  background: #07080b;
+  background: #07080b; /* 테마 고정 */
   cursor: move;
   touch-action: none;
 }
@@ -659,8 +676,8 @@
   width: calc(176 * var(--pc-u));
   height: calc(176 * var(--pc-u));
   border-radius: var(--pc-radius-circle);
-  border: 2px solid rgb(255 255 255 / 0.92);
-  box-shadow: 0 0 0 9999px rgb(7 8 11 / 0.58);
+  border: 2px solid rgb(255 255 255 / 0.92); /* 테마 고정 */
+  box-shadow: 0 0 0 9999px rgb(7 8 11 / 0.58); /* 테마 고정 */
   pointer-events: none;
 }
 
@@ -670,16 +687,16 @@
   bottom: calc(12 * var(--pc-u));
   padding: calc(3 * var(--pc-u)) calc(9 * var(--pc-u));
   border-radius: calc(7 * var(--pc-u));
-  background: rgb(0 0 0 / 0.55);
+  background: rgb(0 0 0 / 0.55); /* 테마 고정 */
   font-size: calc(10.5 * var(--pc-u));
   font-weight: 600;
-  color: rgb(255 255 255 / 0.92);
+  color: rgb(255 255 255 / 0.92); /* 테마 고정 */
   pointer-events: none;
 }
 
 .cropError {
   font-size: calc(11.5 * var(--pc-u));
-  color: var(--pc-color-danger);
+  color: var(--pc-color-danger-text);
   margin: calc(10 * var(--pc-u)) 0 0;
 }
 
@@ -724,7 +741,7 @@
   margin: 0;
   font-size: calc(11.5 * var(--pc-u));
   line-height: 1.4;
-  color: var(--pc-color-danger);
+  color: var(--pc-color-danger-text);
 }
 
 /* ---------- 모션 (1p 「모션 · 복귀 규칙」) ---------- */

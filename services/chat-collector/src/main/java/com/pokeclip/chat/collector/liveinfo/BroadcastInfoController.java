@@ -63,7 +63,7 @@ public class BroadcastInfoController {
                 : WindowRequest.parseAt(since);
 
         List<Point> series = store.series(streamId, from, MAX_POINTS).stream()
-                .map(info -> new Point(info.observedAt(), info.viewers(), info.platform()))
+                .map(info -> new Point(info.observedAt(), info.viewers(), info.platform(), info.category()))
                 .toList();
         Latest latest = store.latest(streamId)
                 .map(info -> new Latest(info.title(), info.tags(), info.category(),
@@ -124,8 +124,9 @@ public class BroadcastInfoController {
 
     /**
      * 추이 한 점. <b>{@code viewers}가 {@code null}이면 그 회차에 못 찾은 것</b>이지 0이 아니다. {@code platform}은 그 줄을 남긴 플랫폼이다
-     * (POK-397). 두 플랫폼에 같이 내보내면 줄이 번갈아 오므로 화면은 플랫폼으로 갈라 그린다.
+     * (POK-397). 두 플랫폼에 같이 내보내면 줄이 번갈아 오므로 화면은 플랫폼으로 갈라 그린다. {@code category}는 그 관측의 카테고리이고
+     * 못 얻었으면 {@code null}이다(POK-402). 화면은 카테고리가 바뀐 구간마다 통계 그래프 아래 띠를 나눈다. 칸은 맨 뒤에 더해 앞 칸 순서는 그대로다.
      */
-    public record Point(Instant observedAt, Integer viewers, com.pokeclip.chat.collector.Platform platform) {
+    public record Point(Instant observedAt, Integer viewers, com.pokeclip.chat.collector.Platform platform, String category) {
     }
 }

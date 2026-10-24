@@ -1,10 +1,12 @@
 import { Suspense } from 'react';
+import { CALLBACK_PENDING_LABEL, CallbackPending } from '@/features/auth/CallbackPending';
 import { ChzzkCallbackScreen } from '@/features/settings/channels/ChzzkCallbackScreen';
 
 // 치지직 redirect URI — 백엔드 CHZZK_REDIRECT_URI({origin}/oauth/chzzk/callback)와 짝이고
 // 경로 상수는 features/settings/channels/chzzkOAuth.ts의 CHZZK_CALLBACK_PATH다.
 // (dock) 밖이라 AuthGuard가 없다 — 세션 판정은 화면이 직접 한다.
 // useSearchParams를 쓰는 클라 화면이라 프리렌더 경계로 Suspense가 필요하다.
+// 대기 화면은 화면의 교환 대기와 같은 CallbackPending이다(POK-442): 가드 밖이라 null이면 하이드레이션 전까지 빈 화면이다.
 export const metadata = {
   title: '채널 연동 중 · PokeClip',
   // code·state가 실린 주소다. 색인될 자리가 아니다.
@@ -13,7 +15,7 @@ export const metadata = {
 
 export default function ChzzkCallbackPage() {
   return (
-    <Suspense fallback={null}>
+    <Suspense fallback={<CallbackPending label={CALLBACK_PENDING_LABEL.chzzk} />}>
       <ChzzkCallbackScreen />
     </Suspense>
   );

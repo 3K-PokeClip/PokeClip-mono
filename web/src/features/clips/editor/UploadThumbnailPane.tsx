@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react';
-import { RadioGroup, Text } from '@/ui';
+import { RadioGroup, Skeleton, Text } from '@/ui';
 import type { ThumbnailSource } from '@/api/clipEditor';
 import {
   SCENE_STEP_MS,
@@ -45,6 +45,7 @@ export function UploadThumbnailPane({
   cutLengthMs,
   picks,
   frameOf,
+  frameFailed,
   error,
   onSource,
   onScene,
@@ -61,6 +62,11 @@ export function UploadThumbnailPane({
   picks: readonly ScenePick[];
   /** 장면 그림. 아직 못 뽑았거나 녹화가 없으면 null(시각만 보인다) */
   frameOf: (offsetMs: number) => string | null;
+  /**
+   * 그 시각의 그림을 못 얻는다(재료 없음 · 뽑기 실패). 그림이 없고 이것도 아니면 뽑는 중이라 타일을 스켈레톤으로 채운다
+   * (POK-444). 못 얻는 타일은 시각만 있는 정적 자리다
+   */
+  frameFailed: (offsetMs: number) => boolean;
   error: string | undefined;
   onSource: (source: ThumbnailSource) => void;
   onScene: (offsetMs: number) => void;
@@ -122,6 +128,7 @@ export function UploadThumbnailPane({
                       pick={p}
                       selected={p.offsetMs === sceneOffsetMs}
                       image={frameOf(p.offsetMs)}
+                      loading={!frameFailed(p.offsetMs)}
                       onPick={() => onScene(p.offsetMs)}
                     />
                   ))}
@@ -133,6 +140,7 @@ export function UploadThumbnailPane({
                     cutLengthMs={cutLengthMs}
                     picks={picks}
                     frameOf={frameOf}
+                    frameFailed={frameFailed}
                     onChange={onScene}
                     onHover={onHover}
                   />
@@ -163,11 +171,14 @@ function PickTile({
   pick,
   selected,
   image,
+  loading,
   onPick,
 }: {
   pick: ScenePick;
   selected: boolean;
   image: string | null;
+  /** 그림이 없을 때 뽑는 중인가. 아니면(못 뽑음 · 재료 없음) 시각만 있는 정적 자리다 */
+  loading: boolean;
   onPick: () => void;
 }) {
   return (
@@ -182,7 +193,18 @@ function PickTile({
         // eslint-disable-next-line @next/next/no-img-element
         <img src={image} alt="" />
       ) : (
-        <span className={styles.pickTime}>{sceneLabel(pick.offsetMs)}</span>
+        <>
+          {/* 뽑는 중이면 타일 자리를 스켈레톤으로 채우고 시각은 그 위에 남긴다(POK-444) */}
+          {loading ? (
+            <Skeleton
+              className={styles.pickSkeleton}
+              height="100%"
+              radius="none"
+              data-frame-loading
+            />
+          ) : null}
+          <span className={styles.pickTime}>{sceneLabel(pick.offsetMs)}</span>
+        </>
       )}
       <span className={styles.pickLabel}>{pick.label}</span>
       {selected ? (
@@ -203,6 +225,7 @@ function SceneStrip({
   cutLengthMs,
   picks,
   frameOf,
+  frameFailed,
   onChange,
   onHover,
 }: {
@@ -210,6 +233,7 @@ function SceneStrip({
   cutLengthMs: number;
   picks: readonly ScenePick[];
   frameOf: (offsetMs: number) => string | null;
+  frameFailed: (offsetMs: number) => boolean;
   onChange: (offsetMs: number) => void;
   onHover: (offsetMs: number | null) => void;
 }) {
@@ -282,6 +306,9 @@ function SceneStrip({
           return image !== null ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img key={i} src={image} alt="" draggable={false} />
+          ) : !frameFailed(ms) ? (
+            // 뽑는 중인 칸(POK-444). 칸 폭은 띠가 나눈다(flex)
+            <Skeleton key={i} width="auto" height="100%" radius="none" data-frame-loading />
           ) : (
             <span key={i} />
           );
@@ -303,6 +330,9 @@ function SceneStrip({
           {hoverImage !== null ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img src={hoverImage} alt="" />
+          ) : !frameFailed(hover) ? (
+            // 올린 자리 장면을 뽑는 중(POK-444). 높이는 .stripHoverEmpty의 9:16 비율이 정한다
+            <Skeleton className={styles.stripHoverEmpty} height="auto" data-frame-loading />
           ) : (
             <span className={styles.stripHoverEmpty} />
           )}

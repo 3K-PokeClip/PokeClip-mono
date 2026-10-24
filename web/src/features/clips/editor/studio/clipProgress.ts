@@ -1,15 +1,26 @@
 import type { ClipSnapshot } from '@/api/clipEditor';
 
-// 편집기 헤더가 말하는 영상의 진행(POK-291): 만드는 중 N% → 올리는 중 → 업로드됨 / 업로드 실패.
+// 편집기 헤더가 말하는 영상의 진행(POK-291): 만드는 중 N% → 올리는 중 → 업로드됨 / 업로드 실패. 문구 아래 막대도 여기서 정한다(POK-444).
 // 업로드 정보를 실어 주문하면 렌더가 끝나는 대로 clip이 올리므로, 상태 확인(폴링)도 업로드가 끝날 때까지 간다.
+
+/**
+ * 렌더 퍼센트. 만드는 중이고 서버가 숫자를 줬을 때만이다 — 없는 값을 0%로 바꾸지 않는다(POK-444). 일꾼이 아직 진척을
+ * 안 보냈으면(progress 없음) 「0%」가 아니라 모르는 것이다.
+ */
+export function renderPercent(clip: ClipSnapshot): number | null {
+  const percent = clip.status === 'rendering' ? clip.progress?.percent : undefined;
+  return typeof percent === 'number' && Number.isFinite(percent) ? percent : null;
+}
 
 /** 헤더 문구 */
 export function clipLabel(clip: ClipSnapshot): string {
   switch (clip.status) {
     case 'queued':
       return `영상 #${clip.id} 주문됨`;
-    case 'rendering':
-      return `영상 #${clip.id} 만드는 중 ${clip.progress?.percent ?? 0}%`;
+    case 'rendering': {
+      const percent = renderPercent(clip);
+      return `영상 #${clip.id} 만드는 중${percent === null ? '' : ` ${percent}%`}`;
+    }
     case 'rendered':
       switch (clip.upload?.status) {
         case undefined:
@@ -43,4 +54,13 @@ export function clipSettled(clip: ClipSnapshot): boolean {
   // 완성인데 줄이 없으면 더 기다려도 생기지 않는다(위 clipLabel 참고)
   if (upload == null) return true;
   return upload.status === 'uploaded' || upload.status === 'failed' || upload.status === 'checking';
+}
+
+/**
+ * 헤더 문구 아래 진행 막대(POK-444). 아직 기다리는 영상(주문됨 · 만드는 중 · 올리는 중 — 상태 확인이 도는 동안)만 선다.
+ * 렌더 퍼센트가 있으면 그 값, 없으면 불확정(`value: null`)이다: 대기열과 유튜브 업로드는 서버가 퍼센트를 안 주므로 지어내지
+ * 않는다. 완성 · 실패 · 업로드 끝 · 확인 필요는 기다릴 것이 없어 막대가 없다(null).
+ */
+export function clipProgressBar(clip: ClipSnapshot): { value: number | null } | null {
+  return clipSettled(clip) ? null : { value: renderPercent(clip) };
 }

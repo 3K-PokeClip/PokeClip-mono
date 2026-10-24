@@ -42,4 +42,12 @@ export const color = {
   success: 'var(--pc-color-success)',
   warning: 'var(--pc-color-warning)',
   info: 'var(--pc-color-info)',
+  /** Status hues for small text/icons — darker than the fills on light. */
+  statusText: {
+    danger: 'var(--pc-color-danger-text)',
+    success: 'var(--pc-color-success-text)',
+    warning: 'var(--pc-color-warning-text)',
+    info: 'var(--pc-color-info-text)',
+  },
+  brandMark: 'var(--pc-color-brand-mark)',
 } as const;

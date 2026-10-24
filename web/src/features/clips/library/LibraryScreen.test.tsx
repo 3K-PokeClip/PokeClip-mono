@@ -7,6 +7,7 @@ import { jsonResponse, stubFetch } from '@/test/mockFetch';
 import { renderWithProviders } from '@/test/testProviders';
 import { ClipDetailPanel } from './ClipDetailPanel';
 import { LibraryScreen } from './LibraryScreen';
+import { LibrarySkeleton } from './LibrarySkeleton';
 import { LIBRARY_FIXTURE } from './libraryFixture';
 import type { ClipSnapshot, LibraryStatus } from '@/api/clipEditor';
 import { toLibraryClip } from './useLibraryMockState';
@@ -957,7 +958,11 @@ describe('LibraryScreen — 서버 편집본의 유튜브 업로드 (POK-111)', 
     show(serverClip('rendered', { ...rendered, upload: failedUpload }));
 
     await user.click(within(panel()).getByRole('button', { name: '다시 시도' }));
-    expect(within(panel()).getByRole('button', { name: '다시 시도' })).toBeDisabled();
+    // 누른 단추만 돈다(POK-443): 잠기고 aria-busy, 이름 끝에 「로딩 중」이 붙는다
+    const busy = within(panel()).getByRole('button', { name: /^다시 시도/ });
+    expect(busy).toBeDisabled();
+    expect(busy).toHaveAttribute('aria-busy', 'true');
+    await user.click(busy);
     expect(orders()).toHaveLength(1);
     expect(orders()[0]?.[0]).toBe('/api/clip/broadcasts/s1/clips/5/uploads/retry');
 
@@ -983,6 +988,28 @@ describe('LibraryScreen — 서버 편집본의 유튜브 업로드 (POK-111)', 
     expect(inside.getByText('영상 만드는 중 42%')).toBeInTheDocument();
     expect(inside.getByText('자막').nextElementSibling).toHaveTextContent('—');
     expect(inside.getByRole('button', { name: '영상 만드는 중' })).toBeDisabled();
+    // 글자 아래 막대가 같은 퍼센트를 그린다(POK-443). 이름이 「영상 만들기」라 꽉 차도 업로드 끝으로 읽히지 않는다
+    const bar = inside.getByRole('progressbar', { name: '영상 만들기 진행률' });
+    expect(bar).toHaveAttribute('aria-valuenow', '42');
+  });
+
+  it('만드는 중인데 퍼센트가 아직 없으면 0%라고 하지 않고 불확정 막대를 그린다(POK-443)', async () => {
+    show(serverClip('rendering', { ...rendered, status: 'rendering', progress: null }));
+    const inside = within(panel());
+    const bar = inside.getByRole('progressbar', { name: '영상 만들기 진행률' });
+    expect(bar).not.toHaveAttribute('aria-valuenow');
+    // 막대 위 진행 줄(주 동작 단추도 「영상 만드는 중」이라 막대가 선 안내 자리로 본다)
+    expect(bar.parentElement).toHaveTextContent(/^영상 만드는 중$/);
+    expect(inside.queryByText(/0%/)).toBeNull();
+    await act(async () => {
+      expect(await axe(panel())).toHaveNoViolations();
+    });
+  });
+
+  it('주문만 되고 차례를 기다리는 영상은 막대가 없다 — 만드는 중이 아니다(POK-443)', () => {
+    show(serverClip('rendering', { ...rendered, status: 'queued', progress: null }));
+    expect(within(panel()).getByText('영상 주문됨 · 차례 기다리는 중')).toBeInTheDocument();
+    expect(within(panel()).queryByRole('progressbar')).toBeNull();
   });
 
   it('영상은 올라갔는데 썸네일만 실패하면 그렇게 말한다(POK-291)', () => {
@@ -1104,7 +1131,13 @@ describe('LibraryScreen — 서버 편집본의 유튜브 업로드 (POK-111)', 
     await user.click(within(panel()).getByRole('button', { name: '업로드' }));
 
     expect(within(panel()).getByRole('textbox')).toHaveAttribute('readonly');
-    expect(within(panel()).getByRole('button', { name: '업로드' })).toBeDisabled();
+    const busy = within(panel()).getByRole('button', { name: /^업로드/ });
+    expect(busy).toBeDisabled();
+    expect(busy).toHaveAttribute('aria-busy', 'true');
+    // 다른 단추에는 번지지 않는다(POK-443): 다운로드는 돌지 않는다
+    expect(within(panel()).getByRole('button', { name: '다운로드' })).not.toHaveAttribute(
+      'aria-busy',
+    );
   });
 
   it('영상을 못 틀면 까닭을 알린다 — 단추만 조용히 돌아오지 않는다', async () => {
@@ -1129,5 +1162,263 @@ describe('LibraryScreen — 서버 편집본의 유튜브 업로드 (POK-111)', 
   it('영상이 없는 편집본은 미리보기가 장식이다', () => {
     show(serverClip('editing', null));
     expect(within(panel()).queryByRole('button', { name: '미리보기 재생' })).toBeNull();
+  });
+
+  // ── 누른 단추만 돈다(POK-443) ──
+
+  /** 비율을 읽는 상세 요청(POK-254)은 답하지 않고, 나머지 요청은 시험이 손으로 답한다 */
+  function holdRequests() {
+    const pending: ((r: Response) => void)[] = [];
+    const spy = stubFetch((url) =>
+      url.startsWith('/api/clip/library/')
+        ? new Promise<Response>(() => {})
+        : new Promise<Response>((resolve) => pending.push(resolve)),
+    );
+    return { spy, answer: (r: Response) => pending.shift()?.(r) };
+  }
+  const fileAccess = {
+    clipId: 5,
+    expiresAt: '2026-09-20T13:00:00Z',
+    files: [{ outputId: 'o1', kind: 'video', fileName: 'a.mp4', url: 'https://s3.example/a.mp4' }],
+  };
+
+  it('렌더 재시도는 보내는 동안 그 단추만 돌고 연타해도 한 번만 주문한다 — 답이 오면 바로 만드는 중으로 옮긴다', async () => {
+    const { spy, answer } = holdRequests();
+    const renders = () => spy.mock.calls.filter(([url]) => String(url).endsWith('/renders'));
+    const user = userEvent.setup();
+    show(
+      serverClip('failed', {
+        ...rendered,
+        status: 'failed',
+        outputs: null,
+        error: { code: 'X', message: null },
+      }),
+    );
+
+    await user.click(within(panel()).getByRole('button', { name: '렌더 재시도' }));
+    const busy = within(panel()).getByRole('button', { name: /^렌더 재시도/ });
+    expect(busy).toHaveAttribute('aria-busy', 'true');
+    expect(busy).toBeDisabled();
+    await user.click(busy);
+    expect(renders()).toHaveLength(1);
+    expect(renders()[0]?.[0]).toBe('/api/clip/broadcasts/s1/recipes/12/renders');
+
+    await act(async () =>
+      answer(jsonResponse(201, { ...rendered, id: 6, status: 'queued', outputs: null })),
+    );
+    // 잠금이 풀린 사이 「렌더 재시도」로 돌아오지 않는다: 받은 영상으로 곧장 만드는 중이다
+    expect(await within(panel()).findByRole('button', { name: '영상 만드는 중' })).toBeDisabled();
+    expect(within(panel()).getByText('영상 주문됨 · 차례 기다리는 중')).toBeInTheDocument();
+  });
+
+  it('렌더 재시도가 거절되면 돌기를 멈추고 다시 누를 수 있다', async () => {
+    const { answer } = holdRequests();
+    const user = userEvent.setup();
+    show(
+      serverClip('failed', {
+        ...rendered,
+        status: 'failed',
+        outputs: null,
+        error: { code: 'X', message: null },
+      }),
+    );
+
+    await user.click(within(panel()).getByRole('button', { name: '렌더 재시도' }));
+    await act(async () => answer(jsonResponse(409, { error: 'source_not_ready' })));
+
+    expect(await screen.findByText('다시 주문 실패')).toBeInTheDocument();
+    const again = within(panel()).getByRole('button', { name: '렌더 재시도' });
+    expect(again).toBeEnabled();
+    expect(again).not.toHaveAttribute('aria-busy');
+  });
+
+  it('다운로드는 주소를 받는 동안만 그 단추가 돌고 연타해도 주소를 한 번만 받는다 — 업로드는 막지 않는다', async () => {
+    const { spy, answer } = holdRequests();
+    const access = () => spy.mock.calls.filter(([url]) => String(url).endsWith('/file-access'));
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    try {
+      const user = userEvent.setup();
+      show(serverClip('rendered'));
+
+      await user.click(within(panel()).getByRole('button', { name: '다운로드' }));
+      const busy = within(panel()).getByRole('button', { name: /^다운로드/ });
+      expect(busy).toHaveAttribute('aria-busy', 'true');
+      await user.click(busy);
+      expect(access()).toHaveLength(1);
+      const upload = within(panel()).getByRole('button', { name: '업로드' });
+      expect(upload).toBeEnabled();
+      expect(upload).not.toHaveAttribute('aria-busy');
+
+      await act(async () => answer(jsonResponse(200, fileAccess)));
+      await waitFor(() => expect(click).toHaveBeenCalledTimes(1));
+      expect(within(panel()).getByRole('button', { name: '다운로드' })).not.toHaveAttribute(
+        'aria-busy',
+      );
+    } finally {
+      click.mockRestore();
+    }
+  });
+
+  it('미리보기는 주소를 받는 동안 재생 단추가 돌고 잠긴다', async () => {
+    const { answer } = holdRequests();
+    const user = userEvent.setup();
+    show(serverClip('rendered'));
+
+    await user.click(within(panel()).getByRole('button', { name: '미리보기 재생' }));
+    const play = within(panel()).getByRole('button', { name: '미리보기 재생' });
+    expect(play).toHaveAttribute('aria-busy', 'true');
+    expect(play).toBeDisabled();
+    expect(within(panel()).getByRole('button', { name: '다운로드' })).not.toHaveAttribute(
+      'aria-busy',
+    );
+
+    await act(async () => answer(jsonResponse(200, fileAccess)));
+    expect(await within(panel()).findByLabelText('선택한 편집본 미리보기')).toHaveAttribute(
+      'src',
+      'https://s3.example/a.mp4',
+    );
+  });
+
+  it('보내는 중 표시는 그 편집본에만 선다 — 다른 편집본의 업로드는 돌지도 잠기지도 않는다', async () => {
+    holdRequests();
+    const user = userEvent.setup();
+    const first = serverClip('rendered');
+    const second = toLibraryClip(
+      { ...first.entry!, recipeId: 13, latestClip: { ...rendered, id: 6, recipeId: 13 } },
+      '9',
+    );
+    renderWithProviders(<LibraryScreen clips={[first, second]} selectedId="12" now={NOW} />);
+
+    await user.click(within(panel()).getByRole('button', { name: '업로드' }));
+    expect(within(panel()).getByRole('button', { name: /^업로드/ })).toHaveAttribute(
+      'aria-busy',
+      'true',
+    );
+
+    await user.click(screen.getByRole('button', { name: /^편집본 #13/ }));
+    const other = within(panel()).getByRole('button', { name: '업로드' });
+    expect(other).toBeEnabled();
+    expect(other).not.toHaveAttribute('aria-busy');
+
+    // 돌아오면 아직 보내는 중이다 — 표시는 패널이 아니라 편집본에 붙어 있다
+    await user.click(screen.getByRole('button', { name: /^편집본 #12/ }));
+    expect(within(panel()).getByRole('button', { name: /^업로드/ })).toHaveAttribute(
+      'aria-busy',
+      'true',
+    );
+  });
+});
+
+describe('LibraryScreen — 목록 로딩·실패 (POK-443)', () => {
+  const entry = {
+    recipeId: 12,
+    streamId: 's1',
+    creatorId: '9',
+    recipeVersion: 1,
+    cut: { inAtMs: 0, outAtMs: 30_000 },
+    status: 'rendered',
+    broadcast: { status: 'ended', startedAt: null, endedAt: null, vodExpiresAt: null },
+    latestClip: null,
+    createdAt: '2026-09-20T11:00:00Z',
+    updatedAt: '2026-09-20T12:00:00Z',
+  };
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('첫 응답 전에는 「없다」가 아니라 격자 스켈레톤이다 — 낭독기엔 status 한 줄만 들린다', async () => {
+    let answer: (r: Response) => void = () => {};
+    stubFetch((url) =>
+      url.startsWith('/api/clip/library')
+        ? new Promise<Response>((resolve) => (answer = resolve))
+        : jsonResponse(200, { id: 9 }),
+    );
+    const { container } = renderWithProviders(<LibraryScreen />);
+
+    expect(screen.getAllByRole('status')).toHaveLength(1);
+    expect(screen.getByRole('status')).toHaveTextContent('편집본을 불러오는 중');
+    // 로드 뒤 격자와 같은 9:16 카드 자리 — 열 수를 못 재는 jsdom에서는 8장
+    const region = container.querySelector('[aria-busy="true"]')!;
+    expect(region.querySelectorAll('li')).toHaveLength(8);
+    expect(region.querySelector('ul')).toHaveAttribute('data-panel-open', 'false');
+    // 칩 줄·빈 상태는 편집본이 있어야(없어야) 서는 자리라 미리 그리지 않는다
+    expect(screen.queryByRole('group', { name: '상태 필터' })).toBeNull();
+    expect(screen.queryByText('아직 보관한 편집본이 없어요')).toBeNull();
+    expect(screen.queryByRole('list', { name: '편집본 목록' })).toBeNull();
+    await act(async () => {
+      expect(await axe(container)).toHaveNoViolations();
+    });
+
+    await act(async () => answer(jsonResponse(200, { items: [entry], nextCursor: null })));
+    expect(await screen.findByRole('list', { name: '편집본 목록' })).toBeInTheDocument();
+    expect(container.querySelector('[aria-busy="true"]')).toBeNull();
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+
+  it('스켈레톤은 실제 격자 열 수를 재어 두 줄을 채운다 — 5열이면 10장', () => {
+    const real = window.getComputedStyle.bind(window);
+    vi.spyOn(window, 'getComputedStyle').mockImplementation((el, pseudo) =>
+      el instanceof HTMLUListElement
+        ? ({
+            gridTemplateColumns: '213.6px 213.6px 213.6px 213.6px 213.6px',
+          } as CSSStyleDeclaration)
+        : real(el, pseudo),
+    );
+    const { container } = renderWithProviders(<LibrarySkeleton panelOpen={false} />);
+    expect(container.querySelectorAll('li')).toHaveLength(10);
+  });
+
+  it('스켈레톤도 패널이 열린 격자 규칙(data-panel-open)을 탄다', () => {
+    const { container } = renderWithProviders(<LibrarySkeleton panelOpen />);
+    expect(container.querySelector('ul')).toHaveAttribute('data-panel-open', 'true');
+  });
+
+  it('첫 조회가 실패하면 스켈레톤·빈 상태가 아니라 못 읽었다고만 말한다', async () => {
+    stubFetch((url) =>
+      url.startsWith('/api/clip/library')
+        ? jsonResponse(503, { error: 'unavailable' })
+        : jsonResponse(200, { id: 9 }),
+    );
+    renderWithProviders(<LibraryScreen />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('편집본 목록을 못 읽었어요');
+    expect(screen.queryByRole('status')).toBeNull();
+    expect(screen.queryByRole('list', { name: '편집본 목록' })).toBeNull();
+    expect(screen.queryByText('아직 보관한 편집본이 없어요')).toBeNull();
+  });
+
+  it('한 번 읽은 뒤 다시 읽기가 실패하면 격자를 그대로 두고 위에 한 줄만 알린다 — 다음 읽기가 되면 걷힌다', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let down = false;
+    stubFetch((url) =>
+      url.startsWith('/api/clip/library?') && down
+        ? jsonResponse(503, { error: 'unavailable' })
+        : url.startsWith('/api/clip/library?')
+          ? jsonResponse(200, { items: [entry], nextCursor: null })
+          : jsonResponse(200, { id: 9 }),
+    );
+    renderWithProviders(<LibraryScreen />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100);
+    });
+    expect(cards()).toHaveLength(1);
+
+    down = true;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+    });
+    expect(cards()).toHaveLength(1);
+    expect(screen.getByRole('alert')).toHaveTextContent('편집본 목록을 새로 읽지 못했어요');
+    expect(screen.getByRole('group', { name: '상태 필터' })).toBeInTheDocument();
+
+    down = false;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+    });
+    expect(cards()).toHaveLength(1);
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 });

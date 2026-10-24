@@ -5,6 +5,7 @@ import { LEGAL_URLS } from '@/features/legal/legalInfo';
 import { SettingsPageHeader } from '../SettingsPageHeader';
 import { LoginCard } from './LoginCard';
 import { ProfileCard } from './ProfileCard';
+import { ThemeCard } from './ThemeCard';
 import { ProfilePhotoDialog } from './ProfilePhotoDialog';
 import { useAccountMockState } from './useAccountMockState';
 import { useAccountState } from './useAccountState';
@@ -65,6 +66,8 @@ export function AccountSettingsScreen() {
       />
 
       <LoginCard email={email} />
+
+      <ThemeCard />
 
       <div className={styles.withdrawRow}>
         {/* 저장·사진 수정과 같은 가드다 — me가 없으면 모달 인사말의 이름이 비어

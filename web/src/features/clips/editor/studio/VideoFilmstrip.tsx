@@ -1,4 +1,5 @@
 import { useMemo } from 'react';
+import { Skeleton } from '@/ui';
 import { useSceneFrames, type SceneFrameSource, type SceneFrames } from '../useSceneFrames';
 import styles from './StudioScreen.module.css';
 
@@ -69,11 +70,17 @@ export function VideoFilmstrip({
     <div className={styles.filmstrip} aria-hidden>
       {times.map((ms, i) => {
         const url = ms === null ? null : frames.frameOf(ms);
+        // 뽑는 중인 칸만 스켈레톤이다(POK-444). 받아 둔 영상 밖 칸 · 못 뽑은 칸은 뽑을 것이 없어 빈 칸 그대로다
+        const loading = ms !== null && url === null && !frames.failed(ms);
         return (
           <span key={i} className={styles.filmstripTile} data-filmstrip-tile>
-            {/* 뽑은 장면(data:)이라 next/image가 다룰 대상이 아니다 */}
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            {url !== null ? <img src={url} alt="" /> : null}
+            {url !== null ? (
+              // 뽑은 장면(data:)이라 next/image가 다룰 대상이 아니다
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={url} alt="" />
+            ) : loading ? (
+              <Skeleton height="100%" radius="none" data-frame-loading />
+            ) : null}
           </span>
         );
       })}

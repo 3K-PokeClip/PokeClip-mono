@@ -19,8 +19,26 @@ describe('useLiveStatsMockState', () => {
 
   it('볼 수 없게 된 방송(명부에 없다)은 그래프를 불러온다고 하지 않는다', () => {
     const { result } = renderHook(() => useLiveStatsMockState('ended'));
-    expect(result.current.noChart).toBe('그래프를 불러오고 있어요');
+    // 받기 전에는 불러오는 중이다: 그래프 자리에 스켈레톤이 선다(POK-445)
+    expect(result.current.chartLoading).toBe(true);
     act(() => publishLiveData({ status: 'offline' }));
+    expect(result.current.chartLoading).toBe(false);
     expect(result.current.noChart).toBe('볼 수 없는 방송이에요');
+  });
+
+  it('그래프를 받으면 불러오는 중이 아니다', () => {
+    const { result } = renderHook(() => useLiveStatsMockState('live'));
+    act(() =>
+      publishLiveData({
+        chart: {
+          bucketSeconds: 30,
+          appliedOffsetMs: 0,
+          scope: 'recent',
+          buckets: [{ start: '2026-09-26T12:00:00Z', chats: 3, donations: 0 }],
+        },
+      }),
+    );
+    expect(result.current.chart).not.toBeNull();
+    expect(result.current.chartLoading).toBe(false);
   });
 });
