@@ -8,9 +8,10 @@
 # guard.sh 가 그 트리에서 종료 1 로 실패하고, 출력에 그 규칙 이름이 나와야
 # 통과다. testdata/guard/ok/ 는 모든 규칙을 지키는 트리라 guard.sh 가 통과해야
 # 한다. testdata/guard/ok_R10/ 은 R10 대상 경로(Media 역할 정책)를 채운 통과
-# 트리다. testdata/guard/err_<이름>/ 은 Terraform 도 받지 않는(파싱되지 않는)
-# 트리라 guard.sh 가 종료 코드 2 로 실패해야 한다(fail-closed). 읽을 수 없는
-# 파일은 git 에 둘 수 없어 시험이 임시 디렉터리에 만든다.
+# 트리다. testdata/guard/ok_R8/ 은 R8 대상 경로(엣지)에 다른 관리형 · 사용자
+# 정의 캐시 정책을 둔 통과 트리다. testdata/guard/err_<이름>/ 은 Terraform 도
+# 받지 않는(파싱되지 않는) 트리라 guard.sh 가 종료 코드 2 로 실패해야
+# 한다(fail-closed). 읽을 수 없는 파일은 git 에 둘 수 없어 시험이 임시 디렉터리에 만든다.
 # `terraform fmt -recursive` 를 깨는 fixture(파싱 오류 · fmt 가 고쳐 쓸 꼴)는
 # *.tf.in 으로 두고, 시험이 임시 디렉터리에 *.tf 로 복사해 돌린다.
 # 경로를 겨누는 규칙(R4 · R11 · R12)의 fixture 는 그 경로를 트리 안에 그대로
@@ -1207,6 +1208,7 @@ main() {
   expect_clean "${FIXTURES}/ok"
   expect_clean "${FIXTURES}/ok_R12"
   expect_clean "${FIXTURES}/ok_R10"
+  expect_clean "${FIXTURES}/ok_R8"
   for dir in "${FIXTURES}"/err_*/; do
     [[ -d "${dir}" ]] || continue
     expect_fixture_error "${dir%/}"
@@ -1241,7 +1243,7 @@ main() {
     echo "guard_test: ${failures}건 실패" >&2
     exit 1
   fi
-  echo "guard_test: 전부 통과(bad ${count}개 · ok 3개 · 운영 표지 5개)"
+  echo "guard_test: 전부 통과(bad ${count}개 · ok 4개 · 운영 표지 5개)"
 }
 
 main "$@"
