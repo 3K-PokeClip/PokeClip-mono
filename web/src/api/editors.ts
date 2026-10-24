@@ -21,6 +21,8 @@ interface DelegationWire {
   id: number;
   counterpartId: number;
   counterpartName: string;
+  /** 상대 프로필 사진(me의 profileImageUrl과 같은 규칙). 없으면 null, 이 칸을 싣기 전 서버면 칸째 없다 */
+  counterpartProfileImageUrl?: string | null;
   grantedAt: string;
 }
 
@@ -42,6 +44,8 @@ interface SentInvitationWire {
 export interface EditorDelegation {
   id: number;
   name: string;
+  /** 편집자 프로필 사진 주소. 없으면 null(아바타가 이니셜로 선다) */
+  profileImageUrl: string | null;
   grantedAt: string;
 }
 
@@ -63,6 +67,7 @@ export async function fetchEditorDelegations(): Promise<EditorDelegation[]> {
   return wires.map((wire) => ({
     id: wire.id,
     name: wire.counterpartName,
+    profileImageUrl: wire.counterpartProfileImageUrl ?? null,
     grantedAt: wire.grantedAt,
   }));
 }
