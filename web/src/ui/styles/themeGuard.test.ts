@@ -11,9 +11,18 @@ import { describe, expect, it } from 'vitest';
 // 영상 위 무대처럼 통째로 어두워야 하는 곳은 요소에 data-theme="dark"를 달아 토큰을 다크로 묶는다.
 
 const SRC = join(__dirname, '..', '..');
-// 프리미티브는 단계가 붙은 것(--pc-gray-950)과 안 붙은 것(--pc-white) 둘 다
-const LITERAL =
-  /#[0-9a-fA-F]{3,8}\b|\brgba?\(\s*\d|var\(--pc-(gray|primary|point|red|green|yellow|cyan|teal|white|black)(-|\))/;
+// 박힌 색으로 보는 것 — hex · rgb(숫자) · 함수 표기(hsl·oklch …) · 프리미티브 var(단계가 붙은
+// --pc-gray-950도, 안 붙은 --pc-white도) · 값 자리의 이름 색 white·black(`white-space` 같은 속성 이름과
+// `.white` 같은 셀렉터는 뺀다)
+const LITERAL = new RegExp(
+  [
+    String.raw`#[0-9a-fA-F]{3,8}\b`,
+    String.raw`\brgba?\(\s*\d`,
+    String.raw`\b(?:hsla?|hwb|lab|lch|oklab|oklch)\(`,
+    String.raw`var\(--pc-(?:gray|primary|point|red|green|yellow|cyan|teal|white|black)(?:-|\))`,
+    String.raw`:[^;{]*(?<![\w.#-])(?:white|black)(?![\w-])`,
+  ].join('|'),
+);
 const MARKS = ['테마 고정', '라이트 덮음', '라이트 값'];
 
 /** 표식 없이 색을 박은 줄 — `파일:줄  내용` */
@@ -41,6 +50,31 @@ function cssModules(): string[] {
 describe('라이트 모드 가드 — CSS 모듈의 박힌 색', () => {
   it('CSS 모듈을 찾는다', () => {
     expect(cssModules().length).toBeGreaterThan(50);
+  });
+
+  it('박힌 색 표기는 잡고, 비슷하게 생긴 이름·토큰은 놓아 준다', () => {
+    for (const line of [
+      'color: #fff;',
+      'background: rgb(0 0 0 / 0.5);',
+      'color: hsl(0 0% 100%);',
+      'color: oklch(0.7 0.1 250);',
+      'background: var(--pc-gray-950);',
+      'color: var(--pc-white);',
+      'color: white;',
+      'background: color-mix(in srgb, black 20%, transparent);',
+    ]) {
+      expect(LITERAL.test(line), line).toBe(true);
+    }
+    for (const line of [
+      'white-space: nowrap;',
+      '.white:hover {',
+      'color: currentColor;',
+      'background: transparent;',
+      'color: var(--pc-color-text-primary);',
+      'color: var(--pc-color-success-text);',
+    ]) {
+      expect(LITERAL.test(line), line).toBe(false);
+    }
   });
 
   it('색을 박은 줄은 모두 시맨틱 토큰이거나 표식이 있다', () => {
