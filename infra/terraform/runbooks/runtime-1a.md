@@ -817,34 +817,42 @@ plan 이 역할을 새로 만드는지 고치는지로 드러나고, 어느 쪽�
     건수와 이름 끝 토막만 냅니다.
 
     ```shell
+    # 새 bash 프로세스에서 돈다 — zsh 는 조건 문맥 안의 set -e 를 무시하고
+    # $(…) 결과를 단어로 나누지 않아, 조회 실패 · 정책 둘 이상이 「0 건」 으로
+    # 읽힌다. 조회마다 실패하면 멈춘다. 오류 원문(역할 · 계정 · ARN)은 버린다.
+    bash -c '
     role=pokeclip-prod-media
-    # 목록을 먼저 변수에 받는다 — for 의 $(…) 안에서 조회가 실패하면 빈
-    # 목록이 되어 「0 건」 으로 읽힌다. set -e 로 하나라도 실패하면 멈춘다.
-    if docs="$(
-      set -e
-      inline="$(aws iam list-role-policies --role-name "${role}" \
-        --query 'PolicyNames[]' --output text)"
-      for p in ${inline}; do
-        aws iam get-role-policy --role-name "${role}" --policy-name "${p}" \
-          --query PolicyDocument --output json
-      done
-      attached="$(aws iam list-attached-role-policies --role-name "${role}" \
-        --query 'AttachedPolicies[].PolicyArn' --output text)"
-      for a in ${attached}; do
-        v="$(aws iam get-policy --policy-arn "${a}" \
-          --query Policy.DefaultVersionId --output text)"
-        aws iam get-policy-version --policy-arn "${a}" --version-id "${v}" \
-          --query PolicyVersion.Document --output json
-      done
-    )" 2>/dev/null; then
-      printf 'internal-api-token %s\n' \
-        "$(printf '%s' "${docs}" | grep -c 'internal-api-token')"
-      printf 'stream-key-resolve-token %s\n' \
-        "$(printf '%s' "${docs}" | grep -c 'stream-key-resolve-token')"
-    else
-      printf '멈춤: 정책 읽기 실패\n'
-    fi
-    unset docs
+    stop() { printf "멈춤: %s 읽기 실패\n" "$1"; exit 1; }
+    inline="$(aws iam list-role-policies --role-name "${role}" \
+      --query "PolicyNames[]" --output text 2>/dev/null)" || stop "인라인 목록"
+    read -r -d "" -a names <<<"${inline}"
+    attached="$(aws iam list-attached-role-policies --role-name "${role}" \
+      --query "AttachedPolicies[].PolicyArn" --output text 2>/dev/null)" ||
+      stop "관리형 목록"
+    read -r -d "" -a arns <<<"${attached}"
+    docs=""
+    for p in "${names[@]}"; do
+      doc="$(aws iam get-role-policy --role-name "${role}" \
+        --policy-name "${p}" --query PolicyDocument --output json \
+        2>/dev/null)" || stop "인라인 정책"
+      docs+="${doc}"
+    done
+    for a in "${arns[@]}"; do
+      v="$(aws iam get-policy --policy-arn "${a}" \
+        --query Policy.DefaultVersionId --output text 2>/dev/null)" ||
+        stop "관리형 정책 판"
+      doc="$(aws iam get-policy-version --policy-arn "${a}" \
+        --version-id "${v}" --query PolicyVersion.Document --output json \
+        2>/dev/null)" ||
+        stop "관리형 정책"
+      docs+="${doc}"
+    done
+    printf "policies %s\n" "$(( ${#names[@]} + ${#arns[@]} ))"
+    printf "internal-api-token %s\n" \
+      "$(printf "%s" "${docs}" | grep -c "internal-api-token")"
+    printf "stream-key-resolve-token %s\n" \
+      "$(printf "%s" "${docs}" | grep -c "stream-key-resolve-token")"
+    '
     ```
 
     `internal-api-token 0` 이 아니면(공용 그릇이 다른 문장 · 변수 · 정책으로
@@ -934,6 +942,7 @@ plan 이 역할을 새로 만드는지 고치는지로 드러나고, 어느 쪽�
 
     ```shell
     cat >"${work}/probe.sh" <<'EOF'
+    denied=0
     for i in 1 2 3; do
       err="$(aws secretsmanager get-secret-value --region ap-northeast-2 \
         --secret-id pokeclip/prod/internal-api-token 2>&1 >/dev/null)"
@@ -943,15 +952,26 @@ plan 이 역할을 새로 만드는지 고치는지로 드러나고, 어느 쪽�
       unset err
       printf 'probe %s %s rc=%s code=%s\n' "${i}" "$(date -u '+%H:%M:%S')" \
         "${rc}" "${code:-NONE}"
+      [ "${rc}" -ne 0 ] && [ "${code}" = AccessDeniedException ] &&
+        denied=$((denied + 1))
       [ "${rc}" -eq 0 ] && break
       [ "${i}" -lt 3 ] && sleep 300
     done
+    # 종료 코드가 판정이다 — 마지막 줄의 종료 코드(sleep 을 건너뛴 [ ] 의 1)가
+    # 남지 않게 끝을 명시한다. 셋 다 거부면 0(SSM Success), 그 밖은 1.
+    if [ "${denied}" -eq 3 ]; then
+      printf 'verdict pass\n'
+      exit 0
+    fi
+    printf 'verdict stop\n'
+    exit 1
     EOF
     media_ssm <상자 키> "${work}/probe.sh"
     ```
 
-    *   셋 다 `code=AccessDeniedException`(`rc` 는 0 이 아님) → 통과. (c) 는
-        셋째 측정 시각에서 끝난 것으로 봅니다.
+    *   셋 다 `code=AccessDeniedException`(`rc` 는 0 이 아님) · `verdict
+        pass` · `SSM Success` → 통과. (c) 는 셋째 측정 시각에서 끝난 것으로
+        봅니다. 그 밖의 갈래는 모두 `verdict stop` · `SSM Failed` 입니다.
     *   한 번이라도 `rc=0`(성공) → 즉시 멈춤. 권한이 남았거나 전파 전입니다.
         회전하지 않고 (c) 30분을 다 채운 뒤 묶음을 다시 돕니다.
     *   측정 실패(send-command 실패 · 상자 무응답 · 다른 오류 코드 · 종료
