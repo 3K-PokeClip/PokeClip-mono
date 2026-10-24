@@ -17,6 +17,9 @@
 # 사례에서는 표준 오류가 정해진 줄과 바이트 그대로 같은지(끝 줄바꿈 · 빈 줄
 # 포함) 보고, aws 호출이 거부는 0회 · aws 실패는 1회인지 본다.
 # 추적(bash -x · SHELLOPTS)이나 allexport 를 켠 호출도 값을 내지 않는지 본다.
+# aws CLI 명령 기록이 켜져 있거나(프로필의 cli_history · AWS_CLI_HISTORY_FILE)
+# 그 검사를 하지 못하면 파일을 읽기 전에 종료 1 로 멈추는지 본다(가짜 aws 의
+# configure get 답 — fakebin/aws 머리 주석).
 # 호출자 셸의 환경(살아 있는 토큰 변수 등)은 사례 파일에 옮기지 않는다 — 가짜
 # aws 는 환경 중 시험이 보는 값만 적고(그 밖의 AWS_ 는 이름만), 시험은 표지
 # 변수가 남지 않는지 본다.
@@ -52,6 +55,7 @@ readonly PUT="${SCRIPT_DIR}/../put-secret-from-file.sh"
 readonly FAKEBIN="${SCRIPT_DIR}/fakebin"
 
 # put-secret-from-file.sh 의 종료 코드.
+readonly EXIT_HISTORY=1
 readonly EXIT_USAGE=2
 readonly EXIT_REJECTED=3
 readonly EXIT_DENIED=4
@@ -83,8 +87,20 @@ EXPECTED_ARGV_HEAD='secretsmanager put-secret-value --region ap-northeast-2'
 EXPECTED_ARGV_HEAD+=' --output json --no-cli-auto-prompt --secret-id'
 readonly EXPECTED_ARGV_HEAD
 readonly EXPECTED_ARGV_TAIL='--secret-string file:///dev/stdin'
+# CLI 기록 검사의 고정 줄(스크립트 머리 주석의 출력 표).
+readonly HISTORY_ENABLED='CLI HISTORY ENABLED'
+readonly HISTORY_UNCHECKED='CLI HISTORY UNCHECKED'
+NOTE_HISTORY_PROFILE='프로필의 cli_history 가 enabled — 값을 읽지 않음 ·'
+NOTE_HISTORY_PROFILE+=' 기록을 끄고 다시'
+readonly NOTE_HISTORY_PROFILE
+NOTE_HISTORY_FILE='AWS_CLI_HISTORY_FILE 이 설정됨 — 값을 읽지 않음 ·'
+NOTE_HISTORY_FILE+=' 변수를 지우고 다시'
+readonly NOTE_HISTORY_FILE
+NOTE_HISTORY_FAIL='CLI 기록 설정(cli_history)을 읽지 못함 — 값을 읽지 않음 ·'
+NOTE_HISTORY_FAIL+=' 켜짐과 같이 멈춤'
+readonly NOTE_HISTORY_FAIL
 # 사례 수(ok · skip 줄의 수). 사례를 더하거나 빼면 함께 고친다.
-readonly EXPECTED_CASES=56
+readonly EXPECTED_CASES=61
 # 호출자 환경의 표지 변수(셸에 살아 있는 토큰 변수를 흉내 낸 가짜 값). 사례
 # 디렉터리 어디에도 남지 않아야 한다 — 가짜 aws 는 환경 중 시험이 보는
 # 이름만 적는다.
@@ -206,8 +222,9 @@ write_pem() {
 #   case_dir, out, err, status, utf8_locale
 # Arguments:
 #   셸 모드(plain · xtrace-flag · xtrace-env · allexport-env · secret-export
-#   — 호출자가 secret_value 를 export · no-aws — PATH 에 aws 없음), 가짜
-#   aws 모드, 스크립트 인자들.
+#   — 호출자가 secret_value 를 export · no-aws — PATH 에 aws 없음 ·
+#   history-file — AWS_CLI_HISTORY_FILE 설정 · history-<답> — 가짜 aws 의
+#   configure get 답 FAKE_AWS_CLI_HISTORY), 가짜 aws 모드, 스크립트 인자들.
 #######################################
 run_put_as() {
   local shell_mode="$1" mode="$2" var
@@ -242,6 +259,10 @@ run_put_as() {
         export SHELLOPTS
         ;;
       secret-export) export secret_value=FakeInheritedExport ;;
+      history-file)
+        export AWS_CLI_HISTORY_FILE="${case_dir}/in/qxhistory.db"
+        ;;
+      history-*) export FAKE_AWS_CLI_HISTORY="${shell_mode#history-}" ;;
     esac
     exec "${BASH}" "${PUT}" "$@"
   ) </dev/null >"${case_dir}/stdout" 2>"${case_dir}/stderr"
@@ -457,10 +478,11 @@ expect_usage() {
 }
 
 #######################################
-# 성공 경로를 본다: 종료 0 · 이름 + VersionId 한 줄 · aws 1회 · 인자 · 받은
-# 값 · AWS_PAGER · 고정한 로캘(LC_ALL — 시험 로캘이 실제로 걸렸는지) · 사례
-# HOME · TMPDIR · SHELL(격리가 실제로 걸렸는지) · 호출자 환경의 표지 변수가
-# 사례 디렉터리에 없음 · 값과 계정 ID 0건 · 남은 것 없음.
+# 성공 경로를 본다: 종료 0 · 이름 + VersionId 한 줄 · aws 1회 · 인자 · CLI
+# 기록 검사 1회 · 받은 값 · AWS_PAGER · 고정한 로캘(LC_ALL — 시험 로캘이
+# 실제로 걸렸는지) · 사례 HOME · TMPDIR · SHELL(격리가 실제로 걸렸는지) ·
+# 호출자 환경의 표지 변수가 사례 디렉터리에 없음 · 값과 계정 ID 0건 · 남은 것
+# 없음.
 # Globals:
 #   case_dir, input, out, err, status, utf8_locale, PUT_SECRET_TEST_CANARY
 # Arguments:
@@ -487,6 +509,11 @@ expect_put() {
     "${argv}" != "${EXPECTED_ARGV_HEAD} ${secret_id} ${EXPECTED_ARGV_TAIL}" ]]
   then
     fail "${name}: aws 호출(1회) · 인자가 다름 — ${argv}"
+    return
+  fi
+  if [[ "$(contents_of "${case_dir}/aws/history-calls")" != \
+    'configure get cli_history' ]]; then
+    fail "${name}: CLI 기록 검사(configure get cli_history 1회)가 없음"
     return
   fi
   env=$'\n'"$(contents_of "${case_dir}/aws/env")"$'\n'
@@ -815,7 +842,8 @@ test_aws_failures() {
 }
 
 #######################################
-# PATH 에 aws 가 없으면 검사를 통과한 뒤 실패(종료 5)하고 값은 안 나온다 —
+# PATH 에 aws 가 없으면 CLI 기록 검사 · 파일 읽기 전에 실패(종료 5)하고 값은
+# 안 나온다 —
 # 표준 출력 없음 · 표준 오류는 고정 두 줄과 바이트 그대로 같다. 다른 사례와
 # 같이 격리한 셸(run_put_as)에서 돌리고 남은 것도 본다.
 # Globals:
@@ -834,6 +862,75 @@ test_aws_missing() {
   expect_absent aws-missing "${ONE_LINE_MARKER}" || return
   expect_no_leftovers aws-missing "${ONE_LINE_MARKER}" || return
   pass "aws-missing → 실패"
+}
+
+#######################################
+# CLI 기록이 켜졌거나 검사를 하지 못한 호출을 본다: 종료 1 · 표준 출력 없음 ·
+# 표준 오류가 고정 두 줄과 바이트 그대로 같음(기록 파일 경로를 되울리지 않음)
+# · secretsmanager 호출 0 · 값 0건 · 남은 것 없음.
+# Globals:
+#   input, out, err, status
+# Arguments:
+#   사례 이름, 셸 모드(history-*), 표준 오류의 기대 줄들.
+# Returns:
+#   어긋나면 1.
+#######################################
+expect_history_blocked() {
+  local name="$1" shell_mode="$2"
+  shift 2
+  run_put_as "${shell_mode}" ok cdn-secret "${input}"
+  if [[ "${status}" -ne "${EXIT_HISTORY}" || -n "${out}" ]] ||
+    ! stderr_is "$@"; then
+    fail "${name}: 종료 ${EXIT_HISTORY} · 「$*」 를 기대했으나 ${status} —" \
+      "${err}"
+    return 1
+  fi
+  if [[ "$(aws_calls)" -ne 0 ]]; then
+    fail "${name}: 기록 검사에서 멈췄는데 secretsmanager 를 부름"
+    return 1
+  fi
+  expect_absent "${name}" "${ONE_LINE_MARKER}" || return 1
+  expect_no_leftovers "${name}" "${ONE_LINE_MARKER}" || return 1
+  pass "${name} → 멈춤(종료 ${EXIT_HISTORY})"
+}
+
+#######################################
+# aws CLI 명령 기록: 프로필의 cli_history 가 enabled 이거나
+# AWS_CLI_HISTORY_FILE 이 설정돼 있으면 「CLI HISTORY ENABLED」, 설정을 읽지
+# 못하면 「CLI HISTORY UNCHECKED」 로 종료 1(값을 읽지 않음). 검사는 파일을
+# 읽기 전이다 — 없는 파일이어도 거부(종료 3)가 아니라 종료 1 이다. disabled ·
+# 값 없음(다른 성공 사례 — expect_put 이 검사 1회를 봄)은 그대로 넣는다.
+# Globals:
+#   case_dir, input, out, status
+#######################################
+test_cli_history() {
+  new_case || return
+  write_input '%s\n' "${ONE_LINE_VALUE}"
+  expect_history_blocked history-enabled history-enabled \
+    "${HISTORY_ENABLED}" "${NOTE_HISTORY_PROFILE}"
+  new_case || return
+  write_input '%s\n' "${ONE_LINE_VALUE}"
+  expect_history_blocked history-file history-file "${HISTORY_ENABLED}" \
+    "${NOTE_HISTORY_FILE}"
+  new_case || return
+  write_input '%s\n' "${ONE_LINE_VALUE}"
+  expect_history_blocked history-fail history-fail "${HISTORY_UNCHECKED}" \
+    "${NOTE_HISTORY_FAIL}"
+  new_case || return
+  input="${case_dir}/in/missing"
+  expect_history_blocked history-before-read history-enabled \
+    "${HISTORY_ENABLED}" "${NOTE_HISTORY_PROFILE}"
+  new_case || return
+  write_input '%s\n' "${ONE_LINE_VALUE}"
+  run_put_as history-disabled ok cdn-secret "${input}"
+  if [[ "${status}" -ne 0 ||
+    "${out}" != "SECRET PUT OK pokeclip/prod/cdn-secret ${VERSION_ID}" ||
+    "$(contents_of "${case_dir}/aws/history-calls")" != \
+    'configure get cli_history' ]]; then
+    fail "history-disabled: 검사 1회 뒤 넣기를 기대했으나 ${status} — ${err}"
+    return
+  fi
+  pass "history-disabled → 넣음"
 }
 
 #######################################
@@ -1222,6 +1319,7 @@ main() {
   test_file_checks
   test_signing_key
   test_one_line
+  test_cli_history
   test_quiet_shells
   test_caller_aws_env
   test_fake_aws_no_trace

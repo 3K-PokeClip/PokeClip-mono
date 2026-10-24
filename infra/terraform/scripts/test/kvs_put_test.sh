@@ -24,7 +24,10 @@
 #     ARN 의 계정 번호 · ARN 은 출력에 0건.
 #   - TMPDIR · HOME 에 남은 것이 없음.
 # 추적(bash -x · SHELLOPTS) · allexport 를 켠 호출과 호출자가 값 변수 이름을
-# export 해 둔 호출도 값을 내지 않는지 본다.
+# export 해 둔 호출도 값을 내지 않는지 본다. aws CLI 명령 기록이 켜져
+# 있거나(프로필의 cli_history · AWS_CLI_HISTORY_FILE) 그 검사를 하지 못하면
+# 이름 풀이 · 값 읽기 전에 종료 1 로 멈추는지 본다(가짜 aws 의 configure get
+# 답 — kvs_fakebin/aws 머리 주석).
 #
 # 정적 검사(no-heredoc · no-external-commands · no-file-writes ·
 # no-endpoint-override · no-debug-or-cli-input-json)는 흔한 회귀를 잡는
@@ -78,7 +81,9 @@ readonly ETAG='ETVPDKIKX0DER'
 readonly SECRET_VALUE='FakeCdnSecret+/=_-.~Z9xyz'
 readonly SECRET_MARKER='FakeCdnSecret'
 
-# 부른 동작마다 기대하는 인자(한 줄로 이은 것).
+# 부른 동작마다 기대하는 인자(한 줄로 이은 것). CLI 기록 검사(aws configure
+# get)의 인자는 get.argv 에 적힌다.
+readonly ARGV_HISTORY='configure get cli_history'
 readonly ARGV_DIG="+short ${ARN_ACCOUNT}.cloudfront-kvs.global.api.aws"
 ARGV_SECRET='secretsmanager get-secret-value --region ap-northeast-2'
 ARGV_SECRET+=" --no-cli-auto-prompt --secret-id ${SECRET_ID}"
@@ -94,7 +99,8 @@ ARGV_PUT+=" --key cdn-secret --if-match ${ETAG} --value file:///dev/stdin"
 readonly ARGV_PUT
 
 # 부른 차례(쉼표로 이은 것). 단계마다 앞 단계를 품는다.
-readonly CALLS_DIG='dig'
+readonly CALLS_HISTORY='aws configure get'
+readonly CALLS_DIG="${CALLS_HISTORY},dig"
 readonly CALLS_SECRET="${CALLS_DIG},aws secretsmanager get-secret-value"
 CALLS_DESCRIBE="${CALLS_SECRET},aws cloudfront-keyvaluestore"
 CALLS_DESCRIBE+=' describe-key-value-store'
@@ -105,9 +111,20 @@ readonly CALLS_ALL="${CALLS_DESCRIBE},aws cloudfront-keyvaluestore put-key"
 readonly NOTE_DIG='이름 풀이(dig) 실패 — 값을 넣지 않음 · 런북의 우회 절차로'
 readonly NOTE_CONNECT='KVS 엔드포인트 연결 실패(Could not connect) — SCP 거부 아님'
 readonly NOTE_DENIED='SCP 멈춤 규칙 — 다시 시도하지 말고 kty 에게 보고'
+readonly HISTORY_ENABLED='CLI HISTORY ENABLED'
+readonly HISTORY_UNCHECKED='CLI HISTORY UNCHECKED'
+NOTE_HISTORY_PROFILE='프로필의 cli_history 가 enabled — 값을 읽지 않음 ·'
+NOTE_HISTORY_PROFILE+=' 기록을 끄고 다시'
+readonly NOTE_HISTORY_PROFILE
+NOTE_HISTORY_FILE='AWS_CLI_HISTORY_FILE 이 설정됨 — 값을 읽지 않음 ·'
+NOTE_HISTORY_FILE+=' 변수를 지우고 다시'
+readonly NOTE_HISTORY_FILE
+NOTE_HISTORY_FAIL='CLI 기록 설정(cli_history)을 읽지 못함 — 값을 읽지 않음 ·'
+NOTE_HISTORY_FAIL+=' 켜짐과 같이 멈춤'
+readonly NOTE_HISTORY_FAIL
 
 # 사례 수(ok · skip 줄의 수). 사례를 더하거나 빼면 함께 고친다.
-readonly EXPECTED_CASES=46
+readonly EXPECTED_CASES=50
 
 failures=0
 passes=0
@@ -208,7 +225,9 @@ set_secret() {
 # Arguments:
 #   셸 모드(plain · xtrace-flag · xtrace-env · allexport-env · secret-export
 #   — 호출자가 secret_value 를 export · no-aws · no-dig — PATH 에서 그 명령을
-#   뺌), 가짜 aws 모드, 가짜 dig 모드, 스크립트 인자들.
+#   뺌 · history-file — AWS_CLI_HISTORY_FILE 설정 · history-<답> — 가짜 aws
+#   의 configure get 답 FAKE_AWS_CLI_HISTORY), 가짜 aws 모드, 가짜 dig 모드,
+#   스크립트 인자들.
 #######################################
 run_kvs_as() {
   local shell_mode="$1" aws_mode="$2" dig_mode="$3" var
@@ -245,6 +264,10 @@ run_kvs_as() {
         export SHELLOPTS
         ;;
       secret-export) export secret_value=FakeInheritedExport ;;
+      history-file)
+        export AWS_CLI_HISTORY_FILE="${case_dir}/cmd/qxhistory.db"
+        ;;
+      history-*) export FAKE_AWS_CLI_HISTORY="${shell_mode#history-}" ;;
     esac
     exec "${BASH}" "${KVS_PUT}" "$@"
   ) </dev/null >"${case_dir}/stdout" 2>"${case_dir}/stderr"
@@ -337,9 +360,10 @@ argv_of() {
 #######################################
 expect_argv() {
   local name="$1" op expected
-  for op in dig get-secret-value describe-key-value-store put-key; do
+  for op in get dig get-secret-value describe-key-value-store put-key; do
     [[ -f "${case_dir}/cmd/${op}.argv" ]] || continue
     case "${op}" in
+      get) expected="${ARGV_HISTORY}" ;;
       dig) expected="${ARGV_DIG}" ;;
       get-secret-value) expected="${ARGV_SECRET}" ;;
       describe-key-value-store) expected="${ARGV_DESCRIBE}" ;;
@@ -664,6 +688,44 @@ test_usage() {
 }
 
 #######################################
+# aws CLI 명령 기록: 프로필의 cli_history 가 enabled 이거나
+# AWS_CLI_HISTORY_FILE 이 설정돼 있으면 「CLI HISTORY ENABLED」, 설정을 읽지
+# 못하면 「CLI HISTORY UNCHECKED」 로 종료 1 — 기록 검사 밖에는 아무것도
+# 부르지 않는다(이름 풀이 · 값 읽기 · KVS 0 · 환경 변수 갈래는 설정 조회도
+# 0). 기록 파일 경로는 되울리지 않는다
+# (표준 오류 바이트 대조). disabled 는 그대로 넣는다(값 없음은 다른 사례).
+#######################################
+test_cli_history() {
+  local spec note head calls
+  for spec in enabled file fail; do
+    head="${HISTORY_ENABLED}"
+    calls="${CALLS_HISTORY}"
+    case "${spec}" in
+      enabled) note="${NOTE_HISTORY_PROFILE}" ;;
+      file)
+        note="${NOTE_HISTORY_FILE}"
+        calls=""
+        ;;
+      fail)
+        head="${HISTORY_UNCHECKED}"
+        note="${NOTE_HISTORY_FAIL}"
+        ;;
+    esac
+    new_case || return
+    run_kvs_as "history-${spec}" ok ok --kvs-arn "${KVS_ARN}" --secret-id \
+      "${SECRET_ID}"
+    check_run "history-${spec}" "${EXIT_FAILED}" "" "${calls}" \
+      "${head}" "${note}" || continue
+    pass "history-${spec} → 종료 ${EXIT_FAILED}"
+  done
+  new_case || return
+  run_kvs_as history-disabled ok ok --kvs-arn "${KVS_ARN}" --secret-id \
+    "${SECRET_ID}"
+  check_run history-disabled 0 "KVS PUT OK" "${CALLS_ALL}" || return
+  pass "history-disabled → 넣음"
+}
+
+#######################################
 # PATH 에 aws · dig 가 없으면 아무것도 부르지 않고 실패(종료 1)한다.
 # Globals:
 #   tmp_root
@@ -961,6 +1023,7 @@ main() {
   test_denied
   test_failures
   test_secret_values
+  test_cli_history
   test_missing_tools
   test_quiet_shells
   test_real_cli_contract

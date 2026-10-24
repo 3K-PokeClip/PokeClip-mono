@@ -405,7 +405,10 @@ O7f 의 2(T6b)와 4(T0 · T8e 해석 · T11 404 · T2b)입니다. 아래 명령�
     거부면 값을 넣지 않고 A2 로 갑니다. 종료 2(검사 불가)면 넣지 않고 kty
     에게 보고합니다.
 1.  AWS CLI 명령 기록이 꺼져 있습니다([엣지 비밀 런북](edge-secrets.md)
-    「시험용 스트림 키 넣기」 의 1 과 같은 블록 — `CLI HISTORY OK`).
+    「시험용 스트림 키 넣기」 의 1 과 같은 블록 — `CLI HISTORY OK`). 이
+    단계는 이중 확인입니다 — 스크립트도 값을 읽기 전에 같은 검사로 막습니다
+    (종료 1 · `CLI HISTORY ENABLED` · `CLI HISTORY UNCHECKED` — 이름 풀이 ·
+    값 읽기 · KVS 호출 0). 그때는 기록을 끈 뒤 다시 합니다.
 1.  `aws --version` 이 `aws-cli/2.38.1` 이 아니면
     `bash infra/terraform/scripts/test/kvs_put_test.sh` 의
     `ok: real-cli-contract(` 줄을 본 뒤 진행합니다. 그 줄이 아니면(skip ·
