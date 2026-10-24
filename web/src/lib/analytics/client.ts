@@ -170,6 +170,14 @@ export function identifyUser(userId: number, optOut = false): void {
   });
 }
 
+/**
+ * 지금 채널에서의 역할을 이후 모든 이벤트에 싣는다(`active_role`) — 스트리머와 편집자의 쓰임을 나눠 본다.
+ * 열거 둘뿐이고 상대 채널 번호는 싣지 않는다. 로그아웃의 reset이 함께 지운다.
+ */
+export function setActiveRole(role: 'owner' | 'editor'): void {
+  withAnalytics((posthog) => posthog.register({ active_role: role }));
+}
+
 /** 다음 방문자가 앞사람으로 묶이지 않게 식별·기기 식별자를 지운다. */
 export function resetIdentity(): void {
   withAnalytics((posthog) => posthog.reset());

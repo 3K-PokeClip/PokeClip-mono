@@ -11,6 +11,7 @@ const posthog = vi.hoisted(() => ({
   opt_out_capturing: vi.fn(),
   clear_opt_in_out_capturing: vi.fn(),
   stopSessionRecording: vi.fn(),
+  register: vi.fn(),
 }));
 vi.mock('posthog-js', () => ({ default: posthog }));
 
@@ -230,6 +231,16 @@ describe('identifyUser — 「이용 분석 참여」 꺼짐(처리방침 7·9�
     const [, config] = posthog.init.mock.calls[0] ?? [];
     expect(config.opt_out_capturing_persistence_type).toBe('cookie');
     expect(config.cross_subdomain_cookie).toBe(true);
+  });
+});
+
+describe('setActiveRole — 지금 채널에서의 역할을 모든 이벤트에 싣는다', () => {
+  it('열거 하나만 공통 속성으로 등록한다 — 상대 채널 번호는 싣지 않는다', async () => {
+    const { client } = await load('phc_test', 'https://us.i.posthog.com');
+    client.initAnalytics();
+    await client.whenAnalyticsLoaded();
+    client.setActiveRole('editor');
+    expect(posthog.register).toHaveBeenCalledWith({ active_role: 'editor' });
   });
 });
 

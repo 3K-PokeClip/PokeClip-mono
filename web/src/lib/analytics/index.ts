@@ -5,6 +5,7 @@ export {
   initAnalytics,
   REPLAY_BLOCK_CLASS,
   resetIdentity,
+  setActiveRole,
 } from './client';
 export {
   toYoutubeCategoryId,
