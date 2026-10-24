@@ -2,8 +2,9 @@
 
 prod 엣지(CloudFront · 공개 ALB · NLB)를 운영 이름 그대로 시험하는
 절차입니다. 설계서 5-6(시험 계획과 시험 접속법)과 계획 M10 c10 에 해당하고,
-7단계 O7f 의 KVS 값 입력(멈춤 자리 ②)도 여기에 있습니다. 8단계(O8)의 개통
-뒤 관찰은 이 시험표를 `--resolve` 없이 다시 돌립니다.
+7단계 O7f 의 KVS 값 입력(멈춤 자리 ②)도 여기에 있습니다. 8단계(O8)는
+「경로 우회 시험」 을 통과한 뒤에 시작하고, 개통 뒤 관찰은 이 시험표를
+`--resolve` 없이 다시 돌립니다.
 
 *   실행자는 kty 입니다. **kty 로컬 터미널**에서 kty IAM 사용자 프로필로
     돌립니다. 출력에 계정 ID 가 든 ARN · 엣지 IP 가 섞여 에이전트 세션이나
@@ -44,7 +45,7 @@ prod 엣지(CloudFront · 공개 ALB · NLB)를 운영 이름 그대로 시험�
 | 1 | edge apply | [prod/edge](../prod/edge/README.md) 「적용 순서(O7f)」 |
 | 2 | T6b(KVS 값 입력 전) | 「시험표」 · 「판정 문구」 |
 | 3 | KVS 값 입력(멈춤 자리 ②) | 「KVS 값 입력」 |
-| 4 | 엣지만 시험 — T0 · T8e 해석 · T11 404 · T2b 기본 거절 | 「엣지만 시험」 |
+| 4 | 엣지만 시험 — T0 · T8e 해석 · T11 404 · T2b 기본 거절 · T2b 경로 우회 | 「엣지만 시험」 · 「경로 우회 시험」 |
 | 5 | 랜딩 업로드(kty 로컬) | [prod 산출물 런북](prod-artifacts.md) 「랜딩 업로드(O7f 의 5)」 |
 | 6 | 런타임 트랙 2단 | [런타임 트랙 계약](../CONTRACT-runtime.md) |
 | 7 | auth · clip · next 정상 기동 확인 | 계획 M10 O7f 7 |
@@ -155,9 +156,9 @@ SNI · Host 를 `media.pokeclip.com` · `api.pokeclip.com` ·
 | T9a | Media 빈 CDN 비밀 기동 | Media 미기동 · 인스턴스 로그 고정 문자열 · 복구 절차(경보 검증 보류) | O7e([Media 교체 런북](media-swap.md)) |
 | T8e | NLB IP · AZ | ingest 해석 IP 하나 · 교체 전후 같음 | 해석은 엣지만, 비교는 T8a 와 함께 |
 | T11 | 종료 신호 경로 | media 이름으로 `POST /api/ingest/end-signal` 이 원본(제어면 서버 배포 전에는 nginx 제어면 포트)에 닿음 · 캐시 안 됨 · 시청자 쿠키 없이 통과 · 표준 로그 · 원본 로그에 Authorization 값 0건 · 4D 수신부 배포 전에는 404 그대로 전달 | 404 는 엣지만, 유효 요청 202 는 제어면 서버 반영 뒤 |
-| T2b | 기본 거절 | 아래 「T2b 기본 거절」 | 엣지만 |
+| T2b | 기본 거절 · 경로 우회 | 아래 「T2b 기본 거절」 · 「경로 우회 시험」(O8 개통 조건) | 엣지만 |
 | T1 | 다른 쿠키 두 시청자 | 목록 종류별 Cache-Control 기록 · 조각 · 파트 두 번째 시청자 적중 · 블로킹 목록은 정상 전달만 · 원본 302 · Set-Cookie · `session` 0건 | 런타임 뒤 |
-| T2 | 쿠키 없음 · 다른 방송 쿠키 | 403, 원본 도달 0 | 런타임 뒤 |
+| T2 | 쿠키 없음 · 다른 방송 쿠키 · 경로 우회 | 403, 원본 도달 0 · 경로 우회는 「경로 우회 시험」(O8 개통 조건) | 런타임 뒤 |
 | T3 | 쿠키 만료 | 만료 뒤 403, 재발급 뒤 복구 | 런타임 뒤 |
 | T4 | 블로킹 리로드 | 쿼리마다 다른 캐시 키, 504 0건 | 런타임 뒤 |
 | T5 | Host · Authorization 전달 | 원본에서 Host = `media.pokeclip.com` · Bearer 있음 · 쿠키 미전달. 시청자 임의 Authorization 은 원본에 안 닿음 | 런타임 뒤 |
@@ -220,7 +221,8 @@ O7f 의 2(T6b)와 4(T0 · T8e 해석 · T11 404 · T2b)입니다. 아래 명령�
 
 *   **T11 404**(제어면 서버 배포 전 · A1 이면 하지 않음): nginx 제어면 포트가
     직접 404 를 내고, 그 404 가 그대로 전달되며 캐시되지 않습니다(설계
-    3-3-1). 502 가 나오면 실패입니다. 두 번 보내 둘 다 원본까지 가는지
+    3-3-1). 502 가 나오면 실패이고, 원인 1순위는 아래 「VPC origin TLS
+    전제」 입니다. 두 번 보내 둘 다 원본까지 가는지
     (`x-cache` 가 `Miss` 또는 `Error`, `Hit` 아님) 봅니다.
 
     ```shell
@@ -241,6 +243,102 @@ O7f 의 2(T6b)와 4(T0 · T8e 해석 · T11 404 · T2b)입니다. 아래 명령�
 *   공개 ALB: `api.pokeclip.com/unknown` · 모르는 Host 는 404 입니다.
 *   런타임 뒤: 유효 쿠키로 `/live` 가 없는 경로를 요청해도 404 이고, nginx
     로그 도달은 0 입니다.
+*   쿠키 없는 경로 우회 사례도 T2b 에서 합니다(아래 「경로 우회 시험」).
+
+## 경로 우회 시험
+
+**O8(이름 공개)의 개통 조건입니다 — 통과하기 전에는 O8 을 시작하지
+않습니다.** 쿠키 없는 사례는 T2b(엣지만)에서, 방송 쿠키 사례는 T2(런타임
+뒤)에서 합니다. 공개 이름이 열리기 전에도 `--resolve` 로 O7f 뒤 배포에 바로
+닿으므로, DNS 미등록은 노출을 막지 못합니다.
+
+배경:
+
+*   CloudFront 는 URI 경로를 RFC 3986 대로 정규화한 뒤 비헤이비어를 고르고,
+    고른 뒤에는 원 경로(raw URI path)를 원본에 보냅니다. 정규화에서 `//` ·
+    `..` 같은 문자가 지워집니다(AWS 개발자 안내서
+    [캐시 비헤이비어 설정](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/DownloadDistValuesCacheBehavior.html)
+    「Path normalization」 — 2026-10-24 원문 확인). 그래서
+    `/live/../api/ingest/x` 는 쿠키 · 함수가 없는 `/api/ingest/*`
+    비헤이비어로 골라지지만 원본에는 `/live/…` 그대로 갑니다.
+*   내부 ALB 도 규칙을 정규화 경로로 고릅니다 — 「The rule evaluation is
+    performed only after URI normalization occurs.」(AWS ALB 안내서
+    [규칙 조건 유형](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/rule-condition-types.html)
+    「Path conditions」 — 2026-10-25 원문 확인). 대상 그룹 선택은 정규화
+    경로 기준입니다.
+*   Media 상자 nginx 에는 원문 경로 거절이 이미 있습니다.
+    `infra/media-host/nginx/nginx.conf.tmpl` 의 `$raw_path_unsafe` 가 live ·
+    제어면 포트에서 400 을, playback 원문 대조가 403 을 냅니다. 계약 시험
+    `infra/media-host/test/proxy_contract.sh` 가 정규화 우회 사례
+    (`test/lib/normalization_cases.sh`)로 거절과 상류 호출 0 을 봅니다.
+*   미확인 셋 — ① ALB 가 상류에 원 경로를 넘기는지 정규화 경로를 넘기는지
+    ② 서명 쿠키의 리소스 대조가 원 경로 기준인지 ③ CloudFront 가 `%2e` ·
+    `%2f` · `%5c` 를 정규화하는지. 셋 다 방송 간 우회의 결과를 가르므로
+    **T2 사례가 가장 중요한 실측**입니다.
+
+| 언제 | 요청(쿠키) | 통과 조건 |
+|---|---|---|
+| T2b | `/live/../api/ingest/<표식>` · `/playback/../api/ingest/<표식>` · `/live/../api/streams/<표식>/rewind`(쿠키 없음) | 차단 계층 · 응답 코드 기록 · 엣지 차단이면 nginx 도달 0 · nginx 차단이면 거절 응답 + 보호 대상 상류 전달 0 |
+| T2 | `/live/<A>/../<B>/index.m3u8`(방송 A 쿠키) | 방송 A 쿠키로 B 콘텐츠가 반환되지 않음(B 상류 전달 0) |
+
+*   **변형**: 각 사례의 `/../` 를 `/%2e%2e/` · `/..%2f` · `/..%5c` ·
+    `//../` 로 바꾼 것도 같은 조건입니다.
+*   **명령**: `curl --path-as-is` 로 보냅니다(없으면 curl 이 `..` 를 먼저
+    접습니다). 시험 직전 시각(`date -u`)을 적어 두고 아래 SSM 조회의 시작
+    시각으로 씁니다.
+
+    ```shell
+    probe="pcpt$(date -u +%H%M%S)"
+    date -u '+%Y-%m-%d %H:%M:%S UTC' > "${evidence}/path-since.txt"
+    for dots in /../ /%2e%2e/ /..%2f /..%5c //../; do
+      for path in "/live${dots}api/ingest/${probe}" \
+        "/playback${dots}api/ingest/${probe}" \
+        "/live${dots}api/streams/${probe}/rewind"; do
+        curl --path-as-is --resolve "media.pokeclip.com:443:${edge_ip}" -sS \
+          -o /dev/null -w "${path} %{http_code}\n" \
+          "https://media.pokeclip.com${path}"
+      done
+    done | tee "${evidence}/t2b-path.txt"
+    ```
+
+*   **T2(방송 쿠키)**: `a_id` · `b_id` 는 시험 방송 둘의 `ingestStreamId`
+    입니다. `cookie_jar` 는 방송 A 의 서명 쿠키 셋(O7f 의 10 과 같은 발급)을
+    담은 쿠키 파일이고, 증거 디렉터리 밖에 둡니다(`mktemp` — 0600). 쿠키는
+    이 파일로만 넘기고 시험 뒤 지웁니다(명령 인자 · 증거에 값이 남지 않게).
+
+    ```shell
+    for dots in /../ /%2e%2e/ /..%2f /..%5c //../; do
+      path="/live/${a_id}${dots}${b_id}/index.m3u8"
+      curl --path-as-is -b "${cookie_jar}" \
+        --resolve "media.pokeclip.com:443:${edge_ip}" -sS -o /dev/null \
+        -w "${path} %{http_code}\n" "https://media.pokeclip.com${path}"
+    done | tee "${evidence}/t2-path.txt"
+    rm -f "${cookie_jar}" && test ! -e "${cookie_jar}" && echo removed
+    ```
+
+*   **판정 근거 = 응답 코드 + SSM 판정 줄의 건수**(건수만 · 실행 직전
+    승인). Media 상자의 유닛 저널(nginx 접근 로그가 남는 곳 —
+    [media-host README](/infra/media-host/README.md) 「로그」)에서 시작
+    시각 뒤의 줄을 셉니다. 꼴은 그 README 「시작 · 정지」 의 건수 꼴(`awk` ·
+    조회 실패는 0 건이 아니라 실패)을 따르고, 원문은 내지 않습니다.
+*   **차단 계층**: 사례마다 응답 코드와 막은 계층을 `results.tsv` 비고에
+    적습니다. 표식(T2 는 `b_id`)이 든 nginx 줄이 없으면 엣지 차단(CloudFront
+    키 그룹 403 · deny-default 404)이고, 있으면 nginx 까지 온 것입니다.
+    *   엣지 차단: nginx 도달 0 이면 통과입니다.
+    *   nginx 차단: 거절 응답(400 · 403 · 404)이고, 보호 대상 상류(MediaMTX
+        `127.0.0.1:8888` · 재생 서버 `127.0.0.1:9996`)로 넘긴 줄이 0(그
+        줄의 `$upstream_addr` 가 `-`)이면 통과입니다. 제어면 상류로 넘긴
+        줄은 실패로 세지 않습니다 — `/…/../api/ingest/…` 가 정규화되면
+        원래 서명 쿠키 없이 열린 `/api/ingest/…` 와 같은 요청입니다.
+    *   T2: 방송 A 쿠키로 B 콘텐츠가 반환되지 않아야 합니다 — `b_id` 가 든
+        줄 가운데 상류로 넘긴 줄(`$upstream_addr` 가 `-` 아님)이 0 입니다.
+*   **실패면 O8 을 중단합니다.** kty 에게 보고하고, 재현된 누락 사례만
+    Media 상자 nginx 에 보강합니다(후속 티켓).
+*   통과 뒤 O8 은 [prod/records](../prod/records/README.md) 「적용 —
+    이름마다 apply(O8)」 대로 합니다. 이 루트의 첫 apply(처음 여는 이름)는
+    `terraform_data.remote_contract` 가 함께 생성되어 plan 이 「추가 = 그
+    이름의 레코드 수 + 1 · 그 밖 0」 이고, 그 뒤 이름은 「추가 = 그 이름의
+    레코드 수 · 그 밖 0」 입니다.
 
 ## 판정 문구
 
@@ -357,10 +455,14 @@ media 배포의 media-alb 원본 도메인은 내부 ALB DNS 이름이라 내부
 비헤이비어가 Host = `media.pokeclip.com` 을 원본에 넘기므로 CloudFront 는
 그 Host 로 인증서 이름을 맞춥니다(AWS 문서 using-https-cloudfront-to-custom-origin
 · cnames-and-https-requirements). 이 규칙이 VPC origin 경로에도 그대로
-적용되는지는 첫 edge apply 뒤 `/live` 시험에서 판정합니다
-([prod/edge](../prod/edge/README.md) 「VPC origin TLS 전제」 와 같은 뜻).
+적용되는지는 첫 edge apply 뒤 원본까지 가는 첫 요청인 T6b 의 end-signal ·
+T11 404 에서 판정합니다([prod/edge](../prod/edge/README.md) 「VPC origin TLS
+전제」 와 같은 뜻).
 
-*   T6b · T11 · 런타임 뒤 `/live` 에서 **502 가 나면 원인 1순위**입니다.
+*   T6b 의 end-signal · T11 404 · 런타임 뒤 `/live` 에서 **502 가 나면 원인
+    1순위**입니다.
+*   502 가 나도 원본 프로토콜을 http-only 로 내리지 않습니다 — 내리면
+    Bearer 가 VPC 안에서 평문으로 갑니다(kty 결정 없이 금지).
 *   그때 VPC 안(Media 상자 — SSM · 실행 직전 승인)에서 내부 ALB 인증서의
     이름을 봅니다. `*.pokeclip.com` 이 나와야 합니다.
 
@@ -380,7 +482,8 @@ media 배포의 media-alb 원본 도메인은 내부 ALB DNS 이름이라 내부
     *   m3u8 의 `x-cache` 를 기록합니다.
     *   `Origin: https://app.pokeclip.com` 요청 → ACAO = app · ACAC = true.
         `Origin: https://example.invalid` → ACAO 없음.
-*   **T2**: 「T2b 기본 거절」 의 런타임 뒤 항목을 함께 봅니다.
+*   **T2**: 「T2b 기본 거절」 의 런타임 뒤 항목을 함께 봅니다. 방송 쿠키의
+    경로 우회는 「경로 우회 시험」 입니다(O8 개통 조건).
 *   **T4**:
     *   두 플레이어를 동시에 붙여, 첫 요청은 Miss 이고 나머지는 Hit 인지
         봅니다(`x-edge-result-type`).
@@ -401,7 +504,7 @@ media 배포의 media-alb 원본 도메인은 내부 ALB DNS 이름이라 내부
     *   제어면 서버(I1-6) 배포 전에는 위 「T11 404」 그대로입니다.
     *   배포 뒤(`control_upstream` 반영 교체 뒤)에는 유효 요청 202 입니다
         (POK-322 — 후속). 그 전이면 「보류」 로 기록합니다.
-    *   표준 로그 · nginx 로그에 Authorization 0건(아래 「비밀 · 쿠키 0건」).
+    *   표준 로그 · nginx 로그에 Authorization 0건(아래 「비밀 · 쿠키 0건 확인」).
     *   내부 ALB → Media HTTP 는 계약4 개정본(팀 위키 PR 171) 기준으로
         정상입니다.
 
@@ -428,12 +531,17 @@ CLOUDFRONT WAF 의 속도 규칙 기본값 20000(5분 · IP 하나)은 추정입
     (`CloudFront-Policy` · `CloudFront-Signature` · `CloudFront-Key-Pair-Id`)과
     `Bearer` 가 0건인지 셉니다.
 *   **WAF 로그**: `authorization` · `cookie` 헤더는 가려 남깁니다(값 대신
-    `REDACTED`). 같은 이름들이 값으로 0건인지 셉니다.
+    `REDACTED`). 같은 이름들이 값으로 0건인지 셉니다. 가리는 것은 로그뿐이고
+    요청 샘플은 가리지 않습니다(웹 ACL 데이터 보호는 후속) — 시험 중 · 뒤에
+    WAF 콘솔의 샘플 요청을 열지 않습니다.
+*   **함수 시험**: live-auth 에 `aws cloudfront test-function` · 콘솔 함수
+    시험 탭을 쓰지 않습니다(출력에 KVS 값이 든 Authorization 이 찍힙니다).
 *   **원본 쪽**(nginx · MediaMTX · 사이드카 · 저널): O7f 의 9 의
     `secret-count.sh` 결과(`SECRET COUNT … 0`)를 씁니다.
 *   **증거 디렉터리**: 이 런북이 남긴 파일(`curl -D -` 헤더 포함)에 쿠키 ·
     Bearer 값이 없는지 봅니다. 헤더를 저장하는 명령은 응답 헤더만 남기고
-    요청 헤더를 찍지 않습니다(`-v` 쓰지 않음).
+    요청 헤더를 찍지 않습니다(`-v` 쓰지 않음). 「경로 우회 시험」 의 쿠키
+    파일은 지워졌어야 합니다(`removed`).
 
 ```shell
 aws logs filter-log-events --region us-east-1 \
@@ -466,8 +574,10 @@ Budgets 경보가 오면 kty 가 원천을 찾습니다. 표준 로그 급증이
 | T8e 해석 | | | | |
 | T11 404 | | | | |
 | T2b | | | | |
+| 경로 우회(T2b) | | | | |
 | T1 | | | | |
 | T2 | | | | |
+| 경로 우회(T2) | | | | |
 | T3 | | | | |
 | T4 | | | | |
 | T5 | | | | |

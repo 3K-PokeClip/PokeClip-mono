@@ -65,7 +65,7 @@ clip ↔ auth · RDS ← auth · clip · 로드밸런서 → Media 규칙은 위
     되감기 · VOD 를 media 배포의 `/dvr/*` · `/vod/*` 로만 받고, CORS 응답
     헤더는 그 비헤이비어의 응답 헤더 정책(media-cors)이 붙입니다. 플레이어
     요청이 사용자 정의 헤더 없는 GET 이라 사전 요청(OPTIONS)이 없다는 전제이고
-    (허용 헤더 기본 빈 목록 — G14), T1 · T10 에서 OPTIONS 가 생기면 다시
+    (허용 헤더 기본 `["range"]` — 빈 목록은 provider 가 못 받음 · 사전 요청 0 전제는 G14 그대로), T1 · T10 에서 OPTIONS 가 생기면 다시
     봅니다. `prod/runtime/rewind_bucket.tf` 머리 주석 「edge 에 묻는다」 의
     답입니다.
 *   **비밀 암호화 키**: 앱 비밀 그릇은 기본 KMS 키(`aws/secretsmanager`)를
