@@ -2,6 +2,7 @@ package com.pokeclip.chat.collector.soop.chat;
 
 import com.pokeclip.chat.collector.archive.ChatArchive;
 import com.pokeclip.chat.collector.persist.ChatBuffer;
+import com.pokeclip.chat.collector.persist.DonationBuffer;
 import com.pokeclip.chat.collector.relay.RelaySink;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
@@ -19,6 +20,7 @@ class SoopChatConfigurationTest {
     private final ApplicationContextRunner runner = new ApplicationContextRunner()
             .withUserConfiguration(SoopChatConfiguration.class)
             .withBean(ChatBuffer.class, ChatBuffer::new)
+            .withBean(DonationBuffer.class, DonationBuffer::new)
             .withBean(ChatArchive.class, () -> ChatArchive.NONE)
             .withBean(RelaySink.class, () -> RelaySink.NONE)
             .withPropertyValues("pokeclip.soop.chat.sdk-url=http://127.0.0.1:1/sdk.js",
@@ -57,7 +59,7 @@ class SoopChatConfigurationTest {
     void 다시_붙기_간격은_두_배씩_상한까지() {
         SoopChatProperties p = new SoopChatProperties(true, "i", "s", "u", "o", 1, Duration.ofSeconds(1),
                 Duration.ofSeconds(60));
-        SoopChatSessions sessions = new SoopChatSessions(p, new ChatBuffer(), ChatArchive.NONE, RelaySink.NONE,
+        SoopChatSessions sessions = new SoopChatSessions(p, new ChatBuffer(), new DonationBuffer(), ChatArchive.NONE, RelaySink.NONE,
                 System::currentTimeMillis);
         try {
             assertThat(sessions.backoff(0)).isEqualTo(Duration.ofSeconds(1));

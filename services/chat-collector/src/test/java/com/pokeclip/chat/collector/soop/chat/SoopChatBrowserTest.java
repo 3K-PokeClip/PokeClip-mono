@@ -6,7 +6,9 @@ import com.pokeclip.chat.collector.archive.ArchivableChat;
 import com.pokeclip.chat.collector.archive.ArchiveCounters;
 import com.pokeclip.chat.collector.archive.ChatArchive;
 import com.pokeclip.chat.collector.persist.ChatBuffer;
+import com.pokeclip.chat.collector.persist.DonationBuffer;
 import com.pokeclip.chat.collector.persist.PersistableChat;
+import com.pokeclip.chat.collector.persist.PersistableDonation;
 import com.pokeclip.chat.collector.relay.RelayPayload;
 import com.pokeclip.chat.collector.relay.RelaySink;
 import com.pokeclip.chat.collector.soop.chat.FakeSoopSdkServer.Step;
@@ -42,6 +44,7 @@ class SoopChatBrowserTest {
 
     private FakeSoopSdkServer sdk;
     private ChatBuffer buffer;
+    private final DonationBuffer donations = new DonationBuffer();
     private final List<ArchivableChat> archived = new CopyOnWriteArrayList<>();
     private final List<String> relayed = new CopyOnWriteArrayList<>();
     private final List<RelayPayload> relayPayloads = new CopyOnWriteArrayList<>();
@@ -103,7 +106,7 @@ class SoopChatBrowserTest {
                 return ArchiveCounters.NONE;
             }
         };
-        sessions = new SoopChatSessions(properties, buffer, archive, relay, System::currentTimeMillis);
+        sessions = new SoopChatSessions(properties, buffer, donations, archive, relay, System::currentTimeMillis);
         browser = new SoopChatBrowser(properties, sessions);
         sessions.attach(new SoopChatSessions.Tabs() {
             @Override
@@ -153,6 +156,54 @@ class SoopChatBrowserTest {
         sleep(300);
         assertThat(buffer.drain(100)).isEmpty();
         assertThat(archived).hasSize(2);
+    }
+
+    /**
+     * 후원 여섯은 표 바구니와 중계로 가고, 원본 아카이브 · 채팅 바구니에는 안 간다(POK-431). 다시보기 · 방송국 · 중계방 후원과 받지 않는
+     * 종류(구독 · 정산 · 퀵뷰 · OGQ 선물)는 어디에도 안 간다. 개수가 숫자가 아니면 null로 남는다. 페이지 거름망 · 칸 순서까지 진짜 탭에서 잰다
+     */
+    @Test
+    void 후원_여섯만_표와_중계로_가고_원본에는_안_간다() {
+        List<String> kept = SoopChatPage.DONATIONS;
+        List<Step> steps = new ArrayList<>();
+        for (int i = 0; i < kept.size(); i++) {
+            steps.add(Step.donation(kept.get(i), "fan-" + i, "팬" + i, String.valueOf(i + 1), false, false, false));
+        }
+        steps.add(Step.donation("BALLOON_GIFTED", "vod", "n", "5", true, false, false));
+        steps.add(Step.donation("BALLOON_GIFTED", "station", "n", "5", false, true, false));
+        steps.add(Step.donation("BALLOON_GIFTED", "relay", "n", "5", false, false, true));
+        for (String skipped : List.of("SUBSCRIBED", "BATTLE_MISSION_SETTLED", "QUICKVIEW_GIFTED", "OGQ_EMOTICON_GIFTED")) {
+            steps.add(Step.donation(skipped, "skip", "n", "5", false, false, false));
+        }
+        steps.add(Step.donation("STICKER_GIFTED", "nan", "n", "\"many\"", false, false, false));
+        steps.add(Step.message("MESSAGE", "v", "n", "끝"));
+        sdk.script(steps.toArray(Step[]::new));
+        start(10);
+
+        sessions.ensure("s-1", "bj-1", TOKEN);
+        List<PersistableChat> chats = new ArrayList<>();
+        await(() -> {
+            chats.addAll(buffer.drain(100));
+            return !chats.isEmpty();
+        });
+
+        List<PersistableDonation> got = donations.drain(100);
+        assertThat(got).extracting(PersistableDonation::donatorChannelId)
+                .containsExactly("fan-0", "fan-1", "fan-2", "fan-3", "fan-4", "fan-5", "nan");
+        assertThat(got).extracting(PersistableDonation::donationType)
+                .containsExactlyElementsOf(java.util.stream.Stream.concat(kept.stream(), java.util.stream.Stream.of("STICKER_GIFTED")).toList());
+        assertThat(got).extracting(PersistableDonation::payAmount).containsExactly(1L, 2L, 3L, 4L, 5L, 6L, null);
+        assertThat(got).extracting(PersistableDonation::donatorNickname).startsWith("팬0", "팬1");
+        assertThat(got).allSatisfy(d -> {
+            assertThat(d.platform()).isEqualTo(Platform.SOOP);
+            assertThat(d.channelId()).isEqualTo("bj-1");
+            assertThat(d.donationText()).isEmpty();
+        });
+        assertThat(chats).extracting(PersistableChat::content).containsExactly("끝");
+        await(() -> !archived.isEmpty());
+        assertThat(archived).as("후원은 원본에 안 넣는다(검산 등식)").singleElement()
+                .satisfies(a -> assertThat(a.raw()).contains("끝"));
+        assertThat(relayPayloads).filteredOn(p -> p instanceof RelayPayload.Donation).hasSize(7);
     }
 
     /** 펌프는 한 탭에서만 기다리지만 다른 탭의 채팅도 온다(탭 셋, 방송마다 제 번호로) */

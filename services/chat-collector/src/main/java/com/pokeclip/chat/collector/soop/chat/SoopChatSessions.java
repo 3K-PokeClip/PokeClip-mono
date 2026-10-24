@@ -4,6 +4,8 @@ import com.pokeclip.chat.collector.Platform;
 import com.pokeclip.chat.collector.archive.ArchivableChat;
 import com.pokeclip.chat.collector.archive.ChatArchive;
 import com.pokeclip.chat.collector.persist.ChatBuffer;
+import com.pokeclip.chat.collector.persist.DonationBuffer;
+import com.pokeclip.chat.collector.persist.PersistableDonation;
 import com.pokeclip.chat.collector.persist.PersistableChat;
 import com.pokeclip.chat.collector.relay.RelayPayload;
 import com.pokeclip.chat.collector.relay.RelaySink;
@@ -52,6 +54,7 @@ public class SoopChatSessions implements SoopChat, SoopChatBrowser.Listener {
 
     private final SoopChatProperties properties;
     private final ChatBuffer buffer;
+    private final DonationBuffer donations;
     private final ChatArchive archive;
     private final RelaySink relay;
     private final LongSupplier clockMillis;
@@ -63,6 +66,14 @@ public class SoopChatSessions implements SoopChat, SoopChatBrowser.Listener {
     /** 탭 세대. 프로세스 하나에서 한 줄로 늘어 방송 · 세션이 달라도 겹치지 않는다. 자물쇠 안에서 {@code tabs.open}과 같이 받는다. */
     private final AtomicLong generations = new AtomicLong();
     private final AtomicLong staleEvents = new AtomicLong();
+    /**
+     * 🔴 SOOP 후원 받은 순번. <b>음수(-1, -2, …)로, 프로세스 하나에서</b> 센다(POK-431 계획 검증 중대 2). 후원 중복 열쇠
+     * {@code uq_chat_donations_received (stream_id, received_at, received_seq)}에 플랫폼이 없고, 같은 방송을 치지직과 SOOP에 같이 내보내면
+     * 두 세션이 같은 방송 번호로 후원을 넣는다. 치지직 순번은 세션마다 1부터라 SOOP도 그렇게 세면 같은 밀리초의 n번째 후원끼리 부딪혀 뒤의
+     * 것이 오류 없이 사라진다(후원은 원본이 없어 되찾을 길도 없다). 음수면 양수인 치지직과 안 겹치고, 세션이 바뀌어도 이어져 같은 방송의 옛
+     * SOOP 세션과도 안 겹친다. 재시작 뒤는 받은 시각이 가른다(치지직과 같은 이유). 제약에 플랫폼을 넣는 길은 색인 교체라 이 카드 밖이다.
+     */
+    private final AtomicLong donationSeq = new AtomicLong();
 
     /** 한 방송의 채팅 세션. 칸은 이 객체를 잠그고 바꾼다. */
     private static final class Session {
@@ -71,6 +82,11 @@ public class SoopChatSessions implements SoopChat, SoopChatBrowser.Listener {
         String token;
         int failures;
         long received;
+        long donations;
+        /** 중계방에서 와 버린 후원 수. 닫을 때 남긴다. */
+        long relayDonationsDropped;
+        /** 다시보기 · 방송국에서 와 버린 후원 수. 닫을 때 남긴다. */
+        long vodStationDonationsDropped;
         /** 다시 붙기를 예약했는가. 예약이 겹치지 않게 한다. */
         boolean retryScheduled;
         /** 지금 연 탭의 세대. 이와 다른 세대의 이벤트는 지난 탭에서 온 것이다. */
@@ -85,10 +101,11 @@ public class SoopChatSessions implements SoopChat, SoopChatBrowser.Listener {
         }
     }
 
-    public SoopChatSessions(SoopChatProperties properties, ChatBuffer buffer, ChatArchive archive, RelaySink relay,
-                            LongSupplier clockMillis) {
+    public SoopChatSessions(SoopChatProperties properties, ChatBuffer buffer, DonationBuffer donations, ChatArchive archive,
+                            RelaySink relay, LongSupplier clockMillis) {
         this.properties = properties;
         this.buffer = buffer;
+        this.donations = donations;
         this.archive = archive;
         this.relay = relay;
         this.clockMillis = clockMillis;
@@ -177,10 +194,17 @@ public class SoopChatSessions implements SoopChat, SoopChatBrowser.Listener {
         }
         tabs.close(streamId);
         long received;
+        long donationCount;
+        long relayDropped;
+        long vodStationDropped;
         synchronized (removed) {
             received = removed.received;
+            donationCount = removed.donations;
+            relayDropped = removed.relayDonationsDropped;
+            vodStationDropped = removed.vodStationDonationsDropped;
         }
-        log.info("soop.chat.closed stream={} received={}", streamId, received);
+        log.info("soop.chat.closed stream={} received={} donations={} relayDonationsDropped={} vodStationDonationsDropped={}",
+                streamId, received, donationCount, relayDropped, vodStationDropped);
     }
 
     @Override
@@ -203,6 +227,40 @@ public class SoopChatSessions implements SoopChat, SoopChatBrowser.Listener {
         archive.offer(new ArchivableChat(Platform.SOOP, session.channelId, receivedAt, message.raw()));
         relay.offer(streamId, new RelayPayload.Chat(Instant.ofEpochMilli(receivedAt), message.nickname(), message.userId(),
                 role, message.text()));
+    }
+
+    @Override
+    public void onDonation(String streamId, long generation, SoopChatDonation donation) {
+        Session session = sessions.get(streamId);
+        if (session == null) {
+            return;
+        }
+        long receivedAt = clockMillis.getAsLong();
+        synchronized (session) {
+            if (!isCurrent(session, generation)) {
+                return;
+            }
+            if (donation.fromVod() || donation.fromStation()) {
+                // 다시보기 · 방송국에서 보낸 후원은 지금 이 방송의 반응이 아니다(결정 1). 칸 뜻을 잘못 읽었으면 후원이 전부 여기로 오므로 센다
+                session.vodStationDonationsDropped++;
+                return;
+            }
+            if (donation.relaysBroad()) {
+                // 중계방에서 온 후원은 이 방송국 시청자의 반응이 아니다(결정 3). 얼마나 오는지 보려고 센다
+                if (session.relayDonationsDropped++ == 0) {
+                    log.info("soop.chat.donation_relay_dropped stream={}", streamId);
+                }
+                return;
+            }
+            session.donations++;
+            session.failures = 0;
+        }
+        // 칸 짝: 금액 칸에 개수, 종류 칸에 action 이름. 단위(치지직 = 원, SOOP = 개수)는 종류로 가른다(결정 2). SOOP 후원에는 문구가 없다
+        donations.offer(new PersistableDonation(Platform.SOOP, streamId, session.channelId, donation.userId(),
+                donation.nickname(), donation.action(), donation.count(), "", receivedAt, donationSeq.decrementAndGet()));
+        relay.offer(streamId, new RelayPayload.Donation(Instant.ofEpochMilli(receivedAt), donation.nickname(),
+                donation.userId(), donation.count(), donation.action(), ""));
+        // 원본 아카이브에는 안 넣는다: 치지직 후원과 같다(StreamSession 주석, 검산 등식 received = archived + 버림)
     }
 
     @Override
