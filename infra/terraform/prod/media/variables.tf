@@ -99,6 +99,18 @@ variable "image_digests" {
   }
 }
 
+variable "stream_key_resolve_url" {
+  description = "응답기 4C(스트림 키 판정) 주소 http://<호스트>:<포트>. 응답기 모드(image_digests.ingest_auth 가 찬 값)에서는 필수다 — 비면 plan 이 멈춘다. 바꾸면 설정 반영 교체로 들어간다."
+  type        = string
+  default     = ""
+}
+
+variable "ingest_auth_ip_limit" {
+  description = "응답기 IP 한도 \"on\" · \"off\"(ingest-auth.env 의 INGEST_AUTH_IP_LIMIT — 응답기 모드에서만 읽힌다). 바꾸면 설정 반영 교체로 들어간다."
+  type        = string
+  default     = "on"
+}
+
 variable "docker_version" {
   description = "AL2023 arm64 저장소의 docker 패키지 판."
   type        = string

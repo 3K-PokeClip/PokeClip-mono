@@ -54,6 +54,10 @@ module "media_host" {
   loopback_sender_image = local.images.loopback_sender
   ingest_auth_image     = local.images.ingest_auth
 
+  stream_key_resolve_url              = var.stream_key_resolve_url
+  stream_key_resolve_token_secret_arn = local.runtime.ingest_auth_resolve_token_secret_arn
+  ingest_auth_ip_limit                = var.ingest_auth_ip_limit
+
   rds_endpoint      = local.runtime.rds_endpoint
   rds_db_name       = local.runtime.rds_db_name
   rds_resource_id   = local.runtime.rds_resource_id
