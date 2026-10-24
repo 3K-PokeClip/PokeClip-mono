@@ -113,9 +113,18 @@ variable "dvr_vod_ttl" {
 }
 
 variable "cors_allow_headers" {
-  description = "CORS 로 허용할 요청 헤더 이름. 기본은 빈 목록(플레이어가 단순 요청만 보냄 — G14)."
+  description = "CORS 로 허용할 요청 헤더 이름(하나 이상). 기본 [\"range\"] — 플레이어는 단순 GET 만 보내 사전 요청이 없다는 전제(G14)는 그대로다. 빈 목록을 막는 이유: provider 6.68.0 은 빈 목록이면 Quantity 를 보내지 않아 응답 헤더 정책 생성이 실패한다."
   type        = list(string)
-  default     = []
+  default     = ["range"]
+
+  # 출처: terraform-provider-aws v6.68.0
+  # internal/service/cloudfront/response_headers_policy.go 의
+  # expandResponseHeadersPolicyAccessControlAllowHeaders — 빈 Set 이면 Items ·
+  # Quantity 를 둘 다 비워 보내는데, API 는 Quantity 가 필수다.
+  validation {
+    condition     = length(var.cors_allow_headers) > 0
+    error_message = "cors_allow_headers 는 비어 있으면 안 된다(provider 6.68.0 은 빈 목록이면 Quantity 를 보내지 않아 응답 헤더 정책 생성이 실패한다)."
+  }
 
   # credentials 를 허용하는 응답에는 와일드카드가 와일드카드로 읽히지 않는다.
   validation {

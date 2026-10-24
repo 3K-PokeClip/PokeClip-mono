@@ -11,7 +11,8 @@ prod 의 CloudFront 엣지를 만드는 루트입니다(설계 3-1 의 ⑩ · �
     둘(KnownBadInputs · IpReputation)이고, 속도 제한은 `waf_rate_limit`(기본
     20000 — LL-HLS 시청자가 같은 IP 뒤에 여럿)입니다. 차단된 요청만 로그
     그룹 `aws-waf-logs-pokeclip-prod-cloudfront`(보존 30일 — platform 과 같음)에
-    남기고, `authorization` · `cookie` 헤더는 가립니다.
+    남기고, `authorization` · `cookie` 헤더는 로그에서만 가립니다 — 요청
+    샘플은 가리지 않습니다(웹 ACL 데이터 보호는 후속).
 *   **apex 배포**(`modules/cdn_static_site`): `pokeclip.com` · `www.pokeclip.com`
     별칭, 서울 S3 버킷(접두 `pokeclip-prod-apex-`)을 OAC 로만 읽습니다.
 *   **media 배포**(`modules/cdn_media`): `media.pokeclip.com` 별칭, KVS 그릇 ·
@@ -96,14 +97,19 @@ media-alb 원본 도메인은 내부 ALB DNS 이름이라 내부 ALB 인증서
 `media.pokeclip.com` 을 원본에 넘기므로, CloudFront 는 그 Host 로 인증서
 이름을 맞춥니다(AWS 문서 using-https-cloudfront-to-custom-origin ·
 cnames-and-https-requirements). 이 규칙이 VPC origin 경로에도 그대로
-적용되는지는 첫 edge apply 뒤 `/live` 시험에서 판정합니다. 502 가 나면 원인
-1순위입니다.
+적용되는지는 첫 edge apply 뒤 원본까지 가는 첫 시험(T6b 의 end-signal ·
+T11 404)에서 판정합니다. 502 가 나면 원인 1순위입니다.
+
+502 가 나도 원본 프로토콜을 http-only 로 내리지 않습니다 — 원본 요청의
+`Authorization: Bearer` 가 VPC 안에서 평문이 됩니다(kty 결정 없이 금지).
 
 ## 표준 로그 끄기
 
 Budgets 경보 때 1차 대응은 `enable_standard_logs = false` 로 edge apply 하는
-것입니다(설계 10절 · 36차). 전달 자원만 지우고 로그 그룹은 남깁니다. 끈
-동안은 설계 7절의 `/live` 302 · 401 신호를 쓸 수 없습니다.
+것입니다(설계 10절 · 36차). 전달 자원만 지우고 로그 그룹은 남깁니다 — plan
+은 전달 자원 삭제만이고 그 밖 0 입니다(VPC origin 서비스 SG 조회가 VPC origin
+하나만 기다려, 내부 ALB 인그레스 규칙에 변경 예고가 끼지 않습니다). 끈 동안은
+설계 7절의 `/live` 302 · 401 신호를 쓸 수 없습니다.
 
 모듈에 넘기는 로그 그룹 ARN 은 자원의 `arn` 속성이 아니라 계정 · 리전 ·
 이름으로 짓습니다. 로그 그룹을 처음 만드는 plan 에서 `arn` 은 정해지지 않고,

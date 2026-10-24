@@ -54,7 +54,8 @@ module "waf" {
   managed_rule_groups = local.cloudfront_waf.managed_rule_groups
   rate_limit          = local.cloudfront_waf.rate_limit
 
-  # 차단된 요청만 남기고, 자격 증명이 실리는 헤더는 가린다(결정 161).
+  # 차단된 요청만 남기고, 자격 증명이 실리는 헤더는 로그에서만 가린다(결정
+  # 161) — 요청 샘플은 가리지 않는다(웹 ACL 데이터 보호는 후속).
   logging = {
     log_group_name    = "aws-waf-logs-pokeclip-prod-cloudfront"
     retention_in_days = local.waf_log_retention_days
