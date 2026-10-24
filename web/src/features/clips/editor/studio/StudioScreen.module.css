@@ -559,7 +559,7 @@
   border: 0;
   border-radius: calc(999 * var(--pc-u));
   background: var(--pc-color-accent);
-  color: var(--pc-white);
+  color: var(--pc-white); /* 테마 고정 — 브랜드 알약 위 글자 */
   font-size: calc(10.5 * var(--pc-u));
   font-weight: 600;
   pointer-events: auto;

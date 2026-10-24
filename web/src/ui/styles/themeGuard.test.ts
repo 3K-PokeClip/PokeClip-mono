@@ -11,8 +11,9 @@ import { describe, expect, it } from 'vitest';
 // 영상 위 무대처럼 통째로 어두워야 하는 곳은 요소에 data-theme="dark"를 달아 토큰을 다크로 묶는다.
 
 const SRC = join(__dirname, '..', '..');
+// 프리미티브는 단계가 붙은 것(--pc-gray-950)과 안 붙은 것(--pc-white) 둘 다
 const LITERAL =
-  /#[0-9a-fA-F]{3,8}\b|\brgba?\(\s*\d|var\(--pc-(gray|primary|point|red|green|yellow|cyan|teal|white|black)-/;
+  /#[0-9a-fA-F]{3,8}\b|\brgba?\(\s*\d|var\(--pc-(gray|primary|point|red|green|yellow|cyan|teal|white|black)(-|\))/;
 const MARKS = ['테마 고정', '라이트 덮음', '라이트 값'];
 
 /** 표식 없이 색을 박은 줄 — `파일:줄  내용` */

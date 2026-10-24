@@ -31,12 +31,12 @@
 .badge[data-tone='point'] {
   --_c: var(--pc-color-point);
   --_bg: var(--pc-color-point-subtle);
-  --_on: var(--pc-white);
+  --_on: var(--pc-white); /* 테마 고정 — 진한 채움 위 글자 */
 }
 .badge[data-tone='success'] {
   --_c: var(--pc-color-success);
   --_bg: var(--pc-color-success-subtle);
-  --_on: var(--pc-white);
+  --_on: var(--pc-white); /* 테마 고정 — 진한 채움 위 글자 */
 }
 .badge[data-tone='warning'] {
   --_c: var(--pc-color-warning);

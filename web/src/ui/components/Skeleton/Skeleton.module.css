@@ -25,7 +25,7 @@
   background: linear-gradient(
     90deg,
     transparent,
-    color-mix(in srgb, var(--pc-white) 60%, transparent),
+    color-mix(in srgb, var(--pc-white) 60%, transparent) /* 라이트 값 */,
     transparent
   );
 }
