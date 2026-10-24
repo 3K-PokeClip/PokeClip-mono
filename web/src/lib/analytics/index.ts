@@ -15,3 +15,8 @@ export {
   type FaqKey,
   type YoutubeCategoryId,
 } from './events';
+export {
+  announceAnalyticsPreference,
+  subscribeAnalyticsPreference,
+  type AnalyticsPreferenceMessage,
+} from './preferenceChannel';

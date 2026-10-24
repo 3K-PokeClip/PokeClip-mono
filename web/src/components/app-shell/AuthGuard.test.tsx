@@ -11,7 +11,10 @@ vi.mock('next/navigation', () => ({
   useRouter: () => ({ replace }),
   usePathname: () => '/home',
 }));
-vi.mock('@/lib/analytics', () => ({ identifyUser }));
+vi.mock('@/lib/analytics', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/analytics')>()),
+  identifyUser,
+}));
 
 const ME = { id: 1, email: 'raccoon@example.com', name: '게임하는너구리', profileImageUrl: '' };
 
@@ -104,6 +107,27 @@ describe('AuthGuard', () => {
 
     await waitFor(() => expect(identifyUser).toHaveBeenCalledWith(1, true));
     expect(identifyUser).not.toHaveBeenCalledWith(1, false);
+  });
+
+  it('다른 탭이 토글을 끄면 이 탭의 me 캐시도 꺼짐으로 고쳐 다시 건다 — 옛 캐시로 다시 켜지 않게 (PR #382 리뷰)', async () => {
+    useAuthStore.setState({ accessToken: 'a-1', refreshToken: 'r-1', hydrated: true });
+    stubFetch((url) => (url === '/api/auth/me' ? jsonResponse(200, ME) : jsonResponse(404)));
+    const { queryClient } = renderWithProviders(
+      <AuthGuard>
+        <div>보호 콘텐츠</div>
+      </AuthGuard>,
+    );
+    await waitFor(() => expect(identifyUser).toHaveBeenCalledWith(1, false));
+
+    const otherTab = new BroadcastChannel('pc-analytics-preference');
+    otherTab.postMessage({ userId: 1, optOut: true });
+    otherTab.postMessage({ userId: 2, optOut: false }); // 남의 값은 이 탭의 캐시를 안 고친다
+    otherTab.close();
+
+    await waitFor(() => expect(identifyUser).toHaveBeenLastCalledWith(1, true));
+    expect(
+      queryClient.getQueryData<{ analyticsOptOut?: boolean }>(['auth', 'me'])?.analyticsOptOut,
+    ).toBe(true);
   });
 
   it('refresh까지 401이면(만료·도난 감지) 세션을 접고 /login으로 보낸다', async () => {

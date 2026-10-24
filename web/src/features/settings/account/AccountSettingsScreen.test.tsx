@@ -541,10 +541,16 @@ describe('AccountSettingsScreen — 이용 분석 참여(처리방침 7·9절)',
         : jsonResponse(404),
     );
     const { queryClient } = await renderScreen();
+    const heard: unknown[] = [];
+    const otherTab = new BroadcastChannel('pc-analytics-preference');
+    otherTab.onmessage = (event) => heard.push(event.data);
 
     await user.click(screen.getByRole('switch', { name: '이용 분석 참여' }));
 
     expect(await screen.findByText('이용 분석을 껐어요')).toBeInTheDocument();
+    // 같은 브라우저의 다른 탭에도 알린다 — 옛 캐시로 꺼짐을 되돌리지 않게 (PR #382 리뷰)
+    await waitFor(() => expect(heard).toEqual([{ userId: 1, optOut: true }]));
+    otherTab.close();
     const patches = spy.mock.calls.filter(([, init]) => init?.method === 'PATCH');
     expect(patches).toHaveLength(1);
     expect(bodyOf(patches[0]?.[1])).toEqual({ optOut: true });

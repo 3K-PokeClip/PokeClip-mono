@@ -2,8 +2,10 @@
 
 import { useEffect, type ReactNode } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
+import { useQueryClient } from '@tanstack/react-query';
+import { meQueryOptions, type Me } from '@/api/auth';
 import { useMe } from '@/features/auth/useSession';
-import { identifyUser } from '@/lib/analytics';
+import { identifyUser, subscribeAnalyticsPreference } from '@/lib/analytics';
 import { useAuthHydration, useAuthStore } from '@/stores/auth';
 
 // 보호 라우트 가드 (POK-101) — 독 4개 라우트를 (dock)/layout.tsx에서 한 번에 덮는다.
@@ -59,6 +61,21 @@ export function AuthGuard({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (userId !== undefined) identifyUser(userId, optOut);
   }, [userId, optOut]);
+
+  // 다른 탭이 토글을 바꾸면 이 탭의 me 캐시도 고친다 — 옛 캐시가 남으면 화면을 옮길 때(가드 다시 마운트) 꺼 둔 선택을
+  // 다시 켠다(PR #382 리뷰). 캐시 주인이 같은 회원일 때만 쓴다
+  const queryClient = useQueryClient();
+  useEffect(
+    () =>
+      subscribeAnalyticsPreference((message) => {
+        queryClient.setQueryData<Me>(meQueryOptions.queryKey, (prev) =>
+          prev === undefined || prev.id !== message.userId
+            ? prev
+            : { ...prev, analyticsOptOut: message.optOut },
+        );
+      }),
+    [queryClient],
+  );
 
   useEffect(() => {
     if (!hydrated || refreshToken !== null) return;

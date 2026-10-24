@@ -5,6 +5,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { meQueryOptions, type Me } from '@/api/auth';
 import { updateAnalyticsOptOut } from '@/api/profile';
 import { useMe } from '@/features/auth/useSession';
+import { announceAnalyticsPreference } from '@/lib/analytics';
 import { useSessionMutation } from '@/lib/useSessionMutation';
 import { useToast } from '@/ui';
 
@@ -39,6 +40,8 @@ export function useAnalyticsOptOutState(): AnalyticsOptOutState {
         prev === undefined || prev.id !== next.id ? prev : { ...prev, analyticsOptOut: optOut },
       );
       if (queryClient.getQueryData<Me>(meQueryOptions.queryKey)?.id !== next.id) return;
+      // 같은 브라우저의 다른 탭도 새 값을 쓰게 알린다 — 옛 캐시로 꺼 둔 선택을 다시 켜지 않게(PR #382 리뷰)
+      announceAnalyticsPreference({ userId: next.id, optOut });
       toast({
         tone: 'success',
         title: optOut ? '이용 분석을 껐어요' : '이용 분석을 다시 켰어요',
