@@ -279,7 +279,7 @@ O7f 의 2(T6b)와 4(T0 · T8e 해석 · T11 404 · T2b)입니다. 아래 명령�
 | 언제 | 요청(쿠키) | 통과 조건 |
 |---|---|---|
 | T2b | `/live/../api/ingest/<표식>` · `/playback/../api/ingest/<표식>` · `/live/../api/streams/<표식>/rewind`(쿠키 없음) | 차단 계층 · 응답 코드 기록 · 엣지 차단이면 nginx 도달 0 · nginx 차단이면 거절 응답 + 보호 대상 상류 전달 0 |
-| T2 | `/live/<A>/../<B>/index.m3u8`(방송 A 쿠키 · 사례마다 B 쿠키로 예열 200 뒤) | A 요청 응답이 거절 코드(CloudFront 403 · 404 또는 nginx 400 · 403 · 404) — 2xx · 3xx · 5xx · 통신 실패는 실패(캐시 HIT 로 B 가 엣지에서 나오면 상류 기록 없이 노출) · nginx 건수는 참고만 |
+| T2 | `/live/<A>/../<B>/index.m3u8`(방송 A 쿠키) | 모든 사례가 CloudFront 가 낸 403(`server: CloudFront`) — 그 밖(nginx 응답 · `Miss` · 2xx · 5xx · 통신 실패)은 A 쿠키가 엣지를 통과한 것이라 실패 |
 
 *   **변형**: 각 사례의 `/../` 를 `/%2e%2e/` · `/..%2f` · `/..%5c` ·
     `//../` 로 바꾼 것도 같은 조건입니다.
@@ -302,42 +302,32 @@ O7f 의 2(T6b)와 4(T0 · T8e 해석 · T11 404 · T2b)입니다. 아래 명령�
     ```
 
 *   **T2(방송 쿠키)**: `a_id` · `b_id` 는 시험 방송 둘의 `ingestStreamId`
-    입니다. `jar_a` · `jar_b` 는 방송 A · B 의 서명 쿠키 셋(O7f 의 10 과 같은
-    발급)을 담은 쿠키 파일이고, 증거 디렉터리 밖에 둡니다(`mktemp` — 0600).
-    쿠키는 이 파일로만 넘기고 시험 뒤 지웁니다(명령 인자 · 증거에 값이 남지
-    않게). B 가 송출 중이어야 합니다.
-*   **캐시를 먼저 채웁니다.** 결과가 시험 시각의 캐시 상태에 따라 갈리지
-    않게, 사례마다 바로 앞에서 B 쿠키로 B 목록을 같은 엣지에 받아 둡니다
-    (목록 TTL 1초 — 같은 `--resolve` 주소). 그 직후 A 쿠키 요청의
-    `x-cache` 를 함께 기록합니다. `Hit from cloudfront` 와 2xx 가 함께 나오면
-    B 가 엣지에서 노출된 것이라 실패입니다. 예열(`warm`) 응답이 200 이
-    아니면 그 사례는 캐시를 못 채운 것이라 무효입니다 — B 송출 · B 쿠키를
-    확인하고 다시 합니다. 예열 뒤 A 요청이 `Miss` 면 **HIT 경로를 시험하지
-    못한 것**이라 그 사례도 무효입니다 — 목록 TTL 이 1초라 그사이 만료됐을 수
-    있어 「캐시 키가 원 경로」 의 증거가 되지 않습니다. 그리고 `Miss` 는 A
-    쿠키가 엣지 서명 검사를 통과했다는 뜻이라(막혔다면 403 · `Error from
-    cloudfront`) 가장 위험한 상태입니다. 다시 해도 `Miss` 만 나오면 결론을
-    적지 않고 kty 에게 회부합니다.
+    입니다. `jar_a` 는 방송 A 의 서명 쿠키 셋(O7f 의 10 과 같은 발급)을 담은
+    쿠키 파일이고, 증거 디렉터리 밖에 둡니다(`mktemp` — 0600). 쿠키는 이
+    파일로만 넘기고 시험 뒤 지웁니다(명령 인자 · 증거에 값이 남지 않게).
+*   **T2 는 엣지 서명 거절만 통과입니다**(kty 2026-10-25). 모든 사례의
+    응답이 CloudFront 가 직접 낸 403(`server: CloudFront` 헤더 — nginx 가 낸
+    응답이면 `server` 가 nginx)이어야 합니다. 그 밖의 응답은 모두
+    실패입니다 — nginx 까지 간 응답(400 · 403 · 404 · `Miss`)은 A 쿠키가
+    엣지 서명 검사를 통과했다는 뜻이고, 그러면 캐시가 차 있는 실제 운영에서
+    A 쿠키로 B 목록 · 조각(조각은 최대 1시간 캐시)이 나갈 수 있습니다. 2xx
+    는 노출 그 자체입니다. 판정이 캐시 상태에 기대지 않으므로 예열은 하지
+    않습니다.
 
     ```shell
     for dots in /../ /%2e%2e/ /..%2f /..%5c //../; do
       req_path="/live/${a_id}${dots}${b_id}/index.m3u8"
-      curl -b "${jar_b}" --resolve "media.pokeclip.com:443:${edge_ip}" -sS \
-        -o /dev/null -w "warm %{http_code}\n" \
-        "https://media.pokeclip.com/live/${b_id}/index.m3u8"
       curl --path-as-is -b "${jar_a}" \
         --resolve "media.pokeclip.com:443:${edge_ip}" -sS -o /dev/null \
         -D - -w "${req_path} %{http_code}\n" "https://media.pokeclip.com${req_path}" |
-        grep -iE '^x-cache:|^/live/'
-      # 예열 줄(warm)은 위 curl 의 -w 가 바로 표준 출력에 낸다.
+        grep -iE '^server:|^x-cache:|^/live/'
     done | tee "${evidence}/t2-path.txt"
-    rm -f "${jar_a}" "${jar_b}" &&
-      test ! -e "${jar_a}" && test ! -e "${jar_b}" && echo removed
+    rm -f "${jar_a}" && test ! -e "${jar_a}" && echo removed
     ```
 
-*   **판정 근거 = 응답 코드 + SSM 판정 줄의 건수**(T2 는 응답 코드 ·
-    `x-cache` 만 — 아래 T2 항목)(건수만 · 실행 직전
-    승인). Media 상자의 유닛 저널(nginx 접근 로그가 남는 곳 —
+*   **판정 근거 = 응답 코드 + SSM 판정 줄의 건수**(건수만 · 실행 직전
+    승인 · T2 는 응답 코드와 `server` 헤더만 — 아래 T2 항목). Media
+    상자의 유닛 저널(nginx 접근 로그가 남는 곳 —
     [media-host README](/infra/media-host/README.md) 「로그」)에서 시작
     시각 뒤의 줄을 셉니다. 꼴은 그 README 「시작 · 정지」 의 건수 꼴(`awk` ·
     조회 실패는 0 건이 아니라 실패)을 따르고, 원문은 내지 않습니다.
@@ -355,16 +345,13 @@ O7f 의 2(T6b)와 4(T0 · T8e 해석 · T11 404 · T2b)입니다. 아래 명령�
         줄의 `$upstream_addr` 가 `-`)이면 통과입니다. 제어면 상류로 넘긴
         줄은 실패로 세지 않습니다 — `/…/../api/ingest/…` 가 정규화되면
         원래 서명 쿠키 없이 열린 `/api/ingest/…` 와 같은 요청입니다.
-    *   T2: 방송 A 쿠키로 B 콘텐츠가 반환되지 않아야 합니다 — **A 요청의
-        응답 코드로 판정**합니다(거절 코드면 통과 · 2xx 는 `x-cache` 와
-        무관하게 실패 · `Miss` 는 위 「캐시를 먼저 채웁니다」 대로 무효).
-        `results.tsv` 비고에는 예열 코드 · A 응답 코드 · A `x-cache` 를
-        적습니다. nginx 건수는 T2 판정에 쓰지 않고 참고로만 적습니다
-        — 예열 요청이 B 목록을 원본에서 받아 같은 꼴의 상류 전달 줄을
-        남기고, ALB 가 정규화 경로를 넘기면 A 요청 줄도 예열 줄과 구별되지
-        않기 때문입니다.
-*   **실패면 O8 을 중단합니다.** kty 에게 보고하고, 재현된 누락 사례만
-    Media 상자 nginx 에 보강합니다(후속 티켓).
+    *   T2: 모든 사례가 CloudFront 403(`server: CloudFront`)이어야 통과입니다
+        (위 「T2 는 엣지 서명 거절만 통과」). `results.tsv` 비고에는 응답
+        코드 · `server` · `x-cache` 를 적습니다. nginx 건수는 T2 판정에 쓰지
+        않습니다.
+*   **실패면 O8 을 중단합니다.** kty 에게 보고하고, 막는 자리(T2 면
+    CloudFront 함수 등 엣지 · T2b 면 Media 상자 nginx)를 정해 고친 뒤 다시
+    시험합니다([POK-458](https://xodbs9810.atlassian.net/browse/POK-458)).
 *   통과 뒤 O8 은 [prod/records](../prod/records/README.md) 「적용 —
     이름마다 apply(O8)」 대로 합니다. 이 루트의 첫 apply(처음 여는 이름)는
     `terraform_data.remote_contract` 가 함께 생성되어 plan 이 「추가 = 그
