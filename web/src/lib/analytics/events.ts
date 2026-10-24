@@ -133,6 +133,43 @@ export interface AnalyticsEvents {
   editor_delegation_ended: { initiator: 'owner' | 'editor' };
   /** 라이브·다시보기 화면에서 수동 마킹으로 카드가 새로 생김(가까운 카드가 이미 있으면 세지 않는다) */
   highlight_marked: { mode: 'live' | 'past' };
+
+  // ── 2026-10-24 확장 묶음(서비스 전체 PostHog 계획 5b) ─────────────────────────────
+  // `_started`·`_clicked`는 「성공한 뒤에만」의 예외다 — 누른 순간에 센다(plugin_download_clicked와 같은 이유: 그 뒤는 웹이 모른다)
+
+  /** 「Google로 로그인」을 눌러 동의 화면으로 떠남(비콘). login_completed와 짝 → 로그인 이탈률 */
+  login_started: Record<string, never>;
+  /** 방송 채널·YouTube 연동을 시작해 동의 화면으로 떠남(비콘). platform_linked와 짝 → 연동 이탈률 */
+  platform_link_started: { platform: 'chzzk' | 'youtube' | 'soop' };
+  /** 처음 사용 안내를 시작함. welcome=환영 창, chip=다시 보기 칩, help=도움말의 「안내 다시 보기」. onboarding_tour_finished와 짝 */
+  onboarding_tour_started: { entry: 'welcome' | 'chip' | 'help' };
+  /** 「준비 중」 기능을 누름 — 수요를 본다 */
+  pending_feature_clicked: {
+    feature: 'ai_subtitle' | 'vod_download' | 'player_clip' | 'mini_player';
+  };
+  /** 하이라이트 카드·통계 핀을 눌러 그 자리로 옮김. 카드 번호·시각은 싣지 않는다 */
+  highlight_card_seeked: { from: 'card' | 'stats_pin'; mode: 'live' | 'past' };
+  /** 홈의 시작 안내 단계를 누름 */
+  setup_step_clicked: { step: 'chzzk' | 'plugin' | 'broadcast' | 'publish' };
+  /** 도움말 · 문의의 문의 창구를 누름 */
+  support_link_clicked: { channel: 'discord' | 'email' };
+  /** 보낸 편집자 초대를 취소함 */
+  editor_invitation_canceled: Record<string, never>;
+  /** 프로필 사진을 바꿈. file=올린 사진, preset=기본 아바타 */
+  profile_photo_changed: { source: 'file' | 'preset' };
+  /** 표시 이름을 바꿈 — 이름은 싣지 않는다 */
+  profile_name_changed: Record<string, never>;
+  /** 플러그인 설정의 오디오 트랙 이름을 저장함. 이름이 있는 칸 수(0~6)만 싣는다 */
+  audio_track_names_saved: { named_count: number };
+}
+
+/** `track`의 보내는 방식 */
+export interface TrackOptions {
+  /**
+   * 곧 페이지를 떠나는 자리 — 일괄 전송을 기다리지 않고 비콘으로 바로 보낸다(랜딩 `analytics.js`의 시작 버튼과 같은 방식).
+   * SDK가 아직 안 붙었으면 버려진다(이동을 막지 않는다)
+   */
+  beacon?: boolean;
 }
 
 /** 열거 값의 모양 — 소문자·숫자·`_`·`-`만, 40자까지. 이메일·채널 이름·제목 같은 자유 문자열은 여기 맞지 않는다 */
@@ -160,8 +197,16 @@ function safeProperties(properties: object): Record<string, string | number | bo
 export function track<K extends keyof AnalyticsEvents>(
   name: K,
   properties: AnalyticsEvents[K],
+  options: TrackOptions = {},
 ): void {
   withAnalytics((posthog) => {
-    posthog.capture(name, safeProperties(properties));
+    if (options.beacon) {
+      posthog.capture(name, safeProperties(properties), {
+        send_instantly: true,
+        transport: 'sendBeacon',
+      });
+    } else {
+      posthog.capture(name, safeProperties(properties));
+    }
   });
 }

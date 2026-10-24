@@ -79,6 +79,16 @@ describe('track — 행동 이벤트(POK-357)', () => {
     });
   });
 
+  it('비콘을 고르면 일괄 전송을 기다리지 않고 바로 보낸다 — 곧 페이지를 떠나는 자리', async () => {
+    const { track } = await load('phc_test');
+    track('login_started', {}, { beacon: true });
+    track('login_completed', {});
+    expect(posthog.capture.mock.calls).toEqual([
+      ['login_started', {}, { send_instantly: true, transport: 'sendBeacon' }],
+      ['login_completed', {}],
+    ]);
+  });
+
   it('유튜브 분류 번호는 목록 안이면 그대로, 밖이면 other로 좁힌다', async () => {
     const { toYoutubeCategoryId } = await load('');
     expect(toYoutubeCategoryId('20')).toBe('20');
