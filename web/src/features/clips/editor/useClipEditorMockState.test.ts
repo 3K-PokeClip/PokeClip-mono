@@ -256,6 +256,23 @@ describe('useClipEditorMockState', () => {
     expect(result.current.layout).toBe('split');
   });
 
+  it('마지막 움직임이 놓기 뒤에 그려져도 드래그는 실행취소 한 칸이다(음량 숫자 끌기)', () => {
+    const { result } = renderEditor();
+
+    act(() => result.current.gestureHandlers.onPointerDownCapture());
+    act(() => result.current.setTrackVolume('mic', 90));
+    // 브라우저는 pointermove의 갱신을 미뤄 그린다: 마지막 움직임과 놓기가 한 번에 처리되면
+    // 갱신 계산이 놓기 뒤에 돈다. 제스처 여부를 그때 읽으면 마지막 값만 따로 한 칸이 쌓였다
+    act(() => {
+      result.current.setTrackVolume('mic', 120);
+      result.current.gestureHandlers.onPointerUp();
+    });
+
+    expect(result.current.tracks[0]?.volume).toBe(120);
+    act(() => result.current.undo());
+    expect(result.current.tracks[0]?.volume).toBe(80);
+  });
+
   it('드래그가 취소돼도 제스처가 끝난다 — 창이 고정된 채 남지 않는다', () => {
     const { result } = renderEditor();
 

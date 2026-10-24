@@ -734,13 +734,15 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
   }, []);
 
   const commit = useCallback((update: (recipe: EditorRecipe) => EditorRecipe) => {
+    // 제스처 중인지는 바꾸는 그 순간에 읽는다. 업데이터 안에서 읽으면 pointermove처럼 미뤄 그리는 갱신이 놓기(pointerup)
+    // 뒤에 계산돼 마지막 움직임만 따로 쌓인다(음량 숫자 끌기를 ⌘Z 하면 끌기 전이 아니라 바로 앞 값으로 갔다)
+    const base = gesturing.current ? gestureBase.current : null;
     setHistory((current) => {
       const next = update(current.present);
       // 같은 값을 다시 고르면 히스토리를 늘리지 않는다 — ↺가 아무 일도 안 하는 것처럼 보인다
       if (next === current.present) return current;
-      // 업데이터는 ref를 읽기만 한다 — StrictMode 이중 호출에서도 같은 답이 나온다
-      const opened =
-        gesturing.current && current.past[current.past.length - 1] === gestureBase.current;
+      // 업데이터는 위에서 잡아 둔 값만 읽는다 — StrictMode 이중 호출에서도 같은 답이 나온다
+      const opened = base !== null && current.past[current.past.length - 1] === base;
       return opened ? replacePresent(current, next) : pushHistory(current, next);
     });
   }, []);
