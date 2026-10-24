@@ -7,6 +7,12 @@ import { useAuthStore } from '@/stores/auth';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
 import { renderWithProviders } from '@/test/testProviders';
 
+const { track } = vi.hoisted(() => ({ track: vi.fn() }));
+vi.mock('@/lib/analytics', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/analytics')>()),
+  track,
+}));
+
 const DELEGATIONS_URL = '/api/editor-delegations/as-streamer';
 const SENT_URL = '/api/editor-invitations/sent';
 const INVITE_URL = '/api/editor-invitations';
@@ -94,6 +100,7 @@ async function openInviteDialog(user: ReturnType<typeof userEvent.setup>) {
 
 beforeEach(() => {
   window.localStorage.clear();
+  track.mockReset();
   useAuthStore.setState({ accessToken: 'access-1', refreshToken: 'refresh-1', hydrated: true });
 });
 
@@ -222,6 +229,8 @@ describe('EditorSettingsScreen — 초대', () => {
       ).length;
       expect(listCalls).toBe(listCallsBefore + 2);
     });
+    // 초대 성공 뒤 한 번 센다 — 이메일은 싣지 않는다 (POK-357)
+    expect(track.mock.calls).toEqual([['editor_invited', {}]]);
   });
 
   it.each([
@@ -245,6 +254,7 @@ describe('EditorSettingsScreen — 초대', () => {
     const alert = await dialog.findByRole('alert');
     expect(alert).toHaveTextContent(title);
     expect(screen.getByRole('dialog', { name: '편집자 초대' })).toBeInTheDocument();
+    expect(track).not.toHaveBeenCalled(); // 거절된 초대는 세지 않는다
   });
 
   it('정원이 차면 자리 비우는 방법(취소)이 사유에 담긴다 — 내보내기는 효과 없는 해법이라 없다', async () => {

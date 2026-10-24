@@ -7,6 +7,12 @@ import { useOnboardingStore } from '@/stores/onboarding';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
 import { renderWithProviders } from '@/test/testProviders';
 
+const { track } = vi.hoisted(() => ({ track: vi.fn() }));
+vi.mock('@/lib/analytics', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/analytics')>()),
+  track,
+}));
+
 // 서버의 사람용 표기와 같은 XXXX-XXXX (Crockford Base32, PairingCodeService.format)
 const CODE_PATTERN = /^[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}$/;
 const CREATED_AT = '2026-08-02T03:00:00Z';
@@ -47,6 +53,7 @@ function callsTo(spy: ReturnType<typeof stubFetch>, url: string) {
 
 beforeEach(() => {
   window.localStorage.clear();
+  track.mockReset();
   useAuthStore.setState({ accessToken: 'access-1', refreshToken: 'refresh-1', hydrated: true });
   useOnboardingStore.setState({
     welcomeSeen: false,
@@ -142,6 +149,8 @@ describe('PluginSettingsScreen', () => {
     expect(await screen.findByText('KQ4M-7X2P')).toBeInTheDocument();
     expect(callsTo(spy, '/api/stream-keys/pairing-codes')).toHaveLength(1);
     expect(useOnboardingStore.getState().pluginLinked).toBe(true);
+    // 발급 성공 뒤 한 번 센다 — 코드 원문은 싣지 않는다 (POK-357)
+    expect(track.mock.calls).toEqual([['pairing_code_issued', {}]]);
   });
 
   it('코드를 발급해도 연결됐다고 말하지 않는다 — 발급은 OBS에 넣었다는 증거가 아니다', async () => {
