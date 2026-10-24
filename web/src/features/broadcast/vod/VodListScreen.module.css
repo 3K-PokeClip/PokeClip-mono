@@ -387,15 +387,15 @@
 
 /* 「아직 없다」 카드는 DS EmptyState가 그린다. 기간을 좁혀 아무것도 안 남은 자리는 그 카드와
    다른 말이라 다른 모양이다 */
+.filterEmpty {
+  margin: calc(6 * var(--pc-u)) 0 0;
+  font-size: calc(12 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}
+
 /* 첫 조회 실패 카드 아래 「다시 시도」 — 카드 가운데 줄에 맞춘다(POK-441) */
 .failAction {
   display: flex;
   justify-content: center;
   margin-top: calc(12 * var(--pc-u));
-}
-
-.filterEmpty {
-  margin: calc(6 * var(--pc-u)) 0 0;
-  font-size: calc(12 * var(--pc-u));
-  color: var(--pc-color-text-muted);
 }
