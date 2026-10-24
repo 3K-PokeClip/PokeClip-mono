@@ -30,6 +30,7 @@ import {
 import { ensurePlaybackAccess } from '@/api/playbackAccess';
 import { EditorHeader } from '../EditorHeader';
 import { PreviewCanvas } from '../PreviewCanvas';
+import { TransportBar } from '../TransportBar';
 import { MultitrackTimeline } from './MultitrackTimeline';
 import { ToolPanel } from './ToolPanel';
 import { ToolRail } from './ToolRail';
@@ -230,6 +231,7 @@ export function StudioEditor(options: ClipEditorOptions = {}) {
         <ToolPanel state={state} />
         <div className={styles.previewColumn} ref={previewColumnRef}>
           <PreviewCanvas state={state} />
+          <TransportBar state={state} />
         </div>
       </main>
       <MultitrackTimeline state={state} headroom={headroom} />

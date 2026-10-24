@@ -12,6 +12,22 @@ function renderStudio(options?: ClipEditorOptions) {
   return renderWithProviders(<StudioEditor {...options} />);
 }
 
+/** 미리보기 아래 재생 막대의 글자 — 타임코드 박스·눈금에도 비슷한 시각이 있어 막대 안만 본다 */
+function transportClock(): string {
+  return screen.getByRole('button', { name: '5초 뒤로' }).parentElement?.textContent ?? '';
+}
+
+/** 재생 막대의 쇼츠 안 시각(m:ss.t)을 초로. 앞의 되감기 아이콘 숫자(5·1)가 붙어 읽히니 분은 한 자리로 끊는다 */
+function transportSeconds(): number {
+  const [, m, s] = /(\d):(\d\d\.\d)/.exec(transportClock())!;
+  return Number(m) * 60 + Number(s);
+}
+
+/** 타임라인 머리의 확대 묶음(− 100% ＋) — 오디오 트랙 음량에도 「100%」가 있어 이 안만 본다 */
+function zoomGroup(): HTMLElement {
+  return screen.getByRole('button', { name: '타임라인 확대' }).parentElement!;
+}
+
 describe('StudioScreen', () => {
   it('헤더에 제목·자동 저장·저장 버튼을 렌더한다', () => {
     renderStudio();
@@ -147,27 +163,44 @@ describe('StudioScreen', () => {
     expect(screen.getByText('5초 미만, 3분 초과로는 핸들이 움직이지 않아요')).toBeInTheDocument();
   });
 
-  it('재생 조작은 타임라인 위 막대에 있다: 미리보기 아래 재생 막대·배속·구간 반복은 없다(POK-389)', async () => {
+  it('재생 조작은 미리보기 아래 막대에 있다: 되감기·감기·재생·쇼츠 안 시각 · 반복·배속·썸네일 칩', async () => {
     const user = userEvent.setup();
     renderStudio();
-    const bar = screen.getByRole('toolbar', { name: '재생과 구간' });
 
-    // 목업 구간 1:22:08.4 ~ 1:22:20.8(12.4초), 재생 위치 1:22:14 → 쇼츠 안 5.6초(내림 0:05)
-    expect(within(bar).getByRole('status', { name: '재생 위치' })).toHaveTextContent('0:05 / 0:12');
-    // 쇼츠 길이 칸은 뺐다(재생 위치 칸이 길이를 이미 보인다, POK-389)
-    expect(within(bar).queryByText(/최대 3분/)).not.toBeInTheDocument();
-    expect(screen.queryByRole('radiogroup', { name: '재생 속도' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('switch', { name: '구간 반복' })).not.toBeInTheDocument();
+    // 목업 구간 1:22:08.4 ~ 1:22:20.8(12.4초), 재생 위치 1:22:14 → 쇼츠 안 5.6초
+    expect(transportClock()).toContain('0:05.6 / 0:12.4');
+    expect(screen.getByRole('button', { name: '구간 반복' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    expect(screen.getByRole('button', { name: '재생 속도 1×' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '이 장면을 썸네일로' })).toBeEnabled();
+    // 타임라인 위 막대(여기부터·여기까지·시작으로)는 없다: 구간 끝은 I·O 키와 손잡이가 맡는다
+    expect(screen.queryByRole('toolbar', { name: '재생과 구간' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /여기부터|시작으로/ })).not.toBeInTheDocument();
 
-    // 여기부터 = I 키: 시작이 재생 위치로 와서 쇼츠 안 0초가 된다
-    await user.click(within(bar).getByRole('button', { name: /여기부터/ }));
-    expect(within(bar).getByRole('status', { name: '재생 위치' })).toHaveTextContent('0:00 / 0:06');
+    await user.click(screen.getByRole('button', { name: '1초 앞으로' }));
+    expect(transportClock()).toContain('0:06.6');
 
-    // 시작으로 = 쇼츠 맨 앞으로
-    await user.keyboard('{ArrowRight}{ArrowRight}');
-    expect(within(bar).getByRole('status', { name: '재생 위치' })).toHaveTextContent('0:02 / 0:06');
-    await user.click(within(bar).getByRole('button', { name: /시작으로/ }));
-    expect(within(bar).getByRole('status', { name: '재생 위치' })).toHaveTextContent('0:00 / 0:06');
+    await user.click(screen.getByRole('button', { name: '구간 반복' }));
+    expect(screen.getByRole('button', { name: '구간 반복' })).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    );
+
+    await user.click(screen.getByRole('button', { name: '재생 속도 1×' }));
+    await user.click(screen.getByRole('menuitem', { name: '2×' }));
+    expect(screen.getByRole('button', { name: '재생 속도 2×' })).toBeInTheDocument();
+  });
+
+  it('되감기·감기 버튼이 아이콘 안의 초로 갈린다 — 방향만으로는 구분되지 않는다', () => {
+    renderStudio();
+
+    // 시안 1d는 원형 화살표 안에 5·1을 적어 네 버튼을 가른다
+    expect(screen.getByRole('button', { name: '5초 뒤로' })).toHaveTextContent('5');
+    expect(screen.getByRole('button', { name: '1초 뒤로' })).toHaveTextContent('1');
+    expect(screen.getByRole('button', { name: '1초 앞으로' })).toHaveTextContent('1');
+    expect(screen.getByRole('button', { name: '5초 앞으로' })).toHaveTextContent('5');
   });
 
   it('「이 장면을 썸네일로」를 누르면 영상 줄 앞 칸에 그 장면이 선다(POK-389)', async () => {
@@ -193,33 +226,29 @@ describe('StudioScreen', () => {
     expect(requestUpload).toHaveBeenLastCalledWith(expect.anything(), 4934);
   });
 
-  it('확대 막대가 타임라인 배율을 바꾼다', async () => {
+  it('확대 단추가 타임라인 배율을 바꾼다', async () => {
     const user = userEvent.setup();
     renderStudio();
 
-    const bar = screen.getByRole('toolbar', { name: '재생과 구간' });
-    const zoom = within(bar).getByRole('slider', { name: '타임라인 확대' });
-    expect(within(bar).getByText('100%')).toBeInTheDocument();
-    zoom.focus();
-    await user.keyboard('{ArrowRight}');
-    expect(within(bar).getByText('200%')).toBeInTheDocument();
+    expect(within(zoomGroup()).getByText('100%')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: '타임라인 확대' }));
+    expect(within(zoomGroup()).getByText('200%')).toBeInTheDocument();
   });
 
-  it('막대 양쪽 돋보기(− · +)로 한 단계씩 줄이고 키우며, 끝 단계에서는 그쪽 단추가 꺼진다(POK-389)', async () => {
+  it('− · ＋ 단추로 한 단계씩 줄이고 키우며, 끝 단계에서는 그쪽 단추가 꺼진다(POK-389)', async () => {
     const user = userEvent.setup();
     renderStudio();
-    const bar = screen.getByRole('toolbar', { name: '재생과 구간' });
-    const zoomOut = within(bar).getByRole('button', { name: '타임라인 축소' });
-    const zoomIn = within(bar).getByRole('button', { name: '타임라인 한 단계 확대' });
+    const zoomOut = screen.getByRole('button', { name: '타임라인 축소' });
+    const zoomIn = screen.getByRole('button', { name: '타임라인 확대' });
 
     await user.click(zoomIn);
-    expect(within(bar).getByText('200%')).toBeInTheDocument();
+    expect(within(zoomGroup()).getByText('200%')).toBeInTheDocument();
     await user.click(zoomIn);
-    expect(within(bar).getByText('400%')).toBeInTheDocument();
+    expect(within(zoomGroup()).getByText('400%')).toBeInTheDocument();
     expect(zoomIn).toBeDisabled();
 
     for (let i = 0; i < 4; i++) await user.click(zoomOut);
-    expect(within(bar).getByText('25%')).toBeInTheDocument();
+    expect(within(zoomGroup()).getByText('25%')).toBeInTheDocument();
     expect(zoomOut).toBeDisabled();
     expect(zoomIn).toBeEnabled();
   });
@@ -273,14 +302,9 @@ describe('StudioScreen', () => {
         setBounds: vi.fn(),
       },
     });
-    const bar = screen.getByRole('toolbar', { name: '재생과 구간' });
-    // 범위보다 넓힐 수 없으니 축소 단추는 꺼져 있다
-    expect(within(bar).getByRole('button', { name: '타임라인 축소' })).toBeDisabled();
-    // 막대도 100% 아래로 못 내린다: 25%·50%는 같은 폭이라 표시만 바뀐다(PR #341 codex)
-    const zoomBar = within(bar).getByRole('slider', { name: '타임라인 확대' });
-    expect(zoomBar).toHaveAttribute('aria-valuemin', '2');
-    fireEvent.keyDown(zoomBar, { key: 'Home' });
-    expect(within(bar).getByText('100%')).toBeInTheDocument();
+    // 범위보다 넓힐 수 없으니 축소 단추는 꺼져 있고 100%에 머문다: 25%·50%는 같은 폭이라 표시만 바뀐다(PR #341 codex)
+    expect(screen.getByRole('button', { name: '타임라인 축소' })).toBeDisabled();
+    expect(within(zoomGroup()).getByText('100%')).toBeInTheDocument();
 
     // 구간 늘리기: 끝점을 레인 오른쪽 끝까지 끌면 범위 끝(119초)까지 늘어난다
     const end = screen.getByRole('slider', { name: '구간 끝점' });
@@ -299,9 +323,9 @@ describe('StudioScreen', () => {
       return ticks;
     };
     const at100 = span();
-    await user.click(within(bar).getByRole('button', { name: '타임라인 한 단계 확대' }));
+    await user.click(screen.getByRole('button', { name: '타임라인 확대' }));
     expect(span()).not.toEqual(at100);
-    expect(within(bar).getByRole('button', { name: '타임라인 축소' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: '타임라인 축소' })).toBeEnabled();
   });
 
   it('키운 채 끄는 동안은 창을 붙잡는다: 재생 위치가 창 밖으로 가도 끄던 자리 밑에서 창이 안 넘어간다(로컬 리뷰 2라운드)', async () => {
@@ -334,9 +358,8 @@ describe('StudioScreen', () => {
       );
     }
     renderWithProviders(<Harness />);
-    const bar = screen.getByRole('toolbar', { name: '재생과 구간' });
-    await user.click(within(bar).getByRole('button', { name: '타임라인 한 단계 확대' }));
-    await user.click(within(bar).getByRole('button', { name: '타임라인 한 단계 확대' }));
+    await user.click(screen.getByRole('button', { name: '타임라인 확대' }));
+    await user.click(screen.getByRole('button', { name: '타임라인 확대' }));
     const ticks = () =>
       [...document.querySelectorAll('[data-ruler] span')].map((tick) => tick.textContent);
     const before = ticks();
@@ -383,13 +406,12 @@ describe('StudioScreen', () => {
       );
     }
     renderWithProviders(<Harness />);
-    const bar = screen.getByRole('toolbar', { name: '재생과 구간' });
-    await user.click(within(bar).getByRole('button', { name: '이 장면을 썸네일로' }));
+    await user.click(screen.getByRole('button', { name: '이 장면을 썸네일로' }));
     const marker = () => document.querySelector('[data-thumbnail-marker]');
     expect(marker()).not.toBeNull();
 
-    await user.click(within(bar).getByRole('button', { name: '타임라인 한 단계 확대' }));
-    await user.click(within(bar).getByRole('button', { name: '타임라인 한 단계 확대' }));
+    await user.click(screen.getByRole('button', { name: '타임라인 확대' }));
+    await user.click(screen.getByRole('button', { name: '타임라인 확대' }));
     // 재생 위치가 멀리 가면 창이 따라가고, 105초에 고른 썸네일은 창 밖이다
     act(() => setPosition(155));
     expect(marker()).toBeNull();
@@ -417,13 +439,12 @@ describe('StudioScreen', () => {
         setBounds: vi.fn(),
       },
     });
-    const bar = screen.getByRole('toolbar', { name: '재생과 구간' });
     // 100%: 1분 구간 전체가 보이고 손잡이 둘이 다 있다
     expect(screen.getAllByRole('slider', { name: /구간 (시작|끝)점/ })).toHaveLength(2);
     expect(screen.queryByRole('button', { name: /으로 가기/ })).not.toBeInTheDocument();
 
-    await user.click(within(bar).getByRole('button', { name: '타임라인 한 단계 확대' }));
-    await user.click(within(bar).getByRole('button', { name: '타임라인 한 단계 확대' }));
+    await user.click(screen.getByRole('button', { name: '타임라인 확대' }));
+    await user.click(screen.getByRole('button', { name: '타임라인 확대' }));
     // 400%: 18.75초 창(121~139초)이라 두 끝이 다 밖이다. 손잡이는 잘려 안 보일 뿐 그대로 있다(키보드 초점을 잃지 않게)
     expect(screen.getAllByRole('slider', { name: /구간 (시작|끝)점/ })).toHaveLength(2);
     await user.click(screen.getByRole('button', { name: '시작점으로 가기' }));
@@ -483,16 +504,17 @@ describe('StudioScreen', () => {
     const start = parseFloat(box.style.left) / 100;
     const width = parseFloat(box.style.width) / 100;
     const xAt = (seconds: number) => (start + (width * seconds) / 12.4) * 1000;
-    const position = () => screen.getByRole('status', { name: '재생 위치' }).textContent;
+    // 쇼츠 안 몇 초인가: 재생 막대 시각이 곧 그 값이다
+    const position = () => transportSeconds();
 
     fireEvent.pointerDown(scrub, { clientX: xAt(2.5), pointerId: 1 });
-    expect(position()).toBe('0:02 / 0:12');
+    expect(position()).toBeCloseTo(2.5, 0);
     fireEvent.pointerMove(scrub, { clientX: xAt(9.5), pointerId: 1 });
-    expect(position()).toBe('0:09 / 0:12');
+    expect(position()).toBeCloseTo(9.5, 0);
     fireEvent.pointerUp(scrub, { pointerId: 1 });
 
     fireEvent.pointerDown(ruler, { clientX: xAt(4.5), pointerId: 2 });
-    expect(position()).toBe('0:04 / 0:12');
+    expect(position()).toBeCloseTo(4.5, 0);
   });
 
   it('타임라인을 접으면 선택 구간 요약만 남는다', async () => {
@@ -588,7 +610,7 @@ describe('StudioScreen', () => {
     await user.keyboard('{ArrowRight}');
     expect(within(ratios).getByRole('radio', { name: '60 : 40' })).toBeChecked();
     // 시킹으로 새지 않았다
-    expect(screen.getByRole('status', { name: '재생 위치' })).toHaveTextContent('0:05 / 0:12');
+    expect(transportClock()).toContain('0:05.6');
   });
 
   it('크롭 사각형 위의 화살표는 사각형만 옮기고 플레이헤드는 건드리지 않는다', async () => {
@@ -600,12 +622,12 @@ describe('StudioScreen', () => {
     body.focus();
     await user.keyboard('{ArrowRight}');
     expect(body.parentElement?.getAttribute('style')).not.toBe(before);
-    expect(screen.getByRole('status', { name: '재생 위치' })).toHaveTextContent('0:05 / 0:12');
+    expect(transportClock()).toContain('0:05.6');
 
     // 모서리도 같다 — 넓히기가 시킹으로 새지 않는다
     screen.getByRole('button', { name: '상단 오른쪽 아래 모서리' }).focus();
     await user.keyboard('{ArrowRight}');
-    expect(screen.getByRole('status', { name: '재생 위치' })).toHaveTextContent('0:05 / 0:12');
+    expect(transportClock()).toContain('0:05.6');
   });
 
   it('크롭 사각형 위의 Space는 재생을 토글한다 — 버튼이 삼키지 않는다', async () => {
@@ -630,7 +652,7 @@ describe('StudioScreen', () => {
     await user.keyboard('{ArrowRight}');
 
     expect(overlay().style.width).not.toBe(before);
-    expect(screen.getByRole('status', { name: '재생 위치' })).toHaveTextContent('0:05 / 0:12');
+    expect(transportClock()).toContain('0:05.6');
   });
 
   it('「직접」 색 선택기 한 번은 실행취소 한 칸이다 — 값마다 쌓이지 않는다', async () => {
@@ -882,10 +904,9 @@ describe('StudioScreen', () => {
     // 버튼은 화살표를 안 쓴다 → 시킹이 통과해야 한다
     const play = screen.getByRole('button', { name: '재생' });
     play.focus();
-    const clock = () => screen.getByRole('status', { name: '재생 위치' }).textContent ?? '';
-    const before = clock();
+    const before = transportClock();
     await user.keyboard('{ArrowRight}');
-    expect(clock()).not.toBe(before);
+    expect(transportClock()).not.toBe(before);
 
     // 슬라이더는 Space를 안 쓴다 → 재생이 통과해야 한다
     screen.getByRole('slider', { name: '구간 시작점' }).focus();

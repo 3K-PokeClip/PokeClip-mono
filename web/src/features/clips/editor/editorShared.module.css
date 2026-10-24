@@ -471,3 +471,92 @@
   background: var(--pc-color-accent-subtle);
   color: var(--pc-color-accent-text);
 }
+
+/* ---------- 트랜스포트 ---------- */
+
+.transport {
+  display: flex;
+  align-items: center;
+  gap: calc(4 * var(--pc-u));
+  margin-top: calc(11 * var(--pc-u));
+  /* 미리보기와 형제 요소라 .preview의 패딩을 물려받지 못한다 — 같은 값을 직접 준다 */
+  padding: 0 calc(20 * var(--pc-u));
+  flex-wrap: wrap;
+  row-gap: calc(8 * var(--pc-u));
+}
+
+/* 재생 아이콘도 같은 이유로 디자인 단위로 잰다 — 되감기(21단위)보다 작아지면
+   가운데 주 버튼이 곁다리보다 작아 보인다. 버튼(md = 40단위)은 그대로다. */
+.transportPlayIcon {
+  width: calc(25 * var(--pc-u));
+  height: calc(25 * var(--pc-u));
+}
+
+.transportTime {
+  font:
+    600 calc(12 * var(--pc-u)) ui-monospace,
+    Menlo,
+    monospace;
+  margin-left: calc(6 * var(--pc-u));
+}
+
+/* 「/ 0:30.0」 — 쇼츠 길이는 흐리게 */
+.transportTotal {
+  font-weight: 500;
+  color: var(--pc-color-text-muted);
+}
+
+.transportRight {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: calc(8 * var(--pc-u));
+}
+
+/* 오른쪽 칩 셋(반복 · 배속 · 썸네일): 같은 높이의 알약, 켜진 반복만 강조색 */
+.transportChip {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(6 * var(--pc-u));
+  height: calc(32 * var(--pc-u));
+  padding: 0 calc(14 * var(--pc-u));
+  border-radius: var(--pc-radius-pill);
+  border: 1px solid var(--pc-color-border-default);
+  background: transparent;
+  color: var(--pc-color-text-secondary);
+  font-family: inherit;
+  font-size: calc(12 * var(--pc-u));
+  font-weight: 650;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.transportChip:hover:not(:disabled) {
+  background: var(--pc-color-bg-surface-hover);
+  color: var(--pc-color-text-primary);
+}
+
+.transportChip:focus-visible {
+  outline: 2px solid var(--pc-color-focus-ring);
+  outline-offset: 2px;
+}
+
+.transportChip[aria-pressed='true'] {
+  border-color: var(--pc-color-accent);
+  background: var(--pc-color-accent-subtle);
+  color: var(--pc-color-accent-text);
+}
+
+.transportChip:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* 배속 메뉴 한 줄: 값 왼쪽, 고른 값만 체크 오른쪽 */
+.transportMenuItem {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: calc(16 * var(--pc-u));
+  min-width: calc(64 * var(--pc-u));
+}

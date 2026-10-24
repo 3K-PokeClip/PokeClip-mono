@@ -1,9 +1,17 @@
 import { useRef, type KeyboardEvent, type PointerEvent } from 'react';
-import { Camera, Captions, ChevronLeft, ChevronRight, Film } from 'lucide-react';
+import {
+  Camera,
+  Captions,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  ChevronUp,
+  Film,
+} from 'lucide-react';
+import { IconButton } from '@/ui';
 import { formatUptime } from '@/features/player/playerMath';
 import styles from './StudioScreen.module.css';
 import { ThumbnailTile } from './ThumbnailTile';
-import { shortClock, TimelineToolbar } from './TimelineToolbar';
 import { TimelineTrackRow } from './TimelineTrackRow';
 import { VideoFilmstrip } from './VideoFilmstrip';
 import {
@@ -30,6 +38,12 @@ import type { ClipEditorMockState } from '../useClipEditorMockState';
 
 /** 높이 조절 키보드 한 걸음 */
 const HEIGHT_STEP_PX = 24;
+
+/** 썸네일 칸에 적는 쇼츠 안 시각. 반올림하면 끝에서 길이보다 크게 보이니 내림한다 */
+function shortClock(seconds: number): string {
+  const s = Math.max(0, Math.floor(seconds));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
 
 export function MultitrackTimeline({
   state,
@@ -207,16 +221,53 @@ export function MultitrackTimeline({
         </button>
       ) : null}
 
-      <TimelineToolbar state={state} />
-      {state.timelineCollapsed ? (
-        <span className={styles.timelineSummary}>
-          선택 구간{' '}
-          <b>
-            {formatUptime(state.range.startSeconds)} – {formatUptime(state.range.endSeconds)}
-          </b>{' '}
-          · {state.rangeLengthLabel}
-        </span>
-      ) : null}
+      <div className={styles.timelineHead}>
+        <span className={styles.timelineTitle}>타임라인</span>
+        {state.timelineCollapsed ? (
+          <span className={styles.timelineSummary}>
+            선택 구간{' '}
+            <b>
+              {formatUptime(state.range.startSeconds)} – {formatUptime(state.range.endSeconds)}
+            </b>{' '}
+            · {state.rangeLengthLabel}
+          </span>
+        ) : null}
+        <IconButton
+          variant="ghost"
+          size="sm"
+          aria-label={state.timelineCollapsed ? '타임라인 열기' : '타임라인 접기'}
+          onClick={state.toggleTimeline}
+        >
+          {state.timelineCollapsed ? (
+            <ChevronUp size={14} aria-hidden />
+          ) : (
+            <ChevronDown size={14} aria-hidden />
+          )}
+        </IconButton>
+
+        <div className={styles.zoomGroup}>
+          <IconButton
+            variant="ghost"
+            size="sm"
+            aria-label="타임라인 축소"
+            // 범위보다 넓힐 수 없으면(카드 창 등) 꺼 둔다: 눌러도 화면이 그대로다
+            disabled={!state.canZoomOut}
+            onClick={state.zoomOut}
+          >
+            −
+          </IconButton>
+          <span className={styles.zoomValue}>{state.zoomLabel}</span>
+          <IconButton
+            variant="ghost"
+            size="sm"
+            aria-label="타임라인 확대"
+            disabled={state.zoom >= Math.max(...state.zoomLevels)}
+            onClick={state.zoomIn}
+          >
+            ＋
+          </IconButton>
+        </div>
+      </div>
 
       {!state.timelineCollapsed ? (
         <>
