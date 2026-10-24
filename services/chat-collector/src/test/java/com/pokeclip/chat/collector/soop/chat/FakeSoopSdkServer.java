@@ -132,6 +132,7 @@ final class FakeSoopSdkServer implements AutoCloseable {
                       .then(function () { return fetch('%1$s/script'); })
                       .then(function (r) { return r.json(); })
                       .then(function (steps) {
+                        if (self.handlers.ready) { self.handlers.ready(); }
                         var i = 0;
                         function next() {
                           if (i >= steps.length) { return; }
