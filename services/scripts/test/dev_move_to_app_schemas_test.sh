@@ -25,9 +25,14 @@
 # 남긴다. 「앞 배포」 · 「다음 배포」는 제품을 새 bash 프로세스로 source 한 실행
 # 하나씩이다(실행마다 울타리 이름이 새로 정해진다).
 #
-# 제품 스크립트는 마지막 줄이 `main "$@"` 라 source 하면 main 이 돈다. 시험은
-# 가짜 docker 가 public 에 이력 표가 없다고 답하게 해 main 을 「건너뜀」
-# 갈래(종료 0)로 끝내고 함수만 얻는다.
+# 상태 불명 표지(BACKUP_DIR 아래 dev-move-unknown)도 지킨다: restore 가 판정
+# 불가로 끝나면 표지를 남기고, 다음 배포의 main 은 표지를 보면 아무것도
+# 멈추지 않고 끝난다 — 앞 배포가 울타리를 못 세웠으면 다음 배포가 옛 컨테이너를
+# 띄운 뒤 앞 배포의 밀린 이전이 커밋할 수 있어서다.
+#
+# 제품 스크립트는 마지막 줄이 `main "$@"` 라 그대로 source 하면 main 이 돈다.
+# 시험은 그 줄을 뺀 사본을 source 해 함수만 얻는다. 사본은 BACKUP_DIR 만 사례의
+# 상태 디렉터리 아래로 바꾼다(표지 · 백업이 상자 경로에 쓰이지 않게).
 #
 # 사용: bash services/scripts/test/dev_move_to_app_schemas_test.sh
 # 종료 코드: 0 전부 통과 / 1 하나라도 실패
@@ -39,11 +44,13 @@ readonly TEST_DIR
 SERVICES_DIR="$(cd -- "${TEST_DIR}/../.." && pwd)"
 readonly SERVICES_DIR
 readonly SCRIPT="${SERVICES_DIR}/scripts/dev-move-to-app-schemas.sh"
+readonly MARKER_NAME='dev-move-unknown'
 readonly HISTORY_BEFORE='flyway_schema_history_auth flyway_schema_history_clip'
 readonly SIX="auth clip chat-collector chat-detector render-worker \
 upload-worker"
 
 work_dir=''
+product=''
 fail_count=0
 case_count=0
 
@@ -72,11 +79,9 @@ EOF
   cat > "${work_dir}/bin/docker" <<'EOF'
 #!/usr/bin/env bash
 # 가짜 docker — argv 를 한 줄로 펴(줄바꿈 → 공백) calls 에 적고 하위 명령
-# 종류로 답한다. source 때(FAKE_BOOT=1)의 이력 표 읽기는 적지 않고 빈 줄로
-# 답해 main 을 건너뜀 갈래로 끝낸다.
+# 종류로 답한다.
 set -u
 d="${FAKE_DIR}"
-[[ "${FAKE_BOOT:-0}" == 1 ]] && exit 0
 args="$*"
 args="${args//$'\n'/ }"
 printf '%s\n' "${args}" >> "${d}/calls"
@@ -212,11 +217,31 @@ reset_state() {
 fresh_run() {
   # shellcheck disable=SC2016 # 새 bash 가 풀 변수다.
   bash -c '
-    export FAKE_BOOT=1
-    source "$1" 6gb > /dev/null
-    export FAKE_BOOT=0
+    source "$1"
     history_before="$2"
-    "$3"' fresh_run "${SCRIPT}" "${HISTORY_BEFORE}" "$1"
+    "$3"' fresh_run "${PRODUCT}" "${HISTORY_BEFORE}" "$1"
+}
+
+#######################################
+# 제품 스크립트에서 마지막 줄(`main "$@"`)을 빼고 BACKUP_DIR 을 사례의 상태
+# 디렉터리 아래로 바꾼 사본을 만든다. 두 자리가 기대한 꼴이 아니면 실패한다.
+# Globals:
+#   product
+#######################################
+make_product_copy() {
+  product="${work_dir}/product.sh"
+  if [[ "$(tail -1 "${SCRIPT}")" != 'main "$@"' ]]; then
+    echo "last line of ${SCRIPT} is not main \"\$@\"" >&2
+    return 1
+  fi
+  if [[ "$(grep -c '^readonly BACKUP_DIR=' "${SCRIPT}")" != 1 ]]; then
+    echo "expected one readonly BACKUP_DIR line in ${SCRIPT}" >&2
+    return 1
+  fi
+  # shellcheck disable=SC2016 # 사본을 source 한 셸이 풀 변수다.
+  sed -e '$d' \
+    -e 's|^readonly BACKUP_DIR=.*|readonly BACKUP_DIR="${FAKE_DIR}/backup"|' \
+    "${SCRIPT}" > "${product}"
 }
 
 #######################################
@@ -311,6 +336,38 @@ main_until_stop() {
   prune_build_cache() { :; }
   require_disk_for_backup() { :; }
   main 6gb
+}
+
+# 배포 A 의 restore 가 울타리를 못 세워 판정 불가로 끝난다. 배포 B(새 실행)의
+# main 이 정지 실패로 restore 에 들어갈 수 있는 상황에서 돈다. 그 뒤 데몬이 A 의
+# 밀린 이전을 시작한다(울타리가 없어 이전은 커밋한다).
+fence_failure_then_next_run() {
+  ( FAKE_FENCE_FAIL=1 restore ) || true
+  echo "${MOVE_RUN_ID}" > "${FAKE_DIR}/first_run_id"
+  local status=0
+  fresh_run main_until_stop || status=$?
+  echo "${status}" > "${FAKE_DIR}/next_status"
+  run_move_sql
+}
+
+marker_path() {
+  echo "${FAKE_DIR}/backup/${MARKER_NAME}"
+}
+
+# 표지가 있고 첫 줄이 「실행 식별자 시각」 꼴이다.
+marker_left() {
+  local line
+  line="$(head -1 "$(marker_path)" 2>/dev/null)" || return 1
+  [[ "${line}" =~ ^[0-9]{14}_[0-9]+\ [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z$ ]]
+}
+
+# restore 를 돌려 판정 불가로 끝났는지(종료 1 · 띄우지 않음 · 표지 남김) 본다.
+restore_is_unknown_with_marker() {
+  call_in_script restore
+  [[ "$(exit_status)" == 1 ]] || return 1
+  started && return 1
+  grep -q '::error::schema move state unknown' "${FAKE_DIR}/out" || return 1
+  marker_left
 }
 
 # 연결만 끊기고 안의 이전이 대기 둘 동안 더 돈 뒤 커밋 — 띄우지 않는다.
@@ -500,13 +557,111 @@ case_check_and_create_use_same_fence() {
   [[ "${created}" == "${checked}" ]]
 }
 
+# codex 연쇄 — A 가 울타리를 못 세워 판정 불가로 끝나면, B 의 main 은 표지를
+# 보고 아무것도 멈추지 않고 종료 1 이다. 그 뒤 A 의 밀린 이전이 와도 옛
+# 컨테이너는 띄워지지 않았다.
+case_fence_failure_then_next_run_does_not_start() {
+  export FAKE_STOP_FAIL=1
+  call_in_script fence_failure_then_next_run
+  [[ "$(cat "${FAKE_DIR}/next_status")" == 1 ]] || return 1
+  grep -q ' stop ' "${FAKE_DIR}/calls" && return 1
+  started && return 1
+  grep -q '::error::schema move: an earlier run ended in an unknown state' \
+    "${FAKE_DIR}/out" || return 1
+  grep -q "^$(cat "${FAKE_DIR}/first_run_id") " "$(marker_path)"
+}
+
+# 표지가 있으면 main 은 맨 앞에서 끝난다 — docker 를 한 번도 부르지 않고(이력
+# 읽기 · 정지 · 울타리 없음) 종료 1 · 표지는 그대로.
+case_marker_stops_main_before_anything() {
+  mkdir -p "${FAKE_DIR}/backup"
+  echo '20260101000000_1 2026-01-01T00:00:00Z' > "$(marker_path)"
+  export FAKE_STOP_FAIL=1
+  call_in_script main_until_stop
+  [[ "$(exit_status)" == 1 ]] || return 1
+  [[ -s "${FAKE_DIR}/calls" ]] && return 1
+  grep -q '::error::schema move: an earlier run ended in an unknown state' \
+    "${FAKE_DIR}/out" || return 1
+  grep -q '20260101000000_1' "${FAKE_DIR}/out" || return 1
+  [[ -e "$(marker_path)" ]]
+}
+
+# 표지가 없으면 main 은 평소대로 정지까지 간다.
+case_main_without_marker_reaches_stop() {
+  export FAKE_STOP_FAIL=1
+  call_in_script main_until_stop
+  grep -q ' stop ' "${FAKE_DIR}/calls" || return 1
+  started || return 1
+  [[ -e "$(marker_path)" ]] && return 1
+  return 0
+}
+
+# 판정 불가의 갈래마다 표지를 남긴다.
+case_fence_failure_leaves_marker() {
+  export FAKE_FENCE_FAIL=1
+  restore_is_unknown_with_marker
+}
+
+case_wait_bound_exceeded_leaves_marker() {
+  export FAKE_PROC_POLLS=100000
+  restore_is_unknown_with_marker
+}
+
+case_top_failure_leaves_marker() {
+  export FAKE_TOP_FAIL=1
+  restore_is_unknown_with_marker
+}
+
+case_session_read_failure_leaves_marker() {
+  export FAKE_STAT_FAIL=1
+  restore_is_unknown_with_marker
+}
+
+# 이력 표가 일부만 남음(앞과도 다르고 비지도 않음) — 판정 불가.
+case_partial_history_leaves_marker() {
+  export FAKE_HISTORY_FINAL='flyway_schema_history_auth'
+  restore_is_unknown_with_marker
+}
+
+# 커밋 전 · 커밋 뒤 갈래는 표지를 남기지 않는다.
+case_before_commit_leaves_no_marker() {
+  call_in_script restore
+  started || return 1
+  [[ -e "$(marker_path)" ]] && return 1
+  return 0
+}
+
+case_committed_leaves_no_marker() {
+  export FAKE_HISTORY_FINAL=''
+  call_in_script restore
+  grep -q '::error::schema move committed' "${FAKE_DIR}/out" || return 1
+  [[ -e "$(marker_path)" ]] && return 1
+  return 0
+}
+
+# 표지 쓰기 실패(BACKUP_DIR 자리에 파일이 있음) — ::error:: 를 내고 띄우지
+# 않는다.
+case_marker_write_failure_is_error() {
+  : > "${FAKE_DIR}/backup"
+  export FAKE_TOP_FAIL=1
+  call_in_script restore
+  [[ "$(exit_status)" == 1 ]] || return 1
+  started && return 1
+  local pattern='::error::schema move: could not write the unknown-state'
+  pattern+=' marker .* \(run [0-9]{14}_[0-9]+\)'
+  grep -Eq "${pattern}" "${FAKE_DIR}/out"
+}
+
 main() {
   work_dir="$(mktemp -d)"
   trap 'rm -rf "${work_dir}"' EXIT
   make_fakes
-  export SCRIPT HISTORY_BEFORE
+  make_product_copy
+  readonly PRODUCT="${product}"
+  export PRODUCT HISTORY_BEFORE
   export -f fresh_run late_move_after_restore \
-    late_move_after_next_run_disk_failure main_without_prune main_until_stop
+    late_move_after_next_run_disk_failure main_without_prune main_until_stop \
+    fence_failure_then_next_run
   run_case case_inner_move_commits_after_disconnect
   run_case case_backend_lingers_then_commits
   run_case case_inner_move_rolls_back_then_restart
@@ -523,6 +678,17 @@ main() {
   run_case case_late_move_after_next_run_disk_failure_is_fenced
   run_case case_fence_name_differs_per_run
   run_case case_check_and_create_use_same_fence
+  run_case case_fence_failure_then_next_run_does_not_start
+  run_case case_marker_stops_main_before_anything
+  run_case case_main_without_marker_reaches_stop
+  run_case case_fence_failure_leaves_marker
+  run_case case_wait_bound_exceeded_leaves_marker
+  run_case case_top_failure_leaves_marker
+  run_case case_session_read_failure_leaves_marker
+  run_case case_partial_history_leaves_marker
+  run_case case_before_commit_leaves_no_marker
+  run_case case_committed_leaves_no_marker
+  run_case case_marker_write_failure_is_error
   echo "cases: ${case_count} · fail: ${fail_count}"
   (( fail_count == 0 ))
 }

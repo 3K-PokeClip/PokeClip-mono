@@ -936,7 +936,14 @@ SELECT pg_catalog.pg_database_size(pg_catalog.current_database());
     불가) 실패했다. 서버는 멈춘 채다. kty 에게 보고하고, 새 이미지로 `up -d` 하는
     SSM 은 kty 승인 뒤에 보낸다. 판정 불가에는 이전 psql 이 90초 안에 끝나지
     않은 경우도 든다 — 그때는 `pg_stat_activity` 에 `application_name` 이
-    `pokeclip-dev-move` 인 세션이 없어진 뒤에 이력 표를 읽어 판정한다.
+    `pokeclip-dev-move` 인 세션이 없어진 뒤에 이력 표를 읽어 판정한다. 판정
+    불가면 상태 불명 표지도 남는다(아래).
+*   `::error::schema move: could not write the unknown-state marker …` — 판정
+    불가인데 표지를 못 남겼다. 다음 배포가 스스로 멈추지 않으므로 다음 배포
+    전에 아래 표지를 손으로 남긴다(내용은 그 줄의 `run` 식별자 한 줄).
+*   `::error::schema move: an earlier run ended in an unknown state (…)` — 앞
+    배포가 남긴 상태 불명 표지가 있어 아무것도 멈추지 않고 끝났다. 옛 컨테이너가
+    그대로 돈다. 아래 확인을 마치고 표지를 지운 뒤 다시 배포한다.
 
 **울타리.** 실패 갈래의 복구는 판정 전에 그 실행의 울타리 스키마
 `pokeclip_move_fence_<UTC 시각>_<PID>` 를 먼저 만든다. 이전 SQL 은 같은
@@ -945,11 +952,47 @@ SELECT pg_catalog.pg_database_size(pg_catalog.current_database());
 울타리를 못 만들면 판정 불가로 친다. 울타리 이름은 실행마다 달라 다음 배포는
 앞 울타리를 지우지도 보지도 않는다 — 그래서 실패 하나마다 빈 스키마 하나가 dev
 DB 에 남는다(public 밖이라 이전 · 역이전 SQL 이 보지 않아 해가 없다). 지우려면
-그 실행의 밀린 이전이 없음을 확인한 뒤 손으로 지운다.
+그 실행의 밀린 이전이 없음을 확인한 뒤(아래 확인 1 · 2) 손으로 지운다 —
+`CASCADE` 없이 지우므로 빈 스키마가 아니면 실패한다.
+
+```sh
+sudo -u ec2-user docker compose -f docker-compose.dev.yml exec -T postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "DROP SCHEMA pokeclip_move_fence_<식별자>"'
+```
+
+**상태 불명 표지.** 판정 불가로 끝난 복구는 상자 디스크에
+`/home/ec2-user/pokeclip-backup/dev-move-unknown` 을 남긴다(DB 가 죽어도 남게
+파일로). 내용은 그 실행의 식별자(`<UTC 시각>_<PID>` — 울타리 이름 뒷부분)와
+시각 한 줄이다. 판정 불가에는 울타리를 못 세운 경우가 들어, 다음 배포가 자기
+울타리만 세우고 옛 컨테이너를 띄우면 그 뒤 앞 배포의 밀린 이전이 커밋해 자료가
+갈릴 수 있다. 그래서 표지가 있으면 다음 배포의 이전 단계는 맨 앞에서 아무것도
+멈추지 않고 실패한다. 아래를 kty 승인 SSM 으로 확인한 뒤 지운다.
+
+1.  `sudo -u ec2-user docker compose -f docker-compose.dev.yml top postgres`
+    출력에 `pokeclip-dev-move` 를 단 psql 이 없다.
+1.  `pg_stat_activity` 에 `application_name` 이 `pokeclip-dev-move` 인 세션이
+    0 이다.
+1.  표지 식별자의 울타리 `pokeclip_move_fence_<식별자>` 가 없으면 세운다
+    (`CREATE SCHEMA IF NOT EXISTS pokeclip_move_fence_<식별자>`). 그 뒤에 늦게
+    시작하는 그 실행의 이전은 울타리를 보고 실패한다.
+1.  이력 표 넷이 어디 있는지 본다 — 넷 다 public 이면 이전 전이고(옛 서버가
+    그대로 맞다), 넷 다 `app_*` 면 이전이 커밋됐다(새 이미지로 `up -d` 는 kty
+    승인 뒤). 섞여 있으면 지우지 말고 kty 에게 회부한다.
+
+    ```sql
+    SELECT n.nspname, c.relname FROM pg_catalog.pg_class c
+      JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+     WHERE c.relname LIKE 'flyway_schema_history%';
+    ```
+1.  표지를 지운다.
+
+    ```sh
+    sudo rm /home/ec2-user/pokeclip-backup/dev-move-unknown
+    ```
 
 **백업 정리.** 백업은 상자의 `/home/ec2-user/pokeclip-backup/public-<UTC
 시각>.sql`(파일 0600 · 디렉터리 0700)이다. 계정 · 방송 · 암호문이 들어 있으므로
-dev 확인 뒤 kty 승인을 받아 지우고 삭제를 기록한다.
+dev 확인 뒤 kty 승인을 받아 지우고 삭제를 기록한다. 디렉터리째 지우지 않는다 —
+상태 불명 표지가 같은 곳에 있다.
 
 #### 되돌리기 순서
 

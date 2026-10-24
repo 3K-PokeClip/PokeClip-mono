@@ -31,6 +31,13 @@
 #           하나마다 빈 스키마 하나가 dev DB 에 남는다(이전 · 역이전 SQL 이 보지
 #           않아 해가 없다). 지우려면 그 실행의 밀린 이전이 없음을 확인한 뒤 손으로
 #           지운다(README).
+#   표지    판정 불가로 끝난 restore 는 상자 디스크에 상태 불명 표지
+#           (BACKUP_DIR/dev-move-unknown, 실행 식별자와 시각 한 줄)를 남긴다.
+#           울타리를 못 세웠을 수 있어, 다음 배포가 자기 울타리만 세우고 옛
+#           컨테이너를 띄우면 이 실행의 밀린 이전이 그 뒤에 커밋할 수 있어서다.
+#           표지가 있으면 다음 배포의 main 은 맨 앞에서 아무것도 멈추지 않고
+#           ::error:: · 종료 1. 밀린 이전이 없고 표가 어디 있는지 확인한 뒤 손으로
+#           지운다(README).
 #
 # 되돌리기 순서 · 백업 정리는 services/README.md 「dev 앱별 스키마 이전과
 # 되돌리기」. 이전 단계를 지우는 후속 PR 에서 이 파일도 지운다.
@@ -40,6 +47,9 @@ set -euo pipefail
 readonly COMPOSE_FILE='docker-compose.dev.yml'
 readonly MOVE_SQL='scripts/dev-move-to-app-schemas.sql'
 readonly BACKUP_DIR='/home/ec2-user/pokeclip-backup'
+# 상태 불명 표지. DB 가 죽어도 남게 상자 디스크(재부팅 · /tmp 정리에 지워지지
+# 않는 곳)에 둔다.
+readonly UNKNOWN_MARKER="${BACKUP_DIR}/dev-move-unknown"
 readonly PRUNE_LOG='/tmp/pokeclip-prune.log'
 # 이전하는 동안 세우는 것 — 서버 넷과, 서버에 보고하는 일꾼 둘(멈춘 서버에 보고하다
 # 재시도 끝에 DLQ 로 가지 않게).
@@ -193,6 +203,39 @@ require_disk_for_backup() {
 }
 
 #######################################
+# 상태 불명 표지를 남긴다 — 이 실행의 식별자와 UTC 시각 한 줄. 디렉터리는 백업과
+# 같이 0700 으로 만든다.
+# Returns:
+#   0 남김, 그 밖 쓰기 실패.
+#######################################
+write_unknown_marker() {
+  (
+    umask 077
+    mkdir -p -- "${BACKUP_DIR}" \
+      && printf '%s %s\n' "${MOVE_RUN_ID}" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
+        > "${UNKNOWN_MARKER}"
+  )
+}
+
+#######################################
+# 앞 배포가 남긴 상태 불명 표지가 있으면 아무것도 멈추지 않고 끝낸다. 그 배포의
+# 밀린 이전이 아직 커밋할 수 있어, 이 배포가 옛 컨테이너를 띄우면 자료가 갈린다.
+#######################################
+require_no_unknown_marker() {
+  local content
+  if [[ ! -e "${UNKNOWN_MARKER}" ]]; then
+    return 0
+  fi
+  content="$(head -n 1 -- "${UNKNOWN_MARKER}" 2>/dev/null)" \
+    || content='(unreadable)'
+  echo '::error::schema move: an earlier run ended in an unknown state' \
+    "(${UNKNOWN_MARKER}: ${content}); nothing stopped. Check that no pending" \
+    'move remains and where the tables are, then delete the marker' \
+    '(services/README.md)'
+  exit 1
+}
+
+#######################################
 # 실패 뒤 복구. 이 실행의 울타리를 세우고, 이전 psql 이 끝나기를 기다린 뒤 이전이
 # 커밋됐는지 읽는다 — 커밋 뒤에 옛 컨테이너를 띄우면 옛 Flyway 가 public 에 빈
 # 표를 만들어 자료가 갈린다. 끝나기 전에 읽으면 커밋 전 모습이 보여 그 오판을
@@ -205,6 +248,8 @@ require_disk_for_backup() {
 # 울타리를 보고 아무것도 바꾸지 않고 실패한다(READ COMMITTED 는 문장마다 새
 # 스냅숏을 잡는다). 울타리는 지우지 않는다 — 이 실행의 이전이 언제 늦게
 # 시작할지 모르고, 다음 실행은 자기 이름의 울타리만 보므로 막히지 않는다.
+# 판정 불가로 끝나면 상태 불명 표지를 남긴다(다음 배포가 옛 컨테이너를 띄우지
+# 않게 — 울타리를 못 세웠을 수 있다).
 # Globals:
 #   history_before
 #######################################
@@ -239,6 +284,11 @@ restore() {
       ;;
     *)
       echo '::error::schema move state unknown; old containers NOT restarted'
+      if ! write_unknown_marker; then
+        echo '::error::schema move: could not write the unknown-state marker' \
+          "${UNKNOWN_MARKER} (run ${MOVE_RUN_ID}); the next deploy will not" \
+          'stop on its own — write it by hand (services/README.md)'
+      fi
       ;;
   esac
   exit 1
@@ -247,6 +297,9 @@ restore() {
 main() {
   local cache_cap="${1:?빌드 캐시 상한(예: 6gb)을 첫 인자로 준다}"
   local backup_file
+
+  # 이력 읽기 · 정지 · trap 보다 먼저 — 앞 배포의 밀린 이전이 남았을 수 있다.
+  require_no_unknown_marker
 
   history_before="$(history_in_public)"
   if [[ -z "${history_before}" ]]; then
