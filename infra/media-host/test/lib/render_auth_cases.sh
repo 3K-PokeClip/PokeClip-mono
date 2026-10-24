@@ -206,6 +206,7 @@ auth_cases::start_default() {
 }
 
 # 사례 35 — 응답기 environment 가 정확히 ia_env 다(env_file 은 풀지 않고 본다).
+# 정확 집합인 까닭: compose 에서 environment 가 env_file 을 이긴다(값 없는 키 · 빈 값도 덮는다).
 auth_cases::check_35() {
   auth_cases::require || return 1
   auth_cases::expect_noenv '.services["ingest-auth"].environment // null' \

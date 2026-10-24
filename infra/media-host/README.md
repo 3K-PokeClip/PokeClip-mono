@@ -158,14 +158,17 @@ compose 템플릿 변수 `ingest_auth_image` 하나로 모드를 고른다. 빈 
     모드로 안다(`bin/lib/render_files.sh` 의 `compose_mode`). 2 이상이거나
     같은 키를 다른 꼴(뒤 공백 · 같은 줄 값)로 쓴 줄이 있으면 `MEDIA START
     BLOCKED: ingest-auth mode mismatch` 다. 모드 판정 줄은 따로 내지 않는다.
+    키 줄은 글자 꼴로만 센다 — 같은 뜻의 다른 YAML 꼴(따옴표 키 · 4칸 들여쓰기 ·
+    flow 표기)는 0 으로 읽혀 옛 모드가 된다. 저장소 compose 템플릿의 키 꼴은
+    `render_test.sh` 사례 39 가 잠근다.
 *   **MediaMTX 템플릿은 두 모드를 다 품는다.** 상자에 깔리는 것은 렌더하지
     않은 저장소 파일이다(M9 설치 묶음). 모드마다 다른 절은 표지 줄
     (`# @mode <legacy|ingest-auth> begin` · `… end`) 사이의 블록이고, 시작
     스크립트가 고른 모드의 블록만 남긴다(다른 모드 블록 · 표지 줄 삭제 —
     `select_mode_blocks`). 표지 꼴이 깨졌거나(닫히지 않음 · 겹침 · 짝 다름 ·
     모르는 모드 · 표지 글자가 든 다른 줄) 두 모드 가운데 하나라도 블록이
-    없으면 `MEDIA START FAIL render template-mode` 다. 그래서 템플릿과
-    compose 가 다른 모드를 고를 길이 없다.
+    없으면 `MEDIA START FAIL render template-mode` 다. 그래서 템플릿이 compose
+    판정과 다른 모드를 고를 길이 없다(compose 판정의 한계는 위 항목).
 *   **남은 토큰 집합이 그 모드 꼴이어야 한다.** 옛 모드는 CDN 비밀 · API
     비밀번호 각 1 이고 응답기 토큰(Basic 비밀번호 · 잠금 둘) 0, 응답기 모드는
     CDN 비밀 · Basic 비밀번호 · 잠금 둘 각 1 이고 API 비밀번호 0 이다. 아니면
@@ -205,7 +208,8 @@ compose 템플릿 변수 `ingest_auth_image` 하나로 모드를 고른다. 빈 
     누구나 비CDN 세션을 열 수 있고, 세션마다 MediaMTX 경로 관리자가 응답기
     왕복만큼 붙잡힌다(새 송출 지연 · `budget_exhausted` — 응답기 예산이 바닥나
     새 송출을 판정 없이 거부하는 것). 판단 시점은 O8a 5 가
-    아니라 **O8a 2 전**이다.
+    아니라 **O8a 2 전**이다. kty 결정(2026-10-24): 공개(O8a 2) 착수 전에
+    확인하는 관문으로 둔다 — PR 머지는 막지 않는다.
     *   S-47(이 몰아치기의 로컬 실측) 수치를 kty 에 보고한다(아래 「시험」 의
         기록 자리).
     *   M8 공개 ALB 의 원본 검증(CloudFront 전용 헤더 등) 상태를 확인한다.
@@ -222,9 +226,10 @@ compose 템플릿 변수 `ingest_auth_image` 하나로 모드를 고른다. 빈 
         비밀(`STREAM_KEY_RESOLVE_TOKEN_SECRET_ARN`) · 인스턴스 역할 권한
         둘(아래 「후속」 M9 행) · `stream_key_resolve_url` ·
         `ingest-auth.env` 렌더.
-    *   4C 전용 토큰 비밀이 **평문 단일 값**인지 확인한다(미확인 —
-        3번에 확인한다). JSON 이 한 줄이면 시작 스크립트의 꼴 검사를 지나
-        **기동은 되고**, 4C 가 실패해 모든 송출이 거부된다(태그 저널
+    *   4C 전용 토큰 비밀이 **평문 단일 값**인지 확인한다. 값은 런타임
+        1단-나 ② 의 값 넣기 경로가 hex 평문(`openssl rand -hex 32`)으로
+        넣는다 — 그 경로로 넣었는지 본다. JSON 이 한 줄이면 시작 스크립트의 꼴
+        검사를 지나 **기동은 되고**, 4C 가 실패해 모든 송출이 거부된다(태그 저널
         `ingestauth_auth_degraded`). 여러 줄 JSON 은 제어 문자(줄바꿈) 때문에
         `MEDIA START BLOCKED: ingest-auth resolve token unavailable` 로 막힌다.
     *   상자 root 의 aws CLI 기록(`cli_history`)이 꺼져 있는지 확인한다
@@ -405,7 +410,7 @@ SIGKILL 등) systemd 252 는 `ExecStop` 을 건너뛰고 `ExecStopPost` 로 간�
 | | `MEDIA START BLOCKED: MTX API credential unavailable` | API 비밀번호 생성 실패 |
 | | `MEDIA START BLOCKED: ingest-auth mode mismatch` | compose 렌더본의 응답기 서비스 키 줄로 모드를 정할 수 없음(`  ingest-auth:` 2 이상 · 같은 키를 뒤 공백 · 같은 줄 값으로 쓴 줄) |
 | | `MEDIA START BLOCKED: ingest-auth ip-limit setting unavailable` | 응답기 모드 — `ingest-auth.env` 없음 · 링크 · 일반 파일 아님 · `INGEST_AUTH_IP_LIMIT=on\|off` 한 줄이 아님 |
-| | `MEDIA START BLOCKED: ingest-auth resolve token unavailable` | 응답기 모드 — 4C 토큰 ARN 빔 · 못 읽음 · 꼴 밖 |
+| | `MEDIA START BLOCKED: ingest-auth resolve token unavailable` | 응답기 모드 — `media.env` 의 `STREAM_KEY_RESOLVE_TOKEN_SECRET_ARN` 빔(옛 이름 `INTERNAL_API_TOKEN_SECRET_ARN` 은 읽지 않는다) · 못 읽음 · 꼴 밖 |
 | | `MEDIA START BLOCKED: ingest-auth denylist unavailable` | 응답기 모드 — 거부 목록 파라미터 이름 빔 · 받기 실패 |
 | | `MEDIA START BLOCKED: ingest-auth denylist invalid` | 응답기 모드 — 받은 거부 목록이 꼴 밖(공백뿐 · 머리 줄 없음 · NUL · 64 KiB 초과) |
 | | `MEDIA START BLOCKED: generated credential unavailable` | 응답기 모드 — Basic 비밀번호 · 잠금 둘 생성 실패 |
@@ -604,8 +609,8 @@ not-running` 이다. 어느 쪽이든 아무것도 하지 않는다. 모든 명�
     (유닛 재기동 · 재부팅)과 거부 목록 동기화가 겹치면, 기동이 남은 임시 파일을
     정리하다 동기화의 진행 중 임시 파일을 지울 수 있다. 그때 동기화는 `FAIL
     invalid` 나 `FAIL install` 로 끝나고 옛 목록은 그대로다 — 원인이 경합일 수
-    있으니 기동이 끝난 뒤 다시 돌린다. 잠금(`flock` 등)을 둘지는 PR 단계 kty
-    판단 대기다.
+    있으니 기동이 끝난 뒤 다시 돌린다. kty 결정(2026-10-24): 잠금(`flock`
+    등)은 이 PR 에 넣지 않는다 — 후속 [POK-435](https://xodbs9810.atlassian.net/browse/POK-435).
 *   **응답기를 다시 만드는 것은 모두 거부 해제다.** 응답기는 한 번 읽은 거부
     토큰을 프로세스가 끝날 때까지 쥐고, 다시 뜨면 그때의 파일부터 다시 쌓는다.
     그래서 `--release` 만이 아니라 IP 한도 전환 · 유닛 재기동도 SSM 에서 이미
@@ -630,10 +635,16 @@ not-running` 이다. 어느 쪽이든 아무것도 하지 않는다. 모든 명�
 1.  이미 붙은 연결을 끊는다. 출력은 JSON 한 줄이다. 종료 0 과
     `"msg":"ingestauth_cut_completed"` 이면 끝난 것이고, `"kicked":<n>` 이 끊은
     수다. `ingestauth_cut_incomplete`(종료 1 — `remaining` · `reason` 이 붙음)면
-    연결이 남았을 수 있다. `verify_timeout` · `api_unreachable` 처럼 일시적인
-    reason 이면 다시 돌린다. `denylist_unreadable` · `api_auth` ·
-    `connlog_unreadable` 처럼 원인이 남는 reason 은 원인(거부 목록 읽기 ·
-    응답기 자격 · 연결 기록)을 고친 뒤 다시 돌린다.
+    연결이 남았을 수 있다. reason 은 여덟 가지다(`media/cmd/ingest-auth/cut.go`).
+    *   일시적 — 다시 돌린다: `verify_timeout` · `api_unreachable` ·
+        `connlog_window_short`(기록에 없는 판독 중 연결이 30초가 안 됐다 —
+        30초 뒤 다시 돌린다).
+    *   원인이 남는다 — 원인(거부 목록 읽기 · 응답기 자격 · 연결 기록)을
+        고친 뒤 다시 돌린다: `denylist_unreadable` · `api_auth` ·
+        `connlog_unreadable`.
+    *   다시 돌려도 같다 — 출력 줄을 남기고 원인을 본다:
+        `api_incompatible`(Control API 응답이 cut 이 아는 꼴이 아니다) ·
+        `internal_error`(cut 의 결함).
 
     ```shell
     docker compose -p pokeclip-media -f /etc/pokeclip-media/compose.yml \
@@ -658,7 +669,10 @@ not-running` 이다. 어느 쪽이든 아무것도 하지 않는다. 모든 명�
     `root:10003 0750` · 파일 `root:10003 0640` 인지, `INGEST_AUTH_GID` 가 응답기
     이미지 USER 의 그룹(10003)과 같은지부터 본다.
 *   **연결 기록(본문 「허용 연결 기록 …」 · 「기록 디렉터리에 다음 세대를 만들 수
-    없다」 · 「현재 세대 경로가 연 파일과 다르다」):** 거부 목록과 무관하다.
+    없다」 · 「현재 세대 경로가 연 파일과 다르다」 — 이 셋만이 아니다. 「연 기록
+    파일을 보지 못했다」 · 「현재 세대 경로를 보지 못했다」 · 「기록 디렉터리의
+    확인 파일을 치우지 못했다」 처럼 기록 · 세대를 말하는 `ingestauth:` 줄은 모두
+    여기다):** 거부 목록과 무관하다.
     상태 디렉터리 `/run/pokeclip-media/ingest-auth/state` 가 `10003:10003
     0700` 인지, `/run` tmpfs 에 여유가 있는지, 정지 정리가 일부만 되어 기록
     파일이 지워지거나 바뀌지 않았는지 본다. 이 상태면 다음 단계의 cut 이
@@ -676,8 +690,8 @@ not-running` 이다. 어느 쪽이든 아무것도 하지 않는다. 모든 명�
 1.  kty 가 SSM 파라미터 값에서 그 줄을 지운다(머리 줄은 남긴다).
 1.  `ingest-auth-deny-sync.sh --release` →
     `INGEST AUTH DENY SYNC OK release tokens=<N>`. N 이 기대한 수(이전 수 −
-    지운 수)인지 사람이 본다 — 스크립트가 기대 수를 받아 대조할지는 PR 단계
-    kty 판단 대기다.
+    지운 수)인지 사람이 본다. kty 결정(2026-10-24): 스크립트가 기대 수를 받아
+    대조하는 일은 이 PR 에 넣지 않는다 — 후속 [POK-434](https://xodbs9810.atlassian.net/browse/POK-434).
 1.  재생성이 끝날 때까지(healthy · 상한 `MEDIA_OPS_HEALTH_WAIT`) 모든 계정의
     **새 연결 · 재접속이 거부된다.** 진행 중 송출은 끊기지 않는다(인증은 연결
     때만 묻는다).
@@ -781,8 +795,8 @@ exit 1
 
 | 갈래 | 출력 | 종료 코드(SSM 상태) |
 |---|---|---|
-| 정상 — started ≥ 1 · rejected = 0 | `SIDECAR AUTH OK started=<n> rejected=0` | 0(Success) |
-| 기동 줄 없음 · 자격 거부 | `SIDECAR AUTH NOT OK started=<n> rejected=<n>` | 1(Failed) |
+| 정상 — started ≥ 1 · rejected = 0 | `SIDECAR AUTH OK started=<n> rejected=0`(응답기 모드는 끝에 ` failed=<n>` — 아래) | 0(Success) |
+| 기동 줄 없음 · 자격 거부 | `SIDECAR AUTH NOT OK started=<n> rejected=<n>`(응답기 모드는 끝에 ` failed=<n>`) | 1(Failed) |
 | 조회 실패(`systemctl` · `journalctl` · `awk`) · 기동 기록 없음 | `SIDECAR AUTH FAIL since\|journal\|count` | 2(Failed) |
 
 *   1 과 2 는 SSM 에서 둘 다 Failed 다. 판정 줄로 「거부」 와 「조회 실패」 를
@@ -827,10 +841,13 @@ exit 1
         않고 참고로 낸다.
     *   **한계 — `false` 기동의 뜻:** `first_observation:false` 줄 뒤 10초 폴이
         성공했는지는 저널로 알 수 없다(성공 줄이 없다). 그래서 이 판정의 OK 는
-        「기동 뒤 거부가 이어지지 않았다」 일 뿐이다. 확인은 관찰 창을 10초보다
-        길게 두고 `failed=0`(기동 줄 뒤 `mtxstate_poll_failed` 가 이어지지
+        「기동 뒤 거부가 이어지지 않았다」 일 뿐이다. 확인은 관찰 창(위
+        `since` — 유닛이 active 가 된 시각 — 부터 판정을 돌린 때까지)이 둘째
+        폴(사이드카 시작 + 10초 — 첫 폴이 거부됐으면 기동 줄 + 약 7초)을 넘게
+        두고 `failed=0`(기동 줄 뒤 `mtxstate_poll_failed` 가 이어지지
         않음)을 함께 보는 것이다. 폴러가 BootWait 안에서 다시 묻거나 회복 줄을
-        남기게 할지는 아래 「알려진 한계」 의 kty 판단 대기 항목이다.
+        남기게 하는 일은 kty 결정(2026-10-24)으로 별도 작업이다(아래 「알려진
+        한계」) — 후속 [POK-438](https://xodbs9810.atlassian.net/browse/POK-438).
 
 *   응답기 자신의 기동은 태그 저널(`-t pokeclip-media-ingest-auth`)의
     JSON 줄 `"msg":"ingestauth_started"` 에 `"caller_auth":"basic"` ·
@@ -1067,7 +1084,8 @@ prod 상자에 깔 도구의 판이다. M9 user_data 가 같은 값으로 설치
     시작 스크립트의 **기본값**과 같은지만 본다 — 값을 덮어쓴 상자는 막지
     못한다. 덮어쓰기를 구조로 막을지, 그리고 root 로 도는 운영 스크립트가
     `INGEST_AUTH_DENY_DIR` · `MEDIA_COMPOSE_FILE` 경로를 env 에서 받는 것(env
-    경로 주입)을 막을지는 PR 단계 kty 판단 대기다.
+    경로 주입)은 kty 결정(2026-10-24)으로 막지 않고 이 기록을 유지한다 — root
+    전제(`media.env` 는 root 만 쓴다 — 아래 「후속」 의 M9 설치 단언 행).
 
 유닛 시험은 prod 유닛 파일을 바이트 그대로 설치하고, drop-in 에는
 `Environment=` · `EnvironmentFile=` 만 둔다.
@@ -1102,11 +1120,12 @@ prod 상자에 깔 도구의 판이다. M9 user_data 가 같은 값으로 설치
 *   **paths 조회의 자격 정규화:** 사이드카는 자격 파일의 앞뒤 공백 · 끝 CRLF 를
     떼지만 paths 두 스크립트는 그러지 않는다. 자격 파일은 시작 스크립트가 16진
     64자 + LF 로만 쓰고 사용자 이름은 고정이라 갈리는 입력이 생기지 않는다.
-*   **상시 서비스의 실행 상한:** compose 의 상시 서비스(mediamtx · nginx ·
-    사이드카 · 응답기)에 읽기 전용 루트(`read_only`)를 두지 않았고, janitor
-    를 포함한 모든 서비스에 프로세스 수 상한(`pids_limit`) · 메모리 상한을
-    두지 않았다. 서비스마다 쓰는 자리와 기동 메모리를 재야 정할 수 있어 아래
-    「후속」 으로 넘긴다. janitor 는 recordings 밖에 쓰지 않아 읽기 전용 루트를
+*   **상시 서비스의 실행 상한:** compose 의 상시 서비스 가운데 mediamtx ·
+    nginx · 사이드카에 읽기 전용 루트(`read_only`)를 두지 않았고, janitor 와
+    응답기를 포함한 모든 서비스에 프로세스 수 상한(`pids_limit`) · 메모리
+    상한을 두지 않았다. 서비스마다 쓰는 자리와 기동 메모리를 재야 정할 수 있어
+    아래 「후속」 으로 넘긴다. janitor(recordings 밖에 쓰지 않음)와
+    응답기(상태 디렉터리 밖에 쓰지 않음 — 렌더 사례 37)는 읽기 전용 루트를
     이미 둔다.
 *   **paths 조회의 `pageCount` 산술:** 2^63 급 값이면 셸 산술이 넘쳐 여러 페이지
     판정을 비켜 갈 수 있다. 그 값은 같은 망 칸 MediaMTX API 가 주는 것이라 그
@@ -1121,13 +1140,13 @@ prod 상자에 깔 도구의 판이다. M9 user_data 가 같은 값으로 설치
     `tokens=0` 을 내지만, 실행 중인 응답기는 이미 읽은 토큰을 쥐고 있어
     그때까지는 막힌 채다. 재생성 전에 SSM 값을 되돌려 다시 동기화하면 차단을
     잃지 않는다. 덧붙이기 · 해제 때 `tokens=<N>` 을 기대한 수와 대조하고(위
-    「응답기 런북」), 줄 수 감소를 따로 잡는 판정 줄은 아직 없다(PR 단계 kty
-    판단 대기).
+    「응답기 런북」), 줄 수 감소를 따로 잡는 판정 줄은 아직 없다. kty
+    결정(2026-10-24): 이 PR 에 넣지 않는다 — 후속 [POK-434](https://xodbs9810.atlassian.net/browse/POK-434).
 *   **`secret-count.sh ssm` · 옛 모드의 응답기 비밀:** `box` 응답기 모드만
     넷을 센다. Basic 비밀번호 · 잠금 둘은 기동마다 만든 tmpfs 값이라 kty
     로컬(`ssm` 모드)에서 읽을 수 없다. 4C 토큰은 Secrets Manager 에서 읽을 수
-    있지만, `ssm` 모드와 옛 모드에서의 대조는 범위 밖으로 두었다(M15 kty 결정
-    3 의 범위 — 판단 대기).
+    있지만, `ssm` 모드와 옛 모드에서의 대조는 범위 밖으로 두었다. kty
+    결정(2026-10-24): 넓히지 않는다(M15 kty 결정 3 의 범위 밖).
 *   **옛 모드의 `overridePublisher`:** 옛 모드는 기본(허용)이라 같은 경로에
     둘째 송출자가 붙으면 진행 중 송출을 빼앗는다. 팀 IP 한정 동안 받아들인
     위험이고, 공개 뒤에는 옛 모드를 쓰지 않는다(위 「되돌리기 순서」).
@@ -1136,7 +1155,8 @@ prod 상자에 깔 도구의 판이다. M9 user_data 가 같은 값으로 설치
     아님).
 *   **모드 전환 뒤 남는 응답기 비밀:** 정지 정리가 실패한 상자를 옛 모드로
     띄우면, 옛 모드 기동은 `ingest-auth/` 에 남은 응답기 모드 비밀을 지우지
-    않는다(PR 단계 kty 판단 대기). 그 상자에서는 `secret-count.sh box` 가
+    않는다 — kty 결정(2026-10-24): 지금대로 둔다(안전 쪽 실패 + 아래 처치).
+    그 상자에서는 `secret-count.sh box` 가
     매번 `SECRET COUNT FAIL ingest-auth` 로 끝난다(응답기 표지 일부만 남음 —
     안전 쪽 실패). 처치는 유닛을 정지해(정지 스크립트가 `ingest-auth/` 를
     지운다 — `MEDIA STOP CLEANUP FAIL` 이 없어야 한다) 다시 시작하거나
@@ -1144,7 +1164,8 @@ prod 상자에 깔 도구의 판이다. M9 user_data 가 같은 값으로 설치
 *   **응답기 모드의 사이드카 기동 확인:** 사이드카 폴러는 첫 폴이 거부되면
     `first_observation:false` 로 한 번 찍고, 뒤의 성공은 로그로 남기지 않는다
     (위 「기동 확인 신호」). 폴러가 BootWait 안에서 다시 묻거나 회복 줄을
-    남기게 바꿀지는 PR 단계 kty 판단 대기다(코드 변경 — M15 범위 밖).
+    남기게 바꾸는 일은 kty 결정(2026-10-24)으로 별도 작업이다(코드 변경 —
+    M15 범위 밖) — 후속 [POK-438](https://xodbs9810.atlassian.net/browse/POK-438).
 *   **응답기 상태 디렉터리의 크기:** `state/` 의 원천은 `/run`(tmpfs — 메모리)
     이고 compose 에 크기 상한이 없다. 정상 쓰기는 연결 기록 두 세대(1 MiB 에서
     회전)로 묶이지만, 응답기가 침해되면 메모리를 채울 수 있다. 상한은 아래
@@ -1170,7 +1191,7 @@ prod 상자에 깔 도구의 판이다. M9 user_data 가 같은 값으로 설치
 | M9 | prod 인스턴스 아키텍처를 정한다(O7c 플랫폼 · 위 arm64 주의) — **처리:** `linux/arm64` 하나(결정 146 · 2026-10-23). `c8gn.large` · AL2023 arm64 AMI · 이미지 arm64 한 변형 |
 | M9 런북 · O7e 5 | 사이드카 기동 판정은 태그 저널(`-t pokeclip-media-sidecar`)로. DB 장애 때는 compose 전체가 아니라 사이드카만 다시 뜬다(송출 유지) — 「5분 MainPID 무변화」 는 mediamtx · nginx 감시로만 읽는다. 판정 조건에 「관찰 창 5분 동안 사이드카 태그 저널의 종료 줄 0 건」 을 넣고, 먼저 `docker info` 로 로그 드라이버(journald)를 확인한다 — **처리(M9):** [교체 런북](../terraform/runbooks/media-swap.md) 의 기동 판정 · 관찰 판정 |
 | M7 · O7c | 루프백 송출기 ECR 저장소 · 미러 하나를 더한다 — **처리(M9):** `prod/registry` 키 `media-loopback-sender` · 산출물 런북 「설치 묶음 · 루프백 송출기」 |
-| M9 | 하드닝 — 상시 서비스에 `read_only`(쓰는 자리는 tmpfs · 볼륨으로 — janitor 는 이미 있음) · `pids_limit` · 메모리 상한을 둔다. 값은 상자에서 서비스별 쓰기 자리 · 기동 메모리를 재서 정하고 `render_test.sh` 에 단언을 더한다 — **넘김(M9):** 교체 런북 「O7e 뒤 측정 · 기록」 |
+| M9 | 하드닝 — 상시 서비스에 `read_only`(쓰는 자리는 tmpfs · 볼륨으로 — janitor · 응답기는 이미 있음) · `pids_limit` · 메모리 상한을 둔다. 값은 상자에서 서비스별 쓰기 자리 · 기동 메모리를 재서 정하고 `render_test.sh` 에 단언을 더한다 — **넘김(M9):** 교체 런북 「O7e 뒤 측정 · 기록」 |
 | M9 · 런타임 | janitor 를 켜기(`janitor_enabled`) 전 전제: RDS PostgreSQL 17 이상(미만이면 janitor 가 기동을 거부해 엔진이 계속 다시 띄운다) · DB 사용자 `media_janitor` 와 `GRANT rds_iam` · 스키마 배치 · 인스턴스 역할 `rds-db:connect`(`media_janitor`) · 권한은 세 표 `SELECT` 와 `stream_segments` 의 `UPDATE (local_path)` 뿐이다(사이드카처럼 표 단위 UPDATE 를 주지 않는다 — 정본은 [media/README.md](../../media/README.md) 「DB 요구 — PostgreSQL 17 이상 · 계정 · TLS」 의 「운영 계정 `media_janitor` 권한」). 켠 뒤 상자에서 태그 저널의 `db_connected`(pool=janitor) · `janitor_started` 를 보고, IAM 경로에서 읽기 전용 루트로 기동되는지 확인한다(로컬은 비밀번호 경로로만 확인됨) — **처리(M9 몫):** 인스턴스 역할 `rds-db:connect`(`media_janitor`) · 교체 런북 기동 판정의 `JANITOR_*` 줄 · O7e 선행 확인 ③. 런타임 몫(PostgreSQL 17 · 사용자 · GRANT)은 런타임 트랙 |
 | I1-1 | 반영됨(POK-311). `compose.yml.tmpl` 사이드카 · janitor env 에 RDS CA 번들 경로(`POSTGRES_SSLROOTCERT` — 이미지 안 `/etc/pokeclip/rds-ca/global-bundle.pem`)와 `AWS_EC2_METADATA_V1_DISABLED: "true"` 를 넣고 `render_test.sh` 사례 10 이 단언한다. DB 연결 성공 고정 줄은 `db_connected`(media/README 「DB 연결 성공 줄」) |
 | 범위 밖(제안) | `media/cmd/janitor` 의 compose 계약 시험을 이 템플릿까지 넓힌다 — `media/Dockerfile.mtxhook` 의 USER 가 바뀌어도 infra-ci(경로 필터 `infra/media-host/**`)는 돌지 않아, `render_test.sh` 사례 9 의 대조가 다음 infra 변경 때에야 돈다. `infra/terraform/prod/registry` 의 「janitor 저장소는 janitor 코드가 생길 때 더한다」 문장은 사이드카 이미지를 쓰는 지금 결정과 어긋나 정리한다 — **처리(M9 — 문장만):** `prod/registry` README · 변수 주석을 고쳤다. compose 계약 시험 확대는 남음 |
@@ -1181,7 +1202,7 @@ prod 상자에 깔 도구의 판이다. M9 user_data 가 같은 값으로 설치
 | M15 | 반영됨(POK-301). `render_test.sh` 사례 11 은 비밀 계열 env 이름 금지를 유지하고, `_FILE` 로 끝나며 값이 읽기 전용 bind 대상과 같은 env 만 예외로 둔다. `authHTTPExclude` 는 `playback` 하나다(read 를 빼면 Bearer 없는 LL-HLS 가 열려, read 는 응답기가 판정한다). SRT 경로 잠금 · `overridePublisher: no` 는 응답기 모드에만 있다. 포트 127.0.0.1:8080 · 헬스 8081. dev-media 응답기와 다른 점(전용 제어망 대신 같은 망 칸 · 비밀 env 대신 `_FILE`)은 CONTRACT 2절 D1 · D4 |
 | M9 | 송출 인증 모드는 compose 템플릿 변수 `ingest_auth_image` 하나로 고른다 — 빈 문자열이면 옛 인증(익명 publish · 응답기 없음), 이미지 참조면 응답기 인증이다. MediaMTX 템플릿은 `templatefile()` 하지 않는다 — 설치 묶음이 저장소 파일 그대로 깔고, 시작 스크립트가 compose 렌더본의 응답기 서비스 유무로 모드 블록을 고른다(종결 r1 지적 1 · kty 결정 (다) 2026-10-24). O7 은 빈 값, O8a 2 의 설정 반영 교체에서 다이제스트를 넣는다 — 그 다이제스트는 M15 머지 뒤 develop 커밋에서 빌드한 것이어야 한다(빌드 커밋 기록) |
 | M9 | **공개 인바운드와 옛 모드를 함께 쓰지 않는다.** `ingest_allowed_cidrs` 에 `0.0.0.0/0` 이 있는 동안 `ingest_auth_image` 는 비울 수 없다 — 두 값이 같은 루트면 precondition 으로 막고, 다른 루트면 롤백 런북(인바운드를 팀 IP 로 먼저 되돌림 → 옛 모드 교체 → 팀 IP 밖 익명 송출 거부 확인)과 plan 점검 항목으로 지킨다. M15 PR revert 판으로 교체할 때도 같다 |
-| M9 | 두 변수 `stream_key_resolve_url` · `ingest_auth_ip_limit` 은 M15 에서 최소 호환 반영(변수 · template_vars) — 값 배선은 후속(루트 전달 · `ingest-auth.env` 의 write_files · 응답기 모드 빈 값 거부). 응답기 모드에서만 값이 필수: `stream_key_resolve_url`(`http://auth.pokeclip.internal:<auth 포트>` — compose 에 따옴표 없는 스칼라로 들어가므로 모듈 validation 은 문자 집합 `^http://[A-Za-z0-9.-]+:[0-9]+$` 로 묶는다. `$` · 공백 · `#` · 사용자 정보 · 질의 · 조각 금지. **키는 두 모드 모두 넘기고** 옛 모드는 빈 값) · `media.env` 의 `STREAM_KEY_RESOLVE_TOKEN_SECRET_ARN` · `INGEST_AUTH_DENYLIST_PARAM`. 옛 모드에서는 비어도 된다. `media.env` 의 `STREAM_KEY_RESOLVE_TOKEN_SECRET_ARN` = 런타임 출력 `ingest_auth_resolve_token_secret_arn`(4C 전용 창구 `resolve-token` 의 출입증 비밀 — kty 2026-10-24) · 인스턴스 역할 `secretsmanager:GetSecretValue` 에 그 ARN 포함. `ingest_auth_ip_limit`(`"on"` · `"off"`, 기본 `"on"`)은 `ingest-auth.env.tmpl` 로 `/etc/pokeclip-media/ingest-auth.env`(root:root 0644)에 늘 렌더한다 — 응답기 모드에서 없으면 기동이 막힌다. `INGEST_AUTH_DENY_DIR` 는 `media.env` 에 넣지 않는다(시험 전용 이음매) |
+| M9 | 두 변수 `stream_key_resolve_url` · `ingest_auth_ip_limit` 은 M15 에서 최소 호환 반영(변수 · template_vars) — 값 배선은 후속(루트 전달 · `ingest-auth.env` 의 write_files · 응답기 모드 빈 값 거부). 응답기 모드에서만 값이 필수: `stream_key_resolve_url`(`http://auth.pokeclip.internal:<auth 포트>` — compose 에 따옴표 없는 스칼라로 들어가므로 모듈 validation 은 문자 집합 `^http://[A-Za-z0-9.-]+:[0-9]+$` 로 묶는다. `$` · 공백 · `#` · 사용자 정보 · 질의 · 조각 금지. **키는 두 모드 모두 넘기고** 옛 모드는 빈 값) · `media.env` 의 `STREAM_KEY_RESOLVE_TOKEN_SECRET_ARN` · `INGEST_AUTH_DENYLIST_PARAM`. 옛 모드에서는 비어도 된다. `media.env` 의 `STREAM_KEY_RESOLVE_TOKEN_SECRET_ARN` = 런타임 출력 `ingest_auth_resolve_token_secret_arn`(4C 전용 창구 `resolve-token` 의 출입증 비밀 — kty 2026-10-24) · 인스턴스 역할 `secretsmanager:GetSecretValue` 는 그 ARN 하나만 — 옛 `INTERNAL_API_TOKEN` 비밀 읽기는 두지 않는다(런타임 1단-나 ② K2). `ingest_auth_ip_limit`(`"on"` · `"off"`, 기본 `"on"`)은 `ingest-auth.env.tmpl` 로 `/etc/pokeclip-media/ingest-auth.env`(root:root 0644)에 늘 렌더한다 — 응답기 모드에서 없으면 기동이 막힌다. `INGEST_AUTH_DENY_DIR` 는 `media.env` 에 넣지 않는다(시험 전용 이음매) |
 | M9 | O8a 2 전에: 거부 목록 SSM Parameter(`/pokeclip/prod/media/ingest-auth-deny-tokens` · String · Standard · 초기값 `# pokeclip deny-tokens v1`) — **`lifecycle { ignore_changes = [value] }` 필수**. 인스턴스 역할에 그 파라미터 하나의 `ssm:GetParameter` · 4C 전용 토큰 비밀(`ingest_auth_resolve_token_secret_arn`) 하나의 `secretsmanager:GetSecretValue`(CMK 면 `kms:Decrypt`). Standard 값 한도 4 KB(토큰 약 150개). Media → auth(4C) SG 짝은 출발지 = Media SG(POK-307 코멘트 10640 — 3번 · M8 와) |
 | M9 | 망 칸 예약 포트(응답기 127.0.0.1:8080 · 8081, MediaMTX 127.0.0.1:8888 · 9996 · 9997 · :8890/udp)와 프록시 네 포트가 겹치지 않음을 모듈에서 단언한다 |
 | M9 | 설치 목록에 `bin/ingest-auth-deny-sync.sh` · `bin/ingest-auth-ip-limit.sh`(0755) · `bin/lib/` 의 새 셋 `deny_tokens.sh` · `docker_config.sh` · `render_files.sh`(0644 — 위 설치 단언 행의 다섯) · `ingest-auth.env.tmpl` 렌더본을 더하고(**두 모드 공통** — 시작 스크립트가 새 lib 셋을 source 하므로 빠지면 옛 모드(O7) 기동도 실패한다) 압축 user_data 16 KiB 게이트를 다시 잰다. 거부 목록 부모 디렉터리 `/var/lib/pokeclip-media/ingest-auth` 의 소유(`root:root` · 그룹 · 기타 쓰기 불가)도 단언한다 — **처리(e1734148):** 묶음 파일은 14개(`bin/` 스크립트 여덟 · `bin/lib/` 다섯 · `mediamtx.yml.tmpl`)이고 부트스트랩 `REQUIRED_FILES` 에 lib 셋 · 스크립트 둘을 더했다(모듈 시험 `bootstrap_requires_every_bundle_file`). 산출물 런북은 개수 대신 그 목록과 묶음 목록을 대조한다. `ingest-auth.env.tmpl` 렌더본(user_data `write_files`)은 위 두 변수 배선 행의 후속으로 남았다. |

@@ -7,6 +7,8 @@
 - 갱신: 2026-10-24 — M15(POK-301) 반영: c0(read 판정 · `too_large` 수준 —
   1-1 의 9 · 1-2 의 2 · 8 · 1-9 의 2 · D6 · K4)과 c8(머리 · D3 · D6 · D8 ·
   D9 · D11 · D12 · 후보값 표 · 3절). 이 행들의 근거도 함수 · 파일 이름으로 적는다
+- 갱신: 2026-10-24 c11 — 4C 창구 전용(POK-429): 1-5 의 15 · 1-9 의 평문 http
+  잔여 위험 · D9 · 3절(머리 · K6 · 확인 항목)
 - 관련 티켓: POK-310 · POK-307 · POK-301(M15 · O8a) · POK-299(엣지 계획)
 - 목적: 엣지 트랙 M15(prod 송출 인증을 응답기로)의 착수 조건 「응답기 계약 확정(포트 · 인증 요청 경로 · 비밀 파일 경로)」을 채운다.
 - 기준 판: 응답기 코드 · dev-media 구성 = `origin/develop`(64633374), M2 compose 자리 =
@@ -205,7 +207,7 @@ prod 기대 = 계획 M2(Media 상자 compose) · M15(송출 인증 반영) · O8
 
 | # | 차이 | 응답기 코드 변경 | 한 줄 |
 |---|---|---|---|
-| D1 | 연결 꼴: 같은 netns 루프백 vs 제어망 고정 주소 | 불필요(추론 — 실측 필요) | 계획은 루프백 · 같은 netns, dev 는 별도 제어망 |
+| D1 | 연결 꼴: 같은 netns 루프백 vs 제어망 고정 주소 | 불필요((가) 루프백은 M15 c1 계약 시험 층 B 로 확인됨 — 3절) | 계획은 루프백 · 같은 netns, dev 는 별도 제어망 |
 | D2 | 호출자 IP 검사가 같은 netns 안에서는 구별력을 잃는다 | 현재 TCP 피어 IP 검사로는 구별 불가. Basic 자격(K1 (라), 포크 실측으로 확인됨)으로 구별 — 응답기에 Basic 검사를 더했다(트랙 A, 1-1 의 14) | nginx · 사이드카도 같은 `127.0.0.1` 로 보인다 |
 | D3 | Control API 인증: 계획은 `api` 를 응답기에서 제외, 실물은 응답기 경유 | 불필요 | 제외하면 Control API 무인증 |
 | D4 | 비밀 전달: 계획은 tmpfs 파일 경로, 기존 dev 가동판은 환경 변수만 | **필요** — 더했다(트랙 A, 1-5 의 6 · 9 · 13) | 기존 가동판엔 `_FILE` 입력이 없었고 이미지에 셸이 없다 |
@@ -376,14 +378,17 @@ prod 기대 = 계획 M2(Media 상자 compose) · M15(송출 인증 반영) · O8
   공용 창구를 대체한다 — 그 근거(prod auth `native` 와 전용 창구 양립 불가)는 POK-316 으로
   사라졌다(`native` 위에서도 전용 창구가 열리고, 전달 머리글을 단 전용 헤더 요청은 403). 주소 ·
   보안 그룹 출발지 잠금은 그대로이고, auth 의 전용 창구 허용 대역은 Media 프라이빗 서브넷
-  대역이다(아래 선택지 (나) — 런타임 1단-나 ② K3).
+  대역이다(아래 선택지 (나) — 런타임 1단-나 ② K3). 한계: 그 대역은 같은 AZ 의
+  다른 ECS 태스크도 출발지 조건을 통과한다 — 통제는 토큰이다.
 - **선행 조건 해소(POK-307 코멘트 10640, 3번 답 — 창구는 위 「prod 창구」 가 대체)**: prod
   응답기는 **공용 창구**(`X-Internal-Token`
   — `STREAM_KEY_RESOLVE_CHANNEL=internal-token`, 값 = INTERNAL_API_TOKEN 비밀)로
   `http://auth.pokeclip.internal:<auth 포트>` 의 4C 를 부른다. 출발지 잠금은 주소가 아니라 **보안
-  그룹(Media SG → auth)** 이다. 그래서 아래 전용 창구 · `native` 충돌과 출발지 단위(K6)는 prod 에서 다루지
-  않는다. 아래 원문은 그 판단의 기록으로 둔다.
-- **선행 조건(원문) — prod auth 와의 양립(3번과 먼저 합의)**: auth 의 전용 토큰 창구는 켜져 있으면 부팅 검사가
+  그룹(Media SG → auth)** 이다. 그래서 아래 전용 창구 · `native` 충돌과 출발지
+  단위(K6)는 prod 에서 다루지 않았다(POK-316 이전 판 — 지금 코드와 다름 · 지금은
+  위 「prod 창구」). 아래 원문은 그 판단의 기록으로 둔다.
+- **선행 조건(원문 · POK-316 이전 판 — 지금 코드와 다름) — prod auth 와의
+  양립(3번과 먼저 합의)**: auth 의 전용 토큰 창구는 켜져 있으면 부팅 검사가
   `server.forward-headers-strategy` 가 정확히 `none` 인지(미설정 포함 아님)를
   요구한다
   (`services/auth/.../config/StreamKeyResolveSecurityConfig.java:66-77,102-108`;
@@ -393,7 +398,13 @@ prod 기대 = 계획 M2(Media 상자 compose) · M15(송출 인증 반영) · O8
   않아 토큰을 비워 둔다(`application.yml` 같은 자리 주석). 따라서 「어떤 경로 · 어떤 인증 방식으로 prod 응답기가 4C
   를 부르는가」(예: 전용 토큰 창구를 쓰는 별도의 `none` 인스턴스 · 포트, 또는 공용 토큰 창구 등 — 후보일 뿐 3번이 정한다)가
   K6 보다 먼저다. `native` 에서는 피어 IP 의 의미도 달라져 아래 출발지 잠금 판단에 영향이 있다.
-- **코드가 지원하는 범위와 계약의 현재 허용 범위는 다르다**: auth 는 이미 **IPv4 CIDR 목록**(`allowedCidrs` — `StreamKeyResolveAccessProperties.java:13-20`, 설정 `STREAM_KEY_RESOLVE_ALLOWED_CIDRS` 쉼표 목록 — `application.yml:185-192`)을 받는다. 계약4 2절의 문구만 「설정된 주소(지금은 하나)」다.
+  위 줄 번호는 POK-316 이전 판이다. 지금 코드는 `requireSafeToOpen`
+  (`StreamKeyResolveSecurityConfig.java:106-141`)이 `none` · `native` 를 둘 다
+  받고(126-132행), 설정 주석은 `application.yml:219-222` 다.
+- **코드가 지원하는 범위와 계약의 현재 허용 범위는 다르다**: auth 는 이미 **IPv4
+  CIDR 목록**(`allowedCidrs` — `StreamKeyResolveAccessProperties.java:13-20`, 설정
+  `STREAM_KEY_RESOLVE_ALLOWED_CIDRS` 쉼표 목록 — `application.yml:219-225`)을
+  받는다. 계약4 2절의 문구만 「설정된 주소(지금은 하나)」다.
 - **prod 에서 정할 것(위 선행 조건이 정해진 뒤)**: (a) auth 의 주소(내부 DNS 이름 vs 고정 주소), (b) auth 가 허용할 출발지. prod 의 응답기는 상자에서 나가므로 출발지는 상자 쪽 주소(컨테이너가 브리지 뒤면 변환된 상자 주소일 것이나 — 추론, 미확인)다. 상자를 교체하면 주소가 바뀔 수 있다.
 - **선택지(출발지 단위)**:
   - (가) 상자에 고정 사설 주소(고정 ENI 등)를 두고 허용 대역을 그 `/32` 하나로. 장: 가장 좁다. 단: 상자 교체 절차에 주소 고정이 들어간다(M9 몫). 코드 · 설정은 이미 지원(`/32` CIDR).
@@ -407,7 +418,8 @@ prod 기대 = 계획 M2(Media 상자 compose) · M15(송출 인증 반영) · O8
 - **응답기 코드 변경**: 더 없다. 트랙 A 가 창구 설정 `STREAM_KEY_RESOLVE_CHANNEL` 을 더해
   전용(`X-Stream-Key-Resolve-Token`) · 공용(`X-Internal-Token`) 헤더를 설정으로
   고른다(1-3 의 2 · 1-5 의 15 — `keyresolve/client.go` `Channel`). 그 전 dev 가동판은 전용 헤더
-  이름을 고정했다. 계약 문서 개정은 어느 창구든 필요하다(위키 PR, 승인 3번, 1번 통지).
+  이름을 고정했다. 계약 문서 개정은 어느 창구든 필요하다(위키 PR — 이번 개정은
+  kty 승인 머지 · 3번 알림, 3절).
 
 ### D10. 시한 · 예산 상수
 
@@ -438,7 +450,7 @@ compose 드리프트(M15 c4 — 2cd4ee4b · 45 · 46 은 77e3f537). 43 은 옛 �
 
 | # | 채울 것 | 값 · 근거 |
 |---|---|---|
-| 1 | `environment` | 비밀 아닌 값: `INGEST_AUTH_LISTEN` · `INGEST_AUTH_CALLER_IP` · `MTX_API_URL` · `MTX_API_USER` · `STREAM_KEY_RESOLVE_URL` · `INGEST_AUTH_BASIC_USER`(후보값 표 3) · `STREAM_KEY_RESOLVE_CHANNEL`(1-5 의 15). 비밀 셋(K3)은 파일 경로 변수 `MTX_API_PASS_FILE` · `STREAM_KEY_RESOLVE_TOKEN_FILE` · `INGEST_AUTH_BASIC_PASS_FILE`(1-5 의 6 · 9 · 13). `INGEST_AUTH_CALLER_BASIC` 은 적지 않는다(`off` 면 Basic 검사가 꺼진다 — 1-5 의 14 · 1-9 의 3). `LOG_LEVEL` 도 적지 않는다(기본 info — M15 c4 에서 이 칸을 정확 집합 10개에 맞춤) |
+| 1 | `environment` | 비밀 아닌 값: `INGEST_AUTH_LISTEN` · `INGEST_AUTH_CALLER_IP` · `MTX_API_URL` · `MTX_API_USER` · `STREAM_KEY_RESOLVE_URL` · `INGEST_AUTH_BASIC_USER`(후보값 표 3) · `STREAM_KEY_RESOLVE_CHANNEL`(1-5 의 15). 비밀 셋(K3)은 파일 경로 변수 `MTX_API_PASS_FILE` · `STREAM_KEY_RESOLVE_TOKEN_FILE` · `INGEST_AUTH_BASIC_PASS_FILE`(1-5 의 6 · 9 · 13). `INGEST_AUTH_CALLER_BASIC` 은 적지 않는다(`off` 면 Basic 검사가 꺼진다 — 1-5 의 14 · 1-9 의 3). `LOG_LEVEL` 도 적지 않는다(기본 info — M15 c8 검수 r1 에서 이 칸을 정확 집합 10개에 맞춤) |
 | 2 | `read_only: true` | dev 가 쓴다(1-7 의 3). 쓰는 곳은 상태 디렉터리 하나뿐 |
 | 3 | `volumes` | 거부 목록 디렉터리 → `/etc/ingest-auth`(읽기 전용, 디렉터리 마운트) · 상태 디렉터리 → `/var/lib/ingest-auth` · 비밀 파일(읽기 전용). D7 |
 | 4 | `healthcheck` | `["CMD","/ingest-auth","healthcheck"]` 30초 · 3회 · 유예 10초(1-8). 같은 netns 의 `127.0.0.1:8081` 이라 포트 충돌 점검(D1) |
@@ -496,8 +508,9 @@ compose 드리프트(M15 c4 — 2cd4ee4b · 45 · 46 은 77e3f537). 43 은 옛 �
 
 ## 3. 결정됨 — kty 결정 (2026-10-20)
 
-선행 조건(결정이 아니라 3번과 먼저 합의할 것): **prod 의 4C 호출 경로 · 인증 방식**(D9 — prod auth `native`
-와 전용 토큰 창구는 양립 불가). **해소** — 3번이 POK-307 코멘트 10640 으로 답했다: 공용
+선행 조건(결정이 아니라 3번과 먼저 합의할 것): **prod 의 4C 호출 경로 · 인증
+방식**(D9 — 그때는 prod auth `native` 와 전용 토큰 창구가 양립 불가였다 · POK-316
+이전 판, 지금 코드와 다름). **해소** — 3번이 POK-307 코멘트 10640 으로 답했다: 공용
 창구(`X-Internal-Token`) · 주소 `auth.pokeclip.internal` · 출발지 = 보안 그룹(D9 의 「선행 조건
 해소」). 그래서 K6(출발지 `/32`)은 **불요**다. 창구는 뒤에 kty 결정(2026-10-24 · POK-429)으로
 전용(`X-Stream-Key-Resolve-Token`)으로 바뀌었다 — POK-316 이 양립 불가를 없앴다(D9 의 「prod
@@ -540,9 +553,10 @@ kty 결정이 아닌 **확인 · 실측 항목**(결정 없이 M15 착수 때 �
 - SRT 읽기 잠금(`srtReadPassphrase`)이 값이 있을 때 읽기를 막고 비면 통과시키는지 포크 `.2` 에서 확인(D12). —
   **닫힘**: 포크 `internal/servers/srt/conn.go` 판독 + c1 C8 · C17 실측(D12).
 - O8a 3 의 거부 실측에서 `resolve_ms` 분포를 기록(D10). — **남음**(O8a 3 몫).
-- 계약4 2절 개정(운영 Media 의 resolve 경로 · 출발지 문구) — 위키 PR, 승인 3번, 1번 통지(D9). —
-  **남음**(런타임 1단-나 ② 몫 — kty 승인 머지 · 3번 알림, 2026-10-24 — 전용 창구 ·
-  `auth.pokeclip.internal` · 출발지 = SG · 허용 대역을 문구로).
+- 계약4 2절 개정(운영 Media 의 resolve 경로 · 출발지 문구) — 위키 PR, kty 승인
+  머지 · 3번 알림(2026-10-24 위임 — 런타임 1단-나 ② K6 · D9). — **남음**(런타임
+  1단-나 ② 몫 — 전용 창구 · `auth.pokeclip.internal` · 출발지 = SG · 허용 대역을
+  문구로).
 - **설정 조회 노출 완화(신규)**: 응답기가 `action=api` 요청 가운데 설정 조회(`/v3/config/…`)를 사이드카 자격에
   대해 거부할 수 있는지 — 인증 요청 본문의 `path` 에 API 경로가 실리는지부터 확인(D2). — **남음**(M15 범위 밖).
   응답기 모드에서는 설정 조회가 Basic 비밀번호와 SRT 잠금 둘도 평문으로 돌려준다(`infra/media-host/README.md`

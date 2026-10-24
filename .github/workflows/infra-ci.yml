@@ -49,6 +49,9 @@
 #                   checksums.txt의 그 줄 · 그 자산의 digest(API)와 셋이 같은지 본다(GitHub
 #                   attestation은 없다 — gh attestation verify가 404). 판은 prod 고정판과 같아야
 #                   한다 — infra/media-host/README.md 「판 고정」 표(두 아키텍처 sha256)도 함께 바꾼다.
+#                   렌더 시험 사례 43의 compose 골든(infra/media-host/test/golden/compose.legacy.*)은
+#                   5.5.0의 `docker compose config` 출력이라 새 판으로 다시 만든다 — 만드는 법은 그
+#                   README 「골든 · 실측 기록」.
 #
 # 저장소가 공개라 이 로그도 공개다. 시험은 가짜 계정 ID · 가짜 이름만 쓴다.
 #
@@ -596,8 +599,9 @@ jobs:
   media-host-systemd:
     if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
-    # 상한: 탐침 상자(AL2023 arm64 · systemd 252) 실측 한 바퀴 약 8분 × 3 + 준비(이미지 빌드 ·
-    # 받기)에 여유를 둔 값이다. 첫 실제 러너 실행 시간으로 다시 본다.
+    # 상한: 로컬 상자(OrbStack 위 AL2023 arm64 · systemd 252) 실측 한 바퀴 9분 40초(사례 22 · 23
+    # 포함 — M15 c7) × 3 + 준비(이미지 빌드 · 받기)에 여유를 둔 값이다. 러너 실측은 사례 22 · 23
+    # 을 더하기 전 판의 잡 전체 약 25분(2026-10-24)뿐이라, 이 판의 CI 첫 실측 뒤 갱신한다.
     timeout-minutes: 50
     steps:
       - uses: actions/checkout@v7
