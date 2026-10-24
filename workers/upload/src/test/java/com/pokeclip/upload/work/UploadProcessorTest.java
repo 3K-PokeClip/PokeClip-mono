@@ -521,6 +521,18 @@ class UploadProcessorTest {
         assertThat(internal.sessionUri).isEqualTo(먼저);
         assertThat(youtube.session(먼저).bytes.toByteArray()).isEqualTo(video);
         assertThat(youtube.videosCreated()).isEqualTo(1);
+        assertThat(internal.reportedChannels).as("남이 만든 주소는 어느 채널인지 모른다(POK-423)").containsExactly("null");
+    }
+
+    /** 재배달이 지난 배달의 주소를 이어받으면 그 사이 채널을 바꿨을 수 있어 채널을 안 싣는다(PR #375 codex) */
+    @Test
+    void 이어받은_주소의_올림은_채널을_안_싣는다() {
+        internal.sessionUri = youtube.openSession(SIZE);
+
+        processor().process(주문서());
+
+        assertThat(internal.results).containsExactly("UPLOADED:vid1");
+        assertThat(internal.reportedChannels).containsExactly("null");
     }
 
     /** 하루 한도(쿼터)에 걸리면 조용히 넘어가지 않고 {@code QUOTA_EXCEEDED}로 드러난다. 주소를 못 받았으니 영상은 확실히 없다. */
