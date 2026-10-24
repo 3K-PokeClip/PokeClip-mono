@@ -132,6 +132,12 @@ mode_cases::shape_body() {
     crossed) printf '%s\n' "${lb}" "${api}" "${ae}" "${ab}" "${auth}" "${le}" ;;
     unknown) printf '%s\n' "${lb}" "${api}" "${le}" '# @mode other begin' \
       "${auth}" '# @mode other end' ;;
+    # 두 모드 블록은 온전하고 꼴 하나만 깨진 행 — 끝 검사의 닫힘 절반 · begin
+    # 의 모드 이름 대조를 각각 따로 본다(위 unclosed 는 겹침에, unknown 은
+    # 응답기 블록 없음에 먼저 걸린다).
+    unclosed-eof) printf '%s\n' "${lb}" "${api}" "${le}" "${ab}" "${auth}" ;;
+    unknown-extra) printf '%s\n' "${lb}" "${api}" "${le}" "${ab}" "${auth}" \
+      "${ae}" '# @mode other begin' '# 모르는 모드' '# @mode other end' ;;
     indented) printf '%s\n' "  ${lb}" "${api}" "  ${le}" "${ab}" "${auth}" \
       "${ae}" ;;
     trailing) printf '%s\n' "${lb} " "${api}" "${le}" "${ab}" "${auth}" \
@@ -150,7 +156,7 @@ mode_cases::shape_body() {
 mode_cases::case_shape_table() {
   local ok=0 row n tmpl
   for row in none terraform unclosed stray-end nested crossed unknown \
-    indented trailing legacy-only auth-only; do
+    unclosed-eof unknown-extra indented trailing legacy-only auth-only; do
     for n in 0 1; do
       fixture::new_case
       tmpl="${fixture_dir}.shape.tmpl"

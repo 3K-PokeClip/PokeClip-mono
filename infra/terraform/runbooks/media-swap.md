@@ -413,7 +413,8 @@ tg_health
 
 *   통과 = `MEDIA START OK` · `MEDIA WATCH OK`, 그리고 `tg_health` 의
     `control` 줄이 `<a 의 id> healthy` 입니다(nginx 헬스 경로). janitor 를 끈
-    tfvars 면 인자에서 `janitor` 를 뺍니다. 응답기는 M15 전이라 없습니다.
+    tfvars 면 인자에서 `janitor` 를 뺍니다. O7 은 옛 모드(`ingest_auth_image`
+    빈 값)라 응답기가 없습니다.
 *   Media 인스턴스 역할로 하는 첫 RDS IAM 접속은 `SIDECAR_DB` 줄로
     확인합니다.
 *   **DB 연결이 실패하면**(`SIDECAR_DB 0` · `EXIT_LINES` 가 0 보다 큼 —
@@ -477,9 +478,12 @@ SH
 media_ssm b "${work}/loopback.sh" <시험 ingestStreamId>
 ```
 
-*   M15 반영 전은 passphrase 없이, 반영 뒤는 `--passphrase` 를 앞에 붙입니다
-    (`media_ssm b "${work}/loopback.sh" --passphrase <ID>`). 반영 뒤에는 기본
-    갈래가 거부되는 것이 정상입니다.
+*   인자는 B 의 송출 인증 모드로 고릅니다(위 2 의 서비스 집합과 같은 기준).
+    `ingest_auth_image` 가 빈 구성(옛 모드 — O7 · 되돌리기 포함)은 passphrase
+    없이, 찬 구성(응답기 모드)은 `--passphrase` 를 앞에 붙입니다
+    (`media_ssm b "${work}/loopback.sh" --passphrase <ID>` — media-host README
+    「송출 인증 두 모드」 · 「루프백 헬스」). 응답기 모드에서는 기본 갈래가
+    거부되는 것이 정상입니다.
 *   `LOOPBACK FAIL <단계>` 면 교체를 멈추고 B 를 회수합니다(A 는 그대로).
 
 ### 정상 교체 4 — 방송 경로 수
@@ -525,6 +529,8 @@ media_ids | jq -r '.b'
 
 하루 관찰한 뒤 `instances` 에서 A 를 뺍니다. plan 범위 = A 인스턴스 삭제 한
 줄 → apply(승인). 그 전에는 A 를 「부분 실패 복구」 의 되돌릴 곳으로 둡니다.
+A 가 옛 모드이고 O8a 5 뒤면 되돌리기 전에 media-host README 「되돌리기 순서」
+1(인바운드를 팀 IP 로 축소 · 확인)을 먼저 합니다.
 
 ## 설정 반영 교체
 
@@ -532,6 +538,9 @@ M15 · O8a · I1-6 반영(`control_upstream`)이나 이미지 다이제스트 ·
 `janitor_enabled` 를 바꿀 때입니다. 떠 있는 상자는 고치지 않습니다.
 
 1.  tfvars 의 설정을 바꿉니다.
+1.  B 가 옛 모드(`ingest_auth_image` 빈 구성 · M15 PR revert 판 포함)이고
+    O8a 5 뒤(SRT 인바운드 `0.0.0.0/0`)면 media-host README 「되돌리기 순서」
+    1(인바운드를 팀 IP 로 축소 · 확인)을 먼저 합니다.
 1.  `instances` 에 `config_version` 을 올린 새 키 B 를 더합니다.
 1.  「정상 교체」 1–8 을 돕니다. 2 의 plan 범위에서 공유 자원 변경이
     보이면 위 「plan 범위」 의 주의를 따릅니다.
@@ -638,7 +647,8 @@ ingest · http 전환(정상 교체 5 · 6, force 2 · 4)의 apply 가 중간에
 1.  같은 키로 다시 apply 하거나, 두 활성 키를 A 로 되돌려 apply 합니다
     (승인). force 갈래에서 되돌릴 때는 먼저 A 에서 `systemctl start
     pokeclip-media`(실행 직전 승인)로 A 의 MediaMTX 를 다시 띄우고 기동 판정을
-    봅니다.
+    봅니다. A 가 옛 모드이고 O8a 5 뒤면 되돌리기 전에 media-host README
+    「되돌리기 순서」 1(인바운드를 팀 IP 로 축소 · 확인)을 먼저 합니다.
 1.  「정상 교체」 7 의 일관성을 만족하기 전에는 운영 재개로 보지 않습니다.
 1.  force 중이었다면 끝난 뒤 수동 복구를 돕니다.
 

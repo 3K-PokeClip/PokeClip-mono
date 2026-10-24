@@ -980,7 +980,7 @@ main() {
   harness::run_case 44 '드리프트 — 계약 시험 compose 응답기 · mediamtx' \
     auth_cases::check_44
   harness::run_case 45 \
-    '응답기 실행 계정 — Dockerfile.ingest-auth USER = start-media 기본 소유' \
+    '응답기 실행 계정 — Dockerfile.ingest-auth USER = 시작 · deny-sync 기본값' \
     auth_cases::check_45
   harness::run_case 46 '드리프트 — 응답기 모드 유닛 시험 compose 응답기' \
     auth_cases::check_46

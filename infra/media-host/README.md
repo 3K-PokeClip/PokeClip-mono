@@ -159,8 +159,9 @@ compose 템플릿 변수 `ingest_auth_image` 하나로 모드를 고른다. 빈 
     같은 키를 다른 꼴(뒤 공백 · 같은 줄 값)로 쓴 줄이 있으면 `MEDIA START
     BLOCKED: ingest-auth mode mismatch` 다. 모드 판정 줄은 따로 내지 않는다.
     키 줄은 글자 꼴로만 센다 — 같은 뜻의 다른 YAML 꼴(따옴표 키 · 4칸 들여쓰기 ·
-    flow 표기)는 0 으로 읽혀 옛 모드가 된다. 저장소 compose 템플릿의 키 꼴은
-    `render_test.sh` 사례 39 가 잠근다.
+    flow 표기)는 0 으로 읽혀 옛 모드가 된다 — 익명 송출 · 응답기 컨테이너는
+    기동 실패. 저장소 compose 템플릿의 키 꼴은 `render_test.sh` 사례 39 가
+    잠근다.
 *   **MediaMTX 템플릿은 두 모드를 다 품는다.** 상자에 깔리는 것은 렌더하지
     않은 저장소 파일이다(M9 설치 묶음). 모드마다 다른 절은 표지 줄
     (`# @mode <legacy|ingest-auth> begin` · `… end`) 사이의 블록이고, 시작
@@ -226,6 +227,9 @@ compose 템플릿 변수 `ingest_auth_image` 하나로 모드를 고른다. 빈 
         비밀(`STREAM_KEY_RESOLVE_TOKEN_SECRET_ARN`) · 인스턴스 역할 권한
         둘(아래 「후속」 M9 행) · `stream_key_resolve_url` ·
         `ingest-auth.env` 렌더.
+    *   `prod/media` apply 는 런타임 1단-나 ②(POK-429 — `media_secret_arns`
+        = 전용 그릇 하나 · 출력 `ingest_auth_resolve_token_secret_arn`) 머지 ·
+        apply 뒤다 — 그 전엔 상자 역할에 옛 공용 토큰 읽기 권한이 남는다.
     *   4C 전용 토큰 비밀이 **평문 단일 값**인지 확인한다. 값은 런타임
         1단-나 ② 의 값 넣기 경로가 hex 평문(`openssl rand -hex 32`)으로
         넣는다 — 그 경로로 넣었는지 본다. JSON 이 한 줄이면 시작 스크립트의 꼴
@@ -1201,8 +1205,8 @@ prod 상자에 깔 도구의 판이다. M9 user_data 가 같은 값으로 설치
 | M15 | 반영됨(POK-301). 응답기 자리를 응답기 모드로 채웠다(위 「송출 인증 두 모드」). `--passphrase` 루프백은 「응답기 런북」 에 있다. 응답기의 kick 자격은 사이드카와 같은 사용자 · 같은 비밀번호 파일 내용(응답기 쪽 파일 따로)으로 정했다 — 전용 사용자를 두지 않는다. `api` 는 `authHTTPExclude` 에 넣지 않는다. Basic 비밀번호 · 잠금 둘은 시작 스크립트의 토큰 계약을 모드별로 넓혀 렌더한다. 응답기가 다시 뜨는 동안의 거부 창은 계약 시험 C13 에 기록한다 |
 | M15 | 반영됨(POK-301). `render_test.sh` 사례 11 은 비밀 계열 env 이름 금지를 유지하고, `_FILE` 로 끝나며 값이 읽기 전용 bind 대상과 같은 env 만 예외로 둔다. `authHTTPExclude` 는 `playback` 하나다(read 를 빼면 Bearer 없는 LL-HLS 가 열려, read 는 응답기가 판정한다). SRT 경로 잠금 · `overridePublisher: no` 는 응답기 모드에만 있다. 포트 127.0.0.1:8080 · 헬스 8081. dev-media 응답기와 다른 점(전용 제어망 대신 같은 망 칸 · 비밀 env 대신 `_FILE`)은 CONTRACT 2절 D1 · D4 |
 | M9 | 송출 인증 모드는 compose 템플릿 변수 `ingest_auth_image` 하나로 고른다 — 빈 문자열이면 옛 인증(익명 publish · 응답기 없음), 이미지 참조면 응답기 인증이다. MediaMTX 템플릿은 `templatefile()` 하지 않는다 — 설치 묶음이 저장소 파일 그대로 깔고, 시작 스크립트가 compose 렌더본의 응답기 서비스 유무로 모드 블록을 고른다(종결 r1 지적 1 · kty 결정 (다) 2026-10-24). O7 은 빈 값, O8a 2 의 설정 반영 교체에서 다이제스트를 넣는다 — 그 다이제스트는 M15 머지 뒤 develop 커밋에서 빌드한 것이어야 한다(빌드 커밋 기록) |
-| M9 | **공개 인바운드와 옛 모드를 함께 쓰지 않는다.** `ingest_allowed_cidrs` 에 `0.0.0.0/0` 이 있는 동안 `ingest_auth_image` 는 비울 수 없다 — 두 값이 같은 루트면 precondition 으로 막고, 다른 루트면 롤백 런북(인바운드를 팀 IP 로 먼저 되돌림 → 옛 모드 교체 → 팀 IP 밖 익명 송출 거부 확인)과 plan 점검 항목으로 지킨다. M15 PR revert 판으로 교체할 때도 같다 |
-| M9 | 두 변수 `stream_key_resolve_url` · `ingest_auth_ip_limit` 은 M15 에서 최소 호환 반영(변수 · template_vars) — 값 배선은 후속(루트 전달 · `ingest-auth.env` 의 write_files · 응답기 모드 빈 값 거부). 응답기 모드에서만 값이 필수: `stream_key_resolve_url`(`http://auth.pokeclip.internal:<auth 포트>` — compose 에 따옴표 없는 스칼라로 들어가므로 모듈 validation 은 문자 집합 `^http://[A-Za-z0-9.-]+:[0-9]+$` 로 묶는다. `$` · 공백 · `#` · 사용자 정보 · 질의 · 조각 금지. **키는 두 모드 모두 넘기고** 옛 모드는 빈 값) · `media.env` 의 `STREAM_KEY_RESOLVE_TOKEN_SECRET_ARN` · `INGEST_AUTH_DENYLIST_PARAM`. 옛 모드에서는 비어도 된다. `media.env` 의 `STREAM_KEY_RESOLVE_TOKEN_SECRET_ARN` = 런타임 출력 `ingest_auth_resolve_token_secret_arn`(4C 전용 창구 `resolve-token` 의 출입증 비밀 — kty 2026-10-24) · 인스턴스 역할 `secretsmanager:GetSecretValue` 는 그 ARN 하나만 — 옛 `INTERNAL_API_TOKEN` 비밀 읽기는 두지 않는다(런타임 1단-나 ② K2). `ingest_auth_ip_limit`(`"on"` · `"off"`, 기본 `"on"`)은 `ingest-auth.env.tmpl` 로 `/etc/pokeclip-media/ingest-auth.env`(root:root 0644)에 늘 렌더한다 — 응답기 모드에서 없으면 기동이 막힌다. `INGEST_AUTH_DENY_DIR` 는 `media.env` 에 넣지 않는다(시험 전용 이음매) |
+| M9 | **공개 인바운드와 옛 모드를 함께 쓰지 않는다.** `ingest_allowed_cidrs` 에 `0.0.0.0/0` 이 있는 동안 `ingest_auth_image` 는 비울 수 없다. 두 값은 다른 루트(`prod/platform` · `prod/media`)라 precondition 으로 묶지 못하고, 지금 지키는 자리는 롤백 순서(위 「되돌리기 순서」 — 인바운드를 팀 IP 로 먼저 되돌림 → 옛 모드 교체 → 팀 IP 밖 익명 송출 거부 확인)와 M9 런북 [media-swap.md](../terraform/runbooks/media-swap.md) 의 단서 셋(「정상 교체 8」 · 「설정 반영 교체」 · 「부분 실패 복구」)이다. plan 점검 항목 · 기계 방어는 아직 없다(후속). M15 PR revert 판으로 교체할 때도 같다 |
+| M9 | 두 변수 `stream_key_resolve_url` · `ingest_auth_ip_limit` 은 M15 에서 최소 호환 반영(변수 · template_vars) — 값 배선은 후속(루트 전달 · `ingest-auth.env` 의 write_files · 응답기 모드 빈 값 거부). 응답기 모드에서만 값이 필수: `stream_key_resolve_url`(`http://auth.pokeclip.internal:<auth 포트>` — compose 에 따옴표 없는 스칼라로 들어가므로 모듈 validation 은 문자 집합 `^http://[A-Za-z0-9.-]+:[0-9]+$` 로 묶는다. `$` · 공백 · `#` · 사용자 정보 · 질의 · 조각 금지. **키는 두 모드 모두 넘기고** 옛 모드는 빈 값) · `media.env` 의 `STREAM_KEY_RESOLVE_TOKEN_SECRET_ARN` · `INGEST_AUTH_DENYLIST_PARAM`. 옛 모드에서는 비어도 된다. `media.env` 의 `STREAM_KEY_RESOLVE_TOKEN_SECRET_ARN` = 런타임 출력 `ingest_auth_resolve_token_secret_arn`(4C 전용 창구 `resolve-token` 의 출입증 비밀 — kty 2026-10-24) · 인스턴스 역할 `secretsmanager:GetSecretValue` 는 그 ARN 하나만 — 옛 `INTERNAL_API_TOKEN` 비밀 읽기는 두지 않는다(런타임 1단-나 ② K2). `prod/media` apply 는 런타임 1단-나 ②(POK-429 — `media_secret_arns` = 전용 그릇 하나 · 출력 `ingest_auth_resolve_token_secret_arn`) 머지 · apply 뒤 — 그 전엔 상자 역할에 옛 공용 토큰 읽기 권한이 남는다. `ingest_auth_ip_limit`(`"on"` · `"off"`, 기본 `"on"`)은 `ingest-auth.env.tmpl` 로 `/etc/pokeclip-media/ingest-auth.env`(root:root 0644)에 늘 렌더한다 — 응답기 모드에서 없으면 기동이 막힌다. `INGEST_AUTH_DENY_DIR` 는 `media.env` 에 넣지 않는다(시험 전용 이음매) |
 | M9 | O8a 2 전에: 거부 목록 SSM Parameter(`/pokeclip/prod/media/ingest-auth-deny-tokens` · String · Standard · 초기값 `# pokeclip deny-tokens v1`) — **`lifecycle { ignore_changes = [value] }` 필수**. 인스턴스 역할에 그 파라미터 하나의 `ssm:GetParameter` · 4C 전용 토큰 비밀(`ingest_auth_resolve_token_secret_arn`) 하나의 `secretsmanager:GetSecretValue`(CMK 면 `kms:Decrypt`). Standard 값 한도 4 KB(토큰 약 150개). Media → auth(4C) SG 짝은 출발지 = Media SG(POK-307 코멘트 10640 — 3번 · M8 와) |
 | M9 | 망 칸 예약 포트(응답기 127.0.0.1:8080 · 8081, MediaMTX 127.0.0.1:8888 · 9996 · 9997 · :8890/udp)와 프록시 네 포트가 겹치지 않음을 모듈에서 단언한다 |
 | M9 | 설치 목록에 `bin/ingest-auth-deny-sync.sh` · `bin/ingest-auth-ip-limit.sh`(0755) · `bin/lib/` 의 새 셋 `deny_tokens.sh` · `docker_config.sh` · `render_files.sh`(0644 — 위 설치 단언 행의 다섯) · `ingest-auth.env.tmpl` 렌더본을 더하고(**두 모드 공통** — 시작 스크립트가 새 lib 셋을 source 하므로 빠지면 옛 모드(O7) 기동도 실패한다) 압축 user_data 16 KiB 게이트를 다시 잰다. 거부 목록 부모 디렉터리 `/var/lib/pokeclip-media/ingest-auth` 의 소유(`root:root` · 그룹 · 기타 쓰기 불가)도 단언한다 — **처리(e1734148):** 묶음 파일은 14개(`bin/` 스크립트 여덟 · `bin/lib/` 다섯 · `mediamtx.yml.tmpl`)이고 부트스트랩 `REQUIRED_FILES` 에 lib 셋 · 스크립트 둘을 더했다(모듈 시험 `bootstrap_requires_every_bundle_file`). 산출물 런북은 개수 대신 그 목록과 묶음 목록을 대조한다. `ingest-auth.env.tmpl` 렌더본(user_data `write_files`)은 위 두 변수 배선 행의 후속으로 남았다. |

@@ -594,7 +594,8 @@ case_limit_verify() {
 
 # I10 — 재생성 뒤 healthy 조회가 매달림 → 대기 상한 안에 unhealthy.
 case_limit_bounded_wait() {
-  expect_bounded_wait "${LIMIT_SCRIPT}" 'INGEST AUTH IP LIMIT FAIL unhealthy' off
+  expect_bounded_wait "${LIMIT_SCRIPT}" 'INGEST AUTH IP LIMIT FAIL unhealthy' \
+    off
 }
 
 # I9 — 비밀 · 토큰 값이 argv · 출력에 없음(거부 목록 값은 표준 입력 아닌 파일로만).

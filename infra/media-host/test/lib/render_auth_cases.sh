@@ -33,6 +33,7 @@ readonly IP_LIMIT_ENV_NAME='ingest-auth.env'
 # merge-develop 의 make-golden.sh.
 readonly COMPOSE_GOLDEN_PREFIX="${TEST_DIR}/golden/compose.legacy"
 readonly START_SCRIPT="${MEDIA_HOST_DIR}/bin/start-media.sh"
+readonly DENY_SYNC_SCRIPT="${MEDIA_HOST_DIR}/bin/ingest-auth-deny-sync.sh"
 RESPONDER_MAIN="$(cd -- "${MEDIA_HOST_DIR}/../.." && pwd)"
 RESPONDER_MAIN="${RESPONDER_MAIN}/media/cmd/ingest-auth/main.go"
 readonly RESPONDER_MAIN
@@ -197,8 +198,18 @@ auth_cases::start_const() {
 #   변수 이름.
 #######################################
 auth_cases::start_default() {
+  auth_cases::script_default "${START_SCRIPT}" "$1"
+}
+
+#######################################
+# 스크립트 하나의 `${이름:-기본값}` 기본값을 낸다(서로 다른 값이 하나뿐이어야
+# 한다).
+# Arguments:
+#   스크립트 경로, 변수 이름.
+#######################################
+auth_cases::script_default() {
   local got
-  got="$(grep -o -E "\\\$\\{$1:-[^}]+\\}" "${START_SCRIPT}" 2>/dev/null \
+  got="$(grep -o -E "\\\$\\{$2:-[^}]+\\}" "$1" 2>/dev/null \
     | sort -u)" || return 1
   [[ -n "${got}" && "${got}" != *$'\n'* ]] || return 1
   got="${got#*:-}"
@@ -581,15 +592,17 @@ $(harness::log_tail "${trial}.err")"
 # 사례 45 — 응답기 실행 계정. compose 는 응답기에 user 를 적지 않으므로(사례
 # 37) 이미지 Dockerfile.ingest-auth 최종 스테이지의 USER 가 정본이다. 시작
 # 스크립트는 응답기 비밀 셋을 INGEST_AUTH_UID · INGEST_AUTH_GID 기본값 소유로
-# 둔다 — 둘이 갈리면 응답기가 비밀을 읽지 못한다. USER 는 사례 9(janitor ⇔
-# Dockerfile.mtxhook)와 같은 규칙(마지막 FROM 뒤 마지막 USER)으로 읽는다.
+# 두고, 거부 목록 동기화(bin/ingest-auth-deny-sync.sh)는 목록 파일 그룹을
+# INGEST_AUTH_GID 기본값으로 맞춘다 — USER 와 갈리면 응답기가 비밀 · 목록을
+# 읽지 못한다. USER 는 사례 9(janitor ⇔ Dockerfile.mtxhook)와 같은 규칙(마지막
+# FROM 뒤 마지막 USER)으로 읽는다.
 # Globals:
-#   INGEST_AUTH_DOCKERFILE, START_SCRIPT
+#   INGEST_AUTH_DOCKERFILE, START_SCRIPT, DENY_SYNC_SCRIPT
 # Returns:
 #   0 같음 / 1 다름 · 읽지 못함.
 #######################################
 auth_cases::check_45() {
-  local image_user uid gid
+  local image_user uid gid sync_gid
   if [[ ! -f "${INGEST_AUTH_DOCKERFILE}" ]]; then
     harness::add_reason 'media/Dockerfile.ingest-auth 없음(응답기 실행 계정 정본)'
     return 1
@@ -607,6 +620,16 @@ auth_cases::check_45() {
   if [[ "${image_user}" != "${uid}:${gid}" ]]; then
     harness::add_reason "Dockerfile.ingest-auth 최종 USER ${image_user} · \
 start-media 기본 소유 ${uid}:${gid}"
+    return 1
+  fi
+  if ! sync_gid="$(auth_cases::script_default "${DENY_SYNC_SCRIPT}" \
+    INGEST_AUTH_GID)"; then
+    harness::add_reason 'bin/ingest-auth-deny-sync.sh 그룹 기본값을 읽지 못함'
+    return 1
+  fi
+  if [[ "${sync_gid}" != "${image_user#*:}" ]]; then
+    harness::add_reason "Dockerfile.ingest-auth 최종 USER ${image_user} · \
+deny-sync 기본 그룹 ${sync_gid}"
     return 1
   fi
 }

@@ -10,8 +10,9 @@
 #                        이미지 참조 <저장소 URL>@<다이제스트>. 이름은 이미지
 #                        핀 정본 images.json 의 키 + _image 다.
 #   ingest_auth_image    같은 꼴. 비면 송출 인증 응답기 서비스를 렌더하지 않는다
-#                        (옛 모드). 차면 응답기 모드 — mediamtx.yml.tmpl 에 같은
-#                        값을 넘긴다(어긋나면 시작 스크립트가 막는다).
+#                        (옛 모드). 차면 응답기 모드 — 시작 스크립트가 렌더본의
+#                        이 서비스 키 줄로 모드를 정하고 mediamtx.yml.tmpl 의
+#                        그 모드 블록을 고른다(키 꼴은 render_test 사례 39).
 #   stream_key_resolve_url
 #                        응답기의 4C(스트림 키 판정) 주소. 응답기 모드에서만
 #                        쓰이지만 templatefile() 은 안 쓰는 갈래의 변수도 요구해
