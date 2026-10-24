@@ -50,6 +50,9 @@ export const ANALYTICS_CONFIG: Partial<PostHogConfig> = {
   capture_pageview: 'history_change',
   // 처리방침 2·9절의 거부 수단: 브라우저 추적 금지(Do Not Track)를 켜면 보내지 않는다
   respect_dnt: true,
+  // 다른 거부 수단 「이용 분석 참여」(설정 › 계정, identifyUser)의 기억을 .pokeclip.com 쿠키에 둔다 — 기본(localStorage)은
+  // 출처마다 따로라, 같은 브라우저의 랜딩이 끈 회원을 그 회원 번호로 계속 센다(식별 쿠키는 둘이 함께 쓴다). 랜딩도 같은 값이다
+  opt_out_capturing_persistence_type: 'cookie',
   // 자동 수집은 끈다 — 누른 단추의 글자(채팅·채널 이름·이메일)가 실려 나간다. 행동은 track()으로만 보낸다(POK-357)
   autocapture: false,
   rageclick: false,
@@ -141,21 +144,55 @@ export function whenAnalyticsLoaded(): Promise<void> {
 // ── 식별 ─────────────────────────────────────────────────────────────────────
 
 /**
+ * 식별·기기 식별자를 지운다. SDK의 reset은 동의 선택까지 지우는데, 「이용 분석 참여」를 끈 선택은 그 뒤에 다시 건다 —
+ * 지워 두면 같은 브라우저에서 다시 로그인할 때 계정 설정을 불러오기 전의 기록(login_completed·첫 페이지 조회)이 나간다.
+ * 공용 PC의 다음 사람에게도 덜 보내는 쪽이고, 참여하는 회원이 식별되면 identifyUser가 그 선택을 지운다.
+ */
+function resetKeepingOptOut(posthog: PostHog): void {
+  const denied = posthog.get_explicit_consent_status() === 'denied';
+  posthog.reset();
+  if (denied) posthog.opt_out_capturing();
+}
+
+/**
  * 로그인한 회원을 내부 회원 번호로 식별한다. 이메일·이름·Google 식별자는 넘기지 않는다(처리방침 2절).
  * 같은 브라우저에 다른 회원으로 식별된 흔적이 남아 있으면(로그아웃 없이 세션이 끝난 공용 PC) 먼저 지운다 —
  * SDK는 식별된 사람 위에 다른 번호로 identify하면 둘을 합치지 않고 번호만 바꾸므로, 지우지 않으면 앞사람의 기기 식별자를 잇는다.
+ *
+ * `optOut`은 그 회원의 「이용 분석 참여」 꺼짐(`me.analyticsOptOut`, 처리방침 7·9절)이다. identify보다 **먼저** 맞춘다 —
+ * 순서가 바뀌면 끈 회원의 `$identify`가 새어 나간다. 끄면 이벤트·녹화를 멈추고 식별도 하지 않는다. 다시 켜면 opt_in이다 —
+ * 선택만 지우는 clear는 SDK의 전송 대기열을 다시 시작하지 않아, 꺼진 채 연 페이지에서는 새로고침 전까지 아무것도 안 나갔다
+ * (2026-10-24 실측). `$opt_in` 이벤트는 보내지 않는다. 추적 금지는 저장된 선택과 무관하게 SDK가 먼저 막는다(소스 확인).
+ * 로그아웃·다른 회원 로그인의 reset은 끈 선택을 지키고(resetKeepingOptOut), 다음에 식별할 때 그 회원의 값을 다시 건다.
  */
-export function identifyUser(userId: number): void {
+export function identifyUser(userId: number, optOut = false): void {
   const id = String(userId);
   withAnalytics((posthog) => {
-    if (posthog._isIdentified() && posthog.get_distinct_id() !== id) posthog.reset();
+    if (posthog._isIdentified() && posthog.get_distinct_id() !== id) resetKeepingOptOut(posthog);
+    const denied = posthog.get_explicit_consent_status() === 'denied';
+    if (optOut) {
+      if (!denied) {
+        posthog.opt_out_capturing();
+        posthog.stopSessionRecording();
+      }
+      return;
+    }
+    if (denied) posthog.opt_in_capturing({ captureEventName: false });
     posthog.identify(id);
   });
 }
 
+/**
+ * 지금 채널에서의 역할을 이후 모든 이벤트에 싣는다(`active_role`) — 스트리머와 편집자의 쓰임을 나눠 본다.
+ * 열거 둘뿐이고 상대 채널 번호는 싣지 않는다. 로그아웃의 reset이 함께 지운다.
+ */
+export function setActiveRole(role: 'owner' | 'editor'): void {
+  withAnalytics((posthog) => posthog.register({ active_role: role }));
+}
+
 /** 다음 방문자가 앞사람으로 묶이지 않게 식별·기기 식별자를 지운다. */
 export function resetIdentity(): void {
-  withAnalytics((posthog) => posthog.reset());
+  withAnalytics(resetKeepingOptOut);
 }
 
 let unbindAuth: (() => void) | null = null;
@@ -179,7 +216,7 @@ export function bindIdentityToAuthStore(): void {
       state.refreshToken !== null && state.accessToken !== null && state.rotatedFrom === null;
     if (isNewLogin) {
       withAnalytics((posthog) => {
-        if (posthog._isIdentified()) posthog.reset();
+        if (posthog._isIdentified()) resetKeepingOptOut(posthog);
       });
     }
   });

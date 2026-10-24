@@ -30,6 +30,11 @@ import { ToastProvider } from '@/ui';
 // 화면이 그 값으로 무엇을 그리는지 잰다. 시계는 가짜다 — 경과·마킹 시각이 결정적이어야 한다.
 
 const nav = vi.hoisted(() => ({ search: '', pathname: null as string | null }));
+const { track } = vi.hoisted(() => ({ track: vi.fn() }));
+vi.mock('@/lib/analytics', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/analytics')>()),
+  track,
+}));
 
 // useSearchParams 대체 — ?stream=(useMediaSource)은 비워 두고 아래 env 고정과 함께 소스를 null로 만들어
 // 플레이어가 「영상 신호 없음」 자리로 결정적으로 선다. ?mock=(오프라인 목업 토글)은 케이스가 nav.search로 정한다.
@@ -881,6 +886,7 @@ let fetchSpy: ReturnType<typeof stubFetch>;
 vi.setConfig({ testTimeout: 15_000 });
 
 beforeEach(() => {
+  track.mockReset();
   nav.search = '';
   nav.pathname = null;
   server.vodOrigin = null;
@@ -2103,6 +2109,10 @@ describe('LiveScreen — 수동 마킹', () => {
     expect(screen.queryByText(/마킹됨 · 카드 생성 중/)).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: '전체 9' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '수동 3' })).toBeInTheDocument();
+    // 새 카드가 생긴 뒤 한 번 센다 — 방송 번호·시각은 싣지 않는다 (POK-357)
+    expect(track.mock.calls.filter(([n]) => n === 'highlight_marked')).toEqual([
+      ['highlight_marked', { mode: 'live' }],
+    ]);
   });
 
   it('F8도 어디에 포커스가 있든 같은 요청이다', async () => {
@@ -2180,6 +2190,7 @@ describe('LiveScreen — 수동 마킹', () => {
     expect(screen.getByText('가까운 카드가 이미 있어요')).toBeInTheDocument();
     expect(screen.queryByText('카드 만드는 중…')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: '전체 8' })).toBeInTheDocument();
+    expect(track.mock.calls.some(([n]) => n === 'highlight_marked')).toBe(false);
   });
 
   it('503 timeline_not_ready면 영상 기준을 못 정했다고 알리고 자리를 치운다', async () => {

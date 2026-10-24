@@ -127,6 +127,17 @@ public class UserService {
     }
 
     /**
+     * 「이용 분석 참여」 토글(처리방침 7·9절). 이름 수정과 같은 가드로 탈퇴한 회원은 막는다. 값은 대시보드가 읽어
+     * 분석 도구로 보내지 않게만 쓴다 — auth는 분석 도구와 통신하지 않는다.
+     */
+    @Transactional
+    public User updateAnalyticsOptOut(Long userId, boolean optOut) {
+        User user = activeUserGuard.requireAlive(userId, "profile.analytics");
+        user.changeAnalyticsOptOut(optOut, Instant.now());
+        return user;
+    }
+
+    /**
      * 앞뒤의 <b>공백류</b>를 자른다.
      *
      * <p>🔴 <b>{@code trim()}으로는 부족했다</b>(PR #127 codex, 실측). 그것은 U+0020 이하만

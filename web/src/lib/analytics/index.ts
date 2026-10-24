@@ -5,5 +5,13 @@ export {
   initAnalytics,
   REPLAY_BLOCK_CLASS,
   resetIdentity,
+  setActiveRole,
 } from './client';
-export { track, type AnalyticsEvents, type FaqKey } from './events';
+export {
+  toYoutubeCategoryId,
+  track,
+  YOUTUBE_CATEGORY_IDS,
+  type AnalyticsEvents,
+  type FaqKey,
+  type YoutubeCategoryId,
+} from './events';

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { recordingClipUrl } from '@/api/mediaPlayback';
 import { recoverForbiddenRecording } from '@/api/playbackAccess';
+import { track } from '@/lib/analytics';
 import { AT_EDGE_THRESHOLD_SECONDS, behindFromSeekFraction } from './playerMath';
 import { useControlsAutoHide } from './useControlsAutoHide';
 import { PLAYER_QUALITIES, type PlayerQuality, type PlayerSimulation } from './usePlayerSimulation';
@@ -62,6 +63,8 @@ export function useRecordedPlayback(
   const total = recorded.durationSeconds;
   const startAt = () => forwardTarget(recorded, startAtSeconds);
   const [playing, setPlaying] = useState(false);
+  /** 재생 시작을 센 방송. 사용 통계에 「방송마다 한 번」을 지키는 데만 쓴다 */
+  const countedStreamRef = useRef<string | null>(null);
   const [muted, setMuted] = useState(true);
   const [volume, setVolumeState] = useState(70);
   const volumeRef = useRef(70);
@@ -140,6 +143,11 @@ export function useRecordedPlayback(
     const onPlay = () => {
       wantPlayRef.current = true;
       setPlaying(true);
+      // 그 방송을 처음 틀었을 때 한 번만 센다 — 줄기를 갈아 끼우는 구간 넘김·옮김은 세지 않는다 (POK-357)
+      if (countedStreamRef.current !== recorded.streamId) {
+        countedStreamRef.current = recorded.streamId;
+        track('broadcast_playback_started', { mode: 'vod' });
+      }
     };
     const onPause = () => {
       // 끝나서 멈춘 것은 사용자가 멈춘 것이 아니다 — 다음 구간을 이어 틀지는 ended가 정한다

@@ -1058,6 +1058,7 @@ preflight에서 막혀 **창구는 멀쩡한데 브라우저만 못 부른다.**
 | `POST /internal/editor-delegations/accessible` | **clip** | `X-Internal-Token` 헤더 |
 | `POST /internal/streamer-channel-names` — 스트리머 번호 여럿(최대 100, 넘으면 400)의 플랫폼 채널 이름(POK-430) | **clip**(방송 목록) | `X-Internal-Token` 헤더 |
 | `PATCH /api/auth/me` | 웹 | 사용자 JWT |
+| `PATCH /api/auth/me/analytics` — 설정 › 계정 「이용 분석 참여」 토글. 본문 `{"optOut": boolean}`(빠지면 400), 답은 `GET /api/auth/me`와 같은 모양(`analyticsOptOut` 포함). auth는 값을 저장만 하고 분석 도구와 통신하지 않는다 — 끄는 일은 대시보드가 한다(`web/docs/ANALYTICS.md`) | 웹 | 사용자 JWT |
 | `PUT /api/auth/me/photo` | 웹 | 사용자 JWT (**multipart/form-data**) |
 | `GET /api/profile-photos/{userId}?token=…` | **웹의 그림 태그** | **사진 표**(세 번째 `permitAll`) |
 | **`DELETE /api/auth/me`** — 탈퇴 | 웹 | 사용자 JWT |

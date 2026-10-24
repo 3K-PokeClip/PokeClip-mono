@@ -52,7 +52,7 @@ import {
 } from '@/api/audioTracks';
 import { fetchDelegationsAsEditor } from '@/api/editors';
 import { fetchRecordingSpans } from '@/api/mediaPlayback';
-import { track } from '@/lib/analytics';
+import { toYoutubeCategoryId, track } from '@/lib/analytics';
 import {
   rebaseTimeline,
   recordingTimeline,
@@ -764,6 +764,15 @@ function WiredStudio({
             label: `편집본 #${snap.id} v${snap.recipeVersion} 저장됨`,
           }));
           toast({ tone: 'success', title: `편집본 #${snap.id} 저장됨 (v${snap.recipeVersion})` });
+          // 사람이 누른 저장만 센다 — 영상 주문(submitUpload)도 persist를 거치지만 여기로 오지 않는다 (POK-357)
+          track('clip_recipe_saved', {
+            first_save: current.recipeId === null,
+            source: openedFrom,
+            layout: recipe.layout,
+            caption_position: recipe.captionPosition,
+            subtitle_mode: recipe.subtitleMode,
+            cut_seconds: Math.round(recipe.range.endSeconds - recipe.range.startSeconds),
+          });
         })
         .catch((e: unknown) => {
           const message = messageOf(e);
@@ -771,7 +780,7 @@ function WiredStudio({
           toast({ tone: 'error', title: '저장 실패', description: message });
         });
     },
-    [documentFor, persist, toast],
+    [documentFor, persist, toast, openedFrom],
   );
 
   const [pending, setPending] = useState<PendingUpload | null>(null);
@@ -894,7 +903,7 @@ function WiredStudio({
             privacy_status: upload.privacyStatus,
             thumbnail_source: draft.thumbnailSource,
             made_for_kids: draft.madeForKids,
-            category_id: upload.categoryId,
+            category_id: toYoutubeCategoryId(upload.categoryId),
             scheduled: upload.publishAt !== undefined,
           });
           // 200은 새 주문이 아니다: 같은 판이 만드는 중이면 끝난 뒤 이 정보로, 이미 만들어져 있으면 지금 올린다

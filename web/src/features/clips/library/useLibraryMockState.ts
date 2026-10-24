@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { track } from '@/lib/analytics';
 import { useToast } from '@/ui';
 import {
   fetchLibraryAll,
@@ -381,6 +382,8 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
                   : c,
               ),
             );
+            // 새 주문만 센다 — 같은 영상의 먼저 들어온 주문(created=false)은 DB 숫자와 어긋난다 (POK-357)
+            if (created) track('video_upload_requested', { via: fromIntent ? 'intent' : 'title' });
             toast(
               created
                 ? {
@@ -438,6 +441,7 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
                 : c,
             ),
           );
+          if (created) track('video_upload_retried', {});
           toast(
             created
               ? {
@@ -471,6 +475,7 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
       setSendingFlag(id, true);
       try {
         await requestUploadResolution(entry.streamId, target.clipId, uploadId, resolution);
+        track('video_upload_resolved', { result: resolution.result });
         // 다시 시도 단추는 지금 영상(latestClip)에만 있다: 옛 판 업로드를 닫았으면 다시 올릴 길을 약속하지 않는다(PR #261 codex)
         const current = target.clipId === entry.latestClip?.id;
         toast(
@@ -512,6 +517,7 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
       }
       requestRender(entry.streamId, entry.recipeId)
         .then(({ clip: snap }) => {
+          track('video_render_retried', {});
           toast({ tone: 'success', title: `영상 #${snap.id} 다시 주문됨` });
           refresh();
         })
@@ -579,6 +585,8 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
       }
       void videoUrlOf(id, '내려받기').then((url) => {
         if (url === null) return;
+        // 받기 주소를 브라우저에 넘긴 때다 — 저장이 끝났는지는 웹이 모른다 (POK-357)
+        track('clip_download_requested', {});
         const a = document.createElement('a');
         a.href = url;
         a.rel = 'noopener';

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { YOUTUBE_CATEGORY_IDS } from '@/lib/analytics';
 import {
   addTags,
   CATEGORIES,
@@ -103,6 +104,10 @@ describe('카테고리(POK-381)', () => {
       '29',
     ]);
     expect(CATEGORIES[0]).toEqual({ value: '20', label: '게임' });
+  });
+
+  it('분석 이벤트 열거(YOUTUBE_CATEGORY_IDS)와 같은 번호를 빠짐없이 쓴다 — 정본은 analytics', () => {
+    expect(CATEGORIES.map((c) => c.value).sort()).toEqual([...YOUTUBE_CATEGORY_IDS].sort());
   });
 });
 

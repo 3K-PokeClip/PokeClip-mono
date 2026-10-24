@@ -9,6 +9,11 @@ import { jsonResponse, stubFetch, type FetchHandler } from '@/test/mockFetch';
 import { renderWithProviders } from '@/test/testProviders';
 
 const nav = vi.hoisted(() => ({ search: '', replace: vi.fn(), push: vi.fn() }));
+const { track } = vi.hoisted(() => ({ track: vi.fn() }));
+vi.mock('@/lib/analytics', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/analytics')>()),
+  track,
+}));
 
 // jsdom은 라우팅을 못 흉내 낸다 — 이동 여부만 확인한다.
 // 차단 상태 목업은 쿼리로 켜지므로 useSearchParams도 여기서 갈아 끼운다.
@@ -73,6 +78,7 @@ function stubCanvas() {
 
 beforeEach(() => {
   window.localStorage.clear();
+  track.mockReset();
   nav.search = '';
   nav.replace.mockReset();
   nav.push.mockReset();
@@ -192,6 +198,8 @@ describe('AccountSettingsScreen — 표시 이름 저장', () => {
     // 저장한 값이 곧 현재 값이 되므로 입력은 응답을 따라가고 저장은 다시 잠긴다
     expect(screen.getByLabelText('표시 이름')).toHaveValue('너구리씨');
     expect(screen.getByRole('button', { name: '저장' })).toBeDisabled();
+    // 바꾼 뒤 한 번 센다 — 이름은 싣지 않는다 (POK-357)
+    expect(track.mock.calls).toEqual([['profile_name_changed', {}]]);
   });
 
   it('응답을 기다리는 동안 저장 버튼이 잠기고 바쁨을 알린다', async () => {
@@ -451,6 +459,8 @@ describe('AccountSettingsScreen — 프로필 사진', () => {
     // 헤더·사이드바가 읽는 캐시가 서버 응답의 새 주소를 갖는다 — 재조회 없이
     expect(queryClient.getQueryData<Me>(ME_KEY)?.profileImageUrl).toBe(NEW_URL);
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    // 기본 아바타를 골라 적용했다 — 사진·파일 이름은 싣지 않는다 (POK-357)
+    expect(track.mock.calls).toEqual([['profile_photo_changed', { source: 'preset' }]]);
   });
 
   it('사진 창고가 꺼져 있으면(503) 모달을 닫지 않고 사유를 알리며 캐시는 그대로다', async () => {
@@ -514,6 +524,77 @@ describe('AccountSettingsScreen — 프로필 사진', () => {
       expect(meCalls).toBe(meCallsBefore + 1);
     });
     expect(dialog.getByText('2 / 3 · 크롭')).toBeInTheDocument();
+  });
+});
+
+describe('AccountSettingsScreen — 이용 분석 참여(처리방침 7·9절)', () => {
+  it('기본은 켬이다 — 옛 auth가 analyticsOptOut을 안 줘도 참여로 읽는다', async () => {
+    await renderScreen();
+    expect(screen.getByRole('switch', { name: '이용 분석 참여' })).toBeChecked();
+  });
+
+  it('끄면 PATCH /api/auth/me/analytics에 optOut만 보내고, 응답이 캐시를 바꾼다 — 가드가 그 값으로 끈다', async () => {
+    const user = userEvent.setup();
+    const spy = stubAccount(ME, (url, init) =>
+      url === '/api/auth/me/analytics' && init?.method === 'PATCH'
+        ? jsonResponse(200, { ...ME, analyticsOptOut: true })
+        : jsonResponse(404),
+    );
+    const { queryClient } = await renderScreen();
+
+    await user.click(screen.getByRole('switch', { name: '이용 분석 참여' }));
+
+    expect(await screen.findByText('이용 분석을 껐어요')).toBeInTheDocument();
+    const patches = spy.mock.calls.filter(([, init]) => init?.method === 'PATCH');
+    expect(patches).toHaveLength(1);
+    expect(bodyOf(patches[0]?.[1])).toEqual({ optOut: true });
+    expect(queryClient.getQueryData<Me>(ME_KEY)?.analyticsOptOut).toBe(true);
+    expect(screen.getByRole('switch', { name: '이용 분석 참여' })).not.toBeChecked();
+  });
+
+  it('꺼 둔 회원은 꺼진 채로 보이고, 켜면 optOut=false를 보낸다', async () => {
+    const user = userEvent.setup();
+    const spy = stubAccount({ ...ME, analyticsOptOut: true }, (url, init) =>
+      url === '/api/auth/me/analytics' && init?.method === 'PATCH'
+        ? jsonResponse(200, { ...ME, analyticsOptOut: false })
+        : jsonResponse(404),
+    );
+    await renderScreen();
+    expect(screen.getByRole('switch', { name: '이용 분석 참여' })).not.toBeChecked();
+
+    await user.click(screen.getByRole('switch', { name: '이용 분석 참여' }));
+
+    expect(await screen.findByText('이용 분석을 다시 켰어요')).toBeInTheDocument();
+    const patches = spy.mock.calls.filter(([, init]) => init?.method === 'PATCH');
+    expect(bodyOf(patches[0]?.[1])).toEqual({ optOut: false });
+  });
+
+  it('실패하면 토스트로 알리고 토글·캐시는 그대로 참여다', async () => {
+    const user = userEvent.setup();
+    stubAccount(ME, () => jsonResponse(503, { message: '점검 중' }));
+    const { queryClient } = await renderScreen();
+
+    await user.click(screen.getByRole('switch', { name: '이용 분석 참여' }));
+
+    expect(await screen.findByText('이용 분석 설정을 바꾸지 못했어요')).toBeInTheDocument();
+    expect(queryClient.getQueryData<Me>(ME_KEY)?.analyticsOptOut).toBeUndefined();
+    expect(screen.getByRole('switch', { name: '이용 분석 참여' })).toBeChecked();
+  });
+
+  it('왕복 중에는 토글을 잠근다 — 연타로 요청이 겹치지 않게', async () => {
+    const user = userEvent.setup();
+    const held = heldResponse();
+    stubAccount(ME, () => held.promise);
+    await renderScreen();
+
+    await user.click(screen.getByRole('switch', { name: '이용 분석 참여' }));
+    await waitFor(() =>
+      expect(screen.getByRole('switch', { name: '이용 분석 참여' })).toBeDisabled(),
+    );
+    held.release(jsonResponse(200, { ...ME, analyticsOptOut: true }));
+    await waitFor(() =>
+      expect(screen.getByRole('switch', { name: '이용 분석 참여' })).toBeEnabled(),
+    );
   });
 });
 

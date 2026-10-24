@@ -83,7 +83,14 @@ export function WelcomeDialog({ visible }: { visible: readonly number[] }) {
                 나중에 볼게요
               </Button>
               <span className={styles.welcomeStart}>
-                <Button variant="solid" size="sm" onClick={startTour}>
+                <Button
+                  variant="solid"
+                  size="sm"
+                  onClick={() => {
+                    startTour();
+                    track('onboarding_tour_started', { entry: 'welcome' });
+                  }}
+                >
                   둘러보기 시작
                 </Button>
               </span>

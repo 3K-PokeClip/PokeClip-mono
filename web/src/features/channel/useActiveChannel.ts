@@ -4,6 +4,7 @@ import { useCallback, useEffect } from 'react';
 import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { delegationsAsEditorQueryOptions } from '@/api/editors';
 import { useMe } from '@/features/auth/useSession';
+import { track } from '@/lib/analytics';
 import {
   isListSeenWhenSelected,
   setAsEditorListReader,
@@ -152,6 +153,11 @@ export function useSwitchChannel() {
         },
         () => {
           select(me.id, target.streamerId === me.id ? null : target.streamerId);
+          // 사람이 고른 전환만 여기로 온다(처음 자동 선택은 store hydrate) — 상대 채널 번호는 싣지 않는다
+          track('channel_switched', {
+            to_role: target.relation === 'OWNER' ? 'owner' : 'editor',
+            reason: options.leftStreamerId !== undefined ? 'left' : 'picked',
+          });
           options.onSwitched?.();
         },
       );

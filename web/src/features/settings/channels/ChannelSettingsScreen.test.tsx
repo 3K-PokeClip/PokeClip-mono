@@ -9,10 +9,16 @@ import { useOnboardingStore } from '@/stores/onboarding';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
 import { renderWithProviders } from '@/test/testProviders';
 
-const { goToChzzkConsent, goToYoutubeConsent, goToSoopConsent } = vi.hoisted(() => ({
+const { goToChzzkConsent, goToYoutubeConsent, goToSoopConsent, track } = vi.hoisted(() => ({
   goToChzzkConsent: vi.fn(),
   goToYoutubeConsent: vi.fn(),
   goToSoopConsent: vi.fn(),
+  track: vi.fn(),
+}));
+
+vi.mock('@/lib/analytics', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/analytics')>()),
+  track,
 }));
 
 // location.assign은 jsdom이 못 흉내 낸다 — 이동은 모킹하고, 등록 주소 판정은
@@ -98,6 +104,7 @@ const soop = () => row('SOOP');
 
 beforeEach(() => {
   window.localStorage.clear();
+  track.mockReset();
   goToChzzkConsent.mockReset();
   goToYoutubeConsent.mockReset();
   goToSoopConsent.mockReset();
@@ -197,6 +204,10 @@ describe('ChannelSettingsScreen — 연동 시작', () => {
     expect(
       spy.mock.calls.filter(([url, init]) => url === START_URL && init?.method === 'POST'),
     ).toHaveLength(1);
+    // 동의 화면으로 떠나는 자리라 비콘으로 센다 — 동의 주소는 싣지 않는다 (POK-357)
+    expect(track.mock.calls).toEqual([
+      ['platform_link_started', { platform: 'chzzk' }, { beacon: true }],
+    ]);
   });
 
   it('동의 URL 발급에 실패하면 오류를 알리고 이동하지 않는다', async () => {
@@ -356,6 +367,7 @@ describe('ChannelSettingsScreen — 연동 해제', () => {
     await waitFor(() => expect(screen.queryByText('정상')).not.toBeInTheDocument());
     expect(screen.queryByRole('button', { name: '되돌리기' })).not.toBeInTheDocument();
     await waitFor(() => expect(useOnboardingStore.getState().channelLinked).toBe(false));
+    expect(track.mock.calls).toEqual([['platform_unlinked', { platform: 'chzzk' }]]);
   });
 
   it('해제에 실패하면 오류를 알리고 연동 상태를 그대로 둔다', async () => {
@@ -494,6 +506,7 @@ describe('ChannelSettingsScreen: SOOP 행 (POK-396)', () => {
       spy.mock.calls.filter(([url, init]) => url === SOOP_LINK_URL && init?.method === 'DELETE'),
     ).toHaveLength(1);
     await waitFor(() => expect(soop().getByRole('button', { name: '연동' })).toBeEnabled());
+    expect(track.mock.calls).toEqual([['platform_unlinked', { platform: 'soop' }]]);
   });
 });
 

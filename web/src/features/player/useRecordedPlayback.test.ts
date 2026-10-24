@@ -8,6 +8,11 @@ const access = vi.hoisted(() => ({
   recover: vi.fn((_url: string, _key: string) => Promise.resolve(false)),
 }));
 vi.mock('@/api/playbackAccess', () => ({ recoverForbiddenRecording: access.recover }));
+const { track } = vi.hoisted(() => ({ track: vi.fn() }));
+vi.mock('@/lib/analytics', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/analytics')>()),
+  track,
+}));
 import { useRecordedPlayback, type RecordedSource } from './useRecordedPlayback';
 
 // 끝난 방송 다시보기(POK-253). 재생 서버는 틈을 건너 주지 않으므로(실측) 한 구간씩 달라 하고 이어 튼다.
@@ -42,6 +47,36 @@ function requested(video: HTMLVideoElement) {
 describe('useRecordedPlayback — 구간 여럿', () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
+
+  it('그 방송을 처음 틀 때 한 번만 센다 — 멈췄다 다시 틀기·다음 구간 이어 틀기는 세지 않는다 (POK-357)', () => {
+    track.mockClear();
+    const { video } = fakeVideo();
+    renderHook(() =>
+      useRecordedPlayback(
+        { current: video },
+        source([
+          [0, 14],
+          [24, 14],
+        ]),
+      ),
+    );
+
+    act(() => {
+      video.dispatchEvent(new Event('play'));
+      video.dispatchEvent(new Event('pause'));
+      video.dispatchEvent(new Event('play'));
+    });
+    Object.defineProperty(video, 'ended', { value: true, configurable: true });
+    act(() => {
+      video.dispatchEvent(new Event('pause'));
+      video.dispatchEvent(new Event('ended'));
+    });
+    act(() => {
+      video.dispatchEvent(new Event('play'));
+    });
+
+    expect(track.mock.calls).toEqual([['broadcast_playback_started', { mode: 'vod' }]]);
+  });
 
   it('틈을 건너 달라 하지 않는다 — 첫 줄기는 첫 구간 끝까지다', () => {
     const { video } = fakeVideo();

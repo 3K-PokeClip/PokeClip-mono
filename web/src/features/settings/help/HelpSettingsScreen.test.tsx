@@ -169,6 +169,18 @@ describe('HelpSettingsScreen', () => {
     expect(screen.getByText('3k.pokeclip@gmail.com')).toBeInTheDocument();
   });
 
+  it('문의 창구를 누르면 어느 창구인지만 센다 — 바깥으로 떠나 결과는 웹이 모른다 (POK-357)', () => {
+    render(<HelpSettingsScreen />);
+
+    fireEvent.click(screen.getByRole('link', { name: '디스코드 1:1' }));
+    fireEvent.click(screen.getByRole('link', { name: '이메일' }));
+
+    expect(track.mock.calls).toEqual([
+      ['support_link_clicked', { channel: 'discord' }],
+      ['support_link_clicked', { channel: 'email' }],
+    ]);
+  });
+
   it('접근성 위반이 없다 — 질문 하나를 펼친 상태까지', async () => {
     const { container } = render(<HelpSettingsScreen />);
     fireEvent.click(question(FAQ_ITEMS[0].q));

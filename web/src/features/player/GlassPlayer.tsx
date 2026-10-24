@@ -12,6 +12,7 @@ import {
   type Ref,
 } from 'react';
 import clsx from 'clsx';
+import { track } from '@/lib/analytics';
 import { useToast } from '@/ui';
 import styles from './GlassPlayer.module.css';
 import { PlayerChatOverlay } from './PlayerChatOverlay';
@@ -312,6 +313,7 @@ function GlassPlayerBody({
   // 🔴 서버로 보내는 길이 아직 없다 — 전에는 시크바에 표시만 찍고 「저장되었습니다」를 띄워 거짓 성공이었다(POK-253).
   // 수동 마킹이 서버로 가기 전까지(POK-257) 준비 중이라고만 알린다. 자동 하이라이트 카드는 채팅 급증으로 따로 생긴다
   const handleClip = useCallback(() => {
+    track('pending_feature_clicked', { feature: 'player_clip' }); // 수요를 본다 (POK-357)
     toast({
       tone: 'info',
       title: '클립 만들기는 준비 중이에요',
@@ -320,6 +322,7 @@ function GlassPlayerBody({
   }, [toast]);
 
   const handlePip = useCallback(() => {
+    track('pending_feature_clicked', { feature: 'mini_player' });
     toast({ tone: 'info', title: '미니 플레이어는 준비 중이에요' });
   }, [toast]);
 
