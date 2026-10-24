@@ -38,8 +38,11 @@ prod 의 CloudFront 엣지를 만드는 루트입니다(설계 3-1 의 ⑩ · �
 | KVS 값(`cdn-secret`) | `scripts/kvs-put-cdn-secret.sh`(O7f 멈춤 자리 ②) |
 | 운영 이름 레코드 | `prod/records` |
 
-되감기 버킷 CORS 는 두지 않습니다 — 플레이어의 사전 요청(OPTIONS)이 없을 때
-불요입니다(G14 · T10 에서 OPTIONS 0건 확인).
+되감기 버킷의 CORS 규칙은 edge 가 두지 않습니다 — `/dvr/*` · `/vod/*` 의
+CORS 는 응답 헤더 정책이 붙이고(플레이어의 사전 요청(OPTIONS)이 없을 때 —
+G14 · T10 에서 OPTIONS 0건 확인), 버킷 자체의 규칙은 S3 직접 요청(편집기 미리
+듣기)용으로 런타임이 둡니다([런타임 트랙 계약](../../CONTRACT-runtime.md)
+「rewind 버킷 CORS」).
 
 ## 앞 루트 출력
 
