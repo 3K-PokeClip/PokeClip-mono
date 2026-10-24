@@ -86,17 +86,27 @@ public final class StallingTcpProxy implements AutoCloseable {
     private void pump(Socket from, Socket to, boolean clientToServer) {
         Thread t = new Thread(() -> {
             byte[] buf = new byte[8192];
+            // 앞 조각의 끝. 표식이 두 번의 읽기에 걸쳐 와도 알아보려고 다음 조각 앞에 붙여 찾는다(POK-426).
+            byte[] tail = new byte[0];
             try (InputStream in = from.getInputStream(); OutputStream out = to.getOutputStream()) {
                 int n;
                 while ((n = in.read(buf)) >= 0) {
                     if (clientToServer) {
+                        // 🔴 막힘을 <b>보내기 전에</b> 켠다(POK-426). 보낸 뒤에 켜면 서버가 그 사이 답하고 반대쪽 스레드가
+                        // 막힘을 보기 전에 응답을 넘겨, 재려던 질의가 그냥 성공한다(CI에서 SQLState 빈 문자열로 간헐 실패).
+                        byte[] marker = stallMarker.get();
+                        if (marker != null) {
+                            byte[] window = new byte[tail.length + n];
+                            System.arraycopy(tail, 0, window, 0, tail.length);
+                            System.arraycopy(buf, 0, window, tail.length, n);
+                            if (contains(window, window.length, marker) && stalled.compareAndSet(false, true)) {
+                                stalledAt.set(Instant.now());
+                            }
+                            int keep = Math.min(marker.length - 1, window.length);
+                            tail = java.util.Arrays.copyOfRange(window, window.length - keep, window.length);
+                        }
                         out.write(buf, 0, n);
                         out.flush();
-                        byte[] marker = stallMarker.get();
-                        if (marker != null && contains(buf, n, marker)
-                                && stalled.compareAndSet(false, true)) {
-                            stalledAt.set(Instant.now());
-                        }
                     } else if (!stalled.get()) {
                         out.write(buf, 0, n);
                         out.flush();
