@@ -114,7 +114,7 @@
 | 12 | `INGEST_AUTH_BASIC_PASS` | 11 과 함께 필수(또는 13 · 14 가 off 가 아니면) | **예** | 호출자 Basic 비밀번호. unreserved 문자만, **24자 이상**(짧으면 기동 거부 — 에러엔 변수 이름 · 최소 길이만, kty 120차). 길이 · 문자 집합만 보고 무작위성은 보지 않는다 — 같은 글자 반복 같은 약한 값도 기동은 통과하니 값은 무작위로 만든다(2절 「후보값」 표의 4b). 응답기는 SHA-256 다이제스트만 쥔다 | `config.go` `loadCallerBasic` · `minCallerBasicPassLen` · `ingestauth/handler.go` `newHandler` |
 | 13 | `INGEST_AUTH_BASIC_PASS_FILE` | 12 대신 | 경로(값은 아님) | 12 의 값이 든 파일의 절대 경로 | `secrets.go` `resolveSecret` |
 | 14 | `INGEST_AUTH_CALLER_BASIC` | 선택 | 아니오 | `off` 만 받는다(명시 끔 — 11 · 12 · 13 가운데 하나라도 함께 주면 기동 거부). 그 밖의 값은 기동 거부. dev-media 는 `off`(제어망이 따로 있어 1-1 의 4 가 MediaMTX 를 가른다) | `config.go` `loadCallerBasic` · `compose.yml` |
-| 15 | `STREAM_KEY_RESOLVE_CHANNEL` | 선택(기본 `resolve-token`) | 아니오 | 4C 창구(1-3 의 2): `resolve-token`(전용) · `internal-token`(공용). 그 밖의 값은 기동 거부. prod 는 `internal-token`(118차) — 빠뜨리면 전용 헤더로 가 auth 가 401 이고 started `auth_channel=resolve-token` · `ingestauth_auth_degraded` `status=401` 로 드러난다 | `config.go` `resolveChannel` |
+| 15 | `STREAM_KEY_RESOLVE_CHANNEL` | 선택(기본 `resolve-token`) | 아니오 | 4C 창구(1-3 의 2): `resolve-token`(전용) · `internal-token`(공용). 그 밖의 값은 기동 거부. prod 는 `resolve-token`(POK-429 — 118차의 `internal-token` 을 대체) — 기본값과 같아도 compose 에 명시한다. 창구와 비밀이 어긋나면(공용 토큰을 전용 헤더로) auth 가 401 이고 `ingestauth_auth_degraded` `status=401` 로 드러난다 | `config.go` `resolveChannel` |
 | 16 | `INGEST_AUTH_IP_LIMIT` | 선택(기본 `on`) | 아니오 | `on` · `off`(1-1 의 15). 그 밖의 값(`On` · `false` 등)은 기동 실패. dev compose 가 `.env` 에서 넘긴다(`${INGEST_AUTH_IP_LIMIT:-on}`) — 바꾼 값은 `restart` 가 아니라 응답기 재생성(`up -d --force-recreate ingest-auth`)으로 반영된다 | `cmd/ingest-auth/iplimit_config.go` `loadIPLimit` · `compose.yml` |
 | 17 | `INGEST_AUTH_IP_LIMIT_BURST` | 선택(기본 30) | 아니오 | 정수 1–1000. 꺼짐이어도 검사한다. dev compose 는 넘기지 않는다(기본값) | `iplimit_config.go` |
 | 18 | `INGEST_AUTH_IP_LIMIT_INTERVAL` | 선택(기본 `3s`) | 아니오 | Go duration 100ms–10m. 꺼짐이어도 검사한다. dev compose 는 넘기지 않는다(기본값) | `iplimit_config.go` |
@@ -202,7 +202,7 @@ prod 기대 = 계획 M2(Media 상자 compose) · M15(송출 인증 반영) · O8
 | D6 | action 처리: 계획의 제외 목록에 `playback` 이 없다 | 불필요 | 그 밖의 action 은 전부 401 |
 | D7 | 거부 목록 · 상태의 저장 자리 | 불필요 | 상자 교체 시 거부 목록 소실 = 신호 없이 풀림 |
 | D8 | 재시작 단위: 계획 문구 vs M2 브랜치 vs dev 운영 절차 | 불필요 | 응답기만 다시 시작할 수 있어야 한다 |
-| D9 | 4C 호출 경로 · 인증 방식 · 출발지 잠금 | 창구 헤더를 설정으로 고르게 더했다(트랙 A, 1-3 의 2 · 1-5 의 15). auth 쪽은 3번 | 계약이 「운영 Media 경로 미정」, prod auth 의 `native` 와 전용 토큰 창구는 양립 불가 |
+| D9 | 4C 호출 경로 · 인증 방식 · 출발지 잠금 | 창구 헤더를 설정으로 고르게 더했다(트랙 A, 1-3 의 2 · 1-5 의 15). auth 쪽은 3번 | 닫힘 — auth 는 POK-316 으로 `native` 위에서도 전용 창구를 연다(전달 머리글이 있으면 403). 운영 경로 = 전용 창구 · 출발지 = Media 프라이빗 서브넷(POK-429 · 계약4 2절 개정) |
 | D10 | 시한 · 예산 상수가 환경 변수로 안 열린다 | 측정 뒤 판단 | prod 의 auth 왕복이 dev 와 다를 수 있다 |
 | D11 | compose 자리가 비어 있다(포트 · 볼륨 · healthcheck · 기동 순서) | 불필요 | M15 c2 가 채울 목록 |
 | D12 | prod MediaMTX 에 SRT 송출 · 읽기 경로 잠금과 `overridePublisher: no` 가 없다 | 불필요(MediaMTX 설정) | `read` 는 응답기가 늘 200 이라 SRT 읽기 방어는 이 잠금뿐 |
@@ -312,6 +312,10 @@ prod 기대 = 계획 M2(Media 상자 compose) · M15(송출 인증 반영) · O8
 
 - **계획이 가정한 것**: 「응답기 → auth 는 런타임 2단 규칙」, Media → auth SG 짝은 런타임 2단(계획 747 · 1724행). prod auth 는 `native` 프록시 신뢰 + 좁힌 `internal-proxies`(계획 1113 · 1524행).
 - **실물**: dev 는 `http://<dev auth 사설 주소>:8082` — 값이 **사설 주소여야** 한다(공인 주소면 auth 의 출발지 잠금에 걸려 403 — `.env.example:6`). 응답기 코드는 호스트 이름 · https 도 받는다(1-3 의 1). 계약4 2절은 「운영 Media 의 resolve 경로는 아직 정하지 않았다」이고 auth 의 전용 토큰 출발지는 「설정된 주소(지금은 media-dev 하나)」다. 4C 승인권은 3번이다(계약4 4절 · ADR-033).
+- **닫힘(POK-316 · POK-429)**: 아래 양립 문제는 POK-316 으로 풀렸다 — auth 는 `native` 위에서도 전용
+  창구를 열고, 전달 머리글을 달고 온 전용 헤더 요청은 403 으로 끝낸다. 운영 경로는 전용
+  창구(`X-Stream-Key-Resolve-Token`)이고 출발지는 Media 프라이빗 서브넷 대역이다(POK-429 · 계약4 2절
+  개정). 아래 문단은 당시 기록이다.
 - **선행 조건 — prod auth 와의 양립(3번과 먼저 합의)**: auth 의 전용 토큰 창구는 켜져 있으면 부팅 검사가 `server.forward-headers-strategy` 가 정확히 `none` 인지(미설정 포함 아님)를 요구한다(`services/auth/.../config/StreamKeyResolveSecurityConfig.java:66-77,102-108`; 허용 대역 IPv4 · 톰캣 remoteip 헤더 속성 없음 · 공용 토큰과 다름도 함께 검사 — `application.yml:185-192` 주석). 반면 prod auth 계획은 `native` 다. **prod auth 에 전용 토큰을 켜면 `native` 와 부딪혀 auth 가 뜨지 않는다**(실패가 부팅 거부라 눈에 띈다). 운영 auth 는 지금 이 창구를 쓰지 않아 토큰을 비워 둔다(`application.yml` 같은 자리 주석). 따라서 「어떤 경로 · 어떤 인증 방식으로 prod 응답기가 4C 를 부르는가」(예: 전용 토큰 창구를 쓰는 별도의 `none` 인스턴스 · 포트, 또는 공용 토큰 창구 등 — 후보일 뿐 3번이 정한다)가 K6 보다 먼저다. `native` 에서는 피어 IP 의 의미도 달라져 아래 출발지 잠금 판단에 영향이 있다.
 - **코드가 지원하는 범위와 계약의 현재 허용 범위는 다르다**: auth 는 이미 **IPv4 CIDR 목록**(`allowedCidrs` — `StreamKeyResolveAccessProperties.java:13-20`, 설정 `STREAM_KEY_RESOLVE_ALLOWED_CIDRS` 쉼표 목록 — `application.yml:185-192`)을 받는다. 계약4 2절의 문구만 「설정된 주소(지금은 하나)」다.
 - **prod 에서 정할 것(위 선행 조건이 정해진 뒤)**: (a) auth 의 주소(내부 DNS 이름 vs 고정 주소), (b) auth 가 허용할 출발지. prod 의 응답기는 상자에서 나가므로 출발지는 상자 쪽 주소(컨테이너가 브리지 뒤면 변환된 상자 주소일 것이나 — 추론, 미확인)다. 상자를 교체하면 주소가 바뀔 수 있다.
@@ -376,7 +380,9 @@ M2 브랜치의 응답기 자리는 이미지 · netns · `depends_on` · `resta
 
 ## 3. 결정됨 — kty 결정 (2026-10-20)
 
-선행 조건(결정이 아니라 3번과 먼저 합의할 것): **prod 의 4C 호출 경로 · 인증 방식**(D9 — prod auth `native` 와 전용 토큰 창구는 양립 불가). K6 은 이것이 정해진 뒤에 적용한다. 합의 수단은 정해졌다 — POK-307 Jira 코멘트로 3번에게 물었다(2026-10-20). 남은 것은 3번의 답(4C 경로 · 인증 방식)이다.
+선행 조건(결정이 아니라 3번과 먼저 합의할 것): **prod 의 4C 호출 경로 · 인증 방식**(D9). **닫힘** — POK-316
+으로 `native` 와 전용 창구가 양립하고, 운영 경로는 전용 창구 · 출발지 Media 프라이빗 서브넷으로 정했다(POK-429 · kty
+2026-10-24 확정). 합의 수단은 POK-307 Jira 코멘트였다(2026-10-20).
 
 | # | 결정 | 확정 내용 | 응답기 코드 | 연결 |
 |---|---|---|---|---|
@@ -388,7 +394,8 @@ M2 브랜치의 응답기 자리는 이미지 · netns · `depends_on` · `resta
 | K7 | 송출자 `ip` 확인 수단 | **(가)** c1 의 가짜 응답기 + MediaMTX 연결 로그 | 없음 | D5 |
 | K8 | 포트 · 비밀 파일 경로 | **2절 끝 후보값 표를 후보값으로 채택**(Basic 자격 파일이 하나 늘어 비밀 파일은 응답기 쪽 `/run/secrets/` 아래 셋 · 사이드카 쪽 `mtx_api_pass` 하나 · MediaMTX 쪽은 `mediamtx.yml` 의 `authHTTPAddress` 렌더 — 위 후보 표 3 · 4 · 4b). 포트 충돌은 prod 포트 값 확인 뒤 | 없음(K3 가 전제) | D11 |
 
-아직 남은 것: **3번의 답**(4C 경로 · 인증 방식 — 선행 조건, POK-307 에서 물음). 정본 위치(이 파일)와 합의 수단(POK-307 코멘트)은 2026-10-20 에 정했다.
+선행 조건(3번의 답)은 위처럼 닫혔다(POK-429). 정본 위치(이 파일)와 합의 수단(POK-307 코멘트)은 2026-10-20 에
+정했다.
 
 kty 결정이 아닌 **확인 · 실측 항목**(결정 없이 M15 착수 때 한다):
 
