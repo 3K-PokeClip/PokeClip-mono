@@ -240,6 +240,9 @@ export function applyAnalyticsOptOut(optOut: boolean): void {
       return;
     }
     posthog.opt_in_capturing({ captureEventName: false });
+    // 끌 때의 stopSessionRecording은 설정(disable_session_recording)을 true로 박아, opt_in만으로는 녹화가 새로고침 전까지
+    // 안 돌아왔다(PR #382 2차 리뷰). 처음 설정으로 되돌린다 — 녹화를 안 켜는 배포에서는 그대로 꺼져 있다
+    posthog.set_config({ disable_session_recording: !REPLAY });
     if (signedInUserId !== null) posthog.identify(signedInUserId);
   });
 }

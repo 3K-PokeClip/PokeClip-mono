@@ -11,6 +11,7 @@ const posthog = vi.hoisted(() => ({
   opt_out_capturing: vi.fn(),
   opt_in_capturing: vi.fn(),
   stopSessionRecording: vi.fn(),
+  set_config: vi.fn(),
   register: vi.fn(),
 }));
 vi.mock('posthog-js', () => ({ default: posthog }));
@@ -235,6 +236,25 @@ describe('「이용 분석 참여」 — 이 브라우저에만 저장한다(처
     expect(optInAt).toBeLessThan(identifyAt ?? 0);
     expect(posthog.identify.mock.calls).toEqual([['7']]);
   });
+
+  it.each([
+    ['on', false],
+    ['', true],
+  ])(
+    '다시 켜면 녹화 설정을 처음 값으로 되돌린다(REPLAY=%j → disable_session_recording %s) — 끌 때 박힌 true가 남지 않게 (PR #382 2차 리뷰)',
+    async (replay, disabled) => {
+      const { client } = await load('phc_test', 'https://us.i.posthog.com', replay);
+      client.initAnalytics();
+      await client.whenAnalyticsLoaded();
+      client.setAnalyticsOptOut(true);
+      client.setAnalyticsOptOut(false);
+      expect(posthog.set_config.mock.calls).toEqual([[{ disable_session_recording: disabled }]]);
+      // opt_in 뒤에 건다 — 설정을 바꾸면 SDK가 그 자리에서 녹화를 다시 판정한다
+      const [optInAt] = posthog.opt_in_capturing.mock.invocationCallOrder;
+      const [configAt] = posthog.set_config.mock.invocationCallOrder;
+      expect(optInAt).toBeLessThan(configAt ?? 0);
+    },
+  );
 
   it('로그아웃한 뒤 켜면 식별하지 않는다 — 앞사람 번호로 다시 묶지 않게', async () => {
     const client = await ready();
