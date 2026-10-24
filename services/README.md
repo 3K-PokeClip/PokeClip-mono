@@ -895,6 +895,149 @@ README의 `GRANT ... TO app_*;` 줄과 시험의 목록이 다르면 빨간불�
 **재지 않는 것**: 자기 표의 전체 저장 경로를 그 역할로 다 돌리지는 않는다(소유자라 표 권한이 다 있다). 시퀀스 ·
 트리거 함수 · advisory 잠금 · `pg_stat_ssl` 자기 행은 소유 또는 PUBLIC 기본으로 충분하다.
 
+### dev 앱별 스키마 이전과 되돌리기 (POK-428)
+
+서버 넷은 이제 표를 자기 스키마(`app_auth` · `app_clip` · `app_chat_collector` ·
+`app_chat_detector`)에 만든다. dev 공유 DB 는 그 전까지 public 하나에 표가
+있었으므로 배포 잡이 한 번 옮긴다 — `services-deploy.yml` 이 굽기 뒤 · 띄우기 앞에
+`scripts/dev-move-to-app-schemas.sh` 를 부르고, 그 셸이 서버 넷 · 일꾼 둘을 세우고
+public 을 백업한 뒤 `scripts/dev-move-to-app-schemas.sql` 을 한 트랜잭션으로
+돌린다. 이미 옮긴 DB 에서는 아무것도 하지 않는다. 이 단계 · 스크립트 셋 ·
+`DevSchemaMoveTest` · `DevSchemaMove` 는 dev 확인 뒤 후속 PR 에서 지운다.
+
+**머지 전 읽기 확인(상자 명령 — kty 승인 SSM).** dev postgres 의 public 객체를
+읽어 스크립트 목록 · media 표(`media/internal/index/ddl.go`)와 대조한다. 목록 밖
+객체가 있으면 머지하지 않고 kty 에게 묻는다. 크기도 같이 적는다.
+
+```sql
+SELECT n.nspname, c.relname, c.relkind, pg_catalog.pg_get_userbyid(c.relowner)
+  FROM pg_catalog.pg_class c
+  JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+ WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p', 'S', 'v', 'm');
+SELECT p.oid::regprocedure FROM pg_catalog.pg_proc p
+  JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+ WHERE n.nspname = 'public';
+SELECT pg_catalog.pg_database_size(pg_catalog.current_database());
+```
+
+상자에서는 `df -h /` 도 적는다.
+
+**배포 로그에서 볼 줄.**
+
+*   `schema move: skipped` — 옮길 것이 없다(이미 옮겼다).
+*   `schema move: moved` · `schema move: public backup written under …` — 옮겼다.
+    뒤이은 `up -d` 가 새 이미지로 서버 넷을 띄운다.
+*   `::error::schema move: … bytes free, need …` — 디스크가 모자라 아무것도
+    멈추지 않았다. 옛 컨테이너가 그대로 돈다.
+*   `schema move: failed before commit, restarting old containers` — 이전 전에
+    실패해 옛 컨테이너를 다시 띄웠다. 자료는 public 그대로다.
+*   `::error::schema move committed but a later step failed; old containers NOT
+    restarted` 또는 `::error::schema move state unknown; …` — 옮긴 뒤(또는 판정
+    불가) 실패했다. 서버는 멈춘 채다. kty 에게 보고하고, 새 이미지로 `up -d` 하는
+    SSM 은 kty 승인 뒤에 보낸다.
+
+**백업 정리.** 백업은 상자의 `/home/ec2-user/pokeclip-backup/public-<UTC
+시각>.sql`(파일 0600 · 디렉터리 0700)이다. 계정 · 방송 · 암호문이 들어 있으므로
+dev 확인 뒤 kty 승인을 받아 지우고 삭제를 기록한다.
+
+#### 되돌리기 순서
+
+**역이전을 revert 보다 먼저 한다.** revert 가 먼저 배포되면 옛 Flyway(public ·
+baseline-on-migrate)가 public 에 빈 표를 만들어 자료가 조용히 갈린다. 역이전 뒤
+revert 전에 다른 배포가 돌면 새 코드의 이전 단계가 앞방향 이전을 다시 한다 —
+`concurrency` 는 Actions 실행끼리만 줄 세우므로 배포를 environment 필수 검토자로
+막는다. GitHub 쓰기(PUT · 거절 · 취소 · 승인)와 상자 명령은 하나하나 실행 직전에
+kty 승인을 받고, 거절 · 승인은 필수 검토자인 kty 가 직접 누른다. 걸음 2 부터 7
+까지는 한 사람이 끊지 않고 이어 하며, **그동안 상자 명령(SSM `send-command` ·
+`start-session`)은 이 절차 실행자만 보낸다**(손 SSM 은 GitHub 규칙이 막지
+못한다). 배타 중에도 develop 머지는 막지 않는다(배포만 멈춘다).
+
+1.  **원상 기록(읽기).**
+    `gh api repos/3K-PokeClip/PokeClip-mono/environments/dev-deploy` 와
+    `…/dev-deploy/deployment-branch-policies` 출력을 파일로 남긴다.
+1.  **배타 걸기(kty 승인 쓰기).** environment `dev-deploy` 에 `reviewers` = kty
+    하나를 단다. PUT 은 설정을 통째로 바꾸므로 `deployment_branch_policy` 를 기록한
+    값 그대로 함께 보낸다(빠뜨리면 배포 브랜치 제한이 풀린다). 다시 읽어
+    required_reviewers 가 생겼고 브랜치 정책이 기록과 같은지 보고, 그 확인 시각을
+    **T_block** 으로 적는다(그 자리에서 찍은 `date -u '+%Y-%m-%dT%H:%M:%SZ'`
+    출력). 응답이 「이 저장소에서 못 쓴다」 류면 멈추고 kty 에게 묻는다.
+1.  **진행 중인 것 끝남(읽기).** 아래 둘이 **둘 다** 0 인 것을 T_block 뒤 처음
+    확인한 시각을 **T_idle** 로 적는다(T_block 뒤 첫 확인에서 0 이면 T_idle = 그
+    확인 시각).
+    *   비종료 dev-deploy deployment 0 — deployments 를 모든 페이지(`gh api -i
+        'repos/3K-PokeClip/PokeClip-mono/deployments?environment=dev-deploy&per_page=100&page=<N>'`,
+        Link `rel="next"` 가 없을 때까지 · 상한 10 페이지) 읽고, deployment 마다
+        statuses(`…/deployments/<id>/statuses?per_page=100` · 상한 1 페이지)에서
+        `created_at` 이 가장 늦은 상태가 종료(`success` · `failure` · `error` ·
+        `inactive`)가 아닌 것이 0.
+    *   서버에서 거른 활성 실행 0 — `gh run list --workflow services-deploy.yml
+        --status <s> --json databaseId,attempt,headSha,status` 를 `in_progress` ·
+        `queued` · `waiting` · `requested` · `pending` 다섯에 하나씩 돌려 다섯 다 0.
+        `--status` 는 서버에서 거르므로 기본 상한 20건은 거른 뒤에 걸린다. 다섯
+        값만 쓰는 이유: 이 다섯이 아직 끝나지 않은 실행의 상태 전부이고,
+        `action_required` 는 실행이 끝난 뒤 붙는 결론 값인 데다 이 잡은 push
+        트리거라 생기지 않는다.
+
+    `in_progress` 는 끝날 때까지 기다린다(중간에 끊지 않는다). `waiting` 은 kty 가
+    거절하고 `queued` · `pending` · `requested` 는 취소한다(둘 다 실행 직전 kty
+    승인). 처리한 뒤 다섯 목록과 deployments 를 다시 읽어 둘 다 0 이 될 때까지
+    되풀이하고, 읽은 시각 · 상태별 건수 · 비종료 deployment `id` 를 파일로
+    남긴다. **다섯 목록이 0 인데 비종료 deployment 가 남거나, 페이지 상한을
+    넘거나, deployments · statuses 읽기 실패가 되풀이되면 T_idle 을 적지 않고 그
+    `id` 와 기록을 들고 kty 에게 회부한다.**
+
+    Actions 실행이 끝났다고 상자의 셸이 끝난 것은 아니다(잡의 기다리기 루프는
+    `InProgress` · `Pending` 밖에서 멈추고, 실행을 취소해도 SSM 명령은 취소되지
+    않는다). 그래서 SSM 쪽을 아래 넷으로 본다. 기준 시각은 **T_block 과 T_idle
+    가운데 늦은 쪽**이다.
+    1.  **(생략 판정)** deployments 를 위와 같이 모든 페이지 읽어, `created_at`
+        부터 마지막 갱신(statuses 의 `created_at` · `updated_at` 최댓값, 최신
+        상태가 비종료면 지금)까지가 [기준 시각 − 6600초, 기준 시각] 과 겹치는 것이
+        0 건이면 (시간)을 건너뛴다. 하나라도 겹치거나 읽기가 실패하거나(종료 코드가
+        0 이 아니거나 빈 응답) 페이지 상한을 넘으면 건너뛰지 않는다. 판정 출력(페이지
+        수 · 전체 건수 · 창 안 건수와 `id` · 비종료 `id`)을 파일로 남긴다.
+    1.  **(시간)** 기준 시각 + **6600초(110분)** 가 지날 때까지 기다린다(그
+        자리에서 찍은 `date -u` 로 확인). 기존 배포 명령의 최대 수명이다 — 전달
+        제한 3000초(`--timeout-seconds`) + 실행 제한 3600초(AWS-RunShellScript
+        `executionTimeout` 기본). Run Command 조회는 최종 일관성이라 막 보낸
+        명령이 조회에 늦게 나올 수 있어 시간으로 닫는다. **대가: 되돌리기 착수가
+        기준 시각에서 최소 110분 늦어지고, 그동안 dev 는 새 코드로 돈다.**
+    1.  **(읽기 1)** `aws ssm list-command-invocations --instance-id <dev 상자>`
+        에서 상태가 종료 넷(`Success` · `Cancelled` · `TimedOut` · `Failed`) 밖인
+        호출이 0(`Pending` · `InProgress` · `Delayed` · `Cancelling` 포함 — 목록 밖
+        값도 미완료로 본다). 남으면 기다렸다 다시 읽고(`cancel-command` 로 끊지
+        않는다), 그래도 남으면 무관한 명령으로 보고 kty 에게 회부한다.
+    1.  **(읽기 2 — kty 승인 SSM)** 상자에서 `pgrep -af` 로 ① 이 읽기 명령 자기
+        것 밖의 SSM 명령 셸(`/var/lib/amazon/ssm/<상자>/document/orchestration/<CommandId>/…/_script.sh`)
+        ② `dev-move-to-app-schemas` ③
+        `docker compose -f docker-compose.dev.yml` · `pg_dump` · `psql` 이 0 인지
+        본다. 같은 출력에 이 읽기 명령 자기
+        `_script.sh` 가 보여야 한다(양성 대조 — 안 보이면 패턴이 틀린 것이라 0 이
+        아무것도 뜻하지 않는다. 패턴을 실물에 맞춰 다시 읽는다). 남으면 기다렸다
+        다시 읽고, 오래 남으면 kty 회부(죽이지 않는다).
+
+    읽기 1 · 2 는 (시간)을 마치거나 (생략 판정)으로 건너뛴 뒤, 걸음 4 의 정지
+    명령 바로 앞에 이 순서로 한다.
+1.  **역이전(kty 승인 SSM).** 서버 넷 · 일꾼 둘 정지 → `pg_dump -n public` 백업
+    → `scripts/dev-move-back-to-public.sql`(한 트랜잭션) → 확인 질의(public 에
+    이력 표 넷 · `app_*` 넷이 빔).
+1.  **revert PR 머지.** 그 push 의 실행이 승인 대기에 선다. 머지 전 push 로 생긴
+    대기 실행은 **거절**하고(그 workflow 파일은 이전 단계가 있는 새 코드다),
+    **revert 를 포함한 가장 새 대기 실행** 하나만 승인한다 — 한 concurrency
+    그룹의 대기 실행은 하나라 새 push 가 앞 대기를 바꿔치기할 수 있다. revert
+    앞 커밋의 실행은 거절한다.
+1.  **revert 배포 확인.** 로그에서 서버 넷 `UP` · https 401 · 상자 `git log
+    --oneline -1` 의 커밋이 revert 를 포함하는지(로컬 저장소에서 `git merge-base
+    --is-ancestor <revert 커밋> <배포된 커밋>` 이 0) · 옛 Flyway 로그에
+    「baseline」 · 새 표 만들기가 없는지 본다.
+1.  **배타 풀기(kty 승인 쓰기).** 먼저 쌓인 대기 실행을 `gh run list --workflow
+    services-deploy.yml --status waiting --json databaseId,attempt,headSha` 로
+    열거해 `headSha` 가 revert 를 포함하고(`git merge-base --is-ancestor`)
+    `attempt` == 1 인 실행만 승인하고 나머지는 거절한다 — 재실행은 원래 실행의
+    workflow 파일로 돌기 때문이고, `attempt` == 1 만 받는 것은 판정 단순화다
+    (보수적). 그다음 `reviewers` 를 비운 PUT(같은 branch policy)을 보내고 다시
+    읽어 걸음 1 의 기록과 같은지 대조한다.
+
 ### DB 로거 셋은 info로 박혀 있다 (POK-409)
 
 **서버 넷 다 `org.hibernate.orm` · `org.springframework.jdbc` · `org.postgresql` 트리를 `application.yml`에서 info로 박는다.**

@@ -1,5 +1,6 @@
 package com.pokeclip.db.support;
 
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 
 import java.io.IOException;
@@ -16,6 +17,7 @@ import java.util.TreeSet;
 import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import javax.sql.DataSource;
 
 /**
  * 서버 DB 계정의 권한 목록을 실 PG 역할로 재는 시험 도우미다(POK-407, 선례 media {@code pgtest/role.go}).
@@ -94,6 +96,20 @@ public final class GrantedRoleDatabase implements AutoCloseable {
     /** 이 DB에 관리자로 붙은 새 연결이다. 결과를 읽어야 할 때 쓴다 — 닫는 것은 부른 쪽이다. */
     public Connection adminConnection() throws SQLException {
         return DriverManager.getConnection(jdbcUrl(), postgres.getUsername(), postgres.getPassword());
+    }
+
+    /** 이 DB에 관리자로 붙는 데이터소스다(풀 없음). Flyway · 서버 부팅을 관리자 신분으로 돌릴 때 쓴다. */
+    public DataSource adminDataSource() {
+        return new DriverManagerDataSource(jdbcUrl(), postgres.getUsername(), postgres.getPassword());
+    }
+
+    /** 관리자 사용자 이름 · 비밀번호다. 서버를 dev 처럼 소유자 계정으로 띄울 때 쓴다. */
+    public String adminUsername() {
+        return postgres.getUsername();
+    }
+
+    public String adminPassword() {
+        return postgres.getPassword();
     }
 
     /** 이 DB에서 시험 역할로 문장을 돌린다. */
