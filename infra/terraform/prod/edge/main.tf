@@ -55,8 +55,14 @@ module "waf" {
   managed_rule_groups = local.cloudfront_waf.managed_rule_groups
   rate_limit          = local.cloudfront_waf.rate_limit
 
-  # 차단된 요청만 남기고, 자격 증명이 실리는 헤더는 로그에서만 가린다(결정
-  # 161) — 요청 샘플은 가리지 않는다(웹 ACL 데이터 보호는 후속).
+  # Authorization · media 시청자의 서명 쿠키는 요청 샘플 · 로그 모두에서
+  # 가린다(POK-459) — 로그의 redacted_headers 는 그대로 둔다(이중). 데이터
+  # 보호를 끄거나 줄여도 로그만은 계속 가려지게 하는 것이고, 값이 같아 로그
+  # 내용은 달라지지 않는다.
+  protected_headers = ["authorization", "cookie"]
+
+  # 차단된 요청만 남기고, 자격 증명이 실리는 헤더는 로그에서도 가린다(결정
+  # 161).
   logging = {
     log_group_name    = "aws-waf-logs-pokeclip-prod-cloudfront"
     retention_in_days = local.waf_log_retention_days

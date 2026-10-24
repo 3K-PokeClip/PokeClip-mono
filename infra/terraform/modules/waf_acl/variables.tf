@@ -41,6 +41,18 @@ variable "rate_limit" {
   }
 }
 
+variable "protected_headers" {
+  description = "웹 ACL 데이터 보호로 값을 REDACTED 로 바꿀 헤더 이름(요청 샘플 · 로그 모두). 빈 목록(기본)이면 끈다."
+  type        = list(string)
+  default     = []
+
+  # AWS WAF API FieldToProtect.FieldKeys 의 제약.
+  validation {
+    condition     = length(var.protected_headers) <= 100 && alltrue([for header in var.protected_headers : length(header) <= 64 && can(regex("\\S", header))])
+    error_message = "protected_headers 는 100개 이하이고, 이름마다 64자 이하 · 공백만으로 된 이름이 아니어야 한다."
+  }
+}
+
 variable "logging" {
   description = "트래픽 로그(CloudWatch Logs 로 차단된 요청만). null(기본)이면 끈다. log_group_name 은 aws-waf-logs- 로 시작 · retention_in_days 는 보존 일수 · redacted_headers 는 로그에서 가릴 헤더 이름(소문자)."
   type = object({

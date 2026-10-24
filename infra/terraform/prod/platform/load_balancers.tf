@@ -139,6 +139,11 @@ module "waf" {
   managed_rule_groups = var.waf_managed_rule_groups
   rate_limit          = var.waf_rate_limit
 
+  # 자격 증명이 실리는 헤더는 요청 샘플 · 로그 모두에서 가린다(POK-459) —
+  # 로그의 redacted_headers 는 그대로 둔다(이중). 데이터 보호를 끄거나 줄여도
+  # 로그만은 계속 가려지게 하는 것이고, 값이 같아 로그 내용은 달라지지 않는다.
+  protected_headers = ["authorization", "cookie"]
+
   # 차단된 요청만 남긴다(장부 17 · kty 결정). 보존은 ECS 로그(services.tf)와
   # 같고, 자격 증명이 실리는 헤더는 가린다.
   logging = {
