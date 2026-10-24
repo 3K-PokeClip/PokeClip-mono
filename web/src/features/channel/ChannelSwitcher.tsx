@@ -77,9 +77,21 @@ export function ChannelSwitcher({
   // 거절·나가기 요청이 나가 있는 동안은 창을 닫지 않는다: 바깥 클릭·Esc·트리거로 닫히면 확인 덮개가 같이 사라져
   // 취소된 줄 알았다가 결과 토스트를 보게 된다(PR #342 리뷰 1)
   const [busy, setBusy] = useState(false);
-  // 전환 화면이 걷힐 때 포커스를 돌려줄 표식: 트리거는 채널과 함께 다시 그려져 덮기 전 요소로는 못 돌아간다(PR #342 2차 리뷰).
+  // 전환 화면이 걷힐 때 포커스를 돌려줄 표식: 전환 전 포커스는 창 안의 채널 줄에 있었고 그 줄은 창과 함께 사라져, 덮기 전
+  // 요소로는 못 돌아간다(PR #342 2차 리뷰). 트리거 자체는 POK-442부터 채널 범위 밖이라 전환해도 다시 그려지지 않는다.
   // 사이드바(펼침·접힘)와 홈 헤더에 하나씩이다
   const returnFocus = side === 'bottom' ? 'channel-switcher-header' : 'channel-switcher-sidebar';
+  // 고른 채널이 바뀌면 창을 닫는다(POK-442). 트리거(사이드바·홈 헤더)가 채널 범위 밖으로 나와 바꿔도 다시 서지 않는다:
+  // 창에서 고른 전환은 pick이 닫지만, 다른 탭에서 고르거나 위임이 끊겨 내 채널로 돌아온 것은 열린 창에 그대로 남는다.
+  // 거절·나가기 요청 중(busy)이면 닫지 않는다: 바깥 클릭을 막는 것과 같은 이유다(PR #342 리뷰 1).
+  // 처음 읽힘(아직 아무 회원으로도 안 읽힘 → 저장값)은 바뀐 것이 아니다: 사이드바가 me보다 먼저 서서 그 전에 열 수 있다
+  const storeUserId = useChannelStore((s) => s.userId);
+  const selected = useChannelStore((s) => s.selected);
+  const [seen, setSeen] = useState({ userId: storeUserId, selected });
+  if (seen.userId !== storeUserId || seen.selected !== selected) {
+    setSeen({ userId: storeUserId, selected });
+    if (seen.userId !== null && open && !busy) setOpen(false);
+  }
   return (
     <Popover
       open={open}

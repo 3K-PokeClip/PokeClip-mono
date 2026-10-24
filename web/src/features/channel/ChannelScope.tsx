@@ -20,8 +20,10 @@ import { useSwitchCurtain } from './switchCurtain';
 import { asEditorList, useActiveChannel } from './useActiveChannel';
 
 // 독 화면들의 채널 범위(POK-390). 하는 일 넷:
-// 1) 지금 채널이 서기 전에는 자식을 안 그린다: 홈·지난 방송 훅은 마운트 때 한 번만 목록을 부르므로, 새로고침 뒤
-//    as-editor가 늦게 오면 내 번호로 먼저 불러 버린다(계획 검증 M4).
+// 1) 지금 채널이 서기 전에는 자식 대신 fallback(본문 스켈레톤)을 그린다: 홈·지난 방송 훅은 마운트 때 한 번만 목록을
+//    부르므로, 새로고침 뒤 as-editor가 늦게 오면 내 번호로 먼저 불러 버린다(계획 검증 M4). 범위는 화면 그룹마다 본문만
+//    감싼다(POK-442): 사이드바·홈 헤더는 범위 밖이라 me를 기다리지 않고 바로 선다. 그래서 채널이 바뀌어도 그 둘은 다시
+//    서지 않는다(열린 계정 전환 창은 ChannelSwitcher가 스스로 닫는다).
 // 2) 채널이 바뀌면 자식을 통째로 다시 세운다(key): 훅마다 「채널이 바뀌었나」를 보게 하지 않는다. 앞 채널의 늦은 응답은
 //    각 훅의 정리 플래그가 버린다.
 // 3) 위임 끊김의 부수효과(저장값 지우기·토스트·as-editor 다시 읽기)를 여기 한 자리에서 한다. useActiveChannel은 여러
@@ -55,7 +57,14 @@ function pinnedToBroadcast(pathname: string | null): boolean {
   return typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('stream');
 }
 
-export function ChannelScope({ children }: { children: ReactNode }) {
+export function ChannelScope({
+  children,
+  fallback = null,
+}: {
+  children: ReactNode;
+  /** 채널이 서기 전·홈으로 떠나는 동안 자식 대신 그린다. 기본은 아무것도 안 그림 */
+  fallback?: ReactNode;
+}) {
   const active = useActiveChannel();
   const meQuery = useMe();
   const meFailed = meQuery.isError;
@@ -143,7 +152,7 @@ export function ChannelScope({ children }: { children: ReactNode }) {
       <ChannelStreamerIdContext.Provider value={null}>{children}</ChannelStreamerIdContext.Provider>
     );
   }
-  if (!active.ready || leaving) return null;
+  if (!active.ready || leaving) return <>{fallback}</>;
   return (
     <ChannelStreamerIdContext.Provider value={active.streamerId}>
       <ChannelRelationContext.Provider value={active.relation}>
