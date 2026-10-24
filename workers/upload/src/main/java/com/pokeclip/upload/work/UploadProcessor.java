@@ -63,6 +63,14 @@ public class UploadProcessor {
     private final List<Duration> retryDelays;
     private final Sleeper sleeper;
 
+    /**
+     * 이 배달에서 resolve가 준 유튜브 채널(POK-423). 올림 보고에 싣는다: 연동을 해제하거나 채널을 바꾸면 clip이 그 채널의 영상 번호만
+     * 골라 지운다. 이 배달이 주소를 새로 만들었을 때만 채운다: 이어받는 주소(재배달 · 겹친 일꾼)는 그 사이 채널을 바꿨을 수 있어 {@code null}
+     * (모름)이고, 모르는 줄은 해제 기한에 같이 지워진다. 배달 하나 동안만 쓰고 {@link #process} 처음에 비운다. 처리는 줄 스레드 하나({@code QueueWorker}의 {@code upload-queue})만
+     * 하므로 배달끼리 섞이지 않는다. 결론 내기 갈래처럼 토큰을 못 받은 배달은 {@code null}(채널 모름)이다.
+     */
+    private String channel;
+
     public UploadProcessor(EnvelopeParser parser, ClipUploadApi clip, YoutubeTokenClient auth, S3Download storage,
                            ResumableUploader youtube, ThumbnailStep thumbnails, Path workDir, long chunkSize,
                            List<Duration> retryDelays, Sleeper sleeper) {
@@ -108,6 +116,7 @@ public class UploadProcessor {
             return Disposition.DELETE;
         }
         Path file = workDir.resolve("upload-" + job.uploadId() + ".mp4");
+        channel = null;
         try {
             return run(job, file);
         } catch (Unavailable e) {
@@ -136,6 +145,8 @@ public class UploadProcessor {
         String session = started.sessionUri();
 
         Token token = auth.resolve(job.channelOwnerUserId());
+        // 이 배달이 주소를 새로 만들 때만 채널을 안다. 이어받는 주소는 그 사이 채널이 바뀌었을 수 있어 「모름」으로 둔다(PR #375 codex)
+        channel = session == null ? token.channelId() : null;
         String code = "YOUTUBE_" + token.reason();
         String message = "유튜브 연동이 없거나 끊겼다. 스트리머가 다시 연동해야 한다";
         // 영상 바이트가 필요 없는 갈래는 창고에서 받기 전에 끝낸다. 재배달마다 수십 MB를 헛받지 않게(PR #199 codex 3판).
@@ -188,12 +199,17 @@ public class UploadProcessor {
                             : failUnlessAdopted(job, null, file, size, "YOUTUBE_" + fresh.reason(), message, true);
                 }
                 access = fresh.accessToken();
+                // 새 주소를 이 새 토큰으로 만든다. 그 사이 다른 채널로 다시 연동했으면 채널도 바뀐다(PR #375 codex 2판)
+                channel = fresh.channelId();
                 start = youtube.start(access, job.title(), job.description(), job.categoryId(),
                         job.privacyStatus(), job.publishAt(), job.tags(), job.madeForKids(), size);
             }
             switch (start) {
                 case Start.Session s -> {
                     session = clip.session(id, s.uri());
+                    if (session != null && !session.equals(s.uri())) {
+                        channel = null; // 겹친 일꾼이 먼저 적은 주소다: 어느 채널 토큰으로 만들었는지 모른다
+                    }
                     if (session == null) {
                         log.info("upload.skip_after_session uploadId={}", id);
                         return Disposition.DELETE;
@@ -305,6 +321,7 @@ public class UploadProcessor {
         return switch (clip.failIfNoSession(id, code, message)) {
             case ClipUploadApi.FailOutcome.SessionExists s -> {
                 log.info("upload.adopt_session uploadId={} after={}", id, code);
+                channel = null; // 겹친 일꾼의 주소다: 어느 채널 토큰으로 만들었는지 모른다
                 yield token == null ? retryLater() : drive(job, s.sessionUri(), token, file, size, refreshed);
             }
             case ClipUploadApi.FailOutcome.Failed f -> Disposition.DELETE;
@@ -367,7 +384,7 @@ public class UploadProcessor {
             log.info("upload.thumbnail_unconfirmed uploadId={} code={}", job.uploadId(), thumbnail.errorCode());
             thumbnail = ClipUploadApi.ThumbnailReport.failed(THUMBNAIL_UNCONFIRMED);
         }
-        clip.uploaded(job.uploadId(), videoId, thumbnail);
+        clip.uploaded(job.uploadId(), videoId, thumbnail, channel);
         log.info("upload.done uploadId={} videoId={} thumbnail={}", job.uploadId(), videoId, thumbnail.outcome());
         return Disposition.DELETE;
     }

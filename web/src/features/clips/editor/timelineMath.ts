@@ -3,7 +3,7 @@
 // jsdom 렌더 테스트로 검증할 수 없어(레이아웃이 없다) 여기서 단위 테스트한다
 // (playerMath.ts와 같은 이유).
 
-import { seekFractionFromPointer } from '@/features/player/playerMath';
+import { formatUptime, seekFractionFromPointer } from '@/features/player/playerMath';
 
 /** 클립 길이 하한 — ADR-009 "클립 길이 5초~3분" */
 export const MIN_RANGE_SECONDS = 5;
@@ -21,13 +21,12 @@ export const MAX_RANGE_LABEL = '3:00';
  */
 export const MAX_RANGE_TEXT = `${MAX_RANGE_SECONDS / 60}분`;
 
-/** 100% 배율에서 타임라인에 보이는 폭 — 시안 눈금자(1:21:40~1:22:55) */
+/** 100% 배율에서 타임라인에 보이는 폭(구간이 더 길면 구간 × 1.15). 잡을 수 있는 범위보다 넓으면 범위까지만(시안 눈금자) */
 export const BASE_VIEW_SECONDS = 75;
 
 /**
- * 줌 단계 — 시안의 `100%`가 기본값이다.
- * 25%를 두는 이유: 창이 최대 구간(180초)보다 좁으면 포인터 환산이 창에 갇혀
- * 마우스로는 3:00을 만들 수 없다. 75초 기준 25%에서 창이 300초가 되어 그 문이 열린다.
+ * 줌 단계: `100%`가 기본값이다(zoomSpan). 25% · 50%는 그 4배 · 2배로 넓히되 잡을 수 있는 범위까지만이라, 카드 창처럼 범위가
+ * 좁으면 100%와 같다(화면이 축소 단추를 끈다). 200% · 400%는 100%에 보이는 폭의 절반 · 4분의 1로 재생 위치 둘레를 키운다.
  */
 export const ZOOM_LEVELS = [25, 50, 100, 200, 400] as const;
 
@@ -150,9 +149,18 @@ export function rangeGaugeFraction(lengthSeconds: number): number {
  * 0으로 나눈 NaN이 CSS left로 나가면 요소가 통째로 사라진다(progressFraction과 같은 방어).
  */
 export function secondsToFraction(seconds: number, view: TimelineView): number {
+  return Math.min(1, Math.max(0, secondsToViewOffset(seconds, view)));
+}
+
+/**
+ * 보이는 창 기준 위치를 자르지 않고: 창 앞이면 0보다 작고 뒤면 1보다 크다. 키운 창보다 넓은 구간 상자에 쓴다 —
+ * 0..1로 자르면 상자가 창 전체가 되어 손잡이가 창 가장자리에 남고, 끌면 경계가 창 끝 시각으로 튄다(PR #341 codex).
+ * 창 밖으로 나간 부분은 덮개가 가로로 잘라 감춘다.
+ */
+export function secondsToViewOffset(seconds: number, view: TimelineView): number {
   const span = view.endSeconds - view.startSeconds;
   if (!(span > 0)) return 0;
-  return Math.min(1, Math.max(0, (seconds - view.startSeconds) / span));
+  return (seconds - view.startSeconds) / span;
 }
 
 /** 보이는 창 안의 위치 0..1 → 초 */
@@ -177,25 +185,81 @@ export function secondsFromPointer(
 }
 
 /**
- * 줌 배율에서 보이는 창. 중심(플레이헤드·구간)을 가운데 두되 원본 밖으로는 나가지 않는다 —
- * 창이 원본보다 넓으면 원본 전체를 보여준다.
+ * 배율의 창 폭(POK-389). 100% = 기본 75초와 구간 × 1.15 중 큰 폭을 잡을 수 있는 범위로 자른 것(손잡이를 범위 끝까지 끌 수 있다).
+ * 25% · 50%는 그 4배 · 2배를 범위로 자르고, 200% · 400%는 100% 폭을 나눈다.
+ * 🔴 한때 200%를 「기본 75초 ÷ 2」로 잡아 범위가 좁으면(카드 창 19초) 200%까지 다 범위 폭으로 잘려 확대가 안 됐고, 그걸 고치려
+ * 100%를 「구간에 맞춤」으로 바꿨더니 이번엔 100%에서 손잡이를 구간의 7.5%밖에 못 끌었다(로컬 리뷰 3라운드). 확대는
+ * 「지금 보이는 100% 폭」을 나눠야 둘 다 된다.
  */
-export function viewWindow(
-  centerSeconds: number,
+export function zoomSpan(
+  range: ClipRange,
   zoom: number,
-  durationSeconds: number,
-  /**
-   * 창이 최소한 이만큼은 보여야 한다 — 선택 구간을 넣어 준다.
-   * 구간보다 좁은 창은 핸들을 창 밖으로 밀어내고, 그러면 그 핸들은
-   * 가장자리에 붙어 엉뚱한 시각을 가리키거나 아예 조작할 수 없게 된다.
-   */
-  minSpanSeconds = 0,
-): TimelineView {
-  const zoomSpan = (BASE_VIEW_SECONDS * 100) / zoom;
-  const span = Math.min(durationSeconds, Math.max(zoomSpan, minSpanSeconds));
-  const half = span / 2;
-  const start = Math.min(Math.max(0, centerSeconds - half), Math.max(0, durationSeconds - span));
-  return { startSeconds: roundMs(start), endSeconds: roundMs(start + span) };
+  minSeconds: number,
+  maxSeconds: number,
+): number {
+  const available = Math.max(0, maxSeconds - minSeconds);
+  const fit = Math.min(
+    available,
+    Math.max(BASE_VIEW_SECONDS, (range.endSeconds - range.startSeconds) * 1.15),
+  );
+  if (zoom >= 100) return (fit * 100) / zoom;
+  return Math.min(available, (fit * 100) / zoom);
+}
+
+/**
+ * 고를 수 있는 가장 낮은 배율. 잡을 수 있는 범위에 막혀 한 단계 줄여도 폭이 그대로면 그 아래는 고를 수 없다:
+ * 표시만 바뀌고 화면은 100%와 같다(PR #341 codex)
+ */
+export function lowestUsefulZoom(range: ClipRange, minSeconds: number, maxSeconds: number): number {
+  let index = ZOOM_LEVELS.indexOf(100);
+  while (
+    index > 0 &&
+    zoomSpan(range, ZOOM_LEVELS[index - 1]!, minSeconds, maxSeconds) >
+      zoomSpan(range, ZOOM_LEVELS[index]!, minSeconds, maxSeconds) + 1e-6
+  )
+    index -= 1;
+  return ZOOM_LEVELS[index]!;
+}
+
+/**
+ * 확대 배율에서 보이는 창(POK-389). 폭은 zoomSpan.
+ *
+ * - 100% 이하: 구간 가운데에 둔다. 구간 손잡이가 늘 보인다.
+ * - 100% 초과: 구간보다 좁아질 수 있어(캡컷처럼 진짜 확대) 재생 위치를 따라간다. 앞 창 안에 재생 위치가 있으면 그대로 두고
+ *   (누를 때마다 출렁이지 않게), 앞으로 벗어나면 그 자리가 창의 10%에, 뒤로 벗어나면 90%에 오게 넘긴다. 앞 창이 없거나
+ *   폭이 바뀌었으면(배율을 바꿨으면) 재생 위치를 가운데에 둔다. 밖으로 나간 손잡이는 화면이 가장자리 표시로 알린다.
+ *
+ * 어느 쪽이든 잡을 수 있는 범위(min~max) 밖으로는 나가지 않고, 범위가 창보다 좁으면 범위 전체를 보여 준다.
+ */
+export function zoomedView({
+  range,
+  playheadSeconds,
+  zoom,
+  minSeconds,
+  maxSeconds,
+  previous,
+}: {
+  range: ClipRange;
+  playheadSeconds: number;
+  zoom: number;
+  minSeconds: number;
+  maxSeconds: number;
+  /** 바로 앞에 그린 창. 처음이면 null */
+  previous: TimelineView | null;
+}): TimelineView {
+  const span = zoomSpan(range, zoom, minSeconds, maxSeconds);
+  const place = (start: number) => {
+    const clamped = Math.min(Math.max(minSeconds, start), maxSeconds - span);
+    return { startSeconds: roundMs(clamped), endSeconds: roundMs(clamped + span) };
+  };
+  if (zoom <= 100) return place((range.startSeconds + range.endSeconds) / 2 - span / 2);
+  // 앞 창은 양 끝을 ms로 반올림해 두어 폭이 최대 1ms 다를 수 있다. 그보다 엄격하면 재생 틱마다 가운데로 다시 맞춘다
+  const sameSpan =
+    previous !== null && Math.abs(previous.endSeconds - previous.startSeconds - span) < 0.002;
+  if (!sameSpan) return place(playheadSeconds - span / 2);
+  if (playheadSeconds > previous.endSeconds) return place(playheadSeconds - span * 0.1);
+  if (playheadSeconds < previous.startSeconds) return place(playheadSeconds - span * 0.9);
+  return place(previous.startSeconds);
 }
 
 /** 줌 한 단계 — 끝에서 더 누르면 그대로 (버튼 비활성 판단도 이 값으로 한다) */
@@ -223,8 +287,18 @@ export function clampTimelineHeight(px: number, ceiling = MAX_TIMELINE_HEIGHT): 
   return Math.round(Math.max(MIN_TIMELINE_HEIGHT, Math.min(top, px)));
 }
 
+/** 눈금 글자. 창이 이보다 좁으면 0.1초까지 적는다(초만 적으면 같은 초가 되풀이된다) */
+const TENTHS_BELOW_SECONDS = 15;
+
+export function rulerLabel(seconds: number, spanSeconds: number): string {
+  // 초 표기도 0.1초 표기도 내림한다: 한쪽만 반올림하면 15초 경계를 넘나들 때 같은 눈금의 초 자리가 바뀌어 튀어 보인다
+  const tenths = Math.floor(seconds * 10 + 1e-6);
+  const whole = formatUptime(Math.floor(tenths / 10));
+  return spanSeconds >= TENTHS_BELOW_SECONDS ? whole : `${whole}.${tenths % 10}`;
+}
+
 /**
- * 눈금자 눈금 위치(초). 창을 균등 분할한다 —
+ * 눈금자 눈금 위치(초). 창을 균등 분할한다:
  * 줌을 바꾸면 눈금도 따라 움직여야 해서 시안 값(1:21:40…1:22:55)을 박아둘 수 없다.
  */
 export function rulerTicks(view: TimelineView, count = 6): number[] {

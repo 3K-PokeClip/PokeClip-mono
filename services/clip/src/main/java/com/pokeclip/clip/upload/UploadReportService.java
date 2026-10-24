@@ -32,6 +32,8 @@ public class UploadReportService {
     /** 유튜브 영상 번호 모양(지금은 11자). 여유를 둔다: 길이가 바뀌어도 성공을 거절하면 안 된다. */
     static final Pattern VIDEO_ID = Pattern.compile("[A-Za-z0-9_-]{6,32}");
     static final Pattern ERROR_CODE = Pattern.compile("[A-Z0-9_]{1,32}");
+    /** 유튜브 채널 번호 모양(지금은 UC + 22자, POK-423). 칸 길이까지 여유를 둔다. */
+    static final Pattern CHANNEL_ID = Pattern.compile("[A-Za-z0-9_-]{1,64}");
     static final int MAX_SESSION_URI = 2048;
     static final int MAX_ERROR_MESSAGE = 512;
     private static final java.util.Set<String> THUMBNAIL_OUTCOMES = java.util.Set.of("SET", "FAILED", "NONE");
@@ -145,6 +147,17 @@ public class UploadReportService {
      */
     public Reply result(long uploadId, String outcome, String videoId, String errorCode, String errorMessage,
                         String thumbnailOutcome, String thumbnailErrorCode, boolean onlyIfNoSession) {
+        return result(uploadId, outcome, videoId, errorCode, errorMessage, thumbnailOutcome, thumbnailErrorCode,
+                onlyIfNoSession, null);
+    }
+
+    /**
+     * {@code channelId}(POK-423): 일꾼이 올린 채널. 올림으로 바뀔 때만 적는다. 🔴 모양이 틀려도 거절하지 않고 버린다(썸네일 칸과 같은
+     * 이유: 거절하면 일꾼이 같은 보고를 되풀이하다 실패 큐로 간다). 채널을 모르는 줄은 auth가 지우라고 할 때 같이 지운다.
+     */
+    public Reply result(long uploadId, String outcome, String videoId, String errorCode, String errorMessage,
+                        String thumbnailOutcome, String thumbnailErrorCode, boolean onlyIfNoSession, String channelId) {
+        String channel = channelId != null && CHANNEL_ID.matcher(channelId).matches() ? channelId : null;
         UploadStatus target = switch (outcome == null ? "" : outcome) {
             case "UPLOADED" -> UploadStatus.UPLOADED;
             case "FAILED" -> UploadStatus.FAILED;
@@ -174,7 +187,7 @@ public class UploadReportService {
                     ? UploadStatus.CHECKING : target;
             if (current == UploadStatus.CHECKING && effective == UploadStatus.UPLOADED) {
                 // 확인 중이던 것에 늦은 올림 보고가 왔다: 채널에 영상이 있다는 확정이다.
-                upload.uploaded(videoId);
+                upload.uploaded(videoId, channel);
                 upload.thumbnailReported(thumbOutcome, thumbCode);
                 log.info("clip.upload.checking_resolved uploadId={}", uploadId);
                 return ok(upload);
@@ -216,7 +229,7 @@ public class UploadReportService {
             }
             switch (effective) {
                 case UPLOADED -> {
-                    upload.uploaded(videoId);
+                    upload.uploaded(videoId, channel);
                     upload.thumbnailReported(thumbOutcome, thumbCode);
                 }
                 case FAILED -> upload.failed(errorCode, message);

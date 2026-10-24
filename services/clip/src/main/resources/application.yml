@@ -248,6 +248,8 @@ pokeclip:
     max-attempts: 3
     # 완성 영상 주소(POK-247)의 수명. 그 사이 영상 재생·내려받기가 된다. 지나면 문을 다시 부른다.
     file-url-ttl: PT60M
+    # 원본 조각 주소(POK-389)의 수명. 편집기가 트랙별로 미리 들으려고 받자마자 내려받는다. 조각엔 방송 소리가 전부 들어 있다.
+    segment-audio-url-ttl: PT5M
     # 주문서 크기 상한(계약1 2절 200KB).
     max-message-bytes: 204800
 
@@ -278,6 +280,12 @@ pokeclip:
     interval: ${THUMBNAIL_INTERVAL:PT1M}
     # 사진 주소의 수명. 화면은 목록을 다시 받을 때 새 주소를 받는다.
     url-ttl: PT60M
+
+  youtube-video:
+    # 올린 영상 번호의 30일 확인(POK-423, 처리방침 13절). 영상 번호를 auth에 넘기고 auth가 그 회원 토큰으로 유튜브에 묻는다.
+    # 켜고 끄는 값이 없다: 끄면 「30일마다 확인」을 안 지킨다. 지우는 기한(해제 7일 · 철회 30일)은 auth가 정한다.
+    check-interval: PT1H
+    check-after: P30D
 
   purge:
     # 탈퇴 정리기(POK-256). auth가 탈퇴를 알리면 명부에 적고 이 주기로 표·창고·녹화 조각을 지운다.

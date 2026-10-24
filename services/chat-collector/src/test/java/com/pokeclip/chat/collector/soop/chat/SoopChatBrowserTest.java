@@ -6,7 +6,9 @@ import com.pokeclip.chat.collector.archive.ArchivableChat;
 import com.pokeclip.chat.collector.archive.ArchiveCounters;
 import com.pokeclip.chat.collector.archive.ChatArchive;
 import com.pokeclip.chat.collector.persist.ChatBuffer;
+import com.pokeclip.chat.collector.persist.DonationBuffer;
 import com.pokeclip.chat.collector.persist.PersistableChat;
+import com.pokeclip.chat.collector.persist.PersistableDonation;
 import com.pokeclip.chat.collector.relay.RelayPayload;
 import com.pokeclip.chat.collector.relay.RelaySink;
 import com.pokeclip.chat.collector.soop.chat.FakeSoopSdkServer.Step;
@@ -42,6 +44,7 @@ class SoopChatBrowserTest {
 
     private FakeSoopSdkServer sdk;
     private ChatBuffer buffer;
+    private final DonationBuffer donations = new DonationBuffer();
     private final List<ArchivableChat> archived = new CopyOnWriteArrayList<>();
     private final List<String> relayed = new CopyOnWriteArrayList<>();
     private final List<RelayPayload> relayPayloads = new CopyOnWriteArrayList<>();
@@ -103,12 +106,12 @@ class SoopChatBrowserTest {
                 return ArchiveCounters.NONE;
             }
         };
-        sessions = new SoopChatSessions(properties, buffer, archive, relay, System::currentTimeMillis);
+        sessions = new SoopChatSessions(properties, buffer, donations, archive, relay, System::currentTimeMillis);
         browser = new SoopChatBrowser(properties, sessions);
         sessions.attach(new SoopChatSessions.Tabs() {
             @Override
-            public void open(String streamId, String token) {
-                browser.open(streamId, token);
+            public void open(String streamId, String token, long generation) {
+                browser.open(streamId, token, generation);
             }
 
             @Override
@@ -153,6 +156,54 @@ class SoopChatBrowserTest {
         sleep(300);
         assertThat(buffer.drain(100)).isEmpty();
         assertThat(archived).hasSize(2);
+    }
+
+    /**
+     * 후원 여섯은 표 바구니와 중계로 가고, 원본 아카이브 · 채팅 바구니에는 안 간다(POK-431). 다시보기 · 방송국 · 중계방 후원과 받지 않는
+     * 종류(구독 · 정산 · 퀵뷰 · OGQ 선물)는 어디에도 안 간다. 개수가 숫자가 아니면 null로 남는다. 페이지 거름망 · 칸 순서까지 진짜 탭에서 잰다
+     */
+    @Test
+    void 후원_여섯만_표와_중계로_가고_원본에는_안_간다() {
+        List<String> kept = SoopChatPage.DONATIONS;
+        List<Step> steps = new ArrayList<>();
+        for (int i = 0; i < kept.size(); i++) {
+            steps.add(Step.donation(kept.get(i), "fan-" + i, "팬" + i, String.valueOf(i + 1), false, false, false));
+        }
+        steps.add(Step.donation("BALLOON_GIFTED", "vod", "n", "5", true, false, false));
+        steps.add(Step.donation("BALLOON_GIFTED", "station", "n", "5", false, true, false));
+        steps.add(Step.donation("BALLOON_GIFTED", "relay", "n", "5", false, false, true));
+        for (String skipped : List.of("SUBSCRIBED", "BATTLE_MISSION_SETTLED", "QUICKVIEW_GIFTED", "OGQ_EMOTICON_GIFTED")) {
+            steps.add(Step.donation(skipped, "skip", "n", "5", false, false, false));
+        }
+        steps.add(Step.donation("STICKER_GIFTED", "nan", "n", "\"many\"", false, false, false));
+        steps.add(Step.message("MESSAGE", "v", "n", "끝"));
+        sdk.script(steps.toArray(Step[]::new));
+        start(10);
+
+        sessions.ensure("s-1", "bj-1", TOKEN);
+        List<PersistableChat> chats = new ArrayList<>();
+        await(() -> {
+            chats.addAll(buffer.drain(100));
+            return !chats.isEmpty();
+        });
+
+        List<PersistableDonation> got = donations.drain(100);
+        assertThat(got).extracting(PersistableDonation::donatorChannelId)
+                .containsExactly("fan-0", "fan-1", "fan-2", "fan-3", "fan-4", "fan-5", "nan");
+        assertThat(got).extracting(PersistableDonation::donationType)
+                .containsExactlyElementsOf(java.util.stream.Stream.concat(kept.stream(), java.util.stream.Stream.of("STICKER_GIFTED")).toList());
+        assertThat(got).extracting(PersistableDonation::payAmount).containsExactly(1L, 2L, 3L, 4L, 5L, 6L, null);
+        assertThat(got).extracting(PersistableDonation::donatorNickname).startsWith("팬0", "팬1");
+        assertThat(got).allSatisfy(d -> {
+            assertThat(d.platform()).isEqualTo(Platform.SOOP);
+            assertThat(d.channelId()).isEqualTo("bj-1");
+            assertThat(d.donationText()).isEmpty();
+        });
+        assertThat(chats).extracting(PersistableChat::content).containsExactly("끝");
+        await(() -> !archived.isEmpty());
+        assertThat(archived).as("후원은 원본에 안 넣는다(검산 등식)").singleElement()
+                .satisfies(a -> assertThat(a.raw()).contains("끝"));
+        assertThat(relayPayloads).filteredOn(p -> p instanceof RelayPayload.Donation).hasSize(7);
     }
 
     /** 펌프는 한 탭에서만 기다리지만 다른 탭의 채팅도 온다(탭 셋, 방송마다 제 번호로) */
@@ -209,6 +260,10 @@ class SoopChatBrowserTest {
     @DisabledIfEnvironmentVariable(named = "GITHUB_ACTIONS", matches = "true",
             disabledReason = "CI 러너(Ubuntu 26)에서 렌더러 충돌 사건이 안 온다. 운영과 같은 noble+deps 컨테이너에서 통과")
     void 페이지가_깨지면_그_탭만_다시_붙고_채팅을_받는다() {
+        // 앞 두 연결 몫의 빈 대본을 먼저 쌓는다. 안 쌓으면 둘째 연결이 붙은 뒤(connects 셈) 대본을 받으러 가기 전에 아래 「다시」가 쌓여
+        // s-2가 그것을 가져가 흘린다(대본은 연결 순서대로 나간다, 감사 1회차 경미 4)
+        sdk.script();
+        sdk.script();
         start(10);
         sessions.ensure("s-1", "bj-1", TOKEN);
         await(() -> sdk.connects.size() >= 1);
@@ -230,6 +285,9 @@ class SoopChatBrowserTest {
     /** 방송 중에 다른 SOOP 계정으로 다시 연동하면 탭을 갈아 새 채널로 저장한다(토큰만 바꾸면 옛 채널로 저장된다) */
     @Test
     void 채널이_바뀌면_새로_붙어_새_채널로_저장한다() {
+        // 첫 연결 몫의 빈 대본을 먼저 쌓는다. 안 쌓으면 첫 연결이 대본을 받으러 가기 전에 「새 계정」이 쌓여 옛 탭이 그것을 흘리고, 세대 번호가
+        // 그 줄을 버려 둘째 연결은 빈 대본을 받는다(30초 시한, 클래스 10회 중 1회 실측). 옛 코드는 그 줄을 새 채널로 저장해 통과했다
+        sdk.script();
         start(10);
         sessions.ensure("s-1", "bj-old", TOKEN);
         await(() -> sdk.connects.size() >= 1);
@@ -245,6 +303,38 @@ class SoopChatBrowserTest {
         assertThat(chats).extracting(PersistableChat::channelId).containsExactly("bj-new");
         assertThat(sdk.connects).extracting(FakeSoopSdkServer.Connect::token).containsExactly(TOKEN, "token-new");
         assertThat(sessions.size()).isEqualTo(1);
+    }
+
+    /**
+     * 🔴 채널이 바뀐 직후, 브라우저가 옛 탭을 닫기 전(펌프 한 번, 최대 0.1초)에 옛 탭이 보낸 채팅이 새 채널 아이디로 저장되면 안 된다
+     * (PR4 봇 codex P2). 연결마다 20ms 간격으로 「연결 번호-순번」을 흘리고 채널을 다섯 번 바꿔, 줄마다 그 연결의 채널로만 저장됐는지 본다.
+     * 틈에 걸려 버려진 줄이 실제로 있었는지도 본다(없으면 이 시험은 아무것도 안 잰 것이다. 한 번 바꿀 때 걸리는 줄 수는 펌프 시점에
+     * 따라 0~5줄이라 다섯 번 바꾼다).
+     */
+    @Test
+    void 채널이_바뀌는_틈에_온_옛_탭_채팅은_새_채널로_저장되지_않는다() {
+        int switches = 5;
+        for (int k = 0; k <= switches; k++) {
+            Step[] steps = new Step[200];
+            for (int i = 0; i < steps.length; i++) {
+                steps[i] = Step.message("MESSAGE", "v", "n", k + "-" + i);
+            }
+            sdk.script(steps);
+        }
+        start(10);
+        List<PersistableChat> chats = new ArrayList<>();
+        for (int k = 0; k <= switches; k++) {
+            String prefix = k + "-";
+            sessions.ensure("s-1", "bj-" + k, "token-" + k);
+            await(() -> {
+                chats.addAll(buffer.drain(100));
+                return chats.stream().filter(c -> c.content().startsWith(prefix)).count() >= 3;
+            });
+        }
+
+        assertThat(chats).allSatisfy(c -> assertThat(c.channelId())
+                .as("연결 %s의 채팅", c.content()).isEqualTo("bj-" + c.content().substring(0, c.content().indexOf('-'))));
+        assertThat(sessions.staleEvents()).as("틈에 걸린 옛 탭 채팅이 있었고 버려졌다").isPositive();
     }
 
     @Test

@@ -915,7 +915,7 @@ chat-detector의 `V401`(`chat_metrics`, POK-120)이다.
 **chat-collector 대역 열:** `V301`(`chat_messages`) · `V302`(`stream_id` 칸) ·
 `V303`(`chat_ended_streams`) · `V304`(`stop_reason` 칸) · `V305`(`received_at` 색인 — 아래) ·
 **`V306`**(`nickname`·`user_role` 칸 + `(stream_id, message_time)` 부분 색인, POK-234) ·
-**`V307`**(`chat_donations` — 후원, POK-234) · **`V308`**(`broadcast_info` — 방송 정보 관측 이력, POK-234) ·
+**`V307`**(`chat_donations` — 후원, POK-234. `pay_amount`는 치지직 = 원, SOOP = 개수, POK-431) · **`V308`**(`broadcast_info` — 방송 정보 관측 이력, POK-234) ·
 `V309`(`(stream_id, message_time)` 색인을 `CONCURRENTLY`로, POK-234) · **`V310`**(`chat_ingest_keys` — 방송 번호 → 물리 키, POK-233) ·
 `V311`(`purged_channels`, POK-256) · `V312`(정리 색인 셋, `CONCURRENTLY`) ·
 **`V313`**(표 넷에 `platform` 칸 + CHECK `NOT VALID` + 명부 PK `(platform, channel_id)`, POK-397) ·
@@ -1640,6 +1640,7 @@ JSON 트리를 맞대어 지킨다). 화면이 같은 것을 두 벌로 처리�
 | `POST …/{streamId}/recipes/{id}/renders` (POK-125) | 같음 → 편집본이 그 방송 것인가 | 같음 · **404** `recipe_not_found` |
 | `GET …/{streamId}/clips/{clipId}` (POK-125) | 같음 → 영상이 그 방송 것인가 | 같음 · **404** `clip_not_found` |
 | `POST …/{streamId}/clips/{clipId}/file-access` (POK-247) | 같음 | 같음 |
+| `POST …/{streamId}/segments/audio-access` (POK-389) | 같음 → 보관 기한(자격 확인 뒤) | 같음 · 기한이 지났으면 **410** `vod_expired` |
 | `POST …/{streamId}/clips/{clipId}/uploads` (POK-220) | 같음 | 같음 |
 | `POST …/{streamId}/marks` (POK-392, 웹 수동 마킹) | `BroadcastAccessGuard`: **본문 형식 검사 뒤, 방송 읽기·저장 앞** | **404** `broadcast_not_found` |
 | `GET /api/clip/library` (POK-243) | auth `accessible`: **방송 목록과 같은 판정**(볼 수 있는 스트리머 번호로만 조회) | 그 줄이 목록에 **안 나온다**(200). `streamerId`로 고른 채널이 그 번호들에 없으면 **404** `broadcast_not_found`(POK-390, 방송 목록과 같은 이름) |
@@ -2536,6 +2537,26 @@ UploadInfo = {"title":"필수","description":null,"tags":["…"],"categoryId":"2
 - 수명은 `pokeclip.render.file-url-ttl`(기본 `PT60M`, 0초 초과 7일 이하. 밖이면 부팅을 거부한다: S3 미리서명 한도). 지나면 문을 다시 부른다. **한계**: EC2 역할의 임시 자격증명으로 서명하므로
   그 자격증명이 먼저 끝나면 주소도 60분 전에 끊긴다(S3 규칙). 화면은 403을 받으면 문을 다시 부르면 된다.
 
+### clip: 원본 조각 주소 (POK-389)
+
+**편집기가 트랙별로 미리 들으려고 구간의 원본 조각을 받는 5분짜리 S3 미리서명 주소를 준다.** 재생 서버는 영상 하나·소리 하나만
+남겨(ADR-057) 방송 소리 트랙이 전부 든 것은 조각 파일뿐이다. 렌더 일꾼이 읽는 그 파일이고 트랙 번호도 같다(`[0:a:trackId]`).
+
+| 문 | 인증 | 응답 |
+|---|---|---|
+| `POST /api/clip/broadcasts/{streamId}/segments/audio-access?fromMs=&toMs=` | Bearer JWT | **200** `{"expiresAt","segments":[{"seq","startAtMs","durationMs","url"}]}` · **400** `{"field":"fromMs"\|"toMs"}` · 404 `broadcast_not_found` · **410** `vod_expired` · 401 · 503 `authorization_unavailable`/`render_unavailable` |
+
+- **`fromMs`·`toMs`는 재생 축 UTC epoch ms**(편집본 `cut`과 같은 축)이고 반개 구간이다. `toMs`가 `fromMs` 이하이거나 6분을 넘으면 400이다.
+- **순서: 구간 → 자격 → 만료 → 켜짐 → 조회.** 조각 조회 문과 같다: 410이 자격 앞이면 남남에게 「있었던 방송」이 샌다.
+- **올라간(`uploaded`) 조각만 싣는다.** 덜 올라온 조각은 주소를 줘도 창고에 없다. 빠진 자리는 화면이 소리 없이 둔다.
+- **`startAtMs`는 재생 축**(`playback_pdt`, 없으면 `start_wall_utc`). 조각 장부는 물리 키로 찾는다(POK-233).
+- **POST이고 주소는 로그에 안 찍는다**(완성 영상 주소와 같다). 로그는 `clip.segment_audio_access.issued streamId userId segments expiresAt`.
+- 수명은 `pokeclip.render.segment-audio-url-ttl`(기본 `PT5M`, 0초 초과 7일 이하). 화면은 받자마자 내려받는다.
+  조각 창고는 `SEGMENT_BUCKET`이고 주문줄(`RENDER_ENABLED`)과 같이 켜진다: 운영 역할에 조각 창고 `s3:GetObject`가 있어야 주소가 통한다.
+- 🔴 **배포 조건: 조각 창고에 웹 주소를 허락하는 CORS 규칙(GET·HEAD)이 있어야 한다.** 화면이 이 주소를 `fetch`로 받아 푼다.
+  썸네일·완성 영상은 `<img>`·`<video>`로 열어 CORS가 필요 없었지만 이 기능은 처음으로 창고 파일을 코드로 읽는다. 규칙이 없으면
+  브라우저가 응답을 막고(로컬 실측: `net::ERR_FAILED`, 창고에 CORS 설정 없음) 화면은 영상 소리로 물러난다. 로컬 LocalStack 창고에도 같은 규칙이 필요하다.
+
 ### clip: 유튜브 업로드 주문 (POK-220)
 
 **완성 영상을 스트리머 채널에 올리는 주문을 받아 줄(SQS `jobs-upload`)에 넣고, 업로드 일꾼의 보고로 상태를 바꾼다.**
@@ -2643,8 +2664,18 @@ UploadInfo = {"title":"필수","description":null,"tags":["…"],"categoryId":"2
   영상을 찾아 지운다. 30분 기다림이 이 길을 좁히지만 닫지는 못한다(일꾼이 30분 넘게 멈췄다 깨어나는 경우).
 - **사람이 적은 영상 번호를 유튜브에 묻지 않는다**: 모양만 본다. 틀린 번호를 적으면 보관함이 없는 영상을 「발행됨」으로 가리킨다.
 - **「업로드됨」은 유튜브가 바이트를 받았다는 뜻이다.** 처리(인코딩)가 끝났는지 모르고, 공개 범위도 우리가 실어 보낸 값이다: 유튜브(잠금)나
-  스트리머(스튜디오)가 바꾸면 모르고 보관함은 올릴 때의 범위를 말한다(일꾼은 완료 응답에서 `id`만 읽고, `videos.list`를 읽는 곳이 없다).
+  스트리머(스튜디오)가 바꾸면 모르고 보관함은 올릴 때의 범위를 말한다(일꾼은 완료 응답에서 `id`만 읽는다. 30일 확인의 `videos.list`도 있는지만 본다).
 - 하루 올리기 한도(Video Uploads 몫, 프로젝트 하루 100회. `workers/upload` README 쿼터 절)에 걸리면 일꾼이 `failed` + `QUOTA_EXCEEDED`로 보고한다(PR-B).
+
+**영상 번호 보관 (POK-423)**: 일꾼이 올림 보고에 resolve가 준 채널(`channelId`)을 싣고 clip이 `youtube_channel_id`(`V222`)에 적는다(모양이 틀리면
+버리고 올림은 받는다. 사람이 푼 줄은 채널 없음). 영상 번호는 두 길로 지운다. ① auth가 해제 7일 · 끊김 30일 뒤
+`POST /internal/youtube-videos/forget {owner, channelId, before}`를 보내면 그 채널 줄과 채널 모르는 줄 중 `before` 전에 주문한 것의 번호 ·
+채널을 비운다(200 `{forgotten}` · 400 · 401, 몇 번 불러도 같다). ② 1시간마다 30일 지난 영상 번호를 50개씩 auth `POST /internal/youtube-videos/check`에
+넘겨 유튜브에 아직 있는지 묻고(토큰은 auth 밖으로 안 나간다), 없으면 지운다. 🔴 지금 연동 채널이 아닌 줄은 「안 보임」이어도 안 지운다(비공개
+영상은 그 채널 토큰으로만 보인다. ①이 지운다). 보이면 채널 모르는 줄에 유튜브가 알려 준 **그 영상의 주인 채널**을 채운다(공개 영상은 다른 채널 토큰으로도 보여 지금 채널로 채우면 옛 채널 지우기에서 빠진다). 이 확인은 **자기 스레드**(`youtube-video-check`)에서 돈다(공용 스케줄러 스레드를 썸네일 · 재발행이 쓴다). 연동이 없으면 확인 시각만 미루고, 못 물었으면
+아무것도 안 바꾼다. 🔴 번호를 지운 줄은 **올림 그대로**다(`video_forgotten_at`): 상태를 바꾸면 같은 영상을 다시 올릴 자리가 열린다. 화면은 번호
+없는 올림을 링크 없이 보인다. 로그 `clip.youtube_video.<event>`: `forgotten owner= count=` · `checked owner= linked= checked= forgotten=` ·
+`check_skipped`(WARN) · `check_failed` · `sweep_failed`.
 
 ### clip: 썸네일 (POK-277)
 
@@ -3009,7 +3040,7 @@ scope는 둘 — 업로드(`youtube.upload`)와 채널 조회(`youtube.readonly`
 | `POST /api/youtube-link/start` | 200 `{authorizeUrl}` — `state`는 URL 안에 있다(표 없이 서명, 10분) |
 | `POST /api/youtube-link` `{code, state}` | 201 `{channelId, channelName, linkedAt}` · 400 `INVALID_STATE` · 400 `INVALID_CODE`(구글이 교환·채널 조회를 4xx로 거부 — code 소모·만료·권한 부족, **동의부터 다시**) · 400 `SCOPE_MISSING`(업로드 권한 미동의) · 400 `NO_CHANNEL`(구글 계정에 유튜브 채널이 없다 — 먼저 만들어야 한다) · 409 `CHANNEL_ALREADY_LINKED` · 502 `YOUTUBE_UNAVAILABLE`(5xx·타임아웃·429·408·`invalid_client`·**403 할당량**) |
 | `GET /api/youtube-link` | 200 `{linked:false}` 또는 `{linked, channelId, channelName, status, linkedAt, lastRefreshedAt, accessExpiresAt}`. `status` ∈ `ACTIVE`·`BROKEN`·`UNLINKED`(파생). **치지직과 달리 `EXPIRED`가 없다** — 구글 access는 1시간짜리라 늘 만료돼 있고 갱신으로 항상 해소되므로 상태가 아니다. `linked`는 `ACTIVE`일 때만 true |
-| `DELETE /api/youtube-link` | 204 (없어도 204). 행은 남고(`revoked_at`+`USER_UNLINKED`) 커밋 뒤에 secrets 삭제. 🔴 **구글에는 revoke를 보내지 않는다** — 아래 |
+| `DELETE /api/youtube-link` | 204 (없어도 204). 행은 남고(`revoked_at`+`USER_UNLINKED`) 커밋 뒤에 **구글 revoke** → secrets 삭제(POK-423). 그 사이 다시 연동했으면 revoke는 건너뛴다 — 아래 |
 | `POST /internal/youtube-link/resolve` `{userId, rejectedTokenSha256?}` | **항상 200** — 아래(지문 모양이 틀리면 400) |
 | `POST /internal/youtube-link/status` `{userId}` | **항상 200** `{"linked":true,"reason":null}` 또는 `{"linked":false,"reason":"NOT_LINKED"\|"UNLINKED"\|"BROKEN"}`. 회원 번호가 없으면 400. 아래 「`status`(clip용)」 |
 
@@ -3020,15 +3051,21 @@ scope는 둘 — 업로드(`youtube.upload`)와 채널 조회(`youtube.readonly`
 공식 문서대로이고 실측으로도 확인했다(1차 refresh만 revoke했더니 직전까지 갱신되던 2차 refresh가
 `400 invalid_grant`로 죽었다). **치지직의 「쌍 무효화」와 근본이 다르다.**
 
-🔴 **그래서 revoke를 부르는 자리가 하나뿐이다.** 처음엔 갈래를 넷으로 갈라 조건을 붙였는데,
+🔴 **2026-10-24부터 해제 · 탈퇴도 부른다**(POK-423, ADR-116, 유튜브 정책 III.D.2.c, 사용자 재결정). 아래 이유는 여전히
+참이고 대가로 받아들였다: 해제한 회원은 다음 로그인 · 재연동 때 구글 동의 화면을 다시 보고, **같은 구글 계정으로 다른 채널을
+연동한 다른 회원**의 연동도 끊긴다(다음 갱신에서 `BROKEN`). 해제 직후 같은 회원이 다시 연동했으면 정리 잡이 revoke를 건너뛴다
+(확인과 발사 사이의 좁은 창은 남는다). revoke 실패는 갱신 거부와 같이 best-effort(WARN `orphan_token`, 다시 안 보낸다: 토큰
+원문을 남기지 않는다).
+
+그 전(2026-08-24 ~ 10-24)에는 **revoke를 부르는 자리가 하나뿐이었다.** 처음엔 갈래를 넷으로 갈라 조건을 붙였는데,
 봇 리뷰 세 판에 걸쳐 **조건으로는 못 막는다**는 것이 재현으로 드러나 결국 뺐다(2026-08-24).
 근본 원인은 하나다 — **revoke의 영향 범위는 「그 구글 계정」인데 우리가 가진 판별자는 「회원·채널」뿐**이고,
 그것조차 없는 경로(scope 미달)와 표에 아직 없는 순간(교환 직후·저장 전)이 있다.
 
 | 경로 | revoke | 왜 |
 |---|---|---|
-| **갱신 거부 → `BROKEN`** | **부른다**(1회) | 그 토큰은 이미 `invalid_grant`로 죽어 있다 — 살아있는 grant에 닿지 않으므로 남을 해칠 수 없다. **유일하게 남은 자리다** |
-| **사용자 해제 `DELETE`** | **안 부른다** | 계정 단위라 같은 채널을 방금 연동한 **다른 회원**의 연동까지 끊는다. 대신 secrets를 지워 **우리가 못 쓰게** 하고, 사용자는 구글 계정 화면에서 직접 지운다(아래 「웹에 필요한 것」) |
+| **갱신 거부 → `BROKEN`** | **부른다**(1회) | 그 토큰은 이미 `invalid_grant`로 죽어 있다 — 살아있는 grant에 닿지 않으므로 남을 해칠 수 없다 |
+| **사용자 해제 `DELETE` · 탈퇴** | **부른다**(1회, 커밋 뒤 정리 잡) | 유튜브 정책 III.D.2.c(POK-423). 계정 단위라 같은 구글 계정의 다른 grant도 끊긴다(대가로 받아들임). 그 사이 같은 회원이 다시 연동했으면 건너뛴다 |
 | **재연동** | **안 부른다** | 새 동의가 옛 grant를 대체한다. 부르면 방금 저장한 새 토큰이 죽는다 |
 | **연동 실패 정리**(scope 없음·채널 0개·409·5xx) | **안 부른다** | scope 미달은 **채널을 읽기도 전에** 갈려 판별자가 아예 없다. 버려진 access는 1시간이면 스스로 죽는다 |
 
@@ -3060,14 +3097,8 @@ scope는 둘 — 업로드(`youtube.upload`)와 채널 조회(`youtube.readonly`
 - **회원별 최신 연동 행 하나만 읽어 가른다.** 「살아 있는 행이 있으면 그것이 최신 행」이라는 저장 쪽 약속
   (`YoutubeLinkWriter.create`가 회원 행 락 뒤에 옛 행을 닫고 새 행을 넣는다)에 기댄다. GET 상태와 같은 근거다.
 
-🔴 **해제해도 구글 쪽 허락은 남는다 — 웹이 안내해야 한다(2번 몫).** `DELETE`는 우리 표의 행을 닫고
-**secrets의 토큰 원문을 지운다**(우리는 다시 못 쓴다). 그러나 구글에 `revoke`는 보내지 않는다 —
-구글 revoke는 **그 구글 계정이 우리 앱에 준 동의 전부**를 죽이므로, 같은 채널을 방금 연동한 **다른 회원**의
-연동까지 끊는다. 조건으로 막으려 세 판을 썼지만 「확인과 발사 사이」 창이 남았고, 그것을 닫으려면
-revoke를 DB 락 안에 넣어야 해서(=트랜잭션 안 외부 호출) 포기했다. 근거는 `services/auth/CLAUDE.md` 「알려진 구멍」 20번.
-
-> **웹에 필요한 것**: 해제 완료 화면에 「구글 계정에서도 권한을 지우려면」 안내와
-> <https://myaccount.google.com/permissions> 링크. 이것이 사용자가 구글 쪽 허락을 지우는 유일한 수단이다.
+**해제하면 구글 쪽 허락도 거둔다**(POK-423): `DELETE`는 행을 닫고 커밋 뒤 정리 잡이 구글 revoke를 보낸 다음 secrets를 지운다.
+revoke가 실패하면(5xx · 시간 초과) 허락이 남을 수 있다. 사용자는 <https://myaccount.google.com/permissions>에서 직접 철회할 수 있다.
 
 **refresh는 재사용형이다.** 갱신 응답에 `refresh_token`이 **없는 것이 정상**이고 그때는 기존 것을
 계속 쓴다(있으면 교체). 치지직 코드를 그대로 베껴 무조건 덮어쓰면 `null`을 써 넣어 연동이 통째로 죽는다.
@@ -3084,7 +3115,8 @@ revoke를 DB 락 안에 넣어야 해서(=트랜잭션 안 외부 호출) 포기
 정리 풀이 **넷**이고 각자 스레드 2개를 쓰며, **치지직 10초 + 유튜브 4초 + 탈퇴 6초 + SOOP 4초 = 24초**가 위 24초의
 근거다: 스프링이 `@PreDestroy`를 순차로 부르므로 **합이 곧 예산**이다. SOOP(`SoopCleanupExecutor`)은 유튜브 복제라
 3초 + 강제 1초이고 정리 잡에 외부 HTTP가 아예 없다(폐기 API 없음).
-유튜브가 짧은 이유는 정리 잡에 외부 HTTP가 거의 없기 때문이고(구글 revoke를 걷어냈다),
+유튜브가 짧은 이유는 해제 정리 잡이 **secrets를 먼저 지우고** revoke(외부 HTTP)를 그 뒤에 보내서다: 종료에 잘려도 남는 것은
+보내지 못한 revoke뿐이다(POK-423),
 탈퇴(`WithdrawalCleanupExecutor`, 5초 + 강제 1초)가 가장 긴 이유는 사진 창고 호출(최대 8초)을 기다리기
 때문이다. `YoutubeShutdownBudgetTest`가 넷과 이 문장을 대조한다.
 
@@ -3099,6 +3131,44 @@ revoke를 DB 락 안에 넣어야 해서(=트랜잭션 안 외부 호출) 포기
 
 **마이그레이션은 `V109__create_youtube_channel_links.sql`이다.** 살아있는 행에만 걸리는 부분 유니크
 둘(`channel_id`·`user_id`)이 최종 방어선이고, 점검 후보용 인덱스는 `last_refreshed_at` 축이다.
+
+#### 유튜브 데이터 보관 (POK-423)
+
+**처리방침 13절 표대로 지우고 갱신한다**(유튜브 API 정책 III.D.2 · III.E.4). 기한 셋은 처리방침 문장 그대로라 바꾸면
+처리방침도 바꾼다(`pokeclip.youtube.retention.*`).
+
+| 무엇 | 연동 중 | 서비스에서 해제 | 구글 쪽 철회 · 갱신 불가(`BROKEN`) |
+|---|---|---|---|
+| 토큰 | 쓴다 | 바로 지운다(secrets, 전부터) | 바로 지운다(전부터) |
+| 채널 번호 · 이름(auth) | 30일마다 channels.list로 이름을 다시 받는다 | **7일 뒤** 닫힌 줄에서 지운다 | **30일 뒤** 지운다 |
+| 올린 영상 번호(clip) | 30일마다 videos.list로 아직 있는지 보고 없으면 지운다 | 7일 뒤 지운다 | 30일 뒤 지운다 |
+
+- **한 바퀴(`YoutubeRetentionJob`, 1시간, 자기 스레드)**: ① 기한 지난 닫힌 줄의 채널 번호 · 이름을 비운다. 그때 그 회원의
+  **살아 있는 연동이 같은 채널이 아니면** 장부(`youtube_video_forget_jobs`, `V119`)에 「이 채널 영상 번호를 지워라」를 적는다
+  (같은 트랜잭션). ② 장부를 clip `POST /internal/youtube-videos/forget`에 받을 때까지 보낸다(15초부터 두 배, 상한 1시간).
+  받으면 **줄째 지운다**(탈퇴 장부와 달리 남기지 않는다: 채널 번호가 개인정보다). ③ 30일 지난 살아 있는 연동의 채널 이름을
+  다시 받는다(resolve로 토큰 + channels.list). 목록에 그 채널이 없으면 이름은 그대로 두고 받은 시각만 적는다
+- **기한 안에 같은 채널로 다시 연동하면 영상 번호는 남는다**(살아 있는 연동이 그 채널이라 장부를 안 적는다. 닫힌 옛 줄의 채널
+  번호만 지운다). 같은 채널의 **더 늦게 닫힌 줄**이 있어도 장부를 안 적는다: 그 줄의 기한이 남았을 수 있고 그 줄이 기한에 적는다
+  (0일 해제 → 1일 재연동 → 6일 해제면 7일째가 아니라 13일째에 지운다, PR #375 codex). 기한 뒤 같은 채널로 다시 연동했으면 그 전 영상 번호는 지운다: clip은 장부를 적은 시각(`before`) **전에 주문한**
+  업로드만 지운다
+- **다른 채널로 바꾼 회원**: 옛 채널 줄이 7일 뒤 장부를 적고, clip은 그 채널 줄과 **채널을 모르는 줄**(사람이 「올라갔다」로 푼 줄 ·
+  `V222` 전 줄)을 같이 지운다. 🔴 대가: 채널을 바꾼 회원은 옛 업로드의 유튜브 링크가 7일 뒤 사라진다(처리방침을 지키는 쪽으로
+  정했다. 2026-10-24 관리 세션 추천안)
+- **해제 · 탈퇴하면 구글에 권한 취소(revoke)를 보낸다**(2026-10-24 사용자 재결정, ADR-052 대체, 유튜브 정책 III.D.2.c). 위 「유튜브 채널
+  연동」의 revoke 표. 처리방침 13절 「Google에도 권한 취소를 요청」과 같은 말이다
+- **영상 확인 문(`POST /internal/youtube-videos/check`, clip이 부른다)**: `{userId, videoIds(1~50)}` → 200 `{linked:true, channelId, videos:[{id, channelId}]}`(있는 것과 각 영상의 주인 채널, `videos.list part=snippet`) ·
+  200 `{linked:false}` · 503(갱신 일시 실패 · 구글 장애 · 할당량: 「없음」으로 답하면 clip이 멀쩡한 번호를 지운다) · 400. 토큰은
+  auth 밖으로 안 나간다
+- **쿼터**(유튜브 Data API 하루 10,000유닛): channels.list 1유닛 × (살아 있는 연동 수 / 30) + videos.list 1유닛 × (올린 영상 수 / 50 / 30)
+  하루 남짓이다. 연동 100명 · 영상 1만 개면 하루 약 4 + 7 = 11유닛(토큰 갱신은 OAuth 엔드포인트라 유닛이 아니다). 업로드 한 번
+  (videos.insert 100유닛)보다 작다
+- **남은 한계**: 지우기 장부를 보낸 **뒤에** 사람이 「올라갔다」로 푼 옛 업로드(채널 모름, 주문 시각은 기준 시각 전)는 그 회원이 다시 연동해
+  30일 확인이 돌거나 다음 해제 기한이 올 때까지 번호가 남는다(연동이 없으면 clip은 유튜브에 못 묻는다). 영상 확인 문의 시한은 전역
+  기본(읽기 5초)이라 구글이 느린 날은 clip이 끊고 다음 바퀴에 다시 묻는다
+- 로그: `auth.youtube.retention.<event>`: `closed_out links= forgetJobs=` · `forget_sent` · `forget_retry`(WARN) · `close_out_failed` ·
+  `channel_refresh_skipped reason=` · `channel_missing`(WARN) · `channel_refresh_failed` · `run_failed`, 영상 확인은
+  `auth.youtube.video_check asked= existing=`(있는 수) · `video_check_unavailable`(WARN). 채널 번호는 안 찍는다
 
 ### SOOP 채널 연동 (POK-396)
 
@@ -3675,10 +3745,10 @@ clip이 방송 목록 한 장을 만들 때 그 장에 나온 스트리머들의
   🔴 **V114(2026-10-08) 전 탈퇴자는 정리 장부가 없어 채널 번호를 남긴다**(PR #249 codex P1 둘째). 그 번호가 수집기 정리의 마지막 단서라서다. 운영 DB가 생기기 전이라 해당자는 시험 계정뿐이다
   🔴 **살아 있는 행이 남은 탈퇴자는 비우지 않는다**(있으면 안 되는 상태다). 건드리면 같은 `V115`의 CHECK에 걸려 마이그레이션이 실패하고 auth 부팅이 멈춘다
 - **탈퇴한 채널로 다른 계정이 다시 연동할 수 있다**: 유일 제약은 살아 있는 행에만 걸려 비운 행과 무관하다(시험)
-- **연동 해제(탈퇴 아님)는 안 비운다.** 유튜브 정책상 동의 철회 뒤 7일 삭제 문제는 POK-336에서 함께 정한다
+- **연동 해제(탈퇴 아님)는 바로 비우지 않는다**: 유튜브는 해제 7일 · 끊김 30일 뒤 비운다(POK-423, 위 「유튜브 데이터 보관」). 치지직은 그대로 남는다
 
-**③ 구글·치지직 계정 쪽에 남는 허락은 우리가 못 지운다.** 유튜브는 구조상 revoke를 안 보내고
-(그 이유는 위 유튜브 절), 로그인용 구글 동의도 우리가 지울 수단이 없다.
+**③ 구글·치지직 계정 쪽에 남는 허락.** 유튜브는 탈퇴 정리 잡이 revoke를 보낸다(POK-423, 실패하면 남는다. 위 유튜브 절).
+로그인용 구글 동의는 우리가 지울 수단이 없다.
 사용자에게는 웹이 구글 권한 페이지를 안내한다.
 
 **④ 확인과 쓰기 사이의 창 셋이 열린 채 남는다.** 위 「쓰기 직전에 한 번 더 본다」의 확인은
@@ -3964,12 +4034,30 @@ SOOP 수신은 다음 PR이고, 지금 세션을 여는 곳(연동 시작)은 �
 - **탭 하나 = 방송 하나**: 브라우저(Chromium 하나)는 전용 스레드 `soop-chat-browser`가 쥔다(Playwright 객체는 스레드를 못 나눠 쓰고 페이지 콜백도 그
   스레드가 펌프해야 온다). 탭은 빈 페이지(`http://localhost/soop-chat`, 출처를 보는지 문서에 없어 흔한 개발 출처)에 SDK를 싣고 문서 순서대로
   `new SOOP.ChatSDK(앱 키, 비밀값)` → `init()` → `setAuth(토큰)` → `connect()`. 앱 값 · 토큰은 HTML 글자가 아니라 인자로 넘긴다. Chromium은 첫 탭에서 뜬다.
-- **받는 것은 채팅 둘**: `MESSAGE` · `MANAGER_MESSAGE`(역할 `manager`). 입장 · 퇴장 · 공지 · 후원은 버린다(후원은 다음 카드). 받은 채팅은 치지직과 같은 세 길
+- **받는 것은 채팅 둘**: `MESSAGE` · `MANAGER_MESSAGE`(역할 `manager`). 입장 · 퇴장 · 공지는 버린다. 받은 채팅은 치지직과 같은 세 길
   (적재 바구니 · 원본 아카이브 · 화면 중계)에 `platform` `SOOP`, 채널 = 스트리머 SOOP 아이디, 보낸 사람 = SOOP 아이디로 들어간다.
+- **후원**(POK-431): 치지직 후원과 같은 표(`chat_donations`)와 화면 중계(`event: donation`)로 간다. **원본 아카이브에는 안 넣는다**(치지직과 같다, 아래 아카이브 절의 검산 등식).
+
+  | SDK action | 처리 | 이유 |
+  |---|---|---|
+  | `BALLOON_GIFTED` · `ADBALLOON_GIFTED` · `VIDEOBALLOON_GIFTED` · `STICKER_GIFTED` · `BATTLE_MISSION_GIFTED` · `CHALLENGE_MISSION_GIFTED` | 받는다 | 시청자가 이 방송에 보낸 후원(별풍선 · 애드벌룬 · 영상풍선 · 스티커 · 대결 미션 · 도전 미션) |
+  | 위 여섯 중 `fromVod` 또는 `fromStation`이 참 | 버리고 센다 | 다시보기 · 방송국에서 보낸 것이라 지금 방송의 반응이 아니다. 닫을 때 `soop.chat.closed … vodStationDonationsDropped=` 합계(칸 뜻을 잘못 읽었으면 후원이 전부 여기로 오므로) |
+  | 위 여섯 중 `relaysBroad`가 참 | 버리고 센다 | 중계방에서 온 후원. 첫 번 `soop.chat.donation_relay_dropped` INFO, 닫을 때 `soop.chat.closed … relayDonationsDropped=` 합계 |
+  | 미션 정산 · 종료 · 후원자 목록 · 구독(가입 · 갱신 · 선물) · 퀵뷰 · OGQ 이모티콘 선물 · 젬 · 티켓 · 굿즈 | 버린다(페이지에서) | 시청자의 실시간 반응 투표가 아니거나 금액 단위가 다르다 |
+
+  칸 짝: `donation_type` = action 이름, `pay_amount` = **개수**(`count`, 숫자가 아니면 NULL. 치지직은 원이라 단위는 종류로 가른다),
+  `donation_text` = 빈 값(SOOP 후원에는 문구가 없다), `donator_channel_id` = 보낸 사람 SOOP 아이디, 받은 시각 = 수집기 시계.
+  🔴 **받은 순번은 음수(-1, -2, …)로 프로세스 하나에서 센다**: 중복 열쇠 `uq_chat_donations_received`에 플랫폼이 없어, 같은 방송을 치지직과
+  SOOP에 같이 내보낼 때 양쪽이 1부터 세면 같은 밀리초의 n번째 후원끼리 부딪혀 SOOP 후원이 오류 없이 사라진다(일회용 PG 재현). 치지직 순번은
+  늘 양수다. 제약에 플랫폼을 넣는 길은 색인 교체라 하지 않았다.
+  화면은 `donation_type`으로 단위를 골라 「별풍선 N개」처럼 그린다(웹 PR #371).
+  한계: 다시 붙은 직후 SDK가 지난 후원을 다시 준다면 순번이 새로 매겨져 중복으로 남는다(실방송에서 확인할 것) · 끌 때 마지막 저장 뒤에 온
+  후원은 사라진다(SOOP 채팅과 같은 처지) · 칸 이름(`count` · `fromVod` · `fromStation` · `relaysBroad`)은 SDK 문서에서 읽은 것이라
+  실방송에서 그 이름과 모양(참 · 거짓이 `true` · `false`로 오는지)으로 오는지 확인한다. 다른 모양이면 「거짓」으로 읽혀 버릴 후원이 남는 쪽으로 틀린다(잃지는 않는다).
 - 🔴 **시각은 받은 시각이다**(`message_time = received_at`). SOOP 메시지에 시각 · ID가 없다(공식 문서). 시차 보정은 아직 없다(실방송에서 잰 뒤 정한다).
   **멱등 전제**: 지문이 시각을 품어 다시 붙은 직후 SDK가 지난 줄을 다시 준다면 막지 못한다. 문서에 지난 줄을 다시 준다는 말은 없다(실방송에서 확인할 것).
   거꾸로 같은 사람이 같은 글을 같은 밀리초에 두 번 받으면 지문이 같아 하나로 접힌다(드물다, 판정 입력이 그만큼 준다).
-  **채널이 바뀌는 순간의 틈**: 방송 중 다른 SOOP 계정으로 다시 연동하면 옛 탭을 닫고 새로 붙는데, 옛 탭이 실제로 닫히기 전 짧은 틈(펌프 한 번, 약 0.1초)에 온 옛 계정의 채팅이 새 채널 아이디로 저장될 수 있다. 같은 스트리머의 두 계정 사이이고 유실은 없다. 같은 틈에 옛 탭의 늦은 닫힘 · 오류 알림이 새 탭을 한 번 더 다시 열게 할 수 있다(1초 대기 한 번). 근본 처방 후보는 탭마다 세대 번호를 붙여 지난 세대의 알림을 버리는 것(POK-431에서 함께 다룬다).
+  **탭 세대 번호**(POK-431): 탭 명령은 줄에 들어가기만 해서 브라우저가 옛 탭을 실제로 닫기까지 펌프 한 번(약 0.1초)이 걸린다. 그 틈에 옛 탭의 채팅이 새 채널 아이디로 저장되고(채널이 바뀔 때, 실 Chromium 시험으로 재현) 옛 탭의 늦은 닫힘 · 오류가 막 연 새 탭을 또 다시 열게 했다. 그래서 탭을 열 때마다(붙이기 · 다시 붙기 둘 다) 프로세스 하나에서 늘어나는 새 세대를 받고, 브라우저는 이벤트 · 오류마다 그것을 낸 탭의 세대를 싣고, 세션은 지금 연 탭과 다른 세대를 버린다(`soop.chat.stale_event`, 세션마다 처음 한 번 INFO, 그 뒤 DEBUG). 대가: 다시 붙기 직전 옛 탭이 보낸 채팅(그 틈만큼)은 버려진다. 그 탭은 이미 끊겼다고 알린 탭이라 보낼 것이 거의 없다.
 - **Chromium이 죽으면**(메모리 상한 · 충돌) 열려 있던 탭마다 오류로 알려 다시 붙기 줄에 태우고, 다음 열기가 새 브라우저를 띄운다.
 - **끊기면 다시 붙는다**: `handleChatClosed` · `handleError` · SDK를 못 불러옴이면 그 방송이 아직 붙어 있어야 할 때 1초부터 두 배씩(상한 60초) 기다렸다 새 탭으로
   다시 붙는다. 채팅을 하나 받으면 간격을 처음으로 되돌린다.
@@ -3978,7 +4066,7 @@ SOOP 수신은 다음 PR이고, 지금 세션을 여는 곳(연동 시작)은 �
   (`PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`). 탭 하나가 수십 MB라 켤 때 수집기 메모리 상한(dev 576m)을 같이 올린다.
 - **로그에 토큰 · 앱 비밀값 · SOOP 아이디 · 본문 · 닉네임을 안 싣는다.** 방송 번호 · 사유 · 건수 · SDK 오류 코드(영숫자 40자까지)만.
 - 🔴 **확인 안 된 것**(실방송에서만 알 수 있다): 진짜 SDK가 화면 없는 브라우저 · 이 출처에서 붙는지 · 채팅 지연 · 다시 붙은 직후 지난 줄을 다시 주는지 ·
-  SDK가 방송 종료 때 `handleChatClosed`를 부르는지.
+  SDK가 방송 종료 때 `handleChatClosed`를 부르는지 · 후원 칸 이름과 재연결 뒤 지난 후원을 다시 주는지 · 중계방 후원이 얼마나 오는지.
 
 ### 운영 전 잔불 정리: 보관 기한 청소·프록시 IP (POK-89)
 
@@ -4433,7 +4521,8 @@ DB가 거절해 500이 되고, **입력 오류가 장애로 오인된다**(epoch
  "appliedOffsetMs":3900}
 {"latest":{"title":"…","tags":["롤"],"category":"League of Legends","viewers":1203,
            "observedAt":"2026-09-01T12:00:00Z"},
- "series":[{"observedAt":"2026-09-01T12:00:00Z","viewers":1203}]}
+ "series":[{"observedAt":"2026-09-01T12:00:00Z","viewers":1203,"platform":"CHZZK",
+             "category":"League of Legends"}]}
 ```
 
 🔴 **위 예시의 `role`은 실물에서 늘 `null`이다**(2026-09-08 실측). 치지직이 `userRoleCode`를
@@ -4482,7 +4571,8 @@ DB가 거절해 500이 되고, **입력 오류가 장애로 오인된다**(epoch
 **`latest`는 플랫폼과 무관한 최신 한 줄**(옛 모양 그대로)이고, 플랫폼마다 보려면 **`platforms`**를 본다(POK-397):
 `[{"platform":"CHZZK","title":…,"category":…,"viewers":…,"observedAt":…}, …]`(플랫폼 열거 순, 관측이 없는 플랫폼은 안 나온다).
 `viewers`·`observedAt`은 그 플랫폼의 **최신 줄**(제목 조건 없음), `title`·`category`는 그 플랫폼의 **제목 있는 최신 줄**이라 두 시점이 다를 수 있다
-(제목을 한 번도 못 얻었으면 둘 다 `null`). 추이 `series`의 점마다 `platform`이 실린다(`{"observedAt":…,"viewers":…,"platform":"SOOP"}`).
+(제목을 한 번도 못 얻었으면 둘 다 `null`). 추이 `series`의 점마다 `platform`과 그 관측의 `category`가 실린다(`{"observedAt":…,"viewers":…,"platform":"SOOP","category":…}`,
+카테고리를 못 얻은 관측은 `null`, POK-402). 화면은 카테고리가 바뀐 구간마다 통계 그래프 아래 띠를 나눈다.
 
 **제목 창구(`/internal/broadcast-info/latest`, POK-259)는 여러 방송의 마지막 제목을 한 번에 준다.** clip 방송 목록이
 한 장(최대 100개)마다 한 번 부른다. 위 창구는 방송 하나씩이라 한 장에 100번 왕복이 된다.

@@ -18,6 +18,9 @@ import type { ClipEditorMockState } from './useClipEditorMockState';
 //
 // 원본 판은 아직 자리 표시자다 — 실제 영상은 미디어 경로가 이어지면 이 자리에 깔린다.
 // 사각형은 판 기준 %로 놓이므로 그때도 좌표는 그대로다.
+//
+// 가운데 화면에는 판만 둔다: 위 막대(비율 · 레이아웃 · 안전 영역)와 결과 아래 요약 줄은 걷었다.
+// 결과 아래에는 미리보기를 못 틀 때의 이유만 뜬다.
 
 export function PreviewCanvas({ state }: { state: ClipEditorMockState }) {
   const panelRef = useRef<HTMLDivElement>(null);
@@ -28,14 +31,6 @@ export function PreviewCanvas({ state }: { state: ClipEditorMockState }) {
     state.subtitle.status === 'ready' && state.subtitleMode !== 'cc'
       ? (state.subtitle.items.find((item) => item.id === state.selectedSubtitleId)?.text ?? null)
       : null;
-  // 결과 설명은 결과에 실제로 들어갈 것을 말한다: 자막이 없는데 고른 방식(번인+CC)만 적으면 자막이 들어갈 것처럼
-  // 읽힌다(QA 2026-10-11)
-  const subtitleNote =
-    state.subtitle.status === 'ready' && state.subtitle.items.length > 0
-      ? state.subtitleModeLabel
-      : state.subtitle.status === 'generating'
-        ? '만드는 중'
-        : '없음';
 
   const result = (
     <div
@@ -103,10 +98,16 @@ export function PreviewCanvas({ state }: { state: ClipEditorMockState }) {
         >
           {editingLayout ? <span className={styles.sideLabel}>결과</span> : null}
           {result}
-          <span className={styles.stageNote}>
-            {editingLayout ? '' : '미리보기 · '}
-            {state.layoutLabel} · 자막 {subtitleNote} · {state.speed}× 배속
-          </span>
+          {state.previewError !== null ? (
+            <span className={styles.stageNote} role="status">
+              {state.previewError}
+            </span>
+          ) : null}
+          {state.trackPreviewStatus === 'unavailable' ? (
+            <span className={styles.stageNote} role="status">
+              트랙별 미리 듣기를 못 불러왔어요 · 영상 소리로 들려요
+            </span>
+          ) : null}
         </section>
       </div>
     </div>

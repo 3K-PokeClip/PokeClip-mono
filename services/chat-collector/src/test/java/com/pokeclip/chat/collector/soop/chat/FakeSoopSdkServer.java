@@ -32,6 +32,13 @@ final class FakeSoopSdkServer implements AutoCloseable {
                     + "\",\"color\":\"\"}");
         }
 
+        /** 후원. 개수 · 불리언은 SDK처럼 JSON 값 그대로({@code count}는 글이 아니면 그대로 싣는다: 숫자가 아닌 값 시험) */
+        static Step donation(String action, String userId, String nickname, String countJson, boolean fromVod,
+                             boolean fromStation, boolean relaysBroad) {
+            return new Step(action, "{\"userId\":\"" + userId + "\",\"userNickname\":\"" + nickname + "\",\"count\":" + countJson
+                    + ",\"fromVod\":" + fromVod + ",\"fromStation\":" + fromStation + ",\"relaysBroad\":" + relaysBroad + "}");
+        }
+
         static Step other(String action) {
             return new Step(action, "{\"userList\":[]}");
         }

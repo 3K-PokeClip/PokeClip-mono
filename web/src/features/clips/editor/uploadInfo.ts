@@ -126,7 +126,7 @@ export function quickSchedules(now: number): { label: string; date: string; time
 // ---------- 추천 장면 ----------
 
 export interface ScenePick {
-  id: 'highlight' | 'start' | 'playhead' | 'middle' | 'end';
+  id: 'editor' | 'highlight' | 'start' | 'playhead' | 'middle' | 'end';
   label: string;
   /** 완성 영상 첫 장면 기준 ms */
   offsetMs: number;
@@ -136,7 +136,7 @@ export interface ScenePick {
 export const SCENE_STEP_MS = 250;
 
 /**
- * 추천 장면: 하이라이트 · 시작 · 재생 위치 · 중간 · 마지막(POK-381 사용자 결정). 하이라이트는 카드에서 연 편집기만 안다(카드
+ * 추천 장면: (편집기에서 고름) · 하이라이트 · 시작 · 재생 위치 · 중간 · 마지막(POK-381 사용자 결정, 편집기에서 고른 장면은 POK-389). 하이라이트는 카드에서 연 편집기만 안다(카드
  * 시각), 재생 위치는 녹화가 있어야 안다. 모르거나 영상 밖이면 뺀다. 앞의 것과 한 눈금 안으로 겹치면 뒤의 것을 뺀다(같은 그림
  * 둘이 나란히 놓이지 않게).
  */
@@ -144,10 +144,15 @@ export function scenePicks(
   cutLengthMs: number,
   highlightOffsetMs: number | null,
   playheadOffsetMs: number | null,
+  /** 편집기 「이 장면을 썸네일로」로 고른 장면(POK-389). 없으면 null */
+  editorOffsetMs: number | null = null,
 ): ScenePick[] {
   const last = Math.max(0, cutLengthMs - 1);
   const inside = (ms: number | null) => ms !== null && ms >= 0 && ms < cutLengthMs;
   const all: (ScenePick | null)[] = [
+    inside(editorOffsetMs)
+      ? { id: 'editor', label: '편집기에서 고름', offsetMs: editorOffsetMs! }
+      : null,
     inside(highlightOffsetMs)
       ? { id: 'highlight', label: '하이라이트', offsetMs: highlightOffsetMs! }
       : null,
@@ -205,6 +210,21 @@ export function defaultSceneOffsetMs(
   if (playheadSeconds === null) return middle;
   const raw = Math.round((playheadSeconds - rangeStartSeconds) * 1000);
   return raw >= 0 && raw < cutLengthMs ? raw : middle;
+}
+
+/**
+ * 편집기에서 고른 썸네일 장면(소스 축 초)으로 업로드 창의 처음 값을 바꾼다(POK-389). 지금 막 고른 값이라 기억된 창 값·저장된
+ * 업로드 정보보다 앞선다. 고르지 않았으면 처음 값 그대로다.
+ */
+export function withPickedScene<T extends { thumbnailSource: string; sceneOffsetMs: number }>(
+  initial: T,
+  thumbnailSeconds: number | null,
+  rangeStartSeconds: number,
+  cutLengthMs: number,
+): { draft: T; picked: boolean } {
+  const offset = sceneOffsetFromPlayhead(thumbnailSeconds, rangeStartSeconds, cutLengthMs);
+  if (offset === null) return { draft: initial, picked: false };
+  return { draft: { ...initial, thumbnailSource: 'scene', sceneOffsetMs: offset }, picked: true };
 }
 
 // ---------- 태그 ----------

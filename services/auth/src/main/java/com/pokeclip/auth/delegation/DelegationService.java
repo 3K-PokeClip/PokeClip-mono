@@ -2,6 +2,7 @@ package com.pokeclip.auth.delegation;
 
 import com.pokeclip.auth.delegation.api.dto.AccessibleStreamersResponse;
 import com.pokeclip.auth.delegation.api.dto.DelegationResponse;
+import com.pokeclip.auth.profile.PhotoUrls;
 import com.pokeclip.auth.user.User;
 import com.pokeclip.auth.user.UserRepository;
 import lombok.RequiredArgsConstructor;
@@ -25,6 +26,7 @@ public class DelegationService {
 
     private final EditorDelegationRepository delegations;
     private final UserRepository users;
+    private final PhotoUrls photoUrls;
 
     /** 내 편집자들. 살아있는 것만. */
     @Transactional(readOnly = true)
@@ -116,10 +118,13 @@ public class DelegationService {
                                                  Function<EditorDelegation, Long> counterpart) {
         Map<Long, User> byId = users.findAllById(rows.stream().map(counterpart).toList()).stream()
                 .collect(Collectors.toMap(User::getId, u -> u));
+        Instant now = Instant.now();
         return rows.stream()
                 .map(d -> {
                     Long id = counterpart.apply(d);
-                    return new DelegationResponse(d.getId(), id, byId.get(id).getName(), d.getGrantedAt());
+                    User user = byId.get(id);
+                    return new DelegationResponse(d.getId(), id, user.getName(), photoUrls.of(user, now),
+                            d.getGrantedAt());
                 })
                 .toList();
     }

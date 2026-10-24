@@ -64,6 +64,10 @@ public class ClipUpload {
     @Column(name = "youtube_video_id", length = 32)
     private String youtubeVideoId;
 
+    /** 일꾼이 올린 채널(POK-423). 사람이 푼 줄 · 그 전 줄은 {@code null}. 영상 번호를 지우면 같이 지운다. */
+    @Column(name = "youtube_channel_id", length = 64)
+    private String youtubeChannelId;
+
     @Column(name = "error_code", length = 32)
     private String errorCode;
 
@@ -157,8 +161,14 @@ public class ClipUpload {
     }
 
     void uploaded(String videoId) {
+        uploaded(videoId, null);
+    }
+
+    /** @param channelId 일꾼이 올린 채널(POK-423). 모르면 {@code null} */
+    void uploaded(String videoId, String channelId) {
         this.status = UploadStatus.UPLOADED.dbValue();
         this.youtubeVideoId = videoId;
+        this.youtubeChannelId = channelId;
         this.errorCode = null;
         this.errorMessage = null;
         this.updatedAt = Instant.now();
@@ -273,6 +283,10 @@ public class ClipUpload {
 
     public String getYoutubeVideoId() {
         return youtubeVideoId;
+    }
+
+    public String getYoutubeChannelId() {
+        return youtubeChannelId;
     }
 
     public String getErrorCode() {
