@@ -6,7 +6,8 @@ import { fetchChzzkLink, type ChzzkLinkState } from '@/api/chzzkLink';
 import { fetchSoopLink, type SoopLinkState } from '@/api/soopLink';
 import { fetchStreamKeyStatus } from '@/api/streamKeys';
 import { fetchYoutubeLink, type YoutubeLinkState } from '@/api/youtubeLink';
-import { broadcastTitle, platformLabel } from '@/api/clipEditor';
+import { broadcastTitle } from '@/api/clipEditor';
+import { infoWaitOver } from '@/features/broadcast/infoWait';
 import { onAirLabel, primaryInfo, type PlatformLatest } from '@/features/broadcast/platformView';
 import { ddayFor, isJustEnded } from '@/features/broadcast/vod/vodListView';
 import {
@@ -33,16 +34,28 @@ import { useChannelStreamerId } from '@/features/channel/ChannelScope';
 
 export interface LiveNow {
   streamId: string;
-  title: string;
-  /** 방송 플랫폼 표시 이름(치지직·SOOP). 방송 목록의 코드에서 고르고, 모르는 코드거나 옛 서버면 null(모르는 플랫폼을 치지직이라 적지 않는다) */
+  /**
+   * 방송 제목. 방송 정보 관측의 제목, 비면 목록 제목이다. 둘 다 없으면 null(아직 모름): 방송 번호를 제목 자리에 쓰지 않는다(POK-449,
+   * OBS를 켠 직후 실방송에서 `live-…` 번호가 제목처럼 떴다)
+   */
+  title: string | null;
+  /**
+   * 켜진 플랫폼 표시 이름(「치지직 · SOOP」). 수집기가 실제로 본 플랫폼에서만 고르고, 아직 아무것도 못 봤으면 null이다. 목록의 플랫폼
+   * 칸(값이 없으면 치지직)으로 채우지 않는다: SOOP 방송을 켠 직후 「치지직」이 떴다(POK-449)
+   */
   platform: string | null;
   /** 이 방송 대시보드를 지금 연 편집자 수(POK-398, 스트리머 본인과 나는 뺌). 0이거나 모르면(null·없음) 띠에 안 적는다 */
   editorsOnline?: number | null;
   startedNote: string;
   /** 방송 경과 표기 — LIVE 배지 옆에 그대로 붙는다 */
   uptimeLabel: string;
-  /** 시청자 수 — 백엔드가 없으면 null */
+  /** 시청자 수 — 수집기가 아직 못 쟀으면 null */
   viewers: string | null;
+  /**
+   * 방송 시작에서 2분(INFO_WAIT_MS, features/broadcast/infoWait)이 지났다. 그 뒤에도 비어 있는 칸은 회색 막대 대신 「아직 받지 못했어요」로 적는다: 수집기가 이 방송을
+   * 못 찾는 동안 막대가 끝없이 번쩍이면 곧 온다고 읽힌다(POK-449)
+   */
+  infoLate: boolean;
   detectedCards: number;
   /** 이 방송에서 영상까지 만든 편집본 수. 보관함을 못 읽었으면 null */
   completedClips: number | null;
@@ -299,24 +312,25 @@ async function loadHome(
       `/api/clip/broadcasts/${encodeURIComponent(liveBroadcast.streamId)}/broadcast-info`,
       signal,
     );
-    // 방송 정보 창구의 최신 관측이 먼저다(목록보다 늦게 바뀐 제목을 먼저 본다). 그 관측에 제목이 비면 목록 제목, 그것도 없으면 번호.
-    // 관측은 대표 플랫폼 하나의 것이다: 둘 다 켤 수 있어 가장 새 관측을 그대로 쓰면 다른 플랫폼 값이 섞인다(POK-397)
+    // 방송 정보 창구의 최신 관측이 먼저다(목록보다 늦게 바뀐 제목을 먼저 본다). 그 관측에 제목이 비면 목록 제목, 그것도 없으면
+    // null(띠가 회색 막대로 비운다, POK-449). 관측은 대표 플랫폼 하나의 것이다: 둘 다 켤 수 있어 가장 새 관측을 그대로 쓰면 다른
+    // 플랫폼 값이 섞인다(POK-397)
     const latest = info === null ? null : primaryInfo(info, now).latest;
-    const title = latest?.title?.trim() || broadcastTitle(liveBroadcast);
+    const title = latest?.title?.trim() || liveBroadcast.title?.trim() || null;
     const startedAt = liveBroadcast.startedAt;
     live = {
       streamId: liveBroadcast.streamId,
       title,
-      // 켜진 플랫폼 태그(「치지직 · SOOP」). 방송 정보가 플랫폼마다 값을 주면 그것으로, 아니면 목록의 묶음, 그것도 없는 옛 서버면
-      // 목록의 플랫폼 하나다(POK-397)
-      platform:
-        onAirLabel(info?.platforms ?? liveBroadcast.platforms, now) ??
-        platformLabel(liveBroadcast.platform),
+      // 켜진 플랫폼 태그(「치지직 · SOOP」). 방송 정보가 플랫폼마다 값을 주면 그것으로, 아니면 목록의 묶음이다(POK-397). 둘 다
+      // 없으면 비운다: 목록의 플랫폼 칸은 수집기가 보기 전에도 치지직이라 SOOP 방송에 「치지직」이 떴다(POK-449)
+      platform: onAirLabel(info?.platforms ?? liveBroadcast.platforms, now),
       editorsOnline: liveBroadcast.editorsOnline ?? null,
       startedNote: startedAt ? `${clockLabel(startedAt)} 시작` : '시작 시각 정보 없음',
       uptimeLabel: startedAt ? msToClock(now - Date.parse(startedAt)) : '--:--:--',
       // 수집기가 1분마다 채우는 시청자 수. 아직 없으면 null(「준비 중」)
       viewers: typeof latest?.viewers === 'number' ? latest.viewers.toLocaleString('ko-KR') : null,
+      // 시작 시각을 모르는 방송(자리표시)은 기다릴 기준이 없어 처음부터 글자로 적는다: 막대가 끝없이 번쩍이지 않게(로컬 리뷰 1라운드)
+      infoLate: startedAt ? infoWaitOver(Date.parse(startedAt), now) : true,
       detectedCards: cardsByStream.get(liveBroadcast.streamId)?.length ?? 0,
       completedClips: null,
       thumbnailUrl: liveBroadcast.thumbnailUrl ?? null,
