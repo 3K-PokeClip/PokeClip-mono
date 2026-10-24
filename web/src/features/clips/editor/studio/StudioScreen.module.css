@@ -224,6 +224,11 @@
   scrollbar-width: thin;
 }
 
+/* 덮개(.overlay)가 재는 상자. 스크롤 내용 전체 높이라 줄여서 내려도 구간 상자가 아래 트랙까지 덮는다 */
+.laneContent {
+  position: relative;
+}
+
 .lanes {
   display: flex;
   flex-direction: column;

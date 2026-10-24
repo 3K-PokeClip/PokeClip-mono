@@ -299,192 +299,196 @@ export function MultitrackTimeline({
               state.timelineHeight === null ? undefined : { height: `${state.timelineHeight}px` }
             }
           >
-            <div className={styles.lanes}>
-              {subtitleBlocks.length > 0 ? (
+            {/* 덮개(구간 상자·재생선)의 기준은 스크롤 상자가 아니라 이 안쪽 상자다: 스크롤 상자에 바로 붙이면 덮개 높이가
+                보이는 창 높이에 묶여, 타임라인을 줄이고 아래로 내리면 아래 트랙이 구간 상자 밖으로 빠진다 */}
+            <div className={styles.laneContent}>
+              <div className={styles.lanes}>
+                {subtitleBlocks.length > 0 ? (
+                  <div className={styles.trackRow}>
+                    <span className={styles.trackLabel}>
+                      <Captions size={12} aria-hidden />
+                      <span data-row-label>자막</span>
+                    </span>
+                    <div className={styles.lane} data-kind="subtitle">
+                      {subtitleBlocks.map((block) => (
+                        <span
+                          key={block.id}
+                          className={styles.subtitleBlock}
+                          data-subtitle-block
+                          style={{ left: `${block.left * 100}%`, width: `${block.width * 100}%` }}
+                        >
+                          {block.text}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
                 <div className={styles.trackRow}>
                   <span className={styles.trackLabel}>
-                    <Captions size={12} aria-hidden />
-                    <span data-row-label>자막</span>
+                    <Film size={12} aria-hidden />
+                    <span data-row-label>영상</span>
+                    <ThumbnailTile
+                      seconds={state.thumbnailSeconds}
+                      label={shortClock(
+                        (state.thumbnailSeconds ?? state.range.startSeconds) -
+                          state.range.startSeconds,
+                      )}
+                      source={state.filmstripSource}
+                      onSeek={state.seekTo}
+                    />
                   </span>
-                  <div className={styles.lane} data-kind="subtitle">
-                    {subtitleBlocks.map((block) => (
-                      <span
-                        key={block.id}
-                        className={styles.subtitleBlock}
-                        data-subtitle-block
-                        style={{ left: `${block.left * 100}%`, width: `${block.width * 100}%` }}
-                      >
-                        {block.text}
-                      </span>
-                    ))}
+                  <div className={styles.lane} data-kind="video">
+                    {state.filmstripSource !== null ? (
+                      <VideoFilmstrip source={state.filmstripSource} view={state.view} />
+                    ) : (
+                      <div className={styles.laneFilmstrip} aria-hidden />
+                    )}
                   </div>
                 </div>
-              ) : null}
-              <div className={styles.trackRow}>
-                <span className={styles.trackLabel}>
-                  <Film size={12} aria-hidden />
-                  <span data-row-label>영상</span>
-                  <ThumbnailTile
-                    seconds={state.thumbnailSeconds}
-                    label={shortClock(
-                      (state.thumbnailSeconds ?? state.range.startSeconds) -
-                        state.range.startSeconds,
-                    )}
-                    source={state.filmstripSource}
-                    onSeek={state.seekTo}
-                  />
-                </span>
-                <div className={styles.lane} data-kind="video">
-                  {state.filmstripSource !== null ? (
-                    <VideoFilmstrip source={state.filmstripSource} view={state.view} />
-                  ) : (
-                    <div className={styles.laneFilmstrip} aria-hidden />
-                  )}
-                </div>
+                {state.tracks.map((track, index) => {
+                  const levels = state.trackLevels;
+                  const values = levels?.tracks[index];
+                  return (
+                    <TimelineTrackRow
+                      key={track.id}
+                      track={track}
+                      onToggleMute={state.toggleTrackMute}
+                      levels={
+                        levels === undefined
+                          ? undefined
+                          : levels !== null && values !== undefined
+                            ? {
+                                values,
+                                startSeconds: levels.startSeconds,
+                                stepSeconds: levels.stepSeconds,
+                              }
+                            : null
+                      }
+                      view={state.view}
+                    />
+                  );
+                })}
               </div>
-              {state.tracks.map((track, index) => {
-                const levels = state.trackLevels;
-                const values = levels?.tracks[index];
-                return (
-                  <TimelineTrackRow
-                    key={track.id}
-                    track={track}
-                    onToggleMute={state.toggleTrackMute}
-                    levels={
-                      levels === undefined
-                        ? undefined
-                        : levels !== null && values !== undefined
-                          ? {
-                              values,
-                              startSeconds: levels.startSeconds,
-                              stepSeconds: levels.stepSeconds,
-                            }
-                          : null
-                    }
-                    view={state.view}
-                  />
-                );
-              })}
-            </div>
 
-            <div className={styles.overlay} ref={overlayRef}>
-              {/* 누르거나 끌어 재생 위치를 옮기는 바닥. 구간 손잡이는 이 뒤에 그려 위에 놓인다. 키로는 ← → 가 같은 일을 한다 */}
-              <div
-                className={styles.scrub}
-                data-scrub
-                aria-hidden
-                onPointerDown={onScrubPointerDown}
-                onPointerMove={onScrubPointerMove}
-                onPointerUp={onScrubPointerUp}
-                onPointerCancel={onScrubPointerUp}
-                onLostPointerCapture={onScrubPointerUp}
-              />
-              {/* 쇼츠 밖은 양쪽을 흐리게 덮는다: 쓰는 구간만 밝게(알파컷 방식, POK-389) */}
-              <div
-                className={styles.outsideMask}
-                data-outside
-                style={{ left: 0, width: `${Math.max(0, startFraction) * 100}%` }}
-              />
-              <div
-                className={styles.outsideMask}
-                data-outside
-                style={{
-                  left: `${Math.min(1, endFraction) * 100}%`,
-                  right: 0,
-                }}
-              />
-              <div
-                className={styles.rangeBox}
-                style={{
-                  left: `${startFraction * 100}%`,
-                  width: `${(endFraction - startFraction) * 100}%`,
-                }}
-              >
-                {/* 핸들은 늘 그린다. 키워서 창 밖으로 나간 핸들은 덮개가 가로로 잘라 안 보이고 가장자리 표시가 대신한다.
-                    빼 버리면 그 핸들에 있던 키보드 초점이 사라진다(로컬 리뷰 1라운드) */}
-                {(['start', 'end'] as const).map((edge) => (
-                  <button
-                    key={edge}
-                    type="button"
-                    role="slider"
-                    aria-label={edge === 'start' ? '구간 시작점' : '구간 끝점'}
-                    // 이름·키 조작이 「경계 위치」를 뜻하므로 값도 위치로 읽어 준다.
-                    // 길이를 실으면 시작점에서 ArrowRight(증가)에 값이 줄어드는 모순이 생기고
-                    // 두 핸들이 늘 같은 숫자를 말한다.
-                    // 길이 상한(3분)까지 반영한다. 안 하면 「0부터」라 안내해 놓고
-                    // 그쪽으로는 값이 움직이지 않는다
-                    aria-valuemin={
-                      edge === 'start'
-                        ? Math.max(0, state.range.endSeconds - MAX_RANGE_SECONDS)
-                        : state.range.startSeconds + MIN_RANGE_SECONDS
-                    }
-                    aria-valuemax={
-                      edge === 'start'
-                        ? state.range.endSeconds - MIN_RANGE_SECONDS
-                        : Math.min(
-                            state.sourceDurationSeconds,
-                            state.range.startSeconds + MAX_RANGE_SECONDS,
-                          )
-                    }
-                    aria-valuenow={
-                      edge === 'start' ? state.range.startSeconds : state.range.endSeconds
-                    }
-                    aria-valuetext={`${edge === 'start' ? state.rangeStartLabel : state.rangeEndLabel} · 구간 ${state.rangeLengthLabel}`}
-                    className={`${styles.rangeHandle} ${
-                      edge === 'start' ? styles.rangeHandleStart : styles.rangeHandleEnd
-                    }`}
-                    onPointerDown={onHandlePointerDown(edge)}
-                    onPointerMove={onHandlePointerMove}
-                    onPointerUp={onHandlePointerUp}
-                    onPointerCancel={onHandlePointerUp}
-                    onLostPointerCapture={onHandlePointerUp}
-                    onKeyDown={onHandleKeyDown(edge)}
-                  />
-                ))}
-              </div>
-              {leftMarker !== null ? (
-                <button
-                  type="button"
-                  className={`${styles.edgeMarker} ${styles.edgeMarkerStart}`}
-                  aria-label={`${leftMarker.label}으로 가기`}
-                  onClick={() => state.seekTo(leftMarker.seconds)}
-                >
-                  <ChevronLeft size={11} aria-hidden />
-                  {leftMarker.label}
-                </button>
-              ) : null}
-              {rightMarker !== null ? (
-                <button
-                  type="button"
-                  className={`${styles.edgeMarker} ${styles.edgeMarkerEnd}`}
-                  aria-label={`${rightMarker.label}으로 가기`}
-                  onClick={() => state.seekTo(rightMarker.seconds)}
-                >
-                  {rightMarker.label}
-                  <ChevronRight size={11} aria-hidden />
-                </button>
-              ) : null}
-              {/* 창 밖이면 그리지 않는다. 클램프된 채 두면 눈금 가장자리에 딱 붙어
-                  실제와 다른 시각을 현재 위치처럼 읽게 한다. */}
-              {state.thumbnailSeconds !== null &&
-              state.thumbnailSeconds >= state.view.startSeconds &&
-              state.thumbnailSeconds <= state.view.endSeconds ? (
-                <span
-                  data-thumbnail-marker
-                  className={styles.thumbnailMarker}
-                  style={{
-                    left: `${secondsToFraction(state.thumbnailSeconds, state.view) * 100}%`,
-                  }}
+              <div className={styles.overlay} ref={overlayRef}>
+                {/* 누르거나 끌어 재생 위치를 옮기는 바닥. 구간 손잡이는 이 뒤에 그려 위에 놓인다. 키로는 ← → 가 같은 일을 한다 */}
+                <div
+                  className={styles.scrub}
+                  data-scrub
                   aria-hidden
+                  onPointerDown={onScrubPointerDown}
+                  onPointerMove={onScrubPointerMove}
+                  onPointerUp={onScrubPointerUp}
+                  onPointerCancel={onScrubPointerUp}
+                  onLostPointerCapture={onScrubPointerUp}
+                />
+                {/* 쇼츠 밖은 양쪽을 흐리게 덮는다: 쓰는 구간만 밝게(알파컷 방식, POK-389) */}
+                <div
+                  className={styles.outsideMask}
+                  data-outside
+                  style={{ left: 0, width: `${Math.max(0, startFraction) * 100}%` }}
+                />
+                <div
+                  className={styles.outsideMask}
+                  data-outside
+                  style={{
+                    left: `${Math.min(1, endFraction) * 100}%`,
+                    right: 0,
+                  }}
+                />
+                <div
+                  className={styles.rangeBox}
+                  style={{
+                    left: `${startFraction * 100}%`,
+                    width: `${(endFraction - startFraction) * 100}%`,
+                  }}
                 >
-                  <Camera size={9} />
-                </span>
-              ) : null}
-              {playheadVisible ? (
-                <div className={styles.playhead} style={{ left: `${playheadFraction * 100}%` }}>
-                  <span className={styles.playheadTip} aria-hidden />
+                  {/* 핸들은 늘 그린다. 키워서 창 밖으로 나간 핸들은 덮개가 가로로 잘라 안 보이고 가장자리 표시가 대신한다.
+                    빼 버리면 그 핸들에 있던 키보드 초점이 사라진다(로컬 리뷰 1라운드) */}
+                  {(['start', 'end'] as const).map((edge) => (
+                    <button
+                      key={edge}
+                      type="button"
+                      role="slider"
+                      aria-label={edge === 'start' ? '구간 시작점' : '구간 끝점'}
+                      // 이름·키 조작이 「경계 위치」를 뜻하므로 값도 위치로 읽어 준다.
+                      // 길이를 실으면 시작점에서 ArrowRight(증가)에 값이 줄어드는 모순이 생기고
+                      // 두 핸들이 늘 같은 숫자를 말한다.
+                      // 길이 상한(3분)까지 반영한다. 안 하면 「0부터」라 안내해 놓고
+                      // 그쪽으로는 값이 움직이지 않는다
+                      aria-valuemin={
+                        edge === 'start'
+                          ? Math.max(0, state.range.endSeconds - MAX_RANGE_SECONDS)
+                          : state.range.startSeconds + MIN_RANGE_SECONDS
+                      }
+                      aria-valuemax={
+                        edge === 'start'
+                          ? state.range.endSeconds - MIN_RANGE_SECONDS
+                          : Math.min(
+                              state.sourceDurationSeconds,
+                              state.range.startSeconds + MAX_RANGE_SECONDS,
+                            )
+                      }
+                      aria-valuenow={
+                        edge === 'start' ? state.range.startSeconds : state.range.endSeconds
+                      }
+                      aria-valuetext={`${edge === 'start' ? state.rangeStartLabel : state.rangeEndLabel} · 구간 ${state.rangeLengthLabel}`}
+                      className={`${styles.rangeHandle} ${
+                        edge === 'start' ? styles.rangeHandleStart : styles.rangeHandleEnd
+                      }`}
+                      onPointerDown={onHandlePointerDown(edge)}
+                      onPointerMove={onHandlePointerMove}
+                      onPointerUp={onHandlePointerUp}
+                      onPointerCancel={onHandlePointerUp}
+                      onLostPointerCapture={onHandlePointerUp}
+                      onKeyDown={onHandleKeyDown(edge)}
+                    />
+                  ))}
                 </div>
-              ) : null}
+                {leftMarker !== null ? (
+                  <button
+                    type="button"
+                    className={`${styles.edgeMarker} ${styles.edgeMarkerStart}`}
+                    aria-label={`${leftMarker.label}으로 가기`}
+                    onClick={() => state.seekTo(leftMarker.seconds)}
+                  >
+                    <ChevronLeft size={11} aria-hidden />
+                    {leftMarker.label}
+                  </button>
+                ) : null}
+                {rightMarker !== null ? (
+                  <button
+                    type="button"
+                    className={`${styles.edgeMarker} ${styles.edgeMarkerEnd}`}
+                    aria-label={`${rightMarker.label}으로 가기`}
+                    onClick={() => state.seekTo(rightMarker.seconds)}
+                  >
+                    {rightMarker.label}
+                    <ChevronRight size={11} aria-hidden />
+                  </button>
+                ) : null}
+                {/* 창 밖이면 그리지 않는다. 클램프된 채 두면 눈금 가장자리에 딱 붙어
+                  실제와 다른 시각을 현재 위치처럼 읽게 한다. */}
+                {state.thumbnailSeconds !== null &&
+                state.thumbnailSeconds >= state.view.startSeconds &&
+                state.thumbnailSeconds <= state.view.endSeconds ? (
+                  <span
+                    data-thumbnail-marker
+                    className={styles.thumbnailMarker}
+                    style={{
+                      left: `${secondsToFraction(state.thumbnailSeconds, state.view) * 100}%`,
+                    }}
+                    aria-hidden
+                  >
+                    <Camera size={9} />
+                  </span>
+                ) : null}
+                {playheadVisible ? (
+                  <div className={styles.playhead} style={{ left: `${playheadFraction * 100}%` }}>
+                    <span className={styles.playheadTip} aria-hidden />
+                  </div>
+                ) : null}
+              </div>
             </div>
           </div>
 
