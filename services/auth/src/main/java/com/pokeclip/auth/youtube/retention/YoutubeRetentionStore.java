@@ -67,9 +67,14 @@ public class YoutubeRetentionStore {
         boolean forget = alive.isEmpty() || !channelId.equals(alive.getFirst());
         if (forget) {
             Timestamp at = Timestamp.from(now);
+            // 같은 채널 줄이 아직 안 보내졌으면 기준 시각만 늦춘다. 버리면 그 사이(같은 채널로 다시 연동했다 다시 해제한 동안) 주문한
+            // 업로드가 지우는 범위에서 빠진다
             jdbc.update("""
                     INSERT INTO youtube_video_forget_jobs (user_id, channel_id, created_at, next_attempt_at)
-                    VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING""", userId, channelId, at, at);
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT (user_id, channel_id)
+                    DO UPDATE SET created_at = GREATEST(youtube_video_forget_jobs.created_at, EXCLUDED.created_at)""",
+                    userId, channelId, at, at);
         }
         jdbc.update("UPDATE youtube_channel_links SET channel_id = NULL, channel_name = NULL WHERE id = ?", linkId);
         return forget;

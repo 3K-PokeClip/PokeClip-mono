@@ -2674,7 +2674,7 @@ UploadInfo = {"title":"필수","description":null,"tags":["…"],"categoryId":"2
 넘겨 유튜브에 아직 있는지 묻고(토큰은 auth 밖으로 안 나간다), 없으면 지운다. 🔴 지금 연동 채널이 아닌 줄은 「안 보임」이어도 안 지운다(비공개
 영상은 그 채널 토큰으로만 보인다. ①이 지운다). 보이면 채널 모르는 줄에 지금 채널을 채운다. 연동이 없으면 확인 시각만 미루고, 못 물었으면
 아무것도 안 바꾼다. 🔴 번호를 지운 줄은 **올림 그대로**다(`video_forgotten_at`): 상태를 바꾸면 같은 영상을 다시 올릴 자리가 열린다. 화면은 번호
-없는 올림을 링크 없이 보인다. 로그 `clip.youtube_video.<event>` — `forgotten owner= count=` · `checked owner= linked= checked= forgotten=` ·
+없는 올림을 링크 없이 보인다. 로그 `clip.youtube_video.<event>`: `forgotten owner= count=` · `checked owner= linked= checked= forgotten=` ·
 `check_skipped`(WARN) · `check_failed` · `sweep_failed`.
 
 ### clip: 썸네일 (POK-277)
@@ -3161,7 +3161,10 @@ revoke를 DB 락 안에 넣어야 해서(=트랜잭션 안 외부 호출) 포기
 - **쿼터**(유튜브 Data API 하루 10,000유닛): channels.list 1유닛 × (살아 있는 연동 수 / 30) + videos.list 1유닛 × (올린 영상 수 / 50 / 30)
   하루 남짓이다. 연동 100명 · 영상 1만 개면 하루 약 4 + 7 = 11유닛(토큰 갱신은 OAuth 엔드포인트라 유닛이 아니다). 업로드 한 번
   (videos.insert 100유닛)보다 작다
-- 로그: `auth.youtube.retention.<event>` — `closed_out links= forgetJobs=` · `forget_sent` · `forget_retry`(WARN) · `close_out_failed` ·
+- **남은 한계**: 지우기 장부를 보낸 **뒤에** 사람이 「올라갔다」로 푼 옛 업로드(채널 모름, 주문 시각은 기준 시각 전)는 그 회원이 다시 연동해
+  30일 확인이 돌거나 다음 해제 기한이 올 때까지 번호가 남는다(연동이 없으면 clip은 유튜브에 못 묻는다). 영상 확인 문의 시한은 전역
+  기본(읽기 5초)이라 구글이 느린 날은 clip이 끊고 다음 바퀴에 다시 묻는다
+- 로그: `auth.youtube.retention.<event>`: `closed_out links= forgetJobs=` · `forget_sent` · `forget_retry`(WARN) · `close_out_failed` ·
   `channel_refresh_skipped reason=` · `channel_missing`(WARN) · `channel_refresh_failed` · `run_failed`, 영상 확인은
   `auth.youtube.video_check asked= existing=` · `video_check_unavailable`(WARN). 채널 번호는 안 찍는다
 

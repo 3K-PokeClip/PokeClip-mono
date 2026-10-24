@@ -194,6 +194,30 @@ class YoutubeRetentionJobTest extends YoutubeLinkTestSupport {
         assertThat(장부()).isZero();
     }
 
+    /**
+     * 같은 채널 줄이 아직 안 보내졌는데(clip이 오래 못 받는다) 또 닫힌 줄이 기한을 넘으면 기준 시각을 늦춘다. 처음 시각에 머물면 그 사이
+     * 같은 채널로 다시 연동해 올린 업로드가 지우는 범위에서 빠진다
+     */
+    @Test
+    void 안_보낸_장부가_있으면_기준_시각을_늦춘다() {
+        User user = newUser();
+        String 채널 = 연동(user, "UC-twice-");
+        닫는다(user, "USER_UNLINKED", Duration.ofDays(20));
+        answer.set(503);
+        Instant 처음 = Instant.now().minus(Duration.ofDays(12)).truncatedTo(java.time.temporal.ChronoUnit.MICROS);
+        job.runOnce(처음);
+        writer.create(user.getId(), new YoutubeChannel(채널, "채널"), new YoutubeTokens("at-2", "rt-2", Duration.ofHours(1), null));
+        닫는다(user, "USER_UNLINKED", Duration.ofDays(8));
+        Instant 나중 = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS);
+        jdbc.update("UPDATE youtube_video_forget_jobs SET next_attempt_at = now() + interval '1 hour'");
+
+        job.runOnce(나중);
+
+        assertThat(장부()).isEqualTo(1);
+        assertThat(jdbc.queryForObject("SELECT created_at FROM youtube_video_forget_jobs", Timestamp.class).toInstant())
+                .isEqualTo(나중);
+    }
+
     /** 연동 중 30일이 지나면 channels.list로 채널 이름을 다시 받는다. 30일 전이면 안 묻는다 */
     @Test
     void 연동_중_30일마다_채널_이름을_다시_받는다() {
