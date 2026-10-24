@@ -81,7 +81,7 @@
 | 5 | 판단 불가 | 비-200 · 시간 초과 · 연결 실패 · 해석 실패 → 그 새 연결을 401(`undecided`)로 거부. 진행 중인 송출은 건드리지 않는다. 판단 불가였던 토큰은 기억해 차례로 다시 묻는다(기억된 토큰 전체에서 4초에 하나) | `client.go:106-130,185-187` · `publish.go:380-389` · `ingestauth/doc.go:3-6` |
 | 6 | 시간 제한 | 전체 1.125초(위 1-1 의 13). 연결 준비(TCP · TLS) 상한 2초. 응답 본문 4 KiB. **재시도 없음** | `client.go:133-139,155-157` |
 | 7 | 전송 성질 | 환경 변수 프록시를 타지 않는다(출입증이 프록시를 거치지 않게). 리다이렉트를 따르지 않는다(3xx 는 비-200 = 판단 불가). 연결은 다시 쓴다 | `client.go:74-87` |
-| 8 | auth 쪽 조건(계약4 2절) | 전용 토큰이 설정돼 있으면 요청 출발지가 **설정된 주소**(지금은 media-dev 하나)일 때만 받는다. 출발지 판정이 먼저: 다르면 403, 맞고 토큰이 틀리면 401. 전용 토큰이 설정되지 않으면 창구가 닫혀 401. **운영 Media 의 resolve 경로는 계약에 「미정」** | 위키 `contracts/계약4-OBS-Control-API.md` 2절(30행) · 0절(14행) |
+| 8 | auth 쪽 조건(계약4 2절) | 전용 토큰이 설정돼 있으면 요청 출발지가 **설정된 IPv4 대역**(운영 = Media 프라이빗 서브넷 · dev = media-dev)일 때만 받는다. 출발지 판정이 먼저: 다르면 403, 맞고 토큰이 틀리면 401. 전용 토큰이 설정되지 않으면 창구가 닫혀 401. **운영 Media 도 전용 헤더로 부른다**(2026-10-24 개정 — 그 전 판은 「미정」) | 위키 `contracts/계약4-OBS-Control-API.md` 2절 · 0절(개정 커밋 62eaf27 · 3d6b66d) |
 
 ### 1-4. 응답기 → MediaMTX Control API (긴급 절단 `cut` 에서만)
 
@@ -192,7 +192,7 @@ Basic · Control API 자격과 200 본문의 passphrase 가 암호화 없이 오
 dev 는 `internal` 제어망, prod 후보는 같은 netns 루프백(D1 · 2절 후보값 표 1).
 prod 의 응답기 → auth 4C 호출도 호스트 간 VPC 구간을 http 평문으로 지난다 — 요청에
 `X-Stream-Key-Resolve-Token` 출입증이 실리고 응답 본문에 passphrase 가 온다. 출발지는
-보안 그룹으로 잠기고(D9), 사설 DNS 이름을 http 로 부르는 것은
+보안 그룹과 auth 의 서브넷 대역(K6)으로 잠기고(D9), 사설 DNS 이름을 http 로 부르는 것은
 플랫폼 전체 관례다(`infra/terraform/prod/platform/README.md` 의
 `http://auth.pokeclip.internal`). 이 구간의 TLS 는 플랫폼 결정 때 함께 정한다.
 
@@ -369,7 +369,7 @@ prod 기대 = 계획 M2(Media 상자 compose) · M15(송출 인증 반영) · O8
 ### D9. 4C 호출 경로 · 인증 방식 · 출발지 잠금 (prod)
 
 - **계획이 가정한 것**: 「응답기 → auth 는 런타임 2단 규칙」, Media → auth SG 짝은 런타임 2단(계획 747 · 1724행). prod auth 는 `native` 프록시 신뢰 + 좁힌 `internal-proxies`(계획 1113 · 1524행).
-- **실물**: dev 는 `http://<dev auth 사설 주소>:8082` — 값이 **사설 주소여야** 한다(공인 주소면 auth 의 출발지 잠금에 걸려 403 — `.env.example:6`). 응답기 코드는 호스트 이름 · https 도 받는다(1-3 의 1). 계약4 2절은 「운영 Media 의 resolve 경로는 아직 정하지 않았다」이고 auth 의 전용 토큰 출발지는 「설정된 주소(지금은 media-dev 하나)」다. 4C 승인권은 3번이다(계약4 4절 · ADR-033).
+- **실물**: dev 는 `http://<dev auth 사설 주소>:8082` — 값이 **사설 주소여야** 한다(공인 주소면 auth 의 출발지 잠금에 걸려 403 — `.env.example:6`). 응답기 코드는 호스트 이름 · https 도 받는다(1-3 의 1). 계약4 2절은 「운영 Media 의 resolve 경로는 아직 정하지 않았다」이고 auth 의 전용 토큰 출발지는 「설정된 주소(지금은 media-dev 하나)」다(개정 전 판 — 2026-10-24 개정으로 운영도 전용 헤더 · 출발지 IPv4 대역, 1-3 의 8). 4C 승인권은 3번이다(계약4 4절 · ADR-033).
 - **prod 창구(kty 결정 2026-10-24 · POK-429)**: prod 응답기는 **전용 창구**
   (`X-Stream-Key-Resolve-Token` — `STREAM_KEY_RESOLVE_CHANNEL=resolve-token`,
   값 = 런타임의 비밀 `pokeclip/prod/stream-key-resolve-token` · 출력
@@ -404,7 +404,7 @@ prod 기대 = 계획 M2(Media 상자 compose) · M15(송출 인증 반영) · O8
 - **코드가 지원하는 범위와 계약의 현재 허용 범위는 다르다**: auth 는 이미 **IPv4
   CIDR 목록**(`allowedCidrs` — `StreamKeyResolveAccessProperties.java:13-20`, 설정
   `STREAM_KEY_RESOLVE_ALLOWED_CIDRS` 쉼표 목록 — `application.yml:219-225`)을
-  받는다. 계약4 2절의 문구만 「설정된 주소(지금은 하나)」다.
+  받는다. 계약4 2절의 문구만 「설정된 주소(지금은 하나)」다(개정 전 판 — 지금은 IPv4 대역).
 - **prod 에서 정할 것(위 선행 조건이 정해진 뒤)**: (a) auth 의 주소(내부 DNS 이름 vs 고정 주소), (b) auth 가 허용할 출발지. prod 의 응답기는 상자에서 나가므로 출발지는 상자 쪽 주소(컨테이너가 브리지 뒤면 변환된 상자 주소일 것이나 — 추론, 미확인)다. 상자를 교체하면 주소가 바뀔 수 있다.
 - **선택지(출발지 단위)**:
   - (가) 상자에 고정 사설 주소(고정 ENI 등)를 두고 허용 대역을 그 `/32` 하나로. 장: 가장 좁다. 단: 상자 교체 절차에 주소 고정이 들어간다(M9 몫). 코드 · 설정은 이미 지원(`/32` CIDR).
@@ -414,7 +414,7 @@ prod 기대 = 계획 M2(Media 상자 compose) · M15(송출 인증 반영) · O8
   resolve-token`(기본과 같아도 명시) · `STREAM_KEY_RESOLVE_TOKEN_FILE`(시작 스크립트가
   `media.env` 의 `STREAM_KEY_RESOLVE_TOKEN_SECRET_ARN` 에서 읽어 렌더 —
   `infra/media-host/bin/start-media.sh` `read_resolve_token`). 호스트 이름 URL 은 응답기
-  코드가 이미 받는다(1-3 의 1). 계약4 2절 문구 개정은 3절의 남은 항목이다.
+  코드가 이미 받는다(1-3 의 1). 계약4 2절 문구 개정은 3절 항목이다(닫힘).
 - **응답기 코드 변경**: 더 없다. 트랙 A 가 창구 설정 `STREAM_KEY_RESOLVE_CHANNEL` 을 더해
   전용(`X-Stream-Key-Resolve-Token`) · 공용(`X-Internal-Token`) 헤더를 설정으로
   고른다(1-3 의 2 · 1-5 의 15 — `keyresolve/client.go` `Channel`). 그 전 dev 가동판은 전용 헤더
@@ -518,7 +518,7 @@ compose 드리프트(M15 c4 — 2cd4ee4b · 45 · 46 은 77e3f537). 43 은 옛 �
 | K3 | 응답기 비밀 입력 | **(가) `_FILE` 입력 추가.** 받을 비밀은 **셋**: (1) 4C resolve 토큰 (2) Control API 비밀번호(`MTX_API_PASS` — 응답기 · 사이드카가 공유) (3) Basic 자격(MediaMTX → 응답기). 값 출처는 D4 · K1 에 따른다(resolve 토큰 = Secrets Manager, 나머지 둘 = 시작 스크립트가 부팅마다 생성한 tmpfs 렌더 — D4 의 「값의 출처」 조건 하에) | **필요** — 트랙 A 가 더했다(1-5 의 6 · 9 · 13) | D4 |
 | K4 | `authHTTPExclude` | **`playback` 하나**(kty 결정 1, 2026-10-23 — 2026-10-20 의 (가) `read` · `playback` 을 대체). `read` 를 빼면 Bearer 없는 LL-HLS 읽기가 열리기 때문이다(M15 계획 0-1). `metrics` · `pprof` 는 넣지 않는다 — prod 설정이 둘 다 `no` 다(`infra/media-host/mediamtx.yml.tmpl`). **D12 의 SRT 경로 잠금 이행을 같은 PR 의 전제로** | read 판정 변경(M15 c0 — SRT 만 200, 1-2 의 2 · 8) | D6 · D12 |
 | K5 | 거부 목록 정본 | **(나) 상자 밖 정본 + 부팅 시 렌더**(없거나 비면 기동 차단). 상세(M15 — kty 답 2026-10-23): 정본 = SSM Parameter `/pokeclip/prod/media/ingest-auth-deny-tokens`(String · Standard · 초기값 머리 줄 `# pokeclip deny-tokens v1` · Terraform `ignore_changes = [value]` — 자원은 M9). 「빔」 = 파라미터가 없거나 공백뿐 — 머리 줄만 있으면(토큰 0건) 정상. 받기 실패 · 꼴 밖이면 시작 스크립트가 기동을 막는다(`… ingest-auth denylist unavailable` · `… invalid`). 덧붙이기 · 해제는 `infra/media-host/bin/ingest-auth-deny-sync.sh`(SSM 실행 · 승인 — 덧붙이기는 재시작 없이, 해제는 `--release` 로 응답기만 재생성) | 없음 | D7 |
-| K6 | 4C 출발지 잠금 단위 | **(나) Media 프라이빗 서브넷 CIDR**(POK-429 · kty 2026-10-24 — 2026-10-20 의 (가) 고정 주소 `/32` 를 대체). 값은 런타임이 넣는다 — `app_env.auth` 의 `STREAM_KEY_RESOLVE_ALLOWED_CIDRS` = 서브넷 조회(`data.aws_subnet.media_private`) 결과. 보안 그룹 짝(Media SG → auth)은 따로 M9 · M8 몫 | 없음 | D9 |
+| K6 | 4C 출발지 잠금 단위 | **(나) Media 프라이빗 서브넷 CIDR**(POK-429 · kty 2026-10-24 — 2026-10-20 의 (가) 고정 주소 `/32` 를 대체). 값은 런타임이 넣는다 — `app_env.auth` 의 `STREAM_KEY_RESOLVE_ALLOWED_CIDRS` = 서브넷 조회(`data.aws_subnet.media_private`) 결과. 보안 그룹 규칙(Media 이그레스 → auth · auth 인그레스 ← Media)은 따로 런타임 2단 몫(`infra/terraform/CONTRACT-runtime.md`) | 없음 | D9 |
 | K7 | 송출자 `ip` 확인 수단 | **(가)** c1 의 가짜 응답기 + MediaMTX 연결 로그 | 없음 | D5 |
 | K8 | 포트 · 비밀 파일 경로 | **2절 끝 후보값 표를 후보값으로 채택**(Basic 자격 파일이 하나 늘어 비밀 파일은 응답기 쪽 `/run/secrets/` 아래 셋 · 사이드카 쪽 `mtx_api_pass` 하나 · MediaMTX 쪽은 `mediamtx.yml` 의 `authHTTPAddress` 렌더 — 위 후보 표 3 · 4 · 4b). 포트 충돌은 prod 포트 값 확인 뒤. **M15 에서 유지 — 편차 하나**: 사이드카 호스트 파일은 M2 자리 그대로(후보 표 5 — kty Q1 답) | 없음(K3 가 전제) | D11 |
 
@@ -550,9 +550,9 @@ kty 결정이 아닌 **확인 · 실측 항목**(결정 없이 M15 착수 때 �
   **닫힘**: 포크 `internal/servers/srt/conn.go` 판독 + c1 C8 · C17 실측(D12).
 - O8a 3 의 거부 실측에서 `resolve_ms` 분포를 기록(D10). — **남음**(O8a 3 몫).
 - 계약4 2절 개정(운영 Media 의 resolve 경로 · 출발지 문구) — 위키 PR, kty 승인
-  머지 · 3번 알림(2026-10-24 위임 — 런타임 1단-나 ② K6 · D9). — **남음**(런타임
-  1단-나 ② 몫 — 전용 창구 · `auth.pokeclip.internal` · 출발지 = SG · 허용 대역을
-  문구로).
+  머지 · 3번 알림(2026-10-24 위임 — 런타임 1단-나 ② K6 · D9). — **닫힘**(위키
+  62eaf27 · 3d6b66d, 2026-10-24 — 운영도 전용 헤더 · 출발지 Media 프라이빗 서브넷
+  IPv4 대역).
 - **설정 조회 노출 완화(신규)**: 응답기가 `action=api` 요청 가운데 설정 조회(`/v3/config/…`)를 사이드카 자격에
   대해 거부할 수 있는지 — 인증 요청 본문의 `path` 에 API 경로가 실리는지부터 확인(D2). — **남음**(M15 범위 밖).
   응답기 모드에서는 설정 조회가 Basic 비밀번호와 SRT 잠금 둘도 평문으로 돌려준다(`infra/media-host/README.md`
@@ -564,8 +564,8 @@ kty 결정이 아닌 **확인 · 실측 항목**(결정 없이 M15 착수 때 �
   `authInternalUsers: []` 를 둔다.
 
 **3절 집계**: 결정됨 표 7행(K1·K2 묶음 + K3–K8) · 결정 8개(K1–K8 — K4 는 2026-10-23 개정, K6 은
-2026-10-24 (나) 로 개정 · POK-429) · 확인 항목 전체 10개(M15 가 C0 를 더함) = 완료 · 닫힘 6(D2 (라) · C0 · 실물 조합 publish ·
-api · cut · playback · SRT 잠금 · D8) + 이관 1(포트 → M9) + 남음 3(`resolve_ms` · 계약4 개정
+2026-10-24 (나) 로 개정 · POK-429) · 확인 항목 전체 10개(M15 가 C0 를 더함) = 완료 · 닫힘 7(D2 (라) · C0 · 실물 조합 publish ·
+api · cut · playback · SRT 잠금 · D8 · 계약4 개정) + 이관 1(포트 → M9) + 남음 2(`resolve_ms`
 · 설정 조회 완화). 선행 조건 1개는 해소.
 
 ---
