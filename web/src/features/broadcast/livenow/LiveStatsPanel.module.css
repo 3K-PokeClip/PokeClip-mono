@@ -9,7 +9,7 @@
   --sp-viewer: var(--pc-color-text-primary);
   --sp-grid: var(--pc-color-border-subtle);
   --sp-surface: var(--pc-color-bg-surface);
-  --sp-gold: #bf8a1f;
+  --sp-gold: #bf8a1f; /* 라이트 덮음 */
 
   border: 1px solid var(--pc-color-border-subtle);
   border-radius: calc(14 * var(--pc-u));
@@ -17,7 +17,7 @@
 }
 
 :global([data-theme='light']) .panel {
-  --sp-gold: #a87610;
+  --sp-gold: #a87610; /* 라이트 값 */
 }
 
 /* ---------- 머리줄 ---------- */
@@ -351,7 +351,7 @@
 .pin {
   border: 0;
   background: var(--sp-hl);
-  color: var(--pc-color-text-on-accent, #fff);
+  color: var(--pc-color-text-on-accent, #fff); /* 테마 고정 */
 }
 
 .pinManual {
@@ -481,7 +481,7 @@
   border-radius: calc(10 * var(--pc-u));
   background: var(--pc-color-bg-surface-raised);
   border: 1px solid var(--pc-color-border-default);
-  box-shadow: 0 8px 24px rgb(0 0 0 / 0.2);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.2); /* 테마 고정 */
   pointer-events: none;
   display: grid;
   gap: calc(4 * var(--pc-u));

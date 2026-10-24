@@ -29,8 +29,13 @@ export function PlayerSettingsPopover({
           <Settings size={19} aria-hidden />
         </button>
       </Popover.Trigger>
-      {/* role="dialog"로 뜨므로 이름이 있어야 한다 */}
-      <Popover.Content className={styles.settingsPanel} aria-label="플레이어 설정">
+      {/* role="dialog"로 뜨므로 이름이 있어야 한다. 영상 위 크롬이라 라이트에서도 어둡게 — 포털로
+          body에 붙으므로 플레이어에 건 테마는 닿지 않는다, 내용에 직접 data-theme을 단다 */}
+      <Popover.Content
+        className={styles.settingsPanel}
+        aria-label="플레이어 설정"
+        data-theme="dark"
+      >
         <div className={styles.settingsGroupLabel}>화질</div>
         <div className={styles.qualityList}>
           {PLAYER_QUALITIES.map((option) => (
