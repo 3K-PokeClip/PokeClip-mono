@@ -40,8 +40,10 @@ M11). 8단계(O8)에서 이름마다 하나씩 엽니다.
 | edge | `apex_distribution_domain` · `apex_distribution_zone_id` · `media_distribution_domain` · `media_distribution_zone_id` |
 
 `terraform_data.remote_contract` 의 precondition 이 이 여덟 값의 꼴(ALB ·
-NLB DNS 이름 · CloudFront 도메인 · 존 id `Z…`)을 봅니다. 출력이 빠졌거나 꼴이
-다르면 레코드보다 먼저 멈춥니다. 레코드가 0 인 기본값에서도 봅니다.
+NLB DNS 이름 · CloudFront 도메인 · 존 id `Z…`)을 봅니다. ALB 이름이
+`internal-` 로 시작하면(내부 ALB) 공개 ALB 가 아니므로 멈춥니다. 출력이
+빠졌거나 꼴이 다르면 레코드보다 먼저 멈춥니다. 레코드가 0 인 기본값에서도
+봅니다.
 
 ## 적용 — 이름마다 apply(O8)
 
