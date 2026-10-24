@@ -93,6 +93,7 @@ class UploadProcessorTest {
         assertThat(d).isEqualTo(Disposition.DELETE);
         assertThat(youtube.videosCreated()).isEqualTo(1);
         assertThat(internal.results).containsExactly("UPLOADED:vid1");
+        assertThat(internal.reportedChannels).as("resolve가 준 채널을 올림 보고에 싣는다(POK-423)").containsExactly("UC1");
         FakeYoutube.Session s = youtube.session(internal.sessionUri);
         assertThat(s.bytes.toByteArray()).isEqualTo(video);
         assertThat(s.privacy).isEqualTo("private");

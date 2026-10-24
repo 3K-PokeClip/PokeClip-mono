@@ -25,9 +25,14 @@ public class YoutubeTokenClient {
     }
 
     /**
-     * @param reason 거절 사유({@code NOT_LINKED}·{@code UNLINKED}·{@code BROKEN}·{@code REFRESH_UNAVAILABLE}). 받았으면 null
+     * @param reason    거절 사유({@code NOT_LINKED}·{@code UNLINKED}·{@code BROKEN}·{@code REFRESH_UNAVAILABLE}). 받았으면 null
+     * @param channelId 그 토큰의 유튜브 채널(POK-423). 올림 보고에 싣는다. 거절이면 null
      */
-    public record Token(String accessToken, String reason) {
+    public record Token(String accessToken, String reason, String channelId) {
+
+        Token(String accessToken, String reason) {
+            this(accessToken, reason, null);
+        }
 
         /** 강제 갱신을 청했는데 401을 받은 그 토큰이 다시 왔다(지문 칸을 모르는 옛 auth). 잠시 뒤 다시 = 지금 동작. */
         public static final String NOT_REFRESHED = "NOT_REFRESHED";
@@ -73,7 +78,7 @@ public class YoutubeTokenClient {
             throw new IllegalStateException("auth resolve가 " + reply.status() + "을 줬다");
         }
         if (reply.body().path("valid").asBoolean()) {
-            return new Token(reply.body().path("accessToken").asString(), null);
+            return new Token(reply.body().path("accessToken").asString(), null, reply.body().path("channelId").asString(null));
         }
         return new Token(null, reply.body().path("reason").asString("UNKNOWN"));
     }

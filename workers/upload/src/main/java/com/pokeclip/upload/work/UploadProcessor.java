@@ -63,6 +63,13 @@ public class UploadProcessor {
     private final List<Duration> retryDelays;
     private final Sleeper sleeper;
 
+    /**
+     * 이 배달에서 resolve가 준 유튜브 채널(POK-423). 올림 보고에 싣는다: 연동을 해제하거나 채널을 바꾸면 clip이 그 채널의 영상 번호만
+     * 골라 지운다. 배달 하나 동안만 쓰고 {@link #process} 처음에 비운다. 처리는 줄 스레드 하나({@code QueueWorker}의 {@code upload-queue})만
+     * 하므로 배달끼리 섞이지 않는다. 결론 내기 갈래처럼 토큰을 못 받은 배달은 {@code null}(채널 모름)이다.
+     */
+    private String channel;
+
     public UploadProcessor(EnvelopeParser parser, ClipUploadApi clip, YoutubeTokenClient auth, S3Download storage,
                            ResumableUploader youtube, ThumbnailStep thumbnails, Path workDir, long chunkSize,
                            List<Duration> retryDelays, Sleeper sleeper) {
@@ -108,6 +115,7 @@ public class UploadProcessor {
             return Disposition.DELETE;
         }
         Path file = workDir.resolve("upload-" + job.uploadId() + ".mp4");
+        channel = null;
         try {
             return run(job, file);
         } catch (Unavailable e) {
@@ -136,6 +144,7 @@ public class UploadProcessor {
         String session = started.sessionUri();
 
         Token token = auth.resolve(job.channelOwnerUserId());
+        channel = token.channelId();
         String code = "YOUTUBE_" + token.reason();
         String message = "유튜브 연동이 없거나 끊겼다. 스트리머가 다시 연동해야 한다";
         // 영상 바이트가 필요 없는 갈래는 창고에서 받기 전에 끝낸다. 재배달마다 수십 MB를 헛받지 않게(PR #199 codex 3판).
@@ -367,7 +376,7 @@ public class UploadProcessor {
             log.info("upload.thumbnail_unconfirmed uploadId={} code={}", job.uploadId(), thumbnail.errorCode());
             thumbnail = ClipUploadApi.ThumbnailReport.failed(THUMBNAIL_UNCONFIRMED);
         }
-        clip.uploaded(job.uploadId(), videoId, thumbnail);
+        clip.uploaded(job.uploadId(), videoId, thumbnail, channel);
         log.info("upload.done uploadId={} videoId={} thumbnail={}", job.uploadId(), videoId, thumbnail.outcome());
         return Disposition.DELETE;
     }
