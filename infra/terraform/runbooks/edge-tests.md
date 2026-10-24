@@ -407,8 +407,9 @@ O7f 의 2(T6b)와 4(T0 · T8e 해석 · T11 404 · T2b)입니다. 아래 명령�
 1.  AWS CLI 명령 기록이 꺼져 있습니다([엣지 비밀 런북](edge-secrets.md)
     「시험용 스트림 키 넣기」 의 1 과 같은 블록 — `CLI HISTORY OK`). 이
     단계는 이중 확인입니다 — 스크립트도 값을 읽기 전에 같은 검사로 막습니다
-    (종료 1 · `CLI HISTORY ENABLED` · `CLI HISTORY UNCHECKED` — 이름 풀이 ·
-    값 읽기 · KVS 호출 0). 그때는 기록을 끈 뒤 다시 합니다.
+    (종료 1 — 이름 풀이 · 값 읽기 · KVS 호출 0). `CLI HISTORY ENABLED` 면
+    기록을 끈 뒤 다시 하고, `CLI HISTORY UNCHECKED` 면 사유 줄을 보고 설정 ·
+    프로필 · lib 경로를 고친 뒤 다시 합니다(모르면 kty 에게 보고).
 1.  `aws --version` 이 `aws-cli/2.38.1` 이 아니면
     `bash infra/terraform/scripts/test/kvs_put_test.sh` 의
     `ok: real-cli-contract(` 줄을 본 뒤 진행합니다. 그 줄이 아니면(skip ·
@@ -440,6 +441,8 @@ echo "exit=$?"
 |---|---|---|---|
 | 0 | `KVS PUT OK` | 넣음 | 다음 번호로 |
 | 1 | `KVS PUT FAILED <단계> <코드>` · `SECRET VALUE EMPTY` · `SECRET VALUE INVALID` | 그 밖의 실패(값 검사 포함) | 다시 시도하지 않고 kty 에게 보고합니다. SCP 거부가 아니므로 A2 로 기록하지 않습니다 |
+| 1 | `CLI HISTORY ENABLED` + 사유 한 줄 | aws CLI 명령 기록이 켜짐(값 읽기 · KVS 호출 0) | 기록을 끄고 다시 합니다 |
+| 1 | `CLI HISTORY UNCHECKED` + 사유 한 줄 | 기록 검사를 하지 못함(설정 읽기 실패 · 공용 함수 없음 — 값 읽기 · KVS 호출 0) | 사유 줄을 보고 설정 · 프로필 · lib 경로를 고친 뒤 다시 합니다. 모르면 kty 에게 보고합니다 |
 | 2 | 사용법 | 인자 · KVS ARN 꼴 · 비밀 ID 꼴이 틀림 | 출력 이름(`cdn_kvs_arn` · `cdn_secret_arn`)을 다시 봅니다 |
 | 3 | `KVS HOST UNRESOLVED` + 사유 | 이름 풀이 실패 · KVS 엔드포인트 연결 실패(Could not connect) | 아래 「이름 풀이 우회」 뒤 다시 합니다. SCP 거부로 기록하지 않습니다 |
 | 4 | `KVS PUT DENIED` | KVS 호출(ETag 읽기 · PutKey)의 AccessDenied | 멈춤 자리 ② — 값 입력만 멈추고 승인 지점 A2(「멈춤 자리일 때」) |

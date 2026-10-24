@@ -901,6 +901,9 @@ rm -f -- "${value_file}"
     남지 않았는지 봅니다. 종료 2 · 3 → 종류 · 파일을 고칩니다. 종료 4
     (DENIED) → 다시 시도하지 않고 멈춥니다. 종료 5 → 멈추고 코드를
     보고합니다.
+*   종료 1(`CLI HISTORY ENABLED` · `CLI HISTORY UNCHECKED` — 값 파일은 읽지
+    않음) → `ENABLED` 면 기록을 끄고, `UNCHECKED` 면 사유 줄을 보고 설정 ·
+    프로필 · lib 경로를 고친 뒤 다시 넣습니다(모르면 kty 에게 보고).
 *   여덟을 넣은 뒤 그릇마다 버전이 있는지 봅니다(값은 나오지 않음):
     `aws secretsmanager describe-secret --region ap-northeast-2 --secret-id
     pokeclip/prod/<종류> --query 'length(keys(VersionIdsToStages))'` 가
@@ -1169,7 +1172,7 @@ rt1d 행과 POK-301 코멘트에 남깁니다. 7 의 보류 조건이 이 기록
 ```shell
 cd "$(git rev-parse --show-toplevel)"
 # 하위 셸 — 추적 · allexport 끔과 umask 가 밖으로 새지 않고, 값 파일은
-# put-secret 이 실패(종료 2 · 3 · 4 · 5)하거나 중간에 멈춰도 지워진다.
+# put-secret 이 실패(종료 1 · 2 · 3 · 4 · 5)하거나 중간에 멈춰도 지워진다.
 (
   set +o xtrace +o allexport
   umask 077
