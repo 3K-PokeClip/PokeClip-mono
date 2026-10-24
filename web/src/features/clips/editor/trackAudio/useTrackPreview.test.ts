@@ -333,6 +333,46 @@ describe('useTrackPreview', () => {
     }
   });
 
+  it('느려도 조각이 계속 오면 끊지 않는다: 시한은 진척이 멈춘 시간이다(PR #341 2차)', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.mocked(requestSegmentAudioAccess).mockResolvedValue({
+        expiresAt: '2026-10-23T00:05:00Z',
+        segments: [1, 2, 3].map((seq) => ({
+          seq,
+          startAtMs: BASE + 9_000 + seq * 1000,
+          durationMs: 1000,
+          url: `https://s3/seg_${seq}.m4s`,
+        })),
+      });
+      // 조각마다 40초 걸린다(동시에 넷까지라 셋이 함께 40초). 전체 시한이면 60초에 끊겼다
+      let calls = 0;
+      vi.mocked(fetch).mockImplementation(() => {
+        calls += 1;
+        const delay = calls * 40_000;
+        return new Promise<Response>((resolve) =>
+          setTimeout(() => resolve(new Response(new Uint8Array(fixture))), delay),
+        );
+      });
+      const { result } = renderHook(() =>
+        useTrackPreview({
+          streamId: 's-1',
+          baseMs: BASE,
+          window: WINDOW,
+          video: video(),
+          createContext: () => fakeContext().ctx as never,
+        }),
+      );
+      // 40 · 80 · 120초에 하나씩 온다: 사이는 늘 40초라 시한(60초)에 안 걸린다
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(130_000);
+      });
+      expect(result.current.status).toBe('ready');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('창이 바뀌면 앞 창의 조각 받기를 멈춘다(로컬 리뷰 2라운드)', async () => {
     const signals: AbortSignal[] = [];
     vi.mocked(fetch).mockImplementation((_url, init) => {

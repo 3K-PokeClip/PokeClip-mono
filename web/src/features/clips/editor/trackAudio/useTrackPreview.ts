@@ -34,8 +34,9 @@ type DecodingContext = AudioContextLike & Pick<AudioContext, 'decodeAudioData' |
 const defaultContext = (): DecodingContext => new AudioContext({ sampleRate: 24_000 });
 
 /**
- * 조각 받기·풀기가 이만큼 안에 안 끝나면 「못 부름」이다. 불러오는 동안 영상 소리를 꺼 둘 수 있어(음량을 바꿔 둔 편집본),
- * 받기가 멈춘 채면 화면이 아무 소리도 안 낸다(로컬 리뷰 2라운드). 3분 20초 창(조각 약 50개)을 보통 망에서 받는 데 넉넉하다
+ * 받기가 이만큼 아무 진척 없이 멈추면 「못 부름」이다. 불러오는 동안 영상 소리를 꺼 둘 수 있어(음량을 바꿔 둔 편집본),
+ * 받기가 멈춘 채면 화면이 아무 소리도 안 낸다(로컬 리뷰 2라운드). 조각(≈3MB) 하나가 올 때마다 다시 잰다: 전체에 시한을
+ * 걸면 느린 망에서 3분 구간(≈150MB)을 받다 끊고 받은 것을 다 버렸다(PR #341 2차)
  */
 export const TRACK_LOAD_TIMEOUT_MS = 60_000;
 
@@ -93,7 +94,14 @@ export function useTrackPreview(options: {
     let cancelled = false;
     // 창이 바뀌거나 화면이 떠나면 앞 창의 받기를 멈춘다: 안 멈추면 버릴 조각 수십 개를 끝까지 받는다(로컬 리뷰 2라운드)
     const abort = new AbortController();
-    const timer = setTimeout(() => abort.abort(), TRACK_LOAD_TIMEOUT_MS);
+    let settled = false;
+    let timer = setTimeout(() => abort.abort(), TRACK_LOAD_TIMEOUT_MS);
+    /** 받기가 한 걸음 나아갔다(주소 · 조각 하나): 멈춤 시한을 처음부터 다시 잰다 */
+    const progressed = () => {
+      if (settled) return;
+      clearTimeout(timer);
+      timer = setTimeout(() => abort.abort(), TRACK_LOAD_TIMEOUT_MS);
+    };
     const stopped = new Promise<never>((_, reject) => {
       abort.signal.addEventListener('abort', () => reject(new Error('track audio load stopped')));
     });
@@ -105,11 +113,17 @@ export function useTrackPreview(options: {
     Promise.race([
       loadTrackAudio(
         {
-          fetchAccess: () => requestSegmentAudioAccess(streamId, fromMs, toMs),
+          fetchAccess: async () => {
+            const access = await requestSegmentAudioAccess(streamId, fromMs, toMs);
+            progressed();
+            return access;
+          },
           fetchBytes: async (url) => {
             const res = await fetch(url, { signal: abort.signal });
             if (!res.ok) throw new Error(`segment ${res.status}`);
-            return res.arrayBuffer();
+            const bytes = await res.arrayBuffer();
+            progressed();
+            return bytes;
           },
           decode: (adts) => decoder.decodeAudioData(adts.buffer as ArrayBuffer),
         },
@@ -146,9 +160,13 @@ export function useTrackPreview(options: {
         setLevels(null);
         setStatus('unavailable');
       })
-      .finally(() => clearTimeout(timer));
+      .finally(() => {
+        settled = true;
+        clearTimeout(timer);
+      });
     return () => {
       cancelled = true;
+      settled = true;
       abort.abort();
       clearTimeout(timer);
     };
