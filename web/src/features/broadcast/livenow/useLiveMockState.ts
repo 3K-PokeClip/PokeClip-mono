@@ -160,6 +160,7 @@ function toLiveInfo(loaded: LoadedInfo): LiveInfo {
         : { title: view.latest.title, tags: view.latest.tags, category: view.latest.category },
     series: view.series,
     scope: loaded.scope,
+    platform: view.platform,
   };
 }
 

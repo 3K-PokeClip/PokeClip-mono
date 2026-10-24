@@ -33,6 +33,8 @@ export interface LiveInfo {
   /** 점마다 그 관측의 카테고리(POK-402) — 통계가 카테고리가 바뀐 구간을 나눈다. 옛 서버면 없다 */
   series: { observedAt: string; viewers: number | null; category?: string | null }[];
   scope: LiveInfoScope;
+  /** 정보 바가 값을 보이는 대표 플랫폼(POK-397, primaryInfo). 모르면(옛 서버 · 아직 안 고름) null이거나 빠진다 */
+  platform?: string | null;
 }
 export type LiveBroadcastStatus = 'live' | 'ended' | 'offline' | 'unknown';
 export interface LiveData {
