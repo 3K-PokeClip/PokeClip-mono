@@ -465,25 +465,36 @@ echo "exit=$?"
     전용으로 붙입니다. 자격 값은 파이프로만 지나가고 화면 · 명령 인자 · 환경
     변수에 남지 않습니다. 리전은 스크립트가 `--region` 으로 정하므로 `config`
     는 붙이지 않습니다.
-*   자격을 꺼내지 못하면(`CREDS FILE OK` 없음 — 프로필 · 로그인 확인)
-    컨테이너를 띄우지 않습니다. 컨테이너는 끝나면 지워지고(`--rm`), 자격
-    파일은 어느 쪽이든 마지막 줄이 지웁니다(`removed`).
+*   자격을 꺼내지 못하면(`CREDS FILE OK` 없음 — 프로필 · 로그인 확인 · 키
+    둘 중 하나라도 비면 여기서 멈춤) 컨테이너를 띄우지 않습니다.
+*   자격 디렉터리는 서브셸의 `EXIT` 트랩이 지웁니다 — 정상 · 실패 · 중단
+    (Ctrl-C · TERM · HUP) 모두 `removed` 가 나옵니다. 컨테이너는 끝나면
+    지워집니다(`--rm`). `--init` 과 `TINI_KILL_PROCESS_GROUP=1` 은 Ctrl-C 를
+    컨테이너 안 프로세스 묶음 전체에 넘겨 컨테이너도 끝나게 합니다(`--init`
+    만이면 PID 1 bash 가 신호를 받고도 자식을 기다려 끝나지 않습니다 —
+    2026-10-25 로컬 확인).
 
 ```shell
 image='amazon/aws-cli@sha256:733d5be1015825e4038c6016f3fa9954868ddee1f611b73be795a9cc2e706bfd'
 had_image=no
 docker image inspect "${image}" >/dev/null 2>&1 && had_image=yes
-creds_dir="$(mktemp -d)"
-if (umask 077 &&
+(
+  creds_dir="$(mktemp -d "${TMPDIR:-/tmp}/pokeclip-kvs-creds.XXXXXX")" || exit 1
+  cleanup='rm -rf -- "${creds_dir}" && test ! -e "${creds_dir}" && echo removed'
+  trap "${cleanup}" EXIT
+  trap 'exit 130' INT TERM HUP
+  umask 077
   aws configure export-credentials --profile "${AWS_PROFILE:-default}" |
-  jq -er '"[default]",
-    "aws_access_key_id = \(.AccessKeyId)",
-    "aws_secret_access_key = \(.SecretAccessKey)",
-    (.SessionToken // empty | "aws_session_token = \(.)")' \
-    > "${creds_dir}/credentials"); then
+    jq -er 'select((.AccessKeyId // "") != ""
+        and (.SecretAccessKey // "") != "")
+      | "[default]",
+        "aws_access_key_id = \(.AccessKeyId)",
+        "aws_secret_access_key = \(.SecretAccessKey)",
+        (.SessionToken // empty | "aws_session_token = \(.)")' \
+    > "${creds_dir}/credentials" || exit 1
   echo "CREDS FILE OK"
-  docker run --rm --label com.pokeclip.bench=kvs-put \
-    --dns 1.1.1.1 --dns 8.8.8.8 \
+  docker run --rm --init -e TINI_KILL_PROCESS_GROUP=1 \
+    --label com.pokeclip.bench=kvs-put --dns 1.1.1.1 --dns 8.8.8.8 \
     -v "${creds_dir}/credentials:/root/.aws/credentials:ro" \
     -v "${PWD}/infra/terraform/scripts:/work:ro" \
     --entrypoint /bin/bash "${image}" -c \
@@ -491,8 +502,7 @@ if (umask 077 &&
       exec bash /work/kvs-put-cdn-secret.sh "$@"' _ \
     --kvs-arn "${kvs_arn}" --secret-id "${secret_id}"
   echo "exit=$?"
-fi
-rm -rf -- "${creds_dir}" && test ! -e "${creds_dir}" && echo removed
+)
 ```
 
 끝나면 잔여 0 을 확인합니다. 이 실행이 받은 이미지(전에 없던 것)만
@@ -500,6 +510,7 @@ rm -rf -- "${creds_dir}" && test ! -e "${creds_dir}" && echo removed
 
 ```shell
 docker ps -a -q --filter label=com.pokeclip.bench=kvs-put | wc -l   # 0
+find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'pokeclip-kvs-creds.*' | wc -l   # 0
 if [ "${had_image}" = no ]; then docker image rm "${image}"; fi
 docker image inspect "${image}" >/dev/null 2>&1 && echo kept || echo removed
 # removed(전에 있었으면 kept)
