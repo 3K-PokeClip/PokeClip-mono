@@ -1,4 +1,4 @@
-import { renderHook, waitFor } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useEditorVideoPlayback } from './useEditorVideoPlayback';
 
@@ -64,7 +64,8 @@ describe('useEditorVideoPlayback — 녹화 구간', () => {
       }),
     );
     expect(fetchSpy).not.toHaveBeenCalled();
-    expect(result.current.playback.error).toBe('fatal');
+    // 실패 이유가 「녹화 없음」이라 화면이 그대로 알린다(POK-389)
+    expect(result.current.playback.error).toBe('no-recording');
   });
 
   it('구간은 틈 안인데 여유만 다음 녹화에 닿아도 받지 않는다 — 고른 장면이 아닌 영상이다(PR #205 codex)', () => {
@@ -78,7 +79,8 @@ describe('useEditorVideoPlayback — 녹화 구간', () => {
       }),
     );
     expect(fetchSpy).not.toHaveBeenCalled();
-    expect(result.current.playback.error).toBe('fatal');
+    // 실패 이유가 「녹화 없음」이라 화면이 그대로 알린다(POK-389)
+    expect(result.current.playback.error).toBe('no-recording');
   });
 
   it('구간 목록이 없으면 전처럼 앞뒤 10초 여유다', () => {
@@ -91,6 +93,237 @@ describe('useEditorVideoPlayback — 녹화 구간', () => {
       }),
     );
     expect(requestedWindow(fetchSpy)).toEqual({ fromSeconds: 20, toSeconds: 50 });
+  });
+});
+
+describe('useEditorVideoPlayback: 받은 창 알리기 (POK-389)', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('창은 영상을 다 받은 뒤에 알린다: 받는 동안 알리면 옛 영상을 새 창 시각으로 읽어 미리 듣기·필름띠가 어긋난다(PR #341 codex)', async () => {
+    let finish: (res: Response) => void = () => undefined;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => new Promise<Response>((resolve) => (finish = resolve))),
+    );
+    vi.stubGlobal(
+      'URL',
+      Object.assign(URL, { createObjectURL: () => 'blob:x', revokeObjectURL: () => undefined }),
+    );
+    const { result } = renderHook(() =>
+      useEditorVideoPlayback({
+        streamId: 'key-1',
+        recordingStartMs: BASE,
+        recordingSeconds: 38,
+        pieces: PIECES,
+        initialRange: { startSeconds: 5, endSeconds: 10 },
+      }),
+    );
+    expect(result.current.window).toBeNull();
+    // 받으려는 창은 처음부터 있다: 미리 듣기가 영상과 함께 조각을 받기 시작한다(PR #341 2차)
+    expect(result.current.targetWindow).toEqual({ startSeconds: 0, endSeconds: 14 });
+
+    finish(new Response('mp4', { status: 200 }));
+    await waitFor(() => expect(result.current.src).toBe('blob:x'));
+    expect(result.current.window).toEqual({ startSeconds: 0, endSeconds: 14 });
+  });
+});
+
+describe('useEditorVideoPlayback: 창 다시 받기 예약 (POK-389)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it('창 끝까지 끌었다가 곧 안쪽으로 돌리면 같은 창을 다시 받지 않는다(PR #341 codex)', () => {
+    vi.useFakeTimers();
+    const fetchSpy = vi.fn(() => new Promise<Response>(() => undefined));
+    vi.stubGlobal('fetch', fetchSpy);
+    const { result } = renderHook(() =>
+      useEditorVideoPlayback({
+        streamId: 'key-1',
+        recordingStartMs: BASE,
+        recordingSeconds: 100,
+        initialRange: { startSeconds: 20, endSeconds: 30 },
+      }),
+    );
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      result.current.playback.setBounds({ startSeconds: 20, endSeconds: 39.8, loop: true });
+      result.current.playback.setBounds({ startSeconds: 20, endSeconds: 30, loop: true });
+      vi.advanceTimersByTime(1_000);
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('useEditorVideoPlayback: 옛 영상 주소 지우기 (POK-389)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it('새 창을 받는 동안에는 옛 영상 주소를 지우지 않고, 새 영상이 들어온 뒤에 지운다(PR #341 claude)', async () => {
+    vi.useFakeTimers();
+    const finishers: ((res: Response) => void)[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => new Promise<Response>((resolve) => finishers.push(resolve))),
+    );
+    let made = 0;
+    const revoke = vi.fn();
+    vi.stubGlobal(
+      'URL',
+      Object.assign(URL, { createObjectURL: () => `blob:${++made}`, revokeObjectURL: revoke }),
+    );
+    const { result } = renderHook(() =>
+      useEditorVideoPlayback({
+        streamId: 'key-1',
+        recordingStartMs: BASE,
+        recordingSeconds: 100,
+        initialRange: { startSeconds: 20, endSeconds: 30 },
+      }),
+    );
+    await act(async () => {
+      finishers[0]!(new Response('mp4', { status: 200 }));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(result.current.src).toBe('blob:1');
+
+    // 구간을 창 끝 너머로 늘리면 새 창을 받는다. 받는 동안 <video>는 옛 주소를 그대로 쓴다
+    await act(async () => {
+      result.current.playback.setBounds({ startSeconds: 20, endSeconds: 45, loop: true });
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(finishers).toHaveLength(2);
+    expect(result.current.src).toBe('blob:1');
+    expect(revoke).not.toHaveBeenCalledWith('blob:1');
+
+    await act(async () => {
+      finishers[1]!(new Response('mp4', { status: 200 }));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(result.current.src).toBe('blob:2');
+    expect(revoke).toHaveBeenCalledWith('blob:1');
+    expect(revoke).not.toHaveBeenCalledWith('blob:2');
+  });
+});
+
+describe('useEditorVideoPlayback: 새 창을 받는 동안의 시각 (POK-389)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it('새 창을 받는 동안은 아직 도는 옛 영상의 창으로 시각을 옮기고, 새 영상이 들어오면 새 창으로 옮긴다(PR #341 claude)', async () => {
+    vi.useFakeTimers();
+    const finishers: ((res: Response) => void)[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => new Promise<Response>((resolve) => finishers.push(resolve))),
+    );
+    let made = 0;
+    vi.stubGlobal(
+      'URL',
+      Object.assign(URL, { createObjectURL: () => `blob:${++made}`, revokeObjectURL: () => {} }),
+    );
+    const node = Object.assign(new EventTarget(), {
+      currentTime: 0,
+      paused: true,
+      readyState: 0,
+      playbackRate: 1,
+    }) as unknown as HTMLVideoElement;
+    const { result } = renderHook(() =>
+      useEditorVideoPlayback({
+        streamId: 'key-1',
+        recordingStartMs: BASE,
+        recordingSeconds: 100,
+        initialRange: { startSeconds: 20, endSeconds: 30 },
+      }),
+    );
+    act(() => result.current.videoRef(node));
+    // 첫 창: 구간 앞뒤 10초(10~40초)
+    await act(async () => {
+      finishers[0]!(new Response('mp4', { status: 200 }));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(result.current.window).toEqual({ startSeconds: 10, endSeconds: 40 });
+    act(() => {
+      node.currentTime = 15;
+      node.dispatchEvent(new Event('timeupdate'));
+    });
+    expect(result.current.playback.currentSeconds).toBe(25);
+
+    // 시작을 창 앞쪽 끝까지 당기면 새 창(0.2~40초)을 받는다. 받는 동안 <video>는 옛 창(10~40초) 영상 그대로다
+    await act(async () => {
+      result.current.playback.setBounds({ startSeconds: 10.2, endSeconds: 30, loop: true });
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(finishers).toHaveLength(2);
+    act(() => node.dispatchEvent(new Event('timeupdate')));
+    expect(result.current.playback.currentSeconds).toBe(25);
+    act(() => result.current.playback.seekTo(28));
+    expect(node.currentTime).toBe(18);
+
+    // 새 영상이 들어오면 새 창으로 옮기고, 구간 시작으로 간다
+    await act(async () => {
+      finishers[1]!(new Response('mp4', { status: 200 }));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    act(() => node.dispatchEvent(new Event('loadedmetadata')));
+    expect(node.currentTime).toBeCloseTo(10);
+    expect(result.current.playback.currentSeconds).toBeCloseTo(10.2);
+  });
+});
+
+describe('useEditorVideoPlayback: 재생 거절 (POK-389)', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  function videoNode(play: () => Promise<void>) {
+    return Object.assign(document.createElement('video'), { play }) as HTMLVideoElement;
+  }
+  const props = {
+    streamId: 'key-1',
+    recordingStartMs: BASE,
+    recordingSeconds: 38,
+    pieces: PIECES,
+    initialRange: { startSeconds: 5, endSeconds: 10 },
+  };
+
+  it('재생을 누르자마자 멈춰 play()가 AbortError로 거절돼도 오류로 알리지 않는다: 보통 조작이다(로컬 리뷰 4라운드)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => new Promise<Response>(() => undefined)),
+    );
+    const { result } = renderHook(() => useEditorVideoPlayback(props));
+    act(() =>
+      result.current.videoRef(
+        videoNode(() => Promise.reject(new DOMException('interrupted', 'AbortError'))),
+      ),
+    );
+    await act(async () => {
+      result.current.playback.togglePlay();
+      await Promise.resolve();
+    });
+    expect(result.current.playback.error).toBeNull();
+  });
+
+  it('그 밖의 이유로 재생을 못 하면 「불러오지 못함」으로 알린다', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => new Promise<Response>(() => undefined)),
+    );
+    const { result } = renderHook(() => useEditorVideoPlayback(props));
+    act(() =>
+      result.current.videoRef(
+        videoNode(() => Promise.reject(new DOMException('bad', 'NotSupportedError'))),
+      ),
+    );
+    await act(async () => {
+      result.current.playback.togglePlay();
+      await Promise.resolve();
+    });
+    expect(result.current.playback.error).toBe('fatal');
   });
 });
 
@@ -173,5 +406,34 @@ describe('useEditorVideoPlayback: 출입증 쿠키 (POK-317)', () => {
       fetchSpy.mock.calls.filter(([url]) => String(url).endsWith('/playback-access')),
     ).toHaveLength(2);
     await waitFor(() => expect(result.current.playback.error).toBeNull());
+  });
+
+  it('출입증을 다시 받아도 403이면 「출입증 거절」로 알린다(POK-389)', async () => {
+    vi.resetModules();
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_PLAYBACK_BASE_URL', 'https://media.test');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) =>
+        Promise.resolve(
+          String(input).endsWith('/playback-access')
+            ? new Response(JSON.stringify({ expiresAt: '2999-01-01T00:00:00Z' }), { status: 200 })
+            : new Response(null, { status: 403 }),
+        ),
+      ),
+    );
+    const { ensurePlaybackAccess } = await import('@/api/playbackAccess');
+    const { useEditorVideoPlayback: hook } = await import('./useEditorVideoPlayback');
+    await ensurePlaybackAccess('S-1', 'key-1');
+
+    const { result } = renderHook(() =>
+      hook({
+        streamId: 'key-1',
+        recordingStartMs: BASE,
+        recordingSeconds: 38,
+        pieces: PIECES,
+        initialRange: { startSeconds: 5, endSeconds: 10 },
+      }),
+    );
+    await waitFor(() => expect(result.current.playback.error).toBe('access'));
   });
 });

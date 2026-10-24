@@ -165,7 +165,7 @@ type UploadStore interface {
 // 결정 9‴(bytes 의 쓰기 소유자는 UpdateTail 하나)와 모순되지 않는 이유가 이것이다.
 // upload_state <> 'uploaded' 가드는 확정된 행을 되돌리지 못하게 한다.
 const markUploadedSQL = `
-UPDATE stream_segments SET upload_state = 'uploaded', uploaded_at = now()
+UPDATE stream_segments SET upload_state = 'uploaded', uploaded_at = pg_catalog.now()
  WHERE stream_id = $1 AND seq = $2 AND upload_state <> 'uploaded' AND bytes = $3`
 
 // markFailedSQL — 같은 CAS 다. uploaded_at 은 건드리지 않는다.
@@ -180,7 +180,7 @@ UPDATE stream_segments SET upload_state = 'failed'
 // IN ('pending','failed') 가드는 확정된 행을 되돌리지 못하게 한다.
 const markPlaybackUploadedSQL = `
 UPDATE stream_segments
-   SET playback_upload_state = 'uploaded', playback_uploaded_at = now(), playback_bytes = $3
+   SET playback_upload_state = 'uploaded', playback_uploaded_at = pg_catalog.now(), playback_bytes = $3
  WHERE stream_id = $1 AND seq = $2 AND playback_upload_state IN ('pending','failed')`
 
 // markPlaybackFailedSQL 은 일시 실패용 한 문장이다 — 설계 5.5.5 둘째 문장 그대로다.
@@ -208,12 +208,12 @@ WITH seg AS (
     RETURNING session_id
 ), sess AS (
     UPDATE stream_sessions s
-       SET state = 'ending', ending_at = now(), end_reason = $4
+       SET state = 'ending', ending_at = pg_catalog.now(), end_reason = $4
       FROM seg
      WHERE s.session_id = seg.session_id AND s.state = 'live'
     RETURNING 1
 )
-SELECT (SELECT count(*) FROM seg)`
+SELECT (SELECT pg_catalog.count(*) FROM seg)`
 
 // ReasonInitMismatch 는 MarkPlaybackFailed 의 사유 중 세션을 끝내는 유일한 값이며, 그대로
 // stream_sessions.end_reason 에 적힌다(계획 5절 새 어휘 2 중 하나). M3 의 'td_exceeded' 와
@@ -288,7 +288,7 @@ WITH cur AS (
       FROM stream_sessions s WHERE s.session_id = $1 FOR UPDATE
 ), upd AS (
     UPDATE stream_sessions s SET
-        init_s3_key = $3, init_bytes = $4, init_uploaded_at = now(), init_sha256 = $2,
+        init_s3_key = $3, init_bytes = $4, init_uploaded_at = pg_catalog.now(), init_sha256 = $2,
         inherits_session   = CASE WHEN s.inherits_session IS NOT NULL AND $5 THEN NULL ELSE s.inherits_session END,
         discontinuity_base = CASE WHEN s.inherits_session IS NOT NULL AND $5 THEN 0    ELSE s.discontinuity_base END
       FROM cur
@@ -296,7 +296,7 @@ WITH cur AS (
        AND (s.init_sha256 IS NULL OR s.init_sha256 = $2)
     RETURNING (cur.inherits_session IS NOT NULL AND $5) AS revoked
 )
-SELECT (SELECT count(*) FROM upd), cur.init_sha256, cur.init_uploaded_at,
+SELECT (SELECT pg_catalog.count(*) FROM upd), cur.init_sha256, cur.init_uploaded_at,
        COALESCE((SELECT revoked FROM upd), false)
   FROM cur`
 
@@ -324,7 +324,7 @@ SELECT t.stream_id, t.seq, t.s3_key, t.local_path, t.bytes,
    AND t.bytes IS NOT NULL
    AND ( EXISTS (SELECT 1 FROM stream_segments s
                   WHERE s.stream_id = t.stream_id AND s.seq > t.seq)
-         OR t.start_wall_utc < now() - make_interval(secs => $1::double precision) )
+         OR t.start_wall_utc < pg_catalog.now() - pg_catalog.make_interval(secs => $1::double precision) )
    AND ( (t.upload_state <> 'pending'), t.start_wall_utc, t.stream_id, t.seq )
        > ( $3::boolean, $4::timestamptz, $5::text, $6::bigint )
  ORDER BY (t.upload_state <> 'pending'), t.start_wall_utc, t.stream_id, t.seq
@@ -369,7 +369,7 @@ SELECT t.stream_id, t.seq, t.playback_s3_key, t.local_path, t.bytes,
    AND t.seq >= cut.cutoff_seq
    AND ( EXISTS (SELECT 1 FROM stream_segments s
                   WHERE s.stream_id = t.stream_id AND s.seq > t.seq)
-         OR t.start_wall_utc < now() - make_interval(secs => $1::double precision) )
+         OR t.start_wall_utc < pg_catalog.now() - pg_catalog.make_interval(secs => $1::double precision) )
    AND ( (t.playback_upload_state <> 'pending'), t.start_wall_utc, t.stream_id, t.seq )
        > ( $3::boolean, $4::timestamptz, $5::text, $6::bigint )
  ORDER BY (t.playback_upload_state <> 'pending'), t.start_wall_utc, t.stream_id, t.seq
@@ -422,9 +422,9 @@ SELECT s.stream_id, 0::bigint, '', seg.local_path, seg.bytes,
 // bytesNull 필터를 IN ('pending','failed') 로 못 박는다. 상태 열에 예상 밖 값이 들어오면
 // "<> 'uploaded'" 만으로는 부분집합 관계가 깨진다.
 const countArchiveBacklogSQL = `
-SELECT count(*) FILTER (WHERE upload_state = 'pending'),
-       count(*) FILTER (WHERE upload_state = 'failed'),
-       count(*) FILTER (WHERE upload_state IN ('pending','failed') AND bytes IS NULL)
+SELECT pg_catalog.count(*) FILTER (WHERE upload_state = 'pending'),
+       pg_catalog.count(*) FILTER (WHERE upload_state = 'failed'),
+       pg_catalog.count(*) FILTER (WHERE upload_state IN ('pending','failed') AND bytes IS NULL)
   FROM stream_segments WHERE local_path IS NOT NULL`
 
 // countPlaybackBacklogSQL — ③ 는 세션 귀속 조각만 센다(세션 없는 조각은 대상이 아니다).
@@ -434,9 +434,9 @@ SELECT count(*) FILTER (WHERE upload_state = 'pending'),
 // 않는 면제 행을 이 집계가 영구 적체로 보고한다. stream_cutoffs 는 stream_id 가 PK 라 조인이
 // 행을 불리지 않는다.
 const countPlaybackBacklogSQL = `
-SELECT count(*) FILTER (WHERE t.playback_upload_state = 'pending'),
-       count(*) FILTER (WHERE t.playback_upload_state = 'failed'),
-       count(*) FILTER (WHERE t.playback_upload_state IN ('pending','failed') AND t.bytes IS NULL)
+SELECT pg_catalog.count(*) FILTER (WHERE t.playback_upload_state = 'pending'),
+       pg_catalog.count(*) FILTER (WHERE t.playback_upload_state = 'failed'),
+       pg_catalog.count(*) FILTER (WHERE t.playback_upload_state IN ('pending','failed') AND t.bytes IS NULL)
   FROM stream_segments t
   JOIN stream_cutoffs  cut  ON cut.stream_id   = t.stream_id
  WHERE t.local_path IS NOT NULL AND t.session_id IS NOT NULL
@@ -446,8 +446,8 @@ SELECT count(*) FILTER (WHERE t.playback_upload_state = 'pending'),
 // 언제나 0 이다(5.5.5 는 init 에 성공 문장 하나만 정의한다). bytesNull 은 만들 재료가 없는
 // 세션 수다 — 조각이 하나도 없어 재추출 자체가 불가능한 국면의 관측이다.
 const countInitBacklogSQL = `
-SELECT count(*), 0::bigint,
-       count(*) FILTER (WHERE NOT EXISTS (
+SELECT pg_catalog.count(*), 0::bigint,
+       pg_catalog.count(*) FILTER (WHERE NOT EXISTS (
            SELECT 1 FROM stream_segments g
             WHERE g.stream_id = s.stream_id AND g.session_id = s.session_id
               AND g.local_path IS NOT NULL AND g.bytes IS NOT NULL))

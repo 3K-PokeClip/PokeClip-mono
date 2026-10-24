@@ -49,6 +49,25 @@ class DelegationListAndRevokeTest extends DelegationTestSupport {
                 .andExpect(jsonPath("$[0].counterpartName").value(streamer.getName()));
     }
 
+    /** 편집자 관리·채널 목록이 상대 얼굴을 그린다. 주소는 회원 정보(me)와 같은 규칙이고, 사진이 없으면 null(화면은 이니셜). */
+    @Test
+    void 목록에_상대의_프로필_사진_주소가_실린다() throws Exception {
+        User streamer = newUser();
+        User editor = userService.findOrCreate("sub-photo", "photo@example.com", "사진있는편집자",
+                "https://img/editor.png");
+        grant(streamer, editor);
+
+        mockMvc.perform(get("/api/editor-delegations/as-streamer")
+                        .header("Authorization", "Bearer " + accessTokenOf(streamer)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].counterpartProfileImageUrl").value("https://img/editor.png"));
+
+        mockMvc.perform(get("/api/editor-delegations/as-editor")
+                        .header("Authorization", "Bearer " + accessTokenOf(editor)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].counterpartProfileImageUrl").isEmpty());
+    }
+
     @Test
     void 스트리머가_내보내면_STREAMER로_남는다() throws Exception {
         User streamer = newUser();

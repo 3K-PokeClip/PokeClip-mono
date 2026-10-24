@@ -59,6 +59,8 @@ import {
   type RecordingTimeline,
 } from '@/features/player/recordingTimeline';
 import { useEditorVideoPlayback } from '../useEditorVideoPlayback';
+import { useTrackPreview } from '../trackAudio/useTrackPreview';
+import type { FilmstripSource } from './VideoFilmstrip';
 import {
   lookFromDocument,
   outputFromLook,
@@ -77,6 +79,7 @@ import {
   sceneOffsetFromPlayhead,
   scheduleInstant,
   scheduleOf,
+  withPickedScene,
 } from '../uploadInfo';
 import type { SceneFrameSource } from '../useSceneFrames';
 import { clipLabel, clipSettled } from './clipProgress';
@@ -106,7 +109,8 @@ const TEXT_ENTRY =
  * 안 쓰는 키까지 양보한다(버튼은 화살표를 안 쓰고 슬라이더는 Space를 안 쓴다).
  */
 const KEY_OWNERS: Partial<Record<EditorIntent['kind'], string>> = {
-  togglePlay: 'button:not([role]), [role="button"], [role="switch"], [role="tab"], [role="radio"]',
+  togglePlay:
+    'button:not([role]), [role="button"], [role="switch"], [role="tab"], [role="radio"], input[type="checkbox"]',
   seekBy: '[role="slider"], [role="radiogroup"], [role="tablist"]',
 };
 
@@ -125,6 +129,13 @@ function timelineHeadroom(previewColumn: HTMLElement | null): number {
   const spilled = previewColumn.scrollHeight - previewColumn.clientHeight;
   return spare - spilled;
 }
+
+/** 필름띠 그림 모양: 원본 화면 전체를 그대로(층 하나, 자르지 않음) */
+const FULL_FRAME_OUTPUT: FilmstripSource['output'] = {
+  outputId: 'filmstrip',
+  aspect: 'VERT_9_16',
+  layers: [{ crop: { x: 0, y: 0, w: 1, h: 1 }, box: { x: 0, y: 0, w: 1, h: 1 } }],
+};
 
 /** 시안 그대로의 편집기 본체. 옵션(소스·동작)은 마운트 값이다 — 컨테이너가 key로 갈아 끼운다. */
 export function StudioEditor(options: ClipEditorOptions = {}) {
@@ -168,9 +179,10 @@ export function StudioEditor(options: ClipEditorOptions = {}) {
     function onKeyDown(event: globalThis.KeyboardEvent) {
       const target = event.target instanceof Element ? event.target : null;
       // 창(업로드 정보 등)이 떠 있는 동안에는 편집기 단축키를 통째로 끈다. 안 끄면 창 안 라디오 위 Space가 재생으로 새며
-      // 선택을 막고, 스위치·라디오 위 I·O·⌘Z가 창 뒤 편집기의 구간과 기록을 바꾼다(POK-291)
+      // 선택을 막고, 스위치·라디오 위 I·O·⌘Z가 창 뒤 편집기의 구간과 기록을 바꾼다(POK-291). 열린 메뉴(재생 속도) 안도
+      // 같다: 항목 위 Space가 고르기 대신 재생을 켜고 ← → · I · O가 메뉴 뒤 편집기로 샜다(PR #341 3차)
       if (
-        target?.closest('[role="dialog"]') != null ||
+        target?.closest('[role="dialog"], [role="menu"]') != null ||
         document.querySelector('[aria-modal="true"]') !== null
       )
         return;
@@ -207,7 +219,7 @@ export function StudioEditor(options: ClipEditorOptions = {}) {
 
   return (
     <div className={styles.screen}>
-      <EditorHeader state={state} showTemplateSave />
+      <EditorHeader state={state} />
       <main className={styles.body} data-panel-side={state.panelSide}>
         <ToolRail
           tools={state.toolOptions}
@@ -220,7 +232,7 @@ export function StudioEditor(options: ClipEditorOptions = {}) {
         <ToolPanel state={state} />
         <div className={styles.previewColumn} ref={previewColumnRef}>
           <PreviewCanvas state={state} />
-          <TransportBar state={state} showRangeLength />
+          <TransportBar state={state} />
         </div>
       </main>
       <MultitrackTimeline state={state} headroom={headroom} />
@@ -567,6 +579,8 @@ interface PendingUpload {
   recipe: EditorRecipe;
   cutLengthMs: number;
   initial: UploadDraft;
+  /** 썸네일 장면이 편집기의 「이 장면을 썸네일로」로 채워졌는가(POK-389) */
+  pickedInEditor: boolean;
   playheadOffsetMs: number | null;
   /** 카드 시각(하이라이트)을 완성 영상 시각으로. 카드 없이 연 편집본이거나 영상 밖이면 null */
   highlightOffsetMs: number | null;
@@ -626,6 +640,31 @@ function WiredStudio({
     pieces: recordingPieces,
     initialRange,
   });
+  // 트랙별 미리 듣기: 영상이 받으려는 창과 같은 창의 녹화 조각(방송 소리 트랙 전부)을 영상과 함께 받기 시작해, 영상 노드를
+  // 따라 튼다(POK-389). 따라 틀기는 영상이 실제로 받아 튼 창으로 옮긴다
+  const trackPreview = useTrackPreview({
+    streamId,
+    baseMs: base,
+    window: recording ? video.targetWindow : null,
+    video: recording ? video.video : null,
+    playingFromSeconds: recording ? (video.window?.startSeconds ?? null) : null,
+  });
+
+  // 타임라인 필름띠(POK-389): 받아 둔 녹화 파일에서 원본 화면 그대로(자르지 않은 16:9) 칸마다 뽑는다
+  const loadedWindow = video.window;
+  const filmstripSource = useMemo<FilmstripSource | null>(
+    () =>
+      recording && video.src !== '' && loadedWindow !== null
+        ? {
+            src: video.src,
+            videoSecondsAt: (ms) => ms / 1000 - loadedWindow.startSeconds,
+            output: FULL_FRAME_OUTPUT,
+            fromSeconds: loadedWindow.startSeconds,
+            toSeconds: loadedWindow.endSeconds,
+          }
+        : null,
+    [recording, video.src, loadedWindow],
+  );
 
   const [save, setSave] = useState<SaveState>(() => ({
     recipeId: saved?.id ?? null,
@@ -749,7 +788,7 @@ function WiredStudio({
 
   /** 「영상 만들기」 = 업로드 정보 창을 연다. 연 순간의 화면이 주문할 모양이다(창이 떠 있는 동안 편집기는 안 바뀐다) */
   const openUploadDialog = useCallback(
-    (recipe: EditorRecipe) => {
+    (recipe: EditorRecipe, thumbnailSeconds: number | null) => {
       const current = saveRef.current;
       if (current.busy !== null) return;
       const playheadSeconds = playheadRef.current;
@@ -786,11 +825,13 @@ function WiredStudio({
         : stored
           ? draftFromSummary(stored, scene)
           : emptyUploadDraft(scene);
+      const prefilled = withPickedScene(initial, thumbnailSeconds, rangeStart, cutLengthMs);
       setUploadErrors({});
       setPending({
         recipe,
         cutLengthMs,
-        initial,
+        initial: prefilled.draft,
+        pickedInEditor: prefilled.picked,
         playheadOffsetMs: sceneOffsetFromPlayhead(playheadSeconds, rangeStart, cutLengthMs),
         highlightOffsetMs,
         frameSource,
@@ -926,7 +967,6 @@ function WiredStudio({
         label: trackDisplayName(i, trackLabels?.[i]),
         volume: 100,
         muted: false,
-        clips: [],
       });
     }
     return { tracks, muted, volumes };
@@ -954,8 +994,11 @@ function WiredStudio({
         id: `saved-${i}`,
         timecode: (Math.max(0, seg.startAtMs - cut.inAtMs) / 1000).toFixed(1).padStart(4, '0'),
         text: seg.text,
+        // 타임라인 자막 줄의 자리: 소스 축(기준점 + 초)이다
+        startSeconds: (seg.startAtMs - base) / 1000,
+        endSeconds: (seg.endAtMs - base) / 1000,
       }));
-  }, [saved]);
+  }, [saved, base]);
   const label =
     save.clip && save.busy === null && !save.label.includes('영상 #')
       ? `${save.label} · ${clipLabel(save.clip)}`
@@ -981,6 +1024,8 @@ function WiredStudio({
         autosaveLabel={label}
         uploadLabel="영상 만들기"
         mixTrackId={trackId(0)}
+        trackPreview={recording ? trackPreview : undefined}
+        filmstripSource={filmstripSource}
         tracks={trackSetup.tracks}
         initialTrackMuted={trackSetup.muted}
         initialTrackVolumes={trackSetup.volumes}
@@ -993,6 +1038,7 @@ function WiredStudio({
           busy={save.busy === 'render'}
           initial={pending.initial}
           cutLengthMs={pending.cutLengthMs}
+          pickedInEditor={pending.pickedInEditor}
           playheadOffsetMs={pending.playheadOffsetMs}
           highlightOffsetMs={pending.highlightOffsetMs}
           frameSource={pending.frameSource}

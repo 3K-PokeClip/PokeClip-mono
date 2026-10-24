@@ -1,0 +1,199 @@
+# 단계 묶음 — 열: 동작 · 리전 · 자원 패턴(탭 구분). 「#」 줄은 주석, 빈 줄은
+# 건너뜀. 계정 자리는 ${ACCOUNT} 뿐(판정 때 caller identity 의 계정 ID).
+# 같은 (동작, 리전)은 한 행. 자원 패턴을 계획이 주지 않으면 *.
+# 출처: 계획 rt1a c6 · 착수 체크리스트 H1 · 설계 D11 · K5(prod/runtime 본
+# apply · 실행기 켬 · 끔 · SQL 실행). 2-3 판정 묶음이다 — POK-365 완료로
+# K5 가 바뀌었다(kty 2026-10-23 · 단계 순서는 O7c 뒤 · O7d 앞).
+# rds-db:connect 는 넣지 않는다(결정 48 — O7e-stop1 에만).
+# 읽기 동작은 provider v6.19.0 소스(internal/service/{rds,iam,ec2,s3,sns,sqs,
+# secretsmanager,logs}) 의 호출에서 뽑았다(2026-10-23). 잠금 판 v6.68.0 대조로
+# 더한 것(2026-10-24): rds:ModifyDBInstance(rds/instance.go — 생성 응답의 CA 가
+# 지정 CA 와 다르면 고친다) · sns:ListSubscriptionsByTopic
+# (sns/topic_subscription.go — 구독 읽기). 실행기 상자 생성 경로
+# (ec2/ec2_instance.go · vpc_security_group*.go · iam/{role,instance_profile,
+# role_policy_attachment}.go · ssm/parameter_data_source.go)의 호출은 아래
+# 행에 모두 있어 더한 것이 없다 — ec2:DescribeSubnets 는 그 경로가 부르지
+# 않는다. RDS 를 VPC 에 만드는 경로도 ec2 읽기를 더하지 않는다(2026-10-24
+# 대조): 잠금 판 v6.68.0 의 rds/instance.go · subnet_group.go ·
+# parameter_group.go 는 RDS 클라이언트만 부르고, 서비스 승인 참조
+# list_rds.html 의 CreateDBInstance · CreateDBSubnetGroup · ModifyDBInstance
+# 는 의존 동작이 없다. 서브넷 · AZ · VPC 속성 · 인터넷 게이트웨이 조회
+# (ec2:DescribeSubnets · DescribeAvailabilityZones · DescribeVpcAttribute ·
+# DescribeInternetGateways 등)는 RDS 서비스 연결 역할의 관리형 정책
+# AmazonRDSServiceRolePolicy 에 있다 — 호출자 권한이 아니다.
+# 판정 읽기와 이름이 같은 Terraform 자기 읽기는 제 덩어리에 자원 * 한 행으로
+# 둔다(같은 (동작, 리전)은 한 행 — * 가 prod 경로도 덮는다).
+
+# RDS — 인스턴스 · 파라미터 그룹 · 서브넷 그룹 · 태그(D2)
+rds:CreateDBInstance	ap-northeast-2	*
+rds:DescribeDBInstances	ap-northeast-2	*
+rds:CreateDBParameterGroup	ap-northeast-2	*
+rds:ModifyDBInstance	ap-northeast-2	*
+rds:ModifyDBParameterGroup	ap-northeast-2	*
+rds:DescribeDBParameterGroups	ap-northeast-2	*
+rds:DescribeDBParameters	ap-northeast-2	*
+rds:CreateDBSubnetGroup	ap-northeast-2	*
+rds:DescribeDBSubnetGroups	ap-northeast-2	*
+rds:AddTagsToResource	ap-northeast-2	*
+rds:ListTagsForResource	ap-northeast-2	*
+
+# RDS 서비스 연결 역할(계정에 없을 때 첫 인스턴스 생성이 만든다)
+iam:CreateServiceLinkedRole	us-east-1	arn:aws:iam::${ACCOUNT}:role/aws-service-role/rds.amazonaws.com/AWSServiceRoleForRDS
+
+# 비밀 — 앱 비밀 그릇 일곱(c3) · RDS 관리형 마스터 비밀(D1). 관리형 비밀은
+# RDS 가 호출자 권한으로 kms:DescribeKey · secretsmanager:CreateSecret ·
+# secretsmanager:TagResource 를 쓴다(RDS 사용 설명서 「Permissions required for
+# Secrets Manager integration」 — 2026-10-23 확인). 그 비밀 이름은 rds!db-* 이지만
+# 같은 (동작, 리전)은 한 행이라 그릇 경로 pokeclip/prod/* 하나로 판정한다.
+secretsmanager:CreateSecret	ap-northeast-2	arn:aws:secretsmanager:ap-northeast-2:${ACCOUNT}:secret:pokeclip/prod/*
+secretsmanager:TagResource	ap-northeast-2	arn:aws:secretsmanager:ap-northeast-2:${ACCOUNT}:secret:pokeclip/prod/*
+secretsmanager:DescribeSecret	ap-northeast-2	arn:aws:secretsmanager:ap-northeast-2:${ACCOUNT}:secret:pokeclip/prod/*
+secretsmanager:GetResourcePolicy	ap-northeast-2	*
+kms:DescribeKey	ap-northeast-2	*
+
+# 실행기 루트 볼륨 암호화(EBS — 기본 키 aws/ebs). AWS EBS 사용 설명서
+# 「Amazon EBS encryption requirements」 의 사용자 권한(2026-10-24 확인 — 문서의
+# kms:ReEncrypt* 는 IAM 동작 ReEncryptFrom · ReEncryptTo 둘이다).
+kms:CreateGrant	ap-northeast-2	*
+kms:Decrypt	ap-northeast-2	*
+kms:GenerateDataKeyWithoutPlaintext	ap-northeast-2	*
+kms:ReEncryptFrom	ap-northeast-2	*
+kms:ReEncryptTo	ap-northeast-2	*
+
+# 보안 그룹 — RDS SG(규칙 0 — 기본 이그레스 회수) · 실행기 SG · 별도 규칙 자원
+ec2:CreateSecurityGroup	ap-northeast-2	*
+ec2:DescribeSecurityGroups	ap-northeast-2	*
+ec2:DescribeSecurityGroupRules	ap-northeast-2	*
+ec2:AuthorizeSecurityGroupIngress	ap-northeast-2	*
+ec2:AuthorizeSecurityGroupEgress	ap-northeast-2	*
+ec2:RevokeSecurityGroupEgress	ap-northeast-2	*
+ec2:CreateTags	ap-northeast-2	*
+
+# rewind 버킷(D10 — 공개 차단 · 소유권 · SSE-S3 · 수명주기)
+s3:CreateBucket	ap-northeast-2	*
+s3:PutBucketTagging	ap-northeast-2	*
+s3:PutBucketPublicAccessBlock	ap-northeast-2	*
+s3:PutBucketOwnershipControls	ap-northeast-2	*
+s3:PutEncryptionConfiguration	ap-northeast-2	*
+s3:PutLifecycleConfiguration	ap-northeast-2	*
+s3:GetBucketPolicy	ap-northeast-2	*
+s3:GetBucketAcl	ap-northeast-2	*
+s3:GetBucketCORS	ap-northeast-2	*
+s3:GetBucketWebsite	ap-northeast-2	*
+s3:GetBucketVersioning	ap-northeast-2	*
+s3:GetAccelerateConfiguration	ap-northeast-2	*
+s3:GetBucketRequestPayment	ap-northeast-2	*
+s3:GetBucketLogging	ap-northeast-2	*
+s3:GetLifecycleConfiguration	ap-northeast-2	*
+s3:GetReplicationConfiguration	ap-northeast-2	*
+s3:GetEncryptionConfiguration	ap-northeast-2	*
+s3:GetBucketObjectLockConfiguration	ap-northeast-2	*
+s3:GetBucketTagging	ap-northeast-2	*
+s3:GetBucketPublicAccessBlock	ap-northeast-2	*
+s3:GetBucketOwnershipControls	ap-northeast-2	*
+
+# 계약9 — SNS FIFO 주제 · 구독 · SQS FIFO 큐 · 큐 정책 · redrive(D3 ~ D5)
+sns:CreateTopic	ap-northeast-2	*
+sns:GetTopicAttributes	ap-northeast-2	*
+sns:SetTopicAttributes	ap-northeast-2	*
+sns:TagResource	ap-northeast-2	*
+sns:ListTagsForResource	ap-northeast-2	*
+sns:Subscribe	ap-northeast-2	*
+sns:GetSubscriptionAttributes	ap-northeast-2	*
+sns:ListSubscriptionsByTopic	ap-northeast-2	*
+sns:SetSubscriptionAttributes	ap-northeast-2	*
+sqs:CreateQueue	ap-northeast-2	*
+sqs:GetQueueAttributes	ap-northeast-2	*
+sqs:SetQueueAttributes	ap-northeast-2	*
+sqs:TagQueue	ap-northeast-2	*
+sqs:ListQueueTags	ap-northeast-2	*
+
+# RDS 로그 그룹(30일 · 인스턴스보다 먼저)
+logs:CreateLogGroup	ap-northeast-2	*
+logs:PutRetentionPolicy	ap-northeast-2	*
+logs:DescribeLogGroups	ap-northeast-2	*
+logs:TagResource	ap-northeast-2	*
+logs:ListTagsForResource	ap-northeast-2	*
+
+# SQL 실행기 켬(D7) — AMI 매개변수 · 인스턴스 · 역할 · 프로필
+ssm:GetParameter	ap-northeast-2	*
+ec2:RunInstances	ap-northeast-2	*
+ec2:DescribeInstances	ap-northeast-2	*
+ec2:DescribeInstanceAttribute	ap-northeast-2	*
+ec2:DescribeInstanceTypes	ap-northeast-2	*
+ec2:DescribeInstanceCreditSpecifications	ap-northeast-2	*
+ec2:DescribeImages	ap-northeast-2	*
+ec2:DescribeVolumes	ap-northeast-2	*
+ec2:DescribeTags	ap-northeast-2	*
+ec2:DescribeVpcs	ap-northeast-2	*
+iam:CreateRole	us-east-1	arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*
+iam:GetRole	us-east-1	*
+iam:TagRole	us-east-1	arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*
+iam:PutRolePolicy	us-east-1	arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*
+iam:GetRolePolicy	us-east-1	arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*
+iam:ListRolePolicies	us-east-1	arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*
+iam:AttachRolePolicy	us-east-1	arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*
+iam:ListAttachedRolePolicies	us-east-1	*
+iam:PassRole	us-east-1	arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*
+iam:CreateInstanceProfile	us-east-1	arn:aws:iam::${ACCOUNT}:instance-profile/pokeclip/prod/*
+iam:GetInstanceProfile	us-east-1	*
+iam:TagInstanceProfile	us-east-1	arn:aws:iam::${ACCOUNT}:instance-profile/pokeclip/prod/*
+iam:AddRoleToInstanceProfile	us-east-1	arn:aws:iam::${ACCOUNT}:instance-profile/pokeclip/prod/*
+
+# SQL 실행 — send-command · 결과 · 상자의 SSM 등록 확인(운영 순서 4 · 5)
+ssm:SendCommand	ap-northeast-2	*
+ssm:GetCommandInvocation	ap-northeast-2	*
+ssm:DescribeInstanceInformation	ap-northeast-2	*
+
+# 실행기 끔(되돌리기) — 인스턴스 · SG · 규칙 · 역할 · 프로필 삭제
+ec2:TerminateInstances	ap-northeast-2	*
+ec2:DeleteSecurityGroup	ap-northeast-2	*
+ec2:RevokeSecurityGroupIngress	ap-northeast-2	*
+iam:DetachRolePolicy	us-east-1	arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*
+iam:DeleteRolePolicy	us-east-1	arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*
+iam:ListInstanceProfilesForRole	us-east-1	arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*
+iam:RemoveRoleFromInstanceProfile	us-east-1	arn:aws:iam::${ACCOUNT}:instance-profile/pokeclip/prod/*
+iam:DeleteInstanceProfile	us-east-1	arn:aws:iam::${ACCOUNT}:instance-profile/pokeclip/prod/*
+iam:DeleteRole	us-east-1	arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*
+
+# 이벤트 기록(K5 「SCP · 이벤트」 — events.sh 가 두 리전에서 조회)
+cloudtrail:LookupEvents	ap-northeast-2	*
+cloudtrail:LookupEvents	us-east-1	*
+
+# 상태 버킷(백엔드 · use_lockfile — 읽기 · 쓰기 · 잠금 파일 · network 원격 상태)
+s3:ListBucket	ap-northeast-2	*
+s3:GetObject	ap-northeast-2	*
+s3:PutObject	ap-northeast-2	*
+s3:DeleteObject	ap-northeast-2	*
+
+# 2-3 판정 · 이벤트 조회의 읽기(O7c 의 같은 덩어리와 같다). 위 덩어리에 이미
+# 있는 것(s3:GetBucketPolicy · secretsmanager:GetResourcePolicy ·
+# sns:GetTopicAttributes · sqs:GetQueueAttributes · 서울 ec2:DescribeInstances
+# · cloudtrail:LookupEvents 두 리전)은 다시 적지 않는다. ec2:DescribeRegions 는
+# 넣지 않는다(kty 45차).
+iam:GetAccountAuthorizationDetails	us-east-1	*
+iam:GetContextKeysForPrincipalPolicy	us-east-1	*
+iam:SimulateCustomPolicy	us-east-1	*
+iam:ListAccessKeys	us-east-1	*
+ecr:GetRepositoryPolicy	ap-northeast-2	*
+ec2:DescribeInstances	us-east-1	*
+lambda:ListFunctions	ap-northeast-2	*
+lambda:ListFunctions	us-east-1	*
+ecs:ListTaskDefinitions	ap-northeast-2	*
+ecs:ListTaskDefinitions	us-east-1	*
+ecs:DescribeTaskDefinition	ap-northeast-2	*
+ecs:DescribeTaskDefinition	us-east-1	*
+tag:GetTagKeys	ap-northeast-2	*
+tag:GetTagKeys	us-east-1	*
+tag:GetResources	ap-northeast-2	*
+tag:GetResources	us-east-1	*
+
+# 2-3 판정 래퍼(M17b principal-check.sh)가 더 부르는 읽기 — 주체 · 대상
+# 해석(IAM · Route 53 은 us-east-1). iam:GetRole · iam:GetInstanceProfile ·
+# iam:ListAttachedRolePolicies 는 실행기 덩어리에 자원 * 로 있다.
+iam:GetUser	us-east-1	*
+iam:ListRoles	us-east-1	*
+iam:ListAttachedUserPolicies	us-east-1	*
+iam:ListGroupsForUser	us-east-1	*
+iam:ListAttachedGroupPolicies	us-east-1	*
+route53:ListHostedZonesByName	us-east-1	*

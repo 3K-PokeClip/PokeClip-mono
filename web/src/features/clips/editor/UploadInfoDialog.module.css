@@ -3,12 +3,15 @@
 /* DS 창의 폭(480)을 이긴다: 클래스를 겹쳐 쓴다(설정 화면 창들과 같은 방식) */
 .dialog.dialog {
   width: calc(960 * var(--pc-u));
+  /* 크기를 고정한다: 탭을 넘길 때 내용 길이에 따라 창이 늘고 줄면 보기 안 좋다. 첫 탭(정보)이 스크롤 없이 들어가는
+     높이이고, 긴 탭(썸네일)은 안에서 스크롤한다. 낮은 화면에서는 화면 높이까지 */
+  height: min(calc(740 * var(--pc-u)), calc(100vh - 2 * var(--pc-space-6)));
   /* 100%는 창을 담은 격자 칸(내용만큼 늘어난다)을 따라가 좁은 화면에서 넘친다: 화면 폭으로 막는다 */
   max-width: calc(100vw - 2 * var(--pc-space-4));
   padding: 0;
   display: flex;
   flex-direction: column;
-  /* 낮은 화면에서는 가운데만 스크롤하고 머리·아래 단추 줄은 늘 보인다 */
+  /* 가운데만 스크롤하고 머리·아래 단추 줄은 늘 보인다 */
   overflow: hidden;
 }
 
@@ -23,13 +26,15 @@
   flex-direction: column;
 }
 
+/* 왼쪽 미리보기와 오른쪽 탭 줄은 그 자리에 두고, 탭 내용(.panel)만 스크롤한다 */
 .body {
+  flex: 1;
   display: flex;
   gap: var(--pc-space-6);
-  padding: var(--pc-space-5) var(--pc-space-6);
+  padding: var(--pc-space-5) var(--pc-space-6) 0;
   align-items: flex-start;
   min-height: 0;
-  overflow-y: auto;
+  overflow: hidden;
 }
 
 .left {
@@ -38,11 +43,33 @@
   display: flex;
   flex-direction: column;
   gap: var(--pc-space-2);
+  /* 창 높이가 고정이라 낮은 화면(1366×768 노트북 등)에서는 미리보기(9:16)가 칸보다 길다: 이 열도 안에서 스크롤해
+     잘린 아래쪽(제목 띠)을 볼 수 있게 한다(PR #341 claude) */
+  align-self: stretch;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  padding-bottom: var(--pc-space-2);
+}
+
+/* 스크롤 상자 안에서 미리보기가 9:16을 잃고 찌그러지지 않게 한다 */
+.left > * {
+  flex-shrink: 0;
 }
 
 .right {
   flex: 1;
   min-width: 0;
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* DS 탭 묶음(세로 flex)이 오른쪽 칸 높이를 다 쓰게 한다: 그래야 그 안의 탭 내용이 남는 높이에서 스크롤한다 */
+.tabsRoot {
+  flex: 1;
+  min-height: 0;
 }
 
 .label {
@@ -79,13 +106,23 @@
   border-bottom-color: var(--pc-color-accent);
 }
 
-/* 탭을 바꿔도 창 높이가 덜 출렁이게 */
+/* 탭 내용. 창 높이가 고정이라 긴 탭(썸네일)은 이 안에서 스크롤한다. 입력 칸의 초점 테두리가 스크롤 상자 가장자리에서
+   잘리지 않게 옆으로 숨 쉴 틈을 두고, 그만큼 바깥으로 당겨 탭 줄과 줄을 맞춘다 */
 .panel {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
   display: flex;
   flex-direction: column;
   gap: var(--pc-space-4);
-  min-height: calc(500 * var(--pc-u));
-  padding-top: var(--pc-space-4);
+  padding: var(--pc-space-3) var(--pc-space-1) var(--pc-space-2);
+  margin-inline: calc(-1 * var(--pc-space-1));
+}
+
+/* 스크롤 상자 안에서 칸이 줄어들지 않고 넘치게 한다(줄어들면 스크롤이 안 생기고 칸이 찌그러진다) */
+.panel > * {
+  flex-shrink: 0;
 }
 
 .tabError {
@@ -113,6 +150,75 @@
   gap: var(--pc-space-2);
   font-size: var(--pc-font-size-sm);
   color: var(--pc-color-text-muted);
+}
+
+/* ---------- 태그 칸 ---------- */
+
+/* 넣은 태그가 입력 칸 안에 쌓인다: 이 상자가 DS 입력 칸과 같은 모양(배경·테두리·초점 링)을 그리고, 안의 글자 칸은 테두리 없이
+   남은 폭을 채운다. 태그가 없을 때 높이는 DS 입력 칸(40)과 같고, 태그가 늘면 줄을 바꿔 늘어난다 */
+.tagBox {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--pc-space-1) var(--pc-space-2);
+  min-height: calc(40 * var(--pc-u));
+  padding: calc(4 * var(--pc-u)) var(--pc-space-3);
+  background: var(--pc-color-bg-inset);
+  border: 1px solid var(--pc-color-border-default);
+  border-radius: var(--pc-radius-md);
+  cursor: text;
+  transition:
+    border-color var(--pc-duration-fast) var(--pc-ease-standard),
+    box-shadow var(--pc-duration-fast) var(--pc-ease-standard);
+}
+
+.tagBox:hover {
+  border-color: var(--pc-color-border-strong);
+}
+
+.tagBox:focus-within {
+  border-color: var(--pc-color-accent);
+  box-shadow: 0 0 0 3px var(--pc-color-accent-subtle);
+}
+
+.tagBox[data-invalid] {
+  border-color: var(--pc-color-danger);
+}
+
+.tagBox[data-invalid]:focus-within {
+  box-shadow: 0 0 0 3px var(--pc-color-danger-subtle);
+}
+
+/* 태그 하나가 칸 폭보다 길면(유튜브 태그는 합쳐서 500자라 한 개도 길 수 있다) 말줄임으로 칸 안에 둔다 */
+.tagChip {
+  max-width: 100%;
+  min-width: 0;
+  cursor: default;
+}
+
+.tagChip > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 줄어드는 것은 글자뿐: 빼기 단추는 다른 태그와 같은 크기로 둔다 */
+.tagChip > button {
+  flex-shrink: 0;
+}
+
+/* 남은 폭이 좁으면(120 아래) 다음 줄로 내려가 글자 칠 자리를 확보한다 */
+.tagInput {
+  flex: 1 0 calc(120 * var(--pc-u));
+  min-width: 0;
+  height: calc(30 * var(--pc-u));
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--pc-color-text-primary);
+  font-family: var(--pc-font-sans);
+  font-size: var(--pc-font-size-md);
+  outline: none;
 }
 
 /* ---------- 쇼츠 미리보기 ---------- */

@@ -189,7 +189,7 @@ func classifySQL(sql string) string {
 		return "p0"
 	case strings.Contains(sql, "WITH p4 AS"):
 		return "p4"
-	case strings.Contains(sql, "SET fence_expires_at = now() + $3::interval"):
+	case strings.Contains(sql, "SET fence_expires_at = pg_catalog.now() + $3::interval"):
 		return "renew"
 	case strings.Contains(sql, "SET writer_fence = $2"):
 		return "acquire"

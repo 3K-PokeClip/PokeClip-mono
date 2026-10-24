@@ -50,12 +50,23 @@ public class RenderConfiguration {
     @Bean
     @ConditionalOnProperty(prefix = "pokeclip.render", name = "enabled", havingValue = "true")
     public ClipFileSigner clipFileSigner(RenderProperties properties) {
+        return new ClipFileSigner(presigner(properties), properties.outputBucket(), properties.fileUrlTtl());
+    }
+
+    /** 원본 조각 주소(POK-389). 조각 창고 좌표가 주문줄과 같은 설정에 있어 같이 켜진다. */
+    @Bean
+    @ConditionalOnProperty(prefix = "pokeclip.render", name = "enabled", havingValue = "true")
+    public SegmentAudioSigner segmentAudioSigner(RenderProperties properties) {
+        return new SegmentAudioSigner(presigner(properties), properties.segmentBucket(), properties.segmentAudioUrlTtl());
+    }
+
+    private static S3Presigner presigner(RenderProperties properties) {
         S3Presigner.Builder builder = S3Presigner.builder()
                 .region(Region.of(properties.region()))
                 .serviceConfiguration(S3Configuration.builder().pathStyleAccessEnabled(properties.hasEndpoint()).build());
         if (properties.hasEndpoint()) {
             builder.endpointOverride(URI.create(properties.endpoint()));
         }
-        return new ClipFileSigner(builder.build(), properties.outputBucket(), properties.fileUrlTtl());
+        return builder.build();
     }
 }

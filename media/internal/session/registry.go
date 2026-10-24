@@ -281,12 +281,14 @@ func (r *Registry) loadLive(ctx context.Context, tx pgx.Tx, streamID string) (*l
 // 첫 · 마지막 조각은 stream_segments_session_idx (stream_id, session_id, seq) 의 앞 · 뒤 끝이다(index 의
 // basePDTSQL 과 같은 정렬 — 선행 컬럼 stream_id 를 술어에 둔다). 이 패키지가 stream_segments 를 읽는 자리는
 // 여기 하나다(계획 부기 22). 조각이 없는 회차면 두 값이 NULL 이다.
+// duration_ms(integer) 는 ::double precision 으로 맞춘다 — pg_catalog 에는 integer * interval 이 없어, 맞추지 않으면
+// public 의 integer 판 연산자(앱 사용자가 만들 수 있다)가 먼저 골린다. 값은 암묵 변환과 같다.
 const previousSessionSQL = `
 SELECT s.session_id, s.state, s.end_reason, s.discontinuity_base, s.target_duration,
        (SELECT g.local_path FROM stream_segments g
          WHERE g.stream_id = s.stream_id AND g.session_id = s.session_id
          ORDER BY g.seq LIMIT 1),
-       (SELECT g.start_wall_utc + g.duration_ms * interval '1 millisecond' FROM stream_segments g
+       (SELECT g.start_wall_utc + g.duration_ms::double precision * interval '1 millisecond' FROM stream_segments g
          WHERE g.stream_id = s.stream_id AND g.session_id = s.session_id
          ORDER BY g.seq DESC LIMIT 1)
   FROM stream_sessions s
@@ -497,7 +499,7 @@ func openDecision(in Input, split *liveSession, inherit *previousSession) Decisi
 // 두 문장은 end_session_pg_test.go 가 대조한다(계획 부기 21).
 const endSessionSQL = `
 UPDATE stream_sessions
-   SET state = 'ending', ending_at = now(), end_reason = $2
+   SET state = 'ending', ending_at = pg_catalog.now(), end_reason = $2
  WHERE session_id = $1 AND state = 'live'`
 
 // endReasonTDExceeded 는 TD 분할이 직전 세션을 끝내는 사유다(설계 4.9.1).

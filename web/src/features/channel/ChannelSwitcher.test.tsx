@@ -166,6 +166,22 @@ describe('ChannelSwitcher: 펼친 패널', () => {
     );
   });
 
+  it('참여 채널 줄은 스트리머 프로필 사진을 그리고, 고르면 전환 화면도 그 사진으로 덮는다', async () => {
+    const photo = 'https://img.example/byeolha.png';
+    const withPhoto = { ...BYEOLHA, counterpartProfileImageUrl: photo };
+    stub({ delegations: [withPhoto, KONGSTAR], invitations: [] });
+    const user = userEvent.setup();
+    const panel = within(await open(user));
+
+    const byeolha = await panel.findByRole('button', { name: /별하 채널/ });
+    expect(byeolha.querySelector('img')).toHaveAttribute('src', photo);
+    // 사진이 없는 채널은 이름 글자로 선다
+    expect(panel.getByRole('button', { name: /콩스타 채널/ }).querySelector('img')).toBeNull();
+
+    await user.click(byeolha);
+    expect(useSwitchCurtain.getState().curtain).toMatchObject({ name: '별하', photo });
+  });
+
   it('별하를 누르면 전환 화면이 서고 패널이 닫히고, 다 덮은 뒤 그 채널로 바뀐다', async () => {
     stub({ delegations: [BYEOLHA], invitations: [] });
     const user = userEvent.setup();

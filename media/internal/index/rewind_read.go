@@ -103,12 +103,12 @@ WITH recent AS (
      ORDER BY seq DESC
      LIMIT $4
 ), suffix AS (
-    SELECT seq, sum(duration_ms) OVER (ORDER BY seq DESC) AS suffix_ms FROM recent
+    SELECT seq, pg_catalog.sum(duration_ms) OVER (ORDER BY seq DESC) AS suffix_ms FROM recent
 )
-SELECT COALESCE((SELECT max(seq) FROM suffix WHERE suffix_ms >= $3),
-                (SELECT min(seq) FROM recent),
+SELECT COALESCE((SELECT pg_catalog.max(seq) FROM suffix WHERE suffix_ms >= $3),
+                (SELECT pg_catalog.min(seq) FROM recent),
                 $2)                                              AS floor_seq,
-       (SELECT count(*) FROM recent) = $4
+       (SELECT pg_catalog.count(*) FROM recent) = $4
          AND NOT EXISTS (SELECT 1 FROM suffix WHERE suffix_ms >= $3) AS capped`
 
 // rewindRowsSQL 은 적재의 조각 축이다 — 설계 4.1 settled 정본 SQL 의 형상에서 범위를 `seq ≥ 적재 하한`
@@ -132,7 +132,7 @@ SELECT seq, session_id, duration_ms, playback_pdt, playback_s3_key, pb_uploaded,
 const rewindSessionsSQL = `
 SELECT s.session_id, s.state, s.end_reason, s.init_uploaded_at IS NOT NULL, s.discontinuity_base,
        s.first_pdt, s.inherits_session, s.target_duration,
-       (SELECT min(g.seq) FROM stream_segments g
+       (SELECT pg_catalog.min(g.seq) FROM stream_segments g
          WHERE g.stream_id = s.stream_id AND g.session_id = s.session_id) AS min_seq
   FROM stream_sessions s
  WHERE s.session_id = ANY($1)
@@ -374,22 +374,22 @@ WITH RECURSIVE live AS (
            s.seq, s.session_id, s.duration_ms, s.playback_pdt, s.playback_s3_key,
            (s.playback_upload_state = 'uploaded') AS pb_uploaded,
            (g.seq IS NOT NULL)                    AS is_gap
-      FROM unnest($1::text[], $2::bigint[]) AS p(stream_id, next_seq)
+      FROM ROWS FROM (pg_catalog.unnest($1::text[]), pg_catalog.unnest($2::bigint[])) AS p(stream_id, next_seq)
       LEFT JOIN stream_cutoffs c ON c.stream_id = p.stream_id
       LEFT JOIN stream_segments s ON s.stream_id = p.stream_id AND s.seq = p.next_seq
       LEFT JOIN stream_published_gaps g ON g.stream_id = p.stream_id AND g.seq = p.next_seq
 ), ids AS (
-    SELECT min(stream_id) AS stream_id FROM stream_segments
+    SELECT pg_catalog.min(stream_id) AS stream_id FROM stream_segments
     UNION ALL
-    SELECT (SELECT min(x.stream_id) FROM stream_segments x WHERE x.stream_id > ids.stream_id)
+    SELECT (SELECT pg_catalog.min(x.stream_id) FROM stream_segments x WHERE x.stream_id > ids.stream_id)
       FROM ids WHERE ids.stream_id IS NOT NULL
 ), absent AS (
     SELECT i.stream_id, w.last_wall
       FROM ids i
       LEFT JOIN stream_cutoffs c ON c.stream_id = i.stream_id
-      CROSS JOIN LATERAL (SELECT max(s.start_wall_utc) AS last_wall
+      CROSS JOIN LATERAL (SELECT pg_catalog.max(s.start_wall_utc) AS last_wall
                             FROM stream_segments s WHERE s.stream_id = i.stream_id) w
-     WHERE i.stream_id IS NOT NULL AND c.stream_id IS NULL AND now() - w.last_wall <= $3::interval
+     WHERE i.stream_id IS NOT NULL AND c.stream_id IS NULL AND pg_catalog.now() - w.last_wall <= $3::interval
 )
 SELECT 'live' AS kind, stream_id, session_id, init_uploaded, inherit_absent, has_cutoff,
        NULL::bigint AS next_seq, NULL::bigint AS cutoff_seq, NULL::bigint AS seq, NULL::text AS row_session,

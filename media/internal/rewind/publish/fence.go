@@ -13,16 +13,16 @@ import (
 // 얻는다. 반납된(NULL) fence 는 lease 끝을 기다리지 않고 얻는다(계획 4.5 A1 「반납 예외」).
 const fenceAcquireSQL = `
 UPDATE stream_sessions
-   SET writer_fence = $2, fence_expires_at = now() + $3::interval
+   SET writer_fence = $2, fence_expires_at = pg_catalog.now() + $3::interval
  WHERE session_id = $1
-   AND (writer_fence IS NULL OR fence_expires_at < now() OR writer_fence = $2)`
+   AND (writer_fence IS NULL OR fence_expires_at < pg_catalog.now() OR writer_fence = $2)`
 
 // fenceRenewSQL 은 lazy 갱신이다 — 아직 쥔 lease 만 늘린다. 끝난 lease 는 획득으로 다시 얻는다(그 사이 다른
 // writer 가 썼을 수 있어 화해가 따라야 한다).
 const fenceRenewSQL = `
 UPDATE stream_sessions
-   SET fence_expires_at = now() + $3::interval
- WHERE session_id = $1 AND writer_fence = $2 AND fence_expires_at > now()`
+   SET fence_expires_at = pg_catalog.now() + $3::interval
+ WHERE session_id = $1 AND writer_fence = $2 AND fence_expires_at > pg_catalog.now()`
 
 // fenceReleaseSQL 은 반납이다 — 이 writer 가 쥔 fence 를 모두 놓는다(shutdown · 다중 세션 보유).
 const fenceReleaseSQL = `UPDATE stream_sessions SET writer_fence = NULL WHERE writer_fence = $1`

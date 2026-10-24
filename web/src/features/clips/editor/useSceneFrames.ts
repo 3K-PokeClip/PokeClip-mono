@@ -19,6 +19,8 @@ export interface SceneFrameSource {
   videoSecondsAt: (offsetMs: number) => number;
   /** 결과 모양(편집기 화면 그대로) */
   output: RecipeOutputV2;
+  /** 뽑는 그림 크기. 없으면 세로 미리보기 크기(타임라인 필름띠는 가로로 작게 뽑는다, POK-389) */
+  size?: { width: number; height: number };
 }
 
 /** 뽑는 그림 크기. 미리보기 칸(264px)을 고밀도 화면에서도 덜 흐리게 */
@@ -97,7 +99,7 @@ export function useSceneFrames(
         // 옮기는 사이 재료가 바뀌었으면 옛 노드의 그림이다: 버린다
         if (video.current !== el) return;
         // 못 뽑은 것도 적는다: 안 적으면 창이 「불러오는 중」에서 멈춘다(PR #301 리뷰)
-        remember(next, (ok ? drawFrame(el, src.output) : null) ?? FAILED);
+        remember(next, (ok ? drawFrame(el, src.output, src.size) : null) ?? FAILED);
       })
       .finally(() => {
         busy.current = false;
@@ -205,17 +207,21 @@ function seekTo(el: HTMLVideoElement, seconds: number): Promise<boolean> {
 }
 
 /** 지금 장면을 결과 모양대로 그려 JPEG 주소로. 그릴 수 없으면(캔버스 없음 · 영상 크기 0) null */
-function drawFrame(el: HTMLVideoElement, output: RecipeOutputV2): string | null {
+function drawFrame(
+  el: HTMLVideoElement,
+  output: RecipeOutputV2,
+  size: { width: number; height: number } = { width: FRAME_WIDTH, height: FRAME_HEIGHT },
+): string | null {
   const vw = el.videoWidth;
   const vh = el.videoHeight;
   if (vw === 0 || vh === 0) return null;
   const canvas = document.createElement('canvas');
-  canvas.width = FRAME_WIDTH;
-  canvas.height = FRAME_HEIGHT;
+  canvas.width = size.width;
+  canvas.height = size.height;
   const ctx = canvas.getContext('2d');
   if (ctx === null) return null;
-  const w = FRAME_WIDTH;
-  const h = FRAME_HEIGHT;
+  const w = size.width;
+  const h = size.height;
   ctx.fillStyle = '#000';
   ctx.fillRect(0, 0, w, h);
   const background = output.background;

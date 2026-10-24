@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 #
 # principal-check.sh 를 시험한다 — 해석 · 정책 묶음(계획 M17b
-# r3.1 3-1 사례 10 부터 18 과 r1 검수 지적의 사례 28 · 29 · 30).
+# r3.1 3-1 사례 10 부터 18 과 r1 검수 지적의 사례 28 · 29 · 30, SNS · SQS
+# 정책 읽기의 사례 31 · 32 · 33).
 #
 # 고정 입력 · 사본 트리 · 공용 단언(사례 22 유출 — 모든 사례가 끝에
 # 본다)은 principal_testlib.sh 에 있다.
@@ -427,7 +428,7 @@ expect_policy_reads() {
       ecr-none) set_repo_policy "${case_dir}" None ;;
       *)
         edit_lib "${case_dir}" principal_policy.sh \
-          's/--query Policy /--query Polciy /'
+          's/--query Policy$/--query Polciy/'
         ;;
     esac || return
     run_check "${case_dir}" "${spec}" O7a
@@ -507,6 +508,263 @@ expect_escaped_policy() {
     "Allow 는 사용자 요청에 정책 · CallerArn"
 }
 
+#######################################
+# 주제 행 · 큐 행(동작 하나씩)을 사례의 대상 데이터에 더한다.
+# Arguments:
+#   사례 디렉터리, 첫 단계.
+#######################################
+add_topic_queue_rows() {
+  # shellcheck disable=SC2016 # ${ACCOUNT} 는 펼치지 않는 계정 자리다.
+  local seoul='arn:aws:sns:ap-northeast-2:${ACCOUNT}'
+  {
+    testlib::tsv prod-topic "$2" "arn:${seoul}:${MARK_TOPIC}-events.fifo" \
+      topic ap-northeast-2 sns:Publish sns -
+    testlib::tsv prod-queue "$2" \
+      "arn:${seoul/:sns:/:sqs:}:${MARK_QUEUE}-clip.fifo" queue \
+      ap-northeast-2 sqs:ReceiveMessage sqs -
+  } >>"$1/tree/data/principal_sim/prod_targets.tsv"
+}
+
+#######################################
+# 주제 · 큐 정책 읽기 답을 넣는다(「-」 면 그쪽은 가짜의 기본 답).
+# Arguments:
+#   사례 디렉터리, 주제 답, 큐 답.
+#######################################
+set_topic_queue() {
+  local -a lines=()
+  [[ "$2" == - ]] ||
+    lines+=("$(testlib::tsv get-topic-attributes "${TOPIC_ARN}" "$2")")
+  [[ "$3" == - ]] ||
+    lines+=("$(testlib::tsv get-queue-attributes "${QUEUE_URL}" "$3")")
+  [[ "${#lines[@]}" -eq 0 ]] || prepend "$1/in/reads.tsv" "${lines[@]}"
+}
+
+#######################################
+# Deny 만 가진 정책(주제 · 큐 공용)을 낸다.
+# Arguments:
+#   자원 ARN.
+# Outputs:
+#   정책 원문.
+#######################################
+deny_policy() {
+  printf '%s%s\n' '{"Version":"2012-10-17","Statement":[{"Effect":"Deny",' \
+    "\"Principal\":\"*\",\"Action\":\"*\",\"Resource\":\"$1\"}]}"
+}
+
+#######################################
+# 마지막 실행 증거의 policies.tsv 에서 「읽기 방법<탭>대상<탭>상태」 줄이
+# 있는지 본다.
+# Arguments:
+#   사례 이름, 사례 디렉터리, 읽기 방법, 대상, 상태.
+# Returns:
+#   있으면 0(아니면 실패를 센다).
+#######################################
+expect_policy_state() {
+  local file
+  file="$(evidence_dir "$2")/policies.tsv"
+  if ! grep -qF -- $'\t'"$3"$'\t'"$4"$'\t'"$5" "${file}"; then
+    testlib::fail "$1: policies.tsv 에 $3 · $5 줄이 없음 —" \
+      "$(cut -f 2,4 -- "${file}" 2>&1 | tr '\n' ' ')"
+    return 1
+  fi
+}
+
+#######################################
+# 사례 31: SNS · SQS 정책 읽기 — 주제는 TopicArn · 큐는 QueueUrl 요청(서울
+# 리전 · 정책 칸만), Deny 만 · 큐 정책 없음은 정책 없이 판정, 첫 단계의
+# 「자원 없음」 은 정책 없음으로 받고 기록, 첫 단계 뒤의 「자원 없음」 은
+# 종료 2.
+#######################################
+expect_topic_queue_reads() {
+  local case_dir dir log code kind
+  local topic_call='^sns get-topic-attributes --region ap-northeast-2 --query'
+  local queue_call='^sqs get-queue-attributes --region ap-northeast-2 --query'
+  topic_call+=' Attributes.Policy '
+  queue_call+=' Attributes.\[QueueArn,Policy\] '
+  case_dir="$(new_tree_case)" || {
+    testlib::fail "topic-queue: 시험 준비 실패"
+    return
+  }
+  add_topic_queue_rows "${case_dir}" O7a
+  set_topic_queue "${case_dir}" "$(deny_policy "${TOPIC_ARN}")" -
+  run_check "${case_dir}" topic-queue O7a
+  expect_result topic-queue 0 "PRINCIPAL CHECK PASS $((NORMAL_ROWS + 6))" ||
+    return
+  dir="$(evidence_dir "${case_dir}")"
+  log="${case_dir}/out/aws.log"
+  if [[ "$(grep -c -- "${topic_call}" "${log}")" -ne 1 ||
+    "$(grep -c -- "${queue_call}" "${log}")" -ne 1 ||
+    "$(count_requests "${dir}" "{\"TopicArn\":\"${TOPIC_ARN}\"}")" -ne 1 ||
+    "$(count_requests "${dir}" "{\"QueueUrl\":\"${QUEUE_URL}\"," \
+      '"AttributeNames":["QueueArn","Policy"]}')" -ne 1 ||
+    "$(grep -c -- "--resource-policy file://.*/policy-" "${log}")" -ne 0 ]]
+  then
+    testlib::fail "topic-queue: 주제 · 큐 읽기 요청 꼴이 다르거나 Deny 만 ·" \
+      "정책 없음인데 --resource-policy 가 붙음"
+    return
+  fi
+  expect_policy_state topic-queue "${case_dir}" sns "${TOPIC_ARN}" deny ||
+    return
+  expect_policy_state topic-queue "${case_dir}" sqs "${QUEUE_ARN}" none ||
+    return
+  expect_no_leak topic-queue "${case_dir}" || return
+  for code in AWS.SimpleQueueService.NonExistentQueue QueueDoesNotExist; do
+    case_dir="$(new_tree_case)" || return
+    add_topic_queue_rows "${case_dir}" O7a
+    set_topic_queue "${case_dir}" '!NotFound' "!${code}"
+    run_check "${case_dir}" "absent-first-${code}" O7a
+    expect_result "absent-first-${code}" 0 \
+      "PRINCIPAL CHECK PASS $((NORMAL_ROWS + 6))" || return
+    expect_policy_state "absent-first-${code}" "${case_dir}" sns \
+      "${TOPIC_ARN}" absent || return
+    expect_policy_state "absent-first-${code}" "${case_dir}" sqs \
+      "${QUEUE_ARN}" absent || return
+    dir="$(evidence_dir "${case_dir}")"
+    if [[ "$(grep -c '^자원 없음(첫 단계 — 정책 없이 판정): prod-' \
+      "${dir}/report.txt")" -ne 2 ]]; then
+      testlib::fail "absent-first-${code}: report.txt 에 자원 없음 기록 둘이 없음"
+      return
+    fi
+    expect_no_leak "absent-first-${code}" "${case_dir}" || return
+  done
+  for kind in topic queue; do
+    case_dir="$(new_tree_case)" || return
+    add_topic_queue_rows "${case_dir}" 5
+    if [[ "${kind}" == topic ]]; then
+      set_topic_queue "${case_dir}" '!NotFound' -
+    else
+      set_topic_queue "${case_dir}" - '!AWS.SimpleQueueService.NonExistentQueue'
+    fi
+    run_check "${case_dir}" "absent-later-${kind}" O7a
+    expect_unverifiable "absent-later-${kind}" || return
+    testlib::expect_stderr_count "absent-later-${kind}" \
+      '자원 정책 읽기 대상이 없음' 1 || return
+    expect_no_leak "absent-later-${kind}" "${case_dir}" || return
+  done
+  testlib::ok "31 topic-queue → TopicArn · QueueUrl 요청 · Deny 만 · 큐 정책" \
+    "없음은 정책 없이 · 첫 단계 자원 없음은 absent 기록 · 그 뒤는 종료 2"
+}
+
+#######################################
+# 사례 32: SNS · SQS 응답 꼴 — 주제 None · 큐 속성 None(칸 이름 오타) · 큐
+# ARN 이 요청과 다름(QueueArn 을 묻지 않음) · { 로 시작하지 않는 정책 ·
+# "Statement" 없는 정책 · 봉투째 · 읽기 거부 · 연결 실패는 모두 종료 2.
+#######################################
+expect_topic_queue_shapes() {
+  local case_dir spec want
+  for spec in topic-none queue-query queue-arn topic-text queue-nostmt \
+    envelope topic-denied queue-fail; do
+    case_dir="$(new_tree_case)" || {
+      testlib::fail "${spec}: 시험 준비 실패"
+      return
+    }
+    add_topic_queue_rows "${case_dir}" O7a
+    case "${spec}" in
+      topic-none)
+        set_topic_queue "${case_dir}" None -
+        want='자원 정책 응답이 None'
+        ;;
+      queue-query)
+        edit_lib "${case_dir}" principal_policy.sh \
+          's/Attributes\.\[QueueArn,Policy\]/Attributes.[QueueArn,Polciy]/'
+        want='큐 속성 응답이 None'
+        ;;
+      queue-arn)
+        edit_lib "${case_dir}" principal_policy.sh \
+          's/\["QueueArn","Policy"\]/["Policy"]/'
+        set_topic_queue "${case_dir}" - "$(deny_policy "${QUEUE_ARN}")"
+        want='큐 속성 응답의 ARN 이 요청과 다름'
+        ;;
+      topic-text)
+        set_topic_queue "${case_dir}" 'Statement Allow' -
+        want='정책 파일 꼴이 아님'
+        ;;
+      queue-nostmt)
+        set_topic_queue "${case_dir}" - '{"Version":"2012-10-17"}'
+        want='정책 파일 꼴이 아님'
+        ;;
+      envelope) want='정책 파일 꼴이 아님' ;;
+      topic-denied)
+        set_topic_queue "${case_dir}" '!AccessDenied' -
+        want='AccessDenied'
+        ;;
+      *)
+        set_topic_queue "${case_dir}" - '!fail'
+        want='자원 정책 읽기 호출 실패'
+        ;;
+    esac || return
+    if [[ "${spec}" == envelope ]]; then
+      run_check "${case_dir}" "${spec}" FAKE_AWS_POLICY_MODE=envelope O7a
+    else
+      run_check "${case_dir}" "${spec}" O7a
+    fi
+    expect_unverifiable "${spec}" || return
+    [[ "${spec}" == envelope ]] ||
+      testlib::expect_stderr_count "${spec}" "${want}" 1 || return
+    expect_no_leak "${spec}" "${case_dir}" || return
+  done
+  testlib::ok "32 topic-queue-shapes → 주제 None · 큐 속성 None · 큐 ARN 다름 ·" \
+    "꼴 밖 정책 · 봉투째 · 거부 · 연결 실패는 종료 2 · 유출 0"
+}
+
+#######################################
+# 사례 33: Allow 를 가진 주제 · 큐 정책 — 기본 주제 정책(Principal * ·
+# AWS:SourceOwner) · SNS 서비스 주체 큐 정책은 갈래 B 에서 역할 행
+# RESOURCE_POLICY_UNSIMULATED · 사용자 요청에 정책 · CallerArn, 갈래 A 에서
+# 시뮬레이터가 AWS:SourceOwner 를 누락 문맥으로 내면 MISSING_CONTEXT,
+# 큐 정책의 「\u」 는 POLICY_ESCAPED.
+#######################################
+expect_topic_queue_allow() {
+  local case_dir dir policy
+  policy='{"Version":"2012-10-17","Statement":[{"Effect":"Allow",'
+  policy+='"Principal":{"Service":"sns.amazonaws.com"},'
+  policy+="\"Action\":\"sqs:SendMessage\",\"Resource\":\"${QUEUE_ARN}\","
+  policy+='"Condition":{"ArnEquals":'
+  policy+="{\"aws:SourceArn\":\"${TOPIC_ARN}\"}}}]}"
+  case_dir="$(new_tree_case)" || {
+    testlib::fail "topic-queue-allow: 시험 준비 실패"
+    return
+  }
+  add_topic_queue_rows "${case_dir}" O7a
+  set_topic_queue "${case_dir}" - "${policy}"
+  prepend "${case_dir}/in/sim.tsv" \
+    "$(testlib::tsv "${MARK_ROLE}-oidc@s3:ListBucket@${PCA_SAMPLE}@*@policy" \
+      implicitDeny None - - -)"
+  run_check "${case_dir}" allow-b O7a
+  expect_result allow-b 3 'PRINCIPAL CHECK UNDECIDED 4' || return
+  expect_rows allow-b 'RESOURCE_POLICY_UNSIMULATED' 4 || return
+  expect_rows allow-b '| dev-deployer |' 0 || return
+  dir="$(evidence_dir "${case_dir}")"
+  if [[ "$(count_requests "${dir}" "\"CallerArn\":\"${USER_DEPLOY}\"" \
+    "\"PolicySourceArn\":\"${USER_DEPLOY}\"")" -ne 2 ]]; then
+    testlib::fail "allow-b: 사용자 주체 요청 둘에 정책 · CallerArn 이 없음"
+    return
+  fi
+  expect_policy_state allow-b "${case_dir}" sns "${TOPIC_ARN}" allow || return
+  expect_policy_state allow-b "${case_dir}" sqs "${QUEUE_ARN}" allow || return
+  expect_no_leak allow-b "${case_dir}" || return
+  case_dir="$(new_tree_case)" || return
+  add_topic_queue_rows "${case_dir}" O7a
+  prepend "${case_dir}/in/sim.tsv" \
+    "$(testlib::tsv "*@sns:Publish@${TOPIC_ARN}@*@policy" implicitDeny None \
+      aws:SourceOwner - -)"
+  run_check "${case_dir}" default-topic-a O7a
+  expect_result default-topic-a 3 'PRINCIPAL CHECK UNDECIDED 3' || return
+  expect_rows default-topic-a '| prod-topic | sns:Publish | ap-northeast-2 |\
+ 판정 불가 | MISSING_CONTEXT |' 3 || return
+  expect_no_leak default-topic-a "${case_dir}" || return
+  case_dir="$(new_tree_case)" || return
+  add_topic_queue_rows "${case_dir}" O7a
+  set_topic_queue "${case_dir}" - "${policy/\"Allow\"/\"\\u0041llow\"}"
+  run_check "${case_dir}" queue-escaped O7a
+  expect_result queue-escaped 3 'PRINCIPAL CHECK UNDECIDED 3' || return
+  expect_rows queue-escaped '| prod-queue |' 3 || return
+  expect_rows queue-escaped 'POLICY_ESCAPED' 3 || return
+  expect_no_leak queue-escaped "${case_dir}" || return
+  testlib::ok "33 topic-queue-allow → 갈래 B 역할 UNSIMULATED 4 · 사용자에 정책 ·" \
+    "기본 주제 정책 + 누락 문맥은 MISSING_CONTEXT 3 · 큐 「\\u」 POLICY_ESCAPED 3"
+}
+
 main() {
   testlib::init principal_check_resolve_test
   expect_principal_resolution
@@ -519,6 +777,9 @@ main() {
   expect_resolution_responses
   expect_policy_reads
   expect_escaped_policy
+  expect_topic_queue_reads
+  expect_topic_queue_shapes
+  expect_topic_queue_allow
   testlib::finish principal_check_resolve_test
 }
 

@@ -70,9 +70,11 @@ func roleInsertSeries(t *testing.T, store Store, stream string, base time.Time, 
 }
 
 // 장부 기록 경로 — 커서 · 경로 적재, 회차 개시 + 주조, 귀속(기저 PDT), 기존 컷오프 진단, TD 분할, 꼬리 정정,
-// 종료 전이가 media_indexer 권한만으로 돌고 장부가 기대대로 바뀐다.
+// 종료 전이, 종료 뒤 재개시가 media_indexer 권한만으로 돌고 장부가 기대대로 바뀐다. 앱 사용자가 public 에 심은
+// search_path 덫은 하나도 불리지 않는다.
 func TestMediaIndexerRoleRecordsSegments(t *testing.T) {
 	admin := newTestPool(t)
+	traps := pgtest.PlantSearchPathTraps(t, admin)
 	role := pgtest.NewMediaIndexerRole(t, admin)
 	t.Cleanup(func() { role.RequireNoneDenied(t) })
 	store := newSessionStore(role.Pool)
@@ -124,18 +126,25 @@ func TestMediaIndexerRoleRecordsSegments(t *testing.T) {
 		sessions[1].State != "ending" || *sessions[1].EndReason != "offline" {
 		t.Errorf("회차 = %+v, want [ending(td_exceeded) ending(offline)]", sessions)
 	}
+	// 현 live 가 없는 조각 — 직전 회차 조회(session 패키지)가 그 회차 끝 조각의 끝 시각(길이 × interval)을 계산한다.
+	_, reopened, err := store.Insert(ctx, segAt(stream, 3, base.Add(15100*time.Millisecond), 4000), Seed{}, liveIngress())
+	if err != nil || !reopened.SessionOpened {
+		t.Fatalf("종료 뒤 Insert = (%+v, %v), want 새 회차 개시", reopened, err)
+	}
 	role.RequireSent(t, map[string]string{
 		"loadCursorSQL": loadCursorSQL, "existingPathsSQL": existingPathsSQL, "setTxnLimitsSQL": setTxnLimitsSQL,
 		"lockCutoffStreamSQL": lockCutoffStreamSQL, "openedSessionSQL": openedSessionSQL, "basePDTSQL": basePDTSQL,
 		"insertSeedSQL": insertSeedSQL, "cutoffExistsSQL": cutoffExistsSQL, "updateTailSQL": updateTailSQL,
 		"endLiveSQL": endLiveSQL,
 	})
+	traps.RequireNotCalled(t)
 }
 
 // 업로드 장부 경로 — 축 셋의 대상 조회 · 잔량 집계와 CAS 여섯 갈래가 media_indexer 권한만으로 돌고 상태가
 // 전이한다.
 func TestMediaIndexerRoleRunsUploadLedger(t *testing.T) {
 	admin := newTestPool(t)
+	traps := pgtest.PlantSearchPathTraps(t, admin)
 	role := pgtest.NewMediaIndexerRole(t, admin)
 	t.Cleanup(func() { role.RequireNoneDenied(t) })
 	stream := "role-up"
@@ -196,11 +205,13 @@ func TestMediaIndexerRoleRunsUploadLedger(t *testing.T) {
 		"pendingInitUploadsSQL": pendingInitUploadsSQL, "countArchiveBacklogSQL": countArchiveBacklogSQL,
 		"countPlaybackBacklogSQL": countPlaybackBacklogSQL, "countInitBacklogSQL": countInitBacklogSQL,
 	})
+	traps.RequireNotCalled(t)
 }
 
 // 되감기 읽기 경로 — 장부 적재(읽기 전용 REPEATABLE READ)와 30초 감시 한 문장이 media_indexer 권한만으로 돈다.
 func TestMediaIndexerRoleReadsRewindLedger(t *testing.T) {
 	admin := newTestPool(t)
+	traps := pgtest.PlantSearchPathTraps(t, admin)
 	role := pgtest.NewMediaIndexerRole(t, admin)
 	t.Cleanup(func() { role.RequireNoneDenied(t) })
 	stream := "role-rw"
@@ -219,6 +230,7 @@ func TestMediaIndexerRoleReadsRewindLedger(t *testing.T) {
 		"rewindCutoffSQL": rewindCutoffSQL, "rewindFloorSQL": rewindFloorSQL, "rewindRowsSQL": rewindRowsSQL,
 		"rewindSessionsSQL": rewindSessionsSQL, "rewindWatchSQL": rewindWatchSQL,
 	})
+	traps.RequireNotCalled(t)
 }
 
 // 음성 대조 — 시험이 권한 경계를 실제로 재는지 본다. 목록의 권한을 표마다 하나씩 거두면 그 권한을 쓰는 메서드가
