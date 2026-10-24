@@ -123,7 +123,7 @@ interface BroadcastInfoResponse {
   } | null;
   /** 플랫폼마다 최신 값(POK-397). 옛 서버면 빠져 온다 */
   platforms?: PlatformLatest[];
-  /** category는 수집기가 관측마다 싣기 전엔 없다(지금은 latest에만 있다) — 오면 통계가 카테고리 구간을 나눈다 */
+  /** 점마다 그 관측의 카테고리(POK-402). 통계가 카테고리 구간을 나눈다. 옛 서버면 빠져 온다 */
   series: InfoPoint[];
 }
 /** platform은 그 점을 잰 플랫폼(POK-397). 두 플랫폼 점이 섞여 오고, 옛 서버면 빠져 온다 */
@@ -572,10 +572,16 @@ export function useLiveMockState(pastRoute: boolean): LiveMockState {
                       observedAt: ev.time,
                     },
                     platforms: withPlatformObservation(prev?.platforms, ev),
-                    // 점마다 플랫폼을 남긴다: 버리면 두 플랫폼 숫자가 한 그래프에 섞인다(POK-397)
+                    // 점마다 플랫폼을 남긴다: 버리면 두 플랫폼 숫자가 한 그래프에 섞인다(POK-397). 카테고리도 남긴다:
+                    // 버리면 바뀐 카테고리가 다음 정기 조회까지 통계 띠에 안 보였다(POK-465)
                     series: [
                       ...(prev?.series ?? []),
-                      { observedAt: ev.time, viewers: ev.viewers, platform: ev.platform },
+                      {
+                        observedAt: ev.time,
+                        viewers: ev.viewers,
+                        category: ev.category,
+                        platform: ev.platform,
+                      },
                     ].slice(-720),
                   };
                   publishLiveData({ info: toLiveInfo(next) });

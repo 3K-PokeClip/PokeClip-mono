@@ -30,7 +30,7 @@ export interface LiveChart {
 export type LiveInfoScope = 'broadcast' | 'recent';
 export interface LiveInfo {
   latest: { title: string | null; tags: string[]; category: string | null } | null;
-  /** category는 수집기가 관측마다 싣기 전엔 없다 — 오면 통계가 카테고리가 바뀐 구간을 나눈다 */
+  /** 점마다 그 관측의 카테고리(POK-402) — 통계가 카테고리가 바뀐 구간을 나눈다. 옛 서버면 없다 */
   series: { observedAt: string; viewers: number | null; category?: string | null }[];
   scope: LiveInfoScope;
 }
