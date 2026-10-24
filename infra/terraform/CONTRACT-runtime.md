@@ -62,13 +62,17 @@ clip ↔ auth · RDS ← auth · clip · 로드밸런서 → Media 규칙은 위
 
 *   **rewind 버킷 이름**: media 는 이름 출력을 따로 받지 않고
     `rewind_bucket_arn`(`arn:aws:s3:::<이름>`)에서 꺼냅니다.
-*   **rewind 버킷 CORS**: 두지 않습니다(사전 요청이 없을 때). 브라우저는
-    되감기 · VOD 를 media 배포의 `/dvr/*` · `/vod/*` 로만 받고, CORS 응답
-    헤더는 그 비헤이비어의 응답 헤더 정책(media-cors)이 붙입니다. 플레이어
-    요청이 사용자 정의 헤더 없는 GET 이라 사전 요청(OPTIONS)이 없다는 전제이고
-    (허용 헤더 기본 `["range"]` — 빈 목록은 provider 가 못 받음 · 사전 요청 0 전제는 G14 그대로), T1 · T10 에서 OPTIONS 가 생기면 다시
-    봅니다. `prod/runtime/rewind_bucket.tf` 머리 주석 「edge 에 묻는다」 의
-    답입니다.
+*   **rewind 버킷 CORS — 경로마다 붙이는 쪽이 다릅니다**: 이 버킷은 조각
+    창고를 겸합니다(아래 「조각 창고의 CORS 규칙」 과 같은 버킷). 되감기 ·
+    VOD 를 media 배포의 `/dvr/*` · `/vod/*` 로 받을 때는 그 비헤이비어의 응답
+    헤더 정책(media-cors, `origin_override = true`)이 CORS 응답 헤더를
+    붙입니다 — edge 몫이고 버킷 CORS 규칙에 기대지 않습니다. 브라우저가 clip
+    이 서명한 조각 주소로 S3 에 직접 갈 때는 런타임의 버킷 CORS 규칙이
+    붙입니다(아래). edge 는 그 규칙을 지우거나 대신 두지 않습니다. CDN 경로는
+    플레이어 요청이 사용자 정의 헤더 없는 GET 이라 사전 요청(OPTIONS)이
+    없다는 전제이고(허용 헤더 기본 `["range"]` — 빈 목록은 provider 가 못
+    받음 · 사전 요청 0 전제는 G14 그대로), T1 · T10 에서 OPTIONS 가 생기면
+    다시 봅니다.
 *   **비밀 암호화 키**: 앱 비밀 그릇은 기본 KMS 키(`aws/secretsmanager`)를
     전제합니다. 고객 관리 키로 바꾸면 그 비밀을 읽는 실행 역할(platform)에
     그 키의 `kms:Decrypt` 를 더해야 합니다 — 같은 PR 에서 platform 도
