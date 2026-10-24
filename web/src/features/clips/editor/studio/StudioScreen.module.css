@@ -593,7 +593,7 @@
   min-width: 0;
   display: flex;
   flex-direction: column;
-  padding-bottom: calc(14 * var(--pc-u));
+  padding-bottom: calc(8 * var(--pc-u));
 }
 
 /* ---------- 타임라인 줄 (POK-389) ---------- */
