@@ -147,6 +147,29 @@ describe('useTrackPreview', () => {
     expect(gains.map((g) => g.gain.value)).toEqual([1, 0, 0]);
   });
 
+  it('음량만 바뀌면 화면을 다시 그리지 않고 재생기에 바로 건다: 음량 숫자를 끄는 동안 값이 초당 수십 번 온다(PR #341 3차)', async () => {
+    const { ctx, gains } = fakeContext();
+    let renders = 0;
+    const { result } = renderHook(() => {
+      renders += 1;
+      return useTrackPreview({
+        streamId: 's-1',
+        baseMs: BASE,
+        window: WINDOW,
+        video: video(),
+        createContext: () => ctx as never,
+      });
+    });
+    act(() => result.current.setGains([0, 1, 0]));
+    await waitFor(() => expect(result.current.status).toBe('ready'));
+
+    const before = renders;
+    act(() => result.current.setGains([0, 0.9, 0]));
+    act(() => result.current.setGains([0, 0.8, 0.3]));
+    expect(renders).toBe(before);
+    expect(gains.map((g) => g.gain.value)).toEqual([0, 0.8, 0.3]);
+  });
+
   it('영상을 다 받기 전에도 조각을 받기 시작하고, 따라 틀기는 영상이 받은 창이 생기면 시작한다(PR #341 2차)', async () => {
     const { ctx } = fakeContext();
     const sources = vi.spyOn(ctx, 'createBufferSource');

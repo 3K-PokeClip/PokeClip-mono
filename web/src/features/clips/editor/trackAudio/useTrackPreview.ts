@@ -71,10 +71,13 @@ export function useTrackPreview(options: {
   const [status, setStatus] = useState<TrackPreviewStatus>('idle');
   const [player, setPlayer] = useState<TrackAudioPlayer | null>(null);
   const [levels, setLevels] = useState<TrackLevels | null>(null);
-  /** 트랙 번호 순 음량. 재생기가 바뀌거나 배속이 바뀌면 다시 건다(아래 이펙트) */
-  const [gains, setGainsState] = useState<readonly number[]>([]);
+  // 트랙 번호 순 음량은 ref로 든다: 음량 숫자를 끄는 동안 값이 초당 수십 번 오는데, 상태로 들면 그때마다 이 훅을 쥔 화면
+  // 전체가 한 번 더 그려졌다(PR #341 3차). 화면이 알아야 하는 「영상 소리와 같은가」만 상태다(값이 같으면 다시 안 그린다)
+  const gainsRef = useRef<readonly number[]>([]);
+  const [videoMixMatches, setVideoMixMatches] = useState(true);
   const [videoRate, setVideoRate] = useState(1);
-  const videoMixMatches = sameAsVideo(gains);
+  const videoRateRef = useRef(videoRate);
+  videoRateRef.current = videoRate;
   const contextRef = useRef<DecodingContext | null>(null);
   const createRef = useRef(createContext);
   const playerRef = useRef(player);
@@ -207,9 +210,18 @@ export function useTrackPreview(options: {
   }, [video]);
   const videoCarries = videoRate !== 1 && videoMixMatches;
 
+  /** 재생기에 음량을 건다. 영상 소리가 대신 내는 동안(배속 · 같은 음량)은 재생기를 0으로 둔다 */
+  const applyGains = useCallback((target: TrackAudioPlayer, carries: boolean) => {
+    const gains = gainsRef.current;
+    target.setGains(carries ? gains.map(() => 0) : gains);
+  }, []);
+
+  // 재생기가 바뀌거나(만들자마자는 모두 0) 판단 재료(배속 · 같은 음량)가 바뀌면 다시 건다. 음량만 바뀌면 setGains가 바로
+  // 건다. 재료를 다 걸어 두는 까닭: 같은 렌더 묶음에서 음량과 배속이 함께 바뀌면 setGains는 옛 배속으로 걸고, 「맡는가」
+  // 결과는 그대로라 그것만 보면 다시 안 건다
   useEffect(() => {
-    player?.setGains(videoCarries ? gains.map(() => 0) : gains);
-  }, [player, gains, videoCarries]);
+    if (player !== null) applyGains(player, videoCarries);
+  }, [player, videoCarries, videoRate, videoMixMatches, applyGains]);
 
   // 영상 소리를 끄는 때: 재생기가 소리를 내면(트는 중 · 새 창을 받는 동안 앞 창 재생기가 이어 튼다) 끈다. 재생기 없이 불러오는
   // 중이면 음량이 영상 소리와 다를 때만 끈다: 다르면 뺀 트랙까지 섞인 최종 믹스가 들려서다(로컬 리뷰 1라운드). 같으면(새로 연
@@ -230,7 +242,17 @@ export function useTrackPreview(options: {
     return followVideo(player, video, () => playingFrom + video.currentTime);
   }, [player, video, playingFrom]);
 
-  const setGains = useCallback((next: readonly number[]) => setGainsState(next), []);
+  const setGains = useCallback(
+    (next: readonly number[]) => {
+      gainsRef.current = next;
+      const matches = sameAsVideo(next);
+      setVideoMixMatches(matches);
+      // 새 음량으로 바로 건다(영상 소리가 맡을지는 새 음량으로 판단한다). 맡는 쪽이 바뀌면 다음 렌더의 이펙트가 한 번 더 건다
+      const player = playerRef.current;
+      if (player !== null) applyGains(player, videoRateRef.current !== 1 && matches);
+    },
+    [applyGains],
+  );
 
   return useMemo(() => ({ status, levels, setGains }), [status, levels, setGains]);
 }
