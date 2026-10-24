@@ -324,6 +324,11 @@ SH
     `ingest_auth_resolve_token_secret_arn` 이 있습니다. 없으면 plan 이 그
     이름으로 실패합니다(옛 모드여도 — 루트가 늘 읽습니다). 마지막 출력은 런타임
     1단-나 ②(POK-429)의 apply 뒤에 생깁니다.
+1.  **platform 출력 `service_ports`**: `terraform -chdir=infra/terraform/prod/platform
+    output service_ports` 에 auth 포트가 있습니다. Media → auth resolve SG 짝이
+    이 값을 씁니다(POK-307 · kty 결정 2026-10-25 (나)). 이 출력이 생기기 전
+    커밋으로 platform 을 apply 했다면 platform 을 다시 apply 합니다(plan 은
+    출력만 늘어남 · kty 승인). 없으면 prod/media plan 이 그 이름으로 실패합니다.
 1.  **런타임의 DB 준비**: RDS IAM 인증 켬 · `media_indexer` · `media_janitor`
     (`rds_iam`) · DDL 역할로 스키마 배치 · GRANT 가 끝났다는 확인이 런타임
     스토리 티켓 코멘트에 있습니다([CONTRACT-runtime.md](/infra/terraform/CONTRACT-runtime.md)
@@ -335,7 +340,8 @@ SH
 `terraform.tfvars` 는 `terraform.tfvars.example` 대로 채웁니다(이미지 =
 O7c 다이제스트 · `control_upstream` 빈 값 · 응답기 다이제스트 없음). 첫
 apply 라 plan 은 생성뿐입니다 — 인스턴스 · Media SG 와 규칙 · RDS 인그레스 ←
-Media · LB 이그레스 → Media · 인스턴스 역할 · 프로필 · 정책 · 관리형 정책
+Media · auth 인그레스 ← Media(kty 결정 2026-10-25 (나)) · LB 이그레스 →
+Media · 인스턴스 역할 · 프로필 · 정책 · 관리형 정책
 연결 하나 · 거부 목록 파라미터 · 대상 등록 넷. 변경 · 삭제가 있으면 apply
 하지 않습니다.
 
@@ -435,8 +441,8 @@ tg_health
 ## 정상 교체
 
 방송이 없는 시간대에 합니다(설계 5-3). 선행: 루프백 헬스(3)는 런타임 트랙
-(Media → auth resolve)과 시험 스트림 키 입력(설계 5-4 의 11)이 끝난 뒤에만 할
-수 있습니다.
+(auth 의 resolve 창구 — Media ↔ auth SG 짝은 이 루트 몫, kty 결정 2026-10-25
+(나))과 시험 스트림 키 입력(설계 5-4 의 11)이 끝난 뒤에만 할 수 있습니다.
 
 | # | 동작 | 통과 |
 |---|---|---|

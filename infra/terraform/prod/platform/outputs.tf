@@ -81,8 +81,13 @@ output "discovery_namespace_id" {
 }
 
 output "service_sg_ids" {
-  description = "서비스 SG id(auth · clip · next) — 런타임 2단 · 일꾼 · chat 이 상대 규칙에 쓴다."
+  description = "서비스 SG id(auth · clip · next) — 런타임 2단 · 일꾼 · chat · media(auth) 가 상대 규칙에 쓴다."
   value       = local.service_sg_ids
+}
+
+output "service_ports" {
+  description = "서비스 포트(auth · clip · next) — services 와 같은 값. media 가 Media → auth 이그레스 · auth 인그레스 ← Media 의 포트에 쓴다."
+  value       = { for name, service in var.services : name => service.port }
 }
 
 output "clip_execution_role_arn" {

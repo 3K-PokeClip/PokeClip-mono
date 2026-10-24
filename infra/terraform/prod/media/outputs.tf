@@ -12,7 +12,7 @@ output "http_active_key" {
 }
 
 output "media_sg_id" {
-  description = "Media SG id — 런타임 2단의 Media → auth 이그레스 · auth 인그레스 ← Media."
+  description = "Media SG id — 다른 루트가 Media 를 상대로 규칙을 걸 때 쓴다. Media ↔ auth · RDS 짝은 이 루트가 만든다(kty 결정 2026-10-25 (나))."
   value       = module.media_host.media_sg_id
 }
 
