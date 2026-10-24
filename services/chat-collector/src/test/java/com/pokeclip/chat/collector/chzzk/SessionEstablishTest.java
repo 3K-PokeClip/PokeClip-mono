@@ -341,6 +341,12 @@ class SessionEstablishTest extends IntegrationTestSupport {
         assertThat(seen.get())
                 .as("connected·subscribed·채팅 둘 — 넷이 다 싱크를 지나야 수신이 산 것이다")
                 .isGreaterThanOrEqualTo(4);
+        // 싱크는 seen을 올린 뒤 던지고, 세션은 그 예외를 잡은 뒤에 센다. 넷 뒤에도 프레임이 더 올 수 있어 바로 읽으면 그 한 프레임이
+        // 두 수 사이에 걸려 「5 대 4」가 난다(POK-468, CI 실측). 두 수가 맞춰지기를 기다린다: 세지 않으면 끝까지 안 맞아 여전히 빨갛다
+        deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+        while (session.sinkFailureCount() != seen.get() && System.nanoTime() < deadline) {
+            Thread.sleep(20);
+        }
         assertThat(session.sinkFailureCount())
                 .as("삼켰으면 세야 한다. 안 세면 수신은 사는데 처리가 죽은 것을 못 본다")
                 .isEqualTo(seen.get());
