@@ -294,3 +294,32 @@ describe('ChatPanel: 후원 줄(POK-431)', () => {
     expect(screen.getByText('승급 기원')).toBeInTheDocument();
   });
 });
+
+describe('ChatPanel: 플랫폼 표시(POK-466)', () => {
+  it('채팅 · 후원 줄 앞에 어느 플랫폼인지 적고, 모르면 적지 않는다', () => {
+    renderPanel({
+      messages: [
+        {
+          id: 1,
+          kind: 'chat',
+          name: '숲시청자',
+          text: 'ㅋㅋ',
+          colorIndex: 0,
+          platformLabel: 'SOOP',
+        },
+        {
+          id: 2,
+          kind: 'donation',
+          name: '도네초코',
+          amountLabel: '치즈 5,000',
+          text: '',
+          platformLabel: '치지직',
+        },
+        { id: 3, kind: 'chat', name: '옛줄', text: '안녕', colorIndex: 1, platformLabel: null },
+      ],
+    });
+    expect(screen.getByText('숲시청자').closest('li')).toHaveTextContent(/^SOOP/);
+    expect(screen.getByText('도네초코 · 치즈 5,000').closest('li')).toHaveTextContent(/^치지직/);
+    expect(screen.getByText('옛줄').closest('li')).toHaveTextContent(/^옛줄/);
+  });
+});

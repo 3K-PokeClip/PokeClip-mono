@@ -667,6 +667,14 @@
   word-break: break-all;
 }
 
+/* 어느 플랫폼 채팅인지(POK-466) — 닉네임보다 한 단계 작고 흐리게: 줄을 읽는 흐름을 끊지 않는다 */
+.chatPlatform {
+  margin-right: calc(4 * var(--pc-u));
+  font-size: calc(10 * var(--pc-u));
+  font-weight: 650;
+  color: var(--pc-color-text-muted);
+}
+
 .chatName {
   font-weight: 700;
   color: var(--pc-color-text-secondary);

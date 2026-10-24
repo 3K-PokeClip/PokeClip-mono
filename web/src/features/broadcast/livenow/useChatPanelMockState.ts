@@ -2,6 +2,7 @@
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { apiFetch } from '@/api/client';
+import { platformLabel } from '@/api/clipEditor';
 import { recordingSearchFrom } from '@/features/broadcast/endedWindow';
 import {
   CHAT_PAGE_MAX,
@@ -57,8 +58,18 @@ export type ChatPanelMessage =
       text: string;
       /** 닉네임 색 로테이션 인덱스 (LiveScreen.module.css .chatName*) */
       colorIndex: number;
+      /** 어느 플랫폼 채팅인지(「치지직」·「SOOP」, POK-466). 모르면 비우고 표시를 숨긴다 */
+      platformLabel?: string | null;
     }
-  | { id: number; kind: 'donation'; name: string; amountLabel: string; text: string }
+  | {
+      id: number;
+      kind: 'donation';
+      name: string;
+      amountLabel: string;
+      text: string;
+      /** 채팅 줄과 같다 */
+      platformLabel?: string | null;
+    }
   /** 하이라이트 감지처럼 서비스가 끼워 넣는 줄 */
   | { id: number; kind: 'system'; text: string };
 
@@ -177,6 +188,7 @@ function toPanel(it: WireItem): ChatPanelMessage {
       name,
       amountLabel: donationLabel(it.donationType, it.amount),
       text: it.text ?? '',
+      platformLabel: platformLabel(it.platform),
     };
   }
   return {
@@ -185,6 +197,7 @@ function toPanel(it: WireItem): ChatPanelMessage {
     name,
     text: it.text ?? '',
     colorIndex: colorOf(it.senderChannelId),
+    platformLabel: platformLabel(it.platform),
   };
 }
 
@@ -331,6 +344,7 @@ export function useChatPanelMockState(
         text: ev.text,
         amount: ev.amount,
         donationType: ev.donationType,
+        platform: ev.platform,
       };
       setRaw((prev) => {
         const k = chatFingerprint(item);

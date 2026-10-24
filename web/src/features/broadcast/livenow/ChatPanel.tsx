@@ -21,12 +21,20 @@ import type { ChatPanelMessage, ChatSurge } from './useChatPanelMockState';
 /** 바닥에서 이만큼 안이면 「끝에 있다」로 본다 — 서브픽셀 스크롤·줌 잔차 흡수 */
 const FOLLOW_SLACK_PX = 8;
 
+/** 어느 플랫폼 줄인지(POK-466). 한 방송을 치지직 · SOOP에 같이 내보내면 두 채팅이 섞이므로 줄마다 앞에 둔다. 모르면 그리지 않는다 */
+function PlatformMark({ label }: { label?: string | null }) {
+  return label ? <span className={styles.chatPlatform}>{label}</span> : null;
+}
+
 function ChatLine({ message }: { message: ChatPanelMessage }) {
   if (message.kind === 'donation') {
     return (
       <li className={styles.chatDonation}>
         <span className={styles.chatDonationHead}>
-          {message.name} · {message.amountLabel}
+          <PlatformMark label={message.platformLabel} />
+          <span>
+            {message.name} · {message.amountLabel}
+          </span>
         </span>
         {/* SOOP 후원은 문구가 늘 비어 온다(POK-431): 빈 자리를 그리면 후원마다 빈 줄이 생긴다 */}
         {message.text ? <span className={styles.chatDonationText}>{message.text}</span> : null}
@@ -38,6 +46,7 @@ function ChatLine({ message }: { message: ChatPanelMessage }) {
   }
   return (
     <li className={styles.chatLine}>
+      <PlatformMark label={message.platformLabel} />
       <b className={styles.chatName} data-color={message.colorIndex}>
         {message.name}
       </b>{' '}
