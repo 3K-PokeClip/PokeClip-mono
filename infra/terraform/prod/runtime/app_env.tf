@@ -28,6 +28,9 @@ output "app_env" {
   value = {
     auth = merge(local.app_db_env, {
       STREAM_KEY_SECRET_REF_PREFIX = "pokeclip/prod/stream-key/"
+      # resolve 전용 창구의 출발지 — Media 프라이빗 서브넷(POK-429 · K3). 전용
+      # 토큰(app_secret_arns)이 있는데 이 값이 비면 auth 가 부팅을 거부한다.
+      STREAM_KEY_RESOLVE_ALLOWED_CIDRS = local.media_private_subnet_cidr
     })
     clip = merge(local.app_db_env, {
       BROADCAST_QUEUE_URL      = aws_sqs_queue.broadcast["clip"].url

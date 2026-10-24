@@ -1,7 +1,8 @@
 # 출력 app_env(POK-309 · 설계 3절) — 서비스별 비밀 아닌 env 의 키 집합과 값이
-# RDS · 계약9 큐 · stream-key 접두를 가리키는지 단언한다(CONTRACT-runtime.md
-# 「런타임 1단 → platform」 행). 주소 · URL 은 mock 이 만드는 가짜 값이다.
-# override_data 가 network 원격 상태를 대신하므로 S3 를 읽지 않는다(AWS 호출 0).
+# RDS · 계약9 큐 · stream-key 접두 · Media 서브넷 대역을 가리키는지 단언한다
+# (CONTRACT-runtime.md 「런타임 1단 → platform」 행). 주소 · URL 은 mock 이
+# 만드는 가짜 값이다. override_data 가 network 원격 상태와 서브넷 조회를
+# 대신하므로 S3 · EC2 를 읽지 않는다(AWS 호출 0).
 
 mock_provider "aws" {
   source = "./tests/mocks"
@@ -19,6 +20,14 @@ override_data {
   }
 }
 
+# 문서용 대역(RFC 5737)이다. mock 기본값(192.0.2.0/24)과 달라서 값이 이
+# 서브넷이 아닌 곳에서 오면 아래 단언이 깨진다.
+override_data {
+  target = data.aws_subnet.media_private
+  values = {
+    cidr_block = "198.51.100.0/24"
+  }
+}
 
 # env 이름은 각 서비스 application.yml 실물이다. 이름을 더하면 이 집합도
 # 함께 고친다(POSTGRES_USER 는 platform 이 app_db_users 로 넣는다).
@@ -35,8 +44,9 @@ run "lists_env_names_per_service" {
   assert {
     condition = toset(keys(output.app_env["auth"])) == toset([
       "DB_HOST", "DB_PORT", "POSTGRES_DB", "STREAM_KEY_SECRET_REF_PREFIX",
+      "STREAM_KEY_RESOLVE_ALLOWED_CIDRS",
     ])
-    error_message = "auth 의 env 이름 집합이 DB_HOST · DB_PORT · POSTGRES_DB · STREAM_KEY_SECRET_REF_PREFIX 와 다르다."
+    error_message = "auth 의 env 이름 집합이 DB_HOST · DB_PORT · POSTGRES_DB · STREAM_KEY_SECRET_REF_PREFIX · STREAM_KEY_RESOLVE_ALLOWED_CIDRS 와 다르다."
   }
 
   assert {
@@ -125,6 +135,29 @@ run "prefixes_stream_key_secrets_under_prod" {
   assert {
     condition     = output.app_env["auth"]["STREAM_KEY_SECRET_REF_PREFIX"] == "pokeclip/prod/stream-key/"
     error_message = "auth 의 STREAM_KEY_SECRET_REF_PREFIX 가 pokeclip/prod/stream-key/ 가 아니다."
+  }
+}
+
+# resolve 전용 창구의 출발지는 Media 프라이빗 서브넷 하나다(POK-429 · K3).
+# auth 는 전용 토큰이 있는데 이 대역이 비면 부팅을 거부한다. 대역은 앱이
+# IPv4 CIDR 로 읽는다. 이름이 platform 의 비밀 낱말 검사를 통과하는지는
+# platform 시험(services.tftest.hcl 의 계약 이름 오탐 run)이 본다.
+run "allows_resolve_from_media_private_subnet_only" {
+  command = apply
+
+  assert {
+    condition     = data.aws_subnet.media_private.id == local.media_private_subnet_id
+    error_message = "서브넷 조회가 network 출력 media_private_subnet_id 를 읽지 않는다."
+  }
+
+  assert {
+    condition     = output.app_env["auth"]["STREAM_KEY_RESOLVE_ALLOWED_CIDRS"] == "198.51.100.0/24"
+    error_message = "auth 의 STREAM_KEY_RESOLVE_ALLOWED_CIDRS 가 Media 프라이빗 서브넷의 cidr_block 이 아니다."
+  }
+
+  assert {
+    condition     = can(cidrhost(output.app_env["auth"]["STREAM_KEY_RESOLVE_ALLOWED_CIDRS"], 0)) && can(regex("^[0-9]+[.][0-9]+[.][0-9]+[.][0-9]+/[0-9]+$", output.app_env["auth"]["STREAM_KEY_RESOLVE_ALLOWED_CIDRS"]))
+    error_message = "auth 의 STREAM_KEY_RESOLVE_ALLOWED_CIDRS 가 IPv4 CIDR 하나가 아니다."
   }
 }
 
