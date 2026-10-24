@@ -16,3 +16,13 @@ locals {
   media_az                = data.terraform_remote_state.network.outputs.media_az
   media_private_subnet_id = data.terraform_remote_state.network.outputs.media_private_subnet_id
 }
+
+# auth resolve 전용 창구의 허용 대역(POK-429 · K4) — Media 프라이빗 서브넷의
+# CIDR. 호출자 권한으로 ec2:DescribeSubnets 를 부른다(점검 묶음 runtime-1a).
+data "aws_subnet" "media_private" {
+  id = local.media_private_subnet_id
+}
+
+locals {
+  media_private_subnet_cidr = data.aws_subnet.media_private.cidr_block
+}

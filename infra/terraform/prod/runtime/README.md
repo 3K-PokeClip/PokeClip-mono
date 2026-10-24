@@ -1,7 +1,7 @@
 # prod/runtime
 
 prod 런타임 1단(설계 3-1 의 ⑤)을 만드는 루트입니다 — RDS PostgreSQL 17 ·
-앱 비밀 그릇 여덟 · 계약9 SNS FIFO 주제와 SQS FIFO 큐 · rewind 버킷 · SQL
+앱 비밀 그릇 아홉 · 계약9 SNS FIFO 주제와 SQS FIFO 큐 · rewind 버킷 · SQL
 실행기 스위치(1단-가), 일 큐 셋과 DLQ · clips · 프로필 사진 버킷 · auth 설정
 (OAuth · 사진 주소) · clip 일 스위치(1단-다). platform · media · edge · 일꾼
 배치 루트는 이 루트의 상태(키 `prod/runtime/terraform.tfstate`)를
@@ -34,9 +34,9 @@ prod 런타임 1단(설계 3-1 의 ⑤)을 만드는 루트입니다 — RDS Pos
 | 파일 | 담는 것 | 티켓 |
 |---|---|---|
 | `versions.tf` · `providers.tf` · `backend.tf` · `variables.tf` | 규약 · default_tags(`TerraformRoot = prod/runtime`) · 루트 공통 변수 | POK-304 |
-| `network_state.tf` | prod/network 원격 상태 → `vpc_id` · `private_subnet_ids` · `media_az` · `media_private_subnet_id` | POK-304 |
+| `network_state.tf` | prod/network 원격 상태 → `vpc_id` · `private_subnet_ids` · `media_az` · `media_private_subnet_id` · Media 프라이빗 서브넷 CIDR 조회(`data "aws_subnet"`) | POK-304 · POK-429 |
 | `rds.tf` | RDS 인스턴스 · 서브넷 그룹 · 파라미터 그룹 · 로그 그룹(30일) · RDS SG(규칙 0) | POK-304 |
-| `app_secrets.tf` | 앱 비밀 그릇 여덟과 서비스별 ARN 지도(일꾼 render · upload 포함) | POK-305 · POK-427 · POK-408 |
+| `app_secrets.tf` | 앱 비밀 그릇 아홉과 서비스별 ARN 지도(일꾼 render · upload 포함) · Media 가 읽는 그릇 | POK-305 · POK-427 · POK-408 · POK-429 |
 | `rewind_bucket.tf` | rewind 버킷(공개 차단 · SSE-S3 · 미완료 업로드 정리 · 앱 출처 `app_origin` 의 GET · HEAD CORS) — segment 창고를 겸함 | POK-308 · POK-427 |
 | `broadcast_events.tf` · `app_env.tf` | 계약9 주제 · 주제 정책 · 큐 · DLQ · 구독 · 큐 정책 · 서비스별 env · clip 일 스위치 변수 `clip_job_features` | POK-309 · POK-408 |
 | `job_queues.tf` | 일 큐 셋(render · thumbnail · upload — 표준 SQS)과 DLQ · redrive | POK-408 |
@@ -76,9 +76,10 @@ default_tags 가 붙는지는 미확인이고, 런북 「운영 확인」 에서
 | `rds_db_name` | media · `app_env` 의 `POSTGRES_DB` |
 | `rds_resource_id` | media — 인스턴스 역할 `rds-db:connect` 의 대상 |
 | `rewind_bucket_name` · `rewind_bucket_arn` · `rewind_bucket_regional_domain_name` | edge — `rewind-s3` 오리진 · media — 업로드 정책 · 런타임 2단 — 버킷 정책 |
-| `app_secret_arns`(서비스 → env 이름 → 전체 ARN) | platform — `ecs_service.secrets` · 실행 역할 읽기 정책. auth 여덟(`SOOP_CLIENT_SECRET` 포함) · clip 둘(`JWT_SECRET` · `INTERNAL_API_TOKEN`) · chat-collector 둘(`INTERNAL_API_TOKEN` · `CHZZK_CLIENT_SECRET`) · chat-detector 하나(`INTERNAL_API_TOKEN`). 일꾼 render · upload 하나씩(`INTERNAL_API_TOKEN` — 앱과 같은 그릇)은 배치 루트가 읽는다 |
-| `media_secret_arns`(비밀 전체 ARN 목록 — `list(string)`) | media — 인스턴스 역할 읽기 정책(media_host 변수 `media_secret_arns` 와 같은 꼴). 원소는 `INTERNAL_API_TOKEN` 그릇 하나(앱과 같은 그릇) |
-| `app_env`(서비스 → env 이름 → 값) | platform — `ecs_service.environment`. 네 서버 모두 `DB_HOST` · `DB_PORT` · `POSTGRES_DB`, auth 는 OAuth 네 덩어리의 `*_CLIENT_ID` · `*_REDIRECT_URI` 와 `PROFILE_PHOTO_S3_BUCKET` · `PROFILE_PHOTO_BASE_URL`(스트림 키 접두 `STREAM_KEY_SECRET_REF_PREFIX` 는 platform 이 넣는다), clip · chat-collector 는 자기 큐의 `BROADCAST_QUEUE_URL`, clip 은 수신 스위치 `BROADCAST_INTAKE_ENABLED = "true"`(문자열 — 빠지면 큐를 읽지 않아 편지가 보관 기간 뒤 사라진다) · 일 스위치 셋(`clip_job_features`) · 일 큐 주소 다섯 · `CLIPS_BUCKET` · `SEGMENT_BUCKET`(= rewind). `AUTH_BASE_URL` 은 platform 이 넣는다. chat-collector 의 스위치는 배치(POK-306)가 `AUTH_BASE_URL` · `INTERNAL_API_TOKEN` 과 함께 정한다. 일꾼 render · upload 의 큐 주소 · 숨김 env 는 배치 루트가 읽는다 |
+| `app_secret_arns`(서비스 → env 이름 → 전체 ARN) | platform — `ecs_service.secrets` · 실행 역할 읽기 정책. auth 아홉(`SOOP_CLIENT_SECRET` · resolve 전용 토큰 `STREAM_KEY_RESOLVE_TOKEN` 포함) · clip 둘(`JWT_SECRET` · `INTERNAL_API_TOKEN`) · chat-collector 둘(`INTERNAL_API_TOKEN` · `CHZZK_CLIENT_SECRET`) · chat-detector 하나(`INTERNAL_API_TOKEN`). 일꾼 render · upload 하나씩(`INTERNAL_API_TOKEN` — 앱과 같은 그릇)은 배치 루트가 읽는다 |
+| `media_secret_arns`(비밀 전체 ARN 목록 — `list(string)`) | media — 인스턴스 역할 읽기 정책(media_host 변수 `media_secret_arns` 와 같은 꼴). 원소는 resolve 전용 토큰 그릇 하나(auth 의 `STREAM_KEY_RESOLVE_TOKEN` 과 같은 그릇) — 공용 `INTERNAL_API_TOKEN` 은 없다(POK-429) |
+| `ingest_auth_resolve_token_secret_arn`(전체 ARN — string) | media(M15) — 응답기 `media.env` 의 `STREAM_KEY_RESOLVE_TOKEN_SECRET_ARN` 렌더. `media_secret_arns` 의 원소와 같은 값이고, 목록의 순서에 기대지 않으려는 이름 있는 출력이다 |
+| `app_env`(서비스 → env 이름 → 값) | platform — `ecs_service.environment`. 네 서버 모두 `DB_HOST` · `DB_PORT` · `POSTGRES_DB`, auth 는 OAuth 네 덩어리의 `*_CLIENT_ID` · `*_REDIRECT_URI` 와 `PROFILE_PHOTO_S3_BUCKET` · `PROFILE_PHOTO_BASE_URL` · resolve 전용 창구의 허용 대역 `STREAM_KEY_RESOLVE_ALLOWED_CIDRS`(Media 프라이빗 서브넷 CIDR)(스트림 키 접두 `STREAM_KEY_SECRET_REF_PREFIX` 는 platform 이 넣는다), clip · chat-collector 는 자기 큐의 `BROADCAST_QUEUE_URL`, clip 은 수신 스위치 `BROADCAST_INTAKE_ENABLED = "true"`(문자열 — 빠지면 큐를 읽지 않아 편지가 보관 기간 뒤 사라진다) · 일 스위치 셋(`clip_job_features`) · 일 큐 주소 다섯 · `CLIPS_BUCKET` · `SEGMENT_BUCKET`(= rewind). `AUTH_BASE_URL` 은 platform 이 넣는다. chat-collector 의 스위치는 배치(POK-306)가 `AUTH_BASE_URL` · `INTERNAL_API_TOKEN` 과 함께 정한다. 일꾼 render · upload 의 큐 주소 · 숨김 env 는 배치 루트가 읽는다 |
 | `broadcast_topic_arn` | media — 사이드카 역할의 `sns:Publish` 대상(신원 정책 — 주제 정책은 계정 루트만 주체로 둔다) |
 | `broadcast_queue_arns`(소비자 clip · chat → 큐 ARN) | chat-collector(POK-306)의 수신 정책 대상. clip 은 `app_task_resource_arns` 를 쓴다 |
 | `app_db_users`(서비스 → DB 사용자 이름) | platform — 태스크 env `POSTGRES_USER` · `rds-db:connect` 의 사용자 자리(auth · clip). `auth` `app_auth` · `clip` `app_clip` · `chat-collector` `app_chat_collector` · `chat-detector` `app_chat_detector` — chat 두 키는 배치(POK-306)가 읽는다. 사용자 · `rds_iam` · GRANT 는 `sql/` 이 만든다 |
@@ -162,10 +163,10 @@ CREATE 는 1단-가가 했습니다(POK-407 · kty 2026-10-24). 잊지 않도록
     `report.txt` 에 「자원 없음」 을 남깁니다.
 1.  `scripts/put-secret-from-file.sh` 의 비밀 종류 확장(O7d 앞). 닫힘 —
     1단-다(POK-427): 그릇 이름 허용 목록 · SOOP 포함.
-1.  응답기 비밀 최소 권한(K1) — 응답기가 앱과 같은 `INTERNAL_API_TOKEN` 을
-    써서 Media 상자가 auth `/internal/**` 전부에 통하는 열쇠를 가집니다. 전용
-    토큰으로 옮길지는 3번과 다시 합의해야 합니다(auth
-    `FORWARD_HEADERS_STRATEGY` 제약).
+1.  응답기 비밀 최소 권한(K1) — **닫힘 — 1단-나 ②(POK-429)**: Media 가 읽는
+    그릇은 resolve 전용 토큰 하나이고(공용 `INTERNAL_API_TOKEN` 없음), auth
+    의 전용 창구 출발지는 Media 프라이빗 서브넷입니다. auth 는 POK-316 으로
+    `native` 위에서도 그 창구를 엽니다.
 1.  앱별 스키마 — 앱 사용자 넷에게 `public` CREATE 대신 자기 스키마를 주고
     (3번 Flyway 의 스키마 설정과 함께) `public` CREATE 를 회수해, 한계 절의
     이름 해석 가로채기를 닫습니다. 3번 Java(`services/auth` 의
@@ -218,6 +219,18 @@ CREATE 는 1단-가가 했습니다(POK-407 · kty 2026-10-24). 잊지 않도록
 *   탈퇴 정리 로그 `clip.purge.segments_skipped`(`StreamerPurger.java:78`)는
     손실 사건입니다 — 그 스트리머의 녹화 조각이 지워지지 않은 채 명부가
     닫힌 것입니다. 나오면 스트리머 id 를 모아 kty 에게 회부합니다(런북).
+*   auth 의 resolve 전용 창구 출발지는 Media 프라이빗 서브넷 대역 하나라,
+    같은 AZ 에 뜨는 ECS 태스크(next · auth · clip · chat · 일꾼)도 출발지
+    조건은 통과합니다. 그 서브넷이 `private_subnet_ids` 의 한 칸이기
+    때문입니다. 1차 방어는 토큰입니다(POK-429 K3).
+*   전용 토큰 · 공용 토큰을 바꾸거나 긴급 차단할 때 auth 롤링 배포 동안 옛
+    태스크 · 새 태스크가 섞여 어느 토큰이든 일부 요청이 401 입니다(거부 창 —
+    진행 중인 송출은 무사). 순서와 완료 조건은
+    [runtime-1a 런북](../../runbooks/runtime-1a.md) 「1단-나 ②」 절입니다.
+*   Media 상자는 IMDS 홉 제한이 2(`modules/media_host/main.tf` 의
+    `http_put_response_hop_limit`)라 상자의 컨테이너도 인스턴스 역할 자격을
+    받습니다. 그래서 전용 토큰을 읽을 수 있는 것은 응답기만이 아니라 상자
+    위의 모든 것입니다. media_host 범위라 고치지 않았습니다.
 
 ## See also
 

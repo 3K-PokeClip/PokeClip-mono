@@ -54,6 +54,18 @@ run "exposes_network_outputs_as_locals" {
   }
 }
 
+# auth 허용 대역의 출처(POK-429 · K4). 이 파일의 media_private_subnet_id 는
+# private_subnet_ids 의 어느 원소와도 달라서, 조회가 다른 서브넷을 가리키면
+# 깨진다.
+run "looks_up_media_private_subnet" {
+  command = plan
+
+  assert {
+    condition     = data.aws_subnet.media_private.id == "subnet-0examplemedia"
+    error_message = "data.aws_subnet.media_private 가 network 출력 media_private_subnet_id 를 조회하지 않는다."
+  }
+}
+
 # 원격 상태 위치는 변수 기본값으로 고정한다(CONTRACT-runtime.md 「상태 위치」).
 run "reads_network_state_from_prod_state_bucket" {
   command = plan

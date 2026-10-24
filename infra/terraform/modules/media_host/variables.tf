@@ -335,7 +335,7 @@ variable "test_stream_key_secret_arn" {
 }
 
 variable "media_secret_arns" {
-  description = "그 밖에 Media 상자가 읽는 비밀 ARN(런타임 1단 출력 media_secret_arns — INTERNAL_API_TOKEN 등)."
+  description = "그 밖에 Media 상자가 읽는 비밀 ARN(런타임 1단 출력 media_secret_arns — resolve 전용 토큰 등)."
   type        = list(string)
   default     = []
 

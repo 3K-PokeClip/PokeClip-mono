@@ -25,7 +25,7 @@
 |---|---|---|---|
 | network → 런타임 1단 | `vpc_id` · `private_subnet_ids` · `media_az` · `media_private_subnet_id` | RDS 서브넷 그룹 · RDS SG 의 VPC · RDS 의 AZ(Media 상자와 같은 AZ) · SQL 실행기 서브넷(켜진 동안만) | network |
 | 런타임 1단 → platform | `rds_sg_id` | platform 이 RDS 인그레스 ← auth · clip 규칙을 만든다 | RDS SG = 런타임, 규칙 = platform. 예외: `sql_runner_enabled` 가 켜진 동안만 RDS ← SQL 실행기 5432 규칙은 런타임이 가진다 |
-| 런타임 1단 → platform | `app_secret_arns`(서비스 → env 이름 → 전체 ARN — auth · clip · chat-collector · chat-detector 의 JWT_SECRET · SECRET_STORE_KEY · INTERNAL_API_TOKEN · OAuth 비밀 넷(SOOP 포함) 등, 일꾼 render · upload 의 INTERNAL_API_TOKEN(앱과 같은 그릇 — 배치 루트가 읽음), DB 비밀번호는 platform `app_db_auth = "password"` 일 때만 · 그릇 여덟 · 서비스별 목록은 [prod/runtime](prod/runtime/README.md)) | `ecs_service.secrets` 에 엣지 비밀(clip 의 `CLOUDFRONT_PRIVATE_KEY_PEM` = prod/secrets `signing_key_secret_arn`)과 합쳐 넣는다. 읽기 정책은 platform(실행 역할). 앱 서버 DB 자격은 비밀이 아니다 — IAM DB 인증 사용자(`app_db_users` · `prod/runtime/sql/`)로 붙는다. 비밀번호 그릇은 IAM 인증을 못 쓰는 대체 갈래에서만 생긴다(아래 「O7d 선행 확인」) | 그릇 · 값 = 런타임, 읽기 정책 = platform |
+| 런타임 1단 → platform | `app_secret_arns`(서비스 → env 이름 → 전체 ARN — auth · clip · chat-collector · chat-detector 의 JWT_SECRET · SECRET_STORE_KEY · INTERNAL_API_TOKEN · OAuth 비밀 넷(SOOP 포함) 등, 일꾼 render · upload 의 INTERNAL_API_TOKEN(앱과 같은 그릇 — 배치 루트가 읽음), DB 비밀번호는 platform `app_db_auth = "password"` 일 때만 · auth 의 resolve 전용 토큰 `STREAM_KEY_RESOLVE_TOKEN` · 그릇 아홉 · 서비스별 목록은 [prod/runtime](prod/runtime/README.md)) | `ecs_service.secrets` 에 엣지 비밀(clip 의 `CLOUDFRONT_PRIVATE_KEY_PEM` = prod/secrets `signing_key_secret_arn`)과 합쳐 넣는다. 읽기 정책은 platform(실행 역할). 앱 서버 DB 자격은 비밀이 아니다 — IAM DB 인증 사용자(`app_db_users` · `prod/runtime/sql/`)로 붙는다. 비밀번호 그릇은 IAM 인증을 못 쓰는 대체 갈래에서만 생긴다(아래 「O7d 선행 확인」) | 그릇 · 값 = 런타임, 읽기 정책 = platform |
 | 런타임 1단 → platform | `app_env`(서비스 → 이름 → 값 — DB 엔드포인트 · 큐 URL 등 비밀 아닌 값) | 태스크 env. 키는 앱이 읽는 이름 그대로(아래 「앱이 읽는 env 이름」). platform 이 정하는 이름(아래 「platform 이 정하는 env」)이 겹치면 platform 값이 이긴다. 큐 수신 스위치 `BROADCAST_INTAKE_ENABLED`(서버 기본 false)는 clip 만 `app_env` 가 `"true"`(문자열)로 준다. 스위치가 빠지면 서버는 뜨지만 큐를 읽지 않아 편지가 보관 기간 뒤 사라진다. 서비스 주소 `AUTH_BASE_URL` 은 platform 이 넣는다 — clip 은 비면 부팅을 거부한다. 켜면 auth 내부 호출에 `INTERNAL_API_TOKEN`(`app_secret_arns`)도 쓴다. chat-collector 의 스위치는 배치(POK-306)가 `AUTH_BASE_URL` · `INTERNAL_API_TOKEN` 과 함께 정한다 — 주소가 없으면 기본값(localhost)으로 떠서 틀린 주소로 돈다 | 런타임 |
 | 런타임 1단 → platform | `rds_resource_id` | auth · clip 작업 역할의 `rds-db:connect`(대상 = `dbuser:<rds_resource_id>/<사용자>`) — platform `app_db_auth = "iam"` 일 때 | RDS = 런타임, 접속 정책 = platform |
 | 런타임 1단 → platform | `app_db_users`(서비스 → DB 사용자 이름 — `auth` `app_auth` · `clip` `app_clip` · `chat-collector` `app_chat_collector` · `chat-detector` `app_chat_detector`, 3번 POK-407 확정) | 태스크 env `POSTGRES_USER` · `rds-db:connect` 의 사용자 자리(서비스마다 하나, 와일드카드 없음). platform 은 auth · clip 만 읽고 모르는 키를 거부하지 않는다 — chat 두 키는 배치(POK-306)가 읽는다. 런타임 1단-가가 낸다(이름은 `prod/runtime/sql/10_roles.sql` 에서 읽음 · kty 2026-10-24) | DB 사용자 · `rds_iam` · GRANT = 런타임(Terraform 이 아니라 `prod/runtime/sql/` 과 [runtime-1a 런북](runbooks/runtime-1a.md)) |
@@ -34,7 +34,8 @@
 | platform → 런타임 · 일꾼 · chat | `ecs_cluster_arn` · `discovery_namespace_id` · `service_sg_ids`(auth · clip · next) | 같은 클러스터 · Cloud Map 네임스페이스(`pokeclip.internal`)에 서비스를 두고, 상대 SG 규칙을 만든다(POK-408 일꾼 · POK-306 chat) | 클러스터 · 네임스페이스 · 서비스 SG = platform, 새 서비스 · 그 규칙 = 그 PR |
 | platform → media | `media_proxy_ports`(live · control · playback · health) · `media_health_path` | Media 상자 nginx 포트 · 헬스 경로 — platform 대상 그룹과 같은 값(정본 = platform) | platform |
 | 런타임 1단 → media | `rds_endpoint` · `rds_db_name` · `rds_resource_id` · `rds_sg_id` · `rewind_bucket_arn` | 사이드카 · janitor env(주소 · DB 이름) · Media 인스턴스 역할의 `rds-db:connect`(대상 = `rds_resource_id`) · Media ↔ RDS 5432 규칙 한 쌍 · 사이드카 S3(rewind) 업로드 정책(대상 = `rewind_bucket_arn/*`) | RDS · DB 사용자 · GRANT = 런타임(DB 사용자 · GRANT 는 Terraform 이 아니라 `prod/runtime/sql/` 과 [runtime-1a 런북](runbooks/runtime-1a.md)), 접속 정책 · SG 규칙 · 업로드 정책 = media |
-| 런타임 1단 → media | `media_secret_arns`(비밀 전체 ARN 목록 `list(string)` — media_host 변수와 같은 꼴. 지금은 `INTERNAL_API_TOKEN` 그릇 하나, 앱의 그릇과 같은 ARN) | Media 인스턴스 역할 읽기 정책. 한계: 이 열쇠는 auth `/internal/**` 전부에 통한다(전용 토큰은 런타임 1단-나에서 3번과 재합의) | 그릇 · 값 = 런타임, 읽기 정책 = media |
+| 런타임 1단 → media | `media_secret_arns`(비밀 전체 ARN 목록 `list(string)` — media_host 변수와 같은 꼴. resolve 전용 토큰 `pokeclip/prod/stream-key-resolve-token` 그릇 하나 — auth 의 `STREAM_KEY_RESOLVE_TOKEN` 과 같은 ARN. 공용 `INTERNAL_API_TOKEN` 은 없다, POK-429) | Media 인스턴스 역할 읽기 정책. 전용 토큰은 auth 의 `POST /internal/stream-keys/resolve` 하나만 열고, 출발지는 Media 프라이빗 서브넷 대역이어야 한다(auth `STREAM_KEY_RESOLVE_ALLOWED_CIDRS`) | 그릇 · 값 = 런타임, 읽기 정책 = media |
+| 런타임 1단 → media | `ingest_auth_resolve_token_secret_arn`(string — 위 그릇의 전체 ARN, `media_secret_arns` 의 원소와 같은 값) | 응답기 `media.env` 의 `STREAM_KEY_RESOLVE_TOKEN_SECRET_ARN` 렌더(M15). 목록의 순서에 기대지 않으려는 이름 있는 출력이다 | 출력 = 런타임, 키 · 렌더 = media(M15) |
 | 런타임 1단 → media | `broadcast_topic_arn` | 사이드카 역할의 `sns:Publish` 대상(계약9 발행 — `MessageDeduplicationId = eventId`). 발행 권한은 media 역할의 신원 정책이다 — 주제 정책은 계정 루트만 주체로 둔다(기본 정책의 `Principal *` 없음) | 주제 · 주제 정책 = 런타임, 발행 정책 = media |
 | 런타임 1단 → edge | `rewind_bucket_{name,arn,regional_domain_name}` | `cdn_media` 의 `rewind-s3` 오리진 | 버킷 = 런타임 |
 | edge → 런타임 2단 | `media_distribution_arn` | rewind 버킷 정책의 OAC 허용문(조건 `AWS:SourceArn`) | 버킷 정책 = 런타임 2단 |
@@ -203,8 +204,8 @@ clip 의 큐 수신 스위치 `BROADCAST_INTAKE_ENABLED` 는 이 목록에 없�
 | auth | `SOOP_CLIENT_ID` · `SOOP_REDIRECT_URI` | `app_env` | 빈 값 | 비밀 `SOOP_CLIENT_SECRET` 은 `app_secret_arns`. 치지직과 같다 |
 | auth | `PROFILE_PHOTO_S3_BUCKET` · `PROFILE_PHOTO_BASE_URL` | `app_env` | 빈 값 | 버킷이 비면 사진 기능이 꺼진다. 버킷은 「작업 역할 대상」 `profile_photo_bucket_arn` 과 같은 것 |
 | auth | `PROFILE_PHOTO_TOKEN_SECRET` | `app_secret_arns` | 빈 값 | 버킷이 있는데 비면 부팅 거부. `JWT_SECRET` 과 다른 값 |
-| auth | `STREAM_KEY_RESOLVE_ALLOWED_CIDRS` | `app_env` | 빈 값 | resolve 전용 창구(계약4 4C)의 허용 대역. 아래 토큰이 있으면 필수 — 비면 부팅 거부, platform plan 도 멈춘다 |
-| auth | `STREAM_KEY_RESOLVE_TOKEN` | `app_secret_arns` | 빈 값 | 비면 resolve 전용 창구가 닫힌다(auth 는 뜬다) |
+| auth | `STREAM_KEY_RESOLVE_ALLOWED_CIDRS` | `app_env` | 빈 값 | resolve 전용 창구(계약4 4C)의 허용 대역. 아래 토큰이 있으면 필수 — 비면 부팅 거부, platform plan 도 멈춘다. prod 값 = Media 프라이빗 서브넷 CIDR(런타임이 network `media_private_subnet_id` 로 조회) |
+| auth | `STREAM_KEY_RESOLVE_TOKEN` | `app_secret_arns` | 빈 값 | 비면 resolve 전용 창구가 닫힌다(auth 는 뜬다). prod 는 런타임이 준다(POK-429 — Media 응답기와 같은 그릇) |
 | auth | `FORWARD_HEADERS_TRUSTED_PROXIES` | platform | Boot 기본 신뢰 대역 | 값 = network `vpc_cidr`. 런타임은 넣지 않는다 |
 | clip | `BROADCAST_INTAKE_ENABLED` · `BROADCAST_QUEUE_URL` | `app_env` | `false` · 빈 값 | 켜면 URL 필수. 큐는 `broadcast_queue_arn` 과 같은 것 |
 | clip | `BROADCAST_REAPER_ENABLED` · `_INTERVAL` · `_GRACE` | `app_env`(선택) | `false` · `PT1M` · `PT30M` | 켜는 것은 운영자 결정. 켰는데 `stream_segments` 표가 없으면 부팅 거부 |
@@ -236,8 +237,12 @@ clip 의 큐 수신 스위치 `BROADCAST_INTAKE_ENABLED` 는 이 목록에 없�
 ### 응답기 비밀
 
 `media_secret_arns` 의 소비자는 Media 상자의 `ingest-auth`(응답기)
-컨테이너입니다. 시작 스크립트가 값을 tmpfs 파일로 렌더하고, 응답기는 **파일
-경로**로 받습니다. 환경변수로 넘기지 않습니다.
+컨테이너입니다. 원소는 resolve 전용 토큰 그릇
+`pokeclip/prod/stream-key-resolve-token` 하나이고, 응답기는 이름 있는 출력
+`ingest_auth_resolve_token_secret_arn` 으로 그 그릇을 찾습니다(M15 가
+`media.env` 의 `STREAM_KEY_RESOLVE_TOKEN_SECRET_ARN` 으로 렌더). 시작
+스크립트가 값을 tmpfs 파일로 렌더하고, 응답기는 **파일 경로**로 받습니다.
+환경변수로 넘기지 않습니다.
 
 ### DB 접속(IAM DB 인증)
 
@@ -319,7 +324,7 @@ prod 루트와 같은 규약을 씁니다(계획 3절 「한 계정 규약」). 
 | clips · 프로필 사진 버킷 | 접두 `pokeclip-prod-`(버킷 이름은 전역) | `pokeclip-prod-clips-apne2` · `pokeclip-prod-profile-photos-apne2`(변수 `clips_bucket_name` · `profile_photo_bucket_name` 기본값) |
 | 일 큐 · DLQ | 접두 `pokeclip-prod-` | `pokeclip-prod-jobs-{render,thumbnail,upload}`(표준 큐) · `pokeclip-prod-jobs-{render,thumbnail,upload}-dlq` |
 | SNS 주제 · SQS 큐 | 접두 `pokeclip-prod-` | `pokeclip-prod-broadcast-lifecycle.fifo`(주제) · `pokeclip-prod-broadcast-lifecycle-{clip,chat}.fifo`(큐) · `pokeclip-prod-broadcast-lifecycle-{clip,chat}-dlq.fifo`(DLQ) |
-| 앱 비밀 | `pokeclip/prod/<용도>` | `pokeclip/prod/{jwt-secret,secret-store-key,internal-api-token,google-client-secret,youtube-client-secret,chzzk-client-secret,profile-photo-token-secret,soop-client-secret}` |
+| 앱 비밀 | `pokeclip/prod/<용도>` | `pokeclip/prod/{jwt-secret,secret-store-key,internal-api-token,google-client-secret,youtube-client-secret,chzzk-client-secret,profile-photo-token-secret,soop-client-secret,stream-key-resolve-token}` |
 | IAM 역할 · 정책 · 인스턴스 프로필 | 접두 `pokeclip-prod-` + 경로 `/pokeclip/prod/` | 역할 · 인스턴스 프로필 `/pokeclip/prod/pokeclip-prod-sql-runner` · 인라인 정책 `pokeclip-prod-sql-runner-master-secret`(SQL 실행기가 켜진 동안만) |
 | SQL 실행기(EC2 · SG) | 접두 `pokeclip-prod-` | SG `pokeclip-prod-sql-runner` · 인스턴스 `Name` 태그 `pokeclip-prod-sql-runner`(켜진 동안만) |
 | RDS 관리형 마스터 비밀(규약의 예외) | 이름을 RDS 가 정함 | `rds!db-<식별자>` |

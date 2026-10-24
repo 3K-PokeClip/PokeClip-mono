@@ -1033,7 +1033,7 @@ preflight에서 막혀 **창구는 멀쩡한데 브라우저만 못 부른다.**
 | `POST /api/stream-keys/rotate` | 웹 | 사용자 JWT |
 | `POST /api/stream-keys/pairing-codes` | 웹 | 사용자 JWT |
 | `POST /api/stream-keys/pairing-codes/exchange` | OBS 플러그인 | **없음** (코드 자체가 자격증명) |
-| `POST /internal/stream-keys/resolve` | **Media(1번)** | `X-Internal-Token` 헤더 **또는** `X-Stream-Key-Resolve-Token` 헤더 + 출발지 잠금(아래) |
+| `POST /internal/stream-keys/resolve` | **Media(1번)** · clip 수동 마킹(`X-Internal-Token`) | `X-Internal-Token` 헤더 **또는** `X-Stream-Key-Resolve-Token` 헤더 + 출발지 잠금(아래) |
 | `POST /api/chzzk-link/start` | 웹 | 사용자 JWT |
 | `POST /api/chzzk-link` | 웹 | 사용자 JWT |
 | `GET /api/chzzk-link` | 웹 | 사용자 JWT |
