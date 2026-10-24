@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import { CirclePlus, Pencil, Zap } from 'lucide-react';
 import { Avatar, Button, IconButton, Skeleton, Tag } from '@/ui';
 import styles from './LiveScreen.module.css';
@@ -58,17 +59,35 @@ export function StreamInfoBar({
   markDisabled: boolean;
   onMark: () => void;
 }) {
+  // 못 읽은 카테고리 사진 주소. 그 주소인 동안은 프로필로 돌아가고, 다른 카테고리(다른 주소)로 바뀌면 다시 그린다
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
+  const category =
+    meta.categoryThumb !== null && meta.categoryThumb.url !== failedUrl ? meta.categoryThumb : null;
   return (
     <section className={styles.infoBar} aria-label="방송 정보">
-      {/* 그 방송 스트리머의 프로필 사진(POK-457). 사진이 없거나 못 받으면 Avatar가 이름 첫 글자로 선다. 누구 방송인지 아직 모르면
-          다른 빈 칸과 같은 규칙이다(POK-449): 받아 오는 중이면 회색 동그라미, 그 뒤는 빈 동그라미 */}
-      <div className={styles.infoThumb} aria-hidden data-testid="info-streamer">
-        {meta.streamer ? (
-          <Avatar size="lg" src={meta.streamer.photo ?? undefined} name={meta.streamer.name} />
-        ) : infoPending ? (
-          <Skeleton circle height="100%" data-testid="info-streamer-pending" />
-        ) : null}
-      </div>
+      {/* 그 시점 카테고리 사진(POK-467): 치지직 · SOOP처럼 세로 포스터다. 사진이 없거나 못 읽으면 아래 프로필 사진이 선다 */}
+      {category !== null ? (
+        <div
+          className={styles.infoCategoryThumb}
+          aria-hidden
+          title={category.name}
+          data-testid="info-category"
+        >
+          {/* 플랫폼이 준 사진 주소를 그대로 그린다: Next 이미지 최적화를 거치면 주소마다 허용 목록이 필요하다 */}
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={category.url} alt="" onError={() => setFailedUrl(category.url)} />
+        </div>
+      ) : (
+        /* 그 방송 스트리머의 프로필 사진(POK-457). 사진이 없거나 못 받으면 Avatar가 이름 첫 글자로 선다. 누구 방송인지 아직 모르면
+          다른 빈 칸과 같은 규칙이다(POK-449): 받아 오는 중이면 회색 동그라미, 그 뒤는 빈 동그라미 */
+        <div className={styles.infoThumb} aria-hidden data-testid="info-streamer">
+          {meta.streamer ? (
+            <Avatar size="lg" src={meta.streamer.photo ?? undefined} name={meta.streamer.name} />
+          ) : infoPending ? (
+            <Skeleton circle height="100%" data-testid="info-streamer-pending" />
+          ) : null}
+        </div>
+      )}
       <div className={styles.infoBody}>
         <div className={styles.infoTitleRow}>
           {stream.title ? (

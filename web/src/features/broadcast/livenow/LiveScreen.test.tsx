@@ -511,6 +511,8 @@ const server = vi.hoisted(() => ({
   liveStartUnknown: false,
   /** 수집기가 관측마다 카테고리를 싣는다(POK-402) — 통계가 바뀐 구간을 나눈다 */
   infoCategoryChange: false,
+  /** 시점별 기록 창구(POK-462)의 구간들. null이면 그 창구가 없는 옛 서버다(404) */
+  timeline: null as Record<string, unknown>[] | null,
   /**
    * SOOP로만 켠 방송(POK-397): 치지직은 앞서 켰다가 꺼져 묶음에만 남았다. 플랫폼 구분 없는 가장 새 관측(latest)은 치지직 줄이고
    * 시청자 기록에는 두 플랫폼 점이 섞여 있다
@@ -832,6 +834,10 @@ function handle(url: string, init?: RequestInit): Response | Promise<Response> {
       return jsonResponse(200, liveChartPage(u, liveBuckets, server.liveOffsetMs));
     return jsonResponse(200, { ...CHART, appliedOffsetMs: server.liveOffsetMs });
   }
+  if (path.endsWith('/broadcast-info/timeline'))
+    return server.timeline === null
+      ? jsonResponse(404, { error: 'not_found' })
+      : jsonResponse(200, { segments: server.timeline, truncated: false });
   if (path.endsWith('/broadcast-info')) {
     if (server.infoFail) return jsonResponse(503, { error: 'unavailable' });
     const noSince = u.searchParams.get('since') === null;
@@ -992,6 +998,7 @@ beforeEach(() => {
   server.liveAsks = [];
   server.liveStartUnknown = false;
   server.infoCategoryChange = false;
+  server.timeline = null;
   server.infoSoop = false;
   server.soopNickname = null;
   server.channelNames = undefined;
@@ -4798,6 +4805,203 @@ describe('LiveScreen: 정보 바의 스트리머 프로필 사진 (POK-457)', ()
 
     expect(avatar().querySelector('img')).toBeNull();
     expect(avatar()).not.toHaveTextContent('박편');
+  });
+});
+
+describe('LiveScreen: 정보 바의 그 시점 카테고리 사진 (POK-467)', () => {
+  const JUST = 'https://img.test/category/just-chatting.jpg';
+  const LOL = 'https://img.test/category/lol.jpg';
+  const PROFILE = 'http://localhost:4566/profiles/9.png';
+  /** 시점별 기록 창구의 구간 하나 */
+  const seg = (
+    from: number,
+    until: number | null,
+    category: string | null,
+    categoryImageUrl: string | null,
+    platform = 'CHZZK',
+  ) => ({
+    platform,
+    from: new Date(from).toISOString(),
+    until: until === null ? null : new Date(until).toISOString(),
+    lastObservedAt: new Date(until ?? NOW).toISOString(),
+    title: '랭크 달립니다',
+    category,
+    categoryImageUrl,
+    tags: [],
+  });
+  const categoryImg = () => screen.queryByTestId('info-category')?.querySelector('img') ?? null;
+  const profileImg = () => screen.queryByTestId('info-streamer')?.querySelector('img') ?? null;
+  const timelineReads = () =>
+    fetchSpy.mock.calls.filter(([u]) => String(u).includes('/broadcast-info/timeline')).length;
+  // 프로필로 돌아갔는지 보려면 me가 있어야 한다(POK-457 시험과 같은 세션)
+  beforeEach(() => {
+    useAuthStore.setState({ refreshToken: 'refresh-1', hydrated: true });
+    useChannelStore.setState({ userId: null, selected: null, selectedAgainst: null });
+    server.myPhoto = PROFILE;
+  });
+  afterEach(() => {
+    useAuthStore.setState({ refreshToken: null });
+    useChannelStore.setState({ userId: null, selected: null, selectedAgainst: null });
+    window.localStorage.removeItem('pc-channel');
+  });
+
+  it('라이브는 지금 구간의 카테고리 사진이다: 프로필 사진 자리를 대신한다', async () => {
+    server.timeline = [
+      seg(NOW - 20 * 60_000, NOW - 5 * 60_000, '저스트 채팅', JUST),
+      seg(NOW - 5 * 60_000, null, '리그 오브 레전드', LOL),
+    ];
+    await renderLive();
+
+    expect(categoryImg()).toHaveAttribute('src', LOL);
+    expect(screen.getByTestId('info-category')).toHaveAttribute('title', '리그 오브 레전드');
+    expect(screen.queryByTestId('info-streamer')).toBeNull();
+  });
+
+  it('방송 중 카테고리를 바꾸면 1분 안에 그 카테고리 사진으로 바뀐다', async () => {
+    server.timeline = [seg(NOW - 20 * 60_000, null, '저스트 채팅', JUST)];
+    await renderLive();
+    expect(categoryImg()).toHaveAttribute('src', JUST);
+    const before = timelineReads();
+
+    server.timeline = [
+      seg(NOW - 20 * 60_000, NOW + 1_000, '저스트 채팅', JUST),
+      seg(NOW + 1_000, null, '리그 오브 레전드', LOL),
+    ];
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    await settle();
+
+    expect(timelineReads()).toBeGreaterThan(before);
+    expect(categoryImg()).toHaveAttribute('src', LOL);
+  });
+
+  it('보던 방송이 끝나면 끝까지 담긴 기록을 다시 읽는다: 화면을 열 때(상태를 모를 때) 읽은 옛 기록을 쓰지 않는다', async () => {
+    // 상태를 모를 때와 끝난 뒤가 같은 조회로 묶이면 열 때 읽은 기록(마지막 구간이 아직 열린 저스트 채팅)이 끝난 뒤 다시 쓰였다(로컬
+    // 리뷰 3라운드)
+    server.timeline = [seg(NOW - 20 * 60_000, null, '저스트 채팅', JUST)];
+    // 방송을 골라 연 주소다: 끝나도 꺼짐 화면으로 가지 않고 그 방송이 끝난 방송으로 남는다
+    nav.search = `?stream=${STREAM_ID}`;
+    window.history.pushState({}, '', `/broadcast/livenow?stream=${STREAM_ID}`);
+    await renderLive();
+    expect(categoryImg()).toHaveAttribute('src', JUST);
+
+    server.timeline = [
+      seg(NOW - 20 * 60_000, NOW + 1_000, '저스트 채팅', JUST),
+      seg(NOW + 1_000, NOW + 2 * 60_000, '리그 오브 레전드', LOL),
+    ];
+    server.liveEnded = true;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3 * 60_000);
+    });
+    await settle();
+
+    expect(screen.getByText(/방송함/)).toBeInTheDocument();
+    expect(categoryImg()).toHaveAttribute('src', LOL);
+  });
+
+  it('라이브를 되감으면 되감은 자리의 카테고리 사진이고, 실시간으로 돌아오면 지금 구간이다', async () => {
+    server.timeline = [
+      seg(NOW - 20 * 60_000, NOW - 5 * 60_000, '저스트 채팅', JUST),
+      seg(NOW - 5 * 60_000, null, '리그 오브 레전드', LOL),
+    ];
+    await renderLive();
+
+    act(() =>
+      publishLiveData({
+        liveRewind: { atMs: NOW - 8 * 60_000, edgeAtMs: NOW, behindSeconds: 480 },
+      }),
+    );
+    expect(categoryImg()).toHaveAttribute('src', JUST);
+
+    act(() => publishLiveData({ liveRewind: null }));
+    expect(categoryImg()).toHaveAttribute('src', LOL);
+  });
+
+  it('지난 방송은 재생 위치의 카테고리 사진이다: 재생 위치를 모르면 방송 끝의 카테고리다', async () => {
+    server.timeline = [
+      seg(VOD_STARTED + 60_000, VOD_STARTED + 60 * 60_000, '저스트 채팅', JUST),
+      seg(VOD_STARTED + 60 * 60_000, VOD_ENDED, '리그 오브 레전드', LOL),
+    ];
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    await renderLive();
+    expect(categoryImg()).toHaveAttribute('src', LOL);
+
+    act(() => publishLiveData({ timeBaseMs: VOD_STARTED, playheadMs: 20 * 60_000 }));
+    expect(categoryImg()).toHaveAttribute('src', JUST);
+
+    act(() => publishLiveData({ playheadMs: 90 * 60_000 }));
+    expect(categoryImg()).toHaveAttribute('src', LOL);
+  });
+
+  it('지난 방송 재생 위치가 첫 구간보다 앞이면 모르는 자리라 프로필 사진이다', async () => {
+    server.timeline = [seg(VOD_STARTED + 10 * 60_000, VOD_ENDED, '저스트 채팅', JUST)];
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    await renderLive();
+
+    act(() => publishLiveData({ timeBaseMs: VOD_STARTED, playheadMs: 60_000 }));
+
+    expect(categoryImg()).toBeNull();
+    expect(profileImg()).toHaveAttribute('src', PROFILE);
+  });
+
+  it('그 구간에 카테고리가 없으면 프로필 사진이다: 앞 구간 사진을 끌어 오지 않는다', async () => {
+    server.timeline = [
+      seg(NOW - 20 * 60_000, NOW - 5 * 60_000, '저스트 채팅', JUST),
+      seg(NOW - 5 * 60_000, null, null, null),
+    ];
+    await renderLive();
+
+    expect(categoryImg()).toBeNull();
+    expect(profileImg()).toHaveAttribute('src', PROFILE);
+  });
+
+  it('카테고리는 있는데 사진 주소가 없으면(못 얻은 사진) 프로필 사진이다', async () => {
+    server.timeline = [seg(NOW - 5 * 60_000, null, '리그 오브 레전드', null)];
+    await renderLive();
+
+    expect(categoryImg()).toBeNull();
+    expect(profileImg()).toHaveAttribute('src', PROFILE);
+  });
+
+  it('시점별 기록 창구가 없으면(옛 서버) 프로필 사진이다', async () => {
+    await renderLive();
+
+    expect(timelineReads()).toBeGreaterThan(0);
+    expect(categoryImg()).toBeNull();
+    expect(profileImg()).toHaveAttribute('src', PROFILE);
+  });
+
+  it('동시 방송이면 정보 바 대표 플랫폼의 구간이다: 다른 플랫폼 카테고리 사진을 쓰지 않는다', async () => {
+    // 대표 플랫폼은 SOOP이다(SOOP_INFO: 치지직은 앞서 켰다가 꺼졌다)
+    server.infoSoop = true;
+    server.timeline = [
+      // 치지직 구간이 더 늦게 시작한다: 플랫폼을 안 가리면 마지막 구간인 치지직 사진이 선다
+      seg(NOW - 30 * 60_000, null, '리그 오브 레전드', LOL, 'SOOP'),
+      seg(NOW - 10 * 60_000, null, '저스트 채팅', JUST, 'CHZZK'),
+    ];
+    await renderLive();
+
+    expect(categoryImg()).toHaveAttribute('src', LOL);
+  });
+
+  it('카테고리 사진을 못 읽으면 프로필 사진으로 돌아가고, 다른 카테고리로 바뀌면 그 사진을 다시 그린다', async () => {
+    server.timeline = [
+      seg(NOW - 20 * 60_000, NOW - 5 * 60_000, '저스트 채팅', JUST),
+      seg(NOW - 5 * 60_000, null, '리그 오브 레전드', LOL),
+    ];
+    await renderLive();
+
+    fireEvent.error(categoryImg()!);
+    expect(categoryImg()).toBeNull();
+    expect(profileImg()).toHaveAttribute('src', PROFILE);
+
+    act(() =>
+      publishLiveData({
+        liveRewind: { atMs: NOW - 8 * 60_000, edgeAtMs: NOW, behindSeconds: 480 },
+      }),
+    );
+    expect(categoryImg()).toHaveAttribute('src', JUST);
   });
 });
 

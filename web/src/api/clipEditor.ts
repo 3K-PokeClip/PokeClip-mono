@@ -239,6 +239,32 @@ export async function fetchBroadcast(streamId: string): Promise<BroadcastRow | n
 }
 
 /**
+ * 방송 정보의 시점별 기록(POK-462): 플랫폼마다 제목 · 카테고리 · 태그가 같은 구간들. 시각 t의 값은 platform이 같고
+ * from ≤ t < until인 구간이다(until이 null이면 지금도). 첫 구간 앞은 모른다. 카테고리 사진(categoryImageUrl)은 구간을 가르지 않고
+ * 그 구간의 마지막 사진이다
+ */
+export interface BroadcastTimeline {
+  segments: {
+    platform: string;
+    from: string;
+    until: string | null;
+    title: string | null;
+    category: string | null;
+    categoryImageUrl: string | null;
+    tags: string[];
+  }[];
+  truncated: boolean;
+}
+
+/** 방송 하나의 시점별 기록 전체. 방송 정보 문과 같은 자격 판정이고, 모르는 방송이면 빈 구간이다 */
+export async function fetchBroadcastTimeline(streamId: string): Promise<BroadcastTimeline> {
+  const res = await apiFetch(
+    `/api/clip/broadcasts/${encodeURIComponent(streamId)}/broadcast-info/timeline`,
+  );
+  return (await res.json()) as BroadcastTimeline;
+}
+
+/**
  * 그 방송이 그 채널(스트리머)의 것인가(POK-457). 방송 줄에는 스트리머 번호가 없어, 그 채널로 물은 목록에 있는지로 가른다.
  * 남의 채널 방송을 주소로 열었을 때 고른 채널 주인의 프로필을 붙이지 않으려고 쓴다
  */

@@ -78,6 +78,23 @@
   flex: none;
 }
 
+.infoCategoryThumb {
+  /* 카테고리 사진은 세로 포스터(3:4)다: 치지직 · SOOP 정보 줄과 같은 모양. 높이는 프로필 동그라미와 같다 */
+  width: calc(42 * var(--pc-u));
+  height: calc(56 * var(--pc-u));
+  border-radius: var(--pc-radius-sm);
+  overflow: hidden;
+  background: var(--pc-color-bg-inset);
+  flex: none;
+}
+
+.infoCategoryThumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
 .infoBody {
   flex: 1;
   min-width: 0;
