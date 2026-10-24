@@ -71,6 +71,11 @@ export interface GlassPlayerProps {
   mediaKey?: string;
   /** 이 라이브 재생기는 403으로 출입증을 다시 받은 뒤 새로 섰다. 또 403이면 멈춘다(POK-419, useHlsPlayback) */
   afterForbidden?: boolean;
+  /**
+   * 방송 번호(회차, POK-233) — 사용 통계 「방송마다 한 번」(`broadcast_playback_started`)의 기억 키. `src`·`mediaKey`·녹화의
+   * `streamId`는 물리 키(지금은 스트림 키)라 한 스트리머의 방송이 모두 같아 쓰지 않는다(PR #382 2차 리뷰). 없으면 세지 않는다
+   */
+  broadcastId?: string;
   /** 끝난 방송의 녹화(재생 서버) — 있으면 HLS 대신 이것으로 다시보기를 튼다 */
   recorded?: RecordedSource | null;
   /** 녹화 다시보기를 이 자리(방송 기준 초)부터 튼다. 녹화 플레이어가 설 때 한 번만 읽는다(useRecordedPlayback) */
@@ -182,6 +187,7 @@ function RecordedGlassPlayer(props: GlassPlayerProps & { recorded: RecordedSourc
     props.recorded,
     props.startAtSeconds ?? 0,
     props.onSeek,
+    props.broadcastId,
   );
   // 초가 바뀔 때만 알린다: timeupdate는 1초에 네 번쯤 온다. 내린다: 영상 시각을 넘는 줄은 보이지 않는다. 카드는 그 시각에
   // 정확히 서므로(seekToPosition) 카드와 같은 초다
@@ -208,6 +214,7 @@ function HlsGlassPlayer(props: GlassPlayerProps & { src: string }) {
     props.onSeek,
     props.mediaKey,
     props.afterForbidden,
+    props.broadcastId,
   );
   // 초가 바뀌거나 시차가 바뀔 때만 알린다(재생기가 초로 내리고, 같은 값이면 같은 객체를 둔다)
   const { onLivePosition } = props;

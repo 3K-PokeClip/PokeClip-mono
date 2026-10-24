@@ -60,6 +60,9 @@ describe('useRecordedPlayback — 구간 여럿', () => {
           [0, 14],
           [24, 14],
         ]),
+        0,
+        undefined,
+        'S-1',
       ),
     );
 
@@ -83,25 +86,22 @@ describe('useRecordedPlayback — 구간 여럿', () => {
   it('플레이어가 다시 마운트돼도(GlassPlayer key 변경) 같은 방송은 다시 세지 않는다 — 다른 방송은 센다 (PR #382 리뷰)', () => {
     track.mockClear();
     resetPlaybackStartsForTest();
-    const first = fakeVideo();
-    const view = renderHook(() => useRecordedPlayback({ current: first.video }, source([[0, 14]])));
-    act(() => {
-      first.video.dispatchEvent(new Event('play'));
-    });
-    view.unmount();
+    const play = (broadcastId?: string) => {
+      const { video } = fakeVideo();
+      // 녹화의 streamId는 물리 키(스트림 키)라 방송이 달라도 같다 — 기억은 방송 번호로 한다(PR #382 2차 리뷰)
+      const view = renderHook(() =>
+        useRecordedPlayback({ current: video }, source([[0, 14]]), 0, undefined, broadcastId),
+      );
+      act(() => {
+        video.dispatchEvent(new Event('play'));
+      });
+      view.unmount();
+    };
 
-    const again = fakeVideo();
-    renderHook(() => useRecordedPlayback({ current: again.video }, source([[0, 14]])));
-    act(() => {
-      again.video.dispatchEvent(new Event('play'));
-    });
-    const other = fakeVideo();
-    renderHook(() =>
-      useRecordedPlayback({ current: other.video }, { ...source([[0, 14]]), streamId: 'other' }),
-    );
-    act(() => {
-      other.video.dispatchEvent(new Event('play'));
-    });
+    play('S-1');
+    play('S-1'); // 다시 마운트
+    play('S-2'); // 같은 스트리머(같은 물리 키)의 다른 방송
+    play(undefined); // 방송 번호를 모르면 세지 않는다
 
     expect(track.mock.calls).toEqual([
       ['broadcast_playback_started', { mode: 'vod' }],

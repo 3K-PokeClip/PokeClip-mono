@@ -99,6 +99,8 @@ vi.mock('@/features/broadcast/livenow/ChatPanel', async (importOriginal) => {
 
 // 플레이어가 받은 상태: 지난 방송에 들어오는 동안 플레이어만 라이브·오프라인 문구로 깜박이는지 잰다(리뷰 3라운드)
 const playerStatuses = vi.hoisted(() => [] as (string | undefined)[]);
+// 플레이어가 받은 방송 번호 — 사용 통계 「방송마다 한 번」의 기억 키(PR #382 2차 리뷰)
+const playerBroadcastIds = vi.hoisted(() => [] as (string | undefined)[]);
 vi.mock('@/features/player/GlassPlayer', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/features/player/GlassPlayer')>();
   const { createElement } = await import('react');
@@ -106,6 +108,7 @@ vi.mock('@/features/player/GlassPlayer', async (importOriginal) => {
     ...actual,
     GlassPlayer: (props: import('react').ComponentProps<typeof actual.GlassPlayer>) => {
       playerStatuses.push(props.broadcastStatus);
+      playerBroadcastIds.push(props.broadcastId);
       return createElement(actual.GlassPlayer, props);
     },
   };
@@ -936,6 +939,7 @@ beforeEach(() => {
   chatModes.length = 0;
   chatTexts.length = 0;
   playerStatuses.length = 0;
+  playerBroadcastIds.length = 0;
   // 앞 시험이 단언에서 멈춰도 지난 방송 주소가 다음 시험으로 새지 않는다
   window.history.pushState({}, '', '/');
   mediaCalls.keys = [];
@@ -2785,6 +2789,22 @@ describe('LiveScreen — 영상 경로의 키(POK-233)', () => {
     await renderLive();
     expect(mediaCalls.spans).toContain('key-vod');
     expect(mediaCalls.spans).not.toContain(VOD_ID);
+  });
+
+  // 영상 키는 스트리머마다 같다(지금은 스트림 키) — 그것으로 기억하면 같은 탭에서 두 번째 방송부터 안 셌다(PR #382 2차 리뷰)
+  it('플레이어의 사용 통계 기억 키는 영상 키가 아니라 방송 번호다 — 라이브', async () => {
+    server.ingest = 'key-live';
+    await renderLive();
+    expect(mediaCalls.keys.at(-1)).toBe('key-live');
+    expect(playerBroadcastIds.at(-1)).toBe(STREAM_ID);
+  });
+
+  it('플레이어의 사용 통계 기억 키는 영상 키가 아니라 방송 번호다 — 지난 방송', async () => {
+    server.ingest = 'key-vod';
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    await renderLive();
+    expect(mediaCalls.spans).toContain('key-vod');
+    expect(playerBroadcastIds.at(-1)).toBe(VOD_ID);
   });
 });
 
