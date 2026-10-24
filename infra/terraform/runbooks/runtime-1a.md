@@ -106,7 +106,8 @@ bash infra/terraform/scripts/precheck/events.sh --since <비교 기준 판정 �
 
     *   `Plan: 29 to add, 0 to change, 0 to destroy` — RDS 다섯(SG · 서브넷
         그룹 · 파라미터 그룹 · 로그 그룹 · 인스턴스) · 비밀 그릇 일곱 ·
-        rewind 버킷 다섯 · 계약9 열둘(주제 정책 포함).
+        rewind 버킷 다섯 · 계약9 열둘(주제 정책 포함). 수는 1단-가 시점
+        기준입니다(뒤 단계가 그릇을 더함 — 1단-나 ② 2).
     *   주제 정책(`aws_sns_topic_policy.broadcast_lifecycle`)은 명시
         정책입니다 — 주체가 계정 루트 하나이고 `*` · `Condition` 이 없습니다.
     *   주소에 `sql_runner` 가 없습니다(실행기 꺼짐).
@@ -772,12 +773,18 @@ rt1d 행과 POK-301 코멘트에 남깁니다. 7 의 보류 조건이 이 기록
 
 ```shell
 cd "$(git rev-parse --show-toplevel)"
-umask 077
-value_file="$(mktemp)"
-openssl rand -hex 32 >"${value_file}"
-bash infra/terraform/scripts/put-secret-from-file.sh \
-  stream-key-resolve-token "${value_file}"
-rm -f "${value_file}"
+# 하위 셸 — 추적 · allexport 끔과 umask 가 밖으로 새지 않고, 값 파일은
+# put-secret 이 실패(종료 2 · 3 · 4 · 5)하거나 중간에 멈춰도 지워진다.
+(
+  set +o xtrace +o allexport
+  umask 077
+  value_file="$(mktemp)" || exit 1
+  trap 'rm -f "${value_file}"' EXIT
+  openssl rand -hex 32 >"${value_file}" || exit 1
+  bash infra/terraform/scripts/put-secret-from-file.sh \
+    stream-key-resolve-token "${value_file}"
+)
+printf 'put-secret 종료 %s\n' "$?"
 ```
 
 *   종류 `stream-key-resolve-token` 은 1단-다(POK-427)가 넓힌 허용 목록에 이
@@ -880,7 +887,9 @@ plan 이 역할을 새로 만드는지 고치는지로 드러나고, 어느 쪽�
 
 7 뒤 **늘** 합니다(kty 「무조건 1회 회전」). Media 역할이 공용 그릇을 읽은
 적이 있는지는 따지지 않습니다. 아래 (a) · (b) · (b2) · (c) 를 이 순서로 모두
-통과해야 값을 넣습니다.
+통과해야 값을 넣습니다. (a) 의 정책 원문 · 자원 정책 확인과 완료 조건의
+옛 태스크 교체 완료 · 옛 토큰 401 확인은 kty 결정이 아니라 계획이 더한
+것입니다(계획 rt1d 처분 R5 · R10 · P7).
 
 *   **(a)** 7 의 실물 확인 둘(정책 문장 전부에서 `internal-api-token` 0 건 ·
     공용 그릇 자원 정책 없음)이 통과했습니다. 아니면 멈춥니다.
@@ -1048,7 +1057,50 @@ plan 이 역할을 새로 만드는지 고치는지로 드러나고, 어느 쪽�
 선행 조건은 9 와 같습니다.
 
 *   **전용 토큰**: 상자에서 전용 토큰으로 `POST /internal/youtube-link/status`
-    → 401(send-command **kty 승인**).
+    → 401(send-command **kty 승인**). 상자가 전용 그릇의 값을 셸 변수로 받아
+    셸 내장 `printf` 파이프로만 curl 헤더에 싣고, 상태 코드만 냅니다. 이
+    스크립트는 긴급 차단 · 되돌리기도 씁니다.
+
+    ```shell
+    cat >"${work}/token-probe.sh" <<'EOF'
+    # token-probe.sh <경로> <버전 단계>… — 전용 그릇의 그 단계 값으로 auth 의
+    # <경로> 를 부르고 코드만 낸다. 종료 0 = 모든 단계를 재어 봄(판정은 줄).
+    set +o xtrace +o allexport
+    unset token
+    trap 'unset token; exit 130' INT
+    api_path="$1"  # path 는 zsh 에서 PATH 와 묶인 특수 변수라 피한다.
+    shift
+    fail=0
+    for stage in "$@"; do
+      token="$(aws secretsmanager get-secret-value --region ap-northeast-2 \
+        --secret-id pokeclip/prod/stream-key-resolve-token \
+        --version-stage "${stage}" --query SecretString --output text \
+        2>/dev/null)"
+      if [ "$?" -ne 0 ] || [ -z "${token}" ]; then
+        unset token
+        printf 'token-probe %s 멈춤: 읽지 못함\n' "${stage}"
+        fail=1
+        continue
+      fi
+      code="$(printf 'X-Stream-Key-Resolve-Token: %s\n' "${token}" |
+        curl -sS -o /dev/null -w '%{http_code}' -H @- \
+          -H 'Content-Type: application/json' \
+          -d '{"streamid":"#!::r=7ZK3M9QW2XJ4NB6TC8VDFG5HRP,m=publish"}' \
+          "http://auth.pokeclip.internal:8082${api_path}")"
+      rc=$?
+      unset token
+      [ "${rc}" -eq 0 ] || fail=1
+      printf 'token-probe %s rc=%s code=%s\n' "${stage}" "${rc}" "${code:-NONE}"
+    done
+    exit "${fail}"
+    EOF
+    media_ssm <상자 키> "${work}/token-probe.sh" \
+      /internal/youtube-link/status AWSCURRENT
+    ```
+
+    `token-probe AWSCURRENT rc=0 code=401` · `SSM Success` 이면 통과입니다.
+    `curl` 에 `-v` · `--trace` 를 붙이지 않습니다(헤더가 찍힘). 「멈춤」 줄 ·
+    `rc` 가 0 아님 · 401 밖의 코드는 판정 불가 · 멈춤입니다.
 *   **옛 공용 토큰**(8 의 완료 조건 ②): 상자는 공용 그릇을 못 읽으므로
     상자에서 보내지 않습니다. kty 가 세션 밖 터미널에서 Media 상자를 거치는
     포트 포워딩(`aws ssm start-session` · 문서
@@ -1058,30 +1110,38 @@ plan 이 역할을 새로 만드는지 고치는지로 드러나고, 어느 쪽�
     꼴).
 
     ```shell
-    for stage in AWSPREVIOUS AWSCURRENT; do
-      token="$(aws secretsmanager get-secret-value --region ap-northeast-2 \
-        --secret-id pokeclip/prod/internal-api-token --version-stage "${stage}" \
-        --query SecretString --output text 2>/dev/null)"
-      if [ "$?" -ne 0 ] || [ -z "${token}" ]; then
-        printf '멈춤: %s 를 읽지 못함\n' "${stage}"
-        unset token
-        break
-      fi
-      code="$(printf 'X-Internal-Token: %s\n' "${token}" |
-        curl -s -o /dev/null -w '%{http_code}' -H @- \
-          -H 'Content-Type: application/json' \
-          -d '{"streamid":"#!::r=7ZK3M9QW2XJ4NB6TC8VDFG5HRP,m=publish"}' \
-          "http://localhost:<로컬 포트>/internal/stream-keys/resolve")"
+    # 하위 셸 — 값 변수 · 추적 끔 · INT 트랩이 터미널 셸에 남지 않는다.
+    # token 은 export 하지 않고, curl 에 -v · --trace 를 붙이지 않는다.
+    (
+      set +o xtrace +o allexport
       unset token
-      printf '%s %s\n' "${stage}" "${code}"
-    done
+      trap 'unset token; exit 130' INT
+      for stage in AWSPREVIOUS AWSCURRENT; do
+        token="$(aws secretsmanager get-secret-value \
+          --region ap-northeast-2 --secret-id pokeclip/prod/internal-api-token \
+          --version-stage "${stage}" --query SecretString --output text \
+          2>/dev/null)"
+        if [ "$?" -ne 0 ] || [ -z "${token}" ]; then
+          unset token
+          printf '멈춤: %s 를 읽지 못함\n' "${stage}"
+          break
+        fi
+        code="$(printf 'X-Internal-Token: %s\n' "${token}" |
+          curl -s -o /dev/null -w '%{http_code}' -H @- \
+            -H 'Content-Type: application/json' \
+            -d '{"streamid":"#!::r=7ZK3M9QW2XJ4NB6TC8VDFG5HRP,m=publish"}' \
+            "http://localhost:<로컬 포트>/internal/stream-keys/resolve")"
+        unset token
+        printf '%s %s\n' "${stage}" "${code}"
+      done
+    )
     ```
 
     *   `AWSPREVIOUS 401` 이고 `AWSCURRENT 200`(공용 창구 resolve 는 출발지
         잠금이 없음 · 본문은 없는 키라 `valid:false`)이면 통과입니다.
     *   양성 대조(`AWSCURRENT`)가 200 이 아니면 판정 불가 · 멈춤 · kty 회부.
-    *   끝나면 포트 포워딩을 닫고 잔여 0(`pgrep -f session-manager-plugin`)을
-        확인합니다.
+    *   포트 포워딩은 위 블록을 돌리는 동안만 열어 둡니다. 끝나면 바로 닫고
+        잔여 0(`pgrep -f session-manager-plugin`)을 확인합니다.
 
 ### 1단-나 ② 11. 기록
 
@@ -1102,7 +1162,17 @@ plan 이 역할을 새로 만드는지 고치는지로 드러나고, 어느 쪽�
 1.  재배포 요청만으로는 끝나지 않습니다 — 롤링 동안 옛 태스크는 옛 값을
     계속 받습니다. **완료 조건**: auth 의 옛 태스크가 모두 새 태스크로
     교체됨(8 의 완료 조건 ① 과 같은 읽기) **그리고** 상자에서 옛 토큰으로
-    resolve 를 불러 401(send-command **kty 승인**).
+    resolve 를 불러 401(send-command **kty 승인** · 10 의 `token-probe.sh`).
+    옛 값은 `AWSPREVIOUS`, 새 값은 `AWSCURRENT` 입니다.
+
+    ```shell
+    media_ssm <상자 키> "${work}/token-probe.sh" \
+      /internal/stream-keys/resolve AWSPREVIOUS AWSCURRENT
+    ```
+
+    `AWSPREVIOUS` 가 `code=401` 이고 `AWSCURRENT` 가 `code=200`(양성 대조 —
+    없는 키라 본문은 `valid:false`)이면 통과입니다. `AWSCURRENT` 가 200 이
+    아니면 판정 불가 · 멈춤 · kty 회부.
 
 새 송출은 응답기를 다시 렌더하기 전까지 거부됩니다(fail-closed). 응답기
 창구를 `internal-token` 으로 되돌리는 길은 쓰지 않습니다 — 공용 열쇠가
@@ -1136,7 +1206,8 @@ auth 롤링 동안 옛 태스크 · 새 태스크가 섞여, 어느 토큰이든
         의 `STREAM_KEY_RESOLVE_ALLOWED_CIDRS` 를 빼는 커밋(그릇 ·
         `media_secret_arns` 는 그대로) → runtime plan · apply → platform
         plan · apply → auth 옛 태스크 교체 완료 → 전용 헤더 요청 401
-        확인(새 송출 거부).
+        확인(새 송출 거부 — 10 의 `token-probe.sh` 를
+        `/internal/stream-keys/resolve AWSCURRENT` 로 · **kty 승인**).
     1.  그릇을 지우는 커밋 → runtime plan · apply. `media_secret_arns` 를
         공용 그릇으로 되돌릴지는 따로 kty 확인(공용 열쇠를 상자에 다시 줌).
 *   **prod/media apply 뒤**: 정책을 되돌리면 응답기가 다음 기동에서 그릇을
