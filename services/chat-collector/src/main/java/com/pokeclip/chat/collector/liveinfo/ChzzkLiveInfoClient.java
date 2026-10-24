@@ -34,7 +34,13 @@ public class ChzzkLiveInfoClient {
         this.clientSecret = clientSecret;
     }
 
-    public record LiveSetting(String title, List<String> tags, String category) { }
+    /** @param categoryImageUrl 카테고리 사진 주소({@code category.posterImageUrl}, POK-462). 없으면 null */
+    public record LiveSetting(String title, List<String> tags, String category, String categoryImageUrl) {
+
+        public LiveSetting(String title, List<String> tags, String category) {
+            this(title, tags, category, null);
+        }
+    }
 
     /** @param setting 성공했을 때만 있다. {@code status}는 실패 갈래를 가르려고 준다(0 = 응답 없음) */
     public record SettingResult(LiveSetting setting, int status) {
@@ -80,7 +86,8 @@ public class ChzzkLiveInfoClient {
             return new SettingResult(new LiveSetting(
                     textOrNull(content.path("defaultLiveTitle")),
                     strings(content.path("tags")),
-                    textOrNull(content.path("category").path("categoryValue"))), 200);
+                    textOrNull(content.path("category").path("categoryValue")),
+                    textOrNull(content.path("category").path("posterImageUrl"))), 200);
         } catch (RestClientResponseException e) {
             return new SettingResult(null, e.getStatusCode().value());
         } catch (Exception e) {

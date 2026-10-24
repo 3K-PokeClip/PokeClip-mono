@@ -16,7 +16,14 @@ import java.util.List;
  * @param viewers    동시 시청자 수. <b>{@code null}이 정상값이다</b> — 전체 라이브 목록에서
  *                   그 방송을 못 찾은 회차가 있다(채널 하나를 묻는 공식 창구가 없다).
  *                   0으로 접으면 「아무도 안 봤다」가 되어 그럴듯하게 틀린다
+ * @param categoryImageUrl 카테고리 사진 주소(POK-462). 치지직 방송 설정에서만 온다 — 설정이 거부된 회차와 SOOP은 null
  */
 public record BroadcastInfo(Platform platform, String streamId, String channelId, Instant observedAt,
-                            String title, List<String> tags, String category, Integer viewers) {
+                            String title, List<String> tags, String category, Integer viewers, String categoryImageUrl) {
+
+    /** 사진이 없는 관측(SOOP · 시험). */
+    public BroadcastInfo(Platform platform, String streamId, String channelId, Instant observedAt,
+                         String title, List<String> tags, String category, Integer viewers) {
+        this(platform, streamId, channelId, observedAt, title, tags, category, viewers, null);
+    }
 }

@@ -29,12 +29,12 @@ import java.util.Optional;
 public class BroadcastInfoStore {
 
     private static final String COLUMNS =
-            "platform, stream_id, channel_id, observed_at, live_title, tags, category, concurrent_users";
+            "platform, stream_id, channel_id, observed_at, live_title, tags, category, concurrent_users, category_image_url";
 
     private static final String INSERT = """
             INSERT INTO broadcast_info
-              (platform, stream_id, channel_id, observed_at, live_title, tags, category, concurrent_users)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+              (platform, stream_id, channel_id, observed_at, live_title, tags, category, concurrent_users, category_image_url)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """;
 
     /**
@@ -147,6 +147,7 @@ public class BroadcastInfoStore {
             } else {
                 ps.setInt(8, info.viewers());
             }
+            ps.setString(9, info.categoryImageUrl());
             return ps;
         });
     }
@@ -248,6 +249,7 @@ public class BroadcastInfoStore {
                 tags == null ? List.of()
                         : List.of(nonNullTags(java.util.Arrays.asList((String[]) tags.getArray()))),
                 rs.getString("category"),
-                rs.getObject("concurrent_users", Integer.class));
+                rs.getObject("concurrent_users", Integer.class),
+                rs.getString("category_image_url"));
     }
 }

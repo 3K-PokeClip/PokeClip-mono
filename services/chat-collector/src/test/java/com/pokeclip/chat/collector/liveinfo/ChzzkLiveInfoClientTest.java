@@ -76,7 +76,18 @@ class ChzzkLiveInfoClientTest {
         assertThat(result.setting().title()).isEqualTo("오늘은 랭크");
         assertThat(result.setting().category()).isEqualTo("리그 오브 레전드");
         assertThat(result.setting().tags()).containsExactly("롤", "랭크");
+        assertThat(result.setting().categoryImageUrl()).as("사진 칸이 없으면 null이다(빈 글자가 아니다)").isNull();
         assertThat(seenHeaders.getFirst().get("auth")).isEqualTo("Bearer user-token");
+    }
+
+    /** 카테고리 사진(POK-462). 공식 문서의 칸 이름 {@code category.posterImageUrl}을 그대로 읽는다. */
+    @Test
+    void 방송_설정의_카테고리_사진_주소를_읽는다() {
+        bodyByQuery.put("/open/v1/lives/setting", """
+                {"code":200,"content":{"defaultLiveTitle":"t","category":{"categoryType":"GAME","categoryId":"lol",
+                 "categoryValue":"리그 오브 레전드","posterImageUrl":"https://img.example/lol.jpg"},"tags":[]}}""");
+
+        assertThat(client().setting("user-token").setting().categoryImageUrl()).isEqualTo("https://img.example/lol.jpg");
     }
 
     @Test
