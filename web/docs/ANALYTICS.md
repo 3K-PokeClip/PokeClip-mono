@@ -8,20 +8,20 @@
 
 ## 결정 (2026-10-17, POK-354)
 
-| 항목         | 값                                                                                                                                                                                                                                                                                                                         | 처리방침                                      |
-| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
-| 지역         | **US** (`https://us.i.posthog.com`)                                                                                                                                                                                                                                                                                        | 6·7절 「미국」                                |
-| 처리 근거    | 정당한 이익 + 처리방침 고지. **동의 창 없음**                                                                                                                                                                                                                                                                              | 2절                                           |
-| 거부 수단    | 브라우저 추적 금지(Do Not Track) 존중(`respect_dnt`), 스크립트 차단                                                                                                                                                                                                                                                        | 7·9절                                         |
-| 쿠키         | `ph_<키>_posthog`(익명 식별자)·`ph_<키>_posthog_cpm`(서브도메인 맞춤 표시) 두 개, 1년, `.pokeclip.com`에 두어 랜딩과 대시보드가 공유 — 실측 2026-10-17                                                                                                                                                                     | 9절                                           |
-| 플래그 요청  | **끔** — 대시보드는 평가를 꺼(`advanced_disable_feature_flags`) `/flags` 요청이 나가지 않게 한다. 그 본문은 `before_send`를 거치지 않고 첫 방문 주소를 쿼리째 싣는다(실측). 원격 설정(토큰만 싣는 GET)은 받는다 — 녹화가 그 「녹화 켜짐」을 요구한다. 랜딩은 녹화를 안 해서 원격 설정까지 막는다(`advanced_disable_flags`) | —                                             |
-| IP           | **저장 안 함**(콘솔 설정 — US는 기본이 저장이라 꼭 끈다)                                                                                                                                                                                                                                                                   | 2절                                           |
-| 자동 수집    | **끔**. 행동은 `track()`으로만(POK-357)                                                                                                                                                                                                                                                                                    | 2절 「누른 단추」                             |
-| 사람 프로필  | 로그인한 회원만(`person_profiles: 'identified_only'`), 식별자는 **회원 번호**                                                                                                                                                                                                                                              | 2절                                           |
-| 세션 녹화    | 대시보드만, 글자·입력 전부 가림·이미지와 영상 차단(POK-358). 스위치는 둘 — env `NEXT_PUBLIC_POSTHOG_REPLAY=on`과 콘솔 「Record user sessions」. 보존 30일(무료). 아래 「세션 녹화」                                                                                                                                        | 2·3절                                         |
-| 이벤트 보존  | 무료 플랜 1년(조회 기간)                                                                                                                                                                                                                                                                                                   | 3절 — 물리 삭제 보장은 `landing/README.md` 🔴 |
-| 프록시       | 안 씀                                                                                                                                                                                                                                                                                                                      | —                                             |
-| 탈퇴 시 삭제 | **운영자 수동**, 7일 안 — 아래 절차                                                                                                                                                                                                                                                                                        | 3·4절                                         |
+| 항목         | 값                                                                                                                                                                                                                                                                                                                          | 처리방침                                      |
+| ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
+| 지역         | **US** (`https://us.i.posthog.com`)                                                                                                                                                                                                                                                                                         | 6·7절 「미국」                                |
+| 처리 근거    | 정당한 이익 + 처리방침 고지. **동의 창 없음**                                                                                                                                                                                                                                                                               | 2절                                           |
+| 거부 수단    | 브라우저 추적 금지(Do Not Track) 존중(`respect_dnt`), 스크립트 차단, **설정 › 계정 「이용 분석 참여」 토글**(2026-10-24 — 값은 auth 계정 `users.analytics_opt_out`, 기본 참여. 끄면 그 계정으로 로그인한 동안 보내지 않는다. 아래 「식별 · 초기화」)                                                                        | 7·9절                                         |
+| 쿠키         | `ph_<키>_posthog`(익명 식별자)·`ph_<키>_posthog_cpm`(서브도메인 맞춤 표시) 두 개, 1년, `.pokeclip.com`에 두어 랜딩과 대시보드가 공유 — 실측 2026-10-17. 「이용 분석 참여」를 끈 회원의 브라우저에만 `__ph_opt_in_out_<키>`(그 선택, 1년, `.pokeclip.com` — `opt_out_capturing_persistence_type: 'cookie'`)가 하나 더 생긴다 | 9절                                           |
+| 플래그 요청  | **끔** — 대시보드는 평가를 꺼(`advanced_disable_feature_flags`) `/flags` 요청이 나가지 않게 한다. 그 본문은 `before_send`를 거치지 않고 첫 방문 주소를 쿼리째 싣는다(실측). 원격 설정(토큰만 싣는 GET)은 받는다 — 녹화가 그 「녹화 켜짐」을 요구한다. 랜딩은 녹화를 안 해서 원격 설정까지 막는다(`advanced_disable_flags`)  | —                                             |
+| IP           | **저장 안 함**(콘솔 설정 — US는 기본이 저장이라 꼭 끈다)                                                                                                                                                                                                                                                                    | 2절                                           |
+| 자동 수집    | **끔**. 행동은 `track()`으로만(POK-357)                                                                                                                                                                                                                                                                                     | 2절 「누른 단추」                             |
+| 사람 프로필  | 로그인한 회원만(`person_profiles: 'identified_only'`), 식별자는 **회원 번호**                                                                                                                                                                                                                                               | 2절                                           |
+| 세션 녹화    | 대시보드만, 글자·입력 전부 가림·이미지와 영상 차단(POK-358). 스위치는 둘 — env `NEXT_PUBLIC_POSTHOG_REPLAY=on`과 콘솔 「Record user sessions」. 보존 30일(무료). 아래 「세션 녹화」                                                                                                                                         | 2·3절                                         |
+| 이벤트 보존  | 무료 플랜 1년(조회 기간)                                                                                                                                                                                                                                                                                                    | 3절 — 물리 삭제 보장은 `landing/README.md` 🔴 |
+| 프록시       | 안 씀                                                                                                                                                                                                                                                                                                                       | —                                             |
+| 탈퇴 시 삭제 | **운영자 수동**, 7일 안 — 아래 절차                                                                                                                                                                                                                                                                                         | 3·4절                                         |
 
 ## 켜는 법 · 꺼짐 조건
 
@@ -38,15 +38,17 @@
 
 ## 코드 구조
 
-| 파일                                     | 역할                                                                                                    |
-| ---------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| `src/instrumentation-client.ts`          | hydration 전에 `initAnalytics()` 한 번                                                                  |
-| `src/lib/analytics/client.ts`            | 설정(`ANALYTICS_CONFIG`), 동적 import·대기열(`withAnalytics`), 식별·초기화, auth 스토어 구독            |
-| `src/lib/analytics/scrub.ts`             | `before_send` — 주소 정제(녹화 메타 주소 포함), 녹화 속 요소 속성 가리기(`scrubAttribute`)              |
-| `src/lib/analytics/events.ts`            | 이벤트 정본(`AnalyticsEvents`)·`track()`(속성 런타임 거르기)·열거 정본(`FaqKey`·`YOUTUBE_CATEGORY_IDS`) |
-| `src/lib/analytics/index.ts`             | 화면 코드가 가져다 쓰는 곳. 화면은 `posthog-js`를 직접 import하지 않는다                                |
-| `src/components/app-shell/AuthGuard.tsx` | 보호 화면 진입 때 `identifyUser(me.id)`                                                                 |
-| `landing/analytics.js`                   | 랜딩 세 페이지의 같은 설정                                                                              |
+| 파일                                                                           | 역할                                                                                                                         |
+| ------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| `src/instrumentation-client.ts`                                                | hydration 전에 `initAnalytics()` 한 번                                                                                       |
+| `src/lib/analytics/client.ts`                                                  | 설정(`ANALYTICS_CONFIG`), 동적 import·대기열(`withAnalytics`), 식별·초기화, auth 스토어 구독                                 |
+| `src/lib/analytics/scrub.ts`                                                   | `before_send` — 주소 정제(녹화 메타 주소 포함), 녹화 속 요소 속성 가리기(`scrubAttribute`)                                   |
+| `src/lib/analytics/events.ts`                                                  | 이벤트 정본(`AnalyticsEvents`)·`track()`(속성 런타임 거르기)·열거 정본(`FaqKey`·`YOUTUBE_CATEGORY_IDS`)                      |
+| `src/lib/analytics/index.ts`                                                   | 화면 코드가 가져다 쓰는 곳. 화면은 `posthog-js`를 직접 import하지 않는다                                                     |
+| `src/components/app-shell/AuthGuard.tsx`                                       | 보호 화면 진입 때 `identifyUser(me.id, me.analyticsOptOut)`                                                                  |
+| `src/features/settings/account/AnalyticsCard.tsx`·`useAnalyticsOptOutState.ts` | 설정 › 계정 「이용 분석 참여」 토글 — `PATCH /api/auth/me/analytics`로 저장하고 me 캐시를 갈아 끼운다(끄는 일은 가드가 한다) |
+| `src/features/channel/ChannelScope.tsx`                                        | 지금 채널의 역할을 `setActiveRole`로 등록(`active_role`)                                                                     |
+| `landing/analytics.js`                                                         | 랜딩 세 페이지의 같은 설정                                                                                                   |
 
 SDK는 동적 import라 hydration 뒤에 붙을 수 있다(Next 16 `instrumentation-client` 「Execution timing」). 그 사이의 식별·이벤트는 대기열(최대 50개)에 두었다가 흘려보낸다. 분석이 던져도 화면은 멈추지 않는다.
 
@@ -56,6 +58,8 @@ SDK는 동적 import라 hydration 뒤에 붙을 수 있다(Next 16 `instrumentat
 - **로그아웃**: auth 스토어의 refreshToken이 값 → null이 되면 `reset()`. 명시 로그아웃·401 자동 로그아웃·탈퇴(`/goodbye`)·다른 탭 로그아웃이 모두 이 길이다.
 - **새 로그인**인데 이미 누군가로 식별돼 있으면 먼저 `reset()` — SDK는 식별된 사람 위에 다른 번호로 identify하면 합치지 않고 번호만 바꿔서, 로그인 직후 이벤트가 앞사람에게 붙는다. 익명이면 지우지 않는다(지우면 랜딩 → 로그인이 끊긴다).
 - 같은 세션의 토큰 회전·새로고침 hydrate에서는 지우지 않는다.
+- **「이용 분석 참여」 꺼짐**(`me.analyticsOptOut`, 2026-10-24): `AuthGuard`가 `identifyUser(id, optOut)`로 넘긴다. 끈 회원은 **식별보다 먼저** `opt_out_capturing()`(녹화도 멈춤)하고 식별하지 않는다 — 순서가 바뀌면 `$identify`가 새어 나간다. 다시 켜면 `clear_opt_in_out_capturing()`으로 선택만 지운다(`opt_in`이 아니다: 추적 금지는 SDK가 따로 그대로 지키고 — DNT면 저장된 선택과 무관하게 막힘을 소스로 확인 — 켠 회원에게 동의 쿠키를 남기지 않는다). 선택은 `.pokeclip.com` 쿠키라 같은 브라우저의 랜딩도 따른다(랜딩도 `opt_out_capturing_persistence_type: 'cookie'`). **로그아웃의 `reset()`은 이 선택까지 지운다**(SDK 동작) — 그 브라우저는 다시 익명 방문자이고, 다음 식별 때 그 회원의 값을 다시 건다. 그래서 처리방침은 「그 계정으로 로그인한 동안」이라고 쓴다. 다시 켠 뒤의 녹화는 다음 페이지 로드부터 원격 설정을 따라 다시 시작한다.
+- **역할 속성**: `ChannelScope`가 지금 채널에서의 역할을 `register({ active_role: 'owner' | 'editor' })`로 모든 이벤트에 싣는다(처음 자동 선택 포함). 상대 채널 번호는 싣지 않는다. `reset()`이 함께 지운다.
 
 ## 주소 정제 (`scrub.ts`)
 
@@ -93,7 +97,7 @@ SDK는 동적 import라 hydration 뒤에 붙을 수 있다(Next 16 `instrumentat
 
 - **「가입」은 사람별 첫 `login_completed`** 로 센다(PostHog 「First time for user」). 로그인 응답에 신규 가입 표시가 없어서다. PostHog를 붙이기 전에 가입한 회원도 처음 로그인할 때 「첫」으로 잡히므로, 화면 이름은 「첫 로그인(PostHog 기준)」으로 쓴다.
 - `login_completed`는 식별 전에 익명으로 나간다. 다음 화면의 `AuthGuard`가 `identify`하면 그 회원에게 합쳐진다.
-- **브라우저가 모르는 일**(플러그인 연결 완료·첫 송출·하이라이트 생성·YouTube 업로드 성공)은 보내지 않는다 — DB 숫자로 본다. 서버 SDK는 이번 범위 밖이다.
+- **브라우저가 모르는 일**(플러그인 연결 완료·첫 송출·하이라이트 생성·YouTube 업로드 성공)은 보내지 않는다 — DB 숫자로 본다. **서버는 PostHog에 보내지 않는다**(2026-10-24 서비스 전체로 넓히는 계획에서 다시 검토하고 붙이지 않기로 정함 — 서버가 회원 번호로 보내면 처리방침 9절 「추적 금지를 켜면 보내지 않는다」가 서버까지 닿아야 하고, auth·clip·워커에 전송 모듈·동의 조회·탈퇴 자동 삭제가 따라온다. 채팅 수집·판별·미디어·OBS 플러그인은 회원 번호가 없거나 플랫폼 데이터라 처음부터 대상이 아니다). auth는 「이용 분석 참여」 값을 저장만 하고 분석 도구와 통신하지 않는다.
 
 ## 세션 녹화 (POK-358)
 
