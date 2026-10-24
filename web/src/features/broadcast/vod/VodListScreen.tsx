@@ -3,6 +3,7 @@
 import { Video } from 'lucide-react';
 import { Badge, EmptyState } from '@/ui';
 import { useVodListMockState, VOD_DOWNLOAD_IDLE, type VodListOptions } from './useVodListMockState';
+import { VodListSkeleton } from './VodListSkeleton';
 import { VodPeriodFilter } from './VodPeriodFilter';
 import { VodRow } from './VodRow';
 import styles from './VodListScreen.module.css';
@@ -53,10 +54,8 @@ export function VodListScreen(options: VodListOptions = {}) {
 
       {loading ? (
         // 첫 읽기가 끝나기 전의 빈 목록은 「모른다」다: 빈 상태를 먼저 보이면 방송이 없는 줄 안다(QA 2026-10-11).
-        // 글자 한 줄로만 말한다(홈 「불러오는 중…」과 같은 방식)
-        <p className={styles.filterEmpty} role="status">
-          불러오는 중…
-        </p>
+        // 로드 뒤 행과 같은 치수의 스켈레톤으로 자리를 잡는다(POK-441)
+        <VodListSkeleton />
       ) : totalCount === 0 ? (
         <EmptyState
           icon={<Video size={21} />}

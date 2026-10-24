@@ -330,7 +330,7 @@ describe('VodListScreen — 서버 목록', () => {
     vi.unstubAllGlobals();
   });
 
-  it('처음 불러오는 동안은 「없다」가 아니라 「불러오는 중」이다: 비어 있는 목록은 아직 모르는 것이다', async () => {
+  it('처음 불러오는 동안은 「없다」가 아니라 행 스켈레톤이다: 비어 있는 목록은 아직 모르는 것이다', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     let answer: (response: Response) => void = () => undefined;
     stubFetch((url) =>
@@ -341,9 +341,14 @@ describe('VodListScreen — 서버 목록', () => {
         : jsonResponse(200, { cards: [], nextCursor: null }),
     );
 
-    renderWithProviders(<VodListScreen />);
-    expect(screen.getByText('불러오는 중…')).toBeInTheDocument();
+    const { container } = renderWithProviders(<VodListScreen />);
+    // 낭독기엔 스켈레톤 대신 status 한 줄만 들린다(POK-441)
+    expect(screen.getAllByRole('status')).toHaveLength(1);
+    expect(screen.getByRole('status')).toHaveTextContent('지난 방송을 불러오는 중');
     expect(screen.queryByText('아직 지난 방송이 없어요')).toBeNull();
+    await act(async () => {
+      expect(await axe(container)).toHaveNoViolations();
+    });
 
     await act(async () => {
       answer(jsonResponse(200, { broadcasts: [], nextCursor: null }));
@@ -351,10 +356,10 @@ describe('VodListScreen — 서버 목록', () => {
     });
     // 서버가 「없다」고 답한 뒤에야 빈 상태다
     expect(screen.getByText('아직 지난 방송이 없어요')).toBeInTheDocument();
-    expect(screen.queryByText('불러오는 중…')).toBeNull();
+    expect(screen.queryByText('지난 방송을 불러오는 중')).toBeNull();
   });
 
-  it('첫 조회가 실패하면 다음 주기까지 「불러오는 중」이다: 못 읽은 것을 「없다」고 하지 않는다', async () => {
+  it('첫 조회가 실패하면 다음 주기까지 스켈레톤이다: 못 읽은 것을 「없다」고 하지 않는다', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     stubFetch(() => jsonResponse(503, { error: 'unavailable' }));
 
@@ -362,7 +367,7 @@ describe('VodListScreen — 서버 목록', () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(100);
     });
-    expect(screen.getByText('불러오는 중…')).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('지난 방송을 불러오는 중');
     expect(screen.queryByText('아직 지난 방송이 없어요')).toBeNull();
   });
 
