@@ -596,6 +596,41 @@ describe('AccountSettingsScreen — 탈퇴', () => {
     expect(window.sessionStorage.getItem('pc-withdrawn')).toBe('1');
   });
 
+  it('탈퇴 요청 중엔 누른 탈퇴 버튼만 돌고, 취소·Esc·배경으로도 닫히지 않는다 (POK-446)', async () => {
+    const user = userEvent.setup();
+    const held = heldResponse();
+    const spy = stubAccount(ME, (url, init) =>
+      url === '/api/auth/me' && init?.method === 'DELETE'
+        ? held.promise
+        : jsonResponse(404, { reason: 'UNEXPECTED_CALL' }),
+    );
+    await renderScreen();
+
+    await user.click(screen.getByRole('button', { name: '탈퇴하기' }));
+    const dialog = within(screen.getByRole('dialog'));
+    await user.click(dialog.getByRole('button', { name: '탈퇴하기' }));
+
+    // 라벨은 그대로 두고 스피너·aria-busy가 처리 중을 말한다
+    const confirm = await dialog.findByRole('button', { name: /^탈퇴하기/ });
+    expect(confirm).toHaveAttribute('aria-busy', 'true');
+    expect(confirm).toBeDisabled();
+    expect(dialog.getByRole('button', { name: '취소' })).toBeDisabled();
+
+    // 결과 전에 모달만 사라지면 취소된 줄 안다 — Esc·배경 클릭을 무시한다
+    await user.keyboard('{Escape}');
+    fireEvent.pointerDown(document.body);
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(spy.mock.calls.filter(([, init]) => init?.method === 'DELETE')).toHaveLength(1);
+
+    // 실패로 끝나면 다시 닫을 수 있다
+    held.release(jsonResponse(500, { reason: '서버 오류' }));
+    expect(await screen.findByText('탈퇴하지 못했어요')).toBeInTheDocument();
+    expect(dialog.getByRole('button', { name: '탈퇴하기' })).not.toHaveAttribute('aria-busy');
+    await user.click(dialog.getByRole('button', { name: '취소' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(nav.replace).not.toHaveBeenCalled();
+  });
+
   it('미결제 잔액이 있으면 재확인 대신 차단 상태가 뜬다', async () => {
     const user = userEvent.setup();
     nav.search = 'mock=blocked';

@@ -1,5 +1,6 @@
 import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { axe } from 'jest-axe';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useAuthStore } from '@/stores/auth';
 import { useChannelStore } from '@/stores/channel';
@@ -52,14 +53,19 @@ interface Server {
   receivedFails?: boolean;
   /** 참여 채널 목록을 읽을 때마다 부른다(읽는 순서를 재는 시험용) */
   onAsEditor?: () => void;
-  /** 거절·나가기 응답을 이 약속이 풀릴 때까지 붙잡는다(요청 중 상태를 재는 시험용) */
+  /** 거절·나가기·수락 응답을 이 약속이 풀릴 때까지 붙잡는다(요청 중 상태를 재는 시험용) */
   hold?: Promise<void>;
+  /** 참여 채널·받은 초대 목록 응답을 붙잡는다(첫 로딩·다시 읽기 중을 재는 시험용, POK-446) */
+  listsHold?: Promise<void>;
+  /** 내 정보 응답을 붙잡는다(POK-446) */
+  meHold?: Promise<void>;
 }
 
 function stub(server: Server) {
   return stubFetch((url, init) => {
     const method = init?.method ?? 'GET';
-    if (url === '/api/auth/me') return jsonResponse(200, ME);
+    if (url === '/api/auth/me')
+      return (server.meHold ?? Promise.resolve()).then(() => jsonResponse(200, ME));
     const leave = /^\/api\/editor-delegations\/(\d+)$/.exec(url);
     if (leave && method === 'DELETE') {
       return (server.hold ?? Promise.resolve()).then(() => {
@@ -69,19 +75,25 @@ function stub(server: Server) {
     }
     if (url === '/api/editor-delegations/as-editor') {
       server.onAsEditor?.();
-      return server.asEditorFails
-        ? jsonResponse(500, { error: 'boom' })
-        : jsonResponse(200, server.delegations);
+      return (server.listsHold ?? Promise.resolve()).then(() =>
+        server.asEditorFails
+          ? jsonResponse(500, { error: 'boom' })
+          : jsonResponse(200, server.delegations),
+      );
     }
     if (url === '/api/editor-invitations/received') {
-      return server.receivedFails
-        ? jsonResponse(500, { error: 'boom' })
-        : jsonResponse(200, server.invitations);
+      return (server.listsHold ?? Promise.resolve()).then(() =>
+        server.receivedFails
+          ? jsonResponse(500, { error: 'boom' })
+          : jsonResponse(200, server.invitations),
+      );
     }
     if (url === '/api/editor-invitations/11/accept' && method === 'POST') {
-      server.invitations = [];
-      server.delegations = [...server.delegations, GAMJA];
-      return new Response(null, { status: 204 });
+      return (server.hold ?? Promise.resolve()).then(() => {
+        server.invitations = [];
+        server.delegations = [...server.delegations, GAMJA];
+        return new Response(null, { status: 204 });
+      });
     }
     if (url === '/api/editor-invitations/11/decline' && method === 'POST') {
       return (server.hold ?? Promise.resolve()).then(() => {
@@ -306,6 +318,8 @@ describe('ChannelSwitcher: 펼친 패널', () => {
     const panel = within(await open(user));
 
     await panel.findByRole('button', { name: /별하 채널/ });
+    // 「없다」는 서버가 답한 뒤에만 판단한다: 첫 로딩 중엔 그 자리에 스켈레톤이 선다(POK-446)
+    await waitFor(() => expect(panel.queryByRole('status')).not.toBeInTheDocument());
     expect(panel.queryByText(/받은 초대/)).not.toBeInTheDocument();
   });
 
@@ -337,6 +351,154 @@ describe('ChannelSwitcher: 펼친 패널', () => {
 
     expect(posts(spy)).toContain('/api/auth/logout');
     expect(nav.replace).toHaveBeenCalledWith('/login');
+  });
+});
+
+describe('ChannelSwitcher: 첫 로딩과 요청 중 표시(POK-446)', () => {
+  it('참여 채널·받은 초대를 처음 읽는 동안엔 구역 자리에 줄 스켈레톤을 두고, 개수는 응답 뒤에만 쓴다', async () => {
+    let release: () => void = () => {};
+    stub({
+      delegations: [BYEOLHA],
+      invitations: [invitation(18)],
+      listsHold: new Promise<void>((r) => {
+        release = r;
+      }),
+    });
+    const user = userEvent.setup();
+    const panel = await open(user);
+    const p = within(panel);
+    await p.findByRole('button', { name: /나 채널/ });
+
+    // 낭독기엔 둘을 같이 말하는 status 한 줄만 들린다 — 막대는 모두 숨는다
+    expect(p.getAllByRole('status')).toHaveLength(1);
+    expect(p.getByRole('status')).toHaveTextContent('참여 채널과 받은 초대를 불러오는 중');
+    expect(p.getByRole('status').parentElement).toHaveAttribute('aria-busy', 'true');
+    // 응답 전엔 빈 목록이 아니라 모르는 것이다: 구역 제목·개수를 미리 쓰지 않는다
+    expect(p.queryByText(/편집 참여 중/)).not.toBeInTheDocument();
+    expect(p.queryByRole('group', { name: /받은 초대/ })).not.toBeInTheDocument();
+    await act(async () => {
+      expect(await axe(panel)).toHaveNoViolations();
+    });
+
+    await act(async () => release());
+
+    expect(await p.findByText('편집 참여 중 · 1')).toBeInTheDocument();
+    expect(await p.findByRole('group', { name: '받은 초대 1' })).toBeInTheDocument();
+    expect(p.queryByRole('status')).not.toBeInTheDocument();
+  });
+
+  it('응답이 비었으면 스켈레톤을 걷고 두 구역을 숨긴다', async () => {
+    let release: () => void = () => {};
+    stub({
+      delegations: [],
+      invitations: [],
+      listsHold: new Promise<void>((r) => {
+        release = r;
+      }),
+    });
+    const user = userEvent.setup();
+    const p = within(await open(user));
+    expect(await p.findByRole('status')).toBeInTheDocument();
+
+    await act(async () => release());
+
+    await waitFor(() => expect(p.queryByRole('status')).not.toBeInTheDocument());
+    expect(p.queryByText(/편집 참여 중/)).not.toBeInTheDocument();
+    expect(p.queryByText(/받은 초대/)).not.toBeInTheDocument();
+    expect(p.getByRole('button', { name: /나 채널/ })).toBeInTheDocument();
+  });
+
+  it('받아 둔 목록은 다시 읽는 동안에도 그대로 둔다: 스켈레톤으로 갈아끼우지 않는다', async () => {
+    const server: Server = { delegations: [BYEOLHA], invitations: [invitation(18)] };
+    stub(server);
+    const user = userEvent.setup();
+    const { panel, queryClient } = await openWithClient(user);
+    const p = within(panel);
+    await p.findByRole('group', { name: '받은 초대 1' });
+    await p.findByText('편집 참여 중 · 1');
+
+    let release: () => void = () => {};
+    server.listsHold = new Promise<void>((r) => {
+      release = r;
+    });
+    act(() => {
+      void queryClient.invalidateQueries({ queryKey: ['editor-invitations'] });
+      void queryClient.invalidateQueries({ queryKey: ['editor-delegations'] });
+    });
+
+    await waitFor(() =>
+      expect(queryClient.getQueryState(['editor-invitations', 'received'])?.fetchStatus).toBe(
+        'fetching',
+      ),
+    );
+    expect(p.getByRole('group', { name: '받은 초대 1' })).toBeInTheDocument();
+    expect(p.getByText('편집 참여 중 · 1')).toBeInTheDocument();
+    expect(p.queryByRole('status')).not.toBeInTheDocument();
+
+    await act(async () => release());
+  });
+
+  it('내 정보가 오기 전엔 제목과 「내 채널」 줄 스켈레톤을 둔다', async () => {
+    let release: () => void = () => {};
+    stub({
+      delegations: [],
+      invitations: [],
+      meHold: new Promise<void>((r) => {
+        release = r;
+      }),
+    });
+    const user = userEvent.setup();
+    const panel = await open(user);
+    const p = within(panel);
+
+    expect(p.getByText('계정 전환')).toBeInTheDocument();
+    expect(p.getAllByRole('status')).toHaveLength(1);
+    expect(p.getByRole('status')).toHaveTextContent('내 채널을 불러오는 중');
+    expect(p.queryByRole('button', { name: /나 채널/ })).not.toBeInTheDocument();
+    await act(async () => {
+      expect(await axe(panel)).toHaveNoViolations();
+    });
+
+    await act(async () => release());
+
+    expect(await p.findByRole('button', { name: /나 채널/ })).toBeInTheDocument();
+    await waitFor(() => expect(p.queryByRole('status')).not.toBeInTheDocument());
+  });
+
+  it('수락을 누르면 그 초대의 수락만 돌고, 다른 초대 버튼은 잠그기만 한다', async () => {
+    let release: () => void = () => {};
+    const second = { ...invitation(30), id: 12, streamerId: 4, streamerName: '콩스타' };
+    const spy = stub({
+      delegations: [],
+      invitations: [invitation(18), second],
+      hold: new Promise<void>((r) => {
+        release = r;
+      }),
+    });
+    const user = userEvent.setup();
+    const p = within(await open(user));
+    const group = within(await p.findByRole('group', { name: '받은 초대 2' }));
+
+    // 첫 카드(감자대장, id 11)의 수락
+    await user.click(group.getAllByRole('button', { name: '수락' })[0]!);
+
+    // 폭을 지키려 라벨은 시각만 숨기므로 이름은 aria-label이 맡는다(.busyButton)
+    const accepting = await group.findByRole('button', { name: '수락하는 중' });
+    expect(accepting).toHaveAttribute('aria-busy', 'true');
+    expect(accepting).toBeDisabled();
+    // 도는 버튼은 누른 그 하나뿐이다
+    expect(group.getAllByRole('button').filter((b) => b.getAttribute('aria-busy'))).toHaveLength(1);
+    // 다른 초대의 수락·거절은 지금처럼 잠그기만 한다
+    const otherAccept = group.getByRole('button', { name: '수락' });
+    expect(otherAccept).toBeDisabled();
+    expect(otherAccept).not.toHaveAttribute('aria-busy');
+    for (const decline of group.getAllByRole('button', { name: '거절' })) {
+      expect(decline).toBeDisabled();
+    }
+    expect(posts(spy)).toEqual(['/api/editor-invitations/11/accept']);
+
+    await act(async () => release());
+    expect(await screen.findByText('초대를 수락했어요')).toBeInTheDocument();
   });
 });
 

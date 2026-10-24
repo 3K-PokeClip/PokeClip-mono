@@ -114,6 +114,15 @@
   background: transparent;
 }
 
+/* 첫 로딩의 줄 자리(POK-446): .row의 치수만 빌리고 누를 수 있는 티(손가락 · hover 배경)는 뺀다 */
+.rowSkeleton {
+  cursor: default;
+}
+
+.rowSkeleton:hover {
+  background: transparent;
+}
+
 /* 세로 가운데는 transform 대신 위아래 auto margin으로: 버튼의 눌림 효과(transform)와 겹치지 않게 */
 .leave {
   position: absolute;
@@ -197,6 +206,24 @@
   display: flex;
   gap: calc(6 * var(--pc-u));
   margin-top: calc(9 * var(--pc-u));
+}
+
+/* 수락 요청 중(POK-446): 누른 수락만 돌되 폭은 라벨 그대로 — 라벨은 자리만 지키게 시각만 숨기고 스피너를 가운데 겹친다.
+   숨긴 라벨은 접근 이름에서도 빠지므로 이름은 버튼 aria-label(「수락하는 중」)이 맡는다(플러그인 설정 .busyButton과 같다) */
+.busyButton {
+  position: relative;
+}
+
+.busyButton[data-loading] > span:not([aria-hidden='true']) {
+  visibility: hidden;
+}
+
+.busyButton[data-loading] > span[aria-hidden='true'] {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .fallback {
