@@ -112,7 +112,10 @@ bash infra/terraform/scripts/precheck/events.sh --since <비교 기준 판정 �
 
     *   `Plan: 29 to add, 0 to change, 0 to destroy` — RDS 다섯(SG · 서브넷
         그룹 · 파라미터 그룹 · 로그 그룹 · 인스턴스) · 비밀 그릇 일곱 ·
-        rewind 버킷 다섯 · 계약9 열둘(주제 정책 포함).
+        rewind 버킷 다섯 · 계약9 열둘(주제 정책 포함). 이 수는 1단-가
+        머지본 기준입니다. 1단-다 코드가 들어간 판에서 처음부터 apply 하면
+        수가 다르고 tfvars(`auth_oauth_apps`)가 먼저 있어야 plan 이 돕니다
+        — 「1단-다 2. tfvars 와 apply」 를 따릅니다.
     *   주제 정책(`aws_sns_topic_policy.broadcast_lifecycle`)은 명시
         정책입니다 — 주체가 계정 루트 하나이고 `*` · `Condition` 이 없습니다.
     *   주소에 `sql_runner` 가 없습니다(실행기 꺼짐).
@@ -480,17 +483,21 @@ send_step() {
     않으므로 **첫 운영 적용이 최종 판정**입니다.
 *   `40` 은 `verify failed: <식별자>, …` 로 실패합니다(식별자 뜻은
     `40_verify.sql` 머리). 계정은 media 두 계정과 앱 사용자 넷입니다.
-    멤버십(`membership_<계정>` · `members_media_owner`)이나 media 계정에
-    직접 부여된 CREATE(`schema_create_<계정>`)로 실패하면, 10 은 그것을
-    회수하지 않습니다 — 무엇이 왜 붙었는지 모르기 때문입니다. 운영자가
-    원인을 확인한 뒤 손으로 회수하고 40 을 다시 돌립니다.
+    실패하면 다른 실패와 같이 「실패 · 시간 초과」 로 갑니다 — 같은
+    흐름에서 다시 보내지 않고 실행기를 끕니다. 멤버십(`membership_<계정>` ·
+    `members_media_owner`)이나 media 계정에 직접 부여된
+    CREATE(`schema_create_<계정>`)로 실패했으면 10 은 그것을 회수하지
+    않습니다 — 무엇이 왜 붙었는지 모르기 때문입니다. 운영자가 원인을
+    확인하고, 회수하는 손 SQL 은 「실패 · 시간 초과」 의 손 SQL 규칙대로
+    다음 흐름에서 보냅니다.
 *   앱 서버 사용자 넷(`app_auth` · `app_clip` · `app_chat_collector` ·
     `app_chat_detector`)은 10 이 만들고, `stream_*` 교차 권한은 30 이
     줍니다. 판별 서버의 `chat_messages` 읽기는 수집 서버 Flyway(`V316`)가
     주므로 런타임은 주지 않습니다. `app_chat_detector` 가 수집 서버의 첫
     기동보다 늦게 생겼으면 그 줄이 건너뛰어졌으니 아래를 마스터로 `psql -1`
     로 손으로 돌립니다(표 주인으로 바꿔서 주고 그 멤버십을 거둡니다 — 로컬
-    PG 비superuser 대역으로 확인함).
+    PG 비superuser 대역으로 확인함). 보내는 길은 「실패 · 시간 초과」 의 손
+    SQL 규칙과 같습니다.
 
     ```sql
     GRANT app_chat_collector TO CURRENT_USER WITH SET TRUE, INHERIT FALSE;
@@ -501,8 +508,8 @@ send_step() {
     ```
 
 *   파일 하나가 실패하면 그 파일만 롤백되고 앞 파일은 남습니다. 10 · 20 ·
-    30 은 다시 돌려도 같은 상태로 수렴하므로, 원인을 고친 뒤 00 부터 다시
-    돌립니다.
+    30 은 다시 돌려도 같은 상태로 수렴하므로, 「실패 · 시간 초과」 대로 끈
+    뒤 원인을 고친 다음 흐름에서 00 부터 다시 돌립니다.
 
 ## 6. advisory 확인
 
@@ -623,8 +630,16 @@ send-command 상태가 `Success` 가 아니거나(`Failed` · `TimedOut` ·
 1.  같은 흐름에서 다시 보내지 않습니다.
 1.  결과 JSON(`${payload}/<걸음>-result.json`)을 보관합니다.
 1.  곧바로 7(실행기 끔)로 가서 잔여 0 을 확인합니다.
-1.  원인을 고치는 PR 을 머지한 뒤 4(켬)부터 다시 합니다. 5 는 00 부터
-    다시 돌려도 수렴합니다.
+1.  원인을 고친 뒤 다음 흐름을 4(켬)부터 시작합니다. 코드가 원인이면 고치는
+    PR 을 머지한 뒤입니다. DB 상태가 원인이면(예: 40 의 멤버십 · 직접
+    CREATE) 손 SQL 을 씁니다. 5 는 00 부터 다시 돌려도 수렴합니다.
+
+**손 SQL 규칙.** 손 SQL 은 새 페이로드이고 kty 승인을 새로 받습니다 — 같은
+흐름 안에서 임의로 다시 보내거나 덧붙여 보내지 않습니다. 페이로드는 5-1 의
+`conn` 명령 뒤에 그 SQL 을 `psql -X -1 -v ON_ERROR_STOP=1` 로 돌리고 이어서
+`40_verify.sql` 을 돌리는 JSON 입니다. 보내기 전에 SQL 원문을 kty 에게
+보이고 승인을 받습니다. 판정은 5 와 같습니다(상태 `Success` · `VERIFY OK`).
+실패하면 이 절의 1부터 다시 따릅니다.
 
 ## 되돌리기 · 해체
 

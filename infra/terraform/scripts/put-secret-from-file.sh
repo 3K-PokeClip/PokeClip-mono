@@ -3,8 +3,9 @@
 # 파일 하나의 내용을 prod 비밀(Secrets Manager — 엣지 · 앱 그릇)의 새 버전으로
 # 넣는다(runbooks/edge-secrets.md · runbooks/runtime-1a.md). 값은 파일 → 셸
 # 변수 → 표준 입력(--secret-string file:///dev/stdin)으로만 지나간다 — 명령
-# 인자 · 환경 변수 · 임시 파일 · 출력에 두지 않는다. 그래서 here-doc · here-string(bash 3.2 는 본문을 임시 파일에
-# 씀)과 jq 를 쓰지 않고, 값은 셸 내장 printf 의 파이프로만 넘긴다.
+# 인자 · 환경 변수 · 임시 파일 · 출력에 두지 않는다. 그래서 here-doc ·
+# here-string(bash 3.2 는 본문을 임시 파일에 씀)과 jq 를 쓰지 않고, 값은 셸
+# 내장 printf 의 파이프로만 넘긴다.
 # --cli-input-json file:///dev/stdin 은 쓰지 않는다 — aws-cli 가 file:// 값을 두
 # 번 읽어 파이프의 둘째 읽기가 비고 ParamValidation 으로 실패한다(2026-10-17
 # aws-cli 2.36.7 실측).
@@ -13,7 +14,9 @@
 #   종류는 비밀 이름(SecretId) pokeclip/prod/<종류> 의 용도 토막이고, 아래
 #   허용 목록(KINDS)뿐이다 — 엣지 그릇(prod/secrets/main.tf)과 앱 그릇
 #   (prod/runtime/app_secrets.tf). 그릇을 더하는 PR 이 KINDS · 이 표 · 시험
-#   (put_secret_test.sh 의 kinds-match-shells · 정상 사례) · 문서를 함께 고친다.
+#   (put_secret_test.sh 의 kinds-match-shells · 정상 사례)을 함께 고친다.
+#   문서는 종류를 나열하는 자리가 남아 있을 때만 한 줄 더하고, 아니면 건드리지
+#   않는다.
 #   종류                         파일 내용
 #   signing-key                  PKCS#8 PEM — 그대로 넣음
 #   cdn-secret                   한 줄 — 끝 줄바꿈 하나를 뗌
