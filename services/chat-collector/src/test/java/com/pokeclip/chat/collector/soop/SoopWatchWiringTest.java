@@ -31,6 +31,8 @@ class SoopWatchWiringTest {
             .withPropertyValues(
                     "pokeclip.soop.api-base-uri=http://localhost:1",
                     "pokeclip.soop.interval=PT1M",
+                    "pokeclip.soop.fast-interval=PT10S",
+                    "pokeclip.soop.fast-window=PT3M",
                     "pokeclip.soop.initial-delay=PT1H",
                     "pokeclip.soop.max-watched=100",
                     "pokeclip.platforms.clip-base-url=http://localhost:1",

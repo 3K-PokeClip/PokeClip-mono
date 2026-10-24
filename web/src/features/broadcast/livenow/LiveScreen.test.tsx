@@ -21,6 +21,7 @@ import {
 } from '@/features/broadcast/livenow/liveDataStore';
 import { forgetLiveStreamId } from '@/features/broadcast/streamSelection';
 import { useAuthStore } from '@/stores/auth';
+import { useChannelStore } from '@/stores/channel';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
 import { fakeScrollMetrics } from '@/test/scrollMetrics';
 import { renderWithProviders } from '@/test/testProviders';
@@ -452,6 +453,18 @@ const server = vi.hoisted(() => ({
   infoNoLatest: false,
   /** 라이브 방송을 막 켰다: 시작 시각이 시험 시작(NOW)에서 4초 전이다(POK-449, 방송 정보를 받아 오는 중) */
   liveJustStarted: false,
+  /** 라이브 방송의 스트리머 번호(POK-457). 정하면 다른 채널(streamerId)로 물은 목록에는 이 방송이 없다 */
+  liveOwnerId: null as number | null,
+  /** 내 프로필 사진(POK-457). me 응답에 싣는다 */
+  myPhoto: null as string | null,
+  /** 내가 편집자로 붙은 채널(as-editor). 위임받은 방송의 스트리머 사진을 여기서 읽는다(POK-457) */
+  asEditor: [] as {
+    id: number;
+    counterpartId: number;
+    counterpartName: string;
+    counterpartProfileImageUrl: string | null;
+    grantedAt: string;
+  }[],
   /** 지난 방송 채팅을 VOD_CHAT으로 준다(영상 축으로 묻고 표 축으로 답한다, 쪽·커서까지) */
   vodChat: false,
   /** vodChat 답을 이 약속이 풀릴 때까지 붙든다 */
@@ -647,8 +660,11 @@ function listResponse(u: URL): Response {
       nextCursor: null,
     });
   }
+  const asked = u.searchParams.get('streamerId');
+  const otherChannel =
+    asked !== null && server.liveOwnerId !== null && Number(asked) !== server.liveOwnerId;
   return jsonResponse(200, {
-    broadcasts: live && !server.liveEnded ? [row] : [],
+    broadcasts: live && !server.liveEnded && !otherChannel ? [row] : [],
     nextCursor: null,
   });
 }
@@ -864,8 +880,9 @@ function handle(url: string, init?: RequestInit): Response | Promise<Response> {
       id: 9,
       email: 'me@example.com',
       name: '박편집',
-      profileImageUrl: null,
+      profileImageUrl: server.myPhoto,
     });
+  if (path === '/api/editor-delegations/as-editor') return jsonResponse(200, server.asEditor);
   return jsonResponse(404, { error: 'unexpected_call' });
 }
 
@@ -904,6 +921,9 @@ beforeEach(() => {
   server.chartRecentGate = null;
   server.infoNoLatest = false;
   server.liveJustStarted = false;
+  server.myPhoto = null;
+  server.liveOwnerId = null;
+  server.asEditor = [];
   server.vodChat = false;
   server.vodChatGate = null;
   server.vodChatHoldBefore = null;
@@ -4415,6 +4435,95 @@ describe('LiveScreen — 지난 방송 상세', () => {
     await settle();
 
     expect(chatFroms()).toContain(VOD_STARTED + 30_000 + 2_842_000 - 60_000);
+  });
+});
+
+describe('LiveScreen: 정보 바의 스트리머 프로필 사진 (POK-457)', () => {
+  const avatar = () => screen.getByTestId('info-streamer');
+  // 이 파일의 다른 시험은 me를 안 읽는다(refresh 토큰 없음). 프로필은 me에서 오므로 여기서만 세션을 세운다
+  // 채널 저장소는 같은 회원이면 다시 읽지 않으므로(hydrate) 시험마다 비워 저장값(pc-channel)을 새로 읽게 한다
+  beforeEach(() => {
+    useAuthStore.setState({ refreshToken: 'refresh-1', hydrated: true });
+    useChannelStore.setState({ userId: null, selected: null, selectedAgainst: null });
+  });
+  afterEach(() => {
+    useAuthStore.setState({ refreshToken: null });
+    useChannelStore.setState({ userId: null, selected: null, selectedAgainst: null });
+    window.localStorage.removeItem('pc-channel');
+  });
+
+  it('내 방송이면 내 PokeClip 프로필 사진이다: 고정 문구 「이미지 없음」은 없다', async () => {
+    server.myPhoto = 'http://localhost:4566/profiles/9.png';
+    await renderLive();
+
+    expect(avatar().querySelector('img')).toHaveAttribute(
+      'src',
+      'http://localhost:4566/profiles/9.png',
+    );
+    expect(screen.queryByText('이미지 없음')).toBeNull();
+  });
+
+  it('사진이 없으면 이름 첫 글자 동그라미다', async () => {
+    await renderLive();
+
+    expect(avatar().querySelector('img')).toBeNull();
+    expect(avatar()).toHaveTextContent('박편');
+  });
+
+  it('편집자가 남의 방송을 열면 고른 채널 주인의 사진이다: 내 사진 · 플랫폼 사진이 아니다', async () => {
+    server.relation = 'EDITOR';
+    server.myPhoto = 'http://localhost:4566/profiles/9.png';
+    server.asEditor = [
+      {
+        id: 1,
+        counterpartId: 42,
+        counterpartName: '남의스트리머',
+        counterpartProfileImageUrl: 'http://localhost:4566/profiles/42.png',
+        grantedAt: '2026-09-01T00:00:00Z',
+      },
+    ];
+    window.localStorage.setItem('pc-channel', JSON.stringify({ '9': 42 }));
+    await renderLive();
+
+    expect(avatar().querySelector('img')).toHaveAttribute(
+      'src',
+      'http://localhost:4566/profiles/42.png',
+    );
+  });
+
+  it('위임받은 방송이 고른 채널의 것이 아니면(다른 채널 방송을 주소로 엶) 고른 채널 주인 사진을 붙이지 않는다', async () => {
+    server.relation = 'EDITOR';
+    server.liveOwnerId = 77;
+    server.asEditor = [
+      {
+        id: 1,
+        counterpartId: 42,
+        counterpartName: '고른채널주인',
+        counterpartProfileImageUrl: 'http://localhost:4566/profiles/42.png',
+        grantedAt: '2026-09-01T00:00:00Z',
+      },
+      {
+        id: 2,
+        counterpartId: 77,
+        counterpartName: '방송주인',
+        counterpartProfileImageUrl: 'http://localhost:4566/profiles/77.png',
+        grantedAt: '2026-09-01T00:00:00Z',
+      },
+    ];
+    window.localStorage.setItem('pc-channel', JSON.stringify({ '9': 42 }));
+    await renderLive();
+
+    expect(avatar().querySelector('img')).toBeNull();
+    expect(avatar()).not.toHaveTextContent('고른');
+  });
+
+  it('위임받은 방송인데 고른 채널이 내 것이면 누구인지 몰라 비운다: 내 사진을 남의 방송에 붙이지 않는다', async () => {
+    server.relation = 'EDITOR';
+    server.myPhoto = 'http://localhost:4566/profiles/9.png';
+    await renderLive();
+
+    expect(avatar().querySelector('img')).toBeNull();
+    expect(avatar()).not.toHaveTextContent('박편');
   });
 });
 

@@ -29,7 +29,7 @@ infra/terraform/
 ├── modules/                       # 루트들이 쓰는 부품
 ├── policy/guard/                  # 금지 규약 Rego 정책(conftest) · 단위 시험
 ├── scripts/                       # guard.sh(금지 규약 검사 실행기) · guard_test.sh · precheck/(단계 직전 점검)
-│   ├── put-secret-from-file.sh    # prod 엣지 비밀 값 입력(runbooks/edge-secrets.md)
+│   ├── put-secret-from-file.sh    # prod 비밀 값 입력 — 엣지 · 앱 그릇(runbooks/edge-secrets.md)
 │   ├── kvs-put-cdn-secret.sh      # CloudFront KVS 의 CDN 비밀 값 입력(runbooks/edge-tests.md)
 │   └── test/                      # 두 스크립트의 시험 · 가짜 명령(fakebin/ · kvs_fakebin/)
 ├── runbooks/                      # 운영 단계 절차(kty 승인) — org-ct.md 등
@@ -174,9 +174,9 @@ import 루트(`nonprod/dev` · `nonprod/dns-legacy`)의 선언은 실물에 대�
 *   비밀 그릇 모듈(`modules/secret_shells`)에는 리소스 정책(별도 자원 ·
     인라인 `policy` 인자)과 `names` 밖의 입력을 두지 않습니다(guard R6). 읽기
     권한은 읽는 쪽 루트가 자기 역할 정책으로 붙입니다.
-*   prod 값은 `scripts/put-secret-from-file.sh` 로 파일에서 넣습니다 — 값이
-    명령 인자 · 환경 변수 · 임시 파일 · 출력에 남지 않습니다(절차 ·
-    종료 코드는 [엣지 비밀 런북](runbooks/edge-secrets.md)).
+*   prod 값(엣지 · 앱 그릇)은 `scripts/put-secret-from-file.sh` 로 파일에서
+    넣습니다 — 값이 명령 인자 · 환경 변수 · 임시 파일 · 출력에 남지
+    않습니다(절차 · 종료 코드는 [엣지 비밀 런북](runbooks/edge-secrets.md)).
 *   CloudFront KVS 의 CDN 비밀은 `scripts/kvs-put-cdn-secret.sh` 가 Secrets
     Manager 의 값을 읽어 넣습니다 — 같은 규칙이고, 절차 · 종료 코드는
     [엣지 시험 런북](runbooks/edge-tests.md)입니다.

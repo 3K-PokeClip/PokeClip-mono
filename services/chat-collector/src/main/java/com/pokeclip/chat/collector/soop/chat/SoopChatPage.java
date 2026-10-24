@@ -49,6 +49,9 @@ final class SoopChatPage {
                     }
                     window.%s('message', action, m.userId || '', m.userNickname || '', m.message || '', JSON.stringify(m));
                   });
+                  sdk.handleReady(function () {
+                    window.%s('ready');
+                  });
                   sdk.handleChatClosed(function () {
                     window.%s('closed');
                   });
@@ -61,7 +64,7 @@ final class SoopChatPage {
                   });
                 };
                 </script></body></html>
-                """.formatted(escapeAttr(sdkUrl), b, jsList(DONATIONS), b, b, b, b, b);
+                """.formatted(escapeAttr(sdkUrl), b, jsList(DONATIONS), b, b, b, b, b, b);
     }
 
     private static String jsList(java.util.List<String> values) {

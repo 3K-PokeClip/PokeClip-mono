@@ -46,6 +46,9 @@ public class SoopChatBrowser implements AutoCloseable {
         /** 받는 후원 여섯 중 하나(POK-431). */
         void onDonation(String streamId, long generation, SoopChatDonation donation);
 
+        /** 채팅방 입장을 마쳤다({@code handleReady}, POK-456). 이 뒤부터 채팅이 온다. */
+        void onReady(String streamId, long generation);
+
         /** 채팅 서버 연결이 닫혔다({@code handleChatClosed}). */
         void onClosed(String streamId, long generation);
 
@@ -263,6 +266,7 @@ public class SoopChatBrowser implements AutoCloseable {
                     str(args, 3), str(args, 4), str(args, 5)));
             case "donation" -> listener.onDonation(streamId, generation, SoopChatDonation.of(str(args, 1), str(args, 2),
                     str(args, 3), str(args, 4), str(args, 5), str(args, 6), str(args, 7)));
+            case "ready" -> listener.onReady(streamId, generation);
             case "closed" -> listener.onClosed(streamId, generation);
             case "error" -> listener.onError(streamId, generation, str(args, 1));
             default -> { }

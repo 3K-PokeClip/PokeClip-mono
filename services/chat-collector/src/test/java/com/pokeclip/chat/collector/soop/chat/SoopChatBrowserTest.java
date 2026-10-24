@@ -456,6 +456,19 @@ class SoopChatBrowserTest {
         }
     }
 
+    /** 채팅방 입장(handleReady)을 마치면 탭을 연 뒤 걸린 시간을 한 줄로 남긴다(POK-456: 첫 채팅이 늦을 때 연결이 느린지 가른다) */
+    @Test
+    void 입장을_마치면_걸린_시간을_남긴다() {
+        sdk.script(Step.message("MESSAGE", "v", "n", "첫"));
+        try (LogCaptor captor = new LogCaptor()) {
+            start(10);
+            sessions.ensure("s-1", "bj-1", TOKEN);
+            await(() -> captor.messages().stream().anyMatch(m -> m.startsWith("soop.chat.ready")));
+            assertThat(captor.messages()).filteredOn(m -> m.startsWith("soop.chat.ready")).singleElement().asString()
+                    .matches("soop\\.chat\\.ready stream=s-1 sinceOpenMs=\\d+");
+        }
+    }
+
     /** 토큰 · 앱 비밀값 · 본문 · 아이디 · 닉네임이 어느 로그 줄에도 없다(오류 · 다시 붙기 갈래까지 태운다) */
     @Test
     void 비밀값과_채팅이_로그에_안_남는다() {

@@ -4,8 +4,9 @@
 # sql/10_roles.sql · 30_grants.sql 이 만든다.
 #
 # 이름의 원본은 sql/10_roles.sql 의 CREATE ROLE 줄 하나다. 출력이 그 줄을 읽어
-# SQL 과 출력이 갈라지지 않는다. 키는 app_env · app_secret_arns 와 같은 서비스
-# 이름이다(app_chat_collector → chat-collector).
+# SQL 과 출력이 갈라지지 않는다. 키는 DB 를 쓰는 서비스 넷의 이름이다 —
+# app_env · app_secret_arns 서비스 키의 부분집합이다(일꾼 render · upload 는
+# DB 를 쓰지 않는다. app_chat_collector → chat-collector).
 
 locals {
   # media 의 prod_sql_contract_test.go 가 같은 꼴의 정규식(appUserCreate)으로
