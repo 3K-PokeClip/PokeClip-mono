@@ -17,10 +17,12 @@ Terraform 코드입니다. 설계 정본은 「HTTPS · 엣지 인프라 설계�
 아래는 **목표 구조**입니다 — 지금 있는 것은
 `modules/{state_bucket,secret_shells,cloudfront_public_key}` ·
 `modules/{network,acm_certificate}` ·
-`modules/{waf_acl,alb,media_ingest,ecs_service,media_host}` · `policy/guard` ·
+`modules/{waf_acl,alb,media_ingest,ecs_service,media_host}` ·
+`modules/{cdn_media,cdn_static_site}` · `policy/guard` ·
 `scripts` · `runbooks` · `nonprod/{bootstrap,dev,dns-legacy}` ·
-`prod/{bootstrap,secrets,network,runtime,certs,registry,platform,media}`
-뿐이고, 나머지 루트(edge · records)는 계획의 후속 PR 이 더합니다.
+`prod/{bootstrap,secrets,network,runtime,certs}` ·
+`prod/{registry,platform,media,edge,records}` 이고, 보류로 표시한 루트
+(`mgmt/*` · `nonprod/dns-dev` · `prod/dns` — 결정 46)는 아직 없습니다.
 
 ```
 infra/terraform/
@@ -28,7 +30,8 @@ infra/terraform/
 ├── policy/guard/                  # 금지 규약 Rego 정책(conftest) · 단위 시험
 ├── scripts/                       # guard.sh(금지 규약 검사 실행기) · guard_test.sh · precheck/(단계 직전 점검)
 │   ├── put-secret-from-file.sh    # prod 엣지 비밀 값 입력(runbooks/edge-secrets.md)
-│   └── test/                      # put-secret-from-file.sh 시험 · 가짜 aws(fakebin/)
+│   ├── kvs-put-cdn-secret.sh      # CloudFront KVS 의 CDN 비밀 값 입력(runbooks/edge-tests.md)
+│   └── test/                      # 두 스크립트의 시험 · 가짜 명령(fakebin/ · kvs_fakebin/)
 ├── runbooks/                      # 운영 단계 절차(kty 승인) — org-ct.md 등
 ├── mgmt/                          # (보류 — 결정 46 · 재개 키트)
 │   ├── bootstrap/                 # ① 상태 버킷
@@ -69,8 +72,9 @@ prod 엣지 비밀의 값 입력 · 교체 절차는 [엣지 비밀 런북](runb
 [prod 산출물 올리기(이미지 푸시 · 랜딩 업로드)](runbooks/prod-artifacts.md) ·
 [ALB 교차 영역 실측(O7d)](runbooks/alb-cross-zone-bench.md) ·
 [Media 상자 교체](runbooks/media-swap.md) ·
-[prod 철거(platform · media 를 apply 뒤 내리기)](runbooks/prod-teardown.md) ·
-[prod 런타임 1단-가(apply · SQL 적용)](runbooks/runtime-1a.md).
+[prod 철거(records · edge · media · platform 을 apply 뒤 내리기)](runbooks/prod-teardown.md) ·
+[prod 런타임 1단-가(apply · SQL 적용)](runbooks/runtime-1a.md) ·
+[엣지 시험(접속법 · T0–T11 · KVS 값 입력)](runbooks/edge-tests.md).
 운영 단계마다 먼저 [단계 직전 점검](runbooks/stage-precheck.md)을 합니다.
 2-3 판정(dev 자동 주체 → prod 권한 없음, 정책 시뮬레이터)은
 `scripts/precheck/principal-check.sh` 입니다.
@@ -173,6 +177,9 @@ import 루트(`nonprod/dev` · `nonprod/dns-legacy`)의 선언은 실물에 대�
 *   prod 값은 `scripts/put-secret-from-file.sh` 로 파일에서 넣습니다 — 값이
     명령 인자 · 환경 변수 · 임시 파일 · 출력에 남지 않습니다(절차 ·
     종료 코드는 [엣지 비밀 런북](runbooks/edge-secrets.md)).
+*   CloudFront KVS 의 CDN 비밀은 `scripts/kvs-put-cdn-secret.sh` 가 Secrets
+    Manager 의 값을 읽어 넣습니다 — 같은 규칙이고, 절차 · 종료 코드는
+    [엣지 시험 런북](runbooks/edge-tests.md)입니다.
 
 ## 검증
 
@@ -188,8 +195,11 @@ conftest verify -c infra/terraform/scripts/guard-data/empty-config.toml \
 bash infra/terraform/scripts/guard_test.sh
 bash infra/terraform/scripts/guard.sh
 bash infra/terraform/scripts/test/put_secret_test.sh
+bash infra/terraform/scripts/test/kvs_put_test.sh
 shellcheck infra/terraform/scripts/test/*.sh \
-  infra/terraform/scripts/test/fakebin/aws
+  infra/terraform/scripts/test/fakebin/aws \
+  infra/terraform/scripts/test/kvs_fakebin/*
+node --test 'infra/terraform/modules/*/functions/test/*.test.mjs'
 for d in infra/terraform/modules/*/ infra/terraform/nonprod/*/ \
   infra/terraform/prod/*/; do tflint --chdir="$d" || printf 'FAIL %s\n' "$d"; done
 shellcheck infra/terraform/scripts/*.sh
@@ -203,9 +213,15 @@ shellcheck -x infra/terraform/scripts/precheck/*.sh \
 tflint(`brew install terraform-linters/tap/tflint` · 설정 파일 없음 — 기본
 terraform 규칙 묶음)는 루트 · 모듈마다 돌립니다. `--recursive` 는
 `scripts/testdata` 의 guard fixture 까지 읽어 늘 실패합니다.
-`put_secret_test.sh` 는 PATH 에 진짜 aws 가 있으면
+`put_secret_test.sh` · `kvs_put_test.sh` 는 PATH 에 진짜 aws 가 있으면
 닫힌 로컬 주소(`127.0.0.1:9`) · 가짜 자격으로 실물 CLI 계약 사례를 돌리고(AWS
 에 닿지 않음), 없으면 skip 으로 셉니다.
+
+`node --test` 는 CloudFront Function 셋의 단위 시험입니다(node 26 · 표준
+라이브러리만 — 패키지 설치 없음). 글롭은 따옴표로 감싸 node 가 풉니다 —
+디렉터리를 인자로 주면 node 26 은 실패하고, 맞는 파일이 없으면 시험 0개로
+종료 0 이므로 요약의 `tests` 수를 봅니다. node 는 실제 CloudFront 런타임이
+아닙니다 — 런타임 거동은 [엣지 시험 런북](runbooks/edge-tests.md)이 봅니다.
 
 `put_secret_test.sh` 의 정적 검사(`no-file-writes` · `no-external-commands` ·
 `no-endpoint-override` · `no-heredoc`)는 흔한 회귀를 잡는 울타리입니다. 일부러
@@ -216,27 +232,27 @@ PR 리뷰가 막습니다 — 실제 누출 방어는 실행 시험(실물 CLI �
 `infra/terraform/**` · `infra/media-host/**` 를 고친 PR 에서는
 `.github/workflows/infra-ci.yml`(infra-ci)이 위 명령을 모두 돌립니다.
 도구(terraform 1.16.4 · tflint 0.64.0 · conftest 0.71.1 · shellcheck
-0.11.0)는 sha256 을 고정해 내려받습니다. 필수 체크가 아니므로 머지 전에 PR
-화면의 체크 목록에서 infra-ci 의 세 체크(terraform · guard · shell)가
-초록인지 확인합니다. **체크가 목록에 없으면 통과가 아니라 돌지 않은
-것입니다** — 위 명령을 손으로 돌리고 결과를 PR 에 적습니다. CI 의 한계는
-다음과 같습니다.
+0.11.0 · node 26.4.0)는 sha256 을 고정해 내려받습니다. 필수 체크가 아니므로
+머지 전에 PR 화면의 체크 목록에서 infra-ci 의 네 체크(terraform · guard ·
+shell · cf-functions)가 초록인지 확인합니다. **체크가 목록에 없으면 통과가
+아니라 돌지 않은 것입니다** — 위 명령을 손으로 돌리고 결과를 PR 에 적습니다.
+CI 의 한계는 다음과 같습니다.
 
 *   변경 파일이 3,000개를 넘는 PR 에서는 paths 필터가 뒤쪽 파일을 보지
     못해 워크플로가 아예 돌지 않을 수 있습니다. 그런 PR 은 쪼개거나 위
     명령을 손으로 돌립니다.
 *   저장소가 공개라 CI 로그도 공개입니다. 시험에는 가짜 계정 ID · 가짜
     이름만 씁니다.
-*   두 시험이 러너 이미지의 AWS CLI 에 기댑니다. `put_secret_test.sh` 의
-    실물 CLI 계약 사례(위 닫힌 로컬 주소 · 가짜 자격으로만 부름)와 precheck
-    `testlib_test.sh` 의 실행 비트 사례(PATH 에 실행 가능한 aws 가 따로
-    있어야 뜻이 있음 — fakebin · init-message)입니다. 러너 라벨
+*   세 시험이 러너 이미지의 AWS CLI 에 기댑니다. `put_secret_test.sh` ·
+    `kvs_put_test.sh` 의 실물 CLI 계약 사례(위 닫힌 로컬 주소 · 가짜
+    자격으로만 부름)와 precheck `testlib_test.sh` 의 실행 비트 사례(PATH 에
+    실행 가능한 aws 가 따로 있어야 뜻이 있음 — fakebin · init-message)입니다. 러너 라벨
     `ubuntu-24.04` 는 OS 판만 고정하므로, 러너 이미지가 갱신되면 AWS CLI
     판이 바뀔 수 있습니다(그 실행의 판은 Set up job 로그 「Runner Image」).
     CI 는 `scripts/test/` 시험이 하나라도 skip 하면 실패로 봅니다. 러너에서
     AWS CLI 가 빠지면 shell 잡의 「단계 직전 점검 시험」 이 먼저 빨개지고,
-    뒤의 「스크립트 시험」(`put_secret_test.sh` 의 skip 판정 포함)과 그 뒤
-    단계는 건너뜁니다.
+    뒤의 「스크립트 시험」(두 시험의 skip 판정 포함)과 그 뒤 단계는
+    건너뜁니다.
 *   러너의 bash 는 5.2 입니다. 스크립트가 지키는 macOS bash 3.2 제약은
     로컬에서 돌려야 드러납니다.
 *   guard_test 의 `config-first-folded` 사례(ſ 를 s 로 접는 파일 시스템)는
@@ -284,6 +300,7 @@ guard 는 Terraform 트리의 금지 규약을 검사합니다. 규칙 R1 ~ R14 
 | R3 | 전체 | `aws_security_group` 자원 안 `ingress` · `egress`(블록 · 속성 · `dynamic "ingress"` · `dynamic "egress"`) |
 | R4 | `modules/state_bucket/` | `aws_s3_bucket` 자원 없음, 또는 그 자원 중 `lifecycle { prevent_destroy = true }`(리터럴 `true`)가 없는 것 |
 | R6 | `modules/secret_shells/` | `aws_secretsmanager_secret_policy` 선언(`count = 0` 이어도) · `aws_secretsmanager_secret` 자원의 인라인 `policy` 인자(값과 무관 — kty 61차) · 이름이 `names` 가 아닌 `variable`(읽기 역할 등 다른 입력). 대상 경로에 `.tf` 가 없으면 건너뜀. 모듈 밖(다른 루트가 출력 ARN 으로 비밀에 정책을 붙이는 것)은 보지 않음 — 리뷰가 막음 |
+| R8 | `modules/cdn_media/` · `modules/cdn_static_site/` · `prod/edge/` | 관리형 캐시 정책 `UseOriginCacheControlHeaders` · `UseOriginCacheControlHeaders-QueryStrings` 참조 — 어느 문자열이든(맵 키 · 설명 포함, 대소문자 무관) 이름 `UseOriginCacheControlHeaders` 가 들어 있거나 두 정책의 id(`83da9c7e-98b4-4e11-a168-04f0df8e2c65` · `4cc15a8a-d715-48a4-82b8-cc0b614638fe`)가 들어 있음 · `data "aws_cloudfront_cache_policy"` 의 `name` · `id` 가 식(대조할 수 없음). 쿠키 전부를 캐시 키에 넣어 서명 쿠키가 시청자마다 키를 쪼갠다(설계 3-3). 대상 경로에 `.tf` 가 없으면 위반 없음 |
 | R10 | `modules/media_host/` · `prod/media/` | **유형 허용 목록(경로 전체)**: 자원이 `aws_iam_role` · `aws_iam_instance_profile` · `aws_iam_role_policy` · `aws_iam_role_policy_attachment` · `aws_security_group` · `aws_vpc_security_group_ingress_rule` · `aws_vpc_security_group_egress_rule` · `aws_instance` · `aws_lb_target_group_attachment` · `aws_ssm_parameter` 밖, data 가 `aws_iam_policy_document` · `aws_caller_identity` · `aws_region` · `aws_partition` · `aws_ssm_parameter` · `aws_ec2_instance_type` · `terraform_remote_state` 밖(정책 조회 · 고객 관리 정책 · `awscc_*` · `aws_cloudformation_stack` 포함 — 두 경로가 지금 쓰는 유형만, 새 유형을 쓰려면 이 목록부터 고친다) · 최상위 블록이 `terraform` · `provider` · `variable` · `output` · `locals` · `resource` · `data` · `module` 밖(`ephemeral` · `action` · `check` · `import` · `moved` · `removed`) · `module` 이 `prod/media/` 의 `source = "../../modules/media_host"` 가 아님(`modules/media_host/` 안의 `module` 은 모두) · 공급자가 `hashicorp/aws` 가 아님(`provider` 블록 이름이 `aws` 가 아님 · `required_providers` 항목이 `aws = { source = "hashicorp/aws" … }` 가 아님 — 문자열 판 표기 포함). **관리형 연결**: 주소가 `managed` 하나가 아님 · `policy_arn` 이 `each.value` 가 아님 · `for_each` 가 `local.managed_policy_arns` 가 아님 · 그 지역값이 `{ AmazonSSMManagedInstanceCore = <그 ARN 리터럴> }` 하나가 아님 · 문자열 속 관리형 정책 ARN(`iam::aws:policy/<이름>`)의 이름이 그 리터럴이 아님. **정책 문서**: statement `actions` 원소가 `서비스:동작` 꼴(`^[a-z0-9-]+:[A-Za-z0-9]+$`)이 아님(허용 목록 — 와일드카드 · 템플릿 지시자 · 보간 · 공백 · 식 금지) · `iam:` · `sts:` 동작이 있음(Get · List 포함 — 서비스째 · iam · sts 밖 권한 상승 동작(`ssm:SendCommand` 등)은 동작 이름 형식만 본다 — 리뷰 몫). **역할 참조**: `aws_iam_role_policy` · `aws_iam_instance_profile` · `aws_iam_role_policy_attachment` 의 `role` 이 같은 경로의 `aws_iam_role.<이름>.name` · `.id` 참조가 아님 · `aws_instance` 의 `iam_instance_profile` 이 `aws_iam_instance_profile.<이름>.name` 참조가 아님(리터럴 이름 · 변수 · 가공 식 — 다른 서비스 역할 · 이미 있는 특권 프로필) · `aws_instance` 에 `launch_template` 이 있음(`dynamic` 포함 — 시작 템플릿에 달린 다른 프로필로 비켜 감) · `aws_instance` 에 `key_name` 이 있음(SSH 키 쌍 — 접속은 SSM 세션으로만) · `aws_instance` 의 `metadata_options` 블록 하나에 `http_tokens = "required"` 리터럴이 없음(블록 · 속성 없음 · 식 · `dynamic` 포함 — IMDSv1 은 SSRF 로 역할 자격을 내줌). **명령 블록**: 자원 본문에 `provisioner`(`local-exec` · `remote-exec` · `file`) · `connection` 이 있음(`dynamic` 포함 — 허용 유형 안에서도). **허용 속성**: IAM 자원(유형마다) · 정책 문서(`statement` · `version`) · statement(`sid` · `effect` · `actions` · `resources` · `condition`)가 허용 속성과 메타 인자 밖의 키를 씀 — `dynamic` 포함(역할 `inline_policy` · `managed_policy_arns` · `permissions_boundary`, 문서 합치기 `source_policy_documents` · `override_policy_documents`, statement `not_actions` · `not_resources` · `principals` 가 여기서 걸림). **역할 인라인 정책**: 정책 문서 `json` 이 아님(`jsonencode` 등 — 신뢰 정책 `assume_role_policy` 는 예외). **rds-db**: `dbuser:` 뒤 와일드카드(`*` · `?`) · 동작이 `rds-db:connect` 인 statement 의 Resource 가 `[for <u> in local.db_users : "…:dbuser:${var.rds_resource_id}/${<u>}"]` 꼴이 아님(파티션 · 리전 · 계정 자리만 참조 보간, 사용자 자리는 for 변수뿐) · 그 경로의 `local.db_users` 가 리터럴 목록 `["media_indexer", "media_janitor"]` 정확히가 아님 · rds-db 동작이 정책 문서 statement `actions` 밖에 있음. **lifecycle**: 거부 목록 그릇(`aws_ssm_parameter`)에 리터럴 `prevent_destroy` · `ignore_changes` 의 `value` 가 없음 · media_host 상자(`aws_instance`)의 `ignore_changes` 에 `ami` · `user_data_base64` 가 없음. **템플릿 지시자**: 대상 경로의 어느 문자열이든 `%{`(설명 · 맵 키 포함). 설명 문자열(`description`)은 rds-db 동작 이름 검사만 보지 않음(관리형 정책 ARN · dbuser 와일드카드 · 템플릿 지시자 검사는 설명도 봄). 대상 경로에 `.tf` 가 없으면 건너뜀. 모듈 밖(다른 모듈 · 다른 루트가 출력 `instance_role_arn` 의 역할에 정책을 붙이는 것)은 보지 않음 — 리뷰가 막음 |
 | R11 | `nonprod/dev/` | `aws_instance` · `aws_eip` · `aws_security_group` 중 없는 유형이 있음, 또는 그 자원 중 리터럴 `prevent_destroy = true` 가 없는 것 |
 | R12 | `nonprod/dns-legacy/` | 운영 트리: ① 그 루트 바로 아래 `.tf` 없음 ② 주소가 정확히 `aws_route53_zone.legacy` 인 선언 없음 ③ 그 루트의 `aws_route53_zone` 중 리터럴 `prevent_destroy = true` 가 없는 것. fixture 트리는 ① · ② 의 부재만 건너뜀(③ 은 그대로) |
@@ -308,9 +325,10 @@ dev SG 규칙 자원은 M12 가 8082 규칙을 지우므로 R11 대상이 아닙
 
 R8 · R9 는 계획이 번호를 정해 둔 규칙이라, 그 규칙이 지키는 루트 ·
 모듈과 같은 PR 에서 그 번호로 `policy/guard/` 에 더합니다(정책 · `_test.rego` ·
-fixture 를 함께). R10 은 그렇게 `modules/media_host` · `prod/media` 와 함께
-들어왔습니다. R5 · R7 은 **보류**입니다 — R5 는 재개 키트(결정 46), R7 은
-CI 자동 푸시를 켜는 후속 PR(40차)이 더합니다.
+fixture 를 함께). R10 은 그렇게 `modules/media_host` · `prod/media` 와 함께,
+R8 은 엣지 모듈 둘 · `prod/edge` 와 함께 들어왔습니다. R5 · R7 은
+**보류**입니다 — R5 는 재개 키트(결정 46), R7 은 CI 자동 푸시를 켜는 후속
+PR(40차)이 더합니다.
 
 ### 설치와 실행
 

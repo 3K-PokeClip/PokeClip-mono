@@ -36,7 +36,7 @@
 | 런타임 1단 → media | `rds_endpoint` · `rds_db_name` · `rds_resource_id` · `rds_sg_id` · `rewind_bucket_arn` | 사이드카 · janitor env(주소 · DB 이름) · Media 인스턴스 역할의 `rds-db:connect`(대상 = `rds_resource_id`) · Media ↔ RDS 5432 규칙 한 쌍 · 사이드카 S3(rewind) 업로드 정책(대상 = `rewind_bucket_arn/*`) | RDS · DB 사용자 · GRANT = 런타임(DB 사용자 · GRANT 는 Terraform 이 아니라 `prod/runtime/sql/` 과 [runtime-1a 런북](runbooks/runtime-1a.md)), 접속 정책 · SG 규칙 · 업로드 정책 = media |
 | 런타임 1단 → media | `media_secret_arns`(비밀 전체 ARN 목록 `list(string)` — media_host 변수와 같은 꼴. 지금은 `INTERNAL_API_TOKEN` 그릇 하나, 앱의 그릇과 같은 ARN) | Media 인스턴스 역할 읽기 정책. 한계: 이 열쇠는 auth `/internal/**` 전부에 통한다(전용 토큰은 런타임 1단-나에서 3번과 재합의) | 그릇 · 값 = 런타임, 읽기 정책 = media |
 | 런타임 1단 → media | `broadcast_topic_arn` | 사이드카 역할의 `sns:Publish` 대상(계약9 발행 — `MessageDeduplicationId = eventId`). 발행 권한은 media 역할의 신원 정책이다 — 주제 정책은 계정 루트만 주체로 둔다(기본 정책의 `Principal *` 없음) | 주제 · 주제 정책 = 런타임, 발행 정책 = media |
-| 런타임 1단 → edge | `rewind_bucket_{name,arn,regional_domain_name}` | `cdn_media` 의 `rewind-s3` 오리진 | 버킷 = 런타임 |
+| 런타임 1단 → edge | `rewind_bucket_regional_domain_name` | `cdn_media` 의 `rewind-s3` 오리진 도메인. edge 는 이 하나만 읽는다 — `rewind_bucket_name` · `rewind_bucket_arn` 은 런타임 2단 버킷 정책 몫이다 | 버킷 = 런타임 |
 | edge → 런타임 2단 | `media_distribution_arn` | rewind 버킷 정책의 OAC 허용문(조건 `AWS:SourceArn`) | 버킷 정책 = 런타임 2단 |
 | platform · media → 런타임 2단 | `service_sg_ids`(auth · clip · next) · `media_sg_id` | Media 이그레스 → auth · auth 인그레스 ← Media(내부 resolve), chat-collector · chat-detector ↔ auth · clip 규칙 | SG 규칙 = 런타임 2단 |
 | 런타임 → 엣지 시험 | 시험 계정 · 계약9 억제 조건 | 루프백 · T1 부터 T3 · T8 | 런타임 |
@@ -61,6 +61,13 @@ clip ↔ auth · RDS ← auth · clip · 로드밸런서 → Media 규칙은 위
 
 *   **rewind 버킷 이름**: media 는 이름 출력을 따로 받지 않고
     `rewind_bucket_arn`(`arn:aws:s3:::<이름>`)에서 꺼냅니다.
+*   **rewind 버킷 CORS**: 두지 않습니다(사전 요청이 없을 때). 브라우저는
+    되감기 · VOD 를 media 배포의 `/dvr/*` · `/vod/*` 로만 받고, CORS 응답
+    헤더는 그 비헤이비어의 응답 헤더 정책(media-cors)이 붙입니다. 플레이어
+    요청이 사용자 정의 헤더 없는 GET 이라 사전 요청(OPTIONS)이 없다는 전제이고
+    (허용 헤더 기본 빈 목록 — G14), T1 · T10 에서 OPTIONS 가 생기면 다시
+    봅니다. `prod/runtime/rewind_bucket.tf` 머리 주석 「edge 에 묻는다」 의
+    답입니다.
 *   **비밀 암호화 키**: 앱 비밀 그릇은 기본 KMS 키(`aws/secretsmanager`)를
     전제합니다. 고객 관리 키로 바꾸면 그 비밀을 읽는 실행 역할(platform)에
     그 키의 `kms:Decrypt` 를 더해야 합니다 — 같은 PR 에서 platform 도
