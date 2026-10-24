@@ -1110,7 +1110,7 @@ public class StreamSession {
             // 원본도 넣기만 한다 — 인코드·창·업로드는 전부 아카이브 스레드 몫이다.
             archive.offer(new ArchivableChat(current.platform(), message.channelId(), receivedAt, message.raw()));
             // 중계도 넣기만 한다. 🔴 시각은 <b>표에 저장하는 값</b>(message_time)이다 — 수신 시각이 아니다.
-            // 프론트가 창구 결과와 겹침을 (kind, time, senderChannelId, text)로 거르고 메울 때
+            // 프론트가 창구 결과와 겹침을 (kind, time, senderChannelId, text, platform)으로 거르고 메울 때
             // from = time − appliedOffsetMs로 부르므로, 축이 갈리면 두 번 뜨거나 구간을 건너뛴다(F3).
             relay.offer(streamId, new RelayPayload.Chat(current.platform(), Instant.ofEpochMilli(message.messageTimeMillis()),
                     message.nickname(), message.senderChannelId(), message.userRole(), message.content()));

@@ -234,7 +234,7 @@ class RelayBufferTest {
     /**
      * 후원은 표({@code PersistableDonation})와 <b>같은 값</b>으로 정규화한다 — 종류·문구·
      * 보낸 사람이 null이면 표는 빈 문자열로 접는다. 여기서 null로 두면 겹침 열쇠
-     * ({@code kind, time, senderChannelId, text})가 창구와 SSE 사이에서 갈려 같은 후원이
+     * ({@code kind, time, senderChannelId, text, platform})가 창구와 SSE 사이에서 갈려 같은 후원이
      * 화면에 두 번 뜬다(F3).
      */
     @Test

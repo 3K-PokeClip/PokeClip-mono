@@ -1,6 +1,7 @@
 package com.pokeclip.chat.collector.query;
 
 import com.pokeclip.chat.collector.Platform;
+
 import java.time.Instant;
 
 /**

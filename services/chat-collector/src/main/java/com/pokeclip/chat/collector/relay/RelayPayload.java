@@ -9,7 +9,7 @@ import java.time.Instant;
  * (계획 검증 F9). 부르는 쪽이 번호를 들 수 없게 타입으로 막는다.
  *
  * <p><b>칸 이름과 시각 축이 {@code query.ChatWindowItem}과 같다</b>(main 결정 F3). 프론트는
- * 범위 창구로 메운 구간과 SSE가 겹칠 때 {@code (kind, time, senderChannelId, text)}로 거르는데,
+ * 범위 창구로 메운 구간과 SSE가 겹칠 때 {@code (kind, time, senderChannelId, text, platform)}으로 거르는데,
  * 한쪽 값이 다르면 같은 채팅이 두 번 뜬다. 그래서:
  * <ul>
  *   <li>{@code time}은 <b>표에 저장되는 값</b>이다 — 채팅은 {@code message_time}(치지직 시각),
