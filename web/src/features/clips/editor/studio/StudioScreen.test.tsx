@@ -158,6 +158,14 @@ describe('StudioScreen', () => {
     ).toHaveAttribute('role', 'status');
   });
 
+  it.each(['idle', 'loading', 'single'] as const)(
+    '미리 듣기가 %s이면 실패로 알리지 않는다: 창을 기다리거나 · 받는 중이거나 · 트랙이 하나뿐일 뿐이다(PR #341 claude)',
+    (status) => {
+      renderStudio({ trackPreview: { status, levels: null, setGains: vi.fn() } });
+      expect(screen.queryByText(/트랙별 미리 듣기를 못 불러왔어요/)).not.toBeInTheDocument();
+    },
+  );
+
   it('자막이 아직 없으면 자막 줄을 그리지 않는다', () => {
     const { container } = renderStudio({ initialSubtitleStatus: 'idle' });
     const labels = [...container.querySelectorAll('[data-row-label]')].map((el) => el.textContent);

@@ -9,9 +9,14 @@ import { followVideo, TrackAudioPlayer, type AudioContextLike } from './trackAud
 // 트랙별 미리 듣기(POK-389): 영상이 받은 창(구간 ± 여유)의 녹화 조각을 받아 트랙마다 풀고, 영상 노드를 따라 튼다.
 // 트랙을 끄거나 음량을 바꾸면 미리보기 소리에도 바로 들린다(저장·렌더와 같은 트랙 번호).
 //
-// 못 부르면(소리 문맥 없음·주소 실패·소리 트랙이 하나뿐) 「unavailable」이고 영상 소리가 그대로 난다: 화면이 그 사실을 알린다.
+// 못 부르면(소리 문맥 없음·주소·받기·풀기 실패) 「unavailable」이고 영상 소리가 그대로 난다: 화면이 그 사실을 알린다.
 
-export type TrackPreviewStatus = 'loading' | 'ready' | 'unavailable';
+/**
+ * - idle: 받을 창이 없다(첫 영상 창을 받는 중 · 녹화가 없는 구간). 알릴 것이 없다
+ * - single: 소리 트랙이 하나뿐이다(최종 믹스만). 영상 소리와 같아 고를 소리가 없을 뿐 실패가 아니다
+ * - unavailable: 못 불렀다. 영상 소리로 들린다고 화면이 알린다
+ */
+export type TrackPreviewStatus = 'idle' | 'loading' | 'ready' | 'single' | 'unavailable';
 
 export interface TrackPreview {
   status: TrackPreviewStatus;
@@ -48,7 +53,7 @@ export function useTrackPreview(options: {
   const { streamId, baseMs, video, createContext = defaultContext } = options;
   const startSeconds = options.window?.startSeconds ?? null;
   const endSeconds = options.window?.endSeconds ?? null;
-  const [status, setStatus] = useState<TrackPreviewStatus>('loading');
+  const [status, setStatus] = useState<TrackPreviewStatus>('idle');
   const [player, setPlayer] = useState<TrackAudioPlayer | null>(null);
   const [levels, setLevels] = useState<TrackLevels | null>(null);
   const contextRef = useRef<DecodingContext | null>(null);
@@ -56,8 +61,11 @@ export function useTrackPreview(options: {
   const createRef = useRef(createContext);
 
   useEffect(() => {
+    // 영상이 아직 창을 못 받았거나(첫 창을 받는 중) 녹화가 없는 구간이다: 실패가 아니라 들을 것이 없다(PR #341 claude)
     if (startSeconds === null || endSeconds === null) {
-      setStatus('unavailable');
+      setStatus('idle');
+      setPlayer(null);
+      setLevels(null);
       return undefined;
     }
     let ctx = contextRef.current;
@@ -102,9 +110,14 @@ export function useTrackPreview(options: {
         if (cancelled) return;
         // 파형은 트랙이 하나뿐이어도 그린다(소리 크기는 보여 줄 수 있다)
         setLevels(measureLevels(tracks, startSeconds, endSeconds));
-        // 트랙이 하나뿐이면(최종 믹스만) 영상 소리와 같다: 트랙을 꺼도 고를 소리가 없다
-        if (tracks.length < 2) {
+        // 소리 트랙을 하나도 못 꺼냈으면 못 부름이다
+        if (tracks.length === 0) {
           setStatus('unavailable');
+          return;
+        }
+        // 트랙이 하나뿐이면(최종 믹스만) 영상 소리와 같다: 트랙을 꺼도 고를 소리가 없을 뿐 실패가 아니다(PR #341 claude)
+        if (tracks.length === 1) {
+          setStatus('single');
           return;
         }
         made = new TrackAudioPlayer(decoder, tracks, () => {
@@ -136,12 +149,12 @@ export function useTrackPreview(options: {
     [],
   );
 
-  // 영상 소리는 「못 부름」일 때만 켠다. 불러오는 동안에도 끈다: 창을 다시 받는 사이 영상 소리(최종 믹스)를 켜면 뺀 트랙까지
-  // 섞여 들렸다(로컬 리뷰 1라운드). 소리 문맥이 늦게 뜨는 1~2초는 조용하다
+  // 영상 소리는 재생기가 트는 동안(ready)과 불러오는 동안 끈다. 불러오는 동안 끄는 까닭: 창을 다시 받는 사이 영상 소리(최종 믹스)를
+  // 켜면 뺀 트랙까지 섞여 들렸다(로컬 리뷰 1라운드). 소리 문맥이 늦게 뜨는 1~2초는 조용하다
   useEffect(() => {
     if (video === null) return undefined;
     const wasMuted = video.muted;
-    video.muted = status !== 'unavailable';
+    video.muted = status === 'loading' || status === 'ready';
     return () => {
       video.muted = wasMuted;
     };

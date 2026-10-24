@@ -9,6 +9,10 @@ import { TRACK_LOAD_TIMEOUT_MS, useTrackPreview } from './useTrackPreview';
 vi.mock('@/api/clipEditor', () => ({ requestSegmentAudioAccess: vi.fn() }));
 
 const fixture = readFileSync(join(__dirname, '__fixtures__', 'three-tracks.m4s'));
+// 소리 트랙 하나짜리(최종 믹스만 녹화한 방송). three-tracks.m4s와 같은 ffmpeg 명령에서 소리를 하나만 넣었다:
+//   ffmpeg -f lavfi -i testsrc=size=64x36:rate=10:duration=1 -f lavfi -i sine=440:48000 -map 0:v -map 1:a -t 1
+//          -c:v libx264 -g 5 -c:a aac -b:a 32k -ac 2 -f mp4 -movflags frag_keyframe+empty_moov+default_base_moof one-track.m4s
+const oneTrack = readFileSync(join(__dirname, '__fixtures__', 'one-track.m4s'));
 const BASE = 1_000_000;
 const WINDOW = { startSeconds: 10, endSeconds: 40 };
 
@@ -248,7 +252,7 @@ describe('useTrackPreview', () => {
     expect(node.muted).toBe(false);
   });
 
-  it('주소를 못 받거나 소리 트랙이 하나뿐이면 못 부름이다', async () => {
+  it('주소를 못 받거나 소리 트랙을 하나도 못 꺼내면 못 부름이다', async () => {
     vi.mocked(requestSegmentAudioAccess).mockRejectedValueOnce(new Error('503'));
     const first = renderHook(() =>
       useTrackPreview({
@@ -261,7 +265,7 @@ describe('useTrackPreview', () => {
     );
     await waitFor(() => expect(first.result.current.status).toBe('unavailable'));
 
-    // 소리 트랙 하나짜리 조각
+    // 소리 트랙을 못 꺼내는 조각(상자가 없다)
     vi.mocked(fetch).mockResolvedValue(new Response(new Uint8Array(16)));
     const second = renderHook(() =>
       useTrackPreview({
@@ -273,5 +277,39 @@ describe('useTrackPreview', () => {
       }),
     );
     await waitFor(() => expect(second.result.current.status).toBe('unavailable'));
+  });
+
+  it('소리 트랙이 하나뿐이면 실패가 아니라 「고를 소리 없음」이다: 영상 소리가 그대로 난다(PR #341 claude)', async () => {
+    vi.mocked(fetch).mockResolvedValue(new Response(new Uint8Array(oneTrack)));
+    const node = video();
+    const { result } = renderHook(() =>
+      useTrackPreview({
+        streamId: 's-1',
+        baseMs: BASE,
+        window: WINDOW,
+        video: node,
+        createContext: () => fakeContext().ctx as never,
+      }),
+    );
+    await waitFor(() => expect(result.current.status).toBe('single'));
+    expect(node.muted).toBe(false);
+    // 파형은 그린다(소리 크기는 보여 줄 수 있다)
+    expect(result.current.levels?.tracks).toHaveLength(1);
+  });
+
+  it('영상이 아직 창을 못 받았으면(첫 창을 받는 중 · 녹화 틈) 묻지 않고 기다린다: 실패로 알리지 않는다(PR #341 claude)', () => {
+    const node = video();
+    const { result } = renderHook(() =>
+      useTrackPreview({
+        streamId: 's-1',
+        baseMs: BASE,
+        window: null,
+        video: node,
+        createContext: () => fakeContext().ctx as never,
+      }),
+    );
+    expect(result.current.status).toBe('idle');
+    expect(requestSegmentAudioAccess).not.toHaveBeenCalled();
+    expect(node.muted).toBe(false);
   });
 });
