@@ -5,8 +5,8 @@
 #
 # start_test 의 응답기 모드 외부 입력 사례(사례 51 – 61)와 도우미 — 시작
 # 스크립트가 응답기 모드에서만 4C 토큰(Secrets Manager) · 거부 목록(SSM) ·
-# 상태 디렉터리 · IP 한도 env 파일을 다루고, compose 렌더본과 모드가 어긋나면
-# 막는지, 옛 모드는 그 무엇도 보지 않는지, 정지 스크립트가 링크인 응답기
+# 상태 디렉터리 · IP 한도 env 파일을 다루고, compose 렌더본의 응답기 서비스
+# 줄이 모드를 정할 수 없는 꼴이면 막는지, 옛 모드는 그 무엇도 보지 않는지, 정지 스크립트가 링크인 응답기
 # 디렉터리를 따라가지 않는지, 거부 목록 디렉터리 · 자리의 링크 · 상대 경로 ·
 # 임시 파일 · rename 실패를 막고 앞 기동이 남긴 임시 파일을 치우는지 본다.
 #
@@ -397,24 +397,27 @@ $(harness::log_tail "${fixture_dir}/out")"
 }
 
 #######################################
-# 사례 57 — 모드 대조: compose 렌더본의 `  ingest-auth:` 줄 수가 모드와
-# 어긋나면(옛 모드 + 1 · 응답기 모드 + 0 · 2 · 뒤 공백 꼴) 4C · 거부 목록을 받기
-# 전에 막는다.
+# 사례 57 — 모드 원천: compose 렌더본의 `  ingest-auth:` 줄이 모드를 정할 수 없는
+# 꼴이면(2 · 뒤 공백 꼴 · 같은 줄 값 · 정상 줄 + 뒤 공백 꼴) 운영 템플릿
+# 원본으로도 4C · 거부 목록을 받기 전에 막는다. 템플릿과 compose 의 모드는
+# 어긋날 수 없다 — 모드는 compose 하나가 정하고 템플릿은 두 모드를 다 품는다
+# (블록이 빠진 템플릿은 사례 63 의 template-mode).
 #######################################
 auth_input::case_mode_mismatch() {
-  local ok=0 row n tmpl
+  local ok=0 row
   auth_mode::prod_template || return 1
-  for row in 'legacy 1' 'auth 0' 'auth 2' 'auth space'; do
-    n="${row#* }"
+  for row in two space inline exact-and-space; do
     fixture::new_case
-    if [[ "${n}" == space ]]; then
-      printf 'services:\n  ingest-auth: \n' >"${fixture_dir}/compose.yml"
-    else
-      auth_input::write_compose "${n}"
-    fi
-    tmpl="${auth_mode_tmpl}"
-    [[ "${row% *}" != legacy ]] || tmpl="${TEST_DIR}/mediamtx.test.yml.tmpl"
-    auth_mode::run "${tmpl}" || return 1
+    case "${row}" in
+      two) auth_input::write_compose 2 ;;
+      space) printf 'services:\n  ingest-auth: \n' \
+        >"${fixture_dir}/compose.yml" ;;
+      inline) printf 'services:\n  ingest-auth: {image: x}\n' \
+        >"${fixture_dir}/compose.yml" ;;
+      exact-and-space) printf 'services:\n  ingest-auth:\n  ingest-auth: \n' \
+        >"${fixture_dir}/compose.yml" ;;
+    esac
+    auth_mode::run "${auth_mode_tmpl}" || return 1
     auth_input::expect_blocked "${row}" "${AUTH_MISMATCH_LINE}" 1 || ok=1
     if [[ -e "${fixture_dir}/deny" ]]; then
       harness::add_reason "${row}: 거부 목록 디렉터리가 생김"

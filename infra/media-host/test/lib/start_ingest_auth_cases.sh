@@ -1,18 +1,19 @@
 # shellcheck shell=bash
-# 전역(fixture_* · FIXTURE_* · API_PASS_* · PROD_MTX_TEMPLATE · RENDER_VARS_FILE
-# 등)은 start_fixture.sh · render.sh · start_test.sh 가 정의한다.
+# 전역(fixture_* · FIXTURE_* · API_PASS_* · PROD_MTX_TEMPLATE 등)은
+# start_fixture.sh · start_test.sh 가 정의한다.
 # shellcheck disable=SC2154
 #
 # start_test 의 응답기 모드 사례(사례 42 – 50)와 판정 도우미 — 시작 스크립트가
-# 1단계 렌더본 MediaMTX 템플릿의 토큰 집합으로 모드를 가르고, 응답기 모드에서
-# 생성 셋(Basic 비밀번호 · SRT 송출 잠금 · 읽기 잠금)을 만들어 채우며, API
-# 비밀번호를 사이드카 파일과 응답기 파일(RUNTIME_DIR/ingest-auth/) 두 곳에 두는지
-# 본다. 정지 스크립트가 응답기 파일을 지우는지도 본다.
+# compose 렌더본의 응답기 서비스 줄로 모드를 정하고 템플릿에서 그 모드 블록을
+# 고른 뒤 토큰 집합이 그 모드 꼴인지 보며, 응답기 모드에서 생성 셋(Basic
+# 비밀번호 · SRT 송출 잠금 · 읽기 잠금)을 만들어 채우고, API 비밀번호를 사이드카
+# 파일과 응답기 파일(RUNTIME_DIR/ingest-auth/) 두 곳에 두는지 본다. 정지
+# 스크립트가 응답기 파일을 지우는지도 본다.
 #
-# 응답기 모드 템플릿은 운영 템플릿을 ingest_auth_image 를 채운 변수 파일로
-# templatefile() 렌더한 것이다(시험 전용 고정 템플릿을 따로 두지 않는다 — 운영
-# 템플릿의 토큰 자리 · @@@ 경계를 그대로 흘린다). 모드 판정 표 · 경계 사례만
-# 사례 안에서 짧은 본문을 만든다.
+# 응답기 모드 템플릿은 운영 템플릿 원본(상자에 렌더 없이 깔리는 저장소 파일)
+# 이다(시험 전용 고정 템플릿을 따로 두지 않는다 — 운영 템플릿의 토큰 자리 · @@@
+# 경계를 그대로 흘린다). 모드 판정 표 · 경계 사례만 사례 안에서 짧은 본문을
+# 만든다.
 #
 # start_test.sh 가 harness.sh · start_fixture.sh · render.sh 를 먼저 source 한
 # 뒤 이 파일을 source 한다. 이 파일은 source 해서 쓴다(실행하지 않는다). bash
@@ -27,14 +28,12 @@ readonly AUTH_BASIC_NAME='ingest_basic_pass'
 readonly AUTH_OWNER='10003:10003'
 readonly AUTH_GENERATED_LINE=\
 'MEDIA START BLOCKED: generated credential unavailable'
-# 응답기 모드를 고르는 템플릿 변수 값(가짜 — 렌더에만 쓴다).
-readonly AUTH_IMAGE="registry.pcbench-edge-proxy.invalid/media-ingest-auth@\
-sha256:4444444444444444444444444444444444444444444444444444444444444444"
 # 짧은 본문의 Basic 줄 꼴 — 운영 템플릿처럼 토큰 바로 뒤에 @ 가 붙는다.
 readonly AUTH_BASIC_LINE_HEAD="basic: 'http://u:"
 readonly AUTH_BASIC_LINE_TAIL="@127.0.0.1:8080/a'"
 
-# 운영 템플릿의 응답기 갈래 렌더본(auth_mode::prod_template 이 채운다).
+# 응답기 모드 사례의 템플릿 — 운영 템플릿 원본(auth_mode::prod_template 이
+# 채운다).
 auth_mode_tmpl=""
 # 마지막 실행의 비밀 값(auth_mode::read_values 가 채운다).
 auth_basic=""
@@ -43,41 +42,35 @@ auth_read=""
 auth_api=""
 
 #######################################
-# 운영 템플릿을 응답기 갈래로 한 번 렌더해 auth_mode_tmpl 에 둔다(이미 있으면
-# 그대로). 렌더본의 토큰 집합이 응답기 모드 꼴(CDN · Basic · 잠금 둘 각 1 · API
-# 비밀번호 0)인지도 본다 — 아니면 이 사례들이 응답기 모드를 시험하지 못한다.
+# 운영 템플릿 원본을 auth_mode_tmpl 에 둔다(이미 정했으면 그대로). 그 응답기
+# 모드 블록을 고른 내용(fixture::mode_body)의 토큰 집합이 응답기 모드 꼴(CDN ·
+# Basic · 잠금 둘 각 1 · API 비밀번호 0)인지도 본다 — 아니면 이 사례들이 응답기
+# 모드를 시험하지 못한다.
 # Globals:
-#   auth_mode_tmpl, fixture_root, PROD_MTX_TEMPLATE, RENDER_VARS_FILE
+#   auth_mode_tmpl, fixture_root, PROD_MTX_TEMPLATE
 #######################################
 auth_mode::prod_template() {
-  local tmpl="${fixture_root}/prod.auth.tmpl" vars="${fixture_root}/auth.json"
-  local token want got
-  if [[ -n "${auth_mode_tmpl}" && -f "${auth_mode_tmpl}" ]]; then
+  local tmpl="${fixture_root}/prod.auth.tmpl" token want got
+  if [[ -n "${auth_mode_tmpl}" ]]; then
     return 0
   fi
-  if ! jq --arg image "${AUTH_IMAGE}" '.ingest_auth_image = $image' \
-    "${RENDER_VARS_FILE}" >"${vars}" 2>"${vars}.err"; then
-    harness::add_reason "응답기 변수 파일 실패: $(harness::log_tail \
-"${vars}.err")"
+  if [[ ! -f "${PROD_MTX_TEMPLATE}" ]]; then
+    harness::add_reason 'mediamtx.yml.tmpl 없음'
     return 1
   fi
-  if ! render::template "${PROD_MTX_TEMPLATE}" "${vars}" "${tmpl}" \
-    2>"${tmpl}.err"; then
-    harness::add_reason "운영 템플릿 응답기 갈래 렌더 실패: $(harness::log_tail \
-"${tmpl}.err")"
-    return 1
-  fi
+  fixture::mode_body ingest-auth "${PROD_MTX_TEMPLATE}" "${tmpl}"
   for token in "${FIXTURE_SECRET_TOKEN}=1" "${FIXTURE_API_PASS_TOKEN}=0" \
     "${AUTH_BASIC_TOKEN}=1" "${AUTH_PUBLISH_LOCK_TOKEN}=1" \
     "${AUTH_READ_LOCK_TOKEN}=1"; do
     want="${token##*=}"
     got="$(grep -o -F -- "${token%=*}" "${tmpl}" | awk 'END { print NR }')"
     if [[ "${got}" != "${want}" ]]; then
-      harness::add_reason "응답기 갈래 렌더본의 ${token%=*} ${got}개(기대 ${want})"
+      harness::add_reason "운영 템플릿 응답기 모드 블록의 ${token%=*} ${got}개\
+(기대 ${want})"
       return 1
     fi
   done
-  auth_mode_tmpl="${tmpl}"
+  auth_mode_tmpl="${PROD_MTX_TEMPLATE}"
 }
 
 #######################################
@@ -97,15 +90,19 @@ auth_mode::run() {
 }
 
 #######################################
-# 토큰마다 정한 수만큼 줄을 둔 짧은 템플릿 본문을 파일에 쓴다. Basic 줄은 운영
+# 토큰마다 정한 수만큼 줄을 둔 짧은 템플릿 본문을 파일에 쓴다 — 토큰 줄은 모두
+# 한 모드의 블록 안이고, 다른 모드 블록은 표지 둘뿐이다. Basic 줄은 운영
 # 템플릿처럼 토큰 바로 뒤에 @ 가 붙는다.
 # Arguments:
-#   출력 파일, CDN · API · Basic · 송출 잠금 · 읽기 잠금 토큰 수.
+#   출력 파일, 블록 모드(legacy | ingest-auth), CDN · API · Basic · 송출 잠금 ·
+#   읽기 잠금 토큰 수.
 #######################################
 auth_mode::write_body() {
-  local out="$1" i
-  shift
+  local out="$1" mode="$2" other=legacy i
+  [[ "${mode}" != legacy ]] || other=ingest-auth
+  shift 2
   {
+    printf '# @mode %s begin\n' "${mode}"
     for (( i = 0; i < $1; i++ )); do
       printf 'hlsCDNSecret: "%s"\n' "${FIXTURE_SECRET_TOKEN}"
     done
@@ -122,6 +119,8 @@ auth_mode::write_body() {
     for (( i = 0; i < $5; i++ )); do
       printf "  srtReadPassphrase: '%s'\n" "${AUTH_READ_LOCK_TOKEN}"
     done
+    printf '# @mode %s end\n# @mode %s begin\n# @mode %s end\n' "${mode}" \
+      "${other}" "${other}"
     printf 'paths:\n  all_others:\n'
   } >"${out}"
 }
@@ -179,9 +178,9 @@ auth_mode::read_values() {
 }
 
 #######################################
-# 렌더 파일이 템플릿의 토큰 다섯 자리를 각 값으로 바꾼 것과 같은지(그 밖의
-# 바이트 불변), @@ 가 남지 않았는지, 0400 인지 본다. API 비밀번호 자리는 응답기
-# 모드 템플릿에 없다.
+# 렌더 파일이 템플릿의 응답기 모드 블록을 고른 내용(fixture::mode_body)에서
+# 토큰 넷 자리를 각 값으로 바꾼 것과 같은지(그 밖의 바이트 불변), @@ 가 남지
+# 않았는지, 0400 인지 본다. API 비밀번호 자리는 응답기 모드 블록에 없다.
 # Globals:
 #   fixture_dir, auth_basic, auth_publish, auth_read
 # Arguments:
@@ -190,6 +189,8 @@ auth_mode::read_values() {
 auth_mode::check_render() {
   local ok=0 target="${fixture_dir}/runtime/mediamtx.yml"
   local expected="${fixture_dir}.auth.expected.yml"
+  local selected="${fixture_dir}.auth.selected.tmpl"
+  fixture::mode_body ingest-auth "$1" "${selected}"
   PCBENCH_T1="${FIXTURE_SECRET_TOKEN}" PCBENCH_V1="${FIXTURE_FAKE_SECRET}" \
     PCBENCH_T2="${AUTH_BASIC_TOKEN}" PCBENCH_V2="${auth_basic}" \
     PCBENCH_T3="${AUTH_PUBLISH_LOCK_TOKEN}" PCBENCH_V3="${auth_publish}" \
@@ -200,7 +201,7 @@ auth_mode::check_render() {
     }
     { for (n = 1; n <= 4; n++)
         put(ENVIRON["PCBENCH_T" n], ENVIRON["PCBENCH_V" n])
-      print }' "$1" >"${expected}"
+      print }' "${selected}" >"${expected}"
   if ! cmp -s -- "${expected}" "${target}"; then
     harness::add_reason '렌더 내용이 「토큰 넷을 각 값으로」 와 다름'
     ok=1
@@ -403,16 +404,19 @@ ${auth_basic}@127.0.0.1:8080/mediamtx/auth'" \
 }
 
 #######################################
-# 모드 판정 표 한 행을 돌린다.
+# 모드 판정 표 한 행을 돌린다. 토큰 줄은 compose 가 고르는 모드의 블록 안에
+# 둔다.
 # Arguments:
-#   기대(legacy | auth | token), 토큰 수 다섯(CDN · API · Basic · 송출 · 읽기).
+#   기대(legacy | auth | token), compose 응답기 줄 수(0 | 1), 토큰 수
+#   다섯(CDN · API · Basic · 송출 · 읽기).
 #######################################
 auth_mode::table_row() {
-  local want="$1" tmpl shape="$2 $3 $4 $5 $6" ok=0
+  local want="$1" tmpl shape="$2: $3 $4 $5 $6 $7" ok=0 mode=ingest-auth
+  [[ "$2" != 0 ]] || mode=legacy
   fixture::new_case
   tmpl="${fixture_dir}.body.tmpl"
-  auth_mode::write_body "${tmpl}" "$2" "$3" "$4" "$5" "$6"
-  [[ "${want}" != legacy ]] || auth_input::write_compose 0
+  auth_mode::write_body "${tmpl}" "${mode}" "$3" "$4" "$5" "$6" "$7"
+  auth_input::write_compose "$2"
   auth_mode::run "${tmpl}" || return 1
   case "${want}" in
     token)
@@ -482,16 +486,20 @@ ${AUTH_BASIC_LINE_TAIL}" "${fixture_dir}/runtime/mediamtx.yml")" != 1 ]]; then
 }
 
 #######################################
-# 사례 43 — 모드 판정 표: 옛 꼴 · 응답기 꼴만 받고, 부분 집합 · 섞임 · CDN 없음 ·
-# 토큰 두 번은 template-token 으로 막는다(렌더 · 파일 0).
+# 사례 43 — 모드 판정 표: compose 가 고른 모드 블록의 토큰 집합이 그 모드 꼴일
+# 때만 받는다. 부분 집합 · 섞임 · CDN 없음 · 토큰 두 번 · 다른 모드 꼴(옛
+# 모드에 응답기 꼴 · 응답기 모드에 옛 꼴)은 template-token 으로 막는다(렌더 ·
+# 파일 0).
 #######################################
 auth_mode::case_mode_table() {
   local ok=0 row
-  for row in 'legacy 1 1 0 0 0' 'auth 1 0 1 1 1' \
-    'token 1 0 1 1 0' 'token 1 0 1 0 1' 'token 1 0 0 1 1' \
-    'token 1 1 1 1 1' 'token 1 1 0 0 1' 'token 1 1 1 0 0' \
-    'token 0 0 1 1 1' 'token 1 0 2 1 1' 'token 1 0 1 1 2' \
-    'token 2 0 1 1 1' 'token 1 0 0 0 0' 'token 0 0 0 0 0'; do
+  for row in 'legacy 0 1 1 0 0 0' 'auth 1 1 0 1 1 1' \
+    'token 1 1 0 1 1 0' 'token 1 1 0 1 0 1' 'token 1 1 0 0 1 1' \
+    'token 1 1 1 1 1 1' 'token 1 1 1 0 0 1' 'token 1 1 1 1 0 0' \
+    'token 1 0 0 1 1 1' 'token 1 1 0 2 1 1' 'token 1 1 0 1 1 2' \
+    'token 1 2 0 1 1 1' 'token 1 1 0 0 0 0' 'token 1 0 0 0 0 0' \
+    'token 1 1 1 0 0 0' 'token 0 1 0 1 1 1' 'token 0 1 1 1 1 1' \
+    'token 0 1 2 0 0 0' 'token 0 0 1 0 0 0'; do
     # shellcheck disable=SC2086 # 행을 낱말로 나눈다.
     auth_mode::table_row ${row} || ok=1
   done
@@ -506,7 +514,7 @@ auth_mode::case_at_boundary() {
   local ok=0 tmpl target
   fixture::new_case
   tmpl="${fixture_dir}.body.tmpl"
-  auth_mode::write_body "${tmpl}" 1 0 0 1 1
+  auth_mode::write_body "${tmpl}" ingest-auth 1 0 0 1 1
   printf "edge: '@%s@'\n" "${AUTH_BASIC_TOKEN}" >>"${tmpl}"
   auth_mode::run "${tmpl}" || return 1
   if (( fixture_status != 0 )); then

@@ -5,13 +5,13 @@
 #
 #   C0  실물 MediaMTX 가 `authMethod: http` + `authInternalUsers: []` 최소
 #       설정을 받아 기동하고 설정 조회가 되는지.
-#   L   옛 모드(회귀 기준선) — 운영 템플릿(mediamtx.yml.tmpl) 렌더 그대로.
+#   L   옛 모드(회귀 기준선) — 운영 템플릿(mediamtx.yml.tmpl)의 옛 모드 블록.
 #       L1 익명 송출 · L2 Bearer 없는 재생목록 401 / CDN Bearer 200 · L3
 #       사이드카 자격 관리 API.
 #   A   응답기 모드 설정 + 가짜 응답기(에코 authstub) — C1 ~ C8 · C10.
 #   B   응답기 모드 설정 + 실물 응답기(media/Dockerfile.ingest-auth) + 가짜
 #       4C(에코 resolvestub) — C9 · C11 ~ C19.
-#   T1  두 모드 렌더본의 토큰이 각각 정확히 한 번이고 채운 뒤 `@@` 가 남지
+#   T1  두 모드 블록의 토큰이 각각 정확히 한 번이고 채운 뒤 `@@` 가 남지
 #       않는지(시작 스크립트의 「토큰마다 정확히 한 번」 불변식). 준비 관문이
 #       아니라 사례다 — 개수가 어긋나도 채워서 층을 띄운다.
 #
@@ -20,10 +20,11 @@
 # 의 loopback_sender 핀이다(로컬에 없으면 받는다). compose 는
 # test/compose.ingest-auth.yml 이다.
 #
-# 두 모드의 MediaMTX 설정은 운영 템플릿(mediamtx.yml.tmpl) 렌더다 — 옛 모드는
-# render_vars.json 그대로, 응답기 모드는 ingest_auth_image 만 채운 사본이다.
-# 응답기 모드 렌더가 실패하면 층 A · B 만 준비 실패이고 C0 · 층 L 은 돈다(옛
-# 모드 렌더 실패는 층 L 만 막는다). 시험 compose 의 응답기 서비스(env · 마운트
+# 두 모드의 MediaMTX 설정은 운영 템플릿 원본(mediamtx.yml.tmpl — 상자에 렌더
+# 없이 깔리는 저장소 파일)에서 시작 스크립트와 같은 함수(bin/lib/
+# render_files.sh 의 select_mode_blocks)로 고른 모드 블록이다. 응답기 모드
+# 고르기가 실패하면 층 A · B 만 준비 실패이고 C0 · 층 L 은 돈다(옛 모드 고르기
+# 실패는 층 L 만 막는다). 시험 compose 의 응답기 서비스(env · 마운트
 # 대상 · healthcheck 등)는 render_test 사례 44 가 운영 compose 렌더본과
 # 대조한다. 운영 스크립트 사례(C13 · C15 · C18)는 bin/ 의 실물 스크립트를
 # 시험 이음매(lib 의 ia::configure_ops — 가짜 SSM · 기록만 하는 chown · docker
@@ -37,8 +38,9 @@
 # 실험 식별: compose 프로젝트 pcbench-m15-ingest-auth · 라벨
 # com.pokeclip.bench=m15-ingest-auth(컨테이너 · 망 · 볼륨). 호스트 포트 게시 0.
 # 프로젝트 이름이 고정이라 한 번에 하나만 돈다 — 시작할 때 잠금
-# 디렉터리(TMPDIR 의 pcbench-m15-ingest-auth.lock — 안에 PID)를 잡지 못하면
-# 아무것도 건드리지 않고 멈춘다. 그다음 정리 범위(이 프로젝트 · 이 라벨의
+# 디렉터리(/tmp/pcbench-m15-ingest-auth.lock — 안에 PID)를 잡지 못하면
+# 아무것도 건드리지 않고 멈춘다. 잠금 자리는 TMPDIR 을 따르지 않는다 — 고정
+# 프로젝트 이름처럼 이 기계에 하나라, TMPDIR 이 다른 두 실행도 서로 막는다. 그다음 정리 범위(이 프로젝트 · 이 라벨의
 # 컨테이너 · 망 · 볼륨)에 앞 실행 잔여가 하나라도 있으면 남의 것일 수 있으니
 # 지우지 않고 멈춘다. 끝날 때와 중단 신호에 이 프로젝트를 down -v 하고 남은
 # 일회성 컨테이너 · 임시 디렉터리를 지운 뒤 같은 범위의 잔여를 다시 센다 —
@@ -62,8 +64,8 @@ MEDIA_HOST_DIR="$(cd -- "${TEST_DIR}/.." && pwd)"
 readonly MEDIA_HOST_DIR
 MEDIA_DIR="$(cd -- "${MEDIA_HOST_DIR}/../../media" && pwd)"
 readonly MEDIA_DIR
-# shellcheck source=lib/render.sh
-source "${TEST_DIR}/lib/render.sh"
+# shellcheck source=../bin/lib/render_files.sh
+source "${MEDIA_HOST_DIR}/bin/lib/render_files.sh"
 # shellcheck source=lib/harness.sh
 source "${TEST_DIR}/lib/harness.sh"
 # shellcheck source=lib/ingest_auth_cases.sh
@@ -76,10 +78,6 @@ readonly MTX_IMAGE="${PROJECT}/mediamtx:local"
 readonly INGEST_AUTH_IMAGE="${PROJECT}/ingest-auth:local"
 readonly ECHO_IMAGE="${PROJECT}/echo:local"
 readonly HELPER_IMAGE='alpine:3.22'
-# 응답기 모드 렌더의 ingest_auth_image(MediaMTX 설정은 빈 값인지만 본다 — 실제
-# 실행 이미지는 INGEST_AUTH_IMAGE).
-readonly INGEST_AUTH_IMAGE_REF="registry.pcbench-m15.invalid/media-ingest-auth@\
-sha256:4444444444444444444444444444444444444444444444444444444444444444"
 readonly MTX_TEMPLATE_REL='mediamtx.yml.tmpl'
 # 이미지 빌드 한 번의 상한(초) — 첫 빌드는 모듈 받기를 품는다.
 readonly BUILD_TIMEOUT=600
@@ -89,8 +87,10 @@ readonly RESPONDER_READY_TIMEOUT=60
 readonly PROJECT_LABEL="com.docker.compose.project=${PROJECT}"
 # count_owned 의 「잔여 없음」 꼴.
 readonly NONE_OWNED='컨테이너 0 · 망 0 · 볼륨 0'
-# 동시 실행을 막는 잠금 디렉터리(mkdir 은 원자적이다).
-readonly LOCK_DIR="${TMPDIR:-/tmp}/${PROJECT}.lock"
+# 동시 실행을 막는 잠금 디렉터리(mkdir 은 원자적이다). 고정 프로젝트 이름에
+# 묶인 고정 자리다 — TMPDIR 을 따르면 TMPDIR 이 다른 두 실행이 같은 compose
+# 프로젝트를 함께 쓴다.
+readonly LOCK_DIR="/tmp/${PROJECT}.lock"
 
 scratch=""
 setup_reason=""
@@ -103,7 +103,7 @@ sender_image=""
 ia_compose_copy=""
 # 응답기 /etc/ingest-auth 에 bind 하는 거부 목록 호스트 디렉터리.
 deny_dir=""
-# 층별 준비 실패 원인 — 옛 모드 렌더(층 L) · 응답기 모드 렌더(층 A · B).
+# 층별 준비 실패 원인 — 옛 모드 고르기(층 L) · 응답기 모드 고르기(층 A · B).
 legacy_reason=""
 auth_reason=""
 # 토큰 채우기 기록(T1) — 줄마다 「모드 토큰 개수」 · 「모드 @@남음 0|1」.
@@ -196,7 +196,7 @@ cleanup() {
 
 check_tools() {
   local ok=0 tool
-  for tool in docker jq terraform base64 tr; do
+  for tool in docker jq base64 tr; do
     if ! command -v "${tool}" >/dev/null 2>&1; then
       add_setup_reason "도구 없음: ${tool}"
       ok=1
@@ -357,7 +357,7 @@ export_compose_env() {
 }
 
 #######################################
-# 1단계 렌더본의 토큰을 모두 채운다. 개수는 막지 않고 token_counts 에 남긴다
+# 고른 모드 블록의 토큰을 모두 채운다. 개수는 막지 않고 token_counts 에 남긴다
 # (T1 이 본다).
 # Globals:
 #   token_counts
@@ -382,46 +382,44 @@ fill_tokens() {
 }
 
 #######################################
-# 운영 템플릿을 변수 파일 하나로 렌더한다.
+# 운영 템플릿 원본에서 모드 블록 하나를 고른다(시작 스크립트와 같은 함수).
 # Arguments:
-#   변수 파일, 출력.
+#   모드(legacy | ingest-auth), 출력.
 # Outputs:
 #   실패하면 원인 한 줄.
 #######################################
-render_mtx() {
+select_mtx() {
+  local body
   if [[ ! -f "${MEDIA_HOST_DIR}/${MTX_TEMPLATE_REL}" ]]; then
     printf '%s 없음' "${MTX_TEMPLATE_REL}"
     return 1
   fi
-  if ! render::template "${MEDIA_HOST_DIR}/${MTX_TEMPLATE_REL}" "$1" "$2" \
-    2>"$2.err"; then
-    printf '렌더 실패: %s' "$(harness::log_tail "$2.err")"
+  body="$(cat -- "${MEDIA_HOST_DIR}/${MTX_TEMPLATE_REL}" && printf x)" \
+    || { printf '템플릿 읽기 실패'; return 1; }
+  if ! body="$(select_mode_blocks "$1" "${body%x}" && printf x)"; then
+    printf '모드 블록 고르기 실패(표지 꼴)'
     return 1
   fi
+  printf '%s' "${body%x}" >"$2"
 }
 
 #######################################
-# 층 L · A · B 의 MediaMTX 설정을 렌더한다(옛 · 응답기 두 벌). 실패 원인은 그
+# 층 L · A · B 의 MediaMTX 설정을 만든다(옛 · 응답기 두 벌). 실패 원인은 그
 # 모드를 쓰는 층에만 남긴다.
 # Globals:
 #   legacy_reason, auth_reason
 #######################################
 render_configs() {
   local stage1="${scratch}/mediamtx.stage1.yml" why
-  local auth_vars="${scratch}/vars-auth.json"
   local auth_stage1="${scratch}/mediamtx.auth.stage1.yml"
-  if ! why="$(render_mtx "${RENDER_VARS_FILE}" "${stage1}")"; then
+  if ! why="$(select_mtx legacy "${stage1}")"; then
     legacy_reason="옛 모드 ${why}"
   else
     fill_tokens "${stage1}" "${scratch}/mediamtx.legacy.yml" legacy \
       HLS_CDN_SECRET "${IA_CDN_SECRET}" MTX_API_PASS "${IA_API_PASS}" \
       || legacy_reason='옛 모드 토큰 채우기 실패'
   fi
-  # shellcheck disable=SC2016 # jq 프로그램 — $ 는 jq 변수다.
-  if ! jq --arg image "${INGEST_AUTH_IMAGE_REF}" \
-    '.ingest_auth_image = $image' "${RENDER_VARS_FILE}" >"${auth_vars}"; then
-    auth_reason='응답기 모드 변수 파일을 만들지 못함'
-  elif ! why="$(render_mtx "${auth_vars}" "${auth_stage1}")"; then
+  if ! why="$(select_mtx ingest-auth "${auth_stage1}")"; then
     auth_reason="응답기 모드 ${why}"
   else
     fill_tokens "${auth_stage1}" "${scratch}/mediamtx.auth.yml" auth \
@@ -440,12 +438,12 @@ render_configs() {
 check_t1() {
   local ok=0 mode name count
   if [[ -n "${legacy_reason}" || -n "${auth_reason}" ]]; then
-    harness::add_reason "렌더 실패 — ${legacy_reason}${legacy_reason:+ · }\
+    harness::add_reason "모드 블록 준비 실패 — ${legacy_reason}${legacy_reason:+ · }\
 ${auth_reason}"
     return 1
   fi
   if [[ -z "${token_counts}" ]]; then
-    harness::add_reason '토큰 기록 없음(렌더 전 준비 실패)'
+    harness::add_reason '토큰 기록 없음(고르기 전 준비 실패)'
     return 1
   fi
   while read -r mode name count; do
@@ -686,7 +684,7 @@ main() {
   harness::run_case C0 'authMethod http + authInternalUsers [] 수용 · 설정 조회' \
     check_c0
   layer_down C0
-  harness::run_case T1 '두 모드 렌더본 — 토큰 각 정확히 한 번 · 남은 @@ 0' \
+  harness::run_case T1 '두 모드 블록 — 토큰 각 정확히 한 번 · 남은 @@ 0' \
     check_t1
   run_layer_l
   run_layer_a

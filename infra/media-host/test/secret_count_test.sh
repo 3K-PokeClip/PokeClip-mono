@@ -30,6 +30,8 @@ readonly MEDIA_HOST_DIR
 source "${TEST_DIR}/lib/harness.sh"
 # shellcheck source=lib/ops_fixture.sh
 source "${TEST_DIR}/lib/ops_fixture.sh"
+# shellcheck source=../bin/lib/render_files.sh
+source "${MEDIA_HOST_DIR}/bin/lib/render_files.sh"
 
 readonly SCRIPT='bin/secret-count.sh'
 readonly CASE_COUNT=29
@@ -627,18 +629,19 @@ ia_basic() {
 }
 
 #######################################
-# 실제 템플릿(mediamtx.yml.tmpl)의 토큰을 시작 스크립트처럼 문자열 치환으로
-# 채워 렌더본 자리에 둔다. 잠금 두 줄은 응답기 모드 조건 블록(「%{ if
-# ingest_auth_image != "" ~}」) 안에 있다 — templatefile() 은 응답기 모드에서
-# 그 블록을 남기고 그 줄의 내용은 바꾸지 않는다(사례 25 가 블록 안임을,
-# render_test 가 렌더본의 그 줄을 단언한다). 지시문 줄은 치환하지 않고 그대로
-# 남지만 잠금 줄이 아니라 대조에 영향이 없다.
+# 실제 템플릿(mediamtx.yml.tmpl)에서 시작 스크립트와 같은 함수(bin/lib/
+# render_files.sh 의 select_mode_blocks)로 응답기 모드 블록을 고르고, 토큰을
+# 시작 스크립트처럼 문자열 치환으로 채워 렌더본 자리에 둔다. 잠금 두 줄은 응답기
+# 모드 블록 안에 있다(사례 25 가 블록 안임을, render_test 가 고른 내용의 그
+# 줄을 단언한다). 고르지 못하면 실패다.
 # Arguments:
 #   출력 파일.
 #######################################
 render_ia_mtx() {
   local body
-  body="$(cat -- "${MEDIA_HOST_DIR}/mediamtx.yml.tmpl" && printf x)"
+  body="$(cat -- "${MEDIA_HOST_DIR}/mediamtx.yml.tmpl" && printf x)" \
+    || return 1
+  body="$(select_mode_blocks ingest-auth "${body%x}" && printf x)" || return 1
   body="${body//"${IA_PUBLISH_TOKEN}"/${IA_PUBLISH_LOCK}}"
   body="${body//"${IA_READ_TOKEN}"/${IA_READ_LOCK}}"
   body="${body//@@INGEST_AUTH_BASIC_PASS@@/${IA_BASIC_PASS}}"
@@ -659,7 +662,8 @@ setup_ingest_auth() {
   printf '%s\n' "${IA_BASIC_PASS}" >"${ia}/ingest_basic_pass"
   printf '%s\n' "${OPS_FAKE_API_PASS}" >"${ia}/mtx_api_pass"
   printf '%s\n' "${IA_RESOLVE_TOKEN}" >"${ia}/stream_key_resolve_token"
-  render_ia_mtx "${ops_dir}/runtime/mediamtx.yml"
+  render_ia_mtx "${ops_dir}/runtime/mediamtx.yml" \
+    || harness::add_reason '응답기 모드 렌더본을 만들지 못함(모드 블록 고르기)'
   for name in awk head wc base64 tr; do
     ln -s -- "${TEST_DIR}/ops_fakebin/watch" "${ops_dir}/bin/${name}"
   done
@@ -848,7 +852,7 @@ case_ia_malformed() {
 }
 
 # 사례 25 — 렌더본 꼴 대조: 실제 템플릿의 잠금 줄이 각각 정확히 한 줄이고
-# 응답기 모드 조건 블록 안이며, 그 줄을 시작 스크립트처럼 채운 렌더본에서 잠금
+# 응답기 모드 블록(표지 줄 사이) 안이며, 그 줄을 시작 스크립트처럼 채운 렌더본에서 잠금
 # 둘을 각각 센다(송출 1 · 읽기 2). 템플릿 authHTTPAddress 의 Basic 사용자가
 # IA_BASIC_USER 와 같다(사례 22 가 그 값과 제품 상수가 같음을 센다).
 case_ia_render_form() {
@@ -858,14 +862,14 @@ case_ia_render_form() {
     harness::add_reason "템플릿 authHTTPAddress 사용자가 ${IA_BASIC_USER} 가 아님"
     ok=1
   fi
-  # 잠금 줄마다 응답기 모드 조건 블록 안이면 1.
+  # 잠금 줄마다 응답기 모드 블록 안이면 1.
   blocks="$(awk '
-    /^%\{ if ingest_auth_image != "" ~\}$/ { inside = 1; next }
-    /^%\{ (else|endif) ~\}$/ { inside = 0; next }
+    /^# @mode ingest-auth begin$/ { inside = 1; next }
+    /^# @mode (ingest-auth|legacy) (begin|end)$/ { inside = 0; next }
     /^  srt(Publish|Read)Passphrase:/ { print inside + 0 }' "${tmpl}" \
     | paste -s -d ' ' -)"
   if [[ "${blocks}" != '1 1' ]]; then
-    harness::add_reason "잠금 줄이 응답기 모드 조건 블록 안이 아님: ${blocks}"
+    harness::add_reason "잠금 줄이 응답기 모드 블록 안이 아님: ${blocks}"
     ok=1
   fi
   for line in "  srtPublishPassphrase: '${IA_PUBLISH_TOKEN}'" \

@@ -16,18 +16,23 @@
 #      32바이트 → 16진 64자). 저장하지 않는다 — 기동마다 바뀌고, MediaMTX 설정과
 #      사이드카 파일에 같은 실행에서 같이 쓰이므로 둘이 어긋나지 않는다. 만들지
 #      못하면 「MEDIA START BLOCKED: MTX API credential unavailable」.
-#   4. MediaMTX 설정 템플릿(1단계 렌더본)의 토큰 집합으로 모드를 안다 —
-#      media.env 로는 정하지 않는다. 토큰마다 나온 수가
-#        - CDN 비밀 · API 비밀번호 각 1, 응답기 토큰 0 → 옛 모드(M2 내부 인증).
-#        - CDN 비밀 · Basic 비밀번호 · SRT 송출 잠금 · SRT 읽기 잠금 각 1, API
-#          비밀번호 0 → 응답기 모드(송출 인증 응답기).
-#      그 밖이면 「MEDIA START FAIL render template-token」. 모드 판정 줄은 따로
-#      내지 않는다.
-#   5. compose 렌더본(MEDIA_COMPOSE_FILE)의 응답기 서비스 키 줄(`  ingest-auth:`)
-#      수가 모드와 맞는지 본다 — 응답기 모드 ⇔ 1, 옛 모드 ⇔ 0. 아니면 「MEDIA
-#      START BLOCKED: ingest-auth mode mismatch」. 읽을 수 없는 파일은 0 으로
-#      센다(옛 모드는 compose up 이 그 파일로 실패를 드러낸다). 응답기 모드의
-#      외부 입력(6)을 받기 전에 본다.
+#   4. MediaMTX 설정 템플릿(저장소 파일 그대로 — M9 설치 묶음이 렌더 없이
+#      깐다)을 읽는다. 읽지 못하면 「MEDIA START FAIL render template」.
+#   5. 송출 인증 모드를 compose 렌더본(MEDIA_COMPOSE_FILE) 하나로 정한다 —
+#      media.env · 템플릿으로는 정하지 않는다(lib/render_files.sh). 응답기 서비스
+#      키 줄(`  ingest-auth:`)이 0 이면 옛 모드(M2 내부 인증), 1 이면 응답기
+#      모드(송출 인증 응답기)다. 2 이상이거나 같은 키를 다른 꼴로 쓴 줄이
+#      있으면 「MEDIA START BLOCKED: ingest-auth mode mismatch」. 읽을 수 없는
+#      파일은 0 으로 센다(옛 모드는 compose up 이 그 파일로 실패를 드러낸다).
+#      그다음 템플릿에서 그 모드 블록만 남긴다(다른 모드 블록 · 표지 줄 삭제).
+#      표지 꼴이 깨졌거나 두 모드 가운데 하나라도 블록이 없으면 「MEDIA START
+#      FAIL render template-mode」. 남은 내용의 토큰마다 나온 수가 그 모드 꼴이
+#      아니면 「MEDIA START FAIL render template-token」 이다.
+#        - 옛 모드: CDN 비밀 · API 비밀번호 각 1, 응답기 토큰 0.
+#        - 응답기 모드: CDN 비밀 · Basic 비밀번호 · SRT 송출 잠금 · SRT 읽기
+#          잠금 각 1, API 비밀번호 0.
+#      모드 판정 줄은 따로 내지 않는다. 응답기 모드의 외부 입력(6)을 받기 전에
+#      본다.
 #   6. 응답기 모드만(옛 모드는 아래 키 · 파일을 읽지 않는다):
 #      - compose 파일 옆 ingest-auth.env 가 링크 아닌 일반 파일이고 내용이
 #        정확히 INGEST_AUTH_IP_LIMIT=on 또는 =off 한 줄인지 본다(없으면 compose
@@ -135,7 +140,7 @@ readonly API_PASS_TOKEN='@@MTX_API_PASS@@'
 readonly BASIC_PASS_TOKEN='@@INGEST_AUTH_BASIC_PASS@@'
 readonly PUBLISH_LOCK_TOKEN='@@SRT_PUBLISH_LOCK@@'
 readonly READ_LOCK_TOKEN='@@SRT_READ_LOCK@@'
-# 모드를 가르는 토큰과, 모드마다 그 토큰이 나와야 하는 수(같은 차례).
+# 모드 꼴을 보는 토큰과, 모드마다 그 토큰이 나와야 하는 수(같은 차례).
 readonly MODE_TOKENS=("${SECRET_TOKEN}" "${API_PASS_TOKEN}" \
   "${BASIC_PASS_TOKEN}" "${PUBLISH_LOCK_TOKEN}" "${READ_LOCK_TOKEN}")
 readonly LEGACY_TOKEN_COUNTS='1 1 0 0 0'
@@ -156,17 +161,17 @@ readonly BASIC_PASS_NAME='ingest_basic_pass'
 readonly RESOLVE_TOKEN_NAME='stream_key_resolve_token'
 readonly STATE_DIR_NAME='state'
 readonly RESOLVE_TOKEN_MAX_BYTES=4096
-# compose 파일 옆 IP 한도 env 파일과 compose 렌더본의 응답기 서비스 키 줄.
+# compose 파일 옆 IP 한도 env 파일(compose 렌더본의 응답기 서비스 키 줄은
+# lib/render_files.sh 의 INGEST_AUTH_SERVICE_LINE).
 readonly IP_LIMIT_ENV_NAME='ingest-auth.env'
-readonly INGEST_AUTH_SERVICE_LINE='  ingest-auth:'
 # compose 출력이 붙는 서비스 — 템플릿에서 restart: "no" 인 집합과 같아야 한다.
 readonly ATTACHED_SERVICES=(mediamtx nginx)
 
 render_tmps=()
 staged_tmp=""
 render_step=""
-# 1단계 렌더본 템플릿 내용(비밀 없음)과 그 토큰 집합으로 정한 모드
-# (legacy | ingest-auth).
+# 템플릿 내용(비밀 없음 — 모드를 고른 뒤에는 그 모드 블록만)과 compose
+# 렌더본으로 정한 모드(legacy | ingest-auth).
 template_body=""
 render_mode=""
 # 실행 계정 소유 값(uid:gid) — set_owners 가 채운다.
@@ -295,7 +300,7 @@ generate_credential() {
 
 #######################################
 # MediaMTX 설정 템플릿을 읽어 template_body 에 둔다(끝 줄바꿈을 지키려고 표식
-# 글자를 붙였다가 뗀다). 1단계 렌더본이라 비밀이 없다.
+# 글자를 붙였다가 뗀다). 저장소 파일 그대로라 비밀이 없다.
 # Globals:
 #   template_body
 # Arguments:
@@ -324,24 +329,48 @@ count_token() {
 }
 
 #######################################
-# template_body 의 토큰 집합으로 모드를 정해 render_mode 에 둔다 — 토큰마다
-# 나온 수가 옛 모드 꼴이면 legacy, 응답기 모드 꼴이면 ingest-auth. 부분 집합 ·
-# 섞임 · 두 번은 어느 꼴도 아니다.
+# template_body(모드 블록을 고른 뒤)의 토큰마다 나온 수가 render_mode 의 꼴인지
+# 본다. 부분 집합 · 섞임 · 두 번 · 다른 모드 꼴은 받지 않는다.
 # Globals:
 #   template_body, render_mode
 # Returns:
-#   0 / 1 어느 꼴도 아님.
+#   0 / 1 꼴이 아님.
 #######################################
-detect_mode() {
-  local token counts=""
+check_mode_tokens() {
+  local token counts="" want="${INGEST_AUTH_TOKEN_COUNTS}"
+  [[ "${render_mode}" != legacy ]] || want="${LEGACY_TOKEN_COUNTS}"
   for token in "${MODE_TOKENS[@]}"; do
     counts+="${counts:+ }$(count_token "${template_body}" "${token}")"
   done
-  case "${counts}" in
-    "${LEGACY_TOKEN_COUNTS}") render_mode=legacy ;;
-    "${INGEST_AUTH_TOKEN_COUNTS}") render_mode=ingest-auth ;;
-    *) return 1 ;;
-  esac
+  [[ "${counts}" == "${want}" ]]
+}
+
+#######################################
+# 송출 인증 모드를 compose 렌더본으로 정해 render_mode 에 두고, template_body
+# 에서 그 모드 블록만 남긴 뒤 토큰 집합이 그 모드 꼴인지 본다. 실패 줄은
+# 여기서 낸다.
+# Globals:
+#   template_body, render_mode
+# Arguments:
+#   compose 파일.
+# Returns:
+#   0 / 1 막힘.
+#######################################
+select_mode() {
+  if ! render_mode="$(compose_mode "$1")"; then
+    say 'MEDIA START BLOCKED: ingest-auth mode mismatch'
+    return 1
+  fi
+  if ! template_body="$(select_mode_blocks "${render_mode}" \
+    "${template_body}" && printf x)"; then
+    say 'MEDIA START FAIL render template-mode'
+    return 1
+  fi
+  template_body="${template_body%x}"
+  if ! check_mode_tokens; then
+    say 'MEDIA START FAIL render template-token'
+    return 1
+  fi
 }
 
 #######################################
@@ -482,26 +511,6 @@ render_legacy() {
   unset rendered
   add_file "$1/${API_PASS_NAME}" "${sidecar_owner}" 'api-pass-' "$3"$'\n'
   place_files "$1"
-}
-
-#######################################
-# compose 렌더본의 응답기 서비스 키 줄 수가 모드와 맞는지 본다 — 응답기 모드 ⇔
-# 1, 옛 모드 ⇔ 0. 읽을 수 없는 파일은 0 으로 센다.
-# Globals:
-#   render_mode, INGEST_AUTH_SERVICE_LINE
-# Arguments:
-#   compose 파일.
-# Returns:
-#   0 맞음 / 1 어긋남.
-#######################################
-check_mode_match() {
-  local n=0 want=1
-  [[ "${render_mode}" != legacy ]] || want=0
-  if [[ -f "$1" && -r "$1" ]]; then
-    n="$(awk -v line="${INGEST_AUTH_SERVICE_LINE}" \
-      '$0 == line { n++ } END { print n + 0 }' "$1")" || return 1
-  fi
-  (( n == want ))
 }
 
 #######################################
@@ -658,7 +667,7 @@ render_ingest_auth() {
 }
 
 #######################################
-# 비밀을 읽고 만들어, 템플릿의 토큰 집합으로 고른 모드대로 렌더한다. 실패 줄은
+# 비밀을 읽고 만들어, compose 렌더본으로 고른 모드대로 렌더한다. 실패 줄은
 # 여기서(또는 모드 함수가) 낸다.
 # Globals:
 #   MEDIA_MTX_TEMPLATE, RUNTIME_DIR, render_mode
@@ -688,14 +697,8 @@ prepare_config() {
     say 'MEDIA START FAIL render template'
     return 1
   fi
-  if ! detect_mode; then
+  if ! select_mode "$1"; then
     unset secret api_pass
-    say 'MEDIA START FAIL render template-token'
-    return 1
-  fi
-  if ! check_mode_match "$1"; then
-    unset secret api_pass
-    say 'MEDIA START BLOCKED: ingest-auth mode mismatch'
     return 1
   fi
   set_owners

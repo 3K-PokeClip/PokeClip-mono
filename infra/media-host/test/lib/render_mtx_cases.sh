@@ -1,18 +1,22 @@
 # shellcheck shell=bash
-# 전역(scratch · setup_reason · TEST_DIR · *_TOKEN 등)과 require_setup ·
-# mtx_render · mtx_json · config_json 은 render_test.sh 가 정의한다.
+# 전역(scratch · setup_reason · TEST_DIR · MTX_TEMPLATE · *_TOKEN 등)과
+# require_setup · mtx_render · mtx_json · config_json 은 render_test.sh 가
+# 정의한다.
 # shellcheck disable=SC2154
 #
-# render_test 의 MediaMTX 운영 템플릿 사례(18 – 24 · 30 – 34) — mediamtx.yml.tmpl
-# 을 templatefile() 로 렌더하고 yamldecode() 로 읽은 값에 단언한다. 모드는
-# 템플릿 변수 ingest_auth_image 하나가 고른다 — 갈래 a(빔)가 옛 모드, 갈래
-# b(참)가 응답기 모드다.
+# render_test 의 MediaMTX 운영 템플릿 사례(18 – 24 · 30 – 34 · 47) —
+# mediamtx.yml.tmpl 원본에서 시작 스크립트와 같은 함수로 모드 블록을 고르고
+# yamldecode() 로 읽은 값에 단언한다. 모드는 compose 렌더본의 응답기 서비스
+# 유무가 고른다 — compose 갈래 a(응답기 이미지 빔)가 옛 모드, 갈래 b(참)가
+# 응답기 모드다.
 #   - 옛 모드(18 – 24 · 30): 루프백 바인딩 · 믿는 프록시 없음 · 인증 항목 셋
 #     (무인증 api 0 · 익명 read 0) · 고정 토큰 둘의 자리와 개수 · 녹화 · 훅 ·
 #     사이드카 관측 자격의 짝(compose 쪽과 같은 값) · develop 골든과 같은 값.
 #   - 응답기 모드(31 – 34): 인증 블록(http · Basic URL · exclude {playback} ·
 #     내부 사용자 빔) · 고정 토큰 넷의 자리와 개수 · SRT 잠금 둘 ·
 #     overridePublisher 끔 · 옛 모드와 다른 키가 그것들뿐임.
+#   - 원본(47): M9 설치 묶음이 렌더 없이 깔므로 Terraform 지시자 · 보간이
+#     없고, 표지 글자가 든 줄은 모두 정확한 표지 꼴이다.
 #
 # 이 파일은 source 해서 쓴다(실행하지 않는다). bash 3.2 에서도 돈다.
 
@@ -27,9 +31,15 @@ readonly AUTH_HTTP_ADDRESS="http://pokeclip-mediamtx:${BASIC_PASS_TOKEN}@\
 127.0.0.1:8080/mediamtx/auth"
 # 옛 모드 골든 — develop 0d057a32 의 템플릿을 render_vars.json 으로 렌더한
 # yamldecode JSON(6c90c935 와 템플릿 · 렌더 결과가 바이트까지 같아 파일은
-# 그대로다). CI checkout 은 이력이 얕아 시험이 git 으로 옛 판을 읽지 않는다(만든 명령은
-# M15 c2a 실험 기록 · 병합 때 다시 렌더한 명령은 merge-develop 기록).
+# 그대로다). 비교 대상(갈래 a)은 이제 렌더가 아니라 모드 블록 고르기의 결과다 —
+# 골든은 develop 판 그대로라 다시 만들지 않는다. CI checkout 은 이력이 얕아
+# 시험이 git 으로 옛 판을 읽지 않는다(만든 명령은 M15 c2a 실험 기록 · 병합 때
+# 다시 렌더한 명령은 merge-develop 기록).
 readonly MTX_LEGACY_GOLDEN_REL='golden/mediamtx.legacy.json'
+# 템플릿 원본의 표지 줄 집계(「수 줄」 정렬 · 쉼표로 이음) — 응답기 블록 둘(인증
+# 절 · pathDefaults 절) · 옛 블록 하나(인증 절).
+readonly MTX_MARK_COUNTS="2 # @mode ingest-auth begin,\
+2 # @mode ingest-auth end,1 # @mode legacy begin,1 # @mode legacy end"
 # 두 모드 JSON 의 차이 키(최상위 · pathDefaults 아래는 pathDefaults.<키>) 정본.
 readonly MTX_MODE_DIFF_KEYS='["authHTTPAddress", "authHTTPExclude",
   "authInternalUsers", "authMethod", "pathDefaults.overridePublisher",
@@ -336,4 +346,29 @@ mtx_cases::check_34() {
     harness::add_reason "두 모드 차이 키 기대 ${want} · 실제 ${got}"
     return 1
   fi
+}
+
+# 사례 47 — 템플릿 원본은 렌더 없이 상자에 깔린다(M9 설치 묶음) — Terraform
+# 지시자(퍼센트 중괄호) · 보간(달러 중괄호)이 0 이고, 표지 글자가 든 줄은 모두
+# 정확한 표지 꼴이다(begin · end 각 모드 짝 — 꼴 검사 자체는 사례 18 의 모드
+# 블록 고르기가 한다).
+mtx_cases::check_47() {
+  local ok=0 count marks
+  if [[ ! -f "${MTX_TEMPLATE}" ]]; then
+    harness::add_reason 'mediamtx.yml.tmpl 없음'
+    return 1
+  fi
+  # shellcheck disable=SC2016 # 찾는 글자 그대로다.
+  count="$(grep -c -F -e '%{' -e '${' -- "${MTX_TEMPLATE}")" || count=0
+  if [[ "${count}" != 0 ]]; then
+    harness::add_reason "템플릿 원본에 달러 · 퍼센트 중괄호 줄 ${count}개(기대 0)"
+    ok=1
+  fi
+  marks="$(grep -F -e '@mode' -- "${MTX_TEMPLATE}" | LC_ALL=C sort | uniq -c \
+    | awk '{ $1 = $1; print }' | paste -s -d ',' -)" || marks=''
+  if [[ "${marks}" != "${MTX_MARK_COUNTS}" ]]; then
+    harness::add_reason "표지 줄 집계 「${marks}」(기대 응답기 블록 둘 · 옛 블록 하나)"
+    ok=1
+  fi
+  return "${ok}"
 }

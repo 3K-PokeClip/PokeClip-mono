@@ -3,8 +3,11 @@
 # Media 상자 템플릿 렌더 시험 — 렌더 결과의 구조 단언.
 #
 # prod 와 같은 렌더 함수(test/lib/render.sh — terraform console 의
-# templatefile())로 compose.yml.tmpl · nginx/nginx.conf.tmpl · mediamtx.yml.tmpl
-# 을 렌더하고(MediaMTX 설정은 yamldecode() 로 값을 읽어 단언한다), 렌더한
+# templatefile())로 compose.yml.tmpl · nginx/nginx.conf.tmpl 을 렌더한다.
+# mediamtx.yml.tmpl 은 렌더하지 않는다 — prod 처럼(M9 설치 묶음이 그대로 깐다)
+# 시작 스크립트와 같은 함수(bin/lib/render_files.sh 의 compose_mode ·
+# select_mode_blocks)로 compose 렌더본의 모드를 정해 그 모드 블록을 고르고,
+# yamldecode() 로 값을 읽어 단언한다. 렌더한
 # compose 마다 `docker compose config -q` 로 검증한 뒤 선언 그대로의 구성 JSON
 # (`config --no-normalize`)에 단언한다. 정규화한 구성은 쓰지 않는다 — compose 는
 # 정규화 때 network_mode: service:<이름> 에 depends_on 을 스스로 채워 넣어(5.5.0
@@ -17,7 +20,7 @@
 #   - b: 응답기만 채움. c: janitor 만 켬.
 #   - d: 둘 다 채우고 · 켜고 detached_log_driver = json-file(로컬 실행 렌더 갈래).
 #   - nginx: control_upstream 빔(a) · 채움(e).
-#   - mediamtx: 옛 모드(a) · 응답기 모드(b).
+#   - mediamtx: compose 갈래 a 가 고른 옛 모드(a) · b 가 고른 응답기 모드(b).
 #   - ingest-auth.env: 갈래 a 로 compose 렌더본 옆에 렌더한다(응답기 갈래의
 #     env_file). 응답기 사례(35 – 46)는 test/lib/render_auth_cases.sh 에 있다.
 #
@@ -54,6 +57,8 @@ source "${TEST_DIR}/lib/harness.sh"
 source "${TEST_DIR}/lib/render_mtx_cases.sh"
 # shellcheck source=lib/render_auth_cases.sh
 source "${TEST_DIR}/lib/render_auth_cases.sh"
+# shellcheck source=../bin/lib/render_files.sh
+source "${MEDIA_HOST_DIR}/bin/lib/render_files.sh"
 
 readonly PROJECT='pcbench-edge-proxy'
 readonly COMPOSE_TEMPLATE="${MEDIA_HOST_DIR}/compose.yml.tmpl"
@@ -71,7 +76,7 @@ readonly COMPOSE_VARIANTS='a b c d'
 readonly SAMPLE_CONTROL_UPSTREAM='127.0.0.1:28190'
 readonly MIN_READ_TIMEOUT_SECONDS=15
 readonly CONFIG_TIMEOUT=60
-readonly CASE_COUNT=46
+readonly CASE_COUNT=47
 # 녹화 디렉터리 소유자의 정본 — MediaMTX 이미지 Dockerfile 의 최종 USER.
 MTXHOOK_DOCKERFILE="$(cd -- "${MEDIA_HOST_DIR}/../.." && pwd)/media/Dockerfile.mtxhook"
 readonly MTXHOOK_DOCKERFILE
@@ -180,8 +185,35 @@ $(harness::log_tail "$3.err")"
 }
 
 #######################################
-# 갈래마다 렌더한다(compose a ~ d · nginx a · e). 템플릿이 없으면 그 이름을
-# 한 번만 원인에 남긴다. 하나라도 실패하면 1.
+# compose 갈래 하나의 렌더본으로 모드를 정해, MediaMTX 템플릿 원본에서 그 모드
+# 블록을 고른 내용을 mtx_render 에 쓰고 yamldecode JSON 을 mtx_json 에 쓴다
+# (시작 스크립트와 같은 함수). 실패하면 준비 실패 원인에 남긴다.
+# Arguments:
+#   갈래(a | b).
+#######################################
+select_mtx() {
+  local v="$1" mode body
+  if ! mode="$(compose_mode "$(compose_render "${v}")")"; then
+    add_setup_reason "compose 갈래 ${v} 에서 모드를 정하지 못함"
+    return 1
+  fi
+  body="$(cat -- "${MTX_TEMPLATE}" && printf x)" || return 1
+  if ! body="$(select_mode_blocks "${mode}" "${body%x}" && printf x)"; then
+    add_setup_reason "mediamtx 모드 블록 고르기 실패(갈래 ${v} · ${mode})"
+    return 1
+  fi
+  printf '%s' "${body%x}" >"$(mtx_render "${v}")"
+  if ! render::yaml_json "$(mtx_render "${v}")" "$(vars_file "${v}")" \
+    "$(mtx_json "${v}")" 2>"$(mtx_json "${v}").err"; then
+    add_setup_reason "mediamtx YAML 해석 실패(갈래 ${v}): \
+$(harness::log_tail "$(mtx_json "${v}").err")"
+    return 1
+  fi
+}
+
+#######################################
+# 갈래마다 렌더한다(compose a ~ d · nginx a · e) · mediamtx 는 고른다(a · b).
+# 템플릿이 없으면 그 이름을 한 번만 원인에 남긴다. 하나라도 실패하면 1.
 #######################################
 render_all() {
   local ok=0 v template
@@ -205,16 +237,9 @@ render_all() {
     render_one "${NGINX_TEMPLATE}" "$(vars_file "${v}")" \
       "$(nginx_render "${v}")" || ok=1
   done
+  (( ok == 0 )) || return 1
   for v in a b; do
-    if ! render_one "${MTX_TEMPLATE}" "$(vars_file "${v}")" \
-      "$(mtx_render "${v}")"; then
-      ok=1
-    elif ! render::yaml_json "$(mtx_render "${v}")" "$(vars_file "${v}")" \
-      "$(mtx_json "${v}")" 2>"$(mtx_json "${v}").err"; then
-      add_setup_reason "mediamtx 렌더 YAML 해석 실패(갈래 ${v}): \
-$(harness::log_tail "$(mtx_json "${v}").err")"
-      ok=1
-    fi
+    select_mtx "${v}" || ok=1
   done
   return "${ok}"
 }
@@ -902,7 +927,8 @@ main() {
   harness::run_case 16 'nginx proxy_read_timeout 15초 이상' check_case_16
   harness::run_case 17 '드리프트 — 시험 compose 와 템플릿 구조 일치' \
     check_case_17
-  harness::run_case 18 'mediamtx 렌더(templatefile) · YAML 해석' mtx_cases::check_18
+  harness::run_case 18 'mediamtx 모드 블록 고르기(compose 갈래) · YAML 해석' \
+    mtx_cases::check_18
   harness::run_case 19 'mediamtx — 프로토콜 · 루프백 바인딩 · metrics/pprof 끔' \
     mtx_cases::check_19
   harness::run_case 20 'mediamtx — 허용 출처 app · 믿는 프록시 없음' \
@@ -958,6 +984,9 @@ main() {
     auth_cases::check_45
   harness::run_case 46 '드리프트 — 응답기 모드 유닛 시험 compose 응답기' \
     auth_cases::check_46
+  harness::run_case 47 \
+    'mediamtx 템플릿 원본 — 달러 · 퍼센트 중괄호 0 · 표지 줄 꼴(묶음이 그대로 설치)' \
+    mtx_cases::check_47
 
   if ! harness::summary "${CASE_COUNT}"; then
     exit 1

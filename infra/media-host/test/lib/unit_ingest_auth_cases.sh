@@ -75,7 +75,8 @@ responder::write_assets() {
   # 끼운 파일은 root 소유라, 비root 로 도는 CI 러너는 덮어쓰지 못한다(EACCES).
   # 디렉터리는 시험 사용자 것이라 지우기는 된다.
   # 응답기 모드 토큰 넷(CDN 비밀 · Basic 비밀번호 · 잠금 둘) · API 비밀번호 0.
-  # 시험 compose 의 mediamtx 자리(에코)는 렌더본을 읽지 않는다.
+  # 시작 스크립트는 두 모드 블록이 다 있는 템플릿만 받는다 — 옛 모드 블록은
+  # 표지 둘뿐이다. 시험 compose 의 mediamtx 자리(에코)는 렌더본을 읽지 않는다.
   if ! mkdir -p -- "${responder_dir}" \
     || ! cp -- "${RESPONDER_COMPOSE}" "${responder_dir}/compose.yml" \
     || ! rm -f -- "${env_path}" \
@@ -83,10 +84,14 @@ responder::write_assets() {
     || ! chmod 0644 "${env_path}" \
     || ! cat >"${responder_dir}/mediamtx.yml.tmpl" <<'EOF'
 hlsCDNSecret: "@@HLS_CDN_SECRET@@"
+# @mode legacy begin
+# @mode legacy end
+# @mode ingest-auth begin
 authHTTPAddress: http://u:@@INGEST_AUTH_BASIC_PASS@@@127.0.0.1:8080/a
 pathDefaults:
   srtPublishPassphrase: '@@SRT_PUBLISH_LOCK@@'
   srtReadPassphrase: '@@SRT_READ_LOCK@@'
+# @mode ingest-auth end
 EOF
   then
     harness::add_reason "응답기 모드 자리 쓰기 실패(${responder_dir})"

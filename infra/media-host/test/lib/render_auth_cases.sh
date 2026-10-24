@@ -1,7 +1,9 @@
 # shellcheck shell=bash
 # 전역(scratch · PROJECT · CONFIG_TIMEOUT · TEST_DIR · MEDIA_HOST_DIR ·
 # BASIC_PASS_TOKEN 등)과 require_setup · vars_file · compose_render ·
-# config_json · mtx_json · render_one 은 render_test.sh 가 정의한다.
+# config_json · mtx_json · render_one 은 render_test.sh 가, compose_mode ·
+# INGEST_AUTH_SERVICE_LINE 은 bin/lib/render_files.sh(render_test 가 source)가
+# 정의한다.
 # shellcheck disable=SC2154
 #
 # render_test 의 compose 응답기 서비스 사례(35 – 44). 응답기 갈래는 b · d
@@ -40,8 +42,6 @@ readonly UNIT_INGEST_AUTH_COMPOSE="${TEST_DIR}/compose.unit.ingest-auth.yml"
 INGEST_AUTH_DOCKERFILE="$(cd -- "${MEDIA_HOST_DIR}/../.." && pwd)"
 INGEST_AUTH_DOCKERFILE="${INGEST_AUTH_DOCKERFILE}/media/Dockerfile.ingest-auth"
 readonly INGEST_AUTH_DOCKERFILE
-# compose 렌더본의 응답기 서비스 키 줄(시작 스크립트의 모드 판정과 같은 줄).
-readonly INGEST_AUTH_SERVICE_LINE='  ingest-auth:'
 
 # 기대값 jq 정의(render_test 의 JQ_DEFS 에 붙는다). 입력은 갈래 변수 JSON.
 #   ia_env   — 응답기 environment 정확 집합(계획 4-c4).
@@ -306,16 +306,28 @@ $(harness::log_tail "${err}")"
 }
 
 #######################################
-# 사례 39 — 모드 일치. 같은 변수 파일로 렌더한 compose 의 응답기 서비스(시작
-# 스크립트가 보는 키 줄)와 mediamtx 의 응답기 모드(authMethod http · Basic
-# 토큰)가 함께 있거나 함께 없다.
+# 사례 39 — 모드 일치. compose 렌더본의 응답기 서비스(시작 스크립트가 보는 키
+# 줄 — 응답기 갈래 b · d 는 정확히 1, 옛 갈래 a · c 는 0 이고 compose_mode 가
+# 그 모드를 낸다)와, 그 compose 가 고른 mediamtx 의 응답기 모드(authMethod
+# http · Basic 토큰)가 함께 있거나 함께 없다.
 #######################################
 auth_cases::check_39() {
-  local ok=0 v want lines tokens method
+  local ok=0 v want lines tokens method mode got
   auth_cases::require || return 1
-  for v in a b; do
+  for v in a b c d; do
     want=0
-    [[ "${v}" == a ]] || want=1
+    mode=legacy
+    case "${v}" in
+      b | d) want=1; mode=ingest-auth ;;
+    esac
+    got="$(compose_mode "$(compose_render "${v}")" 2>/dev/null)" || got='?'
+    if [[ "${got}" != "${mode}" ]]; then
+      harness::add_reason "갈래 ${v}: compose_mode 「${got}」(기대 ${mode})"
+      ok=1
+    fi
+    case "${v}" in
+      c | d) continue ;;
+    esac
     lines="$(harness::count_fixed "${INGEST_AUTH_SERVICE_LINE}" \
       "$(compose_render "${v}")")" || lines='?'
     tokens="$(harness::count_fixed "${BASIC_PASS_TOKEN}" \

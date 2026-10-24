@@ -5,7 +5,7 @@
 # start_test 의 사이드카 관측 자격 사례(사례 30 – 35)와 판정 도우미 — 시작
 # 스크립트가 기동마다 만드는 MediaMTX 관리 API 비밀번호(16진 64자)가 두 렌더
 # 파일(mediamtx.yml 의 사이드카 pass · 사이드카 비밀번호 파일 mtx_api_pass)에만
-# 있고, 운영 템플릿(templatefile 렌더)의 두 토큰이 각 한 번씩 채워지는지 본다.
+# 있고, 운영 템플릿 원본(옛 모드 블록)의 두 토큰이 각 한 번씩 채워지는지 본다.
 # start_test.sh 가 harness.sh · start_fixture.sh · render.sh 를 먼저 source 한
 # 뒤 이 파일을 source 한다. API_PASS_* · PROD_MTX_TEMPLATE · check_rendered 는
 # start_test.sh 몫이다.
@@ -82,24 +82,18 @@ api_pass::check_contained() {
 }
 
 #######################################
-# 사례 30 — 운영 템플릿을 prod 와 같은 렌더 함수(templatefile)로 렌더한 결과를
-# 시작 스크립트의 템플릿으로 넘긴다. 두 토큰이 각 한 곳씩 값으로 바뀌고
-# (CDN 비밀은 큰따옴표 · API 비밀번호는 작은따옴표 안), 토큰이 남지 않는다.
+# 사례 30 — 운영 템플릿 원본(prod 상자에 깔리는 저장소 파일 그대로)을 시작
+# 스크립트의 템플릿으로 넘긴다(compose 렌더본 없음 = 옛 모드). 두 토큰이 각 한
+# 곳씩 값으로 바뀌고(CDN 비밀은 큰따옴표 · API 비밀번호는 작은따옴표 안), 토큰이
+# 남지 않는다.
 #######################################
 api_pass::case_prod_template_pipe() {
-  local ok=0 tmpl pass target
+  local ok=0 tmpl="${PROD_MTX_TEMPLATE}" pass target
   if [[ ! -f "${PROD_MTX_TEMPLATE}" ]]; then
     harness::add_reason 'mediamtx.yml.tmpl 없음'
     return 1
   fi
   fixture::new_case
-  tmpl="${fixture_dir}.prod.tmpl"
-  if ! render::template "${PROD_MTX_TEMPLATE}" "${RENDER_VARS_FILE}" \
-    "${tmpl}" 2>"${tmpl}.err"; then
-    harness::add_reason "운영 템플릿 렌더 실패: $(harness::log_tail \
-"${tmpl}.err")"
-    return 1
-  fi
   fixture::base_env MEDIA_MTX_TEMPLATE
   fixture_env+=("MEDIA_MTX_TEMPLATE=${tmpl}")
   fixture::run start-media.sh || return 1
@@ -241,7 +235,7 @@ api_pass::case_token_count() {
 '${FIXTURE_API_PASS_TOKEN}'"; do
     fixture::new_case
     tmpl="${fixture_dir}/bad.tmpl"
-    printf '%s\n' "${body}" >"${tmpl}"
+    fixture::marked_template "${body}" >"${tmpl}"
     fixture::base_env MEDIA_MTX_TEMPLATE
     fixture_env+=("MEDIA_MTX_TEMPLATE=${tmpl}")
     fixture::run start-media.sh || return 1

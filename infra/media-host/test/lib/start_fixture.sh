@@ -345,3 +345,35 @@ fixture::runtime_files() {
   [[ -d "${dir}" ]] || { printf '0\n'; return 0; }
   find "${dir}" -mindepth 1 -type f | awk 'END { print NR }'
 }
+
+#######################################
+# 템플릿에서 한 모드의 블록만 남긴 기대 본문을 파일에 쓴다 — 시작 스크립트의
+# 모드 블록 고르기(bin/lib/render_files.sh)를 awk 로 따로 구현한 것이다(같은
+# 함수로 기대값을 만들면 그 함수의 결함이 보이지 않는다). 표지 줄(「# @mode
+# <모드> begin|end」)과 다른 모드 블록을 빼고 나머지 줄은 그대로 둔다. 표지 꼴
+# 검사는 하지 않는다 — 정상 꼴 템플릿에만 쓴다.
+# Arguments:
+#   모드(legacy | ingest-auth), 템플릿, 출력 파일.
+#######################################
+fixture::mode_body() {
+  awk -v want="$1" '
+    /^# @mode (legacy|ingest-auth) begin$/ { block = $3; next }
+    /^# @mode (legacy|ingest-auth) end$/ { block = ""; next }
+    block == "" || block == want' "$2" >"$3"
+}
+
+#######################################
+# 두 모드 블록을 둔 짧은 템플릿 본문을 낸다(시작 스크립트는 두 모드 블록이 모두
+# 있는 템플릿만 받는다). 빈 본문이면 그 모드 블록은 표지 둘뿐이다.
+# Arguments:
+#   옛 모드 블록 본문, 응답기 모드 블록 본문(없어도 됨).
+# Outputs:
+#   본문.
+#######################################
+fixture::marked_template() {
+  printf '# @mode legacy begin\n'
+  [[ -z "$1" ]] || printf '%s\n' "$1"
+  printf '# @mode legacy end\n# @mode ingest-auth begin\n'
+  [[ -z "${2:-}" ]] || printf '%s\n' "$2"
+  printf '# @mode ingest-auth end\npaths:\n  all_others:\n'
+}
