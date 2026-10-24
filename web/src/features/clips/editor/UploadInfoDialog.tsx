@@ -296,8 +296,9 @@ function UploadInfoForm({
 
   const onTagKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.nativeEvent.isComposing) return;
-    // 글자 칸이 비었을 때 Backspace는 칸 안에 쌓인 태그를 뒤에서부터 하나씩 뺀다
-    if (event.key === 'Backspace' && tagText === '' && draft.tags.length > 0) {
+    // 글자 칸이 비었을 때 Backspace는 칸 안에 쌓인 태그를 뒤에서부터 하나씩 뺀다. 꾹 눌러 반복되는 입력은 거른다:
+    // 글자를 지우던 손이 칸이 빈 뒤에도 계속 눌려 태그까지 다 지우지 않게
+    if (event.key === 'Backspace' && !event.repeat && tagText === '' && draft.tags.length > 0) {
       event.preventDefault();
       set('tags', draft.tags.slice(0, -1));
       return;

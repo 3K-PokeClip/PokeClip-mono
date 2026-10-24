@@ -276,6 +276,21 @@ describe('UploadInfoDialog', () => {
     expect(input).toHaveValue('');
   });
 
+  it('Backspace를 꾹 눌러 반복되는 입력은 태그를 지우지 않는다(PR #372 리뷰)', async () => {
+    const { dialog } = renderDialog({}, { tags: ['롤', '보스'] });
+    const input = dialog().getByRole('textbox', { name: /태그/ });
+
+    // 글자를 지우던 손이 칸이 빈 뒤에도 눌려 있는 모양: 반복 keydown만 온다
+    fireEvent.keyDown(input, { key: 'Backspace', repeat: true });
+    fireEvent.keyDown(input, { key: 'Backspace', repeat: true });
+    expect(dialog().getByText('롤')).toBeInTheDocument();
+    expect(dialog().getByText('보스')).toBeInTheDocument();
+
+    fireEvent.keyDown(input, { key: 'Backspace' });
+    expect(dialog().queryByText('보스')).not.toBeInTheDocument();
+    expect(dialog().getByText('롤')).toBeInTheDocument();
+  });
+
   it('제목이 비었으면 보내지 않고 정보 탭을 열어 그 칸에 말한다', async () => {
     const user = userEvent.setup();
     const { dialog, onSubmit } = renderDialog();
