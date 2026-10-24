@@ -25,10 +25,13 @@
 # 남긴다. 「앞 배포」 · 「다음 배포」는 제품을 새 bash 프로세스로 source 한 실행
 # 하나씩이다(실행마다 울타리 이름이 새로 정해진다).
 #
-# 상태 불명 표지(BACKUP_DIR 아래 dev-move-unknown)도 지킨다: restore 가 판정
-# 불가로 끝나면 표지를 남기고, 다음 배포의 main 은 표지를 보면 아무것도
-# 멈추지 않고 끝난다 — 앞 배포가 울타리를 못 세웠으면 다음 배포가 옛 컨테이너를
-# 띄운 뒤 앞 배포의 밀린 이전이 커밋할 수 있어서다.
+# 상태 불명 표지(BACKUP_DIR 아래 dev-move-unknown — 진행 중 잠금)도 지킨다:
+# main 은 정지 전에 표지를 쓰고(못 쓰면 아무것도 멈추지 않고 끝난다), 결과가
+# 확실한 갈래(옮김 · 커밋 전 · 커밋 뒤 · 정지 전에 끝남)에서만 지운다. 판정
+# 불가면 표지가 남고, 다음 배포의 main 은 표지를 보면 아무것도 멈추지 않고
+# 끝난다 — 앞 배포가 울타리를 못 세웠으면 다음 배포가 옛 컨테이너를 띄운 뒤 앞
+# 배포의 밀린 이전이 커밋할 수 있어서다. 그때 표지를 새로 쓸 수 없어도(디스크)
+# 시작 때 쓴 표지가 남는다. 가짜 rm 은 표지를 지우는 호출만 calls 에 적는다.
 #
 # 제품 스크립트는 마지막 줄이 `main "$@"` 라 그대로 source 하면 main 이 돈다.
 # 시험은 그 줄을 뺀 사본을 source 해 함수만 얻는다. 사본은 BACKUP_DIR 만 사례의
@@ -45,6 +48,8 @@ SERVICES_DIR="$(cd -- "${TEST_DIR}/../.." && pwd)"
 readonly SERVICES_DIR
 readonly SCRIPT="${SERVICES_DIR}/scripts/dev-move-to-app-schemas.sh"
 readonly MARKER_NAME='dev-move-unknown'
+readonly SEEDED_MARKER='20260101000000_1 2026-01-01T00:00:00Z in-progress'
+readonly EARLIER_RUN_ERROR='::error::schema move: an earlier run is in progress'
 readonly HISTORY_BEFORE='flyway_schema_history_auth flyway_schema_history_clip'
 readonly SIX="auth clip chat-collector chat-detector render-worker \
 upload-worker"
@@ -114,6 +119,15 @@ case "${args}" in
     echo "${FAKE_DB_BYTES}"
     ;;
   *' stop '*)
+    # 정지 때 표지가 이미 있었는지 남긴다(시작 때 썼는지 보려고).
+    if [[ -e "${d}/backup/dev-move-unknown" ]]; then
+      cp "${d}/backup/dev-move-unknown" "${d}/marker_at_stop"
+    fi
+    # 정지 뒤로는 표지 디렉터리에 새 파일을 못 만든다(디스크 · 권한 고장 흉내).
+    if [[ "${FAKE_STOP_LOCKS_BACKUP:-0}" == 1 ]]; then
+      mkdir -p "${d}/backup"
+      chmod 500 "${d}/backup"
+    fi
     [[ "${FAKE_STOP_FAIL:-0}" == 1 ]] && exit 1
     ;;
   *' top postgres'*)
@@ -132,6 +146,7 @@ case "${args}" in
     if (( n <= FAKE_SESSION_POLLS )); then echo 1; else echo 0; fi
     ;;
   *flyway_schema_history*)
+    [[ "${FAKE_HISTORY_FAIL:-0}" == 1 ]] && exit 1
     if (( $(count top) > FAKE_PROC_POLLS \
       && $(count stat) > FAKE_SESSION_POLLS )); then
       echo "${FAKE_HISTORY_FINAL}"
@@ -186,8 +201,19 @@ if (( pending )); then
 fi
 exit 0
 EOF
+  cat > "${work_dir}/bin/rm" <<'EOF'
+#!/usr/bin/env bash
+# 가짜 rm — 표지를 지우는 호출만 calls 에 적고 FAKE_RM_FAIL=1 이면 실패한다.
+# 나머지는 진짜 rm 이다.
+if [[ "${!#}" == */dev-move-unknown ]]; then
+  printf 'rm %s\n' "$*" >> "${FAKE_DIR}/calls"
+  [[ "${FAKE_RM_FAIL:-0}" == 1 ]] && exit 1
+fi
+exec /bin/rm "$@"
+EOF
   chmod +x "${work_dir}/bin/sudo" "${work_dir}/bin/sleep" \
-    "${work_dir}/bin/df" "${work_dir}/bin/docker" "${work_dir}/bin/psql"
+    "${work_dir}/bin/df" "${work_dir}/bin/docker" "${work_dir}/bin/psql" \
+    "${work_dir}/bin/rm"
 }
 
 #######################################
@@ -196,11 +222,14 @@ EOF
 #   work_dir
 #######################################
 reset_state() {
+  # 쓰기 금지로 바꾼 표지 디렉터리도 지울 수 있게 권한부터 되돌린다.
+  chmod -R u+w "${work_dir}/state" 2>/dev/null || true
   rm -rf "${work_dir}/state"
   mkdir -p "${work_dir}/state"
   export FAKE_DIR="${work_dir}/state"
   export FAKE_PROC_POLLS=0 FAKE_SESSION_POLLS=0 FAKE_TOP_FAIL=0 FAKE_STAT_FAIL=0
   export FAKE_FENCE_FAIL=0 FAKE_STOP_FAIL=0 FAKE_DB_BYTES=0 FAKE_DF_AVAIL=0
+  export FAKE_HISTORY_FAIL=0 FAKE_RM_FAIL=0 FAKE_STOP_LOCKS_BACKUP=0
   export FAKE_HISTORY_DURING="${HISTORY_BEFORE}"
   export FAKE_HISTORY_FINAL="${HISTORY_BEFORE}"
 }
@@ -330,44 +359,68 @@ is_run_fence_name() {
   [[ "$1" =~ ^pokeclip_move_fence_[a-z0-9_]+$ && "${#1}" -le 63 ]]
 }
 
-# 캐시 줄이기 · 디스크 확인(상자 전용 명령)을 비우고 main 을 stop 까지 돈다.
+# 캐시 줄이기 · 디스크 확인(상자 전용 명령)을 비우고 main 을 돈다.
 # shellcheck disable=SC2329 # 덮어쓴 두 함수는 main 이 부른다.
-main_until_stop() {
+main_without_box_commands() {
   prune_build_cache() { :; }
   require_disk_for_backup() { :; }
   main 6gb
 }
 
-# 배포 A 의 restore 가 울타리를 못 세워 판정 불가로 끝난다. 배포 B(새 실행)의
-# main 이 정지 실패로 restore 에 들어갈 수 있는 상황에서 돈다. 그 뒤 데몬이 A 의
-# 밀린 이전을 시작한다(울타리가 없어 이전은 커밋한다).
+# 배포 A 의 main 이 정지 실패로 restore 에 들어가 울타리를 못 세워 판정 불가로
+# 끝난다. 배포 B(새 실행)의 main 이 정지 실패로 restore 에 들어갈 수 있는
+# 상황에서 돈다.
 fence_failure_then_next_run() {
-  ( FAKE_FENCE_FAIL=1 restore ) || true
-  echo "${MOVE_RUN_ID}" > "${FAKE_DIR}/first_run_id"
+  FAKE_FENCE_FAIL=1 fresh_run main_without_box_commands || true
   local status=0
-  fresh_run main_until_stop || status=$?
+  fresh_run main_without_box_commands || status=$?
   echo "${status}" > "${FAKE_DIR}/next_status"
-  run_move_sql
+}
+
+# 위와 같되 A 의 정지 뒤로는 표지 디렉터리에 새 파일을 못 만든다 — 울타리
+# 생성과 (복구 때의) 표지 쓰기가 둘 다 실패하는 codex 연쇄.
+fence_and_late_marker_failure_then_next_run() {
+  FAKE_FENCE_FAIL=1 FAKE_STOP_LOCKS_BACKUP=1 \
+    fresh_run main_without_box_commands || true
+  local status=0
+  fresh_run main_without_box_commands || status=$?
+  echo "${status}" > "${FAKE_DIR}/next_status"
 }
 
 marker_path() {
   echo "${FAKE_DIR}/backup/${MARKER_NAME}"
 }
 
-# 표지가 있고 첫 줄이 「실행 식별자 시각」 꼴이다.
-marker_left() {
-  local line
-  line="$(head -1 "$(marker_path)" 2>/dev/null)" || return 1
-  [[ "${line}" =~ ^[0-9]{14}_[0-9]+\ [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z$ ]]
+# restore 만 부르는 사례 앞에 main 이 시작 때 쓴 표지를 깐다.
+seed_marker() {
+  mkdir -p "${FAKE_DIR}/backup"
+  echo "${SEEDED_MARKER}" > "$(marker_path)"
 }
 
-# restore 를 돌려 판정 불가로 끝났는지(종료 1 · 띄우지 않음 · 표지 남김) 본다.
-restore_is_unknown_with_marker() {
+# 제품이 쓴 표지 줄의 꼴 — 「실행 식별자 UTC 시각 in-progress」.
+# Arguments:
+#   표지 줄.
+is_marker_line() {
+  local pattern='^[0-9]{14}_[0-9]+ [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z'
+  pattern+=' in-progress$'
+  [[ "$1" =~ ${pattern} ]]
+}
+
+# 표지를 지우는 호출이 있었다.
+marker_removed() {
+  grep -q '^rm ' "${FAKE_DIR}/calls"
+}
+
+# restore 를 돌려 판정 불가로 끝났는지(종료 1 · 띄우지 않음 · 깐 표지를 지우지
+# 않고 그대로 남김) 본다.
+restore_is_unknown_and_keeps_marker() {
+  seed_marker
   call_in_script restore
   [[ "$(exit_status)" == 1 ]] || return 1
   started && return 1
   grep -q '::error::schema move state unknown' "${FAKE_DIR}/out" || return 1
-  marker_left
+  marker_removed && return 1
+  [[ "$(cat "$(marker_path)")" == "${SEEDED_MARKER}" ]]
 }
 
 # 연결만 끊기고 안의 이전이 대기 둘 동안 더 돈 뒤 커밋 — 띄우지 않는다.
@@ -512,7 +565,7 @@ case_main_leaves_earlier_fences() {
   : > "${FAKE_DIR}/fences/pokeclip_move_fence_20260101000000_1"
   : > "${FAKE_DIR}/fences/pokeclip_move_fence"
   export FAKE_STOP_FAIL=1
-  call_in_script main_until_stop
+  call_in_script main_without_box_commands
   grep -q ' stop ' "${FAKE_DIR}/calls" || return 1
   grep -q 'DROP SCHEMA' "${FAKE_DIR}/calls" && return 1
   [[ -e "${FAKE_DIR}/fences/pokeclip_move_fence_20260101000000_1" ]] \
@@ -558,110 +611,199 @@ case_check_and_create_use_same_fence() {
 }
 
 # codex 연쇄 — A 가 울타리를 못 세워 판정 불가로 끝나면, B 의 main 은 표지를
-# 보고 아무것도 멈추지 않고 종료 1 이다. 그 뒤 A 의 밀린 이전이 와도 옛
-# 컨테이너는 띄워지지 않았다.
+# 보고 아무것도 멈추지 않고 종료 1 이다. 표지는 A 의 것이다.
 case_fence_failure_then_next_run_does_not_start() {
   export FAKE_STOP_FAIL=1
   call_in_script fence_failure_then_next_run
   [[ "$(cat "${FAKE_DIR}/next_status")" == 1 ]] || return 1
-  grep -q ' stop ' "${FAKE_DIR}/calls" && return 1
+  # 정지는 A 의 한 번뿐이다.
+  [[ "$(grep -c ' stop ' "${FAKE_DIR}/calls")" == 1 ]] || return 1
   started && return 1
-  grep -q '::error::schema move: an earlier run ended in an unknown state' \
-    "${FAKE_DIR}/out" || return 1
-  grep -q "^$(cat "${FAKE_DIR}/first_run_id") " "$(marker_path)"
+  grep -q "${EARLIER_RUN_ERROR}" "${FAKE_DIR}/out" || return 1
+  local first_run_id
+  first_run_id="$(created_fences | sed -n 1p)"
+  first_run_id="${first_run_id#pokeclip_move_fence_}"
+  [[ -n "${first_run_id}" ]] || return 1
+  grep -q "^${first_run_id} " "$(marker_path)"
+}
+
+# codex 연쇄(울타리 생성 · 표지 쓰기 둘 다 실패) — A 의 복구 때 표지 디렉터리에
+# 새 파일을 만들 수 없어도, 시작 때 쓴 표지가 남아 B 는 아무것도 멈추지 않고
+# 종료 1 이다(root 가 아니어야 쓰기 금지가 먹는다).
+case_fence_and_late_marker_failure_still_blocks_next_run() {
+  export FAKE_STOP_FAIL=1
+  call_in_script fence_and_late_marker_failure_then_next_run
+  [[ "$(cat "${FAKE_DIR}/next_status")" == 1 ]] || return 1
+  [[ "$(grep -c ' stop ' "${FAKE_DIR}/calls")" == 1 ]] || return 1
+  started && return 1
+  grep -q "${EARLIER_RUN_ERROR}" "${FAKE_DIR}/out"
 }
 
 # 표지가 있으면 main 은 맨 앞에서 끝난다 — docker 를 한 번도 부르지 않고(이력
 # 읽기 · 정지 · 울타리 없음) 종료 1 · 표지는 그대로.
 case_marker_stops_main_before_anything() {
-  mkdir -p "${FAKE_DIR}/backup"
-  echo '20260101000000_1 2026-01-01T00:00:00Z' > "$(marker_path)"
+  seed_marker
   export FAKE_STOP_FAIL=1
-  call_in_script main_until_stop
+  call_in_script main_without_box_commands
   [[ "$(exit_status)" == 1 ]] || return 1
   [[ -s "${FAKE_DIR}/calls" ]] && return 1
-  grep -q '::error::schema move: an earlier run ended in an unknown state' \
-    "${FAKE_DIR}/out" || return 1
+  grep -q "${EARLIER_RUN_ERROR}" "${FAKE_DIR}/out" || return 1
   grep -q '20260101000000_1' "${FAKE_DIR}/out" || return 1
-  [[ -e "$(marker_path)" ]]
+  [[ "$(cat "$(marker_path)")" == "${SEEDED_MARKER}" ]]
 }
 
-# 표지가 없으면 main 은 평소대로 정지까지 간다.
+# 표지가 없으면 main 은 평소대로 정지까지 간다(정지 실패 → 커밋 전 복구가
+# 띄우고 시작 때 쓴 표지를 지운다).
 case_main_without_marker_reaches_stop() {
   export FAKE_STOP_FAIL=1
-  call_in_script main_until_stop
+  call_in_script main_without_box_commands
   grep -q ' stop ' "${FAKE_DIR}/calls" || return 1
   started || return 1
   [[ -e "$(marker_path)" ]] && return 1
   return 0
 }
 
-# 판정 불가의 갈래마다 표지를 남긴다.
-case_fence_failure_leaves_marker() {
+# 판정 불가의 갈래마다 시작 때 쓴 표지가 그대로 남는다.
+case_fence_failure_keeps_marker() {
   export FAKE_FENCE_FAIL=1
-  restore_is_unknown_with_marker
+  restore_is_unknown_and_keeps_marker
 }
 
-case_wait_bound_exceeded_leaves_marker() {
+case_wait_bound_exceeded_keeps_marker() {
   export FAKE_PROC_POLLS=100000
-  restore_is_unknown_with_marker
+  restore_is_unknown_and_keeps_marker
 }
 
-case_top_failure_leaves_marker() {
+case_top_failure_keeps_marker() {
   export FAKE_TOP_FAIL=1
-  restore_is_unknown_with_marker
+  restore_is_unknown_and_keeps_marker
 }
 
-case_session_read_failure_leaves_marker() {
+case_session_read_failure_keeps_marker() {
   export FAKE_STAT_FAIL=1
-  restore_is_unknown_with_marker
+  restore_is_unknown_and_keeps_marker
+}
+
+case_history_read_failure_keeps_marker() {
+  export FAKE_HISTORY_FAIL=1
+  restore_is_unknown_and_keeps_marker
 }
 
 # 이력 표가 일부만 남음(앞과도 다르고 비지도 않음) — 판정 불가.
-case_partial_history_leaves_marker() {
+case_partial_history_keeps_marker() {
   export FAKE_HISTORY_FINAL='flyway_schema_history_auth'
-  restore_is_unknown_with_marker
+  restore_is_unknown_and_keeps_marker
 }
 
-# 커밋 전 · 커밋 뒤 갈래는 표지를 남기지 않는다.
-case_before_commit_leaves_no_marker() {
+# 커밋 전 — 옛 여섯을 띄운 뒤에 표지를 지운다.
+case_before_commit_clears_marker_after_start() {
+  seed_marker
   call_in_script restore
   started || return 1
   [[ -e "$(marker_path)" ]] && return 1
-  return 0
+  local start_line rm_line
+  start_line="$(grep -n " start ${SIX}\$" "${FAKE_DIR}/calls" | cut -d: -f1)"
+  rm_line="$(grep -n '^rm ' "${FAKE_DIR}/calls" | cut -d: -f1)"
+  [[ -n "${start_line}" && -n "${rm_line}" ]] || return 1
+  (( start_line < rm_line ))
 }
 
-case_committed_leaves_no_marker() {
+# 커밋 뒤 — 띄우지 않고 표지를 지운다.
+case_committed_clears_marker() {
+  seed_marker
   export FAKE_HISTORY_FINAL=''
   call_in_script restore
   grep -q '::error::schema move committed' "${FAKE_DIR}/out" || return 1
+  started && return 1
   [[ -e "$(marker_path)" ]] && return 1
   return 0
 }
 
-# 표지 쓰기 실패(BACKUP_DIR 자리에 파일이 있음) — ::error:: 를 내고 띄우지
-# 않는다.
-case_marker_write_failure_is_error() {
+# 옮김 — 정지 때 표지가 이미 있었고(시작 때 씀 · 꼴이 맞음) 끝나면 지운다.
+case_moved_clears_marker() {
+  call_in_script main_without_box_commands
+  [[ "$(exit_status)" == 0 ]] || return 1
+  grep -q '^schema move: moved$' "${FAKE_DIR}/out" || return 1
+  [[ -e "${FAKE_DIR}/move_committed" ]] || return 1
+  is_marker_line "$(cat "${FAKE_DIR}/marker_at_stop" 2>/dev/null)" || return 1
+  [[ -e "$(marker_path)" ]] && return 1
+  return 0
+}
+
+# 시작 때 표지 쓰기 실패(BACKUP_DIR 자리에 파일이 있음) — 정지 없이 ::error:: ·
+# 종료 1.
+case_start_marker_write_failure_stops_nothing() {
   : > "${FAKE_DIR}/backup"
-  export FAKE_TOP_FAIL=1
+  call_in_script main_without_box_commands
+  [[ "$(exit_status)" == 1 ]] || return 1
+  grep -q ' stop ' "${FAKE_DIR}/calls" && return 1
+  started && return 1
+  local pattern='::error::schema move: could not write the in-progress'
+  pattern+=' marker .* \(run [0-9]{14}_[0-9]+\); nothing stopped'
+  grep -Eq "${pattern}" "${FAKE_DIR}/out"
+}
+
+# 커밋 전 복구에서 표지 지우기 실패 — ::error:: · 종료 1. 결과는 확실하므로
+# 띄우기는 그대로 한다(표지는 남아 다음 배포가 괜히 멈출 뿐이다).
+case_clear_failure_after_before_commit_is_error() {
+  seed_marker
+  export FAKE_RM_FAIL=1
   call_in_script restore
   [[ "$(exit_status)" == 1 ]] || return 1
+  started || return 1
+  grep -q '::error::schema move: could not delete the marker' \
+    "${FAKE_DIR}/out" || return 1
+  [[ -e "$(marker_path)" ]]
+}
+
+# 옮긴 뒤 표지 지우기 실패 — ::error:: · 종료 1 이지만 복구에 들어가지 않는다
+# (울타리 · 띄우기 없음).
+case_clear_failure_after_move_is_error() {
+  export FAKE_RM_FAIL=1
+  call_in_script main_without_box_commands
+  [[ "$(exit_status)" == 1 ]] || return 1
+  grep -q '^schema move: moved$' "${FAKE_DIR}/out" || return 1
+  grep -q '::error::schema move: could not delete the marker' \
+    "${FAKE_DIR}/out" || return 1
+  grep -q 'CREATE SCHEMA' "${FAKE_DIR}/calls" && return 1
   started && return 1
-  local pattern='::error::schema move: could not write the unknown-state'
-  pattern+=' marker .* \(run [0-9]{14}_[0-9]+\)'
-  grep -Eq "${pattern}" "${FAKE_DIR}/out"
+  [[ -e "$(marker_path)" ]]
+}
+
+# 건너뜀(이미 옮김) — 아무것도 멈추지 않고 종료 0 · 표지를 남기지 않는다.
+case_skip_leaves_no_marker() {
+  export FAKE_HISTORY_DURING=''
+  call_in_script main_without_box_commands
+  [[ "$(exit_status)" == 0 ]] || return 1
+  grep -q '^schema move: skipped$' "${FAKE_DIR}/out" || return 1
+  grep -q ' stop ' "${FAKE_DIR}/calls" && return 1
+  [[ -e "$(marker_path)" ]] && return 1
+  return 0
+}
+
+# 정지 전에 끝나는 실패(디스크 부족) — 아무것도 멈추지 않고 종료 1 · 표지를
+# 남기지 않는다.
+case_disk_failure_clears_marker() {
+  export FAKE_DB_BYTES=1000000000000 FAKE_DF_AVAIL=1
+  call_in_script main_without_prune
+  [[ "$(exit_status)" == 1 ]] || return 1
+  grep -q '::error::schema move: 1 bytes free' "${FAKE_DIR}/out" || return 1
+  grep -q ' stop ' "${FAKE_DIR}/calls" && return 1
+  [[ -e "$(marker_path)" ]] && return 1
+  return 0
 }
 
 main() {
   work_dir="$(mktemp -d)"
-  trap 'rm -rf "${work_dir}"' EXIT
+  trap 'chmod -R u+w "${work_dir}" 2>/dev/null; rm -rf "${work_dir}"' EXIT
   make_fakes
   make_product_copy
   readonly PRODUCT="${product}"
   export PRODUCT HISTORY_BEFORE
   export -f fresh_run late_move_after_restore \
-    late_move_after_next_run_disk_failure main_without_prune main_until_stop \
-    fence_failure_then_next_run
+    late_move_after_next_run_disk_failure main_without_prune \
+    main_without_box_commands fence_failure_then_next_run \
+    fence_and_late_marker_failure_then_next_run
   run_case case_inner_move_commits_after_disconnect
   run_case case_backend_lingers_then_commits
   run_case case_inner_move_rolls_back_then_restart
@@ -679,16 +821,23 @@ main() {
   run_case case_fence_name_differs_per_run
   run_case case_check_and_create_use_same_fence
   run_case case_fence_failure_then_next_run_does_not_start
+  run_case case_fence_and_late_marker_failure_still_blocks_next_run
   run_case case_marker_stops_main_before_anything
   run_case case_main_without_marker_reaches_stop
-  run_case case_fence_failure_leaves_marker
-  run_case case_wait_bound_exceeded_leaves_marker
-  run_case case_top_failure_leaves_marker
-  run_case case_session_read_failure_leaves_marker
-  run_case case_partial_history_leaves_marker
-  run_case case_before_commit_leaves_no_marker
-  run_case case_committed_leaves_no_marker
-  run_case case_marker_write_failure_is_error
+  run_case case_fence_failure_keeps_marker
+  run_case case_wait_bound_exceeded_keeps_marker
+  run_case case_top_failure_keeps_marker
+  run_case case_session_read_failure_keeps_marker
+  run_case case_history_read_failure_keeps_marker
+  run_case case_partial_history_keeps_marker
+  run_case case_before_commit_clears_marker_after_start
+  run_case case_committed_clears_marker
+  run_case case_moved_clears_marker
+  run_case case_start_marker_write_failure_stops_nothing
+  run_case case_clear_failure_after_before_commit_is_error
+  run_case case_clear_failure_after_move_is_error
+  run_case case_skip_leaves_no_marker
+  run_case case_disk_failure_clears_marker
   echo "cases: ${case_count} · fail: ${fail_count}"
   (( fail_count == 0 ))
 }

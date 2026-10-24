@@ -31,13 +31,17 @@
 #           하나마다 빈 스키마 하나가 dev DB 에 남는다(이전 · 역이전 SQL 이 보지
 #           않아 해가 없다). 지우려면 그 실행의 밀린 이전이 없음을 확인한 뒤 손으로
 #           지운다(README).
-#   표지    판정 불가로 끝난 restore 는 상자 디스크에 상태 불명 표지
-#           (BACKUP_DIR/dev-move-unknown, 실행 식별자와 시각 한 줄)를 남긴다.
-#           울타리를 못 세웠을 수 있어, 다음 배포가 자기 울타리만 세우고 옛
-#           컨테이너를 띄우면 이 실행의 밀린 이전이 그 뒤에 커밋할 수 있어서다.
-#           표지가 있으면 다음 배포의 main 은 맨 앞에서 아무것도 멈추지 않고
-#           ::error:: · 종료 1. 밀린 이전이 없고 표가 어디 있는지 확인한 뒤 손으로
-#           지운다(README).
+#   표지    상태 불명 표지(BACKUP_DIR/dev-move-unknown)는 진행 중 잠금이다 —
+#           결과가 확실하지 않으면 남는다. 옮길 것이 있으면 main 이 캐시
+#           줄이기 · 정지보다 먼저 상자 디스크에 쓰고(실행 식별자 · 시각 ·
+#           in-progress 한 줄), 못 쓰면 아무것도 멈추지 않고 종료 1. 결과가
+#           확실할 때만 지운다 — 옮김, 커밋 전(옛 컨테이너 start 뒤), 커밋 뒤,
+#           정지 전에 끝남. 판정 불가 · 도중에 끊긴 실행은 남긴다. 울타리를 못
+#           세웠을 수 있어, 다음 배포가 자기 울타리만 세우고 옛 컨테이너를
+#           띄우면 이 실행의 밀린 이전이 그 뒤에 커밋할 수 있어서다. 표지가
+#           있으면 다음 배포의 main 은 맨 앞에서 아무것도 멈추지 않고 ::error:: ·
+#           종료 1. 확인한 뒤 손으로 지운다(README). 지우기 실패는 ::error:: ·
+#           종료 1 이고 다음 배포가 괜히 멈출 뿐이다.
 #
 # 되돌리기 순서 · 백업 정리는 services/README.md 「dev 앱별 스키마 이전과
 # 되돌리기」. 이전 단계를 지우는 후속 PR 에서 이 파일도 지운다.
@@ -47,8 +51,8 @@ set -euo pipefail
 readonly COMPOSE_FILE='docker-compose.dev.yml'
 readonly MOVE_SQL='scripts/dev-move-to-app-schemas.sql'
 readonly BACKUP_DIR='/home/ec2-user/pokeclip-backup'
-# 상태 불명 표지. DB 가 죽어도 남게 상자 디스크(재부팅 · /tmp 정리에 지워지지
-# 않는 곳)에 둔다.
+# 상태 불명 표지(진행 중 잠금). DB 가 죽어도 남게 상자 디스크(재부팅 · /tmp
+# 정리에 지워지지 않는 곳)에 둔다.
 readonly UNKNOWN_MARKER="${BACKUP_DIR}/dev-move-unknown"
 readonly PRUNE_LOG='/tmp/pokeclip-prune.log'
 # 이전하는 동안 세우는 것 — 서버 넷과, 서버에 보고하는 일꾼 둘(멈춘 서버에 보고하다
@@ -203,23 +207,51 @@ require_disk_for_backup() {
 }
 
 #######################################
-# 상태 불명 표지를 남긴다 — 이 실행의 식별자와 UTC 시각 한 줄. 디렉터리는 백업과
-# 같이 0700 으로 만든다.
+# 진행 중 표지를 쓴다 — 이 실행의 식별자 · UTC 시각 · in-progress 한 줄.
+# 디렉터리는 백업과 같이 0700 으로 만든다.
 # Returns:
-#   0 남김, 그 밖 쓰기 실패.
+#   0 씀, 그 밖 쓰기 실패.
 #######################################
-write_unknown_marker() {
+write_marker() {
   (
     umask 077
     mkdir -p -- "${BACKUP_DIR}" \
-      && printf '%s %s\n' "${MOVE_RUN_ID}" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
-        > "${UNKNOWN_MARKER}"
+      && printf '%s %s in-progress\n' "${MOVE_RUN_ID}" \
+        "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" > "${UNKNOWN_MARKER}"
   )
 }
 
 #######################################
-# 앞 배포가 남긴 상태 불명 표지가 있으면 아무것도 멈추지 않고 끝낸다. 그 배포의
-# 밀린 이전이 아직 커밋할 수 있어, 이 배포가 옛 컨테이너를 띄우면 자료가 갈린다.
+# 결과가 확실해진 뒤 표지를 지운다. 못 지우면 ::error:: 를 낸다 — 다음 배포가
+# 표지를 보고 괜히 멈출 뿐인 안전 쪽 실패다.
+# Returns:
+#   0 지움(없었음 포함), 1 지우기 실패.
+#######################################
+clear_marker() {
+  if rm -f -- "${UNKNOWN_MARKER}"; then
+    return 0
+  fi
+  echo '::error::schema move: could not delete the marker' \
+    "${UNKNOWN_MARKER} (run ${MOVE_RUN_ID}); the result above is settled but" \
+    'the next deploy will stop on it — check and delete it by hand' \
+    '(services/README.md)'
+  return 1
+}
+
+#######################################
+# 표지를 쓴 뒤 · 정지 전의 EXIT trap. 아무것도 멈추지 않았으니 결과가 확실하다 —
+# 표지를 지우고, 못 지우면 종료 1.
+#######################################
+clear_marker_on_exit() {
+  local status=$?
+  clear_marker || status=1
+  exit "${status}"
+}
+
+#######################################
+# 앞 배포가 남긴 상태 불명 표지가 있으면 아무것도 멈추지 않고 끝낸다. 그 배포가
+# 아직 돌거나 결과가 확실하지 않아 밀린 이전이 커밋할 수 있고, 이 배포가 옛
+# 컨테이너를 띄우면 자료가 갈린다.
 #######################################
 require_no_unknown_marker() {
   local content
@@ -228,10 +260,10 @@ require_no_unknown_marker() {
   fi
   content="$(head -n 1 -- "${UNKNOWN_MARKER}" 2>/dev/null)" \
     || content='(unreadable)'
-  echo '::error::schema move: an earlier run ended in an unknown state' \
-    "(${UNKNOWN_MARKER}: ${content}); nothing stopped. Check that no pending" \
-    'move remains and where the tables are, then delete the marker' \
-    '(services/README.md)'
+  echo '::error::schema move: an earlier run is in progress or ended in an' \
+    "unknown state (${UNKNOWN_MARKER}: ${content}); nothing stopped. Check" \
+    'that no pending move remains and where the tables are, then delete the' \
+    'marker (services/README.md)'
   exit 1
 }
 
@@ -248,8 +280,9 @@ require_no_unknown_marker() {
 # 울타리를 보고 아무것도 바꾸지 않고 실패한다(READ COMMITTED 는 문장마다 새
 # 스냅숏을 잡는다). 울타리는 지우지 않는다 — 이 실행의 이전이 언제 늦게
 # 시작할지 모르고, 다음 실행은 자기 이름의 울타리만 보므로 막히지 않는다.
-# 판정 불가로 끝나면 상태 불명 표지를 남긴다(다음 배포가 옛 컨테이너를 띄우지
-# 않게 — 울타리를 못 세웠을 수 있다).
+# main 이 시작 때 쓴 표지는 결과가 확실한 커밋 전(띄운 뒤) · 커밋 뒤에만
+# 지운다. 판정 불가면 남긴다(다음 배포가 옛 컨테이너를 띄우지 않게 — 울타리를
+# 못 세웠을 수 있다).
 # Globals:
 #   history_before
 #######################################
@@ -277,18 +310,16 @@ restore() {
     before_commit)
       echo 'schema move: failed before commit, restarting old containers'
       compose start "${SERVICES[@]}"
+      clear_marker
       ;;
     committed)
       echo '::error::schema move committed but a later step failed;' \
         'old containers NOT restarted'
+      clear_marker
       ;;
     *)
-      echo '::error::schema move state unknown; old containers NOT restarted'
-      if ! write_unknown_marker; then
-        echo '::error::schema move: could not write the unknown-state marker' \
-          "${UNKNOWN_MARKER} (run ${MOVE_RUN_ID}); the next deploy will not" \
-          'stop on its own — write it by hand (services/README.md)'
-      fi
+      echo '::error::schema move state unknown; old containers NOT restarted;' \
+        "marker ${UNKNOWN_MARKER} left (run ${MOVE_RUN_ID})"
       ;;
   esac
   exit 1
@@ -301,11 +332,22 @@ main() {
   # 이력 읽기 · 정지 · trap 보다 먼저 — 앞 배포의 밀린 이전이 남았을 수 있다.
   require_no_unknown_marker
 
+  # 건너뛰기는 표지를 쓰기 전이다 — 위 검사를 지났으면 밀린 이전을 남긴 앞
+  # 실행이 없어 이 읽기가 바뀌지 않고, 건너뛰기는 아무것도 멈추지 않는다.
   history_before="$(history_in_public)"
   if [[ -z "${history_before}" ]]; then
     echo 'schema move: skipped'
     return 0
   fi
+
+  # 캐시 줄이기 · trap · 정지보다 먼저 쓴다 — 그 뒤 어떻게 끝나든(복구가 표지를
+  # 못 쓰는 고장 · 끊김 포함) 결과가 확실하지 않으면 표지가 남는다.
+  if ! write_marker; then
+    echo '::error::schema move: could not write the in-progress marker' \
+      "${UNKNOWN_MARKER} (run ${MOVE_RUN_ID}); nothing stopped"
+    exit 1
+  fi
+  trap clear_marker_on_exit EXIT
 
   prune_build_cache "${cache_cap}"
   require_disk_for_backup
@@ -330,6 +372,7 @@ main() {
   trap - EXIT
   echo 'schema move: moved'
   echo "schema move: public backup written under ${BACKUP_DIR}"
+  clear_marker || exit 1
 }
 
 main "$@"
