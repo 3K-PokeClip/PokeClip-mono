@@ -1398,8 +1398,13 @@ plan 이 역할을 새로 만드는지 고치는지로 드러나고, 어느 쪽�
     손으로 적지 않고 출력에서 뽑습니다(키만 냄 · ARN 은 내지 않음).
 
     ```shell
-    terraform output -json app_secret_arns |
-      jq -r 'to_entries[] | select(.value | has("INTERNAL_API_TOKEN")) | .key'
+    # 값 넣기가 저장소 뿌리로 왔다 — 출력은 하위 셸에서 runtime 으로 가 읽고,
+    # 9 · 10 의 media_ssm 이 쓰는 뿌리 cwd 는 그대로 둔다.
+    (
+      cd "$(git rev-parse --show-toplevel)/infra/terraform/prod/runtime" &&
+        terraform output -json app_secret_arns |
+        jq -r 'to_entries[] | select(.value | has("INTERNAL_API_TOKEN")) | .key'
+    )
     ```
 
     키 `<키>` 는 클러스터 `pokeclip-prod` 의 ECS 서비스
