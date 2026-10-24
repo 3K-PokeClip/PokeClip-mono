@@ -25,7 +25,7 @@ import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 /**
- * SOOP 연동 스트리머의 방송을 지켜본다(POK-397). 시작 편지·재부착이 넣고 종료 편지·재부착 떼기·탈퇴 정리가 뺀다. 1분마다 방송마다
+ * SOOP 연동 스트리머의 방송을 지켜본다(POK-397). 시작 편지·재부착이 넣고 종료 편지·재부착 떼기·탈퇴 정리가 뺀다. 방송마다 {@link Pacing}의 간격으로
  * SOOP 방송 여부를 묻고, 방송 중이면 방송 정보 한 줄(platform SOOP, 채널 = SOOP 아이디)을 남기고 화면에 밀고 clip 묶음에 SOOP을 알린다.
  *
  * <p><b>채팅 세션 자리(등록부)를 안 쓴다.</b> SOOP 채팅은 등록부가 아니라 {@link SoopChat}(PR4)이 받는다: 방송 중으로 본 방송에 붙이고 끝나거나 빠지면 뗀다. 그래서 탈퇴 정리·중계 번호 카운터를 등록부가 대신해 주지 않는다:
@@ -68,6 +68,23 @@ public class SoopBroadcastWatcher implements SoopWatch {
     /** 지난 틱에 예산이 다해 못 본 방송 번호. 틱 스레드만 만진다. */
     private final Set<String> deferred = new java.util.LinkedHashSet<>();
 
+    /**
+     * 묻는 간격(POK-456). 넣은 뒤 {@code fastWindow} 안이고 아직 「방송 중」을 못 봤으면 {@code fast}, 아니면 {@code slow}마다 묻는다.
+     * 🔴 SOOP Chat SDK는 지난 채팅을 다시 주지 않아, 시작 직후 「방송 중」을 늦게 보면 그만큼의 채팅을 영영 잃는다(실방송 2026-10-24:
+     * 1분 주기라 시작 알림 56초 뒤에야 붙었다). 「방송 중」을 본 뒤에는 채팅이 붙었으니 빨리 물을 까닭이 없다(방송 정보 줄도 1분마다로).
+     */
+    public record Pacing(Duration fast, Duration slow, Duration fastWindow) {
+
+        Duration next(Instant addedAt, Instant now, boolean seenOnAir) {
+            return !seenOnAir && Duration.between(addedAt, now).compareTo(fastWindow) < 0 ? fast : slow;
+        }
+    }
+
+    /** 묻는 간격. null이면 틱마다 묻는다(간격은 틱 주기가 정한다, 시험의 기본). */
+    private volatile Pacing pacing;
+    /** 새 방송을 넣었을 때 틱을 깨운다(다음 주기를 안 기다리게). 편지 스레드가 부른다: 줄에 넣기만 해야 한다. */
+    private volatile Runnable wake = () -> { };
+
     /** SOOP 채팅 받기(PR4). 방송 중으로 본 방송에 붙이고, 끝나거나 빠지면 뗀다. 꺼져 있으면 {@link SoopChat#NONE}. */
     private volatile SoopChat chat = SoopChat.NONE;
 
@@ -79,6 +96,12 @@ public class SoopBroadcastWatcher implements SoopWatch {
         final String streamId;
         final long streamerId;
         final Instant startedAt;
+        /** 지켜보기에 넣은 시각. 빠른 간격의 기준이다(시작 알림이 늦게 와도 넣은 뒤 몇 분은 빨리 묻는다). */
+        final Instant addedAt;
+        /** 다음에 물을 시각. null이면 다음 틱에 묻는다. 틱 스레드만 만진다. */
+        Instant nextCheckAt;
+        /** 「방송 중」을 한 번이라도 봤나. 틱 스레드만 만진다. */
+        boolean seenOnAir;
         volatile String soopUserId;
         String accessToken;
         Instant expiresAt;
@@ -87,10 +110,11 @@ public class SoopBroadcastWatcher implements SoopWatch {
         /** 다시 받아도 같은 토큰이 거부된 횟수(n4). 받아들여지면 0. */
         int sameTokenRejections;
 
-        Watch(String streamId, long streamerId, Instant startedAt) {
+        Watch(String streamId, long streamerId, Instant startedAt, Instant addedAt) {
             this.streamId = streamId;
             this.streamerId = streamerId;
             this.startedAt = startedAt;
+            this.addedAt = addedAt;
         }
     }
 
@@ -132,6 +156,12 @@ public class SoopBroadcastWatcher implements SoopWatch {
         this.chat = chat;
     }
 
+    /** 묻는 간격과 틱 깨우기를 단다(구성이 한다). 안 달면 틱마다 묻고 넣어도 안 깨운다. */
+    public void pace(Pacing pacing, Runnable wake) {
+        this.pacing = pacing;
+        this.wake = wake;
+    }
+
     @Override
     public synchronized void watch(String streamId, long streamerId, Instant startedAt) {
         Watch current = byStreamer.get(streamerId);
@@ -139,10 +169,11 @@ public class SoopBroadcastWatcher implements SoopWatch {
             if (current.streamId.equals(streamId) || !startedAt.isAfter(current.startedAt)) {
                 return;
             }
-            byStreamer.put(streamerId, new Watch(streamId, streamerId, startedAt));
+            byStreamer.put(streamerId, new Watch(streamId, streamerId, startedAt, clock.instant()));
             forgetCounter(current.streamId);
             chat.close(current.streamId);
             log.info("soop.watch.replaced stream={} previous={}", streamId, current.streamId);
+            wake.run();
             return;
         }
         // 상한은 확인 중인 것만 센다(n1). 재부착이 명부의 모든 방송을 넣으므로 SOOP을 연동 안 한 스트리머도 멈춘 채 한 자리씩 남는다.
@@ -150,8 +181,10 @@ public class SoopBroadcastWatcher implements SoopWatch {
             log.warn("soop.watch.full stream={} max={}", streamId, maxWatched);
             return;
         }
-        byStreamer.put(streamerId, new Watch(streamId, streamerId, startedAt));
+        byStreamer.put(streamerId, new Watch(streamId, streamerId, startedAt, clock.instant()));
         log.info("soop.watch.added stream={} userId={}", streamId, streamerId);
+        // 다음 주기를 기다리지 않고 바로 한 번 묻는다(시작 직후 채팅을 덜 잃게, POK-456)
+        wake.run();
     }
 
     @Override
@@ -200,7 +233,11 @@ public class SoopBroadcastWatcher implements SoopWatch {
             snapshot.stream().filter(watch -> !deferred.contains(watch.streamId)).forEach(order::add);
             deferred.clear();
             long started = System.nanoTime();
+            Pacing pace = pacing;
             for (Watch watch : order) {
+                if (pace != null && watch.nextCheckAt != null && clock.instant().isBefore(watch.nextCheckAt)) {
+                    continue; // 아직 물을 때가 아니다
+                }
                 if (System.nanoTime() - started >= tickBudget.toNanos()) {
                     deferred.add(watch.streamId);
                     continue;
@@ -209,6 +246,10 @@ public class SoopBroadcastWatcher implements SoopWatch {
                     checkOnce(watch);
                 } catch (RuntimeException e) {
                     log.warn("soop.watch.failed stream={} causeType={}", watch.streamId, e.getClass().getSimpleName());
+                }
+                if (pace != null) {
+                    Instant now = clock.instant();
+                    watch.nextCheckAt = now.plus(pace.next(watch.addedAt, now, watch.seenOnAir));
                 }
             }
             if (!deferred.isEmpty()) {
@@ -287,6 +328,13 @@ public class SoopBroadcastWatcher implements SoopWatch {
         }
         if (status.outcome() != SoopLiveStatus.Outcome.ON_AIR) {
             return;
+        }
+        if (!watch.seenOnAir) {
+            watch.seenOnAir = true;
+            // 시작 알림(넣은 때) · 방송 시작에서 첫 「방송 중」까지(POK-456). 채팅 연결 완료는 soop.chat.ready가 잇는다
+            Instant seenAt = clock.instant();
+            log.info("soop.watch.first_on_air stream={} sinceAddedMs={} sinceStartedMs={}", watch.streamId,
+                    Duration.between(watch.addedAt, seenAt).toMillis(), Duration.between(watch.startedAt, seenAt).toMillis());
         }
         // 확인하는 사이 종료·정리·갈아낌이 왔으면 남기지 않는다. 끝난 방송에 이벤트가 가고 지운 카운터가 되살아난다(L6).
         // 확인과 남기기 사이의 좁은 창은 남는다(방송 정보 수집과 같은 한계).

@@ -93,6 +93,8 @@ public class SoopChatSessions implements SoopChat, SoopChatBrowser.Listener {
         long generation;
         /** 지난 탭 이벤트를 INFO로 한 번 남겼는가(그 뒤는 DEBUG). */
         boolean staleLogged;
+        /** 지금 탭을 연 시각(수집기 시계). 입장까지 걸린 시간을 잰다(POK-456). */
+        long openedAtMillis;
 
         Session(String streamId, String channelId, String token) {
             this.streamId = streamId;
@@ -166,6 +168,7 @@ public class SoopChatSessions implements SoopChat, SoopChatBrowser.Listener {
         synchronized (session) {
             session.retryScheduled = false;
             session.generation = generation;
+            session.openedAtMillis = clockMillis.getAsLong();
             token = session.token;
         }
         tabs.open(session.streamId, token, generation);
@@ -261,6 +264,23 @@ public class SoopChatSessions implements SoopChat, SoopChatBrowser.Listener {
         relay.offer(streamId, new RelayPayload.Donation(Instant.ofEpochMilli(receivedAt), donation.nickname(),
                 donation.userId(), donation.count(), donation.action(), ""));
         // 원본 아카이브에는 안 넣는다: 치지직 후원과 같다(StreamSession 주석, 검산 등식 received = archived + 버림)
+    }
+
+    @Override
+    public void onReady(String streamId, long generation) {
+        Session session = sessions.get(streamId);
+        if (session == null) {
+            return;
+        }
+        long sinceOpen;
+        synchronized (session) {
+            if (!isCurrent(session, generation)) {
+                return;
+            }
+            sinceOpen = clockMillis.getAsLong() - session.openedAtMillis;
+        }
+        // 탭을 연 뒤 채팅방 입장까지(POK-456). 첫 채팅이 늦으면 연결이 느린지 그때 채팅이 없었는지를 이것으로 가른다
+        log.info("soop.chat.ready stream={} sinceOpenMs={}", streamId, sinceOpen);
     }
 
     @Override

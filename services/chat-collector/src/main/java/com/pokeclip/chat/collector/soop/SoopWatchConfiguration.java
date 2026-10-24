@@ -15,11 +15,14 @@ import org.springframework.boot.http.client.ClientHttpRequestFactoryBuilder;
 import org.springframework.boot.http.client.HttpClientSettings;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.web.client.RestClient;
 
 import java.time.Clock;
 import java.time.Duration;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * SOOP 방송 지켜보기 배선(POK-397). 켜지면 지켜보기·스케줄러, 꺼지면 {@link SoopWatch#NONE}. 꺼져도 빈을 두는 이유는 편지 처리기·재부착·
@@ -62,9 +65,9 @@ public class SoopWatchConfiguration {
             return watcher;
         }
 
-        @Bean
-        public Scheduler soopWatchScheduler(SoopBroadcastWatcher watcher) {
-            return new Scheduler(watcher);
+        @Bean(destroyMethod = "close")
+        public Scheduler soopWatchScheduler(SoopBroadcastWatcher watcher, SoopWatchProperties properties) {
+            return new Scheduler(watcher, properties);
         }
     }
 
@@ -78,17 +81,45 @@ public class SoopWatchConfiguration {
         }
     }
 
-    public static class Scheduler {
+    /**
+     * 지켜보기 틱을 전용 스레드 하나에서 돌린다(POK-456). 🔴 새 방송을 넣는 순간 바로 한 번 묻게 하려고 공용 {@code @Scheduled} 대신 쓴다:
+     * 공용 스케줄러는 스레드가 여섯이라 거기서 틱을 하나 더 부르면 주기 틱과 겹쳐 돈다(틱은 한 스레드 전제, 미룬 방송 · 토큰 칸).
+     * 깨우기가 몰려도(재부착이 한 번에 여럿 넣음) 줄에 하나만 둔다.
+     */
+    public static class Scheduler implements AutoCloseable {
 
-        private final SoopBroadcastWatcher watcher;
+        private final ScheduledExecutorService thread = Executors.newSingleThreadScheduledExecutor(runnable -> {
+            Thread t = new Thread(runnable, "soop-watch");
+            t.setDaemon(true);
+            return t;
+        });
+        private final AtomicBoolean wakePending = new AtomicBoolean();
 
-        Scheduler(SoopBroadcastWatcher watcher) {
-            this.watcher = watcher;
+        Scheduler(SoopBroadcastWatcher watcher, SoopWatchProperties properties) {
+            watcher.pace(new SoopBroadcastWatcher.Pacing(properties.fastInterval(), properties.interval(),
+                    properties.fastWindow()), () -> wake(watcher));
+            thread.scheduleWithFixedDelay(watcher::tick, properties.initialDelay().toMillis(),
+                    properties.fastInterval().toMillis(), TimeUnit.MILLISECONDS);
         }
 
-        @Scheduled(fixedDelayString = "${pokeclip.soop.interval}", initialDelayString = "${pokeclip.soop.initial-delay}")
-        public void tick() {
-            watcher.tick();
+        private void wake(SoopBroadcastWatcher watcher) {
+            if (!wakePending.compareAndSet(false, true)) {
+                return;
+            }
+            try {
+                thread.execute(() -> {
+                    wakePending.set(false);
+                    watcher.tick();
+                });
+            } catch (java.util.concurrent.RejectedExecutionException e) {
+                // 끄는 중이다. 편지 스레드로 번지지 않게 삼킨다
+                wakePending.set(false);
+            }
+        }
+
+        @Override
+        public void close() {
+            thread.shutdownNow();
         }
     }
 }

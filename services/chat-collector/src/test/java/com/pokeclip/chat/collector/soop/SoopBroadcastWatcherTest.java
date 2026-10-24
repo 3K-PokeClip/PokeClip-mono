@@ -6,6 +6,7 @@ import com.pokeclip.chat.collector.platforms.PlatformNotifier;
 import com.pokeclip.chat.collector.relay.RelayPayload;
 import com.pokeclip.chat.collector.relay.RelaySink;
 import com.pokeclip.chat.collector.soop.chat.SoopChat;
+import com.pokeclip.web.support.LogCaptor;
 import org.junit.jupiter.api.Test;
 
 import java.time.Clock;
@@ -644,5 +645,91 @@ class SoopBroadcastWatcherTest {
 
         assertThat(kept).containsExactly("s-2");
         assertThat(relayed).containsExactlyInAnyOrder("s-1", "s-2");
+    }
+
+    // ── 처음 몇 분은 빨리 (POK-456) ───────────────────────────────
+
+    private static final SoopBroadcastWatcher.Pacing 빠르게 = new SoopBroadcastWatcher.Pacing(Duration.ofSeconds(10),
+            Duration.ofMinutes(1), Duration.ofMinutes(3));
+
+    /** 시험이 10초씩 시계를 밀며 틱을 돌린다(운영 틱 간격). 확인 횟수를 돌려준다. */
+    private int tickEvery10s(SoopBroadcastWatcher watcher, Duration span) {
+        int before = checkedTokens.size();
+        for (long s = 0; s < span.toSeconds(); s += 10) {
+            now.set(now.get().plusSeconds(10));
+            watcher.tick();
+        }
+        return checkedTokens.size() - before;
+    }
+
+    /**
+     * 🔴 시작 직후 채팅을 놓치지 않으려고 넣은 뒤 3분은 10초마다, 그 뒤는 1분마다 묻는다(실방송 2026-10-24: 1분 주기라 시작 알림 뒤 56초에야
+     * 「방송 중」을 보고 앞부분 채팅을 잃었다. SDK는 지난 채팅을 다시 주지 않는다).
+     */
+    @Test
+    void 넣은_뒤_3분은_10초마다_그_뒤는_1분마다_묻는다() {
+        linkAnswers.add(link("tok-1", now.get().plus(Duration.ofHours(8))));
+        liveAnswers.add(outcome(SoopLiveStatus.Outcome.OFF_AIR));
+        SoopBroadcastWatcher watcher = watcher();
+        watcher.pace(빠르게, () -> { });
+
+        watcher.watch("s-1", 42L, 시작);
+        watcher.tick();
+        assertThat(checkedTokens).as("넣은 뒤 첫 틱에 바로 묻는다").hasSize(1);
+
+        now.set(now.get().plusSeconds(5));
+        watcher.tick();
+        assertThat(checkedTokens).as("10초가 안 지났으면 안 묻는다").hasSize(1);
+        now.set(now.get().minusSeconds(5));
+
+        assertThat(tickEvery10s(watcher, Duration.ofMinutes(3))).as("처음 3분은 10초마다").isEqualTo(18);
+        assertThat(tickEvery10s(watcher, Duration.ofMinutes(3))).as("그 뒤는 1분마다").isEqualTo(3);
+    }
+
+    /** 「방송 중」을 한 번 보면 채팅은 붙었으니 빨리 물을 까닭이 없다: 1분으로 돌아간다(방송 정보 줄이 10초마다 쌓이지 않게) */
+    @Test
+    void 방송_중을_보면_1분으로_돌아간다() {
+        linkAnswers.add(link("tok-1", now.get().plus(Duration.ofHours(8))));
+        liveAnswers.add(onAir("숲", 1));
+        SoopBroadcastWatcher watcher = watcher();
+        watcher.pace(빠르게, () -> { });
+
+        watcher.watch("s-1", 42L, 시작);
+        watcher.tick();
+
+        assertThat(tickEvery10s(watcher, Duration.ofMinutes(2))).isEqualTo(2);
+        assertThat(stored).hasSize(3);
+    }
+
+    /** 넣는 순간 틱을 깨운다(다음 주기를 안 기다린다). 이미 지켜보는 방송을 또 넣으면 안 깨운다 */
+    @Test
+    void 새로_넣으면_틱을_깨운다() {
+        List<String> wakes = new ArrayList<>();
+        SoopBroadcastWatcher watcher = watcher();
+        watcher.pace(빠르게, () -> wakes.add("wake"));
+
+        watcher.watch("s-1", 42L, 시작);
+        watcher.watch("s-1", 42L, 시작);
+        watcher.watch("s-2", 43L, 시작);
+
+        assertThat(wakes).hasSize(2);
+    }
+
+    /** 「시작 알림 → 첫 방송 중」 시간을 한 줄로 남긴다(실방송에서 연결까지 몇 초인지 재려고). 같은 방송에 두 번은 안 남긴다 */
+    @Test
+    void 처음_방송_중을_보면_걸린_시간을_남긴다() {
+        linkAnswers.add(link("tok-1", now.get().plus(Duration.ofHours(8))));
+        liveAnswers.add(onAir("숲", 1));
+        SoopBroadcastWatcher watcher = watcher();
+        watcher.pace(빠르게, () -> { });
+        try (LogCaptor captor = new LogCaptor()) {
+            watcher.watch("s-1", 42L, 시작);
+            now.set(now.get().plusSeconds(3));
+            watcher.tick();
+            tickEvery10s(watcher, Duration.ofMinutes(2));
+
+            assertThat(captor.messages()).filteredOn(m -> m.startsWith("soop.watch.first_on_air"))
+                    .containsExactly("soop.watch.first_on_air stream=s-1 sinceAddedMs=3000 sinceStartedMs=63000");
+        }
     }
 }
