@@ -282,7 +282,7 @@ CI 의 한계는 다음과 같습니다.
 
 ## guard 규칙
 
-guard 는 Terraform 트리의 금지 규약을 검사합니다. 규칙 R1 ~ R14 는
+guard 는 Terraform 트리의 금지 규약을 검사합니다. 규칙 R1 부터 R15 는
 [conftest](https://www.conftest.dev/)(`--parser hcl2`)로 돌리는 Rego 정책
 `policy/guard/*.rego` 가 판정합니다. `scripts/guard.sh` 는 얇은 실행기입니다.
 파서가 볼 수 없는 R0 를 직접 보고, 파일마다 파싱이 되는지 먼저 가린 뒤, 트리
@@ -306,6 +306,7 @@ guard 는 Terraform 트리의 금지 규약을 검사합니다. 규칙 R1 ~ R14 
 | R12 | `nonprod/dns-legacy/` | 운영 트리: ① 그 루트 바로 아래 `.tf` 없음 ② 주소가 정확히 `aws_route53_zone.legacy` 인 선언 없음 ③ 그 루트의 `aws_route53_zone` 중 리터럴 `prevent_destroy = true` 가 없는 것. fixture 트리는 ① · ② 의 부재만 건너뜀(③ 은 그대로) |
 | R13 | 전체(`.tf` 만 — `*.example` · 시험 파일 · 주석은 리뷰) | 문자열 · 숫자 리터럴(맵 키 포함) 안의 계정 ID 꼴 숫자열 — 12자리 · 4-4-4 대시 표기(앞뒤가 숫자가 아님 — ARN 속 계정 ID 포함) · 이름을 소문자로 바꾸고 `-` · `_` 를 뺐을 때 `accountid` 가 드는 `variable`(`accountId` · `account-id` 포함). 위반 메시지는 그 숫자열을 가림 |
 | R14 | `prod/platform/`(루트 바로 아래 `.tf` 만) | 주소가 정확히 `terraform_data.public_routed_target_groups` 인 자원 없음(ECS 서비스가 공개 ALB 리스너 규칙을 기다리는 다리), 또는 그 자원의 `depends_on` 에 `module.public_alb` 참조가 없음(따옴표 문자열 · 다른 참조만 있음 포함). `terraform test` 는 의존 간선을 못 보므로 선언을 여기서 봄 — 서비스가 다리 출력을 받는지는 `prod/platform/tests/apply_order.tftest.hcl`, 실제 생성 순서는 apply 로그. 대상 경로에 `.tf` 가 없으면 건너뜀 |
+| R15 | `prod/edge/`(루트 바로 아래 `.tf` 만) | `data "aws_security_group" "vpc_origin_service"`(VPC origin 관리형 SG 조회)의 `depends_on` 이 정확히 `[terraform_data.vpc_origin_ready]` 가 아님(없음 · 빈 목록 · 따옴표 문자열 · `module.media` 등 다른 참조가 있음 포함). 기다리지 않으면 첫 apply 에서 SG 를 찾지 못하고, media 모듈 전체를 기다리면 VPC origin 밖 변경마다 인그레스 규칙 변경 예고가 plan 에 낀다. `terraform test` 는 의존 간선을 못 보므로 선언을 여기서 봄 — 고리의 `input` 이 VPC origin id 인지는 `prod/edge/tests/edge.tftest.hcl`. 조회가 없으면 건너뜀(같은 시험이 그 주소를 읽음) |
 
 `prevent_destroy` 는 `terraform test`(mock)로 관찰할 수 없어 R4 · R10 · R11 ·
 R12 가 맡습니다. conftest 는 식을 평가하지 않으므로 리터럴 `true` 만 인정합니다 —

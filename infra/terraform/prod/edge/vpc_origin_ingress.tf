@@ -5,7 +5,8 @@
 #
 # 조회는 media 모듈 전체가 아니라 VPC origin 하나만 기다린다. 모듈 전체를
 # 기다리면 VPC origin 밖 변경(표준 로그 끄기 · 비헤이비어 TTL)마다 조회가
-# apply 로 밀려, plan 에 이 규칙의 변경 예고가 끼어든다.
+# apply 로 밀려, plan 에 이 규칙의 변경 예고가 끼어든다. 이 depends_on 줄은
+# guard R15 가 본다(mock 시험은 의존 순서를 못 본다).
 
 resource "terraform_data" "vpc_origin_ready" {
   input = module.media.vpc_origin_id
