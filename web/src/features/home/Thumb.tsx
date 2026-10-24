@@ -11,7 +11,8 @@ export function Thumb({
   className,
   children,
 }: {
-  label: string;
+  /** 사진이 없을 때 자리표시. 글자나 아이콘 */
+  label: ReactNode;
   src?: string | null;
   refreshMs?: number;
   className?: string;

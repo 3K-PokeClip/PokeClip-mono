@@ -6,20 +6,20 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 /**
- * 갱신이 거부된 토큰을 구글에 버린다. 버리기만 한다 — 저장은 모른다.
+ * 토큰을 구글에 버린다(revoke). 버리기만 한다 — 저장은 모른다.
  *
- * <p>🔴 <b>부르는 자리는 하나뿐이다</b> — {@link YoutubeTokenRefresher} 의 갱신 거부 정리(BROKEN).
- * 연동 실패 정리와 <b>사용자 해제</b>는 이제 구글에 아무것도 보내지 않는다(각 자리의 javadoc에 근거가 있다).
- * 이유는 한 문장으로 같다 — <b>구글 revoke는 계정 단위</b>라 우리가 만들지도 않은 남의 grant까지 죽이고,
- * 조건으로 그것을 막으려면 revoke를 락 안에 넣어야 하는데 그것이 트랜잭션 안 외부 호출이다.
+ * <p>🔴 <b>부르는 자리는 둘이다</b>:
+ * <ul>
+ *   <li>{@link YoutubeTokenRefresher}의 갱신 거부 정리(BROKEN). 그 토큰은 이미 {@code invalid_grant}로 죽어 있어 살아 있는
+ *       grant에 닿지 않는다.</li>
+ *   <li>{@link YoutubeLinkWriter}의 <b>해제 정리</b>(사용자 {@code DELETE} · 탈퇴, 2026-10-24 사용자 재결정 · ADR-116, 유튜브
+ *       정책 III.D.2.c). 구글 revoke는 계정 단위라 그 구글 계정의 다른 grant까지 죽는다는 대가를 받아들였다. 그 사이 같은
+ *       회원이 다시 연동했으면 부르지 않는다(그쪽 javadoc).</li>
+ * </ul>
+ * 재연동 · 연동 실패 정리는 여전히 안 부른다(새 토큰이 죽는다 · 판별자가 없다).
  *
- * <p><b>여기만 남은 이유</b>: 이 경로의 토큰은 이미 {@code invalid_grant}로 죽어 있다. 죽은 토큰의 revoke는
- * 살아있는 grant에 닿지 않으므로 남을 해칠 수 없다 — 이 세션에서 검증한 유일하게 안전한 자리다.
- * (다만 「죽은 토큰의 revoke가 정말 무해한가」는 실물로 확인하지 못했다 — {@code YoutubeTokenRefresher.reject}
- * javadoc의 「반증하는 법」 참고.)
- *
- * <p>best-effort다. 실패는 삼킨다 — 못 버려도 그 토큰은 이미 죽었고, 갱신 거부 처리(행을 BROKEN으로 닫는 것)를
- * 막을 이유가 없다. 전용 정리 스레드에서 부른다.
+ * <p>best-effort다. 실패는 삼킨다 — 다시 보내려면 토큰 원문을 남겨야 하는데 처리방침은 해제하면 바로 지운다. 남은 grant는
+ * 사용자가 구글 계정 설정에서 철회할 수 있다. 전용 정리 스레드에서 부른다.
  *
  * <p>판정: 4xx(429·408·invalid_client·403 할당량 제외, 그것들은 Unavailable)는 구글이 이 토큰을 모르거나
  * 이미 무효 = 무효화 목적 달성 → INFO. 5xx·타임아웃·형식 오류만 「구글에 살아있을 수 있다」 → WARN.

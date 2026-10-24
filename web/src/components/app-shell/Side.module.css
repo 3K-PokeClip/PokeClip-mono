@@ -213,7 +213,7 @@
   box-sizing: border-box;
   border-radius: var(--pc-radius-pill);
   background: var(--pc-color-point);
-  color: var(--pc-white);
+  color: var(--pc-white); /* 테마 고정 — 포인트 배지 위 글자 */
   font-size: calc(10.5 * var(--u));
   font-weight: 700;
   line-height: 1;

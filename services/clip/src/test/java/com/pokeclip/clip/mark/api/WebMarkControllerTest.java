@@ -26,11 +26,14 @@ import tools.jackson.databind.ObjectMapper;
 import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doCallRealMethod;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
@@ -391,12 +394,26 @@ class WebMarkControllerTest extends IntegrationTestSupport {
 
     /**
      * 받은 시각은 문에 들어오자마자 읽는다(계획 검증 m1). 자격 판정(auth 왕복) 뒤에 읽으면 그 시간만큼 누른 시각이 뒤로 밀린다.
-     * 진짜 시계로 돌리고 auth에 1초를 심는다: 맨 앞에서 읽으면 카드 ms ≈ 보낸 때 − 기준점, 판정 뒤에서 읽으면 1초 더 뒤다.
+     * 진짜 시계로 돌리고 auth에 1초를 심는다.
+     *
+     * <p>🔴 <b>벽시계 간격이 아니라 순서와 값을 잰다</b>(POK-448). 전에는 「카드 ms − (보낸 때 − 기준점)이 0~500ms」를 봐서, 보낸 때와
+     * 서버가 받은 시각을 읽는 사이 JVM이 0.5초 넘게 멈추면(CI 전체 실행에서 4.5초 멈춤 실측, POK-426) 결함 없이 깨질 수 있었다.
+     * 지금은 서버가 실제로 읽은 받은 시각을 붙잡아 ① 그것이 auth에 첫 요청이 닿기 <b>전</b>이고 ② 카드 ms가 정확히 그 시각 − 기준점인지
+     * 본다. 받은 시각을 판정 뒤에 다시 읽으면 ②가, 판정 뒤에서만 읽으면 ①이 빨갛다.
+     *
+     * <p>🔴 기준점은 ms로 잘라 심는다(POK-448). {@code Instant.now()}의 나노초를 그대로 심으면 PostgreSQL이 마이크로초로 <b>반올림</b>해
+     * 저장해서, 소수가 ms 경계 바로 아래(…0.9995ms 이상)면 서버가 읽는 기준점이 다음 ms가 된다. 받은 시각이 보낸 시각과 같은 ms에
+     * 찍힌 회차에서 차이가 −1로 떨어져 CI에서 간헐로 깨졌다(PR #376, 결정적 재현: 기준점 + 0.9997ms · 받은 시각 = 보낸 시각이면 −1).
      */
     @Test
     void 받은_시각은_자격_판정_전에_읽는다() throws Exception {
-        doCallRealMethod().when(webMarks).now();
-        Instant origin = Instant.now().minusSeconds(600);
+        AtomicReference<Instant> 받은_시각 = new AtomicReference<>();
+        doAnswer(invocation -> {
+            Instant read = (Instant) invocation.callRealMethod();
+            받은_시각.compareAndSet(null, read);
+            return read;
+        }).when(webMarks).now();
+        Instant origin = Instant.now().truncatedTo(ChronoUnit.MILLIS).minusSeconds(600);
         jdbc.update("UPDATE broadcasts SET started_at = ? WHERE stream_id = ?", Timestamp.from(origin.minusSeconds(30)), 라이브);
         jdbc.update("UPDATE stream_segments SET start_wall_utc = ? WHERE stream_id = ?", Timestamp.from(origin), 라이브_키);
         AUTH.holdFor(Duration.ofSeconds(1));
@@ -404,10 +421,14 @@ class WebMarkControllerTest extends IntegrationTestSupport {
         long sent = System.currentTimeMillis();
         JsonNode card = json(mvc.perform(마킹(라이브, 라이브_본문(eventId(), sent, sent))).andExpect(status().isCreated()));
 
-        long expected = sent - origin.toEpochMilli();
-        assertThat(card.path("streamTimestampMs").asLong() - expected)
-                .as("누른 시각이 auth 왕복(1초)만큼 밀렸다: 받은 시각을 판정 뒤에 읽었다")
-                .isBetween(0L, 500L);
+        assertThat(받은_시각.get()).as("문이 받은 시각을 안 읽었다").isNotNull();
+        assertThat(AUTH.firstRequestAt()).as("자격 판정이 auth를 안 탔다: 순서를 잴 수 없다").isNotNull();
+        assertThat(받은_시각.get())
+                .as("받은 시각을 자격 판정(auth 왕복) 뒤에 읽었다")
+                .isBefore(AUTH.firstRequestAt());
+        assertThat(card.path("streamTimestampMs").asLong())
+                .as("카드 ms가 문에서 읽은 받은 시각 − 기준점이 아니다: 판정 뒤에 다시 읽었다")
+                .isEqualTo(받은_시각.get().toEpochMilli() - origin.toEpochMilli());
     }
 
     // ── 404 · 503 ───────────────────────────────────────────────

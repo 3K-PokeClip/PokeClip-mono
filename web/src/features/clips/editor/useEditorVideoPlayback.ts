@@ -4,7 +4,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ensureMediaAccess, reportPlaybackForbidden } from '@/api/playbackAccess';
 import { mediaCredentials, recordingClipUrl } from '@/api/mediaPlayback';
 import { playableFrom, type RecordingPiece } from '@/features/player/recordingTimeline';
-import { boundaryAction, type EditorPlayback, type PlaybackBounds } from './editorPlayback';
+import {
+  boundaryAction,
+  type EditorPlayback,
+  type PlaybackBounds,
+  type PlaybackError,
+} from './editorPlayback';
 
 // 편집기의 실재생 어댑터(POK-251) — 녹화 재생 서버에서 「구간 앞뒤로 조금 넉넉한 창」을 mp4 한 덩어리로 받아
 // <video> 하나로 튼다. 방송 중이든 끝난 뒤든 같은 길이다(녹화 파일에서 읽는다).
@@ -19,6 +24,9 @@ import { boundaryAction, type EditorPlayback, type PlaybackBounds } from './edit
 
 const PAD_SECONDS = 10;
 const REWINDOW_DELAY_MS = 500;
+
+/** 출입증을 새로 받고도 녹화가 403이다 */
+class PlaybackForbiddenError extends Error {}
 
 interface Window {
   startSeconds: number;
@@ -57,6 +65,13 @@ export interface EditorVideoPlayback {
   videoRef: (element: HTMLVideoElement | null) => void;
   video: HTMLVideoElement | null;
   src: string;
+  /** 영상이 받은 창(편집기 초): 영상 노드의 0초가 이 창의 시작이다(POK-389). 아직 못 받았거나 받을 녹화가 없으면 null */
+  window: { startSeconds: number; endSeconds: number } | null;
+  /**
+   * 지금 받으려는 창(편집기 초). 영상을 다 받기 전에도 있다: 트랙별 미리 듣기가 같은 창의 조각을 영상과 함께 받기 시작한다
+   * (PR #341 2차 — 받은 창을 기다리면 영상 수신 + 조각 수신이 이어서 걸렸다). 녹화가 없는 구간이면 null
+   */
+  targetWindow: { startSeconds: number; endSeconds: number } | null;
   /** 받아 둔 조각(src)의 첫 장면이 이 훅의 시간축으로 몇 초인가. 조각 안 초 = 시간축 초 − 이 값 */
   windowStartSeconds: number;
 }
@@ -78,7 +93,7 @@ export function useEditorVideoPlayback(options: {
   piecesRef.current = pieces;
   const [playing, setPlaying] = useState(false);
   const [currentSeconds, setCurrentSeconds] = useState(initialRange.startSeconds);
-  const [failed, setFailed] = useState(false);
+  const [failure, setFailure] = useState<PlaybackError | null>(null);
 
   const winRef = useRef(win);
   winRef.current = win;
@@ -100,16 +115,24 @@ export function useEditorVideoPlayback(options: {
   // 🔴 재생 서버의 응답은 만들어 가며 흘려보내는 영상이라 그대로 틀면 **되감기·건너뛰기가 안 된다**(seekable 0~0, 실측).
   // 창 하나를 통째로 받아 브라우저 안의 파일로 만든 뒤 튼다 — 그러면 구간 반복·프레임 이동이 즉시 된다.
   const [src, setSrc] = useState('');
+  // src에 실제로 담긴 창. 새 창을 받는 동안은 옛 영상이 그대로라 새 창을 알리면 옛 장면을 새 시각으로 읽는다
+  const [srcWindow, setSrcWindow] = useState<Window | null>(null);
+  // 영상 안 초 ↔ 편집기 초는 지금 <video>에 담긴 창으로 옮긴다: 새 창을 받는 몇 초 동안에도 옛 영상이 돌아서, 목표 창(win)으로
+  // 옮기면 재생 시각이 창이 움직인 만큼 어긋나고 경계 검사가 옛 영상을 엉뚱한 자리로 되감는다(PR #341 claude). 아직 아무것도
+  // 못 받았으면 목표 창이다(첫 영상이 곧 그 창이다). 창을 다시 받을지는 목표 창(winRef)으로 정한다
+  const loadedRef = useRef<Window>(win);
+  loadedRef.current = srcWindow ?? win;
   useEffect(() => {
     if (recordingSeconds <= 0) return undefined;
     if (win.empty) {
-      setFailed(true);
+      setFailure('no-recording');
       setSrc('');
+      setSrcWindow(null);
       return undefined;
     }
+    const target = win;
     const abort = new AbortController();
-    let objectUrl: string | null = null;
-    setFailed(false);
+    setFailure(null);
     // 출입증이 곧 만료되면 새로 받은 뒤 부른다(POK-317). 받아 둔 것이 쓸 만하면 기다리지 않는다
     const load = () => fetch(remoteUrl, { signal: abort.signal, credentials: mediaCredentials() });
     const access = ensureMediaAccess(streamId);
@@ -122,36 +145,43 @@ export function useEditorVideoPlayback(options: {
         return load();
       })
       .then((res) => {
+        // 출입증을 새로 받고도 403이면 다시 받을 길이 없다: 화면이 「출입증 거절」로 알린다
+        if (res.status === 403) throw new PlaybackForbiddenError();
         if (!res.ok) throw new Error(String(res.status));
         return res.blob();
       })
       .then((blob) => {
-        objectUrl = URL.createObjectURL(new Blob([blob], { type: 'video/mp4' }));
-        setSrc(objectUrl);
+        setSrc(URL.createObjectURL(new Blob([blob], { type: 'video/mp4' })));
+        setSrcWindow(target);
       })
       .catch((e: unknown) => {
-        if (!(e instanceof DOMException && e.name === 'AbortError')) setFailed(true);
+        if (e instanceof DOMException && e.name === 'AbortError') return;
+        setFailure(e instanceof PlaybackForbiddenError ? 'access' : 'fatal');
       });
-    return () => {
-      abort.abort();
-      if (objectUrl !== null) URL.revokeObjectURL(objectUrl);
-    };
-  }, [remoteUrl, streamId, recordingSeconds, win.empty]);
+    return () => abort.abort();
+  }, [remoteUrl, streamId, recordingSeconds, win]);
+
+  // 옛 영상 주소는 새 영상이 들어간 뒤에(또는 화면을 떠날 때) 지운다: 새 창을 받는 동안에도 <video>는 옛 주소로 틀고
+  // 되감기 때문에, 받기를 시작할 때 지우면 그 사이 되감기가 브라우저에 따라 실패한다(PR #341 claude)
+  useEffect(() => {
+    if (src === '') return undefined;
+    return () => URL.revokeObjectURL(src);
+  }, [src]);
 
   const clampToWindow = useCallback((seconds: number) => {
-    const w = winRef.current;
+    const w = loadedRef.current;
     return Math.min(w.endSeconds - 0.05, Math.max(w.startSeconds, seconds));
   }, []);
 
   useEffect(() => {
     if (video === null) return undefined;
-    const position = () => winRef.current.startSeconds + video.currentTime;
+    const position = () => loadedRef.current.startSeconds + video.currentTime;
     const onLoaded = () => {
-      setFailed(false);
+      setFailure(null);
       const target = pendingSeekRef.current;
       pendingSeekRef.current = null;
       if (target !== null)
-        video.currentTime = Math.max(0, clampToWindow(target) - winRef.current.startSeconds);
+        video.currentTime = Math.max(0, clampToWindow(target) - loadedRef.current.startSeconds);
       setCurrentSeconds(position());
     };
     const onTime = () => {
@@ -160,7 +190,7 @@ export function useEditorVideoPlayback(options: {
       if (action.kind === 'seek') {
         video.currentTime = Math.max(
           0,
-          clampToWindow(action.toSeconds) - winRef.current.startSeconds,
+          clampToWindow(action.toSeconds) - loadedRef.current.startSeconds,
         );
       } else if (action.kind === 'stop' && !video.paused) {
         video.pause();
@@ -169,7 +199,7 @@ export function useEditorVideoPlayback(options: {
     };
     const onPlay = () => setPlaying(true);
     const onPause = () => setPlaying(false);
-    const onError = () => setFailed(true);
+    const onError = () => setFailure('fatal');
     video.addEventListener('loadedmetadata', onLoaded);
     // 리스너를 달기 전에 이미 메타데이터가 와 있을 수 있다(캐시된 영상) — 그러면 처음 자리로 못 간다.
     if (video.readyState >= 1 && pendingSeekRef.current !== null) onLoaded();
@@ -196,12 +226,12 @@ export function useEditorVideoPlayback(options: {
     let raf = 0;
     const tick = () => {
       raf = requestAnimationFrame(tick);
-      const now = winRef.current.startSeconds + video.currentTime;
+      const now = loadedRef.current.startSeconds + video.currentTime;
       const action = boundaryAction(now, boundsRef.current);
       if (action.kind === 'seek') {
         video.currentTime = Math.max(
           0,
-          clampToWindow(action.toSeconds) - winRef.current.startSeconds,
+          clampToWindow(action.toSeconds) - loadedRef.current.startSeconds,
         );
       } else if (action.kind === 'stop') {
         video.pause();
@@ -216,15 +246,18 @@ export function useEditorVideoPlayback(options: {
     if (video === null) return;
     if (video.paused) {
       const bounds = boundsRef.current;
-      const now = winRef.current.startSeconds + video.currentTime;
+      const now = loadedRef.current.startSeconds + video.currentTime;
       // 구간 끝에 서 있으면 처음부터 다시 — 끝에서 재생을 누르면 곧바로 멈춰 아무 일도 없는 것처럼 보인다
       if (now >= bounds.endSeconds - 0.05 || now < bounds.startSeconds) {
         video.currentTime = Math.max(
           0,
-          clampToWindow(bounds.startSeconds) - winRef.current.startSeconds,
+          clampToWindow(bounds.startSeconds) - loadedRef.current.startSeconds,
         );
       }
-      void video.play().catch(() => setFailed(true));
+      // 누르자마자 멈추거나 새 영상으로 갈아 끼우면 play()가 AbortError로 거절된다: 보통 조작이라 오류로 알리지 않는다
+      video.play().catch((e: unknown) => {
+        if (!(e instanceof DOMException && e.name === 'AbortError')) setFailure('fatal');
+      });
     } else {
       video.pause();
     }
@@ -234,7 +267,7 @@ export function useEditorVideoPlayback(options: {
     (seconds: number) => {
       if (video === null) return;
       const target = clampToWindow(seconds);
-      video.currentTime = Math.max(0, target - winRef.current.startSeconds);
+      video.currentTime = Math.max(0, target - loadedRef.current.startSeconds);
       setCurrentSeconds(target);
     },
     [video, clampToWindow],
@@ -243,7 +276,7 @@ export function useEditorVideoPlayback(options: {
   const seekBy = useCallback(
     (delta: number) => {
       if (video === null) return;
-      seekTo(winRef.current.startSeconds + video.currentTime + delta);
+      seekTo(loadedRef.current.startSeconds + video.currentTime + delta);
     },
     [video, seekTo],
   );
@@ -274,8 +307,17 @@ export function useEditorVideoPlayback(options: {
       rewindowTimer.current = window.setTimeout(() => {
         rewindowTimer.current = null;
         const current = boundsRef.current;
+        const next = windowFor(current, recordingSeconds, piecesRef.current);
+        const w = winRef.current;
+        // 기다리는 사이 구간을 안쪽으로 되돌렸으면 창이 그대로다: 같은 영상을 다시 받고 구간 시작으로 튀지 않게 둔다
+        if (
+          next.startSeconds === w.startSeconds &&
+          next.endSeconds === w.endSeconds &&
+          next.empty === w.empty
+        )
+          return;
         pendingSeekRef.current = current.startSeconds;
-        setWin(windowFor(current, recordingSeconds, piecesRef.current));
+        setWin(next);
       }, REWINDOW_DELAY_MS);
     },
     [recordingSeconds],
@@ -293,7 +335,7 @@ export function useEditorVideoPlayback(options: {
       playing,
       currentSeconds,
       durationSeconds: recordingSeconds,
-      error: failed ? 'fatal' : null,
+      error: failure,
       togglePlay,
       seekTo,
       seekBy,
@@ -304,7 +346,7 @@ export function useEditorVideoPlayback(options: {
       playing,
       currentSeconds,
       recordingSeconds,
-      failed,
+      failure,
       togglePlay,
       seekTo,
       seekBy,
@@ -313,5 +355,28 @@ export function useEditorVideoPlayback(options: {
     ],
   );
 
-  return { playback, videoRef: setVideo, video, src, windowStartSeconds: win.startSeconds };
+  const loadedWindow = useMemo(
+    () =>
+      srcWindow === null || recordingSeconds <= 0
+        ? null
+        : { startSeconds: srcWindow.startSeconds, endSeconds: srcWindow.endSeconds },
+    [srcWindow, recordingSeconds],
+  );
+  const targetWindow = useMemo(
+    () =>
+      win.empty || recordingSeconds <= 0
+        ? null
+        : { startSeconds: win.startSeconds, endSeconds: win.endSeconds },
+    [win, recordingSeconds],
+  );
+
+  return {
+    playback,
+    videoRef: setVideo,
+    video,
+    src,
+    window: loadedWindow,
+    targetWindow,
+    windowStartSeconds: srcWindow?.startSeconds ?? win.startSeconds,
+  };
 }

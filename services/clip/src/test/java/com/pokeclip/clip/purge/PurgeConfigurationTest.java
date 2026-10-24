@@ -24,6 +24,7 @@ class PurgeConfigurationTest {
                     "pokeclip.render.max-attempts=3",
                     "pokeclip.render.max-message-bytes=204800",
                     "pokeclip.render.file-url-ttl=PT60M",
+                    "pokeclip.render.segment-audio-url-ttl=PT5M",
                     "pokeclip.upload.region=ap-northeast-2",
                     "pokeclip.upload.outbox-retry-interval=PT30S",
                     "pokeclip.upload.reconcile-interval=PT1M",

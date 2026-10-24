@@ -233,6 +233,23 @@ export async function fetchBroadcast(streamId: string): Promise<BroadcastRow | n
   return null;
 }
 
+/**
+ * 그 방송이 그 채널(스트리머)의 것인가(POK-457). 방송 줄에는 스트리머 번호가 없어, 그 채널로 물은 목록에 있는지로 가른다.
+ * 남의 채널 방송을 주소로 열었을 때 고른 채널 주인의 프로필을 붙이지 않으려고 쓴다
+ */
+export async function isBroadcastInChannel(streamId: string, streamerId: number): Promise<boolean> {
+  for (const state of ['live', 'past'] as const) {
+    let found = false;
+    await walkBroadcasts(
+      state,
+      (rows) => (found = rows.some((b) => b.streamId === streamId)),
+      streamerId,
+    );
+    if (found) return true;
+  }
+  return false;
+}
+
 export function fetchSegments(
   streamId: string,
   startMs: number,
@@ -678,6 +695,28 @@ export function requestFileAccess(streamId: string, clipId: number): Promise<Cli
   return sendJson(
     'POST',
     `/api/clip/broadcasts/${encodeURIComponent(streamId)}/clips/${clipId}/file-access`,
+  );
+}
+
+/**
+ * 원본 조각 주소(POK-389): 편집기가 트랙별로 미리 들으려고 구간의 녹화 조각(방송 소리 트랙이 전부 든 파일)을 받는다.
+ * url은 5분짜리 서명 주소라 받자마자 내려받는다. startAtMs는 재생 축(편집본 cut과 같은 축)이고, 올라간 조각만 온다.
+ * 400 {field: fromMs|toMs}(6분 넘는 구간 등) · 404 · 410 vod_expired · 503 render_unavailable.
+ */
+export interface SegmentAudioAccess {
+  expiresAt: string;
+  segments: { seq: number; startAtMs: number; durationMs: number; url: string }[];
+}
+
+export function requestSegmentAudioAccess(
+  streamId: string,
+  fromMs: number,
+  toMs: number,
+): Promise<SegmentAudioAccess> {
+  const qs = new URLSearchParams({ fromMs: String(fromMs), toMs: String(toMs) });
+  return sendJson(
+    'POST',
+    `/api/clip/broadcasts/${encodeURIComponent(streamId)}/segments/audio-access?${qs}`,
   );
 }
 

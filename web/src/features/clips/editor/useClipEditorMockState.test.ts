@@ -46,20 +46,16 @@ describe('useClipEditorMockState', () => {
     expect(result.current.rangeGaugeLabel).toBe('0:12.4 / 최대 3:00');
   });
 
-  it('트랙 6종을 시안 볼륨과 클립 이름 그대로 준다', () => {
+  it('목업 트랙은 방송 소리 넷이다: 실제 모드처럼 스트리머가 이름 붙인 소스 트랙(POK-389)', () => {
     const { result } = renderEditor();
 
     expect(result.current.tracks.map((t) => t.label)).toEqual([
-      '영상',
       '마이크',
-      '게임 사운드',
+      '게임',
+      '디스코드',
       'BGM',
-      '효과음',
-      '이미지',
     ]);
-    expect(result.current.tracks.map((t) => t.volume)).toEqual([null, 80, 60, 40, 70, null]);
-    expect(result.current.tracks[3]?.clips[0]?.label).toBe('Neon Drive.mp3 · 페이드 인/아웃');
-    expect(result.current.tracks[4]?.clips.map((c) => c.label)).toEqual(['띠용', '박수']);
+    expect(result.current.tracks.map((t) => t.volume)).toEqual([80, 60, 100, 40]);
   });
 
   it('자막 생성 전에는 제목 추천이 잠기고, 생성하면 열린다', () => {
@@ -154,10 +150,10 @@ describe('useClipEditorMockState', () => {
     const { result } = renderEditor();
 
     act(() => result.current.setTrackVolume('mic', 20));
-    expect(result.current.tracks[1]?.volume).toBe(20);
+    expect(result.current.tracks[0]?.volume).toBe(20);
 
     act(() => result.current.undo());
-    expect(result.current.tracks[1]?.volume).toBe(80);
+    expect(result.current.tracks[0]?.volume).toBe(80);
   });
 
   it('재생하면 구간 안에서 플레이헤드가 흐르고 끝에서 되감는다', () => {
@@ -184,6 +180,29 @@ describe('useClipEditorMockState', () => {
     const second = renderEditor();
     expect(second.result.current.panelSide).toBe('right');
     window.localStorage.removeItem('pc-editor-panel-side');
+  });
+
+  it('썸네일 장면은 쇼츠 구간 안에서만 고르고 편집 기록에 남기지 않는다(POK-389)', () => {
+    const { result } = renderEditor();
+    expect(result.current.thumbnailSeconds).toBeNull();
+    expect(result.current.canPickThumbnail).toBe(true);
+
+    act(() => result.current.pickThumbnail());
+    expect(result.current.thumbnailSeconds).toBe(4934);
+    // 보는 값이 아니라 업로드 정보라 실행취소 거리가 생기지 않는다
+    expect(result.current.canUndo).toBe(false);
+
+    act(() => result.current.seekTo(result.current.range.endSeconds + 5));
+    expect(result.current.canPickThumbnail).toBe(false);
+  });
+
+  it('구간을 줄여 고른 장면이 쇼츠 밖으로 나가면 고른 장면이 없는 것으로 본다', () => {
+    const { result } = renderEditor();
+    act(() => result.current.pickThumbnail());
+    // 시작을 4935로 당기면(쇼츠 5.8초) 고른 4934초는 밖이다
+    act(() => result.current.setRangeEdge('start', 4935));
+    expect(result.current.range.startSeconds).toBe(4935);
+    expect(result.current.thumbnailSeconds).toBeNull();
   });
 
   it('드래그 한 번은 실행취소 한 칸이다 — 이력을 삼키지 않는다', () => {
@@ -229,12 +248,29 @@ describe('useClipEditorMockState', () => {
     }
     act(() => result.current.gestureHandlers.onPointerUp());
 
-    expect(result.current.tracks[1]?.volume).toBe(30);
+    expect(result.current.tracks[0]?.volume).toBe(30);
     act(() => result.current.undo());
-    expect(result.current.tracks[1]?.volume).toBe(80);
+    expect(result.current.tracks[0]?.volume).toBe(80);
     // 드래그 이전 편집도 그대로 남아 있다
     act(() => result.current.undo());
     expect(result.current.layout).toBe('split');
+  });
+
+  it('마지막 움직임이 놓기 뒤에 그려져도 드래그는 실행취소 한 칸이다(음량 숫자 끌기)', () => {
+    const { result } = renderEditor();
+
+    act(() => result.current.gestureHandlers.onPointerDownCapture());
+    act(() => result.current.setTrackVolume('mic', 90));
+    // 브라우저는 pointermove의 갱신을 미뤄 그린다: 마지막 움직임과 놓기가 한 번에 처리되면
+    // 갱신 계산이 놓기 뒤에 돈다. 제스처 여부를 그때 읽으면 마지막 값만 따로 한 칸이 쌓였다
+    act(() => {
+      result.current.setTrackVolume('mic', 120);
+      result.current.gestureHandlers.onPointerUp();
+    });
+
+    expect(result.current.tracks[0]?.volume).toBe(120);
+    act(() => result.current.undo());
+    expect(result.current.tracks[0]?.volume).toBe(80);
   });
 
   it('드래그가 취소돼도 제스처가 끝난다 — 창이 고정된 채 남지 않는다', () => {

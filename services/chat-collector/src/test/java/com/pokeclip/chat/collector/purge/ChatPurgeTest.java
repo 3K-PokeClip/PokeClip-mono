@@ -221,6 +221,8 @@ class ChatPurgeTest extends IntegrationTestSupport {
         Instant old = now.minus(Duration.ofDays(61));
         Instant fresh = now.minus(Duration.ofDays(59));
         심는다(이웃_채널, old);
+        심는다(Platform.SOOP, 이웃_채널, old, "purge-soop-old");
+        심는다(Platform.SOOP, 탈퇴_채널, fresh, "purge-soop-new");
         jdbc.update("""
                 INSERT INTO chat_messages (channel_id, sender_channel_id, content, message_time, received_at, content_sha256)
                 VALUES (?, 'viewer', '옛 줄', ?, ?, 'legacy')""", 이웃_채널, Timestamp.from(old), Timestamp.from(old));
@@ -233,6 +235,8 @@ class ChatPurgeTest extends IntegrationTestSupport {
         for (String table : List.of("chat_messages", "chat_donations", "broadcast_info")) {
             assertThat(count(table, 이웃_채널)).as(table).isZero();
             assertThat(count(table, 탈퇴_채널)).as(table).isOne();
+            assertThat(count(table, Platform.SOOP, 이웃_채널)).as(table + ": 기한 지난 SOOP 줄").isZero();
+            assertThat(count(table, Platform.SOOP, 탈퇴_채널)).as(table + ": 기한 안 SOOP 줄").isOne();
         }
         assertThat(jdbc.queryForList("SELECT stream_id FROM chat_ingest_keys WHERE stream_id LIKE 'purge-%'", String.class))
                 .containsExactly("purge-new");

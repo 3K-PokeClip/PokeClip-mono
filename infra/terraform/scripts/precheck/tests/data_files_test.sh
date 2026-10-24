@@ -92,11 +92,12 @@ readonly POLICY_SERVICES=' s3 secretsmanager ecr sns sqs kms lambda '
 # 래퍼가 자원 정책을 읽는 서비스(그 행의 정책 읽기 방법은 서비스 이름 그대로
 # 다 — unread 를 쓸 수 없다. lib/principal_policy.sh 머리 주석).
 readonly READ_SERVICES=' s3 secretsmanager ecr sns sqs '
-# 런타임 1단-가가 만드는 자원의 대상 행(kty 2026-10-24 — 2-3 판정 대상에
-# 편입). 「자원 키 · 첫 단계 · 반드시 묻는 동작」 이고, 같은 색인의
-# RUNTIME_ARN_TAILS 가 그 행 ARN 의 꼬리다(이름 = prod/runtime/*.tf ·
-# CONTRACT-runtime.md 「런타임 자원 이름 패턴」). rewind 둘은 버킷이 생긴
-# 뒤 단계(O7d)부터 묻는다(prod_targets.tsv 머리 주석).
+# 런타임 1단-가 · 1단-다가 만드는 자원의 대상 행(kty 2026-10-24 — 2-3 판정
+# 대상에 편입). 「자원 키 · 첫 단계 · 반드시 묻는 동작(쉼표 구분)」 이고, 같은
+# 색인의 RUNTIME_ARN_TAILS 가 그 행 ARN 의 꼬리다(이름 = prod/runtime/*.tf ·
+# CONTRACT-runtime.md 「런타임 자원 이름 패턴」). 버킷 · 객체 행은 버킷이
+# 생긴 뒤 단계(O7d)부터 묻는다(prod_targets.tsv 머리 주석). 비공개 사용자
+# 자료 객체는 읽기도 묻는다 — dev 주체의 읽기가 곧 유출이다.
 RUNTIME_TARGETS=('rds-instance runtime-1a rds:DeleteDBInstance'
   'rds-parameter-group runtime-1a rds:ModifyDBParameterGroup'
   'rds-subnet-group runtime-1a rds:DeleteDBSubnetGroup'
@@ -106,10 +107,21 @@ RUNTIME_TARGETS=('rds-instance runtime-1a rds:DeleteDBInstance'
   'broadcast-queue-chat runtime-1a sqs:ReceiveMessage'
   'broadcast-dlq-clip runtime-1a sqs:ReceiveMessage'
   'broadcast-dlq-chat runtime-1a sqs:ReceiveMessage'
+  'jobs-render-queue runtime-1a sqs:ReceiveMessage'
+  'jobs-render-dlq runtime-1a sqs:ReceiveMessage'
+  'jobs-thumbnail-queue runtime-1a sqs:ReceiveMessage'
+  'jobs-thumbnail-dlq runtime-1a sqs:ReceiveMessage'
+  'jobs-upload-queue runtime-1a sqs:ReceiveMessage'
+  'jobs-upload-dlq runtime-1a sqs:ReceiveMessage'
   'sql-runner-role runtime-1a iam:PassRole'
   'sql-runner-profile runtime-1a iam:AddRoleToInstanceProfile'
-  'rewind-bucket O7d s3:PutBucketPolicy'
-  'rewind-object O7d s3:PutObject')
+  'rewind-bucket O7d s3:PutBucketPolicy,s3:PutBucketCORS'
+  'rewind-object O7d s3:GetObject,s3:PutObject'
+  'rewind-segment-object O7d s3:GetObject,s3:PutObject'
+  'clips-bucket O7d s3:PutBucketPolicy,s3:PutBucketCORS'
+  'clips-object O7d s3:GetObject,s3:PutObject'
+  'profile-photo-bucket O7d s3:PutBucketPolicy,s3:PutBucketCORS'
+  'profile-photo-object O7d s3:GetObject,s3:PutObject')
 readonly RUNTIME_TARGETS
 RUNTIME_ARN_TAILS=(':db:pokeclip-prod-db' ':pg:pokeclip-prod-pg17'
   ':subgrp:pokeclip-prod-db'
@@ -119,10 +131,29 @@ RUNTIME_ARN_TAILS=(':db:pokeclip-prod-db' ':pg:pokeclip-prod-pg17'
   ':pokeclip-prod-broadcast-lifecycle-chat.fifo'
   ':pokeclip-prod-broadcast-lifecycle-clip-dlq.fifo'
   ':pokeclip-prod-broadcast-lifecycle-chat-dlq.fifo'
+  ':pokeclip-prod-jobs-render' ':pokeclip-prod-jobs-render-dlq'
+  ':pokeclip-prod-jobs-thumbnail' ':pokeclip-prod-jobs-thumbnail-dlq'
+  ':pokeclip-prod-jobs-upload' ':pokeclip-prod-jobs-upload-dlq'
   ':role/pokeclip/prod/pokeclip-prod-sql-runner'
   ':instance-profile/pokeclip/prod/pokeclip-prod-sql-runner'
-  ':::pokeclip-prod-rewind-apne2' ':::pokeclip-prod-rewind-apne2/?*')
+  ':::pokeclip-prod-rewind-apne2' ':::pokeclip-prod-rewind-apne2/?*'
+  ':::pokeclip-prod-rewind-apne2/?*'
+  ':::pokeclip-prod-clips-apne2' ':::pokeclip-prod-clips-apne2/?*'
+  ':::pokeclip-prod-profile-photos-apne2'
+  ':::pokeclip-prod-profile-photos-apne2/?*')
 readonly RUNTIME_ARN_TAILS
+# 값 넣기(put-secret-from-file.sh — 1단-다)의 직전 점검이 쓰는 runtime-1a
+# 묶음 행(동작 · 리전 · 자원 패턴 — 5 묶음의 같은 행과 같은 꼴).
+RUNTIME_PUT_SECRET_ROW='secretsmanager:PutSecretValue'$'\t''ap-northeast-2'$'\t'
+RUNTIME_PUT_SECRET_ROW+='arn:aws:secretsmanager:ap-northeast-2:'
+# 계정 자리는 묶음 파일의 글자 그대로다(펼치지 않음).
+# shellcheck disable=SC2016
+RUNTIME_PUT_SECRET_ROW+='${ACCOUNT}:secret:pokeclip/prod/*'
+readonly RUNTIME_PUT_SECRET_ROW
+# rewind 버킷 CORS(aws_s3_bucket_cors_configuration — 1단-다)의 Terraform
+# 생성 · 갱신 · 삭제 동작 행. 읽기(s3:GetBucketCORS)는 1단-가 버킷 읽기
+# 행으로 이미 있다.
+readonly RUNTIME_PUT_CORS_ROW='s3:PutBucketCORS'$'\t''ap-northeast-2'$'\t''*'
 # 실행기 역할 넘기기는 EC2 에 넘기는 질문이다(추가 문맥).
 readonly PASSED_TO_EC2='iam:PassedToService:string:ec2.amazonaws.com'
 # 그 문맥이 시뮬레이터 요청에 실린 꼴.
@@ -997,20 +1028,21 @@ target_row() {
 }
 
 #######################################
-# 데이터 단언: 런타임 1단-가 자원 행(RUNTIME_TARGETS)이 그 첫 단계 ·
-# 구체 ARN(이름 꼬리)으로 있고 반드시 묻는 동작을 담는다. 실행기 역할 행은
+# 데이터 단언: 런타임 자원 행(RUNTIME_TARGETS)이 그 첫 단계 · 구체
+# ARN(이름 꼬리)으로 있고 반드시 묻는 동작을 모두 담는다. 실행기 역할 행은
 # EC2 로 넘기는 문맥을 단다.
 # Globals:
 #   RUNTIME_TARGETS, RUNTIME_ARN_TAILS, PASSED_TO_EC2
 #######################################
 expect_runtime_targets() {
-  local i key want_stage action tail stage method actions context
+  local i key want_stage want_actions action tail stage method actions context
+  local -a wanted
   if [[ "${#RUNTIME_TARGETS[@]}" -ne "${#RUNTIME_ARN_TAILS[@]}" ]]; then
     testlib::fail "runtime-targets: 시험 표 둘의 길이가 다름"
     return
   fi
   for i in "${!RUNTIME_TARGETS[@]}"; do
-    read -r key want_stage action <<<"${RUNTIME_TARGETS[i]}"
+    read -r key want_stage want_actions <<<"${RUNTIME_TARGETS[i]}"
     tail="${RUNTIME_ARN_TAILS[i]}"
     IFS=$'\t' read -r stage method actions context <<<"$(target_row "${key}")"
     if [[ "${stage}" != "${want_stage}" ]]; then
@@ -1023,10 +1055,13 @@ expect_runtime_targets() {
       testlib::fail "runtime-targets: ${key} 의 ARN 이 ${tail} 로 끝나지 않음"
       return
     fi
-    if [[ ",${actions}," != *",${action},"* ]]; then
-      testlib::fail "runtime-targets: ${key} 에 ${action} 이 없음"
-      return
-    fi
+    IFS=, read -ra wanted <<<"${want_actions}"
+    for action in "${wanted[@]}"; do
+      if [[ ",${actions}," != *",${action},"* ]]; then
+        testlib::fail "runtime-targets: ${key} 에 ${action} 이 없음"
+        return
+      fi
+    done
     if [[ "${key}" == sql-runner-role && "${context}" != "${PASSED_TO_EC2}" ]]
     then
       testlib::fail "runtime-targets: ${key} 의 추가 문맥이 EC2 넘기기가 아님"
@@ -1186,6 +1221,45 @@ expect_runtime_terraform_reads() {
     "ec2:DescribeSubnets 행"
 }
 
+#######################################
+# 데이터 단언: runtime-1a 묶음에 값 넣기(put-secret-from-file.sh — 1단-다)의
+# PutSecretValue 행이 동작 · 리전 · 자원 패턴 그대로 있다(계획 rt1c E5).
+# Globals:
+#   STAGE_DIR, RUNTIME_PUT_SECRET_ROW
+#######################################
+expect_runtime_bundle_puts_secret_value() {
+  if ! has_line "$(data_rows "${STAGE_DIR}/runtime-1a.tsv")" \
+    "${RUNTIME_PUT_SECRET_ROW}"; then
+    testlib::fail "runtime-put-secret: runtime-1a 묶음에 PutSecretValue 행" \
+      "(pokeclip/prod/*)이 없음"
+    return
+  fi
+  testlib::ok "runtime-put-secret → runtime-1a 묶음에 값 넣기 행 하나"
+}
+
+#######################################
+# 데이터 단언: runtime-1a 묶음에 rewind 버킷 CORS 의 쓰기 행(PutBucketCORS)
+# 과 읽기 행(GetBucketCORS)이 있다(provider 잠금 판 v6.68.0 의
+# s3/bucket_cors_configuration.go — PutBucketCors · GetBucketCors ·
+# DeleteBucketCors, 삭제의 IAM 동작은 PutBucketCORS).
+# Globals:
+#   STAGE_DIR, RUNTIME_PUT_CORS_ROW
+#######################################
+expect_runtime_bundle_puts_bucket_cors() {
+  local rows
+  rows="$(data_rows "${STAGE_DIR}/runtime-1a.tsv")"
+  if ! has_line "${rows}" "${RUNTIME_PUT_CORS_ROW}"; then
+    testlib::fail "runtime-cors: runtime-1a 묶음에 s3:PutBucketCORS 행이 없음"
+    return
+  fi
+  if ! has_line "${rows}" \
+    's3:GetBucketCORS'$'\t''ap-northeast-2'$'\t''*'; then
+    testlib::fail "runtime-cors: runtime-1a 묶음에 s3:GetBucketCORS 행이 없음"
+    return
+  fi
+  testlib::ok "runtime-cors → runtime-1a 묶음에 버킷 CORS 쓰기 · 읽기 행"
+}
+
 main() {
   testlib::init data_files_test
   expect_bundle_set
@@ -1201,6 +1275,8 @@ main() {
   expect_stage_order_matches_wrapper
   expect_target_rows_consistent
   expect_runtime_targets
+  expect_runtime_bundle_puts_secret_value
+  expect_runtime_bundle_puts_bucket_cors
   expect_late_targets
   expect_runtime_rows_asked
   expect_runtime_terraform_reads

@@ -16,6 +16,7 @@ import {
   tagsLength,
   thumbnailFileProblem,
   THUMBNAIL_MAX_BYTES,
+  withPickedScene,
 } from './uploadInfo';
 
 describe('추천 장면(POK-381): 하이라이트 · 시작 · 재생 위치 · 중간 · 마지막', () => {
@@ -205,5 +206,24 @@ describe('썸네일 이미지 파일', () => {
       '이미지는 10MB까지 올릴 수 있어요',
     );
     expect(thumbnailFileProblem(file('image/webp', 10))).toBe('JPG나 PNG만 올릴 수 있어요');
+  });
+});
+
+describe('withPickedScene: 편집기에서 고른 썸네일 장면으로 창을 채운다(POK-389)', () => {
+  const initial = { thumbnailSource: 'none' as const, sceneOffsetMs: 4_000, title: '그대로' };
+
+  it('고른 장면이 있으면 「장면 고르기 · 그 시각」으로 바꾸고 나머지 칸은 그대로 둔다', () => {
+    expect(withPickedScene(initial, 63.5, 60, 12_400)).toEqual({
+      draft: { thumbnailSource: 'scene', sceneOffsetMs: 3_500, title: '그대로' },
+      picked: true,
+    });
+  });
+
+  it('고르지 않았으면 처음 값 그대로다', () => {
+    expect(withPickedScene(initial, null, 60, 12_400)).toEqual({ draft: initial, picked: false });
+  });
+
+  it('완성 영상 밖이면 영상 안 끝으로 자른다', () => {
+    expect(withPickedScene(initial, 80, 60, 12_400).draft.sceneOffsetMs).toBe(12_399);
   });
 });

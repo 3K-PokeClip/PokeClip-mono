@@ -1,13 +1,15 @@
-/* Semantic tokens — LIGHT theme. Explicit opt-in via [data-theme='light'],
-   plus a prefers-color-scheme fallback when no theme attribute is set. */
+/* Semantic tokens — LIGHT theme. Explicit opt-in via [data-theme='light'] (set by the theme
+   init script / ThemeProvider). No prefers-color-scheme fallback: the app always sets
+   data-theme (SSR default 'dark'), and 'system' is resolved by the script, not by CSS. */
 [data-theme='light'] {
   color-scheme: light;
 
-  --pc-color-bg-canvas: var(--pc-gray-50);
+  /* backgrounds — canvas carries a faint brand indigo so white surfaces separate from it */
+  --pc-color-bg-canvas: #f3f5fc;
   --pc-color-bg-surface: var(--pc-white);
-  --pc-color-bg-surface-hover: var(--pc-gray-50);
+  --pc-color-bg-surface-hover: #eef1fa;
   --pc-color-bg-surface-raised: var(--pc-white);
-  --pc-color-bg-inset: var(--pc-gray-100);
+  --pc-color-bg-inset: #e9edf8;
   --pc-color-bg-overlay: rgb(var(--pc-gray-1000-rgb) / 0.48);
 
   --pc-color-text-primary: var(--pc-gray-950);
@@ -17,9 +19,9 @@
   --pc-color-text-on-accent: var(--pc-white);
   --pc-color-text-on-danger: var(--pc-white);
 
-  --pc-color-border-subtle: var(--pc-gray-100);
-  --pc-color-border-default: var(--pc-gray-200);
-  --pc-color-border-strong: var(--pc-gray-300);
+  --pc-color-border-subtle: #e3e7f3;
+  --pc-color-border-default: #d3d9ea;
+  --pc-color-border-strong: #b6bed6;
 
   --pc-color-accent: var(--pc-primary-500);
   --pc-color-accent-hover: var(--pc-primary-600);
@@ -45,35 +47,22 @@
   --pc-color-warning-subtle: rgb(var(--pc-yellow-500-rgb) / 0.16);
   --pc-color-info: var(--pc-teal-500);
   --pc-color-info-subtle: rgb(var(--pc-cyan-500-rgb) / 0.12);
-}
 
-/* OS preference fallback — applies ONLY when the app has set no explicit theme.
-   An explicit [data-theme] attribute always wins over this block. */
-@media (prefers-color-scheme: light) {
-  :root:not([data-theme]) {
-    color-scheme: light;
-    --pc-color-bg-canvas: var(--pc-gray-50);
-    --pc-color-bg-surface: var(--pc-white);
-    --pc-color-bg-surface-hover: var(--pc-gray-50);
-    --pc-color-bg-surface-raised: var(--pc-white);
-    --pc-color-bg-inset: var(--pc-gray-100);
-    --pc-color-bg-overlay: rgb(var(--pc-gray-1000-rgb) / 0.48);
-    --pc-color-text-primary: var(--pc-gray-950);
-    --pc-color-text-secondary: var(--pc-gray-600);
-    --pc-color-text-muted: var(--pc-gray-500);
-    --pc-color-text-disabled: var(--pc-gray-300);
-    --pc-color-text-on-accent: var(--pc-white);
-    --pc-color-border-subtle: var(--pc-gray-100);
-    --pc-color-border-default: var(--pc-gray-200);
-    --pc-color-border-strong: var(--pc-gray-300);
-    --pc-color-accent-hover: var(--pc-primary-600);
-    --pc-color-accent-active: var(--pc-primary-700);
-    --pc-color-accent-subtle: rgb(var(--pc-primary-500-rgb) / 0.1);
-    --pc-color-accent-text: var(--pc-primary-700);
-    --pc-color-point-hover: var(--pc-point-600);
-    --pc-color-point-subtle: rgb(var(--pc-point-500-rgb) / 0.1);
-    --pc-color-point-text: var(--pc-point-700);
-    --pc-color-focus-ring: var(--pc-primary-500);
-    --pc-color-danger: var(--pc-red-500);
-  }
+  /* status as small text/icons — the fills above read under 4.5:1 on white,
+     so text gets darker shades (≥ 4.6:1 even on bg-inset) */
+  --pc-color-danger-text: #c80026;
+  --pc-color-success-text: #1f7a08;
+  --pc-color-warning-text: #8a6300;
+  --pc-color-info-text: #067486;
+
+  /* brand symbol play mark (docs/BRAND.md — #141517 on light) */
+  --pc-color-brand-mark: var(--pc-gray-1000);
+
+  /* elevation — the dark-tuned primitives (shadow.css) turn into black halos on white */
+  --pc-shadow-sm: 0 1px 2px rgb(var(--pc-gray-1000-rgb) / 0.08);
+  --pc-shadow-md: 0 4px 12px rgb(var(--pc-gray-1000-rgb) / 0.1);
+  --pc-shadow-lg: 0 12px 32px rgb(var(--pc-gray-1000-rgb) / 0.14);
+  --pc-shadow-xl: 0 24px 64px rgb(var(--pc-gray-1000-rgb) / 0.18);
+  --pc-shadow-glow-accent:
+    0 0 0 1px rgb(var(--pc-primary-500-rgb) / 0.3), 0 0 24px rgb(var(--pc-primary-500-rgb) / 0.25);
 }

@@ -1,7 +1,8 @@
 import { resetPlaybackAccessForTests } from '@/api/playbackAccess';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { StrictMode } from 'react';
+import { axe } from 'jest-axe';
+import { act, StrictMode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
 import { renderWithProviders } from '@/test/testProviders';
@@ -72,6 +73,8 @@ const server = vi.hoisted(() => ({
   /** 저장된 자막. clip은 자막이 없으면 칸을 빼지 않고 null 로 준다 */
   savedSubtitles: null as unknown,
   relation: 'OWNER',
+  /** 내 트랙 이름(POK-240). 칸 i = trackId i, 빈 칸은 「트랙 n」 */
+  myTrackLabels: {} as unknown,
   /** 영상 경로의 키(POK-233). undefined면 이 칸을 모르는 옛 서버다 */
   ingest: undefined as string | undefined,
   delegations: [] as {
@@ -221,7 +224,8 @@ function handle(url: string, init?: RequestInit) {
         : jsonResponse(500, { error: 'boom' });
   if (path === '/api/auth/me')
     return jsonResponse(200, { id: 9, email: 'me@example.com', name: '나' });
-  if (path === '/api/streamers/9/audio-tracks') return jsonResponse(200, { labels: {} });
+  if (path === '/api/streamers/9/audio-tracks')
+    return jsonResponse(200, { labels: server.myTrackLabels });
   if (path.startsWith('/api/streamers/'))
     return jsonResponse(200, { labels: ['남의 트랙', null, null, null, null, null] });
   if (path === '/api/editor-delegations/as-editor') return jsonResponse(200, server.delegations);
@@ -244,6 +248,7 @@ beforeEach(() => {
   server.origin = null;
   server.savedSubtitles = null;
   server.relation = 'OWNER';
+  server.myTrackLabels = {};
   server.playbackAccess = 'grant';
   server.delegations = [];
   server.ingest = undefined;
@@ -287,10 +292,19 @@ function openCalls() {
   );
 }
 
+/**
+ * 편집기가 다 읽혀 섰다. 첫 읽기 스켈레톤에도 「편집본 저장」이 꺼진 채 서 있어(POK-444) 나타나기만 기다리면 읽기 전에
+ * 지나간다 — 켜질 때까지 기다린다
+ */
+async function editorReady() {
+  await waitFor(() => expect(screen.getByRole('button', { name: '편집본 저장' })).toBeEnabled());
+  return screen.getByRole('button', { name: '편집본 저장' });
+}
+
 async function openFrom(search: string) {
   nav.search = search;
   renderWithProviders(<StudioScreen />);
-  return screen.findByRole('button', { name: '편집본 저장' });
+  return editorReady();
 }
 
 /** 업로드 창의 공개 탭을 열고 「업로드」. 업로드 단추는 공개 탭에만 있다(POK-381) */
@@ -400,7 +414,7 @@ describe('StudioScreen: 카드 열기 기록(POK-393)', () => {
         <StudioScreen />
       </StrictMode>,
     );
-    await screen.findByRole('button', { name: '편집본 저장' });
+    await editorReady();
 
     await waitFor(() => expect(openCalls()).toHaveLength(1));
   });
@@ -483,8 +497,7 @@ describe('StudioScreen — 카드로 연 실제 편집기', () => {
     const user = userEvent.setup();
     const save = await openFrom(`stream=${STREAM_ID}&card=5`);
 
-    await user.click(screen.getByRole('tab', { name: '오디오' }));
-    await user.click(screen.getByRole('switch', { name: '트랙 2 사용' }));
+    await user.click(screen.getByRole('button', { name: '트랙 2 넣기' }));
     await user.click(save);
 
     await waitFor(() =>
@@ -562,8 +575,7 @@ describe('StudioScreen — 카드로 연 실제 편집기', () => {
     await waitFor(() => expect(renders()).toBe(1));
     expect(bodiesOf('PUT', `/api/clip/broadcasts/${STREAM_ID}/recipes/31`)).toHaveLength(0);
 
-    await user.click(screen.getByRole('tab', { name: '오디오' }));
-    await user.click(screen.getByRole('switch', { name: '트랙 2 사용' }));
+    await user.click(screen.getByRole('button', { name: '트랙 2 넣기' }));
     await orderVideo(user);
     await waitFor(() => expect(renders()).toBe(2));
     expect(bodiesOf('PUT', `/api/clip/broadcasts/${STREAM_ID}/recipes/31`)[0]?.audio).toEqual({
@@ -571,27 +583,62 @@ describe('StudioScreen — 카드로 연 실제 편집기', () => {
     });
   });
 
-  it('오디오 스위치가 계약을 지킨다 — 최종 믹스와 방송 트랙은 하나만, 마지막 트랙은 못 끈다', async () => {
+  it('넣기 단추가 계약을 지킨다 — 최종 믹스와 방송 트랙은 하나만, 마지막 트랙은 못 끈다', async () => {
     // 저장할 때 조용히 바꾸면 화면과 다른 소리가 렌더된다(PR #200 codex P1)
     const user = userEvent.setup();
     await openFrom(`stream=${STREAM_ID}&card=5`);
-    await user.click(screen.getByRole('tab', { name: '오디오' }));
-    const mix = () => screen.getByRole('switch', { name: '최종 믹스(트랙 1) 사용' });
-    const track2 = () => screen.getByRole('switch', { name: '트랙 2 사용' });
-    expect(mix()).toBeChecked();
+    const mix = () => screen.getByRole('button', { name: '최종 믹스(트랙 1) 넣기' });
+    const track2 = () => screen.getByRole('button', { name: '트랙 2 넣기' });
+    const on = (button: HTMLElement) => button.getAttribute('aria-pressed') === 'true';
+    expect(on(mix())).toBe(true);
 
     await user.click(track2());
-    expect(track2()).toBeChecked();
-    expect(mix()).not.toBeChecked();
+    expect(on(track2())).toBe(true);
+    expect(on(mix())).toBe(false);
 
     // 마지막으로 켜진 트랙은 끄지 않고 이유를 말한다
     await user.click(track2());
-    expect(track2()).toBeChecked();
+    expect(on(track2())).toBe(true);
     expect(await screen.findByText('트랙을 하나는 켜 둬야 해요')).toBeInTheDocument();
 
     await user.click(mix());
-    expect(mix()).toBeChecked();
-    expect(track2()).not.toBeChecked();
+    expect(on(mix())).toBe(true);
+    expect(on(track2())).toBe(false);
+  });
+});
+
+describe('StudioScreen: 편집기에서 고른 썸네일 장면(POK-389)', () => {
+  it('녹화가 없으면 재생 위치를 몰라 썸네일 단추가 꺼져 있다', async () => {
+    await openFrom(`stream=${STREAM_ID}&card=5`);
+    expect(screen.getByRole('button', { name: '이 장면을 썸네일로' })).toBeDisabled();
+  });
+
+  it('고르지 않았으면 지금처럼 자동으로 연다', async () => {
+    const user = userEvent.setup();
+    await openFrom(`stream=${STREAM_ID}&card=5`);
+
+    await user.click(screen.getByRole('button', { name: '영상 만들기' }));
+    const dialog = within(await screen.findByRole('dialog'));
+    await user.click(dialog.getByRole('tab', { name: '썸네일' }));
+    expect(dialog.getByRole('radio', { name: /영상 장면/ })).toBeChecked();
+    expect(dialog.queryByRole('button', { name: /편집기에서 고름/ })).not.toBeInTheDocument();
+  });
+});
+
+describe('StudioScreen: 트랙 줄 넣기 · 음량(POK-389)', () => {
+  it('스트리머가 적은 트랙 이름으로 줄 머리가 서고, 음량 막대는 저장 계약대로 200%까지다', async () => {
+    server.myTrackLabels = [null, '마이크', '게임', null, null, null];
+    const user = userEvent.setup();
+    await openFrom(`stream=${STREAM_ID}&card=5`);
+
+    expect(screen.getByRole('button', { name: '마이크 넣기' })).toBeInTheDocument();
+    // 처음엔 최종 믹스만 켜져 있다: 마이크를 켜야 음량 숫자가 선다
+    await user.click(screen.getByRole('button', { name: '마이크 넣기' }));
+    await user.click(screen.getByRole('button', { name: '마이크 음량 100%' }));
+    expect(screen.getByRole('slider', { name: '마이크 볼륨' })).toHaveAttribute(
+      'aria-valuemax',
+      '200',
+    );
   });
 });
 
@@ -891,9 +938,13 @@ describe('StudioScreen — 화면에서 고른 모양이 저장 본문에 그대
     await openFrom('recipe=31');
     await user.click(screen.getByRole('tab', { name: '자막' }));
 
-    expect(screen.getByText('저장된 첫 자막')).toBeInTheDocument();
+    expect(
+      within(screen.getByRole('region', { name: '자막' })).getByText('저장된 첫 자막'),
+    ).toBeInTheDocument();
     expect(screen.queryByText('구간 밖 자막')).not.toBeInTheDocument();
-    expect(screen.getByRole('radio', { name: '상단' })).toBeChecked();
+    // 타임라인 자막 줄에도 구간 안 한 줄만 조각으로 선다(POK-389)
+    expect(document.querySelectorAll('[data-subtitle-block]')).toHaveLength(1);
+    expect(screen.getByRole('radio', { name: '위' })).toBeChecked();
 
     // 고치지 않았으면 다시 저장하지 않는다 — 자막 방식·자리도 제자리로 돌아왔다
     await orderVideo(user);
@@ -921,21 +972,15 @@ describe('StudioScreen — 화면에서 고른 모양이 저장 본문에 그대
     expect(screen.queryByText('“자막 파일에만”')).not.toBeInTheDocument();
   });
 
-  it('자막이 없으면 결과 설명도 「자막 없음」이다: 고른 방식(번인+CC)만 적으면 자막이 들어갈 것처럼 읽힌다', async () => {
+  it('AI 자막 만들기는 서버 기능이 없어 꺼져 있고 준비 중이라고 말한다(POK-389)', async () => {
+    const user = userEvent.setup();
     await openFrom('recipe=31');
-    expect(screen.getByText(/자막 없음 · 1× 배속/)).toBeInTheDocument();
-    expect(screen.queryByText(/자막 번인\+CC/)).not.toBeInTheDocument();
-  });
+    await user.click(screen.getByRole('tab', { name: '자막' }));
 
-  it('저장된 자막이 있으면 결과 설명은 고른 방식을 적는다', async () => {
-    server.savedSubtitles = {
-      mode: 'BURN_ONLY',
-      segments: [
-        { startAtMs: STARTED_AT + 121_500, endAtMs: STARTED_AT + 123_000, text: '저장된 첫 자막' },
-      ],
-    };
-    await openFrom('recipe=31');
-    expect(screen.getByText(/자막 번인 · 1× 배속/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /AI 자막 만들기/ })).toBeDisabled();
+    expect(
+      within(screen.getByRole('region', { name: 'AI 자막' })).getByText('준비 중'),
+    ).toBeInTheDocument();
   });
 });
 
@@ -1089,9 +1134,11 @@ describe('StudioScreen: 영상 만들기 + 유튜브 올리기(POK-291)', () => 
   it('창이 떠 있는 동안 ⌘Z·Space는 뒤 편집기를 안 바꾼다: 창 안 라디오는 Space로 골라진다', async () => {
     const user = userEvent.setup();
     await openFrom(`stream=${STREAM_ID}&card=5`);
-    await user.click(screen.getByRole('tab', { name: '오디오' }));
-    await user.click(screen.getByRole('switch', { name: '트랙 2 사용' }));
-    expect(screen.getByRole('switch', { name: '트랙 2 사용' })).toBeChecked();
+    await user.click(screen.getByRole('button', { name: '트랙 2 넣기' }));
+    expect(screen.getByRole('button', { name: '트랙 2 넣기' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
 
     await user.click(screen.getByRole('button', { name: '영상 만들기' }));
     await user.click(dialog().getByRole('tab', { name: '공개' }));
@@ -1108,14 +1155,16 @@ describe('StudioScreen: 영상 만들기 + 유튜브 올리기(POK-291)', () => 
     await user.click(dialog().getByRole('tab', { name: '정보' }));
     await user.click(dialog().getByRole('button', { name: '취소' }));
     // ⌘Z가 창 뒤로 샜으면 트랙 2가 꺼져 있다
-    expect(screen.getByRole('switch', { name: '트랙 2 사용' })).toBeChecked();
+    expect(screen.getByRole('button', { name: '트랙 2 넣기' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
   });
 
   it('카드로 연 편집기를 처음 저장하면 주소가 ?recipe= 로 바뀌고, 다시 읽지 않아 실행취소가 남는다', async () => {
     const user = userEvent.setup();
     const save = await openFrom(`stream=${STREAM_ID}&card=5`);
-    await user.click(screen.getByRole('tab', { name: '오디오' }));
-    await user.click(screen.getByRole('switch', { name: '트랙 2 사용' }));
+    await user.click(screen.getByRole('button', { name: '트랙 2 넣기' }));
 
     await user.click(save);
     await screen.findByText(/편집본 #31 v1 저장됨/);
@@ -1227,5 +1276,101 @@ describe('StudioScreen: 영상 만들기 + 유튜브 올리기(POK-291)', () => 
       privacyStatus: 'private',
       publishAt: '2099-01-01T09:00:00.000Z',
     });
+  });
+});
+
+describe('StudioScreen: 로딩 표시(POK-444)', () => {
+  /** 이 경로의 답만 붙잡아 둔다. 놓으면 원래 답이 간다 */
+  function holdPath(path: string) {
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    fetchSpy = stubFetch(async (url, init) => {
+      if (new URL(url, 'http://localhost').pathname === path) await gate;
+      return handle(url, init);
+    });
+    return () => release();
+  }
+
+  it('첫 읽기에는 글자 한 줄 대신 편집기 모양의 스켈레톤이다: status 한 줄, 보관함으로는 나가고 고치는 버튼은 꺼져 있다', async () => {
+    // 답이 오지 않는 서버: 첫 읽기가 끝나지 않는다
+    stubFetch(() => new Promise<Response>(() => {}));
+    nav.search = `stream=${STREAM_ID}&card=5`;
+    const { container } = renderWithProviders(<StudioScreen />);
+
+    // 낭독기엔 스켈레톤 대신 status 한 줄만 들린다
+    expect(screen.getAllByRole('status')).toHaveLength(1);
+    expect(screen.getByRole('status')).toHaveTextContent('편집기를 불러오는 중');
+    expect(screen.queryByText(/카드·방송을 불러오는 중/)).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '클립 편집' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: '보관함으로' })).toHaveAttribute(
+      'href',
+      '/clips/library',
+    );
+    for (const name of ['편집본 저장', '영상 만들기', '작업 이전으로', '작업 앞으로']) {
+      expect(screen.getByRole('button', { name })).toBeDisabled();
+    }
+    // 로드 뒤와 같은 칸(소리 줄은 트랙 수만큼)으로 선다
+    expect(container.querySelectorAll('[data-kind="audio"]')).toHaveLength(6);
+    await act(async () => {
+      expect(await axe(container)).toHaveNoViolations();
+    });
+  });
+
+  it('주소가 바뀌어 다시 읽는 동안 옛 화면을 두고 헤더 아래 막대 한 줄만 띄운다: 스켈레톤으로 번쩍이지 않는다', async () => {
+    await openFrom(`stream=${STREAM_ID}&card=5`);
+    expect(screen.getByRole('heading', { name: '점프카드 #5' })).toBeInTheDocument();
+
+    const release = holdPath('/api/clip/library/31');
+    act(() => window.history.replaceState(null, '', '?recipe=31'));
+
+    // 옛 화면이 그대로 있고 만질 수 없다. 보관함으로는 나갈 수 있다
+    expect(
+      await screen.findByRole('progressbar', { name: '편집 대상을 다시 불러오는 중' }),
+    ).not.toHaveAttribute('aria-valuenow');
+    expect(screen.getByRole('heading', { name: '점프카드 #5' })).toBeInTheDocument();
+    expect(screen.queryByText('편집기를 불러오는 중')).not.toBeInTheDocument();
+    expect(document.querySelector('main')).toHaveAttribute('inert');
+    expect(screen.getByRole('button', { name: '편집본 저장' })).toBeDisabled();
+    expect(screen.getByRole('link', { name: '보관함으로' })).toBeInTheDocument();
+
+    release();
+    expect(await screen.findByRole('heading', { name: '편집본 #31' })).toBeInTheDocument();
+    expect(
+      screen.queryByRole('progressbar', { name: '편집 대상을 다시 불러오는 중' }),
+    ).not.toBeInTheDocument();
+    expect(document.querySelector('main')).not.toHaveAttribute('inert');
+    await editorReady();
+  });
+
+  it('편집본 저장을 보내는 동안 그 버튼만 돌고 영상 만들기는 꺼진다: 끝나면 둘 다 돌아온다', async () => {
+    const user = userEvent.setup();
+    await openFrom('recipe=31');
+    const release = holdPath(`/api/clip/broadcasts/${STREAM_ID}/recipes/31`);
+
+    await user.click(screen.getByRole('button', { name: '편집본 저장' }));
+    const saving = screen.getByRole('button', { name: '편집본 저장 중' });
+    expect(saving).toHaveAttribute('aria-busy', 'true');
+    expect(saving).toBeDisabled();
+    expect(screen.getByRole('button', { name: '영상 만들기' })).toBeDisabled();
+
+    release();
+    await screen.findAllByText(/편집본 #31 v3 저장됨/);
+    expect(screen.getByRole('button', { name: '편집본 저장' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: '영상 만들기' })).toBeEnabled();
+    expect(bodiesOf('PUT', `/api/clip/broadcasts/${STREAM_ID}/recipes/31`)).toHaveLength(1);
+  });
+
+  it('주문한 영상이 대기열에 있으면 문구 아래 불확정 막대가 선다: 퍼센트를 지어내지 않는다', async () => {
+    const user = userEvent.setup();
+    await openFrom('recipe=31');
+    expect(screen.queryByRole('progressbar', { name: '영상 진행' })).not.toBeInTheDocument();
+
+    await orderVideo(user);
+    await screen.findAllByText(/영상 #77 주문됨$/);
+    expect(screen.getByRole('progressbar', { name: '영상 진행' })).not.toHaveAttribute(
+      'aria-valuenow',
+    );
   });
 });

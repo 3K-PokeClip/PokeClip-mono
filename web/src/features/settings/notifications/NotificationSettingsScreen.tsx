@@ -3,10 +3,9 @@
 import { useId, useState } from 'react';
 import { BellOff } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
-import { Switch } from '@/ui';
+import { ModeSegment, Switch, type ModeOption } from '@/ui';
 import { delegationsAsEditorQueryOptions } from '@/api/editors';
 import { SettingsPageHeader } from '../SettingsPageHeader';
-import { ModeSegment, type ModeOption } from './ModeSegment';
 import {
   DO_NOT_DISTURB_DEFAULT,
   NOTIFICATION_ITEMS,

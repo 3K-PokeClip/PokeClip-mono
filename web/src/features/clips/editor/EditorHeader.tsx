@@ -1,19 +1,16 @@
 import Link from 'next/link';
 import { ChevronLeft, Redo2, Undo2 } from 'lucide-react';
-import { Button, IconButton } from '@/ui';
+import { Button, IconButton, Progress } from '@/ui';
 import styles from './editorShared.module.css';
 import type { ClipEditorMockState } from './useClipEditorMockState';
 
-// 시안 1d 상단 — 편집기 자체 헤더(전역 헤더 대신). 저장·업로드는 전부 목업 동작이다.
+// 시안 1d 상단 — 편집기 자체 헤더(전역 헤더 대신). 저장·업로드는 컨테이너가 준 동작으로 간다(없으면 목업 안내).
 
-export function EditorHeader({
-  state,
-  showTemplateSave = false,
-}: {
-  state: ClipEditorMockState;
-  /** 템플릿 저장은 시안에서 스튜디오형에만 있다 */
-  showTemplateSave?: boolean;
-}) {
+export function EditorHeader({ state }: { state: ClipEditorMockState }) {
+  const { busyAction, reloading } = state;
+  // 보내는 동안 컨테이너는 저장·주문을 둘 다 받지 않는다(같은 요청을 두 번 보내지 않게): 누른 버튼만 돌고 다른 쪽은 끈다.
+  // 다른 편집 대상을 읽는 중이면 이 화면은 곧 갈아 끼워지므로 고치는 버튼을 모두 끈다 — 보관함으로는 나갈 수 있다(POK-444)
+  const locked = busyAction !== null || reloading;
   return (
     <header className={styles.header}>
       {/* 보관함 화면을 바로 가리킨다 — /clips는 리다이렉트라 한 홉을 더 탄다(POK-235) */}
@@ -25,13 +22,22 @@ export function EditorHeader({
         <div className={styles.headerMeta}>
           {state.sourceLabel} · {state.autosaveLabel}
         </div>
+        {/* 문구 아래 막대는 머리 아래 여백에 겹쳐 그린다: 섰다 사라질 때 헤더 높이가 바뀌어 편집 화면이 밀리지 않게(POK-444) */}
+        {state.clipProgress !== null && !reloading ? (
+          <Progress
+            className={styles.headerProgress}
+            size="sm"
+            value={state.clipProgress.value}
+            label="영상 진행"
+          />
+        ) : null}
       </div>
       <div className={styles.headerHistory}>
         <IconButton
           variant="ghost"
           size="sm"
           aria-label="작업 이전으로"
-          disabled={!state.canUndo}
+          disabled={!state.canUndo || reloading}
           onClick={state.undo}
         >
           <Undo2 size={15} aria-hidden />
@@ -40,25 +46,45 @@ export function EditorHeader({
           variant="ghost"
           size="sm"
           aria-label="작업 앞으로"
-          disabled={!state.canRedo}
+          disabled={!state.canRedo || reloading}
           onClick={state.redo}
         >
           <Redo2 size={15} aria-hidden />
         </IconButton>
       </div>
       <div className={styles.headerActions}>
-        {showTemplateSave ? (
-          <Button variant="ghost" size="sm" onClick={state.saveTemplate}>
-            템플릿 저장
-          </Button>
-        ) : null}
-        <Button variant="soft" size="sm" onClick={state.saveDraft}>
+        {/* 도는 동안 라벨은 자리만 지켜 폭이 튀지 않는다(.busyButton). 라벨이 시각으로 숨으므로 이름은 aria-label이 댄다 */}
+        <Button
+          variant="soft"
+          size="sm"
+          className={styles.busyButton}
+          loading={busyAction === 'save'}
+          disabled={locked}
+          aria-label={busyAction === 'save' ? '편집본 저장 중' : undefined}
+          onClick={state.saveDraft}
+        >
           편집본 저장
         </Button>
-        <Button variant="solid" size="sm" onClick={state.requestUpload}>
+        <Button
+          variant="solid"
+          size="sm"
+          className={styles.busyButton}
+          loading={busyAction === 'render'}
+          disabled={locked}
+          aria-label={busyAction === 'render' ? `${state.uploadLabel} 요청 중` : undefined}
+          onClick={state.requestUpload}
+        >
           {state.uploadLabel}
         </Button>
       </div>
+      {reloading ? (
+        <Progress
+          className={styles.headerReloadBar}
+          size="sm"
+          value={null}
+          label="편집 대상을 다시 불러오는 중"
+        />
+      ) : null}
     </header>
   );
 }

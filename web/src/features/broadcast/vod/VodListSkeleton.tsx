@@ -1,0 +1,52 @@
+import { LoadingRegion, Skeleton } from '@/ui';
+import styles from './VodListScreen.module.css';
+
+/** 한 화면 위쪽을 채우는 수 — 두 열이면 두 줄이다(POK-441 시안에서 4줄로 골랐다) */
+const ROWS = 4;
+
+const u = (n: number) => `calc(${n} * var(--pc-u))`;
+
+/**
+ * 지난 방송 화면이 첫 로딩에 보이는 모습 그대로(제목 + 행 스켈레톤). 새로고침 직후 채널이 서기 전 레이아웃도 이것을 그려,
+ * 채널이 선 뒤 화면이 같은 뼈대를 이어 그린다 — 공통 뼈대였다 바뀌면 한 번 더 튄다(PR #377 2차 리뷰). VodListScreen의
+ * 로딩 분기와 같은 틀이어야 한다(.container · .header · .title)
+ */
+export function VodListLoadingScreen() {
+  return (
+    <main className={styles.container}>
+      <div className={styles.header}>
+        <h1 className={styles.title}>지난 방송</h1>
+      </div>
+      <VodListSkeleton />
+    </main>
+  );
+}
+
+// 첫 읽기가 끝나기 전의 지난 방송 목록(POK-441 시안 A). 로드 뒤 행과 같은 클래스(.list·.row·.thumb·.rowText·.rowActions)를
+// 그대로 써서, 데이터가 와도 행 높이·열 배치가 바뀌지 않는다. 헤더는 제목만 둔다: 개수 배지·기간 필터는 방송이 있을 때만
+// 서므로 미리 그리면 방송이 0개인 계정에서 거짓이 된다.
+export function VodListSkeleton() {
+  return (
+    <LoadingRegion label="지난 방송을 불러오는 중">
+      <ul className={styles.list} aria-hidden="true">
+        {Array.from({ length: ROWS }, (_, i) => (
+          <li key={i} className={styles.row}>
+            {/* 칸은 실제 .thumb(150u·16:9·9u)이고 막대는 그 안을 채운다. Skeleton에 .thumb를 얹으면 같은 특이도의 .skeleton과
+                배경·display가 CSS 삽입 순서로 갈린다(PR #377 리뷰) */}
+            <div className={styles.thumb}>
+              <Skeleton radius="none" height="100%" style={{ position: 'absolute', inset: 0 }} />
+            </div>
+            <div className={styles.rowText}>
+              <Skeleton width="55%" height={u(14)} />
+              <Skeleton width="35%" height={u(11)} style={{ marginTop: u(8) }} />
+            </div>
+            <div className={styles.rowActions}>
+              <Skeleton width={u(54)} height={u(20)} radius="pill" />
+              <Skeleton width={u(40)} height={u(20)} radius="pill" />
+            </div>
+          </li>
+        ))}
+      </ul>
+    </LoadingRegion>
+  );
+}

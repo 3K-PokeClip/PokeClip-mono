@@ -59,6 +59,8 @@ import {
   type RecordingTimeline,
 } from '@/features/player/recordingTimeline';
 import { useEditorVideoPlayback } from '../useEditorVideoPlayback';
+import { useTrackPreview } from '../trackAudio/useTrackPreview';
+import type { FilmstripSource } from './VideoFilmstrip';
 import {
   lookFromDocument,
   outputFromLook,
@@ -77,9 +79,11 @@ import {
   sceneOffsetFromPlayhead,
   scheduleInstant,
   scheduleOf,
+  withPickedScene,
 } from '../uploadInfo';
 import type { SceneFrameSource } from '../useSceneFrames';
-import { clipLabel, clipSettled } from './clipProgress';
+import { clipLabel, clipProgressBar, clipSettled } from './clipProgress';
+import { StudioSkeleton } from './StudioSkeleton';
 
 // 시안 1d-a 클립 편집기(스튜디오형). 전폭 자체 헤더를 가지므로 ScreenContainer를 쓰지 않는다
 // (라이브 대시보드 선례). 데이터·동작은 전부 useClipEditorMockState 뒤에 있다.
@@ -106,7 +110,8 @@ const TEXT_ENTRY =
  * 안 쓰는 키까지 양보한다(버튼은 화살표를 안 쓰고 슬라이더는 Space를 안 쓴다).
  */
 const KEY_OWNERS: Partial<Record<EditorIntent['kind'], string>> = {
-  togglePlay: 'button:not([role]), [role="button"], [role="switch"], [role="tab"], [role="radio"]',
+  togglePlay:
+    'button:not([role]), [role="button"], [role="switch"], [role="tab"], [role="radio"], input[type="checkbox"]',
   seekBy: '[role="slider"], [role="radiogroup"], [role="tablist"]',
 };
 
@@ -125,6 +130,13 @@ function timelineHeadroom(previewColumn: HTMLElement | null): number {
   const spilled = previewColumn.scrollHeight - previewColumn.clientHeight;
   return spare - spilled;
 }
+
+/** 필름띠 그림 모양: 원본 화면 전체를 그대로(층 하나, 자르지 않음) */
+const FULL_FRAME_OUTPUT: FilmstripSource['output'] = {
+  outputId: 'filmstrip',
+  aspect: 'VERT_9_16',
+  layers: [{ crop: { x: 0, y: 0, w: 1, h: 1 }, box: { x: 0, y: 0, w: 1, h: 1 } }],
+};
 
 /** 시안 그대로의 편집기 본체. 옵션(소스·동작)은 마운트 값이다 — 컨테이너가 key로 갈아 끼운다. */
 export function StudioEditor(options: ClipEditorOptions = {}) {
@@ -164,13 +176,17 @@ export function StudioEditor(options: ClipEditorOptions = {}) {
     };
   }, []);
 
+  const { reloading } = state;
   useEffect(() => {
+    // 다른 편집 대상을 읽는 동안(POK-444)은 단축키도 쉰다: 이 화면은 곧 갈아 끼워져 고친 것이 남지 않는다
+    if (reloading) return undefined;
     function onKeyDown(event: globalThis.KeyboardEvent) {
       const target = event.target instanceof Element ? event.target : null;
       // 창(업로드 정보 등)이 떠 있는 동안에는 편집기 단축키를 통째로 끈다. 안 끄면 창 안 라디오 위 Space가 재생으로 새며
-      // 선택을 막고, 스위치·라디오 위 I·O·⌘Z가 창 뒤 편집기의 구간과 기록을 바꾼다(POK-291)
+      // 선택을 막고, 스위치·라디오 위 I·O·⌘Z가 창 뒤 편집기의 구간과 기록을 바꾼다(POK-291). 열린 메뉴(재생 속도) 안도
+      // 같다: 항목 위 Space가 고르기 대신 재생을 켜고 ← → · I · O가 메뉴 뒤 편집기로 샜다(PR #341 3차)
       if (
-        target?.closest('[role="dialog"]') != null ||
+        target?.closest('[role="dialog"], [role="menu"]') != null ||
         document.querySelector('[aria-modal="true"]') !== null
       )
         return;
@@ -203,12 +219,13 @@ export function StudioEditor(options: ClipEditorOptions = {}) {
     }
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [togglePlay, seekBy, markIn, markOut, undo, redo]);
+  }, [reloading, togglePlay, seekBy, markIn, markOut, undo, redo]);
 
   return (
     <div className={styles.screen}>
-      <EditorHeader state={state} showTemplateSave />
-      <main className={styles.body} data-panel-side={state.panelSide}>
+      <EditorHeader state={state} />
+      {/* 다시 읽는 동안 옛 화면은 보이기만 한다(inert: 누르기·초점·낭독 모두 빠진다). 타임라인도 같다 */}
+      <main className={styles.body} data-panel-side={state.panelSide} inert={reloading}>
         <ToolRail
           tools={state.toolOptions}
           activeTool={state.activeTool}
@@ -220,7 +237,7 @@ export function StudioEditor(options: ClipEditorOptions = {}) {
         <ToolPanel state={state} />
         <div className={styles.previewColumn} ref={previewColumnRef}>
           <PreviewCanvas state={state} />
-          <TransportBar state={state} showRangeLength />
+          <TransportBar state={state} />
         </div>
       </main>
       <MultitrackTimeline state={state} headroom={headroom} />
@@ -304,11 +321,23 @@ async function loadTrackLabels(broadcast: BroadcastRow): Promise<TrackLabels | n
 
 const trackId = (index: number) => `track-${index}`;
 
+/** 다 읽은 편집 대상. mount는 읽기마다 새 번호다 — 편집기를 읽기마다 새로 마운트하는 열쇠(구간·실행취소 기록은 마운트 값) */
+interface Opened {
+  data: Loaded;
+  mount: number;
+}
+
+type LoadResult = { kind: 'error'; message: string } | { kind: 'loaded'; data: Loaded };
+
 type Status =
   | { kind: 'no-card' }
-  | { kind: 'loading' }
+  /**
+   * 읽는 중. previous는 앞서 연 편집기다 — 주소가 바뀌어 다시 읽는 동안 그 화면을 만질 수 없게 둔다(POK-444).
+   * 첫 읽기면 null이고 스켈레톤이 선다
+   */
+  | { kind: 'loading'; previous: Opened | null }
   | { kind: 'error'; message: string }
-  | { kind: 'loaded'; data: Loaded };
+  | ({ kind: 'loaded' } & Opened);
 
 function messageOf(e: unknown): string {
   if (e instanceof ClipApiError) {
@@ -401,7 +430,7 @@ function draftFromSummary(summary: UploadRequestSummary, sceneOffsetMs: number):
   return { ...draft, scheduled: true, scheduleDate: date, scheduleTime: time };
 }
 
-async function loadFromCard(streamId: string, cardId: string): Promise<Status> {
+async function loadFromCard(streamId: string, cardId: string): Promise<LoadResult> {
   const [card, broadcast] = await Promise.all([
     fetchJumpCard(streamId, cardId),
     fetchBroadcast(streamId),
@@ -431,7 +460,7 @@ async function loadFromCard(streamId: string, cardId: string): Promise<Status> {
   };
 }
 
-async function loadFromRecipe(recipeId: number): Promise<Status> {
+async function loadFromRecipe(recipeId: number): Promise<LoadResult> {
   const detail = await fetchLibraryDetail(recipeId);
   const broadcast = await fetchBroadcast(detail.streamId);
   const cut = detail.recipe.cut;
@@ -473,12 +502,21 @@ export function StudioScreen() {
   const recipeParam = params.get('recipe');
   const recipeId = recipeParam !== null && /^\d+$/.test(recipeParam) ? Number(recipeParam) : null;
   const [status, setStatus] = useState<Status>(() =>
-    (streamId && cardId) || recipeId !== null ? { kind: 'loading' } : { kind: 'no-card' },
+    (streamId && cardId) || recipeId !== null
+      ? { kind: 'loading', previous: null }
+      : { kind: 'no-card' },
   );
+  /** 다 읽을 때마다 하나씩 — 편집기 마운트 열쇠(Opened.mount) */
+  const mounts = useRef(0);
+  const reloadingRef = useRef(false);
+  reloadingRef.current = status.kind === 'loading';
   // 이 화면이 첫 저장(POST)으로 만든 편집본. 주소를 ?recipe= 로 바꾸면 주소 값이 바뀌어 아래 읽기가 다시 돈다. 그러면
   // 편집기가 새로 마운트되어 실행취소 기록을 잃고, 구간 한계가 카드 창에서 저장된 컷으로 좁아진다. 스스로 만든 것이면 안 읽는다
   const ownRecipe = useRef<number | null>(null);
   const adoptRecipe = useCallback((id: number) => {
+    // 다시 읽는 중이면 주소는 이미 새 편집 대상의 것이다. 옛 화면에서 늦게 끝난 첫 저장이 주소를 ?recipe= 로 되돌리면
+    // 그 값은 「스스로 만든 것」이라 아무도 읽지 않아, 읽기가 끝나지 않은 채 옛 화면이 남는다(POK-444)
+    if (reloadingRef.current) return;
     ownRecipe.current = id;
     // 새로고침·공유해도 같은 편집본으로 열리게 한다. 안 바꾸면 카드 주소로 다시 열려 다음 저장이 편집본을 하나 더 만든다
     window.history.replaceState(null, '', `?recipe=${id}`);
@@ -491,11 +529,23 @@ export function StudioScreen() {
       return undefined;
     }
     let alive = true;
-    setStatus({ kind: 'loading' });
+    // 앞서 연 편집기가 있으면 다 읽을 때까지 그 화면을 둔다: 화면 전체가 스켈레톤으로 번쩍이지 않게(POK-444)
+    setStatus((s) =>
+      s.kind === 'loading'
+        ? s
+        : {
+            kind: 'loading',
+            previous: s.kind === 'loaded' ? { data: s.data, mount: s.mount } : null,
+          },
+    );
     const load = recipeId !== null ? loadFromRecipe(recipeId) : loadFromCard(streamId!, cardId!);
     load
       .then((next) => {
-        if (alive) setStatus(next);
+        if (!alive) return;
+        if (next.kind === 'loaded') {
+          mounts.current += 1;
+          setStatus({ kind: 'loaded', data: next.data, mount: mounts.current });
+        } else setStatus(next);
       })
       .catch((e: unknown) => {
         if (alive) setStatus({ kind: 'error', message: messageOf(e) });
@@ -505,13 +555,22 @@ export function StudioScreen() {
     };
   }, [streamId, cardId, recipeId]);
 
-  if (status.kind === 'loaded') {
-    // 소스가 바뀌면(다른 카드·편집본) 훅을 새로 마운트한다 — 구간·히스토리는 마운트 값이다.
-    const key = status.data.card
-      ? `card:${status.data.streamId}:${status.data.card.id}`
-      : `recipe:${status.data.saved?.id}`;
-    return <WiredStudio key={key} data={status.data} onRecipeCreated={adoptRecipe} />;
+  const opened =
+    status.kind === 'loaded' ? status : status.kind === 'loading' ? status.previous : null;
+  if (opened !== null) {
+    // 읽기마다 훅을 새로 마운트한다 — 구간·히스토리는 마운트 값이다. 소스가 같아도(같은 편집본을 다시 읽음) 새로 연다:
+    // 읽는 사이 다른 곳에서 새 판이 저장됐을 수 있다. 다시 읽는 동안에는 옛 화면을 그대로 두고 막아 둔다(POK-444)
+    return (
+      <WiredStudio
+        key={opened.mount}
+        data={opened.data}
+        reloading={status.kind === 'loading'}
+        onRecipeCreated={adoptRecipe}
+      />
+    );
   }
+  // 첫 읽기: 글자 한 줄 대신 편집기 모양의 스켈레톤(POK-444)
+  if (status.kind === 'loading') return <StudioSkeleton />;
 
   return (
     <div className={styles.screen}>
@@ -522,26 +581,20 @@ export function StudioScreen() {
         <div className={shared.headerTitleBlock}>
           <h1 className={shared.headerTitle}>클립 편집</h1>
           <div className={shared.headerMeta}>
-            {status.kind === 'loading'
-              ? '불러오는 중…'
-              : status.kind === 'error'
-                ? '못 열었어요'
-                : '열 편집본이 없어요'}
+            {status.kind === 'error' ? '못 열었어요' : '열 편집본이 없어요'}
           </div>
         </div>
       </header>
       <main className={styles.body}>
         <div style={{ padding: '2rem', width: '100%' }}>
-          {status.kind === 'no-card' ? (
+          {status.kind === 'error' ? (
+            <p role="alert">불러오지 못했어요: {status.message}</p>
+          ) : (
             <EmptyState
               icon={<Scissors size={21} />}
               title="카드에서 「편집」을 누르거나 보관함에서 편집본을 여세요"
               description="라이브 대시보드의 하이라이트 카드나 보관함의 편집본에서 편집을 시작해요."
             />
-          ) : status.kind === 'error' ? (
-            <p role="alert">불러오지 못했어요: {status.message}</p>
-          ) : (
-            <p role="status">카드·방송을 불러오는 중…</p>
           )}
         </div>
       </main>
@@ -567,6 +620,8 @@ interface PendingUpload {
   recipe: EditorRecipe;
   cutLengthMs: number;
   initial: UploadDraft;
+  /** 썸네일 장면이 편집기의 「이 장면을 썸네일로」로 채워졌는가(POK-389) */
+  pickedInEditor: boolean;
   playheadOffsetMs: number | null;
   /** 카드 시각(하이라이트)을 완성 영상 시각으로. 카드 없이 연 편집본이거나 영상 밖이면 null */
   highlightOffsetMs: number | null;
@@ -576,9 +631,12 @@ interface PendingUpload {
 
 function WiredStudio({
   data,
+  reloading,
   onRecipeCreated,
 }: {
   data: Loaded;
+  /** 주소가 바뀌어 다른 편집 대상을 읽는 중이다 — 다 읽으면 이 화면은 갈아 끼워진다(POK-444) */
+  reloading: boolean;
   /** 첫 저장(POST)으로 편집본이 생겼다. 주소를 ?recipe= 로 바꾼다 */
   onRecipeCreated: (recipeId: number) => void;
 }) {
@@ -626,6 +684,31 @@ function WiredStudio({
     pieces: recordingPieces,
     initialRange,
   });
+  // 트랙별 미리 듣기: 영상이 받으려는 창과 같은 창의 녹화 조각(방송 소리 트랙 전부)을 영상과 함께 받기 시작해, 영상 노드를
+  // 따라 튼다(POK-389). 따라 틀기는 영상이 실제로 받아 튼 창으로 옮긴다
+  const trackPreview = useTrackPreview({
+    streamId,
+    baseMs: base,
+    window: recording ? video.targetWindow : null,
+    video: recording ? video.video : null,
+    playingFromSeconds: recording ? (video.window?.startSeconds ?? null) : null,
+  });
+
+  // 타임라인 필름띠(POK-389): 받아 둔 녹화 파일에서 원본 화면 그대로(자르지 않은 16:9) 칸마다 뽑는다
+  const loadedWindow = video.window;
+  const filmstripSource = useMemo<FilmstripSource | null>(
+    () =>
+      recording && video.src !== '' && loadedWindow !== null
+        ? {
+            src: video.src,
+            videoSecondsAt: (ms) => ms / 1000 - loadedWindow.startSeconds,
+            output: FULL_FRAME_OUTPUT,
+            fromSeconds: loadedWindow.startSeconds,
+            toSeconds: loadedWindow.endSeconds,
+          }
+        : null,
+    [recording, video.src, loadedWindow],
+  );
 
   const [save, setSave] = useState<SaveState>(() => ({
     recipeId: saved?.id ?? null,
@@ -737,6 +820,14 @@ function WiredStudio({
 
   const [pending, setPending] = useState<PendingUpload | null>(null);
   const [uploadErrors, setUploadErrors] = useState<UploadFieldErrors>({});
+  // 다른 편집 대상을 읽는 동안 이 화면은 만질 수 없다(POK-444): 틀던 영상은 멈추고(멈출 단추도 막힌다), 떠 있던 업로드 창은
+  // 닫는다 — 창은 화면 바깥 층이라 막아 둔 것(inert)이 닿지 않고, 거기서 보낸 주문은 곧 사라질 화면의 것이다
+  const previewVideo = video.video;
+  useEffect(() => {
+    if (!reloading) return;
+    previewVideo?.pause();
+    setPending(null);
+  }, [reloading, previewVideo]);
   // 이 화면에서 마지막으로 보낸 창의 값. 다시 열면 그대로 채운다(고른 이미지 파일까지)
   const lastDraft = useRef<UploadDraft | null>(null);
   // 지금 재생 위치(기준점 축의 초). 녹화가 없으면 재생 위치가 늘 0이라 모르는 것으로 둔다. 재생 중에는 프레임마다
@@ -749,7 +840,7 @@ function WiredStudio({
 
   /** 「영상 만들기」 = 업로드 정보 창을 연다. 연 순간의 화면이 주문할 모양이다(창이 떠 있는 동안 편집기는 안 바뀐다) */
   const openUploadDialog = useCallback(
-    (recipe: EditorRecipe) => {
+    (recipe: EditorRecipe, thumbnailSeconds: number | null) => {
       const current = saveRef.current;
       if (current.busy !== null) return;
       const playheadSeconds = playheadRef.current;
@@ -786,11 +877,13 @@ function WiredStudio({
         : stored
           ? draftFromSummary(stored, scene)
           : emptyUploadDraft(scene);
+      const prefilled = withPickedScene(initial, thumbnailSeconds, rangeStart, cutLengthMs);
       setUploadErrors({});
       setPending({
         recipe,
         cutLengthMs,
-        initial,
+        initial: prefilled.draft,
+        pickedInEditor: prefilled.picked,
         playheadOffsetMs: sceneOffsetFromPlayhead(playheadSeconds, rangeStart, cutLengthMs),
         highlightOffsetMs,
         frameSource,
@@ -926,7 +1019,6 @@ function WiredStudio({
         label: trackDisplayName(i, trackLabels?.[i]),
         volume: 100,
         muted: false,
-        clips: [],
       });
     }
     return { tracks, muted, volumes };
@@ -954,12 +1046,17 @@ function WiredStudio({
         id: `saved-${i}`,
         timecode: (Math.max(0, seg.startAtMs - cut.inAtMs) / 1000).toFixed(1).padStart(4, '0'),
         text: seg.text,
+        // 타임라인 자막 줄의 자리: 소스 축(기준점 + 초)이다
+        startSeconds: (seg.startAtMs - base) / 1000,
+        endSeconds: (seg.endAtMs - base) / 1000,
       }));
-  }, [saved]);
+  }, [saved, base]);
   const label =
     save.clip && save.busy === null && !save.label.includes('영상 #')
       ? `${save.label} · ${clipLabel(save.clip)}`
       : save.label;
+  // 진행 막대는 문구가 그 영상을 말할 때만 선다: 저장 · 주문을 보내는 동안 문구는 「…하는 중」이고 누른 버튼이 돈다(POK-444)
+  const clipProgress = save.clip !== null && save.busy === null ? clipProgressBar(save.clip) : null;
 
   return (
     <>
@@ -980,7 +1077,12 @@ function WiredStudio({
         actions={actions}
         autosaveLabel={label}
         uploadLabel="영상 만들기"
+        busyAction={save.busy}
+        clipProgress={clipProgress}
+        reloading={reloading}
         mixTrackId={trackId(0)}
+        trackPreview={recording ? trackPreview : undefined}
+        filmstripSource={filmstripSource}
         tracks={trackSetup.tracks}
         initialTrackMuted={trackSetup.muted}
         initialTrackVolumes={trackSetup.volumes}
@@ -993,6 +1095,7 @@ function WiredStudio({
           busy={save.busy === 'render'}
           initial={pending.initial}
           cutLengthMs={pending.cutLengthMs}
+          pickedInEditor={pending.pickedInEditor}
           playheadOffsetMs={pending.playheadOffsetMs}
           highlightOffsetMs={pending.highlightOffsetMs}
           frameSource={pending.frameSource}

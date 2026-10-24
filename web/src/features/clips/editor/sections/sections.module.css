@@ -254,35 +254,6 @@
   outline-offset: 2px;
 }
 
-/* ---------- 오디오 · BGM ---------- */
-
-.trackRow {
-  display: flex;
-  align-items: center;
-  gap: calc(8 * var(--pc-u));
-}
-
-.trackName {
-  font-size: calc(12 * var(--pc-u));
-  font-weight: 650;
-  flex: 1;
-  min-width: 0;
-}
-
-.trackValue {
-  font:
-    600 calc(10 * var(--pc-u)) ui-monospace,
-    Menlo,
-    monospace;
-  color: var(--pc-color-text-muted);
-  width: calc(26 * var(--pc-u));
-  text-align: right;
-}
-
-.trackSlider {
-  width: calc(84 * var(--pc-u));
-}
-
 /* ---------- 이미지 ---------- */
 
 .imageRow {
@@ -419,8 +390,14 @@
   overflow: hidden;
   box-sizing: border-box;
   /* 고르지 않았을 때의 채움 — 고르면 아래에서 진하게 바꾼다 */
-  --fill-1: rgb(255 255 255 / 0.09);
-  --fill-2: rgb(255 255 255 / 0.16);
+  --fill-1: rgb(255 255 255 / 0.09); /* 라이트 덮음 */
+  --fill-2: rgb(255 255 255 / 0.16); /* 라이트 덮음 */
+}
+
+/* 흰 워시는 흰 패널에서 사라진다 — 라이트는 글자색을 섞어 어둡게 */
+:global([data-theme='light']) .layoutDiagram {
+  --fill-1: color-mix(in srgb, var(--pc-color-text-primary) 8%, transparent);
+  --fill-2: color-mix(in srgb, var(--pc-color-text-primary) 16%, transparent);
 }
 
 .layoutDiagram[data-mode='horiz'] {
@@ -430,8 +407,8 @@
 
 .layoutRow[aria-checked='true'] .layoutDiagram {
   border-color: var(--pc-color-accent-text, var(--pc-color-accent));
-  --fill-1: rgb(140 160 230 / 0.38);
-  --fill-2: rgb(212 70 151 / 0.38);
+  --fill-1: rgb(140 160 230 / 0.38); /* 테마 고정 */
+  --fill-2: rgb(212 70 151 / 0.38); /* 테마 고정 */
 }
 
 .layoutFill {
@@ -565,8 +542,12 @@
   padding: 0;
   border-radius: 99px;
   border: 0;
-  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.18);
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.18); /* 라이트 덮음 */
   cursor: pointer;
+}
+
+:global([data-theme='light']) .swatch {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pc-color-text-primary) 18%, transparent);
 }
 
 .swatch[aria-checked='true'] {
@@ -590,6 +571,55 @@
   border: 0;
   border-radius: calc(6 * var(--pc-u));
   background: transparent;
-  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.18);
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.18); /* 라이트 덮음 */
   cursor: pointer;
+}
+
+:global([data-theme='light']) .swatchCustom input {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pc-color-text-primary) 18%, transparent);
+}
+
+/* ---------- 준비 중 도구 ---------- */
+
+.dashedAction:disabled {
+  cursor: not-allowed;
+  color: var(--pc-color-text-disabled);
+  background: none;
+}
+
+.textSampleGrid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: calc(6 * var(--pc-u));
+  margin-top: calc(6 * var(--pc-u));
+  opacity: 0.5;
+}
+
+.textSample {
+  display: grid;
+  place-items: center;
+  height: calc(46 * var(--pc-u));
+  border-radius: calc(9 * var(--pc-u));
+  background: var(--pc-color-bg-inset);
+  font-size: calc(15 * var(--pc-u));
+  font-weight: 800;
+  color: var(--pc-color-text-primary);
+}
+
+.textSample[data-style='outline'] {
+  -webkit-text-stroke: 1px var(--pc-color-bg-canvas);
+}
+
+.textSample[data-style='yellow'] {
+  color: var(--pc-color-warning-text);
+}
+
+.textSample[data-style='glow'] {
+  color: var(--pc-color-point);
+  text-shadow: 0 0 calc(6 * var(--pc-u)) var(--pc-color-point);
+}
+
+.textSample[data-style='box'] {
+  outline: 1px solid var(--pc-color-border-strong);
+  outline-offset: calc(-10 * var(--pc-u));
 }

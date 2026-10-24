@@ -19,7 +19,7 @@
 }
 
 /* next/image·lucide의 width 속성은 px 고정 — 유닛에 태운다 */
-.brand img {
+.brandSymbol {
   width: calc(34 * var(--pc-u));
   height: calc(34 * var(--pc-u));
 }

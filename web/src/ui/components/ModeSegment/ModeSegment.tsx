@@ -16,7 +16,7 @@ import styles from './ModeSegment.module.css';
 //   포인터로 고르면 그 칸의 라디오로 포커스를 옮긴다(아래 onPointerUp) — 안 옮기면 키보드로 와 있던
 //   다른 줄에 포커스가 남아, 이어서 누른 방향키가 그 줄을 바꾼다.
 //
-// 지금은 알림 설정 하나만 쓴다. 다른 화면이 같은 것을 원하면 그때 ui/로 올린다.
+// 알림 설정(끔 · 받기 · 중요)과 설정 › 계정 「화면 테마」(시스템 · 라이트 · 다크)가 쓴다.
 
 export interface ModeOption<T extends string> {
   key: T;

@@ -25,7 +25,7 @@ class YoutubeLinkWriterCleanupTest {
     private final SecretStore secretStore = mock(SecretStore.class);
     private final YoutubeLinkWriter writer = new YoutubeLinkWriter(mock(YoutubeChannelLinkRepository.class),
             secretStore, mock(UserRepository.class), mock(ActiveUserGuard.class),
-            mock(YoutubeCleanupExecutor.class));
+            mock(YoutubeCleanupExecutor.class), mock(YoutubeTokenDiscarder.class));
 
     /**
      * 🔴 access 삭제가 던져도 refresh 삭제를 <b>시도한다</b>. 한 try로 묶으면 첫 실패가 둘째를 건너뛰어

@@ -2,6 +2,7 @@ package com.pokeclip.chat.collector.soop.chat;
 
 import com.pokeclip.chat.collector.archive.ChatArchive;
 import com.pokeclip.chat.collector.persist.ChatBuffer;
+import com.pokeclip.chat.collector.persist.DonationBuffer;
 import com.pokeclip.chat.collector.relay.RelaySink;
 import org.springframework.beans.factory.DisposableBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -27,18 +28,19 @@ public class SoopChatConfiguration {
 
         @Bean
         public SoopChatRuntime soopChatRuntime(SoopChatProperties properties, Environment environment, ChatBuffer buffer,
-                                               ChatArchive archive, RelaySink relay) {
+                                               DonationBuffer donations, ChatArchive archive, RelaySink relay) {
             properties.validate();
             if (!environment.getProperty("pokeclip.soop.watch-enabled", Boolean.class, false)) {
                 throw new IllegalStateException(
                         "pokeclip.soop.chat.enabled=true인데 pokeclip.soop.watch-enabled가 꺼져 있다. 채팅은 지켜보기가 본 방송에만 붙는다.");
             }
-            SoopChatSessions sessions = new SoopChatSessions(properties, buffer, archive, relay, System::currentTimeMillis);
+            SoopChatSessions sessions = new SoopChatSessions(properties, buffer, donations, archive, relay,
+                    System::currentTimeMillis);
             SoopChatBrowser browser = new SoopChatBrowser(properties, sessions);
             sessions.attach(new SoopChatSessions.Tabs() {
                 @Override
-                public void open(String streamId, String token) {
-                    browser.open(streamId, token);
+                public void open(String streamId, String token, long generation) {
+                    browser.open(streamId, token, generation);
                 }
 
                 @Override

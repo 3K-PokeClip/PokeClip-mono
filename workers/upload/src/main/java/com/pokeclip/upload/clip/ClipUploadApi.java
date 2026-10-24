@@ -73,9 +73,13 @@ public class ClipUploadApi {
         }
     }
 
-    public void uploaded(long uploadId, String videoId, ThumbnailReport thumbnail) {
+    /** @param channelId 영상을 올린 유튜브 채널(POK-423). 모르면 null이고 칸을 안 싣는다 */
+    public void uploaded(long uploadId, String videoId, ThumbnailReport thumbnail, String channelId) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("videoId", videoId);
+        if (channelId != null) {
+            body.put("channelId", channelId);
+        }
         body.put("thumbnailOutcome", thumbnail.outcome());
         if (thumbnail.errorCode() != null) {
             body.put("thumbnailErrorCode", thumbnail.errorCode());

@@ -18,11 +18,14 @@ import {
   Input,
   RadioGroup,
   Select,
+  Skeleton,
   Switch,
   Tabs,
   Tag,
   Text,
   Textarea,
+  useFieldControlProps,
+  VisuallyHidden,
 } from '@/ui';
 import type { PrivacyStatus, ThumbnailSource } from '@/api/clipEditor';
 import { uploadTitleProblem } from '@/features/clips/library/libraryView';
@@ -144,6 +147,7 @@ export function UploadInfoDialog({
   initial,
   cutLengthMs,
   playheadOffsetMs,
+  pickedInEditor = false,
   highlightOffsetMs = null,
   frameSource = null,
   serverErrors,
@@ -159,6 +163,8 @@ export function UploadInfoDialog({
   cutLengthMs: number;
   /** 지금 재생 위치를 완성 영상 시각으로 옮긴 값. 녹화가 없어 모르면 null */
   playheadOffsetMs: number | null;
+  /** 장면이 편집기의 「이 장면을 썸네일로」로 채워졌는가(POK-389) */
+  pickedInEditor?: boolean;
   /** 하이라이트(카드 시각)를 완성 영상 시각으로 옮긴 값. 카드 없이 연 편집본이면 null */
   highlightOffsetMs?: number | null;
   /** 장면 그림을 뽑을 재료. 녹화가 없거나 아직 못 받았으면 null(시각만 보인다) */
@@ -187,6 +193,7 @@ export function UploadInfoDialog({
           initial={initial}
           cutLengthMs={cutLengthMs}
           playheadOffsetMs={playheadOffsetMs}
+          pickedInEditor={pickedInEditor}
           highlightOffsetMs={highlightOffsetMs}
           frameSource={frameSource}
           serverErrors={serverErrors}
@@ -203,6 +210,7 @@ function UploadInfoForm({
   initial,
   cutLengthMs,
   playheadOffsetMs,
+  pickedInEditor = false,
   highlightOffsetMs,
   frameSource,
   serverErrors,
@@ -228,8 +236,15 @@ function UploadInfoForm({
   }, []);
 
   const picks = useMemo(
-    () => scenePicks(cutLengthMs, highlightOffsetMs, playheadOffsetMs),
-    [cutLengthMs, highlightOffsetMs, playheadOffsetMs],
+    // 편집기에서 「이 장면을 썸네일로」 고른 장면(POK-389)을 추천 맨 앞에 둔다
+    () =>
+      scenePicks(
+        cutLengthMs,
+        highlightOffsetMs,
+        playheadOffsetMs,
+        pickedInEditor ? initial.sceneOffsetMs : null,
+      ),
+    [cutLengthMs, highlightOffsetMs, playheadOffsetMs, pickedInEditor, initial.sceneOffsetMs],
   );
   const wanted = useMemo(
     () => [...picks.map((p) => p.offsetMs), ...stripTileTimes(cutLengthMs)],
@@ -364,6 +379,9 @@ function UploadInfoForm({
       : draft.thumbnailSource === 'file'
         ? previewUrl
         : null;
+  // 고른 장면을 아직 뽑는 중인가(못 뽑음 · 재료 없음과 가른다 — 그쪽은 로더가 아니다, POK-444)
+  const sceneLoading =
+    draft.thumbnailSource === 'scene' && previewSrc === null && !frameFailed(draft.sceneOffsetMs);
   const footNote =
     tab !== 'publish'
       ? '공개 탭에서 올려요'
@@ -385,15 +403,24 @@ function UploadInfoForm({
               // 뽑은 장면(data:)·고른 파일(blob:)이라 next/image가 다룰 대상이 아니다
               // eslint-disable-next-line @next/next/no-img-element
               <img src={previewSrc} alt="썸네일 미리보기" />
+            ) : sceneLoading ? (
+              // 장면을 뽑는 중: 자리를 스켈레톤으로 채우고 문장은 그 위에 둔다(POK-444). 못 뽑았으면 아래 정적 자리다
+              <>
+                <Skeleton
+                  className={styles.shortsSkeleton}
+                  height="100%"
+                  radius="none"
+                  data-frame-loading
+                />
+                <span className={styles.shortsLoading}>장면을 불러오는 중이에요</span>
+              </>
             ) : (
               <span className={styles.shortsEmpty}>
                 {draft.thumbnailSource === 'none'
                   ? '유튜브가 영상에서 골라요'
                   : draft.thumbnailSource === 'file'
                     ? '고른 이미지가 여기 보여요'
-                    : frameFailed(draft.sceneOffsetMs)
-                      ? `장면 그림을 못 불러와요 · ${sceneLabel(draft.sceneOffsetMs)}`
-                      : '장면을 불러오는 중이에요'}
+                    : `장면 그림을 못 불러와요 · ${sceneLabel(draft.sceneOffsetMs)}`}
               </span>
             )}
             {draft.scheduled && schedule !== '' ? (
@@ -408,7 +435,11 @@ function UploadInfoForm({
         </div>
 
         <div className={styles.right}>
-          <Tabs value={tab} onValueChange={(v) => setTab(v as UploadTab)}>
+          <Tabs
+            value={tab}
+            onValueChange={(v) => setTab(v as UploadTab)}
+            className={styles.tabsRoot}
+          >
             <Tabs.List aria-label="업로드 정보" className={styles.tabs}>
               {TABS.map((t) => (
                 <Tabs.Trigger key={t.value} value={t.value} className={styles.tab}>
@@ -453,36 +484,23 @@ function UploadInfoForm({
 
               <Field invalid={errorOf('tags') !== undefined}>
                 <Field.Label>태그</Field.Label>
-                <Input
-                  value={tagText}
-                  autoComplete="off"
-                  onChange={(e) => onTagChange(e.target.value)}
+                <TagBox
+                  tags={draft.tags}
+                  text={tagText}
+                  onText={onTagChange}
                   onKeyDown={onTagKeyDown}
+                  onRemove={(tag) =>
+                    set(
+                      'tags',
+                      draft.tags.filter((t) => t !== tag),
+                    )
+                  }
                 />
                 {errorOf('tags') ? (
                   <Field.Error>{errorOf('tags')}</Field.Error>
                 ) : (
                   <Field.Description>Enter나 쉼표로 넣어요. 합쳐서 500자까지예요</Field.Description>
                 )}
-                {draft.tags.length > 0 ? (
-                  <HStack gap={2} wrap>
-                    {draft.tags.map((tag) => (
-                      <Tag
-                        key={tag}
-                        size="sm"
-                        onRemove={() =>
-                          set(
-                            'tags',
-                            draft.tags.filter((t) => t !== tag),
-                          )
-                        }
-                        removeLabel={`태그 ${tag} 빼기`}
-                      >
-                        {tag}
-                      </Tag>
-                    ))}
-                  </HStack>
-                ) : null}
               </Field>
 
               <Field invalid={errorOf('categoryId') !== undefined}>
@@ -507,6 +525,7 @@ function UploadInfoForm({
                 cutLengthMs={cutLengthMs}
                 picks={picks}
                 frameOf={frameOf}
+                frameFailed={frameFailed}
                 error={errorOf('thumbnail')}
                 onSource={(source) => set('thumbnailSource', source)}
                 onScene={(ms) => set('sceneOffsetMs', ms)}
@@ -618,6 +637,120 @@ function UploadInfoForm({
         </HStack>
       </div>
     </form>
+  );
+}
+
+/** 태그 칸: 넣은 태그가 입력 칸 안, 치는 글자 앞에 쌓인다. 테두리·초점 링은 바깥 상자가 그리고 글자 칸은 남은 폭을 채운다.
+ *  Field 안에서 그려져야 라벨·설명·오류가 글자 칸에 붙는다.
+ *
+ *  빼기 단추는 Tab 순서 밖이다: 태그가 많아도 Tab 한 번에 글자 칸으로 온다(PR #372 리뷰). 키보드로는 글자 맨 앞에서 ←로
+ *  마지막 태그에 들어가 ←→로 오가고, Delete·Backspace(또는 Enter)로 뺀다. 빈 글자 칸의 Backspace는 마지막 태그를 뺀다 */
+function TagBox({
+  tags,
+  text,
+  onText,
+  onKeyDown,
+  onRemove,
+}: {
+  tags: string[];
+  text: string;
+  onText: (value: string) => void;
+  onKeyDown: (event: KeyboardEvent<HTMLInputElement>) => void;
+  onRemove: (tag: string) => void;
+}) {
+  const field = useFieldControlProps();
+  const boxRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // 상자 안의 단추는 태그마다 하나인 빼기 단추뿐이다
+  const focusChip = (index: number) =>
+    boxRef.current?.querySelectorAll<HTMLButtonElement>('button')[index]?.focus();
+
+  // 태그가 빠졌다고 낭독기에 알린다: 칩은 Tab 순서 밖이고 Backspace로도 빠져서, 알리지 않으면 무엇이 빠졌는지 모른다.
+  // 비웠다가 다음 프레임에 채운다(DS LiveRegion과 같은 방식): 같은 문구가 연달아 와도 다시 읽게
+  const [notice, setNotice] = useState('');
+  const remove = (tag: string) => {
+    onRemove(tag);
+    setNotice('');
+    requestAnimationFrame(() => setNotice(`${tag} 태그를 뺐어요`));
+    // 누른 빼기 단추가 사라지며 초점이 창 밖으로 빠지지 않게 글자 칸으로 돌린다
+    inputRef.current?.focus();
+  };
+
+  const onInputKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    const last = tags[tags.length - 1];
+    if (!event.nativeEvent.isComposing && last !== undefined) {
+      // 꾹 눌러 반복되는 Backspace는 거른다: 글자를 지우던 손이 칸이 빈 뒤에도 계속 눌려 태그까지 다 지우지 않게
+      if (event.key === 'Backspace' && !event.repeat && text === '') {
+        event.preventDefault();
+        remove(last);
+        return;
+      }
+      const { selectionStart, selectionEnd } = event.currentTarget;
+      if (event.key === 'ArrowLeft' && selectionStart === 0 && selectionEnd === 0) {
+        event.preventDefault();
+        focusChip(tags.length - 1);
+        return;
+      }
+    }
+    onKeyDown(event);
+  };
+
+  const onChipKeyDown = (event: KeyboardEvent<HTMLElement>, index: number) => {
+    const tag = tags[index];
+    if (tag === undefined) return;
+    if (event.key === 'ArrowLeft') {
+      event.preventDefault();
+      focusChip(Math.max(index - 1, 0));
+    } else if (event.key === 'ArrowRight') {
+      event.preventDefault();
+      if (index + 1 < tags.length) focusChip(index + 1);
+      else inputRef.current?.focus();
+    } else if (event.key === 'Delete' || event.key === 'Backspace') {
+      event.preventDefault();
+      remove(tag);
+    }
+  };
+
+  return (
+    <div
+      ref={boxRef}
+      className={styles.tagBox}
+      data-invalid={field['aria-invalid']}
+      // 상자 전체가 한 칸으로 보이므로 태그 사이·빈 자리를 눌러도 글자 칸으로 간다(빼기 단추와 글자 칸 자체는 그대로)
+      onMouseDown={(event) => {
+        const target = event.target as HTMLElement;
+        if (target === inputRef.current || target.closest('button') !== null) return;
+        event.preventDefault();
+        inputRef.current?.focus();
+      }}
+    >
+      {tags.map((tag, index) => (
+        <Tag
+          key={tag}
+          size="sm"
+          className={styles.tagChip}
+          // 칸보다 길어 말줄임된 태그도 올리면 다 보인다
+          title={tag}
+          onKeyDown={(event) => onChipKeyDown(event, index)}
+          onRemove={() => remove(tag)}
+          removeLabel={`태그 ${tag} 빼기`}
+          removeTabIndex={-1}
+        >
+          {tag}
+        </Tag>
+      ))}
+      <input
+        ref={inputRef}
+        {...field}
+        className={styles.tagInput}
+        value={text}
+        autoComplete="off"
+        onChange={(e) => onText(e.target.value)}
+        onKeyDown={onInputKeyDown}
+      />
+      <VisuallyHidden role="status">{notice}</VisuallyHidden>
+    </div>
   );
 }
 

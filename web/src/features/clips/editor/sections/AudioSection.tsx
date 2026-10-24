@@ -1,54 +1,21 @@
-import { Slider, Switch } from '@/ui';
+import { PendingNote } from './PendingNote';
 import styles from './sections.module.css';
-import type { ClipEditorMockState, EditorTrackKind } from '../useClipEditorMockState';
 
-// 시안 1d 오디오 도구 — 트랙별 켜기·볼륨.
-// 어떤 트랙이 있는지는 데이터가 정한다 (E2 — RMS 무음 필터를 통과한 트랙만 온다).
+// 오디오 도구(POK-389): 방송 소리 트랙의 넣기 · 음량은 타임라인 트랙 줄에서 한다(같은 값을 두 곳에서 바꾸지 않게).
+// 여기에는 그 안내와, 아직 준비 중인 음악 · 효과음만 둔다.
 
-export function AudioSection({
-  state,
-  kinds,
-  title,
-  hint,
-}: {
-  state: ClipEditorMockState;
-  /** 이 패널이 맡는 트랙 종류 — 오디오 탭과 BGM·효과 탭이 같은 컴포넌트를 나눠 쓴다 */
-  kinds: readonly EditorTrackKind[];
-  title: string;
-  hint?: string;
-}) {
-  const tracks = state.tracks.filter(
-    (track) => kinds.includes(track.kind) && track.volume !== null,
-  );
-
+export function AudioSection() {
   return (
-    <section className={styles.section} aria-label={title}>
+    <section className={styles.section} aria-label="오디오">
       <div className={styles.sectionHead}>
-        <span className={styles.sectionTitle}>{title}</span>
-        <span className={styles.hint}>트랙별 볼륨</span>
+        <span className={styles.sectionTitle}>방송 소리</span>
       </div>
+      <p className={styles.hint}>
+        타임라인 트랙 줄에서 넣고 빼요 · 음량은 숫자를 누르거나 좌우로 끌어요
+      </p>
 
-      {tracks.map((track) => (
-        <div key={track.id} className={styles.trackRow}>
-          <Switch
-            size="sm"
-            aria-label={`${track.label} 사용`}
-            checked={!track.muted}
-            onChange={() => state.toggleTrackMute(track.id)}
-          />
-          <span className={styles.trackName}>{track.label}</span>
-          <Slider
-            className={styles.trackSlider}
-            label={`${track.label} 볼륨`}
-            value={track.volume ?? 0}
-            {...state.gestureHandlers}
-            onValueChange={(volume) => state.setTrackVolume(track.id, volume)}
-          />
-          <span className={styles.trackValue}>{track.volume}%</span>
-        </div>
-      ))}
-
-      {hint !== undefined ? <p className={styles.hint}>{hint}</p> : null}
+      <div className={styles.divider} />
+      <PendingNote title="음악 · 효과음" />
     </section>
   );
 }
