@@ -2194,8 +2194,11 @@ health `relay`와 종료 판정 줄에 실린다. 🔴 **health UP/DOWN에는 �
 
 ```json
 {"seq":12,"seqEpoch":1789300000000,"kind":"chat","time":"2026-09-13T10:00:04.120Z","timeBasis":"message",
- "nickname":"…","senderChannelId":"…","role":null,"text":"…","amount":null,"donationType":null}
+ "nickname":"…","senderChannelId":"…","role":null,"text":"…","amount":null,"donationType":null,"platform":"CHZZK"}
 ```
+
+**`platform`**(`CHZZK`·`SOOP`)은 그 채팅·후원이 들어온 플랫폼이다(POK-466). 한 방송을 치지직과 SOOP에 같이 내보내면 두 플랫폼 줄이
+한 줄기로 섞여 오므로 화면이 이것으로 줄마다 플랫폼을 보인다. 범위 창구 한 줄도 같은 칸을 싣는다.
 
 **`event: broadcast-info`**(POK-234 PR-C, `BROADCAST_INFO_ENABLED`) — 걷는 방송마다 1분에 한 번. 같은 `seq`·`seqEpoch`를 나눠 쓴다.
 `time`은 **우리가 물어본 시각**(`timeBasis:"observed"`)이고 창구 칸 대신 제목·태그·카테고리·시청자 수가 찬다.
@@ -2224,7 +2227,8 @@ health `relay`와 종료 판정 줄에 실린다. 🔴 **health UP/DOWN에는 �
    🔴 **구멍을 본 즉시 부르지 말고 2초 뒤에 부른다.** 놓친 채팅은 표에 **최대 1초 뒤**(적재 flush 주기)에 들어간다 — 바로 부르면
    그 채팅이 아직 없어 한 번 부른 메우기가 빈손으로 끝나고, 뒤 번호가 이어지면 다시 부를 계기가 없다(PR #181 codex)
 3. **같은 `seqEpoch` 안에서 `seq`가 뒤로 가면 늦게 온 묶음이다** — 버리지 말고 보여 준다(clip이 늦은 요청을 먼저 처리하는 것을 측정했다).
-   **겹친 구간은 (`kind`, `time`, `senderChannelId`, `text`)로 거른다** — 채팅 표 지문 UNIQUE와 같은 열쇠다. `seq`는 중복 판정 열쇠가 아니다
+   **겹친 구간은 (`kind`, `time`, `senderChannelId`, `text`, `platform`)으로 거른다** — 채팅 표 지문 UNIQUE와 같은 열쇠다(플랫폼은 POK-466,
+   두 플랫폼에서 같은 글이 같은 시각에 오면 둘 다 보인다). `seq`는 중복 판정 열쇠가 아니다
 4. **SSE `lastEventId`로 빈틈을 재지 않는다.** 카드도 같은 통로에서 `id`를 쓴다
 
 #### clip 쪽 규칙
@@ -4526,7 +4530,7 @@ DB가 거절해 500이 되고, **입력 오류가 장애로 오인된다**(epoch
 ```json
 {"items":[{"kind":"chat","id":41,"time":"2026-09-01T12:00:03Z","timeBasis":"message",
            "nickname":"…","senderChannelId":"…","role":"common_user","text":"ㅋㅋ",
-           "amount":null,"donationType":null}],
+           "amount":null,"donationType":null,"platform":"CHZZK"}],
  "nextCursor":"h:…","appliedOffsetMs":3900}
 {"bucketSeconds":10,"buckets":[{"start":"2026-09-01T12:00:00Z","chats":12,"donations":1}],
  "appliedOffsetMs":3900}

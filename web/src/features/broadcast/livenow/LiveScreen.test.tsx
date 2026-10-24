@@ -394,6 +394,8 @@ const server = vi.hoisted(() => ({
   sseDonations: null as Record<string, unknown>[] | null,
   /** 채팅 창구 답에 SOOP 별풍선 후원 한 줄을 더한다(POK-431) */
   soopDonation: false,
+  /** 한 방송을 치지직 · SOOP에 같이 내보낸 채팅 창구 답(POK-466). 두 플랫폼에서 같은 글이 같은 시각에 온 줄까지 싣는다 */
+  dualPlatformChat: false,
   live: true,
   failLive: false,
   relation: 'OWNER',
@@ -816,6 +818,23 @@ function handle(url: string, init?: RequestInit): Response | Promise<Response> {
         nextCursor: null,
         appliedOffsetMs: 0,
       });
+    if (server.dualPlatformChat) {
+      const both = {
+        kind: 'chat',
+        time: chatAt(30),
+        senderChannelId: 'same',
+        text: '같은 글',
+        amount: null,
+      };
+      return jsonResponse(200, {
+        items: [
+          { ...both, id: 1, nickname: '치지직팬', platform: 'CHZZK' },
+          { ...both, id: 2, nickname: '숲시청자', platform: 'SOOP' },
+        ],
+        nextCursor: null,
+        appliedOffsetMs: 0,
+      });
+    }
     return jsonResponse(200, {
       items: server.soopDonation
         ? [
@@ -971,6 +990,7 @@ beforeEach(() => {
   server.sseInfo = null;
   server.sseDonations = null;
   server.soopDonation = false;
+  server.dualPlatformChat = false;
   server.live = true;
   server.failLive = false;
   server.relation = 'OWNER';
@@ -2587,6 +2607,44 @@ describe('LiveScreen — 실시간 채팅 패널', () => {
     await settle();
 
     expect(screen.getByText('애드팬 · 애드벌룬 30개')).toBeInTheDocument();
+  });
+
+  it('두 플랫폼 채팅이 섞이면 줄마다 어느 플랫폼인지 보인다: 같은 글이 같은 시각에 와도 하나로 접지 않는다(POK-466)', async () => {
+    server.dualPlatformChat = true;
+    await renderLive();
+
+    const chzzk = screen.getByText('치지직팬').closest('li')!;
+    const soop = screen.getByText('숲시청자').closest('li')!;
+    expect(within(chzzk).getByText('치지직')).toBeInTheDocument();
+    expect(within(soop).getByText('SOOP')).toBeInTheDocument();
+  });
+
+  it('실시간 중계로 온 후원도 어느 플랫폼인지 보인다(POK-466)', async () => {
+    await renderLive();
+    server.sseDonations = [
+      {
+        seq: 1,
+        seqEpoch: 1,
+        kind: 'donation',
+        time: new Date(Date.now() - 1_000).toISOString(),
+        timeBasis: 'received',
+        nickname: '애드팬',
+        senderChannelId: 's10',
+        role: null,
+        text: '',
+        amount: 30,
+        donationType: 'ADBALLOON_GIFTED',
+        platform: 'SOOP',
+      },
+    ];
+    // 첫 통로는 용량 초과(503)라 60초 쉬고 다시 붙는다
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(61_000);
+    });
+    await settle();
+
+    const line = screen.getByText('애드팬 · 애드벌룬 30개').closest('li')!;
+    expect(within(line).getByText('SOOP')).toBeInTheDocument();
   });
 
   it('급증 키워드·후원·채팅 줄을 그린다', async () => {

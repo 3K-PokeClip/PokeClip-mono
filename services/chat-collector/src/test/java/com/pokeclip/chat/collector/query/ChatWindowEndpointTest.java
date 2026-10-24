@@ -199,12 +199,12 @@ class ChatWindowEndpointTest {
 
         /**
          * 🔴 <b>응답 JSON 칸 이름은 clip·프론트와의 계약이다</b>(POK-234 감사 라운드 3 C-3).
-         * 여섯이 record 필드 이름 하나에만 걸려 있어서 이름을 바꿔도 아무도 안 잡았다.
+         * 칸들이 record 필드 이름 하나에만 걸려 있어서 이름을 바꿔도 아무도 안 잡았다(처음 여섯, POK-466이 플랫폼을 더했다).
          * 여기서 <b>글자로</b> 못박는다 — 특히 {@code donationType}은 {@code type}으로
          * 줄이자는 제안이 실제로 있었다.
          */
         @Test
-        void 응답_칸_이름_여섯은_글자로_못박는다() throws Exception {
+        void 응답_칸_이름_일곱은_글자로_못박는다() throws Exception {
             insertChat(T0.plusSeconds(1), "채팅본문");
             insertDonation(T0.plusSeconds(2), "후원본문");
 
@@ -216,7 +216,9 @@ class ChatWindowEndpointTest {
                     .contains("\"senderChannelId\":\"api-win-donator\"")
                     .contains("\"role\":\"common_user\"")
                     .contains("\"donationType\":\"CHAT\"")
-                    .contains("\"amount\":1000");
+                    .contains("\"amount\":1000")
+                    // 웹이 줄마다 플랫폼을 보이고 겹침 지문에 넣는다(POK-466). 중계 줄과 같은 대문자 이름이어야 지문이 맞는다
+                    .contains("\"platform\":\"CHZZK\"");
         }
 
         @Test

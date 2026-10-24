@@ -411,6 +411,10 @@ web/                     # 단일 Next.js 앱 (App Router + TanStack Query + Zus
   「애드벌룬 N개」 · `VIDEOBALLOON_GIFTED` 「영상풍선 N개」 · `STICKER_GIFTED` 「스티커 N개」 · 미션 후원 둘은 「미션 후원 N개」다
   (`chatCollector.ts`의 `donationLabel`, 채팅 창구 줄과 실시간 중계 둘 다). 종류가 비면 치지직, 모르는 종류는 「후원 N」, 개수를
   모르면 숫자 없이 단위만 보인다.
+- **채팅 · 후원 줄마다 어느 플랫폼인지 적는다 (POK-466).** 수집기가 채팅 창구 줄과 실시간 중계 둘 다에 `platform`(`CHZZK` · `SOOP`)을
+  싣고, 채팅 창은 닉네임(후원은 머리줄) 앞에 「치지직」 · 「SOOP」을 흐리게 둔다(`ChatPanel`의 `PlatformMark`). 한 플랫폼만 켠 방송에도
+  같은 규칙으로 보인다. 모르는 코드거나 옛 서버라 칸이 없으면 적지 않는다. 겹침 지문(`chatFingerprint`)에도 플랫폼을 넣었다: 수집기 표
+  지문에 플랫폼이 있어, 두 플랫폼에서 같은 글이 같은 시각에 오면 둘 다 보인다.
 - **한 방송이 치지직 · SOOP에 나란히 켜질 수 있다 (POK-397).** 서버는 플랫폼마다 값을 준다(목록 `platforms`, 방송 정보 `platforms`,
   시청자 기록 점마다 `platform`). 무엇을 보일지는 `features/broadcast/platformView.ts` 한 곳이 정하고 홈 · 라이브가 같이 쓴다:
   관측이 3분 안인 플랫폼이 켜짐(지금 켜진 것이 없는 끝난 방송이면 마지막 관측에서 3분 안, 서버 목록 제목과 같은 기준), 대표 플랫폼은 켜진 것 중 시청자가 가장 많은 쪽(같으면 치지직 → SOOP).

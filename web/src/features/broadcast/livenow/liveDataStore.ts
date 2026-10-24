@@ -187,6 +187,8 @@ export interface RelayEvent {
   text: string | null;
   amount: number | null;
   donationType: string | null;
+  /** 그 줄이 들어온 플랫폼 코드(POK-466). 옛 서버면 빠져 온다 */
+  platform?: string | null;
 }
 const relayListeners = new Set<(ev: RelayEvent) => void>();
 export function subscribeRelay(fn: (ev: RelayEvent) => void): () => void {
