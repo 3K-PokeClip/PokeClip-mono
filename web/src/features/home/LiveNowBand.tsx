@@ -7,7 +7,7 @@ import { Thumb } from './Thumb';
 import type { LiveNow } from './useHomeMockState';
 
 // 디자인 1a ② — 방송 중일 때만 노출되는 라이브 밴드. 홈 개편(POK-378)부터 큰 칸 아래 본문 맨 위에 선다.
-// 두 액션 모두 라이브 대시보드(1b)로 간다 — "카드 검토"는 우측 카드 목록이 목적지다.
+// 액션은 라이브 대시보드(1b)로 가는 「대시보드 열기」 하나다. 같은 곳으로 가던 「카드 검토」는 중복이라 뺐다(POK-464).
 // 클립 완료 수는 줄 창구가 없어 「준비 중」으로 적는다.
 //
 // 방송 정보(플랫폼 · 제목 · 시청자 수)는 수집기가 방송을 찾아야 온다. 방송 시작 알림만 온 직후에는 그 칸들이 비는데, 방송 번호 ·
@@ -88,9 +88,6 @@ export function LiveNowBand({ live }: { live: LiveNow }) {
           <div className={styles.liveActions}>
             <Link href={dashboardHref} className={styles.solidLink}>
               대시보드 열기
-            </Link>
-            <Link href={dashboardHref} className={styles.ghostLink}>
-              카드 검토
             </Link>
           </div>
         </div>
