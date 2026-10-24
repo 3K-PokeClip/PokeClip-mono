@@ -53,7 +53,11 @@ output "app_env" {
   description = "서비스 → env 이름 → 값(비밀 아님) — platform(auth · clip 등) · 배치 루트(render · upload)의 ecs_service.environment."
   value = {
     # OAuth 설정 · 프로필 사진 env 는 auth_settings.tf 의 locals 다.
-    auth = merge(local.app_db_env, local.auth_settings_env)
+    auth = merge(local.app_db_env, local.auth_settings_env, {
+      # resolve 전용 창구의 출발지 — Media 프라이빗 서브넷(POK-429 · K3). 전용
+      # 토큰(app_secret_arns)이 있는데 이 값이 비면 auth 가 부팅을 거부한다.
+      STREAM_KEY_RESOLVE_ALLOWED_CIDRS = local.media_private_subnet_cidr
+    })
     # 스위치는 clip 이 havingValue = "true" 로 읽어 문자열이다. 큐 주소와 창고
     # 이름은 스위치와 무관하게 늘 낸다 — 한쪽이 꺼진 배포의 탈퇴 정리가 두
     # 창고 이름으로 지운다(D7). segment 창고는 rewind 버킷이다(D4 — 사이드카가

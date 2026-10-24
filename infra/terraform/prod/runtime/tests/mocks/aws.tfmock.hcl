@@ -7,3 +7,11 @@ mock_resource "aws_sns_topic" {
     arn = "arn:aws:sns:ap-northeast-2::example-broadcast-lifecycle.fifo"
   }
 }
+
+# 서브넷 조회(network_state.tf)는 시험 열셋이 모두 읽는다. override 가 없는
+# 파일에서도 대역이 IPv4 CIDR 꼴이 되게 문서용 대역(RFC 5737)을 준다.
+mock_data "aws_subnet" {
+  defaults = {
+    cidr_block = "192.0.2.0/24"
+  }
+}

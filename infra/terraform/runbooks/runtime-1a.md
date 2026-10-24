@@ -113,9 +113,10 @@ bash infra/terraform/scripts/precheck/events.sh --since <비교 기준 판정 �
     *   `Plan: 29 to add, 0 to change, 0 to destroy` — RDS 다섯(SG · 서브넷
         그룹 · 파라미터 그룹 · 로그 그룹 · 인스턴스) · 비밀 그릇 일곱 ·
         rewind 버킷 다섯 · 계약9 열둘(주제 정책 포함). 이 수는 1단-가
-        머지본 기준입니다. 1단-다 코드가 들어간 판에서 처음부터 apply 하면
-        수가 다르고 tfvars(`auth_oauth_apps`)가 먼저 있어야 plan 이 돕니다
-        — 「1단-다 2. tfvars 와 apply」 를 따릅니다.
+        머지본 기준입니다(뒤 단계가 그릇을 더함 — 1단-다 · 1단-나 ② 2).
+        1단-다 코드가 들어간 판에서 처음부터 apply 하면 수가 다르고
+        tfvars(`auth_oauth_apps`)가 먼저 있어야 plan 이 돕니다 — 「1단-다 2.
+        tfvars 와 apply」 를 따릅니다.
     *   주제 정책(`aws_sns_topic_policy.broadcast_lifecycle`)은 명시
         정책입니다 — 주체가 계정 루트 하나이고 `*` · `Condition` 이 없습니다.
     *   주소에 `sql_runner` 가 없습니다(실행기 꺼짐).
@@ -765,7 +766,11 @@ AccessDenied(접근 거부 · SCP 거부)가 나면 다시 시도하지 않고 �
         destroy` — 일 큐 · DLQ 여섯 · 재처리 허용 셋 · clips 버킷 다섯 ·
         프로필 사진 버킷 다섯 · 그릇 하나(`pokeclip/prod/soop-client-secret`)
         · rewind 버킷 CORS 하나(`aws_s3_bucket_cors_configuration.rewind`).
-        1단-가와 함께면 `50 to add`(29 + 21)입니다.
+        1단-가와 함께면 `50 to add`(29 + 21)입니다. 1단-나 ②(POK-429)가
+        들어간 판이면 그릇이 하나 더(`pokeclip/prod/stream-key-resolve-token`)
+        라 `22 to add` · 1단-가와 함께면 `51 to add` 이고, 출력에 「1단-나 ②
+        2」 의 변화가 함께 나옵니다. 그 그릇의 값은 O7d 전에 「1단-나 ② 4」
+        로 넣습니다.
     *   바뀐 출력이 `app_env` · `app_secret_arns` ·
         `app_task_resource_arns` 입니다. `app_env.auth` 에
         `STREAM_KEY_SECRET_REF_PREFIX` 가 없습니다(platform 이 넣음).
@@ -829,8 +834,10 @@ done
       --output text
     ```
 
-*   그릇 여덟: 모두 `prod` 입니다. 2-3 판정의 `secrets` 행이 이 태그로
-    그릇을 풉니다.
+*   그릇 여덟(위 반복의 종류): 모두 `prod` 입니다. 2-3 판정의 `secrets`
+    행이 이 태그로 그릇을 풉니다. 1단-나 ② 가 들어간 판이면 그릇은
+    아홉이고, 아홉째(`stream-key-resolve-token`)는 이 걸음이 아니라
+    「1단-나 ② 2」 의 2-3 재판정이 봅니다.
 *   결과 줄을 볼트 raw 로 옮깁니다(비밀 값 훑기 뒤 · 계정 ID · ARN 가림).
 
 ### 1단-다 4. apply 뒤 2-3 재판정
@@ -1062,6 +1069,564 @@ kty 결정(2026-10-24): clip 을 먼저 내리고, 나머지를 되돌린 뒤, �
 *   O7d 부터 일꾼 배치까지 주문이 소비자 없이 쌓입니다(고착 알람 없음).
 *   `clip_job_features` 거부 규칙은 런타임 변수 값만 막습니다. 코드
     되돌리기 길은 위 「clip 먼저 0개」 절차(platform 동결 포함)가 막습니다.
+
+## 1단-나 ② — Media 전용 토큰(POK-429)
+
+Media 상자가 읽는 auth 출입증을 공용 `INTERNAL_API_TOKEN` 에서 resolve 전용
+토큰(그릇 `pokeclip/prod/stream-key-resolve-token`) 하나로 줄이고, 줄인 뒤
+공용 토큰을 한 번 바꾸는 절차입니다. 계획 rt1d 의 「운영 순서와 승인
+지점」 이 이 절입니다. 머리의 실행 규칙(kty 로컬 터미널 · 쓰기마다 직전
+승인 · 출력을 세션에 붙이지 않음)이 그대로 걸립니다.
+
+*   **전용 토큰**: auth 의 `POST /internal/stream-keys/resolve` 하나만 여는
+    토큰입니다. 헤더 `X-Stream-Key-Resolve-Token` 으로 싣고, 출발지가 Media
+    프라이빗 서브넷 대역(`STREAM_KEY_RESOLVE_ALLOWED_CIDRS`)이어야 합니다.
+*   **공용 토큰**: `INTERNAL_API_TOKEN` 입니다. auth 의 `/internal/**` 전부를
+    열고 앱 서버들이 함께 씁니다.
+*   **응답기**: Media 상자의 `ingest-auth` 컨테이너입니다. 렌더 · 명령은
+    M15 몫이고, 상자 명령은 [Media 교체 런북](media-swap.md) 「준비」 의
+    작업 디렉터리 · `media_ssm` 으로 보냅니다.
+
+어느 걸음이든 AccessDenied 가 나오면 그 자리에서 멈추고 kty 에게
+보고합니다(다시 시도 · 우회하지 않음).
+
+### 1단-나 ② 순서 한눈에
+
+| 걸음 | 하는 일 | 승인 지점 |
+|---|---|---|
+| 1 | 직전 점검(`runtime-1a`) — SCP 판정은 CHANGED(새 행) | ⑤ 보고 · `--accept` |
+| 2 | runtime plan · apply → 2-3 다시 | plan 승인 |
+| 3 | M15 선행 조건 기록 | — |
+| 4 | 전용 토큰 값 넣기(O7d 전 필수) | 값 입력 |
+| 5 | platform(O7d 또는 그 뒤) | plan 승인 |
+| 6 | prod/media 적용 모드 확인 | — |
+| 7 | prod/media plan · apply(권한 축소) · 실물 확인 | plan 승인 |
+| 8 | 공용 토큰 1회 회전(조건 없음) | send-command · 값 입력 · 재배포 |
+| 9 | 응답기 기동 · 교체 | send-command |
+| 10 | 음성 확인(전용 토큰 · 옛 공용 토큰 401) | send-command · 포트 포워딩 |
+| 11 | 기록 | — |
+
+### 1단-나 ② 직전 점검 규칙
+
+새 규칙을 만들지 않습니다. runtime apply 는 이 런북 1 · 3-1 · 4 의 첫
+걸음, platform apply 는 O7d, prod/media apply 는 O7e 단계의 직전 점검을
+[단계 직전 점검](stage-precheck.md) 「순서」 · 「단계별 점검」 대로 돕니다.
+아래 1 의 결과별 멈춤 조건은 세 단계에 똑같이 걸립니다.
+
+### 1단-나 ② 1. 직전 점검(runtime-1a)
+
+kty 가 세션 밖에서 caller identity 를 본 뒤 1 의 세 명령을 그 순서로
+돌리고 ⑤ 보고를 합니다.
+
+*   ① 종료 3(CHANGED)은 예상됩니다 — 묶음에 `ec2:DescribeSubnets` 행이
+    늘었습니다(런타임 `data "aws_subnet"`). ⑤ 보고와 함께 묻고, 답을 들은 뒤
+    `--accept` 하고 다시 판정해 종료 0 이어야 다음입니다. 종료 1(DENIED) ·
+    2(검사 불가)면 2 로 가지 않습니다.
+*   ② 는 1단-가 apply 뒤 기준입니다(4 의 첫 걸음 — 1 의 「apply 전이라
+    정상」 은 맞지 않음). 정상인 `TARGET_NONE` 은 `prod-instance` 하나뿐입니다.
+    `rds-master-secret` 이 `TARGET_NONE` 이거나 `ALLOWED` 이면 멈춤,
+    `report.txt` 에 「자원 없음(첫 단계 — 정책 없이 판정)」 줄이 있으면
+    멈춤입니다. 입력 파일 `~/.pokeclip-precheck/input-rds-master.txt` 가 없거나
+    비었으면 3-1 로 먼저 만들고 `INPUT OK` 를 본 뒤 ② 를 돌립니다.
+    UNDECIDED(3)는 kty 가 그 증거 `approvals.tsv` 에 「진행」 을 적어야
+    다음입니다.
+*   ③ 종료 2 면 시작하지 않습니다. `summary.tsv` 에 역할 받기 밖의 0 아닌
+    행이 있으면 kty 에게 알립니다.
+*   시작 조건은 stage-precheck 「2-3 판정」 그대로입니다(멈춤 0 · 판정 불가는
+    0 이거나 모두 「진행」 기록).
+
+### 1단-나 ② 2. runtime plan · apply
+
+2 의 plan · 확인 · apply · 적용 확인 꼴로 합니다. 기대 변화는 아래뿐입니다
+— 그 밖의 변화가 있으면 apply 하지 않습니다.
+
+*   `Plan: 1 to add, 0 to change, 0 to destroy`(1단-다를 적용한 뒤 기준 —
+    함께 적용하면 「1단-다 2」 의 수를 봅니다).
+*   추가: 그릇 하나(`module.secret_shells` 의
+    `pokeclip/prod/stream-key-resolve-token`).
+*   출력: `app_secret_arns.auth` 에 `STREAM_KEY_RESOLVE_TOKEN` ·
+    `media_secret_arns` 원소 교체(공용 그릇 → 전용 그릇) · `app_env.auth` 에
+    `STREAM_KEY_RESOLVE_ALLOWED_CIDRS` · 새 출력
+    `ingest_auth_resolve_token_secret_arn`.
+
+apply 뒤 2-3 판정을 3-1 과 4 의 첫 걸음 그대로 다시 합니다. 입력 파일은
+1단-가 때 만든 것을 씁니다. `principal-check.sh runtime-1a` 의 증거
+`targets.tsv` 에서 새 그릇이 `secrets` 태그 행으로 대상에 들어왔는지 봅니다.
+멈춤 조건은 위 1 의 ② 와 같습니다.
+
+### 1단-나 ② 3. M15 선행 조건 기록
+
+2 직후 「응답기 모드(`ingest_auth_image` 를 채운) prod/media apply 는 M15 의
+전환(`media.env` 의 `STREAM_KEY_RESOLVE_TOKEN_SECRET_ARN` · compose 의
+`STREAM_KEY_RESOLVE_CHANNEL: resolve-token`)이 들어간 판으로만 한다」 를 장부
+rt1d 행과 POK-301 코멘트에 남깁니다. 7 의 보류 조건이 이 기록을 봅니다.
+
+### 1단-나 ② 4. 전용 토큰 값 넣기
+
+**auth 배포(O7d) 전 필수**입니다. 값 없는 그릇을 참조한 태스크가 어떻게
+뜨는지는 미확인이라 앞에 둡니다.
+
+```shell
+cd "$(git rev-parse --show-toplevel)"
+# 하위 셸 — 추적 · allexport 끔과 umask 가 밖으로 새지 않고, 값 파일은
+# put-secret 이 실패(종료 2 · 3 · 4 · 5)하거나 중간에 멈춰도 지워진다.
+(
+  set +o xtrace +o allexport
+  umask 077
+  value_file="$(mktemp)" || exit 1
+  trap 'rm -f "${value_file}"' EXIT
+  openssl rand -hex 32 >"${value_file}" || exit 1
+  bash infra/terraform/scripts/put-secret-from-file.sh \
+    stream-key-resolve-token "${value_file}"
+)
+printf 'put-secret 종료 %s\n' "$?"
+```
+
+*   종류 `stream-key-resolve-token` 은 1단-다(POK-427)가 넓힌 허용 목록에 이
+    PR 이 한 줄을 더한 것입니다. 인자 꼴(`<종류> <파일>`)은 1단-다 머지본
+    그대로입니다. 종료 2(모르는 종류)면 그 판이 빠진 것이니 멈춥니다.
+*   값은 `INTERNAL_API_TOKEN` 과 달라야 합니다 — 같으면 auth 가 부팅을
+    거부합니다. 화면 · 세션에 값을 내지 않습니다. 종료 4(DENIED)는 다시
+    시도하지 않고 멈춥니다.
+
+### 1단-나 ② 5. platform(O7d 또는 그 뒤)
+
+O7d 직전 점검(위 규칙) → plan → auth 태스크 정의의 secrets 에
+`STREAM_KEY_RESOLVE_TOKEN`, environment 에 `STREAM_KEY_RESOLVE_ALLOWED_CIDRS`
+가 들어감을 확인 → **plan 승인** → apply. auth 부팅 로그에 부팅 거부 문구가
+없고 health 가 통과해야 다음입니다.
+
+### 1단-나 ② 6. prod/media 적용 모드 확인
+
+이번 prod/media apply 가 응답기 모드인지(`ingest_auth_image` 가 비었는지 —
+값이 아니라 비었는지만)를 봅니다. 첫 O7e 인지는 따로 가리지 않습니다 — 7 의
+plan 이 역할을 새로 만드는지 고치는지로 드러나고, 어느 쪽이든 8 을 합니다.
+
+### 1단-나 ② 7. prod/media plan · apply(권한 축소)
+
+*   **보류**: 응답기 모드이고 M15 전환 전 판(`internal-token` 창구 · 공용
+    그릇 키)으로 렌더되는 판이면 미룹니다(3 의 기록 대조). 옛 모드
+    O7e(`ingest_auth_image` 빈 값 — 응답기가 뜨지 않음)는 막지 않습니다.
+*   O7e 직전 점검(멈춤 자리 묶음 포함) → plan → 인스턴스 역할 정책
+    `SecretsRead` 의 Resource 에서 `internal-api-token` 그릇이 빠지고
+    `stream-key-resolve-token` 그릇이 들어가는 변화만 있는지 확인 → **plan
+    승인** → apply → 완료 직후 `date '+%Y-%m-%d %H:%M'` 를 찍어 8 (c) 의
+    시작 시각으로 적습니다. O7e 전이면 O7e 의 첫 media apply 가 이 걸음을
+    겸하고, plan 에 `internal-api-token` 이 없음을 확인합니다.
+*   **실물 확인(읽기)**: Media 인스턴스 역할(`pokeclip-prod-media`)의 정책
+    문장 전부에서 `internal-api-token` 이 0 건이고 `stream-key-resolve-token`
+    이 `SecretsRead` 에 있어야 합니다. sid 하나로 한정하지 않습니다. 화면에는
+    건수와 이름 끝 토막만 냅니다.
+
+    ```shell
+    # 새 bash 프로세스에서 돈다 — zsh 는 조건 문맥 안의 set -e 를 무시하고
+    # $(…) 결과를 단어로 나누지 않아, 조회 실패 · 정책 둘 이상이 「0 건」 으로
+    # 읽힌다. 조회마다 실패하면 멈춘다. 오류 원문(역할 · 계정 · ARN)은 버린다.
+    bash -c '
+    role=pokeclip-prod-media
+    stop() { printf "멈춤: %s 읽기 실패\n" "$1"; exit 1; }
+    inline="$(aws iam list-role-policies --role-name "${role}" \
+      --query "PolicyNames[]" --output text 2>/dev/null)" || stop "인라인 목록"
+    read -r -d "" -a names <<<"${inline}"
+    attached="$(aws iam list-attached-role-policies --role-name "${role}" \
+      --query "AttachedPolicies[].PolicyArn" --output text 2>/dev/null)" ||
+      stop "관리형 목록"
+    read -r -d "" -a arns <<<"${attached}"
+    docs=""
+    for p in "${names[@]}"; do
+      doc="$(aws iam get-role-policy --role-name "${role}" \
+        --policy-name "${p}" --query PolicyDocument --output json \
+        2>/dev/null)" || stop "인라인 정책"
+      docs+="${doc}"
+    done
+    for a in "${arns[@]}"; do
+      v="$(aws iam get-policy --policy-arn "${a}" \
+        --query Policy.DefaultVersionId --output text 2>/dev/null)" ||
+        stop "관리형 정책 판"
+      doc="$(aws iam get-policy-version --policy-arn "${a}" \
+        --version-id "${v}" --query PolicyVersion.Document --output json \
+        2>/dev/null)" ||
+        stop "관리형 정책"
+      docs+="${doc}"
+    done
+    printf "policies %s\n" "$(( ${#names[@]} + ${#arns[@]} ))"
+    printf "internal-api-token %s\n" \
+      "$(printf "%s" "${docs}" | grep -c "internal-api-token")"
+    printf "stream-key-resolve-token %s\n" \
+      "$(printf "%s" "${docs}" | grep -c "stream-key-resolve-token")"
+    '
+    ```
+
+    `internal-api-token 0` 이 아니면(공용 그릇이 다른 문장 · 변수 · 정책으로
+    붙은 fail-open 갈래) 멈추고 kty 에게 회부합니다.
+    `stream-key-resolve-token` 이 0 이면(양성 대조 — 역할을 잘못 읽음) ·
+    「정책 읽기 실패」 가 나오면 0 건으로 읽지 않고 멈춥니다.
+*   **공용 그릇 자원 정책(읽기)**: 아래가 `None` 이면 닫힘입니다. 런타임은
+    그릇에 읽기 정책을 두지 않습니다. 정책이 있으면 내용을 화면에 내지 말고
+    멈춥니다.
+
+    ```shell
+    if none="$(aws secretsmanager get-resource-policy --region ap-northeast-2 \
+      --secret-id pokeclip/prod/internal-api-token \
+      --query 'ResourcePolicy == null' --output text 2>/dev/null)"; then
+      printf 'no-resource-policy %s\n' "${none}"
+    else
+      printf '멈춤: 자원 정책 읽기 실패\n'
+    fi
+    ```
+
+    정책 내용은 내지 않고 「없음」 여부만 냅니다. `no-resource-policy True`
+    가 아니면(`False` · 읽기 실패) 멈춥니다.
+
+### 1단-나 ② 8. 공용 토큰 1회 회전
+
+7 뒤 **늘** 합니다(kty 「무조건 1회 회전」). Media 역할이 공용 그릇을 읽은
+적이 있는지는 따지지 않습니다. 아래 (a) · (b) · (b2) · (c) 를 이 순서로 모두
+통과해야 값을 넣습니다. (a) 의 정책 원문 · 자원 정책 확인과 완료 조건의
+옛 태스크 교체 완료 · 옛 토큰 401 확인은 kty 결정이 아니라 계획이 더한
+것입니다(계획 rt1d 처분 R5 · R10 · P7).
+
+*   **(a)** 7 의 실물 확인 둘(정책 문장 전부에서 `internal-api-token` 0 건 ·
+    공용 그릇 자원 정책 없음)이 통과했습니다. 아니면 멈춥니다.
+*   **(b) 시뮬레이터**(읽기 · 승인 불요 · 오류 원문에 ARN 이 섞여 세션의
+    `!` 로 돌리지 않음): Media 역할 → `secretsmanager:GetSecretValue` 를 두
+    그릇에 묻습니다. ARN 은 셸 변수와 요청 파일로만 다룹니다
+    ([scp-recheck.sh](../scripts/precheck/scp-recheck.sh) 의 요청 파일 꼴).
+    문맥 키는 `aws:RequestedRegion` · `aws:SecureTransport` 입니다(2-3 판정
+    관례).
+
+    ```shell
+    cd "$(git rev-parse --show-toplevel)/infra/terraform/prod/runtime"
+    sim="$(mktemp -d)"
+    (
+      umask 077
+      role_arn="$(aws iam get-role --role-name pokeclip-prod-media \
+        --query Role.Arn --output text)" || exit 1
+      shared="$(terraform output -json app_secret_arns |
+        jq -er '.auth.INTERNAL_API_TOKEN')" || exit 1
+      resolve="$(terraform output -raw ingest_auth_resolve_token_secret_arn)" ||
+        exit 1
+      ctx='{"ContextKeyName":"aws:RequestedRegion","ContextKeyValues":'
+      ctx+='["ap-northeast-2"],"ContextKeyType":"string"},'
+      ctx+='{"ContextKeyName":"aws:SecureTransport","ContextKeyValues":'
+      ctx+='["true"],"ContextKeyType":"boolean"}'
+      for name in shared resolve; do
+        arn="${shared}"
+        [ "${name}" = resolve ] && arn="${resolve}"
+        printf '{"PolicySourceArn":"%s","ActionNames":%s,"ResourceArns":["%s"],"ContextEntries":[%s]}\n' \
+          "${role_arn}" '["secretsmanager:GetSecretValue"]' "${arn}" "${ctx}" \
+          >"${sim}/${name}.json"
+        if ! decision="$(aws iam simulate-principal-policy \
+          --cli-input-json "file://${sim}/${name}.json" \
+          --query 'EvaluationResults[0].EvalDecision' --output text \
+          2>"${sim}/${name}.err")" || [ -z "${decision}" ]; then
+          printf '멈춤: %s 판정 실패\n' "${name}"
+          exit 1
+        fi
+        printf '%s %s\n' "${name}" "${decision}"
+      done
+    )
+    rm -r "${sim}"
+    # (b2) 의 media_ssm 은 저장소 뿌리 기준 경로를 쓴다 — 뿌리로 돌아간다.
+    cd "$(git rev-parse --show-toplevel)"
+    ```
+
+    *   통과 = `shared implicitDeny` · `resolve allowed`. 전용은 양성
+        대조입니다 — 역할 · ARN 을 잘못 넣어 생기는 거짓 거부를 가릅니다.
+    *   `shared allowed`(권한이 남음) · `shared explicitDeny`(예상 밖 거부
+        문장) · `resolve` 가 `allowed` 아님 → 멈춤 · kty 회부.
+    *   「판정 실패」 는 거부로 읽지 않고 멈춥니다.
+    *   한계: 시뮬레이터는 실제로 호출하지 않고, 자원 정책을 스스로 읽지
+        않으며, 실환경과 다를 수 있습니다. 자원 정책은 (a), 전파는 (b2) ·
+        (c) 가 맡습니다.
+*   **(b2) 상자 직접 측정**(상자 명령 — 실행 직전 **kty 승인**): Media
+    상자에서 인스턴스 역할로 공용 그릇을 실제로 불러 거부되는지 잽니다. 한
+    묶음 = 측정 셋 · 5분 간격을 한 send-command 안에서 돕니다. 값은 표준
+    출력째 버리고, 종료 코드와 오류 코드(`An error occurred (<코드>)` 의
+    괄호 안)만 냅니다. 오류 원문에는 역할 · 계정 · ARN 이 있어 내지 않습니다.
+    성공(값을 받음)이 나오면 그 자리에서 묶음을 끝냅니다.
+
+    ```shell
+    cat >"${work}/probe.sh" <<'EOF'
+    denied=0
+    for i in 1 2 3; do
+      err="$(aws secretsmanager get-secret-value --region ap-northeast-2 \
+        --secret-id pokeclip/prod/internal-api-token 2>&1 >/dev/null)"
+      rc=$?
+      code="$(printf '%s' "${err}" |
+        sed -n 's/.*An error occurred (\([A-Za-z0-9]*\)).*/\1/p' | head -n 1)"
+      unset err
+      printf 'probe %s %s rc=%s code=%s\n' "${i}" "$(date -u '+%H:%M:%S')" \
+        "${rc}" "${code:-NONE}"
+      [ "${rc}" -ne 0 ] && [ "${code}" = AccessDeniedException ] &&
+        denied=$((denied + 1))
+      [ "${rc}" -eq 0 ] && break
+      [ "${i}" -lt 3 ] && sleep 300
+    done
+    # 종료 코드가 판정이다 — 마지막 줄의 종료 코드(sleep 을 건너뛴 [ ] 의 1)가
+    # 남지 않게 끝을 명시한다. 셋 다 거부면 0(SSM Success), 그 밖은 1.
+    if [ "${denied}" -eq 3 ]; then
+      printf 'verdict pass\n'
+      exit 0
+    fi
+    printf 'verdict stop\n'
+    exit 1
+    EOF
+    media_ssm <상자 키> "${work}/probe.sh"
+    ```
+
+    *   셋 다 `code=AccessDeniedException`(`rc` 는 0 이 아님) · `verdict
+        pass` · `SSM Success` → 통과. (c) 는 셋째 측정 시각에서 끝난 것으로
+        봅니다. 그 밖의 갈래는 모두 `verdict stop` · `SSM Failed` 입니다.
+    *   한 번이라도 `rc=0`(성공) → 즉시 멈춤. 권한이 남았거나 전파 전입니다.
+        회전하지 않고 (c) 30분을 다 채운 뒤 묶음을 다시 돕니다.
+    *   측정 실패(send-command 실패 · 상자 무응답 · 다른 오류 코드 · 종료
+        코드를 못 읽음) → 거부로 읽지 않습니다. (c) 30분을 다 채운 뒤 다시
+        돕니다.
+    *   다시 돈 묶음도 셋 다 `AccessDeniedException` 이 아니면 멈춤 · kty
+        회부.
+*   **(c) 대기**: 기본은 7 의 apply 완료 시각부터 30분이고, 지났음을 새로
+    찍은 `date` 출력으로 확인합니다. (b2) 첫 묶음이 셋 다 AccessDenied 면
+    셋째 측정 시각에서 끝납니다. AWS 는 IAM 변경이 모든 곳에 보이기까지
+    시간이 걸린다고만 하고 수치를 주지 않습니다 — 30분 · 3회 · 5분은 kty
+    확정 값입니다.
+*   **값 넣기**(실행 직전 **kty 승인**): 4 와 같은 꼴로 종류
+    `internal-api-token` 에 `openssl rand -hex 32` 값을 넣습니다. 전용 토큰
+    값과 달라야 합니다. 옛 값은 `AWSPREVIOUS` 로 남고 10 이 그것을 씁니다.
+    종료 4(DENIED)는 다시 시도하지 않고 멈춥니다.
+*   **앱 전원 강제 재배포**: 대상 = 공용 그릇을 읽는 서비스 키 전부.
+    손으로 적지 않고 출력에서 뽑습니다(키만 냄 · ARN 은 내지 않음).
+
+    ```shell
+    # 값 넣기가 저장소 뿌리로 왔다 — 출력은 하위 셸에서 runtime 으로 가 읽고,
+    # 9 · 10 의 media_ssm 이 쓰는 뿌리 cwd 는 그대로 둔다. 출력 실패나 auth ·
+    # clip 이 빠진 목록은 조용히 지나가지 않고 종료 1 로 멈춘다.
+    (
+      set -o pipefail
+      cd "$(git rev-parse --show-toplevel)/infra/terraform/prod/runtime" ||
+        exit 1
+      filter='to_entries[] | select(.value | has("INTERNAL_API_TOKEN")) | .key'
+      keys="$(terraform output -json app_secret_arns | jq -r "${filter}")" ||
+        exit 1
+      for want in auth clip; do
+        printf '%s\n' "${keys}" | grep -qx "${want}" && continue
+        printf '멈춤: 재배포 대상에 %s 없음\n' "${want}" >&2
+        exit 1
+      done
+      printf '%s\n' "${keys}"
+    )
+    ```
+
+    키 `<키>` 는 클러스터 `pokeclip-prod` 의 ECS 서비스
+    `pokeclip-prod-<키>` 입니다(`modules/ecs_service` 의
+    `<name_prefix>-<name>`). 키마다 상태를 읽습니다.
+
+    ```shell
+    aws ecs describe-services --region ap-northeast-2 \
+      --cluster pokeclip-prod --services "pokeclip-prod-<키>" \
+      --query 'services[0].status' --output text
+    ```
+
+    *   `ACTIVE` → 강제 재배포(쓰기 — **kty 승인**):
+        `aws ecs update-service --region ap-northeast-2 --cluster
+        pokeclip-prod --service pokeclip-prod-<키> --force-new-deployment
+        --query service.serviceName --output text`.
+    *   `None`(서비스 없음 — 응답의 `failures` 에 들어감) → 다음에 뜨는
+        태스크가 새 값을 받습니다. 키와 함께 기록합니다. 지금 platform 은
+        next · auth · clip 셋만 두므로 chat-collector · chat-detector 와
+        일꾼(render · upload)이 이 갈래입니다.
+    *   그 밖의 값(`DRAINING` · `INACTIVE` 등) → 멈춤 · kty 회부.
+    *   규칙의 전제: ECS 서비스 · 클러스터 자원은 `modules/ecs_service` 와
+        platform 의 클러스터 하나뿐입니다. 다른 클러스터 · 배치 루트가
+        생기면 이 규칙을 그 판으로 고칩니다.
+*   **완료 조건**: ① `ACTIVE` 였던 서비스마다 옛 태스크 교체 완료 — 아래
+    읽기가 `1 COMPLETED <n> <n>`(배포 하나 · 완료 상태 · 실행 수 = 원하는
+    수 — 옛 배포의 태스크가 남지 않음)이어야 합니다 ② 옛 공용 토큰
+    401 — 상자 → auth 8082 SG 짝이 있어야 해서 10 에서 합니다(그 전에는
+    「401 미확인」 으로 적음). 롤링 동안 옛 값 · 새 값 태스크가 섞여 내부
+    호출 일부가 401 입니다(거부 창). 창의 길이를 11 에 적습니다.
+
+    ```shell
+    aws ecs describe-services --region ap-northeast-2 \
+      --cluster pokeclip-prod --services "pokeclip-prod-<키>" \
+      --query 'services[0].[length(deployments),deployments[0].rolloutState,deployments[0].runningCount,desiredCount]' \
+      --output text
+    ```
+
+### 1단-나 ② 9. 응답기 기동 · 교체
+
+선행 조건: 런타임 2단의 Media ↔ auth 8082 SG 짝([계약](../CONTRACT-runtime.md)
+「platform · media → 런타임 2단」 행)이 적용됨. 없으면 기다립니다. M15 의
+렌더 · `config_version` 으로 응답기를 다시 띄우고(send-command **kty
+승인**) 아래를 봅니다.
+
+*   started 줄에 `auth_channel=resolve-token auth_host_kind=name
+    auth_port=8082`.
+*   시험 송출이 `publish_allowed`, `ingestauth_auth_degraded` 0.
+
+### 1단-나 ② 10. 음성 확인
+
+선행 조건은 9 와 같습니다.
+
+*   **전용 토큰**: 상자에서 전용 토큰으로 `POST /internal/youtube-link/status`
+    → 401(send-command **kty 승인**). 상자가 전용 그릇의 값을 셸 변수로 받아
+    셸 내장 `printf` 파이프로만 curl 헤더에 싣고, 상태 코드만 냅니다. 이
+    스크립트는 긴급 차단 · 되돌리기도 씁니다.
+
+    ```shell
+    cat >"${work}/token-probe.sh" <<'EOF'
+    # token-probe.sh <경로> <버전 단계>… — 전용 그릇의 그 단계 값으로 auth 의
+    # <경로> 를 부르고 코드만 낸다. 종료 0 = 모든 단계를 재어 봄(판정은 줄).
+    set +o xtrace +o allexport
+    unset token
+    trap 'unset token; exit 130' INT
+    api_path="$1"  # path 는 zsh 에서 PATH 와 묶인 특수 변수라 피한다.
+    shift
+    fail=0
+    for stage in "$@"; do
+      token="$(aws secretsmanager get-secret-value --region ap-northeast-2 \
+        --secret-id pokeclip/prod/stream-key-resolve-token \
+        --version-stage "${stage}" --query SecretString --output text \
+        2>/dev/null)"
+      if [ "$?" -ne 0 ] || [ -z "${token}" ]; then
+        unset token
+        printf 'token-probe %s 멈춤: 읽지 못함\n' "${stage}"
+        fail=1
+        continue
+      fi
+      code="$(printf 'X-Stream-Key-Resolve-Token: %s\n' "${token}" |
+        curl -q -sS -o /dev/null -w '%{http_code}' -H @- \
+          -H 'Content-Type: application/json' \
+          -d '{"streamid":"#!::r=7ZK3M9QW2XJ4NB6TC8VDFG5HRP,m=publish"}' \
+          "http://auth.pokeclip.internal:8082${api_path}")"
+      rc=$?
+      unset token
+      [ "${rc}" -eq 0 ] || fail=1
+      printf 'token-probe %s rc=%s code=%s\n' "${stage}" "${rc}" "${code:-NONE}"
+    done
+    exit "${fail}"
+    EOF
+    media_ssm <상자 키> "${work}/token-probe.sh" \
+      /internal/youtube-link/status AWSCURRENT
+    ```
+
+    `token-probe AWSCURRENT rc=0 code=401` · `SSM Success` 이면 통과입니다.
+    `curl` 에 `-v` · `--trace` 를 붙이지 않습니다(헤더가 찍힘). `-q` 는
+    첫 인자여야 `.curlrc` 를 읽지 않으므로 앞에 둡니다. 「멈춤」 줄 ·
+    `rc` 가 0 아님 · 401 밖의 코드는 판정 불가 · 멈춤입니다.
+*   **옛 공용 토큰**(8 의 완료 조건 ②): 상자는 공용 그릇을 못 읽으므로
+    상자에서 보내지 않습니다. kty 가 세션 밖 터미널에서 Media 상자를 거치는
+    포트 포워딩(`aws ssm start-session` · 문서
+    `AWS-StartPortForwardingSessionToRemoteHost` · 대상 auth 의 Cloud Map
+    이름과 포트 8082 — 상자 세션이라 **kty 승인**)을 열고, 다른 터미널에서
+    보냅니다. 값은 셸 내장 `printf` 파이프로만 넘깁니다(put-secret 과 같은
+    꼴).
+
+    ```shell
+    # 하위 셸 — 값 변수 · 추적 끔 · INT 트랩이 터미널 셸에 남지 않는다.
+    # token 은 export 하지 않고, curl 에 -v · --trace 를 붙이지 않는다.
+    # curl 의 -q 는 첫 인자라야 .curlrc 를 읽지 않는다.
+    (
+      set +o xtrace +o allexport
+      unset token
+      trap 'unset token; exit 130' INT
+      for stage in AWSPREVIOUS AWSCURRENT; do
+        token="$(aws secretsmanager get-secret-value \
+          --region ap-northeast-2 --secret-id pokeclip/prod/internal-api-token \
+          --version-stage "${stage}" --query SecretString --output text \
+          2>/dev/null)"
+        if [ "$?" -ne 0 ] || [ -z "${token}" ]; then
+          unset token
+          printf '멈춤: %s 를 읽지 못함\n' "${stage}"
+          break
+        fi
+        code="$(printf 'X-Internal-Token: %s\n' "${token}" |
+          curl -q -s -o /dev/null -w '%{http_code}' -H @- \
+            -H 'Content-Type: application/json' \
+            -d '{"streamid":"#!::r=7ZK3M9QW2XJ4NB6TC8VDFG5HRP,m=publish"}' \
+            "http://localhost:<로컬 포트>/internal/stream-keys/resolve")"
+        unset token
+        printf '%s %s\n' "${stage}" "${code}"
+      done
+    )
+    ```
+
+    *   `AWSPREVIOUS 401` 이고 `AWSCURRENT 200`(공용 창구 resolve 는 출발지
+        잠금이 없음 · 본문은 없는 키라 `valid:false`)이면 통과입니다.
+    *   양성 대조(`AWSCURRENT`)가 200 이 아니면 판정 불가 · 멈춤 · kty 회부.
+    *   포트 포워딩은 위 블록을 돌리는 동안만 열어 둡니다. 끝나면 바로 닫고
+        잔여 0(`pgrep -f session-manager-plugin`)을 확인합니다.
+
+### 1단-나 ② 11. 기록
+
+*   볼트 raw(비밀 값 훑기 뒤 · 계정 ID · ARN 은 가림): 각 걸음의 명령 ·
+    출력 · 판정, 8 (b) 판정, (b2) 측정마다 시각 · 종료 코드 · 오류 코드,
+    (c) 대기 시작 · 끝 시각, 서비스 키마다 재배포 또는 「서비스 없음」,
+    거부 창 길이, 옛 공용 토큰 401.
+*   POK-429 코멘트와 완료 전이.
+
+### 1단-나 ② 긴급 차단
+
+전용 토큰이 샜을 때입니다.
+
+1.  그릇 `stream-key-resolve-token` 에 새 난수 값을 넣습니다(4 와 같은 꼴 ·
+    **kty 승인**).
+1.  auth 를 강제 재배포합니다(8 의 `update-service` 꼴 · **kty 승인**).
+    ECS 는 비밀이 바뀌면 새 배포 · 새 태스크라야 새 값을 받습니다.
+1.  재배포 요청만으로는 끝나지 않습니다 — 롤링 동안 옛 태스크는 옛 값을
+    계속 받습니다. **완료 조건**: auth 의 옛 태스크가 모두 새 태스크로
+    교체됨(8 의 완료 조건 ① 과 같은 읽기) **그리고** 상자에서 옛 토큰으로
+    resolve 를 불러 401(send-command **kty 승인** · 10 의 `token-probe.sh`).
+    옛 값은 `AWSPREVIOUS`, 새 값은 `AWSCURRENT` 입니다.
+
+    ```shell
+    media_ssm <상자 키> "${work}/token-probe.sh" \
+      /internal/stream-keys/resolve AWSPREVIOUS AWSCURRENT
+    ```
+
+    `AWSPREVIOUS` 가 `code=401` 이고 `AWSCURRENT` 가 `code=200`(양성 대조 —
+    없는 키라 본문은 `valid:false`)이면 통과입니다. `AWSCURRENT` 가 200 이
+    아니면 판정 불가 · 멈춤 · kty 회부.
+
+새 송출은 응답기를 다시 렌더하기 전까지 거부됩니다(fail-closed). 응답기
+창구를 `internal-token` 으로 되돌리는 길은 쓰지 않습니다 — 공용 열쇠가
+상자로 돌아갑니다.
+
+### 1단-나 ② 복구
+
+긴급 차단 뒤 원인을 확인하고, 응답기를 다시 렌더합니다(시작 스크립트가
+그릇을 다시 읽음 · M15 몫의 명령 · send-command **kty 승인**). started
+`auth_channel=resolve-token` 과 시험 송출 `publish_allowed` 를 확인합니다.
+
+### 1단-나 ② 전용 토큰 회전
+
+순서는 값 넣기 → auth 재배포(옛 태스크 교체 완료까지) → 응답기 재렌더입니다.
+auth 롤링 동안 옛 태스크 · 새 태스크가 섞여, 어느 토큰이든 일부 요청이
+401 입니다(거부 창 — 진행 중인 송출은 무사). 창의 길이를 기록합니다.
+
+### 1단-나 ② 되돌리기
+
+*   **코드**: 커밋 단위 revert, 머지 뒤에는 `git revert -m 1`. 위키는 위키 PR
+    revert.
+*   **runtime apply 뒤 · platform 전**: 코드 revert → runtime plan 이 그릇을
+    지우고(30일 복구 대기) `media_secret_arns` 가 공용 그릇으로 돌아갑니다.
+    **Media 에 공용 열쇠를 다시 줍니다** — 다음 prod/media apply 전에 kty
+    확인. 그 상태로 prod/media apply 를 했으면, 다시 앞으로 갈 때 7 뒤 8 을
+    다시 합니다.
+*   **platform apply 뒤(창구 열림)**: 긴급 차단이 먼저입니다. 창구를 닫는
+    되돌림은 두 단계입니다 — 그릇을 먼저 지우면 auth 태스크 정의가 지워질
+    그릇을 가리킨 채 남아, 그 사이에 뜨는 새 태스크가 비밀을 못 받습니다.
+    1.  `app_secret_arns.auth` 의 `STREAM_KEY_RESOLVE_TOKEN` 과 `app_env.auth`
+        의 `STREAM_KEY_RESOLVE_ALLOWED_CIDRS` 를 빼는 커밋(그릇 ·
+        `media_secret_arns` 는 그대로) → runtime plan · apply → platform
+        plan · apply → auth 옛 태스크 교체 완료 → 전용 헤더 요청 401
+        확인(새 송출 거부 — 10 의 `token-probe.sh` 를
+        `/internal/stream-keys/resolve AWSCURRENT` 로 · **kty 승인**).
+    1.  그릇을 지우는 커밋 → runtime plan · apply. `media_secret_arns` 를
+        공용 그릇으로 되돌릴지는 따로 kty 확인(공용 열쇠를 상자에 다시 줌).
+*   **prod/media apply 뒤**: 정책을 되돌리면 응답기가 다음 기동에서 그릇을
+    못 읽어 기동이 막힙니다(fail-closed). 되돌리기는 응답기 렌더 → media
+    정책 → runtime 출력 한 방향으로만 합니다.
 
 ## See also
 

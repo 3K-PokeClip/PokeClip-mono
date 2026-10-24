@@ -29,6 +29,7 @@
 #   chzzk-client-secret          한 줄 — 끝 줄바꿈 하나를 뗌
 #   profile-photo-token-secret   한 줄 — 끝 줄바꿈 하나를 뗌
 #   soop-client-secret           한 줄 — 끝 줄바꿈 하나를 뗌
+#   stream-key-resolve-token     한 줄 — 끝 줄바꿈 하나를 뗌
 #   비밀 이름으로 지정한다(ARN 은 계정 ID 를 품으므로 쓰지 않음). 리전은
 #   ap-northeast-2 고정이다. 이미 값이 있으면 새 버전이 되고 옛 값은
 #   AWSPREVIOUS 로 남는다.
@@ -92,6 +93,7 @@ readonly -a KINDS=(
   chzzk-client-secret
   profile-photo-token-secret
   soop-client-secret
+  stream-key-resolve-token
 )
 
 # 비밀 값. 함수 인자로 넘기지 않고 전역으로만 다룬다. 호출자가 같은 이름을

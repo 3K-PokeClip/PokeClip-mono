@@ -1,4 +1,4 @@
-# prod 앱 비밀 그릇 여덟(pokeclip/prod/<용도>)과 출력 둘(CONTRACT-runtime.md
+# prod 앱 비밀 그릇 아홉(pokeclip/prod/<용도>)과 출력 셋(CONTRACT-runtime.md
 # 「런타임 1단 → platform · media」 행)을 단언한다. network 출력은 가짜 값이다.
 # override_data 가 원격 상태를 대신하므로 S3 를 읽지 않는다(AWS 호출 0).
 
@@ -29,7 +29,7 @@ override_data {
   }
 }
 
-run "creates_eight_app_secret_shells" {
+run "creates_nine_app_secret_shells" {
   command = plan
 
   assert {
@@ -42,8 +42,9 @@ run "creates_eight_app_secret_shells" {
       "pokeclip/prod/chzzk-client-secret",
       "pokeclip/prod/profile-photo-token-secret",
       "pokeclip/prod/soop-client-secret",
+      "pokeclip/prod/stream-key-resolve-token",
     ])
-    error_message = "비밀 그릇 이름 집합이 pokeclip/prod/ 아래 여덟과 다르다."
+    error_message = "비밀 그릇 이름 집합이 pokeclip/prod/ 아래 아홉과 다르다."
   }
 }
 
@@ -69,8 +70,9 @@ run "maps_services_to_secret_env_names" {
       "CHZZK_CLIENT_SECRET",
       "PROFILE_PHOTO_TOKEN_SECRET",
       "SOOP_CLIENT_SECRET",
+      "STREAM_KEY_RESOLVE_TOKEN",
     ])
-    error_message = "auth 의 env 이름 집합이 여덟(JWT_SECRET 부터 SOOP_CLIENT_SECRET)과 다르다."
+    error_message = "auth 의 env 이름 집합이 아홉(JWT_SECRET 부터 STREAM_KEY_RESOLVE_TOKEN)과 다르다."
   }
 
   assert {
@@ -106,13 +108,14 @@ run "maps_services_to_secret_env_names" {
 
   assert {
     condition     = length(output.media_secret_arns) == 1
-    error_message = "media_secret_arns 의 원소가 INTERNAL_API_TOKEN 그릇 하나가 아니다."
+    error_message = "media_secret_arns 의 원소가 하나가 아니다."
   }
 }
 
-# 이 루트가 만들지 않는 비밀 셋: CLOUDFRONT_PRIVATE_KEY_PEM 은 prod/secrets 의
-# 서명 키 그릇을 platform 이 합친다(K2). STREAM_KEY_RESOLVE_TOKEN 은 prod 에서
-# 비운다(POK-305 10546). POSTGRES_PASSWORD 는 대체 갈래에서만 생긴다(설계 9절 4).
+# 이 루트가 만들지 않는 비밀 둘: CLOUDFRONT_PRIVATE_KEY_PEM 은 prod/secrets 의
+# 서명 키 그릇을 platform 이 합친다(K2). POSTGRES_PASSWORD 는 대체 갈래에서만
+# 생긴다(설계 9절 4). resolve 전용 토큰은 auth 만 받는다 — 서비스 집합을 손으로
+# 적지 않고 출력의 키에서 auth 를 뺀 나머지를 돈다.
 run "omits_secrets_owned_elsewhere" {
   command = apply
 
@@ -121,11 +124,18 @@ run "omits_secrets_owned_elsewhere" {
       for env_arns in values(output.app_secret_arns) :
       length(setintersection(toset(keys(env_arns)), toset([
         "CLOUDFRONT_PRIVATE_KEY_PEM",
-        "STREAM_KEY_RESOLVE_TOKEN",
         "POSTGRES_PASSWORD",
       ]))) == 0
     ])
-    error_message = "출력에 CLOUDFRONT_PRIVATE_KEY_PEM · STREAM_KEY_RESOLVE_TOKEN · POSTGRES_PASSWORD 가운데 하나가 있다."
+    error_message = "출력에 CLOUDFRONT_PRIVATE_KEY_PEM · POSTGRES_PASSWORD 가운데 하나가 있다."
+  }
+
+  assert {
+    condition = alltrue([
+      for service in setsubtract(keys(output.app_secret_arns), ["auth"]) :
+      !contains(keys(output.app_secret_arns[service]), "STREAM_KEY_RESOLVE_TOKEN")
+    ])
+    error_message = "auth 밖 서비스에 STREAM_KEY_RESOLVE_TOKEN 이 있다 — resolve 전용 토큰은 auth 만 받는다."
   }
 }
 
@@ -133,8 +143,8 @@ run "points_each_env_name_at_its_shell" {
   command = apply
 
   assert {
-    condition     = length(distinct(values(module.secret_shells.secret_arns))) == 8
-    error_message = "mock 이 그릇 여덟에 서로 다른 ARN 을 주지 않았다 — 아래 단언이 의미를 잃는다."
+    condition     = length(distinct(values(module.secret_shells.secret_arns))) == 9
+    error_message = "mock 이 그릇 아홉에 서로 다른 ARN 을 주지 않았다 — 아래 단언이 의미를 잃는다."
   }
 
   assert {
@@ -147,11 +157,12 @@ run "points_each_env_name_at_its_shell" {
       CHZZK_CLIENT_SECRET        = module.secret_shells.secret_arns["pokeclip/prod/chzzk-client-secret"]
       PROFILE_PHOTO_TOKEN_SECRET = module.secret_shells.secret_arns["pokeclip/prod/profile-photo-token-secret"]
       SOOP_CLIENT_SECRET         = module.secret_shells.secret_arns["pokeclip/prod/soop-client-secret"]
+      STREAM_KEY_RESOLVE_TOKEN   = module.secret_shells.secret_arns["pokeclip/prod/stream-key-resolve-token"]
     }
     error_message = "auth 의 env 이름이 같은 용도의 그릇 ARN 을 가리키지 않는다."
   }
 
-  # 같은 env 이름은 서비스가 달라도 같은 그릇(같은 ARN)이다. auth 가 여덟을
+  # 같은 env 이름은 서비스가 달라도 같은 그릇(같은 ARN)이다. auth 가 아홉을
   # 모두 가지므로 auth 를 기준으로 본다 — 일꾼의 INTERNAL_API_TOKEN 도 auth 의
   # 것과 같은 ARN 이다(1단-가 K1).
   assert {
@@ -163,12 +174,44 @@ run "points_each_env_name_at_its_shell" {
     ]))
     error_message = "같은 env 이름이 서비스에 따라 다른 ARN 을 가리킨다."
   }
+}
 
-  # 응답기는 앱과 같은 INTERNAL_API_TOKEN 그릇을 쓴다(K1 — 새 그릇 없음). 소비자
-  # media_host 의 변수가 list(string) 이라 목록과 같은지로 꼴도 함께 본다.
+# Media 상자가 읽는 auth 출입증은 resolve 전용 토큰 그릇 하나다(POK-429 · K2).
+# 공용 INTERNAL_API_TOKEN 은 auth 의 /internal/** 전부를 열므로 목록에 없어야
+# 한다. 소비자 media_host 의 변수가 list(string) 이라 목록과 같은지로 꼴도
+# 함께 본다.
+run "gives_media_only_the_resolve_token_shell" {
+  command = apply
+
   assert {
-    condition     = output.media_secret_arns == [output.app_secret_arns["auth"]["INTERNAL_API_TOKEN"]]
-    error_message = "media_secret_arns 가 auth 의 INTERNAL_API_TOKEN ARN 하나만 든 목록이 아니다."
+    condition     = output.app_secret_arns["auth"]["STREAM_KEY_RESOLVE_TOKEN"] != output.app_secret_arns["auth"]["INTERNAL_API_TOKEN"]
+    error_message = "resolve 전용 토큰과 공용 INTERNAL_API_TOKEN 이 같은 그릇 ARN 이다 — 아래 단언이 의미를 잃는다."
+  }
+
+  assert {
+    condition     = output.media_secret_arns == [output.app_secret_arns["auth"]["STREAM_KEY_RESOLVE_TOKEN"]]
+    error_message = "media_secret_arns 가 auth 의 STREAM_KEY_RESOLVE_TOKEN ARN 하나만 든 목록이 아니다."
+  }
+
+  assert {
+    condition     = !contains(output.media_secret_arns, output.app_secret_arns["auth"]["INTERNAL_API_TOKEN"])
+    error_message = "media_secret_arns 에 공용 INTERNAL_API_TOKEN 그릇 ARN 이 있다."
+  }
+}
+
+# 응답기 media.env 렌더(M15)는 목록의 순서([0])에 기대지 않고 이름 있는 출력을
+# 읽는다(K5). 그 출력과 읽기 정책 목록이 같은 그릇을 가리키는지 묶는다.
+run "names_resolve_token_arn_for_ingest_auth" {
+  command = apply
+
+  assert {
+    condition     = output.ingest_auth_resolve_token_secret_arn == output.app_secret_arns["auth"]["STREAM_KEY_RESOLVE_TOKEN"]
+    error_message = "ingest_auth_resolve_token_secret_arn 이 auth 의 STREAM_KEY_RESOLVE_TOKEN ARN 이 아니다."
+  }
+
+  assert {
+    condition     = contains(output.media_secret_arns, output.ingest_auth_resolve_token_secret_arn)
+    error_message = "ingest_auth_resolve_token_secret_arn 이 media_secret_arns 에 없다 — 응답기가 읽을 권한이 없는 그릇을 받는다."
   }
 }
 
@@ -183,7 +226,7 @@ run "media_secret_arns_pass_media_host_validation" {
   override_resource {
     target = module.secret_shells.aws_secretsmanager_secret.this
     values = {
-      arn = "arn:aws:secretsmanager:ap-northeast-2:0:secret:pokeclip/prod/internal-api-token-AbCdEf"
+      arn = "arn:aws:secretsmanager:ap-northeast-2:0:secret:pokeclip/prod/stream-key-resolve-token-AbCdEf"
     }
   }
 
@@ -193,5 +236,10 @@ run "media_secret_arns_pass_media_host_validation" {
       can(regex("^arn:aws[a-z-]*:secretsmanager:[a-z0-9-]+:[0-9]+:secret:[A-Za-z0-9/_+=.@-]+$", arn))
     ])
     error_message = "media_secret_arns 의 원소가 media_host 의 Secrets Manager ARN 검증을 통과하지 못한다."
+  }
+
+  assert {
+    condition     = can(regex("^arn:aws[a-z-]*:secretsmanager:[a-z0-9-]+:[0-9]+:secret:[A-Za-z0-9/_+=.@-]+$", output.ingest_auth_resolve_token_secret_arn))
+    error_message = "ingest_auth_resolve_token_secret_arn 이 media_host 의 Secrets Manager ARN 검증과 같은 꼴이 아니다."
   }
 }
