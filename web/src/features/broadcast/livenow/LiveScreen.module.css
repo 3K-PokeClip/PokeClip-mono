@@ -680,7 +680,8 @@
 
 /* 닉네임 색 로테이션 — 누가 말하는지 줄 단위로 갈라 보이게 하는 장치라 시안 값을 그대로 쓴다 */
 .chatName[data-color='1'] {
-  color: var(--pc-color-success, #4cae7d); /* 테마 고정 */
+  /* 글자라 채움 초록(라이트 2.99:1) 대신 글자용 — 다크는 같은 값 */
+  color: var(--pc-color-success-text);
 }
 
 .chatName[data-color='2'] {
