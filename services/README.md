@@ -882,8 +882,11 @@ GRANT SELECT ON stream_segments TO app_chat_collector;
 -- V316이 돌 때 이 계정이 없었다면 수집 서버 계정이나 마스터로 이 줄을 손으로 돌린다.
 CREATE ROLE app_chat_detector LOGIN;
 GRANT rds_iam TO app_chat_detector;
-GRANT CREATE ON SCHEMA public TO app_chat_detector;
-GRANT SELECT ON chat_messages TO app_chat_detector;
+CREATE SCHEMA app_chat_detector;
+GRANT USAGE, CREATE ON SCHEMA app_chat_detector TO app_chat_detector;
+GRANT USAGE ON SCHEMA app_chat_collector TO app_chat_detector;
+GRANT CONNECT ON DATABASE pokeclip TO app_chat_detector;
+GRANT SELECT ON app_chat_collector.chat_messages TO app_chat_detector;
 ```
 
 **이 목록은 서버마다 `DbRoleGrantsTest`가 그대로 잰다.** 빈 DB에 「이 줄들만 가진」 역할을 만들어 그 역할로 서버를 띄운다.

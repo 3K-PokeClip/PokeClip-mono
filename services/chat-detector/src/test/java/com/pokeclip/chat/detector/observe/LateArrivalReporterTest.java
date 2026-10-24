@@ -32,7 +32,8 @@ class LateArrivalReporterTest extends IntegrationTestSupport {
     @BeforeEach
     void 표를_준비한다() {
         jdbc.execute("""
-                CREATE TABLE IF NOT EXISTS chat_messages (
+                CREATE SCHEMA IF NOT EXISTS app_chat_collector;
+                CREATE TABLE IF NOT EXISTS app_chat_collector.chat_messages (
                     id                BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
                     channel_id        TEXT        NOT NULL,
                     sender_channel_id TEXT        NOT NULL,
@@ -43,13 +44,13 @@ class LateArrivalReporterTest extends IntegrationTestSupport {
                     stream_id         VARCHAR(128)
                 )
                 """);
-        jdbc.update("DELETE FROM chat_messages");
+        jdbc.update("DELETE FROM app_chat_collector.chat_messages");
     }
 
     /** @param delayMs 전달 지연 — 찍힌 시각과 받은 시각의 차 */
     private void 채팅(String streamId, Instant messageTime, long delayMs) {
         jdbc.update("""
-                INSERT INTO chat_messages
+                INSERT INTO app_chat_collector.chat_messages
                     (channel_id, sender_channel_id, content, message_time, received_at, content_sha256, stream_id)
                 VALUES ('c1', 'u1', 'hi', ?, ?, repeat('a', 64), ?)
                 """, Timestamp.from(messageTime), Timestamp.from(messageTime.plusMillis(delayMs)), streamId);

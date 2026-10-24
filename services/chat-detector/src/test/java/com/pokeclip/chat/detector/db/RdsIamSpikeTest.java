@@ -105,7 +105,7 @@ class RdsIamSpikeTest {
             JdbcTemplate jdbc = context.getBean(JdbcTemplate.class);
 
             Throwable thrown = catchThrowable(() ->
-                    jdbc.queryForObject("SELECT count(*) FROM chat_messages", Long.class));
+                    jdbc.queryForObject("SELECT count(*) FROM app_chat_collector.chat_messages", Long.class));
             print("S5", "expect=" + (granted ? "granted" : "revoked") + " sqlState=" + sqlStateOf(thrown));
 
             if (granted) {

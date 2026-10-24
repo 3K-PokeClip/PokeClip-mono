@@ -32,7 +32,8 @@ class ChatWindowReaderTest extends IntegrationTestSupport {
     @BeforeEach
     void 채팅_표를_만들고_비운다() {
         jdbc.execute("""
-                CREATE TABLE IF NOT EXISTS chat_messages (
+                CREATE SCHEMA IF NOT EXISTS app_chat_collector;
+                CREATE TABLE IF NOT EXISTS app_chat_collector.chat_messages (
                     id                BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
                     channel_id        TEXT        NOT NULL,
                     sender_channel_id TEXT        NOT NULL,
@@ -43,7 +44,7 @@ class ChatWindowReaderTest extends IntegrationTestSupport {
                     stream_id         VARCHAR(128)
                 )
                 """);
-        jdbc.update("DELETE FROM chat_messages");
+        jdbc.update("DELETE FROM app_chat_collector.chat_messages");
     }
 
     /** 전달 지연은 실측 중앙값 175ms를 쓴다. 두 축을 갈라야 하는 검사는 아래 갈래를 쓴다. */
@@ -54,7 +55,7 @@ class ChatWindowReaderTest extends IntegrationTestSupport {
     /** 치지직이 찍은 시각과 우리가 받은 시각을 <b>따로</b> 준다. 시계가 어긋난 상황을 만든다. */
     private void 채팅(String streamId, String sender, Instant messageTime, Instant receivedAt) {
         jdbc.update("""
-                INSERT INTO chat_messages
+                INSERT INTO app_chat_collector.chat_messages
                     (channel_id, sender_channel_id, content, message_time, received_at, content_sha256, stream_id)
                 VALUES ('c1', ?, 'hi', ?, ?, repeat('a', 64), ?)
                 """, sender, java.sql.Timestamp.from(messageTime),
