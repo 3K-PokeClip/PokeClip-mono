@@ -17,6 +17,9 @@ import {
   type PlatformLatest,
 } from '@/features/broadcast/platformView';
 import { COLLECTOR_WINDOW_MS } from './chatCollector';
+import { viewedSegment } from './broadcastInfoAt';
+import { focusAtMs } from './categoryThumb';
+import { useBroadcastTimeline } from './useBroadcastTimeline';
 import {
   emitRelay,
   publishLiveData,
@@ -710,11 +713,16 @@ export function useLiveMockState(pastRoute: boolean): LiveMockState {
           ? ((soopLead ? live.channelNames?.SOOP : live.channelNames?.CHZZK) ?? '')
           : '';
   const myName = me?.name ?? '';
+  // 라이브를 되감았거나 지난 방송에서 시점을 옮겼으면 그 시점의 제목이다(POK-462). 실시간이면 null이고 최신 관측 제목을 쓴다.
+  // 정보 바의 카테고리 · 사진과 같은 기록 · 같은 시각이다(useLiveDetailsMockState)
+  const timeline = useBroadcastTimeline(streamId, live.status);
+  const seen = viewedSegment(timeline, view?.platform ?? null, focusAtMs(live));
   const stream = useMemo<LiveStream>(
     () => ({
-      // 방송 정보 관측의 제목이 먼저고, 그 관측에 제목이 비면 목록 제목(POK-259), 그것도 없으면 빈 값(모름)이다. 방송 번호를 제목
-      // 자리에 쓰지 않는다: 정보 바가 빈 제목을 회색 막대나 「제목 확인 중」으로 비운다(POK-449)
+      // 보는 시점 구간의 제목(POK-462), 실시간이면 방송 정보 관측의 제목이 먼저고, 그 관측에 제목이 비면 목록 제목(POK-259), 그것도
+      // 없으면 빈 값(모름)이다. 방송 번호를 제목 자리에 쓰지 않는다: 정보 바가 빈 제목을 회색 막대나 「제목 확인 중」으로 비운다(POK-449)
       title:
+        seen?.title?.trim() ||
         view?.latest?.title?.trim() ||
         live.listTitle ||
         (streamId
@@ -742,7 +750,18 @@ export function useLiveMockState(pastRoute: boolean): LiveMockState {
       })(),
       editorName: myName,
     }),
-    [streamId, sseOk, info, view, live.status, live.listTitle, channelName, myName, pastRoute],
+    [
+      streamId,
+      sseOk,
+      info,
+      view,
+      seen,
+      live.status,
+      live.listTitle,
+      channelName,
+      myName,
+      pastRoute,
+    ],
   );
 
   const mergeCard = useCallback((card: Snapshot) => {

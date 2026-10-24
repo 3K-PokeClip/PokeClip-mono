@@ -4918,6 +4918,45 @@ describe('LiveScreen: 정보 바의 그 시점 카테고리 사진 (POK-467)', (
     expect(categoryImg()).toHaveAttribute('src', LOL);
   });
 
+  it('라이브를 되감으면 정보 바 제목 · 카테고리가 그 자리 값이고, 실시간으로 돌아오면 최신 관측이다 (POK-462)', async () => {
+    server.timeline = [
+      { ...seg(NOW - 20 * 60_000, NOW - 5 * 60_000, '그때 카테고리', JUST), title: '그때 제목' },
+      seg(NOW - 5 * 60_000, null, '리그 오브 레전드', LOL),
+    ];
+    await renderLive();
+    const latestTitle = INFO.latest.title;
+    expect(screen.getByRole('heading', { name: latestTitle })).toBeInTheDocument();
+
+    act(() =>
+      publishLiveData({
+        liveRewind: { atMs: NOW - 8 * 60_000, edgeAtMs: NOW, behindSeconds: 480 },
+      }),
+    );
+    expect(screen.getByRole('heading', { name: '그때 제목' })).toBeInTheDocument();
+    expect(screen.getByText('그때 카테고리')).toBeInTheDocument();
+
+    act(() => publishLiveData({ liveRewind: null }));
+    expect(screen.getByRole('heading', { name: latestTitle })).toBeInTheDocument();
+  });
+
+  it('지난 방송은 재생 위치의 제목이다 (POK-462)', async () => {
+    server.timeline = [
+      {
+        ...seg(VOD_STARTED + 60_000, VOD_STARTED + 60 * 60_000, '저스트 채팅', JUST),
+        title: '앞 제목',
+      },
+      { ...seg(VOD_STARTED + 60 * 60_000, VOD_ENDED, '리그 오브 레전드', LOL), title: '뒤 제목' },
+    ];
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    await renderLive();
+
+    act(() => publishLiveData({ timeBaseMs: VOD_STARTED, playheadMs: 20 * 60_000 }));
+    expect(screen.getByRole('heading', { name: '앞 제목' })).toBeInTheDocument();
+
+    act(() => publishLiveData({ playheadMs: 90 * 60_000 }));
+    expect(screen.getByRole('heading', { name: '뒤 제목' })).toBeInTheDocument();
+  });
+
   it('지난 방송은 재생 위치의 카테고리 사진이다: 재생 위치를 모르면 방송 끝의 카테고리다', async () => {
     server.timeline = [
       seg(VOD_STARTED + 60_000, VOD_STARTED + 60 * 60_000, '저스트 채팅', JUST),
