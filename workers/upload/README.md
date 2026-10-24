@@ -41,7 +41,7 @@
 4. 주소가 없으면 유튜브에 시작을 청해 주소를 받고 clip `session`에 적는다.
 5. 주소에 「어디까지」를 묻고, 덜 받았으면 그 자리부터 8MB 조각으로 보낸다. 끊기면(5xx·시한·연결) 다시 묻고 잇는다.
 6. 다 받았으면 **썸네일을 먼저 붙인다**(주문서에 있을 때만, 아래 「썸네일」).
-7. clip `result UPLOADED {videoId, thumbnailOutcome, thumbnailErrorCode}`. 임시 파일(mp4·썸네일 그림)은 지운다.
+7. clip `result UPLOADED {videoId, thumbnailOutcome, thumbnailErrorCode, channelId}`. `channelId`는 이 배달에서 auth resolve가 준 채널이다(POK-423: 연동을 해제하거나 채널을 바꾸면 clip이 그 채널의 영상 번호만 골라 지운다. 토큰을 못 받은 배달은 칸을 안 싣는다). 임시 파일(mp4·썸네일 그림)은 지운다.
 
 영상이 끝났음을 아는 자리는 둘이다(5의 끝 · 이어 갈 수 없을 때 주소에 물어 보니 이미 다 받았을 때). 둘 다 같은 메서드
 (`UploadProcessor.finish`)를 지나서 6·7을 한다.
