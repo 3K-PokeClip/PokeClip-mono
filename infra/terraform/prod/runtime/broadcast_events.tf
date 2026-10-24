@@ -66,6 +66,12 @@ resource "aws_sns_topic" "broadcast_lifecycle" {
 # 정책의 여덟이다(provider 기본 정책의 SNS:Receive 는 SNS 정책 동작이 아니라
 # 뺀다). 같은 계정 주체는 신원 정책만으로 접근하므로 이 정책이 교체되는
 # 동안에도 발행 · 구독이 끊기지 않는다 — 구독과 순서를 두지 않는다.
+#
+# 조건(aws:PrincipalArn = prod 역할): 1단-다 직전 점검 2-3 의 정책
+# 시뮬레이터는 계정 루트 문장을 같은 계정 호출자 전부에 맞춰, 리스 계정의
+# dev 주체도 이 주제에 ALLOWED 로 판정했다. 실제 AWS 는 계정 루트 문장을
+# 신원 정책에 위임하므로 동작은 바뀌지 않는다 — 발행은 media 역할, 관리
+# (Terraform)는 kty IAM 사용자의 신원 정책이 연다.
 resource "aws_sns_topic_policy" "broadcast_lifecycle" {
   arn = aws_sns_topic.broadcast_lifecycle.arn
   policy = jsonencode({
@@ -88,6 +94,11 @@ resource "aws_sns_topic_policy" "broadcast_lifecycle" {
           "SNS:Publish",
         ]
         Resource = aws_sns_topic.broadcast_lifecycle.arn
+        Condition = {
+          ArnLike = {
+            "aws:PrincipalArn" = "arn:${data.aws_partition.broadcast.partition}:iam::${data.aws_caller_identity.current.account_id}:role/pokeclip-prod-*"
+          }
+        }
       },
     ]
   })

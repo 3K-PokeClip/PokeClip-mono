@@ -298,8 +298,9 @@ run "lets_only_broadcast_topic_send_to_queues" {
 }
 
 # 주제 정책은 이 계정의 신원 정책에 맡기는 한 문장이다 — 주체는 계정 루트,
-# 조건 없음, 동작은 기본 주제 정책의 여덟(SNS:Receive 는 SNS 정책 동작이
-# 아니라 뺀다). 기본 정책의 Principal * · AWS:SourceOwner 를 남기지 않는다.
+# 동작은 기본 주제 정책의 여덟(SNS:Receive 는 SNS 정책 동작이 아니라 뺀다).
+# 기본 정책의 Principal * · AWS:SourceOwner 를 남기지 않는다. 조건은 아래
+# limits_topic_policy_to_prod_roles 가 본다.
 run "delegates_topic_access_to_account_identity_policies" {
   command = apply
 
@@ -334,11 +335,6 @@ run "delegates_topic_access_to_account_identity_policies" {
   }
 
   assert {
-    condition     = !contains(keys(jsondecode(aws_sns_topic_policy.broadcast_lifecycle.policy).Statement[0]), "Condition")
-    error_message = "주제 정책 문장에 Condition 이 있다 — 계정 루트 주체에는 조건을 두지 않는다."
-  }
-
-  assert {
     condition = toset(jsondecode(aws_sns_topic_policy.broadcast_lifecycle.policy).Statement[0].Action) == toset([
       "SNS:GetTopicAttributes",
       "SNS:SetTopicAttributes",
@@ -350,6 +346,21 @@ run "delegates_topic_access_to_account_identity_policies" {
       "SNS:Publish",
     ])
     error_message = "주제 정책 동작이 기본 주제 정책의 여덟(SNS:Receive 제외)이 아니다."
+  }
+}
+
+# 계정 루트 문장을 정책 시뮬레이터는 같은 계정 호출자 전부에 맞춘다 — 리스
+# 계정의 dev 주체도 ALLOWED 로 나온다(1단-다 직전 점검 2-3). 그래서 문장을
+# prod 역할(pokeclip-prod-*)로 좁힌다. 실제 접근은 신원 정책이 정해 동작은
+# 같다.
+run "limits_topic_policy_to_prod_roles" {
+  command = apply
+
+  assert {
+    condition = lookup(jsondecode(aws_sns_topic_policy.broadcast_lifecycle.policy).Statement[0], "Condition", null) == {
+      ArnLike = { "aws:PrincipalArn" = "arn:aws:iam::example-account:role/pokeclip-prod-*" }
+    }
+    error_message = "주제 정책 조건이 ArnLike aws:PrincipalArn = 이 계정의 role/pokeclip-prod-* 하나가 아니다."
   }
 }
 

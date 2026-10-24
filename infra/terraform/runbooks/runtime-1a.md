@@ -771,6 +771,11 @@ AccessDenied(접근 거부 · SCP 거부)가 나면 다시 시도하지 않고 �
         라 `22 to add` · 1단-가와 함께면 `51 to add` 이고, 출력에 「1단-나 ②
         2」 의 변화가 함께 나옵니다. 그 그릇의 값은 O7d 전에 「1단-나 ② 4」
         로 넣습니다.
+    *   방송 주제 정책을 prod 역할로 좁힌 판(POK-304 — 조건
+        `aws:PrincipalArn`)이면 1단-가를 이미 적용한 경우 위 수에
+        `1 to change`(`aws_sns_topic_policy.broadcast_lifecycle`)가 더해집니다
+        — `21 to add, 1 to change` · `22 to add, 1 to change`. 1단-가와
+        함께면 처음부터 조건 있는 정책으로 생겨 수가 그대로입니다.
     *   바뀐 출력이 `app_env` · `app_secret_arns` ·
         `app_task_resource_arns` 입니다. `app_env.auth` 에
         `STREAM_KEY_SECRET_REF_PREFIX` 가 없습니다(platform 이 넣음).
