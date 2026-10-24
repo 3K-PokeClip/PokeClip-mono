@@ -254,46 +254,6 @@
   outline-offset: 2px;
 }
 
-/* ---------- 오디오 · BGM ---------- */
-
-.trackRow {
-  display: flex;
-  align-items: center;
-  gap: calc(8 * var(--pc-u));
-}
-
-.trackName {
-  font-size: calc(12 * var(--pc-u));
-  font-weight: 650;
-  flex: 1;
-  min-width: 0;
-  /* 긴 이름은 한 줄로 줄인다: 두 줄로 접히면 줄 높이가 들쭉날쭉하다 */
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.trackValue {
-  font:
-    600 calc(10 * var(--pc-u)) ui-monospace,
-    Menlo,
-    monospace;
-  color: var(--pc-color-text-muted);
-  /* 「안 넣음」(가장 긴 값)이 들어가는 폭. 좁으면 글자가 왼쪽 슬라이더로 넘친다 */
-  flex: 0 0 calc(40 * var(--pc-u));
-  white-space: nowrap;
-  text-align: right;
-}
-
-/* 디자인 시스템 Slider의 width: 100%와 같은 무게라 CSS를 불러온 순서에 따라 이기고 진다(홈을 거쳐 들어오면 슬라이더가 줄을
-   다 차지해 이름이 사라졌다). 줄 안에서 두 단계로 걸어 순서와 상관없이 이 폭을 쓴다. 손잡이(18)가 양 끝에서 반만큼 밖으로
-   나가므로 그만큼 띄운다 */
-.trackRow .trackSlider {
-  flex: 0 0 calc(84 * var(--pc-u));
-  width: calc(84 * var(--pc-u));
-  margin-inline: calc(9 * var(--pc-u));
-}
-
 /* ---------- 이미지 ---------- */
 
 .imageRow {
@@ -648,12 +608,4 @@
 .textSample[data-style='box'] {
   outline: 1px solid var(--pc-color-border-strong);
   outline-offset: calc(-10 * var(--pc-u));
-}
-
-/* ---------- 오디오 트랙 줄 (POK-389) ---------- */
-
-.trackRow[data-muted] .trackName,
-.trackRow[data-muted] .trackValue {
-  color: var(--pc-color-text-disabled);
-  white-space: nowrap;
 }
