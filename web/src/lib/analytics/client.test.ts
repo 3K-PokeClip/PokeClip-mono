@@ -258,6 +258,17 @@ describe('auth 스토어 구독 — 로그아웃·새 로그인에서 초기화�
     posthog.reset.mockClear();
     useAuthStore.getState().clearTokens();
     expect(posthog.reset).toHaveBeenCalledTimes(1);
+    expect(posthog.opt_out_capturing).not.toHaveBeenCalled(); // 선택한 적 없으면 기본(참여)으로 둔다
+  });
+
+  it('「이용 분석 참여」를 끈 채 로그아웃하면 reset 뒤에 다시 끈다 — 다시 로그인할 때 설정을 읽기 전 기록이 새지 않게', async () => {
+    const { useAuthStore } = await ready();
+    useAuthStore.getState().setTokens(PAIR);
+    posthog.get_explicit_consent_status.mockReturnValue('denied');
+    useAuthStore.getState().clearTokens();
+    const [resetAt] = posthog.reset.mock.invocationCallOrder.slice(-1);
+    const [optOutAt] = posthog.opt_out_capturing.mock.invocationCallOrder.slice(-1);
+    expect(optOutAt).toBeGreaterThan(resetAt ?? Infinity);
   });
 
   it('같은 세션의 회전에서는 지우지 않는다', async () => {
