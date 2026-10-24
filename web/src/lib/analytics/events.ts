@@ -1,4 +1,5 @@
 import type { PrivacyStatus, ThumbnailSource } from '@/api/clipEditor';
+import type { Theme } from '@/ui/theme/themeConfig';
 import { withAnalytics } from './client';
 
 /**
@@ -69,7 +70,7 @@ export interface AnalyticsEvents {
   /** 도움말 · 문의의 「이 답변이 도움이 되었나요?」에 답함. 질문은 문구가 아니라 고정 key로 싣는다 */
   faq_feedback_sent: { faq: FaqKey; helpful: boolean };
   /** 설정 › 계정 「화면 테마」에서 다른 값을 고름(같은 값을 다시 누른 건 세지 않는다) */
-  theme_changed: { theme: 'system' | 'light' | 'dark' };
+  theme_changed: { theme: Theme };
 }
 
 /** 행동 이벤트를 보낸다. 분석이 꺼져 있으면(키 없음·SDK 차단) 아무 일도 하지 않는다. */
