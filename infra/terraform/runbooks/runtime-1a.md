@@ -1399,11 +1399,21 @@ plan 이 역할을 새로 만드는지 고치는지로 드러나고, 어느 쪽�
 
     ```shell
     # 값 넣기가 저장소 뿌리로 왔다 — 출력은 하위 셸에서 runtime 으로 가 읽고,
-    # 9 · 10 의 media_ssm 이 쓰는 뿌리 cwd 는 그대로 둔다.
+    # 9 · 10 의 media_ssm 이 쓰는 뿌리 cwd 는 그대로 둔다. 출력 실패나 auth ·
+    # clip 이 빠진 목록은 조용히 지나가지 않고 종료 1 로 멈춘다.
     (
-      cd "$(git rev-parse --show-toplevel)/infra/terraform/prod/runtime" &&
-        terraform output -json app_secret_arns |
-        jq -r 'to_entries[] | select(.value | has("INTERNAL_API_TOKEN")) | .key'
+      set -o pipefail
+      cd "$(git rev-parse --show-toplevel)/infra/terraform/prod/runtime" ||
+        exit 1
+      filter='to_entries[] | select(.value | has("INTERNAL_API_TOKEN")) | .key'
+      keys="$(terraform output -json app_secret_arns | jq -r "${filter}")" ||
+        exit 1
+      for want in auth clip; do
+        printf '%s\n' "${keys}" | grep -qx "${want}" && continue
+        printf '멈춤: 재배포 대상에 %s 없음\n' "${want}" >&2
+        exit 1
+      done
+      printf '%s\n' "${keys}"
     )
     ```
 
