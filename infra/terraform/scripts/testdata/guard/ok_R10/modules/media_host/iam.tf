@@ -32,9 +32,17 @@ data "aws_iam_policy_document" "media" {
   }
 }
 
+resource "aws_iam_role" "media" {
+  name = "pokeclip-prod-media"
+  assume_role_policy = jsonencode({
+    Version   = "2012-10-17"
+    Statement = [{ Effect = "Allow", Action = "sts:AssumeRole", Principal = { Service = "ec2.amazonaws.com" } }]
+  })
+}
+
 resource "aws_iam_role_policy_attachment" "managed" {
   for_each = local.managed_policy_arns
 
-  role       = "pokeclip-prod-media"
+  role       = aws_iam_role.media.name
   policy_arn = each.value
 }

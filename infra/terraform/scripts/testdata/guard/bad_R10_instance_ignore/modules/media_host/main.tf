@@ -4,6 +4,10 @@ resource "aws_instance" "this" {
   ami           = "ami-0123456789abcdef0"
   instance_type = "c8gn.large"
 
+  metadata_options {
+    http_tokens = "required"
+  }
+
   lifecycle {
     ignore_changes = [ami]
   }
