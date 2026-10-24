@@ -142,7 +142,7 @@ platform 대상 그룹이 교체될 수 있습니다(provider 6.68.0 기준 — 
 | `media_sg_id` | Media 를 상대로 규칙을 거는 다른 루트(지금은 없음 — Media ↔ auth 짝은 이 루트가 만듭니다, kty 결정 2026-10-25 (나)) |
 | `instance_ids`(상자 키 → id) | 교체 런북 — SSM 명령 대상 |
 
-모듈의 시험용 출력(`rendered_user_data` · `template_vars`)은 다시 내보내지
+모듈의 시험용 출력(`rendered_user_data` · `template_vars` · `auth_resolve_rules`)은 다시 내보내지
 않습니다.
 
 ## 시험

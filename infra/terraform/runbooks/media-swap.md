@@ -324,6 +324,11 @@ SH
     `ingest_auth_resolve_token_secret_arn` 이 있습니다. 없으면 plan 이 그
     이름으로 실패합니다(옛 모드여도 — 루트가 늘 읽습니다). 마지막 출력은 런타임
     1단-나 ②(POK-429)의 apply 뒤에 생깁니다.
+1.  **platform 출력 `service_ports`**: `terraform -chdir=infra/terraform/prod/platform
+    output service_ports` 에 auth 포트가 있습니다. Media → auth resolve SG 짝이
+    이 값을 씁니다(POK-307 · kty 결정 2026-10-25 (나)). 이 출력이 생기기 전
+    커밋으로 platform 을 apply 했다면 platform 을 다시 apply 합니다(plan 은
+    출력만 늘어남 · kty 승인). 없으면 prod/media plan 이 그 이름으로 실패합니다.
 1.  **런타임의 DB 준비**: RDS IAM 인증 켬 · `media_indexer` · `media_janitor`
     (`rds_iam`) · DDL 역할로 스키마 배치 · GRANT 가 끝났다는 확인이 런타임
     스토리 티켓 코멘트에 있습니다([CONTRACT-runtime.md](/infra/terraform/CONTRACT-runtime.md)
