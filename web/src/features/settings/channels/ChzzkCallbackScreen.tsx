@@ -3,11 +3,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useQueryClient } from '@tanstack/react-query';
-import { LinkButton, Spinner, useToast } from '@/ui';
+import { LinkButton, useToast } from '@/ui';
 import { ApiError } from '@/api/client';
 import { chzzkLinkFailureMessage, chzzkLinkQueryOptions, completeChzzkLink } from '@/api/chzzkLink';
 import { ReplaceLink } from '@/components/ReplaceLink';
 import { restoreReturnPath } from '@/components/app-shell/AuthGuard';
+import { CALLBACK_PENDING_LABEL, CallbackPending } from '@/features/auth/CallbackPending';
 import { track } from '@/lib/analytics';
 import { captureSession, useAuthHydration, useAuthStore } from '@/stores/auth';
 import { CHANNEL_SETTINGS_PATH } from './chzzkOAuth';
@@ -132,10 +133,5 @@ export function ChzzkCallbackScreen() {
     );
   }
 
-  return (
-    <main className={styles.screen}>
-      <Spinner size="lg" />
-      <p className={styles.working}>치지직 채널을 연동하는 중…</p>
-    </main>
-  );
+  return <CallbackPending label={CALLBACK_PENDING_LABEL.chzzk} />;
 }
