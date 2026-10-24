@@ -1166,6 +1166,26 @@ expect_runtime_rows_asked() {
     "시뮬레이터 요청에 실림(그 전 단계 0)"
 }
 
+#######################################
+# runtime-1a 묶음에 런타임 루트의 Terraform 이 호출자 권한으로 부르는 읽기가
+# 정확한 행으로 있는지 본다(계획 rt1d c2 · 설계 K4 — data "aws_subnet" 의
+# ec2:DescribeSubnets). 다른 단언은 행의 꼴 · 중복만 보고 누락은 못 잡는다.
+# Globals:
+#   STAGE_DIR
+#######################################
+expect_runtime_terraform_reads() {
+  local rows want
+  want="ec2:DescribeSubnets"$'\t'"ap-northeast-2"$'\t'"*"
+  rows="$(data_rows "${STAGE_DIR}/runtime-1a.tsv")"
+  if ! has_line "${rows}" "${want}"; then
+    testlib::fail "runtime-reads: runtime-1a 에" \
+      "「ec2:DescribeSubnets ap-northeast-2 *」 행 없음"
+    return
+  fi
+  testlib::ok "runtime-reads → runtime-1a 에 런타임 data aws_subnet 의" \
+    "ec2:DescribeSubnets 행"
+}
+
 main() {
   testlib::init data_files_test
   expect_bundle_set
@@ -1183,6 +1203,7 @@ main() {
   expect_runtime_targets
   expect_late_targets
   expect_runtime_rows_asked
+  expect_runtime_terraform_reads
   expect_dev_principals
   expect_principal_reads
   expect_stage_own_reads_scoped
