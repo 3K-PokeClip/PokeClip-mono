@@ -36,8 +36,8 @@
   var UTM_ALLOWED = {
     utm_source: /^(youtube|chzzk|soop|discord|kakao|x|naver|instagram)$/,
     utm_medium: /^(video_description|profile|community|post|dm|ad)$/,
-    utm_campaign: /^(launch_2026_10|\d{4}_\d{2}_[a-z0-9_]{1,40})$/,
-    utm_content: /^[a-z0-9_]{1,32}$/,
+    utm_campaign: /^(launch_2026_10)$/,
+    utm_content: /^(pinned_comment|banner)$/,
   };
   var UTM_KEY = /^(?:\$initial_)?(utm_[a-z]+)$/;
   var CLICK_ID_KEY =

@@ -150,14 +150,14 @@ ChatGPT 검색·Perplexity·Google AI 개요·네이버 AI 브리핑 같은 엔�
 |---|---|---|
 | `utm_source` | `youtube` · `chzzk` · `soop` · `discord` · `kakao` · `x` · `naver` · `instagram` | 어디서 왔나(플랫폼·서비스) |
 | `utm_medium` | `video_description`(영상 설명) · `profile`(채널·프로필 소개) · `community`(커뮤니티 글) · `post`(SNS 글) · `dm`(1:1 메시지) · `ad`(광고) | 그 안의 어떤 자리인가 |
-| `utm_campaign` | `launch_2026_10`(출시) · 이후 `<yyyy>_<mm>_<이름>` | 어떤 홍보 묶음인가 |
-| `utm_content` | 선택. 같은 자리에 링크가 여럿일 때 `pinned_comment`·`banner`처럼 고정값 | 같은 자리 안의 구분 |
+| `utm_campaign` | `launch_2026_10`(출시). 새 캠페인은 `<yyyy>_<mm>_<이름>`으로 지어 **이 표와 두 허용 목록에 먼저 더한다** | 어떤 홍보 묶음인가 |
+| `utm_content` | 선택. 같은 자리에 링크가 여럿일 때 `pinned_comment`·`banner`(새 값은 표와 두 허용 목록에 먼저 더한다) | 같은 자리 안의 구분 |
 
 ```text
 https://pokeclip.com/?utm_source=chzzk&utm_medium=profile&utm_campaign=launch_2026_10
 ```
 
-- **사람을 알아볼 수 있는 값은 넣지 않습니다** — 스트리머 이름·채널명·이메일·받는 사람 ID 대신 위 고정값만 씁니다. 표 밖의 값은 보내기 전에 `other`로 바뀌어(`utm_campaign`은 `<yyyy>_<mm>_<이름>` 꼴, `utm_content`는 소문자·숫자·`_` 32자까지만 통과), 실수로 넣은 값도 저장되지 않습니다. 새 출처·자리가 필요하면 이 표와 두 허용 목록(`analytics.js`·`scrub.ts`)을 함께 고친 뒤 링크를 돌립니다.
+- **사람을 알아볼 수 있는 값은 넣지 않습니다** — 스트리머 이름·채널명·이메일·받는 사람 ID 대신 위 고정값만 씁니다. 표 밖의 값은 보내기 전에 `other`로 바뀌어(네 칸 모두 모양이 아니라 **표에 적은 값 목록**과 맞춘다), 실수로 넣은 값도 저장되지 않습니다. 새 출처·자리가 필요하면 이 표와 두 허용 목록(`analytics.js`·`scrub.ts`)을 함께 고친 뒤 링크를 돌립니다.
 - 홍보 링크는 **랜딩**(`https://pokeclip.com/`)을 가리킵니다. 대시보드로 바로 보내면 랜딩 → 시작 버튼 단계가 빠집니다. 랜딩 안의 시작 버튼 링크에는 꼬리표를 붙이지 않습니다(처음 유입을 덮어씁니다).
 - 새 값이 필요하면 이 표부터 고칩니다. 같은 뜻을 다른 철자로 쓰면(`yt`·`youtube`) PostHog에서 따로 셉니다.
 

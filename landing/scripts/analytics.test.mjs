@@ -77,6 +77,7 @@ test('홍보 링크 값은 README 표의 값만 두고 나머지는 other — ut
     $set_once: {
       $initial_utm_source: 'a@b.c',
       $initial_utm_medium: 'newsletter',
+      $initial_utm_content: 'abcdef0123456789abcdef0123456789',
       $initial_gclid: 'Cj0-secret',
     },
   });
@@ -89,6 +90,7 @@ test('홍보 링크 값은 README 표의 값만 두고 나머지는 other — ut
   assert.deepEqual(out.$set_once, {
     $initial_utm_source: 'other',
     $initial_utm_medium: 'other',
+    $initial_utm_content: 'other', // 모양만 맞는 값(채널 ID 꼴)도 목록에 없으면 other
   });
 });
 

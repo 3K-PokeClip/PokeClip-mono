@@ -74,8 +74,9 @@ export function scrubUrl(value: string): string {
 const UTM_ALLOWED: Record<string, RegExp> = {
   utm_source: /^(youtube|chzzk|soop|discord|kakao|x|naver|instagram)$/,
   utm_medium: /^(video_description|profile|community|post|dm|ad)$/,
-  utm_campaign: /^(launch_2026_10|\d{4}_\d{2}_[a-z0-9_]{1,40})$/,
-  utm_content: /^[a-z0-9_]{1,32}$/,
+  // 모양(패턴)이 아니라 목록이다 — 패턴이면 채널 ID·핸들 같은 소문자 값이 통과한다(PR #382 리뷰). 새 캠페인·자리는 표부터 더한다
+  utm_campaign: /^(launch_2026_10)$/,
+  utm_content: /^(pinned_comment|banner)$/,
 };
 const UTM_KEY_RE = /^(?:\$initial_)?(utm_[a-z]+)$/;
 /** SDK가 주소에서 따로 뽑는 광고 클릭 식별자(posthog-js 1.435 캠페인 매개변수 목록) — 쓰지 않으니 지운다 */

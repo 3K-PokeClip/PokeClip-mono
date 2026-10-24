@@ -173,7 +173,7 @@ describe('scrubEvent — PostHog before_send', () => {
         {
           $set_once: {
             $initial_utm_source: 'a@b.c',
-            $initial_utm_campaign: '2026_11_winter_event',
+            $initial_utm_campaign: '2026_11_abcdef0123456789abcdef0123456789',
             $initial_utm_term: 'secret',
             $initial_gclid: 'Cj0-secret',
           },
@@ -188,7 +188,7 @@ describe('scrubEvent — PostHog before_send', () => {
     });
     expect(out?.$set_once).toEqual({
       $initial_utm_source: 'other',
-      $initial_utm_campaign: '2026_11_winter_event',
+      $initial_utm_campaign: 'other', // 모양만 맞는 캠페인(채널 ID 꼴)은 목록에 없으니 other다
     });
   });
 
