@@ -68,7 +68,8 @@ cert-use1	O7b	tag:acm:certificate	certificate	us-east-1	acm:DeleteCertificate,ac
 # SNS 주제 · SQS 큐의 정책은 직접 읽는다(sns · sqs — lib/principal_policy.sh
 # 머리 주석, kty 2026-10-24). 주제는 명시 정책(계정 루트 하나 · 조건
 # 없음 — broadcast_events.tf), 원 큐는 이 주제의 SendMessage 허용 정책을
-# 가지고 DLQ 는 정책이 없다. 첫 단계(runtime-1a) 직전에는 주제 · 큐가 아직 없어
+# 가지고 DLQ 는 정책이 없다. 일 큐 셋 · DLQ(1단-다 — job_queues.tf)는 정책이
+# 없다(DLQ 와 같은 길). 첫 단계(runtime-1a) 직전에는 주제 · 큐가 아직 없어
 # 「자원 없음」 을 정책 없이 판정한다(런북 2-3 한계 A13).
 rds-instance	runtime-1a	arn:arn:aws:rds:ap-northeast-2:${ACCOUNT}:db:pokeclip-prod-db	db	ap-northeast-2	rds:DeleteDBInstance,rds:ModifyDBInstance,rds:RebootDBInstance,rds:StopDBInstance,rds:CreateDBSnapshot	none	-
 rds-parameter-group	runtime-1a	arn:arn:aws:rds:ap-northeast-2:${ACCOUNT}:pg:pokeclip-prod-pg17	pg	ap-northeast-2	rds:ModifyDBParameterGroup,rds:ResetDBParameterGroup,rds:DeleteDBParameterGroup	none	-
@@ -79,6 +80,12 @@ broadcast-queue-clip	runtime-1a	arn:arn:aws:sqs:ap-northeast-2:${ACCOUNT}:pokecl
 broadcast-queue-chat	runtime-1a	arn:arn:aws:sqs:ap-northeast-2:${ACCOUNT}:pokeclip-prod-broadcast-lifecycle-chat.fifo	queue	ap-northeast-2	sqs:SendMessage,sqs:ReceiveMessage,sqs:PurgeQueue,sqs:SetQueueAttributes,sqs:AddPermission,sqs:RemovePermission,sqs:DeleteQueue	sqs	-
 broadcast-dlq-clip	runtime-1a	arn:arn:aws:sqs:ap-northeast-2:${ACCOUNT}:pokeclip-prod-broadcast-lifecycle-clip-dlq.fifo	queue	ap-northeast-2	sqs:SendMessage,sqs:ReceiveMessage,sqs:PurgeQueue,sqs:SetQueueAttributes,sqs:AddPermission,sqs:RemovePermission,sqs:DeleteQueue	sqs	-
 broadcast-dlq-chat	runtime-1a	arn:arn:aws:sqs:ap-northeast-2:${ACCOUNT}:pokeclip-prod-broadcast-lifecycle-chat-dlq.fifo	queue	ap-northeast-2	sqs:SendMessage,sqs:ReceiveMessage,sqs:PurgeQueue,sqs:SetQueueAttributes,sqs:AddPermission,sqs:RemovePermission,sqs:DeleteQueue	sqs	-
+jobs-render-queue	runtime-1a	arn:arn:aws:sqs:ap-northeast-2:${ACCOUNT}:pokeclip-prod-jobs-render	queue	ap-northeast-2	sqs:SendMessage,sqs:ReceiveMessage,sqs:PurgeQueue,sqs:SetQueueAttributes,sqs:AddPermission,sqs:RemovePermission,sqs:DeleteQueue	sqs	-
+jobs-render-dlq	runtime-1a	arn:arn:aws:sqs:ap-northeast-2:${ACCOUNT}:pokeclip-prod-jobs-render-dlq	queue	ap-northeast-2	sqs:SendMessage,sqs:ReceiveMessage,sqs:PurgeQueue,sqs:SetQueueAttributes,sqs:AddPermission,sqs:RemovePermission,sqs:DeleteQueue	sqs	-
+jobs-thumbnail-queue	runtime-1a	arn:arn:aws:sqs:ap-northeast-2:${ACCOUNT}:pokeclip-prod-jobs-thumbnail	queue	ap-northeast-2	sqs:SendMessage,sqs:ReceiveMessage,sqs:PurgeQueue,sqs:SetQueueAttributes,sqs:AddPermission,sqs:RemovePermission,sqs:DeleteQueue	sqs	-
+jobs-thumbnail-dlq	runtime-1a	arn:arn:aws:sqs:ap-northeast-2:${ACCOUNT}:pokeclip-prod-jobs-thumbnail-dlq	queue	ap-northeast-2	sqs:SendMessage,sqs:ReceiveMessage,sqs:PurgeQueue,sqs:SetQueueAttributes,sqs:AddPermission,sqs:RemovePermission,sqs:DeleteQueue	sqs	-
+jobs-upload-queue	runtime-1a	arn:arn:aws:sqs:ap-northeast-2:${ACCOUNT}:pokeclip-prod-jobs-upload	queue	ap-northeast-2	sqs:SendMessage,sqs:ReceiveMessage,sqs:PurgeQueue,sqs:SetQueueAttributes,sqs:AddPermission,sqs:RemovePermission,sqs:DeleteQueue	sqs	-
+jobs-upload-dlq	runtime-1a	arn:arn:aws:sqs:ap-northeast-2:${ACCOUNT}:pokeclip-prod-jobs-upload-dlq	queue	ap-northeast-2	sqs:SendMessage,sqs:ReceiveMessage,sqs:PurgeQueue,sqs:SetQueueAttributes,sqs:AddPermission,sqs:RemovePermission,sqs:DeleteQueue	sqs	-
 
 # SQL 실행기 역할 · 인스턴스 프로필(켜진 동안만 있다 — 꺼져 있어도 묻는다).
 # 역할 넘기기는 EC2 로 넘기는 문맥으로 묻는다(dev 주체가 이 역할로 새 상자를
@@ -109,13 +116,26 @@ sql-runner-profile	runtime-1a	arn:arn:aws:iam::${ACCOUNT}:instance-profile/pokec
 prod-instance	runtime-1a	tag:ec2:instance	instance	ap-northeast-2	ssm:SendCommand,ssm:StartSession,ssm:CreateAssociation	none	-
 rds-master-secret	runtime-1a	input:rds-master	secret	ap-northeast-2	secretsmanager:GetSecretValue,secretsmanager:PutSecretValue,secretsmanager:UpdateSecret,secretsmanager:DeleteSecret,secretsmanager:PutResourcePolicy,secretsmanager:DeleteResourcePolicy,secretsmanager:TagResource,secretsmanager:UntagResource	secretsmanager	-
 
-# rewind 버킷 · 객체 — 첫 단계는 버킷이 생긴 뒤인 O7d 다. runtime-1a 직전
-# 점검 때는 버킷이 없어 버킷 정책 읽기가 「정책 없음」 이 아닌 오류(종료 2)가
-# 된다. 그 단계 동안은 A13(그 단계가 새로 만드는 자원)이다. 객체 키는
-# 사이드카 목록 경로 꼴(dvr/<방송>/<세션>/index.m3u8)의 표본이다 —
-# 시뮬레이터는 객체가 있는지 보지 않는다.
+# 버킷 · 객체(rewind · clips · 프로필 사진) — 첫 단계는 버킷이 생긴 뒤인
+# O7d 다. runtime-1a 직전 점검 때는 버킷이 없어 버킷 정책 읽기가 「정책
+# 없음」 이 아닌 오류(종료 2)가 된다. 그 단계 동안은 A13(그 단계가 새로 만드는
+# 자원)이다. 시뮬레이터는 객체가 있는지 보지 않는다 — 객체 키는 코드 꼴의
+# 표본이다. 객체 행은 읽기(s3:GetObject)도 묻는다 — 세 버킷 모두 비공개
+# 자료(녹화 조각 · 완성 클립 · 프로필 사진)라 dev 주체의 읽기가 곧 유출이다.
+# rewind 는 표본이 둘이다: 목록 경로(dvr/<방송>/<세션>/index.m3u8 —
+# 사이드카 목록 발행)는 목록 경로로 열린 dev 정책을, 원본 조각
+# (streams/<id>/<날짜>/<시>/seg_N.m4s — media/internal/upload/worker.go 의
+# 예약 키 문법)은 segment 창고를 겸하는 이 버킷(1단-다 D4)의 조각 읽기를
+# 묻는다. clips 객체는 clip 의 출력 접두(clips/<clipId>/<실행 토큰>/ —
+# RenderEnvelope · JobEventService), 사진은 auth 의 키
+# (profile-photos/<id>/<자리> — PhotoStorage)다.
 rewind-bucket	O7d	arn:arn:aws:s3:::pokeclip-prod-rewind-apne2	bucket	ap-northeast-2	s3:PutBucketPolicy,s3:DeleteBucketPolicy,s3:PutBucketPublicAccessBlock,s3:PutBucketOwnershipControls,s3:PutLifecycleConfiguration,s3:DeleteBucket	s3	-
-rewind-object	O7d	arn:arn:aws:s3:::pokeclip-prod-rewind-apne2/dvr/sample-stream/sample-session/index.m3u8	object	ap-northeast-2	s3:PutObject,s3:DeleteObject	s3	-
+rewind-object	O7d	arn:arn:aws:s3:::pokeclip-prod-rewind-apne2/dvr/sample-stream/sample-session/index.m3u8	object	ap-northeast-2	s3:GetObject,s3:PutObject,s3:DeleteObject	s3	-
+rewind-segment-object	O7d	arn:arn:aws:s3:::pokeclip-prod-rewind-apne2/streams/sample-stream/2026-01-01/00/seg_000001.m4s	object	ap-northeast-2	s3:GetObject,s3:PutObject,s3:DeleteObject	s3	-
+clips-bucket	O7d	arn:arn:aws:s3:::pokeclip-prod-clips-apne2	bucket	ap-northeast-2	s3:PutBucketPolicy,s3:DeleteBucketPolicy,s3:PutBucketPublicAccessBlock,s3:PutBucketOwnershipControls,s3:PutLifecycleConfiguration,s3:DeleteBucket	s3	-
+clips-object	O7d	arn:arn:aws:s3:::pokeclip-prod-clips-apne2/clips/1/sample-token/sample.mp4	object	ap-northeast-2	s3:GetObject,s3:PutObject,s3:DeleteObject	s3	-
+profile-photo-bucket	O7d	arn:arn:aws:s3:::pokeclip-prod-profile-photos-apne2	bucket	ap-northeast-2	s3:PutBucketPolicy,s3:DeleteBucketPolicy,s3:PutBucketPublicAccessBlock,s3:PutBucketOwnershipControls,s3:PutLifecycleConfiguration,s3:DeleteBucket	s3	-
+profile-photo-object	O7d	arn:arn:aws:s3:::pokeclip-prod-profile-photos-apne2/profile-photos/1/0	object	ap-northeast-2	s3:GetObject,s3:PutObject,s3:DeleteObject	s3	-
 
 # 권한 변경 — 주체 자신 · 사용자의 그룹 · prod 역할(경로 /pokeclip/prod/) ·
 # 붙은 고객 관리형 정책(IAM 은 us-east-1)
