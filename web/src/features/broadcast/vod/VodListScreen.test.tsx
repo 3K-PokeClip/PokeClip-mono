@@ -370,13 +370,25 @@ describe('VodListScreen — 서버 목록', () => {
           : jsonResponse(200, { cards: [], nextCursor: null }),
     );
 
-    renderWithProviders(<VodListScreen />);
+    const { container } = renderWithProviders(<VodListScreen />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100);
+    });
+    const firstAlert = screen.getByRole('alert');
+    expect(firstAlert).toHaveTextContent('지난 방송을 불러오지 못했어요');
+    expect(screen.queryByText('지난 방송을 불러오는 중')).toBeNull();
+    expect(screen.queryByText('아직 지난 방송이 없어요')).toBeNull();
+    await act(async () => {
+      expect(await axe(container)).toHaveNoViolations();
+    });
+
+    // 다시 실패하면 안내를 새로 그린다: 같은 alert 노드면 낭독기가 다시 읽지 않는다(PR #377 리뷰)
+    fireEvent.click(screen.getByRole('button', { name: '다시 시도' }));
     await act(async () => {
       await vi.advanceTimersByTimeAsync(100);
     });
     expect(screen.getByRole('alert')).toHaveTextContent('지난 방송을 불러오지 못했어요');
-    expect(screen.queryByText('지난 방송을 불러오는 중')).toBeNull();
-    expect(screen.queryByText('아직 지난 방송이 없어요')).toBeNull();
+    expect(screen.getByRole('alert')).not.toBe(firstAlert);
 
     down = false;
     fireEvent.click(screen.getByRole('button', { name: '다시 시도' }));
@@ -386,6 +398,8 @@ describe('VodListScreen — 서버 목록', () => {
     // 60초 주기 전인데 다시 읽었다: 서버가 「없다」고 답했으니 이제 빈 상태다
     expect(screen.getByText('아직 지난 방송이 없어요')).toBeInTheDocument();
     expect(screen.queryByRole('alert')).toBeNull();
+    // 버튼이 사라져 갈 곳 잃은 포커스는 제목으로 간다(PR #377 리뷰)
+    expect(screen.getByRole('heading', { level: 1, name: '지난 방송' })).toHaveFocus();
   });
 
   it('한 번 읽은 뒤의 실패는 옛 목록을 그대로 둔다: 못 불러왔다는 카드로 바꾸지 않는다', async () => {

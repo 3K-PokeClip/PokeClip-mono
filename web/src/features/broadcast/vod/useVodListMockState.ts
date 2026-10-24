@@ -121,6 +121,8 @@ export interface VodListMockState {
    * 못 불러왔다고 말하고 바로 다시 시도하게 한다. 한 번이라도 읽었으면 실패해도 옛 목록을 두므로 늘 false다
    */
   failed: boolean;
+  /** 한 번도 못 읽은 채 실패한 횟수. 다시 실패하면 안내를 새로 그려 낭독기가 다시 읽게 화면이 key로 쓴다(PR #377 리뷰) */
+  failCount: number;
   /** 「다시 시도」로 부른 읽기가 도는 중 */
   retrying: boolean;
   /** 지금 바로 새로 읽는다(주기 읽기와 겹쳐도 따로 읽는다) */
@@ -189,7 +191,7 @@ export function useVodListMockState(options: VodListOptions = {}): VodListMockSt
   );
   const [fetched, setFetched] = useState<VodBroadcast[]>([]);
   const [loaded, setLoaded] = useState(false);
-  const [failed, setFailed] = useState(false);
+  const [failCount, setFailCount] = useState(0);
   const [retrying, setRetrying] = useState(false);
   // 읽기 효과가 세운 「한 번 읽기」. 「다시 시도」가 효과 밖에서 부른다(내려가면 비운다)
   const runRef = useRef<(() => Promise<void>) | null>(null);
@@ -347,10 +349,11 @@ export function useVodListMockState(options: VodListOptions = {}): VodListMockSt
         setNow(new Date());
         setLoaded(true);
         everLoaded = true;
-        setFailed(false);
+        setFailCount(0);
       } catch {
-        // 다음 주기에 다시 한다. 한 번도 못 읽었으면 실패를 「불러오는 중」으로 가리지 않는다(POK-441)
-        if (!stopped && !everLoaded) setFailed(true);
+        // 다음 주기에 다시 한다. 한 번도 못 읽었으면 실패를 「불러오는 중」으로 가리지 않는다(POK-441). 한 번이라도 읽었으면
+        // 세지 않는다 — 옛 목록을 둔 채 다음 주기를 기다린다(이 가드 하나가 그 규칙을 지킨다)
+        if (!stopped && !everLoaded) setFailCount((n) => n + 1);
       }
     };
     // 주기마다 새로 읽는다(겹쳐도 묶지 않는다): 요청에 시한이 없어, 묶으면 멈춘 요청 하나가 그 뒤 주기·「다시 시도」를 모두
@@ -411,7 +414,8 @@ export function useVodListMockState(options: VodListOptions = {}): VodListMockSt
     broadcasts,
     totalCount: past.length,
     loading: options.broadcasts === undefined && !loaded,
-    failed: options.broadcasts === undefined && !loaded && failed,
+    failed: options.broadcasts === undefined && failCount > 0,
+    failCount,
     retrying,
     retry,
     visuals,
