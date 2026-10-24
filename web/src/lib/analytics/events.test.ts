@@ -56,4 +56,10 @@ describe('track — 행동 이벤트(POK-357)', () => {
     track('signed_up', {});
     expect(posthog.capture).toHaveBeenCalledTimes(3); // 런타임은 막지 않는다 — 타입이 지킨다
   });
+
+  it('유튜브 분류 번호는 목록 안이면 그대로, 밖이면 other로 좁힌다', async () => {
+    const { toYoutubeCategoryId } = await load('');
+    expect(toYoutubeCategoryId('20')).toBe('20');
+    expect(toYoutubeCategoryId('99')).toBe('other');
+  });
 });

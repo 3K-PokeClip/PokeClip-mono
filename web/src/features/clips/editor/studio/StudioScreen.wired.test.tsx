@@ -34,7 +34,11 @@ vi.mock('next/navigation', async () => {
 
 // 사용 통계(POK-357) — 편집기 진입·영상 만들기 이벤트를 잰다
 const { track } = vi.hoisted(() => ({ track: vi.fn() }));
-vi.mock('@/lib/analytics', () => ({ track, identifyUser: vi.fn() }));
+vi.mock('@/lib/analytics', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/analytics')>()),
+  track,
+  identifyUser: vi.fn(),
+}));
 const tracked = (name: string) =>
   track.mock.calls.filter(([n]) => n === name).map(([, props]) => props as Record<string, unknown>);
 

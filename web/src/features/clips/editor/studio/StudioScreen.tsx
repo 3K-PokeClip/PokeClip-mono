@@ -52,7 +52,7 @@ import {
 } from '@/api/audioTracks';
 import { fetchDelegationsAsEditor } from '@/api/editors';
 import { fetchRecordingSpans } from '@/api/mediaPlayback';
-import { track } from '@/lib/analytics';
+import { toYoutubeCategoryId, track } from '@/lib/analytics';
 import {
   rebaseTimeline,
   recordingTimeline,
@@ -894,7 +894,7 @@ function WiredStudio({
             privacy_status: upload.privacyStatus,
             thumbnail_source: draft.thumbnailSource,
             made_for_kids: draft.madeForKids,
-            category_id: upload.categoryId,
+            category_id: toYoutubeCategoryId(upload.categoryId),
             scheduled: upload.publishAt !== undefined,
           });
           // 200은 새 주문이 아니다: 같은 판이 만드는 중이면 끝난 뒤 이 정보로, 이미 만들어져 있으면 지금 올린다

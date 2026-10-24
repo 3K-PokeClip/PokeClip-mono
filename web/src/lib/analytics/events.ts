@@ -29,6 +29,36 @@ export type FaqKey =
   | 'profile'
   | 'chat-retention';
 
+/**
+ * 사람이 고를 수 있는 유튜브 분류 번호(POK-381) — `video_render_requested`의 `category_id` 열거. 정본은 여기다:
+ * 화면 쪽 `uploadInfo.ts`의 `CATEGORIES`가 이 목록을 따른다(번호가 여기 없으면 그쪽 타입에서, 빠지면 그쪽 테스트에서 걸린다).
+ */
+export const YOUTUBE_CATEGORY_IDS = [
+  '1',
+  '2',
+  '10',
+  '15',
+  '17',
+  '19',
+  '20',
+  '22',
+  '23',
+  '24',
+  '25',
+  '26',
+  '27',
+  '28',
+  '29',
+] as const;
+export type YoutubeCategoryId = (typeof YOUTUBE_CATEGORY_IDS)[number];
+
+/** 서버 응답의 분류 번호(문자열)를 이벤트 열거로 좁힌다. 목록 밖이면 other */
+export function toYoutubeCategoryId(value: string): YoutubeCategoryId | 'other' {
+  return (YOUTUBE_CATEGORY_IDS as readonly string[]).includes(value)
+    ? (value as YoutubeCategoryId)
+    : 'other';
+}
+
 // 행동 이벤트 목록 (POK-357). 이름은 「대상_동사」 snake_case, 속성은 열거형·boolean·number만 —
 // 자유 문자열(이메일·채널 이름·채팅·제목·토큰·페어링 코드)이 들어갈 자리를 타입으로 없앤다(처리방침 2절).
 // 새 이벤트는 docs/ANALYTICS.md 「이벤트」 표부터 고친다. 성공한 뒤에만 보낸다(실패·취소는 세지 않는다).
@@ -52,7 +82,7 @@ export interface AnalyticsEvents {
     thumbnail_source: ThumbnailSource;
     made_for_kids: boolean;
     /** 유튜브 분류 번호(POK-381) */
-    category_id: string;
+    category_id: YoutubeCategoryId | 'other';
     /** 예약 공개로 주문했나(POK-381). 예약이면 privacy_status는 private다 */
     scheduled: boolean;
   };
