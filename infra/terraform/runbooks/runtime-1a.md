@@ -49,6 +49,9 @@ prod/network(O7a) 뒤, platform(O7d) · media(O7e) 앞입니다. platform · med
 4 부터 6 까지 어느 걸음이든 실패하거나 시간이 넘으면 곧바로 7 로 갑니다(아래
 「실패 · 시간 초과」).
 
+1단-가 SQL 이 이미 적용된 DB 에 1단-나 ①(앱별 스키마 · DB 권한)을 얹을 때는
+아래 「1단-나 ①」 절의 순서를 따릅니다.
+
 1단-다(일 큐 · 새 버킷 · auth 설정 · 값 넣기)는 아래 「1단-다」 절의 순서를
 따릅니다. O7d 뒤 1단-다를 되돌리는 동안(clip 0개부터 다시 올리기까지 —
 회부로 보류된 동안 포함) platform apply 는 다시 올리기 하나뿐입니다. 다른 PR
@@ -496,18 +499,19 @@ send_step() {
     확인하고, 회수하는 손 SQL 은 「실패 · 시간 초과」 의 손 SQL 규칙대로
     다음 흐름에서 보냅니다.
 *   앱 서버 사용자 넷(`app_auth` · `app_clip` · `app_chat_collector` ·
-    `app_chat_detector`)은 10 이 만들고, `stream_*` 교차 권한은 30 이
-    줍니다. 판별 서버의 `chat_messages` 읽기는 수집 서버 Flyway(`V316`)가
-    주므로 런타임은 주지 않습니다. `app_chat_detector` 가 수집 서버의 첫
-    기동보다 늦게 생겼으면 그 줄이 건너뛰어졌으니 아래를 마스터로 `psql -1`
-    로 손으로 돌립니다(표 주인으로 바꿔서 주고 그 멤버십을 거둡니다 — 로컬
-    PG 비superuser 대역으로 확인함). 보내는 길은 「실패 · 시간 초과」 의 손
-    SQL 규칙과 같습니다.
+    `app_chat_detector`)과 계정마다 이름이 같은 자기 스키마 · DB CONNECT 는
+    10 이 만들고, `stream_*` 교차 권한은 30 이 줍니다. 판별 서버의
+    `chat_messages` 읽기는 수집 서버 Flyway(`V316`)가 주므로 런타임은 주지
+    않습니다. `app_chat_detector` 가 수집 서버의 첫 기동보다 늦게 생겼으면
+    그 줄이 건너뛰어졌으니 아래를 마스터로 `psql -1` 로 손으로 돌립니다(표
+    주인으로 바꿔서 주고 그 멤버십을 거둡니다 — 로컬 PG 비superuser 대역으로
+    확인함). 표는 수집 서버 스키마에 있으므로 이름을 한정합니다. 보내는 길은
+    「실패 · 시간 초과」 의 손 SQL 규칙과 같습니다.
 
     ```sql
     GRANT app_chat_collector TO CURRENT_USER WITH SET TRUE, INHERIT FALSE;
     SET ROLE app_chat_collector;
-    GRANT SELECT ON chat_messages TO app_chat_detector;
+    GRANT SELECT ON app_chat_collector.chat_messages TO app_chat_detector;
     RESET ROLE;
     REVOKE app_chat_collector FROM CURRENT_USER;
     ```
@@ -519,9 +523,9 @@ send_step() {
 ## 6. advisory 확인
 
 `50_advisory_probe.sql` 은 마스터가 `pg_advisory_xact_lock(bigint)` 의
-EXECUTE 를 PUBLIC 에서 회수할 수 있는지만 보고 ROLLBACK 합니다(K7 — 실제
-회수는 런타임 1단-나). 5 와 떼어 한 번만, `-1` 없이 돌리고, 같은 명령 안에서
-뒤이어 40 을 다시 돌려 무변경을 확인합니다.
+EXECUTE 를 PUBLIC 에서 회수할 수 있는지만 보고 ROLLBACK 합니다(K7 —
+1단-나 ①이 회수하지 않기로 정했습니다). 5 와 떼어 한 번만, `-1` 없이
+돌리고, 같은 명령 안에서 뒤이어 40 을 다시 돌려 무변경을 확인합니다.
 
 승인 뒤 `send_step probe`. 아래 세 갈래가 **모두 정상 관측**입니다. 어느
 쪽이든 뒤의 40 이 `VERIFY OK` 여야 하고(상태 `Success`), 아니면 「실패 · 시간
@@ -535,19 +539,9 @@ EXECUTE 를 PUBLIC 에서 회수할 수 있는지만 보고 ROLLBACK 합니다(K
 
 50 은 `VERBOSITY=verbose` 로 돌아 오류 · 경고 줄에 SQLSTATE 가 붙습니다 —
 `50 exit 3` 이 42501 이 아닌 다른 오류로 났으면 「실패 · 시간 초과」 로
-갑니다. 이 출력이 1단-나의 재료입니다(8 에서 기록). 1단-나에 넘길 내용:
-
-*   쓰는 쪽이 둘입니다. 사이드카 `media_indexer` 가 컷오프 경로에서
-    `pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtext(…)::bigint)` 을
-    씁니다(`media/internal/index/store.go:206` 의 `lockCutoffStreamSQL`). 권한
-    정본은 「advisory 잠금은 PUBLIC 기본으로 충분」 을 전제로 GRANT 를 두지
-    않습니다(`media/internal/pgtest/role.go:41`). 3번 서버 넷의 Flyway 도
-    advisory 잠금으로 직렬화합니다(Flyway 일반 거동 — 3번 코드 미대조).
-*   회수한다면 재부여 대상에 `media_indexer` 를 넣고 `role.go` 전제 주석 ·
-    권한 시험을 함께 고칩니다. 재부여를 잊으면 40 의
-    `advisory_xact_lock_media_indexer` 단언이 깨집니다.
-*   목록 전문은 [prod/runtime](../prod/runtime/README.md) 「1단-나 이월」 의
-    1 입니다.
+갑니다. 이 출력은 운영 관측 기록입니다(8 에서 기록). K7 (가)라 갈래와
+무관하게 회수하지 않습니다 — 사유는 [prod/runtime](../prod/runtime/README.md)
+「1단-나 이월」 의 1 입니다.
 
 ## 7. 실행기 끔
 
@@ -625,7 +619,8 @@ EXECUTE 를 PUBLIC 에서 회수할 수 있는지만 보고 ROLLBACK 합니다(K
     7 의 점검 첫 줄과 증거 디렉터리 이름, 3 의 `EngineVersion` 실제 값 · 비밀 태그, 5 의 sha256
     일곱 줄 · 머지 SHA · `prepare` · `apply` 결과, 6 의 `probe` 결과, 7 의
     잔여 0. 옮기기 전에 비밀 값 훑기를 합니다(계정 ID · ARN 은 가립니다).
-*   Jira POK-304 코멘트: 6 의 출력과 판정 갈래(1단-나 재료).
+*   Jira 코멘트: 6 의 출력과 판정 갈래 — 1단-가 흐름은 POK-304, 1단-나 ①
+    재적용 흐름(아래 「1단-나 ①」 절)은 POK-428 입니다.
 
 ## 실패 · 시간 초과
 
@@ -653,18 +648,35 @@ JSON 입니다. 보내기 전에 SQL 원문을 kty 에게
 
 *   **SQL**: 파일마다 트랜잭션이라 실패한 파일은 남지 않습니다. 적용을 통째로
     되돌릴 때는 실행기를 켜고 마스터로 아래를 `psql -1` 로 돌립니다 — 표 ·
-    함수(media_owner 소유 전부) → 앱 사용자 → 두 계정 → media_owner
-    순서입니다. 앱 사용자 두 줄은 앱 서버가 처음 뜨기 전에만 씁니다. 뜬
-    뒤면 앱 사용자가 자기 표의 소유자라 지우면 앱 데이터가 함께 사라집니다.
-    이 SQL 은 시험하지 않았습니다(쓰기 전에 로컬 PG 비superuser 대역으로
-    확인합니다).
+    함수(media_owner 소유 전부) → 앱 스키마 → DB 권한 → 앱 사용자 → 두
+    계정 → media_owner 순서입니다. 앱 스키마 · 앱 사용자 줄은 앱 서버가
+    처음 뜨기 전에만 씁니다. 뜬 뒤면 자기 스키마에 표가 있어 `DROP SCHEMA`
+    (CASCADE 없음)가 실패합니다 — 앱 사용자가 자기 표의 소유자라 지우면 앱
+    데이터가 함께 사라지므로 그 실패를 넘기지 않습니다. `REVOKE CREATE ON
+    SCHEMA public` 줄은 1단-가 판만 적용된 DB 몫이고 1단-나 ① 판 위에서는
+    아무것도 바꾸지 않습니다. DB 권한 두 줄은 계정마다 준 CONNECT 를 거둬
+    `DROP ROLE` 이 남은 권한으로 막히지 않게 하고, PUBLIC 의 CONNECT · TEMP
+    를 RDS 기본으로 되돌립니다. `media_owner` 의 `public` USAGE · CREATE 는
+    마스터가 준 것이라 `DROP OWNED` 가 거두지 못해 따로 거둡니다 — 없으면
+    마지막 `DROP ROLE media_owner` 가 「privileges for schema public」 으로
+    실패합니다. `DROP OWNED` 줄의 `WARNING:  no privileges could be revoked
+    for "public"` 은 그 때문이고 정상입니다. 이 SQL 은 로컬 PG 17 superuser
+    대역에서 10 · 20 · 30 · 40 적용 뒤 한 트랜잭션으로 끝까지 돌고, 역할 ·
+    앱 스키마 · `public` 표가 0 이 되는 것까지만 확인했습니다(2026-10-25 —
+    운영 마스터 대역 · 운영에서는 돌린 적이 없습니다).
 
     ```sql
     SET ROLE media_owner;
     DROP OWNED BY media_owner;
     RESET ROLE;
+    REVOKE USAGE, CREATE ON SCHEMA public FROM media_owner;
+    DROP SCHEMA app_auth, app_clip, app_chat_collector, app_chat_detector;
     REVOKE CREATE ON SCHEMA public
       FROM app_auth, app_clip, app_chat_collector, app_chat_detector;
+    REVOKE CONNECT ON DATABASE pokeclip
+      FROM media_indexer, media_janitor, app_auth, app_clip,
+           app_chat_collector, app_chat_detector;
+    GRANT CONNECT, TEMPORARY ON DATABASE pokeclip TO PUBLIC;
     DROP ROLE app_auth, app_clip, app_chat_collector, app_chat_detector;
     DROP ROLE media_indexer, media_janitor;
     DROP ROLE media_owner;
@@ -1084,6 +1096,97 @@ kty 결정(2026-10-24): clip 을 먼저 내리고, 나머지를 되돌린 뒤, �
 *   O7d 부터 일꾼 배치까지 주문이 소비자 없이 쌓입니다(고착 알람 없음).
 *   `clip_job_features` 거부 규칙은 런타임 변수 값만 막습니다. 코드
     되돌리기 길은 위 「clip 먼저 0개」 절차(platform 동결 포함)가 막습니다.
+
+## 1단-나 ① — 앱별 스키마 · DB 권한(POK-428)
+
+1단-나 ①의 SQL 판(`10_roles.sql` · `40_verify.sql` · `50_advisory_probe.sql`
+주석)을 RDS 에 적용하는 절차입니다. 앱 사용자 넷의 `public` CREATE 를 거두고
+계정과 이름이 같은 자기 스키마를 주며, `pokeclip` 의 CONNECT · TEMP 를
+PUBLIC 에서 거두고 CONNECT 만 계정 여섯에 줍니다(결정 정본
+[ADR-0007](../../../docs/decisions/2026-10-24-app-schemas.md)). 계획 rt1b 의
+「prod 운영 순서와 승인 지점」 이 이 절입니다. 머리의 실행 규칙(kty 로컬
+터미널 · 쓰기마다 직전 승인 · 출력을 세션에 붙이지 않음)이 그대로 걸립니다.
+
+1단-나 ①은 Terraform 자원을 바꾸지 않습니다 — 바뀌는 것은 5 가 보내는 SQL
+파일뿐입니다. **앱 서버(auth · clip)가 처음 뜨기(O7d) 전에** 합니다. prod
+에는 옮길 앱 자료가 없습니다.
+
+### 1단-나 ① 순서
+
+| 걸음 | 하는 일 | 승인 지점 |
+|---|---|---|
+| 1 | 1단-가 SQL 적용 여부 확인(볼트 raw · POK-304 코멘트) | — |
+| 2 | 이 런북 1 · 4 — 직전 점검 → 실행기 켬 → 켬 뒤 2-3 | ⑤ 보고 · plan 승인 |
+| 3 | 이 런북 5 — 이 PR 의 머지 SHA 로 00 → 10(새 판) → 20 → 30 → 40 | send-command 승인 |
+| 4 | 이 런북 6 — 50 → 40(갈래 기록만) | send-command 승인 |
+| 5 | 이 런북 7 · 8 — 실행기 끔 · 잔여 0 · 기록(POK-428) | plan 승인 |
+| 6 | O7d · POK-306 — 서버가 처음 떠 자기 스키마에 표를 만듦 | 그 단계 몫 |
+| 7 | 기동 뒤 확인 | send-command 승인 |
+
+1.  1단-가 SQL 이 아직 적용되지 않았으면 이 절 대신 이 런북 1 부터 8 을 이
+    PR 의 머지 SHA 로 처음부터 돕니다(같은 SQL 판입니다). 이미 적용됐으면
+    2 부터 갑니다.
+1.  5 는 1단-가 판이 이미 적용된 DB 에서 그대로 다시 돕니다. 10 · 20 · 30
+    은 그 위에서도 같은 상태로 수렴합니다 — media 시험
+    `TestProdSQLConvergesOverRuntime1aRoles`
+    (`media/internal/index/prod_sql_apply_pg_test.go`)가 1단-가 판 10 의
+    사본(`testdata/prod_sql_runtime_1a_10_roles.sql`) · 20 · 30 위에 새
+    10 · 20 · 30 · 40 을 돌려 `VERIFY OK` 를 냅니다. 40 의 새 식별자(이름
+    · 뜻은 `40_verify.sql` 머리)로 실패하면 「실패 · 시간 초과」 로
+    갑니다. 앱 서버가 뜨기 전이라 `public_owned_by_app:<계정>` 이 실패하면
+    이상입니다 — 무엇이 있는지 확인하고 kty 에게 회부합니다.
+1.  6 의 50 은 K7 (가)라 갈래와 무관하게 회수하지 않습니다. 출력은 볼트
+    raw 와 POK-428 코멘트에 기록합니다.
+1.  서버가 처음 뜨는 순서는 auth · clip(O7d) → 수집 서버(POK-306) → 판별
+    서버입니다. 수집 서버의 Flyway(`V316`)가 판별 계정에 `chat_messages`
+    SELECT 를 주므로 판별 서버는 그 뒤에 뜹니다.
+
+### 1단-나 ① 기동 뒤 확인
+
+*   서버마다 기동 로그의 Flyway 줄이 자기 스키마를 가리킵니다 — 꼴
+    `Successfully applied <N> migrations to schema "app_auth"`(clip 은
+    `"app_clip"` 등 서버마다 자기 스키마 이름).
+*   실행기를 다시 켜는 흐름(4 → 손 SQL → 7)으로 아래를 「실패 · 시간
+    초과」 의 손 SQL 규칙대로 보냅니다. 첫째는 0행이어야 하고, 둘째는 수집
+    서버가 처음 뜬 뒤 `t` 여야 합니다(수집 서버가 뜨기 전에는 표가 없어
+    42P01 로 실패합니다). 둘째가 `f` 면 5-3 의 손 줄을 돌립니다. 뒤이은 40
+    의 `public_owned_by_app:<계정>` 이 표뿐 아니라 함수 · 형까지 같은 것을
+    잽니다.
+
+    ```sql
+    SELECT n.nspname, c.relname
+      FROM pg_catalog.pg_class c
+      JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+     WHERE n.nspname = 'public'
+       AND pg_catalog.pg_get_userbyid(c.relowner) LIKE 'app\_%';
+    SELECT pg_catalog.has_table_privilege('app_chat_detector',
+             'app_chat_collector.chat_messages', 'SELECT');
+    ```
+
+### 1단-나 ① 되돌리기
+
+*   **앱 서버가 뜨기 전**: 되돌리기는 둘로 나뉩니다. 1단-가 판 10 을 다시
+    돌려도 PUBLIC 의 CONNECT · TEMP 는 돌아오지 않기 때문입니다.
+    1.  스키마 권한 — 1단-가 머지 커밋(`9e008743`)의 SHA 로 5 를
+        돕니다(1단-가 판 10 이 앱 넷에 `public` CREATE 를 다시 줍니다).
+    1.  DB 권한과 빈 스키마 — 같은 SHA 로 만든 페이로드로 아래를 「실패 ·
+        시간 초과」 의 손 SQL 규칙대로 보냅니다. 뒤이은 1단-가 판 40 이
+        `VERIFY OK` 여야 합니다. `DROP SCHEMA` 는 CASCADE 없이 씁니다 —
+        비어 있지 않으면(앱이 이미 떴으면) 크게 실패하고 아무것도 바뀌지
+        않습니다. 계정마다 준 CONNECT 는 남아도 무해합니다. 로컬 PG 17
+        superuser 대역에서 1단-가 판 → 이 판 → 1단-가 판 10 · 20 · 30 · 40 →
+        아래 SQL · 1단-가 판 40 이 모두 `VERIFY OK` 인 것을 확인했습니다
+        (2026-10-25 — 운영 마스터 대역은 아님).
+
+        ```sql
+        DROP SCHEMA app_auth, app_clip, app_chat_collector, app_chat_detector;
+        GRANT CONNECT, TEMPORARY ON DATABASE pokeclip TO PUBLIC;
+        ```
+
+*   **앱 서버가 뜬 뒤**: 표가 자기 스키마에 있으므로 코드 · SQL 을 되돌리지
+    않고 앞으로 고칩니다.
+*   dev 공유 DB 의 되돌리기는 [services/README.md](../../../services/README.md)
+    「dev 앱별 스키마 이전과 되돌리기」 입니다.
 
 ## 1단-나 ② — Media 전용 토큰(POK-429)
 

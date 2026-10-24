@@ -199,8 +199,9 @@ run "gives_media_only_the_resolve_token_shell" {
   }
 }
 
-# 응답기 media.env 렌더(M15)는 목록의 순서([0])에 기대지 않고 이름 있는 출력을
-# 읽는다(K5). 그 출력과 읽기 정책 목록이 같은 그릇을 가리키는지 묶는다.
+# 응답기 media.env(키 정의 · 읽기 = M15, 렌더 = M9(user_data))는 목록의
+# 순서([0])에 기대지 않고 이름 있는 출력을 읽는다(K5). 그 출력과 읽기 정책
+# 목록이 같은 그릇을 가리키는지 묶는다.
 run "names_resolve_token_arn_for_ingest_auth" {
   command = apply
 

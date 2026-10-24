@@ -844,8 +844,26 @@ auth · clip에도 같은 10초를 넣었다(POK-414). 전에는 없어서 DB가
 ### 서버별 DB 계정과 권한 (POK-407)
 
 **운영은 서버마다 DB 계정이 따로다.** 넷 다 `rds_iam`(IAM 토큰 로그인)을 받고, 각 서버가 **자기 표를 자기 계정으로
-만든다**(Flyway가 그 계정으로 돈다). 그래서 자기 표 권한은 소유로 충분하고, 목록에 남는 것은 표를 만들 자리
-(`CREATE ON SCHEMA public`, PG 15부터 기본으로 닫혔다)와 남의 표에 대한 교차 접근 넷뿐이다. `stream_*`는 media(1번) 표다.
+만든다**(Flyway가 그 계정으로 돈다). 그래서 자기 표 권한은 소유로 충분하고, 목록에 남는 것은 표를 만들 자리 · DB 접속 · 남의
+표에 대한 교차 접근뿐이다. `stream_*`는 media(1번) 표다.
+
+**표를 만들 자리는 `public`이 아니라 계정과 이름이 같은 자기 스키마다(POK-428).** 스키마는 마스터가 만들어 가지고, 계정에는
+`USAGE, CREATE`만 준다 — 서버가 자기 스키마 권한을 남에게 줄 수 없다. 서버의 세션 경로는 자기 스키마 하나라
+(`pokeclip.datasource.schema` → Hikari `schema` · Flyway `schemas`) 남의 표는 스키마를
+붙여 읽는다(`public.stream_segments` · `app_chat_collector.chat_messages`). 붙이지 않으면
+`42P01`로 크게 실패한다. 계정에는 `public` CREATE가 없다 — `public`에 표 · 함수를 만들 수 있는 것은 마스터와
+media 뿐이라, 맨 이름으로 부르는 함수(`pg_advisory_xact_lock(hashtext(?))` 등)를 남이 심은 판이 가로채지
+못한다.
+
+**DB 접속도 계정마다 준다.** 운영 DB(`pokeclip`)는 CONNECT · TEMP를 PUBLIC(모든 계정)에서 거두고,
+CONNECT만 계정마다 따로 준다. TEMP는 아무에게도 주지 않는다 — 서버는 임시 표를 쓰지 않는다. 새 계정은 CONNECT를 받아야
+붙는다. 두 줄은 서버마다가 아니라 DB에 한 번이다(운영
+`infra/terraform/prod/runtime/sql/10_roles.sql`이 같은 일을 한다).
+
+```sql
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+REVOKE CONNECT, TEMPORARY ON DATABASE pokeclip FROM PUBLIC;
+```
 
 **계정 만들기와 GRANT 실행은 1번(런타임) 몫이다.** 순서가 있다.
 
@@ -891,9 +909,11 @@ GRANT SELECT ON app_chat_collector.chat_messages TO app_chat_detector;
 
 **이 목록은 서버마다 `DbRoleGrantsTest`가 그대로 잰다.** 빈 DB에 「이 줄들만 가진」 역할을 만들어 그 역할로 서버를 띄운다.
 마이그레이션이 끝까지 돌고 위 교차 접근 코드가 돈다. 한 줄씩 거두면 그 경로가 권한 부족(`42501`)으로 거절된다.
-README의 `GRANT ... TO app_*;` 줄과 시험의 목록이 다르면 빨간불이다.
-**재지 않는 것**: 자기 표의 전체 저장 경로를 그 역할로 다 돌리지는 않는다(소유자라 표 권한이 다 있다). 시퀀스 ·
-트리거 함수 · advisory 잠금 · `pg_stat_ssl` 자기 행은 소유 또는 PUBLIC 기본으로 충분하다.
+README의 `GRANT ... TO app_*;` 줄과 시험의 목록이 다르면 빨간불이다. 시험 DB는 운영처럼 PUBLIC의 CONNECT
+· TEMP를 거두고 그 역할에만 CONNECT를 준다(`GrantedRoleDatabase`) — 서버가 임시 표에 기대면 여기서 빨간불이다.
+**재지 않는 것**: 자기 표의 전체 저장 경로를 그 역할로 다 돌리지는 않는다(소유자라 표 권한이 다 있다). 시퀀스 · 트리거 함수 ·
+advisory 잠금 · `pg_stat_ssl` 자기 행은 소유 또는 PUBLIC 기본으로 충분하다(advisory 잠금 함수는 운영에서도
+PUBLIC에서 거두지 않는다 — ADR-0007, K7).
 
 ### dev 앱별 스키마 이전과 되돌리기 (POK-428)
 
@@ -1192,21 +1212,23 @@ Flyway가 스스로 그렇게 판정했기 때문이다(우연). `V315`처럼 �
 (60만 행 실측: 인덱스 있을 때 1.1ms, 없을 때 19.5ms로 **약 18배**). 표가 있는 곳에
 인덱스도 둔다는 소유 경계는 그대로지만, 대가가 이것이다 — **둘은 같이 배포한다.**
 
-**모든 Flyway 서버(auth 포함)에 `baseline-on-migrate: true` + `baseline-version: 0`이 필수다.**
-공유 DB에서는 어느 서버가 먼저 뜰지 정해져 있지 않다 — 다른 서버가 이미 표를
-만들어 놓은 DB에 자기 이력 테이블 없이 뜨는 서버는 baseline 없이
-`Found non-empty schema(s) "public" but no schema history table`로 부팅이 죽는다.
-"두 번째 서버부터"가 아니다: 빈 DB에 chat-collector가 auth보다 먼저 뜨면 auth가
-그 두 번째 서버다. chat-collector가 실물에서 밟았고(2026-08-15), auth도 같은
-메시지로 재현했다(PR #56). Testcontainers·CI는 매번 빈 DB라 그냥은 안 잡히므로
-네 서버의 `IntegrationTestSupport`가 남의 표를 먼저 심어 두고 부팅한다 —
-두 줄을 지우면 그 모듈 테스트 전체가 빨강이다. **chat-detector도 POK-120에서 같은 두 줄을 갖췄다 —
-이제 Flyway를 도는 서버 넷이 전부 갖췄다.** `baseline-version: 0`인 이유는 기본 1이면 V1
-이하가 적용 대상에서 빠지기 때문이다.
+**Flyway 서버 넷은 baseline 을 쓰지 않는다(POK-428).** 서버마다 표를 자기
+스키마에 만들므로 다른 서버가 먼저 떠도 내 스키마는 비어 있다. 그래서
+`baseline-on-migrate` · `baseline-version` 을 지웠다. 그 전(모두 `public` 에
+만들던 때)에는 남의 표가 있는 DB 에 자기 이력 표 없이 뜨면
+`Found non-empty schema(s) "public" but no schema history table` 로 부팅이
+죽어 넷 다 baseline 두 줄을 갖췄었다(chat-collector 실물 2026-08-15 · auth 재현
+3K-PokeClip/PokeClip-mono#56). 시험의 baseline 시드(남의 표를 먼저 심던 것)도
+함께 지웠다.
 
-**이력이 한 줄이 아니라 두 줄인 것이 정상이다.** 남의 표가 있는 DB에 처음 뜨면
-`<< Flyway Baseline >>`(version 0, type `BASELINE`)이 먼저 찍히고 그다음에 자기
-마이그레이션이 온다. clip 실기동 확인(2026-08-18):
+이제 **자기 스키마가 이력 표 없이 비어 있지 않으면** Flyway 가 같은 꼴의
+non-empty 오류로 멈춘다 — 의도다. 누가 그 스키마에 손으로 객체를 만들었거나
+이력 표를 잃었다는 뜻이라, baseline 을 찍고 조용히 넘어가지 않는다.
+
+**옛 이력 표에는 baseline 줄이 남는다.** `public` 시절 baseline 으로 뜬 이력
+표(dev)는 자기 스키마로 옮겨 와도 `<< Flyway Baseline >>`(version 0, type
+`BASELINE`) 줄이 첫 줄로 남는다 — 정상이다. 새 DB(운영 · 시험)에는 그 줄이
+없고 자기 마이그레이션부터 찍힌다. clip 옛 실기동 기록(2026-08-18):
 
 ```
  installed_rank | version |              description               |   type   | success
@@ -3076,6 +3098,11 @@ POK-393에서 집기·숨기기를 없애면서 「열어 봤다」를 **편집�
   바로 저장한 편집본이 시작점을 잃고 빠진다. 대가로 저장 뒤 15초 안에 같은 카드를 다시 열면 그것이 시작점이 된다.
 - `actor`는 회원 번호다. 이 기록은 카드가 있는 동안 남는다.
 
+두 SQL 은 clip 의 표를 맨 이름으로 읽는다. 표는 `app_clip` 스키마에
+있으므로(POK-428) 마스터 · 운영자 세션에서는 먼저 `SET search_path TO app_clip;`
+을 돌린다 — 안 하면 `42P01` 이다. 블록 안에는 넣지 않는다(아래 시험이 블록의
+첫 줄로 SQL 을 찾고 clip 의 세션 경로로 돌린다).
+
 **① 클립 안 나온 카드 비율**: 기간(`:from` 이상 `:to` 미만)에 편집기로 연 자동 카드 중 렌더 주문(`clips`)이 하나도 없는 비율.
 편집본만 저장하고 영상을 안 만든 카드도 「안 나왔다」로 센다.
 
@@ -4207,6 +4234,7 @@ SOOP 수신은 다음 PR이고, 지금 세션을 여는 곳(연동 시작)은 �
   실행은 배포 담당 몫이다(이 문서는 명령만 적는다). 배포 시작·끝 시각을 넣는다:
 
   ```sql
+  SET search_path TO app_auth;
   UPDATE withdrawal_purge_jobs
      SET done_at = NULL, next_attempt_at = now()
    WHERE target = 'COLLECTOR' AND platform = 'SOOP'
@@ -4537,6 +4565,7 @@ get·put이 한 트랜잭션에서 이어지는 갈래는 하나다. `ensureKey`
 | ④ | `STREAM_KEY_SECRET_STORE_TYPE=aws`로 바꿔 auth 기동, 이어서 `verify` | 부팅 줄 `auth.streamkey.secret_store type=AWS`, `verify`의 `readable` = `targets`, 아래 조회가 0, 테스트 계정 resolve `valid:true`, 유튜브·치지직 연동 계정 하나의 상태 조회 정상 |
 
 ```sql
+SET search_path TO app_auth;
 SELECT count(*) FROM stream_keys
 WHERE revoked_at IS NULL AND passphrase_ref NOT LIKE 'pokeclip/dev/stream-key/%';
 ```

@@ -125,6 +125,7 @@ SDK는 동적 import라 hydration 뒤에 붙을 수 있다(Next 16 `instrumentat
 
 1. auth DB에서 지난 확인 뒤 탈퇴한 회원 번호를 뽑는다. 회원 줄은 익명화만 되고 `id`는 남는다.
    ```sql
+   SET search_path TO app_auth;
    SELECT id, deleted_at FROM users
     WHERE deleted_at >= now() - interval '8 days'
     ORDER BY deleted_at;

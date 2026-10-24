@@ -385,9 +385,11 @@ GRANT SELECT, INSERT, UPDATE ON stream_published_gaps TO media_indexer;
 - **그 밖에 이 계정에 따로 주는 권한은 없다 — 대신 PUBLIC(모든 계정)
   기본 권한에 기댄다.** 시퀀스는 없고(DDL 에 `SERIAL` · `IDENTITY` 0),
   트리거 함수 · advisory 잠금 · `set_config` 는 PUBLIC 기본 권한으로 돈다.
-  DB `CONNECT` · `public` 스키마 `USAGE` 도 PUBLIC 기본값에 기댄다 — 이것을
-  거둔 DB 라면 따로 준다. 반대로 PUBLIC 기본값이 이 목록보다 넓은 DB 가
-  있으므로 아래 사전 확인을 한다.
+  `public` 스키마 `USAGE` 도 PUBLIC 기본값에 기댄다. DB `CONNECT` 는 다르다
+  — 운영 DB(`pokeclip`)는 CONNECT 를 PUBLIC 에서 거두고 계정마다 따로
+  준다(`infra/terraform/prod/runtime/sql/10_roles.sql`). 그렇게 하지 않은
+  DB 는 PUBLIC 기본값으로 붙는다. 반대로 PUBLIC 기본값이 이 목록보다 넓은
+  DB 가 있으므로 아래 사전 확인을 한다.
 - **`FOR UPDATE` 는 `stream_sessions` 에 있다**(init 업로드 확정). 행 잠금에도
   UPDATE 권한이 필요하다. `stream_segments` 의 `FOR UPDATE NOWAIT` 는
   janitor(`media_janitor`) 몫이다.
@@ -406,7 +408,10 @@ SELECT has_schema_privilege('media_indexer', 'public', 'CREATE');  -- false 여�
 
 - 결과가 true 면(PostgreSQL 14 이하이거나 누가 되돌린 DB) 이 계정도 표를
   만들 수 있다 — PG15 부터 `public` 스키마 CREATE 가 PUBLIC 에서 빠졌다.
-  `REVOKE CREATE ON SCHEMA public FROM PUBLIC;` 을 하고, 임시 표도 막으려면
+  `REVOKE CREATE ON SCHEMA public FROM PUBLIC;` 을 한다. 임시 표는 운영
+  DB(`pokeclip`)에서 막았다 — `10_roles.sql` 이 `TEMP` 를 PUBLIC 에서
+  거두고 아무에게도 주지 않는다(`40_verify.sql` 의 `public_temp_revoked` ·
+  `temp:<계정>`). 다른 DB 에서도 막으려면
   `REVOKE TEMP ON DATABASE <DB 이름> FROM PUBLIC;` 을 한다. 역할 시험의
   「CREATE TABLE 42501」 도 이 PG15+ 기본값을 전제로 한다.
 - **계정 하드닝**(만들 때 확인): `NOSUPERUSER` · `NOCREATEDB` ·
@@ -419,8 +424,10 @@ SELECT has_schema_privilege('media_indexer', 'public', 'CREATE');  -- false 여�
   (`internal/pgtest/role.go` · 위 블록 · 운영 GRANT 를 함께), 새 열은 표
   단위 권한을 자동으로 받으므로 사이드카가 그 열을 고쳐도 되는지 본다.
 
-**SQL 규약 — 내장 함수는 `pg_catalog` 로 한정한다.** 운영 DB 의 앱 사용자
-넷은 `public` CREATE 를 가져 맨 이름 함수 · 연산자를 가로챌 수 있다
+**SQL 규약 — 내장 함수는 `pg_catalog` 로 한정한다.** 심층 방어다. 운영
+DB 의 앱 사용자 넷은 1단-나 ①(POK-428) 뒤로 `public` CREATE 가 없고 자기
+스키마에만 표를 만든다. 그래도 누가 `public` CREATE 를 다시 연 DB 에서는
+거기 심은 같은 이름의 판이 맨 이름 함수 · 연산자를 가로챌 수 있다
 (CVE-2018-1058 계열). 새 SQL(사이드카 · janitor · `ddl.go`)은
 `pg_catalog.now()` 꼴로 쓰고, `pg_catalog` 에 정확한 판이 없는 형은 캐스트로
 맞춘다(`::bigint` · `::double precision` · `::oid` · `::name`). 시험은
@@ -439,7 +446,14 @@ SELECT has_schema_privilege('media_indexer', 'public', 'CREATE');  -- false 여�
   되풀이한다. 방어는 둘이다: 이 DB 의 로그인 계정 수를 줄이는 것, 그리고 잠금
   함수의 `EXECUTE` 를 PUBLIC 에서 회수하고 사이드카 계정에만 주는 것(함수 소유자
   권한이 필요하다 — RDS 의 마스터 사용자로 되는지는 아직 확인하지 않았다).
-  회수에는 두 전제가 붙는다. 이 DB 에서 advisory 잠금을 쓰는 다른 계정(마이그레이션
+  **운영은 회수하지 않는다(K7 · kty 2026-10-24).** 이 DB 에서 잠금을 쓰는
+  계정이 다섯이라(사이드카 · 앱 사용자 넷의 Flyway · auth · clip 의 잠금 —
+  `media_janitor` 만 쓰지 않는다) 그 계정들에 다시 주어도 컷오프 열쇠를 막는
+  위협이 그대로이고, Flyway 판이 잠금 함수를 바꾸면 앱 부팅이 42501 로
+  멈추기 때문이다(`docs/decisions/2026-10-24-app-schemas.md`). 마스터가
+  회수할 수 있는지는 `infra/terraform/prod/runtime/sql/50_advisory_probe.sql`
+  이 관측만 한다. 아래는 다시 회수를 검토할 때의 조건이다. 회수에는 두
+  전제가 붙는다. 이 DB 에서 advisory 잠금을 쓰는 다른 계정(마이그레이션
   도구 등)에도 함께 허용해야 그 계정이 깨지지 않는다. `GRANT` · `REVOKE` 는 DB
   마다 따로 적용된다 — 이 DB 하나에만 하면 다른 DB 는 그대로다. 새로 만드는
   DB 는 `template1` 을 복제하므로 새 DB 까지 막으려면 `template1` 에도 한다.
