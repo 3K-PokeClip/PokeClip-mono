@@ -117,6 +117,32 @@ clip 의 큐 수신 스위치 `BROADCAST_INTAKE_ENABLED` 는 이 목록에 없�
 사이드카의 이름인 `POSTGRES_HOST` 를 auth · clip 에 넣으면, 앱은 `DB_HOST` 를
 찾지 못해 `localhost` 로 붙습니다.
 
+`app_env` 는 평문 태스크 env 라 platform 이 plan 때 비밀을 싣는 꼴을
+거부합니다(`prod/platform/remote_state.tf` 의 런타임 계약 검사).
+
+*   이름: `^[A-Z][A-Z0-9_]*$` 꼴만 받고, `PASSWORD` · `PASSWD` ·
+    `PASSPHRASE` · `SECRET` · `TOKEN` · `KEY` · `PEM` · `CREDENTIAL` 이
+    이름 어디에 들어도 거부합니다. 비밀이 아닌 계약 이름 다섯
+    (`STREAM_KEY_RESOLVE_ALLOWED_CIDRS` · `STREAM_KEY_SECRET_*` 셋 ·
+    `CLOUDFRONT_KEY_PAIR_ID`)은 검사 식 안의 예외입니다. 그 밖에 비밀이
+    아닌데 걸리는 이름은 platform 변수 `app_env_non_secret_names` 에
+    적습니다.
+*   운반 이름: `SPRING_APPLICATION_JSON` · `JAVA_TOOL_OPTIONS` ·
+    `JDK_JAVA_OPTIONS` · `JAVA_OPTS` 는 받지 않습니다.
+*   값: 다음 꼴을 거부합니다.
+    *   URL 자격 증명(`scheme://user:pass@` · `https://<토큰>@`).
+    *   키 이름에 `passw` · `pwd` · `secret` · `token` 이 든 쿼리 ·
+        프래그먼트 매개변수(`?password=` · `#access_token=`, 대소문자 무관).
+    *   속성 이름에 `secret` · `password` · `token` 이 든 `-D` 속성.
+*   값 검사는 위 낱말만 봅니다. `?api_key=…` · `-Ddb.passwd=…` ·
+    `-Dapi.key=…` 처럼 다른 낱말을 쓴 비밀은 통과하므로 검사에 기대지
+    말고 처음부터 `app_secret_arns` 로 넘깁니다. 거꾸로 쿼리나
+    프래그먼트에 `user:x@` 꼴이 든 정상 값과 `token_type` 같은 비밀 아닌
+    키는 걸릴 수 있습니다(알려진 오탐 — 그런 값은 `app_secret_arns` 로
+    옮깁니다).
+
+비밀은 모두 `app_secret_arns` 로 넘깁니다.
+
 근거는 PR 343 머지 뒤 develop 의
 `services/auth` · `services/clip` 의 `src/main/resources/application.yml`,
 `services/db-support`, `web/Dockerfile` 입니다. 「yml 기본값」 은 자리
@@ -156,6 +182,12 @@ clip 의 큐 수신 스위치 `BROADCAST_INTAKE_ENABLED` 는 이 목록에 없�
 
 *   `*_ENDPOINT` 는 `PROFILE_PHOTO_S3_ENDPOINT` · `BROADCAST_QUEUE_ENDPOINT` ·
     `RENDER_QUEUE_ENDPOINT` 입니다.
+*   `app_env` 에 넣지 않는 이름 · 값: 값 하나에 여러 속성을 싣는 이름
+    (`SPRING_APPLICATION_JSON` · `JAVA_TOOL_OPTIONS` · `JDK_JAVA_OPTIONS` ·
+    `JAVA_OPTS`)과 URL 자격 증명 · 쿼리 `password=` · 비밀 `-D` 속성이 든
+    값은 platform plan 이 멈춥니다(검사 범위는 위 「앱이 읽는 env 이름」
+    절). 쿼리 · 프래그먼트에 `@` 가 든 URL 도 걸릴 수 있으므로(알려진 오탐)
+    그런 값은 `app_secret_arns` 로 넣습니다.
 *   표에 없는 이름은 미확인입니다. 위 파일 밖(Java 코드의 직접 env 조회 등)은
     `services/auth` · `services/clip` 의 `src/main` 에서
     `getenv` · `@Value` 검색으로 더 찾지 못했습니다.

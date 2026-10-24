@@ -408,6 +408,77 @@ class UploadControllerTest extends IntegrationTestSupport {
                 .andExpect(jsonPath("$.status").value("failed"));
     }
 
+    /**
+     * 🔴 일꾼이 「주소가 없을 때만 실패」로 보고했는데 그사이 겹친 일꾼이 주소를 적었다. 상태를 안 바꾸고 그 주소를 돌려준다:
+     * 실패한 일꾼이 그 주소로 이어 올려 영상을 끝낸다. 옛 규칙(확인 중으로 받기)이면 아무도 그 주소를 잇지 않는다(POK-250).
+     */
+    @Test
+    void 주소가_없을_때만_실패는_주소가_있으면_409와_주소를_주고_상태를_안_바꾼다() throws Exception {
+        볼_수_있다();
+        long id = 주문한_업로드();
+        일꾼(id, "start", "{}");
+        일꾼(id, "session", 주소_본문(주소1));
+
+        일꾼(id, "result", "{\"outcome\":\"FAILED\",\"errorCode\":\"QUOTA_EXCEEDED\",\"onlyIfNoSession\":true}")
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.reason").value("SESSION_EXISTS"))
+                .andExpect(jsonPath("$.sessionUri").value(주소1));
+        assertThat(상태(id)).isEqualTo("uploading:null");
+    }
+
+    /** 주소가 없으면 그대로 실패다. 200을 못 받은 일꾼이 같은 보고를 다시 보내도 200이다(멱등). */
+    @Test
+    void 주소가_없을_때만_실패는_주소가_없으면_실패다() throws Exception {
+        볼_수_있다();
+        long id = 주문한_업로드();
+        일꾼(id, "start", "{}");
+        일꾼(id, "result", "{\"outcome\":\"FAILED\",\"errorCode\":\"YOUTUBE_BROKEN\",\"onlyIfNoSession\":true}")
+                .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("failed"));
+        일꾼(id, "result", "{\"outcome\":\"FAILED\",\"errorCode\":\"YOUTUBE_BROKEN\",\"onlyIfNoSession\":true}")
+                .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("failed"));
+    }
+
+    /**
+     * 확인 중으로 닫힌 줄(주소 있음)에 이 모드의 실패가 와도 「같은 보고」로 200을 주지 않는다. 200이면 일꾼은 「실패로 닫혔다」로
+     * 읽고 쪽지를 지운다: 주소가 있는 줄을 실패로 믿게 된다.
+     */
+    @Test
+    void 확인_중인_줄에_주소가_없을_때만_실패가_오면_TERMINAL이다() throws Exception {
+        볼_수_있다();
+        long id = 주문한_업로드();
+        일꾼(id, "start", "{}");
+        일꾼(id, "session", 주소_본문(주소1));
+        일꾼(id, "result", "{\"outcome\":\"FAILED\",\"errorCode\":\"YOUTUBE_REJECTED\"}")
+                .andExpect(jsonPath("$.status").value("checking"));
+        일꾼(id, "result", "{\"outcome\":\"FAILED\",\"errorCode\":\"YOUTUBE_REJECTED\",\"onlyIfNoSession\":true}")
+                .andExpect(status().isConflict()).andExpect(jsonPath("$.reason").value("TERMINAL"));
+        assertThat(상태(id)).isEqualTo("checking:YOUTUBE_REJECTED");
+    }
+
+    /**
+     * 모르는 칸이 실려도 200이다. 배포 순서 가정을 지킨다: 옛 clip은 새 일꾼이 싣는 칸({@code onlyIfNoSession})을 이렇게 무시한다.
+     * 400이면 일꾼이 같은 보고를 되풀이하다 실패 큐로 간다(POK-250).
+     */
+    @Test
+    void 끝_보고에_모르는_칸이_실려도_200이다() throws Exception {
+        볼_수_있다();
+        long id = 주문한_업로드();
+        일꾼(id, "start", "{}");
+        일꾼(id, "result", "{\"outcome\":\"FAILED\",\"errorCode\":\"QUOTA_EXCEEDED\",\"someFutureField\":1}")
+                .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("failed"));
+    }
+
+    /** 칸 모양이 틀리면(글자 "true" 등) 꺼진 것으로 본다. 400으로 거절하면 일꾼이 같은 보고를 되풀이하다 실패 큐로 간다. */
+    @Test
+    void 주소가_없을_때만_칸_모양이_틀리면_꺼진_것이다() throws Exception {
+        볼_수_있다();
+        long id = 주문한_업로드();
+        일꾼(id, "start", "{}");
+        일꾼(id, "session", 주소_본문(주소1));
+        일꾼(id, "result", "{\"outcome\":\"FAILED\",\"errorCode\":\"YOUTUBE_REJECTED\",\"onlyIfNoSession\":\"true\"}")
+                .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("checking"));
+    }
+
     /** 🔴 일꾼의 오류 문장에 이어 올리기 주소가 섞여도 화면에는 안 나간다(PR #198 codex P1). 주소 모양 글자를 지워 저장한다. */
     @Test
     void 오류_문장_속_주소는_지워서_저장한다() throws Exception {

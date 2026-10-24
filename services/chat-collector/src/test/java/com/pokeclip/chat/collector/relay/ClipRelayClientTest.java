@@ -1,5 +1,7 @@
 package com.pokeclip.chat.collector.relay;
 
+import com.pokeclip.chat.collector.Platform;
+
 import ch.qos.logback.classic.Level;
 import com.pokeclip.chat.collector.ChatLogLeakTest;
 import com.pokeclip.chat.collector.link.LinkProperties;
@@ -151,19 +153,19 @@ class ClipRelayClientTest {
         assertThat(chat.has("id")).isFalse();
     }
 
-    /** POK-234 PR-C — 방송 정보는 공통 다섯 칸 + 제목·태그·카테고리·시청자 수. 시청자 수 null은 「못 찾음」 그대로. */
+    /** POK-234 PR-C — 방송 정보는 공통 다섯 칸 + 제목·태그·카테고리·시청자 수 + 플랫폼(POK-397). 시청자 수 null은 「못 찾음」 그대로. */
     @Test
     void 방송_정보_본문_모양() {
         clip.respondWith(200);
         Instant observed = Instant.parse("2026-09-03T15:01:00Z");
         List<RelayEvent> events = List.of(
-                new RelayEvent("s-1", 3, 7L, new RelayPayload.Info(observed, "제목\0", java.util.Arrays.asList("롤", null), "LoL", null)));
+                new RelayEvent("s-1", 3, 7L, new RelayPayload.Info(Platform.SOOP, observed, "제목\0", java.util.Arrays.asList("롤", null), "LoL", null)));
 
         assertThat(client().send("s-1", events)).isEqualTo(ClipRelayClient.Outcome.SENT);
 
         JsonNode info = clip.requests().getFirst().body().get("events").get(0);
         assertThat(fieldNames(info)).containsExactly("seq", "seqEpoch", "kind", "time", "timeBasis",
-                "title", "tags", "category", "viewers");
+                "title", "tags", "category", "viewers", "platform");
         assertThat(info.get("kind").asString()).isEqualTo("broadcast-info");
         assertThat(info.get("timeBasis").asString()).isEqualTo("observed");
         assertThat(info.get("time").asString()).isEqualTo("2026-09-03T15:01:00Z");
@@ -171,6 +173,7 @@ class ClipRelayClientTest {
         assertThat(info.get("tags").size()).as("null 태그는 뺀다").isEqualTo(1);
         assertThat(info.get("category").asString()).isEqualTo("LoL");
         assertThat(info.get("viewers").isNull()).isTrue();
+        assertThat(info.get("platform").asString()).as("화면이 플랫폼마다 숫자를 가른다(POK-397)").isEqualTo("SOOP");
     }
 
     /**

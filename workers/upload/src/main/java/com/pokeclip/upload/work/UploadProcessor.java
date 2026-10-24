@@ -27,7 +27,8 @@ import java.util.stream.Stream;
  * <ol>
  *   <li>바이트는 clip에 적힌 이어 올리기 주소 하나로만 보낸다. 새 주소를 받으면 clip에 적고 <b>clip이 돌려준 주소</b>(먼저 적힌 것)를 쓴다.</li>
  *   <li>보내기 전에 그 주소에 「어디까지 받았나」를 먼저 묻는다. 이미 다 받았으면(재배달·응답 유실) 영상 번호만 보고한다.</li>
- *   <li>{@code FAILED}는 <b>주소를 받기 전</b>의 실패에만 보낸다(바이트가 갈 곳이 없었으니 영상이 없다). 주소가 생긴 뒤 더 못 가면
+ *   <li>{@code FAILED}는 <b>주소를 받기 전</b>의 실패에만, 「주소가 없을 때만」으로 보낸다(바이트가 갈 곳이 없었으니 영상이 없다.
+ *       보내는 사이 주소가 생기면 clip이 그 주소를 돌려준다, POK-250). 주소가 생긴 뒤 더 못 가면
  *       주소에 물어 다 받았으면 올림, 아니면 {@code CHECKING}이다: 같은 주소로 다른 일꾼이 아직 올리는 중일 수 있어 「덜 받았다」도
  *       영상이 없다는 증거가 못 된다(PR #198 codex P1, clip도 같은 규칙으로 받는다). 모르면 쪽지를 남긴다.</li>
  * </ol>
@@ -143,18 +144,17 @@ public class UploadProcessor {
                 return retryLater();
             }
             if (session == null) {
-                // 🔴 실패 전에 다시 묻는다. 그사이 겹친 일꾼이 주소를 적었으면 실패가 그 주소로 이어 갈 길을 막는다(PR #199 codex 2판).
-                // 이 일꾼은 토큰이 없어 이을 수 없으니 쪽지를 남긴다. 그 일꾼이 끝내면 끝난 주문이 되고, 멈췄으면 다음 배달이 주소에 묻는다.
-                ClipUploadApi.Start again = clip.start(id);
-                if (!again.found() || !again.proceed()) {
-                    return Disposition.DELETE;
-                }
-                if (again.sessionUri() != null) {
-                    log.info("upload.session_appeared_while_unlinked uploadId={}", id);
-                    return retryLater();
-                }
-                clip.failed(id, code, message);
-                return Disposition.DELETE;
+                // 🔴 「주소가 없을 때만 실패」로 보낸다(POK-250). 그사이 겹친 일꾼이 주소를 적었으면 실패가 그 주소로 이어 갈 길을 막는다
+                // (PR #199 codex 2판). 판정은 clip이 줄 잠금 안에서 한 번에 한다: 다시 묻고 나서 실패하면 그 사이에 적힌 주소를 못 잡는다.
+                return switch (clip.failIfNoSession(id, code, message)) {
+                    case ClipUploadApi.FailOutcome.Failed f -> Disposition.DELETE;
+                    case ClipUploadApi.FailOutcome.Terminal t -> Disposition.DELETE;
+                    case ClipUploadApi.FailOutcome.SessionExists s -> {
+                        // 이 일꾼은 토큰이 없어 이을 수 없다. 그 일꾼이 끝내면 끝난 주문이 되고, 멈췄으면 다음 배달이 주소에 묻는다.
+                        log.info("upload.session_appeared_while_unlinked uploadId={}", id);
+                        yield retryLater();
+                    }
+                };
             }
         }
 
@@ -169,12 +169,28 @@ public class UploadProcessor {
 
         if (!token.valid()) {
             // 주소는 있는데 토큰이 없다: 이어 갈 수는 없지만 끝났는지는 물어 볼 수 있다.
-            return settleWithoutContinuing(job, file, session, null, size, false, code, message);
+            return settleWithoutContinuing(job, file, session, null, size, false, code, message, false);
         }
 
+        String access = token.accessToken();
+        // 🔴 강제 갱신(401 뒤 새 토큰)은 이 배달 전체에 한 번이다(POK-250). 자리마다 한 번이면 시작 · 조각 · 결론 내기를 돌며 끝없이 부른다.
+        // 썸네일은 자기 한 번을 따로 쓴다(ThumbnailStep): finish가 토큰 없이 부르면 썸네일이 resolve로 받은 토큰이 401일 때 한 번 더 갱신한다.
+        boolean refreshed = false;
         if (session == null) {
-            Start start = youtube.start(token.accessToken(), job.title(), job.description(), job.categoryId(),
+            Start start = youtube.start(access, job.title(), job.description(), job.categoryId(),
                     job.privacyStatus(), job.publishAt(), job.tags(), job.madeForKids(), size);
+            if (start instanceof Start.Unauthorized) {
+                log.warn("upload.start_unauthorized uploadId={}", id);
+                Token fresh = fresh(job, access);
+                refreshed = true;
+                if (!fresh.valid()) {
+                    return fresh.transientRefusal() ? retryLater()
+                            : failUnlessAdopted(job, null, file, size, "YOUTUBE_" + fresh.reason(), message, true);
+                }
+                access = fresh.accessToken();
+                start = youtube.start(access, job.title(), job.description(), job.categoryId(),
+                        job.privacyStatus(), job.publishAt(), job.tags(), job.madeForKids(), size);
+            }
             switch (start) {
                 case Start.Session s -> {
                     session = clip.session(id, s.uri());
@@ -184,16 +200,17 @@ public class UploadProcessor {
                     }
                 }
                 case Start.Quota q -> {
-                    return failUnlessAdopted(job, token.accessToken(), file, size, "QUOTA_EXCEEDED",
-                            "유튜브 하루 올리기 한도에 걸렸다(" + q.reason() + "). 내일 다시 올린다");
+                    return failUnlessAdopted(job, access, file, size, "QUOTA_EXCEEDED",
+                            "유튜브 하루 올리기 한도에 걸렸다(" + q.reason() + "). 내일 다시 올린다", refreshed);
                 }
                 case Start.Rejected r -> {
-                    return failUnlessAdopted(job, token.accessToken(), file, size, "YOUTUBE_REJECTED",
-                            "유튜브가 올리기를 거절했다: HTTP " + r.status() + " " + r.reason());
+                    return failUnlessAdopted(job, access, file, size, "YOUTUBE_REJECTED",
+                            "유튜브가 올리기를 거절했다: HTTP " + r.status() + " " + r.reason(), refreshed);
                 }
                 case Start.Unauthorized u -> {
-                    log.warn("upload.start_unauthorized uploadId={}", id);
-                    return retryLater();
+                    // 강제 갱신한 새 토큰도 401이다. 주소가 없으니 영상도 없다: 연동이 끊긴 것으로 실패한다(이 토큰으로는 못 잇는다).
+                    log.warn("upload.start_unauthorized_after_refresh uploadId={}", id);
+                    return failUnlessAdopted(job, null, file, size, "YOUTUBE_BROKEN", message, true);
                 }
                 case Start.Transient t -> {
                     log.warn("upload.start_transient uploadId={} what={}", id, t.what());
@@ -201,11 +218,20 @@ public class UploadProcessor {
                 }
             }
         }
-        return drive(job, session, token.accessToken(), file, size);
+        return drive(job, session, access, file, size, refreshed);
     }
 
-    /** 주소에 먼저 묻고, 덜 받았으면 그 자리부터 조각을 보낸다. 끊기면 다시 묻는다. */
-    private Disposition drive(UploadEnvelope job, String session, String token, Path file, long size) {
+    /** 401을 받은 토큰 대신 새 토큰(POK-250). 부르는 쪽이 배달에 한 번만 부른다. */
+    private Token fresh(UploadEnvelope job, String rejected) {
+        return auth.resolveAfterRejection(job.channelOwnerUserId(), rejected);
+    }
+
+    /**
+     * 주소에 먼저 묻고, 덜 받았으면 그 자리부터 조각을 보낸다. 끊기면 다시 묻는다.
+     *
+     * @param refreshed 이 배달에서 강제 갱신을 이미 썼다
+     */
+    private Disposition drive(UploadEnvelope job, String session, String token, Path file, long size, boolean refreshed) {
         long id = job.uploadId();
         int failures = 0;
         // 이 배달에서 바이트를 하나라도 보냈나. 안 보냈는데 끝났으면 지난 배달(또는 겹친 일꾼)이 영상을 끝낸 것이다(finish 주석).
@@ -238,9 +264,22 @@ public class UploadProcessor {
                     progress = youtube.status(session, token, size);
                 }
                 case Progress.Unauthorized u -> {
-                    // 올리는 도중 토큰이 끝났다. 다음 배달에 새 토큰으로 같은 주소를 잇는다.
-                    log.warn("upload.unauthorized_midway uploadId={}", id);
-                    return retryLater();
+                    // 올리는 도중 토큰이 끝났다(POK-250). 새 토큰으로 주소에 먼저 묻고 받은 데부터 잇는다. 이미 한 번 갱신했으면 이어 갈
+                    // 수 없다: 결론을 낸다. 401을 받은 토큰은 넘기지 않는다(주소 물음은 토큰 없이 묻는다).
+                    log.warn("upload.unauthorized_midway uploadId={} refreshed={}", id, refreshed);
+                    String reason = "유튜브가 토큰을 받지 않는다. 스트리머가 다시 연동해야 할 수 있다";
+                    if (refreshed) {
+                        return settleWithoutContinuing(job, file, session, null, size, sentBytes, "YOUTUBE_BROKEN", reason, true);
+                    }
+                    Token fresh = fresh(job, token);
+                    refreshed = true;
+                    if (!fresh.valid()) {
+                        return fresh.transientRefusal() ? retryLater()
+                                : settleWithoutContinuing(job, file, session, null, size, sentBytes,
+                                        "YOUTUBE_" + fresh.reason(), reason, true);
+                    }
+                    token = fresh.accessToken();
+                    progress = youtube.status(session, token, size);
                 }
                 case Progress.Gone g -> {
                     clip.checking(id, "SESSION_GONE", "유튜브 이어 올리기 주소가 사라졌다(HTTP " + g.status()
@@ -249,41 +288,55 @@ public class UploadProcessor {
                 }
                 case Progress.Rejected r -> {
                     return settleWithoutContinuing(job, file, session, token, size, sentBytes, "YOUTUBE_REJECTED",
-                            "유튜브가 바이트를 거절했다: HTTP " + r.status() + " " + r.reason());
+                            "유튜브가 바이트를 거절했다: HTTP " + r.status() + " " + r.reason(), refreshed);
                 }
             }
         }
     }
 
     /**
-     * 시작이 거절됐다. 🔴 실패를 보내기 전에 clip에 다시 묻는다: 이 일꾼이 시작을 청하는 사이 겹친 일꾼이 주소를 적어 두었으면
-     * 실패 보고는 그 주소로 이어 갈 길을 막는다(clip이 확인 중으로 닫고 쪽지가 지워진다, PR #199 codex). 적힌 주소가 있으면 그리로 잇는다.
+     * 시작이 거절됐다. 🔴 실패를 「주소가 없을 때만」으로 보낸다(POK-250): 이 일꾼이 시작을 청하는 사이 겹친 일꾼이 주소를 적어 두었으면
+     * 실패 보고는 그 주소로 이어 갈 길을 막는다(clip이 확인 중으로 닫고 쪽지가 지워진다, PR #199 codex). 그때 clip은 상태를 안 바꾸고
+     * 주소를 돌려주므로 그리로 잇는다. 토큰이 없으면 이을 수 없어 쪽지를 남긴다.
      */
     private Disposition failUnlessAdopted(UploadEnvelope job, String token, Path file, long size, String code,
-                                          String message) {
+                                          String message, boolean refreshed) {
         long id = job.uploadId();
-        ClipUploadApi.Start again = clip.start(id);
-        if (!again.found() || !again.proceed()) {
-            return Disposition.DELETE;
-        }
-        if (again.sessionUri() != null) {
-            log.info("upload.adopt_session uploadId={} after={}", id, code);
-            return drive(job, again.sessionUri(), token, file, size);
-        }
-        clip.failed(id, code, message);
-        return Disposition.DELETE;
+        return switch (clip.failIfNoSession(id, code, message)) {
+            case ClipUploadApi.FailOutcome.SessionExists s -> {
+                log.info("upload.adopt_session uploadId={} after={}", id, code);
+                yield token == null ? retryLater() : drive(job, s.sessionUri(), token, file, size, refreshed);
+            }
+            case ClipUploadApi.FailOutcome.Failed f -> Disposition.DELETE;
+            case ClipUploadApi.FailOutcome.Terminal t -> Disposition.DELETE;
+        };
     }
 
     /**
      * 주소가 생긴 뒤 더 보낼 수 없을 때 결론 내기. 주소에 물어 다 받았으면 올림, 아니면 확인 중(사람이 채널을 본다).
      * 🔴 실패로 닫지 않는다: 자리가 비면 다시 올리고, 같은 주소로 다른 일꾼이 끝내면 영상이 둘 뜬다.
+     *
+     * <p>토큰을 들고 물었는데 401이면(POK-250) 이 배달에서 강제 갱신을 아직 안 썼을 때만 새 토큰으로 한 번 더 묻는다.
+     *
+     * @param refreshed 이 배달에서 강제 갱신을 이미 썼다
      */
     private Disposition settleWithoutContinuing(UploadEnvelope job, Path file, String session, String token, long size,
-                                                boolean sentBytes, String code, String message) {
+                                                boolean sentBytes, String code, String message, boolean refreshed) {
         long id = job.uploadId();
         switch (youtube.status(session, token, size)) {
             case Progress.Done d -> {
                 return finish(job, d.videoId(), file, token, !sentBytes);
+            }
+            case Progress.Unauthorized u when token != null && !refreshed -> {
+                Token fresh = fresh(job, token);
+                if (fresh.valid()) {
+                    return settleWithoutContinuing(job, file, session, fresh.accessToken(), size, sentBytes, code, message, true);
+                }
+                if (fresh.transientRefusal()) {
+                    return retryLater();
+                }
+                // 처음 사유가 아니라 갱신 거절 사유로 남긴다(drive의 같은 자리와 같다): 사람이 「다시 연동」이 필요함을 알게.
+                clip.checking(id, "YOUTUBE_" + fresh.reason(), message + ". 끝났는지 확인하지 못했다");
             }
             case Progress.Incomplete inc -> clip.checking(id, code, message + ". 유튜브는 덜 받았다고 한다");
             case Progress.Transient t -> {

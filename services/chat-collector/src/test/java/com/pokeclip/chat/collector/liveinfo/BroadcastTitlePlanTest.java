@@ -49,6 +49,12 @@ class BroadcastTitlePlanTest extends IntegrationTestSupport {
         jdbc.update("""
                 INSERT INTO broadcast_info (stream_id, channel_id, observed_at, live_title, category)
                 VALUES (?, 'ch', ?, '마지막 제목', 'Talk')""", STREAM, Timestamp.from(START.plusSeconds(40_000L * 60)));
+        // SOOP을 처음 100분만 같이 내보낸 방송(POK-397). plan-bt-other에는 SOOP 줄이 없다: 색인에 플랫폼이 없으면 그 방송의 SOOP 탐색이
+        // 치지직 이력 전체를 훑는다(계획 검증 L9, 실측 Rows Removed 19,900)
+        jdbc.update("""
+                INSERT INTO broadcast_info (platform, stream_id, channel_id, observed_at, live_title, category)
+                SELECT 'SOOP', ?, 'su', ?::timestamptz + make_interval(mins => g), '숲 ' || g, 'Talk'
+                  FROM generate_series(0, 99) g""", STREAM, Timestamp.from(START));
         jdbc.execute("ANALYZE broadcast_info");
     }
 
@@ -73,5 +79,28 @@ class BroadcastTitlePlanTest extends IntegrationTestSupport {
         assertThat(text).as(text).doesNotContain("Seq Scan on broadcast_info");
         // 필터로 버린 행이 이력 크기만큼이면 색인을 범위로 안 쓰고 훑은 것이다
         assertThat(text).as(text).doesNotContain("Rows Removed by Filter: 19").doesNotContain("Rows Removed by Filter: 2");
+    }
+
+    /**
+     * 플랫폼별 최신(POK-397, {@link BroadcastInfoStore#LATEST_BY_PLATFORM})은 V317 색인 {@code (stream_id, platform, observed_at)}을 플랫폼까지
+     * 범위로 탄다. 이 색인이 없으면 기존 {@code (stream_id, observed_at)}으로 최신부터 훑으며 다른 플랫폼 줄을 필터로 버린다.
+     */
+    @Test
+    void 플랫폼별_최신은_플랫폼까지_색인으로_찾는다() {
+        List<String> plan = new ArrayList<>();
+        jdbc.query(con -> {
+            var ps = con.prepareStatement("EXPLAIN (ANALYZE, BUFFERS) " + BroadcastInfoStore.LATEST_BY_PLATFORM);
+            ps.setArray(1, con.createArrayOf("text", new String[] {STREAM, "plan-bt-other"}));
+            ps.setArray(2, con.createArrayOf("text", new String[] {"CHZZK", "SOOP"}));
+            return ps;
+        }, rs -> {
+            plan.add(rs.getString(1));
+        });
+        String text = String.join("\n", plan);
+
+        assertThat(text).as(text).contains("idx_broadcast_info_stream_platform_observed");
+        assertThat(text).as(text).doesNotContain("Seq Scan on broadcast_info");
+        // 필터로 버린 줄이 세 자리 이상이면 플랫폼을 범위로 안 쓰고 이력을 훑은 것이다
+        assertThat(text).as(text).doesNotContainPattern("Rows Removed by Filter: \\d{3,}");
     }
 }

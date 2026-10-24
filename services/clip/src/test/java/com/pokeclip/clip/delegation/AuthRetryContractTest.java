@@ -9,6 +9,10 @@ import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.boot.http.client.ClientHttpRequestFactoryBuilder;
 import org.springframework.http.client.HttpComponentsClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
+import tools.jackson.databind.ObjectMapper;
+
+import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -36,9 +40,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 class AuthRetryContractTest extends IntegrationTestSupport {
 
     private final RestClient.Builder 운영_빌더;
+    private final ClientHttpRequestFactoryBuilder<?> 운영_팩토리_빌더;
+    private final ObjectMapper mapper;
 
-    AuthRetryContractTest(RestClient.Builder restClientBuilder) {
+    AuthRetryContractTest(RestClient.Builder restClientBuilder, ClientHttpRequestFactoryBuilder<?> factoryBuilder,
+                          ObjectMapper mapper) {
         this.운영_빌더 = restClientBuilder;
+        this.운영_팩토리_빌더 = factoryBuilder;
+        this.mapper = mapper;
     }
 
     /**
@@ -86,6 +95,23 @@ class AuthRetryContractTest extends IntegrationTestSupport {
             clientFor(auth).accessible(42L);
 
             assertThat(auth.callCount()).isEqualTo(1);
+        }
+    }
+
+    /**
+     * 이름 창구(POK-430)도 목록 화면이 뜰 때마다 부른다. 이 클라이언트는 전용 시한 때문에 팩토리를 새로 짓는데, 그때 주입받은
+     * 팩토리 빌더가 아니라 {@code detect()}를 부르면 되걸기·리다이렉트가 되살아난다. 그 자리를 이 갈래와 아래 리다이렉트 갈래가 잰다.
+     */
+    @ParameterizedTest(name = "auth 상태={0}")
+    @ValueSource(ints = {401, 429, 500, 502, 503, 504})
+    void 이름_창구도_상태와_무관하게_한_번만_나간다(int status) {
+        try (FakeAuth auth = FakeAuth.start()) {
+            auth.respondWith(status, "");
+
+            Map<Long, ChannelNames> names = namesClientFor(auth).namesOf(List.of(42L));
+
+            assertThat(auth.callCount()).isEqualTo(1);
+            assertThat(names).isEmpty();
         }
     }
 
@@ -174,6 +200,32 @@ class AuthRetryContractTest extends IntegrationTestSupport {
             assertThat(답.available())
                     .as("리다이렉트가 가리킨 곳의 목록을 우리 목록으로 읽었다").isFalse();
         }
+    }
+
+    /** 이름 창구도 리다이렉트를 안 따라간다: 따라가면 열쇠가 새고, 도착지의 이름을 우리 이름으로 읽는다. */
+    @ParameterizedTest(name = "auth 상태={0}")
+    @ValueSource(ints = {301, 302, 303, 307, 308})
+    void 이름_창구도_리다이렉트를_따라가지_않는다(int status) {
+        try (FakeAuth 도착지 = FakeAuth.start(); FakeAuth 출발지 = FakeAuth.start()) {
+            도착지.respondWith(200, "{\"names\":{\"42\":{\"chzzk\":\"가짜 이름\",\"soop\":null}}}");
+            출발지.redirectTo(status, 도착지.baseUrl() + "/internal/streamer-channel-names");
+
+            Map<Long, ChannelNames> names = namesClientFor(출발지).namesOf(List.of(42L));
+
+            assertThat(출발지.callCount())
+                    .as("요청이 안 나갔다 — 아래 0은 「안 따라갔다」가 아니다").isEqualTo(1);
+            assertThat(도착지.callCount())
+                    .as("리다이렉트를 따라갔다 — 받은 토큰=%s 받은 본문=%s",
+                            도착지.lastToken(), 도착지.lastBody())
+                    .isZero();
+            assertThat(names).as("리다이렉트가 가리킨 곳의 이름을 우리 이름으로 읽었다").isEmpty();
+        }
+    }
+
+    private StreamerChannelNameClient namesClientFor(FakeAuth auth) {
+        return new StreamerChannelNameClient(운영_빌더, 운영_팩토리_빌더,
+                new AuthClientProperties(auth.baseUrl()),
+                new InternalApiProperties("internal-token-for-test"), mapper);
     }
 
     /**

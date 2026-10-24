@@ -130,9 +130,18 @@ next 이미지를 다시 빌드해야 합니다.
     auth · clip 에 `POSTGRES_PASSWORD` 가 오거나, auth 에
     `STREAM_KEY_RESOLVE_TOKEN` 이 오는데 `STREAM_KEY_RESOLVE_ALLOWED_CIDRS` 가
     비면 plan 이 멈춥니다.
-*   런타임 `app_env` 이름의 끝 토막이 `PASSWORD` · `SECRET` · `TOKEN` · `KEY`
-    등이면 plan 이 멈춥니다(평문 env 라 비밀은 `app_secret_arns` 로). 비밀이
-    아닌 그런 이름은 `app_env_non_secret_names` 에 적습니다.
+*   런타임 `app_env` 는 평문 env 라 비밀은 `app_secret_arns` 로 와야 합니다.
+    이름 어디에든 `PASSWORD` · `SECRET` · `TOKEN` · `KEY` 등이 들면 plan 이
+    멈춥니다 — 비밀이 아닌 그런 이름은 `app_env_non_secret_names` 에 적습니다.
+    이 목록으로도 풀리지 않는 검사가 넷 있습니다 — 이름 꼴(대문자 · 숫자 ·
+    `_`), 값 운반 이름(`SPRING_APPLICATION_JSON` · `JAVA_TOOL_OPTIONS` ·
+    `JDK_JAVA_OPTIONS` · `JAVA_OPTS`), URL 자격 증명(`user:pass@` ·
+    `<토큰>@`), 값에 비밀을 싣는 꼴(키에 `passw` · `pwd` · `secret` · `token`
+    이 든 쿼리 · 프래그먼트 매개변수 · 이름에 `secret` · `password` · `token`
+    이 든 `-D` 속성). 값 검사는 이 낱말만 봐서 `?api_key=` · `-Ddb.passwd=` 는
+    통과합니다 — 비밀은 검사에 기대지 말고 `app_secret_arns` 로 넘깁니다. 쿼리 ·
+    프래그먼트 속 `@` 도 자격 증명으로 보고 멈출 수 있습니다(알려진 오탐) — 그런 값도
+    `app_secret_arns` 로 옮깁니다.
 *   next 는 AWS 를 부르지 않아 작업 역할에 정책이 없습니다.
 
 ## 값과 적용

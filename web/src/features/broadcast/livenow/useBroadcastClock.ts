@@ -108,6 +108,7 @@ export function useBroadcastClock(streamId: string): BroadcastClock {
           relation: row.relation,
           originMs: ms(row.timelineOriginAt ?? null),
           listTitle: row.title?.trim() || null,
+          channelNames: row.channelNames ?? null,
         });
       } catch {
         /* 다음 주기에 다시 */

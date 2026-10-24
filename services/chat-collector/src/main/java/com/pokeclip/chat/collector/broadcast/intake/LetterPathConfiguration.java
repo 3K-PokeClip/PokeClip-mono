@@ -11,6 +11,7 @@ import com.pokeclip.chat.collector.broadcast.attach.StreamerSerialExecutor;
 import com.pokeclip.chat.collector.link.ChzzkLinkClient;
 import com.pokeclip.chat.collector.link.LinkProperties;
 import com.pokeclip.chat.collector.session.SessionRegistry;
+import com.pokeclip.chat.collector.soop.SoopWatch;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
@@ -88,8 +89,9 @@ public class LetterPathConfiguration {
      */
     @Bean
     public BroadcastEventProcessor broadcastEventProcessor(EndedStreamStore store, IngestKeyStore ingestKeys,
-                                                           BroadcastSessions sessions, StoppedStreamRecorder recorder) {
-        return new BroadcastEventProcessor(store, ingestKeys, sessions, recorder::record);
+                                                           BroadcastSessions sessions, StoppedStreamRecorder recorder,
+                                                           SoopWatch soop) {
+        return new BroadcastEventProcessor(store, ingestKeys, sessions, recorder::record, soop);
     }
 
     /** 편지 경로가 켜진 프로세스에서만 뜻이 있다 — 옛 경로는 등록부를 안 탄다. */

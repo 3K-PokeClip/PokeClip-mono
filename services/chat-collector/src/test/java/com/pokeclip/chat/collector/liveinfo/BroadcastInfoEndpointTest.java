@@ -77,8 +77,30 @@ class BroadcastInfoEndpointTest extends IntegrationTestSupport {
                 .contains("\"observedAt\":\"2026-09-03T15:01:00Z\"")
                 .contains("\"series\":[")
                 .as("추이는 오래된 것부터고 모르는 시청자 수는 null이다")
-                .contains("{\"observedAt\":\"2026-09-03T15:00:00Z\",\"viewers\":100}")
-                .contains("{\"observedAt\":\"2026-09-03T15:01:00Z\",\"viewers\":null}");
+                .contains("{\"observedAt\":\"2026-09-03T15:00:00Z\",\"viewers\":100,\"platform\":\"CHZZK\"}")
+                .contains("{\"observedAt\":\"2026-09-03T15:01:00Z\",\"viewers\":null,\"platform\":\"CHZZK\"}");
+    }
+
+    /**
+     * 같은 방송에 치지직·SOOP 줄이 있으면 {@code platforms}에 플랫폼마다 최신 값이 따로 나가고(POK-397), {@code latest}는 옛 모양
+     * 그대로 플랫폼과 무관한 최신 한 줄이다. 추이 줄마다 플랫폼이 실린다. 칸 이름은 clip·프론트와의 계약이라 글자로 못박는다.
+     */
+    @Test
+    void 플랫폼마다_최신_값과_추이_줄의_플랫폼을_준다() throws Exception {
+        store.insert(new BroadcastInfo(Platform.CHZZK, STREAM, "CH", T, "치지직 제목", List.of(), "LoL", 100));
+        store.insert(new BroadcastInfo(Platform.SOOP, STREAM, "SU", T.plusSeconds(60), null, List.of(), null, 8));
+
+        HttpResponse<String> response = 물어본다("since=" + T.minusSeconds(1), TOKEN);
+
+        assertThat(response.statusCode()).as(response.body()).isEqualTo(200);
+        assertThat(response.body())
+                .contains("\"latest\":{\"title\":null,\"tags\":[],\"category\":null,\"viewers\":8,"
+                        + "\"observedAt\":\"2026-09-03T15:01:00Z\"}")
+                .contains("\"platforms\":[{\"platform\":\"CHZZK\",\"title\":\"치지직 제목\",\"category\":\"LoL\","
+                        + "\"viewers\":100,\"observedAt\":\"2026-09-03T15:00:00Z\"},"
+                        + "{\"platform\":\"SOOP\",\"title\":null,\"category\":null,"
+                        + "\"viewers\":8,\"observedAt\":\"2026-09-03T15:01:00Z\"}]")
+                .contains("{\"observedAt\":\"2026-09-03T15:01:00Z\",\"viewers\":8,\"platform\":\"SOOP\"}");
     }
 
     /**
@@ -90,7 +112,7 @@ class BroadcastInfoEndpointTest extends IntegrationTestSupport {
         HttpResponse<String> response = 물어본다("since=" + T, TOKEN);
 
         assertThat(response.statusCode()).isEqualTo(200);
-        assertThat(response.body()).isEqualTo("{\"latest\":null,\"series\":[]}");
+        assertThat(response.body()).isEqualTo("{\"latest\":null,\"platforms\":[],\"series\":[]}");
     }
 
     /**
@@ -161,10 +183,31 @@ class BroadcastInfoEndpointTest extends IntegrationTestSupport {
                 .contains("\"api-bt-2\":{\"title\":\"제목2\",\"category\":null}")
                 .as("관측이 없는 방송은 키가 없다").doesNotContain("api-bt-none");
 
-        assertThat(제목을_묻는다("{}", TOKEN).body()).isEqualTo("{\"titles\":{}}");
+        assertThat(제목을_묻는다("{}", TOKEN).body()).isEqualTo("{\"titles\":{},\"platforms\":{}}");
 
         store.insert(new BroadcastInfo(Platform.CHZZK, "api-bt-a,b", "CH", T, "쉼표 방송", List.of(), null, null));
         assertThat(제목을_묻는다(본문(List.of("api-bt-a,b")), TOKEN).body()).contains("\"api-bt-a,b\":{\"title\":\"쉼표 방송\"");
+    }
+
+    /**
+     * {@code platforms}는 {@code titles}와 <b>나란히</b> 있다(POK-397, 계획 검증 M1). 제목이 없는 SOOP 방송도 시청자 수가 나가야 하는데
+     * {@code titles}는 제목 있는 방송만 키를 가진다. 옛 clip은 {@code titles}만 읽으므로 그 칸은 그대로다.
+     */
+    @Test
+    void 여러_방송의_플랫폼별_최신_값을_제목과_나란히_준다() throws Exception {
+        store.insert(new BroadcastInfo(Platform.CHZZK, "api-bt-1", "CH", T, "제목1", List.of(), "LoL", 3));
+        store.insert(new BroadcastInfo(Platform.SOOP, "api-bt-1", "SU", T.plusSeconds(60), "숲 제목", List.of(), null, 4));
+        store.insert(new BroadcastInfo(Platform.SOOP, "api-bt-2", "SU", T, null, List.of(), null, 9));
+
+        HttpResponse<String> response = 제목을_묻는다(본문(List.of("api-bt-1", "api-bt-2")), TOKEN);
+
+        assertThat(response.statusCode()).as(response.body()).isEqualTo(200);
+        assertThat(response.body()).isEqualTo("{\"titles\":{\"api-bt-1\":{\"title\":\"숲 제목\",\"category\":null}},"
+                + "\"platforms\":{\"api-bt-1\":["
+                + "{\"platform\":\"CHZZK\",\"title\":\"제목1\",\"category\":\"LoL\",\"viewers\":3,\"observedAt\":\"2026-09-03T15:00:00Z\"},"
+                + "{\"platform\":\"SOOP\",\"title\":\"숲 제목\",\"category\":null,\"viewers\":4,\"observedAt\":\"2026-09-03T15:01:00Z\"}],"
+                + "\"api-bt-2\":[{\"platform\":\"SOOP\",\"title\":null,\"category\":null,\"viewers\":9,"
+                + "\"observedAt\":\"2026-09-03T15:00:00Z\"}]}}");
     }
 
     /** 상한을 넘으면 잘라 주지 않고 400이다. 잘라 주면 부르는 쪽은 뒤 방송 제목이 「없다」로 보인다. 상한 그 자체는 통과(양성 대조). */

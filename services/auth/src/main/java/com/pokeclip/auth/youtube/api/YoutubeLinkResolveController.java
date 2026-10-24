@@ -30,7 +30,7 @@ public class YoutubeLinkResolveController {
 
     @PostMapping("/resolve")
     public YoutubeResolveResponse resolve(@Valid @RequestBody YoutubeResolveRequest request) {
-        YoutubeResolveResult result = service.resolve(request.userId());
+        YoutubeResolveResult result = service.resolve(request.userId(), request.rejectedTokenSha256());
         if (!result.valid()) {
             // WARN이 아닌 이유는 미연동 회원의 클립 생성이 정상 트래픽이기 때문이다 — 건수 알람을 걸 자리가 아니다.
             log.info("auth.youtube.link.resolve_rejected userId={} reason={}", request.userId(), result.reason());

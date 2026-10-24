@@ -7,6 +7,7 @@ import {
   CHAT_PAGE_MAX,
   LIVE_REREAD_MS,
   chatFingerprint,
+  donationLabel,
   type WireItem,
   type WirePage,
 } from './chatCollector';
@@ -174,7 +175,7 @@ function toPanel(it: WireItem): ChatPanelMessage {
       id: it.id,
       kind: 'donation',
       name,
-      amountLabel: `치즈 ${(it.amount ?? 0).toLocaleString()}`,
+      amountLabel: donationLabel(it.donationType, it.amount),
       text: it.text ?? '',
     };
   }
@@ -329,6 +330,7 @@ export function useChatPanelMockState(
         senderChannelId: ev.senderChannelId,
         text: ev.text,
         amount: ev.amount,
+        donationType: ev.donationType,
       };
       setRaw((prev) => {
         const k = chatFingerprint(item);

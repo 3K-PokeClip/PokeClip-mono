@@ -7,6 +7,7 @@ import { fetchSoopLink, type SoopLinkState } from '@/api/soopLink';
 import { fetchStreamKeyStatus } from '@/api/streamKeys';
 import { fetchYoutubeLink, type YoutubeLinkState } from '@/api/youtubeLink';
 import { broadcastTitle, platformLabel } from '@/api/clipEditor';
+import { onAirLabel, primaryInfo, type PlatformLatest } from '@/features/broadcast/platformView';
 import { ddayFor, isJustEnded } from '@/features/broadcast/vod/vodListView';
 import {
   fetchAllBroadcasts,
@@ -114,8 +115,11 @@ interface WireInfo {
     tags: string[];
     category: string | null;
     viewers?: number | null;
+    observedAt?: string | null;
   } | null;
-  series: unknown[];
+  /** 플랫폼마다 최신 값(POK-397). 옛 서버면 빠져 온다 */
+  platforms?: PlatformLatest[];
+  series: { observedAt: string; platform?: string | null }[];
 }
 interface WireMe {
   id: number | string;
@@ -295,21 +299,24 @@ async function loadHome(
       `/api/clip/broadcasts/${encodeURIComponent(liveBroadcast.streamId)}/broadcast-info`,
       signal,
     );
-    // 방송 정보 창구의 최신 관측이 먼저다(목록보다 늦게 바뀐 제목을 먼저 본다). 그 관측에 제목이 비면 목록 제목, 그것도 없으면 번호
-    const title = info?.latest?.title?.trim() || broadcastTitle(liveBroadcast);
+    // 방송 정보 창구의 최신 관측이 먼저다(목록보다 늦게 바뀐 제목을 먼저 본다). 그 관측에 제목이 비면 목록 제목, 그것도 없으면 번호.
+    // 관측은 대표 플랫폼 하나의 것이다: 둘 다 켤 수 있어 가장 새 관측을 그대로 쓰면 다른 플랫폼 값이 섞인다(POK-397)
+    const latest = info === null ? null : primaryInfo(info, now).latest;
+    const title = latest?.title?.trim() || broadcastTitle(liveBroadcast);
     const startedAt = liveBroadcast.startedAt;
     live = {
       streamId: liveBroadcast.streamId,
       title,
-      platform: platformLabel(liveBroadcast.platform),
+      // 켜진 플랫폼 태그(「치지직 · SOOP」). 방송 정보가 플랫폼마다 값을 주면 그것으로, 아니면 목록의 묶음, 그것도 없는 옛 서버면
+      // 목록의 플랫폼 하나다(POK-397)
+      platform:
+        onAirLabel(info?.platforms ?? liveBroadcast.platforms, now) ??
+        platformLabel(liveBroadcast.platform),
       editorsOnline: liveBroadcast.editorsOnline ?? null,
       startedNote: startedAt ? `${clockLabel(startedAt)} 시작` : '시작 시각 정보 없음',
       uptimeLabel: startedAt ? msToClock(now - Date.parse(startedAt)) : '--:--:--',
       // 수집기가 1분마다 채우는 시청자 수. 아직 없으면 null(「준비 중」)
-      viewers:
-        typeof info?.latest?.viewers === 'number'
-          ? info.latest.viewers.toLocaleString('ko-KR')
-          : null,
+      viewers: typeof latest?.viewers === 'number' ? latest.viewers.toLocaleString('ko-KR') : null,
       detectedCards: cardsByStream.get(liveBroadcast.streamId)?.length ?? 0,
       completedClips: null,
       thumbnailUrl: liveBroadcast.thumbnailUrl ?? null,

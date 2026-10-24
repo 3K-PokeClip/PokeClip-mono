@@ -167,6 +167,14 @@ describe('uploadFailureText — 지난 업로드가 실패한 편집본의 안�
     );
   });
 
+  it('주문줄에서 거듭 실패해 닫힌 업로드(SWEPT)는 코드명 없이 다시 올리라고 한다', () => {
+    const clip = toLibraryClip(entry('rendered', snapshot(failedUpload('SWEPT'))), '9');
+    // SWEPT 실패는 주소를 받기 전에만 생긴다(주소가 있으면 SWEPT_AFTER_SESSION 확인 필요). 그래서 「올라가지 않았다」고 말해도 된다
+    expect(uploadFailureText(clip)).toBe(
+      '올리는 중에 문제가 거듭 생겨 유튜브에 올리지 못했어요. 영상은 올라가지 않았으니 다시 올려 주세요.',
+    );
+  });
+
   it('모르는 코드도 코드를 보이고 다시 올리게 한다', () => {
     const clip = toLibraryClip(entry('rendered', snapshot(failedUpload('UNKNOWN'))), '9');
     expect(uploadFailureText(clip)).toBe('유튜브에 올리지 못했어요(UNKNOWN). 다시 올려 주세요.');

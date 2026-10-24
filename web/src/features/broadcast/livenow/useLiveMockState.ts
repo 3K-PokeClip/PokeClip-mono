@@ -4,11 +4,18 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ApiError, apiFetch } from '@/api/client';
 import { chzzkLinkQueryOptions } from '@/api/chzzkLink';
+import { soopLinkQueryOptions } from '@/api/soopLink';
 import { fetchAllJumpCards } from '@/api/clipEditor';
 import { useMe } from '@/features/auth/useSession';
 import { keepKnownThumbnail } from '@/features/thumbnail/thumbnailUrl';
 import { timeAgo } from '@/lib/timeAgo';
 import { endedWindowStart } from '@/features/broadcast/endedWindow';
+import {
+  onAirLabel,
+  primaryInfo,
+  withPlatformObservation,
+  type PlatformLatest,
+} from '@/features/broadcast/platformView';
 import { COLLECTOR_WINDOW_MS } from './chatCollector';
 import {
   emitRelay,
@@ -16,6 +23,7 @@ import {
   timeBaseOf,
   useLiveData,
   type LiveChart,
+  type LiveInfo,
   type LiveInfoScope,
   type RelayEvent,
 } from './liveDataStore';
@@ -105,20 +113,47 @@ interface Snapshot {
   thumbnailUrl?: string | null;
 }
 interface BroadcastInfoResponse {
+  /** 모든 플랫폼 중 가장 새 관측 하나. 화면은 이것 대신 대표 플랫폼의 값을 쓴다(toLiveInfo) */
   latest: {
     title: string | null;
     tags: string[];
     category: string | null;
     viewers?: number | null;
+    observedAt?: string | null;
   } | null;
+  /** 플랫폼마다 최신 값(POK-397). 옛 서버면 빠져 온다 */
+  platforms?: PlatformLatest[];
   /** category는 수집기가 관측마다 싣기 전엔 없다(지금은 latest에만 있다) — 오면 통계가 카테고리 구간을 나눈다 */
   series: InfoPoint[];
 }
-type InfoPoint = { observedAt: string; viewers: number | null; category?: string | null };
+/** platform은 그 점을 잰 플랫폼(POK-397). 두 플랫폼 점이 섞여 오고, 옛 서버면 빠져 온다 */
+type InfoPoint = {
+  observedAt: string;
+  viewers: number | null;
+  category?: string | null;
+  platform?: string | null;
+};
 /** chat-chart 응답 한 장. 어느 창을 읽었는지(scope)는 부른 쪽이 안다 */
 type ChartPage = Omit<LiveChart, 'scope'>;
 /** 받아 둔 방송 정보. 시청자 기록을 어느 창으로 읽었는지(scope)를 같이 둔다 */
 type LoadedInfo = BroadcastInfoResponse & { scope: LiveInfoScope };
+
+/**
+ * 화면(정보 바 · 통계)에 넘길 방송 정보: 대표 플랫폼 하나의 제목 · 카테고리 · 태그와 그 플랫폼의 시청자 기록(POK-397). 받은
+ * 그대로 넘기면 SOOP로만 켠 방송에 묶음에 남은 치지직 제목 · 시청자 수가 섞였다. 켜짐은 관측 시각으로 가르므로 받을 때마다 지금
+ * 시각으로 다시 고른다
+ */
+function toLiveInfo(loaded: LoadedInfo): LiveInfo {
+  const view = primaryInfo(loaded, Date.now());
+  return {
+    latest:
+      view.latest === null
+        ? null
+        : { title: view.latest.title, tags: view.latest.tags, category: view.latest.category },
+    series: view.series,
+    scope: loaded.scope,
+  };
+}
 
 const CHART_MINUTES = 10;
 const CHART_BUCKET = 30;
@@ -445,11 +480,13 @@ export function useLiveMockState(pastRoute: boolean): LiveMockState {
       if (page && stillCurrent(rg)) {
         let series = page.series;
         if (liveFrom !== null && rg.startedAt !== null && sinceMs !== null) {
-          // 받아 둔 앞 기록 + 이번 답. 겹친 구간은 관측 시각으로 하나만 두고, 12시간 꼬리 밖으로 밀려난 점은 버린다
+          // 받아 둔 앞 기록 + 이번 답. 겹친 구간은 플랫폼 · 관측 시각으로 하나만 두고, 12시간 꼬리 밖으로 밀려난 점은 버린다.
+          // 플랫폼까지 키에 넣는다: 두 플랫폼을 같은 시각에 잰 점이 서로를 지웠다(POK-397 로컬 리뷰)
           const byTime = new Map<string, InfoPoint>();
+          const keyOf = (p: InfoPoint) => `${p.platform ?? ''}|${p.observedAt}`;
           for (const p of kept?.series ?? [])
-            if (Date.parse(p.observedAt) <= sinceMs) byTime.set(p.observedAt, p);
-          for (const p of page.series) byTime.set(p.observedAt, p);
+            if (Date.parse(p.observedAt) <= sinceMs) byTime.set(keyOf(p), p);
+          for (const p of page.series) byTime.set(keyOf(p), p);
           series = [...byTime.values()]
             .filter((p) => Date.parse(p.observedAt) >= liveFrom)
             .sort((a, b) => Date.parse(a.observedAt) - Date.parse(b.observedAt));
@@ -461,7 +498,7 @@ export function useLiveMockState(pastRoute: boolean): LiveMockState {
           scope: sinceMs === null ? 'recent' : 'broadcast',
         };
         setInfo(loaded);
-        publishLiveData({ info: loaded });
+        publishLiveData({ info: toLiveInfo(loaded) });
         if (sinceMs !== null && rg.status === 'ended') infoDoneFor = settledKey(rg, askedAt);
       }
     };
@@ -519,6 +556,8 @@ export function useLiveMockState(pastRoute: boolean): LiveMockState {
                   tags: string[];
                   category: string | null;
                   viewers: number | null;
+                  /** 이 관측을 잰 플랫폼(POK-397). 옛 서버면 빠져 온다 */
+                  platform?: string | null;
                 };
                 setInfo((prev) => {
                   // 통로는 방송 중에만 온다. 기록은 받아 둔 창 그대로 이어 붙인다: 끝난 뒤 늦게 온 이벤트가 방송 창 기록을
@@ -530,13 +569,16 @@ export function useLiveMockState(pastRoute: boolean): LiveMockState {
                       tags: ev.tags ?? [],
                       category: ev.category,
                       viewers: ev.viewers,
+                      observedAt: ev.time,
                     },
+                    platforms: withPlatformObservation(prev?.platforms, ev),
+                    // 점마다 플랫폼을 남긴다: 버리면 두 플랫폼 숫자가 한 그래프에 섞인다(POK-397)
                     series: [
                       ...(prev?.series ?? []),
-                      { observedAt: ev.time, viewers: ev.viewers },
+                      { observedAt: ev.time, viewers: ev.viewers, platform: ev.platform },
                     ].slice(-720),
                   };
-                  publishLiveData({ info: next });
+                  publishLiveData({ info: toLiveInfo(next) });
                   return next;
                 });
               } catch {
@@ -604,21 +646,34 @@ export function useLiveMockState(pastRoute: boolean): LiveMockState {
   }, [cards, now, base]);
 
   const { data: chzzk } = useQuery(chzzkLinkQueryOptions);
+  const { data: soop } = useQuery(soopLinkQueryOptions);
   const { data: me } = useMe();
-  // 채널 이름은 내 방송일 때만 내 치지직 연동에서 읽는다. 위임받은 방송(EDITOR)은 방송 줄에 스트리머 채널이
-  // 실려 오지 않아 비운다 — 내 채널 이름을 남의 방송에 붙이면 거짓이다(POK-251 리뷰)
-  const channelName = live.relation === 'OWNER' ? (chzzk?.channelName ?? '') : '';
+  // 화면이 그릴 방송 정보는 대표 플랫폼 하나의 것이다(POK-397). 받을 때 고른 것을 쓰지 않고 여기서 다시 고르는 것은 이 값이
+  // info와 같은 렌더에 서야 해서다(저장소 값은 효과 뒤에 온다). 켜짐 판정은 info가 바뀔 때만 다시 한다: 방송 중에는 관측이
+  // 1분마다 오고(통로 · 정기 조회), 끝난 방송은 마지막 관측 기준이라 지금 시각에 기대지 않는다(PR #368 claude)
+  const view = useMemo(() => (info === null ? null : primaryInfo(info, Date.now())), [info]);
+  // 채널 이름은 대표 플랫폼의 것이다(치지직 채널 이름 · SOOP 닉네임, POK-397). 플랫폼 값이 없는 옛 서버면 치지직이다. 내 방송은 내
+  // 연동에서, 위임받은 방송(EDITOR)은 방송 줄에 실려 온 스트리머 이름에서 읽는다(POK-430). 내 채널 이름을 남의 방송에 붙이면 거짓이라
+  // (POK-251 리뷰) 줄에 이름이 없으면(옛 서버 · 연동 없음) 비운다
+  const soopLead = view?.platform === 'SOOP';
+  const channelName =
+    live.relation === 'OWNER'
+      ? ((soopLead ? soop?.nickname : chzzk?.channelName) ?? '')
+      : live.relation === 'EDITOR'
+        ? ((soopLead ? live.channelNames?.SOOP : live.channelNames?.CHZZK) ?? '')
+        : '';
   const myName = me?.name ?? '';
   const stream = useMemo<LiveStream>(
     () => ({
       // 방송 정보 관측의 제목이 먼저고, 그 관측에 제목이 비면 목록 제목(POK-259), 그것도 없으면 방송 번호
       title:
-        info?.latest?.title?.trim() ||
+        view?.latest?.title?.trim() ||
         live.listTitle ||
         // 지난 방송 주소는 방송 번호를 정하기 전에도 라이브 안내(「방송 중인 채널이 없어요」)를 쓰지 않는다(리뷰 3라운드)
         streamId ||
         (pastRoute ? '지난 방송' : '방송 중인 채널이 없어요'),
-      platform: '치지직',
+      // 정보 바는 이 칸을 그리지 않는다(플랫폼 태그는 홈 라이브 띠에만 있다). 방송 정보가 아직 없으면 빈 값이다
+      platform: onAirLabel(info?.platforms, Date.now()) ?? '',
       channelName,
       startedNote: !streamId
         ? '방송을 시작하면 자동으로 나타나요'
@@ -630,13 +685,13 @@ export function useLiveMockState(pastRoute: boolean): LiveMockState {
       uptimeSeconds: 0,
       uptimeLabel: '0:00:00',
       viewers: (() => {
-        const lastPt = info?.series?.length ? info.series[info.series.length - 1] : undefined;
+        const lastPt = view?.series.length ? view.series[view.series.length - 1] : undefined;
         const v = lastPt ? lastPt.viewers : null;
         return v === null || v === undefined ? '-' : String(v);
       })(),
       editorName: myName,
     }),
-    [streamId, sseOk, info, live.status, live.listTitle, channelName, myName, pastRoute],
+    [streamId, sseOk, info, view, live.status, live.listTitle, channelName, myName, pastRoute],
   );
 
   const mergeCard = useCallback((card: Snapshot) => {

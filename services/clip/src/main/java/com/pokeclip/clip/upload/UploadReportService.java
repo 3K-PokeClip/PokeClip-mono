@@ -135,6 +135,16 @@ public class UploadReportService {
      */
     public Reply result(long uploadId, String outcome, String videoId, String errorCode, String errorMessage,
                         String thumbnailOutcome, String thumbnailErrorCode) {
+        return result(uploadId, outcome, videoId, errorCode, errorMessage, thumbnailOutcome, thumbnailErrorCode, false);
+    }
+
+    /**
+     * {@code onlyIfNoSession}(POK-250): 「주소가 없을 때만 실패」. 일꾼이 실패를 보내는 순간 겹친 일꾼이 주소를 적었으면, 실패를
+     * 확인 중으로 받는 대신 상태를 안 바꾸고 409 {@code SESSION_EXISTS}와 그 주소를 돌려준다. 일꾼은 그 주소로 이어 올린다
+     * (확인 중으로 받으면 일꾼이 쪽지를 지워 아무도 그 주소를 잇지 않는다). {@code FAILED}일 때만 뜻이 있다.
+     */
+    public Reply result(long uploadId, String outcome, String videoId, String errorCode, String errorMessage,
+                        String thumbnailOutcome, String thumbnailErrorCode, boolean onlyIfNoSession) {
         UploadStatus target = switch (outcome == null ? "" : outcome) {
             case "UPLOADED" -> UploadStatus.UPLOADED;
             case "FAILED" -> UploadStatus.FAILED;
@@ -157,7 +167,10 @@ public class UploadReportService {
             ClipUpload upload = uploads.findByIdForUpdate(uploadId).orElseThrow(() -> new UploadNotFoundException(uploadId));
             UploadStatus current = upload.getStatus();
             // 주소가 있으면 실패 보고는 확인 중으로 받는다(클래스 주석). 판정 전에 바꿔야 같은 보고의 재전송이 200이다(PR #198 codex 2판).
-            UploadStatus effective = target == UploadStatus.FAILED && upload.getSessionUri() != null
+            // 「주소가 없을 때만 실패」는 바꾸지 않는다: 바꾸면 이미 확인 중인 줄에 온 이 보고가 「같은 보고」로 200을 받고, 일꾼은
+            // 실패로 닫혔다고 읽는다. 바꾸지 않으면 그 줄은 아래 settled 판정에서 TERMINAL이다.
+            boolean guarded = onlyIfNoSession && target == UploadStatus.FAILED;
+            UploadStatus effective = !guarded && target == UploadStatus.FAILED && upload.getSessionUri() != null
                     ? UploadStatus.CHECKING : target;
             if (current == UploadStatus.CHECKING && effective == UploadStatus.UPLOADED) {
                 // 확인 중이던 것에 늦은 올림 보고가 왔다: 채널에 영상이 있다는 확정이다.
@@ -192,6 +205,11 @@ public class UploadReportService {
             if (current != UploadStatus.UPLOADING) {
                 return conflict("NOT_STARTED");
             }
+            if (guarded && upload.getSessionUri() != null) {
+                // 실패를 보내는 사이 겹친 일꾼이 주소를 적었다. 주소는 안 찍는다(올리기 권한이다).
+                log.info("clip.upload.failed_refused_session_exists uploadId={} code={}", uploadId, errorCode);
+                return sessionExists(upload.getSessionUri());
+            }
             if (effective != target) {
                 // 다른 일꾼이 같은 주소로 아직 올리는 중일 수 있다. 자리를 비우지 않는다.
                 log.warn("clip.upload.failed_with_session_held uploadId={} code={}", uploadId, errorCode);
@@ -223,6 +241,14 @@ public class UploadReportService {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("status", upload.getStatus().dbValue());
         return new Reply(200, body);
+    }
+
+    /** 일꾼 문이라 주소를 줘도 된다: {@link #start}도 같은 주소를 준다. */
+    private static Reply sessionExists(String sessionUri) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("reason", "SESSION_EXISTS");
+        body.put("sessionUri", sessionUri);
+        return new Reply(409, body);
     }
 
     private static Reply conflict(String reason) {

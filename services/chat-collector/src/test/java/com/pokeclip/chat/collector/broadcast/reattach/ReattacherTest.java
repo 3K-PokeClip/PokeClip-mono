@@ -919,6 +919,139 @@ class ReattacherTest extends IntegrationTestSupport {
         assertThat(registry.activeStreamIds()).contains(A001);
     }
 
+    // ── SOOP 지켜보기(POK-397) ──
+
+    /** 지켜보기에 들어간 것을 적는 가짜. */
+    private static final class RecordingWatch implements com.pokeclip.chat.collector.soop.SoopWatch {
+        final List<String> watched = new java.util.concurrent.CopyOnWriteArrayList<>();
+        final List<String> retained = new java.util.concurrent.CopyOnWriteArrayList<>();
+
+        @Override
+        public void watch(String streamId, long streamerId, Instant startedAt) {
+            watched.add(streamId + ":" + streamerId + ":" + startedAt);
+        }
+
+        @Override
+        public void unwatch(String streamId) {
+        }
+
+        @Override
+        public void unwatchChannel(Platform platform, String channelId, Instant startedBefore) {
+        }
+
+        @Override
+        public void retainListed(java.util.Set<String> listedStreamIds, Instant startedBefore) {
+            retained.add(new java.util.TreeSet<>(listedStreamIds) + "@" + startedBefore);
+        }
+    }
+
+    /**
+     * 명부의 <b>모든</b> 읽을 수 있는 줄을 지켜보기에 넣는다(계획 검증 M4). 치지직이 이미 붙어 있거나(SOOP을 못 넣은 채 붙은 방송이 재부착
+     * 후보에서 빠지면 영영 안 들어온다) 치지직 포기 메모가 있어도 넣는다. 종료 메모가 있는 방송만 뺀다. 시각이 없으면 EPOCH다.
+     */
+    @Test
+    @Timeout(30)
+    void 명부의_읽을_수_있는_줄은_치지직과_무관하게_지켜보기에_넣는다() {
+        열어둔다(A001, 7L, 시작);
+        store.remember(A999, 3, 시작);
+        store.rememberStopped(C001, "LINK_UNAVAILABLE", 시작);
+        returnsIncludingNullRow(live(A001, "7", 시작), live(A999, "1", 시작), live(B001, "2", null),
+                live(C001, "9", 시작), live(null, "3", 시작), null, live("live-R-X", "숫자아님", 시작));
+        RecordingWatch soop = new RecordingWatch();
+
+        new Reattacher(client, registry, store, measurer, lanes, sessions, () -> 지금, null, soop).sweep();
+        // 🔴 줄에 들어간 치지직 붙이기가 끝나기를 기다린다. 안 기다리면 정리(tearDown)가 붙는 중인 세션과 겹쳐 가짜 치지직이 다음 시험까지
+        // 연결을 남기고, 뒤 시험이 줄줄이 깨진다(실제로 아홉 개가 깨졌다).
+        assertThat(lanes.awaitIdle(IDLE_BUDGET)).isTrue();
+
+        assertThat(soop.watched).containsExactly(A001 + ":7:" + 시작, B001 + ":2:" + Instant.EPOCH, C001 + ":9:" + 시작);
+    }
+
+    /**
+     * 감사 2회차 n5: 넣기 직전에 그 방송의 종료 메모를 다시 본다. 회차 처음의 메모 묶음 조회와 넣기 사이에 종료 편지가 메모를 쓰고 지켜보기를
+     * 빼면, 묶음 조회만 믿은 넣기가 끝난 방송을 다시 넣는다. 묶음 조회가 낡은 것(메모 없음)을 돌려주게 해서 그 순서를 만든다.
+     */
+    @Test
+    @Timeout(30)
+    void 넣기_직전에_종료_메모를_다시_본다() {
+        store.remember(B001, 3, 시작);
+        Thread sweeper = Thread.currentThread();
+        java.util.concurrent.atomic.AtomicInteger findAllCalls = new java.util.concurrent.atomic.AtomicInteger();
+        java.util.concurrent.atomic.AtomicInteger singleFindsOnSweeper = new java.util.concurrent.atomic.AtomicInteger();
+        EndedStreamStore stale = new EndedStreamStore(jdbc) {
+            /** 첫 묶음 조회(회차 처음)만 낡은 값(메모 없음)을 준다. 그 뒤 종료 편지가 메모를 쓴 순서를 만든다. */
+            @Override
+            public Map<String, EndedStream> findAll(java.util.Collection<String> streamIds) {
+                return findAllCalls.incrementAndGet() == 1 ? Map.of() : super.findAll(streamIds);
+            }
+
+            @Override
+            public Optional<EndedStream> find(String streamId) {
+                if (Thread.currentThread() == sweeper) {
+                    singleFindsOnSweeper.incrementAndGet();
+                }
+                return super.find(streamId);
+            }
+        };
+        returns(live(B001, "2", 시작), live(A001, "7", 시작), live(A999, "1", 시작));
+        RecordingWatch soop = new RecordingWatch();
+
+        new Reattacher(client, registry, stale, measurer, lanes, sessions, () -> 지금, null, soop).sweep();
+        assertThat(lanes.awaitIdle(IDLE_BUDGET)).isTrue();
+
+        assertThat(soop.watched).containsExactly(A001 + ":7:" + 시작, A999 + ":1:" + 시작);
+        // 후보가 셋이어도 다시 보기는 묶음 조회 한 번이다(회차 처음 한 번 + 넣기 직전 한 번). 명부 줄마다 낱개로 묻지 않는다.
+        assertThat(findAllCalls.get()).isEqualTo(2);
+        assertThat(singleFindsOnSweeper.get()).as("회차 스레드의 낱개 조회 0(줄 안의 붙이기 재확인은 따로다)").isZero();
+    }
+
+    /**
+     * 메모 묶음 조회 범위(PR #363 봇): SOOP 지켜보기가 꺼져 있으면(기본) 옛 범위 그대로 <b>후보</b>(안 붙은 방송)만 묻는다. 켜져 있으면 지켜보기에
+     * 넣을 줄까지 보므로 읽을 수 있는 줄 전부를 묻는다. 꺼진 배포에서 붙은 방송 수만큼 조회가 커지지 않게 한다.
+     */
+    @Test
+    @Timeout(30)
+    void 지켜보기가_꺼지면_메모는_후보만_묻고_켜지면_읽을_수_있는_줄_전부를_묻는다() {
+        열어둔다(A001, 7L, 시작);
+        List<List<String>> asked = new CopyOnWriteArrayList<>();
+        EndedStreamStore counting = new EndedStreamStore(jdbc) {
+            @Override
+            public Map<String, EndedStream> findAll(java.util.Collection<String> streamIds) {
+                asked.add(List.copyOf(streamIds));
+                return super.findAll(streamIds);
+            }
+        };
+        returns(live(A001, "7", 시작), live(B001, "2", 시작));
+
+        new Reattacher(client, registry, counting, measurer, lanes, sessions, () -> 지금, null,
+                com.pokeclip.chat.collector.soop.SoopWatch.NONE).sweep();
+        assertThat(lanes.awaitIdle(IDLE_BUDGET)).isTrue();
+        assertThat(asked).as("꺼짐: 붙은 A001은 안 묻는다").containsExactly(List.of(B001));
+
+        asked.clear();
+        new Reattacher(client, registry, counting, measurer, lanes, sessions, () -> 지금, null, new RecordingWatch()).sweep();
+        assertThat(lanes.awaitIdle(IDLE_BUDGET)).isTrue();
+        assertThat(asked.getFirst()).as("켜짐: 읽을 수 있는 줄 전부").containsExactly(A001, B001);
+    }
+
+    /** 떼기 갈래가 도는 회차(명부가 온전)에만 명부에 없는 지켜보기를 치운다. 잘린 명부에서는 안 치운다(살아 있는 방송이 사라진 것으로 보인다). */
+    @Test
+    @Timeout(30)
+    void 떼기_회차에만_명부에_없는_지켜보기를_치운다() {
+        RecordingWatch soop = new RecordingWatch();
+        returns(live(B001, "2", 시작));
+
+        new Reattacher(client, registry, store, measurer, lanes, sessions, () -> 지금, Duration.ofMinutes(5), soop).sweep();
+        assertThat(lanes.awaitIdle(IDLE_BUDGET)).isTrue();
+        assertThat(soop.retained).containsExactly("[" + B001 + "]@" + 지금.minus(Duration.ofMinutes(5)));
+
+        given(client.list()).willReturn(new LiveBroadcasts(List.of(live(B001, "2", 시작)), true));
+        new Reattacher(client, registry, store, measurer, lanes, sessions, () -> 지금, Duration.ofMinutes(5), soop).sweep();
+        new Reattacher(client, registry, store, measurer, lanes, sessions, () -> 지금, null, soop).sweep();
+        assertThat(lanes.awaitIdle(IDLE_BUDGET)).isTrue();
+        assertThat(soop.retained).as("잘린 명부·떼기 꺼짐은 안 치운다").hasSize(1);
+    }
+
     // ── 조립 ─────────────────────────────────────────────────────────────
 
     private Reattacher newReattacher(StreamerSerialExecutor executor) {

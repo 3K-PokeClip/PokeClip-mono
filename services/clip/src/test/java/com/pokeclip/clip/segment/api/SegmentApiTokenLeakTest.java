@@ -144,7 +144,13 @@ class SegmentApiTokenLeakTest extends IntegrationTestSupport {
 
             // ① 톰캣이 지금도 찍는다. 이 단언이 빨간불이면 톰캣이 조용해진 것이고,
             //    그때는 yml의 그 줄이 아직 필요한지 다시 본다 — 지우라는 신호가 아니다.
-            assertThat(톰캣_기록.stream().map(SegmentApiTokenLeakTest::본문).toList())
+            // 🔴 잠그고 복사한 뒤 훑는다(POK-426). synchronizedList의 stream()은 잠그지 않아, 응답을 보낸 뒤에도 톰캣 스레드가
+            // 이 잎에 기록을 더하는 순간 ConcurrentModificationException이 났다(PR #350 CI 첫 실행).
+            List<LogRecord> 톰캣_기록_사본;
+            synchronized (톰캣_기록) {
+                톰캣_기록_사본 = new ArrayList<>(톰캣_기록);
+            }
+            assertThat(톰캣_기록_사본.stream().map(SegmentApiTokenLeakTest::본문).toList())
                     .as("톰캣이 " + RECEIVED_LOGGER + "로 요청 헤더를 안 찍는다 — ②가 재는 대상이 사라졌다")
                     .anyMatch(m -> m.contains("Authorization") && m.contains(토큰));
 

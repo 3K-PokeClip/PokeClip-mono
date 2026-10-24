@@ -83,8 +83,50 @@ public class ClipUploadApi {
         result(uploadId, "UPLOADED", body);
     }
 
-    public void failed(long uploadId, String code, String message) {
-        result(uploadId, "FAILED", error(code, message));
+    /** {@link #failIfNoSession}의 답 셋. */
+    public sealed interface FailOutcome {
+        /** 실패로 닫혔다(주소가 없었다). */
+        record Failed() implements FailOutcome {
+        }
+
+        /** 그사이 겹친 일꾼이 주소를 적었다. 상태는 그대로이고 이 주소로 이어 갈 수 있다. */
+        record SessionExists(String sessionUri) implements FailOutcome {
+        }
+
+        /** 이미 끝난 주문이다(409 그 밖 · 404 주문 없음, 또는 칸을 모르는 옛 clip이 확인 중으로 받았다). */
+        record Terminal() implements FailOutcome {
+        }
+    }
+
+    /**
+     * 「주소가 없을 때만 실패」(POK-250). 실패를 보내는 순간 겹친 일꾼이 주소를 적었으면 clip은 상태를 안 바꾸고 그 주소를 돌려준다.
+     * 실패 전에 clip에 다시 묻던 옛 방식은 그 물음과 실패 사이에 적힌 주소를 못 잡았다: 판정을 clip의 잠금 안 한 번으로 옮겼다.
+     *
+     * <p>🔴 칸을 모르는 옛 clip은 주소 있는 줄의 실패를 200 {@code checking}으로 받는다. 그것은 {@link FailOutcome.Terminal}로 본다:
+     * 실패로 닫혔다고 읽으면 안 된다(주소가 있는 줄이다). 쪽지를 지우는 결과는 지금 결함과 같아 넓어지지 않는다(배포 순서 clip 먼저).
+     *
+     * @throws com.pokeclip.upload.work.Unavailable clip이 답을 안 준다
+     */
+    public FailOutcome failIfNoSession(long uploadId, String code, String message) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("outcome", "FAILED");
+        body.putAll(error(code, message));
+        body.put("onlyIfNoSession", true);
+        Reply reply = http.post(url(uploadId, "result"), body);
+        if (reply.status() == 404) {
+            // 주문이 지워졌다(탈퇴 정리 등). start의 404와 같이 끝난 주문으로 본다: 다시 해도 같다.
+            return new FailOutcome.Terminal();
+        }
+        if (reply.status() == 409) {
+            String uri = reply.body() == null ? null : reply.body().path("sessionUri").asString(null);
+            if (reply.body() != null && "SESSION_EXISTS".equals(reply.body().path("reason").asString(null)) && uri != null) {
+                return new FailOutcome.SessionExists(uri);
+            }
+            return new FailOutcome.Terminal();
+        }
+        requireOk(reply, "result");
+        return "checking".equals(reply.body().path("status").asString(null))
+                ? new FailOutcome.Terminal() : new FailOutcome.Failed();
     }
 
     public void checking(long uploadId, String code, String message) {

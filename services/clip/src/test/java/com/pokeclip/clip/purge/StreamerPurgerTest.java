@@ -58,7 +58,9 @@ class StreamerPurgerTest extends IntegrationTestSupport {
         store.request(탈퇴자, Instant.now());
         purger(files).purge(탈퇴자);
 
-        for (String table : List.of("broadcasts", "jump_cards", "recipes", "clips", "broadcast_events")) {
+        // 플랫폼 묶음(POK-397)은 방송 FK의 CASCADE로 같이 지워진다: 정리 코드에 따로 줄이 없다.
+        for (String table : List.of("broadcasts", "jump_cards", "recipes", "clips", "broadcast_events",
+                "broadcast_platforms")) {
             assertThat(count(table + " WHERE stream_id = 'S-gone'")).as(table).isZero();
             assertThat(count(table + " WHERE stream_id = 'S-kept'")).as(table).isOne();
         }
@@ -257,11 +259,13 @@ class StreamerPurgerTest extends IntegrationTestSupport {
     private record Seeded(long clipId, long cardId, long recipeId) {
     }
 
-    /** 방송 하나에 딸린 표 열을 한 줄씩(카드 행동 기록·렌더 보고 기록·업로드·업로드 의도·사진 셋·녹화 조각 둘·회차 머리 하나). */
+    /** 방송 하나에 딸린 표 열하나를 한 줄씩(플랫폼 묶음·카드 행동 기록·렌더 보고 기록·업로드·업로드 의도·사진 셋·녹화 조각 둘·회차 머리 하나). */
     private Seeded 심는다(String streamerId, String streamId, String ingestKey) {
         방송(streamerId, streamId, ingestKey);
         jdbc.update("INSERT INTO broadcast_events (event_id, stream_id, event_type, sequence_no, processed_at) "
                 + "VALUES (?, ?, 'BROADCAST_STARTED', 1, now())", "evt-" + streamId, streamId);
+        jdbc.update("INSERT INTO broadcast_platforms (stream_id, platform, first_seen_at, last_seen_at) "
+                + "VALUES (?, 'SOOP', now(), now())", streamId);
         long cardId = jdbc.queryForObject("""
                 INSERT INTO jump_cards (stream_id, source, event_id, stream_timestamp_ms, window_start_ms, window_end_ms, score, event_seq)
                 VALUES (?, 'auto', ?, 1000, 500, 1500, 5, 0) RETURNING id""", Long.class, streamId, "card-" + streamId);
