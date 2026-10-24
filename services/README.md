@@ -956,15 +956,12 @@ SELECT pg_catalog.pg_database_size(pg_catalog.current_database());
 끊긴 뒤 데몬이 늦게 시작한 이전도 옛 컨테이너가 뜬 뒤에 자료를 바꾸지 못한다.
 울타리를 못 만들면 판정 불가로 친다. 울타리 이름은 실행마다 달라 다음 배포는
 앞 울타리를 지우지도 보지도 않는다 — 그래서 실패 하나마다 빈 스키마 하나가 dev
-DB 에 남는다(public 밖이라 이전 · 역이전 SQL 이 보지 않아 해가 없다). 지우는
-것은 **상태 불명 표지가 가리키지 않는, 오래된 실행의 울타리만**이다 — 그
-실행의 밀린 이전이 없음을 확인한 뒤(아래 확인 2 · 3) 손으로 지운다. 표지가
-가리키는 실행의 울타리는 지우지 않는다(아래). `CASCADE` 없이 지우므로 빈
-스키마가 아니면 실패한다.
-
-```sh
-sudo -u ec2-user docker compose -f docker-compose.dev.yml exec -T postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "DROP SCHEMA pokeclip_move_fence_<식별자>"'
-```
+DB 에 남는다. **울타리는 손으로도 지우지 않는다.** 빈 스키마이고 public 밖이라
+이전 · 역이전 SQL 이 보지 않아 해가 없다. 반면 지우면 위험하다 — 도커에 아직
+시작되지 않은 그 실행의 이전 요청은 프로세스 · 세션 확인 어느 쪽에도 보이지
+않아, 밀린 이전이 없음을 증명할 수단이 없다. 표지가 가리키지 않는 실행도
+마찬가지다(커밋 전 복구는 옛 컨테이너를 띄운 뒤 표지를 지운다). 지우면 늦게
+뜬 이전이 커밋해 자료가 갈릴 수 있다.
 
 **상태 불명 표지(진행 중 잠금).** 상자 디스크의
 `/home/ec2-user/pokeclip-backup/dev-move-unknown` 은 진행 중 잠금이다 — 결과가
