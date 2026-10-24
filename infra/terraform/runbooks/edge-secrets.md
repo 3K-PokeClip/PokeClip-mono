@@ -397,8 +397,11 @@ aws sts get-caller-identity
 
 *   **KVS 값 입력**(설계 5-4 의 9 · 멈춤 자리 ②): 단계 직전 재판정
     (`O7f-stop2`)이 허용일 때만 합니다. 먼저 T6b(KVS 키 없음 → `/live` 503)를
-    봅니다. 값은 `kvs-put-cdn-secret.sh`(M10 c9 — M10 머지 뒤 링크)가 Secrets
-    Manager 의 CDN 비밀을 읽어 넣습니다 — 로컬 파일이 다시 생기지 않습니다.
+    봅니다. 값은 [`kvs-put-cdn-secret.sh`](/infra/terraform/scripts/kvs-put-cdn-secret.sh)
+    가 Secrets Manager 의 CDN 비밀을 읽어 넣습니다 — 로컬 파일이 다시 생기지
+    않습니다. 명령 · 종료 코드 · 이름 풀이 우회는
+    [엣지 시험 런북](/infra/terraform/runbooks/edge-tests.md) 「KVS 값 입력」
+    입니다.
 *   **시험용 스트림 키**(5-4 의 11 — 루프백 시험 직전): 부분 진행 중(A1 ·
     A2)이면 시작 직전에 `testkey` 묶음을 다시 판정하고, 허용이 아니면(거부 ·
     변경 · 검사 불가 종료 2) 시작하지 않고 kty 에게 보고합니다. prod auth 에
@@ -470,8 +473,9 @@ aws sts get-caller-identity
 1.  승인된 KVS 키를 지웁니다(현재 ETag 로).
 1.  유효한 서명 쿠키로 `/live` 가 503 이고 함수 로그에 고정 문자열이
     나오는지 봅니다.
-1.  `kvs-put-cdn-secret.sh`(M10 c9 — 이름 풀이 사전 확인 포함, M10 머지 뒤
-    링크)로 값을 되돌립니다.
+1.  [`kvs-put-cdn-secret.sh`](/infra/terraform/scripts/kvs-put-cdn-secret.sh)
+    (이름 풀이 사전 확인 포함 — [엣지 시험 런북](/infra/terraform/runbooks/edge-tests.md)
+    「KVS 값 입력」)로 값을 되돌립니다.
 1.  `/live` 가 200 인지 봅니다.
 
 ## 기동 차단 표

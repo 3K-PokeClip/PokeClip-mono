@@ -1,0 +1,44 @@
+#!/bin/bash
+#
+# kvs_put_test.sh 의 가짜 dig. 이름을 풀지 않는다(망에 나가지 않는다).
+#
+# 부를 때마다 FAKE_CMD_DIR/calls 에 「dig」 한 줄을 더하고, 받은 인자(한 줄에
+# 하나)를 dig.argv 에 적는다. 출력 꼴은 dig 9.10.6(macOS)의 +short 를 따른다 —
+# CNAME 줄은 끝에 점이 붙은 이름, 주소 줄은 주소다. 시간 초과는 +short 여도
+# 「;;」 로 시작하는 줄을 표준 출력에 내고 9 로 끝난다. 주소는 문서용 대역
+# (192.0.2.0/24 · 2001:db8::/32)이다.
+#
+# FAKE_DIG_MODE:
+#   ok          CNAME 한 줄 + IPv4 주소 한 줄, 종료 0
+#   ok-v6       IPv6 주소 한 줄, 종료 0
+#   empty       출력 없음, 종료 0(이름이 없음 — NXDOMAIN)
+#   cname-only  CNAME 줄만(주소 없음), 종료 0
+#   timeout     「;; connection timed out; …」, 종료 9
+
+set -uo pipefail
+set +o allexport +o xtrace +o verbose
+
+main() {
+  if [[ -z "${FAKE_CMD_DIR:-}" || ! -d "${FAKE_CMD_DIR}" ]]; then
+    printf '%s\n' "fake dig: FAKE_CMD_DIR 가 없음" >&2
+    exit 99
+  fi
+  printf 'dig\n' >>"${FAKE_CMD_DIR}/calls"
+  printf '%s\n' "$@" >"${FAKE_CMD_DIR}/dig.argv"
+  case "${FAKE_DIG_MODE:-ok}" in
+    ok) printf '%s\n' "d111example.cloudfront-kvs.global.api.aws." 192.0.2.10 ;;
+    ok-v6) printf '%s\n' 2001:db8::10 ;;
+    empty) ;;
+    cname-only) printf '%s\n' "d111example.cloudfront-kvs.global.api.aws." ;;
+    timeout)
+      printf '%s\n' ";; connection timed out; no servers could be reached"
+      exit 9
+      ;;
+    *)
+      printf 'fake dig: 모르는 FAKE_DIG_MODE: %s\n' "${FAKE_DIG_MODE}" >&2
+      exit 99
+      ;;
+  esac
+}
+
+main "$@"

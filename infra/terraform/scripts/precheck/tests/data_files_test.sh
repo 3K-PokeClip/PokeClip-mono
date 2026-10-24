@@ -766,6 +766,8 @@ service_types() {
         route-table internet-gateway natgateway elastic-ip vpc-endpoint
       ;;
     acm) printf ' certificate \n' ;;
+    cloudfront) printf ' distribution function key-value-store \n' ;;
+    cloudfront-keyvaluestore) printf ' key-value-store \n' ;;
     route53) printf ' hostedzone \n' ;;
     iam) printf ' role user group policy instance-profile \n' ;;
     rds) printf ' db pg subgrp \n' ;;
@@ -835,10 +837,17 @@ policy_version_actions() {
 #   틀린 까닭(맞으면 빈 출력).
 #######################################
 method_problem() {
-  local service="$1" method="$2" type="$3" actions="$4" path
+  local service="$1" method="$2" type="$3" actions="$4" path arn_service
   case "${method}" in
     arn:*)
-      [[ "${method#arn:}" == "arn:aws:${service}:"* ]] ||
+      # KVS 값 동작(cloudfront-keyvaluestore)의 자원은 CloudFront KVS ARN
+      # 이다(서비스 승인 참조 list_cloudfront-keyvaluestore.html 「Resource
+      # types」).
+      arn_service="${service}"
+      if [[ "${service}" == cloudfront-keyvaluestore ]]; then
+        arn_service=cloudfront
+      fi
+      [[ "${method#arn:}" == "arn:aws:${arn_service}:"* ]] ||
         printf 'ARN 서비스가 동작과 다름\n'
       path="${method#arn:arn:aws:s3:::}"
       if [[ "${type}" == object && "${path}" != */?* ]]; then

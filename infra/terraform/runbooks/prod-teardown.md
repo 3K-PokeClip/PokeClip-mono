@@ -1,9 +1,11 @@
 # prod 철거 런북
 
-apply 로 만든 `prod/media` · `prod/platform` 자원을 내리는(destroy) 절차입니다.
-M9 에서 `prod/registry` 에 더한 저장소 둘(`media-host-bundle` ·
-`media-loopback-sender`)도 필요하면 함께 내립니다. 두 루트를 apply 한 뒤 그
-코드를 되돌리거나(revert), O7d · O7e 를 처음부터 다시 할 때 씁니다.
+apply 로 만든 `prod/records` · `prod/edge` · `prod/media` · `prod/platform`
+자원을 내리는(destroy) 절차입니다. records · edge 는 apply 했을 때만(상태
+키가 있을 때) 내립니다. M9 에서 `prod/registry` 에 더한 저장소 둘
+(`media-host-bundle` · `media-loopback-sender`)도 필요하면 함께 내립니다. 이
+루트들을 apply 한 뒤 그 코드를 되돌리거나(revert), O7d · O7e · O7f 를
+처음부터 다시 할 때 씁니다.
 
 *   실행자는 kty 입니다. **kty 로컬 터미널**에서 kty IAM 사용자 프로필로
     돌립니다. plan · 상태 · 조회 출력에 계정 ID 가 든 ARN 이 섞여 에이전트
@@ -30,9 +32,9 @@ M9 에서 `prod/registry` 에 더한 저장소 둘(`media-host-bundle` ·
 
 | 순서 | 무엇 | 왜 |
 |---|---|---|
-| 1 | **revert 전에** 내린다(platform · media) | revert 하면 루트 코드가 사라져 destroy 할 구성이 없어집니다. 상태만 남고 자원은 관리 밖에 남습니다. registry 저장소 둘은 예외입니다 — 순서 4 |
-| 2 | platform 출력을 읽는 다른 루트가 먼저 | edge · records · 런타임 2단 · 일꾼 · chat 이 platform 출력을 씁니다(platform README 「출력」). 이 런북은 그 루트들을 내리지 않습니다 — 아래 「시작 전」 4 |
-| 3 | `prod/media` 다음 `prod/platform` | `prod/media/remote_state.tf` 가 platform 상태를 읽고, `main.tf` 가 대상 그룹 ARN · LB SG · nginx 포트를 그 출력에서 받습니다. platform 을 먼저 내리면 media 의 destroy plan 이 출력 이름으로 실패합니다. Media SG 규칙도 platform 의 LB SG 를 출처로 가리킵니다 |
+| 1 | **revert 전에** 내린다(records · edge · platform · media) | revert 하면 루트 코드가 사라져 destroy 할 구성이 없어집니다. 상태만 남고 자원은 관리 밖에 남습니다. registry 저장소 둘은 예외입니다 — 순서 4 |
+| 2 | 앞 루트 출력을 읽는 다른 루트가 먼저 | 런타임 2단 · 일꾼 · chat 이 platform 출력을 쓰고(platform README 「출력」), 런타임 2단은 edge 출력 `media_distribution_arn` 도 씁니다. 이 런북은 그 루트들을 내리지 않습니다 — 아래 「시작 전」 4 |
+| 3 | 의존 역순 — `prod/records` → `prod/edge` → `prod/media` → `prod/platform` | records 는 edge(배포 별칭)와 platform(공개 ALB · NLB 별칭) 출력을, edge 는 platform 의 내부 ALB 출력을 읽고 그 SG 에 인그레스 규칙을 둡니다. `prod/media/remote_state.tf` 도 platform 상태를 읽고, `main.tf` 가 대상 그룹 ARN · LB SG · nginx 포트를 그 출력에서 받습니다. 앞 루트를 먼저 내리면 뒤 루트의 destroy plan 이 출력 이름으로 실패합니다. Media SG 규칙도 platform 의 LB SG 를 출처로 가리킵니다 |
 | 4 | registry 저장소 둘은 맨 끝 · 필요할 때만 · **revert 뒤가 기본** | 두 저장소의 이미지는 `prod/media` 만 씁니다. `prod/registry` 루트는 revert 뒤에도 남고 두 키만 빠지므로, revert 뒤의 registry apply 로 지우는 것이 기본입니다(「4. registry 저장소 둘」) |
 
 앞 루트(network · certs · secrets · registry 의 저장소 11개 · 런타임 1단 ·
@@ -44,6 +46,8 @@ bootstrap)는 이 런북이 내리지 않습니다. platform · media 의 destro
 | 지점 | 언제 | kty 가 보는 것 |
 |---|---|---|
 | T1 | 시작 | 리전 한 값(「시작 전」 2) · 의존 루트 확인(「시작 전」 4) · 방송 없음 · 거부 목록 파라미터 갈래 (a) · (b) 선택((b) 면 목록 토큰 회수 확인) |
+| T1a | records destroy(apply 했을 때) | plan 요지 |
+| T1b | edge destroy(apply 했을 때) | apex 버킷 비우기 · plan 요지 |
 | T2 | 상태 떼기 | `state rm -dry-run` 출력 한 줄 |
 | T3 | media destroy | plan 요지 |
 | T4 | platform destroy | plan 요지 |
@@ -66,6 +70,8 @@ bootstrap)는 이 런북이 내리지 않습니다. platform · media 의 destro
     work="$(mktemp -d "${TMPDIR:-/tmp}/pokeclip-teardown.XXXXXX")"
     evidence="${HOME}/.pokeclip-precheck/teardown-prod-$(date -u +%Y%m%dT%H%M%SZ)"
     mkdir -p "${evidence}" && chmod 700 "${evidence}"
+    records=infra/terraform/prod/records
+    edge=infra/terraform/prod/edge
     media=infra/terraform/prod/media
     platform=infra/terraform/prod/platform
     registry=infra/terraform/prod/registry
@@ -105,26 +111,34 @@ bootstrap)는 이 런북이 내리지 않습니다. platform · media 의 destro
       --query 'Contents[].Key' --output text | tr '\t' '\n' \
       | tee "${evidence}/00-state-keys.txt"
     roots='bootstrap|network|certs|secrets|registry|runtime|platform|media'
+    roots+='|edge|records'
     grep -Ev "^prod/(${roots})/terraform\.tfstate(\.tflock)?$" \
       "${evidence}/00-state-keys.txt"   # 출력 없음
+    grep -Ec '^prod/(edge|records)/terraform\.tfstate$' \
+      "${evidence}/00-state-keys.txt"   # 0 · 1 · 2 — 「0. records · edge」 대상
     ```
 
-    알려진 여덟 루트의 상태 키(`prod/<루트>/terraform.tfstate` 와 그 잠금
+    알려진 열 루트의 상태 키(`prod/<루트>/terraform.tfstate` 와 그 잠금
     파일 `.tflock`) 밖의 키가 하나라도 나오면 멈추고 kty 에게 보고합니다.
-    접두가 아니라 키 전체로 봅니다 — 런타임 2단 · edge · records 의 키가
-    `prod/runtime/` 같은 앞 루트 디렉터리 아래에 있어도 걸리게. 그 루트에 자원이 남았으면 그 루트를 먼저 내려야 하고, 그
-    절차는 이 런북에 없습니다(O7d · O7e 때 확인).
+    접두가 아니라 키 전체로 봅니다 — 런타임 2단 · 일꾼 · chat 의 키가
+    `prod/runtime/` 같은 앞 루트 디렉터리 아래에 있어도 걸리게. 그 루트에
+    자원이 남았으면 그 루트를 먼저 내려야 하고, 그 절차는 이 런북에
+    없습니다(그 루트의 PR 이 정합니다). edge · records 의 키가 있으면
+    「0. records · edge 먼저 내리기」 를 합니다.
 1.  방송이 없는지 kty 가 확인합니다. media destroy 는 상자를 종료합니다 —
     상자 디스크의 녹화 · DVR 은 함께 사라집니다(`delete_on_termination`).
 1.  시작 전 상태를 남깁니다.
 
     ```shell
     umask 077
-    for root in "${media}" "${platform}"; do
+    for root in "${records}" "${edge}" "${media}" "${platform}"; do
       terraform -chdir="${root}" state list > "${evidence}/01-$(basename "${root}")-state.txt"
     done
     wc -l "${evidence}"/01-*-state.txt
     ```
+
+    records · edge 를 apply 하지 않았으면(상태 키 없음) 그 둘은 루프에서
+    뺍니다.
 
 ### plan 요지
 
@@ -139,6 +153,95 @@ plan_summary() {  # plan_summary <루트> <plan 파일>
         | select(.change.actions != ["no-op"])
         | "\(.change.actions | join(",")) \(.address)"'
 }
+```
+
+## 0. records · edge 먼저 내리기
+
+「시작 전」 4 에서 `prod/records` · `prod/edge` 의 상태 키가 나왔을 때만
+합니다. records → edge 순서입니다(「지키는 순서」 3). 둘 다 provider 의
+서울 리전이 `var.region` 이라, 먼저 그 값이 「시작 전」 2 의 `${region}` 과
+같은지 봅니다(edge 의 CloudFront · WAF · 로그는 늘 us-east-1).
+
+```shell
+umask 077
+for root in "${records}" "${edge}"; do
+  echo "$(basename "${root}") $(echo 'var.region' \
+    | terraform -chdir="${root}" console | tr -d '"')"
+done | tee "${evidence}/02-region-edge.txt"
+grep -vc " ${region}$" "${evidence}/02-region-edge.txt"   # 0
+```
+
+### records
+
+공유 공개 존(`nonprod/dns-legacy` 소유) 안의 prod 별칭 레코드만 지웁니다.
+존 자체와 dev · media-dev 레코드는 이 루트의 상태에 없습니다.
+
+```shell
+umask 077
+terraform -chdir="${records}" plan -destroy -input=false -out="${work}/records.plan"
+plan_summary "${records}" "${work}/records.plan" | tee "${evidence}/03-records-plan.txt"
+grep -vc '^delete ' "${evidence}/03-records-plan.txt"     # 0
+grep -c 'aws_route53_zone' "${evidence}/03-records-plan.txt"   # 0
+```
+
+요지에는 `enabled_records` 로 연 이름의 레코드(apex · www 는 A · AAAA 둘,
+그 밖은 A 하나)와 원격 출력 확인 자원(`terraform_data`)만 나옵니다. kty 가
+요지를 보고(T1a) 승인하면 적용합니다. 이름이 내려가는 순간부터 그 공개
+이름은 풀리지 않습니다.
+
+```shell
+terraform -chdir="${records}" apply -input=false "${work}/records.plan"
+terraform -chdir="${records}" state list | wc -l   # 0
+```
+
+### edge
+
+**apex 버킷 비우기.** apex 버킷은 `force_destroy` 가 꺼져 있어 랜딩
+업로드(O7f 의 5)로 객체가 있으면 destroy 가 실패합니다. 객체는 랜딩
+산출물이라 다시 올릴 수 있습니다(prod 산출물 런북 「랜딩 업로드」). 비우는
+것도 T1b 의 승인입니다.
+
+```shell
+umask 077
+apex_bucket="$(terraform -chdir="${edge}" output -raw apex_bucket_name)"
+aws s3api list-objects-v2 --region "${region}" --bucket "${apex_bucket}" \
+  --query 'Contents[].Key' --output text | tr '\t' '\n' \
+  | grep -vcx 'None'   # 비우기 전 객체 수
+aws s3 rm --region "${region}" --recursive "s3://${apex_bucket}"
+aws s3api list-objects-v2 --region "${region}" --bucket "${apex_bucket}" \
+  --query 'Contents[].Key' --output text | tr '\t' '\n' \
+  | grep -vcx 'None'   # 0
+```
+
+객체 수는 키 목록으로 셉니다 — `KeyCount` 는 CLI 가 여러 쪽을 합칠 때
+`None` 으로 나와 0 으로 읽으면 안 됩니다.
+
+```shell
+umask 077
+terraform -chdir="${edge}" plan -destroy -input=false -out="${work}/edge.plan"
+plan_summary "${edge}" "${work}/edge.plan" | tee "${evidence}/04-edge-plan.txt"
+grep -vc '^delete ' "${evidence}/04-edge-plan.txt"   # 0
+```
+
+요지에는 배포 둘(apex · media) · 함수 셋 · KVS · 키 그룹 · VPC origin ·
+OAC 둘 · 캐시 · 원본 요청 · 응답 헤더 정책 · CLOUDFRONT WAF · 로그 그룹
+둘(`pokeclip-prod-media-access` · `aws-waf-logs-pokeclip-prod-cloudfront` —
+us-east-1) · 표준 로그 전달 자원 · apex 버킷과 그 설정 · 내부 ALB SG 의
+인그레스 규칙(← VPC origin 서비스 SG) · 원격 출력 확인 자원이 나옵니다.
+
+*   KVS 를 지우면 그 안의 CDN 비밀 키(`cdn-secret`)도 함께 사라집니다.
+    Secrets Manager 의 원본(`pokeclip/prod/cdn-secret`)은 `prod/secrets`
+    소유라 남습니다.
+*   로그 그룹은 destroy 와 함께 지워집니다. 남길 로그가 있으면 T1b 전에
+    kty 가 정합니다 — 내보내기 절차는 이 런북에 없습니다.
+*   배포 삭제는 비활성화 · 전파를 기다려 수십 분 걸릴 수 있습니다. 끊지
+    않고 기다립니다.
+
+kty 가 요지를 보고(T1b) 승인하면 적용합니다.
+
+```shell
+terraform -chdir="${edge}" apply -input=false "${work}/edge.plan"
+terraform -chdir="${edge}" state list | wc -l   # 0
 ```
 
 ## 1. 거부 목록 파라미터 — 갈래 고르기
@@ -383,6 +486,53 @@ umask 077
   echo "## denylist parameter"
   aws ssm get-parameter --region "${region}" --name "${param_name}" 2>&1 \
     | grep -c ParameterNotFound
+  # 아래는 「0. records · edge」 를 했을 때만 봅니다.
+  for r in us-east-1 "${region}"; do
+    echo "## tagged prod/edge ${r}"
+    aws resourcegroupstaggingapi get-resources --region "${r}" \
+      --tag-filters Key=TerraformRoot,Values=prod/edge \
+      --query 'ResourceTagMappingList[].ResourceARN' --output json \
+      | jq -r '.[]'
+  done
+  echo "## cloudfront (us-east-1 · 이름 접두)"
+  aws cloudfront list-functions --region us-east-1 \
+    --query "length((FunctionList.Items || \`[]\`)[?starts_with(Name, 'pokeclip-prod-')])"
+  aws cloudfront list-key-value-stores --region us-east-1 \
+    --query "length((KeyValueStoreList.Items || \`[]\`)[?starts_with(Name, 'pokeclip-prod-')])"
+  aws cloudfront list-key-groups --region us-east-1 \
+    --query "length((KeyGroupList.Items || \`[]\`)[?starts_with(KeyGroup.KeyGroupConfig.Name, 'pokeclip-prod-')])"
+  aws cloudfront list-vpc-origins --region us-east-1 \
+    --query "length((VpcOriginList.Items || \`[]\`)[?starts_with(Name, 'pokeclip-prod-')])"
+  aws cloudfront list-origin-access-controls --region us-east-1 \
+    --query "length((OriginAccessControlList.Items || \`[]\`)[?starts_with(Name, 'pokeclip-prod-')])"
+  aws cloudfront list-cache-policies --region us-east-1 --type custom \
+    --query "length((CachePolicyList.Items || \`[]\`)[?starts_with(CachePolicy.CachePolicyConfig.Name, 'pokeclip-prod-')])"
+  aws cloudfront list-origin-request-policies --region us-east-1 --type custom \
+    --query "length((OriginRequestPolicyList.Items || \`[]\`)[?starts_with(OriginRequestPolicy.OriginRequestPolicyConfig.Name, 'pokeclip-prod-')])"
+  aws cloudfront list-response-headers-policies --region us-east-1 --type custom \
+    --query "length((ResponseHeadersPolicyList.Items || \`[]\`)[?starts_with(ResponseHeadersPolicy.ResponseHeadersPolicyConfig.Name, 'pokeclip-prod-')])"
+  echo "## cloudfront waf (us-east-1)"
+  aws wafv2 list-web-acls --scope CLOUDFRONT --region us-east-1 \
+    --query "length(WebACLs[?Name=='pokeclip-prod-cloudfront'])"
+  echo "## log groups us-east-1 (prefix)"
+  for prefix in pokeclip-prod- aws-waf-logs-pokeclip-prod-; do
+    aws logs describe-log-groups --region us-east-1 \
+      --log-group-name-prefix "${prefix}" \
+      --query 'logGroups[].logGroupName' --output text | tr '\t' '\n'
+  done
+  echo "## log delivery sources us-east-1"
+  aws logs describe-delivery-sources --region us-east-1 \
+    --query "length(deliverySources[?starts_with(name, 'pokeclip-prod-')])"
+  echo "## apex bucket"
+  aws s3api list-buckets \
+    --query "length(Buckets[?starts_with(Name, 'pokeclip-prod-apex-')])"
+  echo "## prod records (A · AAAA)"
+  zone_id="$(aws route53 list-hosted-zones-by-name --dns-name pokeclip.com \
+    --query "HostedZones[?Name=='pokeclip.com.' && Config.PrivateZone==\`false\`].Id" \
+    --output text)"
+  echo "${zone_id}" | wc -w
+  aws route53 list-resource-record-sets --hosted-zone-id "${zone_id}" \
+    --query "length(ResourceRecordSets[?(Type=='A' || Type=='AAAA') && contains(['pokeclip.com.', 'www.pokeclip.com.', 'app.pokeclip.com.', 'api.pokeclip.com.', 'media.pokeclip.com.', 'ingest.pokeclip.com.'], Name)])"
 } | tee "${evidence}/50-residue.txt"
 ```
 
@@ -396,6 +546,10 @@ umask 077
 | `iam roles` | `pokeclip-prod-media` · `pokeclip-prod-{next,auth,clip}-{execution,task}` 가 없음 |
 | 인스턴스 프로필 | `1`(NoSuchEntity) |
 | `denylist parameter` | `1`(ParameterNotFound — 갈래 (b) 의 6 뒤) — 갈래 (a) 면 `0`(있음 · 보존 목록) |
+| `tagged prod/edge us-east-1` · `tagged prod/edge <서울>` | 빈 목록(0 을 했을 때) |
+| `cloudfront` · `cloudfront waf` · `log delivery sources` · `apex bucket` | 모두 `0` — 함수 · KVS · 키 그룹 · 정책은 태그 조회가 받지 않아 이름 접두로 셉니다 |
+| `log groups us-east-1` | `pokeclip-prod-media-access` · `aws-waf-logs-pokeclip-prod-cloudfront` 가 없음 |
+| `prod records` | 존 ID 수 `1` · 레코드 `0` — dns-legacy 가 같은 이름을 가졌으면 그 수(「0」 의 records plan 이 지우지 않은 것) |
 
 *   이름 접두 조회(로그 그룹 · 역할 · LB · 대상 그룹)에 위 이름 밖의 것이
     나오면 다른 루트의 자원일 수 있습니다. 지우지 않고 kty 가 확인합니다.
@@ -413,9 +567,9 @@ umask 077
     aws ecr describe-repositories --region "${region}" --query "length(repositories[?repositoryName=='pokeclip-prod/media-host-bundle' || repositoryName=='pokeclip-prod/media-loopback-sender'])"
     ```
 
-잔여가 있으면 이름으로 하나씩 확인해 kty 에게 보고합니다. platform ·
-media 의 잔여 0 과 보존 목록 판정을 끝낸 뒤에만 revert 를 머지합니다 —
-registry 갈래 (r1) 도 같습니다.
+잔여가 있으면 이름으로 하나씩 확인해 kty 에게 보고합니다. 내린 루트
+(records · edge · media · platform)의 잔여 0 과 보존 목록 판정을 끝낸
+뒤에만 revert 를 머지합니다 — registry 갈래 (r1) 도 같습니다.
 
 **보존 목록** — 잔여 0 과 따로, 일부러 남기는 것입니다. 증거
 디렉터리에 `50-kept.txt` 로 한 줄씩(무엇 · 갈래 · 이유) 적습니다.
@@ -424,7 +578,8 @@ registry 갈래 (r1) 도 같습니다.
 |---|---|---|
 | 거부 목록 파라미터 | 갈래 (a) | 다시 apply 할 때 import 해 운영 값을 이어 씀 |
 | registry 저장소 둘 | M9 코드를 되돌리지 않을 때 | 다음 registry apply 가 다시 만듦 |
-| `prod/media` · `prod/platform` 상태 객체(빈 상태) | 늘 | 다시 apply 할 때 그대로 씀(「정리」) |
+| `prod/records` · `prod/edge` · `prod/media` · `prod/platform` 상태 객체(빈 상태) | 늘 | 다시 apply 할 때 그대로 씀(「정리」) |
+| CDN 비밀 원본(`pokeclip/prod/cdn-secret`) | 늘 | `prod/secrets` 소유 — 다시 edge 를 apply 하면 그 값으로 KVS 를 채움(엣지 시험 런북 「KVS 값 입력」) |
 | 증거 디렉터리 | 늘 | 결과 원문(「정리」) |
 
 ## 6. (b) 파라미터 삭제
@@ -489,9 +644,9 @@ terraform -chdir="${media}" import "${param_addr}" "${param_name}"
 
 ## 정리
 
-상태 객체(`prod/media` · `prod/platform` 의 빈 상태)는 지우지 않습니다 —
-다시 apply 할 때 그대로 씁니다. 작업 디렉터리는 잔여 0 을 확인한 뒤
-지웁니다. 증거 디렉터리는 남깁니다.
+상태 객체(`prod/records` · `prod/edge` · `prod/media` · `prod/platform` 의 빈
+상태)는 지우지 않습니다 — 다시 apply 할 때 그대로 씁니다. 작업 디렉터리는
+잔여 0 을 확인한 뒤 지웁니다. 증거 디렉터리는 남깁니다.
 
 ```shell
 rm -r -- "${work}" && unset work
@@ -504,8 +659,10 @@ rm -r -- "${work}" && unset work
 
 ## See also
 
-*   [prod/media](../prod/media/README.md) · [prod/platform](../prod/platform/README.md) ·
+*   [prod/records](../prod/records/README.md) · [prod/edge](../prod/edge/README.md) ·
+    [prod/media](../prod/media/README.md) · [prod/platform](../prod/platform/README.md) ·
     [prod/registry](../prod/registry/README.md)
+*   [엣지 시험 런북](edge-tests.md) — 「KVS 값 입력」(다시 apply 할 때)
 *   [Media 교체 런북](media-swap.md) — 「plan 범위」 · 「부분 실패 복구」
 *   [단계 직전 점검 런북](stage-precheck.md) — 「증거」
 *   계획 3절 「SCP 멈춤 규칙」 · guard R10(`policy/guard/prevent_destroy.rego`)

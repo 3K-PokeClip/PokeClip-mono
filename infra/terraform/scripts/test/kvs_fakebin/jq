@@ -1,0 +1,20 @@
+#!/bin/bash
+#
+# kvs_put_test.sh 의 감시용 가짜 jq. 스크립트는 jq 를 부르지 않는다 — 부르면
+# 값이 jq 의 인자로 지나갈 수 있다(계획 c9 「외부 명령의 argv 에 값을 올리지
+# 않는다」). 불리면 FAKE_CMD_DIR/calls 에 「jq」 한 줄, 받은 인자를 jq.argv 에
+# 적고 실패한다. 시험은 calls 에 jq 가 0회인지와 jq.argv 에 값이 없는지 본다.
+
+set -uo pipefail
+set +o allexport +o xtrace +o verbose
+
+main() {
+  if [[ -n "${FAKE_CMD_DIR:-}" && -d "${FAKE_CMD_DIR}" ]]; then
+    printf 'jq\n' >>"${FAKE_CMD_DIR}/calls"
+    printf '%s\n' "$@" >"${FAKE_CMD_DIR}/jq.argv"
+  fi
+  printf '%s\n' "fake jq: 이 시험에서 jq 는 불리면 안 됨" >&2
+  exit 99
+}
+
+main "$@"
