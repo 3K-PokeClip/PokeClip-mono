@@ -1,6 +1,6 @@
 import { useRef, useState, type KeyboardEvent, type PointerEvent } from 'react';
 import { Volume2, VolumeX } from 'lucide-react';
-import { Popover, Slider } from '@/ui';
+import { Popover, Skeleton, Slider } from '@/ui';
 import styles from './StudioScreen.module.css';
 import { TrackWaveform } from './TrackWaveform';
 import type { ClipEditorMockState, EditorTrack } from '../useClipEditorMockState';
@@ -135,13 +135,19 @@ export function TimelineTrackRow({
   volumeControls,
   levels,
   view,
+  levelsLoading = false,
 }: {
   track: EditorTrack;
   onToggleMute: (trackId: string) => void;
   volumeControls: VolumeControls;
-  /** 소리 크기. undefined면 목업(모양만), null이면 아직·못 불러 빈 줄 */
+  /** 소리 크기. undefined면 목업(모양만), null이면 아직·못 불러 빈 줄(받는 중이면 levelsLoading이 스켈레톤으로 채운다) */
   levels: { values: Float32Array; startSeconds: number; stepSeconds: number } | null | undefined;
   view: { startSeconds: number; endSeconds: number };
+  /**
+   * 트랙 소리를 받는 중이다(미리 듣기 loading). 아직 파형이 없으면 빈 줄 대신 줄 높이 스켈레톤을 둔다(POK-444).
+   * 못 불렀거나(사용 불가 — 미리보기 아래 안내가 말한다) 받을 창이 없으면 빈 줄 그대로다. 앞 창의 파형이 있으면 그것을 둔다
+   */
+  levelsLoading?: boolean;
 }) {
   return (
     <div
@@ -179,6 +185,9 @@ export function TimelineTrackRow({
             gain={(track.volume ?? 100) / 100}
             view={view}
           />
+        ) : levelsLoading ? (
+          // 파형처럼 그림일 뿐이라 낭독할 것이 없다(Skeleton은 aria-hidden) — 줄마다 status를 세우지 않는다
+          <Skeleton height="100%" data-wave-loading />
         ) : null}
       </div>
     </div>

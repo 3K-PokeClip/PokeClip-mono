@@ -18,6 +18,7 @@ import {
   Input,
   RadioGroup,
   Select,
+  Skeleton,
   Switch,
   Tabs,
   Tag,
@@ -378,6 +379,9 @@ function UploadInfoForm({
       : draft.thumbnailSource === 'file'
         ? previewUrl
         : null;
+  // 고른 장면을 아직 뽑는 중인가(못 뽑음 · 재료 없음과 가른다 — 그쪽은 로더가 아니다, POK-444)
+  const sceneLoading =
+    draft.thumbnailSource === 'scene' && previewSrc === null && !frameFailed(draft.sceneOffsetMs);
   const footNote =
     tab !== 'publish'
       ? '공개 탭에서 올려요'
@@ -399,15 +403,24 @@ function UploadInfoForm({
               // 뽑은 장면(data:)·고른 파일(blob:)이라 next/image가 다룰 대상이 아니다
               // eslint-disable-next-line @next/next/no-img-element
               <img src={previewSrc} alt="썸네일 미리보기" />
+            ) : sceneLoading ? (
+              // 장면을 뽑는 중: 자리를 스켈레톤으로 채우고 문장은 그 위에 둔다(POK-444). 못 뽑았으면 아래 정적 자리다
+              <>
+                <Skeleton
+                  className={styles.shortsSkeleton}
+                  height="100%"
+                  radius="none"
+                  data-frame-loading
+                />
+                <span className={styles.shortsLoading}>장면을 불러오는 중이에요</span>
+              </>
             ) : (
               <span className={styles.shortsEmpty}>
                 {draft.thumbnailSource === 'none'
                   ? '유튜브가 영상에서 골라요'
                   : draft.thumbnailSource === 'file'
                     ? '고른 이미지가 여기 보여요'
-                    : frameFailed(draft.sceneOffsetMs)
-                      ? `장면 그림을 못 불러와요 · ${sceneLabel(draft.sceneOffsetMs)}`
-                      : '장면을 불러오는 중이에요'}
+                    : `장면 그림을 못 불러와요 · ${sceneLabel(draft.sceneOffsetMs)}`}
               </span>
             )}
             {draft.scheduled && schedule !== '' ? (
@@ -512,6 +525,7 @@ function UploadInfoForm({
                 cutLengthMs={cutLengthMs}
                 picks={picks}
                 frameOf={frameOf}
+                frameFailed={frameFailed}
                 error={errorOf('thumbnail')}
                 onSource={(source) => set('thumbnailSource', source)}
                 onScene={(ms) => set('sceneOffsetMs', ms)}

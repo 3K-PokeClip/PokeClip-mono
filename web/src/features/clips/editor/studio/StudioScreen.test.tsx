@@ -1074,6 +1074,125 @@ describe('StudioScreen', () => {
   });
 });
 
+// --- 로딩 표시(POK-444) ---------------------------------------------------------
+// 컨테이너(WiredStudio)가 넘기는 보내는 중 · 영상 진행 · 다시 읽기 상태를 헤더와 타임라인이 어떻게 보이는지.
+
+describe('StudioScreen — 로딩 표시(POK-444)', () => {
+  const realSource = {
+    clipTitle: '카드',
+    sourceLabel: '방송',
+    durationSeconds: 60,
+    range: { startSeconds: 10, endSeconds: 20 },
+  };
+  const realTracks = [0, 1, 2].map((i) => ({
+    id: `track-${i}`,
+    kind: 'mic' as const,
+    label: `트랙 ${i + 1}`,
+    volume: 100,
+    muted: false,
+  }));
+
+  it('저장을 보내는 중이면 그 버튼만 돌고(aria-busy) 다른 쪽은 꺼진다: 컨테이너가 보내는 동안 둘 다 받지 않는다', () => {
+    renderStudio({ busyAction: 'save' });
+    const saving = screen.getByRole('button', { name: '편집본 저장 중' });
+    expect(saving).toHaveAttribute('aria-busy', 'true');
+    expect(saving).toBeDisabled();
+    // 라벨은 자리만 지킨다(폭 유지) — 이름은 aria-label이 댄다
+    expect(saving).toHaveTextContent('편집본 저장');
+    const upload = screen.getByRole('button', { name: '업로드' });
+    expect(upload).toBeDisabled();
+    expect(upload).not.toHaveAttribute('aria-busy');
+  });
+
+  it('영상 주문을 보내는 중이면 주 버튼만 돌고 저장은 꺼진다', () => {
+    renderStudio({ busyAction: 'render' });
+    const ordering = screen.getByRole('button', { name: '업로드 요청 중' });
+    expect(ordering).toHaveAttribute('aria-busy', 'true');
+    expect(ordering).toBeDisabled();
+    expect(screen.getByRole('button', { name: '편집본 저장' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '편집본 저장' })).not.toHaveAttribute('aria-busy');
+  });
+
+  it('보내는 것이 없으면 두 버튼 다 누를 수 있고 돌지 않는다', () => {
+    renderStudio();
+    for (const name of ['편집본 저장', '업로드']) {
+      expect(screen.getByRole('button', { name })).toBeEnabled();
+      expect(screen.getByRole('button', { name })).not.toHaveAttribute('aria-busy');
+    }
+  });
+
+  it('헤더 문구 아래 영상 진행 막대: 퍼센트가 있으면 그 값, 없으면 불확정이다(0%로 지어내지 않는다)', () => {
+    const { unmount } = renderStudio({ clipProgress: { value: 42 } });
+    expect(screen.getByRole('progressbar', { name: '영상 진행' })).toHaveAttribute(
+      'aria-valuenow',
+      '42',
+    );
+    unmount();
+
+    renderStudio({ clipProgress: { value: null } });
+    expect(screen.getByRole('progressbar', { name: '영상 진행' })).not.toHaveAttribute(
+      'aria-valuenow',
+    );
+  });
+
+  it('기다릴 영상이 없으면 진행 막대가 없다', () => {
+    renderStudio();
+    expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
+  });
+
+  it('트랙 소리를 받는 중이면 소리 줄마다 줄 높이 스켈레톤이고, 못 불렀으면 빈 줄과 안내 그대로다', () => {
+    const loading = renderStudio({
+      source: realSource,
+      tracks: realTracks,
+      trackPreview: { status: 'loading', levels: null, setGains: vi.fn() },
+    });
+    const bars = loading.container.querySelectorAll('[data-wave-loading]');
+    expect(bars).toHaveLength(realTracks.length);
+    // 파형처럼 그림일 뿐이라 낭독에서 빠진다
+    for (const bar of bars) expect(bar).toHaveAttribute('aria-hidden', 'true');
+    loading.unmount();
+
+    const unavailable = renderStudio({
+      source: realSource,
+      tracks: realTracks,
+      trackPreview: { status: 'unavailable', levels: null, setGains: vi.fn() },
+    });
+    expect(unavailable.container.querySelectorAll('[data-wave-loading]')).toHaveLength(0);
+    expect(
+      screen.getByText('트랙별 미리 듣기를 못 불러왔어요 · 영상 소리로 들려요'),
+    ).toBeInTheDocument();
+    unavailable.unmount();
+
+    // 받을 창이 없으면(녹화 없는 구간) 들을 것이 없다: 로더가 아니다
+    const idle = renderStudio({
+      source: realSource,
+      tracks: realTracks,
+      trackPreview: { status: 'idle', levels: null, setGains: vi.fn() },
+    });
+    expect(idle.container.querySelectorAll('[data-wave-loading]')).toHaveLength(0);
+  });
+
+  it('다른 편집 대상을 읽는 동안 옛 화면은 보이기만 한다: 헤더 아래 불확정 막대 한 줄, 보관함으로는 나갈 수 있다', async () => {
+    const user = userEvent.setup();
+    const { container } = renderStudio({ reloading: true });
+
+    const bar = screen.getByRole('progressbar', { name: '편집 대상을 다시 불러오는 중' });
+    expect(bar).not.toHaveAttribute('aria-valuenow');
+    expect(container.querySelector('main')).toHaveAttribute('inert');
+    expect(container.querySelector('section[aria-label="타임라인"]')).toHaveAttribute('inert');
+    for (const name of ['편집본 저장', '업로드', '작업 이전으로', '작업 앞으로']) {
+      expect(screen.getByRole('button', { name })).toBeDisabled();
+    }
+    expect(screen.getByRole('link', { name: '보관함으로' })).toHaveAttribute(
+      'href',
+      '/clips/library',
+    );
+    // 단축키도 쉰다: Space가 재생을 켜지 않는다
+    await user.keyboard(' ');
+    expect(container.querySelector('button[aria-label="일시정지"]')).toBeNull();
+  });
+});
+
 // --- 크롭·레이아웃 -------------------------------------------------------------
 // 원본 판은 아직 자리 표시자다. 사각형은 목업 해상도(1920×1080) 기준으로 잡히므로
 // 영상 없이도 좌표·경계·실행취소를 그대로 확인할 수 있다.
