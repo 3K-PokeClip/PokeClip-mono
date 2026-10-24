@@ -63,9 +63,11 @@ export function useTrackPreview(options: {
   const [status, setStatus] = useState<TrackPreviewStatus>('idle');
   const [player, setPlayer] = useState<TrackAudioPlayer | null>(null);
   const [levels, setLevels] = useState<TrackLevels | null>(null);
-  const [videoMixMatches, setVideoMixMatches] = useState(true);
+  /** 트랙 번호 순 음량. 재생기가 바뀌거나 배속이 바뀌면 다시 건다(아래 이펙트) */
+  const [gains, setGainsState] = useState<readonly number[]>([]);
+  const [videoRate, setVideoRate] = useState(1);
+  const videoMixMatches = sameAsVideo(gains);
   const contextRef = useRef<DecodingContext | null>(null);
-  const gainsRef = useRef<readonly number[]>([]);
   const createRef = useRef(createContext);
   const playerRef = useRef(player);
   playerRef.current = player;
@@ -132,7 +134,7 @@ export function useTrackPreview(options: {
           setPlayer(null);
           setStatus('unavailable');
         });
-        made.setGains(gainsRef.current);
+        // 음량은 아래 이펙트가 건다(만들자마자는 모두 0이다)
         setPlayer(made);
         setStatus('ready');
       })
@@ -168,10 +170,26 @@ export function useTrackPreview(options: {
     [],
   );
 
-  // 영상 소리를 끄는 때: 재생기가 있으면(트는 중 · 새 창을 받는 동안 앞 창 재생기가 이어 튼다) 늘 끈다. 재생기 없이 불러오는
+  // 배속: 소리 노드의 배속은 음높이까지 바꾼다(영상은 음높이를 지킨다). 배속 중이고 음량이 영상 소리와 같으면 영상 소리가
+  // 같은 소리를 제 음높이로 내므로 재생기를 쉬게 한다(PR #341 2차). 음량을 바꿔 두었으면 그 음량이 맞게 들리는 쪽(재생기)을
+  // 둔다 — 그때는 음높이가 배속만큼 바뀐다(소리 노드에는 음높이를 지키는 배속이 없다)
+  useEffect(() => {
+    if (video === null) return undefined;
+    const onRate = () => setVideoRate(video.playbackRate);
+    onRate();
+    video.addEventListener('ratechange', onRate);
+    return () => video.removeEventListener('ratechange', onRate);
+  }, [video]);
+  const videoCarries = videoRate !== 1 && videoMixMatches;
+
+  useEffect(() => {
+    player?.setGains(videoCarries ? gains.map(() => 0) : gains);
+  }, [player, gains, videoCarries]);
+
+  // 영상 소리를 끄는 때: 재생기가 소리를 내면(트는 중 · 새 창을 받는 동안 앞 창 재생기가 이어 튼다) 끈다. 재생기 없이 불러오는
   // 중이면 음량이 영상 소리와 다를 때만 끈다: 다르면 뺀 트랙까지 섞인 최종 믹스가 들려서다(로컬 리뷰 1라운드). 같으면(새로 연
   // 편집본) 영상 소리가 곧 미리 듣기 소리라 조각을 다 받을 때까지 조용히 기다리지 않는다(PR #341 claude)
-  const muteVideo = player !== null || (status === 'loading' && !videoMixMatches);
+  const muteVideo = player !== null ? !videoCarries : status === 'loading' && !videoMixMatches;
   useEffect(() => {
     if (video === null) return undefined;
     const wasMuted = video.muted;
@@ -186,14 +204,7 @@ export function useTrackPreview(options: {
     return followVideo(player, video, () => startSeconds + video.currentTime);
   }, [player, video, startSeconds]);
 
-  const setGains = useCallback(
-    (gains: readonly number[]) => {
-      gainsRef.current = gains;
-      player?.setGains(gains);
-      setVideoMixMatches(sameAsVideo(gains));
-    },
-    [player],
-  );
+  const setGains = useCallback((next: readonly number[]) => setGainsState(next), []);
 
   return useMemo(() => ({ status, levels, setGains }), [status, levels, setGains]);
 }

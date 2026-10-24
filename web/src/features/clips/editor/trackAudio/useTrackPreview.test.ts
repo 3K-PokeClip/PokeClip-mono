@@ -93,19 +93,58 @@ describe('useTrackPreview', () => {
         createContext: () => ctx as never,
       }),
     );
-    result.current.setGains([0, 1.3, 0.6]);
+    act(() => result.current.setGains([0, 1.3, 0.6]));
     await waitFor(() => expect(result.current.status).toBe('ready'));
 
     expect(requestSegmentAudioAccess).toHaveBeenCalledWith('s-1', BASE + 10_000, BASE + 40_000);
     // 준비 전에 받은 음량도 준비되자마자 걸린다
     expect(gains.map((g) => g.gain.value)).toEqual([0, 1.3, 0.6]);
-    result.current.setGains([1, 0, 0]);
+    act(() => result.current.setGains([1, 0, 0]));
     expect(gains.map((g) => g.gain.value)).toEqual([1, 0, 0]);
     expect(node.muted).toBe(true);
     // 타임라인 파형: 창(10~40초)을 0.05초 칸으로 잰다. 조각(10~11초) 자리는 소리가 있다
     expect(result.current.levels?.tracks).toHaveLength(3);
     expect(result.current.levels?.startSeconds).toBe(10);
     expect(result.current.levels?.tracks[0]![0]).toBeCloseTo(0.5);
+  });
+
+  it('배속 중에는 음량이 영상 소리와 같으면 영상 소리로 듣는다: 소리 노드 배속은 음높이까지 바꾼다(PR #341 2차)', async () => {
+    const { ctx, gains } = fakeContext();
+    const node = video();
+    const { result } = renderHook(() =>
+      useTrackPreview({
+        streamId: 's-1',
+        baseMs: BASE,
+        window: WINDOW,
+        video: node,
+        createContext: () => ctx as never,
+      }),
+    );
+    act(() => result.current.setGains([1, 0, 0]));
+    await waitFor(() => expect(result.current.status).toBe('ready'));
+    expect(node.muted).toBe(true);
+
+    // 2×: 영상 소리(음높이 그대로)가 같은 소리를 낸다 → 재생기는 쉬고 영상 소리를 켠다
+    act(() => {
+      node.playbackRate = 2;
+      node.dispatchEvent(new Event('ratechange'));
+    });
+    expect(node.muted).toBe(false);
+    expect(gains.map((g) => g.gain.value)).toEqual([0, 0, 0]);
+
+    // 음량을 바꿔 두면 그 음량이 들리는 쪽(재생기)으로 돌아간다
+    act(() => result.current.setGains([1, 0.5, 0]));
+    expect(node.muted).toBe(true);
+    expect(gains.map((g) => g.gain.value)).toEqual([1, 0.5, 0]);
+
+    // 1×로 돌리면 늘 재생기다
+    act(() => {
+      result.current.setGains([1, 0, 0]);
+      node.playbackRate = 1;
+      node.dispatchEvent(new Event('ratechange'));
+    });
+    expect(node.muted).toBe(true);
+    expect(gains.map((g) => g.gain.value)).toEqual([1, 0, 0]);
   });
 
   it('소리 문맥을 깨우지 못하면 「못 부름」으로 바꿔 영상 소리를 되살린다(PR #341 codex)', async () => {
