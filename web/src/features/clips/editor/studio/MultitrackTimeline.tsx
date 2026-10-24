@@ -104,6 +104,8 @@ export function MultitrackTimeline({
   // 끄는 동안은 창을 붙잡는다: 키운 창은 재생 위치를 따라 넘어가므로, 안 붙잡으면 끌던 자리 밑에서 창이 움직인다
   const scrubGesture = useRef<number | null>(null);
   const onScrubPointerDown = (event: PointerEvent<HTMLElement>) => {
+    // 왼쪽 단추(터치·펜은 0)만: 오른쪽 클릭이면 메뉴가 뜨면서 재생 위치까지 튀었다(PR #341 claude)
+    if (event.button !== 0) return;
     event.currentTarget.setPointerCapture(event.pointerId);
     seekFromPointer(event.clientX);
     scrubGesture.current = state.beginGesture();
@@ -139,6 +141,7 @@ export function MultitrackTimeline({
         : null;
 
   const onHandlePointerDown = (edge: 'start' | 'end') => (event: PointerEvent<HTMLElement>) => {
+    if (event.button !== 0) return;
     event.currentTarget.setPointerCapture(event.pointerId);
     draggingEdge.current = edge;
     // 드래그 한 번을 실행취소 한 칸으로 묶고, 그 동안 타임라인 창을 붙잡는다

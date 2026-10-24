@@ -589,6 +589,11 @@ describe('StudioScreen', () => {
 
     fireEvent.pointerDown(ruler, { clientX: xAt(4.5), pointerId: 2 });
     expect(position()).toBeCloseTo(4.5, 0);
+    fireEvent.pointerUp(ruler, { pointerId: 2 });
+
+    // 오른쪽 클릭은 메뉴만: 재생 위치는 그대로다(PR #341 claude)
+    fireEvent.pointerDown(scrub, { clientX: xAt(8), pointerId: 3, button: 2 });
+    expect(position()).toBeCloseTo(4.5, 0);
   });
 
   it('타임라인을 접으면 선택 구간 요약만 남는다', async () => {
