@@ -72,8 +72,9 @@ export interface BroadcastRow {
    */
   thumbnailUrl?: string | null;
   /**
-   * 치지직 방송 제목과 카테고리(POK-259). 수집기가 1분마다 남기는 관측에서 제목이 있는 마지막 값이다. 관측이 없거나, 수집기가
-   * 아프거나, 이 칸을 모르는 옛 서버면 비어 온다. 화면에 보일 이름은 {@link broadcastTitle}로 고른다
+   * 방송 제목과 카테고리(POK-259). 서버가 켜진 플랫폼 중에서 고른다(POK-397). 수집기가 1분마다 남기는 관측에서 제목이
+   * 있는 마지막 값이다. 관측이 없거나, 수집기가 아프거나, 이 칸을 모르는 옛 서버면 비어 온다. 화면에 보일 이름은
+   * {@link broadcastTitle}로 고른다
    */
   title?: string | null;
   category?: string | null;
@@ -82,13 +83,22 @@ export interface BroadcastRow {
    */
   platform?: string | null;
   /**
+   * 이 방송이 켜진 플랫폼과 플랫폼마다 시청자 수 · 관측 시각(POK-397). 순서는 치지직 → SOOP. 꺼진 플랫폼도 남으므로 무엇을 보일지는
+   * features/broadcast/platformView가 관측 시각으로 고른다. 옛 서버면 빠져 온다
+   */
+  platforms?: { platform: string; viewers?: number | null; observedAt?: string | null }[];
+  /**
    * 이 방송의 라이브 대시보드를 지금 열어 둔 편집자 수(POK-398). 스트리머 본인과 나는 빼고 센다. 방송 중 줄만 숫자고 끝난 줄은 null,
    * 옛 서버면 빠져 온다
    */
   editorsOnline?: number | null;
+  /**
+   * 이 방송 스트리머의 플랫폼 채널 이름(POK-430). 치지직 채널 이름 · SOOP 닉네임, 지금 연동된 것만이고 없으면 null. 옛 서버면 빠져 온다
+   */
+  channelNames?: { CHZZK: string | null; SOOP: string | null } | null;
 }
 
-/** 방송을 사람에게 보일 이름(POK-259). 치지직 제목이 있으면 그것, 없으면 방송 번호 */
+/** 방송을 사람에게 보일 이름(POK-259). 방송 제목이 있으면 그것, 없으면 방송 번호 */
 export function broadcastTitle(row: Pick<BroadcastRow, 'streamId' | 'title'>): string {
   return row.title?.trim() || row.streamId;
 }

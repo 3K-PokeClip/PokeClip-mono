@@ -749,6 +749,93 @@ describe('HomeScreen', () => {
     expect(within(band).queryByText(/접속 중/)).toBeNull();
   });
 
+  it('SOOP로만 켠 방송은 라이브 띠의 플랫폼 · 제목 · 시청자 수가 SOOP 값이다: 묶음에 남은 치지직 값이 섞이지 않는다(POK-397)', async () => {
+    // 실방송 재시험에서 SOOP로만 켰는데 치지직 태그 · 제목 · 시청자 수가 떴다. 치지직은 앞서 켰다가 꺼져 묶음에만 남았고,
+    // 플랫폼 구분 없는 가장 새 관측(latest)이 치지직 줄이었다
+    const recent = (ms: number) => new Date(Date.now() - ms).toISOString();
+    serve({
+      live: [
+        {
+          streamId: 'S-soop',
+          status: 'live',
+          relation: 'OWNER',
+          startedAt: recent(30 * 60_000),
+          endedAt: null,
+          vodExpiresAt: null,
+          title: '목록 제목',
+          platform: 'CHZZK',
+          platforms: [
+            { platform: 'CHZZK', viewers: 1842, observedAt: recent(20 * 60_000) },
+            { platform: 'SOOP', viewers: 57, observedAt: recent(30_000) },
+          ],
+        },
+      ],
+      info: {
+        latest: {
+          title: '치지직 제목',
+          tags: [],
+          category: null,
+          viewers: 1842,
+          observedAt: recent(10_000),
+        },
+        platforms: [
+          {
+            platform: 'CHZZK',
+            title: '치지직 제목',
+            viewers: 1842,
+            observedAt: recent(20 * 60_000),
+          },
+          { platform: 'SOOP', title: '숲 방송 제목', viewers: 57, observedAt: recent(30_000) },
+        ],
+        series: [],
+      },
+    });
+    render(<HomeScreen />);
+
+    const band = await screen.findByRole('region', { name: '라이브' });
+    expect(await within(band).findByText('숲 방송 제목')).toBeInTheDocument();
+    expect(within(band).getByText('SOOP')).toBeInTheDocument();
+    expect(within(band).getByText('시청자 57')).toBeInTheDocument();
+    expect(within(band).queryByText(/치지직/)).toBeNull();
+    expect(within(band).queryByText('시청자 1,842')).toBeNull();
+  });
+
+  it('둘 다 켠 방송은 태그에 둘 다 보이고 제목 · 시청자 수는 시청자가 많은 쪽 하나에서 온다(POK-397)', async () => {
+    const recent = (ms: number) => new Date(Date.now() - ms).toISOString();
+    serve({
+      live: [
+        {
+          streamId: 'S-both',
+          status: 'live',
+          relation: 'OWNER',
+          startedAt: recent(30 * 60_000),
+          endedAt: null,
+          vodExpiresAt: null,
+          title: '목록 제목',
+          platform: 'CHZZK',
+          platforms: [
+            { platform: 'CHZZK', viewers: 30, observedAt: recent(20_000) },
+            { platform: 'SOOP', viewers: 500, observedAt: recent(20_000) },
+          ],
+        },
+      ],
+      info: {
+        latest: null,
+        platforms: [
+          { platform: 'CHZZK', title: '치지직 제목', viewers: 30, observedAt: recent(20_000) },
+          { platform: 'SOOP', title: '숲 제목', viewers: 500, observedAt: recent(20_000) },
+        ],
+        series: [],
+      },
+    });
+    render(<HomeScreen />);
+
+    const band = await screen.findByRole('region', { name: '라이브' });
+    expect(await within(band).findByText('숲 제목')).toBeInTheDocument();
+    expect(within(band).getByText('치지직 · SOOP')).toBeInTheDocument();
+    expect(within(band).getByText('시청자 500')).toBeInTheDocument();
+  });
+
   it('라이브 띠의 클립 완료는 그 방송에서 영상까지 만든 편집본 수다', async () => {
     const rendered = { status: 'rendered', createdAt: new Date('2026-09-26T10:00:00Z') };
     serve({

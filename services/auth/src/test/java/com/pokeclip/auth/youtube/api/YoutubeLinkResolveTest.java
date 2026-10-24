@@ -1,6 +1,7 @@
 package com.pokeclip.auth.youtube.api;
 
 import com.pokeclip.auth.streamkey.secret.SecretStore;
+import com.pokeclip.auth.support.Sha256;
 import com.pokeclip.auth.token.TokenService;
 import com.pokeclip.auth.user.User;
 import com.pokeclip.auth.user.UserRepository;
@@ -112,6 +113,69 @@ class YoutubeLinkResolveTest extends YoutubeLinkTestSupport {
         mockMvc.perform(resolve(u.getId())).andExpect(jsonPath("$.reason").value("BROKEN"));   // 행이 닫혔어도 사유는 유지
 
         assertThat(YOUTUBE.tokenCalls()).as("BROKEN인데 다시 구글을 불렀다").isEqualTo(1);
+    }
+
+    /** 🔴 일꾼이 받은 토큰이 유튜브에서 401을 받았다. 수명이 넉넉해도 그 토큰이면 새로 갱신해 준다(POK-250). */
+    @Test
+    void 거절된_토큰의_지문이면_수명이_넉넉해도_갱신한다() throws Exception {
+        User u = newUser();
+        linked(u, "at-old", "rt-old");   // 60분 남음: 지문만이 갱신 이유다
+
+        mockMvc.perform(resolve(u.getId(), Sha256.hex("at-old")))
+                .andExpect(jsonPath("$.valid").value(true))
+                .andExpect(jsonPath("$.accessToken").value("at-1"));
+        assertThat(YOUTUBE.tokenCalls()).isEqualTo(1);
+    }
+
+    /** 지문이 지금 토큰과 다르면 누가 이미 갱신했다. 구글을 안 부르고 지금 토큰을 준다. */
+    @Test
+    void 지문이_지금_토큰과_다르면_갱신하지_않고_지금_토큰을_준다() throws Exception {
+        User u = newUser();
+        linked(u, "at-new", "rt-old");
+
+        mockMvc.perform(resolve(u.getId(), Sha256.hex("at-older")))
+                .andExpect(jsonPath("$.valid").value(true))
+                .andExpect(jsonPath("$.accessToken").value("at-new"));
+        assertThat(YOUTUBE.tokenCalls()).isZero();
+    }
+
+    @Test
+    void 강제_갱신이_invalid_grant면_BROKEN이다() throws Exception {
+        User u = newUser();
+        linked(u, "at-old", "rt-old");
+        YOUTUBE.tokenResponds(400, "{\"error\":\"invalid_grant\"}");
+
+        String body = mockMvc.perform(resolve(u.getId(), Sha256.hex("at-old")))
+                .andExpect(jsonPath("$.valid").value(false))
+                .andExpect(jsonPath("$.reason").value("BROKEN"))
+                .andReturn().getResponse().getContentAsString();
+        assertThat(body).doesNotContain("accessToken").doesNotContain("at-old");
+        awaitCleanup();
+    }
+
+    /**
+     * 모르는 칸이 실려도 200이다. 배포 순서 가정을 지킨다: 옛 auth는 새 일꾼이 싣는 칸({@code rejectedTokenSha256})을 이렇게 무시하고
+     * 지금 토큰을 준다(일꾼은 그것을 알아보고 잠시 뒤 다시 한다). 400이면 일꾼이 같은 쪽지를 되풀이하다 실패 큐로 간다(POK-250).
+     */
+    @Test
+    void 모르는_칸이_실려도_200이다() throws Exception {
+        User u = newUser();
+        linked(u, "at-old", "rt-old");
+
+        mockMvc.perform(post("/internal/youtube-link/resolve").header("X-Internal-Token", INTERNAL_TOKEN)
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"userId\":" + u.getId() + ",\"someFutureField\":\"x\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.valid").value(true))
+                .andExpect(jsonPath("$.accessToken").value("at-old"));
+    }
+
+    /** 일꾼이 만드는 값이라 모양이 틀리면 우리 버그다. {@code userId} 누락과 같은 400 길로 보낸다. */
+    @Test
+    void 지문_모양이_틀리면_400() throws Exception {
+        mockMvc.perform(resolve(newUser().getId(), "not-hex")).andExpect(status().isBadRequest());
+        mockMvc.perform(resolve(newUser().getId(), Sha256.hex("at-old").toUpperCase())).andExpect(status().isBadRequest());
+        assertThat(YOUTUBE.tokenCalls()).isZero();
     }
 
     /** 사용자가 스스로 끊은 것과 갱신이 거부된 것은 호출자에게 다른 사건이다 — 전자는 재연동 안내, 후자는 재동의 안내. */

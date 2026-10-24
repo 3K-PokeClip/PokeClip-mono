@@ -7,6 +7,9 @@ import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
+import java.time.Instant;
+import java.time.format.DateTimeParseException;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -22,8 +25,11 @@ import java.util.Map;
  * 목록은 그대로 나간다. 화면은 그때 방송 번호를 보인다. 대가: 수집기가 응답 없이 매달리면 목록이 시한(접속 2초 + 읽기 3초)만큼
  * 늦어진다.
  *
- * <p>clip은 이 응답을 <b>해석한다</b>({@link CollectorClient}는 채팅 창구 본문을 그대로 넘긴다). 목록 응답의 칸 둘로 옮겨 실어야
+ * <p>clip은 이 응답을 <b>해석한다</b>({@link CollectorClient}는 채팅 창구 본문을 그대로 넘긴다). 목록 응답의 칸으로 옮겨 실어야
  * 해서다.
+ *
+ * <p>응답의 {@code platforms}(POK-397)는 {@code titles}와 나란히 오는 플랫폼마다 최신 값이다. 옛 수집기는 이 칸을 안 주므로 없으면
+ * 비운다(지금처럼 제목만). 원소 하나가 이상하면 그 원소만 버리고, 칸 하나가 이상하면 그 칸만 {@code null}로 읽는다.
  */
 @Component
 public class BroadcastTitleClient {
@@ -42,43 +48,82 @@ public class BroadcastTitleClient {
 
     /**
      * @param streamIds 방송 번호. 수집기 상한(100)은 방송 목록 한 장의 상한과 같다
-     * @return 방송 번호 → 제목. 제목이 없는 방송과, 묻지 못한 경우 전부는 맵에 없다
+     * @return 제목과 플랫폼별 최신 값. 제목이 없는 방송은 제목 맵에 없고, 묻지 못하면 둘 다 빈다
      */
-    public Map<String, BroadcastTitle> titlesOf(List<String> streamIds) {
+    public BroadcastLatest latestOf(List<String> streamIds) {
         Map<String, BroadcastTitle> titles = new HashMap<>();
         if (streamIds.isEmpty() || !collector.enabled()) {
             // 꺼짐은 로그를 안 남긴다. 매 목록 요청마다 참이라 줄만 쌓인다(CollectorClient.get과 같은 이유)
-            return titles;
+            return BroadcastLatest.EMPTY;
         }
         try {
             // 본문에 싣는다. 주소에 이으면 128자 번호 100개가 13KB라 수집기 톰캣 요청 줄 한도(8KB)에 걸린다(PR #214 codex)
             CollectorResponse response = collector.postJson(PATH, mapper.writeValueAsString(Map.of("streamIds", streamIds)));
             if (response.status() != 200) {
                 log.warn("clip.broadcast_title.unavailable cause=status={}", response.status());
-                return titles;
+                return BroadcastLatest.EMPTY;
             }
             // 🔴 본문이 비면(null) readTree가 잭슨 예외가 아니라 IllegalArgumentException을 던지고, 공백뿐이면 null을 돌려준다.
             // 둘 다 그대로 두면 목록 전체가 500이다(로컬 리뷰 · PR #214 codex). 「읽을 것이 없다」를 한 자리에서 못 읽은 것으로 접는다
             JsonNode root = response.body() == null ? null : mapper.readTree(response.body());
             if (root == null || !root.isObject()) {
                 log.warn("clip.broadcast_title.unreadable cause=not_object");
-                return titles;
+                return BroadcastLatest.EMPTY;
             }
             JsonNode byStream = root.path("titles");
+            JsonNode platformsByStream = root.path("platforms");
+            Map<String, List<BroadcastLatest.PlatformLatest>> platforms = new HashMap<>();
             for (String streamId : streamIds) {
                 JsonNode one = byStream.path(streamId);
                 String title = text(one.path("title"));
                 if (title != null && !title.isBlank()) {
                     titles.put(streamId, new BroadcastTitle(title, text(one.path("category"))));
                 }
+                List<BroadcastLatest.PlatformLatest> entries = platformsOf(platformsByStream.path(streamId));
+                if (!entries.isEmpty()) {
+                    platforms.put(streamId, entries);
+                }
             }
-            return titles;
+            return new BroadcastLatest(titles, platforms, platformsByStream.isObject());
         } catch (CollectorErrors.CollectorUnavailableException e) {
             // CollectorClient가 원인을 이미 남겼다
-            return titles;
+            return BroadcastLatest.EMPTY;
         } catch (JacksonException e) {
             log.warn("clip.broadcast_title.unreadable cause={}", e.getClass().getSimpleName());
-            return titles;
+            return BroadcastLatest.EMPTY;
+        }
+    }
+
+    /** 플랫폼 이름이 글자가 아닌 원소는 버린다(어느 플랫폼 값인지 모르면 실을 자리가 없다). 빈 제목은 「제목 없음」이다. */
+    private static List<BroadcastLatest.PlatformLatest> platformsOf(JsonNode array) {
+        List<BroadcastLatest.PlatformLatest> entries = new ArrayList<>();
+        if (!array.isArray()) {
+            return entries;
+        }
+        for (JsonNode each : array) {
+            String platform = text(each.path("platform"));
+            if (platform == null) {
+                continue;
+            }
+            String title = text(each.path("title"));
+            JsonNode viewers = each.path("viewers");
+            entries.add(new BroadcastLatest.PlatformLatest(platform,
+                    title == null || title.isBlank() ? null : title,
+                    text(each.path("category")),
+                    viewers.isInt() ? viewers.asInt() : null,
+                    instantOrNull(text(each.path("observedAt")))));
+        }
+        return entries;
+    }
+
+    private static Instant instantOrNull(String value) {
+        if (value == null) {
+            return null;
+        }
+        try {
+            return Instant.parse(value);
+        } catch (DateTimeParseException e) {
+            return null;
         }
     }
 

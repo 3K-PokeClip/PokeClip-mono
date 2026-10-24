@@ -1,6 +1,7 @@
 package com.pokeclip.auth.youtube;
 
 import com.pokeclip.auth.streamkey.secret.SecretStore;
+import com.pokeclip.auth.support.Sha256;
 import com.pokeclip.auth.user.UserRepository;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
@@ -49,6 +50,16 @@ public class YoutubeTokenRefresher {
      */
     @Transactional
     public RefreshResult refreshIfExpiringWithin(Long userId, Duration minRemaining) {
+        return refreshIfExpiringWithin(userId, minRemaining, null);
+    }
+
+    /**
+     * {@code rejectedSha256}(POK-250): 호출자가 유튜브에서 401을 받은 access의 지문. 지금 access가 그 토큰이면 남은 수명과 무관하게
+     * 갱신한다. 지문 비교는 <b>회원 행 락 안</b>에서 한다: 401이 겹쳐 여럿이 같은 지문을 보내도 첫째가 갱신한 뒤 둘째부터는 바뀐
+     * 토큰을 보고(지문이 다르다) 지금 토큰을 받는다. {@code null}이면 지금 규칙 그대로(스케줄러 길은 access를 먼저 읽지 않는다).
+     */
+    @Transactional
+    public RefreshResult refreshIfExpiringWithin(Long userId, Duration minRemaining, String rejectedSha256) {
         // DB(timestamptz)는 마이크로초까지 반올림해 둔다. 리눅스 시계는 나노초를 주므로 자르지 않으면
         // 스냅샷에 실은 만료 시각이 방금 저장한 값과 1µs 안쪽으로 어긋난다. 이 줄을 지키는 시험(YoutubeTokenRefresherTest의
         // 「임박하면_갱신하고…」)은 리눅스 CI에서만 빨개진다(macOS 로컬은 마이크로초 시계라 초록).
@@ -67,11 +78,16 @@ public class YoutubeTokenRefresher {
                             .map(YoutubeChannelLink::status).orElse(null));
         }
         YoutubeChannelLink link = found.get();
-        if (link.getAccessExpiresAt().isAfter(now.plus(minRemaining))) {
+        // 지문이 왔을 때만 access를 먼저 읽는다. 지문 값은 로그에 안 찍는다.
+        String current = rejectedSha256 == null ? null : accessOf(link, userId);
+        boolean forced = current != null && Sha256.hex(current).equals(rejectedSha256);
+        if (!forced && link.getAccessExpiresAt().isAfter(now.plus(minRemaining))) {
             // access 원문도 락 안에서 읽어 스냅샷에 싣는다 — 호출부(resolve)가 락 밖에서 다시 읽지 않게.
-            String accessToken = secretStore.get(link.getAccessTokenRef())
-                    .orElseThrow(() -> new IllegalStateException("연동 행은 있는데 access secret이 없다 userId=" + userId));
+            String accessToken = current != null ? current : accessOf(link, userId);
             return RefreshResult.of(RefreshOutcome.SKIPPED_FRESH, link, accessToken);
+        }
+        if (forced) {
+            log.info("auth.youtube.link.forced_refresh userId={}", userId);
         }
         // 행은 있는데 secret이 없으면 우리 저장소가 어긋난 것 — 500이 맞다(StreamKeyService.materialOf 선례).
         String refreshToken = secretStore.get(link.getRefreshTokenRef())
@@ -96,6 +112,11 @@ public class YoutubeTokenRefresher {
         link.refreshed(now.plus(tokens.expiresIn()), tokens.scope(), now);   // scope도 null이면 기존 값 유지
         logAfterCommit(() -> log.info("auth.youtube.link.refreshed userId={}", userId));
         return RefreshResult.of(RefreshOutcome.REFRESHED, link, tokens.accessToken());
+    }
+
+    private String accessOf(YoutubeChannelLink link, Long userId) {
+        return secretStore.get(link.getAccessTokenRef())
+                .orElseThrow(() -> new IllegalStateException("연동 행은 있는데 access secret이 없다 userId=" + userId));
     }
 
     /**

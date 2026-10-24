@@ -53,6 +53,8 @@ class ReattachWiringTest {
                 .withBean(BroadcastSessions.class, () -> mock(BroadcastSessions.class))
                 .withBean(EndedStreamStore.class, () -> mock(EndedStreamStore.class))
                 .withBean(StreamerSerialExecutor.class, () -> new StreamerSerialExecutor(10))
+                // SOOP 지켜보기(POK-397). 운영은 꺼져 있어도 SoopWatch.NONE 빈이 있다(SoopWatchConfiguration).
+                .withBean(com.pokeclip.chat.collector.soop.SoopWatch.class, () -> com.pokeclip.chat.collector.soop.SoopWatch.NONE)
                 .withBean(ReattachStatus.class, () -> new ReattachStatus(true))
                 .withPropertyValues(
                         "pokeclip.broadcast.intake.enabled=true",

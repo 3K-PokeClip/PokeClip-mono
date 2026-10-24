@@ -92,8 +92,10 @@ jobs:
           # 40회가 400초가 아니라 600초가 되고, 넷이면 약 40분이 기다리기 예산을 먹는다(PR #258 codex). 바깥 포트를 닫아도
           # (POK-293 M12) 이 길은 남는다. 못 뜬 서버가 있어도 compose ps · free -m · df -h 를 먼저 찍고 실패한다.
           # 굽기 전 · 뒤에 빌드 캐시를 BUILD_CACHE_MAX 아래로 줄이고, 굽기 전 남은 공간이 MIN_FREE_GB 미만이면 캐시를 통째로
-          # 비운다(위 env 의 이유). 크기 상한 옵션 이름이 도커 판마다 다르다(옛 --keep-storage, 새 --max-used-space): 상자의
-          # 도움말을 보고 고른다. 줄이기가 실패하면(옵션이 또 바뀌면) 조용히 넘어가지 않고 ::warning:: 을 찍는다. 캐시를 다
+          # 비운다(위 env 의 이유). 크기 상한 옵션 이름이 도커 판마다 다르다(옛 --keep-storage, 새 --max-used-space). 🔴 도움말에 새
+          # 이름이 보여도 상자의 buildkit 이 낮으면 거부한다(2026-10-24 dev 실측: 「buildkit v0.17.0+ is required for max-used-space」,
+          # 0B). 그래서 도움말로 고르지 않고 새 이름 → 옛 이름 차례로 해 보고, 둘 다 실패하면 ::warning:: 을 찍고 캐시를 통째로 비운다
+          # (그 판 다음 배포는 처음부터 굽어 느리지만 디스크가 차는 것보다 낫다, POK-425 후속). 캐시를 다
           # 비우고도 남은 공간이 모자라면(이미지 · DB 자료가 찼다) 그것도 경고한다. 끝에서 디스크가 DISK_WARN_PERCENT 이상이면 ::warning:: 줄을 찍는다.
           # 상수들은 이 셸에서 풀려 상자에 글자로 간다(앞에 \ 가 없다).
           # 굽기 뒤의 image prune 은 이름이 떨어진 옛 :dev 이미지만 지운다(돌고 있는 컨테이너의 이미지는 안 지운다).
@@ -112,15 +114,15 @@ jobs:
               'sudo -u ec2-user git checkout -B develop FETCH_HEAD',
               'sudo -u ec2-user git log --oneline -1',
               'cd services',
-              'cap=--keep-storage; if sudo -u ec2-user docker builder prune --help | grep -q -- --max-used-space; then cap=--max-used-space; fi',
-              'if sudo -u ec2-user docker builder prune -f \$cap $BUILD_CACHE_MAX > /tmp/pokeclip-prune.log 2>&1; then tail -1 /tmp/pokeclip-prune.log; else echo ::warning::build cache cap prune failed; tail -3 /tmp/pokeclip-prune.log; fi',
+              'cap_prune() { for flag in --max-used-space --keep-storage; do if sudo -u ec2-user docker builder prune -f \$flag $BUILD_CACHE_MAX > /tmp/pokeclip-prune.log 2>&1; then tail -1 /tmp/pokeclip-prune.log; return 0; fi; done; echo ::warning::build cache cap prune failed with both flags, pruning all build cache; tail -2 /tmp/pokeclip-prune.log; sudo -u ec2-user docker builder prune -af | tail -1; }',
+              'cap_prune',
               'free_gb=\$(df --output=avail -BG / | tail -1 | tr -dc 0-9); if [ \$free_gb -lt $MIN_FREE_GB ]; then echo low disk \${free_gb}G free, pruning all build cache; sudo -u ec2-user docker builder prune -af | tail -1; free_gb=\$(df --output=avail -BG / | tail -1 | tr -dc 0-9); if [ \$free_gb -lt $MIN_FREE_GB ]; then echo ::warning::dev box still only \${free_gb}G free after clearing build cache; fi; fi',
               'df -h /',
               'for s in auth clip chat-collector chat-detector render-worker upload-worker; do echo build \$s; sudo -u ec2-user docker compose -f docker-compose.dev.yml build -q \$s; done',
               'sudo -u ec2-user docker compose -f docker-compose.dev.yml up -d render-worker upload-worker',
               'sudo -u ec2-user docker compose -f docker-compose.dev.yml up -d postgres auth clip chat-collector chat-detector',
               'sudo -u ec2-user docker image prune -f',
-              'if sudo -u ec2-user docker builder prune -f \$cap $BUILD_CACHE_MAX > /tmp/pokeclip-prune.log 2>&1; then tail -1 /tmp/pokeclip-prune.log; else echo ::warning::build cache cap prune failed; tail -3 /tmp/pokeclip-prune.log; fi',
+              'cap_prune',
               'fail=0; end=\$((\$(date +%s) + 600)); for p in 8081 8082 8083 8084; do ok=0; while [ \$(date +%s) -lt \$end ]; do if curl -sf -m 5 -o /dev/null http://127.0.0.1:\$p/actuator/health; then ok=1; break; fi; sleep 10; done; if [ \$ok -eq 1 ]; then echo \$p UP; else echo \$p not UP within 600s; fail=1; fi; done; sudo -u ec2-user docker compose -f docker-compose.dev.yml ps; free -m; df -h /; use=\$(df --output=pcent / | tail -1 | tr -dc 0-9); if [ \$use -ge $DISK_WARN_PERCENT ]; then echo ::warning::dev box disk \$use% used; fi',
               'wfail=0; for s in render-worker upload-worker; do if [ -z \"\$(sudo -u ec2-user docker compose -f docker-compose.dev.yml ps --status running -q \$s)\" ]; then echo \$s not running; wfail=1; else echo \$s running; fi; done; for v in render-worker:RENDER_QUEUE_URL render-worker:THUMBNAIL_QUEUE_URL upload-worker:UPLOAD_QUEUE_URL; do s=\${v%%:*}; n=\${v#*:}; if ! sudo -u ec2-user docker compose -f docker-compose.dev.yml exec -T \$s env 2>/dev/null | grep -q ^\$n=.; then echo ::warning::\$s \$n empty; fi; done; [ \$fail -eq 0 ] && [ \$wfail -eq 0 ]'
             ]" \

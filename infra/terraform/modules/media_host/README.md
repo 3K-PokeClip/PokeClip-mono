@@ -40,8 +40,18 @@ Media 상자[^box] 모듈입니다(설계 3-3 · 3-3-1 · 5-3 · 5-5, 계획 M9)
         `local.db_users` 를 도는 for 식만 · `db_users` 는 두 이름
         (`media_indexer` · `media_janitor`) 리터럴.
     *   statement `actions` 는 `서비스:동작` 꼴 리터럴 목록만(허용 목록 —
-        와일드카드 · 지시자 · 식 금지). 두 경로의 문자열 · 맵 키에 템플릿
-        지시자 `%{` 금지.
+        와일드카드 · 지시자 · 식 금지)이고 `iam:` · `sts:` 동작은 없다. 두
+        경로의 문자열 · 맵 키에 템플릿 지시자 `%{` 금지.
+    *   역할 참조: 인라인 정책 · 인스턴스 프로필 · 관리형 정책 연결의 `role` 은
+        같은 경로의 `aws_iam_role.<이름>.name` · `.id` 만, 상자의
+        `iam_instance_profile` 은 `aws_iam_instance_profile.<이름>.name` 만
+        (리터럴 이름 · 변수로 다른 역할 · 프로필을 겨누지 못하게). 상자에
+        `launch_template` 금지(`dynamic` 포함 — 템플릿의 프로필로 비켜 간다).
+    *   상자 접속 · 자격: `key_name`(SSH 키 쌍) 금지 · `metadata_options` 에
+        `http_tokens = "required"` 리터럴 명시 필수(IMDSv2 — 없음 · 식 ·
+        `dynamic` 위반).
+    *   명령 블록: 자원 본문에 `provisioner`(`local-exec` · `remote-exec` ·
+        `file`) · `connection` 금지(`dynamic` 포함).
     *   lifecycle: 거부 목록 파라미터는 `prevent_destroy = true`(리터럴) ·
         `ignore_changes` 에 `value`, 상자는 `ignore_changes` 에 `ami` ·
         `user_data_base64`.
@@ -78,9 +88,10 @@ Media 상자[^box] 모듈입니다(설계 3-3 · 3-3-1 · 5-3 · 5-5, 계획 M9)
     합니다.
 *   부트스트랩의 판정 줄(`MEDIA BOOTSTRAP OK|FAIL <단계>`)은 cloud-init 출력
     (`/var/log/cloud-init-output.log`)에 남습니다.
-*   압축 user_data 크기(시험값 기준): 기본 12,381 바이트 · 가장 큰 렌더(응답기
-    · janitor · 제어면 상류 모두 켬) 12,453 바이트 — 여유 약 3.9 KB 입니다.
-    시험이 매번 다시 잽니다.
+*   압축 user_data 크기(시험값 기준): 기본 약 12.4 KB · 가장 큰 렌더(응답기
+    · janitor · 제어면 상류 모두 켬) 약 12.5 KB — 여유 약 3.9 KB 입니다. 주석을
+    고칠 때마다 수십 바이트씩 바뀌므로 정확한 값은 16 KiB 게이트 시험이 매번
+    다시 잽니다.
 
 묶음 내용이 저장소와 같은지는 묶음 Dockerfile 이 저장소 경로를 그대로 COPY
 하는 것으로 갈음합니다. 2026-10-23 로컬 빌드(arm64)에서 꺼낸 9개 파일의

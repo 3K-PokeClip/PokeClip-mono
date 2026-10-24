@@ -1,5 +1,7 @@
 package com.pokeclip.chat.collector.relay;
 
+import com.pokeclip.chat.collector.Platform;
+
 import java.time.Instant;
 
 /**
@@ -84,8 +86,9 @@ public sealed interface RelayPayload permits RelayPayload.Chat, RelayPayload.Don
      * 방송 정보 한 시점(POK-234 PR-C). 시각은 <b>우리가 물어본 시각</b>이다 — 치지직이 관측 시각을 안 준다.
      * 창구 칸(nickname 등)은 비고 {@code title}·{@code tags}·{@code category}·{@code viewers}가 찬다.
      * {@code viewers}의 {@code null}은 「목록에서 못 찾았다」이지 0명이 아니다({@code BroadcastInfo} 주석).
+     * {@code platform}은 그 관측을 남긴 플랫폼이다(POK-397). 한 방송을 두 플랫폼에 같이 내보내면 화면이 이것으로 숫자를 가른다.
      */
-    record Info(Instant time, String title, java.util.List<String> tags, String category, Integer viewers)
+    record Info(Platform platform, Instant time, String title, java.util.List<String> tags, String category, Integer viewers)
             implements RelayPayload {
 
         public Info {

@@ -32,7 +32,7 @@ public class UploadReportController {
      * 그 400은 일꾼이 같은 보고를 되풀이하다 실패 큐로 가는 길이다(UploadReportService.result 주석).
      */
     public record ResultBody(String outcome, String videoId, String errorCode, String errorMessage,
-                             JsonNode thumbnailOutcome, JsonNode thumbnailErrorCode) {
+                             JsonNode thumbnailOutcome, JsonNode thumbnailErrorCode, JsonNode onlyIfNoSession) {
     }
 
     @PostMapping("/internal/uploads/{uploadId}/start")
@@ -54,7 +54,12 @@ public class UploadReportController {
     @PostMapping("/internal/uploads/{uploadId}/result")
     public ResponseEntity<Map<String, Object>> result(@PathVariable long uploadId, @RequestBody ResultBody body) {
         return reply(service.result(uploadId, body.outcome(), body.videoId(), body.errorCode(), body.errorMessage(),
-                text(body.thumbnailOutcome()), text(body.thumbnailErrorCode())));
+                text(body.thumbnailOutcome()), text(body.thumbnailErrorCode()), flag(body.onlyIfNoSession())));
+    }
+
+    /** 불리언 {@code true}일 때만 켠다. 모양이 틀리면 꺼짐(400을 안 낸다: 썸네일 칸과 같은 이유). */
+    private static boolean flag(JsonNode node) {
+        return node != null && node.isBoolean() && node.booleanValue();
     }
 
     private static String text(JsonNode node) {

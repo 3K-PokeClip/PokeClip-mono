@@ -10,6 +10,7 @@ import org.springframework.test.context.ActiveProfiles;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -25,7 +26,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 class BroadcastInfoStoreTest extends IntegrationTestSupport {
 
     private static final List<String> STREAMS =
-            List.of("bi-1", "bi-cap", "bi-tags", "bi-null-tag", "bi-null-write", "bi-title-a", "bi-title-b", "bi-title-gap", "bi-plat");
+            List.of("bi-1", "bi-cap", "bi-tags", "bi-null-tag", "bi-null-write", "bi-title-a", "bi-title-b", "bi-title-gap", "bi-plat",
+                    "bi-dual", "bi-soop-early", "bi-soop-untitled");
     private static final Instant T = Instant.parse("2026-09-03T15:00:00Z");
 
     private final BroadcastInfoStore store;
@@ -83,6 +85,46 @@ class BroadcastInfoStoreTest extends IntegrationTestSupport {
                 .containsEntry("bi-title-a", new BroadcastInfoStore.Title("새 제목", "LoL"))
                 .containsEntry("bi-title-b", new BroadcastInfoStore.Title("다른 방송", null));
         assertThat(store.latestTitles(List.of())).isEmpty();
+    }
+
+    /**
+     * 한 방송을 치지직·SOOP에 같이 내보내면 플랫폼마다 최신 값이 따로다(POK-397). 시각을 엇갈리게 심어 두 플랫폼 줄이 번갈아 섞이면
+     * 드러나게 한다. 시청자 수·관측 시각은 그 플랫폼의 <b>최신 줄</b>(제목 조건 없음), 제목·카테고리는 그 플랫폼의 <b>제목 있는</b> 최신 줄이다.
+     * 옛 칸({@code latestTitles})은 플랫폼과 무관한 「제목 있는 마지막 값」 그대로다.
+     */
+    @Test
+    void 플랫폼마다_최신_값을_따로_준다() {
+        store.insert(new BroadcastInfo(Platform.CHZZK, "bi-dual", "CH", T, "치지직1", List.of(), "LoL", 10));
+        store.insert(new BroadcastInfo(Platform.SOOP, "bi-dual", "SU", T.plusSeconds(60), "숲1", List.of(), "Talk", 5));
+        store.insert(new BroadcastInfo(Platform.CHZZK, "bi-dual", "CH", T.plusSeconds(120), "치지직2", List.of(), "LoL", 20));
+        store.insert(new BroadcastInfo(Platform.SOOP, "bi-dual", "SU", T.plusSeconds(180), null, List.of(), null, 7));
+        // SOOP이 먼저 끝난 방송: SOOP 마지막 관측은 처음 한 줄이다
+        store.insert(new BroadcastInfo(Platform.SOOP, "bi-soop-early", "SU", T, "숲 처음", List.of(), null, 3));
+        store.insert(new BroadcastInfo(Platform.CHZZK, "bi-soop-early", "CH", T.plusSeconds(300), "치지직 끝까지", List.of(), null, 30));
+        // 제목을 한 번도 못 얻은 SOOP 방송도 시청자 수는 나간다(계획 검증 M1)
+        store.insert(new BroadcastInfo(Platform.SOOP, "bi-soop-untitled", "SU", T, null, List.of(), null, 9));
+
+        Map<String, List<BroadcastInfoStore.PlatformLatest>> latest =
+                store.latestByPlatform(List.of("bi-dual", "bi-soop-early", "bi-soop-untitled", "bi-없음"));
+
+        assertThat(latest).containsOnlyKeys("bi-dual", "bi-soop-early", "bi-soop-untitled");
+        assertThat(latest.get("bi-dual")).as("순서는 플랫폼 열거 순(CHZZK, SOOP)").containsExactly(
+                new BroadcastInfoStore.PlatformLatest(Platform.CHZZK, "치지직2", "LoL", 20, T.plusSeconds(120)),
+                new BroadcastInfoStore.PlatformLatest(Platform.SOOP, "숲1", "Talk", 7, T.plusSeconds(180)));
+        assertThat(latest.get("bi-soop-early")).containsExactly(
+                new BroadcastInfoStore.PlatformLatest(Platform.CHZZK, "치지직 끝까지", null, 30, T.plusSeconds(300)),
+                new BroadcastInfoStore.PlatformLatest(Platform.SOOP, "숲 처음", null, 3, T));
+        assertThat(latest.get("bi-soop-untitled")).containsExactly(
+                new BroadcastInfoStore.PlatformLatest(Platform.SOOP, null, null, 9, T));
+        assertThat(store.latestByPlatform(List.of())).isEmpty();
+
+        assertThat(store.latestTitles(List.of("bi-dual", "bi-soop-untitled")))
+                .as("옛 칸은 플랫폼과 무관한 제목 있는 마지막 값이고, 제목 없는 방송은 키가 없다")
+                .containsOnlyKeys("bi-dual")
+                .containsEntry("bi-dual", new BroadcastInfoStore.Title("치지직2", "LoL"));
+        assertThat(store.series("bi-dual", T.minusSeconds(1), 720)).as("추이 줄마다 플랫폼이 실린다")
+                .extracting(BroadcastInfo::platform)
+                .containsExactly(Platform.CHZZK, Platform.SOOP, Platform.CHZZK, Platform.SOOP);
     }
 
     /**
