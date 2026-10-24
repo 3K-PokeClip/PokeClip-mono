@@ -258,6 +258,24 @@ describe('UploadInfoDialog', () => {
     expect(input).toHaveFocus();
   });
 
+  it('빈 태그 칸에서 Backspace를 누르면 마지막 태그부터 빠지고, 친 글자가 있으면 글자만 지운다', async () => {
+    const user = userEvent.setup();
+    const { dialog } = renderDialog({}, { tags: ['롤', '보스'] });
+    const input = dialog().getByRole('textbox', { name: /태그/ });
+
+    await user.type(input, '역{Backspace}');
+    expect(input).toHaveValue('');
+    expect(dialog().getByText('보스')).toBeInTheDocument();
+
+    await user.type(input, '{Backspace}');
+    expect(dialog().queryByText('보스')).not.toBeInTheDocument();
+    expect(dialog().getByText('롤')).toBeInTheDocument();
+
+    await user.type(input, '{Backspace}{Backspace}');
+    expect(dialog().queryByText('롤')).not.toBeInTheDocument();
+    expect(input).toHaveValue('');
+  });
+
   it('제목이 비었으면 보내지 않고 정보 탭을 열어 그 칸에 말한다', async () => {
     const user = userEvent.setup();
     const { dialog, onSubmit } = renderDialog();

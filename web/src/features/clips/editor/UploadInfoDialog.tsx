@@ -295,7 +295,14 @@ function UploadInfoForm({
   };
 
   const onTagKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.key !== 'Enter' || event.nativeEvent.isComposing) return;
+    if (event.nativeEvent.isComposing) return;
+    // 글자 칸이 비었을 때 Backspace는 칸 안에 쌓인 태그를 뒤에서부터 하나씩 뺀다
+    if (event.key === 'Backspace' && tagText === '' && draft.tags.length > 0) {
+      event.preventDefault();
+      set('tags', draft.tags.slice(0, -1));
+      return;
+    }
+    if (event.key !== 'Enter') return;
     // Enter는 폼을 보내지 않고 태그를 넣는다
     event.preventDefault();
     if (commitTags(tagText) !== null) setTagText('');
