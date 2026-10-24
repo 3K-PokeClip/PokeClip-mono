@@ -569,9 +569,34 @@ CLOUDFRONT WAF 의 속도 규칙 기본값 20000(5분 · IP 하나)은 추정입
     (`CloudFront-Policy` · `CloudFront-Signature` · `CloudFront-Key-Pair-Id`)과
     `Bearer` 가 0건인지 셉니다.
 *   **WAF 로그**: `authorization` · `cookie` 헤더는 가려 남깁니다(값 대신
-    `REDACTED`). 같은 이름들이 값으로 0건인지 셉니다. 가리는 것은 로그뿐이고
-    요청 샘플은 가리지 않습니다(웹 ACL 데이터 보호는 후속) — 시험 중 · 뒤에
-    WAF 콘솔의 샘플 요청을 열지 않습니다.
+    `REDACTED`). 같은 이름들이 값으로 0건인지 셉니다.
+*   **WAF 요청 샘플**: 웹 ACL 데이터 보호(POK-459)가 apply 되면 요청
+    샘플에서도 `authorization` · `cookie` 헤더 값이 `REDACTED` 로 바뀝니다.
+    다만 아래 둘을 실측으로 확인하기 전까지는 시험 중 · 뒤에 WAF 콘솔의
+    샘플 요청을 열지 않습니다. 그 실측이 POK-459 완료 조건 「apply 뒤 콘솔
+    샘플 실측」 입니다.
+    *   (가) 헤더 이름 대소문자 — HTTP/1.1 클라이언트가 보내는
+        `Authorization` · `Cookie` 도 가려지는가.
+    *   (나) `cookie` 헤더를 보호할 때 쿠키 이름(`CloudFront-Policy` 등)이
+        남는가.
+
+    실측은 실제 비밀이 아닌 고정 표식 값으로, 앞 3시간 안에 서명 쿠키를 쓴
+    시험이 없을 때 합니다(샘플은 최근 3시간을 보관). 아래 두 요청을 보내고
+    샘플에서 두 헤더 값이 `REDACTED` 인지, `x` 같은 쿠키 이름이 남는지
+    봅니다. 대소문자를 구별하는 것으로 나오면 `protected_headers` 에
+    변형(`Authorization` · `Cookie`)을 더하는 후속을 엽니다.
+
+    ```shell
+    curl --http1.1 --resolve "media.pokeclip.com:443:${edge_ip}" -sS \
+      -o /dev/null -w '%{http_code}\n' \
+      -H 'Authorization: Bearer <표식>' -H 'Cookie: x=<표식>' \
+      https://media.pokeclip.com/<경로>
+    curl --http2 --resolve "media.pokeclip.com:443:${edge_ip}" -sS \
+      -o /dev/null -w '%{http_code}\n' \
+      -H 'authorization: Bearer <표식>' -H 'cookie: x=<표식>' \
+      https://media.pokeclip.com/<경로>
+    ```
+
 *   **함수 시험**: live-auth 에 `aws cloudfront test-function` · 콘솔 함수
     시험 탭을 쓰지 않습니다(출력에 KVS 값이 든 Authorization 이 찍힙니다).
 *   **원본 쪽**(nginx · MediaMTX · 사이드카 · 저널): O7f 의 9 의
