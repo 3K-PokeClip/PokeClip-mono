@@ -15,15 +15,54 @@
   if (!KEY) return;
   if (location.hostname !== 'pokeclip.com' && location.hostname !== 'www.pokeclip.com') return;
 
-  // 주소의 쿼리·해시를 뗀다 — 홍보 링크의 utm_* 는 SDK가 먼저 따로 뽑아 두므로 남는다
+  // 주소의 쿼리·해시를 뗀다 — 홍보 링크의 utm_* 는 SDK가 먼저 따로 뽑아 두므로 남는다.
+  // 우리 주소가 아닌 곳(유입 경로)은 origin만 남긴다 — 방송 채널·영상 주소는 경로에 채널 ID·영상 ID가 실린다(처리방침 13절)
   function scrubUrl(value) {
+    if (/^https?:\/\//i.test(value)) {
+      try {
+        var url = new URL(value);
+        if (url.hostname !== 'pokeclip.com' && !/\.pokeclip\.com$/.test(url.hostname)) {
+          return url.origin;
+        }
+      } catch (e) {
+        // 주소처럼 생겼는데 못 읽으면 아래에서 쿼리만이라도 뗀다
+      }
+    }
     return value.replace(/[?#].*$/, '');
+  }
+
+  // 홍보 링크 값은 README 「홍보 링크와 UTM」 표에 적은 값만 그대로 두고 나머지는 other로 바꾼다.
+  // 자유 문자열(utm_term)과 광고 클릭 식별자는 지운다 — 대시보드 web/src/lib/analytics/scrub.ts와 같은 규칙이다
+  var UTM_ALLOWED = {
+    utm_source: /^(youtube|chzzk|soop|discord|kakao|x|naver|instagram)$/,
+    utm_medium: /^(video_description|profile|community|post|dm|ad)$/,
+    utm_campaign: /^(launch_2026_10|\d{4}_\d{2}_[a-z0-9_]{1,40})$/,
+    utm_content: /^[a-z0-9_]{1,32}$/,
+  };
+  var UTM_KEY = /^(?:\$initial_)?(utm_[a-z]+)$/;
+  var CLICK_ID_KEY =
+    /^(?:\$initial_)?(?:gad_source|mc_cid|gclid|gclsrc|dclid|gbraid|wbraid|fbclid|msclkid|twclid|li_fat_id|igshid|ttclid|rdt_cid|epik|qclid|sccid|oppref|irclid|_kx)$/;
+
+  // 홍보 링크 속성이면 정리하고 true
+  function scrubCampaign(properties, key, value) {
+    if (CLICK_ID_KEY.test(key)) {
+      delete properties[key];
+      return true;
+    }
+    var utm = UTM_KEY.exec(key);
+    if (!utm) return false;
+    var allowed = UTM_ALLOWED[utm[1]];
+    if (!allowed) delete properties[key];
+    else if (typeof value === 'string' && value !== '' && !allowed.test(value))
+      properties[key] = 'other';
+    return true;
   }
 
   function scrubProperties(properties) {
     if (!properties) return;
     Object.keys(properties).forEach(function (key) {
       var value = properties[key];
+      if (scrubCampaign(properties, key, value)) return;
       if (typeof value === 'string') {
         if (/pathname$/.test(key) || /^https?:\/\//i.test(value)) properties[key] = scrubUrl(value);
       } else if ((key === '$set' || key === '$set_once') && value && typeof value === 'object') {
