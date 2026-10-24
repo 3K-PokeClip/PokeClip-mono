@@ -526,7 +526,7 @@ button.preview:focus-visible {
 
 /* 만료 임박(D-3 이하) — 글자색만 바뀌지만 D-day 숫자가 함께 말한다 */
 .meta dd[data-urgent='true'] {
-  color: var(--pc-color-danger);
+  color: var(--pc-color-danger-text);
 }
 
 /* ---------- 빈 상태 ---------- */

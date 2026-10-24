@@ -71,7 +71,7 @@
 /* 완료 단계 — 번호 대신 체크 (DoD "단계 완료 시 체크 표시") */
 .welcomeStepNo[data-done='true'] {
   background: var(--pc-color-success-subtle);
-  color: var(--pc-color-success);
+  color: var(--pc-color-success-text);
 }
 
 /* lucide size prop은 px 고정 — 유닛에 태운다 */

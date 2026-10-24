@@ -611,7 +611,7 @@
 }
 
 .textSample[data-style='yellow'] {
-  color: var(--pc-color-warning);
+  color: var(--pc-color-warning-text);
 }
 
 .textSample[data-style='glow'] {

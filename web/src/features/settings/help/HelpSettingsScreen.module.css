@@ -345,7 +345,7 @@
   flex: none;
   width: calc(14 * var(--pc-u));
   height: calc(14 * var(--pc-u));
-  color: var(--pc-color-success);
+  color: var(--pc-color-success-text);
 }
 
 .faqLink {

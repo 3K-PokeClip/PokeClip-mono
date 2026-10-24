@@ -255,7 +255,7 @@
 
 .compareYes {
   display: block;
-  color: var(--pc-color-success);
+  color: var(--pc-color-success-text);
 }
 
 .compareNo {

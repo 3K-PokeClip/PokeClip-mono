@@ -195,7 +195,7 @@
 /* 시인성은 호버에서만 준다 — 평소에 눈에 띄면 실수로 눌린다 */
 .withdrawLink:hover:enabled,
 .withdrawLink:focus-visible {
-  color: var(--pc-color-danger);
+  color: var(--pc-color-danger-text);
   text-decoration-color: var(--pc-color-danger);
 }
 
@@ -400,7 +400,7 @@
 .unpaidValue {
   margin-left: auto;
   font: 700 calc(13 * var(--pc-u)) var(--pc-font-mono);
-  color: var(--pc-color-danger);
+  color: var(--pc-color-danger-text);
 }
 
 .blockedActions {
@@ -600,13 +600,13 @@
   width: calc(24 * var(--pc-u));
   height: calc(24 * var(--pc-u));
   stroke-width: 1.7;
-  color: var(--pc-color-danger);
+  color: var(--pc-color-danger-text);
 }
 
 .errorTitle {
   font-size: calc(12.5 * var(--pc-u));
   font-weight: 700;
-  color: var(--pc-color-danger);
+  color: var(--pc-color-danger-text);
 }
 
 .errorHint {
@@ -696,7 +696,7 @@
 
 .cropError {
   font-size: calc(11.5 * var(--pc-u));
-  color: var(--pc-color-danger);
+  color: var(--pc-color-danger-text);
   margin: calc(10 * var(--pc-u)) 0 0;
 }
 
@@ -741,7 +741,7 @@
   margin: 0;
   font-size: calc(11.5 * var(--pc-u));
   line-height: 1.4;
-  color: var(--pc-color-danger);
+  color: var(--pc-color-danger-text);
 }
 
 /* ---------- 모션 (1p 「모션 · 복귀 규칙」) ---------- */

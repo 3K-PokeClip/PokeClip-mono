@@ -30,7 +30,7 @@
   outline: none;
 }
 .item[data-danger] {
-  color: var(--pc-color-danger);
+  color: var(--pc-color-danger-text);
 }
 .item[aria-disabled='true'] {
   opacity: 0.5;

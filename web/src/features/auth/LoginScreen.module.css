@@ -109,7 +109,7 @@
   margin-top: calc(12 * var(--pc-u));
   font-size: calc(12.5 * var(--pc-u));
   text-align: center;
-  color: var(--pc-color-danger);
+  color: var(--pc-color-danger-text);
 }
 
 .terms {

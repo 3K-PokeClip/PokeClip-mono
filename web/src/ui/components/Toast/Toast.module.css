@@ -98,13 +98,13 @@
   color: var(--pc-color-accent-text);
 }
 .toast[data-tone='success'] .icon {
-  color: var(--pc-color-success);
+  color: var(--pc-color-success-text);
 }
 .toast[data-tone='error'] .icon {
-  color: var(--pc-color-danger);
+  color: var(--pc-color-danger-text);
 }
 .toast[data-tone='warning'] .icon {
-  color: var(--pc-color-warning);
+  color: var(--pc-color-warning-text);
 }
 
 .body {
