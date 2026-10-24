@@ -72,8 +72,9 @@ export interface BroadcastRow {
    */
   thumbnailUrl?: string | null;
   /**
-   * 방송 제목과 카테고리(POK-259). 서버가 켜진 플랫폼 중에서 고른다(POK-397). 수집기가 1분마다 남기는 관측에서 제목이 있는 마지막 값이다. 관측이 없거나, 수집기가
-   * 아프거나, 이 칸을 모르는 옛 서버면 비어 온다. 화면에 보일 이름은 {@link broadcastTitle}로 고른다
+   * 방송 제목과 카테고리(POK-259). 서버가 켜진 플랫폼 중에서 고른다(POK-397). 수집기가 1분마다 남기는 관측에서 제목이
+   * 있는 마지막 값이다. 관측이 없거나, 수집기가 아프거나, 이 칸을 모르는 옛 서버면 비어 온다. 화면에 보일 이름은
+   * {@link broadcastTitle}로 고른다
    */
   title?: string | null;
   category?: string | null;
