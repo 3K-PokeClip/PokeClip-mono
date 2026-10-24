@@ -59,10 +59,6 @@
   --_bg: var(--pc-color-info-subtle);
   --_on: var(--pc-gray-1000); /* 테마 고정 — 밝은 채움 위 글자 */
 }
-.badge[data-variant='solid'] {
-  background: var(--_c);
-  color: var(--_on);
-}
 /* accent·point는 다크 글자가 채움색(primary-500·point-500)이라 -text로 바꾸면 다크가 달라진다 — 라이트만 */
 :global([data-theme='light']) .badge[data-tone='accent'] {
   --_t: var(--pc-color-accent-text);
