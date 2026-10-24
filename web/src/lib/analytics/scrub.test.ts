@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CaptureResult } from 'posthog-js';
 import { scrubAttribute, scrubEvent, scrubUrl } from './scrub';
 
@@ -57,6 +57,37 @@ describe('scrubUrl — 주소에서 비밀값을 뗀다(POK-356)', () => {
     expect(scrubUrl('/api/clip/broadcasts?state=live')).toBe('/api/clip/broadcasts');
     expect(scrubUrl('https://media.pokeclip.com/playback/S-1/index.m3u8')).toBe(
       'https://media.pokeclip.com/playback/_/index.m3u8',
+    );
+  });
+
+  it('라이브 LL-HLS 재생목록·조각 주소의 송출 키 폴더를 가린다 — 우리 호스트라 경로가 남는다 (PR #382 리뷰)', () => {
+    expect(scrubUrl('https://media.pokeclip.com/ab12cd34key/index.m3u8?_HLS_msn=3')).toBe(
+      'https://media.pokeclip.com/_/index.m3u8',
+    );
+    expect(scrubUrl('https://media.pokeclip.com/ab12cd34key/0f2a_seg12.mp4')).toBe(
+      'https://media.pokeclip.com/_/0f2a_seg12.mp4',
+    );
+    expect(scrubUrl('https://media.pokeclip.com/playback/S-1/index.m3u8')).toBe(
+      'https://media.pokeclip.com/playback/_/index.m3u8',
+    );
+  });
+});
+
+describe('scrubUrl — 라이브 재생 base(NEXT_PUBLIC_MEDIA_LIVE_BASE_URL)', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.resetModules();
+  });
+
+  it('base 뒤 첫 경로 조각(송출 키)을 가린다 — base 경로가 깊어도', async () => {
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', 'https://media.pokeclip.com/live/');
+    vi.resetModules();
+    const fresh = await import('./scrub');
+    expect(fresh.scrubUrl('https://media.pokeclip.com/live/ab12cd34key/v1/index.m3u8?x=1')).toBe(
+      'https://media.pokeclip.com/live/_/_/index.m3u8',
+    );
+    expect(fresh.scrubUrl('https://media.pokeclip.com/live/ab12cd34key')).toBe(
+      'https://media.pokeclip.com/live/_',
     );
   });
 });

@@ -21,13 +21,29 @@ const PAGE_EVENTS = new Set(['$pageview', '$pageleave']);
 const VOD_PATH_RE = /^\/broadcast\/vod\/[^/]+/;
 const BROADCAST_API_RE = /^\/api\/clip\/broadcasts\/[^/]+/;
 const PLAYBACK_PATH_RE = /^\/playback\/[^/]+/;
+/**
+ * HLS 재생목록·조각 파일을 담은 폴더 — 라이브 LL-HLS는 `<base>/<송출 키>/index.m3u8`·`<송출 키>/<…>_seg.mp4`라 그 폴더가 키다
+ * (features/player/mediaSource.ts). base가 설정과 달라도 새지 않게 파일 바로 위 폴더를 가린다
+ */
+const MEDIA_FILE_DIR_RE = /\/[^/]+(\/[^/]+\.(?:m3u8|m4s|mp4|ts|aac|m4a))$/;
+/** 라이브 재생 주소의 앞부분 — 그 뒤 첫 경로 조각이 송출 키다(PR #382 리뷰) */
+const LIVE_BASE = (process.env.NEXT_PUBLIC_MEDIA_LIVE_BASE_URL ?? '').replace(/\/+$/, '');
 
 function scrubPath(path: string): string {
   return path
     .replace(/[?#].*$/, '')
     .replace(VOD_PATH_RE, '/broadcast/vod/_')
     .replace(BROADCAST_API_RE, '/api/clip/broadcasts/_')
-    .replace(PLAYBACK_PATH_RE, '/playback/_');
+    .replace(PLAYBACK_PATH_RE, '/playback/_')
+    .replace(MEDIA_FILE_DIR_RE, '/_$1');
+}
+
+/** 라이브 재생 base 아래 주소면 송출 키 자리(첫 경로 조각)를 가린다. 아니면 null */
+function scrubLiveMediaUrl(value: string): string | null {
+  if (LIVE_BASE === '' || !value.startsWith(`${LIVE_BASE}/`)) return null;
+  const rest = value.slice(LIVE_BASE.length + 1).replace(/[?#].*$/, '');
+  const slash = rest.indexOf('/');
+  return `${LIVE_BASE}/_${slash === -1 ? '' : scrubPath(rest.slice(slash))}`;
 }
 
 /** pokeclip.com과 그 하위 주소, 그리고 지금 페이지의 호스트(로컬 개발)만 우리 주소로 본다 */
@@ -43,6 +59,8 @@ function isOwnHost(hostname: string): boolean {
 export function scrubUrl(value: string): string {
   if (value.startsWith('/')) return scrubPath(value);
   if (!/^https?:\/\//i.test(value)) return value;
+  const live = scrubLiveMediaUrl(value);
+  if (live !== null) return live;
   try {
     const url = new URL(value);
     return isOwnHost(url.hostname) ? `${url.origin}${scrubPath(url.pathname)}` : url.origin;
