@@ -12,15 +12,18 @@
 # 데몬이 늦게 이전을 시작하는 갈래(0→1 후발 기동)도 지킨다: restore 가 볼 때는
 # 이전 psql 프로세스도 세션도 없어 옛 컨테이너를 띄웠는데, 그 뒤 데몬이 버퍼에
 # 남은 이전을 시작하면 그 이전은 restore 가 먼저 만든 울타리를 보고 아무것도
-# 바꾸지 않고 실패해야 한다.
+# 바꾸지 않고 실패해야 한다. 울타리 이름은 실행마다 달라, 다음 배포가 디스크
+# 검사에서 실패한 뒤에 앞 배포의 밀린 이전이 돌아도 앞 울타리가 막는다.
 #
-# 가짜 sudo · docker · sleep · psql 을 PATH 맨 앞에 둔다. 컨테이너는 띄우지
+# 가짜 sudo · docker · sleep · df · psql 을 PATH 맨 앞에 둔다. 컨테이너는 띄우지
 # 않는다. 가짜 docker 는 이전 psql 이 「대기 몇 번 동안 살아 있는지」를 환경
 # 변수로 받아, 그동안의 이력 표 읽기에는 커밋 전 모습을, 그 뒤에는 최종 모습을
-# 낸다. 울타리 스키마는 state 의 fence 파일 하나로 본다. 이전 SQL 호출만은 안쪽
+# 낸다. 울타리 스키마는 state/fences 에 이름마다 파일 하나로 본다. 이전 SQL
+# 호출만은 안쪽
 # `sh -c` 를 그대로 돌려 가짜 psql 에 넘기고, 가짜 psql 은 psql 의 -1 · -c · -f
 # 차례(앞에서부터 · -1 이면 한 트랜잭션)를 흉내 내 커밋되면 move_committed 를
-# 남긴다.
+# 남긴다. 「앞 배포」 · 「다음 배포」는 제품을 새 bash 프로세스로 source 한 실행
+# 하나씩이다(실행마다 울타리 이름이 새로 정해진다).
 #
 # 제품 스크립트는 마지막 줄이 `main "$@"` 라 source 하면 main 이 돈다. 시험은
 # 가짜 docker 가 public 에 이력 표가 없다고 답하게 해 main 을 「건너뜀」
@@ -45,7 +48,7 @@ fail_count=0
 case_count=0
 
 #######################################
-# 가짜 sudo · docker · sleep · psql 을 만든다.
+# 가짜 sudo · docker · sleep · df · psql 을 만든다.
 # Globals:
 #   work_dir
 #######################################
@@ -62,12 +65,18 @@ EOF
 #!/usr/bin/env bash
 echo "$*" >> "${FAKE_DIR}/sleeps"
 EOF
+  cat > "${work_dir}/bin/df" <<'EOF'
+#!/usr/bin/env bash
+printf 'Avail\n%s\n' "${FAKE_DF_AVAIL}"
+EOF
   cat > "${work_dir}/bin/docker" <<'EOF'
 #!/usr/bin/env bash
 # 가짜 docker — argv 를 한 줄로 펴(줄바꿈 → 공백) calls 에 적고 하위 명령
-# 종류로 답한다.
+# 종류로 답한다. source 때(FAKE_BOOT=1)의 이력 표 읽기는 적지 않고 빈 줄로
+# 답해 main 을 건너뜀 갈래로 끝낸다.
 set -u
 d="${FAKE_DIR}"
+[[ "${FAKE_BOOT:-0}" == 1 ]] && exit 0
 args="$*"
 args="${args//$'\n'/ }"
 printf '%s\n' "${args}" >> "${d}/calls"
@@ -86,13 +95,18 @@ case "${args}" in
     run_inner "$@"
     exit
     ;;
-  *'CREATE SCHEMA IF NOT EXISTS pokeclip_move_fence'*)
+  *'CREATE SCHEMA IF NOT EXISTS '*)
     [[ "${FAKE_FENCE_FAIL:-0}" == 1 ]] && exit 1
-    : > "${d}/fence"
+    name="${args##*CREATE SCHEMA IF NOT EXISTS }"
+    mkdir -p "${d}/fences"
+    : > "${d}/fences/${name%% *}"
     ;;
-  *'DROP SCHEMA IF EXISTS pokeclip_move_fence'*)
-    [[ "${FAKE_FENCE_FAIL:-0}" == 1 ]] && exit 1
-    rm -f "${d}/fence"
+  *'DROP SCHEMA IF EXISTS '*)
+    name="${args##*DROP SCHEMA IF EXISTS }"
+    rm -f "${d}/fences/${name%% *}"
+    ;;
+  *pg_database_size*)
+    echo "${FAKE_DB_BYTES}"
     ;;
   *' stop '*)
     [[ "${FAKE_STOP_FAIL:-0}" == 1 ]] && exit 1
@@ -113,9 +127,7 @@ case "${args}" in
     if (( n <= FAKE_SESSION_POLLS )); then echo 1; else echo 0; fi
     ;;
   *flyway_schema_history*)
-    if [[ "${FAKE_BOOT:-0}" == 1 ]]; then
-      echo ''
-    elif (( $(count top) > FAKE_PROC_POLLS \
+    if (( $(count top) > FAKE_PROC_POLLS \
       && $(count stat) > FAKE_SESSION_POLLS )); then
       echo "${FAKE_HISTORY_FINAL}"
     else
@@ -128,7 +140,8 @@ EOF
   cat > "${work_dir}/bin/psql" <<'EOF'
 #!/usr/bin/env bash
 # 가짜 psql(이전 SQL 호출 전용) — argv 를 한 줄에 하나씩 move_argv 에 적고,
-# -c · -f 를 앞에서부터 돈다. 울타리 이름이 든 -c 는 울타리가 있으면 실패한다.
+# -c · -f 를 앞에서부터 돈다. 울타리 검사 -c(to_regnamespace('이름'))는 그
+# 이름의 울타리가 있으면 실패한다.
 # -1 이면 실패 때 앞서 돈 것도 되돌리고, 아니면 -f 가 돈 자리에서 커밋된다.
 set -u
 d="${FAKE_DIR}"
@@ -141,9 +154,13 @@ pending=0
 while (( $# > 0 )); do
   case "$1" in
     -c)
-      if [[ "$2" == *pokeclip_move_fence* && -e "${d}/fence" ]]; then
-        echo 'ERROR:  schema move: fenced' >&2
-        exit 3
+      if [[ "$2" == *"to_regnamespace('"* ]]; then
+        name="${2#*"to_regnamespace('"}"
+        name="${name%%"'"*}"
+        if [[ -e "${d}/fences/${name}" ]]; then
+          echo "ERROR:  schema move: fence ${name} exists" >&2
+          exit 3
+        fi
       fi
       shift
       ;;
@@ -165,7 +182,7 @@ fi
 exit 0
 EOF
   chmod +x "${work_dir}/bin/sudo" "${work_dir}/bin/sleep" \
-    "${work_dir}/bin/docker" "${work_dir}/bin/psql"
+    "${work_dir}/bin/df" "${work_dir}/bin/docker" "${work_dir}/bin/psql"
 }
 
 #######################################
@@ -178,16 +195,32 @@ reset_state() {
   mkdir -p "${work_dir}/state"
   export FAKE_DIR="${work_dir}/state"
   export FAKE_PROC_POLLS=0 FAKE_SESSION_POLLS=0 FAKE_TOP_FAIL=0 FAKE_STAT_FAIL=0
-  export FAKE_FENCE_FAIL=0 FAKE_STOP_FAIL=0
+  export FAKE_FENCE_FAIL=0 FAKE_STOP_FAIL=0 FAKE_DB_BYTES=0 FAKE_DF_AVAIL=0
   export FAKE_HISTORY_DURING="${HISTORY_BEFORE}"
   export FAKE_HISTORY_FINAL="${HISTORY_BEFORE}"
 }
 
 #######################################
-# 제품 스크립트를 source 하고 함수 하나를 부른다. 새 bash 프로세스에서 돈다 —
-# restore 의 exit 가 시험을 끝내지 않게, 그리고 set -e 가 제품 안에서 그대로
-# 살게(run_case 의 `if` 안에서 부른 서브셸은 set -e 가 꺼져 제품의 실패 갈래가
-# 돌지 않는다). 출력과 종료 코드를 state 에 남긴다.
+# 제품 스크립트의 실행 하나 — 새 bash 프로세스에서 source 하고 함수 하나를
+# 부른다. 실행마다 제품의 실행 식별자(울타리 이름)가 새로 정해진다. 새
+# 프로세스라 restore 의 exit 가 부른 쪽을 끝내지 않고, set -e 가 제품 안에서
+# 그대로 산다(run_case 의 `if` 안에서 부른 서브셸은 set -e 가 꺼져 제품의 실패
+# 갈래가 돌지 않는다).
+# Arguments:
+#   부를 함수 이름(제품 함수 또는 export 한 시험용 흐름).
+#######################################
+fresh_run() {
+  # shellcheck disable=SC2016 # 새 bash 가 풀 변수다.
+  bash -c '
+    export FAKE_BOOT=1
+    source "$1" 6gb > /dev/null
+    export FAKE_BOOT=0
+    history_before="$2"
+    "$3"' fresh_run "${SCRIPT}" "${HISTORY_BEFORE}" "$1"
+}
+
+#######################################
+# 제품의 실행 하나(fresh_run)를 돌려 출력과 종료 코드를 state 에 남긴다.
 # Arguments:
 #   부를 함수 이름(제품 함수 또는 export 한 시험용 흐름).
 #######################################
@@ -197,15 +230,8 @@ call_in_script() {
   (
     cd "${SERVICES_DIR}"
     export PATH="${work_dir}/bin:${PATH}"
-    # shellcheck disable=SC2016 # 새 bash 가 풀 변수다.
-    exec bash -c '
-      export FAKE_BOOT=1
-      source "$1" 6gb > /dev/null
-      export FAKE_BOOT=0
-      : > "${FAKE_DIR}/calls"
-      history_before="$2"
-      "$3"' call_in_script "${SCRIPT}" "${HISTORY_BEFORE}" "${fn}"
-  ) > "${FAKE_DIR}/out" 2>&1 || status=$?
+    fresh_run "${fn}"
+  ) >> "${FAKE_DIR}/out" 2>&1 || status=$?
   echo "${status}" > "${FAKE_DIR}/status"
 }
 
@@ -244,8 +270,39 @@ late_move_after_restore() {
   run_move_sql
 }
 
-main_6gb() {
+# 배포 A 의 restore 가 울타리를 세우고 옛 여섯을 띄운 뒤, 배포 B(새 실행)의
+# main 이 디스크 검사에서 실패한다. 그 뒤 데몬이 A 의 밀린 이전을 시작한다.
+late_move_after_next_run_disk_failure() {
+  ( restore ) || true
+  fresh_run main_without_prune || true
+  run_move_sql
+}
+
+# 캐시 줄이기(상자 전용 명령)만 비우고 main 을 돈다.
+# shellcheck disable=SC2329 # 덮어쓴 함수는 main 이 부른다.
+main_without_prune() {
+  prune_build_cache() { :; }
   main 6gb
+}
+
+#######################################
+# calls 에서 restore 가 만든 울타리 이름들을 차례대로 낸다.
+# Outputs:
+#   울타리 이름, 줄마다 하나.
+#######################################
+created_fences() {
+  sed -n 's/.*CREATE SCHEMA IF NOT EXISTS \([^ ]*\).*/\1/p' \
+    "${FAKE_DIR}/calls"
+}
+
+#######################################
+# 울타리 이름이 실행 식별자를 단 꼴인지 본다 — 소문자 · 숫자 · 밑줄만, 63바이트
+# 이하(PostgreSQL 식별자 한도).
+# Arguments:
+#   울타리 이름.
+#######################################
+is_run_fence_name() {
+  [[ "$1" =~ ^pokeclip_move_fence_[a-z0-9_]+$ && "${#1}" -le 63 ]]
 }
 
 # 캐시 줄이기 · 디스크 확인(상자 전용 명령)을 비우고 main 을 stop 까지 돈다.
@@ -391,36 +448,65 @@ case_move_sql_checks_fence_first_in_one_transaction() {
   grep -q 'RAISE EXCEPTION' "${argv}"
 }
 
-# 앞방향 실행은 서비스를 세우기 전에 남은 울타리를 지운다.
-case_main_drops_fence_before_stop() {
-  : > "${FAKE_DIR}/fence"
+# 앞방향 실행은 앞선 실행의 울타리를 지우지 않는다 — 스키마를 지우는 문장이
+# 없고, 정지까지 간 뒤에도 앞 울타리가 그대로다.
+case_main_leaves_earlier_fences() {
+  mkdir -p "${FAKE_DIR}/fences"
+  : > "${FAKE_DIR}/fences/pokeclip_move_fence_20260101000000_1"
+  : > "${FAKE_DIR}/fences/pokeclip_move_fence"
   export FAKE_STOP_FAIL=1
   call_in_script main_until_stop
-  local drop_line stop_line
-  drop_line="$(grep -n 'DROP SCHEMA IF EXISTS pokeclip_move_fence' \
-    "${FAKE_DIR}/calls" | head -1 | cut -d: -f1)"
-  stop_line="$(grep -n ' stop ' "${FAKE_DIR}/calls" | head -1 | cut -d: -f1)"
-  [[ -n "${drop_line}" && -n "${stop_line}" ]] || return 1
-  (( drop_line < stop_line ))
+  grep -q ' stop ' "${FAKE_DIR}/calls" || return 1
+  grep -q 'DROP SCHEMA' "${FAKE_DIR}/calls" && return 1
+  [[ -e "${FAKE_DIR}/fences/pokeclip_move_fence_20260101000000_1" ]] \
+    || return 1
+  [[ -e "${FAKE_DIR}/fences/pokeclip_move_fence" ]]
 }
 
-# 울타리 지우기 실패 — 아무것도 멈추지 않고 실패로 끝난다.
-case_main_fence_drop_failure_stops_nothing() {
-  export FAKE_FENCE_FAIL=1
-  call_in_script main_6gb
-  [[ "$(exit_status)" != 0 ]] || return 1
-  grep -q 'DROP SCHEMA IF EXISTS pokeclip_move_fence' "${FAKE_DIR}/calls" \
-    || return 1
+# 배포 A 가 실패해 울타리를 세운 뒤 배포 B 의 main 이 디스크 검사에서 실패해도
+# (아무것도 멈추지 않고 · restore 도 거치지 않음) A 의 밀린 이전은 A 의
+# 울타리를 보고 커밋하지 않는다.
+case_late_move_after_next_run_disk_failure_is_fenced() {
+  export FAKE_DB_BYTES=1000000000000 FAKE_DF_AVAIL=1
+  call_in_script late_move_after_next_run_disk_failure
+  grep -q '::error::schema move: 1 bytes free' "${FAKE_DIR}/out" || return 1
   grep -q ' stop ' "${FAKE_DIR}/calls" && return 1
-  grep -q 'builder prune' "${FAKE_DIR}/calls" && return 1
-  grep -q '::error::' "${FAKE_DIR}/out"
+  [[ -e "${FAKE_DIR}/move_committed" ]] && return 1
+  [[ "$(exit_status)" != 0 ]]
+}
+
+# 울타리 이름은 실행마다 다르다 — 두 실행의 restore 가 서로 다른 이름을 만들고,
+# 둘 다 실행 식별자를 단 꼴이다.
+case_fence_name_differs_per_run() {
+  call_in_script restore
+  call_in_script restore
+  local first second
+  first="$(created_fences | sed -n 1p)"
+  second="$(created_fences | sed -n 2p)"
+  is_run_fence_name "${first}" || return 1
+  is_run_fence_name "${second}" || return 1
+  [[ "${first}" != "${second}" ]]
+}
+
+# 한 실행 안에서 restore 가 만든 울타리와 이전 SQL 의 울타리 검사가 같은
+# 이름을 본다.
+case_check_and_create_use_same_fence() {
+  call_in_script late_move_after_restore
+  local created checked
+  created="$(created_fences)"
+  checked="$(sed -n "s/.*to_regnamespace('\([^']*\)').*/\1/p" \
+    "${FAKE_DIR}/move_argv")"
+  is_run_fence_name "${created}" || return 1
+  [[ "${created}" == "${checked}" ]]
 }
 
 main() {
   work_dir="$(mktemp -d)"
   trap 'rm -rf "${work_dir}"' EXIT
   make_fakes
-  export -f late_move_after_restore main_6gb main_until_stop
+  export SCRIPT HISTORY_BEFORE
+  export -f fresh_run late_move_after_restore \
+    late_move_after_next_run_disk_failure main_without_prune main_until_stop
   run_case case_inner_move_commits_after_disconnect
   run_case case_backend_lingers_then_commits
   run_case case_inner_move_rolls_back_then_restart
@@ -433,8 +519,10 @@ main() {
   run_case case_fence_created_before_wait
   run_case case_fence_failure_is_unknown
   run_case case_move_sql_checks_fence_first_in_one_transaction
-  run_case case_main_drops_fence_before_stop
-  run_case case_main_fence_drop_failure_stops_nothing
+  run_case case_main_leaves_earlier_fences
+  run_case case_late_move_after_next_run_disk_failure_is_fenced
+  run_case case_fence_name_differs_per_run
+  run_case case_check_and_create_use_same_fence
   echo "cases: ${case_count} · fail: ${fail_count}"
   (( fail_count == 0 ))
 }
