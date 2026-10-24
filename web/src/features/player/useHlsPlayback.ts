@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 import type Hls from 'hls.js';
-import { track } from '@/lib/analytics';
 import {
   behindFromCurrentTime,
   dvrRange,
@@ -18,6 +17,7 @@ import {
 } from '@/api/playbackAccess';
 import { HLS_DVR_CONFIG } from './hlsConfig';
 import { behindFromSeekFraction, isAtEdge } from './playerMath';
+import { trackPlaybackStartOnce } from './playbackStarts';
 import { useControlsAutoHide } from './useControlsAutoHide';
 import {
   CLIP_MARK_MS,
@@ -75,8 +75,6 @@ export function useHlsPlayback(
 ): PlayerSimulation & { livePosition: LivePosition | null } {
   // playing은 video 이벤트로만 바꾼다 — 자동재생이 거부되면 false로 남아 재생 버튼이 노출된다
   const [playing, setPlaying] = useState(false);
-  /** 재생 시작을 센 방송(src). 사용 통계에 「방송마다 한 번」을 지키는 데만 쓴다 */
-  const countedSrcRef = useRef<string | null>(null);
   // 자동재생 정책상 muted로 시작한다 (시뮬레이션의 muted=false와 다른 점)
   const [muted, setMuted] = useState(true);
   const [volume, setVolumeState] = useState(70);
@@ -255,10 +253,7 @@ export function useHlsPlayback(
     const onPlay = () => {
       setPlaying(true);
       // 그 방송을 처음 틀었을 때 한 번만 센다 — 멈췄다 다시 틀기·재연결은 세지 않는다. 주소는 싣지 않는다 (POK-357)
-      if (countedSrcRef.current !== src) {
-        countedSrcRef.current = src;
-        track('broadcast_playback_started', { mode: 'live' });
-      }
+      trackPlaybackStartOnce(src, 'live');
     };
     const onPause = () => setPlaying(false);
     const onVolumeChange = () => {

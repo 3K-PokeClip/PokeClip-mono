@@ -14,6 +14,7 @@ vi.mock('@/lib/analytics', async (importOriginal) => ({
   track,
 }));
 import { useRecordedPlayback, type RecordedSource } from './useRecordedPlayback';
+import { resetPlaybackStartsForTest } from './playbackStarts';
 
 // 끝난 방송 다시보기(POK-253). 재생 서버는 틈을 건너 주지 않으므로(실측) 한 구간씩 달라 하고 이어 튼다.
 
@@ -50,6 +51,7 @@ describe('useRecordedPlayback — 구간 여럿', () => {
 
   it('그 방송을 처음 틀 때 한 번만 센다 — 멈췄다 다시 틀기·다음 구간 이어 틀기는 세지 않는다 (POK-357)', () => {
     track.mockClear();
+    resetPlaybackStartsForTest();
     const { video } = fakeVideo();
     renderHook(() =>
       useRecordedPlayback(
@@ -76,6 +78,35 @@ describe('useRecordedPlayback — 구간 여럿', () => {
     });
 
     expect(track.mock.calls).toEqual([['broadcast_playback_started', { mode: 'vod' }]]);
+  });
+
+  it('플레이어가 다시 마운트돼도(GlassPlayer key 변경) 같은 방송은 다시 세지 않는다 — 다른 방송은 센다 (PR #382 리뷰)', () => {
+    track.mockClear();
+    resetPlaybackStartsForTest();
+    const first = fakeVideo();
+    const view = renderHook(() => useRecordedPlayback({ current: first.video }, source([[0, 14]])));
+    act(() => {
+      first.video.dispatchEvent(new Event('play'));
+    });
+    view.unmount();
+
+    const again = fakeVideo();
+    renderHook(() => useRecordedPlayback({ current: again.video }, source([[0, 14]])));
+    act(() => {
+      again.video.dispatchEvent(new Event('play'));
+    });
+    const other = fakeVideo();
+    renderHook(() =>
+      useRecordedPlayback({ current: other.video }, { ...source([[0, 14]]), streamId: 'other' }),
+    );
+    act(() => {
+      other.video.dispatchEvent(new Event('play'));
+    });
+
+    expect(track.mock.calls).toEqual([
+      ['broadcast_playback_started', { mode: 'vod' }],
+      ['broadcast_playback_started', { mode: 'vod' }],
+    ]);
   });
 
   it('틈을 건너 달라 하지 않는다 — 첫 줄기는 첫 구간 끝까지다', () => {
