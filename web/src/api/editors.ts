@@ -196,6 +196,8 @@ export interface StreamerDelegation {
   id: number;
   streamerId: number;
   streamerName: string;
+  /** 스트리머 프로필 사진 주소. 없으면 null(아바타가 이니셜로 선다) */
+  streamerProfileImageUrl: string | null;
   grantedAt: string;
 }
 
@@ -215,12 +217,15 @@ export async function declineInvitation(id: number): Promise<void> {
 export async function fetchDelegationsAsEditor(): Promise<StreamerDelegation[]> {
   const res = await apiFetch('/api/editor-delegations/as-editor');
   const wire = (await res.json()) as DelegationWire[];
-  return wire.map(({ id, counterpartId, counterpartName, grantedAt }) => ({
-    id,
-    streamerId: counterpartId,
-    streamerName: counterpartName,
-    grantedAt,
-  }));
+  return wire.map(
+    ({ id, counterpartId, counterpartName, counterpartProfileImageUrl, grantedAt }) => ({
+      id,
+      streamerId: counterpartId,
+      streamerName: counterpartName,
+      streamerProfileImageUrl: counterpartProfileImageUrl ?? null,
+      grantedAt,
+    }),
+  );
 }
 
 export const receivedInvitationsQueryOptions = {

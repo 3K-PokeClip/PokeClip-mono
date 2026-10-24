@@ -37,7 +37,7 @@ import styles from './ChannelSwitcher.module.css';
 
 export type ChannelRole = '스트리머' | '편집자';
 
-/** 트리거가 그릴 지금 채널: 아직 안 섰으면 내 이름으로(사이드바가 빈칸으로 깜빡이지 않게). 남의 채널은 사진이 없다. */
+/** 트리거가 그릴 지금 채널: 아직 안 섰으면 내 이름으로(사이드바가 빈칸으로 깜빡이지 않게). */
 export function useChannelIdentity(): {
   name: string | null;
   photo: string | null;
@@ -46,11 +46,10 @@ export function useChannelIdentity(): {
   const me = useMe().data;
   const active = useActiveChannel();
   if (active.ready) {
-    const own = active.relation === 'OWNER';
     return {
       name: active.name,
-      photo: own ? (me?.profileImageUrl ?? null) : null,
-      role: own ? '스트리머' : '편집자',
+      photo: active.photo,
+      role: active.relation === 'OWNER' ? '스트리머' : '편집자',
     };
   }
   return { name: me?.name ?? null, photo: me?.profileImageUrl ?? null, role: null };
@@ -212,13 +211,18 @@ function SwitcherPanel({
                 <ChannelRow
                   key={d.id}
                   name={d.streamerName}
-                  photo={null}
+                  photo={d.streamerProfileImageUrl}
                   role="편집자"
                   current={currentId === d.streamerId}
                   managing={managing}
                   onLeave={(opener) => setAsking({ kind: 'leave', channel: d, opener })}
                   onClick={() =>
-                    pick({ streamerId: d.streamerId, name: d.streamerName, relation: 'EDITOR' })
+                    pick({
+                      streamerId: d.streamerId,
+                      name: d.streamerName,
+                      relation: 'EDITOR',
+                      photo: d.streamerProfileImageUrl,
+                    })
                   }
                 />
               ))}
@@ -324,7 +328,7 @@ function ChannelRow({
       tabIndex={leaving ? -1 : undefined}
       onClick={leaving ? undefined : onClick}
     >
-      {/* 남의 채널은 서버가 사진을 안 준다: 이름 글자 아바타 */}
+      {/* 채널 주인의 프로필 사진. 사진이 없으면 이름 글자 아바타 */}
       <Avatar size="sm" src={photo ?? undefined} name={name} className={styles.rowAvatar} />
       <span className={styles.rowText}>
         <span className={styles.rowName}>{name} 채널</span>
