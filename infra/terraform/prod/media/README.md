@@ -41,7 +41,7 @@ prod Media 상자[^box]를 띄우는 루트입니다(설계 3-1 의 ⑨). 자원
 | platform | `target_group_arns` · `internal_alb_sg_id` · `nlb_sg_id` · `media_proxy_ports` · `media_health_path` |
 | secrets | `cdn_secret_arn` · `test_stream_key_secret_arn` |
 | registry | `repo_urls`(아래 「이미지」) |
-| 런타임 1단 | `rds_endpoint` · `rds_db_name` · `rds_resource_id` · `rds_sg_id` · `rewind_bucket_arn` · `media_secret_arns`([CONTRACT-runtime.md](/infra/terraform/CONTRACT-runtime.md)) |
+| 런타임 1단 | `rds_endpoint` · `rds_db_name` · `rds_resource_id` · `rds_sg_id` · `rewind_bucket_arn` · `media_secret_arns` · `ingest_auth_resolve_token_secret_arn`([CONTRACT-runtime.md](/infra/terraform/CONTRACT-runtime.md)) |
 
 출력 하나라도 없으면 plan 이 그 이름으로 실패합니다. 런타임 1단 출력은 O7e
 선행 확인 ② 입니다.
@@ -87,6 +87,10 @@ tfvars 에 둡니다.
     사이드카 `REWIND_PUBLIC_BASE_URL`(되감기 목록 URI 앞머리 — 목록 줄 = 이
     값 + `/` + S3 키 `dvr/…`)이고, 영상 CDN 의 `/dvr/*` 가 rewind 버킷입니다
     (설계 4-5). 버킷이 있으면 사이드카가 이 값 없이 기동하지 않습니다.
+*   `stream_key_resolve_url`(응답기 4C 주소)은 기본 빈 값,
+    `ingest_auth_ip_limit` 은 기본 `"on"` 입니다. 응답기 모드
+    (`image_digests.ingest_auth` 가 찬 값)에서 4C 주소가 비면 plan 이
+    멈춥니다. 둘 다 바꾸면 설정 반영 교체로 들어갑니다.
 
 적용은 O7e 의 1(kty 승인)입니다. 백엔드는 `backend.hcl.example` 을
 `backend.hcl` 로 복사하고 `bucket` 자리표시자 `<STATE_BUCKET_PROD>` 를
