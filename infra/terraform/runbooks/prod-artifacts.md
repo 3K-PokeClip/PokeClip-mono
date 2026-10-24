@@ -162,17 +162,35 @@ docker buildx build --platform linux/arm64 --provenance=false --sbom=false \
   -f infra/media-host/bundle/Dockerfile infra/media-host
 docker image inspect --format '{{.Os}}/{{.Architecture}}' \
   pokeclip-media-host-bundle:<태그>   # linux/arm64
+work="$(mktemp -d)"
 cid="$(docker create pokeclip-media-host-bundle:<태그> /bundle-not-run)"
-docker export "${cid}" | tar -t | grep -c '^bundle/.*[^/]$'   # 9
+docker export "${cid}" | tar -t | sed -n 's|^bundle/\(.*[^/]\)$|\1|p' \
+  | LC_ALL=C sort >"${work}/bundle.txt"
 docker rm "${cid}"
+awk '/^readonly REQUIRED_FILES=\(/ { on = 1; next }
+  on && /^\)/ { exit }
+  on { print $1 }' \
+  infra/terraform/modules/media_host/templates/bootstrap.sh.tftpl \
+  | LC_ALL=C sort >"${work}/required.txt"
+LC_ALL=C comm -23 "${work}/required.txt" "${work}/bundle.txt"   # 빈 출력(빠진 것)
+LC_ALL=C comm -13 "${work}/required.txt" "${work}/bundle.txt"   # 빈 출력(남는 것)
+rm -rf -- "${work}"
 docker tag pokeclip-media-host-bundle:<태그> \
   "${registry_host}/pokeclip-prod/media-host-bundle:<태그>"
 docker push "${registry_host}/pokeclip-prod/media-host-bundle:<태그>"
 ```
 
-*   파일 9개는 `bin/` 의 스크립트 여섯 · `bin/lib/` 둘 · `mediamtx.yml.tmpl`
-    입니다(상자 부트스트랩의 필수 목록 — `modules/media_host`
-    `templates/bootstrap.sh.tftpl`). 수가 다르면 푸시하지 않습니다.
+*   묶음 파일 목록의 정본은 상자 부트스트랩의 `REQUIRED_FILES` 하나입니다
+    (`modules/media_host` `templates/bootstrap.sh.tftpl`). 위 `awk` 가 그
+    배열을 뽑고, 묶음 이미지의 `/bundle` 아래 파일 목록과 정렬해 비교합니다.
+*   `comm -23` 은 목록에 있는데 묶음에 없는 파일(빠진 것)을, `comm -13` 은
+    묶음에 있는데 목록에 없는 파일(남는 것)을 줄마다 하나씩 찍습니다. 둘 다
+    빈 출력일 때만 푸시합니다.
+*   빠진 것이 있으면 그 묶음으로는 상자 설치가 `MEDIA BOOTSTRAP
+    missing <경로>` 로 실패합니다. 남는 것은 `bin/` 에 파일을 더하고 목록을 고치지
+    않은 경우입니다. 어느 쪽이든 저장소에서 목록이나 파일을 고쳐 머지한 뒤
+    다시 빌드합니다. 목록 자체는 `modules/media_host` 시험
+    (`bootstrap_requires_every_bundle_file`)이 단언합니다.
 
 **루프백 송출기**는 nginx 와 같은 꼴로 핀을 받아 다시 태그합니다.
 

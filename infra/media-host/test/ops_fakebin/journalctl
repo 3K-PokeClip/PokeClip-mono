@@ -6,6 +6,8 @@
 # 받는 꼴(그 밖은 종료 2):
 #   -u <유닛> -q --no-pager -o cat   state/journal.u.<유닛>
 #   -t <태그> -q --no-pager -o cat   state/journal.t.<태그>
+#   -t <태그> CONTAINER_ID_FULL=<id> -q --no-pager -o cat
+#                                    state/journal.c.<id>
 # 파일이 없으면 빈 출력(그 저널에 줄이 없음). state/journal.fail 이 있으면
 # 종료 1.
 #
@@ -23,6 +25,14 @@ readonly STATE="${PCBENCH_FAKE_STATE_DIR:?PCBENCH_FAKE_STATE_DIR 없음}"
 
 main() {
   fake::record journalctl "$@"
+  if (( $# == 7 )) && [[ "$1" == -t && -n "$2" \
+    && "$3" == CONTAINER_ID_FULL=?* \
+    && "$4 $5 $6 $7" == '-q --no-pager -o cat' ]]; then
+    [[ ! -e "${STATE}/journal.fail" ]] || exit 1
+    [[ ! -f "${STATE}/journal.c.${3#*=}" ]] \
+      || cat -- "${STATE}/journal.c.${3#*=}"
+    return 0
+  fi
   if (( $# != 6 )) || [[ "$1" != -u && "$1" != -t ]] || [[ -z "$2" \
     || "$3 $4 $5 $6" != '-q --no-pager -o cat' ]]; then
     fake::unknown journalctl

@@ -331,3 +331,103 @@ run "rejects_root_volume_throughput_above_iops_ratio" {
 
   expect_failures = [var.root_volume_throughput]
 }
+
+# 응답기 4C 주소는 compose 에 따옴표 없는 스칼라로 들어간다 — http://<호스트>:<포트>
+# 꼴만 받는다. 옛 모드(응답기 이미지 빈 값)는 빈 값이어도 된다. 응답기 모드의
+# 빈 값은 아직 막지 않는다 — 루트가 값을 넘기기 전(M9 후속 배선)이라서다.
+run "accepts_responder_mode_with_stream_key_resolve_url" {
+  command = plan
+
+  variables {
+    ingest_auth_image      = "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/pokeclip-prod/media-ingest-auth@sha256:5555555555555555555555555555555555555555555555555555555555555555"
+    stream_key_resolve_url = "http://auth.pokeclip.internal:8085"
+  }
+
+  assert {
+    condition     = output.template_vars.stream_key_resolve_url == "http://auth.pokeclip.internal:8085"
+    error_message = "stream_key_resolve_url 이 템플릿 변수로 그대로 넘어가지 않았다."
+  }
+}
+
+run "rejects_stream_key_resolve_url_with_userinfo" {
+  command = plan
+
+  variables {
+    stream_key_resolve_url = "http://user@auth.pokeclip.internal:8085"
+  }
+
+  expect_failures = [var.stream_key_resolve_url]
+}
+
+run "rejects_stream_key_resolve_url_with_query" {
+  command = plan
+
+  variables {
+    stream_key_resolve_url = "http://auth.pokeclip.internal:8085?channel=x"
+  }
+
+  expect_failures = [var.stream_key_resolve_url]
+}
+
+run "rejects_stream_key_resolve_url_with_fragment" {
+  command = plan
+
+  variables {
+    stream_key_resolve_url = "http://auth.pokeclip.internal:8085#x"
+  }
+
+  expect_failures = [var.stream_key_resolve_url]
+}
+
+run "rejects_stream_key_resolve_url_with_space" {
+  command = plan
+
+  variables {
+    stream_key_resolve_url = "http://auth pokeclip:8085"
+  }
+
+  expect_failures = [var.stream_key_resolve_url]
+}
+
+run "rejects_stream_key_resolve_url_with_dollar" {
+  command = plan
+
+  variables {
+    stream_key_resolve_url = "http://auth$x.pokeclip.internal:8085"
+  }
+
+  expect_failures = [var.stream_key_resolve_url]
+}
+
+run "rejects_stream_key_resolve_url_without_port" {
+  command = plan
+
+  variables {
+    stream_key_resolve_url = "http://auth.pokeclip.internal"
+  }
+
+  expect_failures = [var.stream_key_resolve_url]
+}
+
+run "accepts_ingest_auth_ip_limit_off" {
+  command = plan
+
+  variables {
+    ingest_auth_ip_limit = "off"
+  }
+
+  assert {
+    condition     = output.template_vars.ingest_auth_ip_limit == "off"
+    error_message = "ingest_auth_ip_limit 이 템플릿 변수로 그대로 넘어가지 않았다."
+  }
+}
+
+run "rejects_unknown_ingest_auth_ip_limit" {
+  command = plan
+
+  variables {
+    ingest_auth_ip_limit = "true"
+  }
+
+  expect_failures = [var.ingest_auth_ip_limit]
+}

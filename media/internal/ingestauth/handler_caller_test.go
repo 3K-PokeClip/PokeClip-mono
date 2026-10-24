@@ -36,7 +36,7 @@ func withBasic(r *http.Request, value string) *http.Request {
 func TestHandlerChecksCallerBasic(t *testing.T) {
 	bodies := map[string]mtxAuthBody{
 		"api":     apiBody(testSelfIP.String(), testAPIUser, testAPIPass),
-		"read":    {IP: testPublisherIP, Action: "read"},
+		"read":    {IP: testPublisherIP, Action: "read", Protocol: "srt"},
 		"publish": publishBody(testTokenA, testConnID(1)),
 	}
 	for action, body := range bodies {
@@ -81,7 +81,7 @@ func TestHandlerChecksCallerBasic(t *testing.T) {
 // CallerBasicOff(명시 끔)면 Authorization 을 보지 않는다 — 없어도 다음 행으로 간다.
 func TestHandlerSkipsCallerBasicWhenOff(t *testing.T) {
 	f := newHandlerFixture(t, fixtureOptions{callerBasicOff: true})
-	if rr := f.serve(withBasic(newAuthRequest(t, mtxAuthBody{IP: testPublisherIP, Action: "read"}), "")); rr.Code != http.StatusOK {
+	if rr := f.serve(withBasic(newAuthRequest(t, mtxAuthBody{IP: testPublisherIP, Action: "read", Protocol: "srt"}), "")); rr.Code != http.StatusOK {
 		t.Errorf("read without Authorization while caller Basic is off = %d, want 200", rr.Code)
 	}
 }
@@ -90,7 +90,7 @@ func TestHandlerSkipsCallerBasicWhenOff(t *testing.T) {
 func TestHandlerCallerIPBeforeBasic(t *testing.T) {
 	for _, auth := range []string{"", "Basic " + basicCredentials(testCallerUser, testCallerPass), "Basic " + basicCredentials(testCallerUser, "other")} {
 		f := newHandlerFixture(t, fixtureOptions{})
-		r := withBasic(newAuthRequest(t, mtxAuthBody{IP: testPublisherIP, Action: "read"}), auth)
+		r := withBasic(newAuthRequest(t, mtxAuthBody{IP: testPublisherIP, Action: "read", Protocol: "srt"}), auth)
 		r.RemoteAddr = "192.0.2.11:40000"
 		if rr := f.serve(r); rr.Code != http.StatusForbidden {
 			t.Errorf("request from a foreign TCP peer (Authorization %d bytes) = %d, want 403", len(auth), rr.Code)

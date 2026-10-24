@@ -6,11 +6,12 @@
 # 사용: loopback-health.sh [--passphrase] <ingestStreamId>
 #   ingestStreamId  시험 계정의 공개 스트림 토큰(26자 Crockford Base32 —
 #                   streamid 의 r 값 · 경로 이름. 비밀이 아니다).
-#   --passphrase    시험 스트림 키 passphrase 를 실어 송출한다. 송출 인증(M15
-#                   응답기)이 반영된 상자에서만 쓴다. 그 전의 상자는 익명
-#                   publish 라 passphrase 를 실으면 MediaMTX 가 끊는다 — 기본은
-#                   싣지 않는다. M15 뒤에는
-#                   거꾸로 기본 갈래가 거부되는 것이 정상이다.
+#   --passphrase    시험 스트림 키 passphrase 를 실어 송출한다. 응답기
+#                   모드(ingest_auth_image 찬 구성) 상자에서만 쓴다. 옛
+#                   모드(빈 구성 — O7 · 되돌리기 포함) 상자는 익명 publish 라
+#                   passphrase 를 실으면 MediaMTX 가 끊는다 — 기본은 싣지
+#                   않는다. 응답기 모드에서는 거꾸로 기본 갈래가 거부되는
+#                   것이 정상이다(media-host README 「루프백 헬스」).
 #
 # 하는 일:
 #   1. CDN 비밀(과 --passphrase 면 시험 키)을 Secrets Manager 에서 읽어 셸

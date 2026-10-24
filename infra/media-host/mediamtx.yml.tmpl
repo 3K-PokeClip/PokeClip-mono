@@ -1,19 +1,29 @@
 # Media 상자 MediaMTX 설정 템플릿(prod).
 #
-# 두 단계로 렌더한다.
-#   1. M9 user_data 가 Terraform templatefile() 로 렌더해
-#      /etc/pokeclip-media/mediamtx.yml.tmpl 에 둔다(지금은 템플릿 변수가 없다 —
-#      비밀이 아닌 값은 모두 이 파일에 적혀 있다). 그래서 이 파일에는 달러 ·
-#      퍼센트 중괄호를 쓰지 않는다.
-#   2. 시작 스크립트(bin/start-media.sh)가 기동할 때마다 고정 토큰 두 곳을 채워
-#      tmpfs(/run/pokeclip-media/mediamtx.yml — MediaMTX 실행 계정 소유 0400)에
-#      쓴다. compose 가 그 파일을 /mediamtx.yml 로 읽기 전용 마운트한다.
+# 렌더는 시작 스크립트(bin/start-media.sh) 한 단계다. M9 설치 묶음이 이 파일을
+# 렌더하지 않고 그대로 /etc/pokeclip-media/mediamtx.yml.tmpl 에 깐다 — 그래서
+# 이 파일에는 달러 · 퍼센트 중괄호를 쓰지 않는다(Terraform 지시자 · 보간 0 —
+# render_test 가 본다). 비밀이 아닌 값은 모두 이 파일에 적혀 있다.
+#
+# 시작 스크립트는 기동할 때마다
+#   1. 송출 인증 모드를 compose 렌더본의 응답기 서비스 유무로 정하고(없으면 옛
+#      모드 — M2 내부 인증, 있으면 응답기 모드 — 송출 인증 응답기 · SRT 경로
+#      잠금), 아래의 모드 블록 가운데 그 모드 것만 남긴다. 블록은 begin 표지
+#      줄부터 같은 모드의 end 표지 줄까지다(인증 절 · pathDefaults 절 — 표지
+#      꼴은 bin/lib/render_files.sh 의 MODE_MARK 주석. 표지 글자는 표지 줄
+#      말고는 쓰지 않는다). 표지 줄은 지우고, 다른 모드 블록은 통째로 지운다.
+#      두 모드 모두 블록이 있어야 하고, 블록은 겹치지 않는다(꼴이 깨지면
+#      기동하지 않는다).
+#   2. 남은 내용의 고정 토큰을 채워 tmpfs(/run/pokeclip-media/mediamtx.yml —
+#      MediaMTX 실행 계정 소유 0400)에 쓴다. compose 가 그 파일을 /mediamtx.yml
+#      로 읽기 전용 마운트한다. 옛 모드의 토큰은 아래 두 곳이다(응답기 모드는
+#      인증 절 주석).
 #        - CDN 비밀(hlsCDNSecret) — Secrets Manager 에서 읽은 값. 큰따옴표 안.
 #        - 사이드카 API 비밀번호(사이드카 사용자 항목의 pass) — 기동할 때마다
 #          새로 만드는 16진 64자. 작은따옴표 안. 같은 값을 사이드카가 읽는
 #          파일(MTX_API_PASS_FILE)에도 쓴다. 저장하지 않는다.
-#      두 값의 허용 글자는 따옴표 안에서 이스케이프가 필요 없다(시작 스크립트가
-#      그 밖의 값을 막는다). 토큰은 각각 정확히 한 번 나와야 한다.
+#      값의 허용 글자는 따옴표 안에서 이스케이프가 필요 없다(시작 스크립트가
+#      그 밖의 값을 막는다). 토큰은 모드마다 각각 정확히 한 번 나와야 한다.
 #
 # 바탕은 로컬 개발 설정 infra/compose/mediamtx.yml 이다. 이 파일은 기본값 전체를
 # 대체하므로(전체 설정 대체 규약) 아래에 없는 키는 MediaMTX 기본값이다.
@@ -43,6 +53,30 @@ apiTrustedProxies: []
 metrics: no
 pprof: no
 
+# @mode ingest-auth begin
+# 인증 — 응답기 모드. 연결마다 같은 망 칸의 송출 인증 응답기(ingest-auth)에
+# 묻는다. 시작 스크립트가 채우는 고정 토큰은 넷이다(옛 모드의 사이드카 API
+# 비밀번호 대신 아래 셋):
+#   - 호출자 Basic 비밀번호(아래 주소의 사용자 정보) — 응답기가 읽는 파일과 같은
+#     값. 사용자 이름은 응답기 INGEST_AUTH_BASIC_USER 와 같은 설정값이다(비밀
+#     아님). 값은 URL 에 퍼센트 인코딩이 필요 없는 16진이다.
+#   - SRT 송출 잠금 · 읽기 잠금(아래 pathDefaults) — 서로 다른 값.
+# 모두 작은따옴표 안이다.
+#
+# 응답기에 묻지 않는 것은 playback 하나다(되감기 · 다운로드 — nginx 의 경로
+# 번호 대조와 CloudFront 서명 쿠키가 관문이다). api 는 응답기를 거친다 —
+# 여기에 넣으면 Control API 가 무인증이 된다. read 도 응답기가 판정한다(SRT
+# 만 받고 그 밖은 거부 — Bearer 없는 LL-HLS 재생목록을 막는다. SRT 읽기는
+# 아래 읽기 잠금이 막는다).
+#
+# 내부 사용자 목록은 비워 둔다 — http 방식에서는 쓰이지 않지만, authMethod 가
+# 다른 값으로 바뀌어도 기본 · 옛 사용자(익명 publish 등)가 살아나지 않게.
+authMethod: http
+authHTTPAddress: 'http://pokeclip-mediamtx:@@INGEST_AUTH_BASIC_PASS@@@127.0.0.1:8080/mediamtx/auth'
+authHTTPExclude: [{action: playback}]
+authInternalUsers: []
+# @mode ingest-auth end
+# @mode legacy begin
 # 인증 — 이 키를 적으면 기본 사용자 목록이 통째로 대체된다. 아래 셋 말고는 없다.
 #
 # 무인증(user: any) 항목에 api · metrics · pprof 권한을 두지 않는다 — 기본값의
@@ -85,6 +119,7 @@ authInternalUsers:
     ips: []
     permissions:
       - action: api
+# @mode legacy end
 
 # LL-HLS 재생 + DVR — 루프백에만 묶는다(앞단 nginx 가 live 포트에서 넘긴다).
 hls: yes
@@ -108,6 +143,19 @@ playbackTrustedProxies: []
 
 # 녹화 — 사이드카(인덱서 · S3 업로더)가 recordings 볼륨을 감시한다.
 pathDefaults:
+# @mode ingest-auth begin
+  # SRT 경로 잠금(응답기 모드만). 송출 잠금은 응답기의 2xx 에 passphrase 가
+  # 없을 때 이 값으로 판정돼 거부된다(빈 passphrase 의 무암호 송출 차단). 읽기
+  # 잠금은 SRT 읽기를 막는다 — 경로 이름이 공개 토큰이라 막지 않으면 원
+  # 스트림을 무암호로 읽는다. HLS 는 영향이 없다. 옛 모드에는 두지 않는다 —
+  # 송출 잠금이 익명 송출을 깬다.
+  srtPublishPassphrase: '@@SRT_PUBLISH_LOCK@@'
+  srtReadPassphrase: '@@SRT_READ_LOCK@@'
+  # passphrase 를 아는 둘째 SRT 가 송출을 빼앗고 DVR 을 0 부터 리셋하는 것을
+  # 막는다.
+  overridePublisher: no
+
+# @mode ingest-auth end
   record: yes
   recordFormat: fmp4
   recordSegmentDuration: 4s

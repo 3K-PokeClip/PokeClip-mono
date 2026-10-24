@@ -219,7 +219,7 @@ func (h *handler) denyForeignCaller(w http.ResponseWriter, remoteAddr string) bo
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	req, invalid, ok := readRequest(r.Body)
 	if !ok {
-		h.log.Warn("ingestauth_request_invalid", "reason", invalid)
+		h.logInvalid(invalid)
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
@@ -227,12 +227,36 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case actionAPI:
 		h.api(w, req)
 	case actionRead:
-		// 설정에서 제외하므로 오지 않는다. 오면 지금 동작(무인증 읽기)을 유지한다 — SRT 읽기는 경로 잠금값이
-		// 막는다(설계 2-8).
-		w.WriteHeader(http.StatusOK)
+		h.read(w, req)
 	default:
 		h.publish(r.Context(), w, req)
 	}
+}
+
+// logInvalid 는 ingestauth_request_invalid 를 낸다(reason 만). too_large 만 DEBUG 이고 나머지는 WARN 이다. 정상
+// 요청의 본문은 상한에 닿지 않는다 — 넘는 것은 Bearer 없는 HLS 요청이 쿼리 · User-Agent 를 JSON 이 늘려 쓰는 글자로
+// 채울 때뿐이라, 그 줄은 공격이 요청마다 만든다. 로그를 쓰는 시간도 바깥 층(layers)이 예산에서 빼므로 ip_limited
+// 처럼 DEBUG 로 낸다. 나머지 reason 은 MediaMTX 와의 계약이 깨졌다는 신호라 WARN 이다.
+func (h *handler) logInvalid(reason string) {
+	if reason == invalidTooLarge {
+		h.log.Debug("ingestauth_request_invalid", "reason", reason)
+		return
+	}
+	h.log.Warn("ingestauth_request_invalid", "reason", reason)
+}
+
+// read 는 판정표의 read 두 행이다. protocol 이 정확히 srt 면 200(본문 없음 · 이벤트 없음)이다 — SRT 읽기는 경로
+// 잠금값이 막는다(설계 2-8). 그 밖(hls · webrtc · rtsp · rtmp · 빈 값 · 대문자 SRT 등)은 401(본문 없음)이고
+// ingestauth_read_denied 를 DEBUG 로 낸다(protocol 만 — 시청자 · 송출자 IP 는 싣지 않는다). 정상 CDN 시청은
+// MediaMTX 가 인증을 건너뛰어 여기 오지 않으므로 그 줄은 공격에서만 생기고, 로그를 쓰는 시간도 바깥 층(layers)이
+// 예산에서 빼므로 DEBUG 다. 4C · 실패 토큰 차례 · IP 한도를 타지 않는다.
+func (h *handler) read(w http.ResponseWriter, req mtxRequest) {
+	if req.protocol == protocolSRT {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	h.log.Debug("ingestauth_read_denied", "protocol", req.protocol)
+	w.WriteHeader(http.StatusUnauthorized)
 }
 
 // api 는 판정표의 api 행이다. 출발지(본문의 ip)가 SelfIP(cut)이고 자격이 맞으면 200, 아니면 401 이다. 둘 다 본문이

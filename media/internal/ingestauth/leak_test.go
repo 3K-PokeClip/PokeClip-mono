@@ -54,7 +54,7 @@ func TestNoSecretsInOutputsAcrossJudgmentRows(t *testing.T) {
 		chmods     bool // 권한을 빼는 행 — root 는 권한 검사를 우회해 건너뛴다
 		send       func(t *testing.T, f *leakFixture) *httptest.ResponseRecorder
 		wantStatus int
-		wantEvent  leakEvent // 그 행의 이벤트. Msg 가 비면 아무 이벤트도 없어야 한다(read 행)
+		wantEvent  leakEvent // 그 행의 이벤트. Msg 가 비면 아무 이벤트도 없어야 한다(read_srt 행)
 		resolves   bool      // 그 행이 4C 를 부른다 — 가짜 auth 는 출입증 머리가 맞는지 보고 답한다
 	}{
 		{
@@ -106,7 +106,17 @@ func TestNoSecretsInOutputsAcrossJudgmentRows(t *testing.T) {
 			name:       "본문_해석_실패_크기", // 카나리아는 상한 안쪽(본문 앞)에 있고 채움이 상한을 넘긴다
 			send:       publishWith(func(b *mtxAuthBody) { b.UserAgent = strings.Repeat("x", maxRequestBytes) }),
 			wantStatus: http.StatusBadRequest,
-			wantEvent:  leakEvent{Msg: "ingestauth_request_invalid", Reason: "too_large"},
+			wantEvent:  leakEvent{Msg: "ingestauth_request_invalid", Level: "DEBUG", Reason: "too_large"},
+		},
+		{
+			// Bearer 없는 HLS 의 꼴 — 카나리아는 상한 안쪽에 있고, JSON 이 6바이트로 늘려 쓰는 글자가 상한을 넘긴다
+			name: "too_large",
+			send: publishWith(func(b *mtxAuthBody) {
+				b.Action, b.Protocol = "read", "hls"
+				b.UserAgent = strings.Repeat("<", maxRequestBytes/5)
+			}),
+			wantStatus: http.StatusBadRequest,
+			wantEvent:  leakEvent{Msg: "ingestauth_request_invalid", Level: "DEBUG", Reason: "too_large"},
 		},
 		{
 			name: "본문_해석_실패_연결_id",
@@ -152,9 +162,15 @@ func TestNoSecretsInOutputsAcrossJudgmentRows(t *testing.T) {
 			wantEvent:  leakEvent{Msg: "ingestauth_api_denied"},
 		},
 		{
-			name:       "read",
-			send:       publishWith(func(b *mtxAuthBody) { b.Action = "read" }),
+			name:       "read_srt",
+			send:       publishWith(func(b *mtxAuthBody) { b.Action, b.Protocol = "read", "srt" }),
 			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "read_hls",
+			send:       publishWith(func(b *mtxAuthBody) { b.Action, b.Protocol = "read", "hls" }),
+			wantStatus: http.StatusUnauthorized,
+			wantEvent:  leakEvent{Msg: "ingestauth_read_denied", Level: "DEBUG"},
 		},
 		{
 			name:       "publish_아님",

@@ -141,10 +141,10 @@ kty 확정(2026-10-23): `c8gn.large`(네트워크 최적화 Graviton) · 루트 
     아키텍처(`aws_ec2_instance_type`)에 arm64 가 없으면 plan 이 멈춥니다.
 *   `rewind_bucket_arn` 에서 버킷 이름을 꺼내 사이드카 `S3_BUCKET` 으로
     넘깁니다.
-*   응답기 거부 목록 파라미터 이름 `/pokeclip/prod/media/ingest-auth-deny-tokens`
-    는 후보입니다. M15 계획 게이트에서 확정되면 맞춥니다. 값은 운영자가
-    고치고 Terraform 은 첫 줄만 넣습니다(`ignore_changes = [value]` ·
-    `prevent_destroy`).
+*   응답기 거부 목록 파라미터 이름은 `/pokeclip/prod/media/ingest-auth-deny-tokens`
+    로 확정입니다(M15 계획 · ingest-auth `CONTRACT.md` K5 · `media.env` 의
+    `INGEST_AUTH_DENYLIST_PARAM`). 값은 운영자가 고치고 Terraform 은 첫 줄만
+    넣습니다(`ignore_changes = [value]` · `prevent_destroy`).
 
 ## 출력
 

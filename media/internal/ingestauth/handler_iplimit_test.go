@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -257,7 +258,8 @@ func TestHandlerIPLimitSustainedFlood(t *testing.T) {
 	}
 }
 
-// H8 — api · read 행은 한도와 무관하다(설계 2-1 의 14).
+// H8 — api · read 행은 한도와 무관하다(설계 2-1 의 14). 한도에 걸린 IP 의 srt read 는 200, hls read 는 한도 거절이
+// 아니라 read 거부(401 · read_denied)다.
 func TestHandlerIPLimitIgnoresAPIAndRead(t *testing.T) {
 	f := newIPLimitFixture(t)
 	f.publishStatuses(t, testAttackerIP, testTokenA, testIPBurst+1)
@@ -265,10 +267,56 @@ func TestHandlerIPLimitIgnoresAPIAndRead(t *testing.T) {
 		t.Errorf("api from SelfIP while a publisher is limited = %d, want 200", rr.Code)
 	}
 	read := publishBody(testTokenA, testConnID(9999))
-	read.IP, read.Action = testAttackerIP, "read"
+	read.IP, read.Action, read.Protocol = testAttackerIP, "read", "srt"
 	if rr := f.serve(newAuthRequest(t, read)); rr.Code != http.StatusOK {
-		t.Errorf("read from the limited IP = %d, want 200", rr.Code)
+		t.Errorf("srt read from the limited IP = %d, want 200", rr.Code)
 	}
+	limitedBefore := len(handlerEvents(t, f.logs, "ingestauth_publish_denied"))
+	read.Protocol = "hls"
+	if rr := f.serve(newAuthRequest(t, read)); rr.Code != http.StatusUnauthorized {
+		t.Errorf("hls read from the limited IP = %d, want 401", rr.Code)
+	}
+	if n := len(handlerEvents(t, f.logs, "ingestauth_publish_denied")) - limitedBefore; n != 0 {
+		t.Errorf("publish_denied events for an hls read from the limited IP = %d, want 0 (read 거부는 한도 행이 아니다)", n)
+	}
+	if n := len(handlerEvents(t, f.logs, "ingestauth_read_denied")); n != 1 {
+		t.Errorf("read_denied events for an hls read from the limited IP = %d, want 1", n)
+	}
+}
+
+// 거부된 read 는 한도를 세지 않는다 — 한 IP 의 hls read 를 BURST 의 두 배 보낸 뒤에도 한도기에 그 IP 의 항목이 없고,
+// 이어서 그 IP 의 publish 를 BURST 번 보내도 ip_limited 거절이 없다. publish 의 200 은 보지 않는다 — 가짜 auth 는 실제
+// TCP 로 부르므로, 부하로 resolve 가 실패하면 한도와 무관한 401 이 나 거짓 실패가 된다. 한도 거절만 센다. 실패하면
+// publish 의 상태 · 거절 reason · auth 도달 수를 함께 싣는다.
+func TestHandlerIPLimitSkipsDeniedRead(t *testing.T) {
+	f := newIPLimitFixture(t)
+	read := publishBody(testTokenA, testConnID(9999))
+	read.IP, read.Action, read.Protocol = testAttackerIP, "read", "hls"
+	for i := range 2 * testIPBurst {
+		if rr := f.serve(newAuthRequest(t, read)); rr.Code != http.StatusUnauthorized {
+			t.Fatalf("hls read %d = %d, want 401", i, rr.Code)
+		}
+	}
+	if hasEntry(f.h.ipLimit, netip.MustParseAddr(testAttackerIP)) {
+		t.Errorf("IP limiter entry for %s after %d hls reads exists, want none (거부된 read 는 한도를 세지 않는다)", testAttackerIP, 2*testIPBurst)
+	}
+	codes := make([]int, 0, testIPBurst)
+	for range testIPBurst {
+		codes = append(codes, f.publishFrom(t, testAttackerIP, testTokenA).Code)
+	}
+	if limited := ipLimitedDenials(t, f.logs); len(limited) != 0 {
+		t.Errorf("ip_limited denials over %d publishes after %d hls reads from the same IP = %v, want none; publish codes = %v, denial reasons = %v, fake auth calls = %d", testIPBurst, 2*testIPBurst, limited, codes, publishDeniedReasons(t, f.logs), f.auth.callCount())
+	}
+}
+
+// publishDeniedReasons 는 ingestauth_publish_denied 줄을 reason 별로 센다 — 실패 메시지에 거절 까닭을 싣는다.
+func publishDeniedReasons(t *testing.T, logs *logRecorder) map[string]int {
+	t.Helper()
+	n := make(map[string]int)
+	for _, e := range handlerEvents(t, logs, "ingestauth_publish_denied") {
+		n[e.Reason]++
+	}
+	return n
 }
 
 // H9 — 영값 Options 는 꺼짐이다 — 한 IP 로 publish 를 많이 쏘는 기존 시험이 그대로 돈다.

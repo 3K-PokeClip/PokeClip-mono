@@ -1,18 +1,44 @@
 #!/usr/bin/env bash
 #
-# start_test 전용 가짜 od — 시작 스크립트의 API 비밀번호 생성 실패를 흉내 낸다.
-# 그 사례만 PATH 앞에 이 파일을 둔다(다른 사례는 진짜 od 를 쓴다).
+# start_test 전용 가짜 od — 시작 스크립트의 비밀 생성(API 비밀번호 · 응답기
+# 모드의 생성 셋) 실패를 흉내 낸다. 그 사례만 PATH 앞에 이 파일을 둔다(다른
+# 사례는 진짜 od 를 쓴다).
 #
 # 시험이 주는 값:
-#   PCBENCH_FAKE_OD_MODE  short(16진 62자) · upper(대문자 16진 64자) ·
-#                         okfail(꼴이 맞는 16진 64자를 내고 종료 1) ·
-#                         fail(종료 1). 기본 fail.
+#   PCBENCH_FAKE_OD_MODE        short(16진 62자) · upper(대문자 16진 64자) ·
+#                               okfail(꼴이 맞는 16진 64자를 내고 종료 1) ·
+#                               fail(종료 1). 기본 fail.
+#   PCBENCH_FAKE_OD_PASS_CALLS  있으면 처음 그 수만큼의 호출은 진짜 od(/usr/bin ·
+#                               /bin)로 넘기고 그 뒤 호출부터 위 모드를 흉내
+#                               낸다(몇 번째 생성이 실패하는지 고른다). 호출
+#                               수는 PCBENCH_FAKE_LOG_DIR/od.calls 에 센다.
 
 set -euo pipefail
 
 readonly HEX62='00112233445566778899aabbccddeeff00112233445566778899aabbccddee'
 
+#######################################
+# 이번 호출이 진짜 od 로 넘길 차례면 넘긴다(돌아오지 않는다).
+# Arguments:
+#   받은 argv.
+#######################################
+pass_through_if_due() {
+  local limit="${PCBENCH_FAKE_OD_PASS_CALLS:-}" calls dir
+  [[ -n "${limit}" ]] || return 0
+  calls="${PCBENCH_FAKE_LOG_DIR:?가짜 od: PCBENCH_FAKE_LOG_DIR 없음}/od.calls"
+  printf 'call\n' >>"${calls}"
+  (( $(awk 'END { print NR }' "${calls}") <= limit )) || return 0
+  for dir in /usr/bin /bin; do
+    if [[ -x "${dir}/od" ]]; then
+      exec "${dir}/od" "$@"
+    fi
+  done
+  printf '가짜 od: 진짜 명령을 찾지 못함\n' >&2
+  exit 2
+}
+
 main() {
+  pass_through_if_due "$@"
   case "${PCBENCH_FAKE_OD_MODE:-fail}" in
     short) printf ' %s\n' "${HEX62}" ;;
     upper) printf ' %s\n' "$(printf '%sFF' "${HEX62}" | tr 'a-f' 'A-F')" ;;
