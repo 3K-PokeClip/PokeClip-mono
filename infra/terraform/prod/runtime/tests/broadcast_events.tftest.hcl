@@ -298,8 +298,8 @@ run "lets_only_broadcast_topic_send_to_queues" {
 }
 
 # 주제 정책은 이 계정의 신원 정책에 맡기는 한 문장이다 — 주체는 계정 루트,
-# 조건 없음, 동작은 기본 주제 정책의 여덟(SNS:Receive 는 SNS 정책 동작이
-# 아니라 뺀다). 기본 정책의 Principal * · AWS:SourceOwner 를 남기지 않는다.
+# 조건 없음. 기본 정책의 Principal * · AWS:SourceOwner 를 남기지 않는다.
+# 동작은 아래 keeps_topic_policy_to_read_only 가 본다.
 run "delegates_topic_access_to_account_identity_policies" {
   command = apply
 
@@ -337,19 +337,33 @@ run "delegates_topic_access_to_account_identity_policies" {
     condition     = !contains(keys(jsondecode(aws_sns_topic_policy.broadcast_lifecycle.policy).Statement[0]), "Condition")
     error_message = "주제 정책 문장에 Condition 이 있다 — 계정 루트 주체에는 조건을 두지 않는다."
   }
+}
+
+# 정책 시뮬레이터(1단-다 직전 점검 2-3)는 계정 루트 문장을 같은 계정 dev
+# 주체에도 맞춘다. 그래서 문장은 읽기(SNS:GetTopicAttributes) 하나만 연다 —
+# 변경 · 삭제 · 구독 · 발행은 정책에 두지 않는다. 실제 접근(media 발행 ·
+# Terraform 관리)은 신원 정책이 정해 동작은 같다.
+run "keeps_topic_policy_to_read_only" {
+  command = apply
 
   assert {
-    condition = toset(jsondecode(aws_sns_topic_policy.broadcast_lifecycle.policy).Statement[0].Action) == toset([
-      "SNS:GetTopicAttributes",
-      "SNS:SetTopicAttributes",
-      "SNS:AddPermission",
-      "SNS:RemovePermission",
-      "SNS:DeleteTopic",
-      "SNS:Subscribe",
-      "SNS:ListSubscriptionsByTopic",
-      "SNS:Publish",
-    ])
-    error_message = "주제 정책 동작이 기본 주제 정책의 여덟(SNS:Receive 제외)이 아니다."
+    condition     = jsondecode(aws_sns_topic_policy.broadcast_lifecycle.policy).Statement[0].Action == ["SNS:GetTopicAttributes"]
+    error_message = "주제 정책 동작이 SNS:GetTopicAttributes 하나가 아니다."
+  }
+
+  assert {
+    condition = length(setintersection(
+      toset(flatten([jsondecode(aws_sns_topic_policy.broadcast_lifecycle.policy).Statement[0].Action])),
+      toset([
+        "SNS:SetTopicAttributes",
+        "SNS:AddPermission",
+        "SNS:RemovePermission",
+        "SNS:DeleteTopic",
+        "SNS:Subscribe",
+        "SNS:Publish",
+      ]),
+    )) == 0
+    error_message = "주제 정책에 변경 동작(SetTopicAttributes · AddPermission · RemovePermission · DeleteTopic · Subscribe · Publish)이 있다."
   }
 }
 

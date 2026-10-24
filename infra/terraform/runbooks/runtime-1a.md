@@ -118,7 +118,11 @@ bash infra/terraform/scripts/precheck/events.sh --since <비교 기준 판정 �
         tfvars(`auth_oauth_apps`)가 먼저 있어야 plan 이 돕니다 — 「1단-다 2.
         tfvars 와 apply」 를 따릅니다.
     *   주제 정책(`aws_sns_topic_policy.broadcast_lifecycle`)은 명시
-        정책입니다 — 주체가 계정 루트 하나이고 `*` · `Condition` 이 없습니다.
+        정책입니다 — 문장이 하나이고, 주체가 계정 루트 하나, 동작이
+        `SNS:GetTopicAttributes` 하나이며 `*` · `Condition` 이 없습니다.
+        변경 동작(`SNS:SetTopicAttributes` · `SNS:AddPermission` ·
+        `SNS:RemovePermission` · `SNS:DeleteTopic` · `SNS:Subscribe` ·
+        `SNS:Publish`)이 없습니다.
     *   주소에 `sql_runner` 가 없습니다(실행기 꺼짐).
     *   `aws_secretsmanager_secret_version` 이 0 입니다.
     *   태그를 받는 자원의 `tags_all` 에 네 키(`TerraformRoot =
@@ -771,6 +775,14 @@ AccessDenied(접근 거부 · SCP 거부)가 나면 다시 시도하지 않고 �
         라 `22 to add` · 1단-가와 함께면 `51 to add` 이고, 출력에 「1단-나 ②
         2」 의 변화가 함께 나옵니다. 그 그릇의 값은 O7d 전에 「1단-나 ② 4」
         로 넣습니다.
+    *   방송 주제 정책을 읽기 하나(`SNS:GetTopicAttributes`)로 줄인
+        판(POK-304)이면 1단-가를 이미 적용한 경우 위 수에
+        `1 to change`(`aws_sns_topic_policy.broadcast_lifecycle`)가
+        더해집니다 — `21 to add, 1 to change` · `22 to add, 1 to change`.
+        바뀌는 것은 그 정책의 `Sid` 와 동작 목록이고, 주체(계정 루트) ·
+        `Condition` 없음은 그대로입니다(「2. 본 apply」 의 주제 정책 항목과
+        같은 꼴). 1단-가와 함께면 처음부터 읽기 하나 정책으로 생겨 수가
+        그대로입니다.
     *   바뀐 출력이 `app_env` · `app_secret_arns` ·
         `app_task_resource_arns` 입니다. `app_env.auth` 에
         `STREAM_KEY_SECRET_REF_PREFIX` 가 없습니다(platform 이 넣음).
