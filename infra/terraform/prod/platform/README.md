@@ -119,6 +119,7 @@ next 이미지를 다시 빌드해야 합니다.
 | clip | `ClipObjects` | `s3:GetObject` · `PutObject` · `DeleteObject` | `clips_bucket_arn/*` | 서명 URL `ClipFileSigner.java:42` · `ThumbnailSigner.java:24` · `UploadThumbnailStore.java:69` · `82` · `S3PurgeStorage.java:57` |
 | clip | `ClipList` | `s3:ListBucket` | `clips_bucket_arn` | `S3PurgeStorage.java:36` |
 | clip | `SegmentDelete` | `s3:DeleteObject` | `segment_bucket_arn/*` | `S3PurgeStorage.java:57` |
+| clip | `SegmentRead` | `s3:GetObject` | `segment_bucket_arn/*` | 서명 URL `SegmentAudioSigner.java:33`(트랙별 미리 듣기, POK-389) |
 | auth · clip | `DbConnect` | `rds-db:connect` | `dbuser:<rds_resource_id>/<자기 사용자>` — `app_db_auth = "iam"` 일 때만 | 공통 지시 6(POK-407) |
 
 *   서명 URL 은 작업 역할 자격으로 서명되므로, 받는 사람이 그 URL 로 읽으려면

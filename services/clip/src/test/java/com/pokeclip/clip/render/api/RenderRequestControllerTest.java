@@ -7,6 +7,7 @@ import com.pokeclip.clip.support.IntegrationTestSupport;
 import com.pokeclip.clip.support.LocalStackFixture;
 import com.pokeclip.clip.support.NotFoundFloor;
 import com.pokeclip.clip.support.TestTokens;
+import com.pokeclip.web.support.LogCaptor;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -402,6 +403,91 @@ class RenderRequestControllerTest extends IntegrationTestSupport {
                 .andExpect(jsonPath("$.error").value("broadcast_not_found"));
     }
 
+    // ── 원본 조각 소리 주소(POK-389) ─────────────────────────────
+
+    /**
+     * 편집기가 트랙별로 미리 들으려고 원본 조각(모든 소리 트랙이 든 파일)을 받는 주소. 구간과 겹치는 <b>올라간 조각만</b> 재생 축
+     * 시각과 함께 주고, 그 주소로 조각 창고에서 진짜 받아진다. 아직 안 올라간 조각(3번)은 빠진다: 주소를 줘도 창고에 없다.
+     */
+    @Test
+    void 원본_조각_주소는_올라간_조각만_주고_그_주소로_진짜_받아진다() throws Exception {
+        볼_수_있다("OWNER");
+        RenderFixtures.조각을_넣는다(jdbc, 내_방송, 3);
+        LocalStackFixture.ensureBucket("segments-test");
+        byte[] 조각 = "가짜 fmp4 바이트".getBytes(StandardCharsets.UTF_8);
+        LocalStackFixture.putObject("segments-test", "streams/" + 내_방송 + "/seg_2.m4s", 조각, "video/mp4");
+
+        Instant 전 = Instant.now();
+        JsonNode 응답 = MAPPER.readTree(본문(조각_주소(내_방송, RenderFixtures.CUT_IN, RenderFixtures.CUT_IN + 10_000)
+                .andExpect(status().isOk())));
+
+        Instant 만료 = Instant.parse(응답.get("expiresAt").asString());
+        assertThat(만료).isBetween(전.plus(Duration.ofMinutes(4)), 전.plus(Duration.ofMinutes(6)));
+        JsonNode segments = 응답.get("segments");
+        assertThat(segments.size()).as("2·3·4번이 겹치고 3번은 아직 안 올라갔다").isEqualTo(2);
+        assertThat(segments.get(0).get("seq").asLong()).isEqualTo(2);
+        assertThat(segments.get(0).get("startAtMs").asLong()).isEqualTo(RenderFixtures.CUT_IN);
+        assertThat(segments.get(0).get("durationMs").asInt()).isEqualTo(RenderFixtures.SEGMENT_MS);
+        assertThat(segments.get(1).get("seq").asLong()).isEqualTo(4);
+        assertThat(segments.get(1).get("startAtMs").asLong()).isEqualTo(RenderFixtures.CUT_IN + 8_000);
+        assertThat(응답.toString()).as("창고 좌표는 화면에 줄 필요가 없다").doesNotContain("s3Key");
+
+        HttpResponse<byte[]> 받음 = 받는다(segments.get(0).get("url").asString());
+        assertThat(받음.statusCode()).isEqualTo(200);
+        assertThat(받음.body()).isEqualTo(조각);
+    }
+
+    /** 주소는 로그에 안 남는다: 한 줄 새면 그 조각이 수명 동안 열린다. 발급 줄 자체는 남는다(양성 대조). */
+    @Test
+    void 원본_조각_주소는_로그에_안_남는다() throws Exception {
+        볼_수_있다("OWNER");
+        RenderFixtures.조각을_넣는다(jdbc, 내_방송, 0);
+        try (LogCaptor 로그 = new LogCaptor()) {
+            JsonNode 응답 = MAPPER.readTree(본문(조각_주소(내_방송, RenderFixtures.CUT_IN, RenderFixtures.CUT_IN + 10_000)
+                    .andExpect(status().isOk())));
+            String 서명 = 응답.get("segments").get(0).get("url").asString().replaceFirst(".*X-Amz-Signature=", "");
+
+            assertThat(로그.messages()).as("발급 줄이 안 찍혔다: 아래 부정 단언이 빈 로그에 저절로 참이 된다")
+                    .anyMatch(line -> line.contains("clip.segment_audio_access.issued"));
+            assertThat(로그.messages()).noneMatch(line -> line.contains(서명) || line.contains("X-Amz-"));
+            assertThat(로그.messages()).noneMatch(line -> line.contains("seg_2.m4s"));
+        }
+    }
+
+    /** 구간이 거꾸로이거나 비었거나 6분을 넘으면 400이다. 6분 상한은 화면이 받아 푸는 양(조각 90개)의 한도다. */
+    @Test
+    void 구간이_잘못되면_400이다() throws Exception {
+        볼_수_있다("OWNER");
+        long in = RenderFixtures.CUT_IN;
+        조각_주소(내_방송, -1, in).andExpect(status().isBadRequest()).andExpect(jsonPath("$.field").value("fromMs"));
+        조각_주소(내_방송, in, in).andExpect(status().isBadRequest()).andExpect(jsonPath("$.field").value("toMs"));
+        조각_주소(내_방송, in, in - 1).andExpect(status().isBadRequest()).andExpect(jsonPath("$.field").value("toMs"));
+        조각_주소(내_방송, in, in + 360_001).andExpect(status().isBadRequest()).andExpect(jsonPath("$.field").value("toMs"));
+        조각_주소(내_방송, in, in + 360_000).andExpect(status().isOk());
+        // 길이는 6분 안이어도 DB가 못 받는 먼 미래면 조회에서 500이 났다(PR #341 codex)
+        조각_주소(내_방송, Long.MAX_VALUE - 100, Long.MAX_VALUE).andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.field").value("toMs"));
+    }
+
+    /** 자격이 없으면 방송이 없는 것과 같은 404다. 보관 기한이 지난 방송은 자격 확인 뒤에 410이다(조각 조회 문과 같은 순서). */
+    @Test
+    void 자격_없음은_404이고_기한이_지난_방송은_410이다() throws Exception {
+        볼_수_없다();
+        조각_주소(내_방송, RenderFixtures.CUT_IN, RenderFixtures.CUT_IN + 10_000).andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error").value("broadcast_not_found"));
+        조각_주소("s-없음", RenderFixtures.CUT_IN, RenderFixtures.CUT_IN + 10_000).andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error").value("broadcast_not_found"));
+
+        볼_수_있다("OWNER");
+        jdbc.update("UPDATE broadcasts SET vod_expires_at = now() - interval '1 day' WHERE stream_id = ?", 내_방송);
+        조각_주소(내_방송, RenderFixtures.CUT_IN, RenderFixtures.CUT_IN + 10_000).andExpect(status().isGone())
+                .andExpect(jsonPath("$.error").value("vod_expired"));
+
+        // 기한이 지났어도 자격이 없으면 404다: 410이 먼저면 남남에게 「있었던 방송」이 샌다.
+        볼_수_없다();
+        조각_주소(내_방송, RenderFixtures.CUT_IN, RenderFixtures.CUT_IN + 10_000).andExpect(status().isNotFound());
+    }
+
     // ── outbox · 실패 큐 ──────────────────────────────────────────
 
     /**
@@ -477,6 +563,13 @@ class RenderRequestControllerTest extends IntegrationTestSupport {
 
     private ResultActions 주소(String streamId, long clipId) throws Exception {
         return mvc.perform(post("/api/clip/broadcasts/" + streamId + "/clips/" + clipId + "/file-access")
+                .header("Authorization", "Bearer " + TestTokens.access(요청자)));
+    }
+
+    private ResultActions 조각_주소(String streamId, long fromMs, long toMs) throws Exception {
+        return mvc.perform(post("/api/clip/broadcasts/" + streamId + "/segments/audio-access")
+                .param("fromMs", Long.toString(fromMs))
+                .param("toMs", Long.toString(toMs))
                 .header("Authorization", "Bearer " + TestTokens.access(요청자)));
     }
 

@@ -144,6 +144,7 @@ export function UploadInfoDialog({
   initial,
   cutLengthMs,
   playheadOffsetMs,
+  pickedInEditor = false,
   highlightOffsetMs = null,
   frameSource = null,
   serverErrors,
@@ -159,6 +160,8 @@ export function UploadInfoDialog({
   cutLengthMs: number;
   /** 지금 재생 위치를 완성 영상 시각으로 옮긴 값. 녹화가 없어 모르면 null */
   playheadOffsetMs: number | null;
+  /** 장면이 편집기의 「이 장면을 썸네일로」로 채워졌는가(POK-389) */
+  pickedInEditor?: boolean;
   /** 하이라이트(카드 시각)를 완성 영상 시각으로 옮긴 값. 카드 없이 연 편집본이면 null */
   highlightOffsetMs?: number | null;
   /** 장면 그림을 뽑을 재료. 녹화가 없거나 아직 못 받았으면 null(시각만 보인다) */
@@ -187,6 +190,7 @@ export function UploadInfoDialog({
           initial={initial}
           cutLengthMs={cutLengthMs}
           playheadOffsetMs={playheadOffsetMs}
+          pickedInEditor={pickedInEditor}
           highlightOffsetMs={highlightOffsetMs}
           frameSource={frameSource}
           serverErrors={serverErrors}
@@ -203,6 +207,7 @@ function UploadInfoForm({
   initial,
   cutLengthMs,
   playheadOffsetMs,
+  pickedInEditor = false,
   highlightOffsetMs,
   frameSource,
   serverErrors,
@@ -228,8 +233,15 @@ function UploadInfoForm({
   }, []);
 
   const picks = useMemo(
-    () => scenePicks(cutLengthMs, highlightOffsetMs, playheadOffsetMs),
-    [cutLengthMs, highlightOffsetMs, playheadOffsetMs],
+    // 편집기에서 「이 장면을 썸네일로」 고른 장면(POK-389)을 추천 맨 앞에 둔다
+    () =>
+      scenePicks(
+        cutLengthMs,
+        highlightOffsetMs,
+        playheadOffsetMs,
+        pickedInEditor ? initial.sceneOffsetMs : null,
+      ),
+    [cutLengthMs, highlightOffsetMs, playheadOffsetMs, pickedInEditor, initial.sceneOffsetMs],
   );
   const wanted = useMemo(
     () => [...picks.map((p) => p.offsetMs), ...stripTileTimes(cutLengthMs)],
@@ -408,7 +420,11 @@ function UploadInfoForm({
         </div>
 
         <div className={styles.right}>
-          <Tabs value={tab} onValueChange={(v) => setTab(v as UploadTab)}>
+          <Tabs
+            value={tab}
+            onValueChange={(v) => setTab(v as UploadTab)}
+            className={styles.tabsRoot}
+          >
             <Tabs.List aria-label="업로드 정보" className={styles.tabs}>
               {TABS.map((t) => (
                 <Tabs.Trigger key={t.value} value={t.value} className={styles.tab}>

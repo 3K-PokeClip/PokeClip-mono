@@ -6,14 +6,7 @@ import type { ClipEditorMockState } from './useClipEditorMockState';
 
 // 시안 1d 상단 — 편집기 자체 헤더(전역 헤더 대신). 저장·업로드는 전부 목업 동작이다.
 
-export function EditorHeader({
-  state,
-  showTemplateSave = false,
-}: {
-  state: ClipEditorMockState;
-  /** 템플릿 저장은 시안에서 스튜디오형에만 있다 */
-  showTemplateSave?: boolean;
-}) {
+export function EditorHeader({ state }: { state: ClipEditorMockState }) {
   return (
     <header className={styles.header}>
       {/* 보관함 화면을 바로 가리킨다 — /clips는 리다이렉트라 한 홉을 더 탄다(POK-235) */}
@@ -47,11 +40,6 @@ export function EditorHeader({
         </IconButton>
       </div>
       <div className={styles.headerActions}>
-        {showTemplateSave ? (
-          <Button variant="ghost" size="sm" onClick={state.saveTemplate}>
-            템플릿 저장
-          </Button>
-        ) : null}
         <Button variant="soft" size="sm" onClick={state.saveDraft}>
           편집본 저장
         </Button>

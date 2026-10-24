@@ -82,7 +82,7 @@ clip ↔ auth · RDS ← auth · clip · 로드밸런서 → Media 규칙은 위
 | clip | `render_queue_arn` · `upload_queue_arn` · `thumbnail_queue_arn` | SQS 큐 ARN | `sqs:SendMessage` |
 | clip | `render_dlq_arn` · `upload_dlq_arn` | SQS 큐 ARN | `sqs:ReceiveMessage` · `DeleteMessage` |
 | clip | `clips_bucket_arn` | `arn:aws:s3:::<버킷>` | `s3:GetObject` · `PutObject` · `DeleteObject`(`/*`) · `s3:ListBucket`(버킷) |
-| clip | `segment_bucket_arn` | `arn:aws:s3:::<버킷>` | `s3:DeleteObject`(`/*`) |
+| clip | `segment_bucket_arn` | `arn:aws:s3:::<버킷>` | `s3:DeleteObject` · `GetObject`(`/*`) |
 
 런타임은 지금 clip 의 `broadcast_queue_arn` 하나만 냅니다. 나머지 키는 그
 자원을 만드는 런타임 다음 PR(POK-408)이 더합니다(kty 2026-10-23).
@@ -93,6 +93,12 @@ clip ↔ auth · RDS ← auth · clip · 로드밸런서 → Media 규칙은 위
 *   큐 · 버킷은 SSE-SQS · SSE-S3(AWS 관리 키)를 전제합니다. 고객 관리 KMS
     키면 작업 역할에 그 키 권한이 더 필요합니다 — platform 과 같은 PR 에서
     고칩니다.
+*   **조각 창고(`segment_bucket_arn`)에는 CORS 규칙이 있어야 합니다** —
+    앱 출처(`https://<app_host>`, 기본 `app.pokeclip.com`)에 `GET` · `HEAD`
+    를 허락하는 규칙. 편집기의 트랙별 미리 듣기가 clip 이 서명한 조각 주소를
+    브라우저 `fetch` 로 받습니다(POK-389). 창고는 런타임 1단이 만들므로
+    규칙도 런타임 몫이고, 없으면 `SegmentRead` 권한이 있어도 브라우저가
+    응답을 막아 미리 듣기가 「못 불러왔어요」로만 뜹니다.
 
 ### platform 이 정하는 env
 

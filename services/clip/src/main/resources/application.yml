@@ -248,6 +248,8 @@ pokeclip:
     max-attempts: 3
     # 완성 영상 주소(POK-247)의 수명. 그 사이 영상 재생·내려받기가 된다. 지나면 문을 다시 부른다.
     file-url-ttl: PT60M
+    # 원본 조각 주소(POK-389)의 수명. 편집기가 트랙별로 미리 들으려고 받자마자 내려받는다. 조각엔 방송 소리가 전부 들어 있다.
+    segment-audio-url-ttl: PT5M
     # 주문서 크기 상한(계약1 2절 200KB).
     max-message-bytes: 204800
 

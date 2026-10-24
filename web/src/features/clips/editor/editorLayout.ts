@@ -44,9 +44,10 @@ export const DEFAULT_SPLIT_RATIO = 50;
 /** 자막이 놓이는 자리 — 시안에서 레이아웃 패널이 아니라 자막 패널로 옮겨졌다 */
 export type CaptionPosition = 'top' | 'edge' | 'bottom';
 export const CAPTION_POSITIONS: readonly { value: CaptionPosition; label: string }[] = [
-  { value: 'top', label: '상단' },
-  { value: 'edge', label: '경계' },
-  { value: 'bottom', label: '하단' },
+  // 「경계」는 분할이면 두 칸 사이, 아니면 한가운데라 화면에는 「가운데」로 말한다(POK-389). 값은 그대로다
+  { value: 'top', label: '위' },
+  { value: 'edge', label: '가운데' },
+  { value: 'bottom', label: '아래' },
 ];
 
 /**

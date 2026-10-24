@@ -21,7 +21,7 @@ export function SubtitleSection({ state }: { state: ClipEditorMockState }) {
             <Captions size={14} aria-hidden />
             <span className={styles.sectionTitle}>AI 자막</span>
             <Badge tone="neutral" variant="soft" size="sm">
-              {generating ? '생성 중' : '미생성'}
+              {!state.subtitleGenerationAvailable ? '준비 중' : generating ? '생성 중' : '미생성'}
             </Badge>
           </div>
           <p className={styles.hint}>
@@ -32,13 +32,14 @@ export function SubtitleSection({ state }: { state: ClipEditorMockState }) {
             size="sm"
             fullWidth
             loading={generating}
+            disabled={!state.subtitleGenerationAvailable}
             onClick={state.generateSubtitles}
           >
-            {generating ? '자막을 만드는 중' : `AI 자막 생성 · ${subtitle.estimateLabel}`}
+            {generating ? '자막을 만드는 중' : `AI 자막 만들기 · ${subtitle.estimateLabel}`}
           </Button>
           <p className={styles.pending}>
             <Lock size={11} aria-hidden />
-            기본 폰트 제공 · 내 폰트 업로드는 준비 중
+            기본 글꼴 제공 · 내 글꼴 올리기는 준비 중
           </p>
         </section>
         <div className={styles.divider} />
@@ -64,7 +65,7 @@ export function SubtitleSection({ state }: { state: ClipEditorMockState }) {
 
         {/* 태그 모양이지만 하는 일은 라디오 그룹이라 화살표 이동까지 갖춘 Segmented를 쓴다 */}
         <Segmented
-          label="자막 표시 방식"
+          label="자막 보이는 방식"
           options={state.subtitleModeOptions}
           value={state.subtitleMode}
           onChange={state.setSubtitleMode}
@@ -86,7 +87,7 @@ export function SubtitleSection({ state }: { state: ClipEditorMockState }) {
 
         <div>
           <div className={styles.fieldLabel} id="subtitle-font-label">
-            폰트
+            글꼴
           </div>
           <button type="button" className={styles.fontSelect} aria-labelledby="subtitle-font-label">
             {state.subtitleFontLabel}
@@ -94,7 +95,7 @@ export function SubtitleSection({ state }: { state: ClipEditorMockState }) {
           </button>
           {/* 폰트 업로드는 이 티켓 범위 밖 — 시안도 「준비 중」으로 적는다 */}
           <p className={styles.pending}>
-            <Lock size={12} aria-hidden />내 폰트 업로드 · 준비 중
+            <Lock size={12} aria-hidden />내 글꼴 올리기 · 준비 중
           </p>
         </div>
 

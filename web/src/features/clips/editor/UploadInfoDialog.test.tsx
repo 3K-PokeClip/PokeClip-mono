@@ -54,6 +54,25 @@ describe('UploadInfoDialog', () => {
     expect(dialog().queryByText('장면을 불러오는 중이에요')).not.toBeInTheDocument();
   });
 
+  it('편집기에서 고른 장면은 추천 맨 앞 「편집기에서 고름」으로 골라져 있다(POK-389)', async () => {
+    const user = userEvent.setup();
+    const { dialog } = renderDialog(
+      { pickedInEditor: true },
+      { thumbnailSource: 'scene', sceneOffsetMs: 3_500 },
+    );
+    await openTab(user, dialog, '썸네일');
+    expect(dialog().getByRole('button', { name: '편집기에서 고름 0:03.5' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+
+    await user.click(dialog().getByRole('button', { name: '중간 0:06.2' }));
+    expect(dialog().getByRole('button', { name: '편집기에서 고름 0:03.5' })).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    );
+  });
+
   it('처음 값: 정보 탭 · 빈 칸 · 카테고리 게임 · 썸네일은 장면 · 비공개 · 아동용 아님', async () => {
     const user = userEvent.setup();
     const { dialog } = renderDialog();

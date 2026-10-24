@@ -55,6 +55,29 @@ public final class RenderErrors {
         }
     }
 
+    /**
+     * 400. 원본 조각 주소(POK-389)의 구간이 잘못됐다: 시작이 음수({@code fromMs})거나, 끝이 시작 이하이거나 6분을 넘는다({@code toMs}).
+     */
+    public static class InvalidSegmentRangeException extends RuntimeException {
+        private final String field;
+
+        public InvalidSegmentRangeException(String field) {
+            super("잘못된 구간: " + field);
+            this.field = field;
+        }
+
+        public String field() {
+            return field;
+        }
+    }
+
+    /** 410. 방송의 보관 기한이 지났다(조각 조회 문의 {@code vod_expired}와 같은 뜻). 자격 확인 뒤에만 던진다. */
+    public static class SegmentsExpiredException extends RuntimeException {
+        public SegmentsExpiredException() {
+            super("보관 기한이 지난 방송이다");
+        }
+    }
+
     /** 404(내부 문). 모르는 jobId. 일꾼은 중단하고 메시지를 지운다(계약1). */
     public static class JobNotFoundException extends RuntimeException {
         public JobNotFoundException(String jobId) {
