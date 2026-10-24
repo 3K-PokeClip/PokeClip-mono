@@ -48,7 +48,8 @@ class YoutubeResolveReasonTest extends YoutubeLinkTestSupport {
     /** 갱신기가 준 결과만으로 사유를 고르게 조립한다 — 그 판정이 락 안에서 났는지가 이 검사의 요점이다. */
     private YoutubeLinkService serviceWith(RefreshResult stubbed) {
         YoutubeTokenRefresher refresher = mock(YoutubeTokenRefresher.class);
-        when(refresher.refreshIfExpiringWithin(any(), any())).thenReturn(stubbed);
+        // resolve는 지문 칸이 있는 3인자를 부른다(POK-250, 지문 없으면 null).
+        when(refresher.refreshIfExpiringWithin(any(), any(), any())).thenReturn(stubbed);
         return new YoutubeLinkService(properties, codec, oauthClient, writer, refresher, linkRepository);
     }
 

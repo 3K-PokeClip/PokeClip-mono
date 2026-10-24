@@ -54,6 +54,11 @@ public class FakeYoutube implements AutoCloseable {
     public volatile int chunkServerErrors;
     public volatile boolean rejectChunks;
     public volatile boolean goneSessions;
+    /**
+     * 설정하면 시작 · 조각 · 주소 물음이 이 토큰만 받고 나머지는 401이다(POK-250). 주소 문은 Authorization 머리가 <b>없으면</b> 통과시킨다:
+     * 토큰 없는 결론 자리가 머리 없이 묻는다. null이면 지금 그대로(시작만 {@link #GOOD_TOKEN}을 본다).
+     */
+    public volatile String acceptedToken;
     /** 썸네일 문이 받아 주는 토큰. 다르면 401(긴 업로드 뒤 토큰이 끝난 흉내). */
     public volatile String thumbnailToken = GOOD_TOKEN;
     /** 썸네일 문이 차례로 줄 실패. {@code "403 forbidden"}처럼 상태와 사유. 비면 성공(영상이 있을 때). */
@@ -147,7 +152,7 @@ public class FakeYoutube implements AutoCloseable {
         String auth = ex.getRequestHeaders().getFirst("Authorization");
         seenAuth.add(String.valueOf(auth));
         String body = new String(ex.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
-        if (!("Bearer " + GOOD_TOKEN).equals(auth)) {
+        if (!("Bearer " + (acceptedToken != null ? acceptedToken : GOOD_TOKEN)).equals(auth)) {
             reply(ex, 401, "{}");
             return;
         }
@@ -191,6 +196,11 @@ public class FakeYoutube implements AutoCloseable {
         byte[] body = ex.getRequestBody().readAllBytes();
         if (s == null || goneSessions) {
             reply(ex, 404, "{}");
+            return;
+        }
+        String auth = ex.getRequestHeaders().getFirst("Authorization");
+        if (acceptedToken != null && auth != null && !("Bearer " + acceptedToken).equals(auth)) {
+            reply(ex, 401, "{}");
             return;
         }
         String range = ex.getRequestHeaders().getFirst("Content-Range");

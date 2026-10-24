@@ -280,3 +280,17 @@ describe('ChatPanel — 목록', () => {
     expect(screen.getByText('마지막 메시지까지 보는 중 · 분당 평균 1,234.5')).toBeInTheDocument();
   });
 });
+
+describe('ChatPanel: 후원 줄(POK-431)', () => {
+  it('문구가 빈 후원(SOOP 별풍선)은 문구 자리를 그리지 않는다: 후원마다 빈 줄이 생기지 않게', () => {
+    renderPanel({
+      messages: [
+        { id: 7, kind: 'donation', name: '숲팬', amountLabel: '별풍선 1,000개', text: '' },
+        { id: 8, kind: 'donation', name: '도네초코', amountLabel: '치즈 5,000', text: '승급 기원' },
+      ],
+    });
+    expect(screen.getByText('숲팬 · 별풍선 1,000개').closest('li')!.children).toHaveLength(1);
+    expect(screen.getByText('도네초코 · 치즈 5,000').closest('li')!.children).toHaveLength(2);
+    expect(screen.getByText('승급 기원')).toBeInTheDocument();
+  });
+});

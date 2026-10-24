@@ -1,6 +1,7 @@
 package com.pokeclip.chat.collector.liveinfo;
 
 import com.pokeclip.chat.collector.ChzzkProperties;
+import com.pokeclip.chat.collector.platforms.ClipPlatformClient;
 import com.pokeclip.chat.collector.relay.RelaySink;
 import com.pokeclip.chat.collector.session.SessionRegistry;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -24,11 +25,13 @@ public class LiveInfoConfiguration {
     @Bean
     public BroadcastInfoCollector broadcastInfoCollector(SessionRegistry registry, RestClient.Builder builder,
                                                          ChzzkProperties chzzk, LiveInfoProperties properties,
-                                                         BroadcastInfoStore store, RelaySink relay) {
+                                                         BroadcastInfoStore store, RelaySink relay,
+                                                         ClipPlatformClient clip) {
         properties.validate();
         ChzzkLiveInfoClient client = new ChzzkLiveInfoClient(builder.build(), chzzk.baseUrl(),
                 properties.clientId(), properties.clientSecret());
-        return new BroadcastInfoCollector(registry, client, store::insert, relay, properties, Clock.systemUTC());
+        // clip 알림은 SOOP 지켜보기와 나눠 쓰는 공용 빈이다(PlatformsConfiguration).
+        return new BroadcastInfoCollector(registry, client, store::insert, relay, clip, properties, Clock.systemUTC());
     }
 
     @Bean

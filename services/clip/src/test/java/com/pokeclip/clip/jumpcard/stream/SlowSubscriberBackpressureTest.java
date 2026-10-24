@@ -24,6 +24,9 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
+import java.lang.management.ManagementFactory;
+import java.lang.management.ThreadInfo;
+import java.lang.management.ThreadMXBean;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -43,6 +46,11 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * <p>단언이 <b>상한</b>(3초 안에 끝난다)이라 느린 기계에서 더 안전하고, 막힘이 스케줄러 운이
  * 아니라 <b>TCP가 강제</b>하는 것이라 「직렬로 돌아도 통과」하지 않는다.
+ *
+ * <p>🔴 <b>벽시계가 아니라 요청 스레드가 「기다리거나 막혀 있던」 시간을 잰다</b>(POK-426). CI 전체 실행에서 첫 저장이
+ * 큐가 비어 있는데도 4.5초로 깨졌다(PR #362). 거부 처리기는 큐가 찬 뒤에야 돌므로 그것은 이 결함이 아니라 JVM이 멈춘
+ * 시간(힙 512MB에 컨텍스트 여럿이 얹힌 GC · 첫 호출의 클래스 불러오기 · CPU 부족)이다. 이 결함은 자물쇠를 기다리는
+ * 것이라 스레드 대기 시간에 그대로 쌓이고(주입하면 수십 초), JVM 멈춤은 거기 안 쌓인다. 벽시계는 메시지에만 싣는다.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @TestPropertySource(properties = {
@@ -102,32 +110,50 @@ class SlowSubscriberBackpressureTest extends IntegrationTestSupport {
             // 71초 걸렸는데 시험은 통과했다).
             Duration worst = Duration.ZERO;
             String worstAt = "없음";
+            Duration worstWall = Duration.ZERO;
             for (int i = 0; i < 60; i++) {
                 Instant each = Instant.now();
+                Duration waitedBefore = waitedOrBlocked();
                 service.record("s-slow", auto("evt-fill-" + i, 1_000_000L + i * 100_000L, big));
-                Duration took = Duration.between(each, Instant.now());
-                if (took.compareTo(worst) > 0) {
-                    worst = took;
+                Duration waited = waitedOrBlocked().minus(waitedBefore);
+                worstWall = max(worstWall, Duration.between(each, Instant.now()));
+                if (waited.compareTo(worst) > 0) {
+                    worst = waited;
                     worstAt = "evt-fill-" + i;
                 }
                 Thread.sleep(20);
             }
 
-            // 진짜 HTTP 2A도 한 번 — 컨트롤러·트랜잭션까지 같은 경로를 탄다.
+            // 진짜 HTTP 2A도 한 번 — 컨트롤러·트랜잭션까지 같은 경로를 탄다. 요청 스레드가 톰캣 스레드라 대기 시간을 못 재므로,
+            // 이 갈래는 벽시계로 재되 상한을 결함 크기(write timeout까지, 수십 초)에 맞춘다. 결함을 재는 주 갈래는 위 60번이다.
             Instant started = Instant.now();
             HttpResponse<String> response = post2A("evt-measured", 90_000_000L, big);
             Duration overHttp = Duration.between(started, Instant.now());
-            if (overHttp.compareTo(worst) > 0) {
-                worst = overHttp;
-                worstAt = "HTTP 2A";
-            }
 
             assertThat(response.statusCode()).isEqualTo(201);
             assertThat(worst)
-                    .as("가장 오래 걸린 저장은 %s였다 — 거부 처리기가 요청 스레드에서 막힌 send의 "
-                            + "락을 기다리면 여기서 수십 초가 나온다", worstAt)
+                    .as("가장 오래 기다린 저장은 %s였다(벽시계 최장 %s) — 거부 처리기가 요청 스레드에서 막힌 send의 "
+                            + "락을 기다리면 여기서 수십 초가 나온다", worstAt, worstWall)
                     .isLessThan(Duration.ofSeconds(3));
+            assertThat(overHttp).as("HTTP 2A가 막힌 send의 락을 기다리면 수십 초다").isLessThan(Duration.ofSeconds(20));
         }
+    }
+
+    /**
+     * 지금 스레드가 자물쇠를 기다리거나(WAITING · TIMED_WAITING) 모니터에 막혀(BLOCKED) 있던 누적 시간. GC 멈춤 · CPU 부족 ·
+     * 클래스 불러오기는 RUNNABLE이라 안 쌓인다. {@code Thread.sleep}은 쌓이므로 저장 호출 하나만 감싸서 잰다.
+     */
+    private static Duration waitedOrBlocked() {
+        ThreadMXBean threads = ManagementFactory.getThreadMXBean();
+        if (!threads.isThreadContentionMonitoringEnabled()) {
+            threads.setThreadContentionMonitoringEnabled(true);
+        }
+        ThreadInfo info = threads.getThreadInfo(Thread.currentThread().threadId());
+        return Duration.ofMillis(info.getWaitedTime() + info.getBlockedTime());
+    }
+
+    private static Duration max(Duration a, Duration b) {
+        return a.compareTo(b) >= 0 ? a : b;
     }
 
     private HighlightRequest auto(String eventId, long start, String big) {

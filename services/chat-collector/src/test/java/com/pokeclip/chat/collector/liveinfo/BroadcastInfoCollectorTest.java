@@ -44,6 +44,25 @@ class BroadcastInfoCollectorTest {
         @Override public Instant instant() { return now.get(); }
     };
     private FakeClient client;
+    /** clip 플랫폼 알림(POK-397). 받은 (방송, 플랫폼)을 적는다. */
+    private final List<String> notified = new CopyOnWriteArrayList<>();
+    private final List<java.util.Set<String>> retained = new CopyOnWriteArrayList<>();
+    private volatile boolean notifierThrows;
+    private final com.pokeclip.chat.collector.platforms.PlatformNotifier notifier =
+            new com.pokeclip.chat.collector.platforms.PlatformNotifier() {
+                @Override
+                public void seen(String streamId, Platform platform, Instant seenAt) {
+                    notified.add(streamId + ":" + platform);
+                    if (notifierThrows) {
+                        throw new IllegalStateException("clip down");
+                    }
+                }
+
+                @Override
+                public void retain(Platform platform, java.util.Set<String> streamIds) {
+                    retained.add(java.util.Set.copyOf(streamIds));
+                }
+            };
 
     @BeforeEach
     void setUp() {
@@ -56,7 +75,7 @@ class BroadcastInfoCollectorTest {
     }
 
     private BroadcastInfoCollector collector() {
-        return new BroadcastInfoCollector(registry, client, stored::add, relay, PROPS, clock);
+        return new BroadcastInfoCollector(registry, client, stored::add, relay, notifier, PROPS, clock);
     }
 
     @Test
@@ -82,17 +101,126 @@ class BroadcastInfoCollectorTest {
         assertThat(relayed).containsExactly("s-a:broadcast-info", "s-b:broadcast-info");
     }
 
-    /** 🔴 표의 기본값이 CHZZK라 SOOP 세션으로만 잰다. 방송 정보 줄은 세션 목록의 플랫폼을 그대로 싣는다. */
+    /**
+     * 치지직 목록·설정은 치지직 세션만 묻는다(POK-397). SOOP 세션의 채널이 우연히 치지직 목록의 채널 아이디와 같아도(플랫폼마다 따로
+     * 매긴다) 그 세션에는 설정 호출·정보 줄·SSE·clip 알림이 없다. 정보 줄과 SSE에는 치지직이 실린다.
+     */
     @Test
-    void 방송_정보_줄은_세션의_플랫폼을_싣는다() {
+    void 치지직_세션만_훑고_SOOP_세션은_건드리지_않는다() {
         when(registry.activeSessions()).thenReturn(List.of(
-                new ActiveSession(Platform.SOOP, "s-a", 1L, "c-a", "tok-a")));
+                new ActiveSession(Platform.SOOP, "s-soop", 3L, "c-a", "tok-soop"),
+                new ActiveSession(Platform.CHZZK, "s-a", 1L, "c-a", "tok-a")));
         client.pages = List.of(new LivePage(List.of(entry("c-a", 300)), null));
         client.settings.put("tok-a", new SettingResult(new LiveSetting("A", List.of(), null), 200));
+        client.settings.put("tok-soop", new SettingResult(new LiveSetting("숲", List.of(), null), 200));
+
+        List<RelayPayload> payloads = new ArrayList<>();
+        new BroadcastInfoCollector(registry, client, stored::add, (streamId, payload) -> payloads.add(payload), notifier,
+                PROPS, clock).tick();
+
+        assertThat(client.settingCalls.get()).as("SOOP 토큰으로 치지직 설정을 안 묻는다").isEqualTo(1);
+        assertThat(stored).extracting(BroadcastInfo::streamId).containsExactly("s-a");
+        assertThat(stored).extracting(BroadcastInfo::platform).containsExactly(Platform.CHZZK);
+        assertThat(payloads).as("SSE 방송 정보에도 같은 플랫폼이 실린다(POK-397)").singleElement()
+                .isInstanceOfSatisfying(RelayPayload.Info.class, info -> assertThat(info.platform()).isEqualTo(Platform.CHZZK));
+        assertThat(notified).containsExactly("s-a:CHZZK");
+    }
+
+    /** 치지직 세션이 없고 SOOP 세션만 있으면 치지직 목록을 아예 안 연다(앱 인증 호출을 아낀다). */
+    @Test
+    void SOOP_세션만_있으면_치지직_목록을_안_연다() {
+        when(registry.activeSessions()).thenReturn(List.of(
+                new ActiveSession(Platform.SOOP, "s-soop", 3L, "c-soop", "tok-soop")));
 
         collector().tick();
 
-        assertThat(stored).extracting(BroadcastInfo::platform).containsExactly(Platform.SOOP);
+        assertThat(client.pagesRead.get()).isZero();
+        assertThat(client.settingCalls.get()).isZero();
+        assertThat(stored).isEmpty();
+        assertThat(retained).as("메모는 걷는 치지직 방송만 남긴다").containsExactly(java.util.Set.of());
+    }
+
+    /**
+     * 목록에서 찾은 치지직 세션만 clip에 「치지직이 켜져 있다」를 알린다. 목록에서 못 찾은 세션은 설정 조회가 돼도 알리지 않는다
+     * (목록이 방송 중인 것을 보여 준 증거다). 메모를 걷는 방송으로 줄인다.
+     */
+    @Test
+    void 목록에서_찾은_치지직_세션만_clip에_알린다() {
+        client.pages = List.of(new LivePage(List.of(entry("c-a", 300)), null));
+        client.settings.put("tok-a", new SettingResult(new LiveSetting("A", List.of(), null), 200));
+        client.settings.put("tok-b", new SettingResult(new LiveSetting("B", List.of(), null), 200));
+
+        collector().tick();
+
+        assertThat(notified).containsExactly("s-a:CHZZK");
+        assertThat(retained).containsExactly(java.util.Set.of("s-a", "s-b"));
+    }
+
+    /**
+     * clip이 받고 답을 안 주면 알림마다 시한(최대 1.5초)을 먹는다. 한 틱의 알림 합계가 예산({@link BroadcastInfoCollector#NOTIFY_BUDGET})을
+     * 넘으면 남은 알림은 다음 틱으로 미루고, 다음 틱은 미룬 것부터 보낸다(감사 1회차 m3). 안 그러면 방송 100개 × 1.5초가 한 틱에 더해져
+     * 뒤 방송의 관측 간격이 「꺼짐」 판정(3분)에 닿는다. 정보 저장·중계는 알림 전에 다 끝난다.
+     */
+    @Test
+    void clip이_매달리면_알림은_예산에서_멈추고_다음_틱에_미룬_것부터_보낸다() {
+        List<ActiveSession> sessions = new ArrayList<>();
+        List<LiveEntry> entries = new ArrayList<>();
+        for (int i = 1; i <= 5; i++) {
+            sessions.add(new ActiveSession(Platform.CHZZK, "s-" + i, i, "c-" + i, "tok-" + i));
+            entries.add(entry("c-" + i, 10 * i));
+            when(registry.currentStreamIdOf((long) i)).thenReturn("s-" + i);
+        }
+        when(registry.activeSessions()).thenReturn(sessions);
+        List<String> calls = new CopyOnWriteArrayList<>();
+        com.pokeclip.chat.collector.platforms.PlatformNotifier slow =
+                new com.pokeclip.chat.collector.platforms.PlatformNotifier() {
+                    @Override
+                    public void seen(String streamId, Platform platform, Instant seenAt) {
+                        calls.add(streamId);
+                        try {
+                            Thread.sleep(1_100);
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                        }
+                    }
+
+                    @Override
+                    public void retain(Platform platform, java.util.Set<String> streamIds) {
+                    }
+                };
+        BroadcastInfoCollector collector =
+                new BroadcastInfoCollector(registry, client, stored::add, relay, slow, PROPS, clock);
+
+        client.pages = List.of(new LivePage(entries, null));
+        long started = System.nanoTime();
+        collector.tick();
+        Duration took = Duration.ofNanos(System.nanoTime() - started);
+
+        assertThat(stored).as("저장은 알림과 무관하게 다섯 다").hasSize(5);
+        assertThat(calls).as("1.1초 셋이면 3초 예산을 넘는다").containsExactly("s-1", "s-2", "s-3");
+        assertThat(took).as("다섯 다 기다리면 5.5초").isLessThan(Duration.ofMillis(4_500));
+
+        calls.clear();
+        client.pages = List.of(new LivePage(entries, null));
+        client.pagesRead.set(0);
+        collector.tick();
+
+        assertThat(calls).as("미룬 둘이 먼저다").startsWith("s-4", "s-5");
+    }
+
+    /** clip 알림이 실패(던짐)해도 정보 저장·중계는 이미 끝났고 뒤 방송도 그대로다. */
+    @Test
+    void clip_알림이_실패해도_정보_저장은_계속한다() {
+        notifierThrows = true;
+        client.pages = List.of(new LivePage(List.of(entry("c-a", 300), entry("c-b", 40)), null));
+        client.settings.put("tok-a", new SettingResult(new LiveSetting("A", List.of(), null), 200));
+        client.settings.put("tok-b", new SettingResult(new LiveSetting("B", List.of(), null), 200));
+
+        collector().tick();
+
+        assertThat(stored).extracting(BroadcastInfo::streamId).containsExactly("s-a", "s-b");
+        assertThat(relayed).containsExactly("s-a:broadcast-info", "s-b:broadcast-info");
+        assertThat(notified).containsExactly("s-a:CHZZK", "s-b:CHZZK");
     }
 
     @Test
@@ -105,11 +233,11 @@ class BroadcastInfoCollectorTest {
 
         assertThat(client.pagesRead.get()).isEqualTo(PROPS.maxPages());
         assertThat(collector.lastPagesScanned()).isEqualTo(PROPS.maxPages());
-        assertThat(stored).extracting(BroadcastInfo::viewers).containsExactly(null, null);
+        assertThat(stored).as("훑기가 상한에서 멈춘 회차에 못 찾은 세션은 적지 않는다").isEmpty();
     }
 
     @Test
-    void 목록이_중간_장에서_실패하면_앞_장에서_찾은_시청자_수는_남기고_상태_코드를_남긴다() {
+    void 목록이_중간_장에서_실패하면_앞_장에서_찾은_방송만_남기고_상태_코드를_남긴다() {
         client.pages = List.of(new LivePage(List.of(entry("c-a", 300)), "p2"));
         client.failAt = 1;
         client.failStatus = 400;
@@ -123,18 +251,27 @@ class BroadcastInfoCollectorTest {
                     .as("400(우리 요청이 틀림)과 5xx(기다리면 되는 장애)를 로그로 가른다(POK-325)")
                     .contains("liveinfo.lives_failed pages=1 status=400");
         }
-        assertThat(stored).extracting(BroadcastInfo::viewers).containsExactly(300, null);
+        assertThat(stored).extracting(BroadcastInfo::viewers).containsExactly(300);
+        assertThat(client.settingCalls.get()).as("못 찾은 세션은 설정도 안 묻는다").isEqualTo(1);
     }
 
+    /**
+     * 🔴 치지직 목록에서 못 찾은 세션은 방송 정보를 적지 않는다(POK-397 재시험). SOOP으로만 방송하는데 치지직 세션이 붙어 있으면(같은 방송 번호,
+     * 치지직은 꺼져 있음) 설정 조회는 치지직 방송 설정(제목)을 그대로 준다. 그것을 적으면 SOOP 전용 방송에 치지직 줄·제목·태그가 붙었다.
+     * 정보 줄·SSE·clip 알림·설정 조회 모두 없다.
+     */
     @Test
-    void 목록에_없으면_시청자_수는_null이고_0이_아니다() {
+    void 목록에_없는_세션은_적지_않고_설정도_안_묻는다() {
         client.pages = List.of(new LivePage(List.of(entry("other", 10)), null));
         client.settings.put("tok-a", new SettingResult(new LiveSetting("A", List.of(), null), 200));
         client.settings.put("tok-b", new SettingResult(new LiveSetting("B", List.of(), null), 200));
 
         collector().tick();
 
-        assertThat(stored).extracting(BroadcastInfo::viewers).containsExactly(null, null);
+        assertThat(stored).isEmpty();
+        assertThat(relayed).isEmpty();
+        assertThat(notified).isEmpty();
+        assertThat(client.settingCalls.get()).isZero();
     }
 
     @Test
@@ -146,34 +283,36 @@ class BroadcastInfoCollectorTest {
 
         collector().tick();
 
-        assertThat(stored).hasSize(2);
+        assertThat(stored).as("목록에 있는 s-a만").hasSize(1);
         assertThat(stored.get(0).title()).isEqualTo("목록 제목");
         assertThat(stored.get(0).tags()).containsExactly("t");
         assertThat(stored.get(0).viewers()).isEqualTo(77);
     }
 
     @Test
-    void 목록이_429면_이번엔_시청자_없이_남기고_주기만큼_다음_틱을_건너뛴다() {
+    void 목록이_429면_이번엔_아무것도_안_남기고_주기만큼_다음_틱을_건너뛴다() {
         client.throttle = true;
         client.settings.put("tok-a", new SettingResult(new LiveSetting("A", List.of(), null), 200));
         client.settings.put("tok-b", new SettingResult(new LiveSetting("B", List.of(), null), 200));
         BroadcastInfoCollector collector = collector();
 
         collector.tick();
-        assertThat(stored).extracting(BroadcastInfo::viewers).containsExactly(null, null);
+        assertThat(stored).as("훑기가 실패한 회차는 적지 않는다").isEmpty();
+        assertThat(client.cursorsAsked).hasSize(1);
 
         now.set(now.get().plusSeconds(59));
         collector.tick();
-        assertThat(stored).as("백오프 안이면 아무것도 안 한다").hasSize(2);
+        assertThat(client.cursorsAsked).as("백오프 안이면 아무것도 안 한다").hasSize(1);
 
         now.set(now.get().plusSeconds(2));
         collector.tick();
-        assertThat(stored).as("백오프가 지나면 다시 돈다").hasSize(4);
+        assertThat(client.cursorsAsked).as("백오프가 지나면 다시 돈다").hasSize(2);
+        assertThat(stored).isEmpty();
     }
 
     @Test
     void 한_방송의_저장이_던져도_뒤_방송은_남고_틱은_안_던진다() {
-        client.pages = List.of(new LivePage(List.of(), null));
+        client.pages = List.of(new LivePage(List.of(entry("c-a", 1), entry("c-b", 2)), null));
         client.settings.put("tok-a", new SettingResult(new LiveSetting("A", List.of(), null), 200));
         client.settings.put("tok-b", new SettingResult(new LiveSetting("B", List.of(), null), 200));
         List<BroadcastInfo> kept = new ArrayList<>();
@@ -182,7 +321,7 @@ class BroadcastInfoCollectorTest {
                 throw new IllegalStateException("db down");
             }
             kept.add(info);
-        }, relay, PROPS, clock);
+        }, relay, notifier, PROPS, clock);
 
         collector.tick();
 
@@ -194,7 +333,7 @@ class BroadcastInfoCollectorTest {
     /** PR #180 codex — 묻는 사이 방송이 바뀌었거나 닫혔으면 끝난 방송에 안 민다(카운터를 되살리지 않는다). 저장은 한다. */
     @Test
     void 묻는_사이_방송이_바뀌거나_닫히면_중계하지_않는다() {
-        client.pages = List.of(new LivePage(List.of(), null));
+        client.pages = List.of(new LivePage(List.of(entry("c-a", 1), entry("c-b", 2)), null));
         client.settings.put("tok-a", new SettingResult(new LiveSetting("A", List.of(), null), 200));
         client.settings.put("tok-b", new SettingResult(new LiveSetting("B", List.of(), null), 200));
         when(registry.currentStreamIdOf(1L)).thenReturn("s-a-next");

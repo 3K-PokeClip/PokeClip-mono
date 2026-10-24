@@ -330,6 +330,40 @@ const CHART = {
   })),
 };
 
+const SOOP_INFO = {
+  latest: {
+    title: '치지직 옛 제목',
+    tags: ['치지직태그'],
+    category: '저스트 채팅',
+    viewers: 1842,
+    observedAt: new Date(NOW - 10_000).toISOString(),
+  },
+  platforms: [
+    {
+      platform: 'CHZZK',
+      title: '치지직 옛 제목',
+      category: '저스트 채팅',
+      viewers: 1842,
+      observedAt: new Date(NOW - 20 * 60_000).toISOString(),
+    },
+    {
+      platform: 'SOOP',
+      title: '숲에서 랭크 올리기',
+      category: '리그 오브 레전드',
+      viewers: 57,
+      observedAt: new Date(NOW - 30_000).toISOString(),
+    },
+  ],
+  series: [
+    { observedAt: new Date(NOW - 25 * 60_000).toISOString(), viewers: 1500, platform: 'CHZZK' },
+    { observedAt: new Date(NOW - 21 * 60_000).toISOString(), viewers: 2310, platform: 'CHZZK' },
+    { observedAt: new Date(NOW - 2 * 60_000).toISOString(), viewers: 40, platform: 'SOOP' },
+    { observedAt: new Date(NOW - 30_000).toISOString(), viewers: 57, platform: 'SOOP' },
+    // 수집기가 같은 회차에 두 플랫폼을 같은 시각으로 남길 수 있다: 기록을 이어 붙일 때 시각만으로 거르면 한쪽이 사라진다
+    { observedAt: new Date(NOW - 30_000).toISOString(), viewers: 99, platform: 'CHZZK' },
+  ],
+};
+
 const INFO = {
   latest: {
     title: '새벽 랭크 올리기 — 다이아 승급전 가보자',
@@ -353,6 +387,12 @@ const server = vi.hoisted(() => ({
   markGate: null as Promise<void> | null,
   /** 통로(SSE)가 이 카드들을 card 이벤트로 보내고 닫는다. null이면 통로는 용량 초과(503)다 */
   sseCards: null as Card[] | null,
+  /** 통로가 카드 뒤에 실어 보낼 방송 정보 이벤트(PR-C, POK-397에서 platform이 붙었다) */
+  sseInfo: null as Record<string, unknown>[] | null,
+  /** 통로가 실어 보낼 중계 후원 이벤트(POK-431) */
+  sseDonations: null as Record<string, unknown>[] | null,
+  /** 채팅 창구 답에 SOOP 별풍선 후원 한 줄을 더한다(POK-431) */
+  soopDonation: false,
   live: true,
   failLive: false,
   relation: 'OWNER',
@@ -440,6 +480,15 @@ const server = vi.hoisted(() => ({
   liveStartUnknown: false,
   /** 수집기가 관측마다 카테고리를 싣는다(아직 안 싣는다 — 실으면 통계가 바뀐 구간을 나눈다) */
   infoCategoryChange: false,
+  /**
+   * SOOP로만 켠 방송(POK-397): 치지직은 앞서 켰다가 꺼져 묶음에만 남았다. 플랫폼 구분 없는 가장 새 관측(latest)은 치지직 줄이고
+   * 시청자 기록에는 두 플랫폼 점이 섞여 있다
+   */
+  infoSoop: false,
+  /** SOOP 연동 닉네임. null이면 미연동 */
+  soopNickname: null as string | null,
+  /** 방송 목록 줄의 스트리머 채널 이름(POK-430). undefined면 이 칸을 모르는 옛 서버다 */
+  channelNames: undefined as { CHZZK: string | null; SOOP: string | null } | undefined,
   /** 라이브 줄의 시각 기준점(카드 0초). 서버 기준점은 첫 조각의 PDT − pts라 ms 자리가 있다. 없으면 싣지 않는다 */
   liveOriginMs: null as number | null,
   /** 라이브 다시 보기 물음(한 쪽 CHAT_PAGE_MAX줄)에 503을 준다. 폴링(200줄)은 그대로다 */
@@ -571,6 +620,7 @@ function listResponse(u: URL): Response {
     vodExpiresAt: null,
     ingestStreamId: server.ingest,
     title: server.listTitle,
+    channelNames: server.channelNames,
   };
   const vod = {
     streamId: VOD_ID,
@@ -623,6 +673,7 @@ function liveChartPage(u: URL, base: typeof CHART.buckets, offsetMs: number) {
 /** 방송 정보의 답. 수집기는 since가 없으면 최근 1시간만 준다(DEFAULT_WINDOW): 몇 시간 전에 끝난 지난 방송은 기록이 비어 온다 */
 function infoResponse(path: string, noSince: boolean): Response {
   if (server.infoSinceFail && !noSince) return jsonResponse(503, { error: 'unavailable' });
+  if (server.infoSoop) return jsonResponse(200, SOOP_INFO);
   const info = server.infoNoLatest
     ? { ...INFO, latest: null }
     : server.infoTitleMissing
@@ -743,11 +794,37 @@ function handle(url: string, init?: RequestInit): Response | Promise<Response> {
         nextCursor: null,
         appliedOffsetMs: 0,
       });
-    return jsonResponse(200, { items: CHAT, nextCursor: null, appliedOffsetMs: 0 });
+    return jsonResponse(200, {
+      items: server.soopDonation
+        ? [
+            ...CHAT,
+            {
+              kind: 'donation',
+              id: 9,
+              time: chatAt(10),
+              nickname: '숲팬',
+              senderChannelId: 's9',
+              text: '',
+              amount: 1000,
+              donationType: 'BALLOON_GIFTED',
+            },
+          ]
+        : CHAT,
+      nextCursor: null,
+      appliedOffsetMs: 0,
+    });
   }
-  if (path.endsWith('/events') && server.sseCards)
+  if (path.endsWith('/events') && (server.sseCards || server.sseInfo || server.sseDonations))
     return new Response(
-      server.sseCards.map((c) => `event: card\ndata: ${JSON.stringify(c)}\n\n`).join(''),
+      [
+        ...(server.sseCards ?? []).map((c) => `event: card\ndata: ${JSON.stringify(c)}\n\n`),
+        ...(server.sseInfo ?? []).map(
+          (i) => `event: broadcast-info\ndata: ${JSON.stringify(i)}\n\n`,
+        ),
+        ...(server.sseDonations ?? []).map(
+          (d) => `event: donation\ndata: ${JSON.stringify(d)}\n\n`,
+        ),
+      ].join(''),
       { status: 200, headers: { 'Content-Type': 'text/event-stream' } },
     );
   // 통로는 용량 초과로 답한다 — 폴링이 카드를 채운다(통로 자체는 useLiveMockState의 몫)
@@ -769,6 +846,13 @@ function handle(url: string, init?: RequestInit): Response | Promise<Response> {
   }
   if (path === '/api/chzzk-link')
     return jsonResponse(200, { linked: true, channelName: '게임하는너구리', status: 'ACTIVE' });
+  if (path === '/api/soop-link')
+    return jsonResponse(
+      200,
+      server.soopNickname === null
+        ? { linked: false }
+        : { linked: true, nickname: server.soopNickname, status: 'ACTIVE' },
+    );
   if (path === '/api/auth/me')
     return jsonResponse(200, {
       id: 9,
@@ -826,6 +910,9 @@ beforeEach(() => {
   server.liveAsks = [];
   server.liveStartUnknown = false;
   server.infoCategoryChange = false;
+  server.infoSoop = false;
+  server.soopNickname = null;
+  server.channelNames = undefined;
   server.liveOffsetMs = 0;
   server.liveOriginMs = null;
   server.liveReplayFail = false;
@@ -853,6 +940,9 @@ beforeEach(() => {
   server.markReply = null;
   server.markGate = null;
   server.sseCards = null;
+  server.sseInfo = null;
+  server.sseDonations = null;
+  server.soopDonation = false;
   server.live = true;
   server.failLive = false;
   server.relation = 'OWNER';
@@ -1703,10 +1793,104 @@ describe('LiveScreen — 방송 정보 바', () => {
     expect(screen.getByText('게임하는너구리')).toBeInTheDocument();
   });
 
+  it('SOOP로만 켠 방송은 제목 · 카테고리 · 시청자 수 · 채널 이름이 SOOP 값이다: 묶음에 남은 치지직 값이 섞이지 않는다(POK-397)', async () => {
+    // 실방송 재시험에서 SOOP로만 켰는데 치지직 채널 이름 · 제목 · 시청자 수가 떴다
+    server.infoSoop = true;
+    server.soopNickname = '숲너구리';
+    await renderLive();
+
+    expect(screen.getByRole('heading', { name: '숲에서 랭크 올리기' })).toBeInTheDocument();
+    expect(screen.getAllByText('57명 시청 중').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('리그 오브 레전드').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('숲너구리').length).toBeGreaterThan(0);
+    // 치지직 줄의 값은 어디에도 없다: 이름 · 제목 · 시청자 수 · 최고 시청자(그래프는 SOOP 점만 센다) · 태그
+    expect(screen.queryByText('게임하는너구리')).toBeNull();
+    expect(screen.queryByText('치지직 옛 제목')).toBeNull();
+    expect(screen.queryByText(/1,842/)).toBeNull();
+    expect(screen.queryByText(/2,310/)).toBeNull();
+    expect(screen.queryByText('치지직태그')).toBeNull();
+  });
+
+  it('실시간으로 온 관측도 플랫폼을 지킨다: 시청자가 적은 다른 플랫폼 관측이 와도 대표 플랫폼의 숫자 · 제목이 그대로다(POK-397)', async () => {
+    // 통로가 platform을 버리면 마지막 점이 어느 플랫폼이든 그 숫자를 보였다
+    server.infoSoop = true;
+    server.soopNickname = '숲너구리';
+    await renderLive();
+    const sseReads = () =>
+      fetchSpy.mock.calls.filter(([u]) => String(u).endsWith('/events')).length;
+    const before = sseReads();
+    server.sseInfo = [
+      {
+        time: new Date(Date.now() - 5_000).toISOString(),
+        title: '숲에서 랭크 올리기',
+        tags: [],
+        category: '리그 오브 레전드',
+        viewers: 61,
+        platform: 'SOOP',
+      },
+      {
+        time: new Date(Date.now() - 1_000).toISOString(),
+        title: '치지직 새 제목',
+        tags: [],
+        category: '저스트 채팅',
+        viewers: 12,
+        platform: 'CHZZK',
+      },
+    ];
+    // 첫 통로는 용량 초과(503)라 60초 쉬고 다시 붙는다
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(61_000);
+    });
+    await settle();
+
+    expect(sseReads(), '통로에 다시 안 붙었다: 이 갈래는 아무것도 안 잰다').toBeGreaterThan(before);
+    // 통로 관측(61)과 정기 조회(57) 중 무엇이 나중이든 SOOP 숫자다
+    expect(screen.queryByText('12명 시청 중')).toBeNull();
+    expect(screen.getAllByText(/^(61|57)명 시청 중$/).length).toBeGreaterThan(0);
+    expect(screen.queryByRole('heading', { name: '치지직 새 제목' })).toBeNull();
+    expect(screen.getByRole('heading', { name: '숲에서 랭크 올리기' })).toBeInTheDocument();
+    expect(screen.getAllByText('숲너구리').length).toBeGreaterThan(0);
+  });
+
   it('위임받은 방송에는 내 채널 이름을 붙이지 않는다', async () => {
     server.relation = 'EDITOR';
     await renderLive();
     expect(screen.queryByText('게임하는너구리')).not.toBeInTheDocument();
+  });
+
+  it('위임받은 방송은 목록 줄의 스트리머 채널 이름 중 대표 플랫폼(치지직) 것을 보인다 (POK-430)', async () => {
+    server.relation = 'EDITOR';
+    server.channelNames = { CHZZK: '남의치지직', SOOP: '남의숲' };
+    await renderLive();
+    expect(screen.getAllByText('남의치지직').length).toBeGreaterThan(0);
+    expect(screen.queryByText('남의숲')).toBeNull();
+    expect(screen.queryByText('게임하는너구리')).toBeNull();
+  });
+
+  it('위임받은 방송이 SOOP 대표면 스트리머의 SOOP 닉네임이다 (POK-430)', async () => {
+    server.relation = 'EDITOR';
+    server.infoSoop = true;
+    server.soopNickname = '숲너구리';
+    server.channelNames = { CHZZK: '남의치지직', SOOP: '남의숲' };
+    await renderLive();
+    expect(screen.getAllByText('남의숲').length).toBeGreaterThan(0);
+    expect(screen.queryByText('남의치지직')).toBeNull();
+    expect(screen.queryByText('숲너구리')).toBeNull();
+  });
+
+  it('위임받은 방송에서 대표 플랫폼 이름이 null이면 비운다: 다른 플랫폼 이름으로 채우지 않는다 (POK-430)', async () => {
+    server.relation = 'EDITOR';
+    server.channelNames = { CHZZK: null, SOOP: '남의숲' };
+    await renderLive();
+    expect(screen.queryByText('남의숲')).toBeNull();
+    expect(screen.queryByText('게임하는너구리')).toBeNull();
+  });
+
+  it('내 방송이면 목록 줄의 이름이 와도 내 연동 이름이다 (POK-430)', async () => {
+    server.channelNames = { CHZZK: '남의치지직', SOOP: '남의숲' };
+    await renderLive();
+    expect(screen.getByText('게임하는너구리')).toBeInTheDocument();
+    expect(screen.queryByText('남의치지직')).toBeNull();
   });
 
   it('페이지 헤더가 없다 — 시안 1b는 콘텐츠부터 시작한다', async () => {
@@ -2271,6 +2455,42 @@ describe('LiveScreen: 지난 방송 이 시점 카드 추가(POK-392)', () => {
 });
 
 describe('LiveScreen — 실시간 채팅 패널', () => {
+  it('SOOP 별풍선 후원은 「별풍선 N개」다: 치즈로 그리지 않는다(POK-431)', async () => {
+    server.soopDonation = true;
+    await renderLive();
+
+    expect(screen.getByText('숲팬 · 별풍선 1,000개')).toBeInTheDocument();
+    expect(screen.queryByText('숲팬 · 치즈 1,000')).toBeNull();
+    // 치지직 후원은 그대로 치즈다
+    expect(screen.getByText('도네초코 · 치즈 5,000')).toBeInTheDocument();
+  });
+
+  it('실시간 중계로 온 SOOP 후원도 종류를 지켜 그린다(POK-431)', async () => {
+    await renderLive();
+    server.sseDonations = [
+      {
+        seq: 1,
+        seqEpoch: 1,
+        kind: 'donation',
+        time: new Date(Date.now() - 1_000).toISOString(),
+        timeBasis: 'received',
+        nickname: '애드팬',
+        senderChannelId: 's10',
+        role: null,
+        text: '',
+        amount: 30,
+        donationType: 'ADBALLOON_GIFTED',
+      },
+    ];
+    // 첫 통로는 용량 초과(503)라 60초 쉬고 다시 붙는다
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(61_000);
+    });
+    await settle();
+
+    expect(screen.getByText('애드팬 · 애드벌룬 30개')).toBeInTheDocument();
+  });
+
   it('급증 키워드·후원·채팅 줄을 그린다', async () => {
     await renderLive();
 

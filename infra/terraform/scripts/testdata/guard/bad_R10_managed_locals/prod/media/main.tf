@@ -9,6 +9,6 @@ locals {
 resource "aws_iam_role_policy_attachment" "managed" {
   for_each = local.managed_policy_arns
 
-  role       = "pokeclip-prod-media"
+  role       = aws_iam_role.media.name
   policy_arn = each.value
 }

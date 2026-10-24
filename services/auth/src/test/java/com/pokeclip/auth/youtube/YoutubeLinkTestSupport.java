@@ -141,4 +141,11 @@ public abstract class YoutubeLinkTestSupport extends IntegrationTestSupport {
         return post("/internal/youtube-link/resolve").header("X-Internal-Token", INTERNAL_TOKEN)
                 .contentType(APPLICATION_JSON).content("{\"userId\":" + userId + "}");
     }
+
+    /** 일꾼이 유튜브에서 401을 받은 토큰의 지문을 함께 보낸다(POK-250). */
+    protected MockHttpServletRequestBuilder resolve(Long userId, String rejectedTokenSha256) {
+        return post("/internal/youtube-link/resolve").header("X-Internal-Token", INTERNAL_TOKEN)
+                .contentType(APPLICATION_JSON)
+                .content("{\"userId\":" + userId + ",\"rejectedTokenSha256\":\"" + rejectedTokenSha256 + "\"}");
+    }
 }

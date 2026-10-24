@@ -176,6 +176,7 @@ public class ClipRelayClient {
                     item.put("tags", info.tags());
                     item.put("category", info.category());
                     item.put("viewers", info.viewers());
+                    item.put("platform", info.platform().name());
                 }
             }
             out.add(item);

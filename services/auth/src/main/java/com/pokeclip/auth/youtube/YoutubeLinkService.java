@@ -209,7 +209,16 @@ public class YoutubeLinkService {
      * 「지금은 안 된다」가 낫다.
      */
     public YoutubeResolveResult resolve(Long userId) {
-        RefreshResult r = refresher.refreshIfExpiringWithin(userId, properties.resolveMinRemaining());
+        return resolve(userId, null);
+    }
+
+    /**
+     * {@code rejectedTokenSha256}(POK-250): 업로드 일꾼이 유튜브에서 401을 받은 토큰의 지문. 지금 토큰이 그것이면 수명과 무관하게
+     * 새로 갱신해 준다(판정은 {@link YoutubeTokenRefresher#refreshIfExpiringWithin(Long, java.time.Duration, String)}). 갱신 결과의
+     * 갈래(BROKEN·REFRESH_UNAVAILABLE)는 지문 없는 resolve와 같다.
+     */
+    public YoutubeResolveResult resolve(Long userId, String rejectedTokenSha256) {
+        RefreshResult r = refresher.refreshIfExpiringWithin(userId, properties.resolveMinRemaining(), rejectedTokenSha256);
         return switch (r.outcome()) {
             case REFRESHED, SKIPPED_FRESH -> {
                 RefreshResult.LinkSnapshot s = r.snapshot();
