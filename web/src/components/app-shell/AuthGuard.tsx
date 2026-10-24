@@ -51,12 +51,14 @@ export function AuthGuard({ children }: { children: ReactNode }) {
   // 부르고 아래 이펙트가 /login으로 보낸다. 완료조건 "만료·도난 시 자연 복귀"가 이 경로다.
   const me = useMe();
   const userId = me.data?.id;
+  const optOut = me.data?.analyticsOptOut === true;
 
   // 사용 통계(PostHog)의 사람 식별 — 보호 화면은 전부 이 가드를 지나므로 여기 한 곳에서 한다 (POK-356).
   // 회원 번호만 넘긴다. 로그아웃 때의 초기화는 lib/analytics가 auth 스토어를 구독해 한다.
+  // 「이용 분석 참여」를 끈 회원은 식별 전에 끈다 — 설정에서 바꾸면 me 캐시가 바뀌어 다시 건다
   useEffect(() => {
-    if (userId !== undefined) identifyUser(userId);
-  }, [userId]);
+    if (userId !== undefined) identifyUser(userId, optOut);
+  }, [userId, optOut]);
 
   useEffect(() => {
     if (!hydrated || refreshToken !== null) return;

@@ -94,6 +94,8 @@
       person_profiles: 'identified_only',
       capture_pageview: true,
       respect_dnt: true,
+      // 대시보드 설정 › 계정의 「이용 분석 참여」를 끈 회원의 선택(.pokeclip.com 쿠키)을 같은 브라우저의 소개 페이지도 따른다
+      opt_out_capturing_persistence_type: 'cookie',
       autocapture: false,
       rageclick: false,
       capture_dead_clicks: false,

@@ -12,6 +12,10 @@ import vm from 'node:vm';
 const SOURCE = readFileSync(new URL('../analytics.js', import.meta.url), 'utf8');
 
 function loadBeforeSend(hostname = 'pokeclip.com') {
+  return loadConfig(hostname)?.before_send ?? null;
+}
+
+function loadConfig(hostname = 'pokeclip.com') {
   const scripts = [];
   let config = null;
   const window = {
@@ -34,7 +38,7 @@ function loadBeforeSend(hostname = 'pokeclip.com') {
   vm.runInNewContext(SOURCE, context);
   if (scripts.length === 0) return null;
   scripts[0].onload();
-  return config.before_send;
+  return config;
 }
 
 test('운영 주소가 아니면 SDK를 내려받지 않는다', () => {
@@ -86,6 +90,13 @@ test('홍보 링크 값은 README 표의 값만 두고 나머지는 other — ut
     $initial_utm_source: 'other',
     $initial_utm_medium: 'other',
   });
+});
+
+test('대시보드 「이용 분석 참여」를 끈 선택(.pokeclip.com 쿠키)을 따른다 — 추적 금지도 존중한다', () => {
+  const config = loadConfig();
+  assert.equal(config.opt_out_capturing_persistence_type, 'cookie');
+  assert.equal(config.cross_subdomain_cookie, true);
+  assert.equal(config.respect_dnt, true);
 });
 
 test('null 이벤트는 null로 돌려준다', () => {

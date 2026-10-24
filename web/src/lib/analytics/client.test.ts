@@ -7,6 +7,10 @@ const posthog = vi.hoisted(() => ({
   capture: vi.fn(),
   _isIdentified: vi.fn(() => false),
   get_distinct_id: vi.fn(() => 'anon-1'),
+  get_explicit_consent_status: vi.fn((): 'granted' | 'denied' | 'pending' => 'pending'),
+  opt_out_capturing: vi.fn(),
+  clear_opt_in_out_capturing: vi.fn(),
+  stopSessionRecording: vi.fn(),
 }));
 vi.mock('posthog-js', () => ({ default: posthog }));
 
@@ -26,6 +30,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   posthog._isIdentified.mockReturnValue(false);
   posthog.get_distinct_id.mockReturnValue('anon-1');
+  posthog.get_explicit_consent_status.mockReturnValue('pending');
   localStorage.clear();
   // 테스트마다 resetModules로 새 스토어를 만든다. 탭 간 채널을 두면 앞 테스트의 스토어들이 「login」을 받아
   // 같은 목에 reset을 더 부른다 — 이 파일은 한 탭 안의 규칙만 본다
@@ -165,6 +170,66 @@ describe('identifyUser — 회원 번호로만 식별한다', () => {
       throw new Error('boom');
     });
     expect(() => client.identifyUser(7)).not.toThrow();
+  });
+});
+
+describe('identifyUser — 「이용 분석 참여」 꺼짐(처리방침 7·9절)', () => {
+  async function ready() {
+    const { client } = await load('phc_test', 'https://us.i.posthog.com');
+    client.initAnalytics();
+    await client.whenAnalyticsLoaded();
+    return client;
+  }
+
+  it('끈 회원은 식별하지 않고 끈다 — 녹화도 멈춘다', async () => {
+    const client = await ready();
+    client.identifyUser(7, true);
+    expect(posthog.opt_out_capturing).toHaveBeenCalledTimes(1);
+    expect(posthog.stopSessionRecording).toHaveBeenCalledTimes(1);
+    expect(posthog.identify).not.toHaveBeenCalled(); // $identify가 새지 않는다
+  });
+
+  it('공용 PC에서 앞사람 흔적을 지운 뒤에 끈다 — reset이 동의 선택까지 지우기 때문이다', async () => {
+    const client = await ready();
+    posthog._isIdentified.mockReturnValue(true);
+    posthog.get_distinct_id.mockReturnValue('3');
+    client.identifyUser(7, true);
+    const [resetAt] = posthog.reset.mock.invocationCallOrder;
+    const [optOutAt] = posthog.opt_out_capturing.mock.invocationCallOrder;
+    expect(resetAt).toBeLessThan(optOutAt ?? 0);
+  });
+
+  it('이미 꺼 둔 브라우저면 다시 끄지 않는다(새로고침마다 부른다)', async () => {
+    const client = await ready();
+    posthog.get_explicit_consent_status.mockReturnValue('denied');
+    client.identifyUser(7, true);
+    expect(posthog.opt_out_capturing).not.toHaveBeenCalled();
+    expect(posthog.identify).not.toHaveBeenCalled();
+  });
+
+  it('다시 켜면 꺼 둔 선택만 지우고 식별한다 — opt_in이 아니라 추적 금지는 SDK가 그대로 지킨다', async () => {
+    const client = await ready();
+    posthog.get_explicit_consent_status.mockReturnValue('denied');
+    client.identifyUser(7, false);
+    expect(posthog.clear_opt_in_out_capturing).toHaveBeenCalledTimes(1);
+    const [clearAt] = posthog.clear_opt_in_out_capturing.mock.invocationCallOrder;
+    const [identifyAt] = posthog.identify.mock.invocationCallOrder;
+    expect(clearAt).toBeLessThan(identifyAt ?? 0);
+    expect(posthog.identify).toHaveBeenCalledWith('7');
+  });
+
+  it('켠 회원이 선택한 적 없으면 동의 쿠키를 만들지 않는다', async () => {
+    const client = await ready();
+    client.identifyUser(7);
+    expect(posthog.clear_opt_in_out_capturing).not.toHaveBeenCalled();
+    expect(posthog.opt_out_capturing).not.toHaveBeenCalled();
+  });
+
+  it('선택의 기억은 .pokeclip.com 쿠키에 둔다 — 같은 브라우저의 랜딩도 따른다', async () => {
+    await ready();
+    const [, config] = posthog.init.mock.calls[0] ?? [];
+    expect(config.opt_out_capturing_persistence_type).toBe('cookie');
+    expect(config.cross_subdomain_cookie).toBe(true);
   });
 });
 

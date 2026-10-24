@@ -82,9 +82,28 @@ describe('AuthGuard', () => {
     await waitFor(() => expect(useAuthStore.getState().refreshToken).toBe('boot-refresh'));
     expect(spy.mock.calls.some(([url]) => url === '/api/auth/me')).toBe(true);
     expect(replace).not.toHaveBeenCalled();
-    // 사용 통계는 회원 번호로만 식별한다 — 이메일·이름은 넘기지 않는다(POK-356)
-    await waitFor(() => expect(identifyUser).toHaveBeenCalledWith(1));
-    expect(identifyUser.mock.calls.flat()).toEqual([1]);
+    // 사용 통계는 회원 번호로만 식별한다 — 이메일·이름은 넘기지 않는다(POK-356).
+    // 옛 auth는 analyticsOptOut을 안 준다 — 없으면 참여(false)로 읽는다
+    await waitFor(() => expect(identifyUser).toHaveBeenCalledWith(1, false));
+    expect(identifyUser.mock.calls.flat()).toEqual([1, false]);
+  });
+
+  it('「이용 분석 참여」를 끈 회원이면 그 값을 식별과 함께 넘긴다 — 식별 전에 끄게', async () => {
+    useAuthStore.setState({ accessToken: 'a-1', refreshToken: 'r-1', hydrated: true });
+    stubFetch((url) =>
+      url === '/api/auth/me'
+        ? jsonResponse(200, { ...ME, analyticsOptOut: true })
+        : jsonResponse(404),
+    );
+
+    renderWithProviders(
+      <AuthGuard>
+        <div>보호 콘텐츠</div>
+      </AuthGuard>,
+    );
+
+    await waitFor(() => expect(identifyUser).toHaveBeenCalledWith(1, true));
+    expect(identifyUser).not.toHaveBeenCalledWith(1, false);
   });
 
   it('refresh까지 401이면(만료·도난 감지) 세션을 접고 /login으로 보낸다', async () => {

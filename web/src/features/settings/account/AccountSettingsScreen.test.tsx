@@ -517,6 +517,77 @@ describe('AccountSettingsScreen — 프로필 사진', () => {
   });
 });
 
+describe('AccountSettingsScreen — 이용 분석 참여(처리방침 7·9절)', () => {
+  it('기본은 켬이다 — 옛 auth가 analyticsOptOut을 안 줘도 참여로 읽는다', async () => {
+    await renderScreen();
+    expect(screen.getByRole('switch', { name: '이용 분석 참여' })).toBeChecked();
+  });
+
+  it('끄면 PATCH /api/auth/me/analytics에 optOut만 보내고, 응답이 캐시를 바꾼다 — 가드가 그 값으로 끈다', async () => {
+    const user = userEvent.setup();
+    const spy = stubAccount(ME, (url, init) =>
+      url === '/api/auth/me/analytics' && init?.method === 'PATCH'
+        ? jsonResponse(200, { ...ME, analyticsOptOut: true })
+        : jsonResponse(404),
+    );
+    const { queryClient } = await renderScreen();
+
+    await user.click(screen.getByRole('switch', { name: '이용 분석 참여' }));
+
+    expect(await screen.findByText('이용 분석을 껐어요')).toBeInTheDocument();
+    const patches = spy.mock.calls.filter(([, init]) => init?.method === 'PATCH');
+    expect(patches).toHaveLength(1);
+    expect(bodyOf(patches[0]?.[1])).toEqual({ optOut: true });
+    expect(queryClient.getQueryData<Me>(ME_KEY)?.analyticsOptOut).toBe(true);
+    expect(screen.getByRole('switch', { name: '이용 분석 참여' })).not.toBeChecked();
+  });
+
+  it('꺼 둔 회원은 꺼진 채로 보이고, 켜면 optOut=false를 보낸다', async () => {
+    const user = userEvent.setup();
+    const spy = stubAccount({ ...ME, analyticsOptOut: true }, (url, init) =>
+      url === '/api/auth/me/analytics' && init?.method === 'PATCH'
+        ? jsonResponse(200, { ...ME, analyticsOptOut: false })
+        : jsonResponse(404),
+    );
+    await renderScreen();
+    expect(screen.getByRole('switch', { name: '이용 분석 참여' })).not.toBeChecked();
+
+    await user.click(screen.getByRole('switch', { name: '이용 분석 참여' }));
+
+    expect(await screen.findByText('이용 분석을 다시 켰어요')).toBeInTheDocument();
+    const patches = spy.mock.calls.filter(([, init]) => init?.method === 'PATCH');
+    expect(bodyOf(patches[0]?.[1])).toEqual({ optOut: false });
+  });
+
+  it('실패하면 토스트로 알리고 토글·캐시는 그대로 참여다', async () => {
+    const user = userEvent.setup();
+    stubAccount(ME, () => jsonResponse(503, { message: '점검 중' }));
+    const { queryClient } = await renderScreen();
+
+    await user.click(screen.getByRole('switch', { name: '이용 분석 참여' }));
+
+    expect(await screen.findByText('이용 분석 설정을 바꾸지 못했어요')).toBeInTheDocument();
+    expect(queryClient.getQueryData<Me>(ME_KEY)?.analyticsOptOut).toBeUndefined();
+    expect(screen.getByRole('switch', { name: '이용 분석 참여' })).toBeChecked();
+  });
+
+  it('왕복 중에는 토글을 잠근다 — 연타로 요청이 겹치지 않게', async () => {
+    const user = userEvent.setup();
+    const held = heldResponse();
+    stubAccount(ME, () => held.promise);
+    await renderScreen();
+
+    await user.click(screen.getByRole('switch', { name: '이용 분석 참여' }));
+    await waitFor(() =>
+      expect(screen.getByRole('switch', { name: '이용 분석 참여' })).toBeDisabled(),
+    );
+    held.release(jsonResponse(200, { ...ME, analyticsOptOut: true }));
+    await waitFor(() =>
+      expect(screen.getByRole('switch', { name: '이용 분석 참여' })).toBeEnabled(),
+    );
+  });
+});
+
 describe('AccountSettingsScreen — 탈퇴', () => {
   it('탈퇴 진입점은 구분선 아래 저강도 링크다 — DS 버튼이 아니다', async () => {
     await renderScreen();

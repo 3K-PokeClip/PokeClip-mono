@@ -50,6 +50,9 @@ export const ANALYTICS_CONFIG: Partial<PostHogConfig> = {
   capture_pageview: 'history_change',
   // 처리방침 2·9절의 거부 수단: 브라우저 추적 금지(Do Not Track)를 켜면 보내지 않는다
   respect_dnt: true,
+  // 다른 거부 수단 「이용 분석 참여」(설정 › 계정, identifyUser)의 기억을 .pokeclip.com 쿠키에 둔다 — 기본(localStorage)은
+  // 출처마다 따로라, 같은 브라우저의 랜딩이 끈 회원을 그 회원 번호로 계속 센다(식별 쿠키는 둘이 함께 쓴다). 랜딩도 같은 값이다
+  opt_out_capturing_persistence_type: 'cookie',
   // 자동 수집은 끈다 — 누른 단추의 글자(채팅·채널 이름·이메일)가 실려 나간다. 행동은 track()으로만 보낸다(POK-357)
   autocapture: false,
   rageclick: false,
@@ -144,11 +147,25 @@ export function whenAnalyticsLoaded(): Promise<void> {
  * 로그인한 회원을 내부 회원 번호로 식별한다. 이메일·이름·Google 식별자는 넘기지 않는다(처리방침 2절).
  * 같은 브라우저에 다른 회원으로 식별된 흔적이 남아 있으면(로그아웃 없이 세션이 끝난 공용 PC) 먼저 지운다 —
  * SDK는 식별된 사람 위에 다른 번호로 identify하면 둘을 합치지 않고 번호만 바꾸므로, 지우지 않으면 앞사람의 기기 식별자를 잇는다.
+ *
+ * `optOut`은 그 회원의 「이용 분석 참여」 꺼짐(`me.analyticsOptOut`, 처리방침 7·9절)이다. identify보다 **먼저** 맞춘다 —
+ * 순서가 바뀌면 끈 회원의 `$identify`가 새어 나간다. 끄면 이벤트·녹화를 멈추고 식별도 하지 않는다. 다시 켜면 그 선택만
+ * 지운다(opt_in이 아니다: 추적 금지는 SDK가 그대로 따로 지키고, 켠 회원에게 동의 쿠키를 남기지 않는다).
+ * 로그아웃의 reset은 이 선택까지 지운다 — 그 브라우저는 다시 익명 방문자이고, 다음에 식별할 때 그 회원의 값을 다시 건다.
  */
-export function identifyUser(userId: number): void {
+export function identifyUser(userId: number, optOut = false): void {
   const id = String(userId);
   withAnalytics((posthog) => {
     if (posthog._isIdentified() && posthog.get_distinct_id() !== id) posthog.reset();
+    const denied = posthog.get_explicit_consent_status() === 'denied';
+    if (optOut) {
+      if (!denied) {
+        posthog.opt_out_capturing();
+        posthog.stopSessionRecording();
+      }
+      return;
+    }
+    if (denied) posthog.clear_opt_in_out_capturing();
     posthog.identify(id);
   });
 }
