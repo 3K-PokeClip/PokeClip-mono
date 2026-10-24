@@ -124,9 +124,19 @@ describe('loadTrackAudio', () => {
     expect(src.fetchBytes).toHaveBeenCalledTimes(2);
   });
 
-  it('소리 트랙을 못 꺼낸 조각만 있으면 빈 목록이다', async () => {
-    const src = source(access(BASE));
-    src.fetchBytes.mockResolvedValueOnce(new Uint8Array(16).buffer);
+  it('받은 조각을 하나라도 못 풀면 실패다: 덜 올라온 조각처럼 그 자리를 무음으로 두지 않는다(PR #341 3차)', async () => {
+    const src = source(access(BASE + 2000, BASE + 3000, BASE + 4000));
+    // 2번만 깨진 조각(상자가 없다)
+    src.fetchBytes.mockImplementation((url: string) =>
+      Promise.resolve(
+        url.endsWith('seg_2.m4s') ? new Uint8Array(16).buffer : new Uint8Array(fixture).buffer,
+      ),
+    );
+    await expect(loadTrackAudio(src, BASE)).rejects.toThrow('segment 2 has no readable audio');
+  });
+
+  it('받을 조각이 없으면 빈 목록이다', async () => {
+    const src = source(access());
     expect(await loadTrackAudio(src, BASE)).toEqual([]);
   });
 });

@@ -68,7 +68,7 @@ export class SegmentUrlExpiredError extends Error {
 
 /**
  * @param baseMs 편집기 시간축의 0초(절대 ms): 조각의 재생 축 시각을 편집기 초로 옮긴다
- * @returns 트랙 번호(파일 순서) → 덩어리들. 소리 트랙을 하나도 못 꺼냈으면 빈 목록. 주소·내려받기·풀기가 실패하면 던진다
+ * @returns 트랙 번호(파일 순서) → 덩어리들. 받을 조각이 없으면 빈 목록. 주소·내려받기가 실패하거나 받은 조각 하나라도 못 풀면 던진다
  */
 export async function loadTrackAudio(
   source: SegmentAudioSource,
@@ -110,14 +110,17 @@ export async function loadTrackAudio(
       return source.fetchBytes(urlOf(await refresh(used), seq));
     }
   };
-  const demuxed = await inParallel(ordered, async (segment) =>
-    demuxAudioTracks(await download(segment.seq)),
-  );
+  // 받은 조각을 못 풀면(깨짐 · 모르는 AAC 모양) 실패다: 덜 올라온 조각(목록에 없음)처럼 건너뛰면 그 자리가 영상 소리를 끈 채
+  // 무음이고 안내도 없다(PR #341 3차). 던지면 받던 나머지도 멈추고 화면은 영상 소리로 물러나 알린다
+  const demuxed = await inParallel(ordered, async (segment) => {
+    const tracks = demuxAudioTracks(await download(segment.seq));
+    if (tracks.length === 0) throw new Error(`segment ${segment.seq} has no readable audio`);
+    return tracks;
+  });
 
   const runs: Run[] = [];
   ordered.forEach((segment, i) => {
-    const tracks = demuxed[i] ?? [];
-    if (tracks.length === 0) return;
+    const tracks = demuxed[i]!;
     const last = runs.at(-1);
     if (
       last &&
