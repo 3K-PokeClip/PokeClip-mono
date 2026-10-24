@@ -515,12 +515,10 @@
   margin-top: auto;
   padding-top: calc(12 * var(--pc-u));
   display: flex;
-  gap: calc(8 * var(--pc-u));
 }
 
-/* 버튼처럼 보이는 링크 — DS Button(solid·ghost, md) 규격을 미러링 (LoginScreen.googleButton 선례) */
-.solidLink,
-.ghostLink {
+/* 버튼처럼 보이는 링크 — DS Button(solid, md) 규격을 미러링 (LoginScreen.googleButton 선례) */
+.solidLink {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -539,14 +537,6 @@
 
 .solidLink:hover {
   background: var(--pc-color-accent-hover);
-}
-
-.ghostLink {
-  color: var(--pc-color-text-primary);
-}
-
-.ghostLink:hover {
-  background: var(--pc-color-bg-surface-hover);
 }
 
 /* ---------- 지난 방송 · VOD ---------- */

@@ -1313,9 +1313,8 @@ describe('LiveNowBand', () => {
       'href',
       '/broadcast/livenow?stream=stream-1',
     );
-    expect(screen.getByRole('link', { name: '카드 검토' })).toHaveAttribute(
-      'href',
-      '/broadcast/livenow?stream=stream-1',
-    );
+    // 「카드 검토」는 같은 대시보드로 가는 중복 버튼이라 뺐다(POK-464): 진입 링크는 하나뿐이다
+    expect(screen.getAllByRole('link')).toHaveLength(1);
+    expect(screen.queryByText('카드 검토')).toBeNull();
   });
 });
