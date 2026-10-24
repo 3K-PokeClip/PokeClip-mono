@@ -1,7 +1,7 @@
 'use client';
 
 import { CirclePlus, Pencil, Zap } from 'lucide-react';
-import { Button, IconButton, Skeleton, Tag } from '@/ui';
+import { Avatar, Button, IconButton, Skeleton, Tag } from '@/ui';
 import styles from './LiveScreen.module.css';
 import { MARK_HOTKEY } from './markKey';
 import type { StreamMeta } from './useLiveDetailsMockState';
@@ -60,9 +60,14 @@ export function StreamInfoBar({
 }) {
   return (
     <section className={styles.infoBar} aria-label="방송 정보">
-      {/* 카테고리 이미지 창구가 아직 없다 — 자리와 라벨만 지킨다 */}
-      <div className={styles.infoThumb} aria-hidden>
-        {meta.thumbLabel}
+      {/* 그 방송 스트리머의 프로필 사진(POK-457). 사진이 없거나 못 받으면 Avatar가 이름 첫 글자로 선다. 누구 방송인지 아직 모르면
+          다른 빈 칸과 같은 규칙이다(POK-449): 받아 오는 중이면 회색 동그라미, 그 뒤는 빈 동그라미 */}
+      <div className={styles.infoThumb} aria-hidden data-testid="info-streamer">
+        {meta.streamer ? (
+          <Avatar size="lg" src={meta.streamer.photo ?? undefined} name={meta.streamer.name} />
+        ) : infoPending ? (
+          <Skeleton circle height="100%" data-testid="info-streamer-pending" />
+        ) : null}
       </div>
       <div className={styles.infoBody}>
         <div className={styles.infoTitleRow}>

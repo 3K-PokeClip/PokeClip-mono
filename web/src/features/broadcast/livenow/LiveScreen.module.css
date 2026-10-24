@@ -69,18 +69,12 @@
   background: var(--pc-color-bg-surface);
 }
 
-/* 카테고리 이미지 창구가 없어 라벨만 든 자리 표시 */
+/* 스트리머 프로필 사진 동그라미(POK-457). Avatar lg(56u)와 같은 크기의 빈 자리라 누구인지 모를 때도 줄 모양이 안 흔들린다 */
 .infoThumb {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: calc(46 * var(--pc-u));
-  height: calc(61 * var(--pc-u));
-  border-radius: calc(9 * var(--pc-u));
+  width: calc(56 * var(--pc-u));
+  height: calc(56 * var(--pc-u));
+  border-radius: 50%;
   background: var(--pc-color-bg-inset);
-  color: var(--pc-color-text-muted);
-  font-size: calc(9 * var(--pc-u));
-  text-align: center;
   flex: none;
 }
 

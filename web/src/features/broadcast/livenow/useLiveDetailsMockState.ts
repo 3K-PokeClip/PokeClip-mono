@@ -1,6 +1,10 @@
 'use client';
 
 import { useMemo } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { isBroadcastInChannel } from '@/api/clipEditor';
+import { useMe } from '@/features/auth/useSession';
+import { useActiveChannel } from '@/features/channel/useActiveChannel';
 import { useLiveData } from './liveDataStore';
 
 // 방송 정보(카테고리·태그)는 clip의 broadcast-info 창구에서 온다(POK-251).
@@ -12,8 +16,12 @@ export interface StreamMeta {
   /** 방송 카테고리 — 없으면 빈 문자열 */
   category: string;
   tags: string[];
-  /** 카테고리 썸네일 자리 표시 문구 (이미지 소스가 아직 없다) */
-  thumbLabel: string;
+  /**
+   * 정보 바 왼쪽 동그라미: 그 방송 스트리머의 PokeClip 프로필(이름 · 사진, POK-457). 사진은 직접 올린 것, 없으면 구글 사진이고 편집자 ·
+   * 채널 아바타(#372)와 같은 출처다. 사진이 없으면 이름 첫 글자다. 누구 방송인지 아직 모르면 null이다. 옛 고정 문구 「이미지
+   * 없음」은 실제 그림과 이어진 적이 없어 걷었다. 플랫폼(치지직 · SOOP) 사진은 쓰지 않는다
+   */
+  streamer: { name: string; photo: string | null } | null;
   /** broadcast-info의 latest가 있었는가. false면 화면이 그 까닭(확인 중·기록 없음·수집 전)을 말한다 */
   collected: boolean;
 }
@@ -40,15 +48,32 @@ export interface LiveDetailsMockState {
 const EMPTY_VISUALS: Record<string, CardVisual> = {};
 
 export function useLiveDetailsMockState(): LiveDetailsMockState {
-  const { info } = useLiveData();
+  const { info, relation, streamId } = useLiveData();
+  const me = useMe().data;
+  const channel = useActiveChannel();
+  // 방송 줄은 스트리머 번호를 싣지 않는다. 내 방송(OWNER)이면 나, 위임받은 방송(EDITOR)이면 지금 고른 채널의 주인인데, 주소로 연
+  // 방송은 고른 채널의 것이 아닐 수 있다(방송 조회는 채널을 가리지 않는다). 그래서 그 채널로 물은 목록에 이 방송이 있을 때만 그
+  // 주인으로 본다(로컬 리뷰 1라운드: 두 채널의 편집자가 다른 채널 방송을 열면 고른 채널 주인 사진이 붙었다). 방송의 채널은 바뀌지
+  // 않으니 한 번만 묻는다. 모르면 비운다(남의 사진을 붙이지 않게)
+  const editorChannel = relation === 'EDITOR' && channel.ready && channel.relation === 'EDITOR';
+  const inChannel = useQuery({
+    queryKey: ['broadcast-in-channel', streamId, channel.streamerId],
+    queryFn: () => isBroadcastInChannel(streamId, channel.streamerId!),
+    enabled: editorChannel && streamId !== '',
+    staleTime: Infinity,
+  });
+  const delegated = editorChannel && inChannel.data === true;
+  const streamerName = relation === 'OWNER' ? (me?.name ?? null) : delegated ? channel.name : null;
+  const streamerPhoto =
+    relation === 'OWNER' ? (me?.profileImageUrl ?? null) : delegated ? channel.photo : null;
   const streamMeta = useMemo<StreamMeta>(() => {
     const latest = info?.latest ?? null;
     return {
       category: latest?.category ?? '',
       tags: latest?.tags ?? [],
-      thumbLabel: '이미지 없음',
+      streamer: streamerName === null ? null : { name: streamerName, photo: streamerPhoto },
       collected: latest !== null,
     };
-  }, [info]);
+  }, [info, streamerName, streamerPhoto]);
   return { streamMeta, cardVisuals: EMPTY_VISUALS };
 }
