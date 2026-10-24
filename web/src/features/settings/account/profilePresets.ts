@@ -12,7 +12,7 @@ export interface PresetAvatar {
 export const PRESET_AVATARS: readonly PresetAvatar[] = [
   { bg: '--pc-color-accent', fg: '#ffffff' },
   { bg: '--pc-color-point', fg: '#ffffff' },
-  // 이 하나만 토큰에 없는 색이다 — 시안이 지정한 황토색을 그대로 쓴다
+  // 토큰에 없는 색 — 시안이 지정한 황토색을 그대로 쓴다
   { bg: '#e6a83c', fg: '#1b1206' },
   { bg: '--pc-color-success', fg: '#ffffff' },
   // 아래 둘은 테마마다 토큰 값이 달라(info 청록·inset 회색), 토큰을 쓰면 고른 순간의 테마 색이
