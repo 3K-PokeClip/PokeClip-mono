@@ -69,11 +69,7 @@ export function AccountSettingsScreen() {
 
       <LoginCard email={email} />
 
-      <AnalyticsCard
-        participating={analytics.participating}
-        saving={analytics.saving}
-        onChange={analytics.setParticipating}
-      />
+      <AnalyticsCard choice={analytics.choice} onChange={analytics.setParticipating} />
 
       <div className={styles.withdrawRow}>
         {/* 저장·사진 수정과 같은 가드다 — me가 없으면 모달 인사말의 이름이 비어

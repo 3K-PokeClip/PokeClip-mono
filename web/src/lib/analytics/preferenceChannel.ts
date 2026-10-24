@@ -1,17 +1,26 @@
 // 「이용 분석 참여」를 바꾼 탭이 같은 브라우저의 다른 탭에 알린다 (PR #382 리뷰).
-// 동의 선택은 .pokeclip.com 쿠키 하나를 모든 탭이 같이 쓰는데, 참여 값은 탭마다의 me 캐시(60초 신선)에서 온다 — 알리지 않으면
-// 옛 캐시를 든 다른 탭이 화면을 옮길 때(AuthGuard 다시 마운트) 그 값으로 identifyUser를 불러 꺼 둔 선택을 다시 켠다.
-// 받는 쪽(AuthGuard)은 me 캐시만 고친다. 끄고 켜는 일은 그 캐시를 보는 AuthGuard → identifyUser가 그대로 한다.
+// 선택 자체는 .pokeclip.com 쿠키 하나라 모든 탭이 같이 읽지만, SDK의 전송 대기열·녹화·식별은 탭마다 메모리에 있다 —
+// 알리지 않으면 다른 탭은 꺼진 채 연 페이지에서 다시 켠 뒤에도 새로고침 전까지 보내지 않고, 설정 화면의 스위치도 옛 값이다.
+// 받는 쪽: AuthGuard(이 탭의 SDK에 다시 건다)·설정 화면(스위치 표시).
 
 const CHANNEL_NAME = 'pc-analytics-preference';
 
+/**
+ * 이 탭의 표식 — 같은 탭의 다른 구독도 쪽지를 받으므로(BroadcastChannel은 보낸 객체만 뺀다) 자기 탭이 보낸 것은 버린다.
+ * 기억하는 데만 쓰고 어디로도 보내지 않는다
+ */
+const TAB_ID = Math.random().toString(36).slice(2);
+
 export interface AnalyticsPreferenceMessage {
-  userId: number;
   optOut: boolean;
 }
 
+interface Envelope extends AnalyticsPreferenceMessage {
+  from: string;
+}
+
 function openChannel(): BroadcastChannel | null {
-  // 서버 렌더와 BroadcastChannel이 없는 환경에서는 알리지 않는다 — 그 탭은 다음 me 조회로 따라온다
+  // 서버 렌더와 BroadcastChannel이 없는 환경에서는 알리지 않는다 — 그 탭은 다음에 열 때 쿠키를 따른다
   if (typeof window === 'undefined' || typeof BroadcastChannel === 'undefined') return null;
   try {
     return new BroadcastChannel(CHANNEL_NAME);
@@ -20,18 +29,18 @@ function openChannel(): BroadcastChannel | null {
   }
 }
 
-function isMessage(data: unknown): data is AnalyticsPreferenceMessage {
+function isFromOtherTab(data: unknown): data is Envelope {
   if (typeof data !== 'object' || data === null) return false;
-  const { userId, optOut } = data as Record<string, unknown>;
-  return typeof userId === 'number' && typeof optOut === 'boolean';
+  const { optOut, from } = data as Record<string, unknown>;
+  return typeof optOut === 'boolean' && typeof from === 'string' && from !== TAB_ID;
 }
 
-/** 저장에 성공한 새 값을 다른 탭에 알린다 */
+/** 이 탭에 건 새 값을 다른 탭에 알린다 */
 export function announceAnalyticsPreference(message: AnalyticsPreferenceMessage): void {
   const channel = openChannel();
   if (channel === null) return;
   try {
-    channel.postMessage(message);
+    channel.postMessage({ optOut: message.optOut, from: TAB_ID } satisfies Envelope);
   } finally {
     channel.close();
   }
@@ -44,7 +53,7 @@ export function subscribeAnalyticsPreference(
   const channel = openChannel();
   if (channel === null) return () => {};
   channel.onmessage = (event: MessageEvent) => {
-    if (isMessage(event.data)) onMessage(event.data);
+    if (isFromOtherTab(event.data)) onMessage({ optOut: event.data.optOut });
   };
   return () => channel.close();
 }

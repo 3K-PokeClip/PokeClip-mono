@@ -5,7 +5,11 @@ import { useAuthStore } from '@/stores/auth';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
 import { renderWithProviders } from '@/test/testProviders';
 
-const { replace, identifyUser } = vi.hoisted(() => ({ replace: vi.fn(), identifyUser: vi.fn() }));
+const { replace, identifyUser, applyAnalyticsOptOut } = vi.hoisted(() => ({
+  replace: vi.fn(),
+  identifyUser: vi.fn(),
+  applyAnalyticsOptOut: vi.fn(),
+}));
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ replace }),
@@ -14,6 +18,7 @@ vi.mock('next/navigation', () => ({
 vi.mock('@/lib/analytics', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/analytics')>()),
   identifyUser,
+  applyAnalyticsOptOut,
 }));
 
 const ME = { id: 1, email: 'raccoon@example.com', name: '게임하는너구리', profileImageUrl: '' };
@@ -23,6 +28,7 @@ beforeEach(() => {
   window.sessionStorage.clear();
   replace.mockReset();
   identifyUser.mockReset();
+  applyAnalyticsOptOut.mockReset();
   useAuthStore.setState({ accessToken: null, refreshToken: null, hydrated: false });
 });
 
@@ -85,49 +91,27 @@ describe('AuthGuard', () => {
     await waitFor(() => expect(useAuthStore.getState().refreshToken).toBe('boot-refresh'));
     expect(spy.mock.calls.some(([url]) => url === '/api/auth/me')).toBe(true);
     expect(replace).not.toHaveBeenCalled();
-    // 사용 통계는 회원 번호로만 식별한다 — 이메일·이름은 넘기지 않는다(POK-356).
-    // 옛 auth는 analyticsOptOut을 안 준다 — 없으면 참여(false)로 읽는다
-    await waitFor(() => expect(identifyUser).toHaveBeenCalledWith(1, false));
-    expect(identifyUser.mock.calls.flat()).toEqual([1, false]);
+    // 사용 통계는 회원 번호로만 식별한다 — 이메일·이름은 넘기지 않는다(POK-356)
+    await waitFor(() => expect(identifyUser).toHaveBeenCalledWith(1));
+    expect(identifyUser.mock.calls.flat()).toEqual([1]);
   });
 
-  it('「이용 분석 참여」를 끈 회원이면 그 값을 식별과 함께 넘긴다 — 식별 전에 끄게', async () => {
+  it('다른 탭이 「이용 분석 참여」를 바꾸면 이 탭의 SDK에도 건다 — 다시 켠 뒤 새로고침 전까지 안 보내지 않게 (PR #382 리뷰)', async () => {
     useAuthStore.setState({ accessToken: 'a-1', refreshToken: 'r-1', hydrated: true });
-    stubFetch((url) =>
-      url === '/api/auth/me'
-        ? jsonResponse(200, { ...ME, analyticsOptOut: true })
-        : jsonResponse(404),
-    );
-
+    stubFetch((url) => (url === '/api/auth/me' ? jsonResponse(200, ME) : jsonResponse(404)));
     renderWithProviders(
       <AuthGuard>
         <div>보호 콘텐츠</div>
       </AuthGuard>,
     );
-
-    await waitFor(() => expect(identifyUser).toHaveBeenCalledWith(1, true));
-    expect(identifyUser).not.toHaveBeenCalledWith(1, false);
-  });
-
-  it('다른 탭이 토글을 끄면 이 탭의 me 캐시도 꺼짐으로 고쳐 다시 건다 — 옛 캐시로 다시 켜지 않게 (PR #382 리뷰)', async () => {
-    useAuthStore.setState({ accessToken: 'a-1', refreshToken: 'r-1', hydrated: true });
-    stubFetch((url) => (url === '/api/auth/me' ? jsonResponse(200, ME) : jsonResponse(404)));
-    const { queryClient } = renderWithProviders(
-      <AuthGuard>
-        <div>보호 콘텐츠</div>
-      </AuthGuard>,
-    );
-    await waitFor(() => expect(identifyUser).toHaveBeenCalledWith(1, false));
+    await waitFor(() => expect(identifyUser).toHaveBeenCalledWith(1));
 
     const otherTab = new BroadcastChannel('pc-analytics-preference');
-    otherTab.postMessage({ userId: 1, optOut: true });
-    otherTab.postMessage({ userId: 2, optOut: false }); // 남의 값은 이 탭의 캐시를 안 고친다
+    otherTab.postMessage({ optOut: true, from: 'other-tab' });
+    otherTab.postMessage({ optOut: false, from: 'other-tab' });
     otherTab.close();
 
-    await waitFor(() => expect(identifyUser).toHaveBeenLastCalledWith(1, true));
-    expect(
-      queryClient.getQueryData<{ analyticsOptOut?: boolean }>(['auth', 'me'])?.analyticsOptOut,
-    ).toBe(true);
+    await waitFor(() => expect(applyAnalyticsOptOut.mock.calls).toEqual([[true], [false]]));
   });
 
   it('refresh까지 401이면(만료·도난 감지) 세션을 접고 /login으로 보낸다', async () => {

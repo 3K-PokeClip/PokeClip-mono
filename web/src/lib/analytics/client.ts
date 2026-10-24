@@ -1,5 +1,6 @@
 import type { PostHog, PostHogConfig } from 'posthog-js';
 import { useAuthStore } from '@/stores/auth';
+import { announceAnalyticsPreference } from './preferenceChannel';
 import { scrubAttribute, scrubEvent, scrubUrl } from './scrub';
 
 // 사용 통계(PostHog) 연결 (POK-354·356). 결정은 POK-354 코멘트와 위키 ADR — US 지역, 정당한 이익 + 처리방침 고지
@@ -50,8 +51,8 @@ export const ANALYTICS_CONFIG: Partial<PostHogConfig> = {
   capture_pageview: 'history_change',
   // 처리방침 2·9절의 거부 수단: 브라우저 추적 금지(Do Not Track)를 켜면 보내지 않는다
   respect_dnt: true,
-  // 다른 거부 수단 「이용 분석 참여」(설정 › 계정, identifyUser)의 기억을 .pokeclip.com 쿠키에 둔다 — 기본(localStorage)은
-  // 출처마다 따로라, 같은 브라우저의 랜딩이 끈 회원을 그 회원 번호로 계속 센다(식별 쿠키는 둘이 함께 쓴다). 랜딩도 같은 값이다
+  // 다른 거부 수단 「이용 분석 참여」(설정 › 계정, setAnalyticsOptOut)는 이 브라우저에만 저장한다 — 그 기억을 .pokeclip.com
+  // 쿠키에 둔다. 기본(localStorage)은 출처마다 따로라, 대시보드에서 꺼도 같은 브라우저의 랜딩은 계속 센다. 랜딩도 같은 값이다
   opt_out_capturing_persistence_type: 'cookie',
   // 자동 수집은 끈다 — 누른 단추의 글자(채팅·채널 이름·이메일)가 실려 나간다. 행동은 track()으로만 보낸다(POK-357)
   autocapture: false,
@@ -143,10 +144,12 @@ export function whenAnalyticsLoaded(): Promise<void> {
 
 // ── 식별 ─────────────────────────────────────────────────────────────────────
 
+/** 지금 로그인한 회원 번호 — 꺼 둔 브라우저에서 다시 켜면 그때 식별한다 */
+let signedInUserId: string | null = null;
+
 /**
- * 식별·기기 식별자를 지운다. SDK의 reset은 동의 선택까지 지우는데, 「이용 분석 참여」를 끈 선택은 그 뒤에 다시 건다 —
- * 지워 두면 같은 브라우저에서 다시 로그인할 때 계정 설정을 불러오기 전의 기록(login_completed·첫 페이지 조회)이 나간다.
- * 공용 PC의 다음 사람에게도 덜 보내는 쪽이고, 참여하는 회원이 식별되면 identifyUser가 그 선택을 지운다.
+ * 식별·기기 식별자를 지운다. SDK의 reset은 동의 선택까지 지우는데, 「이용 분석 참여」는 이 브라우저의 선택이라 로그아웃·
+ * 다른 회원 로그인을 넘어 남아야 한다 — 끈 선택은 reset 뒤에 다시 건다.
  */
 function resetKeepingOptOut(posthog: PostHog): void {
   const denied = posthog.get_explicit_consent_status() === 'denied';
@@ -158,28 +161,74 @@ function resetKeepingOptOut(posthog: PostHog): void {
  * 로그인한 회원을 내부 회원 번호로 식별한다. 이메일·이름·Google 식별자는 넘기지 않는다(처리방침 2절).
  * 같은 브라우저에 다른 회원으로 식별된 흔적이 남아 있으면(로그아웃 없이 세션이 끝난 공용 PC) 먼저 지운다 —
  * SDK는 식별된 사람 위에 다른 번호로 identify하면 둘을 합치지 않고 번호만 바꾸므로, 지우지 않으면 앞사람의 기기 식별자를 잇는다.
- *
- * `optOut`은 그 회원의 「이용 분석 참여」 꺼짐(`me.analyticsOptOut`, 처리방침 7·9절)이다. identify보다 **먼저** 맞춘다 —
- * 순서가 바뀌면 끈 회원의 `$identify`가 새어 나간다. 끄면 이벤트·녹화를 멈추고 식별도 하지 않는다. 다시 켜면 opt_in이다 —
- * 선택만 지우는 clear는 SDK의 전송 대기열을 다시 시작하지 않아, 꺼진 채 연 페이지에서는 새로고침 전까지 아무것도 안 나갔다
- * (2026-10-24 실측). `$opt_in` 이벤트는 보내지 않는다. 추적 금지는 저장된 선택과 무관하게 SDK가 먼저 막는다(소스 확인).
- * 로그아웃·다른 회원 로그인의 reset은 끈 선택을 지키고(resetKeepingOptOut), 다음에 식별할 때 그 회원의 값을 다시 건다.
+ * 이 브라우저에서 「이용 분석 참여」를 껐으면 식별하지 않는다 — 켜면 setAnalyticsOptOut이 이 번호로 식별한다.
  */
-export function identifyUser(userId: number, optOut = false): void {
+export function identifyUser(userId: number): void {
   const id = String(userId);
+  signedInUserId = id;
   withAnalytics((posthog) => {
     if (posthog._isIdentified() && posthog.get_distinct_id() !== id) resetKeepingOptOut(posthog);
-    const denied = posthog.get_explicit_consent_status() === 'denied';
-    if (optOut) {
-      if (!denied) {
-        posthog.opt_out_capturing();
-        posthog.stopSessionRecording();
-      }
-      return;
-    }
-    if (denied) posthog.opt_in_capturing({ captureEventName: false });
+    if (posthog.get_explicit_consent_status() === 'denied') return;
     posthog.identify(id);
   });
+}
+
+// ── 「이용 분석 참여」(설정 › 계정, 처리방침 7·9절) ──────────────────────────────────
+// 선택은 이 브라우저에만 둔다(SDK의 동의 쿠키 `__ph_opt_in_out_<키>`, .pokeclip.com) — 서버는 모른다. 기기·브라우저마다 따로
+// 끄고, 쿠키를 지우면 다시 참여다. SDK는 보낼 때마다 그 쿠키를 다시 읽어서 SDK가 뜨기 전부터 끈 브라우저에서는 아무것도 안 나간다.
+
+/**
+ * 이 브라우저의 상태. `unavailable` = SDK를 안 불렀다(키 없음·차단기) — 보내지 않는다.
+ * `dnt` = 브라우저의 추적 금지가 켜져 있다 — 스위치와 상관없이 SDK가 막는다
+ */
+export type AnalyticsChoice = 'participating' | 'opted_out' | 'dnt' | 'unavailable';
+
+/** SDK가 「켜짐」으로 읽는 값(@posthog/core `isYesLike`) */
+const YES_LIKE: unknown[] = [true, 'true', 1, '1', 'yes'];
+
+/** SDK의 추적 금지 판정(posthog-js consent.js `_getDnt`)과 같은 자리를 본다 */
+function doNotTrackOn(): boolean {
+  const nav = navigator as Navigator & { msDoNotTrack?: unknown; globalPrivacyControl?: unknown };
+  return [
+    nav.doNotTrack,
+    nav.msDoNotTrack,
+    (window as Window & { doNotTrack?: unknown }).doNotTrack,
+    nav.globalPrivacyControl,
+  ].some((value) => YES_LIKE.includes(value));
+}
+
+/** 설정 화면이 읽는다. SDK를 불러오는 중이면 끝날 때까지 기다린다 */
+export async function readAnalyticsChoice(): Promise<AnalyticsChoice> {
+  await loading;
+  if (status !== 'ready' || client === null) return 'unavailable';
+  if (doNotTrackOn()) return 'dnt';
+  return client.get_explicit_consent_status() === 'denied' ? 'opted_out' : 'participating';
+}
+
+/**
+ * 이 탭의 SDK에 선택을 건다. 끄면 이벤트·녹화를 멈춘다. 켜면 opt_in이다 — 선택만 지우는 clear는 SDK의 전송 대기열을 다시
+ * 시작하지 않아, 꺼진 채 연 페이지에서는 새로고침 전까지 아무것도 안 나갔다(2026-10-24 실측). `$opt_in` 이벤트는 보내지 않고,
+ * 로그인한 회원이면 그 번호로 식별한다
+ */
+export function applyAnalyticsOptOut(optOut: boolean): void {
+  withAnalytics((posthog) => {
+    if (optOut) {
+      posthog.opt_out_capturing();
+      posthog.stopSessionRecording();
+      return;
+    }
+    posthog.opt_in_capturing({ captureEventName: false });
+    if (signedInUserId !== null) posthog.identify(signedInUserId);
+  });
+}
+
+/**
+ * 설정 화면의 스위치 — 이 탭에 걸고 같은 브라우저의 다른 탭에 알린다. 쿠키는 탭이 함께 읽지만 SDK의 전송 대기열·녹화·식별은
+ * 탭마다 메모리에 있어서, 다시 켠 것을 알리지 않으면 다른 탭은 새로고침 전까지 안 보낸다(받는 쪽은 AuthGuard)
+ */
+export function setAnalyticsOptOut(optOut: boolean): void {
+  applyAnalyticsOptOut(optOut);
+  announceAnalyticsPreference({ optOut });
 }
 
 /**
@@ -192,6 +241,7 @@ export function setActiveRole(role: 'owner' | 'editor'): void {
 
 /** 다음 방문자가 앞사람으로 묶이지 않게 식별·기기 식별자를 지운다. */
 export function resetIdentity(): void {
+  signedInUserId = null;
   withAnalytics(resetKeepingOptOut);
 }
 

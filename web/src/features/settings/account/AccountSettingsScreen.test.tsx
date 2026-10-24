@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -9,10 +9,16 @@ import { jsonResponse, stubFetch, type FetchHandler } from '@/test/mockFetch';
 import { renderWithProviders } from '@/test/testProviders';
 
 const nav = vi.hoisted(() => ({ search: '', replace: vi.fn(), push: vi.fn() }));
-const { track } = vi.hoisted(() => ({ track: vi.fn() }));
+const { track, readAnalyticsChoice, setAnalyticsOptOut } = vi.hoisted(() => ({
+  track: vi.fn(),
+  readAnalyticsChoice: vi.fn(),
+  setAnalyticsOptOut: vi.fn(),
+}));
 vi.mock('@/lib/analytics', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/analytics')>()),
   track,
+  readAnalyticsChoice,
+  setAnalyticsOptOut,
 }));
 
 // jsdom은 라우팅을 못 흉내 낸다 — 이동 여부만 확인한다.
@@ -79,6 +85,8 @@ function stubCanvas() {
 beforeEach(() => {
   window.localStorage.clear();
   track.mockReset();
+  readAnalyticsChoice.mockReset().mockResolvedValue('participating');
+  setAnalyticsOptOut.mockReset();
   nav.search = '';
   nav.replace.mockReset();
   nav.push.mockReset();
@@ -527,80 +535,72 @@ describe('AccountSettingsScreen — 프로필 사진', () => {
   });
 });
 
-describe('AccountSettingsScreen — 이용 분석 참여(처리방침 7·9절)', () => {
-  it('기본은 켬이다 — 옛 auth가 analyticsOptOut을 안 줘도 참여로 읽는다', async () => {
+describe('AccountSettingsScreen — 이용 분석 참여(처리방침 7·9절, 이 브라우저에만 저장)', () => {
+  const analyticsSwitch = () => screen.getByRole('switch', { name: '이용 분석 참여' });
+
+  it('기본은 켬이다 — 이 브라우저의 상태를 읽을 때까지 잠근다', async () => {
+    let resolve: (choice: string) => void = () => {};
+    readAnalyticsChoice.mockReturnValue(new Promise((r) => (resolve = r)));
     await renderScreen();
-    expect(screen.getByRole('switch', { name: '이용 분석 참여' })).toBeChecked();
+    expect(analyticsSwitch()).toBeChecked();
+    expect(analyticsSwitch()).toBeDisabled();
+    await act(async () => resolve('participating'));
+    expect(analyticsSwitch()).toBeEnabled();
+    expect(analyticsSwitch()).toBeChecked();
   });
 
-  it('끄면 PATCH /api/auth/me/analytics에 optOut만 보내고, 응답이 캐시를 바꾼다 — 가드가 그 값으로 끈다', async () => {
+  it('끄면 이 브라우저에서 끄고 알린다 — 서버에는 아무것도 보내지 않는다', async () => {
     const user = userEvent.setup();
-    const spy = stubAccount(ME, (url, init) =>
-      url === '/api/auth/me/analytics' && init?.method === 'PATCH'
-        ? jsonResponse(200, { ...ME, analyticsOptOut: true })
-        : jsonResponse(404),
-    );
-    const { queryClient } = await renderScreen();
-    const heard: unknown[] = [];
+    const spy = stubAccount(ME);
+    await renderScreen();
+    await waitFor(() => expect(analyticsSwitch()).toBeEnabled());
+
+    await user.click(analyticsSwitch());
+
+    expect(await screen.findByText('이 브라우저에서 이용 분석을 껐어요')).toBeInTheDocument();
+    expect(setAnalyticsOptOut.mock.calls).toEqual([[true]]);
+    expect(analyticsSwitch()).not.toBeChecked();
+    expect(spy.mock.calls.filter(([, init]) => init?.method === 'PATCH')).toHaveLength(0);
+  });
+
+  it('꺼 둔 브라우저는 꺼진 채로 보이고, 켜면 다시 켠다', async () => {
+    const user = userEvent.setup();
+    readAnalyticsChoice.mockResolvedValue('opted_out');
+    await renderScreen();
+    await waitFor(() => expect(analyticsSwitch()).toBeEnabled());
+    expect(analyticsSwitch()).not.toBeChecked();
+    expect(screen.getByText(/다른 기기는 그 기기에서 따로 꺼 주세요/)).toBeInTheDocument();
+
+    await user.click(analyticsSwitch());
+
+    expect(await screen.findByText('이 브라우저에서 이용 분석을 다시 켰어요')).toBeInTheDocument();
+    expect(setAnalyticsOptOut.mock.calls).toEqual([[false]]);
+  });
+
+  it.each([
+    ['dnt', '브라우저의 추적 금지 설정이 켜져 있어 보내지 않아요.'],
+    ['unavailable', '지금 이 브라우저는 이용 분석을 보내지 않아요.'],
+  ])('%s면 스위치와 상관없이 보내지 않으니 꺼진 채 잠그고 까닭을 적는다', async (choice, text) => {
+    readAnalyticsChoice.mockResolvedValue(choice);
+    await renderScreen();
+    expect(await screen.findByText(text)).toBeInTheDocument();
+    expect(analyticsSwitch()).not.toBeChecked();
+    expect(analyticsSwitch()).toBeDisabled();
+  });
+
+  it('다른 탭에서 바꾸면 이 탭의 스위치도 따라간다', async () => {
+    await renderScreen();
+    await waitFor(() => expect(analyticsSwitch()).toBeEnabled());
+
     const otherTab = new BroadcastChannel('pc-analytics-preference');
-    otherTab.onmessage = (event) => heard.push(event.data);
-
-    await user.click(screen.getByRole('switch', { name: '이용 분석 참여' }));
-
-    expect(await screen.findByText('이용 분석을 껐어요')).toBeInTheDocument();
-    // 같은 브라우저의 다른 탭에도 알린다 — 옛 캐시로 꺼짐을 되돌리지 않게 (PR #382 리뷰)
-    await waitFor(() => expect(heard).toEqual([{ userId: 1, optOut: true }]));
+    await act(async () => {
+      otherTab.postMessage({ optOut: true, from: 'other-tab' });
+      await new Promise((resolve) => setTimeout(resolve, 20)); // 배달을 act 안에서 기다린다
+    });
     otherTab.close();
-    const patches = spy.mock.calls.filter(([, init]) => init?.method === 'PATCH');
-    expect(patches).toHaveLength(1);
-    expect(bodyOf(patches[0]?.[1])).toEqual({ optOut: true });
-    expect(queryClient.getQueryData<Me>(ME_KEY)?.analyticsOptOut).toBe(true);
-    expect(screen.getByRole('switch', { name: '이용 분석 참여' })).not.toBeChecked();
-  });
 
-  it('꺼 둔 회원은 꺼진 채로 보이고, 켜면 optOut=false를 보낸다', async () => {
-    const user = userEvent.setup();
-    const spy = stubAccount({ ...ME, analyticsOptOut: true }, (url, init) =>
-      url === '/api/auth/me/analytics' && init?.method === 'PATCH'
-        ? jsonResponse(200, { ...ME, analyticsOptOut: false })
-        : jsonResponse(404),
-    );
-    await renderScreen();
-    expect(screen.getByRole('switch', { name: '이용 분석 참여' })).not.toBeChecked();
-
-    await user.click(screen.getByRole('switch', { name: '이용 분석 참여' }));
-
-    expect(await screen.findByText('이용 분석을 다시 켰어요')).toBeInTheDocument();
-    const patches = spy.mock.calls.filter(([, init]) => init?.method === 'PATCH');
-    expect(bodyOf(patches[0]?.[1])).toEqual({ optOut: false });
-  });
-
-  it('실패하면 토스트로 알리고 토글·캐시는 그대로 참여다', async () => {
-    const user = userEvent.setup();
-    stubAccount(ME, () => jsonResponse(503, { message: '점검 중' }));
-    const { queryClient } = await renderScreen();
-
-    await user.click(screen.getByRole('switch', { name: '이용 분석 참여' }));
-
-    expect(await screen.findByText('이용 분석 설정을 바꾸지 못했어요')).toBeInTheDocument();
-    expect(queryClient.getQueryData<Me>(ME_KEY)?.analyticsOptOut).toBeUndefined();
-    expect(screen.getByRole('switch', { name: '이용 분석 참여' })).toBeChecked();
-  });
-
-  it('왕복 중에는 토글을 잠근다 — 연타로 요청이 겹치지 않게', async () => {
-    const user = userEvent.setup();
-    const held = heldResponse();
-    stubAccount(ME, () => held.promise);
-    await renderScreen();
-
-    await user.click(screen.getByRole('switch', { name: '이용 분석 참여' }));
-    await waitFor(() =>
-      expect(screen.getByRole('switch', { name: '이용 분석 참여' })).toBeDisabled(),
-    );
-    held.release(jsonResponse(200, { ...ME, analyticsOptOut: true }));
-    await waitFor(() =>
-      expect(screen.getByRole('switch', { name: '이용 분석 참여' })).toBeEnabled(),
-    );
+    expect(analyticsSwitch()).not.toBeChecked();
+    expect(setAnalyticsOptOut).not.toHaveBeenCalled(); // 걸기는 그 탭과 AuthGuard 몫이다
   });
 });
 

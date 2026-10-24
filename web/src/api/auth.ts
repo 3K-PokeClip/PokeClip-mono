@@ -18,11 +18,6 @@ export interface Me {
    * 뒤의 token이 서명값이라 **직접 조립하지 않는다** (POK-207 계약).
    */
   profileImageUrl: string | null;
-  /**
-   * 설정 › 계정의 「이용 분석 참여」를 껐나(auth V120). 참이면 이 계정으로 로그인한 동안 분석 도구(PostHog)로
-   * 보내지 않는다(처리방침 7·9절). 선택 필드다 — 배포가 겹치는 동안 옛 auth는 이 값을 안 주고, 없으면 참여로 읽는다
-   */
-  analyticsOptOut?: boolean;
 }
 
 /** 구글 동의 화면에서 받은 authorization code를 우리 토큰 한 쌍으로 바꾼다. 처음 온 사용자는 자동 가입. */

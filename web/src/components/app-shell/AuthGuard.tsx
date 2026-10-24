@@ -2,10 +2,8 @@
 
 import { useEffect, type ReactNode } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
-import { useQueryClient } from '@tanstack/react-query';
-import { meQueryOptions, type Me } from '@/api/auth';
 import { useMe } from '@/features/auth/useSession';
-import { identifyUser, subscribeAnalyticsPreference } from '@/lib/analytics';
+import { applyAnalyticsOptOut, identifyUser, subscribeAnalyticsPreference } from '@/lib/analytics';
 import { useAuthHydration, useAuthStore } from '@/stores/auth';
 
 // 보호 라우트 가드 (POK-101) — 독 4개 라우트를 (dock)/layout.tsx에서 한 번에 덮는다.
@@ -53,29 +51,17 @@ export function AuthGuard({ children }: { children: ReactNode }) {
   // 부르고 아래 이펙트가 /login으로 보낸다. 완료조건 "만료·도난 시 자연 복귀"가 이 경로다.
   const me = useMe();
   const userId = me.data?.id;
-  const optOut = me.data?.analyticsOptOut === true;
 
   // 사용 통계(PostHog)의 사람 식별 — 보호 화면은 전부 이 가드를 지나므로 여기 한 곳에서 한다 (POK-356).
   // 회원 번호만 넘긴다. 로그아웃 때의 초기화는 lib/analytics가 auth 스토어를 구독해 한다.
-  // 「이용 분석 참여」를 끈 회원은 식별 전에 끈다 — 설정에서 바꾸면 me 캐시가 바뀌어 다시 건다
+  // 이 브라우저에서 「이용 분석 참여」를 껐으면 identifyUser가 식별하지 않는다
   useEffect(() => {
-    if (userId !== undefined) identifyUser(userId, optOut);
-  }, [userId, optOut]);
+    if (userId !== undefined) identifyUser(userId);
+  }, [userId]);
 
-  // 다른 탭이 토글을 바꾸면 이 탭의 me 캐시도 고친다 — 옛 캐시가 남으면 화면을 옮길 때(가드 다시 마운트) 꺼 둔 선택을
-  // 다시 켠다(PR #382 리뷰). 캐시 주인이 같은 회원일 때만 쓴다
-  const queryClient = useQueryClient();
-  useEffect(
-    () =>
-      subscribeAnalyticsPreference((message) => {
-        queryClient.setQueryData<Me>(meQueryOptions.queryKey, (prev) =>
-          prev === undefined || prev.id !== message.userId
-            ? prev
-            : { ...prev, analyticsOptOut: message.optOut },
-        );
-      }),
-    [queryClient],
-  );
+  // 같은 브라우저의 다른 탭이 「이용 분석 참여」를 바꾸면 이 탭의 SDK에도 건다 — 쿠키는 같이 읽지만 전송 대기열·녹화·식별은
+  // 탭마다라, 다시 켠 것을 걸지 않으면 이 탭은 새로고침 전까지 안 보낸다(PR #382 리뷰)
+  useEffect(() => subscribeAnalyticsPreference(({ optOut }) => applyAnalyticsOptOut(optOut)), []);
 
   useEffect(() => {
     if (!hydrated || refreshToken !== null) return;

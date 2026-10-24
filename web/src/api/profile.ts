@@ -42,18 +42,6 @@ export async function updateDisplayName(name: string): Promise<Me> {
 }
 
 /**
- * 「이용 분석 참여」 토글 — `optOut`이 참이면 끈다. 누구를 고칠지는 토큰이 정한다. auth는 값을 저장만 하고
- * 끄는 일은 대시보드가 한다(`lib/analytics`의 `identifyUser`).
- */
-export async function updateAnalyticsOptOut(optOut: boolean): Promise<Me> {
-  const res = await apiFetch('/api/auth/me/analytics', {
-    method: 'PATCH',
-    body: JSON.stringify({ optOut }),
-  });
-  return res.json() as Promise<Me>;
-}
-
-/**
  * 프로필 사진을 올린다 — multipart 파트 이름은 서버가 `file` 하나로 못박았다. 사람마다 사진이
  * 하나라 PUT이고, 올리면 구글 사진 주소는 지워진다(되돌리는 문이 없다).
  *

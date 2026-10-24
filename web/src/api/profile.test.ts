@@ -6,7 +6,6 @@ import {
   normalizeDisplayName,
   photoFailureMessage,
   profileFailureOf,
-  updateAnalyticsOptOut,
   updateDisplayName,
   uploadProfilePhoto,
 } from '@/api/profile';
@@ -46,20 +45,6 @@ describe('updateDisplayName', () => {
     expect(init?.method).toBe('PATCH');
     expect(JSON.parse(String(init?.body))).toEqual({ name: '너구리씨' });
     expect(new Headers(init?.headers).get('Content-Type')).toBe('application/json');
-  });
-});
-
-describe('updateAnalyticsOptOut', () => {
-  it('PATCH /api/auth/me/analytics에 optOut만 싣고, 응답을 Me 그대로 돌려준다 — 회원 번호는 싣지 않는다', async () => {
-    const spy = stubFetch(() => jsonResponse(200, { ...ME, analyticsOptOut: true }));
-
-    const me = await updateAnalyticsOptOut(true);
-
-    expect(me).toEqual({ ...ME, analyticsOptOut: true });
-    const [url, init] = spy.mock.calls[0] ?? [];
-    expect(url).toBe('/api/auth/me/analytics');
-    expect(init?.method).toBe('PATCH');
-    expect(JSON.parse(String(init?.body))).toEqual({ optOut: true });
   });
 });
 
