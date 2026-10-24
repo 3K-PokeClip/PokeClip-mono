@@ -1,18 +1,20 @@
 package com.pokeclip.clip.jumpcard.api;
 
 import com.pokeclip.clip.jumpcard.JumpCardService;
+import com.pokeclip.clip.jumpcard.JumpCardSnapshot;
 import com.pokeclip.clip.support.NotFoundFloor;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * 편집자가 카드에 쓰는 문. 집기·놓기·숨기기·되돌리기는 POK-393에서 없앴고 열기 하나가 남았다.
+ * 편집자가 카드에 쓰는 문. 열기(POK-393)와 가리기·되살리기(POK-463). 집기·놓기는 POK-393에서 없앴다.
  *
  * <p>사용자 번호는 <b>토큰의 subject에서만</b> 온다: 본문이나 쿼리로 받으면 남의 번호로 기록된다.
  * 편집자 <b>이름</b>은 응답에 안 넣는다(POK-175 — 이름표는 auth가 갖고 있고 물어볼 창구가 없다).
@@ -45,5 +47,20 @@ public class JumpCardController {
         NotFoundFloor.mark(request);
         service.open(id, jwt.getSubject());
         return ResponseEntity.noContent().build();
+    }
+
+    /** 가린다(POK-463). 본문 없음. 지금 카드를 돌려준다({@code hidden=true}). 기준 시각은 열기와 같은 이유로 맨 앞이다. */
+    @PostMapping("/hide")
+    public JumpCardSnapshot hide(@PathVariable long id, @AuthenticationPrincipal Jwt jwt, HttpServletRequest request) {
+        NotFoundFloor.mark(request);
+        return service.hide(id, jwt.getSubject());
+    }
+
+    /** 되살린다(POK-463). 가린 사람이 아니어도 된다. 지금 카드를 돌려준다({@code hidden=false}). */
+    @DeleteMapping("/hide")
+    public JumpCardSnapshot unhide(@PathVariable long id, @AuthenticationPrincipal Jwt jwt,
+                                   HttpServletRequest request) {
+        NotFoundFloor.mark(request);
+        return service.unhide(id, jwt.getSubject());
     }
 }

@@ -274,6 +274,30 @@ class JumpCardStreamEndToEndTest extends IntegrationTestSupport {
     }
 
     /**
+     * 가리기·되살리기는 다른 편집자 화면에도 바로 보여야 한다(POK-463): 안 보이면 그 화면에서 같은 카드가 다른 칸에 남는다.
+     * 네이티브 UPDATE 뒤 1차 캐시의 낡은 엔티티가 나가면 「가렸는데 안 가려진」 카드가 뜬다(놓기 시험이 막던 것과 같은 자리).
+     */
+    @Test
+    void 가리고_되살리면_다른_연결에_hidden이_바뀐_card가_온다() {
+        long id = service.record("s-1", auto("evt-hide", 3_000_000L)).card().id();
+
+        try (SseReader watcher = open("s-1", TestTokens.access("1711"))) {
+            // 연결이 명부에 오른 뒤라야 발행이 도착한다. 카드는 초기 전송으로 안 오므로 주석으로 확인한다(POK-174).
+            assertThat(watcher.await(1, Duration.ofSeconds(3))).isTrue();
+
+            int before = watcher.named().size();
+            service.hide(id, "1712");
+            awaitUntil(() -> watcher.named().size() > before, Duration.ofSeconds(3));
+            assertThat(MAPPER.readTree(마지막_card(watcher).data()).get("hidden").asBoolean()).isTrue();
+
+            int afterHide = watcher.named().size();
+            service.unhide(id, "1712");
+            awaitUntil(() -> watcher.named().size() > afterHide, Duration.ofSeconds(3));
+            assertThat(MAPPER.readTree(마지막_card(watcher).data()).get("hidden").asBoolean()).isFalse();
+        }
+    }
+
+    /**
      * 「안 온다」를 재기 전에 <b>같은 대기로 긍정 경로를 먼저 잰다</b> — 그래야 그 대기 시간이
      * 충분하다는 증거가 생긴다(async-test-reality 문항 4(가)).
      */
@@ -372,6 +396,11 @@ class JumpCardStreamEndToEndTest extends IntegrationTestSupport {
                 .findFirst().orElseThrow();
     }
 
+    private SseReader.Event 마지막_card(SseReader reader) {
+        return reader.events().stream().filter(e -> "card".equals(e.name()))
+                .reduce((a, b) -> b).orElseThrow();
+    }
+
     private void post2A(String streamId, String eventId, long start) {
         String body = """
                 {"eventId":"%s","source":"auto","streamTimestampMs":%d,
@@ -402,7 +431,7 @@ class JumpCardStreamEndToEndTest extends IntegrationTestSupport {
     /** 같은 카드의 <b>다음</b> 상태. 순번만 바꾼다 — record라 복사 생성자가 없다. */
     private JumpCardSnapshot 순번을_올린다(JumpCardSnapshot card, long eventSeq) {
         return new JumpCardSnapshot(card.id(), card.streamId(), card.source(), card.streamTimestampMs(),
-                card.window(), card.score(), card.evidence(), eventSeq, card.createdAt(), null);
+                card.window(), card.score(), card.evidence(), card.hidden(), eventSeq, card.createdAt(), null);
     }
 
     private HighlightRequest auto(String eventId, long start) {

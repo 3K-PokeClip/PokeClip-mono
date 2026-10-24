@@ -66,14 +66,17 @@ class HighlightIntakeControllerTest extends IntegrationTestSupport {
                 .andExpect(jsonPath("$.evidence.multiplier").value(4.2));
     }
 
-    /** 점유·숨김 칸은 POK-393에서 뺐다. 값이 null인 칸도 「없음」이 아니므로 본문 글자로 본다. */
+    /**
+     * 점유 칸은 POK-393에서 뺐다. 새 카드는 가리지 않은 카드다({@code hidden=false}, POK-463). 가린 사람·이유는 싣지 않는다.
+     * 값이 null인 칸도 「없음」이 아니므로 본문 글자로 본다.
+     */
     @Test
-    void 응답에_점유_숨김_칸이_없다() throws Exception {
+    void 응답에_점유_칸이_없고_가리지_않은_카드다() throws Exception {
         String body = mvc.perform(요청("evt-1", 5_020_000L, 5_062_000L, 5_043_000L))
                 .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
 
-        assertThat(body).contains("\"streamTimestampMs\"")
-                .doesNotContain("claimedBy", "claimedAt", "claimExpiresAt", "\"hidden\"", "hiddenBy", "hiddenReason");
+        assertThat(body).contains("\"streamTimestampMs\"", "\"hidden\":false")
+                .doesNotContain("claimedBy", "claimedAt", "claimExpiresAt", "hiddenBy", "hiddenReason");
     }
 
     @Test

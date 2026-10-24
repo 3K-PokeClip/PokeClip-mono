@@ -16,7 +16,7 @@ import java.util.stream.Stream;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * 카드 목록 한 장을 뽑는 조회. <b>재는 것은 넷이다:</b> 정렬 · 방송 거르기 · 옛 숨김 칸을 안 거르는 것 ·
+ * 카드 목록 한 장을 뽑는 조회. <b>재는 것은 넷이다:</b> 정렬 · 방송 거르기 · 숨긴 카드 거르기 ·
  * 이어받기 경계.
  *
  * <p>여기엔 자격 판정이 없다. 「이 사람이 이 방송을 볼 수 있나」는 {@code BroadcastAccessGuard}가
@@ -85,19 +85,27 @@ class JumpCardListQueryTest extends IntegrationTestSupport {
         assertThat(줄번호(첫장(넉넉한_상한))).containsExactly(내것);
     }
 
-    // ── 옛 숨김 칸 ──────────────────────────────────────────────
+    // ── 숨김 ────────────────────────────────────────────────
 
-    /**
-     * 숨기기는 POK-393에서 없앴다. 칸은 POK-394가 지울 때까지 표에 남으므로 <b>그 칸이 찬 옛 카드도 나와야</b>
-     * 한다. 거르기가 남으면 옛 숨김 카드가 다시 볼 길 없이 영영 빠진다.
-     */
+    /** 숨긴 카드는 기본 목록에서 빠진다(POK-463). 다른 칸(전체·자동·수동)에서 사라져야 한다. */
     @Test
-    void 숨김_칸이_찬_옛_카드도_나온다() {
+    void 숨긴_카드는_기본으로_빠진다() {
         long 보통 = 카드를_넣는다(내_방송, 1000, "auto");
-        long 옛_숨김 = 카드를_넣는다(내_방송, 2000, "auto");
-        숨긴다(옛_숨김);
+        long 숨긴 = 카드를_넣는다(내_방송, 2000, "auto");
+        숨긴다(숨긴);
 
-        assertThat(줄번호(첫장(넉넉한_상한))).containsExactly(보통, 옛_숨김);
+        assertThat(줄번호(첫장(넉넉한_상한))).containsExactly(보통);
+    }
+
+    /** 숨김 칸은 이것으로 채운다. 안 나오면 숨긴 카드를 되살릴 자리가 없다. */
+    @Test
+    void 숨긴_것도_달라고_하면_순서대로_섞여_나온다() {
+        long 첫째 = 카드를_넣는다(내_방송, 1000, "auto");
+        long 숨긴 = 카드를_넣는다(내_방송, 2000, "auto");
+        long 셋째 = 카드를_넣는다(내_방송, 3000, "auto");
+        숨긴다(숨긴);
+
+        assertThat(줄번호(cards.findPage(내_방송, true, null, null, 넉넉한_상한))).containsExactly(첫째, 숨긴, 셋째);
     }
 
     // ── 이어받기 ────────────────────────────────────────────────
@@ -129,7 +137,7 @@ class JumpCardListQueryTest extends IntegrationTestSupport {
     /**
      * 🔴 <b>{@code event_seq}로 정렬·이어받기를 하면 여기서 어긋난다.</b> 행을 바꾸는 UPDATE는 무엇이든
      * {@code trg_jump_cards_touch}가 순번을 <b>새 값으로</b> 올린다: 바뀐 카드가 목록 맨 뒤로 밀리고,
-     * 이어받는 중이었다면 이미 지나온 자리로 되돌아온다. 점수를 고치는 UPDATE로 잰다(숨김 칸은 POK-394가 지운다).
+     * 이어받는 중이었다면 이미 지나온 자리로 되돌아온다. 점수를 고치는 UPDATE로 잰다.
      *
      * <p>{@code stream_timestamp_ms}는 저장 뒤로 안 바뀐다.
      * <b>순번이 실제로 올라간 것을 먼저 확인한다</b> — 안 올라갔으면 이 갈래는 아무것도 안 재고 초록이다.
@@ -197,7 +205,7 @@ class JumpCardListQueryTest extends IntegrationTestSupport {
         카드를_넣는다(내_방송, 1000, "hotkey");
         long 뒤쪽 = 카드를_넣는다(내_방송, 2000, "auto");
 
-        assertThat(줄번호(cards.findPage(내_방송, 1000L, null, 넉넉한_상한)))
+        assertThat(줄번호(cards.findPage(내_방송, false, 1000L, null, 넉넉한_상한)))
                 .as("두 값을 함께 주면 같은 방송 시간의 뒷줄도 나온다 — 그 갈래는 위 시험이 잰다")
                 .containsExactly(뒤쪽);
     }
@@ -205,12 +213,12 @@ class JumpCardListQueryTest extends IntegrationTestSupport {
     // ── 도우미 ──────────────────────────────────────────────────
 
     private List<JumpCard> 첫장(int limit) {
-        return cards.findPage(내_방송, null, null, limit);
+        return cards.findPage(내_방송, false, null, null, limit);
     }
 
     /** 받은 줄의 <b>두 값</b>으로 이어받는다 — 카드 표시가 싣고 다니는 것이 정확히 이 둘이다. */
     private List<JumpCard> 다음장(JumpCard 마지막_줄, int limit) {
-        return cards.findPage(내_방송, 마지막_줄.getStreamTimestampMs(), 마지막_줄.getId(), limit);
+        return cards.findPage(내_방송, false, 마지막_줄.getStreamTimestampMs(), 마지막_줄.getId(), limit);
     }
 
     private static List<Long> 방송시간(List<JumpCard> rows) {
@@ -225,7 +233,7 @@ class JumpCardListQueryTest extends IntegrationTestSupport {
         return jdbc.queryForObject("SELECT event_seq FROM jump_cards WHERE id = ?", Long.class, id);
     }
 
-    /** 옛 숨기기 문이 쓰던 칸을 채운다(그 문은 POK-393에서 없앴다. 칸은 POK-394가 지운다). */
+    /** 숨기기 문(POK-463)이 쓰는 칸을 직접 채운다. 이 시험은 조회만 잰다. */
     private void 숨긴다(long id) {
         jdbc.update("UPDATE jump_cards SET hidden_at = now(), hidden_by = '99' WHERE id = ?", id);
     }
