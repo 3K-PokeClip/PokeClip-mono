@@ -915,7 +915,7 @@ chat-detector의 `V401`(`chat_metrics`, POK-120)이다.
 **chat-collector 대역 열:** `V301`(`chat_messages`) · `V302`(`stream_id` 칸) ·
 `V303`(`chat_ended_streams`) · `V304`(`stop_reason` 칸) · `V305`(`received_at` 색인 — 아래) ·
 **`V306`**(`nickname`·`user_role` 칸 + `(stream_id, message_time)` 부분 색인, POK-234) ·
-**`V307`**(`chat_donations` — 후원, POK-234) · **`V308`**(`broadcast_info` — 방송 정보 관측 이력, POK-234) ·
+**`V307`**(`chat_donations` — 후원, POK-234. `pay_amount`는 치지직 = 원, SOOP = 개수, POK-431) · **`V308`**(`broadcast_info` — 방송 정보 관측 이력, POK-234) ·
 `V309`(`(stream_id, message_time)` 색인을 `CONCURRENTLY`로, POK-234) · **`V310`**(`chat_ingest_keys` — 방송 번호 → 물리 키, POK-233) ·
 `V311`(`purged_channels`, POK-256) · `V312`(정리 색인 셋, `CONCURRENTLY`) ·
 **`V313`**(표 넷에 `platform` 칸 + CHECK `NOT VALID` + 명부 PK `(platform, channel_id)`, POK-397) ·
@@ -3985,12 +3985,30 @@ SOOP 수신은 다음 PR이고, 지금 세션을 여는 곳(연동 시작)은 �
 - **탭 하나 = 방송 하나**: 브라우저(Chromium 하나)는 전용 스레드 `soop-chat-browser`가 쥔다(Playwright 객체는 스레드를 못 나눠 쓰고 페이지 콜백도 그
   스레드가 펌프해야 온다). 탭은 빈 페이지(`http://localhost/soop-chat`, 출처를 보는지 문서에 없어 흔한 개발 출처)에 SDK를 싣고 문서 순서대로
   `new SOOP.ChatSDK(앱 키, 비밀값)` → `init()` → `setAuth(토큰)` → `connect()`. 앱 값 · 토큰은 HTML 글자가 아니라 인자로 넘긴다. Chromium은 첫 탭에서 뜬다.
-- **받는 것은 채팅 둘**: `MESSAGE` · `MANAGER_MESSAGE`(역할 `manager`). 입장 · 퇴장 · 공지 · 후원은 버린다(후원은 다음 카드). 받은 채팅은 치지직과 같은 세 길
+- **받는 것은 채팅 둘**: `MESSAGE` · `MANAGER_MESSAGE`(역할 `manager`). 입장 · 퇴장 · 공지는 버린다. 받은 채팅은 치지직과 같은 세 길
   (적재 바구니 · 원본 아카이브 · 화면 중계)에 `platform` `SOOP`, 채널 = 스트리머 SOOP 아이디, 보낸 사람 = SOOP 아이디로 들어간다.
+- **후원**(POK-431): 치지직 후원과 같은 표(`chat_donations`)와 화면 중계(`event: donation`)로 간다. **원본 아카이브에는 안 넣는다**(치지직과 같다, 아래 아카이브 절의 검산 등식).
+
+  | SDK action | 처리 | 이유 |
+  |---|---|---|
+  | `BALLOON_GIFTED` · `ADBALLOON_GIFTED` · `VIDEOBALLOON_GIFTED` · `STICKER_GIFTED` · `BATTLE_MISSION_GIFTED` · `CHALLENGE_MISSION_GIFTED` | 받는다 | 시청자가 이 방송에 보낸 후원(별풍선 · 애드벌룬 · 영상풍선 · 스티커 · 대결 미션 · 도전 미션) |
+  | 위 여섯 중 `fromVod` 또는 `fromStation`이 참 | 버리고 센다 | 다시보기 · 방송국에서 보낸 것이라 지금 방송의 반응이 아니다. 닫을 때 `soop.chat.closed … vodStationDonationsDropped=` 합계(칸 뜻을 잘못 읽었으면 후원이 전부 여기로 오므로) |
+  | 위 여섯 중 `relaysBroad`가 참 | 버리고 센다 | 중계방에서 온 후원. 첫 번 `soop.chat.donation_relay_dropped` INFO, 닫을 때 `soop.chat.closed … relayDonationsDropped=` 합계 |
+  | 미션 정산 · 종료 · 후원자 목록 · 구독(가입 · 갱신 · 선물) · 퀵뷰 · OGQ 이모티콘 선물 · 젬 · 티켓 · 굿즈 | 버린다(페이지에서) | 시청자의 실시간 반응 투표가 아니거나 금액 단위가 다르다 |
+
+  칸 짝: `donation_type` = action 이름, `pay_amount` = **개수**(`count`, 숫자가 아니면 NULL. 치지직은 원이라 단위는 종류로 가른다),
+  `donation_text` = 빈 값(SOOP 후원에는 문구가 없다), `donator_channel_id` = 보낸 사람 SOOP 아이디, 받은 시각 = 수집기 시계.
+  🔴 **받은 순번은 음수(-1, -2, …)로 프로세스 하나에서 센다**: 중복 열쇠 `uq_chat_donations_received`에 플랫폼이 없어, 같은 방송을 치지직과
+  SOOP에 같이 내보낼 때 양쪽이 1부터 세면 같은 밀리초의 n번째 후원끼리 부딪혀 SOOP 후원이 오류 없이 사라진다(일회용 PG 재현). 치지직 순번은
+  늘 양수다. 제약에 플랫폼을 넣는 길은 색인 교체라 하지 않았다.
+  화면은 `donation_type`으로 단위를 골라 「별풍선 N개」처럼 그린다(웹 PR #371).
+  한계: 다시 붙은 직후 SDK가 지난 후원을 다시 준다면 순번이 새로 매겨져 중복으로 남는다(실방송에서 확인할 것) · 끌 때 마지막 저장 뒤에 온
+  후원은 사라진다(SOOP 채팅과 같은 처지) · 칸 이름(`count` · `fromVod` · `fromStation` · `relaysBroad`)은 SDK 문서에서 읽은 것이라
+  실방송에서 그 이름과 모양(참 · 거짓이 `true` · `false`로 오는지)으로 오는지 확인한다. 다른 모양이면 「거짓」으로 읽혀 버릴 후원이 남는 쪽으로 틀린다(잃지는 않는다).
 - 🔴 **시각은 받은 시각이다**(`message_time = received_at`). SOOP 메시지에 시각 · ID가 없다(공식 문서). 시차 보정은 아직 없다(실방송에서 잰 뒤 정한다).
   **멱등 전제**: 지문이 시각을 품어 다시 붙은 직후 SDK가 지난 줄을 다시 준다면 막지 못한다. 문서에 지난 줄을 다시 준다는 말은 없다(실방송에서 확인할 것).
   거꾸로 같은 사람이 같은 글을 같은 밀리초에 두 번 받으면 지문이 같아 하나로 접힌다(드물다, 판정 입력이 그만큼 준다).
-  **채널이 바뀌는 순간의 틈**: 방송 중 다른 SOOP 계정으로 다시 연동하면 옛 탭을 닫고 새로 붙는데, 옛 탭이 실제로 닫히기 전 짧은 틈(펌프 한 번, 약 0.1초)에 온 옛 계정의 채팅이 새 채널 아이디로 저장될 수 있다. 같은 스트리머의 두 계정 사이이고 유실은 없다. 같은 틈에 옛 탭의 늦은 닫힘 · 오류 알림이 새 탭을 한 번 더 다시 열게 할 수 있다(1초 대기 한 번). 근본 처방 후보는 탭마다 세대 번호를 붙여 지난 세대의 알림을 버리는 것(POK-431에서 함께 다룬다).
+  **탭 세대 번호**(POK-431): 탭 명령은 줄에 들어가기만 해서 브라우저가 옛 탭을 실제로 닫기까지 펌프 한 번(약 0.1초)이 걸린다. 그 틈에 옛 탭의 채팅이 새 채널 아이디로 저장되고(채널이 바뀔 때, 실 Chromium 시험으로 재현) 옛 탭의 늦은 닫힘 · 오류가 막 연 새 탭을 또 다시 열게 했다. 그래서 탭을 열 때마다(붙이기 · 다시 붙기 둘 다) 프로세스 하나에서 늘어나는 새 세대를 받고, 브라우저는 이벤트 · 오류마다 그것을 낸 탭의 세대를 싣고, 세션은 지금 연 탭과 다른 세대를 버린다(`soop.chat.stale_event`, 세션마다 처음 한 번 INFO, 그 뒤 DEBUG). 대가: 다시 붙기 직전 옛 탭이 보낸 채팅(그 틈만큼)은 버려진다. 그 탭은 이미 끊겼다고 알린 탭이라 보낼 것이 거의 없다.
 - **Chromium이 죽으면**(메모리 상한 · 충돌) 열려 있던 탭마다 오류로 알려 다시 붙기 줄에 태우고, 다음 열기가 새 브라우저를 띄운다.
 - **끊기면 다시 붙는다**: `handleChatClosed` · `handleError` · SDK를 못 불러옴이면 그 방송이 아직 붙어 있어야 할 때 1초부터 두 배씩(상한 60초) 기다렸다 새 탭으로
   다시 붙는다. 채팅을 하나 받으면 간격을 처음으로 되돌린다.
@@ -3999,7 +4017,7 @@ SOOP 수신은 다음 PR이고, 지금 세션을 여는 곳(연동 시작)은 �
   (`PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`). 탭 하나가 수십 MB라 켤 때 수집기 메모리 상한(dev 576m)을 같이 올린다.
 - **로그에 토큰 · 앱 비밀값 · SOOP 아이디 · 본문 · 닉네임을 안 싣는다.** 방송 번호 · 사유 · 건수 · SDK 오류 코드(영숫자 40자까지)만.
 - 🔴 **확인 안 된 것**(실방송에서만 알 수 있다): 진짜 SDK가 화면 없는 브라우저 · 이 출처에서 붙는지 · 채팅 지연 · 다시 붙은 직후 지난 줄을 다시 주는지 ·
-  SDK가 방송 종료 때 `handleChatClosed`를 부르는지.
+  SDK가 방송 종료 때 `handleChatClosed`를 부르는지 · 후원 칸 이름과 재연결 뒤 지난 후원을 다시 주는지 · 중계방 후원이 얼마나 오는지.
 
 ### 운영 전 잔불 정리: 보관 기한 청소·프록시 IP (POK-89)
 
