@@ -20,7 +20,7 @@ DO $do$
 DECLARE
     leftover text;
 BEGIN
-    -- auth: 표 13 · 이력 표 1
+    -- auth: 표 14 · 이력 표 1
     IF pg_catalog.to_regclass('public.flyway_schema_history_auth') IS NOT NULL THEN
         CREATE SCHEMA IF NOT EXISTS app_auth;
         ALTER TABLE public.flyway_schema_history_auth SET SCHEMA app_auth;
@@ -37,6 +37,7 @@ BEGIN
         ALTER TABLE public.users SET SCHEMA app_auth;
         ALTER TABLE public.withdrawal_purge_jobs SET SCHEMA app_auth;
         ALTER TABLE public.youtube_channel_links SET SCHEMA app_auth;
+        ALTER TABLE public.youtube_video_forget_jobs SET SCHEMA app_auth;
     END IF;
 
     -- clip: 표 13 · 이력 표 1 · 독립 시퀀스 1 · 함수 1(V202)
