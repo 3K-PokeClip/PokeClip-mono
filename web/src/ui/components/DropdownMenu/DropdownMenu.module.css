@@ -3,7 +3,8 @@
   border: 1px solid var(--pc-color-border-default);
   border-radius: var(--pc-radius-lg);
   box-shadow: var(--pc-shadow-lg);
-  z-index: var(--pc-z-dropdown);
+  /* body로 포털되므로 창(--pc-z-modal) 안에서 열어도 창 위에 떠야 한다. Select 목록과 같은 층이다 */
+  z-index: var(--pc-z-popover);
   min-width: calc(180 * var(--pc-u));
   padding: var(--pc-space-1);
   animation: pc-menu-in var(--pc-duration-fast) var(--pc-ease-standard);

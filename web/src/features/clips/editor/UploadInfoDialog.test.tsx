@@ -1,5 +1,5 @@
 import { act } from 'react';
-import { fireEvent, screen, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
 import { describe, expect, it, vi } from 'vitest';
@@ -234,6 +234,100 @@ describe('UploadInfoDialog', () => {
     await upload(user, dialog);
 
     expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ tags: ['보스', '남은 글자'] }));
+  });
+
+  it('넣은 태그는 입력 칸 안, 치는 글자 앞에 쌓이고 칸의 빈 자리를 누르거나 태그를 빼면 글자 칸에 초점이 간다', async () => {
+    const user = userEvent.setup();
+    const { dialog } = renderDialog();
+    const input = dialog().getByRole('textbox', { name: /태그/ });
+    const box = input.parentElement as HTMLElement;
+
+    await user.type(input, '롤{Enter}보스{Enter}');
+    expect(within(box).getByText('롤')).toBeInTheDocument();
+    expect(
+      within(box).getByText('보스').compareDocumentPosition(input) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+
+    await user.click(dialog().getByRole('textbox', { name: /제목/ }));
+    await user.click(box);
+    expect(input).toHaveFocus();
+
+    await user.click(within(box).getByRole('button', { name: '태그 롤 빼기' }));
+    expect(within(box).queryByText('롤')).not.toBeInTheDocument();
+    expect(input).toHaveFocus();
+  });
+
+  it('빈 태그 칸에서 Backspace를 누르면 마지막 태그부터 빠지고, 친 글자가 있으면 글자만 지운다', async () => {
+    const user = userEvent.setup();
+    const { dialog } = renderDialog({}, { tags: ['롤', '보스'] });
+    const input = dialog().getByRole('textbox', { name: /태그/ });
+
+    await user.type(input, '역{Backspace}');
+    expect(input).toHaveValue('');
+    expect(dialog().getByText('보스')).toBeInTheDocument();
+
+    await user.type(input, '{Backspace}');
+    expect(dialog().queryByText('보스')).not.toBeInTheDocument();
+    expect(dialog().getByText('롤')).toBeInTheDocument();
+
+    await user.type(input, '{Backspace}{Backspace}');
+    expect(dialog().queryByText('롤')).not.toBeInTheDocument();
+    expect(input).toHaveValue('');
+  });
+
+  it('태그 빼기 단추는 Tab 순서 밖이고, 글자 맨 앞에서 ←로 들어가 ←→로 오가며 Delete로 뺀다(PR #372 리뷰)', async () => {
+    const user = userEvent.setup();
+    const { dialog } = renderDialog({}, { tags: ['롤', '보스', '역전'] });
+    const input = dialog().getByRole('textbox', { name: /태그/ });
+
+    // 태그가 셋이어도 빼기 단추는 Tab 순서 밖이다: 설명 칸 다음 Tab이 곧 글자 칸이다. (jsdom은 크기가 0이라 창의
+    // FocusScope가 Tab을 가둬 user.tab()으로는 못 잰다: 단추의 tabindex로 잰다)
+    for (const tag of ['롤', '보스', '역전']) {
+      expect(dialog().getByRole('button', { name: `태그 ${tag} 빼기` })).toHaveAttribute(
+        'tabindex',
+        '-1',
+      );
+    }
+    await user.click(input);
+
+    // 글자가 있으면 ←는 글자 사이를 움직이고, 맨 앞에서 한 번 더 누르면 마지막 태그로 간다
+    await user.keyboard('a{ArrowLeft}');
+    expect(input).toHaveFocus();
+    await user.keyboard('{ArrowLeft}');
+    expect(dialog().getByRole('button', { name: '태그 역전 빼기' })).toHaveFocus();
+    await user.keyboard('{ArrowLeft}');
+    expect(dialog().getByRole('button', { name: '태그 보스 빼기' })).toHaveFocus();
+
+    await user.keyboard('{Delete}');
+    expect(dialog().queryByText('보스')).not.toBeInTheDocument();
+    expect(input).toHaveFocus();
+    expect(input).toHaveValue('a');
+    // 칩은 Tab 순서 밖이라 무엇이 빠졌는지 낭독기에 알린다
+    await waitFor(() =>
+      expect(dialog().getByRole('status')).toHaveTextContent('보스 태그를 뺐어요'),
+    );
+
+    // 마지막 태그에서 →는 글자 칸으로 돌아온다
+    await user.keyboard('{Home}{ArrowLeft}');
+    expect(dialog().getByRole('button', { name: '태그 역전 빼기' })).toHaveFocus();
+    await user.keyboard('{ArrowRight}');
+    expect(input).toHaveFocus();
+  });
+
+  it('Backspace를 꾹 눌러 반복되는 입력은 태그를 지우지 않는다(PR #372 리뷰)', async () => {
+    const { dialog } = renderDialog({}, { tags: ['롤', '보스'] });
+    const input = dialog().getByRole('textbox', { name: /태그/ });
+
+    // 글자를 지우던 손이 칸이 빈 뒤에도 눌려 있는 모양: 반복 keydown만 온다
+    fireEvent.keyDown(input, { key: 'Backspace', repeat: true });
+    fireEvent.keyDown(input, { key: 'Backspace', repeat: true });
+    expect(dialog().getByText('롤')).toBeInTheDocument();
+    expect(dialog().getByText('보스')).toBeInTheDocument();
+
+    fireEvent.keyDown(input, { key: 'Backspace' });
+    expect(dialog().queryByText('보스')).not.toBeInTheDocument();
+    expect(dialog().getByText('롤')).toBeInTheDocument();
   });
 
   it('제목이 비었으면 보내지 않고 정보 탭을 열어 그 칸에 말한다', async () => {
