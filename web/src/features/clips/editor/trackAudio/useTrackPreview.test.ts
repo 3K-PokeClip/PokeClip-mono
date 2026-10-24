@@ -393,8 +393,9 @@ describe('useTrackPreview', () => {
     await waitFor(() => expect(second.result.current.status).toBe('unavailable'));
   });
 
-  it('소리 트랙이 하나뿐이면 실패가 아니라 「고를 소리 없음」이다: 영상 소리가 그대로 난다(PR #341 claude)', async () => {
+  it('소리 트랙이 하나뿐이어도 재생기로 튼다: 그 트랙의 음량·넣기가 미리보기에 들린다(PR #341 2차)', async () => {
     vi.mocked(fetch).mockResolvedValue(new Response(new Uint8Array(oneTrack)));
+    const { ctx, gains } = fakeContext();
     const node = video();
     const { result } = renderHook(() =>
       useTrackPreview({
@@ -402,13 +403,15 @@ describe('useTrackPreview', () => {
         baseMs: BASE,
         window: WINDOW,
         video: node,
-        createContext: () => fakeContext().ctx as never,
+        createContext: () => ctx as never,
       }),
     );
-    await waitFor(() => expect(result.current.status).toBe('single'));
-    expect(node.muted).toBe(false);
-    // 파형은 그린다(소리 크기는 보여 줄 수 있다)
+    await waitFor(() => expect(result.current.status).toBe('ready'));
+    expect(node.muted).toBe(true);
     expect(result.current.levels?.tracks).toHaveLength(1);
+    // 음량을 반으로 내리면 재생기 음량도 반이다(영상 소리 100%로 남지 않는다)
+    act(() => result.current.setGains([0.5]));
+    expect(gains.map((g) => g.gain.value)).toEqual([0.5]);
   });
 
   it('영상이 아직 창을 못 받았으면(첫 창을 받는 중 · 녹화 틈) 묻지 않고 기다린다: 실패로 알리지 않는다(PR #341 claude)', () => {

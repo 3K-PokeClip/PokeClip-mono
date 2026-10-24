@@ -13,10 +13,9 @@ import { followVideo, TrackAudioPlayer, type AudioContextLike } from './trackAud
 
 /**
  * - idle: 받을 창이 없다(첫 영상 창을 받는 중 · 녹화가 없는 구간). 알릴 것이 없다
- * - single: 소리 트랙이 하나뿐이다(최종 믹스만). 영상 소리와 같아 고를 소리가 없을 뿐 실패가 아니다
  * - unavailable: 못 불렀다. 영상 소리로 들린다고 화면이 알린다
  */
-export type TrackPreviewStatus = 'idle' | 'loading' | 'ready' | 'single' | 'unavailable';
+export type TrackPreviewStatus = 'idle' | 'loading' | 'ready' | 'unavailable';
 
 export interface TrackPreview {
   status: TrackPreviewStatus;
@@ -126,12 +125,7 @@ export function useTrackPreview(options: {
           setStatus('unavailable');
           return;
         }
-        // 트랙이 하나뿐이면(최종 믹스만) 영상 소리와 같다: 트랙을 꺼도 고를 소리가 없을 뿐 실패가 아니다(PR #341 claude)
-        if (tracks.length === 1) {
-          setPlayer(null);
-          setStatus('single');
-          return;
-        }
+        // 트랙이 하나뿐이어도(최종 믹스만) 재생기로 튼다: 영상 소리로 두면 그 트랙의 음량·넣기가 미리보기에 안 들린다(PR #341 2차)
         const made = new TrackAudioPlayer(decoder, tracks, () => {
           // 소리 문맥을 못 깨웠다: 이 재생기가 아직 쓰이고 있으면 접고 영상 소리로 물러난다
           if (playerRef.current !== made) return;
