@@ -436,6 +436,8 @@ const server = vi.hoisted(() => ({
    * 고르는 질의(limit=1)는 붙들지 않는다
    */
   listGate: null as Promise<void> | null,
+  /** 방송 번호를 고르는 질의(limit=1)의 답을 이 약속이 풀릴 때까지 붙든다: 방송을 정하기 전의 화면을 잰다(POK-445) */
+  pickGate: null as Promise<void> | null,
   /** 「방송 중」 목록의 방송이 위임받은 다른 방송(live-2, EDITOR)으로 바뀌었다 */
   liveStream2: false,
   /** since를 단 방송 정보 조회만 실패한다 */
@@ -703,10 +705,10 @@ function handle(url: string, init?: RequestInit): Response | Promise<Response> {
   const u = new URL(url, 'http://localhost');
   const path = u.pathname;
   if (u.host === 'live.test') return new Response(null, { status: server.liveStatus });
-  if (path === '/api/clip/broadcasts')
-    return server.listGate && u.searchParams.get('limit') !== '1'
-      ? server.listGate.then(() => listResponse(u))
-      : listResponse(u);
+  if (path === '/api/clip/broadcasts') {
+    const gate = u.searchParams.get('limit') === '1' ? server.pickGate : server.listGate;
+    return gate ? gate.then(() => listResponse(u)) : listResponse(u);
+  }
   if (path.endsWith('/marks') && init?.method === 'POST') {
     server.markBodies.push(JSON.parse(String(init.body)) as Record<string, unknown>);
     const reply = () => {
@@ -890,6 +892,7 @@ beforeEach(() => {
   server.infoFail = false;
   server.liveEnded = false;
   server.listGate = null;
+  server.pickGate = null;
   server.infoNoSinceGate = null;
   server.liveStream2 = false;
   server.infoSinceFail = false;
@@ -1118,6 +1121,75 @@ describe('LiveScreen — 방송 꺼짐', () => {
     expect(
       screen.queryByRole('heading', { name: '지금은 방송 중이 아니에요' }),
     ).not.toBeInTheDocument();
+  });
+});
+
+describe('LiveScreen — 방송을 정하기 전(POK-445)', () => {
+  /** 방송 번호를 고르는 답을 붙든다. 돌려준 함수를 부르면 푼다 */
+  function holdPick() {
+    let release = () => {};
+    server.pickGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    return () => release();
+  }
+
+  it('방송을 정하기 전에는 대시보드 대신 스켈레톤이다: 「방송 중이 아니에요」를 먼저 말하지 않는다', async () => {
+    // 빈 방송 번호로 대시보드를 세우면 시계가 「꺼짐」을 퍼뜨려 정보 바·채팅·플레이어가 꺼짐 말로 한 번 섰다가 바뀌었다
+    const release = holdPick();
+    await renderLive();
+
+    expect(screen.getAllByRole('status')).toHaveLength(1);
+    expect(screen.getByRole('status')).toHaveTextContent('라이브 대시보드를 불러오는 중');
+    expect(screen.queryByText('방송 중이 아니에요')).toBeNull();
+    expect(screen.queryByRole('button', { name: /수동 마킹/ })).toBeNull();
+    expect(chatModes).toEqual([]);
+
+    release();
+    await settle();
+    expect(screen.getByRole('button', { name: /수동 마킹/ })).toBeInTheDocument();
+    expect(screen.getByText('스트리밍 중')).toBeInTheDocument();
+    expect(screen.queryByText('라이브 대시보드를 불러오는 중')).toBeNull();
+    // 선 뒤로도 꺼짐 말로 그린 적이 없다
+    expect(chatModes).not.toContain('offline');
+    expect(playerStatuses).not.toContain('offline');
+  });
+
+  it('방송 목록을 못 읽으면 스켈레톤을 둔 채 10초마다 다시 묻고, 읽히면 대시보드가 선다', async () => {
+    server.failLive = true;
+    await renderLive();
+    expect(screen.getByRole('status')).toHaveTextContent('라이브 대시보드를 불러오는 중');
+    // 대시보드 훅(F8 문서 리스너)이 아직 없다
+    fireEvent.keyDown(document, { key: 'F8' });
+    await settle();
+    expect(server.markBodies).toHaveLength(0);
+
+    server.failLive = false;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    await settle();
+    expect(screen.getByRole('button', { name: /수동 마킹/ })).toBeInTheDocument();
+    expect(screen.queryByText('라이브 대시보드를 불러오는 중')).toBeNull();
+  });
+
+  it('지난 방송 상세는 주소가 방송을 못 박아 스켈레톤을 기다리지 않는다', async () => {
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    renderWithProviders(<LiveScreen />);
+
+    expect(screen.queryByText('라이브 대시보드를 불러오는 중')).toBeNull();
+    expect(screen.getByRole('button', { name: /이 시점 카드 추가/ })).toBeInTheDocument();
+    await settle();
+  });
+
+  it('스켈레톤에 접근성 위반이 없다', async () => {
+    holdPick();
+    const { container } = await renderLive();
+    // axe는 진짜 시계로 돈다 — 가짜 시계에서는 제 타이머를 기다리다 멈춘다
+    vi.useRealTimers();
+    await act(async () => {
+      expect(await axe(container)).toHaveNoViolations();
+    });
   });
 });
 
@@ -2244,7 +2316,8 @@ describe('LiveScreen — 수동 마킹', () => {
   });
 
   it('방송 상태를 모르는 동안은 단추가 꺼져 있고 F8도 아무것도 안 보낸다', async () => {
-    server.failLive = true;
+    // 방송은 정했지만 명부가 답하지 않았다. 방송을 정하기 전에는 대시보드가 아직 서지 않는다(POK-445, 아래 「방송을 정하기 전」)
+    server.listGate = new Promise(() => undefined);
     await renderLive();
 
     expect(screen.getByRole('button', { name: /수동 마킹/ })).toBeDisabled();
