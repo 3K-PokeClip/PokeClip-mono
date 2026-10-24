@@ -1,0 +1,37 @@
+# terraform.tfvars 로 복사해 실제 값을 넣는다. terraform.tfvars 는 추적하지 않는다.
+
+# OAuth 앱 넷의 client_id · redirect_uri(기본값 없음 — 필수). 콘솔(구글 · GCP ·
+# 치지직 · SOOP 개발자 센터)에 등록한 뒤에 값을 바꾼다 — 거꾸로 하면 동의가
+# 거부된다. 등록 순서는 kty 가 쥔다(services README 「OAuth 리다이렉트 · 출처
+# 값」 — prod 주소도 그 표). redirect_uri 는 https 절대 주소이고 localhost 가
+# 아니다(변수 검증). platform plan 의 app_env 값 검사는 쿼리 키에 passw · pwd ·
+# secret · token 이 든 주소를 거부한다 — redirect_uri 에 그런 쿼리를 붙이지
+# 않는다. CLIENT_SECRET 넷은 여기가 아니라 비밀 그릇이다(runbooks/runtime-1a.md
+# 「1단-다」 의 값 넣기).
+auth_oauth_apps = {
+  google = {
+    client_id    = "<GOOGLE_CLIENT_ID>"
+    redirect_uri = "https://app.pokeclip.com/auth/callback"
+  }
+  chzzk = {
+    client_id    = "<CHZZK_CLIENT_ID>"
+    redirect_uri = "https://app.pokeclip.com/oauth/chzzk/callback"
+  }
+  youtube = {
+    client_id    = "<YOUTUBE_CLIENT_ID>"
+    redirect_uri = "https://app.pokeclip.com/oauth/youtube/callback"
+  }
+  soop = {
+    client_id    = "<SOOP_CLIENT_ID>"
+    redirect_uri = "https://app.pokeclip.com/oauth/soop/callback"
+  }
+}
+
+# 프로필 사진 주소의 앞부분(브라우저가 붙는 주소 — 같은-오리진 리라이트).
+# 기본값이 앱 호스트라 호스트를 바꿀 때만 켠다. 끝 / · 쿼리 · 조각은 받지 않는다.
+# profile_photo_base_url = "https://app.pokeclip.com"
+
+# clip 일 스위치(기본 셋 다 켬). 사고 때(예: 유튜브 할당량) 한쪽만 끈다 —
+# render · upload 를 둘 다 끄는 값은 plan 에서 멈춘다(탈퇴 정리가 녹화 조각을
+# 지우지 못한다).
+# clip_job_features = { render = true, upload = false, thumbnail = true }
