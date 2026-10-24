@@ -61,20 +61,81 @@ describe('StudioScreen', () => {
     expect(container.querySelectorAll('[data-outside]')).toHaveLength(2);
   });
 
-  it('소리 트랙 줄 머리에서 바로 넣고 뺀다: 오디오 메뉴와 같은 값이다(POK-389)', async () => {
+  it('소리 트랙 줄 머리에서 바로 넣고 뺀다: 뺀 줄은 음량 숫자를 감춘다(POK-389)', async () => {
     const user = userEvent.setup();
     const { container } = renderStudio();
     const timeline = screen.getByRole('region', { name: '타임라인' });
 
     const discord = within(timeline).getByRole('button', { name: '디스코드 넣기' });
     expect(discord).toHaveAttribute('aria-pressed', 'true');
+    expect(
+      within(timeline).getByRole('button', { name: '디스코드 음량 100%' }),
+    ).toBeInTheDocument();
     await user.click(discord);
     expect(discord).toHaveAttribute('aria-pressed', 'false');
-    expect(within(timeline).getByText('안 넣음')).toBeInTheDocument();
+    expect(
+      within(timeline).queryByRole('button', { name: /디스코드 음량/ }),
+    ).not.toBeInTheDocument();
     expect(container.querySelector('[data-track-row="discord"]')).toHaveAttribute('data-muted');
+  });
 
+  it('오디오 메뉴에는 음량이 없다: 방송 소리는 타임라인에서 다룬다고 안내한다(POK-389)', async () => {
+    const user = userEvent.setup();
+    renderStudio();
     await user.click(screen.getByRole('tab', { name: '오디오' }));
-    expect(screen.getByRole('checkbox', { name: '디스코드 넣기' })).not.toBeChecked();
+    const audio = screen.getByRole('region', { name: '오디오' });
+
+    expect(within(audio).queryByRole('slider')).not.toBeInTheDocument();
+    expect(within(audio).queryByRole('checkbox')).not.toBeInTheDocument();
+    expect(within(audio).getByText(/타임라인 트랙 줄에서 넣고 빼요/)).toBeInTheDocument();
+  });
+
+  it('음량 숫자를 누르면 막대 창이 뜨고, 50 · 100 · 150%로 바로 고른다(POK-389)', async () => {
+    const user = userEvent.setup();
+    renderStudio();
+    const timeline = screen.getByRole('region', { name: '타임라인' });
+
+    await user.click(within(timeline).getByRole('button', { name: '마이크 음량 80%' }));
+    const panel = screen.getByRole('dialog');
+    expect(within(panel).getByRole('slider', { name: '마이크 볼륨' })).toHaveAttribute(
+      'aria-valuemax',
+      '200',
+    );
+    await user.click(within(panel).getByRole('button', { name: '150%' }));
+    expect(within(timeline).getByRole('button', { name: '마이크 음량 150%' })).toBeInTheDocument();
+  });
+
+  it('음량 숫자를 좌우로 끌면 바로 바뀌고 막대 창은 안 뜬다: 끈 것은 실행취소 한 칸이다(POK-389)', () => {
+    renderStudio();
+    const timeline = screen.getByRole('region', { name: '타임라인' });
+    const mic = within(timeline).getByRole('button', { name: '마이크 음량 80%' });
+
+    fireEvent.pointerDown(mic, { clientX: 100, pointerId: 1, button: 0 });
+    fireEvent.pointerMove(mic, { clientX: 115, pointerId: 1 });
+    fireEvent.pointerMove(mic, { clientX: 130, pointerId: 1 });
+    fireEvent.pointerUp(mic, { pointerId: 1 });
+    fireEvent.click(mic);
+
+    expect(within(timeline).getByRole('button', { name: '마이크 음량 110%' })).toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    // 끄는 동안 여러 번 바뀌어도 되돌리기 한 번에 끌기 전으로 돌아간다
+    fireEvent.click(screen.getByRole('button', { name: '작업 이전으로' }));
+    expect(within(timeline).getByRole('button', { name: '마이크 음량 80%' })).toBeInTheDocument();
+  });
+
+  it('음량 숫자에 초점이 있으면 ← → 가 5%씩 바꾸고 재생 위치는 안 움직인다(POK-389)', async () => {
+    const user = userEvent.setup();
+    renderStudio();
+    const timeline = screen.getByRole('region', { name: '타임라인' });
+    const before = transportClock();
+
+    within(timeline).getByRole('button', { name: '마이크 음량 80%' }).focus();
+    await user.keyboard('{ArrowRight}');
+    expect(within(timeline).getByRole('button', { name: '마이크 음량 85%' })).toBeInTheDocument();
+    await user.keyboard('{ArrowLeft}{ArrowLeft}');
+    expect(within(timeline).getByRole('button', { name: '마이크 음량 75%' })).toBeInTheDocument();
+    expect(transportClock()).toBe(before);
   });
 
   it('트랙을 빼거나 음량을 바꾸면 미리 듣기 음량에도 바로 넘긴다: 트랙 순서가 번호다(POK-389)', async () => {
@@ -854,7 +915,8 @@ describe('StudioScreen', () => {
   it('볼륨 슬라이더가 포인터로 살아 있다: 제스처 핸들러가 DS 핸들러를 덮지 않는다', async () => {
     const user = userEvent.setup();
     renderStudio();
-    await user.click(screen.getByRole('tab', { name: '오디오' }));
+    // 음량 막대는 트랙 줄의 음량 숫자를 누르면 뜨는 창 안에 있다
+    await user.click(screen.getByRole('button', { name: '마이크 음량 80%' }));
 
     const [slider] = screen.getAllByRole('slider', { name: /볼륨/ });
     if (slider === undefined) throw new Error('볼륨 슬라이더가 없다');
@@ -883,18 +945,20 @@ describe('StudioScreen', () => {
     expect(screen.getByRole('slider', { name: '구간 끝점' })).toBeInTheDocument();
   });
 
-  it('체크박스를 누른 뒤에도 ⌘Z가 먹는다: 체크박스는 글자 입력이 아니다', async () => {
+  it('넣기 단추를 누른 뒤에도 ⌘Z가 먹는다: 단추는 글자 입력이 아니다', async () => {
     const user = userEvent.setup();
     renderStudio();
 
-    await user.click(screen.getByRole('tab', { name: '오디오' }));
-    const mic = screen.getByRole('checkbox', { name: '마이크 넣기' });
+    const mic = screen.getByRole('button', { name: '마이크 넣기' });
     await user.click(mic);
-    expect(mic).not.toBeChecked();
+    expect(mic).toHaveAttribute('aria-pressed', 'false');
 
-    // 포커스가 체크박스(input)에 남은 채로 되돌린다
+    // 포커스가 넣기 단추에 남은 채로 되돌린다
     await user.keyboard('{Meta>}z{/Meta}');
-    expect(screen.getByRole('checkbox', { name: '마이크 넣기' })).toBeChecked();
+    expect(screen.getByRole('button', { name: '마이크 넣기' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
   });
 
   it('키마다 주인이 다르다 — 버튼 위 화살표는 시킹, 슬라이더 위 Space는 재생', async () => {

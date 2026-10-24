@@ -306,7 +306,10 @@ export function MultitrackTimeline({
                 {subtitleBlocks.length > 0 ? (
                   <div className={styles.trackRow}>
                     <span className={styles.trackLabel}>
-                      <Captions size={12} aria-hidden />
+                      {/* 아이콘은 소리 줄의 스피커와 같은 칸에 둬서 이름이 한 줄로 맞는다 */}
+                      <span className={styles.trackLead}>
+                        <Captions size={13} aria-hidden />
+                      </span>
                       <span data-row-label>자막</span>
                     </span>
                     <div className={styles.lane} data-kind="subtitle">
@@ -325,7 +328,9 @@ export function MultitrackTimeline({
                 ) : null}
                 <div className={styles.trackRow}>
                   <span className={styles.trackLabel}>
-                    <Film size={12} aria-hidden />
+                    <span className={styles.trackLead}>
+                      <Film size={13} aria-hidden />
+                    </span>
                     <span data-row-label>영상</span>
                     <ThumbnailTile
                       seconds={state.thumbnailSeconds}
@@ -353,6 +358,7 @@ export function MultitrackTimeline({
                       key={track.id}
                       track={track}
                       onToggleMute={state.toggleTrackMute}
+                      volumeControls={state}
                       levels={
                         levels === undefined
                           ? undefined

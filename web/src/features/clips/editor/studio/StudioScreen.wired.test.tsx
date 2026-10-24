@@ -456,8 +456,7 @@ describe('StudioScreen — 카드로 연 실제 편집기', () => {
     const user = userEvent.setup();
     const save = await openFrom(`stream=${STREAM_ID}&card=5`);
 
-    await user.click(screen.getByRole('tab', { name: '오디오' }));
-    await user.click(screen.getByRole('checkbox', { name: '트랙 2 넣기' }));
+    await user.click(screen.getByRole('button', { name: '트랙 2 넣기' }));
     await user.click(save);
 
     await waitFor(() =>
@@ -535,8 +534,7 @@ describe('StudioScreen — 카드로 연 실제 편집기', () => {
     await waitFor(() => expect(renders()).toBe(1));
     expect(bodiesOf('PUT', `/api/clip/broadcasts/${STREAM_ID}/recipes/31`)).toHaveLength(0);
 
-    await user.click(screen.getByRole('tab', { name: '오디오' }));
-    await user.click(screen.getByRole('checkbox', { name: '트랙 2 넣기' }));
+    await user.click(screen.getByRole('button', { name: '트랙 2 넣기' }));
     await orderVideo(user);
     await waitFor(() => expect(renders()).toBe(2));
     expect(bodiesOf('PUT', `/api/clip/broadcasts/${STREAM_ID}/recipes/31`)[0]?.audio).toEqual({
@@ -544,27 +542,27 @@ describe('StudioScreen — 카드로 연 실제 편집기', () => {
     });
   });
 
-  it('오디오 스위치가 계약을 지킨다 — 최종 믹스와 방송 트랙은 하나만, 마지막 트랙은 못 끈다', async () => {
+  it('넣기 단추가 계약을 지킨다 — 최종 믹스와 방송 트랙은 하나만, 마지막 트랙은 못 끈다', async () => {
     // 저장할 때 조용히 바꾸면 화면과 다른 소리가 렌더된다(PR #200 codex P1)
     const user = userEvent.setup();
     await openFrom(`stream=${STREAM_ID}&card=5`);
-    await user.click(screen.getByRole('tab', { name: '오디오' }));
-    const mix = () => screen.getByRole('checkbox', { name: '최종 믹스(트랙 1) 넣기' });
-    const track2 = () => screen.getByRole('checkbox', { name: '트랙 2 넣기' });
-    expect(mix()).toBeChecked();
+    const mix = () => screen.getByRole('button', { name: '최종 믹스(트랙 1) 넣기' });
+    const track2 = () => screen.getByRole('button', { name: '트랙 2 넣기' });
+    const on = (button: HTMLElement) => button.getAttribute('aria-pressed') === 'true';
+    expect(on(mix())).toBe(true);
 
     await user.click(track2());
-    expect(track2()).toBeChecked();
-    expect(mix()).not.toBeChecked();
+    expect(on(track2())).toBe(true);
+    expect(on(mix())).toBe(false);
 
     // 마지막으로 켜진 트랙은 끄지 않고 이유를 말한다
     await user.click(track2());
-    expect(track2()).toBeChecked();
+    expect(on(track2())).toBe(true);
     expect(await screen.findByText('트랙을 하나는 켜 둬야 해요')).toBeInTheDocument();
 
     await user.click(mix());
-    expect(mix()).toBeChecked();
-    expect(track2()).not.toBeChecked();
+    expect(on(mix())).toBe(true);
+    expect(on(track2())).toBe(false);
   });
 });
 
@@ -586,15 +584,16 @@ describe('StudioScreen: 편집기에서 고른 썸네일 장면(POK-389)', () =>
   });
 });
 
-describe('StudioScreen: 오디오 탭(POK-389)', () => {
-  it('트랙마다 넣기·음량만 있고 빠른 설정은 없다: 음량 막대는 저장 계약대로 200%까지다', async () => {
+describe('StudioScreen: 트랙 줄 넣기 · 음량(POK-389)', () => {
+  it('스트리머가 적은 트랙 이름으로 줄 머리가 서고, 음량 막대는 저장 계약대로 200%까지다', async () => {
     server.myTrackLabels = [null, '마이크', '게임', null, null, null];
     const user = userEvent.setup();
     await openFrom(`stream=${STREAM_ID}&card=5`);
 
-    await user.click(screen.getByRole('tab', { name: '오디오' }));
-    expect(screen.queryByRole('radiogroup', { name: '빠른 설정' })).not.toBeInTheDocument();
-    expect(screen.getByRole('checkbox', { name: '마이크 넣기' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '마이크 넣기' })).toBeInTheDocument();
+    // 처음엔 최종 믹스만 켜져 있다: 마이크를 켜야 음량 숫자가 선다
+    await user.click(screen.getByRole('button', { name: '마이크 넣기' }));
+    await user.click(screen.getByRole('button', { name: '마이크 음량 100%' }));
     expect(screen.getByRole('slider', { name: '마이크 볼륨' })).toHaveAttribute(
       'aria-valuemax',
       '200',
@@ -1087,9 +1086,11 @@ describe('StudioScreen: 영상 만들기 + 유튜브 올리기(POK-291)', () => 
   it('창이 떠 있는 동안 ⌘Z·Space는 뒤 편집기를 안 바꾼다: 창 안 라디오는 Space로 골라진다', async () => {
     const user = userEvent.setup();
     await openFrom(`stream=${STREAM_ID}&card=5`);
-    await user.click(screen.getByRole('tab', { name: '오디오' }));
-    await user.click(screen.getByRole('checkbox', { name: '트랙 2 넣기' }));
-    expect(screen.getByRole('checkbox', { name: '트랙 2 넣기' })).toBeChecked();
+    await user.click(screen.getByRole('button', { name: '트랙 2 넣기' }));
+    expect(screen.getByRole('button', { name: '트랙 2 넣기' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
 
     await user.click(screen.getByRole('button', { name: '영상 만들기' }));
     await user.click(dialog().getByRole('tab', { name: '공개' }));
@@ -1106,14 +1107,16 @@ describe('StudioScreen: 영상 만들기 + 유튜브 올리기(POK-291)', () => 
     await user.click(dialog().getByRole('tab', { name: '정보' }));
     await user.click(dialog().getByRole('button', { name: '취소' }));
     // ⌘Z가 창 뒤로 샜으면 트랙 2가 꺼져 있다
-    expect(screen.getByRole('checkbox', { name: '트랙 2 넣기' })).toBeChecked();
+    expect(screen.getByRole('button', { name: '트랙 2 넣기' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
   });
 
   it('카드로 연 편집기를 처음 저장하면 주소가 ?recipe= 로 바뀌고, 다시 읽지 않아 실행취소가 남는다', async () => {
     const user = userEvent.setup();
     const save = await openFrom(`stream=${STREAM_ID}&card=5`);
-    await user.click(screen.getByRole('tab', { name: '오디오' }));
-    await user.click(screen.getByRole('checkbox', { name: '트랙 2 넣기' }));
+    await user.click(screen.getByRole('button', { name: '트랙 2 넣기' }));
 
     await user.click(save);
     await screen.findByText(/편집본 #31 v1 저장됨/);

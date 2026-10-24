@@ -254,59 +254,133 @@
   color: var(--pc-color-text-secondary);
 }
 
-.trackControls {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: calc(6 * var(--pc-u));
-}
-
-.trackToggle {
+/* 줄 맨 앞 칸: 소리 줄은 넣기 스피커, 영상 · 자막 줄은 아이콘이 같은 폭으로 서서 이름이 한 줄로 맞는다 */
+.trackLead,
+.trackSpeaker {
+  flex: none;
+  width: calc(24 * var(--pc-u));
+  height: calc(24 * var(--pc-u));
   display: grid;
   place-items: center;
-  width: calc(14 * var(--pc-u));
-  height: calc(14 * var(--pc-u));
+  border-radius: calc(6 * var(--pc-u));
+}
+
+.trackLead {
+  color: var(--pc-color-text-muted);
+}
+
+/* 넣기: 켜면 강조색 바탕의 스피커, 빼면 바탕 없는 음소거 스피커 */
+.trackSpeaker {
   padding: 0;
-  border-radius: calc(3 * var(--pc-u));
-  border: 1px solid var(--pc-color-border-strong);
-  background: transparent;
-  color: var(--pc-color-text-on-accent);
+  border: 0;
+  background: var(--pc-color-accent-subtle);
+  color: var(--pc-color-accent-text);
   cursor: pointer;
 }
 
-.trackToggle[aria-pressed='true'] {
-  border-color: var(--pc-color-accent);
-  background: var(--pc-color-accent);
-}
-
-.trackToggle:focus-visible {
-  outline: 2px solid var(--pc-color-focus-ring);
-  outline-offset: 1px;
-}
-
-.trackRow[data-muted] [data-row-label],
-.trackRow[data-muted] .trackValue {
-  color: var(--pc-color-text-disabled);
-}
-
-.trackValue {
-  font:
-    600 calc(9.5 * var(--pc-u)) ui-monospace,
-    Menlo,
-    monospace;
+.trackSpeaker[aria-pressed='false'] {
+  background: transparent;
   color: var(--pc-color-text-muted);
-  /* 「안 넣음」(가장 긴 값)이 한 줄에 들어가는 폭. 좁으면 두 줄로 접힌다(오디오 메뉴 값 칸과 같은 처방) */
-  flex: 0 0 calc(34 * var(--pc-u));
-  white-space: nowrap;
-  text-align: right;
 }
 
-/* 줄 이름은 한 줄로 줄인다: 이름 칸 폭이 정해져 있어 긴 이름이 넣기·값 칸을 밀지 않게 */
+.trackSpeaker:hover {
+  filter: brightness(1.15);
+}
+
+/* 뺀 줄은 이름을 한 단계만 낮춘다 — 흐린 회색은 못 누르는 줄처럼 읽혔다 */
+.trackRow[data-muted] [data-row-label] {
+  color: var(--pc-color-text-muted);
+}
+
+/* 줄 이름은 한 줄로 줄인다: 이름 칸 폭이 정해져 있어 긴 이름이 넣기·음량 칸을 밀지 않게 */
 .trackLabel [data-row-label] {
+  flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 음량 숫자: 누르면 막대, 좌우로 끌면 바로 바뀐다. 비례폭 글꼴에 같은 폭 숫자(고정폭 글꼴은 띄엄띄엄 보였다) */
+.trackVolume {
+  flex: none;
+  width: calc(42 * var(--pc-u));
+  height: calc(22 * var(--pc-u));
+  padding: 0 calc(5 * var(--pc-u));
+  border: 1px solid transparent;
+  border-radius: calc(6 * var(--pc-u));
+  background: transparent;
+  color: var(--pc-color-text-secondary);
+  font-family: inherit;
+  font-size: calc(10.5 * var(--pc-u));
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  cursor: ew-resize;
+  touch-action: none;
+  user-select: none;
+}
+
+/* 바꿀 수 있다는 표시: 올리거나 연 동안 테두리 */
+.trackVolume:hover,
+.trackVolume[aria-expanded='true'] {
+  border-color: var(--pc-color-border-default);
+  background: var(--pc-color-bg-surface-hover);
+}
+
+.trackSpeaker:focus-visible,
+.trackVolume:focus-visible,
+.volumePreset:focus-visible {
+  outline: 2px solid var(--pc-color-focus-ring);
+  outline-offset: 1px;
+}
+
+/* 음량 막대 창 */
+.volumePopover {
+  width: calc(210 * var(--pc-u));
+  display: flex;
+  flex-direction: column;
+  gap: calc(10 * var(--pc-u));
+  font-size: calc(12 * var(--pc-u));
+}
+
+.volumePopoverHead {
+  display: flex;
+  justify-content: space-between;
+  gap: calc(8 * var(--pc-u));
+  font-weight: 650;
+}
+
+.volumePopoverHead b {
+  font-variant-numeric: tabular-nums;
+}
+
+.volumePresets {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: calc(6 * var(--pc-u));
+}
+
+.volumePreset {
+  height: calc(26 * var(--pc-u));
+  border: 1px solid var(--pc-color-border-default);
+  border-radius: var(--pc-radius-pill);
+  background: transparent;
+  color: var(--pc-color-text-secondary);
+  font-family: inherit;
+  font-size: calc(11 * var(--pc-u));
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.volumePreset:hover {
+  background: var(--pc-color-bg-surface-hover);
+}
+
+.volumePreset[aria-pressed='true'] {
+  border-color: var(--pc-color-accent);
+  background: var(--pc-color-accent-subtle);
+  color: var(--pc-color-accent-text);
 }
 
 .lane {
