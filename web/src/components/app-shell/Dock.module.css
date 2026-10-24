@@ -123,14 +123,19 @@
 
 /* 배경·테두리는 .pill이 그린다. 여기엔 글자 표현만 남긴다.
    예전의 padding 9u 오버라이드는 뺐다 — 활성 전환마다 항목 폭이 2u씩 튀었다.
-   흰 글자는 알약을 따라간다(끄는 동안 손가락 아래 칸). 굵기는 지금 탭에 둔다 — 끄는 동안 칸 폭이 바뀌면
+   알약 위 글자색(다크 흰색 · 라이트 진한 남색)은 알약을 따라간다(끄는 동안 손가락 아래 칸). 굵기는 지금 탭에 둔다 — 끄는 동안 칸 폭이 바뀌면
    손가락 아래 칸이 달라진다. */
 .item[aria-current='page'] {
   font-weight: 650;
 }
 
 .item[data-pill] {
-  color: var(--pc-white); /* 테마 고정 — 브랜드 알약 위 글자 */
+  color: var(--pc-white); /* 라이트 덮음 */
+}
+
+/* 반투명 알약이 라이트 유리 위에선 옅은 하늘색이 돼 흰 글자가 1.6~1.8:1 — 라이트는 진한 남색 글자(5.4:1 이상) */
+:global([data-theme='light']) .item[data-pill] {
+  color: var(--pc-color-accent-text);
 }
 
 .item:focus-visible {
