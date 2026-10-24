@@ -540,9 +540,14 @@ run "clip_task_role_allows_queues_and_buckets" {
         sid       = "SegmentDelete"
         actions   = ["s3:DeleteObject"]
         resources = ["arn:aws:s3:::pokeclip-prod-rewind-example/*"]
+      }) &&
+      jsonencode({ for statement in local.task_role_statements.clip : statement.sid => statement }["SegmentRead"]) == jsonencode({
+        sid       = "SegmentRead"
+        actions   = ["s3:GetObject"]
+        resources = ["arn:aws:s3:::pokeclip-prod-rewind-example/*"]
       })
     )
-    error_message = "clip S3 문장(클립 창고 읽기 · 쓰기 · 지우기 · 목록, 조각 창고 지우기)이 다르다."
+    error_message = "clip S3 문장(클립 창고 읽기 · 쓰기 · 지우기 · 목록, 조각 창고 지우기 · 읽기)이 다르다."
   }
 
   assert {

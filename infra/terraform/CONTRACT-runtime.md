@@ -78,7 +78,7 @@ clip ↔ auth · RDS ← auth · clip · 로드밸런서 → Media 규칙은 위
 | clip | `render_queue_arn` · `upload_queue_arn` · `thumbnail_queue_arn` | SQS 큐 ARN | `sqs:SendMessage` |
 | clip | `render_dlq_arn` · `upload_dlq_arn` | SQS 큐 ARN | `sqs:ReceiveMessage` · `DeleteMessage` |
 | clip | `clips_bucket_arn` | `arn:aws:s3:::<버킷>` | `s3:GetObject` · `PutObject` · `DeleteObject`(`/*`) · `s3:ListBucket`(버킷) |
-| clip | `segment_bucket_arn` | `arn:aws:s3:::<버킷>` | `s3:DeleteObject`(`/*`) |
+| clip | `segment_bucket_arn` | `arn:aws:s3:::<버킷>` | `s3:DeleteObject` · `GetObject`(`/*`) |
 
 *   auth 의 스트림 키 비밀(이름 = 접두 + UUID, auth 가 만든다)은 런타임
     자원이 아닙니다. platform 이 접두 `pokeclip/prod/stream-key/` 로 정책 ·

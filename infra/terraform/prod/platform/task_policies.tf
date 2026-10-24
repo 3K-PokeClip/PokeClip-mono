@@ -69,6 +69,12 @@ locals {
         actions   = ["s3:DeleteObject"]
         resources = [for arn in compact([try(local.clip_arns.segment_bucket_arn, "")]) : "${arn}/*"]
       },
+      {
+        # 트랙별 미리 듣기의 조각 서명 URL(SegmentAudioSigner)이 이 역할 자격으로 서명된다(POK-389).
+        sid       = "SegmentRead"
+        actions   = ["s3:GetObject"]
+        resources = [for arn in compact([try(local.clip_arns.segment_bucket_arn, "")]) : "${arn}/*"]
+      },
     ]
   }
 
