@@ -495,7 +495,7 @@ const server = vi.hoisted(() => ({
   liveOffsetMs: 0,
   /** 라이브 줄에 시작 시각이 없고 시각 기준점만 있다(명부가 시작을 모르는 라이브) */
   liveStartUnknown: false,
-  /** 수집기가 관측마다 카테고리를 싣는다(아직 안 싣는다 — 실으면 통계가 바뀐 구간을 나눈다) */
+  /** 수집기가 관측마다 카테고리를 싣는다(POK-402) — 통계가 바뀐 구간을 나눈다 */
   infoCategoryChange: false,
   /**
    * SOOP로만 켠 방송(POK-397): 치지직은 앞서 켰다가 꺼져 묶음에만 남았다. 플랫폼 구분 없는 가장 새 관측(latest)은 치지직 줄이고
@@ -2791,6 +2791,35 @@ describe('LiveScreen — 실시간 통계', () => {
     // 관측: 8분 전·5분 전 저스트 채팅, 1분 전 리그 오브 레전드. 처음 관측 앞은 모른다(띠를 지어내지 않는다)
     expect(screen.getByTitle('저스트 채팅 · 7분')).toBeInTheDocument();
     expect(screen.getByTitle(/^리그 오브 레전드 · /)).toBeInTheDocument();
+  });
+
+  it('실시간으로 온 관측의 카테고리도 띠를 나눈다: 정기 조회를 기다리지 않는다 (POK-465)', async () => {
+    // 통로가 관측을 이어 붙일 때 카테고리를 버리면 바뀐 카테고리가 다음 정기 조회까지 띠에 안 보였다
+    server.infoCategoryChange = true;
+    graphWidth();
+    await renderLive();
+    // 정기 조회는 실패시켜 받아 둔 기록을 덮지 않게 한다: 이 시험은 통로로 온 몫만 잰다
+    server.infoSinceFail = true;
+    const sseReads = () =>
+      fetchSpy.mock.calls.filter(([u]) => String(u).endsWith('/events')).length;
+    const before = sseReads();
+    server.sseInfo = [
+      {
+        time: new Date(Date.now() + 60_000).toISOString(),
+        title: INFO.latest.title,
+        tags: [],
+        category: '발로란트',
+        viewers: 1900,
+      },
+    ];
+    // 첫 통로는 용량 초과(503)라 60초 쉬고 다시 붙는다
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(61_000);
+    });
+    await settle();
+
+    expect(sseReads(), '통로에 다시 안 붙었다: 이 갈래는 아무것도 안 잰다').toBeGreaterThan(before);
+    expect(screen.getByTitle(/^발로란트 · /)).toBeInTheDocument();
   });
 });
 

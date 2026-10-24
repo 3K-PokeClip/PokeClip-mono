@@ -31,7 +31,7 @@ export interface LiveStatsMockState {
   scope: LiveChartScope | null;
   /** 믿는 시청자 기록 중 잰 값만(빈 관측은 뺀다) */
   viewers: ViewerPoint[];
-  /** 카테고리가 바뀐 기록. 수집기가 관측마다 카테고리를 싣기 전에는 마지막 카테고리 하나가 그래프 처음부터다 */
+  /** 카테고리가 바뀐 기록. 관측에 카테고리가 하나도 없으면(옛 서버) 마지막 카테고리 하나가 그래프 처음부터다 */
   categories: CategoryMark[];
   chat: StatsCell;
   viewerCell: StatsCell;
