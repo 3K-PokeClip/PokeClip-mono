@@ -92,13 +92,15 @@ public sealed interface RelayPayload permits RelayPayload.Chat, RelayPayload.Don
      * 창구 칸(nickname 등)은 비고 {@code title}·{@code tags}·{@code category}·{@code viewers}가 찬다.
      * {@code viewers}의 {@code null}은 「목록에서 못 찾았다」이지 0명이 아니다({@code BroadcastInfo} 주석).
      * {@code platform}은 그 관측을 남긴 플랫폼이다(POK-397). 한 방송을 두 플랫폼에 같이 내보내면 화면이 이것으로 숫자를 가른다.
+     * {@code categoryImageUrl}은 카테고리 사진 주소다(POK-462, 치지직 방송 설정에서만 온다. 없으면 null).
      */
-    record Info(Platform platform, Instant time, String title, java.util.List<String> tags, String category, Integer viewers)
-            implements RelayPayload {
+    record Info(Platform platform, Instant time, String title, java.util.List<String> tags, String category, Integer viewers,
+                String categoryImageUrl) implements RelayPayload {
 
         public Info {
             title = stripNul(title);
             category = stripNul(category);
+            categoryImageUrl = stripNul(categoryImageUrl);
             tags = tags == null ? java.util.List.of()
                     : tags.stream().filter(java.util.Objects::nonNull).map(RelayPayload::stripNul).toList();
         }

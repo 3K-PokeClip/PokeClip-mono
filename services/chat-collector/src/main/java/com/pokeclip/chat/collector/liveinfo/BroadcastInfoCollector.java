@@ -135,7 +135,7 @@ public class BroadcastInfoCollector {
                 // 잊은 번호 카운터를 되살려 끝난 방송에 이벤트가 가고 카운터가 샌다. 확인과 넣기 사이의 좁은 창은 남는다.
                 if (session.streamId().equals(registry.currentStreamIdOf(session.streamerId()))) {
                     relay.offer(info.streamId(), new RelayPayload.Info(info.platform(), info.observedAt(), info.title(), info.tags(),
-                            info.category(), info.viewers()));
+                            info.category(), info.viewers(), info.categoryImageUrl()));
                 }
                 // 목록에서 찾았다는 것이 그 방송이 치지직에서 켜져 있다는 증거다. 알림은 모든 방송의 저장·중계 뒤에 한 번에 보낸다:
                 // clip이 늦어도 정보는 남고 뒤 방송 관측이 안 밀린다.
@@ -214,14 +214,14 @@ public class BroadcastInfoCollector {
         return found;
     }
 
-    /** 설정이 이기고, 없으면 목록 값으로 채운다. 시청자 수는 목록에서만 온다. */
+    /** 설정이 이기고, 없으면 목록 값으로 채운다. 시청자 수는 목록에서만, 카테고리 사진은 설정에서만 온다(목록에 칸이 없다). */
     static BroadcastInfo merge(ActiveSession session, SettingResult result, LiveEntry live, Instant observedAt) {
         ChzzkLiveInfoClient.LiveSetting setting = result.setting();
         String title = setting != null ? setting.title() : live == null ? null : live.liveTitle();
         List<String> tags = setting != null ? setting.tags() : live == null ? List.of() : live.tags();
         String category = setting != null ? setting.category() : live == null ? null : live.category();
         return new BroadcastInfo(session.platform(), session.streamId(), session.channelId(), observedAt, title, tags, category,
-                live == null ? null : live.viewers());
+                live == null ? null : live.viewers(), setting == null ? null : setting.categoryImageUrl());
     }
 
     private static Duration min(Duration a, Duration b) {

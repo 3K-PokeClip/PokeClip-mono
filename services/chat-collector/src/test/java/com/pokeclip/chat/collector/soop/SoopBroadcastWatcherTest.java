@@ -114,6 +114,27 @@ class SoopBroadcastWatcherTest {
         return new SoopLiveStatus(outcome, null, null, null);
     }
 
+    /** SOOP 카테고리 이름과 치지직에서 빌린 사진(POK-462)이 정보 줄과 SSE에 같이 실린다. 태그는 빈 목록이다. */
+    @Test
+    void 카테고리와_빌린_사진이_정보_줄과_SSE에_실린다() {
+        linkAnswers.add(link("tok-1", now.get().plus(Duration.ofHours(8))));
+        liveAnswers.add(new SoopLiveStatus(SoopLiveStatus.Outcome.ON_AIR, "숲", "리그 오브 레전드", 3, "https://img.example/lol.jpg"));
+        SoopBroadcastWatcher watcher = watcher();
+
+        watcher.watch("s-1", 42L, 시작);
+        watcher.tick();
+
+        assertThat(stored).singleElement().satisfies(info -> {
+            assertThat(info.category()).isEqualTo("리그 오브 레전드");
+            assertThat(info.categoryImageUrl()).isEqualTo("https://img.example/lol.jpg");
+            assertThat(info.tags()).isEmpty();
+        });
+        assertThat(payloads).singleElement().isInstanceOfSatisfying(RelayPayload.Info.class, info -> {
+            assertThat(info.category()).isEqualTo("리그 오브 레전드");
+            assertThat(info.categoryImageUrl()).isEqualTo("https://img.example/lol.jpg");
+        });
+    }
+
     @Test
     void 연동이_있고_방송_중이면_정보_줄과_SSE와_clip_알림을_남긴다() {
         linkAnswers.add(link("tok-1", now.get().plus(Duration.ofHours(8))));

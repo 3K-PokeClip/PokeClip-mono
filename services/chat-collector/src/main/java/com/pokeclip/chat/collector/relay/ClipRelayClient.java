@@ -179,6 +179,8 @@ public class ClipRelayClient {
                     item.put("category", info.category());
                     item.put("viewers", info.viewers());
                     item.put("platform", info.platform().name());
+                    // 맨 뒤에 더한다(POK-462). clip은 칸을 해석하지 않고 통과시키므로 화면이 바로 받는다.
+                    item.put("categoryImageUrl", info.categoryImageUrl());
                 }
             }
             out.add(item);
