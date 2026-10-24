@@ -112,6 +112,17 @@ public class BroadcastInfoStore {
                      LIMIT 1) t ON true
              ORDER BY s.ord, p.pord""";
 
+    /**
+     * 구간 창구가 접을 줄(POK-462). 방송 하나의 모든 플랫폼 줄을 <b>최신부터</b> 상한 + 1개 뽑는다: 넘치면 잘려 나가는 쪽이 먼 과거여야 하고
+     * (라이브 화면은 최근 값이 필요하다), + 1은 「딱 상한」과 「넘쳤다」를 가르려는 것이다. {@code (stream_id, observed_at)} 색인(V308)을 탄다.
+     */
+    private static final String TIMELINE = "SELECT " + COLUMNS + """
+             FROM broadcast_info
+            WHERE stream_id = ?
+            ORDER BY observed_at DESC, id DESC
+            LIMIT ?
+            """;
+
     private static final String[] PLATFORMS =
             java.util.Arrays.stream(Platform.values()).map(Platform::name).toArray(String[]::new);
 
@@ -214,6 +225,21 @@ public class BroadcastInfoStore {
                 new ArrayList<>(jdbc.query(SERIES, MAPPER, streamId, Timestamp.from(since), max));
         Collections.reverse(newestFirst);
         return newestFirst;
+    }
+
+    /** 구간 창구가 접을 줄. 시각 오름차순이고, 상한을 넘으면 오래된 쪽을 버리고 {@code truncated}다. */
+    public TimelineRows timelineRows(String streamId, int max) {
+        List<BroadcastInfo> newestFirst = new ArrayList<>(jdbc.query(TIMELINE, MAPPER, streamId, max + 1));
+        boolean truncated = newestFirst.size() > max;
+        if (truncated) {
+            newestFirst.removeLast();
+        }
+        Collections.reverse(newestFirst);
+        return new TimelineRows(newestFirst, truncated);
+    }
+
+    /** @param truncated 줄 상한에 걸려 오래된 줄을 버렸다 */
+    public record TimelineRows(List<BroadcastInfo> rows, boolean truncated) {
     }
 
     /**

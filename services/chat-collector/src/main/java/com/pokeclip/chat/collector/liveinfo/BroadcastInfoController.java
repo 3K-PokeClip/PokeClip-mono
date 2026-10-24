@@ -45,6 +45,14 @@ public class BroadcastInfoController {
      */
     private static final int MAX_POINTS = 720;
 
+    /**
+     * 구간 창구가 읽는 관측 줄 상한(POK-462). 1분 관측이면 두 플랫폼을 합쳐 약 7일치다. 넘치면 오래된 줄부터 버린다.
+     */
+    static final int MAX_TIMELINE_ROWS = 20_000;
+
+    /** 구간 창구가 주는 구간 상한(POK-462). 바뀜은 방송당 수십 번이라 여유가 크다. 넘치면 오래된 구간부터 버린다. */
+    static final int MAX_TIMELINE_SEGMENTS = 2_000;
+
     /** 한 번에 묻는 방송 수 상한. clip 방송 목록 한 장의 상한(100)과 같다. */
     static final int MAX_STREAMS = 100;
 
@@ -72,6 +80,20 @@ public class BroadcastInfoController {
         List<BroadcastInfoStore.PlatformLatest> platforms =
                 store.latestByPlatform(List.of(streamId)).getOrDefault(streamId, List.of());
         return new Response(latest, platforms, series);
+    }
+
+    /**
+     * 방송 중 제목·카테고리·태그·카테고리 사진이 언제 무엇이었나(POK-462). {@code GET /internal/streams/{streamId}/broadcast-info/timeline}
+     *
+     * <p>방송 전체를 구간으로 준다({@link BroadcastTimeline}). 인자가 없다: 바뀜이 방송당 수십 번이라 작고, 부르는 쪽(라이브 막대 · 지난 방송 ·
+     * 대시보드)이 다 방송 전체를 본다. 모르는 방송도 200 + 빈 목록이다(위 창구와 같은 이유). 줄 · 구간 상한에 걸리면 오래된 쪽을 버리고
+     * {@code truncated:true}다.
+     */
+    @GetMapping("/internal/streams/{streamId}/broadcast-info/timeline")
+    public BroadcastTimeline timeline(@PathVariable String streamId) {
+        BroadcastInfoStore.TimelineRows rows = store.timelineRows(streamId, MAX_TIMELINE_ROWS);
+        BroadcastTimeline timeline = BroadcastTimeline.compress(rows.rows(), MAX_TIMELINE_SEGMENTS);
+        return rows.truncated() ? new BroadcastTimeline(timeline.segments(), true) : timeline;
     }
 
     /**

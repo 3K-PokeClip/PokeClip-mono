@@ -68,6 +68,24 @@ class BroadcastInfoStoreTest extends IntegrationTestSupport {
         assertThat(store.latest("bi-img-old").orElseThrow().categoryImageUrl()).isNull();
     }
 
+    /** 구간 창구가 접을 줄(POK-462). 오름차순이고, 상한을 넘으면 오래된 줄을 버리고 truncated다. 딱 상한이면 안 잘렸다. */
+    @Test
+    void 구간용_줄은_오름차순이고_넘치면_오래된_줄을_버린다() {
+        jdbc.update("DELETE FROM broadcast_info WHERE stream_id = 'bi-tl'");
+        for (int minute = 0; minute < 4; minute++) {
+            store.insert(new BroadcastInfo(Platform.CHZZK, "bi-tl", "CH", T.plusSeconds(60L * minute), "t" + minute, List.of(), null, null));
+        }
+
+        BroadcastInfoStore.TimelineRows cut = store.timelineRows("bi-tl", 3);
+        assertThat(cut.truncated()).isTrue();
+        assertThat(cut.rows()).extracting(BroadcastInfo::title).containsExactly("t1", "t2", "t3");
+
+        BroadcastInfoStore.TimelineRows exact = store.timelineRows("bi-tl", 4);
+        assertThat(exact.truncated()).isFalse();
+        assertThat(exact.rows()).extracting(BroadcastInfo::title).containsExactly("t0", "t1", "t2", "t3");
+        assertThat(store.timelineRows("bi-없음", 4).rows()).isEmpty();
+    }
+
     @Test
     void 최신과_추이를_준다() {
         store.insert(new BroadcastInfo(Platform.CHZZK, "bi-1", "CH", T, "제목1", List.of("롤"), "LoL", 100));

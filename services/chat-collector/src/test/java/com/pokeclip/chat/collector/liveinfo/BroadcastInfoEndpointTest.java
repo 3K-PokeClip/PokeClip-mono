@@ -81,6 +81,50 @@ class BroadcastInfoEndpointTest extends IntegrationTestSupport {
                         + "{\"observedAt\":\"2026-09-03T15:02:00Z\",\"viewers\":90,\"platform\":\"CHZZK\",\"category\":\"Just Chatting\"}]");
     }
 
+    private HttpResponse<String> 구간을_물어본다(String streamId, String token) throws Exception {
+        HttpRequest.Builder request = HttpRequest.newBuilder(URI.create(
+                "http://localhost:" + port + "/internal/streams/" + streamId + "/broadcast-info/timeline"));
+        if (token != null) request.header("X-Internal-Token", token);
+        return HttpClient.newHttpClient().send(request.GET().build(), HttpResponse.BodyHandlers.ofString());
+    }
+
+    /**
+     * 구간 창구(POK-462). 칸 이름과 순서는 웹 · 대시보드 카드와의 계약이라 글자로 못박는다. 실 PG에서 사진 칸까지 왕복해 접힌다.
+     */
+    @Test
+    void 구간_창구가_계약된_칸_이름으로_바뀐_곳마다_끊어_준다() throws Exception {
+        String stream = "api-bi-tl";
+        store.insert(new BroadcastInfo(Platform.CHZZK, stream, "CH", T, "랭크", List.of("롤"), "LoL", 100, "https://img.example/lol.jpg"));
+        store.insert(new BroadcastInfo(Platform.CHZZK, stream, "CH", T.plusSeconds(60), "랭크", List.of("롤"), "LoL", 90, null));
+        store.insert(new BroadcastInfo(Platform.CHZZK, stream, "CH", T.plusSeconds(120), "랭크", List.of("롤"), "Talk", 80, null));
+        store.insert(new BroadcastInfo(Platform.SOOP, stream, "SU", T.plusSeconds(30), "숲", List.of(), "LOL", 5));
+
+        HttpResponse<String> response = 구간을_물어본다(stream, TOKEN);
+
+        assertThat(response.statusCode()).as(response.body()).isEqualTo(200);
+        assertThat(response.body()).isEqualTo("{\"segments\":["
+                + "{\"platform\":\"CHZZK\",\"from\":\"2026-09-03T15:00:00Z\",\"until\":\"2026-09-03T15:02:00Z\","
+                + "\"lastObservedAt\":\"2026-09-03T15:01:00Z\",\"title\":\"랭크\",\"category\":\"LoL\","
+                + "\"categoryImageUrl\":\"https://img.example/lol.jpg\",\"tags\":[\"롤\"]},"
+                + "{\"platform\":\"SOOP\",\"from\":\"2026-09-03T15:00:30Z\",\"until\":null,"
+                + "\"lastObservedAt\":\"2026-09-03T15:00:30Z\",\"title\":\"숲\",\"category\":\"LOL\","
+                + "\"categoryImageUrl\":null,\"tags\":[]},"
+                + "{\"platform\":\"CHZZK\",\"from\":\"2026-09-03T15:02:00Z\",\"until\":null,"
+                + "\"lastObservedAt\":\"2026-09-03T15:02:00Z\",\"title\":\"랭크\",\"category\":\"Talk\","
+                + "\"categoryImageUrl\":null,\"tags\":[\"롤\"]}],"
+                + "\"truncated\":false}");
+    }
+
+    /** 모르는 방송도 200 + 빈 목록(위 창구와 같다). 토큰이 없으면 401. */
+    @Test
+    void 구간_창구는_모르는_방송에_빈_목록이고_토큰이_없으면_401이다() throws Exception {
+        HttpResponse<String> unknown = 구간을_물어본다("api-bi-없음", TOKEN);
+        assertThat(unknown.statusCode()).isEqualTo(200);
+        assertThat(unknown.body()).isEqualTo("{\"segments\":[],\"truncated\":false}");
+
+        assertThat(구간을_물어본다("api-bi-tl", null).statusCode()).isEqualTo(401);
+    }
+
     /**
      * 같은 방송에 치지직·SOOP 줄이 있으면 {@code platforms}에 플랫폼마다 최신 값이 따로 나가고(POK-397), {@code latest}는 옛 모양
      * 그대로 플랫폼과 무관한 최신 한 줄이다. 추이 줄마다 플랫폼이 실린다. 칸 이름은 clip·프론트와의 계약이라 글자로 못박는다.
