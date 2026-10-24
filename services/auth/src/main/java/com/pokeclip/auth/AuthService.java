@@ -58,4 +58,8 @@ public class AuthService {
     public User updateName(Long userId, String rawName) {
         return userService.updateName(userId, rawName);
     }
+
+    public User updateAnalyticsOptOut(Long userId, boolean optOut) {
+        return userService.updateAnalyticsOptOut(userId, optOut);
+    }
 }
