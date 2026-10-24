@@ -111,10 +111,18 @@ export interface VodListMockState {
   /** 필터와 무관한 전체 수 — 「아직 없다」와 「이 기간에 없다」를 가른다 */
   totalCount: number;
   /**
-   * 서버 목록을 아직 한 번도 못 읽었다. 그동안의 빈 목록은 「없다」가 아니라 「모른다」다(QA 2026-10-11). 첫 읽기부터
-   * 실패하면 다음 주기까지 그대로다(홈과 같은 규칙)
+   * 서버 목록을 아직 한 번도 못 읽었다. 그동안의 빈 목록은 「없다」가 아니라 「모른다」다(QA 2026-10-11)
    */
   loading: boolean;
+  /**
+   * 한 번도 못 읽었는데 읽기가 실패했다(POK-441). 주기가 60초라 다음 주기까지 「불러오는 중」으로 두면 실패가 1분 가려진다 —
+   * 못 불러왔다고 말하고 바로 다시 시도하게 한다. 한 번이라도 읽었으면 실패해도 옛 목록을 두므로 늘 false다
+   */
+  failed: boolean;
+  /** 「다시 시도」로 부른 읽기가 도는 중 */
+  retrying: boolean;
+  /** 지금 바로 다시 읽는다. 이미 읽는 중이면 그 읽기를 기다린다 */
+  retry: () => void;
   visuals: Record<string, VodRowVisual>;
   filter: VodPeriodFilter;
   setFilter: (filter: VodPeriodFilter) => void;
@@ -179,6 +187,10 @@ export function useVodListMockState(options: VodListOptions = {}): VodListMockSt
   );
   const [fetched, setFetched] = useState<VodBroadcast[]>([]);
   const [loaded, setLoaded] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const [retrying, setRetrying] = useState(false);
+  // 읽기 효과가 세운 「한 번 읽기」. 「다시 시도」가 효과 밖에서 부른다(내려가면 비운다)
+  const runRef = useRef<(() => Promise<void>) | null>(null);
   const [fetchedVisuals, setFetchedVisuals] = useState<Record<string, VodRowVisual>>({});
   const [now, setNow] = useState(() => new Date());
   const rowCache = useRef(
@@ -199,6 +211,8 @@ export function useVodListMockState(options: VodListOptions = {}): VodListMockSt
   useEffect(() => {
     if (options.broadcasts) return;
     let stopped = false;
+    // 한 번이라도 읽었으면 그 뒤의 실패는 옛 목록을 둔 채 다음 주기에 다시 한다
+    let everLoaded = false;
     // 내려가면(채널 전환 등) 넘기던 쪽·카드 읽기를 끊는다: 이어 가면 채널 전환 화면이 옛 채널 요청까지 기다린다(PR #342 2차 리뷰)
     const abort = new AbortController();
     const load = async () => {
@@ -330,14 +344,25 @@ export function useVodListMockState(options: VodListOptions = {}): VodListMockSt
         setFetchedVisuals(visuals);
         setNow(new Date());
         setLoaded(true);
+        everLoaded = true;
+        setFailed(false);
       } catch {
-        /* 다음 주기에 다시 */
+        // 다음 주기에 다시 한다. 한 번도 못 읽었으면 실패를 「불러오는 중」으로 가리지 않는다(POK-441)
+        if (!stopped && !everLoaded) setFailed(true);
       }
     };
-    void load();
-    const t = window.setInterval(load, LIST_POLL_MS);
+    // 읽기는 한 번에 하나만: 「다시 시도」나 주기가 도는 읽기와 겹치면 그 읽기를 기다린다
+    let inflight: Promise<void> | null = null;
+    const run = () =>
+      (inflight ??= load().finally(() => {
+        inflight = null;
+      }));
+    runRef.current = run;
+    void run();
+    const t = window.setInterval(() => void run(), LIST_POLL_MS);
     return () => {
       stopped = true;
+      runRef.current = null;
       abort.abort();
       window.clearInterval(t);
     };
@@ -364,6 +389,12 @@ export function useVodListMockState(options: VodListOptions = {}): VodListMockSt
     (streamId: string) => setDownload(streamId, VOD_DOWNLOAD_IDLE),
     [setDownload],
   );
+  const retry = useCallback(() => {
+    const run = runRef.current;
+    if (run === null) return;
+    setRetrying(true);
+    void run().finally(() => setRetrying(false));
+  }, []);
 
   const past = useMemo(() => excludeLive(source), [source]);
   const baseNow = options.now ?? now;
@@ -377,6 +408,9 @@ export function useVodListMockState(options: VodListOptions = {}): VodListMockSt
     broadcasts,
     totalCount: past.length,
     loading: options.broadcasts === undefined && !loaded,
+    failed: options.broadcasts === undefined && !loaded && failed,
+    retrying,
+    retry,
     visuals,
     filter,
     setFilter,

@@ -1,7 +1,7 @@
 'use client';
 
-import { Video } from 'lucide-react';
-import { Badge, EmptyState } from '@/ui';
+import { CloudOff, Video } from 'lucide-react';
+import { Badge, Button, EmptyState } from '@/ui';
 import { useVodListMockState, VOD_DOWNLOAD_IDLE, type VodListOptions } from './useVodListMockState';
 import { VodListSkeleton } from './VodListSkeleton';
 import { VodPeriodFilter } from './VodPeriodFilter';
@@ -22,6 +22,9 @@ export function VodListScreen(options: VodListOptions = {}) {
     broadcasts,
     totalCount,
     loading,
+    failed,
+    retrying,
+    retry,
     visuals,
     filter,
     setFilter,
@@ -52,7 +55,30 @@ export function VodListScreen(options: VodListOptions = {}) {
         ) : null}
       </div>
 
-      {loading ? (
+      {failed ? (
+        // 한 번도 못 읽었는데 실패했다: 다음 주기(60초)까지 스켈레톤으로 가리지 않고 바로 다시 시도하게 한다(POK-441).
+        // 「없다」가 아니라 「못 불러왔다」다 — 빈 상태와 같은 카드 틀이지만 문구로 가른다
+        <>
+          <div role="alert">
+            <EmptyState
+              icon={<CloudOff size={21} />}
+              title="지난 방송을 불러오지 못했어요"
+              description={
+                <>
+                  인터넷 연결을 확인하고 다시 시도해 주세요.
+                  <br />
+                  1분 뒤에도 자동으로 다시 불러와요.
+                </>
+              }
+            />
+          </div>
+          <div className={styles.failAction}>
+            <Button size="sm" variant="soft" loading={retrying} onClick={retry}>
+              다시 시도
+            </Button>
+          </div>
+        </>
+      ) : loading ? (
         // 첫 읽기가 끝나기 전의 빈 목록은 「모른다」다: 빈 상태를 먼저 보이면 방송이 없는 줄 안다(QA 2026-10-11).
         // 로드 뒤 행과 같은 치수의 스켈레톤으로 자리를 잡는다(POK-441)
         <VodListSkeleton />

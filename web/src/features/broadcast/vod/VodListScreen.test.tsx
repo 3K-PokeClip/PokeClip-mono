@@ -359,16 +359,70 @@ describe('VodListScreen — 서버 목록', () => {
     expect(screen.queryByText('지난 방송을 불러오는 중')).toBeNull();
   });
 
-  it('첫 조회가 실패하면 다음 주기까지 스켈레톤이다: 못 읽은 것을 「없다」고 하지 않는다', async () => {
+  it('첫 조회가 실패하면 「없다」도 「불러오는 중」도 아니라 못 불러왔다고 말하고, 다시 시도는 주기를 기다리지 않는다(POK-441)', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    stubFetch(() => jsonResponse(503, { error: 'unavailable' }));
+    let down = true;
+    stubFetch((url) =>
+      url.startsWith('/api/clip/broadcasts?') && down
+        ? jsonResponse(503, { error: 'unavailable' })
+        : url.startsWith('/api/clip/broadcasts?')
+          ? jsonResponse(200, { broadcasts: [], nextCursor: null })
+          : jsonResponse(200, { cards: [], nextCursor: null }),
+    );
 
     renderWithProviders(<VodListScreen />);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(100);
     });
-    expect(screen.getByRole('status')).toHaveTextContent('지난 방송을 불러오는 중');
+    expect(screen.getByRole('alert')).toHaveTextContent('지난 방송을 불러오지 못했어요');
+    expect(screen.queryByText('지난 방송을 불러오는 중')).toBeNull();
     expect(screen.queryByText('아직 지난 방송이 없어요')).toBeNull();
+
+    down = false;
+    fireEvent.click(screen.getByRole('button', { name: '다시 시도' }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100);
+    });
+    // 60초 주기 전인데 다시 읽었다: 서버가 「없다」고 답했으니 이제 빈 상태다
+    expect(screen.getByText('아직 지난 방송이 없어요')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('한 번 읽은 뒤의 실패는 옛 목록을 그대로 둔다: 못 불러왔다는 카드로 바꾸지 않는다', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let down = false;
+    stubFetch((url) =>
+      url.startsWith('/api/clip/broadcasts?') && down
+        ? jsonResponse(503, { error: 'unavailable' })
+        : url.startsWith('/api/clip/broadcasts?')
+          ? jsonResponse(200, {
+              broadcasts: [
+                {
+                  streamId: 'S-1',
+                  status: 'ended',
+                  relation: 'OWNER',
+                  startedAt: '2026-10-20T10:00:00Z',
+                  endedAt: '2026-10-20T12:00:00Z',
+                  vodExpiresAt: '2026-12-19T12:00:00Z',
+                },
+              ],
+              nextCursor: null,
+            })
+          : jsonResponse(200, { cards: [], nextCursor: null }),
+    );
+
+    renderWithProviders(<VodListScreen />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100);
+    });
+    expect(rows()).toHaveLength(1);
+
+    down = true;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(rows()).toHaveLength(1);
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 
   it('카드 수는 낡으면 다시 센다: 끝난 지 한 시간 안이면 주기마다, 그 밖은 10분마다(POK-254)', async () => {
