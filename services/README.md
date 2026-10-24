@@ -3984,7 +3984,7 @@ SOOP 수신은 다음 PR이고, 지금 세션을 여는 곳(연동 시작)은 �
   일시 실패(SOOP 응답 없음)는 그대로 둔다. 채팅만 켜고 지켜보기를 끄면 붙을 곳이 없어 부팅을 거부한다.
 - **탭 하나 = 방송 하나**: 브라우저(Chromium 하나)는 전용 스레드 `soop-chat-browser`가 쥔다(Playwright 객체는 스레드를 못 나눠 쓰고 페이지 콜백도 그
   스레드가 펌프해야 온다). 탭은 빈 페이지(`http://localhost/soop-chat`, 출처를 보는지 문서에 없어 흔한 개발 출처)에 SDK를 싣고 문서 순서대로
-  `new SOOP.ChatSDK(앱 키, 비밀값)` → `init()` → `setAuth(토큰)` → `connect()`. 앱 값 · 토큰은 HTML 글자가 아니라 인자로 넘긴다. Chromium은 첫 탭에서 뜬다.
+  `new SOOP.ChatSDK(앱 키, 비밀값)` → `setAuth(토큰)` → `connect()`. 🔴 공식 문서 예시의 `init()`은 부르지 않는다: 배포된 SDK에 없어 `TypeError: s.init is not a function`으로 시작이 던지고 탭마다 다시 붙기만 돌았다(실방송 2026-10-24). 가짜 SDK는 배포본의 메서드 목록만 갖고, 페이지가 그 밖의 메서드를 부르면 시험이 깨진다. 시작이 던지면 `soop.chat.page_failed … cause=`에 JS 오류 첫 줄을 싣는다(앱 키 · 비밀값 · 토큰은 지운다). `connect()`가 거절되면 오류 코드에 SDK 오류 코드를 붙인다(`soop.chat.error code=CONNECT_invalid-chat-info`, 오류 글은 안 싣는다). 앱 값 · 토큰은 HTML 글자가 아니라 인자로 넘긴다. Chromium은 첫 탭에서 뜬다.
 - **받는 것은 채팅 둘**: `MESSAGE` · `MANAGER_MESSAGE`(역할 `manager`). 입장 · 퇴장 · 공지는 버린다. 받은 채팅은 치지직과 같은 세 길
   (적재 바구니 · 원본 아카이브 · 화면 중계)에 `platform` `SOOP`, 채널 = 스트리머 SOOP 아이디, 보낸 사람 = SOOP 아이디로 들어간다.
 - **후원**(POK-431): 치지직 후원과 같은 표(`chat_donations`)와 화면 중계(`event: donation`)로 간다. **원본 아카이브에는 안 넣는다**(치지직과 같다, 아래 아카이브 절의 검산 등식).

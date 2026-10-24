@@ -196,7 +196,9 @@ public class SoopChatBrowser implements AutoCloseable {
                     Map.of("clientId", properties.clientId(), "clientSecret", properties.clientSecret(), "token", token));
         } catch (RuntimeException e) {
             // SDK 스크립트를 못 불러왔거나(SOOP 전역 없음) 시작이 던졌다. 오류로 넘겨 다시 붙기 줄에 태운다
-            log.warn("soop.chat.page_failed stream={} causeType={}", streamId, e.getClass().getSimpleName());
+            // 이름만 남기면 원인을 못 본다(실방송에서 없는 init() 호출이 PlaywrightException으로만 찍혔다): JS 오류 첫 줄을 싣되 비밀값은 지운다
+            log.warn("soop.chat.page_failed stream={} causeType={} cause={}", streamId, e.getClass().getSimpleName(),
+                    firstLine(e.getMessage(), properties.clientId(), properties.clientSecret(), token));
             listener.onError(streamId, generation, "PAGE");
         }
     }
@@ -265,6 +267,32 @@ public class SoopChatBrowser implements AutoCloseable {
             case "error" -> listener.onError(streamId, generation, str(args, 1));
             default -> { }
         }
+    }
+
+    /**
+     * 오류 글의 첫 줄(스택 · 둘째 줄부터는 버림). Playwright는 페이지 오류를 「Error {」 다음 줄 {@code message='…'}에 싣는다:
+     * 그 줄이 있으면 그것을 쓴다. {@code secrets}가 섞여 있으면 지우고, 제어 글자를 빼고, 200자로 자른다.
+     */
+    static String firstLine(String message, String... secrets) {
+        if (message == null) {
+            return "";
+        }
+        String[] lines = message.split("\n", -1);
+        String line = lines[0];
+        for (String candidate : lines) {
+            int at = candidate.indexOf("message='");
+            if (at >= 0) {
+                line = candidate.substring(at + "message='".length());
+                break;
+            }
+        }
+        for (String secret : secrets) {
+            if (secret != null && !secret.isEmpty()) {
+                line = line.replace(secret, "***");
+            }
+        }
+        line = line.replaceAll("\\p{Cntrl}", "");
+        return line.length() > 200 ? line.substring(0, 200) : line;
     }
 
     private static String str(Object[] args, int index) {

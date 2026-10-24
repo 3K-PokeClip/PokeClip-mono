@@ -14,9 +14,9 @@ import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
- * 진짜 SOOP 대신 같은 모양의 Chat SDK 스크립트를 내리는 시험용 서버(POK-397 PR4). 공식 문서의 메서드 이름 그대로다:
- * {@code new SOOP.ChatSDK(id, secret)} · {@code init} · {@code setAuth} · {@code connect} · {@code handleMessageReceived} ·
- * {@code handleChatClosed} · {@code handleError}.
+ * 진짜 SOOP 대신 같은 모양의 Chat SDK 스크립트를 내리는 시험용 서버(POK-397 PR4). 메서드는 배포된 SDK 스크립트에 실제로 있는 것만 둔다
+ * ({@link #REAL_METHODS} 중 페이지가 쓰는 것). 🔴 공식 문서 예시의 {@code init()}은 배포본에 없다: 가짜가 그것을 갖고 있어 실방송에서
+ * {@code TypeError: s.init is not a function}으로 탭마다 다시 붙기만 돌던 결함을 시험이 못 잡았다. 없는 메서드를 부르면 진짜처럼 던진다.
  *
  * <p>{@code connect()}가 불리면 이 서버에 「붙었다」를 알리고(앱 키 · 토큰을 같이, 시험이 무엇이 넘어갔는지 본다), 그 연결 몫의 대본을 받아
  * 차례로 흘린다. 대본은 시험이 {@link #script}로 연결마다 하나씩 쌓는다. 비면 아무것도 안 흘린다.
@@ -24,6 +24,18 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * <p>루프백에만 붙는다(services/CLAUDE.md 「시험용 임시 포트」).
  */
 final class FakeSoopSdkServer implements AutoCloseable {
+
+    /**
+     * 배포된 SDK({@code static.sooplive.com/asset/app/chat-sdk/sooplive-chat-sdk.js}, 2026-10-24 읽음)가 내보내는 메서드 전부.
+     * {@code init}은 없다.
+     */
+    static final java.util.Set<String> REAL_METHODS = java.util.Set.of("sendDebuggingPacket", "bindDebuggingChannel",
+            "handleReady", "handleMessageReceived", "handleChatClosed", "handleError", "openAuth", "getAuth", "refreshAuth",
+            "isReady", "setAuth", "connect", "requestTranslation", "getRoomInfo", "freezeChat", "unfreezeChat", "banUser",
+            "unbanUser", "requestBannedUserList", "reportChat", "sendMessage", "sendManagerMessage", "requestUserList",
+            "whisper", "resendWhisper", "setWhisperState", "setQuickView", "muteUser", "setSlowMode", "unsetSlowMode",
+            "setChatNotice", "showChatNotice", "disconnect", "destroy", "sendOGQ", "exitChannel", "changeNickname",
+            "addBlacklistUser");
 
     /** 대본의 한 줄. {@code action}이 null이면 연결 닫힘({@code handleChatClosed}), {@code error}면 오류다. */
     record Step(String action, String json) {
@@ -60,6 +72,8 @@ final class FakeSoopSdkServer implements AutoCloseable {
     final List<Connect> connects = new CopyOnWriteArrayList<>();
     final List<String> sdkLoads = new CopyOnWriteArrayList<>();
     private volatile boolean sdkMissing;
+    private volatile boolean connectThrows;
+    private volatile String connectRejectsWith;
 
     FakeSoopSdkServer() throws IOException {
         server = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
@@ -83,6 +97,16 @@ final class FakeSoopSdkServer implements AutoCloseable {
         this.sdkMissing = missing;
     }
 
+    /** {@code connect()}가 곧바로 던진다(오류 글에 토큰을 섞어, 로그가 그것을 안 싣는지 본다). */
+    void connectThrows(boolean throwsNow) {
+        this.connectThrows = throwsNow;
+    }
+
+    /** {@code connect()}가 진짜 SDK처럼 {@code code}를 단 오류로 거절한다(예: {@code invalid-chat-info}). null이면 안 거절한다. */
+    void connectRejectsWith(String code) {
+        this.connectRejectsWith = code;
+    }
+
     private void sdk(HttpExchange exchange) throws IOException {
         sdkLoads.add("load");
         if (sdkMissing) {
@@ -94,12 +118,15 @@ final class FakeSoopSdkServer implements AutoCloseable {
                 window.SOOP = { ChatSDK: function (clientId, clientSecret) {
                   var self = this;
                   self.handlers = {};
-                  self.init = function () {};
+                  self.handleReady = function (cb) { self.handlers.ready = cb; };
+                  self.isReady = function () { return false; };
                   self.setAuth = function (token) { self.token = token; };
                   self.handleMessageReceived = function (cb) { self.handlers.message = cb; };
                   self.handleChatClosed = function (cb) { self.handlers.closed = cb; };
                   self.handleError = function (cb) { self.handlers.error = cb; };
                   self.connect = function () {
+                    if (%2$s) { throw new TypeError('fake connect failed ' + self.token + '\\nsecond line'); }
+                    if (%3$s) { var err = new Error('rejected ' + self.token); err.code = %4$s; return Promise.reject(err); }
                     return fetch('%1$s/connected', { method: 'POST', body: JSON.stringify({ clientId: clientId,
                         clientSecret: clientSecret, token: self.token }) })
                       .then(function () { return fetch('%1$s/script'); })
@@ -119,7 +146,8 @@ final class FakeSoopSdkServer implements AutoCloseable {
                       });
                   };
                 } };
-                """.formatted(base);
+                """.formatted(base, connectThrows, connectRejectsWith != null,
+                connectRejectsWith == null ? "null" : "'" + connectRejectsWith + "'");
         send(exchange, 200, "application/javascript", js);
     }
 
