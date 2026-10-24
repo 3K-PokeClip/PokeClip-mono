@@ -2,11 +2,13 @@
 
 import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { fetchBroadcastTimeline, isBroadcastInChannel } from '@/api/clipEditor';
+import { isBroadcastInChannel } from '@/api/clipEditor';
 import { useMe } from '@/features/auth/useSession';
 import { useActiveChannel } from '@/features/channel/useActiveChannel';
 import { categoryAt, categorySpansOf, focusAtMs } from './categoryThumb';
+import { viewedSegment } from './broadcastInfoAt';
 import { useLiveData } from './liveDataStore';
+import { useBroadcastTimeline } from './useBroadcastTimeline';
 
 // 방송 정보(카테고리·태그)는 clip의 broadcast-info 창구에서 온다(POK-251).
 // latest가 없으면 칩을 하나도 안 그리고 화면이 그 까닭을 말한다(대시보드의 missingWord: 확인 중·기록 없음·수집 전).
@@ -52,8 +54,6 @@ export interface LiveDetailsMockState {
 }
 
 const EMPTY_VISUALS: Record<string, CardVisual> = {};
-/** 방송 중 시점별 기록을 다시 읽는 간격. 카테고리를 바꾸면 1분 안에 그림이 바뀐다(POK-467 완료 조건) */
-const TIMELINE_LIVE_MS = 30_000;
 
 export function useLiveDetailsMockState(): LiveDetailsMockState {
   const liveData = useLiveData();
@@ -75,28 +75,23 @@ export function useLiveDetailsMockState(): LiveDetailsMockState {
   const streamerName = relation === 'OWNER' ? (me?.name ?? null) : delegated ? channel.name : null;
   const streamerPhoto =
     relation === 'OWNER' ? (me?.profileImageUrl ?? null) : delegated ? channel.photo : null;
-  // 그 시점 카테고리 사진(POK-467)은 시점별 기록 창구(POK-462)에서 온다. 방송 중이면 카테고리를 바꾼 것이 1분 안에 보이게 30초마다
-  // 다시 읽고, 끝난 방송은 한 번 읽는다(방송 중에서 끝으로 바뀌면 끝까지 담긴 기록을 한 번 더). 못 읽으면 프로필 사진이다.
-  // 상태를 아는 뒤에만 읽고 상태마다 따로 둔다: 모를 때 읽은 기록을 끝난 방송과 함께 두면 화면을 열 때 읽은 옛 기록이 끝난 뒤 다시
-  // 쓰였다(로컬 리뷰 3라운드)
-  const { status } = liveData;
-  const live = status === 'live';
-  const timeline = useQuery({
-    queryKey: ['broadcast-timeline', streamId, status],
-    queryFn: () => fetchBroadcastTimeline(streamId),
-    enabled: streamId !== '' && (live || status === 'ended'),
-    staleTime: live ? TIMELINE_LIVE_MS : Infinity,
-    refetchInterval: live ? TIMELINE_LIVE_MS : false,
-  });
-  const spans = useMemo(() => categorySpansOf(timeline.data), [timeline.data]);
-  const span = categoryAt(spans, focusAtMs(liveData), info?.platform ?? null);
+  // 그 시점 카테고리 사진(POK-467)과 보는 시점의 카테고리 · 태그(POK-462)는 시점별 기록 창구에서 온다(useBroadcastTimeline). 못 읽으면
+  // 프로필 사진과 최신 관측이다
+  const timeline = useBroadcastTimeline(streamId, liveData.status);
+  const spans = useMemo(() => categorySpansOf(timeline), [timeline]);
+  const focus = focusAtMs(liveData);
+  const span = categoryAt(spans, focus, info?.platform ?? null);
   const categoryName = span?.name ?? null;
   const categoryUrl = span?.imageUrl ?? null;
+  // 라이브를 되감았거나 지난 방송에서 시점을 옮겼으면 그 시점의 카테고리 · 태그다(POK-462). 실시간이면 null이고 최신 관측을 쓴다.
+  // 재생 위치는 매초 바뀌지만 같은 구간이면 같은 줄이라 아래 memo가 다시 안 돈다
+  const seen = viewedSegment(timeline, info?.platform ?? null, focus);
   const streamMeta = useMemo<StreamMeta>(() => {
     const latest = info?.latest ?? null;
+    const shown = seen ?? latest;
     return {
-      category: latest?.category ?? '',
-      tags: latest?.tags ?? [],
+      category: shown?.category ?? '',
+      tags: shown?.tags ?? [],
       streamer: streamerName === null ? null : { name: streamerName, photo: streamerPhoto },
       categoryThumb:
         categoryName !== null && categoryUrl !== null
@@ -104,6 +99,6 @@ export function useLiveDetailsMockState(): LiveDetailsMockState {
           : null,
       collected: latest !== null,
     };
-  }, [info, streamerName, streamerPhoto, categoryName, categoryUrl]);
+  }, [info, seen, streamerName, streamerPhoto, categoryName, categoryUrl]);
   return { streamMeta, cardVisuals: EMPTY_VISUALS };
 }
