@@ -5,8 +5,10 @@ import com.pokeclip.clip.collector.BroadcastTitle;
 import com.pokeclip.clip.collector.BroadcastTitleClient;
 import com.pokeclip.clip.delegation.AccessErrors;
 import com.pokeclip.clip.delegation.AccessibleResult;
+import com.pokeclip.clip.delegation.ChannelNames;
 import com.pokeclip.clip.delegation.DelegationResolveClient;
 import com.pokeclip.clip.delegation.ResolveResult;
+import com.pokeclip.clip.delegation.StreamerChannelNameClient;
 import com.pokeclip.clip.paging.CursorCodec;
 import com.pokeclip.clip.paging.InvalidListParamException;
 import com.pokeclip.clip.paging.ListLimit;
@@ -95,10 +97,11 @@ public class BroadcastListService {
     private final BroadcastTitleClient titles;
     private final ViewerPresence viewers;
     private final BroadcastPlatformStore bundles;
+    private final StreamerChannelNameClient channelNames;
 
     BroadcastListService(BroadcastRepository broadcasts, DelegationResolveClient delegation,
                          TimelineOriginReader origins, ThumbnailUrls thumbnails, BroadcastTitleClient titles,
-                         ViewerPresence viewers, BroadcastPlatformStore bundles) {
+                         ViewerPresence viewers, BroadcastPlatformStore bundles, StreamerChannelNameClient channelNames) {
         this.broadcasts = broadcasts;
         this.delegation = delegation;
         this.origins = origins;
@@ -106,6 +109,7 @@ public class BroadcastListService {
         this.titles = titles;
         this.viewers = viewers;
         this.bundles = bundles;
+        this.channelNames = channelNames;
     }
 
     /** 플랫폼 순서(POK-397): 치지직 → SOOP → 그 밖 이름순. 화면이 같은 방송을 열 때마다 같은 순서로 그리게 한다. */
@@ -199,7 +203,33 @@ public class BroadcastListService {
             }
         }
         return new BroadcastPage(page, relations, next, originsOrEmpty(page), thumbnailsOf(page),
-                chosenTitles, platforms, leads, editorsOnlineOf(page, userId));
+                chosenTitles, platforms, leads, editorsOnlineOf(page, userId), channelNamesOf(page, accessible));
+    }
+
+    /**
+     * 이 장에 줄이 있는 스트리머의 플랫폼 채널 이름(POK-430). auth에 한 장을 한 번에 묻는다.
+     *
+     * <p>번호는 줄의 문자열을 다시 읽지 않고 <b>auth가 준 볼 수 있는 번호(숫자) 중 이 장에 줄이 있는 것</b>으로 고른다. 줄은 그 번호의
+     * 문자열로만 조회됐으므로 같은 집합이고, 볼 수 있는 밖의 번호가 섞일 길이 없다. 볼 수 있지만 이 장에 줄이 없는 스트리머(다음 장 · 방송
+     * 없음)는 안 묻는다.
+     *
+     * <p>부가 칸이다. 못 물으면 클라이언트가 빈 맵을 주고 응답은 두 칸 null이다(제목과 같은 처리). 대가: auth 이름 창구가 매달리면 목록이
+     * 그 시한(2초)만큼 늦다.
+     */
+    private Map<String, ChannelNames> channelNamesOf(List<Broadcast> page, AccessibleResult accessible) {
+        if (page.isEmpty()) {
+            return Map.of();
+        }
+        Set<String> onPage = new HashSet<>();
+        page.forEach(row -> onPage.add(row.getStreamerId()));
+        List<Long> ids = accessible.streamers().stream()
+                .map(AccessibleResult.Entry::streamerUserId)
+                .filter(id -> onPage.contains(String.valueOf(id)))
+                .distinct()
+                .toList();
+        Map<String, ChannelNames> byStreamer = new HashMap<>();
+        channelNames.namesOf(ids).forEach((id, names) -> byStreamer.put(String.valueOf(id), names));
+        return byStreamer;
     }
 
     /**

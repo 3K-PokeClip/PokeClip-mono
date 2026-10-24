@@ -52,6 +52,9 @@ public final class FakeAuth implements AutoCloseable {
     private final AtomicReference<String> lastBody = new AtomicReference<>();
     private final AtomicReference<String> lastPath = new AtomicReference<>();
     private final AtomicReference<Instant> firstRequestAt = new AtomicReference<>();
+    /** 경로별 기록(POK-430). 목록 문이 auth를 두 번(자격 · 이름) 부르게 되어 총합만으로는 어느 창구를 거쳤는지 못 가른다. */
+    private final Map<String, AtomicInteger> callsByPath = new ConcurrentHashMap<>();
+    private final Map<String, String> lastBodyByPath = new ConcurrentHashMap<>();
 
     private volatile Response fallback = 아무_경로도_안_정했을_때;
     private volatile Duration delay = Duration.ZERO;
@@ -149,6 +152,8 @@ public final class FakeAuth implements AutoCloseable {
         lastBody.set(null);
         lastPath.set(null);
         firstRequestAt.set(null);
+        callsByPath.clear();
+        lastBodyByPath.clear();
     }
 
     /**
@@ -179,6 +184,17 @@ public final class FakeAuth implements AutoCloseable {
         return lastPath.get();
     }
 
+    /** 그 경로가 받은 요청 수. */
+    public int callCount(String path) {
+        AtomicInteger count = callsByPath.get(path);
+        return count == null ? 0 : count.get();
+    }
+
+    /** 그 경로가 마지막으로 받은 본문. 안 받았으면 {@code null}. */
+    public String lastBodyOf(String path) {
+        return lastBodyByPath.get(path);
+    }
+
     /** 첫 요청이 <b>서버에 도착한 시각</b>부터 잰다. 클라이언트 조립 시간이 안 섞인다. */
     public Duration sinceFirstRequest() {
         Instant at = firstRequestAt.get();
@@ -191,7 +207,10 @@ public final class FakeAuth implements AutoCloseable {
         String path = exchange.getRequestURI().getPath();
         lastPath.set(path);
         lastToken.set(exchange.getRequestHeaders().getFirst("X-Internal-Token"));
-        lastBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+        String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+        lastBody.set(body);
+        callsByPath.computeIfAbsent(path, any -> new AtomicInteger()).incrementAndGet();
+        lastBodyByPath.put(path, body);
         if (!delay.isZero()) {
             try {
                 Thread.sleep(delay.toMillis());

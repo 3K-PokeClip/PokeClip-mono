@@ -15,6 +15,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.http.client.ClientHttpRequestFactoryBuilder;
 import org.springframework.web.client.RestClient;
+import tools.jackson.databind.ObjectMapper;
 
 import java.util.List;
 import java.util.UUID;
@@ -48,11 +49,16 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 public class AuthClientTokenLeakTest extends IntegrationTestSupport {
 
     private final RestClient.Builder restClientBuilder;
+    private final ClientHttpRequestFactoryBuilder<?> factoryBuilder;
+    private final ObjectMapper mapper;
 
     private FakeAuth auth;
 
-    AuthClientTokenLeakTest(RestClient.Builder restClientBuilder) {
+    AuthClientTokenLeakTest(RestClient.Builder restClientBuilder, ClientHttpRequestFactoryBuilder<?> factoryBuilder,
+                            ObjectMapper mapper) {
         this.restClientBuilder = restClientBuilder;
+        this.factoryBuilder = factoryBuilder;
+        this.mapper = mapper;
     }
 
     @BeforeEach
@@ -104,6 +110,41 @@ public class AuthClientTokenLeakTest extends IntegrationTestSupport {
 
             assertNoSecretsIn(captor, List.of(internalToken));
         }
+    }
+
+    /**
+     * 이름 창구 클라이언트(POK-430)도 같은 열쇠를 싣는다. 전용 시한 때문에 팩토리를 새로 지으므로 위 갈래와 따로 잰다.
+     * 양성 대조는 실패 로그 두 줄(5xx · 못 닿음)이다.
+     */
+    @Test
+    void 이름_창구도_내부_토큰을_로그에_안_남긴다() {
+        String internalToken = needle("internal-token-names");
+
+        try (LogCaptor captor = new LogCaptor()) {
+            setRootLevel(Level.TRACE);
+
+            auth.respondWith(200, "{\"names\":{\"42\":{\"chzzk\":\"이름\",\"soop\":null}}}");
+            assertThat(namesClientFor(auth.baseUrl(), internalToken).namesOf(List.of(42L)))
+                    .as("호출이 성립하지 않았으면 샐 것도 없다")
+                    .containsKey(42L);
+
+            auth.respondWith(500, "{\"error\":\"boom\"}");
+            namesClientFor(auth.baseUrl(), internalToken).namesOf(List.of(43L));
+
+            namesClientFor("http://127.0.0.1:1", internalToken).namesOf(List.of(44L));
+
+            assertThat(captor.messages())
+                    .filteredOn(m -> m.startsWith("clip.list.channel_names_unavailable"))
+                    .as("5xx와 못 닿음 둘만 남아야 한다 — 성공 경로는 안 찍는다")
+                    .hasSize(2);
+
+            assertNoSecretsIn(captor, List.of(internalToken));
+        }
+    }
+
+    private StreamerChannelNameClient namesClientFor(String baseUrl, String internalToken) {
+        return new StreamerChannelNameClient(restClientBuilder, factoryBuilder, new AuthClientProperties(baseUrl),
+                new InternalApiProperties(internalToken), mapper);
     }
 
     /**
