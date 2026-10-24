@@ -1,7 +1,7 @@
 # prod/runtime
 
 prod 런타임 1단(설계 3-1 의 ⑤)을 만드는 루트입니다 — RDS PostgreSQL 17 ·
-앱 비밀 그릇 여덟 · 계약9 SNS FIFO 주제와 SQS FIFO 큐 · rewind 버킷 · SQL
+앱 비밀 그릇 아홉 · 계약9 SNS FIFO 주제와 SQS FIFO 큐 · rewind 버킷 · SQL
 실행기 스위치(1단-가), 일 큐 셋과 DLQ · clips · 프로필 사진 버킷 · auth 설정
 (OAuth · 사진 주소) · clip 일 스위치(1단-다). platform · media · edge · 일꾼
 배치 루트는 이 루트의 상태(키 `prod/runtime/terraform.tfstate`)를

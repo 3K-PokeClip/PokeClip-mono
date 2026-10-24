@@ -766,7 +766,11 @@ AccessDenied(접근 거부 · SCP 거부)가 나면 다시 시도하지 않고 �
         destroy` — 일 큐 · DLQ 여섯 · 재처리 허용 셋 · clips 버킷 다섯 ·
         프로필 사진 버킷 다섯 · 그릇 하나(`pokeclip/prod/soop-client-secret`)
         · rewind 버킷 CORS 하나(`aws_s3_bucket_cors_configuration.rewind`).
-        1단-가와 함께면 `50 to add`(29 + 21)입니다.
+        1단-가와 함께면 `50 to add`(29 + 21)입니다. 1단-나 ②(POK-429)가
+        들어간 판이면 그릇이 하나 더(`pokeclip/prod/stream-key-resolve-token`)
+        라 `22 to add` · 1단-가와 함께면 `51 to add` 이고, 출력에 「1단-나 ②
+        2」 의 변화가 함께 나옵니다. 그 그릇의 값은 O7d 전에 「1단-나 ② 4」
+        로 넣습니다.
     *   바뀐 출력이 `app_env` · `app_secret_arns` ·
         `app_task_resource_arns` 입니다. `app_env.auth` 에
         `STREAM_KEY_SECRET_REF_PREFIX` 가 없습니다(platform 이 넣음).
@@ -1134,6 +1138,8 @@ kty 가 세션 밖에서 caller identity 를 본 뒤 1 의 세 명령을 그 순
 2 의 plan · 확인 · apply · 적용 확인 꼴로 합니다. 기대 변화는 아래뿐입니다
 — 그 밖의 변화가 있으면 apply 하지 않습니다.
 
+*   `Plan: 1 to add, 0 to change, 0 to destroy`(1단-다를 적용한 뒤 기준 —
+    함께 적용하면 「1단-다 2」 의 수를 봅니다).
 *   추가: 그릇 하나(`module.secret_shells` 의
     `pokeclip/prod/stream-key-resolve-token`).
 *   출력: `app_secret_arns.auth` 에 `STREAM_KEY_RESOLVE_TOKEN` ·
@@ -1175,8 +1181,8 @@ printf 'put-secret 종료 %s\n' "$?"
 ```
 
 *   종류 `stream-key-resolve-token` 은 1단-다(POK-427)가 넓힌 허용 목록에 이
-    PR 이 한 줄을 더한 것입니다. 인자 꼴은 1단-다 머지본에서 다시 맞춥니다.
-    종료 2(모르는 종류)면 그 판이 빠진 것이니 멈춥니다.
+    PR 이 한 줄을 더한 것입니다. 인자 꼴(`<종류> <파일>`)은 1단-다 머지본
+    그대로입니다. 종료 2(모르는 종류)면 그 판이 빠진 것이니 멈춥니다.
 *   값은 `INTERNAL_API_TOKEN` 과 달라야 합니다 — 같으면 auth 가 부팅을
     거부합니다. 화면 · 세션에 값을 내지 않습니다. 종료 4(DENIED)는 다시
     시도하지 않고 멈춥니다.

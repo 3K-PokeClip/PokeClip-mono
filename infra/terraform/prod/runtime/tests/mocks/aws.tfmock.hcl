@@ -8,7 +8,7 @@ mock_resource "aws_sns_topic" {
   }
 }
 
-# 서브넷 조회(network_state.tf)는 시험 여덟이 모두 읽는다. override 가 없는
+# 서브넷 조회(network_state.tf)는 시험 열셋이 모두 읽는다. override 가 없는
 # 파일에서도 대역이 IPv4 CIDR 꼴이 되게 문서용 대역(RFC 5737)을 준다.
 mock_data "aws_subnet" {
   defaults = {

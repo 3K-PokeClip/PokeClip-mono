@@ -29,7 +29,7 @@ override_data {
   }
 }
 
-run "creates_eight_app_secret_shells" {
+run "creates_nine_app_secret_shells" {
   command = plan
 
   assert {
@@ -44,7 +44,7 @@ run "creates_eight_app_secret_shells" {
       "pokeclip/prod/soop-client-secret",
       "pokeclip/prod/stream-key-resolve-token",
     ])
-    error_message = "비밀 그릇 이름 집합이 pokeclip/prod/ 아래 여덟과 다르다."
+    error_message = "비밀 그릇 이름 집합이 pokeclip/prod/ 아래 아홉과 다르다."
   }
 }
 

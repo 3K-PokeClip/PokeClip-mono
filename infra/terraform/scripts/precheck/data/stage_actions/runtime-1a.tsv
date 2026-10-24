@@ -64,7 +64,8 @@ secretsmanager:CreateSecret	ap-northeast-2	arn:aws:secretsmanager:ap-northeast-2
 secretsmanager:TagResource	ap-northeast-2	arn:aws:secretsmanager:ap-northeast-2:${ACCOUNT}:secret:pokeclip/prod/*
 secretsmanager:DescribeSecret	ap-northeast-2	arn:aws:secretsmanager:ap-northeast-2:${ACCOUNT}:secret:pokeclip/prod/*
 secretsmanager:GetResourcePolicy	ap-northeast-2	*
-# 값 넣기(put-secret-from-file.sh — 1단-다) — apply 뒤 그릇 여덟에 값을 넣는다.
+# 값 넣기(put-secret-from-file.sh — 1단-다 · 1단-나 ②) — apply 뒤 그릇 아홉에
+# 값을 넣는다.
 secretsmanager:PutSecretValue	ap-northeast-2	arn:aws:secretsmanager:ap-northeast-2:${ACCOUNT}:secret:pokeclip/prod/*
 kms:DescribeKey	ap-northeast-2	*
 
