@@ -654,24 +654,32 @@ export function useLiveMockState(pastRoute: boolean): LiveMockState {
   const view = useMemo(() => (info === null ? null : primaryInfo(info, Date.now())), [info]);
   // 채널 이름은 대표 플랫폼의 것이다(치지직 채널 이름 · SOOP 닉네임, POK-397). 플랫폼 값이 없는 옛 서버면 치지직이다. 내 방송은 내
   // 연동에서, 위임받은 방송(EDITOR)은 방송 줄에 실려 온 스트리머 이름에서 읽는다(POK-430). 내 채널 이름을 남의 방송에 붙이면 거짓이라
-  // (POK-251 리뷰) 줄에 이름이 없으면(옛 서버 · 연동 없음) 비운다
+  // (POK-251 리뷰) 줄에 이름이 없으면(옛 서버 · 연동 없음) 비운다. 방송 중인데 수집기가 이 방송을 아직 한 번도 못 봤으면(방송 정보
+  // 없음) 어느 플랫폼인지 모르므로 비운다: 치지직 이름으로 채우면 SOOP 방송 왼쪽 위에 치지직 채널 이름이 떴다(POK-449). 끝난 방송은
+  // 그대로다: 정보 없이 끝난 옛 방송은 치지직 방송이었다(로컬 리뷰 1라운드)
   const soopLead = view?.platform === 'SOOP';
   const channelName =
-    live.relation === 'OWNER'
-      ? ((soopLead ? soop?.nickname : chzzk?.channelName) ?? '')
-      : live.relation === 'EDITOR'
-        ? ((soopLead ? live.channelNames?.SOOP : live.channelNames?.CHZZK) ?? '')
-        : '';
+    !view?.latest && live.status !== 'ended'
+      ? ''
+      : live.relation === 'OWNER'
+        ? ((soopLead ? soop?.nickname : chzzk?.channelName) ?? '')
+        : live.relation === 'EDITOR'
+          ? ((soopLead ? live.channelNames?.SOOP : live.channelNames?.CHZZK) ?? '')
+          : '';
   const myName = me?.name ?? '';
   const stream = useMemo<LiveStream>(
     () => ({
-      // 방송 정보 관측의 제목이 먼저고, 그 관측에 제목이 비면 목록 제목(POK-259), 그것도 없으면 방송 번호
+      // 방송 정보 관측의 제목이 먼저고, 그 관측에 제목이 비면 목록 제목(POK-259), 그것도 없으면 빈 값(모름)이다. 방송 번호를 제목
+      // 자리에 쓰지 않는다: 정보 바가 빈 제목을 회색 막대나 「제목 확인 중」으로 비운다(POK-449)
       title:
         view?.latest?.title?.trim() ||
         live.listTitle ||
-        // 지난 방송 주소는 방송 번호를 정하기 전에도 라이브 안내(「방송 중인 채널이 없어요」)를 쓰지 않는다(리뷰 3라운드)
-        streamId ||
-        (pastRoute ? '지난 방송' : '방송 중인 채널이 없어요'),
+        (streamId
+          ? ''
+          : // 지난 방송 주소는 방송 번호를 정하기 전에도 라이브 안내(「방송 중인 채널이 없어요」)를 쓰지 않는다(리뷰 3라운드)
+            pastRoute
+            ? '지난 방송'
+            : '방송 중인 채널이 없어요'),
       // 정보 바는 이 칸을 그리지 않는다(플랫폼 태그는 홈 라이브 띠에만 있다). 방송 정보가 아직 없으면 빈 값이다
       platform: onAirLabel(info?.platforms, Date.now()) ?? '',
       channelName,

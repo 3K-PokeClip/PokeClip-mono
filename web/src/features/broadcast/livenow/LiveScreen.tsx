@@ -45,6 +45,7 @@ import { useLiveStatsMockState } from './useLiveStatsMockState';
 import { useLiveStatusMockState } from './useLiveStatusMockState';
 import { useLiveStreamSelection } from './useLiveStreamSelection';
 import { useManualMarking } from './useManualMarking';
+import { infoWaitOver } from '../infoWait';
 
 // 디자인 1b — 라이브 대시보드. 시안은 페이지 헤더 없이 콘텐츠부터 시작하고,
 // 방송 정보를 영상 아래 줄에 둔다. 세로로 길게 쌓아 문서 스크롤로 내려가는 화면이라
@@ -109,6 +110,7 @@ const PLAYBACK_ACCESS_CHECK_MS = 60_000;
 function LivePlayer({
   stream,
   viewersNote,
+  infoPending,
   broadcastStatus,
   displayStatus,
   startedAt,
@@ -129,6 +131,8 @@ function LivePlayer({
 }: {
   stream: LiveStream;
   viewersNote: string;
+  /** 방송 정보를 받아 오는 중 — 상단 필의 빈 칸을 회색 막대로 둔다(POK-449) */
+  infoPending: boolean;
   /** 명부가 답한 방송 상태. 녹화를 찾고 영상 주소를 고르는 데만 쓴다 */
   broadcastStatus: BroadcastStatus;
   /**
@@ -345,6 +349,7 @@ function LivePlayer({
       key={`${uptimeSeconds === null ? 'clock-pending' : 'clock-known'}-${accessRecoveries}`}
       channelName={stream.channelName}
       viewersNote={viewersNote}
+      infoPending={infoPending}
       broadcastStatus={displayStatus}
       noSignalNote={noSignalNote}
       mediaKey={liveStreamId && cookieFor === accessKey ? (mediaKey ?? liveStreamId) : undefined}
@@ -491,9 +496,21 @@ function LiveDashboard() {
   // 무엇이라 쓰는지는 통계와 같은 함수 하나가 정한다(리뷰 5라운드). 값과 말은 통계 훅이 센 것을 그대로 쓴다: 두 곳에서 따로
   // 세면 한쪽 인자만 바뀌어도 다시 갈린다(리뷰 6라운드)
   const v = stats.lastViewers;
+  // 방송 정보를 받아 오는 중(POK-449): 방송 중이거나 아직 상태를 모르고, 방송 시작에서 2분이 안 지났다. 이때 빈 칸(채널 이름 · 시청자
+  // 수 · 제목 · 카테고리)은 회색 막대다. 그 뒤로는 지금처럼 까닭(확인 중 · 수집 전)을 글자로 적는다
+  // 시작 시각을 모르면(명부 답 전 · 실패, 시작 시각 없는 방송) 이 화면이 그 방송을 처음 본 때부터 센다: 안 세면 명부 조회가 계속
+  // 실패하는 동안 막대가 끝없이 번쩍였다(로컬 리뷰 1라운드)
+  // 방송을 바꾸면 다시 센다(렌더 중 상태 고침: React의 「이전 값에 맞춰 상태 고치기」 방식)
+  const [firstSeen, setFirstSeen] = useState(() => ({ streamId, at: Date.now() }));
+  if (firstSeen.streamId !== streamId) setFirstSeen({ streamId, at: Date.now() });
+  const infoPending =
+    (viewStatus === 'live' || viewStatus === 'unknown') &&
+    !infoWaitOver(clock.startedAt ?? firstSeen.at, Date.now());
   const viewersLabel =
     v === null
-      ? `시청자 수 ${stats.noViewers}`
+      ? infoPending
+        ? ''
+        : `시청자 수 ${stats.noViewers}`
       : ended
         ? `끝날 때 ${v.toLocaleString('ko-KR')}명 시청`
         : `${v.toLocaleString('ko-KR')}명 시청 중`;
@@ -667,6 +684,7 @@ function LiveDashboard() {
               <LivePlayer
                 stream={stream}
                 viewersNote={viewersLabel}
+                infoPending={infoPending}
                 broadcastStatus={clock.status}
                 displayStatus={viewStatus}
                 startedAt={clock.startedAt}
@@ -691,6 +709,8 @@ function LiveDashboard() {
             stream={stream}
             meta={streamMeta}
             viewersLabel={viewersLabel}
+            infoPending={infoPending}
+            titleNote={`제목 ${missingWord(viewStatus, info !== null)}`}
             uptimeLabel={uptimeLabel}
             uptimeNote={UPTIME_NOTE[viewStatus]}
             metaNote={`방송 정보 ${missingWord(viewStatus, info !== null)}`}
