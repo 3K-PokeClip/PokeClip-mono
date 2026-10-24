@@ -9,6 +9,7 @@ import {
   restoreReturnPath,
 } from '@/components/app-shell/AuthGuard';
 import { LEGAL_URLS } from '@/features/legal/legalInfo';
+import { track } from '@/lib/analytics';
 import { useAuthHydration, useAuthStore } from '@/stores/auth';
 import { GoogleGIcon } from './GoogleGIcon';
 import { startGoogleLogin } from './googleOAuth';
@@ -42,6 +43,8 @@ export function LoginScreen() {
     const returnTo = consumeReturnPath();
     try {
       startGoogleLogin(returnTo ?? undefined);
+      // 동의 화면으로 떠나는 자리라 비콘으로 바로 보낸다 — 시작을 못 하고 던졌으면 세지 않는다 (POK-357)
+      track('login_started', {}, { beacon: true });
     } catch {
       if (returnTo !== null) restoreReturnPath(returnTo);
       setStartFailed(true);

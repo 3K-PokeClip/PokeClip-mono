@@ -75,6 +75,7 @@ export function useYoutubeLinkState(): YoutubeLinkViewState {
       // 등록 주소가 어긋나 있으면 동의를 다 마친 뒤에야 증상이 나온다 — 개발 빌드에서 미리 알린다.
       warnIfCallbackMismatch(authorizeUrl);
       goToYoutubeConsent(authorizeUrl);
+      track('platform_link_started', { platform: 'youtube' }, { beacon: true }); // 동의 화면으로 떠난다 (POK-357)
     },
     onError: () => {
       // 401은 apiFetch가 회전을 시도하고 AuthGuard가 /login으로 보낸다 — 별도 문구 없음.

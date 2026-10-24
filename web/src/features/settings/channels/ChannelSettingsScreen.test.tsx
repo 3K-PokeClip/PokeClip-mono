@@ -204,6 +204,10 @@ describe('ChannelSettingsScreen — 연동 시작', () => {
     expect(
       spy.mock.calls.filter(([url, init]) => url === START_URL && init?.method === 'POST'),
     ).toHaveLength(1);
+    // 동의 화면으로 떠나는 자리라 비콘으로 센다 — 동의 주소는 싣지 않는다 (POK-357)
+    expect(track.mock.calls).toEqual([
+      ['platform_link_started', { platform: 'chzzk' }, { beacon: true }],
+    ]);
   });
 
   it('동의 URL 발급에 실패하면 오류를 알리고 이동하지 않는다', async () => {
