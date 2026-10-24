@@ -17,7 +17,7 @@ const BASE = 1_000_000;
 const WINDOW = { startSeconds: 10, endSeconds: 40 };
 
 function fakeContext() {
-  const gains: { gain: { value: number } }[] = [];
+  const gains: { gain: { value: number }; disconnect: ReturnType<typeof vi.fn> }[] = [];
   return {
     gains,
     ctx: {
@@ -160,7 +160,7 @@ describe('useTrackPreview', () => {
     expect(used.at(-1)!.state).toBe('running');
   });
 
-  it('불러오는 동안에도 영상 소리를 끈다: 다시 받는 사이 뺀 트랙까지 섞인 최종 믹스가 들리지 않게(로컬 리뷰 1라운드)', async () => {
+  it('음량을 바꿔 두었으면 불러오는 동안에도 영상 소리를 끈다: 뺀 트랙까지 섞인 최종 믹스가 들리지 않게(로컬 리뷰 1라운드)', async () => {
     const node = video();
     let finish: (value: unknown) => void = () => {};
     vi.mocked(requestSegmentAudioAccess).mockReturnValueOnce(
@@ -177,12 +177,94 @@ describe('useTrackPreview', () => {
         createContext: () => fakeContext().ctx as never,
       }),
     );
+    act(() => result.current.setGains([0, 1, 0]));
     expect(result.current.status).toBe('loading');
     expect(node.muted).toBe(true);
     finish({ expiresAt: '', segments: [] });
     // 소리 트랙을 못 꺼냈다(빈 조각) → 못 부름 → 영상 소리로 돌아간다
     await waitFor(() => expect(result.current.status).toBe('unavailable'));
     expect(node.muted).toBe(false);
+  });
+
+  it('음량이 영상 소리와 같으면(첫 트랙만 100%) 불러오는 동안 영상 소리를 그대로 둔다: 조각을 다 받는 수십 초 동안 조용하지 않게(PR #341 claude)', async () => {
+    const node = video();
+    let finish: (value: unknown) => void = () => {};
+    vi.mocked(requestSegmentAudioAccess).mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve;
+      }) as never,
+    );
+    const { result } = renderHook(() =>
+      useTrackPreview({
+        streamId: 's-1',
+        baseMs: BASE,
+        window: WINDOW,
+        video: node,
+        createContext: () => fakeContext().ctx as never,
+      }),
+    );
+    act(() => result.current.setGains([1, 0, 0]));
+    expect(result.current.status).toBe('loading');
+    expect(node.muted).toBe(false);
+    // 트랙을 하나 더 넣으면 영상 소리와 달라진다: 그때부터는 끈다
+    act(() => result.current.setGains([1, 0.5, 0]));
+    expect(node.muted).toBe(true);
+    act(() => result.current.setGains([1, 0, 0]));
+    expect(node.muted).toBe(false);
+
+    finish({
+      expiresAt: '',
+      segments: [
+        { seq: 1, startAtMs: BASE + 10_000, durationMs: 1000, url: 'https://s3/seg_1.m4s' },
+      ],
+    });
+    // 재생기가 준비되면 소리는 재생기가 낸다
+    await waitFor(() => expect(result.current.status).toBe('ready'));
+    expect(node.muted).toBe(true);
+  });
+
+  it('창을 다시 받는 동안 앞 창 재생기가 이어 튼다: 새 재생기가 준비되면 그때 앞 것을 버린다(PR #341 claude)', async () => {
+    const { ctx, gains } = fakeContext();
+    const node = video();
+    const { result, rerender } = renderHook(
+      ({ window }) =>
+        useTrackPreview({
+          streamId: 's-1',
+          baseMs: BASE,
+          window,
+          video: node,
+          createContext: () => ctx as never,
+        }),
+      { initialProps: { window: WINDOW } },
+    );
+    act(() => result.current.setGains([0, 1, 0]));
+    await waitFor(() => expect(result.current.status).toBe('ready'));
+    const firstPlayerGains = [...gains];
+    expect(firstPlayerGains).toHaveLength(3);
+
+    let finish: (value: unknown) => void = () => {};
+    vi.mocked(requestSegmentAudioAccess).mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve;
+      }) as never,
+    );
+    rerender({ window: { startSeconds: 5, endSeconds: 45 } });
+    expect(result.current.status).toBe('loading');
+    // 앞 재생기가 그대로 소리를 내니 영상 소리는 꺼 둔 채다. 파형도 그대로 둔다
+    expect(node.muted).toBe(true);
+    expect(result.current.levels).not.toBeNull();
+    for (const gain of firstPlayerGains) expect(gain.disconnect).not.toHaveBeenCalled();
+
+    finish({
+      expiresAt: '',
+      segments: [
+        { seq: 1, startAtMs: BASE + 10_000, durationMs: 1000, url: 'https://s3/seg_1.m4s' },
+      ],
+    });
+    await waitFor(() => expect(result.current.status).toBe('ready'));
+    expect(gains).toHaveLength(6);
+    for (const gain of firstPlayerGains) expect(gain.disconnect).toHaveBeenCalled();
+    expect(result.current.levels?.startSeconds).toBe(5);
   });
 
   it('조각 받기가 멈춰 있으면 시한 뒤 「못 부름」으로 영상 소리를 되살린다(로컬 리뷰 2라운드)', async () => {
@@ -200,6 +282,7 @@ describe('useTrackPreview', () => {
           createContext: () => fakeContext().ctx as never,
         }),
       );
+      act(() => result.current.setGains([0, 1, 0]));
       expect(node.muted).toBe(true);
       await act(async () => {
         await vi.advanceTimersByTimeAsync(TRACK_LOAD_TIMEOUT_MS + 10);
