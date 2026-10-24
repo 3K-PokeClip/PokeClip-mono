@@ -68,13 +68,6 @@ public class User {
     @Column(name = "deleted_at")
     private Instant deletedAt;
 
-    /**
-     * 설정 › 계정의 「이용 분석 참여」를 껐나(V120). 끄면 대시보드가 분석 도구로 보내지 않는다 — auth는 값을
-     * 저장하고 돌려줄 뿐 분석 도구와 통신하지 않는다. 기본은 참여(false).
-     */
-    @Column(name = "analytics_opt_out", nullable = false)
-    private boolean analyticsOptOut;
-
     private User(String googleSub, String email, String name, String profileImageUrl, Instant now) {
         this.googleSub = googleSub;
         this.email = email;
@@ -106,13 +99,6 @@ public class User {
      */
     public void changeName(String trimmedName, Instant now) {
         this.name = trimmedName;
-        this.updatedAt = now;
-    }
-
-    /** 「이용 분석 참여」 토글. 같은 값이면 아무것도 바꾸지 않는다(수정 시각도 그대로) */
-    public void changeAnalyticsOptOut(boolean optOut, Instant now) {
-        if (this.analyticsOptOut == optOut) return;
-        this.analyticsOptOut = optOut;
         this.updatedAt = now;
     }
 

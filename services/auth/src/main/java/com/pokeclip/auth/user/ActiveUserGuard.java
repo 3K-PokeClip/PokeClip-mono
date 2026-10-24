@@ -49,7 +49,7 @@ import org.springframework.stereotype.Component;
  * <p><b>{@code site}는 상수만 넘긴다.</b> 로그로 나가는 값이라 이메일·이름·채널 이름이 들어가면 안 된다
  * ({@code SecretLeakTest}가 본다).
  *
- * <h2>🔴 전수 명부 — 막는 자리 11자리 · 9파일 · 가드 밖 회원 행 락 9자리</h2>
+ * <h2>🔴 전수 명부 — 막는 자리 10자리 · 9파일 · 가드 밖 회원 행 락 9자리</h2>
  *
  * <p>🔴 <b>숫자는 바로 위 한 줄에만 있다 — 아래 표에는 세어 둔 수를 안 적는다.</b>
  * 두 군데 적으면 한쪽만 고치는 날이 오고, <b>이 세션에서만 그 일이 세 번</b> 났다
@@ -79,8 +79,6 @@ import org.springframework.stereotype.Component;
  * <tr><td>{@code SoopLinkWriter.create}</td><td>SOOP 연동 행 + secrets 둘(POK-396)</td><td>없다(락과 함께)</td></tr>
  * <tr><td>{@code UserService.updateName}</td><td>익명화된 이름의 <b>되돌리기</b></td>
  *     <td><b>남는다</b>(락 없음)</td></tr>
- * <tr><td>{@code UserService.updateAnalyticsOptOut}</td><td>탈퇴자 행의 「이용 분석 참여」 칸(V120) — 탈퇴자에게 새 설정을 적는 쓰기</td>
- *     <td><b>남는다</b>(락 없음). 통과해도 남는 것은 익명 행의 boolean 하나다</td></tr>
  * <tr><td>{@code InvitationService.invite}</td><td>탈퇴자가 <b>보내는</b> 초대</td>
  *     <td><b>남는다</b>(락 없음)</td></tr>
  * <tr><td>🔴 {@code TokenService.rotate}</td><td>일괄 폐기를 <b>넘어 살아남은 갱신 표</b>의 회전</td>

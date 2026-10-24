@@ -7,7 +7,6 @@ import com.pokeclip.auth.api.dto.GoogleLoginRequest;
 import com.pokeclip.auth.api.dto.MeResponse;
 import com.pokeclip.auth.api.dto.RefreshRequest;
 import com.pokeclip.auth.api.dto.TokenResponse;
-import com.pokeclip.auth.api.dto.UpdateAnalyticsRequest;
 import com.pokeclip.auth.api.dto.UpdateNameRequest;
 import com.pokeclip.auth.profile.PhotoUrls;
 import com.pokeclip.auth.token.TokenService;
@@ -54,17 +53,6 @@ public class AuthController {
     @PatchMapping("/me")
     public MeResponse updateName(@AuthenticationPrincipal Jwt jwt, @RequestBody UpdateNameRequest request) {
         User user = authService.updateName(userId(jwt), request.name());
-        return MeResponse.from(user, photoUrls.of(user, Instant.now()));
-    }
-
-    /**
-     * 설정 › 계정의 「이용 분석 참여」 토글(처리방침 7·9절). 이름과 모양이 달라(boolean 하나) 따로 둔다.
-     * auth는 값을 저장하고 돌려줄 뿐 분석 도구와 통신하지 않는다 — 끄는 일은 대시보드가 한다.
-     */
-    @PatchMapping("/me/analytics")
-    public MeResponse updateAnalytics(@AuthenticationPrincipal Jwt jwt,
-                                      @Valid @RequestBody UpdateAnalyticsRequest request) {
-        User user = authService.updateAnalyticsOptOut(userId(jwt), request.optOut());
         return MeResponse.from(user, photoUrls.of(user, Instant.now()));
     }
 
