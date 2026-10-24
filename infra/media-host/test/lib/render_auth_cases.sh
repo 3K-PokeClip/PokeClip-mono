@@ -53,7 +53,7 @@ def ia_env:
    MTX_API_URL: "http://127.0.0.1:9997", MTX_API_USER: "pokeclip-sidecar",
    MTX_API_PASS_FILE: "/run/secrets/mtx_api_pass",
    STREAM_KEY_RESOLVE_URL: .stream_key_resolve_url,
-   STREAM_KEY_RESOLVE_CHANNEL: "internal-token",
+   STREAM_KEY_RESOLVE_CHANNEL: "resolve-token",
    STREAM_KEY_RESOLVE_TOKEN_FILE: "/run/secrets/stream_key_resolve_token",
    INGEST_AUTH_BASIC_USER: "pokeclip-mediamtx",
    INGEST_AUTH_BASIC_PASS_FILE: "/run/secrets/ingest_basic_pass"};
@@ -540,7 +540,7 @@ auth_cases::check_44() {
   # 구조 비교에 쓰지 않는 값으로 채운다(빈 값이면 compose 가 멈춘다).
   printf '%s\n' PCBENCH_MTX_IMAGE=x PCBENCH_INGEST_AUTH_IMAGE=x \
     PCBENCH_ECHO_IMAGE=x PCBENCH_HELPER_IMAGE=x PCBENCH_SENDER_IMAGE=x \
-    PCBENCH_PASSPHRASE=x PCBENCH_INTERNAL_TOKEN=x PCBENCH_STREAM_TOKEN=x \
+    PCBENCH_PASSPHRASE=x PCBENCH_RESOLVE_TOKEN=x PCBENCH_STREAM_TOKEN=x \
     PCBENCH_API_PASS=x PCBENCH_RESOLVE_URL=http://resolvestub:28082 \
     "PCBENCH_MTX_CONFIG=${scratch}/mediamtx.yml" "RUNTIME_DIR=${scratch}" \
     >"${trial}.env"

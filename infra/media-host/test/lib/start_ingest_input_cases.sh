@@ -43,7 +43,7 @@ auth_input_no_env=0
 #######################################
 auth_input::add_env() {
   local entry
-  for entry in "INTERNAL_API_TOKEN_SECRET_ARN=${AUTH_RESOLVE_ARN}" \
+  for entry in "STREAM_KEY_RESOLVE_TOKEN_SECRET_ARN=${AUTH_RESOLVE_ARN}" \
     "INGEST_AUTH_DENYLIST_PARAM=${AUTH_DENY_PARAM}" \
     "INGEST_AUTH_DENY_DIR=${fixture_dir}/deny"; do
     case " ${auth_input_drop} " in
@@ -165,7 +165,8 @@ $(fixture::count_records aws)회(기대 3)"
 auth_input::resolve_run() {
   local value=""
   case "$1" in
-    arn-unset) auth_input_drop=INTERNAL_API_TOKEN_SECRET_ARN ;;
+    arn-unset | old-arn-only)
+      auth_input_drop=STREAM_KEY_RESOLVE_TOKEN_SECRET_ARN ;;
     fail | empty | none) ;;
     ctrl) value=$'pcbench\001token' ;;
     nul) value='nul' ;;
@@ -183,6 +184,10 @@ auth_input::resolve_run() {
   fi
   case "$1" in
     arn-unset) auth_mode::run "${auth_mode_tmpl}" ;;
+    # 옛 키 이름만 있는 media.env — 별칭으로 읽지 않는다(ARN 없음과 같다).
+    old-arn-only)
+      auth_mode::run "${auth_mode_tmpl}" \
+        "INTERNAL_API_TOKEN_SECRET_ARN=${AUTH_RESOLVE_ARN}" ;;
     fail | empty | none)
       auth_mode::run "${auth_mode_tmpl}" "PCBENCH_FAKE_AWS_RESOLVE_MODE=$1" ;;
     *)
@@ -192,20 +197,22 @@ auth_input::resolve_run() {
 }
 
 #######################################
-# 사례 52 — 4C 토큰을 쓸 수 없으면(ARN 없음 · 조회 실패 · 빈 값 · None · 제어
-# 문자 · NUL · 앞뒤 공백 · C1 제어 문자 · 파일 4096바이트 초과) 거부 목록을
-# 받기 전에 막고 파일을 남기지 않는다. 4095바이트 값(줄바꿈까지 4096)은 받는다.
+# 사례 52 — 4C 토큰을 쓸 수 없으면(ARN 없음 · 옛 키 이름
+# INTERNAL_API_TOKEN_SECRET_ARN 만 있음 · 조회 실패 · 빈 값 · None · 제어 문자 ·
+# NUL · 앞뒤 공백 · C1 제어 문자 · 파일 4096바이트 초과) 거부 목록을 받기 전에
+# 막고 파일을 남기지 않는다. 4095바이트 값(줄바꿈까지 4096)은 받는다.
 #######################################
 auth_input::case_resolve_blocked() {
   local ok=0 row f max
   auth_mode::prod_template || return 1
-  for row in arn-unset fail empty none ctrl nul lead trail c1 oversize; do
+  for row in arn-unset old-arn-only fail empty none ctrl nul lead trail c1 \
+    oversize; do
     fixture::new_case
     auth_input::resolve_run "${row}" || return 1
     auth_input_drop=""
     # ARN 이 없으면 4C 조회를 부르지 않는다(aws 는 CDN 하나).
     max=2
-    [[ "${row}" != arn-unset ]] || max=1
+    [[ "${row}" != arn-unset && "${row}" != old-arn-only ]] || max=1
     auth_input::expect_blocked "${row}" "${AUTH_RESOLVE_LINE}" "${max}" || ok=1
   done
   fixture::new_case
@@ -438,7 +445,7 @@ auth_input::case_legacy_untouched() {
   auth_input::write_compose 0
   ln -s -- "${fixture_dir}/absent.env" "${fixture_dir}/${AUTH_ENV_NAME}"
   fixture::base_env
-  fixture_env+=("INTERNAL_API_TOKEN_SECRET_ARN=${AUTH_RESOLVE_ARN}"
+  fixture_env+=("STREAM_KEY_RESOLVE_TOKEN_SECRET_ARN=${AUTH_RESOLVE_ARN}"
     "INGEST_AUTH_DENYLIST_PARAM=${AUTH_DENY_PARAM}"
     "INGEST_AUTH_DENY_DIR=${fixture_dir}/deny")
   fixture::run start-media.sh || return 1

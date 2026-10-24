@@ -161,7 +161,7 @@ services:
       MTX_API_USER: pokeclip-sidecar
       MTX_API_PASS_FILE: /run/secrets/mtx_api_pass
       STREAM_KEY_RESOLVE_URL: ${PCBENCH_RESOLVE_URL:?}
-      STREAM_KEY_RESOLVE_CHANNEL: internal-token
+      STREAM_KEY_RESOLVE_CHANNEL: resolve-token
       STREAM_KEY_RESOLVE_TOKEN_FILE: /run/secrets/stream_key_resolve_token
       INGEST_AUTH_BASIC_USER: pokeclip-mediamtx
       INGEST_AUTH_BASIC_PASS_FILE: /run/secrets/ingest_basic_pass
@@ -195,7 +195,7 @@ services:
       - resolvestub
       - -listen=:28082
       - -admin=127.0.0.1:28199
-      - -internal_token=${PCBENCH_INTERNAL_TOKEN:?}
+      - -resolve_token=${PCBENCH_RESOLVE_TOKEN:?}
       - -stream_token=${PCBENCH_STREAM_TOKEN:?}
       - -passphrase=${PCBENCH_PASSPHRASE:?}
     restart: "no"

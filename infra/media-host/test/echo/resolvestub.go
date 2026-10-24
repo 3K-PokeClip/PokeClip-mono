@@ -12,9 +12,9 @@ import (
 )
 
 // resolvestub 은 송출 인증 계약 시험 층 B 의 가짜 4C(auth 서비스의 POST /internal/stream-keys/resolve)다.
-// 실물 응답기가 prod 창구(STREAM_KEY_RESOLVE_CHANNEL=internal-token)로 부르는 꼴을 받는다:
+// 실물 응답기가 prod 창구(STREAM_KEY_RESOLVE_CHANNEL=resolve-token)로 부르는 꼴을 받는다:
 //
-//	X-Internal-Token 이 정한 값과 다름 → 401(본문 없음)
+//	X-Stream-Key-Resolve-Token 이 정한 값과 다름 → 401(본문 없음 — 공용 X-Internal-Token 으로만 와도)
 //	본문 {"streamid":"#!::r=<토큰>,m=publish"} 의 토큰이 정한 토큰 → 200 {"valid":true,"userId":1,"passphrase":"<P>"}
 //	그 밖의 토큰                                                → 200 {"valid":false,"reason":"NOT_FOUND"}
 //	본문을 읽지 못함                                            → 400
@@ -34,10 +34,10 @@ type resolveCounts struct {
 
 // resolveStub 은 대조할 출입증과 토큰 하나, 그 토큰의 passphrase 를 쥔다.
 type resolveStub struct {
-	internalToken string
-	streamToken   string
-	passphrase    string
-	counts        resolveCounts
+	resolveToken string
+	streamToken  string
+	passphrase   string
+	counts       resolveCounts
 }
 
 // runResolvestub 은 4C 포트와 관리 포트를 띄우고 종료 신호로 끝난다.
@@ -45,7 +45,7 @@ func runResolvestub(args []string) int {
 	fs := flag.NewFlagSet("resolvestub", flag.ContinueOnError)
 	listen := fs.String("listen", ":28082", "4C address (host:port)")
 	admin := fs.String("admin", "127.0.0.1:28199", "admin address (host:port)")
-	internalToken := fs.String("internal_token", "", "expected X-Internal-Token value")
+	resolveToken := fs.String("resolve_token", "", "expected X-Stream-Key-Resolve-Token value")
 	streamToken := fs.String("stream_token", "", "the one stream token that resolves as valid")
 	passphrase := fs.String("passphrase", "", "passphrase returned for the stream token")
 	if err := fs.Parse(args); err != nil {
@@ -55,14 +55,14 @@ func runResolvestub(args []string) int {
 		log.Printf("resolvestub: %v", err)
 		return exitUsage
 	}
-	if *internalToken == "" || *streamToken == "" || *passphrase == "" {
-		log.Print("resolvestub: -internal_token · -stream_token · -passphrase 가 모두 있어야 한다")
+	if *resolveToken == "" || *streamToken == "" || *passphrase == "" {
+		log.Print("resolvestub: -resolve_token · -stream_token · -passphrase 가 모두 있어야 한다")
 		return exitUsage
 	}
 	stub := &resolveStub{
-		internalToken: *internalToken,
-		streamToken:   *streamToken,
-		passphrase:    *passphrase,
+		resolveToken: *resolveToken,
+		streamToken:  *streamToken,
+		passphrase:   *passphrase,
 	}
 	servers := []*http.Server{
 		newServer(*listen, stub.resolveHandler()),
@@ -75,8 +75,8 @@ func runResolvestub(args []string) int {
 func (s *resolveStub) resolveHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST "+resolvePath, func(w http.ResponseWriter, r *http.Request) {
-		got := r.Header.Get("X-Internal-Token")
-		if subtle.ConstantTimeCompare([]byte(got), []byte(s.internalToken)) != 1 {
+		got := r.Header.Get("X-Stream-Key-Resolve-Token")
+		if subtle.ConstantTimeCompare([]byte(got), []byte(s.resolveToken)) != 1 {
 			s.counts.Unauthorized.Add(1)
 			w.WriteHeader(http.StatusUnauthorized)
 			return

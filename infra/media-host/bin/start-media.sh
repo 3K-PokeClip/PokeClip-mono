@@ -38,7 +38,7 @@
 #        정확히 INGEST_AUTH_IP_LIMIT=on 또는 =off 한 줄인지 본다(없으면 compose
 #        의 required env_file 때문에 판정 줄 없이 재시작이 되풀이된다). 아니면
 #        「MEDIA START BLOCKED: ingest-auth ip-limit setting unavailable」.
-#      - 4C 토큰(공용 창구 INTERNAL_API_TOKEN)을 Secrets Manager 에서 읽는다
+#      - 4C 토큰(전용 창구 resolve-token 의 출입증)을 Secrets Manager 에서 읽는다
 #        (argv 에는 ARN 만). ARN 빔 · 실패 · 빈 값 · None · 제어 문자(NUL ·
 #        C1 포함) · 앞뒤 공백 · 파일(값 + 줄바꿈)이 4096바이트 초과면 「MEDIA
 #        START BLOCKED: ingest-auth resolve token unavailable」.
@@ -97,7 +97,8 @@
 #   MEDIA_COMPOSE_PROJECT           기본 pokeclip-media.
 #   MEDIA_COMPOSE_FILE              기본 /etc/pokeclip-media/compose.yml. 옆의
 #                                   ingest-auth.env 도 본다(응답기 모드).
-#   INTERNAL_API_TOKEN_SECRET_ARN   응답기 모드 필수. 4C 토큰 비밀 ARN.
+#   STREAM_KEY_RESOLVE_TOKEN_SECRET_ARN
+#                                   응답기 모드 필수. 4C 토큰 비밀 ARN.
 #   INGEST_AUTH_DENYLIST_PARAM      응답기 모드 필수. 거부 목록 SSM 파라미터
 #                                   이름.
 #   INGEST_AUTH_DENY_DIR            기본 /var/lib/pokeclip-media/ingest-auth/deny
@@ -542,14 +543,14 @@ check_ip_limit_env() {
 # 4096바이트까지 받으므로(secretfile) 빈 값 · None · 제어 문자(C1 포함) · 앞뒤
 # 공백 · 값 + 줄바꿈이 상한 초과면 실패다.
 # Globals:
-#   INTERNAL_API_TOKEN_SECRET_ARN
+#   STREAM_KEY_RESOLVE_TOKEN_SECRET_ARN
 # Outputs:
 #   값(성공했을 때만).
 # Returns:
 #   0 / 1 조회 실패 · 쓸 수 없는 값.
 #######################################
 read_resolve_token() {
-  local arn="${INTERNAL_API_TOKEN_SECRET_ARN:-}" value LC_ALL=C
+  local arn="${STREAM_KEY_RESOLVE_TOKEN_SECRET_ARN:-}" value LC_ALL=C
   local c1=$'\xc2['$'\x80''-'$'\x9f'']'
   [[ -n "${arn}" ]] || return 1
   value="$({ aws secretsmanager get-secret-value --secret-id "${arn}" \

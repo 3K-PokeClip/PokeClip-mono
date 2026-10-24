@@ -25,7 +25,7 @@ readonly IA_PUBLISH_LOCK=\
 'fa4e5ec7040000000123456789abcdef0123456789abcdef0123456789abcdef'
 readonly IA_READ_LOCK=\
 'fa4e5ec7050000000123456789abcdef0123456789abcdef0123456789abcdef'
-readonly IA_INTERNAL_TOKEN=\
+readonly IA_RESOLVE_TOKEN=\
 'fa4e5ec7060000000123456789abcdef0123456789abcdef0123456789abcdef'
 readonly IA_PASSPHRASE='m15FakePassphrase0000000000000001'
 readonly IA_WRONG_PASSPHRASE='m15WrongPassphrase000000000000002'
@@ -660,9 +660,9 @@ check_c9() {
     | tail -n 1)" || started=""
   [[ -n "${started}" ]] || started='{}'
   if [[ "$(jq -r '.caller_auth' <<<"${started}")" != basic \
-    || "$(jq -r '.auth_channel' <<<"${started}")" != internal-token ]]; then
+    || "$(jq -r '.auth_channel' <<<"${started}")" != resolve-token ]]; then
     harness::add_reason \
-      'started 의 caller_auth=basic · auth_channel=internal-token 아님'
+      'started 의 caller_auth=basic · auth_channel=resolve-token 아님'
     ok=1
   fi
   ia::expect_accepted b-c9 "${IA_PASSPHRASE}" '실물 응답기 경유 송출' || ok=1
@@ -1058,7 +1058,7 @@ ia::basic_b64() { printf '%s:%s' "$1" "$2" | base64 | tr -d '\n'; }
 ia::secret_forms() {
   printf '%s %s\n' cdn "${IA_CDN_SECRET}" api "${IA_API_PASS}" \
     basic "${IA_BASIC_PASS}" publish-lock "${IA_PUBLISH_LOCK}" \
-    read-lock "${IA_READ_LOCK}" internal-token "${IA_INTERNAL_TOKEN}" \
+    read-lock "${IA_READ_LOCK}" resolve-token "${IA_RESOLVE_TOKEN}" \
     basic-b64 "$(ia::basic_b64 "${IA_BASIC_USER}" "${IA_BASIC_PASS}")" \
     api-b64 "$(ia::basic_b64 "${IA_API_USER}" "${IA_API_PASS}")"
 }

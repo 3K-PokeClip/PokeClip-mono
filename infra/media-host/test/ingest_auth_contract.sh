@@ -322,7 +322,7 @@ write_responder_inputs() {
   mkdir -p -- "${src}" "${deny_dir}"
   printf '%s\n' "${IA_BASIC_PASS}" >"${src}/ingest_basic_pass"
   printf '%s\n' "${IA_API_PASS}" >"${src}/mtx_api_pass"
-  printf '%s\n' "${IA_INTERNAL_TOKEN}" >"${src}/stream_key_resolve_token"
+  printf '%s\n' "${IA_RESOLVE_TOKEN}" >"${src}/stream_key_resolve_token"
   printf '# pokeclip deny-tokens v1\n' >"${deny_dir}/deny-tokens"
   chmod 0750 "${deny_dir}"
   chmod 0640 "${deny_dir}/deny-tokens"
@@ -342,7 +342,7 @@ export_compose_env() {
   export PCBENCH_HELPER_IMAGE="${HELPER_IMAGE}"
   export PCBENCH_SENDER_IMAGE="${sender_image}"
   export PCBENCH_PASSPHRASE="${IA_PASSPHRASE}"
-  export PCBENCH_INTERNAL_TOKEN="${IA_INTERNAL_TOKEN}"
+  export PCBENCH_RESOLVE_TOKEN="${IA_RESOLVE_TOKEN}"
   export PCBENCH_STREAM_TOKEN="${IA_STREAM_TOKEN}"
   export PCBENCH_API_PASS="${IA_API_PASS}"
   export PCBENCH_RESOLVE_URL='http://resolvestub:28082'

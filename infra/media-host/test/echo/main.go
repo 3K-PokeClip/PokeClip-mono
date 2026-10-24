@@ -6,7 +6,7 @@
 //	echo probe -timeout 2s mediamtx:8888 mediamtx:9996
 //	echo fetch -method POST 'http://127.0.0.1:28199/exit?code=1'
 //	echo authstub -listen 127.0.0.1:8080 -admin 127.0.0.1:28199 -passphrase <P>
-//	echo resolvestub -listen :28082 -internal_token <T> -stream_token <토큰> -passphrase <P>
+//	echo resolvestub -listen :28082 -resolve_token <T> -stream_token <토큰> -passphrase <P>
 //
 // serve 는 MediaMTX 자리(망 칸 주인)를 흉내 낸다. 받은 요청의 경로 · 쿼리 원문 · 메서드 ·
 // 본문 · 헤더를 JSON 으로 그대로 돌려주고, 포트별 호출 수를 센다. 관리 포트는 호출 수
