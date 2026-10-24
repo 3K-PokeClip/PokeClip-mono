@@ -199,7 +199,7 @@ bash infra/terraform/scripts/test/kvs_put_test.sh
 shellcheck infra/terraform/scripts/test/*.sh \
   infra/terraform/scripts/test/fakebin/aws \
   infra/terraform/scripts/test/kvs_fakebin/*
-node --test 'infra/terraform/modules/*/functions/test/*.test.mjs'
+node --test infra/terraform/modules/*/functions/test/*.test.mjs
 for d in infra/terraform/modules/*/ infra/terraform/nonprod/*/ \
   infra/terraform/prod/*/; do tflint --chdir="$d" || printf 'FAIL %s\n' "$d"; done
 shellcheck infra/terraform/scripts/*.sh
@@ -218,9 +218,13 @@ terraform 규칙 묶음)는 루트 · 모듈마다 돌립니다. `--recursive` �
 에 닿지 않음), 없으면 skip 으로 셉니다.
 
 `node --test` 는 CloudFront Function 셋의 단위 시험입니다(node 26 · 표준
-라이브러리만 — 패키지 설치 없음). 글롭은 따옴표로 감싸 node 가 풉니다 —
-디렉터리를 인자로 주면 node 26 은 실패하고, 맞는 파일이 없으면 시험 0개로
-종료 0 이므로 요약의 `tests` 수를 봅니다. node 는 실제 CloudFront 런타임이
+라이브러리만 — 패키지 설치 없음). 글롭은 따옴표 없이 두어 셸이 풀고, 파일
+목록을 node 에 넘깁니다(CI 의 cf-functions 잡과 같음). 디렉터리를 인자로 주면
+node 26 은 실패합니다. 맞는 파일이 없을 때 CI 는 빈 목록을 보고 실패하고,
+TAP 요약의 시험 수가 0 이거나 실패 · 취소 · 건너뜀 · 할 일이 하나라도 있어도
+실패로 봅니다. 손으로 돌릴 때 zsh 는 맞는 파일이 없으면 명령 전에 멈추지만,
+bash 는 풀리지 않은 글롭을 그대로 넘기고 node 는 그것을 시험 0개 · 종료 0 으로
+끝내므로 요약의 `tests` 수를 봅니다. node 는 실제 CloudFront 런타임이
 아닙니다 — 런타임 거동은 [엣지 시험 런북](runbooks/edge-tests.md)이 봅니다.
 
 `put_secret_test.sh` 의 정적 검사(`no-file-writes` · `no-external-commands` ·
