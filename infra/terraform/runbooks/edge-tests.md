@@ -313,8 +313,21 @@ O7f 의 2(T6b)와 4(T0 · T8e 해석 · T11 404 · T2b)입니다. 아래 명령�
     A 쿠키로 B 목록 · 조각(조각은 최대 1시간 캐시)이 나갈 수 있습니다. 2xx
     는 노출 그 자체입니다. 판정이 캐시 상태에 기대지 않으므로 예열은 하지
     않습니다.
+*   **A 쿠키 양성 대조를 먼저 합니다.** 같은 `jar_a` 로 A 자신의 목록
+    `/live/<A>/index.m3u8` 를 한 번 요청해, 응답이 CloudFront 403 이 아님(`server`
+    가 CloudFront 가 아님 — A 송출 여부와 무관)을 확인합니다. 대조가
+    CloudFront 403 이면 쿠키가 무효(만료 · 다른 방송 · 안 실림)라 경로 사례의
+    403 도 경로 때문인지 가를 수 없으므로 그 회차는 무효이고 판정을 적지
+    않습니다. 대조는 사례 뒤에 한 번 더 합니다.
 
     ```shell
+    control() {
+      curl -b "${jar_a}" --resolve "media.pokeclip.com:443:${edge_ip}" -sS \
+        -o /dev/null -D - -w "control %{http_code}\n" \
+        "https://media.pokeclip.com/live/${a_id}/index.m3u8" |
+        grep -iE '^server:|^control '
+    }
+    control
     for dots in /../ /%2e%2e/ /..%2f /..%5c //../; do
       req_path="/live/${a_id}${dots}${b_id}/index.m3u8"
       curl --path-as-is -b "${jar_a}" \
@@ -322,6 +335,7 @@ O7f 의 2(T6b)와 4(T0 · T8e 해석 · T11 404 · T2b)입니다. 아래 명령�
         -D - -w "${req_path} %{http_code}\n" "https://media.pokeclip.com${req_path}" |
         grep -iE '^server:|^x-cache:|^/live/'
     done | tee "${evidence}/t2-path.txt"
+    control | tee -a "${evidence}/t2-path.txt"
     rm -f "${jar_a}" && test ! -e "${jar_a}" && echo removed
     ```
 
@@ -331,7 +345,8 @@ O7f 의 2(T6b)와 4(T0 · T8e 해석 · T11 404 · T2b)입니다. 아래 명령�
     [media-host README](/infra/media-host/README.md) 「로그」)에서 시작
     시각 뒤의 줄을 셉니다. 꼴은 그 README 「시작 · 정지」 의 건수 꼴(`awk` ·
     조회 실패는 0 건이 아니라 실패)을 따르고, 원문은 내지 않습니다.
-*   **응답 코드가 먼저**입니다. 모든 사례에서 응답은 거절 코드(CloudFront
+*   **응답 코드가 먼저**입니다(T2 는 아래 T2 항목이 더 좁습니다). T2b 의
+    모든 사례에서 응답은 거절 코드(CloudFront
     403 · 404 또는 nginx 400 · 403 · 404)여야 합니다. 2xx · 3xx · 5xx · 통신
     실패는 로그와 무관하게 실패입니다 — 캐시 HIT 면 엣지가 원본에 가지 않고
     콘텐츠를 내주므로 nginx · 상류 기록이 0 이어도 노출일 수 있습니다.
@@ -346,12 +361,17 @@ O7f 의 2(T6b)와 4(T0 · T8e 해석 · T11 404 · T2b)입니다. 아래 명령�
         줄은 실패로 세지 않습니다 — `/…/../api/ingest/…` 가 정규화되면
         원래 서명 쿠키 없이 열린 `/api/ingest/…` 와 같은 요청입니다.
     *   T2: 모든 사례가 CloudFront 403(`server: CloudFront`)이어야 통과입니다
-        (위 「T2 는 엣지 서명 거절만 통과」). `results.tsv` 비고에는 응답
-        코드 · `server` · `x-cache` 를 적습니다. nginx 건수는 T2 판정에 쓰지
+        (위 「T2 는 엣지 서명 거절만 통과」) — 앞뒤 양성 대조가 CloudFront
+        403 이 아닐 때만 유효합니다. `results.tsv` 비고에는 대조 결과 · 응답
+        코드 · `server` · `x-cache` 와, 그 시각대 WAF 차단 로그의 시험 IP
+        건수(0 이어야 「서명 거절」 — WAF 403 도 `server: CloudFront`)를
+        적습니다. nginx 건수는 T2 판정에 쓰지
         않습니다.
 *   **실패면 O8 을 중단합니다.** kty 에게 보고하고, 막는 자리(T2 면
     CloudFront 함수 등 엣지 · T2b 면 Media 상자 nginx)를 정해 고친 뒤 다시
-    시험합니다([POK-458](https://xodbs9810.atlassian.net/browse/POK-458)).
+    시험합니다(확인은
+    [POK-458](https://xodbs9810.atlassian.net/browse/POK-458) · 고치는 일은
+    그 결과로 여는 후속 티켓).
 *   통과 뒤 O8 은 [prod/records](../prod/records/README.md) 「적용 —
     이름마다 apply(O8)」 대로 합니다. 이 루트의 첫 apply(처음 여는 이름)는
     `terraform_data.remote_contract` 가 함께 생성되어 plan 이 「추가 = 그
