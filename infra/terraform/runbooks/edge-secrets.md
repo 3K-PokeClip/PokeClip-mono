@@ -62,6 +62,10 @@ prod 엣지 비밀 세 개(서명 키 · CDN 비밀 · 시험용 스트림 키)�
 *   입력이 실패하면 종료 코드로 정합니다. 같은 셸에서 바로 고칠 수 있는
     실패(종료 2 · 3 — 인자 · 입력 파일 지정 오류 등, 원인이 분명한 종료 5)는
     파일을 그대로 두고 고쳐 다시 넣습니다.
+*   종료 1(CLI 기록 차단 — 파일은 읽지 않음)도 파일을 그대로 둡니다.
+    `CLI HISTORY ENABLED` 면 기록을 끈 뒤, `CLI HISTORY UNCHECKED` 면 사유 줄을
+    보고 설정 · 프로필 · lib 경로를 고친 뒤 다시 넣습니다(모르면 kty 에게
+    보고).
 *   **단계를 멈추면** — 입력 실패(종료 4 · 그날 못 고침)든 그 앞 걸음(예:
     「O5」 의 3 의 plan · apply)이든, 셸을 닫을 때든 — 셸을 닫기 전에 파일을
     지우고 0건을 확인합니다. 셸을 닫으면 스크래치 경로(`scratch`)를 잃습니다.
@@ -101,6 +105,10 @@ bash infra/terraform/scripts/put-secret-from-file.sh <종류> <파일>
     `--cli-input-json file:///dev/stdin` 은 쓰지 않습니다 — aws-cli 가 `file://`
     값을 두 번 읽어 파이프의 둘째 읽기가 비고 ParamValidation 으로
     실패합니다(2026-10-17 aws-cli 2.36.7 실측).
+*   파일을 읽기 전에 AWS CLI 명령 기록을 봅니다 — 프로필의 `cli_history` 가
+    `enabled` 이거나 환경 변수 `AWS_CLI_HISTORY_FILE` 이 설정돼 있으면, 또는
+    그 검사를 하지 못하면 값을 읽지 않고 종료 1 로 멈춥니다(판정 규칙은 단계
+    직전 점검 도구와 같은 공용 함수 — 아래 표).
 *   aws 를 부르기 전에 검사합니다 — 파일 없음 · 일반 파일 아님 · 읽기 불가 ·
     빈 파일 · 공백만 · NUL. 서명 키는 머리 줄 `BEGIN PRIVATE KEY` · 꼬리 줄
     `END PRIVATE KEY`(PKCS#8)만 받고, PKCS#1(`BEGIN RSA PRIVATE KEY`) ·
@@ -113,6 +121,7 @@ bash infra/terraform/scripts/put-secret-from-file.sh <종류> <파일>
 | 종료 코드 | 출력(값은 어느 줄에도 없음) | 할 일 |
 |---|---|---|
 | 0 | 표준 출력 `SECRET PUT OK <비밀 이름> <VersionId>` | 다음 걸음 |
+| 1 | 표준 오류 `CLI HISTORY ENABLED`(기록 켜짐) · `CLI HISTORY UNCHECKED`(기록 검사 실패) + 사유 한 줄 | `ENABLED` 는 기록을 끈 뒤(사유 줄이 가리키는 프로필의 `cli_history` · `AWS_CLI_HISTORY_FILE`) 다시. `UNCHECKED` 는 사유 줄을 보고 설정 · 프로필 · lib 경로를 고친 뒤 다시 — 모르면 kty 에게 보고(어느 쪽이든 파일은 읽지 않았고 값을 넣는 aws 호출도 없음) |
 | 2 | 표준 오류 `사용: …` | 인자를 고쳐 다시 |
 | 3 | 표준 오류 `SECRET PUT REJECTED: <이유>` | 파일을 고쳐 다시(aws 는 불리지 않음) |
 | 4 | 표준 오류 `SECRET PUT DENIED` | **다시 시도하지 않고 멈춥니다**(아래 「AccessDenied 가 나면」) |
@@ -166,7 +175,11 @@ aws sts get-caller-identity
     AWS CLI 명령 기록(`cli_history`)이 켜져 있지 않은지도 봅니다 — 켜져 있으면
     요청 본문(값)이 `~/.aws/cli/history/history.db` 에 평문으로 남습니다. 아래
     블록은 판정 줄만 냅니다. 비어 있거나 `disabled` 면 `CLI HISTORY OK` 이고,
-    `CLI HISTORY ENABLED` 면 기록을 끈 뒤 다시 봅니다.
+    `CLI HISTORY ENABLED` 면 기록을 끈 뒤 다시 봅니다. 비밀 입력 스크립트
+    (`put-secret-from-file.sh` · `kvs-put-cdn-secret.sh`)도 값을 읽기 전에 같은
+    검사를 스스로 해서, 켜져 있거나 검사를 하지 못하면 종료 1 로 멈춥니다
+    (`AWS_CLI_HISTORY_FILE` 이 설정돼 있어도 멈춤). 이 블록은 시작 전의 이중
+    확인입니다.
 
     ```shell
     if [ "$(aws configure get cli_history)" = enabled ]; then
@@ -282,6 +295,8 @@ aws sts get-caller-identity
     *   같은 셸에서 바로 고칠 수 있는 실패(종료 2 · 3 — 인자 · 입력 파일 지정
         오류 등, 원인이 분명한 종료 5)는 키 쌍을 그대로 두고 고쳐 다시
         넣습니다.
+    *   종료 1(CLI 기록 차단)도 키 쌍을 그대로 두고 위 「로컬 파일 규칙」 의
+        종료 1 대로 고쳐 다시 넣습니다.
     *   단계를 멈추면(종료 4 · 그날 못 고침 · 셸을 닫을 때) 2 의 「단계를
         멈추면」 대로 셸을 닫기 전에 5 대로 키 쌍을 지우고 0건을 확인한 뒤
         멈춥니다. 종료 4 는 아래 「AccessDenied 가 나면」 도 따릅니다.
@@ -350,8 +365,9 @@ aws sts get-caller-identity
         실행표」 입니다.
 
     CDN 비밀을 넣기 전이라 「O5」 의 선행 0 과 같이 AWS CLI 명령 기록과
-    aws-cli 판을 봅니다. 아래 블록이 `CLI HISTORY OK` 가 아니면 기록을 끈 뒤
-    다시 보고, `aws --version` 이 `aws-cli/2.36.7` 이 아니면
+    aws-cli 판을 봅니다(기록은 스크립트도 막습니다 — 이 블록은 이중 확인).
+    아래 블록이 `CLI HISTORY OK` 가 아니면 기록을 끈 뒤 다시 보고,
+    `aws --version` 이 `aws-cli/2.36.7` 이 아니면
     `bash infra/terraform/scripts/test/put_secret_test.sh` 의
     `ok: real-cli-contract` 줄을 본 뒤 진행합니다 — 그 줄이 아니면(skip ·
     FAIL) 시작하지 않습니다.
@@ -415,7 +431,8 @@ aws sts get-caller-identity
 돌립니다.
 
 1.  키를 넣기 전에 「O5」 의 선행 0 과 같이 AWS CLI 명령 기록과 aws-cli 판을
-    봅니다. 아래 블록이 `CLI HISTORY OK` 가 아니면 기록을 끈 뒤 다시 보고,
+    봅니다(기록은 스크립트도 막습니다 — 이 블록은 이중 확인). 아래 블록이
+    `CLI HISTORY OK` 가 아니면 기록을 끈 뒤 다시 보고,
     `aws --version` 이 `aws-cli/2.36.7` 이 아니면
     `bash infra/terraform/scripts/test/put_secret_test.sh` 의
     `ok: real-cli-contract` 줄을 본 뒤 진행합니다 — 그 줄이 아니면(skip ·
