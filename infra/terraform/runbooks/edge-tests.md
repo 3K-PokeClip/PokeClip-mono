@@ -198,9 +198,9 @@ O7f 의 2(T6b)와 4(T0 · T8e 해석 · T11 404 · T2b)입니다. 아래 명령�
 *   **T6b**(KVS 값 입력 전 · A1 이면 하지 않음):
 
     ```shell
-    for path in "/live/<id>/index.m3u8" "/dvr/<id>/index.m3u8"; do
+    for req_path in "/live/<id>/index.m3u8" "/dvr/<id>/index.m3u8"; do
       curl --resolve "media.pokeclip.com:443:${edge_ip}" -sS -o /dev/null \
-        -w "${path} %{http_code}\n" "https://media.pokeclip.com${path}"
+        -w "${req_path} %{http_code}\n" "https://media.pokeclip.com${req_path}"
     done | tee "${evidence}/t6b.txt"
     curl --resolve "media.pokeclip.com:443:${edge_ip}" -sS -o /dev/null \
       -X POST -w 'end-signal %{http_code}\n' \
@@ -279,7 +279,7 @@ O7f 의 2(T6b)와 4(T0 · T8e 해석 · T11 404 · T2b)입니다. 아래 명령�
 | 언제 | 요청(쿠키) | 통과 조건 |
 |---|---|---|
 | T2b | `/live/../api/ingest/<표식>` · `/playback/../api/ingest/<표식>` · `/live/../api/streams/<표식>/rewind`(쿠키 없음) | 차단 계층 · 응답 코드 기록 · 엣지 차단이면 nginx 도달 0 · nginx 차단이면 거절 응답 + 보호 대상 상류 전달 0 |
-| T2 | `/live/<A>/../<B>/index.m3u8`(방송 A 쿠키) | 응답이 거절 코드(CloudFront 403 · 404 또는 nginx 400 · 403 · 404) **이고** B 상류 전달 0 — 2xx · 3xx · 5xx · 통신 실패는 실패(캐시 HIT 로 B 가 엣지에서 나오면 상류 기록 없이 노출) |
+| T2 | `/live/<A>/../<B>/index.m3u8`(방송 A 쿠키 · 사례마다 B 쿠키로 예열 200 뒤) | A 요청 응답이 거절 코드(CloudFront 403 · 404 또는 nginx 400 · 403 · 404) — 2xx · 3xx · 5xx · 통신 실패는 실패(캐시 HIT 로 B 가 엣지에서 나오면 상류 기록 없이 노출) · nginx 건수는 참고만 |
 
 *   **변형**: 각 사례의 `/../` 를 `/%2e%2e/` · `/..%2f` · `/..%5c` ·
     `//../` 로 바꾼 것도 같은 조건입니다.
@@ -291,12 +291,12 @@ O7f 의 2(T6b)와 4(T0 · T8e 해석 · T11 404 · T2b)입니다. 아래 명령�
     probe="pcpt$(date -u +%H%M%S)"
     date -u '+%Y-%m-%d %H:%M:%S UTC' > "${evidence}/path-since.txt"
     for dots in /../ /%2e%2e/ /..%2f /..%5c //../; do
-      for path in "/live${dots}api/ingest/${probe}" \
+      for req_path in "/live${dots}api/ingest/${probe}" \
         "/playback${dots}api/ingest/${probe}" \
         "/live${dots}api/streams/${probe}/rewind"; do
         curl --path-as-is --resolve "media.pokeclip.com:443:${edge_ip}" -sS \
-          -o /dev/null -w "${path} %{http_code}\n" \
-          "https://media.pokeclip.com${path}"
+          -o /dev/null -w "${req_path} %{http_code}\n" \
+          "https://media.pokeclip.com${req_path}"
       done
     done | tee "${evidence}/t2b-path.txt"
     ```
@@ -310,17 +310,22 @@ O7f 의 2(T6b)와 4(T0 · T8e 해석 · T11 404 · T2b)입니다. 아래 명령�
     않게, 사례마다 바로 앞에서 B 쿠키로 B 목록을 같은 엣지에 받아 둡니다
     (목록 TTL 1초 — 같은 `--resolve` 주소). 그 직후 A 쿠키 요청의
     `x-cache` 를 함께 기록합니다. `Hit from cloudfront` 와 2xx 가 함께 나오면
-    B 가 엣지에서 노출된 것이라 실패입니다.
+    B 가 엣지에서 노출된 것이라 실패입니다. 예열(`warm`) 응답이 200 이
+    아니면 그 사례는 캐시를 못 채운 것이라 무효입니다 — B 송출 · B 쿠키를
+    확인하고 다시 합니다. 예열 뒤 A 요청이 `Miss` 면 캐시 키가 원 경로라
+    HIT 노출 경로가 없다는 뜻이라 그대로 기록합니다.
 
     ```shell
     for dots in /../ /%2e%2e/ /..%2f /..%5c //../; do
-      path="/live/${a_id}${dots}${b_id}/index.m3u8"
+      req_path="/live/${a_id}${dots}${b_id}/index.m3u8"
       curl -b "${jar_b}" --resolve "media.pokeclip.com:443:${edge_ip}" -sS \
-        -o /dev/null "https://media.pokeclip.com/live/${b_id}/index.m3u8"
+        -o /dev/null -w "warm %{http_code}\n" \
+        "https://media.pokeclip.com/live/${b_id}/index.m3u8"
       curl --path-as-is -b "${jar_a}" \
         --resolve "media.pokeclip.com:443:${edge_ip}" -sS -o /dev/null \
-        -D - -w "${path} %{http_code}\n" "https://media.pokeclip.com${path}" |
+        -D - -w "${req_path} %{http_code}\n" "https://media.pokeclip.com${req_path}" |
         grep -iE '^x-cache:|^/live/'
+      # 예열 줄(warm)은 위 curl 의 -w 가 바로 표준 출력에 낸다.
     done | tee "${evidence}/t2-path.txt"
     rm -f "${jar_a}" "${jar_b}" &&
       test ! -e "${jar_a}" && test ! -e "${jar_b}" && echo removed
@@ -336,7 +341,7 @@ O7f 의 2(T6b)와 4(T0 · T8e 해석 · T11 404 · T2b)입니다. 아래 명령�
     실패는 로그와 무관하게 실패입니다 — 캐시 HIT 면 엣지가 원본에 가지 않고
     콘텐츠를 내주므로 nginx · 상류 기록이 0 이어도 노출일 수 있습니다.
 *   **차단 계층**: 사례마다 응답 코드와 막은 계층을 `results.tsv` 비고에
-    적습니다. 거절 코드이면서 표식(T2 는 `b_id`)이 든 nginx 줄이 없으면 엣지
+    적습니다. T2b 는 거절 코드이면서 표식이 든 nginx 줄이 없으면 엣지
     차단(CloudFront 키 그룹 403 · deny-default 404)이고, 있으면 nginx 까지 온
     것입니다.
     *   엣지 차단: nginx 도달 0 이면 통과입니다.
@@ -345,9 +350,12 @@ O7f 의 2(T6b)와 4(T0 · T8e 해석 · T11 404 · T2b)입니다. 아래 명령�
         줄의 `$upstream_addr` 가 `-`)이면 통과입니다. 제어면 상류로 넘긴
         줄은 실패로 세지 않습니다 — `/…/../api/ingest/…` 가 정규화되면
         원래 서명 쿠키 없이 열린 `/api/ingest/…` 와 같은 요청입니다.
-    *   T2: 방송 A 쿠키로 B 콘텐츠가 반환되지 않아야 합니다 — 거절 코드이고,
-        `b_id` 가 든 줄 가운데 상류로 넘긴 줄(`$upstream_addr` 가 `-` 아님)이
-        0 입니다.
+    *   T2: 방송 A 쿠키로 B 콘텐츠가 반환되지 않아야 합니다 — **A 요청의
+        응답 코드로 판정**합니다(거절 코드면 통과 · 2xx 는 `x-cache` 와
+        무관하게 실패). nginx 건수는 T2 판정에 쓰지 않고 참고로만 적습니다
+        — 예열 요청이 B 목록을 원본에서 받아 같은 꼴의 상류 전달 줄을
+        남기고, ALB 가 정규화 경로를 넘기면 A 요청 줄도 예열 줄과 구별되지
+        않기 때문입니다.
 *   **실패면 O8 을 중단합니다.** kty 에게 보고하고, 재현된 누락 사례만
     Media 상자 nginx 에 보강합니다(후속 티켓).
 *   통과 뒤 O8 은 [prod/records](../prod/records/README.md) 「적용 —
