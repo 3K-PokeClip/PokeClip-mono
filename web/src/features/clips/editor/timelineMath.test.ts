@@ -16,6 +16,7 @@ import {
   rulerTicks,
   secondsFromPointer,
   secondsToFraction,
+  secondsToViewOffset,
   zoomedView,
   lowestUsefulZoom,
   zoomSpan,
@@ -129,6 +130,14 @@ describe('창 환산', () => {
 
   it('폭이 0인 창은 NaN 대신 0을 준다', () => {
     expect(secondsToFraction(10, { startSeconds: 10, endSeconds: 10 })).toBe(0);
+    expect(secondsToViewOffset(10, { startSeconds: 10, endSeconds: 10 })).toBe(0);
+  });
+
+  it('구간 상자용 위치는 자르지 않는다: 창 앞은 음수, 창 뒤는 1보다 크다(PR #341 codex)', () => {
+    const zoomed = { startSeconds: 120, endSeconds: 140 };
+    expect(secondsToViewOffset(100, zoomed)).toBeCloseTo(-1);
+    expect(secondsToViewOffset(130, zoomed)).toBeCloseTo(0.5);
+    expect(secondsToViewOffset(160, zoomed)).toBeCloseTo(2);
   });
 
   it('포인터 좌표를 초로 옮긴다 — 폭이 0이면 계산 불가라 null', () => {

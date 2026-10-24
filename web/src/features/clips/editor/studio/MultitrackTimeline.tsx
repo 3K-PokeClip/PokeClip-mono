@@ -22,6 +22,7 @@ import {
   rulerTicks,
   secondsFromPointer,
   secondsToFraction,
+  secondsToViewOffset,
 } from '../timelineMath';
 import {
   EDITOR_SEEK_SHIFT_STEP_SECONDS,
@@ -75,6 +76,9 @@ export function MultitrackTimeline({
         })
       : [];
   const endFraction = secondsToFraction(state.range.endSeconds, state.view);
+  // 구간 상자는 자르지 않은 자리에 그린다: 키운 창보다 넓으면 창 밖으로 나가고 덮개가 잘라 감춘다(손잡이도 같이 숨는다)
+  const boxStart = secondsToViewOffset(state.range.startSeconds, state.view);
+  const boxEnd = secondsToViewOffset(state.range.endSeconds, state.view);
   const playheadFraction = secondsToFraction(state.playheadSeconds, state.view);
   const playheadVisible =
     state.playheadSeconds >= state.view.startSeconds &&
@@ -405,8 +409,8 @@ export function MultitrackTimeline({
                 <div
                   className={styles.rangeBox}
                   style={{
-                    left: `${startFraction * 100}%`,
-                    width: `${(endFraction - startFraction) * 100}%`,
+                    left: `${boxStart * 100}%`,
+                    width: `${(boxEnd - boxStart) * 100}%`,
                   }}
                 >
                   {/* 핸들은 늘 그린다. 키워서 창 밖으로 나간 핸들은 덮개가 가로로 잘라 안 보이고 가장자리 표시가 대신한다.

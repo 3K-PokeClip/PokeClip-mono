@@ -516,6 +516,11 @@ describe('StudioScreen', () => {
     await user.click(screen.getByRole('button', { name: '타임라인 확대' }));
     // 400%: 18.75초 창(121~139초)이라 두 끝이 다 밖이다. 손잡이는 잘려 안 보일 뿐 그대로 있다(키보드 초점을 잃지 않게)
     expect(screen.getAllByRole('slider', { name: /구간 (시작|끝)점/ })).toHaveLength(2);
+    // 구간 상자는 창 밖까지 실제 자리로 뻗는다(덮개가 잘라 감춘다). 창 폭으로 자르면 손잡이가 창 가장자리에 남아,
+    // 살짝 끌기만 해도 시작이 100초에서 창 끝(≈120.8초)으로 튄다(PR #341 codex)
+    const box = document.querySelector<HTMLElement>('[class*="rangeBox"]')!;
+    expect(parseFloat(box.style.left)).toBeCloseTo(-110, 0);
+    expect(parseFloat(box.style.width)).toBeCloseTo(320, 0);
     await user.click(screen.getByRole('button', { name: '시작점으로 가기' }));
     expect(seekTo).toHaveBeenLastCalledWith(100);
     await user.click(screen.getByRole('button', { name: '끝점으로 가기' }));

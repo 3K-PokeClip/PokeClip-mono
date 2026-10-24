@@ -149,9 +149,18 @@ export function rangeGaugeFraction(lengthSeconds: number): number {
  * 0으로 나눈 NaN이 CSS left로 나가면 요소가 통째로 사라진다(progressFraction과 같은 방어).
  */
 export function secondsToFraction(seconds: number, view: TimelineView): number {
+  return Math.min(1, Math.max(0, secondsToViewOffset(seconds, view)));
+}
+
+/**
+ * 보이는 창 기준 위치를 자르지 않고: 창 앞이면 0보다 작고 뒤면 1보다 크다. 키운 창보다 넓은 구간 상자에 쓴다 —
+ * 0..1로 자르면 상자가 창 전체가 되어 손잡이가 창 가장자리에 남고, 끌면 경계가 창 끝 시각으로 튄다(PR #341 codex).
+ * 창 밖으로 나간 부분은 덮개가 가로로 잘라 감춘다.
+ */
+export function secondsToViewOffset(seconds: number, view: TimelineView): number {
   const span = view.endSeconds - view.startSeconds;
   if (!(span > 0)) return 0;
-  return Math.min(1, Math.max(0, (seconds - view.startSeconds) / span));
+  return (seconds - view.startSeconds) / span;
 }
 
 /** 보이는 창 안의 위치 0..1 → 초 */
