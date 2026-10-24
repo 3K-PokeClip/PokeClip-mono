@@ -204,10 +204,11 @@ CREATE 는 1단-가가 했습니다(POK-407 · kty 2026-10-24). 잊지 않도록
 *   일꾼 배치 전에는 소비자가 없습니다(1단-다 K5). O7d 부터 일꾼 배치(POK-408
     배치 PR)까지 clip 이 보낸 주문이 원 큐에 쌓이고, 보관 4일 뒤 사라집니다
     — 고착 알람이 없습니다.
-*   segment 창고 = rewind 버킷이라 platform 의 clip `SegmentDelete`
-    (`<버킷>/*`)가 목록 객체까지 지울 수 있습니다. 좁히는 일(`streams/*` ·
-    `dvr/*/init/*` · `dvr/*/seg/*`)은 platform 후속이고, 런타임 2단 버킷
-    정책이 작업 역할을 막지 않게 둡니다.
+*   segment 창고 = rewind 버킷이라 platform 의 clip `SegmentDelete` ·
+    `SegmentRead`(`<버킷>/*`)가 목록 객체까지 지우고 읽을 수 있습니다. 좁히는
+    일(지우기 `streams/*` · `dvr/*/init/*` · `dvr/*/seg/*`, 읽기
+    `streams/*`)은 platform 후속이고, 런타임 2단 버킷 정책이 작업 역할을 막지
+    않게 둡니다.
 *   새 버킷 둘(clips · 프로필 사진)에 TLS 거부 버킷 정책이 없습니다 — rewind
     와 함께 런타임 2단에서 둡니다(K8).
 *   `clip_job_features` 의 거부 규칙(render · upload 둘 다 끔)은 런타임 변수

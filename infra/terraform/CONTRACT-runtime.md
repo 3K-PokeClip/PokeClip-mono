@@ -89,11 +89,13 @@ clip ↔ auth · RDS ← auth · clip · 로드밸런서 → Media 규칙은 위
 rewind 버킷입니다(사이드카가 조각을 rewind 에 올립니다 — 새 버킷 없음). 썸네일
 DLQ 는 키를 내지 않습니다(clip 이 읽지 않음).
 
-*   `segment_bucket_arn` 의 `s3:DeleteObject` 는 버킷 전체(`/*`)라 clip 이
-    목록 객체(`dvr/<방송>/<세션>/index.m3u8`)까지 지울 수 있습니다. 좁힐 대상은
-    탈퇴 정리가 지우는 셋(`streams/*` · `dvr/*/init/*` · `dvr/*/seg/*`)이고,
-    좁히는 일은 platform 후속입니다. 런타임 2단의 rewind 버킷 정책(OAC)이 작업
-    역할을 막는 Deny 를 두지 않아야 합니다.
+*   `segment_bucket_arn` 의 `s3:DeleteObject` · `GetObject` 는 버킷
+    전체(`/*`)라 clip 이 목록 객체(`dvr/<방송>/<세션>/index.m3u8`)까지 지우고
+    읽을 수 있습니다. 지우기를 좁힐 대상은 탈퇴 정리가 지우는
+    셋(`streams/*` · `dvr/*/init/*` · `dvr/*/seg/*`)이고, 읽기는 미리 듣기가
+    서명하는 원본 조각(`streams/*`)입니다. 좁히는 일은 platform 후속입니다.
+    런타임 2단의 rewind 버킷 정책(OAC)이 작업 역할을 막는 Deny 를 두지 않아야
+    합니다.
 
 *   auth 의 스트림 키 비밀(이름 = 접두 + UUID, auth 가 만든다)은 런타임
     자원이 아닙니다. platform 이 접두 `pokeclip/prod/stream-key/` 로 정책 ·
