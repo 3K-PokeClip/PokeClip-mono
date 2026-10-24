@@ -30,11 +30,21 @@ async function load(key: string, host: string, replay = '') {
 
 const PAIR = { accessToken: 'a-1', refreshToken: 'r-1' };
 
+/** SDK가 이 브라우저에 저장한 「이용 분석 참여」 선택(`__ph_opt_in_out_<키>`, 값은 JSON을 주소 인코딩) — 끔 0·켬 1 */
+const CONSENT_COOKIE = '__ph_opt_in_out_phc_test';
+function storeConsent(value: 0 | 1 | null) {
+  document.cookie =
+    value === null
+      ? `${CONSENT_COOKIE}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/`
+      : `${CONSENT_COOKIE}=${encodeURIComponent(JSON.stringify(value))}; path=/`;
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   posthog._isIdentified.mockReturnValue(false);
   posthog.get_distinct_id.mockReturnValue('anon-1');
   posthog.get_explicit_consent_status.mockReturnValue('pending');
+  storeConsent(null);
   localStorage.clear();
   // 테스트마다 resetModules로 새 스토어를 만든다. 탭 간 채널을 두면 앞 테스트의 스토어들이 「login」을 받아
   // 같은 목에 reset을 더 부른다 — 이 파일은 한 탭 안의 규칙만 본다
@@ -198,6 +208,7 @@ describe('「이용 분석 참여」 — 이 브라우저에만 저장한다(처
     posthog._isIdentified.mockReturnValue(true);
     posthog.get_distinct_id.mockReturnValue('3');
     posthog.get_explicit_consent_status.mockReturnValue('denied');
+    storeConsent(0);
     client.identifyUser(7);
     const [resetAt] = posthog.reset.mock.invocationCallOrder;
     const [optOutAt] = posthog.opt_out_capturing.mock.invocationCallOrder;
@@ -321,11 +332,28 @@ describe('auth 스토어 구독 — 로그아웃·새 로그인에서 초기화�
     const { useAuthStore } = await ready();
     useAuthStore.getState().setTokens(PAIR);
     posthog.get_explicit_consent_status.mockReturnValue('denied');
+    storeConsent(0);
     useAuthStore.getState().clearTokens();
     const [resetAt] = posthog.reset.mock.invocationCallOrder.slice(-1);
     const [optOutAt] = posthog.opt_out_capturing.mock.invocationCallOrder.slice(-1);
     expect(optOutAt).toBeGreaterThan(resetAt ?? Infinity);
   });
+
+  it.each([
+    ['저장된 선택 없음', null],
+    ['켬(1)', 1],
+  ] as const)(
+    '추적 금지만 켠 브라우저(%s)는 로그아웃해도 끔 쿠키를 쓰지 않는다 — SDK가 denied로 답해도 저장값만 본다 (PR #382 2차 리뷰)',
+    async (_, stored) => {
+      const { useAuthStore } = await ready();
+      useAuthStore.getState().setTokens(PAIR);
+      posthog.get_explicit_consent_status.mockReturnValue('denied'); // 추적 금지면 저장값과 상관없이 denied
+      storeConsent(stored);
+      useAuthStore.getState().clearTokens();
+      expect(posthog.reset).toHaveBeenCalled();
+      expect(posthog.opt_out_capturing).not.toHaveBeenCalled();
+    },
+  );
 
   it('같은 세션의 회전에서는 지우지 않는다', async () => {
     const { useAuthStore } = await ready();

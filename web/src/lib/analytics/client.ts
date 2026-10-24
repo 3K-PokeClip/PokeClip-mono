@@ -147,14 +147,36 @@ export function whenAnalyticsLoaded(): Promise<void> {
 /** 지금 로그인한 회원 번호 — 꺼 둔 브라우저에서 다시 켜면 그때 식별한다 */
 let signedInUserId: string | null = null;
 
+/** SDK가 「끔」으로 읽는 값(@posthog/core `isNoLike`) */
+const NO_LIKE: unknown[] = [false, 'false', 0, '0', 'no'];
+
+/**
+ * 이 브라우저에 「끔」이 저장돼 있나 — SDK 동의 쿠키(`__ph_opt_in_out_<키>`, 값은 `encodeURIComponent(JSON.stringify(값))`)만
+ * 본다. SDK의 동의 상태(`get_explicit_consent_status`)는 추적 금지가 켜져 있으면 저장값과 상관없이 denied라, 그것으로 판정하면
+ * 스위치를 만진 적 없는 브라우저에 끔 쿠키를 새로 써서 추적 금지를 꺼도 꺼진 채로 남았다(PR #382 2차 리뷰)
+ */
+function storedOptOut(): boolean {
+  const prefix = `__ph_opt_in_out_${KEY}=`;
+  const raw = document.cookie
+    .split('; ')
+    .find((cookie) => cookie.startsWith(prefix))
+    ?.slice(prefix.length);
+  if (raw === undefined) return false;
+  try {
+    return NO_LIKE.includes(JSON.parse(decodeURIComponent(raw)));
+  } catch {
+    return false;
+  }
+}
+
 /**
  * 식별·기기 식별자를 지운다. SDK의 reset은 동의 선택까지 지우는데, 「이용 분석 참여」는 이 브라우저의 선택이라 로그아웃·
- * 다른 회원 로그인을 넘어 남아야 한다 — 끈 선택은 reset 뒤에 다시 건다.
+ * 다른 회원 로그인을 넘어 남아야 한다 — 저장된 끔은 reset 뒤에 다시 건다.
  */
 function resetKeepingOptOut(posthog: PostHog): void {
-  const denied = posthog.get_explicit_consent_status() === 'denied';
+  const optedOut = storedOptOut();
   posthog.reset();
-  if (denied) posthog.opt_out_capturing();
+  if (optedOut) posthog.opt_out_capturing();
 }
 
 /**
