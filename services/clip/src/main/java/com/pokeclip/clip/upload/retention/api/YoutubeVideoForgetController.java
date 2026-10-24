@@ -9,6 +9,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.Clock;
+import java.time.Instant;
 import java.util.Map;
 import java.util.regex.Pattern;
 
@@ -34,7 +35,8 @@ public class YoutubeVideoForgetController {
         this.clock = Clock.systemUTC();
     }
 
-    public record ForgetBody(String owner, String channelId) {
+    /** @param before auth가 지우기로 정한 시각(ISO-8601). 그 뒤에 주문한 줄은 남긴다 */
+    public record ForgetBody(String owner, String channelId, String before) {
     }
 
     @PostMapping("/internal/youtube-videos/forget")
@@ -45,7 +47,13 @@ public class YoutubeVideoForgetController {
         if (body.channelId() == null || !CHANNEL_ID.matcher(body.channelId()).matches()) {
             return ResponseEntity.badRequest().body(Map.of("error", "invalid_channel_id"));
         }
-        int forgotten = store.forget(body.owner(), body.channelId(), clock.instant());
+        Instant before;
+        try {
+            before = Instant.parse(body.before() == null ? "" : body.before());
+        } catch (java.time.format.DateTimeParseException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", "invalid_before"));
+        }
+        int forgotten = store.forget(body.owner(), body.channelId(), before, clock.instant());
         log.info("clip.youtube_video.forgotten owner={} count={}", body.owner(), forgotten);
         return ResponseEntity.ok(Map.of("forgotten", forgotten));
     }

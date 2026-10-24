@@ -11,6 +11,8 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 
+import java.time.Instant;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -73,6 +75,27 @@ class YoutubeVideoForgetTest extends IntegrationTestSupport {
         assertThat(줄(남의것)).as("다른 회원 줄은 같은 채널이어도 남는다").isEqualTo("uploaded:vidNEIGHBOR:" + 옛_채널 + ":kept");
     }
 
+    /**
+     * auth가 지우기로 정한 시각보다 뒤에 주문한 줄은 남긴다. 그 사이 같은 채널로 다시 연동해 올린 영상까지 지우면 살아 있는 연동의
+     * 링크가 사라진다
+     */
+    @Test
+    void 정한_시각_뒤에_주문한_줄은_남긴다() throws Exception {
+        Instant 정한_시각 = Instant.now();
+        long 옛것 = 업로드("o1", 주인, "vidOLD00001", 옛_채널);
+        long 다시_올린것 = 업로드("o2", 주인, "vidAGAIN001", 옛_채널);
+        // 주문 시각은 DB 시계(now())라 시험 쪽 시계와 몇 ms 어긋날 수 있다. 앞뒤를 분명히 벌려 둔다
+        jdbc.update("UPDATE clip_uploads SET created_at = ? WHERE id = ?", java.sql.Timestamp.from(정한_시각.minusSeconds(3600)), 옛것);
+        jdbc.update("UPDATE clip_uploads SET created_at = ? WHERE id = ?", java.sql.Timestamp.from(정한_시각.plusSeconds(3600)), 다시_올린것);
+
+        mvc.perform(post("/internal/youtube-videos/forget").header("X-Internal-Token", INTERNAL)
+                        .contentType(MediaType.APPLICATION_JSON).content(본문(주인, 옛_채널, 정한_시각)))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.forgotten").value(1));
+
+        assertThat(줄(옛것)).isEqualTo("uploaded:null:null:forgotten");
+        assertThat(줄(다시_올린것)).isEqualTo("uploaded:vidAGAIN001:" + 옛_채널 + ":kept");
+    }
+
     @Test
     void 몇_번_불러도_같다() throws Exception {
         long 옛것 = 업로드("o1", 주인, "vidOLD00001", 옛_채널);
@@ -89,6 +112,9 @@ class YoutubeVideoForgetTest extends IntegrationTestSupport {
 
         잊어라("abc", 옛_채널).andExpect(status().isBadRequest());
         잊어라(주인, "채널 <x>").andExpect(status().isBadRequest());
+        mvc.perform(post("/internal/youtube-videos/forget").header("X-Internal-Token", INTERNAL)
+                .contentType(MediaType.APPLICATION_JSON).content("{\"owner\":\"" + 주인 + "\",\"channelId\":\"" + 옛_채널 + "\"}"))
+                .andExpect(status().isBadRequest());
         mvc.perform(post("/internal/youtube-videos/forget").contentType(MediaType.APPLICATION_JSON)
                 .content(본문(주인, 옛_채널))).andExpect(status().isUnauthorized());
 
@@ -102,7 +128,11 @@ class YoutubeVideoForgetTest extends IntegrationTestSupport {
     }
 
     private static String 본문(String owner, String channelId) {
-        return "{\"owner\":\"" + owner + "\",\"channelId\":\"" + channelId + "\"}";
+        return 본문(owner, channelId, Instant.now().plusSeconds(60));
+    }
+
+    private static String 본문(String owner, String channelId, Instant before) {
+        return "{\"owner\":\"" + owner + "\",\"channelId\":\"" + channelId + "\",\"before\":\"" + before + "\"}";
     }
 
     private long 업로드(String outputId, String owner, String videoId, String channelId) {

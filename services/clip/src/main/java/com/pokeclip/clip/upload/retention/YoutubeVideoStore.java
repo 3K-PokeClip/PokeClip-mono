@@ -30,15 +30,17 @@ public class YoutubeVideoStore {
      * 같이 지우는 이유: auth가 이 말을 보내는 것은 그 회원의 살아 있는 연동이 이 채널이 아닐 때뿐이라, 그 줄이 지금 채널 것이라는 근거가
      * 없다. 처리방침을 지키는 쪽으로 지운다(대가: 채널을 바꾼 회원의 옛 업로드 링크가 사라진다). 몇 번 불러도 같다.
      *
+     * <p>{@code before}(auth가 지우기로 정한 시각)보다 뒤에 주문한 줄은 남긴다: 그 사이 같은 채널로 다시 연동해 올린 영상까지 지우지 않게.
+     *
      * @return 지운 줄 수
      */
-    public int forget(String owner, String channelId, Instant now) {
+    public int forget(String owner, String channelId, Instant before, Instant now) {
         return jdbc.update("""
                 UPDATE clip_uploads
                 SET youtube_video_id = NULL, youtube_channel_id = NULL, video_forgotten_at = ?
-                WHERE channel_owner = ? AND youtube_video_id IS NOT NULL
+                WHERE channel_owner = ? AND youtube_video_id IS NOT NULL AND created_at < ?
                   AND (youtube_channel_id = ? OR youtube_channel_id IS NULL)""",
-                Timestamp.from(now), owner, channelId);
+                Timestamp.from(now), owner, Timestamp.from(before), channelId);
     }
 
     /** 확인할 때가 된 주인(오래 안 본 것부터). */
