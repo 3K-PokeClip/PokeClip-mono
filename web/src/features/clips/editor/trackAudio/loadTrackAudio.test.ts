@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { SegmentAudioAccess } from '@/api/clipEditor';
-import { loadTrackAudio } from './loadTrackAudio';
+import { loadTrackAudio, SegmentUrlExpiredError } from './loadTrackAudio';
 
 // 조각 셋을 받아 트랙마다 「이어진 조각끼리 한 덩어리」로 푼다. 풀기(decodeAudioData)는 가짜다: ADTS 머리에서 표본 빈도
 // 번호와 프레임 수를 읽어 돌려준다: 어느 트랙의 무엇을 넘겼는지가 값으로 드러난다.
@@ -92,6 +92,36 @@ describe('loadTrackAudio', () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
     // 동시에 받던 넷(1~4번)까지만: 실패 뒤에 새 조각을 집지 않는다
     expect(src.fetchBytes).toHaveBeenCalledTimes(4);
+  });
+
+  it('받는 사이 서명 주소가 만료되면 주소를 새로 받아 그 조각만 다시 받는다: 동시에 여럿 만료돼도 새로 받기는 한 번(PR #341 3차)', async () => {
+    const first = access(BASE + 2000, BASE + 3000, BASE + 4000);
+    const second: SegmentAudioAccess = {
+      ...first,
+      segments: first.segments.map((segment) => ({ ...segment, url: `${segment.url}?v=2` })),
+    };
+    const src = source(first);
+    src.fetchAccess.mockResolvedValueOnce(first).mockResolvedValueOnce(second);
+    // 2·3번은 옛 주소가 만료됐다(403)
+    src.fetchBytes.mockImplementation((url: string) =>
+      /seg_[23]\.m4s$/.test(url)
+        ? Promise.reject(new SegmentUrlExpiredError())
+        : Promise.resolve(new Uint8Array(fixture).buffer),
+    );
+    const tracks = await loadTrackAudio(src, BASE);
+    expect(tracks).toHaveLength(3);
+    expect(tracks[0]!.map((piece) => piece.startSeconds)).toEqual([2]);
+    expect(src.fetchAccess).toHaveBeenCalledTimes(2);
+    expect(src.fetchBytes).toHaveBeenCalledWith('https://s3/seg_2.m4s?v=2');
+    expect(src.fetchBytes).toHaveBeenCalledWith('https://s3/seg_3.m4s?v=2');
+  });
+
+  it('새 주소로도 만료면 실패다: 끝없이 다시 받지 않는다', async () => {
+    const src = source(access(BASE + 2000));
+    src.fetchBytes.mockRejectedValue(new SegmentUrlExpiredError());
+    await expect(loadTrackAudio(src, BASE)).rejects.toBeInstanceOf(SegmentUrlExpiredError);
+    expect(src.fetchAccess).toHaveBeenCalledTimes(2);
+    expect(src.fetchBytes).toHaveBeenCalledTimes(2);
   });
 
   it('소리 트랙을 못 꺼낸 조각만 있으면 빈 목록이다', async () => {

@@ -59,6 +59,13 @@ async function inParallel<T, R>(items: readonly T[], work: (item: T) => Promise<
   return results;
 }
 
+/** 조각 서명 주소가 만료됐다(403). 받는 쪽(fetchBytes)이 던지면 주소를 새로 받아 그 조각을 한 번 더 받는다 */
+export class SegmentUrlExpiredError extends Error {
+  constructor() {
+    super('segment url expired');
+  }
+}
+
 /**
  * @param baseMs 편집기 시간축의 0초(절대 ms): 조각의 재생 축 시각을 편집기 초로 옮긴다
  * @returns 트랙 번호(파일 순서) → 덩어리들. 소리 트랙을 하나도 못 꺼냈으면 빈 목록. 주소·내려받기·풀기가 실패하면 던진다
@@ -67,10 +74,44 @@ export async function loadTrackAudio(
   source: SegmentAudioSource,
   baseMs: number,
 ): Promise<TrackPiece[][]> {
-  const { segments } = await source.fetchAccess();
-  const ordered = [...segments].sort((a, b) => a.seq - b.seq);
+  let current = await source.fetchAccess();
+  const ordered = [...current.segments].sort((a, b) => a.seq - b.seq);
+
+  // 받기가 서명 주소 수명(기본 5분)보다 길어지면 뒤에 받는 조각의 주소가 만료된다(느린 망의 3분 구간 ≈ 150MB):
+  // 그 조각에서 주소를 새로 받아 이어 받는다. 동시에 여럿이 만료돼도 새로 받기는 한 번이다(PR #341 3차)
+  let refreshing: Promise<SegmentAudioAccess> | null = null;
+  const refresh = (stale: SegmentAudioAccess): Promise<SegmentAudioAccess> => {
+    if (current !== stale) return Promise.resolve(current);
+    refreshing ??= source.fetchAccess().then(
+      (next) => {
+        current = next;
+        refreshing = null;
+        return next;
+      },
+      (error: unknown) => {
+        refreshing = null;
+        throw error;
+      },
+    );
+    return refreshing;
+  };
+  const urlOf = (access: SegmentAudioAccess, seq: number) => {
+    const url = access.segments.find((segment) => segment.seq === seq)?.url;
+    if (url === undefined) throw new Error(`segment ${seq} missing`);
+    return url;
+  };
+  const download = async (seq: number) => {
+    const used = current;
+    try {
+      return await source.fetchBytes(urlOf(used, seq));
+    } catch (error) {
+      if (!(error instanceof SegmentUrlExpiredError)) throw error;
+      // 새 주소로도 만료면(시계가 크게 어긋남 · 권한 없음) 그대로 실패다
+      return source.fetchBytes(urlOf(await refresh(used), seq));
+    }
+  };
   const demuxed = await inParallel(ordered, async (segment) =>
-    demuxAudioTracks(await source.fetchBytes(segment.url)),
+    demuxAudioTracks(await download(segment.seq)),
   );
 
   const runs: Run[] = [];

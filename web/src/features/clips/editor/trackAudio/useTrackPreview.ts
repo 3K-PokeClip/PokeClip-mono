@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { requestSegmentAudioAccess } from '@/api/clipEditor';
-import { loadTrackAudio } from './loadTrackAudio';
+import { loadTrackAudio, SegmentUrlExpiredError } from './loadTrackAudio';
 import { measureLevels, type TrackLevels } from './trackLevels';
 import { followVideo, TrackAudioPlayer, type AudioContextLike } from './trackAudioPlayer';
 
@@ -130,6 +130,8 @@ export function useTrackPreview(options: {
           },
           fetchBytes: async (url) => {
             const res = await fetch(url, { signal: abort.signal });
+            // 서명 주소 만료(S3는 403): 주소를 새로 받아 다시 받는다(loadTrackAudio)
+            if (res.status === 403) throw new SegmentUrlExpiredError();
             if (!res.ok) throw new Error(`segment ${res.status}`);
             const bytes = await res.arrayBuffer();
             progressed();

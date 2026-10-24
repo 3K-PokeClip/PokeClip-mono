@@ -473,6 +473,36 @@ describe('useTrackPreview', () => {
     expect(signals[0]!.aborted).toBe(true);
   });
 
+  it('조각이 403(서명 주소 만료)이면 주소를 새로 받아 이어 받는다(PR #341 3차)', async () => {
+    vi.mocked(requestSegmentAudioAccess)
+      .mockResolvedValueOnce({
+        expiresAt: '2026-10-23T00:05:00Z',
+        segments: [{ seq: 1, startAtMs: BASE + 10_000, durationMs: 1000, url: 'https://s3/old' }],
+      })
+      .mockResolvedValueOnce({
+        expiresAt: '2026-10-23T00:10:00Z',
+        segments: [{ seq: 1, startAtMs: BASE + 10_000, durationMs: 1000, url: 'https://s3/new' }],
+      });
+    vi.mocked(fetch).mockImplementation((url) =>
+      Promise.resolve(
+        String(url) === 'https://s3/old'
+          ? new Response(null, { status: 403 })
+          : new Response(new Uint8Array(fixture)),
+      ),
+    );
+    const { result } = renderHook(() =>
+      useTrackPreview({
+        streamId: 's-1',
+        baseMs: BASE,
+        window: WINDOW,
+        video: video(),
+        createContext: () => fakeContext().ctx as never,
+      }),
+    );
+    await waitFor(() => expect(result.current.status).toBe('ready'));
+    expect(requestSegmentAudioAccess).toHaveBeenCalledTimes(2);
+  });
+
   it('조각 하나가 실패하면 받는 중인 다른 조각도 멈춘다(PR #341 claude)', async () => {
     vi.mocked(requestSegmentAudioAccess).mockResolvedValue({
       expiresAt: '2026-10-23T00:05:00Z',
