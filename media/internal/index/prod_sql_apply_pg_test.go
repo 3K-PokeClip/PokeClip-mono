@@ -18,9 +18,12 @@ package index
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha1"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -223,13 +226,20 @@ func prodSQLRandHex(t *testing.T, n int) string {
 // 않는다(\set 줄은 빈 줄로 남긴다) — PG 오류의 줄 위치가 파일과 어긋나지 않게.
 func expandProdSQL(t *testing.T, name string) string {
 	t.Helper()
-	lines := strings.Split(readProdSQL(t, name), "\n")
+	return expandPSQLMeta(t, name, readProdSQL(t, name), prodSQLAllowedMeta[name])
+}
+
+// expandPSQLMeta 는 src 의 메타 명령을 expandProdSQL 과 같은 규칙으로 펼친다. name 은 오류 문구의 이름이고,
+// allowed 는 src 에 허용한 메타 명령 줄이다.
+func expandPSQLMeta(t *testing.T, name, src string, allowed []string) string {
+	t.Helper()
+	lines := strings.Split(src, "\n")
 	for i, line := range lines {
 		meta := strings.TrimSpace(line)
 		if !strings.HasPrefix(meta, `\`) {
 			continue
 		}
-		if !slices.Contains(prodSQLAllowedMeta[name], meta) {
+		if !slices.Contains(allowed, meta) {
 			t.Fatalf("%s 의 메타 명령 %q 는 허용 목록 밖이다", name, meta)
 		}
 		switch meta {
@@ -355,6 +365,70 @@ func TestProdSQLAppliesAsNonSuperuserMasterAndConverges(t *testing.T) {
 	env.mustApplyAll(t)
 }
 
+// runtime1aRolesFile 은 1단-가 판 10_roles.sql 의 바이트 사본이다(f1fc0da1 · 9e008743 의 같은 경로). prodSQLDir 의
+// .sql 집합은 TestProdSQLDirHoldsOnlyKnownFiles 가 고정하므로 testdata 에 둔다.
+var runtime1aRolesFile = filepath.Join("testdata", "prod_sql_runtime_1a_10_roles.sql")
+
+// runtime1aRolesBlob 은 그 사본의 git blob 해시다 — 사본이 조용히 바뀌면 재적용 사례가 1단-가 판을 재지 못한다.
+const runtime1aRolesBlob = "b45757c5672ab8d15980888b394e8c42bec1f804"
+
+// gitBlobHash 는 b 의 git blob 해시("blob <길이>\x00" + 본문의 SHA-1)다.
+func gitBlobHash(b []byte) string {
+	h := sha1.New()
+	fmt.Fprintf(h, "blob %d\x00", len(b))
+	h.Write(b)
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// ③ 수렴 — 1단-가 판 10 · 20 · 30 이 이미 적용된 DB 에 이 판 10 · 20 · 30 을 돌려도 40 이 VERIFY OK 다(운영 D7 ·
+// 런북 「다시 돈다」 의 근거). 새 DB 는 PUBLIC CONNECT · TEMP 가 기본으로 열린 1단-가 직후 상태 그대로다. 00 은
+// mustApplyAll 과 같은 이유로 돌리지 않는다.
+func TestProdSQLConvergesOverRuntime1aRoles(t *testing.T) {
+	old, err := os.ReadFile(runtime1aRolesFile)
+	if err != nil {
+		t.Fatalf("1단-가 판 10_roles.sql 사본을 읽지 못했다: %v", err)
+	}
+	if got := gitBlobHash(old); got != runtime1aRolesBlob {
+		t.Fatalf("%s 의 blob 해시 = %s, want %s — 사본은 1단-가 판 그대로여야 한다", runtime1aRolesFile, got, runtime1aRolesBlob)
+	}
+	env := newProdSQLEnv(t)
+	steps := []struct{ name, body string }{
+		{"1단-가 10_roles.sql", expandPSQLMeta(t, runtime1aRolesFile, string(old), []string{metaStopOnError})},
+		{"20_schema.sql", expandProdSQL(t, "20_schema.sql")},
+		{"30_grants.sql", expandProdSQL(t, "30_grants.sql")},
+	}
+	for _, st := range steps {
+		if _, err := applyProdSQL(t, env.master, st.body); err != nil {
+			t.Fatalf("%s 적용 오류 = %v, want nil", st.name, err)
+		}
+	}
+	env.mustApplyAll(t)
+}
+
+// 실 역할 사례 — 10 뒤 앱 사용자는 자기 스키마에만 만들 수 있다. public · 남의 스키마 · 임시 표는 42501 이다.
+func TestProdSQLAppUserCreatesOnlyInOwnSchema(t *testing.T) {
+	env := newProdSQLEnv(t)
+	env.mustApplyAll(t)
+	tests := []struct {
+		stmt   string
+		denied bool
+	}{
+		{"CREATE TABLE public.pc_probe (a int)", true},
+		{"CREATE TABLE app_auth.pc_probe (a int)", false},
+		{"CREATE TABLE app_clip.pc_probe (a int)", true},
+		{"CREATE TEMP TABLE pc_probe (a int)", true},
+	}
+	for _, tt := range tests {
+		_, err := execScript(t, env.super, "BEGIN; SET ROLE app_auth; "+tt.stmt+"; ROLLBACK;")
+		switch {
+		case tt.denied && !isSQLState(err, pgInsufficientPrivilege):
+			t.Errorf("app_auth 의 %s 오류 = %v, want 42501", tt.stmt, err)
+		case !tt.denied && err != nil:
+			t.Errorf("app_auth 의 %s 오류 = %v, want nil", tt.stmt, err)
+		}
+	}
+}
+
 // ④ 음성 대조(H2) — 30 의 SET ROLE media_owner · RESET ROLE 두 줄을 빼면 마스터는 INHERIT FALSE 라
 // media_owner 소유 표에 GRANT 하지 못한다(42501).
 func TestProdSQLGrantsWithoutSetRoleAreDenied(t *testing.T) {
@@ -474,9 +548,9 @@ func TestProdSQLVerifyCatchesDirectSchemaCreate(t *testing.T) {
 	}
 }
 
-// 음성 대조 — 표 단위 행렬 밖의 권한 어긋남(검수 c7 r1 이연 M)도 40 이 바로 그 단언으로만 잡는다(CONNECT 회수는
-// 계정마다 하나). 사례끼리 상태를 나누지 않는다: verifyFailuresAfter 가 매번 ROLLBACK 하고 VERIFY OK 로
-// 되돌아왔는지 본다.
+// 음성 대조 — 표 단위 행렬 밖의 권한 어긋남(검수 c7 r1 이연 M) · DB 권한 · 앱 스키마도 40 이 바로 그 단언으로만
+// 잡는다(PUBLIC 에 TEMP 를 되돌리면 PUBLIC 하나와 계정 여섯). 사례끼리 상태를 나누지 않는다:
+// verifyFailuresAfter 가 매번 ROLLBACK 하고 VERIFY OK 로 되돌아왔는지 본다.
 func TestProdSQLVerifyCatchesPrivilegeDrift(t *testing.T) {
 	env := newProdSQLEnv(t)
 	env.mustApplyAll(t)
@@ -507,12 +581,34 @@ func TestProdSQLVerifyCatchesPrivilegeDrift(t *testing.T) {
 			want:   []string{"column:media_janitor:stream_segments.local_path:UPDATE+grant_option"},
 		},
 		{
-			name:   "CONNECT revoked from PUBLIC",
-			tamper: "REVOKE CONNECT ON DATABASE " + env.dbName + " FROM PUBLIC",
+			name:   "CONNECT granted back to PUBLIC",
+			tamper: "GRANT CONNECT ON DATABASE " + env.dbName + " TO PUBLIC",
+			want:   []string{"public_connect_revoked"},
+		},
+		{
+			// 10 이 계정마다 준 CONNECT 가 빠지면 그 계정만 접속하지 못한다.
+			name:   "account CONNECT revoked",
+			tamper: "REVOKE CONNECT ON DATABASE " + env.dbName + " FROM app_clip",
+			want:   []string{"connect:app_clip"},
+		},
+		{
+			name:   "TEMP granted back to PUBLIC",
+			tamper: "GRANT TEMPORARY ON DATABASE " + env.dbName + " TO PUBLIC",
 			want: []string{
-				"connect:app_auth", "connect:app_chat_collector", "connect:app_chat_detector", "connect:app_clip",
-				"connect:media_indexer", "connect:media_janitor",
+				"public_temp_revoked", "temp:app_auth", "temp:app_chat_collector", "temp:app_chat_detector",
+				"temp:app_clip", "temp:media_indexer", "temp:media_janitor",
 			},
+		},
+		{
+			name:   "account TEMP",
+			tamper: "GRANT TEMPORARY ON DATABASE " + env.dbName + " TO app_clip",
+			want:   []string{"temp:app_clip"},
+		},
+		{
+			// DB CREATE 가 있으면 남의 "$user" 이름 스키마를 먼저 만들 수 있다.
+			name:   "account DB CREATE",
+			tamper: "GRANT CREATE ON DATABASE " + env.dbName + " TO app_auth",
+			want:   []string{"db_create:app_auth"},
 		},
 		{
 			// 계정의 public 스키마 USAGE 는 PUBLIC 기본이다 — 회수되면 표 권한이 있어도 이름을 풀지 못한다.
@@ -554,9 +650,42 @@ func TestProdSQLVerifyCatchesPrivilegeDrift(t *testing.T) {
 			want:   []string{"membership_app_clip"},
 		},
 		{
-			name:   "app schema CREATE revoked",
-			tamper: "REVOKE CREATE ON SCHEMA public FROM app_auth",
+			// 앱 사용자는 public 에 아무것도 만들지 못한다 — 자기 스키마에 만든다.
+			name:   "app public CREATE granted back",
+			tamper: "GRANT CREATE ON SCHEMA public TO app_auth",
 			want:   []string{"schema_create_app_auth"},
+		},
+		{
+			name:   "media account reads app schema",
+			tamper: "GRANT USAGE ON SCHEMA app_auth TO media_indexer",
+			want:   []string{"schema_priv:media_indexer:app_auth:USAGE"},
+		},
+		{
+			name:   "detector cross USAGE revoked",
+			tamper: "REVOKE USAGE ON SCHEMA app_chat_collector FROM app_chat_detector",
+			want:   []string{"schema_priv:app_chat_detector:app_chat_collector:USAGE"},
+		},
+		{
+			name:   "app own schema CREATE revoked",
+			tamper: "REVOKE CREATE ON SCHEMA app_clip FROM app_clip",
+			want:   []string{"schema_priv:app_clip:app_clip:CREATE"},
+		},
+		{
+			// 앱이 스키마를 가지면 그 스키마 권한을 남에게 줄 수 있다(K9).
+			name:   "app owns its schema",
+			tamper: "ALTER SCHEMA app_auth OWNER TO app_auth",
+			want:   []string{"app_schema:app_auth"},
+		},
+		{
+			// 없는 스키마는 has_schema_privilege 의 3F000 이 아니라 식별자 하나로 드러난다.
+			name:   "app schema missing",
+			tamper: "DROP SCHEMA app_chat_detector",
+			want:   []string{"app_schema:app_chat_detector"},
+		},
+		{
+			name:   "app owns an object in public",
+			tamper: "CREATE TABLE public.pc_x (a int); ALTER TABLE public.pc_x OWNER TO app_auth",
+			want:   []string{"public_owned_by_app:app_auth"},
 		},
 		{
 			// 멤버십은 부여자(대역 마스터)별로 남는다 — superuser 의 맨 REVOKE 는 그 행을 지우지 않는다(PG16+).

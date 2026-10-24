@@ -1,11 +1,12 @@
 package pgtest
 
-// search_path 가로채기(CVE-2018-1058 계열) 덫 — 운영 DB 의 앱 사용자 넷을 흉내 낸다.
+// search_path 가로채기(CVE-2018-1058 계열) 덫 — public CREATE 를 다시 연 DB 를 흉내 낸다.
 //
-// 운영 RDS 에서 3번 서버 넷의 앱 사용자는 Flyway 때문에 public 스키마 CREATE 를 가진다(prod/runtime
-// 10_roles.sql). 그 사용자가 public 에 pg_catalog 함수 · 연산자와 이름이 같고 인자 형이 호출 쪽 형과 **정확히**
-// 맞는 판을 만들면, 스키마를 한정하지 않은 호출은 암묵 형 변환이 필요한 pg_catalog 판 대신 그 판을 고른다. 그 판은
-// 부른 세션의 신분(media_indexer · media_janitor · media_owner)으로 돈다.
+// 운영 RDS 에서 3번 서버 넷의 앱 사용자는 자기 스키마에 표를 만들고 public 스키마 CREATE 를 갖지 않는다(prod/runtime
+// 10_roles.sql · 1단-나). 그래도 누군가 public CREATE 를 다시 열고 public 에 pg_catalog 함수 · 연산자와 이름이 같고
+// 인자 형이 호출 쪽 형과 **정확히** 맞는 판을 만들면, 스키마를 한정하지 않은 호출은 암묵 형 변환이 필요한
+// pg_catalog 판 대신 그 판을 고른다. 그 판은 부른 세션의 신분(media_indexer · media_janitor · media_owner)으로 돈다.
+// 이 덫은 그런 DB 에서도 사이드카 · janitor 가 버티는지 재는 심층 방어 시험이다.
 //
 // PlantSearchPathTraps 는 그런 판(덫)을 public CREATE 만 받은 가짜 앱 사용자로 심는다. 덫은 원래 결과를 그대로
 // 돌려주므로 시험 흐름은 멈추지 않고, 불릴 때마다 부른 신분을 기록 표에 남긴다(부작용). 시험은 끝에서
@@ -86,14 +87,18 @@ var searchPathTraps = []searchPathTrap{
 
 // SearchPathTraps 는 이 실행이 심은 덫과 그 덫을 심은 가짜 앱 사용자다.
 type SearchPathTraps struct {
-	role  string // public CREATE 만 받은 가짜 앱 사용자 이름(난수 접미)
-	admin *pgxpool.Pool
-	conn  *pgx.Conn // 가짜 앱 사용자 연결 — 기록을 읽고 덫을 지운다
+	role string    // public CREATE 만 받은 가짜 앱 사용자 이름(난수 접미)
+	conn *pgx.Conn // 가짜 앱 사용자 연결 — 기록을 읽고 덫을 지운다
 }
 
 // PlantSearchPathTraps 는 admin 이 붙은 DB 에 public CREATE 만 가진 가짜 앱 사용자를 만들고, 그 사용자로 덫과 기록
 // 표를 심는다. 덫 · 기록 표 · 사용자는 t.Cleanup 이 지운다. 앞선 실행이 강제 종료돼 남긴 덫은 심기 전에 admin 으로
 // 지운다(admin 이 그 덫을 지울 수 있어야 한다 — 로컬 compose 의 소유자 계정은 초사용자다).
+//
+// 가짜 사용자에게는 이 DB 의 CONNECT 도 준다 — 운영 10 이 PUBLIC 에서 CONNECT 를 거둔 DB 에서도 붙게(PUBLIC 기본이
+// 남은 DB 에서는 겹칠 뿐이다). admin 이 준 권한(CONNECT · public CREATE)은 받은 쪽이 거두지 못하므로 부여 바로
+// 다음 줄에 admin 의 회수를 정리로 따로 건다 — 연결 실패 등으로 remove 가 등록되기 전에 끝나도 권한이 남아
+// dropRole 을 막지 않는다. 정리는 등록의 거꾸로 돈다: remove → public CREATE 회수 → CONNECT 회수 → dropRole.
 func PlantSearchPathTraps(t *testing.T, admin *pgxpool.Pool) *SearchPathTraps {
 	t.Helper()
 	ctx := context.Background()
@@ -105,9 +110,19 @@ func PlantSearchPathTraps(t *testing.T, admin *pgxpool.Pool) *SearchPathTraps {
 	name := appRolePrefix + randHex(t, 4)
 	password := createLoginRole(t, admin, name)
 	t.Cleanup(func() { dropRole(t, admin, name, nil) })
+	var db string
+	if err := admin.QueryRow(ctx, "SELECT pg_catalog.current_database()").Scan(&db); err != nil {
+		t.Fatalf("현재 DB 이름 조회 실패: %v", err)
+	}
+	dbIdent := pgx.Identifier{db}.Sanitize()
+	if _, err := admin.Exec(ctx, "GRANT CONNECT ON DATABASE "+dbIdent+" TO "+name); err != nil {
+		t.Fatalf("가짜 앱 사용자 CONNECT 부여 실패: %v", err)
+	}
+	t.Cleanup(func() { adminCleanupExec(t, admin, "REVOKE CONNECT ON DATABASE "+dbIdent+" FROM "+name) })
 	if _, err := admin.Exec(ctx, "GRANT CREATE ON SCHEMA public TO "+name); err != nil {
 		t.Fatalf("가짜 앱 사용자 public CREATE 부여 실패: %v", err)
 	}
+	t.Cleanup(func() { adminCleanupExec(t, admin, "REVOKE CREATE ON SCHEMA public FROM "+name) })
 
 	cfg := admin.Config().ConnConfig
 	cfg.User, cfg.Password = name, password
@@ -115,7 +130,7 @@ func PlantSearchPathTraps(t *testing.T, admin *pgxpool.Pool) *SearchPathTraps {
 	if err != nil {
 		t.Fatalf("가짜 앱 사용자 연결 실패: %v", err)
 	}
-	traps := &SearchPathTraps{role: name, admin: admin, conn: conn}
+	traps := &SearchPathTraps{role: name, conn: conn}
 	t.Cleanup(func() { traps.remove(t) }) // dropRole 보다 늦게 등록 — 먼저 돌아 덫을 지운 뒤 사용자를 지운다
 	for _, s := range trapCreateSQL() {
 		if _, err := conn.Exec(ctx, s); err != nil {
@@ -188,8 +203,8 @@ func (s *SearchPathTraps) callers(t *testing.T) []trapCall {
 	return out
 }
 
-// remove 는 가짜 앱 사용자가 가진 것(덫 · 기록 표)을 그 사용자 자신으로 지우고 연결을 닫은 뒤, admin 이 준
-// public CREATE 를 거둔다(받은 쪽은 남이 준 권한을 거둘 수 없다).
+// remove 는 가짜 앱 사용자가 가진 것(덫 · 기록 표)을 그 사용자 자신으로 지우고 연결을 닫는다. admin 이 준 권한
+// (CONNECT · public CREATE)은 받은 쪽이 거두지 못하므로 PlantSearchPathTraps 가 부여 직후 따로 건 정리가 거둔다.
 func (s *SearchPathTraps) remove(t *testing.T) {
 	t.Helper()
 	ctx := context.Background()
@@ -199,7 +214,12 @@ func (s *SearchPathTraps) remove(t *testing.T) {
 	if err := s.conn.Close(ctx); err != nil {
 		t.Errorf("가짜 앱 사용자 연결 닫기 실패: %v", err)
 	}
-	if _, err := s.admin.Exec(ctx, "REVOKE CREATE ON SCHEMA public FROM "+s.role); err != nil {
-		t.Errorf("가짜 앱 사용자 public CREATE 회수 실패: %v", err)
+}
+
+// adminCleanupExec 는 정리 단계에서 admin 으로 sql 을 돌린다. 실패는 오류로 남긴다.
+func adminCleanupExec(t *testing.T, admin *pgxpool.Pool, sql string) {
+	t.Helper()
+	if _, err := admin.Exec(context.Background(), sql); err != nil {
+		t.Errorf("가짜 앱 사용자 권한 회수 실패(%s): %v", sql, err)
 	}
 }

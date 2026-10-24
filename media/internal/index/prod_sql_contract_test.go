@@ -286,26 +286,28 @@ func TestProdGrantsMatchCanonicalRoleLists(t *testing.T) {
 var appDBUsers = []string{"app_auth", "app_clip", "app_chat_collector", "app_chat_detector"}
 
 // appDBUserGrants 는 3번 목록(services/README.md 「서버별 DB 계정과 권한」 의 SQL 블록)의 GRANT 줄 사본이다.
-// app_chat_detector 의 chat_messages SELECT 는 빠진다 — 표 주인인 수집 서버의 Flyway(V316)가 준다.
+// app_chat_detector 의 chat_messages SELECT 는 빠진다 — 표 주인인 수집 서버의 Flyway(V316)가 준다. DB CONNECT 는
+// 10 의 DO 블록이 동적 SQL 로 주므로 이 대조 밖이고 40 이 잰다.
 var appDBUserGrants = map[string][]string{
 	"app_auth": {
 		"GRANT rds_iam TO app_auth",
-		"GRANT CREATE ON SCHEMA public TO app_auth",
+		"GRANT USAGE, CREATE ON SCHEMA app_auth TO app_auth",
 	},
 	"app_clip": {
 		"GRANT rds_iam TO app_clip",
-		"GRANT CREATE ON SCHEMA public TO app_clip",
+		"GRANT USAGE, CREATE ON SCHEMA app_clip TO app_clip",
 		"GRANT SELECT, DELETE ON stream_segments TO app_clip",
 		"GRANT SELECT ON stream_sessions TO app_clip",
 	},
 	"app_chat_collector": {
 		"GRANT rds_iam TO app_chat_collector",
-		"GRANT CREATE ON SCHEMA public TO app_chat_collector",
+		"GRANT USAGE, CREATE ON SCHEMA app_chat_collector TO app_chat_collector",
 		"GRANT SELECT ON stream_segments TO app_chat_collector",
 	},
 	"app_chat_detector": {
 		"GRANT rds_iam TO app_chat_detector",
-		"GRANT CREATE ON SCHEMA public TO app_chat_detector",
+		"GRANT USAGE, CREATE ON SCHEMA app_chat_detector TO app_chat_detector",
+		"GRANT USAGE ON SCHEMA app_chat_collector TO app_chat_detector",
 	},
 }
 

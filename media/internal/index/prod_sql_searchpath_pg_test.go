@@ -2,12 +2,13 @@ package index
 
 // prod SQL 의 search_path 가로채기 음성 대조(CVE-2018-1058 계열 · kty 결정 2026-10-24).
 //
-// 10_roles.sql 은 앱 사용자 넷에게 public 스키마 CREATE 를 준다(3번 Flyway). 그 사용자가 public 에 pg_catalog 함수
-// · 연산자와 이름이 같고 인자 형이 호출 쪽과 정확히 맞는 판을 심으면, 마스터 신분으로 도는 00–50 의 맨 이름
-// 호출이 그 판을 고른다. 여기서는 그런 덫을 두 묶음 심고 00–50 을 마스터 대역으로 돌린 뒤 덫이 0회 불렸는지 본다.
+// 10_roles.sql 은 앱 사용자 넷에게서 public 스키마 CREATE 를 거두고 자기 스키마를 준다(1단-나). 그래도 누군가
+// public CREATE 를 다시 연 DB 에서, 그 신분이 public 에 pg_catalog 함수 · 연산자와 이름이 같고 인자 형이 호출 쪽과
+// 정확히 맞는 판을 심으면 마스터 신분으로 도는 00–50 의 맨 이름 호출이 그 판을 고른다(심층 방어). 여기서는 그런
+// 덫을 두 묶음 심고 00–50 을 마스터 대역으로 돌린 뒤 덫이 0회 불렸는지 본다.
 //
 //   - pgtest.PlantSearchPathTraps — 사이드카 · janitor 와 같은 덫 일곱(public CREATE 만 받은 가짜 앱 사용자)
-//   - prodSQLTraps — 00–50 에만 나오는 꼴의 덫(10 이 만든 실제 앱 사용자 app_auth)
+//   - prodSQLTraps — 00–50 에만 나오는 꼴의 덫(public CREATE 만 받은 시험 전용 역할 trapPlanterPrefix…)
 //
 // 00 은 로컬에서 늘 실패하고(rds.force_ssl) 50 은 ROLLBACK 으로 끝나므로, 덫이 기록 표에 남긴 행은 그 트랜잭션과
 // 함께 사라진다. 그래서 기록 표(RequireNotCalled)와 함께 마스터 연결이 받은 NOTICE 도 본다 — 두 묶음의 덫은 모두
@@ -30,8 +31,8 @@ import (
 // trapNoticeMarker 는 덫이 불릴 때 내는 NOTICE 의 머리다(pgtest 의 덫 본문과 같은 문구).
 const trapNoticeMarker = "search_path trap "
 
-// trapPlanter 는 prodSQLTraps 를 심는 앱 사용자다 — 10 이 만들고 public CREATE 를 준 실제 이름이다.
-const trapPlanter = "app_auth"
+// trapPlanterPrefix 는 prodSQLTraps 를 심는 시험 전용 역할 이름의 앞부분이다 — 실행마다 난수 접미가 붙는다.
+const trapPlanterPrefix = "pc_prodsql_planter_"
 
 // prodSQLTrap 은 덫 하나다. name 은 NOTICE 에 싣는 이름이고 create 는 심는 문장들이다(시험 DB 와 함께 지워진다).
 type prodSQLTrap struct {
@@ -111,11 +112,24 @@ var prodSQLTraps = []prodSQLTrap{
 		"RETURN $1 OPERATOR(pg_catalog.=) $2::oid;"),
 }
 
-// plantProdSQLTraps 는 superuser 연결에서 trapPlanter 로 바꿔 prodSQLTraps 를 심는다(10 이 먼저 돌아 그 사용자가
-// public CREATE 를 가져야 한다).
+// plantProdSQLTraps 는 superuser 연결에서 public CREATE 만 받은 시험 전용 역할을 만들고, 그 역할로 바꿔 prodSQLTraps
+// 를 심는다. 바꾸기는 SET ROLE 이라 새 접속이 아니므로 CONNECT 는 주지 않는다(주면 DB 권한이 남아 역할을 지우지
+// 못한다). 역할은 시험 DB 안에 덫을 소유하므로 DROP ROLE 만으로는 지워지지 않는다 — 만든 직후 같은 연결에서
+// DROP OWNED BY → DROP ROLE 을 정리로 건다(closeConns 보다 늦게 등록되므로 먼저 돈다).
 func (e *prodSQLEnv) plantProdSQLTraps(t *testing.T) {
 	t.Helper()
-	stmts := []string{"SET ROLE " + trapPlanter}
+	planter := trapPlanterPrefix + prodSQLRandHex(t, 4)
+	if _, err := execScript(t, e.super, "CREATE ROLE "+planter+" NOLOGIN"); err != nil {
+		t.Fatalf("덫 심는 역할 만들기 실패: %v", err)
+	}
+	t.Cleanup(func() {
+		for _, s := range []string{"DROP OWNED BY " + planter, "DROP ROLE " + planter} {
+			if _, err := e.super.Exec(context.Background(), s); err != nil {
+				t.Errorf("덫 심는 역할 정리 실패(%s): %v", s, err)
+			}
+		}
+	})
+	stmts := []string{"GRANT CREATE ON SCHEMA public TO " + planter, "SET ROLE " + planter}
 	for _, tr := range prodSQLTraps {
 		stmts = append(stmts, tr.create...)
 	}
@@ -178,5 +192,15 @@ func TestProdSQLDoesNotCallSearchPathTraps(t *testing.T) {
 	for _, name := range slices.Sorted(maps.Keys(calls)) {
 		t.Errorf("가로채기 덫 %s 가 마스터 대역 신분으로 %d번 불렸다 — 00–50 의 맨 이름 호출이 public 의 판을 골랐다",
 			name, calls[name])
+	}
+}
+
+// 양성 — 10 뒤 앱 사용자는 public 에 덫을 심지 못한다(public CREATE 를 거뒀다).
+func TestProdSQLAppUserCannotPlantTrapInPublic(t *testing.T) {
+	env := newProdSQLEnv(t)
+	env.mustApplyAll(t)
+	stmt := prodSQLTraps[0].create[0]
+	if _, err := execScript(t, env.super, "BEGIN; SET ROLE app_auth; "+stmt+"; ROLLBACK;"); !isSQLState(err, pgInsufficientPrivilege) {
+		t.Errorf("app_auth 의 public 덫 심기 오류 = %v, want 42501", err)
 	}
 }
