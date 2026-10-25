@@ -69,6 +69,10 @@ interface Server {
   listsHold?: Promise<void>;
   /** 내 정보 응답을 붙잡는다(POK-446) */
   meHold?: Promise<void>;
+  /** 수락·거절을 이 상태·사유로 실패시킨다(POK-481) */
+  respondFails?: { status: number; reason: string };
+  /** 나가기를 이 상태·사유로 실패시킨다(POK-481) */
+  leaveFails?: { status: number; reason: string };
 }
 
 function stub(server: Server) {
@@ -78,6 +82,8 @@ function stub(server: Server) {
       return (server.meHold ?? Promise.resolve()).then(() => jsonResponse(200, ME));
     const leave = /^\/api\/editor-delegations\/(\d+)$/.exec(url);
     if (leave && method === 'DELETE') {
+      const fails = server.leaveFails;
+      if (fails) return jsonResponse(fails.status, { reason: fails.reason });
       return (server.hold ?? Promise.resolve()).then(() => {
         server.delegations = server.delegations.filter((d) => d.id !== Number(leave[1]));
         return new Response(null, { status: 204 });
@@ -97,6 +103,11 @@ function stub(server: Server) {
           ? jsonResponse(500, { error: 'boom' })
           : jsonResponse(200, server.invitations),
       );
+    }
+    const respond = /^\/api\/editor-invitations\/11\/(accept|decline)$/.test(url);
+    if (respond && method === 'POST' && server.respondFails) {
+      const fails = server.respondFails;
+      return jsonResponse(fails.status, { reason: fails.reason });
     }
     if (url === '/api/editor-invitations/11/accept' && method === 'POST') {
       return (server.hold ?? Promise.resolve()).then(() => {
@@ -694,6 +705,126 @@ describe('ChannelSwitcher: 스트리머가 바꾼 받은 초대를 새로고침 
     expect(calls(spy, RECEIVED)).toBe(2);
     // 포커스를 시험 안에서 되돌린다: afterEach에서 되돌리면 그것이 부른 다시 읽기가 시험 밖에서 화면을 바꾼다
     await settle(queryClient, () => focusManager.setFocused(undefined));
+  });
+});
+
+describe('ChannelSwitcher: 답하기·나가기가 실패하면 사람 말로 알리고 목록을 다시 읽는다(POK-481)', () => {
+  it.each([
+    [409, 'INVITATION_NOT_PENDING', '이미 처리된 초대예요'],
+    [404, 'INVITATION_NOT_FOUND', '이미 처리된 초대예요'],
+    [410, 'INVITATION_EXPIRED', '기한이 지난 초대예요'],
+  ])(
+    '수락이 %i %s로 실패하면 「%s」로 알리고 받은 초대를 다시 읽는다: 사유 코드는 보이지 않는다',
+    async (status, reason, title) => {
+      const server: Server = {
+        delegations: [],
+        invitations: [invitation(18)],
+        respondFails: { status, reason },
+      };
+      const spy = stub(server);
+      const user = userEvent.setup();
+      const p = within(await open(user));
+      const card = within(await p.findByRole('group', { name: '받은 초대 1' }));
+      const before = calls(spy, RECEIVED);
+      // 그 사이 서버에서 초대가 닫혔다: 다시 읽으면 카드가 없다
+      server.invitations = [];
+
+      await user.click(card.getByRole('button', { name: '수락' }));
+
+      expect(await screen.findByText(title)).toBeInTheDocument();
+      expect(screen.queryByText(reason)).not.toBeInTheDocument();
+      await waitFor(() =>
+        expect(p.queryByRole('group', { name: /받은 초대/ })).not.toBeInTheDocument(),
+      );
+      expect(calls(spy, RECEIVED)).toBe(before + 1);
+      expect(tracked('editor_invitation_responded')).toEqual([]);
+    },
+  );
+
+  it('모르는 실패는 폴백 문구로 알린다: 사유 원문을 보이지 않는다', async () => {
+    stub({
+      delegations: [],
+      invitations: [invitation(18)],
+      respondFails: { status: 500, reason: 'SOME_INTERNAL_CODE' },
+    });
+    const user = userEvent.setup();
+    const p = within(await open(user));
+    const card = within(await p.findByRole('group', { name: '받은 초대 1' }));
+
+    await user.click(card.getByRole('button', { name: '수락' }));
+
+    expect(await screen.findByText('처리하지 못했어요')).toBeInTheDocument();
+    expect(screen.queryByText('SOME_INTERNAL_CODE')).not.toBeInTheDocument();
+  });
+
+  it('거절이 409로 실패하면 덮개를 닫고 「이미 처리된 초대예요」로 알린다', async () => {
+    const server: Server = {
+      delegations: [],
+      invitations: [invitation(18)],
+      respondFails: { status: 409, reason: 'INVITATION_NOT_PENDING' },
+    };
+    stub(server);
+    const user = userEvent.setup();
+    const p = within(await open(user));
+    await user.click(await p.findByRole('button', { name: '거절' }));
+    server.invitations = [];
+    await user.click(
+      within(await p.findByRole('alertdialog')).getByRole('button', { name: '거절하기' }),
+    );
+
+    expect(await screen.findByText('이미 처리된 초대예요')).toBeInTheDocument();
+    await waitFor(() => expect(p.queryByRole('alertdialog')).not.toBeInTheDocument());
+    await waitFor(() =>
+      expect(p.queryByRole('group', { name: /받은 초대/ })).not.toBeInTheDocument(),
+    );
+    expect(screen.getByRole('dialog', { name: '계정 전환' })).toBeInTheDocument();
+  });
+
+  it('나가기가 404로 실패하면 「이미 끊긴 채널이에요」로 알리고 나온 뒤처럼 그 줄을 지운다', async () => {
+    const server: Server = {
+      delegations: [BYEOLHA, KONGSTAR],
+      invitations: [],
+      leaveFails: { status: 404, reason: 'DELEGATION_NOT_FOUND' },
+    };
+    stub(server);
+    const user = userEvent.setup();
+    const p = within(await open(user));
+    await p.findByText('편집 참여 중 · 2');
+    await user.click(p.getByRole('button', { name: '관리' }));
+    await user.click(p.getByRole('button', { name: '콩스타 채널에서 나가기' }));
+    // 그 사이 스트리머가 먼저 내보냈다
+    server.delegations = [BYEOLHA];
+    await user.click(
+      within(await p.findByRole('alertdialog')).getByRole('button', { name: '나가기' }),
+    );
+
+    expect(await screen.findByText('이미 끊긴 채널이에요')).toBeInTheDocument();
+    expect(screen.queryByText('DELEGATION_NOT_FOUND')).not.toBeInTheDocument();
+    await waitFor(() => expect(p.queryByRole('alertdialog')).not.toBeInTheDocument());
+    await waitFor(() =>
+      expect(p.queryByRole('button', { name: '콩스타 채널에서 나가기' })).not.toBeInTheDocument(),
+    );
+    expect(tracked('editor_delegation_ended')).toEqual([]);
+  });
+
+  it('나가기가 다른 이유로 실패하면 덮개를 남기고 다시 시도하라고 알린다', async () => {
+    stub({
+      delegations: [BYEOLHA, KONGSTAR],
+      invitations: [],
+      leaveFails: { status: 503, reason: 'UNAVAILABLE' },
+    });
+    const user = userEvent.setup();
+    const p = within(await open(user));
+    await p.findByText('편집 참여 중 · 2');
+    await user.click(p.getByRole('button', { name: '관리' }));
+    await user.click(p.getByRole('button', { name: '콩스타 채널에서 나가기' }));
+    await user.click(
+      within(await p.findByRole('alertdialog')).getByRole('button', { name: '나가기' }),
+    );
+
+    expect(await screen.findByText('채널에서 나가지 못했어요')).toBeInTheDocument();
+    expect(screen.queryByText('UNAVAILABLE')).not.toBeInTheDocument();
+    expect(p.getByRole('alertdialog')).toBeInTheDocument();
   });
 });
 

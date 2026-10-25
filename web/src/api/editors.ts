@@ -214,6 +214,45 @@ export async function declineInvitation(id: number): Promise<void> {
   await apiFetch(`/api/editor-invitations/${id}/decline`, { method: 'POST' });
 }
 
+type RespondFailure = 'INVITATION_NOT_FOUND' | 'INVITATION_NOT_PENDING' | 'INVITATION_EXPIRED';
+
+// 초대 실패와 같은 규칙으로 status·reason을 짝으로 본다. 받은 초대에 답하다 나는 실패는 대개 그 사이 상황이 바뀐 것이다:
+// 스트리머가 취소했거나(404 · 409), 다른 탭·기기에서 먼저 답했거나(409), 기한이 지났다(410) (POK-481)
+const RESPOND_FAILURE_STATUS: Record<RespondFailure, number> = {
+  INVITATION_NOT_FOUND: 404,
+  INVITATION_NOT_PENDING: 409,
+  INVITATION_EXPIRED: 410,
+};
+
+const ALREADY_HANDLED: EditorInviteMessage = {
+  title: '이미 처리된 초대예요',
+  description: '스트리머가 취소했거나 다른 곳에서 먼저 답했어요. 목록을 최신으로 갱신했어요.',
+};
+
+const RESPOND_FAILURE_MESSAGE: Record<RespondFailure, EditorInviteMessage> = {
+  INVITATION_NOT_FOUND: ALREADY_HANDLED,
+  INVITATION_NOT_PENDING: ALREADY_HANDLED,
+  INVITATION_EXPIRED: {
+    title: '기한이 지난 초대예요',
+    description: '다시 초대받아야 참여할 수 있어요.',
+  },
+};
+
+const RESPOND_FALLBACK: EditorInviteMessage = {
+  title: '처리하지 못했어요',
+  description: '잠시 후 다시 시도해 주세요.',
+};
+
+/** 받은 초대 수락·거절 실패를 사용자 문구로. 알 수 없는 실패는 폴백으로 — reason 원문을 노출하지 않는다. */
+export function respondFailureMessage(e: unknown): EditorInviteMessage {
+  if (!(e instanceof ApiError) || !Object.hasOwn(RESPOND_FAILURE_STATUS, e.message))
+    return RESPOND_FALLBACK;
+  const failure = e.message as RespondFailure;
+  return RESPOND_FAILURE_STATUS[failure] === e.status
+    ? RESPOND_FAILURE_MESSAGE[failure]
+    : RESPOND_FALLBACK;
+}
+
 export async function fetchDelegationsAsEditor(): Promise<StreamerDelegation[]> {
   const res = await apiFetch('/api/editor-delegations/as-editor');
   const wire = (await res.json()) as DelegationWire[];

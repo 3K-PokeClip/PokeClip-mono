@@ -7,6 +7,7 @@ import {
   inviteEditor,
   inviteFailureMessage,
   inviteFailureOf,
+  respondFailureMessage,
   revokeDelegation,
 } from '@/api/editors';
 import { useAuthStore } from '@/stores/auth';
@@ -179,5 +180,27 @@ describe('inviteFailureMessage', () => {
       description: '잠시 후 다시 시도해 주세요.',
     });
     expect(JSON.stringify(message)).not.toContain('SOME_INTERNAL_CODE');
+  });
+});
+
+describe('respondFailureMessage (POK-481)', () => {
+  it('취소됐거나 먼저 답한 초대(404·409)는 「이미 처리된 초대예요」, 기한이 지난 초대(410)는 따로 알린다', () => {
+    expect(respondFailureMessage(new ApiError(404, 'INVITATION_NOT_FOUND')).title).toBe(
+      '이미 처리된 초대예요',
+    );
+    expect(respondFailureMessage(new ApiError(409, 'INVITATION_NOT_PENDING')).title).toBe(
+      '이미 처리된 초대예요',
+    );
+    expect(respondFailureMessage(new ApiError(410, 'INVITATION_EXPIRED')).title).toBe(
+      '기한이 지난 초대예요',
+    );
+  });
+
+  it('status가 어긋나거나 모르는 실패면 폴백 문구다 — reason 원문을 노출하지 않는다', () => {
+    const fallback = { title: '처리하지 못했어요', description: '잠시 후 다시 시도해 주세요.' };
+    expect(respondFailureMessage(new ApiError(500, 'INVITATION_EXPIRED'))).toEqual(fallback);
+    expect(respondFailureMessage(new ApiError(409, 'SOME_INTERNAL_CODE'))).toEqual(fallback);
+    expect(respondFailureMessage(new ApiError(404, 'toString'))).toEqual(fallback);
+    expect(respondFailureMessage(new TypeError('network'))).toEqual(fallback);
   });
 });
