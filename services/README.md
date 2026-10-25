@@ -1046,11 +1046,10 @@ DB 에 남는다. **울타리는 손으로도 지우지 않는다.** 빈 스키�
 1.  이력 표 넷이 어디 있는지 본다 — 넷 다 public 이면 이전 전이고(다시
     배포하면 이전 단계가 옮긴다), 넷 다 `app_*` 면 이전이 커밋됐다(새 이미지로
     `up -d` 는 kty 승인 뒤). 섞여 있으면 지우지 말고 kty 에게 회부한다.
+    출력은 `<스키마>|<표>` 네 줄과 `exit=0` 이어야 한다(표만 — 색인은 뺀다).
 
-    ```sql
-    SELECT n.nspname, c.relname FROM pg_catalog.pg_class c
-      JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-     WHERE c.relname LIKE 'flyway_schema_history%';
+    ```sh
+    cd /home/ec2-user/pokeclip-mono/services && sudo -u ec2-user docker compose -f docker-compose.dev.yml exec -T postgres sh -c 'psql -X -At -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT n.nspname, c.relname FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace WHERE c.relkind = '\''r'\'' AND c.relname LIKE '\''flyway_schema_history%'\''"'; echo "exit=$?"
     ```
 1.  표지를 지운다.
 
@@ -3156,9 +3155,21 @@ POK-393에서 집기·숨기기를 없애면서 「열어 봤다」를 **편집�
 - `actor`는 회원 번호다. 이 기록은 카드가 있는 동안 남는다.
 
 두 SQL 은 clip 의 표를 맨 이름으로 읽는다. 표는 `app_clip` 스키마에
-있으므로(POK-428) 마스터 · 운영자 세션에서는 먼저 `SET search_path TO app_clip;`
-을 돌린다 — 안 하면 `42P01` 이다. 블록 안에는 넣지 않는다(아래 시험이 블록의
-첫 줄로 SQL 을 찾고 clip 의 세션 경로로 돌린다).
+있으므로(POK-428) 먼저 세션 경로를 바꾼다 — 안 바꾸면 `42P01` 이다. 블록
+안에는 넣지 않는다(아래 시험이 블록의 첫 줄로 SQL 을 찾고 clip 의 세션 경로로
+돌린다). 감싸는 꼴은 세션마다 다르다.
+
+*   **dev(compose 의 소유자 계정)**: 표 주인이라 경로 한 줄이면 된다 —
+    `SET search_path TO app_clip;` 뒤에 블록을 돌린다.
+*   **prod 마스터**: 표 주인이 `app_clip` 이고 마스터에게는 표 권한이 없어,
+    경로만 바꾸면 `42501` 이다. 런북
+    [runtime-1a.md](../infra/terraform/runbooks/runtime-1a.md) 「1단-다
+    되돌리기 — O7d 뒤(clip 먼저 0개)」 의 셈 SQL 꼴로 감싼다. 경로를 바꾸고
+    `GRANT app_clip TO CURRENT_USER WITH SET TRUE, INHERIT FALSE;` 와
+    `SET ROLE app_clip;` 뒤에 블록을 돌린 다음, `RESET ROLE;` 과
+    `REVOKE app_clip FROM CURRENT_USER;` 로 멤버십을 거둔다. 보내는 길(실행기 ·
+    페이로드 · send-command 승인)도 그 자리를 따른다. 한 트랜잭션
+    (`psql -X -1 -v ON_ERROR_STOP=1`)으로 돌려 중간에 실패하면 부여도 롤백된다.
 
 **① 클립 안 나온 카드 비율**: 기간(`:from` 이상 `:to` 미만)에 편집기로 연 자동 카드 중 렌더 주문(`clips`)이 하나도 없는 비율.
 편집본만 저장하고 영상을 안 만든 카드도 「안 나왔다」로 센다.
@@ -4297,6 +4308,12 @@ SOOP 수신은 다음 PR이고, 지금 세션을 여는 곳(연동 시작)은 �
    WHERE target = 'COLLECTOR' AND platform = 'SOOP'
      AND done_at BETWEEN :deploy_started_at AND :deploy_finished_at;
   ```
+
+  위 블록은 dev(compose 의 소유자 계정) 꼴이다 — 표 주인이라 경로 한 줄로
+  된다. prod 마스터는 표 권한이 없어 경로만 바꾸면 `42501` 이다. 런북
+  [runtime-1a.md](../infra/terraform/runbooks/runtime-1a.md) 「1단-다
+  되돌리기 — O7d 뒤(clip 먼저 0개)」 의 셈 SQL 꼴에서 `app_clip` 을
+  `app_auth` 로 바꿔, 그 계정으로 바꿔 돌리고 멤버십을 거둔다.
 
   다시 열린 줄은 새 발송기가 `platform=SOOP`으로 보낸다. 새 auth가 이미 바르게 보낸 줄도 함께 열려 한 번 더 가지만, 수집기 명부가 같은 탈퇴 시각으로 접어 결과는 같다. 같은 아이디의 치지직 데이터가 잘못 지워졌다면 되돌릴 길은 없다(백업 없음).
 

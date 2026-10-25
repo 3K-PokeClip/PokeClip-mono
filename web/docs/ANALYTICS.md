@@ -163,6 +163,12 @@ SDK는 동적 import라 hydration 뒤에 붙을 수 있다(Next 16 `instrumentat
     WHERE deleted_at >= now() - interval '8 days'
     ORDER BY deleted_at;
    ```
+   위 블록은 dev(compose 의 소유자 계정) 꼴이다 — 표 주인이라 경로 한 줄로
+   된다. prod 마스터는 표 권한이 없어 경로만 바꾸면 `42501` 이다. 런북
+   [runtime-1a.md](../../infra/terraform/runbooks/runtime-1a.md) 「1단-다
+   되돌리기 — O7d 뒤(clip 먼저 0개)」 의 셈 SQL 꼴에서 `app_clip` 을
+   `app_auth` 로 바꿔, 그 계정으로 바꿔 읽고 멤버십을 거둔다(한 트랜잭션
+   `psql -X -1 -v ON_ERROR_STOP=1` — 중간에 실패하면 부여도 롤백된다).
 2. PostHog → **Persons**에서 distinct ID가 그 회원 번호인 사람을 찾는다(없으면 그 회원은 식별된 적이 없다 — 할 일 없음).
 3. **Delete person**에서 **이벤트와 녹화도 함께 지우기**를 고른다. 삭제는 PostHog 안에서 차례로 처리된다.
 4. 지운 회원 번호와 날짜를 운영 기록에 남긴다(회원 번호 말고 다른 정보는 적지 않는다).
