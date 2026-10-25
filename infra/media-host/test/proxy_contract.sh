@@ -73,6 +73,8 @@ readonly ECHO_ADMIN_PORT=28199
 readonly OTHER_STREAM_ID='pcbench-edge-proxy-s2'
 readonly LOOPBACK_STREAM_ID='pcbench-edge-proxy-loopback'
 readonly END_SIGNAL_BODY='{"ingestStreamId":"pcbench-edge-proxy-s1"}'
+# 회차별 되감기 경로의 회차 번호(아무 값 — 상류에 원문 그대로 가는지만 본다).
+readonly ROUND_ID='pcbench-edge-proxy-r1'
 readonly READY_TIMEOUT=60
 readonly CASE_COUNT=17
 
@@ -482,6 +484,10 @@ check_case_7() {
   proxy::request GET "${base}/api/streams/${PROXY_STREAM_ID}/rewind"
   proxy::expect_code 404 || ok=1
   proxy::expect_no_cache_control || ok=1
+  proxy::request GET \
+    "${base}/api/streams/${PROXY_STREAM_ID}/rounds/${ROUND_ID}/rewind"
+  proxy::expect_code 404 || ok=1
+  proxy::expect_no_cache_control || ok=1
   for target in / /api/other /v3/paths/list; do
     proxy::request GET "${base}${target}"
     proxy::expect_code 404 || ok=1
@@ -656,6 +662,18 @@ check_case_15() {
   else
     ok=1
   fi
+  # 회차별 경로(/api/streams/{s}/rounds/{r}/rewind)도 같은 상류로 원문 그대로
+  # 간다 — 웹 끝남 대기가 종국 판정에 이 경로만 쓴다.
+  path="/api/streams/${PROXY_STREAM_ID}/rounds/${ROUND_ID}/rewind"
+  proxy::request GET "${base}${path}"
+  if proxy::expect_code 200; then
+    proxy::expect_field .listener "127.0.0.1:${ECHO_CONTROL_PORT}" '상류' \
+      || ok=1
+    proxy::expect_field .path "${path}" '경로' || ok=1
+    proxy::expect_field .method GET '메서드' || ok=1
+  else
+    ok=1
+  fi
   # 상류를 채워도 제어면 포트의 그 밖 경로는 404 다(관리 API 를 열지 않는다).
   proxy::request GET "${base}/v3/paths/list"
   proxy::expect_code 404 || ok=1
@@ -693,7 +711,8 @@ main() {
   harness::run_case 5 'path 없음 · 빈 값 · 중복 → 403 · 상류 호출 0' check_case_5
   harness::run_case 6 'playback /get — 쿼리 원문 보존' check_case_6
   harness::run_case 7 \
-    '제어면(상류 빔) → 404 · 상류 호출 0 · Cache-Control 없음' check_case_7
+    '제어면(상류 빔 · 회차 경로 포함) → 404 · 상류 호출 0 · Cache-Control 없음' \
+    check_case_7
   harness::run_case 10 '루프백 점검 경로 200' check_case_10
   harness::run_case 11 'nginx 가 127.0.0.1:8888 에 닿음(망 칸 공유)' \
     check_case_11
@@ -704,7 +723,8 @@ main() {
   fi
   switch_control_upstream || true
   harness::run_case 15 \
-    '제어면(상류 = 에코) → 그대로 전달 · 정규화 우회 원문은 400' check_case_15
+    '제어면(상류 = 에코 · 회차 경로 포함) → 그대로 전달 · 정규화 우회 원문은 400' \
+    check_case_15
   if (( phase_b_ready )); then
     collect_nginx_logs "${scratch}/nginx-b.log" '사례 15 단계'
   fi
