@@ -9,7 +9,7 @@ import {
   type DatedFragment,
   type SeekableLike,
 } from './dvrWindow';
-import { LIVE_EDGE_BACKOFF_SECONDS, LIVE_WINDOW_SECONDS, isAtEdge } from './playerMath';
+import { LIVE_EDGE_BACKOFF_SECONDS, REWIND_UI_MAX_SECONDS, isAtEdge } from './playerMath';
 
 // TimeRanges 호환 plain object — jsdom 미디어 구현 없이 검증한다
 function seekable(...ranges: Array<[number, number]>): SeekableLike {
@@ -91,7 +91,7 @@ describe('behindFromCurrentTime', () => {
   it('DVR 창 상한으로 자른다 — 시크바 ARIA 범위 밖으로 나가지 않게', () => {
     // 1시간 넘게 일시정지하면 currentTime은 멈춘 채 라이브 지점만 계속 전진한다
     const long = { start: 0, end: 90_000 };
-    expect(behindFromCurrentTime(long, 0, 80_000)).toBe(LIVE_WINDOW_SECONDS);
+    expect(behindFromCurrentTime(long, 0, 80_000)).toBe(REWIND_UI_MAX_SECONDS);
   });
 });
 
@@ -134,7 +134,7 @@ describe('rewindWindowSeconds', () => {
   });
 
   it('창을 넘으면 계약 상한 1시간으로 자른다', () => {
-    expect(rewindWindowSeconds({ start: 0, end: 7200 }, 7100)).toBe(LIVE_WINDOW_SECONDS);
+    expect(rewindWindowSeconds({ start: 0, end: 7200 }, 7100)).toBe(REWIND_UI_MAX_SECONDS);
   });
 
   it('라이브 지점이 창 시작으로 붕괴하면 0이다 — 방송 시작 직후', () => {

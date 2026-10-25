@@ -1,4 +1,4 @@
-import { LIVE_EDGE_BACKOFF_SECONDS, LIVE_WINDOW_SECONDS } from './playerMath';
+import { LIVE_EDGE_BACKOFF_SECONDS, REWIND_UI_MAX_SECONDS } from './playerMath';
 
 // video.seekable 기반 DVR 창 계산 — infra/dev-media/player.html의 dvrRange 이식.
 // jsdom에 미디어 구현이 없어 TimeRanges 대신 구조 타입을 받아 plain object로
@@ -22,7 +22,7 @@ export interface DvrRange {
  */
 export function dvrRange(
   seekable: SeekableLike,
-  windowSeconds: number = LIVE_WINDOW_SECONDS,
+  windowSeconds: number = REWIND_UI_MAX_SECONDS,
 ): DvrRange | null {
   if (seekable.length === 0) return null;
   const end = seekable.end(seekable.length - 1);
@@ -67,7 +67,7 @@ export function behindFromCurrentTime(
   syncPosition: number | null,
 ): number {
   const behind = Math.round(liveEdgePosition(range, syncPosition) - currentTime);
-  return Math.min(LIVE_WINDOW_SECONDS, Math.max(0, behind));
+  return Math.min(REWIND_UI_MAX_SECONDS, Math.max(0, behind));
 }
 
 /**
@@ -79,7 +79,7 @@ export function behindFromCurrentTime(
  */
 export function rewindWindowSeconds(range: DvrRange, syncPosition: number | null): number {
   const width = liveEdgePosition(range, syncPosition) - range.start;
-  return Math.min(LIVE_WINDOW_SECONDS, Math.max(0, width));
+  return Math.min(REWIND_UI_MAX_SECONDS, Math.max(0, width));
 }
 
 /** 영상 목록의 조각 하나. 구조 타입이라 hls.js의 Fragment를 그대로 넘긴다 */

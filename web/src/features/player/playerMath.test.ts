@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   AT_EDGE_THRESHOLD_SECONDS,
   LIVE_EDGE_BACKOFF_SECONDS,
-  LIVE_WINDOW_SECONDS,
+  REWIND_UI_MAX_SECONDS,
   behindFromSeekFraction,
   formatBehind,
   formatUptime,
@@ -19,12 +19,12 @@ describe('formatBehind — 계약3 4절 시차 표기', () => {
   });
 
   it('1시간부터는 -H:MM:SS다 — 라이브 창의 끝은 -1:00:00', () => {
-    expect(formatBehind(LIVE_WINDOW_SECONDS)).toBe('-1:00:00');
+    expect(formatBehind(REWIND_UI_MAX_SECONDS)).toBe('-1:00:00');
     expect(formatBehind(3599)).toBe('-59:59');
   });
 
   it('1시간 넘는 녹화 다시보기는 -1:00:00에서 멈추지 않는다 — POK-253', () => {
-    expect(formatBehind(LIVE_WINDOW_SECONDS + 999)).toBe('-1:16:39');
+    expect(formatBehind(REWIND_UI_MAX_SECONDS + 999)).toBe('-1:16:39');
     expect(formatBehind(9000)).toBe('-2:30:00');
   });
 
@@ -71,18 +71,18 @@ describe('parseClockLabel — formatUptime의 역함수', () => {
 
 describe('behindFromSeekFraction', () => {
   it('시크바 위치를 시차로 환산한다 (우측 끝 = 엣지)', () => {
-    expect(behindFromSeekFraction(1, LIVE_WINDOW_SECONDS)).toBe(0);
-    expect(behindFromSeekFraction(0.5, LIVE_WINDOW_SECONDS)).toBe(LIVE_WINDOW_SECONDS / 2);
+    expect(behindFromSeekFraction(1, REWIND_UI_MAX_SECONDS)).toBe(0);
+    expect(behindFromSeekFraction(0.5, REWIND_UI_MAX_SECONDS)).toBe(REWIND_UI_MAX_SECONDS / 2);
   });
 
   it('엣지 3초 미만은 0으로 스냅한다', () => {
-    const nearEdge = 1 - 2 / LIVE_WINDOW_SECONDS; // 시차 2초 지점
-    expect(behindFromSeekFraction(nearEdge, LIVE_WINDOW_SECONDS)).toBe(0);
+    const nearEdge = 1 - 2 / REWIND_UI_MAX_SECONDS; // 시차 2초 지점
+    expect(behindFromSeekFraction(nearEdge, REWIND_UI_MAX_SECONDS)).toBe(0);
   });
 
   it('범위를 벗어난 입력은 0..윈도우로 클램프한다', () => {
-    expect(behindFromSeekFraction(-0.2, LIVE_WINDOW_SECONDS)).toBe(LIVE_WINDOW_SECONDS);
-    expect(behindFromSeekFraction(1.7, LIVE_WINDOW_SECONDS)).toBe(0);
+    expect(behindFromSeekFraction(-0.2, REWIND_UI_MAX_SECONDS)).toBe(REWIND_UI_MAX_SECONDS);
+    expect(behindFromSeekFraction(1.7, REWIND_UI_MAX_SECONDS)).toBe(0);
   });
 
   it('창이 짧으면 그 창 기준으로 환산한다 — POK-32', () => {
@@ -106,9 +106,9 @@ describe('behindFromSeekFraction', () => {
 
 describe('progressFraction', () => {
   it('엣지는 1, 윈도우 끝은 0', () => {
-    expect(progressFraction(0, LIVE_WINDOW_SECONDS)).toBe(1);
-    expect(progressFraction(LIVE_WINDOW_SECONDS, LIVE_WINDOW_SECONDS)).toBe(0);
-    expect(progressFraction(LIVE_WINDOW_SECONDS * 2, LIVE_WINDOW_SECONDS)).toBe(0);
+    expect(progressFraction(0, REWIND_UI_MAX_SECONDS)).toBe(1);
+    expect(progressFraction(REWIND_UI_MAX_SECONDS, REWIND_UI_MAX_SECONDS)).toBe(0);
+    expect(progressFraction(REWIND_UI_MAX_SECONDS * 2, REWIND_UI_MAX_SECONDS)).toBe(0);
   });
 
   it('창이 짧으면 그 창 기준으로 채운다 — POK-32', () => {
