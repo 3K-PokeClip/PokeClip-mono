@@ -47,8 +47,9 @@ public class PlaybackAccessSigner {
 
     /**
      * 계약3 7-1의 경로 종류. 순서가 곧 응답 순서다. 새 종류가 생기면 여기 한 줄이고, 쿠키는 셋씩 는다.
-     * {@code playback}은 녹화 재생 서버의 목록 · 조각 길이다(POK-317). 🔴 쿼리는 정책이 못 막으므로 그 서버의
-     * {@code path} 쿼리는 엣지가 경로의 키로 덮는다(클라이언트가 보낸 값은 버린다).
+     * {@code playback}은 녹화 재생 서버의 목록 · 조각 길이다(POK-317). 🔴 쿼리는 정책이 못 막으므로 웹이 그 서버의
+     * {@code path} 쿼리를 경로의 키와 같은 값으로 싣고, Media 상자 nginx가 {@code path}가 정확히 하나이고 값이
+     * 경로의 키와 같을 때만 통과시킨다(아니면 403 · CloudFront · ALB는 쿼리를 그대로 넘긴다 · POK-200).
      */
     static final List<String> KINDS = List.of("live", "dvr", "vod", "playback");
 

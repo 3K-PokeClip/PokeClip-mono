@@ -150,8 +150,9 @@ class PlaybackAccessControllerTest extends IntegrationTestSupport {
 
     /**
      * 녹화 재생 길(POK-317)은 경로의 키로만 열려야 한다. 🔴 <b>쿠키 정책은 쿼리를 못 막는다</b>. 내 키 경로에 남의 키를
-     * {@code path} 쿼리로 붙인 요청도 정책에 맞는다(양성 대조). 그래서 엣지(로컬은 웹 라우트)가 들어온 {@code path}를 버리고
-     * 경로의 키로 덮어야 한다. 남의 키 경로는 정책에 안 맞는다.
+     * {@code path} 쿼리로 붙인 요청도 정책에 맞는다(양성 대조). 그래서 Media 상자 nginx가 {@code path}가 정확히 하나이고
+     * 값이 경로의 키와 같을 때만 통과시킨다(로컬은 웹 라우트가 들어온 {@code path}를 버리고 다시 채운다 · POK-200).
+     * 남의 키 경로는 정책에 안 맞는다.
      */
     @Test
     void 녹화_재생_길은_경로의_키로만_맞고_쿼리의_path는_정책이_못_막는다() throws Exception {
@@ -161,7 +162,7 @@ class PlaybackAccessControllerTest extends IntegrationTestSupport {
 
         assertThat(자원).as("내 키 경로의 녹화 목록").anyMatch(r -> cloudFrontMatches(r, BASE + "/playback/" + 내_방송 + "/list"));
         assertThat(자원).as("남의 키 경로").noneMatch(r -> cloudFrontMatches(r, BASE + "/playback/" + 남의_방송 + "/list"));
-        assertThat(자원).as("쿼리의 path는 정책이 못 막는다: 엣지가 경로 키로 덮어야 하는 이유")
+        assertThat(자원).as("쿼리의 path는 정책이 못 막는다: Media 상자 nginx가 경로 키 대조로 막는 이유")
                 .anyMatch(r -> cloudFrontMatches(r, BASE + "/playback/" + 내_방송 + "/list?path=" + 남의_방송));
     }
 
