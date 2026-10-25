@@ -2266,9 +2266,17 @@ SOOP은 공식 API에 사진이 없어 **같은 이름의 치지직 카테고리
 
 **쿠키 셋은 CloudFront가 정한 이름이다** — `CloudFront-Policy` · `CloudFront-Signature` · `CloudFront-Key-Pair-Id`.
 **경로 종류(`live`·`dvr`·`vod`·`playback`)마다 한 셋, 열두 장**이다. `playback`은 녹화 재생 서버의 목록 · 조각 길
-(`{MEDIA_BASE_URL}/playback/{키}/list` · `/get`, POK-317)이다. 🔴 **쿠키 정책은 쿼리를 못 막는다**: `/playback/{내키}/list?path={남의키}`도
-정책에 맞으므로 **엣지가 들어온 `path` 쿼리를 버리고 경로의 키로 덮어야 한다**(로컬은 웹 라우트가 같은 규칙, 시험
-`녹화_재생_길은_경로의_키로만_맞고_쿼리의_path는_정책이_못_막는다`). 속성은 `Path=/{kind}/{streamId}` · `Secure` · `HttpOnly` ·
+(`{MEDIA_BASE_URL}/playback/{키}/list` · `/get`, POK-317)이다.
+🔴 **쿠키 정책은 쿼리를 못 막는다**: `/playback/{내키}/list?path={남의키}`도
+정책에 맞는다. 그래서 웹이 경로의 키와 같은 값으로 `path`를 싣고, **막는 것은
+Media 상자 nginx의 대조다**: `path`가 정확히 하나이고 값이 경로의 키와 같을
+때만 통과시키고 나머지는 403이다(`infra/media-host/nginx/nginx.conf.tmpl:85-98`).
+CloudFront는 `/playback/*`에 함수를 걸지 않고 쿼리를 전부 넘기며, ALB는 앞의
+`/playback`만 떼고 쿼리는 그대로 넘긴다. 로컬은 웹 라우트가 들어온 `path`를
+버리고 경로의 키로 다시 채우는 이중 방어다. 시험
+`녹화_재생_길은_경로의_키로만_맞고_쿼리의_path는_정책이_못_막는다`가 정책이
+이 쿼리를 못 막음을 잰다〔2026-10-25 POK-200 · kty 결정〕. 속성은
+`Path=/{kind}/{streamId}` · `Secure` · `HttpOnly` ·
 `SameSite=Lax` · `Max-Age=수명` · `Domain=PLAYBACK_COOKIE_DOMAIN`(비면 없음). 브라우저는 요청 경로에 맞는 셋만 보낸다.
 
 🔴 **왜 `Path=/` 한 셋이 아닌가 — 봇 리뷰 2판(claude)이 찾은 구멍.** 첫 판은 정책 `Resource`를
