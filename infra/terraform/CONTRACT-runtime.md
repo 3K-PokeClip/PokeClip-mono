@@ -43,10 +43,11 @@
 | platform → 런타임 2단 | `service_sg_ids`(auth · clip · next) | chat-collector · chat-detector ↔ auth · clip 규칙(POK-306) | SG 규칙 = 런타임 2단 |
 | 런타임 → 엣지 시험 | 시험 계정 · 계약9 억제 조건 | 루프백 · T1 부터 T3 · T8 | 런타임 |
 
-clip ↔ auth · RDS ← auth · clip · 로드밸런서 → Media · Media ↔ auth 규칙은
-위 표의 런타임 2단 행이 아닙니다(platform · media 가 가짐 — 설계 5-5). Media
-↔ auth 는 설계서가 런타임 2단 몫으로 적었지만 kty 결정 2026-10-25 (나)로
-media 가 RDS 짝과 같은 꼴로 만듭니다.
+clip ↔ auth · RDS ← auth · clip · 로드밸런서 → Media 규칙은 위 표의 런타임
+2단 행이 아니고 platform · media 가 가집니다(설계 5-5). Media ↔ auth 규칙도
+런타임 2단 행이 아닙니다. 설계서는 런타임 2단 몫으로 적었지만, kty 결정
+2026-10-25 (나)에 따라 media 가 RDS 짝과 같은 꼴로 만듭니다(POK-477 — 근거를
+규칙별로 나눔).
 
 *   **auth → chat-collector**: auth 탈퇴 정리가 `COLLECTOR_BASE_URL`
     (`http://chat-collector.pokeclip.internal:8083`)을 부릅니다. 그 SG 짝(auth
