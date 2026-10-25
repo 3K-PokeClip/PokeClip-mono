@@ -62,6 +62,42 @@ clip-sse 는 같은 clip 서비스입니다. 긴 SSE 연결이 clip 그룹의 �
 `CORS_ALLOWED_ORIGINS = https://app.pokeclip.com` 하나만 둡니다(kty 확정 —
 변수 `cors_allowed_origins`).
 
+## 공개 WAF 데이터 보호
+
+공개 ALB 의 REGIONAL WAF 는 웹 ACL 데이터 보호로 아래 값을 요청 샘플 · 로그
+모두에서 `REDACTED` 로 바꿉니다(`load_balancers.tf` 의 `module "waf"`).
+
+*   **헤더**: `authorization` · `cookie` · `referer` · `x-internal-token` ·
+    `x-stream-key-resolve-token`. 앞의 둘은 로그 가림(`redacted_fields`)도
+    겹쳐 둡니다.
+*   **질의 인자**: `code`(OAuth 콜백) · `token`(프로필 사진 주소).
+
+이 설정에는 운영 대가가 둘 있습니다. 차단 동작은 바뀌지 않습니다 — 데이터
+보호는 저장되는 요청 데이터만 바꿉니다.
+
+*   **질의 문자열 전체가 일치 세부에서 가려집니다.** 질의 인자를 하나라도
+    가리면 로그의 `RuleMatchDetails` · `rateBasedRuleList` 에서는 질의 문자열
+    전체가 `REDACTED` 입니다(AWS WAF 개발자 안내서 「Data protection
+    limitations」). 그래서 질의를 보는 규칙(KnownBadInputs 의
+    `*_QUERYSTRING` 규칙 등)에 걸린 차단 로그에서 공격 페이로드를 볼 수
+    없습니다.
+*   **출처를 잃습니다.** `referer` 를 가리므로 요청이 어느 화면에서 왔는지
+    WAF 기록으로는 알 수 없습니다.
+
+오탐을 볼 때는 가려지지 않는 자리를 씁니다.
+
+*   어느 규칙이 걸렸는지: 로그의 `terminatingRuleId` · `ruleGroupList` 의
+    규칙 이름과 `conditionType` · `location` · `labels`.
+*   요청 대상: `httpRequest.uri` · `httpRequest.args`. `args` 에서는 가린
+    인자(`code` · `token`)만 `REDACTED` 이고 나머지 인자는 원문입니다(같은
+    안내서 「Examples of data protection」).
+*   요청 샘플(최근 3시간)에도 같은 보호가 걸립니다. 샘플이 로그보다 더
+    보여 주지는 않습니다.
+
+질의 원문이 꼭 필요하면 데이터 보호 예외(`exclude_rule_match_details`)를
+잠시 켜야 합니다. `modules/waf_acl` 에 그 입력이 없으므로 코드 변경과 리뷰를
+거칩니다.
+
 ## Next 이미지 빌드 인자
 
 Next 는 rewrite 목적지를 **빌드 때** 굳힙니다(web README 「컨테이너

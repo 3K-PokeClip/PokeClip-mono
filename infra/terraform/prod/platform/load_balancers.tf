@@ -151,6 +151,13 @@ module "waf" {
   # 같은 출처(app)로 보내는 요청의 Referer 에 ?code= 가 든 전체 주소가
   # 실린다. SINGLE_QUERY_ARGUMENT 는 헤더 안의 그 값을 가리지 못한다. 대가로
   # 요청 샘플 · 로그에서 요청이 어느 화면에서 왔는지(출처 정보)를 잃는다.
+  #
+  # 질의 인자를 하나라도 가리면 로그의 규칙 일치 · 속도 규칙 세부
+  # (RuleMatchDetails · rateBasedRuleList)에서 질의 문자열 전체가 REDACTED 가
+  # 된다(AWS WAF 개발자 안내서 「Data protection limitations」) — 질의를 보는
+  # 규칙에 걸린 차단 로그에서 공격 페이로드를 볼 수 없다. 차단 자체는 그대로다
+  # (데이터 보호는 저장되는 요청 데이터만 바꾼다 — AWS WAF API
+  # 「FieldToProtect」). 오탐을 볼 때의 대안은 README 「공개 WAF 데이터 보호」.
   protected_headers = [
     "authorization",
     "cookie",

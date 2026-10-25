@@ -12,8 +12,9 @@ locals {
   }
 
   # 데이터 보호로 가릴 이름 — 필드 종류(field_type)마다 항목 하나. 빈 목록은
-  # 뺀다(FieldKeys 가 비면 그 종류의 모든 키를 가린다 — AWS WAF API
-  # 「FieldToProtect」).
+  # 항목째 뺀다 — SINGLE_HEADER · SINGLE_QUERY_ARGUMENT 는 비어 있지 않은
+  # FieldKeys 가 필요하고, 그 종류의 모든 키를 가리는 선택지는 없다(AWS WAF
+  # API 「FieldToProtect」).
   protected_fields = {
     for field_type, keys in {
       SINGLE_HEADER         = var.protected_headers

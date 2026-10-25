@@ -566,6 +566,16 @@ run "rejects_protected_header_with_trailing_space" {
   expect_failures = [var.protected_headers]
 }
 
+run "rejects_duplicate_protected_header" {
+  command = plan
+
+  variables {
+    protected_headers = ["authorization", "authorization"]
+  }
+
+  expect_failures = [var.protected_headers]
+}
+
 run "accepts_100_protected_headers" {
   command = plan
 
@@ -644,6 +654,16 @@ run "rejects_protected_query_arg_with_trailing_space" {
 
   variables {
     protected_query_args = ["code "]
+  }
+
+  expect_failures = [var.protected_query_args]
+}
+
+run "rejects_duplicate_protected_query_arg" {
+  command = plan
+
+  variables {
+    protected_query_args = ["code", "code"]
   }
 
   expect_failures = [var.protected_query_args]
