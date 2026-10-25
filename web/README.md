@@ -449,6 +449,7 @@ web/                     # 단일 Next.js 앱 (App Router + TanStack Query + Zus
 | `NEXT_PUBLIC_MEDIA_LIVE_BASE_URL`     | LL-HLS 베이스            | 진짜 미디어 서버 (`{base}/{영상 경로 키}/index.m3u8`, POK-233)                                               |
 | `NEXT_PUBLIC_MEDIA_PLAYBACK_BASE_URL` | 녹화 재생 (비워도 됨)    | 다시보기·편집기 미리보기 (`{base}/playback/{키}/list`·`/get`, POK-317). 로컬은 `http://localhost:3000/media` |
 | `MEDIA_PLAYBACK_ORIGIN`               | `http://localhost:9996`  | 로컬 전용 재생 서버. `/media/playback` 라우트가 넘긴다(비면 404). prod · dev는 비운다                        |
+| `NEXT_PUBLIC_MEDIA_CONTROL_BASE_URL`  | 비움                     | 되감기 제어면 — 이 판은 읽지 않음. M5 웹 전환 PR이 `{값}/api/streams/{id}/rewind`를 붙인다(끝 `/` 없음)      |
 | `NEXT_PUBLIC_POSTHOG_KEY`             | 비움                     | 사용 통계(PostHog) 프로젝트 공개 키 — 비면 SDK를 불러오지 않음 (POK-356)                                     |
 | `NEXT_PUBLIC_POSTHOG_HOST`            | 비움                     | PostHog 수집 주소(운영 `https://us.i.posthog.com`) — 규칙은 `docs/ANALYTICS.md`                              |
 | `NEXT_PUBLIC_POSTHOG_REPLAY`          | 비움                     | `on`일 때만 세션 녹화(POK-358) — 콘솔 녹화 토글도 켜야 시작                                                  |
@@ -474,6 +475,7 @@ docker build --platform linux/<태스크 아키텍처> -t pokeclip-web \
   --build-arg NEXT_PUBLIC_GOOGLE_CLIENT_ID=… \
   --build-arg NEXT_PUBLIC_MEDIA_LIVE_BASE_URL=… \
   --build-arg NEXT_PUBLIC_MEDIA_PLAYBACK_BASE_URL=… \
+  --build-arg NEXT_PUBLIC_MEDIA_CONTROL_BASE_URL=… \
   web
 ```
 
@@ -489,12 +491,35 @@ docker build --platform linux/<태스크 아키텍처> -t pokeclip-web \
 | `NEXT_PUBLIC_GOOGLE_CLIENT_ID`        | **빌드 실패**          | 백엔드 `GOOGLE_CLIENT_ID`와 같은 값 |
 | `NEXT_PUBLIC_MEDIA_LIVE_BASE_URL`     | **빌드 실패**          | LL-HLS 베이스                       |
 | `NEXT_PUBLIC_MEDIA_PLAYBACK_BASE_URL` | **빌드 실패**          | 녹화 재생 서버                      |
+| `NEXT_PUBLIC_MEDIA_CONTROL_BASE_URL`  | **빌드 실패**          | 되감기 제어면 (이 판은 읽지 않음)   |
 | `NEXT_PUBLIC_POSTHOG_KEY` · `_HOST`   | 사용 통계 꺼짐         | 운영 값은 `.env.example` 주석       |
 | `NEXT_PUBLIC_POSTHOG_REPLAY`          | 세션 녹화 꺼짐         | `on`일 때만 켜짐                    |
 | `NEXT_PUBLIC_LANDING_URL`             | `https://pokeclip.com` | 랜딩 주소                           |
 
 `NEXT_PUBLIC_MEDIA_PLAYBACK_BASE_URL`은 prod 이미지가 다시보기·편집기 미리보기가 꺼진 채 나가지 않게
-필수로 둔다(로컬 개발은 위 환경변수 표대로 비워도 된다). prod 값은 I2-2에서 이것도 함께 정한다.
+필수로 둔다(로컬 개발은 위 환경변수 표대로 비워도 된다).
+
+`NEXT_PUBLIC_MEDIA_CONTROL_BASE_URL`은 이 판의 웹이 아직 읽지 않는다. 그래도 필수로 두는
+것은 prod 의 한 번 빌드 명령(O7c)이 인자 여섯을 지금 확정하기 위해서다. 되감기 API 를
+부르는 M5 웹 전환 PR 이 읽어 `{값}/api/streams/{id}/rewind`를 붙인다. 끝에 `/`를 붙이지
+않는다. 그래서 되감기 기능은 그 PR 뒤 이미지를 다시 빌드해야 실린다.
+
+**prod 영상 주소 값.** 셋 다 영상 도메인 `media.pokeclip.com`의 CloudFront 비헤이비어로
+간다([`cdn_media`](../infra/terraform/modules/cdn_media/main.tf) · 별칭은
+[`prod/edge`](../infra/terraform/prod/edge/main.tf) 의 `module "media"`).
+
+| 빌드 인자                             | prod 값                           | 출처                                                                  |
+| ------------------------------------- | --------------------------------- | --------------------------------------------------------------------- |
+| `NEXT_PUBLIC_MEDIA_LIVE_BASE_URL`     | `https://media.pokeclip.com/live` | `/live/*.m3u8` · `/live/*` 비헤이비어(웹이 `/{키}/index.m3u8`를 붙임) |
+| `NEXT_PUBLIC_MEDIA_PLAYBACK_BASE_URL` | `https://media.pokeclip.com`      | `/playback/*` 비헤이비어(웹이 `/playback/{키}/…`를 붙임)              |
+| `NEXT_PUBLIC_MEDIA_CONTROL_BASE_URL`  | `https://media.pokeclip.com`      | `/api/streams/*/rewind` 비헤이비어(웹이 경로를 붙임)                  |
+
+🔴 **이 값은 clip 의 `MEDIA_BASE_URL`과 묶여 있다.** clip 의 값은
+`https://media.pokeclip.com`이다
+([`prod/platform` README](../infra/terraform/prod/platform/README.md) 의 clip
+`MEDIA_BASE_URL` 행). 출입증 쿠키 정책의 범위는 그 값으로 만든다. 그래서 라이브
+값은 그 값 뒤에 `/live`, 재생 값은 그 값과 같아야 한다. 아니면 쿠키 범위가 안 맞아 영상
+요청이 전부 403 이다.
 
 선택 인자는 비어도 빌드가 멈추지 않으므로, 이름을 잘못 적으면 그 기능이 조용히 꺼진 채 빌드된다.
 
