@@ -161,6 +161,14 @@ PASSED_TO_EC2_ENTRY='{"ContextKeyName":"iam:PassedToService",'
 PASSED_TO_EC2_ENTRY+='"ContextKeyValues":["ec2.amazonaws.com"],'
 PASSED_TO_EC2_ENTRY+='"ContextKeyType":"string"}'
 readonly PASSED_TO_EC2_ENTRY
+# prod ECS 실행 · 작업 역할 넘기기는 ECS 작업에 넘기는 질문이다(추가 문맥).
+PASSED_TO_ECS='iam:PassedToService:string:ecs-tasks.amazonaws.com'
+readonly PASSED_TO_ECS
+# 그 문맥이 시뮬레이터 요청에 실린 꼴.
+PASSED_TO_ECS_ENTRY='{"ContextKeyName":"iam:PassedToService",'
+PASSED_TO_ECS_ENTRY+='"ContextKeyValues":["ecs-tasks.amazonaws.com"],'
+PASSED_TO_ECS_ENTRY+='"ContextKeyType":"string"}'
+readonly PASSED_TO_ECS_ENTRY
 # 켬 · apply 뒤에 정해지는 런타임 자원의 대상 행(rt1a 종결 r1 H2 · H4).
 # 「자원 키 · 첫 단계 · 해석 방법 · 반드시 묻는 동작(쉼표 구분)」 이다. 실행기
 # 인스턴스는 켤 때 ID 가 정해져 태그로 풀고, 관리형 마스터 비밀은 이름 끝이
@@ -172,6 +180,75 @@ LATE_TARGETS=(
 'ssm:SendCommand,ssm:StartSession,ssm:CreateAssociation'
   'rds-master-secret runtime-1a input:rds-master secretsmanager:GetSecretValue')
 readonly LATE_TARGETS
+# 묶음 C 판 「두지 않는 행」 주석이 후속으로 넘긴 대상 행(POK-460 — platform ·
+# media 상태 객체 · platform · media · edge 자원). 「자원 키 · 첫 단계 · 해석
+# 방법 · 반드시 묻는 동작(쉼표 구분) · 추가 문맥(없으면 생략)」 이다. 이름이
+# 고정인 자원은 구체 ARN, 이름 끝이 생성 때 정해지는 자원은 태그로 푼다. WAF
+# 의 ARN 끝(ID)은 생성 때 정해져 표본 ID 로 묻는다(cf-kvs 와 같은 방식 —
+# 근거는 prod_targets.tsv 의 platform 덩어리 주석).
+readonly STATE_OBJECT='arn:arn:aws:s3:::pokeclip-tfstate-prod-apne2/prod'
+# 상태 객체 행의 ARN 끝(루트 이름 뒤)과 반드시 묻는 동작.
+STATE_TAIL='terraform.tfstate s3:GetObject,s3:PutObject,s3:DeleteObject'
+readonly STATE_TAIL
+# 계정 자리는 데이터 파일의 글자 그대로다(펼치지 않음).
+# shellcheck disable=SC2016
+FOLLOWUP_TARGETS=(
+  "state-object-platform O7d ${STATE_OBJECT}/platform/${STATE_TAIL}"
+  "state-object-media O7e ${STATE_OBJECT}/media/${STATE_TAIL}"
+  'platform-load-balancer O7d tag:elasticloadbalancing:loadbalancer '\
+'elasticloadbalancing:DeleteLoadBalancer,elasticloadbalancing:CreateListener'
+  'platform-target-group O7d tag:elasticloadbalancing:targetgroup '\
+'elasticloadbalancing:RegisterTargets'
+  'platform-listener O7d tag:elasticloadbalancing:listener '\
+'elasticloadbalancing:ModifyListener'
+  'ecs-cluster O7d tag:ecs:cluster ecs:ExecuteCommand'
+  'ecs-service O7d tag:ecs:service ecs:UpdateService'
+  'ecs-task-definition O7d tag:ecs:task-definition ecs:RunTask'
+  'waf-regional O7d arn:arn:aws:wafv2:ap-northeast-2:${ACCOUNT}:regional/'\
+'webacl/pokeclip-prod-regional/sample-regional-web-acl '\
+'wafv2:UpdateWebACL,wafv2:DeleteLoggingConfiguration'
+  'waf-regional-log-group O7d arn:arn:aws:logs:ap-northeast-2:${ACCOUNT}:'\
+'log-group:aws-waf-logs-pokeclip-prod-public logs:DeleteLogGroup'
+  'media-role O7e arn:arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/'\
+'pokeclip-prod-media iam:PassRole '"${PASSED_TO_EC2}"
+  'media-profile O7e arn:arn:aws:iam::${ACCOUNT}:instance-profile/pokeclip/'\
+'prod/pokeclip-prod-media iam:AddRoleToInstanceProfile'
+  'waf-cloudfront O7f arn:arn:aws:wafv2:us-east-1:${ACCOUNT}:global/webacl/'\
+'pokeclip-prod-cloudfront/sample-cloudfront-web-acl '\
+'wafv2:UpdateWebACL,wafv2:DeleteLoggingConfiguration'
+  'waf-cloudfront-log-group O7f arn:arn:aws:logs:us-east-1:${ACCOUNT}:'\
+'log-group:aws-waf-logs-pokeclip-prod-cloudfront logs:DeleteLogGroup'
+  'edge-media-log-group O7f arn:arn:aws:logs:us-east-1:${ACCOUNT}:'\
+'log-group:pokeclip-prod-media-access logs:DeleteLogGroup'
+  'edge-apex-bucket O7f tag:s3:bucket s3:PutBucketPolicy,s3:DeleteBucket'
+  "ecs-role-pass O7d prodrole iam:PassRole ${PASSED_TO_ECS}")
+readonly FOLLOWUP_TARGETS
+# 단계 묶음에 더한 행(POK-460 — 「묶음 · 동작 · 리전 · 자원 패턴」, 탭 구분).
+# O7f 다섯은 묶음 C 의 edge apply 가 부르는데 빠져 있던 동작(리뷰가 찾은
+# 누락만 — 결정 65 의 예외), UpdateWebACL 둘은 웹 ACL 데이터 보호(POK-459)
+# apply 가 부르는 동작이다. 뒤의 여섯(O7f 의 CreateTags · WAF 로그에 딸린
+# 동작)은 리뷰가 찾은 누락이다(kty 2026-10-25 가). 끝의 셋(로그 그룹 태그
+# 동작)도 리뷰가 찾은 누락이다(kty 2026-10-25 넣고 PR).
+# shellcheck disable=SC2016 # ${ACCOUNT} 는 펼치지 않는 글자 그대로다.
+STAGE_FOLLOWUP_ROWS=(
+  $'O7f\tec2:AuthorizeSecurityGroupIngress\tap-northeast-2\t*'
+  $'O7f\twafv2:PutLoggingConfiguration\tus-east-1\t*'
+  $'O7f\ts3:PutEncryptionConfiguration\tap-northeast-2\t*'
+  $'O7f\tiam:CreateServiceLinkedRole\tus-east-1\t'\
+'arn:aws:iam::${ACCOUNT}:role/aws-service-role/*'
+  $'O7f\tec2:DescribeSecurityGroups\tap-northeast-2\t*'
+  $'O7f\twafv2:UpdateWebACL\tus-east-1\t*'
+  $'O7d\twafv2:UpdateWebACL\tap-northeast-2\t*'
+  $'O7f\tec2:CreateTags\tap-northeast-2\t*'
+  $'O7f\twafv2:GetLoggingConfiguration\tus-east-1\t*'
+  $'O7f\tlogs:CreateLogDelivery\tus-east-1\t*'
+  $'O7f\tlogs:DescribeResourcePolicies\tus-east-1\t*'
+  $'O7f\tlogs:DescribeLogGroups\tus-east-1\t*'
+  $'O7f\tlogs:TagResource\tus-east-1\t*'
+  $'O7f\tlogs:ListTagsForResource\tus-east-1\t*'
+  $'O7d\tlogs:TagResource\tap-northeast-2\t*'
+  $'O7d\tlogs:ListTagsForResource\tap-northeast-2\t*')
+readonly STAGE_FOLLOWUP_ROWS
 
 #######################################
 # 데이터 파일의 행(주석 · 빈 줄 뺌)을 낸다.
@@ -775,6 +852,9 @@ service_types() {
     sns) printf ' topic \n' ;;
     sqs) printf ' queue \n' ;;
     ssm) printf ' instance \n' ;;
+    elasticloadbalancing) printf ' loadbalancer targetgroup listener \n' ;;
+    ecs) printf ' cluster service task-definition \n' ;;
+    wafv2) printf ' webacl \n' ;;
     *) ;;
   esac
 }
@@ -1082,6 +1162,41 @@ expect_runtime_targets() {
 }
 
 #######################################
+# 「자원 키 · 첫 단계 · 해석 방법 · 반드시 묻는 동작(쉼표 구분) · 추가
+# 문맥(없으면 생략)」 항목마다 그 행이 첫 단계 · 해석 방법(글자 그대로)으로
+# 있고 동작을 모두 담으며, 추가 문맥을 주면 그 행의 추가 문맥이 그것인지
+# 본다.
+# Arguments:
+#   항목들.
+# Outputs:
+#   처음 틀린 까닭(맞으면 빈 출력).
+#######################################
+pinned_target_problem() {
+  local entry key want_stage want_method want_actions want_context action
+  local stage method actions context
+  for entry in "$@"; do
+    read -r key want_stage want_method want_actions want_context <<<"${entry}"
+    IFS=$'\t' read -r stage method actions context <<<"$(target_row "${key}")"
+    if [[ "${stage}" != "${want_stage}" || "${method}" != "${want_method}" ]]
+    then
+      printf '%s 의 첫 단계 · 해석 방법이 %s · %s 가 아님 — 「%s · %s」\n' \
+        "${key}" "${want_stage}" "${want_method}" "${stage}" "${method}"
+      return
+    fi
+    for action in ${want_actions//,/ }; do
+      if [[ ",${actions}," != *",${action},"* ]]; then
+        printf '%s 에 %s 이 없음\n' "${key}" "${action}"
+        return
+      fi
+    done
+    if [[ -n "${want_context}" && "${context}" != "${want_context}" ]]; then
+      printf '%s 의 추가 문맥이 %s 가 아님\n' "${key}" "${want_context}"
+      return
+    fi
+  done
+}
+
+#######################################
 # 데이터 단언: 켬 · apply 뒤에 정해지는 런타임 자원 행(LATE_TARGETS)이 그
 # 첫 단계 · 해석 방법으로 있고 반드시 묻는 동작을 모두 담는다(rt1a 종결 r1
 # H2 · H4).
@@ -1089,26 +1204,53 @@ expect_runtime_targets() {
 #   LATE_TARGETS
 #######################################
 expect_late_targets() {
-  local entry key want_stage want_method want_actions action stage method
-  local actions
-  for entry in "${LATE_TARGETS[@]}"; do
-    read -r key want_stage want_method want_actions <<<"${entry}"
-    IFS=$'\t' read -r stage method actions _ <<<"$(target_row "${key}")"
-    if [[ "${stage}" != "${want_stage}" || "${method}" != "${want_method}" ]]
-    then
-      testlib::fail "late-targets: ${key} 의 첫 단계 · 해석 방법이" \
-        "${want_stage} · ${want_method} 가 아님 — 「${stage} · ${method}」"
-      return
-    fi
-    for action in ${want_actions//,/ }; do
-      if [[ ",${actions}," != *",${action},"* ]]; then
-        testlib::fail "late-targets: ${key} 에 ${action} 이 없음"
-        return
-      fi
-    done
-  done
+  local problem
+  problem="$(pinned_target_problem "${LATE_TARGETS[@]}")"
+  if [[ -n "${problem}" ]]; then
+    testlib::fail "late-targets: ${problem}"
+    return
+  fi
   testlib::ok "late-targets → 실행기 인스턴스(태그) · 관리형 마스터 비밀" \
     "(입력 파일) 행이 첫 단계 · 해석 방법 · 핵심 동작대로"
+}
+
+#######################################
+# 데이터 단언: 묶음 C 판 주석이 후속으로 넘긴 대상 행(FOLLOWUP_TARGETS —
+# POK-460)이 그 첫 단계 · 해석 방법으로 있고 반드시 묻는 동작 · 추가 문맥을
+# 담는다.
+# Globals:
+#   FOLLOWUP_TARGETS
+#######################################
+expect_followup_targets() {
+  local problem
+  problem="$(pinned_target_problem "${FOLLOWUP_TARGETS[@]}")"
+  if [[ -n "${problem}" ]]; then
+    testlib::fail "followup-targets: ${problem}"
+    return
+  fi
+  testlib::ok "followup-targets → 후속 대상 ${#FOLLOWUP_TARGETS[@]}행이" \
+    "첫 단계 · 해석 방법 · 핵심 동작 · 문맥대로"
+}
+
+#######################################
+# 데이터 단언: 단계 묶음에 더한 행(STAGE_FOLLOWUP_ROWS — POK-460)이 그 묶음
+# 파일에 동작 · 리전 · 자원 패턴 그대로 있다. 다른 단언은 행의 꼴 · 중복만
+# 보고 누락은 못 잡는다.
+# Globals:
+#   STAGE_DIR, STAGE_FOLLOWUP_ROWS
+#######################################
+expect_stage_followup_rows() {
+  local entry bundle
+  for entry in "${STAGE_FOLLOWUP_ROWS[@]}"; do
+    bundle="${entry%%$'\t'*}"
+    if ! has_line "$(data_rows "${STAGE_DIR}/${bundle}.tsv")" \
+      "${entry#*$'\t'}"; then
+      testlib::fail "stage-followup: 행이 없음 — ${entry//$'\t'/ }"
+      return
+    fi
+  done
+  testlib::ok "stage-followup → 더한 묶음 행 ${#STAGE_FOLLOWUP_ROWS[@]}개가" \
+    "동작 · 리전 · 자원 패턴 그대로"
 }
 
 #######################################
@@ -1211,6 +1353,110 @@ expect_runtime_rows_asked() {
 }
 
 #######################################
+# 실제 principal-check.sh 를 실제 데이터로 runtime-1a · O7d 에 돌려(주체 넷과
+# prod 역할 하나가 풀리는 가짜 aws), prod 역할을 ECS 작업에 넘기는 질문
+# (ecs-role-pass — iam:PassRole + PassedToService ecs-tasks)이 O7d 부터
+# 요청에 실리고 runtime-1a 에는 없는지 본다.
+# Globals:
+#   FAKE_USER, FAKE_ACCOUNT, PASSED_TO_ECS_ENTRY, run_status, run_out
+#######################################
+expect_ecs_role_pass_asked() {
+  local case_dir stage dir role request files want
+  case_dir="$(testlib::new_case)" || {
+    testlib::fail "ecs-role-pass: 시험 준비 실패"
+    return
+  }
+  role="arn:aws:iam::${FAKE_ACCOUNT}:role/pokeclip/prod/pokeclip-prod-next-exec"
+  {
+    principal_reads_table
+    testlib::tsv list-roles /pokeclip/prod/ "${role}"
+  } >"${case_dir}/in/reads.tsv"
+  testlib::tsv "${FAKE_USER}@*" allowed None - - - >"${case_dir}/in/sim.tsv"
+  request="\"ActionNames\":[\"iam:PassRole\"],\"ResourceArns\":[\"${role}\"]"
+  for stage in runtime-1a O7d; do
+    testlib::run "${case_dir}" "principal-${stage}" env \
+      FAKE_AWS_READS="${case_dir}/in/reads.tsv" \
+      FAKE_AWS_SIM_TABLE="${case_dir}/in/sim.tsv" bash "${WRAPPER}" "${stage}"
+    dir="$(compgen -G \
+      "${case_dir}/home/.pokeclip-precheck/principal-${stage}-*")"
+    if [[ "${run_status}" -ne 3 || ! -d "${dir}" ]]; then
+      testlib::fail "ecs-role-pass: ${stage} 실행이 종료 ${run_status} —" \
+        "$(cat -- "${run_out}.stderr")"
+      return
+    fi
+    files="$(grep -lF -- "${request}" "${dir}"/req-*.json)"
+    want=0
+    if [[ -n "${files}" ]]; then
+      # shellcheck disable=SC2086 # 파일 이름 목록을 낱말로 나눈다.
+      grep -qF -- "${PASSED_TO_ECS_ENTRY}" ${files} && want=1
+    fi
+    if [[ "${stage}" == O7d && "${want}" -ne 1 ]]; then
+      testlib::fail "ecs-role-pass: O7d 에 ECS 넘기기 문맥의 PassRole 질문이" \
+        "없음"
+      return
+    fi
+    if [[ "${stage}" == runtime-1a && "${want}" -ne 0 ]]; then
+      testlib::fail "ecs-role-pass: 첫 단계 O7d 전(runtime-1a)에 물어짐"
+      return
+    fi
+  done
+  testlib::ok "ecs-role-pass → prod 역할의 ECS 넘기기 질문이 O7d 부터" \
+    "문맥과 함께 실림(runtime-1a 0)"
+}
+
+#######################################
+# 실제 principal-check.sh 를 실제 데이터로 O7f 에 돌려(주체 넷이 풀리는 가짜
+# aws), 로그 그룹 ARN 행마다 이름 꼴과 「:log-stream:」 꼴 두 ARN 이 동작마다
+# 시뮬레이터 요청에 실리는지 본다. IAM 정책은 로그 그룹을 대개 「이름:*」 로
+# 적어서(CloudWatch Logs API 참조 LogGroup.arn), 이름 꼴만 물으면
+# 「log-group:*:*」 같은 허용을 놓친다. O7f 는 로그 그룹 행의 첫 단계
+# (runtime-1a · O7d · O7f) 뒤라 넷 모두 묻는다.
+# Globals:
+#   FAKE_USER, FAKE_ACCOUNT, run_status, run_out
+#######################################
+expect_log_group_forms_asked() {
+  local case_dir dir key method actions arn action form request count=0
+  case_dir="$(testlib::new_case)" || {
+    testlib::fail "log-group-forms: 시험 준비 실패"
+    return
+  }
+  principal_reads_table >"${case_dir}/in/reads.tsv"
+  testlib::tsv "${FAKE_USER}@*" allowed None - - - >"${case_dir}/in/sim.tsv"
+  testlib::run "${case_dir}" principal-O7f env \
+    FAKE_AWS_READS="${case_dir}/in/reads.tsv" \
+    FAKE_AWS_SIM_TABLE="${case_dir}/in/sim.tsv" bash "${WRAPPER}" O7f
+  dir="$(compgen -G "${case_dir}/home/.pokeclip-precheck/principal-O7f-*")"
+  if [[ "${run_status}" -ne 3 || ! -d "${dir}" ]]; then
+    testlib::fail "log-group-forms: O7f 실행이 종료 ${run_status} —" \
+      "$(cat -- "${run_out}.stderr")"
+    return
+  fi
+  while IFS=$'\t' read -r key _ method _ _ actions _; do
+    [[ "${method}" == arn:arn:aws:logs:*:log-group:* ]] || continue
+    count=$((count + 1))
+    # shellcheck disable=SC2016 # ${ACCOUNT} 는 펼치지 않는 글자 그대로다.
+    arn="$(printf '%s' "${method#arn:}" | sed "s/\${ACCOUNT}/${FAKE_ACCOUNT}/")"
+    for action in ${actions//,/ }; do
+      for form in "${arn}" "${arn}:log-stream:"; do
+        request="\"ActionNames\":[\"${action}\"],"
+        request+="\"ResourceArns\":[\"${form}\"]"
+        if ! grep -qF -- "${request}" "${dir}"/req-*.json; then
+          testlib::fail "log-group-forms: ${key} 의 ${action} 이" \
+            "${form##*:log-group:} 꼴로 물어지지 않음"
+          return
+        fi
+      done
+    done
+  done < <(principal_rows prod_targets.tsv)
+  if [[ "${count}" -eq 0 ]]; then
+    testlib::fail "log-group-forms: 로그 그룹 ARN 행이 없음"
+    return
+  fi
+  testlib::ok "log-group-forms → 로그 그룹 행 ${count}개가 이름 꼴 ·" \
+    ":log-stream: 꼴 두 ARN 으로 동작마다 물어짐"
+}
+
+#######################################
 # runtime-1a 묶음에 런타임 루트의 Terraform 이 호출자 권한으로 부르는 읽기가
 # 정확한 행으로 있는지 본다(계획 rt1d c2 · 설계 K4 — data "aws_subnet" 의
 # ec2:DescribeSubnets). 다른 단언은 행의 꼴 · 중복만 보고 누락은 못 잡는다.
@@ -1287,7 +1533,11 @@ main() {
   expect_runtime_bundle_puts_secret_value
   expect_runtime_bundle_puts_bucket_cors
   expect_late_targets
+  expect_followup_targets
+  expect_stage_followup_rows
   expect_runtime_rows_asked
+  expect_log_group_forms_asked
+  expect_ecs_role_pass_asked
   expect_runtime_terraform_reads
   expect_dev_principals
   expect_principal_reads

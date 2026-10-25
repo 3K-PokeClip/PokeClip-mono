@@ -17,7 +17,11 @@
 # 대상: 단계와 무관한 해석(tag: · arn: · zone: · input: · prodrole)은 행마다
 # 한 번,
 # 주체에 매인 해석(self:group 의 그룹 · policy:attached 의 고객 관리형
-# 정책)은 단위마다 한 번 한다. tag: · zone: · prodrole 이 0건이면
+# 정책)은 단위마다 한 번 한다. arn: 이 로그 그룹 ARN(…:log-group:<이름>)
+# 이면 이름 꼴과 「:log-stream:」 을 붙인 꼴 두 ARN 을 묻는다 — IAM 정책은
+# 로그 그룹을 대개 「이름:*」 로 적어(CloudWatch Logs API 참조 LogGroup.arn),
+# 이름 꼴만 물으면 「log-group:*:*」 같은 허용을 놓친다. 질문 ARN 에 「*」
+# 는 넣지 않는다. tag: · zone: · prodrole 이 0건이면
 # TARGET_NONE 이다. zone: 은 뒤 점을 맞춘 이름이 같고 공개(PrivateZone =
 # False)인 존이 정확히 1건이어야 하고, 2건 이상이면 종료 2 다(cc348-3). 존
 # 목록이 잘렸으면(IsTruncated True · NextDNSName 있음 — 한 번에 최대 100개)
@@ -41,6 +45,8 @@
 readonly PROD_ROLE_PATH='/pokeclip/prod/'
 readonly AWS_MANAGED_POLICY='arn:aws:iam::aws:policy/'
 readonly ZONE_ID_PATTERN='^/hostedzone/[A-Z0-9]+$'
+# 로그 그룹 ARN 의 둘째 질문 꼴에 붙이는 끝(별표 없는 로그 스트림 꼴).
+readonly LOG_STREAM_SUFFIX=':log-stream:'
 # input: 해석의 입력 파일 이름 앞부분(증거 루트 바로 아래).
 readonly INPUT_PREFIX='input-'
 # 비밀 ARN 의 이름 접두 뒤(이름 나머지 + 「-」 + 영숫자 6자 접미).
@@ -294,12 +300,17 @@ principal::resolve_input() {
 #   t_* 색인.
 #######################################
 principal::resolve_target_arns() {
-  local t="$1" method="${t_method[$1]}" body
+  local t="$1" method="${t_method[$1]}" body arn
   list_items=""
   case "${method}" in
     arn:*)
-      list_items="${method#arn:}"
-      list_items="${list_items//${ACCOUNT_PLACEHOLDER}/${account}}"$'\n'
+      arn="${method#arn:}"
+      arn="${arn//${ACCOUNT_PLACEHOLDER}/${account}}"
+      list_items="${arn}"$'\n'
+      if [[ "${arn}" == arn:aws:logs:*:log-group:* &&
+        "${arn#*:log-group:}" != *:* ]]; then
+        list_items+="${arn}${LOG_STREAM_SUFFIX}"$'\n'
+      fi
       ;;
     tag:*)
       body='{"TagFilters":[{"Key":"Environment","Values":["prod"]}],'

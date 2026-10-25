@@ -5,7 +5,9 @@
 # REGIONAL · ec2 SG 규칙) · 고유 확인(Cloud Map 사설 존 리전 조건 · ELB 한도) ·
 # 설계 13-1 미판정 행 · REGIONAL WAF 트래픽 로그(장부 17 — WAF 개발자 안내서
 # 「Permissions required to publish logs to CloudWatch Logs」 · CloudWatch
-# Logs 안내서 「Logs sent to CloudWatch Logs」, 2026-10-24 확인).
+# Logs 안내서 「Logs sent to CloudWatch Logs」, 2026-10-24 확인) · 웹 ACL
+# 데이터 보호의 UpdateWebACL(POK-459 — 묶음 행은 POK-460 이 더함) · 로그
+# 그룹 태그 동작(결정 65 예외 · 리뷰가 찾은 누락 · kty 2026-10-25 넣고 PR).
 # 2-3 판정 래퍼 읽기(맨 아래 덩어리): M17b principal-check.sh.
 
 # 공개 ALB · 내부 ALB · NLB · 대상 그룹 · 리스너 규칙 · 한도 읽기
@@ -28,6 +30,12 @@ ecs:DescribeServices	ap-northeast-2	*
 ecs:TagResource	ap-northeast-2	*
 logs:CreateLogGroup	ap-northeast-2	*
 logs:PutRetentionPolicy	ap-northeast-2	*
+# 로그 그룹(REGIONAL WAF 로그 그룹 포함)은 default_tags 를 받아 생성이
+# logs:TagResource 도 인가한다(CreateLogGroup API 원문 「logs:TagResource or
+# logs:TagLogGroup」 · runtime-1a 선례). 결정 65 예외 · 리뷰가 찾은 누락 ·
+# kty 2026-10-25 넣고 PR.
+logs:TagResource	ap-northeast-2	*
+logs:ListTagsForResource	ap-northeast-2	*
 
 # Cloud Map 사설 DNS 네임스페이스 · 서비스
 servicediscovery:CreatePrivateDnsNamespace	ap-northeast-2	*
@@ -53,9 +61,10 @@ iam:TagRole	us-east-1	arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*
 iam:PassRole	us-east-1	arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*
 iam:CreateServiceLinkedRole	us-east-1	arn:aws:iam::${ACCOUNT}:role/aws-service-role/*
 
-# REGIONAL WAF
+# REGIONAL WAF — 웹 ACL 데이터 보호(POK-459)는 웹 ACL 갱신이다
 wafv2:CreateWebACL	ap-northeast-2	*
 wafv2:GetWebACL	ap-northeast-2	*
+wafv2:UpdateWebACL	ap-northeast-2	*
 wafv2:AssociateWebACL	ap-northeast-2	*
 wafv2:TagResource	ap-northeast-2	*
 
