@@ -194,7 +194,8 @@ compose 템플릿 변수 `ingest_auth_image` 하나로 모드를 고른다. 빈 
     되풀이되고(CONTRACT 1-5 의 7 — 필수 값), 주소가 틀리거나 Media → auth SG
     짝이 빠지면 응답기는 뜨지만 4C 가 실패해 모든 송출이 거부된다. 상자가
     읽는 전용 토큰이 auth 의 값과 다르거나 auth 출발지 대역에 Media 서브넷이
-    없어도 같다. 빈 주소는 M9 모듈 validation(아래 「후속」 M9 행)이 막는다.
+    없어도 같다. 빈 주소와 `auth_port`(platform 출력 `service_ports.auth`)와
+    다른 포트는 M9 모듈 validation(아래 「후속」 M9 행)이 plan 에서 막는다.
     SG 길 · 전용 토큰 · 출발지 대역은 교체 **전에** 옛 모드 상자에서 아래
     점검표 5 가 먼저 보고, 주소까지 포함한 전체는 점검표 3(전환 직후
     `loopback-health.sh --passphrase`)이 다시 본다(POK-477).
@@ -260,9 +261,13 @@ compose 템플릿 변수 `ingest_auth_image` 하나로 모드를 고른다. 빈 
         단계 값을 읽어 헤더 `X-Stream-Key-Resolve-Token` 에 싣고
         `http://auth.pokeclip.internal:8082<경로>` 에 POST 한 뒤 상태 코드만
         낸다. 본문은 없는 스트림 키라 성공 응답도 `valid:false` 다.
+    *   `${work}` 는 세션마다 새로 만들므로, 먼저 런북 10 의
+        `cat >"${work}/token-probe.sh" <<'EOF'` 블록을 같은 `${work}` 에서
+        실행해 스크립트 파일을 만든다. 그다음 지금 활성인 옛 모드 상자의
+        키(`<A>` — 앞선 교체로 `b` 일 수 있다)로 부른다.
 
         ```shell
-        media_ssm a "${work}/token-probe.sh" \
+        media_ssm <A> "${work}/token-probe.sh" \
           /internal/stream-keys/resolve AWSCURRENT
         ```
 
@@ -280,6 +285,8 @@ compose 템플릿 변수 `ingest_auth_image` 하나로 모드를 고른다. 빈 
             auth 기동). SG 가 패킷을 버리면 연결 시간 초과까지 오래 걸린다.
         *   `token-probe AWSCURRENT 멈춤: 읽지 못함` — 상자 역할이 전용
             그릇을 못 읽거나 값이 없다(아래 조건).
+        *   그 밖의 코드(400 · 500 등) — 판정 불가로 보고 멈춘다(런북 10 과
+            같다).
     *   **옛 모드에서도 쓸 수 있는 근거:** 인스턴스 역할 `SecretsRead` 는
         모드와 무관하게 `media_secret_arns` 를 Resource 에 싣고
         (`modules/media_host/iam.tf`), Media ↔ auth SG 짝도 모드와 무관하게
@@ -292,8 +299,10 @@ compose 템플릿 변수 `ingest_auth_image` 하나로 모드를 고른다. 빈 
         *   1단-나 ② 4(값 넣기) 전 — 값이 없다(멈춤 줄).
         *   1단-나 ② 5(platform) 전 — auth 창구가 닫혀 늘 401 이다.
     *   스크립트는 주소를 `auth.pokeclip.internal:8082` 로 고정한다.
-        prod/media tfvars 의 `stream_key_resolve_url` 이 같은 호스트 · 포트인지
-        따로 본다 — 다르면 이 확인을 통과해도 4C 는 실패한다.
+        prod/media tfvars 의 `stream_key_resolve_url` 포트는 plan validation 이
+        `auth_port` 와 대조하지만 호스트는 보지 않으므로, 호스트가
+        `auth.pokeclip.internal` 인지 따로 본다 — 다르면 이 확인을 통과해도 4C
+        는 실패한다.
 
 ### 되돌리기 순서
 
