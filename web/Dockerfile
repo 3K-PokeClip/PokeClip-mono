@@ -30,6 +30,8 @@ ARG CLIP_API_URL
 ARG NEXT_PUBLIC_GOOGLE_CLIENT_ID
 ARG NEXT_PUBLIC_MEDIA_LIVE_BASE_URL
 ARG NEXT_PUBLIC_MEDIA_PLAYBACK_BASE_URL
+# 되감기 제어면 — 이 판의 웹은 읽지 않지만, O7c 의 한 번 빌드 명령이 인자 여섯을 지금 확정한다(소비자는 M5 웹 전환 PR).
+ARG NEXT_PUBLIC_MEDIA_CONTROL_BASE_URL
 # 선택 — 비우면 그 기능이 꺼지는 것이 정해진 동작이다(사용 통계 · 녹화 · 랜딩 주소 기본값).
 ARG NEXT_PUBLIC_POSTHOG_KEY
 ARG NEXT_PUBLIC_POSTHOG_HOST
@@ -41,7 +43,8 @@ RUN : "${AUTH_API_URL:?빌드 인자가 비었습니다}" \
       "${CLIP_API_URL:?빌드 인자가 비었습니다}" \
       "${NEXT_PUBLIC_GOOGLE_CLIENT_ID:?빌드 인자가 비었습니다}" \
       "${NEXT_PUBLIC_MEDIA_LIVE_BASE_URL:?빌드 인자가 비었습니다}" \
-      "${NEXT_PUBLIC_MEDIA_PLAYBACK_BASE_URL:?빌드 인자가 비었습니다}"
+      "${NEXT_PUBLIC_MEDIA_PLAYBACK_BASE_URL:?빌드 인자가 비었습니다}" \
+      "${NEXT_PUBLIC_MEDIA_CONTROL_BASE_URL:?빌드 인자가 비었습니다}"
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN pnpm build

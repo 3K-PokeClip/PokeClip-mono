@@ -167,19 +167,39 @@ describe('녹화 재생 주소는 출입증 경로 아래다 (POK-317)', () => {
     return { m: await import('./mediaPlayback'), spy };
   }
 
-  it('녹화 목록은 {base}/playback/{키}/list 이고 키를 쿼리로 싣지 않는다: 쿠키 정책은 쿼리를 못 막아 엣지가 경로 키로 덮는다', async () => {
+  it('녹화 목록은 {base}/playback/{키}/list 이고 path 를 경로의 키로 하나만 싣는다: Media 상자 nginx 가 path 하나 · 경로 키와 같음일 때만 통과시킨다', async () => {
     const { m, spy } = await load();
     await m.lookupRecordingSpans('key-1');
-    expect(String(spy.mock.calls[0]?.[0])).toBe('https://media.test/playback/key-1/list');
+    const url = new URL(String(spy.mock.calls[0]?.[0]));
+    expect(url.origin + url.pathname).toBe('https://media.test/playback/key-1/list');
+    expect(url.searchParams.getAll('path')).toEqual(['key-1']);
   });
 
-  it('영상 조각은 {base}/playback/{키}/get 이고 시작 · 길이 · 형식만 싣는다', async () => {
+  it('영상 조각은 {base}/playback/{키}/get 이고 시작 · 길이 · 형식과 경로의 키로 path 하나를 싣는다: Media 상자 nginx 가 path 하나 · 경로 키와 같음일 때만 통과시킨다', async () => {
     const { m } = await load();
     const url = new URL(m.recordingClipUrl('key-1', Date.parse('2026-10-23T01:00:00Z'), 12.5));
     expect(url.origin + url.pathname).toBe('https://media.test/playback/key-1/get');
-    expect([...url.searchParams.keys()].sort()).toEqual(['duration', 'format', 'start']);
+    expect([...url.searchParams.keys()].sort()).toEqual(['duration', 'format', 'path', 'start']);
+    expect(url.searchParams.getAll('path')).toEqual(['key-1']);
     expect(url.searchParams.get('start')).toBe('2026-10-23T01:00:00.000Z');
   });
+
+  it.each(['key-1', 'cam_01-a'])(
+    '키 %s 의 path 값은 목록 · 조각 둘 다 경로의 키와 같다: 다르면 nginx 가 403 을 낸다',
+    async (key) => {
+      const { m, spy } = await load();
+      await m.lookupRecordingSpans(key);
+      const urls = [
+        new URL(String(spy.mock.calls[0]?.[0])),
+        new URL(m.recordingClipUrl(key, Date.parse('2026-10-23T01:00:00Z'), 4)),
+      ];
+      for (const url of urls) {
+        const pathKey = decodeURIComponent(url.pathname.split('/')[2] ?? '');
+        expect(pathKey).toBe(key);
+        expect(url.searchParams.getAll('path')).toEqual([pathKey]);
+      }
+    },
+  );
 });
 
 describe('녹화 목록이 403이면 그 키의 출입증을 버리게 알린다 (PR #332 codex)', () => {
