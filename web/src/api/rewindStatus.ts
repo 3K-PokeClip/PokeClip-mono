@@ -93,8 +93,9 @@ export function parseRewindStatus(body: unknown, controlBase: string): RewindSta
   const { ready, mode, url } = raw;
   if (typeof ready !== 'boolean') return null;
   if (mode !== null && !MODES.includes(mode as RewindMode)) return null;
-  if (url !== null && (typeof url !== 'string' || !isTrustedPlaylistUrl(url, controlBase)))
+  if (url !== null && (typeof url !== 'string' || !isTrustedPlaylistUrl(url, controlBase))) {
     return null;
+  }
   const firstPdtMs = parsePdt(raw.firstPdt);
   const headPdtMs = parsePdt(raw.headPdt);
   if (firstPdtMs === undefined || headPdtMs === undefined) return null;

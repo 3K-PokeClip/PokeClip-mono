@@ -327,8 +327,9 @@ export function useHlsPlayback(
       let target = mediaTimeAt(fragments, atMs);
       if (target === null) return;
       // 라이브 끝보다 뒤는 라이브 끝이다: 부분 조각을 기다리며 멎지 않게
-      if (sourceRef.current.kind === 'live' && axis !== null && range && atMs >= axis.edgeMs)
+      if (sourceRef.current.kind === 'live' && axis !== null && range && atMs >= axis.edgeMs) {
         target = liveEdgePosition(range, hlsRef.current?.liveSyncPosition ?? null);
+      }
       writeTime(video, target);
       if (video.paused) {
         pausedAtMsRef.current = atMs;
@@ -443,8 +444,9 @@ export function useHlsPlayback(
       const pausedAtMs = pausedAtMsRef.current;
       pausedAtMsRef.current = null;
       const axis = hooksRef.current.onSeekRequest ? readAxis() : null;
-      if (pausedAtMs !== null && axis !== null && pausedAtMs < axis.view.lowerMs)
+      if (pausedAtMs !== null && axis !== null && pausedAtMs < axis.view.lowerMs) {
         hooksRef.current.onSeekRequest?.(pausedAtMs, axis.view);
+      }
     };
     // 그 방송을 처음 틀었을 때 한 번만 센다 — 멈췄다 다시 틀기·재연결은 세지 않는다. 주소는 싣지 않는다 (POK-357).
     // 키는 방송 번호다: 주소는 물리 키(스트림 키)로 만들어 한 스트리머의 방송이 모두 같다(PR #382 2차 리뷰).

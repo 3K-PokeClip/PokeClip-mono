@@ -97,8 +97,9 @@ export function useLiveSession(input: LiveSessionInput): LiveSession {
       // 고정 안 한 화면은 다시 고르기(10초)가 낸 값이다. 답이 보던 방송과 같으면 deferred 는 비어 있다
       if (!fresh && !pinned) return { kind: 'known', id: deferredRef.current ?? liveStreamId };
       const reuse = pinnedX.current;
-      if (!fresh && reuse !== null && Date.now() - reuse.at < PINNED_X_REUSE_MS)
+      if (!fresh && reuse !== null && Date.now() - reuse.at < PINNED_X_REUSE_MS) {
         return reuse.answer;
+      }
       const id = await withTimeout(resolveLiveStreamId(streamerId, true), X_TIMEOUT_MS);
       const answer: XAnswer = id === null ? { kind: 'unknown' } : { kind: 'known', id };
       pinnedX.current = { at: Date.now(), answer };
@@ -119,8 +120,9 @@ export function useLiveSession(input: LiveSessionInput): LiveSession {
         return;
       }
       // 고정 화면의 「새 방송 보기」는 라이브 대시보드의 그 방송으로 간다. 고정 안 한 화면은 보유가 풀려 다시 고르기가 X 를 넣는다
-      if (closed.reason === 'left' && closed.goTo !== undefined && pinned)
+      if (closed.reason === 'left' && closed.goTo !== undefined && pinned) {
         router.push(`${LIVE_DASHBOARD_PATH}?stream=${encodeURIComponent(closed.goTo)}`);
+      }
     },
     [startedAt, endedAt, pinned, router],
   );
@@ -164,8 +166,9 @@ export function useLiveSession(input: LiveSessionInput): LiveSession {
   const pastOnly = openedFor !== accessKey && broadcastStatus === 'ended';
   const fromMs = recordingSearchFrom(startedAt, endedAt);
   const recordedRequest = useMemo<RecordedRequest | null>(() => {
-    if (recordedReq !== null && recordedReq.key === accessKey)
+    if (recordedReq !== null && recordedReq.key === accessKey) {
       return { fromMs: recordedReq.fromMs, untilMs: recordedReq.untilMs };
+    }
     return pastOnly ? { fromMs, untilMs: endedAt } : null;
   }, [recordedReq, accessKey, pastOnly, fromMs, endedAt]);
 
