@@ -64,6 +64,9 @@ class DbRoleGrantsTest extends IntegrationTestSupport {
             db.grant(GRANTS);
 
             try (ConfigurableApplicationContext context = boot(db)) {
+                assertThat(context.getBean(JdbcTemplate.class)
+                        .queryForObject("SELECT pg_catalog.current_schemas(true)::text", String.class))
+                        .as("세션 경로는 자기 스키마 하나다(+ 암묵 pg_catalog)").isEqualTo("{pg_catalog,app_chat_collector}");
                 SegmentLedger ledger = context.getBean(SegmentLedger.class);
                 assertThat(ledger.hasAnySegment("no-such-stream")).isFalse();
 

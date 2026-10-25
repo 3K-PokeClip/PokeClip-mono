@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.context.ConfigurableApplicationContext;
+import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -59,6 +60,9 @@ class DbRoleGrantsTest extends IntegrationTestSupport {
             db.grant(GRANTS);
 
             try (ConfigurableApplicationContext context = boot(db)) {
+                assertThat(context.getBean(JdbcTemplate.class)
+                        .queryForObject("SELECT pg_catalog.current_schemas(true)::text", String.class))
+                        .as("세션 경로는 자기 스키마 하나다(+ 암묵 pg_catalog)").isEqualTo("{pg_catalog,app_clip}");
                 StreamerPurgeStore store = context.getBean(StreamerPurgeStore.class);
                 List<StreamerPurgeStore.SegmentRow> rows = store.segmentBatch(List.of("s1"), 10);
                 assertThat(rows).hasSize(1);

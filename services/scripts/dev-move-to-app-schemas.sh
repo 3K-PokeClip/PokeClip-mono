@@ -6,7 +6,9 @@
 #
 # 실행: services 디렉터리에서 root 로 `bash scripts/dev-move-to-app-schemas.sh
 # <빌드 캐시 상한>`(워크플로의 BUILD_CACHE_MAX). docker 는 ec2-user 로 부른다
-# (워크플로의 다른 줄과 같다).
+# (워크플로의 다른 줄과 같다). 첫 DB 읽기 전에 postgres 를 띄우고 healthy 를
+# 기다린다 — 없거나 멈춘 상자에서도 스스로 회복하고, 못 띄우면 아무것도
+# 멈추지 않고 종료 1.
 #
 # 갈래(출력은 SSM 24,000자 상한 안에 들게 요약 줄만):
 #   건너뜀  public 에 서버 이력 표가 하나도 없다(이미 옮겼거나 뜬 적이 없다).
@@ -35,10 +37,13 @@
 #   표지    상태 불명 표지(BACKUP_DIR/dev-move-unknown)는 진행 중 잠금이다 —
 #           결과가 확실하지 않으면 남는다. 옮길 것이 있으면 main 이 캐시
 #           줄이기 · 정지보다 먼저 상자 디스크에 쓰고(실행 식별자 · 시각 ·
-#           in-progress 한 줄), 못 쓰면 아무것도 멈추지 않고 종료 1. 결과가
-#           확실할 때만 지운다 — 옮김, 커밋 전(옛 컨테이너 start 뒤), 커밋 뒤,
-#           정지 전에 끝남. 판정 불가 · 도중에 끊긴 실행은 남긴다. 울타리를 못
-#           세웠을 수 있어, 다음 배포가 자기 울타리만 세우고 옛 컨테이너를
+#           in-progress 한 줄), 못 쓰면 아무것도 멈추지 않고 종료 1. 쓰기는
+#           noclobber 라 검사 뒤 다른 실행이 먼저 썼으면 덮어쓰지 않고 아래
+#           「표지가 있으면」 갈래로 끝난다. 디렉터리는 root 소유 0700 으로
+#           만들거나 바로잡고, 심볼릭 링크면 쓰지 않는다. 결과가 확실할 때만,
+#           첫 칸이 이 실행의 식별자일 때만 지운다 — 옮김, 커밋 전(옛 컨테이너
+#           start 뒤), 커밋 뒤, 정지 전에 끝남. 판정 불가 · 도중에 끊긴 실행은
+#           남긴다. 울타리를 못 세웠을 수 있어, 다음 배포가 자기 울타리만 세우고 옛 컨테이너를
 #           띄우면 이 실행의 밀린 이전이 그 뒤에 커밋할 수 있어서다. 표지가
 #           있으면 다음 배포의 main 은 맨 앞에서 아무것도 멈추지 않고 ::error:: ·
 #           종료 1. 확인한 뒤 손으로 지운다(README). 지우기 실패는 ::error:: ·
@@ -208,28 +213,56 @@ require_disk_for_backup() {
 }
 
 #######################################
-# 진행 중 표지를 쓴다 — 이 실행의 식별자 · UTC 시각 · in-progress 한 줄.
-# 디렉터리는 백업과 같이 0700 으로 만든다.
+# 백업 · 표지 디렉터리를 root 소유 0700 으로 만든다. 이미 있으면 소유 · 권한을
+# 바로잡는다(mkdir -p 는 바로잡지 않는다). 심볼릭 링크면 따라가지 않고 실패한다.
 # Returns:
-#   0 씀, 그 밖 쓰기 실패.
+#   0 만듦 · 바로잡음, 1 링크 · 만들기 실패.
+#######################################
+make_backup_dir() {
+  if [[ -L "${BACKUP_DIR}" ]]; then
+    echo "::error::schema move: ${BACKUP_DIR} is a symbolic link; refusing" \
+      'to use it'
+    return 1
+  fi
+  install -d -m 0700 -o root -g root -- "${BACKUP_DIR}"
+}
+
+#######################################
+# 진행 중 표지를 쓴다 — 이 실행의 식별자 · UTC 시각 · in-progress 한 줄.
+# noclobber 로 써서 표지가 이미 있으면(검사 뒤 다른 실행이 씀) 덮어쓰지 않고
+# 실패한다.
+# Returns:
+#   0 씀, 그 밖 쓰기 실패(이미 있음 포함).
 #######################################
 write_marker() {
+  make_backup_dir || return 1
   (
     umask 077
-    mkdir -p -- "${BACKUP_DIR}" \
-      && printf '%s %s in-progress\n' "${MOVE_RUN_ID}" \
-        "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" > "${UNKNOWN_MARKER}"
+    set -C
+    printf '%s %s in-progress\n' "${MOVE_RUN_ID}" \
+      "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" > "${UNKNOWN_MARKER}"
   )
 }
 
 #######################################
-# 결과가 확실해진 뒤 표지를 지운다. 못 지우면 ::error:: 를 낸다 — 다음 배포가
-# 표지를 보고 괜히 멈출 뿐인 안전 쪽 실패다.
+# 결과가 확실해진 뒤 이 실행의 표지를 지운다. 첫 칸이 다른 실행 식별자면 그
+# 실행의 잠금이므로 지우지 않는다. 못 읽거나 못 지우면 ::error:: 를 낸다 —
+# 다음 배포가 표지를 보고 괜히 멈출 뿐인 안전 쪽 실패다.
 # Returns:
-#   0 지움(없었음 포함), 1 지우기 실패.
+#   0 지움(없었음 · 남의 표지 포함), 1 읽기 · 지우기 실패.
 #######################################
 clear_marker() {
-  if rm -f -- "${UNKNOWN_MARKER}"; then
+  local owner
+  if [[ ! -e "${UNKNOWN_MARKER}" ]]; then
+    return 0
+  fi
+  if owner="$(cut -d ' ' -f 1 -- "${UNKNOWN_MARKER}" | head -n 1)" \
+    && [[ "${owner}" != "${MOVE_RUN_ID}" ]]; then
+    echo "::warning::schema move: marker ${UNKNOWN_MARKER} belongs to run" \
+      "${owner}, not this run (${MOVE_RUN_ID}); left in place"
+    return 0
+  fi
+  if [[ -n "${owner:-}" ]] && rm -f -- "${UNKNOWN_MARKER}"; then
     return 0
   fi
   echo '::error::schema move: could not delete the marker' \
@@ -333,6 +366,13 @@ main() {
   # 이력 읽기 · 정지 · trap 보다 먼저 — 앞 배포의 밀린 이전이 남았을 수 있다.
   require_no_unknown_marker
 
+  # 첫 DB 읽기 전에 postgres 를 띄운다 — 없거나 멈춘 상자에서도 배포가 스스로
+  # 회복한다. 이미 떠 있으면 아무 일도 하지 않고 옛 서버들도 건드리지 않는다.
+  if ! compose up -d --wait postgres; then
+    echo '::error::schema move: could not start postgres; nothing stopped'
+    exit 1
+  fi
+
   # 건너뛰기는 표지를 쓰기 전이다 — 위 검사를 지났으면 밀린 이전을 남긴 앞
   # 실행이 없어 이 읽기가 바뀌지 않고, 건너뛰기는 아무것도 멈추지 않는다.
   history_before="$(history_in_public)"
@@ -344,6 +384,8 @@ main() {
   # 캐시 줄이기 · trap · 정지보다 먼저 쓴다 — 그 뒤 어떻게 끝나든(복구가 표지를
   # 못 쓰는 고장 · 끊김 포함) 결과가 확실하지 않으면 표지가 남는다.
   if ! write_marker; then
+    # 검사 뒤 다른 실행이 표지를 썼으면 「표지 있음」 갈래로 끝낸다.
+    require_no_unknown_marker
     echo '::error::schema move: could not write the in-progress marker' \
       "${UNKNOWN_MARKER} (run ${MOVE_RUN_ID}); nothing stopped"
     exit 1
@@ -359,7 +401,7 @@ main() {
   compose stop "${SERVICES[@]}"
 
   umask 077
-  mkdir -p "${BACKUP_DIR}"
+  make_backup_dir
   backup_file="${BACKUP_DIR}/public-$(date -u '+%Y%m%dT%H%M%SZ').sql"
   # public 만으로 넉넉하다 — 이전 SQL 은 public 의 객체를 옮겨 낼 뿐 app_* 에
   # 이미 있던 것은 바꾸지 않는다(같은 이름이 있으면 ALTER 가 실패해 전부

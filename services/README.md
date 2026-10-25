@@ -958,17 +958,30 @@ SELECT pg_catalog.pg_database_size(pg_catalog.current_database());
     않은 경우도 든다 — 그때는 `pg_stat_activity` 에 `application_name` 이
     `pokeclip-dev-move` 인 세션이 없어진 뒤에 이력 표를 읽어 판정한다. 판정
     불가면 시작 때 쓴 상태 불명 표지가 그대로 남는다(아래).
+*   `::error::schema move: could not start postgres; nothing stopped` — 첫 DB
+    읽기 전에 postgres 를 띄우지(`up -d --wait postgres`) 못했다. 아무것도
+    멈추지 않았다. 바로 위의 compose 오류 줄과 `compose ps postgres` 로 원인을
+    본다.
 *   `::error::schema move: could not write the in-progress marker …; nothing
     stopped` — 정지 전에 표지를 못 써 아무것도 멈추지 않고 끝났다. 옛
     컨테이너가 그대로 돈다. 상자의 `/home/ec2-user/pokeclip-backup` 을 고친 뒤
-    다시 배포한다.
+    다시 배포한다. 그 자리가 심볼릭 링크면 앞에
+    `::error::schema move: … is a symbolic link` 줄이 있다.
 *   `::error::schema move: could not delete the marker …` — 결과는 앞 줄대로
     확실한데 표지를 못 지웠다. 다음 배포가 표지를 보고 괜히 멈추는 안전 쪽
-    실패다. 아래 확인을 거쳐 표지를 지운다.
+    실패다. 아래 확인을 거쳐 표지를 지운다. **옮김(`schema move: moved`) 뒤에
+    났으면 이 배포는 `up -d` 전에 끝나 서버 넷 · 일꾼 둘이 멈춘 채다** — 표지를
+    지우고 다시 배포하면 건너뜀 갈래로 새 이미지가 뜬다.
+*   `::warning::schema move: marker … belongs to run …` — 결과는 확실한데 표지
+    첫 칸이 다른 실행의 식별자라 지우지 않았다(그 실행의 잠금). 다음 배포는 그
+    표지를 보고 멈추므로 아래 확인 대상이다.
 *   `::error::schema move: an earlier run is in progress or ended in an unknown
-    state (…)` — 앞 배포가 남긴 상태 불명 표지가 있어 아무것도 멈추지 않고
-    끝났다. 옛 컨테이너가 그대로 돈다. 아래 확인을 마치고 표지를 지운 뒤 다시
-    배포한다.
+    state (…)` — 앞 배포가 남긴 상태 불명 표지가 있어 이 배포는 아무것도 바꾸지
+    않고 끝났다(컨테이너를 띄우지도 멈추지도 않는다). **서버는 앞 배포가 남긴
+    상태 그대로이고, 대개 멈춰 있다** — 표지가 남는 갈래(판정 불가 · 정지 뒤
+    도중에 끊김 · 표지 지우기 실패)는 거의 다 서버를 멈춘 뒤다. 앞 배포 로그의
+    판정 줄과 `compose ps` 로 확인한다. 아래 확인을 마치고 표지를 지운 뒤 다시
+    배포해야 서버가 뜬다.
 
 **울타리.** 실패 갈래의 복구는 판정 전에 그 실행의 울타리 스키마
 `pokeclip_move_fence_<UTC 시각>_<PID>` 를 먼저 만든다. 이전 SQL 은 같은
@@ -995,23 +1008,44 @@ DB 에 남는다. **울타리는 손으로도 지우지 않는다.** 빈 스키�
 옛 컨테이너를 띄우면 그 뒤 앞 배포의 밀린 이전이 커밋해 자료가 갈릴 수 있다.
 그래서 표지가 있으면 다음 배포의 이전 단계는 맨 앞에서 아무것도 멈추지 않고
 실패한다. 지우기가 실패하면 표지가 남아 다음 배포가 괜히 멈춘다(안전 쪽
-실패). 아래를 kty 승인 SSM 으로 이 순서대로 한 뒤 지운다.
+실패).
+
+표지는 noclobber(`set -C`)로 만든다 — 맨 앞 검사 뒤 다른 실행이 먼저 썼으면
+덮어쓰지 않고 「표지 있음」 갈래로 끝난다. 지우는 것은 첫 칸이 자기 실행
+식별자인 표지뿐이다(남의 표지는 두고 `::warning::`). 이것은 같은 상자에서 겹친
+두 실행이 표지를 서로 덮거나 지우지 못하게 할 뿐이고, 배포끼리 줄 세우기는
+워크플로 `concurrency` 몫이다.
+
+아래를 kty 승인 SSM 으로 이 순서대로 한 뒤 지운다. SSM 명령은 services
+디렉터리에서 돌지 않으므로 명령마다 `cd` 로 먼저 간다. 명령마다 끝에
+`echo "exit=$?"` 를 붙여, `exit=0` 이 아니거나 출력이 비면 그 확인은 실패다 —
+「없다」 로 읽지 않고 다시 보거나 kty 에게 회부한다.
 
 1.  **맨 앞에서** 표지 식별자의 울타리를 세운다 — 그 뒤에 울타리 검사를 하는
     그 실행의 이전은 실패하고, 그 전에 검사를 지난 이전은 이미 접속해 있어
     확인 2 · 3 에 보인다. 이 울타리는 지우지 않는다 — 도커에 아직 시작되지
-    않은 그 실행의 요청은 확인 2 · 3 에 보이지 않는다.
+    않은 그 실행의 요청은 확인 2 · 3 에 보이지 않는다. 출력 `CREATE SCHEMA` ·
+    `exit=0` 을 본다.
 
     ```sh
-    sudo -u ec2-user docker compose -f docker-compose.dev.yml exec -T postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "CREATE SCHEMA IF NOT EXISTS pokeclip_move_fence_<식별자>"'
+    cd /home/ec2-user/pokeclip-mono/services && sudo -u ec2-user docker compose -f docker-compose.dev.yml exec -T postgres sh -c 'psql -X -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "CREATE SCHEMA IF NOT EXISTS pokeclip_move_fence_<식별자>"'; echo "exit=$?"
     ```
-1.  `sudo -u ec2-user docker compose -f docker-compose.dev.yml top postgres`
-    출력에 `pokeclip-dev-move` 를 단 psql 이 없다.
+1.  postgres 컨테이너에 이전 psql 이 없다. `exit=0` 이고 출력에 postgres
+    서버 프로세스 줄(`postgres` · `postgres: checkpointer` 등)이 보여야 읽기가
+    된 것이다(양성 대조). 그 위에서 `pokeclip-dev-move` 를 단 줄이 없어야 한다.
+
+    ```sh
+    cd /home/ec2-user/pokeclip-mono/services && sudo -u ec2-user docker compose -f docker-compose.dev.yml top postgres; echo "exit=$?"
+    ```
 1.  `pg_stat_activity` 에 `application_name` 이 `pokeclip-dev-move` 인 세션이
-    0 이다.
-1.  이력 표 넷이 어디 있는지 본다 — 넷 다 public 이면 이전 전이고(옛 서버가
-    그대로 맞다), 넷 다 `app_*` 면 이전이 커밋됐다(새 이미지로 `up -d` 는 kty
-    승인 뒤). 섞여 있으면 지우지 말고 kty 에게 회부한다.
+    0 이다. 출력이 정확히 `0` 한 줄과 `exit=0` 이어야 한다.
+
+    ```sh
+    cd /home/ec2-user/pokeclip-mono/services && sudo -u ec2-user docker compose -f docker-compose.dev.yml exec -T postgres sh -c 'psql -X -At -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT pg_catalog.count(*) FROM pg_catalog.pg_stat_activity WHERE application_name = '\''pokeclip-dev-move'\''"'; echo "exit=$?"
+    ```
+1.  이력 표 넷이 어디 있는지 본다 — 넷 다 public 이면 이전 전이고(다시
+    배포하면 이전 단계가 옮긴다), 넷 다 `app_*` 면 이전이 커밋됐다(새 이미지로
+    `up -d` 는 kty 승인 뒤). 섞여 있으면 지우지 말고 kty 에게 회부한다.
 
     ```sql
     SELECT n.nspname, c.relname FROM pg_catalog.pg_class c
@@ -1024,8 +1058,12 @@ DB 에 남는다. **울타리는 손으로도 지우지 않는다.** 빈 스키�
     sudo rm /home/ec2-user/pokeclip-backup/dev-move-unknown
     ```
 
+    멈춘 서버는 표지를 지운 뒤 다시 배포해야 뜬다.
+
 **백업 정리.** 백업은 상자의 `/home/ec2-user/pokeclip-backup/public-<UTC
-시각>.sql`(파일 0600 · 디렉터리 0700)이다. 계정 · 방송 · 암호문이 들어 있으므로
+시각>.sql`(파일 0600 · 디렉터리 root 소유 0700)이다. 이전 단계는 디렉터리를
+쓰기 전마다 `install -d -m 0700 -o root -g root` 로 만들거나 바로잡고, 그 자리가
+심볼릭 링크면 쓰지 않고 멈춘다. 계정 · 방송 · 암호문이 들어 있으므로
 dev 확인 뒤 kty 승인을 받아 지우고 삭제를 기록한다. 디렉터리째 지우지 않는다 —
 상태 불명 표지가 같은 곳에 있다.
 
@@ -1050,9 +1088,10 @@ kty 승인을 받고, 거절 · 승인은 필수 검토자인 kty 가 직접 누
     required_reviewers 가 생겼고 브랜치 정책이 기록과 같은지 보고, 그 확인 시각을
     **T_block** 으로 적는다(그 자리에서 찍은 `date -u '+%Y-%m-%dT%H:%M:%SZ'`
     출력). 응답이 「이 저장소에서 못 쓴다」 류면 멈추고 kty 에게 묻는다.
-1.  **진행 중인 것 끝남(읽기).** 아래 둘이 **둘 다** 0 인 것을 T_block 뒤 처음
-    확인한 시각을 **T_idle** 로 적는다(T_block 뒤 첫 확인에서 0 이면 T_idle = 그
-    확인 시각).
+1.  **진행 중인 것 끝남(읽기).** 아래 둘이 **둘 다** 0 인 것을 처음 확인한
+    시각을 **T_idle** 로 적는다(그 자리에서 찍은 `date -u '+%Y-%m-%dT%H:%M:%SZ'`
+    출력 그대로). 확인은 T_block 뒤에만 하므로 T_block 에 이미 0 이었어도
+    T_idle 은 그 첫 확인 시각이다 — T_block 보다 이르게 적지 않는다.
     *   비종료 dev-deploy deployment 0 — deployments 를 모든 페이지(`gh api -i
         'repos/3K-PokeClip/PokeClip-mono/deployments?environment=dev-deploy&per_page=100&page=<N>'`,
         Link `rel="next"` 가 없을 때까지 · 상한 10 페이지) 읽고, deployment 마다

@@ -301,7 +301,7 @@ class ThumbnailFlowTest extends IntegrationTestSupport {
         s.sweepNewCards();
         assertThat(sent).isEmpty();
 
-        jdbc.update("UPDATE stream_segments SET upload_state = 'uploaded'");
+        jdbc.update("UPDATE public.stream_segments SET upload_state = 'uploaded'");
         s.sweepNewCards();
         assertThat(sent).hasSize(1);
 
@@ -363,7 +363,7 @@ class ThumbnailFlowTest extends IntegrationTestSupport {
 
         now = now.plus(ThumbnailSweeper.NEW_CARD_WINDOW).plusSeconds(1);
         s.sweepNewCards();
-        jdbc.update("UPDATE stream_segments SET upload_state = 'uploaded'");
+        jdbc.update("UPDATE public.stream_segments SET upload_state = 'uploaded'");
         s.sweepNewCards();
         assertThat(sent).as("10분이 지난 카드를 빠른 순회가 아직 본다").isEmpty();
 

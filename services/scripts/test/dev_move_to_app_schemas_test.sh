@@ -15,9 +15,9 @@
 # 바꾸지 않고 실패해야 한다. 울타리 이름은 실행마다 달라, 다음 배포가 디스크
 # 검사에서 실패한 뒤에 앞 배포의 밀린 이전이 돌아도 앞 울타리가 막는다.
 #
-# 가짜 sudo · docker · sleep · df · psql 을 PATH 맨 앞에 둔다. 컨테이너는 띄우지
-# 않는다. 가짜 docker 는 이전 psql 이 「대기 몇 번 동안 살아 있는지」를 환경
-# 변수로 받아, 그동안의 이력 표 읽기에는 커밋 전 모습을, 그 뒤에는 최종 모습을
+# 가짜 sudo · docker · sleep · df · psql · rm · install 을 PATH 맨 앞에 둔다.
+# 컨테이너는 띄우지 않는다. 가짜 docker 는 이전 psql 이 「대기 몇 번 동안 살아
+# 있는지」를 환경 변수로 받아, 그동안의 이력 표 읽기에는 커밋 전 모습을, 그 뒤에는 최종 모습을
 # 낸다. 울타리 스키마는 state/fences 에 이름마다 파일 하나로 본다. 이전 SQL
 # 호출만은 안쪽
 # `sh -c` 를 그대로 돌려 가짜 psql 에 넘기고, 가짜 psql 은 psql 의 -1 · -c · -f
@@ -32,6 +32,10 @@
 # 끝난다 — 앞 배포가 울타리를 못 세웠으면 다음 배포가 옛 컨테이너를 띄운 뒤 앞
 # 배포의 밀린 이전이 커밋할 수 있어서다. 그때 표지를 새로 쓸 수 없어도(디스크)
 # 시작 때 쓴 표지가 남는다. 가짜 rm 은 표지를 지우는 호출만 calls 에 적는다.
+# 표지 쓰기는 덮어쓰지 않고(검사 뒤 다른 실행이 쓴 표지가 있으면 「표지 있음」
+# 갈래), 지우기는 첫 칸이 자기 실행 식별자일 때만이다. 가짜 install 은 argv 를
+# calls 에 적고 -o · -g 만 빼 진짜 install 에 넘긴다(root 가 아니어도 돌게).
+# postgres 를 띄우는 호출(up -d --wait postgres)은 첫 DB 읽기보다 앞이다.
 #
 # 제품 스크립트는 마지막 줄이 `main "$@"` 라 그대로 source 하면 main 이 돈다.
 # 시험은 그 줄을 뺀 사본을 source 해 함수만 얻는다. 사본은 BACKUP_DIR 만 사례의
@@ -60,7 +64,7 @@ fail_count=0
 case_count=0
 
 #######################################
-# 가짜 sudo · docker · sleep · df · psql 을 만든다.
+# 가짜 sudo · docker · sleep · df · psql · rm · install 을 만든다.
 # Globals:
 #   work_dir
 #######################################
@@ -101,6 +105,9 @@ run_inner() {
   POSTGRES_USER='owner' POSTGRES_DB='pokeclip' sh -c "$@"
 }
 case "${args}" in
+  *' up -d --wait postgres')
+    [[ "${FAKE_UP_FAIL:-0}" == 1 ]] && exit 1
+    ;;
   *' -f -'*)
     run_inner "$@"
     exit
@@ -147,6 +154,12 @@ case "${args}" in
     ;;
   *flyway_schema_history*)
     [[ "${FAKE_HISTORY_FAIL:-0}" == 1 ]] && exit 1
+    # 다른 실행이 표지 검사와 표지 쓰기 사이에 표지를 쓰는 경쟁 흉내.
+    if [[ -n "${FAKE_MARKER_APPEARS:-}" \
+      && ! -e "${d}/backup/dev-move-unknown" ]]; then
+      mkdir -p "${d}/backup"
+      echo "${FAKE_MARKER_APPEARS}" > "${d}/backup/dev-move-unknown"
+    fi
     if (( $(count top) > FAKE_PROC_POLLS \
       && $(count stat) > FAKE_SESSION_POLLS )); then
       echo "${FAKE_HISTORY_FINAL}"
@@ -211,9 +224,23 @@ if [[ "${!#}" == */dev-move-unknown ]]; then
 fi
 exec /bin/rm "$@"
 EOF
+  cat > "${work_dir}/bin/install" <<'EOF'
+#!/usr/bin/env bash
+# 가짜 install — argv 를 calls 에 적고, root 가 아니어도 돌게 -o · -g 만 빼고
+# 진짜 install 에 넘긴다.
+printf 'install %s\n' "$*" >> "${FAKE_DIR}/calls"
+args=()
+while (( $# > 0 )); do
+  case "$1" in
+    -o | -g) shift 2 ;;
+    *) args+=("$1"); shift ;;
+  esac
+done
+exec /usr/bin/install "${args[@]}"
+EOF
   chmod +x "${work_dir}/bin/sudo" "${work_dir}/bin/sleep" \
     "${work_dir}/bin/df" "${work_dir}/bin/docker" "${work_dir}/bin/psql" \
-    "${work_dir}/bin/rm"
+    "${work_dir}/bin/rm" "${work_dir}/bin/install"
 }
 
 #######################################
@@ -230,6 +257,7 @@ reset_state() {
   export FAKE_PROC_POLLS=0 FAKE_SESSION_POLLS=0 FAKE_TOP_FAIL=0 FAKE_STAT_FAIL=0
   export FAKE_FENCE_FAIL=0 FAKE_STOP_FAIL=0 FAKE_DB_BYTES=0 FAKE_DF_AVAIL=0
   export FAKE_HISTORY_FAIL=0 FAKE_RM_FAIL=0 FAKE_STOP_LOCKS_BACKUP=0
+  export FAKE_UP_FAIL=0 FAKE_MARKER_APPEARS=''
   export FAKE_HISTORY_DURING="${HISTORY_BEFORE}"
   export FAKE_HISTORY_FINAL="${HISTORY_BEFORE}"
 }
@@ -332,6 +360,14 @@ late_move_after_next_run_disk_failure() {
   run_move_sql
 }
 
+# main 이 시작 때 하듯 이 실행의 표지를 쓰고 restore 로 간다 — 표지는 첫 칸이
+# 자기 실행 식별자일 때만 지워지므로, restore 만 부르는 사례도 같은 실행이
+# 표지를 써야 한다.
+restore_after_own_marker() {
+  write_marker
+  restore
+}
+
 # 캐시 줄이기(상자 전용 명령)만 비우고 main 을 돈다.
 # shellcheck disable=SC2329 # 덮어쓴 함수는 main 이 부른다.
 main_without_prune() {
@@ -391,7 +427,7 @@ marker_path() {
   echo "${FAKE_DIR}/backup/${MARKER_NAME}"
 }
 
-# restore 만 부르는 사례 앞에 main 이 시작 때 쓴 표지를 깐다.
+# 남의 실행(앞 배포)이 쓴 표지를 깐다.
 seed_marker() {
   mkdir -p "${FAKE_DIR}/backup"
   echo "${SEEDED_MARKER}" > "$(marker_path)"
@@ -411,16 +447,15 @@ marker_removed() {
   grep -q '^rm ' "${FAKE_DIR}/calls"
 }
 
-# restore 를 돌려 판정 불가로 끝났는지(종료 1 · 띄우지 않음 · 깐 표지를 지우지
-# 않고 그대로 남김) 본다.
+# 이 실행의 표지를 쓰고 restore 를 돌려 판정 불가로 끝났는지(종료 1 · 띄우지
+# 않음 · 자기 표지를 지우지 않고 그대로 남김) 본다.
 restore_is_unknown_and_keeps_marker() {
-  seed_marker
-  call_in_script restore
+  call_in_script restore_after_own_marker
   [[ "$(exit_status)" == 1 ]] || return 1
   started && return 1
   grep -q '::error::schema move state unknown' "${FAKE_DIR}/out" || return 1
   marker_removed && return 1
-  [[ "$(cat "$(marker_path)")" == "${SEEDED_MARKER}" ]]
+  is_marker_line "$(cat "$(marker_path)")"
 }
 
 # 연결만 끊기고 안의 이전이 대기 둘 동안 더 돈 뒤 커밋 — 띄우지 않는다.
@@ -697,8 +732,7 @@ case_partial_history_keeps_marker() {
 
 # 커밋 전 — 옛 여섯을 띄운 뒤에 표지를 지운다.
 case_before_commit_clears_marker_after_start() {
-  seed_marker
-  call_in_script restore
+  call_in_script restore_after_own_marker
   started || return 1
   [[ -e "$(marker_path)" ]] && return 1
   local start_line rm_line
@@ -710,9 +744,8 @@ case_before_commit_clears_marker_after_start() {
 
 # 커밋 뒤 — 띄우지 않고 표지를 지운다.
 case_committed_clears_marker() {
-  seed_marker
   export FAKE_HISTORY_FINAL=''
-  call_in_script restore
+  call_in_script restore_after_own_marker
   grep -q '::error::schema move committed' "${FAKE_DIR}/out" || return 1
   started && return 1
   [[ -e "$(marker_path)" ]] && return 1
@@ -746,9 +779,8 @@ case_start_marker_write_failure_stops_nothing() {
 # 커밋 전 복구에서 표지 지우기 실패 — ::error:: · 종료 1. 결과는 확실하므로
 # 띄우기는 그대로 한다(표지는 남아 다음 배포가 괜히 멈출 뿐이다).
 case_clear_failure_after_before_commit_is_error() {
-  seed_marker
   export FAKE_RM_FAIL=1
-  call_in_script restore
+  call_in_script restore_after_own_marker
   [[ "$(exit_status)" == 1 ]] || return 1
   started || return 1
   grep -q '::error::schema move: could not delete the marker' \
@@ -793,6 +825,84 @@ case_disk_failure_clears_marker() {
   return 0
 }
 
+# 표지 검사를 지난 뒤 · 표지를 쓰기 전에 다른 실행이 표지를 쓰면, 표지 쓰기가
+# 실패해(덮어쓰지 않음) 「표지 있음」 갈래로 끝난다 — 아무것도 멈추지 않고
+# 종료 1 · 남의 표지는 그대로.
+case_marker_written_after_check_stops_nothing() {
+  export FAKE_MARKER_APPEARS="${SEEDED_MARKER}"
+  call_in_script main_without_box_commands
+  [[ "$(exit_status)" == 1 ]] || return 1
+  grep -q "${EARLIER_RUN_ERROR}" "${FAKE_DIR}/out" || return 1
+  grep -q ' stop ' "${FAKE_DIR}/calls" && return 1
+  marker_removed && return 1
+  [[ "$(cat "$(marker_path)")" == "${SEEDED_MARKER}" ]]
+}
+
+# 결과가 확실한 갈래(커밋 전)라도 표지의 첫 칸이 남의 실행 식별자면 지우지
+# 않는다.
+case_restore_leaves_other_runs_marker() {
+  seed_marker
+  call_in_script restore
+  started || return 1
+  marker_removed && return 1
+  [[ "$(cat "$(marker_path)")" == "${SEEDED_MARKER}" ]]
+}
+
+# 첫 DB 읽기(compose exec postgres) 전에 postgres 를 띄우고 healthy 를
+# 기다린다 — postgres 가 없거나 멈춘 상자에서도 배포가 스스로 회복한다.
+case_postgres_up_before_first_exec() {
+  export FAKE_HISTORY_DURING=''
+  call_in_script main_without_box_commands
+  [[ "$(exit_status)" == 0 ]] || return 1
+  local up_line exec_line
+  up_line="$(grep -n -- \
+    '-f docker-compose.dev.yml up -d --wait postgres$' "${FAKE_DIR}/calls" \
+    | head -1 | cut -d: -f1)"
+  exec_line="$(grep -n ' exec -T postgres ' "${FAKE_DIR}/calls" | head -1 \
+    | cut -d: -f1)"
+  [[ -n "${up_line}" && -n "${exec_line}" ]] || return 1
+  (( up_line < exec_line ))
+}
+
+# postgres 를 못 띄우면 ::error:: 한 줄 · 아무것도 멈추지 않고 종료 1 · 표지
+# 없음.
+case_postgres_up_failure_stops_nothing() {
+  export FAKE_UP_FAIL=1
+  call_in_script main_without_box_commands
+  [[ "$(exit_status)" == 1 ]] || return 1
+  grep -q '::error::schema move: could not start postgres' \
+    "${FAKE_DIR}/out" || return 1
+  grep -q ' exec ' "${FAKE_DIR}/calls" && return 1
+  grep -q ' stop ' "${FAKE_DIR}/calls" && return 1
+  [[ -e "$(marker_path)" ]] && return 1
+  return 0
+}
+
+# 백업 디렉터리는 root 소유 0700 으로 만들고, 이미 있으면(0755) 0700 으로
+# 바로잡는다.
+case_backup_dir_is_root_0700() {
+  mkdir -m 0755 "${FAKE_DIR}/backup"
+  call_in_script main_without_box_commands
+  [[ "$(exit_status)" == 0 ]] || return 1
+  grep -qx -- \
+    "install -d -m 0700 -o root -g root -- ${FAKE_DIR}/backup" \
+    "${FAKE_DIR}/calls" || return 1
+  [[ -n "$(find "${FAKE_DIR}/backup" -maxdepth 0 -type d -perm 0700)" ]]
+}
+
+# 백업 디렉터리 자리가 심볼릭 링크면 ::error:: · 아무것도 멈추지 않고 종료 1 ·
+# 링크 너머에 아무것도 쓰지 않는다.
+case_backup_dir_symlink_stops_nothing() {
+  mkdir "${FAKE_DIR}/elsewhere"
+  ln -s "${FAKE_DIR}/elsewhere" "${FAKE_DIR}/backup"
+  call_in_script main_without_box_commands
+  [[ "$(exit_status)" == 1 ]] || return 1
+  grep -q "::error::schema move: ${FAKE_DIR}/backup is a symbolic link" \
+    "${FAKE_DIR}/out" || return 1
+  grep -q ' stop ' "${FAKE_DIR}/calls" && return 1
+  [[ -z "$(ls -A "${FAKE_DIR}/elsewhere")" ]]
+}
+
 main() {
   work_dir="$(mktemp -d)"
   trap 'chmod -R u+w "${work_dir}" 2>/dev/null; rm -rf "${work_dir}"' EXIT
@@ -803,7 +913,7 @@ main() {
   export -f fresh_run late_move_after_restore \
     late_move_after_next_run_disk_failure main_without_prune \
     main_without_box_commands fence_failure_then_next_run \
-    fence_and_late_marker_failure_then_next_run
+    fence_and_late_marker_failure_then_next_run restore_after_own_marker
   run_case case_inner_move_commits_after_disconnect
   run_case case_backend_lingers_then_commits
   run_case case_inner_move_rolls_back_then_restart
@@ -838,6 +948,12 @@ main() {
   run_case case_clear_failure_after_move_is_error
   run_case case_skip_leaves_no_marker
   run_case case_disk_failure_clears_marker
+  run_case case_marker_written_after_check_stops_nothing
+  run_case case_restore_leaves_other_runs_marker
+  run_case case_postgres_up_before_first_exec
+  run_case case_postgres_up_failure_stops_nothing
+  run_case case_backup_dir_is_root_0700
+  run_case case_backup_dir_symlink_stops_nothing
   echo "cases: ${case_count} · fail: ${fail_count}"
   (( fail_count == 0 ))
 }

@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.context.ConfigurableApplicationContext;
+import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -83,6 +84,9 @@ class DbRoleGrantsTest extends IntegrationTestSupport {
                     .run("--spring.datasource.url=" + db.jdbcUrl(),
                             "--spring.datasource.username=" + db.role(),
                             "--spring.datasource.password=" + db.password())) {
+                assertThat(context.getBean(JdbcTemplate.class)
+                        .queryForObject("SELECT pg_catalog.current_schemas(true)::text", String.class))
+                        .as("세션 경로는 자기 스키마 하나다(+ 암묵 pg_catalog)").isEqualTo("{pg_catalog,app_chat_detector}");
                 ChatWindowReader reader = context.getBean(ChatWindowReader.class);
                 Instant hourAgo = Instant.now().minusSeconds(3600);
                 assertThat(reader.activeStreams(hourAgo)).containsExactly("s1");
