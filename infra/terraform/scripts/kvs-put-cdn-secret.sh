@@ -23,7 +23,8 @@
 #      history.db 에 평문으로 남는다. 판정 규칙은 단계 직전 점검 도구와 같다
 #      (precheck/lib/precheck_common.sh 의 precheck::cli_history_state —
 #      프로필의 cli_history = enabled · AWS_CLI_HISTORY_FILE 설정됨). 검사를
-#      하지 못해도(설정 읽기 실패 · 공용 함수를 읽지 못함) 켜짐과 같이 멈춘다.
+#      하지 못해도(설정 읽기 실패 · 공용 함수를 읽지 못함 · 심볼릭 링크로
+#      부름) 켜짐과 같이 멈춘다.
 #   1. KVS 데이터면 호스트 이름 풀이(dig +short <계정>.cloudfront-kvs.global.
 #      api.aws). 호스트 꼴과 계정 번호는 SDK 의 KVS 엔드포인트 규칙과 같다 —
 #      계정 번호는 KVS ARN 의 계정 칸이다(sts 를 부르지 않는다 · 출력하지
@@ -51,7 +52,9 @@
 # 종료 코드:
 #   0 넣음
 #   1 그 밖의 실패(값 검사 포함) — 다시 시도하지 말고 kty 에게 보고. 단 CLI
-#     기록 켜짐 · 기록 검사 실패(값 읽기 · KVS 호출 0)는 기록을 끄고 다시
+#     기록 켜짐 · 기록 검사 실패(둘 다 값 읽기 · KVS 호출 0)는 다르다 —
+#     ENABLED 는 기록을 끄고 다시, UNCHECKED 는 사유 줄을 보고 설정 · 프로필 ·
+#     lib 경로를 고친 뒤 다시(모르면 kty 에게 보고)
 #   2 사용법 오류(인자 · KVS ARN 꼴 arn:aws:cloudfront::<12자리>:key-value-store/
 #     <id> · 비밀 ID 꼴)
 #   3 이름 풀이 실패 · KVS 엔드포인트 연결 실패 — 런북의 우회 절차로
@@ -98,10 +101,22 @@ readonly NOTE_HISTORY_FILE
 NOTE_HISTORY_FAIL='CLI 기록 설정(cli_history)을 읽지 못함 — 값을 읽지 않음 ·'
 NOTE_HISTORY_FAIL+=' 켜짐과 같이 멈춤'
 readonly NOTE_HISTORY_FAIL
+NOTE_SYMLINK='심볼릭 링크로 부름(공용 함수를 링크 자리에서 찾게 됨) — 값을'
+NOTE_SYMLINK+=' 읽지 않음 · 실제 경로로 다시'
+readonly NOTE_SYMLINK
 
 # CLI 기록 판정(precheck::cli_history_state)은 단계 직전 점검 도구와 같은 공용
 # 함수를 쓴다. 이 파일의 디렉터리는 외부 명령(dirname) 없이 얻는다. 읽지
 # 못하면 bash 의 원시 진단(절대 경로가 든다)은 버리고 고정 줄로 멈춘다.
+# 심볼릭 링크로 부르면 그 디렉터리가 링크 자리라 링크 옆의 다른 파일을
+# source 하게 되므로 멈춘다. 링크를 실제 경로로 푸는 셸 내장은 없다 — cd -P
+# · pwd -P 는 디렉터리 경로만 풀고, readlink 는 외부 명령이다(이 스크립트는
+# aws · dig 밖의 외부 명령을 부르지 않는다). 디렉터리 경로에 든 링크는
+# 커널이 풀어 실제 lib 에 닿으므로 막지 않는다.
+if [[ -L "${BASH_SOURCE[0]}" ]]; then
+  printf '%s\n' "${HISTORY_UNCHECKED}" "${NOTE_SYMLINK}" >&2
+  exit "${EXIT_FAILED}"
+fi
 SCRIPT_DIR="${BASH_SOURCE[0]%/*}"
 [[ "${SCRIPT_DIR}" != "${BASH_SOURCE[0]}" ]] || SCRIPT_DIR=.
 readonly SCRIPT_DIR
@@ -193,6 +208,12 @@ die_kvs_failure() {
 #######################################
 # aws CLI 명령 기록이 꺼져 있는지 본다(이름 풀이 · 값 읽기 전). 켜져 있거나
 # 검사를 하지 못하면 값을 읽지 않고 끝낸다.
+# Globals:
+#   HISTORY_ENABLED, HISTORY_UNCHECKED, NOTE_HISTORY_FILE,
+#   NOTE_HISTORY_PROFILE, NOTE_HISTORY_FAIL, EXIT_FAILED
+# Outputs:
+#   멈출 때 표준 오류에 「CLI HISTORY ENABLED」 · 「CLI HISTORY UNCHECKED」 와
+#   사유 한 줄.
 #######################################
 require_cli_history_off() {
   local state

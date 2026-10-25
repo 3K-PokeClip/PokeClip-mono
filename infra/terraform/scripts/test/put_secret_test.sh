@@ -15,11 +15,15 @@
 # 토막 · PEM 본문 줄)를 품은 것만 잡는다 — 표지를 품지 않는 조각은 못 잡는다
 # (가짜 aws 가 메모리에서 대조해 걸린 이름만 env-hits 에 적음). 거부 · 실패
 # 사례에서는 표준 오류가 정해진 줄과 바이트 그대로 같은지(끝 줄바꿈 · 빈 줄
-# 포함) 보고, aws 호출이 거부는 0회 · aws 실패는 1회인지 본다.
+# 포함) 보고, secretsmanager 호출이 거부는 0회 · aws 실패는 1회인지 본다
+# (CLI 기록 검사 configure get 은 따로 센다).
 # 추적(bash -x · SHELLOPTS)이나 allexport 를 켠 호출도 값을 내지 않는지 본다.
 # aws CLI 명령 기록이 켜져 있거나(프로필의 cli_history · AWS_CLI_HISTORY_FILE)
 # 그 검사를 하지 못하면 파일을 읽기 전에 종료 1 로 멈추는지 본다(가짜 aws 의
-# configure get 답 — fakebin/aws 머리 주석).
+# configure get 답 — fakebin/aws 머리 주석). 공용 함수 파일
+# (precheck_common.sh)이 스크립트 옆에 없거나(사본) 스크립트를 심볼릭 링크로
+# 부르면(링크 옆에 가짜 공용 함수) aws 를 부르지 않고 종료 1(CLI HISTORY
+# UNCHECKED)로 멈추는지 본다.
 # 호출자 셸의 환경(살아 있는 토큰 변수 등)은 사례 파일에 옮기지 않는다 — 가짜
 # aws 는 환경 중 시험이 보는 값만 적고(그 밖의 AWS_ 는 이름만), 시험은 표지
 # 변수가 남지 않는지 본다.
@@ -29,6 +33,10 @@
 # no-heredoc)는 흔한 회귀를 잡는 울타리다. 일부러 숨긴 꼴(문자열 안 명령
 # 치환 · 공백 변형 · 리디렉션 없는 쓰기 내장 명령 등)은 PR 리뷰가 막는다 —
 # 실제 누출 방어는 실행 시험(실물 CLI 계약 · 잔여 검사 · 출력 완전 일치)이다.
+# no-file-writes · no-external-commands 는 스크립트가 source 하는 공용 함수
+# 파일 중 실제로 도는 줄(함수 밖 줄 · 스크립트가 부르는 precheck:: 함수와 그
+# 함수가 부르는 함수)도 본다. no-heredoc · no-endpoint-override 는 스크립트만
+# 본다 — 그 함수는 값을 받지 않고 configure get 만 부른다.
 #
 # 실물 CLI 계약: PATH 에 진짜 aws 가 있으면 가짜 자격 · 빈 설정 · 격리 HOME ·
 # 닫힌 로컬 주소(AWS_ENDPOINT_URL=http://127.0.0.1:9)로 스크립트를 끝까지 돌려,
@@ -87,9 +95,9 @@ EXPECTED_ARGV_HEAD='secretsmanager put-secret-value --region ap-northeast-2'
 EXPECTED_ARGV_HEAD+=' --output json --no-cli-auto-prompt --secret-id'
 readonly EXPECTED_ARGV_HEAD
 readonly EXPECTED_ARGV_TAIL='--secret-string file:///dev/stdin'
-# CLI 기록 검사의 고정 줄(스크립트 머리 주석의 출력 표).
 # CLI 기록 검사의 aws 인자(가짜 aws 의 history-calls 한 줄).
 readonly HISTORY_ARGV='configure get cli_history --no-cli-auto-prompt'
+# CLI 기록 검사의 고정 줄(스크립트 머리 주석의 출력 표).
 readonly HISTORY_ENABLED='CLI HISTORY ENABLED'
 readonly HISTORY_UNCHECKED='CLI HISTORY UNCHECKED'
 NOTE_HISTORY_PROFILE='프로필의 cli_history 가 enabled — 값을 읽지 않음 ·'
@@ -101,8 +109,12 @@ readonly NOTE_HISTORY_FILE
 NOTE_HISTORY_FAIL='CLI 기록 설정(cli_history)을 읽지 못함 — 값을 읽지 않음 ·'
 NOTE_HISTORY_FAIL+=' 켜짐과 같이 멈춤'
 readonly NOTE_HISTORY_FAIL
+readonly NOTE_LIB_MISSING='공용 함수(precheck_common.sh)를 읽지 못함 — 값을 읽지 않음'
+NOTE_SYMLINK='심볼릭 링크로 부름(공용 함수를 링크 자리에서 찾게 됨) — 값을'
+NOTE_SYMLINK+=' 읽지 않음 · 실제 경로로 다시'
+readonly NOTE_SYMLINK
 # 사례 수(ok · skip 줄의 수). 사례를 더하거나 빼면 함께 고친다.
-readonly EXPECTED_CASES=62
+readonly EXPECTED_CASES=64
 # 호출자 환경의 표지 변수(셸에 살아 있는 토큰 변수를 흉내 낸 가짜 값). 사례
 # 디렉터리 어디에도 남지 않아야 한다 — 가짜 aws 는 환경 중 시험이 보는
 # 이름만 적는다.
@@ -122,6 +134,9 @@ status=0
 # code_only_line 의 상태(줄을 넘어 이어짐)와 결과.
 code_stack=""
 code_line=""
+# 공용 함수 파일에서 스크립트가 실제로 돌리는 줄만 남긴 사본(write_called_lib
+# 가 만듦 — 정적 검사가 스크립트와 함께 본다).
+called_lib=""
 
 #######################################
 # 임시 디렉터리 뿌리를 지운다(EXIT 트랩 — INT · TERM 도 exit 로 여기 온다).
@@ -227,10 +242,13 @@ write_pem() {
 #   — 호출자가 secret_value 를 export · no-aws — PATH 에 aws 없음 ·
 #   history-file — AWS_CLI_HISTORY_FILE 설정 · history-<답> — 가짜 aws 의
 #   configure get 답 FAKE_AWS_CLI_HISTORY · stdin-fed — 표준 입력을
-#   /dev/null 대신 사례의 in/stdin-feed 로), 가짜 aws 모드, 스크립트 인자들.
+#   /dev/null 대신 사례의 in/stdin-feed 로 · lib-missing — 사례의 copy/ 에
+#   둔 스크립트 사본(옆에 공용 함수 파일 없음) · symlink — 사례의 link/ 에
+#   둔 심볼릭 링크 · 가짜 aws 의 configure get 답은 enabled), 가짜 aws 모드,
+#   스크립트 인자들.
 #######################################
 run_put_as() {
-  local shell_mode="$1" mode="$2" var
+  local shell_mode="$1" mode="$2" var target="${PUT}"
   shift 2
   # 환경은 이 하위 셸 안에서만 바꾼다(의도).
   # shellcheck disable=SC2030,SC2031
@@ -267,8 +285,13 @@ run_put_as() {
         ;;
       history-*) export FAKE_AWS_CLI_HISTORY="${shell_mode#history-}" ;;
       stdin-fed) exec <"${case_dir}/in/stdin-feed" ;;
+      lib-missing) target="${case_dir}/copy/${PUT##*/}" ;;
+      symlink)
+        target="${case_dir}/link/${PUT##*/}"
+        export FAKE_AWS_CLI_HISTORY=enabled
+        ;;
     esac
-    exec "${BASH}" "${PUT}" "$@"
+    exec "${BASH}" "${target}" "$@"
   ) </dev/null >"${case_dir}/stdout" 2>"${case_dir}/stderr"
   status=$?
   out="$(<"${case_dir}/stdout")"
@@ -285,7 +308,8 @@ run_put() {
 }
 
 #######################################
-# 가짜 aws 가 불린 횟수.
+# 가짜 aws 가 불린 횟수(CLI 기록 검사 configure get 은 세지 않는다 — 가짜
+# aws 가 history-calls 에 따로 적음).
 # Globals:
 #   case_dir
 # Outputs:
@@ -432,7 +456,7 @@ expect_no_env_hits() {
 
 #######################################
 # 입력을 넣기 전에 거부하는지 본다: 종료 3 · 표준 오류가 거부 한 줄과 바이트
-# 그대로 같음 · aws 호출 0 · 출력에 값 없음. 이유를 완전한 문자열로 대조해,
+# 그대로 같음 · secretsmanager 호출 0 · 출력에 값 없음. 이유를 완전한 문자열로 대조해,
 # 이유에 값 조각이나 빈 줄이 덧붙으면 잡는다.
 # Globals:
 #   input, out, err, status
@@ -452,7 +476,7 @@ expect_rejected() {
     return
   fi
   if [[ "$(aws_calls)" -ne 0 || -n "${out}" ]]; then
-    fail "${name}: 거부인데 aws 가 불렸거나 표준 출력이 있음"
+    fail "${name}: 거부인데 secretsmanager 를 불렀거나 표준 출력이 있음"
     return
   fi
   expect_absent "${name}" "${marker}" || return
@@ -482,11 +506,11 @@ expect_usage() {
 }
 
 #######################################
-# 성공 경로를 본다: 종료 0 · 이름 + VersionId 한 줄 · aws 1회 · 인자 · CLI
-# 기록 검사 1회 · 받은 값 · AWS_PAGER · 고정한 로캘(LC_ALL — 시험 로캘이
-# 실제로 걸렸는지) · 사례 HOME · TMPDIR · SHELL(격리가 실제로 걸렸는지) ·
-# 호출자 환경의 표지 변수가 사례 디렉터리에 없음 · 값과 계정 ID 0건 · 남은 것
-# 없음.
+# 성공 경로를 본다: 종료 0 · 이름 + VersionId 한 줄 · secretsmanager 1회 ·
+# 인자 · CLI 기록 검사 1회 · 받은 값 · AWS_PAGER · 고정한 로캘(LC_ALL — 시험
+# 로캘이 실제로 걸렸는지) · 사례 HOME · TMPDIR · SHELL(격리가 실제로
+# 걸렸는지) · 호출자 환경의 표지 변수가 사례 디렉터리에 없음 · 값과 계정 ID
+# 0건 · 남은 것 없음.
 # Globals:
 #   case_dir, input, out, err, status, utf8_locale, PUT_SECRET_TEST_CANARY
 # Arguments:
@@ -512,7 +536,7 @@ expect_put() {
   if [[ "$(aws_calls)" -ne 1 ||
     "${argv}" != "${EXPECTED_ARGV_HEAD} ${secret_id} ${EXPECTED_ARGV_TAIL}" ]]
   then
-    fail "${name}: aws 호출(1회) · 인자가 다름 — ${argv}"
+    fail "${name}: secretsmanager 호출(1회) · 인자가 다름 — ${argv}"
     return
   fi
   if [[ "$(contents_of "${case_dir}/aws/history-calls")" != \
@@ -577,8 +601,8 @@ expect_put_quiet() {
 
 #######################################
 # aws 가 실패할 때를 본다: 종료 코드 · 표준 오류가 고정 줄들과 바이트 그대로
-# 같음(값 조각 · 빈 줄이 덧붙으면 잡음) · aws 1회(다시 시도 안 함) · 값 · 계정
-# ID · ARN 0건.
+# 같음(값 조각 · 빈 줄이 덧붙으면 잡음) · secretsmanager 1회(다시 시도 안
+# 함) · 값 · 계정 ID · ARN 0건.
 # Globals:
 #   input, out, err, status
 # Arguments:
@@ -599,7 +623,7 @@ expect_aws_failure() {
     return
   fi
   if [[ "$(aws_calls)" -ne 1 ]]; then
-    fail "${name}: aws 호출이 1회가 아님(다시 시도하면 안 됨)"
+    fail "${name}: secretsmanager 호출이 1회가 아님(다시 시도하면 안 됨)"
     return
   fi
   expect_absent "${name}" "${ONE_LINE_VALUE}" || return
@@ -954,6 +978,64 @@ test_cli_history() {
 }
 
 #######################################
+# 공용 함수 파일을 쓰지 못하는 호출을 본다: 종료 1 · 표준 출력 없음 · 표준
+# 오류가 「CLI HISTORY UNCHECKED」 와 사유 한 줄로 바이트 그대로 같음(bash 의
+# 원시 진단 · 절대 경로가 없음) · aws 호출 0(기록 검사 configure get 도 0) ·
+# 값 0건 · 남은 것 없음.
+# Globals:
+#   case_dir, input, out, err, status
+# Arguments:
+#   사례 이름, 셸 모드(lib-missing · symlink), 사유 줄.
+#######################################
+expect_lib_unchecked() {
+  local name="$1" shell_mode="$2" note="$3"
+  run_put_as "${shell_mode}" ok cdn-secret "${input}"
+  if [[ "${status}" -ne "${EXIT_HISTORY}" || -n "${out}" ]] ||
+    ! stderr_is "${HISTORY_UNCHECKED}" "${note}"; then
+    fail "${name}: 종료 ${EXIT_HISTORY} · 「${HISTORY_UNCHECKED}」 + 사유를" \
+      "기대했으나 ${status} — ${err}"
+    return
+  fi
+  if [[ "$(aws_calls)" -ne 0 || -e "${case_dir}/aws/history-calls" ]]; then
+    fail "${name}: 공용 함수를 쓰지 못했는데 aws 를 부름"
+    return
+  fi
+  expect_absent "${name}" "${ONE_LINE_MARKER}" || return
+  expect_no_leftovers "${name}" "${ONE_LINE_MARKER}" || return
+  pass "${name} → 멈춤(종료 ${EXIT_HISTORY})"
+}
+
+#######################################
+# 공용 함수 파일(precheck_common.sh)의 자리: 스크립트 옆에 없으면(사본을 lib
+# 없는 디렉터리에 둠) 멈춘다. 심볼릭 링크로 부르면 링크 옆에 가짜 공용 함수
+# (기록을 늘 off 로 판정)가 있어도 그것을 source 하지 않고 멈춘다 — 가짜 aws
+# 는 기록이 켜졌다고 답하므로, 가짜 공용 함수를 쓰면 값을 넣어 버린다.
+# Globals:
+#   case_dir, input, PUT
+#######################################
+test_lib_location() {
+  local decoy
+  new_case || return
+  write_input '%s\n' "${ONE_LINE_VALUE}"
+  if ! mkdir -- "${case_dir}/copy" || ! cp -- "${PUT}" "${case_dir}/copy/"; then
+    fail "lib-missing: 사본을 만들지 못함"
+    return
+  fi
+  expect_lib_unchecked lib-missing lib-missing "${NOTE_LIB_MISSING}"
+  new_case || return
+  write_input '%s\n' "${ONE_LINE_VALUE}"
+  decoy="${case_dir}/link/precheck/lib/precheck_common.sh"
+  if ! mkdir -p -- "${decoy%/*}" ||
+    ! printf '%s\n' 'precheck::cli_history_state() { printf "%s\n" off; }' \
+      >"${decoy}" ||
+    ! ln -s -- "${PUT}" "${case_dir}/link/"; then
+    fail "symlink: 링크 · 가짜 공용 함수를 만들지 못함"
+    return
+  fi
+  expect_lib_unchecked symlink symlink "${NOTE_SYMLINK}"
+}
+
+#######################################
 # 추적(bash -x · SHELLOPTS 의 xtrace)이나 allexport 를 물려받은 호출, 호출자가
 # 같은 이름(secret_value)을 export 해 둔 호출도 값을 내지 않는다.
 #######################################
@@ -1137,32 +1219,82 @@ test_locale() {
 }
 
 #######################################
+# 공용 함수 파일(precheck_common.sh)에서 스크립트가 실제로 돌리는 줄만 남긴
+# 사본을 tmp_root 아래 called/ 에 같은 이름으로 만든다 — source 때 도는 함수
+# 밖 줄과, 스크립트가 부르는 precheck:: 함수(그 함수가 부르는 함수 포함)의
+# 본문이다. 다른 함수의 줄은 빈 줄로 바꿔 줄 번호를 그대로 둔다.
+# Globals:
+#   called_lib, tmp_root, SCRIPT_DIR
+# Arguments:
+#   스크립트 경로.
+# Returns:
+#   부르는 함수가 없거나, 공용 함수 파일에 그 정의가 없거나, 사본을 쓰지
+#   못하면 1.
+#######################################
+write_called_lib() {
+  local lib="${SCRIPT_DIR}/../precheck/lib/precheck_common.sh"
+  local names next="" kept name
+  names="$(grep -v '^[[:space:]]*#' -- "$1" |
+    grep -oE 'precheck::[A-Za-z0-9_]+' | LC_ALL=C sort -u)"
+  [[ -n "${names}" && -r "${lib}" ]] || return 1
+  while [[ "${next}" != "${names}" ]]; do
+    [[ -z "${next}" ]] || names="${next}"
+    for name in ${names}; do
+      grep -qxF -- "${name}() {" "${lib}" || return 1
+    done
+    kept="$(awk -v names=" ${names//$'\n'/ } " '
+      /^[A-Za-z_][A-Za-z0-9_:]*\(\) \{$/ {
+        fn = $1
+        sub(/\(\)$/, "", fn)
+        in_fn = 1
+        keep = index(names, " " fn " ") > 0
+      }
+      { print ((!in_fn || keep) ? $0 : "") }
+      in_fn && /^}$/ { in_fn = 0 }
+    ' "${lib}")" || return 1
+    next="$({
+      printf '%s\n' "${names}"
+      printf '%s\n' "${kept}" | grep -v '^[[:space:]]*#' |
+        grep -oE 'precheck::[A-Za-z0-9_]+'
+    } | LC_ALL=C sort -u)"
+  done
+  called_lib="${tmp_root}/called/${lib##*/}"
+  mkdir -- "${tmp_root}/called" && printf '%s\n' "${kept}" >"${called_lib}"
+}
+
+#######################################
 # 스크립트가 aws 밖의 다른 프로세스에 값을 넘길 길을 소스로 본다. 절대 경로
 # (/usr/ · /bin/)와 jq 는 PATH 를 fakebin 하나로 둔 시험을 비켜 가고, command
 # -p · $BASH · ${BASH} · eval · exec · env 는 PATH 밖의 명령이나 다른 셸을
-# 부른다. 주석 · shebang 줄은 보지 않는다.
+# 부른다. 주석 · shebang 줄은 보지 않는다. 스크립트가 source 하는 공용 함수
+# 파일 중 실제로 도는 줄(called_lib)도 본다.
+# Globals:
+#   called_lib
 #######################################
 test_no_external_commands() {
-  local line number=0 comment_re='^[[:space:]]*#' pattern
+  local file line number comment_re='^[[:space:]]*#' pattern
   # 글자 그대로 찾는 패턴이다(펼치지 않음).
   # shellcheck disable=SC2016
   local patterns=('/usr/' '/bin/' 'jq' 'command -p' '${BASH}' '$BASH' 'eval'
     'exec ' 'env ')
-  if [[ ! -r "${PUT}" ]]; then
-    fail "no-external-commands: 스크립트를 읽을 수 없음 — ${PUT}"
-    return
-  fi
-  while IFS= read -r line; do
-    number=$((number + 1))
-    [[ "${line}" =~ ${comment_re} ]] && continue
-    for pattern in "${patterns[@]}"; do
-      if [[ "${line}" == *"${pattern}"* ]]; then
-        fail "no-external-commands: ${number}행에 「${pattern}」"
-        return
-      fi
-    done
-  done <"${PUT}"
-  pass "no-external-commands → 0건"
+  for file in "${PUT}" "${called_lib}"; do
+    if [[ ! -r "${file}" ]]; then
+      fail "no-external-commands: 소스를 읽을 수 없음 — ${file:-공용 함수 사본}"
+      return
+    fi
+    number=0
+    while IFS= read -r line; do
+      number=$((number + 1))
+      [[ "${line}" =~ ${comment_re} ]] && continue
+      for pattern in "${patterns[@]}"; do
+        if [[ "${line}" == *"${pattern}"* ]]; then
+          fail "no-external-commands: ${file##*/} ${number}행에 「${pattern}」"
+          return
+        fi
+      done
+    done <"${file}"
+  done
+  pass "no-external-commands → 0건(스크립트 · 공용 함수 중 부르는 줄)"
 }
 
 #######################################
@@ -1260,40 +1392,47 @@ code_only_line() {
 # 뒤 검사로는 다 보지 못한다. 문자열 · 괄호 짝이 끝까지 맞지 않으면(검사기가
 # 코드를 문자열로 잘못 읽었을 수 있음) 실패로 센다. 검사기는 백틱 명령 치환을
 # 읽지 못하므로, 주석 아닌 줄에 백틱이 하나라도 있으면 실패로 센다(스크립트는
-# $( ) 만 씀 — shellguide Command Substitution).
+# $( ) 만 씀 — shellguide Command Substitution). 스크립트가 source 하는 공용
+# 함수 파일 중 실제로 도는 줄(called_lib)도 본다.
 # Globals:
-#   code_stack, code_line
+#   code_stack, code_line, called_lib
 #######################################
 test_no_file_writes() {
-  local line number=0 rest comment_re='^[[:space:]]*#'
+  local file line number rest comment_re='^[[:space:]]*#'
   local allowed_re='^(.*[^0-9>])?[0-9]*>>?[[:space:]]*(&[12]|/dev/null)'
   allowed_re+='([^[:alnum:]_./-].*)?$'
-  if [[ ! -r "${PUT}" ]]; then
-    fail "no-file-writes: 스크립트를 읽을 수 없음 — ${PUT}"
-    return
-  fi
-  code_stack=""
-  while IFS= read -r line; do
-    number=$((number + 1))
-    if [[ ! "${line}" =~ ${comment_re} && "${line}" == *'`'* ]]; then
-      fail "no-file-writes: ${number}행에 백틱 — 검사기가 읽지 못하는 꼴"
+  for file in "${PUT}" "${called_lib}"; do
+    if [[ ! -r "${file}" ]]; then
+      fail "no-file-writes: 소스를 읽을 수 없음 — ${file:-공용 함수 사본}"
       return
     fi
-    code_only_line "${line}"
-    rest="${code_line}"
-    while [[ "${rest}" =~ ${allowed_re} ]]; do
-      rest="${BASH_REMATCH[1]}${BASH_REMATCH[3]}"
-    done
-    if [[ "${rest}" == *'>'* ]]; then
-      fail "no-file-writes: ${number}행 — > · >> 대상이 &1 · &2 · /dev/null 밖"
+    code_stack=""
+    number=0
+    while IFS= read -r line; do
+      number=$((number + 1))
+      if [[ ! "${line}" =~ ${comment_re} && "${line}" == *'`'* ]]; then
+        fail "no-file-writes: ${file##*/} ${number}행에 백틱 — 검사기가 읽지" \
+          "못하는 꼴"
+        return
+      fi
+      code_only_line "${line}"
+      rest="${code_line}"
+      while [[ "${rest}" =~ ${allowed_re} ]]; do
+        rest="${BASH_REMATCH[1]}${BASH_REMATCH[3]}"
+      done
+      if [[ "${rest}" == *'>'* ]]; then
+        fail "no-file-writes: ${file##*/} ${number}행 — > · >> 대상이 &1 ·" \
+          "&2 · /dev/null 밖"
+        return
+      fi
+    done <"${file}"
+    if [[ -n "${code_stack}" ]]; then
+      fail "no-file-writes: ${file##*/} 끝에서 문자열 · 괄호 짝이 남음" \
+        "(${code_stack})"
       return
     fi
-  done <"${PUT}"
-  if [[ -n "${code_stack}" ]]; then
-    fail "no-file-writes: 소스 끝에서 문자열 · 괄호 짝이 남음(${code_stack})"
-    return
-  fi
-  pass "no-file-writes → 0건"
+  done
+  pass "no-file-writes → 0건(스크립트 · 공용 함수 중 부르는 줄)"
 }
 
 #######################################
@@ -1333,6 +1472,8 @@ main() {
     printf '%s\n' "put_secret_test: 임시 디렉터리를 만들지 못함" >&2
     exit 1
   }
+  # 정적 검사가 함께 볼 공용 함수 사본. 못 만들면 그 검사들이 실패로 센다.
+  write_called_lib "${PUT}" || called_lib=""
   test_locale
   test_usage
   test_kinds_match_shells
@@ -1340,6 +1481,7 @@ main() {
   test_signing_key
   test_one_line
   test_cli_history
+  test_lib_location
   test_quiet_shells
   test_caller_aws_env
   test_fake_aws_no_trace
