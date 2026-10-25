@@ -145,8 +145,11 @@ export function useRecordedPlayback(
     const onPlay = () => {
       wantPlayRef.current = true;
       setPlaying(true);
-      // 그 방송을 처음 틀었을 때 한 번만 센다 — 줄기를 갈아 끼우는 구간 넘김·옮김은 세지 않는다 (POK-357).
-      // 키는 방송 번호다: recorded.streamId는 물리 키라 한 스트리머의 방송이 모두 같다(PR #382 2차 리뷰)
+    };
+    // 그 방송을 처음 틀었을 때 한 번만 센다 — 줄기를 갈아 끼우는 구간 넘김·옮김은 세지 않는다 (POK-357).
+    // 키는 방송 번호다: recorded.streamId는 물리 키라 한 스트리머의 방송이 모두 같다(PR #382 2차 리뷰).
+    // play가 아니라 playing에서 센다 — play는 play()를 부른 순간 나가, 녹화 줄기를 못 받아 화면이 안 나와도 셌다(PR #382 3차 리뷰)
+    const onPlaying = () => {
       const id = broadcastIdRef.current;
       if (id) trackPlaybackStartOnce(id, 'vod');
     };
@@ -195,6 +198,7 @@ export function useRecordedPlayback(
     };
     video.addEventListener('timeupdate', onTime);
     video.addEventListener('play', onPlay);
+    video.addEventListener('playing', onPlaying);
     video.addEventListener('pause', onPause);
     video.addEventListener('ended', onEnded);
     video.addEventListener('error', onError);
@@ -202,6 +206,7 @@ export function useRecordedPlayback(
       gone = true;
       video.removeEventListener('timeupdate', onTime);
       video.removeEventListener('play', onPlay);
+      video.removeEventListener('playing', onPlaying);
       video.removeEventListener('pause', onPause);
       video.removeEventListener('ended', onEnded);
       video.removeEventListener('error', onError);

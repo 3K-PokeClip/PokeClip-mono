@@ -66,10 +66,15 @@ describe('useRecordedPlayback — 구간 여럿', () => {
       ),
     );
 
+    // 브라우저는 play(재생 요청) 뒤 화면이 나올 때 playing을 낸다
+    const start = () => {
+      video.dispatchEvent(new Event('play'));
+      video.dispatchEvent(new Event('playing'));
+    };
     act(() => {
-      video.dispatchEvent(new Event('play'));
+      start();
       video.dispatchEvent(new Event('pause'));
-      video.dispatchEvent(new Event('play'));
+      start();
     });
     Object.defineProperty(video, 'ended', { value: true, configurable: true });
     act(() => {
@@ -77,9 +82,28 @@ describe('useRecordedPlayback — 구간 여럿', () => {
       video.dispatchEvent(new Event('ended'));
     });
     act(() => {
-      video.dispatchEvent(new Event('play'));
+      start();
     });
 
+    expect(track.mock.calls).toEqual([['broadcast_playback_started', { mode: 'vod' }]]);
+  });
+
+  it('재생 요청(play)만 나가고 화면이 안 나오면(playing 없음) 세지 않는다 — 나중에 나오면 그때 센다 (PR #382 3차 리뷰)', () => {
+    track.mockClear();
+    resetPlaybackStartsForTest();
+    const { video } = fakeVideo();
+    renderHook(() =>
+      useRecordedPlayback({ current: video }, source([[0, 14]]), 0, undefined, 'S-1'),
+    );
+
+    act(() => {
+      video.dispatchEvent(new Event('play')); // 녹화 줄기를 아직 못 받았다
+    });
+    expect(track).not.toHaveBeenCalled();
+
+    act(() => {
+      video.dispatchEvent(new Event('playing'));
+    });
     expect(track.mock.calls).toEqual([['broadcast_playback_started', { mode: 'vod' }]]);
   });
 
@@ -94,6 +118,7 @@ describe('useRecordedPlayback — 구간 여럿', () => {
       );
       act(() => {
         video.dispatchEvent(new Event('play'));
+        video.dispatchEvent(new Event('playing'));
       });
       view.unmount();
     };
