@@ -343,13 +343,26 @@ run "accepts_responder_mode_with_stream_key_resolve_url" {
 
   variables {
     ingest_auth_image      = "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/pokeclip-prod/media-ingest-auth@sha256:5555555555555555555555555555555555555555555555555555555555555555"
-    stream_key_resolve_url = "http://auth.pokeclip.internal:8085"
+    stream_key_resolve_url = "http://auth.pokeclip.internal:18086"
   }
 
   assert {
-    condition     = output.template_vars.stream_key_resolve_url == "http://auth.pokeclip.internal:8085"
+    condition     = output.template_vars.stream_key_resolve_url == "http://auth.pokeclip.internal:18086"
     error_message = "stream_key_resolve_url 이 템플릿 변수로 그대로 넘어가지 않았다."
   }
+}
+
+# 4C 주소의 포트는 auth_port(platform 출력 service_ports.auth)와 같아야 한다 —
+# Media → auth SG 짝이 그 포트만 열기 때문이다(POK-477). 시험 auth_port 는 18086.
+run "rejects_stream_key_resolve_url_port_other_than_auth_port" {
+  command = plan
+
+  variables {
+    ingest_auth_image      = "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/pokeclip-prod/media-ingest-auth@sha256:5555555555555555555555555555555555555555555555555555555555555555"
+    stream_key_resolve_url = "http://auth.pokeclip.internal:8085"
+  }
+
+  expect_failures = [var.stream_key_resolve_url]
 }
 
 run "rejects_responder_mode_without_stream_key_resolve_url" {

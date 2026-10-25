@@ -130,7 +130,7 @@ run "largest_user_data_under_16_kib" {
     ingest_auth_image                   = "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/pokeclip-prod/media-ingest-auth@sha256:5555555555555555555555555555555555555555555555555555555555555555"
     janitor_enabled                     = true
     control_upstream                    = "127.0.0.1:19090"
-    stream_key_resolve_url              = "http://auth.pokeclip.internal:8085"
+    stream_key_resolve_url              = "http://auth.pokeclip.internal:18086"
     stream_key_resolve_token_secret_arn = "arn:aws:secretsmanager:ap-northeast-2:123456789012:secret:pokeclip/prod/stream-key-resolve-token-MnOpQr"
   }
 
@@ -406,7 +406,7 @@ run "toggles_optional_services_and_control_upstream" {
     ingest_auth_image      = "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/pokeclip-prod/media-ingest-auth@sha256:5555555555555555555555555555555555555555555555555555555555555555"
     janitor_enabled        = false
     control_upstream       = "127.0.0.1:19090"
-    stream_key_resolve_url = "http://auth.pokeclip.internal:8085"
+    stream_key_resolve_url = "http://auth.pokeclip.internal:18086"
   }
 
   assert {
@@ -474,7 +474,7 @@ run "writes_resolve_token_secret_arn_to_media_env" {
 
   variables {
     ingest_auth_image                   = "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/pokeclip-prod/media-ingest-auth@sha256:5555555555555555555555555555555555555555555555555555555555555555"
-    stream_key_resolve_url              = "http://auth.pokeclip.internal:8085"
+    stream_key_resolve_url              = "http://auth.pokeclip.internal:18086"
     stream_key_resolve_token_secret_arn = "arn:aws:secretsmanager:ap-northeast-2:123456789012:secret:pokeclip/prod/stream-key-resolve-token-MnOpQr"
   }
 
@@ -516,7 +516,7 @@ run "writes_ingest_auth_env_ip_limit_off_in_responder_mode" {
 
   variables {
     ingest_auth_image      = "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/pokeclip-prod/media-ingest-auth@sha256:5555555555555555555555555555555555555555555555555555555555555555"
-    stream_key_resolve_url = "http://auth.pokeclip.internal:8085"
+    stream_key_resolve_url = "http://auth.pokeclip.internal:18086"
     ingest_auth_ip_limit   = "off"
   }
 
