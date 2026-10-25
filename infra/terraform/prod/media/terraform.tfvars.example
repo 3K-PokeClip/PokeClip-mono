@@ -34,9 +34,10 @@ ecr_credential_helper_version = "0.12.0-3.amzn2023"
 compose_version               = "5.5.0"
 compose_sha256                = "ff42489f5a9b879d5d117c5ffea6defc27390b3286da8ad52cbc9c6ab5df590e"
 
-# 기본값 — I1-6 배포 전에는 비워 둔다(nginx 제어면 404). 채우는 것은 설정 반영
-# 교체다.
-# control_upstream = "127.0.0.1:<제어면 포트>"
+# 기본값 — 제어면 서버가 든 사이드카 이미지(I1-6)를 올리기 전에는 비워 둔다
+# (nginx 제어면 404). 사이드카는 nginx 와 같은 망 칸의 127.0.0.1:8086 에서
+# 듣는다(compose 템플릿 CONTROL_LISTEN). 채우는 것은 설정 반영 교체다.
+# control_upstream = "127.0.0.1:8086"
 
 # 기본 켬(kty 확정). 끄는 것도 설정 반영 교체다.
 # janitor_enabled = true
