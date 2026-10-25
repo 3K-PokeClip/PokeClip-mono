@@ -14,6 +14,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { meQueryOptions } from '@/api/auth';
 import { delegationsAsEditorQueryOptions, type StreamerDelegation } from '@/api/editors';
 import { useMe } from '@/features/auth/useSession';
+import { setActiveRole } from '@/lib/analytics';
 import { isListSeenWhenSelected, useChannelStore } from '@/stores/channel';
 import { useToast } from '@/ui';
 import { useSwitchCurtain } from './switchCurtain';
@@ -79,6 +80,13 @@ export function ChannelScope({
   const { toast } = useToast();
   const router = useRouter();
   const pathname = usePathname();
+
+  // 사용 통계의 역할 속성(active_role) — 스트리머·편집자의 쓰임을 나눠 본다. 처음 자동 선택에서도 건다.
+  // 여기 한 자리에서만 한다: useActiveChannel은 여러 화면이 부르는 순수 해석이다
+  const role = active.ready ? (active.relation === 'OWNER' ? 'owner' : 'editor') : null;
+  useEffect(() => {
+    if (role !== null) setActiveRole(role);
+  }, [role]);
 
   useEffect(() => {
     if (!active.ready || !active.gone) return;

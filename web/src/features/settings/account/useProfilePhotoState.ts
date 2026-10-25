@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { photoFailureMessage } from '@/api/profile';
+import { track } from '@/lib/analytics';
 import { useToast } from '@/ui';
 import { dataUrlToBlob } from './dataUrl';
 
@@ -135,6 +136,8 @@ export function useProfilePhotoState({
    * 토스트의 「편집」과 업로드 실패 복귀는 올리지 않는다: 방금 자른 자리를 그대로 잇는 동선이다.
    */
   const [selectionSeq, setSelectionSeq] = useState(0);
+  /** 지금 자르는 그림이 올린 파일인가 기본 아바타인가 — 사용 통계(profile_photo_changed)에만 쓴다 */
+  const sourceRef = useRef<'file' | 'preset'>('file');
   const [shaking, setShaking] = useState(false);
   const [restoring, setRestoring] = useState(false);
 
@@ -266,6 +269,7 @@ export function useProfilePhotoState({
       reader.onload = () => {
         if (seq !== readSeq.current) return; // 닫혔거나 다른 것을 고른 뒤 — 버린다
         // 읽기는 브라우저 안의 일이라 화면을 거치지 않는다 — 곧장 크롭이다
+        sourceRef.current = 'file';
         enterCrop(String(reader.result), `${file.name} · ${megabytes(file.size)}`);
       };
       reader.onerror = () => {
@@ -278,7 +282,10 @@ export function useProfilePhotoState({
   );
 
   const selectImage = useCallback(
-    (dataUrl: string) => enterCrop(dataUrl, '기본 아바타'),
+    (dataUrl: string) => {
+      sourceRef.current = 'preset';
+      enterCrop(dataUrl, '기본 아바타');
+    },
     [enterCrop],
   );
 
@@ -322,6 +329,8 @@ export function useProfilePhotoState({
           if (seq !== uploadSeq.current) return; // 취소·닫기 뒤 도착 — 화면은 이미 다른 곳이다
           inflight.current = null;
           setStep('idle');
+          // 사진·파일 이름은 싣지 않는다 — 올린 사진인지 기본 아바타인지만 (POK-357)
+          track('profile_photo_changed', { source: sourceRef.current });
           toastId.current = toast({
             tone: 'success',
             title: '프로필 사진을 변경했습니다',

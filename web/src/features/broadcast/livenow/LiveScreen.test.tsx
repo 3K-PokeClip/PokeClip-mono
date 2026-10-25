@@ -31,6 +31,11 @@ import { ToastProvider } from '@/ui';
 // 화면이 그 값으로 무엇을 그리는지 잰다. 시계는 가짜다 — 경과·마킹 시각이 결정적이어야 한다.
 
 const nav = vi.hoisted(() => ({ search: '', pathname: null as string | null }));
+const { track } = vi.hoisted(() => ({ track: vi.fn() }));
+vi.mock('@/lib/analytics', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/analytics')>()),
+  track,
+}));
 
 // useSearchParams 대체 — ?stream=(useMediaSource)은 비워 두고 아래 env 고정과 함께 소스를 null로 만들어
 // 플레이어가 「영상 신호 없음」 자리로 결정적으로 선다. ?mock=(오프라인 목업 토글)은 케이스가 nav.search로 정한다.
@@ -95,6 +100,8 @@ vi.mock('@/features/broadcast/livenow/ChatPanel', async (importOriginal) => {
 
 // 플레이어가 받은 상태: 지난 방송에 들어오는 동안 플레이어만 라이브·오프라인 문구로 깜박이는지 잰다(리뷰 3라운드)
 const playerStatuses = vi.hoisted(() => [] as (string | undefined)[]);
+// 플레이어가 받은 방송 번호 — 사용 통계 「방송마다 한 번」의 기억 키(PR #382 2차 리뷰)
+const playerBroadcastIds = vi.hoisted(() => [] as (string | undefined)[]);
 vi.mock('@/features/player/GlassPlayer', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/features/player/GlassPlayer')>();
   const { createElement } = await import('react');
@@ -102,6 +109,7 @@ vi.mock('@/features/player/GlassPlayer', async (importOriginal) => {
     ...actual,
     GlassPlayer: (props: import('react').ComponentProps<typeof actual.GlassPlayer>) => {
       playerStatuses.push(props.broadcastStatus);
+      playerBroadcastIds.push(props.broadcastId);
       return createElement(actual.GlassPlayer, props);
     },
   };
@@ -960,6 +968,7 @@ let fetchSpy: ReturnType<typeof stubFetch>;
 vi.setConfig({ testTimeout: 15_000 });
 
 beforeEach(() => {
+  track.mockReset();
   nav.search = '';
   nav.pathname = null;
   server.vodOrigin = null;
@@ -1019,6 +1028,7 @@ beforeEach(() => {
   chatModes.length = 0;
   chatTexts.length = 0;
   playerStatuses.length = 0;
+  playerBroadcastIds.length = 0;
   // 앞 시험이 단언에서 멈춰도 지난 방송 주소가 다음 시험으로 새지 않는다
   window.history.pushState({}, '', '/');
   mediaCalls.keys = [];
@@ -2262,6 +2272,10 @@ describe('LiveScreen — 하이라이트 카드', () => {
     // 옮겼어요」는 거짓이다(리뷰 2라운드)
     expect(screen.getByText('영상은 아직 없어요')).toBeInTheDocument();
     expect(screen.queryByText(/채팅을 그 시점으로 옮겼어요/)).not.toBeInTheDocument();
+    // 카드 목록에서 누른 이동이다 — 통계 핀과 갈라 센다 (POK-357)
+    expect(track.mock.calls.filter(([n]) => n === 'highlight_card_seeked')).toEqual([
+      ['highlight_card_seeked', { from: 'card', mode: 'live' }],
+    ]);
   });
 
   it('지난 방송에서는 영상이 없어도 채팅을 그 시점으로 옮기고 그렇다고 말한다', async () => {
@@ -2366,6 +2380,10 @@ describe('LiveScreen — 수동 마킹', () => {
     expect(screen.queryByText(/마킹됨 · 카드 생성 중/)).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: '전체 9' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '수동 3' })).toBeInTheDocument();
+    // 새 카드가 생긴 뒤 한 번 센다 — 방송 번호·시각은 싣지 않는다 (POK-357)
+    expect(track.mock.calls.filter(([n]) => n === 'highlight_marked')).toEqual([
+      ['highlight_marked', { mode: 'live' }],
+    ]);
   });
 
   it('F8도 어디에 포커스가 있든 같은 요청이다', async () => {
@@ -2443,6 +2461,7 @@ describe('LiveScreen — 수동 마킹', () => {
     expect(screen.getByText('가까운 카드가 이미 있어요')).toBeInTheDocument();
     expect(screen.queryByText('카드 만드는 중…')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: '전체 8' })).toBeInTheDocument();
+    expect(track.mock.calls.some(([n]) => n === 'highlight_marked')).toBe(false);
   });
 
   it('200의 앞 카드가 가린 카드면 숨김 칸에 있다고 알린다: 보이는 칸에 없어 실패한 것처럼 읽히지 않게 (POK-463)', async () => {
@@ -2942,6 +2961,12 @@ describe('LiveScreen — 실시간 통계', () => {
     expect(
       screen.getByRole('button', { name: /^하이라이트 #8 — .*1:23:20로 이동$/ }),
     ).toBeInTheDocument();
+
+    // 핀에서 누른 이동은 카드 목록과 갈라 센다 (POK-357)
+    fireEvent.click(screen.getByRole('button', { name: /^하이라이트 #8 — .*1:23:20로 이동$/ }));
+    expect(track.mock.calls.filter(([n]) => n === 'highlight_card_seeked')).toEqual([
+      ['highlight_card_seeked', { from: 'stats_pin', mode: 'live' }],
+    ]);
   });
 
   it('새 카드가 들어오면 지표와 필터 칩이 같이 는다: 요약이 첫 값에 굳지 않는다', async () => {
@@ -3121,6 +3146,22 @@ describe('LiveScreen — 영상 경로의 키(POK-233)', () => {
     await renderLive();
     expect(mediaCalls.spans).toContain('key-vod');
     expect(mediaCalls.spans).not.toContain(VOD_ID);
+  });
+
+  // 영상 키는 스트리머마다 같다(지금은 스트림 키) — 그것으로 기억하면 같은 탭에서 두 번째 방송부터 안 셌다(PR #382 2차 리뷰)
+  it('플레이어의 사용 통계 기억 키는 영상 키가 아니라 방송 번호다 — 라이브', async () => {
+    server.ingest = 'key-live';
+    await renderLive();
+    expect(mediaCalls.keys.at(-1)).toBe('key-live');
+    expect(playerBroadcastIds.at(-1)).toBe(STREAM_ID);
+  });
+
+  it('플레이어의 사용 통계 기억 키는 영상 키가 아니라 방송 번호다 — 지난 방송', async () => {
+    server.ingest = 'key-vod';
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    await renderLive();
+    expect(mediaCalls.spans).toContain('key-vod');
+    expect(playerBroadcastIds.at(-1)).toBe(VOD_ID);
   });
 });
 

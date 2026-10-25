@@ -1,4 +1,5 @@
 import type { PrivacyStatus } from '@/api/clipEditor';
+import type { YoutubeCategoryId } from '@/lib/analytics';
 
 // 업로드 정보 창(POK-291)의 규칙: 렌더와 떼어 순수 함수로 둔다. clip 렌더 주문 문이 같은 규칙으로 400을 주지만,
 // 보내기 전에 창 안에서 말해야 그 칸을 바로 고친다. 제목 규칙은 보관함의 uploadTitleProblem을 그대로 쓴다.
@@ -38,8 +39,9 @@ export function privacyNote(privacy: PrivacyStatus): string {
 /**
  * 사람이 고를 수 있는 유튜브 분류(videoCategories assignable, POK-381). clip이 같은 목록 밖이면 400(categoryId)을 준다
  * (UploadInfoParser.CATEGORIES). 처음 값은 게임이다: 우리 영상은 게임 방송에서 나온다.
+ * 번호 목록의 정본은 analytics `YOUTUBE_CATEGORY_IDS`다(분석 이벤트 열거) — 번호를 더하면 거기부터 고친다.
  */
-export const CATEGORIES: readonly { value: string; label: string }[] = [
+export const CATEGORIES: readonly { value: YoutubeCategoryId; label: string }[] = [
   { value: '20', label: '게임' },
   { value: '24', label: '엔터테인먼트' },
   { value: '22', label: '인물/블로그' },

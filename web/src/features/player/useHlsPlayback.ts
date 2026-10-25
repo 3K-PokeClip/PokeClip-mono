@@ -17,6 +17,7 @@ import {
 } from '@/api/playbackAccess';
 import { HLS_DVR_CONFIG } from './hlsConfig';
 import { behindFromSeekFraction, isAtEdge } from './playerMath';
+import { trackPlaybackStartOnce } from './playbackStarts';
 import { useControlsAutoHide } from './useControlsAutoHide';
 import {
   CLIP_MARK_MS,
@@ -63,6 +64,7 @@ export interface LivePosition {
  * @param mediaKey 영상 키(출입증 쿠키의 경로). 영상 요청이 403이면 그 키의 출입증을 버린다(POK-410). 없으면 버리지 않는다
  * @param afterForbidden 이 재생기는 403으로 출입증을 다시 받은 뒤 새로 섰다. 영상 조각을 하나도 못 받은 채 또 403이면 더 받지 않고
  *   멈춘다(계약3 재시도 정책: 재호출 1회 뒤에도 403이면 접근 불가, POK-419). 한 번이라도 받았으면 회복한 것이라 다음 403은 다시 받는다
+ * @param broadcastId 방송 번호(회차) — 사용 통계 「방송마다 한 번」의 기억 키(playbackStarts.ts). 없으면 세지 않는다
  */
 export function useHlsPlayback(
   videoRef: RefObject<HTMLVideoElement | null>,
@@ -71,6 +73,7 @@ export function useHlsPlayback(
   onSeek?: () => void,
   mediaKey?: string,
   afterForbidden = false,
+  broadcastId?: string,
 ): PlayerSimulation & { livePosition: LivePosition | null } {
   // playing은 video 이벤트로만 바꾼다 — 자동재생이 거부되면 false로 남아 재생 버튼이 노출된다
   const [playing, setPlaying] = useState(false);
@@ -97,6 +100,8 @@ export function useHlsPlayback(
   mediaKeyRef.current = mediaKey;
   const afterForbiddenRef = useRef(afterForbidden);
   afterForbiddenRef.current = afterForbidden;
+  const broadcastIdRef = useRef(broadcastId);
+  broadcastIdRef.current = broadcastId;
   const { controlsVisible, wake, sleep } = useControlsAutoHide(playing);
 
   const hlsRef = useRef<Hls | null>(null);
@@ -250,6 +255,13 @@ export function useHlsPlayback(
     setLivePosition(null);
 
     const onPlay = () => setPlaying(true);
+    // 그 방송을 처음 틀었을 때 한 번만 센다 — 멈췄다 다시 틀기·재연결은 세지 않는다. 주소는 싣지 않는다 (POK-357).
+    // 키는 방송 번호다: 주소는 물리 키(스트림 키)로 만들어 한 스트리머의 방송이 모두 같다(PR #382 2차 리뷰).
+    // play가 아니라 playing에서 센다 — play는 play()를 부른 순간 나가, 첫 조각을 못 받아 화면이 안 나와도 셌다(PR #382 3차 리뷰)
+    const onPlaying = () => {
+      const id = broadcastIdRef.current;
+      if (id) trackPlaybackStartOnce(id, 'live');
+    };
     const onPause = () => setPlaying(false);
     const onVolumeChange = () => {
       setMuted(video.muted);
@@ -286,6 +298,7 @@ export function useHlsPlayback(
       });
     };
     video.addEventListener('play', onPlay);
+    video.addEventListener('playing', onPlaying);
     video.addEventListener('pause', onPause);
     video.addEventListener('volumechange', onVolumeChange);
     video.addEventListener('timeupdate', paint);
@@ -378,6 +391,7 @@ export function useHlsPlayback(
       disposed = true;
       window.clearInterval(paintTimer);
       video.removeEventListener('play', onPlay);
+      video.removeEventListener('playing', onPlaying);
       video.removeEventListener('pause', onPause);
       video.removeEventListener('volumechange', onVolumeChange);
       video.removeEventListener('timeupdate', paint);

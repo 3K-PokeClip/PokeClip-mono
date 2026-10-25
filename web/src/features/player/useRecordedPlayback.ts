@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } fro
 import { recordingClipUrl } from '@/api/mediaPlayback';
 import { recoverForbiddenRecording } from '@/api/playbackAccess';
 import { AT_EDGE_THRESHOLD_SECONDS, behindFromSeekFraction } from './playerMath';
+import { trackPlaybackStartOnce } from './playbackStarts';
 import { useControlsAutoHide } from './useControlsAutoHide';
 import { PLAYER_QUALITIES, type PlayerQuality, type PlayerSimulation } from './usePlayerSimulation';
 import { playableBackFrom, playableFrom, type RecordingTimeline } from './recordingTimeline';
@@ -52,12 +53,14 @@ function forwardTarget(recorded: RecordingTimeline, seconds: number): number {
  *   섰다(리뷰 3라운드)
  * @param onSeek 사람이 옮겼다(시크바·키(화살표·PageUp·PageDown·Home)·끝으로·카드·다 본 뒤 처음부터). 재생으로 흐르거나 녹화 틈을 넘을 때는 부르지 않는다:
  *   녹화가 옮긴 자리는 지난 방송 채팅이 이것으로만 따라가 맨 아래로 간다(POK-324)
+ * @param broadcastId 방송 번호(회차) — 사용 통계 「방송마다 한 번」의 기억 키(playbackStarts.ts). 없으면 세지 않는다
  */
 export function useRecordedPlayback(
   videoRef: RefObject<HTMLVideoElement | null>,
   recorded: RecordedSource,
   startAtSeconds = 0,
   onSeek?: () => void,
+  broadcastId?: string,
 ): PlayerSimulation & { positionSeconds: number } {
   const total = recorded.durationSeconds;
   // 시크바 왼쪽 끝 = 녹화 처음(첫 구간 시작, 0초 앞은 못 간다). 축의 0초(서버 기준점)는 녹화보다 한참 앞일 수 있다: 송출 회차가 방송
@@ -111,6 +114,8 @@ export function useRecordedPlayback(
   recordedRef.current = recorded;
   const onSeekRef = useRef(onSeek);
   onSeekRef.current = onSeek;
+  const broadcastIdRef = useRef(broadcastId);
+  broadcastIdRef.current = broadcastId;
 
   const src = useMemo(
     () =>
@@ -145,6 +150,13 @@ export function useRecordedPlayback(
     const onPlay = () => {
       wantPlayRef.current = true;
       setPlaying(true);
+    };
+    // 그 방송을 처음 틀었을 때 한 번만 센다 — 줄기를 갈아 끼우는 구간 넘김·옮김은 세지 않는다 (POK-357).
+    // 키는 방송 번호다: recorded.streamId는 물리 키라 한 스트리머의 방송이 모두 같다(PR #382 2차 리뷰).
+    // play가 아니라 playing에서 센다 — play는 play()를 부른 순간 나가, 녹화 줄기를 못 받아 화면이 안 나와도 셌다(PR #382 3차 리뷰)
+    const onPlaying = () => {
+      const id = broadcastIdRef.current;
+      if (id) trackPlaybackStartOnce(id, 'vod');
     };
     const onPause = () => {
       // 끝나서 멈춘 것은 사용자가 멈춘 것이 아니다 — 다음 구간을 이어 틀지는 ended가 정한다
@@ -191,6 +203,7 @@ export function useRecordedPlayback(
     };
     video.addEventListener('timeupdate', onTime);
     video.addEventListener('play', onPlay);
+    video.addEventListener('playing', onPlaying);
     video.addEventListener('pause', onPause);
     video.addEventListener('ended', onEnded);
     video.addEventListener('error', onError);
@@ -198,6 +211,7 @@ export function useRecordedPlayback(
       gone = true;
       video.removeEventListener('timeupdate', onTime);
       video.removeEventListener('play', onPlay);
+      video.removeEventListener('playing', onPlaying);
       video.removeEventListener('pause', onPause);
       video.removeEventListener('ended', onEnded);
       video.removeEventListener('error', onError);

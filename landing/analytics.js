@@ -15,15 +15,56 @@
   if (!KEY) return;
   if (location.hostname !== 'pokeclip.com' && location.hostname !== 'www.pokeclip.com') return;
 
-  // 주소의 쿼리·해시를 뗀다 — 홍보 링크의 utm_* 는 SDK가 먼저 따로 뽑아 두므로 남는다
+  // 주소의 쿼리·해시를 뗀다 — 홍보 링크의 utm_* 는 SDK가 먼저 따로 뽑아 두므로 남는다.
+  // 우리 주소가 아닌 곳(유입 경로)은 origin만 남긴다 — 방송 채널·영상 주소는 경로에 채널 ID·영상 ID가 실린다(처리방침 13절)
   function scrubUrl(value) {
+    if (/^https?:\/\//i.test(value)) {
+      try {
+        var url = new URL(value);
+        if (url.hostname !== 'pokeclip.com' && !/\.pokeclip\.com$/.test(url.hostname)) {
+          return url.origin;
+        }
+      } catch (e) {
+        // 주소처럼 생겼는데 못 읽으면 아래에서 쿼리만이라도 뗀다
+      }
+    }
     return value.replace(/[?#].*$/, '');
+  }
+
+  // 홍보 링크 값은 README 「홍보 링크와 UTM」 표에 적은 값만 그대로 두고 나머지는 other로 바꾼다.
+  // 자유 문자열(utm_term)과 광고 클릭 식별자는 지운다 — 대시보드 web/src/lib/analytics/scrub.ts와 같은 규칙이다
+  var UTM_ALLOWED = {
+    utm_source: /^(youtube|chzzk|soop|discord|kakao|x|naver|instagram)$/,
+    utm_medium: /^(video_description|profile|community|post|dm|ad)$/,
+    utm_campaign: /^(launch_2026_10)$/,
+    utm_content: /^(pinned_comment|banner)$/,
+  };
+  // 접두 없음(그 페이지)·$initial_(처음 방문)·$session_entry_(그 세션 첫 진입 — SDK가 모든 이벤트에 싣는다) 셋 다 본다.
+  // $fbc·$fbp는 SDK가 fbclid·Meta 쿠키로 만드는 식별자다(PR #382 3차 리뷰)
+  var UTM_KEY = /^(?:\$initial_|\$session_entry_)?(utm_[a-z]+)$/;
+  var CLICK_ID_KEY =
+    /^(?:(?:\$initial_|\$session_entry_)?(?:gad_source|mc_cid|gclid|gclsrc|dclid|gbraid|wbraid|fbclid|msclkid|twclid|li_fat_id|igshid|ttclid|rdt_cid|epik|qclid|sccid|oppref|bfcid|irclid|_kx)|\$fbc|\$fbp)$/;
+
+  // 홍보 링크 속성이면 정리하고 true
+  function scrubCampaign(properties, key, value) {
+    if (CLICK_ID_KEY.test(key)) {
+      delete properties[key];
+      return true;
+    }
+    var utm = UTM_KEY.exec(key);
+    if (!utm) return false;
+    var allowed = UTM_ALLOWED[utm[1]];
+    if (!allowed) delete properties[key];
+    else if (typeof value === 'string' && value !== '' && !allowed.test(value))
+      properties[key] = 'other';
+    return true;
   }
 
   function scrubProperties(properties) {
     if (!properties) return;
     Object.keys(properties).forEach(function (key) {
       var value = properties[key];
+      if (scrubCampaign(properties, key, value)) return;
       if (typeof value === 'string') {
         if (/pathname$/.test(key) || /^https?:\/\//i.test(value)) properties[key] = scrubUrl(value);
       } else if ((key === '$set' || key === '$set_once') && value && typeof value === 'object') {
@@ -55,6 +96,8 @@
       person_profiles: 'identified_only',
       capture_pageview: true,
       respect_dnt: true,
+      // 대시보드 설정 › 계정의 「이용 분석 참여」를 끈 선택(그 브라우저의 .pokeclip.com 쿠키)을 같은 브라우저의 소개 페이지도 따른다
+      opt_out_capturing_persistence_type: 'cookie',
       autocapture: false,
       rageclick: false,
       capture_dead_clicks: false,

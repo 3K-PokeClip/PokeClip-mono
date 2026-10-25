@@ -5,13 +5,21 @@ import { useAuthStore } from '@/stores/auth';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
 import { renderWithProviders } from '@/test/testProviders';
 
-const { replace, identifyUser } = vi.hoisted(() => ({ replace: vi.fn(), identifyUser: vi.fn() }));
+const { replace, identifyUser, syncAnalyticsOptOutFromStorage } = vi.hoisted(() => ({
+  replace: vi.fn(),
+  identifyUser: vi.fn(),
+  syncAnalyticsOptOutFromStorage: vi.fn(),
+}));
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ replace }),
   usePathname: () => '/home',
 }));
-vi.mock('@/lib/analytics', () => ({ identifyUser }));
+vi.mock('@/lib/analytics', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/analytics')>()),
+  identifyUser,
+  syncAnalyticsOptOutFromStorage,
+}));
 
 const ME = { id: 1, email: 'raccoon@example.com', name: '게임하는너구리', profileImageUrl: '' };
 
@@ -20,6 +28,7 @@ beforeEach(() => {
   window.sessionStorage.clear();
   replace.mockReset();
   identifyUser.mockReset();
+  syncAnalyticsOptOutFromStorage.mockReset();
   useAuthStore.setState({ accessToken: null, refreshToken: null, hydrated: false });
 });
 
@@ -85,6 +94,25 @@ describe('AuthGuard', () => {
     // 사용 통계는 회원 번호로만 식별한다 — 이메일·이름은 넘기지 않는다(POK-356)
     await waitFor(() => expect(identifyUser).toHaveBeenCalledWith(1));
     expect(identifyUser.mock.calls.flat()).toEqual([1]);
+  });
+
+  it('다른 탭이 「이용 분석 참여」를 바꾸면 이 탭의 SDK에도 건다 — 다시 켠 뒤 새로고침 전까지 안 보내지 않게 (PR #382 리뷰)', async () => {
+    useAuthStore.setState({ accessToken: 'a-1', refreshToken: 'r-1', hydrated: true });
+    stubFetch((url) => (url === '/api/auth/me' ? jsonResponse(200, ME) : jsonResponse(404)));
+    renderWithProviders(
+      <AuthGuard>
+        <div>보호 콘텐츠</div>
+      </AuthGuard>,
+    );
+    await waitFor(() => expect(identifyUser).toHaveBeenCalledWith(1));
+
+    const otherTab = new BroadcastChannel('pc-analytics-preference');
+    otherTab.postMessage({ changed: true, from: 'other-tab' });
+    otherTab.postMessage({ changed: true, from: 'other-tab' });
+    otherTab.close();
+
+    // 쪽지의 값이 아니라 쿠키를 다시 읽어 건다 — 늦게 온 쪽지가 마지막 선택을 덮지 않게(PR #382 3차 리뷰)
+    await waitFor(() => expect(syncAnalyticsOptOutFromStorage).toHaveBeenCalledTimes(2));
   });
 
   it('refresh까지 401이면(만료·도난 감지) 세션을 접고 /login으로 보낸다', async () => {

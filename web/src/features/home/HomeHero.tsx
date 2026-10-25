@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { Check } from 'lucide-react';
 import { Button, LinkButton, Skeleton } from '@/ui';
 import { TOUR_TARGET } from '@/features/onboarding/tourSteps';
+import { track } from '@/lib/analytics';
 import styles from './HomeScreen.module.css';
 import { isWaitingForBroadcast, setupSteps, type SetupStepId } from './setupSteps';
 import type { HomeLinks, WeekStats } from './useHomeMockState';
@@ -90,13 +91,27 @@ export function SetupHome({
   actionsDisabled?: boolean;
 }) {
   // 링크는 비활성을 못 나타낸다: 막을 때는 같은 모양의 비활성 버튼으로 바꾼다
-  const action = (href: string, label: string, variant: 'solid' | 'outline', className?: string) =>
+  // step이 있으면 시작 안내 단계 버튼이다 — 누른 순간을 센다(홈 안내의 효과, POK-357)
+  const action = (
+    href: string,
+    label: string,
+    variant: 'solid' | 'outline',
+    className?: string,
+    step?: SetupStepId,
+  ) =>
     actionsDisabled ? (
       <Button variant={variant} size="sm" disabled className={className}>
         {label}
       </Button>
     ) : (
-      <LinkButton as={Link} href={href} variant={variant} size="sm" className={className}>
+      <LinkButton
+        as={Link}
+        href={href}
+        variant={variant}
+        size="sm"
+        className={className}
+        onClick={step ? () => track('setup_step_clicked', { step }) : undefined}
+      >
         {label}
       </LinkButton>
     );
@@ -149,7 +164,13 @@ export function SetupHome({
                     <span className={styles.trackDesc}>{step.desc}</span>
                   ) : null}
                   {state === 'current' && step.action
-                    ? action(step.action.href, step.action.label, 'solid', styles.trackAction)
+                    ? action(
+                        step.action.href,
+                        step.action.label,
+                        'solid',
+                        styles.trackAction,
+                        step.id,
+                      )
                     : null}
                   {state === 'current' && step.id === 'broadcast' ? (
                     <span className={styles.trackWait}>
@@ -158,7 +179,13 @@ export function SetupHome({
                   ) : null}
                   {/* 방송 채널·플러그인은 순서가 없다 — 지금 단계가 아니어도 버튼을 둔다 */}
                   {state === 'todo' && step.action && !step.unknown
-                    ? action(step.action.href, step.action.label, 'outline', styles.trackAction)
+                    ? action(
+                        step.action.href,
+                        step.action.label,
+                        'outline',
+                        styles.trackAction,
+                        step.id,
+                      )
                     : null}
                 </li>
               );

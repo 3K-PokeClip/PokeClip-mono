@@ -3,37 +3,113 @@ import type { CaptureResult, Properties } from 'posthog-js';
 // 분석 도구(PostHog)로 나가는 이벤트에서 주소에 실린 비밀값을 지운다 (POK-356).
 // - 쿼리와 해시는 통째로 뗀다. OAuth 콜백의 code·state, 화면의 ?stream=·?card=·?recipe= 가 다 여기 실린다.
 //   유입 분석에 쓰는 utm_* 는 SDK가 before_send 전에 따로 속성으로 뽑아 두므로 쿼리를 떼도 남는다.
-// - 예전 방송 번호는 스트림 키와 같다(services/README 「clip: 방송 번호와 물리 키」) — /broadcast/vod/<번호>도 가린다.
+// - 예전 방송 번호는 스트림 키와 같다(services/README 「clip: 방송 번호와 물리 키」) — /broadcast/vod/<번호>와
+//   녹화 네트워크 기록에 남는 API·재생 주소의 방송 번호도 가린다.
+// - 우리 주소가 아닌 곳(유입 경로·녹화 속 바깥 링크)은 origin만 남긴다 — youtu.be/<영상 ID>, 방송 채널 주소의 채널 ID가
+//   경로에 실린다(처리방침 13절 「영상 정보는 분석 도구에 보내지 않는다」).
 // - OAuth 콜백 화면의 페이지 조회는 담을 것이 없으니 아예 보내지 않는다.
+// - 홍보 링크 값(utm_*)은 landing/README 「홍보 링크와 UTM」 표에 적은 값만 그대로 두고 나머지는 other로 바꾼다.
+//   자유 문자열(utm_term)과 광고 클릭 식별자는 지운다.
 
 const OAUTH_CALLBACK_PATHS = new Set([
   '/auth/callback',
   '/oauth/chzzk/callback',
+  '/oauth/soop/callback',
   '/oauth/youtube/callback',
 ]);
 const PAGE_EVENTS = new Set(['$pageview', '$pageleave']);
 const VOD_PATH_RE = /^\/broadcast\/vod\/[^/]+/;
+const BROADCAST_API_RE = /^\/api\/clip\/broadcasts\/[^/]+/;
+const PLAYBACK_PATH_RE = /^\/playback\/[^/]+/;
+/**
+ * HLS 재생목록·조각 파일을 담은 폴더 — 라이브 LL-HLS는 `<base>/<송출 키>/index.m3u8`·`<송출 키>/<…>_seg.mp4`라 그 폴더가 키다
+ * (features/player/mediaSource.ts). base가 설정과 달라도 새지 않게 파일 바로 위 폴더를 가린다
+ */
+const MEDIA_FILE_DIR_RE = /\/[^/]+(\/[^/]+\.(?:m3u8|m4s|mp4|ts|aac|m4a))$/;
+/** 라이브 재생 주소의 앞부분 — 그 뒤 첫 경로 조각이 송출 키다(PR #382 리뷰) */
+const LIVE_BASE = (process.env.NEXT_PUBLIC_MEDIA_LIVE_BASE_URL ?? '').replace(/\/+$/, '');
 
 function scrubPath(path: string): string {
-  return path.replace(/[?#].*$/, '').replace(VOD_PATH_RE, '/broadcast/vod/_');
+  return path
+    .replace(/[?#].*$/, '')
+    .replace(VOD_PATH_RE, '/broadcast/vod/_')
+    .replace(BROADCAST_API_RE, '/api/clip/broadcasts/_')
+    .replace(PLAYBACK_PATH_RE, '/playback/_')
+    .replace(MEDIA_FILE_DIR_RE, '/_$1');
 }
 
-/** 절대 주소면 origin + 정제한 경로, `/`로 시작하는 경로면 정제한 경로. 그 밖의 값은 그대로 둔다. */
+/** 라이브 재생 base 아래 주소면 송출 키 자리(첫 경로 조각)를 가린다. 아니면 null */
+function scrubLiveMediaUrl(value: string): string | null {
+  if (LIVE_BASE === '' || !value.startsWith(`${LIVE_BASE}/`)) return null;
+  const rest = value.slice(LIVE_BASE.length + 1).replace(/[?#].*$/, '');
+  const slash = rest.indexOf('/');
+  return `${LIVE_BASE}/_${slash === -1 ? '' : scrubPath(rest.slice(slash))}`;
+}
+
+/** pokeclip.com과 그 하위 주소, 그리고 지금 페이지의 호스트(로컬 개발)만 우리 주소로 본다 */
+function isOwnHost(hostname: string): boolean {
+  if (hostname === 'pokeclip.com' || hostname.endsWith('.pokeclip.com')) return true;
+  return typeof window !== 'undefined' && hostname === window.location.hostname;
+}
+
+/**
+ * 절대 주소면 우리 주소는 origin + 정제한 경로, 바깥 주소는 origin만. `/`로 시작하는 경로면 정제한 경로.
+ * 그 밖의 값은 그대로 둔다.
+ */
 export function scrubUrl(value: string): string {
   if (value.startsWith('/')) return scrubPath(value);
   if (!/^https?:\/\//i.test(value)) return value;
+  const live = scrubLiveMediaUrl(value);
+  if (live !== null) return live;
   try {
     const url = new URL(value);
-    return `${url.origin}${scrubPath(url.pathname)}`;
+    return isOwnHost(url.hostname) ? `${url.origin}${scrubPath(url.pathname)}` : url.origin;
   } catch {
     // 주소처럼 생겼는데 못 읽으면 쿼리만이라도 뗀다
     return value.replace(/[?#].*$/, '');
   }
 }
 
+/** landing/README 「홍보 링크와 UTM」 표 — 값을 더하면 그 표와 landing/analytics.js도 함께 고친다 */
+const UTM_ALLOWED: Record<string, RegExp> = {
+  utm_source: /^(youtube|chzzk|soop|discord|kakao|x|naver|instagram)$/,
+  utm_medium: /^(video_description|profile|community|post|dm|ad)$/,
+  // 모양(패턴)이 아니라 목록이다 — 패턴이면 채널 ID·핸들 같은 소문자 값이 통과한다(PR #382 리뷰). 새 캠페인·자리는 표부터 더한다
+  utm_campaign: /^(launch_2026_10)$/,
+  utm_content: /^(pinned_comment|banner)$/,
+};
+/**
+ * SDK가 홍보 링크 값을 싣는 자리 셋 — 그 페이지의 값(접두 없음), 처음 방문(`$initial_`, 사람 속성), 그 세션의 첫 진입
+ * (`$session_entry_`, 모든 이벤트 — posthog-js session-props.js `getSessionProps`). 셋째를 빠뜨리면 utm_term·클릭 식별자가
+ * 그 세션의 모든 이벤트에 실려 나갔다(PR #382 3차 리뷰)
+ */
+const UTM_KEY_RE = /^(?:\$initial_|\$session_entry_)?(utm_[a-z]+)$/;
+/**
+ * SDK가 주소에서 따로 뽑는 광고 클릭 식별자(@posthog/browser-common 0.9.5 `CAMPAIGN_PARAMS`·`PERSONAL_DATA_CAMPAIGN_PARAMS`)와
+ * 그것으로 만드는 Meta 식별자(`$fbc` = fbclid·`_fbc` 쿠키, `$fbp` = `_fbp` 쿠키, `$set`에 실림) — 쓰지 않으니 지운다
+ */
+const CLICK_ID_KEY_RE =
+  /^(?:(?:\$initial_|\$session_entry_)?(?:gad_source|mc_cid|gclid|gclsrc|dclid|gbraid|wbraid|fbclid|msclkid|twclid|li_fat_id|igshid|ttclid|rdt_cid|epik|qclid|sccid|oppref|bfcid|irclid|_kx)|\$fbc|\$fbp)$/;
+
+/** 홍보 링크 속성이면 정리하고 true. utm_term·광고 클릭 식별자처럼 담지 않을 것은 지운다 */
+function scrubCampaignProperty(properties: Properties, key: string, value: unknown): boolean {
+  if (CLICK_ID_KEY_RE.test(key)) {
+    delete properties[key];
+    return true;
+  }
+  const utm = UTM_KEY_RE.exec(key)?.[1];
+  if (utm === undefined) return false;
+  const allowed = UTM_ALLOWED[utm];
+  if (allowed === undefined) delete properties[key];
+  else if (typeof value === 'string' && value !== '' && !allowed.test(value))
+    properties[key] = 'other';
+  return true;
+}
+
 function scrubProperties(properties: Properties | undefined): void {
   if (!properties) return;
   for (const [key, value] of Object.entries(properties)) {
+    if (scrubCampaignProperty(properties, key, value)) continue;
     if (typeof value === 'string') {
       // $pathname·$prev_pageview_pathname 같은 경로 값과 $current_url·$referrer 같은 주소 값
       if (/pathname$/.test(key) || /^https?:\/\//i.test(value)) properties[key] = scrubUrl(value);

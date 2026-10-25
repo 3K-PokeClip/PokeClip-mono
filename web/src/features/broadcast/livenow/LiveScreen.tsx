@@ -23,6 +23,7 @@ import { LiveStatsPanel, type TimelineCard } from './LiveStatsPanel';
 import { StreamInfoBar } from './StreamInfoBar';
 import { notFound, usePathname, useSearchParams } from 'next/navigation';
 import { ensureLiveAccess, takePlaybackDrop } from '@/api/playbackAccess';
+import { track } from '@/lib/analytics';
 import { useToast } from '@/ui';
 import { vodStreamIdFromPathname } from '@/features/broadcast/streamSelection';
 import { recordingSearchFrom } from '@/features/broadcast/endedWindow';
@@ -355,6 +356,8 @@ function LivePlayer({
       noSignalNote={noSignalNote}
       mediaKey={liveStreamId && cookieFor === accessKey ? (mediaKey ?? liveStreamId) : undefined}
       afterForbidden={accessKey !== null && afterForbiddenFor === accessKey}
+      // 사용 통계 「방송마다 한 번」은 방송 번호로 기억한다 — 영상 키는 스트리머마다 같다(PR #382 2차 리뷰)
+      broadcastId={liveStreamId || undefined}
       // 라이브 주소는 방송 중일 때만 — 끝난 방송의 LL-HLS는 닫혀 있어 검은 화면과 오류만 남는다(PR #200 codex).
       // 끝난 방송은 녹화가 있으면 recorded로, 없으면 「지난 방송 영상」 자리를 그린다
       src={
@@ -664,9 +667,11 @@ function LiveDashboard() {
   }, [highlights, hiddenHighlights, linkedCardId, seekTo]);
 
   const handleSeek = useCallback(
-    (timestamp: string) => {
+    (timestamp: string, from: 'card' | 'stats_pin') => {
       const seconds = parseClockLabel(timestamp);
       if (seconds === null) return;
+      // 사람이 누른 이동만 센다(주소의 카드로 옮기는 것은 위 효과) — 카드 번호·시각은 싣지 않는다 (POK-357)
+      track('highlight_card_seeked', { from, mode: live ? 'live' : 'past' });
       linkedDoneRef.current = linkedCardId;
       // 사람이 누른 것만 알린다. 주소의 카드로 옮길 때는 녹화를 찾는 중일 뿐이라 말하지 않는다(리뷰).
       // 영상 없이 채팅만 그 시점으로 가는 것은 지난 방송뿐이다: 라이브 채팅은 옮긴 영상의 시각을 따르므로(POK-326) 영상이 못 옮기면
@@ -681,7 +686,17 @@ function LiveDashboard() {
           }`,
         });
     },
-    [linkedCardId, seekTo, toast, chat.followsPlayhead, recordingMissing],
+    [linkedCardId, seekTo, toast, chat.followsPlayhead, recordingMissing, live],
+  );
+  /** 하이라이트 카드 목록에서 누른 이동 */
+  const handleCardSeek = useCallback(
+    (timestamp: string) => handleSeek(timestamp, 'card'),
+    [handleSeek],
+  );
+  /** 실시간 통계의 카드 핀에서 누른 이동 */
+  const handlePinSeek = useCallback(
+    (timestamp: string) => handleSeek(timestamp, 'stats_pin'),
+    [handleSeek],
   );
 
   return (
@@ -738,7 +753,7 @@ function LiveDashboard() {
             detectionPaused={chatWarning}
             ended={ended}
             listStatus={cardsStatus}
-            onSeek={handleSeek}
+            onSeek={handleCardSeek}
             onCardChange={mergeCard}
           />
         </div>
@@ -770,7 +785,7 @@ function LiveDashboard() {
         highlightSummary={highlightSummary}
         live={viewStatus === 'live'}
         ended={ended}
-        onSeekCard={handleSeek}
+        onSeekCard={handlePinSeek}
       />
     </main>
   );

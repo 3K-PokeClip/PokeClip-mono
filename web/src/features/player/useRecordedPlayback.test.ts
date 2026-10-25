@@ -9,7 +9,13 @@ const access = vi.hoisted(() => ({
   recover: vi.fn((_url: string, _key: string) => Promise.resolve(false)),
 }));
 vi.mock('@/api/playbackAccess', () => ({ recoverForbiddenRecording: access.recover }));
+const { track } = vi.hoisted(() => ({ track: vi.fn() }));
+vi.mock('@/lib/analytics', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/analytics')>()),
+  track,
+}));
 import { useRecordedPlayback, type RecordedSource } from './useRecordedPlayback';
+import { resetPlaybackStartsForTest } from './playbackStarts';
 
 // 끝난 방송 다시보기(POK-253). 재생 서버는 틈을 건너 주지 않으므로(실측) 한 구간씩 달라 하고 이어 튼다.
 
@@ -43,6 +49,91 @@ function requested(video: HTMLVideoElement) {
 describe('useRecordedPlayback — 구간 여럿', () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
+
+  it('그 방송을 처음 틀 때 한 번만 센다 — 멈췄다 다시 틀기·다음 구간 이어 틀기는 세지 않는다 (POK-357)', () => {
+    track.mockClear();
+    resetPlaybackStartsForTest();
+    const { video } = fakeVideo();
+    renderHook(() =>
+      useRecordedPlayback(
+        { current: video },
+        source([
+          [0, 14],
+          [24, 14],
+        ]),
+        0,
+        undefined,
+        'S-1',
+      ),
+    );
+
+    // 브라우저는 play(재생 요청) 뒤 화면이 나올 때 playing을 낸다
+    const start = () => {
+      video.dispatchEvent(new Event('play'));
+      video.dispatchEvent(new Event('playing'));
+    };
+    act(() => {
+      start();
+      video.dispatchEvent(new Event('pause'));
+      start();
+    });
+    Object.defineProperty(video, 'ended', { value: true, configurable: true });
+    act(() => {
+      video.dispatchEvent(new Event('pause'));
+      video.dispatchEvent(new Event('ended'));
+    });
+    act(() => {
+      start();
+    });
+
+    expect(track.mock.calls).toEqual([['broadcast_playback_started', { mode: 'vod' }]]);
+  });
+
+  it('재생 요청(play)만 나가고 화면이 안 나오면(playing 없음) 세지 않는다 — 나중에 나오면 그때 센다 (PR #382 3차 리뷰)', () => {
+    track.mockClear();
+    resetPlaybackStartsForTest();
+    const { video } = fakeVideo();
+    renderHook(() =>
+      useRecordedPlayback({ current: video }, source([[0, 14]]), 0, undefined, 'S-1'),
+    );
+
+    act(() => {
+      video.dispatchEvent(new Event('play')); // 녹화 줄기를 아직 못 받았다
+    });
+    expect(track).not.toHaveBeenCalled();
+
+    act(() => {
+      video.dispatchEvent(new Event('playing'));
+    });
+    expect(track.mock.calls).toEqual([['broadcast_playback_started', { mode: 'vod' }]]);
+  });
+
+  it('플레이어가 다시 마운트돼도(GlassPlayer key 변경) 같은 방송은 다시 세지 않는다 — 다른 방송은 센다 (PR #382 리뷰)', () => {
+    track.mockClear();
+    resetPlaybackStartsForTest();
+    const play = (broadcastId?: string) => {
+      const { video } = fakeVideo();
+      // 녹화의 streamId는 물리 키(스트림 키)라 방송이 달라도 같다 — 기억은 방송 번호로 한다(PR #382 2차 리뷰)
+      const view = renderHook(() =>
+        useRecordedPlayback({ current: video }, source([[0, 14]]), 0, undefined, broadcastId),
+      );
+      act(() => {
+        video.dispatchEvent(new Event('play'));
+        video.dispatchEvent(new Event('playing'));
+      });
+      view.unmount();
+    };
+
+    play('S-1');
+    play('S-1'); // 다시 마운트
+    play('S-2'); // 같은 스트리머(같은 물리 키)의 다른 방송
+    play(undefined); // 방송 번호를 모르면 세지 않는다
+
+    expect(track.mock.calls).toEqual([
+      ['broadcast_playback_started', { mode: 'vod' }],
+      ['broadcast_playback_started', { mode: 'vod' }],
+    ]);
+  });
 
   it('틈을 건너 달라 하지 않는다 — 첫 줄기는 첫 구간 끝까지다', () => {
     const { video } = fakeVideo();

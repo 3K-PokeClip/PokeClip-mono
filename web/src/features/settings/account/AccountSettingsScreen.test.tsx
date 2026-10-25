@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -9,6 +9,17 @@ import { jsonResponse, stubFetch, type FetchHandler } from '@/test/mockFetch';
 import { renderWithProviders } from '@/test/testProviders';
 
 const nav = vi.hoisted(() => ({ search: '', replace: vi.fn(), push: vi.fn() }));
+const { track, readAnalyticsChoice, setAnalyticsOptOut } = vi.hoisted(() => ({
+  track: vi.fn(),
+  readAnalyticsChoice: vi.fn(),
+  setAnalyticsOptOut: vi.fn(),
+}));
+vi.mock('@/lib/analytics', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/analytics')>()),
+  track,
+  readAnalyticsChoice,
+  setAnalyticsOptOut,
+}));
 
 // jsdom은 라우팅을 못 흉내 낸다 — 이동 여부만 확인한다.
 // 차단 상태 목업은 쿼리로 켜지므로 useSearchParams도 여기서 갈아 끼운다.
@@ -73,6 +84,9 @@ function stubCanvas() {
 
 beforeEach(() => {
   window.localStorage.clear();
+  track.mockReset();
+  readAnalyticsChoice.mockReset().mockResolvedValue('participating');
+  setAnalyticsOptOut.mockReset();
   nav.search = '';
   nav.replace.mockReset();
   nav.push.mockReset();
@@ -192,6 +206,8 @@ describe('AccountSettingsScreen — 표시 이름 저장', () => {
     // 저장한 값이 곧 현재 값이 되므로 입력은 응답을 따라가고 저장은 다시 잠긴다
     expect(screen.getByLabelText('표시 이름')).toHaveValue('너구리씨');
     expect(screen.getByRole('button', { name: '저장' })).toBeDisabled();
+    // 바꾼 뒤 한 번 센다 — 이름은 싣지 않는다 (POK-357)
+    expect(track.mock.calls).toEqual([['profile_name_changed', {}]]);
   });
 
   it('응답을 기다리는 동안 저장 버튼이 잠기고 바쁨을 알린다', async () => {
@@ -451,6 +467,8 @@ describe('AccountSettingsScreen — 프로필 사진', () => {
     // 헤더·사이드바가 읽는 캐시가 서버 응답의 새 주소를 갖는다 — 재조회 없이
     expect(queryClient.getQueryData<Me>(ME_KEY)?.profileImageUrl).toBe(NEW_URL);
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    // 기본 아바타를 골라 적용했다 — 사진·파일 이름은 싣지 않는다 (POK-357)
+    expect(track.mock.calls).toEqual([['profile_photo_changed', { source: 'preset' }]]);
   });
 
   it('사진 창고가 꺼져 있으면(503) 모달을 닫지 않고 사유를 알리며 캐시는 그대로다', async () => {
@@ -514,6 +532,76 @@ describe('AccountSettingsScreen — 프로필 사진', () => {
       expect(meCalls).toBe(meCallsBefore + 1);
     });
     expect(dialog.getByText('2 / 3 · 크롭')).toBeInTheDocument();
+  });
+});
+
+describe('AccountSettingsScreen — 이용 분석 참여(처리방침 7·9절, 이 브라우저에만 저장)', () => {
+  const analyticsSwitch = () => screen.getByRole('switch', { name: '이용 분석 참여' });
+
+  it('기본은 켬이다 — 이 브라우저의 상태를 읽을 때까지 잠근다', async () => {
+    let resolve: (choice: string) => void = () => {};
+    readAnalyticsChoice.mockReturnValue(new Promise((r) => (resolve = r)));
+    await renderScreen();
+    expect(analyticsSwitch()).toBeChecked();
+    expect(analyticsSwitch()).toBeDisabled();
+    await act(async () => resolve('participating'));
+    expect(analyticsSwitch()).toBeEnabled();
+    expect(analyticsSwitch()).toBeChecked();
+  });
+
+  it('끄면 이 브라우저에서 끄고 알린다 — 서버에는 아무것도 보내지 않는다', async () => {
+    const user = userEvent.setup();
+    const spy = stubAccount(ME);
+    await renderScreen();
+    await waitFor(() => expect(analyticsSwitch()).toBeEnabled());
+
+    await user.click(analyticsSwitch());
+
+    expect(await screen.findByText('이 브라우저에서 이용 분석을 껐어요')).toBeInTheDocument();
+    expect(setAnalyticsOptOut.mock.calls).toEqual([[true]]);
+    expect(analyticsSwitch()).not.toBeChecked();
+    expect(spy.mock.calls.filter(([, init]) => init?.method === 'PATCH')).toHaveLength(0);
+  });
+
+  it('꺼 둔 브라우저는 꺼진 채로 보이고, 켜면 다시 켠다', async () => {
+    const user = userEvent.setup();
+    readAnalyticsChoice.mockResolvedValue('opted_out');
+    await renderScreen();
+    await waitFor(() => expect(analyticsSwitch()).toBeEnabled());
+    expect(analyticsSwitch()).not.toBeChecked();
+    expect(screen.getByText(/다른 기기는 그 기기에서 따로 꺼 주세요/)).toBeInTheDocument();
+
+    await user.click(analyticsSwitch());
+
+    expect(await screen.findByText('이 브라우저에서 이용 분석을 다시 켰어요')).toBeInTheDocument();
+    expect(setAnalyticsOptOut.mock.calls).toEqual([[false]]);
+  });
+
+  it.each([
+    ['dnt', '브라우저의 추적 금지 설정이 켜져 있어 보내지 않아요.'],
+    ['unavailable', '지금 이 브라우저는 이용 분석을 보내지 않아요.'],
+  ])('%s면 스위치와 상관없이 보내지 않으니 꺼진 채 잠그고 까닭을 적는다', async (choice, text) => {
+    readAnalyticsChoice.mockResolvedValue(choice);
+    await renderScreen();
+    expect(await screen.findByText(text)).toBeInTheDocument();
+    expect(analyticsSwitch()).not.toBeChecked();
+    expect(analyticsSwitch()).toBeDisabled();
+  });
+
+  it('다른 탭에서 바꾸면 이 탭의 스위치도 따라간다', async () => {
+    await renderScreen();
+    await waitFor(() => expect(analyticsSwitch()).toBeEnabled());
+    readAnalyticsChoice.mockResolvedValue('opted_out'); // 다른 탭이 끈 뒤의 쿠키 — 쪽지에는 값이 없다
+
+    const otherTab = new BroadcastChannel('pc-analytics-preference');
+    await act(async () => {
+      otherTab.postMessage({ changed: true, from: 'other-tab' });
+      await new Promise((resolve) => setTimeout(resolve, 20)); // 배달을 act 안에서 기다린다
+    });
+    otherTab.close();
+
+    expect(analyticsSwitch()).not.toBeChecked();
+    expect(setAnalyticsOptOut).not.toHaveBeenCalled(); // 걸기는 그 탭과 AuthGuard 몫이다
   });
 });
 

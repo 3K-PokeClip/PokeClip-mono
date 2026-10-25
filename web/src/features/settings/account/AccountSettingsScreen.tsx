@@ -3,12 +3,14 @@
 import { useEffect, useRef, useState } from 'react';
 import { LEGAL_URLS } from '@/features/legal/legalInfo';
 import { SettingsPageHeader } from '../SettingsPageHeader';
+import { AnalyticsCard } from './AnalyticsCard';
 import { LoginCard } from './LoginCard';
 import { ProfileCard } from './ProfileCard';
 import { ThemeCard } from './ThemeCard';
 import { ProfilePhotoDialog } from './ProfilePhotoDialog';
 import { useAccountMockState } from './useAccountMockState';
 import { useAccountState } from './useAccountState';
+import { useAnalyticsOptOutState } from './useAnalyticsOptOutState';
 import { firstGrapheme } from './profilePresets';
 import { useProfilePhotoState } from './useProfilePhotoState';
 import { WithdrawBlockedDialog } from './WithdrawBlockedDialog';
@@ -20,6 +22,7 @@ import styles from './AccountSettingsScreen.module.css';
 // 사진 모달의 단계·타이머는 useProfilePhotoState가 갖는다.
 export function AccountSettingsScreen() {
   const account = useAccountState();
+  const analytics = useAnalyticsOptOutState();
   const mock = useAccountMockState();
   const photo = useProfilePhotoState({
     upload: account.uploadPhoto,
@@ -68,6 +71,8 @@ export function AccountSettingsScreen() {
       <LoginCard email={email} />
 
       <ThemeCard />
+
+      <AnalyticsCard choice={analytics.choice} onChange={analytics.setParticipating} />
 
       <div className={styles.withdrawRow}>
         {/* 저장·사진 수정과 같은 가드다 — me가 없으면 모달 인사말의 이름이 비어
