@@ -1039,8 +1039,17 @@ kty 결정(2026-10-24): clip 을 먼저 내리고, 나머지를 되돌린 뒤, �
         늦은 메시지가 섞임)와 clip DB 의 미종결 주문 수. 미배치 갈래면 원 큐
         숫자도 같은 보고에 싣습니다. 미종결 주문은 실행기(4 켬 · 5-1 꼴의
         페이로드 · 5-2 `send_step` · 7 끔 — send-command 승인)로 셉니다.
+        clip 표는 1단-나 ① 뒤 `app_clip` 스키마에 있고 표 주인이 `app_clip`
+        이라, 마스터는 경로에도 없고 읽을 권한도 없습니다. 그래서 5-3 의
+        손 줄처럼 `app_clip` 으로 바꿔서 읽고 그 멤버십을 거둡니다.
+        `psql -X -1 -v ON_ERROR_STOP=1` 로 돌리므로 중간에 실패하면 부여도
+        롤백됩니다(로컬 PG 17 비superuser 마스터 대역으로 확인 —
+        2026-10-25 · 경로만 바꾸면 42501, 그대로면 42P01).
 
         ```sql
+        SET search_path TO app_clip;
+        GRANT app_clip TO CURRENT_USER WITH SET TRUE, INHERIT FALSE;
+        SET ROLE app_clip;
         SELECT 'render_jobs', pg_catalog.count(*) FROM render_jobs
           WHERE status IN ('queued', 'started')
         UNION ALL
@@ -1049,6 +1058,8 @@ kty 결정(2026-10-24): clip 을 먼저 내리고, 나머지를 되돌린 뒤, �
         UNION ALL
         SELECT 'purged_streamers', pg_catalog.count(*) FROM purged_streamers
           WHERE completed_at IS NULL;
+        RESET ROLE;
+        REVOKE app_clip FROM CURRENT_USER;
         ```
 
         상태 값은 clip 마이그레이션(`V207` · `V209` · `V212`)의 CHECK
@@ -1123,15 +1134,73 @@ PUBLIC 에서 거두고 CONNECT 만 계정 여섯에 줍니다(결정 정본
 |---|---|---|
 | 1 | 1단-가 SQL 적용 여부 확인(볼트 raw · POK-304 코멘트) | — |
 | 2 | 이 런북 1 · 4 — 직전 점검 → 실행기 켬 → 켬 뒤 2-3 | ⑤ 보고 · plan 승인 |
-| 3 | 이 런북 5 — 이 PR 의 머지 SHA 로 00 → 10(새 판) → 20 → 30 → 40 | send-command 승인 |
-| 4 | 이 런북 6 — 50 → 40(갈래 기록만) | send-command 승인 |
-| 5 | 이 런북 7 · 8 — 실행기 끔 · 잔여 0 · 기록(POK-428) | plan 승인 |
-| 6 | O7d · POK-306 — 서버가 처음 떠 자기 스키마에 표를 만듦 | 그 단계 몫 |
-| 7 | 기동 뒤 확인 | send-command 승인 |
+| 3 | 10 보다 먼저 — public 에 앱 계정 소유 객체 0행 확인(아니면 멈춤) | send-command 승인 |
+| 4 | 이 런북 5 — 이 PR 의 머지 SHA 로 00 → 10(새 판) → 20 → 30 → 40 | send-command 승인 |
+| 5 | 이 런북 6 — 50 → 40(갈래 기록만) | send-command 승인 |
+| 6 | 이 런북 7 · 8 — 실행기 끔 · 잔여 0 · 기록(POK-428) | plan 승인 |
+| 7 | O7d · POK-306 — 서버가 처음 떠 자기 스키마에 표를 만듦 | 그 단계 몫 |
+| 8 | 기동 뒤 확인 | send-command 승인 |
 
 1.  1단-가 SQL 이 아직 적용되지 않았으면 이 절 대신 이 런북 1 부터 8 을 이
     PR 의 머지 SHA 로 처음부터 돕니다(같은 SQL 판입니다). 이미 적용됐으면
     2 부터 갑니다.
+1.  10 을 보내기 **전에** public 에 앱 계정(`app_%`) 소유 객체가 0행인지
+    읽습니다. 1단-가 판은 앱 넷에 public CREATE 를 주므로, O7d 가 이 절보다
+    먼저 됐으면 앱 표가 public 에 있습니다. 그 위에 10 을 적용하면 옛
+    이미지는 다음 마이그레이션을 만들지 못해 42501 로 멈추고, 이 PR 의
+    이미지는 빈 자기 스키마에 표를 새로 만들어 자료가 갈립니다. 40 의
+    `public_owned_by_app:<계정>` 도 잡지만 그때는 10 이 이미 커밋된
+    뒤입니다(파일마다 트랜잭션). 보내는 길은 「실패 · 시간 초과」 의 손
+    SQL 규칙과 같되(새 페이로드 · SQL 원문을 보이고 kty 승인) 40 을 잇지
+    않습니다 — 10 전이라 새 판 40 은 반드시 실패합니다. 1단-가 판의 public
+    CREATE 아래에서 마스터로 돌리므로 함수 · 연산자 · 형을 모두 `pg_catalog`
+    로 한정합니다. 0행이면 걸음 4 로 갑니다. 한 행이라도 나오면 10 을 보내지
+    않고 곧바로 이 런북 7(끔)로 가서 잔여 0 을 확인한 뒤, 그 출력을 kty 에게
+    회부합니다.
+
+    ```sql
+    WITH pub(ns) AS (
+      SELECT oid FROM pg_catalog.pg_namespace
+       WHERE nspname OPERATOR(pg_catalog.=) 'public'
+    ), owned(kind, o) AS (
+      SELECT 'pg_class', relowner FROM pg_catalog.pg_class, pub
+       WHERE relnamespace OPERATOR(pg_catalog.=) ns
+      UNION ALL
+      SELECT 'pg_proc', proowner FROM pg_catalog.pg_proc, pub
+       WHERE pronamespace OPERATOR(pg_catalog.=) ns
+      UNION ALL
+      SELECT 'pg_type', typowner FROM pg_catalog.pg_type, pub
+       WHERE typnamespace OPERATOR(pg_catalog.=) ns
+      UNION ALL
+      SELECT 'pg_operator', oprowner FROM pg_catalog.pg_operator, pub
+       WHERE oprnamespace OPERATOR(pg_catalog.=) ns
+      UNION ALL
+      SELECT 'pg_opclass', opcowner FROM pg_catalog.pg_opclass, pub
+       WHERE opcnamespace OPERATOR(pg_catalog.=) ns
+      UNION ALL
+      SELECT 'pg_opfamily', opfowner FROM pg_catalog.pg_opfamily, pub
+       WHERE opfnamespace OPERATOR(pg_catalog.=) ns
+      UNION ALL
+      SELECT 'pg_collation', collowner FROM pg_catalog.pg_collation, pub
+       WHERE collnamespace OPERATOR(pg_catalog.=) ns
+      UNION ALL
+      SELECT 'pg_conversion', conowner FROM pg_catalog.pg_conversion, pub
+       WHERE connamespace OPERATOR(pg_catalog.=) ns
+      UNION ALL
+      SELECT 'pg_ts_config', cfgowner FROM pg_catalog.pg_ts_config, pub
+       WHERE cfgnamespace OPERATOR(pg_catalog.=) ns
+      UNION ALL
+      SELECT 'pg_ts_dict', dictowner FROM pg_catalog.pg_ts_dict, pub
+       WHERE dictnamespace OPERATOR(pg_catalog.=) ns
+    )
+    SELECT kind, pg_catalog.pg_get_userbyid(o) AS owner,
+           pg_catalog.count(*) AS n
+      FROM owned
+     WHERE pg_catalog.starts_with(
+             pg_catalog.pg_get_userbyid(o)::pg_catalog.text, 'app_')
+     GROUP BY 1, 2;
+    ```
+
 1.  5 는 1단-가 판이 이미 적용된 DB 에서 그대로 다시 돕니다. 10 · 20 · 30
     은 그 위에서도 같은 상태로 수렴합니다 — media 시험
     `TestProdSQLConvergesOverRuntime1aRoles`
@@ -1156,8 +1225,8 @@ PUBLIC 에서 거두고 CONNECT 만 계정 여섯에 줍니다(결정 정본
     초과」 의 손 SQL 규칙대로 보냅니다. 첫째는 0행이어야 하고, 둘째는 수집
     서버가 처음 뜬 뒤 `t` 여야 합니다(수집 서버가 뜨기 전에는 표가 없어
     42P01 로 실패합니다). 둘째가 `f` 면 5-3 의 손 줄을 돌립니다. 뒤이은 40
-    의 `public_owned_by_app:<계정>` 이 표뿐 아니라 함수 · 형까지 같은 것을
-    잽니다.
+    의 `public_owned_by_app:<계정>` 이 표뿐 아니라 함수 · 형 · 연산자 등
+    (걸음 3 의 카탈로그 열)까지 같은 것을 잽니다.
 
     ```sql
     SELECT n.nspname, c.relname

@@ -23,7 +23,10 @@
 --   schema_priv:<계정>:<스키마>:<권한>
 --                                   있는 앱 스키마마다 계정의 USAGE · CREATE 가 기대와 같다 — 참은 앱 사용자의
 --                                   자기 스키마 둘씩과 app_chat_detector 의 app_chat_collector USAGE 하나다
---   public_owned_by_app:<계정>      public 의 표 · 함수 · 형(pg_class · pg_proc · pg_type) 가운데 그 계정 소유가 없다
+--   public_owned_by_app:<계정>      public 에 그 계정 소유 객체가 없다 — 표 · 함수 · 형(pg_class · pg_proc · pg_type)과
+--                                   맨 이름 연산자 해석을 가로챌 수 있는 연산자 · 연산자 클래스 · 연산자 패밀리 ·
+--                                   정렬 규칙 · 인코딩 변환 · 전문 검색 설정 · 사전(pg_operator · pg_opclass ·
+--                                   pg_opfamily · pg_collation · pg_conversion · pg_ts_config · pg_ts_dict)을 본다
 --   schema_usage_<계정>             계정이 public 스키마 USAGE 를 가진다(PUBLIC 기본) — 없으면 표 권한이 있어도
 --                                   stream_* · 자기 표의 이름을 풀지 못한다
 --   public_create_revoked           PUBLIC 이 public 스키마에 CREATE 를 갖지 않는다
@@ -94,6 +97,32 @@ BEGIN
                pg_catalog.unnest(ARRAY['USAGE', 'CREATE']) AS p
          WHERE EXISTS (SELECT 1 FROM pg_roles WHERE rolname = a)
            AND EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = s)
+    ),
+    -- public 에 있는 객체의 소유자다(public_owned_by_app). 소유자가 없는 카탈로그(pg_ts_parser · pg_ts_template —
+    -- superuser 만 만든다)는 뺀다.
+    public_ns(ns) AS (
+        SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = 'public'
+    ),
+    public_owners(o) AS (
+        SELECT relowner FROM pg_catalog.pg_class, public_ns WHERE relnamespace = ns
+        UNION ALL
+        SELECT proowner FROM pg_catalog.pg_proc, public_ns WHERE pronamespace = ns
+        UNION ALL
+        SELECT typowner FROM pg_catalog.pg_type, public_ns WHERE typnamespace = ns
+        UNION ALL
+        SELECT oprowner FROM pg_catalog.pg_operator, public_ns WHERE oprnamespace = ns
+        UNION ALL
+        SELECT opcowner FROM pg_catalog.pg_opclass, public_ns WHERE opcnamespace = ns
+        UNION ALL
+        SELECT opfowner FROM pg_catalog.pg_opfamily, public_ns WHERE opfnamespace = ns
+        UNION ALL
+        SELECT collowner FROM pg_catalog.pg_collation, public_ns WHERE collnamespace = ns
+        UNION ALL
+        SELECT conowner FROM pg_catalog.pg_conversion, public_ns WHERE connamespace = ns
+        UNION ALL
+        SELECT cfgowner FROM pg_catalog.pg_ts_config, public_ns WHERE cfgnamespace = ns
+        UNION ALL
+        SELECT dictowner FROM pg_catalog.pg_ts_dict, public_ns WHERE dictnamespace = ns
     ),
     tables(t) AS (
         VALUES ('stream_segments'), ('stream_sessions'), ('stream_cutoffs'), ('stream_published_gaps')
@@ -254,12 +283,7 @@ BEGIN
           FROM schema_matrix m
         UNION ALL
         SELECT 'public_owned_by_app:' || a,
-               NOT EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-                            WHERE n.nspname = 'public' AND pg_catalog.pg_get_userbyid(c.relowner) = a)
-               AND NOT EXISTS (SELECT 1 FROM pg_proc f JOIN pg_namespace n ON n.oid = f.pronamespace
-                                WHERE n.nspname = 'public' AND pg_catalog.pg_get_userbyid(f.proowner) = a)
-               AND NOT EXISTS (SELECT 1 FROM pg_type y JOIN pg_namespace n ON n.oid = y.typnamespace
-                                WHERE n.nspname = 'public' AND pg_catalog.pg_get_userbyid(y.typowner) = a)
+               NOT EXISTS (SELECT 1 FROM public_owners WHERE pg_catalog.pg_get_userbyid(o) = a)
           FROM accounts
         UNION ALL
         SELECT 'advisory_xact_lock_media_indexer',

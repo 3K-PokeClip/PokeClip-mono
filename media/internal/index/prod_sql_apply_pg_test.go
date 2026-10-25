@@ -688,6 +688,14 @@ func TestProdSQLVerifyCatchesPrivilegeDrift(t *testing.T) {
 			want:   []string{"public_owned_by_app:app_auth"},
 		},
 		{
+			// 표 · 함수 · 형이 없어도 연산자 하나면 맨 이름 연산자 해석을 가로챈다(종결 r1 [sec] L1) — 함수는
+			// pg_catalog 의 것이라 pg_proc 에는 앱 소유가 없다.
+			name: "app owns an operator in public",
+			tamper: "CREATE OPERATOR public.=== (LEFTARG = oid, RIGHTARG = oid, FUNCTION = pg_catalog.oideq); " +
+				"ALTER OPERATOR public.=== (oid, oid) OWNER TO app_auth",
+			want: []string{"public_owned_by_app:app_auth"},
+		},
+		{
 			// 멤버십은 부여자(대역 마스터)별로 남는다 — superuser 의 맨 REVOKE 는 그 행을 지우지 않는다(PG16+).
 			name:   "app rds_iam revoked",
 			tamper: "REVOKE rds_iam FROM app_chat_collector GRANTED BY " + env.masterName,
