@@ -54,6 +54,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  window.history.replaceState(null, '', '/'); // 주소를 지우는지 보는 시험이 바꾼 주소를 되돌린다
 });
 
 describe('OAuthCallbackScreen', () => {
@@ -183,5 +184,19 @@ describe('OAuthCallbackScreen', () => {
       screen.getByText('구글 계정의 이메일 인증을 마친 뒤 다시 로그인해 주세요'),
     ).toBeInTheDocument();
     expect(screen.getByRole('link', { name: '로그인 화면으로' })).toHaveAttribute('href', '/login');
+  });
+
+  it('실패 안내로 머물러도 주소창에 code·state가 남지 않는다 (POK-482)', async () => {
+    window.sessionStorage.setItem(STATE_KEY, JSON.stringify({ state: 'state-1', returnTo: null }));
+    window.history.replaceState(null, '', '/auth/callback?code=code-1&state=state-1');
+    searchRef.current = new URLSearchParams('code=code-1&state=state-1');
+    const spy = stubFetch(() => jsonResponse(401, { message: '인증 실패' }));
+
+    renderWithClient(<OAuthCallbackScreen />);
+
+    expect(await screen.findByText('로그인에 실패했어요')).toBeInTheDocument();
+    expect(spy).toHaveBeenCalledTimes(1); // 지우기 전에 읽은 code로 교환은 그대로 나간다
+    expect(window.location.pathname).toBe('/auth/callback');
+    expect(window.location.search).toBe('');
   });
 });

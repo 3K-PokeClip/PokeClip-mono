@@ -9,6 +9,7 @@ import { chzzkLinkFailureMessage, chzzkLinkQueryOptions, completeChzzkLink } fro
 import { ReplaceLink } from '@/components/ReplaceLink';
 import { restoreReturnPath } from '@/components/app-shell/AuthGuard';
 import { CALLBACK_PENDING_LABEL, CallbackPending } from '@/features/auth/CallbackPending';
+import { stripOAuthParamsFromUrl } from '@/features/auth/stripOAuthParams';
 import { track } from '@/lib/analytics';
 import { captureSession, useAuthHydration, useAuthStore } from '@/stores/auth';
 import { CHANNEL_SETTINGS_PATH } from './chzzkOAuth';
@@ -39,6 +40,8 @@ export function ChzzkCallbackScreen() {
     // 떨어져, 성공한 연동이 실패 토스트로 뒤집힌다. ref 가드가 필수다.
     if (startedRef.current) return;
     startedRef.current = true;
+    // 로그인 안내로 이 화면에 머물러도 주소창에 1회용 값을 남기지 않는다. params는 이미 읽은 사본이다 (POK-482).
+    stripOAuthParamsFromUrl();
 
     if (refreshToken === null) {
       // 재로그인 후 채널 연동 화면으로 돌아오게 자리를 남긴다 (LoginScreen이 읽는다).
