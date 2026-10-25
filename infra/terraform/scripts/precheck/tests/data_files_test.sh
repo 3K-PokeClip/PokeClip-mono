@@ -161,6 +161,14 @@ PASSED_TO_EC2_ENTRY='{"ContextKeyName":"iam:PassedToService",'
 PASSED_TO_EC2_ENTRY+='"ContextKeyValues":["ec2.amazonaws.com"],'
 PASSED_TO_EC2_ENTRY+='"ContextKeyType":"string"}'
 readonly PASSED_TO_EC2_ENTRY
+# prod ECS 실행 · 작업 역할 넘기기는 ECS 작업에 넘기는 질문이다(추가 문맥).
+PASSED_TO_ECS='iam:PassedToService:string:ecs-tasks.amazonaws.com'
+readonly PASSED_TO_ECS
+# 그 문맥이 시뮬레이터 요청에 실린 꼴.
+PASSED_TO_ECS_ENTRY='{"ContextKeyName":"iam:PassedToService",'
+PASSED_TO_ECS_ENTRY+='"ContextKeyValues":["ecs-tasks.amazonaws.com"],'
+PASSED_TO_ECS_ENTRY+='"ContextKeyType":"string"}'
+readonly PASSED_TO_ECS_ENTRY
 # 켬 · apply 뒤에 정해지는 런타임 자원의 대상 행(rt1a 종결 r1 H2 · H4).
 # 「자원 키 · 첫 단계 · 해석 방법 · 반드시 묻는 동작(쉼표 구분)」 이다. 실행기
 # 인스턴스는 켤 때 ID 가 정해져 태그로 풀고, 관리형 마스터 비밀은 이름 끝이
@@ -212,7 +220,8 @@ FOLLOWUP_TARGETS=(
 'log-group:aws-waf-logs-pokeclip-prod-cloudfront logs:DeleteLogGroup'
   'edge-media-log-group O7f arn:arn:aws:logs:us-east-1:${ACCOUNT}:'\
 'log-group:pokeclip-prod-media-access logs:DeleteLogGroup'
-  'edge-apex-bucket O7f tag:s3:bucket s3:PutBucketPolicy,s3:DeleteBucket')
+  'edge-apex-bucket O7f tag:s3:bucket s3:PutBucketPolicy,s3:DeleteBucket'
+  "ecs-role-pass O7d prodrole iam:PassRole ${PASSED_TO_ECS}")
 readonly FOLLOWUP_TARGETS
 # 단계 묶음에 더한 행(POK-460 — 「묶음 · 동작 · 리전 · 자원 패턴」, 탭 구분).
 # O7f 다섯은 묶음 C 의 edge apply 가 부르는데 빠져 있던 동작(리뷰가 찾은
@@ -1344,6 +1353,58 @@ expect_runtime_rows_asked() {
 }
 
 #######################################
+# 실제 principal-check.sh 를 실제 데이터로 runtime-1a · O7d 에 돌려(주체 넷과
+# prod 역할 하나가 풀리는 가짜 aws), prod 역할을 ECS 작업에 넘기는 질문
+# (ecs-role-pass — iam:PassRole + PassedToService ecs-tasks)이 O7d 부터
+# 요청에 실리고 runtime-1a 에는 없는지 본다.
+# Globals:
+#   FAKE_USER, FAKE_ACCOUNT, PASSED_TO_ECS_ENTRY, run_status, run_out
+#######################################
+expect_ecs_role_pass_asked() {
+  local case_dir stage dir role request files want
+  case_dir="$(testlib::new_case)" || {
+    testlib::fail "ecs-role-pass: 시험 준비 실패"
+    return
+  }
+  role="arn:aws:iam::${FAKE_ACCOUNT}:role/pokeclip/prod/pokeclip-prod-next-exec"
+  {
+    principal_reads_table
+    testlib::tsv list-roles /pokeclip/prod/ "${role}"
+  } >"${case_dir}/in/reads.tsv"
+  testlib::tsv "${FAKE_USER}@*" allowed None - - - >"${case_dir}/in/sim.tsv"
+  request="\"ActionNames\":[\"iam:PassRole\"],\"ResourceArns\":[\"${role}\"]"
+  for stage in runtime-1a O7d; do
+    testlib::run "${case_dir}" "principal-${stage}" env \
+      FAKE_AWS_READS="${case_dir}/in/reads.tsv" \
+      FAKE_AWS_SIM_TABLE="${case_dir}/in/sim.tsv" bash "${WRAPPER}" "${stage}"
+    dir="$(compgen -G \
+      "${case_dir}/home/.pokeclip-precheck/principal-${stage}-*")"
+    if [[ "${run_status}" -ne 3 || ! -d "${dir}" ]]; then
+      testlib::fail "ecs-role-pass: ${stage} 실행이 종료 ${run_status} —" \
+        "$(cat -- "${run_out}.stderr")"
+      return
+    fi
+    files="$(grep -lF -- "${request}" "${dir}"/req-*.json)"
+    want=0
+    if [[ -n "${files}" ]]; then
+      # shellcheck disable=SC2086 # 파일 이름 목록을 낱말로 나눈다.
+      grep -qF -- "${PASSED_TO_ECS_ENTRY}" ${files} && want=1
+    fi
+    if [[ "${stage}" == O7d && "${want}" -ne 1 ]]; then
+      testlib::fail "ecs-role-pass: O7d 에 ECS 넘기기 문맥의 PassRole 질문이" \
+        "없음"
+      return
+    fi
+    if [[ "${stage}" == runtime-1a && "${want}" -ne 0 ]]; then
+      testlib::fail "ecs-role-pass: 첫 단계 O7d 전(runtime-1a)에 물어짐"
+      return
+    fi
+  done
+  testlib::ok "ecs-role-pass → prod 역할의 ECS 넘기기 질문이 O7d 부터" \
+    "문맥과 함께 실림(runtime-1a 0)"
+}
+
+#######################################
 # 실제 principal-check.sh 를 실제 데이터로 O7f 에 돌려(주체 넷이 풀리는 가짜
 # aws), 로그 그룹 ARN 행마다 이름 꼴과 「:log-stream:」 꼴 두 ARN 이 동작마다
 # 시뮬레이터 요청에 실리는지 본다. IAM 정책은 로그 그룹을 대개 「이름:*」 로
@@ -1476,6 +1537,7 @@ main() {
   expect_stage_followup_rows
   expect_runtime_rows_asked
   expect_log_group_forms_asked
+  expect_ecs_role_pass_asked
   expect_runtime_terraform_reads
   expect_dev_principals
   expect_principal_reads

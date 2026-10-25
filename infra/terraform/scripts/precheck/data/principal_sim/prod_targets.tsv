@@ -179,6 +179,16 @@ platform-listener	O7d	tag:elasticloadbalancing:listener	listener	ap-northeast-2	
 ecs-cluster	O7d	tag:ecs:cluster	cluster	ap-northeast-2	ecs:DeleteCluster,ecs:UpdateCluster,ecs:UpdateClusterSettings,ecs:PutClusterCapacityProviders,ecs:ExecuteCommand,ecs:TagResource,ecs:UntagResource	none	-
 ecs-service	O7d	tag:ecs:service	service	ap-northeast-2	ecs:UpdateService,ecs:DeleteService,ecs:TagResource,ecs:UntagResource	none	-
 ecs-task-definition	O7d	tag:ecs:task-definition	task-definition	ap-northeast-2	ecs:RunTask,ecs:StartTask,ecs:DeleteTaskDefinitions,ecs:TagResource,ecs:UntagResource	none	-
+# prod ECS 실행 · 작업 역할을 ECS 작업에 넘기는 길(보안 리뷰 HIGH). 실행
+# 역할은 앱 비밀 그릇을 읽고(modules/ecs_service/main.tf 의 ReadSecrets —
+# secretsmanager:GetSecretValue), ECS 는 작업 정의의 역할을 넘길 때
+# iam:PassRole 을 iam:PassedToService = ecs-tasks.amazonaws.com 으로 인가한다.
+# dev 주체가 이 역할을 넣은 작업 정의를 등록 · 실행하면 prod 비밀이 컨테이너
+# 환경 변수로 나간다. 그래서 prod 역할 경로(prodrole)의 역할마다 그 문맥으로
+# 묻는다. 한계: prodrole 은 /pokeclip/prod/ 의 역할 전체라 ECS 역할만 고르지
+# 않는다(다른 prod 역할도 같은 질문을 받는다). 첫 단계(O7d) 직전에는 ECS
+# 역할이 아직 없어 그때 있는 prod 역할만 묻는다.
+ecs-role-pass	O7d	prodrole	role	us-east-1	iam:PassRole	none	iam:PassedToService:string:ecs-tasks.amazonaws.com
 waf-regional	O7d	arn:arn:aws:wafv2:ap-northeast-2:${ACCOUNT}:regional/webacl/pokeclip-prod-regional/sample-regional-web-acl	webacl	ap-northeast-2	wafv2:UpdateWebACL,wafv2:DeleteWebACL,wafv2:PutLoggingConfiguration,wafv2:DeleteLoggingConfiguration,wafv2:GetSampledRequests	none	-
 waf-regional-log-group	O7d	arn:arn:aws:logs:ap-northeast-2:${ACCOUNT}:log-group:aws-waf-logs-pokeclip-prod-public	log-group	ap-northeast-2	logs:DeleteLogGroup,logs:PutRetentionPolicy,logs:DeleteRetentionPolicy	none	-
 
