@@ -15,13 +15,16 @@ import clsx from 'clsx';
 import { Check } from 'lucide-react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { track } from '@/lib/analytics';
-import { useSessionMutation } from '@/lib/useSessionMutation';
+import { StaleSessionError, useSessionMutation } from '@/lib/useSessionMutation';
 import { Avatar, Button, LoadingRegion, Popover, Skeleton, Slot, useToast } from '@/ui';
+import { ApiError } from '@/api/client';
 import {
   acceptInvitation,
   declineInvitation,
   delegationsAsEditorQueryOptions,
+  isInvitationGone,
   receivedInvitationsQueryOptions,
+  respondFailureMessage,
   revokeDelegation,
   type ReceivedInvitation,
   type StreamerDelegation,
@@ -37,6 +40,9 @@ import styles from './ChannelSwitcher.module.css';
 // 시안에서 뺀 것: 요금제(Pro) · 편집자 등급(기본·신뢰) · 채널별 알림 숫자 · 플랫폼 이름: 데이터가 없거나 결정으로 빠졌다.
 
 export type ChannelRole = '스트리머' | '편집자';
+
+/** 창이 열린 동안 받은 초대를 다시 읽는 간격. 스트리머가 보낸 초대가 새로고침 없이 20초 안에 뜬다(POK-481) */
+export const RECEIVED_POLL_MS = 20_000;
 
 /** 트리거가 그릴 지금 채널: 아직 안 섰으면 내 이름으로(사이드바가 빈칸으로 깜빡이지 않게). */
 export function useChannelIdentity(): {
@@ -135,7 +141,14 @@ function SwitcherPanel({
   const switchTo = useSwitchChannel();
   const logout = useLogout();
   const asEditor = useQuery(delegationsAsEditorQueryOptions);
-  const received = useQuery(receivedInvitationsQueryOptions);
+  // 받은 초대는 남(스트리머의 초대·취소)이 바꾼다. 창을 열 때마다 새로 읽고(staleTime 0: 60초 안에 다시 열어도) 열린 동안엔
+  // 주기로 읽는다. 창이 닫히면 이 구독이 사라져 주기도 멈추고, 숨은 탭에서는 react-query가 쉰다(POK-481). 한 번도 못 읽었으면
+  // 주기로 두드리지 않는다: 회복은 「다시 시도」가 맡는다 — 주기 읽기마다 그 버튼이 저절로 돌며 눌리지 않게 되지 않게(PR #412 리뷰)
+  const received = useQuery({
+    ...receivedInvitationsQueryOptions,
+    staleTime: 0,
+    refetchInterval: (query) => (query.state.data === undefined ? false : RECEIVED_POLL_MS),
+  });
   const select = useChannelStore((s) => s.select);
   // 저장된 남의 채널이 있다(지금은 as-editor를 못 읽어 내 채널로 보일 수 있다)
   const storedOther = useChannelStore((s) => s.selected !== null && s.selected !== s.userId);
@@ -282,7 +295,10 @@ function SwitcherPanel({
             <Button
               variant="soft"
               size="sm"
-              loading={asEditor.isFetching || received.isFetching}
+              // 못 읽은 목록의 다시 읽기에만 돈다: 받은 초대의 주기 읽기마다 버튼이 돌지 않게(POK-481)
+              loading={
+                (channelsFailed && asEditor.isFetching) || (invitesFailed && received.isFetching)
+              }
               onClick={() => {
                 if (channelsFailed) void asEditor.refetch();
                 if (invitesFailed) void received.refetch();
@@ -316,6 +332,7 @@ function SwitcherPanel({
           opener={asking.opener}
           onClose={() => setAsking(null)}
           onBusyChange={onBusyChange}
+          fallbackFocus={mineRef}
         />
       )}
       {asking?.kind === 'leave' && (
@@ -479,16 +496,12 @@ function InvitesSkeleton({ label }: { label?: string }) {
   );
 }
 
-/** 실패는 토스트로만 알린다: 서버 문구를 그대로 보인다 */
-function failedToast(toast: ReturnType<typeof useToast>['toast'], e: unknown) {
-  toast({
-    tone: 'error',
-    title: '처리하지 못했어요',
-    description: e instanceof Error ? e.message : String(e),
-  });
-}
-
-/** 수락·거절 공통: 끝나면 받은 초대와 참여 채널 목록을 다시 읽는다(수락하면 참여 채널이 는다). */
+/**
+ * 수락·거절 공통: 끝나면 받은 초대와 참여 채널 목록을 다시 읽는다(수락하면 참여 채널이 는다). 실패해도 읽는다: 실패는 대개
+ * 그 사이 스트리머가 취소했거나 다른 곳에서 먼저 답했다는 뜻이라 목록이 낡았다(POK-481). onDone(거절 덮개 닫기)은 그 초대가
+ * 끝났을 때만 부른다: 성공 · 이미 처리된 초대 · 세션이 바뀜. 모르는 실패(일시 장애)엔 덮개를 남겨 「거절하기」만 다시 누르면
+ * 되게 한다 — 나가기 덮개와 같은 규칙(PR #412 리뷰)
+ */
 function useInvitationAction(
   send: (id: number) => Promise<void>,
   doneTitle: string,
@@ -502,11 +515,15 @@ function useInvitationAction(
     onSuccess: () => {
       track('editor_invitation_responded', { outcome }); // 상대 이름·초대 번호는 싣지 않는다 (POK-357)
       toast({ tone: 'success', title: doneTitle });
-      onDone?.();
+    },
+    // 서버 사유 코드는 보이지 않는다: 사람 말로 바꾸고 모르는 실패는 폴백 문구로
+    onError: (e: unknown) => toast({ tone: 'error', ...respondFailureMessage(e) }),
+    onSettled: (_data, error) => {
+      if (error === null || isInvitationGone(error) || error instanceof StaleSessionError)
+        onDone?.();
       void queryClient.invalidateQueries({ queryKey: ['editor-invitations'] });
       void queryClient.invalidateQueries({ queryKey: ['editor-delegations'] });
     },
-    onError: (e: unknown) => failedToast(toast, e),
   });
 }
 
@@ -571,13 +588,26 @@ function DeclineConfirm({
   opener,
   onClose,
   onBusyChange,
+  fallbackFocus,
 }: {
   invitation: ReceivedInvitation;
   opener: HTMLElement;
   onClose: () => void;
   onBusyChange: (busy: boolean) => void;
+  /** 「거절」 버튼이 없어질 때 포커스를 둘 늘 남는 자리(「내 채널」 줄) */
+  fallbackFocus: RefObject<HTMLElement | null>;
 }) {
-  const decline = useInvitationAction(declineInvitation, '초대를 거절했어요', 'declined', onClose);
+  // 닫힐 때 「거절」 버튼이 없으면 늘 남는 자리로 보낸다: 거절이 끝난 카드는 다음 읽기에서 지워지고, 덮개를 연 사이 주기
+  // 읽기가 카드를 먼저 지울 수도 있다(PR #412 리뷰). ref만 읽어 고정해 둔다: 덮개의 포커스 효과가 다시 돌지 않게
+  const finished = useRef(false);
+  const returnFocusTo = useCallback(
+    () => (finished.current || !opener.isConnected ? fallbackFocus.current : null),
+    [opener, fallbackFocus],
+  );
+  const decline = useInvitationAction(declineInvitation, '초대를 거절했어요', 'declined', () => {
+    finished.current = true;
+    onClose();
+  });
   return (
     <PanelConfirm
       title={`${invitation.streamerName}님의 초대를 거절할까요?`}
@@ -588,6 +618,7 @@ function DeclineConfirm({
       onConfirm={() => decline.mutate(invitation.id)}
       onClose={onClose}
       onBusyChange={onBusyChange}
+      returnFocusTo={returnFocusTo}
     />
   );
 }
@@ -621,7 +652,24 @@ function LeaveConfirm({
       toast({ tone: 'success', title: `${channel.streamerName} 채널에서 나왔어요` });
       onLeft(() => void queryClient.invalidateQueries({ queryKey: ['editor-delegations'] }));
     },
-    onError: (e: unknown) => failedToast(toast, e),
+    onError: (e: unknown) => {
+      // 없는 것과 같은 404: 스트리머가 먼저 내보냈거나 다른 곳에서 이미 나왔다. 나온 것과 결과가 같으니 나온 뒤 흐름(목록
+      // 다시 읽기 · 지금 채널이었으면 내 채널로)을 그대로 탄다(POK-481)
+      if (e instanceof ApiError && e.status === 404 && e.message === 'DELEGATION_NOT_FOUND') {
+        toast({
+          tone: 'error',
+          title: '이미 끊긴 채널이에요',
+          description: '스트리머가 내보냈거나 다른 곳에서 먼저 나왔어요.',
+        });
+        onLeft(() => void queryClient.invalidateQueries({ queryKey: ['editor-delegations'] }));
+        return;
+      }
+      toast({
+        tone: 'error',
+        title: '채널에서 나가지 못했어요',
+        description: '잠시 후 다시 시도해 주세요.',
+      });
+    },
   });
   return (
     <PanelConfirm

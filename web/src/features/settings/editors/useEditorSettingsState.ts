@@ -27,6 +27,19 @@ import { useToast } from '@/ui';
 
 export type EditorsView = 'loading' | 'unavailable' | 'ready';
 
+/** 화면이 열린 동안 두 목록을 다시 읽는 간격. 편집자가 수락·거절하면 새로고침 없이 20초 안에 바뀐다(POK-481) */
+export const EDITORS_POLL_MS = 20_000;
+
+// 두 목록은 상대(편집자의 수락·거절·나가기)도 바꾼다. 화면에 들어올 때·탭으로 돌아올 때 바로 읽고(staleTime 0) 열린
+// 동안엔 주기로 읽는다. 화면을 떠나면 구독과 함께 주기도 멈추고, 숨은 탭에서는 react-query가 쉰다(POK-481).
+// 한 번도 못 읽은 목록은 주기로 두드리지 않는다: 회복은 「다시 시도」가 맡는다 — 주기 읽기마다 그 버튼이 저절로 돌며
+// 눌리지 않게 되지 않게(PR #412 리뷰). 처음 읽기에 성공하면 react-query가 이 함수를 다시 불러 주기가 붙는다
+const LIVE_LIST = {
+  staleTime: 0,
+  refetchInterval: (query: { state: { data: unknown } }) =>
+    query.state.data === undefined ? false : EDITORS_POLL_MS,
+} as const;
+
 export interface EditorSettingsViewState {
   view: EditorsView;
   /** `ready`가 아니면 빈 배열 — 로딩·오류 화면에 낡은 목록이 남지 않게. */
@@ -67,8 +80,8 @@ export interface EditorSettingsViewState {
 export function useEditorSettingsState(): EditorSettingsViewState {
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const delegations = useQuery(editorDelegationsQueryOptions);
-  const invitations = useQuery(sentInvitationsQueryOptions);
+  const delegations = useQuery({ ...editorDelegationsQueryOptions, ...LIVE_LIST });
+  const invitations = useQuery({ ...sentInvitationsQueryOptions, ...LIVE_LIST });
   const [inviteOpen, setInviteOpen] = useState(false);
   const [revokeTarget, setRevokeTarget] = useState<EditorDelegation | null>(null);
   const [cancelingIds, setCancelingIds] = useState<ReadonlySet<number>>(new Set());
@@ -230,8 +243,11 @@ export function useEditorSettingsState(): EditorSettingsViewState {
     empty: view === 'ready' && editors.length === 0 && pendingInvitations.length === 0,
     retry,
     // isPending이 아닌 isFetching이다 — 최초 조회는 view가 'loading'이라 겹치지 않고,
-    // 여기서 잡아야 할 것은 실패 후 재조회다 (useChzzkLinkState와 같은 판정).
-    retrying: delegations.isFetching || invitations.isFetching,
+    // 여기서 잡아야 할 것은 실패 후 재조회다 (useChzzkLinkState와 같은 판정). 처음부터 못 읽은
+    // 목록만 본다 — 읽어 둔 다른 목록의 주기 읽기마다 버튼이 돌지 않게 (POK-481).
+    retrying:
+      (delegations.data === undefined && delegations.isFetching) ||
+      (invitations.data === undefined && invitations.isFetching),
     inviteOpen,
     openInvite,
     closeInvite,

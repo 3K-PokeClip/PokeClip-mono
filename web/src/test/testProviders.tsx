@@ -16,8 +16,14 @@ export function createTestQueryClient() {
   });
 }
 
-export function renderWithProviders(ui: ReactElement) {
-  const queryClient = createTestQueryClient();
+/**
+ * 클라이언트를 넘기는 경우: 운영 기본값(providers.tsx의 staleTime 60초)이 동작을 가르는 테스트다.
+ * 기본 테스트 클라이언트는 staleTime이 0이라 「60초 안에 다시 열어도 다시 읽는다」가 늘 참으로 나온다.
+ */
+export function renderWithProviders(
+  ui: ReactElement,
+  queryClient: QueryClient = createTestQueryClient(),
+) {
   const result = render(
     <QueryClientProvider client={queryClient}>
       <ThemeProvider enablePersistence={false}>
