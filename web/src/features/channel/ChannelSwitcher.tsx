@@ -15,13 +15,14 @@ import clsx from 'clsx';
 import { Check } from 'lucide-react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { track } from '@/lib/analytics';
-import { useSessionMutation } from '@/lib/useSessionMutation';
+import { StaleSessionError, useSessionMutation } from '@/lib/useSessionMutation';
 import { Avatar, Button, LoadingRegion, Popover, Skeleton, Slot, useToast } from '@/ui';
 import { ApiError } from '@/api/client';
 import {
   acceptInvitation,
   declineInvitation,
   delegationsAsEditorQueryOptions,
+  isInvitationGone,
   receivedInvitationsQueryOptions,
   respondFailureMessage,
   revokeDelegation,
@@ -496,7 +497,9 @@ function InvitesSkeleton({ label }: { label?: string }) {
 
 /**
  * 수락·거절 공통: 끝나면 받은 초대와 참여 채널 목록을 다시 읽는다(수락하면 참여 채널이 는다). 실패해도 읽는다: 실패는 대개
- * 그 사이 스트리머가 취소했거나 다른 곳에서 먼저 답했다는 뜻이라 목록이 낡았다(POK-481)
+ * 그 사이 스트리머가 취소했거나 다른 곳에서 먼저 답했다는 뜻이라 목록이 낡았다(POK-481). onDone(거절 덮개 닫기)은 그 초대가
+ * 끝났을 때만 부른다: 성공 · 이미 처리된 초대 · 세션이 바뀜. 모르는 실패(일시 장애)엔 덮개를 남겨 「거절하기」만 다시 누르면
+ * 되게 한다 — 나가기 덮개와 같은 규칙(PR #412 리뷰)
  */
 function useInvitationAction(
   send: (id: number) => Promise<void>,
@@ -514,9 +517,9 @@ function useInvitationAction(
     },
     // 서버 사유 코드는 보이지 않는다: 사람 말로 바꾸고 모르는 실패는 폴백 문구로
     onError: (e: unknown) => toast({ tone: 'error', ...respondFailureMessage(e) }),
-    // 덮개도 성공·실패 모두 닫는다: 결과는 토스트가 알린다(ADR-044, 편집자 관리의 내보내기와 같은 규칙)
-    onSettled: () => {
-      onDone?.();
+    onSettled: (_data, error) => {
+      if (error === null || isInvitationGone(error) || error instanceof StaleSessionError)
+        onDone?.();
       void queryClient.invalidateQueries({ queryKey: ['editor-invitations'] });
       void queryClient.invalidateQueries({ queryKey: ['editor-delegations'] });
     },

@@ -7,6 +7,7 @@ import {
   inviteEditor,
   inviteFailureMessage,
   inviteFailureOf,
+  isInvitationGone,
   respondFailureMessage,
   revokeDelegation,
 } from '@/api/editors';
@@ -202,5 +203,14 @@ describe('respondFailureMessage (POK-481)', () => {
     expect(respondFailureMessage(new ApiError(409, 'SOME_INTERNAL_CODE'))).toEqual(fallback);
     expect(respondFailureMessage(new ApiError(404, 'toString'))).toEqual(fallback);
     expect(respondFailureMessage(new TypeError('network'))).toEqual(fallback);
+  });
+
+  it('isInvitationGone은 답할 수 없게 된 실패(짝이 맞는 404·409·410)만 참이다 — 일시 장애는 거짓', () => {
+    expect(isInvitationGone(new ApiError(404, 'INVITATION_NOT_FOUND'))).toBe(true);
+    expect(isInvitationGone(new ApiError(409, 'INVITATION_NOT_PENDING'))).toBe(true);
+    expect(isInvitationGone(new ApiError(410, 'INVITATION_EXPIRED'))).toBe(true);
+    expect(isInvitationGone(new ApiError(503, 'UNAVAILABLE'))).toBe(false);
+    expect(isInvitationGone(new ApiError(500, 'INVITATION_EXPIRED'))).toBe(false);
+    expect(isInvitationGone(new TypeError('network'))).toBe(false);
   });
 });

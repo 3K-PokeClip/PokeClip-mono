@@ -243,14 +243,21 @@ const RESPOND_FALLBACK: EditorInviteMessage = {
   description: '잠시 후 다시 시도해 주세요.',
 };
 
+function respondFailureOf(e: unknown): RespondFailure | null {
+  if (!(e instanceof ApiError) || !Object.hasOwn(RESPOND_FAILURE_STATUS, e.message)) return null;
+  const failure = e.message as RespondFailure;
+  return RESPOND_FAILURE_STATUS[failure] === e.status ? failure : null;
+}
+
+/** 그 초대에 더는 답할 수 없게 된 실패인가(취소됐거나 먼저 답했거나 기한이 지났다). 모르는 실패(일시 장애)는 아니다. */
+export function isInvitationGone(e: unknown): boolean {
+  return respondFailureOf(e) !== null;
+}
+
 /** 받은 초대 수락·거절 실패를 사용자 문구로. 알 수 없는 실패는 폴백으로 — reason 원문을 노출하지 않는다. */
 export function respondFailureMessage(e: unknown): EditorInviteMessage {
-  if (!(e instanceof ApiError) || !Object.hasOwn(RESPOND_FAILURE_STATUS, e.message))
-    return RESPOND_FALLBACK;
-  const failure = e.message as RespondFailure;
-  return RESPOND_FAILURE_STATUS[failure] === e.status
-    ? RESPOND_FAILURE_MESSAGE[failure]
-    : RESPOND_FALLBACK;
+  const failure = respondFailureOf(e);
+  return failure !== null ? RESPOND_FAILURE_MESSAGE[failure] : RESPOND_FALLBACK;
 }
 
 export async function fetchDelegationsAsEditor(): Promise<StreamerDelegation[]> {

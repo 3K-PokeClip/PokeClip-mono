@@ -804,6 +804,32 @@ describe('ChannelSwitcher: 답하기·나가기가 실패하면 사람 말로 �
     expect(screen.getByRole('dialog', { name: '계정 전환' })).toBeInTheDocument();
   });
 
+  it('거절이 모르는 이유(503)로 실패하면 덮개를 남긴다: 「거절하기」만 다시 누르면 된다', async () => {
+    const server: Server = {
+      delegations: [],
+      invitations: [invitation(18)],
+      respondFails: { status: 503, reason: 'UNAVAILABLE' },
+    };
+    const spy = stub(server);
+    const user = userEvent.setup();
+    const p = within(await open(user));
+    await user.click(await p.findByRole('button', { name: '거절' }));
+    const confirm = within(await p.findByRole('alertdialog'));
+    await user.click(confirm.getByRole('button', { name: '거절하기' }));
+
+    expect(await screen.findByText('처리하지 못했어요')).toBeInTheDocument();
+    expect(screen.queryByText('UNAVAILABLE')).not.toBeInTheDocument();
+    expect(p.getByRole('alertdialog')).toBeInTheDocument();
+
+    server.respondFails = undefined;
+    await user.click(confirm.getByRole('button', { name: '거절하기' }));
+    await waitFor(() => expect(p.queryByRole('alertdialog')).not.toBeInTheDocument());
+    expect(posts(spy)).toEqual([
+      '/api/editor-invitations/11/decline',
+      '/api/editor-invitations/11/decline',
+    ]);
+  });
+
   it('나가기가 404로 실패하면 「이미 끊긴 채널이에요」로 알리고 나온 뒤처럼 그 줄을 지운다', async () => {
     const server: Server = {
       delegations: [BYEOLHA, KONGSTAR],
