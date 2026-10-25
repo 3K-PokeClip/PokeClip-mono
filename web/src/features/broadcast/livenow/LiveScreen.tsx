@@ -18,6 +18,7 @@ import { formatUptime, parseClockLabel } from '@/features/player/playerMath';
 import { ChatPanel } from './ChatPanel';
 import { HighlightCardPanel } from './HighlightCardPanel';
 import { LiveOfflineScreen } from './LiveOfflineScreen';
+import { NewBroadcastBand } from './NewBroadcastBand';
 import { LiveScreenSkeleton } from './LiveScreenSkeleton';
 import { LiveStatsPanel, type TimelineCard } from './LiveStatsPanel';
 import { StreamInfoBar } from './StreamInfoBar';
@@ -26,7 +27,6 @@ import { ensureLiveAccess, takePlaybackDrop } from '@/api/playbackAccess';
 import { track } from '@/lib/analytics';
 import { useToast } from '@/ui';
 import { vodStreamIdFromPathname } from '@/features/broadcast/streamSelection';
-import { recordingSearchFrom } from '@/features/broadcast/endedWindow';
 import { lookupRecordingSpans, playbackConfigured } from '@/api/mediaPlayback';
 import type { LivePosition } from '@/features/player/useHlsPlayback';
 import type { RecordedSource } from '@/features/player/useRecordedPlayback';
@@ -46,6 +46,7 @@ import { useLiveMockState, type LiveStream } from './useLiveMockState';
 import { useLiveStatsMockState } from './useLiveStatsMockState';
 import { useLiveStatusMockState } from './useLiveStatusMockState';
 import { useLiveStreamSelection } from './useLiveStreamSelection';
+import { useLiveSession } from './useLiveSession';
 import { useManualMarking } from './useManualMarking';
 import { infoWaitOver } from '../infoWait';
 
@@ -130,6 +131,7 @@ function LivePlayer({
   onLivePosition,
   onSeek,
   onMarkableChange,
+  deferred,
 }: {
   stream: LiveStream;
   viewersNote: string;
@@ -179,6 +181,8 @@ function LivePlayer({
    * 녹화 소스 하나에서 읽는다(계획 검증 m11): 녹화 조회 결과와 기준점을 따로 보면 둘이 갈리는 그리기가 생긴다
    */
   onMarkableChange: (markable: boolean) => void;
+  /** 재생 보유 중에 다시 고른 방송 번호(useLiveStreamSelection — POK-200 M5). 보던 방송과 다르면 「새 방송」 띠다 */
+  deferred: string | null;
 }) {
   // env 미설정이면 null → GlassPlayer가 「영상 신호 없음」 자리 표시를 그린다.
   // 주소에 ?stream= 이 없으면 clip 명부에서 고른 방송(liveDataStore)의 영상을 튼다.
@@ -195,28 +199,39 @@ function LivePlayer({
   // 보관 기간(60일)이 지나 출입증을 안 주는 방송(410, POK-335). 녹화를 찾지 않고 그렇다고 알린다
   const [accessExpiredFor, setAccessExpiredFor] = useState<string | null>(null);
   const [lookup, setLookup] = useState<RecordingLookup>({ kind: 'pending' });
+  const accessReady = accessKey === null || accessReadyFor === accessKey;
+  // 재생 세션(POK-200 M5) — 라이브 · 되감기 · 끝남 대기. 녹화 조회는 세션이 녹화로 닫히거나(그 자리의 끝 시각으로 고정) 세션을
+  // 연 적 없는 화면이 끝난 방송일 때만 묻는다: 명부는 정산 15분 뒤에야 ended 라 「명부 ended 단독」 조건을 쓰지 않는다(설계 5.5절)
+  const live = useLiveSession({
+    liveStreamId,
+    mediaKey,
+    accessKey,
+    accessReady,
+    broadcastStatus,
+    startedAt,
+    endedAt,
+    liveUrl: src,
+    deferred,
+  });
+  const request = live.recordedRequest;
+  const playerStatus: BroadcastStatus = live.closedRecorded ? 'ended' : displayStatus;
   useEffect(() => {
     setLookup({ kind: 'pending' });
     publishLiveData({ timeBaseMs: null });
     // CDN 뒤 녹화 목록은 출입증 쿠키가 있어야 열린다: 출입증 답 뒤에 묻는다(POK-317)
-    if (
-      broadcastStatus !== 'ended' ||
-      !mediaKey ||
-      (accessKey !== null && accessReadyFor !== accessKey)
-    )
-      return undefined;
+    if (request === null || !mediaKey || !accessReady) return undefined;
     let alive = true;
     let retry: number | undefined;
     // 시작 시각을 모르는 방송(자리표시)은 그래프와 같은 끝 12시간 안에서만 찾는다: 하한이 없으면 같은 송출 키로 한 다른 날 방송의
     // 녹화를 틀고, 채팅도 그 날짜를 물었다(리뷰 5라운드). 지난 방송 목록도 같은 하한이고(recordingSearchFrom), 지난 방송 채팅은 이
     // 하한에서 보정 여유(60초)만큼 앞부터 읽는다(POK-324)
-    const fromMs = recordingSearchFrom(startedAt, endedAt);
+    const { fromMs, untilMs } = request;
     onRecordingLookupStart();
     const ask = () => {
       // 첫 구간 하나만 쓰면 송출이 한 번 끊긴 방송은 그 뒤를 못 보고, 앞 방송 녹화를 잡을 수도 있다(POK-253)
       void lookupRecordingSpans(mediaKey).then((spans) => {
         if (!alive) return;
-        const found = spans === null ? null : recordingTimeline(spans, fromMs, endedAt);
+        const found = spans === null ? null : recordingTimeline(spans, fromMs, untilMs);
         if (!found) {
           // 묻지 못했으면(재생 서버 없음·조회 실패) 녹화가 없다는 뜻이 아니라 「물을 수 없음」이다: 조회 실패를 빈 목록으로 접어
           // 「찾지 못했어요」로 굳혔다(리뷰 6라운드). 어느 쪽이든 서버가 있으면 다시 묻는다. 같은 답이면 상태를 그대로 둔다: 새 값을
@@ -242,16 +257,7 @@ function LivePlayer({
       alive = false;
       window.clearTimeout(retry);
     };
-  }, [
-    broadcastStatus,
-    mediaKey,
-    accessKey,
-    accessReadyFor,
-    startedAt,
-    endedAt,
-    originMs,
-    onRecordingLookupStart,
-  ]);
+  }, [request, mediaKey, accessReady, originMs, onRecordingLookupStart]);
   const recorded = lookup.kind === 'found' ? lookup.source : null;
   const markable = recorded?.originAxis === true;
   useEffect(() => {
@@ -274,13 +280,13 @@ function LivePlayer({
   // 않았어요」가 맞다: 그때 「찾지 못했어요」라 하면 녹화가 지워진 것처럼 읽혔다(dev·운영은 재생 서버 주소가 비어 있다, 리뷰
   // 6라운드). 서버는 있는데 묻지 못했으면(오류·시한·출입증 쿠키 없음 403) 그렇다고 알린다: 1분 뒤 다시 묻는다(POK-337)
   const noSignalNote =
-    displayStatus === 'ended' && accessKey !== null && accessExpiredFor === accessKey
+    playerStatus === 'ended' && accessKey !== null && accessExpiredFor === accessKey
       ? '보관 기간(60일)이 지나 녹화 영상을 볼 수 없어요'
-      : displayStatus === 'live'
+      : playerStatus === 'live'
         ? accessKey !== null && accessFailedFor === accessKey
           ? '영상 출입증을 받지 못했어요. 1분 뒤 다시 받아요'
           : undefined
-        : displayStatus !== 'ended' || !playbackConfigured()
+        : playerStatus !== 'ended' || !playbackConfigured()
           ? undefined
           : recordingMayPlay(lookup.kind)
             ? '녹화 영상을 확인하고 있어요'
@@ -345,37 +351,38 @@ function LivePlayer({
     };
   }, [liveStreamId, mediaKey]);
   return (
-    <GlassPlayer
-      // 실재생 훅은 경과 시드를 마운트 때 한 번만 읽는다 — startedAt이 도착하면 한 번 다시 세운다
-      // 출입증 갱신이 실패하다가 다시 받아져도 다시 세운다(accessRecoveries)
-      key={`${uptimeSeconds === null ? 'clock-pending' : 'clock-known'}-${accessRecoveries}`}
-      channelName={stream.channelName}
-      viewersNote={viewersNote}
-      infoPending={infoPending}
-      broadcastStatus={displayStatus}
-      noSignalNote={noSignalNote}
-      mediaKey={liveStreamId && cookieFor === accessKey ? (mediaKey ?? liveStreamId) : undefined}
-      afterForbidden={accessKey !== null && afterForbiddenFor === accessKey}
-      // 사용 통계 「방송마다 한 번」은 방송 번호로 기억한다 — 영상 키는 스트리머마다 같다(PR #382 2차 리뷰)
-      broadcastId={liveStreamId || undefined}
-      // 라이브 주소는 방송 중일 때만 — 끝난 방송의 LL-HLS는 닫혀 있어 검은 화면과 오류만 남는다(PR #200 codex).
-      // 끝난 방송은 녹화가 있으면 recorded로, 없으면 「지난 방송 영상」 자리를 그린다
-      src={
-        broadcastStatus === 'live' && (accessKey === null || accessReadyFor === accessKey)
-          ? src
-          : null
-      }
-      recorded={recorded}
-      startAtSeconds={startAtSeconds}
-      onPlaybackPosition={onPlaybackPosition}
-      onLivePosition={onLivePosition}
-      onSeek={onSeek}
-      embed
-      simulationOptions={{ initialUptimeSeconds: uptimeSeconds ?? 0 }}
-      controllerRef={controllerRef}
-      chatPanelOpen={chatPanelOpen}
-      onToggleChatPanel={onToggleChatPanel}
-    />
+    <>
+      {live.band !== null ? <NewBroadcastBand onGo={live.onBand} /> : null}
+      <GlassPlayer
+        // 실재생 훅은 경과 시드를 마운트 때 한 번만 읽는다 — startedAt이 도착하면 한 번 다시 세운다
+        // 출입증 갱신이 실패하다가 다시 받아져도 다시 세운다(accessRecoveries)
+        key={`${uptimeSeconds === null ? 'clock-pending' : 'clock-known'}-${accessRecoveries}`}
+        channelName={stream.channelName}
+        viewersNote={viewersNote}
+        infoPending={infoPending}
+        broadcastStatus={playerStatus}
+        noSignalNote={noSignalNote}
+        mediaKey={liveStreamId && cookieFor === accessKey ? (mediaKey ?? liveStreamId) : undefined}
+        afterForbidden={accessKey !== null && afterForbiddenFor === accessKey}
+        // 사용 통계 「방송마다 한 번」은 방송 번호로 기억한다 — 영상 키는 스트리머마다 같다(PR #382 2차 리뷰)
+        broadcastId={liveStreamId || undefined}
+        // 라이브 주소는 방송 중일 때만 — 끝난 방송의 LL-HLS는 닫혀 있어 검은 화면과 오류만 남는다(PR #200 codex).
+        // 끝난 방송은 녹화가 있으면 recorded로, 없으면 「지난 방송 영상」 자리를 그린다. 세션이 있으면 세션이 소스를 정하고,
+        // 녹화로 닫힌 세션은 닫힌 라이브 주소로 다시 붙지 않는다(설계 5.5절)
+        session={live.session}
+        src={broadcastStatus === 'live' && accessReady && !live.closedRecorded ? src : null}
+        recorded={recorded}
+        startAtSeconds={startAtSeconds}
+        onPlaybackPosition={onPlaybackPosition}
+        onLivePosition={onLivePosition}
+        onSeek={onSeek}
+        embed
+        simulationOptions={{ initialUptimeSeconds: uptimeSeconds ?? 0 }}
+        controllerRef={controllerRef}
+        chatPanelOpen={chatPanelOpen}
+        onToggleChatPanel={onToggleChatPanel}
+      />
+    </>
   );
 }
 
@@ -407,10 +414,10 @@ function LiveScreenBody() {
   // 번호로 세우면 시계(useBroadcastClock)가 「꺼짐」을 퍼뜨려 정보 바에 「방송 중이 아니에요」가 먼저 떴다가 바뀌었다. 방송 목록을
   // 못 읽으면 10초마다 다시 묻고(LIVE_RESELECT_MS) 답이 오면 선다. 한 번 선 뒤 방송이 바뀌면(A → B) 저장소가 비지 않으니 내리지 않는다
   if (!selection.resolved || streamId === '') return <LiveScreenSkeleton />;
-  return <LiveDashboard />;
+  return <LiveDashboard deferred={selection.deferred} />;
 }
 
-function LiveDashboard() {
+function LiveDashboard({ deferred }: { deferred: string | null }) {
   // 주소는 usePathname으로 읽는다: 넘어온 직후 첫 그리기의 window.location은 옛 주소다
   const vodRouteId = vodStreamIdFromPathname(usePathname() ?? '');
   const pastRoute = vodRouteId !== null;
@@ -727,6 +734,7 @@ function LiveDashboard() {
                 onLivePosition={handleLivePosition}
                 onSeek={handlePlayerSeek}
                 onMarkableChange={setPastMarkable}
+                deferred={deferred}
               />
             </Suspense>
           </div>

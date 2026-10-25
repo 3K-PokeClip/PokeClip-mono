@@ -68,6 +68,11 @@ export interface LiveData {
   listTitle: string | null;
   /** 방송 목록 줄의 스트리머 채널 이름(POK-430). 위임받은 방송의 채널 이름이다. 옛 서버면 null */
   channelNames: { CHZZK: string | null; SOOP: string | null } | null;
+  /**
+   * 재생 보유(POK-200 M5) — 재생 세션이 열려 있거나 그 세션이 녹화로 닫혀 녹화를 보이는 동안의 방송 번호. 고정하지 않은 대시보드의
+   * 방송 다시 고르기(useLiveStreamSelection)가 보던 재생을 내리지 않게 이 값을 본다. 없으면 null
+   */
+  playbackHold: string | null;
 }
 
 /**
@@ -139,6 +144,7 @@ const INITIAL: LiveData = {
   originMs: null,
   listTitle: null,
   channelNames: null,
+  playbackHold: null,
 };
 let state: LiveData = INITIAL;
 const listeners = new Set<() => void>();

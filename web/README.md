@@ -455,7 +455,7 @@ web/                     # 단일 Next.js 앱 (App Router + TanStack Query + Zus
 | `NEXT_PUBLIC_MEDIA_LIVE_BASE_URL`     | LL-HLS 베이스            | 진짜 미디어 서버 (`{base}/{영상 경로 키}/index.m3u8`, POK-233)                                               |
 | `NEXT_PUBLIC_MEDIA_PLAYBACK_BASE_URL` | 녹화 재생 (비워도 됨)    | 다시보기·편집기 미리보기 (`{base}/playback/{키}/list`·`/get`, POK-317). 로컬은 `http://localhost:3000/media` |
 | `MEDIA_PLAYBACK_ORIGIN`               | `http://localhost:9996`  | 로컬 전용 재생 서버. `/media/playback` 라우트가 넘긴다(비면 404). prod · dev는 비운다                        |
-| `NEXT_PUBLIC_MEDIA_CONTROL_BASE_URL`  | 비움                     | 되감기 제어면 — 이 판은 읽지 않음. M5 웹 전환 PR이 `{값}/api/streams/{id}/rewind`를 붙인다(끝 `/` 없음)      |
+| `NEXT_PUBLIC_MEDIA_CONTROL_BASE_URL`  | 비움                     | 되감기 제어면 — `{값}/api/streams/{id}/rewind` 와 회차별 경로를 붙인다(끝 `/` 없음, POK-200)                 |
 | `NEXT_PUBLIC_POSTHOG_KEY`             | 비움                     | 사용 통계(PostHog) 프로젝트 공개 키 — 비면 SDK를 불러오지 않음 (POK-356)                                     |
 | `NEXT_PUBLIC_POSTHOG_HOST`            | 비움                     | PostHog 수집 주소(운영 `https://us.i.posthog.com`) — 규칙은 `docs/ANALYTICS.md`                              |
 | `NEXT_PUBLIC_POSTHOG_REPLAY`          | 비움                     | `on`일 때만 세션 녹화(POK-358) — 콘솔 녹화 토글도 켜야 시작                                                  |
@@ -497,7 +497,7 @@ docker build --platform linux/<태스크 아키텍처> -t pokeclip-web \
 | `NEXT_PUBLIC_GOOGLE_CLIENT_ID`        | **빌드 실패**          | 백엔드 `GOOGLE_CLIENT_ID`와 같은 값 |
 | `NEXT_PUBLIC_MEDIA_LIVE_BASE_URL`     | **빌드 실패**          | LL-HLS 베이스                       |
 | `NEXT_PUBLIC_MEDIA_PLAYBACK_BASE_URL` | **빌드 실패**          | 녹화 재생 서버                      |
-| `NEXT_PUBLIC_MEDIA_CONTROL_BASE_URL`  | **빌드 실패**          | 되감기 제어면 (이 판은 읽지 않음)   |
+| `NEXT_PUBLIC_MEDIA_CONTROL_BASE_URL`  | **빌드 실패**          | 되감기 제어면                       |
 | `NEXT_PUBLIC_POSTHOG_KEY` · `_HOST`   | 사용 통계 꺼짐         | 운영 값은 `.env.example` 주석       |
 | `NEXT_PUBLIC_POSTHOG_REPLAY`          | 세션 녹화 꺼짐         | `on`일 때만 켜짐                    |
 | `NEXT_PUBLIC_LANDING_URL`             | `https://pokeclip.com` | 랜딩 주소                           |
@@ -505,10 +505,10 @@ docker build --platform linux/<태스크 아키텍처> -t pokeclip-web \
 `NEXT_PUBLIC_MEDIA_PLAYBACK_BASE_URL`은 prod 이미지가 다시보기·편집기 미리보기가 꺼진 채 나가지 않게
 필수로 둔다(로컬 개발은 위 환경변수 표대로 비워도 된다).
 
-`NEXT_PUBLIC_MEDIA_CONTROL_BASE_URL`은 이 판의 웹이 아직 읽지 않는다. 그래도 필수로 두는
-것은 prod 의 한 번 빌드 명령(O7c)이 인자 여섯을 지금 확정하기 위해서다. 되감기 API 를
-부르는 M5 웹 전환 PR 이 읽어 `{값}/api/streams/{id}/rewind`를 붙인다. 끝에 `/`를 붙이지
-않는다. 그래서 되감기 기능은 그 PR 뒤 이미지를 다시 빌드해야 실린다.
+`NEXT_PUBLIC_MEDIA_CONTROL_BASE_URL`은 되감기 제어면 주소다(POK-200). 웹이
+`{값}/api/streams/{id}/rewind`와 회차별 경로 `{값}/api/streams/{id}/rounds/{방송 번호}/rewind`를
+붙여 묻는다. 끝에 `/`를 붙이지 않는다. 비면 웹은 되감기 세션을 열지 않고 라이브 창 안 시크만
+한다. prod 이미지가 되감기 없이 나가지 않게 필수로 둔다.
 
 **prod 영상 주소 값.** 셋 다 영상 도메인 `media.pokeclip.com`의 CloudFront 비헤이비어로
 간다([`cdn_media`](../infra/terraform/modules/cdn_media/main.tf) · 별칭은

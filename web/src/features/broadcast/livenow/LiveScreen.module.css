@@ -51,6 +51,45 @@
   background: #08090c; /* 테마 고정 */
 }
 
+/* 「새 방송이 시작됐어요」 띠(POK-200 M5) — 재생 보유 중 같은 채널에서 다른 방송이 시작됐을 때 영상 위에 한 줄로 선다 */
+.newBroadcastBand {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: calc(10 * var(--pc-u));
+  padding: calc(8 * var(--pc-u)) calc(14 * var(--pc-u));
+  background: rgb(14 116 144 / 0.9); /* 테마 고정 */
+  color: #f0f9ff; /* 테마 고정 */
+  font-size: calc(13 * var(--pc-u));
+  font-weight: 600;
+}
+
+.newBroadcastBand button {
+  padding: calc(4 * var(--pc-u)) calc(12 * var(--pc-u));
+  border: 1px solid rgb(240 249 255 / 0.6); /* 테마 고정 */
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  transition: background-color 150ms ease;
+}
+
+.newBroadcastBand button:hover {
+  background: rgb(240 249 255 / 0.16); /* 테마 고정 */
+}
+
+.newBroadcastBand button:focus-visible {
+  outline: 2px solid #f0f9ff; /* 테마 고정 */
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .newBroadcastBand button {
+    transition: none;
+  }
+}
+
 /* 플레이어 Suspense 폴백 — GlassPlayer 루트와 같은 16:9로 자리를 지킨다 */
 .playerFallback {
   width: 100%;

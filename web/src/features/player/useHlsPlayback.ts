@@ -51,6 +51,16 @@ const STOPPED_NOTES = {
   denied: '영상에 접근할 수 없어요. 새로고침해 주세요',
 } as const;
 
+/**
+ * hls.js 모듈 읽기 — 재생기들이 한 번 읽은 것을 함께 쓴다. 재생 세션은 소스를 갈아 끼울 때마다 재생기를 새로 세우므로(설계 5.4절)
+ * 앞 재생기의 읽기가 끝나기 전에 다음 재생기가 또 읽는다
+ */
+let hlsModule: Promise<typeof import('hls.js')> | null = null;
+function loadHls(): Promise<typeof import('hls.js')> {
+  hlsModule ??= import('hls.js');
+  return hlsModule;
+}
+
 /** 재생 위치에 영상 자료가 있다(HTMLMediaElement.HAVE_CURRENT_DATA) */
 const HAVE_CURRENT_DATA = 2;
 /** 라이브 지연을 아직 못 쟀을 때 되감기 재생기의 라이브 끝 = 지금 − 이 값(설계 5.2절) */
@@ -561,7 +571,7 @@ export function useHlsPlayback(
 
     void (async () => {
       // hls.js는 클라이언트 전용(월드 오브젝트 참조) — 동적 import로 번들 분리까지 겸한다
-      const { default: HlsCtor } = await import('hls.js');
+      const { default: HlsCtor } = await loadHls();
       if (disposed) return;
 
       if (HlsCtor.isSupported()) {
