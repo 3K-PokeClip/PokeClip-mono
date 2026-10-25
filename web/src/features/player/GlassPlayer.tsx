@@ -21,7 +21,10 @@ import { PlayerSeekBar } from './PlayerSeekBar';
 import { PlayerTopOverlay, type PlayerBroadcastStatus } from './PlayerTopOverlay';
 import { seekIntentForKey } from './playerKeys';
 import { progressFraction } from './playerMath';
+import { PlayerSessionOverlay } from './PlayerSessionOverlay';
 import { useHlsPlayback, type LivePosition } from './useHlsPlayback';
+import { useLiveRewindPlayback } from './useLiveRewindPlayback';
+import type { PlaybackSession } from './usePlaybackSession';
 import { useRecordedPlayback, type RecordedSource } from './useRecordedPlayback';
 import {
   usePlayerSimulation,
@@ -31,7 +34,8 @@ import {
 import { useSimulatedChat } from './useSimulatedChat';
 
 // 리퀴드 글래스 라이브 플레이어 (시안 "영상 플레이어 글래스").
-// 고르는 순서: recorded(끝난 방송 녹화) → src(hls.js 실재생, useHlsPlayback) → simulate(목업,
+// 고르는 순서: session(라이브 · 되감기 · 끝남 대기 재생 세션, useLiveRewindPlayback — POK-200 M5) → recorded(끝난 방송 녹화)
+// → src(hls.js 실재생, useHlsPlayback) → simulate(목업,
 // usePlayerSimulation — 스토리북·시험용) → 그 밖엔 「영상 신호 없음」 자리 표시(NoSignalGlassPlayer).
 // 실제 화면에서 영상이 없을 때 흐르는 진행바·시간·채팅을 지어내지 않는다(POK-251).
 // 훅 규칙상 조건부 호출이 안 되므로 컴포넌트 단위로 갈라 태운다. Body는 어느 쪽인지 모른다.
@@ -69,6 +73,11 @@ export interface GlassPlayerProps {
   infoPending?: boolean;
   /** HLS 재생 소스(m3u8) — 없으면 simulate에 따라 목업이나 「영상 신호 없음」이다 */
   src?: string | null;
+  /**
+   * 재생 세션(POK-200 M5) — 있으면 src · recorded 보다 먼저 이것으로 튼다. 세션은 이 컴포넌트 바깥(LiveScreen 층)에 살아 key 로
+   * 다시 마운트돼도 같은 자리에서 잇는다(설계 5.5절)
+   */
+  session?: PlaybackSession | null;
   /** 라이브 영상 키(출입증 쿠키의 경로). 영상 요청이 403이면 그 키의 출입증을 버린다(POK-410) */
   mediaKey?: string;
   /** 이 라이브 재생기는 403으로 출입증을 다시 받은 뒤 새로 섰다. 또 403이면 멈춘다(POK-419, useHlsPlayback) */
@@ -127,6 +136,7 @@ export interface GlassPlayerProps {
 }
 
 export function GlassPlayer(props: GlassPlayerProps) {
+  if (props.session) return <SessionGlassPlayer {...props} session={props.session} />;
   if (props.recorded) return <RecordedGlassPlayer {...props} recorded={props.recorded} />;
   if (props.src) return <HlsGlassPlayer {...props} src={props.src} />;
   return props.simulate ? <SimulatedGlassPlayer {...props} /> : <NoSignalGlassPlayer {...props} />;
@@ -239,9 +249,49 @@ function HlsGlassPlayer(props: GlassPlayerProps & { src: string }) {
   );
 }
 
+/** 재생 세션으로 튼다 — 라이브 · 되감기 · 끝남 대기 · 다시보기를 한 재생기 자리에서 갈아 끼운다(POK-200 M5) */
+function SessionGlassPlayer(props: GlassPlayerProps & { session: PlaybackSession }) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const { session } = props;
+  const sim = useLiveRewindPlayback(
+    videoRef,
+    session,
+    props.simulationOptions,
+    props.onSeek,
+    props.mediaKey,
+    props.afterForbidden,
+    props.broadcastId,
+  );
+  const { onLivePosition } = props;
+  const { livePosition } = sim;
+  useEffect(() => {
+    onLivePosition?.(livePosition);
+  }, [livePosition, onLivePosition]);
+  useEffect(() => () => onLivePosition?.(null), [onLivePosition]);
+  const { dispatch, view } = session;
+  return (
+    <GlassPlayerBody
+      {...props}
+      sim={sim}
+      seekHidden={view.seekHidden}
+      overlay={
+        <PlayerSessionOverlay
+          view={view}
+          onAction={(which) => dispatch({ type: 'button', which })}
+        />
+      }
+      videoNode={<video ref={videoRef} className={styles.video} playsInline muted />}
+    />
+  );
+}
+
 interface GlassPlayerBodyProps extends GlassPlayerProps {
   sim: PlayerSimulation;
   videoNode: ReactNode;
+  /** 영상 위 덮개 · 띠(재생 세션) */
+  overlay?: ReactNode;
+  /** 받을 목록이 없어 시크바를 숨긴다(재생 세션의 끝남 대기 덮개) */
+  seekHidden?: boolean;
 }
 
 function GlassPlayerBody({
@@ -258,6 +308,8 @@ function GlassPlayerBody({
   recorded,
   sim,
   videoNode,
+  overlay,
+  seekHidden = false,
 }: GlassPlayerBodyProps) {
   // 오버레이는 전체 화면에서만 선다(파일 머리 주석). 첫 진입은 켜진 채 시작하고, 사용자가 끄면
   // 그 선택이 다음 전체 화면까지 남는다 — 플레이어 토글의 통상 동작이다.
@@ -467,17 +519,20 @@ function GlassPlayerBody({
         onToggleChatPanel={fullscreen ? undefined : onToggleChatPanel}
       />
       {overlayChat && fullscreen && chatOn ? <PlayerChatOverlay messages={chat} /> : null}
+      {overlay}
       <div className={styles.controls}>
-        <PlayerSeekBar
-          behindSeconds={sim.behindSeconds}
-          windowSeconds={sim.windowSeconds}
-          clipMarked={sim.clipMarked}
-          onSeekToFraction={sim.seekToFraction}
-          onSeekBy={sim.seekBy}
-          onReturnToLive={sim.returnToLive}
-          onSeekingChange={setSeeking}
-          replay={sim.replay}
-        />
+        {seekHidden ? null : (
+          <PlayerSeekBar
+            behindSeconds={sim.behindSeconds}
+            windowSeconds={sim.windowSeconds}
+            clipMarked={sim.clipMarked}
+            onSeekToFraction={sim.seekToFraction}
+            onSeekBy={sim.seekBy}
+            onReturnToLive={sim.returnToLive}
+            onSeekingChange={setSeeking}
+            replay={sim.replay}
+          />
+        )}
         <PlayerControls
           sim={sim}
           chatToggle={
