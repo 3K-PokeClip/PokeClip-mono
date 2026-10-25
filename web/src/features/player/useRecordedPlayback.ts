@@ -13,7 +13,7 @@ import { playableBackFrom, playableFrom, type RecordingTimeline } from './record
 // 「이동」은 주소를 새 시작점으로 갈아 끼우는 것이다 — 시크바·카드 클릭·화살표가 전부 그 한 길을 탄다.
 //
 // 라이브 플레이어와 같은 계약(PlayerSimulation)을 채운다: 끝(방송 종료 시점)이 「엣지」이고
-// behindSeconds = 끝에서 얼마나 앞인가, windowSeconds = 방송 전체 길이.
+// behindSeconds = 끝에서 얼마나 앞인가, windowSeconds = 녹화 처음부터 끝까지의 길이(축의 0초부터가 아니다, POK-474).
 //
 // 녹화가 구간 여럿이면(송출 끊김·녹화기 재시작) 한 번에 한 구간만 달라 한다 — 재생 서버는 틈을 건너 주지 않는다
 // (recordingTimeline). 한 구간이 끝나면 다음 구간을 이어 틀고, 틈 안을 누르면 다음 구간 시작으로 간다(POK-253).
@@ -60,6 +60,11 @@ export function useRecordedPlayback(
   onSeek?: () => void,
 ): PlayerSimulation & { positionSeconds: number } {
   const total = recorded.durationSeconds;
+  // 시크바 왼쪽 끝 = 녹화 처음(첫 구간 시작, 0초 앞은 못 간다). 축의 0초(서버 기준점)는 녹화보다 한참 앞일 수 있다: 송출 회차가 방송
+  // 여럿을 넘어 이어지면 조각의 pts가 몇 시간이라 기준점이 그만큼 앞에 선다(로컬 실측 13.9시간). 0초부터 그리면 10분 녹화가
+  // 시크바 오른쪽 끝에 몰려 손잡이가 끝에 붙고, 끌어 놓은 자리가 녹화 앞 빈 곳이라 첫 구간 시작으로 올려져 끝으로 되돌아갔다(POK-474)
+  const head = Math.max(0, recorded.pieces[0]!.fromSeconds);
+  const span = Math.max(0, total - head);
   const startAt = () => forwardTarget(recorded, startAtSeconds);
   const [playing, setPlaying] = useState(false);
   const [muted, setMuted] = useState(true);
@@ -255,7 +260,7 @@ export function useRecordedPlayback(
     currentPositionSeconds: now,
     behindSeconds,
     atEdge: behindSeconds < AT_EDGE_THRESHOLD_SECONDS,
-    windowSeconds: total,
+    windowSeconds: span,
     uptimeSeconds: total,
     quality,
     lowLatency: false,
@@ -308,8 +313,8 @@ export function useRecordedPlayback(
       [videoRef],
     ),
     seekToFraction: useCallback(
-      (fraction: number) => jumpTo(total - behindFromSeekFraction(fraction, total)),
-      [jumpTo, total],
+      (fraction: number) => jumpTo(total - behindFromSeekFraction(fraction, span)),
+      [jumpTo, total, span],
     ),
     // 음수는 엣지(끝) 방향 — 라이브 플레이어와 같은 부호
     seekBy: useCallback((delta: number) => jumpTo(now() - delta, delta > 0), [jumpTo, now]),
