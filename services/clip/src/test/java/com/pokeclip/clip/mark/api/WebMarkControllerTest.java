@@ -163,8 +163,8 @@ class WebMarkControllerTest extends IntegrationTestSupport {
         doCallRealMethod().when(webMarks).now();
         Instant now = Instant.now();
         jdbc.update("UPDATE broadcasts SET started_at = ? WHERE stream_id = ?", Timestamp.from(now.minusSeconds(630)), 라이브);
-        jdbc.update("UPDATE stream_segments SET start_wall_utc = ? WHERE stream_id = ?", Timestamp.from(now.minusSeconds(600)), 라이브_키);
-        jdbc.update("DELETE FROM stream_segments WHERE stream_id = ?", 지난_방송_키);
+        jdbc.update("UPDATE public.stream_segments SET start_wall_utc = ? WHERE stream_id = ?", Timestamp.from(now.minusSeconds(600)), 라이브_키);
+        jdbc.update("DELETE FROM public.stream_segments WHERE stream_id = ?", 지난_방송_키);
         jdbc.update("DELETE FROM broadcasts WHERE stream_id = ?", 지난_방송);
         AUTH.respondWith("/internal/stream-keys/resolve", 200,
                 "{\"valid\":true,\"userId\":7,\"passphrase\":\"EXAMPLE-4b-test-vector-not-a-key\"}");
@@ -415,7 +415,7 @@ class WebMarkControllerTest extends IntegrationTestSupport {
         }).when(webMarks).now();
         Instant origin = Instant.now().truncatedTo(ChronoUnit.MILLIS).minusSeconds(600);
         jdbc.update("UPDATE broadcasts SET started_at = ? WHERE stream_id = ?", Timestamp.from(origin.minusSeconds(30)), 라이브);
-        jdbc.update("UPDATE stream_segments SET start_wall_utc = ? WHERE stream_id = ?", Timestamp.from(origin), 라이브_키);
+        jdbc.update("UPDATE public.stream_segments SET start_wall_utc = ? WHERE stream_id = ?", Timestamp.from(origin), 라이브_키);
         AUTH.holdFor(Duration.ofSeconds(1));
 
         long sent = System.currentTimeMillis();
@@ -435,7 +435,7 @@ class WebMarkControllerTest extends IntegrationTestSupport {
 
     @Test
     void 기준점이_없으면_503_timeline_not_ready_Retry_After() throws Exception {
-        jdbc.update("DELETE FROM stream_segments");
+        jdbc.update("DELETE FROM public.stream_segments");
 
         mvc.perform(마킹(라이브, 라이브_본문(eventId(), SENT_AT, SENT_AT)))
                 .andExpect(status().isServiceUnavailable())
@@ -505,7 +505,7 @@ class WebMarkControllerTest extends IntegrationTestSupport {
 
     private void 조각(String ingestKey, Instant wall) {
         jdbc.update("""
-                        INSERT INTO stream_segments (stream_id, seq, start_pts_ms, start_wall_utc, duration_ms, s3_key, upload_state)
+                        INSERT INTO public.stream_segments (stream_id, seq, start_pts_ms, start_wall_utc, duration_ms, s3_key, upload_state)
                         VALUES (?, 1, 0, ?, 4000, ?, 'uploaded')""",
                 ingestKey, Timestamp.from(wall), "seg/" + ingestKey + "/1");
     }

@@ -48,12 +48,12 @@ public class SegmentLedger {
      */
     private static final String FLOOR_BY_WALL_CLOCK = """
             SELECT s.seq, s.start_pts_ms, s.start_wall_utc, s.duration_ms, s.is_discontinuity,
-                   (SELECT max(x.seq) FROM stream_segments x
+                   (SELECT max(x.seq) FROM public.stream_segments x
                      WHERE x.stream_id = s.stream_id AND x.start_wall_utc <= ?) AS max_candidate_seq,
-                   EXISTS(SELECT 1 FROM stream_segments y
+                   EXISTS(SELECT 1 FROM public.stream_segments y
                            WHERE y.stream_id = s.stream_id
                              AND y.seq < s.seq AND y.start_wall_utc > s.start_wall_utc) AS earlier_is_future
-              FROM stream_segments s
+              FROM public.stream_segments s
              WHERE s.stream_id = ? AND s.start_wall_utc <= ?
              ORDER BY s.start_wall_utc DESC, s.seq DESC
              LIMIT 1
@@ -62,7 +62,7 @@ public class SegmentLedger {
     /** 「다음」의 기준은 <b>seq</b>다 — 시계가 튄 방송에서 벽시계 순서와 갈린다. */
     private static final String NEXT_AFTER_SEQ = """
             SELECT seq, start_pts_ms, start_wall_utc, duration_ms, is_discontinuity
-              FROM stream_segments
+              FROM public.stream_segments
              WHERE stream_id = ? AND seq > ?
              ORDER BY seq ASC
              LIMIT 1
@@ -73,7 +73,7 @@ public class SegmentLedger {
      * 앞은 「장부가 아직」(다시 물으면 됨)이고 뒤는 「첫 조각 이전」(영영 없음)이다.
      */
     private static final String HAS_ANY_SEGMENT = """
-            SELECT EXISTS(SELECT 1 FROM stream_segments WHERE stream_id = ?)
+            SELECT EXISTS(SELECT 1 FROM public.stream_segments WHERE stream_id = ?)
             """;
 
     private final JdbcTemplate jdbc;

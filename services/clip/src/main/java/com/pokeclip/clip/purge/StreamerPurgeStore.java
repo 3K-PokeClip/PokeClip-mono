@@ -54,9 +54,9 @@ public class StreamerPurgeStore {
     public List<String> due(int limit) {
         // 끝난 뒤에도 녹화 조각 줄이 다시 생겼는지 본다(기한 없이). 영상 서버는 장부를 따로 쓰므로, 탈퇴 순간 붙어 있던
         // 녹화가 정리 뒤에 줄을 더할 수 있다(PR #220 codex P1). 장부가 없는 배포(media 없음)에서는 그 갈래를 뺀다.
-        String lateSegments = tableExists("stream_segments")
+        String lateSegments = tableExists("public.stream_segments")
                 // 기한을 두면 탈퇴 뒤 그보다 오래 이어진 녹화의 줄이 영영 남는다(PR #220 codex 2판). 열쇠마다 PK 색인 한 번이라 싸다.
-                ? " OR EXISTS (SELECT 1 FROM stream_segments s WHERE s.stream_id = ANY(p.segment_keys))"
+                ? " OR EXISTS (SELECT 1 FROM public.stream_segments s WHERE s.stream_id = ANY(p.segment_keys))"
                 : "";
         return jdbc.queryForList("""
                 SELECT p.streamer_id FROM purged_streamers p
@@ -159,7 +159,11 @@ public class StreamerPurgeStore {
                 (rs, n) -> List.of((String[]) rs.getArray(1).getArray()), streamerId);
     }
 
-    /** 1번 장부가 이 DB에 있나. media 없는 배포(CI·로컬 일부)에는 없다. */
+    /**
+     * 1번 장부가 이 DB에 있나. media 없는 배포(CI·로컬 일부)에는 없다. 🔴 table은 스키마 한정 이름({@code public.…})으로
+     * 넘긴다 — 세션 경로가 자기 스키마 하나라(POK-428) 맨 이름은 늘 NULL이고, 그러면 탈퇴 정리가 조각 삭제를 조용히
+     * 건너뛴다.
+     */
     public boolean tableExists(String table) {
         return Boolean.TRUE.equals(jdbc.queryForObject("SELECT to_regclass(?) IS NOT NULL", Boolean.class, table));
     }
@@ -167,7 +171,7 @@ public class StreamerPurgeStore {
     /** 녹화 조각 한 묶음. 재생용 사본 키가 있으면 같이 싣는다. */
     public List<SegmentRow> segmentBatch(List<String> keys, int limit) {
         return jdbc.query("""
-                SELECT stream_id, seq, s3_key, playback_s3_key FROM stream_segments
+                SELECT stream_id, seq, s3_key, playback_s3_key FROM public.stream_segments
                  WHERE stream_id = ANY(?) ORDER BY stream_id, seq LIMIT ?""",
                 (rs, n) -> new SegmentRow(rs.getString(1), rs.getLong(2), rs.getString(3), rs.getString(4)),
                 textArray(keys), limit);
@@ -175,7 +179,7 @@ public class StreamerPurgeStore {
 
     public int deleteSegments(List<SegmentRow> rows) {
         return jdbc.update("""
-                DELETE FROM stream_segments s
+                DELETE FROM public.stream_segments s
                  USING unnest(?::text[], CAST(? AS bigint[])) AS d(stream_id, seq)
                  WHERE s.stream_id = d.stream_id AND s.seq = d.seq""",
                 textArray(rows.stream().map(SegmentRow::streamId).toList()),
@@ -184,7 +188,7 @@ public class StreamerPurgeStore {
 
     /** 회차 머리 파일(init). 회차 줄(1번 stream_sessions)은 남긴다: 다른 1번 표가 외래키로 걸려 있고 회원 정보가 없다. */
     public List<String> initKeys(List<String> keys) {
-        return jdbc.queryForList("SELECT init_s3_key FROM stream_sessions WHERE stream_id = ANY(?) "
+        return jdbc.queryForList("SELECT init_s3_key FROM public.stream_sessions WHERE stream_id = ANY(?) "
                 + "AND init_s3_key IS NOT NULL", String.class, textArray(keys));
     }
 

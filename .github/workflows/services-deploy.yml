@@ -102,6 +102,9 @@ jobs:
           # 아래에서 SSM 출력을 잡 로그로 그대로 내보내므로 Actions가 경고로 띄운다(실패로 바꾸지는 않는다).
           # prune 은 지운 항목을 한 줄씩 찍어 SSM 출력(앞 24,000자)을 채우므로 합계 한 줄만 남긴다.
           # \$ 는 이 셸이 아니라 상자에서 풀리게 한다.
+          # 굽기 뒤 · 띄우기 앞의 dev-move-to-app-schemas.sh 는 public 에 남은 앱 표를 서버마다 자기 스키마로 옮긴다(POK-428).
+          # 이미 옮겼으면 skipped 한 줄로 끝난다. 옮길 때는 서버 넷 · 일꾼을 세우고 public 을 백업한 뒤 한 트랜잭션으로 옮긴다 —
+          # 갈래 · 실패 복구는 그 스크립트 머리, 되돌리기는 services/README.md 「dev 앱별 스키마 이전과 되돌리기」.
           CMD_ID=$(aws ssm send-command \
             --instance-ids "$INSTANCE_ID" \
             --document-name AWS-RunShellScript \
@@ -119,6 +122,7 @@ jobs:
               'free_gb=\$(df --output=avail -BG / | tail -1 | tr -dc 0-9); if [ \$free_gb -lt $MIN_FREE_GB ]; then echo low disk \${free_gb}G free, pruning all build cache; sudo -u ec2-user docker builder prune -af | tail -1; free_gb=\$(df --output=avail -BG / | tail -1 | tr -dc 0-9); if [ \$free_gb -lt $MIN_FREE_GB ]; then echo ::warning::dev box still only \${free_gb}G free after clearing build cache; fi; fi',
               'df -h /',
               'for s in auth clip chat-collector chat-detector render-worker upload-worker; do echo build \$s; sudo -u ec2-user docker compose -f docker-compose.dev.yml build -q \$s; done',
+              'bash scripts/dev-move-to-app-schemas.sh $BUILD_CACHE_MAX',
               'sudo -u ec2-user docker compose -f docker-compose.dev.yml up -d render-worker upload-worker',
               'sudo -u ec2-user docker compose -f docker-compose.dev.yml up -d postgres auth clip chat-collector chat-detector',
               'sudo -u ec2-user docker image prune -f',

@@ -550,14 +550,14 @@ class BroadcastListControllerTest extends IntegrationTestSupport {
     void 조각_장부를_못_읽어도_목록은_나가고_기준점만_빈다() throws Exception {
         볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
         방송을_넣는다("s-noledger", TestIds.STREAMER, "live");
-        jdbc.execute("ALTER TABLE stream_segments RENAME TO stream_segments_hidden");
+        jdbc.execute("ALTER TABLE public.stream_segments RENAME TO stream_segments_hidden");
         try {
             목록("?state=live")
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.broadcasts[0].streamId").value("s-noledger"))
                     .andExpect(jsonPath("$.broadcasts[0].timelineOriginAt").value(nullValue()));
         } finally {
-            jdbc.execute("ALTER TABLE stream_segments_hidden RENAME TO stream_segments");
+            jdbc.execute("ALTER TABLE public.stream_segments_hidden RENAME TO stream_segments");
         }
     }
 
@@ -1330,7 +1330,7 @@ class BroadcastListControllerTest extends IntegrationTestSupport {
 
     private void 조각을_넣는다(String streamId, long seq, long startPtsMs, Instant playbackPdt, Instant wall) {
         jdbc.update("""
-                        INSERT INTO stream_segments
+                        INSERT INTO public.stream_segments
                             (stream_id, seq, start_pts_ms, start_wall_utc, playback_pdt, duration_ms, s3_key, upload_state)
                         VALUES (?, ?, ?, ?, ?, 4000, ?, 'uploaded')""",
                 streamId, seq, startPtsMs, OffsetDateTime.ofInstant(wall, ZoneOffset.UTC),

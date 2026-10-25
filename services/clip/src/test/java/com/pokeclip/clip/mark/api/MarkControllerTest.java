@@ -300,7 +300,7 @@ class MarkControllerTest extends IntegrationTestSupport {
 
     @Test
     void 기준점이_없으면_503_timeline_not_ready_Retry_After() throws Exception {
-        jdbc.update("DELETE FROM stream_segments");
+        jdbc.update("DELETE FROM public.stream_segments");
 
         mvc.perform(마킹(eventId()))
                 .andExpect(status().isServiceUnavailable())
@@ -332,7 +332,7 @@ class MarkControllerTest extends IntegrationTestSupport {
         // root TRACE에서 Hibernate 추출 로그(org.hibernate.orm.jdbc.extract)가 방송을 읽을 때마다 찍는다: 이 문이 아니라
         // 방송 표를 읽는 모든 자리의 일이다(보고서 05). 여기서는 「요청에서 온 값이 새는가」만 잰다.
         jdbc.update("UPDATE broadcasts SET ingest_stream_id = 'PHYSICAL-KEY-NOT-TOKEN' WHERE stream_id = ?", 방송);
-        jdbc.update("UPDATE stream_segments SET stream_id = 'PHYSICAL-KEY-NOT-TOKEN'");
+        jdbc.update("UPDATE public.stream_segments SET stream_id = 'PHYSICAL-KEY-NOT-TOKEN'");
         try (LogCaptor captor = new LogCaptor()) {
             AuthClientTokenLeakTest.setLevel(org.slf4j.Logger.ROOT_LOGGER_NAME, Level.TRACE);
             String eventId = eventId();
@@ -383,7 +383,7 @@ class MarkControllerTest extends IntegrationTestSupport {
 
     private void 조각(String ingestKey, Instant wall) {
         jdbc.update("""
-                        INSERT INTO stream_segments (stream_id, seq, start_pts_ms, start_wall_utc, duration_ms, s3_key, upload_state)
+                        INSERT INTO public.stream_segments (stream_id, seq, start_pts_ms, start_wall_utc, duration_ms, s3_key, upload_state)
                         VALUES (?, 1, 0, ?, 4000, ?, 'uploaded')""",
                 ingestKey, Timestamp.from(wall), "seg/" + ingestKey + "/1");
     }

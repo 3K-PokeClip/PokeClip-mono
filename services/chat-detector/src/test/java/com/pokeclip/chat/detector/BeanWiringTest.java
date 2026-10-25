@@ -46,7 +46,8 @@ class BeanWiringTest extends IntegrationTestSupport {
     @BeforeEach
     void 표를_준비하고_내_줄만_치운다() {
         jdbc.execute("""
-                CREATE TABLE IF NOT EXISTS chat_messages (
+                CREATE SCHEMA IF NOT EXISTS app_chat_collector;
+                CREATE TABLE IF NOT EXISTS app_chat_collector.chat_messages (
                     id                BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
                     channel_id        TEXT        NOT NULL,
                     sender_channel_id TEXT        NOT NULL,
@@ -57,7 +58,7 @@ class BeanWiringTest extends IntegrationTestSupport {
                     stream_id         VARCHAR(128)
                 )
                 """);
-        jdbc.update("DELETE FROM chat_messages");
+        jdbc.update("DELETE FROM app_chat_collector.chat_messages");
         jdbc.update("DELETE FROM chat_metrics WHERE stream_id LIKE ?", STREAM + "%");
     }
 
@@ -73,7 +74,7 @@ class BeanWiringTest extends IntegrationTestSupport {
     /** 전달 지연 3초 — 유예(2초)는 넘고 발행 창+유예(7초)는 안 넘는다. 방금 도착해 활성이다. */
     private void 늦은_채팅_한_건() {
         jdbc.update("""
-                INSERT INTO chat_messages
+                INSERT INTO app_chat_collector.chat_messages
                     (channel_id, sender_channel_id, content, message_time, received_at, content_sha256, stream_id)
                 VALUES ('c1', 'u1', 'hi', now() - interval '3.1 seconds', now() - interval '0.1 seconds',
                         repeat('a', 64), ?)
@@ -166,7 +167,7 @@ class BeanWiringTest extends IntegrationTestSupport {
     @Test
     void 관측_배선은_활성_창으로_방송을_고른다() {
         jdbc.update("""
-                INSERT INTO chat_messages
+                INSERT INTO app_chat_collector.chat_messages
                     (channel_id, sender_channel_id, content, message_time, received_at, content_sha256, stream_id)
                 VALUES ('c1', 'u1', 'hi', now() - interval '5 minutes', now() - interval '5 minutes',
                         repeat('a', 64), ?)

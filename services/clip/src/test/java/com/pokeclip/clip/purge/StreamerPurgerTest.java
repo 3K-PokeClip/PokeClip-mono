@@ -77,8 +77,8 @@ class StreamerPurgerTest extends IntegrationTestSupport {
         assertThat(count("upload_requests WHERE recipe_id = " + kept.recipeId)).isOne();
         assertThat(count("thumbnails")).isEqualTo(3);
         assertThat(count("thumbnails WHERE target_id IN ('S-kept', '" + kept.clipId + "', '" + kept.cardId + "')")).isEqualTo(3);
-        assertThat(count("stream_segments WHERE stream_id = 'K-gone'")).isZero();
-        assertThat(count("stream_segments WHERE stream_id = 'K-kept'")).isEqualTo(2);
+        assertThat(count("public.stream_segments WHERE stream_id = 'K-gone'")).isZero();
+        assertThat(count("public.stream_segments WHERE stream_id = 'K-kept'")).isEqualTo(2);
 
         assertThat(files.prefixes).containsExactlyInAnyOrder(
                 "clips/" + gone.clipId + "/", "thumbnails/clip/" + gone.clipId + ".jpg",
@@ -106,12 +106,12 @@ class StreamerPurgerTest extends IntegrationTestSupport {
         assertThat(store.pendingPrefixes(탈퇴자)).contains("clips/" + gone.clipId + "/");
         assertThat(store.due(10)).containsExactly(탈퇴자);
         // 파일이 먼저라 녹화 조각 줄도 그대로다.
-        assertThat(count("stream_segments WHERE stream_id = 'K-gone'")).isEqualTo(2);
+        assertThat(count("public.stream_segments WHERE stream_id = 'K-gone'")).isEqualTo(2);
 
         FakeStorage healed = new FakeStorage();
         purger(healed).purge(탈퇴자);
         assertThat(healed.prefixes).contains("clips/" + gone.clipId + "/", "thumbnails/live/S-gone.jpg");
-        assertThat(count("stream_segments WHERE stream_id = 'K-gone'")).isZero();
+        assertThat(count("public.stream_segments WHERE stream_id = 'K-gone'")).isZero();
         assertThat(store.due(10)).isEmpty();
     }
 
@@ -125,7 +125,7 @@ class StreamerPurgerTest extends IntegrationTestSupport {
         assertThatThrownBy(() -> purger(broken).purge(탈퇴자)).isInstanceOf(IllegalStateException.class);
 
         // 줄이 먼저 사라지면 파일 키를 다시 알 길이 없다.
-        assertThat(count("stream_segments WHERE stream_id = 'K-gone'")).isEqualTo(2);
+        assertThat(count("public.stream_segments WHERE stream_id = 'K-gone'")).isEqualTo(2);
         assertThat(store.due(10)).containsExactly(탈퇴자);
     }
 
@@ -133,7 +133,7 @@ class StreamerPurgerTest extends IntegrationTestSupport {
     void 녹화_조각은_묶음으로_나눠_지우고_한_번에_천_개를_넘기지_않는다() {
         방송(탈퇴자, "S-many", "K-many");
         jdbc.update("""
-                INSERT INTO stream_segments (stream_id, seq, start_pts_ms, start_wall_utc, duration_ms, s3_key, playback_s3_key)
+                INSERT INTO public.stream_segments (stream_id, seq, start_pts_ms, start_wall_utc, duration_ms, s3_key, playback_s3_key)
                 SELECT 'K-many', g, g * 2000, now(), 2000, 'streams/K-many/' || g, 'dvr/K-many/' || g
                   FROM generate_series(1, 1201) g""");
         FakeStorage files = new FakeStorage();
@@ -141,7 +141,7 @@ class StreamerPurgerTest extends IntegrationTestSupport {
         store.request(탈퇴자, Instant.now());
         purger(files).purge(탈퇴자);
 
-        assertThat(count("stream_segments")).isZero();
+        assertThat(count("public.stream_segments")).isZero();
         assertThat(files.segmentKeys).hasSize(2402);
         assertThat(files.segmentCallSizes).allSatisfy(size -> assertThat(size).isLessThanOrEqualTo(1000));
         assertThat(files.segmentCallSizes).hasSize(3);
@@ -155,7 +155,7 @@ class StreamerPurgerTest extends IntegrationTestSupport {
         purger(null).purge(탈퇴자);
 
         assertThat(count("broadcasts WHERE streamer_id = '" + 탈퇴자 + "'")).isZero();
-        assertThat(count("stream_segments WHERE stream_id = 'K-gone'")).isEqualTo(2);
+        assertThat(count("public.stream_segments WHERE stream_id = 'K-gone'")).isEqualTo(2);
         assertThat(store.due(10)).isEmpty();
     }
 
@@ -174,7 +174,7 @@ class StreamerPurgerTest extends IntegrationTestSupport {
 
         assertThat(files.prefixes).contains("upload-thumbnails/" + 탈퇴자 + "/");
         assertThat(files.segmentKeys).isEmpty();
-        assertThat(count("stream_segments WHERE stream_id = 'K-gone'")).isEqualTo(2);
+        assertThat(count("public.stream_segments WHERE stream_id = 'K-gone'")).isEqualTo(2);
         assertThat(store.due(10)).isEmpty();
     }
 
@@ -224,14 +224,14 @@ class StreamerPurgerTest extends IntegrationTestSupport {
 
         // 끝난 지 오래여도 잡는다(기한을 두면 그보다 오래 이어진 녹화의 줄이 남는다, codex 2판).
         jdbc.update("UPDATE purged_streamers SET completed_at = now() - interval '3 days' WHERE streamer_id = ?", 탈퇴자);
-        jdbc.update("INSERT INTO stream_segments (stream_id, seq, start_pts_ms, start_wall_utc, duration_ms, s3_key) "
+        jdbc.update("INSERT INTO public.stream_segments (stream_id, seq, start_pts_ms, start_wall_utc, duration_ms, s3_key) "
                 + "VALUES ('K-gone', 99, 0, now(), 2000, 'streams/K-gone/99.m4s')");
 
         assertThat(store.due(10)).containsExactly(탈퇴자);
         FakeStorage files = new FakeStorage();
         purger(files).purge(탈퇴자);
         assertThat(files.segmentKeys).contains("streams/K-gone/99.m4s");
-        assertThat(count("stream_segments WHERE stream_id = 'K-gone'")).isZero();
+        assertThat(count("public.stream_segments WHERE stream_id = 'K-gone'")).isZero();
         assertThat(store.due(10)).isEmpty();
     }
 
@@ -291,11 +291,11 @@ class StreamerPurgerTest extends IntegrationTestSupport {
                 streamId, Long.toString(cardId), Long.toString(clipId));
         for (int seq = 1; seq <= 2; seq++) {
             jdbc.update("""
-                    INSERT INTO stream_segments (stream_id, seq, start_pts_ms, start_wall_utc, duration_ms, s3_key, playback_s3_key)
+                    INSERT INTO public.stream_segments (stream_id, seq, start_pts_ms, start_wall_utc, duration_ms, s3_key, playback_s3_key)
                     VALUES (?, ?, ?, ?, 2000, ?, ?)""", ingestKey, seq, seq * 2000L, Timestamp.from(시작),
                     "streams/" + ingestKey + "/" + seq + ".m4s", "dvr/" + ingestKey + "/" + seq + ".m4s");
         }
-        jdbc.update("INSERT INTO stream_sessions (session_id, stream_id, init_s3_key) VALUES (?, ?, ?)",
+        jdbc.update("INSERT INTO public.stream_sessions (session_id, stream_id, init_s3_key) VALUES (?, ?, ?)",
                 "sess-" + ingestKey, ingestKey, "dvr/" + ingestKey + "/init/a.mp4");
         return new Seeded(clipId, cardId, recipeId);
     }

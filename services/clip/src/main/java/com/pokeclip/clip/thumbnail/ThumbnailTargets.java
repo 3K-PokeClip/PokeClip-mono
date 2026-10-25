@@ -27,7 +27,7 @@ public class ThumbnailTargets {
               FROM broadcasts b
               CROSS JOIN LATERAL (
                     SELECT seg.s3_key, seg.duration_ms, seg.playback_pdt, seg.start_wall_utc
-                      FROM stream_segments seg
+                      FROM public.stream_segments seg
                      WHERE seg.stream_id = COALESCE(b.ingest_stream_id, b.stream_id)
                        AND seg.upload_state = 'uploaded'
                        AND seg.start_wall_utc >= b.started_at - interval '2 minutes'
@@ -60,7 +60,7 @@ public class ThumbnailTargets {
               LEFT JOIN thumbnails t ON t.kind = 'card' AND t.target_id = c.id::text
               CROSS JOIN LATERAL (
                     SELECT s.s3_key, s.start_pts_ms
-                      FROM stream_segments s
+                      FROM public.stream_segments s
                      WHERE s.stream_id = COALESCE(b.ingest_stream_id, b.stream_id)
                        AND s.upload_state = 'uploaded'
                        AND s.start_pts_ms <= c.stream_timestamp_ms

@@ -44,7 +44,7 @@ public class ChatWindowReader {
      */
     private static final String ACTIVE_STREAMS = """
             SELECT DISTINCT stream_id
-              FROM chat_messages
+              FROM app_chat_collector.chat_messages
              WHERE stream_id IS NOT NULL
                AND received_at >= ?
              ORDER BY stream_id
@@ -125,7 +125,7 @@ public class ChatWindowReader {
             SELECT (EXTRACT(EPOCH FROM message_time) * 1000)::bigint / ? * ? AS window_start_ms,
                    count(*)                          AS message_count,
                    count(DISTINCT sender_channel_id) AS chatter_count
-              FROM chat_messages
+              FROM app_chat_collector.chat_messages
              WHERE stream_id = ?
                AND received_at  >= ? AND received_at  <  ?
                AND message_time >= ? AND message_time <  ?
@@ -164,7 +164,7 @@ public class ChatWindowReader {
                    count(*) FILTER (WHERE delay_ms > ?)                AS beyond_window_and_grace,
                    MAX(delay_ms)                                       AS max_delay_ms
               FROM (SELECT EXTRACT(EPOCH FROM (received_at - message_time)) * 1000 AS delay_ms
-                      FROM chat_messages
+                      FROM app_chat_collector.chat_messages
                      WHERE stream_id = ?
                        AND received_at >= ? AND received_at < ?) d
             """;
@@ -336,7 +336,7 @@ public class ChatWindowReader {
      */
     private static final String LAST_RECEIVED = """
             SELECT max(received_at)
-              FROM chat_messages
+              FROM app_chat_collector.chat_messages
              WHERE stream_id = ?
                AND message_time >= ? AND message_time < ?
                AND received_at  >= ? AND received_at  <  ?

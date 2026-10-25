@@ -81,9 +81,10 @@ output "media_secret_arns" {
   ]
 }
 
-# 응답기 media.env 렌더(M15)용 이름 있는 출력(K5) — 목록의 순서에 기대지 않게
-# 한다. media_secret_arns 의 원소와 같은 ARN 이다.
+# 응답기 media.env 용 이름 있는 출력(K5 — 키 정의 · 읽기 = M15, 렌더 =
+# M9(user_data)) — 목록의 순서에 기대지 않게 한다. media_secret_arns 의 원소와
+# 같은 ARN 이다.
 output "ingest_auth_resolve_token_secret_arn" {
-  description = "resolve 전용 토큰 그릇 전체 ARN — 응답기(ingest-auth) media.env 의 STREAM_KEY_RESOLVE_TOKEN_SECRET_ARN 렌더용(M15)."
+  description = "resolve 전용 토큰 그릇 전체 ARN — 응답기(ingest-auth) media.env 의 STREAM_KEY_RESOLVE_TOKEN_SECRET_ARN 용(키 정의 · 읽기 = M15, 렌더 = M9(user_data))."
   value       = module.secret_shells.secret_arns[local.app_secret_shell_names["STREAM_KEY_RESOLVE_TOKEN"]]
 }

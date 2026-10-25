@@ -15,6 +15,9 @@ spring:
     username: ${POSTGRES_USER}
     password: ${POSTGRES_PASSWORD}
     hikari:
+      # 세션 경로를 자기 스키마 하나로 둔다(POK-428). Hikari가 새 연결마다 setSchema로 search_path를 바꾸므로
+      # 맨 이름은 app_chat_collector와 암묵 pg_catalog에서만 풀린다 — public에 누가 같은 이름의 함수를 심어도 고르지 않는다.
+      schema: ${pokeclip.datasource.schema}
       data-source-properties:
         # 반개방 스톨(연결은 살았는데 응답이 안 옴)을 끊는 유일한 시한이다(초).
         # 없으면 동기 batchUpdate가 영영 매달려 단일 저장 스레드가 죽고, 버퍼는
@@ -33,13 +36,9 @@ spring:
     # 네 서버가 DB 하나를 공유한다. 기본 이력 테이블 이름을 쓰면 나중에 뜬 쪽이
     # 남의 이력을 자기 것으로 읽고 부팅에 실패한다. 번호 대역은 V3xx (chat).
     table: flyway_schema_history_chat
-    # auth가 먼저 마이그레이션한 DB에서는 public이 비어 있지 않은데 우리 이력
-    # 테이블은 없다 — 이 설정이 없으면 첫 부팅이 "Found non-empty schema(s)
-    # ... but no schema history table"로 죽는다 (verifier 실물 부팅 실측).
-    baseline-on-migrate: true
-    # 기본 1이면 V1 이하가 스킵된다. 우리 대역은 V3xx라 실질 영향은 없지만,
-    # "아무것도 스킵하지 않는다"를 정확히 말하려면 0이다.
-    baseline-version: 0
+    # 표와 이력 테이블을 자기 스키마에 만든다(POK-428). 남의 표가 없는 스키마라 baseline 설정이 필요 없다 —
+    # 이 스키마가 이력 없이 비어 있지 않으면 Flyway가 non-empty로 멈춘다(의도).
+    schemas: ${pokeclip.datasource.schema}
     # 🔴 동시 색인(V309 CONCURRENTLY)은 잠금을 쥔 다른 트랜잭션이 끝나기를 기다린다. Flyway 기본은 잠금을 다른 연결의
     # 트랜잭션으로 쥐어서 V309가 그 트랜잭션을 영영 기다리다 socketTimeout(10초)에 끊겼다. 부팅은 재시도로 넘어갔지만 그 사이
     # 뒤 마이그레이션(V310~)이 안 돌아 표가 없었다(POK-233 시험에서 찾음). 세션 잠금이면 새 DB에서 열 개가 20ms에 다 선다.
@@ -129,6 +128,9 @@ logging:
 
 pokeclip:
   datasource:
+    # 이 서버의 표가 사는 스키마(POK-428 — 이름 = DB 계정, 운영 10_roles.sql이 마스터 소유로 만든다). 위의
+    # hikari.schema(세션 경로)와 flyway.schemas(표 · 이력 자리)가 이 한 키에서 나온다.
+    schema: app_chat_collector
     # DB 로그인 방식(POK-407, db-support의 DataSourceLoginConfiguration). password(기본)면 위 POSTGRES_PASSWORD로,
     # iam이면 비밀번호 대신 연결마다 RDS IAM 토큰으로 붙는다. 이름과 뜻은 media 사이드카와 같다.
     auth: ${POSTGRES_AUTH:password}

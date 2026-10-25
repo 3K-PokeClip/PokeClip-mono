@@ -83,10 +83,10 @@ public class StreamerPurger {
 
     private int purgeSegments(String streamerId, PurgeStorage files) {
         List<String> keys = store.segmentKeys(streamerId);
-        if (keys.isEmpty() || !store.tableExists("stream_segments")) {
+        if (keys.isEmpty() || !store.tableExists("public.stream_segments")) {
             return 0;
         }
-        if (store.tableExists("stream_sessions")) {
+        if (store.tableExists("public.stream_sessions")) {
             List<String> initKeys = store.initKeys(keys);
             if (!initKeys.isEmpty()) {
                 files.deleteSegmentObjects(initKeys);

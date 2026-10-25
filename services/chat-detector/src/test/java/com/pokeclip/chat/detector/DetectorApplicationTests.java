@@ -21,13 +21,16 @@ class DetectorApplicationTests extends IntegrationTestSupport {
     }
 
     /**
-     * 공유 DB에 남이 먼저 표를 만든 상태(IntegrationTestSupport가 더미 표를 심는다)에서
-     * 우리 Flyway가 뜬다는 것을 잰다. baseline-on-migrate를 지우면 여기가 빨간불이다.
+     * 이력 표와 표가 자기 스키마 {@code app_chat_detector}에 생긴다(POK-428). 남의 표가 없는 스키마라 baseline 설정이
+     * 필요 없다 — public에 생기면 경로 설정(hikari.schema · flyway.schemas)이 빠진 것이다.
      */
     @Test
-    void 남이_먼저_뜬_공유DB에서도_마이그레이션이_돈다() {
+    void 이력_표가_자기_스키마에_생긴다() {
+        assertThat(jdbc.queryForObject(
+                "SELECT pg_catalog.to_regclass('app_chat_detector.flyway_schema_history_chat_detector') IS NOT NULL",
+                Boolean.class)).isTrue();
         Integer count = jdbc.queryForObject(
-                "SELECT count(*) FROM flyway_schema_history_chat_detector WHERE success = true",
+                "SELECT count(*) FROM app_chat_detector.flyway_schema_history_chat_detector WHERE success = true",
                 Integer.class);
         assertThat(count).isGreaterThan(0);
     }

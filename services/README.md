@@ -844,8 +844,26 @@ auth · clip에도 같은 10초를 넣었다(POK-414). 전에는 없어서 DB가
 ### 서버별 DB 계정과 권한 (POK-407)
 
 **운영은 서버마다 DB 계정이 따로다.** 넷 다 `rds_iam`(IAM 토큰 로그인)을 받고, 각 서버가 **자기 표를 자기 계정으로
-만든다**(Flyway가 그 계정으로 돈다). 그래서 자기 표 권한은 소유로 충분하고, 목록에 남는 것은 표를 만들 자리
-(`CREATE ON SCHEMA public`, PG 15부터 기본으로 닫혔다)와 남의 표에 대한 교차 접근 넷뿐이다. `stream_*`는 media(1번) 표다.
+만든다**(Flyway가 그 계정으로 돈다). 그래서 자기 표 권한은 소유로 충분하고, 목록에 남는 것은 표를 만들 자리 · DB 접속 · 남의
+표에 대한 교차 접근뿐이다. `stream_*`는 media(1번) 표다.
+
+**표를 만들 자리는 `public`이 아니라 계정과 이름이 같은 자기 스키마다(POK-428).** 스키마는 마스터가 만들어 가지고, 계정에는
+`USAGE, CREATE`만 준다 — 서버가 자기 스키마 권한을 남에게 줄 수 없다. 서버의 세션 경로는 자기 스키마 하나라
+(`pokeclip.datasource.schema` → Hikari `schema` · Flyway `schemas`) 남의 표는 스키마를
+붙여 읽는다(`public.stream_segments` · `app_chat_collector.chat_messages`). 붙이지 않으면
+`42P01`로 크게 실패한다. 계정에는 `public` CREATE가 없다 — `public`에 표 · 함수를 만들 수 있는 것은 마스터와
+media 뿐이라, 맨 이름으로 부르는 함수(`pg_advisory_xact_lock(hashtext(?))` 등)를 남이 심은 판이 가로채지
+못한다.
+
+**DB 접속도 계정마다 준다.** 운영 DB(`pokeclip`)는 CONNECT · TEMP를 PUBLIC(모든 계정)에서 거두고,
+CONNECT만 계정마다 따로 준다. TEMP는 아무에게도 주지 않는다 — 서버는 임시 표를 쓰지 않는다. 새 계정은 CONNECT를 받아야
+붙는다. 두 줄은 서버마다가 아니라 DB에 한 번이다(운영
+`infra/terraform/prod/runtime/sql/10_roles.sql`이 같은 일을 한다).
+
+```sql
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+REVOKE CONNECT, TEMPORARY ON DATABASE pokeclip FROM PUBLIC;
+```
 
 **계정 만들기와 GRANT 실행은 1번(런타임) 몫이다.** 순서가 있다.
 
@@ -857,34 +875,300 @@ auth · clip에도 같은 10초를 넣었다(POK-414). 전에는 없어서 DB가
 -- auth
 CREATE ROLE app_auth LOGIN;
 GRANT rds_iam TO app_auth;
-GRANT CREATE ON SCHEMA public TO app_auth;
+CREATE SCHEMA app_auth;
+GRANT USAGE, CREATE ON SCHEMA app_auth TO app_auth;
+GRANT CONNECT ON DATABASE pokeclip TO app_auth;
 
 -- clip: 탈퇴 정리가 조각 장부를 읽고 지운다(StreamerPurgeStore) · 조각 조회 · 사진 대상 · 회차 머리 파일
 CREATE ROLE app_clip LOGIN;
 GRANT rds_iam TO app_clip;
-GRANT CREATE ON SCHEMA public TO app_clip;
+CREATE SCHEMA app_clip;
+GRANT USAGE, CREATE ON SCHEMA app_clip TO app_clip;
+GRANT CONNECT ON DATABASE pokeclip TO app_clip;
 GRANT SELECT, DELETE ON stream_segments TO app_clip;
 GRANT SELECT ON stream_sessions TO app_clip;
 
 -- chat-collector: 채팅 시각을 영상 위치로 바꿀 때 조각 장부를 읽는다(SegmentLedger)
 CREATE ROLE app_chat_collector LOGIN;
 GRANT rds_iam TO app_chat_collector;
-GRANT CREATE ON SCHEMA public TO app_chat_collector;
+CREATE SCHEMA app_chat_collector;
+GRANT USAGE, CREATE ON SCHEMA app_chat_collector TO app_chat_collector;
+GRANT CONNECT ON DATABASE pokeclip TO app_chat_collector;
 GRANT SELECT ON stream_segments TO app_chat_collector;
 
 -- chat-detector: 채팅 원문을 읽는다(ChatWindowReader). 아래 SELECT는 수집 서버 V316이 준다(표 주인이 준다).
 -- V316이 돌 때 이 계정이 없었다면 수집 서버 계정이나 마스터로 이 줄을 손으로 돌린다.
 CREATE ROLE app_chat_detector LOGIN;
 GRANT rds_iam TO app_chat_detector;
-GRANT CREATE ON SCHEMA public TO app_chat_detector;
-GRANT SELECT ON chat_messages TO app_chat_detector;
+CREATE SCHEMA app_chat_detector;
+GRANT USAGE, CREATE ON SCHEMA app_chat_detector TO app_chat_detector;
+GRANT USAGE ON SCHEMA app_chat_collector TO app_chat_detector;
+GRANT CONNECT ON DATABASE pokeclip TO app_chat_detector;
+GRANT SELECT ON app_chat_collector.chat_messages TO app_chat_detector;
 ```
 
 **이 목록은 서버마다 `DbRoleGrantsTest`가 그대로 잰다.** 빈 DB에 「이 줄들만 가진」 역할을 만들어 그 역할로 서버를 띄운다.
 마이그레이션이 끝까지 돌고 위 교차 접근 코드가 돈다. 한 줄씩 거두면 그 경로가 권한 부족(`42501`)으로 거절된다.
-README의 `GRANT ... TO app_*;` 줄과 시험의 목록이 다르면 빨간불이다.
-**재지 않는 것**: 자기 표의 전체 저장 경로를 그 역할로 다 돌리지는 않는다(소유자라 표 권한이 다 있다). 시퀀스 ·
-트리거 함수 · advisory 잠금 · `pg_stat_ssl` 자기 행은 소유 또는 PUBLIC 기본으로 충분하다.
+README의 `GRANT ... TO app_*;` 줄과 시험의 목록이 다르면 빨간불이다. 시험 DB는 운영처럼 PUBLIC의 CONNECT
+· TEMP를 거두고 그 역할에만 CONNECT를 준다(`GrantedRoleDatabase`) — 서버가 임시 표에 기대면 여기서 빨간불이다.
+**재지 않는 것**: 자기 표의 전체 저장 경로를 그 역할로 다 돌리지는 않는다(소유자라 표 권한이 다 있다). 시퀀스 · 트리거 함수 ·
+advisory 잠금 · `pg_stat_ssl` 자기 행은 소유 또는 PUBLIC 기본으로 충분하다(advisory 잠금 함수는 운영에서도
+PUBLIC에서 거두지 않는다 — ADR-0007, K7).
+
+### dev 앱별 스키마 이전과 되돌리기 (POK-428)
+
+서버 넷은 이제 표를 자기 스키마(`app_auth` · `app_clip` · `app_chat_collector` ·
+`app_chat_detector`)에 만든다. dev 공유 DB 는 그 전까지 public 하나에 표가
+있었으므로 배포 잡이 한 번 옮긴다 — `services-deploy.yml` 이 굽기 뒤 · 띄우기 앞에
+`scripts/dev-move-to-app-schemas.sh` 를 부르고, 그 셸이 서버 넷 · 일꾼 둘을 세우고
+public 을 백업한 뒤 `scripts/dev-move-to-app-schemas.sql` 을 한 트랜잭션으로
+돌린다. 이미 옮긴 DB 에서는 아무것도 하지 않는다. 이 단계 · 스크립트 셋 ·
+`DevSchemaMoveTest` · `DevSchemaMove` 는 dev 확인 뒤 후속 PR 에서 지운다.
+
+**머지 전 읽기 확인(상자 명령 — kty 승인 SSM).** dev postgres 의 public 객체를
+읽어 스크립트 목록 · media 표(`media/internal/index/ddl.go`)와 대조한다. 목록 밖
+객체가 있으면 머지하지 않고 kty 에게 묻는다. 크기도 같이 적는다.
+
+```sql
+SELECT n.nspname, c.relname, c.relkind, pg_catalog.pg_get_userbyid(c.relowner)
+  FROM pg_catalog.pg_class c
+  JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+ WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p', 'S', 'v', 'm');
+SELECT p.oid::regprocedure FROM pg_catalog.pg_proc p
+  JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+ WHERE n.nspname = 'public';
+SELECT pg_catalog.pg_database_size(pg_catalog.current_database());
+```
+
+상자에서는 `df -h /` 도 적는다.
+
+**배포 로그에서 볼 줄.**
+
+*   `schema move: skipped` — 옮길 것이 없다(이미 옮겼다).
+*   `schema move: moved` · `schema move: public backup written under …` — 옮겼다.
+    뒤이은 `up -d` 가 새 이미지로 서버 넷을 띄운다.
+*   `::error::schema move: … bytes free, need …` — 디스크가 모자라 아무것도
+    멈추지 않았다. 옛 컨테이너가 그대로 돈다.
+*   `schema move: failed before commit, restarting old containers` — 이전 전에
+    실패해 옛 컨테이너를 다시 띄웠다. 자료는 public 그대로다.
+*   `::error::schema move committed but a later step failed; old containers NOT
+    restarted` 또는 `::error::schema move state unknown; …` — 옮긴 뒤(또는 판정
+    불가) 실패했다. 서버는 멈춘 채다. kty 에게 보고하고, 새 이미지로 `up -d` 하는
+    SSM 은 커밋이 확인된 뒤(판정 불가면 아래 판정과 표지 확인 걸음 4 를 거친 뒤)
+    kty 승인으로 보낸다. 판정 불가에는 이전 psql 이 90초 안에 끝나지
+    않은 경우도 든다 — 그때는 `pg_stat_activity` 에 `application_name` 이
+    `pokeclip-dev-move` 인 세션이 없어진 뒤에 이력 표를 읽어 판정한다. 판정
+    불가면 시작 때 쓴 상태 불명 표지가 그대로 남는다(아래).
+*   `::error::schema move: could not start postgres; nothing stopped` — 첫 DB
+    읽기 전에 postgres 를 띄우지(`up -d --wait postgres`) 못했다. 아무것도
+    멈추지 않았다. 바로 위의 compose 오류 줄과 `compose ps postgres` 로 원인을
+    본다.
+*   `::error::schema move: could not write the in-progress marker …; nothing
+    stopped` — 정지 전에 표지를 못 써 아무것도 멈추지 않고 끝났다. 옛
+    컨테이너가 그대로 돈다. 상자의 `/home/ec2-user/pokeclip-backup` 을 고친 뒤
+    다시 배포한다. 그 자리가 심볼릭 링크면 앞에
+    `::error::schema move: … is a symbolic link` 줄이 있다.
+*   `::error::schema move: could not delete the marker …` — 결과는 앞 줄대로
+    확실한데 표지를 못 지웠다. 다음 배포가 표지를 보고 괜히 멈추는 안전 쪽
+    실패다. 아래 확인을 거쳐 표지를 지운다. **옮김(`schema move: moved`) 뒤에
+    났으면 이 배포는 `up -d` 전에 끝나 서버 넷 · 일꾼 둘이 멈춘 채다** — 표지를
+    지우고 다시 배포하면 건너뜀 갈래로 새 이미지가 뜬다.
+*   `::warning::schema move: marker … belongs to run …` — 결과는 확실한데 표지
+    첫 칸이 다른 실행의 식별자라 지우지 않았다(그 실행의 잠금). 다음 배포는 그
+    표지를 보고 멈추므로 아래 확인 대상이다.
+*   `::error::schema move: an earlier run is in progress or ended in an unknown
+    state (…)` — 앞 배포가 남긴 상태 불명 표지가 있어 이 배포는 아무것도 바꾸지
+    않고 끝났다(컨테이너를 띄우지도 멈추지도 않는다). **서버는 앞 배포가 남긴
+    상태 그대로이고, 대개 멈춰 있다** — 표지가 남는 갈래(판정 불가 · 정지 뒤
+    도중에 끊김 · 표지 지우기 실패)는 거의 다 서버를 멈춘 뒤다. 앞 배포 로그의
+    판정 줄과 `compose ps` 로 확인한다. 아래 확인을 마치고 표지를 지운 뒤 다시
+    배포해야 서버가 뜬다.
+
+**울타리.** 실패 갈래의 복구는 판정 전에 그 실행의 울타리 스키마
+`pokeclip_move_fence_<UTC 시각>_<PID>` 를 먼저 만든다. 이전 SQL 은 같은
+트랜잭션의 첫 문장으로 자기 실행의 울타리가 있으면 실패하므로, 호스트 연결이
+끊긴 뒤 데몬이 늦게 시작한 이전도 옛 컨테이너가 뜬 뒤에 자료를 바꾸지 못한다.
+울타리를 못 만들면 판정 불가로 친다. 울타리 이름은 실행마다 달라 다음 배포는
+앞 울타리를 지우지도 보지도 않는다 — 그래서 실패 하나마다 빈 스키마 하나가 dev
+DB 에 남는다. **울타리는 손으로도 지우지 않는다.** 빈 스키마이고 public 밖이라
+이전 · 역이전 SQL 이 보지 않아 해가 없다. 반면 지우면 위험하다 — 도커에 아직
+시작되지 않은 그 실행의 이전 요청은 프로세스 · 세션 확인 어느 쪽에도 보이지
+않아, 밀린 이전이 없음을 증명할 수단이 없다. 표지가 가리키지 않는 실행도
+마찬가지다(커밋 전 복구는 옛 컨테이너를 띄운 뒤 표지를 지운다). 지우면 늦게
+뜬 이전이 커밋해 자료가 갈릴 수 있다.
+
+**상태 불명 표지(진행 중 잠금).** 상자 디스크의
+`/home/ec2-user/pokeclip-backup/dev-move-unknown` 은 진행 중 잠금이다 — 결과가
+확실하지 않으면 남는다(DB 가 죽어도 남게 파일로). 이전 단계는 옮길 것이 있으면
+캐시 줄이기 · 정지보다 먼저 이 표지를 쓰고, 못 쓰면 아무것도 멈추지 않고
+끝난다. 내용은 그 실행의 식별자(`<UTC 시각>_<PID>` — 울타리 이름 뒷부분) ·
+시각 · `in-progress` 한 줄이다. 결과가 확실할 때만 지운다 — 옮김, 커밋 전
+복구(옛 컨테이너 start 뒤), 커밋 뒤 복구, 정지 전에 끝난 실패(디스크 부족
+등). 판정 불가와 도중에 끊긴 실행(SSM 시간 초과 · 상자 재부팅 등)에는 남는다.
+판정 불가에는 울타리를 못 세운 경우가 들어, 다음 배포가 자기 울타리만 세우고
+옛 컨테이너를 띄우면 그 뒤 앞 배포의 밀린 이전이 커밋해 자료가 갈릴 수 있다.
+그래서 표지가 있으면 다음 배포의 이전 단계는 맨 앞에서 아무것도 멈추지 않고
+실패한다. 지우기가 실패하면 표지가 남아 다음 배포가 괜히 멈춘다(안전 쪽
+실패).
+
+표지는 noclobber(`set -C`)로 만든다 — 맨 앞 검사 뒤 다른 실행이 먼저 썼으면
+덮어쓰지 않고 「표지 있음」 갈래로 끝난다. 지우는 것은 첫 칸이 자기 실행
+식별자인 표지뿐이다(남의 표지는 두고 `::warning::`). 이것은 같은 상자에서 겹친
+두 실행이 표지를 서로 덮거나 지우지 못하게 할 뿐이고, 배포끼리 줄 세우기는
+워크플로 `concurrency` 몫이다.
+
+아래를 kty 승인 SSM 으로 이 순서대로 한 뒤 지운다. SSM 명령은 services
+디렉터리에서 돌지 않으므로 명령마다 `cd` 로 먼저 간다. 명령마다 끝에
+`echo "exit=$?"` 를 붙여, `exit=0` 이 아니거나 출력이 비면 그 확인은 실패다 —
+「없다」 로 읽지 않고 다시 보거나 kty 에게 회부한다.
+
+1.  **맨 앞에서** 표지 식별자의 울타리를 세운다 — 그 뒤에 울타리 검사를 하는
+    그 실행의 이전은 실패하고, 그 전에 검사를 지난 이전은 이미 접속해 있어
+    확인 2 · 3 에 보인다. 이 울타리는 지우지 않는다 — 도커에 아직 시작되지
+    않은 그 실행의 요청은 확인 2 · 3 에 보이지 않는다. 출력 `CREATE SCHEMA` ·
+    `exit=0` 을 본다.
+
+    ```sh
+    cd /home/ec2-user/pokeclip-mono/services && sudo -u ec2-user docker compose -f docker-compose.dev.yml exec -T postgres sh -c 'psql -X -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "CREATE SCHEMA IF NOT EXISTS pokeclip_move_fence_<식별자>"'; echo "exit=$?"
+    ```
+1.  postgres 컨테이너에 이전 psql 이 없다. `exit=0` 이고 출력에 postgres
+    서버 프로세스 줄(`postgres` · `postgres: checkpointer` 등)이 보여야 읽기가
+    된 것이다(양성 대조). 그 위에서 `pokeclip-dev-move` 를 단 줄이 없어야 한다.
+
+    ```sh
+    cd /home/ec2-user/pokeclip-mono/services && sudo -u ec2-user docker compose -f docker-compose.dev.yml top postgres; echo "exit=$?"
+    ```
+1.  `pg_stat_activity` 에 `application_name` 이 `pokeclip-dev-move` 인 세션이
+    0 이다. 출력이 정확히 `0` 한 줄과 `exit=0` 이어야 한다.
+
+    ```sh
+    cd /home/ec2-user/pokeclip-mono/services && sudo -u ec2-user docker compose -f docker-compose.dev.yml exec -T postgres sh -c 'psql -X -At -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT pg_catalog.count(*) FROM pg_catalog.pg_stat_activity WHERE application_name = '\''pokeclip-dev-move'\''"'; echo "exit=$?"
+    ```
+1.  이력 표 넷이 어디 있는지 본다 — 넷 다 public 이면 이전 전이고(다시
+    배포하면 이전 단계가 옮긴다), 넷 다 `app_*` 면 이전이 커밋됐다(새 이미지로
+    `up -d` 는 kty 승인 뒤). 섞여 있으면 지우지 말고 kty 에게 회부한다.
+    출력은 `<스키마>|<표>` 네 줄과 `exit=0` 이어야 한다(표만 — 색인은 뺀다).
+
+    ```sh
+    cd /home/ec2-user/pokeclip-mono/services && sudo -u ec2-user docker compose -f docker-compose.dev.yml exec -T postgres sh -c 'psql -X -At -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT n.nspname, c.relname FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace WHERE c.relkind = '\''r'\'' AND c.relname LIKE '\''flyway_schema_history%'\''"'; echo "exit=$?"
+    ```
+1.  표지를 지운다.
+
+    ```sh
+    sudo rm /home/ec2-user/pokeclip-backup/dev-move-unknown
+    ```
+
+    멈춘 서버는 표지를 지운 뒤 다시 배포해야 뜬다.
+
+**백업 정리.** 백업은 상자의 `/home/ec2-user/pokeclip-backup/public-<UTC
+시각>.sql`(파일 0600 · 디렉터리 root 소유 0700)이다. 이전 단계는 디렉터리를
+쓰기 전마다 `install -d -m 0700 -o root -g root` 로 만들거나 바로잡고, 그 자리가
+심볼릭 링크면 쓰지 않고 멈춘다. 계정 · 방송 · 암호문이 들어 있으므로
+dev 확인 뒤 kty 승인을 받아 지우고 삭제를 기록한다. 디렉터리째 지우지 않는다 —
+상태 불명 표지가 같은 곳에 있다.
+
+#### 되돌리기 순서
+
+**역이전을 revert 보다 먼저 한다.** revert 가 먼저 배포되면 옛 Flyway(public ·
+baseline-on-migrate)가 public 에 빈 표를 만들어 자료가 조용히 갈린다. 역이전 뒤
+revert 전에 다른 배포가 돌면 새 코드의 이전 단계가 앞방향 이전을 다시 한다 —
+`concurrency` 는 Actions 실행끼리만 줄 세우므로 배포를 environment 필수 검토자로
+막는다. GitHub 쓰기(PUT · 거절 · 취소 · 승인)와 상자 명령은 하나하나 실행 직전에
+kty 승인을 받고, 거절 · 승인은 필수 검토자인 kty 가 직접 누른다. 걸음 2 부터 7
+까지는 한 사람이 끊지 않고 이어 하며, **그동안 상자 명령(SSM `send-command` ·
+`start-session`)은 이 절차 실행자만 보낸다**(손 SSM 은 GitHub 규칙이 막지
+못한다). 배타 중에도 develop 머지는 막지 않는다(배포만 멈춘다).
+
+1.  **원상 기록(읽기).**
+    `gh api repos/3K-PokeClip/PokeClip-mono/environments/dev-deploy` 와
+    `…/dev-deploy/deployment-branch-policies` 출력을 파일로 남긴다.
+1.  **배타 걸기(kty 승인 쓰기).** environment `dev-deploy` 에 `reviewers` = kty
+    하나를 단다. PUT 은 설정을 통째로 바꾸므로 `deployment_branch_policy` 를 기록한
+    값 그대로 함께 보낸다(빠뜨리면 배포 브랜치 제한이 풀린다). 다시 읽어
+    required_reviewers 가 생겼고 브랜치 정책이 기록과 같은지 보고, 그 확인 시각을
+    **T_block** 으로 적는다(그 자리에서 찍은 `date -u '+%Y-%m-%dT%H:%M:%SZ'`
+    출력). 응답이 「이 저장소에서 못 쓴다」 류면 멈추고 kty 에게 묻는다.
+1.  **진행 중인 것 끝남(읽기).** 아래 둘이 **둘 다** 0 인 것을 처음 확인한
+    시각을 **T_idle** 로 적는다(그 자리에서 찍은 `date -u '+%Y-%m-%dT%H:%M:%SZ'`
+    출력 그대로). 확인은 T_block 뒤에만 하므로 T_block 에 이미 0 이었어도
+    T_idle 은 그 첫 확인 시각이다 — T_block 보다 이르게 적지 않는다.
+    *   비종료 dev-deploy deployment 0 — deployments 를 모든 페이지(`gh api -i
+        'repos/3K-PokeClip/PokeClip-mono/deployments?environment=dev-deploy&per_page=100&page=<N>'`,
+        Link `rel="next"` 가 없을 때까지 · 상한 10 페이지) 읽고, deployment 마다
+        statuses(`…/deployments/<id>/statuses?per_page=100` · 상한 1 페이지)에서
+        `created_at` 이 가장 늦은 상태가 종료(`success` · `failure` · `error` ·
+        `inactive`)가 아닌 것이 0.
+    *   서버에서 거른 활성 실행 0 — `gh run list --workflow services-deploy.yml
+        --status <s> --json databaseId,attempt,headSha,status` 를 `in_progress` ·
+        `queued` · `waiting` · `requested` · `pending` 다섯에 하나씩 돌려 다섯 다 0.
+        `--status` 는 서버에서 거르므로 기본 상한 20건은 거른 뒤에 걸린다. 다섯
+        값만 쓰는 이유: 이 다섯이 아직 끝나지 않은 실행의 상태 전부이고,
+        `action_required` 는 실행이 끝난 뒤 붙는 결론 값인 데다 이 잡은 push
+        트리거라 생기지 않는다.
+
+    `in_progress` 는 끝날 때까지 기다린다(중간에 끊지 않는다). `waiting` 은 kty 가
+    거절하고 `queued` · `pending` · `requested` 는 취소한다(둘 다 실행 직전 kty
+    승인). 처리한 뒤 다섯 목록과 deployments 를 다시 읽어 둘 다 0 이 될 때까지
+    되풀이하고, 읽은 시각 · 상태별 건수 · 비종료 deployment `id` 를 파일로
+    남긴다. **다섯 목록이 0 인데 비종료 deployment 가 남거나, 페이지 상한을
+    넘거나, deployments · statuses 읽기 실패가 되풀이되면 T_idle 을 적지 않고 그
+    `id` 와 기록을 들고 kty 에게 회부한다.**
+
+    Actions 실행이 끝났다고 상자의 셸이 끝난 것은 아니다(잡의 기다리기 루프는
+    `InProgress` · `Pending` 밖에서 멈추고, 실행을 취소해도 SSM 명령은 취소되지
+    않는다). 그래서 SSM 쪽을 아래 넷으로 본다. 기준 시각은 **T_block 과 T_idle
+    가운데 늦은 쪽**이다.
+    1.  **(생략 판정)** deployments 를 위와 같이 모든 페이지 읽어, `created_at`
+        부터 마지막 갱신(statuses 의 `created_at` · `updated_at` 최댓값, 최신
+        상태가 비종료면 지금)까지가 [기준 시각 − 6600초, 기준 시각] 과 겹치는 것이
+        0 건이면 (시간)을 건너뛴다. 하나라도 겹치거나 읽기가 실패하거나(종료 코드가
+        0 이 아니거나 빈 응답) 페이지 상한을 넘으면 건너뛰지 않는다. 판정 출력(페이지
+        수 · 전체 건수 · 창 안 건수와 `id` · 비종료 `id`)을 파일로 남긴다.
+    1.  **(시간)** 기준 시각 + **6600초(110분)** 가 지날 때까지 기다린다(그
+        자리에서 찍은 `date -u` 로 확인). 기존 배포 명령의 최대 수명이다 — 전달
+        제한 3000초(`--timeout-seconds`) + 실행 제한 3600초(AWS-RunShellScript
+        `executionTimeout` 기본). Run Command 조회는 최종 일관성이라 막 보낸
+        명령이 조회에 늦게 나올 수 있어 시간으로 닫는다. **대가: 되돌리기 착수가
+        기준 시각에서 최소 110분 늦어지고, 그동안 dev 는 새 코드로 돈다.**
+    1.  **(읽기 1)** `aws ssm list-command-invocations --instance-id <dev 상자>`
+        에서 상태가 종료 넷(`Success` · `Cancelled` · `TimedOut` · `Failed`) 밖인
+        호출이 0(`Pending` · `InProgress` · `Delayed` · `Cancelling` 포함 — 목록 밖
+        값도 미완료로 본다). 남으면 기다렸다 다시 읽고(`cancel-command` 로 끊지
+        않는다), 그래도 남으면 무관한 명령으로 보고 kty 에게 회부한다.
+    1.  **(읽기 2 — kty 승인 SSM)** 상자에서 `pgrep -af` 로 ① 이 읽기 명령 자기
+        것 밖의 SSM 명령 셸(`/var/lib/amazon/ssm/<상자>/document/orchestration/<CommandId>/…/_script.sh`)
+        ② `dev-move-to-app-schemas` ③
+        `docker compose -f docker-compose.dev.yml` · `pg_dump` · `psql` 이 0 인지
+        본다. 같은 출력에 이 읽기 명령 자기
+        `_script.sh` 가 보여야 한다(양성 대조 — 안 보이면 패턴이 틀린 것이라 0 이
+        아무것도 뜻하지 않는다. 패턴을 실물에 맞춰 다시 읽는다). 남으면 기다렸다
+        다시 읽고, 오래 남으면 kty 회부(죽이지 않는다).
+
+    읽기 1 · 2 는 (시간)을 마치거나 (생략 판정)으로 건너뛴 뒤, 걸음 4 의 정지
+    명령 바로 앞에 이 순서로 한다.
+1.  **역이전(kty 승인 SSM).** 서버 넷 · 일꾼 둘 정지 → DB 전체 `pg_dump`
+    백업(`-n` 없이 · 앞방향 백업과 같은 디렉터리에 `umask 077`) →
+    `scripts/dev-move-back-to-public.sql`(한 트랜잭션) → 확인 질의(public 에
+    이력 표 넷 · `app_*` 넷이 빔). 울타리 `pokeclip_move_fence_…` 가 남아 있어도
+    역이전에는 상관없다. 이때 옮겨 올 앱 자료 · Flyway 이력 · clip
+    독립 객체는 `app_*` 넷에 있으므로 `-n public` 백업에는 빠진다. 앞방향 이전
+    때의 백업에도 그 뒤의 변경은 없다.
+1.  **revert PR 머지.** 그 push 의 실행이 승인 대기에 선다. 머지 전 push 로 생긴
+    대기 실행은 **거절**하고(그 workflow 파일은 이전 단계가 있는 새 코드다),
+    **revert 를 포함한 가장 새 대기 실행** 하나만 승인한다 — 한 concurrency
+    그룹의 대기 실행은 하나라 새 push 가 앞 대기를 바꿔치기할 수 있다. revert
+    앞 커밋의 실행은 거절한다.
+1.  **revert 배포 확인.** 로그에서 서버 넷 `UP` · https 401 · 상자 `git log
+    --oneline -1` 의 커밋이 revert 를 포함하는지(로컬 저장소에서 `git merge-base
+    --is-ancestor <revert 커밋> <배포된 커밋>` 이 0) · 옛 Flyway 로그에
+    「baseline」 · 새 표 만들기가 없는지 본다.
+1.  **배타 풀기(kty 승인 쓰기).** 먼저 쌓인 대기 실행을 `gh run list --workflow
+    services-deploy.yml --status waiting --json databaseId,attempt,headSha` 로
+    열거해 `headSha` 가 revert 를 포함하고(`git merge-base --is-ancestor`)
+    `attempt` == 1 인 실행만 승인하고 나머지는 거절한다 — 재실행은 원래 실행의
+    workflow 파일로 돌기 때문이고, `attempt` == 1 만 받는 것은 판정 단순화다
+    (보수적). 그다음 `reviewers` 를 비운 PUT(같은 branch policy)을 보내고 다시
+    읽어 걸음 1 의 기록과 같은지 대조한다.
 
 ### DB 로거 셋은 info로 박혀 있다 (POK-409)
 
@@ -967,21 +1251,25 @@ Flyway가 스스로 그렇게 판정했기 때문이다(우연). `V315`처럼 �
 (60만 행 실측: 인덱스 있을 때 1.1ms, 없을 때 19.5ms로 **약 18배**). 표가 있는 곳에
 인덱스도 둔다는 소유 경계는 그대로지만, 대가가 이것이다 — **둘은 같이 배포한다.**
 
-**모든 Flyway 서버(auth 포함)에 `baseline-on-migrate: true` + `baseline-version: 0`이 필수다.**
-공유 DB에서는 어느 서버가 먼저 뜰지 정해져 있지 않다 — 다른 서버가 이미 표를
-만들어 놓은 DB에 자기 이력 테이블 없이 뜨는 서버는 baseline 없이
-`Found non-empty schema(s) "public" but no schema history table`로 부팅이 죽는다.
-"두 번째 서버부터"가 아니다: 빈 DB에 chat-collector가 auth보다 먼저 뜨면 auth가
-그 두 번째 서버다. chat-collector가 실물에서 밟았고(2026-08-15), auth도 같은
-메시지로 재현했다(PR #56). Testcontainers·CI는 매번 빈 DB라 그냥은 안 잡히므로
-네 서버의 `IntegrationTestSupport`가 남의 표를 먼저 심어 두고 부팅한다 —
-두 줄을 지우면 그 모듈 테스트 전체가 빨강이다. **chat-detector도 POK-120에서 같은 두 줄을 갖췄다 —
-이제 Flyway를 도는 서버 넷이 전부 갖췄다.** `baseline-version: 0`인 이유는 기본 1이면 V1
-이하가 적용 대상에서 빠지기 때문이다.
+**Flyway 서버 넷은 baseline 을 쓰지 않는다(POK-428).** 서버마다 표를 자기
+스키마에 만들므로 다른 서버가 먼저 떠도 내 스키마는 비어 있다. 그래서
+`baseline-on-migrate` · `baseline-version` 을 지웠다. 그 전(모두 `public` 에
+만들던 때)에는 남의 표가 있는 DB 에 자기 이력 표 없이 뜨면
+`Found non-empty schema(s) "public" but no schema history table` 로 부팅이
+죽어 넷 다 baseline 두 줄을 갖췄었다(chat-collector 실물 2026-08-15 · auth 재현
+3K-PokeClip/PokeClip-mono#56). 시험의 baseline 시드(남의 표를 먼저 심던 것)도
+함께 지웠다.
 
-**이력이 한 줄이 아니라 두 줄인 것이 정상이다.** 남의 표가 있는 DB에 처음 뜨면
-`<< Flyway Baseline >>`(version 0, type `BASELINE`)이 먼저 찍히고 그다음에 자기
-마이그레이션이 온다. clip 실기동 확인(2026-08-18):
+이제 **자기 스키마가 이력 표 없이 비어 있지 않으면** Flyway 가 같은 꼴의
+non-empty 오류로 멈춘다 — 의도다. 누가 그 스키마에 손으로 객체를 만들었거나
+이력 표를 잃었다는 뜻이라, baseline 을 찍고 조용히 넘어가지 않는다.
+
+**옛 이력 표에는 baseline 줄이 남는다.** `public` 시절 baseline 으로 뜬 이력
+표(dev)는 자기 스키마로 옮겨 와도 `<< Flyway Baseline >>`(version 0, type
+`BASELINE`) 줄이 첫 줄로 남는다 — 정상이다. 새 DB 에는 그 줄이 없다. 운영은
+10 이 스키마를 먼저 만들어 자기 마이그레이션부터 찍히고, 시험 · 새 로컬 DB 는
+Flyway 가 스키마를 직접 만들어 `<< Flyway Schema Creation >>`(type `SCHEMA`)
+줄이 첫 줄이다. clip 옛 실기동 기록(2026-08-18):
 
 ```
  installed_rank | version |              description               |   type   | success
@@ -2867,6 +3155,23 @@ POK-393에서 집기·숨기기를 없애면서 「열어 봤다」를 **편집�
   바로 저장한 편집본이 시작점을 잃고 빠진다. 대가로 저장 뒤 15초 안에 같은 카드를 다시 열면 그것이 시작점이 된다.
 - `actor`는 회원 번호다. 이 기록은 카드가 있는 동안 남는다.
 
+두 SQL 은 clip 의 표를 맨 이름으로 읽는다. 표는 `app_clip` 스키마에
+있으므로(POK-428) 먼저 세션 경로를 바꾼다 — 안 바꾸면 `42P01` 이다. 블록
+안에는 넣지 않는다(아래 시험이 블록의 첫 줄로 SQL 을 찾고 clip 의 세션 경로로
+돌린다). 감싸는 꼴은 세션마다 다르다.
+
+*   **dev(compose 의 소유자 계정)**: 표 주인이라 경로 한 줄이면 된다 —
+    `SET search_path TO app_clip;` 뒤에 블록을 돌린다.
+*   **prod 마스터**: 표 주인이 `app_clip` 이고 마스터에게는 표 권한이 없어,
+    경로만 바꾸면 `42501` 이다. 런북
+    [runtime-1a.md](../infra/terraform/runbooks/runtime-1a.md) 「1단-다
+    되돌리기 — O7d 뒤(clip 먼저 0개)」 의 셈 SQL 꼴로 감싼다. 경로를 바꾸고
+    `GRANT app_clip TO CURRENT_USER WITH SET TRUE, INHERIT FALSE;` 와
+    `SET ROLE app_clip;` 뒤에 블록을 돌린 다음, `RESET ROLE;` 과
+    `REVOKE app_clip FROM CURRENT_USER;` 로 멤버십을 거둔다. 보내는 길(실행기 ·
+    페이로드 · send-command 승인)도 그 자리를 따른다. 한 트랜잭션
+    (`psql -X -1 -v ON_ERROR_STOP=1`)으로 돌려 중간에 실패하면 부여도 롤백된다.
+
 **① 클립 안 나온 카드 비율**: 기간(`:from` 이상 `:to` 미만)에 편집기로 연 자동 카드 중 렌더 주문(`clips`)이 하나도 없는 비율.
 편집본만 저장하고 영상을 안 만든 카드도 「안 나왔다」로 센다.
 
@@ -3998,11 +4303,19 @@ SOOP 수신은 다음 PR이고, 지금 세션을 여는 곳(연동 시작)은 �
   실행은 배포 담당 몫이다(이 문서는 명령만 적는다). 배포 시작·끝 시각을 넣는다:
 
   ```sql
+  SET search_path TO app_auth;
   UPDATE withdrawal_purge_jobs
      SET done_at = NULL, next_attempt_at = now()
    WHERE target = 'COLLECTOR' AND platform = 'SOOP'
      AND done_at BETWEEN :deploy_started_at AND :deploy_finished_at;
   ```
+
+  위 블록은 dev(compose 의 소유자 계정) 꼴이다 — 표 주인이라 경로 한 줄로
+  된다. prod 마스터는 표 권한이 없어 경로만 바꾸면 `42501` 이다. 런북
+  [runtime-1a.md](../infra/terraform/runbooks/runtime-1a.md) 「1단-다
+  되돌리기 — O7d 뒤(clip 먼저 0개)」 의 셈 SQL 꼴에서 `app_clip` 을
+  `app_auth` 로 바꿔, 그 계정으로 바꿔 돌리고 멤버십을 거둔다. 보내는 길(실행기
+  · 페이로드 · send-command 승인)도 그 자리를 따른다.
 
   다시 열린 줄은 새 발송기가 `platform=SOOP`으로 보낸다. 새 auth가 이미 바르게 보낸 줄도 함께 열려 한 번 더 가지만, 수집기 명부가 같은 탈퇴 시각으로 접어 결과는 같다. 같은 아이디의 치지직 데이터가 잘못 지워졌다면 되돌릴 길은 없다(백업 없음).
 
@@ -4328,6 +4641,7 @@ get·put이 한 트랜잭션에서 이어지는 갈래는 하나다. `ensureKey`
 | ④ | `STREAM_KEY_SECRET_STORE_TYPE=aws`로 바꿔 auth 기동, 이어서 `verify` | 부팅 줄 `auth.streamkey.secret_store type=AWS`, `verify`의 `readable` = `targets`, 아래 조회가 0, 테스트 계정 resolve `valid:true`, 유튜브·치지직 연동 계정 하나의 상태 조회 정상 |
 
 ```sql
+SET search_path TO app_auth;
 SELECT count(*) FROM stream_keys
 WHERE revoked_at IS NULL AND passphrase_ref NOT LIKE 'pokeclip/dev/stream-key/%';
 ```

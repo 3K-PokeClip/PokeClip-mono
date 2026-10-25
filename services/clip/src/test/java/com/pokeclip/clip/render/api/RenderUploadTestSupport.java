@@ -101,7 +101,7 @@ abstract class RenderUploadTestSupport extends IntegrationTestSupport {
         jdbc.update("DELETE FROM clips");
         jdbc.update("DELETE FROM upload_requests");
         jdbc.update("DELETE FROM recipes");
-        jdbc.update("DELETE FROM stream_segments");
+        jdbc.update("DELETE FROM public.stream_segments");
     }
 
     static void 비운다(LocalStackFixture.QueuePair pair) {

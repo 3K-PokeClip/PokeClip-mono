@@ -78,26 +78,6 @@ public abstract class IntegrationTestSupport {
 
     static {
         POSTGRES.start();
-        seedNonEmptySchema();
-    }
-
-    /**
-     * 다른 서버(chat-collector)가 먼저 마이그레이션한 공유 DB를 재현한다 — public이
-     * 비어 있지 않은데 auth의 이력 테이블(flyway_schema_history_auth)은 없는 상태.
-     * 공유 DB에서는 어느 서버가 먼저 뜰지 정해져 있지 않으므로 auth도 이 상황을
-     * 만나고, application.yml의 baseline-on-migrate가 없으면 "Found non-empty
-     * schema(s) ... but no schema history table"로 죽는다(chat-collector 쪽 실물 부팅
-     * 실측 2026-08-15, PR #56). 여기 심어 두면 모든 스프링 테스트가 이 경로를 지나므로
-     * baseline 설정을 지우는 회귀가 즉시 전체 빨강이 된다 — chat-collector와 같은 방식.
-     */
-    private static void seedNonEmptySchema() {
-        try (java.sql.Connection connection = java.sql.DriverManager.getConnection(
-                POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
-             java.sql.Statement statement = connection.createStatement()) {
-            statement.execute("CREATE TABLE chat_collector_placeholder_for_baseline (id int)");
-        } catch (java.sql.SQLException e) {
-            throw new IllegalStateException("공유 DB 재현용 더미 표 생성 실패", e);
-        }
     }
 
     @DynamicPropertySource

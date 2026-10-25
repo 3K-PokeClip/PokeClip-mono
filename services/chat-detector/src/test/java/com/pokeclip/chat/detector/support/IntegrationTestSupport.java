@@ -8,10 +8,6 @@ import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.TestConstructor;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 
-import java.sql.Connection;
-import java.sql.DriverManager;
-import java.sql.SQLException;
-import java.sql.Statement;
 import java.time.Duration;
 import java.util.function.BooleanSupplier;
 
@@ -40,25 +36,6 @@ public abstract class IntegrationTestSupport {
 
     static {
         POSTGRES.start();
-        seedNonEmptySchema();
-    }
-
-    /**
-     * 남이 먼저 마이그레이션한 공유 DB를 재현한다 — public이 비어 있지 않은데 우리 이력
-     * 테이블(flyway_schema_history_chat_detector)은 없는 상태. 운영 전제(DB 공유 + auth 선배포)에서
-     * 이 서버의 첫 부팅이 만나는 상황이 정확히 이것이고, application.yml의 baseline-on-migrate가
-     * 없으면 "Found non-empty schema(s) ... but no schema history table"로 죽는다.
-     * 여기 심어 두면 모든 스프링 테스트가 이 시나리오를 지나가므로, baseline 설정을 지우는
-     * 회귀가 즉시 전체 빨강이 된다.
-     */
-    private static void seedNonEmptySchema() {
-        try (Connection connection = DriverManager.getConnection(
-                POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
-             Statement statement = connection.createStatement()) {
-            statement.execute("CREATE TABLE auth_placeholder_for_baseline (id int)");
-        } catch (SQLException e) {
-            throw new IllegalStateException("공유 DB 재현용 더미 표 생성 실패", e);
-        }
     }
 
     /**

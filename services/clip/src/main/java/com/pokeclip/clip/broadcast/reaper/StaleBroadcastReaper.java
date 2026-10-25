@@ -72,7 +72,7 @@ public class StaleBroadcastReaper {
      * 잘라 먹어 대가가 같은 크기다(로컬 리뷰 1라운드).
      */
     private static final String LAST_SEGMENT_LATERAL = """
-            SELECT start_wall_utc FROM stream_segments s
+            SELECT start_wall_utc FROM public.stream_segments s
              WHERE s.stream_id = COALESCE(b.ingest_stream_id, b.stream_id)
                AND s.start_wall_utc < COALESCE(
                        (SELECT MIN(n.started_at) FROM broadcasts n

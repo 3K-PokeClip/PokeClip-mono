@@ -30,7 +30,7 @@ public final class StreamSegmentsFixture {
      * {@link #insert}가 그 칸을 비워 둔 채 한 방송에 여러 조각을 넣어도 UNIQUE에 안 걸린다.
      */
     private static final String DDL = """
-            CREATE TABLE IF NOT EXISTS stream_segments (
+            CREATE TABLE IF NOT EXISTS public.stream_segments (
                 stream_id        text        NOT NULL,
                 seq              bigint      NOT NULL,
                 start_pts_ms     bigint      NOT NULL,
@@ -46,11 +46,11 @@ public final class StreamSegmentsFixture {
             );
 
             CREATE UNIQUE INDEX IF NOT EXISTS stream_segments_local_path_uq
-                ON stream_segments (stream_id, local_path);
+                ON public.stream_segments (stream_id, local_path);
             """;
 
     private static final String INSERT = """
-            INSERT INTO stream_segments
+            INSERT INTO public.stream_segments
                    (stream_id, seq, start_pts_ms, start_wall_utc, duration_ms, s3_key, is_discontinuity)
             VALUES (?, ?, ?, ?, ?, ?, ?)
             """;
@@ -68,7 +68,7 @@ public final class StreamSegmentsFixture {
      * 다른 검사 클래스의 행이 같이 살아 있다.
      */
     public static void clear(JdbcTemplate jdbc, String streamId) {
-        jdbc.update("DELETE FROM stream_segments WHERE stream_id = ?", streamId);
+        jdbc.update("DELETE FROM public.stream_segments WHERE stream_id = ?", streamId);
     }
 
     /**
@@ -76,7 +76,7 @@ public final class StreamSegmentsFixture {
      * {@link #ensureTable}로 되살린다 — 안 그러면 뒤에 도는 검사가 전부 깨진다.
      */
     public static void dropTable(JdbcTemplate jdbc) {
-        jdbc.execute("DROP TABLE IF EXISTS stream_segments");
+        jdbc.execute("DROP TABLE IF EXISTS public.stream_segments");
     }
 
     /**

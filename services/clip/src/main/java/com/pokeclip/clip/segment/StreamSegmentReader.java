@@ -26,7 +26,7 @@ public class StreamSegmentReader {
      */
     private static final String OVERLAPPING = """
             SELECT seq, start_pts_ms, duration_ms, s3_key, upload_state, is_discontinuity
-              FROM stream_segments
+              FROM public.stream_segments
              WHERE stream_id = ?
                AND start_pts_ms < ?
                AND start_pts_ms + duration_ms > ?
@@ -44,7 +44,7 @@ public class StreamSegmentReader {
             SELECT seq,
                    (EXTRACT(EPOCH FROM COALESCE(playback_pdt, start_wall_utc)) * 1000)::bigint AS start_at_ms,
                    duration_ms, s3_key, upload_state
-              FROM stream_segments
+              FROM public.stream_segments
              WHERE stream_id = ?
                AND COALESCE(playback_pdt, start_wall_utc) < to_timestamp(? / 1000.0)
                AND COALESCE(playback_pdt, start_wall_utc) + make_interval(secs => duration_ms / 1000.0) > to_timestamp(? / 1000.0)

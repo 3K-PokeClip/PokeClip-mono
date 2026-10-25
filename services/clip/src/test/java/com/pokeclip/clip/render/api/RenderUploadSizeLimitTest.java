@@ -100,7 +100,7 @@ class RenderUploadSizeLimitTest extends RenderUploadTestSupport {
      */
     @Test
     void 그림을_둔_뒤_거절되면_그_그림을_지운다() throws Exception {
-        jdbc.update("DELETE FROM stream_segments");
+        jdbc.update("DELETE FROM public.stream_segments");
         int 전 = 놓인_그림_수();
 
         HttpResponse<String> response = 보낸다(그림_고름, 그림(PNG, 2048), "a.png");

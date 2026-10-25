@@ -54,7 +54,7 @@ public abstract class IntegrationTestSupport {
 
     static {
         POSTGRES.start();
-        seedNonEmptySchema();
+        seedSegmentLedger();
     }
 
     /**
@@ -69,24 +69,17 @@ public abstract class IntegrationTestSupport {
     }
 
     /**
-     * auth가 먼저 마이그레이션한 공유 DB를 재현한다 — public이 비어 있지 않은데
-     * 자기 이력 테이블(flyway_schema_history_clip)은 없는 상태. 운영 전제
-     * (DB 공유 + auth 선배포)에서 clip의 첫 부팅이 만나는 상황이 정확히 이것이고,
-     * application.yml의 baseline-on-migrate가 없으면 "Found non-empty schema(s)
-     * ... but no schema history table"로 죽는다. 여기 심어 두면 모든 스프링
-     * 테스트가 이 시나리오를 지나가므로 baseline 설정을 지우는 회귀가 즉시
-     * 전체 빨강이 된다.
+     * 1번 장부 {@code public.stream_segments} · {@code public.stream_sessions}를 심는다. <b>이 표의 소유는
+     * 1번(Media)이라 clip의 Flyway 마이그레이션에 넣으면 안 된다</b>(ADR-030) — 운영에서는 media가 먼저 만들어 둔 표를
+     * 우리가 읽기만 한다. 테스트 DB에는 그 표를 만드는 사람이 없으므로 여기가 그 자리다.
      *
-     * <p>여기서 {@code stream_segments}도 함께 심는다. <b>이 표의 소유는 1번(Media)이라
-     * clip의 Flyway 마이그레이션에 넣으면 안 된다</b>(ADR-030) — 운영에서는 media가 먼저
-     * 만들어 둔 표를 우리가 읽기만 한다. 테스트 DB에는 그 표를 만드는 사람이 없으므로
-     * 여기가 그 자리다.
+     * <p>clip의 표는 자기 스키마 {@code app_clip}에 있고 세션 경로도 그 하나다(POK-428). 그래서 장부는 운영처럼
+     * public에 두고 본 코드 · 시험 모두 {@code public.} 한정 이름으로 부른다 — 한정이 빠지면 42P01로 크게 실패한다.
      */
-    private static void seedNonEmptySchema() {
+    private static void seedSegmentLedger() {
         try (java.sql.Connection connection = java.sql.DriverManager.getConnection(
                 POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
              java.sql.Statement statement = connection.createStatement()) {
-            statement.execute("CREATE TABLE auth_placeholder_for_baseline (id int)");
             // 정본은 media/internal/index/ddl.go (소유 1번). 이 사본이 어긋나는 것은
             // 계약이 막는다 — 컬럼 변경은 3번(우리) 승인 필수라(ADR-030, 계약 4절)
             // 1번이 바꾸면 우리가 먼저 안다. 그때 이 시드도 같이 고친다.
@@ -95,7 +88,7 @@ public abstract class IntegrationTestSupport {
             // 멱등용이고 우리는 읽기만 한다 — 시드에 넣으면 「clip도 그 이름에
             // 의존한다」는 거짓 신호가 된다.
             statement.execute("""
-                    CREATE TABLE IF NOT EXISTS stream_segments (
+                    CREATE TABLE IF NOT EXISTS public.stream_segments (
                         stream_id        text        NOT NULL,
                         seq              bigint      NOT NULL,
                         start_pts_ms     bigint      NOT NULL,
@@ -116,13 +109,13 @@ public abstract class IntegrationTestSupport {
                     )""");
             // 1번 회차 장부의 칸 셋만. 탈퇴 정리(POK-256)가 회차 머리 파일(init) 키를 읽는다. 정본은 같은 ddl.go.
             statement.execute("""
-                    CREATE TABLE IF NOT EXISTS stream_sessions (
+                    CREATE TABLE IF NOT EXISTS public.stream_sessions (
                         session_id  text PRIMARY KEY,
                         stream_id   text NOT NULL,
                         init_s3_key text
                     )""");
         } catch (java.sql.SQLException e) {
-            throw new IllegalStateException("baseline 시나리오 시드 실패", e);
+            throw new IllegalStateException("1번 장부 시드 실패", e);
         }
     }
 
@@ -143,8 +136,8 @@ public abstract class IntegrationTestSupport {
      * 정리가 필요한 클래스는 {@code @BeforeEach}에서 이것을 부른다.
      */
     protected static void 방송과_카드를_비운다(JdbcTemplate jdbc) {
-        jdbc.update("DELETE FROM stream_segments");
-        jdbc.update("DELETE FROM stream_sessions");
+        jdbc.update("DELETE FROM public.stream_segments");
+        jdbc.update("DELETE FROM public.stream_sessions");
         // 탈퇴 명부가 남으면 같은 스트리머 번호를 쓰는 다른 시험의 방송 편지가 버려진다(POK-256).
         jdbc.update("DELETE FROM purged_streamers");
         jdbc.update("DELETE FROM thumbnails");

@@ -59,7 +59,8 @@ class DetectionCycleTest extends IntegrationTestSupport {
     @BeforeEach
     void 표를_준비한다() {
         jdbc.execute("""
-                CREATE TABLE IF NOT EXISTS chat_messages (
+                CREATE SCHEMA IF NOT EXISTS app_chat_collector;
+                CREATE TABLE IF NOT EXISTS app_chat_collector.chat_messages (
                     id                BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
                     channel_id        TEXT        NOT NULL,
                     sender_channel_id TEXT        NOT NULL,
@@ -70,7 +71,7 @@ class DetectionCycleTest extends IntegrationTestSupport {
                     stream_id         VARCHAR(128)
                 )
                 """);
-        jdbc.update("DELETE FROM chat_messages");
+        jdbc.update("DELETE FROM app_chat_collector.chat_messages");
         jdbc.update("DELETE FROM chat_metrics");
     }
 
@@ -81,7 +82,7 @@ class DetectionCycleTest extends IntegrationTestSupport {
     /** 치지직이 찍은 시각과 우리가 받은 시각을 따로 준다. 시계가 어긋난 상황을 만든다. */
     private void 채팅(String streamId, String sender, Instant messageTime, Instant receivedAt) {
         jdbc.update("""
-                INSERT INTO chat_messages
+                INSERT INTO app_chat_collector.chat_messages
                     (channel_id, sender_channel_id, content, message_time, received_at, content_sha256, stream_id)
                 VALUES ('c1', ?, 'hi', ?, ?, repeat('a', 64), ?)
                 """, sender, Timestamp.from(messageTime), Timestamp.from(receivedAt), streamId);
@@ -508,7 +509,7 @@ class DetectionCycleTest extends IntegrationTestSupport {
      */
     @Test
     void 터져도_예외가_밖으로_안_나간다() {
-        jdbc.execute("DROP TABLE IF EXISTS chat_messages");
+        jdbc.execute("DROP TABLE IF EXISTS app_chat_collector.chat_messages");
 
         try (LogCaptor captor = new LogCaptor()) {
             cycle.tick();   // 던지면 이 줄에서 검사가 실패한다

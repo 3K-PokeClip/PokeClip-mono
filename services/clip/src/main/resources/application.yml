@@ -14,6 +14,9 @@ spring:
     username: ${POSTGRES_USER}
     password: ${POSTGRES_PASSWORD}
     hikari:
+      # 세션 경로를 자기 스키마 하나로 둔다(POK-428). Hikari가 새 연결마다 setSchema로 search_path를 바꾸므로
+      # 맨 이름은 app_clip와 암묵 pg_catalog에서만 풀린다 — public에 누가 같은 이름의 함수를 심어도 고르지 않는다.
+      schema: ${pokeclip.datasource.schema}
       data-source-properties:
         # DB 응답 대기 시한(초, POK-414). 연결은 받고 응답을 안 하는 DB(반개방)를 끊는 것은 이것뿐이다:
         # queryTimeout은 취소를 서버에 보내 답 없는 상대에게 무력하고, Hikari connection-timeout은 풀에서 빌리는
@@ -38,12 +41,9 @@ spring:
     # 남의 이력을 자기 것으로 읽고 부팅에 실패한다.
     # 마이그레이션 번호는 모듈별 대역을 쓴다 — V1xx auth · V2xx clip · V3xx chat.
     table: flyway_schema_history_clip
-    # 공유 DB에서 어느 서버가 먼저 뜰지 정해져 있지 않다. 다른 서버가 이미 표를
-    # 만든 DB에 자기 이력 테이블 없이 뜨면 "Found non-empty schema(s) but no
-    # schema history table"로 죽는다. Testcontainers는 매번 빈 DB라 이걸로는
-    # 안 잡혀서, IntegrationTestSupport가 더미 표를 먼저 심는다.
-    baseline-on-migrate: true
-    baseline-version: 0
+    # 표와 이력 테이블을 자기 스키마에 만든다(POK-428). 남의 표가 없는 스키마라 baseline 설정이 필요 없다 —
+    # 이 스키마가 이력 없이 비어 있지 않으면 Flyway가 non-empty로 멈춘다(의도).
+    schemas: ${pokeclip.datasource.schema}
 
   servlet:
     multipart:
@@ -138,6 +138,9 @@ management:
 
 pokeclip:
   datasource:
+    # 이 서버의 표가 사는 스키마(POK-428 — 이름 = DB 계정, 운영 10_roles.sql이 마스터 소유로 만든다). 위의
+    # hikari.schema(세션 경로)와 flyway.schemas(표 · 이력 자리)가 이 한 키에서 나온다.
+    schema: app_clip
     # DB 로그인 방식(POK-407, db-support의 DataSourceLoginConfiguration). password(기본)면 위 POSTGRES_PASSWORD로,
     # iam이면 비밀번호 대신 연결마다 RDS IAM 토큰으로 붙는다. 이름과 뜻은 media 사이드카와 같다.
     auth: ${POSTGRES_AUTH:password}

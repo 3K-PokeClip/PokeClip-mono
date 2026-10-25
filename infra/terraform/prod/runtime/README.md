@@ -78,7 +78,7 @@ default_tags 가 붙는지는 미확인이고, 런북 「운영 확인」 에서
 | `rewind_bucket_name` · `rewind_bucket_arn` · `rewind_bucket_regional_domain_name` | edge — `rewind-s3` 오리진 · media — 업로드 정책 · 런타임 2단 — 버킷 정책 |
 | `app_secret_arns`(서비스 → env 이름 → 전체 ARN) | platform — `ecs_service.secrets` · 실행 역할 읽기 정책. auth 아홉(`SOOP_CLIENT_SECRET` · resolve 전용 토큰 `STREAM_KEY_RESOLVE_TOKEN` 포함) · clip 둘(`JWT_SECRET` · `INTERNAL_API_TOKEN`) · chat-collector 둘(`INTERNAL_API_TOKEN` · `CHZZK_CLIENT_SECRET`) · chat-detector 하나(`INTERNAL_API_TOKEN`). 일꾼 render · upload 하나씩(`INTERNAL_API_TOKEN` — 앱과 같은 그릇)은 배치 루트가 읽는다 |
 | `media_secret_arns`(비밀 전체 ARN 목록 — `list(string)`) | media — 인스턴스 역할 읽기 정책(media_host 변수 `media_secret_arns` 와 같은 꼴). 원소는 resolve 전용 토큰 그릇 하나(auth 의 `STREAM_KEY_RESOLVE_TOKEN` 과 같은 그릇) — 공용 `INTERNAL_API_TOKEN` 은 없다(POK-429) |
-| `ingest_auth_resolve_token_secret_arn`(전체 ARN — string) | media(M15) — 응답기 `media.env` 의 `STREAM_KEY_RESOLVE_TOKEN_SECRET_ARN` 렌더. `media_secret_arns` 의 원소와 같은 값이고, 목록의 순서에 기대지 않으려는 이름 있는 출력이다 |
+| `ingest_auth_resolve_token_secret_arn`(전체 ARN — string) | media — 응답기 `media.env` 의 `STREAM_KEY_RESOLVE_TOKEN_SECRET_ARN`(키 정의 · 읽기 = M15, 렌더 = M9(user_data)). `media_secret_arns` 의 원소와 같은 값이고, 목록의 순서에 기대지 않으려는 이름 있는 출력이다 |
 | `app_env`(서비스 → env 이름 → 값) | platform — `ecs_service.environment`. 네 서버 모두 `DB_HOST` · `DB_PORT` · `POSTGRES_DB`, auth 는 OAuth 네 덩어리의 `*_CLIENT_ID` · `*_REDIRECT_URI` 와 `PROFILE_PHOTO_S3_BUCKET` · `PROFILE_PHOTO_BASE_URL` · resolve 전용 창구의 허용 대역 `STREAM_KEY_RESOLVE_ALLOWED_CIDRS`(Media 프라이빗 서브넷 CIDR)(스트림 키 접두 `STREAM_KEY_SECRET_REF_PREFIX` 는 platform 이 넣는다), clip · chat-collector 는 자기 큐의 `BROADCAST_QUEUE_URL`, clip 은 수신 스위치 `BROADCAST_INTAKE_ENABLED = "true"`(문자열 — 빠지면 큐를 읽지 않아 편지가 보관 기간 뒤 사라진다) · 일 스위치 셋(`clip_job_features`) · 일 큐 주소 다섯 · `CLIPS_BUCKET` · `SEGMENT_BUCKET`(= rewind). `AUTH_BASE_URL` 은 platform 이 넣는다. chat-collector 의 스위치는 배치(POK-306)가 `AUTH_BASE_URL` · `INTERNAL_API_TOKEN` 과 함께 정한다. 일꾼 render · upload 의 큐 주소 · 숨김 env 는 배치 루트가 읽는다 |
 | `broadcast_topic_arn` | media — 사이드카 역할의 `sns:Publish` 대상(신원 정책 — 주제 정책은 계정 루트만 주체로 둔다) |
 | `broadcast_queue_arns`(소비자 clip · chat → 큐 ARN) | chat-collector(POK-306)의 수신 정책 대상. clip 은 `app_task_resource_arns` 를 쓴다 |
@@ -125,33 +125,33 @@ SQL 을 적용한 뒤 곧바로 끕니다. 켜진 동안 `iam:PassRole` 을 가�
 
 ## 1단-나 이월
 
-런타임 1단-나로 넘긴 일입니다. 앱 서버 DB 사용자 · GRANT · `public` 스키마
-CREATE 는 1단-가가 했습니다(POK-407 · kty 2026-10-24). 잊지 않도록 여기 둡니다
-(설계 9절 · Jira POK-304 코멘트와 같은 목록).
+런타임 1단-나로 넘긴 일입니다. 앱 서버 DB 사용자 · GRANT 는 1단-가가
+했습니다(POK-407 · kty 2026-10-24). 잊지 않도록 여기 둡니다(설계 9절 ·
+Jira POK-304 코멘트와 같은 목록). 1 · 2 · 7 은 1단-나 ①(POK-428)이
+닫았습니다 — 결정 정본은
+[ADR-0007](../../../../docs/decisions/2026-10-24-app-schemas.md)입니다.
 
-1.  **advisory 함수 권한 회수(K7)** — `pg_advisory_lock` ·
-    `pg_advisory_xact_lock` 등을 PUBLIC 에서 회수할지 정합니다.
-    *   미룬 이유 — 쓰는 쪽이 둘입니다. ① 사이드카 `media_indexer` 가 컷오프
-        경로에서 `pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtext(…)::bigint)`
-        을 씁니다(`media/internal/index/store.go:206` 의 `lockCutoffStreamSQL`).
-        권한 정본은 「advisory 잠금은 PUBLIC 기본으로 충분」 을 전제로 GRANT 를
-        두지 않습니다(`media/internal/pgtest/role.go:41`). ② 3번 서버 넷의
-        Flyway 가 advisory 잠금으로 마이그레이션을 직렬화합니다(Flyway 일반
-        거동 — 3번 코드는 아직 대조하지 않음). PUBLIC 에서 회수만 하면 사이드카
-        컷오프가 42501 로 실패하고 앱 서버 부팅이 실패할 수 있습니다.
-    *   회수한다면 재부여 대상에 `media_indexer` 를 넣고, `role.go` 의 전제
-        주석과 권한 시험을 함께 고칩니다. 재부여를 잊으면 `sql/40_verify.sql`
-        의 `advisory_xact_lock_media_indexer` 단언이 깨집니다.
-    *   재료: 1단-가 운영에서 돌린 `sql/50_advisory_probe.sql` 의 출력(마스터로
-        회수가 되는지 · 문구 · `has_function_privilege`) — 볼트 raw 에
-        있습니다.
-    *   1단-나에서 할 일: ① 3번 서버 넷의 advisory 사용 실물 대조(Flyway 판 ·
-        코드) ② 회수하면 PUBLIC 에서 회수하고 필요한 계정에만 EXECUTE 를 다시
-        줌 ③ 회수하지 않으면 사유를 기록.
-1.  계정의 TEMP · PUBLIC CONNECT 회수 — media 두 계정과 앱 사용자 넷이 같은
-    DB 를 쓰므로 함께 정합니다. CONNECT 를 PUBLIC 에서 회수하면
-    `sql/40_verify.sql` 의 `connect:<계정>` 이 깨집니다 — 필요한 계정에 다시
-    줍니다.
+1.  **advisory 함수 권한(K7)** — **닫힘 — 1단-나 ①(POK-428): 회수하지
+    않습니다**(kty 2026-10-24). `pg_advisory_lock` ·
+    `pg_advisory_xact_lock` 등의 EXECUTE 는 PUBLIC 그대로입니다.
+    *   사유 — 쓰는 계정이 다섯입니다(`media_janitor` 만 쓰지 않음). 사이드카
+        `media_indexer` 의 컷오프 잠금(`media/internal/index/store.go` 의
+        `lockCutoffStreamSQL`), `app_auth` 의 맨 이름
+        `pg_advisory_xact_lock(hashtext(?))`, `app_clip` 의
+        `(integer, integer)` 판, 앱 사용자 넷의 Flyway 12.4 직렬화입니다.
+        회수하고 그 계정들에 다시 주어도 그 넷과 `media_indexer` 가 bigint
+        열쇠를 잡을 수 있어 컷오프 열쇠를 막는 위협은 그대로입니다. 대가로
+        Flyway 판이 잠금 함수를 바꾸면 운영 부팅이 42501 로 멈춥니다.
+    *   `sql/50_advisory_probe.sql` 은 마스터가 회수할 수 있는지를 관측해
+        기록만 합니다(볼트 raw · POK-428 코멘트). 갈래와 무관하게 회수하지
+        않습니다. 남는 위협은 아래 「한계」 에 적었습니다.
+1.  계정의 TEMP · PUBLIC CONNECT — **닫힘 — 1단-나 ①(POK-428)**: 이 DB
+    (`pokeclip`)의 CONNECT · TEMP 를 PUBLIC 에서 거두고, CONNECT 는
+    `sql/10_roles.sql` 이 계정 여섯(media 두 계정 · 앱 사용자 넷)에 하나씩
+    줍니다. TEMP 는 아무에게도 주지 않습니다. `sql/40_verify.sql` 이
+    `connect:<계정>` · `public_connect_revoked` · `public_temp_revoked` ·
+    `temp:<계정>` · `db_create:<계정>` 으로 잽니다. 새 계정은 CONNECT 를 따로
+    받아야 접속합니다. 다른 DB 는 「한계」 의 K12 줄입니다.
 1.  IAM 인증을 못 쓰는 대체 갈래면 `POSTGRES_PASSWORD` 그릇.
 1.  2-3 판정 대상의 남은 칸. 런타임 자원 행(RDS · 로그 그룹 · SNS · SQS ·
     rewind 버킷 · 실행기 역할 · 프로필)은 이 PR 이 더했습니다(설계 K5 는
@@ -167,12 +167,18 @@ CREATE 는 1단-가가 했습니다(POK-407 · kty 2026-10-24). 잊지 않도록
     그릇은 resolve 전용 토큰 하나이고(공용 `INTERNAL_API_TOKEN` 없음), auth
     의 전용 창구 출발지는 Media 프라이빗 서브넷입니다. auth 는 POK-316 으로
     `native` 위에서도 그 창구를 엽니다.
-1.  앱별 스키마 — 앱 사용자 넷에게 `public` CREATE 대신 자기 스키마를 주고
-    (3번 Flyway 의 스키마 설정과 함께) `public` CREATE 를 회수해, 한계 절의
-    이름 해석 가로채기를 닫습니다. 3번 Java(`services/auth` 의
-    `AudioTrackLabelRepository` · `PairingAttemptRecorder` 의
-    `pg_advisory_xact_lock(hashtext(?))`)도 같은 꼴이라 앱 사용자끼리 가로챌
-    수 있습니다 — 1단-나 · 3번 협의입니다.
+1.  앱별 스키마 — **닫힘 — 1단-나 ①(POK-428)**: 앱 사용자 넷의 `public`
+    CREATE 를 거두고, 계정과 이름이 같은 자기 스키마(`app_auth` ·
+    `app_clip` · `app_chat_collector` · `app_chat_detector`)를 줍니다.
+    스키마는 마스터가 소유하고 앱에는 `USAGE, CREATE` 만 주며, 판별 서버는
+    수집 서버 스키마의 `USAGE` 를 받습니다(`sql/10_roles.sql`). 서버 넷의
+    세션 경로는 자기 스키마 하나이고, 교차 읽기는 `public.stream_*` ·
+    `app_chat_collector.chat_messages` 처럼 스키마를 한정해 적습니다. 그래서
+    3번 Java 의 맨 이름 호출(`AudioTrackLabelRepository` ·
+    `PairingAttemptRecorder` 의 `pg_advisory_xact_lock(hashtext(?))`)은
+    남이 심은 판을 고를 수 없습니다. 서버 쪽 정본은
+    [services/README.md](../../../../services/README.md) 「서버별 DB 계정과
+    권한」 입니다.
 
 ## 한계
 
@@ -195,14 +201,23 @@ CREATE 는 1단-가가 했습니다(POK-407 · kty 2026-10-24). 잊지 않도록
 *   관리형 마스터 비밀(`rds!db-*`)의 생성 · 태그 동작은 `runtime-1a` 묶음이
     그릇 경로(`pokeclip/prod/*`)로 대신 판정합니다. SCP 가 그 이름만 거부하면
     점검은 통과하고 apply 가 거부로 멈춥니다(런북 2).
-*   앱 사용자 넷이 `public` CREATE 를 가져, 같은 DB 의 다른 계정 세션이 맨
-    이름으로 부르는 함수 · 연산자를 가로챌 수 있습니다(CVE-2018-1058 계열).
-    사이드카 · janitor SQL 과 `sql/` 의 마스터 SQL(00–50 · 스키마 사본
-    `stream_schema.sql`)은 이 PR 에서 `pg_catalog` 로 한정하고 형을
-    맞췄습니다(규약은 `media/README.md`). 3번 Java(`services/auth` 의
-    `AudioTrackLabelRepository` · `PairingAttemptRecorder` 의
-    `pg_advisory_xact_lock(hashtext(?))`)도 같은 꼴이라 앱 사용자끼리 가로챌
-    수 있습니다 — 근본(앱별 스키마)과 함께 1단-나 · 3번 협의입니다.
+*   앱 사용자 넷의 `public` CREATE 로 생기던 이름 해석 가로채기
+    (CVE-2018-1058 계열)는 **닫힘(1단-나 ①)** 입니다 — 위 「1단-나 이월」 의
+    7. 사이드카 · janitor SQL 과 `sql/` 의 마스터 SQL(00–50 · 스키마 사본
+    `stream_schema.sql`)의 `pg_catalog` 한정은 심층 방어로 남깁니다
+    (`public` CREATE 를 다시 연 DB 대비 — 규약은 `media/README.md`).
+*   `media/internal/index/ddl.go` · `sql/stream_schema.sql` ·
+    `sql/00_preflight.sql` 주석의 「앱 사용자가 public 에 심은」 서술은
+    1단-나 ① 뒤로 사실이 아닙니다. DDL 바이트를 바꾸지 않는 불변식(`ddl.go` ·
+    사본)과 범위(00) 때문에 두었습니다.
+*   advisory 함수 EXECUTE 는 PUBLIC 그대로입니다(K7 — 회수하지 않음). 이
+    DB 에 로그인하는 다른 계정이 사이드카의 컷오프 잠금 열쇠를 쥐고 놓지
+    않으면 그 스트림의 컷오프 주조가 실패를 되풀이합니다.
+*   `pokeclip` 밖 DB(`postgres` · `template1`)의 CONNECT · TEMP 는 PUBLIC
+    기본으로 남습니다(K12). 그 DB 에서 할 수 있는 일은 연결 수 소비와 임시
+    표 정도입니다 — 명시 연결 상한은 `media_indexer` 의 20 하나뿐이고 나머지
+    계정은 상한이 없습니다. advisory 열쇠 공간은 DB 마다 따로라 `pokeclip`
+    에 닿지 않습니다.
 *   일꾼 배치 전에는 소비자가 없습니다(1단-다 K5). O7d 부터 일꾼 배치(POK-408
     배치 PR)까지 clip 이 보낸 주문이 원 큐에 쌓이고, 보관 4일 뒤 사라집니다
     — 고착 알람이 없습니다.
@@ -239,3 +254,4 @@ CREATE 는 1단-가가 했습니다(POK-407 · kty 2026-10-24). 잊지 않도록
 *   [runtime-1a 런북](../../runbooks/runtime-1a.md) ·
     [단계 직전 점검](../../runbooks/stage-precheck.md)
 *   [ADR-0001 stream_segments DDL 소유권](../../../../docs/decisions/2026-08-01-stream-segments-ddl-ownership.md)
+*   [ADR-0007 앱 표는 자기 스키마](../../../../docs/decisions/2026-10-24-app-schemas.md)

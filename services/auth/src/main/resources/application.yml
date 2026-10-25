@@ -17,6 +17,9 @@ spring:
     username: ${POSTGRES_USER}
     password: ${POSTGRES_PASSWORD}
     hikari:
+      # 세션 경로를 자기 스키마 하나로 둔다(POK-428). Hikari가 새 연결마다 setSchema로 search_path를 바꾸므로
+      # 맨 이름은 app_auth와 암묵 pg_catalog에서만 풀린다 — public에 누가 같은 이름의 함수를 심어도 고르지 않는다.
+      schema: ${pokeclip.datasource.schema}
       # Hikari 기본값과 같은 10이다. 값을 바꾸는 게 아니라 "운영 풀은 10"을 글로 못박는다 —
       # 치지직 resolve는 커넥션을 쥔 채 외부 HTTP(read-timeout 5s)를 기다리므로 풀 크기가 곧
       # 동시 처리 상한이다. ChzzkResolvePoolExhaustionTest가 같은 10에서 동시 25로 잰다.
@@ -45,16 +48,9 @@ spring:
     # 남의 이력을 자기 것으로 읽고 부팅에 실패한다.
     # 마이그레이션 번호는 모듈별 대역을 쓴다 — V1xx auth · V2xx clip · V3xx chat.
     table: flyway_schema_history_auth
-    # 공유 DB에서 뜨는 순서와 무관하게 부팅하려면 모든 Flyway 서버에 필요하다 —
-    # auth가 "첫 서버"라는 보장이 없다. chat-collector가 먼저 마이그레이션한 빈 DB에
-    # auth가 나중에 뜨면 public은 비어 있지 않은데 우리 이력 테이블은 없어서
-    # "Found non-empty schema(s) ... but no schema history table"로 죽는다
-    # (chat-collector 쪽 실측 2026-08-15, auth도 같은 메시지로 재현 — IntegrationTestSupport가
-    # 그 상황을 심어 두어 이 두 줄을 지우면 auth 테스트 전체가 빨강이다).
-    baseline-on-migrate: true
-    # 기본 1이면 V1 이하가 스킵된다. 우리 대역은 V1xx라 실질 영향은 없지만,
-    # "아무것도 스킵하지 않는다"를 정확히 말하려면 0이다.
-    baseline-version: 0
+    # 표와 이력 테이블을 자기 스키마에 만든다(POK-428). 남의 표가 없는 스키마라 baseline 설정이 필요 없다 —
+    # 이 스키마가 이력 없이 비어 있지 않으면 Flyway가 non-empty로 멈춘다(의도).
+    schemas: ${pokeclip.datasource.schema}
 
   servlet:
     multipart:
@@ -162,6 +158,9 @@ management:
 
 pokeclip:
   datasource:
+    # 이 서버의 표가 사는 스키마(POK-428 — 이름 = DB 계정, 운영 10_roles.sql이 마스터 소유로 만든다). 위의
+    # hikari.schema(세션 경로)와 flyway.schemas(표 · 이력 자리)가 이 한 키에서 나온다.
+    schema: app_auth
     # DB 로그인 방식(POK-407, db-support의 DataSourceLoginConfiguration). password(기본)면 위 POSTGRES_PASSWORD로,
     # iam이면 비밀번호 대신 연결마다 RDS IAM 토큰으로 붙는다. 이름과 뜻은 media 사이드카와 같다.
     auth: ${POSTGRES_AUTH:password}

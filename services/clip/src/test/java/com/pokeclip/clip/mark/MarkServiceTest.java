@@ -261,7 +261,7 @@ class MarkServiceTest extends IntegrationTestSupport {
 
     private void 조각(String ingestKey, Instant wall, long ptsMs) {
         jdbc.update("""
-                        INSERT INTO stream_segments (stream_id, seq, start_pts_ms, start_wall_utc, duration_ms, s3_key, upload_state)
+                        INSERT INTO public.stream_segments (stream_id, seq, start_pts_ms, start_wall_utc, duration_ms, s3_key, upload_state)
                         VALUES (?, 1, ?, ?, 4000, ?, 'uploaded')""",
                 ingestKey, ptsMs, Timestamp.from(wall), "seg/" + ingestKey + "/1");
     }
