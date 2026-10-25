@@ -2778,8 +2778,8 @@ describe('LiveScreen — 실시간 채팅 패널', () => {
 
     const chzzk = screen.getByText('치지직팬').closest('li')!;
     const soop = screen.getByText('숲시청자').closest('li')!;
-    expect(within(chzzk).getByText('치지직')).toBeInTheDocument();
-    expect(within(soop).getByText('SOOP')).toBeInTheDocument();
+    expect(within(chzzk).getByRole('img', { name: '치지직' })).toBeInTheDocument();
+    expect(within(soop).getByRole('img', { name: 'SOOP' })).toBeInTheDocument();
   });
 
   it('실시간 중계로 온 후원도 어느 플랫폼인지 보인다(POK-466)', async () => {
@@ -2807,7 +2807,7 @@ describe('LiveScreen — 실시간 채팅 패널', () => {
     await settle();
 
     const line = screen.getByText('애드팬 · 애드벌룬 30개').closest('li')!;
-    expect(within(line).getByText('SOOP')).toBeInTheDocument();
+    expect(within(line).getByRole('img', { name: 'SOOP' })).toBeInTheDocument();
   });
 
   it('급증 키워드·후원·채팅 줄을 그린다', async () => {
