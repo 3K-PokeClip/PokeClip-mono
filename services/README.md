@@ -954,7 +954,8 @@ SELECT pg_catalog.pg_database_size(pg_catalog.current_database());
 *   `::error::schema move committed but a later step failed; old containers NOT
     restarted` 또는 `::error::schema move state unknown; …` — 옮긴 뒤(또는 판정
     불가) 실패했다. 서버는 멈춘 채다. kty 에게 보고하고, 새 이미지로 `up -d` 하는
-    SSM 은 kty 승인 뒤에 보낸다. 판정 불가에는 이전 psql 이 90초 안에 끝나지
+    SSM 은 커밋이 확인된 뒤(판정 불가면 아래 판정과 표지 확인 걸음 4 를 거친 뒤)
+    kty 승인으로 보낸다. 판정 불가에는 이전 psql 이 90초 안에 끝나지
     않은 경우도 든다 — 그때는 `pg_stat_activity` 에 `application_name` 이
     `pokeclip-dev-move` 인 세션이 없어진 뒤에 이력 표를 읽어 판정한다. 판정
     불가면 시작 때 쓴 상태 불명 표지가 그대로 남는다(아래).
