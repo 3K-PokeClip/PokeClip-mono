@@ -42,9 +42,9 @@
 | O7b | `O7b` | — | 함 | 함 | 공유 존의 옛 ACM 검증 이름(`_` 로 시작하는 CNAME) | apply |
 | O7c | `O7c` | — | 함 | 함 | — | 푸시마다 |
 | runtime-1a | `runtime-1a` | — | 함(POK-365 완료 — 런타임 상태 객체 · RDS · SNS · SQS · 일 큐 셋과 DLQ(1단-다) · 실행기 역할 · 프로필 · prod EC2 인스턴스(켬 뒤 태그) · 관리형 마스터 비밀(apply 뒤 입력 파일)이 이 단계부터, rewind · clips · 프로필 사진 버킷과 그 객체는 O7d 부터 대상) | 함 | — | plan 승인마다(본 apply · 켬 · 끔) · 켬 직후 2-3 재판정 · 값 입력 |
-| O7d | `O7d` | — | 함(platform 상태 객체 · ALB · NLB · 대상 그룹 · 리스너 · ECS 클러스터 · 서비스 · 작업 정의(태그 — 이 단계 직전에는 `TARGET_NONE`) · REGIONAL WAF · 그 로그 그룹 · prod 역할(/pokeclip/prod/)을 ECS 작업에 넘기기(`iam:PassRole` · `ecs-tasks.amazonaws.com` 문맥)가 이 단계부터 대상) | 함 | Cloud Map 사설 존 리전 조건 · 리스너 규칙 transform 속성 · ELB 한도 읽기 | (f) 실측 · 태스크 생성 |
+| O7d | `O7d` | — | 함(platform 상태 객체 · ALB · NLB · 대상 그룹 · 리스너 · 리스너 규칙 · ECS 클러스터 · 서비스 · 작업 정의(태그 — 이 단계 직전에는 `TARGET_NONE`) · ALB 에서 WAF 떼기 · REGIONAL WAF · 그 로그 그룹 · ECS 서비스 로그 그룹 셋 · prod 역할(/pokeclip/prod/)을 ECS 작업에 넘기기(`iam:PassRole` · `ecs-tasks.amazonaws.com` 문맥)가 이 단계부터 대상) | 함 | Cloud Map 사설 존 리전 조건 · 리스너 규칙 transform 속성 · ELB 한도 읽기 | (f) 실측 · 태스크 생성 |
 | O7e | `O7e` | `O7e-stop1`(멈춤 자리 ①) | 함(media 상태 객체 · media 역할(넘기기) · 인스턴스 프로필이 이 단계부터 대상. media 상자는 prod EC2 인스턴스 행이 태그로 푼다) | 함 | — | apply · 기동 확인 · A1 |
-| O7f | `O7f` | `O7f-stop2`(멈춤 자리 ② — 값 입력 직전 · 7-R 직전에 다시). 부분 진행 중 하위 단계는 `O7f` · `testkey` · `loopback` 을 다시 | 함(CloudFront 배포 · 함수 · KVS · CLOUDFRONT WAF · 그 로그 그룹 · media 표준 로그 그룹 · prod 버킷(태그 — apex 포함)이 이 단계부터 대상) | 함 | KVS 그릇 재조회 · Origin Shield · 로그 그룹 부수 동작 | apply · 값 · 시험 판정 · A2 |
+| O7f | `O7f` | `O7f-stop2`(멈춤 자리 ② — 값 입력 직전 · 7-R 직전에 다시). 부분 진행 중 하위 단계는 `O7f` · `testkey` · `loopback` 을 다시 | 함(CloudFront 배포(표준 로그 전달 설정 포함) · 함수 · 함수 로그 그룹 셋 · KVS · CLOUDFRONT WAF · 그 로그 그룹 · media 표준 로그 그룹 · 그 전달 원천 · 대상 · prod 버킷(태그 — apex 포함)과 그 표본 객체(`index.html`)가 이 단계부터 대상) | 함 | KVS 그릇 재조회 · Origin Shield · 로그 그룹 부수 동작 | apply · 값 · 시험 판정 · A2 |
 | 8(O8 — 이름마다) | `8` | — | 함(이름 되돌림 apply 때는 SCP 재판정만 — M11 O8) | 함 | 공유 존 이름 충돌 · 설계 12절 1 ① · 2 답 또는 kty 수용 기록 | 이름마다 |
 | 8a(O8a) | `8a` | — | 함(이 뒤로 주기 판정) | 함 | — | apply |
 | 9(각 상향) | `9` | — | 함 | 함 | — | 상향마다 |
@@ -232,8 +232,9 @@ bash infra/terraform/scripts/precheck/scp-recheck.sh --accept O7f \
 비밀 · ECR · network · 인증서 · 권한 변경 대상 · prod 런타임 자원(RDS ·
 관리형 마스터 비밀 · SNS · SQS · rewind 버킷 · SQL 실행기 역할 · 프로필) ·
 prod EC2 인스턴스(켜진 SQL 실행기 · O7e 뒤 media 상자) · platform(ALB ·
-NLB · 대상 그룹 · 리스너 · ECS · REGIONAL WAF · 그 로그 그룹) · media 역할 ·
-프로필 · edge(CloudFront · CLOUDFRONT WAF · 로그 그룹 · apex 버킷)입니다
+NLB · 대상 그룹 · 리스너 · 리스너 규칙 · ALB 의 WAF 연결 · ECS · REGIONAL
+WAF · 로그 그룹) · media 역할 · 프로필 · edge(CloudFront · CLOUDFRONT WAF ·
+로그 그룹 · 접근 로그 전달 · apex 버킷 · 그 표본 객체)입니다
 (`prod_targets.tsv`). SNS 주제 · SQS 큐의 자원 정책도 직접 읽습니다(아래
 「해석 · 정책 읽기」). 읽기만 하고 AWS 에 아무것도 만들지 않으며, 실제
 접근을 시도하지 않습니다.
@@ -375,9 +376,10 @@ platform 의 태그 행(ALB · NLB · 대상 그룹 · 리스너 · ECS)도 첫 
     `approvals.tsv`. 지우지 않습니다(리스 만료 때 M18). 입력 파일
     `input-<이름>.txt` 는 증거 디렉터리가 아니라 루트 바로 아래에 있고, 다음
     단계 실행도 그것을 읽습니다(지우지 않음).
-*   지금 데이터에는 공유 공개 존의 prod 레코드 행(Route 53 레코드 변경)이
-    없습니다. prod 레코드 이름이 저장소 Terraform 에 오르는 단계 PR 이
-    더합니다.
+*   공유 공개 존의 prod 레코드 이름 여섯(prod/records)은 레코드 이름 문맥
+    행(`zone-record-*` · 첫 단계 8)으로 묻습니다 — 이름마다 prod 하나와
+    dev 표본 + prod 두 갈래입니다(`prod_targets.tsv` 의 prod/records
+    덩어리).
 
 ### 이 점검이 보장하지 않는 것
 

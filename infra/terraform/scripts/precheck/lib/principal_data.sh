@@ -23,6 +23,11 @@ readonly POLICY_SERVICES=' s3 secretsmanager ecr sns sqs kms lambda '
 readonly CONTEXT_KEY_PATTERN='^[a-z0-9-]+:[A-Za-z0-9]+$'
 readonly NAME_PATTERN='^[A-Za-z0-9+=,.@_/-]+$'
 readonly TAG_TYPE_PATTERN='^[a-z0-9-]+:[a-z0-9-]+$'
+# tag: 의 객체 꼴(s3:bucket/<키> — 푼 버킷마다 키를 붙인 객체 ARN 을 묻는다).
+readonly TAG_OBJECT_PATTERN='^s3:bucket/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$'
+# 자원 유형 칸 — 서비스 승인 참조의 유형 이름(loadbalancer/app/ 처럼 「/」
+# 가 들 수 있음)을 쉼표로 하나 이상.
+readonly TYPE_PATTERN='^[a-z0-9-]+(/[a-z0-9-]*)*(,[a-z0-9-]+(/[a-z0-9-]*)*)*$'
 readonly ZONE_PATTERN='^[a-z0-9-]+(\.[a-z0-9-]+)+\.?$'
 
 # 주체 행(같은 색인).
@@ -270,8 +275,8 @@ principal::input_name_prefix() {
 # 대상 행의 해석 방법 · 정책 읽기 방법 · 동작을 검사한다. input: 행은 아는
 # 입력 이름이고 동작이 모두 secretsmanager 여야 한다.
 # Globals:
-#   TAG_TYPE_PATTERN, ZONE_PATTERN, KEY_PATTERN, ACTION_PATTERN,
-#   POLICY_SERVICES
+#   TAG_TYPE_PATTERN, TAG_OBJECT_PATTERN, ZONE_PATTERN, KEY_PATTERN,
+#   ACTION_PATTERN, POLICY_SERVICES
 # Arguments:
 #   해석 방법, 정책 읽기 방법, 동작(쉼표 구분).
 # Returns:
@@ -280,7 +285,10 @@ principal::input_name_prefix() {
 principal::target_fields_ok() {
   local method="$1" read="$2" actions="$3," action
   case "${method}" in
-    tag:*) [[ "${method#tag:}" =~ ${TAG_TYPE_PATTERN} ]] || return 1 ;;
+    tag:*)
+      [[ "${method#tag:}" =~ ${TAG_TYPE_PATTERN} ||
+        "${method#tag:}" =~ ${TAG_OBJECT_PATTERN} ]] || return 1
+      ;;
     arn:*) principal::concrete_arn "${method#arn:}" || return 1 ;;
     zone:*) [[ "${method#zone:}" =~ ${ZONE_PATTERN} ]] || return 1 ;;
     input:*)
@@ -310,7 +318,7 @@ principal::target_fields_ok() {
 # prod_targets.tsv 를 읽는다.
 # Globals:
 #   t_key, t_stage, t_method, t_region, t_actions, t_read, t_context,
-#   KEY_PATTERN, REGION_PATTERN
+#   KEY_PATTERN, TYPE_PATTERN, REGION_PATTERN
 #######################################
 principal::load_targets() {
   local entry n line key stage method type region actions read context
@@ -329,7 +337,7 @@ principal::load_targets() {
     actions="${fields[5]}"
     read="${fields[6]}"
     context="${fields[7]}"
-    if ! [[ "${key}" =~ ${KEY_PATTERN} && "${type}" =~ ^[a-z0-9-]+$ &&
+    if ! [[ "${key}" =~ ${KEY_PATTERN} && "${type}" =~ ${TYPE_PATTERN} &&
       "${region}" =~ ${REGION_PATTERN} ]]; then
       die "prod_targets.tsv ${n}행의 키 · 유형 · 리전 꼴이 틀림"
     fi

@@ -3,6 +3,7 @@
 # 같은 (동작, 리전)은 한 행. 자원 패턴을 계획이 주지 않으면 *.
 # 출처: 계획 M14(HSTS 상향 — 응답 헤더 정책 · edge apply) · 설계 8절 「9 의
 # edge apply 도 SCP 변경의 영향을 받는다」 · 13-1 미판정(KVS 그릇 재조회).
+# SG 규칙 재조회 읽기(POK-479 — 결정 65 예외 · 그 덩어리의 주석).
 # 2-3 판정 래퍼 읽기(맨 아래 덩어리): M17b principal-check.sh.
 
 # edge — 응답 헤더 정책 갱신 · 재조회(us-east-1)
@@ -10,6 +11,16 @@ cloudfront:UpdateResponseHeadersPolicy	us-east-1	*
 cloudfront:GetResponseHeadersPolicy	us-east-1	*
 cloudfront:GetDistribution	us-east-1	*
 cloudfront:DescribeKeyValueStore	us-east-1	*
+
+# SG 규칙 재조회(서울) — 이 단계의 edge apply 가 prod/edge 의 SG 규칙
+# (vpc_origin_ingress.tf 의 internal_alb_from_vpc_origins — O7f 가 만듦)을
+# refresh 한다.
+# provider 6.68.0 은 SG 규칙을 Read 에서 DescribeSecurityGroupRules 로
+# 읽는다(internal/service/ec2 의 vpc_security_group_ingress_rule.go Read →
+# find.go findSecurityGroupRuleByID — egress 규칙도 같은 Read). 첫 apply 는
+# 부르지 않고 재apply 의 refresh 가 부른다 — 거부되면 plan 에서 멈춘다(부분
+# apply 아님). 결정 65 예외 · 리뷰가 찾은 누락(POK-479).
+ec2:DescribeSecurityGroupRules	ap-northeast-2	*
 
 # 상태 버킷(계획 3절 백엔드 · use_lockfile — 읽기 · 쓰기 · 잠금 파일)
 s3:ListBucket	ap-northeast-2	*

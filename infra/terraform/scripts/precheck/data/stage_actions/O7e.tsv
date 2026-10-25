@@ -4,6 +4,7 @@
 # 출처: 계획 M9 「O7e 선행 0」 공통 묶음(ec2 · iam 인스턴스 프로필 · elb 대상
 # 등록 · ssm · secretsmanager — rds-db:connect 는 O7e-stop1 에만) · O7e 본문
 # 1 ~ 5(media apply · T9a · CDN 비밀 입력 · 재시작).
+# SG 규칙 재조회 읽기(POK-479 — 결정 65 예외 · 그 덩어리의 주석).
 # 2-3 판정 래퍼 읽기(맨 아래 덩어리): M17b principal-check.sh.
 
 # Media EC2 · 시작 템플릿 · SG
@@ -14,6 +15,14 @@ ec2:AuthorizeSecurityGroupIngress	ap-northeast-2	*
 ec2:AuthorizeSecurityGroupEgress	ap-northeast-2	*
 ec2:DescribeSecurityGroups	ap-northeast-2	*
 ec2:CreateTags	ap-northeast-2	*
+# SG 규칙 재조회 — 이 루트의 SG 규칙(aws_vpc_security_group_ingress_rule ·
+# egress_rule: 모듈 media_host 의 security_groups.tf).
+# provider 6.68.0 은 SG 규칙을 Read 에서 DescribeSecurityGroupRules 로
+# 읽는다(internal/service/ec2 의 vpc_security_group_ingress_rule.go Read →
+# find.go findSecurityGroupRuleByID — egress 규칙도 같은 Read). 첫 apply 는
+# 부르지 않고 재apply 의 refresh 가 부른다 — 거부되면 plan 에서 멈춘다(부분
+# apply 아님). 결정 65 예외 · 리뷰가 찾은 누락(POK-479).
+ec2:DescribeSecurityGroupRules	ap-northeast-2	*
 
 # 인스턴스 역할 · 인스턴스 프로필(경로 /pokeclip/prod/)
 iam:CreateRole	us-east-1	arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*

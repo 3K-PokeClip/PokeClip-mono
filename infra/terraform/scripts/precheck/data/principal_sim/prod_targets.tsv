@@ -13,6 +13,8 @@
 # prod/bootstrap 의 state_bucket_name 기본값.
 # 해석 tag:<서비스>:<유형> 은 Resource Groups Tagging API 의
 # ResourceTypeFilters 값이다(Environment = prod 태그로 찾음). 해석
+# tag:s3:bucket/<키> 는 그렇게 푼 버킷 ARN 마다 「/<키>」 를 붙인 객체
+# ARN 이다(표본 키 — POK-479). 해석
 # input:<이름> 은 kty 가 apply 뒤 증거 루트에 적는 입력 파일
 # input-<이름>.txt 의 ARN 이다(lib/principal_resolve.sh 머리 주석 · 파일이
 # 없으면 TARGET_NONE). 해석 arn: 이 로그 그룹 ARN 이면 이름 꼴과
@@ -28,7 +30,9 @@
 # secretsmanager). prod/edge · prod/records 행도 대조 2026-10-24(접두 =
 # cloudfront · cloudfront-keyvaluestore · route53). platform · media 행과
 # edge 의 WAF · 로그 그룹 · 버킷 행은 대조 2026-10-25(접두 = elbv2 · ecs ·
-# wafv2 · logs · s3 · iam — ELB 는 list_elbv2.html).
+# wafv2 · logs · s3 · iam — ELB 는 list_elbv2.html). POK-479 행(리스너
+# 규칙 · WAF 떼기 · ECS · 함수 로그 그룹 · 로그 전달 · apex 객체)도 대조
+# 2026-10-25(접두 = elbv2 · wafv2 · logs · cloudfront · s3).
 # 데이터 단언은 서비스 접두 · 계열만 본다 — 짝은 사람이 대조한다(A9).
 #
 # 두지 않는 행:
@@ -155,30 +159,53 @@ clips-object	O7d	arn:arn:aws:s3:::pokeclip-prod-clips-apne2/clips/1/sample-token
 profile-photo-bucket	O7d	arn:arn:aws:s3:::pokeclip-prod-profile-photos-apne2	bucket	ap-northeast-2	s3:PutBucketPolicy,s3:DeleteBucketPolicy,s3:PutBucketPublicAccessBlock,s3:PutBucketOwnershipControls,s3:PutLifecycleConfiguration,s3:PutBucketCORS,s3:DeleteBucket	s3	-
 profile-photo-object	O7d	arn:arn:aws:s3:::pokeclip-prod-profile-photos-apne2/profile-photos/1/0	object	ap-northeast-2	s3:GetObject,s3:PutObject,s3:DeleteObject	s3	-
 
-# prod/platform(POK-460) — 공개 · 내부 ALB 와 NLB · 대상 그룹 · 리스너 · ECS
-# 클러스터 · 서비스 · 작업 정의는 ARN 끝(ID · 개정 번호)이 생성 때 정해져
-# Environment = prod 태그로 푼다(Tagging API 가 받는 유형 — AWS Resource
-# Groups 「Supported resource types」 대조 2026-10-25 · ResourceTypeFilters
-# 값은 ARN 의 서비스 · 유형 조각). ALB · NLB 는 한 유형(loadbalancer)이다.
+# prod/platform(POK-460 · POK-479) — 공개 · 내부 ALB 와 NLB · 대상 그룹 ·
+# 리스너 · 리스너 규칙 · ECS 클러스터 · 서비스 · 작업 정의는 ARN 끝(ID · 개정
+# 번호)이 생성 때 정해져 Environment = prod 태그로 푼다(Tagging API 가 받는
+# 유형 — AWS Resource Groups 「Supported resource types」 대조 2026-10-25 ·
+# ResourceTypeFilters 값은 ARN 의 서비스 · 유형 조각). ELB 의 유형 칸은 서비스
+# 승인 참조의 이름이고(list_elbv2.html — loadbalancer/app/ · listener/app 꼴 ·
+# POK-480), 필터 조각은 그 첫 「/」 앞이다. ALB · NLB 는 한 필터
+# (loadbalancer · listener)라 한 행이 둘을 풀어 유형 칸에 둘을 쉼표로 적는다.
 # 태그 해석 행이라 태그 동작도 묻는다(태그를 지우면 대상에서 빠진다).
-# 첫 단계(O7d) 직전에는 자원이 없어 TARGET_NONE 이 정상이다. 리스너 규칙은
-# 두지 않는다(규칙 만들기는 리스너 행의 CreateRule 이 묻는다 — 한계).
+# 첫 단계(O7d) 직전에는 자원이 없어 TARGET_NONE 이 정상이다.
+# 리스너 규칙(POK-479 · 보안 리뷰 M) — 필터 elasticloadbalancing:listener-rule
+# 은 GetResources 문서(필터 문자열은 「the same as that embedded in a
+# resource's ARN」 — ARN 이 listener-rule/app/…)와 Resource Groups 지원
+# 목록(ListenerRule 의 Tag-based Groups 가 Yes — Listener 와 같음)으로
+# 확인했다(대조 2026-10-25). ModifyRule · DeleteRule · SetRulePriorities 는
+# listener-rule/app 만 받는다.
+# ALB 에서 WAF 떼기(POK-479) — wafv2:DisassociateWebACL 의 자원은 웹 ACL 이
+# 아니라 ALB 다(list_wafv2.html — loadbalancer/app/). 그래서 ALB 를 푸는
+# 필터로 묻는다(NLB 도 함께 풀려 같은 질문을 받는다).
+# elasticloadbalancing:SetWebAcl 은 자원 유형이 없어(자원 「*」 만) 구체 ARN
+# 행으로 물을 수 없다(CloudFront 키 그룹과 같은 한계).
 # REGIONAL WAF 는 ARN 끝(ID)이 생성 때 정해져 표본 ID 로 묻는다(cf-kvs 와
-# 같은 방식 · 같은 한계). 태그로 풀지 않는 근거: Resource Groups 지원 목록
-# 에 WAFv2 가 없다(AWS::WAF::* · AWS::WAFRegional::* 만). GetResources 가
-# 서비스 고유 API 로 태깅한 wafv2 웹 ACL 을 돌려주는지는 실측하지 않았다 —
-# 실측되면 tag: 로 바꾼다(후속). 첫 단계(O7d · O7f) 직전에는 웹 ACL 이 아직
-# 없어 태그로도 풀리지 않으므로 그때는 표본 말고 방법이 없다. 요청 샘플 읽기
-# (GetSampledRequests)도 묻는다 — 웹 ACL 데이터 보호(POK-459) 전에는 샘플에
-# Authorization · 서명 쿠키 원문이 있다. 로그 그룹은 이름이 고정이라 구체
-# ARN 이다(rds-log-group 과 같은 꼴 · 같은 동작 · 두 꼴로 묻는다 — 머리
-# 주석).
-platform-load-balancer	O7d	tag:elasticloadbalancing:loadbalancer	loadbalancer	ap-northeast-2	elasticloadbalancing:DeleteLoadBalancer,elasticloadbalancing:ModifyLoadBalancerAttributes,elasticloadbalancing:SetSecurityGroups,elasticloadbalancing:SetSubnets,elasticloadbalancing:CreateListener,elasticloadbalancing:AddTags,elasticloadbalancing:RemoveTags	none	-
+# 같은 방식 · 같은 한계). 태그로 풀지 않는다 — 읽기 전용 실측(2026-10-25 ·
+# get-resources --resource-type-filters wafv2, 서울 · us-east-1)은 두 리전
+# 모두 0건이었다. 이 계정에 wafv2 자원이 하나도 없어(list-web-acls ·
+# list-ip-sets · list-rule-groups · list-regex-pattern-sets 두 범위 모두
+# 0건) 반환 꼴을 판단할 수 없다. 문서로도 정하지 못한다 — GetResources 는
+# 서비스 고유 API 로 태깅한 자원도 돌려준다고 적지만, Resource Groups 지원
+# 목록에 WAFv2 가 없고(AWS::WAF::* · AWS::WAFRegional::* 만), wafv2 ARN 의
+# 유형 조각(regional/webacl · global/webacl)을 받는 필터 꼴은 확인하지
+# 못했다. 판단 불가 — 표본을 유지한다(POK-479). 웹 ACL 이 생긴 뒤 다시
+# 실측한다. 첫 단계(O7d · O7f) 직전에는 웹 ACL 이 아직 없어 태그로도 풀리지
+# 않으므로 그때는 표본 말고 방법이 없다. 요청 샘플 읽기(GetSampledRequests)
+# 도 묻는다 — 웹 ACL 데이터 보호(POK-459) 전에는 샘플에 Authorization · 서명
+# 쿠키 원문이 있다. 로그 그룹(WAF 트래픽 로그 · ECS 서비스 로그 —
+# POK-479)은 이름이 고정이라 구체 ARN 이다(rds-log-group 과 같은 꼴 · 같은
+# 동작 · 두 꼴로 묻는다 — 머리 주석). ECS 서비스 로그 그룹 이름은 모듈
+# ecs_service 의 <name_prefix>-<name>(prod/platform services.tf 의 next ·
+# auth · clip)이다.
+platform-load-balancer	O7d	tag:elasticloadbalancing:loadbalancer	loadbalancer/app/,loadbalancer/net/	ap-northeast-2	elasticloadbalancing:DeleteLoadBalancer,elasticloadbalancing:ModifyLoadBalancerAttributes,elasticloadbalancing:SetSecurityGroups,elasticloadbalancing:SetSubnets,elasticloadbalancing:CreateListener,elasticloadbalancing:AddTags,elasticloadbalancing:RemoveTags	none	-
 platform-target-group	O7d	tag:elasticloadbalancing:targetgroup	targetgroup	ap-northeast-2	elasticloadbalancing:RegisterTargets,elasticloadbalancing:DeregisterTargets,elasticloadbalancing:ModifyTargetGroup,elasticloadbalancing:ModifyTargetGroupAttributes,elasticloadbalancing:DeleteTargetGroup,elasticloadbalancing:AddTags,elasticloadbalancing:RemoveTags	none	-
-platform-listener	O7d	tag:elasticloadbalancing:listener	listener	ap-northeast-2	elasticloadbalancing:ModifyListener,elasticloadbalancing:DeleteListener,elasticloadbalancing:CreateRule,elasticloadbalancing:AddTags,elasticloadbalancing:RemoveTags	none	-
+platform-listener	O7d	tag:elasticloadbalancing:listener	listener/app,listener/net	ap-northeast-2	elasticloadbalancing:ModifyListener,elasticloadbalancing:DeleteListener,elasticloadbalancing:CreateRule,elasticloadbalancing:AddTags,elasticloadbalancing:RemoveTags	none	-
 ecs-cluster	O7d	tag:ecs:cluster	cluster	ap-northeast-2	ecs:DeleteCluster,ecs:UpdateCluster,ecs:UpdateClusterSettings,ecs:PutClusterCapacityProviders,ecs:ExecuteCommand,ecs:TagResource,ecs:UntagResource	none	-
 ecs-service	O7d	tag:ecs:service	service	ap-northeast-2	ecs:UpdateService,ecs:DeleteService,ecs:TagResource,ecs:UntagResource	none	-
 ecs-task-definition	O7d	tag:ecs:task-definition	task-definition	ap-northeast-2	ecs:RunTask,ecs:StartTask,ecs:DeleteTaskDefinitions,ecs:TagResource,ecs:UntagResource	none	-
+platform-listener-rule	O7d	tag:elasticloadbalancing:listener-rule	listener-rule/app	ap-northeast-2	elasticloadbalancing:ModifyRule,elasticloadbalancing:DeleteRule,elasticloadbalancing:SetRulePriorities,elasticloadbalancing:AddTags,elasticloadbalancing:RemoveTags	none	-
+platform-waf-detach	O7d	tag:elasticloadbalancing:loadbalancer	loadbalancer/app/	ap-northeast-2	wafv2:DisassociateWebACL	none	-
 # prod ECS 실행 · 작업 역할을 ECS 작업에 넘기는 길(보안 리뷰 HIGH). 실행
 # 역할은 앱 비밀 그릇을 읽고(modules/ecs_service/main.tf 의 ReadSecrets —
 # secretsmanager:GetSecretValue), ECS 는 작업 정의의 역할을 넘길 때
@@ -191,6 +218,9 @@ ecs-task-definition	O7d	tag:ecs:task-definition	task-definition	ap-northeast-2	e
 ecs-role-pass	O7d	prodrole	role	us-east-1	iam:PassRole	none	iam:PassedToService:string:ecs-tasks.amazonaws.com
 waf-regional	O7d	arn:arn:aws:wafv2:ap-northeast-2:${ACCOUNT}:regional/webacl/pokeclip-prod-regional/sample-regional-web-acl	webacl	ap-northeast-2	wafv2:UpdateWebACL,wafv2:DeleteWebACL,wafv2:PutLoggingConfiguration,wafv2:DeleteLoggingConfiguration,wafv2:GetSampledRequests	none	-
 waf-regional-log-group	O7d	arn:arn:aws:logs:ap-northeast-2:${ACCOUNT}:log-group:aws-waf-logs-pokeclip-prod-public	log-group	ap-northeast-2	logs:DeleteLogGroup,logs:PutRetentionPolicy,logs:DeleteRetentionPolicy	none	-
+ecs-log-group-next	O7d	arn:arn:aws:logs:ap-northeast-2:${ACCOUNT}:log-group:pokeclip-prod-next	log-group	ap-northeast-2	logs:DeleteLogGroup,logs:PutRetentionPolicy,logs:DeleteRetentionPolicy	none	-
+ecs-log-group-auth	O7d	arn:arn:aws:logs:ap-northeast-2:${ACCOUNT}:log-group:pokeclip-prod-auth	log-group	ap-northeast-2	logs:DeleteLogGroup,logs:PutRetentionPolicy,logs:DeleteRetentionPolicy	none	-
+ecs-log-group-clip	O7d	arn:arn:aws:logs:ap-northeast-2:${ACCOUNT}:log-group:pokeclip-prod-clip	log-group	ap-northeast-2	logs:DeleteLogGroup,logs:PutRetentionPolicy,logs:DeleteRetentionPolicy	none	-
 
 # prod/media(POK-460) — media 상자 역할 · 인스턴스 프로필(modules/media_host
 # 의 이름 · 경로). sql-runner 행과 같은 꼴이다 — 역할 넘기기는 EC2 로 넘기는
@@ -208,26 +238,50 @@ media-profile	O7e	arn:arn:aws:iam::${ACCOUNT}:instance-profile/pokeclip/prod/pok
 # 표본 키와 같은 방식) — 자원 「*」 · 「key-value-store/*」 를 허용한 정책은
 # 잡고, 실제 ID 를 적은 정책은 놓친다(한계). KVS 값 동작(GetKey · ListKeys 는
 # CDN 비밀 값을 읽는다)은 서비스가 달라 행을 나눈다.
-cf-distribution	O7f	tag:cloudfront:distribution	distribution	us-east-1	cloudfront:UpdateDistribution,cloudfront:DeleteDistribution,cloudfront:TagResource,cloudfront:UntagResource	none	-
+# 배포 행은 표준 로그 전달 설정 권한(AllowVendedLogDeliveryForResource —
+# list_cloudfront.html 의 자원 distribution)도 묻는다(POK-479 · 보안 리뷰
+# M). dev 주체가 이것과 아래 전달 행의 동작을 가지면 media 접근 로그를 자기
+# 대상으로 돌리거나 끊을 수 있다.
+cf-distribution	O7f	tag:cloudfront:distribution	distribution	us-east-1	cloudfront:UpdateDistribution,cloudfront:DeleteDistribution,cloudfront:AllowVendedLogDeliveryForResource,cloudfront:TagResource,cloudfront:UntagResource	none	-
 cf-function-live-auth	O7f	arn:arn:aws:cloudfront::${ACCOUNT}:function/pokeclip-prod-live-auth	function	us-east-1	cloudfront:UpdateFunction,cloudfront:PublishFunction,cloudfront:DeleteFunction,cloudfront:TagResource,cloudfront:UntagResource	none	-
 cf-function-deny-default	O7f	arn:arn:aws:cloudfront::${ACCOUNT}:function/pokeclip-prod-deny-default	function	us-east-1	cloudfront:UpdateFunction,cloudfront:PublishFunction,cloudfront:DeleteFunction,cloudfront:TagResource,cloudfront:UntagResource	none	-
 cf-function-apex-request	O7f	arn:arn:aws:cloudfront::${ACCOUNT}:function/pokeclip-prod-apex-request	function	us-east-1	cloudfront:UpdateFunction,cloudfront:PublishFunction,cloudfront:DeleteFunction,cloudfront:TagResource,cloudfront:UntagResource	none	-
 cf-kvs	O7f	arn:arn:aws:cloudfront::${ACCOUNT}:key-value-store/sample-cdn-secret-kvs	key-value-store	us-east-1	cloudfront:UpdateKeyValueStore,cloudfront:DeleteKeyValueStore,cloudfront:TagResource,cloudfront:UntagResource	none	-
 cf-kvs-data	O7f	arn:arn:aws:cloudfront::${ACCOUNT}:key-value-store/sample-cdn-secret-kvs	key-value-store	us-east-1	cloudfront-keyvaluestore:GetKey,cloudfront-keyvaluestore:ListKeys,cloudfront-keyvaluestore:PutKey,cloudfront-keyvaluestore:UpdateKeys,cloudfront-keyvaluestore:DeleteKey	none	-
 
-# prod/edge 의 CLOUDFRONT WAF · 로그 그룹 · apex 버킷(POK-460). WAF 는
-# REGIONAL WAF 행과 같은 방식이다(표본 ID · 같은 동작 · ARN 의 범위 조각은
-# global). 로그 그룹 둘(WAF 차단 로그 · media 배포 표준 로그)은 이름이
-# 고정이라 구체 ARN 이다. apex 버킷은 이름 끝이 생성 때 정해져
+# prod/edge 의 CLOUDFRONT WAF · 로그 그룹 · apex 버킷(POK-460)과 media 접근
+# 로그 전달 · apex 객체 · 함수 로그 그룹(POK-479). WAF 는 REGIONAL WAF 행과
+# 같은 방식이다(표본 ID · 같은 동작 · ARN 의 범위 조각은 global · 태그로
+# 풀지 않는 까닭도 같다). 로그 그룹(WAF 차단 로그 · media 배포 표준 로그 ·
+# 함수 로그 셋)은 이름이 고정이라 구체 ARN 이다. 함수 로그 그룹 이름은
+# prod/edge function_logs.tf 의 /aws/cloudfront/function/<함수 이름>(함수
+# 이름은 위 함수 행)이고 us-east-1 이다. apex 버킷은 이름 끝이 생성 때 정해져
 # (bucket_prefix — modules/cdn_static_site) 태그로 푼다 — 같은 태그의 다른
 # prod 버킷(상태 · rewind · clips · 프로필 사진)도 함께 풀려 같은 동작을
 # 묻는다. 첫 단계(O7f) 직전에는 apex 버킷이 아직 없어 이미 있는 prod 버킷만
-# 풀린다(버킷 정책 읽기는 있는 버킷에만 한다). apex 객체는 버킷 이름을 몰라
-# 구체 ARN 행으로 물을 수 없다(한계).
+# 풀린다(버킷 정책 읽기는 있는 버킷에만 한다). apex 객체(덮어쓰기 · 지우기)는
+# 버킷 이름을 몰라 태그로 푼 버킷마다 표본 키 index.html(랜딩 첫 화면)을
+# 붙여 묻는다(해석 tag:s3:bucket/<키> — lib/principal_resolve.sh 머리 주석).
+# 시뮬레이터는 객체가 있는지 보지 않고, 다른 키만 적은 정책은 놓친다(한계).
+# media 접근 로그 전달(modules/cdn_media logging.tf)의 전달 원천 · 대상은
+# 이름이 고정이라(<name_prefix>-media-access) 구체 ARN 이다. 원천 행은 원천
+# 바꾸기 · 지우기와 다른 대상으로 잇기(CreateDelivery 는 delivery ·
+# delivery-destination · delivery-source 셋을 받는다)를, 대상 행은 대상
+# 바꾸기(다른 로그 그룹 · 버킷으로) · 지우기 · 대상 정책을 묻는다
+# (list_logs.html 대조 2026-10-25). DeleteDeliverySource 는 승인 참조가 자원을
+# delivery-destination 으로 적어 두 행 모두에서 묻는다. 전달(delivery) 자체는
+# 이름이 생성 때 정해지는 ID 라 묻지 않는다(한계 — DeleteDelivery 로 끊는
+# 길은 놓친다).
 waf-cloudfront	O7f	arn:arn:aws:wafv2:us-east-1:${ACCOUNT}:global/webacl/pokeclip-prod-cloudfront/sample-cloudfront-web-acl	webacl	us-east-1	wafv2:UpdateWebACL,wafv2:DeleteWebACL,wafv2:PutLoggingConfiguration,wafv2:DeleteLoggingConfiguration,wafv2:GetSampledRequests	none	-
 waf-cloudfront-log-group	O7f	arn:arn:aws:logs:us-east-1:${ACCOUNT}:log-group:aws-waf-logs-pokeclip-prod-cloudfront	log-group	us-east-1	logs:DeleteLogGroup,logs:PutRetentionPolicy,logs:DeleteRetentionPolicy	none	-
 edge-media-log-group	O7f	arn:arn:aws:logs:us-east-1:${ACCOUNT}:log-group:pokeclip-prod-media-access	log-group	us-east-1	logs:DeleteLogGroup,logs:PutRetentionPolicy,logs:DeleteRetentionPolicy	none	-
 edge-apex-bucket	O7f	tag:s3:bucket	bucket	ap-northeast-2	s3:PutBucketPolicy,s3:DeleteBucketPolicy,s3:PutBucketPublicAccessBlock,s3:PutBucketOwnershipControls,s3:PutEncryptionConfiguration,s3:PutBucketTagging,s3:DeleteBucket	s3	-
+edge-apex-object	O7f	tag:s3:bucket/index.html	object	ap-northeast-2	s3:PutObject,s3:DeleteObject	s3	-
+edge-media-delivery-source	O7f	arn:arn:aws:logs:us-east-1:${ACCOUNT}:delivery-source:pokeclip-prod-media-access	delivery-source	us-east-1	logs:PutDeliverySource,logs:DeleteDeliverySource,logs:CreateDelivery	none	-
+edge-media-delivery-destination	O7f	arn:arn:aws:logs:us-east-1:${ACCOUNT}:delivery-destination:pokeclip-prod-media-access	delivery-destination	us-east-1	logs:PutDeliveryDestination,logs:DeleteDeliveryDestination,logs:PutDeliveryDestinationPolicy,logs:DeleteDeliveryDestinationPolicy,logs:DeleteDeliverySource	none	-
+cf-function-log-group-live-auth	O7f	arn:arn:aws:logs:us-east-1:${ACCOUNT}:log-group:/aws/cloudfront/function/pokeclip-prod-live-auth	log-group	us-east-1	logs:DeleteLogGroup,logs:PutRetentionPolicy,logs:DeleteRetentionPolicy	none	-
+cf-function-log-group-deny-default	O7f	arn:arn:aws:logs:us-east-1:${ACCOUNT}:log-group:/aws/cloudfront/function/pokeclip-prod-deny-default	log-group	us-east-1	logs:DeleteLogGroup,logs:PutRetentionPolicy,logs:DeleteRetentionPolicy	none	-
+cf-function-log-group-apex-request	O7f	arn:arn:aws:logs:us-east-1:${ACCOUNT}:log-group:/aws/cloudfront/function/pokeclip-prod-apex-request	log-group	us-east-1	logs:DeleteLogGroup,logs:PutRetentionPolicy,logs:DeleteRetentionPolicy	none	-
 
 # prod/records — 공유 공개 존(nonprod/dns-legacy 가 소유)의 prod 레코드
 # 이름 여섯(prod/records 의 enabled_records). 존 ARN 은 dev 레코드와 같아
