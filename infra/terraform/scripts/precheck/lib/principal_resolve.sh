@@ -20,8 +20,10 @@
 # 정책)은 단위마다 한 번 한다. arn: 이 로그 그룹 ARN(…:log-group:<이름>)
 # 이면 이름 꼴과 「:log-stream:」 을 붙인 꼴 두 ARN 을 묻는다 — IAM 정책은
 # 로그 그룹을 대개 「이름:*」 로 적어(CloudWatch Logs API 참조 LogGroup.arn),
-# 이름 꼴만 물으면 「log-group:*:*」 같은 허용을 놓친다. 질문 ARN 에 「*」
-# 는 넣지 않는다. tag: · zone: · prodrole 이 0건이면
+# 이름 꼴만 물으면 「log-group:*:*」 같은 허용을 놓친다. tag:s3:bucket/<키>
+# 는 필터 s3:bucket 으로 푼 버킷 ARN 마다 「/<키>」 를 붙인 객체 ARN 을 묻는다
+# (이름 끝이 생성 때 정해지는 버킷의 객체 표본 — apex 객체, POK-479). 질문
+# ARN 에 「*」 는 넣지 않는다. tag: · zone: · prodrole 이 0건이면
 # TARGET_NONE 이다. zone: 은 뒤 점을 맞춘 이름이 같고 공개(PrivateZone =
 # False)인 존이 정확히 1건이어야 하고, 2건 이상이면 종료 2 다(cc348-3). 존
 # 목록이 잘렸으면(IsTruncated True · NextDNSName 있음 — 한 번에 최대 100개)
@@ -292,6 +294,28 @@ principal::resolve_input() {
 }
 
 #######################################
+# 태그로 푼 버킷 ARN(list_items)마다 「/<키>」 를 붙여 객체 ARN 으로 바꾼다
+# (tag:s3:bucket/<키>). 버킷 ARN 이 아닌 줄은 응답 꼴이다(종료 2).
+# Globals:
+#   list_items, req_n
+# Arguments:
+#   객체 키.
+#######################################
+principal::append_object_key() {
+  local rest="${list_items}" item
+  list_items=""
+  while [[ -n "${rest}" ]]; do
+    item="${rest%%$'\n'*}"
+    rest="${rest#*$'\n'}"
+    if [[ "${item}" != arn:aws:s3:::?* || "${item}" == arn:aws:s3:::*/* ]]
+    then
+      die "읽기 응답의 꼴이 다름(res-${req_n}.txt)"
+    fi
+    list_items+="${item}/$1"$'\n'
+  done
+}
+
+#######################################
 # 단계 무관 해석 하나(tag: · arn: · zone: · input: · prodrole)를 list_items
 # 로 낸다.
 # Globals:
@@ -300,7 +324,7 @@ principal::resolve_input() {
 #   t_* 색인.
 #######################################
 principal::resolve_target_arns() {
-  local t="$1" method="${t_method[$1]}" body arn
+  local t="$1" method="${t_method[$1]}" body arn filter
   list_items=""
   case "${method}" in
     arn:*)
@@ -313,14 +337,16 @@ principal::resolve_target_arns() {
       fi
       ;;
     tag:*)
+      filter="${method#tag:}"
       body='{"TagFilters":[{"Key":"Environment","Values":["prod"]}],'
-      body+="\"ResourceTypeFilters\":[\"${method#tag:}\"]}"
+      body+="\"ResourceTypeFilters\":[\"${filter%%/*}\"]}"
       aws_call "${body}" resourcegroupstaggingapi get-resources \
         --region "${t_region[t]}" \
         --query 'ResourceTagMappingList[].ResourceARN' ||
         fail_call "태그 해석"
       principal::read_list \
         '^arn:aws:[a-z0-9-]+:[a-z0-9-]*:[0-9]*:[^*[:space:]]+$'
+      [[ "${filter}" != */* ]] || principal::append_object_key "${filter#*/}"
       ;;
     zone:*) principal::resolve_zone "${method#zone:}" ;;
     input:*) principal::resolve_input "${t}" "${method#input:}" ;;

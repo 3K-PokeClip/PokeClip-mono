@@ -185,7 +185,9 @@ readonly LATE_TARGETS
 # 방법 · 반드시 묻는 동작(쉼표 구분) · 추가 문맥(없으면 생략)」 이다. 이름이
 # 고정인 자원은 구체 ARN, 이름 끝이 생성 때 정해지는 자원은 태그로 푼다. WAF
 # 의 ARN 끝(ID)은 생성 때 정해져 표본 ID 로 묻는다(cf-kvs 와 같은 방식 —
-# 근거는 prod_targets.tsv 의 platform 덩어리 주석).
+# 근거는 prod_targets.tsv 의 platform 덩어리 주석). 끝 덩어리
+# (platform-listener-rule 부터)는 POK-479 가 더한 보안 리뷰 M 다섯과
+# CloudFront 함수 로그 그룹 셋이다.
 readonly STATE_OBJECT='arn:arn:aws:s3:::pokeclip-tfstate-prod-apne2/prod'
 # 상태 객체 행의 ARN 끝(루트 이름 뒤)과 반드시 묻는 동작.
 STATE_TAIL='terraform.tfstate s3:GetObject,s3:PutObject,s3:DeleteObject'
@@ -206,7 +208,7 @@ FOLLOWUP_TARGETS=(
   'ecs-task-definition O7d tag:ecs:task-definition ecs:RunTask'
   'waf-regional O7d arn:arn:aws:wafv2:ap-northeast-2:${ACCOUNT}:regional/'\
 'webacl/pokeclip-prod-regional/sample-regional-web-acl '\
-'wafv2:UpdateWebACL,wafv2:DeleteLoggingConfiguration'
+'wafv2:UpdateWebACL,wafv2:DeleteLoggingConfiguration,wafv2:GetSampledRequests'
   'waf-regional-log-group O7d arn:arn:aws:logs:ap-northeast-2:${ACCOUNT}:'\
 'log-group:aws-waf-logs-pokeclip-prod-public logs:DeleteLogGroup'
   'media-role O7e arn:arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/'\
@@ -215,20 +217,55 @@ FOLLOWUP_TARGETS=(
 'prod/pokeclip-prod-media iam:AddRoleToInstanceProfile'
   'waf-cloudfront O7f arn:arn:aws:wafv2:us-east-1:${ACCOUNT}:global/webacl/'\
 'pokeclip-prod-cloudfront/sample-cloudfront-web-acl '\
-'wafv2:UpdateWebACL,wafv2:DeleteLoggingConfiguration'
+'wafv2:UpdateWebACL,wafv2:DeleteLoggingConfiguration,wafv2:GetSampledRequests'
   'waf-cloudfront-log-group O7f arn:arn:aws:logs:us-east-1:${ACCOUNT}:'\
 'log-group:aws-waf-logs-pokeclip-prod-cloudfront logs:DeleteLogGroup'
   'edge-media-log-group O7f arn:arn:aws:logs:us-east-1:${ACCOUNT}:'\
 'log-group:pokeclip-prod-media-access logs:DeleteLogGroup'
   'edge-apex-bucket O7f tag:s3:bucket s3:PutBucketPolicy,s3:DeleteBucket'
-  "ecs-role-pass O7d prodrole iam:PassRole ${PASSED_TO_ECS}")
+  "ecs-role-pass O7d prodrole iam:PassRole ${PASSED_TO_ECS}"
+  'platform-listener-rule O7d tag:elasticloadbalancing:listener-rule '\
+'elasticloadbalancing:ModifyRule,elasticloadbalancing:DeleteRule,'\
+'elasticloadbalancing:SetRulePriorities'
+  'platform-waf-detach O7d tag:elasticloadbalancing:loadbalancer '\
+'wafv2:DisassociateWebACL,wafv2:AssociateWebACL'
+  'platform-waf-detach-elb O7d tag:elasticloadbalancing:loadbalancer '\
+'elasticloadbalancing:SetWebAcl,elasticloadbalancing:CreateWebACLAssociation,'\
+'elasticloadbalancing:DeleteWebACLAssociation'
+  'ecs-log-group-next O7d arn:arn:aws:logs:ap-northeast-2:${ACCOUNT}:'\
+'log-group:pokeclip-prod-next logs:DeleteLogGroup'
+  'ecs-log-group-auth O7d arn:arn:aws:logs:ap-northeast-2:${ACCOUNT}:'\
+'log-group:pokeclip-prod-auth logs:DeleteLogGroup'
+  'ecs-log-group-clip O7d arn:arn:aws:logs:ap-northeast-2:${ACCOUNT}:'\
+'log-group:pokeclip-prod-clip logs:DeleteLogGroup'
+  'cf-distribution O7f tag:cloudfront:distribution '\
+'cloudfront:AllowVendedLogDeliveryForResource'
+  'edge-media-delivery-source O7f arn:arn:aws:logs:us-east-1:${ACCOUNT}:'\
+'delivery-source:pokeclip-prod-media-access '\
+'logs:PutDeliverySource,logs:CreateDelivery'
+  'edge-media-delivery-destination O7f arn:arn:aws:logs:us-east-1:'\
+'${ACCOUNT}:delivery-destination:pokeclip-prod-media-access '\
+'logs:PutDeliveryDestination,logs:DeleteDeliveryDestination,'\
+'logs:PutDeliveryDestinationPolicy'
+  'edge-apex-object O7f tag:s3:bucket/index.html s3:PutObject,s3:DeleteObject'
+  'cf-function-log-group-live-auth O7f arn:arn:aws:logs:us-east-1:'\
+'${ACCOUNT}:log-group:/aws/cloudfront/function/pokeclip-prod-live-auth '\
+'logs:DeleteLogGroup'
+  'cf-function-log-group-deny-default O7f arn:arn:aws:logs:us-east-1:'\
+'${ACCOUNT}:log-group:/aws/cloudfront/function/pokeclip-prod-deny-default '\
+'logs:DeleteLogGroup'
+  'cf-function-log-group-apex-request O7f arn:arn:aws:logs:us-east-1:'\
+'${ACCOUNT}:log-group:/aws/cloudfront/function/pokeclip-prod-apex-request '\
+'logs:DeleteLogGroup')
 readonly FOLLOWUP_TARGETS
 # 단계 묶음에 더한 행(POK-460 — 「묶음 · 동작 · 리전 · 자원 패턴」, 탭 구분).
 # O7f 다섯은 묶음 C 의 edge apply 가 부르는데 빠져 있던 동작(리뷰가 찾은
 # 누락만 — 결정 65 의 예외), UpdateWebACL 둘은 웹 ACL 데이터 보호(POK-459)
 # apply 가 부르는 동작이다. 뒤의 여섯(O7f 의 CreateTags · WAF 로그에 딸린
 # 동작)은 리뷰가 찾은 누락이다(kty 2026-10-25 가). 끝의 셋(로그 그룹 태그
-# 동작)도 리뷰가 찾은 누락이다(kty 2026-10-25 넣고 PR).
+# 동작)도 리뷰가 찾은 누락이다(kty 2026-10-25 넣고 PR). 맨 끝 다섯은 SG
+# 규칙 자원의 재조회 읽기다(POK-479 — 묶음마다 SG 규칙 자원이 있는 근거는
+# 그 묶음 파일의 주석).
 # shellcheck disable=SC2016 # ${ACCOUNT} 는 펼치지 않는 글자 그대로다.
 STAGE_FOLLOWUP_ROWS=(
   $'O7f\tec2:AuthorizeSecurityGroupIngress\tap-northeast-2\t*'
@@ -247,7 +284,12 @@ STAGE_FOLLOWUP_ROWS=(
   $'O7f\tlogs:TagResource\tus-east-1\t*'
   $'O7f\tlogs:ListTagsForResource\tus-east-1\t*'
   $'O7d\tlogs:TagResource\tap-northeast-2\t*'
-  $'O7d\tlogs:ListTagsForResource\tap-northeast-2\t*')
+  $'O7d\tlogs:ListTagsForResource\tap-northeast-2\t*'
+  $'O7d\tec2:DescribeSecurityGroupRules\tap-northeast-2\t*'
+  $'O7e\tec2:DescribeSecurityGroupRules\tap-northeast-2\t*'
+  $'O7f\tec2:DescribeSecurityGroupRules\tap-northeast-2\t*'
+  $'9\tec2:DescribeSecurityGroupRules\tap-northeast-2\t*'
+  $'ci-followup\tec2:DescribeSecurityGroupRules\tap-northeast-2\t*')
 readonly STAGE_FOLLOWUP_ROWS
 
 #######################################
@@ -827,7 +869,11 @@ expect_stage_order_matches_wrapper() {
 }
 
 #######################################
-# 서비스마다 쓸 수 있는 자원 유형(공백 구분 · 앞뒤 공백)을 낸다.
+# 서비스마다 쓸 수 있는 자원 유형(공백 구분 · 앞뒤 공백)을 낸다. 유형은
+# 서비스 승인 참조 「Resource types」 의 이름 그대로다 — ELB 는
+# list_elbv2.html 의 loadbalancer/app/ · listener/app 꼴(POK-480 — 태그
+# 해석 필터 조각과 다르다, method_problem), wafv2 의 loadbalancer/app/ 은
+# DisassociateWebACL 의 ALB 유형(list_wafv2.html · 대조 2026-10-25).
 # Arguments:
 #   서비스 접두.
 # Outputs:
@@ -848,15 +894,35 @@ service_types() {
     route53) printf ' hostedzone \n' ;;
     iam) printf ' role user group policy instance-profile \n' ;;
     rds) printf ' db pg subgrp \n' ;;
-    logs) printf ' log-group \n' ;;
+    logs) printf ' log-group delivery-source delivery-destination \n' ;;
     sns) printf ' topic \n' ;;
     sqs) printf ' queue \n' ;;
     ssm) printf ' instance \n' ;;
-    elasticloadbalancing) printf ' loadbalancer targetgroup listener \n' ;;
+    elasticloadbalancing)
+      printf ' %s %s %s %s %s %s \n' loadbalancer/app/ loadbalancer/net/ \
+        targetgroup listener/app listener/net listener-rule/app
+      ;;
     ecs) printf ' cluster service task-definition \n' ;;
-    wafv2) printf ' webacl \n' ;;
+    wafv2) printf ' webacl loadbalancer/app/ \n' ;;
     *) ;;
   esac
+}
+
+#######################################
+# 자원 유형 칸(쉼표 구분 — 한 행이 ALB · NLB 처럼 둘을 함께 풀 때)의 유형이
+# 모두 그 서비스의 것인지 본다.
+# Arguments:
+#   서비스 접두, 자원 유형 칸.
+# Returns:
+#   모두 그러면 0.
+#######################################
+types_of_service() {
+  local known type
+  known="$(service_types "$1")"
+  [[ -n "$2" && "$2" != *,,* && "$2" != ,* && "$2" != *, ]] || return 1
+  for type in ${2//,/ }; do
+    [[ "${known}" == *" ${type} "* ]] || return 1
+  done
 }
 
 #######################################
@@ -909,6 +975,28 @@ policy_version_actions() {
 }
 
 #######################################
+# 자원 유형 하나를 태그로 풀 때의 해석 방법(글롭)을 낸다. 필터 조각은 ARN 에
+# 박힌 유형 이름이다(Resource Groups Tagging API GetResources 의
+# ResourceTypeFilters — 「the same as that embedded in a resource's ARN」) —
+# 승인 참조 유형의 첫 「/」 앞(loadbalancer/app/ → loadbalancer). SSM 의
+# instance 는 EC2 인스턴스 ARN 이고(list_ssm.html), wafv2 의
+# loadbalancer/app/ 은 ALB ARN 이라(list_wafv2.html) 그 서비스의 필터로
+# 푼다. s3 object 는 버킷을 풀어 키를 붙인다(tag:s3:bucket/<키>).
+# Arguments:
+#   서비스 접두, 자원 유형(하나).
+# Outputs:
+#   해석 방법 글롭.
+#######################################
+expected_tag_method() {
+  case "$1:$2" in
+    ssm:instance) printf 'tag:ec2:instance\n' ;;
+    wafv2:loadbalancer/app/) printf 'tag:elasticloadbalancing:loadbalancer\n' ;;
+    s3:object) printf 'tag:s3:bucket/?*\n' ;;
+    *) printf 'tag:%s:%s\n' "$1" "${2%%/*}" ;;
+  esac
+}
+
+#######################################
 # 대상 행 하나의 해석 방법이 유형 · 서비스와 맞는지 본다(동작 × 유형 짝
 # 자체는 보지 않는다 — A9, 사람이 서비스 승인 참조로 대조).
 # Arguments:
@@ -917,7 +1005,7 @@ policy_version_actions() {
 #   틀린 까닭(맞으면 빈 출력).
 #######################################
 method_problem() {
-  local service="$1" method="$2" type="$3" actions="$4" path arn_service
+  local service="$1" method="$2" type="$3" actions="$4" path arn_service want
   case "${method}" in
     arn:*)
       # KVS 값 동작(cloudfront-keyvaluestore)의 자원은 CloudFront KVS ARN
@@ -937,14 +1025,14 @@ method_problem() {
       fi
       ;;
     tag:*)
-      # SSM 의 instance 유형은 EC2 인스턴스 ARN 이다(서비스 승인 참조
-      # list_ssm.html 「Resource types」) — 태그 해석도 ec2:instance 로 한다.
-      if [[ "${service}:${type}" == ssm:instance ]]; then
-        [[ "${method}" == tag:ec2:instance ]] ||
-          printf 'ssm instance 행의 tag: 유형 조각이 ec2:instance 가 아님\n'
-      elif [[ "${method}" != "tag:${service}:${type}" ]]; then
-        printf 'tag: 유형 조각이 서비스 · 유형과 다름\n'
-      fi
+      for type in ${type//,/ }; do
+        want="$(expected_tag_method "${service}" "${type}")"
+        # shellcheck disable=SC2053 # s3 object 의 기대는 글롭(키 자리)이다.
+        if [[ "${method}" != ${want} ]]; then
+          printf 'tag: 해석이 %s 유형의 %s 가 아님\n' "${type}" "${want}"
+          return
+        fi
+      done
       ;;
     input:*)
       [[ "${method#input:}" =~ ^[a-z][a-z0-9-]*$ ]] ||
@@ -988,7 +1076,7 @@ expect_target_rows_consistent() {
     elif [[ "${service}" == iam || "${service}" == route53 ]] &&
       [[ "${region}" != us-east-1 ]]; then
       problem="${service} 행의 리전이 us-east-1 이 아님"
-    elif [[ "$(service_types "${service}")" != *" ${type} "* ]]; then
+    elif ! types_of_service "${service}" "${type}"; then
       problem="유형 ${type} 이 ${service} 의 것이 아님"
     elif [[ "${read}" == none &&
       "${POLICY_SERVICES}" == *" ${service} "* ]]; then
@@ -1011,6 +1099,74 @@ expect_target_rows_consistent() {
   fi
   testlib::ok "targets → 서비스 · 리전 · 유형 · 해석 방법 · 계열 일치 ·" \
     "자원 정책 서비스에 none 0 · 읽는 서비스는 그 읽기"
+}
+
+#######################################
+# 대상 행 하나의 기대 리전을 낸다. 전역 서비스(IAM · Route 53 · CloudFront ·
+# KVS 값)는 us-east-1, 인증서는 키 끝(-apne2 · -use1)이다. 두 리전에 자원이
+# 있는 로그 · WAF 는 첫 단계로 가른다 — O7f(prod/edge — 기본 provider 가
+# us-east-1, providers.tf)면 us-east-1, 그 밖(runtime-1a · O7d)은 서울이다.
+# ARN 에서 가져오지 않는다 — ARN 과 리전 칸을 함께 바꾼 변이를 놓치므로.
+# 그 밖 서비스는 서울이다(prod 의 리전 자원은 edge 의 us-east-1 자원 말고
+# 모두 서울).
+# Arguments:
+#   서비스 접두, 첫 단계, 자원 키.
+# Outputs:
+#   기대 리전(정할 수 없으면 빈 출력).
+#######################################
+expected_target_region() {
+  local service="$1" stage="$2" key="$3"
+  case "${service}" in
+    iam | route53 | cloudfront | cloudfront-keyvaluestore)
+      printf 'us-east-1\n'
+      ;;
+    acm)
+      case "${key}" in
+        *-use1) printf 'us-east-1\n' ;;
+        *-apne2) printf 'ap-northeast-2\n' ;;
+        *) ;;
+      esac
+      ;;
+    logs | wafv2)
+      if [[ "${stage}" == O7f ]]; then
+        printf 'us-east-1\n'
+      else
+        printf 'ap-northeast-2\n'
+      fi
+      ;;
+    *) printf 'ap-northeast-2\n' ;;
+  esac
+}
+
+#######################################
+# 데이터 단언(POK-480): 대상 행마다 리전이 기대 리전(expected_target_region)
+# 이고, 리전 조각이 있는 구체 ARN 이면 그 조각과도 같다. 첫 단계 · 해석
+# 방법 · 동작만 고정한 단언은 리전을 바꾼 변이를 못 잡는다.
+#######################################
+expect_target_regions() {
+  local key stage method region actions want arn_region count=0
+  while IFS=$'\t' read -r key stage method _ region actions _; do
+    count=$((count + 1))
+    want="$(expected_target_region "${actions%%:*}" "${stage}" "${key}")"
+    arn_region="${region}"
+    if [[ "${method}" == arn:arn:aws:*:*:* ]]; then
+      arn_region="${method#arn:arn:aws:*:}"
+      arn_region="${arn_region%%:*}"
+      [[ -n "${arn_region}" ]] || arn_region="${region}"
+    fi
+    if [[ -z "${want}" || "${region}" != "${want}" ||
+      "${arn_region}" != "${region}" ]]; then
+      testlib::fail "target-regions: ${key} 의 리전 ${region} 이 기대" \
+        "「${want}」 · ARN 리전 「${arn_region}」 과 다름"
+      return
+    fi
+  done < <(principal_rows prod_targets.tsv)
+  if [[ "${count}" -eq 0 ]]; then
+    testlib::fail "target-regions: prod_targets.tsv 에 행이 없음"
+    return
+  fi
+  testlib::ok "target-regions → 대상 ${count}행의 리전이 서비스 규칙 · ARN" \
+    "리전 조각과 같음"
 }
 
 #######################################
@@ -1165,7 +1321,9 @@ expect_runtime_targets() {
 # 「자원 키 · 첫 단계 · 해석 방법 · 반드시 묻는 동작(쉼표 구분) · 추가
 # 문맥(없으면 생략)」 항목마다 그 행이 첫 단계 · 해석 방법(글자 그대로)으로
 # 있고 동작을 모두 담으며, 추가 문맥을 주면 그 행의 추가 문맥이 그것인지
-# 본다.
+# 본다. 항목 · 행은 here-string 으로 읽지 않는다 — 임시 파일을 만들지 못해
+# read 가 실패하면 빈 값끼리 같아 「맞음」 이 되므로(POK-480). 항목이 없거나
+# 꼴이 틀리거나 행이 없으면 틀린 것으로 낸다.
 # Arguments:
 #   항목들.
 # Outputs:
@@ -1173,10 +1331,38 @@ expect_runtime_targets() {
 #######################################
 pinned_target_problem() {
   local entry key want_stage want_method want_actions want_context action
-  local stage method actions context
+  local row stage method actions context
+  local -a words
+  if [[ "$#" -eq 0 ]]; then
+    printf '항목이 없음\n'
+    return
+  fi
   for entry in "$@"; do
-    read -r key want_stage want_method want_actions want_context <<<"${entry}"
-    IFS=$'\t' read -r stage method actions context <<<"$(target_row "${key}")"
+    # 낱말로 나눈다(글롭 펼침은 끈다 — 항목에 「*」 가 들 수 있음).
+    set -f
+    # shellcheck disable=SC2206 # 일부러 낱말로 나눈다.
+    words=(${entry})
+    set +f
+    if [[ "${#words[@]}" -lt 4 || "${#words[@]}" -gt 5 ]]; then
+      printf '항목 「%s」 의 꼴이 틀림\n' "${entry}"
+      return
+    fi
+    key="${words[0]}"
+    want_stage="${words[1]}"
+    want_method="${words[2]}"
+    want_actions="${words[3]}"
+    want_context="${words[4]:-}"
+    row="$(target_row "${key}")"
+    if [[ "${row}" != *$'\t'*$'\t'*$'\t'* ]]; then
+      printf '%s 행이 없음\n' "${key}"
+      return
+    fi
+    stage="${row%%$'\t'*}"
+    row="${row#*$'\t'}"
+    method="${row%%$'\t'*}"
+    row="${row#*$'\t'}"
+    actions="${row%%$'\t'*}"
+    context="${row#*$'\t'}"
     if [[ "${stage}" != "${want_stage}" || "${method}" != "${want_method}" ]]
     then
       printf '%s 의 첫 단계 · 해석 방법이 %s · %s 가 아님 — 「%s · %s」\n' \
@@ -1194,6 +1380,28 @@ pinned_target_problem() {
       return
     fi
   done
+}
+
+#######################################
+# 단언 도구 자신(POK-480): pinned_target_problem 은 항목이 없거나 빈 항목 ·
+# 없는 키 · 낱말이 모자란 항목이면 틀린 까닭을 낸다(빈 출력 = 통과로 새지
+# 않음).
+#######################################
+expect_pinned_checker_fails_closed() {
+  local entry
+  if [[ -z "$(pinned_target_problem)" ]]; then
+    testlib::fail "pinned-checker: 항목 없이 통과함"
+    return
+  fi
+  for entry in '' 'no-such-key O7d tag:ecs:cluster ecs:UpdateCluster' \
+    'ecs-cluster O7d tag:ecs:cluster'; do
+    if [[ -z "$(pinned_target_problem "${entry}")" ]]; then
+      testlib::fail "pinned-checker: 「${entry}」 가 통과함"
+      return
+    fi
+  done
+  testlib::ok "pinned-checker → 항목 없음 · 빈 항목 · 없는 키 · 모자란 항목은" \
+    "틀림으로 냄"
 }
 
 #######################################
@@ -1457,6 +1665,49 @@ expect_log_group_forms_asked() {
 }
 
 #######################################
+# 실제 principal-check.sh 를 실제 데이터로 O7f 에 돌려(주체 넷과 태그로
+# 풀리는 apex 버킷 하나), apex 객체 행(tag:s3:bucket/index.html — POK-479)이
+# 풀린 버킷에 표본 키를 붙인 ARN 으로 동작마다 묻고, 버킷 행
+# (edge-apex-bucket)은 키 없는 버킷 ARN 으로 묻는지 본다.
+# Globals:
+#   FAKE_USER, run_status, run_out
+#######################################
+expect_apex_object_asked() {
+  local case_dir dir bucket action request
+  case_dir="$(testlib::new_case)" || {
+    testlib::fail "apex-object: 시험 준비 실패"
+    return
+  }
+  bucket='arn:aws:s3:::pokeclip-prod-apex-20261025000000000000000001'
+  {
+    principal_reads_table
+    testlib::tsv get-resources s3:bucket@ap-northeast-2 "${bucket}"
+  } >"${case_dir}/in/reads.tsv"
+  testlib::tsv "${FAKE_USER}@*" allowed None - - - >"${case_dir}/in/sim.tsv"
+  testlib::run "${case_dir}" principal-O7f env \
+    FAKE_AWS_READS="${case_dir}/in/reads.tsv" \
+    FAKE_AWS_SIM_TABLE="${case_dir}/in/sim.tsv" bash "${WRAPPER}" O7f
+  dir="$(compgen -G "${case_dir}/home/.pokeclip-precheck/principal-O7f-*")"
+  if [[ "${run_status}" -ne 3 || ! -d "${dir}" ]]; then
+    testlib::fail "apex-object: O7f 실행이 종료 ${run_status} —" \
+      "$(cat -- "${run_out}.stderr")"
+    return
+  fi
+  for action in s3:PutObject s3:DeleteObject s3:PutBucketPolicy; do
+    request="\"ActionNames\":[\"${action}\"],\"ResourceArns\":[\"${bucket}"
+    [[ "${action}" == s3:*Object ]] && request+='/index.html'
+    request+='"]'
+    if ! grep -qF -- "${request}" "${dir}"/req-*.json; then
+      testlib::fail "apex-object: ${action} 이 ${request##*:::} 로 물어지지" \
+        "않음"
+      return
+    fi
+  done
+  testlib::ok "apex-object → 태그로 푼 버킷에 index.html 을 붙여 객체 동작을" \
+    "묻고 버킷 행은 버킷 ARN 그대로"
+}
+
+#######################################
 # runtime-1a 묶음에 런타임 루트의 Terraform 이 호출자 권한으로 부르는 읽기가
 # 정확한 행으로 있는지 본다(계획 rt1d c2 · 설계 K4 — data "aws_subnet" 의
 # ec2:DescribeSubnets). 다른 단언은 행의 꼴 · 중복만 보고 누락은 못 잡는다.
@@ -1529,6 +1780,8 @@ main() {
   expect_principal_files_wellformed
   expect_stage_order_matches_wrapper
   expect_target_rows_consistent
+  expect_target_regions
+  expect_pinned_checker_fails_closed
   expect_runtime_targets
   expect_runtime_bundle_puts_secret_value
   expect_runtime_bundle_puts_bucket_cors
@@ -1537,6 +1790,7 @@ main() {
   expect_stage_followup_rows
   expect_runtime_rows_asked
   expect_log_group_forms_asked
+  expect_apex_object_asked
   expect_ecs_role_pass_asked
   expect_runtime_terraform_reads
   expect_dev_principals
