@@ -11,9 +11,15 @@ prod 의 CloudFront 엣지를 만드는 루트입니다(설계 3-1 의 ⑩ · �
     둘(KnownBadInputs · IpReputation)이고, 속도 제한은 `waf_rate_limit`(기본
     20000 — LL-HLS 시청자가 같은 IP 뒤에 여럿)입니다. 차단된 요청만 로그
     그룹 `aws-waf-logs-pokeclip-prod-cloudfront`(보존 30일 — platform 과 같음)에
-    남깁니다. `authorization` · `cookie` 헤더는 웹 ACL 데이터 보호로 요청
-    샘플 · 로그 모두에서 `REDACTED` 로 바꾸고, 로그 가림(`redacted_fields`)도
-    겹쳐 둡니다.
+    남깁니다. `authorization` · `cookie` · 내부 토큰 헤더 둘
+    (`x-internal-token` · `x-stream-key-resolve-token`)은 웹 ACL 데이터
+    보호로 요청 샘플 · 로그 모두에서 `REDACTED` 로 바꿉니다. 앞의 둘에는 로그
+    가림(`redacted_fields`)도 겹쳐 둡니다. 이 겹침이 보장하는 범위는 그
+    헤더를 단일 헤더로 보는 규칙까지라, 헤더 전체를 보는 규칙의 일치 세부와
+    요청 샘플은 데이터 보호에만 기댑니다. 질의 인자와 `referer` 는 가리지
+    않습니다 — 자격 증명이 실리는 `?code=`(OAuth 콜백) · `?token=`(프로필
+    사진)과 `?code=` 가 든 Referer 는 app 호스트로만 가므로 공개 ALB
+    WAF(platform)가 가립니다.
 *   **apex 배포**(`modules/cdn_static_site`): `pokeclip.com` · `www.pokeclip.com`
     별칭, 서울 S3 버킷(접두 `pokeclip-prod-apex-`)을 OAC 로만 읽습니다.
 *   **media 배포**(`modules/cdn_media`): `media.pokeclip.com` 별칭, KVS 그릇 ·

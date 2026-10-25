@@ -10,6 +10,17 @@ locals {
   managed_rule_priorities = {
     for index, group in var.managed_rule_groups : group => index + 1
   }
+
+  # 데이터 보호로 가릴 이름 — 필드 종류(field_type)마다 항목 하나. 빈 목록은
+  # 항목째 뺀다 — SINGLE_HEADER · SINGLE_QUERY_ARGUMENT 는 비어 있지 않은
+  # FieldKeys 가 필요하고, 그 종류의 모든 키를 가리는 선택지는 없다(AWS WAF
+  # API 「FieldToProtect」).
+  protected_fields = {
+    for field_type, keys in {
+      SINGLE_HEADER         = var.protected_headers
+      SINGLE_QUERY_ARGUMENT = var.protected_query_args
+    } : field_type => keys if length(keys) > 0
+  }
 }
 
 resource "aws_wafv2_web_acl" "this" {
@@ -24,17 +35,23 @@ resource "aws_wafv2_web_acl" "this" {
   # 로깅 설정의 redacted_fields 는 로그에만 걸린다(샘플은 원문 — AWS WAF API
   # 「VisibilityConfig」). 쿠키는 SINGLE_COOKIE 가 아니라 헤더 cookie 로 막는다
   # — 쿠키 값은 cookie 헤더를 단일 헤더로 보호할 때만 가려진다(AWS WAF 개발자
-  # 안내서 「Data protection limitations」).
+  # 안내서 「Data protection limitations」). 질의 인자를 하나라도 가리면 로그의
+  # 규칙 일치 · 속도 규칙 세부에서는 질의 문자열 전체가 REDACTED 가 된다(같은
+  # 절).
   dynamic "data_protection_config" {
-    for_each = length(var.protected_headers) == 0 ? [] : [var.protected_headers]
+    for_each = length(local.protected_fields) == 0 ? [] : [local.protected_fields]
 
     content {
-      data_protection {
-        action = "SUBSTITUTION"
+      dynamic "data_protection" {
+        for_each = data_protection_config.value
 
-        field {
-          field_type = "SINGLE_HEADER"
-          field_keys = data_protection_config.value
+        content {
+          action = "SUBSTITUTION"
+
+          field {
+            field_type = data_protection.key
+            field_keys = data_protection.value
+          }
         }
       }
     }

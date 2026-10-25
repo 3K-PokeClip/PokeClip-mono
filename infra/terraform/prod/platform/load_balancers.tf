@@ -139,13 +139,42 @@ module "waf" {
   managed_rule_groups = var.waf_managed_rule_groups
   rate_limit          = var.waf_rate_limit
 
-  # 자격 증명이 실리는 헤더는 요청 샘플 · 로그 모두에서 가린다(POK-459) —
-  # 로그의 redacted_headers 는 그대로 둔다(이중). 데이터 보호를 끄거나 줄여도
-  # 로그만은 계속 가려지게 하는 것이고, 값이 같아 로그 내용은 달라지지 않는다.
-  protected_headers = ["authorization", "cookie"]
+  # 자격 증명이 실리는 헤더 · 질의 인자는 웹 ACL 데이터 보호로 요청 샘플 ·
+  # 로그 모두에서 가린다(POK-459 · POK-479). 내부 토큰 헤더 둘(auth
+  # /internal/** 공용 X-Internal-Token · 계약4 resolve 전용
+  # X-Stream-Key-Resolve-Token)은 정상 경로로는 공개 ALB 에 오지 않지만 잘못
+  # 실려 와도 남지 않게 미리 둔다. 질의 인자는 OAuth 콜백의 ?code=(web 콜백
+  # 화면들) · 프로필 사진 주소의 ?token=(auth PhotoUrls)이다.
+  #
+  # referer 도 가린다(kty 2026-10-25). web 에 Referrer-Policy 가 없어 브라우저
+  # 기본값을 따르므로, 콜백 화면(/auth/callback · /oauth/<제공자>/callback)이
+  # 같은 출처(app)로 보내는 요청의 Referer 에 ?code= 가 든 전체 주소가
+  # 실린다. SINGLE_QUERY_ARGUMENT 는 헤더 안의 그 값을 가리지 못한다. 대가로
+  # 요청 샘플 · 로그에서 요청이 어느 화면에서 왔는지(출처 정보)를 잃는다.
+  #
+  # 질의 인자를 하나라도 가리면 로그의 규칙 일치 · 속도 규칙 세부
+  # (RuleMatchDetails · rateBasedRuleList)에서 질의 문자열 전체가 REDACTED 가
+  # 된다(AWS WAF 개발자 안내서 「Data protection limitations」) — 질의를 보는
+  # 규칙에 걸린 차단 로그에서 공격 페이로드를 볼 수 없다. 차단 자체는 그대로다
+  # (데이터 보호는 저장되는 요청 데이터만 바꾼다 — AWS WAF API
+  # 「FieldToProtect」). 오탐을 볼 때의 대안은 README 「공개 WAF 데이터 보호」.
+  protected_headers = [
+    "authorization",
+    "cookie",
+    "referer",
+    "x-internal-token",
+    "x-stream-key-resolve-token",
+  ]
+  protected_query_args = ["code", "token"]
 
   # 차단된 요청만 남긴다(장부 17 · kty 결정). 보존은 ECS 로그(services.tf)와
-  # 같고, 자격 증명이 실리는 헤더는 가린다.
+  # 같다. redacted_headers 는 데이터 보호와 겹쳐 두는 로그 가림이다 — 데이터
+  # 보호를 끄거나 줄여도 로그의 authorization · cookie 는 가려진다. 다만 AWS 가
+  # 보장하는 범위는 그 헤더를 단일 헤더(SingleHeader)로 보는 규칙까지이고, 헤더
+  # 전체(Headers)를 보는 규칙의 일치 세부 · 요청 샘플은 범위 밖이다(AWS WAF API
+  # 「LoggingConfiguration」 RedactedFields). referer · 내부 토큰 헤더 · 질의
+  # 인자는 데이터 보호로만 가린다 — 내부 토큰 헤더는 정상 경로로 들어오지 않는
+  # 선제 항목이라 로그 가림까지 겹치지 않는다(kty 2026-10-25).
   logging = {
     log_group_name    = "aws-waf-logs-pokeclip-prod-public"
     retention_in_days = local.log_retention_days
