@@ -35,3 +35,11 @@ export function useMediaSource(mediaKey?: string | null): string | null {
     liveBaseUrl: process.env.NEXT_PUBLIC_MEDIA_LIVE_BASE_URL,
   });
 }
+
+/**
+ * 되감기 제어면 주소(계약3 7-2절, POK-200 M5). 빌드 때 굳는다(리터럴 접근). 비었으면 null — 되감기 세션을 열지 않고 지금
+ * 동작(라이브 창 안 시크만)이다. 끝의 / 는 뗀다: 경로를 붙일 때 이중 슬래시가 되면 엣지가 다른 경로로 본다
+ */
+export function mediaControlBaseUrl(): string | null {
+  return process.env.NEXT_PUBLIC_MEDIA_CONTROL_BASE_URL?.replace(/\/+$/, '') || null;
+}
