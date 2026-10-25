@@ -13,8 +13,9 @@ import java.security.MessageDigest;
 
 /**
  * Media(Go)가 토큰 헤더로 자기를 증명하는 수단. auth 공용 체인은 X-Internal-Token을 보고,
- * 출발지 잠금 창구의 전용 체인(auth StreamKeyResolveSecurityConfig)은 같은 필터로 전용 헤더를
- * 본다 — 그 체인은 출발지 잠금을 먼저 건다. auth resolve 가 지키는 엔드포인트는
+ * 출발지 잠금 창구의 전용 체인(auth StreamKeyResolveSecurityConfig · clip
+ * ExpiredBroadcastSecurityConfig)은 같은 필터로 전용 헤더를 본다 — 그 체인들은 출발지 잠금을
+ * 먼저 건다. auth resolve 가 지키는 엔드포인트는
  * passphrase를 내려주므로, 뚫리면 전체 스트리머의 송출 경로가 열린다.
  *
  * <p>clip 공용 체인은 이 필터가 아니라 clip 자기 {@code InternalTokenFilter}를 쓴다. 이 필터는

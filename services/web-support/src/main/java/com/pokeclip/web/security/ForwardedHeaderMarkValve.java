@@ -9,7 +9,8 @@ import org.apache.catalina.valves.ValveBase;
 
 /**
  * 요청이 도착한 그대로 전달 머리글을 달고 왔는지 요청 속성에 적는다(POK-316). 엔진 밸브 맨 앞에 단다: 출발지 잠금 창구를
- * 여는 서버의 보안 설정이 배선한다(auth {@code StreamKeyResolveSecurityConfig}).
+ * 여는 서버의 보안 설정이 배선한다(auth {@code StreamKeyResolveSecurityConfig} · clip {@code
+ * ExpiredBroadcastSecurityConfig}).
  *
  * <p>머리글을 필터에서 직접 보면 안 되는 이유: {@code native}에서 톰캣 {@code RemoteIpValve}는 {@code X-Forwarded-For}를
  * 다 소비하면 그 머리글을 지운다(톰캣 11.0.22 {@code RemoteIpValve} 612~617줄, 요청이 끝난 뒤에야 되살린다). 그래서 믿는
