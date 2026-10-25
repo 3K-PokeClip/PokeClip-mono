@@ -16,6 +16,7 @@ import {
   reportPlaybackForbidden,
 } from '@/api/playbackAccess';
 import { HLS_LIVE_CONFIG, HLS_REWIND_CONFIG } from './hlsConfig';
+import { loadHls } from './hlsLoader';
 import { behindFromSeekFraction, isAtEdge } from './playerMath';
 import {
   endStalled,
@@ -50,16 +51,6 @@ const STOPPED_NOTES = {
   // 다시 받고 새로 선 재생기도 403이다: 서명 설정 문제라 더 받아도 같다(계약3 재시도 정책, POK-419)
   denied: '영상에 접근할 수 없어요. 새로고침해 주세요',
 } as const;
-
-/**
- * hls.js 모듈 읽기 — 재생기들이 한 번 읽은 것을 함께 쓴다. 재생 세션은 소스를 갈아 끼울 때마다 재생기를 새로 세우므로(설계 5.4절)
- * 앞 재생기의 읽기가 끝나기 전에 다음 재생기가 또 읽는다
- */
-let hlsModule: Promise<typeof import('hls.js')> | null = null;
-function loadHls(): Promise<typeof import('hls.js')> {
-  hlsModule ??= import('hls.js');
-  return hlsModule;
-}
 
 /** 재생 위치에 영상 자료가 있다(HTMLMediaElement.HAVE_CURRENT_DATA) */
 const HAVE_CURRENT_DATA = 2;
@@ -606,8 +597,16 @@ export function useHlsPlayback(
     const paintTimer = window.setInterval(paint, 1000);
 
     void (async () => {
-      // hls.js는 클라이언트 전용(월드 오브젝트 참조) — 동적 import로 번들 분리까지 겸한다
-      const { default: HlsCtor } = await loadHls();
+      // hls.js는 클라이언트 전용(월드 오브젝트 참조) — 동적 import로 번들 분리까지 겸한다. 읽기가 실패하면 영상 위에 알리고
+      // 원인을 남긴다(다음 재생기는 다시 읽는다 — hlsLoader)
+      let HlsCtor: typeof import('hls.js').default;
+      try {
+        ({ default: HlsCtor } = await loadHls());
+      } catch (e) {
+        console.error('[player] hls.js 를 읽지 못했어요:', e);
+        if (!disposed) setStopped({ src, why: 'broken' });
+        return;
+      }
       if (disposed) return;
 
       if (HlsCtor.isSupported()) {
