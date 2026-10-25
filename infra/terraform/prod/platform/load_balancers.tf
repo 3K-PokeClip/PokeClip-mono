@@ -146,11 +146,15 @@ module "waf" {
   # 실려 와도 남지 않게 미리 둔다. 질의 인자는 OAuth 콜백의 ?code=(web 콜백
   # 화면들) · 프로필 사진 주소의 ?token=(auth PhotoUrls)이다.
   #
-  # referer 도 가린다(kty 2026-10-25). web 에 Referrer-Policy 가 없어 브라우저
-  # 기본값을 따르므로, 콜백 화면(/auth/callback · /oauth/<제공자>/callback)이
-  # 같은 출처(app)로 보내는 요청의 Referer 에 ?code= 가 든 전체 주소가
-  # 실린다. SINGLE_QUERY_ARGUMENT 는 헤더 안의 그 값을 가리지 못한다. 대가로
-  # 요청 샘플 · 로그에서 요청이 어느 화면에서 왔는지(출처 정보)를 잃는다.
+  # referer 도 가린다(kty 2026-10-25). web 은 Referrer-Policy 를 전역
+  # strict-origin-when-cross-origin, 콜백 화면 넷(/auth/callback ·
+  # /oauth/<제공자>/callback)은 no-referrer 로 명시한다(POK-482). 그래서 정상
+  # 경로로는 ?code= 가 든 전체 주소가 Referer 에 실리지 않는다. 이 가림은 그
+  # 정책이 회귀하거나 다른 클라이언트가 콜백 주소를 Referer 로 보낼 때를 막는
+  # 이중 안전장치다 — 정책이 없으면 콜백 화면이 같은 출처(app)로 보내는 요청의
+  # Referer 에 전체 주소가 실리고, SINGLE_QUERY_ARGUMENT 는 헤더 안의 그 값을
+  # 가리지 못한다. 대가로 요청 샘플 · 로그에서 요청이 어느 화면에서
+  # 왔는지(출처 정보)를 잃는다.
   #
   # 질의 인자를 하나라도 가리면 로그의 규칙 일치 · 속도 규칙 세부
   # (RuleMatchDetails · rateBasedRuleList)에서 질의 문자열 전체가 REDACTED 가
