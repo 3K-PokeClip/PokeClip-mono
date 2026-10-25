@@ -192,9 +192,12 @@ compose 템플릿 변수 `ingest_auth_image` 하나로 모드를 고른다. 빈 
 *   **시작 스크립트가 보지 않는 입력**은 BLOCKED 줄 없이 지나간다.
     `stream_key_resolve_url` 이 비면 응답기가 기동을 거부한 채 `on-failure` 로
     되풀이되고(CONTRACT 1-5 의 7 — 필수 값), 주소가 틀리거나 Media → auth SG
-    짝이 빠지면 응답기는 뜨지만 4C 가 실패해 모든 송출이 거부된다. 앞은 M9
-    모듈 validation(아래 「후속」 M9 행)이, 둘 다 아래 점검표 3(전환 직후
-    `loopback-health.sh --passphrase`)이 잡는다.
+    짝이 빠지면 응답기는 뜨지만 4C 가 실패해 모든 송출이 거부된다. 상자가
+    읽는 전용 토큰이 auth 의 값과 다르거나 auth 출발지 대역에 Media 서브넷이
+    없어도 같다. 빈 주소는 M9 모듈 validation(아래 「후속」 M9 행)이 막는다.
+    SG 길 · 전용 토큰 · 출발지 대역은 교체 **전에** 옛 모드 상자에서 아래
+    점검표 5 가 먼저 보고, 주소까지 포함한 전체는 점검표 3(전환 직후
+    `loopback-health.sh --passphrase`)이 다시 본다(POK-477).
 *   교체 절차가 B 를 받아들일지 판정하는 방법은 M9 런북의 「설정 반영 교체」
     가 정한다.
 
@@ -242,6 +245,55 @@ compose 템플릿 변수 `ingest_auth_image` 하나로 모드를 고른다. 빈 
         M9 설치 단언이 본다.
     *   prod `media.env` 에 시험 전용 이음매 `INGEST_AUTH_DENY_DIR` 를 두지
         않는다(아래 「시험 이음매」).
+1.  **교체 전 resolve 미리 부르기**(POK-477 · SSM · 실행 직전 kty 승인):
+    응답기 모드로 바꾸는 설정 반영 교체 **전에**, 떠 있는 옛 모드 상자(O7e
+    뒤 상자 A)에서 auth 의 전용 resolve 창구를 한 번 부른다. 4C 가 기대는
+    세 조건 — Media SG → auth SG 길 · 전용 토큰(상자가 읽는 값 = auth 가
+    받은 값) · auth 출발지 대역(`STREAM_KEY_RESOLVE_ALLOWED_CIDRS` = Media
+    프라이빗 서브넷) — 을 응답기 첫 기동 전에 가른다.
+    *   스크립트는
+        [런타임 런북](../terraform/runbooks/runtime-1a.md)
+        「1단-나 ② 10」 의 `token-probe.sh` 를 그대로 쓴다(작업 디렉터리
+        `${work}` · `media_ssm` 은
+        [Media 교체 런북](../terraform/runbooks/media-swap.md) 「준비」).
+        상자가 전용 그릇(`pokeclip/prod/stream-key-resolve-token`)의 지정
+        단계 값을 읽어 헤더 `X-Stream-Key-Resolve-Token` 에 싣고
+        `http://auth.pokeclip.internal:8082<경로>` 에 POST 한 뒤 상태 코드만
+        낸다. 본문은 없는 스트림 키라 성공 응답도 `valid:false` 다.
+
+        ```shell
+        media_ssm a "${work}/token-probe.sh" \
+          /internal/stream-keys/resolve AWSCURRENT
+        ```
+
+    *   **통과:** `token-probe AWSCURRENT rc=0 code=200` · `SSM Success`.
+        런북 10 의 통과 줄 `token-probe AWSCURRENT rc=0 code=401` 은 다른
+        경로(`/internal/youtube-link/status`)를 부른 음성 확인이다 — 전용
+        토큰이 resolve 밖의 내부 경로를 열지 못한다는 뜻이고, resolve 길이
+        열렸다는 뜻이 아니다. 여기서 resolve 경로가 401 이면 실패다.
+    *   **실패 줄의 뜻**(auth 는 출발지를 토큰보다 먼저 본다 —
+        `StreamKeyResolveSecurityConfig`):
+        *   `code=403` — 상자 출발지가 auth 허용 대역 밖이다.
+        *   `code=401` — 토큰이 다르거나 창구가 닫혔다(auth 가 전용 토큰을
+            아직 받지 않음 — platform apply 전 · 값을 넣은 뒤 옛 태스크).
+        *   `rc` 가 0 아님(`code=000`) — 연결이 안 된다(SG 짝 · 이름 풀이 ·
+            auth 기동). SG 가 패킷을 버리면 연결 시간 초과까지 오래 걸린다.
+        *   `token-probe AWSCURRENT 멈춤: 읽지 못함` — 상자 역할이 전용
+            그릇을 못 읽거나 값이 없다(아래 조건).
+    *   **옛 모드에서도 쓸 수 있는 근거:** 인스턴스 역할 `SecretsRead` 는
+        모드와 무관하게 `media_secret_arns` 를 Resource 에 싣고
+        (`modules/media_host/iam.tf`), Media ↔ auth SG 짝도 모드와 무관하게
+        만든다(`modules/media_host/security_groups.tf`). 상자의 aws CLI ·
+        curl 은 옛 모드 시작 스크립트 · 설치 스크립트가 이미 쓴다.
+    *   **쓸 수 없는 조건**(이때는 결과를 판정에 쓰지 않는다):
+        *   런타임 1단-나 ② 2 apply 와 그 뒤 prod/media apply(1단-나 ② 7 —
+            첫 O7e 가 겸할 수 있음)가 끝나기 전 — `media_secret_arns` 가
+            아직 공용 그릇이라 상자가 전용 그릇을 못 읽는다(멈춤 줄).
+        *   1단-나 ② 4(값 넣기) 전 — 값이 없다(멈춤 줄).
+        *   1단-나 ② 5(platform) 전 — auth 창구가 닫혀 늘 401 이다.
+    *   스크립트는 주소를 `auth.pokeclip.internal:8082` 로 고정한다.
+        prod/media tfvars 의 `stream_key_resolve_url` 이 같은 호스트 · 포트인지
+        따로 본다 — 다르면 이 확인을 통과해도 4C 는 실패한다.
 
 ### 되돌리기 순서
 
