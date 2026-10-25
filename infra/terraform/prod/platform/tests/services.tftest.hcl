@@ -1622,6 +1622,23 @@ run "rejects_proxy_port_used_by_ingest_auth" {
   expect_failures = [var.proxy_ports]
 }
 
+# 사이드카 제어면 서버가 같은 망 칸의 127.0.0.1:8086 에서 듣는다(compose 템플릿
+# CONTROL_LISTEN) — nginx 듣기 포트로 쓰면 둘 중 하나가 뜨지 못한다.
+run "rejects_proxy_port_used_by_control_plane" {
+  command = plan
+
+  variables {
+    proxy_ports = {
+      live     = 28181
+      playback = 28182
+      control  = 8086
+      health   = 28184
+    }
+  }
+
+  expect_failures = [var.proxy_ports]
+}
+
 run "rejects_unknown_db_auth_mode" {
   command = plan
 

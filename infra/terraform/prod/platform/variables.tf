@@ -113,7 +113,7 @@ variable "image_digests" {
 # Media 상자 nginx 포트의 정본 — 대상 그룹 포트 · 헬스가 이 값에서 나오고,
 # 출력 media_proxy_ports 로 media 루트가 같은 값으로 상자를 띄운다.
 variable "proxy_ports" {
-  description = "Media 상자 nginx 듣기 포트 넷(live · playback · control · health). 1024 이상 · 서로 다름 · 응답기(8080 · 8081)와 MediaMTX 루프백(8888 · 9996 · 9997) 밖."
+  description = "Media 상자 nginx 듣기 포트 넷(live · playback · control · health). 1024 이상 · 서로 다름 · 응답기(8080 · 8081) · 사이드카 제어면(8086) · MediaMTX 루프백(8888 · 9996 · 9997) 밖."
   type = object({
     live     = number
     playback = number
@@ -124,9 +124,9 @@ variable "proxy_ports" {
   validation {
     condition = alltrue([
       for port in values(var.proxy_ports) :
-      port >= 1024 && port <= 65535 && floor(port) == port && !contains([8080, 8081, 8888, 9996, 9997], port)
+      port >= 1024 && port <= 65535 && floor(port) == port && !contains([8080, 8081, 8086, 8888, 9996, 9997], port)
     ])
-    error_message = "proxy_ports 는 1024 부터 65535 까지의 정수이고 8080 · 8081 · 8888 · 9996 · 9997 이 아니어야 한다."
+    error_message = "proxy_ports 는 1024 부터 65535 까지의 정수이고 8080 · 8081 · 8086 · 8888 · 9996 · 9997 이 아니어야 한다."
   }
 
   validation {
