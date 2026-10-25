@@ -34,7 +34,7 @@ Java 21 · Spring Boot 4.1 · Gradle 멀티모듈 · PostgreSQL · Redis
 |---|---|
 | `auth` | `users` · `refresh_tokens` · `secrets` · `stream_keys` · `pairing_codes` · `pairing_exchange_attempts` |
 | `clip` | `broadcasts` · `broadcast_events` (V201) · `jump_cards` (V202) · `broadcasts.vod_expires_at` (V203, POK-117) · `recipes` (V206, POK-124) · `clips` · `render_jobs` · `render_job_events` (V207, POK-125) · **`clips` 색인 `idx_clips_recipe` (V208, POK-243)** |
-| chat 계열 | `chat_messages` (V301 · `stream_id` 칸은 V302 · **닉네임·역할 칸은 V306**) · `chat_ended_streams` (V303) · **`chat_donations` (V307)** · **`broadcast_info` (V308)** · **`chat_ingest_keys` (V310, POK-233)** · **`purged_channels` (V311, POK-256)** · **표 넷의 `platform` 칸과 플랫폼을 앞에 둔 색인 (V313~V315, POK-397)** · **방송 정보 플랫폼별 최신 색인 (V317, POK-397)** — **collector가 쓰고 detector가 읽는다.** 같은 담당(3번)·같은 V3xx 대역의 공동 소유라, 아래 "서로의 표를 직접 읽지 않는다"의 예외가 아니라 한 소유자의 두 프로세스다 |
+| chat 계열 | `chat_messages` (V301 · `stream_id` 칸은 V302 · **닉네임·역할 칸은 V306**) · `chat_ended_streams` (V303) · **`chat_donations` (V307)** · **`broadcast_info` (V308)** · **`chat_ingest_keys` (V310, POK-233)** · **`purged_channels` (V311, POK-256)** · **표 넷의 `platform` 칸과 플랫폼을 앞에 둔 색인 (V313~V315, POK-397)** · **방송 정보 플랫폼별 최신 색인 (V317, POK-397)** · **방송 정보 카테고리 사진 칸 (V318, POK-462)** — **collector가 쓰고 detector가 읽는다.** 같은 담당(3번)·같은 V3xx 대역의 공동 소유라, 아래 "서로의 표를 직접 읽지 않는다"의 예외가 아니라 한 소유자의 두 프로세스다 |
 | `chat-detector` | `chat_metrics` (V401, POK-120) — **판별 서버 단독 소유다.** 위 `chat_messages`와 달리 공동 소유가 아니라 이 서버만 읽고 쓴다 |
 
 **서로의 표를 직접 읽지 않는다.** 필요하면 계약4의 `POST /internal/stream-keys/resolve`로
@@ -431,11 +431,11 @@ CHZZK_ENABLED=true CHZZK_ACCESS_TOKEN=<유저 Access Token> ./gradlew :chat-coll
 | `CHAT_RELAY_ENABLED` | `false` | ✅ | 켜면 받은 채팅·후원을 **저장과 따로** clip의 `POST /internal/broadcasts/{streamId}/chat-events`로 바로 민다(POK-234 PR-B, 라이브 화면 SSE). clip이 죽어도 표 적재는 그대로이고 중계는 재시도 없이 버리고 센다. 주소는 위 `CLIP_BASE_URL`, 토큰은 `INTERNAL_API_TOKEN`을 같이 쓴다 — **켜졌는데 둘 중 하나가 비면 부팅이 죽는다** |
 | `CHAT_RELAY_BUFFER_MAX` | `10000` | — | 수신 → 중계 바구니 상한(건). 넘치면 오래된 것부터 버리고 센다 |
 | `BROADCAST_INFO_ENABLED` | `false` | ✅ | 켜면 걷고 있는 방송마다 주기적으로 제목·태그·카테고리·시청자 수를 `broadcast_info`에 남기고, 중계가 켜져 있으면 화면에 `event: broadcast-info`로 민다(POK-234 PR-C). 켜져 있는데 아래 둘이 비면 **부팅이 죽는다**. **치지직 세션만 걷는다**(POK-397, 목록·설정이 치지직 창구다). 목록에서 찾은 방송은 clip 플랫폼 묶음에 `CHZZK`를 알린다(`PUT /internal/broadcasts/{streamId}/platforms/CHZZK`, 주소는 `CLIP_BASE_URL`(`pokeclip.platforms.clip-base-url`), 토큰은 `INTERNAL_API_TOKEN`, 켜졌는데 둘 중 하나가 비면 부팅이 죽는다). (방송, 플랫폼)마다 204를 받을 때까지만 보내고 주기 갱신은 없다. 실패(404·5xx·시한 접속 500ms·읽기 1초)면 다음 관측에 다시 보내고 경고는 (방송, 플랫폼)마다 첫 번만 WARN `platforms.notify_failed`, 뒤는 DEBUG. 받았다는 메모는 메모리라 재시작하면 한 번씩 다시 알린다(창구가 멱등). 알림은 그 틱의 저장·중계가 다 끝난 뒤에 보내고, 한 틱의 알림 합계가 3초를 넘으면 남은 것은 다음 틱에 먼저 보낸다(WARN `liveinfo.notify_deferred`, clip이 받고 답을 안 주면 틱이 방송 수 × 1.5초만큼 늘던 것을 막는다). 알림이 실패해도 정보 저장·중계는 그대로다 |
-| `SOOP_WATCH_ENABLED` | `false` | ✅ | 켜면 SOOP 연동 스트리머의 방송을 1분마다 확인해 방송 정보(`platform` `SOOP`)를 남기고 화면에 `event: broadcast-info`로 밀고 clip 플랫폼 묶음에 `SOOP`을 알린다(POK-397, 아래 「SOOP 방송 지켜보기」 절). 🔴 **PR3b(웹이 플랫폼별로 읽기) 배포 뒤에 켠다.** 먼저 켜면 플랫폼을 모르는 화면의 숫자·그래프가 두 플랫폼 사이를 오간다. 켜졌는데 `INTERNAL_API_TOKEN`·`AUTH_BASE_URL`·`CLIP_BASE_URL` 중 하나가 비면 부팅이 죽는다 |
+| `SOOP_WATCH_ENABLED` | `false` | ✅ | 켜면 SOOP 연동 스트리머의 방송을 1분마다(넣은 뒤 3분은 10초마다) 확인해 방송 정보(`platform` `SOOP`)를 남기고 화면에 `event: broadcast-info`로 밀고 clip 플랫폼 묶음에 `SOOP`을 알린다(POK-397, 아래 「SOOP 방송 지켜보기」 절). 🔴 **PR3b(웹이 플랫폼별로 읽기) 배포 뒤에 켠다.** 먼저 켜면 플랫폼을 모르는 화면의 숫자·그래프가 두 플랫폼 사이를 오간다. 켜졌는데 `INTERNAL_API_TOKEN`·`AUTH_BASE_URL`·`CLIP_BASE_URL` 중 하나가 비면 부팅이 죽는다 |
 | `SOOP_DIAGNOSE_RESPONSE` | `false` | ✅ | 켜면 SOOP 방송 여부 응답 `data`의 **키 이름과 `status` 값만** INFO `soop.live.diagnose` 한 줄로 남긴다(값은 안 찍는다). 응답 칸이 바뀌었는지 볼 때 켜는 진단용이다(2026-10-24 실측으로 칸을 확정했다) |
 | `SOOP_API_BASE_URI` | `https://openapi.sooplive.com` | ✅ | SOOP 오픈 API 주소. 시험은 가짜 서버로 바꾼다 |
 | `SOOP_CHAT_ENABLED` | `false` | ✅ | 켜면 SOOP 지켜보기가 방송 중으로 본 방송마다 화면 없는 Chromium 탭에서 SOOP 공식 Chat SDK로 채팅을 받는다(POK-397 PR4, 아래 「SOOP 채팅 받기」 절). 지켜보기(`SOOP_WATCH_ENABLED`)가 꺼져 있으면 부팅이 죽는다 |
-| `SOOP_CLIENT_ID` · `SOOP_CLIENT_SECRET`(수집기) | 빈 값 | ✅ | 🔴 비밀. auth와 같은 SOOP 앱 값. 공식 SDK가 생성자에서 둘 다 받는다. 채팅을 켰는데 비면 부팅이 죽는다(값은 메시지에 안 싣는다) |
+| `SOOP_CLIENT_ID` · `SOOP_CLIENT_SECRET`(수집기) | 빈 값 | ✅ | 🔴 비밀. auth와 같은 SOOP 앱 값. 공식 SDK가 생성자에서 둘 다 받는다. 채팅을 켰는데 비면 부팅이 죽는다(값은 메시지에 안 싣는다). `SOOP_CLIENT_ID`는 지켜보기가 SOOP 카테고리 번호를 이름으로 바꿀 때도 쓴다(POK-462, 비면 카테고리 `null`). SOOP 카테고리 사진은 `CHZZK_CLIENT_ID`·`CHZZK_CLIENT_SECRET`로 치지직에서 빌린다(비면 사진 `null`) |
 | `SOOP_CHAT_SDK_URL` | `https://static.sooplive.com/asset/app/chat-sdk/sooplive-chat-sdk.js` | ✅ | 공식 SDK 스크립트 주소. 시험만 가짜 SDK로 바꾼다 |
 | `BROADCAST_INFO_INTERVAL` | `PT1M` | — | 방송 정보 주기. 목록이 429를 주면 그 회차 시작부터 이 값(이어지면 두 배씩, 최대 5분)이 지나기 전 회차를 건너뛴다. 다음 회차가 앞 회차 끝 + 주기에 오므로 첫 429는 건너뛰는 회차가 없고 연속 둘째부터 건너뛴다 |
 | `CHZZK_CLIENT_ID` · `CHZZK_CLIENT_SECRET` | 빈 값 | ✅ | 🔴 **비밀.** 시청자 수를 얻는 전체 라이브 목록이 **앱 인증**이라 필요하다(채널 하나를 묻는 공식 창구가 없다). auth와 같은 치지직 앱 값이다 |
@@ -909,7 +909,7 @@ Flyway 마이그레이션은 앱이 뜰 때 실행돼야 하므로 **코드 옆(
 지금까지 나간 것은 auth의 `V101`~`V118`(`V110`·`V111`은 칸, **`V112`는 인덱스 넷과 표 주석 둘**, POK-89 · `V113` 오디오 트랙 이름 · `V114` 탈퇴 장부 · `V115` 연동 채널 칸 NULL 허용 · `V116`·`V117` SOOP 연동 · **`V118` 탈퇴 장부의 `platform` 칸, POK-397**) · clip의 `V201`(`broadcasts`·`broadcast_events`)과
 `V202`(`jump_cards`, POK-118)·`V203`(`broadcasts.vod_expires_at`, POK-117)·`V204`(색인 둘, POK-174)·
 **`V205`(방송 중 부분 색인, POK-218)** · `V206`(`recipes`, POK-124) · `V207`(`clips`·`render_jobs`·`render_job_events`, POK-125) · **`V208`(`clips (recipe_id, id DESC)` 색인 하나, POK-243)** ·
-`V209`~`V213` · **`V214`(`jump_cards.hidden_reason` · `jump_card_actions` · `recipes.source_card_id`, POK-338)** · **`V216`(`jump_card_actions`가 `open`도 받는다, POK-393)** · `V217`(`upload_requests`의 카테고리·예약 공개, POK-381) · `V218`(`broadcasts.platform`, POK-398) · **`V219`(카드 유일 제약을 자동 창·수동 eventId 부분 색인 둘로, POK-391: 되돌릴 때 주의는 「OBS 수동 마킹 받기」 절)** · `V220`(만료 방송 색인, POK-335) · **`V221`(`broadcast_platforms`, POK-397)** · chat-collector의 `V301`(`chat_messages`)~**`V317`** ·
+`V209`~`V213` · **`V214`(`jump_cards.hidden_reason` · `jump_card_actions` · `recipes.source_card_id`, POK-338)** · **`V216`(`jump_card_actions`가 `open`도 받는다, POK-393)** · `V217`(`upload_requests`의 카테고리·예약 공개, POK-381) · `V218`(`broadcasts.platform`, POK-398) · **`V219`(카드 유일 제약을 자동 창·수동 eventId 부분 색인 둘로, POK-391: 되돌릴 때 주의는 「OBS 수동 마킹 받기」 절)** · `V220`(만료 방송 색인, POK-335) · **`V221`(`broadcast_platforms`, POK-397)** · chat-collector의 `V301`(`chat_messages`)~**`V318`** ·
 chat-detector의 `V401`(`chat_metrics`, POK-120)이다.
 
 **chat-collector 대역 열:** `V301`(`chat_messages`) · `V302`(`stream_id` 칸) ·
@@ -920,7 +920,7 @@ chat-detector의 `V401`(`chat_metrics`, POK-120)이다.
 `V311`(`purged_channels`, POK-256) · `V312`(정리 색인 셋, `CONCURRENTLY`) ·
 **`V313`**(표 넷에 `platform` 칸 + CHECK `NOT VALID` + 명부 PK `(platform, channel_id)`, POK-397) ·
 **`V314`**(플랫폼을 앞에 둔 색인 넷, `CONCURRENTLY`) · **`V315`**(지문 제약을 같은 이름으로 플랫폼 색인에 옮김 · 옛 채널 색인 셋 삭제 · CHECK 검증) ·
-`V316`(판별 서버 계정에 `chat_messages` 읽기, POK-407) · **`V317`**(`broadcast_info (stream_id, platform, observed_at)` 색인 하나, `CONCURRENTLY`, 플랫폼별 최신 방송 정보, POK-397).
+`V316`(판별 서버 계정에 `chat_messages` 읽기, POK-407) · **`V317`**(`broadcast_info (stream_id, platform, observed_at)` 색인 하나, `CONCURRENTLY`, 플랫폼별 최신 방송 정보, POK-397) · `V318`(`broadcast_info.category_image_url`, 카테고리 사진 주소, POK-462).
 
 🔴 **`-- executeInTransaction=false` 주석은 Flyway가 읽지 않는다**(Flyway 12.4 OSS, POK-397에서 확인). 스크립트 설정은
 **같은 폴더의 `<파일 이름>.conf`**에서만 읽는다. `V309`·`V312`가 주석만으로 트랜잭션 밖에서 돈 것은 문장이 전부 `CONCURRENTLY`라
@@ -1033,7 +1033,7 @@ preflight에서 막혀 **창구는 멀쩡한데 브라우저만 못 부른다.**
 | `POST /api/stream-keys/rotate` | 웹 | 사용자 JWT |
 | `POST /api/stream-keys/pairing-codes` | 웹 | 사용자 JWT |
 | `POST /api/stream-keys/pairing-codes/exchange` | OBS 플러그인 | **없음** (코드 자체가 자격증명) |
-| `POST /internal/stream-keys/resolve` | **Media(1번)** | `X-Internal-Token` 헤더 **또는** `X-Stream-Key-Resolve-Token` 헤더 + 출발지 잠금(아래) |
+| `POST /internal/stream-keys/resolve` | **Media(1번)** · clip 수동 마킹(`X-Internal-Token`) | `X-Internal-Token` 헤더 **또는** `X-Stream-Key-Resolve-Token` 헤더 + 출발지 잠금(아래) |
 | `POST /api/chzzk-link/start` | 웹 | 사용자 JWT |
 | `POST /api/chzzk-link` | 웹 | 사용자 JWT |
 | `GET /api/chzzk-link` | 웹 | 사용자 JWT |
@@ -1198,8 +1198,8 @@ Media는 auth에 직접 붙어 이 머리글을 안 싣는다. 머리글은 Spri
 
 판별기(`chat-detector`)가 「이 순간 채팅이 터졌다」고 보낸 지점을 **점프카드**로 보관하고,
 그 방송을 보고 있는 웹 화면에 **SSE로 실시간으로 밀어 넣는다.** 표는 `jump_cards` 하나(`V202`).
-처음에는 편집자 둘이 같은 카드를 동시에 집지 못하게 **점유**를 걸고 숨기기도 있었는데, **POK-393에서 둘 다 없앴다**
-(아래 「점유와 숨기기는 없앴다」).
+처음에는 편집자 둘이 같은 카드를 동시에 집지 못하게 **점유**를 걸고 숨기기도 있었는데, **POK-393에서 둘 다 없앴고
+POK-463에서 숨기기(가리기·되살리기)만 되살렸다**(아래 「점유는 없앴고 가리기는 되살렸다」).
 
 **clip의 첫 사람용 API이고, 첫 시큐리티이며, 첫 비동기 전송이다.**
 
@@ -1208,8 +1208,9 @@ Media는 auth에 직접 붙어 이 머리글을 안 싣는다. 머리글은 Spri
 | `POST /internal/broadcasts/{streamId}/highlights` (계약 2A) | `X-Internal-Token` | **201** 새 카드 · **200** 같은 창의 자동 카드가 이미 있음(기존 카드 그대로) · 404 `{"error":"broadcast_not_found"}` · 400 `{"error":"invalid_request","field":…}`(**`source`가 `hotkey`여도 `field:"source"`**, 자동 카드만 받는다. POK-391) · 401 |
 | `GET /api/clip/broadcasts/{streamId}/events` (계약 2B, SSE) | Bearer JWT | **200** `text/event-stream` · 404 `{"error":"broadcast_not_found"}` · 401 · **503** `{"error":"stream_limit","scope":"user\|stream\|total"}` 또는 `{"error":"authorization_unavailable"}` |
 | `POST /api/clip/jump-cards/{id}/open` | Bearer JWT | **204**(본문 없음, 행동 기록 `jump_card_actions`에 `open` 한 줄. 다시 열면 한 줄 더) · **400** `{"error":"invalid_request","field":"id"}`(번호가 숫자가 아니다) · 404 `{"error":"jump_card_not_found"}`(없거나 볼 수 없는 카드) · 503 `{"error":"authorization_unavailable"}` · 401. 편집기가 카드에서 열릴 때 부른다(POK-393) |
+| `POST /api/clip/jump-cards/{id}/hide` (가리기) · `DELETE` 같은 주소 (되살리기) | Bearer JWT | **200** 바뀐 뒤의 카드 한 장(`hidden` true·false). 이미 그 상태여도 200과 지금 카드(기록·발행 없음) · 400 `field:"id"` · 404 `jump_card_not_found` · 503 `authorization_unavailable` · 401. 본문 없음(이유를 안 받는다). 되살리기는 가린 사람이 아니어도 된다(POK-463) |
 
-**🔴 POK-174부터 통로와 카드 문이 자격 판정을 지난다**(카드 문은 그때 넷, POK-393부터 열기 하나). 그래서 404의 뜻이 넓어지고
+**🔴 POK-174부터 통로와 카드 문이 자격 판정을 지난다**(카드 문은 그때 넷, POK-393부터 열기 하나, POK-463부터 열기·가리기·되살리기 셋). 그래서 404의 뜻이 넓어지고
 503 갈래가 하나 늘었다 — **`jump_card_not_found`는 이제 「없는 카드」가 아니라
 「없거나 볼 수 없는 카드」다.** 갈라 두면 카드 번호를 하나씩 넣어 보는 것만으로 그 카드의 실재를
 알 수 있다(번호가 `bigserial`이라 연속이다). 통로의 404도 같은 이유로 「없는 방송」과
@@ -1230,11 +1231,14 @@ FK·CHECK 위반이 중복으로 보고돼 판별기가 "성공"으로 읽고 �
 칸이 `VARCHAR(128)`이고, 검증이 없으면 DB까지 가서 **500**이 나가는데 그러면 판별기가 같은
 payload로 영영 재시도한다(2026-08-23 실측). **판별기 세션에 전할 것.**
 
-**점유와 숨기기는 없앴다(POK-393).** 집기·놓기·숨기기·되돌리기 문 넷과 그 예외(409 `ClaimedByOther`·403 `not_claim_owner`)·
-숨김 이유·점유 시간 설정(`pokeclip.jump-card.claim-ttl`)이 함께 사라졌다. 편집자 여럿이 같은 카드에서 **각자** 편집본을 만든다.
-옛 문을 두드리면 404다. 카드 응답(목록·통로·2A)에서 `claimedBy`·`claimedAt`·`claimExpiresAt`·`hidden`·`hiddenBy`·`hiddenReason`
-칸이 빠졌고, 목록 문은 `includeHidden`을 안 받는다(옛 웹이 보내도 무시). 표의 `claimed_*`·`hidden_*` 칸은
-**POK-394가 지울 때까지 남지만 아무도 안 쓰고 아무것도 안 거른다.** 그 칸이 찬 옛 카드도 목록·썸네일 대표에 나온다.
+**점유는 없앴고 가리기는 되살렸다.** POK-393이 집기·놓기·숨기기·되돌리기 문 넷과 그 예외(409 `ClaimedByOther`·403 `not_claim_owner`)·
+숨김 이유·점유 시간 설정(`pokeclip.jump-card.claim-ttl`)을 없앴고, 편집자 여럿이 같은 카드에서 **각자** 편집본을 만든다. 집기 문을 두드리면 404다.
+카드 응답에서 `claimedBy`·`claimedAt`·`claimExpiresAt`·`hiddenBy`·`hiddenReason` 칸이 빠졌다.
+**POK-463(2026-10-25)이 숨기기를 「가리기」로 되살렸다**: 대시보드 카드 칸에 「숨김」 칸을 더하는 요구다. 옛 칸 `hidden_at`·`hidden_by`를
+그대로 다시 쓰고(마이그레이션 없음) **이유는 안 받는다**(`hidden_reason`은 안 쓴다). 카드 응답(목록·통로·2A·가리기 답)에 **`hidden`**이 다시 실리고,
+목록 문은 **`includeHidden=true`일 때만** 가린 카드를 싣는다(기본은 뺀다). 가리기·되살리기는 순번(`eventSeq`)을 올리고 통로로 `card`를 보낸다.
+가린 카드는 방송 대표 사진·완성 영상 사진의 장면 고르기에서도 빠진다. 🔴 **POK-393 전에 숨겼던 옛 카드는 다시 가린 카드가 된다**(그때 사람이
+숨긴 것이다). 표의 `claimed_*`·`hidden_reason`은 POK-394가 지울 때까지 남지만 아무도 안 쓴다. **`hidden_at`·`hidden_by`는 지우지 않는다.**
 
 **SSE 이벤트는 둘뿐이다 — `card`와 `ended`. 둘 다 `data:` 줄이 반드시 있다.**
 
@@ -1628,10 +1632,11 @@ JSON 트리를 맞대어 지킨다). 화면이 같은 것을 두 벌로 처리�
 | `GET …/{streamId}/jump-cards` | `BroadcastAccessGuard` — 명부에서 스트리머 번호 → auth `resolve` | **404** `broadcast_not_found` |
 | `GET …/{streamId}/events` (통로) | 같음 | **404** `broadcast_not_found` |
 | `GET …/{streamId}/segments` | `SegmentQueryService` — 구간 검증 → 방송 → 자격 → 만료 | **404** `broadcast_not_found` |
-| `POST …/jump-cards/{id}/open` (POK-393) | 카드 → 그 카드의 방송 → `BroadcastAccessGuard` | **404** `jump_card_not_found` |
+| `POST …/jump-cards/{id}/open` (POK-393) · `POST`·`DELETE …/jump-cards/{id}/hide` (POK-463) | 카드 → 그 카드의 방송 → `BroadcastAccessGuard` | **404** `jump_card_not_found` |
 | `GET …/{streamId}/chat-messages` (POK-234) | `BroadcastAccessGuard` — 통로와 같은 판정 | **404** `broadcast_not_found` |
 | `GET …/{streamId}/chat-chart` (POK-234) | 같음 | 같음 |
 | `GET …/{streamId}/broadcast-info` (POK-234) | 같음 | 같음 |
+| `GET …/{streamId}/broadcast-info/timeline` (POK-462) | 같음 | 같음 |
 | `POST …/{streamId}/playback-access` (POK-122) | 같음 | 같음 |
 | `POST …/{streamId}/recipes` (POK-124) | `BroadcastAccessGuard` — **본문 규칙 검사보다 먼저**(아래 절) | **404** `broadcast_not_found` |
 | `GET …/{streamId}/recipes` (POK-124) | 같음 | 같음 |
@@ -1659,7 +1664,7 @@ JSON 트리를 맞대어 지킨다). 화면이 같은 것을 두 벌로 처리�
 **순서가 계약이다 — 요청 칸 → 자격 → 조회.** 요청 칸이 맨 앞인 것은 형식 오류 하나가 auth 왕복
 (최대 7초 = connect 2s + read 5s)을 태우고 그러고도 400이 나가지 않게 하려는 것이고, 자격이
 조회보다 앞인 것은 남의 방송이 메모리에 올라오지 않게 하려는 것이다.
-**카드 열기 문에서는 자격이 기록보다 앞이다.** 뒤로 밀면 자격 없는 사람의 열기가 행동 기록에 남는다.
+**카드 문 셋(열기·가리기·되살리기)에서는 자격이 쓰기보다 앞이다.** 뒤로 밀면 자격 없는 사람의 요청이 카드를 바꾸거나 행동 기록에 남는다.
 (POK-393 전에는 카드 문 넷이었고, 뒤로 밀면 남이 잡은 카드의 **409 본문**에 점유자가 실렸다.)
 
 🔴 **그 「최대 7초」가 참인 유일한 이유는 되걸기를 껐기 때문이다.** Apache HC5의 기본 재시도
@@ -1714,8 +1719,8 @@ JSON 트리를 맞대어 지킨다). 화면이 같은 것을 두 벌로 처리�
 목록 질의가 카드를 읽은 뒤 그 응답이 화면에 닿기 전에 그 카드가 바뀌면,
 **통로가 새 상태를 먼저 보내고 늦게 도착한 목록이 낡은 상태로 덮어쓴다.** `eventSeq`는 **목록 응답과
 통로 이벤트가 같은 모양으로 싣는 값**이라 그대로 비교하면 된다.
-**POK-393 뒤로는 저장된 카드를 바꾸는 문이 없어**(집기·숨기기를 없앴다) 지금은 이 경합이 생길 자리가 없다.
-규칙은 카드에 바뀌는 칸이 다시 생기는 날을 위해 남긴다.
+**POK-463부터 가리기·되살리기가 카드를 바꿔 이 경합이 다시 생긴다.** 웹은 같은 카드면 순번이 낮은 판을 버린다(가리기 답보다 먼저 떠난
+목록 읽기가 늦게 와도 카드를 제 칸으로 되돌리지 않는다).
 🔴 **실제로 그 순서가 뒤집히는 빈도는 안 쟀다** — 계약이 그 경우를 안 정하고 있었다는 것만 확정했다
 (PR #139 codex 지적).
 
@@ -1747,7 +1752,7 @@ JSON 트리를 맞대어 지킨다). 화면이 같은 것을 두 벌로 처리�
 **나머지 문은 스프링 기본 `/error` 봉투**(`timestamp`·`status`·`path`)로 나갔다 — 같은 400에
 웹이 모양이 다른 본문 둘을 받고 있었다.
 
-**그래서 `field` 값이 넷이다:** `state` · `limit` · `cursor` · **`id`**(`includeHidden`은 POK-393에서 문과 함께 빠졌다).
+**그래서 `field` 값이 다섯이다:** `state` · `limit` · `cursor` · `includeHidden`(POK-393에서 빠졌다가 POK-463에서 돌아왔다) · **`id`**.
 마지막 것은 **카드 문**(`/api/clip/jump-cards/{id}/…`)에서 나온다:
 `POST …/jump-cards/abc/open` → **400 `{"error":"invalid_request","field":"id"}`**.
 값 자체는 안 싣는다(자유 입력을 되돌려주지 않는다). `id`는 우리 시그니처의 조각 이름이다.
@@ -1761,7 +1766,7 @@ JSON 트리를 맞대어 지킨다). 화면이 같은 것을 두 벌로 처리�
 #### 404는 25ms 바닥 뒤에 나간다 — 이제 사람 문 <u>일곱</u>이 나눠 쓴다
 
 세그먼트 문에만 있던 장치(`NotFoundFloor`)가 `support` 패키지로 옮겨 왔다. 카드 목록·통로·카드
-열기 문이 같은 바닥을 쓴다(POK-393 전에는 카드 문 넷): **「없는 것」은 명부 조회 하나로 끝나고 「실재하지만 볼 자격이 없다」는
+문 셋(열기, POK-463부터 가리기·되살리기)이 같은 바닥을 쓴다(POK-393 전에는 카드 문 넷): **「없는 것」은 명부 조회 하나로 끝나고 「실재하지만 볼 자격이 없다」는
 auth 왕복을 타서 시간이 갈리기 때문이다**(세그먼트 문 실측 1,240회에서 중앙값 1.5ms 대 4.4ms,
 한 번만 재도 99.5% 구분). 본문을 같게 하는 것만으로는 안 갈린다.
 
@@ -1793,7 +1798,7 @@ auth 왕복을 타서 시간이 갈리기 때문이다**(세그먼트 문 실측
   - 🔴 **같은 뿌리에 더 나쁜 갈래가 있다 — `streamer_id`가 아예 숫자가 아니면 그 방송이 통째로
     막힌다.** 선행 0은 「목록에만 안 나오는」 어긋남이지만, 숫자로 못 읽는 값이면 **사람 문
     일곱이 전부 404**다(`BroadcastAccessGuard.parseNumeric` · `SegmentQueryService.parseNumeric`이
-    `NumberFormatException`을 `NotViewableException`으로 접는다: 카드 목록·통로·카드 문(POK-393부터 열기 하나)·
+    `NumberFormatException`을 `NotViewableException`으로 접는다: 카드 목록·통로·카드 문(열기·가리기·되살리기)·
     세그먼트). 여덟 번째인 방송 목록 문은 404가 아니라 **그 줄이 아예 안 나온다**
     (`String.valueOf(long)`로 조회하므로 못 찾는다). 합치면 **스트리머 본인도 자기 방송을 못 연다.**
     - **발견 수단은 ERROR 로그 하나다** — `clip.access.identity_not_numeric` ·
@@ -2145,6 +2150,7 @@ clip이 그 방송을 `ended`로 굳힌다.** POK-218이 찾은 구멍이다 —
 | `GET /api/clip/broadcasts/{streamId}/chat-messages` | `from` `to` `limit` `cursor` `kinds` | 수집기 `chat-messages` |
 | `GET /api/clip/broadcasts/{streamId}/chat-chart` | `from` `to` `bucket` | 수집기 `chat-chart` |
 | `GET /api/clip/broadcasts/{streamId}/broadcast-info` | `since` | 수집기 `broadcast-info` |
+| `GET /api/clip/broadcasts/{streamId}/broadcast-info/timeline` (POK-462) | 없음 | 수집기 `broadcast-info/timeline` |
 
 🔴 **쿼리를 통째로 넘기지 않는다 — 문마다 허용 목록만이다.** 통째로 넘기면 브라우저가
 `channelId`를 정하게 되는데, 그 값이 수집기에서 **시차 보정값을 고르는 열쇠**다. 지금은 채널별
@@ -2194,8 +2200,11 @@ health `relay`와 종료 판정 줄에 실린다. 🔴 **health UP/DOWN에는 �
 
 ```json
 {"seq":12,"seqEpoch":1789300000000,"kind":"chat","time":"2026-09-13T10:00:04.120Z","timeBasis":"message",
- "nickname":"…","senderChannelId":"…","role":null,"text":"…","amount":null,"donationType":null}
+ "nickname":"…","senderChannelId":"…","role":null,"text":"…","amount":null,"donationType":null,"platform":"CHZZK"}
 ```
+
+**`platform`**(`CHZZK`·`SOOP`)은 그 채팅·후원이 들어온 플랫폼이다(POK-466). 한 방송을 치지직과 SOOP에 같이 내보내면 두 플랫폼 줄이
+한 줄기로 섞여 오므로 화면이 이것으로 줄마다 플랫폼을 보인다. 범위 창구 한 줄도 같은 칸을 싣는다.
 
 **`event: broadcast-info`**(POK-234 PR-C, `BROADCAST_INFO_ENABLED`) — 걷는 방송마다 1분에 한 번. 같은 `seq`·`seqEpoch`를 나눠 쓴다.
 `time`은 **우리가 물어본 시각**(`timeBasis:"observed"`)이고 창구 칸 대신 제목·태그·카테고리·시청자 수가 찬다.
@@ -2212,8 +2221,12 @@ health `relay`와 종료 판정 줄에 실린다. 🔴 **health UP/DOWN에는 �
 
 ```json
 {"seq":13,"seqEpoch":1789300000000,"kind":"broadcast-info","time":"2026-09-13T10:01:00Z","timeBasis":"observed",
- "title":"…","tags":["…"],"category":"리그 오브 레전드","viewers":340,"platform":"CHZZK"}
+ "title":"…","tags":["…"],"category":"리그 오브 레전드","viewers":340,"platform":"CHZZK",
+ "categoryImageUrl":"https://…/lol.jpg"}
 ```
+
+`categoryImageUrl`(POK-462)은 카테고리 사진 주소로 맨 뒤에 더했다. 치지직은 방송 설정의 `category.posterImageUrl`이고 설정이 거부된 회차는 `null`이다.
+SOOP은 공식 API에 사진이 없어 **같은 이름의 치지직 카테고리 사진을 빌린다**(아래 「SOOP 방송 지켜보기」). clip은 칸을 해석하지 않고 통과시킨다.
 
 #### 🔴 웹이 지켜야 하는 것 넷
 
@@ -2224,7 +2237,8 @@ health `relay`와 종료 판정 줄에 실린다. 🔴 **health UP/DOWN에는 �
    🔴 **구멍을 본 즉시 부르지 말고 2초 뒤에 부른다.** 놓친 채팅은 표에 **최대 1초 뒤**(적재 flush 주기)에 들어간다 — 바로 부르면
    그 채팅이 아직 없어 한 번 부른 메우기가 빈손으로 끝나고, 뒤 번호가 이어지면 다시 부를 계기가 없다(PR #181 codex)
 3. **같은 `seqEpoch` 안에서 `seq`가 뒤로 가면 늦게 온 묶음이다** — 버리지 말고 보여 준다(clip이 늦은 요청을 먼저 처리하는 것을 측정했다).
-   **겹친 구간은 (`kind`, `time`, `senderChannelId`, `text`)로 거른다** — 채팅 표 지문 UNIQUE와 같은 열쇠다. `seq`는 중복 판정 열쇠가 아니다
+   **겹친 구간은 (`kind`, `time`, `senderChannelId`, `text`, `platform`)으로 거른다** — 채팅 표 지문 UNIQUE와 같은 열쇠다(플랫폼은 POK-466,
+   두 플랫폼에서 같은 글이 같은 시각에 오면 둘 다 보인다). `seq`는 중복 판정 열쇠가 아니다
 4. **SSE `lastEventId`로 빈틈을 재지 않는다.** 카드도 같은 통로에서 `id`를 쓴다
 
 #### clip 쪽 규칙
@@ -2687,12 +2701,17 @@ UploadInfo = {"title":"필수","description":null,"tags":["…"],"categoryId":"2
 | 자리 | 사진 | 어디서 찍나 |
 |---|---|---|
 | 라이브(`state=live` 목록 `thumbnailUrl`) | 가장 최근에 올라간 조각의 가운데 | 조각 창고. 같은 조각이면 다시 안 찍는다(송출이 멈췄다) |
-| 지난 방송(`state=past` 목록 `thumbnailUrl`) | 카드 중 **점수가 가장 높은** 카드의 사진(POK-393부터 옛 숨김 칸을 안 거른다), 없으면 마지막 라이브 사진 | 읽을 때 고른다(따로 안 찍는다) |
+| 지난 방송(`state=past` 목록 `thumbnailUrl`) | 가리지 않은 카드 중 **점수가 가장 높은** 카드의 사진(POK-463: 가린 카드는 대표가 아니다), 없으면 마지막 라이브 사진 | 읽을 때 고른다(따로 안 찍는다) |
 | 카드(카드 목록 `thumbnailUrl`) | 카드 시각(`stream_timestamp_ms`, 조각 pts 축)이 든 조각의 그 자리 | 조각 창고. 조각이 올라온 뒤에 대상이 된다 |
 | 보관함(`library` 목록·상세 `thumbnailUrl`, `latestClip`의 사진) | 영상 구간 안 최고 점수 카드 시점(시각 기준점으로 재생 축에 맞춘다), 없으면 가운데 | **완성 영상 파일**(보관함은 세로 영상이라 결과물의 장면이어야 한다) |
 
 - **순회**: `ThumbnailSweeper`가 `THUMBNAIL_INTERVAL`마다 라이브·카드·영상을 차례로 훑어 주문을 낸다. 카드·영상은 한 번에 50개, 사진이 안
   오면 5분 뒤 다시, **세 번까지만**(조각이 지워졌으면 영원히 실패한다). 보관 기한이 지난 방송의 카드는 안 본다. 갈래마다 예외를 잡는다.
+- **새 카드는 2초 안에 본다(POK-475)**: 1분 순회만 있으면 카드가 생기고 사진이 붙기까지 1분 넘게 걸렸다(로컬 실측 카드 54: 조각 올림 33초 +
+  순회 대기 44초 + 일꾼 4초 = 80초). 카드가 새로 생기면(자동 카드 2A · 수동 마킹, **커밋 뒤**) 그 번호가 순회기 안의 「새 카드 명단」에 오르고,
+  2초마다 **명단의 카드만** 1분 순회와 같은 조건으로 본다. 조각이 아직 안 올라왔으면 명단에 남아 다음 2초에 다시 보고, 10분이 지나면 빠져 1분
+  순회가 맡는다. 두 순회는 같은 「사진 없음 · 요청 5분 안 아님」 조건이라 같은 카드를 겹쳐 내지 않는다(같은 일정 스레드라 동시에도 안 돈다).
+  표 전체를 2초마다 훑지 않는 이유: 카드 질의는 사진 없는 카드를 찾느라 표 끝까지 훑을 수 있다. 새 환경변수 없음.
 - **조각 찾기**: 물리 키(`COALESCE(ingest_stream_id, stream_id)`, POK-233) + 방송 시간(시작 2분 전 ~ 종료 10분 뒤)으로 자른다. 같은 키의 앞
   방송 조각을 안 찍는다. `upload_state = 'uploaded'`만 쓴다.
 - **주문서**: `{"schemaVersion":1,"kind":"live|card|clip","targetId","capturedAt","source":{"bucket","s3Key","offsetMs"},"output":{"bucket","s3Key"}}`.
@@ -2707,6 +2726,9 @@ UploadInfo = {"title":"필수","description":null,"tags":["…"],"categoryId":"2
 
 **알려진 한계**
 - clip이 두 대면 주문이 두 번 나갈 수 있다. 같은 키·같은 값이라 사진은 하나지만 일꾼 일이 두 배다(clip 한 대 전제).
+- **새 카드 명단은 메모리다**(POK-475). clip을 다시 띄우면 비고, 그 사이 생긴 카드는 1분 순회가 찍는다(그만큼 늦다). clip이 여러 대면
+  각자 **자기가 만든 카드만** 빠르게 보고, 다른 clip이 만든 카드는 1분 순회 몫이다.
+- 라이브 카드는 그 시점 조각이 올라와야 찍는다. 로컬은 조각 올림 흉내가 30초 주기라 그만큼 늦고, 운영은 영상 서버가 조각이 닫히면 올린다.
 - 카드 시각과 조각 pts는 방송 중 재접속·재시작으로 어긋날 수 있다(`timelineOriginAt`의 한계와 같은 뿌리).
 - 라이브 주문이 일꾼에서 늦게 처리되면 옛 장면이 같은 키를 잠깐 덮을 수 있다. 표의 시각은 되돌지 않고 다음 분에 다시 덮인다.
 
@@ -2825,7 +2847,8 @@ POK-393에서 집기·숨기기를 없애면서 「열어 봤다」를 **편집�
 - **렌더 주문은 결과를 안 본다.** 주문 뒤 렌더가 실패해도(`clips.status = 'failed'`) 「나왔다」로 센다: 이 비율은 「편집자가 영상으로 만들 만하다고 본 카드」를 재지, 렌더 성공률을 재지 않는다.
 - **렌더 주문은 기간 뒤에 생겨도 센다**(카드를 연 시각만 기간으로 거른다). 기간 끝 무렵에 연 카드는 아직 주문 전일 수 있으니
   최근 기간은 집계를 늦게 읽는다.
-- **옛 `claim`·`release`·`hide`·`unhide` 줄과 `jump_cards.hidden_reason`은 더 쌓이지 않고 집계에 안 쓴다**(POK-393 전의 기록이다. 지우기는 POK-394).
+- **옛 `claim`·`release` 줄과 `jump_cards.hidden_reason`은 더 쌓이지 않고 집계에 안 쓴다**(POK-393 전의 기록이다. 지우기는 POK-394).
+  `hide`·`unhide` 줄은 POK-463부터 가리기·되살리기마다 다시 쌓인다(`reason`은 비어 있다). 집계에는 아직 안 쓴다.
 - **여러 편집자가 같은 카드로 각자 편집본을 만들 수 있다.** ①은 카드 단위라 영향이 없다(그중 하나라도 렌더 주문이 있으면 「나왔다」).
   ②는 편집본 단위다.
 - 편집 시간의 시작은 **그 편집자가 첫 저장 직전에 마지막으로 연 시각**이다. 업로드 완료 시각은 따로 없어 `clip_uploads.updated_at`(`uploaded`)을 쓴다.
@@ -3999,7 +4022,7 @@ SOOP 수신은 다음 PR이고, 지금 세션을 여는 곳(연동 시작)은 �
 
 ### 수집기: SOOP 방송 지켜보기 (POK-397 PR3a)
 
-**SOOP 연동 스트리머의 방송을 1분마다 확인해 방송 정보를 남긴다.** 채팅 세션 자리(등록부)는 안 쓴다. SOOP 채팅 수집은 PR4다.
+**SOOP 연동 스트리머의 방송을 1분마다(넣은 뒤 3분은 방송 중을 볼 때까지 10초마다, POK-456) 확인해 방송 정보를 남긴다.** 채팅 세션 자리(등록부)는 안 쓴다. SOOP 채팅 수집은 PR4다.
 스위치 `SOOP_WATCH_ENABLED`(기본 꺼짐), 진단 `SOOP_DIAGNOSE_RESPONSE`, 상한 `pokeclip.soop.max-watched`(100, **확인 중인 것만 센다**: 연동 없음 등으로 멈춘 지켜보기는 자리를 안 먹고 남아 다시 안 묻는다), 주기 1분.
 
 - **넣는 곳 둘**: 시작 편지(종료 메모만 지나면 **치지직 붙이기 결과와 무관하게**. 치지직을 연동 안 한 SOOP 단독 스트리머는 치지직 쪽이 편지를 지운다) ·
@@ -4016,10 +4039,31 @@ SOOP 수신은 다음 PR이고, 지금 세션을 여는 곳(연동 시작)은 �
   확인하는 사이 빠진 방송은 남기지 않는다.
 - **응답 칸은 실방송으로 확정했다**(2026-10-24 진단, 키 이름만). 방송 중 `data`: `broad_cate_no`·`broad_no`·`broad_start`·`broad_thumb`·`broad_title`·
   `current_view_cnt`·`language`·`link`·`paid_promotion`·`status`·`user_id`, `status` `streaming`(문서와 같다). 방송 아님: `broad_no`·`status`, `status` `streamend`.
-  제목 `broad_title`, 시청자 수 `current_view_cnt`(숫자 또는 숫자 글자). 카테고리는 `broad_cate_no`로 **번호만** 오고 이름 표가 없어 읽지 않는다(`null`).
+  제목 `broad_title`, 시청자 수 `current_view_cnt`(숫자 또는 숫자 글자). 카테고리는 `broad_cate_no`로 **번호만** 온다. 이름은 공식 카테고리 리스트
+  (`GET broad/category/list?client_id=&locale=ko_KR`, 자식 카테고리까지)로 바꾼다(POK-462). 번호는 8자리 글자로 맞춘다(방송 여부는 숫자 `40075`, 리스트는
+  `"00040075"`). 표는 수집기 메모리에 두고 6시간마다 새로 받는다. 받기가 실패하면 앞 표를 지키고 10분 뒤에 다시 묻는다(WARN `soop.category.fetch_failed`).
+  표가 없거나 표에 없는 번호면 `null`이다. 앱 아이디는 채팅 받기와 같은 `SOOP_CLIENT_ID`이고 비면 늘 `null`(그전과 같다). 🔴 문서 표는 인자 이름을
+  `access_token`이라 적었지만 예시와 실서버는 `client_id`다(2026-10-25 실측: 인자 없이 -1100, 틀린 값 -1104).
+  **카테고리 사진은 SOOP에 없어 치지직에서 빌린다**(POK-462 사용자 결정): 치지직 공식 카테고리 검색(`GET /open/v1/categories/search?size=50&query=`,
+  앱 인증 `CHZZK_CLIENT_ID`·`CHZZK_CLIENT_SECRET`)에 SOOP 이름을 넣고 **이름이 정확히 같은**(대소문자 · 공백만 무시) 카테고리의 `posterImageUrl`을 쓴다.
+  검색은 「포함」 목록이라 비슷한 이름을 쓰면 다른 게임 사진이 뜬다. 이름이 다른 카테고리(SOOP `LOL` · 치지직 「리그 오브 레전드」 등)는 못 빌려 `null`이다
+  (별칭 표는 안 둔다). 찾은 것도 못 찾은 것도 이름마다 6시간 기억하고(상한 1,000, 넘치면 비운다), 검색이 실패하면 10분 동안 아무 이름도 안 묻는다
+  (WARN `soop.category_image.search_failed`). 치지직 앱 값이 비면 늘 `null`. 시한은 SOOP 호출과 같다(접속 1초 · 읽기 2초).
+  태그(`hashtags`)를 주는 곳은 `broad/rtmp`뿐인데 그 응답에 스트림 키가 같이 와서 안 쓴다 → SOOP 태그는 늘 빈 목록이다.
   🔴 첫 판은 잠정 값 `onair`·`current_sum_viewer`를 써서 방송 중을 하나도 못 알아봤다(clip 알림 0건). 진단 스위치는 칸이 바뀌는지 볼 때 다시 켠다.
 - **로그에 토큰·SOOP 아이디를 안 싣는다.** 방송 번호·회원 번호·사유·상태 코드·원인 타입만. 연동 record의 `toString`도 가린다.
-- **한 틱 시간 예산 45초**(clip 알림 포함). 넘으면 남은 방송은 다음 틱으로 미루고(WARN `soop.watch.deferred`) 다음 틱은 미룬 것부터 본다. 스케줄러 풀은 6(이 틱이 여섯째)이다.
+- **한 틱 시간 예산 45초**(clip 알림 포함). 넘으면 남은 방송은 다음 틱으로 미루고(WARN `soop.watch.deferred`) 다음 틱은 미룬 것부터 본다.
+- 🔴 **시작 직후는 빨리 묻는다(POK-456).** SOOP Chat SDK는 지난 채팅을 다시 주지 않아, 「방송 중」을 늦게 보면 그 사이 채팅을 영영 잃는다
+  (실방송 2026-10-24: 1분 주기라 시작 알림 21:05:16 뒤 21:06:12에야 방송 중을 봤다). 그래서 틱은 전용 스레드 `soop-watch`에서 **10초마다**
+  (`pokeclip.soop.fast-interval`) 돌고, 방송마다 다음에 물을 시각을 둔다: 넣은 뒤 **3분**(`fast-window`) 안이고 아직 방송 중을 못 봤으면 10초 뒤,
+  아니면 **1분** 뒤(`interval`). 넣는 순간에는 다음 주기를 안 기다리고 틱을 한 번 깨운다(재부착이 한 번에 여럿 넣어도 깨우기는 하나로 접는다).
+  공용 `@Scheduled`(스레드 여섯)에서 따로 깨우면 주기 틱과 겹쳐 돌아 전용 스레드로 옮겼다. 걸린 시간은 INFO `soop.watch.first_on_air stream= sinceAddedMs=
+  sinceStartedMs=`(넣은 때 · 방송 시작부터 첫 방송 중까지)와 `soop.chat.ready stream= sinceOpenMs=`(탭을 연 뒤 채팅방 입장까지)로 잰다.
+- **SOOP 호출 수**: 방송 하나에 `validate/live/status`가 넣은 뒤 3분 동안 최대 19번(방송 중을 보면 그때부터 1분마다), 그 뒤 1분에 한 번.
+  첫 한 시간 최대 약 76번(전에는 60번). 지켜보기 상한 100개가 동시에 시작하면 처음 3분은 초당 약 10번, 그 뒤 초당 약 1.7번이다.
+  auth 연동 조회는 토큰을 쥐고 있는 동안(만료 10분 전까지) 안 부른다. 🔴 **SOOP 호출 한도는 공개돼 있지 않다**(ADR-105 Q6). 종료 메모 조회(DB 한 번)도
+  틱마다라 10초에 한 번이다.
+  한계: 빠른 간격은 넣은 뒤 3분 · 첫 방송 중까지다. 같은 방송 번호 안에서 SOOP 송출만 끊었다 다시 켜면 다시 붙기까지 최대 1분 걸린다.
 - 남은 한계: 꺼진 플랫폼도 clip 묶음에 남는다(꺼짐은 관측 시각으로 판정). SOOP 채팅은 아래 「SOOP 채팅 받기」(PR4)가 받는다.
 
 ### 수집기: SOOP 채팅 받기 (POK-397 PR4)
@@ -4504,18 +4548,19 @@ DB가 거절해 500이 되고, **입력 오류가 장애로 오인된다**(epoch
 | `GET /internal/streams/{streamId}/chat-messages?from&to&limit&cursor&kinds&channelId` | **clip** | `X-Internal-Token` 헤더 |
 | `GET /internal/streams/{streamId}/chat-chart?from&to&bucket&channelId` | **clip** | `X-Internal-Token` 헤더 |
 | `GET /internal/streams/{streamId}/broadcast-info?since` | **clip** | `X-Internal-Token` 헤더 |
+| `GET /internal/streams/{streamId}/broadcast-info/timeline` (POK-462) | **clip** | `X-Internal-Token` 헤더 |
 | `POST /internal/broadcast-info/latest` (POK-259) | **clip**(방송 목록) | `X-Internal-Token` 헤더 |
 
 🔴 **「부르는 쪽」 칸을 「이미 그렇게 배선돼 있다」로 읽지 마라 — 창구마다 다르다**(2026-09-07 실측).
-**실제로 clip 코드에서 수집기를 부르는 것은 이 넷뿐이다**(POK-234가 만든
-`CollectorClient`. 넷째 제목 창구는 POK-259의 `BroadcastTitleClient`가 부른다). 위의 **수집 상태 창구·영상 위치 창구는 아직 아무도 안 부른다** —
+**실제로 clip 코드에서 수집기를 부르는 것은 이 다섯뿐이다**(POK-234가 만든
+`CollectorClient`. 넷째 제목 창구는 POK-259의 `BroadcastTitleClient`가 부르고, 다섯째 구간 창구(POK-462)는 `CollectorClient`로 통과시킨다). 위의 **수집 상태 창구·영상 위치 창구는 아직 아무도 안 부른다** —
 그 표의 「clip」·「판별기」는 **그렇게 부르기로 한 계약**이고 호출 코드는 0줄이다.
 계약과 배선을 같은 칸에 적어 온 탓에 한동안 구분이 안 됐다.
 
 ```json
 {"items":[{"kind":"chat","id":41,"time":"2026-09-01T12:00:03Z","timeBasis":"message",
            "nickname":"…","senderChannelId":"…","role":"common_user","text":"ㅋㅋ",
-           "amount":null,"donationType":null}],
+           "amount":null,"donationType":null,"platform":"CHZZK"}],
  "nextCursor":"h:…","appliedOffsetMs":3900}
 {"bucketSeconds":10,"buckets":[{"start":"2026-09-01T12:00:00Z","chats":12,"donations":1}],
  "appliedOffsetMs":3900}
@@ -4573,6 +4618,30 @@ DB가 거절해 500이 되고, **입력 오류가 장애로 오인된다**(epoch
 `viewers`·`observedAt`은 그 플랫폼의 **최신 줄**(제목 조건 없음), `title`·`category`는 그 플랫폼의 **제목 있는 최신 줄**이라 두 시점이 다를 수 있다
 (제목을 한 번도 못 얻었으면 둘 다 `null`). 추이 `series`의 점마다 `platform`과 그 관측의 `category`가 실린다(`{"observedAt":…,"viewers":…,"platform":"SOOP","category":…}`,
 카테고리를 못 얻은 관측은 `null`, POK-402). 화면은 카테고리가 바뀐 구간마다 통계 그래프 아래 띠를 나눈다.
+점 뒤에 그 관측의 `title`·`tags`·`categoryImageUrl`도 실린다(POK-462, 앞 칸 순서 그대로 맨 뒤에 더했다). 추이는 `since`부터 최대 720점이라
+긴 방송의 앞이 잘린다 — 방송 전체를 보려면 아래 구간 창구를 쓴다.
+
+**구간 창구(`/internal/streams/{streamId}/broadcast-info/timeline`, POK-462)는 방송 중 제목·카테고리·태그·카테고리 사진이 언제 무엇이었나를 준다.**
+라이브 되감기 · 지난 방송 시점 이동 · 대시보드 카테고리 사진이 같이 쓴다. 인자가 없고 방송 전체를 준다(바뀜은 방송당 수십 번이라 작다).
+
+```json
+{"segments":[
+  {"platform":"CHZZK","from":"2026-10-25T10:00:03Z","until":"2026-10-25T10:42:05Z","lastObservedAt":"2026-10-25T10:41:04Z",
+   "title":"랭크 달립니다","category":"리그 오브 레전드","categoryImageUrl":"https://…/lol.jpg","tags":["롤","랭크"]},
+  {"platform":"CHZZK","from":"2026-10-25T10:42:05Z","until":null,"lastObservedAt":"2026-10-25T11:30:02Z",
+   "title":"랭크 달립니다","category":"Just Chatting","categoryImageUrl":null,"tags":["롤","랭크"]}],
+ "truncated":false}
+```
+
+- 한 줄 = 같은 플랫폼에서 (제목 · 카테고리 · 태그)가 그대로였던 구간. **시각 t의 값 = 같은 플랫폼에서 `from ≤ t < until`인 줄**(`until`이 `null`이면 지금도 그 값)
+- **플랫폼마다 따로 접는다.** 두 플랫폼에 같이 내보내면 줄이 섞여 온다(`from` 오름차순, 같으면 플랫폼 이름순). 섞어 접으면 1분마다 「바뀜」이 된다
+- `from` = 그 값을 처음 본 관측 시각(우리 시계) · `until` = 같은 플랫폼 다음 줄의 `from` · `lastObservedAt` = 그 값을 마지막으로 본 관측 시각.
+  수집이 멈췄던 사이(재배포 등)도 구간은 이어진다. 멈춤을 알고 싶으면 `lastObservedAt`을 본다. 첫 줄 `from`보다 앞은 「모른다」(첫 관측 전)
+- 태그 순서가 바뀐 것도 바뀜이다. 제목 · 카테고리는 앞뒤 공백을 깎아 비교하고 내며 공백뿐이면 `null`이다. `tags`는 늘 배열(SOOP은 빈 배열)
+- **카테고리 사진은 구간을 가르지 않는다**(설정 조회가 거부된 회차는 사진이 `null`이라 넣으면 같은 카테고리가 쪼개진다). 구간의 사진은
+  그 구간에서 마지막으로 본 `null` 아닌 값이다. 사진 칸(`V318`)이 생기기 전 관측은 `null`이다(소급 없음)
+- 관측 줄을 최신부터 2만(1분 관측이면 두 플랫폼 합쳐 약 7일치), 구간을 2천까지 준다. 넘치면 **오래된 쪽**을 버리고 `truncated:true`다
+  (라이브 화면에는 최근 값이 필요하다). 모르는 방송도 200 + `segments:[]`. `(stream_id, observed_at)` 색인을 최신부터 탄다
 
 **제목 창구(`/internal/broadcast-info/latest`, POK-259)는 여러 방송의 마지막 제목을 한 번에 준다.** clip 방송 목록이
 한 장(최대 100개)마다 한 번 부른다. 위 창구는 방송 하나씩이라 한 장에 100번 왕복이 된다.

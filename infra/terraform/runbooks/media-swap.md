@@ -39,6 +39,13 @@ c3 · O7e 에 해당합니다. 상자는 `prod/media` 루트가 만들고
 | 방송이 있는데 바꿔야 함 | 「force」 | 있음 |
 | apply 가 중간에 실패함 | 「부분 실패 복구」 | — |
 
+**옛 모드 단서(모든 갈래):** 옛 모드 상자(`ingest_auth_image` 빈 구성 · M15
+PR revert 판 포함)를 서비스에 넣는 모든 갈래(정상 · 설정 반영 · force · 부분
+실패 복구의 되돌리기)는 O8a 5 뒤(SRT 인바운드 `0.0.0.0/0`)면 media-host
+README 「되돌리기 순서」 1(인바운드를 팀 IP 로 축소 · 확인)을 먼저 하고, 교체
+뒤 같은 절 3(팀 IP 밖 익명 송출 거부)을 확인합니다. 옛 모드는 익명 송출이라
+인바운드가 열린 채면 누구나 송출 · 탈취 · DVR 리셋을 할 수 있습니다.
+
 ## 준비
 
 ### 작업 디렉터리와 상태
@@ -62,7 +69,7 @@ media_ids() { terraform -chdir=infra/terraform/prod/media output -json instance_
 
 ```shell
 media_ssm() {  # media_ssm <상자 키> <스크립트 파일> [인자 …]
-  local id params cid status
+  local id params cid cmd_state
   id="$(media_ids | jq -er --arg k "$1" '.[$k]')" || return 2
   params="${work}/params.json"
   jq -n --rawfile script "$2" --args \
@@ -72,14 +79,14 @@ media_ssm() {  # media_ssm <상자 키> <스크립트 파일> [인자 …]
     --document-name AWS-RunShellScript --parameters "file://${params}" \
     --query Command.CommandId --output text)" || return 2
   while sleep 3; do
-    status="$(aws ssm get-command-invocation --command-id "${cid}" \
+    cmd_state="$(aws ssm get-command-invocation --command-id "${cid}" \
       --instance-id "${id}" --query Status --output text)" || return 2
-    case "${status}" in Pending | InProgress | Delayed) ;; *) break ;; esac
+    case "${cmd_state}" in Pending | InProgress | Delayed) ;; *) break ;; esac
   done
   aws ssm get-command-invocation --command-id "${cid}" --instance-id "${id}" \
     --query StandardOutputContent --output text
-  echo "SSM ${status}"
-  [ "${status}" = Success ]
+  echo "SSM ${cmd_state}"
+  [ "${cmd_state}" = Success ]
 }
 ```
 
@@ -313,8 +320,15 @@ SH
     ([prod 산출물 올리기 런북](/infra/terraform/runbooks/prod-artifacts.md)).
     `prod/registry` 재적용(저장소 둘 추가)도 끝났습니다.
 1.  **런타임 1단 출력**: `rds_endpoint` · `rds_db_name` · `rds_resource_id` ·
-    `rds_sg_id` · `media_secret_arns` · `rewind_bucket_arn` 이 있습니다. 없으면
-    plan 이 그 이름으로 실패합니다.
+    `rds_sg_id` · `media_secret_arns` · `rewind_bucket_arn` ·
+    `ingest_auth_resolve_token_secret_arn` 이 있습니다. 없으면 plan 이 그
+    이름으로 실패합니다(옛 모드여도 — 루트가 늘 읽습니다). 마지막 출력은 런타임
+    1단-나 ②(POK-429)의 apply 뒤에 생깁니다.
+1.  **platform 출력 `service_ports`**: `terraform -chdir=infra/terraform/prod/platform
+    output service_ports` 에 auth 포트가 있습니다. Media → auth resolve SG 짝이
+    이 값을 씁니다(POK-307 · kty 결정 2026-10-25 (나)). 이 출력이 생기기 전
+    커밋으로 platform 을 apply 했다면 platform 을 다시 apply 합니다(plan 은
+    출력만 늘어남 · kty 승인). 없으면 prod/media plan 이 그 이름으로 실패합니다.
 1.  **런타임의 DB 준비**: RDS IAM 인증 켬 · `media_indexer` · `media_janitor`
     (`rds_iam`) · DDL 역할로 스키마 배치 · GRANT 가 끝났다는 확인이 런타임
     스토리 티켓 코멘트에 있습니다([CONTRACT-runtime.md](/infra/terraform/CONTRACT-runtime.md)
@@ -326,7 +340,8 @@ SH
 `terraform.tfvars` 는 `terraform.tfvars.example` 대로 채웁니다(이미지 =
 O7c 다이제스트 · `control_upstream` 빈 값 · 응답기 다이제스트 없음). 첫
 apply 라 plan 은 생성뿐입니다 — 인스턴스 · Media SG 와 규칙 · RDS 인그레스 ←
-Media · LB 이그레스 → Media · 인스턴스 역할 · 프로필 · 정책 · 관리형 정책
+Media · auth 인그레스 ← Media(kty 결정 2026-10-25 (나)) · LB 이그레스 →
+Media · 인스턴스 역할 · 프로필 · 정책 · 관리형 정책
 연결 하나 · 거부 목록 파라미터 · 대상 등록 넷. 변경 · 삭제가 있으면 apply
 하지 않습니다.
 
@@ -413,7 +428,8 @@ tg_health
 
 *   통과 = `MEDIA START OK` · `MEDIA WATCH OK`, 그리고 `tg_health` 의
     `control` 줄이 `<a 의 id> healthy` 입니다(nginx 헬스 경로). janitor 를 끈
-    tfvars 면 인자에서 `janitor` 를 뺍니다. 응답기는 M15 전이라 없습니다.
+    tfvars 면 인자에서 `janitor` 를 뺍니다. O7 은 옛 모드(`ingest_auth_image`
+    빈 값)라 응답기가 없습니다.
 *   Media 인스턴스 역할로 하는 첫 RDS IAM 접속은 `SIDECAR_DB` 줄로
     확인합니다.
 *   **DB 연결이 실패하면**(`SIDECAR_DB 0` · `EXIT_LINES` 가 0 보다 큼 —
@@ -425,8 +441,8 @@ tg_health
 ## 정상 교체
 
 방송이 없는 시간대에 합니다(설계 5-3). 선행: 루프백 헬스(3)는 런타임 트랙
-(Media → auth resolve)과 시험 스트림 키 입력(설계 5-4 의 11)이 끝난 뒤에만 할
-수 있습니다.
+(auth 의 resolve 창구 — Media ↔ auth SG 짝은 이 루트 몫, kty 결정 2026-10-25
+(나))과 시험 스트림 키 입력(설계 5-4 의 11)이 끝난 뒤에만 할 수 있습니다.
 
 | # | 동작 | 통과 |
 |---|---|---|
@@ -477,9 +493,12 @@ SH
 media_ssm b "${work}/loopback.sh" <시험 ingestStreamId>
 ```
 
-*   M15 반영 전은 passphrase 없이, 반영 뒤는 `--passphrase` 를 앞에 붙입니다
-    (`media_ssm b "${work}/loopback.sh" --passphrase <ID>`). 반영 뒤에는 기본
-    갈래가 거부되는 것이 정상입니다.
+*   인자는 B 의 송출 인증 모드로 고릅니다(위 2 의 서비스 집합과 같은 기준).
+    `ingest_auth_image` 가 빈 구성(옛 모드 — O7 · 되돌리기 포함)은 passphrase
+    없이, 찬 구성(응답기 모드)은 `--passphrase` 를 앞에 붙입니다
+    (`media_ssm b "${work}/loopback.sh" --passphrase <ID>` — media-host README
+    「송출 인증 두 모드」 · 「루프백 헬스」). 응답기 모드에서는 기본 갈래가
+    거부되는 것이 정상입니다.
 *   `LOOPBACK FAIL <단계>` 면 교체를 멈추고 B 를 회수합니다(A 는 그대로).
 
 ### 정상 교체 4 — 방송 경로 수
@@ -525,6 +544,8 @@ media_ids | jq -r '.b'
 
 하루 관찰한 뒤 `instances` 에서 A 를 뺍니다. plan 범위 = A 인스턴스 삭제 한
 줄 → apply(승인). 그 전에는 A 를 「부분 실패 복구」 의 되돌릴 곳으로 둡니다.
+A 로 되돌릴 때 A 가 옛 모드면 위 「언제 쓰나」 의 옛 모드 단서(README
+「되돌리기 순서」 1 먼저 · 되돌린 뒤 3 확인)를 따릅니다.
 
 ## 설정 반영 교체
 
@@ -532,6 +553,9 @@ M15 · O8a · I1-6 반영(`control_upstream`)이나 이미지 다이제스트 ·
 `janitor_enabled` 를 바꿀 때입니다. 떠 있는 상자는 고치지 않습니다.
 
 1.  tfvars 의 설정을 바꿉니다.
+1.  B 가 옛 모드면 위 「언제 쓰나」 의 옛 모드 단서를 따릅니다 — README
+    「되돌리기 순서」 1 을 이 자리(B 를 더하기 전)에서 하고, 3 은 「정상
+    교체」 5(ingest 전환) 뒤에 확인합니다.
 1.  `instances` 에 `config_version` 을 올린 새 키 B 를 더합니다.
 1.  「정상 교체」 1–8 을 돕니다. 2 의 plan 범위에서 공유 자원 변경이
     보이면 위 「plan 범위」 의 주의를 따릅니다.
@@ -549,6 +573,15 @@ M15 · O8a · I1-6 반영(`control_upstream`)이나 이미지 다이제스트 ·
 B 는 「정상 교체」 2 · 3 으로 미리 띄워 둡니다. force 파일은 저장소 밖 kty
 로컬 디렉터리(`${HOME}/.pokeclip-media-force/`, 0700)에 두고 복구가 끝날
 때까지 지우지 않습니다.
+
+**옛 모드 B 갈래:** B 가 옛 모드면 위 「언제 쓰나」 의 옛 모드 단서를
+따르고, 순서는 아래 1(목록 저장) → README 「되돌리기 순서」 1(인바운드
+축소 · 확인) → 아래 2 입니다. README 3 은 4 뒤에 확인합니다. A 가 응답기
+모드면 진행 중 방송이 B 에 자동으로 붙지 않습니다 — 응답기 모드의 송출은
+passphrase 를 싣고, 옛 모드 B 는 그 송출을 끊습니다(루프백 기본 갈래와 같은
+까닭 · README 「운영 확인 스크립트」). 2 의 재연결 · 5 의 자동 복귀는 없고,
+수동 복구는 연락 뒤 종료 확인(ended)으로 6 을 닫습니다. 인바운드를 다시
+열지 않습니다(README 「되돌리기 순서」 · 위 옛 모드 단서).
 
 ```shell
 force_dir="${HOME}/.pokeclip-media-force"; mkdir -p -m 0700 "${force_dir}"
@@ -568,7 +601,7 @@ SH
 
 ```shell
 force_list() {  # force_list <상자 키> <A|B>
-  local id cid status out
+  local id cid cmd_state out
   id="$(media_ids | jq -er --arg k "$1" '.[$k]')" || return 2
   jq -n --rawfile script "${work}/paths-list.sh" '{commands: [$script]}' \
     > "${work}/params.json"
@@ -576,12 +609,12 @@ force_list() {  # force_list <상자 키> <A|B>
     --document-name AWS-RunShellScript --parameters "file://${work}/params.json" \
     --query Command.CommandId --output text)" || return 2
   while sleep 3; do
-    status="$(aws ssm get-command-invocation --command-id "${cid}" \
+    cmd_state="$(aws ssm get-command-invocation --command-id "${cid}" \
       --instance-id "${id}" --query Status --output text)" || return 2
-    case "${status}" in Pending | InProgress | Delayed) ;; *) break ;; esac
+    case "${cmd_state}" in Pending | InProgress | Delayed) ;; *) break ;; esac
   done
-  echo "SSM ${status}"
-  [ "${status}" = Success ] || return 1
+  echo "SSM ${cmd_state}"
+  [ "${cmd_state}" = Success ] || return 1
   out="${force_dir}/force-${stamp}-$2.txt"
   aws ssm get-command-invocation --command-id "${cid}" --instance-id "${id}" \
     --query StandardOutputContent --output json | jq -j . > "${out}"
@@ -608,10 +641,10 @@ force_list() {  # force_list <상자 키> <A|B>
 | # | 동작 | 통과 · 중단 |
 |---|---|---|
 | 1 | `force_list <A> A` — A 의 진행 중 방송 **목록**을 저장(건수가 아니라 목록 — 수동 복구 대조용) | `PATHS LIST INCOMPLETE` 면 **force 중단** |
-| 2 | **ingest 전환 먼저**(「정상 교체」 5 의 plan 범위 · apply — 4 의 재확인은 건너뜀). A 의 SRT 흐름은 등록 해제 지연(30초)이 끝날 때 연결 종료로 끊기고, 최대 30초 뒤 재연결로 B 에 붙습니다 | NLB = B 1대 healthy |
+| 2 | **ingest 전환 먼저**(「정상 교체」 5 의 plan 범위 · apply — 4 의 재확인은 건너뜀). A 의 SRT 흐름은 등록 해제 지연(30초)이 끝날 때 연결 종료로 끊기고, 최대 30초 뒤 재연결로 B 에 붙습니다(옛 모드 B 갈래는 위 force 머리 참고) | NLB = B 1대 healthy |
 | 3 | A 에서 `systemctl stop pokeclip-media`(compose 전체 정지 — `Restart=always` 여도 stop 은 정지 유지 · 실행 직전 승인). 지연이 끝나기 전에 흐름을 끊어 2 의 최대 30초를 줄입니다 | 유닛 `inactive` |
 | 4 | http 전환 → 일관성 확인(「정상 교체」 6 · 7) | 네 그룹 B 하나 |
-| 5 | 플러그인이 재시도 20회 안에 B 에 붙은 방송은 자동 복귀입니다(소진하면 플러그인이 출력을 해제 — 소진 시간은 미확인, T8b 에서 잼) | — |
+| 5 | 플러그인이 재시도 20회 안에 B 에 붙은 방송은 자동 복귀입니다(소진하면 플러그인이 출력을 해제 — 소진 시간은 미확인, T8b 에서 잼) — 옛 모드 B 갈래는 위 force 머리 참고 | — |
 | 6 | `force_list <B> B` → 종료를 확인한 방송을 `force-<stamp>-ended.txt` 에 탭 구분 3열(`ingestStreamId` · 확인 시각 · 확인 경로)로 덧붙임 → `force-diff.sh` | `FORCE REMAINING 0` |
 
 ```shell
@@ -624,7 +657,8 @@ bash infra/media-host/ops/force-diff.sh \
 
 *   **수동 복구:** `FORCE REMAINING <n>` 의 남은 ID 가 연락 대상입니다.
     운영자가 스트리머를 찾아(ingestStreamId → 스트리머, auth 조회) 연락하고
-    재송출을 요청합니다. 다시 송출하면 6 을 다시 돌립니다.
+    재송출을 요청합니다. 다시 송출하면 6 을 다시 돌립니다(옛 모드 B 갈래는
+    위 force 머리 참고).
 *   **복구 완료 = `A − B − 종료 확인 = ∅`**(`FORCE REMAINING 0`)입니다. 서버
     healthy 나 시험 송출 성공만으로 완료로 보지 않습니다.
 *   2 와 4 사이에 B 로 붙은 방송의 `/live` 는 아직 A 를 봅니다(apply 한 번
@@ -638,7 +672,8 @@ ingest · http 전환(정상 교체 5 · 6, force 2 · 4)의 apply 가 중간에
 1.  같은 키로 다시 apply 하거나, 두 활성 키를 A 로 되돌려 apply 합니다
     (승인). force 갈래에서 되돌릴 때는 먼저 A 에서 `systemctl start
     pokeclip-media`(실행 직전 승인)로 A 의 MediaMTX 를 다시 띄우고 기동 판정을
-    봅니다.
+    봅니다. A 가 옛 모드면 위 「언제 쓰나」 의 옛 모드 단서(README 「되돌리기
+    순서」 1 먼저 · 되돌린 뒤 3 확인)를 따릅니다.
 1.  「정상 교체」 7 의 일관성을 만족하기 전에는 운영 재개로 보지 않습니다.
 1.  force 중이었다면 끝난 뒤 수동 복구를 돕니다.
 

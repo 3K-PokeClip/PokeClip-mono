@@ -6,6 +6,7 @@ import { SettingsPageHeader } from '../SettingsPageHeader';
 import { AnalyticsCard } from './AnalyticsCard';
 import { LoginCard } from './LoginCard';
 import { ProfileCard } from './ProfileCard';
+import { ThemeCard } from './ThemeCard';
 import { ProfilePhotoDialog } from './ProfilePhotoDialog';
 import { useAccountMockState } from './useAccountMockState';
 import { useAccountState } from './useAccountState';
@@ -68,6 +69,8 @@ export function AccountSettingsScreen() {
       />
 
       <LoginCard email={email} />
+
+      <ThemeCard />
 
       <AnalyticsCard choice={analytics.choice} onChange={analytics.setParticipating} />
 

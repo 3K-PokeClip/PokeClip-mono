@@ -287,6 +287,11 @@
   filter: brightness(1.15);
 }
 
+/* 라이트 아이콘은 이미 진해서 밝히면 흐려진다 — 어둡게 */
+:global([data-theme='light']) .trackSpeaker:hover {
+  filter: brightness(0.85);
+}
+
 /* 뺀 줄은 이름을 한 단계만 낮춘다 — 흐린 회색은 못 누르는 줄처럼 읽혔다 */
 .trackRow[data-muted] [data-row-label] {
   color: var(--pc-color-text-muted);
@@ -402,8 +407,18 @@
   height: 100%;
   background: repeating-linear-gradient(
     90deg,
-    rgb(120 140 210 / 0.26) 0 calc(54 * var(--pc-u)),
-    rgb(120 140 210 / 0.1) calc(54 * var(--pc-u)) calc(56 * var(--pc-u))
+    rgb(120 140 210 / 0.26) 0 calc(54 * var(--pc-u)) /* 라이트 덮음 */,
+    rgb(120 140 210 / 0.1) calc(54 * var(--pc-u)) calc(56 * var(--pc-u)) /* 라이트 덮음 */
+  );
+}
+
+/* 연한 남보라 레인은 흰 바탕에서 묻힌다 — 라이트는 브랜드 남색을 섞어 진하게 */
+:global([data-theme='light']) .laneFilmstrip {
+  background: repeating-linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--pc-color-accent) 22%, transparent) 0 calc(54 * var(--pc-u)),
+    color-mix(in srgb, var(--pc-color-accent) 8%, transparent) calc(54 * var(--pc-u))
+      calc(56 * var(--pc-u))
   );
 }
 
@@ -417,8 +432,12 @@
 .filmstripTile {
   flex: 1;
   min-width: 0;
-  background: rgb(120 140 210 / 0.12);
-  border-right: 1px solid rgb(0 0 0 / 0.35);
+  background: rgb(120 140 210 / 0.12); /* 라이트 덮음 */
+  border-right: 1px solid rgb(0 0 0 / 0.35); /* 테마 고정 */
+}
+
+:global([data-theme='light']) .filmstripTile {
+  background: color-mix(in srgb, var(--pc-color-accent) 10%, transparent);
 }
 
 .filmstripTile img {
@@ -433,7 +452,19 @@
   height: 70%;
   margin: auto 0;
   border-radius: calc(3 * var(--pc-u));
-  background: repeating-linear-gradient(90deg, rgb(140 160 230 / 0.45) 0 2px, transparent 2px 5px);
+  background: repeating-linear-gradient(
+    90deg,
+    rgb(140 160 230 / 0.45) 0 2px /* 라이트 덮음 */,
+    transparent 2px 5px
+  ); /* 라이트 덮음 */
+}
+
+:global([data-theme='light']) .laneWave {
+  background: repeating-linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--pc-color-accent) 55%, transparent) 0 2px,
+    transparent 2px 5px
+  );
 }
 
 .laneMuted {
@@ -448,11 +479,19 @@
 }
 
 .laneWaveform path {
-  fill: rgb(140 160 230 / 0.6);
+  fill: rgb(140 160 230 / 0.6); /* 라이트 덮음 */
+}
+
+:global([data-theme='light']) .laneWaveform path {
+  fill: color-mix(in srgb, var(--pc-color-accent) 70%, transparent);
 }
 
 [data-muted] .laneWaveform path {
-  fill: rgb(140 160 230 / 0.25);
+  fill: rgb(140 160 230 / 0.25); /* 라이트 덮음 */
+}
+
+:global([data-theme='light']) [data-muted] .laneWaveform path {
+  fill: color-mix(in srgb, var(--pc-color-accent) 30%, transparent);
 }
 
 /* ---------- 구간 오버레이 · 플레이헤드 ---------- */
@@ -474,7 +513,7 @@
   top: 0;
   bottom: 0;
   border: 2px solid var(--pc-color-accent);
-  background: rgb(88 111 196 / 0.1);
+  background: rgb(88 111 196 / 0.1); /* 테마 고정 */
   border-radius: calc(8 * var(--pc-u));
 }
 
@@ -520,7 +559,7 @@
   border: 0;
   border-radius: calc(999 * var(--pc-u));
   background: var(--pc-color-accent);
-  color: var(--pc-white);
+  color: var(--pc-white); /* 테마 고정 — 브랜드 알약 위 글자 */
   font-size: calc(10.5 * var(--pc-u));
   font-weight: 600;
   pointer-events: auto;

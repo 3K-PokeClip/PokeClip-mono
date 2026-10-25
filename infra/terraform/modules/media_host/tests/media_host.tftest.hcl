@@ -1,6 +1,6 @@
 # Media 상자 모듈(계획 M9 c1 · 설계 3-3 · 3-3-1 · 5-3 · 5-5)을 mock provider 로
 # 단언한다 — 인스턴스(서브넷 · 공인 IP · IMDS · AMI) · Media SG 인그레스 ·
-# 이그레스 · RDS 와 로드밸런서 쪽 짝 규칙 · 인스턴스 역할 정책 · 관리형 정책 ·
+# 이그레스 · RDS · auth 와 로드밸런서 쪽 짝 규칙 · 인스턴스 역할 정책 · 관리형 정책 ·
 # 대상 등록 · 응답기 거부 목록 SSM 파라미터.
 #
 # 계정 ID · ARN · id 는 모두 가짜 값이다. 정책 문서(data source)의 json 은 mock
@@ -73,6 +73,8 @@ variables {
   internal_alb_sg_id = "sg-0internalalb000000"
   nlb_sg_id          = "sg-0nlb0000000000000"
   rds_sg_id          = "sg-0rds0000000000000"
+  auth_sg_id         = "sg-0auth000000000000"
+  auth_port          = 18086
   s3_prefix_list_id  = "pl-0123456789abcdef0"
   proxy_ports = {
     live     = 18081
@@ -239,11 +241,12 @@ run "media_sg_egress_and_rds_pair" {
         coalesce(rule.prefix_list_id, "-"), coalesce(rule.cidr_ipv4, "-"), coalesce(rule.referenced_security_group_id, "-"),
       ])
       } == {
-      https_s3  = "tcp 443 443 pl-0123456789abcdef0 - -"
-      https_any = "tcp 443 443 - 0.0.0.0/0 -"
-      postgres  = "tcp 5432 5432 - - sg-0rds0000000000000"
+      https_s3     = "tcp 443 443 pl-0123456789abcdef0 - -"
+      https_any    = "tcp 443 443 - 0.0.0.0/0 -"
+      postgres     = "tcp 5432 5432 - - sg-0rds0000000000000"
+      auth_resolve = "tcp 18086 18086 - - sg-0auth000000000000"
     }
-    error_message = "Media SG 이그레스가 443 → S3 prefix list · 443 → 0.0.0.0/0 · 5432 → rds_sg_id 가 아니다."
+    error_message = "Media SG 이그레스가 443 → S3 prefix list · 443 → 0.0.0.0/0 · 5432 → rds_sg_id · auth_port → auth_sg_id 가 아니다."
   }
 
   # kty 21차: RDS 인그레스 ← Media 5432 는 이그레스와 같은 루트의 한 쌍.
@@ -255,6 +258,32 @@ run "media_sg_egress_and_rds_pair" {
       aws_vpc_security_group_ingress_rule.rds_from_media.to_port == 5432
     )
     error_message = "RDS SG 인그레스 ← Media 5432 가 rds_sg_id 에 없다."
+  }
+}
+
+# kty 결정 2026-10-25 (나): Media → auth(4C resolve) 이그레스와 auth 인그레스 ←
+# Media 는 RDS 짝처럼 media 가 한 apply 에 만든다.
+run "media_to_auth_resolve_pair" {
+  command = plan
+
+  assert {
+    condition = (
+      aws_vpc_security_group_ingress_rule.auth_from_media.security_group_id == "sg-0auth000000000000" &&
+      aws_vpc_security_group_ingress_rule.auth_from_media.ip_protocol == "tcp" &&
+      aws_vpc_security_group_ingress_rule.auth_from_media.from_port == 18086 &&
+      aws_vpc_security_group_ingress_rule.auth_from_media.to_port == 18086 &&
+      aws_vpc_security_group_ingress_rule.auth_from_media.cidr_ipv4 == null
+    )
+    error_message = "auth SG 인그레스 ← Media 가 auth_sg_id 의 TCP auth_port 가 아니다."
+  }
+
+  # 루트 시험이 platform 출력에서 넘긴 값을 보는 창 — 규칙 자원의 값이어야 한다.
+  assert {
+    condition = output.auth_resolve_rules == {
+      egress  = { auth_sg_id = "sg-0auth000000000000", port = 18086 }
+      ingress = { auth_sg_id = "sg-0auth000000000000", port = 18086 }
+    }
+    error_message = "출력 auth_resolve_rules 가 Media → auth 이그레스 · auth 인그레스 ← Media 의 SG · 포트와 다르다."
   }
 }
 
@@ -292,6 +321,11 @@ run "wires_sg_references_to_media_sg" {
   assert {
     condition     = aws_vpc_security_group_ingress_rule.rds_from_media.referenced_security_group_id == aws_security_group.media.id
     error_message = "RDS 인그레스의 출처가 Media SG 가 아니다."
+  }
+
+  assert {
+    condition     = aws_vpc_security_group_ingress_rule.auth_from_media.referenced_security_group_id == aws_security_group.media.id
+    error_message = "auth 인그레스의 출처가 Media SG 가 아니다."
   }
 
   assert {

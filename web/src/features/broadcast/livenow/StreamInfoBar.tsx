@@ -1,7 +1,8 @@
 'use client';
 
+import { useState } from 'react';
 import { CirclePlus, Pencil, Zap } from 'lucide-react';
-import { Button, IconButton, Tag } from '@/ui';
+import { Avatar, Button, IconButton, Skeleton, Tag } from '@/ui';
 import styles from './LiveScreen.module.css';
 import { MARK_HOTKEY } from './markKey';
 import type { StreamMeta } from './useLiveDetailsMockState';
@@ -14,6 +15,8 @@ export function StreamInfoBar({
   stream,
   meta,
   viewersLabel,
+  infoPending,
+  titleNote,
   uptimeLabel,
   uptimeNote,
   metaNote,
@@ -26,6 +29,13 @@ export function StreamInfoBar({
   meta: StreamMeta;
   /** 시청자 줄: 「1,842명 시청 중」, 끝난 방송은 「끝날 때 N명 시청」, 값이 없으면 그 까닭(확인 중·기록 없음·수집 전) */
   viewersLabel: string;
+  /**
+   * 방송 정보를 받아 오는 중이다(POK-449). 빈 제목 · 시청자 줄 · 카테고리 줄을 번쩍이는 회색 막대로 둔다: 수집기가 방송을 찾기 전이라
+   * 비었을 뿐이다
+   */
+  infoPending: boolean;
+  /** 제목을 모를 때(받아 오는 중이 아닐 때)의 말: 「제목 확인 중」 · 「제목 수집 전」 · 「제목 기록 없음」. 방송 번호를 대신 쓰지 않는다 */
+  titleNote: string;
   /** 흐르는 경과 표기: clip의 startedAt에서 센다. 모르면 null이다 */
   uptimeLabel: string | null;
   /**
@@ -49,15 +59,48 @@ export function StreamInfoBar({
   markDisabled: boolean;
   onMark: () => void;
 }) {
+  // 못 읽은 카테고리 사진 주소. 그 주소인 동안은 프로필로 돌아가고, 다른 카테고리(다른 주소)로 바뀌면 다시 그린다
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
+  const category =
+    meta.categoryThumb !== null && meta.categoryThumb.url !== failedUrl ? meta.categoryThumb : null;
   return (
     <section className={styles.infoBar} aria-label="방송 정보">
-      {/* 카테고리 이미지 창구가 아직 없다 — 자리와 라벨만 지킨다 */}
-      <div className={styles.infoThumb} aria-hidden>
-        {meta.thumbLabel}
-      </div>
+      {/* 그 시점 카테고리 사진(POK-467): 치지직 · SOOP처럼 세로 포스터다. 사진이 없거나 못 읽으면 아래 프로필 사진이 선다 */}
+      {category !== null ? (
+        <div
+          className={styles.infoCategoryThumb}
+          aria-hidden
+          title={category.name}
+          data-testid="info-category"
+        >
+          {/* 플랫폼이 준 사진 주소를 그대로 그린다: Next 이미지 최적화를 거치면 주소마다 허용 목록이 필요하다 */}
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={category.url} alt="" onError={() => setFailedUrl(category.url)} />
+        </div>
+      ) : (
+        /* 그 방송 스트리머의 프로필 사진(POK-457). 사진이 없거나 못 받으면 Avatar가 이름 첫 글자로 선다. 누구 방송인지 아직 모르면
+          다른 빈 칸과 같은 규칙이다(POK-449): 받아 오는 중이면 회색 동그라미, 그 뒤는 빈 동그라미 */
+        <div className={styles.infoThumb} aria-hidden data-testid="info-streamer">
+          {meta.streamer ? (
+            <Avatar size="lg" src={meta.streamer.photo ?? undefined} name={meta.streamer.name} />
+          ) : infoPending ? (
+            <Skeleton circle height="100%" data-testid="info-streamer-pending" />
+          ) : null}
+        </div>
+      )}
       <div className={styles.infoBody}>
         <div className={styles.infoTitleRow}>
-          <h1 className={styles.infoTitle}>{stream.title}</h1>
+          {stream.title ? (
+            <h1 className={styles.infoTitle}>{stream.title}</h1>
+          ) : infoPending ? (
+            <h1 className={styles.infoTitle} aria-label="방송 정보를 받아 오고 있어요">
+              <Skeleton width={260} height={18} data-testid="info-title-pending" />
+            </h1>
+          ) : (
+            <h1 className={styles.infoTitle}>
+              <span className={styles.infoNote}>{titleNote}</span>
+            </h1>
+          )}
           {/* 제목 수정은 방송 정보 쓰기 창구(미발부)까지 자리만 */}
           <IconButton variant="ghost" size="sm" aria-label="제목 수정" disabled>
             <Pencil size={13} aria-hidden />
@@ -73,6 +116,8 @@ export function StreamInfoBar({
                 </Tag>
               ))}
             </>
+          ) : infoPending ? (
+            <Skeleton width={120} height={12} data-testid="info-meta-pending" />
           ) : (
             // 칩을 지어내지 않고 사실만 적는다
             <span className={styles.infoNote}>{metaNote}</span>
@@ -80,7 +125,13 @@ export function StreamInfoBar({
         </div>
       </div>
       <div className={styles.infoStats}>
-        <span className={styles.infoViewers}>{viewersLabel}</span>
+        <span className={styles.infoViewers}>
+          {infoPending && !viewersLabel ? (
+            <Skeleton width={72} height={12} data-testid="info-viewers-pending" />
+          ) : (
+            viewersLabel
+          )}
+        </span>
         <span className={styles.infoDivider} aria-hidden />
         <span className={styles.infoUptime}>
           {uptimeLabel !== null ? (

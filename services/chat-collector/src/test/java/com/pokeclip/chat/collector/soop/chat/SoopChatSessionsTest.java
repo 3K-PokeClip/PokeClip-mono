@@ -203,6 +203,11 @@ class SoopChatSessionsTest {
         await(() -> opened.size() >= 2);
 
         assertThat(buffer.drain(100)).extracting(PersistableChat::content).containsExactly("하나");
+        assertThat(relayed).as("치지직 채팅과 한 줄기로 섞여 화면이 줄마다 플랫폼을 보인다(POK-466)")
+                .singleElement().isInstanceOfSatisfying(RelayPayload.Chat.class, c -> {
+                    assertThat(c.platform()).isEqualTo(Platform.SOOP);
+                    assertThat(c.text()).isEqualTo("하나");
+                });
         assertThat(sessions.staleEvents()).isZero();
     }
 
@@ -230,7 +235,7 @@ class SoopChatSessionsTest {
             assertThat(d.donationText()).isEmpty();
             assertThat(d.receivedAtMillis()).isEqualTo(clock);
         });
-        assertThat(relayed).singleElement().isEqualTo(new RelayPayload.Donation(java.time.Instant.ofEpochMilli(clock),
+        assertThat(relayed).singleElement().isEqualTo(new RelayPayload.Donation(Platform.SOOP, java.time.Instant.ofEpochMilli(clock),
                 "팬", "fan-1", 10L, "BALLOON_GIFTED", ""));
         assertThat(buffer.drain(10)).as("채팅 바구니에는 안 간다").isEmpty();
     }

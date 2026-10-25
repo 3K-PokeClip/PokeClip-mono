@@ -18,6 +18,7 @@ import { formatUptime, parseClockLabel } from '@/features/player/playerMath';
 import { ChatPanel } from './ChatPanel';
 import { HighlightCardPanel } from './HighlightCardPanel';
 import { LiveOfflineScreen } from './LiveOfflineScreen';
+import { LiveScreenSkeleton } from './LiveScreenSkeleton';
 import { LiveStatsPanel, type TimelineCard } from './LiveStatsPanel';
 import { StreamInfoBar } from './StreamInfoBar';
 import { notFound, usePathname, useSearchParams } from 'next/navigation';
@@ -46,6 +47,7 @@ import { useLiveStatsMockState } from './useLiveStatsMockState';
 import { useLiveStatusMockState } from './useLiveStatusMockState';
 import { useLiveStreamSelection } from './useLiveStreamSelection';
 import { useManualMarking } from './useManualMarking';
+import { infoWaitOver } from '../infoWait';
 
 // 디자인 1b — 라이브 대시보드. 시안은 페이지 헤더 없이 콘텐츠부터 시작하고,
 // 방송 정보를 영상 아래 줄에 둔다. 세로로 길게 쌓아 문서 스크롤로 내려가는 화면이라
@@ -110,6 +112,7 @@ const PLAYBACK_ACCESS_CHECK_MS = 60_000;
 function LivePlayer({
   stream,
   viewersNote,
+  infoPending,
   broadcastStatus,
   displayStatus,
   startedAt,
@@ -130,6 +133,8 @@ function LivePlayer({
 }: {
   stream: LiveStream;
   viewersNote: string;
+  /** 방송 정보를 받아 오는 중 — 상단 필의 빈 칸을 회색 막대로 둔다(POK-449) */
+  infoPending: boolean;
   /** 명부가 답한 방송 상태. 녹화를 찾고 영상 주소를 고르는 데만 쓴다 */
   broadcastStatus: BroadcastStatus;
   /**
@@ -346,6 +351,7 @@ function LivePlayer({
       key={`${uptimeSeconds === null ? 'clock-pending' : 'clock-known'}-${accessRecoveries}`}
       channelName={stream.channelName}
       viewersNote={viewersNote}
+      infoPending={infoPending}
       broadcastStatus={displayStatus}
       noSignalNote={noSignalNote}
       mediaKey={liveStreamId && cookieFor === accessKey ? (mediaKey ?? liveStreamId) : undefined}
@@ -393,15 +399,23 @@ export function LiveScreen() {
 function LiveScreenBody() {
   const { status } = useLiveStatusMockState();
   const selection = useLiveStreamSelection();
+  // 대시보드의 훅들이 보는 방송 번호. 고른 번호는 효과에서 저장소에 오르므로(useLiveStreamSelection) 정한 직후 한 그리기는 비어 있다
+  const { streamId } = useLiveData();
   const offline = status === 'offline' || (selection.resolved && selection.streamId === '');
-  return offline ? <LiveOfflineScreen /> : <LiveDashboard />;
+  if (offline) return <LiveOfflineScreen />;
+  // 방송을 정하기 전, 그리고 정한 번호가 저장소에 오르기 전에는 대시보드를 세우지 않고 같은 모양의 스켈레톤을 둔다(POK-445). 빈
+  // 번호로 세우면 시계(useBroadcastClock)가 「꺼짐」을 퍼뜨려 정보 바에 「방송 중이 아니에요」가 먼저 떴다가 바뀌었다. 방송 목록을
+  // 못 읽으면 10초마다 다시 묻고(LIVE_RESELECT_MS) 답이 오면 선다. 한 번 선 뒤 방송이 바뀌면(A → B) 저장소가 비지 않으니 내리지 않는다
+  if (!selection.resolved || streamId === '') return <LiveScreenSkeleton />;
+  return <LiveDashboard />;
 }
 
 function LiveDashboard() {
   // 주소는 usePathname으로 읽는다: 넘어온 직후 첫 그리기의 window.location은 옛 주소다
   const vodRouteId = vodStreamIdFromPathname(usePathname() ?? '');
   const pastRoute = vodRouteId !== null;
-  const { stream, highlights, cardsStatus, chatWarning, mergeCard } = useLiveMockState(pastRoute);
+  const { stream, highlights, hiddenHighlights, cardsStatus, chatWarning, mergeCard } =
+    useLiveMockState(pastRoute);
   const { streamMeta, cardVisuals } = useLiveDetailsMockState();
   const liveData = useLiveData();
   const { streamId, info } = liveData;
@@ -494,9 +508,21 @@ function LiveDashboard() {
   // 무엇이라 쓰는지는 통계와 같은 함수 하나가 정한다(리뷰 5라운드). 값과 말은 통계 훅이 센 것을 그대로 쓴다: 두 곳에서 따로
   // 세면 한쪽 인자만 바뀌어도 다시 갈린다(리뷰 6라운드)
   const v = stats.lastViewers;
+  // 방송 정보를 받아 오는 중(POK-449): 방송 중이거나 아직 상태를 모르고, 방송 시작에서 2분이 안 지났다. 이때 빈 칸(채널 이름 · 시청자
+  // 수 · 제목 · 카테고리)은 회색 막대다. 그 뒤로는 지금처럼 까닭(확인 중 · 수집 전)을 글자로 적는다
+  // 시작 시각을 모르면(명부 답 전 · 실패, 시작 시각 없는 방송) 이 화면이 그 방송을 처음 본 때부터 센다: 안 세면 명부 조회가 계속
+  // 실패하는 동안 막대가 끝없이 번쩍였다(로컬 리뷰 1라운드)
+  // 방송을 바꾸면 다시 센다(렌더 중 상태 고침: React의 「이전 값에 맞춰 상태 고치기」 방식)
+  const [firstSeen, setFirstSeen] = useState(() => ({ streamId, at: Date.now() }));
+  if (firstSeen.streamId !== streamId) setFirstSeen({ streamId, at: Date.now() });
+  const infoPending =
+    (viewStatus === 'live' || viewStatus === 'unknown') &&
+    !infoWaitOver(clock.startedAt ?? firstSeen.at, Date.now());
   const viewersLabel =
     v === null
-      ? `시청자 수 ${stats.noViewers}`
+      ? infoPending
+        ? ''
+        : `시청자 수 ${stats.noViewers}`
       : ended
         ? `끝날 때 ${v.toLocaleString('ko-KR')}명 시청`
         : `${v.toLocaleString('ko-KR')}명 시청 중`;
@@ -632,12 +658,13 @@ function LiveDashboard() {
   const linkedDoneRef = useRef<string | null>(null);
   useEffect(() => {
     if (linkedCardId === null || linkedDoneRef.current === linkedCardId) return;
-    const card = highlights.find((h) => h.id === `card-${linkedCardId}`);
+    // 가린 카드도 찾는다(POK-463): 주소를 받은 뒤 누가 가렸어도 그 시점으로는 간다
+    const card = [...highlights, ...hiddenHighlights].find((h) => h.id === `card-${linkedCardId}`);
     const seconds = card ? parseClockLabel(card.timestamp) : null;
     if (seconds === null) return;
     linkedDoneRef.current = linkedCardId;
     seekTo(seconds);
-  }, [highlights, linkedCardId, seekTo]);
+  }, [highlights, hiddenHighlights, linkedCardId, seekTo]);
 
   const handleSeek = useCallback(
     (timestamp: string, from: 'card' | 'stats_pin') => {
@@ -682,6 +709,7 @@ function LiveDashboard() {
               <LivePlayer
                 stream={stream}
                 viewersNote={viewersLabel}
+                infoPending={infoPending}
                 broadcastStatus={clock.status}
                 displayStatus={viewStatus}
                 startedAt={clock.startedAt}
@@ -706,6 +734,8 @@ function LiveDashboard() {
             stream={stream}
             meta={streamMeta}
             viewersLabel={viewersLabel}
+            infoPending={infoPending}
+            titleNote={`제목 ${missingWord(viewStatus, info !== null)}`}
             uptimeLabel={uptimeLabel}
             uptimeNote={UPTIME_NOTE[viewStatus]}
             metaNote={`방송 정보 ${missingWord(viewStatus, info !== null)}`}
@@ -716,6 +746,7 @@ function LiveDashboard() {
           />
           <HighlightCardPanel
             highlights={highlights}
+            hiddenHighlights={hiddenHighlights}
             stream={streamForCards}
             visuals={cardVisuals}
             pendingLabel={marking.pendingLabel}
@@ -723,6 +754,7 @@ function LiveDashboard() {
             ended={ended}
             listStatus={cardsStatus}
             onSeek={handleCardSeek}
+            onCardChange={mergeCard}
           />
         </div>
         {/* 칸이 행 높이를 받고 그 안에서 채팅이 sticky로 붙는다 — 칸의 역할은 CSS .chatCol 주석.

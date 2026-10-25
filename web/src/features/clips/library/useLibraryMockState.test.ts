@@ -599,6 +599,203 @@ describe('useLibraryMockState — 유튜브 업로드·내려받기 (POK-111)', 
       libraryEntry.latestClip = rendered;
     }
   });
+
+  it('내려받을 주소를 받는 동안 연타해도 한 번만 묻고, 업로드 잠금과는 따로다(POK-443)', async () => {
+    let answer: (r: Response) => void = () => {};
+    const spy = serve(() => new Promise<Response>((resolve) => (answer = resolve)));
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    try {
+      const { result } = await mount();
+
+      act(() => {
+        result.current.download('12');
+        result.current.download('12');
+      });
+      act(() => result.current.download('12'));
+      expect(result.current.downloadingIds.has('12')).toBe(true);
+      // 주소를 받는 동안 올리기를 막을 까닭이 없다: 업로드 잠금에는 들지 않는다
+      expect(result.current.sendingIds.has('12')).toBe(false);
+      await vi.waitFor(() => expect(posts(spy)).toHaveLength(1));
+
+      await act(async () =>
+        answer(
+          jsonResponse(200, {
+            clipId: 5,
+            expiresAt: '2026-09-20T13:00:00Z',
+            files: [
+              { outputId: 'o1', kind: 'video', fileName: 'a.mp4', url: 'https://s3.example/a.mp4' },
+            ],
+          }),
+        ),
+      );
+      await vi.waitFor(() => expect(result.current.downloadingIds.size).toBe(0));
+      expect(click).toHaveBeenCalledTimes(1);
+    } finally {
+      click.mockRestore();
+    }
+  });
+
+  it('내려받을 주소를 못 받으면 받는 중 표시를 거둔다(POK-443)', async () => {
+    serve(() => jsonResponse(500));
+    const { result } = await mount();
+
+    act(() => result.current.download('12'));
+    expect(result.current.downloadingIds.has('12')).toBe(true);
+    await vi.waitFor(() => expect(result.current.downloadingIds.size).toBe(0));
+  });
+});
+
+describe('useLibraryMockState: 렌더 재시도 (POK-443)', () => {
+  const failedClip = {
+    id: 5,
+    streamId: 's1',
+    recipeId: 12,
+    recipeVersion: 2,
+    requestedBy: '9',
+    status: 'failed',
+    progress: null,
+    outputs: null,
+    error: { code: 'X', message: null },
+    createdAt: '2026-09-20T11:00:00Z',
+    updatedAt: '2026-09-20T12:00:00Z',
+    upload: null,
+  };
+  const failedEntry = {
+    recipeId: 12,
+    streamId: 's1',
+    creatorId: '9',
+    recipeVersion: 2,
+    cut: { inAtMs: 0, outAtMs: 30_000 },
+    status: 'failed',
+    broadcast: { status: 'ended', startedAt: null, endedAt: null, vodExpiresAt: null },
+    latestClip: failedClip,
+    createdAt: '2026-09-20T11:00:00Z',
+    updatedAt: '2026-09-20T12:00:00Z',
+  };
+
+  // 첫 목록 읽기만 답하고 그 뒤 읽기(주문 뒤 refresh)는 붙잡는다 — 주문 답이 얹은 상태를 다시 읽기가 덮지 않게
+  function serve(onPost: () => Response | Promise<Response>) {
+    let lists = 0;
+    return stubFetch((url, init) => {
+      if (init?.method === 'POST') return onPost();
+      if (!url.startsWith('/api/clip/library')) return jsonResponse(200, { id: 9 });
+      lists += 1;
+      return lists === 1
+        ? jsonResponse(200, { items: [failedEntry], nextCursor: null })
+        : new Promise<Response>(() => {});
+    });
+  }
+
+  async function mount() {
+    const view = renderHook(() => useLibraryMockState(), { wrapper: withToastProvider });
+    await vi.waitFor(() => expect(view.result.current.loading).toBe(false));
+    return view;
+  }
+
+  function posts(spy: ReturnType<typeof stubFetch>) {
+    return spy.mock.calls.filter(([, init]) => init?.method === 'POST');
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('답을 기다리는 동안 연타해도 한 번만 주문하고, 답을 받자마자 만드는 중으로 옮긴다', async () => {
+    let answer: (r: Response) => void = () => {};
+    const spy = serve(() => new Promise<Response>((resolve) => (answer = resolve)));
+    const { result } = await mount();
+
+    act(() => {
+      result.current.retryRender('12');
+      result.current.retryRender('12');
+    });
+    act(() => result.current.retryRender('12'));
+    // 무엇을 보내는지까지 적힌다 — 패널은 「렌더 재시도」 단추만 돌린다
+    expect(result.current.sendingIds.get('12')).toBe('retryRender');
+    await vi.waitFor(() => expect(posts(spy)).toHaveLength(1));
+    expect(posts(spy)[0]?.[0]).toBe('/api/clip/broadcasts/s1/recipes/12/renders');
+
+    await act(async () =>
+      answer(jsonResponse(201, { ...failedClip, id: 6, status: 'queued', error: null })),
+    );
+    await vi.waitFor(() => expect(result.current.sendingIds.size).toBe(0));
+    expect(result.current.clips[0]?.status).toBe('rendering');
+    expect(result.current.clips[0]?.progressLabel).toBe('영상 주문됨 · 차례 기다리는 중');
+    expect(posts(spy)).toHaveLength(1);
+  });
+
+  it('거절되면 잠금을 풀고 상태는 그대로 둔다 — 다시 누를 수 있다', async () => {
+    const spy = serve(() => jsonResponse(409, { error: 'source_not_ready' }));
+    const { result } = await mount();
+
+    act(() => result.current.retryRender('12'));
+    await vi.waitFor(() => expect(result.current.sendingIds.size).toBe(0));
+    expect(result.current.clips[0]?.status).toBe('failed');
+
+    act(() => result.current.retryRender('12'));
+    await vi.waitFor(() => expect(posts(spy)).toHaveLength(2));
+  });
+});
+
+describe('useLibraryMockState — 다시 읽기 실패 (POK-443)', () => {
+  const entry = {
+    recipeId: 12,
+    streamId: 's1',
+    creatorId: '9',
+    recipeVersion: 1,
+    cut: { inAtMs: 0, outAtMs: 30_000 },
+    status: 'rendered',
+    broadcast: { status: 'ended', startedAt: null, endedAt: null, vodExpiresAt: null },
+    latestClip: null,
+    createdAt: '2026-09-20T11:00:00Z',
+    updatedAt: '2026-09-20T12:00:00Z',
+  };
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('주입한 목록은 처음부터 읽은 것이다', () => {
+    const { result } = renderLibrary();
+    expect(result.current.loaded).toBe(true);
+    expect(result.current.loading).toBe(false);
+  });
+
+  it('한 번도 못 읽었으면 loaded가 거짓이다 — 화면은 실패를 목록 자리에 그린다', async () => {
+    stubFetch((url) =>
+      url.startsWith('/api/clip/library')
+        ? jsonResponse(503, { error: 'unavailable' })
+        : jsonResponse(200, { id: 9 }),
+    );
+    const { result } = renderHook(() => useLibraryMockState(), { wrapper: withToastProvider });
+    await vi.waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.error).not.toBeNull();
+    expect(result.current.loaded).toBe(false);
+  });
+
+  it('한 번 읽은 뒤의 실패는 받아 둔 목록을 두고, 다음 읽기가 되면 실패를 지운다', async () => {
+    let down = false;
+    stubFetch((url) =>
+      url.startsWith('/api/clip/library') && down
+        ? jsonResponse(503, { error: 'unavailable' })
+        : url.startsWith('/api/clip/library')
+          ? jsonResponse(200, { items: [entry], nextCursor: null })
+          : jsonResponse(200, { id: 9 }),
+    );
+    const { result } = renderHook(() => useLibraryMockState(), { wrapper: withToastProvider });
+    await vi.waitFor(() => expect(result.current.loaded).toBe(true));
+
+    down = true;
+    act(() => result.current.refresh());
+    await vi.waitFor(() => expect(result.current.error).not.toBeNull());
+    expect(result.current.loaded).toBe(true);
+    expect(result.current.totalCount).toBe(1);
+
+    down = false;
+    act(() => result.current.refresh());
+    await vi.waitFor(() => expect(result.current.error).toBeNull());
+    expect(result.current.totalCount).toBe(1);
+  });
 });
 
 describe('useLibraryMockState: 업로드 다시 시도 (POK-291)', () => {

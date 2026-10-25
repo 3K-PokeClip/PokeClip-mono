@@ -15,6 +15,7 @@ import com.pokeclip.clip.paging.ListLimit;
 import com.pokeclip.clip.thumbnail.ThumbnailUrls;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -25,6 +26,7 @@ import tools.jackson.databind.ObjectMapper;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.function.IntSupplier;
 
 /** 카드를 쓰는 유일한 자리. 쓰기는 전부 네이티브 SQL이라 DB 시계와 순번 트리거를 탄다. */
 @Service
@@ -60,17 +62,20 @@ public class JumpCardService {
     private final CardStreamRegistry registry;
     private final BroadcastAccessGuard guard;
     private final ThumbnailUrls thumbnails;
+    private final ApplicationEventPublisher events;
 
     /**
-     * 🔴 <b>열기 문이 {@code @Transactional} 대신 이것을 쓴다.</b> 자격 판정을 트랜잭션 밖에서
+     * 🔴 <b>열기·가리기·되살리기 문이 {@code @Transactional} 대신 이것을 쓴다.</b> 자격 판정을 트랜잭션 밖에서
      * 끝내야 하는데, 자기 호출은 프록시를 안 타므로 애너테이션으로는 그 경계를 만들 수 없다. 이유와 실측은 {@link #requireViewableCard} 주석에 있다.
      */
     private final TransactionTemplate transactions;
 
     JumpCardService(JumpCardRepository cards, BroadcastRepository broadcasts,
                     ObjectMapper mapper, CardStreamRegistry registry,
-                    BroadcastAccessGuard guard, TransactionTemplate transactions, ThumbnailUrls thumbnails) {
+                    BroadcastAccessGuard guard, TransactionTemplate transactions, ThumbnailUrls thumbnails,
+                    ApplicationEventPublisher events) {
         this.thumbnails = thumbnails;
+        this.events = events;
         this.cards = cards;
         this.broadcasts = broadcasts;
         this.mapper = mapper;
@@ -103,6 +108,7 @@ public class JumpCardService {
 
         if (inserted == 1) {
             publishAfterCommit(snapshot);
+            events.publishEvent(new JumpCardCreated(card.getId()));
         } else {
             log.info("jumpcard.duplicate_skipped streamId={} source={} windowStartMs={} eventId={}",
                     streamId, JumpCardSource.AUTO, request.window().startMs(), request.eventId());
@@ -172,6 +178,7 @@ public class JumpCardService {
             }
             JumpCardSnapshot snapshot = snapshot(card);
             publishAfterCommit(snapshot);
+            events.publishEvent(new JumpCardCreated(card.getId()));
             log.info("jumpcard.hotkey_created cardId={} by={}", card.getId(), userId);
             return new RecordResult(true, snapshot);
         });
@@ -214,8 +221,40 @@ public class JumpCardService {
     }
 
     /**
-     * <b>이 방송을 볼 자격이 있나. 열기 문의 쓰기보다 앞이다.</b> 뒤에 두면 자격 없는 사람의 열기가
-     * 기록에 남는다.
+     * 카드를 가린다(POK-463). 화면의 「숨김」 칸으로 가고 목록 기본값에서 빠진다. 지우지 않는다: 되살릴 수 있다.
+     * 편집자와 스트리머가 같은 권한이다(2026-10-22 결정): 볼 수 있으면 가린다.
+     *
+     * <p>이미 가린 카드면 바꾸지 않고 지금 카드를 돌려준다(200). 기록·발행도 바뀐 때만이다: 단추를 두 번 누른 것이
+     * 「두 번 가렸다」로 세지거나 화면이 헛돌지 않게.
+     */
+    public JumpCardSnapshot hide(long id, String userId) {
+        requireViewableCard(id, userId);
+        return transactions.execute(status -> toggleHidden(id, "hide", userId, () -> cards.hide(id, userId)));
+    }
+
+    /** 되살린다(POK-463). 누구나 한다({@link JumpCardRepository#unhide} 주석). 안 가린 카드면 지금 카드를 돌려준다. */
+    public JumpCardSnapshot unhide(long id, String userId) {
+        requireViewableCard(id, userId);
+        return transactions.execute(status -> toggleHidden(id, "unhide", userId, () -> cards.unhide(id)));
+    }
+
+    /** 가리기·되살리기의 공통 꼬리: 쓰고, 다시 읽고, 바뀌었을 때만 기록하고 커밋 뒤에 발행한다. */
+    private JumpCardSnapshot toggleHidden(long id, String action, String userId, IntSupplier write) {
+        int updated = write.getAsInt();
+        // 판정 뒤 카드가 지워졌으면(탈퇴 정리) 404로 접는다. 다시 읽는 것은 UPDATE 뒤라 지금 값이다.
+        JumpCard card = cards.findById(id).orElseThrow(() -> new JumpCardNotFoundException(id));
+        JumpCardSnapshot snapshot = snapshot(card);
+        if (updated == 1) {
+            cards.recordAction(id, action, userId);
+            log.info("jumpcard.{} cardId={} by={}", action, id, userId);
+            publishAfterCommit(snapshot);
+        }
+        return snapshot;
+    }
+
+    /**
+     * <b>이 방송을 볼 자격이 있나. 열기·가리기·되살리기 문의 쓰기보다 앞이다.</b> 뒤에 두면 자격 없는 사람의
+     * 요청이 카드를 바꾸거나 기록에 남는다.
      *
      * <p>🔴 <b>거절을 {@code JumpCardNotFoundException}으로 접는다.</b> 그대로 두면
      * 「없는 카드」는 {@code jump_card_not_found}, 「자격 없는 카드」는 {@code broadcast_not_found}로
@@ -229,9 +268,9 @@ public class JumpCardService {
      * 다시 시도하지 않는다).
      *
      * <p>🔴 <b>{@code @Transactional}이 없는 자리에서 부른다.</b> auth 왕복이 최대 7초인데
-     * 트랜잭션 안에서 돌면 그동안 커넥션을 쥔다. 열기는 <b>쓰기라</b> 쓰기 트랜잭션이 7초 열린다. 커넥션은 첫 질의가 아니라
+     * 트랜잭션 안에서 돌면 그동안 커넥션을 쥔다. 세 문 다 <b>쓰기라</b> 쓰기 트랜잭션이 7초 열린다. 커넥션은 첫 질의가 아니라
      * <b>트랜잭션이 열릴 때</b> 잡히므로 순서를 바꾸거나 {@code readOnly}를 빼는 것으로는 안 풀린다
-     * (POK-174 실측). 그래서 열기 문이 애너테이션 대신 {@link #transactions}를 쓴다 :
+     * (POK-174 실측). 그래서 세 문이 애너테이션 대신 {@link #transactions}를 쓴다 :
      * 자기 호출은 프록시를 안 타기 때문이다.
      * {@code BroadcastListTransactionTest.카드를_열_때도_auth_왕복_동안_커넥션을_안_쥔다}가 그 불변식을 잰다.
      */
@@ -266,6 +305,7 @@ public class JumpCardService {
      * 빨간불이 된다 — 그 그물은 애너테이션이 아니라 <b>왕복 중 활성 커넥션 수</b>를 잰다.
      *
      * @param requesterSubject JWT {@code sub} — 우리가 발급·검증한 토큰의 회원 번호(문자열)
+     * @param includeHidden 가린 카드도 싣나(POK-463). 화면의 「숨김」 칸과 편집기가 켠다
      * @param limit {@code null}이면 {@link #DEFAULT_LIST_LIMIT}
      * @param cursor {@code null}<b>이거나 빈 문자열이면</b> 첫 장 ({@code CursorCodec.decodeOrFirstPage})
      * @throws com.pokeclip.clip.paging.InvalidListParamException 개수가 범위 밖이다 (400)
@@ -275,7 +315,8 @@ public class JumpCardService {
      * @throws com.pokeclip.clip.delegation.AccessErrors.AuthUnavailableException
      *         자격을 물어보지 못했다 (503)
      */
-    public JumpCardPage listOf(String requesterSubject, String streamId, Integer limit, String cursor) {
+    public JumpCardPage listOf(String requesterSubject, String streamId, boolean includeHidden,
+                               Integer limit, String cursor) {
         int size = ListLimit.resolve(limit, DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT);
         // 표시는 두 값을 함께 싣는다 — 하나만 오면 같은 방송 시간의 뒷줄이 조용히 빠진다
         // (CursorCodec.Kind.CARD의 칸 수 검사가 그것을 막는다. findPage 주석 참고).
@@ -284,7 +325,7 @@ public class JumpCardService {
         guard.requireViewable(requesterSubject, streamId);
 
         // 상한 하나를 더 받아 「다음 장이 있나」를 본다. 개수를 따로 세면 질의가 하나 더 돈다.
-        List<JumpCard> rows = cards.findPage(streamId,
+        List<JumpCard> rows = cards.findPage(streamId, includeHidden,
                 after == null ? null : after.get(0), after == null ? null : after.get(1), size + 1);
         boolean hasMore = rows.size() > size;
         List<JumpCard> page = hasMore ? rows.subList(0, size) : rows;
@@ -332,8 +373,11 @@ public class JumpCardService {
     }
 
     /**
-     * 카드가 생기거나 바뀌었다고 알리는 유일한 자리. <b>커밋 뒤에만</b> 보낸다 —
+     * 카드가 생기거나 바뀌었다고 <b>화면에</b> 알리는 유일한 자리. <b>커밋 뒤에만</b> 보낸다 —
      * 커밋 전에 보내면 되감긴 카드가 화면에 뜨고, 지울 방법이 없다.
+     *
+     * <p>🔴 <b>새로 만든 카드면 {@link JumpCardCreated}도 같이 낸다</b>(POK-475, 썸네일 순회기가 2초 안에 사진을 주문한다). 새 카드를
+     * 만드는 길을 하나 더 내면 둘 다 부른다: 이것만 부르면 그 카드 사진이 1분 순회를 기다린다.
      *
      * <p>{@code afterCommit} 안에서는 <b>제출만</b> 한다. 전송은 {@code CardStreamExecutor}의
      * 전용 스레드가 하므로 요청 스레드가 느린 브라우저에 묶이지 않는다 — 커밋 뒤 처리를 요청

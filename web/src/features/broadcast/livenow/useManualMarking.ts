@@ -97,7 +97,11 @@ export function useManualMarking(options: ManualMarkingOptions): {
         if (status !== 200) track('highlight_marked', { mode });
         if (!stillHere()) return;
         if (status === 200) {
-          toast({ tone: 'info', title: '가까운 카드가 이미 있어요' });
+          // 앞 카드가 가린 카드면(POK-463) 보이는 칸에는 없다: 「이미 있다」만 말하면 마킹이 실패한 것처럼 읽힌다
+          toast({
+            tone: 'info',
+            title: card.hidden ? '가까운 카드가 숨김 칸에 있어요' : '가까운 카드가 이미 있어요',
+          });
           if (mode === 'past') onExistingCard(card);
         }
       } catch (e) {

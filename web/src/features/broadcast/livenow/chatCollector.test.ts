@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { donationLabel } from './chatCollector';
+import { chatFingerprint, donationLabel } from './chatCollector';
 
 // 후원 라벨(POK-431). 수집기는 후원 종류(donationType)를 플랫폼의 이름 그대로 싣고, 금액(amount)은 그 단위의 개수다(원 환산
 // 없음). 치지직은 CHAT · VIDEO(치즈), SOOP은 SDK action 이름 여섯이라 이름이 안 겹쳐 종류만으로 가른다.
@@ -34,5 +34,17 @@ describe('후원 라벨', () => {
     // 객체 기본 속성 이름이 와도 단위로 잡지 않는다
     expect(donationLabel('constructor', 7)).toBe('후원 7');
     expect(donationLabel('toString', 7)).toBe('후원 7');
+  });
+});
+
+describe('겹침 지문', () => {
+  it('플랫폼이 다르면 같은 글 · 같은 시각 · 같은 보낸 이라도 다른 줄이다: 표 지문에도 플랫폼이 있다(POK-466)', () => {
+    const base = { kind: 'chat', time: '2026-10-25T12:00:00Z', senderChannelId: 's', text: 'ㅋㅋ' };
+    expect(chatFingerprint({ ...base, platform: 'CHZZK' })).not.toBe(
+      chatFingerprint({ ...base, platform: 'SOOP' }),
+    );
+    expect(chatFingerprint({ ...base, platform: 'SOOP' })).toBe(
+      chatFingerprint({ ...base, platform: 'SOOP' }),
+    );
   });
 });

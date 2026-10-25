@@ -1,9 +1,19 @@
 'use client';
 
-import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import {
+  memo,
+  type ReactElement,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from 'react';
 import clsx from 'clsx';
 import { MessageSquare, PanelRightClose } from 'lucide-react';
 import { Badge, IconButton, Tag, VisuallyHidden } from '@/ui';
+import { platformLabel } from '@/api/clipEditor';
+import { ChzzkMark, SoopMark } from '@/features/settings/channels/ChannelMarks';
 import { REPLAY_BLOCK_CLASS } from '@/lib/analytics';
 import { formatPerMinute } from './liveDataStore';
 import styles from './LiveScreen.module.css';
@@ -21,12 +31,37 @@ import type { ChatPanelMessage, ChatSurge } from './useChatPanelMockState';
 /** 바닥에서 이만큼 안이면 「끝에 있다」로 본다 — 서브픽셀 스크롤·줌 잔차 흡수 */
 const FOLLOW_SLACK_PX = 8;
 
+/**
+ * 어느 플랫폼 줄인지(POK-466). 한 방송을 치지직 · SOOP에 같이 내보내면 두 채팅이 섞이므로 줄마다 앞에 둔다. 글자 대신 설정
+ * 화면 채널 연동 줄과 같은 로고 · 같은 타일 색이고(POK-476) 화면 읽기 도구에는 플랫폼 이름을 읽힌다. 모르는 코드면 그리지 않는다
+ */
+const PLATFORM_MARKS: Record<string, { Mark: () => ReactElement; tile: string | undefined }> = {
+  CHZZK: { Mark: ChzzkMark, tile: styles.chatPlatformChzzk },
+  SOOP: { Mark: SoopMark, tile: styles.chatPlatformSoop },
+};
+
+function PlatformMark({ platform }: { platform?: string | null }) {
+  const label = platformLabel(platform);
+  // 이름과 로고를 같은 코드로 고른다: 로고가 없는 코드에 다른 플랫폼 로고를 그리지 않는다
+  const mark =
+    platform && Object.hasOwn(PLATFORM_MARKS, platform) ? PLATFORM_MARKS[platform] : null;
+  if (!label || !mark) return null;
+  return (
+    <span role="img" aria-label={label} className={clsx(styles.chatPlatform, mark.tile)}>
+      <mark.Mark />
+    </span>
+  );
+}
+
 function ChatLine({ message }: { message: ChatPanelMessage }) {
   if (message.kind === 'donation') {
     return (
       <li className={styles.chatDonation}>
         <span className={styles.chatDonationHead}>
-          {message.name} · {message.amountLabel}
+          <PlatformMark platform={message.platform} />
+          <span>
+            {message.name} · {message.amountLabel}
+          </span>
         </span>
         {/* SOOP 후원은 문구가 늘 비어 온다(POK-431): 빈 자리를 그리면 후원마다 빈 줄이 생긴다 */}
         {message.text ? <span className={styles.chatDonationText}>{message.text}</span> : null}
@@ -38,6 +73,7 @@ function ChatLine({ message }: { message: ChatPanelMessage }) {
   }
   return (
     <li className={styles.chatLine}>
+      <PlatformMark platform={message.platform} />
       <b className={styles.chatName} data-color={message.colorIndex}>
         {message.name}
       </b>{' '}

@@ -3,6 +3,7 @@ package com.pokeclip.chat.collector.relay;
 import com.pokeclip.chat.collector.ChzzkProperties;
 import com.pokeclip.chat.collector.CollectionStatus;
 import com.pokeclip.chat.collector.CollectorRunner;
+import com.pokeclip.chat.collector.Platform;
 import com.pokeclip.chat.collector.archive.ChatArchive;
 import com.pokeclip.chat.collector.persist.ChatBuffer;
 import com.pokeclip.chat.collector.persist.ChatPersister;
@@ -90,6 +91,6 @@ class RelayRunnerCloseTest {
     }
 
     private static RelayPayload.Chat chat(String text) {
-        return new RelayPayload.Chat(Instant.EPOCH, "n", "s", null, text);
+        return new RelayPayload.Chat(Platform.CHZZK, Instant.EPOCH, "n", "s", null, text);
     }
 }

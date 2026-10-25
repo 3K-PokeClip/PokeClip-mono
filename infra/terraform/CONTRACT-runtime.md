@@ -10,7 +10,7 @@
 *   **런타임 1단**: 엣지 platform · media · edge 보다 먼저 적용하는 런타임
     루트입니다(RDS · 앱 비밀 · SNS/SQS · rewind 버킷).
 *   **런타임 2단**: edge 뒤에 적용하는 런타임 루트입니다(rewind 버킷 OAC
-    정책 · Media ↔ auth SG 규칙).
+    정책 · chat ↔ auth · clip SG 규칙).
 
 ## 상태 위치
 
@@ -25,24 +25,28 @@
 |---|---|---|---|
 | network → 런타임 1단 | `vpc_id` · `private_subnet_ids` · `media_az` · `media_private_subnet_id` | RDS 서브넷 그룹 · RDS SG 의 VPC · RDS 의 AZ(Media 상자와 같은 AZ) · SQL 실행기 서브넷(켜진 동안만) | network |
 | 런타임 1단 → platform | `rds_sg_id` | platform 이 RDS 인그레스 ← auth · clip 규칙을 만든다 | RDS SG = 런타임, 규칙 = platform. 예외: `sql_runner_enabled` 가 켜진 동안만 RDS ← SQL 실행기 5432 규칙은 런타임이 가진다 |
-| 런타임 1단 → platform | `app_secret_arns`(서비스 → env 이름 → 전체 ARN — auth · clip · chat-collector · chat-detector 의 JWT_SECRET · SECRET_STORE_KEY · INTERNAL_API_TOKEN · OAuth 비밀 등, DB 비밀번호는 platform `app_db_auth = "password"` 일 때만 · 그릇 일곱 · 서비스별 목록은 [prod/runtime](prod/runtime/README.md)) | `ecs_service.secrets` 에 엣지 비밀(clip 의 `CLOUDFRONT_PRIVATE_KEY_PEM` = prod/secrets `signing_key_secret_arn`)과 합쳐 넣는다. 읽기 정책은 platform(실행 역할). 앱 서버 DB 자격은 비밀이 아니다 — IAM DB 인증 사용자(`app_db_users` · `prod/runtime/sql/`)로 붙는다. 비밀번호 그릇은 IAM 인증을 못 쓰는 대체 갈래에서만 생긴다(아래 「O7d 선행 확인」) | 그릇 · 값 = 런타임, 읽기 정책 = platform |
+| 런타임 1단 → platform | `app_secret_arns`(서비스 → env 이름 → 전체 ARN — auth · clip · chat-collector · chat-detector 의 JWT_SECRET · SECRET_STORE_KEY · INTERNAL_API_TOKEN · OAuth 비밀 넷(SOOP 포함) 등, 일꾼 render · upload 의 INTERNAL_API_TOKEN(앱과 같은 그릇 — 배치 루트가 읽음), DB 비밀번호는 platform `app_db_auth = "password"` 일 때만 · auth 의 resolve 전용 토큰 `STREAM_KEY_RESOLVE_TOKEN` · 그릇 아홉 · 서비스별 목록은 [prod/runtime](prod/runtime/README.md)) | `ecs_service.secrets` 에 엣지 비밀(clip 의 `CLOUDFRONT_PRIVATE_KEY_PEM` = prod/secrets `signing_key_secret_arn`)과 합쳐 넣는다. 읽기 정책은 platform(실행 역할). 앱 서버 DB 자격은 비밀이 아니다 — IAM DB 인증 사용자(`app_db_users` · `prod/runtime/sql/`)로 붙는다. 비밀번호 그릇은 IAM 인증을 못 쓰는 대체 갈래에서만 생긴다(아래 「O7d 선행 확인」) | 그릇 · 값 = 런타임, 읽기 정책 = platform |
 | 런타임 1단 → platform | `app_env`(서비스 → 이름 → 값 — DB 엔드포인트 · 큐 URL 등 비밀 아닌 값) | 태스크 env. 키는 앱이 읽는 이름 그대로(아래 「앱이 읽는 env 이름」). platform 이 정하는 이름(아래 「platform 이 정하는 env」)이 겹치면 platform 값이 이긴다. 큐 수신 스위치 `BROADCAST_INTAKE_ENABLED`(서버 기본 false)는 clip 만 `app_env` 가 `"true"`(문자열)로 준다. 스위치가 빠지면 서버는 뜨지만 큐를 읽지 않아 편지가 보관 기간 뒤 사라진다. 서비스 주소 `AUTH_BASE_URL` 은 platform 이 넣는다 — clip 은 비면 부팅을 거부한다. 켜면 auth 내부 호출에 `INTERNAL_API_TOKEN`(`app_secret_arns`)도 쓴다. chat-collector 의 스위치는 배치(POK-306)가 `AUTH_BASE_URL` · `INTERNAL_API_TOKEN` 과 함께 정한다 — 주소가 없으면 기본값(localhost)으로 떠서 틀린 주소로 돈다 | 런타임 |
 | 런타임 1단 → platform | `rds_resource_id` | auth · clip 작업 역할의 `rds-db:connect`(대상 = `dbuser:<rds_resource_id>/<사용자>`) — platform `app_db_auth = "iam"` 일 때 | RDS = 런타임, 접속 정책 = platform |
 | 런타임 1단 → platform | `app_db_users`(서비스 → DB 사용자 이름 — `auth` `app_auth` · `clip` `app_clip` · `chat-collector` `app_chat_collector` · `chat-detector` `app_chat_detector`, 3번 POK-407 확정) | 태스크 env `POSTGRES_USER` · `rds-db:connect` 의 사용자 자리(서비스마다 하나, 와일드카드 없음). platform 은 auth · clip 만 읽고 모르는 키를 거부하지 않는다 — chat 두 키는 배치(POK-306)가 읽는다. 런타임 1단-가가 낸다(이름은 `prod/runtime/sql/10_roles.sql` 에서 읽음 · kty 2026-10-24) | DB 사용자 · `rds_iam` · GRANT = 런타임(Terraform 이 아니라 `prod/runtime/sql/` 과 [runtime-1a 런북](runbooks/runtime-1a.md)) |
-| 런타임 1단 → platform | `app_task_resource_arns`(서비스 → 키 → ARN — 아래 「작업 역할 대상」) | auth · clip 작업 역할 정책 Resource. 키가 없으면(기능 꺼짐) 그 문장을 만들지 않는다 | 자원 = 런타임, 작업 역할 정책 = platform |
+| 런타임 1단 → platform · 배치 루트 | `app_task_resource_arns`(서비스 → 키 → ARN — 아래 「작업 역할 대상」 · 「일꾼 작업 역할 대상」) | auth · clip 작업 역할 정책 Resource(platform). 키가 없으면(기능 꺼짐) 그 문장을 만들지 않는다. 일꾼 render · upload 키는 일꾼을 배치하는 루트가 읽는다(POK-408 배치 PR) | 자원 = 런타임, 작업 역할 정책 = platform · 배치 루트 |
 | 런타임 1단 → platform | `broadcast_queue_arns`(소비자 clip · chat → 계약9 SQS FIFO 큐 ARN) | chat-collector(POK-306)의 수신 정책 대상(큐 URL 은 `app_env` 의 `BROADCAST_QUEUE_URL`). clip 은 `app_task_resource_arns` 의 `broadcast_queue_arn` 을 쓴다 | 큐 = 런타임, 수신 정책 = platform |
 | platform → 런타임 · 일꾼 · chat | `ecs_cluster_arn` · `discovery_namespace_id` · `service_sg_ids`(auth · clip · next) | 같은 클러스터 · Cloud Map 네임스페이스(`pokeclip.internal`)에 서비스를 두고, 상대 SG 규칙을 만든다(POK-408 일꾼 · POK-306 chat) | 클러스터 · 네임스페이스 · 서비스 SG = platform, 새 서비스 · 그 규칙 = 그 PR |
 | platform → media | `media_proxy_ports`(live · control · playback · health) · `media_health_path` | Media 상자 nginx 포트 · 헬스 경로 — platform 대상 그룹과 같은 값(정본 = platform) | platform |
+| platform → media | `service_sg_ids.auth` · `service_ports.auth` | Media 이그레스 → auth · auth 인그레스 ← Media(응답기의 4C resolve) 한 쌍 — kty 결정 2026-10-25 (나) | 서비스 SG · 포트 = platform, SG 규칙 = media |
 | 런타임 1단 → media | `rds_endpoint` · `rds_db_name` · `rds_resource_id` · `rds_sg_id` · `rewind_bucket_arn` | 사이드카 · janitor env(주소 · DB 이름) · Media 인스턴스 역할의 `rds-db:connect`(대상 = `rds_resource_id`) · Media ↔ RDS 5432 규칙 한 쌍 · 사이드카 S3(rewind) 업로드 정책(대상 = `rewind_bucket_arn/*`) | RDS · DB 사용자 · GRANT = 런타임(DB 사용자 · GRANT 는 Terraform 이 아니라 `prod/runtime/sql/` 과 [runtime-1a 런북](runbooks/runtime-1a.md)), 접속 정책 · SG 규칙 · 업로드 정책 = media |
-| 런타임 1단 → media | `media_secret_arns`(비밀 전체 ARN 목록 `list(string)` — media_host 변수와 같은 꼴. 지금은 `INTERNAL_API_TOKEN` 그릇 하나, 앱의 그릇과 같은 ARN) | Media 인스턴스 역할 읽기 정책. 한계: 이 열쇠는 auth `/internal/**` 전부에 통한다(전용 토큰은 런타임 1단-나에서 3번과 재합의) | 그릇 · 값 = 런타임, 읽기 정책 = media |
+| 런타임 1단 → media | `media_secret_arns`(비밀 전체 ARN 목록 `list(string)` — media_host 변수와 같은 꼴. resolve 전용 토큰 `pokeclip/prod/stream-key-resolve-token` 그릇 하나 — auth 의 `STREAM_KEY_RESOLVE_TOKEN` 과 같은 ARN. 공용 `INTERNAL_API_TOKEN` 은 없다, POK-429) | Media 인스턴스 역할 읽기 정책. 전용 토큰은 auth 의 `POST /internal/stream-keys/resolve` 하나만 열고, 출발지는 Media 프라이빗 서브넷 대역이어야 한다(auth `STREAM_KEY_RESOLVE_ALLOWED_CIDRS`) | 그릇 · 값 = 런타임, 읽기 정책 = media |
+| 런타임 1단 → media | `ingest_auth_resolve_token_secret_arn`(string — 위 그릇의 전체 ARN, `media_secret_arns` 의 원소와 같은 값) | 응답기 `media.env` 의 `STREAM_KEY_RESOLVE_TOKEN_SECRET_ARN` 렌더(M9 user_data). 목록의 순서에 기대지 않으려는 이름 있는 출력이다 | 출력 = 런타임, 키 정의 · 읽기 = M15, 렌더 = M9(user_data) |
 | 런타임 1단 → media | `broadcast_topic_arn` | 사이드카 역할의 `sns:Publish` 대상(계약9 발행 — `MessageDeduplicationId = eventId`). 발행 권한은 media 역할의 신원 정책이다 — 주제 정책은 계정 루트만 주체로 둔다(기본 정책의 `Principal *` 없음) | 주제 · 주제 정책 = 런타임, 발행 정책 = media |
-| 런타임 1단 → edge | `rewind_bucket_{name,arn,regional_domain_name}` | `cdn_media` 의 `rewind-s3` 오리진 | 버킷 = 런타임 |
+| 런타임 1단 → edge | `rewind_bucket_regional_domain_name` | `cdn_media` 의 `rewind-s3` 오리진 도메인. edge 는 이 하나만 읽는다 — `rewind_bucket_name` · `rewind_bucket_arn` 은 런타임 2단 버킷 정책 몫이다 | 버킷 = 런타임 |
 | edge → 런타임 2단 | `media_distribution_arn` | rewind 버킷 정책의 OAC 허용문(조건 `AWS:SourceArn`) | 버킷 정책 = 런타임 2단 |
-| platform · media → 런타임 2단 | `service_sg_ids`(auth · clip · next) · `media_sg_id` | Media 이그레스 → auth · auth 인그레스 ← Media(내부 resolve), chat-collector · chat-detector ↔ auth · clip 규칙 | SG 규칙 = 런타임 2단 |
+| platform → 런타임 2단 | `service_sg_ids`(auth · clip · next) | chat-collector · chat-detector ↔ auth · clip 규칙(POK-306) | SG 규칙 = 런타임 2단 |
 | 런타임 → 엣지 시험 | 시험 계정 · 계약9 억제 조건 | 루프백 · T1 부터 T3 · T8 | 런타임 |
 
-clip ↔ auth · RDS ← auth · clip · 로드밸런서 → Media 규칙은 위 표의 런타임
-2단 행이 아닙니다(platform · media 가 가짐 — 설계 5-5).
+clip ↔ auth · RDS ← auth · clip · 로드밸런서 → Media · Media ↔ auth 규칙은
+위 표의 런타임 2단 행이 아닙니다(platform · media 가 가짐 — 설계 5-5). Media
+↔ auth 는 설계서가 런타임 2단 몫으로 적었지만 kty 결정 2026-10-25 (나)로
+media 가 RDS 짝과 같은 꼴로 만듭니다.
 
 *   **auth → chat-collector**: auth 탈퇴 정리가 `COLLECTOR_BASE_URL`
     (`http://chat-collector.pokeclip.internal:8083`)을 부릅니다. 그 SG 짝(auth
@@ -61,6 +65,17 @@ clip ↔ auth · RDS ← auth · clip · 로드밸런서 → Media 규칙은 위
 
 *   **rewind 버킷 이름**: media 는 이름 출력을 따로 받지 않고
     `rewind_bucket_arn`(`arn:aws:s3:::<이름>`)에서 꺼냅니다.
+*   **rewind 버킷 CORS — 경로마다 붙이는 쪽이 다릅니다**: 이 버킷은 조각
+    창고를 겸합니다(아래 「조각 창고의 CORS 규칙」 과 같은 버킷). 되감기 ·
+    VOD 를 media 배포의 `/dvr/*` · `/vod/*` 로 받을 때는 그 비헤이비어의 응답
+    헤더 정책(media-cors, `origin_override = true`)이 CORS 응답 헤더를
+    붙입니다 — edge 몫이고 버킷 CORS 규칙에 기대지 않습니다. 브라우저가 clip
+    이 서명한 조각 주소로 S3 에 직접 갈 때는 런타임의 버킷 CORS 규칙이
+    붙입니다(아래). edge 는 그 규칙을 지우거나 대신 두지 않습니다. CDN 경로는
+    플레이어 요청이 사용자 정의 헤더 없는 GET 이라 사전 요청(OPTIONS)이
+    없다는 전제이고(허용 헤더 기본 `["range"]` — 빈 목록은 provider 가 못
+    받음 · 사전 요청 0 전제는 G14 그대로), T1 · T10 에서 OPTIONS 가 생기면
+    다시 봅니다.
 *   **비밀 암호화 키**: 앱 비밀 그릇은 기본 KMS 키(`aws/secretsmanager`)를
     전제합니다. 고객 관리 키로 바꾸면 그 비밀을 읽는 실행 역할(platform)에
     그 키의 `kms:Decrypt` 를 더해야 합니다 — 같은 PR 에서 platform 도
@@ -84,8 +99,18 @@ clip ↔ auth · RDS ← auth · clip · 로드밸런서 → Media 규칙은 위
 | clip | `clips_bucket_arn` | `arn:aws:s3:::<버킷>` | `s3:GetObject` · `PutObject` · `DeleteObject`(`/*`) · `s3:ListBucket`(버킷) |
 | clip | `segment_bucket_arn` | `arn:aws:s3:::<버킷>` | `s3:DeleteObject` · `GetObject`(`/*`) |
 
-런타임은 지금 clip 의 `broadcast_queue_arn` 하나만 냅니다. 나머지 키는 그
-자원을 만드는 런타임 다음 PR(POK-408)이 더합니다(kty 2026-10-23).
+런타임은 위 키 아홉(auth 하나 · clip 여덟)을 모두 냅니다 — 일 큐 · clips ·
+프로필 사진 버킷은 런타임 1단-다(POK-408 · POK-427)가 만듭니다. segment 창고는
+rewind 버킷입니다(사이드카가 조각을 rewind 에 올립니다 — 새 버킷 없음). 썸네일
+DLQ 는 키를 내지 않습니다(clip 이 읽지 않음).
+
+*   `segment_bucket_arn` 의 `s3:DeleteObject` · `GetObject` 는 버킷
+    전체(`/*`)라 clip 이 목록 객체(`dvr/<방송>/<세션>/index.m3u8`)까지 지우고
+    읽을 수 있습니다. 지우기를 좁힐 대상은 탈퇴 정리가 지우는
+    셋(`streams/*` · `dvr/*/init/*` · `dvr/*/seg/*`)이고, 읽기는 미리 듣기가
+    서명하는 원본 조각(`streams/*`)입니다. 좁히는 일은 platform 후속입니다.
+    런타임 2단의 rewind 버킷 정책(OAC)이 작업 역할을 막는 Deny 를 두지 않아야
+    합니다.
 
 *   auth 의 스트림 키 비밀(이름 = 접두 + UUID, auth 가 만든다)은 런타임
     자원이 아닙니다. platform 이 접두 `pokeclip/prod/stream-key/` 로 정책 ·
@@ -93,12 +118,33 @@ clip ↔ auth · RDS ← auth · clip · 로드밸런서 → Media 규칙은 위
 *   큐 · 버킷은 SSE-SQS · SSE-S3(AWS 관리 키)를 전제합니다. 고객 관리 KMS
     키면 작업 역할에 그 키 권한이 더 필요합니다 — platform 과 같은 PR 에서
     고칩니다.
-*   **조각 창고(`segment_bucket_arn`)에는 CORS 규칙이 있어야 합니다** —
-    앱 출처(`https://<app_host>`, 기본 `app.pokeclip.com`)에 `GET` · `HEAD`
-    를 허락하는 규칙. 편집기의 트랙별 미리 듣기가 clip 이 서명한 조각 주소를
-    브라우저 `fetch` 로 받습니다(POK-389). 창고는 런타임 1단이 만들므로
-    규칙도 런타임 몫이고, 없으면 `SegmentRead` 권한이 있어도 브라우저가
-    응답을 막아 미리 듣기가 「못 불러왔어요」로만 뜹니다.
+*   **조각 창고(`segment_bucket_arn`)의 CORS 규칙은 런타임이 둡니다** —
+    앱 출처(런타임 변수 `app_origin`, 기본 `https://app.pokeclip.com`)에
+    `GET` · `HEAD` 만 허락하는 규칙 하나(`prod/runtime/rewind_bucket.tf`).
+    편집기의 트랙별 미리 듣기가 clip 이 서명한 조각 주소를 브라우저
+    `fetch` 로 받습니다(POK-389). 규칙이 없으면 `SegmentRead` 권한이 있어도
+    브라우저가 응답을 막아 미리 듣기가 「못 불러왔어요」로만 뜹니다. 앱
+    호스트를 바꾸면 `app_origin` 과 platform 의 `app_host` ·
+    `cors_allowed_origins` 를 함께 바꿉니다.
+
+### 일꾼 작업 역할 대상
+
+일꾼 render · upload 의 키입니다. 런타임은 ARN 만 내고, 일꾼 서비스 · 작업
+역할 · SG 규칙은 일꾼을 배치하는 루트(POK-408 배치 PR — 루트는 그 PR 이
+정합니다)가 만듭니다. 키 이름은 clip 의 같은 키와 같은 자원입니다. 동작은
+코드가 실제로 부르는 것뿐입니다(근거 파일:행).
+
+| 서비스 | 키 | 붙일 동작 | 근거 |
+|---|---|---|---|
+| render | `render_queue_arn` · `thumbnail_queue_arn` | `sqs:ReceiveMessage` · `DeleteMessage` · `ChangeMessageVisibility` | `workers/render` `QueueWorker.java` 104 · 132 · 134 · 158 |
+| render | `segment_bucket_arn` · `clips_bucket_arn` | `s3:GetObject`(`/*`) · `s3:ListBucket`(버킷) | `S3Store.java` 39 · 41-47 — ListBucket 이 없으면 없는 조각이 404 가 아니라 403 이 되어 `SOURCE_EXPIRED` 대신 일시 실패로 세 번 돈 뒤 DLQ 로 간다 |
+| render | `clips_bucket_arn` | `s3:PutObject` · `DeleteObject`(`/*`) | `S3Store.java` 56 · 74 |
+| upload | `upload_queue_arn` | `sqs:ReceiveMessage` · `DeleteMessage` · `ChangeMessageVisibility` | `workers/upload` `QueueWorker.java` 113 · 144 · 146 · 162 |
+| upload | `clips_bucket_arn` | `s3:GetObject`(`/*`) | `S3Download.java` 24. ListBucket 은 두지 않는다 — 영상 받기 실패는 예외를 가리지 않고 일시 실패로(`UploadProcessor.java` 162-167), 썸네일은 403 도 「없음」 으로 본다(`ThumbnailStep.java` 95-98) |
+
+*   일꾼의 주소 env(`CLIP_BASE_URL` · upload 의 `AUTH_BASE_URL` — Cloud Map
+    이름)와 SG 규칙(render · upload → clip 8081, upload → auth 8082)도 배치
+    루트가 넣습니다.
 
 ### platform 이 정하는 env
 
@@ -172,18 +218,22 @@ clip 의 큐 수신 스위치 `BROADCAST_INTAKE_ENABLED` 는 이 목록에 없�
 | auth | `SOOP_CLIENT_ID` · `SOOP_REDIRECT_URI` | `app_env` | 빈 값 | 비밀 `SOOP_CLIENT_SECRET` 은 `app_secret_arns`. 치지직과 같다 |
 | auth | `PROFILE_PHOTO_S3_BUCKET` · `PROFILE_PHOTO_BASE_URL` | `app_env` | 빈 값 | 버킷이 비면 사진 기능이 꺼진다. 버킷은 「작업 역할 대상」 `profile_photo_bucket_arn` 과 같은 것 |
 | auth | `PROFILE_PHOTO_TOKEN_SECRET` | `app_secret_arns` | 빈 값 | 버킷이 있는데 비면 부팅 거부. `JWT_SECRET` 과 다른 값 |
-| auth | `STREAM_KEY_RESOLVE_ALLOWED_CIDRS` | `app_env` | 빈 값 | resolve 전용 창구(계약4 4C)의 허용 대역. 아래 토큰이 있으면 필수 — 비면 부팅 거부, platform plan 도 멈춘다 |
-| auth | `STREAM_KEY_RESOLVE_TOKEN` | `app_secret_arns` | 빈 값 | 비면 resolve 전용 창구가 닫힌다(auth 는 뜬다) |
+| auth | `STREAM_KEY_RESOLVE_ALLOWED_CIDRS` | `app_env` | 빈 값 | resolve 전용 창구(계약4 4C)의 허용 대역. 아래 토큰이 있으면 필수 — 비면 부팅 거부, platform plan 도 멈춘다. prod 값 = Media 프라이빗 서브넷 CIDR(런타임이 network `media_private_subnet_id` 로 조회) |
+| auth | `STREAM_KEY_RESOLVE_TOKEN` | `app_secret_arns` | 빈 값 | 비면 resolve 전용 창구가 닫힌다(auth 는 뜬다). prod 는 런타임이 준다(POK-429 — Media 응답기와 같은 그릇) |
 | auth | `FORWARD_HEADERS_TRUSTED_PROXIES` | platform | Boot 기본 신뢰 대역 | 값 = network `vpc_cidr`. 런타임은 넣지 않는다 |
 | clip | `BROADCAST_INTAKE_ENABLED` · `BROADCAST_QUEUE_URL` | `app_env` | `false` · 빈 값 | 켜면 URL 필수. 큐는 `broadcast_queue_arn` 과 같은 것 |
 | clip | `BROADCAST_REAPER_ENABLED` · `_INTERVAL` · `_GRACE` | `app_env`(선택) | `false` · `PT1M` · `PT30M` | 켜는 것은 운영자 결정. 켰는데 `stream_segments` 표가 없으면 부팅 거부 |
-| clip | `RENDER_ENABLED` · `RENDER_QUEUE_URL` · `RENDER_DLQ_URL` · `CLIPS_BUCKET` · `SEGMENT_BUCKET` | `app_env` | `false` · 빈 값 | 켜면 넷 필수. 큐 · 버킷은 「작업 역할 대상」 의 같은 이름 ARN 과 짝 |
-| clip | `UPLOAD_ENABLED` · `UPLOAD_QUEUE_URL` · `UPLOAD_DLQ_URL` | `app_env` | `false` · 빈 값 | 켜면 둘 필수 |
+| clip | `RENDER_ENABLED` · `RENDER_QUEUE_URL` · `RENDER_DLQ_URL` · `CLIPS_BUCKET` · `SEGMENT_BUCKET` | `app_env` | `false` · 빈 값 | 켜면 넷 필수. 큐 · 버킷은 「작업 역할 대상」 의 같은 이름 ARN 과 짝. 스위치 셋은 런타임 변수 `clip_job_features`(기본 셋 다 `"true"`)이고, 큐 주소 · 창고 이름은 스위치와 무관하게 늘 준다 — 한쪽이 꺼진 배포의 탈퇴 정리가 두 창고 이름으로 지운다 |
+| clip | `UPLOAD_ENABLED` · `UPLOAD_QUEUE_URL` · `UPLOAD_DLQ_URL` | `app_env` | `false` · 빈 값 | 켜면 둘 필수. `RENDER_ENABLED` 와 둘 다 `"false"` 인 값은 런타임 plan 이 거부한다 — clip 의 창고 지우기가 render 또는 upload 가 켜져야 생겨, 둘 다 끄면 탈퇴 정리가 rewind 녹화 조각을 지우지 않은 채 완료된다 |
 | clip | `THUMBNAIL_ENABLED` · `THUMBNAIL_QUEUE_URL` | `app_env` | `false` · 빈 값 | 켜면 URL 필수 |
 | clip | `RENDER_RECONCILE_INTERVAL` · `UPLOAD_RECONCILE_INTERVAL` · `THUMBNAIL_INTERVAL` · `PLAYBACK_ACCESS_TTL` | `app_env`(선택) | `PT1M` · `PT1M` · `PT1M` · `PT60M` | |
 | clip | `COLLECTOR_BASE_URL` | platform | 빈 값 | 값 = auth 와 같은 `http://chat-collector.pokeclip.internal:8083`. 비어도 부팅하지만 채팅 문 셋이 503 이다 |
 | auth · clip | `AWS_REGION` | 넣지 않아도 됨 | `ap-northeast-2` | 기본값이 prod 리전과 같다 |
 | auth · clip | `*_ENDPOINT` · `PROFILE_PHOTO_S3_FORCE_PATH_STYLE` | 넣지 않음 | 빈 값 · `false` | 로컬 호환 스토리지 전용. 비면 실제 AWS |
+| render | `RENDER_QUEUE_URL` · `THUMBNAIL_QUEUE_URL` · `RENDER_VISIBILITY_TIMEOUT` · `THUMBNAIL_VISIBILITY_TIMEOUT` | `app_env`(배치 루트가 읽음) | 빈 값 · 빈 값 · `600s` · `120s` | 숨김은 큐의 숨김 시간과 같은 상수에서 만든다(`job_queues.tf` — 한쪽만 바꾸면 깨짐). DB 키는 없다 |
+| upload | `UPLOAD_QUEUE_URL` · `UPLOAD_VISIBILITY_TIMEOUT` | `app_env`(배치 루트가 읽음) | 빈 값 · `900s` | 숨김은 render 와 같다 |
+| render · upload | `INTERNAL_API_TOKEN` | `app_secret_arns`(배치 루트가 읽음) | 빈 값 | 비면 부팅 거부. 앱 서버 넷과 같은 그릇 |
+| render · upload | `CLIP_BASE_URL` · upload 의 `AUTH_BASE_URL` | 배치 루트 | `http://localhost:8081` · `http://localhost:8082` | Cloud Map 이름. 빠뜨리면 localhost 로 붙는다 |
 | next | (없음) | 넣지 않음 | — | 서버 주소 · `NEXT_PUBLIC_*` 는 이미지 빌드 인자로 굳는다(`web/Dockerfile`). `MEDIA_PLAYBACK_ORIGIN` 을 넣으면 로컬 전용 녹화 전달 라우트가 열린다 |
 
 *   `*_ENDPOINT` 는 `PROFILE_PHOTO_S3_ENDPOINT` · `BROADCAST_QUEUE_ENDPOINT` ·
@@ -201,8 +251,13 @@ clip 의 큐 수신 스위치 `BROADCAST_INTAKE_ENABLED` 는 이 목록에 없�
 ### 응답기 비밀
 
 `media_secret_arns` 의 소비자는 Media 상자의 `ingest-auth`(응답기)
-컨테이너입니다. 시작 스크립트가 값을 tmpfs 파일로 렌더하고, 응답기는 **파일
-경로**로 받습니다. 환경변수로 넘기지 않습니다.
+컨테이너입니다. 원소는 resolve 전용 토큰 그릇
+`pokeclip/prod/stream-key-resolve-token` 하나이고, 응답기는 이름 있는 출력
+`ingest_auth_resolve_token_secret_arn` 으로 그 그릇을 찾습니다(`media.env`
+의 `STREAM_KEY_RESOLVE_TOKEN_SECRET_ARN` — 키 정의 · 읽기 = M15, 렌더 =
+M9(user_data)). 시작
+스크립트가 값을 tmpfs 파일로 렌더하고, 응답기는 **파일 경로**로 받습니다.
+환경변수로 넘기지 않습니다.
 
 ### DB 접속(IAM DB 인증)
 
@@ -281,8 +336,10 @@ prod 루트와 같은 규약을 씁니다(계획 3절 「한 계정 규약」). 
 |---|---|---|
 | RDS(인스턴스 · 서브넷 그룹 · 파라미터 그룹) · RDS SG | 접두 `pokeclip-prod-` | `pokeclip-prod-db`(인스턴스 · 서브넷 그룹) · `pokeclip-prod-pg17`(파라미터 그룹) · `pokeclip-prod-rds`(SG) |
 | rewind 버킷 | 접두 `pokeclip-prod-`(버킷 이름은 전역) | `pokeclip-prod-rewind-apne2`(변수 `rewind_bucket_name` 기본값) |
+| clips · 프로필 사진 버킷 | 접두 `pokeclip-prod-`(버킷 이름은 전역) | `pokeclip-prod-clips-apne2` · `pokeclip-prod-profile-photos-apne2`(변수 `clips_bucket_name` · `profile_photo_bucket_name` 기본값) |
+| 일 큐 · DLQ | 접두 `pokeclip-prod-` | `pokeclip-prod-jobs-{render,thumbnail,upload}`(표준 큐) · `pokeclip-prod-jobs-{render,thumbnail,upload}-dlq` |
 | SNS 주제 · SQS 큐 | 접두 `pokeclip-prod-` | `pokeclip-prod-broadcast-lifecycle.fifo`(주제) · `pokeclip-prod-broadcast-lifecycle-{clip,chat}.fifo`(큐) · `pokeclip-prod-broadcast-lifecycle-{clip,chat}-dlq.fifo`(DLQ) |
-| 앱 비밀 | `pokeclip/prod/<용도>` | `pokeclip/prod/{jwt-secret,secret-store-key,internal-api-token,google-client-secret,youtube-client-secret,chzzk-client-secret,profile-photo-token-secret}` |
+| 앱 비밀 | `pokeclip/prod/<용도>` | `pokeclip/prod/{jwt-secret,secret-store-key,internal-api-token,google-client-secret,youtube-client-secret,chzzk-client-secret,profile-photo-token-secret,soop-client-secret,stream-key-resolve-token}` |
 | IAM 역할 · 정책 · 인스턴스 프로필 | 접두 `pokeclip-prod-` + 경로 `/pokeclip/prod/` | 역할 · 인스턴스 프로필 `/pokeclip/prod/pokeclip-prod-sql-runner` · 인라인 정책 `pokeclip-prod-sql-runner-master-secret`(SQL 실행기가 켜진 동안만) |
 | SQL 실행기(EC2 · SG) | 접두 `pokeclip-prod-` | SG `pokeclip-prod-sql-runner` · 인스턴스 `Name` 태그 `pokeclip-prod-sql-runner`(켜진 동안만) |
 | RDS 관리형 마스터 비밀(규약의 예외) | 이름을 RDS 가 정함 | `rds!db-<식별자>` |

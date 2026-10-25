@@ -6,8 +6,14 @@
 #
 # 인자 없음: `docker compose … down` 으로 프로젝트를 내리고, down 의 결과와
 #   상관없이 tmpfs 의 렌더 파일 둘(CDN 비밀 · API 비밀번호가 든 mediamtx.yml ·
-#   사이드카의 mtx_api_pass)과 시작 스크립트가 남겼을 수 있는 임시 파일을
-#   지운다. down 의 종료 코드를 돌려준다. down 인자는 `down`
+#   사이드카의 mtx_api_pass), 응답기 모드의 비밀 파일 셋(RUNTIME_DIR/ingest-auth
+#   의 ingest_basic_pass · mtx_api_pass · stream_key_resolve_token)과 시작
+#   스크립트가 남겼을 수 있는 임시 파일을 지운다. 응답기 디렉터리 자체와 그 안의
+#   상태 디렉터리, 거부 목록(/var/lib 쪽)은 남긴다 — 비밀이 아니고, 상태는 다음
+#   기동이 이어 쓰며 거부 목록은 다음 기동이 SSM 에서 다시 받는다. 응답기
+#   디렉터리가 링크면 따라가 지우지 않고 실패로 적는다(시작 스크립트도 받지
+#   않는다).
+#   down 의 종료 코드를 돌려준다. down 인자는 `down`
 #   하나로 고정한다 — 볼륨(녹화 · 훅 스풀 · DVR)은 지우지 않는다.
 #   down 이 실패하면(compose 파일이 깨져 읽지 못하는 경우 포함) compose 파일
 #   없이 프로젝트 라벨로 남은 컨테이너를 찾아 지운다 — 남으면 옛 렌더(옛
@@ -22,13 +28,18 @@
 #
 # 기본값은 시작 스크립트와 같다(MEDIA_COMPOSE_PROJECT · MEDIA_COMPOSE_FILE ·
 # RUNTIME_DIR). RUNTIME_DIR 이 절대 경로가 아니면 아무것도 하지 않고 「MEDIA STOP
-# FAIL runtime-dir」 로 끝난다. 지운 뒤 남은 파일이 있으면 「MEDIA STOP CLEANUP
-# FAIL」 을 내고 0 아닌 코드로 끝난다.
+# FAIL runtime-dir」 로 끝난다. 지운 뒤 남은 파일이 있으면 그 디렉터리마다
+# 「MEDIA STOP CLEANUP FAIL <디렉터리>」 를 내고 0 아닌 코드로 끝난다.
 
 set -euo pipefail
 
 # 시작 스크립트가 RUNTIME_DIR 에 두는 파일 이름(임시 파일은 .<이름>.XXXXXX).
 readonly RENDER_NAMES=(mediamtx.yml mtx_api_pass)
+# 응답기 모드에서 RUNTIME_DIR/ingest-auth 에 두는 비밀 파일 이름(임시 파일 꼴은
+# 위와 같다).
+readonly INGEST_AUTH_DIR_NAME='ingest-auth'
+readonly INGEST_AUTH_NAMES=(ingest_basic_pass mtx_api_pass
+  stream_key_resolve_token)
 # 폴백의 docker 호출(ps · rm) 한 번의 상한(초).
 readonly FALLBACK_TIMEOUT=10
 
@@ -38,15 +49,17 @@ fallback_pid=""
 fallback_out=""
 
 #######################################
-# 렌더 파일과 임시 렌더 파일을 지우고 0건인지 본다.
+# 디렉터리 하나에서 정한 이름의 파일과 그 임시 파일을 지우고 0건인지 본다.
+# 디렉터리가 없으면 0건이다.
 # Arguments:
-#   RUNTIME_DIR.
+#   디렉터리, 파일 이름 ….
 # Returns:
 #   0 남은 것 없음 / 1 남음.
 #######################################
 remove_rendered() {
   local dir="$1" name f left=0 paths=()
-  for name in "${RENDER_NAMES[@]}"; do
+  shift
+  for name in "$@"; do
     paths+=("${dir}/${name}" "${dir}/.${name}".*)
   done
   for f in "${paths[@]}"; do
@@ -63,17 +76,25 @@ remove_rendered() {
 }
 
 #######################################
-# 렌더를 지우고 실패하면 그 줄을 낸다.
+# 렌더 · 응답기 비밀 파일을 지우고, 남은 디렉터리마다 실패 줄을 낸다.
 # Arguments:
 #   RUNTIME_DIR.
 # Returns:
 #   0 남은 것 없음 / 1 남음.
 #######################################
 cleanup_rendered() {
-  if ! remove_rendered "$1"; then
+  local ia="$1/${INGEST_AUTH_DIR_NAME}" status=0
+  if ! remove_rendered "$1" "${RENDER_NAMES[@]}"; then
     printf 'MEDIA STOP CLEANUP FAIL %s\n' "$1"
-    return 1
+    status=1
   fi
+  # 링크면 가리키는 곳의 같은 이름 파일을 지우게 되므로 손대지 않는다.
+  if [[ -L "${ia}" ]] || ! remove_rendered "${ia}" "${INGEST_AUTH_NAMES[@]}"
+  then
+    printf 'MEDIA STOP CLEANUP FAIL %s\n' "${ia}"
+    status=1
+  fi
+  return "${status}"
 }
 
 #######################################

@@ -21,6 +21,7 @@ import {
 } from '@/features/broadcast/livenow/liveDataStore';
 import { forgetLiveStreamId } from '@/features/broadcast/streamSelection';
 import { useAuthStore } from '@/stores/auth';
+import { useChannelStore } from '@/stores/channel';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
 import { fakeScrollMetrics } from '@/test/scrollMetrics';
 import { renderWithProviders } from '@/test/testProviders';
@@ -401,13 +402,27 @@ const server = vi.hoisted(() => ({
   sseDonations: null as Record<string, unknown>[] | null,
   /** 채팅 창구 답에 SOOP 별풍선 후원 한 줄을 더한다(POK-431) */
   soopDonation: false,
+  /** 한 방송을 치지직 · SOOP에 같이 내보낸 채팅 창구 답(POK-466). 두 플랫폼에서 같은 글이 같은 시각에 온 줄까지 싣는다 */
+  dualPlatformChat: false,
   live: true,
   failLive: false,
   relation: 'OWNER',
   /** 나중에 생긴 카드: 다음 목록 읽기부터 실린다 */
   extraCards: [] as Card[],
-  /** 옛 서버처럼 점유·숨김 칸(claimedBy·hidden)을 실어 보낸다(POK-393 배포 사이) */
+  /** 옛 서버처럼 점유 칸(claimedBy)을 실어 보낸다(POK-393 배포 사이) */
   legacyFields: false,
+  /** 가린 카드 번호와 그 카드의 순번(POK-463). 목록은 includeHidden일 때만 hidden:true로 싣는다(서버 기본은 뺀다) */
+  hidden: new Map<number, number>(),
+  /** 되살린 카드의 순번(가리기·되살리기마다 순번이 오른다) */
+  touched: new Map<number, number>(),
+  /** 이것이 풀릴 때까지 카드 목록 답을 붙든다. 답은 요청을 받은 때의 상태다 */
+  cardsGate: null as Promise<void> | null,
+  /** 이것이 풀릴 때까지 가리기(POST) 답을 붙든다. 서버 상태는 요청을 받은 때 바뀐다 */
+  hideGate: null as Promise<void> | null,
+  /** 가리기·되살리기 문이 503이다 */
+  hideFail: false,
+  /** 마지막으로 카드 목록을 읽은 방송 */
+  cardsStream: '',
   chatPaged: false,
   /** 후원 줄의 서버 id를 첫 채팅 id와 같게 준다: 채팅·후원은 표가 달라 번호가 겹친다(POK-254) */
   chatIdClash: false,
@@ -444,6 +459,8 @@ const server = vi.hoisted(() => ({
    * 고르는 질의(limit=1)는 붙들지 않는다
    */
   listGate: null as Promise<void> | null,
+  /** 방송 번호를 고르는 질의(limit=1)의 답을 이 약속이 풀릴 때까지 붙든다: 방송을 정하기 전의 화면을 잰다(POK-445) */
+  pickGate: null as Promise<void> | null,
   /** 「방송 중」 목록의 방송이 위임받은 다른 방송(live-2, EDITOR)으로 바뀌었다 */
   liveStream2: false,
   /** since를 단 방송 정보 조회만 실패한다 */
@@ -456,6 +473,20 @@ const server = vi.hoisted(() => ({
   chartRecentGate: null as Promise<void> | null,
   /** 방송 정보에 최신 관측이 없다(수집기가 그 방송을 한 번도 못 쟀다) */
   infoNoLatest: false,
+  /** 라이브 방송을 막 켰다: 시작 시각이 시험 시작(NOW)에서 4초 전이다(POK-449, 방송 정보를 받아 오는 중) */
+  liveJustStarted: false,
+  /** 라이브 방송의 스트리머 번호(POK-457). 정하면 다른 채널(streamerId)로 물은 목록에는 이 방송이 없다 */
+  liveOwnerId: null as number | null,
+  /** 내 프로필 사진(POK-457). me 응답에 싣는다 */
+  myPhoto: null as string | null,
+  /** 내가 편집자로 붙은 채널(as-editor). 위임받은 방송의 스트리머 사진을 여기서 읽는다(POK-457) */
+  asEditor: [] as {
+    id: number;
+    counterpartId: number;
+    counterpartName: string;
+    counterpartProfileImageUrl: string | null;
+    grantedAt: string;
+  }[],
   /** 지난 방송 채팅을 VOD_CHAT으로 준다(영상 축으로 묻고 표 축으로 답한다, 쪽·커서까지) */
   vodChat: false,
   /** vodChat 답을 이 약속이 풀릴 때까지 붙든다 */
@@ -486,8 +517,10 @@ const server = vi.hoisted(() => ({
   liveOffsetMs: 0,
   /** 라이브 줄에 시작 시각이 없고 시각 기준점만 있다(명부가 시작을 모르는 라이브) */
   liveStartUnknown: false,
-  /** 수집기가 관측마다 카테고리를 싣는다(아직 안 싣는다 — 실으면 통계가 바뀐 구간을 나눈다) */
+  /** 수집기가 관측마다 카테고리를 싣는다(POK-402) — 통계가 바뀐 구간을 나눈다 */
   infoCategoryChange: false,
+  /** 시점별 기록 창구(POK-462)의 구간들. null이면 그 창구가 없는 옛 서버다(404) */
+  timeline: null as Record<string, unknown>[] | null,
   /**
    * SOOP로만 켠 방송(POK-397): 치지직은 앞서 켰다가 꺼져 묶음에만 남았다. 플랫폼 구분 없는 가장 새 관측(latest)은 치지직 줄이고
    * 시청자 기록에는 두 플랫폼 점이 섞여 있다
@@ -620,7 +653,9 @@ function listResponse(u: URL): Response {
     streamId: server.liveStream2 ? 'live-2' : STREAM_ID,
     status: 'live',
     relation: server.liveStream2 ? 'EDITOR' : server.relation,
-    startedAt: server.liveStartUnknown ? null : new Date(STARTED_AT).toISOString(),
+    startedAt: server.liveStartUnknown
+      ? null
+      : new Date(server.liveJustStarted ? NOW - 4_000 : STARTED_AT).toISOString(),
     endedAt: null,
     ...(server.liveStartUnknown || server.liveOriginMs !== null
       ? { timelineOriginAt: new Date(server.liveOriginMs ?? STARTED_AT).toISOString() }
@@ -649,8 +684,11 @@ function listResponse(u: URL): Response {
       nextCursor: null,
     });
   }
+  const asked = u.searchParams.get('streamerId');
+  const otherChannel =
+    asked !== null && server.liveOwnerId !== null && Number(asked) !== server.liveOwnerId;
   return jsonResponse(200, {
-    broadcasts: live && !server.liveEnded ? [row] : [],
+    broadcasts: live && !server.liveEnded && !otherChannel ? [row] : [],
     nextCursor: null,
   });
 }
@@ -711,10 +749,10 @@ function handle(url: string, init?: RequestInit): Response | Promise<Response> {
   const u = new URL(url, 'http://localhost');
   const path = u.pathname;
   if (u.host === 'live.test') return new Response(null, { status: server.liveStatus });
-  if (path === '/api/clip/broadcasts')
-    return server.listGate && u.searchParams.get('limit') !== '1'
-      ? server.listGate.then(() => listResponse(u))
-      : listResponse(u);
+  if (path === '/api/clip/broadcasts') {
+    const gate = u.searchParams.get('limit') === '1' ? server.pickGate : server.listGate;
+    return gate ? gate.then(() => listResponse(u)) : listResponse(u);
+  }
   if (path.endsWith('/marks') && init?.method === 'POST') {
     server.markBodies.push(JSON.parse(String(init.body)) as Record<string, unknown>);
     const reply = () => {
@@ -723,14 +761,37 @@ function handle(url: string, init?: RequestInit): Response | Promise<Response> {
     };
     return server.markGate ? server.markGate.then(reply) : reply();
   }
+  if (path.endsWith('/hide')) {
+    if (server.hideFail) return jsonResponse(503, { error: 'authorization_unavailable' });
+    const id = Number(path.split('/')[4]);
+    // 카드는 화면이 지금 보는 방송의 것이다: 시험 카드는 방송 번호를 하나만 갖고 있어 마지막으로 목록을 읽은 방송으로 싣는다
+    const target = {
+      ...[...CARDS, ...server.extraCards].find((c) => c.id === id)!,
+      streamId: server.cardsStream,
+    };
+    const seq = 1_000 + server.hidden.size + server.touched.size;
+    if (init?.method === 'DELETE') {
+      server.hidden.delete(id);
+      server.touched.set(id, seq);
+    } else server.hidden.set(id, seq);
+    const reply = () =>
+      jsonResponse(200, { ...target, eventSeq: seq, hidden: init?.method !== 'DELETE' });
+    return server.hideGate && init?.method !== 'DELETE' ? server.hideGate.then(reply) : reply();
+  }
   if (path.endsWith('/jump-cards')) {
     if (server.cards === 'fail') return jsonResponse(503, { error: 'unavailable' });
-    const cards = server.cards === 'none' ? [] : [...CARDS, ...server.extraCards];
-    return jsonResponse(200, {
-      cards: server.legacyFields
-        ? cards.map((c) => ({ ...c, hidden: true, claimedBy: '99' }))
-        : cards,
-    });
+    server.cardsStream = path.split('/')[4]!;
+    const withHidden = u.searchParams.get('includeHidden') === 'true';
+    const cards = (server.cards === 'none' ? [] : [...CARDS, ...server.extraCards])
+      .map((c) => ({
+        ...c,
+        eventSeq: server.hidden.get(c.id) ?? server.touched.get(c.id) ?? c.eventSeq,
+        hidden: server.hidden.has(c.id),
+      }))
+      .filter((c) => withHidden || !c.hidden)
+      .map((c) => (server.legacyFields ? { ...c, claimedBy: '99' } : c));
+    const reply = () => jsonResponse(200, { cards });
+    return server.cardsGate ? server.cardsGate.then(reply) : reply();
   }
   if (path.endsWith('/chat-chart') && server.chartRecentGate) {
     const gate = server.chartRecentGate;
@@ -781,6 +842,10 @@ function handle(url: string, init?: RequestInit): Response | Promise<Response> {
       return jsonResponse(200, liveChartPage(u, liveBuckets, server.liveOffsetMs));
     return jsonResponse(200, { ...CHART, appliedOffsetMs: server.liveOffsetMs });
   }
+  if (path.endsWith('/broadcast-info/timeline'))
+    return server.timeline === null
+      ? jsonResponse(404, { error: 'not_found' })
+      : jsonResponse(200, { segments: server.timeline, truncated: false });
   if (path.endsWith('/broadcast-info')) {
     if (server.infoFail) return jsonResponse(503, { error: 'unavailable' });
     const noSince = u.searchParams.get('since') === null;
@@ -802,6 +867,23 @@ function handle(url: string, init?: RequestInit): Response | Promise<Response> {
         nextCursor: null,
         appliedOffsetMs: 0,
       });
+    if (server.dualPlatformChat) {
+      const both = {
+        kind: 'chat',
+        time: chatAt(30),
+        senderChannelId: 'same',
+        text: '같은 글',
+        amount: null,
+      };
+      return jsonResponse(200, {
+        items: [
+          { ...both, id: 1, nickname: '치지직팬', platform: 'CHZZK' },
+          { ...both, id: 2, nickname: '숲시청자', platform: 'SOOP' },
+        ],
+        nextCursor: null,
+        appliedOffsetMs: 0,
+      });
+    }
     return jsonResponse(200, {
       items: server.soopDonation
         ? [
@@ -866,8 +948,9 @@ function handle(url: string, init?: RequestInit): Response | Promise<Response> {
       id: 9,
       email: 'me@example.com',
       name: '박편집',
-      profileImageUrl: null,
+      profileImageUrl: server.myPhoto,
     });
+  if (path === '/api/editor-delegations/as-editor') return jsonResponse(200, server.asEditor);
   return jsonResponse(404, { error: 'unexpected_call' });
 }
 
@@ -899,12 +982,17 @@ beforeEach(() => {
   server.infoFail = false;
   server.liveEnded = false;
   server.listGate = null;
+  server.pickGate = null;
   server.infoNoSinceGate = null;
   server.liveStream2 = false;
   server.infoSinceFail = false;
   server.infoNoViewers = false;
   server.chartRecentGate = null;
   server.infoNoLatest = false;
+  server.liveJustStarted = false;
+  server.myPhoto = null;
+  server.liveOwnerId = null;
+  server.asEditor = [];
   server.vodChat = false;
   server.vodChatGate = null;
   server.vodChatHoldBefore = null;
@@ -919,6 +1007,7 @@ beforeEach(() => {
   server.liveAsks = [];
   server.liveStartUnknown = false;
   server.infoCategoryChange = false;
+  server.timeline = null;
   server.infoSoop = false;
   server.soopNickname = null;
   server.channelNames = undefined;
@@ -953,11 +1042,18 @@ beforeEach(() => {
   server.sseInfo = null;
   server.sseDonations = null;
   server.soopDonation = false;
+  server.dualPlatformChat = false;
   server.live = true;
   server.failLive = false;
   server.relation = 'OWNER';
   server.extraCards = [];
   server.legacyFields = false;
+  server.hidden = new Map();
+  server.touched = new Map();
+  server.cardsGate = null;
+  server.cardsStream = '';
+  server.hideFail = false;
+  server.hideGate = null;
   server.chatPaged = false;
   server.chatIdClash = false;
   server.playback = 'off';
@@ -1018,6 +1114,12 @@ async function renderLive() {
   const result = renderWithProviders(<LiveScreen />);
   await settle();
   return result;
+}
+
+/** 맨 앞 카드(8번)를 가린다(POK-463) */
+async function 가린다() {
+  fireEvent.click(screen.getAllByRole('button', { name: '이 카드 가리기' })[0] as HTMLElement);
+  await settle();
 }
 
 /**
@@ -1128,6 +1230,75 @@ describe('LiveScreen — 방송 꺼짐', () => {
     expect(
       screen.queryByRole('heading', { name: '지금은 방송 중이 아니에요' }),
     ).not.toBeInTheDocument();
+  });
+});
+
+describe('LiveScreen — 방송을 정하기 전(POK-445)', () => {
+  /** 방송 번호를 고르는 답을 붙든다. 돌려준 함수를 부르면 푼다 */
+  function holdPick() {
+    let release = () => {};
+    server.pickGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    return () => release();
+  }
+
+  it('방송을 정하기 전에는 대시보드 대신 스켈레톤이다: 「방송 중이 아니에요」를 먼저 말하지 않는다', async () => {
+    // 빈 방송 번호로 대시보드를 세우면 시계가 「꺼짐」을 퍼뜨려 정보 바·채팅·플레이어가 꺼짐 말로 한 번 섰다가 바뀌었다
+    const release = holdPick();
+    await renderLive();
+
+    expect(screen.getAllByRole('status')).toHaveLength(1);
+    expect(screen.getByRole('status')).toHaveTextContent('라이브 대시보드를 불러오는 중');
+    expect(screen.queryByText('방송 중이 아니에요')).toBeNull();
+    expect(screen.queryByRole('button', { name: /수동 마킹/ })).toBeNull();
+    expect(chatModes).toEqual([]);
+
+    release();
+    await settle();
+    expect(screen.getByRole('button', { name: /수동 마킹/ })).toBeInTheDocument();
+    expect(screen.getByText('스트리밍 중')).toBeInTheDocument();
+    expect(screen.queryByText('라이브 대시보드를 불러오는 중')).toBeNull();
+    // 선 뒤로도 꺼짐 말로 그린 적이 없다
+    expect(chatModes).not.toContain('offline');
+    expect(playerStatuses).not.toContain('offline');
+  });
+
+  it('방송 목록을 못 읽으면 스켈레톤을 둔 채 10초마다 다시 묻고, 읽히면 대시보드가 선다', async () => {
+    server.failLive = true;
+    await renderLive();
+    expect(screen.getByRole('status')).toHaveTextContent('라이브 대시보드를 불러오는 중');
+    // 대시보드 훅(F8 문서 리스너)이 아직 없다
+    fireEvent.keyDown(document, { key: 'F8' });
+    await settle();
+    expect(server.markBodies).toHaveLength(0);
+
+    server.failLive = false;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    await settle();
+    expect(screen.getByRole('button', { name: /수동 마킹/ })).toBeInTheDocument();
+    expect(screen.queryByText('라이브 대시보드를 불러오는 중')).toBeNull();
+  });
+
+  it('지난 방송 상세는 주소가 방송을 못 박아 스켈레톤을 기다리지 않는다', async () => {
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    renderWithProviders(<LiveScreen />);
+
+    expect(screen.queryByText('라이브 대시보드를 불러오는 중')).toBeNull();
+    expect(screen.getByRole('button', { name: /이 시점 카드 추가/ })).toBeInTheDocument();
+    await settle();
+  });
+
+  it('스켈레톤에 접근성 위반이 없다', async () => {
+    holdPick();
+    const { container } = await renderLive();
+    // axe는 진짜 시계로 돈다 — 가짜 시계에서는 제 타이머를 기다리다 멈춘다
+    vi.useRealTimers();
+    await act(async () => {
+      expect(await axe(container)).toHaveNoViolations();
+    });
   });
 });
 
@@ -1929,17 +2100,114 @@ describe('LiveScreen — 하이라이트 카드', () => {
     expect(screen.getAllByRole('button', { name: '원클릭 업로드' })[0]).toBeDisabled();
   });
 
-  it('카드에는 편집만 있다: 모든 카드에 편집이 있고 놓기·숨기기·숨김 칩이 없다 (POK-393)', async () => {
+  it('모든 카드에 편집·가리기가 있고 놓기는 없다: 숨김 칸은 처음엔 0이다 (POK-393 · POK-463)', async () => {
     await renderLive();
 
     expect(screen.getAllByRole('link', { name: '편집' })).toHaveLength(8);
+    expect(screen.getAllByRole('button', { name: '이 카드 가리기' })).toHaveLength(8);
     const first = screen.getAllByRole('article')[0] as HTMLElement;
     expect(within(first).queryByRole('button', { name: '놓기' })).not.toBeInTheDocument();
-    expect(within(first).queryByRole('button', { name: '이 카드 숨기기' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /^숨김 / })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '숨김 0' })).toBeInTheDocument();
   });
 
-  it('점유·숨김 칸이 실린 옛 응답이 와도 카드가 다 보이고 「편집 중」이 아니다 (POK-393)', async () => {
+  it('가리면 숨김 칸으로 옮기고 다른 칸에서 빠지며, 되살리면 제 칸으로 돌아온다 (POK-463)', async () => {
+    await renderLive();
+
+    await 가린다();
+    expect(screen.queryByText('채팅이 튄 순간 #8')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '전체 7' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '자동 5' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '숨김 1' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '숨김 1' }));
+    expect(screen.getByText('채팅이 튄 순간 #8')).toBeInTheDocument();
+    // 가린 카드에는 편집·가리기가 없고 되살리기만 있다
+    expect(screen.queryByRole('link', { name: '편집' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '되살리기' }));
+    await settle();
+
+    expect(
+      fetchSpy.mock.calls.some(
+        ([url, init]) => url === '/api/clip/jump-cards/8/hide' && init?.method === 'DELETE',
+      ),
+    ).toBe(true);
+    expect(screen.getByRole('button', { name: '숨김 0' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '전체 8' }));
+    expect(screen.getByText('채팅이 튄 순간 #8')).toBeInTheDocument();
+  });
+
+  it('새로 열어도 가린 카드는 숨김 칸에 있다: 목록을 가린 카드까지 달라고 읽는다 (POK-463)', async () => {
+    server.hidden.set(8, 1_000);
+    await renderLive();
+
+    const lists = fetchSpy.mock.calls
+      .map(([url]) => new URL(String(url), 'http://localhost'))
+      .filter((u) => u.pathname.endsWith('/jump-cards'));
+    expect(lists.length).toBeGreaterThan(0);
+    for (const u of lists) expect(u.searchParams.get('includeHidden')).toBe('true');
+    expect(screen.getByRole('button', { name: '숨김 1' })).toBeInTheDocument();
+    expect(screen.queryByText('채팅이 튄 순간 #8')).not.toBeInTheDocument();
+  });
+
+  it('가리기 답보다 늦게 온 옛 목록이 카드를 제 칸으로 되돌리지 않는다 (POK-463)', async () => {
+    await renderLive();
+    let release!: () => void;
+    server.cardsGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    // 가리기 전에 떠난 목록 읽기(3초 주기)를 붙들어 둔다. 답은 가리기 전 상태다
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3_000);
+    });
+
+    await 가린다();
+    expect(screen.getByRole('button', { name: '숨김 1' })).toBeInTheDocument();
+    server.cardsGate = null;
+    release();
+    await settle();
+
+    expect(screen.getByRole('button', { name: '숨김 1' })).toBeInTheDocument();
+    expect(screen.queryByText('채팅이 튄 순간 #8')).not.toBeInTheDocument();
+  });
+
+  it('늦게 온 가리기 답이 그 뒤의 되살리기를 덮지 않는다: 같은 카드는 순번이 낮은 판을 버린다 (POK-463)', async () => {
+    await renderLive();
+    let release!: () => void;
+    server.hideGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    // 가리기 답을 붙든다. 서버는 이미 가렸으므로 다음 목록 읽기(3초)가 카드를 숨김 칸으로 옮긴다
+    fireEvent.click(screen.getAllByRole('button', { name: '이 카드 가리기' })[0] as HTMLElement);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3_000);
+    });
+    await settle();
+    expect(screen.getByRole('button', { name: '숨김 1' })).toBeInTheDocument();
+
+    server.hideGate = null;
+    fireEvent.click(screen.getByRole('button', { name: '숨김 1' }));
+    fireEvent.click(screen.getByRole('button', { name: '되살리기' }));
+    await settle();
+    expect(screen.getByRole('button', { name: '숨김 0' })).toBeInTheDocument();
+
+    release();
+    await settle();
+    expect(screen.getByRole('button', { name: '숨김 0' })).toBeInTheDocument();
+  });
+
+  it('가리지 못하면 알리고 카드는 제 칸에 남는다 (POK-463)', async () => {
+    await renderLive();
+    server.hideFail = true;
+
+    fireEvent.click(screen.getAllByRole('button', { name: '이 카드 가리기' })[0] as HTMLElement);
+    await settle();
+
+    expect(screen.getByText('카드를 가리지 못했어요')).toBeInTheDocument();
+    expect(screen.getByText('채팅이 튄 순간 #8')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '숨김 0' })).toBeInTheDocument();
+  });
+
+  it('점유 칸이 실린 옛 응답이 와도 카드가 다 보이고 「편집 중」이 아니다 (POK-393)', async () => {
     server.legacyFields = true;
     await renderLive();
 
@@ -2196,6 +2464,18 @@ describe('LiveScreen — 수동 마킹', () => {
     expect(track.mock.calls.some(([n]) => n === 'highlight_marked')).toBe(false);
   });
 
+  it('200의 앞 카드가 가린 카드면 숨김 칸에 있다고 알린다: 보이는 칸에 없어 실패한 것처럼 읽히지 않게 (POK-463)', async () => {
+    server.hidden.set(7, 1_000);
+    await renderLive();
+    server.markReply = { status: 200, body: { ...CARDS[1], eventSeq: 1_000, hidden: true } };
+
+    fireEvent.click(screen.getByRole('button', { name: /수동 마킹/ }));
+    await settle();
+
+    expect(screen.getByText('가까운 카드가 숨김 칸에 있어요')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '숨김 1' })).toBeInTheDocument();
+  });
+
   it('503 timeline_not_ready면 영상 기준을 못 정했다고 알리고 자리를 치운다', async () => {
     await renderLive();
     server.markReply = { status: 503, body: { error: 'timeline_not_ready' } };
@@ -2263,7 +2543,8 @@ describe('LiveScreen — 수동 마킹', () => {
   });
 
   it('방송 상태를 모르는 동안은 단추가 꺼져 있고 F8도 아무것도 안 보낸다', async () => {
-    server.failLive = true;
+    // 방송은 정했지만 명부가 답하지 않았다. 방송을 정하기 전에는 대시보드가 아직 서지 않는다(POK-445, 아래 「방송을 정하기 전」)
+    server.listGate = new Promise(() => undefined);
     await renderLive();
 
     expect(screen.getByRole('button', { name: /수동 마킹/ })).toBeDisabled();
@@ -2510,6 +2791,44 @@ describe('LiveScreen — 실시간 채팅 패널', () => {
     expect(screen.getByText('애드팬 · 애드벌룬 30개')).toBeInTheDocument();
   });
 
+  it('두 플랫폼 채팅이 섞이면 줄마다 어느 플랫폼인지 보인다: 같은 글이 같은 시각에 와도 하나로 접지 않는다(POK-466)', async () => {
+    server.dualPlatformChat = true;
+    await renderLive();
+
+    const chzzk = screen.getByText('치지직팬').closest('li')!;
+    const soop = screen.getByText('숲시청자').closest('li')!;
+    expect(within(chzzk).getByRole('img', { name: '치지직' })).toBeInTheDocument();
+    expect(within(soop).getByRole('img', { name: 'SOOP' })).toBeInTheDocument();
+  });
+
+  it('실시간 중계로 온 후원도 어느 플랫폼인지 보인다(POK-466)', async () => {
+    await renderLive();
+    server.sseDonations = [
+      {
+        seq: 1,
+        seqEpoch: 1,
+        kind: 'donation',
+        time: new Date(Date.now() - 1_000).toISOString(),
+        timeBasis: 'received',
+        nickname: '애드팬',
+        senderChannelId: 's10',
+        role: null,
+        text: '',
+        amount: 30,
+        donationType: 'ADBALLOON_GIFTED',
+        platform: 'SOOP',
+      },
+    ];
+    // 첫 통로는 용량 초과(503)라 60초 쉬고 다시 붙는다
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(61_000);
+    });
+    await settle();
+
+    const line = screen.getByText('애드팬 · 애드벌룬 30개').closest('li')!;
+    expect(within(line).getByRole('img', { name: 'SOOP' })).toBeInTheDocument();
+  });
+
   it('급증 키워드·후원·채팅 줄을 그린다', async () => {
     await renderLive();
 
@@ -2672,6 +2991,14 @@ describe('LiveScreen — 실시간 통계', () => {
     expect(screen.getByRole('button', { name: '수동 2' })).toBeInTheDocument();
   });
 
+  it('가린 카드는 지표에서도 빠진다: 칩과 같은 수다 (POK-463)', async () => {
+    await renderLive();
+
+    await 가린다();
+    expect(screen.getByText('자동 5 · 수동 2')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '자동 5' })).toBeInTheDocument();
+  });
+
   it('방송 중에도 그래프를 처음부터 1시간 창으로 나눠 읽고, 다 지난 창은 10초마다 다시 묻지 않는다: 시청자 기록도 시작부터다', async () => {
     await renderLive();
     const charts = () =>
@@ -2718,6 +3045,36 @@ describe('LiveScreen — 실시간 통계', () => {
     // 관측: 8분 전·5분 전 저스트 채팅, 1분 전 리그 오브 레전드. 처음 관측 앞은 모른다(띠를 지어내지 않는다)
     expect(screen.getByTitle('저스트 채팅 · 7분')).toBeInTheDocument();
     expect(screen.getByTitle(/^리그 오브 레전드 · /)).toBeInTheDocument();
+  });
+
+  it('실시간으로 온 관측의 카테고리도 띠를 나눈다: 정기 조회를 기다리지 않는다 (POK-465)', async () => {
+    // 통로가 관측을 이어 붙일 때 카테고리를 버리면 바뀐 카테고리가 다음 정기 조회까지 띠에 안 보였다
+    server.infoCategoryChange = true;
+    graphWidth();
+    await renderLive();
+    // 정기 조회는 실패시켜 받아 둔 기록을 덮지 않게 한다: 이 시험은 통로로 온 몫만 잰다
+    server.infoSinceFail = true;
+    const sseReads = () =>
+      fetchSpy.mock.calls.filter(([u]) => String(u).endsWith('/events')).length;
+    const before = sseReads();
+    // 관측 시각은 통로가 다시 붙기(61초 뒤) 30초쯤 앞이다: 그래프 끝에 붙으면 띠 폭이 0이 되어 아무것도 안 잰다
+    server.sseInfo = [
+      {
+        time: new Date(Date.now() + 30_000).toISOString(),
+        title: INFO.latest.title,
+        tags: [],
+        category: '발로란트',
+        viewers: 1900,
+      },
+    ];
+    // 첫 통로는 용량 초과(503)라 60초 쉬고 다시 붙는다
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(61_000);
+    });
+    await settle();
+
+    expect(sseReads(), '통로에 다시 안 붙었다: 이 갈래는 아무것도 안 잰다').toBeGreaterThan(before);
+    expect(screen.getByTitle(/^발로란트 · /)).toBeInTheDocument();
   });
 });
 
@@ -2839,6 +3196,15 @@ describe('LiveScreen: 주소로 고른 카드로 들어오기', () => {
     await settle();
     return result;
   }
+
+  it('주소의 카드가 가린 카드여도 그 시점으로 간다 (POK-463)', async () => {
+    server.vodOrigin = VOD_STARTED + 32_000;
+    server.hidden.set(4, 1_000);
+    openFromHome(4);
+    await renderLive();
+
+    expect(screen.getByText(/^0:47:22 시점까지 보는 중/)).toBeInTheDocument();
+  });
 
   it('녹화가 없으면 채팅이 그 카드 시점까지에서 멈춘다: 서버 기준점 축으로 그 둘레를 읽는다', async () => {
     server.vodOrigin = VOD_STARTED + 32_000;
@@ -3777,6 +4143,19 @@ describe('LiveScreen: 지난 방송 채팅 다시 보기(POK-324)', () => {
 });
 
 describe('LiveScreen — 지난 방송 상세', () => {
+  it('끝난 방송에서 가리고 되살리면 다음 목록 읽기(1분)를 기다리지 않고 바로 옮긴다 (POK-463)', async () => {
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    await renderLive();
+
+    // 시계를 움직이지 않는다(settle은 0초): 주기 읽기가 아니라 가리기 답만 반영할 수 있다
+    await 가린다();
+    expect(screen.getByRole('button', { name: '숨김 1' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '숨김 1' }));
+    fireEvent.click(screen.getByRole('button', { name: '되살리기' }));
+    await settle();
+    expect(screen.getByRole('button', { name: '숨김 0' })).toBeInTheDocument();
+  });
+
   it('방금 끝난 방송은 수집기가 마지막 줄을 다 쓰도록 2분 동안 차트·방송 정보를 계속 읽은 뒤 멈춘다(PR #256 codex)', async () => {
     // 명부가 끝을 먼저 알리면 수집기의 마지막 적재(1초마다 몰아 쓴다) 전 차트를 받는다: 첫 답을 굳히면 꼬리가 빠진다
     server.vodEndShiftMs = Date.now() - 30_000 - VOD_ENDED;
@@ -4381,6 +4760,414 @@ describe('LiveScreen — 지난 방송 상세', () => {
   });
 });
 
+describe('LiveScreen: 정보 바의 스트리머 프로필 사진 (POK-457)', () => {
+  const avatar = () => screen.getByTestId('info-streamer');
+  // 이 파일의 다른 시험은 me를 안 읽는다(refresh 토큰 없음). 프로필은 me에서 오므로 여기서만 세션을 세운다
+  // 채널 저장소는 같은 회원이면 다시 읽지 않으므로(hydrate) 시험마다 비워 저장값(pc-channel)을 새로 읽게 한다
+  beforeEach(() => {
+    useAuthStore.setState({ refreshToken: 'refresh-1', hydrated: true });
+    useChannelStore.setState({ userId: null, selected: null, selectedAgainst: null });
+  });
+  afterEach(() => {
+    useAuthStore.setState({ refreshToken: null });
+    useChannelStore.setState({ userId: null, selected: null, selectedAgainst: null });
+    window.localStorage.removeItem('pc-channel');
+  });
+
+  it('내 방송이면 내 PokeClip 프로필 사진이다: 고정 문구 「이미지 없음」은 없다', async () => {
+    server.myPhoto = 'http://localhost:4566/profiles/9.png';
+    await renderLive();
+
+    expect(avatar().querySelector('img')).toHaveAttribute(
+      'src',
+      'http://localhost:4566/profiles/9.png',
+    );
+    expect(screen.queryByText('이미지 없음')).toBeNull();
+  });
+
+  it('사진이 없으면 이름 첫 글자 동그라미다', async () => {
+    await renderLive();
+
+    expect(avatar().querySelector('img')).toBeNull();
+    expect(avatar()).toHaveTextContent('박편');
+  });
+
+  it('편집자가 남의 방송을 열면 고른 채널 주인의 사진이다: 내 사진 · 플랫폼 사진이 아니다', async () => {
+    server.relation = 'EDITOR';
+    server.myPhoto = 'http://localhost:4566/profiles/9.png';
+    server.asEditor = [
+      {
+        id: 1,
+        counterpartId: 42,
+        counterpartName: '남의스트리머',
+        counterpartProfileImageUrl: 'http://localhost:4566/profiles/42.png',
+        grantedAt: '2026-09-01T00:00:00Z',
+      },
+    ];
+    window.localStorage.setItem('pc-channel', JSON.stringify({ '9': 42 }));
+    await renderLive();
+
+    expect(avatar().querySelector('img')).toHaveAttribute(
+      'src',
+      'http://localhost:4566/profiles/42.png',
+    );
+  });
+
+  it('위임받은 방송이 고른 채널의 것이 아니면(다른 채널 방송을 주소로 엶) 고른 채널 주인 사진을 붙이지 않는다', async () => {
+    server.relation = 'EDITOR';
+    server.liveOwnerId = 77;
+    server.asEditor = [
+      {
+        id: 1,
+        counterpartId: 42,
+        counterpartName: '고른채널주인',
+        counterpartProfileImageUrl: 'http://localhost:4566/profiles/42.png',
+        grantedAt: '2026-09-01T00:00:00Z',
+      },
+      {
+        id: 2,
+        counterpartId: 77,
+        counterpartName: '방송주인',
+        counterpartProfileImageUrl: 'http://localhost:4566/profiles/77.png',
+        grantedAt: '2026-09-01T00:00:00Z',
+      },
+    ];
+    window.localStorage.setItem('pc-channel', JSON.stringify({ '9': 42 }));
+    await renderLive();
+
+    expect(avatar().querySelector('img')).toBeNull();
+    expect(avatar()).not.toHaveTextContent('고른');
+  });
+
+  it('위임받은 방송인데 고른 채널이 내 것이면 누구인지 몰라 비운다: 내 사진을 남의 방송에 붙이지 않는다', async () => {
+    server.relation = 'EDITOR';
+    server.myPhoto = 'http://localhost:4566/profiles/9.png';
+    await renderLive();
+
+    expect(avatar().querySelector('img')).toBeNull();
+    expect(avatar()).not.toHaveTextContent('박편');
+  });
+});
+
+describe('LiveScreen: 정보 바의 그 시점 카테고리 사진 (POK-467)', () => {
+  const JUST = 'https://img.test/category/just-chatting.jpg';
+  const LOL = 'https://img.test/category/lol.jpg';
+  const PROFILE = 'http://localhost:4566/profiles/9.png';
+  /** 시점별 기록 창구의 구간 하나 */
+  const seg = (
+    from: number,
+    until: number | null,
+    category: string | null,
+    categoryImageUrl: string | null,
+    platform = 'CHZZK',
+  ) => ({
+    platform,
+    from: new Date(from).toISOString(),
+    until: until === null ? null : new Date(until).toISOString(),
+    lastObservedAt: new Date(until ?? NOW).toISOString(),
+    title: '랭크 달립니다',
+    category,
+    categoryImageUrl,
+    tags: [],
+  });
+  const categoryImg = () => screen.queryByTestId('info-category')?.querySelector('img') ?? null;
+  const profileImg = () => screen.queryByTestId('info-streamer')?.querySelector('img') ?? null;
+  const timelineReads = () =>
+    fetchSpy.mock.calls.filter(([u]) => String(u).includes('/broadcast-info/timeline')).length;
+  // 프로필로 돌아갔는지 보려면 me가 있어야 한다(POK-457 시험과 같은 세션)
+  beforeEach(() => {
+    useAuthStore.setState({ refreshToken: 'refresh-1', hydrated: true });
+    useChannelStore.setState({ userId: null, selected: null, selectedAgainst: null });
+    server.myPhoto = PROFILE;
+  });
+  afterEach(() => {
+    useAuthStore.setState({ refreshToken: null });
+    useChannelStore.setState({ userId: null, selected: null, selectedAgainst: null });
+    window.localStorage.removeItem('pc-channel');
+  });
+
+  it('라이브는 지금 구간의 카테고리 사진이다: 프로필 사진 자리를 대신한다', async () => {
+    server.timeline = [
+      seg(NOW - 20 * 60_000, NOW - 5 * 60_000, '저스트 채팅', JUST),
+      seg(NOW - 5 * 60_000, null, '리그 오브 레전드', LOL),
+    ];
+    await renderLive();
+
+    expect(categoryImg()).toHaveAttribute('src', LOL);
+    expect(screen.getByTestId('info-category')).toHaveAttribute('title', '리그 오브 레전드');
+    expect(screen.queryByTestId('info-streamer')).toBeNull();
+  });
+
+  it('방송 중 카테고리를 바꾸면 1분 안에 그 카테고리 사진으로 바뀐다', async () => {
+    server.timeline = [seg(NOW - 20 * 60_000, null, '저스트 채팅', JUST)];
+    await renderLive();
+    expect(categoryImg()).toHaveAttribute('src', JUST);
+    const before = timelineReads();
+
+    server.timeline = [
+      seg(NOW - 20 * 60_000, NOW + 1_000, '저스트 채팅', JUST),
+      seg(NOW + 1_000, null, '리그 오브 레전드', LOL),
+    ];
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    await settle();
+
+    expect(timelineReads()).toBeGreaterThan(before);
+    expect(categoryImg()).toHaveAttribute('src', LOL);
+  });
+
+  it('보던 방송이 끝나면 끝까지 담긴 기록을 다시 읽는다: 화면을 열 때(상태를 모를 때) 읽은 옛 기록을 쓰지 않는다', async () => {
+    // 상태를 모를 때와 끝난 뒤가 같은 조회로 묶이면 열 때 읽은 기록(마지막 구간이 아직 열린 저스트 채팅)이 끝난 뒤 다시 쓰였다(로컬
+    // 리뷰 3라운드)
+    server.timeline = [seg(NOW - 20 * 60_000, null, '저스트 채팅', JUST)];
+    // 방송을 골라 연 주소다: 끝나도 꺼짐 화면으로 가지 않고 그 방송이 끝난 방송으로 남는다
+    nav.search = `?stream=${STREAM_ID}`;
+    window.history.pushState({}, '', `/broadcast/livenow?stream=${STREAM_ID}`);
+    await renderLive();
+    expect(categoryImg()).toHaveAttribute('src', JUST);
+
+    server.timeline = [
+      seg(NOW - 20 * 60_000, NOW + 1_000, '저스트 채팅', JUST),
+      seg(NOW + 1_000, NOW + 2 * 60_000, '리그 오브 레전드', LOL),
+    ];
+    server.liveEnded = true;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3 * 60_000);
+    });
+    await settle();
+
+    expect(screen.getByText(/방송함/)).toBeInTheDocument();
+    expect(categoryImg()).toHaveAttribute('src', LOL);
+  });
+
+  it('라이브를 되감으면 되감은 자리의 카테고리 사진이고, 실시간으로 돌아오면 지금 구간이다', async () => {
+    server.timeline = [
+      seg(NOW - 20 * 60_000, NOW - 5 * 60_000, '저스트 채팅', JUST),
+      seg(NOW - 5 * 60_000, null, '리그 오브 레전드', LOL),
+    ];
+    await renderLive();
+
+    act(() =>
+      publishLiveData({
+        liveRewind: { atMs: NOW - 8 * 60_000, edgeAtMs: NOW, behindSeconds: 480 },
+      }),
+    );
+    expect(categoryImg()).toHaveAttribute('src', JUST);
+
+    act(() => publishLiveData({ liveRewind: null }));
+    expect(categoryImg()).toHaveAttribute('src', LOL);
+  });
+
+  it('라이브를 되감으면 정보 바 제목 · 카테고리가 그 자리 값이고, 실시간으로 돌아오면 최신 관측이다 (POK-462)', async () => {
+    server.timeline = [
+      { ...seg(NOW - 20 * 60_000, NOW - 5 * 60_000, '그때 카테고리', JUST), title: '그때 제목' },
+      seg(NOW - 5 * 60_000, null, '리그 오브 레전드', LOL),
+    ];
+    await renderLive();
+    const latestTitle = INFO.latest.title;
+    expect(screen.getByRole('heading', { name: latestTitle })).toBeInTheDocument();
+
+    act(() =>
+      publishLiveData({
+        liveRewind: { atMs: NOW - 8 * 60_000, edgeAtMs: NOW, behindSeconds: 480 },
+      }),
+    );
+    expect(screen.getByRole('heading', { name: '그때 제목' })).toBeInTheDocument();
+    expect(screen.getByText('그때 카테고리')).toBeInTheDocument();
+
+    act(() => publishLiveData({ liveRewind: null }));
+    expect(screen.getByRole('heading', { name: latestTitle })).toBeInTheDocument();
+  });
+
+  it('지난 방송은 재생 위치의 제목이다 (POK-462)', async () => {
+    server.timeline = [
+      {
+        ...seg(VOD_STARTED + 60_000, VOD_STARTED + 60 * 60_000, '저스트 채팅', JUST),
+        title: '앞 제목',
+      },
+      { ...seg(VOD_STARTED + 60 * 60_000, VOD_ENDED, '리그 오브 레전드', LOL), title: '뒤 제목' },
+    ];
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    await renderLive();
+
+    act(() => publishLiveData({ timeBaseMs: VOD_STARTED, playheadMs: 20 * 60_000 }));
+    expect(screen.getByRole('heading', { name: '앞 제목' })).toBeInTheDocument();
+
+    act(() => publishLiveData({ playheadMs: 90 * 60_000 }));
+    expect(screen.getByRole('heading', { name: '뒤 제목' })).toBeInTheDocument();
+  });
+
+  it('지난 방송은 재생 위치의 카테고리 사진이다: 재생 위치를 모르면 방송 끝의 카테고리다', async () => {
+    server.timeline = [
+      seg(VOD_STARTED + 60_000, VOD_STARTED + 60 * 60_000, '저스트 채팅', JUST),
+      seg(VOD_STARTED + 60 * 60_000, VOD_ENDED, '리그 오브 레전드', LOL),
+    ];
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    await renderLive();
+    expect(categoryImg()).toHaveAttribute('src', LOL);
+
+    act(() => publishLiveData({ timeBaseMs: VOD_STARTED, playheadMs: 20 * 60_000 }));
+    expect(categoryImg()).toHaveAttribute('src', JUST);
+
+    act(() => publishLiveData({ playheadMs: 90 * 60_000 }));
+    expect(categoryImg()).toHaveAttribute('src', LOL);
+  });
+
+  it('지난 방송 재생 위치가 첫 구간보다 앞이면 모르는 자리라 프로필 사진이다', async () => {
+    server.timeline = [seg(VOD_STARTED + 10 * 60_000, VOD_ENDED, '저스트 채팅', JUST)];
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    await renderLive();
+
+    act(() => publishLiveData({ timeBaseMs: VOD_STARTED, playheadMs: 60_000 }));
+
+    expect(categoryImg()).toBeNull();
+    expect(profileImg()).toHaveAttribute('src', PROFILE);
+  });
+
+  it('그 구간에 카테고리가 없으면 프로필 사진이다: 앞 구간 사진을 끌어 오지 않는다', async () => {
+    server.timeline = [
+      seg(NOW - 20 * 60_000, NOW - 5 * 60_000, '저스트 채팅', JUST),
+      seg(NOW - 5 * 60_000, null, null, null),
+    ];
+    await renderLive();
+
+    expect(categoryImg()).toBeNull();
+    expect(profileImg()).toHaveAttribute('src', PROFILE);
+  });
+
+  it('카테고리는 있는데 사진 주소가 없으면(못 얻은 사진) 프로필 사진이다', async () => {
+    server.timeline = [seg(NOW - 5 * 60_000, null, '리그 오브 레전드', null)];
+    await renderLive();
+
+    expect(categoryImg()).toBeNull();
+    expect(profileImg()).toHaveAttribute('src', PROFILE);
+  });
+
+  it('시점별 기록 창구가 없으면(옛 서버) 프로필 사진이다', async () => {
+    await renderLive();
+
+    expect(timelineReads()).toBeGreaterThan(0);
+    expect(categoryImg()).toBeNull();
+    expect(profileImg()).toHaveAttribute('src', PROFILE);
+  });
+
+  it('동시 방송이면 정보 바 대표 플랫폼의 구간이다: 다른 플랫폼 카테고리 사진을 쓰지 않는다', async () => {
+    // 대표 플랫폼은 SOOP이다(SOOP_INFO: 치지직은 앞서 켰다가 꺼졌다)
+    server.infoSoop = true;
+    server.timeline = [
+      // 치지직 구간이 더 늦게 시작한다: 플랫폼을 안 가리면 마지막 구간인 치지직 사진이 선다
+      seg(NOW - 30 * 60_000, null, '리그 오브 레전드', LOL, 'SOOP'),
+      seg(NOW - 10 * 60_000, null, '저스트 채팅', JUST, 'CHZZK'),
+    ];
+    await renderLive();
+
+    expect(categoryImg()).toHaveAttribute('src', LOL);
+  });
+
+  it('카테고리 사진을 못 읽으면 프로필 사진으로 돌아가고, 다른 카테고리로 바뀌면 그 사진을 다시 그린다', async () => {
+    server.timeline = [
+      seg(NOW - 20 * 60_000, NOW - 5 * 60_000, '저스트 채팅', JUST),
+      seg(NOW - 5 * 60_000, null, '리그 오브 레전드', LOL),
+    ];
+    await renderLive();
+
+    fireEvent.error(categoryImg()!);
+    expect(categoryImg()).toBeNull();
+    expect(profileImg()).toHaveAttribute('src', PROFILE);
+
+    act(() =>
+      publishLiveData({
+        liveRewind: { atMs: NOW - 8 * 60_000, edgeAtMs: NOW, behindSeconds: 480 },
+      }),
+    );
+    expect(categoryImg()).toHaveAttribute('src', JUST);
+  });
+});
+
+describe('LiveScreen: 방송 정보를 받기 전 (POK-449)', () => {
+  it('막 켠 방송에 방송 정보가 없으면 왼쪽 위 채널 · 시청자, 정보 바 제목 · 태그 · 시청자가 회색 막대다: 방송 번호 · 치지직 채널 이름을 쓰지 않는다', async () => {
+    server.liveJustStarted = true;
+    server.infoNoLatest = true;
+    await renderLive();
+
+    expect(screen.getByTestId('player-channel-pending')).toBeInTheDocument();
+    expect(screen.getByTestId('player-viewers-pending')).toBeInTheDocument();
+    expect(screen.getByTestId('info-title-pending')).toBeInTheDocument();
+    expect(screen.getByTestId('info-meta-pending')).toBeInTheDocument();
+    expect(screen.getByTestId('info-viewers-pending')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: STREAM_ID })).toBeNull();
+    expect(screen.queryByText(STREAM_ID)).toBeNull();
+    // 내 치지직 연동 이름이다: 어느 플랫폼 방송인지 모르는 동안 붙이면 SOOP 방송에도 뜬다
+    expect(screen.queryByText('게임하는너구리')).toBeNull();
+    expect(screen.queryByText(/시청자 수 (확인 중|수집 전)/)).toBeNull();
+  });
+
+  it('2분이 지나도 비어 있으면 막대를 걷고 까닭을 글자로 적는다: 제목 자리에도 방송 번호가 아니다', async () => {
+    server.liveJustStarted = true;
+    server.infoNoLatest = true;
+    await renderLive();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2 * 60_000);
+    });
+    await settle();
+
+    expect(document.querySelector('[data-testid$="-pending"]')).toBeNull();
+    expect(screen.getByRole('heading', { name: '제목 수집 전' })).toBeInTheDocument();
+    expect(screen.getAllByText('시청자 수 수집 전').length).toBeGreaterThan(0);
+    expect(screen.getByText('방송 정보 수집 전')).toBeInTheDocument();
+    expect(screen.queryByText(STREAM_ID)).toBeNull();
+  });
+
+  // 가짜 방송 정보의 시청자 기록은 이 방송 시작보다 앞이라 믿지 않는다(방송 창 밖): 시청자 칸은 여기서 재지 않는다
+  it('방송 정보가 오면 제목 · 태그 · 채널 이름이 원래 값으로 바뀐다(막대 없음)', async () => {
+    server.liveJustStarted = true;
+    await renderLive();
+
+    for (const id of ['info-title-pending', 'info-meta-pending', 'player-channel-pending'])
+      expect(screen.queryByTestId(id)).toBeNull();
+    expect(
+      screen.getByRole('heading', { name: '새벽 랭크 올리기 — 다이아 승급전 가보자' }),
+    ).toBeInTheDocument();
+    expect(screen.getByText('게임하는너구리')).toBeInTheDocument();
+  });
+
+  it('명부가 계속 답하지 않아도(상태 · 시작 시각 모름) 화면을 연 지 2분이 지나면 막대를 걷는다', async () => {
+    server.listGate = new Promise(() => undefined);
+    server.infoNoLatest = true;
+    await renderLive();
+    expect(screen.getByTestId('info-title-pending')).toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2 * 60_000);
+    });
+    await settle();
+    expect(document.querySelector('[data-testid$="-pending"]')).toBeNull();
+    expect(screen.getByRole('heading', { name: '제목 확인 중' })).toBeInTheDocument();
+  });
+
+  it('정보 없이 끝난 지난 방송은 채널 이름을 그대로 둔다: 막 켠 라이브에서만 비운다', async () => {
+    server.infoNoLatest = true;
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    await renderLive();
+
+    expect(screen.getByText('게임하는너구리')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '제목 기록 없음' })).toBeInTheDocument();
+    expect(screen.queryByText(VOD_ID)).toBeNull();
+  });
+
+  it('제목만 비었으면 제목 자리만 막대고 태그 · 채널 이름은 온 값이다', async () => {
+    server.liveJustStarted = true;
+    server.infoTitleMissing = true;
+    await renderLive();
+
+    expect(screen.getByTestId('info-title-pending')).toBeInTheDocument();
+    expect(screen.queryByTestId('info-meta-pending')).toBeNull();
+    expect(screen.getByText('게임하는너구리')).toBeInTheDocument();
+    expect(screen.queryByText(STREAM_ID)).toBeNull();
+  });
+});
+
 describe('LiveScreen: 값이 없을 때의 말(리뷰 5라운드)', () => {
   // 「확인 중」은 모른다, 「기록 없음」은 끝난 방송에 없다, 「수집 전」은 라이브에서 받았는데 아직 못 쟀다. 네 칸이 이 말을 따로
   // 정해서 한 화면에 「확인 중」과 「수집 전」이 같이 섰다
@@ -4401,7 +5188,8 @@ describe('LiveScreen: 값이 없을 때의 말(리뷰 5라운드)', () => {
     window.history.pushState({}, '', `/broadcast?stream=${VOD_ID}`);
     await renderLive();
 
-    expect(screen.getAllByText('시청자 수 확인 중').length).toBeGreaterThan(0);
+    // 상태를 모르는 동안은 받아 오는 중이라 시청자 칸이 회색 막대다(POK-449)
+    expect(screen.getByTestId('info-viewers-pending')).toBeInTheDocument();
     expect(screen.queryByText(/수집 전/)).toBeNull();
     // 경과 칸도 모른다고 쓴다: 꺼짐 말이 아니다
     expect(screen.queryByText('방송 중이 아니에요')).toBeNull();
@@ -4414,7 +5202,9 @@ describe('LiveScreen: 값이 없을 때의 말(리뷰 5라운드)', () => {
     window.history.pushState({}, '', `/broadcast?stream=${VOD_ID}`);
     await renderLive();
 
-    expect(screen.getByText('방송 정보 확인 중')).toBeInTheDocument();
+    // 받아 오는 중이라 태그 자리가 회색 막대다(POK-449). 「수집 전」은 아니다
+    expect(screen.getByTestId('info-meta-pending')).toBeInTheDocument();
+    expect(screen.queryByText(/수집 전/)).toBeNull();
   });
 
   it('주소에 박힌 라이브가 명부에서 사라지면 경과 시간을 지운다: 「방송 중이 아니에요」 옆에서 시계가 흐르지 않는다', async () => {

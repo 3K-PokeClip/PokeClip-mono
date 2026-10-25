@@ -12,11 +12,13 @@ export interface PresetAvatar {
 export const PRESET_AVATARS: readonly PresetAvatar[] = [
   { bg: '--pc-color-accent', fg: '#ffffff' },
   { bg: '--pc-color-point', fg: '#ffffff' },
-  // 이 하나만 토큰에 없는 색이다 — 시안이 지정한 황토색을 그대로 쓴다
+  // 토큰에 없는 색 — 시안이 지정한 황토색을 그대로 쓴다
   { bg: '#e6a83c', fg: '#1b1206' },
   { bg: '--pc-color-success', fg: '#ffffff' },
-  { bg: '--pc-color-info', fg: '#ffffff' },
-  { bg: '--pc-color-bg-inset', fg: '--pc-color-text-primary' },
+  // 아래 둘은 테마마다 토큰 값이 달라(info 청록·inset 회색), 토큰을 쓰면 고른 순간의 테마 색이
+  // 그림에 구워져 다른 테마에서 어긋난다 — 다크 값으로 고정한다. 위의 토큰들은 두 테마 값이 같다
+  { bg: '#00dfff', fg: '#ffffff' },
+  { bg: '#1d1e22', fg: '#eef0f3' },
 ];
 
 /** DOM에 얹을 색 — 토큰이면 var()로 감싼다. */

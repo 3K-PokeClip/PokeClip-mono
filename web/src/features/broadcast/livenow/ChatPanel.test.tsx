@@ -1,5 +1,5 @@
 import { act } from 'react';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ChatPanel } from '@/features/broadcast/livenow/ChatPanel';
 import type { ChatPanelMessage } from '@/features/broadcast/livenow/useChatPanelMockState';
@@ -292,5 +292,40 @@ describe('ChatPanel: 후원 줄(POK-431)', () => {
     expect(screen.getByText('숲팬 · 별풍선 1,000개').closest('li')!.children).toHaveLength(1);
     expect(screen.getByText('도네초코 · 치즈 5,000').closest('li')!.children).toHaveLength(2);
     expect(screen.getByText('승급 기원')).toBeInTheDocument();
+  });
+});
+
+describe('ChatPanel: 플랫폼 표시(POK-466 · POK-476)', () => {
+  it('채팅 · 후원 줄 앞에 플랫폼 로고를 두고 화면 읽기 이름을 단다. 글자는 쓰지 않고, 모르면 그리지 않는다', () => {
+    renderPanel({
+      messages: [
+        { id: 1, kind: 'chat', name: '숲시청자', text: 'ㅋㅋ', colorIndex: 0, platform: 'SOOP' },
+        {
+          id: 2,
+          kind: 'donation',
+          name: '도네초코',
+          amountLabel: '치즈 5,000',
+          text: '',
+          platform: 'CHZZK',
+        },
+        { id: 3, kind: 'chat', name: '옛줄', text: '안녕', colorIndex: 1, platform: null },
+        { id: 4, kind: 'chat', name: '새플랫폼', text: '?', colorIndex: 2, platform: 'TWITCH' },
+      ],
+    });
+    const soop = screen.getByText('숲시청자').closest('li')!;
+    // 마크는 설정 화면 채널 연동 줄의 것 그대로다: 뷰박스로 어느 로고인지 가른다(뒤바뀌면 빨갛다)
+    expect(
+      within(soop).getByRole('img', { name: 'SOOP' }).querySelector('svg')?.getAttribute('viewBox'),
+    ).toBe('0 0 378.77 215.21');
+    expect(soop).toHaveTextContent(/^숲시청자/);
+    const chzzk = screen.getByText('도네초코 · 치즈 5,000').closest('li')!;
+    expect(
+      within(chzzk)
+        .getByRole('img', { name: '치지직' })
+        .querySelector('svg')
+        ?.getAttribute('viewBox'),
+    ).toBe('0 0 24 24');
+    expect(within(screen.getByText('옛줄').closest('li')!).queryByRole('img')).toBeNull();
+    expect(within(screen.getByText('새플랫폼').closest('li')!).queryByRole('img')).toBeNull();
   });
 });

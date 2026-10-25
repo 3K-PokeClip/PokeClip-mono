@@ -1,6 +1,7 @@
 import { StrictMode, useEffect, useRef } from 'react';
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { progressFraction } from './playerMath';
 import { rebaseTimeline, recordingTimeline } from './recordingTimeline';
 
 // 다시보기 오류가 쿠키 지워짐(403)이면 출입증을 다시 받아 같은 줄기를 다시 붙인다(PR #332 codex). 확인 자체는 playbackAccess 시험이 잰다
@@ -365,6 +366,53 @@ describe('useRecordedPlayback — 1시간 넘는 녹화', () => {
     act(() => result.current.seekToFraction(0));
     act(() => vi.advanceTimersByTime(300));
     expect(requested(video).fromSeconds).toBe(0);
+  });
+});
+
+describe('useRecordedPlayback: 기준점이 녹화보다 한참 앞(POK-474)', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  // 로컬 실측(2026-10-25): 송출 회차 하나가 방송 셋을 넘어 이어져 조각의 pts가 13.9시간이었고, 서버 기준점(첫 조각 시각 − pts)이
+  // 방송 시작보다 13.9시간 앞에 섰다. 축이 0초부터면 10분 녹화가 시크바 오른쪽 1%에 몰려 손잡이가 끝에 붙고, 끌어 놓으면 녹화
+  // 앞 빈 곳이라 첫 구간 시작으로 올려져 끝으로 되돌아갔다
+  const LEAD = 49_940;
+  const farOrigin = () => ({
+    streamId: 'gaptest',
+    ...rebaseTimeline(source([[0, 600]]), T0 - LEAD * 1000),
+  });
+
+  it('시크바는 녹화 처음부터 끝까지다: 축의 0초부터가 아니다', () => {
+    const { video } = fakeVideo();
+    const { result } = renderHook(() => useRecordedPlayback({ current: video }, farOrigin()));
+
+    expect(result.current.windowSeconds).toBe(600);
+    expect(progressFraction(result.current.behindSeconds, result.current.windowSeconds)).toBe(0);
+  });
+
+  it('손잡이를 가운데로 끌면 녹화 가운데부터 튼다: 끝으로 되돌아가지 않는다', () => {
+    const { video } = fakeVideo();
+    const { result } = renderHook(() => useRecordedPlayback({ current: video }, farOrigin()));
+
+    act(() => result.current.seekToFraction(0.5));
+    act(() => vi.advanceTimersByTime(300));
+
+    expect(requested(video).fromSeconds).toBe(300);
+    expect(result.current.behindSeconds).toBe(300);
+    expect(progressFraction(result.current.behindSeconds, result.current.windowSeconds)).toBe(0.5);
+  });
+
+  it('카드(기준점 축 초)로 옮기면 손잡이가 그 자리다', () => {
+    const { video } = fakeVideo();
+    const { result } = renderHook(() => useRecordedPlayback({ current: video }, farOrigin()));
+
+    act(() => result.current.seekToPosition!(LEAD + 120));
+    act(() => vi.advanceTimersByTime(300));
+
+    expect(requested(video).fromSeconds).toBe(120);
+    expect(progressFraction(result.current.behindSeconds, result.current.windowSeconds)).toBe(
+      120 / 600,
+    );
   });
 });
 

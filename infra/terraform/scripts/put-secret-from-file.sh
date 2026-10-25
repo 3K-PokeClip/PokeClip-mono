@@ -1,24 +1,46 @@
 #!/usr/bin/env bash
 #
-# 파일 하나의 내용을 prod 엣지 비밀(Secrets Manager)의 새 버전으로 넣는다
-# (runbooks/edge-secrets.md). 값은 파일 → 셸 변수 → 표준 입력(--secret-string
-# file:///dev/stdin)으로만 지나간다 — 명령 인자 · 환경 변수 · 임시 파일 · 출력에
-# 두지 않는다. 그래서 here-doc · here-string(bash 3.2 는 본문을 임시 파일에
-# 씀)과 jq 를 쓰지 않고, 값은 셸 내장 printf 의 파이프로만 넘긴다.
+# 파일 하나의 내용을 prod 비밀(Secrets Manager — 엣지 · 앱 그릇)의 새 버전으로
+# 넣는다(runbooks/edge-secrets.md · runbooks/runtime-1a.md). 값은 파일 → 셸
+# 변수 → 표준 입력(--secret-string file:///dev/stdin)으로만 지나간다 — 명령
+# 인자 · 환경 변수 · 임시 파일 · 출력에 두지 않는다. 그래서 here-doc ·
+# here-string(bash 3.2 는 본문을 임시 파일에 씀)과 jq 를 쓰지 않고, 값은 셸
+# 내장 printf 의 파이프로만 넘긴다.
 # --cli-input-json file:///dev/stdin 은 쓰지 않는다 — aws-cli 가 file:// 값을 두
 # 번 읽어 파이프의 둘째 읽기가 비고 ParamValidation 으로 실패한다(2026-10-17
 # aws-cli 2.36.7 실측).
 #
 # 사용: put-secret-from-file.sh <종류> <파일>
-#   종류            비밀 이름(SecretId)             파일 내용
-#   signing-key     pokeclip/prod/signing-key       PKCS#8 PEM — 그대로 넣음
-#   cdn-secret      pokeclip/prod/cdn-secret        한 줄 — 끝 줄바꿈 하나를 뗌
-#   test-stream-key pokeclip/prod/test-stream-key   한 줄 — 끝 줄바꿈 하나를 뗌
+#   종류는 비밀 이름(SecretId) pokeclip/prod/<종류> 의 용도 토막이고, 아래
+#   허용 목록(KINDS)뿐이다 — 엣지 그릇(prod/secrets/main.tf)과 앱 그릇
+#   (prod/runtime/app_secrets.tf). 그릇을 더하는 PR 이 KINDS · 이 표 · 시험
+#   (put_secret_test.sh 의 kinds-match-shells · 정상 사례)을 함께 고친다.
+#   문서는 종류를 나열하는 자리가 남아 있을 때만 한 줄 더하고, 아니면 건드리지
+#   않는다.
+#   종류                         파일 내용
+#   signing-key                  PKCS#8 PEM — 그대로 넣음
+#   cdn-secret                   한 줄 — 끝 줄바꿈 하나를 뗌
+#   test-stream-key              한 줄 — 끝 줄바꿈 하나를 뗌
+#   jwt-secret                   한 줄 — 끝 줄바꿈 하나를 뗌
+#   secret-store-key             한 줄 — 끝 줄바꿈 하나를 뗌
+#   internal-api-token           한 줄 — 끝 줄바꿈 하나를 뗌
+#   google-client-secret         한 줄 — 끝 줄바꿈 하나를 뗌
+#   youtube-client-secret        한 줄 — 끝 줄바꿈 하나를 뗌
+#   chzzk-client-secret          한 줄 — 끝 줄바꿈 하나를 뗌
+#   profile-photo-token-secret   한 줄 — 끝 줄바꿈 하나를 뗌
+#   soop-client-secret           한 줄 — 끝 줄바꿈 하나를 뗌
+#   stream-key-resolve-token     한 줄 — 끝 줄바꿈 하나를 뗌
 #   비밀 이름으로 지정한다(ARN 은 계정 ID 를 품으므로 쓰지 않음). 리전은
 #   ap-northeast-2 고정이다. 이미 값이 있으면 새 버전이 되고 옛 값은
 #   AWSPREVIOUS 로 남는다.
 #
 # 검사(aws 를 부르기 전 — 하나라도 걸리면 넣지 않는다):
+#   aws CLI 명령 기록(파일을 읽기 전): 켜져 있으면 요청 본문(값)이
+#     ~/.aws/cli/history/history.db 에 평문으로 남는다. 판정 규칙은 단계 직전
+#     점검 도구와 같다(precheck/lib/precheck_common.sh 의
+#     precheck::cli_history_state — 프로필의 cli_history = enabled ·
+#     AWS_CLI_HISTORY_FILE 설정됨). 검사를 하지 못해도(설정 읽기 실패 · 공용
+#     함수를 읽지 못함) 켜짐과 같이 멈춘다.
 #   모든 종류: 파일 없음 · 일반 파일 아님 · 읽을 수 없음 · 빈 파일 · 공백만 ·
 #     NUL 바이트.
 #   signing-key: 줄바꿈 밖의 제어 문자 · ASCII 밖 문자, 첫 줄이 PKCS#8 머리
@@ -29,6 +51,9 @@
 #
 # 출력(값은 어떤 경로로도 내보내지 않는다 — aws 원문도 내보내지 않는다):
 #   성공      표준 출력 「SECRET PUT OK <비밀 이름> <VersionId>」 한 줄
+#   기록 켜짐 표준 오류 「CLI HISTORY ENABLED」 + 어느 쪽이 켰는지 한 줄
+#   기록 검사 표준 오류 「CLI HISTORY UNCHECKED」 + 사유 한 줄
+#   실패
 #   거부      표준 오류 「SECRET PUT REJECTED: <이유>」
 #   접근 거부 표준 오류 「SECRET PUT DENIED」 — 다시 시도하지 않는다(SCP 멈춤
 #             규칙: 멈추고 kty 에게 보고)
@@ -39,10 +64,12 @@
 #
 # 종료 코드:
 #   0 넣음
+#   1 CLI 기록 켜짐 · 기록 검사 실패(파일을 읽지 않음) — 기록을 끄고 다시
 #   2 사용법 오류(인자 수 · 모르는 종류)
 #   3 입력 거부(위 검사)
 #   4 접근 거부(AccessDenied — AccessDeniedException 등 부분 일치 포함)
-#   5 그 밖의 실패(AWS 오류 · aws CLI 없음 · 응답에 VersionId 없음)
+#   5 그 밖의 실패(AWS 오류 · aws CLI 없음 — 기록 검사 전 · 응답에 VersionId
+#     없음)
 
 set -uo pipefail
 # 물려받은 추적 · allexport 를 값을 읽기 전에 끈다(bash -x · SHELLOPTS) — 켜져
@@ -51,6 +78,7 @@ set +o xtrace +o allexport +o verbose
 
 readonly REGION='ap-northeast-2'
 readonly SECRET_PREFIX='pokeclip/prod/'
+readonly EXIT_HISTORY=1
 readonly EXIT_USAGE=2
 readonly EXIT_REJECTED=3
 readonly EXIT_DENIED=4
@@ -63,6 +91,48 @@ readonly ERROR_CODE_PATTERN='An error occurred \(([A-Za-z0-9]+)\)'
 # 코드 없는 네트워크 단계 실패(Could not connect to · Read timeout on 등)의 원문.
 readonly ENDPOINT_PATTERN='endpoint URL'
 readonly VERSION_ID_PATTERN='"VersionId": *"([A-Za-z0-9-]+)"'
+readonly HISTORY_ENABLED='CLI HISTORY ENABLED'
+readonly HISTORY_UNCHECKED='CLI HISTORY UNCHECKED'
+NOTE_HISTORY_PROFILE='프로필의 cli_history 가 enabled — 값을 읽지 않음 ·'
+NOTE_HISTORY_PROFILE+=' 기록을 끄고 다시'
+readonly NOTE_HISTORY_PROFILE
+NOTE_HISTORY_FILE='AWS_CLI_HISTORY_FILE 이 설정됨 — 값을 읽지 않음 ·'
+NOTE_HISTORY_FILE+=' 변수를 지우고 다시'
+readonly NOTE_HISTORY_FILE
+NOTE_HISTORY_FAIL='CLI 기록 설정(cli_history)을 읽지 못함 — 값을 읽지 않음 ·'
+NOTE_HISTORY_FAIL+=' 켜짐과 같이 멈춤'
+readonly NOTE_HISTORY_FAIL
+# 받는 종류(머리 주석 표와 같은 집합 — 시험 kinds-match-shells 가 tf 그릇과
+# 대조한다). signing-key 만 PEM 이고 나머지는 한 줄 비밀이다.
+readonly -a KINDS=(
+  signing-key
+  cdn-secret
+  test-stream-key
+  jwt-secret
+  secret-store-key
+  internal-api-token
+  google-client-secret
+  youtube-client-secret
+  chzzk-client-secret
+  profile-photo-token-secret
+  soop-client-secret
+  stream-key-resolve-token
+)
+
+# CLI 기록 판정(precheck::cli_history_state)은 단계 직전 점검 도구와 같은 공용
+# 함수를 쓴다. 이 파일의 디렉터리는 외부 명령(dirname) 없이 얻는다. 읽지
+# 못하면 bash 의 원시 진단(절대 경로가 든다)은 버리고 고정 줄로 멈춘다.
+SCRIPT_DIR="${BASH_SOURCE[0]%/*}"
+[[ "${SCRIPT_DIR}" != "${BASH_SOURCE[0]}" ]] || SCRIPT_DIR=.
+readonly SCRIPT_DIR
+# infra-ci 의 shellcheck 는 이 파일을 -x 없이 본다(lib 는 따로 -x 로 봄).
+# shellcheck source-path=SCRIPTDIR disable=SC1091
+# shellcheck source=precheck/lib/precheck_common.sh
+source "${SCRIPT_DIR}/precheck/lib/precheck_common.sh" 2>/dev/null || {
+  printf '%s\n' "${HISTORY_UNCHECKED}" \
+    "공용 함수(precheck_common.sh)를 읽지 못함 — 값을 읽지 않음" >&2
+  exit "${EXIT_HISTORY}"
+}
 
 # 비밀 값. 함수 인자로 넘기지 않고 전역으로만 다룬다. 호출자가 같은 이름을
 # export 해 두었으면 대입만으로는 export 속성이 남아 값이 aws 의 환경으로 가므로,
@@ -74,9 +144,53 @@ secret_value=""
 # 사용법을 알리고 끝낸다.
 #######################################
 usage() {
-  printf '%s\n' "사용: put-secret-from-file.sh" \
-    "  <signing-key|cdn-secret|test-stream-key> <파일>" >&2
+  local IFS='|'
+  printf '%s\n' "사용: put-secret-from-file.sh <종류> <파일>" \
+    "  종류: ${KINDS[*]}" >&2
   exit "${EXIT_USAGE}"
+}
+
+#######################################
+# 종류가 허용 목록에 있는지 본다.
+# Arguments:
+#   종류.
+# Returns:
+#   있으면 0.
+#######################################
+is_known_kind() {
+  local known
+  for known in "${KINDS[@]}"; do
+    [[ "$1" == "${known}" ]] && return 0
+  done
+  return 1
+}
+
+#######################################
+# aws CLI 가 PATH 에 있는지 본다(기록 검사 전 — 없으면 그 검사도 못 한다).
+#######################################
+require_aws() {
+  if ! command -v aws >/dev/null 2>&1; then
+    printf '%s\n' "SECRET PUT FAILED UNKNOWN" "aws CLI 가 PATH 에 없음" >&2
+    exit "${EXIT_FAILED}"
+  fi
+}
+
+#######################################
+# aws CLI 명령 기록이 꺼져 있는지 본다(파일을 읽기 전). 켜져 있거나 검사를
+# 하지 못하면 값을 읽지 않고 끝낸다.
+#######################################
+require_cli_history_off() {
+  local state
+  state="$(precheck::cli_history_state)"
+  case "${state}" in
+    off) return 0 ;;
+    env) printf '%s\n' "${HISTORY_ENABLED}" "${NOTE_HISTORY_FILE}" >&2 ;;
+    profile)
+      printf '%s\n' "${HISTORY_ENABLED}" "${NOTE_HISTORY_PROFILE}" >&2
+      ;;
+    *) printf '%s\n' "${HISTORY_UNCHECKED}" "${NOTE_HISTORY_FAIL}" >&2 ;;
+  esac
+  exit "${EXIT_HISTORY}"
 }
 
 #######################################
@@ -172,10 +286,6 @@ check_one_line() {
 #######################################
 put_request() {
   local name="$1" output status code=""
-  if ! command -v aws >/dev/null 2>&1; then
-    printf '%s\n' "SECRET PUT FAILED UNKNOWN" "aws CLI 가 PATH 에 없음" >&2
-    exit "${EXIT_FAILED}"
-  fi
   output="$(printf '%s' "${secret_value}" | AWS_PAGER="" aws secretsmanager \
     put-secret-value --region "${REGION}" --output json --no-cli-auto-prompt \
     --secret-id "${name}" --secret-string file:///dev/stdin 2>&1)"
@@ -205,11 +315,10 @@ main() {
   local kind name
   [[ "$#" -eq 2 ]] || usage
   kind="$1"
-  case "${kind}" in
-    signing-key | cdn-secret | test-stream-key) ;;
-    *) usage ;;
-  esac
+  is_known_kind "${kind}" || usage
   name="${SECRET_PREFIX}${kind}"
+  require_aws
+  require_cli_history_off
   read_secret_file "$2"
   if [[ "${kind}" == signing-key ]]; then
     check_signing_key

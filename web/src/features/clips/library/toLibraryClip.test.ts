@@ -97,6 +97,9 @@ describe('toLibraryClip', () => {
     expect(toLibraryClip(entry('rendering', { latestClip: rendering }), '9').progressLabel).toBe(
       '영상 만드는 중 42%',
     );
+    expect(toLibraryClip(entry('rendering', { latestClip: rendering }), '9').renderPercent).toBe(
+      42,
+    );
     const withIntent = entry('rendering', {
       latestClip: rendering,
       uploadRequest: { title: '창 제목', privacyStatus: 'private', thumbnailSource: 'none' },
@@ -104,6 +107,27 @@ describe('toLibraryClip', () => {
     expect(toLibraryClip(withIntent, '9').progressLabel).toBe(
       '영상 만드는 중 42% · 끝나면 유튜브에 올려요',
     );
+  });
+
+  it('만드는 중인데 퍼센트가 아직 없으면 0%라고 하지 않는다 — 막대는 불확정(null)이고, 주문만 된 영상은 막대가 없다(POK-443)', () => {
+    const rendering = {
+      ...clipWithUpload(null),
+      status: 'rendering' as const,
+      upload: null,
+      progress: null,
+    };
+    const noPercent = toLibraryClip(entry('rendering', { latestClip: rendering }), '9');
+    expect(noPercent.progressLabel).toBe('영상 만드는 중');
+    expect(noPercent.renderPercent).toBeNull();
+
+    const queued = toLibraryClip(
+      entry('rendering', { latestClip: { ...rendering, status: 'queued' } }),
+      '9',
+    );
+    expect(queued.progressLabel).toBe('영상 주문됨 · 차례 기다리는 중');
+    expect(queued.renderPercent).toBeUndefined();
+    // 만드는 중이 아닌 상태는 막대가 없다
+    expect(toLibraryClip(entry('uploading'), '9').renderPercent).toBeUndefined();
   });
 
   it('업로드 줄이 없으면 제목은 창에서 적은 업로드 정보의 제목, 그것도 없으면 「편집본 #번호」', () => {

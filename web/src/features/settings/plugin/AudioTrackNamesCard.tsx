@@ -1,8 +1,8 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type CSSProperties } from 'react';
 import { track } from '@/lib/analytics';
-import { Button, Input, useToast } from '@/ui';
+import { Button, Input, LoadingRegion, Skeleton, useToast } from '@/ui';
 import {
   TRACK_COUNT,
   TRACK_LABEL_MAX,
@@ -12,6 +12,16 @@ import {
   type TrackLabels,
 } from '@/api/audioTracks';
 import styles from './PluginSettingsScreen.module.css';
+
+const u = (n: number) => `calc(${n} * var(--pc-u))`;
+
+// 입력 여섯 칸의 격자와 한 칸(이름표 위 · 입력 아래). 스켈레톤도 같은 값을 써서 로드 뒤 높이·열 배치가 그대로다
+const TRACK_GRID: CSSProperties = {
+  display: 'grid',
+  gap: u(8),
+  gridTemplateColumns: 'repeat(auto-fit, minmax(14rem, 1fr))',
+};
+const TRACK_CELL: CSSProperties = { display: 'grid', gap: u(4) };
 
 // 오디오 트랙 이름(POK-240) — OBS는 트랙 여섯을 이름 없이 보낸다. 여기서 한 번 적어 두면 편집기 오디오 탭에
 // 「트랙 3」 대신 「디스코드」가 뜬다. 시안에 없는 카드다(백엔드가 시안 뒤에 생겼다) — 플러그인 설정의 카드 모양을 그대로 쓴다.
@@ -69,18 +79,12 @@ export function AudioTrackNamesCard() {
       {error !== null ? (
         <p role="alert">트랙 이름을 불러오지 못했어요: {error}</p>
       ) : labels === null ? (
-        <p role="status">불러오는 중…</p>
+        <TrackNamesSkeleton />
       ) : (
         <>
-          <div
-            style={{
-              display: 'grid',
-              gap: 'calc(8 * var(--pc-u))',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(14rem, 1fr))',
-            }}
-          >
+          <div style={TRACK_GRID}>
             {Array.from({ length: TRACK_COUNT }, (_, i) => (
-              <label key={i} style={{ display: 'grid', gap: 'calc(4 * var(--pc-u))' }}>
+              <label key={i} style={TRACK_CELL}>
                 <span className={styles.codeHint}>{trackDisplayName(i, null)}</span>
                 <Input
                   id={`audio-track-name-${i}`}
@@ -105,5 +109,26 @@ export function AudioTrackNamesCard() {
         </>
       )}
     </section>
+  );
+}
+
+// 첫 읽기 전의 입력 여섯 칸과 저장 버튼 자리(POK-446). 로드 뒤와 같은 격자·칸이라 이름이 와도 카드 높이가 바뀌지 않는다.
+// Skeleton은 폭·높이·반경을 인라인으로 덮으므로 치수를 여기서 준다: 이름표 한 줄은 11u × 줄높이 1.5라 글자만 한 막대
+// 위아래를 여백으로 채우고, 입력·버튼은 sm 높이(32u)·md 반경이다
+function TrackNamesSkeleton() {
+  return (
+    <LoadingRegion label="트랙 이름을 불러오는 중">
+      <div style={TRACK_GRID} aria-hidden="true">
+        {Array.from({ length: TRACK_COUNT }, (_, i) => (
+          <div key={i} style={TRACK_CELL}>
+            <Skeleton width={u(44)} height={u(11)} style={{ marginBlock: u(2.75) }} />
+            <Skeleton height={u(32)} radius="md" />
+          </div>
+        ))}
+      </div>
+      <div className={styles.confirmActions} aria-hidden="true">
+        <Skeleton width={u(76)} height={u(32)} radius="md" />
+      </div>
+    </LoadingRegion>
   );
 }

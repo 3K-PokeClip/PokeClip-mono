@@ -137,6 +137,16 @@ variable "rds_sg_id" {
   type        = string
 }
 
+variable "auth_sg_id" {
+  description = "auth 서비스 SG id(platform 출력 service_sg_ids.auth) — Media 이그레스와 auth 인그레스 ← Media(4C resolve)의 한 쌍."
+  type        = string
+}
+
+variable "auth_port" {
+  description = "auth 서비스 포트(platform 출력 service_ports.auth) — 위 한 쌍의 TCP 포트."
+  type        = number
+}
+
 variable "s3_prefix_list_id" {
   description = "S3 관리형 prefix list id(network 출력) — 이그레스 443."
   type        = string
@@ -335,7 +345,7 @@ variable "test_stream_key_secret_arn" {
 }
 
 variable "media_secret_arns" {
-  description = "그 밖에 Media 상자가 읽는 비밀 ARN(런타임 1단 출력 media_secret_arns — INTERNAL_API_TOKEN 등)."
+  description = "그 밖에 Media 상자가 읽는 비밀 ARN(런타임 1단 출력 media_secret_arns — resolve 전용 토큰 등)."
   type        = list(string)
   default     = []
 
@@ -396,5 +406,47 @@ variable "denylist_parameter_name" {
   validation {
     condition     = can(regex("^(/[A-Za-z0-9._-]+)+$", var.denylist_parameter_name))
     error_message = "denylist_parameter_name 은 /<토막>/… 꼴이어야 한다."
+  }
+}
+
+variable "stream_key_resolve_url" {
+  description = "응답기의 4C(스트림 키 판정) 주소 http://<호스트>:<포트>(예: http://auth.pokeclip.internal:<auth 포트>). 응답기 모드(ingest_auth_image 비어 있지 않음)에서만 값이 필수다. 키는 두 모드 모두 템플릿에 넘긴다 — templatefile() 은 쓰지 않는 갈래의 변수도 요구한다(옛 모드는 빈 값)."
+  type        = string
+  default     = ""
+
+  # 문자 집합으로 사용자 정보 · 경로 · 질의 · 조각 · $ · 공백 · # 이 모두 막힌다.
+  validation {
+    condition     = var.stream_key_resolve_url == "" || can(regex("^http://[A-Za-z0-9.-]+:[0-9]+$", var.stream_key_resolve_url))
+    error_message = "stream_key_resolve_url 은 빈 값이거나 http://<호스트>:<포트> 여야 한다(사용자 정보 · 경로 · 질의 · 조각 금지)."
+  }
+
+  # 모드 판정은 시작 스크립트와 같다 — compose 렌더본에 응답기 서비스가 있으면
+  # (ingest_auth_image 가 찬 값이면) 응답기 모드다. 시작 스크립트는 이 값을 보지
+  # 않으므로 비면 응답기가 기동을 거부한 채 되풀이된다 — plan 에서 막는다.
+  validation {
+    condition     = var.ingest_auth_image == "" || var.stream_key_resolve_url != ""
+    error_message = "응답기 모드(ingest_auth_image 가 찬 값)에서는 stream_key_resolve_url 이 비면 안 된다."
+  }
+}
+
+variable "stream_key_resolve_token_secret_arn" {
+  description = "응답기 4C 토큰 비밀 ARN(런타임 1단 출력 ingest_auth_resolve_token_secret_arn — 값 아님) — media.env 의 STREAM_KEY_RESOLVE_TOKEN_SECRET_ARN. 시작 스크립트가 응답기 모드에서만 읽는다(옛 모드는 빈 값이어도 된다)."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.stream_key_resolve_token_secret_arn == "" || can(regex("^arn:aws[a-z-]*:secretsmanager:[a-z0-9-]+:[0-9]+:secret:[A-Za-z0-9/_+=.@-]+$", var.stream_key_resolve_token_secret_arn))
+    error_message = "stream_key_resolve_token_secret_arn 은 빈 값이거나 Secrets Manager 비밀 ARN 이어야 한다(와일드카드 금지)."
+  }
+}
+
+variable "ingest_auth_ip_limit" {
+  description = "응답기 IP 한도 \"on\" · \"off\"(ingest-auth.env 의 INGEST_AUTH_IP_LIMIT). 두 모드 모두 렌더하고 응답기 모드에서만 읽힌다."
+  type        = string
+  default     = "on"
+
+  validation {
+    condition     = contains(["on", "off"], var.ingest_auth_ip_limit)
+    error_message = "ingest_auth_ip_limit 은 \"on\" 또는 \"off\" 여야 한다."
   }
 }

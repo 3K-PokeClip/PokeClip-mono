@@ -3,12 +3,14 @@
 # infra/media-host 템플릿 렌더 도우미 — 시험이 prod 와 같은 렌더 함수로 템플릿을
 # 렌더한다(proxy_contract.sh 가 쓰고, render_test 도 같이 쓴다).
 #
-# prod 에서는 M9 user_data 가 Terraform templatefile() 로 compose · nginx ·
-# mediamtx 템플릿을 렌더한다. 시험도 같은 함수를 쓰도록 `terraform console` 로
-# templatefile() 을 부른다. console 은 부를 때마다 새로 만든 임시 디렉터리에서
-# 돈다 — 설정은 변수 둘과 locals 하나뿐이고(backend · provider · data source
-# 없음), TF_DATA_DIR 도 그 안으로 격리한다. 운영 루트에서 console 을 돌리면 원격
-# 상태 잠금을 잡기 때문이다.
+# prod 에서는 M9 user_data 가 Terraform templatefile() 로 compose · nginx
+# 템플릿을 렌더한다. MediaMTX 템플릿은 렌더하지 않는다 — 설치 묶음이 저장소
+# 파일 그대로 깔고, 시작 스크립트가 모드 블록을 고른다(bin/lib/render_files.sh).
+# 시험도 같은 함수를 쓰도록 `terraform console` 로 templatefile() 을 부른다.
+# console 은 부를 때마다 새로 만든 임시 디렉터리에서 돈다 — 설정은 변수 둘과
+# locals 하나뿐이고(backend · provider · data source 없음), TF_DATA_DIR 도 그
+# 안으로 격리한다. 운영 루트에서 console 을 돌리면 원격 상태 잠금을 잡기
+# 때문이다.
 #
 # 템플릿 변수 값은 공용 시험값 파일 test/render_vars.json 하나에서 온다
 # (RENDER_VARS_FILE). 값 하나를 바꾼 렌더가 필요한 시험은 그 파일을 jq 로 고친

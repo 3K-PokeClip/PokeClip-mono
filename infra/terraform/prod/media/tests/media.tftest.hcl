@@ -5,8 +5,9 @@
 #
 # 앞 루트의 상태는 override_data 로 흉내 낸다. 계정 ID 는 가짜 12자리
 # (111122223333)다. 루트 시험은 하위 모듈 안의 자원(SG 규칙 · 인스턴스 ·
-# 정책)을 주소로 볼 수 없어 모듈 출력(template_vars · rendered_user_data)과
-# 루트 출력만 본다. 모듈 안 동작은 modules/media_host 시험이 맡는다.
+# 정책)을 주소로 볼 수 없어 모듈 출력(template_vars · rendered_user_data ·
+# auth_resolve_rules)과 루트 출력만 본다. 모듈 안 동작은 modules/media_host
+# 시험이 맡는다.
 
 mock_provider "aws" {
   mock_data "aws_caller_identity" {
@@ -79,6 +80,16 @@ override_data {
         health   = 28184
       }
       media_health_path = "/example-proxy-health"
+      service_sg_ids = {
+        next = "sg-0next"
+        auth = "sg-0auth"
+        clip = "sg-0clip"
+      }
+      service_ports = {
+        next = 23000
+        auth = 28082
+        clip = 28081
+      }
       target_group_arns = {
         ingest   = "arn:aws:elasticloadbalancing:ap-northeast-2:111122223333:targetgroup/pokeclip-prod-ingest/0000000000000001"
         live     = "arn:aws:elasticloadbalancing:ap-northeast-2:111122223333:targetgroup/pokeclip-prod-internal-live/0000000000000002"
@@ -127,6 +138,8 @@ override_data {
       rds_sg_id         = "sg-0rds"
       rewind_bucket_arn = "arn:aws:s3:::pokeclip-prod-rewind-example"
       media_secret_arns = ["arn:aws:secretsmanager:ap-northeast-2:111122223333:secret:pokeclip/prod/internal-api-token-EfGhIj"]
+
+      ingest_auth_resolve_token_secret_arn = "arn:aws:secretsmanager:ap-northeast-2:111122223333:secret:pokeclip/prod/stream-key-resolve-token-StUvWx"
     }
   }
 }
@@ -193,6 +206,7 @@ run "composes_ingest_auth_image_when_digest_given" {
       loopback_sender = "sha256:4444444444444444444444444444444444444444444444444444444444444444"
       ingest_auth     = "sha256:5555555555555555555555555555555555555555555555555555555555555555"
     }
+    stream_key_resolve_url = "http://auth.pokeclip.internal:8085"
   }
 
   assert {
@@ -227,6 +241,56 @@ run "passes_runtime_and_secret_outputs" {
     condition     = strcontains(module.media_host.rendered_user_data["a"], "ECR_REGISTRY_HOST=111122223333.dkr.ecr.ap-northeast-2.amazonaws.com\n")
     error_message = "media.env 의 ECR_REGISTRY_HOST 가 이 계정 레지스트리 호스트가 아니다."
   }
+
+  assert {
+    condition     = strcontains(module.media_host.rendered_user_data["a"], "STREAM_KEY_RESOLVE_TOKEN_SECRET_ARN=arn:aws:secretsmanager:ap-northeast-2:111122223333:secret:pokeclip/prod/stream-key-resolve-token-StUvWx\n")
+    error_message = "media.env 의 STREAM_KEY_RESOLVE_TOKEN_SECRET_ARN 이 런타임 1단 출력 ingest_auth_resolve_token_secret_arn 과 다르다."
+  }
+}
+
+# --- 응답기 설정(4C 주소 · IP 한도) ---
+
+run "defaults_ingest_auth_ip_limit_on_and_resolve_url_empty" {
+  command = plan
+
+  assert {
+    condition = (
+      module.media_host.template_vars.stream_key_resolve_url == "" &&
+      [
+        for file in yamldecode(module.media_host.rendered_user_data["a"]).write_files :
+        file.content if file.path == "/etc/pokeclip-media/ingest-auth.env"
+      ] == ["INGEST_AUTH_IP_LIMIT=on\n"]
+    )
+    error_message = "기본값이 4C 주소 빈 값 · ingest-auth.env 한 줄 INGEST_AUTH_IP_LIMIT=on 이 아니다."
+  }
+}
+
+run "passes_ingest_auth_settings_in_responder_mode" {
+  command = plan
+
+  variables {
+    image_digests = {
+      bundle          = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+      mediamtx        = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+      nginx           = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+      sidecar         = "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+      loopback_sender = "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+      ingest_auth     = "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+    }
+    stream_key_resolve_url = "http://auth.pokeclip.internal:8085"
+    ingest_auth_ip_limit   = "off"
+  }
+
+  assert {
+    condition = (
+      module.media_host.template_vars.stream_key_resolve_url == "http://auth.pokeclip.internal:8085" &&
+      [
+        for file in yamldecode(module.media_host.rendered_user_data["a"]).write_files :
+        file.content if file.path == "/etc/pokeclip-media/ingest-auth.env"
+      ] == ["INGEST_AUTH_IP_LIMIT=off\n"]
+    )
+    error_message = "stream_key_resolve_url · ingest_auth_ip_limit 입력이 모듈(4C 주소 · ingest-auth.env)로 그대로 가지 않는다."
+  }
 }
 
 # 포트 · 헬스 경로의 정본은 platform 이다(대상 그룹과 같은 값 — CONTRACT-runtime.md).
@@ -242,6 +306,20 @@ run "reads_proxy_ports_and_health_path_from_platform" {
       module.media_host.template_vars.media_health_path == "/example-proxy-health"
     )
     error_message = "nginx 포트 넷 · 헬스 경로가 platform 출력 media_proxy_ports · media_health_path 와 다르다."
+  }
+}
+
+# Media → auth(4C resolve) SG 짝은 media 가 만든다(kty 결정 2026-10-25 (나)).
+# auth SG · 포트의 정본은 platform 이다(services.auth).
+run "reads_auth_sg_and_port_from_platform" {
+  command = plan
+
+  assert {
+    condition = module.media_host.auth_resolve_rules == {
+      egress  = { auth_sg_id = "sg-0auth", port = 28082 }
+      ingress = { auth_sg_id = "sg-0auth", port = 28082 }
+    }
+    error_message = "Media → auth 이그레스 · auth 인그레스 ← Media 의 SG · 포트가 platform 출력 service_sg_ids.auth · service_ports.auth 와 다르다."
   }
 }
 

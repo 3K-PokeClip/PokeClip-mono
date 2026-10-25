@@ -240,7 +240,7 @@ class PublishOrderTest extends IntegrationTestSupport {
     private JumpCardSnapshot snapshot(long id, long eventSeq, int score) {
         Instant now = Instant.now();
         return new JumpCardSnapshot(id, "s-ord", JumpCardSource.AUTO, 3_023_000L,
-                new JumpCardSnapshot.Window(3_000_000L, 3_042_000L), score, null, eventSeq, now, null);
+                new JumpCardSnapshot.Window(3_000_000L, 3_042_000L), score, null, false, eventSeq, now, null);
     }
 
     private HighlightRequest auto(String eventId, long start) {

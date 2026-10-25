@@ -62,31 +62,30 @@ resource "aws_sns_topic" "broadcast_lifecycle" {
   content_based_deduplication = false
 }
 
-# 계정 루트 주체 = 이 계정의 IAM 신원 정책이 허용한 주체만. 동작은 기본
-# 정책의 여덟이다(provider 기본 정책의 SNS:Receive 는 SNS 정책 동작이 아니라
-# 뺀다). 같은 계정 주체는 신원 정책만으로 접근하므로 이 정책이 교체되는
-# 동안에도 발행 · 구독이 끊기지 않는다 — 구독과 순서를 두지 않는다.
+# 계정 루트 주체 = 이 계정의 IAM 신원 정책이 허용한 주체만. 같은 계정
+# 주체는 신원 정책만으로 접근하므로(발행은 media 역할, 관리(Terraform)는 kty
+# IAM 사용자) 이 정책이 교체되는 동안에도 발행 · 구독이 끊기지 않는다 —
+# 구독과 순서를 두지 않는다.
+#
+# 동작은 읽기(SNS:GetTopicAttributes) 하나다. 1단-다 직전 점검 2-3 의 정책
+# 시뮬레이터는 계정 루트 문장을 같은 계정 dev 주체에도 맞춰, 이 문장에 든
+# 동작을 dev 주체에 ALLOWED 로 판정한다. 그래서 변경 · 삭제 · 구독 · 발행을
+# 정책에서 뺀다. 실제 접근은 위 신원 정책이 정해 동작은 같다. 조건 키
+# (aws:PrincipalArn = prod 역할)로 좁히는 길은 버렸다 — 시뮬레이터가 그 문맥을
+# 채우지 않아 확인된 거부가 아니라 문맥 누락으로 나오고, prod 역할은 IAM 경로
+# /pokeclip/prod/ 아래라 이름 패턴이 경로까지 맞춰야 한다.
 resource "aws_sns_topic_policy" "broadcast_lifecycle" {
   arn = aws_sns_topic.broadcast_lifecycle.arn
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
       {
-        Sid    = "AllowAccountIdentityPolicies"
+        Sid    = "AllowAccountReadTopicAttributes"
         Effect = "Allow"
         Principal = {
           AWS = "arn:${data.aws_partition.broadcast.partition}:iam::${data.aws_caller_identity.current.account_id}:root"
         }
-        Action = [
-          "SNS:GetTopicAttributes",
-          "SNS:SetTopicAttributes",
-          "SNS:AddPermission",
-          "SNS:RemovePermission",
-          "SNS:DeleteTopic",
-          "SNS:Subscribe",
-          "SNS:ListSubscriptionsByTopic",
-          "SNS:Publish",
-        ]
+        Action   = ["SNS:GetTopicAttributes"]
         Resource = aws_sns_topic.broadcast_lifecycle.arn
       },
     ]
@@ -180,14 +179,4 @@ output "broadcast_topic_arn" {
 output "broadcast_queue_arns" {
   description = "소비자(clip · chat) → 계약9 SQS FIFO 큐 ARN. chat-collector(POK-306) 수신 정책 대상이고, clip 은 app_task_resource_arns 를 쓴다. 큐 URL 은 app_env 에 있다."
   value       = { for consumer, queue in aws_sqs_queue.broadcast : consumer => queue.arn }
-}
-
-# platform 이 clip 작업 역할 정책을 만드는 지도(CONTRACT-runtime.md 「작업
-# 역할 대상」). 키는 platform 의 task_resource_keys 와 같은 이름이고, 일 큐 ·
-# 버킷 키는 런타임 다음 PR 이 더한다(kty 2026-10-23).
-output "app_task_resource_arns" {
-  description = "서비스 → 키 → ARN(와일드카드 없음) — platform 작업 역할 정책 Resource. 지금은 clip 의 broadcast_queue_arn 하나."
-  value = {
-    clip = { broadcast_queue_arn = aws_sqs_queue.broadcast["clip"].arn }
-  }
 }

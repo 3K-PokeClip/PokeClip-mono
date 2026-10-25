@@ -1,6 +1,7 @@
 package com.pokeclip.clip.thumbnail;
 
 import com.pokeclip.clip.broadcast.BroadcastRepository;
+import com.pokeclip.clip.jumpcard.JumpCardCreated;
 import com.pokeclip.clip.segment.TimelineOriginReader;
 import com.pokeclip.clip.support.IntegrationTestSupport;
 import com.pokeclip.clip.support.TestIds;
@@ -9,6 +10,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.support.DefaultListableBeanFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.transaction.event.TransactionPhase;
+import org.springframework.transaction.event.TransactionalEventListener;
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
 import software.amazon.awssdk.regions.Region;
@@ -50,6 +53,8 @@ class ThumbnailFlowTest extends IntegrationTestSupport {
 
     private final List<JsonNode> sent = new ArrayList<>();
     private Instant now = 시작.plus(Duration.ofHours(1));
+    /** 참이면 가짜 줄이 실패한다(줄 장애) */
+    private boolean queueDown;
 
     ThumbnailFlowTest(JdbcTemplate jdbc, ThumbnailTargets targets, ThumbnailRepository thumbnails,
                       BroadcastRepository broadcasts, TimelineOriginReader origins, ObjectMapper mapper,
@@ -67,12 +72,16 @@ class ThumbnailFlowTest extends IntegrationTestSupport {
     void 비운다() {
         방송과_카드를_비운다(jdbc);
         sent.clear();
+        queueDown = false;
     }
 
     private ThumbnailSweeper sweeper() {
         ThumbnailQueueClient queue = new ThumbnailQueueClient(null, "unused") {
             @Override
             public void send(String body) {
+                if (queueDown) {
+                    throw new IllegalStateException("줄 장애");
+                }
                 sent.add(mapper.readTree(body));
             }
         };
@@ -252,6 +261,147 @@ class ThumbnailFlowTest extends IntegrationTestSupport {
         assertThat(sent).hasSize(1);
     }
 
+    // ── 새 카드 (POK-475) ───────────────────────────────────────────────────
+    // 카드가 생기면(커밋 뒤) 명단에 오르고 2초 순회가 명단의 카드만 본다. 1분 순회를 기다리면 사진이 1분 넘게 늦었다.
+    // 명단은 순회기 안에 있어 순회기 하나를 여러 번 돌린다(sweeper()를 다시 부르면 빈 명단이다).
+
+    /** 조각이 이미 올라와 있으면(지난 방송 마킹) 다음 2초 순회가 바로 낸다. 자리는 1분 순회와 같다. */
+    @Test
+    void 새_카드는_조각이_있으면_빠른_순회가_바로_찍는다() {
+        방송("S-c", "key-c", "ended", 시작, 시작.plus(Duration.ofMinutes(30)));
+        조각("key-c", 1, 100_000, 시작, "uploaded", "seg/1");
+        조각("key-c", 2, 104_000, 시작.plusSeconds(4), "uploaded", "seg/2");
+        long card = 카드("S-c", 106_500, 80);
+        ThumbnailSweeper s = sweeper();
+
+        s.cardCreated(new JumpCardCreated(card));
+        s.sweepNewCards();
+
+        assertThat(sent).hasSize(1);
+        JsonNode job = sent.get(0);
+        assertThat(job.path("kind").asString()).isEqualTo("card");
+        assertThat(job.path("targetId").asString()).isEqualTo(String.valueOf(card));
+        assertThat(job.path("source").path("s3Key").asString()).isEqualTo("seg/2");
+        assertThat(job.path("source").path("offsetMs").asLong()).isEqualTo(2_500);
+        assertThat(job.path("output").path("s3Key").asString()).isEqualTo("thumbnails/card/" + card + ".jpg");
+    }
+
+    /**
+     * 라이브 카드는 그 시점 조각이 아직 안 올라왔다. 명단에 남겨 두고 조각이 올라온 다음 순회에 낸다. 한 번 낸 뒤에는 빠른 순회도
+     * 1분 순회도 다시 안 낸다(5분 재시도 규칙 그대로).
+     */
+    @Test
+    void 새_카드는_조각이_올라오는_순회에_한_번만_낸다() {
+        방송("S-c", "S-c", "live", 시작, null);
+        조각("S-c", 1, 0, 시작, "pending", "seg/1");
+        long card = 카드("S-c", 1_000, 50);
+        ThumbnailSweeper s = sweeper();
+        s.cardCreated(new JumpCardCreated(card));
+
+        s.sweepNewCards();
+        assertThat(sent).isEmpty();
+
+        jdbc.update("UPDATE stream_segments SET upload_state = 'uploaded'");
+        s.sweepNewCards();
+        assertThat(sent).hasSize(1);
+
+        s.sweepNewCards();
+        s.sweepCards();
+        assertThat(sent).as("한 번 낸 카드를 다시 냈다: 명단에서 안 빠졌거나 요청 시각을 안 적었다").hasSize(1);
+    }
+
+    /**
+     * 빠른 순회는 명단의 카드만 본다: 표 전체를 2초마다 훑지 않는다. 명단 밖 카드는 1분 순회가 맡는다.
+     * 🔴 명단에 카드 하나를 꼭 둔다: 명단이 비면 질의를 안 해서 번호 조건을 지워도 이 시험이 초록이었다(결함 주입으로 찾음).
+     */
+    @Test
+    void 명단_밖_카드는_빠른_순회가_안_본다() {
+        방송("S-c", "S-c", "ended", 시작, 시작.plus(Duration.ofMinutes(30)));
+        조각("S-c", 1, 0, 시작, "uploaded", "seg/1");
+        long 명단_밖 = 카드("S-c", 1_000, 50);
+        long 새것 = 카드("S-c", 2_000, 50);
+        ThumbnailSweeper s = sweeper();
+        s.cardCreated(new JumpCardCreated(새것));
+
+        s.sweepNewCards();
+        assertThat(sent).extracting(job -> job.path("targetId").asString()).containsExactly(String.valueOf(새것));
+
+        s.sweepCards();
+        assertThat(sent).as("양성 대조: 1분 순회는 명단 밖 카드를 찍는다")
+                .extracting(job -> job.path("targetId").asString())
+                .containsExactly(String.valueOf(새것), String.valueOf(명단_밖));
+    }
+
+    /**
+     * 반대 순서도 한 번이다: 1분 순회가 먼저 낸 명단의 카드를 빠른 순회가 다시 안 낸다(둘 다 「사진 없음 · 요청 5분 안 아님」을 본다).
+     * 두 갈래가 같은 카드를 겹쳐 내면 같은 키 · 같은 장면이라 사진은 하나지만 일꾼 일이 두 배다.
+     */
+    @Test
+    void 일분_순회가_먼저_낸_카드를_빠른_순회가_다시_안_낸다() {
+        방송("S-c", "S-c", "ended", 시작, 시작.plus(Duration.ofMinutes(30)));
+        조각("S-c", 1, 0, 시작, "uploaded", "seg/1");
+        long card = 카드("S-c", 1_000, 50);
+        ThumbnailSweeper s = sweeper();
+        s.cardCreated(new JumpCardCreated(card));
+
+        s.sweepCards();
+        s.sweepNewCards();
+        now = now.plusSeconds(2);
+        s.sweepNewCards();
+
+        assertThat(sent).as("두 순회가 같은 카드를 겹쳐 냈다").hasSize(1);
+    }
+
+    /** 10분이 지나도 조각이 안 오면 명단에서 뺀다(2초마다 묻는 것을 멈춘다). 그 뒤 조각이 오면 1분 순회가 찍는다. */
+    @Test
+    void 십_분이_지난_새_카드는_명단에서_빠진다() {
+        방송("S-c", "S-c", "live", 시작, null);
+        조각("S-c", 1, 0, 시작, "pending", "seg/1");
+        long card = 카드("S-c", 1_000, 50);
+        ThumbnailSweeper s = sweeper();
+        s.cardCreated(new JumpCardCreated(card));
+
+        now = now.plus(ThumbnailSweeper.NEW_CARD_WINDOW).plusSeconds(1);
+        s.sweepNewCards();
+        jdbc.update("UPDATE stream_segments SET upload_state = 'uploaded'");
+        s.sweepNewCards();
+        assertThat(sent).as("10분이 지난 카드를 빠른 순회가 아직 본다").isEmpty();
+
+        s.sweepCards();
+        assertThat(sent).hasSize(1);
+    }
+
+    /** 줄에 못 실으면 명단에 남는다: 다음 2초 순회가 다시 낸다(1분을 기다리지 않는다). */
+    @Test
+    void 줄에_못_실은_새_카드는_명단에_남는다() {
+        방송("S-c", "S-c", "ended", 시작, 시작.plus(Duration.ofMinutes(30)));
+        조각("S-c", 1, 0, 시작, "uploaded", "seg/1");
+        long card = 카드("S-c", 1_000, 50);
+        ThumbnailSweeper s = sweeper();
+        s.cardCreated(new JumpCardCreated(card));
+
+        queueDown = true;
+        assertThatThrownBy(s::sweepNewCards).isInstanceOf(IllegalStateException.class);
+        queueDown = false;
+        s.sweepNewCards();
+
+        assertThat(sent).hasSize(1);
+    }
+
+    /**
+     * 명단에는 <b>커밋 뒤에</b> 오른다. 그냥 듣기({@code @EventListener})로 바꾸면 되감긴 카드도 명단에 올라 없는 카드를 묻는다.
+     * 시험 설정은 썸네일이 꺼져 순회기가 컨텍스트에 없어 받는 법을 표시로 잰다. 알림을 내는 쪽은 {@code JumpCardCreatedEventTest}.
+     */
+    @Test
+    void 새_카드_알림은_커밋_뒤에_받는다() throws Exception {
+        TransactionalEventListener on = ThumbnailSweeper.class.getDeclaredMethod("cardCreated", JumpCardCreated.class)
+                .getAnnotation(TransactionalEventListener.class);
+
+        assertThat(on).isNotNull();
+        assertThat(on.phase()).isEqualTo(TransactionPhase.AFTER_COMMIT);
+        assertThat(on.fallbackExecution()).as("트랜잭션 밖 알림까지 받으면 되감길 카드를 미리 적는다").isFalse();
+    }
+
     // ── 완성 영상 ───────────────────────────────────────────────────────────
 
     /**
@@ -281,21 +431,21 @@ class ThumbnailFlowTest extends IntegrationTestSupport {
         assertThat(job.path("source").path("offsetMs").asLong()).isEqualTo(25_000);
     }
 
-    /** 숨기기는 POK-393에서 없앴다. 숨김 칸이 찬 옛 카드도 점수가 가장 높으면 그 장면을 찍는다(칸은 POK-394가 지운다). */
+    /** 가린 카드(POK-463)는 점수가 가장 높아도 대표 장면으로 안 쓴다: 편집자가 하이라이트가 아니라고 본 장면이다. */
     @Test
-    void 완성_영상은_숨김_칸이_찬_옛_카드도_최고_점수면_그_장면을_찍는다() {
+    void 완성_영상은_가린_카드를_건너뛰고_다음_최고_점수_장면을_찍는다() {
         방송("S-v", "S-v", "ended", 시작, 시작.plus(Duration.ofMinutes(30)));
         조각("S-v", 1, 100_000, 시작, "uploaded", "seg/1");
         long cutIn = 시작.toEpochMilli() + 5_000;
         카드("S-v", 100_000 + 20_000, 70);                 // 영상 15초 자리
-        long 옛_숨김 = 카드("S-v", 100_000 + 30_000, 90);   // 영상 25초 자리, 가장 높다
-        jdbc.update("UPDATE jump_cards SET hidden_at = now(), hidden_by = '1' WHERE id = ?", 옛_숨김);
+        long 가린 = 카드("S-v", 100_000 + 30_000, 90);   // 영상 25초 자리, 가장 높다
+        jdbc.update("UPDATE jump_cards SET hidden_at = now(), hidden_by = '1' WHERE id = ?", 가린);
         완성_영상("S-v", cutIn, cutIn + 40_000, "[{\"outputId\":\"o1\",\"kind\":\"video\",\"s3Key\":\"clips/9/t/o1.mp4\"}]");
 
         sweeper().sweepClips();
 
         assertThat(sent).extracting(job -> job.path("source").path("offsetMs").asLong())
-                .as("숨김 칸으로 거르면 옛 숨김 카드를 건너뛰고 15초 자리를 찍는다").containsExactly(25_000L);
+                .as("가린 카드의 25초 자리를 찍었다: 숨김 칸을 안 거른다").containsExactly(15_000L);
     }
 
     @Test
@@ -327,7 +477,7 @@ class ThumbnailFlowTest extends IntegrationTestSupport {
 
     /**
      * 끝난 방송은 최고 점수 카드 사진, 카드 사진이 없으면 마지막 라이브 사진. 방송 중이면 카드가 있어도 최신 라이브 사진이다.
-     * 숨김 칸이 찬 옛 카드도 대표가 될 수 있다(POK-393, 숨기기가 없어졌다).
+     * 가린 카드(POK-463)는 점수가 가장 높아도 대표가 아니다.
      */
     @Test
     void 방송_사진은_상태에_따라_고른다() {
@@ -351,8 +501,8 @@ class ThumbnailFlowTest extends IntegrationTestSupport {
 
         Map<String, String> urls = urls(true).ofBroadcasts(List.of("S-on", "S-none"), List.of("S-end", "S-nocard"));
 
-        assertThat(urls.get("S-end")).as("숨김 칸으로 거르면 옛 숨김 카드가 대표에서 영영 빠진다")
-                .contains("thumbnails/card/" + hiddenOld + ".jpg");
+        assertThat(urls.get("S-end")).as("가린 카드가 대표로 나갔다: 숨김 칸을 안 거른다")
+                .contains("thumbnails/card/" + high + ".jpg");
         assertThat(urls.get("S-nocard")).contains("thumbnails/live/S-nocard.jpg");
         assertThat(urls.get("S-on")).contains("thumbnails/live/S-on.jpg");
         assertThat(urls).doesNotContainKey("S-none");

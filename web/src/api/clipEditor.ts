@@ -44,6 +44,8 @@ export interface JumpCard {
   score: number | null;
   evidence: unknown;
   eventSeq: number | null;
+  /** 가린 카드(POK-463). 목록은 includeHidden일 때만 싣는다. 옛 서버면 빠져 온다 */
+  hidden?: boolean;
   /** 카드 시점 장면 사진(POK-277). 목록 문만 싣는다. 통로(SSE)로 온 카드는 비어 있다 */
   thumbnailUrl?: string | null;
   createdAt: string;
@@ -150,16 +152,18 @@ const CARD_PAGE = 200;
 
 /**
  * 방송의 카드를 쪽마다 끝까지 읽는다. 한 쪽만 읽으면 51번째 카드부터 없는 것이 된다(기본 쪽 크기 50,
- * 오래된 것부터 온다: PR #200 codex).
+ * 오래된 것부터 온다: PR #200 codex). `includeHidden`이면 가린 카드도 받는다(POK-463: 숨김 칸 · 편집기 열기).
  */
 export async function fetchAllJumpCards<T = JumpCard>(
   streamId: string,
   signal?: AbortSignal,
+  { includeHidden = false }: { includeHidden?: boolean } = {},
 ): Promise<T[]> {
   const all: T[] = [];
   let cursor: string | null = null;
   do {
     const qs = new URLSearchParams({ limit: String(CARD_PAGE) });
+    if (includeHidden) qs.set('includeHidden', 'true');
     if (cursor) qs.set('cursor', cursor);
     const page: { cards: T[]; nextCursor?: string | null } = await getJson(
       `/api/clip/broadcasts/${encodeURIComponent(streamId)}/jump-cards?${qs}`,
@@ -172,7 +176,8 @@ export async function fetchAllJumpCards<T = JumpCard>(
 }
 
 export async function fetchJumpCard(streamId: string, cardId: string): Promise<JumpCard | null> {
-  const cards = await fetchAllJumpCards(streamId);
+  // 가린 카드도 편집기로는 연다: 가리기는 목록에서 빼는 것이지 지우는 것이 아니다(POK-463)
+  const cards = await fetchAllJumpCards(streamId, undefined, { includeHidden: true });
   return cards.find((card) => String(card.id) === cardId) ?? null;
 }
 
@@ -233,6 +238,49 @@ export async function fetchBroadcast(streamId: string): Promise<BroadcastRow | n
   return null;
 }
 
+/**
+ * 방송 정보의 시점별 기록(POK-462): 플랫폼마다 제목 · 카테고리 · 태그가 같은 구간들. 시각 t의 값은 platform이 같고
+ * from ≤ t < until인 구간이다(until이 null이면 지금도). 첫 구간 앞은 모른다. 카테고리 사진(categoryImageUrl)은 구간을 가르지 않고
+ * 그 구간의 마지막 사진이다
+ */
+export interface BroadcastTimeline {
+  segments: {
+    platform: string;
+    from: string;
+    until: string | null;
+    title: string | null;
+    category: string | null;
+    categoryImageUrl: string | null;
+    tags: string[];
+  }[];
+  truncated: boolean;
+}
+
+/** 방송 하나의 시점별 기록 전체. 방송 정보 문과 같은 자격 판정이고, 모르는 방송이면 빈 구간이다 */
+export async function fetchBroadcastTimeline(streamId: string): Promise<BroadcastTimeline> {
+  const res = await apiFetch(
+    `/api/clip/broadcasts/${encodeURIComponent(streamId)}/broadcast-info/timeline`,
+  );
+  return (await res.json()) as BroadcastTimeline;
+}
+
+/**
+ * 그 방송이 그 채널(스트리머)의 것인가(POK-457). 방송 줄에는 스트리머 번호가 없어, 그 채널로 물은 목록에 있는지로 가른다.
+ * 남의 채널 방송을 주소로 열었을 때 고른 채널 주인의 프로필을 붙이지 않으려고 쓴다
+ */
+export async function isBroadcastInChannel(streamId: string, streamerId: number): Promise<boolean> {
+  for (const state of ['live', 'past'] as const) {
+    let found = false;
+    await walkBroadcasts(
+      state,
+      (rows) => (found = rows.some((b) => b.streamId === streamId)),
+      streamerId,
+    );
+    if (found) return true;
+  }
+  return false;
+}
+
 export function fetchSegments(
   streamId: string,
   startMs: number,
@@ -289,6 +337,17 @@ export async function openJumpCard(cardId: string): Promise<void> {
   } catch {
     // 기록 실패는 무시한다
   }
+}
+
+/**
+ * 카드를 가린다 · 되살린다(POK-463). 답은 바뀐 뒤의 카드 한 장이다(이미 그 상태였어도 200과 지금 카드). 실패는 던진다:
+ * 화면이 토스트로 알린다
+ */
+export async function setJumpCardHidden<T = JumpCard>(cardId: string, hidden: boolean): Promise<T> {
+  const res = await clipFetch(`/api/clip/jump-cards/${encodeURIComponent(cardId)}/hide`, {
+    method: hidden ? 'POST' : 'DELETE',
+  });
+  return (await res.json()) as T;
 }
 
 /**

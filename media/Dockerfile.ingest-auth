@@ -28,7 +28,8 @@ COPY --chown=0:0 --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 # 그대로 옮기므로(Dockerfile.mtxhook 의 실측), 빌드 스테이지에 USER 를 더하는 변경 하나로 소유가 바뀌지 않게 한다.
 COPY --chown=0:0 --from=build /out/ingest-auth /ingest-auth
 
-# 비특권 UID 10003 으로 돌린다(설계 2-8 — compose 의 user 와 같다). 숫자로 적는다 — scratch 에는 /etc/passwd 가 없다.
+# 비특권 UID 10003 으로 돌린다(설계 2-8). compose 는 user 를 적지 않는다 — 이 USER 가 정본 · start-media INGEST_AUTH_UID
+# 기본값과 같다(render_test 사례 45). 숫자로 적는다 — scratch 에는 /etc/passwd 가 없다.
 # 거부 목록(/etc/ingest-auth)과 허용 연결 기록(/var/lib/ingest-auth)은 compose 가 호스트 디렉터리로 붙인다 —
 # 이미지에 두지 않는다.
 USER 10003:10003

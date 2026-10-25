@@ -65,6 +65,8 @@ export interface GlassPlayerProps {
   channelName: string;
   /** 상단 필의 아래 줄 — 라이브는 「1,842명 시청 중」 (시안은 여기에 제목을 두지 않는다) */
   viewersNote: string;
+  /** 방송 정보를 받아 오는 중 — 상단 필의 빈 채널 이름 · 시청자 줄을 회색 막대로 둔다(POK-449, PlayerTopOverlay) */
+  infoPending?: boolean;
   /** HLS 재생 소스(m3u8) — 없으면 simulate에 따라 목업이나 「영상 신호 없음」이다 */
   src?: string | null;
   /** 라이브 영상 키(출입증 쿠키의 경로). 영상 요청이 403이면 그 키의 출입증을 버린다(POK-410) */
@@ -141,6 +143,7 @@ function SimulatedGlassPlayer(props: GlassPlayerProps) {
 function NoSignalGlassPlayer({
   channelName,
   viewersNote,
+  infoPending,
   broadcastStatus,
   noSignalNote,
   embed = false,
@@ -171,6 +174,7 @@ function NoSignalGlassPlayer({
       <PlayerTopOverlay
         channelName={channelName}
         viewersNote={viewersNote}
+        infoPending={infoPending}
         status={broadcastStatus}
         chatPanelOpen={chatPanelOpen}
         onToggleChatPanel={onToggleChatPanel}
@@ -243,6 +247,7 @@ interface GlassPlayerBodyProps extends GlassPlayerProps {
 function GlassPlayerBody({
   channelName,
   viewersNote,
+  infoPending,
   broadcastStatus,
   simulate = false,
   embed = false,
@@ -456,6 +461,7 @@ function GlassPlayerBody({
       <PlayerTopOverlay
         channelName={channelName}
         viewersNote={viewersNote}
+        infoPending={infoPending}
         status={broadcastStatus}
         chatPanelOpen={chatPanelOpen}
         onToggleChatPanel={fullscreen ? undefined : onToggleChatPanel}

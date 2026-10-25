@@ -93,6 +93,8 @@ public class SoopChatSessions implements SoopChat, SoopChatBrowser.Listener {
         long generation;
         /** 지난 탭 이벤트를 INFO로 한 번 남겼는가(그 뒤는 DEBUG). */
         boolean staleLogged;
+        /** 지금 탭을 연 시각(수집기 시계). 입장까지 걸린 시간을 잰다(POK-456). */
+        long openedAtMillis;
 
         Session(String streamId, String channelId, String token) {
             this.streamId = streamId;
@@ -166,6 +168,7 @@ public class SoopChatSessions implements SoopChat, SoopChatBrowser.Listener {
         synchronized (session) {
             session.retryScheduled = false;
             session.generation = generation;
+            session.openedAtMillis = clockMillis.getAsLong();
             token = session.token;
         }
         tabs.open(session.streamId, token, generation);
@@ -225,7 +228,7 @@ public class SoopChatSessions implements SoopChat, SoopChatBrowser.Listener {
         buffer.offer(new PersistableChat(Platform.SOOP, streamId, session.channelId, message.userId(), message.text(),
                 receivedAt, receivedAt, message.nickname(), role));
         archive.offer(new ArchivableChat(Platform.SOOP, session.channelId, receivedAt, message.raw()));
-        relay.offer(streamId, new RelayPayload.Chat(Instant.ofEpochMilli(receivedAt), message.nickname(), message.userId(),
+        relay.offer(streamId, new RelayPayload.Chat(Platform.SOOP, Instant.ofEpochMilli(receivedAt), message.nickname(), message.userId(),
                 role, message.text()));
     }
 
@@ -258,9 +261,26 @@ public class SoopChatSessions implements SoopChat, SoopChatBrowser.Listener {
         // 칸 짝: 금액 칸에 개수, 종류 칸에 action 이름. 단위(치지직 = 원, SOOP = 개수)는 종류로 가른다(결정 2). SOOP 후원에는 문구가 없다
         donations.offer(new PersistableDonation(Platform.SOOP, streamId, session.channelId, donation.userId(),
                 donation.nickname(), donation.action(), donation.count(), "", receivedAt, donationSeq.decrementAndGet()));
-        relay.offer(streamId, new RelayPayload.Donation(Instant.ofEpochMilli(receivedAt), donation.nickname(),
+        relay.offer(streamId, new RelayPayload.Donation(Platform.SOOP, Instant.ofEpochMilli(receivedAt), donation.nickname(),
                 donation.userId(), donation.count(), donation.action(), ""));
         // 원본 아카이브에는 안 넣는다: 치지직 후원과 같다(StreamSession 주석, 검산 등식 received = archived + 버림)
+    }
+
+    @Override
+    public void onReady(String streamId, long generation) {
+        Session session = sessions.get(streamId);
+        if (session == null) {
+            return;
+        }
+        long sinceOpen;
+        synchronized (session) {
+            if (!isCurrent(session, generation)) {
+                return;
+            }
+            sinceOpen = clockMillis.getAsLong() - session.openedAtMillis;
+        }
+        // 탭을 연 뒤 채팅방 입장까지(POK-456). 첫 채팅이 늦으면 연결이 느린지 그때 채팅이 없었는지를 이것으로 가른다
+        log.info("soop.chat.ready stream={} sinceOpenMs={}", streamId, sinceOpen);
     }
 
     @Override

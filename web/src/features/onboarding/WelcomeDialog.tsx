@@ -1,9 +1,9 @@
 'use client';
 
 import { useCallback, useEffect } from 'react';
-import Image from 'next/image';
 import { Check } from 'lucide-react';
 import { Button, FocusScope, Portal, VisuallyHidden, useScrollLock } from '@/ui';
+import { BrandSymbol } from '@/components/app-shell/BrandSymbol';
 import { track } from '@/lib/analytics';
 import { useOnboardingStore } from '@/stores/onboarding';
 import { TOUR_STEPS, WELCOME_STEPS, stepDone } from './tourSteps';
@@ -49,13 +49,7 @@ export function WelcomeDialog({ visible }: { visible: readonly number[] }) {
             aria-describedby="onboarding-welcome-desc"
             className={styles.welcomeCard}
           >
-            <Image
-              src="/brand/pokeclip-symbol.svg"
-              alt=""
-              width={36}
-              height={36}
-              className={styles.welcomeLogo}
-            />
+            <BrandSymbol size={36} className={styles.welcomeLogo} />
             <h2 id="onboarding-welcome-title" className={styles.welcomeTitle}>
               PokeClip에 오신 걸 환영해요
             </h2>

@@ -17,6 +17,9 @@ import {
   type PlatformLatest,
 } from '@/features/broadcast/platformView';
 import { COLLECTOR_WINDOW_MS } from './chatCollector';
+import { viewedSegment } from './broadcastInfoAt';
+import { focusAtMs } from './categoryThumb';
+import { useBroadcastTimeline } from './useBroadcastTimeline';
 import {
   emitRelay,
   publishLiveData,
@@ -72,13 +75,18 @@ export interface LiveHighlight {
   atMs?: number;
   /** 감지 사유 한 줄(채팅 ×3.2 급증 (120건) · 수동 마킹) — 통계 그래프 툴팁 */
   reason?: string;
+  /** 가린 카드(POK-463): 「숨김」 칸에서만 보이고 「되살리기」만 할 수 있다 */
+  hidden?: boolean;
 }
 
 export type CardListStatus = 'loading' | 'failed' | 'loaded';
 
 export interface LiveMockState {
   stream: LiveStream;
+  /** 가리지 않은 카드. 전체·자동·수동 칸과 통계 그래프 핀이 이것이다 */
   highlights: LiveHighlight[];
+  /** 가린 카드(POK-463). 「숨김」 칸이 이것이다 */
+  hiddenHighlights: LiveHighlight[];
   /**
    * 이 방송의 카드 목록을 받았나. 받기 전의 빈 목록은 「없다」가 아니라 「모른다」다. 'failed'는 받기 전에 읽기가
    * 실패한 것이다(다음 주기에 다시 읽는다). 한 번 받은 뒤의 실패는 받은 목록을 그대로 두므로 'loaded'다
@@ -88,7 +96,8 @@ export interface LiveMockState {
   chatWarning: boolean;
   /**
    * 수동 마킹 답의 카드를 목록에 넣는다(POK-392). 지금 방송의 카드일 때만 넣는다: 답이 오는 사이 방송을 바꾸면 앞 방송 카드가
-   * 새 방송 목록에 섞인다. 같은 id면 하나이고(통로·목록으로 같은 카드가 와도), 받아 둔 사진은 지킨다(답에는 사진이 없다)
+   * 새 방송 목록에 섞인다. 같은 id면 하나이고(통로·목록으로 같은 카드가 와도), 받아 둔 사진은 지킨다(답에는 사진이 없다).
+   * 가리기·되살리기 답(POK-463)도 이것으로 넣는다
    */
   mergeCard: (card: LiveCardSnapshot) => void;
 }
@@ -107,6 +116,8 @@ interface Snapshot {
   window: { startMs: number; endMs: number };
   score: number | null;
   evidence: Record<string, unknown> | null;
+  /** 가린 카드(POK-463). 옛 서버면 빠져 온다 */
+  hidden?: boolean;
   eventSeq: number;
   createdAt: string;
   /** 목록 문만 싣는다(POK-277). 통로로 온 카드는 비어 있다 */
@@ -123,7 +134,7 @@ interface BroadcastInfoResponse {
   } | null;
   /** 플랫폼마다 최신 값(POK-397). 옛 서버면 빠져 온다 */
   platforms?: PlatformLatest[];
-  /** category는 수집기가 관측마다 싣기 전엔 없다(지금은 latest에만 있다) — 오면 통계가 카테고리 구간을 나눈다 */
+  /** 점마다 그 관측의 카테고리(POK-402). 통계가 카테고리 구간을 나눈다. 옛 서버면 빠져 온다 */
   series: InfoPoint[];
 }
 /** platform은 그 점을 잰 플랫폼(POK-397). 두 플랫폼 점이 섞여 오고, 옛 서버면 빠져 온다 */
@@ -152,6 +163,7 @@ function toLiveInfo(loaded: LoadedInfo): LiveInfo {
         : { title: view.latest.title, tags: view.latest.tags, category: view.latest.category },
     series: view.series,
     scope: loaded.scope,
+    platform: view.platform,
   };
 }
 
@@ -230,7 +242,7 @@ function toHighlight(c: Snapshot, index: number, now: number, base: number | nul
     : ratio !== null
       ? `채팅 ×${ratio.toFixed(1)} 급증${count !== null ? ` (${count}건)` : ''}`
       : `채팅 급증${count !== null ? ` (${count}건)` : ''}`;
-  // 옛 서버가 claimedBy·hidden을 실어 보내도 안 본다: 집기·숨기기는 POK-393에서 없앴다
+  // 옛 서버가 claimedBy를 실어 보내도 안 본다: 집기는 POK-393에서 없앴다
   const status: HighlightStatus = manual ? 'manual' : 'scored';
   return {
     id: `card-${c.id}`,
@@ -244,7 +256,22 @@ function toHighlight(c: Snapshot, index: number, now: number, base: number | nul
     thumbnailUrl: c.thumbnailUrl ?? null,
     atMs: cardAt(c, base),
     reason,
+    ...(c.hidden ? { hidden: true } : {}),
   };
+}
+
+/** 방송 시각이 늦은 것부터, 같으면 번호가 큰 것부터 */
+function byLatest(a: Snapshot, b: Snapshot): number {
+  return b.streamTimestampMs - a.streamTimestampMs || b.id - a.id;
+}
+
+/**
+ * 같은 카드의 더 낡은 판인가. 순번(eventSeq)은 그 카드가 바뀔 때마다 오른다(행 잠금 안에서 트리거가 매긴다). 가리기 답을 넣은 뒤에
+ * 그보다 먼저 떠난 목록 읽기가 늦게 오면 가리기 전 판으로 되돌렸다(POK-463): 끝난 방송은 다음 읽기가 1분 뒤라 그동안 카드가 제 칸으로
+ * 돌아가 있었다. 같은 순번은 받는다: 목록만 사진을 싣는다
+ */
+function isStale(prev: Snapshot | undefined, next: Snapshot): boolean {
+  return prev !== undefined && next.eventSeq < prev.eventSeq;
 }
 
 function parseSseBlock(block: string): { event: string; data: string } | null {
@@ -323,7 +350,10 @@ export function useLiveMockState(pastRoute: boolean): LiveMockState {
       setCards((prev) => {
         const next = { ...prev };
         // 통로(SSE)로 온 카드는 사진 칸이 비어 온다. 목록에서 받아 둔 사진을 지우지 않는다(POK-277)
-        for (const c of list) next[c.id] = fromStream ? keepKnownThumbnail(prev[c.id], c) : c;
+        for (const c of list) {
+          if (isStale(prev[c.id], c)) continue;
+          next[c.id] = fromStream ? keepKnownThumbnail(prev[c.id], c) : c;
+        }
         return next;
       });
     };
@@ -346,7 +376,8 @@ export function useLiveMockState(pastRoute: boolean): LiveMockState {
       listReadAt = Date.now();
       try {
         // 끝까지 넘긴다: 한 쪽만 읽으면 51번째 카드부터 빠진다(PR #200 codex)
-        merge(await fetchAllJumpCards<Snapshot>(streamId));
+        // 가린 카드도 받는다: 숨김 칸이 이것으로 찬다(POK-463)
+        merge(await fetchAllJumpCards<Snapshot>(streamId, undefined, { includeHidden: true }));
         if (!stopped) setCardsStatus('loaded');
       } catch {
         // 다음 주기에 다시. 받기 전의 실패만 「못 읽었다」고 말한다: 받은 목록이 있으면 그것을 그대로 보인다
@@ -572,10 +603,16 @@ export function useLiveMockState(pastRoute: boolean): LiveMockState {
                       observedAt: ev.time,
                     },
                     platforms: withPlatformObservation(prev?.platforms, ev),
-                    // 점마다 플랫폼을 남긴다: 버리면 두 플랫폼 숫자가 한 그래프에 섞인다(POK-397)
+                    // 점마다 플랫폼을 남긴다: 버리면 두 플랫폼 숫자가 한 그래프에 섞인다(POK-397). 카테고리도 남긴다:
+                    // 버리면 바뀐 카테고리가 다음 정기 조회까지 통계 띠에 안 보였다(POK-465)
                     series: [
                       ...(prev?.series ?? []),
-                      { observedAt: ev.time, viewers: ev.viewers, platform: ev.platform },
+                      {
+                        observedAt: ev.time,
+                        viewers: ev.viewers,
+                        category: ev.category,
+                        platform: ev.platform,
+                      },
                     ].slice(-720),
                   };
                   publishLiveData({ info: toLiveInfo(next) });
@@ -632,17 +669,26 @@ export function useLiveMockState(pastRoute: boolean): LiveMockState {
 
   useEffect(() => {
     publishLiveData({
-      cardTimes: Object.values(cards).map((c) => cardAt(c, base)),
+      cardTimes: Object.values(cards)
+        .filter((c) => !c.hidden)
+        .map((c) => cardAt(c, base)),
     });
   }, [cards, base]);
 
   const highlights = useMemo(() => {
     // 방송 시각이 늦은 것부터, 같으면 번호가 큰 것부터: 둘 다 저장 뒤 안 바뀐다. 순번(eventSeq)은 행이 바뀔 때마다 올라
     // 옛 숨김 카드(숨길 때 올랐다)가 맨 앞에서 「방금」 강조를 받았다(PR #326 codex)
-    const list = Object.values(cards).sort(
-      (a, b) => b.streamTimestampMs - a.streamTimestampMs || b.id - a.id,
-    );
+    const list = Object.values(cards)
+      .filter((c) => !c.hidden)
+      .sort(byLatest);
     return list.map((c, i) => toHighlight(c, i, now, base));
+  }, [cards, now, base]);
+  const hiddenHighlights = useMemo(() => {
+    const list = Object.values(cards)
+      .filter((c) => c.hidden)
+      .sort(byLatest);
+    // 강조(맨 앞 「방금」)는 보이는 목록의 몫이라 가린 카드에는 주지 않는다
+    return list.map((c) => toHighlight(c, -1, now, base));
   }, [cards, now, base]);
 
   const { data: chzzk } = useQuery(chzzkLinkQueryOptions);
@@ -654,24 +700,37 @@ export function useLiveMockState(pastRoute: boolean): LiveMockState {
   const view = useMemo(() => (info === null ? null : primaryInfo(info, Date.now())), [info]);
   // 채널 이름은 대표 플랫폼의 것이다(치지직 채널 이름 · SOOP 닉네임, POK-397). 플랫폼 값이 없는 옛 서버면 치지직이다. 내 방송은 내
   // 연동에서, 위임받은 방송(EDITOR)은 방송 줄에 실려 온 스트리머 이름에서 읽는다(POK-430). 내 채널 이름을 남의 방송에 붙이면 거짓이라
-  // (POK-251 리뷰) 줄에 이름이 없으면(옛 서버 · 연동 없음) 비운다
+  // (POK-251 리뷰) 줄에 이름이 없으면(옛 서버 · 연동 없음) 비운다. 방송 중인데 수집기가 이 방송을 아직 한 번도 못 봤으면(방송 정보
+  // 없음) 어느 플랫폼인지 모르므로 비운다: 치지직 이름으로 채우면 SOOP 방송 왼쪽 위에 치지직 채널 이름이 떴다(POK-449). 끝난 방송은
+  // 그대로다: 정보 없이 끝난 옛 방송은 치지직 방송이었다(로컬 리뷰 1라운드)
   const soopLead = view?.platform === 'SOOP';
   const channelName =
-    live.relation === 'OWNER'
-      ? ((soopLead ? soop?.nickname : chzzk?.channelName) ?? '')
-      : live.relation === 'EDITOR'
-        ? ((soopLead ? live.channelNames?.SOOP : live.channelNames?.CHZZK) ?? '')
-        : '';
+    !view?.latest && live.status !== 'ended'
+      ? ''
+      : live.relation === 'OWNER'
+        ? ((soopLead ? soop?.nickname : chzzk?.channelName) ?? '')
+        : live.relation === 'EDITOR'
+          ? ((soopLead ? live.channelNames?.SOOP : live.channelNames?.CHZZK) ?? '')
+          : '';
   const myName = me?.name ?? '';
+  // 라이브를 되감았거나 지난 방송에서 시점을 옮겼으면 그 시점의 제목이다(POK-462). 실시간이면 null이고 최신 관측 제목을 쓴다.
+  // 정보 바의 카테고리 · 사진과 같은 기록 · 같은 시각이다(useLiveDetailsMockState)
+  const timeline = useBroadcastTimeline(streamId, live.status);
+  const seen = viewedSegment(timeline, view?.platform ?? null, focusAtMs(live));
   const stream = useMemo<LiveStream>(
     () => ({
-      // 방송 정보 관측의 제목이 먼저고, 그 관측에 제목이 비면 목록 제목(POK-259), 그것도 없으면 방송 번호
+      // 보는 시점 구간의 제목(POK-462), 실시간이면 방송 정보 관측의 제목이 먼저고, 그 관측에 제목이 비면 목록 제목(POK-259), 그것도
+      // 없으면 빈 값(모름)이다. 방송 번호를 제목 자리에 쓰지 않는다: 정보 바가 빈 제목을 회색 막대나 「제목 확인 중」으로 비운다(POK-449)
       title:
+        seen?.title?.trim() ||
         view?.latest?.title?.trim() ||
         live.listTitle ||
-        // 지난 방송 주소는 방송 번호를 정하기 전에도 라이브 안내(「방송 중인 채널이 없어요」)를 쓰지 않는다(리뷰 3라운드)
-        streamId ||
-        (pastRoute ? '지난 방송' : '방송 중인 채널이 없어요'),
+        (streamId
+          ? ''
+          : // 지난 방송 주소는 방송 번호를 정하기 전에도 라이브 안내(「방송 중인 채널이 없어요」)를 쓰지 않는다(리뷰 3라운드)
+            pastRoute
+            ? '지난 방송'
+            : '방송 중인 채널이 없어요'),
       // 정보 바는 이 칸을 그리지 않는다(플랫폼 태그는 홈 라이브 띠에만 있다). 방송 정보가 아직 없으면 빈 값이다
       platform: onAirLabel(info?.platforms, Date.now()) ?? '',
       channelName,
@@ -691,17 +750,33 @@ export function useLiveMockState(pastRoute: boolean): LiveMockState {
       })(),
       editorName: myName,
     }),
-    [streamId, sseOk, info, view, live.status, live.listTitle, channelName, myName, pastRoute],
+    [
+      streamId,
+      sseOk,
+      info,
+      view,
+      seen,
+      live.status,
+      live.listTitle,
+      channelName,
+      myName,
+      pastRoute,
+    ],
   );
 
   const mergeCard = useCallback((card: Snapshot) => {
     if (!card || card.streamId !== streamIdRef.current) return;
-    setCards((prev) => ({ ...prev, [card.id]: keepKnownThumbnail(prev[card.id], card) }));
+    setCards((prev) =>
+      isStale(prev[card.id], card)
+        ? prev
+        : { ...prev, [card.id]: keepKnownThumbnail(prev[card.id], card) },
+    );
   }, []);
 
   return {
     stream,
     highlights,
+    hiddenHighlights,
     cardsStatus,
     chatWarning: false,
     mergeCard,

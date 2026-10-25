@@ -17,7 +17,8 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="ko" suppressHydrationWarning>
+    // data-theme 기본 dark — init 스크립트가 저장된 선택으로 덮는다. 스크립트가 못 돌아도 다크로 그려진다
+    <html lang="ko" data-theme="dark" suppressHydrationWarning>
       <head>
         {/* 첫 페인트 전에 data-theme을 적용해 테마 플래시(FOUC)를 막는다. */}
         <script dangerouslySetInnerHTML={{ __html: getThemeInitScript() }} />

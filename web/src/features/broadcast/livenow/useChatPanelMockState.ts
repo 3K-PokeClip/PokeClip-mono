@@ -57,8 +57,18 @@ export type ChatPanelMessage =
       text: string;
       /** 닉네임 색 로테이션 인덱스 (LiveScreen.module.css .chatName*) */
       colorIndex: number;
+      /** 어느 플랫폼 채팅인지(서버 코드 `CHZZK`·`SOOP`, POK-466). 채팅 창이 로고로 그리고(POK-476), 모르면 숨긴다 */
+      platform?: string | null;
     }
-  | { id: number; kind: 'donation'; name: string; amountLabel: string; text: string }
+  | {
+      id: number;
+      kind: 'donation';
+      name: string;
+      amountLabel: string;
+      text: string;
+      /** 채팅 줄과 같다 */
+      platform?: string | null;
+    }
   /** 하이라이트 감지처럼 서비스가 끼워 넣는 줄 */
   | { id: number; kind: 'system'; text: string };
 
@@ -177,6 +187,7 @@ function toPanel(it: WireItem): ChatPanelMessage {
       name,
       amountLabel: donationLabel(it.donationType, it.amount),
       text: it.text ?? '',
+      platform: it.platform ?? null,
     };
   }
   return {
@@ -185,6 +196,7 @@ function toPanel(it: WireItem): ChatPanelMessage {
     name,
     text: it.text ?? '',
     colorIndex: colorOf(it.senderChannelId),
+    platform: it.platform ?? null,
   };
 }
 
@@ -331,6 +343,7 @@ export function useChatPanelMockState(
         text: ev.text,
         amount: ev.amount,
         donationType: ev.donationType,
+        platform: ev.platform,
       };
       setRaw((prev) => {
         const k = chatFingerprint(item);

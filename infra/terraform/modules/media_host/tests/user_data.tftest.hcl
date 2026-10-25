@@ -74,6 +74,8 @@ variables {
   internal_alb_sg_id = "sg-0internalalb000000"
   nlb_sg_id          = "sg-0nlb0000000000000"
   rds_sg_id          = "sg-0rds0000000000000"
+  auth_sg_id         = "sg-0auth000000000000"
+  auth_port          = 18086
   s3_prefix_list_id  = "pl-0123456789abcdef0"
   proxy_ports = {
     live     = 18081
@@ -125,9 +127,11 @@ run "largest_user_data_under_16_kib" {
   command = plan
 
   variables {
-    ingest_auth_image = "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/pokeclip-prod/media-ingest-auth@sha256:5555555555555555555555555555555555555555555555555555555555555555"
-    janitor_enabled   = true
-    control_upstream  = "127.0.0.1:19090"
+    ingest_auth_image                   = "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/pokeclip-prod/media-ingest-auth@sha256:5555555555555555555555555555555555555555555555555555555555555555"
+    janitor_enabled                     = true
+    control_upstream                    = "127.0.0.1:19090"
+    stream_key_resolve_url              = "http://auth.pokeclip.internal:8085"
+    stream_key_resolve_token_secret_arn = "arn:aws:secretsmanager:ap-northeast-2:123456789012:secret:pokeclip/prod/stream-key-resolve-token-MnOpQr"
   }
 
   assert {
@@ -148,6 +152,7 @@ run "writes_files_with_owner_and_mode" {
       "/etc/pokeclip-media/media.env"                               = ["root:root", "0644"]
       "/etc/pokeclip-media/compose.yml"                             = ["root:root", "0644"]
       "/etc/pokeclip-media/nginx.conf"                              = ["root:root", "0644"]
+      "/etc/pokeclip-media/ingest-auth.env"                         = ["root:root", "0644"]
       "/root/.docker/config.json"                                   = ["root:root", "0600"]
       "/etc/systemd/system/pokeclip-media.service"                  = ["root:root", "0644"]
       "/etc/systemd/system/pokeclip-media.service.d/10-bundle.conf" = ["root:root", "0644"]
@@ -398,9 +403,10 @@ run "toggles_optional_services_and_control_upstream" {
   command = plan
 
   variables {
-    ingest_auth_image = "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/pokeclip-prod/media-ingest-auth@sha256:5555555555555555555555555555555555555555555555555555555555555555"
-    janitor_enabled   = false
-    control_upstream  = "127.0.0.1:19090"
+    ingest_auth_image      = "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/pokeclip-prod/media-ingest-auth@sha256:5555555555555555555555555555555555555555555555555555555555555555"
+    janitor_enabled        = false
+    control_upstream       = "127.0.0.1:19090"
+    stream_key_resolve_url = "http://auth.pokeclip.internal:8085"
   }
 
   assert {
@@ -428,10 +434,11 @@ run "writes_media_env_and_docker_config" {
       "LOOPBACK_SENDER_IMAGE=123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/pokeclip-prod/media-loopback-sender@sha256:4444444444444444444444444444444444444444444444444444444444444444",
       "MEDIA_LIVE_PORT=18081",
       "INGEST_AUTH_DENYLIST_PARAM=/pokeclip/prod/media/ingest-auth-deny-tokens",
+      "STREAM_KEY_RESOLVE_TOKEN_SECRET_ARN=",
       "MEDIA_CONFIG_VERSION=7",
       "MEDIA_BUNDLE_IMAGE=123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/pokeclip-prod/media-host-bundle@sha256:0000000000000000000000000000000000000000000000000000000000000000",
     ])
-    error_message = "media.env 의 줄(기대 compose 판 · ECR 호스트 · 비밀 ARN · 송출기 · live 포트 · 거부 목록 · 구성 판 · 묶음)이 다르다."
+    error_message = "media.env 의 줄(기대 compose 판 · ECR 호스트 · 비밀 ARN · 송출기 · live 포트 · 거부 목록 · 4C 토큰 비밀 · 구성 판 · 묶음)이 다르다."
   }
 
   assert {
@@ -457,6 +464,68 @@ run "writes_media_env_and_docker_config" {
       file.content if file.path == "/etc/systemd/journald.conf.d/10-pokeclip-media.conf"
     ]), "Storage=persistent")
     error_message = "journald 설정이 영속 저장(Storage=persistent)이 아니다."
+  }
+}
+
+# 응답기 4C 토큰 비밀 ARN(런타임 출력 ingest_auth_resolve_token_secret_arn)은
+# media.env 로 간다 — 시작 스크립트가 응답기 모드에서 읽는다(옛 모드는 빈 값).
+run "writes_resolve_token_secret_arn_to_media_env" {
+  command = plan
+
+  variables {
+    ingest_auth_image                   = "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/pokeclip-prod/media-ingest-auth@sha256:5555555555555555555555555555555555555555555555555555555555555555"
+    stream_key_resolve_url              = "http://auth.pokeclip.internal:8085"
+    stream_key_resolve_token_secret_arn = "arn:aws:secretsmanager:ap-northeast-2:123456789012:secret:pokeclip/prod/stream-key-resolve-token-MnOpQr"
+  }
+
+  assert {
+    condition = contains(split("\n", one([
+      for file in yamldecode(output.rendered_user_data["a"]).write_files :
+      file.content if file.path == "/etc/pokeclip-media/media.env"
+    ])), "STREAM_KEY_RESOLVE_TOKEN_SECRET_ARN=arn:aws:secretsmanager:ap-northeast-2:123456789012:secret:pokeclip/prod/stream-key-resolve-token-MnOpQr")
+    error_message = "media.env 의 STREAM_KEY_RESOLVE_TOKEN_SECRET_ARN 이 입력 ARN 이 아니다."
+  }
+}
+
+# 응답기 IP 한도 설정(compose 파일 옆 ingest-auth.env)은 두 모드 모두 깐다.
+# 시작 스크립트는 렌더본이 정확히 INGEST_AUTH_IP_LIMIT=on|off 한 줄이 아니면
+# 응답기 모드 기동을 막는다(MEDIA START BLOCKED: ingest-auth ip-limit setting
+# unavailable).
+run "writes_ingest_auth_env_as_single_ip_limit_line" {
+  command = plan
+
+  assert {
+    condition = [
+      for file in yamldecode(output.rendered_user_data["a"]).write_files :
+      file.content if file.path == "/etc/pokeclip-media/ingest-auth.env"
+    ] == ["INGEST_AUTH_IP_LIMIT=on\n"]
+    error_message = "ingest-auth.env 가 정확히 한 줄 INGEST_AUTH_IP_LIMIT=on 이 아니다."
+  }
+
+  assert {
+    condition = [
+      for file in yamldecode(output.rendered_user_data["a"]).write_files :
+      file.content if file.path == "/etc/pokeclip-media/ingest-auth.env"
+    ] == [templatefile("../../../media-host/ingest-auth.env.tmpl", { ingest_auth_ip_limit = "on" })]
+    error_message = "ingest-auth.env 가 저장소 템플릿 ingest-auth.env.tmpl 의 렌더가 아니다."
+  }
+}
+
+run "writes_ingest_auth_env_ip_limit_off_in_responder_mode" {
+  command = plan
+
+  variables {
+    ingest_auth_image      = "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/pokeclip-prod/media-ingest-auth@sha256:5555555555555555555555555555555555555555555555555555555555555555"
+    stream_key_resolve_url = "http://auth.pokeclip.internal:8085"
+    ingest_auth_ip_limit   = "off"
+  }
+
+  assert {
+    condition = [
+      for file in yamldecode(output.rendered_user_data["a"]).write_files :
+      file.content if file.path == "/etc/pokeclip-media/ingest-auth.env"
+    ] == ["INGEST_AUTH_IP_LIMIT=off\n"]
+    error_message = "ingest_auth_ip_limit = \"off\" 인데 ingest-auth.env 가 정확히 한 줄 INGEST_AUTH_IP_LIMIT=off 가 아니다."
   }
 }
 
@@ -488,6 +557,40 @@ run "bootstrap_pins_tools_and_extracts_bundle" {
       ]), needle)
     ])
     error_message = "부트스트랩에 판 · 체크섬 고정 설치 · 묶음 꺼내기 · 유닛 enable 중 빠진 것이 있다."
+  }
+}
+
+# 묶음 필수 목록(REQUIRED_FILES)이 묶음 파일 전부와 같다 — 런북의 푸시 전
+# 대조가 이 목록을 정본으로 쓴다(runbooks/prod-artifacts.md 「설치 묶음」).
+run "bootstrap_requires_every_bundle_file" {
+  command = plan
+
+  assert {
+    condition = [
+      for line in split("\n", trimspace(one(regex(
+        "readonly REQUIRED_FILES=\\(\\n([^)]*)\\)",
+        one([
+          for file in yamldecode(output.rendered_user_data["a"]).write_files :
+          file.content if file.path == "/usr/local/sbin/pokeclip-media-bootstrap"
+        ]),
+      )))) : trimspace(line)
+      ] == [
+      "bin/start-media.sh",
+      "bin/stop-media.sh",
+      "bin/loopback-health.sh",
+      "bin/paths-count.sh",
+      "bin/paths-list.sh",
+      "bin/secret-count.sh",
+      "bin/ingest-auth-deny-sync.sh",
+      "bin/ingest-auth-ip-limit.sh",
+      "bin/lib/ops.sh",
+      "bin/lib/mtx_paths.sh",
+      "bin/lib/deny_tokens.sh",
+      "bin/lib/docker_config.sh",
+      "bin/lib/render_files.sh",
+      "mediamtx.yml.tmpl",
+    ]
+    error_message = "부트스트랩의 REQUIRED_FILES 가 묶음 파일 14개(bin/ 여덟 · bin/lib/ 다섯 · mediamtx.yml.tmpl)와 다르다."
   }
 }
 

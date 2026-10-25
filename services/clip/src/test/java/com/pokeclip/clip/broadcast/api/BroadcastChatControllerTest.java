@@ -208,6 +208,29 @@ class BroadcastChatControllerTest extends IntegrationTestSupport {
     }
 
     /**
+     * 구간 창구(POK-462). 자격이 있으면 수집기의 구간 창구를 부르고 본문을 그대로 준다. 인자가 없어 브라우저 쿼리는 하나도 안 넘긴다.
+     * 자격이 없으면 404이고 수집기를 안 부른다(문 셋과 같은 판정).
+     */
+    @Test
+    void 구간_창구는_자격이_있으면_그대로_주고_쿼리를_안_넘긴다() throws Exception {
+        볼_수_없다();
+        assertThat(부른다(내_방송, "broadcast-info/timeline").statusCode()).isEqualTo(404);
+        assertThat(COLLECTOR.callCount()).as("판정보다 먼저 물었다").isZero();
+
+        볼_수_있다("EDITOR");
+        String 본문 = "{\"segments\":[],\"truncated\":false}";
+        COLLECTOR.respondWith("/internal/streams/" + 내_방송 + "/broadcast-info/timeline", 200, 본문);
+
+        HttpResponse<String> 응답 = 부른다(내_방송, "broadcast-info/timeline?since=2026-09-01T00:00:00Z&channelId=남의채널");
+
+        assertThat(응답.statusCode()).as("본문=%s", 응답.body()).isEqualTo(200);
+        assertThat(응답.body()).isEqualTo(본문);
+        assertThat(응답.headers().firstValue("Content-Type").orElse("")).contains("application/json");
+        assertThat(COLLECTOR.lastPath()).isEqualTo("/internal/streams/" + 내_방송 + "/broadcast-info/timeline");
+        assertThat(COLLECTOR.lastQuery()).as("인자가 없는 창구다").isNullOrEmpty();
+    }
+
+    /**
      * 🔴 <b>브라우저가 {@code channelId}를 정하면 안 된다</b> — 그 값이 수집기에서 시차 보정값을
      * 고르는 열쇠다. 허용 목록 밖은 문 셋 어디서도 안 넘어간다.
      */
@@ -283,7 +306,7 @@ class BroadcastChatControllerTest extends IntegrationTestSupport {
      * 「수집기가 아프다」는 채팅만 안 보인다는 뜻이라 화면 안내가 다르다.
      */
     @ParameterizedTest
-    @ValueSource(strings = {"chat-messages", "chat-chart", "broadcast-info"})
+    @ValueSource(strings = {"chat-messages", "chat-chart", "broadcast-info", "broadcast-info/timeline"})
     void auth가_죽으면_authorization_수집기가_죽으면_collector로_갈린다(String 창구) throws Exception {
         AUTH.respondWith(RESOLVE, 500, "");
         HttpResponse<String> auth장애 = 부른다(내_방송, 창구);

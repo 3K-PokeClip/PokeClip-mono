@@ -76,7 +76,38 @@ class ChzzkLiveInfoClientTest {
         assertThat(result.setting().title()).isEqualTo("오늘은 랭크");
         assertThat(result.setting().category()).isEqualTo("리그 오브 레전드");
         assertThat(result.setting().tags()).containsExactly("롤", "랭크");
+        assertThat(result.setting().categoryImageUrl()).as("사진 칸이 없으면 null이다(빈 글자가 아니다)").isNull();
         assertThat(seenHeaders.getFirst().get("auth")).isEqualTo("Bearer user-token");
+    }
+
+    /** 카테고리 사진(POK-462). 공식 문서의 칸 이름 {@code category.posterImageUrl}을 그대로 읽는다. */
+    @Test
+    void 방송_설정의_카테고리_사진_주소를_읽는다() {
+        bodyByQuery.put("/open/v1/lives/setting", """
+                {"code":200,"content":{"defaultLiveTitle":"t","category":{"categoryType":"GAME","categoryId":"lol",
+                 "categoryValue":"리그 오브 레전드","posterImageUrl":"https://img.example/lol.jpg"},"tags":[]}}""");
+
+        assertThat(client().setting("user-token").setting().categoryImageUrl()).isEqualTo("https://img.example/lol.jpg");
+    }
+
+    /**
+     * 카테고리 검색(POK-462, SOOP 카테고리 사진을 치지직에서 빌린다). 앱 인증 헤더 둘로 묻고, 검색어는 값 자리로 인코딩한다
+     * (이름에 공백·「/」·「+」가 든다: 「토크/캠방」). 이름과 사진을 읽는다.
+     */
+    @Test
+    void 카테고리_검색은_앱_헤더로_묻고_이름과_사진을_읽는다() {
+        bodyByQuery.put("/open/v1/categories/search?size=50&query=%ED%86%A0%ED%81%AC%2F%EC%BA%A0%EB%B0%A9%20%2B", """
+                {"code":200,"content":{"data":[{"categoryType":"ETC","categoryId":"talk","categoryValue":"토크/캠방 +",
+                 "posterImageUrl":"https://img.example/talk.jpg"},{"categoryType":"ETC","categoryId":"x","categoryValue":"다른 것"}]}}""");
+
+        List<ChzzkLiveInfoClient.CategoryHit> hits = client().searchCategories("토크/캠방 +");
+
+        assertThat(hits).containsExactly(new ChzzkLiveInfoClient.CategoryHit("토크/캠방 +", "https://img.example/talk.jpg"),
+                new ChzzkLiveInfoClient.CategoryHit("다른 것", null));
+        assertThat(seenQueries).as("검색어는 값 자리로 예약 문자까지 인코딩한다")
+                .containsExactly("/open/v1/categories/search?size=50&query=%ED%86%A0%ED%81%AC%2F%EC%BA%A0%EB%B0%A9%20%2B");
+        assertThat(seenHeaders.getFirst().get("clientId")).isEqualTo("app-id");
+        assertThat(seenHeaders.getFirst().get("clientSecret")).isEqualTo("app-secret");
     }
 
     @Test

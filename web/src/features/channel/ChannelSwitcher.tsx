@@ -16,7 +16,7 @@ import { Check } from 'lucide-react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { track } from '@/lib/analytics';
 import { useSessionMutation } from '@/lib/useSessionMutation';
-import { Avatar, Button, Popover, Slot, useToast } from '@/ui';
+import { Avatar, Button, LoadingRegion, Popover, Skeleton, Slot, useToast } from '@/ui';
 import {
   acceptInvitation,
   declineInvitation,
@@ -78,9 +78,21 @@ export function ChannelSwitcher({
   // 거절·나가기 요청이 나가 있는 동안은 창을 닫지 않는다: 바깥 클릭·Esc·트리거로 닫히면 확인 덮개가 같이 사라져
   // 취소된 줄 알았다가 결과 토스트를 보게 된다(PR #342 리뷰 1)
   const [busy, setBusy] = useState(false);
-  // 전환 화면이 걷힐 때 포커스를 돌려줄 표식: 트리거는 채널과 함께 다시 그려져 덮기 전 요소로는 못 돌아간다(PR #342 2차 리뷰).
+  // 전환 화면이 걷힐 때 포커스를 돌려줄 표식: 전환 전 포커스는 창 안의 채널 줄에 있었고 그 줄은 창과 함께 사라져, 덮기 전
+  // 요소로는 못 돌아간다(PR #342 2차 리뷰). 트리거 자체는 POK-442부터 채널 범위 밖이라 전환해도 다시 그려지지 않는다.
   // 사이드바(펼침·접힘)와 홈 헤더에 하나씩이다
   const returnFocus = side === 'bottom' ? 'channel-switcher-header' : 'channel-switcher-sidebar';
+  // 고른 채널이 바뀌면 창을 닫는다(POK-442). 트리거(사이드바·홈 헤더)가 채널 범위 밖으로 나와 바꿔도 다시 서지 않는다:
+  // 창에서 고른 전환은 pick이 닫지만, 다른 탭에서 고르거나 위임이 끊겨 내 채널로 돌아온 것은 열린 창에 그대로 남는다.
+  // 거절·나가기 요청 중(busy)이면 닫지 않는다: 바깥 클릭을 막는 것과 같은 이유다(PR #342 리뷰 1).
+  // 처음 읽힘(아직 아무 회원으로도 안 읽힘 → 저장값)은 바뀐 것이 아니다: 사이드바가 me보다 먼저 서서 그 전에 열 수 있다
+  const storeUserId = useChannelStore((s) => s.userId);
+  const selected = useChannelStore((s) => s.selected);
+  const [seen, setSeen] = useState({ userId: storeUserId, selected });
+  if (seen.userId !== storeUserId || seen.selected !== selected) {
+    setSeen({ userId: storeUserId, selected });
+    if (seen.userId !== null && open && !busy) setOpen(false);
+  }
   return (
     <Popover
       open={open}
@@ -117,7 +129,8 @@ function SwitcherPanel({
   onBusyChange: (busy: boolean) => void;
   returnFocus: string;
 }) {
-  const me = useMe().data;
+  const meQuery = useMe();
+  const me = meQuery.data;
   const active = useActiveChannel();
   const switchTo = useSwitchChannel();
   const logout = useLogout();
@@ -142,7 +155,22 @@ function SwitcherPanel({
     return target;
   }, []);
 
-  if (!me) return <div className={styles.head}>계정 전환</div>;
+  if (!me) {
+    // 내 정보 전엔 「내 채널」 줄 자리를 스켈레톤으로 둔다(POK-446). 못 읽었으면 제목만: 실패를 로딩으로 가리지 않는다
+    return (
+      <>
+        <div className={styles.head}>계정 전환</div>
+        {meQuery.isPending && (
+          <div className={styles.section}>
+            <div className={styles.sectionTitle}>내 채널</div>
+            <LoadingRegion label="내 채널을 불러오는 중">
+              <RowSkeleton />
+            </LoadingRegion>
+          </div>
+        )}
+      </>
+    );
+  }
   const currentId = active.ready ? active.streamerId : me.id;
   const pick = (target: SwitchTarget) => {
     // 지금 채널을 다시 누르면 닫기만 한다: 같은 채널로 「전환했어요」를 띄우지 않는다
@@ -158,6 +186,16 @@ function SwitcherPanel({
   const invitesFailed = received.data === undefined && received.isError;
   const channels = asEditor.data ?? [];
   const invitations = received.data ?? [];
+  // 첫 응답 전엔 빈 목록이 아니라 모르는 것이다(POK-446): 구역 자리에 줄 스켈레톤을 두고, 개수는 응답 뒤에만 쓴다. 응답이
+  // 비었으면 지금처럼 구역을 숨긴다. 받아 둔 목록은 다시 읽는 동안에도 그대로 둔다(isPending은 데이터가 없을 때만 참)
+  const channelsLoading = asEditor.isPending;
+  const invitesLoading = received.isPending;
+  const loadingLabel =
+    channelsLoading && invitesLoading
+      ? '참여 채널과 받은 초대를 불러오는 중'
+      : channelsLoading
+        ? '참여 채널을 불러오는 중'
+        : '받은 초대를 불러오는 중';
   // 참여 채널이 다 없어지면(마지막 채널에서 나감·끊김) 관리 모드도 끈다: 남기면 초대를 수락해 구역이 다시 설 때 「완료」·
   // 「나가기」가 켜진 채로 서서 새 줄을 눌러도 바뀌지 않는다(PR #342 2차 리뷰)
   if (managing && channels.length === 0) setManaging(false);
@@ -193,6 +231,7 @@ function SwitcherPanel({
             current={currentId === me.id}
             onClick={() => pick({ streamerId: me.id, name: me.name, relation: 'OWNER' })}
           />
+          {channelsLoading && <ChannelsSkeleton label={loadingLabel} />}
           {channels.length > 0 && (
             <>
               <div className={clsx(styles.sectionTitle, styles.sectionHead)}>
@@ -253,6 +292,8 @@ function SwitcherPanel({
             </Button>
           </div>
         )}
+        {/* 낭독할 말은 창에 하나만: 참여 채널도 기다리는 중이면 그쪽 자리가 둘을 같이 말한다 */}
+        {invitesLoading && <InvitesSkeleton label={channelsLoading ? undefined : loadingLabel} />}
         {invitations.length > 0 && (
           <Invitations
             invitations={invitations}
@@ -356,6 +397,88 @@ function ChannelRow({
   );
 }
 
+const u = (n: number) => `calc(${n} * var(--pc-u))`;
+
+/**
+ * 글자 한 줄 자리의 막대(POK-446). 그 줄의 클래스 안에 글자 크기(1em)만 한 막대를 인라인으로 세워, 줄 높이(글자 × 1.5)와
+ * 위아래 여백은 로드 뒤 글자와 같은 값을 쓴다. 블록 막대에 여백을 주면 부모 여백과 겹쳐(margin collapse) 높이가 어긋난다.
+ */
+function LineBar({ width }: { width: string }) {
+  return (
+    <Skeleton
+      width={width}
+      height="1em"
+      style={{ display: 'inline-block', verticalAlign: 'middle' }}
+    />
+  );
+}
+
+/** 채널 줄 자리: 로드 뒤 줄과 같은 .row·.rowText 안에 아바타(32u)와 이름·역할 두 줄 */
+function RowSkeleton() {
+  return (
+    <div className={clsx(styles.row, styles.rowSkeleton)} aria-hidden="true">
+      {/* Skeleton은 폭·높이를 인라인으로 덮으므로 .rowAvatar의 32u를 다시 준다 */}
+      <Skeleton circle height={u(32)} style={{ flexShrink: 0 }} />
+      <span className={styles.rowText}>
+        <span className={styles.rowName}>
+          <LineBar width={u(96)} />
+        </span>
+        <span className={styles.rowMeta}>
+          <LineBar width={u(32)} />
+        </span>
+      </span>
+    </div>
+  );
+}
+
+/**
+ * 「편집 참여 중」 구역 자리: 제목 줄과 줄 하나. 제목은 막대로만 둔다 — 참여 채널이 없는 계정에선 구역이 통째로 없으니
+ * 글자로 미리 쓰면 거짓이 된다. 낭독할 말(label)은 이 자리가 맡는다
+ */
+function ChannelsSkeleton({ label }: { label: string }) {
+  return (
+    <LoadingRegion label={label}>
+      <div className={styles.sectionTitle} aria-hidden="true">
+        <LineBar width={u(64)} />
+      </div>
+      <RowSkeleton />
+    </LoadingRegion>
+  );
+}
+
+/** 「받은 초대」 카드 자리: 같은 점선 상자에 제목 막대와 초대 하나(이름·기한·수락/거절 버튼). label이 없으면 그리기만 한다 */
+function InvitesSkeleton({ label }: { label?: string }) {
+  const bars = (
+    <>
+      <div className={styles.sectionTitleFlat} aria-hidden="true">
+        <LineBar width={u(44)} />
+      </div>
+      <div className={styles.invite} aria-hidden="true">
+        <div className={styles.inviteName}>
+          <LineBar width={u(150)} />
+        </div>
+        <div className={styles.inviteMeta}>
+          <LineBar width={u(64)} />
+        </div>
+        {/* 버튼 sm 높이(32u)·md 반경 */}
+        <div className={styles.inviteActions}>
+          <Skeleton width={u(52)} height={u(32)} radius="md" />
+          <Skeleton width={u(52)} height={u(32)} radius="md" />
+        </div>
+      </div>
+    </>
+  );
+  return label ? (
+    <LoadingRegion label={label} className={styles.invites}>
+      {bars}
+    </LoadingRegion>
+  ) : (
+    <div className={styles.invites} aria-hidden="true">
+      {bars}
+    </div>
+  );
+}
+
 /** 실패는 토스트로만 알린다: 서버 문구를 그대로 보인다 */
 function failedToast(toast: ReturnType<typeof useToast>['toast'], e: unknown) {
   toast({
@@ -406,30 +529,38 @@ function Invitations({
   return (
     <div role="group" aria-label={title} className={styles.invites}>
       <div className={styles.sectionTitleFlat}>{title}</div>
-      {invitations.map((inv) => (
-        <div key={inv.id} className={styles.invite}>
-          <div className={styles.inviteName}>{inv.streamerName} 채널의 편집자 초대</div>
-          <div className={styles.inviteMeta}>{expiresLabel(inv.expiresAt)}</div>
-          <div className={styles.inviteActions}>
-            <Button
-              variant="solid"
-              size="sm"
-              disabled={accept.isPending}
-              onClick={() => accept.mutate(inv.id)}
-            >
-              수락
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              disabled={accept.isPending}
-              onClick={(e) => onDecline(inv, e.currentTarget)}
-            >
-              거절
-            </Button>
+      {invitations.map((inv) => {
+        // 수락 중엔 누른 초대의 수락만 돌고, 나머지 초대 버튼은 지금처럼 잠근다(POK-446)
+        const accepting = accept.isPending && accept.variables === inv.id;
+        return (
+          <div key={inv.id} className={styles.invite}>
+            <div className={styles.inviteName}>{inv.streamerName} 채널의 편집자 초대</div>
+            <div className={styles.inviteMeta}>{expiresLabel(inv.expiresAt)}</div>
+            <div className={styles.inviteActions}>
+              {/* 폭은 라벨 그대로 둔다: 스피너가 라벨 옆에 붙어 버튼이 넓어지면 「거절」이 밀린다(.busyButton) */}
+              <Button
+                variant="solid"
+                size="sm"
+                loading={accepting}
+                aria-label={accepting ? '수락하는 중' : undefined}
+                className={styles.busyButton}
+                disabled={accept.isPending}
+                onClick={() => accept.mutate(inv.id)}
+              >
+                수락
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={accept.isPending}
+                onClick={(e) => onDecline(inv, e.currentTarget)}
+              >
+                거절
+              </Button>
+            </div>
           </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }

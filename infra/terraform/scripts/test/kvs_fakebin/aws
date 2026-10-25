@@ -1,0 +1,279 @@
+#!/bin/bash
+#
+# kvs_put_test.sh 의 가짜 aws. AWS 에 접속하지 않는다(FAKE_AWS_REAL 을 준
+# 실물 CLI 계약 사례의 put-key 만 진짜 aws 에 넘긴다 — 아래).
+#
+# 부를 때마다 FAKE_CMD_DIR/calls 에 「aws <서비스> <동작>」 한 줄을 더하고, 받은
+# 인자(한 줄에 하나)를 <동작>.argv 에, AWS_PAGER 를 <동작>.pager 에 적는다.
+# put-key 는 --value file:///dev/stdin 일 때만 표준 입력을 한 번 읽어 stdin
+# 에 적는다 — 다른 값 넘기기(인자 · 다른 파일 · --cli-input-json)는 violation
+# 에 이유를 적고 실패한다. 받은 값이나 시험 표지(FAKE_CMD_DIR/markers)를 품은
+# export 변수의 이름만 env-hits 에 적는다(값은 적지 않음). 시험은 PATH 에 이
+# 디렉터리만 두므로 셸 내장만 쓴다.
+#
+# 시험이 넣은 비밀 값은 FAKE_CMD_DIR/secret 에 있다(get-secret-value 가 --output
+# text 꼴로 낸다). 오류 원문은 aws-cli 2.38.1 의 「aws: [ERROR]: …」 꼴이고,
+# 거부 · 충돌 원문은 일부러 받은 값 · 계정 번호 · ARN 을 품는다 — 원문이 그것을
+# 품는 최악의 경우에도 스크립트가 원문을 내보내지 않는지 보려고. 계정 번호는
+# AWS 문서의 예시 값이다.
+#
+# FAKE_AWS_MODE(한 사례에 하나 — 해당 호출만 실패하고 나머지는 성공):
+#   ok               모두 성공
+#   secret-denied    get-secret-value: AccessDeniedException(254)
+#   secret-error     get-secret-value: ResourceNotFoundException(254)
+#   secret-connect   get-secret-value: Could not connect(255)
+#   describe-denied  describe-key-value-store: AccessDeniedException(254)
+#   describe-connect describe-key-value-store: Could not connect(255)
+#   describe-none    describe-key-value-store: ETag 없음(None, 0)
+#   put-denied       put-key: AccessDeniedException(254)
+#   put-connect      put-key: Could not connect(255)
+#   put-conflict     put-key: ConflictException(254 — ETag 가 낡음)
+#   put-timeout      put-key: Read timeout on endpoint URL(255)
+# sts get-caller-identity 는 스크립트가 부르지 않는다. 불리면 KVS ARN(시험의
+# 123456789012)과 다른 계정 번호(STUB_ACCOUNT)를 낸다 — 스크립트가 sts 의
+# 계정으로 이름 풀이 호스트를 만들면 시험의 인자 대조 · 계정 0건 검사가 잡는다.
+# aws configure get cli_history --no-cli-auto-prompt(CLI 기록 검사)는 그 인자
+# 그대로일 때만 FAKE_AWS_CLI_HISTORY 로 답한다
+# (precheck/tests/fakebin/aws 와 같은 뜻 — calls 에는 「aws configure get」,
+# 인자는 get.argv): 비면 값 없음(빈 출력 · 종료 1 — 진짜 CLI), fail 이면 설정
+# 읽기 실패(종료 255), 그 밖이면 그 값.
+# FAKE_AWS_REAL: 진짜 aws 의 절대 경로. 주면 put-key 를 그 aws 에 --debug 를
+#   붙여 넘기고(표준 입력은 그대로 물려줌), 디버그 출력은 real-debug 에 적고
+#   「aws: [ERROR]」 줄만 표준 오류로 되낸다. 가짜 값으로만 쓴다.
+
+set -uo pipefail
+# 물려받은 allexport · 추적 · verbose 를 끈다(SHELLOPTS) — 켜진 채면 대조 줄의
+# 추적이 export 변수 값을 표준 오류로 낸다.
+set +o allexport +o xtrace +o verbose
+
+# 가짜 aws 가 만드는 전역 이름은 모두 STUB_ · stub_ 로 시작한다 — 물려받은
+# 같은 이름의 값을 record_env_hits 의 대조 전에 덮지 않게.
+readonly STUB_ACCOUNT='111122223333'
+readonly STUB_ETAG='ETVPDKIKX0DER'
+readonly STUB_NEW_ETAG='ETVPDKIKX0NEW'
+readonly STUB_USER_ARN="arn:aws:iam::${STUB_ACCOUNT}:user/example"
+readonly STUB_KVS_HOST="${STUB_ACCOUNT}.cloudfront-kvs.global.api.aws"
+readonly STUB_SM_ENDPOINT='https://secretsmanager.ap-northeast-2.amazonaws.com/'
+
+stub_value=""
+stub_op=""
+
+#######################################
+# 값 넘기기 규칙을 어긴 호출을 적고 끝낸다. 이유에 값을 넣지 않는다.
+# Arguments:
+#   이유.
+#######################################
+violation() {
+  printf '%s\n' "$*" >>"${FAKE_CMD_DIR}/violation"
+  printf 'fake aws: %s\n' "$*" >&2
+  exit 99
+}
+
+#######################################
+# 받은 값이나 시험 표지를 품은 export 변수의 이름만 env-hits 에 한 줄씩
+# 적는다. 대조는 메모리 안에서만 한다. 볼 수 없는 이름(사각): STUB_ · stub_
+# 이름과 bash 가 시작할 때 다시 쓰는 이름(SHELLOPTS · SHLVL · PWD 등).
+# Globals:
+#   FAKE_CMD_DIR, stub_value
+#######################################
+record_env_hits() {
+  local stub_name stub_marker
+  local -a stub_markers=()
+  [[ -z "${stub_value}" ]] || stub_markers=("${stub_value}")
+  if [[ -f "${FAKE_CMD_DIR}/markers" ]]; then
+    while IFS= read -r stub_marker; do
+      [[ -z "${stub_marker}" ]] || stub_markers+=("${stub_marker}")
+    done <"${FAKE_CMD_DIR}/markers"
+  fi
+  ((${#stub_markers[@]} > 0)) || return 0
+  for stub_name in $(compgen -e); do
+    for stub_marker in "${stub_markers[@]}"; do
+      if [[ "${!stub_name-}" == *"${stub_marker}"* ]]; then
+        printf '%s\n' "${stub_name}" >>"${FAKE_CMD_DIR}/env-hits"
+        break
+      fi
+    done
+  done
+}
+
+#######################################
+# aws-cli 꼴 오류 원문을 표준 오류로 내고 끝낸다.
+# Arguments:
+#   종료 코드, 원문(「aws: [ERROR]: 」 뒤).
+#######################################
+fail_with() {
+  local code="$1"
+  shift
+  printf '\naws: [ERROR]: %s\n' "$*" >&2
+  exit "${code}"
+}
+
+#######################################
+# AccessDeniedException(SCP 명시 거부) 원문으로 끝낸다.
+# Arguments:
+#   API 동작 이름, 대상 자원.
+#######################################
+fail_denied() {
+  fail_with 254 "An error occurred (AccessDeniedException) when calling the" \
+    "$1 operation: User: ${STUB_USER_ARN} is not authorized to perform" \
+    "on resource: $2 with an explicit deny in a service control policy" \
+    "${stub_value:+(received: ${stub_value})}"
+}
+
+#######################################
+# put-key 의 값을 받는다 — --value file:///dev/stdin 만 받는다.
+# Globals:
+#   stub_value
+# Arguments:
+#   aws 가 받은 인자들.
+#######################################
+receive_put_value() {
+  local value_arg="" has_value=false
+  while (($# > 0)); do
+    case "$1" in
+      --value)
+        has_value=true
+        value_arg="${2-}"
+        shift
+        ;;
+      --cli-input-json | --cli-input-json=*)
+        violation "--cli-input-json 은 받지 않음(file:// 이중 읽기)"
+        ;;
+      --value=*) violation "값 인자를 = 꼴로 받음" ;;
+      --debug) violation "--debug 는 값을 표준 오류에 찍음" ;;
+    esac
+    shift
+  done
+  [[ "${has_value}" == true ]] || violation "--value 가 없음"
+  [[ "${value_arg}" == file:///dev/stdin ]] ||
+    violation "--value 가 file:///dev/stdin 이 아님(값이 인자 · 파일로 옴)"
+  [[ -n "${FAKE_AWS_REAL:-}" ]] && return 0
+  stub_value=""
+  IFS= read -r -d '' stub_value </dev/stdin
+  printf '%s' "${stub_value}" >"${FAKE_CMD_DIR}/stdin"
+}
+
+#######################################
+# put-key 를 진짜 aws 에 넘긴다(실물 CLI 계약 사례). 디버그 출력은 real-debug
+# 에, 「aws: [ERROR]」 줄만 표준 오류로 되낸다.
+# Arguments:
+#   aws 가 받은 인자들.
+#######################################
+forward_put_to_real() {
+  local status line
+  "${FAKE_AWS_REAL}" "$@" --debug >"${FAKE_CMD_DIR}/real-stdout" \
+    2>"${FAKE_CMD_DIR}/real-debug"
+  status=$?
+  while IFS= read -r line; do
+    [[ "${line}" != "aws: [ERROR]"* ]] || printf '\n%s\n' "${line}" >&2
+  done <"${FAKE_CMD_DIR}/real-debug"
+  exit "${status}"
+}
+
+#######################################
+# aws configure get cli_history 에 답하고 끝낸다(머리 주석).
+# Globals:
+#   FAKE_AWS_CLI_HISTORY
+# Arguments:
+#   aws 가 받은 인자들.
+#######################################
+configure_get() {
+  if [[ "$*" != 'configure get cli_history --no-cli-auto-prompt' ]]; then
+    printf 'fake aws: 모르는 설정 조회: %s\n' "$*" >&2
+    exit 99
+  fi
+  case "${FAKE_AWS_CLI_HISTORY:-}" in
+    '') exit 1 ;;
+    fail)
+      printf '\nThe config profile (example) could not be found\n' >&2
+      exit 255
+      ;;
+    *)
+      printf '%s\n' "${FAKE_AWS_CLI_HISTORY}"
+      exit 0
+      ;;
+  esac
+}
+
+#######################################
+# 동작마다 FAKE_AWS_MODE 에 맞는 응답을 낸다.
+# Globals:
+#   FAKE_AWS_MODE, FAKE_CMD_DIR, stub_op
+#######################################
+respond() {
+  local mode="${FAKE_AWS_MODE:-ok}"
+  case "${stub_op}:${mode}" in
+    get-caller-identity:*) printf '%s\n' "${STUB_ACCOUNT}" ;;
+    get-secret-value:secret-denied)
+      fail_denied GetSecretValue \
+        "arn:aws:secretsmanager:ap-northeast-2:${STUB_ACCOUNT}:secret:x"
+      ;;
+    get-secret-value:secret-error)
+      fail_with 254 "An error occurred (ResourceNotFoundException) when" \
+        "calling the GetSecretValue operation: Secrets Manager can't find" \
+        "the specified secret."
+      ;;
+    get-secret-value:secret-connect)
+      fail_with 255 "Could not connect to the endpoint URL:" \
+        "\"${STUB_SM_ENDPOINT}\""
+      ;;
+    get-secret-value:*)
+      stub_value=""
+      if [[ -f "${FAKE_CMD_DIR}/secret" ]]; then
+        IFS= read -r -d '' stub_value <"${FAKE_CMD_DIR}/secret"
+      fi
+      printf '%s\n' "${stub_value}"
+      ;;
+    describe-key-value-store:describe-denied)
+      fail_denied DescribeKeyValueStore "${STUB_KVS_HOST}"
+      ;;
+    describe-key-value-store:describe-connect)
+      fail_with 255 "Could not connect to the endpoint URL:" \
+        "\"https://${STUB_KVS_HOST}/key-value-stores/x\""
+      ;;
+    describe-key-value-store:describe-none) printf 'None\n' ;;
+    describe-key-value-store:*) printf '%s\n' "${STUB_ETAG}" ;;
+    put-key:put-denied) fail_denied PutKey "${STUB_KVS_HOST}" ;;
+    put-key:put-connect)
+      fail_with 255 "Could not connect to the endpoint URL:" \
+        "\"https://${STUB_KVS_HOST}/key-value-stores/x/keys/cdn-secret\""
+      ;;
+    put-key:put-conflict)
+      fail_with 254 "An error occurred (ConflictException) when calling the" \
+        "PutKey operation: Pre-condition failed (received: ${stub_value})"
+      ;;
+    put-key:put-timeout)
+      fail_with 255 "Read timeout on endpoint URL:" \
+        "\"https://${STUB_KVS_HOST}/key-value-stores/x/keys/cdn-secret\""
+      ;;
+    put-key:*)
+      printf '{\n    "ItemCount": 1,\n    "TotalSizeInBytes": 42,\n'
+      printf '    "ETag": "%s"\n}\n' "${STUB_NEW_ETAG}"
+      ;;
+    *)
+      printf 'fake aws: 모르는 동작 · 모드: %s\n' "${stub_op}:${mode}" >&2
+      exit 99
+      ;;
+  esac
+}
+
+main() {
+  if [[ -z "${FAKE_CMD_DIR:-}" || ! -d "${FAKE_CMD_DIR}" ]]; then
+    printf '%s\n' "fake aws: FAKE_CMD_DIR 가 없음" >&2
+    exit 99
+  fi
+  stub_op="${2-none}"
+  printf 'aws %s %s\n' "${1-none}" "${stub_op}" >>"${FAKE_CMD_DIR}/calls"
+  printf '%s\n' "$@" >"${FAKE_CMD_DIR}/${stub_op}.argv"
+  printf 'AWS_PAGER=%s\n' "${AWS_PAGER-(unset)}" \
+    >"${FAKE_CMD_DIR}/${stub_op}.pager"
+  [[ "${1-}" != configure ]] || configure_get "$@"
+  if [[ "${stub_op}" == put-key ]]; then
+    receive_put_value "$@"
+    [[ -z "${FAKE_AWS_REAL:-}" ]] || forward_put_to_real "$@"
+  fi
+  record_env_hits
+  respond
+}
+
+main "$@"

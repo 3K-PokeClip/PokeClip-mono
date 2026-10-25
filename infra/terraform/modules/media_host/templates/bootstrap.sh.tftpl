@@ -35,8 +35,13 @@ readonly REQUIRED_FILES=(
   bin/paths-count.sh
   bin/paths-list.sh
   bin/secret-count.sh
+  bin/ingest-auth-deny-sync.sh
+  bin/ingest-auth-ip-limit.sh
   bin/lib/ops.sh
   bin/lib/mtx_paths.sh
+  bin/lib/deny_tokens.sh
+  bin/lib/docker_config.sh
+  bin/lib/render_files.sh
   mediamtx.yml.tmpl
 )
 readonly PULL_ATTEMPTS=6

@@ -124,7 +124,7 @@ class RelayRegistryPathTest extends IntegrationTestSupport {
      * 🔴 <b>D 틀리게 가는 자리</b>(F3·문항 9) — 중계의 {@code time}은 <b>표에 저장된 값과 같은 축</b>이어야 한다.
      * 채팅은 {@code message_time}(치지직 시각), 후원은 {@code received_at}(우리가 받은 시각).
      * 프론트는 메울 때 {@code from = 마지막 time − appliedOffsetMs}로 창구를 부르고 겹침을
-     * {@code (kind, time, senderChannelId, text)}로 거르므로, 한쪽이 수신 시각이면 창구와 SSE가 갈린다.
+     * {@code (kind, time, senderChannelId, text, platform)}으로 거르므로, 한쪽이 수신 시각이면 창구와 SSE가 갈린다.
      */
     @Test
     void 중계_시각과_칸은_표에_저장된_값과_같다() throws Exception {

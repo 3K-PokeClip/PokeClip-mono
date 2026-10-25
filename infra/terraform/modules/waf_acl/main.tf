@@ -20,6 +20,26 @@ resource "aws_wafv2_web_acl" "this" {
     allow {}
   }
 
+  # 웹 ACL 수준 데이터 보호는 요청 샘플 · 로그 · Security Lake 에 다 걸리고,
+  # 로깅 설정의 redacted_fields 는 로그에만 걸린다(샘플은 원문 — AWS WAF API
+  # 「VisibilityConfig」). 쿠키는 SINGLE_COOKIE 가 아니라 헤더 cookie 로 막는다
+  # — 쿠키 값은 cookie 헤더를 단일 헤더로 보호할 때만 가려진다(AWS WAF 개발자
+  # 안내서 「Data protection limitations」).
+  dynamic "data_protection_config" {
+    for_each = length(var.protected_headers) == 0 ? [] : [var.protected_headers]
+
+    content {
+      data_protection {
+        action = "SUBSTITUTION"
+
+        field {
+          field_type = "SINGLE_HEADER"
+          field_keys = data_protection_config.value
+        }
+      }
+    }
+  }
+
   rule {
     name     = "rate-limit"
     priority = 0

@@ -52,7 +52,13 @@ const TRACK_TOUR_TARGET: Partial<Record<SetupStepId, string>> = {
   plugin: TOUR_TARGET.homePlugin,
 };
 
-/** 첫 응답 전 — 신규 계정 화면을 잘못 보이지 않게 큰 칸 모양만 잡는다 */
+const u = (n: number) => `calc(${n} * var(--pc-u))`;
+
+/**
+ * 첫 응답 전 — 신규 계정 화면을 잘못 보이지 않게 큰 칸 모양만 잡는다. 막대 치수는 큰 칸처럼 셸 배율(--pc-u)을 탄다: px로 두면
+ * 배율이 큰 화면에서 막대만 작게 남는다(POK-445). 격자·오른쪽 칸은 그리지 않는다: 기록 없는 계정은 준비 단계 화면(SetupHome)이라
+ * 모양이 다르다
+ */
 export function HeroSkeleton() {
   return (
     <section
@@ -64,9 +70,10 @@ export function HeroSkeleton() {
       data-tour-pending=""
     >
       <div className={styles.skeletonStack}>
-        <Skeleton width={160} height={13} />
-        <Skeleton width={360} height={28} />
-        <Skeleton width={520} height={44} />
+        {/* 좁은 화면에서 칸 밖으로 잘리지 않게 폭은 칸 안쪽까지만 */}
+        <Skeleton width={u(160)} height={u(13)} style={{ maxWidth: '100%' }} />
+        <Skeleton width={u(360)} height={u(28)} style={{ maxWidth: '100%' }} />
+        <Skeleton width={u(520)} height={u(44)} style={{ maxWidth: '100%' }} />
       </div>
       <span aria-hidden />
     </section>

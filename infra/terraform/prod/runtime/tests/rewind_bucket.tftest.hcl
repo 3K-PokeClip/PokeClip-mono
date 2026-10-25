@@ -1,5 +1,6 @@
 # rewind 버킷(POK-308 · 설계 D10) — 이름 기본값 · 삭제 시 객체 보존 ·
-# 공개 차단 넷 · ACL 끔 · SSE-S3 · 수명주기 규칙 하나 · 출력 셋을 단언한다.
+# 공개 차단 넷 · ACL 끔 · SSE-S3 · 수명주기 규칙 하나 · 출력 셋 · 앱 출처의
+# GET · HEAD 만 허락하는 CORS 규칙 하나(POK-427)를 단언한다.
 # 버전 관리와 버킷 정책은 두지 않는다(결정 50 · 정책은 2단). 버킷 자원 안의
 # versioning 블록 · policy 인자가 없음은 단언하지만, 별도 자원
 # (aws_s3_bucket_versioning · aws_s3_bucket_policy)은 없는 자원을 시험이 참조할
@@ -8,6 +9,17 @@
 
 mock_provider "aws" {
   source = "./tests/mocks"
+}
+
+# auth_oauth_apps 는 기본값이 없다(auth_settings.tf — tfvars 필수). 이 파일의
+# 모든 run 에 흐르는 예시 값이다(run 안의 variables 가 덮는 변수만 바뀐다).
+variables {
+  auth_oauth_apps = {
+    google  = { client_id = "example-google-client-id", redirect_uri = "https://app.pokeclip.com/auth/callback" }
+    chzzk   = { client_id = "example-chzzk-client-id", redirect_uri = "https://app.pokeclip.com/oauth/chzzk/callback" }
+    youtube = { client_id = "example-youtube-client-id", redirect_uri = "https://app.pokeclip.com/oauth/youtube/callback" }
+    soop    = { client_id = "example-soop-client-id", redirect_uri = "https://app.pokeclip.com/oauth/soop/callback" }
+  }
 }
 
 override_data {
@@ -291,4 +303,96 @@ run "rechecks_lifecycle_filter_with_second_sentinels" {
     )
     error_message = "수명주기 filter 에 접두 · 크기 조건이 설정돼 있다(두 번째 표지값과 다르다)."
   }
+}
+
+# 조각 창고 CORS(CONTRACT-runtime.md 「작업 역할 대상」 — 편집기 트랙별 미리
+# 듣기가 clip 이 서명한 조각 주소를 브라우저 fetch 로 받는다, POK-389). 규칙은
+# 하나이고 앱 출처의 GET · HEAD 만 허락한다. 쓰기 동작 · 다른 출처 · 요청
+# 헤더 허용은 없다 — fetch 가 헤더 없는 단순 요청이라 사전 요청이 없다.
+run "allows_app_origin_get_head_on_rewind" {
+  command = plan
+
+  assert {
+    condition     = var.app_origin == "https://app.pokeclip.com"
+    error_message = "app_origin 기본값이 https://app.pokeclip.com 이 아니다."
+  }
+
+  assert {
+    condition     = aws_s3_bucket_cors_configuration.rewind.bucket == aws_s3_bucket.rewind.id
+    error_message = "CORS 설정이 rewind 버킷에 걸려 있지 않다."
+  }
+
+  assert {
+    condition     = length(aws_s3_bucket_cors_configuration.rewind.cors_rule) == 1
+    error_message = "CORS 규칙이 하나가 아니다."
+  }
+
+  assert {
+    condition     = one(aws_s3_bucket_cors_configuration.rewind.cors_rule).allowed_methods == toset(["GET", "HEAD"])
+    error_message = "CORS 허용 메서드가 정확히 GET · HEAD 가 아니다."
+  }
+
+  assert {
+    condition     = one(aws_s3_bucket_cors_configuration.rewind.cors_rule).allowed_origins == toset(["https://app.pokeclip.com"])
+    error_message = "CORS 허용 출처가 앱 출처 하나가 아니다."
+  }
+
+  assert {
+    condition     = length(coalesce(one(aws_s3_bucket_cors_configuration.rewind.cors_rule).allowed_headers, [])) == 0
+    error_message = "CORS 가 요청 헤더를 허락한다 — 미리 듣기 fetch 는 헤더를 싣지 않는다."
+  }
+}
+
+run "follows_app_origin_variable" {
+  command = plan
+
+  variables {
+    app_origin = "https://studio.example.com"
+  }
+
+  assert {
+    condition     = one(aws_s3_bucket_cors_configuration.rewind.cors_rule).allowed_origins == toset(["https://studio.example.com"])
+    error_message = "CORS 허용 출처가 변수 app_origin 을 따르지 않는다."
+  }
+}
+
+# 와일드카드 · http · 경로 · 끝 / 는 출처가 아니거나 모든 사이트를 연다.
+run "rejects_wildcard_app_origin" {
+  command = plan
+
+  variables {
+    app_origin = "*"
+  }
+
+  expect_failures = [var.app_origin]
+}
+
+run "rejects_http_app_origin" {
+  command = plan
+
+  variables {
+    app_origin = "http://app.pokeclip.com"
+  }
+
+  expect_failures = [var.app_origin]
+}
+
+run "rejects_app_origin_with_path" {
+  command = plan
+
+  variables {
+    app_origin = "https://app.pokeclip.com/"
+  }
+
+  expect_failures = [var.app_origin]
+}
+
+run "rejects_wildcard_subdomain_app_origin" {
+  command = plan
+
+  variables {
+    app_origin = "https://*.pokeclip.com"
+  }
+
+  expect_failures = [var.app_origin]
 }

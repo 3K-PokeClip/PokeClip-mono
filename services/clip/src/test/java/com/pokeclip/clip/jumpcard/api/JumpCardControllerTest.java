@@ -25,8 +25,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * 편집자가 카드에 쓰는 문. 집기·놓기·숨기기·되돌리기는 없어졌고(POK-393) 열기 하나가 남았다.
- * 열기의 자격 판정·기록은 {@code JumpCardOpenTest}가 잰다. 여기는 <b>옛 문이 정말 닫혔나</b>와
+ * 편집자가 카드에 쓰는 문. 집기·놓기는 없어졌고(POK-393) 열기와 숨기기·되살리기(POK-463)가 남았다.
+ * 열기는 {@code JumpCardOpenTest}, 숨기기는 {@code JumpCardHideTest}가 잰다. 여기는 <b>옛 문이 정말 닫혔나</b>와
  * 경로·토큰 수준의 응답을 본다.
  */
 @AutoConfigureMockMvc
@@ -57,12 +57,12 @@ class JumpCardControllerTest extends IntegrationTestSupport {
     }
 
     /**
-     * 자격이 있는 사람이 실재하는 카드에 옛 문을 두드려도 404이고 아무것도 안 남는다.
+     * 자격이 있는 사람이 실재하는 카드에 옛 집기 문을 두드려도 404이고 아무것도 안 남는다.
      * 옛 웹이 배포 사이에 부를 수 있다. 그때 카드가 바뀌거나 기록이 남으면 안 된다.
      */
     @ParameterizedTest
-    @CsvSource({"POST,/claim", "DELETE,/claim", "POST,/hide", "DELETE,/hide"})
-    void 옛_문_넷은_없다(String method, String path) throws Exception {
+    @CsvSource({"POST,/claim", "DELETE,/claim"})
+    void 옛_집기_문_둘은_없다(String method, String path) throws Exception {
         long id = 카드();
 
         int status = mvc.perform(request(HttpMethod.valueOf(method), "/api/clip/jump-cards/" + id + path)

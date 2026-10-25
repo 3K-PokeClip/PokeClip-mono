@@ -3,7 +3,12 @@
 # 시작 · 정지 스크립트 시험 — 성공 · 실패 갈래와 restart 를 빠뜨린 서비스 · 렌더
 # 제자리 쓰기 · 중간에 끊긴 렌더의 임시 파일 · down 실패 뒤 렌더 삭제 · 비밀 변수
 # export, 그리고 사이드카 관측 자격(기동마다 만드는 API 비밀번호 · 토큰 둘 — 사례 30 – 35 는
-# lib/start_api_pass_cases.sh).
+# lib/start_api_pass_cases.sh)과 응답기 모드(모드 블록의 토큰 집합 판정 · 생성
+# 셋 · 응답기 파일 · 정지 정리 — 사례 42 – 50 은 lib/start_ingest_auth_cases.sh)와
+# 응답기 모드 외부 입력(4C 토큰 · 거부 목록 · 상태 디렉터리 · IP 한도 env 파일 ·
+# 모드 원천 꼴 · 거부 목록 가드 — 사례 51 – 61 은 lib/start_ingest_input_cases.sh)
+# 과 모드 블록(운영 템플릿 원본 그대로 두 모드 기동 · 표지 꼴 — 사례 62 · 63 은
+# lib/start_mode_cases.sh).
 #
 # bin/start-media.sh · bin/stop-media.sh 를 빈 환경(env -i)에서 돌린다. PATH 맨
 # 앞에는 가짜 docker · chown(test/start_fakebin — argv 와 환경을 전부 기록)과
@@ -37,6 +42,12 @@ source "${TEST_DIR}/lib/render.sh"
 source "${TEST_DIR}/lib/start_api_pass_cases.sh"
 # shellcheck source=lib/stop_guard_cases.sh
 source "${TEST_DIR}/lib/stop_guard_cases.sh"
+# shellcheck source=lib/start_ingest_auth_cases.sh
+source "${TEST_DIR}/lib/start_ingest_auth_cases.sh"
+# shellcheck source=lib/start_ingest_input_cases.sh
+source "${TEST_DIR}/lib/start_ingest_input_cases.sh"
+# shellcheck source=lib/start_mode_cases.sh
+source "${TEST_DIR}/lib/start_mode_cases.sh"
 
 readonly COMPOSE_TEMPLATE="${MEDIA_HOST_DIR}/compose.yml.tmpl"
 readonly MTX_TEMPLATE="${TEST_DIR}/mediamtx.test.yml.tmpl"
@@ -53,7 +64,7 @@ readonly API_PASS_NAME='mtx_api_pass'
 readonly API_PASS_PATTERN='^[0-9a-f]{64}$'
 # 우회 플래그로 읽힐 문자열(대소문자 무시).
 readonly BYPASS_PATTERN='skip|bypass|no_prereq|prereq=0'
-readonly CASE_COUNT=41
+readonly CASE_COUNT=63
 
 #######################################
 # up 호출 argv 를 한 줄로 낸다(인자 사이 공백). 호출이 하나가 아니면 실패.
@@ -190,10 +201,10 @@ ${harness_bounded_pid}(exec 아님)"
 }
 
 #######################################
-# 렌더 파일이 템플릿의 두 토큰을 각각 한 곳씩 값으로 바꾼 것과 같고 권한이
-# 0400 인지 본다. CDN 토큰 자리는 기대 값, API 비밀번호 토큰 자리는 사이드카
-# 비밀번호 파일의 값이다. 기대 내용은 awk index() 로 글자 그대로 바꿔 따로
-# 만든다.
+# 렌더 파일이 템플릿의 옛 모드 블록을 고른 내용(fixture::mode_body)에서 두
+# 토큰을 각각 한 곳씩 값으로 바꾼 것과 같고 권한이 0400 인지 본다. CDN 토큰
+# 자리는 기대 값, API 비밀번호 토큰 자리는 사이드카 비밀번호 파일의 값이다. 기대
+# 내용은 awk index() 로 글자 그대로 바꿔 따로 만든다.
 # Globals:
 #   fixture_dir
 # Arguments:
@@ -202,11 +213,12 @@ ${harness_bounded_pid}(exec 아님)"
 check_rendered() {
   # 기대 내용은 사례 디렉터리 밖(형제)에 둔다 — 「렌더 경로 밖 비밀 0」 검사 대상이다.
   local ok=0 expected="${fixture_dir}.expected.yml" pass
-  local template="${3:-${MTX_TEMPLATE}}"
+  local template="${fixture_dir}.legacy.tmpl"
   if [[ ! -f "$1" ]]; then
     harness::add_reason '렌더 파일 없음'
     return 1
   fi
+  fixture::mode_body legacy "${3:-${MTX_TEMPLATE}}" "${template}"
   pass="$(api_pass::value 2>/dev/null)" || pass=""
   PCBENCH_VALUE="$2" PCBENCH_TOKEN="${FIXTURE_SECRET_TOKEN}" \
     PCBENCH_PASS="${pass}" PCBENCH_PASS_TOKEN="${FIXTURE_API_PASS_TOKEN}" awk '
@@ -692,7 +704,8 @@ case_template_token_count() {
     "a: ${FIXTURE_SECRET_TOKEN}"$'\n'"b: ${FIXTURE_SECRET_TOKEN}"; do
     fixture::new_case
     tmpl="${fixture_dir}/bad.tmpl"
-    printf '%s\n' "${body}" >"${tmpl}"
+    fixture::marked_template "${body}"$'\n'"pass: '${FIXTURE_API_PASS_TOKEN}'" \
+      >"${tmpl}"
     fixture::base_env MEDIA_MTX_TEMPLATE
     fixture_env+=("MEDIA_MTX_TEMPLATE=${tmpl}")
     fixture::run start-media.sh || return 1
@@ -807,7 +820,7 @@ main() {
     guard::case_signal_removes_tmp
   harness::run_case 29 'stop — RUNTIME_DIR 상대 경로 · / 거부' \
     guard::case_stop_runtime_dir
-  harness::run_case 30 '운영 템플릿(templatefile) → 두 토큰 치환 · 따옴표 자리' \
+  harness::run_case 30 '운영 템플릿 원본 → 옛 모드 두 토큰 치환 · 따옴표 자리' \
     api_pass::case_prod_template_pipe
   harness::run_case 31 'API 비밀번호 — 실행마다 새 16진 64자' api_pass::case_fresh
   harness::run_case 32 'API 비밀번호 생성 실패 → 기동 차단 · 잔여 0' \
@@ -827,6 +840,49 @@ main() {
     stop::case_signal_during_fallback
   harness::run_case 40 'stop — 끝나지 않는 폴백 ps → 상한 뒤 FAIL · 렌더 삭제' \
     stop::case_fallback_bounded
+  harness::run_case 42 '응답기 모드 — 렌더 · 응답기 파일 · 소유 · 비밀 노출 0' \
+    auth_mode::case_success
+  harness::run_case 43 '모드 판정 표 — 옛 · 응답기 꼴만 받음' \
+    auth_mode::case_mode_table
+  harness::run_case 44 '@@@ 경계 — 토큰 자리만 바꿈' auth_mode::case_at_boundary
+  harness::run_case 45 '응답기 생성 셋 실패 → 기동 차단 · 잔여 0' \
+    auth_mode::case_generation_failure
+  harness::run_case 46 '응답기 파일 설치 실패 → 렌더 거부 · 잔여 0' \
+    auth_mode::case_install_failure
+  harness::run_case 47 '응답기 모드 상속 export 에도 비밀 노출 0' \
+    auth_mode::case_inherited_export
+  harness::run_case 48 '응답기 모드 재기동 — 새 값 · rename' \
+    auth_mode::case_rerun_fresh
+  harness::run_case 49 'stop — 응답기 비밀 · 임시 파일 삭제 · 상태 유지' \
+    auth_mode::case_stop_cleanup
+  harness::run_case 50 'stop — 응답기 비밀이 남으면 CLEANUP FAIL' \
+    auth_mode::case_stop_cleanup_fail
+  harness::run_case 51 '4C 토큰 — 응답기 파일 0400 · argv 에 ARN 만' \
+    auth_input::case_resolve_token
+  harness::run_case 52 '4C 토큰 쓸 수 없음 → 기동 차단 · 잔여 0' \
+    auth_input::case_resolve_blocked
+  harness::run_case 53 '거부 목록 — root:응답기 0640 · rename' \
+    auth_input::case_denylist_installed
+  harness::run_case 54 '거부 목록 받기 실패 · 꼴 밖 → 기동 차단' \
+    auth_input::case_denylist_blocked
+  harness::run_case 55 '상태 디렉터리 — 0700 맞춤 · 링크 거부' \
+    auth_input::case_state_dir
+  harness::run_case 56 'IP 한도 env 파일 없음 · 꼴 밖 → 기동 차단' \
+    auth_input::case_ip_limit_env
+  harness::run_case 57 'compose 응답기 줄 꼴 밖(2 · 뒤 공백 · 같은 줄 값) → 기동 차단' \
+    auth_input::case_mode_mismatch
+  harness::run_case 58 '옛 모드 — 응답기 키 · env 파일을 보지 않음' \
+    auth_input::case_legacy_untouched
+  harness::run_case 59 'stop — 응답기 디렉터리 링크 → CLEANUP FAIL · 대상 보존' \
+    auth_input::case_stop_link
+  harness::run_case 60 '거부 목록 디렉터리 · 자리 가드 → deny-dir · deny-install' \
+    auth_input::case_deny_guards
+  harness::run_case 61 '거부 목록 — 앞 기동이 남긴 임시 파일 정리' \
+    auth_input::case_deny_stale_tmp
+  harness::run_case 62 '운영 템플릿 원본 그대로 → 두 모드 기동(compose 가 모드)' \
+    mode_cases::case_raw_template
+  harness::run_case 63 '표지 꼴 깨짐 → template-mode 로 막음' \
+    mode_cases::case_shape_table
 
   if ! harness::summary "${CASE_COUNT}"; then
     exit 1

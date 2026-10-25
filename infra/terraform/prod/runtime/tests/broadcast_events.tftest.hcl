@@ -1,12 +1,24 @@
 # 계약9 방송 생명주기 이벤트(POK-309 · 설계 D3 · D4 · D5) — SNS FIFO 주제 하나,
 # 소비자(clip · chat)마다 SQS FIFO 큐 · 전용 DLQ · 재처리 허용 · raw 구독 ·
-# 큐 정책 · 주제 정책, 큐 값 변수 기본값 넷, 출력 셋을 단언한다. ARN · URL 은
-# mock 이 만드는 가짜 값이다. override_data 가 network 원격 상태 · 호출자 ·
+# 큐 정책 · 주제 정책, 큐 값 변수 기본값 넷, 출력 둘을 단언한다(clip 큐의
+# app_task_resource_arns 키는 app_task_resources 시험). ARN · URL 은 mock 이
+# 만드는 가짜 값이다. override_data 가 network 원격 상태 · 호출자 ·
 # 파티션을 대신하므로 S3 · STS 를 읽지 않는다(AWS 호출 0). 계정 자리는 숫자가
 # 아닌 가짜 값이다(공유 mock 과 같은 관례 — 계정 ID 숫자열 없음).
 
 mock_provider "aws" {
   source = "./tests/mocks"
+}
+
+# auth_oauth_apps 는 기본값이 없다(auth_settings.tf — tfvars 필수). 이 파일의
+# 모든 run 에 흐르는 예시 값이다(run 안의 variables 가 덮는 변수만 바뀐다).
+variables {
+  auth_oauth_apps = {
+    google  = { client_id = "example-google-client-id", redirect_uri = "https://app.pokeclip.com/auth/callback" }
+    chzzk   = { client_id = "example-chzzk-client-id", redirect_uri = "https://app.pokeclip.com/oauth/chzzk/callback" }
+    youtube = { client_id = "example-youtube-client-id", redirect_uri = "https://app.pokeclip.com/oauth/youtube/callback" }
+    soop    = { client_id = "example-soop-client-id", redirect_uri = "https://app.pokeclip.com/oauth/soop/callback" }
+  }
 }
 
 override_data {
@@ -286,8 +298,8 @@ run "lets_only_broadcast_topic_send_to_queues" {
 }
 
 # 주제 정책은 이 계정의 신원 정책에 맡기는 한 문장이다 — 주체는 계정 루트,
-# 조건 없음, 동작은 기본 주제 정책의 여덟(SNS:Receive 는 SNS 정책 동작이
-# 아니라 뺀다). 기본 정책의 Principal * · AWS:SourceOwner 를 남기지 않는다.
+# 조건 없음. 기본 정책의 Principal * · AWS:SourceOwner 를 남기지 않는다.
+# 동작은 아래 keeps_topic_policy_to_read_only 가 본다.
 run "delegates_topic_access_to_account_identity_policies" {
   command = apply
 
@@ -325,19 +337,33 @@ run "delegates_topic_access_to_account_identity_policies" {
     condition     = !contains(keys(jsondecode(aws_sns_topic_policy.broadcast_lifecycle.policy).Statement[0]), "Condition")
     error_message = "주제 정책 문장에 Condition 이 있다 — 계정 루트 주체에는 조건을 두지 않는다."
   }
+}
+
+# 정책 시뮬레이터(1단-다 직전 점검 2-3)는 계정 루트 문장을 같은 계정 dev
+# 주체에도 맞춘다. 그래서 문장은 읽기(SNS:GetTopicAttributes) 하나만 연다 —
+# 변경 · 삭제 · 구독 · 발행은 정책에 두지 않는다. 실제 접근(media 발행 ·
+# Terraform 관리)은 신원 정책이 정해 동작은 같다.
+run "keeps_topic_policy_to_read_only" {
+  command = apply
 
   assert {
-    condition = toset(jsondecode(aws_sns_topic_policy.broadcast_lifecycle.policy).Statement[0].Action) == toset([
-      "SNS:GetTopicAttributes",
-      "SNS:SetTopicAttributes",
-      "SNS:AddPermission",
-      "SNS:RemovePermission",
-      "SNS:DeleteTopic",
-      "SNS:Subscribe",
-      "SNS:ListSubscriptionsByTopic",
-      "SNS:Publish",
-    ])
-    error_message = "주제 정책 동작이 기본 주제 정책의 여덟(SNS:Receive 제외)이 아니다."
+    condition     = jsondecode(aws_sns_topic_policy.broadcast_lifecycle.policy).Statement[0].Action == ["SNS:GetTopicAttributes"]
+    error_message = "주제 정책 동작이 SNS:GetTopicAttributes 하나가 아니다."
+  }
+
+  assert {
+    condition = length(setintersection(
+      toset(flatten([jsondecode(aws_sns_topic_policy.broadcast_lifecycle.policy).Statement[0].Action])),
+      toset([
+        "SNS:SetTopicAttributes",
+        "SNS:AddPermission",
+        "SNS:RemovePermission",
+        "SNS:DeleteTopic",
+        "SNS:Subscribe",
+        "SNS:Publish",
+      ]),
+    )) == 0
+    error_message = "주제 정책에 변경 동작(SetTopicAttributes · AddPermission · RemovePermission · DeleteTopic · Subscribe · Publish)이 있다."
   }
 }
 
@@ -356,28 +382,5 @@ run "outputs_topic_and_queue_arns" {
       chat = aws_sqs_queue.broadcast["chat"].arn
     }
     error_message = "출력 broadcast_queue_arns 가 소비자 → 원 큐 ARN(clip · chat)이 아니다."
-  }
-}
-
-# platform 은 clip 작업 역할의 수신 문장을 app_task_resource_arns 의
-# 키로 만든다(prod/platform remote_state.tf 의 task_resource_keys). 일 큐 ·
-# 버킷 키는 런타임 다음 PR 이 더한다 — 지금은 clip 의 계약9 큐 하나뿐이다.
-run "outputs_clip_broadcast_queue_as_task_resource" {
-  command = apply
-
-  assert {
-    condition = output.app_task_resource_arns == {
-      clip = { broadcast_queue_arn = aws_sqs_queue.broadcast["clip"].arn }
-    }
-    error_message = "출력 app_task_resource_arns 가 { clip = { broadcast_queue_arn = clip 큐 ARN } } 이 아니다."
-  }
-
-  assert {
-    condition = alltrue(flatten([
-      for arns in values(output.app_task_resource_arns) : [
-        for arn in values(arns) : !strcontains(arn, "*")
-      ]
-    ]))
-    error_message = "app_task_resource_arns 의 값에 와일드카드가 있다."
   }
 }
