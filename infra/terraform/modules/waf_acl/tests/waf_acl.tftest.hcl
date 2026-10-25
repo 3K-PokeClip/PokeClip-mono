@@ -2,7 +2,7 @@
 # 단언한다 — 범위(scope) · 관리 규칙 그룹 이름(AWS 제공 · 그룹의 동작을 그대로
 # 씀) · 속도 제한 값(IP 마다 5분 창 · 넘으면 차단) · 기본 동작 허용 · 출력 ·
 # 트래픽 로그(기본 꺼짐 · 켜면 CloudWatch Logs 로 차단만 · 헤더 가림) · 웹 ACL
-# 데이터 보호(기본 꺼짐 · 켜면 헤더 값을 REDACTED 로 치환).
+# 데이터 보호(기본 꺼짐 · 켜면 헤더 · 질의 인자 값을 REDACTED 로 치환).
 # 이름 · 계정 ID(111122223333)는 가짜 값이다.
 
 mock_provider "aws" {
@@ -346,18 +346,19 @@ run "rejects_uppercase_redacted_header" {
 
 # --- 웹 ACL 데이터 보호 ---
 
-# protected_headers 를 주지 않은 호출은 데이터 보호 설정이 없다.
-run "protects_no_headers_by_default" {
+# protected_headers · protected_query_args 를 주지 않은 호출은 데이터 보호
+# 설정이 없다.
+run "protects_nothing_by_default" {
   command = plan
 
   assert {
     condition     = length(aws_wafv2_web_acl.this.data_protection_config) == 0
-    error_message = "protected_headers 를 주지 않았는데 데이터 보호 설정이 생긴다."
+    error_message = "protected_headers · protected_query_args 를 주지 않았는데 데이터 보호 설정이 생긴다."
   }
 
   assert {
-    condition     = output.protected_headers == []
-    error_message = "protected_headers 를 주지 않았는데 출력 protected_headers 가 빈 목록이 아니다."
+    condition     = output.protected_headers == [] && output.protected_query_args == []
+    error_message = "보호 입력을 주지 않았는데 출력 protected_headers · protected_query_args 가 빈 목록이 아니다."
   }
 }
 
@@ -406,8 +407,115 @@ run "substitutes_protected_headers_in_samples_and_logs" {
   }
 }
 
-# FieldToProtect.FieldKeys 는 이름마다 1 ~ 64자이고 공백만으로 된 이름은 받지
-# 않는다(AWS WAF API).
+# 모듈은 호출자가 준 헤더 이름을 그대로 쓴다 — 이름을 모듈 안에 박아 두면(예:
+# authorization · cookie) 다른 이름을 넘긴 이 run 이 깨진다.
+run "protects_headers_given_by_caller" {
+  command = plan
+
+  variables {
+    protected_headers = ["x-example-token"]
+  }
+
+  assert {
+    condition = [
+      for protection in aws_wafv2_web_acl.this.data_protection_config[0].data_protection :
+      tolist(protection.field[0].field_keys)
+      if protection.field[0].field_type == "SINGLE_HEADER"
+    ] == [tolist(["x-example-token"])]
+    error_message = "데이터 보호의 단일 헤더 이름이 입력 protected_headers(x-example-token)가 아니다."
+  }
+
+  assert {
+    condition     = tolist(output.protected_headers) == tolist(["x-example-token"])
+    error_message = "출력 protected_headers 가 입력 protected_headers(x-example-token)가 아니다."
+  }
+}
+
+# 질의 인자는 SINGLE_QUERY_ARGUMENT 로 값만 치환한다 — 로그의 args 에서 그
+# 인자 값이 REDACTED 가 된다(AWS WAF 개발자 안내서 「Examples of data
+# protection」).
+run "substitutes_protected_query_args_in_samples_and_logs" {
+  command = plan
+
+  variables {
+    protected_query_args = ["example-arg"]
+  }
+
+  assert {
+    condition = (
+      length(aws_wafv2_web_acl.this.data_protection_config) == 1 &&
+      length(aws_wafv2_web_acl.this.data_protection_config[0].data_protection) == 1
+    )
+    error_message = "데이터 보호 설정이 하나(질의 인자 항목 하나)가 아니다."
+  }
+
+  assert {
+    condition = alltrue([
+      for protection in aws_wafv2_web_acl.this.data_protection_config[0].data_protection :
+      (
+        protection.action == "SUBSTITUTION" &&
+        protection.field[0].field_type == "SINGLE_QUERY_ARGUMENT" &&
+        tolist(protection.field[0].field_keys) == tolist(["example-arg"]) &&
+        protection.exclude_rule_match_details != true &&
+        protection.exclude_rate_based_details != true
+      )
+    ])
+    error_message = "데이터 보호가 질의 인자 example-arg 를 예외 없이 SUBSTITUTION 으로 치환하지 않는다."
+  }
+
+  assert {
+    condition = (
+      tolist(output.protected_query_args) == tolist(["example-arg"]) &&
+      output.protected_headers == []
+    )
+    error_message = "출력 protected_query_args · protected_headers 가 데이터 보호로 가린 질의 인자 · 헤더와 다르다."
+  }
+}
+
+# 둘 다 주면 데이터 보호 설정 하나에 필드 종류마다 항목 하나씩 둔다.
+run "protects_headers_and_query_args_together" {
+  command = plan
+
+  variables {
+    protected_headers    = ["authorization"]
+    protected_query_args = ["code", "token"]
+  }
+
+  assert {
+    condition = (
+      length(aws_wafv2_web_acl.this.data_protection_config) == 1 &&
+      sort([
+        for protection in aws_wafv2_web_acl.this.data_protection_config[0].data_protection :
+        protection.field[0].field_type
+      ]) == tolist(["SINGLE_HEADER", "SINGLE_QUERY_ARGUMENT"])
+    )
+    error_message = "데이터 보호 설정 하나에 단일 헤더 · 질의 인자 항목이 하나씩 있지 않다."
+  }
+
+  assert {
+    condition = (
+      tolist(output.protected_headers) == tolist(["authorization"]) &&
+      tolist(output.protected_query_args) == tolist(["code", "token"])
+    )
+    error_message = "출력이 필드 종류별로 가린 이름(헤더 authorization · 질의 인자 code · token)과 다르다."
+  }
+}
+
+# --- 보호 이름 검증 ---
+
+# FieldToProtect.FieldKeys 는 100개 이하 · 이름마다 1부터 64자다(AWS WAF API).
+# 이름은 로그 가림(logging.redacted_headers)처럼 소문자로, 앞뒤 공백 없이
+# 받는다.
+run "rejects_empty_protected_header" {
+  command = plan
+
+  variables {
+    protected_headers = [""]
+  }
+
+  expect_failures = [var.protected_headers]
+}
+
 run "rejects_blank_protected_header" {
   command = plan
 
@@ -426,4 +534,140 @@ run "rejects_protected_header_over_64_chars" {
   }
 
   expect_failures = [var.protected_headers]
+}
+
+run "rejects_uppercase_protected_header" {
+  command = plan
+
+  variables {
+    protected_headers = ["Authorization"]
+  }
+
+  expect_failures = [var.protected_headers]
+}
+
+run "rejects_protected_header_with_leading_space" {
+  command = plan
+
+  variables {
+    protected_headers = [" authorization"]
+  }
+
+  expect_failures = [var.protected_headers]
+}
+
+run "rejects_protected_header_with_trailing_space" {
+  command = plan
+
+  variables {
+    protected_headers = ["authorization "]
+  }
+
+  expect_failures = [var.protected_headers]
+}
+
+run "accepts_100_protected_headers" {
+  command = plan
+
+  variables {
+    protected_headers = [for index in range(100) : format("x-example-%03d", index)]
+  }
+
+  assert {
+    condition     = length(output.protected_headers) == 100
+    error_message = "헤더 100개(상한)를 다 가리지 않는다."
+  }
+}
+
+run "rejects_101_protected_headers" {
+  command = plan
+
+  variables {
+    protected_headers = [for index in range(101) : format("x-example-%03d", index)]
+  }
+
+  expect_failures = [var.protected_headers]
+}
+
+run "rejects_empty_protected_query_arg" {
+  command = plan
+
+  variables {
+    protected_query_args = [""]
+  }
+
+  expect_failures = [var.protected_query_args]
+}
+
+run "rejects_blank_protected_query_arg" {
+  command = plan
+
+  variables {
+    protected_query_args = [" "]
+  }
+
+  expect_failures = [var.protected_query_args]
+}
+
+run "rejects_protected_query_arg_over_64_chars" {
+  command = plan
+
+  variables {
+    protected_query_args = [format("%065d", 0)]
+  }
+
+  expect_failures = [var.protected_query_args]
+}
+
+run "rejects_uppercase_protected_query_arg" {
+  command = plan
+
+  variables {
+    protected_query_args = ["Code"]
+  }
+
+  expect_failures = [var.protected_query_args]
+}
+
+run "rejects_protected_query_arg_with_leading_space" {
+  command = plan
+
+  variables {
+    protected_query_args = [" code"]
+  }
+
+  expect_failures = [var.protected_query_args]
+}
+
+run "rejects_protected_query_arg_with_trailing_space" {
+  command = plan
+
+  variables {
+    protected_query_args = ["code "]
+  }
+
+  expect_failures = [var.protected_query_args]
+}
+
+run "accepts_100_protected_query_args" {
+  command = plan
+
+  variables {
+    protected_query_args = [for index in range(100) : format("example-%03d", index)]
+  }
+
+  assert {
+    condition     = length(output.protected_query_args) == 100
+    error_message = "질의 인자 100개(상한)를 다 가리지 않는다."
+  }
+}
+
+run "rejects_101_protected_query_args" {
+  command = plan
+
+  variables {
+    protected_query_args = [for index in range(101) : format("example-%03d", index)]
+  }
+
+  expect_failures = [var.protected_query_args]
 }
