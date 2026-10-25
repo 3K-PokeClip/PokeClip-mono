@@ -34,7 +34,7 @@ describe('useLiveStreamSelection: 주소의 ?stream=', () => {
     nav.search = '?stream=a';
     const { result, rerender } = renderHook(() => useLiveStreamSelection());
     await waitFor(() =>
-      expect(result.current).toEqual({ streamId: 'a', resolved: true, deferred: null }),
+      expect(result.current).toMatchObject({ streamId: 'a', resolved: true, deferred: null }),
     );
 
     nav.search = '?stream=b';
@@ -51,18 +51,22 @@ describe('useLiveStreamSelection: 주소의 ?stream=', () => {
 describe('useLiveStreamSelection: 재생 보유(POK-200 M5 · 설계 5.5절)', () => {
   // 고정하지 않은 대시보드가 보던 재생을 끊지 않게: 보유 중이면 다시 고른 답을 선택에 넣지 않고 deferred 로 낸다(R45)
   let live: string;
+  let failing: boolean;
   beforeEach(() => {
     vi.useFakeTimers();
     forgetLiveStreamId();
     resetLiveData();
     live = 'live-1';
+    failing = false;
     stubFetch((url) =>
-      url.startsWith('/api/clip/broadcasts?state=live')
-        ? jsonResponse(200, {
-            broadcasts: live === '' ? [] : [{ streamId: live }],
-            nextCursor: null,
-          })
-        : jsonResponse(404),
+      failing
+        ? jsonResponse(503, { error: 'unavailable' })
+        : url.startsWith('/api/clip/broadcasts?state=live')
+          ? jsonResponse(200, {
+              broadcasts: live === '' ? [] : [{ streamId: live }],
+              nextCursor: null,
+            })
+          : jsonResponse(404),
     );
   });
   afterEach(() => {
@@ -91,7 +95,7 @@ describe('useLiveStreamSelection: 재생 보유(POK-200 M5 · 설계 5.5절)', (
     live = '';
     await act(async () => vi.advanceTimersByTimeAsync(LIVE_RESELECT_MS));
     await flush();
-    expect(result.current).toEqual({ streamId: 'live-1', resolved: true, deferred: '' });
+    expect(result.current).toMatchObject({ streamId: 'live-1', resolved: true, deferred: '' });
   });
 
   it('보유 중 다른 방송이 답이면 deferred 로 낸다', async () => {
@@ -99,7 +103,11 @@ describe('useLiveStreamSelection: 재생 보유(POK-200 M5 · 설계 5.5절)', (
     live = 'live-2';
     await act(async () => vi.advanceTimersByTimeAsync(LIVE_RESELECT_MS));
     await flush();
-    expect(result.current).toEqual({ streamId: 'live-1', resolved: true, deferred: 'live-2' });
+    expect(result.current).toMatchObject({
+      streamId: 'live-1',
+      resolved: true,
+      deferred: 'live-2',
+    });
   });
 
   it('보유 중 ended 재조회의 답도 선택에 넣지 않는다', async () => {
@@ -118,7 +126,7 @@ describe('useLiveStreamSelection: 재생 보유(POK-200 M5 · 설계 5.5절)', (
     await flush();
     act(() => publishLiveData({ playbackHold: null }));
     await flush();
-    expect(result.current).toEqual({ streamId: 'live-2', resolved: true, deferred: null });
+    expect(result.current).toMatchObject({ streamId: 'live-2', resolved: true, deferred: null });
   });
 
   it('보유가 없으면 지금 동작이다 — 빈 답이면 꺼짐(빈 선택)', async () => {
@@ -128,5 +136,20 @@ describe('useLiveStreamSelection: 재생 보유(POK-200 M5 · 설계 5.5절)', (
     await act(async () => vi.advanceTimersByTimeAsync(LIVE_RESELECT_MS));
     await flush();
     expect(result.current.streamId).toBe('');
+  });
+
+  it('마지막 다시 고르기의 답(latest) — 실패하면 모름(null)이다: 보던 방송이라고 단정하지 않는다(cx H4)', async () => {
+    const { result } = await holding();
+    expect(result.current.latest).toBe('live-1');
+    failing = true;
+    await act(async () => vi.advanceTimersByTimeAsync(LIVE_RESELECT_MS));
+    await flush();
+    expect(result.current.latest).toBeNull();
+    expect(result.current.streamId).toBe('live-1');
+    failing = false;
+    live = 'live-2';
+    await act(async () => vi.advanceTimersByTimeAsync(LIVE_RESELECT_MS));
+    await flush();
+    expect(result.current.latest).toBe('live-2');
   });
 });

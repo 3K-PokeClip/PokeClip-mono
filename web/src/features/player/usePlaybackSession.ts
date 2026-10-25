@@ -66,6 +66,8 @@ export interface PlaybackSession {
   /** LIVE(실시간으로) — 지금 방송 번호를 새로 물어 상태기계에 넘긴다 */
   liveButton: () => void;
   bindPlayer: (player: SessionPlayer | null) => void;
+  /** 재생기가 내는 알림(되감기 재생 중 라이브러리가 자리를 또 옮김 등) */
+  notice: (text: string) => void;
 }
 
 /** 이 국면의 스트림 폴링 답에 지금 방송 번호가 필요한가(세션에 묶인 live · 끝남 대기 버튼 규칙) */
@@ -95,6 +97,11 @@ export function usePlaybackSession(options: SessionOptions): PlaybackSession | n
   const leftForRef = useRef<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
 
+  /**
+   * 세션 순번 — 세션을 열거나 비울 때마다 오른다. 비동기 작업(지금 방송 번호 묻기 · 재조회 타이머)은 시작 때의 순번을 들고 가서,
+   * 그사이 세션이 바뀌었으면 답을 버린다 — A 의 늦은 답이 B 세션에 들지 않게(cx H3)
+   */
+  const sessionIdRef = useRef(0);
   const commit = useCallback((next: PlaybackSessionState | null) => {
     stateRef.current = next;
     setState(next);
@@ -109,12 +116,14 @@ export function usePlaybackSession(options: SessionOptions): PlaybackSession | n
     if (current !== null && current.closed === null && sameBroadcast) return;
     if (current !== null && current.closed === null && !sameBroadcast) {
       // 다른 방송을 고름 — left 로 닫는다(5.3절 아무 국면)
+      sessionIdRef.current += 1;
       commit(null);
     }
     if (!startable || roundId === null || accessKey === null || liveUrl === null) return;
     if (leftForRef.current === accessKey) return;
     leftForRef.current = null;
     boundOnceRef.current = playerRef.current !== null;
+    sessionIdRef.current += 1;
     commit(openSession({ roundId, accessKey, liveUrl }));
   }, [startable, roundId, accessKey, liveUrl, commit, state?.closed]);
 
@@ -144,11 +153,12 @@ export function usePlaybackSession(options: SessionOptions): PlaybackSession | n
         case 'recheck-x':
           window.clearTimeout(recheckTimer.current);
           recheckTimer.current = window.setTimeout(() => {
-            void optionsRef.current
-              .resolveX(true)
-              .then((x) =>
-                dispatchRef.current({ type: 'live-button', x, attempt: effect.attempt }),
-              );
+            const id = sessionIdRef.current;
+            void optionsRef.current.resolveX(true).then((x) => {
+              if (id === sessionIdRef.current) {
+                dispatchRef.current({ type: 'live-button', x, attempt: effect.attempt });
+              }
+            });
           }, X_RECHECK_MS);
           break;
         case 'close':
@@ -184,10 +194,13 @@ export function usePlaybackSession(options: SessionOptions): PlaybackSession | n
       dispatch({ type: 'live-button', x: { kind: 'unknown' }, attempt: 0 });
       return;
     }
-    void optionsRef.current
-      .resolveX(true)
-      .then((x) => dispatch({ type: 'live-button', x, attempt: 0 }));
+    const id = sessionIdRef.current;
+    void optionsRef.current.resolveX(true).then((x) => {
+      if (id === sessionIdRef.current) dispatch({ type: 'live-button', x, attempt: 0 });
+    });
   }, [dispatch]);
+
+  const notice = useCallback((text: string) => optionsRef.current.onNotice?.(text), []);
 
   const bindPlayer = useCallback(
     (player: SessionPlayer | null) => {
@@ -217,9 +230,10 @@ export function usePlaybackSession(options: SessionOptions): PlaybackSession | n
         dispatch({ type: 'stream-poll', result });
         return;
       }
-      void optionsRef.current
-        .resolveX(false)
-        .then((x) => dispatch({ type: 'stream-poll', result, x }));
+      const id = sessionIdRef.current;
+      void optionsRef.current.resolveX(false).then((x) => {
+        if (id === sessionIdRef.current) dispatch({ type: 'stream-poll', result, x });
+      });
     },
     [dispatch],
   );
@@ -233,6 +247,16 @@ export function usePlaybackSession(options: SessionOptions): PlaybackSession | n
     stream: (u) => streamPoll.refresh(u),
     round: () => roundPoll.refresh(),
   };
+  // 새 세션(다른 방송)은 같은 영상 키라 폴링 경로가 같아도 곧바로 다시 묻는다 — 앞 세션의 주기를 기다리지 않는다
+  const openedKey = state?.accessKey ?? null;
+  const prevKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    const replaced = prevKeyRef.current !== null && openedKey !== prevKeyRef.current;
+    if (openedKey !== null) prevKeyRef.current = openedKey;
+    if (!replaced) return;
+    window.clearTimeout(recheckTimer.current);
+    if (openedKey !== null) refreshRef.current.stream();
+  }, [openedKey]);
 
   // 시한 — 재접속 대기가 끝나는 때(덮개 문구가 바뀐다)와 20분 시한(tick)에 깨운다
   const endingSince = state?.endingSince ?? null;
@@ -257,5 +281,5 @@ export function usePlaybackSession(options: SessionOptions): PlaybackSession | n
     [state, now],
   );
   if (state === null || view === null || state.closed !== null) return null;
-  return { state, view, dispatch, liveButton, bindPlayer };
+  return { state, view, dispatch, liveButton, bindPlayer, notice };
 }

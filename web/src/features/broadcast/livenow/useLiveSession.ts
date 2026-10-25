@@ -15,6 +15,7 @@ import {
 import { useToast } from '@/ui';
 import { publishLiveData } from './liveDataStore';
 import type { BroadcastStatus } from './useBroadcastClock';
+import type { Reselect } from './useLiveStreamSelection';
 
 // 라이브 화면의 재생 세션 배선(설계 5.5절, POK-200 M5) — 세션을 여는 조건 · 녹화 조회 요청 · 재생 보유 · 「새 방송」 띠를 정한다.
 // 세션은 이 층(GlassPlayer key 바깥)에 살아 재생기가 다시 마운트돼도 남는다. 명부 ended 는 세션을 닫지 않는다(재조회 신호다).
@@ -47,8 +48,8 @@ export interface LiveSessionInput {
   endedAt: number | null;
   /** 라이브 목록 주소 */
   liveUrl: string | null;
-  /** 보유 중에 다시 고른 방송 번호(useLiveStreamSelection) */
-  deferred: string | null;
+  /** 보유 중의 다시 고르기(useLiveStreamSelection) — deferred 는 띠, latest(실패면 null)는 지금 방송 번호 X 의 재료 */
+  reselect: Reselect;
 }
 
 export interface LiveSession {
@@ -62,6 +63,14 @@ export interface LiveSession {
   onBand: () => void;
 }
 
+/**
+ * 고정 안 한 화면의 지금 방송 번호 X — 마지막 다시 고르기(10초)의 답이다. 그 물음이 실패했으면 모름이다: 「보던 방송 그대로」로
+ * 단정하면 같은 키의 새 방송 B 가 A 세션 재료에 섞인다(cx H4)
+ */
+export function unpinnedX(latest: string | null): XAnswer {
+  return latest === null ? { kind: 'unknown' } : { kind: 'known', id: latest };
+}
+
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | null> {
   return new Promise((resolve) => {
     const timer = window.setTimeout(() => resolve(null), ms);
@@ -73,8 +82,8 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | null> {
 }
 
 export function useLiveSession(input: LiveSessionInput): LiveSession {
-  const { liveStreamId, mediaKey, accessKey, broadcastStatus, startedAt, endedAt, deferred } =
-    input;
+  const { liveStreamId, mediaKey, accessKey, broadcastStatus, startedAt, endedAt } = input;
+  const { deferred } = input.reselect;
   const router = useRouter();
   const pathname = usePathname();
   const streamParam = useSearchParams().get('stream');
@@ -89,13 +98,12 @@ export function useLiveSession(input: LiveSessionInput): LiveSession {
   // 띠를 눌러 보유를 푼 키
   const [releasedFor, setReleasedFor] = useState<string | null>(null);
 
-  const deferredRef = useRef(deferred);
-  deferredRef.current = deferred;
+  const latestRef = useRef(input.reselect.latest);
+  latestRef.current = input.reselect.latest;
   const pinnedX = useRef<{ at: number; answer: XAnswer } | null>(null);
   const resolveX = useCallback(
     async (fresh: boolean): Promise<XAnswer> => {
-      // 고정 안 한 화면은 다시 고르기(10초)가 낸 값이다. 답이 보던 방송과 같으면 deferred 는 비어 있다
-      if (!fresh && !pinned) return { kind: 'known', id: deferredRef.current ?? liveStreamId };
+      if (!fresh && !pinned) return unpinnedX(latestRef.current);
       const reuse = pinnedX.current;
       if (!fresh && reuse !== null && Date.now() - reuse.at < PINNED_X_REUSE_MS) {
         return reuse.answer;
@@ -105,7 +113,7 @@ export function useLiveSession(input: LiveSessionInput): LiveSession {
       pinnedX.current = { at: Date.now(), answer };
       return answer;
     },
-    [pinned, liveStreamId, streamerId],
+    [pinned, streamerId],
   );
 
   const onClose = useCallback(

@@ -21,12 +21,12 @@ interface Frag {
   programDateTime: number | null;
 }
 
-const fake = vi.hoisted(() => ({ instances: [] as FakeHlsLike[] }));
+const fake = vi.hoisted(() => ({ instances: [] as FakeHlsLike[], supported: true }));
 
 vi.mock('hls.js', () => {
   class FakeHls {
     static isSupported() {
-      return true;
+      return fake.supported;
     }
     static Events = {
       ERROR: 'hlsError',
@@ -118,6 +118,7 @@ function mount(source: PlaybackSource, hooks: PlaybackHooks = {}) {
 beforeEach(() => {
   vi.useFakeTimers({ now: PDT0 + 40_000 });
   fake.instances.length = 0;
+  fake.supported = true;
   video.paused = true;
   video.seekEnd = 40;
   vi.spyOn(HTMLMediaElement.prototype, 'play').mockImplementation(function play(
@@ -337,24 +338,109 @@ describe('창 가장자리를 hls.js 보다 먼저 지키기(5.3.1절 · R23)', 
     expect(video.el!.currentTime).toBe(26);
   });
 
-  it('되감기 재생 중 라이브러리가 끝 쪽으로 2 TD 넘게 튀면 한 번 되돌린다', async () => {
-    const view = mount(src({ kind: 'rewind', url: 'https://m/dvr/k/a/index.m3u8' }), {
-      onSeekRequest: vi.fn(),
+  it('되감기 재생 중 라이브러리가 끝 쪽으로 튀면 튀기 전 자리를 세션에 다시 넘긴다 — 그새 창이 밀렸으면 새 하한으로(cx H2 · R23)', async () => {
+    const onNotice = vi.fn();
+    const requests: [number, { lowerMs: number; endMs: number }][] = [];
+    // 세션 흉내: 하한 앞 목표는 하한으로 잘라 안에서 시크한다(rewindSwitch 의 seekInList)
+    const view = mount(src({ kind: 'rewind', url: 'https://m/dvr/k/a/index.m3u8' }), {});
+    view.rerender({
+      s: src({ kind: 'rewind', url: 'https://m/dvr/k/a/index.m3u8' }),
+      h: {
+        onNotice,
+        onSeekRequest: (t, v) => {
+          requests.push([t, v]);
+          view.result.current.seekToMs(Math.max(t, v.lowerMs));
+        },
+      },
     });
     await settle();
     act(() => lastHls().trigger('hlsLevelUpdated', { details: details(frags(10)) }));
     act(() => view.result.current.seekToMs(PDT0 + 16_000));
     video.paused = false;
     act(() => video.el!.dispatchEvent(new Event('seeking')));
-    // 그린 뒤(16초) 라이브러리가 목록 끝으로 옮긴다
+    // 16초를 그린 뒤 창이 밀려(첫 조각 20초 · 하한 32초) 라이브러리가 목록 끝으로 옮긴다
     await act(async () => vi.advanceTimersByTime(1_000));
-    video.el!.currentTime = 38;
+    act(() => lastHls().trigger('hlsLevelUpdated', { details: details(frags(10, 5)) }));
+    video.el!.currentTime = 56;
     act(() => video.el!.dispatchEvent(new Event('seeking')));
-    expect(video.el!.currentTime).toBe(16);
-    // 되돌림이 또 튀면 두지 않는다
-    video.el!.currentTime = 38;
+    expect(requests).toEqual([[PDT0 + 16_000, { lowerMs: PDT0 + 32_000, endMs: PDT0 + 60_000 }]]);
+    expect(video.el!.currentTime).toBe(32);
     act(() => video.el!.dispatchEvent(new Event('seeking')));
-    expect(video.el!.currentTime).toBe(38);
+    // 되돌림이 또 튀면 두지 않고 알린다
+    video.el!.currentTime = 56;
+    act(() => video.el!.dispatchEvent(new Event('seeking')));
+    expect(requests).toHaveLength(1);
+    expect(video.el!.currentTime).toBe(56);
+    expect(onNotice).toHaveBeenCalledTimes(1);
+  });
+
+  it('ENDLIST 목록에서 끝 → 뒤로 시크 → 다시 끝이면 끝 도달을 두 번 올린다(cx H1 · R55)', async () => {
+    const onEndReached = vi.fn();
+    const view = mount(src({ kind: 'rewind', url: 'https://m/dvr/k/a/index.m3u8' }), {
+      onEndReached,
+      onSeekRequest: vi.fn(),
+    });
+    await settle();
+    act(() => lastHls().trigger('hlsLevelUpdated', { details: details(frags(10), false) }));
+    video.el!.currentTime = 40;
+    act(() => video.el!.dispatchEvent(new Event('ended')));
+    act(() => view.result.current.seekToMs(PDT0 + 10_000));
+    act(() => video.el!.dispatchEvent(new Event('seeking')));
+    video.el!.currentTime = 40;
+    act(() => video.el!.dispatchEvent(new Event('ended')));
+    expect(onEndReached).toHaveBeenCalledTimes(2);
+  });
+
+  it('끝 근처에서 옮긴 것은 끝 도달을 다시 열지 않는다(같은 끝을 두 번 올리지 않음)', async () => {
+    const onEndReached = vi.fn();
+    mount(src({ kind: 'rewind', url: 'https://m/dvr/k/a/index.m3u8' }), { onEndReached });
+    await settle();
+    act(() => lastHls().trigger('hlsLevelUpdated', { details: details(frags(10), false) }));
+    video.el!.currentTime = 40;
+    act(() => video.el!.dispatchEvent(new Event('ended')));
+    video.el!.currentTime = 39.5;
+    act(() => video.el!.dispatchEvent(new Event('seeking')));
+    act(() => video.el!.dispatchEvent(new Event('ended')));
+    expect(onEndReached).toHaveBeenCalledTimes(1);
+  });
+
+  it('hls.js 가 없는 브라우저(네이티브 HLS)는 세션 고리가 있어도 지금처럼 라이브 창 안에서 시크한다(cx M)', async () => {
+    fake.supported = false;
+    vi.spyOn(HTMLMediaElement.prototype, 'canPlayType').mockReturnValue('maybe');
+    const onSeekRequest = vi.fn();
+    const view = mount(src(), { onSeekRequest });
+    await settle();
+    video.el!.currentTime = 36;
+    await act(async () => vi.advanceTimersByTime(1_000));
+    expect(view.result.current.windowSeconds).toBeGreaterThan(0);
+    // 라이브 끝 = seekable 끝(40) − 물러남 3초 = 37 · 시차 1초 + 10초 → 26초
+    act(() => view.result.current.seekBy(10));
+    expect(video.el!.currentTime).toBe(26);
+    expect(onSeekRequest).not.toHaveBeenCalled();
+  });
+
+  it('멈춘 채 넘겼다가 사용자가 다시 틀면 다음 재생기의 자동 재생을 막지 않는다(keepPaused 잔존 — cx M)', async () => {
+    const onSeekRequest = vi.fn();
+    const view = await sessionLive({ onSeekRequest });
+    act(() => view.result.current.seekToMs(PDT0 + 13_000));
+    act(() => {
+      video.paused = true;
+      video.el!.dispatchEvent(new Event('pause'));
+    });
+    act(() => lastHls().trigger('hlsLevelUpdated', { details: details(frags(10, 1)) }));
+    await act(async () => vi.advanceTimersByTime(1_000));
+    expect(onSeekRequest).toHaveBeenCalledTimes(1);
+    // 세션이 교체하지 않고(준비 전) 사용자가 다시 튼다
+    act(() => {
+      video.paused = false;
+      video.el!.dispatchEvent(new Event('play'));
+    });
+    view.rerender({ s: src({ generation: 1 }), h: { onSeekRequest } });
+    await settle();
+    const play = vi.mocked(HTMLMediaElement.prototype.play);
+    play.mockClear();
+    act(() => lastHls().trigger('hlsManifestParsed', {}));
+    expect(play).toHaveBeenCalled();
   });
 
   it('앱이 끝 쪽으로 옮긴 시크는 라이브러리 시크가 아니다 — 되돌리지 않는다', async () => {

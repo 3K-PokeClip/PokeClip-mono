@@ -45,7 +45,7 @@ import { useLiveDetailsMockState } from './useLiveDetailsMockState';
 import { useLiveMockState, type LiveStream } from './useLiveMockState';
 import { useLiveStatsMockState } from './useLiveStatsMockState';
 import { useLiveStatusMockState } from './useLiveStatusMockState';
-import { useLiveStreamSelection } from './useLiveStreamSelection';
+import { useLiveStreamSelection, type Reselect } from './useLiveStreamSelection';
 import { useLiveSession } from './useLiveSession';
 import { useManualMarking } from './useManualMarking';
 import { infoWaitOver } from '../infoWait';
@@ -131,7 +131,7 @@ function LivePlayer({
   onLivePosition,
   onSeek,
   onMarkableChange,
-  deferred,
+  reselect,
 }: {
   stream: LiveStream;
   viewersNote: string;
@@ -181,8 +181,8 @@ function LivePlayer({
    * 녹화 소스 하나에서 읽는다(계획 검증 m11): 녹화 조회 결과와 기준점을 따로 보면 둘이 갈리는 그리기가 생긴다
    */
   onMarkableChange: (markable: boolean) => void;
-  /** 재생 보유 중에 다시 고른 방송 번호(useLiveStreamSelection — POK-200 M5). 보던 방송과 다르면 「새 방송」 띠다 */
-  deferred: string | null;
+  /** 재생 보유 중의 다시 고르기(useLiveStreamSelection — POK-200 M5). 보던 방송과 다른 답이면 「새 방송」 띠다 */
+  reselect: Reselect;
 }) {
   // env 미설정이면 null → GlassPlayer가 「영상 신호 없음」 자리 표시를 그린다.
   // 주소에 ?stream= 이 없으면 clip 명부에서 고른 방송(liveDataStore)의 영상을 튼다.
@@ -211,7 +211,7 @@ function LivePlayer({
     startedAt,
     endedAt,
     liveUrl: src,
-    deferred,
+    reselect,
   });
   const request = live.recordedRequest;
   const playerStatus: BroadcastStatus = live.closedRecorded ? 'ended' : displayStatus;
@@ -414,10 +414,10 @@ function LiveScreenBody() {
   // 번호로 세우면 시계(useBroadcastClock)가 「꺼짐」을 퍼뜨려 정보 바에 「방송 중이 아니에요」가 먼저 떴다가 바뀌었다. 방송 목록을
   // 못 읽으면 10초마다 다시 묻고(LIVE_RESELECT_MS) 답이 오면 선다. 한 번 선 뒤 방송이 바뀌면(A → B) 저장소가 비지 않으니 내리지 않는다
   if (!selection.resolved || streamId === '') return <LiveScreenSkeleton />;
-  return <LiveDashboard deferred={selection.deferred} />;
+  return <LiveDashboard reselect={selection} />;
 }
 
-function LiveDashboard({ deferred }: { deferred: string | null }) {
+function LiveDashboard({ reselect }: { reselect: Reselect }) {
   // 주소는 usePathname으로 읽는다: 넘어온 직후 첫 그리기의 window.location은 옛 주소다
   const vodRouteId = vodStreamIdFromPathname(usePathname() ?? '');
   const pastRoute = vodRouteId !== null;
@@ -734,7 +734,7 @@ function LiveDashboard({ deferred }: { deferred: string | null }) {
                 onLivePosition={handleLivePosition}
                 onSeek={handlePlayerSeek}
                 onMarkableChange={setPastMarkable}
-                deferred={deferred}
+                reselect={reselect}
               />
             </Suspense>
           </div>
