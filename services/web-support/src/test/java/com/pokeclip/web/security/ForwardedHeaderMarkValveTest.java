@@ -1,4 +1,4 @@
-package com.pokeclip.auth.config;
+package com.pokeclip.web.security;
 
 import org.apache.catalina.connector.Connector;
 import org.apache.catalina.connector.Request;
@@ -13,7 +13,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * 표시 밸브가 도착한 그대로의 머리글을 보고 요청 속성에 적는지 잰다. 실물 Request 에 머리글을 심어 밸브를 직접 돌린다
- * ({@link RemoteIpValveTrustTest}와 같은 골격). 밸브가 맨 앞에 배선되는지는 실서버 시험 {@code ProxyTrustNativeTest}가 잰다.
+ * (auth {@code RemoteIpValveTrustTest}와 같은 골격). 밸브가 맨 앞에 배선되는지는 auth 실서버 시험 {@code
+ * ProxyTrustNativeTest}가 잰다.
  *
  * <p>머리글 이름은 제품 상수를 쓰지 않고 글자로 적는다. 목록에서 하나가 빠지면 여기서 잡혀야 한다.
  */

@@ -1,4 +1,4 @@
-package com.pokeclip.auth.config;
+package com.pokeclip.web.security;
 
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -27,7 +27,7 @@ import org.springframework.web.filter.OncePerRequestFilter;
  * 꼴을 먼저 보고(매처 생성자는 받은 값을 실패 메시지에 싣는다), 원격 주소는 {@link Inet4Address}가 아니면
  * 403 이다.
  */
-final class SourceNetworkFilter extends OncePerRequestFilter {
+public final class SourceNetworkFilter extends OncePerRequestFilter {
 
   private static final String OCTET = "(25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)";
 
@@ -37,7 +37,7 @@ final class SourceNetworkFilter extends OncePerRequestFilter {
 
   private final List<IpAddressMatcher> allowed;
 
-  SourceNetworkFilter(List<String> ipv4Cidrs) {
+  public SourceNetworkFilter(List<String> ipv4Cidrs) {
     for (String cidr : ipv4Cidrs) {
       if (!IPV4_CIDR.matcher(cidr).matches()) {
         // 값은 싣지 않는다. 부팅 실패 메시지는 로그와 CI 출력에 남는다.
