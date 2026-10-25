@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/playback"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/rewind/boundary"
@@ -22,6 +23,13 @@ import (
 // pdtLayout 은 EXT-X-PROGRAM-DATE-TIME 의 서식이다 — UTC·밀리초 세 자리(설계 4.8.2 실물,
 // RFC 8216bis-22 4.4.4.6 "to at least millisecond accuracy"). 밀리초 아래는 Format 이 버린다.
 const pdtLayout = "2006-01-02T15:04:05.000Z07:00"
+
+// FormatPDT 는 t 를 EXT-X-PROGRAM-DATE-TIME 서식(UTC · 밀리초 세 자리 · pdtLayout)으로 쓴다. 목록 렌더와
+// 제어면(상태 응답의 firstPdt · headPdt)이 함께 쓴다 — 둘이 갈리면 웹이 상태의 시각으로 목록 안 조각을
+// 찾지 못한다.
+func FormatPDT(t time.Time) string {
+	return t.UTC().Format(pdtLayout)
+}
 
 // Session 은 목록이 읽는 회차(stream_sessions 한 행)다. 앞의 넷은 컬럼과 1:1 이고 NULL 은 영값이다.
 type Session struct {
@@ -142,7 +150,7 @@ func (p Playlist) writeSegment(b *bytes.Buffer, r boundary.Row, newRun bool) err
 	if r.IsGap {
 		b.WriteString("#EXT-X-GAP\n")
 	}
-	fmt.Fprintf(b, "#EXT-X-PROGRAM-DATE-TIME:%s\n", r.PlaybackPDT.UTC().Format(pdtLayout))
+	fmt.Fprintf(b, "#EXT-X-PROGRAM-DATE-TIME:%s\n", FormatPDT(r.PlaybackPDT))
 	// duration_ms 는 양수다(쓰기 경로의 폭 검증 — indexer H7). 정수 나눗셈이라 자릿수가 정확하다.
 	fmt.Fprintf(b, "#EXTINF:%d.%03d,\n", r.DurationMS/1000, r.DurationMS%1000)
 	fmt.Fprintf(b, "%s/%s\n", p.BaseURL, r.PlaybackS3Key)
