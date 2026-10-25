@@ -8,8 +8,10 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
@@ -36,10 +38,20 @@ class ExpiredBroadcastNativeProxyTest extends IntegrationTestSupport {
 
   static final String TOKEN = "test-only-expired-native-token-0123456789";
 
+  /** 서버가 답을 안 주면 시험이 그 자리에서 멈추지 않고 실패하게 한다. 정상 응답은 수십 밀리초다. */
+  private static final Duration TIMEOUT = Duration.ofSeconds(10);
+
   private final int port;
+  private final HttpClient client;
 
   ExpiredBroadcastNativeProxyTest(@LocalServerPort int port) {
     this.port = port;
+    this.client = HttpClient.newBuilder().connectTimeout(TIMEOUT).build();
+  }
+
+  @AfterEach
+  void closeClient() {
+    client.close();
   }
 
   /** 대조: 전달 머리글이 없으면 출발지(루프백, 허용 대역)와 토큰을 지나 만료 목록에 닿는다. */
@@ -80,10 +92,11 @@ class ExpiredBroadcastNativeProxyTest extends IntegrationTestSupport {
                         + port
                         + "/internal/broadcasts/expired?before=2026-10-01T00:00:00Z"))
             .header("X-Expired-Broadcasts-Token", token)
+            .timeout(TIMEOUT)
             .GET();
     extraHeaders.forEach(builder::header);
     try {
-      return HttpClient.newHttpClient().send(builder.build(), HttpResponse.BodyHandlers.ofString());
+      return client.send(builder.build(), HttpResponse.BodyHandlers.ofString());
     } catch (IOException e) {
       throw new IllegalStateException(e);
     } catch (InterruptedException e) {

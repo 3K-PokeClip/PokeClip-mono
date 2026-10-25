@@ -1,6 +1,9 @@
 package com.pokeclip.web.security;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import java.util.Arrays;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockFilterChain;
@@ -65,6 +68,22 @@ class InternalTokenFilterTest {
         .isEqualTo(200);
     assertThat(run(filter, with(DEDICATED_HEADER, TOKEN), new MockFilterChain()).getStatus())
         .isEqualTo(401);
+  }
+
+  /**
+   * 빈 토큰으로 만든 필터는 빈 헤더를 통과시킨다({@code MessageDigest.isEqual(빈, 빈)}이 참). 공유 부품이라 그 규약을
+   * 모르는 호출자가 생길 수 있어 생성자가 막는다. 닫힌 창구는 {@link DenyAllFilter}를 단다.
+   */
+  @Test
+  void blankOrMissingToken_isRejected() {
+    for (String token : Arrays.asList("", "   ", "\t", null)) {
+      assertThatThrownBy(() -> new InternalTokenFilter(token, DEDICATED_HEADER))
+          .as("토큰 [%s]", token)
+          .isInstanceOf(IllegalArgumentException.class)
+          .hasMessageContaining("DenyAllFilter");
+      assertThatThrownBy(() -> new InternalTokenFilter(token))
+          .isInstanceOf(IllegalArgumentException.class);
+    }
   }
 
   private static MockHttpServletResponse run(
