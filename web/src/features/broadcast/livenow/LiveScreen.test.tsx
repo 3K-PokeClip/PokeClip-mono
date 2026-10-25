@@ -40,7 +40,10 @@ vi.mock('@/lib/analytics', async (importOriginal) => ({
 // useSearchParams 대체 — ?stream=(useMediaSource)은 비워 두고 아래 env 고정과 함께 소스를 null로 만들어
 // 플레이어가 「영상 신호 없음」 자리로 결정적으로 선다. ?mock=(오프라인 목업 토글)은 케이스가 nav.search로 정한다.
 const notFound = vi.hoisted(() => vi.fn());
+/** 고정 화면의 「새 방송 보기」 이동(POK-200 M5) */
+const routerPush = vi.hoisted(() => vi.fn());
 vi.mock('next/navigation', () => ({
+  useRouter: () => ({ push: routerPush }),
   useSearchParams: () => new URLSearchParams(nav.search),
   // pathname을 주면 주소창과 갈라 잰다: 다른 화면에서 넘어온 첫 그리기 때 주소창은 아직 옛 주소다
   usePathname: () => nav.pathname ?? window.location.pathname,
@@ -80,6 +83,28 @@ vi.mock('@/api/mediaPlayback', async (importOriginal) => {
     },
   };
 });
+
+// 녹화 줄기를 고른 끝 시각(POK-200 M5 · R42): 세션이 녹화로 닫힐 때 고정한 끝 시각이 같은 키 다음 방송 녹화를 거르는지 잰다
+const timelineUntil = vi.hoisted(() => [] as (number | null)[]);
+vi.mock('@/features/player/recordingTimeline', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/features/player/recordingTimeline')>();
+  return {
+    ...actual,
+    recordingTimeline: (...args: Parameters<typeof actual.recordingTimeline>) => {
+      timelineUntil.push(args[2]);
+      return actual.recordingTimeline(...args);
+    },
+  };
+});
+
+// 되감기 제어면(POK-200 M5) 흉내 — 스트림 경로 · 회차별 경로의 답과 물은 주소
+const control = vi.hoisted(() => ({
+  /** 스트림 경로의 답(본문). null 이면 404 */
+  stream: null as Record<string, unknown> | null,
+  /** 회차별 경로의 답(본문). null 이면 404 */
+  round: null as Record<string, unknown> | null,
+  calls: [] as string[],
+}));
 
 // 채팅 패널이 그려질 때 받은 mode: 지난 방송으로 들어오는 동안 라이브 문구로 깜박이는지 잰다(리뷰 2라운드)
 const chatModes = vi.hoisted(() => [] as (string | undefined)[]);
@@ -144,6 +169,8 @@ const hlsFake = vi.hoisted(() => ({
   manifest: true,
   /** 영상 조각을 받아 내나. 아니면 조각 받기 완료(FRAG_LOADED)가 오지 않는다(목록만 열리고 조각이 403인 곳, POK-419) */
   frags: true,
+  /** 마지막으로 선 재생기의 목록 갱신 처리기(LEVEL_UPDATED — POK-200 M5). 시험이 목록을 쏜다 */
+  levelUpdated: null as ((event: string, data: unknown) => void) | null,
 }));
 /** 재생기가 서는 라이브 끝(영상 초): 영상 끝(지금)에서 2초 뒤다 */
 function liveSyncSeconds(): number {
@@ -158,12 +185,15 @@ vi.mock('hls.js', () => {
       ERROR: 'hlsError',
       MANIFEST_PARSED: 'hlsManifestParsed',
       FRAG_LOADED: 'hlsFragLoaded',
+      LEVEL_LOADED: 'hlsLevelLoaded',
+      LEVEL_UPDATED: 'hlsLevelUpdated',
     };
     static ErrorTypes = { NETWORK_ERROR: 'networkError', MEDIA_ERROR: 'mediaError' };
     private readonly handlers = new Map<string, () => void>();
     on(event: string, handler: () => void) {
       this.handlers.set(event, handler);
       if (event === 'hlsError') hlsFake.error = handler;
+      if (event === 'hlsLevelUpdated') hlsFake.levelUpdated = handler;
     }
     attachMedia() {}
     loadSource() {
@@ -749,6 +779,11 @@ function handle(url: string, init?: RequestInit): Response | Promise<Response> {
   const u = new URL(url, 'http://localhost');
   const path = u.pathname;
   if (u.host === 'live.test') return new Response(null, { status: server.liveStatus });
+  if (u.host === 'control.test') {
+    control.calls.push(u.pathname);
+    const body = u.pathname.includes('/rounds/') ? control.round : control.stream;
+    return body === null ? jsonResponse(404, { error: 'not_found' }) : jsonResponse(200, body);
+  }
   if (path === '/api/clip/broadcasts') {
     const gate = u.searchParams.get('limit') === '1' ? server.pickGate : server.listGate;
     return gate ? gate.then(() => listResponse(u)) : listResponse(u);
@@ -1025,6 +1060,11 @@ beforeEach(() => {
   hlsFake.supported = true;
   hlsFake.manifest = true;
   hlsFake.frags = true;
+  hlsFake.levelUpdated = null;
+  control.stream = null;
+  control.round = null;
+  control.calls = [];
+  timelineUntil.length = 0;
   chatModes.length = 0;
   chatTexts.length = 0;
   playerStatuses.length = 0;
@@ -1066,6 +1106,9 @@ beforeEach(() => {
   // env는 셸에서 그대로 상속된다 — 로컬/CI 셸에 NEXT_PUBLIC_MEDIA_*가 export돼 있어도 소스가 null이게 고정한다.
   vi.stubEnv('NEXT_PUBLIC_MEDIA_STUB_URL', '');
   vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', '');
+  // 되감기 제어면이 없으면 재생 세션을 열지 않는다(지금 동작). 세션 시험은 이 값을 따로 둔다
+  vi.stubEnv('NEXT_PUBLIC_MEDIA_CONTROL_BASE_URL', '');
+  routerPush.mockClear();
   vi.useFakeTimers({ now: NOW });
   forgetLiveStreamId();
   resetLiveData();
@@ -5698,5 +5741,166 @@ describe('LiveScreen: 라이브 되감기 채팅(POK-326)', () => {
     await tick(container);
     expect(within(chatPanel()).getByText('라이브 5035초')).toBeInTheDocument();
     expect(within(chatPanel()).getByText(/^지난 메시지 보는 중/)).toBeInTheDocument();
+  });
+});
+
+describe('LiveScreen: 재생 세션(POK-200 M5 · 설계 5.5절)', () => {
+  const DVR_A = `http://control.test/dvr/${STREAM_ID}/a1/index.m3u8`;
+  const DVR_B = `http://control.test/dvr/${STREAM_ID}/b1/index.m3u8`;
+  function readyLive(url: string, firstMs: number, headMs: number) {
+    return {
+      ready: true,
+      mode: 'live',
+      url,
+      firstPdt: new Date(firstMs).toISOString(),
+      headPdt: new Date(headMs).toISOString(),
+    };
+  }
+
+  beforeEach(() => {
+    stubMediaElement();
+    // 라이브 재생기의 되감기 창(seekable)은 영상 0초(1시간 전)부터 지금까지 · 재생 위치에 영상이 있다
+    vi.spyOn(HTMLMediaElement.prototype, 'seekable', 'get').mockImplementation(
+      () =>
+        ({
+          length: 1,
+          start: () => 0,
+          end: () => (Date.now() - MEDIA_ZERO) / 1000,
+        }) as unknown as TimeRanges,
+    );
+    vi.spyOn(HTMLMediaElement.prototype, 'readyState', 'get').mockImplementation(() => 4);
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', 'http://live.test');
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_CONTROL_BASE_URL', 'http://control.test');
+  });
+
+  /** 라이브 재생기가 목록(영상 0초 = 1시간 전부터 지금까지)을 받았다 — observedEndMs = 지금 */
+  async function liveListLoaded() {
+    await act(async () => {
+      hlsFake.levelUpdated?.('hlsLevelUpdated', {
+        details: {
+          fragments: [{ start: 0, duration: 3_600, programDateTime: MEDIA_ZERO }],
+          targetduration: 4,
+          live: true,
+        },
+      });
+    });
+    // 재생기가 한 번 그려 재생 위치(lastAtMs)를 세션에 알린다(1초 보조 틱)
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    await settle();
+  }
+
+  /** 라이브 목록이 치명 404 로 닫혔다 — 끝 도달로 친다(끝남 대기 · 덮개) */
+  async function liveClosed() {
+    await act(async () => {
+      hlsFake.error?.('hlsError', { fatal: true, type: 'networkError', response: { code: 404 } });
+    });
+    await settle();
+  }
+
+  it('출입증 쿠키가 없어도(필요 없음 · 로컬) 제어면 폴링이 돈다 — 제어면 키는 쿠키와 무관하다(R30)', async () => {
+    await renderLive();
+    expect(control.calls).toContain(`/api/streams/${STREAM_ID}/rewind`);
+  });
+
+  it('제어면 주소가 비면 세션을 열지 않고 지금 동작이다', async () => {
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_CONTROL_BASE_URL', '');
+    await renderLive();
+    expect(control.calls).toEqual([]);
+    expect(hlsFake.loads).toBeGreaterThan(0);
+  });
+
+  it('명부가 ended 로 바뀌어도 재생기를 내리지 않고 세션 중 녹화를 묻지 않는다 · 꺼짐 화면도 서지 않는다(R29 · R45)', async () => {
+    mediaCalls.configured = true;
+    const { container } = await renderLive();
+    expect(container.querySelector('video')).not.toBeNull();
+    server.liveEnded = true;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(61_000);
+    });
+    await settle();
+    expect(container.querySelector('video')).not.toBeNull();
+    expect(screen.queryByRole('heading', { name: '지금은 방송 중이 아니에요' })).toBeNull();
+    expect(mediaCalls.spans).toEqual([]);
+  });
+
+  it('명부 live 인 채 「녹화 보기」 — 녹화를 한 번 묻고 끝 시각은 이 세션이 본 목록 끝이다 · 같은 키 다른 회차의 폴링 끝은 섞이지 않는다(R42)', async () => {
+    mediaCalls.configured = true;
+    mediaCalls.answer = Promise.resolve([
+      { startMs: MEDIA_ZERO, durationSeconds: 3_600 },
+      // 같은 키로 이어 켠 다음 방송 녹화 — 끝 시각이 있어야 거른다
+      { startMs: NOW + 60_000, durationSeconds: 1_800 },
+    ]);
+    await renderLive();
+    await liveListLoaded();
+    await liveClosed();
+    expect(screen.getByText('방송이 이어지는지 확인하고 있어요')).toBeInTheDocument();
+    // 끝남 대기 동안 같은 키의 다른 회차 B 가 30분 뒤까지의 범위를 열 번 준다
+    control.stream = readyLive(DVR_B, NOW + 60_000, NOW + 30 * 60_000);
+    for (let i = 0; i < 10; i += 1) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+    }
+    await settle();
+    const loadsBefore = hlsFake.loads;
+    fireEvent.click(screen.getByRole('button', { name: '녹화 보기' }));
+    await settle();
+    expect(mediaCalls.spans).toHaveLength(1);
+    expect(timelineUntil.at(-1)).toBe(NOW);
+    // 닫힌 라이브로 다시 붙지 않는다 · 세션이 다시 열리지 않는다
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(20_000);
+    });
+    await settle();
+    expect(hlsFake.loads).toBe(loadsBefore);
+    expect(screen.queryByText('방송이 이어지는지 확인하고 있어요')).toBeNull();
+  });
+
+  it('끝남 대기 중 같은 방송이 이어지면(이어짐 증거) 사람 조작 없이 라이브를 다시 세운다(R21 · R53)', async () => {
+    await renderLive();
+    await liveListLoaded();
+    expect(hlsFake.loads).toBeGreaterThan(0);
+    await liveClosed();
+    const loadsBefore = hlsFake.loads;
+    control.stream = readyLive(DVR_A, MEDIA_ZERO, NOW + 13_000);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(13_000);
+    });
+    await settle();
+    expect(hlsFake.loads).toBeGreaterThan(loadsBefore);
+    expect(screen.queryByText('방송이 이어지는지 확인하고 있어요')).toBeNull();
+  });
+
+  it('고정 화면의 끝남 대기 — 같은 키에 새 방송이면 「새 방송 보기」가 그 방송의 대시보드로 보낸다(R56)', async () => {
+    nav.search = `?stream=${STREAM_ID}`;
+    window.history.pushState({}, '', `/broadcast/livenow?stream=${STREAM_ID}`);
+    await renderLive();
+    await liveListLoaded();
+    await liveClosed();
+    // 새 방송 B 가 지금 방송이고, 그 목록은 끊긴 자리를 덮지 않는다
+    server.liveStream2 = true;
+    control.stream = readyLive(DVR_B, NOW + 60_000, NOW + 120_000);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    await settle();
+    fireEvent.click(screen.getByRole('button', { name: '새 방송 보기' }));
+    await settle();
+    expect(routerPush).toHaveBeenCalledWith('/broadcast/livenow?stream=live-2');
+  });
+
+  it('보유 중 같은 채널에 새 방송이 서면 자동으로 넘어가지 않고 띠로 알린다 · 누르면 그 방송으로(R45)', async () => {
+    await renderLive();
+    server.liveStream2 = true;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    await settle();
+    expect(playerBroadcastIds.at(-1)).toBe(STREAM_ID);
+    fireEvent.click(screen.getByRole('button', { name: '보러 가기' }));
+    await settle();
+    expect(playerBroadcastIds.at(-1)).toBe('live-2');
   });
 });

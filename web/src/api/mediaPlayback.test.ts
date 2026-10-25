@@ -172,6 +172,7 @@ describe('녹화 재생 주소는 출입증 경로 아래다 (POK-317)', () => {
     await m.lookupRecordingSpans('key-1');
     const url = new URL(String(spy.mock.calls[0]?.[0]));
     expect(url.origin + url.pathname).toBe('https://media.test/playback/key-1/list');
+    expect([...url.searchParams.keys()]).toEqual(['path']);
     expect(url.searchParams.getAll('path')).toEqual(['key-1']);
   });
 

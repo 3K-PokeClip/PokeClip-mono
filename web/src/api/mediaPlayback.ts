@@ -7,8 +7,8 @@ import { trackApiActivity } from './client';
 //   GET {base}/playback/<키>/get?start=<RFC3339>&duration=<초>&format=mp4&path=<키>   그 구간의 영상 한 덩어리
 // 🔴 주소는 출입증 쿠키 경로(/playback/<키>) 아래다(POK-317). 재생 서버가 읽는 path 쿼리는 웹이 경로의 키와 같은 값으로 하나 싣는다
 //    (POK-200): CloudFront · ALB 는 쿼리를 그대로 넘긴다. 쿠키 정책은 쿼리를 못 막으므로, 남의 키를 실은 요청을 막는 것은 Media 상자
-//    nginx 대조다(path 하나 · 경로 키와 같음일 때만 통과 — infra/media-host/nginx/nginx.conf.tmpl). 로컬은 app/media/playback 라우트가
-//    들어온 path 를 버리고 경로의 키로 다시 채운다(이중 방어).
+//    nginx 대조다(path 하나 · 경로 키와 같음일 때만 통과 — infra/media-host/nginx/nginx.conf.tmpl). 로컬은
+//    app/media/playback 라우트가 들어온 path 를 버리고 경로의 키로 다시 채운다(이중 방어).
 // 방송 중에도 된다(이미 닫힌 4초 조각까지). 서버 주소는 env에만 둔다(하드코딩 금지 규칙).
 // 🔴 카드·조각의 위치(ms)는 「방송 시작 편지 시각」이 아니라 **녹화 첫 조각** 기준이다(조각 장부의 pts 축).
 //    그래서 절대 시각으로 옮길 때의 기준점은 여기 list의 첫 구간 start다.
