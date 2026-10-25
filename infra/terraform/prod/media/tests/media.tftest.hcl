@@ -206,7 +206,7 @@ run "composes_ingest_auth_image_when_digest_given" {
       loopback_sender = "sha256:4444444444444444444444444444444444444444444444444444444444444444"
       ingest_auth     = "sha256:5555555555555555555555555555555555555555555555555555555555555555"
     }
-    stream_key_resolve_url = "http://auth.pokeclip.internal:8085"
+    stream_key_resolve_url = "http://auth.pokeclip.internal:28082"
   }
 
   assert {
@@ -277,13 +277,13 @@ run "passes_ingest_auth_settings_in_responder_mode" {
       loopback_sender = "sha256:4444444444444444444444444444444444444444444444444444444444444444"
       ingest_auth     = "sha256:5555555555555555555555555555555555555555555555555555555555555555"
     }
-    stream_key_resolve_url = "http://auth.pokeclip.internal:8085"
+    stream_key_resolve_url = "http://auth.pokeclip.internal:28082"
     ingest_auth_ip_limit   = "off"
   }
 
   assert {
     condition = (
-      module.media_host.template_vars.stream_key_resolve_url == "http://auth.pokeclip.internal:8085" &&
+      module.media_host.template_vars.stream_key_resolve_url == "http://auth.pokeclip.internal:28082" &&
       [
         for file in yamldecode(module.media_host.rendered_user_data["a"]).write_files :
         file.content if file.path == "/etc/pokeclip-media/ingest-auth.env"

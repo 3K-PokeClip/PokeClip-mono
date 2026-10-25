@@ -141,6 +141,8 @@ kty 확정(2026-10-23): `c8gn.large`(네트워크 최적화 Graviton) · 루트 
 *   `instance_type` · `root_volume_size` 는 기본값이 없고 루트 tfvars 가
     넘깁니다(아래 「상자 크기」). `instance_type` 은 AWS 가 답하는 지원
     아키텍처(`aws_ec2_instance_type`)에 arm64 가 없으면 plan 이 멈춥니다.
+*   `stream_key_resolve_url` 의 포트는 `auth_port`(platform 출력
+    `service_ports.auth`)와 같아야 합니다 — 다르면 plan 이 멈춥니다(POK-477).
 *   `rewind_bucket_arn` 에서 버킷 이름을 꺼내 사이드카 `S3_BUCKET` 으로
     넘깁니다.
 *   응답기 거부 목록 파라미터 이름은 `/pokeclip/prod/media/ingest-auth-deny-tokens`

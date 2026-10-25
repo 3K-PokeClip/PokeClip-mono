@@ -427,6 +427,16 @@ variable "stream_key_resolve_url" {
     condition     = var.ingest_auth_image == "" || var.stream_key_resolve_url != ""
     error_message = "응답기 모드(ingest_auth_image 가 찬 값)에서는 stream_key_resolve_url 이 비면 안 된다."
   }
+
+  # 포트는 auth_port 와 같아야 한다 — Media → auth SG 짝이 그 포트만 연다
+  # (POK-477). 꼴이 틀린 값은 첫 검증이 막으므로 여기서는 꼴이 맞을 때만 본다.
+  validation {
+    condition = alltrue([
+      for port in regexall("^http://[A-Za-z0-9.-]+:([0-9]+)$", var.stream_key_resolve_url) :
+      tonumber(port[0]) == var.auth_port
+    ])
+    error_message = "stream_key_resolve_url(루트 tfvars)의 포트가 auth_port(platform 출력 service_ports.auth)와 달라 Media → auth SG 짝에 막힌다 — 두 값을 맞춘다."
+  }
 }
 
 variable "stream_key_resolve_token_secret_arn" {
