@@ -332,6 +332,7 @@ function SwitcherPanel({
           opener={asking.opener}
           onClose={() => setAsking(null)}
           onBusyChange={onBusyChange}
+          fallbackFocus={mineRef}
         />
       )}
       {asking?.kind === 'leave' && (
@@ -587,13 +588,26 @@ function DeclineConfirm({
   opener,
   onClose,
   onBusyChange,
+  fallbackFocus,
 }: {
   invitation: ReceivedInvitation;
   opener: HTMLElement;
   onClose: () => void;
   onBusyChange: (busy: boolean) => void;
+  /** 「거절」 버튼이 없어질 때 포커스를 둘 늘 남는 자리(「내 채널」 줄) */
+  fallbackFocus: RefObject<HTMLElement | null>;
 }) {
-  const decline = useInvitationAction(declineInvitation, '초대를 거절했어요', 'declined', onClose);
+  // 닫힐 때 「거절」 버튼이 없으면 늘 남는 자리로 보낸다: 거절이 끝난 카드는 다음 읽기에서 지워지고, 덮개를 연 사이 주기
+  // 읽기가 카드를 먼저 지울 수도 있다(PR #412 리뷰). ref만 읽어 고정해 둔다: 덮개의 포커스 효과가 다시 돌지 않게
+  const finished = useRef(false);
+  const returnFocusTo = useCallback(
+    () => (finished.current || !opener.isConnected ? fallbackFocus.current : null),
+    [opener, fallbackFocus],
+  );
+  const decline = useInvitationAction(declineInvitation, '초대를 거절했어요', 'declined', () => {
+    finished.current = true;
+    onClose();
+  });
   return (
     <PanelConfirm
       title={`${invitation.streamerName}님의 초대를 거절할까요?`}
@@ -604,6 +618,7 @@ function DeclineConfirm({
       onConfirm={() => decline.mutate(invitation.id)}
       onClose={onClose}
       onBusyChange={onBusyChange}
+      returnFocusTo={returnFocusTo}
     />
   );
 }

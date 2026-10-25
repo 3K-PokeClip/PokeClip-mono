@@ -711,6 +711,26 @@ describe('ChannelSwitcher: 스트리머가 바꾼 받은 초대를 새로고침 
     expect(calls(spy, RECEIVED)).toBe(3);
   });
 
+  it('거절 덮개를 연 사이 주기 읽기가 카드를 지우면, 덮개를 닫을 때 포커스를 「내 채널」 줄로 보낸다', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const server: Server = { delegations: [], invitations: [invitation(18)] };
+    stub(server);
+    const user = userEvent.setup({ delay: null });
+    const { panel, queryClient } = await openWithClient(user, prodLikeClient());
+    const p = within(panel);
+    await user.click(await p.findByRole('button', { name: '거절' }));
+    const confirm = within(await p.findByRole('alertdialog'));
+
+    // 그 사이 스트리머가 초대를 취소했다
+    server.invitations = [];
+    await settle(queryClient, () => vi.advanceTimersByTimeAsync(RECEIVED_POLL_MS));
+    expect(p.queryByRole('group', { name: /받은 초대/ })).not.toBeInTheDocument();
+
+    await user.click(confirm.getByRole('button', { name: '취소' }));
+    expect(p.queryByRole('alertdialog')).not.toBeInTheDocument();
+    expect(p.getByRole('button', { name: /나 채널/ })).toHaveFocus();
+  });
+
   it('숨은 탭에서는 주기 읽기를 쉬고, 탭이 다시 보이면 바로 읽는다', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const server: Server = { delegations: [BYEOLHA], invitations: [] };
@@ -798,6 +818,8 @@ describe('ChannelSwitcher: 답하기·나가기가 실패하면 사람 말로 �
 
     expect(await screen.findByText('이미 처리된 초대예요')).toBeInTheDocument();
     await waitFor(() => expect(p.queryByRole('alertdialog')).not.toBeInTheDocument());
+    // 그 카드는 다음 읽기에서 사라진다: 포커스는 누른 「거절」이 아니라 늘 남는 「내 채널」 줄로 간다
+    expect(p.getByRole('button', { name: /나 채널/ })).toHaveFocus();
     await waitFor(() =>
       expect(p.queryByRole('group', { name: /받은 초대/ })).not.toBeInTheDocument(),
     );
