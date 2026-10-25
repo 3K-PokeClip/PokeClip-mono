@@ -31,8 +31,8 @@
 # cloudfront · cloudfront-keyvaluestore · route53). platform · media 행과
 # edge 의 WAF · 로그 그룹 · 버킷 행은 대조 2026-10-25(접두 = elbv2 · ecs ·
 # wafv2 · logs · s3 · iam — ELB 는 list_elbv2.html). POK-479 행(리스너
-# 규칙 · WAF 떼기 · ECS · 함수 로그 그룹 · 로그 전달 · apex 객체)도 대조
-# 2026-10-25(접두 = elbv2 · wafv2 · logs · cloudfront · s3).
+# 규칙 · WAF 떼기 · 바꿔 달기 · ECS · 함수 로그 그룹 · 로그 전달 · apex
+# 객체)도 대조 2026-10-25(접두 = elbv2 · wafv2 · logs · cloudfront · s3).
 # 데이터 단언은 서비스 접두 · 계열만 본다 — 짝은 사람이 대조한다(A9).
 #
 # 두지 않는 행:
@@ -175,11 +175,23 @@ profile-photo-object	O7d	arn:arn:aws:s3:::pokeclip-prod-profile-photos-apne2/pro
 # 목록(ListenerRule 의 Tag-based Groups 가 Yes — Listener 와 같음)으로
 # 확인했다(대조 2026-10-25). ModifyRule · DeleteRule · SetRulePriorities 는
 # listener-rule/app 만 받는다.
-# ALB 에서 WAF 떼기(POK-479) — wafv2:DisassociateWebACL 의 자원은 웹 ACL 이
-# 아니라 ALB 다(list_wafv2.html — loadbalancer/app/). 그래서 ALB 를 푸는
-# 필터로 묻는다(NLB 도 함께 풀려 같은 질문을 받는다).
-# elasticloadbalancing:SetWebAcl 은 자원 유형이 없어(자원 「*」 만) 구체 ARN
-# 행으로 물을 수 없다(CloudFront 키 그룹과 같은 한계).
+# ALB 의 WAF 떼기 · 바꿔 달기(POK-479 — 보안 리뷰) — 서비스 승인 참조
+# (list_wafv2.html · 대조 2026-10-25)에서 DisassociateWebACL 의 자원은
+# loadbalancer/app/ 이고, AssociateWebACL 은 loadbalancer/app/ 와 webacl(필수)
+# 둘이다. ALB 를 푸는 필터로 묻는다(NLB 도 함께 풀려 같은 질문을 받는다).
+# AssociateWebACL 의 webacl 쪽은 dev 가 붙일 ACL(아무 ARN)이라 묻지 않고 짝인
+# ALB 쪽을 묻는다. AssociateWebACL 이 기존 연결을 대체하는지는 API 참조
+# (「Associates a web ACL with a resource」)로 확정하지 못했다 — 질문이
+# 늘어나는 쪽(보수적)이라 넣는다.
+# ALB 쪽 권한은 행을 나눈다(행마다 동작은 한 서비스 — 데이터 단언). WAF
+# 개발자 안내서 「Permissions for AssociateWebACL」 · 「Permissions for
+# DisassociateWebACL」(대조 2026-10-25)은 ALB ARN 을 자원으로
+# elasticloadbalancing:SetWebACL(옛 설정 — 떼기는 WAF 동작 없이 이것만) 또는
+# CreateWebACLAssociation · DeleteWebACLAssociation(새 설정)을 요구한다. 셋 다
+# ELB 승인 참조(list_elbv2.html)의 권한 전용 동작이다 — Create · Delete 는
+# loadbalancer/app/ 가 필수이고, SetWebAcl 은 자원 유형이 적혀 있지 않다.
+# SetWebAcl 도 ALB ARN 으로 묻는다 — 안내서의 정책 예가 ALB ARN 을 자원으로
+# 쓰고, 「*」 허용도 이 질문이 잡는다.
 # REGIONAL WAF 는 ARN 끝(ID)이 생성 때 정해져 표본 ID 로 묻는다(cf-kvs 와
 # 같은 방식 · 같은 한계). 태그로 풀지 않는다 — 읽기 전용 실측(2026-10-25 ·
 # get-resources --resource-type-filters wafv2, 서울 · us-east-1)은 두 리전
@@ -205,7 +217,8 @@ ecs-cluster	O7d	tag:ecs:cluster	cluster	ap-northeast-2	ecs:DeleteCluster,ecs:Upd
 ecs-service	O7d	tag:ecs:service	service	ap-northeast-2	ecs:UpdateService,ecs:DeleteService,ecs:TagResource,ecs:UntagResource	none	-
 ecs-task-definition	O7d	tag:ecs:task-definition	task-definition	ap-northeast-2	ecs:RunTask,ecs:StartTask,ecs:DeleteTaskDefinitions,ecs:TagResource,ecs:UntagResource	none	-
 platform-listener-rule	O7d	tag:elasticloadbalancing:listener-rule	listener-rule/app	ap-northeast-2	elasticloadbalancing:ModifyRule,elasticloadbalancing:DeleteRule,elasticloadbalancing:SetRulePriorities,elasticloadbalancing:AddTags,elasticloadbalancing:RemoveTags	none	-
-platform-waf-detach	O7d	tag:elasticloadbalancing:loadbalancer	loadbalancer/app/	ap-northeast-2	wafv2:DisassociateWebACL	none	-
+platform-waf-detach	O7d	tag:elasticloadbalancing:loadbalancer	loadbalancer/app/	ap-northeast-2	wafv2:DisassociateWebACL,wafv2:AssociateWebACL	none	-
+platform-waf-detach-elb	O7d	tag:elasticloadbalancing:loadbalancer	loadbalancer/app/	ap-northeast-2	elasticloadbalancing:SetWebAcl,elasticloadbalancing:CreateWebACLAssociation,elasticloadbalancing:DeleteWebACLAssociation	none	-
 # prod ECS 실행 · 작업 역할을 ECS 작업에 넘기는 길(보안 리뷰 HIGH). 실행
 # 역할은 앱 비밀 그릇을 읽고(modules/ecs_service/main.tf 의 ReadSecrets —
 # secretsmanager:GetSecretValue), ECS 는 작업 정의의 역할을 넘길 때

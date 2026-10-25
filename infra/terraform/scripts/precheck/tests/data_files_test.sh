@@ -228,7 +228,10 @@ FOLLOWUP_TARGETS=(
 'elasticloadbalancing:ModifyRule,elasticloadbalancing:DeleteRule,'\
 'elasticloadbalancing:SetRulePriorities'
   'platform-waf-detach O7d tag:elasticloadbalancing:loadbalancer '\
-'wafv2:DisassociateWebACL'
+'wafv2:DisassociateWebACL,wafv2:AssociateWebACL'
+  'platform-waf-detach-elb O7d tag:elasticloadbalancing:loadbalancer '\
+'elasticloadbalancing:SetWebAcl,elasticloadbalancing:CreateWebACLAssociation,'\
+'elasticloadbalancing:DeleteWebACLAssociation'
   'ecs-log-group-next O7d arn:arn:aws:logs:ap-northeast-2:${ACCOUNT}:'\
 'log-group:pokeclip-prod-next logs:DeleteLogGroup'
   'ecs-log-group-auth O7d arn:arn:aws:logs:ap-northeast-2:${ACCOUNT}:'\
@@ -1100,16 +1103,19 @@ expect_target_rows_consistent() {
 
 #######################################
 # 대상 행 하나의 기대 리전을 낸다. 전역 서비스(IAM · Route 53 · CloudFront ·
-# KVS 값)는 us-east-1, 인증서는 키 끝(-apne2 · -use1), 두 리전에 자원이 있는
-# 로그 · WAF 는 ARN 의 리전(태그 해석이면 서울 — 행이 ALB 를 푼다), 그 밖은
-# 서울이다(prod 의 리전 자원은 edge 의 us-east-1 자원 말고 모두 서울).
+# KVS 값)는 us-east-1, 인증서는 키 끝(-apne2 · -use1)이다. 두 리전에 자원이
+# 있는 로그 · WAF 는 첫 단계로 가른다 — O7f(prod/edge — 기본 provider 가
+# us-east-1, providers.tf)면 us-east-1, 그 밖(runtime-1a · O7d)은 서울이다.
+# ARN 에서 가져오지 않는다 — ARN 과 리전 칸을 함께 바꾼 변이를 놓치므로.
+# 그 밖 서비스는 서울이다(prod 의 리전 자원은 edge 의 us-east-1 자원 말고
+# 모두 서울).
 # Arguments:
-#   서비스 접두, 해석 방법, 자원 키.
+#   서비스 접두, 첫 단계, 자원 키.
 # Outputs:
 #   기대 리전(정할 수 없으면 빈 출력).
 #######################################
 expected_target_region() {
-  local service="$1" method="$2" key="$3" rest
+  local service="$1" stage="$2" key="$3"
   case "${service}" in
     iam | route53 | cloudfront | cloudfront-keyvaluestore)
       printf 'us-east-1\n'
@@ -1122,9 +1128,8 @@ expected_target_region() {
       esac
       ;;
     logs | wafv2)
-      if [[ "${method}" == arn:arn:aws:* ]]; then
-        rest="${method#arn:arn:aws:*:}"
-        printf '%s\n' "${rest%%:*}"
+      if [[ "${stage}" == O7f ]]; then
+        printf 'us-east-1\n'
       else
         printf 'ap-northeast-2\n'
       fi
@@ -1139,10 +1144,10 @@ expected_target_region() {
 # 방법 · 동작만 고정한 단언은 리전을 바꾼 변이를 못 잡는다.
 #######################################
 expect_target_regions() {
-  local key method region actions want arn_region count=0
-  while IFS=$'\t' read -r key _ method _ region actions _; do
+  local key stage method region actions want arn_region count=0
+  while IFS=$'\t' read -r key stage method _ region actions _; do
     count=$((count + 1))
-    want="$(expected_target_region "${actions%%:*}" "${method}" "${key}")"
+    want="$(expected_target_region "${actions%%:*}" "${stage}" "${key}")"
     arn_region="${region}"
     if [[ "${method}" == arn:arn:aws:*:*:* ]]; then
       arn_region="${method#arn:arn:aws:*:}"
