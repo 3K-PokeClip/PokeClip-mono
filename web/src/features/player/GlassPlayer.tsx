@@ -213,7 +213,7 @@ function HlsGlassPlayer(props: GlassPlayerProps & { src: string }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const sim = useHlsPlayback(
     videoRef,
-    props.src,
+    { kind: 'live', url: props.src, startAtMs: null, generation: 0 },
     props.simulationOptions,
     props.onSeek,
     props.mediaKey,

@@ -1,4 +1,5 @@
 import type { RewindStatus, RewindStatusResult } from '@/api/rewindStatus';
+import { EDGE_MARGIN_TD } from './playbackEdge';
 
 // 재생 세션 상태기계(설계 5.3절 종결 판, POK-200 M5) — 라이브 · 되감기 · 끝남 대기 · 다시보기 사이의 전환을 정하는 순수 함수다.
 // 사건 하나를 받아 다음 상태와 효과(재조회 · 안에서 시크 · 알림 · 닫기)를 돌려준다. 시각은 모두 실제 시각(epoch ms)이다.
@@ -12,10 +13,8 @@ import type { RewindStatus, RewindStatusResult } from '@/api/rewindStatus';
 export const RESUME_WAIT_MS = 360_000;
 /** 끝남 대기 시한(20분). 끝에 닿은 시청자는 녹화로, 아직 보는 시청자는 묻기를 멈추고 끝까지 본 뒤 녹화로 간다 */
 export const ENDING_WAIT_MS = 1_200_000;
-/** 창 하한 여유를 아직 모를 때(목록 전) 쓰는 값 — TD 4초의 3배 */
-const DEFAULT_EDGE_MARGIN_MS = 12_000;
-/** 창 하한 여유 = 3 × TARGETDURATION(설계 5.3.1절) */
-const EDGE_MARGIN_TD = 3;
+/** 창 하한 여유를 아직 모를 때(목록 전) 쓰는 값 — TD 4초 기준(설계 5.3.1절) */
+const DEFAULT_EDGE_MARGIN_MS = EDGE_MARGIN_TD * 4_000;
 /** LIVE 버튼의 「지금 방송 번호」 다시 묻기 상한(2초 간격) */
 const X_RECHECK_LIMIT = 3;
 

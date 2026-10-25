@@ -2,8 +2,11 @@
 // 컴포넌트에서 분리한 순수 함수 — 시크바 클릭·드래그 환산은 jsdom 렌더 테스트로
 // 검증하기 어려워 여기서 단위 테스트한다 (dockTransition.ts와 같은 이유).
 
-/** DVR 윈도우 상한 — 계약3 4절: 되감기 최대 1:00:00 */
-export const LIVE_WINDOW_SECONDS = 3600;
+/**
+ * 시크바가 보이는 되감기 폭의 상한(표시 상한) — 계약3 4절: 되감기 최대 1:00:00. 라이브 목록의 창 길이가 아니다: 라이브 창 밖은
+ * 되감기 재생기가 맡는다(POK-200 M5 · 설계 5.2절)
+ */
+export const REWIND_UI_MAX_SECONDS = 3600;
 
 /** 이 값 미만의 시차는 라이브 엣지로 간주하고 0으로 스냅한다 */
 export const AT_EDGE_THRESHOLD_SECONDS = 3;
@@ -78,7 +81,7 @@ export function edgeWords(replay: boolean): (typeof EDGE_WORDS)[keyof typeof EDG
  */
 export function formatBehind(seconds: number): string {
   const s = Math.max(0, Math.round(seconds));
-  if (s >= LIVE_WINDOW_SECONDS) {
+  if (s >= REWIND_UI_MAX_SECONDS) {
     return `-${Math.floor(s / 3600)}:${pad2(Math.floor((s % 3600) / 60))}:${pad2(s % 60)}`;
   }
   return `-${pad2(Math.floor(s / 60))}:${pad2(s % 60)}`;
@@ -110,7 +113,7 @@ export function parseClockLabel(label: string): number | null {
 /**
  * 시크바 진행 비율 0..1 — 엣지(시차 0)가 1.
  *
- * windowSeconds는 필수 인자다 (계약3 4절 4번, POK-32). 상한을 LIVE_WINDOW_SECONDS로
+ * windowSeconds는 필수 인자다 (계약3 4절 4번, POK-32). 상한을 REWIND_UI_MAX_SECONDS로
  * 고정하면 방송이 1시간보다 짧을 때 시크바 왼쪽이 통째로 도달 불가 영역이 된다 —
  * 실제 되감기 폭은 seekable 기준이라 dvrWindow의 rewindWindowSeconds가 정한다.
  * 기본값을 주면 호출부가 빠뜨렸을 때 그 버그가 조용히 되살아난다
