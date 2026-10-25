@@ -392,6 +392,12 @@ run "outputs_distribution_and_bucket" {
     )
     error_message = "출력(distribution_id · domain_name · hosted_zone_id · bucket_name)이 배포 · 버킷 값과 다르다."
   }
+
+  # 호출 루트가 함수 로그 그룹 이름(/aws/cloudfront/function/<이름>)을 짓는다.
+  assert {
+    condition     = output.function_name == "pokeclip-prod-apex-request"
+    error_message = "function_name 출력이 apex-request 함수 이름과 다르다."
+  }
 }
 
 # 입력 검증 — 잘못 넘기면 plan 전에 멈춘다.

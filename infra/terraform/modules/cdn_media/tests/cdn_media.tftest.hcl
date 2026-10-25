@@ -769,4 +769,13 @@ run "exposes_distribution_kvs_and_vpc_origin" {
     )
     error_message = "kvs_arn · vpc_origin_id 출력이 자원의 값과 다르다."
   }
+
+  # 호출 루트가 함수 로그 그룹 이름(/aws/cloudfront/function/<이름>)을 짓는다.
+  assert {
+    condition = output.function_names == {
+      live_auth    = "pokeclip-prod-live-auth"
+      deny_default = "pokeclip-prod-deny-default"
+    }
+    error_message = "function_names 출력이 live-auth · deny-default 함수 이름과 다르다."
+  }
 }
