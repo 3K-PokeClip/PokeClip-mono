@@ -38,6 +38,9 @@ import styles from './ChannelSwitcher.module.css';
 
 export type ChannelRole = '스트리머' | '편집자';
 
+/** 창이 열린 동안 받은 초대를 다시 읽는 간격. 스트리머가 보낸 초대가 새로고침 없이 20초 안에 뜬다(POK-481) */
+export const RECEIVED_POLL_MS = 20_000;
+
 /** 트리거가 그릴 지금 채널: 아직 안 섰으면 내 이름으로(사이드바가 빈칸으로 깜빡이지 않게). */
 export function useChannelIdentity(): {
   name: string | null;
@@ -135,7 +138,13 @@ function SwitcherPanel({
   const switchTo = useSwitchChannel();
   const logout = useLogout();
   const asEditor = useQuery(delegationsAsEditorQueryOptions);
-  const received = useQuery(receivedInvitationsQueryOptions);
+  // 받은 초대는 남(스트리머의 초대·취소)이 바꾼다. 창을 열 때마다 새로 읽고(staleTime 0: 60초 안에 다시 열어도) 열린 동안엔
+  // 주기로 읽는다. 창이 닫히면 이 구독이 사라져 주기도 멈추고, 숨은 탭에서는 react-query가 쉰다(POK-481)
+  const received = useQuery({
+    ...receivedInvitationsQueryOptions,
+    staleTime: 0,
+    refetchInterval: RECEIVED_POLL_MS,
+  });
   const select = useChannelStore((s) => s.select);
   // 저장된 남의 채널이 있다(지금은 as-editor를 못 읽어 내 채널로 보일 수 있다)
   const storedOther = useChannelStore((s) => s.selected !== null && s.selected !== s.userId);
@@ -282,7 +291,10 @@ function SwitcherPanel({
             <Button
               variant="soft"
               size="sm"
-              loading={asEditor.isFetching || received.isFetching}
+              // 못 읽은 목록의 다시 읽기에만 돈다: 받은 초대의 주기 읽기마다 버튼이 돌지 않게(POK-481)
+              loading={
+                (channelsFailed && asEditor.isFetching) || (invitesFailed && received.isFetching)
+              }
               onClick={() => {
                 if (channelsFailed) void asEditor.refetch();
                 if (invitesFailed) void received.refetch();

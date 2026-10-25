@@ -1,12 +1,13 @@
 import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
+import { focusManager, QueryClient } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useAuthStore } from '@/stores/auth';
 import { useChannelStore } from '@/stores/channel';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
 import { renderWithProviders } from '@/test/testProviders';
-import { ChannelSwitcher } from './ChannelSwitcher';
+import { ChannelSwitcher, RECEIVED_POLL_MS } from './ChannelSwitcher';
 import { useSwitchCurtain } from './switchCurtain';
 import { useActiveChannel } from './useActiveChannel';
 
@@ -124,11 +125,12 @@ async function open(user: ReturnType<typeof userEvent.setup>) {
   return (await openWithClient(user)).panel;
 }
 
-async function openWithClient(user: ReturnType<typeof userEvent.setup>) {
+async function openWithClient(user: ReturnType<typeof userEvent.setup>, client?: QueryClient) {
   const { queryClient } = renderWithProviders(
     <ChannelSwitcher side="top" align="start">
       <button type="button">열기</button>
     </ChannelSwitcher>,
+    client,
   );
   await user.click(screen.getByRole('button', { name: '열기' }));
   const panel = await screen.findByRole('dialog', { name: '계정 전환' });
@@ -559,6 +561,139 @@ describe('ChannelSwitcher: 한쪽 목록만 실패할 때(로컬 리뷰 1라운�
 
     expect(await p.findByRole('button', { name: '다시 시도' })).toBeInTheDocument();
     expect(await p.findByRole('group', { name: '받은 초대 1' })).toBeInTheDocument();
+  });
+});
+
+const RECEIVED = '/api/editor-invitations/received';
+const AS_EDITOR = '/api/editor-delegations/as-editor';
+const calls = (spy: ReturnType<typeof stubFetch>, path: string) =>
+  spy.mock.calls.filter(([url]) => url === path).length;
+
+/** 운영(providers.tsx)과 같은 staleTime 60초. 기본 테스트 클라이언트(0)로는 「60초 안에 다시 열기」를 잴 수 없다 */
+function prodLikeClient() {
+  return new QueryClient({
+    defaultOptions: { queries: { staleTime: 60_000, retry: false }, mutations: { retry: false } },
+  });
+}
+
+/** 다시 읽기를 일으키고(주기 진행 · 포커스 복귀) 그 응답까지 act 안에서 받는다: 응답이 act 밖에서 화면을 바꾸지 않게 */
+async function settle(queryClient: QueryClient, run: () => unknown) {
+  await act(async () => {
+    await run();
+    await vi.waitUntil(() => queryClient.isFetching() === 0);
+  });
+}
+
+describe('ChannelSwitcher: 스트리머가 바꾼 받은 초대를 새로고침 없이 반영한다(POK-481)', () => {
+  afterEach(() => {
+    focusManager.setFocused(undefined);
+    vi.useRealTimers();
+  });
+
+  it('창을 닫고 60초 안에 다시 열어도 받은 초대를 다시 읽는다: 참여 채널은 다시 읽지 않는다', async () => {
+    const server: Server = { delegations: [BYEOLHA], invitations: [] };
+    const spy = stub(server);
+    const user = userEvent.setup();
+    const { panel } = await openWithClient(user, prodLikeClient());
+    await within(panel).findByText('편집 참여 중 · 1');
+    expect(calls(spy, RECEIVED)).toBe(1);
+
+    server.invitations = [invitation(18)];
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    await user.click(screen.getByRole('button', { name: '열기' }));
+    const reopened = within(await screen.findByRole('dialog', { name: '계정 전환' }));
+
+    expect(await reopened.findByRole('group', { name: '받은 초대 1' })).toBeInTheDocument();
+    expect(calls(spy, RECEIVED)).toBe(2);
+    expect(calls(spy, AS_EDITOR)).toBe(1);
+  });
+
+  it('창이 열려 있으면 20초마다 받은 초대를 다시 읽는다: 새 초대가 뜨고 취소된 초대는 사라진다', async () => {
+    // react-query는 주기를 걸 때의 전역 setInterval을 쓴다: 렌더 전에 가짜로 바꾼다. user-event는 delay: null로 둔다 —
+    // advanceTimers 옵션은 act 밖에서 시계를 돌려 화면 갱신이 act 경고로 샌다
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const server: Server = { delegations: [BYEOLHA], invitations: [] };
+    const spy = stub(server);
+    const user = userEvent.setup({ delay: null });
+    const { panel, queryClient } = await openWithClient(user, prodLikeClient());
+    const p = within(panel);
+    await p.findByText('편집 참여 중 · 1');
+    expect(p.queryByRole('group', { name: /받은 초대/ })).not.toBeInTheDocument();
+
+    server.invitations = [invitation(18)];
+    await settle(queryClient, () => vi.advanceTimersByTimeAsync(RECEIVED_POLL_MS));
+    expect(p.getByRole('group', { name: '받은 초대 1' })).toBeInTheDocument();
+
+    server.invitations = [];
+    await settle(queryClient, () => vi.advanceTimersByTimeAsync(RECEIVED_POLL_MS));
+    expect(p.queryByRole('group', { name: /받은 초대/ })).not.toBeInTheDocument();
+    expect(calls(spy, RECEIVED)).toBe(3);
+    expect(calls(spy, AS_EDITOR)).toBe(1);
+  });
+
+  it('주기 읽기가 실패해도 받아 둔 초대 카드는 남고 「다시 시도」를 띄우지 않는다', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const server: Server = { delegations: [BYEOLHA], invitations: [invitation(18)] };
+    const spy = stub(server);
+    const user = userEvent.setup({ delay: null });
+    const { panel, queryClient } = await openWithClient(user, prodLikeClient());
+    const p = within(panel);
+    await p.findByRole('group', { name: '받은 초대 1' });
+
+    server.receivedFails = true;
+    await settle(queryClient, () => vi.advanceTimersByTimeAsync(RECEIVED_POLL_MS));
+    expect(calls(spy, RECEIVED)).toBe(2);
+    expect(queryClient.getQueryState(['editor-invitations', 'received'])?.status).toBe('error');
+    expect(p.getByRole('group', { name: '받은 초대 1' })).toBeInTheDocument();
+    expect(p.queryByRole('button', { name: '다시 시도' })).not.toBeInTheDocument();
+  });
+
+  it('참여 채널만 못 읽었을 때 받은 초대를 주기로 다시 읽어도 「다시 시도」 버튼은 돌지 않는다', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const server: Server = { delegations: [], invitations: [invitation(18)], asEditorFails: true };
+    stub(server);
+    const user = userEvent.setup({ delay: null });
+    const { panel, queryClient } = await openWithClient(user, prodLikeClient());
+    const p = within(panel);
+    const retry = await p.findByRole('button', { name: '다시 시도' });
+    await p.findByRole('group', { name: '받은 초대 1' });
+
+    let release: () => void = () => {};
+    server.listsHold = new Promise<void>((r) => {
+      release = r;
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(RECEIVED_POLL_MS);
+    });
+    await waitFor(() =>
+      expect(queryClient.getQueryState(['editor-invitations', 'received'])?.fetchStatus).toBe(
+        'fetching',
+      ),
+    );
+    expect(retry).not.toHaveAttribute('aria-busy');
+
+    await settle(queryClient, () => release());
+  });
+
+  it('숨은 탭에서는 주기 읽기를 쉬고, 탭이 다시 보이면 바로 읽는다', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const server: Server = { delegations: [BYEOLHA], invitations: [] };
+    const spy = stub(server);
+    const user = userEvent.setup({ delay: null });
+    const { panel, queryClient } = await openWithClient(user, prodLikeClient());
+    await within(panel).findByText('편집 참여 중 · 1');
+
+    act(() => focusManager.setFocused(false));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(RECEIVED_POLL_MS * 3);
+    });
+    expect(calls(spy, RECEIVED)).toBe(1);
+
+    await settle(queryClient, () => focusManager.setFocused(true));
+    expect(calls(spy, RECEIVED)).toBe(2);
+    // 포커스를 시험 안에서 되돌린다: afterEach에서 되돌리면 그것이 부른 다시 읽기가 시험 밖에서 화면을 바꾼다
+    await settle(queryClient, () => focusManager.setFocused(undefined));
   });
 });
 
