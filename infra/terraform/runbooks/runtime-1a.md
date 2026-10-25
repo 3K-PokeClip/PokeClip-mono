@@ -652,25 +652,31 @@ JSON 입니다. 보내기 전에 SQL 원문을 kty 에게
     계정 → media_owner 순서입니다. 앱 스키마 · 앱 사용자 줄은 앱 서버가
     처음 뜨기 전에만 씁니다. 뜬 뒤면 자기 스키마에 표가 있어 `DROP SCHEMA`
     (CASCADE 없음)가 실패합니다 — 앱 사용자가 자기 표의 소유자라 지우면 앱
-    데이터가 함께 사라지므로 그 실패를 넘기지 않습니다. `REVOKE CREATE ON
-    SCHEMA public` 줄은 1단-가 판만 적용된 DB 몫이고 1단-나 ① 판 위에서는
-    아무것도 바꾸지 않습니다. DB 권한 두 줄은 계정마다 준 CONNECT 를 거둬
+    데이터가 함께 사라지므로 그 실패를 넘기지 않습니다. `DROP SCHEMA` 는
+    `IF EXISTS` 라 앱 스키마가 없는 DB(1단-가 판만 적용 · 1단-나 ①
+    되돌리기 뒤)에서도 막히지 않습니다. `REVOKE CREATE ON SCHEMA public`
+    줄은 1단-가 판만 적용된 DB 몫이고 1단-나 ① 판 위에서는 아무것도 바꾸지
+    않습니다. DB 권한 두 줄은 계정마다 준 CONNECT 를 거둬
     `DROP ROLE` 이 남은 권한으로 막히지 않게 하고, PUBLIC 의 CONNECT · TEMP
     를 RDS 기본으로 되돌립니다. `media_owner` 의 `public` USAGE · CREATE 는
     마스터가 준 것이라 `DROP OWNED` 가 거두지 못해 따로 거둡니다 — 없으면
     마지막 `DROP ROLE media_owner` 가 「privileges for schema public」 으로
     실패합니다. `DROP OWNED` 줄의 `WARNING:  no privileges could be revoked
-    for "public"` 은 그 때문이고 정상입니다. 이 SQL 은 로컬 PG 17 superuser
-    대역에서 10 · 20 · 30 · 40 적용 뒤 한 트랜잭션으로 끝까지 돌고, 역할 ·
-    앱 스키마 · `public` 표가 0 이 되는 것까지만 확인했습니다(2026-10-25 —
-    운영 마스터 대역 · 운영에서는 돌린 적이 없습니다).
+    for "public"` 은 그 때문이고 정상입니다. 이 SQL 은 로컬 PG 17 에서
+    superuser 대역과 RDS 마스터 꼴 대역(superuser 아님 · CREATEROLE ·
+    CREATEDB · `rds_superuser` 멤버 · DB 소유자) 둘 다, 10 · 20 · 30 · 40
+    적용 뒤와 1단-가 판만 적용한 뒤에 한 트랜잭션으로 끝까지 돌고 역할 · 앱
+    스키마 · `public` 표가 0 이 되는 것까지만 확인했습니다(2026-10-25). 실제
+    RDS 의 `rds_superuser` 특수 능력은 흉내 내지 못했고, 운영에서는 돌린 적이
+    없습니다.
 
     ```sql
     SET ROLE media_owner;
     DROP OWNED BY media_owner;
     RESET ROLE;
     REVOKE USAGE, CREATE ON SCHEMA public FROM media_owner;
-    DROP SCHEMA app_auth, app_clip, app_chat_collector, app_chat_detector;
+    DROP SCHEMA IF EXISTS
+      app_auth, app_clip, app_chat_collector, app_chat_detector;
     REVOKE CREATE ON SCHEMA public
       FROM app_auth, app_clip, app_chat_collector, app_chat_detector;
     REVOKE CONNECT ON DATABASE pokeclip

@@ -1227,8 +1227,10 @@ non-empty 오류로 멈춘다 — 의도다. 누가 그 스키마에 손으로 �
 
 **옛 이력 표에는 baseline 줄이 남는다.** `public` 시절 baseline 으로 뜬 이력
 표(dev)는 자기 스키마로 옮겨 와도 `<< Flyway Baseline >>`(version 0, type
-`BASELINE`) 줄이 첫 줄로 남는다 — 정상이다. 새 DB(운영 · 시험)에는 그 줄이
-없고 자기 마이그레이션부터 찍힌다. clip 옛 실기동 기록(2026-08-18):
+`BASELINE`) 줄이 첫 줄로 남는다 — 정상이다. 새 DB 에는 그 줄이 없다. 운영은
+10 이 스키마를 먼저 만들어 자기 마이그레이션부터 찍히고, 시험 · 새 로컬 DB 는
+Flyway 가 스키마를 직접 만들어 `<< Flyway Schema Creation >>`(type `SCHEMA`)
+줄이 첫 줄이다. clip 옛 실기동 기록(2026-08-18):
 
 ```
  installed_rank | version |              description               |   type   | success
