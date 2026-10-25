@@ -169,7 +169,7 @@ https://pokeclip.com/?utm_source=chzzk&utm_medium=profile&utm_campaign=launch_20
 
 ### PostHog 화면 (출시 첫날부터 보는 것)
 
-콘솔에서 만들어 두고 링크를 Jira POK-359에 남깁니다. 시간대는 **Asia/Seoul**, 공개 공유 링크는 만들지 않습니다(팀원 권한으로만).
+콘솔에서 만들어 두고 링크를 Jira POK-478(콘솔 화면 구성, 백로그)에 남깁니다. 시간대는 **Asia/Seoul**, 공개 공유 링크는 만들지 않습니다(팀원 권한으로만).
 
 | 화면 | 정의 |
 |---|---|
