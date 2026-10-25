@@ -15,6 +15,7 @@ import com.pokeclip.clip.paging.ListLimit;
 import com.pokeclip.clip.thumbnail.ThumbnailUrls;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -61,6 +62,7 @@ public class JumpCardService {
     private final CardStreamRegistry registry;
     private final BroadcastAccessGuard guard;
     private final ThumbnailUrls thumbnails;
+    private final ApplicationEventPublisher events;
 
     /**
      * 🔴 <b>열기·가리기·되살리기 문이 {@code @Transactional} 대신 이것을 쓴다.</b> 자격 판정을 트랜잭션 밖에서
@@ -70,8 +72,10 @@ public class JumpCardService {
 
     JumpCardService(JumpCardRepository cards, BroadcastRepository broadcasts,
                     ObjectMapper mapper, CardStreamRegistry registry,
-                    BroadcastAccessGuard guard, TransactionTemplate transactions, ThumbnailUrls thumbnails) {
+                    BroadcastAccessGuard guard, TransactionTemplate transactions, ThumbnailUrls thumbnails,
+                    ApplicationEventPublisher events) {
         this.thumbnails = thumbnails;
+        this.events = events;
         this.cards = cards;
         this.broadcasts = broadcasts;
         this.mapper = mapper;
@@ -104,6 +108,7 @@ public class JumpCardService {
 
         if (inserted == 1) {
             publishAfterCommit(snapshot);
+            events.publishEvent(new JumpCardCreated(card.getId()));
         } else {
             log.info("jumpcard.duplicate_skipped streamId={} source={} windowStartMs={} eventId={}",
                     streamId, JumpCardSource.AUTO, request.window().startMs(), request.eventId());
@@ -173,6 +178,7 @@ public class JumpCardService {
             }
             JumpCardSnapshot snapshot = snapshot(card);
             publishAfterCommit(snapshot);
+            events.publishEvent(new JumpCardCreated(card.getId()));
             log.info("jumpcard.hotkey_created cardId={} by={}", card.getId(), userId);
             return new RecordResult(true, snapshot);
         });
@@ -367,8 +373,11 @@ public class JumpCardService {
     }
 
     /**
-     * 카드가 생기거나 바뀌었다고 알리는 유일한 자리. <b>커밋 뒤에만</b> 보낸다 —
+     * 카드가 생기거나 바뀌었다고 <b>화면에</b> 알리는 유일한 자리. <b>커밋 뒤에만</b> 보낸다 —
      * 커밋 전에 보내면 되감긴 카드가 화면에 뜨고, 지울 방법이 없다.
+     *
+     * <p>🔴 <b>새로 만든 카드면 {@link JumpCardCreated}도 같이 낸다</b>(POK-475, 썸네일 순회기가 2초 안에 사진을 주문한다). 새 카드를
+     * 만드는 길을 하나 더 내면 둘 다 부른다: 이것만 부르면 그 카드 사진이 1분 순회를 기다린다.
      *
      * <p>{@code afterCommit} 안에서는 <b>제출만</b> 한다. 전송은 {@code CardStreamExecutor}의
      * 전용 스레드가 하므로 요청 스레드가 느린 브라우저에 묶이지 않는다 — 커밋 뒤 처리를 요청
