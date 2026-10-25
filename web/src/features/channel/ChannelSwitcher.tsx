@@ -141,11 +141,12 @@ function SwitcherPanel({
   const logout = useLogout();
   const asEditor = useQuery(delegationsAsEditorQueryOptions);
   // 받은 초대는 남(스트리머의 초대·취소)이 바꾼다. 창을 열 때마다 새로 읽고(staleTime 0: 60초 안에 다시 열어도) 열린 동안엔
-  // 주기로 읽는다. 창이 닫히면 이 구독이 사라져 주기도 멈추고, 숨은 탭에서는 react-query가 쉰다(POK-481)
+  // 주기로 읽는다. 창이 닫히면 이 구독이 사라져 주기도 멈추고, 숨은 탭에서는 react-query가 쉰다(POK-481). 한 번도 못 읽었으면
+  // 주기로 두드리지 않는다: 회복은 「다시 시도」가 맡는다 — 주기 읽기마다 그 버튼이 저절로 돌며 눌리지 않게 되지 않게(PR #412 리뷰)
   const received = useQuery({
     ...receivedInvitationsQueryOptions,
     staleTime: 0,
-    refetchInterval: RECEIVED_POLL_MS,
+    refetchInterval: (query) => (query.state.data === undefined ? false : RECEIVED_POLL_MS),
   });
   const select = useChannelStore((s) => s.select);
   // 저장된 남의 채널이 있다(지금은 as-editor를 못 읽어 내 채널로 보일 수 있다)

@@ -637,6 +637,23 @@ describe('EditorSettingsScreen — 편집자가 바꾼 목록을 새로고침 �
     expect(screen.queryByText('편집자 목록을 불러오지 못했어요')).not.toBeInTheDocument();
   });
 
+  it('처음부터 못 읽은 목록은 주기로 다시 읽지 않아 「다시 시도」가 저절로 돌지 않는다', async () => {
+    const spy = stubFetch((url) => {
+      if (url === DELEGATIONS_URL) return jsonResponse(500, { error: 'boom' });
+      if (url === SENT_URL) return jsonResponse(200, SENT);
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    const { queryClient } = renderWithProviders(<EditorSettingsScreen />, prodLikeClient());
+    const retry = await screen.findByRole('button', { name: '다시 시도' });
+
+    await nextPoll(queryClient);
+    await nextPoll(queryClient);
+
+    expect(listCalls(spy, DELEGATIONS_URL)).toBe(1);
+    expect(listCalls(spy, SENT_URL)).toBe(3);
+    expect(retry).not.toHaveAttribute('aria-busy');
+  });
+
   it('한 목록만 처음부터 못 읽었을 때, 읽어 둔 다른 목록의 주기 읽기에는 「다시 시도」가 돌지 않는다', async () => {
     let releaseSent: () => void = () => {};
     let holdSent: Promise<void> | null = null;

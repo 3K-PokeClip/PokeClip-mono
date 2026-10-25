@@ -31,8 +31,14 @@ export type EditorsView = 'loading' | 'unavailable' | 'ready';
 export const EDITORS_POLL_MS = 20_000;
 
 // 두 목록은 상대(편집자의 수락·거절·나가기)도 바꾼다. 화면에 들어올 때·탭으로 돌아올 때 바로 읽고(staleTime 0) 열린
-// 동안엔 주기로 읽는다. 화면을 떠나면 구독과 함께 주기도 멈추고, 숨은 탭에서는 react-query가 쉰다(POK-481)
-const LIVE_LIST = { staleTime: 0, refetchInterval: EDITORS_POLL_MS } as const;
+// 동안엔 주기로 읽는다. 화면을 떠나면 구독과 함께 주기도 멈추고, 숨은 탭에서는 react-query가 쉰다(POK-481).
+// 한 번도 못 읽은 목록은 주기로 두드리지 않는다: 회복은 「다시 시도」가 맡는다 — 주기 읽기마다 그 버튼이 저절로 돌며
+// 눌리지 않게 되지 않게(PR #412 리뷰). 처음 읽기에 성공하면 react-query가 이 함수를 다시 불러 주기가 붙는다
+const LIVE_LIST = {
+  staleTime: 0,
+  refetchInterval: (query: { state: { data: unknown } }) =>
+    query.state.data === undefined ? false : EDITORS_POLL_MS,
+} as const;
 
 export interface EditorSettingsViewState {
   view: EditorsView;

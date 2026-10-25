@@ -687,6 +687,30 @@ describe('ChannelSwitcher: 스트리머가 바꾼 받은 초대를 새로고침 
     await settle(queryClient, () => release());
   });
 
+  it('처음부터 못 읽은 받은 초대는 주기로 다시 읽지 않아 「다시 시도」가 저절로 돌지 않는다: 다시 시도로 읽히면 그때부터 주기가 붙는다', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const server: Server = {
+      delegations: [BYEOLHA],
+      invitations: [invitation(18)],
+      receivedFails: true,
+    };
+    const spy = stub(server);
+    const user = userEvent.setup({ delay: null });
+    const { panel, queryClient } = await openWithClient(user, prodLikeClient());
+    const p = within(panel);
+    const retry = await p.findByRole('button', { name: '다시 시도' });
+
+    await settle(queryClient, () => vi.advanceTimersByTimeAsync(RECEIVED_POLL_MS * 2));
+    expect(calls(spy, RECEIVED)).toBe(1);
+    expect(retry).not.toHaveAttribute('aria-busy');
+
+    server.receivedFails = false;
+    await user.click(retry);
+    expect(await p.findByRole('group', { name: '받은 초대 1' })).toBeInTheDocument();
+    await settle(queryClient, () => vi.advanceTimersByTimeAsync(RECEIVED_POLL_MS));
+    expect(calls(spy, RECEIVED)).toBe(3);
+  });
+
   it('숨은 탭에서는 주기 읽기를 쉬고, 탭이 다시 보이면 바로 읽는다', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const server: Server = { delegations: [BYEOLHA], invitations: [] };
