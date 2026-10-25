@@ -13,6 +13,7 @@ import {
   Users,
   type LucideIcon,
 } from 'lucide-react';
+import { track } from '@/lib/analytics';
 import { LinkButton, Tabs, VisuallyHidden } from '@/ui';
 import { useOnboardingStore } from '@/stores/onboarding';
 import { SettingsPageHeader } from '../SettingsPageHeader';
@@ -94,6 +95,7 @@ export function HelpSettingsScreen() {
                   ? (e) => {
                       if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
                       startTour();
+                      track('onboarding_tour_started', { entry: 'help' });
                     }
                   : undefined
               }
@@ -128,6 +130,7 @@ export function HelpSettingsScreen() {
             target="_blank"
             rel="noopener noreferrer"
             iconStart={<DiscordMark />}
+            onClick={() => track('support_link_clicked', { channel: 'discord' })}
           >
             디스코드 1:1
           </LinkButton>
@@ -136,6 +139,7 @@ export function HelpSettingsScreen() {
             size="sm"
             href={`mailto:${SUPPORT_EMAIL}`}
             iconStart={<Mail />}
+            onClick={() => track('support_link_clicked', { channel: 'email' })}
           >
             이메일
           </LinkButton>

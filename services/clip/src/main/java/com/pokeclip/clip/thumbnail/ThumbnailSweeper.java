@@ -2,6 +2,7 @@ package com.pokeclip.clip.thumbnail;
 
 import com.pokeclip.clip.broadcast.Broadcast;
 import com.pokeclip.clip.broadcast.BroadcastRepository;
+import com.pokeclip.clip.jumpcard.JumpCardCreated;
 import com.pokeclip.clip.segment.TimelineOriginReader;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -10,6 +11,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.event.TransactionalEventListener;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.node.ObjectNode;
@@ -20,6 +22,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.OptionalLong;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 1분마다 사진 주문을 낸다(POK-277). 세 갈래를 차례로 훑는다.
@@ -37,6 +40,11 @@ import java.util.OptionalLong;
  * (로컬 리뷰 1라운드). 실은 뒤 적기가 실패하면 다음 순회가 한 번 더 내는데, 같은 키라 해가 없다.
  *
  * <p>주문을 못 실어도(줄 오류) 다음 순회가 다시 찾는다. 따로 outbox가 없는 이유다: 사진은 놓쳐도 다음 분에 다시 찍으면 된다.
+ *
+ * <p><b>새 카드는 따로 빨리 본다</b>(POK-475). 1분 순회만 있으면 카드가 생긴 뒤 사진이 붙기까지 1분 넘게 걸렸다(실측 76초: 조각 올림
+ * 33초 + 순회 대기 44초). 카드가 생기면(커밋 뒤) {@link #newCards} 명단에 오르고 {@link #NEW_CARD_POLL_MS}마다 명단의 카드만 본다.
+ * 조각이 아직 안 올라왔으면 명단에 남아 다음에 다시 본다. 표 전체를 그 간격으로 훑지 않는 이유: 카드 질의는 사진 없는 카드를 찾느라
+ * 표를 끝까지 훑을 수 있다. 명단은 이 순회기 안에만 있어 clip을 다시 띄우면 비지만, 그 카드는 1분 순회가 찍는다.
  */
 @Component
 @ConditionalOnProperty(prefix = "pokeclip.thumbnail", name = "enabled", havingValue = "true")
@@ -54,6 +62,15 @@ public class ThumbnailSweeper {
 
     /** 주문을 내고 이만큼 지나도 사진이 안 왔으면 다시 낸다. 일꾼 줄의 숨김 시간(2분)보다 넉넉하게. */
     static final Duration RETRY_AFTER = Duration.ofMinutes(5);
+
+    /** 새 카드 명단을 보는 간격(ms). 조각이 이미 있으면 사진이 이만큼 + 일꾼 시간(약 4초) 뒤에 붙는다 */
+    static final long NEW_CARD_POLL_MS = 2_000;
+
+    /** 이만큼 지나도 조각이 안 오면 명단에서 뺀다: 그 뒤는 1분 순회가 맡는다(2초마다 묻기를 끝없이 하지 않게) */
+    static final Duration NEW_CARD_WINDOW = Duration.ofMinutes(10);
+
+    /** 새 카드 명단: 카드 번호 → 알림을 받은 시각. 알림은 요청 스레드(커밋 뒤)가, 순회는 일정 스레드가 만진다 */
+    private final Map<Long, Instant> newCards = new ConcurrentHashMap<>();
 
     private final ThumbnailTargets targets;
     private final ThumbnailRepository thumbnails;
@@ -98,6 +115,21 @@ public class ThumbnailSweeper {
         guarded("clip", this::sweepClips);
     }
 
+    /** 새 카드 명단을 본다(POK-475). 명단이 비면 DB를 안 묻는다. */
+    @Scheduled(fixedDelay = NEW_CARD_POLL_MS, initialDelay = NEW_CARD_POLL_MS)
+    public void tickNewCards() {
+        guarded("new_card", this::sweepNewCards);
+    }
+
+    /**
+     * 카드가 새로 생겼다. <b>커밋 뒤에만</b> 받는다: 되감긴 카드는 명단에 안 오른다. 여기서는 명단에 적기만 한다: 줄에 싣는 일을
+     * 요청 스레드(마킹 응답)에 붙이지 않는다.
+     */
+    @TransactionalEventListener
+    void cardCreated(JumpCardCreated event) {
+        newCards.put(event.cardId(), clock.instant());
+    }
+
     private static void guarded(String kind, Runnable sweep) {
         try {
             sweep.run();
@@ -127,14 +159,43 @@ public class ThumbnailSweeper {
         Instant now = clock.instant();
         List<ThumbnailTargets.Card> rows = targets.cards(MAX_ATTEMPTS, now.minus(RETRY_AFTER), BATCH_LIMIT);
         for (ThumbnailTargets.Card row : rows) {
-            String target = String.valueOf(row.id());
-            send(ThumbnailKind.CARD, target, segmentBucket, row.s3Key(),
-                    row.streamTimestampMs() - row.segmentStartPtsMs(), now);
-            thumbnails.markRequested(ThumbnailKind.CARD, target, now);
+            orderCard(row, now);
         }
         if (!rows.isEmpty()) {
             log.info("thumbnail.sweep kind=card sent={}", rows.size());
         }
+    }
+
+    /**
+     * 명단의 카드 중 조각이 올라온 것을 주문하고 명단에서 뺀다. 주문 조건(사진 없음 · 재시도 간격 · 횟수)은 1분 순회와 같아서 둘이
+     * 같은 카드를 겹쳐 내지 않는다(같은 일정 스레드라 동시에 돌지도 않는다). 줄에 못 실으면 명단에 남는다.
+     */
+    void sweepNewCards() {
+        if (newCards.isEmpty()) {
+            return;
+        }
+        Instant now = clock.instant();
+        Instant stale = now.minus(NEW_CARD_WINDOW);
+        newCards.values().removeIf(at -> at.isBefore(stale));
+        if (newCards.isEmpty()) {
+            return;
+        }
+        List<ThumbnailTargets.Card> rows = targets.cardsIn(List.copyOf(newCards.keySet()), MAX_ATTEMPTS,
+                now.minus(RETRY_AFTER), BATCH_LIMIT);
+        for (ThumbnailTargets.Card row : rows) {
+            orderCard(row, now);
+            newCards.remove(row.id());
+        }
+        if (!rows.isEmpty()) {
+            log.info("thumbnail.sweep kind=new_card sent={} waiting={}", rows.size(), newCards.size());
+        }
+    }
+
+    private void orderCard(ThumbnailTargets.Card row, Instant now) {
+        String target = String.valueOf(row.id());
+        send(ThumbnailKind.CARD, target, segmentBucket, row.s3Key(),
+                row.streamTimestampMs() - row.segmentStartPtsMs(), now);
+        thumbnails.markRequested(ThumbnailKind.CARD, target, now);
     }
 
     void sweepClips() {

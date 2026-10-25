@@ -14,6 +14,7 @@
 // `source`가 없으면 지금까지의 목업이다(시험·스토리북).
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { track } from '@/lib/analytics';
 import { useToast } from '@/ui';
 import {
   cropRectOf,
@@ -867,6 +868,7 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     // 실제 모드는 만들어 줄 백엔드(AI 자막, 2번 몫)가 아직 없다 — 상태를 바꾸지 않고 안내만 한다
     if (real) {
       toast({ tone: 'info', title: `AI 자막 생성 · ${NOT_AVAILABLE}` });
+      track('pending_feature_clicked', { feature: 'ai_subtitle' }); // 수요를 본다 (POK-357)
       return;
     }
     setSubtitleStatus('generating');

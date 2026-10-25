@@ -14,8 +14,10 @@ Media 상자[^box] 모듈입니다(설계 3-3 · 3-3-1 · 5-3 · 5-5, 계획 M9)
     넷에는 활성 키의 상자 하나만 등록합니다.
 *   **SG(5-5):** Media SG 인그레스는 SRT ← NLB · 프록시 셋 ← 내부 ALB ·
     헬스 ← 둘입니다. 이그레스는 443 → S3 prefix list · 443 → 0.0.0.0/0 ·
-    5432 → RDS SG 입니다. RDS 인그레스 ← Media 5432 와 로드밸런서 SG
-    이그레스 → Media 도 이 모듈이 만듭니다(한 apply 에 짝이 생깁니다).
+    5432 → RDS SG · `auth_port` → auth SG(응답기의 4C resolve)입니다. RDS
+    인그레스 ← Media 5432 · auth 인그레스 ← Media `auth_port` 와 로드밸런서
+    SG 이그레스 → Media 도 이 모듈이 만듭니다(한 apply 에 짝이 생깁니다).
+    auth 짝은 kty 결정 2026-10-25 (나)로 런타임 2단에서 옮겼습니다.
     MediaMTX 루프백 포트(8888 · 9996 · 9997)는 열지 않습니다.
 *   **인스턴스 역할:** 경로 `/pokeclip/prod/`. 관리형 정책은
     `AmazonSSMManagedInstanceCore` 하나이고, 권한 정책은 정책 문서
@@ -67,7 +69,7 @@ Media 상자[^box] 모듈입니다(설계 3-3 · 3-3-1 · 5-3 · 5-5, 계획 M9)
 | 설치 묶음 이미지(`infra/media-host/bundle/Dockerfile` — `pokeclip-prod/media-host-bundle`) | `bin/*.sh` → `/opt/pokeclip-media/bin/` | `root:root` · 0755 |
 | 같은 이미지 | `bin/lib/*` → `/opt/pokeclip-media/bin/lib/` | `root:root` · 0644(디렉터리 0755) |
 | 같은 이미지 | `mediamtx.yml.tmpl` → `/etc/pokeclip-media/mediamtx.yml.tmpl` | `root:root` · 0644 |
-| user_data | `compose.yml` · `nginx.conf`(Terraform 렌더) · `media.env` | `root:root` · 0644 |
+| user_data | `compose.yml` · `nginx.conf` · `ingest-auth.env`(Terraform 렌더) · `media.env` | `root:root` · 0644 |
 | user_data | `/root/.docker/config.json`(`credHelpers` → `ecr-login`) | `root:root` · 0600 |
 | user_data | 유닛 `pokeclip-media.service`(저장소 파일 그대로) · drop-in `10-bundle.conf` | `root:root` · 0644 |
 | user_data | journald 설정(`Storage=persistent`) | `root:root` · 0644 |
@@ -88,8 +90,8 @@ Media 상자[^box] 모듈입니다(설계 3-3 · 3-3-1 · 5-3 · 5-5, 계획 M9)
     합니다.
 *   부트스트랩의 판정 줄(`MEDIA BOOTSTRAP OK|FAIL <단계>`)은 cloud-init 출력
     (`/var/log/cloud-init-output.log`)에 남습니다.
-*   압축 user_data 크기(시험값 기준): 기본 약 12.4 KB · 가장 큰 렌더(응답기
-    · janitor · 제어면 상류 모두 켬) 약 12.5 KB — 여유 약 3.9 KB 입니다. 주석을
+*   압축 user_data 크기(시험값 기준): 기본 약 12.9 KB · 가장 큰 렌더(응답기
+    · janitor · 제어면 상류 모두 켬) 약 13.7 KB — 여유 약 2.6 KB 입니다. 주석을
     고칠 때마다 수십 바이트씩 바뀌므로 정확한 값은 16 KiB 게이트 시험이 매번
     다시 잽니다.
 
@@ -151,9 +153,9 @@ kty 확정(2026-10-23): `c8gn.large`(네트워크 최적화 Graviton) · 루트 
 | 출력 | 쓰는 곳 |
 |---|---|
 | `instance_ids` | 루트 · 운영 확인 |
-| `media_sg_id` | 런타임 2단 — Media → auth 이그레스 · auth 인그레스 ← Media |
+| `media_sg_id` | Media 를 상대로 규칙을 거는 다른 루트(Media ↔ auth 짝은 이 모듈이 만듭니다 — kty 결정 2026-10-25 (나)) |
 | `instance_role_arn` | 참고용 |
-| `rendered_user_data` · `template_vars` | 시험용(비밀 없음) — 루트는 다시 내보내지 않습니다 |
+| `rendered_user_data` · `template_vars` · `auth_resolve_rules` | 시험용(비밀 없음) — 루트는 다시 내보내지 않습니다 |
 
 ## 시험
 

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ClipApiError, postWebMark, type WebMarkBody } from '@/api/clipEditor';
+import { track } from '@/lib/analytics';
 import { useToast } from '@/ui';
 import { isMarkHotkey, isTypingTarget } from './markKey';
 import { msToClock, type LiveCardSnapshot } from './useLiveMockState';
@@ -92,6 +93,8 @@ export function useManualMarking(options: ManualMarkingOptions): {
         const sent = 'sentAt' in body ? { ...body, sentAt: Date.now() } : body;
         const { status, card } = await postWebMark<LiveCardSnapshot>(streamId, sent);
         onCard(card);
+        // 새로 만든 카드만 센다(200은 「가까운 카드가 이미 있어요」). 화면을 떠났어도 서버에는 생겼다 (POK-357)
+        if (status !== 200) track('highlight_marked', { mode });
         if (!stillHere()) return;
         if (status === 200) {
           // 앞 카드가 가린 카드면(POK-463) 보이는 칸에는 없다: 「이미 있다」만 말하면 마킹이 실패한 것처럼 읽힌다

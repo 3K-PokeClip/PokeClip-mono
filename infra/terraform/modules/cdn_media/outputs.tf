@@ -27,3 +27,11 @@ output "vpc_origin_id" {
   description = "내부 ALB VPC origin id. 호출하는 루트가 이 VPC origin 이 생긴 뒤 서비스 SG(CloudFront-VPCOrigins-Service-SG)를 조회해 내부 ALB SG 인바운드 규칙을 만든다."
   value       = aws_cloudfront_vpc_origin.this.id
 }
+
+output "function_names" {
+  description = "CloudFront Function 이름(live_auth · deny_default) — 호출 루트가 함수 로그 그룹 /aws/cloudfront/function/<이름> 을 짓는다."
+  value = {
+    live_auth    = aws_cloudfront_function.live_auth.name
+    deny_default = aws_cloudfront_function.deny_default.name
+  }
+}

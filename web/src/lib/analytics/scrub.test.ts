@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CaptureResult } from 'posthog-js';
 import { scrubAttribute, scrubEvent, scrubUrl } from './scrub';
 
@@ -30,17 +30,79 @@ describe('scrubUrl — 주소에서 비밀값을 뗀다(POK-356)', () => {
     expect(scrubUrl('Chrome')).toBe('Chrome');
     expect(scrubUrl('')).toBe('');
   });
+
+  it('바깥 주소는 origin만 남긴다 — 영상 ID·채널 ID가 경로에 실린다', () => {
+    expect(scrubUrl('https://youtu.be/dQw4w9WgXcQ')).toBe('https://youtu.be');
+    expect(scrubUrl('https://www.youtube.com/shorts/dQw4w9WgXcQ?feature=share')).toBe(
+      'https://www.youtube.com',
+    );
+    expect(scrubUrl('https://chzzk.naver.com/abcdef0123456789')).toBe('https://chzzk.naver.com');
+  });
+
+  it('우리 주소(하위 도메인·지금 페이지 호스트)는 경로를 남긴다', () => {
+    expect(scrubUrl('https://pokeclip.com/terms/')).toBe('https://pokeclip.com/terms/');
+    expect(scrubUrl('https://dev.pokeclip.com/home')).toBe('https://dev.pokeclip.com/home');
+    expect(scrubUrl(`${window.location.origin}/home?card=1`)).toBe(
+      `${window.location.origin}/home`,
+    );
+  });
+
+  it('API·재생 주소의 방송 번호를 가린다 — 녹화 네트워크 기록에 남는다', () => {
+    expect(scrubUrl('https://app.pokeclip.com/api/clip/broadcasts/S-1/recipes/31/renders')).toBe(
+      'https://app.pokeclip.com/api/clip/broadcasts/_/recipes/31/renders',
+    );
+    expect(scrubUrl('/api/clip/broadcasts/S-1/chat-messages?after=3')).toBe(
+      '/api/clip/broadcasts/_/chat-messages',
+    );
+    expect(scrubUrl('/api/clip/broadcasts?state=live')).toBe('/api/clip/broadcasts');
+    expect(scrubUrl('https://media.pokeclip.com/playback/S-1/index.m3u8')).toBe(
+      'https://media.pokeclip.com/playback/_/index.m3u8',
+    );
+  });
+
+  it('라이브 LL-HLS 재생목록·조각 주소의 송출 키 폴더를 가린다 — 우리 호스트라 경로가 남는다 (PR #382 리뷰)', () => {
+    expect(scrubUrl('https://media.pokeclip.com/ab12cd34key/index.m3u8?_HLS_msn=3')).toBe(
+      'https://media.pokeclip.com/_/index.m3u8',
+    );
+    expect(scrubUrl('https://media.pokeclip.com/ab12cd34key/0f2a_seg12.mp4')).toBe(
+      'https://media.pokeclip.com/_/0f2a_seg12.mp4',
+    );
+    expect(scrubUrl('https://media.pokeclip.com/playback/S-1/index.m3u8')).toBe(
+      'https://media.pokeclip.com/playback/_/index.m3u8',
+    );
+  });
+});
+
+describe('scrubUrl — 라이브 재생 base(NEXT_PUBLIC_MEDIA_LIVE_BASE_URL)', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.resetModules();
+  });
+
+  it('base 뒤 첫 경로 조각(송출 키)을 가린다 — base 경로가 깊어도', async () => {
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', 'https://media.pokeclip.com/live/');
+    vi.resetModules();
+    const fresh = await import('./scrub');
+    expect(fresh.scrubUrl('https://media.pokeclip.com/live/ab12cd34key/v1/index.m3u8?x=1')).toBe(
+      'https://media.pokeclip.com/live/_/_/index.m3u8',
+    );
+    expect(fresh.scrubUrl('https://media.pokeclip.com/live/ab12cd34key')).toBe(
+      'https://media.pokeclip.com/live/_',
+    );
+  });
 });
 
 describe('scrubEvent — PostHog before_send', () => {
-  it.each(['/auth/callback', '/oauth/chzzk/callback', '/oauth/youtube/callback'])(
-    'OAuth 콜백 %s 의 페이지 조회는 보내지 않는다',
-    (path) => {
-      const url = `https://app.pokeclip.com${path}?code=secret&state=s`;
-      expect(scrubEvent(event('$pageview', { $current_url: url, $pathname: path }))).toBeNull();
-      expect(scrubEvent(event('$pageleave', { $current_url: url }))).toBeNull();
-    },
-  );
+  it.each([
+    '/auth/callback',
+    '/oauth/chzzk/callback',
+    '/oauth/soop/callback',
+    '/oauth/youtube/callback',
+  ])('OAuth 콜백 %s 의 페이지 조회는 보내지 않는다', (path) => {
+    const url = `https://app.pokeclip.com${path}?code=secret&state=s`;
+    expect(scrubEvent(event('$pageview', { $current_url: url, $pathname: path }))).toBeNull();
+    expect(scrubEvent(event('$pageleave', { $current_url: url }))).toBeNull();
+  });
 
   it('콜백 화면에서 보낸 행동 이벤트는 남기되 주소의 code·state는 뗀다', () => {
     const out = scrubEvent(
@@ -56,22 +118,23 @@ describe('scrubEvent — PostHog before_send', () => {
   it('주소·경로 속성은 정제하고 utm_* 와 다른 값은 건드리지 않는다', () => {
     const out = scrubEvent(
       event('$pageview', {
-        $current_url: 'https://pokeclip.com/?utm_source=discord&utm_campaign=launch&email=a@b.c',
+        $current_url:
+          'https://pokeclip.com/?utm_source=discord&utm_campaign=launch_2026_10&email=a@b.c',
         $pathname: '/',
         $referrer: 'https://www.google.com/search?q=pokeclip',
         $prev_pageview_pathname: '/broadcast/vod/S-1',
         utm_source: 'discord',
-        utm_campaign: 'launch',
+        utm_campaign: 'launch_2026_10',
         $browser: 'Chrome',
         $device_type: 'Mobile',
       }),
     );
     expect(out?.properties).toMatchObject({
       $current_url: 'https://pokeclip.com/',
-      $referrer: 'https://www.google.com/search',
+      $referrer: 'https://www.google.com',
       $prev_pageview_pathname: '/broadcast/vod/_',
       utm_source: 'discord',
-      utm_campaign: 'launch',
+      utm_campaign: 'launch_2026_10',
       $browser: 'Chrome',
       $device_type: 'Mobile',
     });
@@ -92,6 +155,76 @@ describe('scrubEvent — PostHog before_send', () => {
     );
     expect(JSON.stringify(out)).not.toMatch(/secret|card=|S-1/);
     expect(out?.$set_once?.$initial_referrer).toBe('$direct');
+  });
+
+  it('홍보 링크 값은 README에 적은 값만 두고 나머지는 other — utm_term·광고 클릭 식별자는 지운다', () => {
+    const out = scrubEvent(
+      event(
+        '$pageview',
+        {
+          utm_source: 'chzzk',
+          utm_medium: 'profile',
+          utm_campaign: 'launch_2026_10',
+          utm_content: 'pinned_comment',
+          utm_term: '게임하는너구리',
+          gclid: 'Cj0-secret',
+          fbclid: 'IwAR-secret',
+        },
+        {
+          $set_once: {
+            $initial_utm_source: 'a@b.c',
+            $initial_utm_campaign: '2026_11_abcdef0123456789abcdef0123456789',
+            $initial_utm_term: 'secret',
+            $initial_gclid: 'Cj0-secret',
+          },
+        },
+      ),
+    );
+    expect(out?.properties).toEqual({
+      utm_source: 'chzzk',
+      utm_medium: 'profile',
+      utm_campaign: 'launch_2026_10',
+      utm_content: 'pinned_comment',
+    });
+    expect(out?.$set_once).toEqual({
+      $initial_utm_source: 'other',
+      $initial_utm_campaign: 'other', // 모양만 맞는 캠페인(채널 ID 꼴)은 목록에 없으니 other다
+    });
+  });
+
+  it('세션 첫 진입($session_entry_*)·Meta 식별자($fbc·$fbp)도 같은 규칙이다 — SDK가 모든 이벤트에 싣는다 (PR #382 3차 리뷰)', () => {
+    // posthog-js 1.435.8 SessionPropsManager.getSessionProps()가 첫 진입 속성에 붙이는 이름 그대로
+    const out = scrubEvent(
+      event(
+        'login_completed',
+        {
+          $session_entry_utm_source: 'person@example.com',
+          $session_entry_utm_medium: 'profile',
+          $session_entry_utm_term: '게임하는너구리',
+          $session_entry_fbclid: 'IwAR-secret',
+          $session_entry_gclid: 'Cj0-secret',
+          bfcid: 'bf-secret',
+          $session_entry_referring_domain: 'chzzk.naver.com',
+        },
+        {
+          $set: { $fbc: 'fb.1.1700000000000.IwAR-secret', $fbp: 'fb.1.1700000000000.123' },
+          $set_once: { $initial_bfcid: 'bf-secret' },
+        },
+      ),
+    );
+    expect(out?.properties).toEqual({
+      $session_entry_utm_source: 'other',
+      $session_entry_utm_medium: 'profile',
+      $session_entry_referring_domain: 'chzzk.naver.com',
+    });
+    expect(out?.$set).toEqual({});
+    expect(out?.$set_once).toEqual({});
+    expect(JSON.stringify(out)).not.toMatch(/secret|person@|너구리/);
+  });
+
+  it('홍보 링크 값이 비었거나 없으면(null) 그대로 둔다', () => {
+    const out = scrubEvent(event('$pageview', { utm_source: null, utm_medium: '' }));
+    expect(out?.properties).toEqual({ utm_source: null, utm_medium: '' });
   });
 
   it('null은 null로 돌려준다(앞선 before_send가 이미 버린 이벤트)', () => {
@@ -128,6 +261,10 @@ describe('세션 녹화 정제(POK-358)', () => {
       'https://app.pokeclip.com/api/profile-photos/7',
     );
     expect(scrubAttribute('href', '/broadcast/vod/S-1')).toBe('/broadcast/vod/_');
+  });
+
+  it('보관함의 YouTube 링크는 영상 ID 없이 origin만 남긴다 — 처리방침 13절', () => {
+    expect(scrubAttribute('href', 'https://youtu.be/dQw4w9WgXcQ')).toBe('https://youtu.be');
   });
 
   it('글 속성(aria-label·title·alt·placeholder 등)은 글자 수만 남긴다 — 채널·회원 이름이 실린다', () => {

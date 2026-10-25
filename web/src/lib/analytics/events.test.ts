@@ -54,6 +54,44 @@ describe('track — 행동 이벤트(POK-357)', () => {
     track('platform_linked', { platform: 'chzzk', channelName: '게임하는너구리' });
     // @ts-expect-error 목록에 없는 이벤트
     track('signed_up', {});
-    expect(posthog.capture).toHaveBeenCalledTimes(3); // 런타임은 막지 않는다 — 타입이 지킨다
+    expect(posthog.capture).toHaveBeenCalledTimes(3); // 이벤트는 런타임에 막지 않는다 — 타입이 지킨다
+    // 자유 문자열 속성은 런타임에도 빠진다
+    expect(posthog.capture.mock.calls[1]).toEqual(['platform_linked', { platform: 'chzzk' }]);
+  });
+
+  it('단언(as)으로 섞여 들어온 자유 문자열·객체·NaN은 런타임에도 속성째 뺀다', async () => {
+    const { track } = await load('phc_test');
+    track('video_render_requested', {
+      privacy_status: 'public',
+      thumbnail_source: 'scene',
+      made_for_kids: false,
+      category_id: 'a@b.c' as never,
+      scheduled: true,
+      title: '방송 하이라이트 모음',
+      raw: { email: 'a@b.c' },
+      ratio: Number.NaN,
+    } as never);
+    expect(posthog.capture).toHaveBeenCalledWith('video_render_requested', {
+      privacy_status: 'public',
+      thumbnail_source: 'scene',
+      made_for_kids: false,
+      scheduled: true,
+    });
+  });
+
+  it('비콘을 고르면 일괄 전송을 기다리지 않고 바로 보낸다 — 곧 페이지를 떠나는 자리', async () => {
+    const { track } = await load('phc_test');
+    track('login_started', {}, { beacon: true });
+    track('login_completed', {});
+    expect(posthog.capture.mock.calls).toEqual([
+      ['login_started', {}, { send_instantly: true, transport: 'sendBeacon' }],
+      ['login_completed', {}],
+    ]);
+  });
+
+  it('유튜브 분류 번호는 목록 안이면 그대로, 밖이면 other로 좁힌다', async () => {
+    const { toYoutubeCategoryId } = await load('');
+    expect(toYoutubeCategoryId('20')).toBe('20');
+    expect(toYoutubeCategoryId('99')).toBe('other');
   });
 });

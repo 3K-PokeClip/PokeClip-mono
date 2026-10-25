@@ -53,6 +53,7 @@ export function useSoopLinkState(): SoopLinkViewState {
     // 다음 사람을 앞 계정의 동의 화면으로 보내지 않는다(POK-222 · POK-424).
     onSuccess: (authorizeUrl) => {
       goToSoopConsent(authorizeUrl);
+      track('platform_link_started', { platform: 'soop' }, { beacon: true }); // 동의 화면으로 떠난다 (POK-357)
     },
     onError: () => {
       toast({

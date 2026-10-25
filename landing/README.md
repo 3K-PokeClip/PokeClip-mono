@@ -139,8 +139,8 @@ ChatGPT 검색·Perplexity·Google AI 개요·네이버 AI 브리핑 같은 엔�
   ```bash
   curl -sL https://cdn.jsdelivr.net/npm/posthog-js@<판>/dist/array.js | openssl dgst -sha384 -binary | openssl base64 -A
   ```
-- 자동 수집·녹화는 끄고, 주소의 쿼리·해시는 보내기 전에 뗍니다(`before_send`). 홍보 링크의 `utm_*`는 SDK가 먼저 따로 뽑아 두므로 남습니다.
-- **설정을 바꾸면 처리방침 2·7·9절을 먼저 고칩니다.** 처리방침이 실제 동작과 다르면 위반입니다(아래 「문서 쓰는 원칙」).
+- 자동 수집·녹화는 끄고, 주소의 쿼리·해시는 보내기 전에 뗍니다(`before_send`). 우리 주소가 아닌 유입 주소는 origin만 남깁니다(방송 채널·영상 주소의 경로에 채널 ID·영상 ID가 실려서). 홍보 링크의 `utm_*`는 SDK가 먼저 따로 뽑아 두므로 남는데, 아래 「홍보 링크와 UTM」 표에 적은 값만 그대로 두고 나머지는 `other`로 바꿉니다. `utm_term`과 광고 클릭 식별자(`gclid`·`fbclid` 등)는 지웁니다. 표에 값을 더하면 `analytics.js`와 대시보드 `web/src/lib/analytics/scrub.ts`의 허용 목록도 함께 고칩니다. 정제 회귀 테스트는 `scripts/analytics.test.mjs`입니다.
+- **설정을 바꾸면 처리방침 2·3·4·6·7·9·13절을 먼저 고칩니다.** 처리방침이 실제 동작과 다르면 위반입니다(아래 「문서 쓰는 원칙」). `scripts/check-legal.mjs`가 그 절들의 PostHog 문장을 검사합니다.
 
 ## 홍보 링크와 UTM (POK-359)
 
@@ -150,14 +150,14 @@ ChatGPT 검색·Perplexity·Google AI 개요·네이버 AI 브리핑 같은 엔�
 |---|---|---|
 | `utm_source` | `youtube` · `chzzk` · `soop` · `discord` · `kakao` · `x` · `naver` · `instagram` | 어디서 왔나(플랫폼·서비스) |
 | `utm_medium` | `video_description`(영상 설명) · `profile`(채널·프로필 소개) · `community`(커뮤니티 글) · `post`(SNS 글) · `dm`(1:1 메시지) · `ad`(광고) | 그 안의 어떤 자리인가 |
-| `utm_campaign` | `launch_2026_10`(출시) · 이후 `<yyyy>_<mm>_<이름>` | 어떤 홍보 묶음인가 |
-| `utm_content` | 선택. 같은 자리에 링크가 여럿일 때 `pinned_comment`·`banner`처럼 고정값 | 같은 자리 안의 구분 |
+| `utm_campaign` | `launch_2026_10`(출시). 새 캠페인은 `<yyyy>_<mm>_<이름>`으로 지어 **이 표와 두 허용 목록에 먼저 더한다** | 어떤 홍보 묶음인가 |
+| `utm_content` | 선택. 같은 자리에 링크가 여럿일 때 `pinned_comment`·`banner`(새 값은 표와 두 허용 목록에 먼저 더한다) | 같은 자리 안의 구분 |
 
 ```text
 https://pokeclip.com/?utm_source=chzzk&utm_medium=profile&utm_campaign=launch_2026_10
 ```
 
-- **사람을 알아볼 수 있는 값은 넣지 않습니다** — 스트리머 이름·채널명·이메일·받는 사람 ID 대신 위 고정값만 씁니다. 꼬리표 값은 분석 도구에 그대로 저장됩니다.
+- **사람을 알아볼 수 있는 값은 넣지 않습니다** — 스트리머 이름·채널명·이메일·받는 사람 ID 대신 위 고정값만 씁니다. 표 밖의 값은 보내기 전에 `other`로 바뀌어(네 칸 모두 모양이 아니라 **표에 적은 값 목록**과 맞춘다), 실수로 넣은 값도 저장되지 않습니다. 새 출처·자리가 필요하면 이 표와 두 허용 목록(`analytics.js`·`scrub.ts`)을 함께 고친 뒤 링크를 돌립니다.
 - 홍보 링크는 **랜딩**(`https://pokeclip.com/`)을 가리킵니다. 대시보드로 바로 보내면 랜딩 → 시작 버튼 단계가 빠집니다. 랜딩 안의 시작 버튼 링크에는 꼬리표를 붙이지 않습니다(처음 유입을 덮어씁니다).
 - 새 값이 필요하면 이 표부터 고칩니다. 같은 뜻을 다른 철자로 쓰면(`yt`·`youtube`) PostHog에서 따로 셉니다.
 
@@ -169,20 +169,24 @@ https://pokeclip.com/?utm_source=chzzk&utm_medium=profile&utm_campaign=launch_20
 
 ### PostHog 화면 (출시 첫날부터 보는 것)
 
-콘솔에서 만들어 두고 링크를 Jira POK-359에 남깁니다. 시간대는 **Asia/Seoul**, 공개 공유 링크는 만들지 않습니다(팀원 권한으로만).
+콘솔에서 만들어 두고 링크를 Jira POK-478(콘솔 화면 구성, 백로그)에 남깁니다. 시간대는 **Asia/Seoul**, 공개 공유 링크는 만들지 않습니다(팀원 권한으로만).
 
 | 화면 | 정의 |
 |---|---|
 | 웹 분석(기본 제공) | 일별 방문자, 유입 경로(`utm_source`·`utm_medium`·`$referring_domain`), 기기(`$device_type`: Mobile·Desktop·Tablet), 국가. 랜딩과 대시보드는 `$host`로 나눠 본다 |
-| 가입 퍼널 | `$pageview`(`$host` = pokeclip.com) → `landing_cta_clicked` → `login_completed` → `platform_linked` → `pairing_code_issued` → `video_render_requested`. 사람 기준·순서대로·전환 기간 14일. **처음 유입**(`$initial_utm_source`)과 기기로 나눠 본다 |
+| 가입 퍼널 | `$pageview`(`$host` = pokeclip.com) → `landing_cta_clicked` → `login_started` → `login_completed` → `platform_link_started` → `platform_linked` → `pairing_code_issued` → `video_render_requested`. 사람 기준·순서대로·전환 기간 14일. **처음 유입**(`$initial_utm_source`)과 기기로 나눠 본다. `_started` → 짝 이벤트 사이가 바깥 동의 화면의 이탈이다 |
+| 편집자 퍼널 | `editor_invitation_responded`(`outcome` = accepted) → `channel_switched`(`to_role` = editor) → `clip_editor_opened` → `clip_recipe_saved` → `video_render_requested`. 사람 기준·전환 기간 14일. 이 퍼널의 이벤트는 `active_role` = editor로도 거른다 |
+| 제작 | `clip_editor_opened` → `clip_recipe_saved` → `video_render_requested`·`video_upload_requested`, 재시도(`video_render_retried`·`video_upload_retried`)·수동 해결(`video_upload_resolved`) 추이. **영상 완성·업로드 완료는 PostHog에 없다**(서버를 붙이지 않음, 2026-10-24) — DB로 본다 |
+| 기능 이용 | `broadcast_playback_started`(`mode`), `highlight_marked`·`highlight_card_seeked`, `clip_download_requested`, `pending_feature_clicked`(`feature`별 — 준비 중 기능 수요), `setup_step_clicked`(`step`별) |
 | 주간 재방문 | 시작 `login_completed`, 재방문 대시보드 `$pageview`(`$host` = app.pokeclip.com), 주 단위 8주 |
-| 출시 대시보드 | 위 셋 + `onboarding_tour_finished` 결과 분포 + `platform_unlinked`·`editor_invited` 추이 |
+| 출시 대시보드 | 위 화면들 + `onboarding_tour_started`(`entry`) → `onboarding_tour_finished` 결과 분포 + `platform_unlinked`·`editor_invited`·`editor_delegation_ended`(`initiator`) 추이 |
 
 대시보드 설명에 그대로 적어 둡니다.
 
 - **가입자·연동·영상 수는 DB가 정본**입니다. 여기 숫자는 광고 차단기·추적 금지 설정·무료 한도 때문에 더 적게 나옵니다. 비율과 흐름을 보는 화면입니다.
 - 「가입」은 사람별 **첫** `login_completed`(PostHog 기준)입니다. PostHog를 붙이기 전에 가입한 회원도 처음 로그인할 때 여기 잡힙니다.
-- 편집자는 연동·페어링 단계를 거치지 않으니 퍼널 중간에서 빠지는 것이 정상입니다.
+- 편집자는 연동·페어링 단계를 거치지 않으니 가입 퍼널 중간에서 빠지는 것이 정상입니다. 편집자는 「편집자 퍼널」로 봅니다.
+- 「이용 분석 참여」(설정 › 계정)를 끈 브라우저는 소개 페이지·대시보드 모두 아예 잡히지 않습니다 — 추적 금지·차단기와 같은 이유로 숫자가 적게 나옵니다. 선택은 브라우저마다라 같은 회원도 다른 기기에서는 잡힙니다.
 - 이벤트 정의는 [`web/docs/ANALYTICS.md`](../web/docs/ANALYTICS.md) 「이벤트」(POK-357)입니다.
 
 ## 이용약관 · 개인정보 처리방침

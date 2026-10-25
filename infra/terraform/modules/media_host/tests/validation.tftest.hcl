@@ -68,6 +68,8 @@ variables {
   internal_alb_sg_id = "sg-0internalalb000000"
   nlb_sg_id          = "sg-0nlb0000000000000"
   rds_sg_id          = "sg-0rds0000000000000"
+  auth_sg_id         = "sg-0auth000000000000"
+  auth_port          = 18086
   s3_prefix_list_id  = "pl-0123456789abcdef0"
   proxy_ports = {
     live     = 18081
@@ -333,8 +335,9 @@ run "rejects_root_volume_throughput_above_iops_ratio" {
 }
 
 # 응답기 4C 주소는 compose 에 따옴표 없는 스칼라로 들어간다 — http://<호스트>:<포트>
-# 꼴만 받는다. 옛 모드(응답기 이미지 빈 값)는 빈 값이어도 된다. 응답기 모드의
-# 빈 값은 아직 막지 않는다 — 루트가 값을 넘기기 전(M9 후속 배선)이라서다.
+# 꼴만 받는다. 옛 모드(응답기 이미지 빈 값)는 빈 값이어도 되고, 응답기 모드의
+# 빈 값은 plan 에서 막는다 — 응답기는 이 값 없이 기동을 거부한 채 되풀이된다
+# (ingest-auth CONTRACT 1-5 의 7 · 시작 스크립트는 보지 않는다).
 run "accepts_responder_mode_with_stream_key_resolve_url" {
   command = plan
 
@@ -346,6 +349,31 @@ run "accepts_responder_mode_with_stream_key_resolve_url" {
   assert {
     condition     = output.template_vars.stream_key_resolve_url == "http://auth.pokeclip.internal:8085"
     error_message = "stream_key_resolve_url 이 템플릿 변수로 그대로 넘어가지 않았다."
+  }
+}
+
+run "rejects_responder_mode_without_stream_key_resolve_url" {
+  command = plan
+
+  variables {
+    ingest_auth_image      = "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/pokeclip-prod/media-ingest-auth@sha256:5555555555555555555555555555555555555555555555555555555555555555"
+    stream_key_resolve_url = ""
+  }
+
+  expect_failures = [var.stream_key_resolve_url]
+}
+
+run "accepts_legacy_mode_without_stream_key_resolve_url" {
+  command = plan
+
+  variables {
+    ingest_auth_image      = ""
+    stream_key_resolve_url = ""
+  }
+
+  assert {
+    condition     = output.template_vars.ingest_auth_image == "" && output.template_vars.stream_key_resolve_url == ""
+    error_message = "옛 모드 · 빈 stream_key_resolve_url 이 그대로 넘어가지 않았다."
   }
 }
 
@@ -430,4 +458,15 @@ run "rejects_unknown_ingest_auth_ip_limit" {
   }
 
   expect_failures = [var.ingest_auth_ip_limit]
+}
+
+# 4C 토큰 비밀 ARN 은 다른 비밀 ARN 과 같은 꼴만 받는다(옛 모드는 빈 값).
+run "rejects_wildcard_stream_key_resolve_token_secret_arn" {
+  command = plan
+
+  variables {
+    stream_key_resolve_token_secret_arn = "arn:aws:secretsmanager:ap-northeast-2:123456789012:secret:pokeclip/prod/*"
+  }
+
+  expect_failures = [var.stream_key_resolve_token_secret_arn]
 }

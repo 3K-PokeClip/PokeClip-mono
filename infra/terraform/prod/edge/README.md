@@ -22,6 +22,9 @@ prod 의 CloudFront 엣지를 만드는 루트입니다(설계 3-1 의 ⑩ · �
 *   **표준 로그 로그 그룹**(`pokeclip-prod-media-access` · us-east-1): media
     배포의 표준 로그(v2)를 JSON 으로 받습니다. 보존은 `log_retention_days`
     (기본 7)입니다.
+*   **함수 로그 그룹 셋**(`/aws/cloudfront/function/<함수 이름>` ·
+    us-east-1): live-auth · deny-default · apex-request 의 `console.log` 를
+    받습니다. 보존은 WAF 차단 로그와 같은 30일입니다(PR 387 보안 L2).
 *   **내부 ALB 인그레스 ← VPC origin**(서울): VPC origin 이 생긴 뒤
     CloudFront 가 그 VPC 에 만드는 SG `CloudFront-VPCOrigins-Service-SG` 를
     이름과 network `vpc_id` 로 조회하고, platform 내부 ALB SG 에 그 SG 출처
@@ -88,6 +91,16 @@ edge apply 는 [엣지 비밀 런북](../../runbooks/edge-secrets.md) 「초기�
     봅니다.
 1.  KVS 값 입력(멈춤 자리 ② — 런북 「O7f」).
 1.  엣지만 시험 · 랜딩 업로드 · 런타임 2단 순서는 계획 M10 O7f 를 따릅니다.
+
+함수가 이 루트의 함수 로그 그룹보다 먼저 로그를 내면(apply 가 그룹 전에
+멈춘 채 T6b 를 했을 때 등) AWS 가 그룹을 먼저 만들어 다음 apply 가 이미
+있음(`ResourceAlreadyExistsException`)으로 실패합니다. 그 그룹을 import 로
+받고 다시 apply 합니다(키는 `live_auth` · `deny_default` · `apex_request`).
+
+```shell
+terraform import 'aws_cloudwatch_log_group.cloudfront_function["live_auth"]' \
+  /aws/cloudfront/function/pokeclip-prod-live-auth
+```
 
 ## 적용 뒤 할 일
 

@@ -1,7 +1,8 @@
 # Media 상자 user_data(`#cloud-config` → gzip + base64 — EC2 16 KiB 한도는 압축본에
 # 걸린다). kty 결정(설치 묶음 이미지): 스크립트 · 상자에서 렌더하는 MediaMTX
 # 템플릿은 ECR 설치 묶음 이미지에 있고, user_data 에는 Terraform 이 값을 넣는
-# 파일(compose · nginx · media.env · docker 설정) · 유닛 · 작은 부트스트랩만 둔다.
+# 파일(compose · nginx · ingest-auth.env · media.env · docker 설정) · 유닛 · 작은
+# 부트스트랩만 둔다.
 #
 # 유닛은 묶음이 아니라 여기서 설치한다 — 묶음을 꺼내지 못해도 유닛이 있어야
 # drop-in 의 「MEDIA PREREQ FAIL bundle」 이 유닛 저널에 남는다. 유닛은 20초마다
@@ -55,19 +56,25 @@ locals {
               path        = "/etc/pokeclip-media/media.env"
               permissions = "0644"
               content = templatefile("${path.module}/templates/media.env.tftpl", {
-                bundle_image               = var.bundle_image
-                cdn_secret_arn             = var.cdn_secret_arn
-                compose_version            = var.compose_version
-                config_version             = instance.config_version
-                denylist_parameter_name    = aws_ssm_parameter.denylist.name
-                ecr_registry_host          = local.ecr_registry_host
-                live_port                  = var.proxy_ports.live
-                loopback_sender_image      = var.loopback_sender_image
-                test_stream_key_secret_arn = var.test_stream_key_secret_arn
+                bundle_image                        = var.bundle_image
+                cdn_secret_arn                      = var.cdn_secret_arn
+                compose_version                     = var.compose_version
+                config_version                      = instance.config_version
+                denylist_parameter_name             = aws_ssm_parameter.denylist.name
+                ecr_registry_host                   = local.ecr_registry_host
+                live_port                           = var.proxy_ports.live
+                loopback_sender_image               = var.loopback_sender_image
+                stream_key_resolve_token_secret_arn = var.stream_key_resolve_token_secret_arn
+                test_stream_key_secret_arn          = var.test_stream_key_secret_arn
               })
             },
             { path = "/etc/pokeclip-media/compose.yml", permissions = "0644", content = local.compose_yml },
             { path = "/etc/pokeclip-media/nginx.conf", permissions = "0644", content = local.nginx_conf },
+            {
+              path        = "/etc/pokeclip-media/ingest-auth.env"
+              permissions = "0644"
+              content     = templatefile("${local.media_host_dir}/ingest-auth.env.tmpl", { ingest_auth_ip_limit = var.ingest_auth_ip_limit })
+            },
             {
               path        = "/root/.docker/config.json"
               permissions = "0600"

@@ -10,9 +10,15 @@ import { jsonResponse, stubFetch } from '@/test/mockFetch';
 import { createTestQueryClient } from '@/test/testProviders';
 import { ToastProvider } from '@/ui';
 
-const { replace, searchRef } = vi.hoisted(() => ({
+const { replace, searchRef, track } = vi.hoisted(() => ({
   replace: vi.fn(),
   searchRef: { current: new URLSearchParams() },
+  track: vi.fn(),
+}));
+
+vi.mock('@/lib/analytics', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/analytics')>()),
+  track,
 }));
 
 vi.mock('next/navigation', () => ({
@@ -50,6 +56,7 @@ beforeEach(() => {
   window.sessionStorage.clear();
   window.localStorage.clear();
   replace.mockReset();
+  track.mockReset();
   searchRef.current = new URLSearchParams('code=code-1&state=state-1');
   useAuthStore.setState({ accessToken: 'access-1', refreshToken: 'refresh-1', hydrated: true });
 });
@@ -86,6 +93,8 @@ describe('YoutubeCallbackScreen', () => {
     // 이전 계정 채널을 되살리지 않게, 비워서 목적지가 처음부터 읽게 한다
     expect(queryClient.getQueryData(youtubeLinkQueryOptions.queryKey)).toBeUndefined();
     expect(document.body.innerHTML).not.toContain('yt-secret-1');
+    // 성공한 뒤에 한 번 센다 — 채널 ID·이름은 싣지 않는다 (POK-357)
+    expect(track.mock.calls).toEqual([['platform_linked', { platform: 'youtube' }]]);
   });
 
   it('StrictMode 이중 마운트에도 교환은 정확히 한 번이다 — code는 1회용이다', async () => {

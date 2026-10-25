@@ -4,9 +4,10 @@
 #   포트(8888 · 9996 · 9997)는 열지 않는다 — 입력 검증이 프록시 포트와 겹치지
 #   않게 막는다. 공개 ALB SG 는 출처로 받지 않는다.
 # - 이그레스: 443 → S3 prefix list · 443 → 0.0.0.0/0(NAT — AWS API · ECR ·
-#   compose 릴리스) · 5432 → RDS SG. Media → auth 이그레스는 런타임 2단 몫이다.
-# - 짝: RDS 인그레스 ← Media 5432(kty 21차 — 이그레스와 한 apply), 로드밸런서
-#   SG 이그레스 → Media(platform 이 만들면 media_sg_id 가 필요해 순환한다).
+#   compose 릴리스) · 5432 → RDS SG · auth 포트 → auth SG(응답기의 4C resolve).
+# - 짝: RDS 인그레스 ← Media 5432(kty 21차 — 이그레스와 한 apply), auth
+#   인그레스 ← Media(kty 결정 2026-10-25 (나) — 같은 꼴), 로드밸런서 SG
+#   이그레스 → Media(platform 이 만들면 media_sg_id 가 필요해 순환한다).
 
 locals {
   media_ingress_rules = {
@@ -52,9 +53,10 @@ resource "aws_vpc_security_group_ingress_rule" "media" {
 
 resource "aws_vpc_security_group_egress_rule" "media" {
   for_each = {
-    https_s3  = { prefix_list_id = var.s3_prefix_list_id, cidr_ipv4 = null, sg = null, port = 443 }
-    https_any = { prefix_list_id = null, cidr_ipv4 = "0.0.0.0/0", sg = null, port = 443 }
-    postgres  = { prefix_list_id = null, cidr_ipv4 = null, sg = var.rds_sg_id, port = 5432 }
+    https_s3     = { prefix_list_id = var.s3_prefix_list_id, cidr_ipv4 = null, sg = null, port = 443 }
+    https_any    = { prefix_list_id = null, cidr_ipv4 = "0.0.0.0/0", sg = null, port = 443 }
+    postgres     = { prefix_list_id = null, cidr_ipv4 = null, sg = var.rds_sg_id, port = 5432 }
+    auth_resolve = { prefix_list_id = null, cidr_ipv4 = null, sg = var.auth_sg_id, port = var.auth_port }
   }
 
   security_group_id            = aws_security_group.media.id
@@ -74,6 +76,15 @@ resource "aws_vpc_security_group_ingress_rule" "rds_from_media" {
   to_port                      = 5432
   referenced_security_group_id = aws_security_group.media.id
   description                  = "postgres from media host"
+}
+
+resource "aws_vpc_security_group_ingress_rule" "auth_from_media" {
+  security_group_id            = var.auth_sg_id
+  ip_protocol                  = "tcp"
+  from_port                    = var.auth_port
+  to_port                      = var.auth_port
+  referenced_security_group_id = aws_security_group.media.id
+  description                  = "stream key resolve from media host"
 }
 
 resource "aws_vpc_security_group_egress_rule" "load_balancer" {

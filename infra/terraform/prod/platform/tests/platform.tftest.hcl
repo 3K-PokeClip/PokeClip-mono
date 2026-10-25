@@ -470,6 +470,30 @@ run "media_target_groups_check_proxy_health_port" {
   }
 }
 
+# media 루트는 service_ports.auth 로 Media → auth(4C resolve) SG 짝의 포트를
+# 정한다(kty 결정 2026-10-25 (나)) — auth 서비스 포트와 한 값에서 나온다.
+run "outputs_service_ports_from_services" {
+  command = plan
+
+  variables {
+    services = {
+      next = { port = 13000, health_check_path = "/api/ping", cpu = 512, memory = 1024, health_check_grace = 60 }
+      auth = { port = 18082, health_check_path = "/actuator/health", cpu = 1024, memory = 2048, health_check_grace = 180 }
+      clip = { port = 18081, health_check_path = "/actuator/health", cpu = 1024, memory = 2048, health_check_grace = 180 }
+    }
+  }
+
+  assert {
+    condition     = output.service_ports == { next = 13000, auth = 18082, clip = 18081 }
+    error_message = "출력 service_ports 가 services 의 포트(next · auth · clip)와 다르다."
+  }
+
+  assert {
+    condition     = output.service_ports.auth == aws_vpc_security_group_ingress_rule.auth_from_clip.from_port
+    error_message = "출력 service_ports.auth 가 auth SG 인그레스(clip → auth resolve)의 포트와 다르다."
+  }
+}
+
 # 내부 ALB 리스너 인증서 · NLB 위치 · 출처, 출력 계약. 계산 속성이라 apply 로
 # 돌린다.
 run "lb_outputs_match_consumer_contract" {

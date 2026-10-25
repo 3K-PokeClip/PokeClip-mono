@@ -1,6 +1,7 @@
 import { StrictMode, useEffect, useRef } from 'react';
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { progressFraction } from './playerMath';
 import { rebaseTimeline, recordingTimeline } from './recordingTimeline';
 
 // 다시보기 오류가 쿠키 지워짐(403)이면 출입증을 다시 받아 같은 줄기를 다시 붙인다(PR #332 codex). 확인 자체는 playbackAccess 시험이 잰다
@@ -8,7 +9,13 @@ const access = vi.hoisted(() => ({
   recover: vi.fn((_url: string, _key: string) => Promise.resolve(false)),
 }));
 vi.mock('@/api/playbackAccess', () => ({ recoverForbiddenRecording: access.recover }));
+const { track } = vi.hoisted(() => ({ track: vi.fn() }));
+vi.mock('@/lib/analytics', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/analytics')>()),
+  track,
+}));
 import { useRecordedPlayback, type RecordedSource } from './useRecordedPlayback';
+import { resetPlaybackStartsForTest } from './playbackStarts';
 
 // 끝난 방송 다시보기(POK-253). 재생 서버는 틈을 건너 주지 않으므로(실측) 한 구간씩 달라 하고 이어 튼다.
 
@@ -42,6 +49,91 @@ function requested(video: HTMLVideoElement) {
 describe('useRecordedPlayback — 구간 여럿', () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
+
+  it('그 방송을 처음 틀 때 한 번만 센다 — 멈췄다 다시 틀기·다음 구간 이어 틀기는 세지 않는다 (POK-357)', () => {
+    track.mockClear();
+    resetPlaybackStartsForTest();
+    const { video } = fakeVideo();
+    renderHook(() =>
+      useRecordedPlayback(
+        { current: video },
+        source([
+          [0, 14],
+          [24, 14],
+        ]),
+        0,
+        undefined,
+        'S-1',
+      ),
+    );
+
+    // 브라우저는 play(재생 요청) 뒤 화면이 나올 때 playing을 낸다
+    const start = () => {
+      video.dispatchEvent(new Event('play'));
+      video.dispatchEvent(new Event('playing'));
+    };
+    act(() => {
+      start();
+      video.dispatchEvent(new Event('pause'));
+      start();
+    });
+    Object.defineProperty(video, 'ended', { value: true, configurable: true });
+    act(() => {
+      video.dispatchEvent(new Event('pause'));
+      video.dispatchEvent(new Event('ended'));
+    });
+    act(() => {
+      start();
+    });
+
+    expect(track.mock.calls).toEqual([['broadcast_playback_started', { mode: 'vod' }]]);
+  });
+
+  it('재생 요청(play)만 나가고 화면이 안 나오면(playing 없음) 세지 않는다 — 나중에 나오면 그때 센다 (PR #382 3차 리뷰)', () => {
+    track.mockClear();
+    resetPlaybackStartsForTest();
+    const { video } = fakeVideo();
+    renderHook(() =>
+      useRecordedPlayback({ current: video }, source([[0, 14]]), 0, undefined, 'S-1'),
+    );
+
+    act(() => {
+      video.dispatchEvent(new Event('play')); // 녹화 줄기를 아직 못 받았다
+    });
+    expect(track).not.toHaveBeenCalled();
+
+    act(() => {
+      video.dispatchEvent(new Event('playing'));
+    });
+    expect(track.mock.calls).toEqual([['broadcast_playback_started', { mode: 'vod' }]]);
+  });
+
+  it('플레이어가 다시 마운트돼도(GlassPlayer key 변경) 같은 방송은 다시 세지 않는다 — 다른 방송은 센다 (PR #382 리뷰)', () => {
+    track.mockClear();
+    resetPlaybackStartsForTest();
+    const play = (broadcastId?: string) => {
+      const { video } = fakeVideo();
+      // 녹화의 streamId는 물리 키(스트림 키)라 방송이 달라도 같다 — 기억은 방송 번호로 한다(PR #382 2차 리뷰)
+      const view = renderHook(() =>
+        useRecordedPlayback({ current: video }, source([[0, 14]]), 0, undefined, broadcastId),
+      );
+      act(() => {
+        video.dispatchEvent(new Event('play'));
+        video.dispatchEvent(new Event('playing'));
+      });
+      view.unmount();
+    };
+
+    play('S-1');
+    play('S-1'); // 다시 마운트
+    play('S-2'); // 같은 스트리머(같은 물리 키)의 다른 방송
+    play(undefined); // 방송 번호를 모르면 세지 않는다
+
+    expect(track.mock.calls).toEqual([
+      ['broadcast_playback_started', { mode: 'vod' }],
+      ['broadcast_playback_started', { mode: 'vod' }],
+    ]);
+  });
 
   it('틈을 건너 달라 하지 않는다 — 첫 줄기는 첫 구간 끝까지다', () => {
     const { video } = fakeVideo();
@@ -274,6 +366,53 @@ describe('useRecordedPlayback — 1시간 넘는 녹화', () => {
     act(() => result.current.seekToFraction(0));
     act(() => vi.advanceTimersByTime(300));
     expect(requested(video).fromSeconds).toBe(0);
+  });
+});
+
+describe('useRecordedPlayback: 기준점이 녹화보다 한참 앞(POK-474)', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  // 로컬 실측(2026-10-25): 송출 회차 하나가 방송 셋을 넘어 이어져 조각의 pts가 13.9시간이었고, 서버 기준점(첫 조각 시각 − pts)이
+  // 방송 시작보다 13.9시간 앞에 섰다. 축이 0초부터면 10분 녹화가 시크바 오른쪽 1%에 몰려 손잡이가 끝에 붙고, 끌어 놓으면 녹화
+  // 앞 빈 곳이라 첫 구간 시작으로 올려져 끝으로 되돌아갔다
+  const LEAD = 49_940;
+  const farOrigin = () => ({
+    streamId: 'gaptest',
+    ...rebaseTimeline(source([[0, 600]]), T0 - LEAD * 1000),
+  });
+
+  it('시크바는 녹화 처음부터 끝까지다: 축의 0초부터가 아니다', () => {
+    const { video } = fakeVideo();
+    const { result } = renderHook(() => useRecordedPlayback({ current: video }, farOrigin()));
+
+    expect(result.current.windowSeconds).toBe(600);
+    expect(progressFraction(result.current.behindSeconds, result.current.windowSeconds)).toBe(0);
+  });
+
+  it('손잡이를 가운데로 끌면 녹화 가운데부터 튼다: 끝으로 되돌아가지 않는다', () => {
+    const { video } = fakeVideo();
+    const { result } = renderHook(() => useRecordedPlayback({ current: video }, farOrigin()));
+
+    act(() => result.current.seekToFraction(0.5));
+    act(() => vi.advanceTimersByTime(300));
+
+    expect(requested(video).fromSeconds).toBe(300);
+    expect(result.current.behindSeconds).toBe(300);
+    expect(progressFraction(result.current.behindSeconds, result.current.windowSeconds)).toBe(0.5);
+  });
+
+  it('카드(기준점 축 초)로 옮기면 손잡이가 그 자리다', () => {
+    const { video } = fakeVideo();
+    const { result } = renderHook(() => useRecordedPlayback({ current: video }, farOrigin()));
+
+    act(() => result.current.seekToPosition!(LEAD + 120));
+    act(() => vi.advanceTimersByTime(300));
+
+    expect(requested(video).fromSeconds).toBe(120);
+    expect(progressFraction(result.current.behindSeconds, result.current.windowSeconds)).toBe(
+      120 / 600,
+    );
   });
 });
 

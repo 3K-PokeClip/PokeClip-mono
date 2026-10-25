@@ -3,6 +3,7 @@ package com.pokeclip.clip.thumbnail;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
+import java.sql.PreparedStatement;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.List;
@@ -41,6 +42,18 @@ public class ThumbnailTargets {
      * (POK-255). 조각이 아직 안 올라왔으면 줄이 안 나온다(다음 순회에 다시 본다). 보관 기한이 지난 방송은 조각이 지워졌으니 안 본다.
      */
     static final String CARDS = """
+            %s
+             ORDER BY c.id DESC
+             LIMIT ?""".formatted(cardRows(""));
+
+    /** 새 카드 명단(POK-475)의 카드만. 조건은 {@link #CARDS}와 한 글자도 다르지 않다: 번호 조건 하나를 더한다. */
+    static final String CARDS_IN = """
+            %s
+             ORDER BY c.id DESC
+             LIMIT ?""".formatted(cardRows("AND c.id = ANY(?)"));
+
+    private static String cardRows(String extra) {
+        return """
             SELECT c.id, c.stream_timestamp_ms, seg.s3_key, seg.start_pts_ms
               FROM jump_cards c
               JOIN broadcasts b ON b.stream_id = c.stream_id
@@ -58,8 +71,8 @@ public class ThumbnailTargets {
                      LIMIT 1) seg
              WHERE (b.vod_expires_at IS NULL OR b.vod_expires_at > now())
                AND (t.target_id IS NULL OR (t.s3_key IS NULL AND t.attempts < ? AND t.requested_at < ?))
-             ORDER BY c.id DESC
-             LIMIT ?""";
+               %s""".formatted(extra);
+    }
 
     /** 사진이 없는 완성 영상. 구간은 그 영상을 만든 주문서의 레시피에서 읽는다(편집본이 그 뒤에 바뀌었을 수 있다). */
     static final String CLIPS = """
@@ -105,6 +118,19 @@ public class ThumbnailTargets {
     List<Card> cards(int maxAttempts, Instant retryBefore, int limit) {
         return jdbc.query(CARDS, (rs, i) -> new Card(rs.getLong("id"), rs.getLong("stream_timestamp_ms"),
                 rs.getString("s3_key"), rs.getLong("start_pts_ms")), maxAttempts, Timestamp.from(retryBefore), limit);
+    }
+
+    /** {@link #cards}와 같되 번호가 {@code ids} 안인 카드만. */
+    List<Card> cardsIn(List<Long> ids, int maxAttempts, Instant retryBefore, int limit) {
+        return jdbc.query(con -> {
+            PreparedStatement ps = con.prepareStatement(CARDS_IN);
+            ps.setInt(1, maxAttempts);
+            ps.setTimestamp(2, Timestamp.from(retryBefore));
+            ps.setArray(3, con.createArrayOf("bigint", ids.toArray(Long[]::new)));
+            ps.setInt(4, limit);
+            return ps;
+        }, (rs, i) -> new Card(rs.getLong("id"), rs.getLong("stream_timestamp_ms"),
+                rs.getString("s3_key"), rs.getLong("start_pts_ms")));
     }
 
     List<ClipRow> clips(int maxAttempts, Instant retryBefore, int limit) {

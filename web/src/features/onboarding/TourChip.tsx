@@ -2,6 +2,7 @@
 
 import { HelpCircle } from 'lucide-react';
 import { Button, Portal } from '@/ui';
+import { track } from '@/lib/analytics';
 import { useOnboardingStore } from '@/stores/onboarding';
 import styles from './Onboarding.module.css';
 
@@ -13,7 +14,15 @@ export function TourChip() {
   return (
     <Portal>
       <div className={styles.chip}>
-        <Button variant="outline" size="sm" onClick={startTour} iconStart={<HelpCircle aria-hidden />}>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => {
+            startTour();
+            track('onboarding_tour_started', { entry: 'chip' });
+          }}
+          iconStart={<HelpCircle aria-hidden />}
+        >
           둘러보기
         </Button>
       </div>

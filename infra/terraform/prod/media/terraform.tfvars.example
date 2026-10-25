@@ -44,3 +44,9 @@ compose_sha256                = "ff42489f5a9b879d5d117c5ffea6defc27390b3286da8ad
 # 기본값 — 사이드카 되감기 목록 URI 앞머리(영상 CDN 주소 · 끝 / 없음). 목록
 # 줄 = 이 값 + "/" + S3 키(dvr/…).
 # rewind_public_base_url = "https://media.pokeclip.com"
+
+# 응답기 모드(image_digests.ingest_auth 를 채움)에서 필수 — 비면 plan 이 멈춘다.
+# stream_key_resolve_url = "http://<auth 호스트>:<auth 포트>"
+
+# 기본 켬. 끄는 것도 설정 반영 교체다.
+# ingest_auth_ip_limit = "on"

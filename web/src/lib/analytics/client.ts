@@ -1,5 +1,6 @@
 import type { PostHog, PostHogConfig } from 'posthog-js';
 import { useAuthStore } from '@/stores/auth';
+import { announceAnalyticsPreference } from './preferenceChannel';
 import { scrubAttribute, scrubEvent, scrubUrl } from './scrub';
 
 // 사용 통계(PostHog) 연결 (POK-354·356). 결정은 POK-354 코멘트와 위키 ADR — US 지역, 정당한 이익 + 처리방침 고지
@@ -50,6 +51,9 @@ export const ANALYTICS_CONFIG: Partial<PostHogConfig> = {
   capture_pageview: 'history_change',
   // 처리방침 2·9절의 거부 수단: 브라우저 추적 금지(Do Not Track)를 켜면 보내지 않는다
   respect_dnt: true,
+  // 다른 거부 수단 「이용 분석 참여」(설정 › 계정, setAnalyticsOptOut)는 이 브라우저에만 저장한다 — 그 기억을 .pokeclip.com
+  // 쿠키에 둔다. 기본(localStorage)은 출처마다 따로라, 대시보드에서 꺼도 같은 브라우저의 랜딩은 계속 센다. 랜딩도 같은 값이다
+  opt_out_capturing_persistence_type: 'cookie',
   // 자동 수집은 끈다 — 누른 단추의 글자(채팅·채널 이름·이메일)가 실려 나간다. 행동은 track()으로만 보낸다(POK-357)
   autocapture: false,
   rageclick: false,
@@ -140,22 +144,141 @@ export function whenAnalyticsLoaded(): Promise<void> {
 
 // ── 식별 ─────────────────────────────────────────────────────────────────────
 
+/** 지금 로그인한 회원 번호 — 꺼 둔 브라우저에서 다시 켜면 그때 식별한다 */
+let signedInUserId: string | null = null;
+
+/** SDK가 「끔」·「켬」으로 읽는 값(@posthog/core `isNoLike`·`isYesLike`) */
+const NO_LIKE: unknown[] = [false, 'false', 0, '0', 'no'];
+const YES_LIKE: unknown[] = [true, 'true', 1, '1', 'yes'];
+
+/**
+ * 이 브라우저에 저장된 선택 — 끔이면 true, 켬이면 false, 고른 적 없으면 null. SDK 동의 쿠키(`__ph_opt_in_out_<키>`, 값은
+ * `encodeURIComponent(JSON.stringify(값))`)만 본다. SDK의 동의 상태(`get_explicit_consent_status`)는 추적 금지가 켜져 있으면
+ * 저장값과 상관없이 denied라, 그것으로 판정하면 스위치를 만진 적 없는 브라우저에 끔 쿠키를 새로 써서 추적 금지를 꺼도
+ * 꺼진 채로 남았다(PR #382 2차 리뷰)
+ */
+function storedOptOut(): boolean | null {
+  const prefix = `__ph_opt_in_out_${KEY}=`;
+  const raw = document.cookie
+    .split('; ')
+    .find((cookie) => cookie.startsWith(prefix))
+    ?.slice(prefix.length);
+  if (raw === undefined) return null;
+  try {
+    const value: unknown = JSON.parse(decodeURIComponent(raw));
+    if (NO_LIKE.includes(value)) return true;
+    return YES_LIKE.includes(value) ? false : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 식별·기기 식별자를 지운다. SDK의 reset은 동의 선택까지 지우는데, 「이용 분석 참여」는 이 브라우저의 선택이라 로그아웃·
+ * 다른 회원 로그인을 넘어 남아야 한다 — 저장된 끔은 reset 뒤에 다시 건다.
+ */
+function resetKeepingOptOut(posthog: PostHog): void {
+  const optedOut = storedOptOut() === true;
+  posthog.reset();
+  if (optedOut) posthog.opt_out_capturing();
+}
+
 /**
  * 로그인한 회원을 내부 회원 번호로 식별한다. 이메일·이름·Google 식별자는 넘기지 않는다(처리방침 2절).
  * 같은 브라우저에 다른 회원으로 식별된 흔적이 남아 있으면(로그아웃 없이 세션이 끝난 공용 PC) 먼저 지운다 —
  * SDK는 식별된 사람 위에 다른 번호로 identify하면 둘을 합치지 않고 번호만 바꾸므로, 지우지 않으면 앞사람의 기기 식별자를 잇는다.
+ * 이 브라우저에서 「이용 분석 참여」를 껐으면 식별하지 않는다 — 켜면 setAnalyticsOptOut이 이 번호로 식별한다.
  */
 export function identifyUser(userId: number): void {
   const id = String(userId);
+  signedInUserId = id;
   withAnalytics((posthog) => {
-    if (posthog._isIdentified() && posthog.get_distinct_id() !== id) posthog.reset();
+    if (posthog._isIdentified() && posthog.get_distinct_id() !== id) resetKeepingOptOut(posthog);
+    if (posthog.get_explicit_consent_status() === 'denied') return;
     posthog.identify(id);
   });
 }
 
+// ── 「이용 분석 참여」(설정 › 계정, 처리방침 7·9절) ──────────────────────────────────
+// 선택은 이 브라우저에만 둔다(SDK의 동의 쿠키 `__ph_opt_in_out_<키>`, .pokeclip.com) — 서버는 모른다. 기기·브라우저마다 따로
+// 끄고, 쿠키를 지우면 다시 참여다. SDK는 보낼 때마다 그 쿠키를 다시 읽어서 SDK가 뜨기 전부터 끈 브라우저에서는 아무것도 안 나간다.
+
+/**
+ * 이 브라우저의 상태. `unavailable` = SDK를 안 불렀다(키 없음·차단기) — 보내지 않는다.
+ * `dnt` = 브라우저의 추적 금지가 켜져 있다 — 스위치와 상관없이 SDK가 막는다
+ */
+export type AnalyticsChoice = 'participating' | 'opted_out' | 'dnt' | 'unavailable';
+
+/** SDK의 추적 금지 판정(posthog-js consent.js `_getDnt`)과 같은 자리를 본다 */
+function doNotTrackOn(): boolean {
+  const nav = navigator as Navigator & { msDoNotTrack?: unknown; globalPrivacyControl?: unknown };
+  return [
+    nav.doNotTrack,
+    nav.msDoNotTrack,
+    (window as Window & { doNotTrack?: unknown }).doNotTrack,
+    nav.globalPrivacyControl,
+  ].some((value) => YES_LIKE.includes(value));
+}
+
+/** 설정 화면이 읽는다. SDK를 불러오는 중이면 끝날 때까지 기다린다 */
+export async function readAnalyticsChoice(): Promise<AnalyticsChoice> {
+  await loading;
+  if (status !== 'ready' || client === null) return 'unavailable';
+  if (doNotTrackOn()) return 'dnt';
+  return client.get_explicit_consent_status() === 'denied' ? 'opted_out' : 'participating';
+}
+
+/**
+ * 이 탭의 SDK에 선택을 건다. 끄면 이벤트·녹화를 멈춘다. 켜면 opt_in이다 — 선택만 지우는 clear는 SDK의 전송 대기열을 다시
+ * 시작하지 않아, 꺼진 채 연 페이지에서는 새로고침 전까지 아무것도 안 나갔다(2026-10-24 실측). `$opt_in` 이벤트는 보내지 않고,
+ * 로그인한 회원이면 그 번호로 식별한다
+ */
+export function applyAnalyticsOptOut(optOut: boolean): void {
+  withAnalytics((posthog) => {
+    if (optOut) {
+      posthog.opt_out_capturing();
+      posthog.stopSessionRecording();
+      return;
+    }
+    posthog.opt_in_capturing({ captureEventName: false });
+    // 끌 때의 stopSessionRecording은 설정(disable_session_recording)을 true로 박아, opt_in만으로는 녹화가 새로고침 전까지
+    // 안 돌아왔다(PR #382 2차 리뷰). 처음 설정으로 되돌린다 — 녹화를 안 켜는 배포에서는 그대로 꺼져 있다
+    posthog.set_config({ disable_session_recording: !REPLAY });
+    if (signedInUserId !== null) posthog.identify(signedInUserId);
+  });
+}
+
+/**
+ * 설정 화면의 스위치 — 이 탭에 걸고 같은 브라우저의 다른 탭에 알린다. 쿠키는 탭이 함께 읽지만 SDK의 전송 대기열·녹화·식별은
+ * 탭마다 메모리에 있어서, 다시 켠 것을 알리지 않으면 다른 탭은 새로고침 전까지 안 보낸다(받는 쪽은 AuthGuard)
+ */
+export function setAnalyticsOptOut(optOut: boolean): void {
+  applyAnalyticsOptOut(optOut);
+  announceAnalyticsPreference();
+}
+
+/**
+ * 다른 탭이 바꿨다는 알림을 받은 탭이 부른다 — 쪽지 대신 지금 동의 쿠키를 읽어 이 탭의 SDK에 건다. 쪽지는 도착 순서가 바뀔 수
+ * 있어 값을 그대로 걸면 늦게 온 옛 선택이 마지막 선택을 덮었다(PR #382 3차 리뷰). 쿠키는 마지막에 바꾼 탭의 값이다.
+ * 고른 적 없으면(쿠키 없음) 건드리지 않는다
+ */
+export function syncAnalyticsOptOutFromStorage(): void {
+  const stored = storedOptOut();
+  if (stored !== null) applyAnalyticsOptOut(stored);
+}
+
+/**
+ * 지금 채널에서의 역할을 이후 모든 이벤트에 싣는다(`active_role`) — 스트리머와 편집자의 쓰임을 나눠 본다.
+ * 열거 둘뿐이고 상대 채널 번호는 싣지 않는다. 로그아웃의 reset이 함께 지운다.
+ */
+export function setActiveRole(role: 'owner' | 'editor'): void {
+  withAnalytics((posthog) => posthog.register({ active_role: role }));
+}
+
 /** 다음 방문자가 앞사람으로 묶이지 않게 식별·기기 식별자를 지운다. */
 export function resetIdentity(): void {
-  withAnalytics((posthog) => posthog.reset());
+  signedInUserId = null;
+  withAnalytics(resetKeepingOptOut);
 }
 
 let unbindAuth: (() => void) | null = null;
@@ -179,7 +302,7 @@ export function bindIdentityToAuthStore(): void {
       state.refreshToken !== null && state.accessToken !== null && state.rotatedFrom === null;
     if (isNewLogin) {
       withAnalytics((posthog) => {
-        if (posthog._isIdentified()) posthog.reset();
+        if (posthog._isIdentified()) resetKeepingOptOut(posthog);
       });
     }
   });

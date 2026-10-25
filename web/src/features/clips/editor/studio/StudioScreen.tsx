@@ -52,7 +52,7 @@ import {
 } from '@/api/audioTracks';
 import { fetchDelegationsAsEditor } from '@/api/editors';
 import { fetchRecordingSpans } from '@/api/mediaPlayback';
-import { track } from '@/lib/analytics';
+import { setActiveRole, toYoutubeCategoryId, track } from '@/lib/analytics';
 import {
   rebaseTimeline,
   recordingTimeline,
@@ -645,6 +645,14 @@ function WiredStudio({
   const { streamId, card, broadcast, window, saved, latestClip, trackLabels, recording } = data;
   const startedAt = broadcast.startedAt!;
 
+  // 사용 통계의 역할 속성(active_role) — 편집기는 독(ChannelScope) 밖이라, 링크로 바로 열면 등록이 없거나 그 브라우저의 옛
+  // 값이었다(PR #382 2차 리뷰). 연 방송에서의 관계로 건다. 아래 진입 이벤트보다 먼저 돈다(효과는 적힌 순서로 돈다)
+  const role =
+    broadcast.relation === 'OWNER' ? 'owner' : broadcast.relation === 'EDITOR' ? 'editor' : null;
+  useEffect(() => {
+    if (role !== null) setActiveRole(role);
+  }, [role]);
+
   // 편집기 진입을 센다 (POK-357). 편집 대상마다 새로 마운트되므로 마운트당 한 번 —
   // StrictMode의 이중 이펙트와 첫 저장 뒤 ?recipe= 로 주소만 바뀌는 것은 세지 않는다.
   // 카드에서 열었으면 같은 보호 아래 서버 행동 기록에도 열기 한 줄을 남긴다(POK-393). 불러오기에 실패한 화면은 여기까지
@@ -808,6 +816,15 @@ function WiredStudio({
             label: `편집본 #${snap.id} v${snap.recipeVersion} 저장됨`,
           }));
           toast({ tone: 'success', title: `편집본 #${snap.id} 저장됨 (v${snap.recipeVersion})` });
+          // 사람이 누른 저장만 센다 — 영상 주문(submitUpload)도 persist를 거치지만 여기로 오지 않는다 (POK-357)
+          track('clip_recipe_saved', {
+            first_save: current.recipeId === null,
+            source: openedFrom,
+            layout: recipe.layout,
+            caption_position: recipe.captionPosition,
+            subtitle_mode: recipe.subtitleMode,
+            cut_seconds: Math.round(recipe.range.endSeconds - recipe.range.startSeconds),
+          });
         })
         .catch((e: unknown) => {
           const message = messageOf(e);
@@ -815,7 +832,7 @@ function WiredStudio({
           toast({ tone: 'error', title: '저장 실패', description: message });
         });
     },
-    [documentFor, persist, toast],
+    [documentFor, persist, toast, openedFrom],
   );
 
   const [pending, setPending] = useState<PendingUpload | null>(null);
@@ -946,7 +963,7 @@ function WiredStudio({
             privacy_status: upload.privacyStatus,
             thumbnail_source: draft.thumbnailSource,
             made_for_kids: draft.madeForKids,
-            category_id: upload.categoryId,
+            category_id: toYoutubeCategoryId(upload.categoryId),
             scheduled: upload.publishAt !== undefined,
           });
           // 200은 새 주문이 아니다: 같은 판이 만드는 중이면 끝난 뒤 이 정보로, 이미 만들어져 있으면 지금 올린다

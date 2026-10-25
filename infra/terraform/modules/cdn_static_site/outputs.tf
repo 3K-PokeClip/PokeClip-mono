@@ -17,3 +17,8 @@ output "bucket_name" {
   description = "apex 사이트 버킷 이름(서울 — 랜딩 업로드 대상)."
   value       = aws_s3_bucket.this.bucket
 }
+
+output "function_name" {
+  description = "apex-request CloudFront Function 이름 — 호출 루트가 함수 로그 그룹 /aws/cloudfront/function/<이름> 을 짓는다."
+  value       = aws_cloudfront_function.apex_request.name
+}
