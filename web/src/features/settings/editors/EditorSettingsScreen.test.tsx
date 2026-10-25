@@ -1,8 +1,10 @@
-import { screen, waitFor, within } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
+import { QueryClient } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EditorSettingsScreen } from '@/features/settings/editors/EditorSettingsScreen';
+import { EDITORS_POLL_MS } from '@/features/settings/editors/useEditorSettingsState';
 import { useAuthStore } from '@/stores/auth';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
 import { renderWithProviders } from '@/test/testProviders';
@@ -541,5 +543,129 @@ describe('EditorSettingsScreen — 편집자 시점은 다루지 않는다', () 
     const urls = spy.mock.calls.map(([url]) => url);
     expect(urls).not.toContain('/api/editor-invitations/received');
     expect(urls).not.toContain('/api/editor-delegations/as-editor');
+  });
+});
+
+/** 운영(providers.tsx)과 같은 staleTime 60초 — 주기 읽기가 이 기본값과 상관없이 도는지 본다 */
+function prodLikeClient() {
+  return new QueryClient({
+    defaultOptions: { queries: { staleTime: 60_000, retry: false }, mutations: { retry: false } },
+  });
+}
+
+/** 주기를 한 번 진행하고 그 응답까지 act 안에서 받는다: 응답이 act 밖에서 화면을 바꾸지 않게 */
+async function nextPoll(queryClient: QueryClient) {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(EDITORS_POLL_MS);
+    await vi.waitUntil(() => queryClient.isFetching() === 0);
+  });
+}
+
+const listCalls = (spy: ReturnType<typeof stubFetch>, url: string) =>
+  spy.mock.calls.filter(([u]) => u === url).length;
+
+describe('EditorSettingsScreen — 편집자가 바꾼 목록을 새로고침 없이 반영한다(POK-481)', () => {
+  // react-query는 주기를 걸 때의 전역 setInterval을 쓴다: 렌더 전에 가짜로 바꾼다
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** 편집자 쪽 동작(수락·거절·나가기)을 흉내 내려고 응답을 케이스 안에서 바꾼다 */
+  interface LiveServer {
+    delegations: unknown[];
+    sent: unknown[];
+    failing?: boolean;
+  }
+
+  function stubLive(server: LiveServer) {
+    return stubFetch((url) => {
+      if (server.failing) return jsonResponse(500, { error: 'boom' });
+      if (url === DELEGATIONS_URL) return jsonResponse(200, server.delegations);
+      if (url === SENT_URL) return jsonResponse(200, server.sent);
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+  }
+
+  it('화면이 열려 있으면 20초마다 두 목록을 다시 읽는다: 편집자가 수락하면 대기 초대가 편집자 행으로 바뀐다', async () => {
+    const server: LiveServer = { delegations: [DELEGATIONS[0]], sent: [SENT[0]] };
+    const spy = stubLive(server);
+    const { queryClient } = renderWithProviders(<EditorSettingsScreen />, prodLikeClient());
+    await screen.findByRole('group', { name: /cut\.master@gmail\.com/ });
+    expect(screen.queryByRole('group', { name: '컷마스터' })).not.toBeInTheDocument();
+
+    server.sent = [{ ...SENT[0], status: 'ACCEPTED' }];
+    server.delegations = [
+      DELEGATIONS[0],
+      { id: 5, counterpartId: 81, counterpartName: '컷마스터', grantedAt: '2026-08-26T09:00:00Z' },
+    ];
+    await nextPoll(queryClient);
+
+    expect(screen.getByRole('group', { name: '컷마스터' })).toBeInTheDocument();
+    expect(screen.queryByRole('group', { name: /cut\.master@gmail\.com/ })).not.toBeInTheDocument();
+    expect(listCalls(spy, DELEGATIONS_URL)).toBe(2);
+    expect(listCalls(spy, SENT_URL)).toBe(2);
+  });
+
+  it('편집자가 거절하거나 스스로 나가면 그 행이 사라진다', async () => {
+    const server: LiveServer = { delegations: [DELEGATIONS[0]], sent: [SENT[0]] };
+    stubLive(server);
+    const { queryClient } = renderWithProviders(<EditorSettingsScreen />, prodLikeClient());
+    await screen.findByRole('group', { name: '박편집' });
+
+    server.sent = [{ ...SENT[0], status: 'DECLINED' }];
+    server.delegations = [];
+    await nextPoll(queryClient);
+
+    expect(screen.queryByRole('group', { name: '박편집' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('group', { name: /cut\.master@gmail\.com/ })).not.toBeInTheDocument();
+  });
+
+  it('주기 읽기가 실패해도 받아 둔 목록이 남고 오류 카드로 바뀌지 않는다', async () => {
+    const server: LiveServer = { delegations: DELEGATIONS, sent: SENT, failing: false };
+    stubLive(server);
+    const { queryClient } = renderWithProviders(<EditorSettingsScreen />, prodLikeClient());
+    await screen.findByRole('group', { name: '박편집' });
+
+    server.failing = true;
+    await nextPoll(queryClient);
+
+    expect(queryClient.getQueryState(['editorDelegations'])?.status).toBe('error');
+    expect(screen.getByRole('group', { name: '박편집' })).toBeInTheDocument();
+    expect(screen.queryByText('편집자 목록을 불러오지 못했어요')).not.toBeInTheDocument();
+  });
+
+  it('한 목록만 처음부터 못 읽었을 때, 읽어 둔 다른 목록의 주기 읽기에는 「다시 시도」가 돌지 않는다', async () => {
+    let releaseSent: () => void = () => {};
+    let holdSent: Promise<void> | null = null;
+    stubFetch((url) => {
+      if (url === DELEGATIONS_URL) return jsonResponse(500, { error: 'boom' });
+      if (url === SENT_URL)
+        return (holdSent ?? Promise.resolve()).then(() => jsonResponse(200, SENT));
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    const { queryClient } = renderWithProviders(<EditorSettingsScreen />, prodLikeClient());
+    const retry = await screen.findByRole('button', { name: '다시 시도' });
+
+    holdSent = new Promise<void>((r) => {
+      releaseSent = r;
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(EDITORS_POLL_MS);
+      // 실패하는 목록은 바로 끝나고, 읽어 둔 목록만 응답을 기다리는 순간을 만든다
+      await vi.waitUntil(
+        () =>
+          queryClient.getQueryState(['editorDelegations'])?.fetchStatus === 'idle' &&
+          queryClient.getQueryState(['editorInvitations', 'sent'])?.fetchStatus === 'fetching',
+      );
+    });
+    expect(retry).not.toHaveAttribute('aria-busy');
+
+    await act(async () => {
+      releaseSent();
+      await vi.waitUntil(() => queryClient.isFetching() === 0);
+    });
   });
 });
