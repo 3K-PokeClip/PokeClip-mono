@@ -62,6 +62,13 @@ module "waf" {
   # 가린다(POK-459 · POK-479). 질의 인자는 가리지 않는다 — 자격 증명이 실리는
   # ?code=(OAuth 콜백) · ?token=(프로필 사진)은 app 호스트라 엣지가 아니라 공개
   # ALB 로 간다(prod/records · platform 의 protected_query_args).
+  #
+  # referer 는 platform 만 가린다(kty 2026-10-25). ?code= 가 든 전체 주소가
+  # Referer 에 실리는 것은 콜백 화면이 같은 출처(app)로 보내는 요청뿐이다. app
+  # 은 CloudFront 를 지나지 않고(prod/records — app 은 공개 ALB), app 화면이
+  # media · apex 로 보내는 요청은 다른 출처라 브라우저 기본 정책(Referrer-Policy
+  # 없음 → strict-origin-when-cross-origin)이 출처(https://app.<도메인>/)만
+  # 싣는다.
   protected_headers = [
     "authorization",
     "cookie",
@@ -74,7 +81,8 @@ module "waf" {
   # 는 가려진다. 다만 AWS 가 보장하는 범위는 그 헤더를 단일 헤더(SingleHeader)로
   # 보는 규칙까지이고, 헤더 전체(Headers)를 보는 규칙의 일치 세부 · 요청 샘플은
   # 범위 밖이다(AWS WAF API 「LoggingConfiguration」 RedactedFields). 내부 토큰
-  # 헤더는 데이터 보호로만 가린다.
+  # 헤더는 데이터 보호로만 가린다 — 정상 경로로 들어오지 않는 선제 항목이라
+  # 로그 가림까지 겹치지 않는다(kty 2026-10-25).
   logging = {
     log_group_name    = "aws-waf-logs-pokeclip-prod-cloudfront"
     retention_in_days = local.waf_log_retention_days

@@ -1,8 +1,9 @@
 # prod/platform 의 공개 ALB REGIONAL WAF 트래픽 로그(장부 17 · kty 결정)와 웹
 # ACL 데이터 보호를 mock provider 로 단언한다 — CloudWatch Logs 로그 그룹
 # aws-waf-logs-pokeclip-prod-public · 보존은 ECS 로그와 같은 30일 ·
-# authorization · cookie 헤더 가림, 그리고 그 두 헤더 · 내부 토큰 헤더 둘 ·
-# 질의 인자 code · token 을 요청 샘플 · 로그 모두에서 가리는 데이터 보호.
+# authorization · cookie 헤더 가림, 그리고 그 두 헤더 · referer · 내부 토큰
+# 헤더 둘 · 질의 인자 code · token 을 요청 샘플 · 로그 모두에서 가리는 데이터
+# 보호.
 # 차단(BLOCK)만 남기는 필터 · SUBSTITUTION 치환은
 # waf_acl 모듈 시험이 맡는다(루트 시험은 모듈 안 자원을 주소로 볼 수 없다).
 #
@@ -166,8 +167,9 @@ run "logs_public_waf_blocks_to_cloudwatch" {
 
 # --- 공개 WAF 데이터 보호 ---
 
-# 요청 샘플에 Authorization · 쿠키 · 내부 토큰 헤더가 원문으로 남지 않게 웹
-# ACL 데이터 보호로 그 헤더들을 가린다(POK-459 · POK-479).
+# 요청 샘플에 Authorization · 쿠키 · 내부 토큰 헤더 · OAuth 콜백 주소가 실린
+# Referer 가 원문으로 남지 않게 웹 ACL 데이터 보호로 그 헤더들을 가린다
+# (POK-459 · POK-479).
 run "protects_public_waf_credentials_in_samples" {
   command = plan
 
@@ -175,10 +177,11 @@ run "protects_public_waf_credentials_in_samples" {
     condition = toset(module.waf.protected_headers) == toset([
       "authorization",
       "cookie",
+      "referer",
       "x-internal-token",
       "x-stream-key-resolve-token",
     ])
-    error_message = "공개 WAF 데이터 보호가 authorization · cookie · x-internal-token · x-stream-key-resolve-token 헤더만 가리지 않는다."
+    error_message = "공개 WAF 데이터 보호가 authorization · cookie · referer · x-internal-token · x-stream-key-resolve-token 헤더만 가리지 않는다."
   }
 }
 

@@ -145,9 +145,16 @@ module "waf" {
   # X-Stream-Key-Resolve-Token)은 정상 경로로는 공개 ALB 에 오지 않지만 잘못
   # 실려 와도 남지 않게 미리 둔다. 질의 인자는 OAuth 콜백의 ?code=(web 콜백
   # 화면들) · 프로필 사진 주소의 ?token=(auth PhotoUrls)이다.
+  #
+  # referer 도 가린다(kty 2026-10-25). web 에 Referrer-Policy 가 없어 브라우저
+  # 기본값을 따르므로, 콜백 화면(/auth/callback · /oauth/<제공자>/callback)이
+  # 같은 출처(app)로 보내는 요청의 Referer 에 ?code= 가 든 전체 주소가
+  # 실린다. SINGLE_QUERY_ARGUMENT 는 헤더 안의 그 값을 가리지 못한다. 대가로
+  # 요청 샘플 · 로그에서 요청이 어느 화면에서 왔는지(출처 정보)를 잃는다.
   protected_headers = [
     "authorization",
     "cookie",
+    "referer",
     "x-internal-token",
     "x-stream-key-resolve-token",
   ]
@@ -158,8 +165,9 @@ module "waf" {
   # 보호를 끄거나 줄여도 로그의 authorization · cookie 는 가려진다. 다만 AWS 가
   # 보장하는 범위는 그 헤더를 단일 헤더(SingleHeader)로 보는 규칙까지이고, 헤더
   # 전체(Headers)를 보는 규칙의 일치 세부 · 요청 샘플은 범위 밖이다(AWS WAF API
-  # 「LoggingConfiguration」 RedactedFields). 내부 토큰 헤더 · 질의 인자는
-  # 데이터 보호로만 가린다.
+  # 「LoggingConfiguration」 RedactedFields). referer · 내부 토큰 헤더 · 질의
+  # 인자는 데이터 보호로만 가린다 — 내부 토큰 헤더는 정상 경로로 들어오지 않는
+  # 선제 항목이라 로그 가림까지 겹치지 않는다(kty 2026-10-25).
   logging = {
     log_group_name    = "aws-waf-logs-pokeclip-prod-public"
     retention_in_days = local.log_retention_days
