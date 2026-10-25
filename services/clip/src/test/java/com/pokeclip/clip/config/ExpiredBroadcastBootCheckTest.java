@@ -5,20 +5,25 @@ import static org.assertj.core.api.Assertions.assertThat;
 import jakarta.servlet.Filter;
 import java.io.PrintWriter;
 import java.io.StringWriter;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Properties;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.config.YamlPropertiesFactoryBean;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.boot.test.context.ConfigDataApplicationContextInitializer;
 import org.springframework.boot.test.context.assertj.AssertableWebApplicationContext;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.boot.test.context.runner.WebApplicationContextRunner;
 import org.springframework.boot.tomcat.autoconfigure.TomcatServerProperties;
 import org.springframework.boot.web.server.autoconfigure.ServerProperties;
+import org.springframework.boot.web.server.autoconfigure.ServerProperties.ForwardHeadersStrategy;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.io.ClassPathResource;
+import org.springframework.core.env.StandardEnvironment;
 import org.springframework.mock.web.MockFilterChain;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
@@ -28,7 +33,7 @@ import org.springframework.security.web.SecurityFilterChain;
 /**
  * 만료 방송 창구 전용 출입증의 부팅 검사(POK-196 M6, 설계 7절 prod 연결 clip 행). auth 의 같은 검사 시험
  * ({@code StreamKeyResolveBootCheckTest})을 옮겨 왔다. 검사는 전용 토큰이 있을 때만 돈다 — 운영 clip 은 지금 전달 헤더
- * 전략을 적지 않고 뜨는데, 이 창구를 안 여는 그 clip 이 검사에 걸려 죽으면 안 된다.
+ * 전략 env 를 넣지 않고(비면 플랫폼 감지) 뜨는데, 이 창구를 안 여는 그 clip 이 검사에 걸려 죽으면 안 된다.
  *
  * <p>실패 메시지는 여기서 직접 읽는다(값이 실리지 않았는지). 컨텍스트 캐시를 쓰지 않는다(ContextRunner) — 갈래마다 시험
  * 컨텍스트를 띄우면 커넥션 예산이 넘친다({@code IntegrationTestSupport}).
@@ -63,7 +68,7 @@ class ExpiredBroadcastBootCheckTest {
   }
 
   /**
-   * 운영 clip 꼴이다 — 전략을 적지 않는다(application.yml 에 줄이 없다). 토큰이 없으면 대역도 비어 있지만 뜨고, 닫힌
+   * 운영 clip 꼴이다 — 전략 env 가 비어 미설정이다(플랫폼 감지). 토큰이 없으면 대역도 비어 있지만 뜨고, 닫힌
    * 창구는 403 이 아니라 401 이다.
    */
   @Test
@@ -114,7 +119,7 @@ class ExpiredBroadcastBootCheckTest {
       web(INTERNAL_TOKEN_SET, EXPIRED_TOKEN_SET, ALLOWED_CIDR_SET, strategy)
           .run(context -> assertFailedWithoutValues(context, "server.forward-headers-strategy"));
     }
-    // 아예 적지 않은 경우 — 운영 clip 의 지금 꼴이다
+    // 아예 적지 않은 경우 — env 를 안 넣은 운영 clip 의 지금 꼴이다
     web(INTERNAL_TOKEN_SET, EXPIRED_TOKEN_SET, ALLOWED_CIDR_SET)
         .run(context -> assertFailedWithoutValues(context, "server.forward-headers-strategy"));
   }
@@ -188,6 +193,45 @@ class ExpiredBroadcastBootCheckTest {
         .isEqualTo("${EXPIRED_BROADCASTS_ALLOWED_CIDRS:}");
   }
 
+  /**
+   * 전략은 auth 와 같은 env 이름 {@code FORWARD_HEADERS_STRATEGY}로 받는다(application.yml 의 server 절).
+   * env 가 없거나 비면 none 이 아니라 미설정(null)이라, env 를 안 넣은 운영 clip 은 지금처럼 Boot 의 플랫폼
+   * 감지로 간다. M6-6b 가 auth 의 이름을 그대로 넣어도 clip 이 읽는다.
+   *
+   * <p>「없음」 갈래가 운영 clip 의 지금 꼴이고 yml 의 기본값을 잰다(「빈 값」은 env 가 있어 기본값을 안 쓴다). 셸에 같은
+   * 이름이 export 돼 있어도 흔들리지 않게 시스템 환경 변수 원본을 뺀 환경에서 잰다.
+   */
+  @Test
+  void applicationYml_bindsStrategyFromAuthEnvName() {
+    Map<String, ForwardHeadersStrategy> expected = new LinkedHashMap<>();
+    expected.put(null, null);
+    expected.put("", null);
+    expected.put("native", ForwardHeadersStrategy.NATIVE);
+    expected.put("none", ForwardHeadersStrategy.NONE);
+    expected.put("framework", ForwardHeadersStrategy.FRAMEWORK);
+
+    expected.forEach(
+        (env, strategy) ->
+            new ApplicationContextRunner()
+                .withInitializer(
+                    context ->
+                        context
+                            .getEnvironment()
+                            .getPropertySources()
+                            .remove(StandardEnvironment.SYSTEM_ENVIRONMENT_PROPERTY_SOURCE_NAME))
+                .withInitializer(new ConfigDataApplicationContextInitializer())
+                .withUserConfiguration(ServerPropertiesOnly.class)
+                .withPropertyValues(
+                    env == null ? new String[0] : new String[] {"FORWARD_HEADERS_STRATEGY=" + env})
+                .run(
+                    context -> {
+                      ServerProperties server = context.getBean(ServerProperties.class);
+                      assertThat(server.getForwardHeadersStrategy())
+                          .as("FORWARD_HEADERS_STRATEGY=%s", env == null ? "(없음)" : env)
+                          .isEqualTo(strategy);
+                    }));
+  }
+
   private static WebApplicationContextRunner web(String... properties) {
     return new WebApplicationContextRunner()
         .withUserConfiguration(
@@ -236,6 +280,11 @@ class ExpiredBroadcastBootCheckTest {
     TomcatServerProperties.class
   })
   static class BoundProperties {}
+
+  /** 실제 application.yml 을 읽을 때 전략만 본다. 다른 속성 레코드는 yml 의 빈 기본값 검증에 걸린다. */
+  @Configuration(proxyBeanMethods = false)
+  @EnableConfigurationProperties(ServerProperties.class)
+  static class ServerPropertiesOnly {}
 
   /** 앱은 Boot 의 보안 자동 설정이 켠다. {@code HttpSecurity} 빈이 여기서 나온다. */
   @Configuration(proxyBeanMethods = false)

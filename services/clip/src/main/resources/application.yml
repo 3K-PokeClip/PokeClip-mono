@@ -117,6 +117,11 @@ logging:
 
 server:
   port: 8081
+  # 프록시가 붙여 주는 X-Forwarded-* 헤더를 믿을지. env 이름은 auth와 같다(FORWARD_HEADERS_STRATEGY).
+  # 🔴 빈 기본값은 none이 아니라 「미설정」이다(빈 값의 enum 변환이 null). env를 안 넣으면 지금처럼 Boot가
+  # 클라우드 플랫폼을 감지해 전략을 고른다 — 이 줄이 생겨도 운영 clip의 동작은 바뀌지 않는다.
+  # 만료 방송 전용 창구(아래 pokeclip.internal-api.expired-broadcasts)를 열 때만 none이나 native여야 부팅이 산다.
+  forward-headers-strategy: ${FORWARD_HEADERS_STRATEGY:}
 
 management:
   endpoints:
@@ -165,8 +170,8 @@ pokeclip:
     # 쉼표 목록) 안에서만 열린다. 헤더 없는 요청은 위 공용 토큰 그대로다. 토큰이 비면 창구가 닫힌다 — 전용 헤더 요청은
     # 늘 401이고 clip은 그대로 뜬다. 토큰이 있으면 부팅을 검사한다(대역이 있고 IPv4 · server.forward-headers-strategy가
     # none이나 native · 톰캣 remoteip 헤더 이름 속성 없음 · 공용 토큰과 다름). 전달 머리글을 단 전용 헤더 요청은 403이다.
-    # 🔴 clip은 forward-headers-strategy를 이 파일에 적지 않는다(미설정 = 플랫폼 감지). 토큰을 넣는 환경은
-    # SERVER_FORWARDHEADERSSTRATEGY(none 또는 native, 대시를 뺀 Spring 환경변수 이름)를 같이 넣어야 부팅이 산다.
+    # 🔴 전략은 위 server 절이 FORWARD_HEADERS_STRATEGY로 받고, 비면 플랫폼 감지다. 토큰을 넣는 환경은
+    # FORWARD_HEADERS_STRATEGY(none 또는 native)를 같이 넣어야 부팅이 산다.
     expired-broadcasts:
       token: ${EXPIRED_BROADCASTS_TOKEN:}
       allowed-cidrs: ${EXPIRED_BROADCASTS_ALLOWED_CIDRS:}

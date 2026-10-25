@@ -129,8 +129,8 @@ public class ExpiredBroadcastSecurityConfig {
     // 왔다(auth StreamKeyResolveSecurityConfig 와 같다). Boot 판을 올리면 그 조건과 다시 대조한다.
     // native 는 톰캣 RemoteIpValve 가 기본 이름의 머리글만 읽어, 표시 밸브가 그 머리글을 먼저 본다. framework 는
     // Spring 필터가 X-Forwarded-Prefix 같은 다른 이름까지 읽는다. 빈 값은 none 이 아니라 미설정(null)이다. 미설정이면
-    // Boot 가 클라우드 플랫폼을 감지해 전략을 고른다. 운영 clip 은 지금 전략을 적지 않으므로 창구를 여는 환경은 전략을
-    // 같이 넣어야 뜬다.
+    // Boot 가 클라우드 플랫폼을 감지해 전략을 고른다. clip 은 전략을 env(FORWARD_HEADERS_STRATEGY)로 받고 비면 플랫폼
+    // 감지이므로, 창구를 여는 환경은 그 env 를 같이 넣어야 뜬다.
     ForwardHeadersStrategy strategy = server.getForwardHeadersStrategy();
     if (strategy != ForwardHeadersStrategy.NONE && strategy != ForwardHeadersStrategy.NATIVE) {
       throw new IllegalStateException(

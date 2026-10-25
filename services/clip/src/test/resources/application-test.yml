@@ -8,6 +8,9 @@
 # 같은 뿌리를 FakeAuth도 밟고 있었다(전수 16회 중 2회 빨간불) — 거기는 코드에서 고쳤다.
 server:
   address: 127.0.0.1
+  # 셸에 FORWARD_HEADERS_STRATEGY가 export돼 있어도 시험은 기본값(미설정)을 잰다 — 이 줄이 기본 yml의 placeholder
+  # 줄을 덮는다(auth application-test.yml 과 같다). 전략이 필요한 시험은 @TestPropertySource로 따로 준다.
+  forward-headers-strategy: ""
 
 spring:
   jpa:
