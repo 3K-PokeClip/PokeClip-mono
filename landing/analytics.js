@@ -39,9 +39,11 @@
     utm_campaign: /^(launch_2026_10)$/,
     utm_content: /^(pinned_comment|banner)$/,
   };
-  var UTM_KEY = /^(?:\$initial_)?(utm_[a-z]+)$/;
+  // 접두 없음(그 페이지)·$initial_(처음 방문)·$session_entry_(그 세션 첫 진입 — SDK가 모든 이벤트에 싣는다) 셋 다 본다.
+  // $fbc·$fbp는 SDK가 fbclid·Meta 쿠키로 만드는 식별자다(PR #382 3차 리뷰)
+  var UTM_KEY = /^(?:\$initial_|\$session_entry_)?(utm_[a-z]+)$/;
   var CLICK_ID_KEY =
-    /^(?:\$initial_)?(?:gad_source|mc_cid|gclid|gclsrc|dclid|gbraid|wbraid|fbclid|msclkid|twclid|li_fat_id|igshid|ttclid|rdt_cid|epik|qclid|sccid|oppref|irclid|_kx)$/;
+    /^(?:(?:\$initial_|\$session_entry_)?(?:gad_source|mc_cid|gclid|gclsrc|dclid|gbraid|wbraid|fbclid|msclkid|twclid|li_fat_id|igshid|ttclid|rdt_cid|epik|qclid|sccid|oppref|bfcid|irclid|_kx)|\$fbc|\$fbp)$/;
 
   // 홍보 링크 속성이면 정리하고 true
   function scrubCampaign(properties, key, value) {

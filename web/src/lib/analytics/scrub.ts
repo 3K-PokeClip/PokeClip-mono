@@ -78,10 +78,18 @@ const UTM_ALLOWED: Record<string, RegExp> = {
   utm_campaign: /^(launch_2026_10)$/,
   utm_content: /^(pinned_comment|banner)$/,
 };
-const UTM_KEY_RE = /^(?:\$initial_)?(utm_[a-z]+)$/;
-/** SDK가 주소에서 따로 뽑는 광고 클릭 식별자(posthog-js 1.435 캠페인 매개변수 목록) — 쓰지 않으니 지운다 */
+/**
+ * SDK가 홍보 링크 값을 싣는 자리 셋 — 그 페이지의 값(접두 없음), 처음 방문(`$initial_`, 사람 속성), 그 세션의 첫 진입
+ * (`$session_entry_`, 모든 이벤트 — posthog-js session-props.js `getSessionProps`). 셋째를 빠뜨리면 utm_term·클릭 식별자가
+ * 그 세션의 모든 이벤트에 실려 나갔다(PR #382 3차 리뷰)
+ */
+const UTM_KEY_RE = /^(?:\$initial_|\$session_entry_)?(utm_[a-z]+)$/;
+/**
+ * SDK가 주소에서 따로 뽑는 광고 클릭 식별자(@posthog/browser-common 0.9.5 `CAMPAIGN_PARAMS`·`PERSONAL_DATA_CAMPAIGN_PARAMS`)와
+ * 그것으로 만드는 Meta 식별자(`$fbc` = fbclid·`_fbc` 쿠키, `$fbp` = `_fbp` 쿠키, `$set`에 실림) — 쓰지 않으니 지운다
+ */
 const CLICK_ID_KEY_RE =
-  /^(?:\$initial_)?(?:gad_source|mc_cid|gclid|gclsrc|dclid|gbraid|wbraid|fbclid|msclkid|twclid|li_fat_id|igshid|ttclid|rdt_cid|epik|qclid|sccid|oppref|irclid|_kx)$/;
+  /^(?:(?:\$initial_|\$session_entry_)?(?:gad_source|mc_cid|gclid|gclsrc|dclid|gbraid|wbraid|fbclid|msclkid|twclid|li_fat_id|igshid|ttclid|rdt_cid|epik|qclid|sccid|oppref|bfcid|irclid|_kx)|\$fbc|\$fbp)$/;
 
 /** 홍보 링크 속성이면 정리하고 true. utm_term·광고 클릭 식별자처럼 담지 않을 것은 지운다 */
 function scrubCampaignProperty(properties: Properties, key: string, value: unknown): boolean {

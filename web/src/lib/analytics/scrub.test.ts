@@ -192,6 +192,36 @@ describe('scrubEvent — PostHog before_send', () => {
     });
   });
 
+  it('세션 첫 진입($session_entry_*)·Meta 식별자($fbc·$fbp)도 같은 규칙이다 — SDK가 모든 이벤트에 싣는다 (PR #382 3차 리뷰)', () => {
+    // posthog-js 1.435.8 SessionPropsManager.getSessionProps()가 첫 진입 속성에 붙이는 이름 그대로
+    const out = scrubEvent(
+      event(
+        'login_completed',
+        {
+          $session_entry_utm_source: 'person@example.com',
+          $session_entry_utm_medium: 'profile',
+          $session_entry_utm_term: '게임하는너구리',
+          $session_entry_fbclid: 'IwAR-secret',
+          $session_entry_gclid: 'Cj0-secret',
+          bfcid: 'bf-secret',
+          $session_entry_referring_domain: 'chzzk.naver.com',
+        },
+        {
+          $set: { $fbc: 'fb.1.1700000000000.IwAR-secret', $fbp: 'fb.1.1700000000000.123' },
+          $set_once: { $initial_bfcid: 'bf-secret' },
+        },
+      ),
+    );
+    expect(out?.properties).toEqual({
+      $session_entry_utm_source: 'other',
+      $session_entry_utm_medium: 'profile',
+      $session_entry_referring_domain: 'chzzk.naver.com',
+    });
+    expect(out?.$set).toEqual({});
+    expect(out?.$set_once).toEqual({});
+    expect(JSON.stringify(out)).not.toMatch(/secret|person@|너구리/);
+  });
+
   it('홍보 링크 값이 비었거나 없으면(null) 그대로 둔다', () => {
     const out = scrubEvent(event('$pageview', { utm_source: null, utm_medium: '' }));
     expect(out?.properties).toEqual({ utm_source: null, utm_medium: '' });

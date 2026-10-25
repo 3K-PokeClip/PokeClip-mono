@@ -94,6 +94,27 @@ test('홍보 링크 값은 README 표의 값만 두고 나머지는 other — ut
   });
 });
 
+test('세션 첫 진입($session_entry_*)·Meta 식별자($fbc·$fbp)도 같은 규칙이다 — SDK가 모든 이벤트에 싣는다 (PR #382 3차 리뷰)', () => {
+  const beforeSend = loadBeforeSend();
+  const out = beforeSend({
+    event: 'landing_cta_clicked',
+    properties: {
+      $session_entry_utm_source: 'person@example.com',
+      $session_entry_utm_medium: 'profile',
+      $session_entry_utm_term: '스트리머이름',
+      $session_entry_gclid: 'Cj0-secret',
+      bfcid: 'bf-secret',
+    },
+    $set: { $fbc: 'fb.1.1700000000000.IwAR-secret', $fbp: 'fb.1.1700000000000.123' },
+  });
+  assert.deepEqual(out.properties, {
+    $session_entry_utm_source: 'other',
+    $session_entry_utm_medium: 'profile',
+  });
+  assert.deepEqual(out.$set, {});
+  assert.doesNotMatch(JSON.stringify(out), /secret|person@|스트리머/);
+});
+
 test('대시보드 「이용 분석 참여」를 끈 선택(.pokeclip.com 쿠키)을 따른다 — 추적 금지도 존중한다', () => {
   const config = loadConfig();
   assert.equal(config.opt_out_capturing_persistence_type, 'cookie');
