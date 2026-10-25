@@ -40,10 +40,11 @@ export function LoginScreen() {
   // OAuth 진입 실패(NEXT_PUBLIC_GOOGLE_CLIENT_ID 부재 등 배포 설정 오류) — onClick의
   // throw는 에러 바운더리 밖이라 콘솔에만 남고 사용자에겐 "버튼이 안 눌리는" 증상이
   // 된다. 문구로 표면화하고, 이미 소모한 복원 경로는 되돌린다. (리뷰 #72)
-  const handleGoogleLogin = () => {
+  // 진입은 PKCE challenge 계산 때문에 비동기다(POK-483) — 거부도 같은 자리에서 받는다.
+  const handleGoogleLogin = async () => {
     const returnTo = consumeReturnPath();
     try {
-      startGoogleLogin(returnTo ?? undefined);
+      await startGoogleLogin(returnTo ?? undefined);
       // 동의 화면으로 떠나는 자리라 비콘으로 바로 보낸다 — 시작을 못 하고 던졌으면 세지 않는다 (POK-357)
       track('login_started', {}, { beacon: true });
     } catch {
