@@ -1,0 +1,107 @@
+/* 재생 세션의 덮개 · 띠(POK-200 M5). 영상 위에 서므로 색은 플레이어와 같이 테마에 고정한다(GlassPlayer.module.css 와 같은 꼴) */
+
+/* 끝에 닿은 시청자 — 마지막 장면 위 덮개. 가운데에 문구와 버튼 */
+.cover {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: calc(12 * var(--pc-u));
+  background: rgb(3 10 24 / 0.62); /* 테마 고정 */
+  animation: session-fade-in 240ms ease-out;
+}
+
+.coverText {
+  margin: 0;
+  font-size: calc(15 * var(--pc-u));
+  font-weight: 700;
+  color: rgb(224 242 254 / 0.92); /* 테마 고정 */
+  text-align: center;
+}
+
+/* 아직 보는 시청자 — 영상 위쪽 띠. 재생을 가리지 않게 얇게 둔다 */
+.band {
+  position: absolute;
+  top: calc(56 * var(--pc-u));
+  left: 50%;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: calc(10 * var(--pc-u));
+  max-width: calc(100% - 32 * var(--pc-u));
+  padding: calc(6 * var(--pc-u)) calc(8 * var(--pc-u)) calc(6 * var(--pc-u)) calc(14 * var(--pc-u));
+  border-radius: 999px;
+  background: rgb(3 10 24 / 0.72); /* 테마 고정 */
+  color: rgb(224 242 254 / 0.9); /* 테마 고정 */
+  font-size: calc(13 * var(--pc-u));
+  transform: translateX(-50%);
+  animation: session-band-in 240ms ease-out;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: calc(8 * var(--pc-u));
+}
+
+.action {
+  padding: calc(6 * var(--pc-u)) calc(14 * var(--pc-u));
+  border: 1px solid rgb(224 242 254 / 0.35); /* 테마 고정 */
+  border-radius: 999px;
+  background: rgb(255 255 255 / 0.08); /* 테마 고정 */
+  color: rgb(240 249 255); /* 테마 고정 */
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background-color 150ms ease,
+    transform 150ms ease;
+}
+
+.action:hover {
+  background: rgb(255 255 255 / 0.18); /* 테마 고정 */
+}
+
+.action:active {
+  transform: scale(0.97);
+}
+
+.action:focus-visible {
+  outline: 2px solid rgb(125 211 252); /* 테마 고정 */
+  outline-offset: 2px;
+}
+
+/* 명부 ended — 「녹화 보기」가 기본 선택이다 */
+.action[data-emphasis='true'] {
+  border-color: transparent;
+  background: rgb(240 249 255); /* 테마 고정 */
+  color: rgb(3 10 24); /* 테마 고정 */
+}
+
+@keyframes session-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes session-band-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -6px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cover,
+  .band {
+    animation: none;
+  }
+
+  .action {
+    transition: none;
+  }
+}
