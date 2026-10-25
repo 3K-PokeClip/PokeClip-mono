@@ -262,6 +262,17 @@ func ingestStopped(tail *index.TailRow, now time.Time) bool {
 	return now.Sub(tail.StartWallUTC.Add(d)) >= 3*d
 }
 
+// IngestStopped 는 streamID 의 ② 유입 정지 여부다 — 4.1 종료 판정의 ingestStopped(마지막 조각 끝 + 3 × 그 조각의
+// 실제 길이)를 그대로 쓴다. 제어면 경보의 「송출 중」이 이 술어의 부정이라 정의가 한 곳에만 있다(설계 M5 4.4 · cc M2).
+// 꼬리가 없으면 ok 거짓이다. 읽기만 한다 — 4.1 판정 상태는 읽지도 바꾸지도 않는다. loop 단일 고루틴만 부른다(D10).
+func (ix *Indexer) IngestStopped(streamID string, now time.Time) (stopped, ok bool) {
+	cur := ix.cursors[streamID]
+	if cur == nil || cur.Tail == nil {
+		return false, false
+	}
+	return ingestStopped(cur.Tail, now), true
+}
+
 // IngestTail 은 streamID 의 커서 꼬리(장부에 마지막으로 넣은 조각)가 끝난 시각 end(start_wall_utc + duration_ms)다. 꼬리가
 // 없으면 ok 거짓이다 — 4.1 처럼 잴 것이 없다. 발행 루프가 뷰 버리기(cache.Forget)의 lastEnd 로 쓴다(판단 J72). 읽기만
 // 한다 — 4.1 판정 상태는 읽지도 바꾸지도 않는다. loop 단일 고루틴만 부른다(D10).

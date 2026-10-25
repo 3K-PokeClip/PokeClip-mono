@@ -22,6 +22,7 @@ import (
 	"regexp"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -301,6 +302,20 @@ func manifestKey(streamID, sessionID string) (string, error) {
 		}
 	}
 	return "dvr/" + streamID + "/" + sessionID + "/index.m3u8", nil
+}
+
+// ManifestURL 은 회차 sessionID 의 되감기 목록 URL 이다 — base + "/" + manifestKey(streamID, sessionID). 제어면이
+// 상태 응답의 url 로 쓴다. 성분은 manifestKey 의 키 검사를 그대로 거치고, base 는 목록 렌더의 BaseURL 과 같은
+// 규칙이다(비었거나 '/' 로 끝나면 오류 — rewind.Render).
+func ManifestURL(base, streamID, sessionID string) (string, error) {
+	if base == "" || strings.HasSuffix(base, "/") {
+		return "", fmt.Errorf("publish: base URL %q 를 쓸 수 없다 — 비었거나 '/' 로 끝난다(URL = base + \"/\" + 키)", base)
+	}
+	key, err := manifestKey(streamID, sessionID)
+	if err != nil {
+		return "", err
+	}
+	return base + "/" + key, nil
 }
 
 // 메타 키 여덟 — 설계 4.4.2 넷에 계획 4.5 A1 결정 5 가 넷을 더했다. 키는 소문자다(4.4 [B-3]).
