@@ -350,12 +350,15 @@ run "standard_log_retention_rejects_non_cloudwatch_value" {
 
 # 함수 셋의 console.log 가 가는 us-east-1 로그 그룹을 이 루트가 미리 만들어
 # 보존을 건다. 이름은 /aws/cloudfront/function/<함수 이름>, 보존은 WAF 차단
-# 로그와 같다. ARN 앞머리로 기본(us-east-1) provider 인지 본다 — 서울 별칭
+# 로그와 같다. 리전은 자원의 region 값으로 본다 — mock 은 provider 리전을
+# 모르므로, 자원이 region 을 적지 않으면 mock 이 지은 값이 나와 실패하고 다른
+# 리전을 적어도 실패한다. ARN 앞머리로는 기본 provider 인지 본다 — 서울 별칭
 # mock 에는 로그 그룹 기본값이 없어 다른 값이 나온다.
 run "cloudfront_function_log_groups_keep_waf_retention" {
   assert {
     condition = {
-      for key, group in aws_cloudwatch_log_group.cloudfront_function : key => group.name
+      for key, group in aws_cloudwatch_log_group.cloudfront_function :
+      key => group.name
       } == {
       live_auth    = "/aws/cloudfront/function/pokeclip-prod-live-auth"
       deny_default = "/aws/cloudfront/function/pokeclip-prod-deny-default"
@@ -367,7 +370,8 @@ run "cloudfront_function_log_groups_keep_waf_retention" {
   assert {
     condition = alltrue([
       for group in aws_cloudwatch_log_group.cloudfront_function :
-      group.retention_in_days == 30 && group.retention_in_days == local.waf_log_retention_days
+      group.retention_in_days == 30 &&
+      group.retention_in_days == local.waf_log_retention_days
     ])
     error_message = "함수 로그 그룹 보존이 WAF 차단 로그와 같은 30일(local.waf_log_retention_days)이 아니다."
   }
@@ -378,6 +382,14 @@ run "cloudfront_function_log_groups_keep_waf_retention" {
       startswith(group.arn, "arn:aws:logs:us-east-1:")
     ])
     error_message = "함수 로그 그룹을 기본(us-east-1) provider 가 아닌 provider 로 만든다."
+  }
+
+  assert {
+    condition = alltrue([
+      for group in aws_cloudwatch_log_group.cloudfront_function :
+      group.region == "us-east-1"
+    ])
+    error_message = "함수 로그 그룹의 region 이 us-east-1 이 아니다(자원에 적지 않았거나 다른 리전)."
   }
 }
 

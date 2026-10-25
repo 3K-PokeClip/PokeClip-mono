@@ -23,8 +23,10 @@ prod 의 CloudFront 엣지를 만드는 루트입니다(설계 3-1 의 ⑩ · �
     배포의 표준 로그(v2)를 JSON 으로 받습니다. 보존은 `log_retention_days`
     (기본 7)입니다.
 *   **함수 로그 그룹 셋**(`/aws/cloudfront/function/<함수 이름>` ·
-    us-east-1): live-auth · deny-default · apex-request 의 `console.log` 를
-    받습니다. 보존은 WAF 차단 로그와 같은 30일입니다(PR 387 보안 L2).
+    us-east-1): live-auth · deny-default 의 `console.log` 를 받습니다.
+    apex-request 는 `console.log` 가 없어 그룹이 비어 있습니다 — 나중에
+    로그를 넣을 때 보존 없는 그룹이 생기지 않게 미리 만드는 그릇입니다. 보존은
+    WAF 차단 로그와 같은 30일입니다(PR 387 보안 L2).
 *   **내부 ALB 인그레스 ← VPC origin**(서울): VPC origin 이 생긴 뒤
     CloudFront 가 그 VPC 에 만드는 SG `CloudFront-VPCOrigins-Service-SG` 를
     이름과 network `vpc_id` 로 조회하고, platform 내부 ALB SG 에 그 SG 출처

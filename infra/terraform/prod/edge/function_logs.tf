@@ -5,7 +5,8 @@
 # 이름 · 리전은 CloudFront 개발자 안내서 「Edge function logs」의 「CloudFront
 # Functions logs」(2026-10-25 확인)를 따른다 — 캐시 비헤이비어 함수의 로그
 # 그룹은 /aws/cloudfront/function/<함수 이름> 이고, 어느 엣지에서 돌든
-# us-east-1 에 쌓인다. 그래서 기본(us-east-1) provider 로 만든다.
+# us-east-1 에 쌓인다. 그래서 기본(us-east-1) provider 로 만들고, 기본
+# provider 의 리전이 바뀌어도 따라가지 않게 자원에 region 을 적어 둔다.
 # https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/edge-functions-logs.html
 #
 # 함수 이름은 두 모듈의 출력에서 받는다. 이 그룹보다 함수가 먼저 로그를
@@ -25,6 +26,7 @@ locals {
 resource "aws_cloudwatch_log_group" "cloudfront_function" {
   for_each = local.cloudfront_function_names
 
+  region            = "us-east-1"
   name              = "/aws/cloudfront/function/${each.value}"
   retention_in_days = local.function_log_retention_days
 }
