@@ -23,7 +23,15 @@ export interface LiveStreamSelection {
   resolved: boolean;
   /** 보유 중에 다시 고른 답(빈 문자열 = 방송 중인 것이 없다). 보유가 없거나 답이 보던 방송과 같으면 null */
   deferred: string | null;
+  /**
+   * 마지막 다시 고르기의 답 — 지금 방송 번호 X 의 재료(재생 세션). 그 물음이 실패했으면 null(모름)이다: 실패를 「보던 방송 그대로」로
+   * 읽으면 같은 키의 새 방송이 보던 방송 세션에 섞인다(cx H4)
+   */
+  latest: string | null;
 }
+
+/** 재생 보유 중의 다시 고르기 결과(POK-200 M5) — 「새 방송」 띠 · 지금 방송 번호 X 의 재료(useLiveSession) */
+export type Reselect = Pick<LiveStreamSelection, 'deferred' | 'latest'>;
 
 export const LIVE_RESELECT_MS = 10_000;
 
@@ -35,17 +43,21 @@ export function useLiveStreamSelection(): LiveStreamSelection {
   const streamParam = useSearchParams().get('stream');
   const pinned = vodStreamIdFromPathname(pathname ?? '') ?? (streamParam || null);
   // 주소가 못 박았으면 처음부터 그 방송이다: 효과를 한 번 기다리면 그동안 화면이 스켈레톤을 한 번 더 그린다(지난 방송 상세, POK-445)
-  const [selection, setSelection] = useState<Omit<LiveStreamSelection, 'deferred'>>(() =>
-    pinned !== null ? { streamId: pinned, resolved: true } : { streamId: '', resolved: false },
+  const [selection, setSelection] = useState<Omit<LiveStreamSelection, 'deferred' | 'latest'>>(
+    () =>
+      pinned !== null ? { streamId: pinned, resolved: true } : { streamId: '', resolved: false },
   );
   const [deferred, setDeferred] = useState<string | null>(null);
+  const [latest, setLatest] = useState<string | null>(null);
   // 답이 올 때의 보유를 읽는다(효과는 보유에 걸지 않는다 — 보유가 바뀔 때마다 10초 주기를 다시 세우지 않게)
   const holdRef = useRef(playbackHold);
   holdRef.current = playbackHold;
   const selectionRef = useRef(selection);
   selectionRef.current = selection;
   /** 다시 고른 답을 넣는다. 보유 중이고 보유가 지금 선택이면 선택에 넣지 않고 deferred 로 낸다 */
-  const apply = (id: string) => {
+  const apply = (id: string | null) => {
+    setLatest(id);
+    if (id === null) return;
     const prev = selectionRef.current;
     const hold = holdRef.current;
     if (hold !== null && prev.resolved && hold === prev.streamId) {
@@ -70,8 +82,8 @@ export function useLiveStreamSelection(): LiveStreamSelection {
     let alive = true;
     const resolve = (fresh: boolean) =>
       void resolveLiveStreamId(streamerId, fresh).then((id) => {
-        // 모르면(오류) 지금 보던 것을 그대로 둔다 — 꺼짐으로 바꾸지 않는다
-        if (!alive || id === null) return;
+        // 모르면(오류) 지금 보던 것을 그대로 둔다 — 꺼짐으로 바꾸지 않는다. 마지막 답은 「모름」이 된다
+        if (!alive) return;
         applyRef.current(id);
       });
     resolve(false);
@@ -85,7 +97,6 @@ export function useLiveStreamSelection(): LiveStreamSelection {
   useEffect(() => {
     if (status !== 'ended' || pinned !== null) return;
     void resolveLiveStreamId(streamerId, true).then((id) => {
-      if (id === null) return;
       applyRef.current(id);
     });
   }, [status, pinned, streamerId]);
@@ -99,7 +110,7 @@ export function useLiveStreamSelection(): LiveStreamSelection {
     if (!released || pinned !== null) return;
     let alive = true;
     void resolveLiveStreamId(streamerId, true).then((id) => {
-      if (alive && id !== null) applyRef.current(id);
+      if (alive) applyRef.current(id);
     });
     return () => {
       alive = false;
@@ -110,5 +121,9 @@ export function useLiveStreamSelection(): LiveStreamSelection {
     publishLiveData({ streamId: selection.streamId });
   }, [selection.streamId]);
 
-  return { ...selection, deferred: selection.streamId === playbackHold ? deferred : null };
+  return {
+    ...selection,
+    deferred: selection.streamId === playbackHold ? deferred : null,
+    latest: pinned === null ? latest : null,
+  };
 }

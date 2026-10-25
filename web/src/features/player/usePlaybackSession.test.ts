@@ -9,6 +9,7 @@ import { usePlaybackSession, type SessionPlayer, type SessionOptions } from './u
 const BASE = 'https://media.pokeclip.com';
 const NOW = Date.parse('2026-10-25T06:00:00.000Z');
 const A1 = `${BASE}/dvr/key-1/a1/index.m3u8`;
+const B1 = `${BASE}/dvr/key-1/b1/index.m3u8`;
 const STREAM = `${BASE}/api/streams/key-1/rewind`;
 const ROUND = `${BASE}/api/streams/key-1/rounds/r-A/rewind`;
 
@@ -199,5 +200,86 @@ describe('리마운트 잇기(R36 — 세션은 GlassPlayer key 바깥에 산다
     await flush();
     act(() => result.current?.bindPlayer(fakePlayer()));
     expect(result.current?.state.source.generation).toBe(0);
+  });
+});
+
+describe('세션 수명 — 앞 세션의 늦은 답(cx H3)', () => {
+  it('A 의 끝남 대기 폴링이 X 를 기다리는 동안 B 로 바뀌면 A 의 답은 B 세션에 들지 않는다', async () => {
+    let releaseX!: (x: XAnswer) => void;
+    const resolveX = vi.fn(
+      () =>
+        new Promise<XAnswer>((resolve) => {
+          releaseX = resolve;
+        }),
+    );
+    answer = (url) =>
+      url === STREAM ? jsonResponse(200, readyBody(A1, NOW - 3_600_000, NOW)) : jsonResponse(404);
+    const { result, rerender } = renderHook((o: SessionOptions) => usePlaybackSession(o), {
+      initialProps: options({ resolveX }),
+    });
+    await flush();
+    // A 가 끝남 대기 — 다음 스트림 폴링은 X 를 묻는다
+    act(() => result.current?.dispatch({ type: 'live-closed' }));
+    await flush();
+    expect(resolveX).toHaveBeenCalled();
+    // 사용자가 B 를 고른다(같은 영상 키 · 다른 방송 번호). 이제 스트림 경로는 B 의 목록을 준다
+    answer = (url) =>
+      url === STREAM ? jsonResponse(200, readyBody(B1, NOW - 60_000, NOW)) : jsonResponse(404);
+    rerender(options({ resolveX, roundId: 'r-B', accessKey: 'r-B|key-1' }));
+    await flush();
+    expect(result.current?.state.roundId).toBe('r-B');
+    expect(result.current?.state.entry?.url).toBe(B1);
+    const before = result.current!.state;
+    // 늦게 온 A 의 X 답
+    await act(async () => {
+      releaseX({ kind: 'known', id: 'r-A' });
+      await Promise.resolve();
+    });
+    await flush();
+    expect(result.current?.state.entry).toEqual(before.entry);
+    expect(result.current?.state.roundRewindUrls).toEqual(before.roundRewindUrls);
+  });
+
+  it('A 에서 누른 LIVE 의 X 답이 B 로 바뀐 뒤 오면 버린다', async () => {
+    let releaseX!: (x: XAnswer) => void;
+    const resolveX = vi.fn(
+      () =>
+        new Promise<XAnswer>((resolve) => {
+          releaseX = resolve;
+        }),
+    );
+    const onClose = vi.fn();
+    answer = (url) =>
+      url === STREAM ? jsonResponse(200, readyBody(A1, NOW - 3_600_000, NOW)) : jsonResponse(404);
+    const { result, rerender } = renderHook((o: SessionOptions) => usePlaybackSession(o), {
+      initialProps: options({ resolveX, onClose }),
+    });
+    await flush();
+    act(() =>
+      result.current?.dispatch({
+        type: 'seek',
+        targetMs: NOW - 600_000,
+        view: { lowerMs: NOW - 16_000, endMs: NOW },
+      }),
+    );
+    act(() => result.current?.liveButton());
+    rerender(options({ resolveX, onClose, roundId: 'r-B', accessKey: 'r-B|key-1' }));
+    await flush();
+    // B 도 되감기 중이다 — A 의 늦은 답(X = r-C)이 들면 B 세션을 「새 방송 보기」로 닫는다
+    act(() =>
+      result.current?.dispatch({
+        type: 'seek',
+        targetMs: NOW - 600_000,
+        view: { lowerMs: NOW - 16_000, endMs: NOW },
+      }),
+    );
+    expect(result.current?.state.phase.kind).toBe('rewind');
+    await act(async () => {
+      releaseX({ kind: 'known', id: 'r-C' });
+      await Promise.resolve();
+    });
+    await flush();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(result.current?.state.roundId).toBe('r-B');
   });
 });

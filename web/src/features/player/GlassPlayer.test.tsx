@@ -593,6 +593,7 @@ describe('GlassPlayer: 재생 세션(POK-200 M5)', () => {
       dispatch: vi.fn(),
       liveButton: vi.fn(),
       bindPlayer: vi.fn(),
+      notice: vi.fn(),
     };
   }
 

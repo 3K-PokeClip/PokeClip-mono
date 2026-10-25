@@ -69,6 +69,10 @@ const DEFAULT_LIVE_LAG_MS = 3_000;
 const APP_SEEK_TOLERANCE_S = 0.5;
 /** 되감기 재생 중 라이브러리가 끝 쪽으로 이 배수 × TD 넘게 옮기면 한 번 되돌린다(5.3.1절 4번) */
 const LIBRARY_JUMP_TD = 2;
+/** 끝에서 이만큼 넘게 물러난 시크는 끝 도달 판정을 다시 연다(목록 끝 정체의 「끝 1초 안」과 같은 폭) */
+const END_REARM_MS = 1_000;
+/** 되돌린 뒤에도 라이브러리가 또 옮겼다 — 두고 알린다(5.3.1절 4번) */
+const LIBRARY_JUMP_NOTICE = '재생 위치가 목록 끝으로 옮겨졌어요. 다시 옮겨 주세요';
 
 /** 재생기가 로드한 목록 하나(세션의 observedEndMs · roundRewindUrls 재료) */
 export interface LoadedPlaylist extends LoadedList {
@@ -93,6 +97,8 @@ export interface PlaybackHooks {
   onPlaying?: () => void;
   onSeekRequest?: (targetMs: number, view: SeekView) => void;
   onLiveButton?: () => void;
+  /** 세션 알림(되감기 재생 중 라이브러리가 되돌린 자리를 또 옮김) */
+  onNotice?: (text: string) => void;
   /** 시크바 왼쪽 끝(되감기 범위 첫 시각). 라이브 재생기의 시크바가 라이브 창 밖까지 넓어진다 */
   axisLowerMs?: number | null;
 }
@@ -180,6 +186,14 @@ export function useHlsPlayback(
   const pausedHandledRef = useRef(false);
   /** 멈춘 채 갈아 끼운 재생기는 스스로 틀지 않는다 */
   const keepPausedRef = useRef(false);
+  /**
+   * 세션 모드인가 — 세션 고리가 있고 hls.js 재생기가 섰다. hls.js 가 없는 브라우저(네이티브 HLS)는 조각 목록 · 시각 축이 없어
+   * 세션 고리가 있어도 지금처럼 라이브 창 안에서 시크한다(seekable 축)
+   */
+  const sessionActive = useCallback(
+    () => hooksRef.current.onSeekRequest !== undefined && hlsRef.current !== null,
+    [],
+  );
   const { controlsVisible, wake, sleep } = useControlsAutoHide(playing);
 
   const hlsRef = useRef<Hls | null>(null);
@@ -242,7 +256,7 @@ export function useHlsPlayback(
     (behind: number) => {
       const video = videoRef.current;
       if (!video) return;
-      if (hooksRef.current.onSeekRequest) {
+      if (sessionActive()) {
         const axis = readAxis();
         if (axis !== null) requestSeek(axis.edgeMs - Math.max(0, behind) * 1000);
         return;
@@ -266,7 +280,7 @@ export function useHlsPlayback(
       }
       onSeek?.();
     },
-    [videoRef, onSeek, readAxis, requestSeek],
+    [videoRef, onSeek, readAxis, requestSeek, sessionActive],
   );
 
   const seekToFraction = useCallback(
@@ -278,7 +292,7 @@ export function useHlsPlayback(
     (deltaSeconds: number) => {
       const video = videoRef.current;
       if (!video) return;
-      if (hooksRef.current.onSeekRequest) {
+      if (sessionActive()) {
         const axis = readAxis();
         if (axis !== null) seekToBehind(axis.behindSeconds + deltaSeconds);
         return;
@@ -290,7 +304,7 @@ export function useHlsPlayback(
           deltaSeconds,
       );
     },
-    [videoRef, seekToBehind, readAxis],
+    [videoRef, seekToBehind, readAxis, sessionActive],
   );
 
   // 실제 시각으로 옮긴다(라이브 카드, POK-326). 그 시각을 품은 조각의 시각 표시로 영상 시각을 셈하고, 시크는 같은 한 길
@@ -300,7 +314,7 @@ export function useHlsPlayback(
     (epochMs: number): boolean => {
       const video = videoRef.current;
       if (!video) return false;
-      if (hooksRef.current.onSeekRequest) return requestSeek(epochMs);
+      if (sessionActive()) return requestSeek(epochMs);
       const range = dvrRange(video.seekable);
       const target = mediaTimeAt(hlsRef.current?.latestLevelDetails?.fragments ?? [], epochMs);
       if (!range || target === null) return false;
@@ -308,7 +322,7 @@ export function useHlsPlayback(
       seekToBehind(live - target);
       return true;
     },
-    [videoRef, seekToBehind, requestSeek],
+    [videoRef, seekToBehind, requestSeek, sessionActive],
   );
 
   /** 앱이 currentTime 을 쓰는 한 곳(세션 모드) — 라이브러리 시크와 가르려고 쓴 값을 적는다(5.3.1절 4번) */
@@ -411,10 +425,18 @@ export function useHlsPlayback(
     let waiting = false;
     let restoredJump = false;
     let stableTime: number | null = null;
+    let stableAtMs: number | null = null;
     const reachEnd = () => {
       if (endSent) return;
       endSent = true;
       hooksRef.current.onEndReached?.();
+    };
+    // 끝에서 물러난 시크는 끝 도달 판정을 다시 연다 — ENDLIST 목록에서 끝 → 뒤로 → 다시 끝이면 두 번째도 올린다(cx H1 · R55)
+    const rearmEnd = () => {
+      const details = hlsRef.current?.latestLevelDetails;
+      if (!endSent || !details || lastEndMs === null) return;
+      const atMs = programDateAt(details.fragments, video.currentTime);
+      if (atMs !== null && atMs < lastEndMs - END_REARM_MS) endSent = false;
     };
     let recoveredNetwork = false;
     let recoveredMedia = false;
@@ -443,7 +465,9 @@ export function useHlsPlayback(
       // 재개 판정은 멈춘 시각으로 한다: 멈춘 동안 라이브러리가 재생점을 옮겼을 수 있다(5.3.1절 2번)
       const pausedAtMs = pausedAtMsRef.current;
       pausedAtMsRef.current = null;
-      const axis = hooksRef.current.onSeekRequest ? readAxis() : null;
+      // 사용자가 다시 틀었다 — 멈춘 채 넘긴 것이 교체로 이어지지 않았어도 다음 재생기의 자동 재생을 막지 않는다
+      keepPausedRef.current = false;
+      const axis = sessionActive() ? readAxis() : null;
       if (pausedAtMs !== null && axis !== null && pausedAtMs < axis.view.lowerMs) {
         hooksRef.current.onSeekRequest?.(pausedAtMs, axis.view);
       }
@@ -459,7 +483,7 @@ export function useHlsPlayback(
     };
     const onPause = () => {
       setPlaying(false);
-      if (!hooksRef.current.onSeekRequest) return;
+      if (!sessionActive()) return;
       pausedAtMsRef.current = readAxis()?.atMs ?? null;
       pausedHandledRef.current = false;
     };
@@ -469,19 +493,26 @@ export function useHlsPlayback(
     // 라이브러리(또는 기본 컨트롤)의 시크를 앱의 시크와 가른다(5.3.1절 4번). 멈춘 동안은 멈춘 시각을 지키고, 되감기 재생 중
     // 끝 쪽으로 크게 튀었으면 한 번 되돌린다. 라이브 재생기에서 라이브 끝으로 옮긴 것은 지금 동작이다
     const onSeeking = () => {
-      if (!hooksRef.current.onSeekRequest) return;
+      rearmEnd();
+      if (!sessionActive()) return;
       const expected = expectedSeekToRef.current;
       if (expected !== null && Math.abs(video.currentTime - expected) < APP_SEEK_TOLERANCE_S) {
         expectedSeekToRef.current = null;
         return;
       }
-      if (video.paused || kind !== 'rewind' || restoredJump) return;
-      // 되돌릴 자리 = 튀기 전 마지막으로 그린 자리
-      const intended = stableTime;
+      if (video.paused || kind !== 'rewind') return;
       const td = hlsRef.current?.latestLevelDetails?.targetduration ?? 0;
-      if (intended === null || video.currentTime - intended <= LIBRARY_JUMP_TD * td) return;
+      if (stableTime === null || video.currentTime - stableTime <= LIBRARY_JUMP_TD * td) return;
+      if (restoredJump) {
+        hooksRef.current.onNotice?.(LIBRARY_JUMP_NOTICE);
+        return;
+      }
       restoredJump = true;
-      writeTime(video, intended);
+      // 튀기 전 자리를 세션에 다시 넘긴다 — 그새 창이 밀렸으면 세션이 새 하한으로 자르고 알린다(cx H2 · seekInList)
+      const axis = readAxis();
+      if (axis !== null && stableAtMs !== null) {
+        hooksRef.current.onSeekRequest?.(stableAtMs, axis.view);
+      }
     };
     const onVolumeChange = () => {
       setMuted(video.muted);
@@ -493,7 +524,10 @@ export function useHlsPlayback(
       if (axis === null) return;
       setWindowSeconds(axis.windowSeconds);
       setBehind(axis.behindSeconds);
-      if (!video.seeking) stableTime = video.currentTime;
+      if (!video.seeking) {
+        stableTime = video.currentTime;
+        stableAtMs = axis.atMs;
+      }
       const pausedAtMs = pausedAtMsRef.current;
       if (
         video.paused &&
@@ -528,7 +562,7 @@ export function useHlsPlayback(
     // 시차는 정수 초로 반올림돼 있어 같은 값이면 setState가 리렌더를 건너뛴다
     const paint = () => {
       checkStall();
-      if (hooksRef.current.onSeekRequest) {
+      if (sessionActive()) {
         paintSession();
         return;
       }
@@ -712,7 +746,7 @@ export function useHlsPlayback(
       video.removeAttribute('src');
       video.load();
     };
-  }, [videoRef, source.kind, src, source.generation, readAxis, writeTime]);
+  }, [videoRef, source.kind, src, source.generation, readAxis, sessionActive]);
 
   return {
     playing,
