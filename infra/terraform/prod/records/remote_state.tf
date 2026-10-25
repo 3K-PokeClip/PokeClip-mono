@@ -31,12 +31,21 @@ locals {
 # <이름>.<리전>.elb.amazonaws.com · NLB <이름>.elb.<리전>.amazonaws.com ·
 # CloudFront d<영숫자>.cloudfront.net. 내부 ALB 는 꼴이 같고 이름이
 # internal- 로 시작하므로 따로 거른다(RE2 정규식에는 부정 전방 탐색이 없다).
+# 그 거름도 can() 으로 감싼다 — && 의 단락 평가는 Terraform 1.12.0 부터라
+# (CHANGELOG 1.12.0 「Logical binary operators can now short-circuit」),
+# required_version(>= 1.11.0)의 1.11 에서는 빠진 출력이 precondition 대신
+# 평가 오류(Unsupported attribute)로 멈춘다.
+#
+# 한계: 이 검사는 꼴만 본다. 꼴이 맞는 다른 공개 ALB · NLB · 배포(다른 환경 ·
+# 다른 루트의 것)를 가리켜도 통과한다. 어느 상태를 읽는지는 var.state_keys
+# 가 정하고, 실제 대상은 README 「적용」 의 개통 뒤 관찰(기대 대상으로
+# 풀림)이 본다.
 resource "terraform_data" "remote_contract" {
   lifecycle {
     precondition {
       condition = (
         can(regex("^[A-Za-z0-9-]+\\.[a-z0-9-]+\\.elb\\.amazonaws\\.com$", local.platform.public_alb_dns_name)) &&
-        !startswith(local.platform.public_alb_dns_name, "internal-") &&
+        !can(regex("^internal-", local.platform.public_alb_dns_name)) &&
         can(regex("^Z[A-Z0-9]+$", local.platform.public_alb_zone_id))
       )
       error_message = "platform 출력 public_alb_dns_name · public_alb_zone_id 가 없거나 공개 ALB DNS 이름(<이름>.<리전>.elb.amazonaws.com — internal- 로 시작하지 않음) · 존 id(Z…) 꼴이 아니다."

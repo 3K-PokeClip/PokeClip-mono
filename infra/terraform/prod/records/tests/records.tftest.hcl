@@ -274,6 +274,25 @@ run "remote_contract_rejects_bad_alb_zone_id" {
   expect_failures = [terraform_data.remote_contract]
 }
 
+# 공개 ALB 이름이 빠져도 precondition 이 멈춰야 한다 — 평가 오류
+# (Unsupported attribute)로 새면 이 run 이 실패한다.
+run "remote_contract_rejects_missing_alb_dns_name" {
+  command = plan
+
+  override_data {
+    target = data.terraform_remote_state.platform
+    values = {
+      outputs = {
+        public_alb_zone_id = "Z0ALBEXAMPLE"
+        nlb_dns_name       = "pokeclip-prod-srt-0123456789abcdef.elb.ap-northeast-2.amazonaws.com"
+        nlb_zone_id        = "Z0NLBEXAMPLE"
+      }
+    }
+  }
+
+  expect_failures = [terraform_data.remote_contract]
+}
+
 # 내부 ALB 도 DNS 이름 꼴은 같고 이름 앞에 internal- 이 붙는다 — app · api 를
 # 내부 ALB 에 잇는 오연결이다.
 run "remote_contract_rejects_internal_alb_dns_name" {
