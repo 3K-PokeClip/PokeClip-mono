@@ -311,8 +311,8 @@ grep -c 'aws_ssm_parameter' "${evidence}/20-media-plan.txt"     # 0
 
 요지에는 상자(`aws_instance.this["<키>"]`) · 대상 등록(ingest 하나 · http
 셋) · Media SG 와 짝 규칙(RDS SG 의 인그레스 ← Media · LB SG 의 이그레스 →
-Media 포함) · 인스턴스 역할 · 프로필 · 정책이 나옵니다. kty 가 요지를
-보고(T3) 승인하면 적용합니다.
+Media · auth SG 의 인그레스 ← Media(POK-477) 포함) · 인스턴스 역할 ·
+프로필 · 정책이 나옵니다. kty 가 요지를 보고(T3) 승인하면 적용합니다.
 
 ```shell
 terraform -chdir="${media}" apply -input=false "${work}/media.plan"
