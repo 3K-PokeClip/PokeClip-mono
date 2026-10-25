@@ -283,6 +283,7 @@ type putCall struct {
 	key  string
 	size int64
 	body []byte
+	axis index.Axis
 }
 
 type fakePutter struct {
@@ -291,7 +292,7 @@ type fakePutter struct {
 	calls []putCall
 }
 
-func (p *fakePutter) Put(ctx context.Context, key string, body io.Reader, size int64) error {
+func (p *fakePutter) Put(ctx context.Context, key string, body io.Reader, size int64, axis index.Axis) error {
 	p.mu.Lock()
 	fn := p.fn
 	p.mu.Unlock()
@@ -302,7 +303,7 @@ func (p *fakePutter) Put(ctx context.Context, key string, body io.Reader, size i
 	n, _ := io.ReadFull(body, buf)
 
 	p.mu.Lock()
-	p.calls = append(p.calls, putCall{key: key, size: size, body: buf[:n]})
+	p.calls = append(p.calls, putCall{key: key, size: size, body: buf[:n], axis: axis})
 	p.mu.Unlock()
 
 	if fn != nil {

@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -20,6 +21,7 @@ import (
 	"github.com/aws/smithy-go"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/s3errbody"
 )
 
@@ -127,7 +129,7 @@ func TestPutterContract(t *testing.T) {
 	}
 
 	key := "streams/demo/2026-08-03/00/seg_000007.m4s"
-	if err := p.Put(context.Background(), key, bytes.NewReader(body), int64(len(body))); err != nil {
+	if err := p.Put(context.Background(), key, bytes.NewReader(body), int64(len(body)), index.AxisArchive); err != nil {
 		t.Fatalf("Put 실패: %v", err)
 	}
 
@@ -142,6 +144,88 @@ func TestPutterContract(t *testing.T) {
 	}
 	if !strings.Contains(seen.path, key) {
 		t.Errorf("요청 경로 %q 에 키 %q 가 없다", seen.path, key)
+	}
+}
+
+// headerServer 는 받은 요청의 머리를 모으는 TLS 흉내 S3 다(평문이면 SigV4 가 되감기 불가 본문을 거부한다 —
+// TestPutterContract). 200 으로 답한다.
+func headerServer(t *testing.T) (*httptest.Server, *[]http.Header) {
+	t.Helper()
+	var got []http.Header
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		got = append(got, r.Header.Clone())
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &got
+}
+
+func newTestS3Putter(t *testing.T, srv *httptest.Server) Putter {
+	t.Helper()
+	p, _, err := newS3Putter(t.Context(), S3Options{
+		Bucket: "pokeclip-test", Region: "ap-northeast-2",
+		Endpoint: srv.URL, ForcePathStyle: true,
+	}, newLogCapture().logger(), srv.Client())
+	if err != nil {
+		t.Fatalf("NewS3Putter 실패: %v", err)
+	}
+	return p
+}
+
+// Putter 계약 3 — 객체 머리는 축이 고른다(M5 설계 4.5 표 · D5). ③ 조각과 init 은 같은 키의 바이트가 바뀌지
+// 않으므로(R13) 1년 immutable 이고, init 은 MAP 이라 video/mp4 다. ② 원본은 CDN 에 나가지 않아 캐시 지시가 없다.
+// 잡는 결함: 축을 무시하고 한 머리를 쓰면 init 이 video/iso.segment 로 나가거나, ② 에 immutable 이 붙거나,
+// ③ · init 이 엣지 기본 1초로 남아 S3 GET 이 는다.
+func TestPutterSendsHeadersByAxis(t *testing.T) {
+	putterEnv(t)
+	cases := []struct {
+		axis             index.Axis
+		key              string
+		wantContentType  string
+		wantCacheControl []string // nil 이면 머리가 없어야 한다
+	}{
+		{index.AxisArchive, "streams/demo/2026-08-03/00/seg_000007.m4s", "video/iso.segment", nil},
+		{index.AxisPlayback, "dvr/demo/seg/000007.m4s", "video/iso.segment", []string{"public, max-age=31536000, immutable"}},
+		{index.AxisInit, "dvr/demo/init/S-1.mp4", "video/mp4", []string{"public, max-age=31536000, immutable"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.axis.String(), func(t *testing.T) {
+			srv, got := headerServer(t)
+			p := newTestS3Putter(t, srv)
+
+			if err := p.Put(t.Context(), tc.key, bytes.NewReader([]byte("x")), 1, tc.axis); err != nil {
+				t.Fatalf("Put 실패: %v", err)
+			}
+
+			if len(*got) != 1 {
+				t.Fatalf("흉내 서버가 받은 요청 %d건, want 1", len(*got))
+			}
+			h := (*got)[0]
+			if ct := h.Values("Content-Type"); len(ct) != 1 || ct[0] != tc.wantContentType {
+				t.Errorf("Content-Type = %q, want [%s]", ct, tc.wantContentType)
+			}
+			if cc := h.Values("Cache-Control"); !slices.Equal(cc, tc.wantCacheControl) {
+				t.Errorf("Cache-Control = %q, want %q", cc, tc.wantCacheControl)
+			}
+		})
+	}
+}
+
+// 표에 없는 축은 PUT 하지 않고 오류다(fail-closed — 설계 4.5 D5). 잡는 결함: 미판정 축이 ② 머리로 접혀
+// 올라가면 축이 틀린 객체가 조용히 생긴다.
+func TestPutterRejectsUnknownAxis(t *testing.T) {
+	putterEnv(t)
+	srv, got := headerServer(t)
+	p := newTestS3Putter(t, srv)
+
+	err := p.Put(t.Context(), "dvr/demo/seg/000007.m4s", bytes.NewReader([]byte("x")), 1, index.Axis(0))
+
+	if err == nil {
+		t.Error("Put err = nil, want 오류(표에 없는 축)")
+	}
+	if len(*got) != 0 {
+		t.Errorf("흉내 서버가 받은 요청 %d건, want 0", len(*got))
 	}
 }
 
@@ -167,7 +251,7 @@ func TestPutterRespectsContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- p.Put(ctx, "streams/demo/2026-08-03/00/seg_000007.m4s", bytes.NewReader([]byte("x")), 1)
+		done <- p.Put(ctx, "streams/demo/2026-08-03/00/seg_000007.m4s", bytes.NewReader([]byte("x")), 1, index.AxisArchive)
 	}()
 	time.Sleep(100 * time.Millisecond)
 	cancel()
@@ -251,7 +335,7 @@ func putOnce(t *testing.T, srv *httptest.Server) error {
 	if err != nil {
 		t.Fatalf("NewS3Putter 실패: %v", err)
 	}
-	return p.Put(t.Context(), "streams/demo/2026-08-03/00/seg_000007.m4s", bytes.NewReader([]byte("x")), 1)
+	return p.Put(t.Context(), "streams/demo/2026-08-03/00/seg_000007.m4s", bytes.NewReader([]byte("x")), 1, index.AxisArchive)
 }
 
 // D6 · D8 · D4 — 업로더 PUT 이 상한을 넘는 오류 본문(4MiB)을 받아도 본문을 상한까지만 읽고(ErrTooLarge), 브레이커 분류는 상태 코드로
@@ -335,7 +419,7 @@ func TestNewS3PutterCapsErrorBodyOnDefaultClient(t *testing.T) {
 		t.Fatalf("NewS3Putter 실패: %v", err)
 	}
 
-	err = p.Put(t.Context(), "streams/demo/2026-08-03/00/seg_000007.m4s", bytes.NewReader([]byte("x")), 1)
+	err = p.Put(t.Context(), "streams/demo/2026-08-03/00/seg_000007.m4s", bytes.NewReader([]byte("x")), 1, index.AxisArchive)
 
 	if !errors.Is(err, s3errbody.ErrTooLarge) {
 		t.Errorf("Put err = %v, want ErrTooLarge", err)

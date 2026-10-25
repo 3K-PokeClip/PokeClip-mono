@@ -13,14 +13,42 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/smithy-go"
 
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/s3errbody"
 )
 
-// segmentContentType 은 세그먼트 객체의 Content-Type 이다.
+// 객체 머리 값이다(M5 설계 4.5 표). 호출자가 매번 넘기지 않는다 — 축이 고르는 계약이지 인자가 아니다(Putter
+// 계약 3번).
 //
-// 호출자가 매번 넘기지 않는다 — 이것은 계약이지 인자가 아니다(Putter 계약 3번).
-// fMP4 세그먼트의 표준 타입이며, CloudFront·플레이어 경로에서의 적합성은 POK-28 이월(M4)이다.
-const segmentContentType = "video/iso.segment"
+//   - segmentContentType 은 fMP4 조각(② 원본 · ③ 조각)의 표준 타입이다.
+//   - initContentType 은 init(MAP — ftyp+moov)의 타입이다. init 은 조각이 아니라 MP4 파일이다.
+//   - immutableCacheControl 은 ③ 조각 · init 의 캐시 지시다. 같은 키의 바이트가 바뀌지 않는다(재추출 결정성 —
+//     설계 10절 R13 · reextract_test.go). 엣지는 자기 상한(1일)으로 자르고 브라우저는 1년을 지킨다.
+const (
+	segmentContentType    = "video/iso.segment"
+	initContentType       = "video/mp4"
+	immutableCacheControl = "public, max-age=31536000, immutable"
+)
+
+// objectHeaders 는 한 객체의 PUT 머리다. cacheControl 이 비면 머리를 싣지 않는다.
+type objectHeaders struct {
+	contentType, cacheControl string
+}
+
+// headersFor 는 축별 머리 표다. ② 원본은 CDN 에 나가지 않아 캐시 지시가 없다. 표에 없는 축(미판정 영값 포함)은
+// 오류다 — ② 머리로 접어 올리면 축이 틀린 객체가 조용히 생긴다.
+func headersFor(axis index.Axis) (objectHeaders, error) {
+	switch axis {
+	case index.AxisArchive:
+		return objectHeaders{contentType: segmentContentType}, nil
+	case index.AxisPlayback:
+		return objectHeaders{contentType: segmentContentType, cacheControl: immutableCacheControl}, nil
+	case index.AxisInit:
+		return objectHeaders{contentType: initContentType, cacheControl: immutableCacheControl}, nil
+	default:
+		return objectHeaders{}, fmt.Errorf("객체 머리 표에 없는 축(%v)이다", axis)
+	}
+}
 
 // S3Options 는 PUT 대상을 특정하는 설정이다. 자격증명은 여기 없다 —
 // 코드가 자격증명을 직접 읽지 않는 것이 G14 이며, SDK 의 기본 체인이 env·프로필에서 찾는다.
@@ -90,18 +118,26 @@ func newS3Putter(ctx context.Context, opt S3Options, log *slog.Logger, httpClien
 	return &s3Putter{client: client, bucket: opt.Bucket}, true, nil
 }
 
-// Put 은 계약 셋을 그대로 지킨다: ctx 준수 / 처음부터 정확히 size 바이트 / Content-Type 고정.
+// Put 은 계약 셋을 그대로 지킨다: ctx 준수 / 처음부터 정확히 size 바이트 / 축별 머리 고정.
 //
 // body 를 감싸지 않고 그대로 넘기되 ContentLength 를 명시한다 — SDK 가 길이를 모르면
 // 되감기를 시도하거나 청크 인코딩으로 보내는데, 둘 다 계약 2번 위반이다.
-func (p *s3Putter) Put(ctx context.Context, key string, body io.Reader, size int64) error {
-	_, err := p.client.PutObject(ctx, &s3.PutObjectInput{
+func (p *s3Putter) Put(ctx context.Context, key string, body io.Reader, size int64, axis index.Axis) error {
+	h, err := headersFor(axis)
+	if err != nil {
+		return fmt.Errorf("PUT 거부 key=%q: %w", key, err)
+	}
+	in := &s3.PutObjectInput{
 		Bucket:        aws.String(p.bucket),
 		Key:           aws.String(key),
 		Body:          io.LimitReader(body, size),
 		ContentLength: aws.Int64(size),
-		ContentType:   aws.String(segmentContentType),
-	})
+		ContentType:   aws.String(h.contentType),
+	}
+	if h.cacheControl != "" {
+		in.CacheControl = aws.String(h.cacheControl)
+	}
+	_, err = p.client.PutObject(ctx, in)
 	if err != nil {
 		return fmt.Errorf("PUT 실패 key=%q: %w", key, err)
 	}
