@@ -143,6 +143,11 @@ var sentinels = []error{ErrPreconditionFailed, ErrNotFound, ErrConflict}
 // 조건부 PUT 의 요청 모양 — 조건 헤더는 정확히 하나이고(첫 판 If-None-Match: * · 갱신 If-Match: <ETag>),
 // 메타는 x-amz-meta-* 로 같은 요청에 실리며(설계 4.4.2 원자성), 본문은 그대로 간다(aws-chunked 로 감싸지
 // 않는다). 응답의 ETag 를 그대로 돌려준다.
+//
+// 목록 객체 머리(M5 설계 4.5 표 · R12)도 같은 요청에 실린다 — Content-Type 은 HLS 목록 타입, Cache-Control 은
+// 엣지 · 브라우저가 1초만 들고 있게 한다. 잡는 결함: 머리를 더하다 조건 · 메타가 빠지거나(다른 요청 입력에
+// 실음) 머리가 빠져 S3 기본값(application/octet-stream · 캐시 지시 없음)이 시청자에게 간다. 메타는 발행이 실제로
+// 싣는 여덟 키 그대로다(encodeMeta).
 func TestS3StorePutSendsConditionAndMeta(t *testing.T) {
 	cases := []struct {
 		name            string
@@ -156,7 +161,7 @@ func TestS3StorePutSendsConditionAndMeta(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			store, stub := newStubbedStore(t, respondObject(`"new-etag"`, nil, nil))
-			meta := map[string]string{"pc-gen": "7", "pc-session": "sess-1"}
+			meta := encodeMeta(rewind.Published{Gen: 7, MediaSequence: 10, PublishedSeq: 12, SegmentCount: 3}, "sess-1")
 
 			etag, err := store.Put(context.Background(), testKey, tc.cond, bodyA, meta)
 			if err != nil {
@@ -176,9 +181,21 @@ func TestS3StorePutSendsConditionAndMeta(t *testing.T) {
 			if got := req.header.Values("If-None-Match"); !slices.Equal(got, tc.wantIfNoneMatch) {
 				t.Errorf("If-None-Match = %q, want %q", got, tc.wantIfNoneMatch)
 			}
-			wantMeta := map[string]string{"X-Amz-Meta-Pc-Gen": "7", "X-Amz-Meta-Pc-Session": "sess-1"}
+			wantMeta := map[string]string{}
+			for k, v := range meta {
+				wantMeta[http.CanonicalHeaderKey("x-amz-meta-"+k)] = v
+			}
+			if len(wantMeta) != 8 {
+				t.Fatalf("발행 메타 키 = %d개, want 8 — 시험 전제가 깨졌다", len(wantMeta))
+			}
 			if got := metaHeaders(req.header); !maps.Equal(got, wantMeta) {
 				t.Errorf("메타 헤더 = %v, want %v", got, wantMeta)
+			}
+			if got := req.header.Values("Content-Type"); !slices.Equal(got, []string{"application/vnd.apple.mpegurl"}) {
+				t.Errorf("Content-Type = %q, want [application/vnd.apple.mpegurl](HLS 목록)", got)
+			}
+			if got := req.header.Values("Cache-Control"); !slices.Equal(got, []string{"public, max-age=1"}) {
+				t.Errorf("Cache-Control = %q, want [public, max-age=1]", got)
 			}
 			if !bytes.Equal(req.body, bodyA) {
 				t.Errorf("요청 본문 = %q, want %q(그대로)", req.body, bodyA)
