@@ -64,11 +64,12 @@ module "waf" {
   # ALB 로 간다(prod/records · platform 의 protected_query_args).
   #
   # referer 는 platform 만 가린다(kty 2026-10-25). ?code= 가 든 전체 주소가
-  # Referer 에 실리는 것은 콜백 화면이 같은 출처(app)로 보내는 요청뿐이다. app
-  # 은 CloudFront 를 지나지 않고(prod/records — app 은 공개 ALB), app 화면이
-  # media · apex 로 보내는 요청은 다른 출처라 브라우저 기본 정책(Referrer-Policy
-  # 없음 → strict-origin-when-cross-origin)이 출처(https://app.<도메인>/)만
-  # 싣는다.
+  # Referer 에 실릴 수 있는 것은 콜백 화면이 같은 출처(app)로 보내는 요청뿐이다
+  # (web 이 콜백 화면에 no-referrer 를 명시해 정상 경로로는 그마저 없다 —
+  # POK-482). app 은 CloudFront 를 지나지 않고(prod/records — app 은 공개
+  # ALB), app 화면이 media · apex 로 보내는 요청은 다른 출처라 web 이 명시한
+  # 전역 정책 strict-origin-when-cross-origin(브라우저 기본값과 같다)이
+  # 출처(https://app.<도메인>/)만 싣는다.
   protected_headers = [
     "authorization",
     "cookie",
