@@ -74,6 +74,11 @@ export interface PlaybackSessionState {
   endingSince: number | null;
   /** 스트림 경로의 마지막 되감기 진입 재료(mode:live ∧ ready). ready 깜박임에도 지우지 않는다(W3 · R5) */
   entry: RewindRange | null;
+  /**
+   * 최신 스트림 폴링이 되감기 진입을 열었나(mode:live ∧ ready). 진입 재료(entry)는 ready 깜박임에도 남기지만(W3 · R5), 창 밖 시크
+   * 허용 · 시크바 넓힘 같은 되감기 노출은 이 값으로만 한다 — 「ready:false 동안 되감기 UI 를 노출하지 않는다」(계약3 7-2)
+   */
+  rewindOpen: boolean;
   /** 지금 소스 목록의 마지막 조각 끝(E) */
   listEndMs: number | null;
   /** 창 하한 여유(3 × TD) */
@@ -163,6 +168,7 @@ export function openSession(init: {
     roundRewindUrls: new Set(),
     endingSince: null,
     entry: null,
+    rewindOpen: false,
     listEndMs: null,
     edgeMarginMs: DEFAULT_EDGE_MARGIN_MS,
     offer: null,
@@ -172,6 +178,11 @@ export function openSession(init: {
     rosterEnded: false,
     closed: null,
   };
+}
+
+/** 시크바 왼쪽 끝(되감기 범위 첫 시각). 최신 폴링이 되감기를 열었을 때만 — 닫혀 있으면 라이브 창만 보인다(계약3 7-2) */
+export function rewindAxisLowerMs(s: PlaybackSessionState): number | null {
+  return s.rewindOpen && s.entry !== null ? s.entry.firstPdtMs : null;
 }
 
 /** 켤 폴링 경로(설계 5.1절 표) */
@@ -244,10 +255,11 @@ function enterEnding(s: PlaybackSessionState, atEnd: boolean, now: number): Tran
 // ── 시크 ──
 
 function seekLive(s: PlaybackSessionState, t: number, view: SeekView): Transition {
-  if (t >= view.lowerMs)
+  if (t >= view.lowerMs) {
     return { state: s, effects: [{ kind: 'seek-within', atMs: Math.min(t, view.endMs) }] };
-  const entry = s.entry;
-  if (entry === null)
+  }
+  const entry = s.rewindOpen ? s.entry : null;
+  if (entry === null) {
     return {
       state: s,
       effects: [
@@ -255,6 +267,7 @@ function seekLive(s: PlaybackSessionState, t: number, view: SeekView): Transitio
         { kind: 'notice', text: SESSION_NOTICES.oldest },
       ],
     };
+  }
   let start = t;
   const effects: SessionEffect[] = [];
   if (t < entry.firstPdtMs) {
@@ -279,7 +292,7 @@ function seekLive(s: PlaybackSessionState, t: number, view: SeekView): Transitio
 
 /** 로드한 목록 안 시크(되감기 · vod) — 하한 앞은 하한으로 알림, 끝 뒤는 끝으로 */
 function seekInList(s: PlaybackSessionState, t: number, view: SeekView): Transition {
-  if (t < view.lowerMs)
+  if (t < view.lowerMs) {
     return {
       state: s,
       effects: [
@@ -287,6 +300,7 @@ function seekInList(s: PlaybackSessionState, t: number, view: SeekView): Transit
         { kind: 'notice', text: SESSION_NOTICES.oldest },
       ],
     };
+  }
   return { state: s, effects: [{ kind: 'seek-within', atMs: Math.min(t, view.endMs) }] };
 }
 
@@ -295,11 +309,12 @@ function seekInList(s: PlaybackSessionState, t: number, view: SeekView): Transit
 /** rewind · 끝남 대기(atEnd:false) · vod-offered(atEnd:false) 의 LIVE — X 로 가른다(R58) */
 function liveFromAway(s: PlaybackSessionState, x: XAnswer, attempt: number): Transition {
   if (x.kind === 'known' && x.id !== '' && x.id !== s.roundId) return close(s, 'left', x.id);
-  if (x.kind === 'unknown' && attempt < X_RECHECK_LIMIT)
+  if (x.kind === 'unknown' && attempt < X_RECHECK_LIMIT) {
     return {
       state: { ...s, liveChecking: true },
       effects: [{ kind: 'recheck-x', attempt: attempt + 1 }],
     };
+  }
   return {
     state: {
       ...s,
@@ -349,14 +364,20 @@ function onLiveStreamPoll(
   x: XAnswer | undefined,
 ): Transition {
   if (s.foreignLive !== null) return none(s);
-  if (s.boundLive && x?.kind === 'known' && x.id !== '' && x.id !== s.roundId)
-    return none({ ...s, foreignLive: x.id });
+  if (s.boundLive) {
+    // 세션에 묶인 live 는 지금 방송 번호를 모르면 이번 폴링을 건너뛴다 — 같은 키의 새 방송 B 를 A 세션 재료로 받지 않게(R58)
+    if (x?.kind !== 'known') return none(s);
+    if (x.id !== '' && x.id !== s.roundId) return none({ ...s, foreignLive: x.id });
+  }
+  // 잠시 불가는 직전 상태를 둔다. 그 밖의 답은 되감기 노출을 정한다(진입 재료는 남긴다)
+  if (result.kind === 'unavailable') return none(s);
   const live = readyLive(result);
-  if (live === null) return none(s);
+  if (live === null) return s.rewindOpen ? none({ ...s, rewindOpen: false }) : none(s);
   return none({
     ...s,
     entry: { url: live.url, firstPdtMs: live.firstPdtMs, headPdtMs: live.headPdtMs },
     roundRewindUrls: withUrl(s.roundRewindUrls, live.url),
+    rewindOpen: true,
   });
 }
 
@@ -379,13 +400,14 @@ function onRewind(
         : enterEnding(s, false, now);
     case 'end-reached': {
       const next = phase.pendingNext;
-      if (next !== null && within(s.listEndMs, next.firstPdtMs, next.headPdtMs))
+      if (next !== null && within(s.listEndMs, next.firstPdtMs, next.headPdtMs)) {
         return none({
           ...s,
           phase: { kind: 'rewind', pendingNext: null },
           source: replace(s, 'rewind', next.url, s.listEndMs),
           roundRewindUrls: withUrl(s.roundRewindUrls, next.url),
         });
+      }
       return enterEnding(s, true, now);
     }
     case 'roster-ended':
@@ -399,16 +421,24 @@ function onRewindStreamPoll(s: PlaybackSessionState, result: RewindStatusResult)
   const live = readyLive(result);
   if (live === null) return none(s);
   const range = { url: live.url, firstPdtMs: live.firstPdtMs, headPdtMs: live.headPdtMs };
-  if (live.url === s.source.url)
-    return none({ ...s, entry: range, observedEndMs: maxOrSelf(s.observedEndMs, live.headPdtMs) });
-  if (within(s.lastAtMs, live.firstPdtMs, live.headPdtMs))
+  if (live.url === s.source.url) {
     return none({
       ...s,
       entry: range,
+      rewindOpen: true,
+      observedEndMs: maxOrSelf(s.observedEndMs, live.headPdtMs),
+    });
+  }
+  if (within(s.lastAtMs, live.firstPdtMs, live.headPdtMs)) {
+    return none({
+      ...s,
+      entry: range,
+      rewindOpen: true,
       phase: { kind: 'rewind', pendingNext: null },
       source: replace(s, 'rewind', live.url, s.lastAtMs),
       roundRewindUrls: withUrl(s.roundRewindUrls, live.url),
     });
+  }
   return none({ ...s, phase: { kind: 'rewind', pendingNext: range } });
 }
 
@@ -470,12 +500,13 @@ function onEndingStreamPoll(
       rosterEnded: false,
       entry: { url: live.url, firstPdtMs: live.firstPdtMs, headPdtMs: live.headPdtMs },
     };
-    if (phase.origin === 'rewind')
+    if (phase.origin === 'rewind') {
       return none({
         ...resumed,
         phase: { kind: 'rewind', pendingNext: null },
         source: replace(s, 'rewind', live.url, join),
       });
+    }
     return none({
       ...resumed,
       phase: { kind: 'live' },
@@ -530,8 +561,9 @@ function roundFinal(s: PlaybackSessionState, phase: EndingPhase): Transition {
 function onEndingButton(s: PlaybackSessionState, which: SessionButton): Transition {
   if (which === 'record') return close(s, 'recorded');
   if (which === 'go-live' && s.offer?.kind === 'go-live') return close(s, 'go-live');
-  if (which === 'new-broadcast' && s.offer?.kind === 'new-broadcast')
+  if (which === 'new-broadcast' && s.offer?.kind === 'new-broadcast') {
     return close(s, 'left', s.offer.goTo);
+  }
   return none(s);
 }
 
@@ -577,7 +609,10 @@ function onVodOffered(
         ? seekLive(s, e.targetMs, e.view)
         : seekInList(s, e.targetMs, e.view);
     case 'live-button':
-      return phase.atEnd ? none(s) : liveFromAway(s, e.x, e.attempt);
+      if (phase.atEnd) return none(s);
+      // live 기원은 live 표의 LIVE 행 — 라이브 끝으로 시크 · 국면 그대로(종결 정정 live 표 · VOD 제안을 잃지 않는다)
+      if (origin === 'live') return { state: s, effects: [{ kind: 'seek-live-edge' }] };
+      return liveFromAway(s, e.x, e.attempt);
     default:
       return none(s);
   }
@@ -585,8 +620,9 @@ function onVodOffered(
 
 /** 「다시보기 보기」 — 끝에 닿았으면 처음부터, 아니면 지금 자리에서(하한이 이긴다 — 짧은 VOD 는 첫 조각 · R47) */
 function openVod(s: PlaybackSessionState, phase: OfferedPhase): Transition {
-  if (phase.atEnd || s.lastAtMs === null)
+  if (phase.atEnd || s.lastAtMs === null) {
     return none({ ...s, phase: { kind: 'vod' }, source: replace(s, 'vod', phase.url, null) });
+  }
   const start = Math.max(phase.firstPdtMs, Math.min(s.lastAtMs, phase.headPdtMs - s.edgeMarginMs));
   const effects: SessionEffect[] =
     start === s.lastAtMs ? [] : [{ kind: 'notice', text: SESSION_NOTICES.vodStart }];
@@ -706,7 +742,7 @@ export function sessionView(s: PlaybackSessionState, now: number): SessionView {
       recordEmphasis: s.rosterEnded,
     };
   }
-  if (phase.kind === 'vod-offered')
+  if (phase.kind === 'vod-offered') {
     return {
       ...base,
       cover: phase.atEnd ? 'vod-ready' : null,
@@ -714,6 +750,7 @@ export function sessionView(s: PlaybackSessionState, now: number): SessionView {
       seekHidden: phase.atEnd && s.source.kind === 'live',
       vodReady: !phase.atEnd,
     };
+  }
   if (phase.kind === 'vod') return { ...base, liveHidden: true };
   return base;
 }

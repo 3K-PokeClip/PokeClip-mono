@@ -2,7 +2,12 @@ import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RewindStatusResult } from '@/api/rewindStatus';
 import { jsonResponse } from '@/test/mockFetch';
-import { REWIND_POLL_MS, REWIND_RETRY_MS, useRewindStatus } from './useRewindStatus';
+import {
+  REWIND_POLL_MS,
+  REWIND_REQUEST_TIMEOUT_MS,
+  REWIND_RETRY_MS,
+  useRewindStatus,
+} from './useRewindStatus';
 
 const BASE = 'https://media.pokeclip.com';
 const STREAM = `${BASE}/api/streams/key-1/rewind`;
@@ -190,5 +195,56 @@ describe('useRewindStatus — 경로 하나를 10초로 폴링한다(설계 5.1�
     expect(urlsOf(results)).toEqual(['unavailable']);
     await act(async () => vi.advanceTimersByTime(REWIND_POLL_MS));
     expect(spy).toHaveBeenCalledTimes(2);
+  });
+
+  it('답이 끝나지 않는 요청은 시한에 끊고 10초 주기를 지킨다 — 30초 동안 세 번 이상 묻는다(cx H1)', async () => {
+    const spy = stubControllableFetch();
+    renderHook(() => useRewindStatus(STREAM, BASE, onResult));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(spy.mock.calls.length).toBeGreaterThanOrEqual(3);
+    // 시한에 끊긴 요청은 「잠시 불가」로 올린다
+    expect(urlsOf(results)).toContain('unavailable');
+    expect(pending[0]!.signal?.aborted).toBe(true);
+  });
+
+  it('시한 안에 온 답은 그대로 받는다', async () => {
+    stubControllableFetch();
+    renderHook(() => useRewindStatus(STREAM, BASE, onResult));
+    await act(async () => vi.advanceTimersByTime(REWIND_REQUEST_TIMEOUT_MS - 1));
+    pending[0]!.answer(body(URL_A));
+    await flush();
+    expect(urlsOf(results)).toEqual([URL_A]);
+  });
+
+  it('받는 쪽이 던져도 폴링은 이어진다(cc L1)', async () => {
+    const spy = stubControllableFetch();
+    renderHook(() =>
+      useRewindStatus(STREAM, BASE, () => {
+        throw new Error('받는 쪽 오류');
+      }),
+    );
+    pending[0]!.answer(body(URL_A));
+    await flush();
+    await act(async () => vi.advanceTimersByTime(REWIND_POLL_MS));
+    expect(spy).toHaveBeenCalledTimes(2);
+  });
+
+  it('숨김 복귀 재조회가 진행 중인 2초 × 3 재조회를 지우지 않는다(cc L1)', async () => {
+    const spy = stubControllableFetch();
+    const { result } = renderHook(() => useRewindStatus(STREAM, BASE, onResult));
+    pending[0]!.answer(body(URL_A));
+    await flush();
+    act(() => result.current.refresh(URL_A));
+    pending[1]!.answer(body(URL_A));
+    await flush();
+    // 숨김 복귀 — 곧바로 묻되 같은 url 재조회는 이어 간다
+    act(() => document.dispatchEvent(new Event('visibilitychange')));
+    expect(spy).toHaveBeenCalledTimes(3);
+    pending[2]!.answer(body(URL_A));
+    await flush();
+    await act(async () => vi.advanceTimersByTime(REWIND_RETRY_MS));
+    expect(spy).toHaveBeenCalledTimes(4);
   });
 });

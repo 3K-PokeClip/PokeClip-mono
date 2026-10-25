@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, type RefObject } from 'react';
+import { rewindAxisLowerMs } from './rewindSwitch';
 import type { PlaybackSession } from './usePlaybackSession';
 import { useHlsPlayback, type LivePosition, type PlaybackHooks } from './useHlsPlayback';
 import type { PlayerSimulation, PlayerSimulationOptions } from './usePlayerSimulation';
@@ -22,7 +23,8 @@ export function useLiveRewindPlayback(
   broadcastId?: string,
 ): PlayerSimulation & { livePosition: LivePosition | null } {
   const { state, dispatch, liveButton, bindPlayer } = session;
-  const axisLowerMs = state.entry?.firstPdtMs ?? null;
+  // 되감기 노출은 최신 폴링의 ready 로만 — 재료(entry)가 남아도 ready:false 면 시크바를 넓히지 않는다(계약3 7-2)
+  const axisLowerMs = rewindAxisLowerMs(state);
   const hooks = useMemo<PlaybackHooks>(
     () => ({
       onEndlist: () => dispatch({ type: 'endlist' }),
