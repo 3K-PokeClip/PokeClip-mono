@@ -273,8 +273,38 @@ describe('「이용 분석 참여」 — 이 브라우저에만 저장한다(처
     const otherTab = new RealBroadcastChannel('pc-analytics-preference');
     otherTab.onmessage = (event) => heard.push(event.data);
     client.setAnalyticsOptOut(true);
-    await vi.waitFor(() => expect(heard).toEqual([{ optOut: true, from: expect.any(String) }]));
+    await vi.waitFor(() => expect(heard).toEqual([{ changed: true, from: expect.any(String) }]));
     otherTab.close();
+  });
+
+  it.each([
+    ['끔(0)', 0, 'opt_out'],
+    ['켬(1)', 1, 'opt_in'],
+  ] as const)(
+    '다른 탭의 알림을 받으면 쿠키(%s)를 읽어 건다 — 쪽지 값을 믿지 않는다 (PR #382 3차 리뷰)',
+    async (_, stored, applied) => {
+      const client = await ready();
+      storeConsent(stored);
+      client.syncAnalyticsOptOutFromStorage();
+      expect(posthog.opt_out_capturing).toHaveBeenCalledTimes(applied === 'opt_out' ? 1 : 0);
+      expect(posthog.opt_in_capturing).toHaveBeenCalledTimes(applied === 'opt_in' ? 1 : 0);
+    },
+  );
+
+  it('두 탭이 거의 동시에 바꿔 쪽지가 늦게 와도 마지막 선택(쿠키)을 건다 (PR #382 3차 리뷰)', async () => {
+    const client = await ready();
+    // 탭 A가 켜고(쿠키 1) 곧 탭 B가 껐다(쿠키 0) — A의 「켬」 쪽지가 B에 늦게 닿는다
+    storeConsent(0);
+    client.syncAnalyticsOptOutFromStorage();
+    expect(posthog.opt_in_capturing).not.toHaveBeenCalled();
+    expect(posthog.opt_out_capturing).toHaveBeenCalledTimes(1);
+  });
+
+  it('고른 적 없는 브라우저(쿠키 없음)는 알림을 받아도 건드리지 않는다 — 동의 쿠키를 새로 만들지 않는다', async () => {
+    const client = await ready();
+    client.syncAnalyticsOptOutFromStorage();
+    expect(posthog.opt_in_capturing).not.toHaveBeenCalled();
+    expect(posthog.opt_out_capturing).not.toHaveBeenCalled();
   });
 
   it('선택의 기억은 .pokeclip.com 쿠키에 둔다 — 같은 브라우저의 랜딩도 따른다', async () => {

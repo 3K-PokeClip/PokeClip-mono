@@ -591,10 +591,11 @@ describe('AccountSettingsScreen — 이용 분석 참여(처리방침 7·9절, �
   it('다른 탭에서 바꾸면 이 탭의 스위치도 따라간다', async () => {
     await renderScreen();
     await waitFor(() => expect(analyticsSwitch()).toBeEnabled());
+    readAnalyticsChoice.mockResolvedValue('opted_out'); // 다른 탭이 끈 뒤의 쿠키 — 쪽지에는 값이 없다
 
     const otherTab = new BroadcastChannel('pc-analytics-preference');
     await act(async () => {
-      otherTab.postMessage({ optOut: true, from: 'other-tab' });
+      otherTab.postMessage({ changed: true, from: 'other-tab' });
       await new Promise((resolve) => setTimeout(resolve, 20)); // 배달을 act 안에서 기다린다
     });
     otherTab.close();

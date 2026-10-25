@@ -3,7 +3,11 @@
 import { useEffect, type ReactNode } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { useMe } from '@/features/auth/useSession';
-import { applyAnalyticsOptOut, identifyUser, subscribeAnalyticsPreference } from '@/lib/analytics';
+import {
+  identifyUser,
+  subscribeAnalyticsPreference,
+  syncAnalyticsOptOutFromStorage,
+} from '@/lib/analytics';
 import { useAuthHydration, useAuthStore } from '@/stores/auth';
 
 // 보호 라우트 가드 (POK-101) — 독 4개 라우트를 (dock)/layout.tsx에서 한 번에 덮는다.
@@ -60,8 +64,9 @@ export function AuthGuard({ children }: { children: ReactNode }) {
   }, [userId]);
 
   // 같은 브라우저의 다른 탭이 「이용 분석 참여」를 바꾸면 이 탭의 SDK에도 건다 — 쿠키는 같이 읽지만 전송 대기열·녹화·식별은
-  // 탭마다라, 다시 켠 것을 걸지 않으면 이 탭은 새로고침 전까지 안 보낸다(PR #382 리뷰)
-  useEffect(() => subscribeAnalyticsPreference(({ optOut }) => applyAnalyticsOptOut(optOut)), []);
+  // 탭마다라, 다시 켠 것을 걸지 않으면 이 탭은 새로고침 전까지 안 보낸다(PR #382 리뷰). 값은 쪽지가 아니라 쿠키에서 읽는다
+  // (늦게 온 쪽지가 마지막 선택을 덮지 않게, PR #382 3차 리뷰)
+  useEffect(() => subscribeAnalyticsPreference(syncAnalyticsOptOutFromStorage), []);
 
   useEffect(() => {
     if (!hydrated || refreshToken !== null) return;

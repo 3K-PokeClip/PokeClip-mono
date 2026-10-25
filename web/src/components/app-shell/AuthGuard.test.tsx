@@ -5,10 +5,10 @@ import { useAuthStore } from '@/stores/auth';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
 import { renderWithProviders } from '@/test/testProviders';
 
-const { replace, identifyUser, applyAnalyticsOptOut } = vi.hoisted(() => ({
+const { replace, identifyUser, syncAnalyticsOptOutFromStorage } = vi.hoisted(() => ({
   replace: vi.fn(),
   identifyUser: vi.fn(),
-  applyAnalyticsOptOut: vi.fn(),
+  syncAnalyticsOptOutFromStorage: vi.fn(),
 }));
 
 vi.mock('next/navigation', () => ({
@@ -18,7 +18,7 @@ vi.mock('next/navigation', () => ({
 vi.mock('@/lib/analytics', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/analytics')>()),
   identifyUser,
-  applyAnalyticsOptOut,
+  syncAnalyticsOptOutFromStorage,
 }));
 
 const ME = { id: 1, email: 'raccoon@example.com', name: '게임하는너구리', profileImageUrl: '' };
@@ -28,7 +28,7 @@ beforeEach(() => {
   window.sessionStorage.clear();
   replace.mockReset();
   identifyUser.mockReset();
-  applyAnalyticsOptOut.mockReset();
+  syncAnalyticsOptOutFromStorage.mockReset();
   useAuthStore.setState({ accessToken: null, refreshToken: null, hydrated: false });
 });
 
@@ -107,11 +107,12 @@ describe('AuthGuard', () => {
     await waitFor(() => expect(identifyUser).toHaveBeenCalledWith(1));
 
     const otherTab = new BroadcastChannel('pc-analytics-preference');
-    otherTab.postMessage({ optOut: true, from: 'other-tab' });
-    otherTab.postMessage({ optOut: false, from: 'other-tab' });
+    otherTab.postMessage({ changed: true, from: 'other-tab' });
+    otherTab.postMessage({ changed: true, from: 'other-tab' });
     otherTab.close();
 
-    await waitFor(() => expect(applyAnalyticsOptOut.mock.calls).toEqual([[true], [false]]));
+    // 쪽지의 값이 아니라 쿠키를 다시 읽어 건다 — 늦게 온 쪽지가 마지막 선택을 덮지 않게(PR #382 3차 리뷰)
+    await waitFor(() => expect(syncAnalyticsOptOutFromStorage).toHaveBeenCalledTimes(2));
   });
 
   it('refresh까지 401이면(만료·도난 감지) 세션을 접고 /login으로 보낸다', async () => {

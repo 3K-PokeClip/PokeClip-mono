@@ -147,25 +147,29 @@ export function whenAnalyticsLoaded(): Promise<void> {
 /** 지금 로그인한 회원 번호 — 꺼 둔 브라우저에서 다시 켜면 그때 식별한다 */
 let signedInUserId: string | null = null;
 
-/** SDK가 「끔」으로 읽는 값(@posthog/core `isNoLike`) */
+/** SDK가 「끔」·「켬」으로 읽는 값(@posthog/core `isNoLike`·`isYesLike`) */
 const NO_LIKE: unknown[] = [false, 'false', 0, '0', 'no'];
+const YES_LIKE: unknown[] = [true, 'true', 1, '1', 'yes'];
 
 /**
- * 이 브라우저에 「끔」이 저장돼 있나 — SDK 동의 쿠키(`__ph_opt_in_out_<키>`, 값은 `encodeURIComponent(JSON.stringify(값))`)만
- * 본다. SDK의 동의 상태(`get_explicit_consent_status`)는 추적 금지가 켜져 있으면 저장값과 상관없이 denied라, 그것으로 판정하면
- * 스위치를 만진 적 없는 브라우저에 끔 쿠키를 새로 써서 추적 금지를 꺼도 꺼진 채로 남았다(PR #382 2차 리뷰)
+ * 이 브라우저에 저장된 선택 — 끔이면 true, 켬이면 false, 고른 적 없으면 null. SDK 동의 쿠키(`__ph_opt_in_out_<키>`, 값은
+ * `encodeURIComponent(JSON.stringify(값))`)만 본다. SDK의 동의 상태(`get_explicit_consent_status`)는 추적 금지가 켜져 있으면
+ * 저장값과 상관없이 denied라, 그것으로 판정하면 스위치를 만진 적 없는 브라우저에 끔 쿠키를 새로 써서 추적 금지를 꺼도
+ * 꺼진 채로 남았다(PR #382 2차 리뷰)
  */
-function storedOptOut(): boolean {
+function storedOptOut(): boolean | null {
   const prefix = `__ph_opt_in_out_${KEY}=`;
   const raw = document.cookie
     .split('; ')
     .find((cookie) => cookie.startsWith(prefix))
     ?.slice(prefix.length);
-  if (raw === undefined) return false;
+  if (raw === undefined) return null;
   try {
-    return NO_LIKE.includes(JSON.parse(decodeURIComponent(raw)));
+    const value: unknown = JSON.parse(decodeURIComponent(raw));
+    if (NO_LIKE.includes(value)) return true;
+    return YES_LIKE.includes(value) ? false : null;
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -174,7 +178,7 @@ function storedOptOut(): boolean {
  * 다른 회원 로그인을 넘어 남아야 한다 — 저장된 끔은 reset 뒤에 다시 건다.
  */
 function resetKeepingOptOut(posthog: PostHog): void {
-  const optedOut = storedOptOut();
+  const optedOut = storedOptOut() === true;
   posthog.reset();
   if (optedOut) posthog.opt_out_capturing();
 }
@@ -204,9 +208,6 @@ export function identifyUser(userId: number): void {
  * `dnt` = 브라우저의 추적 금지가 켜져 있다 — 스위치와 상관없이 SDK가 막는다
  */
 export type AnalyticsChoice = 'participating' | 'opted_out' | 'dnt' | 'unavailable';
-
-/** SDK가 「켜짐」으로 읽는 값(@posthog/core `isYesLike`) */
-const YES_LIKE: unknown[] = [true, 'true', 1, '1', 'yes'];
 
 /** SDK의 추적 금지 판정(posthog-js consent.js `_getDnt`)과 같은 자리를 본다 */
 function doNotTrackOn(): boolean {
@@ -253,7 +254,17 @@ export function applyAnalyticsOptOut(optOut: boolean): void {
  */
 export function setAnalyticsOptOut(optOut: boolean): void {
   applyAnalyticsOptOut(optOut);
-  announceAnalyticsPreference({ optOut });
+  announceAnalyticsPreference();
+}
+
+/**
+ * 다른 탭이 바꿨다는 알림을 받은 탭이 부른다 — 쪽지 대신 지금 동의 쿠키를 읽어 이 탭의 SDK에 건다. 쪽지는 도착 순서가 바뀔 수
+ * 있어 값을 그대로 걸면 늦게 온 옛 선택이 마지막 선택을 덮었다(PR #382 3차 리뷰). 쿠키는 마지막에 바꾼 탭의 값이다.
+ * 고른 적 없으면(쿠키 없음) 건드리지 않는다
+ */
+export function syncAnalyticsOptOutFromStorage(): void {
+  const stored = storedOptOut();
+  if (stored !== null) applyAnalyticsOptOut(stored);
 }
 
 /**

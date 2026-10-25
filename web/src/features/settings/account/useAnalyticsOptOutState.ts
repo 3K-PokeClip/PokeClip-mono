@@ -32,10 +32,12 @@ export function useAnalyticsOptOutState(): AnalyticsOptOutState {
     void readAnalyticsChoice().then((read) => {
       if (alive) setChoice(read);
     });
-    // 같은 브라우저의 다른 탭에서 바꾸면 이 탭의 스위치도 따라간다
-    const stop = subscribeAnalyticsPreference(({ optOut }) =>
-      setChoice((prev) => (switchable(prev) ? (optOut ? 'opted_out' : 'participating') : prev)),
-    );
+    // 같은 브라우저의 다른 탭에서 바꾸면 이 탭의 스위치도 따라간다 — 쪽지가 아니라 지금 상태를 다시 읽는다(PR #382 3차 리뷰)
+    const stop = subscribeAnalyticsPreference(() => {
+      void readAnalyticsChoice().then((read) => {
+        if (alive) setChoice(read);
+      });
+    });
     return () => {
       alive = false;
       stop();
