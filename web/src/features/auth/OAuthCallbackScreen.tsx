@@ -11,6 +11,7 @@ import { track } from '@/lib/analytics';
 import { useAuthStore } from '@/stores/auth';
 import { CALLBACK_PENDING_LABEL, CallbackPending } from './CallbackPending';
 import { consumeOAuthState } from './googleOAuth';
+import { stripOAuthParamsFromUrl } from './stripOAuthParams';
 import styles from './OAuthCallbackScreen.module.css';
 
 // 구글 동의 화면 복귀 처리 (POK-101) — ?code를 우리 토큰 한 쌍으로 바꾼다.
@@ -58,6 +59,8 @@ export function OAuthCallbackScreen() {
     // 성공한 로그인이 실패 화면으로 뒤집힌다. ref 가드가 필수다.
     if (startedRef.current) return;
     startedRef.current = true;
+    // 실패 안내로 이 화면에 머물러도 주소창에 1회용 값을 남기지 않는다. params는 이미 읽은 사본이다 (POK-482).
+    stripOAuthParamsFromUrl();
 
     const stored = consumeOAuthState(); // 검증 결과와 무관하게 즉시 소모 — 재사용 방지
 

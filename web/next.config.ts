@@ -31,6 +31,19 @@ const proxies = [
   { source: '/api/clip/:path*', target: process.env.CLIP_API_URL },
 ];
 
+// Referrer-Policy (POK-482). OAuth 콜백 주소에는 1회용 code·state가 실려, 그 화면에서 나가는 요청의 Referer에
+// 주소 전체가 담기면 WAF 샘플·로그(다른 출처면 제3자)에 남는다. 콜백 화면은 아예 보내지 않고, 나머지는 브라우저
+// 기본값을 명시해 다른 출처에는 origin만 보낸다. 같은 경로에 같은 키가 두 번 걸리면 뒤 항목이 이기므로 콜백이 뒤에 온다.
+// 정책은 문서 단위라, 콜백에서 router.replace로 옮겨 간 화면도 새로고침 전까지 no-referrer로 남는다(더 엄격할 뿐이다).
+// 🔴 WAF(edge)는 referer를 가리지 않으므로 이보다 느슨하게 바꾸지 말 것: unsafe-url·no-referrer-when-downgrade 금지 (POK-479).
+// 경로는 각 redirect URI와 짝이다: googleOAuth.ts·chzzkOAuth.ts·soopOAuth.ts·youtubeOAuth.ts(next.config.test.ts가 대조).
+const OAUTH_CALLBACK_PATHS = [
+  '/auth/callback',
+  '/oauth/chzzk/callback',
+  '/oauth/soop/callback',
+  '/oauth/youtube/callback',
+];
+
 const nextConfig: NextConfig = {
   // 운영 이미지(Dockerfile)는 .next/standalone 의 server.js 만 싣는다 — node_modules 전체 없이 뜬다.
   // pnpm dev·pnpm build 는 그대로 동작하고, 빌드 산출물에 standalone 폴더가 하나 더 생길 뿐이다.
@@ -45,6 +58,13 @@ const nextConfig: NextConfig = {
         // 백엔드 컨트롤러가 /api/auth·/api/clip 접두사까지 매핑하므로 destination에도 유지한다
         .map((p) => ({ source: p.source, destination: `${p.target}${p.source}` }))
     );
+  },
+  async headers() {
+    const referrerPolicy = (value: string) => [{ key: 'Referrer-Policy', value }];
+    return [
+      { source: '/:path*', headers: referrerPolicy('strict-origin-when-cross-origin') },
+      ...OAUTH_CALLBACK_PATHS.map((source) => ({ source, headers: referrerPolicy('no-referrer') })),
+    ];
   },
 };
 

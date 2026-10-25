@@ -65,6 +65,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  window.history.replaceState(null, '', '/'); // 주소를 지우는지 보는 시험이 바꾼 주소를 되돌린다
 });
 
 describe('SoopCallbackScreen', () => {
@@ -200,6 +201,17 @@ describe('SoopCallbackScreen', () => {
     expect(exchangeCalls(spy)).toHaveLength(0);
     expect(replace).not.toHaveBeenCalled();
     expect(window.sessionStorage.getItem('pc-auth-return')).toBe('/settings/channels');
+  });
+
+  it('로그인 안내로 머물러도 주소창에 code·state가 남지 않는다 (POK-482)', async () => {
+    window.history.replaceState(null, '', '/oauth/soop/callback?code=code-1&state=state-1');
+    useAuthStore.setState({ accessToken: null, refreshToken: null, hydrated: true });
+    stubFetch(() => jsonResponse(500));
+    renderScreen(<SoopCallbackScreen />);
+
+    await screen.findByRole('link', { name: '로그인 화면으로' });
+    expect(window.location.pathname).toBe('/oauth/soop/callback');
+    expect(window.location.search).toBe('');
   });
 });
 
