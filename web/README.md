@@ -166,10 +166,16 @@ web/                     # 단일 Next.js 앱 (App Router + TanStack Query + Zus
     자격 확인이 안 되는 503(`authorization_unavailable`)은 실패라 다시 묻는다.
     보관 기간(60일)이 지난 방송은 출입증 문이 410 `vod_expired`라 「만료」로 받아 그 방송은 더 묻지 않고, 지난 방송 화면 · 편집기가
     「보관 기간(60일)이 지나 … 볼 수 없어요」로 알린다. 렌더 주문의 410도 편집기가 같은 뜻으로 알린다(POK-335).
-  - 🔴 **녹화 주소는 쿠키 경로 아래다**: `{base}/playback/{키}/list` · `/playback/{키}/get?start&duration&format`. 재생 서버의
-    `path` 쿼리는 싣지 않는다. 쿠키 정책은 쿼리를 못 막아(`/playback/{내키}/list?path={남의키}`도 맞는다) 엣지가 경로의 키로
-    `path`를 채우고 **들어온 `path`는 버린다**. 로컬은 `app/media/playback/[key]/[op]/route.ts`가 같은 규칙으로 재생 서버에
-    넘긴다(`MEDIA_PLAYBACK_ORIGIN`이 있을 때만, 없으면 404).
+  - 🔴 **녹화 주소는 쿠키 경로 아래다**: `{base}/playback/{키}/list?path={키}` ·
+    `/playback/{키}/get?start&duration&format&path={키}`. 웹이 재생 서버의
+    `path` 쿼리를 경로의 키와 같은 값으로 하나 싣는다(POK-200). 쿠키 정책은
+    쿼리를 못 막으므로(`/playback/{내키}/list?path={남의키}`도 맞는다) 막는 것은
+    Media 상자 nginx 대조다. `path`가 하나이고 경로의 키와 같을 때만 통과하고
+    그 밖은 403 이다(`infra/media-host/nginx/nginx.conf.tmpl` · 시험은
+    `infra/media-host/test/proxy_contract.sh` 사례 4 · 5). CloudFront 와 ALB 는
+    쿼리를 그대로 넘긴다. 로컬은 `app/media/playback/[key]/[op]/route.ts`가
+    **들어온 `path`를 버리고 경로의 키로 다시 채운다**(이중 방어 ·
+    `MEDIA_PLAYBACK_ORIGIN`이 있을 때만, 없으면 404).
 - 🔴 **영상 주소는 방송 번호가 아니라 영상 경로의 키로 만든다 (POK-233).** 1번이 편지의 방송 번호를 방송마다 새 회차 번호로
   바꾸면 라이브·녹화 경로(스트림키)와 갈린다. clip이 방송 줄에 `ingestStreamId`를 실어 주고, 라이브 LL-HLS·녹화 목록·다시보기·
   편집기 미리보기는 `mediaStreamId(row)`(= `ingestStreamId`, 없거나 비면 방송 번호)를 쓴다. **API 경로·출입증·채팅·카드는 방송

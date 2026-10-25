@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
 import { GET } from './route';
 
-// 로컬 녹화 재생 전달(POK-317). prod는 엣지가 같은 일을 한다: 경로의 키로 path를 채우고 들어온 path는 버린다.
+// 로컬 녹화 재생 전달(POK-317). 들어온 path는 버리고 경로의 키로 다시 채운다: prod는 웹이 실은 path를 Media 상자 nginx가
+// 경로 키와 대조해 막는다(POK-200).
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -14,7 +15,7 @@ function call(url: string, key: string, op: string) {
 }
 
 describe('로컬 녹화 재생 전달', () => {
-  it('재생 서버 주소가 없으면 404다: prod · dev는 이 길이 꺼져 있고 엣지가 맡는다', async () => {
+  it('재생 서버 주소가 없으면 404다: prod · dev는 이 길이 꺼져 있고 Media 상자 nginx가 path를 대조한다', async () => {
     vi.stubEnv('MEDIA_PLAYBACK_ORIGIN', '');
     const spy = stubFetch(() => jsonResponse(200, []));
     const res = await call('http://localhost:3000/media/playback/key-1/list', 'key-1', 'list');
