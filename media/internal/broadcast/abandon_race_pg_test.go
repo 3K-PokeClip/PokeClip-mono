@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/pgtest"
 )
 
 // waitLockedOrDone 은 이 시험 DB 에서 어떤 접속이 행 잠금을 기다리거나 done 이 닫힐 때까지 기다린다. 앞 트랜잭션을
@@ -38,11 +40,37 @@ func waitLockedOrDone(t *testing.T, pool *pgxpool.Pool, done <-chan struct{}) {
 	t.Fatal("뒤 문장이 5초 안에 끝나지도 잠금을 기다리지도 않았다")
 }
 
+// poolWithDefaultIsolation 은 pool 과 같은 DB 에 붙되 세션 기본 격리 수준이 level 인 풀이다 — DB · 역할 설정이 기본값을
+// 바꾼 운영 환경을 흉내 낸다.
+func poolWithDefaultIsolation(t *testing.T, pool *pgxpool.Pool, level string) *pgxpool.Pool {
+	t.Helper()
+	cfg := pool.Config()
+	if cfg.ConnConfig.RuntimeParams == nil {
+		cfg.ConnConfig.RuntimeParams = map[string]string{}
+	}
+	cfg.ConnConfig.RuntimeParams["default_transaction_isolation"] = level
+	p, err := pgxpool.NewWithConfig(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("격리 수준 %s 풀: %v", level, err)
+	}
+	t.Cleanup(p.Close)
+	return p
+}
+
 // 완결 평가가 ended 를 넣고 커밋하기 전에 발행기가 started 를 버리면, 커밋 뒤 ended 도 started_abandoned 여야 한다.
+// 세션 기본 격리 수준이 repeatable read 여도 같다 — 버림은 READ COMMITTED 를 스스로 고른다.
 // 잡는 결함: 버림이 문장 하나면 그 스냅숏에 커밋 전 ended 가 없어 started 만 바뀐다(db M1 재현). started 를 잠그지
-// 않아도 같다 — 버림이 기다리지 않고 지나간다.
+// 않아도 같다 — 버림이 기다리지 않고 지나간다. 버림이 기본 격리 수준을 물려받으면 repeatable read 에서 두 문장이
+// 같은 스냅숏을 보아 문장 하나일 때와 같아진다(db L1).
 func TestAbandonWaitsForEndedEnqueue(t *testing.T) {
+	for _, level := range []string{"read committed", "repeatable read"} {
+		t.Run(level, func(t *testing.T) { testAbandonWaitsForEndedEnqueue(t, level) })
+	}
+}
+
+func testAbandonWaitsForEndedEnqueue(t *testing.T, level string) {
 	pool := newTestPool(t)
+	abandonPool := poolWithDefaultIsolation(t, pool, level)
 	completeRound(t, pool)
 	ctx := context.Background()
 	tx, err := pool.Begin(ctx)
@@ -58,7 +86,7 @@ func TestAbandonWaitsForEndedEnqueue(t *testing.T) {
 	var abandonErr error
 	go func() {
 		defer close(done)
-		_, abandonErr = abandon(ctx, pool, outboxRow{eventID: "S-A.started", round: "S-A", sequence: 1},
+		_, abandonErr = abandon(ctx, abandonPool, outboxRow{eventID: "S-A.started", round: "S-A", sequence: 1},
 			reasonInvalid)
 	}()
 	waitLockedOrDone(t, pool, done)
@@ -132,5 +160,33 @@ func TestEndedEnqueueWaitsForStartedAbandon(t *testing.T) {
 	}
 	if r, ok := readOutbox(t, pool, "S-A.ended"); ok {
 		t.Errorf("S-A.ended = %s · %q, want 행 없음", r.state, r.lastError)
+	}
+}
+
+// 완결 평가는 media_indexer 권한으로 돈다. started 행을 FOR SHARE 로 잠그므로 outbox UPDATE 권한이 요건이다 — 그것을
+// 거두면 SELECT · INSERT 가 있어도 42501 이다(30_grants.sql 의 outbox UPDATE 가 발행기 문장만의 몫이 아니다).
+// 잡는 결함: 권한 목록에서 outbox UPDATE 를 빼면 회차 닫힘 트랜잭션이 통째로 실패한다. FOR SHARE 를 빼도 뒤 단언이
+// 깨진다 — 그때는 이 요건 문장도 함께 고친다.
+func TestEndedEnqueueNeedsOutboxUpdateGrant(t *testing.T) {
+	pool := newTestPool(t)
+	completeRound(t, pool)
+	role := pgtest.NewMediaIndexerRole(t, pool)
+	enqueue := func() error {
+		ctx := context.Background()
+		tx, err := role.Pool.Begin(ctx)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback(ctx)
+		_, err = EnqueueEndedIfComplete(ctx, tx, openGate(), "S-A")
+		return err
+	}
+
+	if err := enqueue(); err != nil {
+		t.Fatalf("media_indexer 로 완결 평가 = %v, want nil", err)
+	}
+	role.Revoke(t, "UPDATE", "broadcast_lifecycle_outbox")
+	if err := enqueue(); !pgtest.IsInsufficientPrivilege(err) {
+		t.Errorf("outbox UPDATE 회수 뒤 완결 평가 = %v, want 42501", err)
 	}
 }

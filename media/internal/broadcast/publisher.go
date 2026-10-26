@@ -220,7 +220,7 @@ func (p *Publisher) retry(ctx context.Context, r outboxRow, kind string) {
 	}
 }
 
-// abandon 은 행을 버리고(started 면 같은 회차 pending 도) ERROR 를 남긴다.
+// abandon 은 행을 버리고(started 면 같은 회차 pending 도) 그 트랜잭션이 커밋된 뒤에 ERROR 를 남긴다.
 func (p *Publisher) abandon(ctx context.Context, r outboxRow, reason string) {
 	if _, err := abandon(ctx, p.pool, r, reason); err != nil {
 		p.storeFailed(ctx, "abandon", err)
