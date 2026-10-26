@@ -279,8 +279,8 @@ func TestRoundRouteCellCaps(t *testing.T) {
 	if n := cacheCount(rr); n > 64 {
 		t.Errorf("캐시 칸 = %d, want ≤ 64", n)
 	}
-	if set, clear := f.logs.countValue("control_rate_limited", 1), f.logs.countValue("control_rate_limited", 0); set != 200 || clear != 200-64 {
-		t.Errorf("control_rate_limited 세움 %d · 내림 %d, want 200 · %d", set, clear, 200-64)
+	if set, clear := f.logs.countValue("control_rate_limited", 1), f.logs.countWarnValue("control_rate_limited", 0); set != 200 || clear != 200-64 {
+		t.Errorf("control_rate_limited 세움 %d · WARN 내림 %d, want 200 · %d", set, clear, 200-64)
 	}
 }
 
@@ -302,8 +302,8 @@ func TestRoundRouteSweep(t *testing.T) {
 	}
 	f.clock.Advance(time.Second)
 	rr.Handler.(*roundHandler).sweep(f.clock.Now())
-	if f.logs.countValue("control_round_shed", 0) != 1 {
-		t.Errorf("60초 청소 뒤 control_round_shed 내림 = %d, want 1", f.logs.countValue("control_round_shed", 0))
+	if f.logs.countWarnValue("control_round_shed", 0) != 1 {
+		t.Errorf("60초 청소 뒤 control_round_shed WARN 내림 = %d, want 1", f.logs.countWarnValue("control_round_shed", 0))
 	}
 }
 

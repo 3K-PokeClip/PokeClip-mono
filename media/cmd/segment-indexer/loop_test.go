@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -101,9 +102,13 @@ func (s *fakeStore) insertCount() int {
 type logCapture struct {
 	mu      sync.Mutex
 	records []slog.Record
+	// warnOnly 가 참이면 WARN 미만을 받지 않는다 — 운영의 LOG_LEVEL=warn 과 같은 걸러냄이다.
+	warnOnly atomic.Bool
 }
 
-func (c *logCapture) Enabled(context.Context, slog.Level) bool { return true }
+func (c *logCapture) Enabled(_ context.Context, level slog.Level) bool {
+	return !c.warnOnly.Load() || level >= slog.LevelWarn
+}
 
 func (c *logCapture) Handle(_ context.Context, r slog.Record) error {
 	c.mu.Lock()

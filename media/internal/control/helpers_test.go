@@ -77,6 +77,18 @@ func (s *logSink) countValue(name string, v float64) int {
 	return n
 }
 
+// countWarnValue 는 name 줄 가운데 WARN 등급이고 value 칸이 v 인 줄 수다. 게이지의 세움 · 내림은 같은 등급이어야
+// LOG_LEVEL=warn 에서도 내림이 걸러지지 않는다(관측 신호 등급 set/clear 대칭).
+func (s *logSink) countWarnValue(name string, v float64) int {
+	n := 0
+	for _, e := range s.events(name) {
+		if e["level"] == "WARN" && e["value"] == v {
+			n++
+		}
+	}
+	return n
+}
+
 // fixture 는 Holder · 시계 · 로그 · 한도를 묶은 시험 조립이다.
 type fixture struct {
 	holder *status.Holder

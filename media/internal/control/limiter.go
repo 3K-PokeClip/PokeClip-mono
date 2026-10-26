@@ -84,7 +84,7 @@ func (l *Limiter) cell(streamID string, now time.Time) *rateCell {
 func (l *Limiter) remove(e *list.Element) {
 	c := e.Value.(*rateCell)
 	if c.limited {
-		l.log.Info("control_rate_limited", "value", 0, "stream_id", c.stream, "limit", l.rps)
+		l.log.Warn("control_rate_limited", "value", 0, "stream_id", c.stream, "limit", l.rps)
 	}
 	l.lru.Remove(e)
 	delete(l.cells, c.stream)
@@ -101,7 +101,7 @@ func (l *Limiter) sweep(now time.Time) {
 		prev, c := e.Prev(), e.Value.(*rateCell)
 		if c.limited && now.Sub(c.limitedAt) >= sweepEvery {
 			c.limited = false
-			l.log.Info("control_rate_limited", "value", 0, "stream_id", c.stream, "limit", l.rps)
+			l.log.Warn("control_rate_limited", "value", 0, "stream_id", c.stream, "limit", l.rps)
 		}
 		if now.Sub(c.usedAt) >= sweepEvery {
 			l.remove(e)

@@ -44,8 +44,8 @@ func TestLimiterEvictsLeastRecentlyUsedAndClearsGauge(t *testing.T) {
 	if !l.Allow("b") { // b 는 새 칸이라 첫 요청은 통과 — a 가 축출된다
 		t.Error("축출 뒤 b 의 첫 요청 = false")
 	}
-	if clear := logs.events("control_rate_limited"); len(clear) != 2 || clear[1]["value"] != 0.0 || clear[1]["stream_id"] != "a" {
-		t.Errorf("control_rate_limited 줄 = %v, want a 세움 · a 내림(축출)", clear)
+	if clear := logs.events("control_rate_limited"); len(clear) != 2 || clear[1]["value"] != 0.0 || clear[1]["level"] != "WARN" || clear[1]["stream_id"] != "a" {
+		t.Errorf("control_rate_limited 줄 = %v, want a 세움 · a WARN 내림(축출)", clear)
 	}
 }
 
@@ -62,7 +62,7 @@ func TestLimiterSweep(t *testing.T) {
 	}
 	c.Advance(time.Second)
 	l.sweep(c.Now())
-	if cellCount(l) != 0 || logs.countValue("control_rate_limited", 0) != 1 {
-		t.Errorf("60초 청소: 칸 %d · 내림 %d, want 0 · 1", cellCount(l), logs.countValue("control_rate_limited", 0))
+	if cellCount(l) != 0 || logs.countWarnValue("control_rate_limited", 0) != 1 {
+		t.Errorf("60초 청소: 칸 %d · WARN 내림 %d, want 0 · 1", cellCount(l), logs.countWarnValue("control_rate_limited", 0))
 	}
 }

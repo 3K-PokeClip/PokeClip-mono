@@ -148,8 +148,8 @@ func TestRewindRouteStaleAfterThirtySeconds(t *testing.T) {
 	f.store(true, map[string]status.Entry{"vod": vodEntry("R1")})
 	get(t, streamURL(base, "vod"))
 	get(t, streamURL(base, "vod"))
-	if set, clear := f.logs.countValue("control_status_stale", 1), f.logs.countValue("control_status_stale", 0); set != 1 || clear != 1 {
-		t.Errorf("control_status_stale 세움 %d · 내림 %d, want 1 · 1", set, clear)
+	if set, clear := f.logs.countValue("control_status_stale", 1), f.logs.countWarnValue("control_status_stale", 0); set != 1 || clear != 1 {
+		t.Errorf("control_status_stale 세움 %d · WARN 내림 %d, want 1 · 1", set, clear)
 	}
 }
 
