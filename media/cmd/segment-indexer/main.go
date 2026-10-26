@@ -105,6 +105,10 @@ func run() error {
 		}
 		log.Info("schema_ensured", "note", "정본 DDL(1번 소유). 컬럼 변경은 3번 승인 — 계약-세그먼트인덱스 4절")
 	}
+	// 기동 스키마 확인 — M6 장부 객체가 없으면 schema_not_ready 로 멈춘다(운영은 운영 SQL 적용이 선행 조건).
+	if err := requireLedgerSchema(ctx, pool, log); err != nil {
+		return err
+	}
 	// 연결 폐기 관측(POK-388). 관측 고루틴이 풀을 읽으므로 pool.Close 보다 뒤에 등록해 먼저 멈춘다.
 	stopIndexerStats := poolstat.Start(ctx, pool, "indexer", log)
 	defer stopIndexerStats()

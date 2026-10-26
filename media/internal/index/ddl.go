@@ -249,18 +249,21 @@ CREATE TABLE IF NOT EXISTS stream_published_gaps (
 
 -- 회차 · 만료 · 의도적 종료 표식 열 넷. 위 6-1 (a) 와 같은 카탈로그 확인 이디엄이다 — 옛 볼륨에도 붙는다.
 -- round_id = 그 회차 머리 세션의 session_id · round_closed_at = 회차 닫힘 · expired_at = 60일 만료의 조회 제외 ·
--- stop_marked_at = 의도적 종료(4D)가 멈춘 시각 표식.
+-- stop_marked_at = 의도적 종료(4D)가 멈춘 시각 표식. 열마다 따로 확인한다 — 하나만 빠진 DB 도 기동 스키마
+-- 확인(MissingLedgerSchema)을 통과하는 상태로 되돌린다. ALTER 는 빠진 열이 있을 때만 돈다.
 DO $do$
+DECLARE
+    col record;
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns
-                   WHERE table_name::name  = 'stream_sessions'
-                     AND column_name::name = 'round_id') THEN
-        ALTER TABLE stream_sessions
-            ADD COLUMN round_id        text,
-            ADD COLUMN round_closed_at timestamptz,
-            ADD COLUMN expired_at      timestamptz,
-            ADD COLUMN stop_marked_at  timestamptz;
-    END IF;
+    FOR col IN SELECT * FROM (VALUES ('round_id', 'text'), ('round_closed_at', 'timestamptz'),
+                                     ('expired_at', 'timestamptz'), ('stop_marked_at', 'timestamptz')) AS c(name, type)
+    LOOP
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                       WHERE table_name::name  = 'stream_sessions'
+                         AND column_name::name = col.name::name) THEN
+            EXECUTE pg_catalog.format('ALTER TABLE stream_sessions ADD COLUMN %I %s', col.name, col.type);
+        END IF;
+    END LOOP;
 END $do$;
 
 -- 열린 회차의 최신 세션을 고르는 회차 스캔(ListClosableRounds)의 부분 인덱스.
