@@ -1,0 +1,108 @@
+# rewind-minio — 로컬 되감기 바이트 원천
+
+팀 compose 에 덧붙여 켜는 로컬 S3(MinIO · https)와 로컬 엣지다. 켜면
+`segment-indexer` 가 되감기 목록 · 조각을 이 MinIO 로 발행 · 업로드하고, 브라우저는
+로컬 엣지(`http://127.0.0.1:28480/dvr/…`)로 받는다. 실버킷은 쓰지 않는다
+(POK-200 · 설계 M5 9.4.1 · 9.4.2).
+
+기본 `docker compose up` 은 바뀌지 않는다 — 발행은 꺼져 있고 제어면은 모든 스트림에
+404 를 낸다. 바이트까지 보려면 이 폴더를 덧붙인다.
+
+## 무엇이 뜨나
+
+| 서비스 | 하는 일 | 망 · 포트 |
+|---|---|---|
+| `minio-certs` | 로컬 CA · `minio` SAN 서버 인증서를 만든다(있으면 건너뜀) | 없음 · 한 번 돌고 끝 |
+| `minio` | S3 API(https) · 데이터 볼륨 | 망 안 `https://minio:9000` 만 |
+| `minio-init` | 버킷 `pokeclip-rewind-local` · 익명 정책(`dvr/*` GetObject 만) | 없음 · 한 번 돌고 끝 |
+| `dvr-edge` | `/dvr/` 만 MinIO 로 넘기는 nginx · CORS · 목록 거부 | 호스트 `127.0.0.1:28480` |
+| `minio-check` | 공통 수용 시험(아래) — 평소 up 에는 안 뜬다 | 프로필 `rewind-minio-check` |
+
+사이드카에는 `S3_*` · `REWIND_PUBLIC_BASE_URL` · `SSL_CERT_DIR` 를 덧붙인다. 사이드카와
+엣지는 CA 인증서만 받고 서버 개인 키는 받지 않는다.
+
+## 켜기
+
+1.  `.env` 에 로컬 전용 자격을 적는다(`.env.example` 의 `REWIND_MINIO_USER` ·
+    `REWIND_MINIO_PASSWORD` — 사용자 3자 · 비밀번호 8자 이상).
+1.  저장소 루트에서 덧붙여 띄운다.
+
+    ```sh
+    docker compose -f docker-compose.yml -f infra/compose/rewind-minio/compose.yml \
+      --profile rewind-minio up -d
+    ```
+
+1.  사이드카 로그에서 `rewind_publish_started endpoint=https://minio:9000` 과
+    `control_server_started` 를 본다. `rewind_publish_degraded` 면 인증서 · 버킷을
+    본다(아래 「막히면」).
+
+`--profile rewind-minio` 는 `logs` · `run` · `down` 에도 붙인다 — 사이드카가 이
+프로필의 `minio-init` 에 기대므로 빠지면 compose 가 프로젝트를 거부한다.
+
+## 수용 시험 — 이미지 · 판을 고르거나 올릴 때마다
+
+발행 층은 조건부 PUT(`If-None-Match: *` · `If-Match`)으로 쓰기 울타리를 지킨다.
+대체 저장소가 이를 무시하면 로컬 실측이 prod 와 다른 동작을 잰다. 하나라도 어긋나면
+그 판은 쓰지 않는다.
+
+```sh
+docker compose -f docker-compose.yml -f infra/compose/rewind-minio/compose.yml \
+  --profile rewind-minio --profile rewind-minio-check run --rm minio-check
+```
+
+기대: 조건부 PUT 200 · 412 · 412 · 200, 익명 목록 · `streams/` · `dvr/` 가
+403 · 403 · 200. 결과 원문(명령 · 응답 코드 · 이미지 다이제스트)은 실험 기록에 남긴다.
+
+## 끄기 · 정리
+
+팀 프로젝트에 올렸으면 덧붙임 없이 다시 띄워 되돌린다 — 덧붙인 채로 두면 팀 사이드카가
+계속 MinIO 로 발행 · 업로드한다.
+
+```sh
+docker compose -f docker-compose.yml -f infra/compose/rewind-minio/compose.yml \
+  --profile rewind-minio rm -sf minio-certs minio minio-init dvr-edge
+docker compose up -d segment-indexer
+```
+
+실험은 전용 프로젝트(`pcbench-<ID>` · 라벨 `com.pokeclip.bench=<ID>`)로 띄우고, 끝나면
+인증서 · 데이터 볼륨까지 지운 뒤 잔여 0 을 확인한다.
+
+```sh
+docker compose -p pcbench-<ID> -f docker-compose.yml -f infra/compose/rewind-minio/compose.yml \
+  --profile rewind-minio down -v --rmi local
+docker ps -a --filter label=com.pokeclip.bench=<ID>
+docker volume ls | grep pcbench-<ID>
+docker network ls | grep pcbench-<ID>
+```
+
+## 이미지 판
+
+MinIO 커뮤니티판은 배포가 멈췄다 — Docker Hub `minio/*` 는 없고 `quay.io/minio/*` 는
+인증을 요구한다(2026-10-26 실물 확인). 그래서 관리되는 재배포판
+`cgr.dev/chainguard/minio` 를 다이제스트로 고정했다(`RELEASE.2026-10-23T20-06-51Z` ·
+linux/arm64 · 같은 이미지에 `mc` 가 들어 `minio-init` 도 이것을 쓴다). 알려진 취약점
+판정은 아직 하지 않았다(로컬에 스캐너가 없다 — 판단 대기). 판을 올리면 위 수용 시험을
+다시 돌린다.
+
+## prod 엣지와 다른 점
+
+*   엣지 캐시(TTL 합치기 · 오류 캐시)는 흉내 내지 않는다.
+*   `x-amz-*` 응답 머리와 MinIO 의 CORS 머리를 지운다. MinIO 도 CORS 머리를 스스로
+    실어 그대로 두면 `Access-Control-Allow-Origin` 이 두 번 나간다(브라우저가 거부한다).
+*   제어면은 이 엣지를 거치지 않는다 — 브라우저가 `http://localhost:8086` 을 직접
+    부르고 CORS 는 `CONTROL_CORS_ORIGIN` 이 낸다.
+
+## 막히면
+
+*   `rewind_publish_degraded` · `HeadBucket` 실패 · `x509` — 사이드카의
+    `SSL_CERT_DIR` 에 CA 디렉터리(`/run/rewind-minio-ca`)가 빠졌거나 `minio-init` 이
+    끝나기 전에 떴다.
+*   `minio` 가 healthy 가 안 된다 — `.env` 의 자격이 MinIO 길이 조건을 못 채운다.
+*   인증서를 새로 만들려면 `down -v` 로 `rewind-minio-certs` · `rewind-minio-ca` 볼륨을
+    지운다.
+
+## See also
+
+*   [`media/README.md`](../../../media/README.md) 제어면 절 · 환경변수 표
+*   [`check-s3-conditions.sh`](check-s3-conditions.sh) — 수용 시험 본체
+*   [`dvr-edge.conf`](dvr-edge.conf) — 로컬 엣지 설정
