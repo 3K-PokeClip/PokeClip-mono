@@ -43,6 +43,26 @@
 # (ARN 꼴 SecretName-6RandomCharacters) ·
 # https://docs.aws.amazon.com/secretsmanager/latest/apireference/API_CreateSecret.html
 # (이름 글자 /_+=.@- · 접미는 「-」 + 6자).
+#
+# 추가 문맥에 ${ACM_VALIDATION}(prod ACM 검증 레코드 이름 자리 — POK-484)이
+# 든 행은 존이 풀리면 이름도 푼다(실행마다 한 번). prod 인증서가 있는 두
+# 리전(ACM_REGIONS)에서 Environment = prod 태그의 인증서를 찾고, 인증서마다
+# acm describe-certificate 로 검증 옵션의 레코드 이름을 읽어 끝 점을 떼고
+# 겹침을 하나로 합친다. 이름은 ACM 이 정하는 값이라 데이터에 적을 수 없고,
+# 대표 이름으로 물으면 실제 이름을 그대로(StringEquals) 또는 일부 글자로
+# (StringLike) 적은 dev 정책을 놓친다 — 실제 이름으로 묻는다. 이름이 0개면
+# TARGET_NONE 이다(첫 단계 O7b 직전에는 인증서가 아직 없어 정상). 레코드
+# 이름이 없는 검증 옵션(None — 레코드가 아직 안 만들어짐 · DNS 검증이 아님)과
+# 정규화 꼴(「_」 로 시작 · 소문자 · 숫자 · 「_」 · 「-」 · 「.」 — 이스케이프가
+# 필요 없는 글자) 밖 이름은 종료 2 다. 질문은 이름마다 하나다(ForAllValues
+# 조건은 이름을 모아 물으면 더 좁게 판정한다).
+# 참고: https://docs.aws.amazon.com/acm/latest/userguide/dns-validation.html
+# (이름은 도메인 · 계정마다 ACM 이 만든 「_」 + 긴 문자열 · 자동 갱신은 그
+# 레코드가 남아 있어야 함) ·
+# https://docs.aws.amazon.com/acm/latest/APIReference/API_DomainValidation.html
+# (ResourceRecord 는 필수 아님) ·
+# https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/specifying-conditions-route53.html
+# (레코드 이름 문맥의 정규화 꼴 · StringEquals 로 레코드 이름을 지명하는 예).
 
 readonly PROD_ROLE_PATH='/pokeclip/prod/'
 readonly AWS_MANAGED_POLICY='arn:aws:iam::aws:policy/'
@@ -53,6 +73,16 @@ readonly LOG_STREAM_SUFFIX=':log-stream:'
 readonly INPUT_PREFIX='input-'
 # 비밀 ARN 의 이름 접두 뒤(이름 나머지 + 「-」 + 영숫자 6자 접미).
 readonly SECRET_TAIL_PATTERN='^[A-Za-z0-9/_+=.@-]+-[A-Za-z0-9]{6}$'
+# prod 인증서가 있는 리전(prod/certs — 서울 ALB · us-east-1 CloudFront).
+ACM_REGIONS=(ap-northeast-2 us-east-1)
+readonly ACM_REGIONS
+# 인증서 하나의 검증 옵션마다 레코드 이름 한 줄(없으면 None — 안쪽 목록이라
+# 투영이 null 을 빼지 않는다).
+ACM_QUERY='Certificate.DomainValidationOptions[].'
+ACM_QUERY+='[ResourceRecord.Name]'
+readonly ACM_QUERY
+# 끝 점을 뗀 검증 레코드 이름(머리 주석의 정규화 꼴).
+readonly VALIDATION_NAME_PATTERN='^_[a-z0-9_-]+(\.[a-z0-9_-]+)+$'
 # 존 목록 질의 — 첫 줄은 「IsTruncated<탭>NextDNSName」, 그 뒤 존마다 「이름<탭>
 # ID<탭>PrivateZone」(text 출력은 스칼라를 먼저, 목록을 줄마다 낸다).
 ZONE_QUERY='[IsTruncated,NextDNSName,'
@@ -71,6 +101,12 @@ missing_keys=()
 # 와 TARGET_NONE 여부(1).
 tr_arns=()
 tr_none=()
+# 대상 행의 검증 레코드 이름(t_* 와 같은 색인 — 이름 줄들, 자리표시자 없는
+# 행은 빈 값).
+tr_names=()
+# 검증 레코드 이름 해석 결과(이름 줄들)와 해석했는지.
+validation_names=""
+validation_done=0
 # prodrole 해석 결과(ARN 줄들)와 해석했는지.
 prod_roles=""
 prod_roles_done=0
@@ -316,6 +352,69 @@ principal::append_object_key() {
 }
 
 #######################################
+# 한 리전의 Environment = prod 태그 자원 ARN 을 읽는다(응답은 call_out).
+# Arguments:
+#   리전, 자원 유형 필터(서비스:유형).
+#######################################
+principal::get_tagged() {
+  local body='{"TagFilters":[{"Key":"Environment","Values":["prod"]}],'
+  body+="\"ResourceTypeFilters\":[\"$2\"]}"
+  aws_call "${body}" resourcegroupstaggingapi get-resources --region "$1" \
+    --query 'ResourceTagMappingList[].ResourceARN' || fail_call "태그 해석"
+}
+
+#######################################
+# 인증서 하나의 검증 레코드 이름을 merged_lines 에 더한다(끝 점 뗌 · 겹침
+# 하나로). 레코드 이름이 없는 검증 옵션 · 정규화 꼴 밖 이름은 종료 2 다.
+# Globals:
+#   list_items, merged_lines, req_n, ACM_QUERY, VALIDATION_NAME_PATTERN
+# Arguments:
+#   리전, 인증서 ARN.
+#######################################
+principal::add_validation_names() {
+  local rest item name
+  aws_call "{\"CertificateArn\":\"$2\"}" acm describe-certificate \
+    --region "$1" --query "${ACM_QUERY}" || fail_call "검증 이름 해석"
+  principal::read_list '^[^[:space:]]+$'
+  rest="${list_items}"
+  while [[ -n "${rest}" ]]; do
+    item="${rest%%$'\n'*}"
+    rest="${rest#*$'\n'}"
+    [[ "${item}" != None ]] ||
+      die "검증 레코드 이름이 없는 인증서(res-${req_n}.txt)"
+    name="${item%.}"
+    [[ "${name}" =~ ${VALIDATION_NAME_PATTERN} ]] ||
+      die "읽기 응답의 꼴이 다름(res-${req_n}.txt)"
+    principal::merge_lines "${name}"$'\n'
+  done
+}
+
+#######################################
+# prod 인증서의 검증 레코드 이름을 한 번만 푼다(머리 주석).
+# Globals:
+#   validation_names, validation_done, list_items, merged_lines, account,
+#   ACM_REGIONS
+#######################################
+principal::resolve_validation_names() {
+  local region certs cert
+  [[ "${validation_done}" -eq 1 ]] && return 0
+  merged_lines=""
+  for region in "${ACM_REGIONS[@]}"; do
+    principal::get_tagged "${region}" acm:certificate
+    principal::read_list \
+      "^arn:aws:acm:${region}:${account}:certificate/[A-Za-z0-9-]+$"
+    certs="${list_items}"
+    while [[ -n "${certs}" ]]; do
+      cert="${certs%%$'\n'*}"
+      certs="${certs#*$'\n'}"
+      principal::add_validation_names "${region}" "${cert}"
+    done
+  done
+  validation_names="${merged_lines}"
+  validation_done=1
+}
+
+#######################################
 # 단계 무관 해석 하나(tag: · arn: · zone: · input: · prodrole)를 list_items
 # 로 낸다.
 # Globals:
@@ -324,7 +423,7 @@ principal::append_object_key() {
 #   t_* 색인.
 #######################################
 principal::resolve_target_arns() {
-  local t="$1" method="${t_method[$1]}" body arn filter
+  local t="$1" method="${t_method[$1]}" arn filter
   list_items=""
   case "${method}" in
     arn:*)
@@ -338,12 +437,7 @@ principal::resolve_target_arns() {
       ;;
     tag:*)
       filter="${method#tag:}"
-      body='{"TagFilters":[{"Key":"Environment","Values":["prod"]}],'
-      body+="\"ResourceTypeFilters\":[\"${filter%%/*}\"]}"
-      aws_call "${body}" resourcegroupstaggingapi get-resources \
-        --region "${t_region[t]}" \
-        --query 'ResourceTagMappingList[].ResourceARN' ||
-        fail_call "태그 해석"
+      principal::get_tagged "${t_region[t]}" "${filter%%/*}"
       principal::read_list \
         '^arn:aws:[a-z0-9-]+:[a-z0-9-]*:[0-9]*:[^*[:space:]]+$'
       [[ "${filter}" != */* ]] || principal::append_object_key "${filter#*/}"
@@ -360,27 +454,39 @@ principal::resolve_target_arns() {
 
 #######################################
 # 이번 단계에서 도는 대상 행의 단계 무관 해석을 하고 targets.tsv 에 남긴다.
+# 검증 레코드 이름 자리가 든 행은 ARN 줄 뒤에 이름 줄을 남기고, 이름이
+# 0개면 TARGET_NONE 이다.
 # Globals:
-#   t_key, t_method, t_active, tr_arns, tr_none, list_items, evidence_dir
+#   t_key, t_method, t_active, t_context, tr_arns, tr_none, tr_names,
+#   list_items, validation_names, evidence_dir, VALIDATION_PLACEHOLDER
 #######################################
 principal::resolve_targets() {
   local t rest record=""
   for t in "${!t_key[@]}"; do
     tr_arns[t]=""
     tr_none[t]=0
+    tr_names[t]=""
     [[ "${t_active[t]}" -eq 1 ]] || continue
     case "${t_method[t]}" in
       self:* | policy:attached) continue ;;
       *) ;;
     esac
     principal::resolve_target_arns "${t}"
+    if [[ -n "${list_items}" &&
+      "${t_context[t]}" == *"${VALIDATION_PLACEHOLDER}"* ]]; then
+      rest="${list_items}"
+      principal::resolve_validation_names
+      tr_names[t]="${validation_names}"
+      list_items=""
+      [[ -z "${validation_names}" ]] || list_items="${rest}"
+    fi
     tr_arns[t]="${list_items}"
     if [[ -z "${list_items}" ]]; then
       tr_none[t]=1
       record+="${t_key[t]}"$'\t'"TARGET_NONE"$'\n'
       continue
     fi
-    rest="${list_items}"
+    rest="${list_items}${tr_names[t]}"
     while [[ -n "${rest}" ]]; do
       record+="${t_key[t]}"$'\t'"${rest%%$'\n'*}"$'\n'
       rest="${rest#*$'\n'}"

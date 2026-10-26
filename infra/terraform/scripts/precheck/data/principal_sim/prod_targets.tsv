@@ -8,7 +8,8 @@
 # stage_actions 의 출처 주석): bootstrap · secrets = 5, network = O7a,
 # certs = O7b, registry = O7c, runtime = runtime-1a(rewind 행만 예외 —
 # 그 행 위 주석), platform = O7d, media = O7e, edge = O7f, records = 8. 그
-# 단계부터 뒤 단계마다 묻는다.
+# 단계부터 뒤 단계마다 묻는다. 추가 문맥 값 ${ACM_VALIDATION} 은 prod ACM
+# 검증 레코드 이름 자리다(prod/certs 덩어리 주석).
 # 상태 객체 키 = 각 루트 backend.hcl.example 의 key, 상태 버킷 이름 =
 # prod/bootstrap 의 state_bucket_name 기본값.
 # 해석 tag:<서비스>:<유형> 은 Resource Groups Tagging API 의
@@ -79,6 +80,14 @@ network-s3-endpoint	O7a	tag:ec2:vpc-endpoint	vpc-endpoint	ap-northeast-2	ec2:Mod
 # prod/certs — 인증서 두 벌(서울 · us-east-1)
 cert-apne2	O7b	tag:acm:certificate	certificate	ap-northeast-2	acm:DeleteCertificate,acm:AddTagsToCertificate,acm:RemoveTagsFromCertificate	none	-
 cert-use1	O7b	tag:acm:certificate	certificate	us-east-1	acm:DeleteCertificate,acm:AddTagsToCertificate,acm:RemoveTagsFromCertificate	none	-
+# prod/certs 의 검증 레코드(aws_route53_record.validation — POK-484). 공유
+# 공개 존에 「_」 로 시작하는 CNAME 으로 있고, ACM 자동 갱신이 다시 본다.
+# 이름은 ACM 이 정하는 값이라 자리표시자 ${ACM_VALIDATION} 으로 두고 실행 때
+# 두 리전의 prod 인증서에서 푼다(lib/principal_resolve.sh 머리 주석 — 대표
+# 이름으로 물으면 실제 이름을 지명한 dev 정책을 놓친다). 첫 단계 O7b 직전에는
+# 인증서가 없어 TARGET_NONE 이 정상이다. 두 갈래는 prod/records 행과 같다.
+zone-record-acm-validation	O7b	zone:pokeclip.com	hostedzone	us-east-1	route53:ChangeResourceRecordSets	none	route53:ChangeResourceRecordSetsNormalizedRecordNames:stringList:${ACM_VALIDATION}
+zone-record-acm-validation-mix	O7b	zone:pokeclip.com	hostedzone	us-east-1	route53:ChangeResourceRecordSets	none	route53:ChangeResourceRecordSetsNormalizedRecordNames:stringList:dev.pokeclip.com,${ACM_VALIDATION}
 
 # prod/runtime — 이름은 prod/runtime/*.tf · CONTRACT-runtime.md 「런타임 자원
 # 이름 패턴」. 이름이 고정이라 구체 ARN 으로 묻는다(자원이 생기기 전 단계에도

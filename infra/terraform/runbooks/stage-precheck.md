@@ -39,7 +39,7 @@
 | 1 ⓑ(M12 운영) | `1b` | — | 없음(설계 원칙 10) | 없음 | — | M12 운영 plan · apply |
 | 5(O5) | `5` | — | 함 | 함 | 태그 키 확인(`tag:GetTagKeys` — `default_tags` 네 키와 겹침 0) | 2-3 판정 결과 · apply · 값 입력 |
 | O7a | `O7a` | — | 함 | 함 | dev VPC CIDR 비중첩 | apply |
-| O7b | `O7b` | — | 함 | 함 | 공유 존의 옛 ACM 검증 이름(`_` 로 시작하는 CNAME) | apply |
+| O7b | `O7b` | — | 함(certs 상태 객체 · 인증서 두 벌 · 공유 존의 prod ACM 검증 레코드(`zone-record-acm-validation*` — 이름은 prod 인증서에서 풂 · 이 단계 직전에는 `TARGET_NONE`)가 이 단계부터 대상) | 함 | 공유 존의 옛 ACM 검증 이름(`_` 로 시작하는 CNAME) | apply |
 | O7c | `O7c` | — | 함 | 함 | — | 푸시마다 |
 | runtime-1a | `runtime-1a` | — | 함(POK-365 완료 — 런타임 상태 객체 · RDS · SNS · SQS · 일 큐 셋과 DLQ(1단-다) · 실행기 역할 · 프로필 · prod EC2 인스턴스(켬 뒤 태그) · 관리형 마스터 비밀(apply 뒤 입력 파일)이 이 단계부터, rewind · clips · 프로필 사진 버킷과 그 객체는 O7d 부터 대상) | 함 | — | plan 승인마다(본 apply · 켬 · 끔) · 켬 직후 2-3 재판정 · 값 입력 |
 | O7d | `O7d` | — | 함(platform 상태 객체 · ALB · NLB · 대상 그룹 · 리스너 · 리스너 규칙 · ECS 클러스터 · 서비스 · 작업 정의(태그 — 이 단계 직전에는 `TARGET_NONE`) · ALB 의 WAF 떼기 · 바꿔 달기 · REGIONAL WAF · 그 로그 그룹 · ECS 서비스 로그 그룹 셋 · prod 역할(/pokeclip/prod/)을 ECS 작업에 넘기기(`iam:PassRole` · `ecs-tasks.amazonaws.com` 문맥)가 이 단계부터 대상) | 함 | Cloud Map 사설 존 리전 조건 · 리스너 규칙 transform 속성 · ELB 한도 읽기 | (f) 실측 · 태스크 생성 |
@@ -363,7 +363,8 @@ platform 의 태그 행(ALB · NLB · 대상 그룹 · 리스너 · ECS)도 첫 
     비밀 ARN 포함) ·
     정책 파일 꼴 · S3 · ECR · SNS 정책 응답의 `None` ·
     존 해석 2건 이상 · 잘린 존 목록 · 입력 파일의 거부 · 빈 파일 · 꼴 밖
-    줄 · PC0 · PC1 실패 · 옛 CLI · 조직 판정
+    줄 · 검증 레코드 이름이 없는 인증서 · 꼴 밖 검증 레코드 이름 · PC0 ·
+    PC1 실패 · 옛 CLI · 조직 판정
     False · 자원 정책 읽기의 「없음」 아닌 오류(첫 단계 뒤의 주제 · 큐 「자원
     없음」 포함)입니다.
 *   ⑤ 보고에는 첫 줄 · 표 행 · 증거 디렉터리 이름 · `report.txt` 의 사유별
@@ -380,6 +381,15 @@ platform 의 태그 행(ALB · NLB · 대상 그룹 · 리스너 · ECS)도 첫 
     행(`zone-record-*` · 첫 단계 8)으로 묻습니다 — 이름마다 prod 하나와
     dev 표본 + prod 두 갈래입니다(`prod_targets.tsv` 의 prod/records
     덩어리).
+*   prod/certs 가 같은 존에 만드는 ACM 검증 레코드(`_` 로 시작하는 CNAME —
+    ACM 자동 갱신이 다시 봄)는 `zone-record-acm-validation*` 행(첫 단계
+    O7b)이 같은 두 갈래로 묻습니다. 이름은 ACM 이 정하는 값이라, 실행 때 두
+    리전(서울 · us-east-1)의 `Environment = prod` 인증서를
+    `acm describe-certificate`(읽기)로 읽어 실제 이름(끝 점 뗌)으로
+    묻습니다. 대표 이름(`_*.pokeclip.com` 류)으로 물으면 실제 이름을 지명한
+    dev 정책을 놓치기 때문입니다. 인증서가 아직 없으면(O7b 직전)
+    `TARGET_NONE` 이 정상이고, O7b apply 뒤 실행부터 `TARGET_NONE` 이면
+    인증서 태그를 확인합니다. 결과 파일의 자원 칸은 `존 ARN 이름` 꼴입니다.
 
 ### 이 점검이 보장하지 않는 것
 
@@ -417,7 +427,7 @@ platform 의 태그 행(ALB · NLB · 대상 그룹 · 리스너 · ECS)도 첫 
 | A17 리스 계정의 실제 SCP 원문 | 판정 영향 없음 | PC0 · PC1 |
 | A18 「허용 + 누락 문맥」 = 허용 | 넓게 | 첫 실행에서 키를 더함 |
 | A19 `/pokeclip/prod/` 경로 밖에 만든 prod 역할 | 좁게(일부만 경로 밖이면) | 전부 빠지면 0건 → `TARGET_NONE` |
-| A20 Route 53 레코드 이름 문맥 행 | 좁게(첫 단계 8 전 — 그 전 단계는 prod 레코드 이름을 묻지 않음) | `zone-record-*` 행이 첫 단계 8 부터 이름마다 두 갈래로 물음(`prod_targets.tsv` 의 prod/records 덩어리) |
+| A20 Route 53 레코드 이름 문맥 행 | 좁게(서비스 레코드 이름 여섯은 첫 단계 8 전에 묻지 않음 · 검증 레코드는 그 인증서 · 이름 밖의 같은 존 `_` 이름을 묻지 않음) | 서비스 레코드는 `zone-record-*` 행이 첫 단계 8 부터, ACM 검증 레코드는 `zone-record-acm-validation*` 행이 첫 단계 O7b 부터 prod 인증서에서 푼 실제 이름마다 두 갈래로 물음(`prod_targets.tsv` 의 prod/records · prod/certs 덩어리) |
 
 ## 이벤트 기록
 

@@ -15,6 +15,12 @@
 #      (부분 ARN 을 서비스가 다른 비밀로 풂) 응답 꼴 계약(SECRET_QUERY)이
 #      어긋나면 종료 2 다. 모르는 입력 이름 · 비밀 아닌 서비스의 input: 행은
 #      데이터 꼴로 종료 2 다.
+#   37 ACM 검증 레코드 이름(POK-484): 추가 문맥의 ${ACM_VALIDATION} 은 두
+#      리전의 prod 인증서(태그)를 읽어 푼 검증 레코드 이름(끝 점 뗌 · 겹침
+#      하나로)마다 묻는다. 인증서가 없으면 TARGET_NONE, 허용이면 멈춤.
+#   38 검증 이름 해석의 거부: 레코드 이름이 없는 검증 옵션(None) · 정규화 꼴
+#      밖 이름 · 다른 리전 인증서 ARN 은 종료 2, 자리표시자가 존 행 밖이거나
+#      값 일부면 데이터 꼴로 종료 2 다.
 #
 # 고정 입력 · 사본 트리 · 공용 단언(사례 22 유출 — 모든 사례가 끝에
 # 본다)은 principal_testlib.sh 에 있다.
@@ -33,6 +39,13 @@ MASTER_ARN="arn:aws:secretsmanager:${SEOUL_ACCOUNT}:secret:rds!db-"
 MASTER_ARN+="${MARK_SECRET}-0a1b-AbCdEf"
 readonly MASTER_ARN
 readonly INPUT_NAME='rds-master'
+readonly CERT_SEOUL="arn:aws:acm:${SEOUL_ACCOUNT}:certificate/qx-1"
+readonly CERT_USE1="arn:aws:acm:us-east-1:${FAKE_ACCOUNT}:certificate/qx-2"
+# 검증 레코드 이름(정규화 꼴 — 소문자 · 끝 점 없음)과 다른 이름 하나.
+readonly VALIDATION_NAME="_qxval1.media.${MARK_ZONE}.test"
+readonly OTHER_NAME="_qxval2.media.${MARK_ZONE}.test"
+# shellcheck disable=SC2016 # 펼치지 않는 글자 그대로다.
+readonly VALIDATION_SLOT='${ACM_VALIDATION}'
 
 #######################################
 # 사본 트리의 대상 행에 한 행을 덧붙인다.
@@ -257,12 +270,207 @@ expect_input_response() {
     "모르는 입력 이름 · 비밀 아닌 input: 행은 종료 2 · 유출 0"
 }
 
+#######################################
+# 사본 트리에 검증 레코드 행 두 갈래(첫 단계 O7a)를 덧붙인다.
+# Arguments:
+#   사례 디렉터리, [prod 갈래의 문맥 값(기본 자리표시자)].
+#######################################
+add_validation_rows() {
+  local value="${2:-${VALIDATION_SLOT}}"
+  add_row "$1" prod-acm-validation O7a "zone:media.${MARK_ZONE}.test" \
+    hostedzone us-east-1 route53:ChangeResourceRecordSets none \
+    "${RECORD_KEY}:stringList:${value}" || return 1
+  add_row "$1" prod-acm-validation-mix O7a "zone:media.${MARK_ZONE}.test" \
+    hostedzone us-east-1 route53:ChangeResourceRecordSets none \
+    "${RECORD_KEY}:stringList:${DEV_RECORD},${VALIDATION_SLOT}"
+}
+
+#######################################
+# 두 리전의 prod 인증서(태그)와 그 검증 옵션 답을 넣는다.
+# Arguments:
+#   사례 디렉터리, 서울 인증서 답, us-east-1 인증서 답(printf %b 꼴),
+#   [서울 태그 해석 답(기본 서울 인증서 ARN)].
+#######################################
+set_certs() {
+  prepend "$1/in/reads.tsv" \
+    "$(testlib::tsv get-resources acm:certificate@ap-northeast-2 \
+      "${4:-${CERT_SEOUL}}")" \
+    "$(testlib::tsv get-resources acm:certificate@us-east-1 "${CERT_USE1}")" \
+    "$(testlib::tsv describe-certificate "${CERT_SEOUL}" "$2")" \
+    "$(testlib::tsv describe-certificate "${CERT_USE1}" "$3")"
+}
+
+#######################################
+# 검증 레코드 이름 문맥(prod 갈래 · dev 표본 + prod 갈래)의 요청 꼴을 낸다.
+# Arguments:
+#   이름, prod 또는 mix.
+# Outputs:
+#   ContextEntries 항목.
+#######################################
+validation_entry() {
+  local values="\"$1\""
+  [[ "$2" == prod ]] || values="\"${DEV_RECORD}\",${values}"
+  printf '{"ContextKeyName":"%s","ContextKeyValues":[%s],%s\n' \
+    "${RECORD_KEY}" "${values}" '"ContextKeyType":"stringList"}'
+}
+
+#######################################
+# 사례 37 의 앞 절반: 인증서 없음 TARGET_NONE · 같은 이름 하나로 두 갈래.
+#######################################
+expect_validation_row() {
+  local case_dir dir branch calls
+  case_dir="$(new_tree_case)" || {
+    testlib::fail "validation: 시험 준비 실패"
+    return
+  }
+  add_validation_rows "${case_dir}" || return
+  run_check "${case_dir}" validation-none O7a
+  expect_result validation-none 3 'PRINCIPAL CHECK UNDECIDED 2' || return
+  expect_rows validation-none \
+    '| - | prod-acm-validation | - | us-east-1 | 판정 불가 | TARGET_NONE |' 1 ||
+    return
+  calls="$(testlib::count "${case_dir}/out/aws.log" 'acm describe-certificate')"
+  if [[ "${calls}" -ne 0 ]]; then
+    testlib::fail "validation-none: 인증서 0건인데 인증서 읽기 ${calls}번"
+    return
+  fi
+  expect_no_leak validation-none "${case_dir}" || return
+  case_dir="$(new_tree_case)" || return
+  add_validation_rows "${case_dir}" || return
+  set_certs "${case_dir}" "${VALIDATION_NAME}.\\n${VALIDATION_NAME}." \
+    "${VALIDATION_NAME}." || return
+  run_check "${case_dir}" validation-ok O7a
+  expect_result validation-ok 0 "PRINCIPAL CHECK PASS $((NORMAL_ROWS + 6))" ||
+    return
+  dir="$(evidence_dir "${case_dir}")"
+  for branch in prod mix; do
+    if [[ "$(count_requests "${dir}" hostedzone/ZQXZONE1 \
+      "$(validation_entry "${VALIDATION_NAME}" "${branch}")")" -ne 3 ]]; then
+      testlib::fail "validation-ok: ${branch} 갈래를 정규화한 이름 하나로" \
+        "단위 셋에 묻지 않음"
+      return
+    fi
+  done
+  calls="$(testlib::count "${case_dir}/out/aws.log" 'acm describe-certificate')"
+  if [[ "${calls}" -ne 2 ||
+    "$(count_requests "${dir}" "${VALIDATION_NAME}.\"")" -ne 0 ]]; then
+    testlib::fail "validation-ok: 인증서 읽기가 둘이 아니거나(${calls}) 끝 점" \
+      "이름으로 물음"
+    return
+  fi
+  expect_no_leak validation-ok "${case_dir}" || return
+  testlib::ok "37a validation → 인증서 0건 TARGET_NONE(읽기 0) · 두 리전" \
+    "인증서의 같은 이름은 하나로 · 끝 점 뗀 이름으로 두 갈래"
+}
+
+#######################################
+# 사례 37 의 뒤 절반: 이름이 둘이면 이름마다 · 그 이름 허용은 멈춤.
+#######################################
+expect_validation_names() {
+  local case_dir dir name
+  case_dir="$(new_tree_case)" || {
+    testlib::fail "validation-two: 시험 준비 실패"
+    return
+  }
+  add_validation_rows "${case_dir}" || return
+  set_certs "${case_dir}" "${VALIDATION_NAME}.\\n${OTHER_NAME}." \
+    "${OTHER_NAME}." || return
+  run_check "${case_dir}" validation-two O7a
+  expect_result validation-two 0 \
+    "PRINCIPAL CHECK PASS $((NORMAL_ROWS + 12))" || return
+  dir="$(evidence_dir "${case_dir}")"
+  for name in "${VALIDATION_NAME}" "${OTHER_NAME}"; do
+    if [[ "$(count_requests "${dir}" \
+      "$(validation_entry "${name}" prod)")" -ne 3 ]]; then
+      testlib::fail "validation-two: 이름마다 따로 묻지 않음"
+      return
+    fi
+  done
+  expect_no_leak validation-two "${case_dir}" || return
+  prepend "${case_dir}/in/sim.tsv" \
+    "$(testlib::tsv \
+      "*@route53:ChangeResourceRecordSets@*@${VALIDATION_NAME}" allowed \
+      None - - -)"
+  run_check "${case_dir}" validation-allowed O7a
+  expect_result validation-allowed 1 'PRINCIPAL CHECK STOP 3' || return
+  expect_rows validation-allowed \
+    '| prod-acm-validation | route53:ChangeResourceRecordSets | us-east-1 |' \
+    3 || return
+  expect_no_leak validation-allowed "${case_dir}" || return
+  testlib::ok "37b validation-two → 이름마다 묻고 · 그 이름 허용은 멈춤"
+}
+
+#######################################
+# 사례 38 의 사례 하나를 준비한다(머리 주석).
+# Arguments:
+#   사례 디렉터리, 사례 이름.
+#######################################
+prepare_validation_reject() {
+  local case_dir="$1"
+  case "$2" in
+    none-record)
+      add_validation_rows "${case_dir}" &&
+        set_certs "${case_dir}" "None\\n${VALIDATION_NAME}." \
+          "${VALIDATION_NAME}."
+      ;;
+    upper | no-underscore | star)
+      local name="_QXVAL1.media.${MARK_ZONE}.test."
+      [[ "$2" != no-underscore ]] || name="qxval1.media.${MARK_ZONE}.test."
+      [[ "$2" != star ]] || name="_*.media.${MARK_ZONE}.test."
+      add_validation_rows "${case_dir}" &&
+        set_certs "${case_dir}" "${name}" "${VALIDATION_NAME}."
+      ;;
+    other-region)
+      add_validation_rows "${case_dir}" &&
+        set_certs "${case_dir}" "${VALIDATION_NAME}." "${VALIDATION_NAME}." \
+          "${CERT_USE1}"
+      ;;
+    non-zone)
+      add_row "${case_dir}" prod-rtb-named O7a tag:ec2:route-table \
+        route-table ap-northeast-2 ec2:CreateRoute none \
+        "${RECORD_KEY}:stringList:${VALIDATION_SLOT}"
+      ;;
+    *) add_validation_rows "${case_dir}" "x${VALIDATION_SLOT}" ;;
+  esac
+}
+
+#######################################
+# 사례 38: 검증 이름 해석의 거부 — 응답은 종료 2(그 원인 문구), 데이터 꼴도
+# 종료 2(유출 0).
+#######################################
+expect_validation_rejected() {
+  local case_dir spec want
+  for spec in none-record upper no-underscore star other-region non-zone \
+    partial; do
+    case_dir="$(new_tree_case)" || {
+      testlib::fail "validation-rejected: 시험 준비 실패"
+      return
+    }
+    prepare_validation_reject "${case_dir}" "${spec}" || return
+    case "${spec}" in
+      none-record) want='검증 레코드 이름이 없는 인증서' ;;
+      non-zone | partial) want='추가 문맥 꼴이 틀림' ;;
+      *) want='읽기 응답의 꼴이 다름' ;;
+    esac
+    run_check "${case_dir}" "validation-${spec}" O7a
+    expect_unverifiable "validation-${spec}" || return
+    testlib::expect_stderr_count "validation-${spec}" "${want}" 1 || return
+    expect_no_leak "validation-${spec}" "${case_dir}" || return
+  done
+  testlib::ok "38 validation-rejected → 레코드 없는 검증 옵션 · 대문자 · 밑줄" \
+    "없음 · * · 다른 리전 인증서 · 존 행 밖 자리표시자 · 값 일부 자리표시자는" \
+    "종료 2(그 원인 문구) · 유출 0"
+}
+
 main() {
   testlib::init principal_check_late_test
   expect_instance_row
   expect_input_row
   expect_input_rejected
   expect_input_response
+  expect_validation_row
+  expect_validation_names
+  expect_validation_rejected
   testlib::finish principal_check_late_test
 }
 

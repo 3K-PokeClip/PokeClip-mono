@@ -27,6 +27,8 @@
 #       list-attached-group-policies(GroupName) ·
 #       resourcegroupstaggingapi get-resources(ResourceTypeFilters 의 하나 +
 #       「@<--region>」) · route53 list-hosted-zones-by-name(DNSName) ·
+#       acm describe-certificate(CertificateArn — --region 이 ARN 의 리전이고
+#       --query 가 ACM_QUERY 일 때만 받음) ·
 #       s3api get-bucket-policy(Bucket) ·
 #       secretsmanager get-resource-policy(SecretId) ·
 #       ecr get-repository-policy(repositoryName) ·
@@ -75,7 +77,9 @@
 #                           줄을 쓴다. 키 = 「주체 이름@동작@자원 ARN@리전@
 #                           정책」(주체 이름 = PolicySourceArn 의 마지막 「/」
 #                           뒤, 정책 = --resource-policy 가 있으면 policy 아니면
-#                           -). 조직 판정 칸은 True · False · None(칸 없음) ·
+#                           -). 요청에 Route 53 레코드 이름 문맥이 있으면
+#                           키 끝에 「@<그 값들 — 쉼표 구분>」 이 붙는다.
+#                           조직 판정 칸은 True · False · None(칸 없음) ·
 #                           그 밖(불리언 아님). 빈 칸은 「-」 로 적는다(자원별
 #                           판정이 「-」 면 최상위 판정과 같음). 맞는 줄이 없으면
 #                           implicitDeny · None · 누락 없음.
@@ -137,6 +141,15 @@ readonly ZONE_QUERY
 readonly QUEUE_QUERY='Attributes.[QueueArn,Policy]'
 # 비밀 정책 응답 꼴의 계약(lib/principal_policy.sh 의 SECRET_QUERY).
 readonly SECRET_QUERY='[ARN,ResourcePolicy]'
+# 인증서 검증 이름 응답 꼴의 계약(lib/principal_resolve.sh 의 ACM_QUERY).
+ACM_QUERY='Certificate.DomainValidationOptions[].'
+ACM_QUERY+='[ResourceRecord.Name]'
+readonly ACM_QUERY
+# 요청의 Route 53 레코드 이름 문맥 값 목록(시뮬레이터 답 표의 키 끝).
+RECORD_CONTEXT_PATTERN='"ContextKeyName":"route53:'
+RECORD_CONTEXT_PATTERN+='ChangeResourceRecordSetsNormalizedRecordNames",'
+RECORD_CONTEXT_PATTERN+='"ContextKeyValues":\[([^]]*)\]'
+readonly RECORD_CONTEXT_PATTERN
 
 #######################################
 # 옵션 값을 찾는다(「--이름 값」 꼴).
@@ -343,7 +356,7 @@ table_lookup() {
 #   요청 JSON, 받은 argv 전체.
 #######################################
 principal_simulate() {
-  local request="$1" source action resource region policy=- rest key
+  local request="$1" source action resource region policy=- rest key names
   local top orgs top_missing resource_decisions resource_missing
   shift
   if [[ "${FAKE_AWS_CLI:-new}" == old ]]; then
@@ -381,6 +394,9 @@ principal_simulate() {
   [[ "$(option_value --query "$@")" == "${SIM_QUERY}" ]] ||
     invalid_request "--query 가 응답 꼴 계약(SIM_QUERY)과 다름"
   key="${source##*/}@${action}@${resource}@${region}@${policy}"
+  if names="$(json_capture "${request}" "${RECORD_CONTEXT_PATTERN}")"; then
+    key+="@${names//\"/}"
+  fi
   rest="$(table_lookup "${FAKE_AWS_SIM_TABLE:-}" "${key}" glob)" ||
     rest=$'implicitDeny\tNone\t-\t-\t-'
   top="${rest%%$'\t'*}"
@@ -561,6 +577,12 @@ table_read() {
     [[ "$(option_value --query "$@")" == "${ZONE_QUERY}" ]] ||
       invalid_request "--query 가 존 목록 응답 꼴 계약(ZONE_QUERY)과 다름"
   fi
+  if [[ "${call}" == describe-certificate ]]; then
+    [[ "${name}" == "arn:aws:acm:$(option_value --region "$@"):"* ]] ||
+      invalid_request "--region 이 인증서 ARN 의 리전이 아님"
+    [[ "$(option_value --query "$@")" == "${ACM_QUERY}" ]] ||
+      invalid_request "--query 가 검증 이름 응답 꼴 계약(ACM_QUERY)과 다름"
+  fi
   if ! answer="$(table_lookup "${FAKE_AWS_READS:-}" \
     "${call}"$'\t'"${name}" exact)"; then
     case "${call}" in
@@ -611,6 +633,7 @@ principal_read() {
     "iam list-attached-group-policies") field=GroupName ;;
     "iam list-roles") field=PathPrefix ;;
     "route53 list-hosted-zones-by-name") field=DNSName ;;
+    "acm describe-certificate") field=CertificateArn ;;
     "s3api get-bucket-policy") field=Bucket ;;
     "secretsmanager get-resource-policy") field=SecretId ;;
     "ecr get-repository-policy") field=repositoryName ;;

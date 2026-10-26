@@ -16,6 +16,10 @@
 #                         동작(쉼표 구분) · 정책 읽기 방법 · 추가 문맥
 # 꼴이 틀리면 종료 2 다. 진단에는 파일 이름과 줄 번호만 적는다 — 이름 · ARN
 # 이 표준 오류에 나오지 않게.
+# 추가 문맥의 값 하나가 통째로 ${ACM_VALIDATION} 이면 prod ACM 검증 레코드
+# 이름 자리다(POK-484 — 이름은 ACM 이 정해 실행 때 푼다,
+# lib/principal_resolve.sh 머리 주석). 존(zone:) 행에만 쓴다. 그 밖의 「$」
+# 는 값에 쓸 수 없다.
 
 # 자원 정책을 가지는 서비스(이 서비스의 행은 정책 읽기 방법 none 을 쓸 수
 # 없다).
@@ -29,6 +33,9 @@ readonly TAG_OBJECT_PATTERN='^s3:bucket/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$'
 # 가 들 수 있음)을 쉼표로 하나 이상.
 readonly TYPE_PATTERN='^[a-z0-9-]+(/[a-z0-9-]*)*(,[a-z0-9-]+(/[a-z0-9-]*)*)*$'
 readonly ZONE_PATTERN='^[a-z0-9-]+(\.[a-z0-9-]+)+\.?$'
+# ACM 검증 레코드 이름 자리(머리 주석).
+# shellcheck disable=SC2016 # 펼치지 않는 글자 그대로다.
+readonly VALIDATION_PLACEHOLDER='${ACM_VALIDATION}'
 
 # 주체 행(같은 색인).
 p_key=()
@@ -214,9 +221,10 @@ principal::load_controls() {
 
 #######################################
 # 추가 문맥(「-」 또는 「키:형:값[,값]」 항목을 「;」 로 이음)을 시뮬레이터
-# ContextEntries 항목 JSON 으로 옮긴다.
+# ContextEntries 항목 JSON 으로 옮긴다. 「$」 가 든 값은 통째로 검증 레코드
+# 이름 자리여야 한다(머리 주석 — 묻기 전에 이름으로 바꾼다).
 # Globals:
-#   context_json, CONTEXT_KEY_PATTERN
+#   context_json, CONTEXT_KEY_PATTERN, VALIDATION_PLACEHOLDER
 # Arguments:
 #   추가 문맥 칸.
 # Returns:
@@ -246,6 +254,8 @@ principal::context_entries() {
       value="${values%%,*}"
       values="${values#*,}"
       precheck::is_plain "${value}" || return 1
+      [[ "${value}" != *'$'* || "${value}" == "${VALIDATION_PLACEHOLDER}" ]] ||
+        return 1
       list+="${list:+,}\"${value}\""
     done
     context_json+=",{\"ContextKeyName\":\"${key}\",\"ContextKeyValues\":"
@@ -318,7 +328,7 @@ principal::target_fields_ok() {
 # prod_targets.tsv 를 읽는다.
 # Globals:
 #   t_key, t_stage, t_method, t_region, t_actions, t_read, t_context,
-#   KEY_PATTERN, TYPE_PATTERN, REGION_PATTERN
+#   KEY_PATTERN, TYPE_PATTERN, REGION_PATTERN, VALIDATION_PLACEHOLDER
 #######################################
 principal::load_targets() {
   local entry n line key stage method type region actions read context
@@ -345,8 +355,11 @@ principal::load_targets() {
       die "prod_targets.tsv ${n}행의 첫 단계를 모름"
     principal::target_fields_ok "${method}" "${read}" "${actions}" ||
       die "prod_targets.tsv ${n}행의 해석 방법 · 동작 · 정책 읽기 꼴이 틀림"
-    principal::context_entries "${context}" ||
+    if ! principal::context_entries "${context}" ||
+      [[ "${context}" == *"${VALIDATION_PLACEHOLDER}"* &&
+        "${method}" != zone:* ]]; then
       die "prod_targets.tsv ${n}행의 추가 문맥 꼴이 틀림"
+    fi
     [[ "${seen}" != *$'\n'"${key}"$'\n'* ]] ||
       die "prod_targets.tsv ${n}행의 키가 겹침"
     seen+="${key}"$'\n'
