@@ -52,6 +52,19 @@ type Session struct {
 	InitUploaded bool
 }
 
+// Kind 는 목록의 종류다 — 머리에 PLAYLIST-TYPE 줄을 싣는가를 가른다(M6 설계 2절 rewind 행).
+type Kind int
+
+const (
+	// KindSliding 은 되감기 목록(/dvr)이다 — 머리에서 축출하는 1시간 창이라 PLAYLIST-TYPE 을 싣지 않는다.
+	// 영값이라 종류를 적지 않은 목록이 이것이고, 본문은 종류가 없던 판과 바이트 단위로 같다. 닫을 때도
+	// PLAYLIST-TYPE 을 새로 붙이지 않는다 — 없던 머리 태그를 더하면 RFC 8216bis-22 6.2.1 허용 변경 밖이다.
+	KindSliding Kind = iota
+	// KindVOD 는 다시보기 목록(/vod)이다 — 머리에 #EXT-X-PLAYLIST-TYPE:VOD 한 줄을 싣는다(4.4.3.5). 새 URL
+	// 의 새 문서라 기존 목록의 변경이 아니다.
+	KindVOD
+)
+
 // Playlist 는 되감기 목록 하나를 값으로 적은 것이다 — Render 의 입력이다.
 //
 // 목록은 되감기 URL(/dvr/{stream}/{session}/index.m3u8)의 그 회차(Owner)가 소유한다. 행은 경계가
@@ -72,6 +85,11 @@ type Playlist struct {
 	Sessions []Session
 	// Rows 는 목록에 실을 장부 행이다 — seq 가 1씩 이어지는 오름차순이고 전부 settled 다.
 	Rows []boundary.Row
+	// Kind 는 목록의 종류다. 영값 KindSliding 이 되감기 목록이다.
+	Kind Kind
+	// Ended 는 목록을 닫는가다 — 참이면 본문 끝에 #EXT-X-ENDLIST 한 줄을 더한다. 머리 줄은 바뀌지 않아
+	// 같은 행의 열린 본문을 SealEndlist 로 닫은 것과 같은 바이트다(정상 동결 F 와 2단 봉인 E 가 같은 목록).
+	Ended bool
 }
 
 // Render 는 목록을 HLS 미디어 재생목록 본문으로 쓴다 — 설계 4.8.2 실물의 문법과 줄 순서 그대로다.
@@ -83,6 +101,7 @@ type Playlist struct {
 //	#EXT-X-TARGETDURATION:<소유 회차 target_duration>
 //	#EXT-X-MEDIA-SEQUENCE:<첫 줄 조각의 seq>
 //	#EXT-X-DISCONTINUITY-SEQUENCE:<소유 회차 discontinuity_base>
+//	#EXT-X-PLAYLIST-TYPE:VOD                    KindVOD 일 때만
 //	조각마다 이 순서로:
 //	  #EXT-X-DISCONTINUITY                      HasDiscontinuityTag 가 참일 때
 //	  #EXT-X-MAP:URI="<BaseURL>/<init 키>"      회차가 바뀌는 첫 줄(목록 첫 줄 포함)
@@ -90,6 +109,7 @@ type Playlist struct {
 //	  #EXT-X-PROGRAM-DATE-TIME:<playback_pdt>
 //	  #EXTINF:<duration_ms 를 초로, 소수 셋째 자리>,
 //	  <BaseURL>/<playback_s3_key>
+//	#EXT-X-ENDLIST                              Ended 일 때만
 //
 // MSN 이 첫 줄 조각의 seq 인 것이 계약이다(위치 카운터가 아니다 — 설계 4.8 대안 B 기각). 그래서
 // 목록 안 seq 는 끊김 없이 이어져야 하고(빈자리는 GAP 줄이 메운다), 이어지지 않으면 오류다.
@@ -97,7 +117,7 @@ type Playlist struct {
 // PDT 는 조각마다 장부 값을 싣는다: EXTINF 누적으로 대신하면 900조각에서 최대 0.45초 어긋나고(설계
 // 4.8.2), 회차 안 끊김은 표시 없이 PDT 점프로만 드러난다(계획 4.2-R RF). 조각 키는 다시 만들지
 // 않는다 — ③ PUT 이 INSERT 때 예약한 키를 그대로 쓰므로 목록도 그 키를 가리켜야 한다.
-// ENDLIST 는 붙이지 않는다 — 목록을 닫는 경로는 따로다.
+// ENDLIST 는 Ended 일 때만 끝에 한 줄 붙인다 — 머리와 조각 줄은 열린 목록과 같다.
 //
 // 렌더할 수 없는 입력(빈 목록 · 쓸 수 없는 base URL · 회차 목록에 없는 회차 · 끊긴 seq · init 키
 // 파생 실패)은 본문 없이 오류다. 발행된 줄은 고칠 수 없고 조각 URL 은 영구 고정이라, 틀린 본문을
@@ -117,6 +137,9 @@ func Render(p Playlist) ([]byte, error) {
 	var b bytes.Buffer
 	fmt.Fprintf(&b, "#EXTM3U\n#EXT-X-VERSION:6\n#EXT-X-TARGETDURATION:%d\n", owner.TargetDuration)
 	fmt.Fprintf(&b, "#EXT-X-MEDIA-SEQUENCE:%d\n#EXT-X-DISCONTINUITY-SEQUENCE:%d\n", p.Rows[0].Seq, owner.DiscontinuityBase)
+	if p.Kind == KindVOD {
+		b.WriteString("#EXT-X-PLAYLIST-TYPE:VOD\n")
+	}
 	for i, r := range p.Rows {
 		if i > 0 && r.Seq != p.Rows[i-1].Seq+1 {
 			return nil, fmt.Errorf("rewind: 목록 안 seq 가 %d 다음에 %d 다 — 1씩 이어져야 MSN 이 조각 번호와 맞는다",
@@ -126,6 +149,9 @@ func Render(p Playlist) ([]byte, error) {
 		if err := p.writeSegment(&b, r, newRun); err != nil {
 			return nil, err
 		}
+	}
+	if p.Ended {
+		b.WriteString(endlistLine + "\n")
 	}
 	return b.Bytes(), nil
 }
