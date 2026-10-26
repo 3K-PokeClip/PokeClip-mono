@@ -277,6 +277,55 @@ func TestValidateBodyHeaderAndMapLines(t *testing.T) {
 	}
 }
 
+// S5 「본문 = 목록 값」의 종류·닫힘 줄 — 본문의 PLAYLIST-TYPE 줄과 ENDLIST 줄이 목록 값(Kind · Ended)과
+// 맞는가(M6-1 검수 cc c3 M1). 렌더가 회귀해 두 값과 다른 본문을 내면, 메타(pc-terminal)는 닫혔다는데
+// 본문은 열려 있거나 /dvr 목록에 PLAYLIST-TYPE 이 실린다 — 뒤의 것은 닫을 때 없던 머리 태그를 더하는
+// 변경이라 RFC 8216bis-22 6.2.1 허용 변경 밖이다.
+//
+//	PLAYLIST-TYPE  KindVOD 면 「#EXT-X-PLAYLIST-TYPE:VOD」 한 줄이 첫 조각 앞에, KindSliding 이면 0줄
+//	ENDLIST        본문에 있는가(hasEndlist)가 Ended 와 같다
+//
+// 직전 발행이 없으면(prev nil) S6 의 닫힘 조항은 견줄 것이 없어, 이 조항이 아니면 아무도 잡지 않는다.
+func TestValidateBodyHeaderMatchesKindAndEnded(t *testing.T) {
+	withKind := func(p rewind.Playlist, k rewind.Kind, ended bool) rewind.Playlist {
+		p.Kind, p.Ended = k, ended
+		return p
+	}
+	sliding := withKind(headed(), rewind.KindSliding, false)
+	vod := withKind(headed(), rewind.KindVOD, false)
+	slidingEnded := withKind(headed(), rewind.KindSliding, true)
+	vodEnded := withKind(headed(), rewind.KindVOD, true)
+	open := mustRender(t, sliding)
+	vodBody := mustRender(t, vod)
+	const vodLine = "#EXT-X-PLAYLIST-TYPE:VOD\n"
+	const discSeq = "#EXT-X-DISCONTINUITY-SEQUENCE:0\n"
+	uri300 := "https://media.pokeclip.com/dvr/str/seg/000300.m4s\n"
+	tests := []struct {
+		name string
+		p    rewind.Playlist
+		body string
+		want string
+	}{
+		{"VOD_렌더_그대로", vod, vodBody, ""},
+		{"닫힌_슬라이딩_렌더_그대로", slidingEnded, mustRender(t, slidingEnded), ""},
+		{"닫힌_VOD_렌더_그대로", vodEnded, mustRender(t, vodEnded), ""},
+		{"슬라이딩에_PLAYLIST-TYPE_VOD", sliding, strings.Replace(open, discSeq, discSeq+vodLine, 1), "S5"},
+		{"슬라이딩에_PLAYLIST-TYPE_EVENT", sliding, strings.Replace(open, discSeq, discSeq+"#EXT-X-PLAYLIST-TYPE:EVENT\n", 1), "S5"},
+		{"VOD_에_PLAYLIST-TYPE_없음", vod, open, "S5"},
+		{"VOD_에_PLAYLIST-TYPE_EVENT", vod, strings.Replace(vodBody, vodLine, "#EXT-X-PLAYLIST-TYPE:EVENT\n", 1), "S5"},
+		{"VOD_에_PLAYLIST-TYPE_중복", vod, strings.Replace(vodBody, vodLine, vodLine+vodLine, 1), "S5"},
+		{"VOD_의_PLAYLIST-TYPE_이_첫_조각_뒤", vod, strings.Replace(strings.Replace(vodBody, vodLine, "", 1), uri300, uri300+vodLine, 1), "S5"},
+		{"닫힌_목록인데_ENDLIST_없음", slidingEnded, open, "S5"},
+		{"열린_목록인데_ENDLIST", sliding, open + "#EXT-X-ENDLIST\n", "S5"},
+		{"열린_VOD_인데_ENDLIST", vod, vodBody + "#EXT-X-ENDLIST\n", "S5"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			wantVerdict(t, rewind.Validate(tt.p, []byte(tt.body), 1, nil), tt.want)
+		})
+	}
+}
+
 // S5 크기 상한 — 본문은 512KiB(524,288바이트) 이하다(설계의 ≤512KB 를 1KB = 1,024B 로 읽었다).
 // 조각이 0.79초로 짧아 1시간 창에 4,557조각이 든 목록으로 경계에 선다. 스트림 str · 회차
 // S-20260924-000000-str-100000(seq 100000 에서 개시 — session_id 규칙 그대로) · 머리 바로 앞 조각들이

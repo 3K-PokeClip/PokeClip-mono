@@ -569,13 +569,15 @@ func (t *tick) confirm(ctx context.Context, gen int64, desc rewind.Published, et
 }
 
 // describe 는 목록 pl 을 올릴 판의 자기기술이다 — 메타 8키가 이 값을 싣는다. DISC-SEQ 는 소유 회차 base
-// 자리에 적은 값이다. M4 목록은 닫지 않는다(ENDLIST 는 M6 — 계획 4.5 A0 결정 1).
+// 자리에 적은 값이다. 닫힘(pc-terminal)은 pl.Ended 다 — 렌더가 그때만 본문 끝에 ENDLIST 를 붙이므로 메타와
+// 본문이 같은 사실을 적는다(M6 설계 5절 tick.go 행). 평시 틱의 목록은 닫지 않는다.
 func describe(pl rewind.Playlist, gen int64, sum [sha256.Size]byte) rewind.Published {
 	d := rewind.Published{
 		Gen:           gen,
 		MediaSequence: pl.Rows[0].Seq,
 		PublishedSeq:  pl.Rows[len(pl.Rows)-1].Seq,
 		SegmentCount:  len(pl.Rows),
+		Terminal:      pl.Ended,
 		BodySHA256:    sum,
 	}
 	for _, s := range pl.Sessions {

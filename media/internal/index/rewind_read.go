@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -56,7 +57,8 @@ type RewindSession struct {
 	TargetDuration  int32
 	// MinSeq 는 장부에서 이 회차에 귀속된 행의 가장 작은 seq 다 — 끊김 표시 술어의 재료다
 	// (rewind.Session.MinSeq). 적재 하한(RewindLedger.FloorSeq)과 무관한 장부 값이라 하한이 회차 첫 행
-	// 뒤여도 표시 자리가 옮겨 가지 않는다(계획 4.5 A3 결정 3 · A1 E1).
+	// 뒤여도 표시 자리가 옮겨 가지 않는다(계획 4.5 A3 결정 3 · A1 E1). 귀속된 행이 없는 회차(사슬 장부의 행 없는
+	// 세션)면 0 이다 — 실을 행이 없어 표시 술어가 읽을 일이 없다.
 	MinSeq int64
 }
 
@@ -94,12 +96,13 @@ const rewindCutoffSQL = `SELECT cutoff_seq FROM stream_cutoffs WHERE stream_id =
 // rewindFloorSQL 은 적재의 되짚기 하한이다(계획 4.5 A3 결정 3 SQL 그대로). 행 수 상한($4) 안의 최신 행만 거꾸로
 // 길이를 더해 되짚기($3 — ms)에 닿는 가장 늦은 seq 를 낸다 — 상한 안에서 닿지 못하면 상한 안 가장 오래된 행이고,
 // 그 행이 상한을 다 채웠으면 capped 가 참이다. 행이 없으면 컷오프($2)다. PK 역순 범위 + LIMIT 라 DB 작업량이 상한
-// 행 수를 넘지 않는다.
+// 행 수를 넘지 않는다. 「최신」은 머리($5) 이하에서 센다 — 되감기 적재는 머리를 두지 않고(maxSeq), 회차 장부
+// (LoadSessionLedger)는 그 회차의 마지막 조각을 머리로 둔다.
 const rewindFloorSQL = `
 WITH recent AS (
     SELECT seq, duration_ms
       FROM stream_segments
-     WHERE stream_id = $1 AND seq >= $2
+     WHERE stream_id = $1 AND seq >= $2 AND seq <= $5
      ORDER BY seq DESC
      LIMIT $4
 ), suffix AS (
@@ -111,8 +114,8 @@ SELECT COALESCE((SELECT pg_catalog.max(seq) FROM suffix WHERE suffix_ms >= $3),
        (SELECT pg_catalog.count(*) FROM recent) = $4
          AND NOT EXISTS (SELECT 1 FROM suffix WHERE suffix_ms >= $3) AS capped`
 
-// rewindRowsSQL 은 적재의 조각 축이다 — 설계 4.1 settled 정본 SQL 의 형상에서 범위를 `seq ≥ 적재 하한`
-// 으로 열고 최신 쪽부터 행 수 상한($3)까지만 싣는 것이다(계획 4.5 A3 결정 3 둘째). is_discontinuity 는
+// rewindRowsSQL 은 적재의 조각 축이다 — 설계 4.1 settled 정본 SQL 의 형상에서 범위를 `적재 하한 ≤ seq ≤ 머리($4)`
+// 로 열고 최신 쪽부터 행 수 상한($3)까지만 싣는 것이다(계획 4.5 A3 결정 3 둘째). is_discontinuity 는
 // 읽지 않는다. GAP 원장은 발행 상태(recorded·put_confirmed·vod_abandoned)와 무관하게 소속만 본다 —
 // settled 술어의 「(stream_id,k) ∈ stream_published_gaps」 그대로다.
 const rewindRowsSQL = `
@@ -122,7 +125,7 @@ SELECT seq, session_id, duration_ms, playback_pdt, playback_s3_key, pb_uploaded,
                (g.seq IS NOT NULL)                    AS is_gap
           FROM stream_segments s
           LEFT JOIN stream_published_gaps g ON g.stream_id = s.stream_id AND g.seq = s.seq
-         WHERE s.stream_id = $1 AND s.seq >= $2
+         WHERE s.stream_id = $1 AND s.seq >= $2 AND s.seq <= $4
          ORDER BY s.seq DESC
          LIMIT $3) AS r
  ORDER BY seq`
@@ -153,6 +156,9 @@ func LoadRewindLedger(ctx context.Context, pool *pgxpool.Pool, streamID string, 
 	return loadRewindLedger(ctx, pool, streamID, b, TxnDeadline)
 }
 
+// maxSeq 는 머리를 두지 않는 적재의 머리 값이다 — seq 열(bigint)의 최댓값이라 모든 행이 그 이하다.
+const maxSeq int64 = math.MaxInt64
+
 // loadRewindLedger 는 LoadRewindLedger 의 몸체다 — 시한 deadline 을 받는 것은 같은 패키지의 시험이 문장 시한과
 // 되돌림 시한을 함께 줄이기 위해서다.
 //
@@ -172,7 +178,7 @@ func loadRewindLedger(ctx context.Context, pool *pgxpool.Pool, streamID string, 
 		defer rcancel()
 		_ = tx.Rollback(rctx)
 	}()
-	l, err := readRewindLedger(tctx, tx, streamID, b)
+	l, err := readRewindLedger(tctx, tx, streamID, b, maxSeq)
 	if err != nil {
 		return RewindLedger{}, err
 	}
@@ -182,8 +188,34 @@ func loadRewindLedger(ctx context.Context, pool *pgxpool.Pool, streamID string, 
 	return l, nil
 }
 
-// readRewindLedger 는 적재 트랜잭션 tx 안의 네 문장이다(LoadRewindLedger 의 표).
-func readRewindLedger(ctx context.Context, tx pgx.Tx, streamID string, b LedgerBounds) (RewindLedger, error) {
+// readRewindLedger 는 적재 트랜잭션 tx 안의 네 문장이다(LoadRewindLedger 의 표). head 는 싣는 행의 머리(seq 상한 ·
+// 포함)다 — 행 수 상한과 되짚기는 이 머리 이하의 최신 행에서 센다.
+func readRewindLedger(ctx context.Context, tx pgx.Tx, streamID string, b LedgerBounds, head int64) (RewindLedger, error) {
+	l, err := readCutoff(ctx, tx, streamID)
+	if err != nil || !l.HasCutoff {
+		return l, err
+	}
+	var lookback int64
+	err = tx.QueryRow(ctx, rewindFloorSQL, streamID, l.CutoffSeq, b.Lookback.Milliseconds(), int64(b.RowCap), head).
+		Scan(&lookback, &l.Capped)
+	if err != nil {
+		return RewindLedger{}, fmt.Errorf("되감기 적재 하한 조회 실패 stream_id=%q: %w", streamID, err)
+	}
+	l.FloorSeq = ledgerFloor(l.CutoffSeq, lookback, b.Hint)
+	if l.Rows, err = loadRewindRows(ctx, tx, streamID, l.FloorSeq, b.RowCap, head); err != nil {
+		return RewindLedger{}, err
+	}
+	if n := len(l.Rows); n > 0 && n == b.RowCap && l.Rows[0].Seq > l.FloorSeq { // 힌트가 상한을 넘겼다
+		l.FloorSeq, l.Capped = l.Rows[0].Seq, true
+	}
+	if l.Sessions, err = loadRewindSessions(ctx, tx, streamID, referencedSessions(l.Rows)); err != nil {
+		return RewindLedger{}, err
+	}
+	return l, nil
+}
+
+// readCutoff 는 스트림의 활성화 컷오프다(⑴) — 없으면 HasCutoff 가 거짓인 빈 적재분이다.
+func readCutoff(ctx context.Context, tx pgx.Tx, streamID string) (RewindLedger, error) {
 	var l RewindLedger
 	err := tx.QueryRow(ctx, rewindCutoffSQL, streamID).Scan(&l.CutoffSeq)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -193,22 +225,6 @@ func readRewindLedger(ctx context.Context, tx pgx.Tx, streamID string, b LedgerB
 		return RewindLedger{}, fmt.Errorf("되감기 적재 컷오프 조회 실패 stream_id=%q: %w", streamID, err)
 	}
 	l.HasCutoff = true
-	var lookback int64
-	err = tx.QueryRow(ctx, rewindFloorSQL, streamID, l.CutoffSeq, b.Lookback.Milliseconds(), int64(b.RowCap)).
-		Scan(&lookback, &l.Capped)
-	if err != nil {
-		return RewindLedger{}, fmt.Errorf("되감기 적재 하한 조회 실패 stream_id=%q: %w", streamID, err)
-	}
-	l.FloorSeq = ledgerFloor(l.CutoffSeq, lookback, b.Hint)
-	if l.Rows, err = loadRewindRows(ctx, tx, streamID, l.FloorSeq, b.RowCap); err != nil {
-		return RewindLedger{}, err
-	}
-	if n := len(l.Rows); n > 0 && n == b.RowCap && l.Rows[0].Seq > l.FloorSeq { // 힌트가 상한을 넘겼다
-		l.FloorSeq, l.Capped = l.Rows[0].Seq, true
-	}
-	if l.Sessions, err = loadRewindSessions(ctx, tx, streamID, referencedSessions(l.Rows)); err != nil {
-		return RewindLedger{}, err
-	}
 	return l, nil
 }
 
@@ -222,8 +238,16 @@ func ledgerFloor(cutoff, lookback int64, hint *int64) int64 {
 }
 
 // loadRewindRows 는 조각 축(⑶)이다.
-func loadRewindRows(ctx context.Context, tx pgx.Tx, streamID string, floor int64, rowCap int) ([]RewindRow, error) {
-	rows, err := tx.Query(ctx, rewindRowsSQL, streamID, floor, int64(rowCap))
+func loadRewindRows(ctx context.Context, tx pgx.Tx, streamID string, floor int64, rowCap int, head int64) ([]RewindRow, error) {
+	return queryRewindRows(ctx, tx, streamID, rewindRowsSQL, streamID, floor, int64(rowCap), head)
+}
+
+// queryRewindRows 는 조각 축 열(seq · session_id · duration_ms · playback_pdt · playback_s3_key · pb_uploaded ·
+// is_gap)을 내는 문장 sql 을 돌려 행으로 편다 — 되감기 적재와 사슬 장부(LoadChainLedger)가 같은 열 · 같은 NULL
+// 규약을 쓴다. sql 은 이 패키지의 문장 상수(rewindRowsSQL · chainRowsSQL)만 받는다 — 호출자 입력으로 문장을
+// 짜지 않는다(값은 args 자리표로만 넘긴다).
+func queryRewindRows(ctx context.Context, tx pgx.Tx, streamID, sql string, args ...any) ([]RewindRow, error) {
+	rows, err := tx.Query(ctx, sql, args...)
 	if err != nil {
 		return nil, fmt.Errorf("되감기 적재 조각 조회 실패 stream_id=%q: %w", streamID, err)
 	}
@@ -276,12 +300,16 @@ func loadRewindSessions(ctx context.Context, tx pgx.Tx, streamID string, ids []s
 			s                  RewindSession
 			endReason, inherit *string
 			firstPDT           *time.Time
+			minSeq             *int64
 		)
 		if err := rows.Scan(&s.SessionID, &s.State, &endReason, &s.InitUploaded, &s.DiscontinuityBase,
-			&firstPDT, &inherit, &s.TargetDuration, &s.MinSeq); err != nil {
+			&firstPDT, &inherit, &s.TargetDuration, &minSeq); err != nil {
 			return nil, fmt.Errorf("되감기 적재 회차 스캔 실패 stream_id=%q: %w", streamID, err)
 		}
 		s.EndReason, s.FirstPDT, s.InheritsSession = deref(endReason), derefTime(firstPDT), deref(inherit)
+		if minSeq != nil {
+			s.MinSeq = *minSeq
+		}
 		out = append(out, s)
 	}
 	if err := rows.Err(); err != nil {
