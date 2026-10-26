@@ -798,18 +798,22 @@ O7e 가 이미 끝났으면(하한 아래 사이드카가 이미 prod 에서 돎
     본문으로 돌아갑니다. 정의자 함수의 EXECUTE 회수(`REVOKE`)도 다시
     돌지만 멱등입니다. 10(1단-나 ① 판) · 20 · 30 도 다시 돌리면 같은
     상태로 수렴합니다(5-3 끝).
-*   잠금 순서가 정해져 있습니다. `20_schema.sql` 은 사본을 읽기 전에
-    `stream_sessions` 를 ACCESS EXCLUSIVE, `stream_segments` 를 SHARE ROW
-    EXCLUSIVE 로 먼저 잡습니다 — 사이드카 `insertOnce` 가 잠그는 순서
-    (sessions → segments)와 같습니다. 이 줄이 없으면 재실행이 segments 를
-    먼저 잡고(`CREATE INDEX IF NOT EXISTS` 는 이름을 확인하기 전에 잠급니다)
-    sessions 를 나중에 잡아, 송출 중인 사이드카와 서로 기다립니다. PG 는
-    이런 교착을 1초(`deadlock_timeout` 기본값) 뒤 찾아 한쪽 트랜잭션을
-    실패시킵니다(SQLSTATE 40P01 · `lock_timeout` 3초보다 먼저 옵니다).
-    그래도 표준 오류에 `deadlock detected` 줄이 있으면 그 파일만
-    롤백되므로(`psql -1`) 아래 「재실행 걸음」 의 `lock timeout` 과 같이
-    끄고 다음 흐름을 4 부터 다시 합니다. 잠근 동안(파일 끝까지) 두 표의
-    사이드카 · 앱 서버 질의는 기다립니다.
+*   수렴한 DB 에 다시 돌리면 `20_schema.sql` 은 장부 표를 잠그지
+    않습니다. 사본은 인덱스를 이름이 없을 때만 만들고(`to_regclass` 존재
+    확인 DO 블록 — `CREATE INDEX IF NOT EXISTS` 는 이름을 확인하기 전에
+    표를 잠급니다), 열 · 제약 · 트리거도 카탈로그를 확인한 뒤에만
+    바꿉니다. 그래서 다시 돌리는 동안 장부 표에 ACCESS SHARE 보다 강한
+    잠금이 없고, 송출 중인 사이드카와 어느 잠금 순서로도 서로 기다리지
+    않습니다(`ledger_schema_pg_test` 의 재실행 무잠금 · 무교착 시험 — M6-0
+    c5). 처음 적용이나 인덱스 · 열 · 제약 · 트리거가 빠진 DB 에서는 그것을
+    만드는 동안 그 표를 잠그고, 그 표의 사이드카 · 앱 서버 질의는 파일
+    끝까지 기다립니다. 그래도 표준 오류에 `deadlock detected`(SQLSTATE
+    40P01) 줄이 있으면 그 파일만 롤백되므로(`psql -1`) 아래 「재실행
+    걸음」 의 `lock timeout` 과 같이 끄고 다음 흐름을 4 부터 다시 합니다.
+    다만 그런 DB 에서는 교착의 희생자가 사이드카 쪽일 수도 있고, 그때
+    재실행 SQL 은 끝까지 돌아 `VERIFY OK` 를 낼 수 있습니다 — `VERIFY OK`
+    가 사이드카 무영향을 뜻하지 않습니다. 사이드카는 그 쓰기를 백오프
+    재시도로 다시 해 회복합니다(M6-0 c5 시험).
 
 ### 재실행 걸음
 
