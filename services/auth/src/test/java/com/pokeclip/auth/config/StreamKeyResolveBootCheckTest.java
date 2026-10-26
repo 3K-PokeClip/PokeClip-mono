@@ -2,6 +2,7 @@ package com.pokeclip.auth.config;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.pokeclip.web.security.ForwardedHeaderMarkValve;
 import jakarta.servlet.Filter;
 import java.io.PrintWriter;
 import java.io.StringWriter;

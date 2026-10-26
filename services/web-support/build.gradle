@@ -1,6 +1,6 @@
 // 서버가 아니라 라이브러리다. bootJar를 만들지 않으므로 spring-boot 플러그인을 붙이지 않는다.
 //
-// 여기는 두 서버 이상이 똑같이 쓰는 웹 인프라(CORS·상관 ID)만 둔다.
+// 여기는 두 서버 이상이 똑같이 쓰는 웹 인프라(CORS·상관 ID·출발지 잠금 부품)만 둔다.
 // 로직은 두지 않는다 — 경계가 흐려지면 서버들이 한 덩어리가 되고 나눈 의미가 사라진다.
 //
 // 계약(공유 엔티티·SQS DTO)을 담던 common 모듈은 소스 0개로 오래 남아 있다가
@@ -17,8 +17,13 @@ dependencies {
     // 그 타입들이 컴파일 클래스패스에 있어야 한다.
     api 'org.springframework.boot:spring-boot-starter-webmvc'
     api 'org.springframework.boot:spring-boot-starter-validation'
+    // 출발지 잠금 부품(security 패키지)이 대역 매처를 쓴다. 쓰는 서버(auth · clip)는 security starter 를 이미
+    // 갖고 있어 compileOnly 로 둔다 — implementation 이면 테스트 픽스처만 받는 모듈(chat-collector ·
+    // chat-detector · db-support)의 시험 클래스패스에도 시큐리티가 딸려 간다.
+    compileOnly 'org.springframework.security:spring-security-web'
 
     testFixturesApi 'ch.qos.logback:logback-classic'
 
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    testImplementation 'org.springframework.security:spring-security-web'
 }

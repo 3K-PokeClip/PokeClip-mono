@@ -39,8 +39,8 @@ import java.io.IOException;
  * <p>회원을 못 찾으면 통과시킨다. 「토큰의 주인이 없다」는 각 창구가 자기 사유로 이미 다룬다.
  *
  * <p>🔴 <b>빈으로 등록하지 않는다.</b> {@link SecurityConfig}가 {@code new}로 만들어 기본 체인에만
- * 끼운다({@link InternalTokenFilter} 선례). {@code @Component}를 붙이면 서블릿이 전역 등록해
- * 끼우는 자리가 명시가 아니라 등록 순서에 딸려 가고, 보안 체인 밖에서도 돈다.
+ * 끼운다({@link com.pokeclip.web.security.InternalTokenFilter} 선례). {@code @Component}를 붙이면
+ * 서블릿이 전역 등록해 끼우는 자리가 명시가 아니라 등록 순서에 딸려 가고, 보안 체인 밖에서도 돈다.
  *
  * <p>🔴 <b>「그러면 {@code /internal/**}이 막힌다」는 재현되지 않았다.</b> 그 체인은 JWT 인증을
  * 아예 안 해 주체가 없고, 주체가 없으면 이 필터는 막지 않는다. <b>참인 것은 거기까지다.</b>
