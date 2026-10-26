@@ -70,6 +70,9 @@ ON CONFLICT (event_id) DO NOTHING`
 // startedAt 은 머리 세션 started_at 이다. 게이트가 그 stream_id 를 내지 않거나 round 가 비면(M6 전 세션) 아무 문장도
 // 보내지 않는다(D45). 회차 열쇠가 식별자 규칙(CheckRound)을 어기면 행을 abandoned 로 넣고 ERROR 를 남긴다(D48) —
 // pending 으로 두면 영영 못 나가고, 행이 없으면 ended 를 막을 근거가 없다. 오류는 INSERT 실패뿐이다.
+//
+// lifecycle_enqueued · lifecycle_abandoned 는 부르는 쪽 트랜잭션 안의 「적재 시도」 신호다 — 커밋 전에 찍으므로 부르는
+// 쪽이 롤백하면 행 없이 줄만 남는다. 커밋된 사실은 outbox 행과 발행기의 lifecycle_published 가 정본이다.
 func EnqueueStarted(ctx context.Context, tx pgx.Tx, g Gate, round, ingestStreamID string, startedAt time.Time) error {
 	if round == "" || !g.allows(ingestStreamID) {
 		return nil
@@ -101,6 +104,9 @@ func EnqueueStarted(ctx context.Context, tx pgx.Tx, g Gate, round, ingestStreamI
 // insertEndedSQL 은 회차가 완결(닫힘 ∧ 전원 ended)이고 그 회차 started 행이 살아 있을(abandoned 아님) 때만 ended 행을
 // 넣는다($1 started eventId · $2 ended eventId · $3 eventType). 문장 하나라 판정과 INSERT 가 같은 스냅숏이다.
 //
+//   - started 행은 FOR SHARE 로 쥔다(B4). 발행기의 버림(abandonRowSQL)이 커밋 전이면 그것을 기다렸다가 abandoned 를
+//     보고 넣지 않고, 이쪽이 먼저면 버림이 이 트랜잭션 커밋을 기다렸다가 다음 문장(abandonLaterSQL)으로 ended 까지
+//     거둔다.
 //   - 회차 세션은 started 행의 (ingest_stream_id, round_id) 로 찾는다 — stream_sessions_stream_idx 의 선행 열을 쓴다.
 //   - occurred_at = 회차 조각의 마지막 끝(D44 — clip endedAt). 조각이 없으면(구조상 드묾) 마지막 ended_at, 그것도 없으면
 //     round_closed_at 이다 — NULL 로 넣다 부르는 쪽 트랜잭션을 깨지 않는다.
@@ -112,6 +118,7 @@ const insertEndedSQL = `
 WITH started AS (
   SELECT round_id, ingest_stream_id FROM broadcast_lifecycle_outbox
    WHERE event_id = $1 AND state <> 'abandoned'
+     FOR SHARE
 ),
 members AS (
   SELECT s.session_id, s.stream_id, s.state, s.round_closed_at, s.ended_at
@@ -141,6 +148,12 @@ ON CONFLICT (event_id) DO NOTHING`
 // CloseRound · tryCloseRound · 4D round_split · MarkChainEnded). 「닫힘 ∧ 전원 ended」 이고 started 행이 살아 있으면
 // ended 행을 넣고 참을 돌려준다. 겹쳐 불려도 행은 하나다. 게이트가 꺼져 있으면 문장을 보내지 않는다. started 를 낸
 // 회차만 ended 를 내므로 허용 목록은 started 쪽에서 이미 걸렀다.
+//
+// 선행 조건: 부르는 쪽은 그 ingest stream 의 위상 잠금(pc_topology_<stream> advisory · 설계 3.3)을 쥔 트랜잭션 끝에서
+// 부르고, 회차 세션을 ended 로 바꾸거나 회차를 닫는 모든 트랜잭션이 같은 잠금 아래에서 부른다. 판정은 stream_sessions
+// 를 잠그지 않고 읽으므로, 잠금 없이 같은 회차의 두 사슬이 따로 ended 가 되면 두 트랜잭션 모두 상대를 아직 ended 가
+// 아닌 것으로 보아 ended 행이 영영 생기지 않는다. lifecycle_enqueued 는 EnqueueStarted 와 같이 커밋 전 「적재 시도」
+// 신호다. started 행을 FOR SHARE 로 잠그므로 부르는 쪽 역할에는 outbox UPDATE 권한이 있어야 한다(30_grants.sql).
 func EnqueueEndedIfComplete(ctx context.Context, tx pgx.Tx, g Gate, round string) (bool, error) {
 	if round == "" || !g.Enabled() {
 		return false, nil

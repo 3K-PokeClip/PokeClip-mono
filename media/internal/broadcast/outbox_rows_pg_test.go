@@ -110,7 +110,7 @@ func TestSelectDueReadsRowsInOrder(t *testing.T) {
 	}
 }
 
-// started 를 버리면 같은 트랜잭션(문장 하나)에서 그 회차의 pending 행(ended)도 started_abandoned 로 버린다(X4 규칙 2).
+// started 를 버리면 같은 트랜잭션(문장 둘)에서 그 회차의 pending 행(ended)도 started_abandoned 로 버린다(X4 규칙 2).
 // ended 를 버려도 started 는 그대로다.
 func TestAbandonCascadesFromStarted(t *testing.T) {
 	pool := newTestPool(t)
