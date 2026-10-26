@@ -71,17 +71,17 @@ output "media_health_path" {
 }
 
 output "ecs_cluster_arn" {
-  description = "ECS 클러스터 ARN — 런타임 트랙 · 일꾼(POK-408) · chat(POK-306) 서비스가 같은 클러스터에 둔다."
+  description = "ECS 클러스터 ARN — 런타임 트랙 · 일꾼(POK-408) 서비스가 같은 클러스터에 둔다(chat 두 서비스는 이 루트가 둔다)."
   value       = aws_ecs_cluster.this.arn
 }
 
 output "discovery_namespace_id" {
-  description = "Cloud Map 사설 DNS 네임스페이스(pokeclip.internal) id — 일꾼 · chat 서비스 등록."
+  description = "Cloud Map 사설 DNS 네임스페이스(pokeclip.internal) id — 일꾼 서비스 등록."
   value       = aws_service_discovery_private_dns_namespace.this.id
 }
 
 output "service_sg_ids" {
-  description = "서비스 SG id(auth · clip · next) — 런타임 2단 · 일꾼 · chat · media(auth) 가 상대 규칙에 쓴다."
+  description = "서비스 SG id(auth · clip · next) — 런타임 2단 · 일꾼 · media(auth) 가 상대 규칙에 쓴다. chat 두 서비스의 SG 와 그 규칙은 이 루트 안에 있어 내보내지 않는다."
   value       = local.service_sg_ids
 }
 

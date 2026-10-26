@@ -33,7 +33,7 @@ apply 로 만든 `prod/records` · `prod/edge` · `prod/media` · `prod/platform
 | 순서 | 무엇 | 왜 |
 |---|---|---|
 | 1 | **revert 전에** 내린다(records · edge · platform · media) | revert 하면 루트 코드가 사라져 destroy 할 구성이 없어집니다. 상태만 남고 자원은 관리 밖에 남습니다. registry 저장소 둘은 예외입니다 — 순서 4 |
-| 2 | 앞 루트 출력을 읽는 다른 루트가 먼저 | 런타임 2단 · 일꾼 · chat 이 platform 출력을 쓰고(platform README 「출력」), 런타임 2단은 edge 출력 `media_distribution_arn` 도 씁니다. 이 런북은 그 루트들을 내리지 않습니다 — 아래 「시작 전」 4 |
+| 2 | 앞 루트 출력을 읽는 다른 루트가 먼저 | 런타임 2단 · 일꾼이 platform 출력을 쓰고(platform README 「출력」), 런타임 2단은 edge 출력 `media_distribution_arn` 도 씁니다. 이 런북은 그 루트들을 내리지 않습니다 — 아래 「시작 전」 4 |
 | 3 | 의존 역순 — `prod/records` → `prod/edge` → `prod/media` → `prod/platform` | records 는 edge(배포 별칭)와 platform(공개 ALB · NLB 별칭) 출력을, edge 는 platform 의 내부 ALB 출력을 읽고 그 SG 에 인그레스 규칙을 둡니다. `prod/media/remote_state.tf` 도 platform 상태를 읽고, `main.tf` 가 대상 그룹 ARN · LB SG · nginx 포트를 그 출력에서 받습니다. 앞 루트를 먼저 내리면 뒤 루트의 destroy plan 이 출력 이름으로 실패합니다. Media SG 규칙도 platform 의 LB SG 를 출처로 가리킵니다 |
 | 4 | registry 저장소 둘은 맨 끝 · 필요할 때만 · **revert 뒤가 기본** | 두 저장소의 이미지는 `prod/media` 만 씁니다. `prod/registry` 루트는 revert 뒤에도 남고 두 키만 빠지므로, revert 뒤의 registry apply 로 지우는 것이 기본입니다(「4. registry 저장소 둘」) |
 
@@ -120,7 +120,7 @@ bootstrap)는 이 런북이 내리지 않습니다. platform · media 의 destro
 
     알려진 열 루트의 상태 키(`prod/<루트>/terraform.tfstate` 와 그 잠금
     파일 `.tflock`) 밖의 키가 하나라도 나오면 멈추고 kty 에게 보고합니다.
-    접두가 아니라 키 전체로 봅니다 — 런타임 2단 · 일꾼 · chat 의 키가
+    접두가 아니라 키 전체로 봅니다 — 런타임 2단 · 일꾼의 키가
     `prod/runtime/` 같은 앞 루트 디렉터리 아래에 있어도 걸리게. 그 루트에
     자원이 남았으면 그 루트를 먼저 내려야 하고, 그 절차는 이 런북에
     없습니다(그 루트의 PR 이 정합니다). edge · records 의 키가 있으면
@@ -634,7 +634,7 @@ terraform -chdir="${media}" import "${param_addr}" "${param_name}"
     보고합니다. 거부 목록 파라미터 밖의 자원을 `state rm` 으로 떼어 넘기지
     않습니다 — 떼면 그 자원이 관리 밖에 남습니다.
 *   SG 삭제가 `DependencyViolation` 으로, Cloud Map 네임스페이스 삭제가
-    사용 중으로 막히면 다른 루트(런타임 2단 · 일꾼 · chat)의 자원이 아직
+    사용 중으로 막히면 다른 루트(런타임 2단 · 일꾼)의 자원이 아직
     가리키고 있을 수 있습니다. 멈추고 「시작 전」 4 를 다시 봅니다.
 *   다시 할 때는 같은 plan 요지 절차로 plan 을 새로 만듭니다(남은 자원만
     나옴).

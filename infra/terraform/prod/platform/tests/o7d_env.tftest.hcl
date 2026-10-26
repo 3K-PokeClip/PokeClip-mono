@@ -124,9 +124,11 @@ override_data {
   values = {
     outputs = {
       repo_urls = {
-        next = "111122223333.dkr.ecr.ap-northeast-2.amazonaws.com/pokeclip-prod/next"
-        auth = "111122223333.dkr.ecr.ap-northeast-2.amazonaws.com/pokeclip-prod/auth"
-        clip = "111122223333.dkr.ecr.ap-northeast-2.amazonaws.com/pokeclip-prod/clip"
+        next             = "111122223333.dkr.ecr.ap-northeast-2.amazonaws.com/pokeclip-prod/next"
+        auth             = "111122223333.dkr.ecr.ap-northeast-2.amazonaws.com/pokeclip-prod/auth"
+        clip             = "111122223333.dkr.ecr.ap-northeast-2.amazonaws.com/pokeclip-prod/clip"
+        "chat-collector" = "111122223333.dkr.ecr.ap-northeast-2.amazonaws.com/pokeclip-prod/chat-collector"
+        "chat-detector"  = "111122223333.dkr.ecr.ap-northeast-2.amazonaws.com/pokeclip-prod/chat-detector"
       }
     }
   }
@@ -140,8 +142,10 @@ override_data {
       rds_resource_id   = "db-ABCDEFGHIJKLMNOPQRSTUVWXYZ"
       rewind_bucket_arn = "arn:aws:s3:::pokeclip-prod-rewind-example"
       app_db_users = {
-        auth = "app_auth"
-        clip = "app_clip"
+        auth             = "app_auth"
+        clip             = "app_clip"
+        "chat-collector" = "app_chat_collector"
+        "chat-detector"  = "app_chat_detector"
       }
       app_env = {
         auth = {
@@ -154,6 +158,18 @@ override_data {
           BROADCAST_INTAKE_ENABLED = "true"
           BROADCAST_QUEUE_URL      = "https://sqs.ap-northeast-2.amazonaws.com/111122223333/pokeclip-prod-broadcast-clip"
         }
+        "chat-collector" = {
+          S3_BUCKET           = "pokeclip-prod-chat-archive-example"
+          DB_HOST             = "db.example.invalid"
+          POSTGRES_DB         = "pokeclip"
+          BROADCAST_QUEUE_URL = "https://sqs.ap-northeast-2.amazonaws.com/111122223333/pokeclip-prod-broadcast-lifecycle-chat.fifo"
+          CHZZK_CLIENT_ID     = "chzzk-example-client"
+          SOOP_CLIENT_ID      = "soop-example-client"
+        }
+        "chat-detector" = {
+          DB_HOST     = "db.example.invalid"
+          POSTGRES_DB = "pokeclip"
+        }
       }
       app_secret_arns = {
         auth = {
@@ -163,6 +179,14 @@ override_data {
         }
         clip = {
           JWT_SECRET         = "arn:aws:secretsmanager:ap-northeast-2:111122223333:secret:pokeclip/prod/jwt-secret-StUvWx"
+          INTERNAL_API_TOKEN = "arn:aws:secretsmanager:ap-northeast-2:111122223333:secret:pokeclip/prod/internal-api-token-EfGhIj"
+        }
+        "chat-collector" = {
+          INTERNAL_API_TOKEN  = "arn:aws:secretsmanager:ap-northeast-2:111122223333:secret:pokeclip/prod/internal-api-token-EfGhIj"
+          CHZZK_CLIENT_SECRET = "arn:aws:secretsmanager:ap-northeast-2:111122223333:secret:pokeclip/prod/chzzk-client-secret-KlMnOp"
+          SOOP_CLIENT_SECRET  = "arn:aws:secretsmanager:ap-northeast-2:111122223333:secret:pokeclip/prod/soop-client-secret-QrStUv"
+        }
+        "chat-detector" = {
           INTERNAL_API_TOKEN = "arn:aws:secretsmanager:ap-northeast-2:111122223333:secret:pokeclip/prod/internal-api-token-EfGhIj"
         }
       }
@@ -181,15 +205,19 @@ override_data {
           segment_bucket_arn  = "arn:aws:s3:::pokeclip-prod-rewind-example"
         }
       }
+      broadcast_queue_arns    = { clip = "arn:aws:sqs:ap-northeast-2:111122223333:pokeclip-prod-broadcast-lifecycle-clip.fifo", chat = "arn:aws:sqs:ap-northeast-2:111122223333:pokeclip-prod-broadcast-lifecycle-chat.fifo" }
+      chat_archive_bucket_arn = "arn:aws:s3:::pokeclip-prod-chat-archive-example"
     }
   }
 }
 
 variables {
   image_digests = {
-    next = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
-    auth = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
-    clip = "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+    next             = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+    auth             = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+    clip             = "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+    "chat-collector" = "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+    "chat-detector"  = "sha256:5555555555555555555555555555555555555555555555555555555555555555"
   }
   proxy_ports = {
     live     = 28181
@@ -251,13 +279,15 @@ run "runtime_contract_accepts_fifo_queue_arn" {
         rds_sg_id         = "sg-0rds"
         rds_resource_id   = "db-ABCDEFGHIJKLMNOPQRSTUVWXYZ"
         rewind_bucket_arn = "arn:aws:s3:::pokeclip-prod-rewind-example"
-        app_db_users      = { auth = "app_auth", clip = "app_clip" }
-        app_env           = { auth = {}, clip = {} }
+        app_db_users      = { auth = "app_auth", clip = "app_clip", "chat-collector" = "app_chat_collector", "chat-detector" = "app_chat_detector" }
+        app_env           = { auth = {}, clip = {}, "chat-collector" = { S3_BUCKET = "pokeclip-prod-chat-archive-example" } }
         app_secret_arns   = { auth = {}, clip = {} }
         app_task_resource_arns = {
           auth = {}
           clip = { broadcast_queue_arn = "arn:aws:sqs:ap-northeast-2:111122223333:pokeclip-prod-broadcast-lifecycle-clip.fifo" }
         }
+        broadcast_queue_arns    = { clip = "arn:aws:sqs:ap-northeast-2:111122223333:pokeclip-prod-broadcast-lifecycle-clip.fifo", chat = "arn:aws:sqs:ap-northeast-2:111122223333:pokeclip-prod-broadcast-lifecycle-chat.fifo" }
+        chat_archive_bucket_arn = "arn:aws:s3:::pokeclip-prod-chat-archive-example"
       }
     }
   }
@@ -275,13 +305,15 @@ run "runtime_contract_rejects_dot_inside_queue_name" {
     target = data.terraform_remote_state.runtime
     values = {
       outputs = {
-        rds_sg_id              = "sg-0rds"
-        rds_resource_id        = "db-ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-        rewind_bucket_arn      = "arn:aws:s3:::pokeclip-prod-rewind-example"
-        app_db_users           = { auth = "app_auth", clip = "app_clip" }
-        app_env                = { auth = {}, clip = {} }
-        app_secret_arns        = { auth = {}, clip = {} }
-        app_task_resource_arns = { auth = {}, clip = { broadcast_queue_arn = "arn:aws:sqs:ap-northeast-2:111122223333:a.b" } }
+        rds_sg_id               = "sg-0rds"
+        rds_resource_id         = "db-ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        rewind_bucket_arn       = "arn:aws:s3:::pokeclip-prod-rewind-example"
+        app_db_users            = { auth = "app_auth", clip = "app_clip", "chat-collector" = "app_chat_collector", "chat-detector" = "app_chat_detector" }
+        app_env                 = { auth = {}, clip = {}, "chat-collector" = { S3_BUCKET = "pokeclip-prod-chat-archive-example" } }
+        app_secret_arns         = { auth = {}, clip = {} }
+        app_task_resource_arns  = { auth = {}, clip = { broadcast_queue_arn = "arn:aws:sqs:ap-northeast-2:111122223333:a.b" } }
+        broadcast_queue_arns    = { clip = "arn:aws:sqs:ap-northeast-2:111122223333:pokeclip-prod-broadcast-lifecycle-clip.fifo", chat = "arn:aws:sqs:ap-northeast-2:111122223333:pokeclip-prod-broadcast-lifecycle-chat.fifo" }
+        chat_archive_bucket_arn = "arn:aws:s3:::pokeclip-prod-chat-archive-example"
       }
     }
   }
@@ -296,13 +328,15 @@ run "runtime_contract_rejects_wildcard_fifo_queue_arn" {
     target = data.terraform_remote_state.runtime
     values = {
       outputs = {
-        rds_sg_id              = "sg-0rds"
-        rds_resource_id        = "db-ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-        rewind_bucket_arn      = "arn:aws:s3:::pokeclip-prod-rewind-example"
-        app_db_users           = { auth = "app_auth", clip = "app_clip" }
-        app_env                = { auth = {}, clip = {} }
-        app_secret_arns        = { auth = {}, clip = {} }
-        app_task_resource_arns = { auth = {}, clip = { broadcast_queue_arn = "arn:aws:sqs:ap-northeast-2:111122223333:pokeclip-prod-*.fifo" } }
+        rds_sg_id               = "sg-0rds"
+        rds_resource_id         = "db-ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        rewind_bucket_arn       = "arn:aws:s3:::pokeclip-prod-rewind-example"
+        app_db_users            = { auth = "app_auth", clip = "app_clip", "chat-collector" = "app_chat_collector", "chat-detector" = "app_chat_detector" }
+        app_env                 = { auth = {}, clip = {}, "chat-collector" = { S3_BUCKET = "pokeclip-prod-chat-archive-example" } }
+        app_secret_arns         = { auth = {}, clip = {} }
+        app_task_resource_arns  = { auth = {}, clip = { broadcast_queue_arn = "arn:aws:sqs:ap-northeast-2:111122223333:pokeclip-prod-*.fifo" } }
+        broadcast_queue_arns    = { clip = "arn:aws:sqs:ap-northeast-2:111122223333:pokeclip-prod-broadcast-lifecycle-clip.fifo", chat = "arn:aws:sqs:ap-northeast-2:111122223333:pokeclip-prod-broadcast-lifecycle-chat.fifo" }
+        chat_archive_bucket_arn = "arn:aws:s3:::pokeclip-prod-chat-archive-example"
       }
     }
   }

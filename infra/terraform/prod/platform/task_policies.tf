@@ -1,6 +1,7 @@
-# auth · clip 작업 역할 정책 — 코드가 실제로 부르는 AWS 동작만(결정 135).
-# 대상 자원은 런타임 1단이 만들고 ARN 을 app_task_resource_arns 로 낸다. 키가
-# 없으면(기능 꺼짐) 그 문장을 만들지 않는다. 근거(파일:행)는 README 「작업 역할」.
+# auth · clip · chat 작업 역할 정책 — 코드가 실제로 부르는 AWS 동작만(결정
+# 135). 대상 자원은 런타임 1단이 만들고 ARN 을 app_task_resource_arns(chat 큐는
+# broadcast_queue_arns)로 낸다. 키가 없으면(기능 꺼짐) 그 문장을 만들지 않는다.
+# 근거(파일:행)는 README 「작업 역할」.
 #
 # 동작을 바꾸는 코드 변경(새 AWS 호출)은 이 표도 함께 고친다 — 빠지면 그
 # 기능이 운영에서 권한 거부로 실패한다.
@@ -8,6 +9,9 @@
 locals {
   auth_arns = local.task_resource_arns.auth
   clip_arns = local.task_resource_arns.clip
+
+  # 채팅 원본 보관 창고(런타임 출력 — collector 의 S3_BUCKET 과 같은 버킷).
+  chat_archive_bucket_arn = try(local.runtime.chat_archive_bucket_arn, "")
 
   # 스트림 키 비밀 이름 = 접두 + UUID(auth 가 만든다) — 접두 와일드카드만 쓴다.
   stream_key_secret_arn = "arn:aws:secretsmanager:${local.region}:${local.account_id}:secret:${var.stream_key_secret_prefix}*"
@@ -76,6 +80,29 @@ locals {
         resources = [for arn in compact([try(local.clip_arns.segment_bucket_arn, "")]) : "${arn}/*"]
       },
     ]
+    "chat-collector" = [
+      {
+        # 방송 편지 받기 — 부팅 때 가시성 시한을 한 번 읽는다(GetQueueAttributes).
+        sid       = "ChatBroadcastIntake"
+        actions   = ["sqs:DeleteMessage", "sqs:GetQueueAttributes", "sqs:ReceiveMessage"]
+        resources = compact([try(local.runtime.broadcast_queue_arns.chat, "")])
+      },
+      {
+        # 채팅 원본 1분 파일 올리기 · 탈퇴 정리(DeleteObjects 는 객체마다
+        # s3:DeleteObject 로 인가된다). 키는 모두 chat/ 아래다(ArchiveKey).
+        sid       = "ChatArchiveObjects"
+        actions   = ["s3:DeleteObject", "s3:PutObject"]
+        resources = [for arn in compact([local.chat_archive_bucket_arn]) : "${arn}/chat/*"]
+      },
+      {
+        # 탈퇴 정리가 채널 접두(chat/<플랫폼>/<채널>/)를 훑는다. ecs_service 의
+        # 문장에 조건(s3:prefix)이 없어 버킷 전체 목록이다 — 창고는 chat 전용.
+        sid       = "ChatArchiveList"
+        actions   = ["s3:ListBucket"]
+        resources = compact([local.chat_archive_bucket_arn])
+      },
+    ]
+    "chat-detector" = []
   }
 
   db_connect_statements = {
@@ -86,15 +113,13 @@ locals {
     }
   }
 
-  task_role_statements = {
-    next = []
-    auth = [
-      for statement in concat(local.task_role_candidates.auth, [local.db_connect_statements.auth]) :
-      statement if length(statement.resources) > 0
-    ]
-    clip = [
-      for statement in concat(local.task_role_candidates.clip, [local.db_connect_statements.clip]) :
-      statement if length(statement.resources) > 0
-    ]
-  }
+  task_role_statements = merge(
+    { next = [] },
+    {
+      for service, candidates in local.task_role_candidates : service => [
+        for statement in concat(candidates, [local.db_connect_statements[service]]) :
+        statement if length(statement.resources) > 0
+      ]
+    },
+  )
 }

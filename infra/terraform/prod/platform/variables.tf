@@ -94,12 +94,77 @@ variable "services" {
   }
 }
 
+# chat 두 서버(POK-306)는 공개 ALB 를 쓰지 않아 services(공개 ALB 대상 그룹 ·
+# 규칙의 원천)에 넣지 않는다. 포트는 두 서버 application.yml 의 server.port
+# 맨값(자리 표시자 없음)이라 여기서 바꿀 수 없다 — 바꾸면 SG · 주소 · 컨테이너
+# 포트만 따라가고 앱은 옛 포트에서 듣는다.
+variable "chat_services" {
+  description = "chat ECS 서비스(chat-collector · chat-detector)의 포트(앱 고정값 8083 · 8084) · 크기 — 대상 그룹 없이 Cloud Map 이름으로만 받는다."
+  type = map(object({
+    port   = number
+    cpu    = number
+    memory = number
+  }))
+  default = {
+    chat-collector = { port = 8083, cpu = 1024, memory = 2048 }
+    chat-detector  = { port = 8084, cpu = 512, memory = 1024 }
+  }
+
+  validation {
+    condition     = toset(keys(var.chat_services)) == toset(["chat-collector", "chat-detector"])
+    error_message = "chat_services 의 키는 chat-collector · chat-detector 여야 한다."
+  }
+
+  validation {
+    condition     = try(var.chat_services["chat-collector"].port == 8083 && var.chat_services["chat-detector"].port == 8084, false)
+    error_message = "chat_services 의 port 는 chat-collector 8083 · chat-detector 8084 여야 한다(앱 application.yml 의 server.port — 바꾸려면 앱부터 고친다)."
+  }
+}
+
+# chat-collector 기능 스위치(서버 기본값은 모두 꺼짐 — application.yml). 방송 편지
+# 받기(BROADCAST_INTAKE_ENABLED)는 운영의 시작 경로라 이 루트가 늘 켜므로
+# 스위치가 아니다 — 재부착이 받기를 요구하는 부팅 규칙(ReattachConfiguration)은
+# 그래서 늘 맞는다. 기본값(kty 2026-10-26): 재부착 · 중계 · 방송 정보 · SOOP
+# 지켜보기 · SOOP 채팅은 켬, 떼기는 꺼 둔다 — 떼기는 clip 치우개
+# (BROADCAST_REAPER_*)와 함께 O7e 뒤 운영자가 정한다.
+variable "chat_collector_features" {
+  description = "chat-collector 기능 스위치 — reattach(CHAT_REATTACH_ENABLED) · relay(CHAT_RELAY_ENABLED) · liveinfo(BROADCAST_INFO_ENABLED) · detach(CHAT_DETACH_ENABLED) · soop_watch(SOOP_WATCH_ENABLED) · soop_chat(SOOP_CHAT_ENABLED)."
+  type = object({
+    reattach   = bool
+    relay      = bool
+    liveinfo   = bool
+    detach     = bool
+    soop_watch = bool
+    soop_chat  = bool
+  })
+  default = {
+    reattach   = true
+    relay      = true
+    liveinfo   = true
+    detach     = false
+    soop_watch = true
+    soop_chat  = true
+  }
+
+  validation {
+    condition     = !var.chat_collector_features.detach || var.chat_collector_features.reattach
+    error_message = "chat_collector_features.detach 는 reattach 와 함께만 켠다 — 떼기는 재부착 회차 안에서 돌아, 혼자 켜면 chat-collector 가 부팅을 거부한다(DetachSwitchGuard)."
+  }
+
+  validation {
+    condition     = !var.chat_collector_features.soop_chat || var.chat_collector_features.soop_watch
+    error_message = "chat_collector_features.soop_chat 은 soop_watch 와 함께만 켠다 — 붙을 방송을 지켜보기가 골라, 혼자 켜면 chat-collector 가 부팅을 거부한다."
+  }
+}
+
 variable "image_digests" {
   description = "서비스 이미지 다이제스트(sha256:<64자리>) — 저장소는 registry 출력 repo_urls."
   type = object({
-    next = string
-    auth = string
-    clip = string
+    next           = string
+    auth           = string
+    clip           = string
+    chat-collector = string
+    chat-detector  = string
   })
 
   validation {
