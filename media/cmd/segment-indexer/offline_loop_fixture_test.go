@@ -434,4 +434,6 @@ func (nopPublishStore) Head(context.Context, string) (publish.Stat, error) {
 	return publish.Stat{}, errNopStore
 }
 
-func (nopPublishStore) Get(context.Context, string) ([]byte, error) { return nil, errNopStore }
+func (nopPublishStore) Get(context.Context, string) ([]byte, string, error) {
+	return nil, "", errNopStore
+}

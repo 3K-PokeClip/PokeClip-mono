@@ -93,7 +93,7 @@ type frozenDoc struct {
 //
 //	ⓐ 본 본문이 재렌더 본문의 앞부분 — 꼬리 조각 · ENDLIST 만 빠졌다(RFC 8216bis 6.2.1 허용 변경 안)
 //	ⓑ 재렌더 본문의 sha256 = 장부의 dvr_sha256
-//	ⓒ If-Match = 방금 Head 로 본 ETag(장부의 옛 ETag 가 아니다)
+//	ⓒ If-Match = ⓐ 의 본문을 읽은 Get 응답의 ETag(장부의 옛 ETag 도 Head 의 ETag 도 아니다 — 읽은 판에만 쓴다)
 //	ⓓ 그 문서를 창(30분) 안에 고치려 한 적이 없다 — 이 감사기의 메모리라 재기동하면 잊는다(설계 10절 한계)
 //	ⓔ 장부 CAS(repairClaimSQL)가 이 감사기를 골랐다 — 0행이면 물러난다
 //
@@ -154,7 +154,7 @@ const (
 	auditRepairFenced    = "dvr_audit_repair_fenced"    // 장부 CAS 0행 — 다른 감사기가 쥐었다
 )
 
-// auditDoc 은 문서 d 하나를 본다 — 통과면 "" 다.
+// auditDoc 은 문서 d 하나를 본다 — 통과면 "" 다. 받을 수 없는 Get ETag(checkETag)는 읽기 실패다.
 func (a *FrozenAuditor) auditDoc(ctx context.Context, d frozenDoc) (string, error) {
 	p := a.p
 	hctx, cancel := context.WithTimeout(ctx, p.opt.PublishTimeout)
@@ -169,7 +169,7 @@ func (a *FrozenAuditor) auditDoc(ctx context.Context, d frozenDoc) (string, erro
 		return "", nil
 	}
 	gctx, cancel := context.WithTimeout(ctx, p.opt.PublishTimeout)
-	body, err := p.store.Get(gctx, d.key)
+	body, etag, err := p.store.Get(gctx, d.key)
 	cancel()
 	switch {
 	case err != nil:
@@ -179,7 +179,11 @@ func (a *FrozenAuditor) auditDoc(ctx context.Context, d frozenDoc) (string, erro
 	case d.axis != AxisDVR:
 		return auditMismatch, nil
 	}
-	return a.repair(ctx, d, stat.ETag, body)
+	// 조건은 본문과 같은 응답의 ETag 다 — Head 의 ETag 는 1차 거름일 뿐이다(Store.Get).
+	if err := checkETag(etag); err != nil {
+		return auditReadFailed, err
+	}
+	return a.repair(ctx, d, etag, body)
 }
 
 // repair 는 DVR 문서 d 의 본 판(ETag seen · 본문 seenBody)이 앞부분 갈래면 고친다. 아니면 mismatch 다 — 고치지

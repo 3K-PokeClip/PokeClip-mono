@@ -3,7 +3,7 @@
 //
 // 저장소는 Store 경계 뒤에 있다. 쓰기는 늘 조건부이고(첫 판 If-None-Match: * · 갱신 If-Match), 목록의
 // 자기기술은 본문 밖 사용자 메타데이터로 같은 요청에 싣는다(설계 4.4.2 — 본문은 순수 HLS 다). 읽기는
-// Head(ETag · 메타)와 Get(본문)으로 나뉜다 — 화해는 Head 만 쓰므로 본문을 읽지 않는다.
+// Head(ETag · 메타)와 Get(본문 · 그 응답의 ETag)으로 나뉜다 — 화해는 Head 만 쓰므로 본문을 읽지 않는다.
 //
 // 지키는 불변식(프로필 4절): S3 LIST 를 쓰지 않는다. Store 에는 목록 연산이 없다 — 객체가 있는지는
 // 인덱스(PG)가 말하고, 발행 경로가 저장소에 묻는 것은 이름을 아는 키 하나의 머리나 본문뿐이다.
@@ -47,8 +47,11 @@ type Store interface {
 	// 오류가 아니라 Exists 가 거짓인 Stat 이다(설계 4.4.3 R1 · R4).
 	Head(ctx context.Context, key string) (Stat, error)
 
-	// Get 은 key 의 현재 본문을 돌려준다. 객체가 없으면 ErrNotFound 다.
-	Get(ctx context.Context, key string) ([]byte, error)
+	// Get 은 key 의 현재 본문과 같은 응답에 실린 그 판의 ETag 를 돌려준다. 객체가 없으면 ErrNotFound 다.
+	//
+	// 읽은 본문을 보고 그 판을 갈아 끼울 때는 이 ETag 로 IfMatch 한다. 앞서 본 Head 의 ETag 로 걸면 Head 와 Get
+	// 사이에 판이 바뀌었다가 되돌아온 경우(A → B → A) 읽지 않은 판 A 를 덮는다.
+	Get(ctx context.Context, key string) (body []byte, etag string, err error)
 }
 
 // Precondition 은 Put 의 쓰기 조건이다 — IfAbsent 나 IfMatch 로 만든다. 영값은 IfAbsent 와 같다: 조건
@@ -62,7 +65,7 @@ type Precondition struct {
 // IfAbsent 는 키에 객체가 없을 때만 쓰는 조건이다(If-None-Match: *) — 그 목록 URL 의 첫 발행.
 func IfAbsent() Precondition { return Precondition{} }
 
-// IfMatch 는 키의 현재 판 ETag 가 etag 일 때만 쓰는 조건이다(If-Match) — 갱신. etag 는 Put 이나 Head 가
+// IfMatch 는 키의 현재 판 ETag 가 etag 일 때만 쓰는 조건이다(If-Match) — 갱신. etag 는 Put · Head · Get 이
 // 돌려준 값을 그대로 넘긴다(따옴표까지 — 불투명한 문자열이다). 빈 etag 면 Put 이 보내지 않고 오류를
 // 돌려준다.
 func IfMatch(etag string) Precondition { return Precondition{ifMatch: true, etag: etag} }

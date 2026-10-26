@@ -38,7 +38,7 @@ func mustPut(t *testing.T, s Store, cond Precondition, body []byte, meta map[str
 // storedBody 는 지금 저장된 본문이다. 객체가 없으면 nil 이다.
 func storedBody(t *testing.T, s Store) []byte {
 	t.Helper()
-	got, err := s.Get(context.Background(), testKey)
+	got, _, err := s.Get(context.Background(), testKey)
 	if errors.Is(err, ErrNotFound) {
 		return nil
 	}
@@ -179,6 +179,24 @@ func TestFakeStoreHeadReturnsETagAndMetaOnly(t *testing.T) {
 	}
 	if heads := f.headKeys(); !slices.Equal(heads, []string{testKey, testKey}) {
 		t.Errorf("Head 기록 = %v, want [%s %s]", heads, testKey, testKey)
+	}
+}
+
+// Get 은 본문과 그 판의 ETag 를 함께 돌려준다 — 읽은 본문에 거는 조건이 Put 이 돌려준 ETag 와 같다. 판이 바뀌면
+// 둘이 같이 바뀐다.
+func TestFakeStoreGetReturnsBodyWithItsETag(t *testing.T) {
+	f := newFakeStore(t)
+	ctx := context.Background()
+	e1 := mustPut(t, f, IfAbsent(), bodyA, nil)
+	body, etag, err := f.Get(ctx, testKey)
+	if err != nil || !bytes.Equal(body, bodyA) || etag != e1 {
+		t.Errorf("Get = %q · %q · %v, want %q · %q · nil", body, etag, err, bodyA, e1)
+	}
+
+	e2 := mustPut(t, f, IfMatch(e1), bodyB, nil)
+	body, etag, err = f.Get(ctx, testKey)
+	if err != nil || !bytes.Equal(body, bodyB) || etag != e2 {
+		t.Errorf("새 판 Get = %q · %q · %v, want %q · %q · nil", body, etag, err, bodyB, e2)
 	}
 }
 
@@ -355,7 +373,7 @@ func TestFakeStoreHonorsDoneContext(t *testing.T) {
 	if _, err := f.Head(ctx, testKey); !errors.Is(err, context.Canceled) {
 		t.Errorf("Head 오류 = %v, want context.Canceled", err)
 	}
-	if _, err := f.Get(ctx, testKey); !errors.Is(err, context.Canceled) {
+	if _, _, err := f.Get(ctx, testKey); !errors.Is(err, context.Canceled) {
 		t.Errorf("Get 오류 = %v, want context.Canceled", err)
 	}
 	if got := storedBody(t, f); got != nil {

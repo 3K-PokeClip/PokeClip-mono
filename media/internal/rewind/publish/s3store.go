@@ -95,27 +95,34 @@ func (s *S3Store) Head(ctx context.Context, key string) (Stat, error) {
 	return Stat{Exists: true, ETag: *out.ETag, Meta: out.Metadata}, nil
 }
 
-// Get 은 Store.Get 이다. 본문은 rewind.MaxBodyBytes(발행 전 검사 S5 의 목록 본문 상한)까지만 읽는다 — 발행한
-// 목록은 S5 를 통과했으므로 그보다 큰 본문은 우리가 쓴 판이 아니고, 상한이 없으면 저장소가 보내는 만큼
-// 메모리를 잡는다. 넘으면 센티널이 아닌 오류다.
-func (s *S3Store) Get(ctx context.Context, key string) ([]byte, error) {
+// Get 은 Store.Get 이다 — ETag 는 본문과 같은 GET 응답의 ETag 머리다. 200 인데 ETag 가 없으면 성공으로 보고하지
+// 않는다 — 읽은 본문에 조건을 걸 수 없다.
+//
+// 본문은 rewind.MaxBodyBytes(발행 전 검사 S5 의 목록 본문 상한)까지만 읽는다 — 발행한 목록은 S5 를 통과했으므로
+// 그보다 큰 본문은 우리가 쓴 판이 아니고, 상한이 없으면 저장소가 보내는 만큼 메모리를 잡는다. 넘으면 센티널이
+// 아닌 오류다.
+func (s *S3Store) Get(ctx context.Context, key string) ([]byte, string, error) {
 	out, err := s.client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(s.bucket),
 		Key:    aws.String(key),
 	}, requestOptions)
 	if err != nil {
-		return nil, storeError("GET", key, err)
+		return nil, "", storeError("GET", key, err)
 	}
 	defer out.Body.Close()
+	etag := aws.ToString(out.ETag)
+	if etag == "" {
+		return nil, "", fmt.Errorf("publish: GET key=%q: 응답에 ETag 가 없다", key)
+	}
 	// 한 바이트 더 읽어야 상한 크기와 초과를 가른다.
 	body, err := io.ReadAll(io.LimitReader(out.Body, rewind.MaxBodyBytes+1))
 	if err != nil {
-		return nil, fmt.Errorf("publish: GET key=%q: 본문 읽기: %w", key, err)
+		return nil, "", fmt.Errorf("publish: GET key=%q: 본문 읽기: %w", key, err)
 	}
 	if len(body) > rewind.MaxBodyBytes {
-		return nil, fmt.Errorf("publish: GET key=%q: 본문이 상한 %d바이트를 넘는다", key, rewind.MaxBodyBytes)
+		return nil, "", fmt.Errorf("publish: GET key=%q: 본문이 상한 %d바이트를 넘는다", key, rewind.MaxBodyBytes)
 	}
-	return body, nil
+	return body, etag, nil
 }
 
 // requestOptions 는 S3Store 의 모든 요청에 붙이는 SDK 설정이다. client 를 어떻게 만들었든 두 가지를

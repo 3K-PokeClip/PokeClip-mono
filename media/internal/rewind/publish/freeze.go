@@ -222,7 +222,8 @@ func (p *Publisher) Endlist(ctx context.Context, streamID, sessionID string) Fre
 		return f.confirmEmpty(ctx)
 	}
 	gctx, cancel := context.WithTimeout(ctx, p.opt.PublishTimeout)
-	body, err := p.store.Get(gctx, f.key)
+	// 조건은 Head 의 ETag(f.prev)다 — 본문이 그 판 메타의 sha 와 같아야 쓰므로 Get 의 ETag 가 따로 필요 없다.
+	body, _, err := p.store.Get(gctx, f.key)
 	cancel()
 	switch {
 	case err != nil:
