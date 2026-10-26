@@ -86,6 +86,8 @@ type Config struct {
 
 	// Control 은 되감기 제어면 서버의 설정이다(CONTROL_* — 설계 M5 3.4 · 3.7).
 	Control ControlOptions
+	// Expiry 는 60일 만료의 설정이다(CLIP_INTERNAL_URL · CLIP_EXPIRY_TOKEN[_FILE] — 설계 M6 7절).
+	Expiry ExpiryOptions
 }
 
 // 관측 축 기본값(설계 5.4.1·6.5.2). 판정 주체(indexer·session)는 이 값을 설정으로 받으며
@@ -328,6 +330,10 @@ func Load(env func(string) string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	expiryOpt, err := loadExpiry(env)
+	if err != nil {
+		return Config{}, err
+	}
 
 	return Config{
 		PG:               pg,
@@ -353,6 +359,7 @@ func Load(env func(string) string) (Config, error) {
 		// S3_BUCKET 이 비면 읽지 않아 빈 값이다(계획 B-9).
 		RewindPublicBaseURL: rewindBaseURL,
 		Control:             control,
+		Expiry:              expiryOpt,
 	}, nil
 }
 
