@@ -345,6 +345,26 @@ func TestDisabledIgnoresPostsWithoutPanic(t *testing.T) {
 	}
 }
 
+// cx c3 M1 · 3.3절 「꺼짐과 강등」: 꺼짐에서는 Drain 이 받은편지함만 비우고 종료 항목에 반영하지 않는다 — Board 가 늘
+// 404 인데 서로 다른 스트림의 종료 값이 루프 메모리에 쌓이지 않게. 무효 값의 WARN 도 쓰지 않는다.
+func TestDisabledDrainDiscardsFinals(t *testing.T) {
+	f := newOfflineLoop(t, nil)
+	f.rewind.cache = nil
+	assembleStatus(t.Context(), config.Config{}, f.rewind, nil) // 꺼짐
+	f.rewind.finals.Post("s", index.PlaybackState{Phase: index.PhaseEnded, RoundID: "A", LatestSessionID: "SA"})
+	f.rewind.finals.Post("t", index.PlaybackState{Phase: index.PhaseLive, RoundID: "B", LatestSessionID: "SB"})
+	f.rewind.holdTick(t.Context(), loopBase)
+	if n := len(f.rewind.final); n != 0 {
+		t.Errorf("꺼짐 Drain 뒤 종료 항목 = %d, want 0(버림)", n)
+	}
+	if left := f.rewind.finals.Drain(); len(left) != 0 {
+		t.Errorf("꺼짐 Drain 뒤 받은편지함 = %v, want 빔", left)
+	}
+	if n := len(f.rewind.invalid); n != 0 {
+		t.Errorf("꺼짐 Drain 뒤 무효 기록 = %d, want 0", n)
+	}
+}
+
 // R60(한계 고정): 강등은 캐시가 없어 개시 삭제가 서지 않는다 — 같은 키로 새 방송이 송출돼도 스트림 경로는 지난 방송 A 의
 // vod 를 낸다. 이 동작이 바뀌면 계약3 7-2 단서도 고친다.
 func TestDegradedKeepsPreviousRoundFinal(t *testing.T) {

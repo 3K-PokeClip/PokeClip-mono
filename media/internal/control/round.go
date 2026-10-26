@@ -3,6 +3,8 @@ package control
 import (
 	"container/list"
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"sync"
 	"time"
@@ -89,9 +91,9 @@ type roundHandler struct {
 
 // RoundRoute 는 회차 경로 GET /api/streams/{streamId}/rounds/{roundId}/rewind 다. 차례(보완 3):
 //
-//	id 검사(둘 다 3.1절 규칙 · 어기면 404) → FindRound(Unavailable 503 · NotFound 404) →
+//	id 검사(퍼센트 인코딩 경로 · 둘 다 3.1절 규칙 · 어기면 404) → FindRound(Unavailable 503 · NotFound 404) →
 //	  hit        → Limiter.Allow(s)(넘으면 503) → 그 답
-//	  Miss       → 1초 캐시 적중이면 Limiter.Allow(s) → 그 답
+//	  Miss       → 1초 캐시 200 적중이면 Limiter.Allow(s) → 그 답 · 404 적중이면 칸 없이 404
 //	             → 캐시 없음이면 공유 칸을 깎지 않는다 → 같은 (s, r) 키 singleflight → 전역 예산(동시 · 초당 — 넘으면
 //	               503 Retry-After: 1) → lookup(ctx 시한) → 결과를 캐시(오류 · 시한 초과는 503 · 캐시 안 함)
 //
@@ -112,7 +114,7 @@ func RoundRoute(h *status.Holder, opt Options, lookup RoundLookup) Route {
 
 func (rh *roundHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s, rid := r.PathValue("streamId"), r.PathValue("roundId")
-	if !validID(s) || !validID(rid) {
+	if r.URL.RawPath != "" || !validID(s) || !validID(rid) {
 		writeError(w, r, rh.opt, http.StatusNotFound)
 		return
 	}
@@ -133,7 +135,7 @@ func (rh *roundHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// answer 는 답한 요청(hit · 캐시 적중)을 공유 칸에 세고 답을 쓴다.
+// answer 는 답한 요청(hit · 캐시 200 적중)을 공유 칸에 세고 답을 쓴다.
 func (rh *roundHandler) answer(w http.ResponseWriter, r *http.Request, s string, rep roundReply) {
 	if !rh.opt.Limiter.Allow(s) {
 		writeError(w, r, rh.opt, http.StatusServiceUnavailable)
@@ -155,6 +157,10 @@ func (rh *roundHandler) miss(w http.ResponseWriter, r *http.Request, key roundKe
 	rh.mu.Lock()
 	if rep, ok := rh.cached(key, now); ok {
 		rh.mu.Unlock()
+		if rep.code == http.StatusNotFound {
+			rh.write(w, r, rep) // 404 적중은 칸을 열지 않는다 — 무작위 (s, r) 가 Board 밖 스트림 칸을 만들지 않게(보안 L2)
+			return
+		}
 		rh.answer(w, r, key.stream, rep)
 		return
 	}
@@ -181,7 +187,7 @@ func (rh *roundHandler) miss(w http.ResponseWriter, r *http.Request, key roundKe
 	if granted {
 		rh.inFlight--
 		if rep.code != http.StatusServiceUnavailable {
-			rh.store(key, rep, now)
+			rh.store(key, rep, rh.opt.Now()) // 1초는 lookup 이 끝난 시각부터 — 느린 lookup 의 답이 저장 직후 만료되지 않게
 		}
 	}
 	rh.mu.Unlock()
@@ -190,12 +196,16 @@ func (rh *roundHandler) miss(w http.ResponseWriter, r *http.Request, key roundKe
 	rh.write(w, r, rep)
 }
 
+// errLookupPanicked 는 lookup 이 패닉했다는 오류다(safeLookup 이 패닉을 이것으로 바꾼다).
+var errLookupPanicked = errors.New("control: 회차 lookup 이 패닉했다")
+
 // call 은 lookup 한 번이다. 시한은 RoundLimits.Timeout 이고 요청 취소와 떼어 둔다 — 같은 키를 기다리는 다른 요청이
 // 있으므로 첫 요청의 연결이 끊겨도 끝까지 간다(시한이 상한이다). Found 는 200 · NotFound 는 404 이고 나머지는 503 이다.
+// 실패 줄의 reason 은 error · timeout · panic 이다.
 func (rh *roundHandler) call(ctx context.Context, key roundKey, now time.Time) roundReply {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), rh.opt.RoundLimits.Timeout)
 	defer cancel()
-	st, answer, err := rh.lookup(ctx, key.stream, key.round)
+	st, answer, err := rh.safeLookup(ctx, key)
 	switch {
 	case err == nil && answer == status.Found:
 		return roundReply{st: st, code: http.StatusOK}
@@ -203,13 +213,28 @@ func (rh *roundHandler) call(ctx context.Context, key roundKey, now time.Time) r
 		return roundReply{code: http.StatusNotFound}
 	}
 	reason := "error"
-	if ctx.Err() != nil {
+	switch {
+	case errors.Is(err, errLookupPanicked):
+		reason = "panic"
+	case ctx.Err() != nil:
 		reason = "timeout"
 	}
 	rh.mu.Lock()
 	rh.noteFailure(reason, now)
 	rh.mu.Unlock()
 	return roundReply{code: http.StatusServiceUnavailable}
+}
+
+// safeLookup 은 lookup 을 부르고, 패닉하면 errLookupPanicked 로 바꿔 돌려준다. 패닉이 miss 를 빠져나가면 flight 칸 ·
+// 전역 예산(inFlight)이 돌아오지 않고 같은 키를 기다리는 요청도 풀리지 않는다 — 패닉 둘이면 재기동까지 회차 경로 전체가
+// 503 이다(보안 c2 M2). 그래서 패닉은 503 한 번으로 끝낸다.
+func (rh *roundHandler) safeLookup(ctx context.Context, key roundKey) (st status.Status, answer status.Answer, err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			st, answer, err = status.Status{}, status.Unavailable, fmt.Errorf("%w: %v", errLookupPanicked, p)
+		}
+	}()
+	return rh.lookup(ctx, key.stream, key.round)
 }
 
 // cached 는 key 의 1초 안 캐시 답이다(rh.mu 아래).

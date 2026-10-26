@@ -82,6 +82,23 @@ func TestRewindRouteRejectsBadStreamIDAsNotFound(t *testing.T) {
 	}
 }
 
+// 보안 c3 M1: 퍼센트 인코딩한 경로(%61bc)는 풀면 규칙을 지키는 id 라도 404 다 — 엣지 거절 규칙을 비켜 같은 스트림의
+// 칸을 깎지 못하게. 칸도 열지 않는다.
+func TestRewindRoutePercentEncodedPathIsNotFound(t *testing.T) {
+	f := newFixture(10)
+	f.store(true, map[string]status.Entry{"abc": vodEntry("R1")})
+	base := f.start(t, RewindRoute(f.holder, f.opt))
+	if got := get(t, streamURL(base, "%61bc")); got.code != 404 || strings.TrimSpace(got.body) != `{"error":"not_found"}` {
+		t.Errorf("%%61bc = (%d, %s), want 404 not_found", got.code, got.body)
+	}
+	if n := cellCount(f.opt.Limiter); n != 0 {
+		t.Errorf("인코딩 경로 뒤 계수기 칸 = %d, want 0", n)
+	}
+	if got := get(t, streamURL(base, "abc")); got.code != 200 {
+		t.Errorf("abc = %d, want 200", got.code)
+	}
+}
+
 // HEAD 는 GET 패턴이 받고, 그 밖 메서드는 405 다.
 func TestRewindRouteMethods(t *testing.T) {
 	f := newFixture(10)
@@ -105,7 +122,9 @@ func TestRewindRouteMethods(t *testing.T) {
 	}
 }
 
-// 3.5절: Origin 이 CONTROL_CORS_ORIGIN 과 정확히 같을 때만 허용 머리 · Vary 를 싣는다. credentials 머리는 싣지 않는다.
+// 3.5절: Origin 이 CONTROL_CORS_ORIGIN 과 정확히 같을 때만 허용 머리를 싣는다. credentials 머리는 싣지 않는다.
+// Vary: Origin 은 설정이 있으면 Origin 과 무관하게 늘 싣는다 — 같은 URL 의 답이 Origin 에 따라 갈리므로, 허용 머리
+// 없는 답이 캐시돼 허용 Origin 에 재사용되지 않게(보안 L1).
 func TestRewindRouteCORSExactMatchOnly(t *testing.T) {
 	f := newFixture(10)
 	f.store(true, map[string]status.Entry{"vod": vodEntry("R1")})
@@ -118,14 +137,17 @@ func TestRewindRouteCORSExactMatchOnly(t *testing.T) {
 	}
 	for _, o := range []string{"http://evil.example", "http://localhost:3000.evil", ""} {
 		r := get(t, streamURL(base, "vod"), "Origin", o)
-		if r.header.Get("Access-Control-Allow-Origin") != "" || r.header.Get("Vary") != "" {
-			t.Errorf("Origin %q: ACAO %q Vary %q, want 없음", o, r.header.Get("Access-Control-Allow-Origin"), r.header.Get("Vary"))
+		if r.header.Get("Access-Control-Allow-Origin") != "" || r.header.Get("Vary") != "Origin" {
+			t.Errorf("Origin %q: ACAO %q Vary %q, want 없음 · Origin", o, r.header.Get("Access-Control-Allow-Origin"), r.header.Get("Vary"))
 		}
+	}
+	if r := get(t, streamURL(base, "none"), "Origin", "http://evil.example"); r.code != 404 || r.header.Get("Vary") != "Origin" {
+		t.Errorf("404 + 다른 Origin: (%d, Vary %q), want (404, Origin)", r.code, r.header.Get("Vary"))
 	}
 	f.opt.AllowOrigin = ""
 	base = f.start(t, RewindRoute(f.holder, f.opt))
-	if r := get(t, streamURL(base, "vod"), "Origin", ""); r.header.Get("Access-Control-Allow-Origin") != "" {
-		t.Errorf("설정 빈 값 + 빈 Origin: ACAO %q, want 없음", r.header.Get("Access-Control-Allow-Origin"))
+	if r := get(t, streamURL(base, "vod"), "Origin", ""); r.header.Get("Access-Control-Allow-Origin") != "" || r.header.Get("Vary") != "" {
+		t.Errorf("설정 빈 값 + 빈 Origin: ACAO %q Vary %q, want 없음 · 없음", r.header.Get("Access-Control-Allow-Origin"), r.header.Get("Vary"))
 	}
 }
 

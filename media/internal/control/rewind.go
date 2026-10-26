@@ -16,9 +16,10 @@ type rewindHandler struct {
 	sh  *shared // Start 가 묶는다
 }
 
-// RewindRoute 는 스트림 경로 GET /api/streams/{streamId}/rewind 다. 차례: id 검사(어기면 404) → Board.Find
+// RewindRoute 는 스트림 경로 GET /api/streams/{streamId}/rewind 다. 차례: id 검사(퍼센트 인코딩 경로 · 규칙 위반은 404) → Board.Find
 // (Unavailable 503 · NotFound 404) → Found 면 opt.Limiter.Allow(s)(넘으면 503) → 200. 칸은 Found 답에만 연다 —
-// 모르는 ID 폭주는 칸을 만들지 않는다(R6).
+// 모르는 ID 폭주는 칸을 만들지 않는다(R6). 회차 경로는 Board 밖 스트림의 200 답(1초 캐시 적중)에도 칸을 열고, 그
+// 수는 lookup 예산 · 칸 상한이 묶는다(R54 ⓑ — RoundRoute).
 func RewindRoute(h *status.Holder, opt Options) Route {
 	opt = opt.withDefaults()
 	requireLimiter(opt)
@@ -28,7 +29,7 @@ func RewindRoute(h *status.Holder, opt Options) Route {
 
 func (rh *rewindHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s := r.PathValue("streamId")
-	if !validID(s) {
+	if r.URL.RawPath != "" || !validID(s) {
 		writeError(w, r, rh.opt, http.StatusNotFound)
 		return
 	}
