@@ -92,6 +92,9 @@ type fixture struct {
 	resolve      func(ctx context.Context, token string) (keyresolve.Verdict, error)
 	apply        func(ctx context.Context, e session.IntentionalEnd) (session.IntentionalResult, error)
 
+	// entered 는 가짜 Apply 가 진입을 알리는 칸이다(쓰는 시험만 만든다).
+	entered chan struct{}
+
 	mu      sync.Mutex
 	applied []session.IntentionalEnd
 	changed []string
@@ -210,6 +213,25 @@ func (f *fixture) snapshot() (changed []string, posted []session.RevokeIntent, a
 	defer f.mu.Unlock()
 	return append([]string(nil), f.changed...), append([]session.RevokeIntent(nil), f.posted...),
 		append([]session.IntentionalEnd(nil), f.applied...)
+}
+
+// lastEndSignalKeys 는 마지막 end_signal 줄의 키 집합이다 — 빈 값과 키 없음을 가른다(logLine 의 문자열 칸은 둘 다 "" 다).
+func (f *fixture) lastEndSignalKeys() map[string]json.RawMessage {
+	f.t.Helper()
+	var last map[string]json.RawMessage
+	for _, s := range strings.Split(strings.TrimSpace(f.log.String()), "\n") {
+		var m map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(s), &m); err != nil {
+			f.t.Fatalf("로그 줄 해석 실패: %v", err)
+		}
+		if string(m["msg"]) == `"end_signal"` {
+			last = m
+		}
+	}
+	if last == nil {
+		f.t.Fatalf("end_signal 줄이 없다")
+	}
+	return last
 }
 
 // lastEndSignal 은 마지막 end_signal 줄이다.

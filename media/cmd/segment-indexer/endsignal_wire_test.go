@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"strings"
@@ -40,6 +41,39 @@ func (l *lockedLog) Write(p []byte) (int, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.buf.Write(p)
+}
+
+// count 는 msg · reason 이 맞는 줄 수다.
+func (l *lockedLog) count(t *testing.T, msg, reason string) int {
+	t.Helper()
+	n := 0
+	for _, m := range l.msgs(t) {
+		if m == msg+":"+reason {
+			n++
+		}
+	}
+	return n
+}
+
+// shedCount 는 end_signal_shed reason 줄들의 count 합이다.
+func (l *lockedLog) shedCount(t *testing.T, reason string) int {
+	t.Helper()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	n := 0
+	for _, s := range strings.Split(strings.TrimSpace(l.buf.String()), "\n") {
+		var line struct {
+			Msg, Reason string
+			Count       int
+		}
+		if err := json.Unmarshal([]byte(s), &line); err != nil {
+			continue
+		}
+		if line.Msg == "end_signal_shed" && line.Reason == reason {
+			n += line.Count
+		}
+	}
+	return n
 }
 
 // msgs 는 로그 줄의 (msg, reason) 차례다.
@@ -150,6 +184,12 @@ type controlFixture struct {
 
 func newControlFixture(t *testing.T, withRecv bool, hold func(ctx context.Context)) *controlFixture {
 	t.Helper()
+	return newControlFixtureAt(t, withRecv, hold, nil)
+}
+
+// newControlFixtureAt 은 수신부 시계를 now 로 둔다(nil 이면 time.Now).
+func newControlFixtureAt(t *testing.T, withRecv bool, hold func(ctx context.Context), now func() time.Time) *controlFixture {
+	t.Helper()
 	logs, log := newLockedLogger()
 	f := &controlFixture{listen: freeListen(t), logs: logs, entered: make(chan struct{}, 1)}
 	var recv *endsignal.Receiver
@@ -163,7 +203,7 @@ func newControlFixture(t *testing.T, withRecv bool, hold func(ctx context.Contex
 					hold(ctx)
 				}
 			}),
-			changed: func(string) {}, postIntent: func(string, string) {}, log: log,
+			changed: func(string) {}, postIntent: func(string, string) {}, log: log, now: now,
 		})
 		if err != nil {
 			t.Fatalf("newEndSignalReceiver: %v", err)
@@ -248,17 +288,26 @@ func TestControlWithoutEndSignalIs404(t *testing.T) {
 }
 
 // 4D 계수기는 control_rate_limited 게이지를 세우지 않는다(cc M1) — 게이지는 세움 줄만 있고 내림이 없는데, 4D 계수기는
-// 이 수신부만의 것이라 내리는 쪽(청소 고루틴)이 없다. 세우면 한 번 초과한 뒤 게이지가 영영 1 로 남는다. 키당 · 전체 상한을
-// 둘 다 넘겨도(429 · 503) 그 줄이 0 이어야 한다 — 초과는 수신부 자신의 end_signal 줄이 센다.
+// 이 수신부만의 것이라 내리는 쪽(청소 고루틴)이 없다. 세우면 한 번 초과한 뒤 게이지가 영영 1 로 남는다. 시계를 고정해 모든
+// 요청이 한 1초 창에 들고, 키당 · 전체 상한을 둘 다 넘긴다 — 202 하나 · 키당 초과 rate_key 아홉 · 전체 초과 둘이다. 초과는
+// 수신부 자신의 줄이 센다: 키당은 end_signal reason=rate_key, 전체는 end_signal_shed reason=rate_global 묶음 줄(count 합)이다.
 func TestEndSignalLimitersRaiseNoRateGauge(t *testing.T) {
-	f := newControlFixture(t, true, nil)
-	defer f.stop()
+	at := time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)
+	f := newControlFixtureAt(t, true, nil, func() time.Time { return at })
 	codes := map[int]int{}
 	for range endSignalGlobalRPS + 2 {
 		codes[f.post(t)]++
 	}
-	if codes[http.StatusTooManyRequests] == 0 || codes[http.StatusServiceUnavailable] == 0 {
-		t.Fatalf("상태 분포 = %v, want 키당 초과 429 와 전체 초과 503 이 모두 있다", codes)
+	f.stop() // 남은 묶음 줄을 내보낸다(Close)
+	want := map[int]int{http.StatusAccepted: 1, http.StatusTooManyRequests: endSignalGlobalRPS - 1, http.StatusServiceUnavailable: 2}
+	if !maps.Equal(codes, want) {
+		t.Fatalf("상태 분포 = %v, want %v", codes, want)
+	}
+	if n := f.logs.count(t, "end_signal", "rate_key"); n != endSignalGlobalRPS-1 {
+		t.Errorf("end_signal reason=rate_key = %d줄, want %d", n, endSignalGlobalRPS-1)
+	}
+	if n := f.logs.shedCount(t, "rate_global"); n != 2 {
+		t.Errorf("end_signal_shed reason=rate_global count 합 = %d, want 2", n)
 	}
 	if i := indexOf(f.logs.msgs(t), "control_rate_limited"); i >= 0 {
 		t.Fatalf("control_rate_limited 줄이 남았다(%d번째) — 4D 계수기가 내림 없는 게이지를 세웠다", i)

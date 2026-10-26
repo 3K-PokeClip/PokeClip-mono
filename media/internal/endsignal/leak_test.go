@@ -1,13 +1,20 @@
 package endsignal
 
 import (
+	"bufio"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/keyresolve"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/session"
@@ -77,6 +84,136 @@ func TestNoSecretsInLogsAcrossBranchesP6(t *testing.T) {
 			t.Errorf("로그에 %s 카나리아 %d 번", name, n)
 		}
 	}
+}
+
+// leakBranch 는 P6 나머지 갈래 하나다. want 는 그 갈래를 지났다는 증거 줄("msg:reason")이다.
+type leakBranch struct {
+	name string
+	want string
+	edit func(*Options)
+	send func(t *testing.T, f *fixture, body, auth string)
+}
+
+// P6 나머지 갈래 — 0 단계(closing · rate_global) · busy · rate_key · 본문 마감 · 마감 미지원 · Apply 시한 · Apply 중 닫힘.
+// 갈래마다 증거 줄이 찍혔는지 먼저 확인하고(카나리아가 그 갈래를 지났다), 모은 로그에 카나리아가 0 번이다. 갈래 끝마다
+// Close 로 진행 중 처리기를 기다리고 남은 묶음 줄을 내보낸다(시계가 고정이라 묶음은 Close 가 낸다).
+func TestNoSecretsInLogsAcrossLimitBranchesP6(t *testing.T) {
+	const (
+		canaryPassphrase = "CANARY-passphrase-4d-leak-test-0002"
+		canaryBody       = "CANARYBODYVALUE2"
+	)
+	derived := deriveForTest(t, canaryPassphrase)
+	body := `{"note":"` + canaryBody + `","streamid":"#!::r=` + testToken + `,m=publish","elapsedSinceStopMs":1,"connectionDurationMs":5000}`
+	post := func(_ *testing.T, f *fixture, body, auth string) { f.post(body, auth) }
+	branches := []leakBranch{
+		{name: "closing_0단계", want: "end_signal_shed:closing", send: func(t *testing.T, f *fixture, body, auth string) {
+			closeNow(t, f)
+			f.post(body, auth)
+		}},
+		{name: "rate_global", want: "end_signal_shed:rate_global", send: func(t *testing.T, f *fixture, body, auth string) {
+			for range 10 {
+				f.recv.o.Global.Allow(globalKey)
+			}
+			f.post(body, auth)
+		}},
+		{name: "busy", want: "end_signal:busy", send: func(t *testing.T, f *fixture, body, auth string) {
+			f.recv.sem <- struct{}{}
+			f.post(body, auth)
+			<-f.recv.sem
+		}},
+		{name: "rate_key", want: "end_signal:rate_key", send: func(t *testing.T, f *fixture, body, auth string) {
+			f.recv.o.PerKey.Allow(testToken)
+			f.post(body, auth)
+		}},
+		{name: "body_timeout", want: "end_signal:body_timeout", edit: func(o *Options) { o.BodyTimeout = 100 * time.Millisecond },
+			send: postPartialBody},
+		{name: "body_deadline_unsupported", want: "end_signal:body_deadline_unsupported", send: func(t *testing.T, f *fixture, body, auth string) {
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/ingest/end-signal", strings.NewReader(body))
+			req.Header.Set("Authorization", auth)
+			f.recv.Route().Handler.ServeHTTP(plainWriter{httptest.NewRecorder()}, req)
+		}},
+		{name: "apply_timeout", want: "end_signal:apply_timeout", edit: func(o *Options) { o.ApplyTimeout = 50 * time.Millisecond },
+			send: post},
+		{name: "closing_apply", want: "end_signal:closing", send: func(t *testing.T, f *fixture, body, auth string) {
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				f.post(body, auth)
+			}()
+			<-f.entered
+			closeNow(t, f)
+			<-done
+		}},
+	}
+	var logs strings.Builder
+	for _, b := range branches {
+		f := newFixture(t, b.edit)
+		f.entered = make(chan struct{}, 1)
+		f.resolve = func(context.Context, string) (keyresolve.Verdict, error) {
+			return validVerdict(t, canaryPassphrase), nil
+		}
+		f.apply = func(ctx context.Context, _ session.IntentionalEnd) (session.IntentionalResult, error) {
+			f.entered <- struct{}{}
+			<-ctx.Done()
+			return session.IntentionalResult{}, ctx.Err()
+		}
+		b.send(t, f, body, "Bearer "+derived)
+		closeNow(t, f)
+		if !hasLine(f.log.lines(t), b.want) {
+			t.Errorf("%s: %s 줄이 없다 — 카나리아가 그 갈래를 지나지 않았다", b.name, b.want)
+		}
+		logs.WriteString(f.log.String())
+	}
+	out := logs.String()
+	for name, canary := range map[string]string{
+		"passphrase": canaryPassphrase, "파생값": derived, "파생값_대문자": strings.ToUpper(derived),
+		"본문": canaryBody, "Authorization": "Bearer ",
+	} {
+		if n := strings.Count(out, canary); n != 0 {
+			t.Errorf("로그에 %s 카나리아 %d 번", name, n)
+		}
+	}
+}
+
+// closeNow 는 1.5초 시한으로 Close 를 부른다(두 번 불러도 된다).
+func closeNow(t *testing.T, f *fixture) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	if err := f.recv.Close(ctx); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+}
+
+// hasLine 은 "msg:reason" 줄이 있는지 본다.
+func hasLine(lines []logLine, want string) bool {
+	for _, l := range lines {
+		if l.Msg+":"+l.Reason == want {
+			return true
+		}
+	}
+	return false
+}
+
+// postPartialBody 는 원시 연결로 머리와 본문 앞 절반만 보내고 응답을 기다린다 — 본문 마감에 걸린다.
+func postPartialBody(t *testing.T, f *fixture, body, auth string) {
+	t.Helper()
+	conn, err := net.Dial("tcp", f.srv.Listener.Addr().String())
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer conn.Close()
+	head := "POST /api/ingest/end-signal HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nAuthorization: " + auth +
+		"\r\nContent-Length: " + strconv.Itoa(len(body)) + "\r\n\r\n"
+	if _, err := io.WriteString(conn, head+body[:len(body)/2]); err != nil {
+		t.Fatalf("쓰기: %v", err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		t.Fatalf("응답 읽기: %v", err)
+	}
+	resp.Body.Close()
 }
 
 // deriveForTest 는 시험 쪽 파생 값 계산이다 — 제품 함수와 따로 계산해 서로를 검증한다.
