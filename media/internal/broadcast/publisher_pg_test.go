@@ -376,7 +376,7 @@ func TestPublisherNotStarvedByBlockedEnded(t *testing.T) {
 }
 
 // D46 — resolve 는 장부 트랜잭션 밖이다. 발행기가 resolve 를 기다리는 동안에도 개시 트랜잭션의 outbox INSERT 는
-// 기다리지 않는다.
+// 기다리지 않는다 — 개시 트랜잭션이 설계 문턱 100ms 안에 끝난다.
 // 잡는 결함: resolve 를 outbox 를 잠근 트랜잭션 안에서 부르면 개시(조각 INSERT 핫 경로)가 auth 지연만큼 막힌다.
 func TestEnqueueNotBlockedWhileResolving(t *testing.T) {
 	pool := newTestPool(t)
@@ -409,8 +409,8 @@ func TestEnqueueNotBlockedWhileResolving(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve 대기 중 개시 = %v, want 바로 성공", err)
 	}
-	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
-		t.Errorf("개시 트랜잭션 = %v, want 500ms 안", elapsed)
+	if elapsed := time.Since(start); elapsed > 100*time.Millisecond {
+		t.Errorf("개시 트랜잭션 = %v, want 100ms 안", elapsed)
 	}
 }
 

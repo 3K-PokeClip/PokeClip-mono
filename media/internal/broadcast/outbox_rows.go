@@ -1,12 +1,14 @@
 package broadcast
 
-// 발행기 쪽 outbox 문장(설계 M6 15.5 · X4 · X5). 발행기(Publisher)만 부르고, 각 문장은 풀에서 단독으로 돈다.
+// 발행기 쪽 outbox 문장(설계 M6 15.5 · X4 · X5). 발행기(Publisher)만 부르고, 버림(abandon)의 두 문장 말고는 각 문장이
+// 풀에서 단독으로 돈다.
 
 import (
 	"context"
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -104,20 +106,38 @@ UPDATE broadcast_lifecycle_outbox SET streamer_id = $2
  WHERE event_id = $1 AND state = 'pending'`, eventID, streamerID)
 }
 
-// abandonSQL 은 행 하나를 버리고, 그 행보다 sequence 가 높은 같은 회차 pending 행도 started_abandoned 로 버린다(X4
-// 규칙 2 — started 를 버리면 ended 도 내지 않는다). 문장 하나라 함께 바뀐다.
-const abandonSQL = `
-UPDATE broadcast_lifecycle_outbox
-   SET state = 'abandoned', last_error = CASE WHEN event_id = $1 THEN $2 ELSE 'started_abandoned' END
- WHERE state = 'pending' AND round_id = $3 AND (event_id = $1 OR sequence > $4)`
+// abandonRowSQL · abandonLaterSQL 은 행 하나를 버리고, 그 행보다 sequence 가 높은 같은 회차 pending 행도
+// started_abandoned 로 버린다(X4 규칙 2 — started 를 버리면 ended 도 내지 않는다). 한 트랜잭션의 두 문장이다 — 앞
+// 문장이 started 행 잠금을 얻을 때까지 기다리면(완결 평가가 FOR SHARE 로 쥠 · insertEndedSQL) 뒤 문장이 새 스냅숏으로
+// 그 사이 커밋된 ended 를 본다. 문장 하나면 그 스냅숏에 없는 ended 가 pending 에 고착한다(B4).
+const (
+	abandonRowSQL = `
+UPDATE broadcast_lifecycle_outbox SET state = 'abandoned', last_error = $2
+ WHERE event_id = $1 AND state = 'pending'`
+	abandonLaterSQL = `
+UPDATE broadcast_lifecycle_outbox SET state = 'abandoned', last_error = 'started_abandoned'
+ WHERE state = 'pending' AND round_id = $1 AND sequence > $2`
+)
 
-// abandon 은 행을 버리고 바뀐 행 수를 돌려준다.
+// abandon 은 행을 버리고 바뀐 행 수(뒤 행 포함)를 돌려준다.
 func abandon(ctx context.Context, db *pgxpool.Pool, r outboxRow, reason string) (int64, error) {
-	tag, err := db.Exec(ctx, abandonSQL, r.eventID, reason, r.round, r.sequence)
+	var n int64
+	err := pgx.BeginFunc(ctx, db, func(tx pgx.Tx) error {
+		row, err := tx.Exec(ctx, abandonRowSQL, r.eventID, reason)
+		if err != nil {
+			return err
+		}
+		later, err := tx.Exec(ctx, abandonLaterSQL, r.round, r.sequence)
+		if err != nil {
+			return err
+		}
+		n = row.RowsAffected() + later.RowsAffected()
+		return nil
+	})
 	if err != nil {
 		return 0, fmt.Errorf("broadcast: 버림 기록: %w", err)
 	}
-	return tag.RowsAffected(), nil
+	return n, nil
 }
 
 // deleteSettledSQL 은 ended 가 발행된 지 $1 밀리초가 지난 회차의 행을 지운다(15.5 규칙 5).
