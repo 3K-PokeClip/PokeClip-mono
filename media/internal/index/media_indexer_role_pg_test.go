@@ -250,7 +250,9 @@ func TestMediaIndexerRoleReadsRewindLedger(t *testing.T) {
 }
 
 // 음성 대조 — 시험이 권한 경계를 실제로 재는지 본다. 목록의 권한을 표마다 하나씩 거두면 그 권한을 쓰는 메서드가
-// 42501 이다(목록에 군더더기가 없다는 근거 — 줄마다 그것 없이는 막히는 메서드가 있다).
+// 42501 이다(아래 줄마다 그것 없이는 막히는 메서드가 있다 — 그 권한이 군더더기가 아니라는 근거). 단 미리 준
+// M6-4 · M6-8 몫(DELETE · stream_cutoffs UPDATE · outbox — 파일 머리 주석)은 아래에 줄이 없다. 이 표를 들일 때 그
+// 권한을 쓰는 메서드가 없어 거둬도 막힐 호출이 없었다 — 그 권한들의 군더더기 여부는 이 시험이 재지 않는다.
 func TestMediaIndexerRoleWithoutEachGrantIsDenied(t *testing.T) {
 	ctx := context.Background()
 	cases := []struct {
