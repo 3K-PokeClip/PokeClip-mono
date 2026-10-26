@@ -17,8 +17,19 @@ export interface RewindFloorInput {
   hls: Pick<Hls, 'hasEnoughToStart' | 'startLoad'>;
   video: Pick<HTMLVideoElement, 'currentTime' | 'readyState'>;
   details: Pick<LevelDetails, 'fragmentStart' | 'targetduration' | 'live'>;
-  /** 기동 전 받기 위치(앱이 startLoad 에 준 자리 · 기동 전 시크 자리). 모르면 null */
+  /**
+   * 기동 전 받기 위치(앱이 startLoad 에 준 자리 · 기동 전 시크 자리 · 복구 직전 재생점). 모르면 null — 그때는 hls.js 가 제 받기
+   * 위치로 기동하게 두고 옮기지 않는다
+   */
   loadFrom: number | null;
+}
+
+/** 기동 전인가 — 조각이 아직 붙지 않아 hls.js 가 currentTime 이 아니라 받기 위치를 본다 */
+export function isBeforeStart(
+  hls: Pick<Hls, 'hasEnoughToStart'>,
+  video: Pick<HTMLVideoElement, 'readyState'>,
+): boolean {
+  return !hls.hasEnoughToStart || video.readyState === 0;
 }
 
 /** 옮긴 갈래와 자리(영상 초). seek = currentTime 을 옮김 · reload = 기동 전이라 받기 위치를 다시 잡음 */
@@ -41,7 +52,7 @@ export function guardRewindFloor({
 }: RewindFloorInput): RewindFloorMove | null {
   if (!details.live) return null;
   const td = details.targetduration;
-  const beforeStart = !hls.hasEnoughToStart || video.readyState === 0;
+  const beforeStart = isBeforeStart(hls, video);
   const position = beforeStart ? loadFrom : video.currentTime;
   if (position === null || position >= details.fragmentStart + FLOOR_TRIGGER_TD * td) return null;
   const floor = details.fragmentStart + EDGE_MARGIN_TD * td;
