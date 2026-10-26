@@ -31,13 +31,26 @@
 # 묶음째 보낸다 — 작업자의 명령 치환 · aws · 대기 sleep 까지 함께 끝나 주
 # 셸이 끝난 뒤 남는 프로세스가 없다. 작업자는 터미널 입출력이 없다(표준
 # 입출력을 닫음). 묶음이 달라 터미널의 SIGINT · SIGHUP 은 작업자에 가지
-# 않으므로 주 셸이 대신 전한다.
+# 않으므로 주 셸이 대신 전한다. 띄우는 동안 온 신호는 미뤄 두었다가 pid 를
+# 다 적은 뒤 처리한다 — 막 띄운 작업자를 놓치지 않게.
+#
+# 작업자가 비정상으로 끝나면(SIGKILL 등 — 실패 표지 없이 비0 상태만 남음)
+# 주 셸이 batch-abort 를 남겨 다른 작업자를 멈추고, 그 작업자의 묶음에 남은
+# 자손(명령 치환 · aws · sleep)에 TERM, 유예(BATCH_REAP_TRIES × 0.1초) 뒤에도
+# 남으면 KILL 을 보낸다. 모든 작업자는 기다린 뒤 묶음이 비었는지 본다. bash
+# 가 신호로 죽은 작업에 내는 「Killed」 진단(lib 의 절대 경로가 든다)은
+# 기다리는 구간의 표준 오류를 버려 가둔다 — 상태 코드는 그대로 받는다. 묶음을
+# 세우지 못한 작업자(실측 0번)의 자손은 주 셸의 묶음에 섞여 따로 찾지 못한다
+# — 그때는 작업자에게만 TERM 을 보낸다(한계).
 #
 # bash 3.2 에서 돈다: wait -n · $BASHPID · declare -A · mapfile 을 쓰지
 # 않고, pid 마다 wait 한다.
 
 readonly BATCH_JOBS_DEFAULT=6
 readonly BATCH_JOBS_PATTERN='^([1-9]|1[0-6])$'
+# 남은 자손에 TERM 을 보낸 뒤 KILL 까지 기다리는 횟수와 한 번의 대기(초).
+readonly BATCH_REAP_TRIES=20
+readonly BATCH_REAP_INTERVAL=0.1
 
 # 동시 수와 보낼 요청(요청 번호 · 자원 정책 파일 — 없으면 빈 값).
 batch_jobs="${BATCH_JOBS_DEFAULT}"
@@ -47,6 +60,8 @@ batch_policy=()
 batch_pids=()
 # 작업자가 지금 맡은 요청 번호(작업자 안에서만 쓴다).
 batch_current=""
+# 작업자를 띄우는 동안 받아 미룬 신호의 종료 코드(없으면 빈 값).
+batch_pending=""
 
 #######################################
 # 동시 수(PRINCIPAL_CHECK_JOBS — 없으면 기본 6)를 검사해 batch_jobs 에 둔다.
@@ -131,6 +146,29 @@ principal::batch_worker() {
 }
 
 #######################################
+# 끝난(기다린) 작업자의 묶음에 남은 프로세스를 끝낸다 — TERM, 유예 뒤에도
+# 남으면 KILL. 묶음이 비었으면 아무것도 하지 않는다. 묶음 id 는 그 묶음에
+# 프로세스가 남아 있는 동안 다른 프로세스에 다시 쓰이지 않는다.
+# Globals:
+#   BATCH_REAP_TRIES, BATCH_REAP_INTERVAL
+# Arguments:
+#   작업자 pid(= 묶음 id).
+#######################################
+principal::batch_reap() {
+  local tries=0
+  kill -0 -- "-$1" 2>/dev/null || return 0
+  kill -TERM -- "-$1" 2>/dev/null
+  while kill -0 -- "-$1" 2>/dev/null; do
+    tries=$((tries + 1))
+    if [[ "${tries}" -gt "${BATCH_REAP_TRIES}" ]]; then
+      kill -KILL -- "-$1" 2>/dev/null
+      return 0
+    fi
+    sleep "${BATCH_REAP_INTERVAL}" 2>/dev/null
+  done
+}
+
+#######################################
 # 동시 구간에 신호를 받으면(트랩) 작업자를 멈추고 끝낸다. complete.txt 는
 # 남지 않는다.
 # Globals:
@@ -149,6 +187,9 @@ principal::batch_stop() {
   done
   for pid in ${batch_pids[@]+"${batch_pids[@]}"}; do
     [[ -z "${pid}" ]] || wait "${pid}" 2>/dev/null
+  done
+  for pid in ${batch_pids[@]+"${batch_pids[@]}"}; do
+    [[ -z "${pid}" ]] || principal::batch_reap "${pid}"
   done
   exit "$1"
 }
@@ -186,21 +227,22 @@ principal::batch_check() {
 
 #######################################
 # 목록의 요청을 작업자 min(동시 수, 요청 수) 개로 보내고, 모두 기다린 뒤
-# principal::batch_check 로 본다. 기다리는 동안만 INT · TERM · HUP 트랩을
-# 건다.
+# principal::batch_check 로 본다. 띄우는 동안 온 신호는 미루고, 기다리는
+# 동안만 INT · TERM · HUP 트랩을 건다.
 # Globals:
-#   batch_n, batch_jobs, batch_pids
+#   batch_n, batch_jobs, batch_pids, batch_pending, evidence_dir
 #######################################
 principal::batch_run() {
-  local count="${#batch_n[@]}" workers w i
+  local count="${#batch_n[@]}" workers w i status
   local -a statuses=()
   [[ "${count}" -gt 0 ]] || return 0
   workers="${batch_jobs}"
   [[ "${count}" -ge "${workers}" ]] || workers="${count}"
   batch_pids=()
-  trap 'principal::batch_stop 130' INT
-  trap 'principal::batch_stop 143' TERM
-  trap 'principal::batch_stop 129' HUP
+  batch_pending=""
+  trap 'batch_pending=130' INT
+  trap 'batch_pending=143' TERM
+  trap 'batch_pending=129' HUP
   # macOS bash 3.2 의 작업 제어는 드물게(실측 1,800번에 2번) 띄운 자식이
   # 「child setpgid … Operation not permitted」 를 자기 리다이렉션 전에 물려받은
   # 표준 오류로 낸다(lib 의 절대 경로가 든다). 묶음은 부모 쪽 setpgid 로 이미
@@ -213,11 +255,24 @@ principal::batch_run() {
     done
     set +m
   } 2>/dev/null
-  for i in "${!batch_pids[@]}"; do
-    wait "${batch_pids[i]}"
-    statuses+=("$?")
-    batch_pids[i]=""
-  done
+  trap 'principal::batch_stop 130' INT
+  trap 'principal::batch_stop 143' TERM
+  trap 'principal::batch_stop 129' HUP
+  [[ -z "${batch_pending}" ]] || principal::batch_stop "${batch_pending}"
+  # 이 구간의 표준 오류는 bash 의 작업 알림(「Killed」 등)뿐이라 버린다 — 모든
+  # 작업자를 여기서 기다리므로 구간 밖에 남는 알림이 없다.
+  {
+    for i in "${!batch_pids[@]}"; do
+      wait "${batch_pids[i]}"
+      status=$?
+      statuses+=("${status}")
+      if [[ "${status}" -ne 0 ]]; then
+        principal::batch_mark "${evidence_dir}/batch-abort" ''
+      fi
+      principal::batch_reap "${batch_pids[i]}"
+      batch_pids[i]=""
+    done
+  } 2>/dev/null
   trap - INT TERM HUP
   principal::batch_check "${statuses[@]}"
 }

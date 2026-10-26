@@ -87,6 +87,9 @@
 #   FAKE_AWS_SIM_DELAY      2-3 판정 시뮬레이터 호출마다 답하기 전에 기다릴 초
 #                           (소수 가능 — /bin/sleep 으로 잰다. 시험이 PATH 에
 #                           둔 가짜 sleep 을 부르지 않게).
+#   FAKE_AWS_SLOW           「<키 글롭>=<초>」. 키(FAKE_AWS_SIM_TABLE 의 키)가
+#                           글롭에 맞는 시뮬레이터 호출만 그만큼 더 기다린다
+#                           (/bin/sleep) — 질문 하나를 오래 붙잡아 두는 시험.
 #   FAKE_AWS_INFLIGHT_DIR   2-3 판정 시뮬레이터 호출의 동시 수를 잴 디렉터리.
 #                           호출마다 그 안에 inflight.<pid> 를 두고(끝날 때
 #                           지움), 들어설 때 본 inflight.* 수를 counts 에 한 줄씩
@@ -411,7 +414,7 @@ maybe_throttle() {
 # 답을 낸다. 옛 CLI 모드는 PolicyExclusionList 를 입력 오류로 거부한다.
 # Globals:
 #   FAKE_AWS_CLI, FAKE_AWS_SIM, FAKE_AWS_SIM_TABLE, FAKE_AWS_SIM_DELAY,
-#   ACCOUNT, REGION_CONTEXT_PATTERN
+#   FAKE_AWS_SLOW, ACCOUNT, REGION_CONTEXT_PATTERN
 # Arguments:
 #   요청 JSON, 받은 argv 전체.
 #######################################
@@ -460,6 +463,10 @@ principal_simulate() {
   enter_flight
   if [[ -n "${FAKE_AWS_SIM_DELAY:-}" ]]; then
     /bin/sleep "${FAKE_AWS_SIM_DELAY}" || exit 252
+  fi
+  # shellcheck disable=SC2053 # 오른쪽은 일부러 글롭이다.
+  if [[ -n "${FAKE_AWS_SLOW:-}" && "${key}" == ${FAKE_AWS_SLOW%=*} ]]; then
+    /bin/sleep "${FAKE_AWS_SLOW##*=}" || exit 252
   fi
   path="$(option_value --cli-input-json "$@")"
   maybe_throttle "${key}" SimulatePrincipalPolicy "${path#file://}"

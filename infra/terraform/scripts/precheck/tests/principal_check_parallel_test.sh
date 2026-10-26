@@ -681,6 +681,75 @@ expect_term_stops() {
     "129 · 그 뒤 호출 0 · 남은 프로세스 0"
 }
 
+#######################################
+# P11b 의 실행을 배경에서 시작하고, 느린 질문(JUDGE_KEY — 8초)이 날아가는
+# 중이면(순차 구간을 지났고 진행 표시가 있음) 주 프로세스의 직속 자식(작업자)
+# 을 모두 SIGKILL 로 죽인다 — 작업자는 실패 표지를 남기지 못하고 비0 상태만
+# 남긴다.
+# Arguments:
+#   사례 디렉터리.
+# Returns:
+#   죽이지 못하면 1.
+#######################################
+kill_workers_in_batch() {
+  local case_dir="$1" runner tries=0 pid
+  local -a flights
+  set -m
+  (
+    run_jobs "${case_dir}" killed PRINCIPAL_CHECK_JOBS=6 \
+      "FAKE_AWS_SLOW=${JUDGE_KEY}=8" \
+      "FAKE_AWS_INFLIGHT_DIR=${case_dir}/in/flight" O7a
+    printf '%s\n' "${run_status}" >"${case_dir}/in/killed.status"
+  ) </dev/null >/dev/null 2>&1 &
+  runner=$!
+  set +m
+  while :; do
+    flights=("${case_dir}"/in/flight/inflight.*)
+    if [[ -e "${flights[0]}" && "$(testlib::count "${case_dir}/out/aws.log" \
+      'simulate-principal-policy')" -gt "${SEQUENTIAL_SIMS}" ]]; then
+      break
+    fi
+    tries=$((tries + 1))
+    [[ "${tries}" -lt 500 ]] || break
+    /bin/sleep 0.05
+  done
+  pid="$(pgrep -o -f -- "${case_dir}/tree/principal-check.sh")"
+  [[ -n "${pid}" ]] && pkill -KILL -P "${pid}"
+  wait "${runner}"
+  [[ -n "${pid}" ]]
+}
+
+#######################################
+# P11b: 동시 구간 중 작업자가 SIGKILL 로 죽으면 종료 2 · 「동시 질문 작업이
+# 실패함」 · complete.txt 없음 · 주 프로세스가 끝난 뒤 자손(aws 포함) 0 ·
+# 표준 오류에 절대 경로 없음(bash 의 「Killed」 진단이 새지 않음).
+#######################################
+expect_worker_killed() {
+  local case_dir
+  case_dir="$(new_jobs_case)" || {
+    testlib::fail "P11b: 시험 준비 실패"
+    return
+  }
+  if ! kill_workers_in_batch "${case_dir}"; then
+    testlib::fail "P11b: 주 프로세스를 찾지 못함"
+    return
+  fi
+  # 느린 질문(8초)이 아직 날고 있을 때 주 프로세스가 끝났으므로, 0.5초 안에
+  # 남은 것이 없어야 작업자 묶음을 정리한 것이다.
+  if ! wait_no_process "${case_dir}" 10; then
+    testlib::fail "P11b: 주 프로세스가 끝났는데 죽은 작업자의 자손이 남음"
+    return
+  fi
+  run_out="${case_dir}/out/killed"
+  run_status="$(cat -- "${case_dir}/in/killed.status")"
+  expect_unverifiable P11b || return
+  testlib::expect_stderr_count P11b '동시 질문 작업이 실패함' 1 || return
+  expect_no_complete P11b "${case_dir}" || return
+  expect_no_leak P11b "${case_dir}" || return
+  testlib::ok "P11b worker-killed → 작업자 SIGKILL 은 종료 2 · complete.txt" \
+    "없음 · 자손 0 · 표준 오류에 경로 없음"
+}
+
 main() {
   testlib::init principal_check_parallel_test
   expect_jobs_rejected
@@ -693,6 +762,7 @@ main() {
   expect_last_write_failure
   expect_shape_failure
   expect_term_stops
+  expect_worker_killed
   testlib::finish principal_check_parallel_test
 }
 
