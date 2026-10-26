@@ -353,9 +353,15 @@ platform 의 태그 행(ALB · NLB · 대상 그룹 · 리스너 · ECS)도 첫 
 *   집계는 멈춤 > 판정 불가 > 통과입니다. 둘째 줄부터 통과가 아닌 행이
     `| 주체 키 | 자원 키 | 동작 | 리전 | 판정 | 사유 |` 로 나옵니다. 계정
     ID · ARN · 역할 · 사용자 · 자원 이름은 표준 출력 · 표준 오류에 없습니다.
-*   ELB 행(WAF 떼기 · 바꿔 달기 · 리스너 등)이 멈춤이면 증거의
-    `result.tsv` 자원 칸이 NLB(`loadbalancer/net/`)인지 먼저 봅니다 — 태그
-    해석이 NLB 도 돌려줘 안전한 쪽으로 넓게 묻습니다.
+*   ALB 의 WAF 떼기 · 바꿔 달기 두 행(`platform-waf-detach` ·
+    `platform-waf-detach-elb` — 유형 칸 `loadbalancer/app/` 만)은 ALB 를
+    푸는 태그 필터가 NLB 도 돌려줘 NLB 에도 묻습니다(넓게). 그 두 행의 멈춤
+    줄이 증거의 `result.tsv` 자원 칸에서 **모두** `loadbalancer/net/` 이면
+    넓게 묻기에서 온 것일 수 있고, 하나라도 `loadbalancer/app/` 이면 진짜
+    WAF 떼기 허용입니다. 어느 쪽이든 멈춤은 kty 기록으로 열리지 않고
+    보고합니다(위 표). LB · 리스너 행(`platform-load-balancer` ·
+    `platform-listener` — 유형 칸에 NLB 를 적어 prod NLB 를 지킴)의 NLB
+    멈춤은 진짜입니다.
 *   종료 3 의 기록: 그 실행의 증거 디렉터리에 `approvals.tsv`(시각 · 판정
     불가 · 진행/멈춤 · 이유, 탭 구분)를 kty 가 적습니다. 기록은 다음 실행에
     이어 쓰지 않습니다 — 다시 돌리면 그 실행의 판정 불가를 다시 적습니다.
@@ -435,7 +441,8 @@ platform 의 태그 행(ALB · NLB · 대상 그룹 · 리스너 · ECS)도 첫 
 A20 의 두 한계(같은 계정 · 도메인의 dev · prod 인증서 검증 이름이 같아 나는
 멈춤의 처분 · 혼합 갈래의 dev 표본이 `dev.pokeclip.com` 하나뿐인 것)는 dev
 주체가 남아 있는 동안만 의미가 있고, dev 를 내릴 예정이라 처분 없이
-기록합니다(kty 2026-10-26).
+기록합니다(kty 2026-10-26). 리스 기간의 prod 단계는 dev 가 살아 있는 동안
+돌므로, dev 를 내리기 전 실행에서는 이 두 한계가 그대로 살아 있습니다.
 
 ## 이벤트 기록
 
