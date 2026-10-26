@@ -26,6 +26,7 @@ import {
   type LoadedList,
   type SessionAxis,
 } from './playbackEdge';
+import { nextLivePosition, type LivePosition } from './livePosition';
 import { trackPlaybackStartOnce } from './playbackStarts';
 import type { PlaybackSource, SeekView } from './rewindSwitch';
 import { useControlsAutoHide } from './useControlsAutoHide';
@@ -99,18 +100,7 @@ export interface PlaybackHooks {
   axisLowerMs?: number | null;
 }
 
-/**
- * 라이브 재생기의 자리(POK-326). 시각은 조각마다 그 조각의 시각 표시(PDT)로 센 실제 시각(epoch ms)이다. 같은 실제 초 안에서
- * 시차도 같으면 재생기는 그 초에 처음 잰 값을 둔다
- */
-export interface LivePosition {
-  /** 재생 위치의 실제 시각 */
-  atMs: number;
-  /** 실시간 끝(재생기가 서는 라이브 끝)의 실제 시각. 라이브 채팅이 표에 다 들어온 자리를 이것으로 센다 */
-  edgeAtMs: number;
-  /** 실시간 끝에서 몇 초 뒤인가(정수, 재생기 시차 표기와 같은 값) */
-  behindSeconds: number;
-}
+export type { LivePosition } from './livePosition';
 
 /**
  * @param onSeek 사람이 옮겼다(시크바·키·실시간으로·카드). 재생으로 흐를 때는 부르지 않는다: 라이브 채팅이 맨 아래(되감은 자리,
@@ -119,8 +109,6 @@ export interface LivePosition {
  * @param afterForbidden 이 재생기는 403으로 출입증을 다시 받은 뒤 새로 섰다. 영상 조각을 하나도 못 받은 채 또 403이면 더 받지 않고
  *   멈춘다(계약3 재시도 정책: 재호출 1회 뒤에도 403이면 접근 불가, POK-419). 한 번이라도 받았으면 회복한 것이라 다음 403은 다시 받는다
  * @param broadcastId 방송 번호(회차) — 사용 통계 「방송마다 한 번」의 기억 키(playbackStarts.ts). 없으면 세지 않는다
- */
-/**
  * @param source 재생할 목록(종류 · 주소 · 시작 시각 · 세대). 세대가 오르면 같은 주소여도 재생기를 새로 세운다(설계 5.4절)
  * @param hooks 재생 세션의 고리(PlaybackHooks). 없으면 지금 동작이다
  */
@@ -485,6 +473,8 @@ export function useHlsPlayback(
     // play가 아니라 playing에서 센다 — play는 play()를 부른 순간 나가, 첫 조각을 못 받아 화면이 안 나와도 셌다(PR #382 3차 리뷰)
     const onPlaying = () => {
       waiting = false;
+      // 재생에 성공했다 — 앞 재생기가 멎은 알림을 내린다(같은 주소로 새로 선 재생기 · 알림은 주소가 바뀔 때만 저절로 사라진다)
+      setStopped(null);
       const id = broadcastIdRef.current;
       if (id) trackPlaybackStartOnce(id, 'live');
       hooksRef.current.onPlaying?.();
@@ -537,8 +527,12 @@ export function useHlsPlayback(
         stableTime = video.currentTime;
         stableAtMs = axis.atMs;
       }
+      // 라이브는 되감기가 준비됐을 때만 멈춘 채 갈아 끼운다. 준비 전이면 재개 때 자른다(onPlay) — 창이 밀릴 때마다 알리지
+      // 않게(5.3.1절 3번)
+      const handsOverPaused = kind !== 'live' || hooksRef.current.axisLowerMs != null;
       const pausedAtMs = pausedAtMsRef.current;
       if (
+        handsOverPaused &&
         video.paused &&
         pausedAtMs !== null &&
         !pausedHandledRef.current &&
@@ -549,15 +543,8 @@ export function useHlsPlayback(
         hooksRef.current.onSeekRequest?.(pausedAtMs, axis.view);
       }
       if (video.readyState < HAVE_CURRENT_DATA || axis.atMs === null) return;
-      const atMs = Math.round(axis.atMs);
-      const behind = axis.behindSeconds;
-      setLivePosition((prev) =>
-        prev !== null &&
-        Math.floor(prev.atMs / 1000) === Math.floor(atMs / 1000) &&
-        prev.behindSeconds === behind
-          ? prev
-          : { atMs, edgeAtMs: Math.round(axis.edgeMs), behindSeconds: behind },
-      );
+      const { atMs, edgeMs, behindSeconds: behind } = axis;
+      setLivePosition((prev) => nextLivePosition(prev, atMs, edgeMs, behind));
     };
     // 목록 끝 정체(D9) — ENDLIST 없는 목록의 회차 경계를 맡는 「끝 도달」이다. 재생기 하나에 한 번(목록이 자라면 다시 센다)
     const checkStall = () => {
@@ -587,21 +574,13 @@ export function useHlsPlayback(
       // 그때의 재생 위치(첫 조각 전엔 0초)는 보고 있는 화면이 아니라, 라이브를 여는 순간 1시간 되감은 것처럼 채팅이 따라갔다
       // (POK-326 리뷰 1라운드)
       if (video.readyState < HAVE_CURRENT_DATA) return;
-      // 시각은 조각 목록으로 센다(programDateAt). 같은 실제 초 안에서 시차도 같으면 앞 값(같은 객체)을 둔다: timeupdate는 1초에
-      // 네 번쯤 온다(시차를 반올림하는 이유와 같다). 정각 초로 내리지 않는다: 카드·채팅 바닥 시계의 0초(서버 기준점)는 ms 자리가
-      // 있어, 내리면 카드로 정확히 옮겨도 채팅이 카드보다 그만큼 일찍 잘리고 바닥이 1초 이르게 섰다(리뷰 2라운드)
+      // 시각은 조각 목록으로 센다(programDateAt) — 같은 초 · 같은 시차면 앞 값을 둔다(nextLivePosition)
       const fragments = hlsRef.current?.latestLevelDetails?.fragments ?? [];
       const at = programDateAt(fragments, video.currentTime);
       const edge = programDateAt(fragments, liveEdgePosition(range, sync));
-      setLivePosition((prev) => {
-        if (at === null || edge === null) return null;
-        const atMs = Math.round(at);
-        return prev !== null &&
-          Math.floor(prev.atMs / 1000) === Math.floor(atMs / 1000) &&
-          prev.behindSeconds === behind
-          ? prev
-          : { atMs, edgeAtMs: Math.round(edge), behindSeconds: behind };
-      });
+      setLivePosition((prev) =>
+        at === null || edge === null ? null : nextLivePosition(prev, at, edge, behind),
+      );
     };
     video.addEventListener('play', onPlay);
     video.addEventListener('playing', onPlaying);

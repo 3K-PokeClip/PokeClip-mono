@@ -7,15 +7,14 @@ import {
   RESUME_WAIT_MS,
   openSession,
   pollTargets,
-  sessionView,
   transition,
   type PlaybackSessionState,
   type SessionClose,
   type SessionEffect,
   type SessionEvent,
-  type SessionView,
   type XAnswer,
 } from './rewindSwitch';
+import { sessionView, type SessionView } from './sessionView';
 import { useRewindStatus } from './useRewindStatus';
 
 // 재생 세션의 수명 소유자(설계 5.5절, POK-200 M5). LiveScreen 층 — GlassPlayer 의 key 바깥 — 에 산다: 출입증 회복 · 시계 key 로
@@ -134,7 +133,7 @@ export function usePlaybackSession(options: SessionOptions): PlaybackSession | n
   const recheckTimer = useRef<number | undefined>(undefined);
 
   const dispatchRef = useRef<(event: SessionEvent) => void>(() => {});
-  const applyEffects = useCallback((effects: SessionEffect[], s: PlaybackSessionState) => {
+  const applyEffects = useCallback((effects: SessionEffect[], session: PlaybackSessionState) => {
     for (const effect of effects) {
       switch (effect.kind) {
         case 'refresh':
@@ -165,12 +164,12 @@ export function usePlaybackSession(options: SessionOptions): PlaybackSession | n
           break;
         }
         case 'close':
-          if (effect.reason === 'left') leftForRef.current = s.accessKey;
+          if (effect.reason === 'left') leftForRef.current = session.accessKey;
           optionsRef.current.onClose({
             reason: effect.reason,
             goTo: effect.goTo,
-            observedEndMs: s.observedEndMs,
-            accessKey: s.accessKey,
+            observedEndMs: session.observedEndMs,
+            accessKey: session.accessKey,
           });
           break;
       }

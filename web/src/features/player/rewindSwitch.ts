@@ -181,19 +181,21 @@ export function openSession(init: {
 }
 
 /** 시크바 왼쪽 끝(되감기 범위 첫 시각). 최신 폴링이 되감기를 열었을 때만 — 닫혀 있으면 라이브 창만 보인다(계약3 7-2) */
-export function rewindAxisLowerMs(s: PlaybackSessionState): number | null {
-  return s.rewindOpen && s.entry !== null ? s.entry.firstPdtMs : null;
+export function rewindAxisLowerMs(session: PlaybackSessionState): number | null {
+  return session.rewindOpen && session.entry !== null ? session.entry.firstPdtMs : null;
 }
 
 /** 켤 폴링 경로(설계 5.1절 표) */
-export function pollTargets(s: PlaybackSessionState): { stream: boolean; round: boolean } {
-  if (s.closed !== null) return { stream: false, round: false };
-  switch (s.phase.kind) {
+export function pollTargets(session: PlaybackSessionState): { stream: boolean; round: boolean } {
+  if (session.closed !== null) return { stream: false, round: false };
+  switch (session.phase.kind) {
     case 'live':
     case 'rewind':
       return { stream: true, round: false };
     case 'ending-wait':
-      return s.phase.recordOnEnd ? { stream: false, round: false } : { stream: true, round: true };
+      return session.phase.recordOnEnd
+        ? { stream: false, round: false }
+        : { stream: true, round: true };
     default:
       return { stream: false, round: false };
   }
@@ -201,7 +203,8 @@ export function pollTargets(s: PlaybackSessionState): { stream: boolean; round: 
 
 // ── 작은 도구 ──
 
-const none = (state: PlaybackSessionState): Transition => ({ state, effects: [] });
+/** 효과 없는 전이 — 상태를 그대로 두거나 바꾼 상태만 돌려준다 */
+const stateOnly = (state: PlaybackSessionState): Transition => ({ state, effects: [] });
 
 function withUrl(set: ReadonlySet<string>, url: string): ReadonlySet<string> {
   return set.has(url) ? set : new Set([...set, url]);
@@ -219,33 +222,33 @@ function readyLive(result: RewindStatusResult): (RewindStatus & RewindRange) | n
   return { ...status, url: status.url, firstPdtMs: status.firstPdtMs, headPdtMs: status.headPdtMs };
 }
 
-function within(t: number | null, first: number, head: number): t is number {
-  return t !== null && first <= t && t <= head;
+function within(atMs: number | null, first: number, head: number): atMs is number {
+  return atMs !== null && first <= atMs && atMs <= head;
 }
 
 function replace(
-  s: PlaybackSessionState,
+  session: PlaybackSessionState,
   kind: PlaybackSource['kind'],
   url: string,
   startAtMs: number | null,
 ): PlaybackSource {
-  return { kind, url, startAtMs, generation: s.source.generation + 1 };
+  return { kind, url, startAtMs, generation: session.source.generation + 1 };
 }
 
-function close(s: PlaybackSessionState, reason: SessionClose, goTo?: string): Transition {
+function close(session: PlaybackSessionState, reason: SessionClose, goTo?: string): Transition {
   const effect: SessionEffect =
     goTo === undefined ? { kind: 'close', reason } : { kind: 'close', reason, goTo };
-  return { state: { ...s, closed: reason }, effects: [effect] };
+  return { state: { ...session, closed: reason }, effects: [effect] };
 }
 
-function enterEnding(s: PlaybackSessionState, atEnd: boolean, now: number): Transition {
-  const origin = s.phase.kind === 'rewind' ? 'rewind' : 'live';
-  const retry = s.source.kind === 'rewind' ? { retryWhileUrl: s.source.url } : {};
+function enterEnding(session: PlaybackSessionState, atEnd: boolean, now: number): Transition {
+  const origin = session.phase.kind === 'rewind' ? 'rewind' : 'live';
+  const retry = session.source.kind === 'rewind' ? { retryWhileUrl: session.source.url } : {};
   return {
     state: {
-      ...s,
+      ...session,
       phase: { kind: 'ending-wait', origin, atEnd, recordOnEnd: false },
-      endingSince: s.endingSince ?? now,
+      endingSince: session.endingSince ?? now,
       offer: null,
     },
     effects: [{ kind: 'refresh', ...retry }],
@@ -254,34 +257,37 @@ function enterEnding(s: PlaybackSessionState, atEnd: boolean, now: number): Tran
 
 // ── 시크 ──
 
-function seekLive(s: PlaybackSessionState, t: number, view: SeekView): Transition {
-  if (t >= view.lowerMs) {
-    return { state: s, effects: [{ kind: 'seek-within', atMs: Math.min(t, view.endMs) }] };
+function seekLive(session: PlaybackSessionState, targetMs: number, view: SeekView): Transition {
+  if (targetMs >= view.lowerMs) {
+    return {
+      state: session,
+      effects: [{ kind: 'seek-within', atMs: Math.min(targetMs, view.endMs) }],
+    };
   }
-  const entry = s.rewindOpen ? s.entry : null;
+  const entry = session.rewindOpen ? session.entry : null;
   if (entry === null) {
     return {
-      state: s,
+      state: session,
       effects: [
         { kind: 'seek-within', atMs: view.lowerMs },
         { kind: 'notice', text: SESSION_NOTICES.oldest },
       ],
     };
   }
-  let start = t;
+  let start = targetMs;
   const effects: SessionEffect[] = [];
-  if (t < entry.firstPdtMs) {
+  if (targetMs < entry.firstPdtMs) {
     start = entry.firstPdtMs;
     effects.push({ kind: 'notice', text: SESSION_NOTICES.oldest });
-  } else if (t > entry.headPdtMs) {
+  } else if (targetMs > entry.headPdtMs) {
     start = entry.headPdtMs;
     effects.push({ kind: 'notice', text: SESSION_NOTICES.gap });
   }
   return {
     state: {
-      ...s,
+      ...session,
       phase: { kind: 'rewind', pendingNext: null },
-      source: replace(s, 'rewind', entry.url, start),
+      source: replace(session, 'rewind', entry.url, start),
       boundLive: false,
       foreignLive: null,
       liveChecking: false,
@@ -291,35 +297,44 @@ function seekLive(s: PlaybackSessionState, t: number, view: SeekView): Transitio
 }
 
 /** 로드한 목록 안 시크(되감기 · vod) — 하한 앞은 하한으로 알림, 끝 뒤는 끝으로 */
-function seekInList(s: PlaybackSessionState, t: number, view: SeekView): Transition {
-  if (t < view.lowerMs) {
+function seekInList(session: PlaybackSessionState, targetMs: number, view: SeekView): Transition {
+  if (targetMs < view.lowerMs) {
     return {
-      state: s,
+      state: session,
       effects: [
         { kind: 'seek-within', atMs: view.lowerMs },
         { kind: 'notice', text: SESSION_NOTICES.oldest },
       ],
     };
   }
-  return { state: s, effects: [{ kind: 'seek-within', atMs: Math.min(t, view.endMs) }] };
+  return {
+    state: session,
+    effects: [{ kind: 'seek-within', atMs: Math.min(targetMs, view.endMs) }],
+  };
 }
 
 // ── LIVE 버튼 ──
 
 /** rewind · 끝남 대기(atEnd:false) · vod-offered(atEnd:false) 의 LIVE — X 로 가른다(R58) */
-function liveFromAway(s: PlaybackSessionState, x: XAnswer, attempt: number): Transition {
-  if (x.kind === 'known' && x.id !== '' && x.id !== s.roundId) return close(s, 'left', x.id);
-  if (x.kind === 'unknown' && attempt < X_RECHECK_LIMIT) {
+function liveFromAway(
+  session: PlaybackSessionState,
+  currentX: XAnswer,
+  attempt: number,
+): Transition {
+  if (currentX.kind === 'known' && currentX.id !== '' && currentX.id !== session.roundId) {
+    return close(session, 'left', currentX.id);
+  }
+  if (currentX.kind === 'unknown' && attempt < X_RECHECK_LIMIT) {
     return {
-      state: { ...s, liveChecking: true },
+      state: { ...session, liveChecking: true },
       effects: [{ kind: 'recheck-x', attempt: attempt + 1 }],
     };
   }
   return {
     state: {
-      ...s,
+      ...session,
       phase: { kind: 'live' },
-      source: replace(s, 'live', s.liveUrl, null),
+      source: replace(session, 'live', session.liveUrl, null),
       liveChecking: false,
       boundLive: true,
       offer: null,
@@ -330,217 +345,231 @@ function liveFromAway(s: PlaybackSessionState, x: XAnswer, attempt: number): Tra
 
 // ── 국면별 표 ──
 
-function onLive(s: PlaybackSessionState, e: SessionEvent, now: number): Transition {
-  switch (e.type) {
+function onLive(session: PlaybackSessionState, event: SessionEvent, now: number): Transition {
+  switch (event.type) {
     case 'seek':
-      return seekLive(s, e.targetMs, e.view);
+      return seekLive(session, event.targetMs, event.view);
     case 'live-button':
-      return { state: s, effects: [{ kind: 'seek-live-edge' }] };
+      return { state: session, effects: [{ kind: 'seek-live-edge' }] };
     case 'playing':
-      return s.endingSince === null ? none(s) : none({ ...s, endingSince: null });
+      return session.endingSince === null
+        ? stateOnly(session)
+        : stateOnly({ ...session, endingSince: null });
     case 'stream-poll':
-      return onLiveStreamPoll(s, e.result, e.x);
+      return onLiveStreamPoll(session, event.result, event.x);
     case 'endlist':
-      return enterEnding(s, false, now);
+      return enterEnding(session, false, now);
     case 'end-reached':
     case 'live-closed':
-      return enterEnding(s, true, now);
+      return enterEnding(session, true, now);
     case 'live-400':
-      return none({ ...s, source: replace(s, 'live', s.liveUrl, null) });
+      return stateOnly({ ...session, source: replace(session, 'live', session.liveUrl, null) });
     case 'roster-ended':
-      return { state: s, effects: [{ kind: 'refresh' }] };
+      return { state: session, effects: [{ kind: 'refresh' }] };
     case 'button':
-      return e.which === 'new-broadcast' && s.foreignLive !== null
-        ? close(s, 'left', s.foreignLive)
-        : none(s);
+      return event.which === 'new-broadcast' && session.foreignLive !== null
+        ? close(session, 'left', session.foreignLive)
+        : stateOnly(session);
     default:
-      return none(s);
+      return stateOnly(session);
   }
 }
 
 function onLiveStreamPoll(
-  s: PlaybackSessionState,
+  session: PlaybackSessionState,
   result: RewindStatusResult,
-  x: XAnswer | undefined,
+  currentX: XAnswer | undefined,
 ): Transition {
-  if (s.foreignLive !== null) return none(s);
-  if (s.boundLive) {
+  if (session.foreignLive !== null) return stateOnly(session);
+  if (session.boundLive) {
     // 세션에 묶인 live 는 지금 방송 번호를 모르면 이번 폴링을 건너뛴다 — 같은 키의 새 방송 B 를 A 세션 재료로 받지 않게(R58)
-    if (x?.kind !== 'known') return none(s);
-    if (x.id !== '' && x.id !== s.roundId) return none({ ...s, foreignLive: x.id });
+    if (currentX?.kind !== 'known') return stateOnly(session);
+    if (currentX.id !== '' && currentX.id !== session.roundId) {
+      return stateOnly({ ...session, foreignLive: currentX.id });
+    }
   }
   // 잠시 불가는 직전 상태를 둔다. 그 밖의 답은 되감기 노출을 정한다(진입 재료는 남긴다)
-  if (result.kind === 'unavailable') return none(s);
+  if (result.kind === 'unavailable') return stateOnly(session);
   const live = readyLive(result);
-  if (live === null) return s.rewindOpen ? none({ ...s, rewindOpen: false }) : none(s);
-  return none({
-    ...s,
+  if (live === null) {
+    return session.rewindOpen ? stateOnly({ ...session, rewindOpen: false }) : stateOnly(session);
+  }
+  return stateOnly({
+    ...session,
     entry: { url: live.url, firstPdtMs: live.firstPdtMs, headPdtMs: live.headPdtMs },
-    roundRewindUrls: withUrl(s.roundRewindUrls, live.url),
+    roundRewindUrls: withUrl(session.roundRewindUrls, live.url),
     rewindOpen: true,
   });
 }
 
 function onRewind(
-  s: PlaybackSessionState,
+  session: PlaybackSessionState,
   phase: Extract<SessionPhase, { kind: 'rewind' }>,
-  e: SessionEvent,
+  event: SessionEvent,
   now: number,
 ): Transition {
-  switch (e.type) {
+  switch (event.type) {
     case 'seek':
-      return seekInList(s, e.targetMs, e.view);
+      return seekInList(session, event.targetMs, event.view);
     case 'live-button':
-      return liveFromAway(s, e.x, e.attempt);
+      return liveFromAway(session, event.x, event.attempt);
     case 'stream-poll':
-      return onRewindStreamPoll(s, e.result);
+      return onRewindStreamPoll(session, event.result);
     case 'endlist':
       return phase.pendingNext !== null
-        ? { state: s, effects: [{ kind: 'refresh', retryWhileUrl: s.source.url }] }
-        : enterEnding(s, false, now);
+        ? { state: session, effects: [{ kind: 'refresh', retryWhileUrl: session.source.url }] }
+        : enterEnding(session, false, now);
     case 'end-reached': {
       const next = phase.pendingNext;
-      if (next !== null && within(s.listEndMs, next.firstPdtMs, next.headPdtMs)) {
-        return none({
-          ...s,
+      if (next !== null && within(session.listEndMs, next.firstPdtMs, next.headPdtMs)) {
+        return stateOnly({
+          ...session,
           phase: { kind: 'rewind', pendingNext: null },
-          source: replace(s, 'rewind', next.url, s.listEndMs),
-          roundRewindUrls: withUrl(s.roundRewindUrls, next.url),
+          source: replace(session, 'rewind', next.url, session.listEndMs),
+          roundRewindUrls: withUrl(session.roundRewindUrls, next.url),
         });
       }
-      return enterEnding(s, true, now);
+      return enterEnding(session, true, now);
     }
     case 'roster-ended':
-      return { state: s, effects: [{ kind: 'refresh' }] };
+      return { state: session, effects: [{ kind: 'refresh' }] };
     default:
-      return none(s);
+      return stateOnly(session);
   }
 }
 
-function onRewindStreamPoll(s: PlaybackSessionState, result: RewindStatusResult): Transition {
+function onRewindStreamPoll(session: PlaybackSessionState, result: RewindStatusResult): Transition {
   const live = readyLive(result);
-  if (live === null) return none(s);
+  if (live === null) return stateOnly(session);
   const range = { url: live.url, firstPdtMs: live.firstPdtMs, headPdtMs: live.headPdtMs };
-  if (live.url === s.source.url) {
-    return none({
-      ...s,
+  if (live.url === session.source.url) {
+    return stateOnly({
+      ...session,
       entry: range,
       rewindOpen: true,
-      observedEndMs: maxOrSelf(s.observedEndMs, live.headPdtMs),
+      observedEndMs: maxOrSelf(session.observedEndMs, live.headPdtMs),
     });
   }
-  if (within(s.lastAtMs, live.firstPdtMs, live.headPdtMs)) {
-    return none({
-      ...s,
+  if (within(session.lastAtMs, live.firstPdtMs, live.headPdtMs)) {
+    return stateOnly({
+      ...session,
       entry: range,
       rewindOpen: true,
       phase: { kind: 'rewind', pendingNext: null },
-      source: replace(s, 'rewind', live.url, s.lastAtMs),
-      roundRewindUrls: withUrl(s.roundRewindUrls, live.url),
+      source: replace(session, 'rewind', live.url, session.lastAtMs),
+      roundRewindUrls: withUrl(session.roundRewindUrls, live.url),
     });
   }
-  return none({ ...s, phase: { kind: 'rewind', pendingNext: range } });
+  return stateOnly({ ...session, phase: { kind: 'rewind', pendingNext: range } });
 }
 
 type EndingPhase = Extract<SessionPhase, { kind: 'ending-wait' }>;
 
 function onEnding(
-  s: PlaybackSessionState,
+  session: PlaybackSessionState,
   phase: EndingPhase,
-  e: SessionEvent,
+  event: SessionEvent,
   now: number,
 ): Transition {
-  switch (e.type) {
+  switch (event.type) {
     case 'stream-poll':
-      return phase.recordOnEnd ? none(s) : onEndingStreamPoll(s, phase, e.result, e.x);
+      return phase.recordOnEnd
+        ? stateOnly(session)
+        : onEndingStreamPoll(session, phase, event.result, event.x);
     case 'round-poll':
-      return phase.recordOnEnd ? none(s) : onEndingRoundPoll(s, phase, e.result, now);
+      return phase.recordOnEnd
+        ? stateOnly(session)
+        : onEndingRoundPoll(session, phase, event.result, now);
     case 'end-reached':
     case 'live-closed':
-      if (phase.atEnd) return none(s);
-      if (phase.recordOnEnd) return close(s, 'recorded');
-      return none({ ...s, phase: { ...phase, atEnd: true } });
+      if (phase.atEnd) return stateOnly(session);
+      if (phase.recordOnEnd) return close(session, 'recorded');
+      return stateOnly({ ...session, phase: { ...phase, atEnd: true } });
     case 'tick':
-      if (s.endingSince === null || now - s.endingSince < ENDING_WAIT_MS) return none(s);
-      return roundFinal(s, phase);
+      if (session.endingSince === null || now - session.endingSince < ENDING_WAIT_MS) {
+        return stateOnly(session);
+      }
+      return roundFinal(session, phase);
     case 'roster-ended':
-      return none({ ...s, rosterEnded: true });
+      return stateOnly({ ...session, rosterEnded: true });
     case 'button':
-      return onEndingButton(s, e.which);
+      return onEndingButton(session, event.which);
     case 'seek':
-      return onEndingSeek(s, phase, e.targetMs, e.view);
+      return onEndingSeek(session, phase, event.targetMs, event.view);
     case 'live-button':
-      return phase.atEnd ? none(s) : liveFromAway(s, e.x, e.attempt);
+      return phase.atEnd ? stateOnly(session) : liveFromAway(session, event.x, event.attempt);
     default:
-      return none(s);
+      return stateOnly(session);
   }
 }
 
 /** 이음 지점 — rewind 기원이면 atEnd ? E : P, live 기원이면 lastAtMs */
-function joinPoint(s: PlaybackSessionState, phase: EndingPhase): number | null {
-  if (phase.origin === 'rewind') return phase.atEnd ? s.listEndMs : s.lastAtMs;
-  return s.lastAtMs;
+function joinPoint(session: PlaybackSessionState, phase: EndingPhase): number | null {
+  if (phase.origin === 'rewind') return phase.atEnd ? session.listEndMs : session.lastAtMs;
+  return session.lastAtMs;
 }
 
 function onEndingStreamPoll(
-  s: PlaybackSessionState,
+  session: PlaybackSessionState,
   phase: EndingPhase,
   result: RewindStatusResult,
-  x: XAnswer | undefined,
+  currentX: XAnswer | undefined,
 ): Transition {
   const live = readyLive(result);
-  if (live === null || s.roundRewindUrls.has(live.url)) return none(s);
-  const join = joinPoint(s, phase);
+  if (live === null || session.roundRewindUrls.has(live.url)) return stateOnly(session);
+  const join = joinPoint(session, phase);
   if (within(join, live.firstPdtMs, live.headPdtMs)) {
     const resumed = {
-      ...s,
-      roundRewindUrls: withUrl(s.roundRewindUrls, live.url),
+      ...session,
+      roundRewindUrls: withUrl(session.roundRewindUrls, live.url),
       endingSince: null,
       offer: null,
       rosterEnded: false,
       entry: { url: live.url, firstPdtMs: live.firstPdtMs, headPdtMs: live.headPdtMs },
     };
     if (phase.origin === 'rewind') {
-      return none({
+      return stateOnly({
         ...resumed,
         phase: { kind: 'rewind', pendingNext: null },
-        source: replace(s, 'rewind', live.url, join),
+        source: replace(session, 'rewind', live.url, join),
       });
     }
-    return none({
+    return stateOnly({
       ...resumed,
       phase: { kind: 'live' },
-      source: replace(s, 'live', s.liveUrl, null),
+      source: replace(session, 'live', session.liveUrl, null),
     });
   }
   let offer: Offer | null = null;
-  if (x?.kind === 'known' && x.id === s.roundId) offer = { kind: 'go-live' };
-  else if (x?.kind === 'known' && x.id !== '') offer = { kind: 'new-broadcast', goTo: x.id };
-  return none({ ...s, offer });
+  if (currentX?.kind === 'known' && currentX.id === session.roundId) offer = { kind: 'go-live' };
+  else if (currentX?.kind === 'known' && currentX.id !== '') {
+    offer = { kind: 'new-broadcast', goTo: currentX.id };
+  }
+  return stateOnly({ ...session, offer });
 }
 
 function onEndingRoundPoll(
-  s: PlaybackSessionState,
+  session: PlaybackSessionState,
   phase: EndingPhase,
   result: RewindStatusResult,
   now: number,
 ): Transition {
   if (result.kind === 'none') {
-    const waited = s.endingSince !== null && now - s.endingSince >= RESUME_WAIT_MS;
-    return waited ? roundFinal(s, phase) : none(s);
+    const waited = session.endingSince !== null && now - session.endingSince >= RESUME_WAIT_MS;
+    return waited ? roundFinal(session, phase) : stateOnly(session);
   }
-  if (result.kind !== 'ok') return none(s);
+  if (result.kind !== 'ok') return stateOnly(session);
   const { status } = result;
-  if (status.mode === 'ended') return roundFinal(s, phase);
-  if (status.mode !== 'vod' || status.url === null) return none(s);
-  if (status.firstPdtMs === null || status.headPdtMs === null) return none(s);
+  if (status.mode === 'ended') return roundFinal(session, phase);
+  if (status.mode !== 'vod' || status.url === null) return stateOnly(session);
+  if (status.firstPdtMs === null || status.headPdtMs === null) return stateOnly(session);
   // 세션이 본 구간 [watchedFromMs, observedEndMs] 과 겹쳐야 그 회차의 문서다(다른 회차 문서 방어 · R46)
-  const seenFrom = s.watchedFromMs;
-  const seenEnd = s.observedEndMs;
-  if (seenFrom === null || seenEnd === null) return none(s);
-  if (status.firstPdtMs > seenEnd || status.headPdtMs < seenFrom) return none(s);
-  return none({
-    ...s,
+  const seenFrom = session.watchedFromMs;
+  const seenEnd = session.observedEndMs;
+  if (seenFrom === null || seenEnd === null) return stateOnly(session);
+  if (status.firstPdtMs > seenEnd || status.headPdtMs < seenFrom) return stateOnly(session);
+  return stateOnly({
+    ...session,
     phase: {
       kind: 'vod-offered',
       url: status.url,
@@ -553,31 +582,36 @@ function onEndingRoundPoll(
 }
 
 /** 회차 종국(회차별 ended · 재접속 대기 뒤 404 · 20분 시한) — 끝에 닿았으면 녹화로, 아니면 끝까지 본 뒤 녹화로 */
-function roundFinal(s: PlaybackSessionState, phase: EndingPhase): Transition {
-  if (phase.atEnd) return close(s, 'recorded');
-  return none({ ...s, phase: { ...phase, recordOnEnd: true } });
+function roundFinal(session: PlaybackSessionState, phase: EndingPhase): Transition {
+  if (phase.atEnd) return close(session, 'recorded');
+  if (phase.recordOnEnd) return stateOnly(session);
+  return stateOnly({ ...session, phase: { ...phase, recordOnEnd: true } });
 }
 
-function onEndingButton(s: PlaybackSessionState, which: SessionButton): Transition {
-  if (which === 'record') return close(s, 'recorded');
-  if (which === 'go-live' && s.offer?.kind === 'go-live') return close(s, 'go-live');
-  if (which === 'new-broadcast' && s.offer?.kind === 'new-broadcast') {
-    return close(s, 'left', s.offer.goTo);
+function onEndingButton(session: PlaybackSessionState, which: SessionButton): Transition {
+  if (which === 'record') return close(session, 'recorded');
+  if (which === 'go-live' && session.offer?.kind === 'go-live') return close(session, 'go-live');
+  if (which === 'new-broadcast' && session.offer?.kind === 'new-broadcast') {
+    return close(session, 'left', session.offer.goTo);
   }
-  return none(s);
+  // 세션에 묶인 live 가 띠(다른 방송)를 세운 채 끝남 대기로 왔다 — 띠의 단추도 그 방송으로 닫는다
+  if (which === 'new-broadcast' && session.foreignLive !== null) {
+    return close(session, 'left', session.foreignLive);
+  }
+  return stateOnly(session);
 }
 
 function onEndingSeek(
-  s: PlaybackSessionState,
+  session: PlaybackSessionState,
   phase: EndingPhase,
-  t: number,
+  targetMs: number,
   view: SeekView,
 ): Transition {
   if (phase.origin === 'live') {
-    if (phase.atEnd) return none(s);
-    return seekLive(s, t, view);
+    if (phase.atEnd) return stateOnly(session);
+    return seekLive(session, targetMs, view);
   }
-  const moved = seekInList(s, t, view);
+  const moved = seekInList(session, targetMs, view);
   if (!phase.atEnd) return moved;
   return { state: { ...moved.state, phase: { ...phase, atEnd: false } }, effects: moved.effects };
 }
@@ -585,172 +619,141 @@ function onEndingSeek(
 type OfferedPhase = Extract<SessionPhase, { kind: 'vod-offered' }>;
 
 function onVodOffered(
-  s: PlaybackSessionState,
+  session: PlaybackSessionState,
   phase: OfferedPhase,
-  e: SessionEvent,
+  event: SessionEvent,
   origin: 'live' | 'rewind',
 ): Transition {
-  switch (e.type) {
+  switch (event.type) {
     case 'button':
-      if (e.which === 'record') return close(s, 'recorded');
-      return e.which === 'vod' ? openVod(s, phase) : none(s);
+      if (event.which === 'record') return close(session, 'recorded');
+      return event.which === 'vod' ? openVod(session, phase) : stateOnly(session);
     case 'end-reached':
-      return phase.atEnd ? none(s) : none({ ...s, phase: { ...phase, atEnd: true } });
+      return phase.atEnd
+        ? stateOnly(session)
+        : stateOnly({ ...session, phase: { ...phase, atEnd: true } });
     case 'seek':
       if (phase.atEnd) {
-        if (origin === 'live') return none(s);
-        const moved = seekInList(s, e.targetMs, e.view);
+        if (origin === 'live') return stateOnly(session);
+        const moved = seekInList(session, event.targetMs, event.view);
         return {
           state: { ...moved.state, phase: { ...phase, atEnd: false } },
           effects: moved.effects,
         };
       }
       return origin === 'live'
-        ? seekLive(s, e.targetMs, e.view)
-        : seekInList(s, e.targetMs, e.view);
+        ? seekLive(session, event.targetMs, event.view)
+        : seekInList(session, event.targetMs, event.view);
     case 'live-button':
-      if (phase.atEnd) return none(s);
+      if (phase.atEnd) return stateOnly(session);
       // live 기원은 live 표의 LIVE 행 — 라이브 끝으로 시크 · 국면 그대로(종결 정정 live 표 · VOD 제안을 잃지 않는다)
-      if (origin === 'live') return { state: s, effects: [{ kind: 'seek-live-edge' }] };
-      return liveFromAway(s, e.x, e.attempt);
+      if (origin === 'live') return { state: session, effects: [{ kind: 'seek-live-edge' }] };
+      return liveFromAway(session, event.x, event.attempt);
     default:
-      return none(s);
+      return stateOnly(session);
   }
 }
 
 /** 「다시보기 보기」 — 끝에 닿았으면 처음부터, 아니면 지금 자리에서(하한이 이긴다 — 짧은 VOD 는 첫 조각 · R47) */
-function openVod(s: PlaybackSessionState, phase: OfferedPhase): Transition {
-  if (phase.atEnd || s.lastAtMs === null) {
-    return none({ ...s, phase: { kind: 'vod' }, source: replace(s, 'vod', phase.url, null) });
+function openVod(session: PlaybackSessionState, phase: OfferedPhase): Transition {
+  if (phase.atEnd || session.lastAtMs === null) {
+    return stateOnly({
+      ...session,
+      phase: { kind: 'vod' },
+      source: replace(session, 'vod', phase.url, null),
+    });
   }
-  const start = Math.max(phase.firstPdtMs, Math.min(s.lastAtMs, phase.headPdtMs - s.edgeMarginMs));
+  const start = Math.max(
+    phase.firstPdtMs,
+    Math.min(session.lastAtMs, phase.headPdtMs - session.edgeMarginMs),
+  );
   const effects: SessionEffect[] =
-    start === s.lastAtMs ? [] : [{ kind: 'notice', text: SESSION_NOTICES.vodStart }];
+    start === session.lastAtMs ? [] : [{ kind: 'notice', text: SESSION_NOTICES.vodStart }];
   return {
-    state: { ...s, phase: { kind: 'vod' }, source: replace(s, 'vod', phase.url, start) },
+    state: {
+      ...session,
+      phase: { kind: 'vod' },
+      source: replace(session, 'vod', phase.url, start),
+    },
     effects,
   };
 }
 
-function onVod(s: PlaybackSessionState, e: SessionEvent): Transition {
-  return e.type === 'seek' ? seekInList(s, e.targetMs, e.view) : none(s);
+function onVod(session: PlaybackSessionState, event: SessionEvent): Transition {
+  return event.type === 'seek'
+    ? seekInList(session, event.targetMs, event.view)
+    : stateOnly(session);
 }
 
 // ── 아무 국면 ──
 
-function onAnyPhase(s: PlaybackSessionState, e: SessionEvent): Transition | null {
-  switch (e.type) {
+function onAnyPhase(session: PlaybackSessionState, event: SessionEvent): Transition | null {
+  switch (event.type) {
     case 'list-loaded': {
-      const own = e.url === s.source.url;
-      const frozen = s.foreignLive !== null;
-      return none({
-        ...s,
+      const own = event.url === session.source.url;
+      const frozen = session.foreignLive !== null;
+      return stateOnly({
+        ...session,
         roundRewindUrls:
-          own && s.source.kind === 'rewind' ? withUrl(s.roundRewindUrls, e.url) : s.roundRewindUrls,
-        observedEndMs: frozen ? s.observedEndMs : maxOrSelf(s.observedEndMs, e.lastEndMs),
-        listEndMs: own ? e.lastEndMs : s.listEndMs,
+          own && session.source.kind === 'rewind'
+            ? withUrl(session.roundRewindUrls, event.url)
+            : session.roundRewindUrls,
+        observedEndMs: frozen
+          ? session.observedEndMs
+          : maxOrSelf(session.observedEndMs, event.lastEndMs),
+        listEndMs: own ? event.lastEndMs : session.listEndMs,
         edgeMarginMs:
-          e.targetDurationS > 0 ? EDGE_MARGIN_TD * e.targetDurationS * 1000 : s.edgeMarginMs,
+          event.targetDurationS > 0
+            ? EDGE_MARGIN_TD * event.targetDurationS * 1000
+            : session.edgeMarginMs,
       });
     }
     case 'position':
-      return none({
-        ...s,
-        lastAtMs: e.atMs,
-        watchedFromMs: s.watchedFromMs === null ? e.atMs : Math.min(s.watchedFromMs, e.atMs),
+      return stateOnly({
+        ...session,
+        lastAtMs: event.atMs,
+        watchedFromMs:
+          session.watchedFromMs === null ? event.atMs : Math.min(session.watchedFromMs, event.atMs),
       });
     case 'remount': {
-      const startAtMs = s.source.kind === 'live' ? null : s.lastAtMs;
-      return none({
-        ...s,
-        source: { ...s.source, startAtMs, generation: s.source.generation + 1 },
+      const startAtMs = session.source.kind === 'live' ? null : session.lastAtMs;
+      return stateOnly({
+        ...session,
+        source: { ...session.source, startAtMs, generation: session.source.generation + 1 },
       });
     }
     case 'leave':
-      return close(s, 'left');
+      return close(session, 'left');
     default:
       return null;
   }
 }
 
 /** 사건 하나를 먹인다. 닫힌 세션은 무엇도 바꾸지 않는다 */
-export function transition(s: PlaybackSessionState, e: SessionEvent, now: number): Transition {
-  if (s.closed !== null) return none(s);
-  const any = onAnyPhase(s, e);
+export function transition(
+  session: PlaybackSessionState,
+  event: SessionEvent,
+  now: number,
+): Transition {
+  if (session.closed !== null) return stateOnly(session);
+  const any = onAnyPhase(session, event);
   if (any !== null) return any;
-  const phase = s.phase;
+  const phase = session.phase;
   switch (phase.kind) {
     case 'live':
-      return onLive(s, e, now);
+      return onLive(session, event, now);
     case 'rewind':
-      return onRewind(s, phase, e, now);
+      return onRewind(session, phase, event, now);
     case 'ending-wait':
-      return onEnding(s, phase, e, now);
+      return onEnding(session, phase, event, now);
     case 'vod-offered':
-      return onVodOffered(s, phase, e, s.source.kind === 'live' ? 'live' : 'rewind');
+      return onVodOffered(
+        session,
+        phase,
+        event,
+        session.source.kind === 'live' ? 'live' : 'rewind',
+      );
     case 'vod':
-      return onVod(s, e);
+      return onVod(session, event);
   }
-}
-
-// ── 화면이 그릴 것 ──
-
-export interface SessionView {
-  /** 마지막 프레임 위 덮개. checking = 재접속 대기 동안 「방송이 이어지는지 확인하고 있어요」 · preparing = 그 뒤 「다시보기 준비 중」 · vod-ready = 「다시보기 보기」 */
-  cover: 'checking' | 'preparing' | 'vod-ready' | null;
-  /** 덮개(끝에 닿음) 또는 띠(아직 보는 중)에 둘 버튼 */
-  actions: SessionButton[];
-  /** 「새 방송이 시작됐어요 — 보러 가기」 띠(세션에 묶인 live 가 다른 방송을 봄) */
-  banner: { goTo: string } | null;
-  /** 받을 목록이 없어 시크바를 숨긴다(live 기원 덮개) */
-  seekHidden: boolean;
-  /** LIVE 버튼을 숨긴다(끝난 방송의 VOD) */
-  liveHidden: boolean;
-  /** LIVE 를 눌러 지금 방송을 확인하는 중 */
-  liveChecking: boolean;
-  /** 「녹화 보기」를 기본 강조로 둔다(명부 ended) */
-  recordEmphasis: boolean;
-  /** 「다시보기 준비됨」 — 아직 보는 시청자에게 띠로 */
-  vodReady: boolean;
-}
-
-function offerActions(s: PlaybackSessionState): SessionButton[] {
-  if (s.offer?.kind === 'go-live') return ['record', 'go-live'];
-  if (s.offer?.kind === 'new-broadcast') return ['record', 'new-broadcast'];
-  return ['record'];
-}
-
-export function sessionView(s: PlaybackSessionState, now: number): SessionView {
-  const base: SessionView = {
-    cover: null,
-    actions: [],
-    banner: s.foreignLive === null ? null : { goTo: s.foreignLive },
-    seekHidden: false,
-    liveHidden: false,
-    liveChecking: s.liveChecking,
-    recordEmphasis: false,
-    vodReady: false,
-  };
-  const phase = s.phase;
-  if (phase.kind === 'ending-wait') {
-    const waiting = s.endingSince !== null && now - s.endingSince < RESUME_WAIT_MS;
-    return {
-      ...base,
-      cover: phase.atEnd ? (waiting ? 'checking' : 'preparing') : null,
-      actions: offerActions(s),
-      seekHidden: phase.atEnd && phase.origin === 'live',
-      recordEmphasis: s.rosterEnded,
-    };
-  }
-  if (phase.kind === 'vod-offered') {
-    return {
-      ...base,
-      cover: phase.atEnd ? 'vod-ready' : null,
-      actions: ['record', 'vod'],
-      seekHidden: phase.atEnd && s.source.kind === 'live',
-      vodReady: !phase.atEnd,
-    };
-  }
-  if (phase.kind === 'vod') return { ...base, liveHidden: true };
-  return base;
 }

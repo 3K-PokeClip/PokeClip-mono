@@ -42,10 +42,11 @@ function stubControllableFetch(honorAbort = true) {
     (input: RequestInfo | URL, init?: RequestInit) =>
       new Promise<Response>((resolve, reject) => {
         const signal = init?.signal ?? undefined;
-        if (honorAbort)
+        if (honorAbort) {
           signal?.addEventListener('abort', () =>
             reject(new DOMException('aborted', 'AbortError')),
           );
+        }
         pending.push({
           url: String(input),
           signal,

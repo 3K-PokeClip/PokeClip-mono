@@ -1,7 +1,8 @@
 'use client';
 
 import styles from './PlayerSessionOverlay.module.css';
-import type { SessionButton, SessionView } from './rewindSwitch';
+import type { SessionButton } from './rewindSwitch';
+import type { SessionView } from './sessionView';
 
 // 재생 세션의 덮개 · 띠(설계 5.3 · 5.5절, POK-200 M5). 끝에 닿은 시청자에게는 마지막 장면 위 덮개, 아직 보는 시청자에게는
 // 영상 위쪽 띠로 같은 버튼을 둔다. 자동 전환은 상태기계가 정하고, 여기는 그 결과를 그리고 누름을 올릴 뿐이다.
