@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/session"
@@ -135,5 +136,17 @@ func newIntentOptions(log *slog.Logger,
 	return session.IntentOptions{
 		ShortConn: intentShortConn, Slack: intentStopSlack,
 		CloseRound: closeRound, EnqueueStarted: enqueueStarted, Log: log,
+	}
+}
+
+// playbackSeedWithin 은 기동 적재의 완결 값 상한이다(경계 확정 3 — 30분 · 집은 M6-3a). 완결 안 된 회차의 Ending 에는 걸지
+// 않는다(index.LoadPlaybackStates 의 계약).
+const playbackSeedWithin = 30 * time.Minute
+
+// newPlaybackSeed 는 제어면 상태 몫의 재기동 적재 칸(statusSeed)이다 — 스트림마다 최신 회차의 종료 국면을 읽는다
+// (계획 4.2 seed 칸 · ②a 의 nil 을 채움).
+func newPlaybackSeed(pool *pgxpool.Pool) statusSeed {
+	return func(ctx context.Context) (map[string]index.PlaybackState, error) {
+		return index.LoadPlaybackStates(ctx, pool, playbackSeedWithin)
 	}
 }

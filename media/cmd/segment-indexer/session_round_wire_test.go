@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -143,5 +144,50 @@ func TestDefaultIntentOptionsApplyWithoutPanic(t *testing.T) {
 	var reason string
 	if err := pool.QueryRow(ctx, `SELECT end_reason FROM stream_sessions WHERE session_id='S-T'`).Scan(&reason); err != nil || reason != "intentional" {
 		t.Errorf("end_reason = (%q, %v), want intentional", reason, err)
+	}
+}
+
+// seed 칸(계획 4.2 · 4.12 커밋 ④) — 기동 적재는 index.LoadPlaybackStates(within 30분 — 경계 확정 3)다. 닫힘 전 Ending 은
+// 시각과 무관하게 실리고, 40분 전 완결 값은 빠진다. 잡는 결함: within 을 다른 값으로 두면 재기동 뒤 끝난 방송이 404 가
+// 되거나(짧음) 오래된 VOD 가 Board 에 올라간다(김).
+func TestPlaybackSeedLoadsStatesWithinThirtyMinutes(t *testing.T) {
+	pool := newWireTestPool(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	for _, q := range []struct {
+		sql  string
+		args []any
+	}{
+		{`INSERT INTO stream_sessions (session_id, stream_id, started_at, state, ending_at, round_id)
+		  VALUES ('S-a', 'a', $1, 'ending', $2, 'S-a')`, []any{now.Add(-3 * time.Hour), now.Add(-2 * time.Hour)}},
+		{`INSERT INTO stream_sessions (session_id, stream_id, started_at, state, ending_at, ended_at, round_id, round_closed_at)
+		  VALUES ('S-b', 'b', $1, 'ended', $2, $2, 'S-b', $3)`, []any{now.Add(-time.Hour), now.Add(-25 * time.Minute), now.Add(-26 * time.Minute)}},
+		{`INSERT INTO stream_sessions (session_id, stream_id, started_at, state, ending_at, ended_at, round_id, round_closed_at)
+		  VALUES ('S-c', 'c', $1, 'ended', $2, $2, 'S-c', $3)`, []any{now.Add(-2 * time.Hour), now.Add(-40 * time.Minute), now.Add(-41 * time.Minute)}},
+	} {
+		if _, err := pool.Exec(ctx, q.sql, q.args...); err != nil {
+			t.Fatalf("픽스처 실패: %v", err)
+		}
+	}
+
+	got, err := newPlaybackSeed(pool)(ctx)
+
+	if err != nil {
+		t.Fatalf("seed 실패: %v", err)
+	}
+	if got["a"].Phase != index.PhaseEnding || got["b"].Phase != index.PhaseEnded || len(got) != 2 {
+		t.Errorf("seed = %+v, want a Ending · b Ended(25분) · c 없음(40분)", got)
+	}
+}
+
+// main.go 는 seed 칸에 newPlaybackSeed(pool) 를 넘긴다(②a 의 nil 을 채움 — 계획 5절 main.go 차례 M6-3a). 호출 한 줄의
+// 배선이라 조립 문장을 직접 대조한다 — nil 로 돌아가면 재기동 적재가 조용히 꺼진다(INFO count=0).
+func TestMainWiresPlaybackSeed(t *testing.T) {
+	src, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("main.go 읽기 실패: %v", err)
+	}
+	if !strings.Contains(string(src), "assembleStatus(ctx, cfg, rewind, newPlaybackSeed(pool))") {
+		t.Error("main.go 가 assembleStatus 의 seed 칸에 newPlaybackSeed(pool) 를 넘기지 않는다")
 	}
 }
