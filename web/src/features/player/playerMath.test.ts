@@ -18,7 +18,7 @@ describe('formatBehind — 계약3 4절 시차 표기', () => {
     expect(formatBehind(307)).toBe('-05:07');
   });
 
-  it('1시간부터는 -H:MM:SS다 — 라이브 창의 끝은 -1:00:00', () => {
+  it('1시간부터는 -H:MM:SS다 — 표시 상한(REWIND_UI_MAX_SECONDS)은 -1:00:00', () => {
     expect(formatBehind(REWIND_UI_MAX_SECONDS)).toBe('-1:00:00');
     expect(formatBehind(3599)).toBe('-59:59');
   });

@@ -111,7 +111,8 @@ function readRewindStatus(body: unknown, controlBase: string): RewindStatus | Re
 
 /**
  * 200 본문을 검사해 받는다. 키 다섯이 다 있고 형이 맞아야 한다. ready 면 url · 범위가 다 있고(첫 ≤ 끝) 국면이 live · vod 다.
- * 어긋나면 null(형식 오류 — 부르는 쪽이 「잠시 불가」로 접는다)
+ * 어긋나면 null(형식 오류), url 이 제어면과 다른 출처여도 null(목록 주소 거부 — isTrustedPlaylistUrl). 부르는 쪽은 둘 다
+ * 「잠시 불가」로 접는다
  * @param controlBase 제어면 주소(출처 대조의 기준)
  */
 export function parseRewindStatus(body: unknown, controlBase: string): RewindStatus | null {
