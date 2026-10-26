@@ -341,6 +341,9 @@ localhost가 딸려가고, 로컬에선 되고 운영에서만 막히는데 로�
 | `THUMBNAIL_INTERVAL` | `PT1M` | 사진 주문을 훑는 주기. 라이브 사진이 이 간격으로 바뀐다(사용자 결정 1분) |
 | `PLAYBACK_ACCESS_TTL` | `PT60M` | 출입증 수명. 0 이하면 부팅 거부 |
 | `PLAYBACK_REQUIRED` | `false` | 켜면 출입증 셋이 다 빈 「꺼짐」도, 켜졌는데 `PLAYBACK_COOKIE_DOMAIN`이 빈 것도 부팅 거부(POK-321 · POK-317, 엣지 T9b 대체). **prod만 `true`** |
+| `EXPIRED_BROADCASTS_TOKEN` | 빈 값 | 1번(Media) 만료 실행기의 전용 출입증(POK-196). **비면 그냥 뜨고 전용 창구만 닫힌다** — 전용 헤더(`X-Expired-Broadcasts-Token`) 만료 목록 요청은 늘 401이고, 공용 `X-Internal-Token` 요청은 그대로다. 🔴 **채우면 조건 넷이 붙는다** — 아래 대역이 비었거나 IPv4 CIDR가 아니거나, `FORWARD_HEADERS_STRATEGY`가 `none`·`native`가 아니거나(비어도 안 된다: 미설정은 플랫폼 감지다), 톰캣 remoteip 헤더 이름 속성(`remote-ip-header`·`protocol-header`)이 있거나, 토큰이 `INTERNAL_API_TOKEN`과 같으면 **부팅 실패**. 토큰은 `openssl rand -hex 32` |
+| `EXPIRED_BROADCASTS_ALLOWED_CIDRS` | 빈 값 | 전용 출입증을 받는 출발지 IPv4 CIDR 쉼표 목록(Media 프라이빗 서브넷). 토큰이 있을 때만 쓴다. 출발지는 소켓 주소만 보고, 전달 머리글을 단 전용 헤더 요청은 허용 대역 안이어도 403이다 |
+| `FORWARD_HEADERS_STRATEGY` | 빈 값(미설정) | 프록시의 `X-Forwarded-*`를 믿을지. **auth와 같은 이름**이다. 비면 Boot가 클라우드 플랫폼을 감지해 고른다(지금 운영 clip이 이 꼴이다). 만료 창구 토큰을 넣는 환경은 `none`이나 `native`를 같이 넣는다 |
 
 **출입증 셋(`CLOUDFRONT_KEY_PAIR_ID`·`CLOUDFRONT_PRIVATE_KEY_PEM`·`MEDIA_BASE_URL`)은 다 비면 「꺼짐」이고
 부팅은 산다** — 로컬에는 CloudFront가 없다. 꺼진 채로 출입증 문을 부르면 `503 playback_signing_unavailable`이다.
@@ -2324,7 +2327,12 @@ sed -n '/^### clip — 방송 생명주기 수신/,/^### 치지직 채널 연동
 
 | 문 | 인증 | 응답 |
 |---|---|---|
-| `GET /internal/broadcasts/expired?before=…&cursor=…` | `X-Internal-Token` | **200** `{"broadcasts":[…],"nextCursor":…}` · **400** `{"field":"before"}` · `{"field":"cursor"}` · **401** |
+| `GET /internal/broadcasts/expired?before=…&cursor=…` | `X-Internal-Token`(공용) 또는 `X-Expired-Broadcasts-Token`(1번 전용 · 출발지 잠금, POK-196) | **200** `{"broadcasts":[…],"nextCursor":…}` · **400** `{"field":"before"}` · `{"field":"cursor"}` · **401** · **403**(전용 헤더만 — 허용 대역 밖 또는 전달 머리글) |
+
+- **문은 둘이다.** 전용 헤더가 붙은 요청만 전용 체인(`ExpiredBroadcastSecurityConfig`, 순번 -1)이 받고, 판정은 출발지(403) 다음
+  토큰(401)이다. 헤더가 없으면 공용 체인이 받아 지금과 같다. 한 체인에 인증 수단 둘을 섞지 않는다(auth resolve 전용 출입증과 같은
+  모양 · 부품은 web-support). 전용 토큰이 비면 창구는 닫혀 늘 401이다. 환경변수와 부팅 조건은 위 「돌리는 법」의 clip 표다.
+  1번에는 공용 토큰을 주지 않는다
 
 - **`before`(필수, ISO-8601 UTC 시각, 예 `2026-10-24T00:00:00Z`)**: 1번이 넘기는 「지금」. **기한 < before**인 방송만 낸다(같으면 안 냄). 판정 시각을 부르는 쪽 하나로
   둬 두 서버 시계 차이로 갈리지 않는다. 빠지거나 시각이 아니면 400
