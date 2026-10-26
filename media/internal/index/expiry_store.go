@@ -26,7 +26,7 @@ const ExpiryDeleteBatch = 500
 const ExpirySessionlessAge = 7 * 24 * time.Hour
 
 // ExpiryRetention 은 보존 기간이다(계약-세그먼트인덱스 5-2 60일). ExpiryUntilSlack 은 clip 의 만료 판정과 이 쪽 시계의
-// 차이를 받는 여유다(설계에 값이 없어 1일 — c4 지시값).
+// 차이를 받는 여유다(설계 7절 「상한 now−59일(여유 1일)」 — 엄격한 60일 최소 보존이 아니다).
 const (
 	ExpiryRetention  = 60 * 24 * time.Hour
 	ExpiryUntilSlack = 24 * time.Hour
@@ -263,6 +263,8 @@ func ExpiryDocuments(ctx context.Context, pool *pgxpool.Pool, q ExpiryQuery) ([]
 
 // expiryPrivileges 는 만료가 쓰는 표 권한이다(설계 7절 활성화 선행 조건 · cc L8ⓑ) — 읽기 권한은 핵심 문장이 이미
 // 요구하므로 여기 없다. 사이드카 권한 목록(pgtest.MediaIndexerGrantSQL)의 부분 집합임을 시험이 단언한다.
+// 원천이 둘이다 — 만료 권한을 바꾸면 pgtest/role.go 와 같이 고친다. 시험은 부분 집합과 개수만 보므로 만료 문장이
+// 새로 쓰는 권한을 여기서 빠뜨린 것은 잡지 못한다.
 var expiryPrivileges = [...]struct{ table, privilege string }{
 	{"broadcast_lifecycle_outbox", "DELETE"},
 	{"stream_cutoffs", "DELETE"},
