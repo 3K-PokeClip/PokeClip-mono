@@ -114,11 +114,13 @@ auth_input::expect_blocked() {
 }
 
 #######################################
-# 사례 51 — 4C 토큰: 응답기 파일(stream_key_resolve_token)에 값 한 줄 · 0400 ·
-# 응답기 소유로 두고, aws argv 에는 ARN · 파라미터 이름만, 값은 그 파일에만.
+# 사례 51 — 4C 토큰: 응답기 파일(stream_key_resolve_token)과 사이드카
+# 사본(RUNTIME_DIR 바로 아래 같은 이름)에 값 한 줄 · 0400 · 각각 응답기 ·
+# 사이드카(10001) 소유로 두고, aws argv 에는 ARN · 파라미터 이름만(4C 조회는
+# 한 번), 값은 그 두 파일에만.
 #######################################
 auth_input::case_resolve_token() {
-  local ok=0 f want
+  local ok=0 f sc file want
   auth_mode::prod_template || return 1
   fixture::new_case
   auth_mode::run "${auth_mode_tmpl}" || return 1
@@ -128,15 +130,22 @@ auth_input::case_resolve_token() {
     return 1
   fi
   f="${fixture_dir}/runtime/${AUTH_DIR_NAME}/${AUTH_RESOLVE_NAME}"
-  if [[ "$(cat -- "${f}" 2>/dev/null && printf x)" \
-    != "${AUTH_RESOLVE_TOKEN}"$'\n'x ]]; then
-    harness::add_reason '4C 토큰 파일 내용이 「값 한 줄」 이 아님'
-    ok=1
-  fi
-  if [[ "$(fixture::perm "${f}" 2>/dev/null)" != -r-------- ]]; then
-    harness::add_reason "4C 토큰 파일 권한 $(fixture::perm "${f}" 2>/dev/null)"
-    ok=1
-  fi
+  sc="${fixture_dir}/runtime/${AUTH_RESOLVE_NAME}"
+  for file in "${f}" "${sc}"; do
+    if [[ "$(cat -- "${file}" 2>/dev/null && printf x)" \
+      != "${AUTH_RESOLVE_TOKEN}"$'\n'x ]]; then
+      harness::add_reason \
+        "${file#"${fixture_dir}/"} 내용이 「값 한 줄」 이 아님"
+      ok=1
+    fi
+    if [[ "$(fixture::perm "${file}" 2>/dev/null)" != -r-------- ]]; then
+      harness::add_reason "${file#"${fixture_dir}/"} 권한 \
+$(fixture::perm "${file}" 2>/dev/null)"
+      ok=1
+    fi
+  done
+  auth_mode::chown_is 10 \
+    "10001:10001 ${fixture_dir}/runtime/.${AUTH_RESOLVE_NAME}.*" || ok=1
   want="secretsmanager get-secret-value --secret-id ${AUTH_RESOLVE_ARN} \
 --query SecretString --output text"
   if [[ "$(auth_input::aws_argv 2)" != "${want}" ]]; then
@@ -151,7 +160,8 @@ auth_input::case_resolve_token() {
 $(fixture::count_records aws)회(기대 3)"
     ok=1
   fi
-  auth_mode::check_only_in "${AUTH_RESOLVE_TOKEN}" '4C 토큰' "${f}" || ok=1
+  auth_mode::check_only_in "${AUTH_RESOLVE_TOKEN}" '4C 토큰' "${f}" "${sc}" \
+    || ok=1
   return "${ok}"
 }
 
@@ -466,6 +476,13 @@ auth_input::case_legacy_untouched() {
     harness::add_reason '옛 모드가 응답기 · 거부 목록 파일을 만듦'
     ok=1
   fi
+  # 4C ARN 이 있어도 옛 모드는 사이드카 4C 토큰 사본을 만들지 않는다(compose 의
+  # 사이드카 4C 설정도 응답기 모드에서만 렌더된다 — 사이드카는 4D 미등록).
+  if [[ -e "${fixture_dir}/runtime/${AUTH_RESOLVE_NAME}" ]]; then
+    harness::add_reason '옛 모드가 사이드카 4C 토큰 사본을 만듦'
+    ok=1
+  fi
+  api_pass::check_chown_records || ok=1
   fixture::common_checks || ok=1
   return "${ok}"
 }

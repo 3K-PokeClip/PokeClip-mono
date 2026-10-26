@@ -6,7 +6,8 @@
 # 대조(시작 스크립트가 RUNTIME_DIR 에 둔 이번 기동의 값 · Basic 꼴) · box 응답기
 # 모드의 대조 넷(Basic 비밀번호 · 그 Basic 머리 값 · 4C 토큰 · 잠금 둘)과 표지
 # 일부만 있음 · 꼴 밖의 실패 · 실제 템플릿 잠금 줄 · Basic 사용자 대조 · 4C
-# 토큰의 JSON 이스케이프 꼴 · 새 지역 변수 이름의 상속 export.
+# 토큰의 JSON 이스케이프 꼴 · 새 지역 변수 이름의 상속 export · 사이드카(4C
+# 토큰 사본을 받는 둘째 호출자) 태그 저널의 4C 토큰.
 #
 # 스크립트를 빈 환경(env -i)에서 돌린다. PATH 맨 앞에는 가짜 docker · aws ·
 # journalctl 과 grep 감시 래퍼(argv · 환경을 기록한 뒤 진짜 grep 실행)만 둔다.
@@ -34,7 +35,7 @@ source "${TEST_DIR}/lib/ops_fixture.sh"
 source "${MEDIA_HOST_DIR}/bin/lib/render_files.sh"
 
 readonly SCRIPT='bin/secret-count.sh'
-readonly CASE_COUNT=29
+readonly CASE_COUNT=30
 # 사이드카 API 사용자 이름(compose MTX_API_USER) — Basic 값의 앞부분.
 readonly SIDECAR_API_USER='pokeclip-sidecar'
 readonly COMMAND_ID='0123abcd-4567-89ef-0123-456789abcdef'
@@ -980,6 +981,23 @@ case_ia_inherited_export() {
   return "${ok}"
 }
 
+# 사례 30 — box 응답기 모드: 사이드카도 4C 토큰 사본으로 4C 를 부른다(4D 종료
+# 신호 인증 · 계약9 streamerId). 사이드카 태그 저널의 4C 토큰을 원문으로도
+# slog JSON 꼴로도 센다 — 원문 1 · JSON 줄 1 = 2.
+case_ia_sidecar_resolve_token() {
+  local ok=0 token="${IA_JSON_TOKENS[0]}" escaped="${IA_JSON_ESCAPED[0]}"
+  setup_ingest_auth
+  printf '%s\n' "${token}" \
+    >"${ops_dir}/runtime/ingest-auth/stream_key_resolve_token"
+  plant "${ops_dir}/state/journal.t.pokeclip-media-sidecar" "${token}" 1
+  plant_json "${ops_dir}/state/journal.t.pokeclip-media-sidecar" "${escaped}"
+  run_count box || return 1
+  ops_fixture::expect_line 'SECRET COUNT box 2' 0 || ok=1
+  expect_ia_hygiene || ok=1
+  ops_fixture::expect_no_leak "${token}" '4C 토큰' || ok=1
+  return "${ok}"
+}
+
 main() {
   if (( $# != 0 )); then
     printf '사용: bash infra/media-host/test/secret_count_test.sh (인자 없음)\n' >&2
@@ -1029,6 +1047,8 @@ main() {
     case_ia_json_escaped
   harness::run_case 29 'box 새 지역 변수 이름 상속 export 가 자식 환경에 0' \
     case_ia_inherited_export
+  harness::run_case 30 'box 사이드카 태그 저널의 4C 토큰(원문 · JSON 꼴)도 셈' \
+    case_ia_sidecar_resolve_token
 
   if ! harness::summary "${CASE_COUNT}"; then
     exit 1

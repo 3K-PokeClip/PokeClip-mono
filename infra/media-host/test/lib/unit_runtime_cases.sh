@@ -212,7 +212,8 @@ unit::mediamtx_exit() {
 }
 
 #######################################
-# 정지 상태를 본다 — inactive · 프로젝트 컨테이너 0 · 렌더 파일 0.
+# 정지 상태를 본다 — inactive · 프로젝트 컨테이너 0 · 렌더 파일 0(응답기
+# 모드의 사이드카 4C 토큰 사본 포함).
 # Arguments:
 #   원인 앞머리.
 #######################################
@@ -230,7 +231,8 @@ unit::expect_stopped() {
     ok=1
   fi
   if ! n="$(unit::render_count -name mediamtx.yml -o -name mtx_api_pass \
-    -o -name '.mediamtx.yml.*' -o -name '.mtx_api_pass.*')"; then
+    -o -name stream_key_resolve_token -o -name '.mediamtx.yml.*' \
+    -o -name '.mtx_api_pass.*' -o -name '.stream_key_resolve_token.*')"; then
     harness::add_reason "$1: 렌더 자리 조회 실패"
     ok=1
   elif [[ "${n}" != 0 ]]; then
