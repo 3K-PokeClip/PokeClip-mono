@@ -24,7 +24,10 @@
 ## 켜기
 
 1.  `.env` 에 로컬 전용 자격을 적는다(`.env.example` 의 `REWIND_MINIO_USER` ·
-    `REWIND_MINIO_PASSWORD` — 사용자 3자 · 비밀번호 8자 이상).
+    `REWIND_MINIO_PASSWORD` — 사용자 3자 · 비밀번호 8자 이상). 이 값은 MinIO root
+    자격이고 사이드카 · 수용 시험 · 헬스체크가 함께 쓴다. 헬스체크 명령 줄에 실려
+    `docker inspect` 와 컨테이너 안 `ps` 에 보이므로 다른 곳의 비밀번호를 재사용하지
+    않는다.
 1.  저장소 루트에서 덧붙여 띄운다.
 
     ```sh
@@ -64,8 +67,22 @@ docker compose -f docker-compose.yml -f infra/compose/rewind-minio/compose.yml \
 docker compose up -d segment-indexer
 ```
 
-실험은 전용 프로젝트(`pcbench-<ID>` · 라벨 `com.pokeclip.bench=<ID>`)로 띄우고, 끝나면
-인증서 · 데이터 볼륨까지 지운 뒤 잔여 0 을 확인한다.
+실험은 전용 프로젝트(`pcbench-<ID>`)로 띄운다. 이름만 바꾸면 호스트 포트는 팀 값
+그대로라 부딪히고 라벨도 없으므로, 덧붙임 예
+[`bench.example.yml`](bench.example.yml)의 `<ID>` 를 바꾼 사본을 한 겹 더 붙인다.
+포트를 28xxx 대역으로 옮기고 실험 컨테이너에 라벨 `com.pokeclip.bench=<ID>` 를 단다.
+
+```sh
+ID=c7  # 실험 이름
+B="${TMPDIR:-/tmp}/bench-${ID}.yml"  # 저장소 밖 — 작업 트리에 남지 않게
+sed "s/<ID>/${ID}/g" infra/compose/rewind-minio/bench.example.yml > "$B"
+docker compose -p "pcbench-${ID}" -f docker-compose.yml \
+  -f infra/compose/rewind-minio/compose.yml -f "$B" \
+  --profile rewind-minio up -d
+```
+
+끝나면 인증서 · 데이터 볼륨까지 지운 뒤 잔여 0 을 확인한다(아래 `<ID>` 는 같은 이름). 잔여 확인은 compose 가
+모든 컨테이너 · 볼륨 · 망에 붙이는 프로젝트 라벨로 한다 — 덧붙임을 빠뜨린 실행도 잡는다.
 
 > **주의:** `down -v` 는 그 프로젝트의 이름 붙은 볼륨을 **전부** 지운다 — 팀
 > 프로젝트(`pokeclip`)면 `pgdata` · `recordings` · `dvr` · `hooks` · MinIO 데이터까지
@@ -73,11 +90,12 @@ docker compose up -d segment-indexer
 > 스택에서 인증서만 바꾸려면 아래 「인증서 다시 만들기」를 따른다.
 
 ```sh
-docker compose -p pcbench-<ID> -f docker-compose.yml -f infra/compose/rewind-minio/compose.yml \
+docker compose -p pcbench-<ID> -f docker-compose.yml \
+  -f infra/compose/rewind-minio/compose.yml -f "$B" \
   --profile rewind-minio down -v --rmi local
-docker ps -a --filter label=com.pokeclip.bench=<ID>
-docker volume ls | grep pcbench-<ID>
-docker network ls | grep pcbench-<ID>
+docker ps -a --filter label=com.docker.compose.project=pcbench-<ID>
+docker volume ls --filter label=com.docker.compose.project=pcbench-<ID>
+docker network ls --filter label=com.docker.compose.project=pcbench-<ID>
 ```
 
 ## 인증서 다시 만들기
@@ -122,6 +140,9 @@ linux/arm64 · 같은 이미지에 `mc` 가 들어 `minio-init` 도 이것을 �
     `SSL_CERT_DIR` 에 CA 디렉터리(`/run/rewind-minio-ca`)가 빠졌거나 `minio-init` 이
     끝나기 전에 떴다.
 *   `minio` 가 healthy 가 안 된다 — `.env` 의 자격이 MinIO 길이 조건을 못 채운다.
+    또는 자격에 URL 특수문자(`@` · `:` · `/` · `#` · `%` · `?`)가 있다 — 헬스체크와
+    `minio-init` 은 자격을 `MC_HOST_*` URL 에 넣으므로 그 문자에서 깨진다. 영숫자로
+    바꾼다.
 *   인증서를 새로 만들려면 위 「인증서 다시 만들기」를 따른다(볼륨 둘만 지운다).
 
 ## See also
@@ -129,3 +150,4 @@ linux/arm64 · 같은 이미지에 `mc` 가 들어 `minio-init` 도 이것을 �
 *   [`media/README.md`](../../../media/README.md) 제어면 절 · 환경변수 표
 *   [`check-s3-conditions.sh`](check-s3-conditions.sh) — 수용 시험 본체
 *   [`dvr-edge.conf`](dvr-edge.conf) — 로컬 엣지 설정
+*   [`bench.example.yml`](bench.example.yml) — 전용 실험 프로젝트 덧붙임 예
