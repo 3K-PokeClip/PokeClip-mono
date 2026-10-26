@@ -11,7 +11,7 @@ package index
 //
 //	문장                           메서드 · 갈래                          표 · 동작
 //	store.go
-//	  loadCursorSQL                LoadCursor                           segments SELECT
+//	  loadCursorSQL                LoadCursor                           segments · floors SELECT
 //	  existingPathsSQL             ExistingPaths                        segments SELECT
 //	  setTxnLimitsSQL              Insert · EndLive 첫 문장             (표 없음 — set_config)
 //	  lockCutoffStreamSQL          Insert 주조 적격 갈래                 (표 없음 — advisory 잠금)
@@ -32,6 +32,11 @@ package index
 //	rewind_read.go
 //	  rewindCutoffSQL · rewindFloorSQL · rewindRowsSQL · rewindSessionsSQL  LoadRewindLedger(읽기 전용 RR)  cutoffs · segments · gaps · sessions SELECT
 //	  rewindWatchSQL                          LoadRewindWatch                      sessions · cutoffs · segments · gaps SELECT
+//
+// M6-4 · M6-8 몫 선부여(ADR-0006 개정 2026-10-26): segments · sessions · gaps · outbox DELETE · cutoffs UPDATE ·
+// DELETE · outbox SELECT · INSERT · UPDATE 는 목록에 있지만 이 패키지의 비시험 SQL 은 아직 쓰지 않는다 — 쓰는 문장과
+// 그 역할 시험은 그 PR 이 들인다. stream_seq_floors SELECT 는 LoadCursor(하한 GREATEST)와 하한 검사 트리거
+// (stream_segments BEFORE INSERT — 부른 쪽 권한)가 읽는다.
 //
 // 세션 결정 문장(currentLive · previousSession · endSession · openSession)은 session 패키지 역할 시험이, 발행자
 // 문장(fence · P0 · P2′ · P4 · R3 · R4 · GAP)은 rewind/publish 역할 시험이 잰다. 여기 Insert 는 실물 결정자를
@@ -234,7 +239,9 @@ func TestMediaIndexerRoleReadsRewindLedger(t *testing.T) {
 }
 
 // 음성 대조 — 시험이 권한 경계를 실제로 재는지 본다. 목록의 권한을 표마다 하나씩 거두면 그 권한을 쓰는 메서드가
-// 42501 이다(목록에 군더더기가 없다는 근거 — 줄마다 그것 없이는 막히는 메서드가 있다).
+// 42501 이다(아래 줄마다 그것 없이는 막히는 메서드가 있다 — 그 권한이 군더더기가 아니라는 근거). 단 미리 준
+// M6-4 · M6-8 몫(DELETE · stream_cutoffs UPDATE · outbox — 파일 머리 주석)은 아래에 줄이 없다. 이 표를 들일 때 그
+// 권한을 쓰는 메서드가 없어 거둬도 막힐 호출이 없었다 — 그 권한들의 군더더기 여부는 이 시험이 재지 않는다.
 func TestMediaIndexerRoleWithoutEachGrantIsDenied(t *testing.T) {
 	ctx := context.Background()
 	cases := []struct {
@@ -243,6 +250,10 @@ func TestMediaIndexerRoleWithoutEachGrantIsDenied(t *testing.T) {
 		call             func(role *pgtest.Role, stream, session string) error
 	}{
 		{"SELECT", "stream_segments", loadCursorSQL, func(r *pgtest.Role, stream, _ string) error {
+			_, err := newSessionStore(r.Pool).LoadCursor(ctx, stream)
+			return err
+		}},
+		{"SELECT", "stream_seq_floors", loadCursorSQL, func(r *pgtest.Role, stream, _ string) error {
 			_, err := newSessionStore(r.Pool).LoadCursor(ctx, stream)
 			return err
 		}},
@@ -299,19 +310,22 @@ func TestMediaIndexerRoleWithoutEachGrantIsDenied(t *testing.T) {
 	}
 }
 
-// 음성 대조 — 목록 밖 권한(DELETE · TRUNCATE · DDL)은 처음부터 42501 이다. 사이드카는 행을 지우지 않고 스키마를
-// 만들지 않는다(ENSURE_SCHEMA=false) — EnsureSchema 를 이 역할로 부르면 막힌다.
+// 음성 대조 — 목록 밖 권한(TRUNCATE · DDL · 하한 표 쓰기)은 처음부터 42501 이다. 사이드카의 DELETE 는 M6 만료 ·
+// outbox 몫으로만 열렸고(ADR-0006 개정 2026-10-26), 표를 통째로 비우거나 스키마를 만들거나(ENSURE_SCHEMA=false)
+// seq 하한을 내리지는 못한다 — EnsureSchema 를 이 역할로 부르면 막힌다.
 // CREATE TABLE · EnsureSchema 의 42501 은 PG15+ 기본값 전제다 — PG15 부터 public 스키마 CREATE 가 PUBLIC 에서
 // 빠졌다. PG14 이하이거나 그 권한을 되돌린 DB 에서는 이 역할도 표를 만들 수 있다(README 운영 DB 사전 확인).
-func TestMediaIndexerRoleHasNoDeleteOrDDL(t *testing.T) {
+func TestMediaIndexerRoleHasNoTruncateDDLOrFloorWrites(t *testing.T) {
 	admin := newTestPool(t)
 	role := pgtest.NewMediaIndexerRole(t, admin)
 	ctx := context.Background()
 
 	for _, s := range []string{
-		"DELETE FROM stream_segments", "DELETE FROM stream_sessions",
-		"DELETE FROM stream_cutoffs", "DELETE FROM stream_published_gaps",
-		"TRUNCATE stream_segments", "CREATE TABLE role_probe (x int)",
+		"TRUNCATE stream_segments", "TRUNCATE stream_sessions",
+		"TRUNCATE stream_cutoffs", "TRUNCATE stream_published_gaps",
+		"TRUNCATE broadcast_lifecycle_outbox", "CREATE TABLE role_probe (x int)",
+		"INSERT INTO stream_seq_floors (stream_id, next_seq) VALUES ('role-probe', 0)",
+		"UPDATE stream_seq_floors SET next_seq = 0", "DELETE FROM stream_seq_floors",
 	} {
 		if _, err := role.Pool.Exec(ctx, s); !pgtest.IsInsufficientPrivilege(err) {
 			t.Errorf("%q 오류 = %v, want 42501", s, err)

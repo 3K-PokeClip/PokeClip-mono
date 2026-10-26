@@ -54,11 +54,12 @@ func newTestPool(t *testing.T) *pgxpool.Pool {
 	return pgtest.Pool(t, "", EnsureSchema, resetTables)
 }
 
-// resetTables 는 케이스 사이에 표를 비운다. M2 신설 표까지 함께 비운다 — 네 표를 한 문장에
-// 넣으면 상호 FK(segments→sessions)에 CASCADE 없이도 통과한다.
+// resetTables 는 케이스 사이에 표를 비운다. M2 신설 표와 M6 표 둘(하한 · outbox)까지 함께 비운다 — 여섯 표를
+// 한 문장에 넣으면 상호 FK(segments→sessions)에 CASCADE 없이도 통과한다. TRUNCATE 는 행 DELETE 트리거를 부르지
+// 않아 하한이 따라 생기지 않는다 — 하한 표를 빼면 앞 케이스가 남긴 하한에 다음 케이스 고정물 INSERT 가 23514 로 걸린다.
 func resetTables(ctx context.Context, pool *pgxpool.Pool) error {
 	_, err := pool.Exec(ctx,
-		"TRUNCATE stream_segments, stream_cutoffs, stream_published_gaps, stream_sessions")
+		"TRUNCATE stream_segments, stream_cutoffs, stream_published_gaps, stream_sessions, stream_seq_floors, broadcast_lifecycle_outbox")
 	return err
 }
 

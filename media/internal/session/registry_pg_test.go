@@ -39,7 +39,7 @@ func newTestPool(t *testing.T) *pgxpool.Pool {
 
 func resetTables(ctx context.Context, pool *pgxpool.Pool) error {
 	_, err := pool.Exec(ctx,
-		"TRUNCATE stream_segments, stream_cutoffs, stream_published_gaps, stream_sessions")
+		"TRUNCATE stream_segments, stream_cutoffs, stream_published_gaps, stream_sessions, stream_seq_floors, broadcast_lifecycle_outbox")
 	return err
 }
 

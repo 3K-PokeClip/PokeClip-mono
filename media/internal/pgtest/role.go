@@ -40,11 +40,17 @@ type tableGrant struct {
 // 권한이다. 근거(문장 → 표 · 동작)는 각 패키지의 media_indexer_role_pg_test.go 머리 표에 있다. 시퀀스는 없고
 // (DDL 에 SERIAL · IDENTITY 0), 트리거 함수 · advisory 잠금 · set_config 는 PUBLIC 기본으로 충분하며, DDL 은
 // 주지 않는다(ENSURE_SCHEMA=false — 스키마는 별도 역할이 적용한다).
+//
+// M6 몫은 선부여다(ADR-0006 개정 2026-10-26). segments · sessions · gaps DELETE 와 cutoffs UPDATE · DELETE 는
+// M6-4(60일 만료)가, outbox 의 네 권한은 M6-8(계약9 발행기)과 M6-4(만료가 그 회차 행을 지움)가 쓰고, 쓰는 문장은
+// 그 PR 이 들인다. 지금 쓰는 M6 권한은 stream_seq_floors SELECT 하나다 — LoadCursor 와 하한 검사 트리거가 읽는다.
 var mediaIndexerGrants = []tableGrant{
-	{table: "stream_segments", privileges: []string{"SELECT", "INSERT", "UPDATE"}},
-	{table: "stream_sessions", privileges: []string{"SELECT", "INSERT", "UPDATE"}},
-	{table: "stream_cutoffs", privileges: []string{"SELECT", "INSERT"}},
-	{table: "stream_published_gaps", privileges: []string{"SELECT", "INSERT", "UPDATE"}},
+	{table: "stream_segments", privileges: []string{"SELECT", "INSERT", "UPDATE", "DELETE"}},
+	{table: "stream_sessions", privileges: []string{"SELECT", "INSERT", "UPDATE", "DELETE"}},
+	{table: "stream_cutoffs", privileges: []string{"SELECT", "INSERT", "UPDATE", "DELETE"}},
+	{table: "stream_published_gaps", privileges: []string{"SELECT", "INSERT", "UPDATE", "DELETE"}},
+	{table: "stream_seq_floors", privileges: []string{"SELECT"}},
+	{table: "broadcast_lifecycle_outbox", privileges: []string{"SELECT", "INSERT", "UPDATE", "DELETE"}},
 }
 
 // MediaIndexerGrantSQL 은 role 에게 media_indexer 권한을 주는 GRANT 문장들이다(끝 ; 없음).

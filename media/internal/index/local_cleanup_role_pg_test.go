@@ -28,9 +28,11 @@ const lcRolePrefix = "pc_lc_media_janitor_"
 
 // lcRoleGrants 는 설계 6절의 media_janitor 권한 그대로다. 운영 GRANT 와 이 목록이 갈라지면
 // 이 시험이 지키는 경계가 운영과 달라진다 — 바꿀 때 설계 6절 · README 와 함께 고친다.
+// stream_published_gaps SELECT 는 M6 선부여다 — ③ 포기 조각(vod_abandoned) 갈래(M6-4)가 GAP 원장을 읽는다.
 func lcRoleGrants(role string) []string {
 	return []string{
 		"GRANT SELECT ON stream_segments, stream_sessions, stream_cutoffs TO " + role,
+		"GRANT SELECT ON stream_published_gaps TO " + role,
 		"GRANT UPDATE (local_path) ON stream_segments TO " + role,
 	}
 }
@@ -94,7 +96,7 @@ func lcDropRole(t *testing.T, admin *pgxpool.Pool, role string) {
 		return
 	}
 	for _, s := range []string{
-		"REVOKE ALL ON stream_segments, stream_sessions, stream_cutoffs FROM " + role,
+		"REVOKE ALL ON stream_segments, stream_sessions, stream_cutoffs, stream_published_gaps FROM " + role,
 		"DROP ROLE " + role,
 	} {
 		if _, err := admin.Exec(ctx, s); err != nil {
