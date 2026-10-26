@@ -376,7 +376,7 @@ func (u *Uploader) attemptOnce(j job, rel string, lg *slog.Logger) attemptResult
 	putCtx, cancel := context.WithTimeout(u.putCtx, u.opt.PutTimeout)
 	defer cancel()
 	start := u.now()
-	if err := u.put.Put(putCtx, t.S3Key, p.body, p.size); err != nil {
+	if err := u.put.Put(putCtx, t.S3Key, p.body, p.size, t.Axis); err != nil {
 		if u.putCtx.Err() != nil {
 			lg.Debug("upload_aborted_shutdown")
 			return attemptResult{outcome: outcomeShutdown}

@@ -76,9 +76,10 @@ type Result struct {
 // 구현 계약 셋 — 하나라도 어기면 종료 상한(G18″)이 무너진다:
 //  1. ctx 취소를 반드시 준수한다. 취소되면 즉시 ctx.Err() 계열 오류로 반환한다.
 //  2. body 를 처음부터 정확히 size 바이트만 읽는다(되감기하지 않는다).
-//  3. Content-Type 은 구현이 상수로 고정한다(계약이므로 호출자가 매번 넘길 이유가 없다).
+//  3. 객체 머리(Content-Type · Cache-Control)는 구현이 축별 상수 표로 고정한다 — 호출자는 이미 들고 있는
+//     대상의 축만 넘긴다(M5 설계 4.5 D5). 표에 없는 축이면 보내지 않고 오류다(fail-closed).
 type Putter interface {
-	Put(ctx context.Context, key string, body io.Reader, size int64) error
+	Put(ctx context.Context, key string, body io.Reader, size int64, axis index.Axis) error
 }
 
 // job 은 큐에 실리는 항목이다.

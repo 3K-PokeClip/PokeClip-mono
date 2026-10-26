@@ -618,3 +618,31 @@ func TestAlreadySameDoesNotRestoreInheritance(t *testing.T) {
 		t.Errorf("보류 ③ 재투입 = %d건, want 1건", n)
 	}
 }
+
+// 워커는 대상의 축을 그대로 Putter 에 넘긴다 — 객체 머리를 고르는 것은 그 축이다(M5 설계 4.5 D5). 잡는 결함:
+// 축을 버리고 상수 하나를 넘기면 ③ · init 이 ② 머리(캐시 지시 없음 · video/iso.segment)로 올라간다.
+func TestWorkerPassesTargetAxisToPutter(t *testing.T) {
+	put := &fakePutter{}
+	u, cap, dir, _ := newPlaybackUploader(t, &fakeUploadStore{}, put, &fakeProducer{}, nil)
+	archive := newTarget("demo", 7, writeSegment(t, dir, "demo", "seg7.mp4", 64), 64, false)
+	initJob := initJobTarget(t, dir, "demo", "S-1", "first.mp4", 64)
+	seg := playbackTarget(t, "demo", 7, "S-1", writeSegment(t, dir, "demo", "seg7p.mp4", 64), 64)
+	seg.ExpectedInitSHA = fakeInitSHA()
+
+	for _, tgt := range []index.UploadTarget{archive, initJob, seg} {
+		if got := runLive(u, tgt); got != outcomeSuccess {
+			t.Fatalf("%v outcome = %v, want success (%s)", tgt.Axis, got, cap.dump())
+		}
+	}
+
+	calls := put.putCalls()
+	want := []index.Axis{index.AxisArchive, index.AxisInit, index.AxisPlayback}
+	if len(calls) != len(want) {
+		t.Fatalf("PUT = %d회, want %d회", len(calls), len(want))
+	}
+	for i, c := range calls {
+		if c.axis != want[i] {
+			t.Errorf("PUT[%d] %q 의 축 = %v, want %v", i, c.key, c.axis, want[i])
+		}
+	}
+}

@@ -16,6 +16,14 @@ import (
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/rewind"
 )
 
+// 되감기 목록 객체의 머리다(M5 설계 4.5 표). Store 에 쓰는 객체는 목록 하나뿐이라 구현이 상수로 고정한다 —
+// 호출자가 넘길 값이 아니다. Cache-Control 은 엣지 · 브라우저가 목록을 1초만 들고 있게 한다(매 조각마다 판이
+// 바뀐다). 이 머리가 없으면 S3 가 application/octet-stream 을 돌려주고 캐시 지시가 없다.
+const (
+	manifestContentType  = "application/vnd.apple.mpegurl"
+	manifestCacheControl = "public, max-age=1"
+)
+
 // S3Store 는 Store 의 S3 구현이다 — 버킷 하나에 쓰고 읽는다. upload.Putter(세그먼트 PUT — 조건 · 메타
 // 없음)와는 다른 경계다.
 type S3Store struct {
@@ -30,18 +38,20 @@ func NewS3Store(client *s3.Client, bucket string) *S3Store {
 }
 
 // Put 은 Store.Put 이다 — cond 를 조건 헤더 하나(If-None-Match: * 또는 If-Match)로, meta 를
-// x-amz-meta-* 헤더로 같은 요청에 싣는다. 200 인데 ETag 가 없으면 성공으로 보고하지 않는다 — 다음 IfMatch 를
-// 만들 수 없다. 그 오류는 센티널이 아니다: 쓰기는 적용됐으나 새 판의 ETag 를 모르므로 호출자는 결과
-// 모름과 같이 Head 로 확인한다.
+// x-amz-meta-* 헤더로, 목록 머리(manifestContentType · manifestCacheControl)를 같은 요청에 싣는다. 200 인데
+// ETag 가 없으면 성공으로 보고하지 않는다 — 다음 IfMatch 를 만들 수 없다. 그 오류는 센티널이 아니다: 쓰기는
+// 적용됐으나 새 판의 ETag 를 모르므로 호출자는 결과 모름과 같이 Head 로 확인한다.
 func (s *S3Store) Put(ctx context.Context, key string, cond Precondition, body []byte, meta map[string]string) (string, error) {
 	if err := cond.check(); err != nil {
 		return "", err
 	}
 	in := &s3.PutObjectInput{
-		Bucket:   aws.String(s.bucket),
-		Key:      aws.String(key),
-		Body:     bytes.NewReader(body),
-		Metadata: meta,
+		Bucket:       aws.String(s.bucket),
+		Key:          aws.String(key),
+		Body:         bytes.NewReader(body),
+		Metadata:     meta,
+		ContentType:  aws.String(manifestContentType),
+		CacheControl: aws.String(manifestCacheControl),
 	}
 	if cond.ifMatch {
 		in.IfMatch = aws.String(cond.etag)
