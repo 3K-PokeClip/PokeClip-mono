@@ -11,7 +11,7 @@ package index
 //
 //	문장                           메서드 · 갈래                          표 · 동작
 //	store.go
-//	  loadCursorSQL                LoadCursor                           segments SELECT
+//	  loadCursorSQL                LoadCursor                           segments · floors SELECT
 //	  existingPathsSQL             ExistingPaths                        segments SELECT
 //	  setTxnLimitsSQL              Insert · EndLive 첫 문장             (표 없음 — set_config)
 //	  lockCutoffStreamSQL          Insert 주조 적격 갈래                 (표 없음 — advisory 잠금)
@@ -35,8 +35,8 @@ package index
 //
 // M6-4 · M6-8 몫 선부여(ADR-0006 개정 2026-10-26): segments · sessions · gaps · outbox DELETE · cutoffs UPDATE ·
 // DELETE · outbox SELECT · INSERT · UPDATE 는 목록에 있지만 이 패키지의 비시험 SQL 은 아직 쓰지 않는다 — 쓰는 문장과
-// 그 역할 시험은 그 PR 이 들인다. stream_seq_floors SELECT 는 하한 검사 트리거(stream_segments BEFORE INSERT)가
-// 부른 쪽 권한으로 읽는다 — 위 Insert 가 그 경로다.
+// 그 역할 시험은 그 PR 이 들인다. stream_seq_floors SELECT 는 LoadCursor(하한 GREATEST)와 하한 검사 트리거
+// (stream_segments BEFORE INSERT — 부른 쪽 권한)가 읽는다.
 //
 // 세션 결정 문장(currentLive · previousSession · endSession · openSession)은 session 패키지 역할 시험이, 발행자
 // 문장(fence · P0 · P2′ · P4 · R3 · R4 · GAP)은 rewind/publish 역할 시험이 잰다. 여기 Insert 는 실물 결정자를
@@ -248,6 +248,10 @@ func TestMediaIndexerRoleWithoutEachGrantIsDenied(t *testing.T) {
 		call             func(role *pgtest.Role, stream, session string) error
 	}{
 		{"SELECT", "stream_segments", loadCursorSQL, func(r *pgtest.Role, stream, _ string) error {
+			_, err := newSessionStore(r.Pool).LoadCursor(ctx, stream)
+			return err
+		}},
+		{"SELECT", "stream_seq_floors", loadCursorSQL, func(r *pgtest.Role, stream, _ string) error {
 			_, err := newSessionStore(r.Pool).LoadCursor(ctx, stream)
 			return err
 		}},

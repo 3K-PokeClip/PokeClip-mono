@@ -252,3 +252,47 @@ func TestRollbackFloorQueryFindsBlockedStreams(t *testing.T) {
 		t.Errorf("걸리는 스트림 = %q, want %q", got, want)
 	}
 }
+
+// D68 LoadCursor 몫 — 다음 seq 는 하한과 max(seq)+1 중 큰 쪽이다. 만료가 마지막 행까지 지운 스트림(행 0 · 하한
+// 10)은 꼬리 없이 10 부터, 하한이 생존 꼬리보다 앞서면 하한부터, 뒤서면 꼬리 다음부터 쓴다. 사이드카 계정
+// (media_indexer — 하한 표 SELECT)으로 돈다.
+func TestLoadCursorStartsAtSeqFloor(t *testing.T) {
+	admin := newTestPool(t)
+	ctx := context.Background()
+	for seq := range int64(3) {
+		lcPut(t, admin, lcRow{stream: "cursor-ahead", seq: seq})
+		lcPut(t, admin, lcRow{stream: "cursor-behind", seq: seq + 5})
+	}
+	if _, err := admin.Exec(ctx, `INSERT INTO stream_seq_floors (stream_id, next_seq)
+		VALUES ('cursor-empty', 10), ('cursor-ahead', 10), ('cursor-behind', 2)`); err != nil {
+		t.Fatalf("하한 고정물 실패: %v", err)
+	}
+	role := pgtest.NewMediaIndexerRole(t, admin)
+	t.Cleanup(func() { role.RequireNoneDenied(t) })
+	store := newSessionStore(role.Pool)
+
+	tests := []struct {
+		stream   string
+		wantNext int64
+		wantTail int64 // -1 = 꼬리 없음
+	}{
+		{stream: "cursor-empty", wantNext: 10, wantTail: -1},
+		{stream: "cursor-ahead", wantNext: 10, wantTail: 2},
+		{stream: "cursor-behind", wantNext: 8, wantTail: 7},
+		{stream: "cursor-none", wantNext: 0, wantTail: -1},
+	}
+	for _, tt := range tests {
+		cur, err := store.LoadCursor(ctx, tt.stream)
+		if err != nil {
+			t.Errorf("%s LoadCursor 오류 = %v, want nil", tt.stream, err)
+			continue
+		}
+		tail := int64(-1)
+		if cur.Tail != nil {
+			tail = cur.Tail.Seq
+		}
+		if cur.NextSeq != tt.wantNext || tail != tt.wantTail {
+			t.Errorf("%s LoadCursor = (다음 %d · 꼬리 %d), want (%d · %d)", tt.stream, cur.NextSeq, tail, tt.wantNext, tt.wantTail)
+		}
+	}
+}
