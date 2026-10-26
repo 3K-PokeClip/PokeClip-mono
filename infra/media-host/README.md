@@ -305,6 +305,22 @@ compose 템플릿 변수 `ingest_auth_image` 하나로 모드를 고른다. 빈 
         `auth.pokeclip.internal` 인지 따로 본다 — 다르면 이 확인을 통과해도 4C
         는 실패한다.
 
+1.  **설치 묶음 판(POK-472):** `image_digests.bundle` 은 사이드카 4C PR
+    (POK-472 — 토큰 사본 렌더)의 머지 커밋을 조상으로 둔 커밋에서 빌드한
+    것이어야 한다. 응답기 모드 compose 렌더본(user_data — apply 하는 저장소
+    판)은 사이드카에 토큰 사본 `/run/pokeclip-media/stream_key_resolve_token`
+    을 `create_host_path: false` 로 bind 하는데, 그 사본은 묶음의
+    `start-media.sh` 가 렌더할 때만 생긴다. 옛 묶음이면 bind 원본이 없어 B 의
+    사이드카가 기동에 실패하고, 교체 판정이 B 를 받아들이지 않아 A 가 남는다.
+
+    ```shell
+    git fetch origin
+    git merge-base --is-ancestor <POK-472 PR 머지 커밋 SHA> \
+      <묶음 빌드 커밋 SHA> && echo '하한 이상' || echo '하한 아래'
+    ```
+
+    묶음 빌드 커밋 해시는 1 과 같은 자리(POK-310 · POK-301 코멘트)에 적는다.
+
 ### 되돌리기 순서
 
 **O8a 5 전**(SRT 인바운드 = 팀 IP): `ingest_auth_image` 를 비운 설정 반영
