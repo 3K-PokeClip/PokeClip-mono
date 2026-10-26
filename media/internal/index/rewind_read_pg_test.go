@@ -407,7 +407,7 @@ func TestLookbackFloorBoundedByRowCap(t *testing.T) {
 
 	var floor int64
 	var capped bool
-	err := pool.QueryRow(context.Background(), rewindFloorSQL, stream, int64(0), (2*time.Hour).Milliseconds(), int64(10000)).
+	err := pool.QueryRow(context.Background(), rewindFloorSQL, stream, int64(0), (2*time.Hour).Milliseconds(), int64(10000), maxSeq).
 		Scan(&floor, &capped)
 	if err != nil || floor != 2000 || !capped {
 		t.Errorf("되짚기 하한 문장 = (%d, %v, %v), want (2000, 참, nil) — 합산이 상한 안의 최신 10,000행에 묶인다", floor, capped, err)
