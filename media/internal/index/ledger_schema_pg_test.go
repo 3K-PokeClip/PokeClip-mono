@@ -12,7 +12,9 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -126,6 +128,35 @@ func TestEnsureSchemaRestoresSingleMissingLedgerColumn(t *testing.T) {
 
 	if err != nil || missErr != nil || len(missing) != 0 {
 		t.Errorf("열 하나 빠진 DB 의 EnsureSchema = %v · 기동 확인 = (%q, %v), want nil · (빈 목록, nil)", err, missing, missErr)
+	}
+}
+
+// 다른 스키마의 같은 이름 표가 열 확인을 속이지 않는다 — 열 확인은 표를 만든 스키마(current_schema)만 본다. 속으면
+// 빠진 열을 「있다」로 읽고 ALTER 를 건너뛰어 기동 스키마 확인이 실패한다.
+func TestEnsureSchemaIgnoresSameNamedTableInOtherSchema(t *testing.T) {
+	pool := pgtest.Pool(t, "ledgerschema", EnsureSchema, resetTables)
+	ctx := context.Background()
+	if _, err := pool.Exec(ctx, `
+		ALTER TABLE stream_sessions DROP COLUMN stop_marked_at;
+		CREATE SCHEMA ledger_decoy;
+		CREATE TABLE ledger_decoy.stream_sessions (stop_marked_at timestamptz)`); err != nil {
+		t.Fatalf("미끼 스키마 만들기 실패: %v", err)
+	}
+	t.Cleanup(func() { // 풀보다 늦게 등록 — 풀이 닫히기 전에 돈다
+		ctx := context.Background()
+		if _, err := pool.Exec(ctx, "DROP SCHEMA IF EXISTS ledger_decoy CASCADE"); err != nil {
+			t.Errorf("미끼 스키마 지우기 실패: %v", err)
+		}
+		if err := EnsureSchema(ctx, pool); err != nil {
+			t.Errorf("스키마 되돌리기 실패: %v", err)
+		}
+	})
+
+	err := EnsureSchema(ctx, pool)
+	missing, missErr := MissingLedgerSchema(ctx, pool)
+
+	if err != nil || missErr != nil || len(missing) != 0 {
+		t.Errorf("미끼 스키마가 있는 DB 의 EnsureSchema = %v · 기동 확인 = (%q, %v), want nil · (빈 목록, nil)", err, missing, missErr)
 	}
 }
 
@@ -446,7 +477,7 @@ func TestFloorRaiseFiresForDeleterWithoutExecute(t *testing.T) {
 
 // 음성 대조(M6-0 c4) — 하한 트리거 · 회차 인덱스가 「있지만 일하지 않는」 상태를 40 이 그 단언으로만 잡는다.
 // replica 전용('R') 트리거는 일반 연결의 DELETE 에서 돌지 않아 하한이 빠진다. 끈 트리거 · 다른 시점 · 다른 전이
-// 표 이름 · 무효 인덱스 · 술어가 다른 인덱스 · PUBLIC EXECUTE 도 같다.
+// 표 이름 · 무효 인덱스 · 술어나 열이 다른 인덱스 · 소유자 밖 EXECUTE 도 같다.
 func TestProdSQLVerifyCatchesIdleLedgerObjects(t *testing.T) {
 	env := newProdSQLEnv(t)
 	env.mustApplyAll(t)
@@ -490,6 +521,17 @@ func TestProdSQLVerifyCatchesIdleLedgerObjects(t *testing.T) {
 			want:   "function_execute:stream_segments_raise_seq_floor",
 		},
 		{
+			// PUBLIC 만 보면 놓친다 — 특정 계정에 준 EXECUTE 도 그 계정의 트리거 부착을 연다.
+			name:   "raise function executable by app account",
+			tamper: "GRANT EXECUTE ON FUNCTION stream_segments_raise_seq_floor() TO app_clip",
+			want:   "function_execute:stream_segments_raise_seq_floor",
+		},
+		{
+			name:   "raise function executable by indexer",
+			tamper: "GRANT EXECUTE ON FUNCTION stream_segments_raise_seq_floor() TO media_indexer",
+			want:   "function_execute:stream_segments_raise_seq_floor",
+		},
+		{
 			name:   "round index invalid",
 			tamper: "UPDATE pg_index SET indisvalid = false WHERE indexrelid = '" + idx + "'::regclass",
 			want:   "index:" + idx,
@@ -505,6 +547,13 @@ func TestProdSQLVerifyCatchesIdleLedgerObjects(t *testing.T) {
 				" ON stream_sessions (round_id, started_at DESC) WHERE round_closed_at IS NULL",
 			want: "index:" + idx,
 		},
+		{
+			// 술어는 같고 정렬만 다르다 — 열 정의까지 봐야 잡는다.
+			name: "round index other columns",
+			tamper: "DROP INDEX " + idx + "; CREATE INDEX " + idx +
+				" ON stream_sessions (round_id, started_at) WHERE round_closed_at IS NULL AND round_id IS NOT NULL",
+			want: "index:" + idx,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -512,6 +561,18 @@ func TestProdSQLVerifyCatchesIdleLedgerObjects(t *testing.T) {
 				t.Errorf("%s 뒤 40_verify.sql 실패 단언 = %q, want [%s]", tt.tamper, got, tt.want)
 			}
 		})
+	}
+}
+
+// 함수가 없으면 EXECUTE 단언도 실패한다 — 「소유자 밖 EXECUTE 0」 은 함수가 없어도 참이라 존재를 함께 본다.
+func TestProdSQLVerifyFailsExecuteCheckWithoutFloorRaiseFunction(t *testing.T) {
+	env := newProdSQLEnv(t)
+	env.mustApplyAll(t)
+
+	got := env.verifyFailuresAfter(t, "DROP FUNCTION stream_segments_raise_seq_floor() CASCADE")
+
+	if !slices.Contains(got, "function_execute:stream_segments_raise_seq_floor") {
+		t.Errorf("함수를 지운 뒤 40_verify.sql 실패 단언 = %q, want function_execute:stream_segments_raise_seq_floor 포함", got)
 	}
 }
 
@@ -529,25 +590,124 @@ func TestProdSQLVerifyAcceptsAlwaysEnabledFloorTrigger(t *testing.T) {
 	}
 }
 
-// 한 창 재실행의 교착 방지 — 20 을 다시 돌리는 트랜잭션은 시작하자마자 stream_sessions 를 ACCESS EXCLUSIVE,
-// stream_segments 를 SHARE ROW EXCLUSIVE 로 쥔다. 사이드카 insertOnce 가 sessions → segments 순으로 잠그므로 같은
-// 순서로 먼저 다 잡아야 한다 — 없으면 재실행은 segments(SHARE) → sessions 순으로 잡아 교착한다(db 검수 실측).
-func TestProdSQLSchemaRerunLocksSessionsThenSegments(t *testing.T) {
+// ledgerTables 는 장부 표 여섯이다(재실행 잠금 시험의 대상).
+const ledgerTables = "'stream_segments', 'stream_sessions', 'stream_cutoffs', 'stream_published_gaps', " +
+	"'stream_seq_floors', 'broadcast_lifecycle_outbox'"
+
+// 한 창 재실행의 교착 방지 — 수렴된 DB 에 20 을 다시 돌리는 트랜잭션은 장부 표를 잠그지 않는다(ACCESS SHARE
+// 밖). 표 잠금이 없으면 사이드카 문장이 어느 순서로 표를 잡든 재실행과 서로 기다리지 않는다. CREATE INDEX IF NOT
+// EXISTS 는 이름을 확인하기 전에 표를 SHARE 로 잡으므로 사본이 존재 확인 DO 블록으로 감싼다.
+func TestProdSQLSchemaRerunTakesNoLedgerTableLocks(t *testing.T) {
 	env := newProdSQLEnv(t)
 	env.mustApplyAll(t)
 	script := "BEGIN;\n" + expandProdSQL(t, "20_schema.sql") + `
-SELECT pg_catalog.string_agg(c.relname || '=' || l.mode, ',' ORDER BY c.relname, l.mode)
+SELECT 'ledger locks: ' || coalesce(pg_catalog.string_agg(c.relname || '=' || l.mode, ',' ORDER BY c.relname, l.mode),
+                                    'none')
   FROM pg_locks l JOIN pg_class c ON c.oid = l.relation
- WHERE l.pid = pg_catalog.pg_backend_pid() AND l.granted
-   AND c.relname IN ('stream_sessions', 'stream_segments')
-   AND l.mode IN ('AccessExclusiveLock', 'ShareRowExclusiveLock');
+ WHERE l.pid = pg_catalog.pg_backend_pid() AND c.relname IN (` + ledgerTables + `)
+   AND l.mode <> 'AccessShareLock';
 ROLLBACK;`
 
 	results, err := execScript(t, env.master, script)
 
-	const want = "stream_segments=ShareRowExclusiveLock,stream_sessions=AccessExclusiveLock"
+	const want = "ledger locks: none"
 	if err != nil || !hasRow(results, want) {
-		t.Errorf("20 재실행 중 쥔 강한 잠금 = (%v, %v), want 행 %q", firstColumns(results), err, want)
+		t.Errorf("20 재실행 중 쥔 장부 표 잠금 = (%v, %v), want 행 %q", firstColumns(results), err, want)
+	}
+}
+
+// 한 창 재실행과 송출 중 사이드카가 교착하지 않는다 — 두 잠금 순서 모두. 사이드카 문장 하나가 두 표를 잡는 순서를
+// 두 문장으로 펼쳐, 첫 표를 쥔 사이에 재실행을 끼운다. 재실행이 표를 잠그면 한쪽 순서에서 40P01 이 난다 —
+// sessions → segments 를 먼저 잡던 c4 판은 init 불일치 순서에서, 잠금 없이 사본만 돌던 판은 insertOnce 순서에서.
+func TestProdSQLSchemaRerunDoesNotDeadlockWithSidecar(t *testing.T) {
+	const probe = "'rerun-probe'"
+	tests := []struct {
+		name          string
+		first, second string
+	}{
+		{
+			// upload_store.go markPlaybackInitMismatchSQL — seg CTE(segments) 뒤 sess CTE(sessions).
+			name:   "init mismatch segments then sessions",
+			first:  "UPDATE stream_segments SET playback_upload_state = 'failed' WHERE stream_id = " + probe,
+			second: "UPDATE stream_sessions SET state = 'ending' WHERE session_id = " + probe,
+		},
+		{
+			// store.go insertOnce — 세션 개시(sessions) 뒤 조각 INSERT(segments).
+			name:   "insert once sessions then segments",
+			first:  "UPDATE stream_sessions SET state = 'live' WHERE session_id = " + probe,
+			second: "UPDATE stream_segments SET local_path = local_path WHERE stream_id = " + probe,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := newProdSQLEnv(t)
+			env.mustApplyAll(t)
+			ctx, cancel := context.WithTimeout(context.Background(), rerunWaitLimit)
+			defer cancel()
+			rerunPID := env.master.PgConn().PID()
+			sidecar := env.super
+			if _, err := sidecar.Exec(ctx, "BEGIN; "+tt.first); err != nil {
+				t.Fatalf("사이드카 첫 문장 실패: %v", err)
+			}
+			rerun := make(chan error, 1)
+			body := "BEGIN;\n" + expandProdSQL(t, "20_schema.sql") + "\nCOMMIT;"
+			go func() {
+				_, err := env.master.PgConn().Exec(ctx, body).ReadAll()
+				rerun <- err
+			}()
+			waitRerunDoneOrBlocked(ctx, t, sidecar, rerunPID, rerun)
+
+			_, secondErr := sidecar.Exec(ctx, tt.second)
+			endSidecar(t, sidecar, secondErr)
+			var rerunErr error
+			select {
+			case rerunErr = <-rerun:
+			case <-ctx.Done():
+				t.Fatalf("재실행이 %v 안에 끝나지 않았다", rerunWaitLimit)
+			}
+
+			if secondErr != nil || rerunErr != nil {
+				t.Errorf("(사이드카 둘째 문장, 재실행) 오류 = (%v, %v), want (nil, nil)", secondErr, rerunErr)
+			}
+		})
+	}
+}
+
+// rerunWaitLimit 은 교착 시험 한 사례의 상한이다 — 교착 탐지(deadlock_timeout 1초)보다 넉넉하다.
+const rerunWaitLimit = 30 * time.Second
+
+// waitRerunDoneOrBlocked 는 재실행 백엔드(pid)가 트랜잭션을 끝냈거나 잠금을 기다리기 시작할 때까지 기다린다.
+// 사이드카 연결로 pg_locks 를 본다(pg_stat_activity 와 달리 트랜잭션 안에서도 매번 새로 읽힌다).
+func waitRerunDoneOrBlocked(ctx context.Context, t *testing.T, sidecar *pgx.Conn, pid uint32, rerun chan error) {
+	t.Helper()
+	for {
+		select {
+		case err := <-rerun:
+			rerun <- err // 결과는 사례 본문이 읽는다
+			return
+		default:
+		}
+		var blocked bool
+		if err := sidecar.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_locks WHERE pid = $1 AND NOT granted)`,
+			int32(pid)).Scan(&blocked); err != nil {
+			t.Fatalf("재실행 잠금 대기 조회 실패: %v", err)
+		}
+		if blocked {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// endSidecar 는 사이드카 트랜잭션을 끝낸다 — 둘째 문장이 성공했으면 COMMIT, 실패했으면 ROLLBACK.
+func endSidecar(t *testing.T, sidecar *pgx.Conn, secondErr error) {
+	t.Helper()
+	end := "COMMIT"
+	if secondErr != nil {
+		end = "ROLLBACK"
+	}
+	if _, err := sidecar.Exec(context.Background(), end); err != nil {
+		t.Fatalf("사이드카 %s 실패: %v", end, err)
 	}
 }
 
