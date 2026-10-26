@@ -559,6 +559,7 @@ func TestInitMarkOutcomeTransportTable(t *testing.T) {
 	}{
 		{"성공", index.InitMarkSuccess, nil, outcomeSuccess, initEvent(false), true},
 		{"해제", index.InitMarkRevoked, nil, outcomeSuccess, initEvent(true), true},
+		{"해제_건너뜀", index.InitMarkRevokeSkipped, nil, outcomeSuccess, initEvent(false), true},
 		{"이미_같음", index.InitMarkAlreadySame, nil, outcomeSuccess, nil, true},
 		{"불일치", index.InitMarkMismatch, nil, outcomeNeutral, nil, false},
 		{"세션_부재", index.InitMarkMissing, nil, outcomeNeutral, nil, false},
@@ -584,6 +585,21 @@ func TestInitMarkOutcomeTransportTable(t *testing.T) {
 			}
 			sameEvents(t, u.Dirty().Peek(), tt.wantEvents)
 		})
+	}
+}
+
+// 닫힌 사슬의 늦은 첫 init(POK-196 M6 D75 (나)) — 장부가 확정만 하고 계승 해제를 건너뛰었다(InitMarkRevokeSkipped). 워커는
+// 확정으로 이어 가고(위 표 「해제_건너뜀」) WARN init_revoke_skipped reason=chain_closed 한 줄을 남긴다 — 닫힌 사슬에 늦은
+// init 이 왔다는 실제 발생 표지다(설계 8절).
+func TestInitRevokeSkippedWarnsChainClosed(t *testing.T) {
+	st := &fakeUploadStore{onInitMark: func(string, []byte) (index.InitMark, error) { return index.InitMarkRevokeSkipped, nil }}
+	u, cap, dir, _ := newPlaybackUploader(t, st, &fakePutter{}, &fakeProducer{}, nil)
+	if got := runLive(u, initJobTarget(t, dir, "demo", "S-1", "first.mp4", 64)); got != outcomeSuccess {
+		t.Fatalf("outcome = %v, want success (%s)", got, cap.dump())
+	}
+	rec := cap.one(t, "init_revoke_skipped")
+	if rec.level != slog.LevelWarn || rec.attrs["reason"] != "chain_closed" || rec.attrs["session_id"] != "S-1" {
+		t.Fatalf("init_revoke_skipped = %+v, want WARN reason=chain_closed session_id=S-1", rec)
 	}
 }
 

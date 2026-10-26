@@ -241,6 +241,9 @@ const (
 	// InitMarkRevoked — 이번 호출이 4열을 썼고 **같은 문장에서 계승을 풀었다**(계승 후보 ∧ 비호환 —
 	// 계획 4.5 A2 결정 8). 호출자는 init 확정과 계승 해제를 한 사건으로 이어 간다.
 	InitMarkRevoked
+	// InitMarkRevokeSkipped — 이번 호출이 4열을 썼지만 계승 후보 ∧ 비호환인데 **사슬이 이미 닫혀**(vod_state ≠ none)
+	// 해제하지 않았다(POK-196 M6 D75). 확정으로 다룬다(Success 와 같다 — 계승은 그대로). 호출자는 WARN 한 줄을 남긴다.
+	InitMarkRevokeSkipped
 )
 
 // String 은 로그와 테스트 실패 메시지에서 숫자 대신 이름이 보이게 한다.
@@ -256,6 +259,8 @@ func (m InitMark) String() string {
 		return "missing"
 	case InitMarkRevoked:
 		return "revoked"
+	case InitMarkRevokeSkipped:
+		return "revoke_skipped"
 	default:
 		return "unknown"
 	}
@@ -282,22 +287,31 @@ func (m InitMark) String() string {
 // upd 가 0행이면(이미 확정 · 해시 불일치) 해제도 없다.
 //
 // cur 의 FOR UPDATE 는 같은 세션에 두 워커가 동시에 들어와도 판정이 갈리지 않게 한다.
+//
+// 닫힌 사슬의 간선은 끊지 않는다(POK-196 M6 3.3 · 종결 정정 D75) — 해제 술어에 `vod_state = 'none'` 이 있다. 사슬 닫힘
+// (CloseChain)이 이 행을 쥔 동안 이 문장이 cur 의 잠금에서 기다렸다가 닫힘 커밋 뒤에 돌면, cur · upd 는 커밋된 새 판
+// (vod_state='freezing')을 본다(READ COMMITTED 재평가 · PG 17 13.2.1). 그때는 init 만 확정하고 간선 · base 는 그대로
+// 두며 skipped 가 참이다(InitMarkRevokeSkipped — 부른 쪽이 WARN init_revoke_skipped reason=chain_closed). 사슬 닫힘은
+// 사슬 전원 init 판정 뒤(정산 창 15분)에만 가므로 이 갈래는 창이 지난 늦은 첫 init 에서만 온다.
 const markInitUploadedSQL = `
 WITH cur AS (
-    SELECT s.init_sha256, s.init_uploaded_at, s.inherits_session
+    SELECT s.init_sha256, s.init_uploaded_at, s.inherits_session, s.vod_state
       FROM stream_sessions s WHERE s.session_id = $1 FOR UPDATE
 ), upd AS (
     UPDATE stream_sessions s SET
         init_s3_key = $3, init_bytes = $4, init_uploaded_at = pg_catalog.now(), init_sha256 = $2,
-        inherits_session   = CASE WHEN s.inherits_session IS NOT NULL AND $5 THEN NULL ELSE s.inherits_session END,
-        discontinuity_base = CASE WHEN s.inherits_session IS NOT NULL AND $5 THEN 0    ELSE s.discontinuity_base END
+        inherits_session   = CASE WHEN s.inherits_session IS NOT NULL AND $5 AND s.vod_state = 'none'
+                                  THEN NULL ELSE s.inherits_session END,
+        discontinuity_base = CASE WHEN s.inherits_session IS NOT NULL AND $5 AND s.vod_state = 'none'
+                                  THEN 0    ELSE s.discontinuity_base END
       FROM cur
      WHERE s.session_id = $1 AND s.init_uploaded_at IS NULL
        AND (s.init_sha256 IS NULL OR s.init_sha256 = $2)
-    RETURNING (cur.inherits_session IS NOT NULL AND $5) AS revoked
+    RETURNING (cur.inherits_session IS NOT NULL AND $5 AND cur.vod_state = 'none') AS revoked,
+              (cur.inherits_session IS NOT NULL AND $5 AND cur.vod_state <> 'none') AS skipped
 )
 SELECT (SELECT pg_catalog.count(*) FROM upd), cur.init_sha256, cur.init_uploaded_at,
-       COALESCE((SELECT revoked FROM upd), false)
+       COALESCE((SELECT revoked FROM upd), false), COALESCE((SELECT skipped FROM upd), false)
   FROM cur`
 
 // pendingArchiveUploadsSQL ($1 = tailGrace 초, $2 = limit, $3..$6 = 키셋 커서)
@@ -517,9 +531,10 @@ func (s *pgUploadStore) MarkInitUploaded(ctx context.Context, sessionID string, 
 		curSHA     []byte
 		uploadedAt *time.Time
 		revoked    bool
+		skipped    bool
 	)
 	err := s.pool.QueryRow(ctx, markInitUploadedSQL, sessionID, sha, s3Key, size, incompatible).
-		Scan(&updated, &curSHA, &uploadedAt, &revoked)
+		Scan(&updated, &curSHA, &uploadedAt, &revoked, &skipped)
 	if errors.Is(err, pgx.ErrNoRows) {
 		// cur 가 비었다 = 그 세션 행이 없다. 불일치와는 다른 사건이다.
 		return InitMarkMissing, nil
@@ -531,6 +546,8 @@ func (s *pgUploadStore) MarkInitUploaded(ctx context.Context, sessionID string, 
 	switch {
 	case updated == 1 && revoked:
 		return InitMarkRevoked, nil
+	case updated == 1 && skipped:
+		return InitMarkRevokeSkipped, nil
 	case updated == 1:
 		return InitMarkSuccess, nil
 	case uploadedAt != nil && bytes.Equal(curSHA, sha):
