@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -376,9 +377,12 @@ func TestPublisherNotStarvedByBlockedEnded(t *testing.T) {
 }
 
 // D46 — resolve 는 장부 트랜잭션 밖이다. 발행기가 resolve 를 기다리는 동안에도 개시 트랜잭션의 outbox INSERT 는
-// 기다리지 않는다 — 개시 트랜잭션이 설계 문턱 100ms 안에 끝난다.
+// 기다리지 않는다 — 개시 트랜잭션이 설계 문턱 100ms 안에 끝난다. 한 번이 아니라 10번 잰 평균으로 단언한다 — 단발
+// 측정은 다른 시험이 같은 기계를 채울 때(부하 평균 130 · 코어 10) 스케줄링 지연만으로 20번에 2번 100ms 를 넘었다.
+// resolve 가 개시를 막으면 매번 막히므로 평균이 그것을 가리지 못한다.
 // 잡는 결함: resolve 를 outbox 를 잠근 트랜잭션 안에서 부르면 개시(조각 INSERT 핫 경로)가 auth 지연만큼 막힌다.
 func TestEnqueueNotBlockedWhileResolving(t *testing.T) {
+	const runs = 10
 	pool := newTestPool(t)
 	entered, release := make(chan struct{}), make(chan struct{})
 	res := &fakeResolve{answer: func(int) (keyresolve.Verdict, error) {
@@ -393,25 +397,38 @@ func TestEnqueueNotBlockedWhileResolving(t *testing.T) {
 	defer func() { close(release); <-done }()
 	<-entered
 
+	var total time.Duration
+	for i := range runs {
+		elapsed, err := timeStartedEnqueue(pool, fmt.Sprintf("S-B%d", i))
+		if err != nil {
+			t.Fatalf("resolve 대기 중 개시 %d = %v, want 바로 성공", i, err)
+		}
+		total += elapsed
+	}
+
+	if mean := total / runs; mean > 100*time.Millisecond {
+		t.Errorf("개시 트랜잭션 평균(%d번) = %v, want 100ms 안", runs, mean)
+	}
+}
+
+// timeStartedEnqueue 는 round 의 started 를 넣는 개시 트랜잭션 하나(Begin · EnqueueStarted · Commit)의 걸린 시간이다.
+// 막혀도 1초에서 끊는다.
+func timeStartedEnqueue(pool *pgxpool.Pool, round string) (time.Duration, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	start := time.Now()
 	tx, err := pool.Begin(ctx)
 	if err != nil {
-		t.Fatalf("Begin: %v", err)
+		return 0, err
 	}
 	defer tx.Rollback(context.Background())
-	err = EnqueueStarted(ctx, tx, openGate(), "S-B", ingest, base)
-	if err == nil {
-		err = tx.Commit(ctx)
+	if err := EnqueueStarted(ctx, tx, openGate(), round, ingest, base); err != nil {
+		return 0, err
 	}
-
-	if err != nil {
-		t.Fatalf("resolve 대기 중 개시 = %v, want 바로 성공", err)
+	if err := tx.Commit(ctx); err != nil {
+		return 0, err
 	}
-	if elapsed := time.Since(start); elapsed > 100*time.Millisecond {
-		t.Errorf("개시 트랜잭션 = %v, want 100ms 안", elapsed)
-	}
+	return time.Since(start), nil
 }
 
 // D47 — 진행 중 Publish 가 ctx 로 끊기면 Run 은 곧바로 돌아오고 행은 pending 그대로다(시도 횟수도 그대로). 다음
