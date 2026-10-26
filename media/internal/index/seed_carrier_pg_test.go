@@ -379,7 +379,7 @@ func endedBroadcast(t *testing.T, pool *pgxpool.Pool, st Store, stream string, b
 		t.Fatal("직전 방송이 회차에 귀속되지 않았다 — 준비가 어긋났다")
 	}
 	setDiscontinuityBase(t, pool, *id, base)
-	if ended, err := EndLive(ctx, pool, stream); err != nil || ended != *id {
+	if ended, err := EndLive(ctx, pool, stream, testClose, noopEnqueue); err != nil || ended != *id {
 		t.Fatalf("EndLive = (%q, %v), want (%q, nil)", ended, err, *id)
 	}
 	return *id, first.LocalPath
@@ -505,7 +505,7 @@ func TestReconnectAfterTDSplitInheritsTargetDuration(t *testing.T) {
 	if _, _, td := sessionLedger(t, pool, *split); td != 8 {
 		t.Fatalf("TD 분할 회차 TD = %d, want 8 — 준비가 어긋났다", td)
 	}
-	if ended, err := EndLive(ctx, pool, stream); err != nil || ended != *split {
+	if ended, err := EndLive(ctx, pool, stream, testClose, noopEnqueue); err != nil || ended != *split {
 		t.Fatalf("EndLive = (%q, %v), want (%q, nil)", ended, err, *split)
 	}
 

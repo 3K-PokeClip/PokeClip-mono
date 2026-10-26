@@ -136,7 +136,7 @@ func TestMediaIndexerRoleRecordsSegments(t *testing.T) {
 	if paths, err := store.ExistingPaths(ctx, stream); err != nil || len(paths) != 3 {
 		t.Fatalf("ExistingPaths = (%d개, %v), want (3개, nil)", len(paths), err)
 	}
-	ended, err := EndLive(ctx, role.Pool, stream)
+	ended, err := EndLive(ctx, role.Pool, stream, testClose, noopEnqueue)
 	if err != nil || ended != split.SessionID {
 		t.Fatalf("EndLive = (%q, %v), want (%q, nil)", ended, err, split.SessionID)
 	}

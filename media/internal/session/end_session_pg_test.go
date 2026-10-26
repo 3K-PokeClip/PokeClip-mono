@@ -104,7 +104,7 @@ func TestEndSessionStatementsAgreeWithIndexInitMismatchEnding(t *testing.T) {
 
 			// EndLive 를 먼저 부른다 — 다른 두 스트림의 회차가 아직 출발 상태일 때 불러야 스트림 단위
 			// 술어(stream_id)가 드러난다. 그 술어를 잃으면 남의 live 회차까지 offline 으로 닫는다.
-			ended, err := index.EndLive(ctx, pool, "endstream")
+			ended, err := index.EndLive(ctx, pool, "endstream", crossClose, noEnqueue)
 			if err != nil {
 				t.Fatalf("EndLive 실패: %v", err)
 			}

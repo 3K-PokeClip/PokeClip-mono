@@ -84,6 +84,10 @@ type rewindLoop struct {
 	invalid     map[string]index.PlaybackState
 	rangeWarned map[string]string
 	alarms      map[string]*readyAlarm
+
+	// fin 은 정산 몫이다(M6-3b — rewind_finalize.go). run 이 조립 밖에서 채워 발행 꺼짐 · 강등에서도 돈다. nil 이면 정산 ·
+	// 상태 전달 · 계승 해제를 하지 않는다(4.1 전이 · 발행 몫만 보는 시험).
+	fin *finalizer
 }
 
 // laneWork 는 차선 작업의 몸체다 — 입력 값만 받아 차선 고루틴에서 돌고 결과를 값으로 돌려준다(캐시 · Dirty 를 만지지 않는다).
@@ -141,9 +145,10 @@ type laneJob struct {
 type laneJobKind int
 
 const (
-	jobTick  laneJobKind = iota + 1 // 발행 틱(평시 · GAP)
-	jobRenew                        // lazy 갱신(RenewFence)
-	jobLoad                         // 캐시 적재(LoadLedger)
+	jobTick   laneJobKind = iota + 1 // 발행 틱(평시 · GAP)
+	jobRenew                         // lazy 갱신(RenewFence)
+	jobLoad                          // 캐시 적재(LoadLedger)
+	jobRevoke                        // 4D round_split 의 계승 해제(RevokeInheritance — M6-3b)
 )
 
 // holdTick 은 holdTicks case 의 되감기 몫이다 — 그 case 의 현재 시각 now 로 4.1 종료 전이를 돌리고, 발행 몫이 있으면 차례대로
@@ -154,8 +159,14 @@ const (
 // 제어면 상태 몫은 그 앞뒤다(설계 M5 3.3 holdTick 순서 · 보완 2 ㉢ ㉤): 4.1 전이 뒤 받은편지함을 종료 항목에 반영하고(Drain),
 // 발행 몫은 발행 몫이 있을 때만 돌며, 끝에서 Board 를 새로 만든다(publishStatus — 강등에서도 돈다 · 꺼짐 제외). 그래서 그 틱
 // 스냅숏은 그 틱의 Drain · 개시 삭제를 본다.
+//
+// 정산 몫(M6 3.2 holdTick 순서의 정본)은 4.1 전이와 M5 Drain 사이다: endOfflineSessions → 받은편지함 비우기(계승 해제 ·
+// 상태 표지 → 차선 발사) → finalizeTick(빠른 길 · 스캔 주기) → M5 Drain → 발행 몫. 조기 반환 앞이라 발행 꺼짐 · 강등에서도
+// 돈다(D56). 표식 EndLive 가 남긴 표지는 같은 틱의 받은편지함 비우기에서 읽힌다.
 func (r *rewindLoop) holdTick(ctx context.Context, now time.Time) {
 	r.endOfflineSessions(ctx, now)
+	r.drainInboxes(ctx)
+	r.finalizeTick(ctx, now)
 	r.drainFinals()
 	if r.publishing() {
 		events := r.peek()
@@ -173,9 +184,11 @@ func (r *rewindLoop) holdTick(ctx context.Context, now time.Time) {
 // publishing 은 발행 몫이 있는가다.
 func (r *rewindLoop) publishing() bool { return r.pub != nil && r.lanes != nil }
 
-// done 은 완료 case 의 채널이다 — 발행 몫이 없으면 nil 이라 그 case 는 영구 비활성이다(판단 J69 — 훅 채널과 같은 규약).
+// done 은 완료 case 의 채널이다 — 차선이 없으면 nil 이라 그 case 는 영구 비활성이다(판단 J69 — 훅 채널과 같은 규약). 조건은
+// 발행 몫이 아니라 차선이다(M6 3.2) — 차선은 run 이 조립 밖에서 채우므로 발행 꺼짐 · 강등에서도 정산 · 상태 전달 결과를 받는다.
+// 발행 결과(KindPublish · KindLoad · KindWatch)는 발행 몫이 있을 때만 온다.
 func (r *rewindLoop) done() <-chan publish.Result {
-	if !r.publishing() {
+	if r.lanes == nil {
 		return nil
 	}
 	return r.lanes.Done()
@@ -199,6 +212,16 @@ func (r *rewindLoop) complete(ctx context.Context, res publish.Result, now time.
 		if rerun {
 			r.startWatch(ctx)
 		}
+	case publish.KindFinalizeScan:
+		r.scanDone(ctx, res, rerun, now)
+	case publish.KindFinalizeLoad:
+		r.finalLoadDone(ctx, res, now)
+	case publish.KindFinalize:
+		r.finalStepDone(ctx, res, now)
+	case publish.KindPlayback:
+		r.playbackDone(ctx, res, rerun)
+	case publish.KindRevoke:
+		r.revokeDone(ctx, res, rerun, now)
 	}
 }
 
@@ -250,9 +273,20 @@ func (r *rewindLoop) endOfflineSessions(ctx context.Context, now time.Time) {
 		if sessionID != "" {
 			r.cache.ApplySessionEnding(streamID, sessionID)
 			r.forgetUploaderSession(sessionID)
+			r.queueEnded(streamID, sessionID, now)
 		}
 		r.ix.OfflineTried(streamID, true, now)
 	}
+}
+
+// queueEnded 는 오프라인 전이가 끝낸 회차를 정산 몫에 넘긴다 — 빠른 길(다음 holdTick 부터 꼬리 정착 + 10초 상한)과 상태 표지
+// (회차가 ending 으로 갔다 — 표식이 있었으면 같은 트랜잭션에서 회차도 닫혔다). 정산 몫이 없으면 아무것도 하지 않는다.
+func (r *rewindLoop) queueEnded(streamID, sessionID string, now time.Time) {
+	if r.fin == nil {
+		return
+	}
+	r.fin.queueFast(streamID, sessionID, now)
+	r.fin.inbox.Changed(streamID)
 }
 
 // offlineFailed 는 결과를 모르는 전이 실패다(시한 · lock_timeout · DB 오류 — 서버가 커밋했을 수 있다). ERROR 한

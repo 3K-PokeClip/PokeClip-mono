@@ -33,6 +33,7 @@ import (
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/indexer"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/recording"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/rewind/publish"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/s3errbody"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/upload"
 )
@@ -156,7 +157,8 @@ func newAssembly(t *testing.T, cfg config.Config, store index.Store) *assembly {
 		t.Fatalf("업로더 조립 실패: %v", err)
 	}
 	t.Cleanup(a.up.Shutdown)
-	a.rewind = &rewindLoop{ix: a.ix, root: cfg.SegmentRoot, log: log, endLive: (&fakeEndLive{}).endLive}
+	// 차선은 run 처럼 조립 밖에서 채운다(M6 3.2 — 조립은 발행 몫만 채우고 차선을 새로 만들지 않는다).
+	a.rewind = &rewindLoop{ix: a.ix, root: cfg.SegmentRoot, log: log, endLive: (&fakeEndLive{}).endLive, lanes: publish.NewLanes()}
 	return a
 }
 
@@ -186,9 +188,10 @@ func (a *assembly) assembleOrFatal(t *testing.T, cfg config.Config) *pgxpool.Poo
 func assertDegraded(t *testing.T, a *assembly, pool *pgxpool.Pool) {
 	t.Helper()
 	r := a.rewind
-	if pool != nil || r.cache != nil || r.publishing() || r.done() != nil {
-		t.Errorf("강등 뒤 풀 %v · 캐시 %v · 발행 몫 %v · 완료 채널 %v, want 모두 없음",
-			pool != nil, r.cache != nil, r.publishing(), r.done() != nil)
+	// 완료 case 채널은 차선(조립 밖)이 연다 — 강등에서도 정산 · 상태 전달 결과를 받는다(M6 3.2 · D56).
+	if pool != nil || r.cache != nil || r.publishing() || r.pub != nil {
+		t.Errorf("강등 뒤 풀 %v · 캐시 %v · 발행 몫 %v · 발행자 %v, want 모두 없음",
+			pool != nil, r.cache != nil, r.publishing(), r.pub != nil)
 	}
 	if a.up.Dirty() != nil {
 		t.Error("강등인데 업로더에 Dirty 집합이 붙었다 — 비우는 소비자 없이 원소가 쌓인다")
@@ -235,9 +238,10 @@ func TestAssemblePublishingWithoutBucketBuildsNothing(t *testing.T) {
 	pool := a.assemble(t, cfg)
 
 	r := a.rewind
-	if pool != nil || r.cache != nil || r.publishing() || r.done() != nil {
-		t.Errorf("assemblePublishing = 풀 %v · 캐시 %v · 발행 몫 %v · 완료 채널 %v, want 모두 없음",
-			pool != nil, r.cache != nil, r.publishing(), r.done() != nil)
+	// 완료 case 채널은 차선(조립 밖)이 연다 — 꺼짐에서도 정산 · 상태 전달 결과를 받는다(M6 3.2 · D56).
+	if pool != nil || r.cache != nil || r.publishing() || r.pub != nil {
+		t.Errorf("assemblePublishing = 풀 %v · 캐시 %v · 발행 몫 %v · 발행자 %v, want 모두 없음",
+			pool != nil, r.cache != nil, r.publishing(), r.pub != nil)
 	}
 	if r.peekDirty != nil || r.forgetSession != nil || r.expedite != nil {
 		t.Error("발행 몫이 없는데 Dirty · 업로더 손잡이가 붙었다")

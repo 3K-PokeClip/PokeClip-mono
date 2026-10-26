@@ -171,7 +171,7 @@ func (h *itHarness) start(o itOptions) {
 	h.rewind = &rewindLoop{
 		ix: h.ix, root: h.root, cache: h.cache, log: log,
 		endLive: func(ctx context.Context, streamID string) (string, error) {
-			return index.EndLive(ctx, h.pool, streamID)
+			return index.EndLive(ctx, h.pool, streamID, index.CloseOptions{Window: 300 * time.Second, Slack: 60 * time.Second}, noEndedEnqueue)
 		},
 		pub: pub, lanes: h.lanes,
 		work: laneWork{

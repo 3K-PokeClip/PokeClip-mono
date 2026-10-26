@@ -498,6 +498,20 @@ const (
 	KindLoad
 	// KindWatch 는 30초 감시 · 부팅 목록 작업이다 — 프로세스 차선(작업 몸체는 Watch — 부팅 목록은 첫 감시의 live 행).
 	KindWatch
+	// 아래는 발행 밖 작업이다(POK-196 M6 — 정산 · 상태 전달 · 계승 해제). 결과는 Value 에 싣고 루프가 형을 단언한다 —
+	// 발행 층이 정산 판정의 형을 알 필요가 없게 한다. 차선 키는 예약 문자열이다("scan:finalize" · "final:"+회차 ·
+	// "playback:"+스트림 — 스트림 id 는 키 성분 규칙이라 「:」를 담지 않아 겹치지 않는다). 계승 해제는 스트림 차선이다.
+
+	// KindFinalizeScan 은 정산 · 회차 스캔이다.
+	KindFinalizeScan
+	// KindFinalizeLoad 는 빠른 길의 행 읽기다.
+	KindFinalizeLoad
+	// KindFinalize 는 정산 걸음 하나다.
+	KindFinalize
+	// KindPlayback 은 상태 전달 읽기다.
+	KindPlayback
+	// KindRevoke 는 계승 해제(RevokeInheritance)다 — 스트림 차선.
+	KindRevoke
 )
 
 // Job 은 차선에서 도는 작업 하나다. ctx 가 끝나면 서둘러 돌아와야 한다 — 워커 고루틴은 작업이 돌아와야
@@ -515,6 +529,9 @@ type Result struct {
 	Load LoadOutcome
 	// Watch 는 감시 작업(KindWatch)의 결과다(판단 J40).
 	Watch WatchOutcome
+	// Value 는 발행 밖 작업(KindFinalizeScan · KindFinalizeLoad · KindFinalize · KindPlayback · KindRevoke)의 결과다 — 형은
+	// 작업을 낸 쪽이 정하고 받는 쪽이 단언한다.
+	Value any
 
 	// lane 은 이 작업이 돈 차선이다 — Finish 가 비울 자리다. 차선이 채운다.
 	lane laneKey
