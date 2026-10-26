@@ -18,7 +18,8 @@ type ExpiryOptions struct {
 	Token    expiry.Token
 	HasToken bool
 	// TokenFile 은 CLIP_EXPIRY_TOKEN_FILE 이다 — 토큰 한 줄이 든 파일의 절대 경로. 여기서는 열지 않는다(읽기는 main 이
-	// secretfile 규칙으로 — MTX_API_PASS_FILE 과 같은 층 규칙).
+	// secretfile 규칙으로 — MTX_API_PASS_FILE 과 같은 층 규칙). 못 읽으면 기동 실패가 아니라 만료만 끈다(ERROR
+	// expiry_disabled reason=token_file — kty 결정 2026-10-27 강등 유지 · ADR-063 결정 1: 인덱싱 · 업로드는 그대로).
 	TokenFile string
 }
 
