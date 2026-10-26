@@ -107,7 +107,7 @@ export function consumeOAuthState(): OAuthState | null {
     if (typeof parsed !== 'object' || parsed === null) return null;
     const { state, returnTo, codeVerifier } = parsed as Record<string, unknown>;
     if (typeof state !== 'string' || state === '') return null;
-    // 배포 전에 시작한 시도는 verifier가 없다 — 교환해 봐야 서버가 400으로 거부하므로 여기서 끊는다.
+    // 배포 전에 시작한 시도는 verifier가 없다 — 그 code는 challenge 없이 발급돼 PKCE로 교환할 수 없으니 여기서 끊는다.
     if (typeof codeVerifier !== 'string' || codeVerifier === '') return null;
     return { state, returnTo: typeof returnTo === 'string' ? returnTo : null, codeVerifier };
   } catch {

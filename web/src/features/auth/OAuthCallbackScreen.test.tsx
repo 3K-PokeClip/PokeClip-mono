@@ -167,7 +167,7 @@ describe('OAuthCallbackScreen', () => {
 
     renderWithClient(<OAuthCallbackScreen />);
 
-    // 서버는 verifier 없는 교환을 400으로 거부한다 — 보내 봐야 실패 안내만 늦어진다
+    // web은 PKCE 없이 교환하지 않는다 — 처음부터 다시 하면 새 verifier로 시작한다
     expect(screen.getByText('로그인을 확인할 수 없어요')).toBeInTheDocument();
     expect(spy).not.toHaveBeenCalled();
   });

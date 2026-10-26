@@ -68,8 +68,8 @@ class GoogleTokenClientTest {
     }
 
     /**
-     * 거부·허용의 스위치는 GoogleLoginRequest의 @NotBlank 하나다. 그것을 떼어 과도기 허용으로
-     * 바꿨을 때 빈 code_verifier가 실려 구글이 거부하지 않도록, null이면 아예 싣지 않는다.
+     * 과도기(POK-483 1단계)에는 verifier 없는 요청도 받는다. 빈 code_verifier가 실려 구글이
+     * 거부하지 않도록, null이면 아예 싣지 않는다.
      */
     @Test
     void verifier가_null이면_code_verifier를_싣지_않는다() {

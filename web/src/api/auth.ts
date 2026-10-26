@@ -22,7 +22,7 @@ export interface Me {
 
 /**
  * 구글 동의 화면에서 받은 authorization code를 우리 토큰 한 쌍으로 바꾼다. 처음 온 사용자는 자동 가입.
- * codeVerifier는 동의 URL에 challenge로 실었던 PKCE 원문이다 — 없으면 서버가 400으로 거부한다 (POK-483).
+ * codeVerifier는 동의 URL에 challenge로 실었던 PKCE 원문이다 — 구글이 challenge와 대조한다 (POK-483).
  */
 export async function loginWithGoogle(code: string, codeVerifier: string): Promise<TokenPair> {
   const res = await fetch('/api/auth/google', {

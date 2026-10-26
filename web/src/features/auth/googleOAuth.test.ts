@@ -108,7 +108,7 @@ describe('consumeOAuthState', () => {
     expect(consumeOAuthState()).toBeNull();
   });
 
-  it('verifier가 없는 항목(배포 전에 시작한 시도)은 null — 교환해 봐야 서버가 거부한다', () => {
+  it('verifier가 없는 항목(배포 전에 시작한 시도)은 null — PKCE 없이 교환하지 않는다', () => {
     window.sessionStorage.setItem(STATE_KEY, JSON.stringify({ state: 'state-1', returnTo: null }));
 
     expect(consumeOAuthState()).toBeNull();
