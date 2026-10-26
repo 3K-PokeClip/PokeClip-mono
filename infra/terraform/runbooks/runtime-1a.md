@@ -798,6 +798,18 @@ O7e 가 이미 끝났으면(하한 아래 사이드카가 이미 prod 에서 돎
     본문으로 돌아갑니다. 정의자 함수의 EXECUTE 회수(`REVOKE`)도 다시
     돌지만 멱등입니다. 10(1단-나 ① 판) · 20 · 30 도 다시 돌리면 같은
     상태로 수렴합니다(5-3 끝).
+*   잠금 순서가 정해져 있습니다. `20_schema.sql` 은 사본을 읽기 전에
+    `stream_sessions` 를 ACCESS EXCLUSIVE, `stream_segments` 를 SHARE ROW
+    EXCLUSIVE 로 먼저 잡습니다 — 사이드카 `insertOnce` 가 잠그는 순서
+    (sessions → segments)와 같습니다. 이 줄이 없으면 재실행이 segments 를
+    먼저 잡고(`CREATE INDEX IF NOT EXISTS` 는 이름을 확인하기 전에 잠급니다)
+    sessions 를 나중에 잡아, 송출 중인 사이드카와 서로 기다립니다. PG 는
+    이런 교착을 1초(`deadlock_timeout` 기본값) 뒤 찾아 한쪽 트랜잭션을
+    실패시킵니다(SQLSTATE 40P01 · `lock_timeout` 3초보다 먼저 옵니다).
+    그래도 표준 오류에 `deadlock detected` 줄이 있으면 그 파일만
+    롤백되므로(`psql -1`) 아래 「재실행 걸음」 의 `lock timeout` 과 같이
+    끄고 다음 흐름을 4 부터 다시 합니다. 잠근 동안(파일 끝까지) 두 표의
+    사이드카 · 앱 서버 질의는 기다립니다.
 
 ### 재실행 걸음
 
@@ -837,7 +849,7 @@ O7e 가 이미 끝났으면(하한 아래 사이드카가 이미 prod 에서 돎
     보유 시간은 미확인). ALTER TABLE · CREATE TRIGGER 는 표에 강한 잠금을
     기다리는 동안 뒤에 오는 사이드카 · 앱 서버 질의를 줄 세웁니다. 3초는
     사이드카 핫 경로 트랜잭션 상한 `TxnDeadline`
-    10초(`media/internal/index/store.go:147`)보다 짧게 고른 값입니다 — 잠금
+    10초(`media/internal/index/store.go:168`)보다 짧게 고른 값입니다 — 잠금
     하나를 두고는 사이드카가 이 줄에 서서 시한에 걸리기 전에 SQL 쪽이 먼저
     물러납니다. 마지막 줄이 주석의 값과 다르면 보내지 않고 7 로 갑니다.
 1.  **5-2 · 5-3(준비 · 적용)**: 그대로 합니다. 통과는 상태 `Success` 와
