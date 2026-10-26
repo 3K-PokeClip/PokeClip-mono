@@ -22,10 +22,11 @@ const freezeOrphanDeadline = "orphan_deadline"
 
 // failDVRSQL 은 freeze_failed 확정이다 — fence 를 쥐었고 아직 닫히지 않았으며 동결 시작부터 $3 이상 지났을 때만 쓴다(3단은
 // $3 = 0 · 좌초 포기는 FREEZE_ORPHAN_HARD). 동결을 시작하지 않은 회차(open — 예약 전에 실패)는 시작 시각이 없어 시한
-// 0 에만 맞는다.
+// 0 에만 맞는다. 라이브 목록 키 $5 를 dvr_s3_key 에 함께 적는다(이미 값이 있으면 그대로) — M6-4 만료는 저장값만으로
+// 지운다(D28 · kty ⑫). 상태 읽기(index 판정식)는 vod_* 만 읽어 이 키로 재생 가능이 되지 않는다.
 const failDVRSQL = `
 UPDATE stream_sessions
-   SET dvr_state = 'freeze_failed'
+   SET dvr_state = 'freeze_failed', dvr_s3_key = COALESCE(dvr_s3_key, $5)
  WHERE session_id = $1 AND stream_id = $4 AND writer_fence = $2 AND fence_expires_at > pg_catalog.now()
    AND dvr_state IN ('open', 'freezing')
    AND pg_catalog.now() - COALESCE(dvr_freezing_at, pg_catalog.now()) >= $3::interval
@@ -66,7 +67,7 @@ func (p *Publisher) failDVR(ctx context.Context, streamID, sessionID string, min
 	}
 	f := &freezeJob{p: p, stream: streamID, session: sessionID}
 	var one int
-	err := f.queryRow(ctx, failDVRSQL, sessionID, p.opt.Writer, minAge, streamID).Scan(&one)
+	err := f.queryRow(ctx, failDVRSQL, sessionID, p.opt.Writer, minAge, streamID, liveListKey(streamID, sessionID)).Scan(&one)
 	switch {
 	case err == nil:
 		return dvrFailed(freezeStateFailed, nil)
@@ -84,4 +85,14 @@ func (p *Publisher) failDVR(ctx context.Context, streamID, sessionID string, min
 		return dvrFailed(freezeStateFailed, nil)
 	}
 	return dvrRetry(freezeOrphanDeadline, nil) // 시한 전이거나 fence 를 그 사이 잃었다
+}
+
+// liveListKey 는 freeze_failed 가 적을 라이브 목록 키다(manifestKey). 성분이 키 규칙을 어기면 nil(NULL)이다 — 발행기도
+// 같은 검사로 그 키에 쓰지 못했으므로 지울 객체가 없고, 종국 확정은 막지 않는다.
+func liveListKey(streamID, sessionID string) any {
+	key, err := manifestKey(streamID, sessionID)
+	if err != nil {
+		return nil
+	}
+	return key
 }

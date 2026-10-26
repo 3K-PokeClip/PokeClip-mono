@@ -7,6 +7,8 @@ import (
 	"bytes"
 	"errors"
 	"testing"
+
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
 )
 
 // strandedSetup 은 writer W 가 창 [0, 5] 를 올린 뒤 동결을 시작해(terminal 예약 — freezing) PUT 에서 멈추고 lease 를
@@ -60,8 +62,12 @@ func TestRecoverOrphanFailsAfterHardDeadline(t *testing.T) {
 
 			wantOutcome(t, b.pub.RecoverOrphan(t.Context(), fxStream, "S"), AxisDVR, tc.result, tc.retry)
 
-			if d := readDVR(t, w, "S"); d.state != tc.wantState {
+			d := readDVR(t, w, "S")
+			if d.state != tc.wantState {
 				t.Errorf("회수 실패 뒤 상태 %q, want %s", d.state, tc.wantState)
+			}
+			if tc.wantState == "freeze_failed" && strOrNil(d.key) != soloKey {
+				t.Errorf("좌초 포기 뒤 키 %s, want %s(freeze_failed 는 라이브 목록 키를 든다)", strOrNil(d.key), soloKey)
 			}
 		})
 	}
@@ -89,8 +95,17 @@ func TestFailDVR(t *testing.T) {
 	t.Run("freezing", func(t *testing.T) {
 		_, b, _ := strandedSetup(t)
 		wantOutcome(t, b.pub.FailDVR(t.Context(), fxStream, "S"), AxisDVR, ResultFailed, false)
-		if d := readDVR(t, b, "S"); d.state != "freeze_failed" {
-			t.Errorf("상태 %q, want freeze_failed", d.state)
+		if d := readDVR(t, b, "S"); d.state != "freeze_failed" || strOrNil(d.key) != soloKey {
+			t.Errorf("상태 %q · 키 %s, want freeze_failed · %s(라이브 목록 키 — M6-4 만료가 저장값으로 지운다)",
+				d.state, strOrNil(d.key), soloKey)
+		}
+	})
+	t.Run("키_보존", func(t *testing.T) {
+		_, b, _ := strandedSetup(t)
+		exec(t, b.pub.pool, `UPDATE stream_sessions SET dvr_s3_key = 'dvr/str/S/kept.m3u8' WHERE session_id = 'S'`)
+		wantOutcome(t, b.pub.FailDVR(t.Context(), fxStream, "S"), AxisDVR, ResultFailed, false)
+		if d := readDVR(t, b, "S"); strOrNil(d.key) != "dvr/str/S/kept.m3u8" {
+			t.Errorf("키 %s, want 이미 있던 dvr/str/S/kept.m3u8 그대로", strOrNil(d.key))
 		}
 	})
 	t.Run("이미_닫힘", func(t *testing.T) {
@@ -143,5 +158,29 @@ func TestReconcileLeavesOpenListOpen(t *testing.T) {
 
 	if d := readDVR(t, l, "S"); d.state != "open" || d.etag != nil || d.frozenAt != nil {
 		t.Errorf("열린 판 화해 뒤 동결 열 %+v, want open · 비어 있음", d)
+	}
+}
+
+// freeze_failed 가 라이브 목록 키를 들어도 상태 읽기(M6-3a 판정식)는 그 회차를 재생 가능으로 보지 않는다 — 판정식은
+// vod_* 만 읽고 dvr_s3_key 를 읽지 않는다. FailDVR 앞뒤의 국면이 같고 VOD 키가 비어 있다.
+func TestFailDVRKeyDoesNotMakeRoundPlayable(t *testing.T) {
+	_, b, _ := strandedSetup(t)
+	exec(t, b.pub.pool, `UPDATE stream_sessions SET state = 'ended', ended_at = now() WHERE session_id = 'S'`)
+	before, err := index.LookupRoundPlayback(t.Context(), b.pub.pool, fxStream, "S")
+	if err != nil {
+		t.Fatalf("FailDVR 앞 상태 읽기 실패: %v", err)
+	}
+
+	wantOutcome(t, b.pub.FailDVR(t.Context(), fxStream, "S"), AxisDVR, ResultFailed, false)
+
+	if d := readDVR(t, b, "S"); strOrNil(d.key) != soloKey {
+		t.Fatalf("키 %s, want %s(전제 — 키가 있어야 이 시험이 뜻이 있다)", strOrNil(d.key), soloKey)
+	}
+	after, err := index.LookupRoundPlayback(t.Context(), b.pub.pool, fxStream, "S")
+	if err != nil {
+		t.Fatalf("FailDVR 뒤 상태 읽기 실패: %v", err)
+	}
+	if after != before || after.Phase == index.PhaseVOD || after.VODKey != "" {
+		t.Errorf("FailDVR 뒤 상태 %+v, want 앞과 같은 %+v(VOD 아님 · VOD 키 없음)", after, before)
 	}
 }
