@@ -210,7 +210,7 @@ run "boots_arm64_box_with_imdsv2_and_no_public_ip" {
 
   assert {
     condition     = aws_instance.sql_runner[0].instance_initiated_shutdown_behavior == "stop"
-    error_message = "instance_initiated_shutdown_behavior 가 stop 이 아니다 — 상자 안 자동 종료가 인스턴스를 지우면 상태와 어긋난다."
+    error_message = "instance_initiated_shutdown_behavior 가 stop 이 아니다 — 상자 안에서 끈 종료가 인스턴스를 지우면 상태와 어긋난다."
   }
 
   assert {

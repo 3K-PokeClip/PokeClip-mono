@@ -244,9 +244,8 @@ bash infra/terraform/scripts/precheck/principal-check.sh runtime-1a
     둘 · `rds_from_sql_runner` · 인스턴스)입니다. 다르면 apply 하지 않습니다.
 1.  **apply**: `terraform apply runner-on.tfplan && rm runner-on.tfplan`.
 1.  **켠 시각 기록**: `date '+%Y-%m-%d %H:%M'` 를 적습니다(8). **이 시각부터
-    120분 안에 7(끔)을 시작합니다.** 준비 단계(5-3)가 상자에 120분 뒤 자동
-    종료(`shutdown -h +120`)를 걸어 두지만, 상자가 멈춰도 자원 · 역할은
-    남으므로 7 은 그대로 합니다.
+    120분 안에 7(끔)을 시작합니다.** 상자가 멈춰도 자원 · 역할은 남으므로
+    7 은 그대로 합니다.
 1.  **SSM 등록**: 아래가 `Online` 이 될 때까지 기다립니다(보통 몇 분).
 
     ```shell
@@ -324,9 +323,7 @@ names = ["00_preflight.sql", "10_roles.sql", "stream_schema.sql",
          "50_advisory_probe.sql"]
 box = "/root/rt1a"
 sums = []
-# 자동 종료를 맨 앞에 건다 — 뒤 명령이 실패해도 상자는 120분 뒤 멈춘다.
-prepare = ["set -eu", "umask 077", "shutdown -h +120",
-           f"mkdir -p {box}/sql", f"cd {box}/sql"]
+prepare = ["set -eu", "umask 077", f"mkdir -p {box}/sql", f"cd {box}/sql"]
 for n in names:
     raw = subprocess.run(["git", "show", f"{sha}:{src}/{n}"],
                          check=True, capture_output=True).stdout
@@ -480,7 +477,7 @@ send_step() {
     psql 패키지 `postgresql17` 이 AL2023 에 있는지는 미확인이라 없으면
     16 을 깝니다(이 SQL 에는 16 클라이언트로 충분). CA 번들 주소는 RDS
     문서의 지역 번들 꼴이고 원문 대조는 미확인입니다 — 받지 못하면 준비가
-    실패합니다. 준비는 맨 앞에서 상자에 120분 뒤 자동 종료를 겁니다.
+    실패합니다.
 1.  **적용**(승인 뒤): `send_step apply`. 통과는 상태 `Success` 이고 표준
     출력에 `PREFLIGHT OK` · `VERIFY OK` 가 있는 것입니다. 실패하면 「실패 ·
     시간 초과」 로 갑니다.
@@ -716,9 +713,9 @@ SQL 에만 씁니다 — 해체 SQL 은 「되돌리기 · 해체」 를 따릅�
     `ssm:CreateAssociation` — 4 의 켬 뒤), 마스터 비밀을 읽을 수
     있는지(3-1)를 묻지만, 판정은 그 시점 한
     번씩입니다. 실행기가 켜진 동안 그 권한이 생기면 dev 주체가 마스터 비밀을
-    읽을 수 있습니다. 그래서 SQL 직후 끕니다. 120분 뒤 자동 종료는 준비
-    단계(5-3)가 건 뒤에만 있고, 4(켬)에서 5-3 사이에는 시한이 없습니다. 그
-    사이 멈추면 바로 7(끔)을 합니다.
+    읽을 수 있습니다. 그래서 SQL 직후 끕니다. 상자에 자동 종료는 없어
+    7(끔)이 실행기를 닫는 유일한 길입니다. 절차가 어디서 멈추든 바로
+    7(끔)을 합니다.
 *   명령 질문은 인스턴스 ARN 만 묻고 문서(`AWS-RunShellScript`) 쪽 허용은
     묻지 않습니다. dev 배포 주체 둘은 그 문서 허용이 양성 대조라 갈리는
     쪽이 인스턴스이기 때문입니다. dev 정책이 인스턴스를 태그 조건으로 열면
@@ -726,8 +723,8 @@ SQL 에만 씁니다 — 해체 SQL 은 「되돌리기 · 해체」 를 따릅�
 *   자동화(`ssm:StartAutomationExecution`)로 켜진 상자에 명령을 보내는 길은
     묻지 않습니다. 이 동작은 인스턴스 자원 유형을 받지 않아(자동화 문서 ·
     실행만 — [서비스 승인 참조](https://docs.aws.amazon.com/service-authorization/latest/reference/list_ssm.html))
-    인스턴스 ARN 으로 물을 수 없습니다. 실행기가 켜진 동안(5-3 뒤로는 최대
-    120분)만 열린 길이라 위의 짧게 켜 두기가 이 한계도 좁힙니다.
+    인스턴스 ARN 으로 물을 수 없습니다. 실행기가 켜진 동안(4(켬)부터
+    7(끔)까지)만 열린 길이라 위의 짧게 켜 두기가 이 한계도 좁힙니다.
 *   SQL 실적용 시험(CI)은 Go 메타 명령 처리기로 돌고 psql 자체가 아니며,
     대역은 `rds_superuser` 가 아닙니다. TLS · `rds.force_ssl` 은 CI 가 재지
     못합니다.

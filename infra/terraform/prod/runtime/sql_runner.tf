@@ -142,9 +142,8 @@ resource "aws_instance" "sql_runner" {
   iam_instance_profile        = aws_iam_instance_profile.sql_runner[0].name
   associate_public_ip_address = false
 
-  # 상자 안에서 끄면(런북의 자동 종료 예약 포함) 지우지 않고 멈춘다. 지우면
-  # 상태와 어긋나 다음 plan 이 실행기를 다시 만들려 한다. 자원 정리는 여전히
-  # sql_runner_enabled = false 다.
+  # 상자 안에서 끄면 지우지 않고 멈춘다. 지우면 상태와 어긋나 다음 plan 이
+  # 실행기를 다시 만들려 한다. 자원 정리는 여전히 sql_runner_enabled = false 다.
   instance_initiated_shutdown_behavior = "stop"
 
   # IMDSv2 필수 — SSM 에이전트가 역할 자격을 받는 길이라 끝점은 켠다. 홉 상한 1
