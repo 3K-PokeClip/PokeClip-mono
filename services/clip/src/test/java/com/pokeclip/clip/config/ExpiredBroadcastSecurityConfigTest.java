@@ -53,7 +53,7 @@ class ExpiredBroadcastSecurityConfigTest extends IntegrationTestSupport {
       properties = {
         "pokeclip.internal-api.expired-broadcasts.token=" + EXPIRED_TOKEN,
         "pokeclip.internal-api.expired-broadcasts.allowed-cidrs=" + ALLOWED_SOURCE + "/32",
-        // clip 은 전략을 yml 에 적지 않는다. 창구를 여는 환경은 같이 넣어야 부팅 검사를 지난다.
+        // 전략 env 가 비면 미설정(플랫폼 감지)이다. 창구를 여는 환경은 같이 넣어야 부팅 검사를 지난다.
         "server.forward-headers-strategy=none"
       })
   class WithExpiredBroadcastsToken {
