@@ -81,30 +81,54 @@ function parsePdt(value: unknown): number | null | undefined {
   return Number.isFinite(ms) ? ms : undefined;
 }
 
+/** 답을 버린 사유 — 형식 오류(키 · 형 · 범위 · JSON 아님) · 출처 불일치(url 이 제어면과 다른 출처) */
+type RejectReason = 'shape' | 'origin';
+const REJECT_LABELS: Record<RejectReason, string> = { shape: '형식 오류', origin: '출처 불일치' };
+
+/** 200 본문을 검사한다. 받으면 RewindStatus, 버리면 그 사유 */
+function readRewindStatus(body: unknown, controlBase: string): RewindStatus | RejectReason {
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) return 'shape';
+  const raw = body as Record<string, unknown>;
+  if (!['ready', 'mode', 'url', 'firstPdt', 'headPdt'].every((key) => key in raw)) return 'shape';
+  const { ready, mode, url } = raw;
+  if (typeof ready !== 'boolean') return 'shape';
+  if (mode !== null && !MODES.includes(mode as RewindMode)) return 'shape';
+  if (url !== null && typeof url !== 'string') return 'shape';
+  if (url !== null && !isTrustedPlaylistUrl(url, controlBase)) return 'origin';
+  const firstPdtMs = parsePdt(raw.firstPdt);
+  const headPdtMs = parsePdt(raw.headPdt);
+  if (firstPdtMs === undefined || headPdtMs === undefined) return 'shape';
+  if (ready) {
+    if (mode !== 'live' && mode !== 'vod') return 'shape';
+    if (url === null || firstPdtMs === null || headPdtMs === null) return 'shape';
+    if (firstPdtMs > headPdtMs) return 'shape';
+  }
+  return { ready, mode: mode as RewindMode | null, url, firstPdtMs, headPdtMs };
+}
+
 /**
  * 200 본문을 검사해 받는다. 키 다섯이 다 있고 형이 맞아야 한다. ready 면 url · 범위가 다 있고(첫 ≤ 끝) 국면이 live · vod 다.
  * 어긋나면 null(형식 오류 — 부르는 쪽이 「잠시 불가」로 접는다)
  * @param controlBase 제어면 주소(출처 대조의 기준)
  */
 export function parseRewindStatus(body: unknown, controlBase: string): RewindStatus | null {
-  if (typeof body !== 'object' || body === null || Array.isArray(body)) return null;
-  const raw = body as Record<string, unknown>;
-  if (!['ready', 'mode', 'url', 'firstPdt', 'headPdt'].every((key) => key in raw)) return null;
-  const { ready, mode, url } = raw;
-  if (typeof ready !== 'boolean') return null;
-  if (mode !== null && !MODES.includes(mode as RewindMode)) return null;
-  if (url !== null && (typeof url !== 'string' || !isTrustedPlaylistUrl(url, controlBase))) {
-    return null;
+  const read = readRewindStatus(body, controlBase);
+  return typeof read === 'string' ? null : read;
+}
+
+/** 이미 남긴 사유. 폴링이 같은 답을 주기마다 버려도 콘솔을 채우지 않게 사유마다 한 번만 남긴다 */
+const warnedReasons = new Set<RejectReason>();
+
+/**
+ * 버린 답을 관측할 수 있게 남긴다(cc M2). 503 같은 「잠시 불가」 응답은 정상 경로라 남기지 않는다. 주소는 싣지 않는다 — 경로에
+ * 스트림 키가 든다
+ */
+function warnRejected(reason: RejectReason): RewindStatusResult {
+  if (!warnedReasons.has(reason)) {
+    warnedReasons.add(reason);
+    console.warn(`[rewind] 제어면 답을 버렸어요(${REJECT_LABELS[reason]})`);
   }
-  const firstPdtMs = parsePdt(raw.firstPdt);
-  const headPdtMs = parsePdt(raw.headPdt);
-  if (firstPdtMs === undefined || headPdtMs === undefined) return null;
-  if (ready) {
-    if (mode !== 'live' && mode !== 'vod') return null;
-    if (url === null || firstPdtMs === null || headPdtMs === null) return null;
-    if (firstPdtMs > headPdtMs) return null;
-  }
-  return { ready, mode: mode as RewindMode | null, url, firstPdtMs, headPdtMs };
+  return { kind: 'unavailable' };
 }
 
 /**
@@ -130,8 +154,8 @@ export async function fetchRewindStatus(
     body = await response.json();
   } catch (e) {
     if (signal?.aborted) throw e;
-    return { kind: 'unavailable' };
+    return warnRejected('shape');
   }
-  const status = parseRewindStatus(body, controlBase);
-  return status === null ? { kind: 'unavailable' } : { kind: 'ok', status };
+  const read = readRewindStatus(body, controlBase);
+  return typeof read === 'string' ? warnRejected(read) : { kind: 'ok', status: read };
 }

@@ -364,11 +364,11 @@ function LivePlayer({
         noSignalNote={noSignalNote}
         mediaKey={liveStreamId && cookieFor === accessKey ? (mediaKey ?? liveStreamId) : undefined}
         afterForbidden={accessKey !== null && afterForbiddenFor === accessKey}
-        // 사용 통계 「방송마다 한 번」은 방송 번호로 기억한다 — 영상 키는 스트리머마다 같다(PR #382 2차 리뷰)
+        // 사용 통계 「방송마다 한 번」은 방송 번호로 기억한다 — 영상 키는 스트리머마다 같다(3K-PokeClip/pokeclip-mono#382 2차 리뷰)
         broadcastId={liveStreamId || undefined}
-        // 라이브 주소는 방송 중일 때만 — 끝난 방송의 LL-HLS는 닫혀 있어 검은 화면과 오류만 남는다(PR #200 codex).
-        // 끝난 방송은 녹화가 있으면 recorded로, 없으면 「지난 방송 영상」 자리를 그린다. 세션이 있으면 세션이 소스를 정하고,
-        // 녹화로 닫힌 세션은 닫힌 라이브 주소로 다시 붙지 않는다(설계 5.5절)
+        // 라이브 주소는 방송 중일 때만 — 끝난 방송의 LL-HLS는 닫혀 있어 검은 화면과 오류만 남는다
+        // (3K-PokeClip/pokeclip-mono#200 codex). 끝난 방송은 녹화가 있으면 recorded로, 없으면 「지난 방송 영상」 자리를
+        // 그린다. 세션이 있으면 세션이 소스를 정하고, 녹화로 닫힌 세션은 닫힌 라이브 주소로 다시 붙지 않는다(설계 5.5절)
         session={live.session}
         src={broadcastStatus === 'live' && accessReady && !live.closedRecorded ? src : null}
         recorded={recorded}

@@ -14,7 +14,8 @@ import {
 } from './rewindSwitch';
 import { sessionView } from './sessionView';
 
-// 재생 세션 상태기계 표 시험(설계 5.3절 종결 판 — R5 · R16 · R21 · R28 · R32 · R43 · R44 · R46 · R47 · R53 · R55–R58).
+// 재생 세션 상태기계 표 시험(설계 5.3절 종결 판 — R5 · R16 · R21 · R28 · R32 · R43 · R44 · R46 · R47 · R53 ·
+// R55–R58).
 // 시각은 모두 epoch ms 다. 방송 A(회차 r-A)를 보던 세션이 기준이다.
 
 const MIN = 60_000;
@@ -67,7 +68,7 @@ function fresh(): PlaybackSessionState {
   return openSession({ roundId: 'r-A', accessKey: 'r-A|key-1', liveUrl: LIVE_URL });
 }
 
-/** live 세션이 되감기 재료(A1 · 범위 T0 ~ NOW)를 받은 상태 */
+/** live 세션이 되감기 재료(A1 · 범위 T0 부터 NOW 까지)를 받은 상태 */
 function liveWithEntry(): PlaybackSessionState {
   return run(fresh(), [[{ type: 'stream-poll', result: liveReady(A1, T0, NOW) }]]).state;
 }

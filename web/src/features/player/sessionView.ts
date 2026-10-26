@@ -4,7 +4,10 @@ import { RESUME_WAIT_MS, type PlaybackSessionState, type SessionButton } from '.
 // 순수 함수다. 전이는 rewindSwitch 가 정하고, 여기는 그 상태를 읽기만 한다.
 
 export interface SessionView {
-  /** 마지막 프레임 위 덮개. checking = 재접속 대기 동안 「방송이 이어지는지 확인하고 있어요」 · preparing = 그 뒤 「다시보기 준비 중」 · vod-ready = 「다시보기 보기」 */
+  /**
+   * 마지막 프레임 위 덮개. checking = 재접속 대기 동안 「방송이 이어지는지 확인하고 있어요」 · preparing = 그 뒤
+   * 「다시보기 준비 중」 · vod-ready = 「다시보기 보기」
+   */
   cover: 'checking' | 'preparing' | 'vod-ready' | null;
   /** 덮개(끝에 닿음) 또는 띠(아직 보는 중)에 둘 버튼 */
   actions: SessionButton[];

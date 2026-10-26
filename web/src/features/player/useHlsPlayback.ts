@@ -17,6 +17,7 @@ import {
   reportPlaybackForbidden,
 } from '@/api/playbackAccess';
 import { HLS_LIVE_CONFIG, HLS_REWIND_CONFIG } from './hlsConfig';
+import { isPlaylistLoadError } from './hlsErrors';
 import { loadHls } from './hlsLoader';
 import { behindFromSeekFraction, isAtEdge } from './playerMath';
 import {
@@ -478,12 +479,15 @@ export function useHlsPlayback(
     };
     const onSeeking = () => {
       rearmEnd();
+      // 시크 중에는 currentTime 이 이미 목표다. seeked 전에 복구가 오면 hls.js 는 그 목표에서 받으므로 같이 적는다(cx M1)
+      notePlayhead();
       // 기동 전 시크는 받기 위치를 그 자리로 옮긴다 — hls.js 의 seeking 처리(base-stream-controller 472-476)와 같게
       if (hlsRef.current?.hasEnoughToStart === false) loadFrom = video.currentTime;
     };
-    // 0 은 재생점으로 치지 않는다. 떼기의 load() 가 만든 0 이 앞서 적은 값을 덮지 않게, 그리고 실제로 0 이면 hls.js 가 제
-    // 자리를 고른다(hls.ts 708-711 — 자동 시작이면 base-stream-controller.ts 339-341 이 스스로 · 아니면 startLoad()). 그때는
-    // 앞서 적은 것을 두고(기동 뒤라 버렸으면 null 이라 옮기지 않는다) 낡은 시작 자리로 되돌리지 않는다(cc H1)
+    // 0 은 재생점으로 치지 않는다. 떼기의 load() 가 만든 0 이 앞서 적은 값을 덮지 않게, 그리고 실제로 0 이면 hls.js 가
+    // 제 자리를 고른다(hls.ts 708-711 — 자동 시작이면 base-stream-controller.ts 339-341 이 스스로 · 아니면
+    // startLoad()). 그때는 앞서 적은 것을 두고(기동 뒤라 버렸으면 null 이라 옮기지 않는다) 낡은 시작 자리로 되돌리지
+    // 않는다(cc H1)
     const isPlayhead = (time: number) => Number.isFinite(time) && time > 0;
     // 떼기에서 쓴다. 떼기의 첫 처리기(buffer-controller)가 src 를 지우고 load() 해 재생점이 0 이 된 뒤라 그때의 currentTime 은
     // 쓸 수 없다(buffer-controller.ts 575-579 — hls.ts 703 이 떼기 전에 재생점을 잡는 까닭)
@@ -510,6 +514,8 @@ export function useHlsPlayback(
     const keepRewindFloor = (hls: Hls, details: LevelDetails) => {
       const moved = guardRewindFloor({ hls, video, details, loadFrom });
       if (moved === null) return;
+      // 알림은 조용한 구간에 묶이므로 옮길 때마다 남겨 둔다(cc L5)
+      console.info('[player] 되감기 재생점을 창 하한으로 옮겼어요:', moved.kind, moved.to);
       if (moved.kind === 'reload') loadFrom = moved.to;
       // 멈춘 채 옮겼으면 재개 판정도 옮긴 자리로 한다 — 옛 자리로 세션에 다시 넘겨 알림이 겹치지 않게
       if (video.paused && pausedAtMsRef.current !== null) {
@@ -662,12 +668,19 @@ export function useHlsPlayback(
             hlsRef.current = null;
             return;
           }
-          // 라이브 목록 404 = 라이브 닫힘(끝 도달로 친다) · 400 = 송출 재시작 뒤 옛 _HLS_msn(mediamtx#4320) — 세션이 재생기를
-          // 새로 세운다. hls.js 는 4xx 를 다시 해 보지 않는다(RC-16)
+          // 라이브 목록 404 = 라이브 닫힘(끝 도달로 친다) · 400 = 송출 재시작 뒤 옛 _HLS_msn
+          // (bluenviron/mediamtx#4320) — 세션이 재생기를 새로 세운다. hls.js 는 4xx 를 다시 해 보지 않는다(RC-16).
+          // 목록 오류만 본다: 조각 404 도 치명으로 오지만 목록은 살아 있을 수 있어 아래의 한 번 다시 받기로 보낸다(cx H1)
           const code = data.response?.code;
           const { onLiveClosed, onLive400 } = hooksRef.current;
           const liveGone = code === 404 ? onLiveClosed : code === 400 ? onLive400 : undefined;
-          if (kind === 'live' && data.type === HlsCtor.ErrorTypes.NETWORK_ERROR && liveGone) {
+          const listError = isPlaylistLoadError(data, HlsCtor.ErrorDetails);
+          if (
+            kind === 'live' &&
+            data.type === HlsCtor.ErrorTypes.NETWORK_ERROR &&
+            listError &&
+            liveGone
+          ) {
             hls.destroy();
             hlsRef.current = null;
             liveGone();
