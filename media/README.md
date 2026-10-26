@@ -311,7 +311,32 @@ M4 ⓒ 이관 기록」의 알려진 한계 「관측 끔」). 인덱싱·업로
 `AWS_PROFILE`은 `~/.aws` 마운트 폴백을 켤 때만 함께 넣는다 — 마운트 없이 넣으면
 SDK가 존재하지 않는 프로필을 요구해 기동이 죽는다(2026-08-04 실측).
 
-위 표가 `internal/config/config.go`가 읽는 전부다(`TZ` 제외 49개 — `POSTGRES_*` · DB 몫 `AWS_REGION` 은
+**60일 만료(POK-196 M6-4) — clip 만료 창구 폴링.** 사이드카가 10분마다
+clip 의 `GET /internal/broadcasts/expired` 를 불러, 보존 기간(60일)이 지난
+방송의 장부 행과 S3 객체를 지운다. 켜는 조건은 주소 · `S3_BUCKET` · 발행 몫
+정상 · 운영 권한(`30_grants.sql` — 아래 「사이드카 DB 계정 media_indexer
+권한」)이다. 하나라도 빠지면 `expiry_disabled` 한 줄(`reason` = `no_url` ·
+`no_bucket` · `publish_degraded` · `privilege` · `privilege_check` ·
+`token_file` · `s3_client` · `assembly`)을 남기고 만료만 끈다 — 인덱싱 ·
+업로드 · 발행은 그대로 돈다. 켜지면 `expiry_started` 가 나온다. 주기(10분) ·
+하루 한 번 처음부터 훑기 · 창구 요청 시한(10초)은 고정값이고 env 가 없다.
+
+| 이름 | 기본값 | 의미 |
+|---|---|---|
+| `CLIP_INTERNAL_URL` | (빈값 = 만료 끔) | clip 내부 주소 `http(s)://host[:port]`. 경로 · 끝 `/` · 질의 · 조각 · 자격증명이 있으면 기동 거부. **빈 값이 롤백 스위치다** — 비우고 사이드카만 재기동한다(`CONTROL_LISTEN` 과 같은 꼴). 주소가 비어도 아래 토큰 값의 규칙은 본다 |
+| `CLIP_EXPIRY_TOKEN` | (빈값) | 만료 창구 토큰 값. 로그 · 오류 문구에 나오지 않는다. `CLIP_EXPIRY_TOKEN_FILE` 과 함께 넣으면 기동 거부. 둘 다 없이 켜면 clip 이 401 로 답하고, 연속 실패가 `expiry_stalled` 게이지(ERROR)로 드러난다 |
+| `CLIP_EXPIRY_TOKEN_FILE` | (빈값) | 토큰 한 줄이 든 파일의 **컨테이너 안 절대 경로**(prod 는 파일로만 공급한다). 상대 경로는 기동 거부. 파일 규칙은 `MTX_API_PASS_FILE` 과 같다(위 「관측 자격 파일 규칙」). 다만 읽기 실패는 기동 실패가 아니라 **만료만 끈다**(`expiry_disabled reason=token_file`). 기동 때 한 번 읽으므로 교체 = 재기동이다 |
+
+*   **한계 — CDN 캐시본:** 만료는 장부 행과 S3 객체만 지우고 CloudFront 캐시를
+    무효화하지 않는다. 서명 쿠키가 살아 있는 시청자에게는 지운 조각 · 목록의
+    엣지 캐시본이 캐시 TTL 동안 더 보일 수 있다.
+*   **첫 적용 때 쓰기 정지:** M6 운영 SQL(`stream_schema.sql` ·
+    `20_schema.sql`)의 인덱스는 `CREATE INDEX` 이고 `CONCURRENTLY` 가 아니다.
+    처음 적용하거나 인덱스가 빠진 DB 에서는 인덱스를 만드는 동안 그 표의 쓰기가
+    잠깐 멈춘다. 절차는 [prod 런타임 1단-가 런북](../infra/terraform/runbooks/runtime-1a.md)
+    「M6 스키마 재실행」 이다.
+
+위 표가 `internal/config/config.go`가 읽는 전부다(`TZ` 제외 52개 — `POSTGRES_*` · DB 몫 `AWS_REGION` 은
 `internal/pgconf` 가 janitor 와 같은 규칙으로 읽는다). 잘못된 값(숫자 자리에 문자,
 음수, 파싱 불가한 기간)은 조용히 기본값으로 넘어가지 않고 기동에 실패한다.
 `SEGMENT_SUSPECT_BELOW_MS`가 `SEGMENT_EXPECTED_DURATION_MS`보다 크면 기동 단계에서 거부한다.

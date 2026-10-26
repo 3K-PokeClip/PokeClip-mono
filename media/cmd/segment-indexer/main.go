@@ -221,16 +221,19 @@ func run() error {
 	}
 	// 제어면 상태 몫(Board · 받은편지함 · 재기동 적재)은 발행 조립 앞이다 — 꺼짐 · 강등 · 정상 모두 받은편지함이 있다(M5 3.3).
 	board := assembleStatus(ctx, cfg, rewind, newPlaybackSeed(pool))
-	// 상태 표지 받은편지함은 기동 때 하나다 — M6-4 가 inbox.Changed 를 만료에, M6-3b 가 Drain 을 루프에 넘긴다(계획 5절).
+	// 상태 표지 받은편지함은 기동 때 하나다 — 만료(아래)와 4D 수신부가 Changed 로 넣고, M6-3b 가 Drain 을 루프에 넘긴다(계획 5절).
 	inbox := session.NewPlaybackInbox()
-	_ = inbox // 읽는 쪽(M6-4 · M6-3b)이 붙기 전까지 쓰는 곳이 없다
-	if pubPool := assemblePublishing(ctx, cfg, dbConfig.Copy(), up, rewind); pubPool != nil {
+	pubPool := assemblePublishing(ctx, cfg, dbConfig.Copy(), up, rewind)
+	if pubPool != nil {
 		// ★ 등록 순서가 계약이다(위 up.Shutdown 주석과 같은 원리). 발행자 풀은 up.Shutdown 보다 먼저 닫히고 아래
 		//   rewind.stop(fence 반납)보다 늦게 닫힌다 — 반납 문장이 이 풀로 나간다(체크리스트 474 A-3 3).
 		defer pubPool.Close()
 		stopPublisherStats := poolstat.Start(ctx, pubPool, "publisher", log)
 		defer stopPublisherStats() // 위 인덱서 풀 관측과 같은 원리 — pubPool.Close 보다 먼저 멈춘다
 	}
+	// 60일 만료(M6-4) — 발행 몫이 강등이면 켜지 않는다(startExpiry). ★ pool.Close 보다 뒤에 등록해 먼저 멈춘다(D24).
+	stopExpiry := startExpiry(ctx, cfg, pool, pubPool != nil, inbox.Changed, log)
+	defer stopExpiry()
 	// 루프의 ctx 가 곧 차선 ctx 다(rewindLoop 문서). run ctx 에서 떼어 두어, 루프가 오류로 끝나 run ctx 가 살아 있어도
 	// rewind.stop 이 작업을 끊고 기다린 뒤 fence 를 반납한다(판단 J74).
 	laneCtx, cancelLanes := context.WithCancel(ctx)
