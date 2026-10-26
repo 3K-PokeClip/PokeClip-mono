@@ -363,3 +363,52 @@ func TestAuditForgetsRepairsAfterWindow(t *testing.T) {
 		t.Errorf("창 뒤 기록 %d개, want 0", len(a.tried))
 	}
 }
+
+// 본 본문과 조건이 같은 판이어야 한다 — Head 가 앞부분이 아닌 판 A 를 보고, Get 이 앞부분 판 B 를 읽고, PUT 직전에
+// A 로 되돌아가도(A → B → A) A 를 덮지 않는다. 조건은 Get 이 본문과 같은 응답에서 받은 B 의 ETag 라 412 로 막히고
+// 멈춘다(ERROR dvr_audit_repair_rejected). Head 의 ETag 로 걸면 If-Match(A) 가 통과해 A 를 덮는다(c6 r1 cx H1).
+func TestAuditRepairBindsConditionToReadBody(t *testing.T) {
+	_, store, logs, a, closed := repairSetup(t)
+	prefix := cutTail(t, closed, 1)
+	changed := bytes.Replace(prefix, []byte(".m4s\n"), []byte(".mp4\n"), 1)
+	plant(store, putCall{key: soloKey, body: changed})
+	store.setOnGet(func() { plant(store, putCall{key: soloKey, body: prefix}) })
+	store.setOnPut(onceBefore(func() { plant(store, putCall{key: soloKey, body: changed}) }))
+	puts := len(store.putCalls())
+
+	out := a.Audit(t.Context())
+
+	if body, _ := stored(store, soloKey); !bytes.Equal(body, changed) || out.Repaired != 0 || out.Failed != 1 {
+		t.Errorf("감사 = %+v · 앞부분이 아닌 판이 남았나 %t, want 복구 0 · 실패 1 · 참", out, bytes.Equal(body, changed))
+	}
+	if got := putsSince(store, puts); len(got) != 1 || got[0].cond != IfMatch(bodyETag(prefix)) {
+		conds := make([]Precondition, len(got))
+		for i, c := range got {
+			conds[i] = c.cond
+		}
+		t.Errorf("PUT 조건 %+v, want 읽은 판 ETag %s 의 If-Match 한 번", conds, bodyETag(prefix))
+	}
+	if errs := auditFailures(logs); len(errs) != 1 || errs[0] != auditRepairRejected {
+		t.Errorf("감사 ERROR %v, want [%s]", errs, auditRepairRejected)
+	}
+}
+
+// 받을 수 없는 ETag(빈 값 · 1024바이트 초과 · 인쇄 불가 문자)로는 다시 쓰지 않는다 — If-Match 에 싣기 전에 checkETag 로
+// 거르고 읽기 실패(WARN read_failed)로 둔다. 동결 경로(reconcile)와 같은 검사다(c6 보안 L1).
+func TestAuditRepairRejectsMalformedETag(t *testing.T) {
+	_, store, logs, a, closed := repairSetup(t)
+	store.mu.Lock()
+	store.objects[soloKey] = fakeObject{body: cutTail(t, closed, 1), etag: "\"e\nf\"", meta: store.objects[soloKey].meta}
+	store.mu.Unlock()
+	puts := len(store.putCalls())
+
+	out := a.Audit(t.Context())
+
+	if out.Repaired != 0 || len(store.putCalls()) != puts {
+		t.Errorf("감사 = %+v · PUT %d번, want 복구 0 · PUT 0", out, len(store.putCalls())-puts)
+	}
+	recs := logs.records(freezeAuditLog)
+	if len(recs) != 1 || recs[0].level != slog.LevelWarn || recs[0].attrs["reason"] != auditReadFailed {
+		t.Errorf("감사 줄 %+v, want WARN read_failed 하나", recs)
+	}
+}

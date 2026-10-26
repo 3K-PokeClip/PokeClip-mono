@@ -113,9 +113,9 @@ func (s *itStore) Head(ctx context.Context, key string) (publish.Stat, error) {
 	return publish.Stat{Exists: true, ETag: obj.etag, Meta: maps.Clone(obj.meta)}, nil
 }
 
-func (s *itStore) Get(context.Context, string) ([]byte, error) {
+func (s *itStore) Get(context.Context, string) ([]byte, string, error) {
 	s.t.Errorf("itStore: Get 호출 — M4 발행 경로에 GET 호출자는 없다")
-	return nil, errors.New("itStore: Get 은 부르지 않는다")
+	return nil, "", errors.New("itStore: Get 은 부르지 않는다")
 }
 
 // ListObjectsV2 · ListObjects 는 S3 LIST 금지(프로필 4절)의 동적 그물이다 — SDK 목록 인터페이스로의 형 단언이 닿으면 실패로

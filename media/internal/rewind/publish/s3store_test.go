@@ -344,9 +344,9 @@ func TestS3StoreHead(t *testing.T) {
 	}
 }
 
-// Get 은 GET 요청 하나로 본문을 읽는다. 키 부재(404 NoSuchKey)는 ErrNotFound, 버킷 부재는 설정 결함이라
-// ErrNotFound 가 아니다. 본문은 rewind.MaxBodyBytes(발행 전 검사 S5 의 상한)까지 받는다 — 상한 크기는 읽고,
-// 한 바이트라도 넘으면 센티널이 아닌 오류다.
+// Get 은 GET 요청 하나로 본문과 그 응답의 ETag 를 읽는다. 키 부재(404 NoSuchKey)는 ErrNotFound, 버킷 부재는 설정
+// 결함이라 ErrNotFound 가 아니다. 본문은 rewind.MaxBodyBytes(발행 전 검사 S5 의 상한)까지 받는다 — 상한 크기는 읽고,
+// 한 바이트라도 넘으면 센티널이 아닌 오류다. 200 인데 ETag 가 없으면 오류다 — 읽은 본문에 조건을 걸 수 없다.
 func TestS3StoreGet(t *testing.T) {
 	atLimit := bytes.Repeat([]byte{'x'}, rewind.MaxBodyBytes)
 	overLimit := bytes.Repeat([]byte{'x'}, rewind.MaxBodyBytes+1)
@@ -354,12 +354,14 @@ func TestS3StoreGet(t *testing.T) {
 		name         string
 		respond      http.HandlerFunc
 		want         []byte
+		wantETag     string
 		wantNotFound bool
 		wantErr      bool
 	}{
-		{name: "200_body", respond: respondObject(`"e1"`, nil, bodyA), want: bodyA},
-		{name: "200_body_at_limit", respond: respondObject(`"e1"`, nil, atLimit), want: atLimit},
+		{name: "200_body", respond: respondObject(`"e1"`, nil, bodyA), want: bodyA, wantETag: `"e1"`},
+		{name: "200_body_at_limit", respond: respondObject(`"e1"`, nil, atLimit), want: atLimit, wantETag: `"e1"`},
 		{name: "200_body_over_limit", respond: respondObject(`"e1"`, nil, overLimit), wantErr: true},
+		{name: "200_no_etag", respond: respondObject("", nil, bodyA), wantErr: true},
 		{name: "404_NoSuchKey", respond: respondError(http.StatusNotFound, "NoSuchKey"), wantNotFound: true, wantErr: true},
 		{name: "404_NoSuchBucket", respond: respondError(http.StatusNotFound, "NoSuchBucket"), wantErr: true},
 		{name: "503_error", respond: respondError(http.StatusServiceUnavailable, "SlowDown"), wantErr: true},
@@ -368,7 +370,7 @@ func TestS3StoreGet(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			store, stub := newStubbedStore(t, tc.respond)
 
-			body, err := store.Get(context.Background(), testKey)
+			body, etag, err := store.Get(context.Background(), testKey)
 			if gotErr := err != nil; gotErr != tc.wantErr {
 				t.Fatalf("Get 오류 = %v, want 오류 있음 = %t", err, tc.wantErr)
 			}
@@ -378,6 +380,9 @@ func TestS3StoreGet(t *testing.T) {
 			if !bytes.Equal(body, tc.want) {
 				// 상한 크기 본문을 통째로 찍지 않게 앞부분만 싣는다.
 				t.Errorf("Get 본문 = %.64q(%d바이트), want %.64q(%d바이트)", body, len(body), tc.want, len(tc.want))
+			}
+			if etag != tc.wantETag {
+				t.Errorf("Get ETag = %q, want %q", etag, tc.wantETag)
 			}
 			req := stub.only(t)
 			if req.method != http.MethodGet || req.path != "/"+testBucket+"/"+testKey {
@@ -402,7 +407,7 @@ func TestS3StoreGetStopsReadingPastLimit(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := store.Get(context.Background(), testKey)
+		_, _, err := store.Get(context.Background(), testKey)
 		done <- err
 	}()
 
@@ -494,7 +499,7 @@ func TestS3StoreKeepsClassOnHugeErrorBody(t *testing.T) {
 
 			var err error
 			if tc.get {
-				_, err = store.Get(context.Background(), testKey)
+				_, _, err = store.Get(context.Background(), testKey)
 			} else {
 				_, err = store.Put(context.Background(), testKey, IfMatch(`"prev-etag"`), bodyA, nil)
 			}
@@ -527,7 +532,7 @@ func TestS3StoreWithLimitKeepsSmallErrorsAndSuccessBodies(t *testing.T) {
 	t.Run("GET_404_NoSuchBucket", func(t *testing.T) {
 		store, stub := newStubbedStore(t, respondError(http.StatusNotFound, "NoSuchBucket"), s3errbody.Limit)
 
-		_, err := store.Get(context.Background(), testKey)
+		_, _, err := store.Get(context.Background(), testKey)
 
 		if err == nil || errors.Is(err, ErrNotFound) || errors.Is(err, s3errbody.ErrTooLarge) {
 			t.Errorf("Get(404 NoSuchBucket) 오류 = %v, want ErrNotFound · ErrTooLarge 아닌 오류", err)
@@ -549,7 +554,7 @@ func TestS3StoreWithLimitKeepsSmallErrorsAndSuccessBodies(t *testing.T) {
 		want := bytes.Repeat([]byte("0123456789abcdef"), 100<<10/16)
 		store, stub := newStubbedStore(t, respondObject(`"e1"`, nil, want), s3errbody.Limit)
 
-		got, err := store.Get(context.Background(), testKey)
+		got, _, err := store.Get(context.Background(), testKey)
 
 		if err != nil || !bytes.Equal(got, want) {
 			t.Errorf("Get(200) = %d바이트 · %v, want %d바이트 그대로 · nil", len(got), err, len(want))
