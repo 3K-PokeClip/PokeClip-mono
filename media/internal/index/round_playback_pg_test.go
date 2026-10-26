@@ -75,7 +75,8 @@ VALUES ($1, $2, 0, $3, $4, $5, $6, 'uploaded', 1000, $7, $3)`,
 // 않는다. 변이 = Ending 을 「round_closed_at IS NOT NULL」 로만 · within 을 Ending 에도 · VOD 행의 키 조건 제거 → 각각 FAIL.
 func TestLoadPlaybackStatesJudgesEachRoundByVerdict(t *testing.T) {
 	pool := newTestPool(t)
-	now := time.Now().UTC()
+	// PG timestamptz 는 마이크로초까지만 담는다 — Linux 시계의 나노초가 남으면 아래 FirstPDT · HeadPDT 왕복 비교가 갈린다.
+	now := time.Now().UTC().Truncate(time.Microsecond)
 	// 오프라인 종료 120초 뒤 — 회차는 아직 닫히지 않았다(360초 전).
 	plantRound(t, pool, roundFixture{id: "A1", stream: "a", state: "ending", roundID: "A1", startedAt: now.Add(-time.Hour)})
 	// 회차는 40분 전에 닫혔지만 정산 중(ended 아님) — 여전히 Ending.
