@@ -416,9 +416,13 @@ func TestValidateDiscontinuitySequenceMustNotDecrease(t *testing.T) {
 // pc-terminal 과 같은 사실). 닫힌 목록 뒤에 닫힌 목록을 다시 내는 것은 되돌림이 아니다.
 // 목록은 회차 N 의 seq 1001..1900 이고 직전 발행은 같은 목록(세대 41)이다 — 닫기는 같은 행에 ENDLIST
 // 만 더한 목록이라 머리가 제자리다(published_seq 비엄격이 여기서도 고정된다 — r3 cc #2).
+// 닫힌 본문은 Ended 인 목록과 짝짓는다 — 「본문 = 목록 값」 조항이 ENDLIST 줄 있음을 Ended 와 견준다
+// (headerMismatch). SealEndlist(열린 본문)는 Render(Ended)와 같은 바이트다(TestRenderEndedEqualsSealedOpenBody).
 func TestValidateTerminalOnlyGoesFalseToTrue(t *testing.T) {
 	n := rewind.Session{ID: "N", TargetDuration: 6, MinSeq: 1000, InitUploaded: true}
 	p := playlist("N", []rewind.Session{n}, run("N", 1001, 1900, day.Add(4*time.Second)))
+	ended := p
+	ended.Ended = true
 	open := []byte(mustRender(t, p))
 	sealed, err := rewind.SealEndlist(open)
 	if err != nil {
@@ -428,18 +432,19 @@ func TestValidateTerminalOnlyGoesFalseToTrue(t *testing.T) {
 	sealedPrev := &rewind.Published{Gen: 41, MediaSequence: 1001, PublishedSeq: 1900, SegmentCount: 900, Terminal: true}
 	tests := []struct {
 		name string
+		p    rewind.Playlist
 		body []byte
 		prev *rewind.Published
 		want string
 	}{
-		{"열린_목록_뒤_닫힌_목록", sealed, openPrev, ""},
-		{"닫힌_목록_뒤_닫힌_목록", sealed, sealedPrev, ""},
+		{"열린_목록_뒤_닫힌_목록", ended, sealed, openPrev, ""},
+		{"닫힌_목록_뒤_닫힌_목록", ended, sealed, sealedPrev, ""},
 		// g6_f14 — 설계 r7–r14 의 「terminal 뒤 비terminal → S6」.
-		{"닫힌_목록_뒤_열린_목록", open, sealedPrev, "S6"},
+		{"닫힌_목록_뒤_열린_목록", p, open, sealedPrev, "S6"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			wantVerdict(t, rewind.Validate(p, tt.body, 42, tt.prev), tt.want)
+			wantVerdict(t, rewind.Validate(tt.p, tt.body, 42, tt.prev), tt.want)
 		})
 	}
 }

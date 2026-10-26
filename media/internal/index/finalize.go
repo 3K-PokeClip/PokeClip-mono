@@ -102,6 +102,7 @@ SELECT pg_catalog.max(seq) FROM stream_segments WHERE stream_id = $1 AND session
 // LoadChainLedger 는 사슬 c 의 VOD 렌더 입력을 읽는다. c 에서 쓰는 것은 StreamID · Tail 이고 사슬은 장부에서 다시
 // 읽는다(사슬 간선 규칙). c.SessionIDs 를 주면 다시 읽은 사슬과 같아야 한다 — 다르면 ErrChainChanged 다. 꼬리가 그
 // 스트림 장부에 없으면 ErrChainNotFound 다. 다섯 문장(사슬 · 컷오프 · 범위 · 행 · 회차)이 한 스냅숏이다.
+// 동결 호출자(FreezeVOD)는 c.SessionIDs 를 반드시 준다 — 비우면 대조를 건너뛰어 ErrChainChanged 가 나지 않는다.
 func LoadChainLedger(ctx context.Context, pool *pgxpool.Pool, c Chain) (ChainLedger, error) {
 	var l ChainLedger
 	err := inLedgerSnapshot(ctx, pool, "사슬 장부", c.StreamID, func(ctx context.Context, tx pgx.Tx) error {
