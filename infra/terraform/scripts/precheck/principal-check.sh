@@ -465,7 +465,8 @@ row_arns() {
 #######################################
 # (5) 실제 질문 하나의 요청 파일을 쓰고 동시 목록에 올린다(보내기 ·
 # 판정은 judge_answers). 검증 레코드 이름이 있으면 추가 문맥의 자리표시자를
-# 그 이름으로 바꾼다. 판정에 쓸 값은 q_* 의 k 번째에 남긴다.
+# 그 이름으로 바꾼다. 바꾼 뒤에도 「$」 가 남으면 자리표시자를 그대로 묻게
+# 되므로 종료 2 다. 판정에 쓸 값은 q_* 의 k 번째에 남긴다.
 # Globals:
 #   u_*, t_*, pol_state, pol_file, found_policy, branch, context_json, q_*,
 #   req_n, VALIDATION_PLACEHOLDER
@@ -483,6 +484,7 @@ prepare_question() {
   fi
   [[ -z "${name}" ]] ||
     context="${context//${VALIDATION_PLACEHOLDER}/${name}}"
+  [[ "${context}" != *'$'* ]] || die "추가 문맥에 풀지 않은 자리표시자가 남음"
   principal::context_entries "${context}" || die "추가 문맥 꼴이 틀림"
   principal::queue "${u_arn[j]}" "${action}" "${arn}" "${t_region[t]}" \
     "${context_json}" "${file}"

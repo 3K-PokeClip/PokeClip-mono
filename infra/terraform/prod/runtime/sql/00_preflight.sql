@@ -5,7 +5,9 @@
 --
 -- 식별자:
 --   version              서버 판이 17 이상
---   rds.force_ssl        파라미터 그룹의 rds.force_ssl = 1
+--   rds.force_ssl        세션에 보이면 1 또는 on 이다. RDS PG 17 은 세션에 보이지
+--                        않음 — 강제는 파라미터 그룹 계약(rds.tf) · 이 연결 TLS 는
+--                        tls 점검
 --   tls                  이 연결이 TLS
 --   rds_iam              IAM 인증 역할 rds_iam 이 있다
 --   master_not_superuser 접속 신분이 superuser 가 아니다(RDS 마스터 모양)
@@ -29,7 +31,8 @@ BEGIN
     IF pg_catalog.current_setting('server_version_num')::int < 170000 THEN
         failed := pg_catalog.array_append(failed, 'version');
     END IF;
-    IF coalesce(pg_catalog.current_setting('rds.force_ssl', true), '') NOT IN ('1', 'on') THEN
+    -- 보이지 않으면(NULL · 빈 값) 통과한다 — 식별자 설명 참조.
+    IF coalesce(pg_catalog.current_setting('rds.force_ssl', true), '') NOT IN ('', '1', 'on') THEN
         failed := pg_catalog.array_append(failed, 'rds.force_ssl');
     END IF;
     IF NOT coalesce((SELECT ssl FROM pg_stat_ssl WHERE pid = pg_catalog.pg_backend_pid()), false) THEN

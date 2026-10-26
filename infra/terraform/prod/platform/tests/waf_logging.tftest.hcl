@@ -3,9 +3,8 @@
 # aws-waf-logs-pokeclip-prod-public · 보존은 ECS 로그와 같은 30일 ·
 # authorization · cookie 헤더 가림, 그리고 그 두 헤더 · referer · 내부 토큰
 # 헤더 둘 · 질의 인자 code · token 을 요청 샘플 · 로그 모두에서 가리는 데이터
-# 보호.
-# 차단(BLOCK)만 남기는 필터 · SUBSTITUTION 치환은
-# waf_acl 모듈 시험이 맡는다(루트 시험은 모듈 안 자원을 주소로 볼 수 없다).
+# 보호. 차단(BLOCK)만 남기는 필터 · SUBSTITUTION 치환은 waf_acl 모듈 시험이
+# 맡는다(루트 시험은 모듈 안 자원을 주소로 볼 수 없다).
 #
 # 앞 루트 상태 흉내 · 가짜 값은 apply_order.tftest.hcl 과 같다(시험 파일마다
 # 따로 둬야 한다).

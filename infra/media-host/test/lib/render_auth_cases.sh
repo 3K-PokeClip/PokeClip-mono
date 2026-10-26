@@ -30,7 +30,8 @@ readonly IP_LIMIT_ENV_NAME='ingest-auth.env'
 # `jq -S .` 로 정렬한 출력이다. 이 출력은 compose 판에 기대므로 판 고정을
 # 올리면 다시 만든다. 기준을 6c90c935 에서 옮긴 것은 develop 병합(사이드카
 # REWIND_PUBLIC_BASE_URL 추가) 때문이다. 만든 명령 = M15 병합 실험 기록
-# merge-develop 의 make-golden.sh.
+# merge-develop 의 make-golden.sh. 사이드카 CONTROL_LISTEN(제어면 포트 8086)은
+# 두 골든에 그 키 한 줄만 더했다.
 readonly COMPOSE_GOLDEN_PREFIX="${TEST_DIR}/golden/compose.legacy"
 readonly START_SCRIPT="${MEDIA_HOST_DIR}/bin/start-media.sh"
 readonly DENY_SYNC_SCRIPT="${MEDIA_HOST_DIR}/bin/ingest-auth-deny-sync.sh"

@@ -44,6 +44,9 @@ const (
 	verifyFailedPrefix    = "verify failed: "
 )
 
+// preflightOK 는 00_preflight.sql 이 모든 점검을 통과했을 때 내는 결과 행이다.
+const preflightOK = "PREFLIGHT OK"
+
 // verifyOK 는 40_verify.sql 이 모든 단언을 통과했을 때 내는 결과 행이다.
 const verifyOK = "VERIFY OK"
 
@@ -289,8 +292,8 @@ func applyProdSQL(t *testing.T, conn *pgx.Conn, body string) ([]*pgconn.Result, 
 	return execScript(t, conn, "BEGIN;\n"+body+"\nCOMMIT;")
 }
 
-// mustApplyAll 은 10 ~ 40 을 대역으로 순서대로 적용하고 40 이 VERIFY OK 를 냈는지 본다. 00 은 CI 가 TLS ·
-// rds.force_ssl 을 못 맞춰 실패하므로 여기서 돌리지 않는다(사례 ① 이 따로 잰다).
+// mustApplyAll 은 10–40 을 대역으로 순서대로 적용하고 40 이 VERIFY OK 를 냈는지 본다. 00 은 CI 가 TLS 를
+// 못 맞춰 실패하므로 여기서 돌리지 않는다(사례 ① 이 따로 잰다).
 func (e *prodSQLEnv) mustApplyAll(t *testing.T) {
 	t.Helper()
 	for _, name := range prodSQLApplied[1:4] {
@@ -337,22 +340,69 @@ func failedChecks(t *testing.T, err error, prefix string) []string {
 	return ids
 }
 
-// ① 00 은 실패한 점검을 모아 한 번에 알린다. CI · 로컬은 RDS 가 아니라 rds.force_ssl 이 없고, 연결이 TLS 가
-// 아니면 tls 도 실패한다 — 그 밖의 점검(판 · rds_iam · 비superuser + CREATEROLE · DB 소유자 · public CREATE)은
-// 대역에서 통과해야 한다.
-func TestProdSQLPreflightFailsOnlyOnTLSAndForceSSL(t *testing.T) {
+// ① 00 은 실패한 점검을 모아 한 번에 알린다. CI · 로컬 PG 는 RDS PG 17 처럼 rds.force_ssl 이 세션에 보이지
+// 않으므로 그 점검은 실패하지 않는다(POK-428 첫 운영 적용). 연결이 TLS 가 아니면 tls 만 실패하고, 그 밖의
+// 점검(판 · rds_iam · 비superuser + CREATEROLE · DB 소유자 · public CREATE)은 대역에서 통과해야 한다.
+func TestProdSQLPreflightFailsOnlyOnTLS(t *testing.T) {
 	env := newProdSQLEnv(t)
+	env.requirePreflight(t, env.tlsFailure(t))
+}
+
+// ①-가 rds.force_ssl 이 세션에 보이면 그 값을 본다 — 1 · on 은 통과, 그 밖의 값은 실패다. 로컬 PG 에는 이
+// 설정이 없어 세션 수준 사용자 정의 설정(placeholder)으로 심는다.
+func TestProdSQLPreflightChecksVisibleForceSSL(t *testing.T) {
+	env := newProdSQLEnv(t)
+	base := env.tlsFailure(t)
+	for _, tc := range []struct {
+		value string
+		fails bool
+	}{
+		{"1", false},
+		{"on", false},
+		{"0", true},
+		{"off", true},
+	} {
+		t.Run(tc.value, func(t *testing.T) {
+			if _, err := env.master.Exec(context.Background(), `SELECT pg_catalog.set_config('rds.force_ssl', $1, false)`, tc.value); err != nil {
+				t.Fatalf("rds.force_ssl 심기 실패: %v", err)
+			}
+			want := slices.Clone(base)
+			if tc.fails {
+				want = append(want, "rds.force_ssl")
+				slices.Sort(want)
+			}
+			env.requirePreflight(t, want)
+		})
+	}
+}
+
+// tlsFailure 는 master 연결이 TLS 가 아니면 00 이 내야 할 실패 식별자 tls 를, TLS 면 빈 목록을 돌려준다.
+func (e *prodSQLEnv) tlsFailure(t *testing.T) []string {
+	t.Helper()
 	var tls bool
-	if err := env.master.QueryRow(context.Background(), `SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()`).Scan(&tls); err != nil {
+	if err := e.master.QueryRow(context.Background(), `SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()`).Scan(&tls); err != nil {
 		t.Fatalf("연결 TLS 조회 실패: %v", err)
 	}
-	want := []string{"rds.force_ssl"}
-	if !tls {
-		want = append(want, "tls")
+	if tls {
+		return nil
 	}
-	slices.Sort(want)
+	return []string{"tls"}
+}
 
-	_, err := applyProdSQL(t, env.master, expandProdSQL(t, "00_preflight.sql"))
+// requirePreflight 는 00_preflight.sql 을 master 로 돌려 실패한 점검이 정렬된 want 와 같은지 본다. want 가 비면
+// 오류 없이 PREFLIGHT OK 행을 내야 한다.
+func (e *prodSQLEnv) requirePreflight(t *testing.T, want []string) {
+	t.Helper()
+	results, err := applyProdSQL(t, e.master, expandProdSQL(t, "00_preflight.sql"))
+	if len(want) == 0 {
+		if err != nil {
+			t.Fatalf("00_preflight.sql 오류 = %v, want nil", err)
+		}
+		if !hasRow(results, preflightOK) {
+			t.Fatalf("00_preflight.sql 결과에 %q 행이 없다", preflightOK)
+		}
+		return
+	}
 	if got := failedChecks(t, err, preflightFailedPrefix); !slices.Equal(got, want) {
 		t.Errorf("00_preflight.sql 실패 점검 = %q, want %q", got, want)
 	}

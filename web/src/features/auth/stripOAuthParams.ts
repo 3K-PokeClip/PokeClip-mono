@@ -11,9 +11,12 @@ const OAUTH_PARAMS = ['code', 'state'];
 export function stripOAuthParamsFromUrl(): void {
   const url = new URL(window.location.href);
   if (!OAUTH_PARAMS.some((name) => url.searchParams.has(name))) return;
-  for (const name of OAUTH_PARAMS) url.searchParams.delete(name);
-  // 상태 인자는 null이어야 한다. 그때만 Next 라우터가 바뀐 주소를 받아 useSearchParams와 맞춘다(Next 문서
-  // 「Native History API」). 라우터 내부 상태(__NA)를 넘기면 라우터는 옛 주소를 쥔 채로 남고, 다음 라우터
-  // 갱신 때 그 주소(code 포함)로 replaceState해 되살린다(app-router의 HistoryUpdater).
+  for (const name of OAUTH_PARAMS) {
+    url.searchParams.delete(name);
+  }
+  // 상태 인자에 라우터 내부 키(__NA·_N)가 없어야 Next 라우터가 바뀐 주소를 받아 useSearchParams와 맞춘다(Next 문서
+  // 「Native History API」, app-router의 replaceState 패치). 지금 항목의 상태(window.history.state)는 그 키를
+  // 갖고 있어 넘기면 라우터가 옛 주소를 쥔 채로 남고, 다음 라우터 갱신 때 그 주소(code 포함)로 replaceState해
+  // 되살린다(app-router의 HistoryUpdater). 넘길 상태가 없으니 null을 쓴다.
   window.history.replaceState(null, '', url.pathname + url.search + url.hash);
 }

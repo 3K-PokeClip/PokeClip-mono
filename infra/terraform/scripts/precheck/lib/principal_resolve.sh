@@ -343,8 +343,8 @@ principal::append_object_key() {
   while [[ -n "${rest}" ]]; do
     item="${rest%%$'\n'*}"
     rest="${rest#*$'\n'}"
-    if [[ "${item}" != arn:aws:s3:::?* || "${item}" == arn:aws:s3:::*/* ]]
-    then
+    if [[ "${item}" != arn:aws:s3:::?* ||
+      "${item}" == arn:aws:s3:::*/* ]]; then
       die "읽기 응답의 꼴이 다름(res-${req_n}.txt)"
     fi
     list_items+="${item}/$1"$'\n'
