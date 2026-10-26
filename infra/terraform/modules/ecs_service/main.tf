@@ -142,8 +142,11 @@ resource "aws_service_discovery_service" "this" {
     }
   }
 
-  # 헬스는 ECS 가 알린다 — 멈추거나 unhealthy 인 태스크를 이름에서 뺀다.
-  health_check_custom_config {}
+  # 커스텀 헬스 설정은 두지 않는다. ECS 가 태스크 헬스를 Cloud Map 에 알리는
+  # 것은 HealthCheckCustomConfig 가 있을 때뿐이라(ECS 서비스 검색 문서), 이름은
+  # 헬스로 걸러지지 않고 ECS 가 태스크를 등록 해제할 때 빠진다. 빈 블록
+  # health_check_custom_config {} 는 provider 6.68.0 이 보내지 않아(Create 가 빈
+  # 원소를 건너뜀 · 실물 null) plan 마다 교체가 떴다 — 실물과 같게 둔다.
 }
 
 resource "aws_ecs_task_definition" "this" {
@@ -184,6 +187,10 @@ resource "aws_ecs_service" "this" {
   task_definition = aws_ecs_task_definition.this.arn
   launch_type     = "FARGATE"
   desired_count   = 1
+
+  # null 이면 넘기지 않는다 — ECS 기본(최소 100 · 최대 200)이 그대로 산다.
+  deployment_minimum_healthy_percent = var.deployment_minimum_healthy_percent
+  deployment_maximum_percent         = var.deployment_maximum_percent
 
   # ECS API 는 대상 그룹 없이 유예를 받지 않는다.
   health_check_grace_period_seconds = length(var.target_group_arns) > 0 ? var.health_check_grace : null

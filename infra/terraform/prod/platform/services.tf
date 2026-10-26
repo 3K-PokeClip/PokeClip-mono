@@ -330,6 +330,10 @@ module "chat_detector" {
   discovery_namespace_id = aws_service_discovery_private_dns_namespace.this.id
   egress_targets         = local.egress_targets["chat-detector"]
   task_role_statements   = local.task_role_statements["chat-detector"]
+  # 사건 묶음(SpikeEpisodes)이 프로세스 메모리라 옛 · 새 태스크가 겹치면 사건이
+  # 갈라져 카드가 두 번 나갈 수 있다 — 옛 태스크를 먼저 내린다(겹침 대신 공백).
+  deployment_minimum_healthy_percent = 0
+  deployment_maximum_percent         = 100
 
   depends_on = [terraform_data.runtime_contract]
 }
