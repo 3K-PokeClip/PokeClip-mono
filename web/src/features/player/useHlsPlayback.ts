@@ -60,8 +60,8 @@ const DEFAULT_LIVE_LAG_MS = 3_000;
 const APP_SEEK_TOLERANCE_S = 0.5;
 /** 되감기 재생 중 라이브러리가 끝 쪽으로 이 배수 × TD 넘게 옮기면 한 번 되돌린다(5.3.1절 4번) */
 const LIBRARY_JUMP_TD = 2;
-/** 끝에서 이만큼 넘게 물러난 시크는 끝 도달 판정을 다시 연다(목록 끝 정체의 「끝 1초 안」과 같은 폭) */
-const END_REARM_MS = 1_000;
+/** 되돌린 뒤 이 배수 × TD 안에 또 튀면 「되돌림이 또 튐」이다. 그 뒤의 튐은 따로 일어난 것이라 다시 되돌린다 */
+const JUMP_AGAIN_TD = 2;
 /** 되돌린 뒤에도 라이브러리가 또 옮겼다 — 두고 알린다(5.3.1절 4번) */
 const LIBRARY_JUMP_NOTICE = '재생 위치가 목록 끝으로 옮겨졌어요. 다시 옮겨 주세요';
 
@@ -90,6 +90,11 @@ export interface PlaybackHooks {
   onLiveButton?: () => void;
   /** 세션 알림(되감기 재생 중 라이브러리가 되돌린 자리를 또 옮김) */
   onNotice?: (text: string) => void;
+  /**
+   * 재생 단추를 막는다 — 끝에 닿아 덮개가 선 동안. 끝난 목록에 play() 를 부르면 처음부터 돌아 덮개 아래에서 세션 모르게
+   * 자리가 바뀐다. 덮개 아래에서 재생을 다시 여는 길은 시크(세션이 atEnd 를 내린다)와 덮개 버튼이다(설계 5.3절)
+   */
+  holdPlay?: boolean;
   /** 시크바 왼쪽 끝(되감기 범위 첫 시각). 라이브 재생기의 시크바가 라이브 창 밖까지 넓어진다 */
   axisLowerMs?: number | null;
 }
@@ -177,6 +182,8 @@ export function useHlsPlayback(
   const pausedHandledRef = useRef(false);
   /** 멈춘 채 갈아 끼운 재생기는 스스로 틀지 않는다 */
   const keepPausedRef = useRef(false);
+  /** 라이브러리의 튐을 되돌린 때(Date.now). 재생기를 새로 세우거나 사용자가 시크하면 비운다(5.3.1절 4번) */
+  const jumpRestoredAtRef = useRef<number | null>(null);
   /**
    * 세션 모드인가 — 세션 고리가 있고 hls.js 재생기가 섰다. hls.js 가 없는 브라우저(네이티브 HLS)는 조각 목록 · 시각 축이 없어
    * 세션 고리가 있어도 지금처럼 라이브 창 안에서 시크한다(seekable 축)
@@ -235,6 +242,8 @@ export function useHlsPlayback(
       const axis = readAxis();
       const ask = hooksRef.current.onSeekRequest;
       if (axis === null || ask === undefined) return false;
+      // 사용자의 시크다 — 그 뒤 라이브러리가 튀면 「되돌림이 또 튐」이 아니라 새 튐이다
+      jumpRestoredAtRef.current = null;
       ask(targetMs, axis.view);
       return true;
     },
@@ -371,6 +380,10 @@ export function useHlsPlayback(
     const video = videoRef.current;
     if (!video) return;
     // 재개 시 currentTime을 만지지 않는다 — 되감은 위치를 그대로 이어서 튼다 (계약3 4절 1번)
+    if (video.paused && hooksRef.current.holdPlay) {
+      wake();
+      return;
+    }
     if (video.paused) video.play().catch(() => {});
     else video.pause();
     wake();
@@ -414,7 +427,7 @@ export function useHlsPlayback(
     let lastGrowAt = Date.now();
     let endSent = false;
     let waiting = false;
-    let restoredJump = false;
+    jumpRestoredAtRef.current = null;
     let stableTime: number | null = null;
     let stableAtMs: number | null = null;
     const reachEnd = () => {
@@ -422,12 +435,16 @@ export function useHlsPlayback(
       endSent = true;
       hooksRef.current.onEndReached?.();
     };
-    // 끝에서 물러난 시크는 끝 도달 판정을 다시 연다 — ENDLIST 목록에서 끝 → 뒤로 → 다시 끝이면 두 번째도 올린다(cx H1 · R55)
+    // 끝에서 물러난 시크는 폭과 무관하게 끝 도달 판정을 다시 연다 — 끝 → 뒤로 → 다시 끝이면 두 번째도 올린다(cx H1 · R55).
+    // 「끝 1초 안」은 정체 판정 폭이지 시크 예외가 아니다. 같은 끝을 두 번 올리지 않는 것은 시크 앞의 waiting 을 버려서 한다:
+    // 정체는 시크 뒤 새 waiting 을 봐야 다시 선다(ended 는 브라우저가 다시 끝에 닿아야 난다)
     const rearmEnd = () => {
       const details = hlsRef.current?.latestLevelDetails;
       if (!endSent || !details || lastEndMs === null) return;
       const atMs = programDateAt(details.fragments, video.currentTime);
-      if (atMs !== null && atMs < lastEndMs - END_REARM_MS) endSent = false;
+      if (atMs === null || atMs >= lastEndMs) return;
+      endSent = false;
+      waiting = false;
     };
     let recoveredNetwork = false;
     let recoveredMedia = false;
@@ -482,7 +499,7 @@ export function useHlsPlayback(
       waiting = true;
     };
     // 라이브러리(또는 기본 컨트롤)의 시크를 앱의 시크와 가른다(5.3.1절 4번). 멈춘 동안은 멈춘 시각을 지키고, 되감기 재생 중
-    // 끝 쪽으로 크게 튀었으면 한 번 되돌린다. 라이브 재생기에서 라이브 끝으로 옮긴 것은 지금 동작이다
+    // 끝 쪽으로 크게 튀었으면 되돌린다(되돌린 직후 또 튀면 두고 알린다). 라이브 재생기에서 라이브 끝으로 옮긴 것은 지금 동작이다
     const onSeeking = () => {
       rearmEnd();
       if (!sessionActive()) return;
@@ -494,11 +511,12 @@ export function useHlsPlayback(
       if (video.paused || kind !== 'rewind') return;
       const td = hlsRef.current?.latestLevelDetails?.targetduration ?? 0;
       if (stableTime === null || video.currentTime - stableTime <= LIBRARY_JUMP_TD * td) return;
-      if (restoredJump) {
+      const restoredAt = jumpRestoredAtRef.current;
+      if (restoredAt !== null && Date.now() - restoredAt <= JUMP_AGAIN_TD * td * 1000) {
         hooksRef.current.onNotice?.(LIBRARY_JUMP_NOTICE);
         return;
       }
-      restoredJump = true;
+      jumpRestoredAtRef.current = Date.now();
       // 튀기 전 자리를 세션에 다시 넘긴다 — 그새 창이 밀렸으면 세션이 새 하한으로 자르고 알린다(cx H2 · seekInList)
       const axis = readAxis();
       if (axis !== null && stableAtMs !== null) {

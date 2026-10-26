@@ -98,7 +98,7 @@ export function usePlaybackSession(options: SessionOptions): PlaybackSession | n
   const [now, setNow] = useState(() => Date.now());
 
   /**
-   * 세션 순번 — 세션을 열거나 비울 때마다 오른다. 비동기 작업(지금 방송 번호 묻기 · 재조회 타이머)은 시작 때의 순번을 들고 가서,
+   * 세션 순번 — 세션을 열거나 비울 때 · 화면을 떠날 때 오른다. 비동기 작업(지금 방송 번호 묻기 · 재조회 타이머)은 시작(예약) 때의 순번을 들고 가서,
    * 그사이 세션이 바뀌었으면 답을 버린다 — A 의 늦은 답이 B 세션에 들지 않게(cx H3)
    */
   const sessionIdRef = useRef(0);
@@ -150,10 +150,12 @@ export function usePlaybackSession(options: SessionOptions): PlaybackSession | n
         case 'notice':
           optionsRef.current.onNotice?.(effect.text);
           break;
-        case 'recheck-x':
+        case 'recheck-x': {
+          // 순번은 예약 때 잡는다 — 그사이 같은 키로 다시 연 세션에 옛 재조회가 들지 않게(cx M)
+          const id = sessionIdRef.current;
           window.clearTimeout(recheckTimer.current);
           recheckTimer.current = window.setTimeout(() => {
-            const id = sessionIdRef.current;
+            if (id !== sessionIdRef.current) return;
             void optionsRef.current.resolveX(true).then((x) => {
               if (id === sessionIdRef.current) {
                 dispatchRef.current({ type: 'live-button', x, attempt: effect.attempt });
@@ -161,6 +163,7 @@ export function usePlaybackSession(options: SessionOptions): PlaybackSession | n
             });
           }, X_RECHECK_MS);
           break;
+        }
         case 'close':
           if (effect.reason === 'left') leftForRef.current = s.accessKey;
           optionsRef.current.onClose({
@@ -274,7 +277,14 @@ export function usePlaybackSession(options: SessionOptions): PlaybackSession | n
     return () => timers.forEach((t) => window.clearTimeout(t));
   }, [endingSince]);
 
-  useEffect(() => () => window.clearTimeout(recheckTimer.current), []);
+  // 화면을 떠나면 순번을 올린다 — 늦게 온 답이 떠난 화면에서 닫기(router.push)를 부르지 않게(cx H2)
+  useEffect(
+    () => () => {
+      sessionIdRef.current += 1;
+      window.clearTimeout(recheckTimer.current);
+    },
+    [],
+  );
 
   const view = useMemo(
     () => (state === null ? null : sessionView(state, Math.max(now, Date.now()))),
