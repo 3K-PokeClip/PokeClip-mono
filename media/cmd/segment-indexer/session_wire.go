@@ -10,6 +10,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -23,13 +24,19 @@ import (
 // sessionDecider 는 session.Registry 를 index.SessionDecider 로 입힌다. 상태는 없다.
 type sessionDecider struct{ reg *session.Registry }
 
+// intentStopSlack 은 의도적 종료 표식의 대조 여유다(K8 확정 8초 — M6 3.3 · 3.4). 레지스트리의 표식 분할 ·
+// 표식 개시와 4D 적용(IntentOptions.Slack)이 같은 값을 쓴다. config 에 두지 않는 것은 운영에서 바꾸는 값이 아니라
+// 계약4 3-2 판정 규칙의 일부이기 때문이다 — 집을 이 조립 한 자리로 둔다.
+const intentStopSlack = 8 * time.Second
+
 // newSessionDecider 는 정책값을 config 에서 받아 결정자를 만든다.
-// 값의 집은 config 하나다 — 여기에 기본값을 또 적지 않는다.
+// 값의 집은 config 하나다 — 여기에 기본값을 또 적지 않는다(표식 여유만 위 상수).
 func newSessionDecider(floorSlack, obsFresh, reconnectWindow time.Duration, log *slog.Logger) index.SessionDecider {
 	return sessionDecider{reg: session.New(session.Options{
 		FloorSlack:      floorSlack,
 		ObsFresh:        obsFresh,
 		ReconnectWindow: reconnectWindow,
+		StopSlack:       intentStopSlack,
 		Log:             log,
 	})}
 }
@@ -74,7 +81,12 @@ func (d sessionDecider) Open(ctx context.Context, tx pgx.Tx, dec index.SessionDe
 	if !ok {
 		return "", fmt.Errorf("세션 개시 계획이 이 결정자의 것이 아니다(%T) — Decide 가 준 값을 그대로 넘겨야 한다", dec.Plan)
 	}
-	return d.reg.Open(ctx, tx, plan, firstPDT)
+	id, err := d.reg.Open(ctx, tx, plan, firstPDT)
+	if errors.Is(err, session.ErrLiveLost) {
+		// 끝내려던 live 를 잃은 개시는 경합이다 — 되돌리고 다음 시도가 다시 판정한다(M6 3.3). 장부의 재시도 갈래로 옮긴다.
+		return "", fmt.Errorf("%w: %w", index.ErrSessionContended, err)
+	}
+	return id, err
 }
 
 // sessionOpOf 는 장부 쪽 연산을 판정 쪽 연산으로 옮긴다.

@@ -170,6 +170,14 @@ type openPlan struct {
 	inheritsSession string
 	// endingSessionID 는 OpenFresh 에서 ending 으로 보낼 현 live 세션이다. "" 면 비분할 개시다.
 	endingSessionID string
+	// endReason 은 endingSessionID 를 끝내는 사유다 — TD 분할 'td_exceeded' · 표식 분할 'intentional'.
+	endReason string
+	// roundID 는 새 세션이 합류할 회차다. "" 면 자기 → 새 회차(round_id = 새 session_id)다(15.2 표).
+	roundID string
+	// roundFromEnding 이면 회차 · 표식을 끝내는 UPDATE 의 RETURNING 에서 받는다(15.2 표 4행 — TD 분할).
+	roundFromEnding bool
+	// stopMarkedAt 은 새 세션이 승계하는 표식이다. nil 이면 NULL 이다.
+	stopMarkedAt *time.Time
 }
 
 // Options 는 정책 값이다.
@@ -185,7 +193,10 @@ type Options struct {
 	// ReconnectWindow 는 재접속 계승 창이다(ADR-044 결정 3 · kty ⑷) — 직전 회차 마지막 조각 끝에서
 	// 이 시간 안에 시작한 개시 조각이 그 회차를 물려받는다.
 	ReconnectWindow time.Duration
-	Log             *slog.Logger
+	// StopSlack 은 의도적 종료 표식의 대조 여유다(M6 3.3 결정 1 · 15.2 표 1 · 2행 · K8 8초) — 「표식 + 이 값」 이상에
+	// 시작한 조각부터 새 회차다. 영값이면 표식으로 가르지 않는다(「확실하지 않으면 적용하지 않는다」 — 안전 방향).
+	StopSlack time.Duration
+	Log       *slog.Logger
 }
 
 // Registry 는 세션 결정자다. 상태를 갖지 않으며 트랜잭션마다 같은 값으로 답한다.
@@ -217,44 +228,35 @@ func (r *Registry) Decide(ctx context.Context, tx pgx.Tx, in Input, now time.Tim
 			in.Op, in.StreamID, in.Seq)
 	}
 
-	live, err := r.loadLive(ctx, tx, in.StreamID)
+	live, err := r.loadLive(ctx, tx, in.StreamID, currentLiveSQL)
 	if err != nil {
 		return Decision{}, err
 	}
 	d := r.decide(live, in, now)
-	if d.Outcome != OutcomeOpen {
-		return d, nil
+	if d.Outcome != OutcomeOpen && d.Outcome != OutcomeOpenFresh {
+		return d, nil // 계속 · 비귀속은 잠그지 않는다(M6 3.3 — 「계속」 조각 INSERT 를 줄 세우지 않는다)
 	}
-	// 개시 갈래만 직전 회차를 **조회**한다. 계속·OpenFresh 는 손에 쥔 현 live 가 기저이고,
-	// 비귀속·비개시는 ⑷⑸ 를 건너뛰므로 기저도 계승도 필요 없다(판단 J51 — 왕복 수는 종전과 같다).
-	prev, err := r.previousSession(ctx, tx, in.StreamID)
-	if err != nil {
-		return Decision{}, err
-	}
-	if prev == nil {
-		return d, nil // 이 스트림의 첫 회차다 — 기저 세션 부재 · 물려받을 회차 없음
-	}
-	// 판정부(decide)는 DB 를 보지 않아 직전 회차를 모른다 — 계승이면 개시 결정을 여기서 다시 만든다.
-	if inheritable(*prev, in.StartWallUTC, r.opt.ReconnectWindow) {
-		d = openDecision(in, nil, prev)
-	}
-	// 기저 세션은 계승 여부와 무관하게 직전 회차다(previousSessionSQL 의 「상태 필터 없음」 계약).
-	d.BaseSessionID = prev.id
-	return d, nil
+	// 개시 갈래면 소속 행을 잠그고 처음부터 다시 판정한다(M6 3.3 소속 잠금 · D69). 잠금 전에 본 값은
+	// 늦은 4D(분리 · 표식) · 회차 닫힘의 커밋과 겹치면 낡는다 — 잠근 읽기는 커밋된 새 판을 본다(READ COMMITTED).
+	return r.decideLocked(ctx, tx, in, now, d)
 }
 
 // currentLiveSQL 은 stream_sessions_one_live_uq(부분 UNIQUE 인덱스) 축의 조회다.
 // 그 인덱스가 스트림당 live 행이 하나임을 물리로 보증하므로 LIMIT 을 두지 않는다.
 // state='live' 술어를 빼면 인덱스를 벗어나고, ending 세션까지 현 세션으로 보게 된다.
 const currentLiveSQL = `
-SELECT session_id, started_at, target_duration, discontinuity_base
+SELECT session_id, started_at, target_duration, discontinuity_base, stop_marked_at
   FROM stream_sessions
  WHERE stream_id = $1 AND state = 'live'`
 
-func (r *Registry) loadLive(ctx context.Context, tx pgx.Tx, streamID string) (*liveSession, error) {
-	var s liveSession
-	err := tx.QueryRow(ctx, currentLiveSQL, streamID).
-		Scan(&s.id, &s.startedAt, &s.targetDuration, &s.discontinuityBase)
+// loadLive 는 현 live 를 읽는다. query 는 currentLiveSQL 이나 그 잠금판(lockLiveSQL)이다.
+func (r *Registry) loadLive(ctx context.Context, tx pgx.Tx, streamID, query string) (*liveSession, error) {
+	var (
+		s      liveSession
+		marked *time.Time
+	)
+	err := tx.QueryRow(ctx, query, streamID).
+		Scan(&s.id, &s.startedAt, &s.targetDuration, &s.discontinuityBase, &marked)
 	// 행이 없다 = 현 live 세션이 없다. 에러가 아니라 정상 상태(개시 갈래)다.
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
@@ -264,6 +266,9 @@ func (r *Registry) loadLive(ctx context.Context, tx pgx.Tx, streamID string) (*l
 	}
 	// 저장은 UTC 강제지만 드라이버가 로컬 위치로 실어 올 수 있어 여기서 한 번 못 박는다.
 	s.startedAt = s.startedAt.UTC()
+	if marked != nil {
+		s.stopMarkedAt = marked.UTC()
+	}
 	return &s, nil
 }
 
@@ -276,7 +281,7 @@ func (r *Registry) loadLive(ctx context.Context, tx pgx.Tx, streamID string) (*l
 // 같은 행의 state · end_reason 과 조각 끝으로만 가린다(inheritable).
 // session_id DESC 는 started_at 동률의 타이브레이커일 뿐 값에 뜻을 부여하지 않는다 —
 // 인덱스가 2열이라 동률 묶음에서 정렬 노드가 끼는 것이 정상이다(스트림당 세션 수는 유계).
-// 이 조회는 **새 세션 INSERT 전**이라 자기 자신이 잡히지 않는다.
+// 이 조회는 **새 세션 INSERT 전**이라 자기 자신이 잡히지 않는다. 보내는 꼴은 잠금판(lockPreviousSQL) 하나다.
 //
 // 첫 · 마지막 조각은 stream_segments_session_idx (stream_id, session_id, seq) 의 앞 · 뒤 끝이다(index 의
 // basePDTSQL 과 같은 정렬 — 선행 컬럼 stream_id 를 술어에 둔다). 이 패키지가 stream_segments 를 읽는 자리는
@@ -285,6 +290,7 @@ func (r *Registry) loadLive(ctx context.Context, tx pgx.Tx, streamID string) (*l
 // public 의 integer 판 연산자(앱 사용자가 만들 수 있다)가 먼저 골린다. 값은 암묵 변환과 같다.
 const previousSessionSQL = `
 SELECT s.session_id, s.state, s.end_reason, s.discontinuity_base, s.target_duration,
+       s.vod_state, s.round_id, s.round_closed_at IS NOT NULL, s.stop_marked_at,
        (SELECT g.local_path FROM stream_segments g
          WHERE g.stream_id = s.stream_id AND g.session_id = s.session_id
          ORDER BY g.seq LIMIT 1),
@@ -307,16 +313,27 @@ type previousSession struct {
 	firstLocalPath string
 	// lastEnd 는 그 회차 마지막 조각의 끝(start_wall_utc + duration_ms)이다. 조각이 없으면 영값이다.
 	lastEnd time.Time
+	// vodState 는 그 회차 사슬의 VOD 축이다. 'none' 이 아니면 사슬이 닫혔다(M6 3.3 — 계승하지 않는다).
+	vodState string
+	// roundID 는 그 세션의 회차다. NULL(M6 전 세션)이면 "" 다.
+	roundID string
+	// roundClosed 는 round_closed_at 이 있는가다 — 닫힘은 DB 가 쓴 값으로만 본다(D9).
+	roundClosed bool
+	// stopMarkedAt 은 의도적 종료 표식이다. 없으면 영값이다.
+	stopMarkedAt time.Time
 }
 
-func (r *Registry) previousSession(ctx context.Context, tx pgx.Tx, streamID string) (*previousSession, error) {
+// lockPrevious 는 직전 회차를 소속 잠금(lockPreviousSQL)으로 읽는다 — 직전 회차는 개시 갈래에서만 읽고, 개시는
+// 늘 잠근 행으로 판정한다(M6 3.3).
+func (r *Registry) lockPrevious(ctx context.Context, tx pgx.Tx, streamID string) (*previousSession, error) {
 	var (
-		p                    previousSession
-		endReason, firstPath *string
-		lastEnd              *time.Time
+		p                             previousSession
+		endReason, firstPath, roundID *string
+		lastEnd, marked               *time.Time
 	)
-	err := tx.QueryRow(ctx, previousSessionSQL, streamID).Scan(
-		&p.id, &p.state, &endReason, &p.discontinuityBase, &p.targetDuration, &firstPath, &lastEnd)
+	err := tx.QueryRow(ctx, lockPreviousSQL, streamID).Scan(
+		&p.id, &p.state, &endReason, &p.discontinuityBase, &p.targetDuration,
+		&p.vodState, &roundID, &p.roundClosed, &marked, &firstPath, &lastEnd)
 	// 행이 없다 = 이 스트림의 첫 세션이다 — 기저 세션 부재(재귀식의 벽시계 항이 받는다)이고 물려받을 회차도 없다.
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
@@ -334,30 +351,53 @@ func (r *Registry) previousSession(ctx context.Context, tx pgx.Tx, streamID stri
 		// 저장은 UTC 강제지만 드라이버가 로컬 위치로 실어 올 수 있어 여기서 한 번 못 박는다.
 		p.lastEnd = lastEnd.UTC()
 	}
+	if roundID != nil {
+		p.roundID = *roundID
+	}
+	if marked != nil {
+		p.stopMarkedAt = marked.UTC()
+	}
 	return &p, nil
 }
 
-// inheritable 은 재접속 계승 판정이다(ADR-044 결정 3 · kty ⑷ · 계획 2.3 registry 행 ⑵) — 현 live 가 없을 때
+// inheritable 은 재접속 계승 판정이다(ADR-044 결정 3 · kty ⑷ · 계획 2.3 registry 행 ⑵ · M6 3.3) — 현 live 가 없을 때
 // startWall 에 시작한 개시 조각이 직전 회차 prev 를 물려받는가. DB 를 보지 않는 순수 판정이다.
 //
-// 네 조건이 모두 참일 때만 참이다:
-//   - prev 가 끝났다(ending · ended). live 면 조회 사이 남이 연 회차다 — 개시는 one_live_uq 경합으로 간다.
-//   - init 불일치로 끝나지 않았다. 그 끝은 송출 머리말이 바뀌었다는 사건이라, 물려받으면 목록 앞머리의 옛 조각과
-//     새 조각의 코덱 사양이 어긋난다.
-//   - prev 에 조각이 있다. 없으면 기산점(마지막 조각 끝)이 없다.
-//   - 새 조각 시작이 prev 마지막 조각 끝에서 0 이상 window 이하다(양 끝 포함 — kty ⑷ 기산). 음수는 직전 회차
-//     끝보다 이른 조각이라 시계가 뒤로 간 것이다.
+// 모든 조건이 참일 때만 참이다:
+//   - prev 가 ending 이다. live 면 조회 사이 남이 연 회차다. ended 는 사슬이 phase 4 까지 끝났다 — 합류(15.2 표
+//     6행)는 할 수 있어도 되감기 목록을 물려받지 않는다.
+//   - 사슬이 닫히지 않았다(vod_state='none') · 회차가 닫히지 않았다(round_closed_at IS NULL — DB 가 쓴 값, D9).
+//   - init 불일치 · 의도적 종료로 끝나지 않았다. 앞은 송출 머리말이 바뀌었다는 사건이고, 뒤는 방송이 끝났다는 사건이다.
+//   - prev 에 조각이 있고, 새 조각 시작이 prev 마지막 조각 끝에서 0 이상 window 이하다(양 끝 포함 — kty ⑷ 기산).
 //
 // window 가 영값이면 거짓이다 — 창을 받지 못한 결정자는 물려받지 않는다(Options 의 안전 방향).
-// 의도적 종료 뒤 비계승(ADR-044 추기)은 M6 몫이라 여기 조건에 없다.
+// 표식 개시 갈래(15.2 표 2행)의 배제는 부르는 쪽(openFromPrevious)이 먼저 거른다.
 func inheritable(prev previousSession, startWall time.Time, window time.Duration) bool {
+	return prev.state == "ending" && inheritDecline(prev) == "" && joinable(prev, startWall, window) &&
+		prev.endReason != endReasonInitMismatch
+}
+
+// inheritDecline 은 시간 창 안의 ending prev 를 닫힘 때문에 물려받지 않을 때의 사유다(D9 신호 inherit_declined).
+func inheritDecline(prev previousSession) string {
+	switch {
+	case prev.roundClosed:
+		return declineRoundClosed
+	case prev.vodState != "none":
+		return declineChainClosed
+	}
+	return ""
+}
+
+// joinable 은 계승과 합류(15.2 표 5 · 6행)의 공통 조건이다 — 끝난 회차 · 의도적 종료 아님 · 조각 있음 · 공백 0 이상
+// window 이하.
+func joinable(prev previousSession, startWall time.Time, window time.Duration) bool {
 	if window <= 0 || prev.lastEnd.IsZero() {
 		return false
 	}
 	if prev.state != "ending" && prev.state != "ended" {
 		return false
 	}
-	if prev.endReason == endReasonInitMismatch {
+	if prev.endReason == endReasonIntentional {
 		return false
 	}
 	gap := startWall.Sub(prev.lastEnd)
@@ -370,6 +410,8 @@ type liveSession struct {
 	startedAt         time.Time
 	targetDuration    int32
 	discontinuityBase int64
+	// stopMarkedAt 은 그 live 의 의도적 종료 표식이다. 없으면 영값이다.
+	stopMarkedAt time.Time
 }
 
 // decide 는 DB 를 보지 않는 판정부다 — 현 live 세션(없으면 nil)과 입력만으로 갈래를 정한다.
@@ -378,11 +420,16 @@ type liveSession struct {
 // **전제**: 연산은 Decide 가 조회보다 앞에서 이미 검증했다. 유일한 호출자가 그 자리다.
 //
 // **순서가 계약이다**(설계 4.9.1 · 5.4.1):
-//  1. TD 판정이 먼저다. 유입·관측과 무관하게 "이 조각이 현 세션의 TD 를 넘는가"가 갈래를
+//  0. 표식 분할(M6 3.3 결정 1)이 맨 앞이다 — live 에 표식이 있고 조각이 「표식 + 여유」 이상이면 live 를 끝낸다.
+//  1. TD 판정이 그다음이다. 유입·관측과 무관하게 "이 조각이 현 세션의 TD 를 넘는가"가 갈래를
 //     가른다 — 분할이면 새 세션이 이 조각에서 시작하므로 아래 하한은 자동으로 만족된다.
 //  2. 귀속 하한은 **항상** 건다(장부 축). 연산과 무관하다.
 //  3. 마지막에야 연산이 "현 세션이 없을 때 열 것인가"를 가른다.
 func (r *Registry) decide(live *liveSession, in Input, now time.Time) Decision {
+	// 표식 분할이 TD 판정보다 먼저다(M6 3.3 결정 1) — 의도적 종료는 회차까지 가르는 사건이다.
+	if live != nil && r.pastStopMark(live.stopMarkedAt, in.StartWallUTC) {
+		return markSplitDecision(in, live)
+	}
 	// TD 판정은 현 live 행의 target_duration 을 피연산자로 쓴다 — 그래서 이 판정이
 	// 트랜잭션 밖이 아니라 여기 있다(밖에서 읽으면 낡은 세션 값으로 판정한다).
 	// 현 live 가 없으면 판정 자체가 성립하지 않고 개시 갈래로 간다.
@@ -463,6 +510,8 @@ func openDecision(in Input, split *liveSession, inherit *previousSession) Decisi
 	case split != nil:
 		p.discontinuityBase = split.discontinuityBase // 설계 4.9.1 "discontinuity_base 승계"
 		p.endingSessionID = split.id
+		p.endReason = endReasonTDExceeded
+		p.roundFromEnding = true // 15.2 표 4행 — 회차 · 표식은 끝내는 UPDATE 의 RETURNING 이 정본
 		// 기저 세션은 곧 ending 으로 보낼 그 세션이다 — ID 를 손에 쥐고 있으므로 조회하지 않는다.
 		// 조회로 찾으면 started_at 최신이 새 세션(또는 더 늦게 시작한 옛 세션)이라 어긋난다.
 		return Decision{Outcome: OutcomeOpenFresh, BaseSessionID: split.id, EndingSessionID: split.id, plan: p}
@@ -481,6 +530,7 @@ func openDecision(in Input, split *liveSession, inherit *previousSession) Decisi
 }
 
 // endSessionSQL 은 live 세션을 ending 으로 보내는 문장이다($1 session_id · $2 end_reason).
+// 사유는 TD 분할 'td_exceeded' 와 표식 분할 'intentional'(M6 3.3 결정 1) 둘이다.
 //
 // 사유가 인자인 이유: 세션을 끝내는 까닭은 여럿이고(TD 분할 'td_exceeded' — 이 패키지의
 // Open, 오프라인 'offline' — M4 PR ⓒ) 문장의 형상은 하나다. 장부가 "왜 끝났는가"를 잃지
@@ -491,16 +541,19 @@ func openDecision(in Input, split *liveSession, inherit *previousSession) Decisi
 // state='live' 술어는 "우리가 읽은 그 세션이 아직 열려 있을 때만 닫는다"이다:
 // READ COMMITTED 의 UPDATE 는 남의 커밋을 만나면 **최신 버전으로 WHERE 를 다시 보므로**,
 // 술어가 session_id 뿐이면 그 사이 남이 적은 종료 사유를 되돌려 쓴다.
-// 0 행이어도 오류로 만들지 않는다 — 이미 남이 닫았다는 뜻이고, 그래도 live 가 남아 있다면
-// 이어지는 INSERT 를 one_live_uq 가 가른다(판정 자리를 둘로 늘리지 않는다).
 //
 // **같은 형상의 종료 절이 index 에도 있다**(init 불일치 결속 CTE — index 는 session 을
 // 임포트하지 않아 이 문장을 쓸 수 없다). 술어·SET 목록을 바꾸면 그쪽도 함께 바꾼다 —
 // 두 문장은 end_session_pg_test.go 가 대조한다(계획 부기 21).
+//
+// RETURNING 셋은 새 세션의 회차 승계 재료다(M6 15.2 표 4행) — 무잠금으로 읽은 값은 늦은 4D 의 커밋과 겹치면 낡지만,
+// 이 UPDATE 는 X 행을 잡은 채 커밋된 판을 보고 돌려준다. **0 행이면 오류다**(M6 3.3): 소속 잠금 아래에서 X 가 이미
+// live 가 아니라면 판정의 전제가 무너진 것이라 그 개시를 되돌리고 다음 조각이 다시 판정한다.
 const endSessionSQL = `
 UPDATE stream_sessions
    SET state = 'ending', ending_at = pg_catalog.now(), end_reason = $2
- WHERE session_id = $1 AND state = 'live'`
+ WHERE session_id = $1 AND state = 'live'
+RETURNING round_id, round_closed_at IS NOT NULL, stop_marked_at`
 
 // endReasonTDExceeded 는 TD 분할이 직전 세션을 끝내는 사유다(설계 4.9.1).
 const endReasonTDExceeded = "td_exceeded"
@@ -511,14 +564,15 @@ const endReasonInitMismatch = "init_mismatch"
 
 // openSessionSQL 은 개시 트랜잭션의 유일한 세션 INSERT 다.
 //
-// 값을 대입하는 컬럼이 **8 개뿐인 것이 계약이다**(계획 3절 (가) · 2.3 registry 행 ⑶) — 나머지는 DDL 기본값이
-// 곧 규칙이고, 그래서 stream_sessions DDL 을 건드리지 않는다(스키마 승인 표면 0).
+// 값을 대입하는 컬럼이 **10 개뿐인 것이 계약이다**(계획 3절 (가) · 2.3 registry 행 ⑶ · M6 15.2) — 나머지는 DDL
+// 기본값이 곧 규칙이다. round_id 는 늘 값이 있고(새 회차면 새 session_id) stop_marked_at 은 승계할 때만 값이다.
 // state 는 DDL 기본과 같은 값이지만 명시로 적는다: 개시가 무엇을 만드는지 문장이 말한다.
 // inherits_session 은 재접속 계승 개시에서만 값이고 그 밖(TD 분할 포함)에는 NULL 이다.
 const openSessionSQL = `
 INSERT INTO stream_sessions
-    (session_id, stream_id, started_at, state, first_pdt, target_duration, discontinuity_base, inherits_session)
-VALUES ($1, $2, $3, 'live', $4, $5, $6, $7)`
+    (session_id, stream_id, started_at, state, first_pdt, target_duration, discontinuity_base, inherits_session,
+     round_id, stop_marked_at)
+VALUES ($1, $2, $3, 'live', $4, $5, $6, $7, $8, $9)`
 
 // Open 은 결정이 개시 갈래일 때 세션 표에 쓰고 새 session_id 를 돌려준다(계획 4.1 ⑸).
 //
@@ -542,19 +596,28 @@ func (r *Registry) Open(ctx context.Context, tx pgx.Tx, d Decision, firstPDT tim
 			d.plan.streamID, d.plan.seq)
 	}
 	p := d.plan
+	roundID, marked := p.roundID, p.stopMarkedAt
 	if p.endingSessionID != "" {
-		if _, err := tx.Exec(ctx, endSessionSQL, p.endingSessionID, endReasonTDExceeded); err != nil {
-			return "", fmt.Errorf("직전 세션 종료 표시 실패 session_id=%q: %w", p.endingSessionID, err)
+		ended, err := endLive(ctx, tx, p.endingSessionID, p.endReason)
+		if err != nil {
+			return "", err
+		}
+		if p.roundFromEnding {
+			roundID, marked = ended.successorRound()
 		}
 	}
 	id := sessionID(p.streamID, p.startedAt, p.seq)
+	if roundID == "" {
+		roundID = id // 15.2 표 「자기 → 새 회차」 — round_id 는 그 회차 머리 세션의 session_id 다
+	}
 	// 계승이 아니면 NULL 이다 — "" 를 쓰면 inherits_session 의 FK(자기 표 참조)가 23503 으로 막는다.
 	var inherits *string
 	if p.inheritsSession != "" {
 		inherits = &p.inheritsSession
 	}
 	if _, err := tx.Exec(ctx, openSessionSQL,
-		id, p.streamID, p.startedAt.UTC(), firstPDT.UTC(), p.targetDuration, p.discontinuityBase, inherits); err != nil {
+		id, p.streamID, p.startedAt.UTC(), firstPDT.UTC(), p.targetDuration, p.discontinuityBase, inherits,
+		roundID, marked); err != nil {
 		return "", fmt.Errorf("세션 개시 INSERT 실패 session_id=%q stream_id=%q: %w", id, p.streamID, err)
 	}
 	return id, nil
