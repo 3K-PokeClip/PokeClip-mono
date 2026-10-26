@@ -538,7 +538,8 @@ DB 의 앱 사용자 넷은 1단-나 ①(POK-428) 뒤로 `public` CREATE 가 없
 - **하한 갱신 함수는 정의자(`media_owner`) 권한으로 돈다.** 다른 표에 붙이면
   그 표의 행으로 남의 하한을 올릴 수 있으므로, EXECUTE 를 PUBLIC 에서 회수해
   새 부착을 막고(42501) 함수가 `stream_segments` 밖에서는 멈춘다(TG_RELID
-  검사). `40_verify.sql` 이 PUBLIC EXECUTE 없음을 단언한다.
+  검사). `40_verify.sql` 이 소유자 밖 EXECUTE 없음(PUBLIC · 특정 계정
+  GRANT 모두)을 단언한다.
 - **`stream_cutoffs` 가 오염되면 DBA 가 손으로 고친다.** 사이드카의 UPDATE
   · DELETE 는 만료 문장(장부 값으로만 전진)용이고, 잘못 들어간 컷오프를
   고치는 경로는 아니다.
