@@ -9,9 +9,18 @@
 # 해석과 자원 정책 읽기 → (4) PC2 주체 대조 → (4') PC-A 갈래 A 대조 →
 # (5) 실제 질문 → (6) 기록. PC0 · PC1 이 실패하면 (3) 이후의 호출은 0건이다.
 #
+# (5) 실제 질문은 요청 파일을 지금 순서대로 다 쓴 뒤 동시 작업자
+# PRINCIPAL_CHECK_JOBS 개(1 이상 16 이하 정수 · 기본 6 · 꼴 밖이면 종료 2)가
+# 나눠 보내고, 판정은 번호 순서로 응답을 다시 읽어 한다
+# (lib/principal_batch.sh). 성공 경로의 결과 · 증거 · 표준 출력 · 종료 코드는
+# 동시 수와 상관없이 같다. 그 앞의 호출은 순서대로 하나씩 보낸다.
+#
 # 모든 AWS 호출은 요청 본문을 증거의 req-<n>.json 에 쓰고
 # --cli-input-json file://… 로 넘긴다 — argv 에는 ARN · 계정 ID · 이름이
 # 없고 --query · --output · --region · --resource-policy 같은 옵션만 있다.
+# 응답이 Throttling 계열 오류(THROTTLE_CODES)면 첫 시도 포함 6번까지 1 · 2 ·
+# 4 · 8 · 16초 쉬고 다시 묻는다(지터 없음). 그 밖의 오류(한도 초과
+# LimitExceededException 포함)는 다시 묻지 않는다.
 # 시뮬레이터 요청은 모두 SCP 를 뺀다(PolicyExclusionList 가 정확히 scp 하나
 # — 결정 5 (가)). 제외가 실제로 먹는지는 PC0 이 확인한다: 호출 주체의 prod
 # 상태 버킷 목록 읽기를 운영 측 SCP 가 막는 리전(ap-northeast-1) 문맥으로
@@ -39,8 +48,9 @@
 #   (첫 줄 없음 — 표준 오류에 「검사 불가」)     종료 2
 # 집계는 멈춤 > 판정 불가 > 통과. 종료 2 = 사용법 · 모르는 단계 · 데이터 꼴 ·
 # CLI 기록 켜짐 · 증거 경로 거부 · 증거 쓰기 실패 · IAM 사용자 아닌 호출
-# 주체 · 호출 실패(NoSuchEntity 를 뺀 주체 해석 오류 포함) · 호출 자체의
-# AccessDenied · 응답 꼴(역할 · 사용자 ARN 이 하나가 아님 · 최상위 판정이
+# 주체 · 동시 수 꼴(PRINCIPAL_CHECK_JOBS) · 호출 실패(NoSuchEntity 를 뺀 주체
+# 해석 오류 포함) · Throttling 재시도 상한 초과 · 호출 자체의 AccessDenied ·
+# 응답 꼴(역할 · 사용자 ARN 이 하나가 아님 · 최상위 판정이
 # 값 하나가 아님 · 큐 속성 · 비밀 응답의 None · 요청과 다른 큐 · 비밀 ARN
 # 포함) · 정책 파일 꼴 · S3 · ECR · SNS 정책 응답의 None · 존 해석 2건 이상 ·
 # 잘린 존 목록 · input: 입력 파일의 거부(0600 아님 · 링크) · 빈 파일 · 꼴
@@ -55,8 +65,9 @@
 # principals.tsv · targets.tsv · policies.tsv · policy-<n>.json ·
 # pca-policy.json(PC-A 합성 정책 — 요청에만 씀) · req-<n>.json · res-<n>.txt ·
 # res-<n>.err · result.tsv · report.txt · complete.txt(마지막 — 「UTC
-# 시각<탭>result.tsv sha256」). kty 는 종료 3 일 때 approvals.tsv 를 손으로
-# 적는다(런북 2-3).
+# 시각<탭>result.tsv sha256」). 동시 구간이 실패하면 res-<n>.fail ·
+# batch-abort 가 더 남는다(실패 때만). kty 는 종료 3 일 때 approvals.tsv 를
+# 손으로 적는다(런북 2-3).
 #
 # 사용: principal-check.sh <단계>   (단계 = STAGE_ORDER 의 이름)
 
@@ -86,16 +97,37 @@ readonly PC0_REGION='ap-northeast-1'
 # PC-A: 없는 표본 버킷에 대한 옛 OIDC 역할(종류 role)의 목록 읽기.
 readonly PCA_SAMPLE_ARN='arn:aws:s3:::pokeclip-prod-m17b-probe-nonexistent-9f3a'
 readonly PCA_REGION='ap-northeast-2'
+# 다시 묻는 Throttling 계열 오류 코드 여덟 — aws CLI 의 botocore
+# retries/standard.py _THROTTLED_ERROR_CODES 의 부분 집합이다. 한도 초과
+# (LimitExceededException) 처럼 기다려도 풀리지 않는 코드는 넣지 않는다.
+THROTTLE_CODES=(Throttling ThrottlingException ThrottledException
+  RequestThrottledException TooManyRequestsException RequestLimitExceeded
+  RequestThrottled SlowDown)
+readonly THROTTLE_CODES
+# 다시 묻기 전의 대기(초) — 첫 시도 포함 6번.
+RETRY_DELAYS=(1 2 4 8 16)
+readonly RETRY_DELAYS
 
 # 단계 · 증거 디렉터리.
 stage=""
 stage_idx=0
 evidence_dir=""
-# aws_call 이 남기는 요청 번호 · 표준 출력 · 표준 오류 파일.
+# aws_request · aws_send 가 남기는 요청 번호 · 표준 출력 · 표준 오류 파일.
 req_n=0
 call_out=""
 call_err=""
 request_json=""
+# (5) 실제 질문 k 의 단위 · 대상 행 · 자원 ARN · 동작 · 검증 레코드 이름 ·
+# 정책 상태 · 붙인 정책 파일 · 찾은 정책 색인 · 요청 번호.
+q_j=()
+q_t=()
+q_arn=()
+q_action=()
+q_name=()
+q_state=()
+q_file=()
+q_found=()
+q_n=()
 # 대상 행이 이번 단계에서 도는지(1).
 t_active=()
 # 단위의 PC2 실패(1) · 갈래(A · B)와 그 기록.
@@ -136,6 +168,9 @@ source "${SCRIPT_DIR}/lib/principal_data.sh" 2>/dev/null ||
 # shellcheck source=infra/terraform/scripts/precheck/lib/principal_simulate.sh
 source "${SCRIPT_DIR}/lib/principal_simulate.sh" 2>/dev/null ||
   die "lib/principal_simulate.sh 를 읽지 못함"
+# shellcheck source=infra/terraform/scripts/precheck/lib/principal_batch.sh
+source "${SCRIPT_DIR}/lib/principal_batch.sh" 2>/dev/null ||
+  die "lib/principal_batch.sh 를 읽지 못함"
 # shellcheck source=infra/terraform/scripts/precheck/lib/principal_resolve.sh
 source "${SCRIPT_DIR}/lib/principal_resolve.sh" 2>/dev/null ||
   die "lib/principal_resolve.sh 를 읽지 못함"
@@ -144,36 +179,89 @@ source "${SCRIPT_DIR}/lib/principal_policy.sh" 2>/dev/null ||
   die "lib/principal_policy.sh 를 읽지 못함"
 
 #######################################
-# AWS 호출 하나 — 요청 본문을 req-<n>.json 에 쓰고 --cli-input-json
-# file:// · --output text 로 부른다. 표준 출력은 call_out 과 res-<n>.txt,
-# 표준 오류는 res-<n>.err 에 남는다.
+# 요청 하나를 쓴다 — 번호를 올리고 req-<n>.json 과 빈 res-<n>.err 를 남긴다.
 # Globals:
-#   evidence_dir, req_n, call_out, call_err
+#   evidence_dir, req_n, call_err
+# Arguments:
+#   요청 본문(JSON).
+#######################################
+aws_request() {
+  req_n=$((req_n + 1))
+  call_err="${evidence_dir}/res-${req_n}.err"
+  precheck::write_evidence "${evidence_dir}/req-${req_n}.json" '%s\n' "$1"
+  precheck::write_evidence "${call_err}" ''
+}
+
+#######################################
+# 표준 오류 파일이 Throttling 계열 오류인지 본다(「(<코드>)」 꼴).
+# Globals:
+#   THROTTLE_CODES
+# Arguments:
+#   표준 오류 파일.
+# Returns:
+#   Throttling 이면 0.
+#######################################
+is_throttled() {
+  local code
+  for code in "${THROTTLE_CODES[@]}"; do
+    grep -qF -- "(${code})" "$1" && return 0
+  done
+  return 1
+}
+
+#######################################
+# 쓴 요청 req-<n>.json 을 --cli-input-json file:// · --output text 로
+# 보낸다. Throttling 계열 오류면 RETRY_DELAYS 만큼 쉬고 다시 묻는다(첫
+# 시도 포함 6번). 표준 출력은 call_out 과 res-<n>.txt, 표준 오류는 마지막
+# 시도의 것이 res-<n>.err 에 남는다.
+# Globals:
+#   evidence_dir, call_out, call_err, RETRY_DELAYS
+# Arguments:
+#   요청 번호, aws 인자(서비스 · 동작 · 옵션).
+# Returns:
+#   마지막 시도의 aws 종료 코드.
+#######################################
+aws_send() {
+  local n="$1" request status attempt=0
+  shift
+  request="${evidence_dir}/req-${n}.json"
+  call_err="${evidence_dir}/res-${n}.err"
+  while :; do
+    # 바깥 2>/dev/null 은 안쪽 리다이렉션이 실패할 때의 원시 진단만 버린다.
+    call_out="$({ aws "$@" --cli-input-json "file://${request}" --output text \
+      2>"${call_err}"; } 2>/dev/null)"
+    status=$?
+    [[ "${status}" -ne 0 && "${attempt}" -lt "${#RETRY_DELAYS[@]}" ]] ||
+      break
+    is_throttled "${call_err}" || break
+    sleep "${RETRY_DELAYS[attempt]}" 2>/dev/null ||
+      die "다시 묻기 전 대기가 실패함(res-${n}.err)"
+    attempt=$((attempt + 1))
+  done
+  precheck::write_evidence "${evidence_dir}/res-${n}.txt" '%s\n' \
+    "${call_out}"
+  return "${status}"
+}
+
+#######################################
+# AWS 호출 하나 — 요청을 쓰고(aws_request) 보낸다(aws_send).
+# Globals:
+#   req_n, call_out, call_err
 # Arguments:
 #   요청 본문(JSON), aws 인자(서비스 · 동작 · 옵션).
 # Returns:
 #   aws 의 종료 코드.
 #######################################
 aws_call() {
-  local body="$1" request status
+  local body="$1"
   shift
-  req_n=$((req_n + 1))
-  request="${evidence_dir}/req-${req_n}.json"
-  call_err="${evidence_dir}/res-${req_n}.err"
-  precheck::write_evidence "${request}" '%s\n' "${body}"
-  precheck::write_evidence "${call_err}" ''
-  # 바깥 2>/dev/null 은 안쪽 리다이렉션이 실패할 때의 원시 진단만 버린다.
-  call_out="$({ aws "$@" --cli-input-json "file://${request}" --output text \
-    2>"${call_err}"; } 2>/dev/null)"
-  status=$?
-  precheck::write_evidence "${evidence_dir}/res-${req_n}.txt" '%s\n' \
-    "${call_out}"
-  return "${status}"
+  aws_request "${body}"
+  aws_send "${req_n}" "$@"
 }
 
 #######################################
-# 마지막 읽기 호출의 실패로 멈춘다 — 호출 자체의 AccessDenied 와 그 밖을
-# 가른다.
+# 마지막 읽기 호출의 실패로 멈춘다 — 호출 자체의 AccessDenied · Throttling
+# 재시도 상한 · 그 밖을 가른다.
 # Globals:
 #   call_err, req_n
 # Arguments:
@@ -182,6 +270,9 @@ aws_call() {
 fail_call() {
   if grep -qF 'AccessDenied' -- "${call_err}"; then
     die "$1 호출 자체가 거부됨(AccessDenied — res-${req_n}.err)"
+  fi
+  if is_throttled "${call_err}"; then
+    die "$1 호출이 Throttling 재시도 상한을 넘음(res-${req_n}.err)"
   fi
   die "$1 호출 실패(res-${req_n}.err)"
 }
@@ -372,20 +463,19 @@ row_arns() {
 }
 
 #######################################
-# (5) 실제 질문 하나를 묻고 행 판정을 기록한다(머리 주석의 순서). 검증
-# 레코드 이름이 있으면 추가 문맥의 자리표시자를 그 이름으로 바꾸고, 결과의
-# 자원 칸에 「ARN 이름」 으로 남긴다. 바꾼 뒤에도 「$」 가 남으면 자리표시자를
-# 그대로 묻게 되므로 종료 2 다.
+# (5) 실제 질문 하나의 요청 파일을 쓰고 동시 목록에 올린다(보내기 ·
+# 판정은 judge_answers). 검증 레코드 이름이 있으면 추가 문맥의 자리표시자를
+# 그 이름으로 바꾼다. 바꾼 뒤에도 「$」 가 남으면 자리표시자를 그대로 묻게
+# 되므로 종료 2 다. 판정에 쓸 값은 q_* 의 k 번째에 남긴다.
 # Globals:
-#   u_*, t_*, pol_state, pol_file, pol_escaped, found_policy, branch,
-#   context_json, sim_class, sim_decision, result, n_judged,
-#   VALIDATION_PLACEHOLDER
+#   u_*, t_*, pol_state, pol_file, found_policy, branch, context_json, q_*,
+#   req_n, VALIDATION_PLACEHOLDER
 # Arguments:
 #   u_* 색인, t_* 색인, 자원 ARN, 동작, 검증 레코드 이름(없으면 빈 값).
 #######################################
-judge_question() {
+prepare_question() {
   local j="$1" t="$2" arn="$3" action="$4" name="$5" state="" file=""
-  local verdict=PASS reason=- context="${t_context[$2]}"
+  local context="${t_context[$2]}"
   principal::policy_for "${t_read[t]}" "${arn}"
   [[ -z "${found_policy}" ]] || state="${pol_state[found_policy]}"
   if [[ "${state}" == allow && ( "${u_kind[j]}" == user ||
@@ -396,8 +486,34 @@ judge_question() {
     context="${context//${VALIDATION_PLACEHOLDER}/${name}}"
   [[ "${context}" != *'$'* ]] || die "추가 문맥에 풀지 않은 자리표시자가 남음"
   principal::context_entries "${context}" || die "추가 문맥 꼴이 틀림"
-  principal::ask "${u_arn[j]}" "${action}" "${arn}" "${t_region[t]}" \
+  principal::queue "${u_arn[j]}" "${action}" "${arn}" "${t_region[t]}" \
     "${context_json}" "${file}"
+  q_j+=("${j}")
+  q_t+=("${t}")
+  q_arn+=("${arn}")
+  q_action+=("${action}")
+  q_name+=("${name}")
+  q_state+=("${state}")
+  q_file+=("${file}")
+  q_found+=("${found_policy}")
+  q_n+=("${req_n}")
+}
+
+#######################################
+# (5) 실제 질문 k 의 응답(sim_class · sim_decision)으로 행 판정을 기록한다
+# (머리 주석의 순서). 검증 레코드 이름이 있으면 결과의 자원 칸에 「ARN
+# 이름」 으로 남긴다.
+# Globals:
+#   q_*, u_*, t_*, pol_escaped, found_policy, sim_class, sim_decision,
+#   result, n_judged
+# Arguments:
+#   q_* 색인.
+#######################################
+decide_question() {
+  local j="${q_j[$1]}" t="${q_t[$1]}" arn="${q_arn[$1]}"
+  local action="${q_action[$1]}" name="${q_name[$1]}" state="${q_state[$1]}"
+  local file="${q_file[$1]}" verdict=PASS reason=-
+  found_policy="${q_found[$1]}"
   if [[ "${sim_class}" == allow ]]; then
     verdict=STOP reason=ALLOWED
   elif [[ "${state}" == session ]]; then
@@ -441,7 +557,7 @@ record_unit_reasons() {
 
 #######################################
 # (5) 단위 · 대상 행 · 자원 하나를 검증 레코드 이름(있으면 이름마다) × 동작
-# 마다 묻는다.
+# 마다 준비한다.
 # Globals:
 #   t_actions, tr_names
 # Arguments:
@@ -458,14 +574,15 @@ judge_arn() {
     while [[ -n "${actions}" ]]; do
       action="${actions%%,*}"
       actions="${actions#*,}"
-      judge_question "${j}" "${t}" "${arn}" "${action}" "${name}"
+      prepare_question "${j}" "${t}" "${arn}" "${action}" "${name}"
     done
   done
 }
 
 #######################################
-# (5) 단위 × 이번 단계 대상 행 × 자원 × (검증 레코드 이름) × 동작마다 묻는다.
-# self:group · policy:attached 가 0건인 단위는 report.txt 에 건수만 남긴다.
+# (5) 단위 × 이번 단계 대상 행 × 자원 × (검증 레코드 이름) × 동작마다 질문을
+# 준비한다(prepare_question). self:group · policy:attached 가 0건인 단위는
+# report.txt 에 건수만 남긴다.
 # Globals:
 #   u_arn, u_kind, u_keys, t_key, t_active, t_method, list_items, notes
 #######################################
@@ -490,6 +607,22 @@ judge_rows() {
         rest="${rest#*$'\n'}"
       done
     done
+  done
+}
+
+#######################################
+# (5) 준비한 질문을 동시로 보내고(principal::batch_run), 번호 순서로 응답을
+# 다시 읽어 판정한다 — 결과 행 순서는 순차로 물을 때와 같다.
+# Globals:
+#   q_n, call_out
+#######################################
+judge_answers() {
+  local k
+  principal::batch_run
+  for k in ${q_n[@]+"${!q_n[@]}"}; do
+    principal::read_answer "${q_n[k]}"
+    principal::read_response "${call_out}"
+    decide_question "${k}"
   done
 }
 
@@ -535,6 +668,7 @@ main() {
   principal::load_controls
   principal::load_targets
   mark_active
+  principal::batch_jobs
   precheck::check_cli_history
   evidence_dir="$(evidence::new_dir "${DIR_PREFIX}-${stage}")" || exit 2
   printf 'principal-check: 증거 ~/%s/%s\n' "${EVIDENCE_ROOT_NAME}" \
@@ -548,6 +682,7 @@ main() {
   ask_positive_controls
   ask_branch_control
   judge_rows
+  judge_answers
   record_unit_reasons
   record_and_report
 }

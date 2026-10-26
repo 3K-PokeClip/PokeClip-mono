@@ -260,6 +260,10 @@ bash infra/terraform/scripts/precheck/principal-check.sh O7a
     CLI 는 요청의 `PolicyExclusionList`(SCP 제외)를 입력 오류로 거부하고,
     도구는 종료 2 와 「2.36.12 이상 필요」 를 냅니다. CLI 기록이 켜져
     있으면 종료 2 입니다(「순서」 절의 세 도구 공통 사전 조건).
+*   동시 수: 실제 질문은 환경 변수 `PRINCIPAL_CHECK_JOBS`(1 이상 16 이하
+    정수 · 앞자리 0 없음 · 없으면 6)개씩 동시에 보냅니다. 꼴 밖이면 첫 AWS
+    호출 전에 종료 2 입니다. 「Throttling 재시도 상한을 넘음」 종료 2 가
+    되풀이되면 `PRINCIPAL_CHECK_JOBS=3` 처럼 낮춰 다시 돌립니다.
 
 ### 2-3 판정의 실행 순서
 
@@ -295,7 +299,12 @@ bash infra/terraform/scripts/precheck/principal-check.sh O7a
     정책과 함께(허용이어야 함). 둘 다 맞으면 갈래 A(역할 주체 질문에도 자원
     정책을 붙임), 아니면 이번 실행은 갈래 B 입니다. 합성 정책은 요청 안에만
     있습니다.
-1.  **실제 질문**: 주체 × 해석된 자원 × 동작마다 한 번 묻습니다.
+1.  **실제 질문**: 주체 × 해석된 자원 × 동작마다 한 번 묻습니다. 요청
+    파일을 지금 순서대로 다 쓴 뒤 `PRINCIPAL_CHECK_JOBS`(기본 6)개씩 동시에
+    보내고, 판정은 요청 번호 순서로 합니다 — 성공한 실행의 결과 · 증거 ·
+    출력은 동시 수와 상관없이 같습니다. 하나라도 실패하면 나머지 질문을
+    멈추고 종료 2 입니다(`complete.txt` 없음). 앞의 PC0 부터 PC-A 까지는
+    하나씩 묻습니다.
 1.  **기록**: 증거를 다 쓴 뒤 마지막에 `complete.txt` 를 남깁니다.
 
 ### 2-3 판정의 질문 규칙
@@ -306,6 +315,13 @@ bash infra/terraform/scripts/precheck/principal-check.sh O7a
     ID · 이름이 없습니다. 로그 그룹 ARN 행은 이름 꼴과 `:log-stream:` 을
     붙인 꼴 두 ARN 을 따로 묻고, 하나라도 허용이면 멈춤입니다 — IAM 정책은
     로그 그룹을 대개 `이름:*` 로 적어 이름 꼴만 물으면 그 허용을 놓칩니다.
+*   **다시 묻기**: 모든 호출(시뮬레이터 · 해석 · 정책 읽기)은 응답이
+    Throttling 계열 오류(`Throttling` · `ThrottlingException` ·
+    `ThrottledException` · `RequestThrottledException` ·
+    `TooManyRequestsException` · `RequestLimitExceeded` · `RequestThrottled`
+    · `SlowDown`)일 때만 첫 시도 포함 6번까지 1 · 2 · 4 · 8 · 16초 쉬고
+    다시 묻습니다. 한도 초과(`LimitExceededException` 등) · 호출 자체의
+    AccessDenied · 그 밖의 오류는 다시 묻지 않고 종료 2 입니다.
 *   **Q2 고정 문맥**: `aws:RequestedRegion`(행의 리전) ·
     `aws:SecureTransport` true · S3 동작이면 `s3:TlsVersion` 1.3 을 넣고,
     행의 추가 문맥이 있으면 더합니다.
@@ -368,8 +384,9 @@ platform 의 태그 행(ALB · NLB · 대상 그룹 · 리스너 · ECS)도 첫 
 *   종료 3 의 기록: 그 실행의 증거 디렉터리에 `approvals.tsv`(시각 · 판정
     불가 · 진행/멈춤 · 이유, 탭 구분)를 kty 가 적습니다. 기록은 다음 실행에
     이어 쓰지 않습니다 — 다시 돌리면 그 실행의 판정 불가를 다시 적습니다.
-*   종료 2 는 사용법 · 모르는 단계 · 데이터 꼴 · CLI 기록 켜짐 · 증거 경로
-    거부 · 증거 쓰기 실패 · IAM 사용자 아닌 호출 주체 · 호출 실패 · 호출
+*   종료 2 는 사용법 · 모르는 단계 · 데이터 꼴 · CLI 기록 켜짐 · 동시 수
+    꼴(`PRINCIPAL_CHECK_JOBS`) · 증거 경로 거부 · 증거 쓰기 실패 · IAM
+    사용자 아닌 호출 주체 · 호출 실패 · Throttling 재시도 상한 초과 · 호출
     자체의 AccessDenied · 응답 꼴(역할 · 사용자 ARN 이 하나가 아님 · 최상위
     판정이 값 하나가 아님 · 큐 속성 · 비밀 응답의 `None` · 요청과 다른 큐 ·
     비밀 ARN 포함) ·
@@ -386,7 +403,8 @@ platform 의 태그 행(ALB · NLB · 대상 그룹 · 리스너 · ECS)도 첫 
     `policy-<n>.json` · `pca-policy.json`(PC-A 합성 정책) · `req-<n>.json` ·
     `res-<n>.txt` · `res-<n>.err` · `result.tsv` · `report.txt` ·
     `complete.txt`(마지막 — UTC 시각과 `result.tsv` 해시) · kty 손 기록
-    `approvals.tsv`. 지우지 않습니다(리스 만료 때 M18). 입력 파일
+    `approvals.tsv`. 동시 질문이 실패한 실행에만 `res-<n>.fail` ·
+    `batch-abort` 가 더 남습니다. 지우지 않습니다(리스 만료 때 M18). 입력 파일
     `input-<이름>.txt` 는 증거 디렉터리가 아니라 루트 바로 아래에 있고, 다음
     단계 실행도 그것을 읽습니다(지우지 않음).
 *   공유 공개 존의 prod 레코드 이름 여섯(prod/records)은 레코드 이름 문맥

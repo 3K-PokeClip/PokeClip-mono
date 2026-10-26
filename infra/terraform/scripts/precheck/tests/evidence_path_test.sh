@@ -29,7 +29,7 @@ CHECK_TOOLS=(
   scp-recheck.sh events.sh principal-check.sh
   lib/evidence.sh lib/precheck_common.sh
   lib/principal_data.sh lib/principal_simulate.sh
-  lib/principal_resolve.sh lib/principal_policy.sh
+  lib/principal_resolve.sh lib/principal_policy.sh lib/principal_batch.sh
 )
 readonly CHECK_TOOLS
 # 임시 파일을 만드는 구문 — bash 3.2 의 here-string · here-doc(둘 다 임시

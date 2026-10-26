@@ -136,7 +136,8 @@ expect_lib_failures() {
       --since 2026-10-13T00:00:00Z || return
   done
   for lib in evidence.sh precheck_common.sh principal_data.sh \
-    principal_simulate.sh principal_resolve.sh principal_policy.sh; do
+    principal_simulate.sh principal_resolve.sh principal_policy.sh \
+    principal_batch.sh; do
     expect_lib_missing principal-check.sh "${lib}" \
       "principal-check: 검사 불가: lib/${lib} 를 읽지 못함" O7a || return
   done
