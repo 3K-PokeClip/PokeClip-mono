@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // blockOnce 는 sql 을 처음 보낼 때 그 자리에서 멈추는 추적기다. reached 가 닫히면 멈췄고, release 를 닫으면 보낸다.
@@ -158,4 +160,56 @@ func TestFreezeVODConfirmLocksChainInRoundOrder(t *testing.T) {
 	if out.Err != nil {
 		t.Errorf("확정 오류 = %v, want 없음", out.Err)
 	}
+}
+
+// vod_tail_lock_lets_segments_land(cc c5 확인 L1 · D71) — 꼬리 잠금은 직렬화만 하면 되므로 FOR NO KEY UPDATE 다. 등재
+// 트랜잭션이 꼬리를 쥔 동안 그 회차의 늦은 조각 INSERT(FK 검사 = FOR KEY SHARE)는 기다리지 않는다. 변이 = 꼬리 잠금을
+// FOR UPDATE 로 → INSERT 가 막혀 시한 FAIL.
+func TestFreezeVODTailLockDoesNotBlockSegmentInsert(t *testing.T) {
+	rows := chainRows()
+	rows[7].state = "pending"
+	p, store, chain := newVODChain(t, rows)
+	hook, reached, release := blockOnce(vodMarkGapSQL)
+	a := newPublisher(t, hookedPool(t, p.pool, hook), store, "w-a", &logRecorder{})
+	done := make(chan FreezeOutcome, 1)
+	go func() { done <- a.FreezeVOD(context.Background(), chain, true) }()
+	waitReached(t, reached, "GAP 등재 문장")
+
+	ictx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	started := time.Now()
+	_, err := p.pool.Exec(ictx, `
+		INSERT INTO stream_segments (stream_id, seq, start_pts_ms, start_wall_utc, duration_ms, s3_key, session_id)
+		VALUES ($1, 10, 0, now(), 4000, 'archive/str/000010.mp4', 'S')`, fxStream)
+	close(release)
+
+	if err != nil {
+		t.Errorf("꼬리 잠금 중 조각 INSERT 실패(%v 뒤): %v — FK 잠금이 꼬리 잠금에 막혔다", time.Since(started), err)
+	}
+	wantOutcome(t, <-done, AxisVOD, ResultFrozenWithGaps, false)
+}
+
+// vod_reread_same_connection(cx c5 확인 설계 M · cc c5 확인 M1) — 꼬리를 쥔 등재 트랜잭션은 장부를 같은 연결로 다시
+// 읽는다. 풀에서 연결을 하나 더 받으면 풀이 찼을 때 잠금을 쥔 채 연결을 기다려 서로 막힌다. 연결 하나짜리 풀에서도
+// 동결이 끝난다. 변이 = 재독을 풀의 별도 연결로 → 연결 대기가 시한에 걸려 재시도로 FAIL.
+func TestFreezeVODRereadsOnSingleConnectionPool(t *testing.T) {
+	p, store, chain := newVODChain(t, chainRows())
+	cfg := p.pool.Config()
+	cfg.MaxConns = 1
+	one, err := pgxpool.NewWithConfig(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("연결 하나짜리 풀 생성 실패: %v", err)
+	}
+	t.Cleanup(one.Close)
+	a := newPublisher(t, one, store, "w-a", &logRecorder{})
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	out := a.FreezeVOD(ctx, chain, false)
+
+	wantOutcome(t, out, AxisVOD, ResultFrozen, false)
+	if out.Err != nil {
+		t.Errorf("동결 오류 = %v, want 없음", out.Err)
+	}
+	wantVODFrozen(t, p, store, ResultFrozen, 0, 9)
 }

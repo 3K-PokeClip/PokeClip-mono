@@ -41,11 +41,23 @@ func chainRows() []vodRow {
 // 사슬 밖 회차 X 도 넣어 둔다(행 배치가 X 를 쓸 때만 행이 있다).
 func newVODChain(t *testing.T, rows []vodRow) (*Publisher, *fakeStore, index.Chain) {
 	t.Helper()
+	return newVODChainOf(t, []rewind.Session{
+		{ID: "P", TargetDuration: 6},
+		{ID: "S", InheritsSession: "P", TargetDuration: 7},
+	}, rows)
+}
+
+// newVODChainOf 는 newVODChain 의 사슬을 chain(머리부터 꼬리까지 · 개시 순)으로 바꾼 픽스처다.
+func newVODChainOf(t *testing.T, chain []rewind.Session, rows []vodRow) (*Publisher, *fakeStore, index.Chain) {
+	t.Helper()
 	pool := newPool(t)
-	insertSession(t, pool, fxStream, rewind.Session{ID: "P", TargetDuration: 6}, "ending")
-	insertSession(t, pool, fxStream, rewind.Session{ID: "S", InheritsSession: "P", TargetDuration: 7}, "ending")
+	ids := make([]string, len(chain))
+	for i, s := range chain {
+		insertSession(t, pool, fxStream, s, "ending")
+		ids[i] = s.ID
+	}
 	insertSession(t, pool, fxStream, rewind.Session{ID: "X", TargetDuration: 6}, "ending")
-	exec(t, pool, `UPDATE stream_sessions SET vod_state = 'freezing', dvr_state = 'frozen' WHERE session_id IN ('P', 'S')`)
+	exec(t, pool, `UPDATE stream_sessions SET vod_state = 'freezing', dvr_state = 'frozen' WHERE session_id = ANY($1)`, ids)
 	for seq, r := range rows {
 		row := fxRow(r.session, int64(seq))
 		if r.session == "" {
@@ -55,8 +67,8 @@ func newVODChain(t *testing.T, rows []vodRow) (*Publisher, *fakeStore, index.Cha
 	}
 	insertCutoff(t, pool, 0)
 	store := newFakeStore(t)
-	chain := index.Chain{StreamID: fxStream, Head: "P", Tail: "S", SessionIDs: []string{"P", "S"}}
-	return newPublisher(t, pool, store, "w-me", &logRecorder{}), store, chain
+	c := index.Chain{StreamID: fxStream, Head: ids[0], Tail: ids[len(ids)-1], SessionIDs: ids}
+	return newPublisher(t, pool, store, "w-me", &logRecorder{}), store, c
 }
 
 // vodSession 은 stream_sessions 한 행의 VOD 열이다. NULL 은 nil 이다.
@@ -350,5 +362,75 @@ func TestFreezeVODConfirmsWholeChainOrNothing(t *testing.T) {
 	wantOutcome(t, out, AxisVOD, ResultRetry, true)
 	if v := readVOD(t, p, "S"); v.state != "freezing" || v.key != nil {
 		t.Errorf("꼬리 VOD 열 = %+v, want freezing · 키 NULL(되돌림)", v)
+	}
+}
+
+// vod_three_session_chain(M6-1 인계 · S4 · S3 · S6) — 사슬 P ← Q ← S 셋의 VOD 는 한 문서다. 소유 회차가 첫 행의 회차(머리
+// P)라 Q · S 의 계승 접두 검사(S4)에 걸리지 않고, 계승 경계마다(Q · S 의 첫 조각 앞) 끊김 표시가 서며 머리 앞에는 없다.
+func TestFreezeVODWritesThreeSessionChain(t *testing.T) {
+	rows := make([]vodRow, 12)
+	for i := range rows {
+		rows[i] = vodRow{session: []string{"P", "Q", "S"}[i/4], state: "uploaded"}
+	}
+	p, store, chain := newVODChainOf(t, []rewind.Session{
+		{ID: "P", TargetDuration: 6},
+		{ID: "Q", InheritsSession: "P", TargetDuration: 6},
+		{ID: "S", InheritsSession: "Q", TargetDuration: 7},
+	}, rows)
+
+	wantOutcome(t, p.FreezeVOD(t.Context(), chain, false), AxisVOD, ResultFrozen, false)
+
+	body, _ := stored(store, vodChainKey)
+	lines := vodLines(body)
+	if len(lines) != 12 || strings.Contains(lines[0], "DISCONTINUITY") ||
+		!strings.HasPrefix(lines[4], "#EXT-X-DISCONTINUITY ") || !strings.HasPrefix(lines[8], "#EXT-X-DISCONTINUITY ") {
+		t.Errorf("VOD 조각 줄 = %q, want 12줄 · 머리 앞 표시 없음 · Q · S 첫 조각 앞 표시", lines)
+	}
+	for _, id := range chain.SessionIDs {
+		if v := readVOD(t, p, id); v.state != ResultFrozen || v.first == nil || *v.first != 0 || v.last == nil || *v.last != 11 {
+			t.Errorf("회차 %s VOD 열 = %+v, want frozen · 범위 0–11", id, v)
+		}
+	}
+}
+
+// vod_chain_longer_than_window(M6-1 인계 · S4 1시간 상한) — VOD 는 1시간 창 문서가 아니다. 4초 조각 1,000개(약 67분)의
+// 두 세션 사슬이 한 문서로 동결된다. 소유 회차가 머리 P 라 P 의 행이 계승 접두가 아니어서, 접두가 1시간 창보다 먼 곳에서
+// 시작하면 거부하는 S4 상한에 걸리지 않는다. 변이 = 소유 회차를 꼬리 S 로(S 의 계승은 그대로) → P 가 접두가 되고 목록
+// 첫 조각을 뺀 길이가 약 67분이라 S4 상한으로 FAIL. 10행 시험은 이 변이를 잡지 못한다(접두가 1시간 안쪽이다).
+func TestFreezeVODWritesChainLongerThanOneHour(t *testing.T) {
+	rows := make([]vodRow, 1000)
+	for i := range rows {
+		rows[i] = vodRow{session: "P", state: "uploaded"}
+		if i >= 500 {
+			rows[i].session = "S"
+		}
+	}
+	p, store, chain := newVODChain(t, rows)
+
+	wantOutcome(t, p.FreezeVOD(t.Context(), chain, false), AxisVOD, ResultFrozen, false)
+
+	body, _ := stored(store, vodChainKey)
+	if lines := vodLines(body); len(lines) != 1000 {
+		t.Errorf("VOD 조각 줄 %d개, want 1000", len(lines))
+	}
+	wantVODFrozen(t, p, store, ResultFrozen, 0, 999)
+}
+
+// vod_empty_session_ids(M6-1 인계 — SessionIDs 필수) — 사슬 세션 목록이 빈 호출은 장부 대조를 건너뛰게 되므로 읽기 전에
+// chain_changed 실패다. 문서도 장부도 그대로다. 변이 = 첫 검사 삭제 → 머리 세션을 고르다 멈춰(범위 밖 색인) FAIL.
+func TestFreezeVODRejectsEmptySessionIDs(t *testing.T) {
+	p, store, chain := newVODChain(t, chainRows())
+	chain.SessionIDs = nil
+
+	out := p.FreezeVOD(t.Context(), chain, false)
+
+	wantOutcome(t, out, AxisVOD, ResultFailed, false)
+	if out.Reason != vodChainChanged || len(store.putCalls()) != 0 {
+		t.Errorf("사유 %q · PUT %d번, want chain_changed · 0", out.Reason, len(store.putCalls()))
+	}
+	for _, id := range []string{"P", "S"} {
+		if v := readVOD(t, p, id); v.state != "freezing" {
+			t.Errorf("회차 %s vod_state = %s, want freezing(그대로)", id, v.state)
+		}
 	}
 }
