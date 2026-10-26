@@ -119,10 +119,12 @@ UPDATE broadcast_lifecycle_outbox SET state = 'abandoned', last_error = 'started
  WHERE state = 'pending' AND round_id = $1 AND sequence > $2`
 )
 
-// abandon 은 행을 버리고 바뀐 행 수(뒤 행 포함)를 돌려준다.
+// abandon 은 행을 버리고 바뀐 행 수(뒤 행 포함)를 돌려준다. 격리 수준을 READ COMMITTED 로 못 박는다 — 뒤 문장이
+// 새 스냅숏을 받는 것은 이 수준에서만이다. DB · 역할의 기본값(default_transaction_isolation)이 repeatable read 면
+// 두 문장이 같은 스냅숏을 보아 문장 하나일 때처럼 ended 가 pending 에 고착한다.
 func abandon(ctx context.Context, db *pgxpool.Pool, r outboxRow, reason string) (int64, error) {
 	var n int64
-	err := pgx.BeginFunc(ctx, db, func(tx pgx.Tx) error {
+	err := pgx.BeginTxFunc(ctx, db, pgx.TxOptions{IsoLevel: pgx.ReadCommitted}, func(tx pgx.Tx) error {
 		row, err := tx.Exec(ctx, abandonRowSQL, r.eventID, reason)
 		if err != nil {
 			return err

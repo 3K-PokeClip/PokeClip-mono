@@ -71,8 +71,9 @@ ON CONFLICT (event_id) DO NOTHING`
 // 보내지 않는다(D45). 회차 열쇠가 식별자 규칙(CheckRound)을 어기면 행을 abandoned 로 넣고 ERROR 를 남긴다(D48) —
 // pending 으로 두면 영영 못 나가고, 행이 없으면 ended 를 막을 근거가 없다. 오류는 INSERT 실패뿐이다.
 //
-// lifecycle_enqueued · lifecycle_abandoned 는 부르는 쪽 트랜잭션 안의 「적재 시도」 신호다 — 커밋 전에 찍으므로 부르는
-// 쪽이 롤백하면 행 없이 줄만 남는다. 커밋된 사실은 outbox 행과 발행기의 lifecycle_published 가 정본이다.
+// 여기서 찍는 lifecycle_enqueued · lifecycle_abandoned 는 부르는 쪽 트랜잭션 안의 「적재 시도」 신호다 — 커밋 전에
+// 찍으므로 부르는 쪽이 롤백하면 행 없이 줄만 남는다. 커밋된 사실은 outbox 행과 발행기의 줄이 정본이다 — 발행기는
+// lifecycle_published 를 발행과 그 기록 뒤에, 같은 이름의 lifecycle_abandoned 를 버림 트랜잭션 커밋 뒤에 찍는다.
 func EnqueueStarted(ctx context.Context, tx pgx.Tx, g Gate, round, ingestStreamID string, startedAt time.Time) error {
 	if round == "" || !g.allows(ingestStreamID) {
 		return nil
