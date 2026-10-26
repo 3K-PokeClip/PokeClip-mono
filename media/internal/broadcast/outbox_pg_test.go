@@ -35,7 +35,8 @@ func TestMain(m *testing.M) {
 
 var base = time.Date(2026, 10, 26, 10, 0, 0, 0, time.UTC)
 
-const ingest = "abcdefghijklmnopqrstuvwxyz"
+// ingest 는 회차의 stream_id 다 — 토큰 꼴(26자 Crockford 대문자)이라 발행기가 resolve 에 그대로 묻는다.
+const ingest = "01HZX3K9QW8E7RMNPA5BCDTFGV"
 
 func newTestPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
