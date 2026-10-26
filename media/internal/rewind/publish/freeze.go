@@ -133,14 +133,12 @@ UPDATE stream_sessions
 // MSN · DISC-SEQ 는 평시 틱과 같은 산식이다(4.1 R1 — 축출이 있으면 오른다).
 // Kind 는 KindSliding 이다. 렌더 행이 0이면 PUT 없이 빈 동결로 확정한다.
 //
-// 이미 닫힌 판(앞 시도가 PUT 뒤 확정 전에 멈춤)이면 다시 쓰지 않고 그 판으로 확정한다 — 닫힌 목록은 바꾸지 않는다.
+// 이미 닫힌 판(앞 시도가 PUT 뒤 확정 전에 멈춤)이면 다시 쓰지 않는다 — 준비의 R3 가 그 판으로 동결을 확정하고(terminal
+// 승격) 예약이 0행이라 멱등 성공이다. 닫힌 목록은 바꾸지 않는다.
 func (p *Publisher) FreezeDVR(ctx context.Context, streamID, sessionID string) FreezeOutcome {
 	f, out, ok := p.beginFreeze(ctx, streamID, sessionID)
 	if !ok {
 		return out
-	}
-	if f.prev != nil && f.prev.Terminal {
-		return f.confirm(ctx, f.prev.Published, f.prev.ETag)
 	}
 	l, err := index.LoadSessionLedger(ctx, p.pool, streamID, sessionID, f.bounds())
 	switch {
@@ -213,7 +211,8 @@ func (f *freezeJob) discontinuitySequence(l index.RewindLedger, pl rewind.Playli
 // 마지막 발행 본문 끝에 SealEndlist 한 줄만 더해 If-Match 로 쓴다. 머리 줄은 바꾸지 않는다.
 //
 // 본문은 Get 으로 읽고 Head 메타의 pc-body-sha256 과 대조한다(E1 — 발행자는 상태를 들지 않아 마지막 발행 본문을 메모리에
-// 두지 않는다). 발행본이 없으면 봉인할 것이 없어 빈 동결이다. 이미 닫힌 본문이면 다시 쓰지 않고 그 판으로 확정한다(E2).
+// 두지 않는다). 발행본이 없으면 봉인할 것이 없어 빈 동결이다. 이미 닫힌 판이면 준비의 R3 승격이
+// 확정해 다시 쓰지 않는다(E2). 본문만 닫히고 메타가 열린 판이면 같은 본문에 닫힘 메타를 맞춘다.
 func (p *Publisher) Endlist(ctx context.Context, streamID, sessionID string) FreezeOutcome {
 	f, out, ok := p.beginFreeze(ctx, streamID, sessionID)
 	if !ok {
@@ -233,8 +232,6 @@ func (p *Publisher) Endlist(ctx context.Context, streamID, sessionID string) Fre
 	}
 	sealed, err := rewind.SealEndlist(body)
 	switch {
-	case errors.Is(err, rewind.ErrAlreadySealed) && f.prev.Terminal:
-		return f.confirm(ctx, f.prev.Published, f.prev.ETag)
 	case errors.Is(err, rewind.ErrAlreadySealed):
 		sealed = body // 본문은 닫혔는데 메타가 열려 있다 — 같은 본문에 닫힘 메타를 맞춘다
 	case err != nil:
@@ -281,7 +278,8 @@ func (p *Publisher) beginFreeze(ctx context.Context, streamID, sessionID string)
 	return f, FreezeOutcome{}, true
 }
 
-// reconcile 은 R1 · R2 · R3 · R4 다 — Head 로 P 를 읽고 fence 를 쥔 채 DB 세대 · ETag 를 그 판에 맞춘다. DB 세대가
+// reconcile 은 R1 · R2 · R3 · R4 다 — Head 로 P 를 읽고 fence 를 쥔 채 DB 세대 · ETag 를 그 판에 맞춘다(닫힌 판이면 R3
+// 가 동결까지 확정한다). DB 세대가
 // 저장된 판의 pc-gen 보다 낮을 수 있어(P4 결과를 잃음) 예약 전에 맞춘다 — 아니면 닫는 판이 S6(세대 단조)에 걸린다.
 func (f *freezeJob) reconcile(ctx context.Context) (FreezeOutcome, bool) {
 	hctx, cancel := context.WithTimeout(ctx, f.p.opt.PublishTimeout)
@@ -300,7 +298,7 @@ func (f *freezeJob) reconcile(ctx context.Context) (FreezeOutcome, bool) {
 			return dvrFailed(freezeMetaInvalid, err), false
 		}
 		f.prev = &Manifest{Published: desc, ETag: stat.ETag}
-		sql, args = r3ReconcileSQL, append(args, desc.Gen, desc.PublishedSeq, stat.ETag, desc.DiscontinuitySequence)
+		sql, args = r3ReconcileSQL, r3Args(f.session, f.p.opt.Writer, f.key, desc, stat.ETag)
 	}
 	var gen int64
 	if err := f.queryRow(ctx, sql, args...).Scan(&gen); err != nil {
