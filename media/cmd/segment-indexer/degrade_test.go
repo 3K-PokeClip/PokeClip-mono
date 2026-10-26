@@ -94,6 +94,32 @@ func TestLoopReattachesWatcher(t *testing.T) {
 	}
 }
 
+// 재장착 복귀의 watcher_degraded value=0 은 세움(run 의 value=1 ERROR)과 같은 ERROR 다.
+//
+// 잡는 결함: 내림이 INFO 로 내려가면 LOG_LEVEL=error 운영에서는 세움만 보이고 해소가
+// 보이지 않아 게이지가 영원히 1 로 읽힌다(set/clear 같은 등급 — rewind_cutoff_absent 선례).
+func TestWatcherDegradedClearKeepsErrorLevel(t *testing.T) {
+	f := newLoopFixture(t, false)
+	ctx, cancelWatcher := context.WithCancel(context.Background())
+	t.Cleanup(cancelWatcher)
+	f.logs.errorOnly.Store(true)
+	degradeLoop(f, 30*time.Millisecond, func() (*recording.Watcher, error) {
+		return assembleWatcher(ctx, recording.DefaultWatcherOptions(f.root, slog.New(f.logs)))
+	})
+	cancel := f.run()
+
+	waitFor(t, "ERROR 만 받을 때 watcher_degraded 내림", func() bool {
+		return f.logs.countLevel(slog.LevelError, "watcher_degraded") == 1
+	})
+	if v := f.logs.attrs("watcher_degraded")["value"]; v != int64(0) {
+		t.Errorf("내림 줄 value = %v, want 0", v)
+	}
+
+	if err := f.stop(cancel); err != nil {
+		t.Fatalf("loop() = %v, want nil", err)
+	}
+}
+
 // 강등 판정의 두 실패점 — 조립(NewWatcher)과 기동(Start)이 각각 에러로 합쳐지고,
 // 기동 실패 경로는 fsnotify 핸들을 닫는다(f6i 의 단위 절반 — Close 도달).
 func TestAssembleWatcherFailurePoints(t *testing.T) {

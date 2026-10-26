@@ -14,6 +14,7 @@ import (
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/rewind/boundary"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/rewind/cache"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/rewind/publish"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/rewind/status"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/upload"
 )
 
@@ -68,6 +69,21 @@ type rewindLoop struct {
 	absent  publish.CutoffAbsentState
 	ticks   int
 	booted  bool
+
+	// 아래는 제어면 상태 몫이다(설계 M5 3.3 · assembleStatus 가 채운다 · rewind_status.go 가 쓴다). board 는 HTTP 고루틴과
+	// 나눠 쓰는 유일한 칸이다(원자 포인터 — 불변 Board 만 오간다). statusOff 는 발행 꺼짐이라 Board 를 갱신하지 않는가다.
+	// finals 는 M6 상태 전달의 받은편지함이고, final 은 스트림마다의 종료 항목이다(루프 고루틴 전용 — 처리기는 Board 의 사본만
+	// 본다). baseURL 은 REWIND_PUBLIC_BASE_URL 이다.
+	board     *status.Holder
+	statusOff bool
+	finals    *finalsInbox
+	final     map[string]status.Final
+	baseURL   string
+	// invalid 는 스트림마다 마지막으로 버린 M6 값이다(rewind_final_invalid 를 같은 값에 한 번만). rangeWarned 는
+	// rewind_status_range_missing 을 남긴 회차다(회차당 한 번). alarms 는 rewind_ready_delayed 의 스트림별 상태다.
+	invalid     map[string]index.PlaybackState
+	rangeWarned map[string]string
+	alarms      map[string]*readyAlarm
 }
 
 // laneWork 는 차선 작업의 몸체다 — 입력 값만 받아 차선 고루틴에서 돌고 결과를 값으로 돌려준다(캐시 · Dirty 를 만지지 않는다).
@@ -134,19 +150,24 @@ const (
 // Dirty 반영 → 사다리 → 틱 발사 → (Ack) → 요구 발사 → lazy 갱신 → 감시다(체크리스트 474 A-4 — 순서가 계약이다: 사다리는 반영된
 // ③ 를 보고, 틱은 사다리의 L2 를 GAP 틱으로 받으며, 감시 입력은 반영 뒤에 뜬다). 작업은 차선으로 내고 결과는 완료 case 가
 // 받는다 — DB · 저장소를 기다리지 않는다(설계 3.3 — 4.1 의 EndLive 만 예외).
+//
+// 제어면 상태 몫은 그 앞뒤다(설계 M5 3.3 holdTick 순서 · 보완 2 ㉢ ㉤): 4.1 전이 뒤 받은편지함을 종료 항목에 반영하고(Drain),
+// 발행 몫은 발행 몫이 있을 때만 돌며, 끝에서 Board 를 새로 만든다(publishStatus — 강등에서도 돈다 · 꺼짐 제외). 그래서 그 틱
+// 스냅숏은 그 틱의 Drain · 개시 삭제를 본다.
 func (r *rewindLoop) holdTick(ctx context.Context, now time.Time) {
 	r.endOfflineSessions(ctx, now)
-	if !r.publishing() {
-		return
+	r.drainFinals()
+	if r.publishing() {
+		events := r.peek()
+		touched := r.reflectDirty(events)
+		gaps := r.evaluateLadders(ctx, now)
+		r.dispatchTicks(ctx, touched, gaps, now)
+		r.ack(events)
+		r.dispatchLoads(ctx, now)
+		r.renewFences(ctx, now)
+		r.watch(ctx)
 	}
-	events := r.peek()
-	touched := r.reflectDirty(events)
-	gaps := r.evaluateLadders(ctx, now)
-	r.dispatchTicks(ctx, touched, gaps, now)
-	r.ack(events)
-	r.dispatchLoads(ctx, now)
-	r.renewFences(ctx, now)
-	r.watch(ctx)
+	r.publishStatus(now)
 }
 
 // publishing 은 발행 몫이 있는가다.

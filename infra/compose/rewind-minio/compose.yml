@@ -1,0 +1,142 @@
+# 로컬 되감기 바이트 원천 — MinIO(https) · 로컬 엣지 · 사이드카 덧붙임 env (POK-200 · 설계 M5 9.4.1 · 9.4.2).
+#
+# 기본 `docker compose up` 은 바뀌지 않는다(발행 꺼짐). 이 파일을 덧붙이고 프로필을 켤 때만 사이드카가 MinIO 로 발행 ·
+# 업로드한다. 켜기 · 끄기 · 수용 시험 · 정리는 같은 폴더 README.md 다.
+#
+#   docker compose -f docker-compose.yml -f infra/compose/rewind-minio/compose.yml --profile rewind-minio up -d
+#
+# 이미지 판: MinIO 커뮤니티판 배포가 멈춰(Docker Hub minio/* 없음 · quay.io/minio 인증 요구 — 2026-10-26 실물 확인)
+# 관리되는 재배포판 Chainguard minio 를 다이제스트로 고정한다. 판을 올리면 check-s3-conditions.sh 를 다시 돌린다
+# (조건부 PUT 412 넷 · 익명 탐침 셋 — 어긋나면 그 판은 쓰지 않는다).
+#   cgr.dev/chainguard/minio = RELEASE.2026-10-23T20-06-51Z · linux/arm64 · 같은 이미지에 mc 가 든다(minio-init 이 쓴다)
+
+x-minio-image: &minio-image cgr.dev/chainguard/minio@sha256:268d68a2a3b6fc65f905a61f84d7eab6345ce6bff14f551e2b028ec31e6a1341
+
+services:
+  # 로컬 CA 와 minio SAN 서버 인증서를 만든다(있으면 건너뛴다). CA 인증서만 rewind-minio-ca 에 두고, 서버 개인 키는
+  # rewind-minio-certs 에만 둔다 — 사이드카 · 엣지는 CA 만 받는다.
+  minio-certs:
+    image: alpine:3.22
+    profiles: [rewind-minio]
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - rewind-minio-certs:/certs
+      - rewind-minio-ca:/ca
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        if [ -s /certs/public.crt ] && [ -s /ca/ca.crt ]; then echo "인증서 있음 — 건너뜀"; exit 0; fi
+        apk add --no-cache openssl >/dev/null
+        cd /tmp
+        openssl req -x509 -newkey rsa:2048 -nodes -days 365 -subj "/CN=pokeclip-rewind-local-ca" \
+          -keyout ca.key -out ca.crt
+        openssl req -newkey rsa:2048 -nodes -subj "/CN=minio" -keyout private.key -out server.csr
+        printf 'subjectAltName=DNS:minio,DNS:localhost,IP:127.0.0.1\nextendedKeyUsage=serverAuth\n' > ext.cnf
+        openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key -CAcreateserial -days 365 \
+          -extfile ext.cnf -out public.crt
+        mkdir -p /certs/CAs
+        cp public.crt private.key /certs/ && cp ca.crt /certs/CAs/ca.crt && cp ca.crt /ca/ca.crt
+        chown -R 65532:65532 /certs && chmod 600 /certs/private.key && chmod 644 /ca/ca.crt
+        rm -f ca.key ca.srl server.csr ext.cnf private.key
+
+  minio:
+    image: *minio-image
+    profiles: [rewind-minio]
+    depends_on:
+      minio-certs:
+        condition: service_completed_successfully
+    security_opt:
+      - no-new-privileges:true
+    command: ["server", "/data", "--address", ":9000", "--certs-dir", "/certs"]
+    environment:
+      MINIO_ROOT_USER: ${REWIND_MINIO_USER:?.env 에 REWIND_MINIO_USER 를 적으세요(.env.example 참조)}
+      MINIO_ROOT_PASSWORD: ${REWIND_MINIO_PASSWORD:?.env 에 REWIND_MINIO_PASSWORD 를 적으세요(.env.example 참조)}
+      SSL_CERT_DIR: /etc/ssl/certs:/certs/CAs # 헬스체크의 mc 가 로컬 CA 를 믿게
+    volumes:
+      - rewind-minio-certs:/certs
+      - rewind-minio-data:/data
+    # 호스트 게시 없음 — compose 망 안 https://minio:9000 만.
+    healthcheck:
+      test: ["CMD-SHELL", "MC_HOST_h=https://$${MINIO_ROOT_USER}:$${MINIO_ROOT_PASSWORD}@localhost:9000 mc --config-dir /tmp/mc ready h"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  # 버킷을 만들고 익명 정책을 dvr/* 의 GetObject 하나로 둔다(목록 권한 없음 · streams/ 는 닫힘 — R34).
+  minio-init:
+    image: *minio-image
+    profiles: [rewind-minio]
+    depends_on:
+      minio:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      MINIO_ROOT_USER: ${REWIND_MINIO_USER:?}
+      MINIO_ROOT_PASSWORD: ${REWIND_MINIO_PASSWORD:?}
+      SSL_CERT_DIR: /etc/ssl/certs:/run/rewind-minio-ca
+    volumes:
+      - rewind-minio-ca:/run/rewind-minio-ca:ro
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        export MC_HOST_local="https://$${MINIO_ROOT_USER}:$${MINIO_ROOT_PASSWORD}@minio:9000"
+        mc --config-dir /tmp/mc mb --ignore-existing local/pokeclip-rewind-local
+        printf '%s' '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":["*"]},"Action":["s3:GetObject"],"Resource":["arn:aws:s3:::pokeclip-rewind-local/dvr/*"]}]}' > /tmp/anon.json
+        mc --config-dir /tmp/mc anonymous set-json /tmp/anon.json local/pokeclip-rewind-local
+        echo "버킷 · 익명 정책(dvr/* GetObject) 준비"
+
+  # 브라우저 대신 MinIO 에 붙는 로컬 엣지 — /dvr/ 만 · CORS · x-amz-* 지움(9.4.2절).
+  dvr-edge:
+    image: nginx:1-alpine
+    profiles: [rewind-minio]
+    depends_on:
+      minio-init:
+        condition: service_completed_successfully
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "127.0.0.1:28480:80"
+    volumes:
+      - ./infra/compose/rewind-minio/dvr-edge.conf:/etc/nginx/conf.d/default.conf:ro
+      - rewind-minio-ca:/run/rewind-minio-ca:ro
+
+  # 공통 수용 시험 — 이미지 · 판을 고르거나 올릴 때(README 「수용 시험」). 평소 up 에는 뜨지 않는다.
+  minio-check:
+    image: alpine:3.22
+    profiles: [rewind-minio-check]
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      S3_URL: https://minio:9000
+      S3_BUCKET: pokeclip-rewind-local
+      S3_ACCESS_KEY: ${REWIND_MINIO_USER:?}
+      S3_SECRET_KEY: ${REWIND_MINIO_PASSWORD:?}
+      S3_CA_FILE: /run/rewind-minio-ca/ca.crt
+    volumes:
+      - ./infra/compose/rewind-minio/check-s3-conditions.sh:/check-s3-conditions.sh:ro
+      - rewind-minio-ca:/run/rewind-minio-ca:ro
+    entrypoint: ["/bin/sh", "-ec", "apk add --no-cache curl >/dev/null && sh /check-s3-conditions.sh"]
+
+  segment-indexer:
+    depends_on:
+      minio-init:
+        condition: service_completed_successfully # 부팅 HeadBucket 이 버킷을 봐야 발행 몫이 강등되지 않는다
+    environment:
+      S3_BUCKET: pokeclip-rewind-local
+      S3_ENDPOINT: https://minio:9000 # 발행 몫은 https 만 받는다
+      S3_FORCE_PATH_STYLE: "true"
+      AWS_ACCESS_KEY_ID: ${REWIND_MINIO_USER:?}
+      AWS_SECRET_ACCESS_KEY: ${REWIND_MINIO_PASSWORD:?}
+      AWS_REGION: us-east-1
+      REWIND_PUBLIC_BASE_URL: http://127.0.0.1:28480 # http 는 루프백 IP 리터럴만 받는다
+      # 시스템 신뢰에 로컬 CA 를 더한다(덮지 않는다 — R33). CA 디렉터리만 마운트한다.
+      SSL_CERT_DIR: /etc/ssl/certs:/run/rewind-minio-ca
+    volumes:
+      - rewind-minio-ca:/run/rewind-minio-ca:ro
+
+volumes:
+  rewind-minio-certs:
+  rewind-minio-ca:
+  rewind-minio-data:
