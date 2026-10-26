@@ -1,11 +1,13 @@
 package fsop
 
 import (
+	"bytes"
 	"errors"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -82,6 +84,36 @@ func TestLatchTripAndReset(t *testing.T) {
 	// 미트립 상태의 Reset 은 프로브 없이 참이다.
 	if !l.Reset(root, time.Nanosecond) {
 		t.Fatal("미트립 Reset 이 거짓이다")
+	}
+}
+
+// fs_degraded 의 세움(Trip)과 내림(Reset)은 같은 ERROR 다.
+//
+// 잡는 결함: 내림이 INFO 로 내려가면 LOG_LEVEL=error 운영에서는 세움만 보이고 해소가
+// 보이지 않아 게이지가 영원히 1 로 읽힌다(set/clear 같은 등급 — rewind_cutoff_absent 선례).
+func TestLatchDegradedSignalKeepsErrorLevelOnClear(t *testing.T) {
+	var buf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelError}))
+	l := NewLatch(log)
+
+	l.Trip("/p", "measure")
+	if !l.Reset(t.TempDir(), time.Second) {
+		t.Fatal("응답하는 FS 에서 Reset 이 해제하지 못했다")
+	}
+
+	var got []string
+	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		if strings.Contains(line, "msg=fs_degraded ") {
+			got = append(got, line)
+		}
+	}
+	if len(got) != 2 {
+		t.Fatalf("ERROR 만 받을 때 fs_degraded = %d줄, want 2(세움 · 내림): %q", len(got), buf.String())
+	}
+	for i, want := range []string{"value=1", "value=0"} {
+		if !strings.Contains(got[i], "level=ERROR") || !strings.Contains(got[i], want) {
+			t.Errorf("fs_degraded %d번째 줄 = %q, want level=ERROR %s", i+1, got[i], want)
+		}
 	}
 }
 

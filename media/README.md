@@ -139,6 +139,17 @@ MediaMTX가 이벤트마다 컨테이너 안의 작은 명령을 실행하고(`m
 
 확인 절차는 [`docs/dev-environment.md`](../docs/dev-environment.md)의 "훅 채널 확인"에 있다.
 
+### 강등 게이지 — 워처 · 파일 시스템
+
+두 게이지는 세움(value 1)과 내림(value 0)이 둘 다 ERROR 다. 내림 뒤에는 다시 쓰지
+않으므로 `LOG_LEVEL=error` 로 걸러도 해소가 보여야 한다(정정 2026-10-26 — 그 전에는
+내림이 INFO 라 error 운영에서 게이지가 1 에 굳었다).
+
+| 게이지 | 세움 | 내림 | 등급 |
+|---|---|---|---|
+| `watcher_degraded` | 기동 때 워처 조립 · 기동 실패(훅 · 스캔 유입은 계속) | 재스캔 주기의 재장착 성공(`watcher_recovered` 와 함께) | ERROR / ERROR |
+| `fs_degraded` | 파일 작업 시간 초과로 FS 래치 트립(`path` · `site`) | 주기 머리 root 프로브가 응답해 래치 해제(트립 때 좌표를 싣는다) | ERROR / ERROR |
+
 ## segment-indexer 사이드카가 인식하는 환경변수
 
 `cmd/segment-indexer`가 읽는 값 전부다. 코드를 읽지 않고도 무엇을 켤 수 있는지 알 수 있게

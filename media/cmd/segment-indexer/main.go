@@ -549,7 +549,8 @@ func loop(ctx context.Context, d loopDeps) error {
 			d.ix.SetAdopter(r.w)
 			d.watcherDegraded = false
 			d.log.Info("watcher_recovered", "note", "재장착 완료 — 되돌림(H4·H5)이 실제 워처로 복귀한다")
-			d.log.Info("watcher_degraded", "value", 0)
+			// 내림은 세움(run 의 value=1)과 같은 ERROR 다 — LOG_LEVEL=error 로 걸러도 해소가 보인다(set/clear 대칭).
+			d.log.Error("watcher_degraded", "value", 0)
 
 		// 수집 워커의 결과가 도착했다. 처리(스트림 루프)는 여기 — 즉 loop 고루틴에서 돈다(D10).
 		case res := <-d.ix.CollectDone():
