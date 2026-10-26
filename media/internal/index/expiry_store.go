@@ -242,6 +242,56 @@ func ExpiryDocuments(ctx context.Context, pool *pgxpool.Pool, q ExpiryQuery) ([]
 	return out, nil
 }
 
+// expiryPrivileges 는 만료가 쓰는 표 권한이다(설계 7절 활성화 선행 조건 · cc L8ⓑ) — 읽기 권한은 핵심 문장이 이미
+// 요구하므로 여기 없다. 사이드카 권한 목록(pgtest.MediaIndexerGrantSQL)의 부분 집합임을 시험이 단언한다.
+var expiryPrivileges = [...]struct{ table, privilege string }{
+	{"broadcast_lifecycle_outbox", "DELETE"},
+	{"stream_cutoffs", "DELETE"},
+	{"stream_cutoffs", "UPDATE"},
+	{"stream_published_gaps", "DELETE"},
+	{"stream_segments", "DELETE"},
+	{"stream_sessions", "DELETE"},
+}
+
+// ExpiryPrivileges 는 만료 기동 검사가 보는 권한을 「표:권한」 꼴로 돌려준다(이름 순).
+func ExpiryPrivileges() []string {
+	out := make([]string, 0, len(expiryPrivileges))
+	for _, p := range expiryPrivileges {
+		out = append(out, p.table+":"+p.privilege)
+	}
+	return out
+}
+
+// missingPrivilegesSQL ($1 표 배열 · $2 권한 배열 — 같은 길이) 는 접속 계정에 없는 권한을 고른다.
+const missingPrivilegesSQL = `
+SELECT p.tbl, p.priv FROM ROWS FROM (pg_catalog.unnest($1::text[]), pg_catalog.unnest($2::text[])) AS p(tbl, priv)
+ WHERE NOT pg_catalog.has_table_privilege(p.tbl, p.priv)
+ ORDER BY p.tbl, p.priv`
+
+// MissingExpiryPrivileges 는 기동 권한 검사다 — 접속 계정에 없는 만료 권한을 「표:권한」 꼴로 돌려준다(이름 순 · 다
+// 있으면 빈 목록). 부르는 쪽은 하나라도 있으면 만료를 켜지 않는다(ERROR expiry_disabled reason=privilege — D50).
+// 운영 권한(30_grants.sql)이 아직 없는 DB 에서 DELETE 가 42501 로 반쯤 지운 상태를 남기지 않게 하는 fail-closed 다.
+func MissingExpiryPrivileges(ctx context.Context, pool *pgxpool.Pool) ([]string, error) {
+	tables := make([]string, 0, len(expiryPrivileges))
+	privs := make([]string, 0, len(expiryPrivileges))
+	for _, p := range expiryPrivileges {
+		tables, privs = append(tables, p.table), append(privs, p.privilege)
+	}
+	rows, err := pool.Query(ctx, missingPrivilegesSQL, tables, privs)
+	if err != nil {
+		return nil, fmt.Errorf("만료 권한 확인 조회 실패: %w", err)
+	}
+	missing, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (string, error) {
+		var table, privilege string
+		err := row.Scan(&table, &privilege)
+		return table + ":" + privilege, err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("만료 권한 확인 스캔 실패: %w", err)
+	}
+	return missing, nil
+}
+
 // CutoffChange 는 DeleteExpired 가 컷오프 행에 한 일이다.
 type CutoffChange int
 
