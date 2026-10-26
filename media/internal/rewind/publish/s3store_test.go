@@ -204,6 +204,46 @@ func TestS3StorePutSendsConditionAndMeta(t *testing.T) {
 	}
 }
 
+// 목록 객체의 Cache-Control 은 키 축으로 갈린다(kty A1 2026-10-27). 라이브 · 동결 DVR 목록(dvr/)은 조각마다 판이
+// 바뀌어 1초, VOD 문서(vod/)는 IfAbsent 로 한 번만 쓰고 바뀌지 않아 1시간이다. 키는 발행 경로가 쓰는 생성 함수
+// 그대로 만든다 — vodKey 의 접두가 바뀌면 이 시험이 먼저 깨진다. 잡는 결함: VOD 가 1초로 남아 엣지 질의가 늘거나,
+// 라이브 목록이 1시간을 받아 시청자가 낡은 판에 묶인다.
+func TestS3StorePutCacheControlByAxis(t *testing.T) {
+	dvr, err := manifestKey("demo", "sess-1")
+	if err != nil {
+		t.Fatalf("manifestKey: %v", err)
+	}
+	vod, err := vodKey("demo", "sess-1")
+	if err != nil {
+		t.Fatalf("vodKey: %v", err)
+	}
+	cases := []struct {
+		name string
+		key  string
+		want string
+	}{
+		{name: "DVR", key: dvr, want: "public, max-age=1"},
+		{name: "VOD", key: vod, want: "public, max-age=3600"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store, stub := newStubbedStore(t, respondObject(`"new-etag"`, nil, nil))
+
+			if _, err := store.Put(context.Background(), tc.key, IfAbsent(), bodyA, nil); err != nil {
+				t.Fatalf("Put(%q) 실패: %v", tc.key, err)
+			}
+
+			req := stub.only(t)
+			if got := req.header.Values("Cache-Control"); !slices.Equal(got, []string{tc.want}) {
+				t.Errorf("Put(%q) 의 Cache-Control = %q, want [%s]", tc.key, got, tc.want)
+			}
+			if got := req.header.Values("Content-Type"); !slices.Equal(got, []string{"application/vnd.apple.mpegurl"}) {
+				t.Errorf("Put(%q) 의 Content-Type = %q, want [application/vnd.apple.mpegurl](축과 무관)", tc.key, got)
+			}
+		})
+	}
+}
+
 // 4.4 [B-1] 응답 분기의 매핑 — 412 · 409 · 404(키 부재)는 센티널로, 나머지는 센티널이 아닌 오류로 온다.
 // 버킷이 없다는 404(NoSuchBucket)는 키 부재가 아니라 설정 결함이다. 어느 분기든 시도는 한 번이다 — 기본
 // 재시도가 3회인 클라이언트로도 503 에 요청이 하나만 나간다(재시도는 호출자 몫 — RC-19 시도 상한).
