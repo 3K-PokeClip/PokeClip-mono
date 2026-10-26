@@ -670,7 +670,8 @@ export function useHlsPlayback(
           }
           // 라이브 목록 404 = 라이브 닫힘(끝 도달로 친다) · 400 = 송출 재시작 뒤 옛 _HLS_msn
           // (bluenviron/mediamtx#4320) — 세션이 재생기를 새로 세운다. hls.js 는 4xx 를 다시 해 보지 않는다(RC-16).
-          // 목록 오류만 본다: 조각 404 도 치명으로 오지만 목록은 살아 있을 수 있어 아래의 한 번 다시 받기로 보낸다(cx H1)
+          // 목록 오류만 본다: 조각 404 도 hls.js 재시도를 다 쓰면 치명으로 오지만 목록은 살아 있을 수 있어 아래의 한 번
+          // 다시 받기로 보낸다(cx H1)
           const code = data.response?.code;
           const { onLiveClosed, onLive400 } = hooksRef.current;
           const liveGone = code === 404 ? onLiveClosed : code === 400 ? onLive400 : undefined;

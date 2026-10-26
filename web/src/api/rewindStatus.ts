@@ -81,9 +81,12 @@ function parsePdt(value: unknown): number | null | undefined {
   return Number.isFinite(ms) ? ms : undefined;
 }
 
-/** 답을 버린 사유 — 형식 오류(키 · 형 · 범위 · JSON 아님) · 출처 불일치(url 이 제어면과 다른 출처) */
-type RejectReason = 'shape' | 'origin';
-const REJECT_LABELS: Record<RejectReason, string> = { shape: '형식 오류', origin: '출처 불일치' };
+/**
+ * 답을 버린 사유 — 형식 오류(키 · 형 · 범위 · JSON 아님) · 목록 주소 거부(url 이 주소 꼴이 아니거나 m3u8 이 아니거나 제어면과
+ * 다른 출처 — isTrustedPlaylistUrl)
+ */
+type RejectReason = 'shape' | 'url';
+const REJECT_LABELS: Record<RejectReason, string> = { shape: '형식 오류', url: '목록 주소 거부' };
 
 /** 200 본문을 검사한다. 받으면 RewindStatus, 버리면 그 사유 */
 function readRewindStatus(body: unknown, controlBase: string): RewindStatus | RejectReason {
@@ -94,7 +97,7 @@ function readRewindStatus(body: unknown, controlBase: string): RewindStatus | Re
   if (typeof ready !== 'boolean') return 'shape';
   if (mode !== null && !MODES.includes(mode as RewindMode)) return 'shape';
   if (url !== null && typeof url !== 'string') return 'shape';
-  if (url !== null && !isTrustedPlaylistUrl(url, controlBase)) return 'origin';
+  if (url !== null && !isTrustedPlaylistUrl(url, controlBase)) return 'url';
   const firstPdtMs = parsePdt(raw.firstPdt);
   const headPdtMs = parsePdt(raw.headPdt);
   if (firstPdtMs === undefined || headPdtMs === undefined) return 'shape';
