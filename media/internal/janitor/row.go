@@ -48,6 +48,10 @@ func (j *Janitor) deleteRow(ctx context.Context, seg index.LocalSegment, st *cyc
 		st.cleared++
 		j.skip.del(k)
 		j.logDeleted(seg, act.outcome)
+		if seg.Abandoned {
+			// ③ 없이 지웠다 — 재추출 기회(ended + 24시간)가 지난 포기 조각이다(설계 M6 7절 X5).
+			j.log.Warn(abandonedReclaimedName, "stream_id", seg.StreamID, "seq", seg.Seq)
+		}
 	case index.RowLockKept:
 		// act 가 남긴 기록(보류 · 부채) 그대로다.
 	case index.RowLockBusy:

@@ -69,6 +69,8 @@ type fakeLedger struct {
 	invalid        []index.InvalidCutoff
 	invalidErr     error
 	invalidCalls   int
+	retained       int64 // AbandonedLocalRetained 가 돌려줄 값
+	retainedErr    error
 	lockCalls      int
 	clearCalls     int
 	acting         bool // 잠금 아래에서 remove 가 도는 중이다(D33 「진행 중」)
@@ -186,6 +188,19 @@ func (l *fakeLedger) DeletableSegments(_ context.Context, _ index.LocalCleanupPo
 	}
 	last := segs[len(segs)-1]
 	return segs, index.LocalCursor{StreamID: last.StreamID, Seq: last.Seq}, nil
+}
+
+// markAbandoned 는 행을 ③ 포기 갈래로 고른 행으로 표시한다.
+func (l *fakeLedger) markAbandoned(k rowKey) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.rows[k].seg.Abandoned = true
+}
+
+func (l *fakeLedger) AbandonedLocalRetained(context.Context) (int64, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.retained, l.retainedErr
 }
 
 func (l *fakeLedger) InvalidCutoffs(context.Context) ([]index.InvalidCutoff, error) {
