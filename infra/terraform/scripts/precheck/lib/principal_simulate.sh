@@ -164,8 +164,8 @@ principal::fail_simulate() {
 }
 
 #######################################
-# 이미 쓴 요청 하나를 시뮬레이터에 보낸다(aws_send — Throttling 만 다시
-# 묻는다).
+# 이미 쓴 요청 하나를 시뮬레이터에 보낸다(aws_send — 도구는 Throttling 만
+# 다시 묻는다 · CLI 자체 재시도는 따로).
 # Globals:
 #   SIM_QUERY
 # Arguments:

@@ -315,13 +315,23 @@ bash infra/terraform/scripts/precheck/principal-check.sh O7a
     ID · 이름이 없습니다. 로그 그룹 ARN 행은 이름 꼴과 `:log-stream:` 을
     붙인 꼴 두 ARN 을 따로 묻고, 하나라도 허용이면 멈춤입니다 — IAM 정책은
     로그 그룹을 대개 `이름:*` 로 적어 이름 꼴만 물으면 그 허용을 놓칩니다.
-*   **다시 묻기**: 모든 호출(시뮬레이터 · 해석 · 정책 읽기)은 응답이
-    Throttling 계열 오류(`Throttling` · `ThrottlingException` ·
-    `ThrottledException` · `RequestThrottledException` ·
-    `TooManyRequestsException` · `RequestLimitExceeded` · `RequestThrottled`
-    · `SlowDown`)일 때만 첫 시도 포함 6번까지 1 · 2 · 4 · 8 · 16초 쉬고
-    다시 묻습니다. 한도 초과(`LimitExceededException` 등) · 호출 자체의
-    AccessDenied · 그 밖의 오류는 다시 묻지 않고 종료 2 입니다.
+*   **다시 묻기**: 두 겹입니다. 먼저 aws CLI 가 호출 하나 안에서 스스로
+    다시 보냅니다 — 기본값(재시도 방식 `standard` · 최대 시도 3)이면
+    Throttling 계열 · 한도 초과(`LimitExceededException`) · 일시 오류(5xx ·
+    연결 오류 등)를 첫 시도 포함 3번까지 보냅니다. 이 수는 `~/.aws/config`
+    의 `retry_mode` · `max_attempts` 와 환경 변수 `AWS_RETRY_MODE` ·
+    `AWS_MAX_ATTEMPTS` 에 따라 달라집니다. 그 위에서 도구는 시뮬레이터 ·
+    해석 · 정책 읽기 호출이 Throttling 계열 오류(`Throttling` ·
+    `ThrottlingException` · `ThrottledException` ·
+    `RequestThrottledException` · `TooManyRequestsException` ·
+    `RequestLimitExceeded` · `RequestThrottled` · `SlowDown`)로 끝났을 때만
+    CLI 호출을 첫 시도 포함 6번까지 1 · 2 · 4 · 8 · 16초 쉬고 다시 합니다.
+    그래서 기본값에서 Throttling 은 요청이 최대 18번(3 × 6) 나갑니다. 한도
+    초과 · 호출 자체의 AccessDenied · 그 밖의 오류는 도구가 다시 묻지 않고
+    종료 2 입니다(한도 초과 · 일시 오류는 CLI 안의 3번 뒤). 사전 조건의
+    호출 주체 확인(`sts get-caller-identity`)과 CLI 기록
+    확인(`configure get`)은 도구가 다시 묻는 대상이 아닙니다 — 앞의 것은 CLI
+    자체 재시도만 받고, 뒤의 것은 AWS 에 묻지 않습니다.
 *   **Q2 고정 문맥**: `aws:RequestedRegion`(행의 리전) ·
     `aws:SecureTransport` true · S3 동작이면 `s3:TlsVersion` 1.3 을 넣고,
     행의 추가 문맥이 있으면 더합니다.
