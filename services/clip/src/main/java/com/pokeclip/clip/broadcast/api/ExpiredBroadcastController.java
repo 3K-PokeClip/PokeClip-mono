@@ -13,8 +13,11 @@ import java.util.List;
 /**
  * 보관 기한(60일)이 지난 방송 목록을 1번(영상 서버)에게 주는 문(POK-335, 계약-세그먼트인덱스 6-2). 1번이 10분마다 부른다.
  *
- * <p>방송 중 목록 창구(POK-218)와 같은 자리다: 자격 판정이 없고, 시큐리티는 {@code InternalSecurityConfig}가 {@code /internal/**}
- * 접두로 가져가 이 파일에 설정이 없다. 400은 {@code before} · {@code cursor} 형식뿐이다.
+ * <p>방송 중 목록 창구(POK-218)와 같은 자리다: 자격 판정이 없고 이 파일에 시큐리티 설정이 없다.
+ * 문은 둘이다 — 공용 {@code X-Internal-Token}은 {@code InternalSecurityConfig}가 {@code /internal/**}
+ * 접두로 받고, 1번 전용 헤더 {@code X-Expired-Broadcasts-Token}은
+ * {@code ExpiredBroadcastSecurityConfig}가 출발지 잠금과 함께 받는다(POK-196 M6).
+ * 400은 {@code before} · {@code cursor} 형식뿐이다.
  */
 @RestController
 public class ExpiredBroadcastController {

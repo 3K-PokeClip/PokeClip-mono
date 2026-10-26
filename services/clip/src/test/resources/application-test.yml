@@ -31,6 +31,12 @@ pokeclip:
 
   internal-api:
     token: test-only-internal-token-32bytes-long!!
+    # 셸에 EXPIRED_BROADCASTS_TOKEN·EXPIRED_BROADCASTS_ALLOWED_CIDRS가 export돼 있어도 시험은 닫힌 창구를 잰다 —
+    # 이 두 줄이 기본 yml의 placeholder 줄을 덮는다(auth application-test.yml 의 stream-key-resolve 와 같다).
+    # 창구를 여는 시험의 @TestPropertySource는 이것보다 위라 그쪽은 계속 열린다.
+    expired-broadcasts:
+      token: ""
+      allowed-cidrs: ""
 
   auth-client:
     # 🔴 이 줄이 없으면 clip의 모든 @SpringBootTest가 죽는다. base-url의 운영 기본값이
