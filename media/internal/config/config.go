@@ -88,6 +88,11 @@ type Config struct {
 	Control ControlOptions
 	// Expiry 는 60일 만료의 설정이다(CLIP_INTERNAL_URL · CLIP_EXPIRY_TOKEN[_FILE] — 설계 M6 7절).
 	Expiry ExpiryOptions
+	// ResolveURL · ResolveTokenFile 은 사이드카의 4C resolve 설정이다(STREAM_KEY_RESOLVE_URL ·
+	// STREAM_KEY_RESOLVE_TOKEN_FILE — POK-472). 둘 다 빈 값이면 4D 수신부를 등록하지 않는다. 토큰 파일은 경로 문자열만
+	// 검사했고 열지 않았다 — 읽기는 main 이 한다(MTXAPIPassFile 과 같은 규칙).
+	ResolveURL       string
+	ResolveTokenFile string
 }
 
 // 관측 축 기본값(설계 5.4.1·6.5.2). 판정 주체(indexer·session)는 이 값을 설정으로 받으며
@@ -334,6 +339,10 @@ func Load(env func(string) string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	resolve, err := loadResolve(env)
+	if err != nil {
+		return Config{}, err
+	}
 
 	return Config{
 		PG:               pg,
@@ -360,6 +369,8 @@ func Load(env func(string) string) (Config, error) {
 		RewindPublicBaseURL: rewindBaseURL,
 		Control:             control,
 		Expiry:              expiryOpt,
+		ResolveURL:          resolve.url,
+		ResolveTokenFile:    resolve.tokenFile,
 	}, nil
 }
 
