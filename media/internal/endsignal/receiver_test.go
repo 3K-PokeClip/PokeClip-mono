@@ -123,8 +123,11 @@ func TestMalformedBodyIs400BeforeAuth(t *testing.T) {
 			if n := f.resolveCalls.Load(); n != 0 {
 				t.Errorf("%s: resolve 호출 = %d, want 0", tc.name, n)
 			}
-			if l := f.lastEndSignal(); l.Reason != "bad_request" || l.StreamID != "" || l.Level != "WARN" {
-				t.Errorf("%s: end_signal 줄 = %+v (400 은 stream_id 를 싣지 않는다)", tc.name, l)
+			if l := f.lastEndSignal(); l.Reason != "bad_request" || l.Level != "WARN" {
+				t.Errorf("%s: end_signal 줄 = %+v", tc.name, l)
+			}
+			if v, has := f.lastEndSignalKeys()["stream_id"]; has {
+				t.Errorf("%s: end_signal 줄에 stream_id 키 = %s — 400 은 그 키를 싣지 않는다(빈 값도 아니다)", tc.name, v)
 			}
 		}
 	}

@@ -43,9 +43,7 @@ func openIndexerPool(ctx context.Context, s pgconf.Settings, log *slog.Logger, s
 	if err != nil {
 		return nil, nil, err
 	}
-	ic := pc.Copy()
-	ic.MaxConns = indexerPoolMaxConns // 인덱서 풀에만 — 돌려주는 pc(발행자 풀 원본)는 그대로 둔다
-	pool, err := pgxpool.NewWithConfig(ctx, ic)
+	pool, err := pgxpool.NewWithConfig(ctx, indexerPoolConfig(pc))
 	if err != nil {
 		return nil, nil, fmt.Errorf("DB 연결 풀 생성 실패: %w", err)
 	}
@@ -57,4 +55,11 @@ func openIndexerPool(ctx context.Context, s pgconf.Settings, log *slog.Logger, s
 		return nil, nil, err
 	}
 	return pool, pc, nil
+}
+
+// indexerPoolConfig 는 pc 의 Copy 에 인덱서 풀 상한을 건다. pc(발행자 풀 원본)는 그대로 둔다.
+func indexerPoolConfig(pc *pgxpool.Config) *pgxpool.Config {
+	ic := pc.Copy()
+	ic.MaxConns = indexerPoolMaxConns
+	return ic
 }

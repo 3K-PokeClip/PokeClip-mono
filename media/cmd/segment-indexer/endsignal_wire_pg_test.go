@@ -11,8 +11,11 @@ import (
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/session"
 )
@@ -88,5 +91,65 @@ VALUES ($1, 1, 0, $2, 4000, 'k-1', '/recordings/x/1.mp4', 'uploaded', 1000, 'S-X
 	var state string
 	if err := pool.QueryRow(ctx, `SELECT state FROM stream_sessions WHERE session_id = 'S-X'`).Scan(&state); err != nil || state != "live" {
 		t.Fatalf("state = %q (%v), want live — 4D 는 live 를 끝내지 않는다", state, err)
+	}
+}
+
+// P4(설계 7절) — 실 intentApplier 가 고갈된 풀을 만나도 Apply 시한(1.5초)에 503 apply_timeout 으로 돌아온다. 크기 2 풀의
+// 연결을 시험이 모두 쥔 채 4D 를 보낸다. 풀 획득 대기가 Apply ctx 를 따르지 않으면 쥔 연결이 풀릴 때까지 매달린다(가짜
+// Apply 의 시한만 보는 TestApplyTimeoutP4 가 못 보는 쪽).
+func TestEndSignalPoolExhaustedIs503WithinApplyTimeoutPG(t *testing.T) {
+	db := newWireTestPool(t)
+	cfg := db.Config()
+	cfg.MaxConns = 2
+	small, err := pgxpool.NewWithConfig(t.Context(), cfg)
+	if err != nil {
+		t.Fatalf("크기 2 풀 생성 실패: %v", err)
+	}
+	t.Cleanup(small.Close)
+	var held []*pgxpool.Conn
+	for range cfg.MaxConns {
+		c, err := small.Acquire(t.Context())
+		if err != nil {
+			t.Fatalf("연결 점유 실패: %v", err)
+		}
+		held = append(held, c)
+	}
+	release := sync.OnceFunc(func() {
+		for _, c := range held {
+			c.Release()
+		}
+	})
+
+	logs, log := newLockedLogger()
+	recv, err := newEndSignalReceiver(endSignalDeps{
+		resolve: fakeResolver(t), apply: intentApplier(small, newIntentOptions(log, nil, nil)),
+		changed: func(string) {}, postIntent: func(string, string) {}, log: log,
+	})
+	if err != nil {
+		t.Fatalf("수신부 조립 실패: %v", err)
+	}
+	srv := httptest.NewServer(recv.Route().Handler)
+	t.Cleanup(srv.Close)
+	t.Cleanup(release) // 나중에 등록해 먼저 돈다 — 매달린 처리기가 있어도 srv.Close 가 기다리다 멈추지 않는다
+
+	body := `{"streamid":"#!::r=` + wireToken + `,m=publish","elapsedSinceStopMs":420,"connectionDurationMs":3600000}`
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/ingest/end-signal", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+wireBearer)
+	start := time.Now()
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+	el := time.Since(start)
+	release()
+	if err != nil {
+		t.Fatalf("요청 실패(%v 뒤): %v — 풀 획득 대기가 Apply 시한을 따르지 않았다", el, err)
+	}
+	resp.Body.Close()
+	if el > 1600*time.Millisecond {
+		t.Fatalf("응답까지 %v, want ≤ 1.6s", el)
+	}
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("상태 = %d, want 503", resp.StatusCode)
+	}
+	if i := indexOf(logs.msgs(t), "end_signal:apply_timeout"); i < 0 {
+		t.Fatalf("로그 = %v, want end_signal reason=apply_timeout", logs.msgs(t))
 	}
 }
