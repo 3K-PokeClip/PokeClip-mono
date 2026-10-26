@@ -84,11 +84,13 @@ bash infra/terraform/scripts/precheck/events.sh --since <비교 기준 판정 �
     판정하고 `report.txt` 에 「자원 없음」 을 남깁니다. 종료 3(UNDECIDED)이면 kty 가
     `approvals.tsv` 에 「진행」 을 적어야 다음으로 갑니다.
 *   ② 에서 `prod-instance`(prod EC2 인스턴스 — 실행기가 꺼져 있고 다른 prod
-    인스턴스도 없음) · `prod-roles`(경로 `/pokeclip/prod/` 의 역할 — runtime
-    의 것은 실행기 역할뿐이라 켤 때만 생기고, platform 역할은 O7d 에서
-    생김) · `rds-master-secret`(관리형 마스터 비밀 — apply 전이라 입력 파일
-    없음)의 `TARGET_NONE` 은 이 걸음에서 정상입니다. 「진행」 의 이유로
-    그렇게 적습니다.
+    인스턴스도 없음) · `rds-master-secret`(관리형 마스터 비밀 — apply 전이라
+    입력 파일 없음)의 `TARGET_NONE` 은 이 걸음에서 정상입니다.
+    `prod-roles`(경로 `/pokeclip/prod/` 의 역할)의 `TARGET_NONE` 은
+    O7d(platform apply) 전에만 정상입니다 — runtime 의 역할은 실행기
+    역할뿐이라 켤 때만 생깁니다. 「진행」 의 이유로 그렇게 적습니다. O7d
+    뒤에는 platform 역할이 늘 있어야 하므로 `prod-roles` 의 `TARGET_NONE` 은
+    멈춤입니다.
 *   ① 이 종료 0 이 아니거나(승인 뒤에도 DENIED 등) ② 가 종료 0 도, 「진행」
     이 적힌 종료 3 도 아니면 2 로 가지 않습니다.
 
@@ -216,8 +218,9 @@ bash infra/terraform/scripts/precheck/principal-check.sh runtime-1a
     뜻이니 4 로 가지 않고 보고합니다. 그 행이 아직 `TARGET_NONE` 이거나
     종료 2 면(입력 파일을 읽지 못함 · 꼴 밖 · 응답 ARN 다름) 원인을 고친 뒤
     다시 돌립니다.
-    `prod-instance` · `prod-roles` 의 `TARGET_NONE` 은 실행기가 꺼져 있어
-    정상입니다(1 의 ②).
+    `prod-instance` 의 `TARGET_NONE` 은 실행기가 꺼져 있어 정상입니다.
+    `prod-roles` 의 `TARGET_NONE` 은 O7d 전이면 정상, O7d 뒤면
+    멈춤입니다(1 의 ②).
 
 ## 4. 실행기 켬
 
@@ -229,8 +232,9 @@ bash infra/terraform/scripts/precheck/principal-check.sh runtime-1a
         멈춥니다.
     *   `rds-master-secret` 행이 `TARGET_NONE` 이거나 `ALLOWED` 임(3-1).
 
-    `prod-instance` · `prod-roles` 의 `TARGET_NONE` 은 실행기가 아직 꺼져
-    있어 정상입니다(1 의 ②).
+    `prod-instance` 의 `TARGET_NONE` 은 실행기가 아직 꺼져 있어 정상입니다.
+    `prod-roles` 의 `TARGET_NONE` 은 O7d 전이면 정상, O7d 뒤면
+    멈춤입니다(1 의 ②).
 1.  **plan**: 실행기만 켜는 plan 입니다.
 
     ```shell
@@ -899,8 +903,9 @@ awk -F '\t' '$1 == "secrets" &&
     사람이 봅니다) · `secrets` 행이 `TARGET_NONE` · `rds-master-secret` 행이
     `TARGET_NONE` 이거나 `ALLOWED` · 위 셈이 1 이 아님(새 그릇이 태그로
     풀리지 않음). 어느 행이든 `ALLOWED` 면 값을 넣지 않고 kty 에게
-    보고합니다. `prod-instance` · `prod-roles` 의 `TARGET_NONE` 은 실행기가
-    꺼져 있고 platform 역할(O7d)도 아직 없어 정상입니다.
+    보고합니다. `prod-instance` 의 `TARGET_NONE` 은 실행기가 꺼져 있어,
+    `prod-roles` 의 것은 이 절이 O7d 앞이라(platform 역할이 아직 없음)
+    정상입니다.
 *   SCP 판정은 1 의 것을 씁니다 — 같은 날 · 같은 묶음 · 그 뒤 SCP 변화
     이벤트 0(`events.sh` 로 확인). 날이 바뀌었으면 1 을 다시 합니다.
 
@@ -1322,9 +1327,9 @@ kty 가 세션 밖에서 caller identity 를 본 뒤 1 의 세 명령을 그 순
     `--accept` 하고 다시 판정해 종료 0 이어야 다음입니다. 종료 1(DENIED) ·
     2(검사 불가)면 2 로 가지 않습니다.
 *   ② 는 1단-가 apply 뒤 기준입니다(4 의 첫 걸음 — 1 의 「apply 전이라
-    정상」 은 맞지 않음). 정상인 `TARGET_NONE` 은 `prod-instance` ·
-    `prod-roles` 둘뿐입니다 — 실행기가 꺼져 있고 platform 역할(O7d)도 아직
-    없습니다.
+    정상」 은 맞지 않음). 늘 정상인 `TARGET_NONE` 은 `prod-instance`
+    하나입니다. `prod-roles` 는 O7d 전이면 정상이고(실행기가 꺼져 있고
+    platform 역할이 아직 없음), O7d 뒤에 돌면 `TARGET_NONE` 이 멈춤입니다.
     `rds-master-secret` 이 `TARGET_NONE` 이거나 `ALLOWED` 이면 멈춤,
     `report.txt` 에 「자원 없음(첫 단계 — 정책 없이 판정)」 줄이 있으면
     멈춤입니다. 입력 파일 `~/.pokeclip-precheck/input-rds-master.txt` 가 없거나
