@@ -93,6 +93,30 @@ func TestOpenIndexerPoolLogsDBConnected(t *testing.T) {
 	}
 }
 
+// 실 PG — 인덱서 풀은 연결 6 개로 묶인다(kty 결정 ⑤ — 핫 경로 3 + 회차 조회 2 + 4D 1). 상한은 인덱서 풀에만 걸리고
+// 돌려준 풀 설정(발행자 풀이 Copy 하는 원본)은 pgx 기본값 그대로다 — 발행자 풀은 따로 잰다(판단 J76).
+func TestOpenIndexerPoolCapsIndexerConns(t *testing.T) {
+	db := newWireTestPool(t)
+	s := settingsOf(t, pgtest.PostgresEnv(t, db.Config().ConnConfig.Database))
+	fresh, err := pgconf.PoolConfig(t.Context(), s)
+	if err != nil {
+		t.Fatalf("PoolConfig: %v", err)
+	}
+
+	pool, base, err := openIndexerPool(t.Context(), s, slog.New(&logCapture{}), dbStepTimeout)
+	if err != nil {
+		t.Fatalf("openIndexerPool: %v", err)
+	}
+	t.Cleanup(pool.Close)
+
+	if got := pool.Config().MaxConns; got != 6 {
+		t.Errorf("인덱서 풀 MaxConns = %d, want 6", got)
+	}
+	if base.MaxConns != fresh.MaxConns {
+		t.Errorf("돌려준 풀 설정 MaxConns = %d, want pgx 기본값 %d — 인덱서 상한이 발행자 풀 원본에 샜다", base.MaxConns, fresh.MaxConns)
+	}
+}
+
 // silentListener 는 TCP 연결을 받기만 하고 한 바이트도 답하지 않는 서버다 — 붙었지만 응답하지 않는 DB 자리다.
 // 받은 연결은 시험이 끝날 때 닫는다(멈춘 클라이언트가 그때 풀린다). 정리는 Accept 고루틴이 끝나기를 기다린 뒤
 // 연결 목록을 회수한다 — 닫기 직전에 받은 연결이 목록을 다 돈 뒤에 덧붙어 닫히지 않고 남는 경쟁이 없다.
