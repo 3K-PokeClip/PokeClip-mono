@@ -14,6 +14,7 @@ import (
 type splitPlan struct {
 	head    roundRow // B — 새 회차의 첫 세션(started_at ≥ StoppedAt 최소)
 	moved   []string // M — R 의 세션 중 started_at ≥ B.started_at
+	noop    bool     // 멈춘 뒤 합류한 B 가 없다 — 뗄 세션이 없다(정상)
 	blocked bool     // 회차를 가로지르는 계승 간선의 한 끝이 닫힌 사슬(vod_state ≠ none)
 	revoke  string   // B 가 R 에 남는 세션을 계승 중이면 B
 }
@@ -22,8 +23,8 @@ type splitPlan struct {
 //
 // 옮길 집합 M 은 소속 잠금 뒤 계산하므로 그 사이 열린 세션(TD 분할로 생긴 C 등)도 든다(D69 (나)). M 의 세션이 R 에
 // 남는 세션을 계승하면(회차를 가로지르는 간선) 양 끝이 모두 vod_state='none' 이어야 한다 — 닫힌 사슬의 간선을
-// 끊으면 옛 회차 VOD 에 새 회차 조각이 남는다(D64). 합류한 B 가 없으면(멈춘 뒤 시작한 세션이 없다) 나눌 자리가
-// 없어 막힌다.
+// 끊으면 옛 회차 VOD 에 새 회차 조각이 남는다(D64). 합류한 B 가 없으면(멈춘 뒤 시작한 세션이 없다) 뗄 세션이 없어
+// noop 이다 — 막힌 것이 아니다(kty ⑪ (가)).
 func planSplit(rows []roundRow, stoppedAt time.Time) splitPlan {
 	headAt := -1
 	for i, r := range rows {
@@ -33,7 +34,7 @@ func planSplit(rows []roundRow, stoppedAt time.Time) splitPlan {
 		}
 	}
 	if headAt < 0 {
-		return splitPlan{blocked: true}
+		return splitPlan{noop: true}
 	}
 	p := splitPlan{head: rows[headAt]}
 	remain := map[string]roundRow{}
@@ -66,11 +67,15 @@ const closeRemainSQL = `
 UPDATE stream_sessions SET round_closed_at = pg_catalog.now()
  WHERE round_id = $1 AND round_closed_at IS NULL`
 
-// splitRound 는 round_split 효과다. 분리 불가면 아무것도 쓰지 않는다(round_split_blocked — 「확실하지 않으면 적용하지
-// 않는다」 · 한계 D64). 같은 트랜잭션 끝에서 B started(EnqueueStarted 칸)와 R 완결 평가(CloseRound 칸 — R 은 이미 닫혀
-// 완결만 평가된다)를 부른다.
+// splitRound 는 round_split 효과다. 뗄 세션이 없으면(round_split_noop) · 분리 불가면(round_split_blocked — 「확실하지
+// 않으면 적용하지 않는다」 · 한계 D64) 아무것도 쓰지 않는다. 같은 트랜잭션 끝에서 B started(EnqueueStarted 칸)와
+// R 완결 평가(CloseRound 칸 — R 은 이미 닫혀 완결만 평가된다)를 부른다.
 func splitRound(ctx context.Context, tx pgx.Tx, e IntentionalEnd, o IntentOptions, res IntentionalResult, rows []roundRow) (IntentionalResult, error) {
 	p := planSplit(rows, e.StoppedAt)
+	if p.noop {
+		res.Skip = skipRoundSplitNoop
+		return res, nil
+	}
 	if p.blocked {
 		res.Skip = skipRoundSplitBlocked
 		return res, nil
