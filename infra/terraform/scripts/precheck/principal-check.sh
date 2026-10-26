@@ -15,12 +15,19 @@
 # (lib/principal_batch.sh). 성공 경로의 결과 · 증거 · 표준 출력 · 종료 코드는
 # 동시 수와 상관없이 같다. 그 앞의 호출은 순서대로 하나씩 보낸다.
 #
-# 모든 AWS 호출은 요청 본문을 증거의 req-<n>.json 에 쓰고
+# 사전 조건 뒤의 모든 AWS 호출은 요청 본문을 증거의 req-<n>.json 에 쓰고
 # --cli-input-json file://… 로 넘긴다 — argv 에는 ARN · 계정 ID · 이름이
 # 없고 --query · --output · --region · --resource-policy 같은 옵션만 있다.
-# 응답이 Throttling 계열 오류(THROTTLE_CODES)면 첫 시도 포함 6번까지 1 · 2 ·
-# 4 · 8 · 16초 쉬고 다시 묻는다(지터 없음). 그 밖의 오류(한도 초과
-# LimitExceededException 포함)는 다시 묻지 않는다.
+# 다시 묻기는 두 겹이다. aws CLI 가 호출 하나 안에서 먼저 다시 보낸다 —
+# 기본값(retry_mode standard · max_attempts 3)이면 Throttling 계열 · 한도
+# 초과 LimitExceededException · 일시 오류(5xx · 연결 오류 등)를 첫 시도 포함
+# 3번. 이 수는 프로필 설정과 AWS_RETRY_MODE · AWS_MAX_ATTEMPTS 로 달라진다.
+# 그 위에서 aws_send 는 CLI 가 Throttling 계열 오류(THROTTLE_CODES)로 끝나면
+# CLI 호출을 첫 시도 포함 6번까지 1 · 2 · 4 · 8 · 16초 쉬고 다시 한다(지터
+# 없음) — 기본값에서 요청은 최대 18번(3 × 6)이다. 그 밖의 오류(한도 초과
+# LimitExceededException 포함)는 CLI 안의 재시도 뒤 다시 묻지 않는다.
+# 사전 조건의 sts get-caller-identity · configure get(lib/precheck_common.sh)은
+# aws_send 를 거치지 않아 도구가 다시 묻지 않는다.
 # 시뮬레이터 요청은 모두 SCP 를 뺀다(PolicyExclusionList 가 정확히 scp 하나
 # — 결정 5 (가)). 제외가 실제로 먹는지는 PC0 이 확인한다: 호출 주체의 prod
 # 상태 버킷 목록 읽기를 운영 측 SCP 가 막는 리전(ap-northeast-1) 문맥으로
@@ -97,14 +104,17 @@ readonly PC0_REGION='ap-northeast-1'
 # PC-A: 없는 표본 버킷에 대한 옛 OIDC 역할(종류 role)의 목록 읽기.
 readonly PCA_SAMPLE_ARN='arn:aws:s3:::pokeclip-prod-m17b-probe-nonexistent-9f3a'
 readonly PCA_REGION='ap-northeast-2'
-# 다시 묻는 Throttling 계열 오류 코드 여덟 — aws CLI 의 botocore
-# retries/standard.py _THROTTLED_ERROR_CODES 의 부분 집합이다. 한도 초과
-# (LimitExceededException) 처럼 기다려도 풀리지 않는 코드는 넣지 않는다.
+# 도구가 다시 묻는 Throttling 계열 오류 코드 여덟 — aws CLI 의 botocore
+# retries/standard.py _THROTTLED_ERROR_CODES 의 부분 집합이다. CLI 는 그
+# 목록 전체를 호출 안에서 먼저 다시 보낸다(기본 첫 시도 포함 3번). 한도 초과
+# (LimitExceededException) 처럼 기다려도 풀리지 않는 코드는 넣지 않는다 —
+# CLI 안의 재시도만 받는다.
 THROTTLE_CODES=(Throttling ThrottlingException ThrottledException
   RequestThrottledException TooManyRequestsException RequestLimitExceeded
   RequestThrottled SlowDown)
 readonly THROTTLE_CODES
-# 다시 묻기 전의 대기(초) — 첫 시도 포함 6번.
+# 다시 묻기 전의 대기(초) — CLI 호출 첫 시도 포함 6번(CLI 자체 재시도는 그
+# 호출 하나 안에서 따로 돈다).
 RETRY_DELAYS=(1 2 4 8 16)
 readonly RETRY_DELAYS
 
@@ -211,9 +221,10 @@ is_throttled() {
 
 #######################################
 # 쓴 요청 req-<n>.json 을 --cli-input-json file:// · --output text 로
-# 보낸다. Throttling 계열 오류면 RETRY_DELAYS 만큼 쉬고 다시 묻는다(첫
-# 시도 포함 6번). 표준 출력은 call_out 과 res-<n>.txt, 표준 오류는 마지막
-# 시도의 것이 res-<n>.err 에 남는다.
+# 보낸다. Throttling 계열 오류면 RETRY_DELAYS 만큼 쉬고 CLI 호출을 다시
+# 한다(첫 시도 포함 6번 — CLI 가 호출 안에서 하는 재시도와 별개). 표준
+# 출력은 call_out 과 res-<n>.txt, 표준 오류는 마지막 시도의 것이
+# res-<n>.err 에 남는다.
 # Globals:
 #   evidence_dir, call_out, call_err, RETRY_DELAYS
 # Arguments:
