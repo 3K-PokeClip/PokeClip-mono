@@ -335,7 +335,8 @@ bash infra/terraform/scripts/precheck/principal-check.sh O7a
 주체 · 대상 단위 사유는 하나당 1건으로 셉니다 — 주체를 찾지 못함
 `PRINCIPAL_MISSING`, 태그 · 존 · prod 역할 해석 0건과 입력 파일 없음
 `TARGET_NONE`. 켬 · apply 뒤에야 생기는 대상(prod EC2 인스턴스 · 관리형
-마스터 비밀)은 그 전 실행에서 `TARGET_NONE` 이 정상입니다 — 언제 정상이고
+마스터 비밀 · 경로 `/pokeclip/prod/` 의 prod 역할 — 실행기를 켤 때와 O7d
+에서 생김)은 그 전 실행에서 `TARGET_NONE` 이 정상입니다 — 언제 정상이고
 언제 멈추는지는 [runtime-1a 런북](runtime-1a.md) 1 · 3 · 4 에 있습니다.
 platform 의 태그 행(ALB · NLB · 대상 그룹 · 리스너 · ECS)도 첫 단계(O7d)
 직전 실행에서는 자원이 없어 `TARGET_NONE` 이 정상이고, O7d apply 뒤

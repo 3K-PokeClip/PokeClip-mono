@@ -753,8 +753,12 @@ terminationGracePeriodSeconds: 20 # k8s (infra/ 는 1번 폴더라 여기서 못
 docker build -f services/auth/Dockerfile -t pokeclip-auth services/
 ```
 
-베이스 이미지는 네 서버 모두 `eclipse-temurin:21-jdk`(빌드) →
-`eclipse-temurin:21-jre`(실행)로 통일했다.
+베이스 이미지는 네 서버 모두 빌드 단계가 `eclipse-temurin:21-jdk`다. 실행
+단계는 auth · clip · chat-detector 가 `eclipse-temurin:21-jre`, chat-collector
+만 `eclipse-temurin:21-jre-noble`(Ubuntu 24.04 고정)이다. chat-collector 는
+Playwright Chromium 을 이미지에 굽는데, 꼬리표 없는 `21-jre` 가 Ubuntu 26.04
+로 넘어가자 Playwright 1.52 가 그 판을 몰라 브라우저 설치가 실패했다
+(`services/chat-collector/Dockerfile` 주석).
 
 **테스트도 팀과 같은 이미지를 쓴다** — Testcontainers가 `postgres:17`을 띄운다.
 compose와 메이저 버전이 갈리면 로컬·CI만 통과하고 실제 DB에서 깨지는 차이를 못 잡는다.
