@@ -395,10 +395,12 @@ DB · S3 · 캐시를 보지 않는다. 회차 경로만 Board 가 모르는 회
 | 상태 | 언제 |
 |---|---|
 | 200 | 캐시나 종료 항목이 그 스트림을 안다 — `ready:true` 는 소유 회차가 live · init 확정 · 발행 판이 있을 때뿐이라 url 은 늘 S3 에 있다 |
-| 404 `{"error":"not_found"}` | 캐시 · 종료 항목 둘 다 모른다(부팅 감시 뒤) · 발행 꺼짐(`S3_BUCKET` 빈 값 — 모든 스트림) · id 가 `[A-Za-z0-9._-]{1,128}` 밖 |
+| 404 `{"error":"not_found"}` | 캐시 · 종료 항목 둘 다 모른다(부팅 감시 뒤) · 발행 꺼짐(`S3_BUCKET` 빈 값 — 모든 스트림) · id 가 `[A-Za-z0-9._-]{1,128}` 밖 · 퍼센트 인코딩한 경로(`%61bc` 처럼 `RawPath` 가 생기는 요청 — 풀린 글자가 규칙 안이어도) |
 | 503 `{"error":"unavailable"}` · `Retry-After: 1` | 첫 스냅숏 전 · 부팅 감시 전의 모르는 스트림 · 스냅숏이 30초 넘게 낡음 · 스트림별 한도 초과 |
 
 머리는 상태와 무관하게 `Cache-Control: public, max-age=1` · `Content-Type: application/json` 이다.
+`CONTROL_CORS_ORIGIN` 이 설정돼 있으면 `Vary: Origin` 을 Origin 과 무관하게 늘 싣고, 요청
+`Origin` 이 그 값과 글자 그대로 같을 때만 `Access-Control-Allow-Origin` 을 싣는다.
 서버 한도는 머리 5초 · 읽기 5초 · 쓰기 5초 · 유휴 60초 · 머리 8KiB 이고, 종료 때 처리 중 요청을
 3초까지 기다린다(그 뒤 풀이 닫힌다).
 
@@ -410,7 +412,10 @@ DB · S3 · 캐시를 보지 않는다. 회차 경로만 Board 가 모르는 회
 *   **로그:** `control_server_started` · `_disabled` · `_failed`(bind · serve) · `_stopped` ·
     `control_status_stale` · `control_rate_limited` · `rewind_ready_delayed`(송출 중인데 60초 넘게
     준비 안 됨 · `reason` 하나) · `rewind_status_range_missing` · `rewind_final_applied` ·
-    `rewind_final_invalid` · `rewind_final_seeded` · `_seed_failed`. 요청마다의 접근 로그는 없다.
+    `rewind_final_invalid` · `rewind_final_seeded` · `_seed_failed` ·
+    `control_round_lookup_failed`(회차 lookup 실패 · `reason` 은 `error` · `timeout`
+    · `panic` · 사유마다 10초에 한 줄로 묶고 `count` 로 센다 — M6 가 회차 경로를
+    등록하기 전에는 나오지 않는다). 요청마다의 접근 로그는 없다.
     게이지(`control_status_stale` · `control_rate_limited` · `control_round_shed` ·
     `rewind_ready_delayed`)는 세움(value 1)과 내림(value 0)이 둘 다 WARN 이다.
     내림 뒤에는 다시 쓰지 않으므로 `LOG_LEVEL=warn` 으로 걸러도 해소가 보여야

@@ -462,6 +462,54 @@ func TestRoundRouteLookupFailuresAreBatched(t *testing.T) {
 	}
 }
 
+// 묶음 꼬리는 다음 실패가 없어도 청소가 내보낸다 — 10초가 지나면 센 실패를 count 로 한 줄 쓰고 비운다(설계 8절
+// 「10초에 한 줄로 묶음」). 그래서 실패 줄의 count 합은 실패 수와 같다.
+func TestRoundRouteLookupFailureTailFlushedBySweep(t *testing.T) {
+	f := newFixture(10)
+	f.opt.RoundLimits.PerSecond = 1000
+	f.store(true, nil)
+	l := &fakeLookup{answer: func(s, r string) (status.Status, status.Answer, error) {
+		return status.Status{}, status.Unavailable, errors.New("db")
+	}}
+	rr := RoundRoute(f.holder, f.opt, l.fn)
+	base := f.start(t, rr)
+	for i := range 40 {
+		get(t, roundURL(base, "x", "r"+strconv.Itoa(i)))
+	}
+	sweep := rr.Handler.(*roundHandler).sweep
+	f.clock.Advance(9 * time.Second)
+	sweep(f.clock.Now())
+	if lines := f.logs.events("control_round_lookup_failed"); len(lines) != 1 {
+		t.Fatalf("9초 청소 뒤 실패 줄 = %v, want 첫 줄 하나(묶음 시간 안)", lines)
+	}
+	f.clock.Advance(time.Second)
+	sweep(f.clock.Now())
+	sweep(f.clock.Now())
+	if lines, total := failureLines(f.logs); len(lines) != 2 || total != 40 {
+		t.Errorf("10초 청소 뒤 실패 줄 = %v, want 두 줄 · count 합 40", lines)
+	}
+	f.clock.Advance(10 * time.Second)
+	sweep(f.clock.Now())
+	if lines, _ := failureLines(f.logs); len(lines) != 2 {
+		t.Errorf("센 실패 없는 청소 뒤 실패 줄 = %v, want 그대로 두 줄", lines)
+	}
+	get(t, roundURL(base, "x", "last"))
+	if lines, total := failureLines(f.logs); len(lines) != 3 || total != 41 {
+		t.Errorf("다음 실패 뒤 실패 줄 = %v, want 세 줄 · count 합 41(비운 꼬리를 다시 세지 않음)", lines)
+	}
+}
+
+// failureLines 는 control_round_lookup_failed 줄과 그 count 합이다.
+func failureLines(logs *logSink) ([]map[string]any, float64) {
+	lines := logs.events("control_round_lookup_failed")
+	total := 0.0
+	for _, e := range lines {
+		c, _ := e["count"].(float64)
+		total += c
+	}
+	return lines, total
+}
+
 // 초당 예산: 한 초 안에서 차례로 온 서로 다른 miss 100건(동시 1)은 lookup 이 정확히 PerSecond 번이다. 다음 초에는
 // 새로 받는다.
 func TestRoundRoutePerSecondBudget(t *testing.T) {

@@ -88,9 +88,13 @@ func startedAddr(t *testing.T, logs *logCapture) string {
 	return "http://" + a
 }
 
+// controlTestClient 는 제어면 시험의 HTTP 클라이언트다 — 요청마다 10초 시한이라 서버가 멈춰도 시험이 go test 상한까지
+// 매달리지 않고 그 요청에서 실패한다.
+var controlTestClient = &http.Client{Timeout: 10 * time.Second}
+
 func httpGet(t *testing.T, url string) (int, string) {
 	t.Helper()
-	res, err := http.Get(url)
+	res, err := controlTestClient.Get(url)
 	if err != nil {
 		t.Fatalf("GET %s = %v", url, err)
 	}
@@ -166,7 +170,7 @@ func TestStartControlRegistersExtraRoutes(t *testing.T) {
 	defer stop()
 	base := startedAddr(t, logs)
 	for range 3 {
-		res, err := http.Post(base+"/api/ingest/end-signal", "application/json", strings.NewReader("{}"))
+		res, err := controlTestClient.Post(base+"/api/ingest/end-signal", "application/json", strings.NewReader("{}"))
 		if err != nil {
 			t.Fatal(err)
 		}
