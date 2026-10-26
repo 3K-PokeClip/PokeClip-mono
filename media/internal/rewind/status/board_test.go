@@ -110,3 +110,18 @@ func TestHolderLoadBeforeStoreIsNil(t *testing.T) {
 		t.Error("Load 가 Store 한 Board 를 돌려주지 않는다")
 	}
 }
+
+// Age 는 낡음 게이지의 재료다 — 처리기가 답과 따로 「스냅숏이 얼마나 낡았나」를 읽는다. 첫 스냅숏 전 · 꺼짐 Board 는
+// 낡음을 말하지 않는다(갱신되지 않는 것이 정상이다).
+func TestBoardAge(t *testing.T) {
+	b := status.NewBoard(built, true, nil)
+	if age, ok := b.Age(built.Add(31 * time.Second)); !ok || age != 31*time.Second {
+		t.Errorf("Age = (%v, %v), want (31s, true)", age, ok)
+	}
+	if _, ok := status.DisabledBoard().Age(built); ok {
+		t.Error("꺼짐 Board 의 Age ok = true, want false")
+	}
+	if _, ok := (*status.Board)(nil).Age(built); ok {
+		t.Error("nil Board 의 Age ok = true, want false")
+	}
+}
