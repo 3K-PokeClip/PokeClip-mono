@@ -5,7 +5,8 @@ package publish
 // 닫힌 사슬 하나에 VOD 문서 하나다(K1 — 키는 머리 세션). 새 URL 의 새 문서라 기존 목록의 변경이 아니고, 한 번만 쓴다
 // (IfAbsent · RFC 8216 4.3.3.5 VOD 불변). 412 면 Head 의 pc-body-sha256 이 다시 렌더한 본문과 같을 때만 그 판을 채택한다
 // (D7 — 쓰고 확정 전에 멈춘 시도의 판). 다시 렌더가 같은 본문을 내도록, 렌더 전에 GAP 으로 실을 행을 원장에 먼저 적는다
-// (포기 등재는 추가만 — D17 4.5.4 재현 가능성). 그 뒤 ③ 이 늦게 닿아도 원장 우선이라 같은 GAP 줄이다.
+// (포기 등재는 추가만 — D17 4.5.4 재현 가능성). 그 뒤 ③ 이 늦게 닿아도 원장 우선이라 같은 GAP 줄이다. 그래서 정산 창
+// 안에서는 ③ 미착지 행을 GAP 원장 유무와 무관하게 기다린다 — 창 안에 닿을 조각을 VOD 에 영구 GAP 으로 굳히지 않는다.
 //
 // fence 를 쓰지 않는다. 쓰기는 새 키의 IfAbsent 하나와 vod_state='freezing' 조건의 확정 CAS 뿐이라 두 writer 가 겹쳐도
 // 한 판만 남고 장부는 그 판으로만 확정된다.
@@ -117,6 +118,8 @@ type vodPlan struct {
 	rows []boundary.Row
 	// marks 는 렌더 전에 원장에 넣을 GAP 행이다(seq · 회차 · 사유).
 	marks []vodMark
+	// abandon 은 정산 창이 끝났는가다 — 참일 때만 범위의 미착지 GAP 원장 행을 vod_abandoned 로 바꾼다.
+	abandon bool
 }
 
 type vodMark struct {
@@ -127,8 +130,9 @@ type vodMark struct {
 
 // plan 은 장부 l 의 행을 VOD 렌더 행으로 바꾼다(설계 3.1 비귀속 행 · D57).
 //
-//	사슬 세션 행 · settled       그대로
-//	사슬 세션 행 · 미착지        포기면 GAP(settle_deadline) · 아니면 재시도(정산 전)
+//	사슬 세션 행 · ③ 미착지 · 포기 아님  재시도(정산 전 — DVR GAP 원장이 있어도 · 설계 3.1 phase 2)
+//	사슬 세션 행 · settled               그대로(포기면 DVR GAP 원장 행도 여기 — markGaps 가 vod_abandoned 로 바꾼다)
+//	사슬 세션 행 · 미착지 · 포기          GAP(settle_deadline)
 //	비귀속 행(세션 NULL)         GAP(mixed_boundary) — 회차는 앞 사슬 세션 · PDT 는 앞 행 PDT + 길이 · URI 는 ③ 키 이름
 //	사슬 밖 회차 행              실패(foreign_session)
 func (v *vodJob) plan(l index.ChainLedger, abandon bool) (vodPlan, FreezeOutcome, bool) {
@@ -136,7 +140,7 @@ func (v *vodJob) plan(l index.ChainLedger, abandon bool) (vodPlan, FreezeOutcome
 	for _, id := range l.Chain.SessionIDs {
 		members[id] = true
 	}
-	var plan vodPlan
+	plan := vodPlan{abandon: abandon}
 	for _, lr := range l.Rows {
 		if l.HasCutoff && lr.Seq < l.CutoffSeq {
 			continue
@@ -151,6 +155,8 @@ func (v *vodJob) plan(l index.ChainLedger, abandon bool) (vodPlan, FreezeOutcome
 			}
 			r = v.fillGap(r, plan.rows[len(plan.rows)-1])
 			plan.marks = append(plan.marks, vodMark{seq: r.Seq, session: r.SessionID, reason: "mixed_boundary"})
+		case !abandon && !r.PlaybackUploaded:
+			return vodPlan{}, vodRetry(vodUnsettled, nil), false
 		case !boundary.Settled(r, l.CutoffSeq):
 			if !abandon {
 				return vodPlan{}, vodRetry(vodUnsettled, nil), false
@@ -179,7 +185,8 @@ func (v *vodJob) fillGap(r, prev boundary.Row) boundary.Row {
 	return r
 }
 
-// markGaps 는 렌더 전 원장 적기다 — GAP 행을 넣고 범위의 미착지 GAP 원장 행을 vod_abandoned 로 바꾼다. 한 트랜잭션이다.
+// markGaps 는 렌더 전 원장 적기다 — GAP 행을 넣고, 포기면 범위의 미착지 GAP 원장 행을 vod_abandoned 로 바꾼다. 한
+// 트랜잭션이다.
 func (v *vodJob) markGaps(ctx context.Context, plan vodPlan) (FreezeOutcome, bool) {
 	dctx, cancel := v.p.stmtCtx(ctx)
 	defer cancel()
@@ -189,6 +196,9 @@ func (v *vodJob) markGaps(ctx context.Context, plan vodPlan) (FreezeOutcome, boo
 			if _, err := tx.Exec(dctx, vodMarkGapSQL, v.chain.StreamID, m.seq, m.session, m.reason); err != nil {
 				return err
 			}
+		}
+		if !plan.abandon {
+			return nil
 		}
 		_, err := tx.Exec(dctx, vodAbandonGapsSQL, v.chain.StreamID, first, last)
 		return err
