@@ -25,6 +25,7 @@ import (
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/playback"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/poolstat"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/recording"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/rewind/publish"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/secretfile"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/session"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/upload"
@@ -214,12 +215,10 @@ func run() error {
 	// 업로더 워커가 Dirty 집합을 읽으므로 그 집합은 Start 전에 붙어야 하고, 캐시는 루프가 돌기 전 이 고루틴에서 한 번만 인덱서에
 	// 끼운다(assemblePublishing). S3_BUCKET 이 비었거나 조립이 강등되면 발행 몫이 없다 — 루프 보조 타입은 4.1 종료 전이만
 	// 돈다(체크리스트 474 판단 J69 · J77). 강등도 사망이 아니다: 업로드 · 인덱싱은 그대로 돈다(ADR-063 결정 1).
-	rewind := &rewindLoop{
-		ix: ix, root: cfg.SegmentRoot, log: log,
-		endLive: func(ctx context.Context, streamID string) (string, error) {
-			return index.EndLive(ctx, pool, streamID)
-		},
-	}
+	// 종료 문장의 옵션 · 완결 평가 칸은 한 벌이다 — 4.1 전이 · 4D 회차 닫힘 칸 · 정산 걸음이 같은 값을 쓴다(finalize_wire.go).
+	// 차선은 조립 밖에서 채운다 — 발행 꺼짐 · 강등에서도 정산 · 상태 전달 차선이 돈다(M6 3.2).
+	fa := newFinalizeAssembly(cfg, log)
+	rewind := &rewindLoop{ix: ix, root: cfg.SegmentRoot, log: log, endLive: fa.endLive(pool), lanes: publish.NewLanes()}
 	// 제어면 상태 몫(Board · 받은편지함 · 재기동 적재)은 발행 조립 앞이다 — 꺼짐 · 강등 · 정상 모두 받은편지함이 있다(M5 3.3).
 	board := assembleStatus(ctx, cfg, rewind, newPlaybackSeed(pool))
 	// 상태 표지 받은편지함은 기동 때 하나다 — 만료(아래)와 4D 수신부가 Changed 로 넣고, M6-3b 가 Drain 을 루프에 넘긴다(계획 5절).
@@ -265,14 +264,16 @@ func run() error {
 
 	// 되감기 제어면 서버(M5 3.7). ★ 위 rewind.stop · 풀 Close · up.Shutdown 보다 뒤에 등록해 먼저 멈춘다(LIFO) — 처리 중
 	// 요청이 끝난 뒤에 풀이 닫힌다. 회차 조회(round)는 인덱서 풀로 읽는다(동시 2 — M6 11절). 4D 수신부(POK-472)는
-	// stopControl 안에서 서버보다 먼저 닫힌다(recv.Close → 서버 Shutdown). 계승 해제 받은편지함은 M6-3b 의 루프가 비운다.
+	// stopControl 안에서 서버보다 먼저 닫힌다(recv.Close → 서버 Shutdown). 계승 해제 받은편지함은 루프가 비운다(fa.wire).
 	intents := session.NewIntentInbox()
-	recv, err := newEndSignal(resolver, intentApplier(pool, newIntentOptions(log, nil, nil)), inbox.Changed, intents.Post, log)
+	recv, err := newEndSignal(resolver, intentApplier(pool, newIntentOptions(log, fa.closeRound(), nil)), inbox.Changed, intents.Post, log)
 	if err != nil {
 		return err
 	}
 	stopControl := startControlWithEndSignal(cfg, board, log, control.NewRoundLookup(pool, cfg.RewindPublicBaseURL, log), recv)
 	defer stopControl()
+	// 정산 몫(M6-3b) — 발행 조립 뒤 · 루프 기동 전. 루프가 받은편지함 둘을 holdTick 마다 비운다.
+	fa.wire(rewind, cfg, pool, inbox, intents)
 
 	// --- 5. 메인 루프 ---
 	//

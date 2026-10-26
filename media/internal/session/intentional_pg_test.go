@@ -560,7 +560,7 @@ func TestIntentionalEndTDSplitAndEndLiveDoNotOverwriteEachOther(t *testing.T) {
 	}
 	r, _ := newRoundRegistry()
 	c := openOne(t, pool, r, Input{StreamID: "demo", Seq: 2, StartWallUTC: stopAt.Add(3 * time.Second), DurationMS: 9000, Op: OpenOrCurrent})
-	ended, err := index.EndLive(ctx, pool, "demo")
+	ended, err := index.EndLive(ctx, pool, "demo", crossClose, noEnqueue)
 	if err != nil || ended != c {
 		t.Fatalf("EndLive = (%q, %v), want %s", ended, err, c)
 	}

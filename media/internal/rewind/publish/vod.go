@@ -43,6 +43,10 @@ const (
 	vodContended    = "contended"       // 꼬리 행 잠금이 lock_timeout(5초)에 걸렸다(55P03)
 )
 
+// ReasonUnsettled 는 VOD 동결의 정산 대기 재시도 사유다(FreezeOutcome.Reason) — 정산 창 안의 ③ 미착지라 장애가 아니다.
+// 판정부(M6-3b)가 이 사유를 장애 재시도와 갈라 센다.
+const ReasonUnsettled = vodUnsettled
+
 // vodTxnLimitsSQL 은 등재 트랜잭션의 지역 상한이다(index.setTxnLimitsSQL 과 같은 값) — lock_timeout 5초가 꼬리 잠금
 // 대기 하나의 상한이고 넘기면 55P03 → 재시도(contended)다.
 const vodTxnLimitsSQL = `
