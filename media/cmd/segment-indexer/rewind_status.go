@@ -280,7 +280,8 @@ func (r *rewindLoop) observeReady(s string, ready bool, reason string, owner *st
 		"waited_ms", now.Sub(a.since).Milliseconds(), "reason", reason)
 }
 
-// clearAlarm 은 s 의 경보 상태를 지우고, 세워져 있었으면 내림 줄을 쓴다.
+// clearAlarm 은 s 의 경보 상태를 지우고, 세워져 있었으면 내림 줄을 쓴다. 내림은 세움과 같은 WARN 이다 — 상태를 지워 다시
+// 쓰지 않으므로 LOG_LEVEL=warn 에서 걸러지면 게이지가 세움에 굳는다.
 func (r *rewindLoop) clearAlarm(s, reason string, now time.Time) {
 	a := r.alarms[s]
 	if a == nil {
@@ -288,7 +289,7 @@ func (r *rewindLoop) clearAlarm(s, reason string, now time.Time) {
 	}
 	delete(r.alarms, s)
 	if a.raised {
-		r.log.Info("rewind_ready_delayed", "value", 0, "stream_id", s, "session_id", a.sessionID,
+		r.log.Warn("rewind_ready_delayed", "value", 0, "stream_id", s, "session_id", a.sessionID,
 			"waited_ms", now.Sub(a.since).Milliseconds(), "reason", reason)
 	}
 }

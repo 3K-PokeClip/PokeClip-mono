@@ -400,6 +400,10 @@ DB · S3 · 캐시를 보지 않는다. 회차 경로만 Board 가 모르는 회
     `control_status_stale` · `control_rate_limited` · `rewind_ready_delayed`(송출 중인데 60초 넘게
     준비 안 됨 · `reason` 하나) · `rewind_status_range_missing` · `rewind_final_applied` ·
     `rewind_final_invalid` · `rewind_final_seeded` · `_seed_failed`. 요청마다의 접근 로그는 없다.
+    게이지(`control_status_stale` · `control_rate_limited` · `control_round_shed` ·
+    `rewind_ready_delayed`)는 세움(value 1)과 내림(value 0)이 둘 다 WARN 이다.
+    내림 뒤에는 다시 쓰지 않으므로 `LOG_LEVEL=warn` 으로 걸러도 해소가 보여야
+    한다.
 *   **되돌리기:** `CONTROL_LISTEN` 을 비우고 사이드카만 재기동한다. 인덱싱 · 업로드 · 발행은
     영향이 없다.
 *   **로컬에서 바이트까지 보기:** 기본 compose 는 발행이 꺼져 있어 모든 스트림이 404 다.

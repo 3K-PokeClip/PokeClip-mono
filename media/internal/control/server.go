@@ -114,7 +114,7 @@ func (s *shared) observeStale(age time.Duration, ok bool, limit time.Duration) {
 		return
 	}
 	if s.stale.CompareAndSwap(true, false) {
-		s.log.Info("control_status_stale", "value", 0, "age_ms", age.Milliseconds())
+		s.log.Warn("control_status_stale", "value", 0, "age_ms", age.Milliseconds())
 	}
 }
 

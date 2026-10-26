@@ -300,6 +300,6 @@ func (rh *roundHandler) sweep(now time.Time) {
 	}
 	if rh.shedSet && now.Sub(rh.shedAt) >= roundShedClear {
 		rh.shedSet = false
-		rh.opt.Log.Info("control_round_shed", "value", 0)
+		rh.opt.Log.Warn("control_round_shed", "value", 0)
 	}
 }

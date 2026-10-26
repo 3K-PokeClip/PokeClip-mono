@@ -367,7 +367,7 @@ func (f *publishLoop) streamFor(s string, base time.Time, from, n int) {
 }
 
 // R31 · 4.4절: 컷오프 없는 스트림(부정 표식)이 송출 중인 채 60초를 넘기면 WARN rewind_ready_delayed value=1
-// reason=no_cutoff 한 번이고, 송출이 멈추면 INFO value=0 reason=ingest_stopped 다. 「송출 중」은 IngestStopped 한 술어다.
+// reason=no_cutoff 한 번이고, 송출이 멈추면 WARN value=0 reason=ingest_stopped 다. 「송출 중」은 IngestStopped 한 술어다.
 func TestReadyDelayedAlarmForNoCutoffStream(t *testing.T) {
 	f := statusLoop(t)
 	f.work.ledgers["s"] = index.RewindLedger{} // 컷오프 없음
@@ -407,6 +407,60 @@ func TestReadyDelayedAlarmWaitsSixtySeconds(t *testing.T) {
 	}
 	if n := f.logs.count("rewind_ready_delayed"); n != 0 {
 		t.Errorf("56초 안 rewind_ready_delayed = %d줄, want 0", n)
+	}
+}
+
+// raiseNoCutoffAlarm 은 컷오프 없는 스트림 s 를 68초 송출해 rewind_ready_delayed 를 세우고 마지막 틱 시각을 돌려준다.
+func (f *publishLoop) raiseNoCutoffAlarm() time.Time {
+	f.t.Helper()
+	f.work.ledgers["s"] = index.RewindLedger{}
+	f.cache.DemandLoad("s", nil)
+	base := f.t0
+	f.streamFor("s", base, 0, 1)
+	f.hold(base.Add(4 * time.Second))
+	f.settle(base.Add(4 * time.Second))
+	last := base
+	for i := 1; i <= 17; i++ {
+		f.streamFor("s", base, i, 1)
+		last = base.Add(time.Duration(i) * 4 * time.Second)
+		f.hold(last)
+	}
+	if n := f.logs.countLevel(slog.LevelWarn, "rewind_ready_delayed"); n != 1 {
+		f.t.Fatalf("세움 rewind_ready_delayed WARN = %d줄, want 1", n)
+	}
+	return last
+}
+
+// 하네스 축 「관측 신호 등급 set/clear 대칭」: 내림은 세움과 같은 WARN 이다. LOG_LEVEL=warn 으로 INFO 를 걸러도 세 갈래
+// (준비됨 · 송출 정지 · Forget) 모두 value=0 줄이 남아야 로그 게이지가 세움에 굳지 않는다 — 내림 뒤 상태를 지워 다시
+// 쓰지 않기 때문이다.
+func TestReadyDelayedClearKeepsWarnLevel(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		reason string
+		clear  func(f *publishLoop, last time.Time)
+	}{
+		{name: "준비됨", reason: "ready", clear: func(f *publishLoop, last time.Time) {
+			f.rewind.observeReady("s", true, "", nil, last)
+		}},
+		{name: "송출_정지", reason: "ingest_stopped", clear: func(f *publishLoop, last time.Time) {
+			f.hold(last.Add(time.Minute)) // 꼬리 끝 + 3 × 4초를 넘김
+		}},
+		{name: "forget", reason: "ingest_stopped", clear: func(f *publishLoop, last time.Time) {
+			f.rewind.dropAlarmsOutside(nil, last) // 캐시가 더는 들지 않는 스트림
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			f := statusLoop(t)
+			f.logs.warnOnly.Store(true)
+			tt.clear(f, f.raiseNoCutoffAlarm())
+			if n := f.logs.countLevel(slog.LevelWarn, "rewind_ready_delayed"); n != 2 {
+				t.Fatalf("WARN 만 받을 때 rewind_ready_delayed = %d줄, want 2(세움 · 내림)", n)
+			}
+			if a := f.logs.attrs("rewind_ready_delayed"); a["value"] != int64(0) || a["reason"] != tt.reason {
+				t.Errorf("내림 줄 = %v, want value=0 reason=%s", a, tt.reason)
+			}
+		})
 	}
 }
 
