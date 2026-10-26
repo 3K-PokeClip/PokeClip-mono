@@ -36,9 +36,10 @@ type RoundLimits struct {
 
 // DefaultRoundLimits 는 운영 상한이다 — 동시 2 · 초당 20 · 2초 · 4096 칸. 동시 2 는 인덱서 풀(연결 6 — 핫 경로 3 · 회차
 // 조회 2 · 4D 1, cmd/segment-indexer indexerPoolMaxConns)의 회차 조회 몫이라 조각 INSERT · 틱 장부 몫을 남긴다. 이 몫은
-// 예약이 아니라 합의 상한이다 — 같은 풀을 쓰는 60일 만료 · 업로드 확정 · 상태판 적재까지 겹치면 최대 동시 7 이 상한 6 을
-// 넘고, 넘친 lookup 은 풀 획득을 기다리다 2초 시한에 503 이 된다(교착 아님). 초당 20 은 회차 닫힘 전 끝남 대기 회차 수의
-// 위다. 값을 바꾸려면 R54 근거와 인덱서 풀 산식을 함께 바꾼다.
+// 예약이 아니라 합의 상한이다 — 같은 풀을 쓰는 60일 만료 · 정산 차선까지 겹치면 동시 수요가 상한 6 을 넘는다. 넘친
+// lookup 은 풀 획득을 기다리고, 획득 대기와 질의를 합친 시한(2초)을 다 쓰면 503 이다(그 안에 연결을 얻으면 조회는
+// 그대로 간다 · 교착 아님). 초당 20 은 회차 닫힘 전 끝남 대기 회차 수의 위다. 값을 바꾸려면 R54 근거와 인덱서 풀 산식을
+// 함께 바꾼다.
 func DefaultRoundLimits() RoundLimits {
 	return RoundLimits{MaxInFlight: 2, PerSecond: 20, Timeout: 2 * time.Second, CacheCells: 4096}
 }
