@@ -8,11 +8,15 @@ package publish
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // repairSetup 은 auditSetup 에 그 발행자의 감사기를 더한다. 닫힌 판의 본문(고친 뒤 와야 할 판)도 돌려준다.
@@ -410,5 +414,104 @@ func TestAuditRepairRejectsMalformedETag(t *testing.T) {
 	recs := logs.records(freezeAuditLog)
 	if len(recs) != 1 || recs[0].level != slog.LevelWarn || recs[0].attrs["reason"] != auditReadFailed {
 		t.Errorf("감사 줄 %+v, want WARN read_failed 하나", recs)
+	}
+}
+
+// 고친 판의 장부 ETag 확정이 0행이면(세대 · fence 가 움직였다) 문서는 고쳐졌지만 장부가 옛 ETag 다 — INFO 가 아니라
+// WARN dvr_audit_repaired(err 포함)다(c6 cc M — 확정 실패가 INFO 에 묻혀 알람이 안 걸린다).
+func TestAuditRepairWarnsWhenConfirmMisses(t *testing.T) {
+	l, store, logs, a, closed := repairSetup(t)
+	truncateDVR(t, store, closed, 1)
+	store.setOnPut(func(putCall) error {
+		exec(t, l.pub.pool, `UPDATE stream_sessions SET manifest_gen = manifest_gen + 1 WHERE session_id = 'S'`)
+		return nil
+	})
+
+	out := a.Audit(t.Context())
+
+	if body, _ := stored(store, soloKey); out.Repaired != 1 || !bytes.Equal(body, closed) {
+		t.Errorf("감사 = %+v · 닫힌 판인가 %t, want 복구 1 · 참", out, bytes.Equal(body, closed))
+	}
+	recs := logs.records(freezeAuditLog)
+	if len(recs) != 1 || recs[0].level != slog.LevelWarn || recs[0].attrs["reason"] != auditRepaired || recs[0].attrs["err"] == "" {
+		t.Errorf("감사 줄 %+v, want WARN %s 하나(err 포함)", recs, auditRepaired)
+	}
+}
+
+// countingAuditor 는 l 의 발행자와 같은 writer · 저장소로 도는 감사기다 — 그 풀이 보낸 문장 수를 센다.
+func countingAuditor(t *testing.T, l *loop, store *fakeStore) (*FrozenAuditor, *atomic.Int64) {
+	t.Helper()
+	var n atomic.Int64
+	pool := hookedPool(t, l.pub.pool, traceSQL(func(ctx context.Context, _ *pgx.Conn, _ string) context.Context {
+		n.Add(1)
+		return ctx
+	}))
+	p := newPublisher(t, pool, store, "w-me", &logRecorder{})
+	p.now = l.pub.now
+	return NewFrozenAuditor(p), &n
+}
+
+// 창 안에 이미 고친 문서가 다시 어긋나면 장부를 다시 읽지 않고 멈춘다 — 소진 여부를 재렌더보다 먼저 본다(c6 보안 M2).
+// 감사는 대상 조회 한 문장만 보낸다.
+func TestAuditRepairChecksBudgetBeforeRender(t *testing.T) {
+	l, store, _, _, closed := repairSetup(t)
+	a, sent := countingAuditor(t, l, store)
+	truncateDVR(t, store, closed, 1)
+	if out := a.Audit(t.Context()); out.Repaired != 1 {
+		t.Fatalf("첫 감사 = %+v, want 복구 1", out)
+	}
+	truncateDVR(t, store, closed, 1)
+	sent.Store(0)
+
+	out := a.Audit(t.Context())
+
+	if out.Failed != 1 || sent.Load() != 1 {
+		t.Errorf("소진 문서 감사 = %+v · 문장 %d개, want 실패 1 · 1개(대상 조회만 — 재렌더 없음)", out, sent.Load())
+	}
+}
+
+// 복구 불가로 판정한 판(앞부분이 아님)은 같은 ETag 인 동안 다시 렌더하지 않는다 — 고칠 수 없는 문서가 감시 주기마다
+// 장부를 다시 읽지 않게(c6 보안 M2). 판이 바뀌면(ETag 가 다르면) 다시 따진다.
+func TestAuditRemembersUnrepairableVersion(t *testing.T) {
+	l, store, _, _, closed := repairSetup(t)
+	a, sent := countingAuditor(t, l, store)
+	changed := bytes.Replace(cutTail(t, closed, 1), []byte(".m4s\n"), []byte(".mp4\n"), 1)
+	plant(store, putCall{key: soloKey, body: changed})
+	if out := a.Audit(t.Context()); out.Failed != 1 {
+		t.Fatalf("첫 감사 = %+v, want 실패 1", out)
+	}
+
+	sent.Store(0)
+	same := a.Audit(t.Context())
+	sameSent := sent.Load()
+	plant(store, putCall{key: soloKey, body: cutAfterTag(t, closed)})
+	sent.Store(0)
+	other := a.Audit(t.Context())
+
+	if same.Failed != 1 || sameSent != 1 {
+		t.Errorf("같은 판 감사 = %+v · 문장 %d개, want 실패 1 · 1개(대상 조회만)", same, sameSent)
+	}
+	if other.Failed != 1 || sent.Load() <= 1 {
+		t.Errorf("바뀐 판 감사 = %+v · 문장 %d개, want 실패 1 · 재렌더(2개 이상)", other, sent.Load())
+	}
+}
+
+// PUT 키는 장부 열 그대로 믿지 않는다 — 스트림 · 세션에서 다시 만든 목록 키와 장부의 dvr_s3_key 가 다르면 앞부분
+// 갈래여도 고치지 않고 ERROR mismatch(err 포함)다(c6 보안 L2 · 방어 심화).
+func TestAuditRepairRequiresDerivedKey(t *testing.T) {
+	l, store, logs, a, closed := repairSetup(t)
+	const otherKey = "dvr/" + fxStream + "/OTHER/index.m3u8"
+	plant(store, putCall{key: otherKey, body: cutTail(t, closed, 1)})
+	exec(t, l.pub.pool, `UPDATE stream_sessions SET dvr_s3_key = $1 WHERE session_id = 'S'`, otherKey)
+	puts := len(store.putCalls())
+
+	out := a.Audit(t.Context())
+
+	if out.Failed != 1 || out.Repaired != 0 || len(store.putCalls()) != puts {
+		t.Errorf("감사 = %+v · PUT %d번, want 실패 1 · 복구 0 · PUT 0", out, len(store.putCalls())-puts)
+	}
+	recs := logs.records(freezeAuditLog)
+	if len(recs) != 1 || recs[0].attrs["reason"] != auditMismatch || recs[0].attrs["err"] == "" {
+		t.Errorf("감사 줄 %+v, want mismatch 하나(err 포함)", recs)
 	}
 }

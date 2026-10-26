@@ -71,7 +71,8 @@ const (
 // J12).
 type Options struct {
 	// Writer 는 이 프로세스의 fence 토큰(writer_fence)이다. 프로세스마다 달라야 하고 비면 안 된다 — 만드는 것은
-	// 조립점 몫이다(커밋 7).
+	// 조립점 몫이다(커밋 7). 동결 감사 복구의 장부 CAS(repairClaimSQL)도 이 토큰이 인스턴스마다 유일하다고 믿고 감사기
+	// 하나를 고른다 — 같은 토큰의 감사기 둘은 서로를 「내 fence」 로 읽어 둘 다 고른다.
 	Writer string
 	// BaseURL 은 목록의 조각 · MAP URI 앞머리다(REWIND_PUBLIC_BASE_URL — 검증은 설정 몫, 커밋 7). 끝에 '/' 가
 	// 없어야 한다(rewind.Render).

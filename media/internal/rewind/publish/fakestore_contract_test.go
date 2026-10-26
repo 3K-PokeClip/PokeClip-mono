@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/rewind"
 )
 
 const testKey = "dvr/demo/sess-1/index.m3u8"
@@ -197,6 +199,26 @@ func TestFakeStoreGetReturnsBodyWithItsETag(t *testing.T) {
 	body, etag, err = f.Get(ctx, testKey)
 	if err != nil || !bytes.Equal(body, bodyB) || etag != e2 {
 		t.Errorf("새 판 Get = %q · %q · %v, want %q · %q · nil", body, etag, err, bodyB, e2)
+	}
+}
+
+// 가짜의 Get 도 S3Store 와 같은 축별 본문 상한을 낸다 — 감사 시험이 상한 초과 갈래를 가짜 위에서 잰다.
+func TestFakeStoreGetLimitsBodyByAxis(t *testing.T) {
+	vod, err := vodKey("demo", "sess-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := newFakeStore(t)
+	plant(f, putCall{key: testKey, body: bytes.Repeat([]byte{'x'}, rewind.MaxBodyBytes+1)})
+	plant(f, putCall{key: vod, body: bytes.Repeat([]byte{'x'}, rewind.MaxVODBodyBytes+1)})
+	for _, key := range []string{testKey, vod} {
+		if _, _, err := f.Get(context.Background(), key); !errors.Is(err, errBodyOverLimit) {
+			t.Errorf("가짜 Get(%q) 상한 초과 오류 = %v, want errBodyOverLimit", key, err)
+		}
+	}
+	plant(f, putCall{key: vod, body: bytes.Repeat([]byte{'x'}, rewind.MaxBodyBytes+1)})
+	if body, _, err := f.Get(context.Background(), vod); err != nil || len(body) != rewind.MaxBodyBytes+1 {
+		t.Errorf("가짜 Get(%q) = %d바이트 · %v, want VOD 는 목록 상한을 넘어도 읽는다", vod, len(body), err)
 	}
 }
 
