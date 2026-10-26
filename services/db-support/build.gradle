@@ -37,9 +37,6 @@ dependencies {
     testFixturesApi 'org.springframework.boot:spring-boot-starter-jdbc'
     // 2.x 좌표다. 1.x의 org.testcontainers:postgresql가 아니다.
     testFixturesApi 'org.testcontainers:testcontainers-postgresql'
-    // dev 앱별 스키마 이전 시험(DevSchemaMove, POK-428)이 옛 설정 Flyway를 돌린다. PostgreSQL 방언 모듈은 쓰는 서버 넷이
-    // 이미 갖고 있다. 이전 단계를 지우는 후속 PR에서 함께 지운다.
-    testFixturesImplementation 'org.flywaydb:flyway-core'
 
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
     testImplementation testFixtures(project(':web-support'))

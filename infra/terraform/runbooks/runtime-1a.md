@@ -1260,8 +1260,8 @@ PUBLIC 에서 거두고 CONNECT 만 계정 여섯에 줍니다(결정 정본
 
 *   **앱 서버가 뜬 뒤**: 표가 자기 스키마에 있으므로 코드 · SQL 을 되돌리지
     않고 앞으로 고칩니다.
-*   dev 공유 DB 의 되돌리기는 [services/README.md](../../../services/README.md)
-    「dev 앱별 스키마 이전과 되돌리기」 입니다.
+*   dev 공유 DB 는 이전이 끝나(2026-10-26) 되돌리기 장치를 지웠습니다 —
+    [services/README.md](../../../services/README.md) 「dev 앱별 스키마 이전」.
 
 ## 1단-나 ② — Media 전용 토큰(POK-429)
 
