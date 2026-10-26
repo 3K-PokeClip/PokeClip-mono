@@ -25,6 +25,7 @@ import (
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/poolstat"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/recording"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/secretfile"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/session"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/upload"
 )
 
@@ -215,6 +216,9 @@ func run() error {
 	}
 	// 제어면 상태 몫(Board · 받은편지함 · 재기동 적재)은 발행 조립 앞이다 — 꺼짐 · 강등 · 정상 모두 받은편지함이 있다(M5 3.3).
 	board := assembleStatus(ctx, cfg, rewind, newPlaybackSeed(pool))
+	// 상태 표지 받은편지함은 기동 때 하나다 — M6-4 가 inbox.Changed 를 만료에, M6-3b 가 Drain 을 루프에 넘긴다(계획 5절).
+	inbox := session.NewPlaybackInbox()
+	_ = inbox // 읽는 쪽(M6-4 · M6-3b)이 붙기 전까지 쓰는 곳이 없다
 	if pubPool := assemblePublishing(ctx, cfg, dbConfig.Copy(), up, rewind); pubPool != nil {
 		// ★ 등록 순서가 계약이다(위 up.Shutdown 주석과 같은 원리). 발행자 풀은 up.Shutdown 보다 먼저 닫히고 아래
 		//   rewind.stop(fence 반납)보다 늦게 닫힌다 — 반납 문장이 이 풀로 나간다(체크리스트 474 A-3 3).
