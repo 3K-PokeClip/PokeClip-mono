@@ -54,7 +54,7 @@ func newPool(t *testing.T) *pgxpool.Pool {
 		if _, err := pool.Exec(ctx, "DROP TRIGGER IF EXISTS pc_test_fault ON stream_sessions"); err != nil {
 			return err
 		}
-		_, err := pool.Exec(ctx, "TRUNCATE stream_segments, stream_cutoffs, stream_published_gaps, stream_sessions")
+		_, err := pool.Exec(ctx, "TRUNCATE stream_segments, stream_cutoffs, stream_published_gaps, stream_sessions, stream_seq_floors, broadcast_lifecycle_outbox")
 		return err
 	})
 }

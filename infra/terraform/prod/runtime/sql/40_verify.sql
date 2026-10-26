@@ -32,6 +32,14 @@
 --   public_create_revoked           PUBLIC 이 public 스키마에 CREATE 를 갖지 않는다
 --   media_owner_schema              media_owner 가 public 스키마에 USAGE · CREATE 를 가진다
 --   owner:<표 · 함수>               소유자가 media_owner 다(없으면 이것이 실패한다)
+--   ledger_column:<표>.<열>         M6 장부 열(stream_sessions 의 round_id · round_closed_at · expired_at ·
+--                                   stop_marked_at)이 있다
+--   index:<인덱스>                  stream_sessions_round_open_idx 가 stream_sessions 의 인덱스로 있다
+--   trigger:<트리거>                stream_segments 의 seq 하한 트리거 둘이 켜진 채 제 함수에 묶여 있다 — 지워지면
+--                                   하한 없이 seq 를 다시 쓸 수 있다(불변식 4)
+--   function:<함수>                 하한 함수의 SECURITY DEFINER 여부가 기대와 같고(갱신 함수만 정의자) search_path 가
+--                                   pg_catalog, pg_temp 로 고정돼 있다 — 정의자 함수가 부른 쪽 search_path 로 돌면
+--                                   public 의 덫을 media_owner 신분으로 부른다
 --   privilege:<역할>:<표>:<권한>    표 단위 권한이 30 의 목록과 같다(PUBLIC 과 교차 권한이 없는 앱 사용자 둘은
 --                                   stream_* 에 아무것도 없다). 권한은 PG17 의
 --                                   MAINTAIN 까지 여덟이고, 끝에 +grant_option 이 붙은 것은 재부여 권한이다(모두 없다)
@@ -125,23 +133,45 @@ BEGIN
         SELECT dictowner FROM pg_catalog.pg_ts_dict, public_ns WHERE dictnamespace = ns
     ),
     tables(t) AS (
-        VALUES ('stream_segments'), ('stream_sessions'), ('stream_cutoffs'), ('stream_published_gaps')
+        VALUES ('stream_segments'), ('stream_sessions'), ('stream_cutoffs'), ('stream_published_gaps'),
+               ('stream_seq_floors'), ('broadcast_lifecycle_outbox')
+    ),
+    -- M6 장부 열(ledger_column:<표>.<열>).
+    ledger_columns(t, c) AS (
+        VALUES ('stream_sessions', 'round_id'), ('stream_sessions', 'round_closed_at'),
+               ('stream_sessions', 'expired_at'), ('stream_sessions', 'stop_marked_at')
+    ),
+    -- seq 하한 트리거와 그 함수 · 정의자 여부(trigger:<트리거> · function:<함수>).
+    floor_triggers(tg, fn, definer) AS (
+        VALUES ('stream_segments_seq_floor_raise', 'stream_segments_raise_seq_floor', true),
+               ('stream_segments_seq_floor_guard', 'stream_segments_check_seq_floor', false)
     ),
     granted(r, t, p) AS (
         VALUES ('media_indexer', 'stream_segments', 'SELECT'),
                ('media_indexer', 'stream_segments', 'INSERT'),
                ('media_indexer', 'stream_segments', 'UPDATE'),
+               ('media_indexer', 'stream_segments', 'DELETE'),
                ('media_indexer', 'stream_sessions', 'SELECT'),
                ('media_indexer', 'stream_sessions', 'INSERT'),
                ('media_indexer', 'stream_sessions', 'UPDATE'),
+               ('media_indexer', 'stream_sessions', 'DELETE'),
                ('media_indexer', 'stream_cutoffs', 'SELECT'),
                ('media_indexer', 'stream_cutoffs', 'INSERT'),
+               ('media_indexer', 'stream_cutoffs', 'UPDATE'),
+               ('media_indexer', 'stream_cutoffs', 'DELETE'),
                ('media_indexer', 'stream_published_gaps', 'SELECT'),
                ('media_indexer', 'stream_published_gaps', 'INSERT'),
                ('media_indexer', 'stream_published_gaps', 'UPDATE'),
+               ('media_indexer', 'stream_published_gaps', 'DELETE'),
+               ('media_indexer', 'stream_seq_floors', 'SELECT'),
+               ('media_indexer', 'broadcast_lifecycle_outbox', 'SELECT'),
+               ('media_indexer', 'broadcast_lifecycle_outbox', 'INSERT'),
+               ('media_indexer', 'broadcast_lifecycle_outbox', 'UPDATE'),
+               ('media_indexer', 'broadcast_lifecycle_outbox', 'DELETE'),
                ('media_janitor', 'stream_segments', 'SELECT'),
                ('media_janitor', 'stream_sessions', 'SELECT'),
                ('media_janitor', 'stream_cutoffs', 'SELECT'),
+               ('media_janitor', 'stream_published_gaps', 'SELECT'),
                ('app_clip', 'stream_segments', 'SELECT'),
                ('app_clip', 'stream_segments', 'DELETE'),
                ('app_clip', 'stream_sessions', 'SELECT'),
@@ -233,6 +263,37 @@ BEGIN
                EXISTS (SELECT 1 FROM pg_proc
                         WHERE oid = pg_catalog.to_regprocedure('public.stream_segments_immutable_axes()')::oid
                           AND pg_catalog.pg_get_userbyid(proowner) = 'media_owner')
+        UNION ALL
+        SELECT 'owner:' || fn,
+               EXISTS (SELECT 1 FROM pg_proc
+                        WHERE oid = pg_catalog.to_regprocedure('public.' || fn || '()')::oid
+                          AND pg_catalog.pg_get_userbyid(proowner) = 'media_owner')
+          FROM floor_triggers
+        UNION ALL
+        SELECT 'ledger_column:' || t || '.' || c,
+               EXISTS (SELECT 1 FROM pg_attribute
+                        WHERE attrelid = pg_catalog.to_regclass('public.' || t)::oid
+                          AND attname = c::name AND attnum > 0 AND NOT attisdropped)
+          FROM ledger_columns
+        UNION ALL
+        SELECT 'index:stream_sessions_round_open_idx',
+               EXISTS (SELECT 1 FROM pg_index
+                        WHERE indexrelid = pg_catalog.to_regclass('public.stream_sessions_round_open_idx')::oid
+                          AND indrelid = pg_catalog.to_regclass('public.stream_sessions')::oid)
+        UNION ALL
+        SELECT 'trigger:' || tg,
+               EXISTS (SELECT 1 FROM pg_trigger
+                        WHERE tgrelid = pg_catalog.to_regclass('public.stream_segments')::oid
+                          AND tgname = tg::name AND tgenabled <> 'D'::"char"
+                          AND tgfoid = pg_catalog.to_regprocedure('public.' || fn || '()')::oid)
+          FROM floor_triggers
+        UNION ALL
+        SELECT 'function:' || fn,
+               EXISTS (SELECT 1 FROM pg_proc
+                        WHERE oid = pg_catalog.to_regprocedure('public.' || fn || '()')::oid
+                          AND prosecdef = definer
+                          AND proconfig OPERATOR(pg_catalog.=) ARRAY['search_path=pg_catalog, pg_temp'])
+          FROM floor_triggers
         UNION ALL
         SELECT pg_catalog.format('privilege:%s:%s:%s%s', m.r, m.t, m.p,
                                  CASE WHEN m.go THEN '+grant_option' ELSE '' END),

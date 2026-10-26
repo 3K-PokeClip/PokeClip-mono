@@ -212,4 +212,120 @@ CREATE TABLE IF NOT EXISTS stream_published_gaps (
     CONSTRAINT stream_published_gaps_reason_chk CHECK (reason IN ('upload_stall','slate','settle_deadline','mixed_boundary')),
     CONSTRAINT stream_published_gaps_state_chk  CHECK (published_state IN ('recorded','put_confirmed','vod_abandoned'))
 );
+
+-- ============================================================================
+-- M6 장부(POK-196 M6-0) — 1번 소유(승인 표면 아님 · 계약-세그먼트인덱스 6절 통지). stream_segments 는 열을 바꾸지
+-- 않고 트리거 둘만 더한다(ADR-0001 결정 2 의 승인 대상 아님).
+-- ============================================================================
+
+-- 회차 · 만료 · 의도적 종료 표식 열 넷. 위 6-1 (a) 와 같은 카탈로그 확인 이디엄이다 — 옛 볼륨에도 붙는다.
+-- round_id = 그 회차 머리 세션의 session_id · round_closed_at = 회차 닫힘 · expired_at = 60일 만료의 조회 제외 ·
+-- stop_marked_at = 의도적 종료(4D)가 멈춘 시각 표식.
+DO $do$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                   WHERE table_name::name  = 'stream_sessions'
+                     AND column_name::name = 'round_id') THEN
+        ALTER TABLE stream_sessions
+            ADD COLUMN round_id        text,
+            ADD COLUMN round_closed_at timestamptz,
+            ADD COLUMN expired_at      timestamptz,
+            ADD COLUMN stop_marked_at  timestamptz;
+    END IF;
+END $do$;
+
+-- 열린 회차의 최신 세션을 고르는 회차 스캔(ListClosableRounds)의 부분 인덱스.
+CREATE INDEX IF NOT EXISTS stream_sessions_round_open_idx
+  ON stream_sessions (round_id, started_at DESC)
+  WHERE round_closed_at IS NULL AND round_id IS NOT NULL;
+
+-- seq 하한 — 스트림별로 다음 seq 가 내려가면 안 되는 값(불변식 4). 행을 지우면 아래 트리거가 올린다.
+-- 사이드카는 읽기만 한다(LoadCursor 가 max(seq)+1 과 GREATEST).
+CREATE TABLE IF NOT EXISTS stream_seq_floors (
+    stream_id text        PRIMARY KEY,
+    next_seq  bigint      NOT NULL,
+    raised_at timestamptz NOT NULL DEFAULT pg_catalog.now()
+);
+
+-- 계약9 생명주기 이벤트 outbox — 장부 트랜잭션에 행을 넣고 발행기가 커밋된 행만 낸다(설계 15.5).
+CREATE TABLE IF NOT EXISTS broadcast_lifecycle_outbox (
+    event_id         text        PRIMARY KEY,
+    round_id         text        NOT NULL,
+    event_type       text        NOT NULL,
+    sequence         bigint      NOT NULL,
+    occurred_at      timestamptz NOT NULL,
+    ingest_stream_id text        NOT NULL,
+    streamer_id      text,
+    payload          jsonb       NOT NULL DEFAULT '{}',
+    state            text        NOT NULL DEFAULT 'pending',
+    attempts         int         NOT NULL DEFAULT 0,
+    next_at          timestamptz NOT NULL DEFAULT pg_catalog.now(),
+    last_error       text,
+    created_at       timestamptz NOT NULL DEFAULT pg_catalog.now(),
+    published_at     timestamptz,
+    CONSTRAINT broadcast_lifecycle_outbox_state_chk CHECK (state IN ('pending','published','abandoned')),
+    UNIQUE (round_id, sequence)
+);
+CREATE INDEX IF NOT EXISTS broadcast_lifecycle_outbox_due_idx
+  ON broadcast_lifecycle_outbox (next_at) WHERE state = 'pending';
+
+-- 하한 갱신 — 지워진 행의 스트림별 max(seq)+1 로 올린다(내리지 않는다). 지우는 쪽이 누구든(만료 · clip 탈퇴 정리 ·
+-- 수동) 같은 트랜잭션에서 돈다. 실패하면 그 DELETE 도 롤백된다. 하한 행을 잠그므로 같은 스트림의 동시 DELETE 는
+-- 서로 직렬화되고, 스트림 순으로 잠가 여러 스트림을 지우는 두 DELETE 가 교착하지 않는다.
+-- SECURITY DEFINER — 지우는 계정(app_clip 등)은 하한 표 권한이 없다. 정의자 함수는 부른 쪽의 search_path 로 돌면
+-- public 에 심은 덫을 정의자 신분으로 부르므로 pg_catalog · pg_temp 로 고정하고 표 이름은 public 으로 한정한다.
+CREATE OR REPLACE FUNCTION stream_segments_raise_seq_floor() RETURNS trigger
+    LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $fn$
+BEGIN
+    INSERT INTO public.stream_seq_floors AS f (stream_id, next_seq)
+    SELECT d.stream_id, pg_catalog.max(d.seq) + 1::bigint
+      FROM deleted_rows d
+     GROUP BY d.stream_id
+     ORDER BY d.stream_id
+    ON CONFLICT (stream_id) DO UPDATE
+       SET next_seq = EXCLUDED.next_seq, raised_at = pg_catalog.now()
+     WHERE f.next_seq < EXCLUDED.next_seq;
+    RETURN NULL;
+END $fn$;
+
+-- 하한 검사 — 하한 아래 seq 의 INSERT 를 거부한다(23514 seq_below_floor). 하한을 모르는 옛 판 사이드카가 seq 를
+-- 다시 쓰면 같은 영구 URL 에 다른 조각이 실리므로, 그 스트림 색인을 멈추는 쪽으로 닫는다(fail-closed). 새 판은
+-- LoadCursor 가 하한 아래를 내지 않아 여기 걸리지 않는다 — 걸리면 결함이다. 넣는 계정(media_indexer)은 하한 표
+-- SELECT 를 가지므로 부른 쪽 권한으로 돈다.
+CREATE OR REPLACE FUNCTION stream_segments_check_seq_floor() RETURNS trigger
+    LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $fn$
+DECLARE
+    floor_seq bigint;
+BEGIN
+    SELECT f.next_seq INTO floor_seq FROM public.stream_seq_floors f WHERE f.stream_id = NEW.stream_id;
+    IF floor_seq IS NOT NULL AND NEW.seq < floor_seq THEN
+        RAISE EXCEPTION 'seq_below_floor'
+            USING ERRCODE = 'check_violation',
+                  DETAIL = pg_catalog.format('stream=%s seq=%s floor=%s', NEW.stream_id, NEW.seq, floor_seq);
+    END IF;
+    RETURN NEW;
+END $fn$;
+
+DO $do$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger
+                   WHERE tgrelid = 'stream_segments'::regclass::oid
+                     AND tgname  = 'stream_segments_seq_floor_raise') THEN
+        CREATE TRIGGER stream_segments_seq_floor_raise
+            AFTER DELETE ON stream_segments
+            REFERENCING OLD TABLE AS deleted_rows
+            FOR EACH STATEMENT EXECUTE FUNCTION stream_segments_raise_seq_floor();
+    END IF;
+END $do$;
+
+DO $do$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger
+                   WHERE tgrelid = 'stream_segments'::regclass::oid
+                     AND tgname  = 'stream_segments_seq_floor_guard') THEN
+        CREATE TRIGGER stream_segments_seq_floor_guard
+            BEFORE INSERT ON stream_segments
+            FOR EACH ROW EXECUTE FUNCTION stream_segments_check_seq_floor();
+    END IF;
+END $do$;
 -- END schemaDDL

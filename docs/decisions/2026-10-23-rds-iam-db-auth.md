@@ -1,9 +1,10 @@
 # ADR-0006: 사이드카 · janitor 는 RDS IAM 토큰으로 DB 에 붙고, iam 이면 verify-full 과 저장소 커밋 CA 번들을 강제한다
 
-날짜: 2026-10-23(결정 10-22) / 상태: 확정 / 관련: POK-311(이 결정) · POK-304(RDS · DB
-사용자 — 권한 목록 전달처), 엣지 계획 I1-1 · I1-2, POK-170 설계(「pgconf 추출은 IAM
-때」), ADR-0001(stream_segments DDL 소유권), ADR-0003(media 비특권), 팀 위키
-ADR-103 · ADR-104 · ADR-018
+날짜: 2026-10-23(결정 10-22) / 상태: 확정 — I1-2 권한 절은 2026-10-26 노트가 개정
+(`2026-10-26-media-indexer-m6-delete-grants.md`) / 관련: POK-311(이 결정) ·
+POK-304(RDS · DB 사용자 — 권한 목록 전달처), 엣지 계획 I1-1 · I1-2, POK-170
+설계(「pgconf 추출은 IAM 때」), ADR-0001(stream_segments DDL 소유권),
+ADR-0003(media 비특권), 팀 위키 ADR-103 · ADR-104 · ADR-018
 
 ## Context
 
