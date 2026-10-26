@@ -69,15 +69,25 @@ func TestD2CutoffSeqHasNoBindArgument(t *testing.T) {
 	}
 }
 
-// d3_no_stray_mutation — stream_cutoffs 에 대한 UPDATE·DELETE 코드 경로가 0곳이다.
-// 허용 변경 둘(6.6 만료 동반 삭제 · 장애 절차 수동 CAS) 중 전자는 M6 에서 1곳으로 늘고
-// (그때 이 단언을 1로 갱신한다), 후자는 코드가 아니라 운영 절차다.
+// d3_no_stray_mutation — stream_cutoffs 에 대한 UPDATE·DELETE 코드 경로는 만료 동반의 전진 · 제거 두 문장
+// (expiry_store.go — M6-4 · 설계 M6 7절 단계 5)뿐이다. 다른 허용 변경(장애 절차 수동 CAS)은 코드가 아니라
+// 운영 절차다.
 func TestD3NoStrayCutoffMutation(t *testing.T) {
 	mutRe := regexp.MustCompile(`(UPDATE|DELETE FROM)\s+stream_cutoffs`)
 	for p, src := range packageSources(t) {
-		if m := mutRe.FindAll(src, -1); len(m) != 0 {
-			t.Errorf("%s 에 stream_cutoffs 변이 %d곳 — M2 시점 허용 0곳(M6 동반 삭제에서 1곳으로 갱신)", p, len(m))
+		n := len(mutRe.FindAll(src, -1))
+		if p == "expiry_store.go" {
+			if n != 2 {
+				t.Errorf("%s 에 stream_cutoffs 변이 %d곳 — 만료 동반 전진 · 제거 정확히 2곳이어야 한다", p, n)
+			}
+			continue
 		}
+		if n != 0 {
+			t.Errorf("%s 에 stream_cutoffs 변이 %d곳 — 만료 동반(expiry_store.go) 밖은 0곳이어야 한다", p, n)
+		}
+	}
+	if !strings.Contains(expiryAdvanceCutoffSQL, "UPDATE stream_cutoffs") || !strings.Contains(expiryRemoveCutoffSQL, "DELETE FROM stream_cutoffs") {
+		t.Fatal("만료 동반 전진 · 제거 문장이 두 상수 밖으로 옮겨졌다")
 	}
 }
 
