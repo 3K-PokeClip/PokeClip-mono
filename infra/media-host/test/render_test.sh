@@ -444,8 +444,9 @@ check_case_7() {
                 "dvr /dvr rw",
                 "/run/pokeclip-media/mediamtx.yml /mediamtx.yml ro"],
      nginx: ["/etc/pokeclip-media/nginx.conf /etc/nginx/nginx.conf ro"],
-     sidecar: ["recordings /recordings ro", "hooks /hooks ro",
-               "/run/pokeclip-media/mtx_api_pass /run/secrets/mtx_api_pass ro"]}
+     sidecar: (["recordings /recordings ro", "hooks /hooks ro",
+               "/run/pokeclip-media/mtx_api_pass /run/secrets/mtx_api_pass ro"]
+       + (if .ingest_auth_image != "" then [sc_resolve_bind] else [] end))}
     + (if .ingest_auth_image != "" then {"ingest-auth": ia_binds} else {} end)
     + (if .janitor_enabled
        then {janitor: ["recordings /recordings rw"]} else {} end)
@@ -527,7 +528,8 @@ check_case_10() {
        MTX_API_PASS_FILE: "/run/secrets/mtx_api_pass",
        S3_BUCKET: .rewind_bucket_name,
        REWIND_PUBLIC_BASE_URL: .rewind_public_base_url,
-       CONTROL_LISTEN: "127.0.0.1:8086"})}
+       CONTROL_LISTEN: "127.0.0.1:8086"}
+       + (if .ingest_auth_image != "" then sc_resolve_env else {} end))}
     + (if .janitor_enabled
        then {janitor: (db_env + {POSTGRES_USER: "media_janitor",
          JANITOR_ENABLED: "true", SEGMENT_ROOT: "/recordings"})}
@@ -683,8 +685,13 @@ check_case_16() {
 # 다른 항목을 한 줄씩 낸다. 역할 서비스 셋이 양쪽에 다 없어도 한 줄 낸다.
 # 입력: $p = 렌더한 템플릿, $t = 시험 compose(둘 다 선언 그대로의 구성 JSON),
 # $logging = logging(드라이버 · 옵션)도 비교할지(true · false).
+# 응답기 모드 사이드카의 4C 토큰 사본 bind 는 렌더 쪽에서 뺀다 — 시험 compose 의
+# 사이드카는 4C 를 부르지 않는다(그 bind 는 사례 7 · 26 · 42 가 본다).
 # shellcheck disable=SC2016 # jq 프로그램 — $ 는 jq 변수다.
 readonly DRIFT_PROGRAM='
+def without_sidecar_resolve: if .services.sidecar == null then . else
+  .services.sidecar.volumes |= map(select(.target
+    != "/run/secrets/stream_key_resolve_token")) end;
 def facts: .services | map_values({
   restart: (.restart // null),
   network_mode: (.network_mode // null),
@@ -698,7 +705,7 @@ def facts: .services | map_values({
   create_host_path: ((.volumes // []) | map(select(.type == "bind")
     | {(.target): (.bind.create_host_path != false)}) | add // {})}
   + (if $logging then {logging: (.logging // null)} else {} end));
-($p[0] | facts) as $pf | ($t[0] | facts) as $tf
+($p[0] | without_sidecar_resolve | facts) as $pf | ($t[0] | facts) as $tf
 | [$pf | keys[] | select(. as $s | $tf | has($s))] as $shared
 | (["mediamtx", "nginx", "sidecar"] - $shared | .[]
    | "공통 서비스 없음: \(.)"),
@@ -754,11 +761,11 @@ $(harness::log_tail "${scratch}/unit.json.err")"
 }
 
 #######################################
-# 사례 26 — 렌더 파일 bind 셋(시작 스크립트가 tmpfs 에 렌더하는 두 파일 · M9
-# user_data 가 렌더하는 nginx 설정)은 원본이 없으면 만들지 않는다
-# (create_host_path: false). 원본이 없을 때(정지가 렌더를 지운 뒤 남은
-# 컨테이너가 다시 뜰 때 등) 엔진이 그 자리에 디렉터리를 만들면 다음 렌더가
-# 영영 막힌다.
+# 사례 26 — 렌더 파일 bind 셋(시작 스크립트가 tmpfs 에 렌더하는 파일 — 응답기
+# 모드는 사이드카 4C 토큰 사본 포함 · M9 user_data 가 렌더하는 nginx 설정)은
+# 원본이 없으면 만들지 않는다(create_host_path: false). 원본이 없을 때(정지가
+# 렌더를 지운 뒤 남은 컨테이너가 다시 뜰 때 등) 엔진이 그 자리에 디렉터리를
+# 만들면 다음 렌더가 영영 막힌다.
 #######################################
 check_case_26() {
   require_setup || return 1
@@ -770,7 +777,9 @@ check_case_26() {
      "nginx /etc/nginx/nginx.conf false",
      "sidecar /run/secrets/mtx_api_pass false"]
     + (if .ingest_auth_image != ""
-       then [ia_binds[] | "ingest-auth \(split(" ")[1]) false"] else [] end)
+       then [ia_binds[] | "ingest-auth \(split(" ")[1]) false"]
+         + ["sidecar /run/secrets/stream_key_resolve_token false"]
+       else [] end)
     | sort' \
     '렌더 파일 bind 의 원본 자동 생성'
 }
@@ -915,7 +924,9 @@ main() {
   harness::run_case 9 \
     '실행 계정 — janitor 만 녹화 소유자(Dockerfile.mtxhook USER) · 나머지 user 없음' \
     check_case_9
-  harness::run_case 10 '사이드카 · janitor env(IAM · 비밀 없음)' check_case_10
+  harness::run_case 10 \
+    '사이드카 · janitor env(IAM · 비밀 없음 · 사이드카 4C 는 응답기 모드만)' \
+    check_case_10
   harness::run_case 11 'env 에 비밀 계열 이름 · POSTGRES_PASSWORD 0' \
     check_case_11
   harness::run_case 12 'mediamtx env TZ=UTC' check_case_12
@@ -974,7 +985,8 @@ main() {
   harness::run_case 40 '망 칸 포트 열 개 서로 다름' auth_cases::check_40
   harness::run_case 41 'ingest-auth.env 렌더 = 정확히 한 줄(on · off)' \
     auth_cases::check_41
-  harness::run_case 42 '응답기 bind 원본 = 시작 스크립트 기본 자리' \
+  harness::run_case 42 \
+    '응답기 · 사이드카 4C 사본 bind 원본 = 시작 스크립트 기본 자리' \
     auth_cases::check_42
   harness::run_case 43 'compose 옛 갈래(a · c) — develop 골든과 같은 구성' \
     auth_cases::check_43

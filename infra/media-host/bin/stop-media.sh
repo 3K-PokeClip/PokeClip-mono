@@ -5,11 +5,13 @@
 # ExecStop 을 건너뛰므로 ExecStopPost 도 down 까지 한다.
 #
 # 인자 없음: `docker compose … down` 으로 프로젝트를 내리고, down 의 결과와
-#   상관없이 tmpfs 의 렌더 파일 둘(CDN 비밀 · API 비밀번호가 든 mediamtx.yml ·
-#   사이드카의 mtx_api_pass), 응답기 모드의 비밀 파일 셋(RUNTIME_DIR/ingest-auth
-#   의 ingest_basic_pass · mtx_api_pass · stream_key_resolve_token)과 시작
-#   스크립트가 남겼을 수 있는 임시 파일을 지운다. 응답기 디렉터리 자체와 그 안의
-#   상태 디렉터리, 거부 목록(/var/lib 쪽)은 남긴다 — 비밀이 아니고, 상태는 다음
+#   상관없이 tmpfs 의 렌더 파일 셋(CDN 비밀 · API 비밀번호가 든 mediamtx.yml ·
+#   사이드카의 mtx_api_pass · 응답기 모드에서 두는 사이드카의
+#   stream_key_resolve_token), 응답기 모드의 비밀 파일 셋
+#   (RUNTIME_DIR/ingest-auth 의 ingest_basic_pass · mtx_api_pass ·
+#   stream_key_resolve_token)과 시작 스크립트가 남겼을 수 있는 임시 파일을
+#   지운다. 응답기 디렉터리 자체와 그 안의 상태 디렉터리, 거부 목록(/var/lib
+#   쪽)은 남긴다 — 비밀이 아니고, 상태는 다음
 #   기동이 이어 쓰며 거부 목록은 다음 기동이 SSM 에서 다시 받는다. 응답기
 #   디렉터리가 링크면 따라가 지우지 않고 실패로 적는다(시작 스크립트도 받지
 #   않는다).
@@ -34,7 +36,7 @@
 set -euo pipefail
 
 # 시작 스크립트가 RUNTIME_DIR 에 두는 파일 이름(임시 파일은 .<이름>.XXXXXX).
-readonly RENDER_NAMES=(mediamtx.yml mtx_api_pass)
+readonly RENDER_NAMES=(mediamtx.yml mtx_api_pass stream_key_resolve_token)
 # 응답기 모드에서 RUNTIME_DIR/ingest-auth 에 두는 비밀 파일 이름(임시 파일 꼴은
 # 위와 같다).
 readonly INGEST_AUTH_DIR_NAME='ingest-auth'

@@ -278,8 +278,9 @@ auth_mode::check_only_in() {
 }
 
 #######################################
-# 응답기 모드 비밀 다섯(CDN · Basic · 잠금 둘 · API 비밀번호)이 정한 파일에만
-# 있는지 본다 — API 비밀번호는 mediamtx.yml 에 없다.
+# 응답기 모드 비밀 여섯(CDN · Basic · 잠금 둘 · API 비밀번호 · 4C 토큰)이 정한
+# 파일에만 있는지 본다 — API 비밀번호는 mediamtx.yml 에 없고, 4C 토큰은 응답기
+# 파일과 사이드카 사본(RUNTIME_DIR 바로 아래) 둘에만 있다.
 # Globals:
 #   fixture_dir, auth_basic, auth_publish, auth_read, auth_api
 #######################################
@@ -294,7 +295,7 @@ auth_mode::check_contained() {
   auth_mode::check_only_in "${auth_api}" 'API 비밀번호' "${run}/${API_PASS_NAME}" \
     "${ia}/${API_PASS_NAME}" || ok=1
   auth_mode::check_only_in "${AUTH_RESOLVE_TOKEN}" '4C 토큰' \
-    "${ia}/${AUTH_RESOLVE_NAME}" || ok=1
+    "${ia}/${AUTH_RESOLVE_NAME}" "${run}/${AUTH_RESOLVE_NAME}" || ok=1
   return "${ok}"
 }
 
@@ -321,16 +322,16 @@ auth_mode::chown_is() {
 #######################################
 # 응답기 모드 chown 기록 — 거부 목록 디렉터리 · 그 임시 파일(root:응답기) 뒤
 # 응답기 디렉터리(root) · 상태 디렉터리(응답기 — 디렉터리는 -h), 그 뒤 임시
-# 파일 다섯이 차례로 MediaMTX · 사이드카 · 응답기 셋 소유이고, 그 순간 0400 ·
-# 최종 경로 없음.
+# 파일 여섯이 차례로 MediaMTX · 사이드카 · 응답기 셋 · 사이드카(4C 토큰 사본)
+# 소유이고, 그 순간 0400 · 최종 경로 없음.
 # Globals:
 #   fixture_dir
 #######################################
 auth_mode::check_chown_records() {
   local ok=0 run="${fixture_dir}/runtime" n deny="${fixture_dir}/deny"
   local ia="${fixture_dir}/runtime/${AUTH_DIR_NAME}"
-  if [[ "$(fixture::count_records chown)" != 9 ]]; then
-    harness::add_reason "chown $(fixture::count_records chown)회(기대 9)"
+  if [[ "$(fixture::count_records chown)" != 10 ]]; then
+    harness::add_reason "chown $(fixture::count_records chown)회(기대 10)"
     ok=1
   fi
   auth_mode::chown_is 1 "-h 0:10003 ${deny}" || ok=1
@@ -342,7 +343,8 @@ auth_mode::check_chown_records() {
   auth_mode::chown_is 7 "${AUTH_OWNER} ${ia}/.${AUTH_BASIC_NAME}.*" || ok=1
   auth_mode::chown_is 8 "${AUTH_OWNER} ${ia}/.${API_PASS_NAME}.*" || ok=1
   auth_mode::chown_is 9 "${AUTH_OWNER} ${ia}/.${AUTH_RESOLVE_NAME}.*" || ok=1
-  for n in 5 6 7 8 9; do
+  auth_mode::chown_is 10 "10001:10001 ${run}/.${AUTH_RESOLVE_NAME}.*" || ok=1
+  for n in 5 6 7 8 9 10; do
     if [[ "$(cat -- "${fixture_dir}/log/chown.${n}.state" 2>/dev/null)" \
       != 'perm=-r-------- final=absent core=0' ]]; then
       harness::add_reason "chown ${n} 순간 상태 「$(cat -- \
@@ -604,6 +606,15 @@ XXXXXX"
       auth_mode::run "${auth_mode_tmpl}" \
         "PCBENCH_FAKE_FS_FAIL_GLOB=*/${AUTH_DIR_NAME}/${API_PASS_NAME}"
       ;;
+    resolve-target)
+      mkdir -p -- "${fixture_dir}/runtime/${AUTH_RESOLVE_NAME}"
+      auth_mode::run "${auth_mode_tmpl}"
+      ;;
+    resolve-rename)
+      ln -s -- "${TEST_DIR}/start_fakebin/fsfail" "${fixture_dir}/bin/mv"
+      auth_mode::run "${auth_mode_tmpl}" \
+        "PCBENCH_FAKE_FS_FAIL_GLOB=*/runtime/${AUTH_RESOLVE_NAME}"
+      ;;
     *) auth_mode::owner_run ;;
   esac
 }
@@ -625,9 +636,10 @@ auth_mode::owner_run() {
 #######################################
 # 사례 46 — 응답기 모드 설치 단계가 실패하면(디렉터리가 링크 · 디렉터리 chown ·
 # Basic 임시 파일 · Basic chown · 응답기 API 비밀번호 대상이 디렉터리 · 그
-# rename · 소유 값) 기동을 막고 RUNTIME_DIR 에 파일을 남기지 않는다 — 대상
-# 점검은 모든 rename 앞이고, 응답기 API 비밀번호 rename(다섯 가운데 넷째)이
-# 실패하면 이번에 옮긴 셋을 지운다.
+# rename · 사이드카 4C 토큰 사본 대상이 디렉터리 · 그 rename · 소유 값) 기동을
+# 막고 RUNTIME_DIR 에 파일을 남기지 않는다 — 대상 점검은 모든 rename 앞이고,
+# 응답기 API 비밀번호 rename(여섯 가운데 넷째)이 실패하면 이번에 옮긴 셋을,
+# 사이드카 4C 토큰 사본 rename(마지막)이 실패하면 다섯을 지운다.
 #######################################
 auth_mode::case_install_failure() {
   local ok=0 row want
@@ -636,7 +648,9 @@ auth_mode::case_install_failure() {
     'basic-tmpfile ingest-auth-basic-pass-tmpfile' \
     'basic-chown ingest-auth-basic-pass-chown' \
     'api-target ingest-auth-api-pass-target' \
-    'api-rename ingest-auth-api-pass-rename' 'owner owner'; do
+    'api-rename ingest-auth-api-pass-rename' \
+    'resolve-target resolve-token-target' \
+    'resolve-rename resolve-token-rename' 'owner owner'; do
     want="MEDIA START FAIL render ${row#* }"
     fixture::new_case
     auth_mode::install_failure_run "${row% *}" || return 1
@@ -708,14 +722,19 @@ auth_mode::case_rerun_fresh() {
 }
 
 #######################################
-# 정지 사례 준비 — 응답기 디렉터리에 비밀 파일 둘 · 각자의 임시 파일 꼴 잔여와
-# 남겨야 할 상태 디렉터리를 둔다(RUNTIME_DIR 의 렌더 파일은 seed_runtime).
+# 정지 사례 준비 — 응답기 디렉터리에 비밀 파일 셋 · 각자의 임시 파일 꼴 잔여와
+# 남겨야 할 상태 디렉터리를 두고, RUNTIME_DIR 에 사이드카 4C 토큰 사본과 그
+# 임시 파일 꼴 잔여를 둔다(RUNTIME_DIR 의 렌더 파일은 seed_runtime).
 # Globals:
 #   fixture_dir
 #######################################
 auth_mode::seed_ingest_auth() {
   local ia="${fixture_dir}/runtime/${AUTH_DIR_NAME}" name
+  local run="${fixture_dir}/runtime"
   seed_runtime
+  printf '%s\n' "${FIXTURE_FAKE_SECRET}" >"${run}/${AUTH_RESOLVE_NAME}"
+  printf '%s\n' "${FIXTURE_FAKE_SECRET}" >"${run}/.${AUTH_RESOLVE_NAME}.Qw3456"
+  chmod 0400 "${run}/${AUTH_RESOLVE_NAME}"
   mkdir -p -- "${ia}/state"
   printf 'keep\n' >"${ia}/state/connlog.jsonl"
   for name in "${AUTH_BASIC_NAME}" "${API_PASS_NAME}" "${AUTH_RESOLVE_NAME}"
@@ -739,7 +758,8 @@ auth_mode::ingest_auth_secrets_left() {
 
 #######################################
 # 사례 49 — stop(인자 없음 · --cleanup-only): 응답기 디렉터리의 비밀 · 임시
-# 파일을 지우고, 상태 디렉터리와 그 안의 파일은 남긴다.
+# 파일과 사이드카 4C 토큰 사본 · 그 임시 파일을 지우고, 상태 디렉터리와 그
+# 안의 파일은 남긴다.
 #######################################
 auth_mode::case_stop_cleanup() {
   local ok=0 args ia
@@ -756,6 +776,11 @@ auth_mode::case_stop_cleanup() {
     fi
     if [[ "$(auth_mode::ingest_auth_secrets_left)" != 0 ]]; then
       harness::add_reason "「${args}」 응답기 디렉터리에 비밀 · 임시 파일이 남음"
+      ok=1
+    fi
+    if [[ -n "$(find "${fixture_dir}/runtime" -maxdepth 1 \
+      -name "*${AUTH_RESOLVE_NAME}*")" ]]; then
+      harness::add_reason "「${args}」 사이드카 4C 토큰 사본 · 임시 파일이 남음"
       ok=1
     fi
     if [[ "$(cat -- "${ia}/state/connlog.jsonl" 2>/dev/null)" != keep ]]; then

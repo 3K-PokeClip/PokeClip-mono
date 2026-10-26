@@ -48,6 +48,9 @@ readonly INGEST_AUTH_DOCKERFILE
 # 기대값 jq 정의(render_test 의 JQ_DEFS 에 붙는다). 입력은 갈래 변수 JSON.
 #   ia_env   — 응답기 environment 정확 집합(계획 4-c4).
 #   ia_binds — 응답기 bind 다섯 「원본 대상 ro|rw」.
+#   sc_resolve_env  — 응답기 모드 사이드카의 4C(4D 인증 · 계약9 streamerId)
+#                     설정 둘. 주소는 응답기와 같은 변수다.
+#   sc_resolve_bind — 그 토큰 사본 bind 「원본 대상 ro」.
 # shellcheck disable=SC2016 # jq 프로그램 — $ 는 jq 변수다.
 readonly AUTH_JQ_DEFS='
 def ia_env:
@@ -65,6 +68,12 @@ def ia_binds:
      | map("\($run)/\(.) /run/secrets/\(.) ro"))
   + ["/var/lib/pokeclip-media/ingest-auth/deny /etc/ingest-auth ro",
      "\($run)/state /var/lib/ingest-auth rw"];
+def sc_resolve_env:
+  {STREAM_KEY_RESOLVE_URL: .stream_key_resolve_url,
+   STREAM_KEY_RESOLVE_TOKEN_FILE: "/run/secrets/stream_key_resolve_token"};
+def sc_resolve_bind:
+  "/run/pokeclip-media/stream_key_resolve_token"
+  + " /run/secrets/stream_key_resolve_token ro";
 '
 
 auth_setup_reason=""
@@ -421,10 +430,11 @@ $(od -c "${out}" | head -3 | tr '\n' ' ')"
 #######################################
 # 사례 42 — 응답기 bind 원본 = 시작 스크립트가 쓰는 자리: 거부 목록 디렉터리 =
 # INGEST_AUTH_DENY_DIR 기본값, 비밀 셋 · 상태 = RUNTIME_DIR 기본값 아래
-# 응답기 디렉터리의 그 이름.
+# 응답기 디렉터리의 그 이름. 사이드카의 4C 토큰 사본 = RUNTIME_DIR 기본값
+# 바로 아래 같은 이름.
 #######################################
 auth_cases::check_42() {
-  local deny runtime dir api basic token state
+  local ok=0 deny runtime dir api basic token state
   auth_cases::require || return 1
   if ! deny="$(auth_cases::start_default INGEST_AUTH_DENY_DIR)" \
     || ! runtime="$(auth_cases::start_default RUNTIME_DIR)" \
@@ -442,7 +452,15 @@ auth_cases::check_42() {
     [$deny, "\($run)/\($api)", "\($run)/\($basic)", "\($run)/\($token)",
      "\($run)/\($state)"] | sort' 'bind 원본 = 시작 스크립트 자리' \
     --arg deny "${deny}" --arg run "${runtime}/${dir}" --arg api "${api}" \
-    --arg basic "${basic}" --arg token "${token}" --arg state "${state}"
+    --arg basic "${basic}" --arg token "${token}" --arg state "${state}" \
+    || ok=1
+  # 사이드카의 4C 토큰 사본은 응답기 디렉터리 밖(RUNTIME_DIR 바로 아래)이다.
+  # shellcheck disable=SC2016 # jq 프로그램 — $ 는 jq 변수다.
+  auth_cases::expect_auth '[.services.sidecar.volumes[]
+      | select(.target == "/run/secrets/stream_key_resolve_token") | .source]' \
+    '[$src]' '사이드카 4C 토큰 bind 원본 = 시작 스크립트 자리' \
+    --arg src "${runtime}/${token}" || ok=1
+  return "${ok}"
 }
 
 #######################################
