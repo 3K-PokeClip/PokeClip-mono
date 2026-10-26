@@ -35,7 +35,7 @@ type IntentionalResult struct {
 	//   upgraded    회차 최신인 ending · ended T 의 사유를 intentional 로 · 회차 닫힘
 	//   round_split T 뒤 합류한 세션부터 새 회차 · R 닫힘
 	Effect string
-	// Skip: no_session · conn_mismatch · short_conn · ambiguous · round_closed · round_split_blocked · contended
+	// Skip: no_session · conn_mismatch · short_conn · ambiguous · round_closed · round_split_noop · round_split_blocked · contended
 	Skip string
 	// RevokeSession 은 계승 해제를 루프에 요청할 세션이다(round_split ∧ 새 회차 첫 세션이 계승 중일 때만).
 	RevokeSession string
@@ -65,6 +65,7 @@ const (
 	skipShortConn         = "short_conn"
 	skipAmbiguous         = "ambiguous"
 	skipRoundClosed       = "round_closed"
+	skipRoundSplitNoop    = "round_split_noop"
 	skipRoundSplitBlocked = "round_split_blocked"
 	skipContended         = "contended"
 )

@@ -299,6 +299,34 @@ func TestApplyIntentionalEndBlocksSplitInsideClosedChain(t *testing.T) {
 	}
 }
 
+// kty ⑪ (가) — T 가 R 의 최신이 아니지만(R 에 조각 없는 live L 이 먼저 시작해 있다) 멈춘 뒤 합류한 세션 B 가 없다 →
+// 뗄 세션이 없어 round_split_noop(정상 — 막힌 것이 아니다) · 아무것도 쓰지 않고 함수 칸 없음. 변이 = 사유를
+// round_split_blocked 로 되돌림 → FAIL.
+func TestApplyIntentionalEndSplitNoopWithoutJoinedSession(t *testing.T) {
+	pool := newTestPool(t)
+	seedLedger(t, pool, ledgerRow{id: "S-T", streamID: "demo", state: "ended", endReason: "offline", roundID: "S-R", startedAt: stopAt.Add(-time.Hour)})
+	seedSegment(t, pool, "demo", "S-T", 1, stopAt.Add(-5*time.Second))
+	seedLedger(t, pool, ledgerRow{id: "S-L", streamID: "demo", state: "live", roundID: "S-R", startedAt: stopAt.Add(-30 * time.Minute)})
+	slots := &intentSlots{}
+
+	res := apply(t, pool, endAt("demo"), slots.options())
+
+	if res.Effect != "" || res.Skip != skipRoundSplitNoop || res.SessionID != "S-T" || res.RoundID != "S-R" {
+		t.Fatalf("결과 = %+v, want round_split_noop · S-T · S-R", res)
+	}
+	for _, id := range []string{"S-T", "S-L"} {
+		var round string
+		var closed bool
+		if err := pool.QueryRow(context.Background(), `SELECT round_id, round_closed_at IS NOT NULL FROM stream_sessions WHERE session_id=$1`, id).
+			Scan(&round, &closed); err != nil || round != "S-R" || closed {
+			t.Errorf("%s = (%s, 닫힘 %v, %v), want (S-R, false) 그대로", id, round, closed, err)
+		}
+	}
+	if len(slots.closed)+len(slots.started) != 0 {
+		t.Errorf("미적용인데 함수 칸을 불렀다: %v · %v", slots.closed, slots.started)
+	}
+}
+
 // D69 (나) — round_split 이 소속 잠금을 기다리는 동안 TD 분할 개시가 커밋 → 분리는 소속 행을 다시 골라 새 live C 까지
 // 보고 옮긴다(C.round_id = B).
 func TestApplyIntentionalEndMovesSessionOpenedWhileWaiting(t *testing.T) {
