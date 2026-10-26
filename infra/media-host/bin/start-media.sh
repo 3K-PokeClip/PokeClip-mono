@@ -59,9 +59,12 @@
 #      RUNTIME_DIR/ingest-auth(root 0711)에 Basic 비밀번호 한 줄(ingest_basic_pass)
 #      과 같은 API 비밀번호 한 줄(mtx_api_pass) · 4C 토큰 한 줄
 #      (stream_key_resolve_token)을 응답기 실행 계정 소유 0400 으로 더 두고, 그
-#      안의 상태 디렉터리(state)를 응답기 실행 계정 소유 0700 으로 맞춘다. 잠금
-#      둘은 mediamtx.yml 에만 있고, 응답기 모드 mediamtx.yml 에는 API
-#      비밀번호가 없다(그 토큰이 없다). 모든 파일을 각 디렉터리의 임시
+#      안의 상태 디렉터리(state)를 응답기 실행 계정 소유 0700 으로 맞춘다. 같은
+#      4C 토큰 한 줄을 RUNTIME_DIR/stream_key_resolve_token(사이드카 실행 계정
+#      소유 0400)에도 둔다 — 사이드카가 4D 종료 신호 인증 · 계약9 streamerId
+#      에 4C 를 부른다. 옛 모드는 이 사본을 두지 않는다. 잠금 둘은
+#      mediamtx.yml 에만 있고, 응답기 모드 mediamtx.yml 에는 API 비밀번호가
+#      없다(그 토큰이 없다). 모든 파일을 각 디렉터리의 임시
 #      파일에 다 쓰고 대상을 모두 점검한 뒤에야 차례로 rename 한다 — 실행 중인
 #      스택이 보는 옛 파일을 제자리에서 고쳐 쓰지 않는다. 중간에 실패하면 새 임시
 #      파일은 남기지 않는다(EXIT 트랩). rename 전에 실패하면 이미 있던 파일은
@@ -615,8 +618,8 @@ install_denylist() {
 
 #######################################
 # 응답기 모드 — 생성 셋(Basic 비밀번호 · 잠금 둘)을 새로 만들어 토큰 넷(CDN
-# 비밀 · Basic · 잠금 둘)을 채운 렌더를 mediamtx.yml 로 두고, API 비밀번호를
-# 사이드카 파일과 응답기 파일에, Basic 비밀번호 · 4C 토큰을 응답기 파일에
+# 비밀 · Basic · 잠금 둘)을 채운 렌더를 mediamtx.yml 로 두고, API 비밀번호 ·
+# 4C 토큰을 사이드카 파일과 응답기 파일에, Basic 비밀번호를 응답기 파일에
 # 둔다. 그 전에 외부 입력(IP 한도 env 파일 · 4C 토큰 · 거부 목록)을 본다. 실패
 # 줄은 여기서 낸다.
 # Globals:
@@ -663,6 +666,10 @@ render_ingest_auth() {
     'ingest-auth-api-pass-' "$3"$'\n'
   add_file "${ia}/${RESOLVE_TOKEN_NAME}" "${ingest_auth_owner}" \
     'ingest-auth-resolve-token-' "${resolve_token}"$'\n'
+  # 사이드카도 같은 4C 토큰으로 4C 를 부른다(4D 종료 신호 인증 · 계약9
+  # streamerId) — 사이드카 실행 계정 소유 사본을 따로 둔다.
+  add_file "$1/${RESOLVE_TOKEN_NAME}" "${sidecar_owner}" 'resolve-token-' \
+    "${resolve_token}"$'\n'
   unset resolve_token
   place_files "$1" "${ia}"
 }

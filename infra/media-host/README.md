@@ -38,6 +38,7 @@ compose 로 한 묶음으로 돌리고, systemd 유닛 하나가 그 묶음 전�
 | (M9 이 씀) | `/etc/pokeclip-media/media.env` | 유닛 `EnvironmentFile` · 운영 확인 스크립트. 응답기 모드 키 `STREAM_KEY_RESOLVE_TOKEN_SECRET_ARN` · `INGEST_AUTH_DENYLIST_PARAM` 은 응답기 모드에서만 읽는다 |
 | (M9 이 씀) | `/root/.docker/config.json`(ECR 자격 도우미 설정) | docker · 시작 스크립트 선행 점검 |
 | (시작 스크립트가 씀) | `/run/pokeclip-media/mediamtx.yml` · `mtx_api_pass` | MediaMTX · 사이드카(읽기 전용 bind — 원본이 없으면 만들지 않음: `create_host_path: false`, 그 컨테이너 기동만 실패) |
+| (시작 스크립트가 씀 · 응답기 모드) | `/run/pokeclip-media/stream_key_resolve_token`(응답기 4C 토큰과 같은 값 · `10001:10001 0400`) | 사이드카(읽기 전용 bind · `STREAM_KEY_RESOLVE_TOKEN_FILE` — 4D 종료 신호 인증 · 계약9 streamerId 에 4C 를 부른다. 옛 모드는 파일도 env 도 없어 4D 수신부가 등록되지 않는다) |
 | (시작 스크립트가 씀 · 응답기 모드) | `/run/pokeclip-media/ingest-auth/`(`root:root 0711`) 아래 `ingest_basic_pass` · `mtx_api_pass` · `stream_key_resolve_token`(`10003:10003 0400`) · `state/`(`10003:10003 0700`) | 응답기(비밀 셋은 읽기 전용 bind · `state/` 는 쓰기 bind) |
 | (시작 스크립트 · 거부 목록 동기화가 씀 · 응답기 모드) | `/var/lib/pokeclip-media/ingest-auth/deny/deny-tokens`(디렉터리 `root:10003 0750` · 파일 `root:10003 0640`) | 응답기(**디렉터리**를 읽기 전용 bind — rename 한 새 파일이 보이게) |
 | `bundle/Dockerfile` | 설치하지 않음 — 설치 묶음 이미지(`pokeclip-prod/media-host-bundle`)를 만든다. 위 `bin/` · `bin/lib/` · `mediamtx.yml.tmpl` 은 이 이미지에 담겨 상자에 온다 | O7c 빌드 · M9 부트스트랩(`docker create` · `docker cp` 로 꺼내 설치) |
@@ -304,6 +305,22 @@ compose 템플릿 변수 `ingest_auth_image` 하나로 모드를 고른다. 빈 
         `auth.pokeclip.internal` 인지 따로 본다 — 다르면 이 확인을 통과해도 4C
         는 실패한다.
 
+1.  **설치 묶음 판(POK-472):** `image_digests.bundle` 은 사이드카 4C PR
+    (POK-472 — 토큰 사본 렌더)의 머지 커밋을 조상으로 둔 커밋에서 빌드한
+    것이어야 한다. 응답기 모드 compose 렌더본(user_data — apply 하는 저장소
+    판)은 사이드카에 토큰 사본 `/run/pokeclip-media/stream_key_resolve_token`
+    을 `create_host_path: false` 로 bind 하는데, 그 사본은 묶음의
+    `start-media.sh` 가 렌더할 때만 생긴다. 옛 묶음이면 bind 원본이 없어 B 의
+    사이드카가 기동에 실패하고, 교체 판정이 B 를 받아들이지 않아 A 가 남는다.
+
+    ```shell
+    git fetch origin
+    git merge-base --is-ancestor <POK-472 PR 머지 커밋 SHA> \
+      <묶음 빌드 커밋 SHA> && echo '하한 이상' || echo '하한 아래'
+    ```
+
+    묶음 빌드 커밋 해시는 1 과 같은 자리(POK-310 · POK-301 코멘트)에 적는다.
+
 ### 되돌리기 순서
 
 **O8a 5 전**(SRT 인바운드 = 팀 IP): `ingest_auth_image` 를 비운 설정 반영
@@ -413,8 +430,9 @@ nginx 요청 줄 · 서비스 진단이 섞여 있고, 비밀이 잘못 찍혔�
     `/run/pokeclip-media/mediamtx.yml`(10002 소유 0400)로, API 비밀번호를
     `mtx_api_pass`(10001 소유 0400)로 둔다.
     응답기 모드는 `ingest-auth/` 아래에 응답기 파일 셋(10003 소유 0400)과
-    `state/`(10003 소유 0700)를 더 둔다 — 응답기 모드 `mediamtx.yml` 에는 API
-    비밀번호가 없다. 모든 파일을 임시 파일에 다 쓰고 대상을 모두 점검한
+    `state/`(10003 소유 0700)를, `/run/pokeclip-media/stream_key_resolve_token`
+    에 사이드카 4C 토큰 사본(10001 소유 0400)을 더 둔다 — 응답기 모드
+    `mediamtx.yml` 에는 API 비밀번호가 없다. 모든 파일을 임시 파일에 다 쓰고 대상을 모두 점검한
     뒤에야 차례로 이름을 바꾼다 — 실행 중인 스택이 보는 옛 파일을 제자리에서
     고쳐 쓰지 않는다. 중간에 실패하면 새 임시 파일은 남지 않는다. 이름을 바꾸기
     전에 실패하면 이미 있던 파일은 그대로이고, 이름 바꾸기 하나가 실패하면
@@ -487,7 +505,7 @@ SIGKILL 등) systemd 252 는 `ExecStop` 을 건너뛰고 `ExecStopPost` 로 간�
 | | `MEDIA START BLOCKED: ingest-auth denylist unavailable` | 응답기 모드 — 거부 목록 파라미터 이름 빔 · 받기 실패 |
 | | `MEDIA START BLOCKED: ingest-auth denylist invalid` | 응답기 모드 — 받은 거부 목록이 꼴 밖(공백뿐 · 머리 줄 없음 · NUL · 64 KiB 초과) |
 | | `MEDIA START BLOCKED: generated credential unavailable` | 응답기 모드 — Basic 비밀번호 · 잠금 둘 생성 실패 |
-| | `MEDIA START FAIL render <단계>` | 렌더 실패 — `runtime-dir` · `template` · `template-mode`(MediaMTX 템플릿의 모드 블록 표지 꼴이 깨짐 · 한 모드 블록 없음) · `template-token`(고른 모드 블록의 토큰 집합이 그 모드 꼴이 아님) · `owner` · 파일마다 `<앞머리>tmpfile` · `write` · `chown` · `target` · `rename`. 앞머리는 `mediamtx.yml` 이 없음, 사이드카 비밀번호가 `api-pass-`, 응답기 모드 파일이 `ingest-auth-basic-pass-` · `ingest-auth-api-pass-` · `ingest-auth-resolve-token-` 다. 응답기 모드 디렉터리 단계는 `ingest-auth-dir` · `ingest-auth-state-dir` · `deny-dir`(거부 목록 디렉터리 · 남은 임시 파일 정리 · 임시 파일), 거부 목록 파일 설치 단계는 `deny-install` |
+| | `MEDIA START FAIL render <단계>` | 렌더 실패 — `runtime-dir` · `template` · `template-mode`(MediaMTX 템플릿의 모드 블록 표지 꼴이 깨짐 · 한 모드 블록 없음) · `template-token`(고른 모드 블록의 토큰 집합이 그 모드 꼴이 아님) · `owner` · 파일마다 `<앞머리>tmpfile` · `write` · `chown` · `target` · `rename`. 앞머리는 `mediamtx.yml` 이 없음, 사이드카 비밀번호가 `api-pass-`, 응답기 모드 파일이 `ingest-auth-basic-pass-` · `ingest-auth-api-pass-` · `ingest-auth-resolve-token-` · 사이드카 4C 토큰 사본 `resolve-token-` 다. 응답기 모드 디렉터리 단계는 `ingest-auth-dir` · `ingest-auth-state-dir` · `deny-dir`(거부 목록 디렉터리 · 남은 임시 파일 정리 · 임시 파일), 거부 목록 파일 설치 단계는 `deny-install` |
 | | `MEDIA START FAIL usage` | 인자를 줬음 |
 | `stop-media.sh` | `MEDIA STOP FAIL usage\|runtime-dir` | 인자 오류 · `RUNTIME_DIR` 이 절대 경로가 아님 |
 | | `MEDIA STOP down exit <n>` | `compose down` 이 0 아닌 코드 |
