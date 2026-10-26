@@ -67,12 +67,36 @@ docker compose up -d segment-indexer
 실험은 전용 프로젝트(`pcbench-<ID>` · 라벨 `com.pokeclip.bench=<ID>`)로 띄우고, 끝나면
 인증서 · 데이터 볼륨까지 지운 뒤 잔여 0 을 확인한다.
 
+> **주의:** `down -v` 는 그 프로젝트의 이름 붙은 볼륨을 **전부** 지운다 — 팀
+> 프로젝트(`pokeclip`)면 `pgdata` · `recordings` · `dvr` · `hooks` · MinIO 데이터까지
+> 사라진다. 폐기해도 되는 전용 실험 프로젝트(`-p pcbench-<ID>`)에서만 쓴다. 팀
+> 스택에서 인증서만 바꾸려면 아래 「인증서 다시 만들기」를 따른다.
+
 ```sh
 docker compose -p pcbench-<ID> -f docker-compose.yml -f infra/compose/rewind-minio/compose.yml \
   --profile rewind-minio down -v --rmi local
 docker ps -a --filter label=com.pokeclip.bench=<ID>
 docker volume ls | grep pcbench-<ID>
 docker network ls | grep pcbench-<ID>
+```
+
+## 인증서 다시 만들기
+
+인증서 볼륨 둘(`rewind-minio-certs` · `rewind-minio-ca`)만 지우고 다시 띄운다.
+MinIO 데이터와 팀 볼륨은 그대로 둔다. 실제 볼륨 이름에는 프로젝트 이름이 앞에
+붙는다 — 팀 프로젝트면 `pokeclip_rewind-minio-certs` · `pokeclip_rewind-minio-ca` 다.
+
+이 볼륨을 붙든 컨테이너가 하나라도 남아 있으면(멈춘 것 포함) 지우기가 거부된다
+(`volume is in use`). 사이드카도 CA 를 받으므로 함께 내렸다가 올린다 — 다시 뜰 때 새
+CA 를 읽는다.
+
+```sh
+docker compose -f docker-compose.yml -f infra/compose/rewind-minio/compose.yml \
+  --profile rewind-minio rm -sf minio-certs minio minio-init \
+  dvr-edge minio-check segment-indexer
+docker volume rm pokeclip_rewind-minio-certs pokeclip_rewind-minio-ca
+docker compose -f docker-compose.yml -f infra/compose/rewind-minio/compose.yml \
+  --profile rewind-minio up -d
 ```
 
 ## 이미지 판
@@ -98,8 +122,7 @@ linux/arm64 · 같은 이미지에 `mc` 가 들어 `minio-init` 도 이것을 �
     `SSL_CERT_DIR` 에 CA 디렉터리(`/run/rewind-minio-ca`)가 빠졌거나 `minio-init` 이
     끝나기 전에 떴다.
 *   `minio` 가 healthy 가 안 된다 — `.env` 의 자격이 MinIO 길이 조건을 못 채운다.
-*   인증서를 새로 만들려면 `down -v` 로 `rewind-minio-certs` · `rewind-minio-ca` 볼륨을
-    지운다.
+*   인증서를 새로 만들려면 위 「인증서 다시 만들기」를 따른다(볼륨 둘만 지운다).
 
 ## See also
 
