@@ -1,6 +1,8 @@
 module github.com/3K-PokeClip/pokeclip-mono/media
 
-// go 지시자는 8단계 Dockerfile 빌드 스테이지(golang:1.27-alpine)와 같은 버전으로 유지한다.
+// go 지시자는 8단계 Dockerfile 빌드 스테이지(golang:1.27.3-alpine)와 같은 1.27 로 유지한다.
+// 패치 판은 Dockerfile 에서만 고정한다 — CI 는 이 줄로 Go 를 고르며, 1.27.2 이상이면
+// golangci-lint v2.13.2 가 깨진다(media-ci.yml lint 단계 주석).
 // 호스트 실측 툴체인은 go1.27.2.
 go 1.27.0
 
@@ -35,7 +37,7 @@ require (
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
-	golang.org/x/sync v0.17.0 // indirect
+	golang.org/x/sync v0.22.0 // indirect
 	golang.org/x/sys v0.13.0 // indirect
-	golang.org/x/text v0.29.0 // indirect
+	golang.org/x/text v0.41.0 // indirect
 )
