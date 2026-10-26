@@ -756,8 +756,12 @@ terminationGracePeriodSeconds: 20 # k8s (infra/ 는 1번 폴더라 여기서 못
 docker build -f services/auth/Dockerfile -t pokeclip-auth services/
 ```
 
-베이스 이미지는 네 서버 모두 `eclipse-temurin:21-jdk`(빌드) →
-`eclipse-temurin:21-jre`(실행)로 통일했다.
+베이스 이미지는 네 서버 모두 빌드 단계가 `eclipse-temurin:21-jdk`다. 실행
+단계는 auth · clip · chat-detector 가 `eclipse-temurin:21-jre`, chat-collector
+만 `eclipse-temurin:21-jre-noble`(Ubuntu 24.04 고정)이다. chat-collector 는
+Playwright Chromium 을 이미지에 굽는데, 꼬리표 없는 `21-jre` 가 Ubuntu 26.04
+로 넘어가자 Playwright 1.52 가 그 판을 몰라 브라우저 설치가 실패했다
+(`services/chat-collector/Dockerfile` 주석).
 
 **실행 계정은 root 가 아니다**(POK-486). auth `10005` · clip `10006` ·
 chat-collector `10007` · chat-detector `10008`이고 GID 도 같은 번호다. 정본은
