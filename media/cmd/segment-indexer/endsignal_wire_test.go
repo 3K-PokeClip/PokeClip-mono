@@ -246,3 +246,21 @@ func TestControlWithoutEndSignalIs404(t *testing.T) {
 		t.Fatalf("상태 = %d, want 404", code)
 	}
 }
+
+// 4D 계수기는 control_rate_limited 게이지를 세우지 않는다(cc M1) — 게이지는 세움 줄만 있고 내림이 없는데, 4D 계수기는
+// 이 수신부만의 것이라 내리는 쪽(청소 고루틴)이 없다. 세우면 한 번 초과한 뒤 게이지가 영영 1 로 남는다. 키당 · 전체 상한을
+// 둘 다 넘겨도(429 · 503) 그 줄이 0 이어야 한다 — 초과는 수신부 자신의 end_signal 줄이 센다.
+func TestEndSignalLimitersRaiseNoRateGauge(t *testing.T) {
+	f := newControlFixture(t, true, nil)
+	defer f.stop()
+	codes := map[int]int{}
+	for range endSignalGlobalRPS + 2 {
+		codes[f.post(t)]++
+	}
+	if codes[http.StatusTooManyRequests] == 0 || codes[http.StatusServiceUnavailable] == 0 {
+		t.Fatalf("상태 분포 = %v, want 키당 초과 429 와 전체 초과 503 이 모두 있다", codes)
+	}
+	if i := indexOf(f.logs.msgs(t), "control_rate_limited"); i >= 0 {
+		t.Fatalf("control_rate_limited 줄이 남았다(%d번째) — 4D 계수기가 내림 없는 게이지를 세웠다", i)
+	}
+}

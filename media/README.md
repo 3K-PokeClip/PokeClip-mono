@@ -336,7 +336,29 @@ clip 의 `GET /internal/broadcasts/expired` 를 불러, 보존 기간(60일)이 
     잠깐 멈춘다. 절차는 [prod 런타임 1단-가 런북](../infra/terraform/runbooks/runtime-1a.md)
     「M6 스키마 재실행」 이다.
 
-위 표가 `internal/config/config.go`가 읽는 전부다(`TZ` 제외 52개 — `POSTGRES_*` · DB 몫 `AWS_REGION` 은
+**4D 종료 신호(POK-472) — resolve 설정.** 사이드카가 플러그인의 의도적 종료
+신호(계약4 3-1 4D — `POST /api/ingest/end-signal`)를 제어면에서 받는다. 받는
+조건은 `CONTROL_LISTEN` 이 있고 아래 두 값이 **함께** 있을 때다. 신호의 Bearer 는
+auth 의 4C resolve(`/internal/stream-keys/resolve`)로 키를 풀어 대조한다.
+
+*   **짝 규칙:** 두 값은 함께 넣거나 함께 비운다. 하나만 있으면 기동 거부다.
+*   **둘 다 비면:** 4D 경로를 등록하지 않는다 — 404 이고 플러그인은 재시도하지
+    않는다. 기동 때 WARN `end_signal_disabled reason=no_resolve` 한 줄이 나오고
+    종료는 보장 시간 판정만으로 돈다. prod 에서 이 줄이 나오면 경보 대상이다.
+*   **`CONTROL_LISTEN` 이 비면:** 제어면이 없으니 4D 경로도 없다. 그래도 두 값이
+    있으면 토큰 파일은 기동 때 읽고, 읽기 실패는 기동 실패다.
+*   **수신부 상한:** 키당 초당 1(429) · 전체 초당 10(503)은 고정값이고 env 가
+    없다. 이 상한은 `control_rate_limited` 게이지를 세우지 않는다 — 초과는
+    `end_signal` 줄의 `rate_key` · `rate_global` 이 센다.
+*   **회전 = 재기동:** 토큰은 기동 때 한 번 읽는다. 파일을 바꾼 뒤 사이드카를
+    재기동해야 새 토큰이 쓰인다(보안 검수 L2).
+
+| 이름 | 기본값 | 의미 |
+|---|---|---|
+| `STREAM_KEY_RESOLVE_URL` | (빈값 = 4D 끔) | auth 의 주소 `http(s)://host[:port]`. http · https 절대 URL 이어야 하고 호스트가 있어야 한다. 사용자 정보 · 질의 · 조각이 있으면 기동 거부. 경로 `/internal/stream-keys/resolve` 는 코드가 붙인다. 프록시 env(`HTTP_PROXY` 등)를 타지 않고 auth 에 바로 붙는다. `STREAM_KEY_RESOLVE_TOKEN_FILE` 과 짝이다 |
+| `STREAM_KEY_RESOLVE_TOKEN_FILE` | (빈값 = 4D 끔) | resolve 토큰 한 줄이 든 파일의 **컨테이너 안 절대 경로**. 상대 경로는 기동 거부. 토큰은 `X-Stream-Key-Resolve-Token` 머리로 실린다. 파일 규칙은 `MTX_API_PASS_FILE` 과 같다(위 「관측 자격 파일 규칙」 — 일반 파일 · other 비트와 group 쓰기 비트 거부 · 권장 소유 10001 `0400` 또는 `root:10001` `0440` · 4 KiB 이하 · 끝 줄바꿈 하나만 걷음). 앞뒤 공백 · 제어 문자가 남으면 기동 거부. 오류 문구에는 env 이름만 싣고 경로 · 내용은 싣지 않는다. 읽기 실패는 **기동 실패**다(만료 토큰과 다르다). 토큰 값을 env 로 받는 칸은 없다 |
+
+위 표가 `internal/config/config.go`가 읽는 전부다(`TZ` 제외 54개 — `POSTGRES_*` · DB 몫 `AWS_REGION` 은
 `internal/pgconf` 가 janitor 와 같은 규칙으로 읽는다). 잘못된 값(숫자 자리에 문자,
 음수, 파싱 불가한 기간)은 조용히 기본값으로 넘어가지 않고 기동에 실패한다.
 `SEGMENT_SUSPECT_BELOW_MS`가 `SEGMENT_EXPECTED_DURATION_MS`보다 크면 기동 단계에서 거부한다.
