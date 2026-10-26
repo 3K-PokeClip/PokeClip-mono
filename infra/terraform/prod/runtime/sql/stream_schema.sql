@@ -332,8 +332,10 @@ END $fn$;
 REVOKE EXECUTE ON FUNCTION stream_segments_raise_seq_floor() FROM PUBLIC;
 
 -- 하한 검사 — 하한 아래 seq 의 INSERT 를 거부한다(23514 seq_below_floor). 하한을 모르는 옛 판 사이드카가 seq 를
--- 다시 쓰면 같은 영구 URL 에 다른 조각이 실리므로, 그 스트림 색인을 멈추는 쪽으로 닫는다(fail-closed). 새 판은
--- LoadCursor 가 하한 아래를 내지 않아 여기 걸리지 않는다 — 걸리면 결함이다. 넣는 계정(media_indexer)은 하한 표
+-- 다시 쓰면 같은 영구 URL 에 다른 조각이 실리므로 그 INSERT 를 막는다(fail-closed). 막힌 결과는 그 스트림에 그치지
+-- 않는다 — 사이드카는 23 클래스를 복구 불가(classifyInsertError fateFatal)로 보고 프로세스를 종료 코드 1 로 끝내므로
+-- 상자의 다른 스트림 색인도 함께 끊긴다. 엔진이 다시 띄워도(restart: on-failure) 같은 seq 에서 또 걸려 재기동을
+-- 되풀이한다. 새 판은 LoadCursor 가 하한 아래를 내지 않아 여기 걸리지 않는다 — 걸리면 결함이다. 넣는 계정(media_indexer)은 하한 표
 -- SELECT 를 가지므로 부른 쪽 권한으로 돈다. 하한 행은 잠그지 않고 읽는다 — 하한을 올리는 DELETE 와 겹친 INSERT 는
 -- 커밋 전 하한을 못 볼 수 있지만, 사이드카는 LoadCursor 가 정한 하한 위 seq 만 내므로 그 경합의 실경로는 없다.
 CREATE OR REPLACE FUNCTION stream_segments_check_seq_floor() RETURNS trigger
