@@ -91,6 +91,11 @@ M6 가 이 전제를 바꾼다.
     *   **표 비우기 · replica 모드는 하한 트리거를 건너뛴다.** 표 비우기
         (TRUNCATE)는 DELETE 트리거를 부르지 않고, `session_replication_role =
         replica` 연결에서는 일반 트리거가 돌지 않는다 — 그렇게 지우면 하한이
-        오르지 않아 seq 를 다시 쓸 수 있다. 둘 다 표 소유자 · superuser 만
-        할 수 있고 사이드카 · 앱 계정에는 권한이 없다. 비우기를 거부하는
-        트리거는 넣지 않았다 — 장부 정리는 DELETE 로만 한다.
+        오르지 않아 seq 를 다시 쓸 수 있다. 표 비우기는 그 표의 TRUNCATE
+        권한을 가진 쪽(소유자 포함)만 할 수 있고, `session_replication_role`
+        변경은 superuser 이거나 그 설정의 SET 권한(`GRANT SET ON PARAMETER`)을
+        받은 쪽만 할 수 있다(PostgreSQL 17 문서 sql-truncate ·
+        runtime-config-client). 사이드카 · 앱 계정은 둘 다 없다 —
+        `40_verify.sql` 이 stream_* 의 TRUNCATE 없음을 단언하고, SET 권한은
+        10 · 30 이 주지 않는다. 비우기를 거부하는 트리거는 넣지 않았다 — 장부
+        정리는 DELETE 로만 한다.
