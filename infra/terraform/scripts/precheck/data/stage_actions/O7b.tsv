@@ -74,3 +74,5 @@ iam:ListAttachedUserPolicies	us-east-1	*
 iam:ListGroupsForUser	us-east-1	*
 iam:ListAttachedGroupPolicies	us-east-1	*
 route53:ListHostedZonesByName	us-east-1	*
+# ACM 검증 레코드 이름 해석(POK-484)의 acm:DescribeCertificate 두 리전은
+# 위 prod/certs 덩어리에 있다(같은 (동작, 리전)은 한 행).

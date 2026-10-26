@@ -45,6 +45,7 @@
 # 포함) · 정책 파일 꼴 · S3 · ECR · SNS 정책 응답의 None · 존 해석 2건 이상 ·
 # 잘린 존 목록 · input: 입력 파일의 거부(0600 아님 · 링크) · 빈 파일 · 꼴
 # 밖 줄(비밀 전체 ARN 이 아님 — 부분 ARN · 기대 이름 밖 비밀 포함) ·
+# 검증 레코드 이름이 없는 인증서 · 꼴 밖 검증 레코드 이름(POK-484) ·
 # PC0 · PC1 실패 · CLI 가 제외를 받지 않음(2.36.12 이상 필요) · 조직 판정
 # False · 자원 정책 읽기의 「없음」 아닌 오류(첫 단계 뒤의 주제 · 큐 「자원
 # 없음」 포함 — 첫 단계의 「자원 없음」 은 정책 없이 판정하고 report.txt 에
@@ -371,23 +372,28 @@ row_arns() {
 }
 
 #######################################
-# (5) 실제 질문 하나를 묻고 행 판정을 기록한다(머리 주석의 순서).
+# (5) 실제 질문 하나를 묻고 행 판정을 기록한다(머리 주석의 순서). 검증
+# 레코드 이름이 있으면 추가 문맥의 자리표시자를 그 이름으로 바꾸고, 결과의
+# 자원 칸에 「ARN 이름」 으로 남긴다.
 # Globals:
 #   u_*, t_*, pol_state, pol_file, pol_escaped, found_policy, branch,
-#   context_json, sim_class, sim_decision, result, n_judged
+#   context_json, sim_class, sim_decision, result, n_judged,
+#   VALIDATION_PLACEHOLDER
 # Arguments:
-#   u_* 색인, t_* 색인, 자원 ARN, 동작.
+#   u_* 색인, t_* 색인, 자원 ARN, 동작, 검증 레코드 이름(없으면 빈 값).
 #######################################
 judge_question() {
-  local j="$1" t="$2" arn="$3" action="$4" state="" file="" verdict=PASS
-  local reason=-
+  local j="$1" t="$2" arn="$3" action="$4" name="$5" state="" file=""
+  local verdict=PASS reason=- context="${t_context[$2]}"
   principal::policy_for "${t_read[t]}" "${arn}"
   [[ -z "${found_policy}" ]] || state="${pol_state[found_policy]}"
   if [[ "${state}" == allow && ( "${u_kind[j]}" == user ||
     "${branch}" == A ) ]]; then
     file="${pol_file[found_policy]}"
   fi
-  principal::context_entries "${t_context[t]}" || die "추가 문맥 꼴이 틀림"
+  [[ -z "${name}" ]] ||
+    context="${context//${VALIDATION_PLACEHOLDER}/${name}}"
+  principal::context_entries "${context}" || die "추가 문맥 꼴이 틀림"
   principal::ask "${u_arn[j]}" "${action}" "${arn}" "${t_region[t]}" \
     "${context_json}" "${file}"
   if [[ "${sim_class}" == allow ]]; then
@@ -407,7 +413,8 @@ judge_question() {
   fi
   n_judged=$((n_judged + 1))
   result+="${u_keys[j]}"$'\t'"${t_key[t]}"$'\t'"${action}"$'\t'
-  result+="${t_region[t]}"$'\t'"${arn}"$'\t'"${verdict}"$'\t'"${reason}"
+  result+="${t_region[t]}"$'\t'"${arn}${name:+ ${name}}"$'\t'"${verdict}"
+  result+=$'\t'"${reason}"
   result+=$'\t'"${sim_decision}"$'\n'
   [[ "${verdict}" == PASS ]] || add_finding "${u_keys[j]}" "${t_key[t]}" \
     "${action}" "${t_region[t]}" "${verdict}" "${reason}"
@@ -431,14 +438,37 @@ record_unit_reasons() {
 }
 
 #######################################
-# (5) 단위 × 이번 단계 대상 행 × 자원 × 동작마다 묻는다. self:group ·
-# policy:attached 가 0건인 단위는 report.txt 에 건수만 남긴다.
+# (5) 단위 · 대상 행 · 자원 하나를 검증 레코드 이름(있으면 이름마다) × 동작
+# 마다 묻는다.
 # Globals:
-#   u_arn, u_kind, u_keys, t_key, t_active, t_method, t_actions, list_items,
-#   notes
+#   t_actions, tr_names
+# Arguments:
+#   u_* 색인, t_* 색인, 자원 ARN.
+#######################################
+judge_arn() {
+  local j="$1" t="$2" arn="$3" names name actions action
+  names="${tr_names[$2]:-}"
+  [[ -n "${names}" ]] || names=$'\n'
+  while [[ -n "${names}" ]]; do
+    name="${names%%$'\n'*}"
+    names="${names#*$'\n'}"
+    actions="${t_actions[t]},"
+    while [[ -n "${actions}" ]]; do
+      action="${actions%%,*}"
+      actions="${actions#*,}"
+      judge_question "${j}" "${t}" "${arn}" "${action}" "${name}"
+    done
+  done
+}
+
+#######################################
+# (5) 단위 × 이번 단계 대상 행 × 자원 × (검증 레코드 이름) × 동작마다 묻는다.
+# self:group · policy:attached 가 0건인 단위는 report.txt 에 건수만 남긴다.
+# Globals:
+#   u_arn, u_kind, u_keys, t_key, t_active, t_method, list_items, notes
 #######################################
 judge_rows() {
-  local j t rest arn actions action
+  local j t rest
   for j in ${u_arn[@]+"${!u_arn[@]}"}; do
     for t in "${!t_key[@]}"; do
       [[ "${t_active[t]}" -eq 1 ]] || continue
@@ -454,14 +484,8 @@ judge_rows() {
       fi
       rest="${list_items}"
       while [[ -n "${rest}" ]]; do
-        arn="${rest%%$'\n'*}"
+        judge_arn "${j}" "${t}" "${rest%%$'\n'*}"
         rest="${rest#*$'\n'}"
-        actions="${t_actions[t]},"
-        while [[ -n "${actions}" ]]; do
-          action="${actions%%,*}"
-          actions="${actions#*,}"
-          judge_question "${j}" "${t}" "${arn}" "${action}"
-        done
       done
     done
   done

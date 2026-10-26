@@ -66,8 +66,10 @@ readonly WRAPPER="${PRECHECK_DIR}/principal-check.sh"
 readonly PRINCIPAL_DIR="${DATA_DIR}/principal_sim"
 # 래퍼가 부르는 읽기 동작과 그 리전(「동작<공백>리전」 — 계획 M17b 1절 4).
 # IAM · Route 53 은 us-east-1, 나머지는 서울이고, 태그 해석은 행의 리전(서울
-# · us-east-1 인증서)에서 부른다. iam:SimulatePrincipalPolicy 는 도구 자신의
-# 호출이라 넣지 않는다(거부되면 종료 2 로 드러남).
+# · us-east-1 인증서)에서 부른다. ACM 검증 레코드 이름 해석(POK-484)은 prod
+# 인증서의 두 리전에서 태그 해석 · 인증서 읽기를 부른다.
+# iam:SimulatePrincipalPolicy 는 도구 자신의 호출이라 넣지 않는다(거부되면
+# 종료 2 로 드러남).
 PRINCIPAL_READS=('iam:GetInstanceProfile us-east-1' 'iam:GetRole us-east-1'
   'iam:GetUser us-east-1' 'iam:ListRoles us-east-1'
   'iam:ListAttachedRolePolicies us-east-1'
@@ -78,7 +80,9 @@ PRINCIPAL_READS=('iam:GetInstanceProfile us-east-1' 'iam:GetRole us-east-1'
   'secretsmanager:GetResourcePolicy ap-northeast-2'
   'ecr:GetRepositoryPolicy ap-northeast-2'
   'sns:GetTopicAttributes ap-northeast-2'
-  'sqs:GetQueueAttributes ap-northeast-2')
+  'sqs:GetQueueAttributes ap-northeast-2'
+  'acm:DescribeCertificate ap-northeast-2'
+  'acm:DescribeCertificate us-east-1')
 readonly PRINCIPAL_READS
 # 2-3 판정이 없는 묶음이 자기 단계 동작으로 가진 판정 읽기 동작(JUDGE_READS
 # · PRINCIPAL_READS 와 이름이 같은 「묶음 동작」). 「묶음 이름 + 동작」 정확
@@ -258,6 +262,28 @@ FOLLOWUP_TARGETS=(
 '${ACCOUNT}:log-group:/aws/cloudfront/function/pokeclip-prod-apex-request '\
 'logs:DeleteLogGroup')
 readonly FOLLOWUP_TARGETS
+# prod ACM 검증 레코드(prod/certs 의 aws_route53_record.validation — POK-484)
+# 를 묻는 레코드 이름 문맥 행. 이름은 ACM 이 정하는 값이라 실행 때 prod
+# 인증서에서 푼다(자리표시자 ${ACM_VALIDATION}). 첫 단계는 그 레코드를 만드는
+# O7b, 리전은 Route 53 이라 us-east-1 이다. 두 갈래(prod 하나 · dev 표본 +
+# prod)는 prod/records 행과 같다.
+readonly RECORD_NAMES='route53:ChangeResourceRecordSetsNormalizedRecordNames'
+# shellcheck disable=SC2016 # ${ACM_VALIDATION} 은 펼치지 않는 글자 그대로다.
+ACM_VALIDATION_TARGETS=(
+  'zone-record-acm-validation O7b zone:pokeclip.com '\
+'route53:ChangeResourceRecordSets '"${RECORD_NAMES}"':stringList:'\
+'${ACM_VALIDATION}'
+  'zone-record-acm-validation-mix O7b zone:pokeclip.com '\
+'route53:ChangeResourceRecordSets '"${RECORD_NAMES}"':stringList:'\
+'dev.pokeclip.com,${ACM_VALIDATION}')
+readonly ACM_VALIDATION_TARGETS
+# 실제 데이터 실행에 쓰는 가짜 prod 인증서 둘과 그 검증 레코드 이름(ACM
+# 안내서 「DNS validation」 의 대표 이름 꼴 — 끝 점 있음).
+ACM_CERT_SEOUL="arn:aws:acm:ap-northeast-2:${FAKE_ACCOUNT}:"
+ACM_CERT_SEOUL+='certificate/qx-1'
+readonly ACM_CERT_SEOUL
+readonly ACM_CERT_USE1="arn:aws:acm:us-east-1:${FAKE_ACCOUNT}:certificate/qx-2"
+readonly ACM_NAME='_3639ac514e785e898d2646601fa951d5.pokeclip.com'
 # 단계 묶음에 더한 행(POK-460 — 「묶음 · 동작 · 리전 · 자원 패턴」, 탭 구분).
 # O7f 다섯은 묶음 C 의 edge apply 가 부르는데 빠져 있던 동작(리뷰가 찾은
 # 누락만 — 결정 65 의 예외), UpdateWebACL 둘은 웹 ACL 데이터 보호(POK-459)
@@ -398,7 +424,8 @@ expect_bundle_rows_wellformed() {
 }
 
 #######################################
-# 사례 3: 모든 데이터 파일에 12자리 숫자 0건 · 자리표시자는 ${ACCOUNT} 뿐.
+# 사례 3: 모든 데이터 파일에 12자리 숫자 0건 · 자리표시자는 ${ACCOUNT} 뿐
+# (prod_targets.tsv 의 ${ACM_VALIDATION} 은 principal-files 가 본다).
 # Globals:
 #   EVENT_NAMES, STAGE_DIR, DATA_DIR
 #######################################
@@ -413,9 +440,11 @@ expect_no_account_ids() {
     testlib::fail "account: 데이터 디렉터리를 읽지 못함"
     return
   fi
+  # prod_targets.tsv 만 ACM 검증 레코드 이름 자리도 받는다(POK-484 —
+  # expect_principal_files_wellformed 가 그 파일을 따로 본다).
   # shellcheck disable=SC2016 # ${ACCOUNT} 는 펼치지 않는 글자 그대로다.
-  others="$(grep -rhoE -- '\$\{[^}]*\}' "${DATA_DIR}" |
-    grep -vxF -- '${ACCOUNT}')"
+  others="$(grep -rhoE --exclude=prod_targets.tsv -- '\$\{[^}]*\}' \
+    "${DATA_DIR}" | grep -vxF -- '${ACCOUNT}')"
   if [[ -n "${hits}" || -n "${others}" ]]; then
     testlib::fail "account: 12자리 숫자(${hits}) 또는 다른 자리표시자(${others})"
     return
@@ -795,13 +824,14 @@ principal_rows() {
 
 #######################################
 # 데이터 단언: 2-3 판정 데이터 셋이 있고, 열 수(3 · 4 · 8)가 맞고 빈 칸이
-# 없으며, 계정 자리는 ${ACCOUNT} 뿐(12자리 숫자 0), 구체 ARN(arn: 해석 ·
+# 없으며, 계정 자리는 ${ACCOUNT} 뿐(12자리 숫자 0 — prod_targets.tsv 만 ACM
+# 검증 레코드 이름 자리 ${ACM_VALIDATION} 도 받음), 구체 ARN(arn: 해석 ·
 # 양성 대조 자원)에 「*」 가 없고, 첫 단계가 JUDGED_BUNDLES 안이다.
 # Globals:
 #   PRINCIPAL_DIR, JUDGED_BUNDLES
 #######################################
 expect_principal_files_wellformed() {
-  local entry name want bad others stage method arn
+  local entry name want bad others stage method arn allowed
   for entry in dev_principals.tsv:3 positive_controls.tsv:4 \
     prod_targets.tsv:8; do
     name="${entry%:*}"
@@ -821,9 +851,12 @@ expect_principal_files_wellformed() {
         "$(printf '%s' "${bad}" | tr '\n' ' ')"
       return
     fi
-    # shellcheck disable=SC2016 # ${ACCOUNT} 는 펼치지 않는 글자 그대로다.
+    # shellcheck disable=SC2016 # 자리표시자는 펼치지 않는 글자 그대로다.
+    allowed='${ACCOUNT}'
+    # shellcheck disable=SC2016 # 자리표시자는 펼치지 않는 글자 그대로다.
+    [[ "${name}" != prod_targets.tsv ]] || allowed+=$'\n''${ACM_VALIDATION}'
     others="$(grep -oE -- '\$\{[^}]*\}' "${PRINCIPAL_DIR}/${name}" |
-      grep -vxF -- '${ACCOUNT}')"
+      grep -vxF -- "${allowed}")"
     if grep -qE -- '[0-9]{12}' "${PRINCIPAL_DIR}/${name}" ||
       [[ -n "${others}" ]]; then
       testlib::fail "principal-files: ${name} 에 12자리 숫자 또는 다른" \
@@ -1441,6 +1474,126 @@ expect_followup_targets() {
 }
 
 #######################################
+# 데이터 단언(POK-484): ACM 검증 레코드 행(ACM_VALIDATION_TARGETS)이 첫
+# 단계 · 해석 방법 · 동작 · 추가 문맥 그대로 있고 리전이 us-east-1 이다. 이
+# 행이 빠지면 「_」 로 시작하는 이름만 허용한 dev 정책이 어느 단계에서도
+# 통과로 나온다.
+# Globals:
+#   ACM_VALIDATION_TARGETS
+#######################################
+expect_acm_validation_targets() {
+  local problem entry key region
+  problem="$(pinned_target_problem "${ACM_VALIDATION_TARGETS[@]}")"
+  if [[ -n "${problem}" ]]; then
+    testlib::fail "acm-validation: ${problem}"
+    return
+  fi
+  for entry in "${ACM_VALIDATION_TARGETS[@]}"; do
+    key="${entry%% *}"
+    region="$(principal_rows prod_targets.tsv |
+      awk -F '\t' -v k="${key}" '$1 == k { print $5 }')"
+    if [[ "${region}" != us-east-1 ]]; then
+      testlib::fail "acm-validation: ${key} 의 리전이 us-east-1 이 아님 —" \
+        "「${region}」"
+      return
+    fi
+  done
+  testlib::ok "acm-validation → 검증 레코드 행 둘이 첫 단계 O7b · 존 해석 ·" \
+    "ChangeResourceRecordSets · us-east-1 · 이름 자리 두 갈래"
+}
+
+#######################################
+# 증거 디렉터리의 req-*.json 가운데 고정 문자열이 모두 든 것의 수를 낸다.
+# Arguments:
+#   증거 디렉터리, 문자열들.
+# Outputs:
+#   개수.
+#######################################
+requests_with() {
+  local dir="$1" file text count=0 hit
+  shift
+  for file in "${dir}"/req-*.json; do
+    [[ -f "${file}" ]] || continue
+    hit=1
+    for text in "$@"; do
+      grep -qF -- "${text}" "${file}" || hit=0
+    done
+    count=$((count + hit))
+  done
+  printf '%s\n' "${count}"
+}
+
+#######################################
+# ACM 검증 레코드 이름 해석의 가짜 읽기 답(주체 넷 · 공유 존 · 두 리전의
+# prod 인증서 하나씩 — 검증 옵션 둘이 같은 이름)을 낸다.
+# Outputs:
+#   표 줄들.
+#######################################
+acm_reads_table() {
+  principal_reads_table
+  testlib::tsv list-hosted-zones-by-name pokeclip.com. \
+    'pokeclip.com.\t/hostedzone/ZQXPROD1\tFalse'
+  testlib::tsv get-resources acm:certificate@ap-northeast-2 "${ACM_CERT_SEOUL}"
+  testlib::tsv get-resources acm:certificate@us-east-1 "${ACM_CERT_USE1}"
+  testlib::tsv describe-certificate "${ACM_CERT_SEOUL}" \
+    "${ACM_NAME}.\\n${ACM_NAME}."
+  testlib::tsv describe-certificate "${ACM_CERT_USE1}" \
+    "${ACM_NAME}.\\n${ACM_NAME}."
+}
+
+#######################################
+# 실제 principal-check.sh 를 실제 데이터로 O7a · O7b 에 돌려, ACM 검증
+# 레코드 행이 O7b 부터 인증서에서 푼 이름(끝 점 뗌 — Route 53 정규화 꼴)으로
+# 두 갈래를 공유 존 ARN 에 묻고(인증서 읽기는 인증서마다 한 번), O7a 에는
+# 인증서 읽기 · 그 이름 질문이 0 인지 본다.
+# Globals:
+#   FAKE_USER, ACM_NAME, RECORD_NAMES, run_status, run_out
+#######################################
+expect_acm_validation_asked() {
+  local case_dir stage dir zone key single mix n_single n_mix calls
+  zone='"ResourceArns":["arn:aws:route53:::hostedzone/ZQXPROD1"]'
+  key="{\"ContextKeyName\":\"${RECORD_NAMES}\",\"ContextKeyValues\":"
+  single="${key}[\"${ACM_NAME}\"],\"ContextKeyType\":\"stringList\"}"
+  mix="${key}[\"dev.pokeclip.com\",\"${ACM_NAME}\"],"
+  mix+='"ContextKeyType":"stringList"}'
+  for stage in O7a O7b; do
+    case_dir="$(testlib::new_case)" || {
+      testlib::fail "acm-validation-asked: 시험 준비 실패"
+      return
+    }
+    acm_reads_table >"${case_dir}/in/reads.tsv"
+    testlib::tsv "${FAKE_USER}@*" allowed None - - - >"${case_dir}/in/sim.tsv"
+    testlib::run "${case_dir}" "principal-${stage}" env \
+      FAKE_AWS_READS="${case_dir}/in/reads.tsv" \
+      FAKE_AWS_SIM_TABLE="${case_dir}/in/sim.tsv" bash "${WRAPPER}" "${stage}"
+    dir="$(compgen -G \
+      "${case_dir}/home/.pokeclip-precheck/principal-${stage}-*")"
+    if [[ "${run_status}" -ne 3 || ! -d "${dir}" ]]; then
+      testlib::fail "acm-validation-asked: ${stage} 실행이 종료" \
+        "${run_status} — $(cat -- "${run_out}.stderr")"
+      return
+    fi
+    n_single="$(requests_with "${dir}" "${single}" "${zone}")"
+    n_mix="$(requests_with "${dir}" "${mix}" "${zone}")"
+    calls="$(grep -c -- '^acm describe-certificate ' "${case_dir}/out/aws.log")"
+    if [[ "${stage}" == O7a &&
+      "${n_single}:${n_mix}:${calls}" != 0:0:0 ]]; then
+      testlib::fail "acm-validation-asked: 첫 단계 O7b 전(O7a)에 검증 이름" \
+        "질문 · 인증서 읽기가 나감(${n_single} · ${n_mix} · ${calls})"
+      return
+    fi
+    if [[ "${stage}" == O7b && ( "${n_single}" -eq 0 ||
+      "${n_single}" -ne "${n_mix}" || "${calls}" -ne 2 ) ]]; then
+      testlib::fail "acm-validation-asked: O7b 에서 두 갈래 질문 · 인증서" \
+        "읽기 둘이 아님(${n_single} · ${n_mix} · ${calls})"
+      return
+    fi
+  done
+  testlib::ok "acm-validation-asked → O7b 부터 인증서에서 푼 검증 이름으로 두" \
+    "갈래 · 인증서 읽기는 인증서마다 한 번 · O7a 에는 0"
+}
+
+#######################################
 # 데이터 단언: 단계 묶음에 더한 행(STAGE_FOLLOWUP_ROWS — POK-460)이 그 묶음
 # 파일에 동작 · 리전 · 자원 패턴 그대로 있다. 다른 단언은 행의 꼴 · 중복만
 # 보고 누락은 못 잡는다.
@@ -1787,10 +1940,12 @@ main() {
   expect_runtime_bundle_puts_bucket_cors
   expect_late_targets
   expect_followup_targets
+  expect_acm_validation_targets
   expect_stage_followup_rows
   expect_runtime_rows_asked
   expect_log_group_forms_asked
   expect_apex_object_asked
+  expect_acm_validation_asked
   expect_ecs_role_pass_asked
   expect_runtime_terraform_reads
   expect_dev_principals
