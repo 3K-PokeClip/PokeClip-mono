@@ -48,7 +48,7 @@ type playbackChain struct {
 // 행(④ⓑ)이다. pinned 는 판독 실패로 도장을 기대값에 고정했는가다(④ⓐ).
 //
 // 접수 게이트보다 앞에서 부른다 — 요청이 거부돼도 사슬은 이어져야 다음 행이 리셋을 오판하지 않는다.
-func (ix *Indexer) advanceChain(streamID string, prev *index.TailRow, rec index.Record, res index.SeedResult, mtxi *playback.Mtxi) (target *index.UploadTarget, pinned bool) {
+func (ix *Indexer) advanceChain(streamID string, prev *index.TailRow, rec index.Record, res index.InsertCommit, mtxi *playback.Mtxi) (target *index.UploadTarget, pinned bool) {
 	c, hasChain := ix.chains[streamID]
 	// adjacent 는 직전 장부 행이 곧 사슬 행인가다 — 아니면 사이에 비귀속 행이 끼었다(⑥).
 	adjacent := hasChain && prev != nil && prev.Seq == c.seq
@@ -77,7 +77,7 @@ func (ix *Indexer) advanceChain(streamID string, prev *index.TailRow, rec index.
 
 // startChain 은 회차의 첫 도장이다 — offset 0, 도장 = 자기 mtxi(⑥ · 결정 B′). mtxi 를 못 읽었으면
 // 도장을 지어내지 않는다(④ⓑ): ③ 요청 없이 두고, 다음 정상 판독 행이 사슬을 연다.
-func (ix *Indexer) startChain(streamID string, rec index.Record, res index.SeedResult, mtxi *playback.Mtxi) *index.UploadTarget {
+func (ix *Indexer) startChain(streamID string, rec index.Record, res index.InsertCommit, mtxi *playback.Mtxi) *index.UploadTarget {
 	if mtxi == nil {
 		return nil
 	}
@@ -90,7 +90,7 @@ func (ix *Indexer) startChain(streamID string, rec index.Record, res index.SeedR
 // nextLink 는 같은 회차 안 다음 행의 보관값이다. mtxi 를 못 읽었으면 도장을 막지 않고 기대값에
 // 고정한다(④ⓐ): pos = pos(k−1) + dur(k−1), 사슬은 기대 mtxi·표식 유지로 잇는다 — 그 자리에 실제
 // 리셋·구멍이 있었다면 다음 행의 술어가 잡으므로 도장은 뒤로 가지 않는다.
-func (ix *Indexer) nextLink(c playbackChain, adjacent bool, rec index.Record, res index.SeedResult, mtxi *playback.Mtxi) (link playbackChain, pinned bool) {
+func (ix *Indexer) nextLink(c playbackChain, adjacent bool, rec index.Record, res index.InsertCommit, mtxi *playback.Mtxi) (link playbackChain, pinned bool) {
 	link = linkOf(rec, res)
 	if mtxi == nil {
 		link.recorder, link.mtxi, link.offset = c.recorder, c.mtxi+c.dur, c.offset
@@ -151,7 +151,7 @@ func (ix *Indexer) recordSkew(streamID string, c, link playbackChain, adjacent b
 }
 
 // linkOf 는 행의 보관값 뼈대다. 도장 재료(표식·mtxi·pos·offset)는 부르는 쪽이 채운다.
-func linkOf(rec index.Record, res index.SeedResult) playbackChain {
+func linkOf(rec index.Record, res index.InsertCommit) playbackChain {
 	return playbackChain{
 		sessionID: res.SessionID, seq: rec.Seq, dur: time.Duration(rec.DurationMS) * time.Millisecond,
 		path: rec.LocalPath, pdt: res.PlaybackPDT,
@@ -160,7 +160,7 @@ func linkOf(rec index.Record, res index.SeedResult) playbackChain {
 
 // playbackTargetOf 는 행의 ③ 작업이다. ExpectedInitSHA 는 비운다 — 실시간 작업의 기대 init 은 워커의
 // sessionInit 이 채운다(계획 2.1). IsTail 은 요청하는 시점이 정한다.
-func playbackTargetOf(streamID string, link playbackChain, rec index.Record, res index.SeedResult, pinned bool) *index.UploadTarget {
+func playbackTargetOf(streamID string, link playbackChain, rec index.Record, res index.InsertCommit, pinned bool) *index.UploadTarget {
 	return &index.UploadTarget{
 		StreamID: streamID, Axis: index.AxisPlayback, Seq: rec.Seq, SessionID: res.SessionID,
 		S3Key: res.PlaybackS3Key, LocalPath: rec.LocalPath, Bytes: rec.Bytes,

@@ -182,7 +182,7 @@ func TestPosIsSegmentMtxiWithoutReset(t *testing.T) {
 	}
 }
 
-// playback_request_absent_without_session — 비귀속 행(SeedResult.SessionID 빈 값)은 ③·init 을 만들지
+// playback_request_absent_without_session — 비귀속 행(InsertCommit.SessionID 빈 값)은 ③·init 을 만들지
 // 않는다(settled 조건상 목록에 실릴 수 없다). ② 는 형제 분기라 그대로 요청된다.
 func TestPlaybackRequestAbsentWithoutSession(t *testing.T) {
 	f := newFixture(t, 4000, 4000)

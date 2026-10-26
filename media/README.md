@@ -586,7 +586,7 @@ M3에서 **무엇이 들어왔고 무엇이 일부러 빠졌는지**를 적는�
 | ③ 바이트 추출·③ 재수거·init 재수거 | 바이트가 없는 상태에서 수거를 켜면 없는 파일을 집어 영구 격리된다 | **완료(PR ⓐ)** — 추출은 `axis_body.go` `playbackPayload`, 재수거는 `internal/upload/sweep.go` `sweepAxes`(② → ③ → init) |
 | 스위퍼의 init 조회 · backlog 축별 집계 | 회수기가 M4라 지표만 켜면 행동 없는 신호가 된다. **M3 동안 backlog 지표는 ② 축만 보여 준다**(③·init은 프로덕션 동작이 0건이라 숨는 장애가 없다) | **완료(PR ⓐ)** — init 조회 `pendingInitUploadsSQL`, 잔량 3벌(`countArchiveBacklogSQL`·`countPlaybackBacklogSQL`·`countInitBacklogSQL`). `upload_backlog` 가 축 라벨을 단다 |
 | 발행 게이트 실물(`init_uploaded_at IS NULL` → `ready:false`)·G7 skew·`rewind_cutoff_absent` 알람·writer fence | 전부 발행 층 소유다. M3는 그 **장부 축**만 픽스처로 확인했다 | **완료(PR ⓐ·ⓑ·ⓒ)** — G7 완결: ⓐ 의 skew 기록(`internal/indexer/chain.go` `recordSkew`, Debug)에 ⓑ 의 S7 PDT 엄격 증가 검사(`internal/rewind/validate.go` `checkPDT`)가 더해졌다. 발행 게이트·알람·fence 는 ⓒ(ⓒ 에서 들어왔다 — 게이트 `internal/rewind/publish/gate.go` `ShouldTick` · 알람 `rewind_cutoff_absent`(30초 감시 (c)) · fence `internal/rewind/publish/fence.go`) |
-| 세션 종료 전이(`live` → `ending` → `ended`) | M4/M6. **그래서 M3에서는 같은 스트림의 연속 방송이 첫 회차에 계속 귀속된다** — 발행 층이 없어 무해하며, 테스트가 현 동작을 문서화한다 | **일부(PR ⓐ · ⓒ)** — ⓐ 가 init 불일치에 의한 `live → ending(init_mismatch)` 를 넣었고(`upload_store.go` `MarkPlaybackFailed` 결속 갈래), ⓒ 가 송출 종료 전이 `live → ending(offline)` 을 넣었다(판정 `internal/indexer/judgment.go` `OfflineDue` · 전이 `internal/index/store.go` `EndLive`). `ended` 는 M6 이다. 연속 방송이 첫 회차에 귀속되는 동작은 관측이 켜져 있으면 닫혔고, `MTX_API_URL` 을 비우면 그대로다(아래 「되감기 M4 ⓒ 이관 기록」 알려진 한계) |
+| 세션 종료 전이(`live` → `ending` → `ended`) | M4/M6. **그래서 M3에서는 같은 스트림의 연속 방송이 첫 회차에 계속 귀속된다** — 발행 층이 없어 무해하며, 테스트가 현 동작을 문서화한다 | **일부(PR ⓐ · ⓒ)** — ⓐ 가 init 불일치에 의한 `live → ending(init_mismatch)` 를 넣었고(`upload_store.go` `SettlePlaybackFailure` 결속 갈래), ⓒ 가 송출 종료 전이 `live → ending(offline)` 을 넣었다(판정 `internal/indexer/judgment.go` `OfflineDue` · 전이 `internal/index/store.go` `EndLive`). `ended` 는 M6 이다. 연속 방송이 첫 회차에 귀속되는 동작은 관측이 켜져 있으면 닫혔고, `MTX_API_URL` 을 비우면 그대로다(아래 「되감기 M4 ⓒ 이관 기록」 알려진 한계) |
 | `REWIND_SEED_ENABLED` 기본값 `true` 전환 | 발행 층이 오는 PR에서 함께 켠다(kty 결정 2026-09-02). 스위치 자체는 롤백 손잡이로 남는다 | **완료(PR ⓒ)** — `internal/config/config.go` 의 기본값이 `true` 다. 명시 `false` 가 롤백 손잡이이고 새 컷오프 주조만 멈춘다(이미 주조된 스트림은 계속 발행된다) |
 | `discontinuity_base` 증분 산식 | 렌더 축 값이라 소비자(M4)와 같은 커밋에서 정한다. M3는 명시적 기본값 `0`("승계 없음") | **완료(PR ⓑ)** — `rewind.EvictedDiscontinuityTags`(순수 함수 — 목록 앞에서 빠지는 끊김 표시 수 = base 에 더할 증분). 배선(발행 예약 문장 P0 에 동봉)은 ⓒ(ⓒ 에서 배선했다 — P0 동봉이 아니라 마지막 발행본 기준 절대식이고 base 는 P4 · 화해가 쓴다. 부기 35) |
 | 상태 관측 등급(tier) ⓘⓘ·ⓘⓘⓘ 상수 | 폴러가 실측상 ⓘ만 산출한다. 소비자가 생길 때 같이 넣는다 | 대기 — 슬레이트 유입이 착지하는 마일스톤(계획 8절) |
@@ -782,7 +782,7 @@ init 이 같은가의 기준은 **재포장 산출 init 바이트의 sha256** �
 `sessionInit` 이다.
 
 - **다르면** 올리지 않는다. 조각 `failed` 와 회차 `live → ending(init_mismatch)` 를 한 문장으로
-  영속한다(`MarkPlaybackFailed` 의 결속 갈래). 다음 조각이 새 회차·새 init 을 연다.
+  영속한다(`SettlePlaybackFailure` 의 결속 갈래). 다음 조각이 새 회차·새 init 을 연다.
 - **기대값을 아직 모르면**(init 확정 전) 올리지도 실패로 적지도 않고 보류 목록에 둔다.
 
 init 요청은 인덱서가 회차의 행에서 낸다. 이 프로세스에서 **접수될 때까지** 다음 행에서 다시
@@ -1864,7 +1864,7 @@ docker compose up -d --build segment-indexer
 | ③ 잔량의 `ended` 동기 · M6 만료 뒤 컷오프 재주조 | M6 | ⓒ 에는 `ended` 가 없다 |
 | 첫 목록 지연 경보(`rewind_ready_delayed`) | M5 | 재기동 ② 뒤 비계승 회차의 무경보(아래 한계 표) 〔추기 2026-10-26 — M5 ②a 에서 닫혔다: 송출 중(4.1 종료 판정과 같은 술어)인데 60초 넘게 준비 안 되면 WARN 이다.〕 |
 | 목록 객체의 Content-Type 값 | M5 회부 | 계획 7절 13 · 위 실측 기록 |
-| 이름 부채 개명(`SeedResult` · `MarkPlaybackFailed`) | M5 | 부기 16 · 23 |
+| 이름 부채 개명(`SeedResult` · `MarkPlaybackFailed`) | M5 | 부기 16 · 23 〔추기 2026-10-26 — M5 ②c 에서 닫혔다: `SeedResult` → `InsertCommit`(INSERT 트랜잭션의 커밋 사실), `MarkPlaybackFailed` → `SettlePlaybackFailure`(사유에 따라 조각만 또는 조각과 회차를 함께 정리). 동작은 그대로다. 이 문서의 이관 기록 · 부기 표는 그때 이름 그대로 둔다.〕 |
 | 계승 사슬(두 단계 이상)과 1시간 상계 | M5/M6 | 위 ⓑ 절 알려진 한계 |
 | 슬레이트 운영 프로비저닝 · 관측 등급 tier 상수 | 별도 마일스톤 | 계획 8절 kty 확정 (가) |
 | 라이브 창 설정(ADR-056 ③ 대체 예정) 28초 적용 | PR ⓒ 뒤 설정 소PR | 되감기 URL 가동 뒤 · 적용 게이트 셋을 통과한 뒤. 라이브 창은 28초(4초 × 7)로 확정됐다(kty 2026-10-19 — ADR-056 의 14초는 대체 예정). 바뀌는 값은 `hlsSegmentCount` 900 → 7 하나다 |

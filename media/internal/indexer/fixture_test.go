@@ -48,7 +48,7 @@ type fakeStore struct {
 	lastSource index.SessionSource
 
 	// sessions 는 들어간 행마다 앞에서 하나씩 꺼내 쓰는 귀속 세션 대본이다. 세션 결정은 SQL
-	// (session.Registry)이 하지만, 그 결과가 SeedResult 로 루프에 어떻게 닿는지는 여기서 잰다.
+	// (session.Registry)이 하지만, 그 결과가 InsertCommit 으로 루프에 어떻게 닿는지는 여기서 잰다.
 	// "" 는 비귀속(NULL) 행이다. 대본이 비었으면 세션 필드를 채우지 않는다(종전 동작).
 	sessions []string
 	// lastSession·lastPDT·lastDurMS 는 대본으로 귀속한 스트림별 마지막 행이다(개시·PDT 흉내).
@@ -101,13 +101,13 @@ func (s *fakeStore) scriptInheritance(sessionID, inherits, prevFirst string) {
 	s.inheritance[sessionID] = inheritance{session: inherits, prevFirst: prevFirst}
 }
 
-// attribute 는 대본의 다음 세션으로 SeedResult 의 개시 통로 9필드를 채운다 — store.go
+// attribute 는 대본의 다음 세션으로 InsertCommit 의 개시 통로 9필드를 채운다 — store.go
 // withCommitted 와 같은 뜻이다: 개시 = 직전 귀속 세션과 다른 세션, PDT = 개시면 벽시계·
 // 아니면 max(직전 PDT + 직전 길이, 벽시계)(설계 5.1.1 재귀식), 키 = playback.SegKey(실패면 NULL),
 // 개시 TD = max(6, 첫 조각 반올림 초)(session.openTargetDuration 과 같은 규칙 — TD 운반, 커밋 ④).
 // base 는 ⓐ 의 개시 값(0)이고, 계승 · 직전 첫 조각은 scriptInheritance 로 정한 회차의 개시 행만 값이다.
 // s.mu 를 쥔 채로 부른다.
-func (s *fakeStore) attribute(r index.Record, res index.SeedResult) index.SeedResult {
+func (s *fakeStore) attribute(r index.Record, res index.InsertCommit) index.InsertCommit {
 	res.DurationMS = r.DurationMS
 	if len(s.sessions) == 0 {
 		return res
@@ -184,7 +184,7 @@ func (s *fakeStore) ExistingPaths(_ context.Context, streamID string) (map[strin
 	return out, nil
 }
 
-func (s *fakeStore) Insert(_ context.Context, r index.Record, seed index.Seed, src index.SessionSource) (index.InsertOutcome, index.SeedResult, error) {
+func (s *fakeStore) Insert(_ context.Context, r index.Record, seed index.Seed, src index.SessionSource) (index.InsertOutcome, index.InsertCommit, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.insertCalls++
@@ -195,33 +195,33 @@ func (s *fakeStore) Insert(_ context.Context, r index.Record, seed index.Seed, s
 		err := s.insertErrs[0]
 		s.insertErrs = s.insertErrs[1:]
 		if err != nil {
-			return index.InsertInserted, index.SeedResult{}, err
+			return index.InsertInserted, index.InsertCommit{}, err
 		}
 	}
 
 	if s.alwaysSeqConflict {
-		return index.InsertSeqConflict, index.SeedResult{}, nil
+		return index.InsertSeqConflict, index.InsertCommit{}, nil
 	}
 
 	for _, existing := range s.rows[r.StreamID] {
 		if existing.LocalPath == r.LocalPath {
-			return index.InsertDuplicatePath, index.SeedResult{}, nil
+			return index.InsertDuplicatePath, index.InsertCommit{}, nil
 		}
 	}
 	for _, existing := range s.rows[r.StreamID] {
 		if existing.Seq == r.Seq {
-			return index.InsertSeqConflict, index.SeedResult{}, nil
+			return index.InsertSeqConflict, index.InsertCommit{}, nil
 		}
 	}
 	s.rows[r.StreamID] = append(s.rows[r.StreamID], r)
 	if s.seeds && seed.Eligible {
-		return index.InsertInserted, s.attribute(r, index.SeedResult{Seeded: true}), nil
+		return index.InsertInserted, s.attribute(r, index.InsertCommit{Seeded: true}), nil
 	}
 	decline := s.declineAs
 	if decline == index.DeclineNone {
 		decline = index.DeclineNoCorroboration
 	}
-	return index.InsertInserted, s.attribute(r, index.SeedResult{Decline: decline}), nil
+	return index.InsertInserted, s.attribute(r, index.InsertCommit{Decline: decline}), nil
 }
 
 func (s *fakeStore) UpdateTail(_ context.Context, streamID string, seq int64, durationMS int32, bytes int64) (bool, error) {

@@ -65,7 +65,7 @@ func (s *pageStore) MarkInitUploaded(context.Context, string, []byte, string, in
 func (s *pageStore) MarkPlaybackUploaded(context.Context, string, int64, int64) (bool, error) {
 	return true, nil
 }
-func (s *pageStore) MarkPlaybackFailed(context.Context, string, int64, string, string) (bool, error) {
+func (s *pageStore) SettlePlaybackFailure(context.Context, string, int64, string, string) (bool, error) {
 	return true, nil
 }
 

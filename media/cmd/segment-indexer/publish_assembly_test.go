@@ -450,9 +450,9 @@ func TestAssemblePublishingSharesCacheWithIndexer(t *testing.T) {
 // openingStore 는 넣는 행마다 회차 개시 결과를 돌려주는 장부다.
 type openingStore struct{ fakeStore }
 
-func (s *openingStore) Insert(ctx context.Context, r index.Record, seed index.Seed, src index.SessionSource) (index.InsertOutcome, index.SeedResult, error) {
+func (s *openingStore) Insert(ctx context.Context, r index.Record, seed index.Seed, src index.SessionSource) (index.InsertOutcome, index.InsertCommit, error) {
 	out, _, err := s.fakeStore.Insert(ctx, r, seed, src)
-	return out, index.SeedResult{SessionOpened: true, SessionID: "S-open"}, err
+	return out, index.InsertCommit{SessionOpened: true, SessionID: "S-open"}, err
 }
 
 // handleOldSegment 는 한 시간 전에 시작해 끝난 조각 파일 하나를 만들어 인덱서에 넣는다(워처 FIFO 가 하는 일).

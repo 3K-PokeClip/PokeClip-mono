@@ -58,15 +58,14 @@ const (
 	DeclineSkipped SeedDecline = "existing_cutoff"
 )
 
-// SeedResult 는 개시 트랜잭션의 산출 carrier 다(주조 + 세션 개시).
+// InsertCommit 은 INSERT 트랜잭션의 커밋 사실이다 — 주조 결과와 세션 개시를 함께 나른다.
 //
 // 주조 결과에 더해 이 트랜잭션이 **커밋한** 세션·carrier 값을 싣는다 — 루프가 DB 를 다시
 // 묻지 않고 방금 쓴 행과 새로 연 세션을 아는 통로가 이것 하나다(계획 3절 형상 결정 2).
-// 이름이 주조 시절 그대로인 것은 알려진 부채다(계획 부기 16 — 개명은 M5 축).
 //
 // 행이 들어가지 않은 호출(오류·중복·seq 충돌)의 결과는 영값이다. 그 트랜잭션은 롤백됐으므로
 // 세션을 열었어도 개시로 보고하지 않는다.
-type SeedResult struct {
+type InsertCommit struct {
 	Seeded  bool
 	Decline SeedDecline
 	// DiagErr 는 Decline **귀속 진단** 쿼리의 실패다 — 삽입·주조 결과와 무관하며 신호

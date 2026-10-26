@@ -155,7 +155,7 @@ func rewindLedgerFixture(t *testing.T, pool *pgxpool.Pool) string {
 
 // 조각 축 — seq ≥ 컷오프 행 전량을 seq 순으로, ③ 상태와 GAP 원장 소속을 얹어 읽는다. 컷오프 행 자신이
 // 포함되고(seq 12 — `>` 로 쓰면 빠진다) 그 아래 행(A 의 10·11)과 다른 스트림 행은 없다. 비귀속 행의
-// NULL carrier 는 영값으로 온다(SeedResult 와 같은 규약).
+// NULL carrier 는 영값으로 온다(InsertCommit 과 같은 규약).
 func TestLoadRewindLedgerReadsSegmentAxisFromCutoff(t *testing.T) {
 	pool := newTestPool(t)
 	stream := rewindLedgerFixture(t, pool)

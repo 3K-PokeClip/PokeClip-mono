@@ -45,13 +45,13 @@ func at(d time.Duration) time.Time { return t0.Add(d) }
 func key(seq int64) string { return fmt.Sprintf("dvr/%s/seg/%06d.m4s", stream, seq) }
 
 // seedOf 는 회차 sessionID 에 귀속된 seq 행의 커밋 결과(개시 아님)다. 인덱서가 INSERT 뒤에 넘기는 값이다.
-func seedOf(sessionID string, seq int64, pdt time.Time, durationMS int32) index.SeedResult {
-	return index.SeedResult{SessionID: sessionID, PlaybackPDT: pdt, PlaybackS3Key: key(seq), DurationMS: durationMS}
+func seedOf(sessionID string, seq int64, pdt time.Time, durationMS int32) index.InsertCommit {
+	return index.InsertCommit{SessionID: sessionID, PlaybackPDT: pdt, PlaybackS3Key: key(seq), DurationMS: durationMS}
 }
 
 // openingOf 는 seq 행이 회차 s 를 연 커밋 결과다 — 개시가 새 회차 행에 쓴 값(base · 계승 · TD)을 싣고,
 // 개시 행의 PDT 가 곧 그 회차의 first_pdt 다.
-func openingOf(s index.RewindSession, seq int64, durationMS int32) index.SeedResult {
+func openingOf(s index.RewindSession, seq int64, durationMS int32) index.InsertCommit {
 	res := seedOf(s.SessionID, seq, s.FirstPDT, durationMS)
 	res.SessionOpened = true
 	res.DiscontinuityBase, res.InheritsSession, res.TargetDuration = s.DiscontinuityBase, s.InheritsSession, s.TargetDuration
@@ -59,7 +59,7 @@ func openingOf(s index.RewindSession, seq int64, durationMS int32) index.SeedRes
 }
 
 // seeded 는 res 의 INSERT 가 컷오프를 주조했다고 표시한다(주조 CTE 가 1행을 넣었다).
-func seeded(res index.SeedResult) index.SeedResult {
+func seeded(res index.InsertCommit) index.InsertCommit {
 	res.Seeded = true
 	return res
 }

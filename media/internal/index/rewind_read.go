@@ -22,7 +22,7 @@ import (
 // is_discontinuity 를 뺀 것이다. 끊김 표시는 그 열을 근거로 쓰지 않으므로(계획 부기 29) 싣지 않는다 —
 // 실리지 않은 값은 표시 규칙이 잘못 읽을 수도 없다(계획 6.3 #7·#42 의 방어가 타입에 선다).
 //
-// NULL 은 영값이다(SeedResult 와 같은 규약). 세 carrier 열에는 NULL 아니면 실제 값이 들어가므로
+// NULL 은 영값이다(InsertCommit 과 같은 규약). 세 carrier 열에는 NULL 아니면 실제 값이 들어가므로
 // 영값과 겹치지 않는다.
 type RewindRow struct {
 	Seq int64

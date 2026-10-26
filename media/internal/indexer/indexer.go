@@ -226,7 +226,7 @@ type Indexer struct {
 	// opened 는 이 프로세스가 본 스트림별 마지막 개시 행의 결과다 — 그 회차의 init 요청이 개시 행의 계승 게이트
 	// 입력(물려받은 회차 · 그 회차 첫 조각 경로)을 싣게 한다. 거부 뒤 다음 행의 재요청도 같다(판단 J64). 수명은
 	// initAdmitted 와 같다.
-	opened map[string]index.SeedResult
+	opened map[string]index.InsertCommit
 	// rewind 는 되감기 캐시다(rewind/cache). 장부에 커밋된 행(advance)과 꼬리 교정(correctTail)을
 	// 커밋 직후 그대로 넘긴다 — 캐시가 평시 DB 를 묻지 않고 목록을 만들 수 있는 통로가 이 둘이다(프로필
 	// 4절 「합성은 평시 DB 조회 0」). nil 이면 넘기지 않는다(캐시의 nil 규약 — 조립은 M4 PR ⓒ).
@@ -355,7 +355,7 @@ func New(store index.Store, probe fmp4meta.DurationProbe, w Adopter,
 		requested:       map[string]int64{},
 		chains:          map[string]playbackChain{},
 		initAdmitted:    map[string]string{},
-		opened:          map[string]index.SeedResult{},
+		opened:          map[string]index.InsertCommit{},
 		pendingOffline:  map[string]sessionMark{},
 		lastOnlineAt:    map[string]time.Time{},
 		breaks:          map[string][]sessionBreak{},
@@ -652,7 +652,7 @@ func (ix *Indexer) promote(ctx context.Context, seg recording.Segment, d, size i
 // 다시 파생하면 ⓐ1→ⓐ2 폴백이 일어난 조각의 로그가 장부와 갈린다(로그: live_ingress /
 // 장부: state_obs) — 설계 9.1 f0~f3 이 seed_reason 으로 국면을 가르므로 그 순간
 // 게이트가 재는 대상이 사라진다.
-func (ix *Indexer) logSeed(seg recording.Segment, seq int64, seed index.Seed, res index.SeedResult) {
+func (ix *Indexer) logSeed(seg recording.Segment, seq int64, seed index.Seed, res index.InsertCommit) {
 	if !ix.opt.SeedEnabled {
 		return
 	}
@@ -871,7 +871,7 @@ func (ix *Indexer) buildRecord(cur *index.Cursor, seg recording.Segment, d, size
 // advance 는 커서를 한 칸 전진시킨다.
 // 꼬리 행 하나만 갈아 끼우면 파생 3값이 동시에 맞는다 — 빠뜨릴 곳 자체가 없어진다.
 // ③ 도장 사슬도 이 자리에서 행마다 한 번 전진하고(res·mtxi 가 그 재료다), 업로드 요청이 뒤따른다.
-func (ix *Indexer) advance(cur *index.Cursor, seg recording.Segment, rec index.Record, res index.SeedResult, mtxi *playback.Mtxi) {
+func (ix *Indexer) advance(cur *index.Cursor, seg recording.Segment, rec index.Record, res index.InsertCommit, mtxi *playback.Mtxi) {
 	// 직전 꼬리를 붙잡아 둔다 — 이 INSERT 로 그 행은 더 이상 꼬리가 아니게 되므로,
 	// 보류 중이었다면 지금이 올릴 때다(파일이 더 자랄 수 없다).
 	prev := cur.Tail

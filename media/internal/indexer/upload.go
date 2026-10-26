@@ -64,7 +64,7 @@ func (noUploader) RequestUpload(index.UploadTarget) bool { return false }
 // 거부가 다른 축을 세우지 않는다(설계 3.3·5.5.3). 보류 중이던 직전 꼬리의 승격이 새 행보다 먼저라
 // ③ 요청(업로더의 보정값 표 기록)이 seq 순을 지킨다(계획 4.2-R 규칙 ①). init 은 새 행의 ③ 보다
 // 먼저 넣는다 — 워커가 하나라 init 확정이 앞서면 그 회차의 ③ 이 대조 보류를 거치지 않는다.
-func (ix *Indexer) requestRowUploads(seg recording.Segment, prev, tail *index.TailRow, res index.SeedResult, playbackTarget *index.UploadTarget) {
+func (ix *Indexer) requestRowUploads(seg recording.Segment, prev, tail *index.TailRow, res index.InsertCommit, playbackTarget *index.UploadTarget) {
 	now := time.Now()
 	// 보류 중이던 직전 꼬리를 승격한다. 더 이상 꼬리가 아니므로 IsTail=false 다 —
 	// 워커의 크기 재확인이 이 값으로 갈린다(결정 4⁵).
