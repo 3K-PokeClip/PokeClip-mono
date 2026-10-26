@@ -756,6 +756,11 @@ docker build -f services/auth/Dockerfile -t pokeclip-auth services/
 베이스 이미지는 네 서버 모두 `eclipse-temurin:21-jdk`(빌드) →
 `eclipse-temurin:21-jre`(실행)로 통일했다.
 
+**실행 계정은 root 가 아니다**(POK-486). auth `10005` · clip `10006` ·
+chat-collector `10007` · chat-detector `10008`이고 GID 도 같은 번호다. 정본은
+각 Dockerfile 의 `USER`이고, compose 와 ECS 태스크 정의는 `user`를 따로 적지
+않는다.
+
 **테스트도 팀과 같은 이미지를 쓴다** — Testcontainers가 `postgres:17`을 띄운다.
 compose와 메이저 버전이 갈리면 로컬·CI만 통과하고 실제 DB에서 깨지는 차이를 못 잡는다.
 
