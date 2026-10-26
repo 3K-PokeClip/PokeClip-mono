@@ -78,8 +78,13 @@ output "app_env" {
     })
     # 스위치는 배치(POK-306)가 AUTH_BASE_URL · INTERNAL_API_TOKEN 과 함께
     # 정한다 — AUTH_BASE_URL 이 없으면 localhost 로 떠서 틀린 주소로 돈다.
+    # 앱 ID 둘은 auth 와 같은 앱이다(auth_oauth_apps — 비밀은 app_secret_arns).
+    # 치지직 ID 는 방송 정보 목록이, SOOP ID 는 SOOP 채팅 SDK 가 쓴다. 기능이
+    # 켜졌는데 비면 부팅을 거부한다.
     "chat-collector" = merge(local.app_db_env, {
       BROADCAST_QUEUE_URL = aws_sqs_queue.broadcast["chat"].url
+      CHZZK_CLIENT_ID     = var.auth_oauth_apps.chzzk.client_id
+      SOOP_CLIENT_ID      = var.auth_oauth_apps.soop.client_id
     })
     "chat-detector" = local.app_db_env
     # 일꾼은 DB 를 읽지 않는다. 숨김은 큐의 숨김 시간과 같은 상수에서 만든다
