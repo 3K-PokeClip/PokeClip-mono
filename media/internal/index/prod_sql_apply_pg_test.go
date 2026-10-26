@@ -579,6 +579,71 @@ func TestProdSQLVerifyCatchesPrivilegeDrift(t *testing.T) {
 	}
 }
 
+// 음성 대조(M6-0) — 장부 스키마와 M6 권한이 어긋나면 40 이 바로 그 단언으로만 잡는다. 트리거를 지운 DB 가
+// VERIFY OK 로 지나가면 하한 없이 이미지가 배포된다(seq 재사용 — 불변식 4).
+func TestProdSQLVerifyCatchesLedgerSchemaDrift(t *testing.T) {
+	env := newProdSQLEnv(t)
+	env.mustApplyAll(t)
+	tests := []struct {
+		name   string
+		tamper string
+		want   []string
+	}{
+		{
+			name:   "floor guard trigger dropped",
+			tamper: "DROP TRIGGER stream_segments_seq_floor_guard ON stream_segments",
+			want:   []string{"trigger:stream_segments_seq_floor_guard"},
+		},
+		{
+			name:   "floor raise trigger dropped",
+			tamper: "DROP TRIGGER stream_segments_seq_floor_raise ON stream_segments",
+			want:   []string{"trigger:stream_segments_seq_floor_raise"},
+		},
+		{
+			name:   "floor raise function not security definer",
+			tamper: "ALTER FUNCTION stream_segments_raise_seq_floor() SECURITY INVOKER",
+			want:   []string{"function:stream_segments_raise_seq_floor"},
+		},
+		{
+			name:   "floor guard function search_path reset",
+			tamper: "ALTER FUNCTION stream_segments_check_seq_floor() RESET search_path",
+			want:   []string{"function:stream_segments_check_seq_floor"},
+		},
+		{
+			name:   "session column dropped",
+			tamper: "ALTER TABLE stream_sessions DROP COLUMN stop_marked_at",
+			want:   []string{"ledger_column:stream_sessions.stop_marked_at"},
+		},
+		{
+			name:   "round open index dropped",
+			tamper: "DROP INDEX stream_sessions_round_open_idx",
+			want:   []string{"index:stream_sessions_round_open_idx"},
+		},
+		{
+			name:   "M6 expiry privilege revoked",
+			tamper: "REVOKE DELETE ON stream_segments FROM media_indexer",
+			want:   []string{"privilege:media_indexer:stream_segments:DELETE"},
+		},
+		{
+			name:   "floor table write granted",
+			tamper: "GRANT UPDATE ON stream_seq_floors TO media_indexer",
+			want:   []string{"privilege:media_indexer:stream_seq_floors:UPDATE"},
+		},
+		{
+			name:   "outbox privilege revoked",
+			tamper: "REVOKE INSERT ON broadcast_lifecycle_outbox FROM media_indexer",
+			want:   []string{"privilege:media_indexer:broadcast_lifecycle_outbox:INSERT"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := env.verifyFailuresAfter(t, tt.tamper); !slices.Equal(got, tt.want) {
+				t.Errorf("%s 뒤 40_verify.sql 실패 단언 = %q, want %q", tt.tamper, got, tt.want)
+			}
+		})
+	}
+}
+
 // probeRow 는 50 의 결과에서 첫 열이 phase 인 행(phase, PUBLIC EXECUTE, media_indexer EXECUTE)이다.
 func probeRow(t *testing.T, results []*pgconn.Result, phase string) [3]string {
 	t.Helper()

@@ -370,15 +370,23 @@ INFO `db_connected` 한 줄을 남긴다. 실패하면 이 줄 없이 기동이 
 표다 — 열 단위로 주면 3번이 승인한 열이 추가될 때마다 운영 GRANT 가 깨진다.
 
 ```sql
-GRANT SELECT, INSERT, UPDATE ON stream_segments TO media_indexer;
-GRANT SELECT, INSERT, UPDATE ON stream_sessions TO media_indexer;
-GRANT SELECT, INSERT ON stream_cutoffs TO media_indexer;
-GRANT SELECT, INSERT, UPDATE ON stream_published_gaps TO media_indexer;
+GRANT SELECT, INSERT, UPDATE, DELETE ON stream_segments TO media_indexer;
+GRANT SELECT, INSERT, UPDATE, DELETE ON stream_sessions TO media_indexer;
+GRANT SELECT, INSERT, UPDATE, DELETE ON stream_cutoffs TO media_indexer;
+GRANT SELECT, INSERT, UPDATE, DELETE ON stream_published_gaps TO media_indexer;
+GRANT SELECT ON stream_seq_floors TO media_indexer;
+GRANT SELECT, INSERT, UPDATE, DELETE ON broadcast_lifecycle_outbox TO media_indexer;
 ```
 
-- **DELETE · TRUNCATE 없음.** 사이드카는 행을 지우지 않는다.
-  `stream_cutoffs` 에는 UPDATE 도 없다 — 컷오프는 주조 때 한 번 넣고
-  (`ON CONFLICT DO NOTHING`) 고치지 않는다.
+- **DELETE 는 M6 만료 · outbox 몫만이다(ADR-0006 개정 —
+  `docs/decisions/2026-10-26-media-indexer-m6-delete-grants.md`).** 60일
+  만료가 조각 · GAP · 세션 행과 그 회차 outbox 행을 지우고, 발행기가 끝난
+  outbox 행을 지운다. `stream_cutoffs` 의 UPDATE · DELETE 는 만료의 컷오프
+  전진 · 제거 몫이다 — 주조는 여전히 한 번 넣고(`ON CONFLICT DO NOTHING`)
+  고치지 않는다. 쓰는 문장은 M6-4 · M6-8 이 들이고, 권한은 미리 준다.
+- **TRUNCATE 없음 · `stream_seq_floors` 는 SELECT 만.** seq 하한은
+  `stream_segments` 의 `AFTER DELETE` 트리거가 정의자(표 소유자) 권한으로
+  올린다. 사이드카가 하한을 내리거나 지울 수 없다.
 - **DDL 없음 — `ENSURE_SCHEMA=false`.** 스키마(`internal/index/ddl.go`)는
   별도 역할이 적용한다. 이 계정으로 `ENSURE_SCHEMA=true` 를 켜면 기동 때
   42501 로 막힌다.
@@ -445,8 +453,13 @@ SELECT has_schema_privilege('media_indexer', 'public', 'CREATE');  -- false 여�
   DB 는 `template1` 을 복제하므로 새 DB 까지 막으려면 `template1` 에도 한다.
   운영에 앞서 스테이징 DB 에서 회수와 관련 도구 동작을 먼저 확인한다.
   함수를 허용받은 계정끼리는 키 단위로 막을 수 없다.
-- **`stream_cutoffs` 가 오염되면 DBA 가 손으로 고친다.** 이 계정에는
-  UPDATE · DELETE 가 없어 잘못 들어간 컷오프를 사이드카가 고칠 수 없다.
+- **표 단위 DELETE 는 장부 행 삭제를 연다.** 사이드카 자격이 새면 조각 ·
+  세션 · GAP · outbox 행과 컷오프를 지울 수 있다. 하한 트리거는 지운 뒤의
+  seq 재사용만 막고(불변식 4), 지운 행 자체는 되살리지 못한다 — 복구는 백업
+  뿐이다. 만료 전용 계정으로 나누는 안은 기각했다(ADR-0006 개정).
+- **`stream_cutoffs` 가 오염되면 DBA 가 손으로 고친다.** 사이드카의 UPDATE
+  · DELETE 는 만료 문장(장부 값으로만 전진)용이고, 잘못 들어간 컷오프를
+  고치는 경로는 아니다.
 
 **시험 경로.** 목록의 정본은 `internal/pgtest/role.go` 한 곳이고, 위 블록과
 같다는 것을 `internal/pgtest/role_test.go` 가 단언한다. SQL 이 사는 패키지마다
@@ -2509,8 +2522,12 @@ janitor 는 파일을 지운 뒤 장부 갱신에 실패한 행을 「부채」�
 
     ```sql
     GRANT SELECT ON stream_segments, stream_sessions, stream_cutoffs TO media_janitor;
+    GRANT SELECT ON stream_published_gaps TO media_janitor;
     GRANT UPDATE (local_path) ON stream_segments TO media_janitor;
     ```
+
+    `stream_published_gaps` SELECT 는 M6 의 ③ 포기 조각 갈래(GAP 원장의
+    `vod_abandoned` 행을 읽는다)를 위해 미리 준다.
 
     계정(`CREATE ROLE media_janitor LOGIN …`)은 DB 관리자가 만들고 비밀번호는
     비밀 관리자(Secrets Manager)에만 둔다(IAM 인증이면 비밀번호 없음) — 문서 ·

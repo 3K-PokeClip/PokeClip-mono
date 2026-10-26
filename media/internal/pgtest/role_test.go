@@ -56,11 +56,28 @@ func TestMediaIndexerGrantsMatchREADME(t *testing.T) {
 	}
 }
 
-// 권한은 표 단위 SELECT · INSERT · UPDATE 안에서만 준다(kty 결정 Q3 — DELETE 없음). 사이드카는 행을 지우지
-// 않고(지우는 쪽은 M6 만료 · 장애 절차) DDL 도 내지 않는다(ENSURE_SCHEMA=false).
-func TestMediaIndexerGrantsStayWithinSelectInsertUpdate(t *testing.T) {
-	allowed := []string{"SELECT", "INSERT", "UPDATE"}
+// mediaIndexerAllowance 는 ADR-0006 개정(2026-10-26 — I1-2 권한 절)이 표마다 허용한 권한의 상한이다. DELETE 는 M6
+// 만료 · outbox 정리 몫(segments · sessions · gaps · outbox)뿐이고, stream_cutoffs 의 UPDATE · DELETE 는 만료의 컷오프
+// 전진 · 제거 몫이다. stream_seq_floors 는 SELECT 만이다 — 하한은 트리거가 정의자 권한으로 올린다. TRUNCATE · DDL 은
+// 어느 표에도 없다(ENSURE_SCHEMA=false).
+var mediaIndexerAllowance = map[string][]string{
+	"stream_segments":            {"SELECT", "INSERT", "UPDATE", "DELETE"},
+	"stream_sessions":            {"SELECT", "INSERT", "UPDATE", "DELETE"},
+	"stream_cutoffs":             {"SELECT", "INSERT", "UPDATE", "DELETE"},
+	"stream_published_gaps":      {"SELECT", "INSERT", "UPDATE", "DELETE"},
+	"stream_seq_floors":          {"SELECT"},
+	"broadcast_lifecycle_outbox": {"SELECT", "INSERT", "UPDATE", "DELETE"},
+}
+
+// 권한은 ADR-0006 개정이 표마다 허용한 상한 안에서만 준다 — 목록에 상한 밖 권한(하한 표 쓰기 · TRUNCATE 등)이나
+// 상한에 없는 표가 들어오면 깨진다.
+func TestMediaIndexerGrantsStayWithinADR0006Allowance(t *testing.T) {
 	for _, g := range mediaIndexerGrants {
+		allowed, ok := mediaIndexerAllowance[g.table]
+		if !ok {
+			t.Errorf("표 %s 는 ADR-0006 개정의 허용 표 밖이다", g.table)
+			continue
+		}
 		for _, p := range g.privileges {
 			if !slices.Contains(allowed, p) {
 				t.Errorf("%s 의 권한 %q 는 허용 목록 %v 밖이다", g.table, p, allowed)
@@ -82,7 +99,7 @@ func roleTables(ctx context.Context, pool *pgxpool.Pool) error {
 func noReset(context.Context, *pgxpool.Pool) error { return nil }
 
 // 역할은 시험이 끝나면 권한을 거두고 지워진다 — 클러스터 전역 객체라 남으면 다음 실행 · 다른 패키지에
-// 쌓인다. 역할 풀은 목록대로 SELECT 가 되고 권한 밖(DELETE)은 42501 이다. 성공한 문장만 기록에 남는다.
+// 쌓인다. 역할 풀은 목록대로 SELECT 가 되고 권한 밖(TRUNCATE)은 42501 이다. 성공한 문장만 기록에 남는다.
 func TestMediaIndexerRoleGrantsListAndDropsAfterTest(t *testing.T) {
 	admin := Pool(t, "roletest", roleTables, noReset)
 	ctx := context.Background()
@@ -99,13 +116,13 @@ func TestMediaIndexerRoleGrantsListAndDropsAfterTest(t *testing.T) {
 		if err := r.Pool.QueryRow(ctx, okSQL).Scan(&n); err != nil {
 			t.Fatalf("SELECT 오류 = %v, want nil", err)
 		}
-		const deniedSQL = "DELETE FROM stream_segments"
+		const deniedSQL = "TRUNCATE stream_segments"
 		if _, err := r.Pool.Exec(ctx, deniedSQL); !IsInsufficientPrivilege(err) {
-			t.Errorf("DELETE 오류 = %v, want 42501", err)
+			t.Errorf("TRUNCATE 오류 = %v, want 42501", err)
 		}
 		r.RequireSent(t, map[string]string{"okSQL": okSQL})
 		if r.sent.has(deniedSQL) {
-			t.Error("실패한 DELETE 가 성공 기록에 남았다")
+			t.Error("실패한 TRUNCATE 가 성공 기록에 남았다")
 		}
 		if got := r.sent.deniedStatements(); !slices.Equal(got, []string{deniedSQL}) {
 			t.Errorf("거부 기록 = %q, want [%q] — RequireNoneDenied 가 보는 목록이다", got, deniedSQL)
@@ -150,9 +167,13 @@ func TestRevokeSQLAcceptsOnlyGrantedPairs(t *testing.T) {
 	if err != nil || got != "REVOKE UPDATE ON stream_sessions FROM r1" {
 		t.Errorf(`revokeSQL("UPDATE", "stream_sessions") = %q, %v`, got, err)
 	}
+	got, err = revokeSQL("DELETE", "broadcast_lifecycle_outbox", "r1")
+	if err != nil || got != "REVOKE DELETE ON broadcast_lifecycle_outbox FROM r1" {
+		t.Errorf(`revokeSQL("DELETE", "broadcast_lifecycle_outbox") = %q, %v`, got, err)
+	}
 	for _, c := range []struct{ privilege, table string }{
-		{"DELETE", "stream_segments"},
-		{"UPDATE", "stream_cutoffs"},
+		{"INSERT", "stream_seq_floors"},
+		{"TRUNCATE", "stream_segments"},
 		{"SELECT", "pg_authid"},
 		{"select", "stream_segments"},
 		{"SELECT, INSERT", "stream_segments"},
