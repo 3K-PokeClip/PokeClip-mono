@@ -143,7 +143,7 @@ func Validate(p Playlist, body []byte, gen int64, prev *Published) error {
 		return violation("S3", "실린 조각이 없다 — 범위가 없는 목록이다")
 	}
 	lines, segs := splitBody(body)
-	if err := checkBodyMatchesRows(p, lines, segs); err != nil {
+	if err := checkBodyMatchesRows(p, body, lines, segs); err != nil {
 		return err
 	}
 	if err := checkInheritedPrefix(p, segs); err != nil {
@@ -172,6 +172,7 @@ func Validate(p Playlist, body []byte, gen int64, prev *Published) error {
 //	조각 수 = 행 수
 //	머리 넷   VERSION · TD · MSN · DISC-SEQ 줄이 첫 조각 앞에 한 줄씩 — 값은 6 · 소유 회차 TD · 첫 행 seq ·
 //	         소유 회차 base(headerMismatch)
+//	종류·닫힘 PLAYLIST-TYPE 줄 = KindVOD 면 VOD 한 줄 · 아니면 0줄 · ENDLIST 줄 있음 = Ended(headerMismatch)
 //	조각마다  URI = BaseURL + "/" + playback_s3_key · PDT 줄 = playback_pdt(ms 로 자름) ·
 //	         EXTINF 줄 = duration_ms · GAP 줄은 GAP 원장에 있는 행에만 · MAP 줄 개수·위치
 //	         (segmentMismatch)
@@ -185,12 +186,12 @@ func Validate(p Playlist, body []byte, gen int64, prev *Published) error {
 // MAP 의 있고 없음·값과 URI 의 절대성은 S4·S5 가 본문에서 읽고, DISCONTINUITY 는 어느 검사도 읽지 않는다.
 // 서식(EXTINF 소수 셋째 자리 · pdtLayout · URI 결합)은 Render 와 같다 — 둘이 갈리면 모든 목록이 여기서
 // 멈추므로 곧바로 드러난다(g6_f2 검사).
-func checkBodyMatchesRows(p Playlist, lines []string, segs []segmentLines) error {
+func checkBodyMatchesRows(p Playlist, body []byte, lines []string, segs []segmentLines) error {
 	if len(segs) != len(p.Rows) {
 		return violation("S5", "본문의 조각 %d개가 목록 행 %d개와 다르다 — 본문이 이 목록의 렌더 결과가 아니다",
 			len(segs), len(p.Rows))
 	}
-	if problem := p.headerMismatch(lines, segs[0]); problem != "" {
+	if problem := p.headerMismatch(body, lines, segs[0]); problem != "" {
 		return violation("S5", "머리 줄이 목록 값과 다르다 — %s", problem)
 	}
 	for i, r := range p.Rows {
@@ -208,7 +209,12 @@ func checkBodyMatchesRows(p Playlist, lines []string, segs []segmentLines) error
 // 하나」)이다. 「첫 조각 앞」이 RFC 의 MUST 인 것은 MSN·DISC-SEQ 뿐이고(4.4.3.2·4.4.3.3), VERSION·TD 는
 // 렌더가 쓰는 자리(목록 머리)를 기준으로 삼았다. 값은 VERSION 6(render.go 와 같은 값 — 계획 부기
 // 32) · 소유 회차 TD · 첫 행 seq · 소유 회차 base 다. 소유 회차를 못 찾으면 영값이라 대조가 어긋나 멈춘다.
-func (p Playlist) headerMismatch(lines []string, first segmentLines) string {
+//
+// 목록 값 Kind · Ended 도 본문과 견준다(M6-1 검수 cc c3 M1). PLAYLIST-TYPE 은 KindVOD 면 VOD 한 줄이 첫
+// 조각 앞에(4.4.3.5 — 머리 태그), KindSliding 이면 0줄이다 — /dvr 목록에 실리면 닫을 때 없던 머리 태그를
+// 더한 변경이 된다(6.2.1). ENDLIST 는 본문에 있는가(hasEndlist — 메타 pc-terminal 과 S6 이 쓰는 판정)가
+// Ended 와 같아야 한다 — 아니면 메타는 닫혔다는데 본문은 열려 있다.
+func (p Playlist) headerMismatch(body []byte, lines []string, first segmentLines) string {
 	owner, _ := p.session(p.Owner)
 	for _, want := range []string{
 		"#EXT-X-VERSION:6",
@@ -220,6 +226,17 @@ func (p Playlist) headerMismatch(lines []string, first segmentLines) string {
 		if got := linesWithPrefix(lines, tag+":"); !slices.Equal(got, []string{want}) || !slices.Contains(first.tags, want) {
 			return fmt.Sprintf("%s 줄 %q — 첫 조각 앞 한 줄 %q 여야 한다", tag, got, want)
 		}
+	}
+	const playlistType = "#EXT-X-PLAYLIST-TYPE"
+	var wantType []string
+	if p.Kind == KindVOD {
+		wantType = []string{playlistType + ":VOD"}
+	}
+	if got := linesWithPrefix(lines, playlistType+":"); !slices.Equal(got, wantType) || (wantType != nil && !slices.Contains(first.tags, wantType[0])) {
+		return fmt.Sprintf("%s 줄 %q — 종류 %d 의 목록은 첫 조각 앞 %q 여야 한다", playlistType, got, p.Kind, wantType)
+	}
+	if ended := hasEndlist(body); ended != p.Ended {
+		return fmt.Sprintf("본문의 ENDLIST 줄 있음 = %t — 목록 값 Ended 는 %t 다", ended, p.Ended)
 	}
 	return ""
 }
@@ -430,7 +447,7 @@ func totalMS(rows []boundary.Row) int64 {
 //	첫 성분이 목록의 스트림이다(계획 B #10). 키는 URI 줄에 그대로 실리므로 CR · 따옴표 · NUL 같은 글자가 줄로 새거나
 //	다른 스트림의 객체를 가리키는 줄을 막는다 — 「본문 = 목록 값」 조항은 본문이 키를 그대로 적었는지만 본다
 //
-// 「본문 = 목록 값」 조항(조각 수 · 머리 넷 · URI · PDT · EXTINF · GAP · MAP 개수·위치)은 checkBodyMatchesRows
+// 「본문 = 목록 값」 조항(조각 수 · 머리 넷 · 종류·닫힘 줄 · URI · PDT · EXTINF · GAP · MAP 개수·위치)은 checkBodyMatchesRows
 // 가 빈 목록 검사 다음, S4 보다 앞서 본다.
 func checkBody(p Playlist, body []byte, lines []string, segs []segmentLines) error {
 	switch {
