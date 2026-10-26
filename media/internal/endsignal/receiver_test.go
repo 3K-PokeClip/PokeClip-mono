@@ -262,7 +262,9 @@ func TestPerKeyLimitIs429AfterAuth(t *testing.T) {
 }
 
 // 표지 규칙(설계 7절 P13 · M6 11절): Apply 오류면 커밋 결과를 몰라 Changed 를 부르고 PostIntent 는 부르지 않는다.
-// 성공 + 효과면 Changed, 성공 + 미적용이면 둘 다 없다. RevokeSession 이 있으면 PostIntent 다.
+// 성공 + 효과면 Changed, 성공 + 미적용이면 둘 다 없다. RevokeSession 이 있으면 PostIntent 다. 미적용 가운데 contended
+// 만 503 이다(플러그인이 재시도) — 커밋 전에 접혀 표지도 없다. bad_time 은 다시 보내도 같아 202 다. 변이 = contended
+// 매핑 제거 → 202 라 FAIL.
 func TestMarkersFollowApplyResult(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -276,6 +278,8 @@ func TestMarkersFollowApplyResult(t *testing.T) {
 		{name: "오류", err: errors.New("pg: 연결 끊김"), wantStatus: 503, wantReason: "apply_failed", wantChanged: 1},
 		{name: "효과", res: session.IntentionalResult{Effect: "upgraded"}, wantStatus: 202, wantReason: "accepted", wantChanged: 1},
 		{name: "미적용", res: session.IntentionalResult{Skip: "round_closed"}, wantStatus: 202, wantReason: "accepted"},
+		{name: "미적용_시각_거부", res: session.IntentionalResult{Skip: "bad_time"}, wantStatus: 202, wantReason: "accepted"},
+		{name: "미적용_경합", res: session.IntentionalResult{SessionID: "S1", Skip: "contended"}, wantStatus: 503, wantReason: "contended"},
 		{
 			name: "분리_계승_해제", res: session.IntentionalResult{Effect: "round_split", RevokeSession: "S9"},
 			wantStatus: 202, wantReason: "accepted", wantChanged: 1,
@@ -301,6 +305,30 @@ func TestMarkersFollowApplyResult(t *testing.T) {
 		if l := f.lastEndSignal(); l.Reason != tc.wantReason {
 			t.Errorf("%s: end_signal 줄 = %+v", tc.name, l)
 		}
+	}
+}
+
+// 실 Apply 는 Apply 시한(1.5s)에 걸린 위상 잠금 대기를 오류가 아니라 Skip contended 로 돌려준다. 수신부는 그것도
+// 503 apply_timeout 으로 돌려 플러그인 재시도를 남긴다(POK-472 P4 와 같은 응답). 변이 = contended 매핑 제거 → 202 라 FAIL.
+func TestContendedAtApplyDeadlineIs503ApplyTimeout(t *testing.T) {
+	f := newFixture(t, nil)
+	f.apply = func(ctx context.Context, _ session.IntentionalEnd) (session.IntentionalResult, error) {
+		<-ctx.Done()
+		return session.IntentionalResult{Skip: "contended"}, nil
+	}
+	start := time.Now()
+	resp := f.postOK(testToken)
+	if el := time.Since(start); el > 1600*time.Millisecond {
+		t.Fatalf("응답까지 %v, want ≤ 1.6s", el)
+	}
+	if resp.status != http.StatusServiceUnavailable {
+		t.Fatalf("상태 = %d, want 503", resp.status)
+	}
+	if l := f.lastEndSignal(); l.Reason != "apply_timeout" || l.Level != "WARN" {
+		t.Fatalf("end_signal 줄 = %+v", l)
+	}
+	if changed, _, _ := f.snapshot(); len(changed) != 0 {
+		t.Errorf("Changed = %v, want 없음(커밋 전에 접혔다)", changed)
 	}
 }
 

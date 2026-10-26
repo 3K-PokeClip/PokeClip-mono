@@ -215,21 +215,19 @@ func resolveKind(err error) string {
 }
 
 // apply 는 8–10 단계다. 오류여도 커밋 결과를 모를 수 있어 Changed 를 부른다(설계 3절 9 · M6 2.2 규칙 1 — 표지는
-// 재조회라 더 불러도 같은 값이다). PostIntent 는 성공으로 RevokeSession 을 안 때만이다.
+// 재조회라 더 불러도 같은 값이다). 재시도 가능한 미적용(contended)도 503 이다 — 위상 잠금 대기가 Apply 시한을 넘긴
+// 4D 를 202 로 삼키지 않고 플러그인 재시도에 맡긴다(M6 11절). 커밋 전에 접혀 표지는 없다. PostIntent 는 성공으로
+// RevokeSession 을 안 때만이다.
 func (r *Receiver) apply(ctx context.Context, sig signal) outcome {
 	actx, cancel := context.WithTimeout(ctx, r.o.ApplyTimeout)
 	defer cancel()
 	res, err := r.o.Apply(actx, session.IntentionalEnd{StreamID: sig.token, StoppedAt: sig.stoppedAt, ConnStartedAt: sig.connStartedAt})
 	if err != nil {
 		r.o.Changed(sig.token)
-		out := outcome{status: http.StatusServiceUnavailable, reason: "apply_failed", streamID: sig.token, err: err}
-		switch {
-		case r.stopCtx.Err() != nil:
-			out.reason = "closing"
-		case actx.Err() != nil:
-			out.reason = "apply_timeout"
-		}
-		return out
+		return r.unavailable(actx, sig.token, "apply_failed", err)
+	}
+	if res.Retryable() {
+		return r.unavailable(actx, sig.token, "contended", nil)
 	}
 	if res.Effect != "" {
 		r.o.Changed(sig.token)
@@ -238,6 +236,18 @@ func (r *Receiver) apply(ctx context.Context, sig signal) outcome {
 		r.o.PostIntent(sig.token, res.RevokeSession)
 	}
 	return outcome{status: http.StatusAccepted, reason: "accepted", streamID: sig.token}
+}
+
+// unavailable 은 Apply 갈래의 503 이다. 사유는 닫힘 · Apply 시한이 reason 보다 앞선다 — 시한 · 취소가 오류로 오든
+// contended 로 접혀 오든 같은 사유로 남는다.
+func (r *Receiver) unavailable(actx context.Context, token, reason string, err error) outcome {
+	switch {
+	case r.stopCtx.Err() != nil:
+		reason = "closing"
+	case actx.Err() != nil:
+		reason = "apply_timeout"
+	}
+	return outcome{status: http.StatusServiceUnavailable, reason: reason, streamID: token, err: err}
 }
 
 // 본문 규칙(계약4 3-1).
