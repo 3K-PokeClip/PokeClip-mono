@@ -277,7 +277,7 @@ func TestOwnerChangeDuringTickStartsNewOwnerFromZero(t *testing.T) {
 	f.work.mu.Unlock()
 	f.publishOnceStart("s1", "A", 3, loopBase) // A 의 틱이 문에서 멈춘다
 	r := segRow("s1", "B", 4, false)
-	f.cache.ApplyInsert("s1", 4, index.SeedResult{SessionOpened: true, SessionID: "B", DurationMS: r.DurationMS,
+	f.cache.ApplyInsert("s1", 4, index.InsertCommit{SessionOpened: true, SessionID: "B", DurationMS: r.DurationMS,
 		TargetDuration: 6, PlaybackPDT: r.PlaybackPDT, PlaybackS3Key: r.PlaybackS3Key})
 	f.cache.ApplyInitUploaded("s1", "B", false)
 	f.hold(loopBase.Add(time.Second)) // 소유 회차가 B 로 바뀐 것을 본다

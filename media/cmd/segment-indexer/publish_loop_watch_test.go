@@ -97,7 +97,7 @@ func TestBootWatchLoadsLiveCutoffStreamsThenPublishes(t *testing.T) {
 		t.Fatalf("틱 = %+v, want s1 한 번(적재 뒤 틱)", calls)
 	}
 
-	f.cache.ApplyInsert("s3", 0, index.SeedResult{SessionOpened: true, SessionID: "N", DurationMS: 4000, TargetDuration: 6})
+	f.cache.ApplyInsert("s3", 0, index.InsertCommit{SessionOpened: true, SessionID: "N", DurationMS: 4000, TargetDuration: 6})
 	f.hold(loopBase.Add(60 * time.Second))
 	if j := f.running("s3"); j == nil || j.kind != jobLoad {
 		t.Fatalf("개시 push 뒤 같은 holdTick 의 s3 차선 = %+v, want 적재", j)
@@ -396,10 +396,10 @@ func TestIdleStreamViewForgottenAfterReconnectWindow(t *testing.T) {
 func TestViewlessPushOpensLoadWithinOneHoldTickAndPublishes(t *testing.T) {
 	tests := []struct {
 		name string
-		res  index.SeedResult
+		res  index.InsertCommit
 	}{
-		{"다음_방송_개시", index.SeedResult{SessionOpened: true, SessionID: "N", DurationMS: 4000, TargetDuration: 6}},
-		{"비개시_행_주조", index.SeedResult{Seeded: true, SessionID: "N", DurationMS: 4000}},
+		{"다음_방송_개시", index.InsertCommit{SessionOpened: true, SessionID: "N", DurationMS: 4000, TargetDuration: 6}},
+		{"비개시_행_주조", index.InsertCommit{Seeded: true, SessionID: "N", DurationMS: 4000}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -429,7 +429,7 @@ func TestTrimBoundsSessionEntriesAcrossShortBroadcasts(t *testing.T) {
 		t := f.t
 		t.Helper()
 		sid := "R" + time.Duration(i).String()
-		f.cache.ApplyInsert("s1", i, index.SeedResult{SessionOpened: true, SessionID: sid, DurationMS: 30 * 60 * 1000,
+		f.cache.ApplyInsert("s1", i, index.InsertCommit{SessionOpened: true, SessionID: sid, DurationMS: 30 * 60 * 1000,
 			TargetDuration: 6, PlaybackPDT: loopBase.Add(time.Duration(i) * time.Hour),
 			PlaybackS3Key: "dvr/s1/seg/x.m4s"})
 		f.dirty.mark(upload.DirtyEvent{Kind: upload.DirtyUploaded, StreamID: "s1", Axis: index.AxisInit, SessionID: sid})

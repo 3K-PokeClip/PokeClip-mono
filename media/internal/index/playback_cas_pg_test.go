@@ -145,7 +145,7 @@ func TestMarkPlaybackUploadedConfirmsRowThatFailedBefore(t *testing.T) {
 	ctx := context.Background()
 	openLiveSession(t, pool, "S-retry", "retrystream")
 	seedSessionSegment(t, pool, "retrystream", "S-retry", 0)
-	if _, err := st.MarkPlaybackFailed(ctx, "retrystream", 0, "S-retry", "put_failed"); err != nil {
+	if _, err := st.SettlePlaybackFailure(ctx, "retrystream", 0, "S-retry", "put_failed"); err != nil {
 		t.Fatalf("실패 확정 실패: %v", err)
 	}
 
@@ -162,7 +162,7 @@ func TestMarkPlaybackUploadedConfirmsRowThatFailedBefore(t *testing.T) {
 	}
 }
 
-func TestMarkPlaybackFailedKeepsSessionLiveForOrdinaryFailure(t *testing.T) {
+func TestSettlePlaybackFailureKeepsSessionLiveForOrdinaryFailure(t *testing.T) {
 	// 음성 대조 playback_put_failure_keeps_session_live —
 	// PUT 일시 실패·브레이커·타임아웃은 세션을 끝내지 않는다. 끝내면 순단마다 방송이 쪼개진다.
 	pool := newTestPool(t)
@@ -170,9 +170,9 @@ func TestMarkPlaybackFailedKeepsSessionLiveForOrdinaryFailure(t *testing.T) {
 	openLiveSession(t, pool, "S-put", "putstream")
 	seedSessionSegment(t, pool, "putstream", "S-put", 0)
 
-	marked, err := st.MarkPlaybackFailed(context.Background(), "putstream", 0, "S-put", "put_failed")
+	marked, err := st.SettlePlaybackFailure(context.Background(), "putstream", 0, "S-put", "put_failed")
 	if err != nil {
-		t.Fatalf("MarkPlaybackFailed 실패: %v", err)
+		t.Fatalf("SettlePlaybackFailure 실패: %v", err)
 	}
 
 	if !marked {
@@ -186,7 +186,7 @@ func TestMarkPlaybackFailedKeepsSessionLiveForOrdinaryFailure(t *testing.T) {
 	}
 }
 
-func TestMarkPlaybackFailedWithInitMismatchEndsSessionInOneTransaction(t *testing.T) {
+func TestSettlePlaybackFailureWithInitMismatchEndsSessionInOneTransaction(t *testing.T) {
 	// 설계 5.3ⓒ — 조각 failed 와 세션 ending 이 한 tx 다. 메모리 이벤트에 의존하지 않으므로
 	// 크래시·ⓐ 단독 배포에서도 상태가 유지된다.
 	pool := newTestPool(t)
@@ -194,9 +194,9 @@ func TestMarkPlaybackFailedWithInitMismatchEndsSessionInOneTransaction(t *testin
 	openLiveSession(t, pool, "S-mis", "misstream")
 	seedSessionSegment(t, pool, "misstream", "S-mis", 3)
 
-	marked, err := st.MarkPlaybackFailed(context.Background(), "misstream", 3, "S-mis", "init_mismatch")
+	marked, err := st.SettlePlaybackFailure(context.Background(), "misstream", 3, "S-mis", "init_mismatch")
 	if err != nil {
-		t.Fatalf("MarkPlaybackFailed 실패: %v", err)
+		t.Fatalf("SettlePlaybackFailure 실패: %v", err)
 	}
 
 	if !marked {
@@ -211,7 +211,7 @@ func TestMarkPlaybackFailedWithInitMismatchEndsSessionInOneTransaction(t *testin
 	}
 }
 
-func TestMarkPlaybackFailedLeavesSessionAloneWhenSegmentCASFinds0Rows(t *testing.T) {
+func TestSettlePlaybackFailureLeavesSessionAloneWhenSegmentCASFinds0Rows(t *testing.T) {
 	// 관계 결속 — 조각 CAS 가 0행이면 세션도 건드리지 않는다.
 	// 풀면 남의 세션(또는 이미 정산된 세션)이 불일치 하나로 끝난다.
 	pool := newTestPool(t)
@@ -220,9 +220,9 @@ func TestMarkPlaybackFailedLeavesSessionAloneWhenSegmentCASFinds0Rows(t *testing
 	seedSessionSegment(t, pool, "zerostream", "S-zero", 0)
 
 	// 다른 세션 id 로 부른다 → 앵커 불일치 → 0행.
-	marked, err := st.MarkPlaybackFailed(context.Background(), "zerostream", 0, "S-남의세션", "init_mismatch")
+	marked, err := st.SettlePlaybackFailure(context.Background(), "zerostream", 0, "S-남의세션", "init_mismatch")
 	if err != nil {
-		t.Fatalf("MarkPlaybackFailed 실패: %v", err)
+		t.Fatalf("SettlePlaybackFailure 실패: %v", err)
 	}
 
 	if marked {
@@ -233,7 +233,7 @@ func TestMarkPlaybackFailedLeavesSessionAloneWhenSegmentCASFinds0Rows(t *testing
 	}
 }
 
-func TestMarkPlaybackFailedForOrdinaryReasonAnchorsOnSegmentOnly(t *testing.T) {
+func TestSettlePlaybackFailureForOrdinaryReasonAnchorsOnSegmentOnly(t *testing.T) {
 	// 설계 5.5.5 둘째 문장 — 일시 실패의 앵커는 (stream_id, seq)·상태 가드뿐이다. 세션 인자는
 	// init_mismatch 결속에서만 앵커이며, 일시 실패 경로(브레이커·타임아웃)는 그것 없이도 기록된다.
 	pool := newTestPool(t)
@@ -241,9 +241,9 @@ func TestMarkPlaybackFailedForOrdinaryReasonAnchorsOnSegmentOnly(t *testing.T) {
 	openLiveSession(t, pool, "S-ord", "ordstream")
 	seedSessionSegment(t, pool, "ordstream", "S-ord", 0)
 
-	marked, err := st.MarkPlaybackFailed(context.Background(), "ordstream", 0, "", "timeout")
+	marked, err := st.SettlePlaybackFailure(context.Background(), "ordstream", 0, "", "timeout")
 	if err != nil {
-		t.Fatalf("MarkPlaybackFailed 실패: %v", err)
+		t.Fatalf("SettlePlaybackFailure 실패: %v", err)
 	}
 
 	if !marked {
@@ -254,14 +254,14 @@ func TestMarkPlaybackFailedForOrdinaryReasonAnchorsOnSegmentOnly(t *testing.T) {
 	}
 }
 
-func TestMarkPlaybackFailedWithInitMismatchRejectsEmptySession(t *testing.T) {
+func TestSettlePlaybackFailureWithInitMismatchRejectsEmptySession(t *testing.T) {
 	// init_mismatch 는 조각이 속한 그 세션을 끝낸다 — 세션 앵커가 없으면 결속이 성립하지 않는다.
 	pool := newTestPool(t)
 	st := NewUploadStore(pool)
 	openLiveSession(t, pool, "S-emp", "empstream")
 	seedSessionSegment(t, pool, "empstream", "S-emp", 0)
 
-	_, err := st.MarkPlaybackFailed(context.Background(), "empstream", 0, "", "init_mismatch")
+	_, err := st.SettlePlaybackFailure(context.Background(), "empstream", 0, "", "init_mismatch")
 
 	if err == nil {
 		t.Fatal("세션 없는 init_mismatch 가 통과했다 — 앵커 없는 결속은 끝낼 세션을 모른다")
@@ -274,7 +274,7 @@ func TestMarkPlaybackFailedWithInitMismatchRejectsEmptySession(t *testing.T) {
 	}
 }
 
-func TestMarkPlaybackFailedNeverRevertsUploadedRow(t *testing.T) {
+func TestSettlePlaybackFailureNeverRevertsUploadedRow(t *testing.T) {
 	// IN ('pending','failed') 가드 — 이미 uploaded 인 ③ 이 늦게 도착한 실패로 되돌아가면
 	// 되감기 목록의 연속 접두에 구멍이 생긴다(인덱스 불변식 1). 결속 갈래도 같은 가드다.
 	for _, reason := range []string{"put_failed", "init_mismatch"} {
@@ -288,13 +288,13 @@ func TestMarkPlaybackFailedNeverRevertsUploadedRow(t *testing.T) {
 				t.Fatalf("③ 확정 실패: %v", err)
 			}
 
-			marked, err := st.MarkPlaybackFailed(ctx, "upstream", 0, "S-up", reason)
+			marked, err := st.SettlePlaybackFailure(ctx, "upstream", 0, "S-up", reason)
 			if err != nil {
-				t.Fatalf("MarkPlaybackFailed(%s) 실패: %v", reason, err)
+				t.Fatalf("SettlePlaybackFailure(%s) 실패: %v", reason, err)
 			}
 
 			if marked {
-				t.Errorf("MarkPlaybackFailed(%s) marked = true, want false", reason)
+				t.Errorf("SettlePlaybackFailure(%s) marked = true, want false", reason)
 			}
 			if state, _, _ := playbackStateOf(t, pool, "upstream", 0); state != "uploaded" {
 				t.Errorf("③ state = %q, want uploaded — 확정된 행이 되돌아갔다", state)
@@ -330,7 +330,7 @@ ALTER TABLE stream_sessions ADD CONSTRAINT itest_reject_init_mismatch_ending
 	}
 }
 
-func TestMarkPlaybackFailedWithInitMismatchRollsBackSegmentWhenSessionTransitionFails(t *testing.T) {
+func TestSettlePlaybackFailureWithInitMismatchRollsBackSegmentWhenSessionTransitionFails(t *testing.T) {
 	// 결속 = 한 트랜잭션 — 세션 전이가 실패하면 조각 CAS 도 남지 않는다. 둘이 따로 커밋되면
 	// "③ 은 failed 인데 세션은 live" 가 장부에 굳어 다음 조각이 옛 MAP 세션에 계속 붙는다.
 	pool := newTestPool(t)
@@ -339,7 +339,7 @@ func TestMarkPlaybackFailedWithInitMismatchRollsBackSegmentWhenSessionTransition
 	seedSessionSegment(t, pool, "rbstream", "S-rb", 0)
 	rejectInitMismatchEnding(t, pool)
 
-	_, err := st.MarkPlaybackFailed(context.Background(), "rbstream", 0, "S-rb", "init_mismatch")
+	_, err := st.SettlePlaybackFailure(context.Background(), "rbstream", 0, "S-rb", "init_mismatch")
 
 	if err == nil {
 		t.Fatal("세션 전이가 막혔는데 오류가 없다")
@@ -352,7 +352,7 @@ func TestMarkPlaybackFailedWithInitMismatchRollsBackSegmentWhenSessionTransition
 	}
 }
 
-func TestMarkPlaybackFailedWithInitMismatchKeepsReasonOfSessionAlreadyEnding(t *testing.T) {
+func TestSettlePlaybackFailureWithInitMismatchKeepsReasonOfSessionAlreadyEnding(t *testing.T) {
 	// state='live' 술어 — 이미 다른 사유로 끝나는 세션의 기록을 덮지 않는다(TD 분할의 종료 문장과
 	// 같은 술어, 부기 21). 조각은 여전히 failed 로 확정된다.
 	pool := newTestPool(t)
@@ -366,9 +366,9 @@ UPDATE stream_sessions SET state = 'ending', ending_at = now(), end_reason = 'td
 		t.Fatalf("세션 종료 픽스처 실패: %v", err)
 	}
 
-	marked, err := st.MarkPlaybackFailed(ctx, "tdendstream", 0, "S-td", "init_mismatch")
+	marked, err := st.SettlePlaybackFailure(ctx, "tdendstream", 0, "S-td", "init_mismatch")
 	if err != nil {
-		t.Fatalf("MarkPlaybackFailed 실패: %v", err)
+		t.Fatalf("SettlePlaybackFailure 실패: %v", err)
 	}
 
 	if !marked {
@@ -399,8 +399,8 @@ func TestInitMismatchEndsSessionAndNextSegmentOpensFreshSession(t *testing.T) {
 		t.Fatalf("둘째 Insert 실패: %v", err)
 	}
 
-	if _, err := up.MarkPlaybackFailed(ctx, stream, 1, first.SessionID, "init_mismatch"); err != nil {
-		t.Fatalf("MarkPlaybackFailed 실패: %v", err)
+	if _, err := up.SettlePlaybackFailure(ctx, stream, 1, first.SessionID, "init_mismatch"); err != nil {
+		t.Fatalf("SettlePlaybackFailure 실패: %v", err)
 	}
 	_, next, err := store.Insert(ctx, segAt(stream, 2, sessionBase.Add(8*time.Second), 4000), Seed{}, liveIngress())
 	if err != nil {

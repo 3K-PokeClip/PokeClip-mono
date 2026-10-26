@@ -41,7 +41,7 @@ func (s *stubStore) MarkPlaybackUploaded(context.Context, string, int64, int64) 
 	return true, nil
 }
 
-func (s *stubStore) MarkPlaybackFailed(context.Context, string, int64, string, string) (bool, error) {
+func (s *stubStore) SettlePlaybackFailure(context.Context, string, int64, string, string) (bool, error) {
 	return true, nil
 }
 

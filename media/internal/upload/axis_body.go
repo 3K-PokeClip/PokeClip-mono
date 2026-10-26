@@ -223,7 +223,7 @@ func (u *Uploader) logHeldListFull(t index.UploadTarget, lg *slog.Logger) {
 }
 
 // failInitMismatch 는 산출 init 이 세션의 MAP 과 다를 때다(설계 5.3ⓒ — fail-closed). 조각은
-// 올리지 않고, 조각 failed 와 세션 ending(init_mismatch)을 한 문장으로 영속한다(MarkPlaybackFailed
+// 올리지 않고, 조각 failed 와 세션 ending(init_mismatch)을 한 문장으로 영속한다(SettlePlaybackFailure
 // 의 결속 갈래 — 크래시에도 남는다). 다음 유입이 새 세션·새 init 을 연다.
 func (u *Uploader) failInitMismatch(j job, want, got []byte, lg *slog.Logger) attemptResult {
 	t := j.target

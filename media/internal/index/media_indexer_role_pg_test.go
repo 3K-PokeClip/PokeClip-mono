@@ -24,8 +24,8 @@ package index
 //	upload_store.go
 //	  markUploadedSQL · markFailedSQL         MarkUploaded · MarkFailed            segments UPDATE
 //	  markPlaybackUploadedSQL                 MarkPlaybackUploaded                 segments UPDATE
-//	  markPlaybackFailedSQL                   MarkPlaybackFailed(그 밖 사유)       segments UPDATE
-//	  markPlaybackInitMismatchSQL             MarkPlaybackFailed(init_mismatch)   segments UPDATE · sessions UPDATE
+//	  markPlaybackFailedSQL                   SettlePlaybackFailure(그 밖 사유)       segments UPDATE
+//	  markPlaybackInitMismatchSQL             SettlePlaybackFailure(init_mismatch)   segments UPDATE · sessions UPDATE
 //	  markInitUploadedSQL                     MarkInitUploaded                     sessions SELECT FOR UPDATE · UPDATE
 //	  pending{Archive,Playback,Init}UploadsSQL PendingUploads 축 셋                segments · sessions · cutoffs SELECT
 //	  count{Archive,Playback,Init}BacklogSQL   CountBacklog 축 셋                  segments · sessions · cutoffs SELECT
@@ -172,11 +172,11 @@ func TestMediaIndexerRoleRunsUploadLedger(t *testing.T) {
 		{"MarkUploaded seq 0", func() (bool, error) { return up.MarkUploaded(ctx, stream, 0, 1000) }},
 		{"MarkFailed seq 1", func() (bool, error) { return up.MarkFailed(ctx, stream, 1, 1001) }},
 		{"MarkPlaybackUploaded seq 0", func() (bool, error) { return up.MarkPlaybackUploaded(ctx, stream, 0, 500) }},
-		{"MarkPlaybackFailed seq 1(put_failed)", func() (bool, error) {
-			return up.MarkPlaybackFailed(ctx, stream, 1, session, "put_failed")
+		{"SettlePlaybackFailure seq 1(put_failed)", func() (bool, error) {
+			return up.SettlePlaybackFailure(ctx, stream, 1, session, "put_failed")
 		}},
-		{"MarkPlaybackFailed seq 2(init_mismatch)", func() (bool, error) {
-			return up.MarkPlaybackFailed(ctx, stream, 2, session, ReasonInitMismatch)
+		{"SettlePlaybackFailure seq 2(init_mismatch)", func() (bool, error) {
+			return up.SettlePlaybackFailure(ctx, stream, 2, session, ReasonInitMismatch)
 		}},
 	}
 	for _, m := range marks {

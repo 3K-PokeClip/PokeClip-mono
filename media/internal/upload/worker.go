@@ -523,7 +523,7 @@ func (u *Uploader) markFailedByAxis(j job, reason string, lg *slog.Logger) bool 
 		err    error
 	)
 	if t.Axis == index.AxisPlayback {
-		marked, err = u.st.MarkPlaybackFailed(markCtx, t.StreamID, t.Seq, t.SessionID, reason)
+		marked, err = u.st.SettlePlaybackFailure(markCtx, t.StreamID, t.Seq, t.SessionID, reason)
 	} else {
 		marked, err = u.st.MarkFailed(markCtx, t.StreamID, t.Seq, t.Bytes)
 	}

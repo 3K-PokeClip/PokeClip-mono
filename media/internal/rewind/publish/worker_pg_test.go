@@ -155,7 +155,7 @@ func TestLoadResultAppliedOnLoopOnly(t *testing.T) {
 		return Result{Kind: KindWatch, Watch: pub.Watch(ctx, probes)}
 	})
 
-	c.ApplyInsert(fxStream, 10, index.SeedResult{SessionID: "S", DurationMS: 4000, PlaybackPDT: fxRow("S", 10).PlaybackPDT,
+	c.ApplyInsert(fxStream, 10, index.InsertCommit{SessionID: "S", DurationMS: 4000, PlaybackPDT: fxRow("S", 10).PlaybackPDT,
 		PlaybackS3Key: fxRow("S", 10).PlaybackS3Key}) // 두 작업이 도는 동안 루프의 push
 	for range 2 {
 		var r Result

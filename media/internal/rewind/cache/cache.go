@@ -231,7 +231,7 @@ func (c *Cache) DemandedLoads() []LoadDemand {
 }
 
 // ApplyInsert 는 장부에 방금 커밋된 행 하나를 반영한다 — 인덱서가 INSERT 가 들어간 뒤 그 결과
-// (index.SeedResult)를 그대로 넘긴다(INSERT push).
+// (index.InsertCommit)를 그대로 넘긴다(INSERT push).
 //
 //	개시(SessionOpened)   회차 축을 세운다 — 개시가 쓴 base·계승·TD·first_pdt, state live, init 미확정,
 //	                      회차 최소 seq = 이 seq. 계승 회차인데 뷰가 접두 회차를 모르면 적재를 요구한다(요구 ①).
@@ -248,7 +248,7 @@ func (c *Cache) DemandedLoads() []LoadDemand {
 // 깨져 다른 쓰기자가 그 seq 를 먼저 쓴 국면 — 인덱서의 seq 충돌 재적재). 놓친 뒤로는 뷰가 거기서 멈추고,
 // 머리가 장부보다 뒤처지므로 정합성 감시(설계 4.1 (a) 캐시 드리프트)가 적재로 되돌린다. 빈자리를
 // 두고 이어 붙이면 경계가 빈자리를 모르고 넘어가 목록 안 seq 가 끊긴다.
-func (c *Cache) ApplyInsert(streamID string, seq int64, res index.SeedResult) {
+func (c *Cache) ApplyInsert(streamID string, seq int64, res index.InsertCommit) {
 	p := func() { c.ApplyInsert(streamID, seq, res) }
 	if c == nil || c.logged(streamID, p) {
 		return
@@ -287,7 +287,7 @@ func (c *Cache) ApplyInsert(streamID string, seq int64, res index.SeedResult) {
 // loadViewless 는 뷰가 없는 스트림(st 는 nil 일 수 있다)의 INSERT push 를 받는다(계획 4.5 A3 결정 6 ⑤) — 주조 push 는
 // 부정 표식이 있어도, 회차 개시 push 는 표식이 없을 때 그 push p 를 로그에 담고 스스로 적재를 열어 요구 목록에
 // 올린다. 그 밖의 push 는 할 일이 없어 상태를 만들지 않는다 — 모르는 스트림의 빈 항목이 쌓이지 않는다.
-func (c *Cache) loadViewless(streamID string, st *stream, res index.SeedResult, p func()) {
+func (c *Cache) loadViewless(streamID string, st *stream, res index.InsertCommit, p func()) {
 	tombstone := st != nil && st.noCutoff
 	if !res.Seeded && (!res.SessionOpened || tombstone) {
 		return

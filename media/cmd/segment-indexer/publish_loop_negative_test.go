@@ -27,7 +27,7 @@ func TestNormalPathRaisesNoLadderAction(t *testing.T) {
 		switch k := sec / 4; sec % 4 {
 		case 0: // 조각 k−1 이 끝나 장부에 든다(INSERT push)
 			r := segRow("s1", "S", k-1, false)
-			f.cache.ApplyInsert("s1", k-1, index.SeedResult{SessionID: "S", DurationMS: r.DurationMS,
+			f.cache.ApplyInsert("s1", k-1, index.InsertCommit{SessionID: "S", DurationMS: r.DurationMS,
 				PlaybackPDT: r.PlaybackPDT, PlaybackS3Key: r.PlaybackS3Key})
 		case 1: // 1초 뒤 ③ 확정
 			f.uploaded("s1", "S", k-1)

@@ -3,7 +3,7 @@ package session
 // 세션 종료 문장 세 벌의 대조(POK-195 M4 — 계획 부기 21).
 //
 // 세션을 ending 으로 보내는 문장이 두 패키지에 셋 있다: TD 분할의 endSessionSQL 은 여기에,
-// init 불일치의 종료 절은 index 의 결속 CTE(MarkPlaybackFailed) 안에, 4.1 오프라인 전이는 index.EndLive
+// init 불일치의 종료 절은 index 의 결속 CTE(SettlePlaybackFailure) 안에, 4.1 오프라인 전이는 index.EndLive
 // (스트림 단위 — 사유 'offline')에 있다. index 는 session 을 임포트하지 않으므로(index/session.go 경계)
 // 술어(state='live')와 사유 어휘를 공유할 집이 없다. 이 파일이 세 문장을 같은 출발 상태에 돌려 효과를
 // 대조한다 — 한쪽만 바뀌면 여기서 갈린다.
@@ -113,7 +113,7 @@ func TestEndSessionStatementsAgreeWithIndexInitMismatchEnding(t *testing.T) {
 					t.Fatalf("endSessionSQL 실행 실패: %v", err)
 				}
 			})
-			if _, err := index.NewUploadStore(pool).MarkPlaybackFailed(ctx,
+			if _, err := index.NewUploadStore(pool).SettlePlaybackFailure(ctx,
 				"idxstream", 0, "S-idx", index.ReasonInitMismatch); err != nil {
 				t.Fatalf("index 결속 종료 실패: %v", err)
 			}

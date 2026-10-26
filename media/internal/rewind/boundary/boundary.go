@@ -20,7 +20,7 @@ const WindowMS = int64(time.Hour / time.Millisecond)
 // Row 는 경계 계산이 보는 장부 한 행이다 — 설계 4.1 settled 정본 SQL 이 읽는 열 가운데 경계가
 // 쓰는 것만 싣는다(is_discontinuity 는 경계가 쓰지 않아 싣지 않는다).
 //
-// NULL 은 영값으로 나른다. index.SeedResult 와 같은 규약(영값 = NULL)이라 캐시가 INSERT push 값을
+// NULL 은 영값으로 나른다. index.InsertCommit 과 같은 규약(영값 = NULL)이라 캐시가 INSERT push 값을
 // 그대로 옮겨 담는다. 장부의 세 열(session_id·playback_pdt·playback_s3_key)에는 NULL 아니면 실제 값이
 // 들어가므로 영값과 겹치지 않는다.
 type Row struct {

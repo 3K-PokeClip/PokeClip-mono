@@ -65,15 +65,15 @@ func (s *fakeStore) ExistingPaths(_ context.Context, streamID string) (map[strin
 	return paths, nil
 }
 
-func (s *fakeStore) Insert(_ context.Context, r index.Record, _ index.Seed, _ index.SessionSource) (index.InsertOutcome, index.SeedResult, error) {
+func (s *fakeStore) Insert(_ context.Context, r index.Record, _ index.Seed, _ index.SessionSource) (index.InsertOutcome, index.InsertCommit, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.insertErrs[r.LocalPath]; err != nil {
-		return index.InsertInserted, index.SeedResult{}, err
+		return index.InsertInserted, index.InsertCommit{}, err
 	}
 	s.inserts++
 	s.rows = append(s.rows, r)
-	return index.InsertInserted, index.SeedResult{}, nil
+	return index.InsertInserted, index.InsertCommit{}, nil
 }
 
 // rowsOf 는 그 스트림에 들어간 행이다(넣은 차례).

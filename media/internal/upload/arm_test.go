@@ -30,7 +30,7 @@ func (s *armStore) MarkFailed(context.Context, string, int64, int64) (bool, erro
 func (s *armStore) MarkPlaybackUploaded(context.Context, string, int64, int64) (bool, error) {
 	return true, nil
 }
-func (s *armStore) MarkPlaybackFailed(context.Context, string, int64, string, string) (bool, error) {
+func (s *armStore) SettlePlaybackFailure(context.Context, string, int64, string, string) (bool, error) {
 	return true, nil
 }
 func (s *armStore) MarkInitUploaded(context.Context, string, []byte, string, int64, bool) (index.InitMark, error) {
