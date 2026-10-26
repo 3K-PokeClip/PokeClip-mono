@@ -24,8 +24,8 @@ package index
 //	upload_store.go
 //	  markUploadedSQL · markFailedSQL         MarkUploaded · MarkFailed            segments UPDATE
 //	  markPlaybackUploadedSQL                 MarkPlaybackUploaded                 segments UPDATE
-//	  markPlaybackFailedSQL                   SettlePlaybackFailure(그 밖 사유)       segments UPDATE
-//	  markPlaybackInitMismatchSQL             SettlePlaybackFailure(init_mismatch)   segments UPDATE · sessions UPDATE
+//	  markPlaybackFailedSQL                   SettlePlaybackFailure(그 밖 사유)    segments UPDATE
+//	  markPlaybackInitMismatchSQL             SettlePlaybackFailure(init_mismatch) segments UPDATE · sessions UPDATE
 //	  markInitUploadedSQL                     MarkInitUploaded                     sessions SELECT FOR UPDATE · UPDATE
 //	  pending{Archive,Playback,Init}UploadsSQL PendingUploads 축 셋                segments · sessions · cutoffs SELECT
 //	  count{Archive,Playback,Init}BacklogSQL   CountBacklog 축 셋                  segments · sessions · cutoffs SELECT

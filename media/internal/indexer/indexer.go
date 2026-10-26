@@ -726,7 +726,7 @@ func (ix *Indexer) commit(ctx context.Context, seg recording.Segment, d, size in
 
 	rec := ix.buildRecord(cur, seg, d, size, dec.Apply)
 
-	outcome, seedRes, poisoned, err := ix.insertWithRetry(ctx, rec, seed, src)
+	outcome, insertCommit, poisoned, err := ix.insertWithRetry(ctx, rec, seed, src)
 	if err != nil {
 		return err
 	}
@@ -768,7 +768,7 @@ func (ix *Indexer) commit(ctx context.Context, seg recording.Segment, d, size in
 		// seed 도 같은 값을 재사용한다 — 시간 항은 SQL 이 매 시도 재검하므로 안전하다.
 		rec = ix.buildRecord(cur, seg, d, size, dec.Apply)
 
-		outcome, seedRes, poisoned, err = ix.insertWithRetry(ctx, rec, seed, src)
+		outcome, insertCommit, poisoned, err = ix.insertWithRetry(ctx, rec, seed, src)
 		if err != nil {
 			return err
 		}
@@ -797,8 +797,8 @@ func (ix *Indexer) commit(ctx context.Context, seg recording.Segment, d, size in
 		ix.log.Debug("duplicate_path_skipped", "stream_id", seg.StreamID, "path", seg.Path)
 		return nil
 	case index.InsertInserted:
-		ix.logSeed(seg, rec.Seq, seed, seedRes)
-		ix.advance(cur, seg, rec, seedRes, mtxi)
+		ix.logSeed(seg, rec.Seq, seed, insertCommit)
+		ix.advance(cur, seg, rec, insertCommit, mtxi)
 		if dec.Index >= 0 {
 			ix.releaseBreak(seg.StreamID, dec)
 			ix.log.Info("hook_break_consumed",
