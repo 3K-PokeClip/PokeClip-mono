@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/config"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/control"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/fmp4meta"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/indexer"
@@ -263,14 +264,14 @@ func run() error {
 	defer holdTicker.Stop()
 
 	// 되감기 제어면 서버(M5 3.7). ★ 위 rewind.stop · 풀 Close · up.Shutdown 보다 뒤에 등록해 먼저 멈춘다(LIFO) — 처리 중
-	// 요청이 끝난 뒤에 풀이 닫힌다. 회차 조회(round)는 M6 가 채운다. 4D 수신부(POK-472)는 stopControl 안에서 서버보다
-	// 먼저 닫힌다(recv.Close → 서버 Shutdown). 계승 해제 받은편지함은 M6-3b 의 루프가 비운다.
+	// 요청이 끝난 뒤에 풀이 닫힌다. 회차 조회(round)는 인덱서 풀로 읽는다(동시 2 — M6 11절). 4D 수신부(POK-472)는
+	// stopControl 안에서 서버보다 먼저 닫힌다(recv.Close → 서버 Shutdown). 계승 해제 받은편지함은 M6-3b 의 루프가 비운다.
 	intents := session.NewIntentInbox()
 	recv, err := newEndSignal(resolver, intentApplier(pool, newIntentOptions(log, nil, nil)), inbox.Changed, intents.Post, log)
 	if err != nil {
 		return err
 	}
-	stopControl := startControlWithEndSignal(cfg, board, log, nil, recv)
+	stopControl := startControlWithEndSignal(cfg, board, log, control.NewRoundLookup(pool, cfg.RewindPublicBaseURL, log), recv)
 	defer stopControl()
 
 	// --- 5. 메인 루프 ---

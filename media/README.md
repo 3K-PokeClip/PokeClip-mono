@@ -428,13 +428,13 @@ INFO `db_connected` 한 줄을 남긴다. 실패하면 이 줄 없이 기동이 
 
 사이드카가 띄우는 작은 HTTP 서버다. 웹이 「지금 되감기를 볼 수 있나 · 어느 목록을 보나」를
 묻는다. 답은 루프가 1초 holdTick 마다 만드는 불변 스냅숏(Board)에서 나온다 — 요청마다
-DB · S3 · 캐시를 보지 않는다. 회차 경로만 Board 가 모르는 회차를 DB 에서 한 번 읽을 수
-있고, 그 길은 M6 가 채운다(지금은 미등록).
+DB · S3 · 캐시를 보지 않는다. 회차 경로만 Board 가 모르는 회차를 DB 에서 한 번 읽는다
+(POK-196 M6 — 인덱서 풀 · 동시 2 · 초당 20 · 2초 시한 · 1초 캐시).
 
 | 경로 | 지금 | 답 |
 |---|---|---|
 | `GET /api/streams/{streamId}/rewind` | 켜짐 | 그 스트림 키의 지금 국면 |
-| `GET /api/streams/{streamId}/rounds/{roundId}/rewind` | **미등록(404)** — M6 가 회차 조회를 채우면 등록 | 그 회차의 종국 |
+| `GET /api/streams/{streamId}/rounds/{roundId}/rewind` | 켜짐(M6) | 그 회차의 국면 — 웹이 끝남 대기의 종국 판정에 쓴다 |
 
 본문은 키 다섯이다 — `{"ready":bool,"mode":"live"|"ending"|"vod"|"ended"|null,"url":…,"firstPdt":…,"headPdt":…}`
 (값이 없으면 `null` · 계약3 7-2절). 미준비도 200 본문으로 낸다(엣지 오류 캐시에 기대지 않게).
@@ -444,6 +444,15 @@ DB · S3 · 캐시를 보지 않는다. 회차 경로만 Board 가 모르는 회
 | 200 | 캐시나 종료 항목이 그 스트림을 안다 — `ready:true` 는 소유 회차가 live · init 확정 · 발행 판이 있을 때뿐이라 url 은 늘 S3 에 있다 |
 | 404 `{"error":"not_found"}` | 캐시 · 종료 항목 둘 다 모른다(부팅 감시 뒤) · 발행 꺼짐(`S3_BUCKET` 빈 값 — 모든 스트림) · id 가 `[A-Za-z0-9._-]{1,128}` 밖 · 퍼센트 인코딩한 경로(`%61bc` 처럼 `RawPath` 가 생기는 요청 — 풀린 글자가 규칙 안이어도) |
 | 503 `{"error":"unavailable"}` · `Retry-After: 1` | 첫 스냅숏 전 · 부팅 감시 전의 모르는 스트림 · 스냅숏이 30초 넘게 낡음 · 스트림별 한도 초과 |
+
+회차 경로는 Board 의 종료 항목이 그 회차를 알면 그 값을, 모르면 DB 의 그 회차 하나를 답한다(계약3 7-2절
+회차별 조회 — 같은 키의 다른 회차 값을 섞지 않는다). 위 표에 더해지는 갈래는 아래다.
+
+| 상태 | 회차 경로에서 언제 |
+|---|---|
+| 200 | 그 회차에 송출 중인 세션이 있다(`mode:"live"` · `url` null) · 끝남 대기(`ending`) · 다시보기 있음(`vod` — url 과 범위는 그 회차 VOD 목록) · 다시보기 없음(`ended`) |
+| 404 | DB 도 그 회차를 모른다 — 없는 회차 · 다른 스트림의 회차 · 60일 만료 |
+| 503 | DB 읽기 실패 · 2초 시한 초과 · 전역 예산(동시 2 · 초당 20) 초과 · 장부 값을 응답으로 옮기지 못함(아래 `control_round_lookup_invalid`) — 캐시하지 않아 다음 요청이 다시 읽는다 |
 
 머리는 상태와 무관하게 `Cache-Control: public, max-age=1` · `Content-Type: application/json` 이다.
 `CONTROL_CORS_ORIGIN` 이 설정돼 있으면 `Vary: Origin` 을 Origin 과 무관하게 늘 싣고, 요청
@@ -461,8 +470,12 @@ DB · S3 · 캐시를 보지 않는다. 회차 경로만 Board 가 모르는 회
     준비 안 됨 · `reason` 하나) · `rewind_status_range_missing` · `rewind_final_applied` ·
     `rewind_final_invalid` · `rewind_final_seeded` · `_seed_failed` ·
     `control_round_lookup_failed`(회차 lookup 실패 · `reason` 은 `error` · `timeout`
-    · `panic` · 사유마다 10초에 한 줄로 묶고 `count` 로 센다 — M6 가 회차 경로를
-    등록하기 전에는 나오지 않는다). 요청마다의 접근 로그는 없다.
+    · `panic` · 사유마다 10초에 한 줄로 묶고 `count` 로 센다) ·
+    `control_round_lookup_invalid`(ERROR — 회차 장부 값을 응답으로 옮기지 못했다 ·
+    `stream_id` · `round_id` · `reason` 은 `vod_incomplete` · `out_of_range` · 그
+    요청은 503 이고 `control_round_lookup_failed reason=error` 에도 센다. 장부가
+    뒤틀린 결함 표지라 묶지 않는다 — 줄 수는 전역 예산 초당 20 이 묶는다). 요청마다의
+    접근 로그는 없다.
     게이지(`control_status_stale` · `control_rate_limited` · `control_round_shed` ·
     `rewind_ready_delayed`)는 세움(value 1)과 내림(value 0)이 둘 다 WARN 이다.
     내림 뒤에는 다시 쓰지 않으므로 `LOG_LEVEL=warn` 으로 걸러도 해소가 보여야
@@ -1904,15 +1917,15 @@ docker compose up -d --build segment-indexer
 | 시청 경로 — 되감기 URL 서빙 · CDN · 제어면의 라이브 전환 | M5 | M4 는 S3 발행까지다(부기 34 의 전제) 〔추기 2026-10-26 — M5 ②a 가 제어면 서버 · 상태 스냅숏을 넣었다(위 「되감기 상태 제어면」). CDN · 웹 전환은 M5 의 다른 PR 몫이다.〕 |
 | `ended` 전이 · ENDLIST 봉인 호출 · 동결 · VOD 전환 · 만료 | M6 | 종결 축이다(부기 34). `rewind.SealEndlist` 는 있지만 운영 코드에서 부르는 곳이 없다 |
 | L3(연속 GAP 셋 → ending) · 정산 창 만료 포기 · L2′ | M6 | 부기 10 |
-| G8-F · G8-E | M6 | 부기 7 |
+| G8-F · G8-E | M6 | 부기 7 〔추기 2026-10-26 — M6 에서 닫혔다: 동결 · 봉인 경로의 두 writer 시험이다(`internal/rewind/publish` 의 `freeze_pg_test.go` G8-F · `audit_pg_test.go` G8-E).〕 |
 | 의도적 종료와 끊김의 구분(계약4 4D 종료 신호 수신) | PR ⓒ 머지 뒤 별도 티켓 | kty 결정. `internal/session/registry.go` 의 `inheritable` 에 의도적 종료 갈래가 없다 |
-| 검문 빈틈 셋(코덱 지문 · 게이트 공백 · 일시 오류) | M6 에서 다시 본다 | kty 결정(2026-09-30 — 코드 그대로). 아래 한계 표 |
+| 검문 빈틈 셋(코덱 지문 · 게이트 공백 · 일시 오류) | M6 에서 다시 본다 | kty 결정(2026-09-30 — 코드 그대로). 아래 한계 표 〔추기 2026-10-26 — M6 에서 다시 봤고 코드 그대로다. M6 가 이어받기 조건에 더한 것은 닫힘 거부 둘(`inherit_declined reason=round_closed` · `chain_closed`)과 의도적 종료 제외뿐이다. 검문 입력 · 순서는 그대로고 플러그인 고정 설정 전제도 그대로다.〕 |
 | init 잔량 영구 잔존의 보정 | M6 | kty K3 — 한계 유지(위 ⓐ 절 알려진 한계 여섯째 행) |
 | ③ 잔량의 `ended` 동기 · M6 만료 뒤 컷오프 재주조 | M6 | ⓒ 에는 `ended` 가 없다 |
 | 첫 목록 지연 경보(`rewind_ready_delayed`) | M5 | 재기동 ② 뒤 비계승 회차의 무경보(아래 한계 표) 〔추기 2026-10-26 — M5 ②a 에서 닫혔다: 송출 중(4.1 종료 판정과 같은 술어)인데 60초 넘게 준비 안 되면 WARN 이다.〕 |
 | 목록 객체의 Content-Type 값 | M5 회부 | 계획 7절 13 · 위 실측 기록 |
 | 이름 부채 개명(`SeedResult` · `MarkPlaybackFailed`) | M5 | 부기 16 · 23 〔추기 2026-10-26 — M5 ②c 에서 닫혔다: `SeedResult` → `InsertCommit`(INSERT 트랜잭션의 커밋 사실), `MarkPlaybackFailed` → `SettlePlaybackFailure`(사유에 따라 조각만 또는 조각과 회차를 함께 정리). 동작은 그대로다. 이 문서의 이관 기록 · 부기 표는 그때 이름 그대로 둔다.〕 |
-| 계승 사슬(두 단계 이상)과 1시간 상계 | M5/M6 | 위 ⓑ 절 알려진 한계 |
+| 계승 사슬(두 단계 이상)과 1시간 상계 | M5/M6 | 위 ⓑ 절 알려진 한계 〔추기 2026-10-26 — M6 몫은 일부 닫혔다: VOD 는 사슬 전체를 덮는다. DVR 다단 접두의 1시간 상계는 한계 그대로다.〕 |
 | 슬레이트 운영 프로비저닝 · 관측 등급 tier 상수 | 별도 마일스톤 | 계획 8절 kty 확정 (가) |
 | 라이브 창 설정(ADR-056 ③ 대체 예정) 28초 적용 | PR ⓒ 뒤 설정 소PR | 되감기 URL 가동 뒤 · 적용 게이트 셋을 통과한 뒤. 라이브 창은 28초(4초 × 7)로 확정됐다(kty 2026-10-19 — ADR-056 의 14초는 대체 예정). 바뀌는 값은 `hlsSegmentCount` 900 → 7 하나다 |
 | SDK 오류 본문 상한(S-1) · 운영 빌드 그래프 정적 단언(S-2) · HTTP 응답 헤더 상한 | PR ⓒ 밖 — kty 회부 | 계획 커밋 순서 7 — 선재 결함 · 범위 확장 |
