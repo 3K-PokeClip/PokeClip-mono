@@ -96,5 +96,7 @@ locals {
       for statement in concat(local.task_role_candidates.clip, [local.db_connect_statements.clip]) :
       statement if length(statement.resources) > 0
     ]
+    "chat-collector" = []
+    "chat-detector"  = []
   }
 }

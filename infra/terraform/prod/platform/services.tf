@@ -1,6 +1,9 @@
 # ECS Fargate 서비스 셋(next · auth · clip)과 클러스터 · Cloud Map · 서비스
 # SG 인그레스 · RDS 인그레스 ← auth · clip(설계 3-1 의 ⑧ · 5-5).
 #
+# chat 두 서버(chat-collector · chat-detector — POK-306)도 같은 모듈로 둔다. 공개
+# 노출이 없어 대상 그룹 없이 Cloud Map 이름으로만 받는다.
+#
 # Next 는 rewrite 목적지를 빌드 때 굳힌다(web README 「컨테이너 이미지」) —
 # 이미지 빌드 인자 AUTH_API_URL · CLIP_API_URL 은 아래 Cloud Map 이름
 # (http://auth.pokeclip.internal:8082 · http://clip.pokeclip.internal:8081)이다.
@@ -11,15 +14,16 @@ locals {
   log_retention_days = 30
   discovery_domain   = "pokeclip.internal"
 
-  # chat-collector 는 POK-306 이 같은 네임스페이스에 등록한다(이름 · 포트 계약).
-  collector_base_url = "http://chat-collector.${local.discovery_domain}:8083"
+  auth_base_url      = "http://auth.${local.discovery_domain}:${var.services.auth.port}"
+  clip_base_url      = "http://clip.${local.discovery_domain}:${var.services.clip.port}"
+  collector_base_url = "http://chat-collector.${local.discovery_domain}:${var.chat_services["chat-collector"].port}"
 
   account_id = data.aws_caller_identity.current.account_id
   region     = data.aws_region.current.region
 
   service_images = {
-    for name in keys(var.services) :
-    name => "${data.terraform_remote_state.registry.outputs.repo_urls[name]}@${var.image_digests[name]}"
+    for name, digest in var.image_digests :
+    name => "${data.terraform_remote_state.registry.outputs.repo_urls[name]}@${digest}"
   }
 
   # 리스너 규칙이 붙은 뒤의 ARN(아래 public_routed_target_groups).
@@ -37,8 +41,11 @@ locals {
     clip = module.clip.sg_id
   }
 
+  # DB 를 쓰는 서비스 — 런타임 app_db_users 의 키(계약)와 같다.
+  db_services = ["auth", "clip", "chat-collector", "chat-detector"]
+
   db_users = {
-    for service in ["auth", "clip"] : service => local.runtime.app_db_users[service]
+    for service in local.db_services : service => local.runtime.app_db_users[service]
   }
 
   # 같은 사용자 이름이 POSTGRES_USER 와 rds-db:connect Resource 에 들어간다.
@@ -68,7 +75,7 @@ locals {
         STREAM_KEY_SECRET_REF_PREFIX  = var.stream_key_secret_prefix
         CORS_ALLOWED_ORIGINS          = var.cors_allowed_origins
         # 탈퇴 정리(withdrawal-purge) — 비면 부팅이 거부된다.
-        CLIP_BASE_URL      = "http://clip.${local.discovery_domain}:${var.services.clip.port}"
+        CLIP_BASE_URL      = local.clip_base_url
         COLLECTOR_BASE_URL = local.collector_base_url
       },
     )
@@ -79,12 +86,42 @@ locals {
         CLOUDFRONT_KEY_PAIR_ID = local.secrets.public_key_id
         MEDIA_BASE_URL         = var.media_base_url
         PLAYBACK_COOKIE_DOMAIN = var.playback_cookie_domain
-        AUTH_BASE_URL          = "http://auth.${local.discovery_domain}:${var.services.auth.port}"
+        AUTH_BASE_URL          = local.auth_base_url
         CORS_ALLOWED_ORIGINS   = var.cors_allowed_origins
         # 비어도 부팅은 되지만 채팅 문 셋(수집기 경유)이 503 이다.
         COLLECTOR_BASE_URL = local.collector_base_url
         # 서명 값 셋 중 하나라도 빠지면 부팅을 거부한다(POK-321).
         PLAYBACK_REQUIRED = "true"
+      },
+    )
+    # CHZZK_CLIENT_ID · SOOP_CLIENT_ID(방송 정보 · SOOP 채팅)와 채팅 원본 보관
+    # 창고 이름 S3_BUCKET 은 런타임 app_env 가 준다. 넣지 않는 것:
+    # CHZZK_ENABLED(옛 한 채널 경로 — 받기와 같이 켜면 부팅 거부) ·
+    # CHAT_SYNC_OFFSET_MS(서버 기본 3900).
+    "chat-collector" = merge(
+      try(local.runtime.app_env["chat-collector"], {}),
+      local.db_env["chat-collector"],
+      {
+        # 방송 편지로 세션을 연다(운영의 시작 경로). 켜면 AUTH_BASE_URL ·
+        # INTERNAL_API_TOKEN(런타임 비밀)이 비면 부팅이 거부된다.
+        BROADCAST_INTAKE_ENABLED = "true"
+        AUTH_BASE_URL            = local.auth_base_url
+        # 재부착 · 중계 · 방송 정보가 부르는 clip 내부 창구.
+        CLIP_BASE_URL          = local.clip_base_url
+        CHAT_REATTACH_ENABLED  = tostring(var.chat_collector_features.reattach)
+        CHAT_RELAY_ENABLED     = tostring(var.chat_collector_features.relay)
+        BROADCAST_INFO_ENABLED = tostring(var.chat_collector_features.liveinfo)
+        CHAT_DETACH_ENABLED    = tostring(var.chat_collector_features.detach)
+        SOOP_WATCH_ENABLED     = tostring(var.chat_collector_features.soop_watch)
+        SOOP_CHAT_ENABLED      = tostring(var.chat_collector_features.soop_chat)
+      },
+    )
+    "chat-detector" = merge(
+      try(local.runtime.app_env["chat-detector"], {}),
+      local.db_env["chat-detector"],
+      {
+        CLIP_BASE_URL      = local.clip_base_url
+        COLLECTOR_BASE_URL = local.collector_base_url
       },
     )
   }
@@ -96,6 +133,8 @@ locals {
       try(local.runtime.app_secret_arns.clip, {}),
       { CLOUDFRONT_PRIVATE_KEY_PEM = local.secrets.signing_key_secret_arn },
     )
+    "chat-collector" = try(local.runtime.app_secret_arns["chat-collector"], {})
+    "chat-detector"  = try(local.runtime.app_secret_arns["chat-detector"], {})
   }
 
   common_egress = {
@@ -116,6 +155,8 @@ locals {
       rds  = { port = 5432, security_group_id = local.runtime.rds_sg_id, description = "RDS" }
       auth = { port = var.services.auth.port, security_group_id = module.auth.sg_id, description = "clip to auth resolve" }
     })
+    "chat-collector" = local.common_egress
+    "chat-detector"  = local.common_egress
   }
 }
 
@@ -209,6 +250,62 @@ module "clip" {
   discovery_namespace_id = aws_service_discovery_private_dns_namespace.this.id
   egress_targets         = local.egress_targets.clip
   task_role_statements   = local.task_role_statements.clip
+
+  depends_on = [terraform_data.runtime_contract]
+}
+
+module "chat_collector" {
+  source = "../../modules/ecs_service"
+
+  name_prefix        = local.name_prefix
+  name               = "chat-collector"
+  iam_path           = local.iam_path
+  cluster_arn        = aws_ecs_cluster.this.arn
+  vpc_id             = local.network.vpc_id
+  subnet_ids         = local.network.private_subnet_ids
+  image              = local.service_images["chat-collector"]
+  cpu                = var.chat_services["chat-collector"].cpu
+  memory             = var.chat_services["chat-collector"].memory
+  port               = var.chat_services["chat-collector"].port
+  log_retention_days = local.log_retention_days
+  env                = local.service_env["chat-collector"]
+  secrets            = local.service_secrets["chat-collector"]
+  # 대상 그룹이 없어 유예는 쓰이지 않는다(ECS API 가 대상 그룹 없이 받지 않음).
+  target_group_arns      = []
+  health_check_grace     = 0
+  discovery_namespace_id = aws_service_discovery_private_dns_namespace.this.id
+  egress_targets         = local.egress_targets["chat-collector"]
+  task_role_statements   = local.task_role_statements["chat-collector"]
+
+  depends_on = [terraform_data.runtime_contract]
+}
+
+# collector 와 순서를 두지 않는다(depends_on = [module.chat_collector] 없음) —
+# 모듈 depends_on 은 collector 가 바뀔 때마다 이 모듈 안 data 읽기를 apply 로
+# 밀어 태스크 정의를 새 판으로 바꾼다(위 public_routed_target_groups 주석).
+# 서비스 생성은 안정 상태를 기다리지 않아 순서를 둬도 collector Flyway 가 먼저
+# 끝난다는 보장이 되지 않는다(POK-306 Q5).
+module "chat_detector" {
+  source = "../../modules/ecs_service"
+
+  name_prefix            = local.name_prefix
+  name                   = "chat-detector"
+  iam_path               = local.iam_path
+  cluster_arn            = aws_ecs_cluster.this.arn
+  vpc_id                 = local.network.vpc_id
+  subnet_ids             = local.network.private_subnet_ids
+  image                  = local.service_images["chat-detector"]
+  cpu                    = var.chat_services["chat-detector"].cpu
+  memory                 = var.chat_services["chat-detector"].memory
+  port                   = var.chat_services["chat-detector"].port
+  log_retention_days     = local.log_retention_days
+  env                    = local.service_env["chat-detector"]
+  secrets                = local.service_secrets["chat-detector"]
+  target_group_arns      = []
+  health_check_grace     = 0
+  discovery_namespace_id = aws_service_discovery_private_dns_namespace.this.id
+  egress_targets         = local.egress_targets["chat-detector"]
+  task_role_statements   = local.task_role_statements["chat-detector"]
 
   depends_on = [terraform_data.runtime_contract]
 }

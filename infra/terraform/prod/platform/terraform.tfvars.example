@@ -5,10 +5,24 @@
 # CLIP_API_URL 을 Cloud Map 이름으로 빌드한 것이어야 한다(README 「Next 이미지
 # 빌드 인자」).
 image_digests = {
-  next = "sha256:<NEXT_DIGEST>"
-  auth = "sha256:<AUTH_DIGEST>"
-  clip = "sha256:<CLIP_DIGEST>"
+  next           = "sha256:<NEXT_DIGEST>"
+  auth           = "sha256:<AUTH_DIGEST>"
+  clip           = "sha256:<CLIP_DIGEST>"
+  chat-collector = "sha256:<CHAT_COLLECTOR_DIGEST>"
+  chat-detector  = "sha256:<CHAT_DETECTOR_DIGEST>"
 }
+
+# chat-collector 기능 스위치. 기본값은 떼기만 꺼짐이다(README 「chat 기능
+# 스위치」). 떼기는 재부착과, SOOP 채팅은 SOOP 지켜보기와 함께만 켠다(plan 이
+# 막는다).
+# chat_collector_features = {
+#   reattach   = true
+#   relay      = true
+#   liveinfo   = true
+#   detach     = false
+#   soop_watch = true
+#   soop_chat  = true
+# }
 
 # Media 상자 nginx 듣기 포트 · 헬스 경로의 정본 — 대상 그룹이 쓰고, 출력으로
 # 내보내 prod/media 가 읽는다. 1024 이상 · 서로 다름 · 8080 · 8081 · 8888 · 9996 · 9997 이 아님.
