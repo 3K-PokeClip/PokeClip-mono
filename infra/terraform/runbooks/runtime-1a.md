@@ -644,17 +644,22 @@ send-command 상태가 `Success` 가 아니거나(`Failed` · `TimedOut` ·
 
 **손 SQL 규칙.** 이 규칙은 실패 · 시간 초과 뒤 원인을 고치는 교정용 손
 SQL 에만 씁니다 — 해체 SQL 은 「되돌리기 · 해체」 를 따릅니다(지운 뒤라
-`40_verify.sql` 이 반드시 실패합니다). 손 SQL 은 새 페이로드이고 kty 승인을
-새로 받습니다 — 같은 흐름 안에서 임의로 다시 보내거나 덧붙여 보내지
-않습니다. 페이로드는 5-1 의 `conn` 명령 뒤에 그 SQL 을
-`psql -X -1 -v ON_ERROR_STOP=1` 로 돌리고 이어서 `40_verify.sql` 을 돌리는
-JSON 입니다. 보내기 전에 SQL 원문을 kty 에게
+`40_verify.sql` 이 반드시 실패합니다). 예외는 아래 「M6 읽기 질의」 입니다 —
+교정이 아니라 읽기 전용(`SET TRANSACTION READ ONLY`) 판정 질의라 같은 흐름에
+이어 보내지만, 보내는 꼴(새 페이로드 · SQL 원문을 보이고 새 승인)은
+같습니다. 손 SQL 은 새 페이로드이고 kty 승인을 새로 받습니다 — 같은 흐름
+안에서 임의로 다시 보내거나 덧붙여 보내지 않습니다. 페이로드는 5-1 의
+`conn` 명령 뒤에 그 SQL 을 `psql -X -1 -v ON_ERROR_STOP=1` 로 돌리고 이어서
+`40_verify.sql` 을 돌리는 JSON 입니다. 보내기 전에 SQL 원문을 kty 에게
 보이고 승인을 받습니다. 판정은 5 와 같습니다(상태 `Success` · `VERIFY OK`).
 실패하면 이 절의 1부터 다시 따릅니다.
 
 ## 되돌리기 · 해체
 
-*   **SQL**: 파일마다 트랜잭션이라 실패한 파일은 남지 않습니다. 적용을 통째로
+*   **SQL**: 파일마다 트랜잭션이라 실패한 파일은 남지 않습니다. 아래 해체
+    SQL 은 M6 운영 SQL 적용 뒤 서비스 되돌리기 용도로 쓰지 않습니다(해체
+    전용) — M6 결함은 앞으로 고칩니다([Media 교체 런북](media-swap.md) 「M6
+    운영 SQL 경계 · 롤백 하한」). 적용을 통째로
     되돌릴 때는 실행기를 켜고 마스터로 아래를 `psql -1` 로 돌립니다 — 표 ·
     함수(media_owner 소유 전부) → 앱 사용자 → 두 계정 → media_owner
     순서입니다. 앱 사용자 두 줄은 앱 서버가 처음 뜨기 전에만 씁니다. 뜬
@@ -750,9 +755,13 @@ O7e 가 먼저 와 버렸으면(하한 아래 사이드카가 이미 prod 에서
     건너뛰고 3 의 이미지로 O7e 를 하면 사이드카가 뜨지 않습니다.
 *   다시 돌려도 안전합니다. M6 문장은 카탈로그 확인 DO 블록(열은
     `information_schema.columns` · 트리거는 `pg_trigger` 를 확인한 뒤
-    만듦)과 `IF NOT EXISTS` 꼴이라 있는 객체는 건드리지 않고 없는 것만
-    만듭니다(M6-0 이 `ddl.go` 와 같은 문장으로 두고
-    `prod_sql_contract_test` 가 바이트를 대조). 1단-가의 10 · 20 · 30 도 다시
+    만듦)과 `IF NOT EXISTS` 꼴이라 표 · 열 · 인덱스 · 트리거는 있으면
+    건너뛰고 없는 것만 만듭니다(M6-0 이 `ddl.go` 와 같은 문장으로 두고
+    `prod_sql_contract_test` 가 바이트를 대조). 함수는 다릅니다 — `CREATE OR
+    REPLACE FUNCTION` 이라 그 SHA 의 본문으로 교체됩니다(트리거 함수 ·
+    `SECURITY DEFINER` 함수 포함). 그래서 재실행 SHA 는 8 에 기록된 최신
+    재실행 SHA 이상(그 SHA 를 조상으로 둔 커밋)이어야 합니다 — 옛 SHA 로
+    돌리면 함수가 옛 본문으로 돌아갑니다. 1단-가의 10 · 20 · 30 도 다시
     돌리면 같은 상태로 수렴합니다(5-3 끝).
 
 ### 재실행 걸음
@@ -777,12 +786,16 @@ O7e 가 먼저 와 버렸으면(하한 아래 사이드카가 이미 prod 에서
     ```
 
     `PGOPTIONS` 는 psql(libpq)이 접속할 때 서버에 넘기는 세션 설정이고,
-    `lock_timeout` 은 잠금을 그 시간 안에 못 잡으면 그 문장을 실패시키는
-    값입니다. ALTER TABLE · CREATE TRIGGER 는 표에 강한 잠금을 기다리는 동안
-    뒤에 오는 사이드카 · 앱 서버 질의를 줄 세웁니다. 3초는 사이드카 핫 경로
-    트랜잭션 상한 `TxnDeadline` 10초(`media/internal/index/store.go:147`)보다
-    짧게 고른 값입니다 — 사이드카가 이 줄에 서서 시한에 걸리기 전에 SQL 쪽이
-    먼저 물러납니다. 마지막 줄이 주석의 값과 다르면 보내지 않고 7 로 갑니다.
+    `lock_timeout` 은 잠금 하나를 기다리는 시간의 상한입니다 — 넘으면 그
+    문장이 실패합니다. 파일 전체의 상한은 아닙니다. 한 파일(`psql -1` 의 한
+    트랜잭션)이 잠금 여럿을 차례로 기다리면 대기가 쌓여 3초를 넘을 수 있고,
+    잡은 잠금을 들고 있는 시간도 이 값이 제한하지 않습니다(prod 크기에서의
+    보유 시간은 미확인). ALTER TABLE · CREATE TRIGGER 는 표에 강한 잠금을
+    기다리는 동안 뒤에 오는 사이드카 · 앱 서버 질의를 줄 세웁니다. 3초는
+    사이드카 핫 경로 트랜잭션 상한 `TxnDeadline`
+    10초(`media/internal/index/store.go:147`)보다 짧게 고른 값입니다 — 잠금
+    하나를 두고는 사이드카가 이 줄에 서서 시한에 걸리기 전에 SQL 쪽이 먼저
+    물러납니다. 마지막 줄이 주석의 값과 다르면 보내지 않고 7 로 갑니다.
 1.  **5-2 · 5-3(준비 · 적용)**: 그대로 합니다. 통과는 상태 `Success` 와
     표준 출력의 `PREFLIGHT OK` · `VERIFY OK` 입니다 — M6-0 판 `40_verify.sql`
     은 열 넷 · 표 둘 · 인덱스 · 트리거 둘 · M6 권한까지 봅니다.
@@ -805,6 +818,10 @@ M6 운영에서 DB 를 읽어 판정해야 하는 자리가 둘 있습니다. �
 페이로드 · SQL 원문을 kty 에게 보이고 승인 · 뒤이어 `40_verify.sql` ·
 판정은 상태 `Success` 와 `VERIFY OK`. 질의는 읽기만 하고, 표 주인
 `media_owner` 로 바꿔 읽습니다(마스터는 SET ROLE 만 가짐 — `10_roles.sql`).
+표 주인은 쓰기 권한도 가지므로 질의 파일의 첫 줄은 언제나
+`SET TRANSACTION READ ONLY;` 입니다 — `psql -1` 이 연 트랜잭션 안에서 SET
+ROLE 앞에 둬, 질의에 쓰기 문장이 섞여도 서버가 거부합니다(SQLSTATE 25006).
+아래 `make_read` 가 첫 줄을 확인하고 다르면 멈춥니다.
 
 | 질의 | 쓰는 자리 | 통과 |
 |---|---|---|
@@ -822,6 +839,7 @@ M6 운영에서 DB 를 읽어 판정해야 하는 자리가 둘 있습니다. �
 
 ```shell
 cat >"${payload}/floor.sql" <<'SQL'
+SET TRANSACTION READ ONLY;
 SET ROLE media_owner;
 SELECT f.stream_id, f.next_seq, m.max_seq
   FROM stream_seq_floors f
@@ -838,6 +856,7 @@ SQL
 
 ```shell
 cat >"${payload}/backlog.sql" <<'SQL'
+SET TRANSACTION READ ONLY;
 SET ROLE media_owner;
 SELECT 'archive' AS axis, *
   FROM (SELECT pg_catalog.count(*) FILTER (WHERE upload_state = 'pending') AS pending,
@@ -872,6 +891,8 @@ SQL
 
 ```shell
 make_read() {  # make_read <걸음 이름> <SQL 파일>
+  [ "$(head -n 1 "$2")" = 'SET TRANSACTION READ ONLY;' ] ||
+    { echo "멈춤: $2 의 첫 줄이 SET TRANSACTION READ ONLY; 가 아님" >&2; return 1; }
   jq --rawfile sql "$2" '
     .commands = .commands[:-1] + [
       "printf %s " + ($sql | @base64 | @sh) + " | base64 -d >/root/rt1a/read.sql",
@@ -888,8 +909,13 @@ make_read backlog "${payload}/backlog.sql" && send_step backlog
 ```
 
 *   표준 출력의 `== read` 뒤가 질의 결과이고, 그 뒤 `VERIFY OK` 가 있어야
-    합니다. 결과 줄에는 계정 ID 가 없어 기록에 옮길 수 있습니다(스트림
-    식별자는 공개 식별자).
+    합니다. 기록에 옮기는 것은 `== read` 뒤 결과 줄만입니다. 표준 오류는
+    계정 ID · ARN · RDS 끝점 · 사설 IP · 인스턴스 id 를 가린 뒤에만
+    옮깁니다([Media 교체 런북](media-swap.md) 「O7e 뒤 측정 · 기록」 의 가림
+    목록).
+*   하한 질의 결과의 스트림 식별자를 그대로 기록할지는 kty 결정 대기입니다
+    (창 동안 탈퇴 정리된 스트림 목록이라, 식별자가 사용자와 이어지는지
+    확인 뒤). 결정 전까지는 행 수만 옮깁니다.
 *   하한 질의에 행이 나오면 그 스트림이 하한 아래 판에서 걸리는 스트림입니다.
     「한 창 절차」 에서는 그 자리의 갈래를 따르고, 사고 확인이면 Media 교체
     런북 「M6 운영 SQL 경계 · 롤백 하한」 의 복구로 갑니다.
