@@ -4,11 +4,11 @@ import type { PlaybackSource } from './rewindSwitch';
 import { useHlsPlayback, type PlaybackHooks } from './useHlsPlayback';
 
 // 재생기 교체 · 사건 올림 · 창 가장자리(설계 5.3.1 · 5.4절 — R15 · R17 · R23 · R47). hls.js 와 <video> 를 흉내 낸다:
-// 흉내 hls.js 는 시험이 사건(LEVEL_LOADED · LEVEL_UPDATED · ERROR)을 쏘고, <video> 는 currentTime · seekable · paused 를 시험이 쥔다.
+// 흉내 hls.js 는 시험이 사건(LEVEL_LOADED · LEVEL_UPDATED · FRAG_BUFFERED · ERROR)을 쏘고, <video> 는 currentTime · seekable · paused 를 시험이 쥔다.
 
 interface FakeHlsLike {
   config: Record<string, unknown>;
-  startLoads: number[];
+  startLoads: (number | undefined)[];
   loaded: string[];
   destroyed: boolean;
   latestLevelDetails: Details | null;
@@ -43,10 +43,11 @@ vi.mock('hls.js', () => {
       LEVEL_LOADED: 'hlsLevelLoaded',
       LEVEL_UPDATED: 'hlsLevelUpdated',
       MEDIA_DETACHING: 'hlsMediaDetaching',
+      FRAG_BUFFERED: 'hlsFragBuffered',
     };
     static ErrorTypes = { NETWORK_ERROR: 'networkError', MEDIA_ERROR: 'mediaError' };
     readonly handlers = new Map<string, ((event: string, data: unknown) => void)[]>();
-    startLoads: number[] = [];
+    startLoads: (number | undefined)[] = [];
     loaded: string[] = [];
     destroyed = false;
     latestLevelDetails: FakeHlsLike['latestLevelDetails'] = null;
@@ -63,18 +64,27 @@ vi.mock('hls.js', () => {
       if (details && typeof details === 'object') this.latestLevelDetails = details;
       for (const h of this.handlers.get(event) ?? []) h(event, data);
     }
-    attachMedia() {}
+    media: HTMLMediaElement | null = null;
+    attachMedia(media: HTMLMediaElement) {
+      this.media = media;
+    }
     loadSource(url: string) {
       this.loaded.push(url);
     }
-    startLoad(pos: number) {
+    startLoad(pos?: number) {
       this.startLoads.push(pos);
     }
-    // hls.js 1.7.3 처럼 떼기 전에 MEDIA_DETACHING 을 내고, 다시 붙여 기동 전으로 돌아간다(hls.ts 699-712 · 514-519 ·
-    // stream-controller.ts 532). 안에서 부르는 startLoad(time) 은 앱의 호출이 아니라 startLoads 에 적지 않는다
+    // hls.js 1.7.3 의 복구(hls.ts 699-712): 재생점을 먼저 잡고 뗀다. 떼기의 첫 처리기는 buffer-controller(먼저 등록 ·
+    // buffer-controller.ts 186)라 src 를 지우고 load() 해 재생점을 0 으로 만든다(575-579) — 앱의 MEDIA_DETACHING 처리기는
+    // 늘 0 을 본다. 다시 붙여 기동 전으로 돌아가고(stream-controller.ts 532), 잡아 둔 재생점에서 startLoad 한다(0 이면
+    // 자동 시작이 아닐 때만 인자 없이). 시험은 기동한 뒤에만 부른다(hls.started)
     recoverMediaError() {
+      const time = this.media?.currentTime ?? 0;
+      if (this.media) this.media.currentTime = 0;
       this.trigger('hlsMediaDetaching', {});
       this.hasEnoughToStart = false;
+      if (time) this.startLoad(time);
+      else if (this.config.autoStartLoad === false) this.startLoad();
     }
     destroy() {
       this.destroyed = true;
@@ -631,8 +641,11 @@ describe('되감기 창 하한을 LEVEL_UPDATED 에서 먼저 지키기(설계 5
     expect(hls.startLoads).toEqual([40, 24]);
   });
 
-  /** 되감기 재생기 · 받기 위치 start 로 기동해 보던 자리(at)까지 — 첫 목록 갱신에서 기동이 끝났다 */
-  async function rewindStarted(startSec: number, at: number) {
+  /**
+   * 되감기 재생기 · 받기 위치 startSec 로 기동해(첫 조각이 붙어 hasEnoughToStart — 목록 갱신은 아직 없다) 보던 자리(at)로
+   * 시크한 데까지. 시크가 끝난 자리를 브라우저가 알리는 사건은 seeked · timeupdate 다
+   */
+  async function rewindStarted(startSec: number, at: number, playheadEvent = 'seeked') {
     const onNotice = vi.fn();
     mount(src({ kind: 'rewind', url: REWIND, startAtMs: PDT0 + startSec * 1000 }), {
       onNotice,
@@ -640,26 +653,37 @@ describe('되감기 창 하한을 LEVEL_UPDATED 에서 먼저 지키기(설계 5
     });
     await settle();
     const hls = lastHls();
+    hls.hasEnoughToStart = false;
     act(() => hls.trigger('hlsLevelLoaded', { details: details(frags(13)) }));
     video.el!.currentTime = startSec;
-    act(() => hls.trigger('hlsLevelUpdated', { details: details(frags(13)) }));
+    hls.hasEnoughToStart = true;
+    act(() => hls.trigger('hlsFragBuffered', {}));
     video.el!.currentTime = at;
-    act(() => video.el!.dispatchEvent(new Event('seeking')));
+    act(() => {
+      video.el!.dispatchEvent(new Event('seeking'));
+      video.el!.dispatchEvent(new Event(playheadEvent));
+    });
     return { hls, onNotice };
   }
   const fatalMediaError = (hls: FakeHlsLike) =>
     act(() => hls.trigger('hlsError', { fatal: true, type: 'mediaError', details: 'x' }));
+  const internalRecovery = (hls: FakeHlsLike) => act(() => hls.recoverMediaError());
 
-  it('MEDIA_ERROR 복구 뒤 목록이 갱신돼도 시작 때 받기 위치로 옮기지 않는다 — 보던 자리에서 튀지 않고 알리지 않는다(cc H1)', async () => {
-    const { hls, onNotice } = await rewindStarted(12, 40);
-    fatalMediaError(hls);
-    slide(3);
-    expect(hls.startLoads).toEqual([12]);
-    expect(video.el!.currentTime).toBe(40);
-    expect(onNotice).not.toHaveBeenCalled();
-  });
+  it.each([
+    ['앱이 치명 MEDIA_ERROR 를 복구', fatalMediaError],
+    ['hls.js 가 스스로 복구(MEDIA_SOURCE_REQUIRES_RESET)', internalRecovery],
+  ])(
+    '기동 뒤 첫 목록 갱신 전에 %s 해도 시작 때 받기 위치로 옮기지 않는다 — 보던 자리에서 다시 받고 알리지 않는다(cx H)',
+    async (_name, recover) => {
+      const { hls, onNotice } = await rewindStarted(12, 40);
+      recover(hls);
+      slide(3);
+      expect(hls.startLoads).toEqual([12, 40]);
+      expect(onNotice).not.toHaveBeenCalled();
+    },
+  );
 
-  it('기동이 끝나면 시작 때 받기 위치를 버린다 — hls.js 가 스스로 기동 전으로 돌아가도 그 자리로 옮기지 않는다', async () => {
+  it('기동이 끝나면 시작 때 받기 위치를 버린다 — hls.js 가 떼지 않고 기동 전으로 돌아가도 그 자리로 옮기지 않는다', async () => {
     const { hls, onNotice } = await rewindStarted(12, 40);
     hls.hasEnoughToStart = false;
     slide(3);
@@ -668,27 +692,25 @@ describe('되감기 창 하한을 LEVEL_UPDATED 에서 먼저 지키기(설계 5
   });
 
   it.each([
-    ['앱이 치명 MEDIA_ERROR 를 복구', fatalMediaError],
-    [
-      'hls.js 가 스스로 복구(MEDIA_SOURCE_REQUIRES_RESET)',
-      (hls: FakeHlsLike) => act(() => hls.recoverMediaError()),
-    ],
+    ['앱이 치명 MEDIA_ERROR 를 복구', fatalMediaError, 'seeked'],
+    ['hls.js 가 스스로 복구(MEDIA_SOURCE_REQUIRES_RESET)', internalRecovery, 'seeked'],
+    ['hls.js 가 스스로 복구 · 재생점은 timeupdate 로만 앎', internalRecovery, 'timeupdate'],
   ])(
-    '%s 할 때 재생점이 창 하한 가까이면 그 자리를 받기 위치로 보고 창 하한으로 다시 잡는다',
-    async (_name, recover) => {
-      const { hls, onNotice } = await rewindStarted(40, 13);
+    '%s 할 때 떼기 전 재생점이 창 하한 가까이고 첫 조각 전에 창이 지나가면 창 하한으로 다시 잡는다(cc M1)',
+    async (_name, recover, playheadEvent) => {
+      const { hls, onNotice } = await rewindStarted(40, 13, playheadEvent);
       recover(hls);
       slide(3);
-      expect(hls.startLoads).toEqual([40, 24]);
+      expect(hls.startLoads).toEqual([40, 13, 24]);
       expect(onNotice).toHaveBeenCalledTimes(1);
     },
   );
 
-  it('MEDIA_ERROR 복구 때 재생점이 0 이면 옮기지 않는다 — hls.js 가 startLoad() 로 제 자리를 고른다', async () => {
+  it('MEDIA_ERROR 복구 때 재생점이 0 이면 옮기지 않는다 — hls.js 가 제 자리를 고른다(자동 시작이 아니면 startLoad())', async () => {
     const { hls, onNotice } = await rewindStarted(40, 0);
     fatalMediaError(hls);
     slide(3);
-    expect(hls.startLoads).toEqual([40]);
+    expect(hls.startLoads).toEqual([40, undefined]);
     expect(onNotice).not.toHaveBeenCalled();
   });
 

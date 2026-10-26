@@ -18,14 +18,14 @@ export interface RewindFloorInput {
   video: Pick<HTMLVideoElement, 'currentTime' | 'readyState'>;
   details: Pick<LevelDetails, 'fragmentStart' | 'targetduration' | 'live'>;
   /**
-   * 기동 전 받기 위치(앱이 startLoad 에 준 자리 · 기동 전 시크 자리 · 복구 직전 재생점). 모르면 null — 그때는 hls.js 가 제 받기
-   * 위치로 기동하게 두고 옮기지 않는다
+   * 기동 전 받기 위치(앱이 startLoad 에 준 자리 · 기동 전 시크 자리 · 떼기 전 마지막 재생점 · 네트워크로 다시 받기 직전
+   * 재생점). 모르면 null — 그때는 hls.js 가 제 받기 위치로 기동하게 두고 옮기지 않는다
    */
   loadFrom: number | null;
 }
 
 /** 기동 전인가 — 조각이 아직 붙지 않아 hls.js 가 currentTime 이 아니라 받기 위치를 본다 */
-export function isBeforeStart(
+function isBeforeStart(
   hls: Pick<Hls, 'hasEnoughToStart'>,
   video: Pick<HTMLVideoElement, 'readyState'>,
 ): boolean {

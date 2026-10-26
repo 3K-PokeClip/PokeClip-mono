@@ -174,3 +174,76 @@ describe('hls.js 1.7.3 의 목록 갱신 순서(진단 재현 9 · 10)', () => {
     expect(sc.nextLoadPosition).toBe(LIVE_SYNC);
   });
 });
+
+// 앱이 기동 전 받기 위치의 출처로 기대는 hls.js 의 처리기 순서 둘(c12d — cx H · cc M1). MediaSource 가 없는 jsdom 이라 붙이기 ·
+// 조각 붙이기는 흉내 낸다: 떼기는 buffer-controller 의 src 지우기 + load() 까지, 조각은 버퍼 범위 하나만
+describe('hls.js 1.7.3 의 떼기 · 첫 조각 처리기 순서(c12d)', () => {
+  /** load() 가 재생점을 0 으로 만드는 흉내 <video>(HTML 미디어 요소 load 알고리즘) */
+  function loadResettingMedia(currentTime: number) {
+    const media = {
+      ...fakeMedia(currentTime, 4).media,
+      src: 'blob:hls',
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      removeAttribute: () => {},
+      querySelectorAll: () => [],
+      load: () => {
+        media.currentTime = 0;
+      },
+    };
+    return media;
+  }
+
+  it('복구의 떼기에서 앱 처리기는 재생점 0 을 보고, hls.js 는 떼기 전에 잡은 재생점에서 다시 받는다', () => {
+    const { hls } = started(null, true);
+    const media = loadResettingMedia(40);
+    const internals = hls as unknown as {
+      _media: unknown;
+      started: boolean;
+      bufferController: { media: unknown; _objectUrl: string };
+      attachMedia: (m: unknown) => void;
+    };
+    internals._media = media;
+    internals.started = true;
+    internals.bufferController.media = media;
+    internals.bufferController._objectUrl = media.src;
+    // 다시 붙이기는 MediaSource 가 없어 흉내 낸다
+    internals.attachMedia = () => {};
+    const loads: (number | undefined)[] = [];
+    hls.startLoad = (position?: number) => {
+      loads.push(position);
+    };
+    const seen: number[] = [];
+    hls.on(Events.MEDIA_DETACHING, () => seen.push(media.currentTime));
+    // jsdom 에는 revokeObjectURL 이 없다(떼기가 부른다)
+    Object.defineProperty(globalThis.URL, 'revokeObjectURL', {
+      value: () => {},
+      configurable: true,
+    });
+    try {
+      hls.recoverMediaError();
+    } finally {
+      Reflect.deleteProperty(globalThis.URL, 'revokeObjectURL');
+    }
+    expect(seen).toEqual([0]);
+    expect(loads).toEqual([40]);
+  });
+
+  it('첫 조각이 붙은 FRAG_BUFFERED 의 앱 처리기에서 hasEnoughToStart 가 이미 참이다', () => {
+    const { media } = fakeMedia(0, 1);
+    const { hls, sc } = started(
+      { ...media, buffered: { length: 1, start: () => 0, end: () => 4 } },
+      false,
+    );
+    const seen: boolean[] = [];
+    hls.on(Events.FRAG_BUFFERED, () => seen.push(hls.hasEnoughToStart));
+    hls.trigger(Events.FRAG_BUFFERED, {
+      frag: { type: PlaylistLevelType.SUBTITLE, stats: { aborted: false } },
+      part: null,
+      stats: {},
+      id: 'subtitle',
+    } as never);
+    expect(sc._hasEnoughToStart).toBe(true);
+    expect(seen).toEqual([true]);
+  });
+});
