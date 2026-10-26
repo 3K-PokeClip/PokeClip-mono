@@ -10,8 +10,8 @@ package index
 //   - pgtest.PlantSearchPathTraps — 사이드카 · janitor 와 같은 덫 일곱(public CREATE 만 받은 가짜 앱 사용자)
 //   - prodSQLTraps — 00–50 에만 나오는 꼴의 덫(public CREATE 만 받은 시험 전용 역할 trapPlanterPrefix…)
 //
-// 00 은 로컬에서 늘 실패하고(rds.force_ssl) 50 은 ROLLBACK 으로 끝나므로, 덫이 기록 표에 남긴 행은 그 트랜잭션과
-// 함께 사라진다. 그래서 기록 표(RequireNotCalled)와 함께 마스터 연결이 받은 NOTICE 도 본다 — 두 묶음의 덫은 모두
+// 00 은 TLS 가 아닌 로컬 연결에서 실패하고(tls) 50 은 ROLLBACK 으로 끝나므로, 덫이 기록 표에 남긴 행은 그
+// 트랜잭션과 함께 사라진다. 그래서 기록 표(RequireNotCalled)와 함께 마스터 연결이 받은 NOTICE 도 본다 — 두 묶음의 덫은 모두
 // 불릴 때 trapNoticeMarker 로 시작하는 NOTICE 를 낸다.
 
 import (
@@ -169,7 +169,7 @@ func trapCalls(notices []*pgconn.Notice) map[string]int {
 }
 
 // 음성 대조 — 앱 사용자가 public 에 덫을 심어도 마스터 대역이 돌리는 00–50 은 덫을 하나도 부르지 않는다.
-// 00 은 로컬에서 rds.force_ssl(· tls)로 실패하고 50 은 회수 불가 갈래로 끝나지만(사례 ① · ⑥), 덫은 그 전에 불린다.
+// 00 은 TLS 가 아닌 로컬 연결에서 tls 로 실패하고 50 은 회수 불가 갈래로 끝나지만(사례 ① · ⑥), 덫은 그 전에 불린다.
 func TestProdSQLDoesNotCallSearchPathTraps(t *testing.T) {
 	env := newProdSQLEnv(t)
 	if _, err := applyProdSQL(t, env.master, expandProdSQL(t, "10_roles.sql")); err != nil {
@@ -179,8 +179,9 @@ func TestProdSQLDoesNotCallSearchPathTraps(t *testing.T) {
 	env.plantProdSQLTraps(t)
 	env.notices = nil
 
-	_, err := applyProdSQL(t, env.master, expandProdSQL(t, "00_preflight.sql"))
-	failedChecks(t, err, preflightFailedPrefix)
+	if _, err := applyProdSQL(t, env.master, expandProdSQL(t, "00_preflight.sql")); err != nil {
+		failedChecks(t, err, preflightFailedPrefix)
+	}
 	env.mustApplyAll(t)
 	if _, err := execScript(t, env.master, expandProdSQL(t, "50_advisory_probe.sql")); err != nil &&
 		!isSQLState(err, pgInsufficientPrivilege) {
