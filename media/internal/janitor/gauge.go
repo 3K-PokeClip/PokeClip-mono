@@ -57,6 +57,8 @@ const (
 	// abandonedRetainedName · abandonedReclaimedName 은 설계 M6 7절 X5 의 신호 이름 그대로다(janitor_ 접두 없음).
 	abandonedRetainedName  = "abandoned_local_retained"
 	abandonedReclaimedName = "local_abandoned_reclaimed"
+	// abandonedRetainedCheckFailedName 은 잔존 집계 실패 WARN 이다 — 게이지는 마지막 값을 유지한다.
+	abandonedRetainedCheckFailedName = "abandoned_local_retained_check_failed"
 )
 
 func newGauges(log *slog.Logger) *gauges {

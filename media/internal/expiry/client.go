@@ -100,5 +100,22 @@ func (c *clipClient) list(ctx context.Context, before time.Time, cursor *string)
 	if err := json.Unmarshal(body, &page); err != nil {
 		return expiredPage{}, &pollError{status: "body", err: fmt.Errorf("본문 해석 실패: %w", err)}
 	}
+	if err := page.checkAdvance(cursor); err != nil {
+		return expiredPage{}, &pollError{status: "body", err: err}
+	}
 	return page, nil
+}
+
+// checkAdvance 는 hasMore 인 장이 앞으로 나아가는가다 — 빈 장이거나 표시가 없거나 보낸 표시 그대로면 같은 장을
+// 끝없이 다시 부르게 된다. 그런 응답은 그 회차의 실패다.
+func (p expiredPage) checkAdvance(sent *string) error {
+	switch {
+	case !p.HasMore:
+		return nil
+	case len(p.Broadcasts) == 0:
+		return errors.New("hasMore 인데 빈 장이다")
+	case p.NextCursor == nil || (sent != nil && *p.NextCursor == *sent):
+		return errors.New("hasMore 인데 표시가 나아가지 않는다")
+	}
+	return nil
 }

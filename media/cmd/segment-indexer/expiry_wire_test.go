@@ -4,8 +4,10 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -14,6 +16,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/config"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/expiry"
@@ -156,5 +160,49 @@ func TestExpiryTokenFromValueOrFile(t *testing.T) {
 	cfg = config.Config{}
 	if tok, err := expiryToken(cfg); err != nil || tok != (expiry.Token{}) {
 		t.Fatalf("토큰 없음 = %v %v (영값 · 오류 없음 기대)", tok, err)
+	}
+}
+
+// cc c5 — 권한 확인은 기동 DB 단계와 같은 상한(dbStepTimeout) 안에서 끝난다. 답하지 않는 DB 에서도 기동이 걸리지 않고
+// 만료만 꺼진다(reason=privilege_check). 상한이 20초라 실주행 게이트(REQUIRE_PG=1)에서만 돈다.
+func TestStartExpiryPrivilegeCheckIsBounded(t *testing.T) {
+	if os.Getenv("REQUIRE_PG") != "1" {
+		t.Skip("20초 시험 — REQUIRE_PG=1 실주행 게이트에서만 돈다")
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() { // 받기만 하고 답하지 않는 DB
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			t.Cleanup(func() { _ = c.Close() })
+		}
+	}()
+	pool, err := pgxpool.New(t.Context(), "postgres://u@"+ln.Addr().String()+"/db?sslmode=disable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	cfg := config.Config{}
+	cfg.Expiry.ClipURL, cfg.S3.Bucket = "http://127.0.0.1:1", "b"
+	log, buf := expiryLog()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		startExpiry(context.Background(), cfg, pool, true, func(string) {}, log)()
+	}()
+	select {
+	case <-done:
+	case <-time.After(dbStepTimeout + 10*time.Second):
+		t.Fatal("권한 확인이 상한 없이 걸려 있다")
+	}
+	if lines := logLines(t, buf, "expiry_disabled"); len(lines) != 1 || lines[0]["reason"] != "privilege_check" {
+		t.Fatalf("expiry_disabled %v", lines)
 	}
 }

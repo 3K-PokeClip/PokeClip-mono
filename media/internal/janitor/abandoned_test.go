@@ -41,16 +41,25 @@ func TestAbandonedLocalRetainedGaugeToggles(t *testing.T) {
 	}
 }
 
-// 잔존 집계가 실패하면 그 주기는 실패로 끝난다(삭제로 넘어가지 않는다) — 다른 조회 실패와 같은 분기다.
-func TestAbandonedLocalRetainedQueryFailureAbortsCycle(t *testing.T) {
+// 잔존 집계는 신호일 뿐이다 — 실패하면 WARN 한 줄을 내고 그 주기의 삭제는 그대로 한다(db m64 M1). 게이지는 마지막
+// 값을 유지하고 cycle_failing 은 켜지 않는다.
+func TestAbandonedLocalRetainedQueryFailureWarnsAndContinues(t *testing.T) {
 	r, warn := warnRig(t, nil)
+	r.ledger.retained = 2
+	r.cycle(t)
 	r.row("s1", 1, false, true)
 	r.ledger.retainedErr = errors.New("x")
 	r.cycle(t)
-	if _, ok := r.ledger.pathOf(rowKey{"s1", 1}); !ok {
-		t.Fatal("집계 실패 주기에 삭제가 돌았다")
+	if _, ok := r.ledger.pathOf(rowKey{"s1", 1}); ok {
+		t.Fatal("집계 실패 주기에 삭제가 돌지 않았다")
 	}
-	if len(warn.all("janitor_cycle_failing")) < 2 { // 시작 덤프 + set
-		t.Fatal("cycle_failing 이 켜지지 않았다")
+	if recs := warn.all(abandonedRetainedCheckFailedName); len(recs) != 1 || recs[0].attrs["err"] != "x" {
+		t.Fatalf("%s 줄 %v (err=x 한 줄 기대)", abandonedRetainedCheckFailedName, recs)
+	}
+	if recs := warn.all(abandonedRetainedName); len(recs) != 2 || recs[1].attrs["value"] != "1" {
+		t.Fatalf("게이지 줄 %v (시작 덤프 + set 뒤 그대로 기대)", recs)
+	}
+	if len(warn.all("janitor_cycle_failing")) != 1 { // 시작 덤프뿐
+		t.Fatal("집계 실패로 cycle_failing 이 켜졌다")
 	}
 }
