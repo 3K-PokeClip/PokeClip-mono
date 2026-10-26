@@ -11,14 +11,21 @@ interface FakeHlsLike {
   startLoads: number[];
   loaded: string[];
   destroyed: boolean;
-  latestLevelDetails: { fragments: Frag[]; targetduration: number; live: boolean } | null;
+  latestLevelDetails: Details | null;
   liveSyncPosition: number | null;
+  hasEnoughToStart: boolean;
   trigger: (event: string, data: unknown) => void;
 }
 interface Frag {
   start: number;
   duration: number;
   programDateTime: number | null;
+}
+interface Details {
+  fragments: Frag[];
+  fragmentStart: number;
+  targetduration: number;
+  live: boolean;
 }
 
 const fake = vi.hoisted(() => ({ instances: [] as FakeHlsLike[], supported: true }));
@@ -42,6 +49,7 @@ vi.mock('hls.js', () => {
     destroyed = false;
     latestLevelDetails: FakeHlsLike['latestLevelDetails'] = null;
     liveSyncPosition: number | null = null;
+    hasEnoughToStart = true;
     constructor(readonly config: Record<string, unknown>) {
       fake.instances.push(this as unknown as FakeHlsLike);
     }
@@ -77,8 +85,8 @@ function frags(n: number, from = 0): Frag[] {
     programDateTime: PDT0 + (from + i) * 4_000,
   }));
 }
-function details(fragments: Frag[], live = true) {
-  return { fragments, targetduration: 4, live };
+function details(fragments: Frag[], live = true): Details {
+  return { fragments, fragmentStart: fragments[0]?.start ?? 0, targetduration: 4, live };
 }
 
 const video = { el: null as HTMLVideoElement | null, paused: true, seekEnd: 40 };
@@ -375,42 +383,6 @@ describe('창 가장자리를 hls.js 보다 먼저 지키기(5.3.1절 · R23)', 
     expect(video.el!.currentTime).toBe(26);
   });
 
-  it('되감기 재생 중 라이브러리가 끝 쪽으로 튀면 튀기 전 자리를 세션에 다시 넘긴다 — 그새 창이 밀렸으면 새 하한으로(cx H2 · R23)', async () => {
-    const onNotice = vi.fn();
-    const requests: [number, { lowerMs: number; endMs: number }][] = [];
-    // 세션 흉내: 하한 앞 목표는 하한으로 잘라 안에서 시크한다(rewindSwitch 의 seekInList)
-    const view = mount(src({ kind: 'rewind', url: 'https://m/dvr/k/a/index.m3u8' }), {});
-    view.rerender({
-      s: src({ kind: 'rewind', url: 'https://m/dvr/k/a/index.m3u8' }),
-      h: {
-        onNotice,
-        onSeekRequest: (t, v) => {
-          requests.push([t, v]);
-          view.result.current.seekToMs(Math.max(t, v.lowerMs));
-        },
-      },
-    });
-    await settle();
-    act(() => lastHls().trigger('hlsLevelUpdated', { details: details(frags(10)) }));
-    act(() => view.result.current.seekToMs(PDT0 + 16_000));
-    video.paused = false;
-    act(() => video.el!.dispatchEvent(new Event('seeking')));
-    // 16초를 그린 뒤 창이 밀려(첫 조각 20초 · 하한 32초) 라이브러리가 목록 끝으로 옮긴다
-    await act(async () => vi.advanceTimersByTime(1_000));
-    act(() => lastHls().trigger('hlsLevelUpdated', { details: details(frags(10, 5)) }));
-    video.el!.currentTime = 56;
-    act(() => video.el!.dispatchEvent(new Event('seeking')));
-    expect(requests).toEqual([[PDT0 + 16_000, { lowerMs: PDT0 + 32_000, endMs: PDT0 + 60_000 }]]);
-    expect(video.el!.currentTime).toBe(32);
-    act(() => video.el!.dispatchEvent(new Event('seeking')));
-    // 되돌림이 또 튀면 두지 않고 알린다
-    video.el!.currentTime = 56;
-    act(() => video.el!.dispatchEvent(new Event('seeking')));
-    expect(requests).toHaveLength(1);
-    expect(video.el!.currentTime).toBe(56);
-    expect(onNotice).toHaveBeenCalledTimes(1);
-  });
-
   it('ENDLIST 목록에서 끝 → 뒤로 시크 → 다시 끝이면 끝 도달을 두 번 올린다(cx H1 · R55)', async () => {
     const onEndReached = vi.fn();
     const view = mount(src({ kind: 'rewind', url: 'https://m/dvr/k/a/index.m3u8' }), {
@@ -426,59 +398,6 @@ describe('창 가장자리를 hls.js 보다 먼저 지키기(5.3.1절 · R23)', 
     video.el!.currentTime = 40;
     act(() => video.el!.dispatchEvent(new Event('ended')));
     expect(onEndReached).toHaveBeenCalledTimes(2);
-  });
-
-  /** 되감기 재생 · 세션 흉내(하한으로 잘라 안에서 시크) · 16초를 그린 뒤 창이 밀려 라이브러리가 끝으로 튀고 한 번 되돌린 데까지 */
-  async function restoredOnce() {
-    const onNotice = vi.fn();
-    const requests: number[] = [];
-    const view = mount(src({ kind: 'rewind', url: 'https://m/dvr/k/a/index.m3u8' }), {});
-    view.rerender({
-      s: src({ kind: 'rewind', url: 'https://m/dvr/k/a/index.m3u8' }),
-      h: {
-        onNotice,
-        onSeekRequest: (t, v) => {
-          requests.push(t);
-          view.result.current.seekToMs(Math.max(t, v.lowerMs));
-        },
-      },
-    });
-    await settle();
-    act(() => lastHls().trigger('hlsLevelUpdated', { details: details(frags(10)) }));
-    act(() => view.result.current.seekToMs(PDT0 + 16_000));
-    video.paused = false;
-    act(() => video.el!.dispatchEvent(new Event('seeking')));
-    await act(async () => vi.advanceTimersByTime(1_000));
-    act(() => lastHls().trigger('hlsLevelUpdated', { details: details(frags(10, 5)) }));
-    video.el!.currentTime = 56;
-    act(() => video.el!.dispatchEvent(new Event('seeking')));
-    act(() => video.el!.dispatchEvent(new Event('seeking')));
-    expect(requests).toHaveLength(1);
-    expect(video.el!.currentTime).toBe(32);
-    return { view, requests, onNotice };
-  }
-
-  it('되돌린 뒤 2 TD 가 지나 따로 일어난 튐은 다시 되돌린다(「또 튐」은 되돌린 직후만 — cc 확인 패스)', async () => {
-    const { requests, onNotice } = await restoredOnce();
-    await act(async () => vi.advanceTimersByTime(9_000));
-    video.el!.currentTime = 56;
-    act(() => video.el!.dispatchEvent(new Event('seeking')));
-    expect(requests).toHaveLength(2);
-    expect(video.el!.currentTime).toBe(32);
-    expect(onNotice).not.toHaveBeenCalled();
-  });
-
-  it('되돌린 뒤 사용자가 시크하면 그 뒤의 튐은 다시 되돌린다', async () => {
-    const { view, requests, onNotice } = await restoredOnce();
-    act(() => {
-      view.result.current.seekToDate?.(PDT0 + 40_000);
-    });
-    act(() => video.el!.dispatchEvent(new Event('seeking')));
-    expect(requests).toHaveLength(2);
-    video.el!.currentTime = 56;
-    act(() => video.el!.dispatchEvent(new Event('seeking')));
-    expect(requests).toHaveLength(3);
-    expect(onNotice).not.toHaveBeenCalled();
   });
 
   it('덮개가 선 동안(holdPlay) 재생 단추는 재생을 시작하지 않는다 — 끝난 목록이 처음부터 돌지 않게(cc 확인 패스)', async () => {
@@ -575,19 +494,154 @@ describe('창 가장자리를 hls.js 보다 먼저 지키기(5.3.1절 · R23)', 
     act(() => lastHls().trigger('hlsManifestParsed', {}));
     expect(play).toHaveBeenCalled();
   });
+});
 
-  it('앱이 끝 쪽으로 옮긴 시크는 라이브러리 시크가 아니다 — 되돌리지 않는다', async () => {
-    const view = mount(src({ kind: 'rewind', url: 'https://m/dvr/k/a/index.m3u8' }), {
+describe('되감기 창 하한을 LEVEL_UPDATED 에서 먼저 지키기(설계 5.3.1절 · 진단 28_)', () => {
+  const REWIND = 'https://m/dvr/k/a/index.m3u8';
+
+  /** 되감기 재생기 · 첫 목록(첫 조각 0초) 뒤 재생점 at · 세션 흉내(하한 앞은 하한으로 잘라 안에서 시크) */
+  async function rewindAt(at: number, hooks: PlaybackHooks = {}) {
+    const onNotice = vi.fn();
+    const onSeekRequest = vi.fn();
+    const view = mount(src({ kind: 'rewind', url: REWIND }), { onNotice, onSeekRequest, ...hooks });
+    await settle();
+    video.el!.currentTime = at;
+    act(() => lastHls().trigger('hlsLevelUpdated', { details: details(frags(13)) }));
+    return { view, onNotice, onSeekRequest };
+  }
+  /** 창이 n 조각 밀린 목록 갱신 */
+  const slide = (n: number) =>
+    act(() => lastHls().trigger('hlsLevelUpdated', { details: details(frags(13, n)) }));
+
+  it.each([1, 2, 3])(
+    '재생점이 첫 조각 + 1 TD 앞이면(readyState %s) 처리기 안에서 바로 창 하한(첫 조각 + 3 TD)으로 옮기고 한 번 알린다',
+    async (readyState) => {
+      vi.spyOn(HTMLMediaElement.prototype, 'readyState', 'get').mockReturnValue(readyState);
+      const { onNotice, onSeekRequest } = await rewindAt(15);
+      video.paused = false;
+      slide(3);
+      expect(video.el!.currentTime).toBe(24);
+      expect(onNotice).toHaveBeenCalledTimes(1);
+      expect(onNotice).toHaveBeenCalledWith('가장 오래된 지점으로 옮겼어요');
+      expect(onSeekRequest).not.toHaveBeenCalled();
+    },
+  );
+
+  it('첫 조각 + 1 TD 이상이면 두고 알리지 않는다', async () => {
+    const { onNotice } = await rewindAt(16);
+    slide(3);
+    expect(video.el!.currentTime).toBe(16);
+    expect(onNotice).not.toHaveBeenCalled();
+  });
+
+  it('멈춰 있어도 옮긴다 — hls.js 는 일시정지를 보지 않는다 · 재개는 옮긴 자리로 판정해 다시 넘기지 않는다', async () => {
+    const { onNotice, onSeekRequest } = await rewindAt(15);
+    act(() => {
+      video.paused = true;
+      video.el!.dispatchEvent(new Event('pause'));
+    });
+    slide(3);
+    expect(video.el!.currentTime).toBe(24);
+    expect(onNotice).toHaveBeenCalledTimes(1);
+    act(() => {
+      video.paused = false;
+      video.el!.dispatchEvent(new Event('play'));
+    });
+    expect(onSeekRequest).not.toHaveBeenCalled();
+    expect(onNotice).toHaveBeenCalledTimes(1);
+  });
+
+  it('멈춘 채 창이 밀려도 1초 틱이 세션에 넘기지 않는다(옮기는 자리는 LEVEL_UPDATED 하나)', async () => {
+    const { onSeekRequest } = await rewindAt(13);
+    act(() => {
+      video.paused = true;
+      video.el!.dispatchEvent(new Event('pause'));
+    });
+    slide(1);
+    await act(async () => vi.advanceTimersByTime(3_000));
+    expect(onSeekRequest).not.toHaveBeenCalled();
+  });
+
+  it('2 TD 안에 또 옮기면 알림을 겹치지 않는다 · 그 뒤에 옮기면 다시 알린다', async () => {
+    const { onNotice } = await rewindAt(15);
+    slide(3);
+    video.el!.currentTime = 27;
+    slide(6);
+    expect(video.el!.currentTime).toBe(36);
+    expect(onNotice).toHaveBeenCalledTimes(1);
+    await act(async () => vi.advanceTimersByTime(9_000));
+    video.el!.currentTime = 39;
+    slide(9);
+    expect(video.el!.currentTime).toBe(48);
+    expect(onNotice).toHaveBeenCalledTimes(2);
+  });
+
+  it('기동 전(hasEnoughToStart 거짓)은 currentTime 대신 받기 위치를 창 하한으로 다시 잡는다', async () => {
+    const onNotice = vi.fn();
+    mount(src({ kind: 'rewind', url: REWIND, startAtMs: PDT0 }), {
+      onNotice,
       onSeekRequest: vi.fn(),
     });
     await settle();
-    act(() => lastHls().trigger('hlsLevelUpdated', { details: details(frags(10)) }));
-    act(() => view.result.current.seekToMs(PDT0 + 16_000));
-    video.paused = false;
+    const hls = lastHls();
+    hls.hasEnoughToStart = false;
+    act(() => hls.trigger('hlsLevelLoaded', { details: details(frags(13)) }));
+    act(() => hls.trigger('hlsLevelUpdated', { details: details(frags(13)) }));
+    expect(hls.startLoads).toEqual([12]);
+    video.el!.currentTime = 0;
+    slide(3);
+    expect(hls.startLoads).toEqual([12, 24]);
+    expect(video.el!.currentTime).toBe(0);
+    expect(onNotice).toHaveBeenCalledTimes(1);
+    slide(4);
+    expect(hls.startLoads).toEqual([12, 24]);
+  });
+
+  it('readyState 0 이면 기동 뒤라도 받기 위치로 다시 잡는다 — currentTime 쓰기가 먹지 않는다', async () => {
+    mount(src({ kind: 'rewind', url: REWIND, startAtMs: PDT0 }), { onSeekRequest: vi.fn() });
+    await settle();
+    const hls = lastHls();
+    vi.spyOn(HTMLMediaElement.prototype, 'readyState', 'get').mockReturnValue(0);
+    act(() => hls.trigger('hlsLevelLoaded', { details: details(frags(13)) }));
+    video.el!.currentTime = 30;
+    slide(3);
+    expect(hls.startLoads).toEqual([12, 24]);
+    expect(video.el!.currentTime).toBe(30);
+  });
+
+  it('기동 전 시크 자리도 받기 위치로 본다(hls.js 가 seeking 에서 받기 위치를 그 자리로 옮기는 것과 같게)', async () => {
+    mount(src({ kind: 'rewind', url: REWIND, startAtMs: PDT0 + 40_000 }), {
+      onSeekRequest: vi.fn(),
+    });
+    await settle();
+    const hls = lastHls();
+    hls.hasEnoughToStart = false;
+    act(() => hls.trigger('hlsLevelLoaded', { details: details(frags(13)) }));
+    expect(hls.startLoads).toEqual([40]);
+    video.el!.currentTime = 13;
     act(() => video.el!.dispatchEvent(new Event('seeking')));
-    await act(async () => vi.advanceTimersByTime(1_000));
-    act(() => view.result.current.seekToMs(PDT0 + 36_000));
-    act(() => video.el!.dispatchEvent(new Event('seeking')));
-    expect(video.el!.currentTime).toBe(36);
+    slide(3);
+    expect(hls.startLoads).toEqual([40, 24]);
+  });
+
+  it('ENDLIST 목록은 옮기지 않는다 — hls.js 가 live 목록에서만 옮긴다', async () => {
+    const onNotice = vi.fn();
+    mount(src({ kind: 'rewind', url: REWIND }), { onNotice, onSeekRequest: vi.fn() });
+    await settle();
+    video.el!.currentTime = 2;
+    act(() => lastHls().trigger('hlsLevelUpdated', { details: details(frags(13), false) }));
+    expect(video.el!.currentTime).toBe(2);
+    expect(onNotice).not.toHaveBeenCalled();
+  });
+
+  it('라이브 재생기는 옮기지 않는다 — 라이브는 창 밖이면 되감기로 갈아 끼운다', async () => {
+    const onNotice = vi.fn();
+    mount(src(), { onNotice, onSeekRequest: vi.fn() });
+    await settle();
+    act(() => lastHls().trigger('hlsLevelUpdated', { details: details(frags(13)) }));
+    video.el!.currentTime = 15;
+    slide(3);
+    expect(video.el!.currentTime).toBe(15);
+    expect(onNotice).not.toHaveBeenCalled();
   });
 });

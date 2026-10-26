@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 import type Hls from 'hls.js';
+import type { LevelDetails } from 'hls.js';
 import {
   behindFromCurrentTime,
   dvrRange,
@@ -28,7 +29,8 @@ import {
 } from './playbackEdge';
 import { nextLivePosition, type LivePosition } from './livePosition';
 import { trackPlaybackStartOnce } from './playbackStarts';
-import type { PlaybackSource, SeekView } from './rewindSwitch';
+import { guardRewindFloor } from './rewindFloor';
+import { SESSION_NOTICES, type PlaybackSource, type SeekView } from './rewindSwitch';
 import { useControlsAutoHide } from './useControlsAutoHide';
 import {
   CLIP_MARK_MS,
@@ -57,14 +59,8 @@ const STOPPED_NOTES = {
 const HAVE_CURRENT_DATA = 2;
 /** 라이브 지연을 아직 못 쟀을 때 되감기 재생기의 라이브 끝 = 지금 − 이 값(설계 5.2절) */
 const DEFAULT_LIVE_LAG_MS = 3_000;
-/** 앱이 쓴 currentTime 과 seeking 목표가 이만큼 안이면 앱의 시크다(라이브러리 시크와 가른다) */
-const APP_SEEK_TOLERANCE_S = 0.5;
-/** 되감기 재생 중 라이브러리가 끝 쪽으로 이 배수 × TD 넘게 옮기면 한 번 되돌린다(5.3.1절 4번) */
-const LIBRARY_JUMP_TD = 2;
-/** 되돌린 뒤 이 배수 × TD 안에 또 튀면 「되돌림이 또 튐」이다. 그 뒤의 튐은 따로 일어난 것이라 다시 되돌린다 */
-const JUMP_AGAIN_TD = 2;
-/** 되돌린 뒤에도 라이브러리가 또 옮겼다 — 두고 알린다(5.3.1절 4번) */
-const LIBRARY_JUMP_NOTICE = '재생 위치가 목록 끝으로 옮겨졌어요. 다시 옮겨 주세요';
+/** 창 하한으로 옮긴 뒤 이 배수 × TD 안에 또 옮기면 알리지 않는다(숨은 탭의 밀린 갱신이 한꺼번에 올 때 — 5.3.1절) */
+const FLOOR_NOTICE_QUIET_TD = 2;
 
 /** 재생기가 로드한 목록 하나(세션의 observedEndMs · roundRewindUrls 재료) */
 export interface LoadedPlaylist extends LoadedList {
@@ -89,7 +85,7 @@ export interface PlaybackHooks {
   onPlaying?: () => void;
   onSeekRequest?: (targetMs: number, view: SeekView) => void;
   onLiveButton?: () => void;
-  /** 세션 알림(되감기 재생 중 라이브러리가 되돌린 자리를 또 옮김) */
+  /** 세션 알림(되감기 재생점이 창 밖으로 떨어지기 전에 가장 오래된 지점으로 옮김 — 5.3.1절) */
   onNotice?: (text: string) => void;
   /**
    * 재생 단추를 막는다 — 끝에 닿아 덮개가 선 동안. 끝난 목록에 play() 를 부르면 처음부터 돌아 덮개 아래에서 세션 모르게
@@ -162,16 +158,12 @@ export function useHlsPlayback(
   const src = source.url;
   // 세션 모드의 창 가장자리 상태(5.3.1절). 재생기를 갈아 끼워도 남는다: 라이브 지연은 되감기 재생기의 라이브 끝 재료다
   const lagMsRef = useRef(DEFAULT_LIVE_LAG_MS);
-  /** 앱이 마지막으로 쓴 currentTime — seeking 목표가 이것과 다르면 라이브러리(또는 기본 컨트롤)의 시크다 */
-  const expectedSeekToRef = useRef<number | null>(null);
   /** 일시정지한 자리의 실제 시각. 재개 판정은 currentTime 이 아니라 이 값으로 한다 */
   const pausedAtMsRef = useRef<number | null>(null);
   /** 멈춘 자리가 창 하한에 닿아 세션에 넘겼다(멈춤 하나에 한 번) */
   const pausedHandledRef = useRef(false);
   /** 멈춘 채 갈아 끼운 재생기는 스스로 틀지 않는다 */
   const keepPausedRef = useRef(false);
-  /** 라이브러리의 튐을 되돌린 때(Date.now). 재생기를 새로 세우거나 사용자가 시크하면 비운다(5.3.1절 4번) */
-  const jumpRestoredAtRef = useRef<number | null>(null);
   /**
    * 세션 모드인가 — 세션 고리가 있고 hls.js 재생기가 섰다. hls.js 가 없는 브라우저(네이티브 HLS)는 조각 목록 · 시각 축이 없어
    * 세션 고리가 있어도 지금처럼 라이브 창 안에서 시크한다(seekable 축)
@@ -230,8 +222,6 @@ export function useHlsPlayback(
       const axis = readAxis();
       const ask = hooksRef.current.onSeekRequest;
       if (axis === null || ask === undefined) return false;
-      // 사용자의 시크다 — 그 뒤 라이브러리가 튀면 「되돌림이 또 튐」이 아니라 새 튐이다
-      jumpRestoredAtRef.current = null;
       ask(targetMs, axis.view);
       return true;
     },
@@ -313,12 +303,6 @@ export function useHlsPlayback(
     [videoRef, seekToBehind, requestSeek, sessionActive],
   );
 
-  /** 앱이 currentTime 을 쓰는 한 곳(세션 모드) — 라이브러리 시크와 가르려고 쓴 값을 적는다(5.3.1절 4번) */
-  const writeTime = useCallback((video: HTMLVideoElement, seconds: number) => {
-    expectedSeekToRef.current = seconds;
-    video.currentTime = seconds;
-  }, []);
-
   const seekToMs = useCallback(
     (atMs: number) => {
       const video = videoRef.current;
@@ -332,25 +316,27 @@ export function useHlsPlayback(
       if (sourceRef.current.kind === 'live' && axis !== null && range && atMs >= axis.edgeMs) {
         target = liveEdgePosition(range, hlsRef.current?.liveSyncPosition ?? null);
       }
-      writeTime(video, target);
+      video.currentTime = target;
       if (video.paused) {
         pausedAtMsRef.current = atMs;
         pausedHandledRef.current = false;
       }
       onSeek?.();
     },
-    [videoRef, readAxis, writeTime, onSeek],
+    [videoRef, readAxis, onSeek],
   );
 
   const seekToLiveEdge = useCallback(() => {
     const video = videoRef.current;
     if (!video) return;
     const range = dvrRange(video.seekable);
-    if (range) writeTime(video, liveEdgePosition(range, hlsRef.current?.liveSyncPosition ?? null));
+    if (range) {
+      video.currentTime = liveEdgePosition(range, hlsRef.current?.liveSyncPosition ?? null);
+    }
     pausedAtMsRef.current = null;
     video.play().catch(() => {});
     onSeek?.();
-  }, [videoRef, writeTime, onSeek]);
+  }, [videoRef, onSeek]);
 
   // 라이브 복귀는 이 액션(LIVE 버튼)뿐이다 — 플레이어가 스스로 복귀하는 경로는 없다 (계약3 4절 3번)
   // 세션 모드면 세션이 정한다(라이브 국면은 라이브 끝으로 · 되감기는 지금 방송 번호를 대조해 라이브로 — 설계 5.3절)
@@ -415,9 +401,9 @@ export function useHlsPlayback(
     let lastGrowAt = Date.now();
     let endSent = false;
     let waiting = false;
-    jumpRestoredAtRef.current = null;
-    let stableTime: number | null = null;
-    let stableAtMs: number | null = null;
+    // 되감기 창 하한 지키기(5.3.1절)의 상태: 기동 전 받기 위치(startLoad 에 준 자리 · 기동 전 시크 자리) · 옮겨 알린 때
+    let loadFrom: number | null = null;
+    let floorNoticeAt: number | null = null;
     const reachEnd = () => {
       if (endSent) return;
       endSent = true;
@@ -488,48 +474,39 @@ export function useHlsPlayback(
     const onWaiting = () => {
       waiting = true;
     };
-    // 라이브러리(또는 기본 컨트롤)의 시크를 앱의 시크와 가른다(5.3.1절 4번). 멈춘 동안은 멈춘 시각을 지키고, 되감기 재생 중
-    // 끝 쪽으로 크게 튀었으면 되돌린다(되돌린 직후 또 튀면 두고 알린다). 라이브 재생기에서 라이브 끝으로 옮긴 것은 지금 동작이다
     const onSeeking = () => {
       rearmEnd();
-      if (!sessionActive()) return;
-      const expected = expectedSeekToRef.current;
-      if (expected !== null && Math.abs(video.currentTime - expected) < APP_SEEK_TOLERANCE_S) {
-        expectedSeekToRef.current = null;
-        return;
+      // 기동 전 시크는 받기 위치를 그 자리로 옮긴다 — hls.js 의 seeking 처리(base-stream-controller 472-476)와 같게
+      if (hlsRef.current?.hasEnoughToStart === false) loadFrom = video.currentTime;
+    };
+    // 되감기 재생점이 창 밖으로 떨어지기 전에 옮긴다 — LEVEL_UPDATED 처리기 안에서 동기로(hls.js 가 옮기기 전, 5.3.1절)
+    const keepRewindFloor = (hls: Hls, details: LevelDetails) => {
+      const moved = guardRewindFloor({ hls, video, details, loadFrom });
+      if (moved === null) return;
+      if (moved.kind === 'reload') loadFrom = moved.to;
+      // 멈춘 채 옮겼으면 재개 판정도 옮긴 자리로 한다 — 옛 자리로 세션에 다시 넘겨 알림이 겹치지 않게
+      if (video.paused && pausedAtMsRef.current !== null) {
+        pausedAtMsRef.current = programDateAt(details.fragments, moved.to);
       }
-      if (video.paused || kind !== 'rewind') return;
-      const td = hlsRef.current?.latestLevelDetails?.targetduration ?? 0;
-      if (stableTime === null || video.currentTime - stableTime <= LIBRARY_JUMP_TD * td) return;
-      const restoredAt = jumpRestoredAtRef.current;
-      if (restoredAt !== null && Date.now() - restoredAt <= JUMP_AGAIN_TD * td * 1000) {
-        hooksRef.current.onNotice?.(LIBRARY_JUMP_NOTICE);
-        return;
-      }
-      jumpRestoredAtRef.current = Date.now();
-      // 튀기 전 자리를 세션에 다시 넘긴다 — 그새 창이 밀렸으면 세션이 새 하한으로 자르고 알린다(cx H2 · seekInList)
-      const axis = readAxis();
-      if (axis !== null && stableAtMs !== null) {
-        hooksRef.current.onSeekRequest?.(stableAtMs, axis.view);
-      }
+      const now = Date.now();
+      const quietMs = FLOOR_NOTICE_QUIET_TD * details.targetduration * 1000;
+      if (floorNoticeAt !== null && now - floorNoticeAt <= quietMs) return;
+      floorNoticeAt = now;
+      hooksRef.current.onNotice?.(SESSION_NOTICES.oldest);
     };
     const onVolumeChange = () => {
       setMuted(video.muted);
       setVolumeState(Math.round(video.volume * 100));
     };
-    // 세션 모드의 그리기: 세 재생기가 같은 실제 시각 축(설계 5.2절). 끝 정체(D9)와 멈춘 자리의 창 하한(5.3.1절 3번)도 여기서 본다
+    // 세션 모드의 그리기: 세 재생기가 같은 실제 시각 축(설계 5.2절). 끝 정체(D9)와 라이브의 멈춘 자리(5.3.1절)도 여기서 본다
     const paintSession = () => {
       const axis = readAxis();
       if (axis === null) return;
       setWindowSeconds(axis.windowSeconds);
       setBehind(axis.behindSeconds);
-      if (!video.seeking) {
-        stableTime = video.currentTime;
-        stableAtMs = axis.atMs;
-      }
       // 라이브는 되감기가 준비됐을 때만 멈춘 채 갈아 끼운다. 준비 전이면 재개 때 자른다(onPlay) — 창이 밀릴 때마다 알리지
-      // 않게(5.3.1절 3번)
-      const handsOverPaused = kind !== 'live' || hooksRef.current.axisLowerMs != null;
+      // 않게. 되감기의 멈춘 자리는 LEVEL_UPDATED 가 지킨다(keepRewindFloor)
+      const handsOverPaused = kind === 'live' && hooksRef.current.axisLowerMs != null;
       const pausedAtMs = pausedAtMsRef.current;
       if (
         handsOverPaused &&
@@ -615,9 +592,12 @@ export function useHlsPlayback(
           if (startAtMs === null || startPlaced) return;
           startPlaced = true;
           const { fragments, targetduration } = data.details;
-          hls.startLoad(startLoadPosition(fragments, startAtMs, kind, targetduration) ?? -1);
+          const position = startLoadPosition(fragments, startAtMs, kind, targetduration);
+          loadFrom = position;
+          hls.startLoad(position ?? -1);
         });
         hls.on(HlsCtor.Events.LEVEL_UPDATED, (_event, data) => {
+          if (kind === 'rewind') keepRewindFloor(hls, data.details);
           const list = loadedList(data.details.fragments, data.details.targetduration);
           if (list !== null) {
             if (lastEndMs === null || list.lastEndMs > lastEndMs) {
