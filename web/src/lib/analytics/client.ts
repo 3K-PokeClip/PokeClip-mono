@@ -49,6 +49,12 @@ export const ANALYTICS_CONFIG: Partial<PostHogConfig> = {
   // 로그인한 사람만 사람 프로필을 만든다 — 익명 방문은 이벤트로만 센다
   person_profiles: 'identified_only',
   capture_pageview: 'history_change',
+  // SDK가 이 브라우저에 저장하는 최초 방문 주소($initial_person_info, .pokeclip.com 쿠키와 localStorage)와 세션 진입
+  // 주소($client_session_props)에서 OAuth 콜백의 1회용 값을 가린다(POK-485). 콜백 화면이 주소를 지우기 전에 SDK가 먼저 붙으면
+  // 그 주소를 쿼리째 적고, before_send는 나가는 이벤트만 고쳐서 저장값에는 닿지 않는다. 이름은 stripOAuthParams.ts가 지우는 둘이다.
+  // 켜면 광고 클릭 식별자(gclid 등)도 주소에서 가려진다. 그 속성은 scrub.ts가 어차피 지운다
+  mask_personal_data_properties: true,
+  custom_personal_data_properties: ['code', 'state'],
   // 처리방침 2·9절의 거부 수단: 브라우저 추적 금지(Do Not Track)를 켜면 보내지 않는다
   respect_dnt: true,
   // 다른 거부 수단 「이용 분석 참여」(설정 › 계정, setAnalyticsOptOut)는 이 브라우저에만 저장한다 — 그 기억을 .pokeclip.com

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { GOOGLE_CALLBACK_PATH } from '@/features/auth/googleOAuth';
 import { CHZZK_CALLBACK_PATH } from '@/features/settings/channels/chzzkOAuth';
 import { SOOP_CALLBACK_PATH } from '@/features/settings/channels/soopOAuth';
 import { YOUTUBE_CALLBACK_PATH } from '@/features/settings/channels/youtubeOAuth';
@@ -81,8 +82,7 @@ describe('next.config headers: Referrer-Policy (POK-482)', () => {
     // 같은 경로에 같은 키가 두 번 걸리면 뒤 항목이 이긴다(Next headers 문서). 콜백이 전역 뒤에 와야 한다.
     expect(await loadHeaders()).toEqual([
       { source: '/:path*', headers: policy('strict-origin-when-cross-origin') },
-      // 구글 로그인 redirect_uri (googleOAuth.ts): 경로 상수가 따로 없다
-      { source: '/auth/callback', headers: policy('no-referrer') },
+      { source: GOOGLE_CALLBACK_PATH, headers: policy('no-referrer') },
       { source: CHZZK_CALLBACK_PATH, headers: policy('no-referrer') },
       { source: SOOP_CALLBACK_PATH, headers: policy('no-referrer') },
       { source: YOUTUBE_CALLBACK_PATH, headers: policy('no-referrer') },

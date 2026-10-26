@@ -10,6 +10,12 @@
 
 const STATE_KEY = 'pc-oauth-state';
 
+/**
+ * 구글 동의 뒤 돌아올 redirect URI의 경로. 백엔드 GoogleAuthProperties.redirectUri(기본값 {origin}/auth/callback)와
+ * 반드시 일치해야 한다. next.config.ts의 콜백 Referrer-Policy 경로도 이 값과 짝이다(next.config.test.ts가 대조).
+ */
+export const GOOGLE_CALLBACK_PATH = '/auth/callback';
+
 /** RFC 7636 4.1 — 32바이트 난수의 base64url은 43자로, 허용 범위(43–128자)의 하한이다. */
 const CODE_VERIFIER_BYTES = 32;
 
@@ -61,9 +67,8 @@ export function buildGoogleAuthUrl(
 ): string {
   const url = new URL('https://accounts.google.com/o/oauth2/v2/auth');
   url.searchParams.set('client_id', clientId);
-  // 백엔드 GoogleAuthProperties.redirectUri와 반드시 일치해야 한다 (기본값 {origin}/auth/callback).
   // 주소 하드코딩 금지 규칙에 따라 origin에서 조립한다.
-  url.searchParams.set('redirect_uri', `${origin}/auth/callback`);
+  url.searchParams.set('redirect_uri', `${origin}${GOOGLE_CALLBACK_PATH}`);
   url.searchParams.set('response_type', 'code');
   url.searchParams.set('scope', 'openid email profile');
   url.searchParams.set('state', state);
