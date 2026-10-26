@@ -1,4 +1,4 @@
-package com.pokeclip.auth.config;
+package com.pokeclip.web.security;
 
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -12,10 +12,13 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 
 /**
- * Media(Go)가 토큰 헤더로 자기를 증명하는 수단. 공용 체인은 X-Internal-Token을 보고,
- * resolve 전용 출입증 체인(StreamKeyResolveSecurityConfig)은 같은 필터로 전용 헤더를
- * 본다 — 그 체인은 출발지 잠금을 먼저 건다. 이 필터가 지키는 엔드포인트는
+ * Media(Go)가 토큰 헤더로 자기를 증명하는 수단. auth 공용 체인은 X-Internal-Token을 보고,
+ * 출발지 잠금 창구의 전용 체인(auth StreamKeyResolveSecurityConfig)은 같은 필터로 전용 헤더를
+ * 본다 — 그 체인은 출발지 잠금을 먼저 건다. auth resolve 가 지키는 엔드포인트는
  * passphrase를 내려주므로, 뚫리면 전체 스트리머의 송출 경로가 열린다.
+ *
+ * <p>clip 공용 체인은 이 필터가 아니라 clip 자기 {@code InternalTokenFilter}를 쓴다. 이 필터는
+ * 출발지 잠금 부품과 함께 web-support 로 옮겨 왔다(POK-196 K6).
  *
  * <p>비교에 String.equals를 쓰지 않는다. 앞자리가 다르면 즉시 끝나므로 응답
  * 시간으로 한 글자씩 맞춰볼 수 있다. MessageDigest.isEqual은 길이가 같으면

@@ -1,4 +1,4 @@
-package com.pokeclip.auth.config;
+package com.pokeclip.web.security;
 
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.http.HttpServletRequest;
@@ -13,7 +13,7 @@ import org.springframework.web.filter.OncePerRequestFilter;
  * MessageDigest.isEqual(빈, 빈)}이 참이라 통과한다. 본문도 로그도 남기지 않는다({@link InternalTokenFilter}
  * 머리 주석과 같은 이유).
  */
-final class DenyAllFilter extends OncePerRequestFilter {
+public final class DenyAllFilter extends OncePerRequestFilter {
 
   @Override
   protected void doFilterInternal(
