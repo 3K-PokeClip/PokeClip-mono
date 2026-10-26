@@ -97,7 +97,7 @@ func sqlStateClass(code string) string {
 //
 // poisoned 가 true 면 이 세그먼트 하나만 버리고 프로세스는 계속 간다.
 // 에러·poison 반환의 outcome 값은 무의미한 채움이다 — 호출부는 err·poisoned 를 먼저 본다.
-func (ix *Indexer) insertWithRetry(ctx context.Context, rec index.Record, seed index.Seed, src index.SessionSource) (outcome index.InsertOutcome, seedRes index.InsertCommit, poisoned bool, err error) {
+func (ix *Indexer) insertWithRetry(ctx context.Context, rec index.Record, seed index.Seed, src index.SessionSource) (outcome index.InsertOutcome, insertCommit index.InsertCommit, poisoned bool, err error) {
 	var lastErr error
 	backoff := ix.opt.InsertRetryBase
 
