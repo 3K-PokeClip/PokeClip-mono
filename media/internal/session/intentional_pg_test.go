@@ -350,6 +350,142 @@ func TestApplyIntentionalEndMovesSessionOpenedWhileWaiting(t *testing.T) {
 	}
 }
 
+// D69 (나) 재확인 창 — 소속 잠금 ② 와 회차 행 잠금 ③ 사이에 다른 개시가 끼어드는 경우다. 개시 1(B 의 TD 분할 → C)이
+// B 를 쥔 동안 4D 가 B 를 기다리고, 개시 1 이 커밋하면 4D 는 소속 행을 다시 골라 C 를 잡는다. 그 뒤 ③ 은 셋째
+// 트랜잭션이 S-T(③ 정렬의 첫 행)에 건 FOR SHARE 에서 멈춘다(배리어). 그 사이 개시 2(C 의 TD 분할 → D)가 돈다 —
+// 4D 가 C 를 쥐고 있으므로 개시 2 는 C 에서 기다리다가, 분리가 커밋한 뒤 RETURNING 으로 새 회차 B 를 물려받는다.
+// 변이 = lockMembership 의 재확인 제거 → 4D 는 B 만 쥐고, 개시 2 가 먼저 D 를 R 에 커밋하며, 이미 시작된 ③ 문장의
+// 스냅숏에는 D 가 없어 D 가 닫힌 R 에 남아 FAIL. 제품 코드에 시험 갈래를 두지 않고 행 잠금만으로 결정적으로 재현한다.
+func TestApplyIntentionalEndRelocksMembershipBeforeRoundRows(t *testing.T) {
+	pool := newTestPool(t)
+	ctx := context.Background()
+	seedLedger(t, pool, ledgerRow{id: "S-T", streamID: "demo", state: "ending", endReason: "offline", roundID: "S-R", startedAt: stopAt.Add(-time.Hour)})
+	seedSegment(t, pool, "demo", "S-T", 1, stopAt.Add(-5*time.Second))
+	seedLedger(t, pool, ledgerRow{id: "S-B", streamID: "demo", state: "live", roundID: "S-R", startedAt: stopAt.Add(20 * time.Second)})
+	r, _ := newRoundRegistry()
+
+	barrier, barrierPID := beginWithPID(t, pool)
+	if _, err := barrier.Exec(ctx, `SELECT 1 FROM stream_sessions WHERE session_id = 'S-T' FOR SHARE`); err != nil {
+		t.Fatalf("배리어 잠금 실패: %v", err)
+	}
+	open1, open1PID := beginWithPID(t, pool)
+	first := Input{StreamID: "demo", Seq: 9, StartWallUTC: stopAt.Add(time.Minute), DurationMS: 9000, Op: OpenOrCurrent}
+	d, err := r.Decide(ctx, open1, first, first.StartWallUTC)
+	if err != nil || d.Outcome != OutcomeOpenFresh {
+		t.Fatalf("개시 1 TD 분할 결정 = (%v, %v)", d.Outcome, err)
+	}
+	cID, err := r.Open(ctx, open1, d, first.StartWallUTC)
+	if err != nil {
+		t.Fatalf("개시 1 실패: %v", err)
+	}
+
+	done := make(chan IntentionalResult, 1)
+	go func() {
+		res, _ := ApplyIntentionalEnd(ctx, pool, endAt("demo"), (&intentSlots{}).options())
+		done <- res
+	}()
+	waitBlockedBy(t, pool, open1PID)
+	if err := open1.Commit(ctx); err != nil {
+		t.Fatalf("개시 1 커밋 실패: %v", err)
+	}
+	waitBlockedBy(t, pool, barrierPID)
+
+	second := decideOpenAsync(pool, r, Input{StreamID: "demo", Seq: 10, StartWallUTC: stopAt.Add(2 * time.Minute), DurationMS: 12000, Op: OpenOrCurrent})
+	secondDone := waitBlockedOrDone(t, pool, second, 2)
+	if err := barrier.Rollback(ctx); err != nil {
+		t.Fatalf("배리어 해제 실패: %v", err)
+	}
+
+	var res IntentionalResult
+	select {
+	case res = <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("4D 적용이 끝나지 않았다")
+	}
+	if secondDone == nil {
+		secondDone = second
+	}
+	waitResult(t, secondDone)
+	if res.Effect != effectRoundSplit {
+		t.Fatalf("결과 = %+v, want round_split", res)
+	}
+	var dID string
+	var dRound *string
+	var dClosed bool
+	if err := pool.QueryRow(ctx, `SELECT session_id, round_id, round_closed_at IS NOT NULL FROM stream_sessions WHERE stream_id = 'demo' AND state = 'live'`).
+		Scan(&dID, &dRound, &dClosed); err != nil {
+		t.Fatalf("개시 2 의 live D 조회 실패: %v", err)
+	}
+	if dID == cID || strOf(dRound) != "S-B" || dClosed {
+		t.Errorf("D %s (round_id, 닫힘) = (%s, %v), want (S-B, false) — ② 와 ③ 사이에 열린 세션이 닫힌 R 에 남았다", dID, strOf(dRound), dClosed)
+	}
+}
+
+// beginWithPID 는 트랜잭션을 열고 그 백엔드 pid 를 돌려준다. 테스트가 끝나면 되돌린다(커밋했으면 무동작).
+func beginWithPID(t *testing.T, pool *pgxpool.Pool) (pgx.Tx, int32) {
+	t.Helper()
+	ctx := context.Background()
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("트랜잭션 시작 실패: %v", err)
+	}
+	t.Cleanup(func() { _ = tx.Rollback(ctx) })
+	var pid int32
+	if err := tx.QueryRow(ctx, `SELECT pg_catalog.pg_backend_pid()`).Scan(&pid); err != nil {
+		t.Fatalf("pid 조회 실패: %v", err)
+	}
+	return tx, pid
+}
+
+// waitBlockedBy 는 어떤 백엔드가 pid 에 막혀 기다릴 때까지 기다린다 — 「누가 무엇을 기다리는가」를 잠금 그래프로 확인한다.
+func waitBlockedBy(t *testing.T, pool *pgxpool.Pool, pid int32) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		var blocked bool
+		if err := pool.QueryRow(context.Background(), `
+SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_stat_activity
+                WHERE datname = pg_catalog.current_database() AND $1::int = ANY(pg_catalog.pg_blocking_pids(pid)))`, pid).
+			Scan(&blocked); err != nil {
+			t.Fatalf("잠금 그래프 조회 실패: %v", err)
+		}
+		if blocked {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("5초 안에 pid %d 를 기다리는 백엔드가 생기지 않았다", pid)
+}
+
+// waitBlockedOrDone 은 ch 가 끝나거나 막힌 백엔드가 n 개가 될 때까지 기다린다. ch 가 먼저 끝났으면 그 값을 담은 새 채널을,
+// 막힘으로 끝났으면 nil 을 돌려준다(그때는 ch 를 그대로 기다리면 된다).
+func waitBlockedOrDone(t *testing.T, pool *pgxpool.Pool, ch <-chan error, n int) <-chan error {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case err := <-ch:
+			out := make(chan error, 1)
+			out <- err
+			return out
+		default:
+		}
+		var blocked int
+		if err := pool.QueryRow(context.Background(), `
+SELECT pg_catalog.count(*) FROM pg_catalog.pg_stat_activity
+ WHERE datname = pg_catalog.current_database() AND pg_catalog.cardinality(pg_catalog.pg_blocking_pids(pid)) > 0`).
+			Scan(&blocked); err != nil {
+			t.Fatalf("잠금 그래프 조회 실패: %v", err)
+		}
+		if blocked >= n {
+			return nil
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("5초 안에 개시 2 가 끝나지도, 막힌 백엔드가 %d 개가 되지도 않았다", n)
+	return nil
+}
+
 // D73(4D 쪽) — 늦게 온 옛 연결 조각이 연 live L 이 최신 ending B 보다 이른 started_at 이어도 4D 의 소속 잠금은 L 을 잡는다.
 // 변이 = 선택 규칙을 started_at 최대로 → B 를 잡아 L 을 쥔 경쟁에 막히지 않아 FAIL.
 func TestApplyIntentionalEndLocksLiveRowAsMembership(t *testing.T) {
