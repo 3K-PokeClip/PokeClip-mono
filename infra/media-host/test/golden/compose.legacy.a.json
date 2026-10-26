@@ -149,6 +149,7 @@
       "environment": {
         "AWS_EC2_METADATA_V1_DISABLED": "true",
         "AWS_REGION": "ap-northeast-2",
+        "CONTROL_LISTEN": "127.0.0.1:8086",
         "ENSURE_SCHEMA": "false",
         "HOOK_SPOOL_PATH": "/hooks/events.jsonl",
         "MTX_API_PASS_FILE": "/run/secrets/mtx_api_pass",

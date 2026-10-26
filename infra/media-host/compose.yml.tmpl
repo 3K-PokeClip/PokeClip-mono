@@ -161,7 +161,7 @@ services:
           create_host_path: false
     logging: *attached-logging
 
-  # 세그먼트 인덱서 사이드카. 제어면 포트는 아직 열지 않는다(I1-6 전).
+  # 세그먼트 인덱서 사이드카.
   sidecar:
     image: ${sidecar_image}
     network_mode: "service:mediamtx"
@@ -199,6 +199,10 @@ services:
       S3_BUCKET: ${rewind_bucket_name}
       # 목록 줄 = 이 앞머리 + "/" + S3 키(dvr/…) — 영상 CDN 의 /dvr/* 가 버킷이다.
       REWIND_PUBLIC_BASE_URL: "${rewind_public_base_url}"
+      # 제어면 HTTP 서버. 같은 망 칸의 루프백에서만 듣는다 — nginx 제어면 server
+      # 가 control_upstream(= 이 주소)으로 넘긴다. control_upstream 이 비면 nginx
+      # 가 제어면 경로를 404 로 답해 이 서버에 닿는 길이 없다.
+      CONTROL_LISTEN: 127.0.0.1:8086
     volumes:
       - recordings:/recordings:ro
       - hooks:/hooks:ro
