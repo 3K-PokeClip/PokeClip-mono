@@ -244,7 +244,8 @@ func loadRewindRows(ctx context.Context, tx pgx.Tx, streamID string, floor int64
 
 // queryRewindRows 는 조각 축 열(seq · session_id · duration_ms · playback_pdt · playback_s3_key · pb_uploaded ·
 // is_gap)을 내는 문장 sql 을 돌려 행으로 편다 — 되감기 적재와 사슬 장부(LoadChainLedger)가 같은 열 · 같은 NULL
-// 규약을 쓴다.
+// 규약을 쓴다. sql 은 이 패키지의 문장 상수(rewindRowsSQL · chainRowsSQL)만 받는다 — 호출자 입력으로 문장을
+// 짜지 않는다(값은 args 자리표로만 넘긴다).
 func queryRewindRows(ctx context.Context, tx pgx.Tx, streamID, sql string, args ...any) ([]RewindRow, error) {
 	rows, err := tx.Query(ctx, sql, args...)
 	if err != nil {
