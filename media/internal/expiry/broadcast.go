@@ -22,11 +22,18 @@ func validIngestKey(s string) bool {
 	return ingestKeyRe.MatchString(s) && s != "." && s != ".." && !strings.HasPrefix(s, "S-")
 }
 
-// process 는 방송 하나를 지운다. 실패하면 재시도 집합에 넣는다. 키를 모르는 방송은 넣지 않는다.
+// process 는 방송 하나를 지운다. 실패하면 재시도 집합에 넣는다. 키를 모르는 방송과 상한이 보존 기간 안인 방송은
+// 넣지 않는다 — 다시 해도 같은 판정이다.
 func (e *Expirer) process(ctx context.Context, b Broadcast) {
 	if !validIngestKey(b.IngestStreamID) || b.SegmentsUntil == nil {
 		e.log.Warn("expiry_skipped", "reason", "no_ingest_key", "broadcast", b.StreamID,
 			"note", "물리 키나 구간 상한이 없다 — 장부에서 찾을 수 없는 방송이라 건너뛴다")
+		return
+	}
+	if ceiling := index.ExpiryCeiling(e.now()); b.SegmentsUntil.After(ceiling) {
+		e.log.Error("expiry_until_rejected", "stream_id", b.IngestStreamID, "broadcast", b.StreamID,
+			"until", b.SegmentsUntil.UTC(), "ceiling", ceiling.UTC(),
+			"note", "구간 상한이 보존 기간 안이다 — clip 응답을 믿고 지우지 않는다(fail-closed)")
 		return
 	}
 	if stage, err := e.deleteBroadcast(ctx, b); err != nil {

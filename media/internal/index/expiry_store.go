@@ -25,6 +25,18 @@ const ExpiryDeleteBatch = 500
 // local_path 가 필요한데, 이 나이면 MediaMTX 보존(1일)이 파일을 지운 뒤다(설계 7절 단계 2).
 const ExpirySessionlessAge = 7 * 24 * time.Hour
 
+// ExpiryRetention 은 보존 기간이다(계약-세그먼트인덱스 5-2 60일). ExpiryUntilSlack 은 clip 의 만료 판정과 이 쪽 시계의
+// 차이를 받는 여유다(설계에 값이 없어 1일 — c4 지시값).
+const (
+	ExpiryRetention  = 60 * 24 * time.Hour
+	ExpiryUntilSlack = 24 * time.Hour
+)
+
+// ExpiryCeiling 은 now 기준으로 지울 수 있는 가장 늦은 상한이다(now − 보존 기간 + 여유). 만료 루프는 이보다 늦은
+// segmentsUntil 을 받지 않고(fail-closed), 0단계 문장도 같은 상한을 다시 건다(보안 H1 — clip 응답 한 줄이 보존
+// 기간 안 조각을 비가역으로 지우지 않게).
+func ExpiryCeiling(now time.Time) time.Time { return now.Add(-ExpiryRetention + ExpiryUntilSlack) }
+
 // ErrCutoffInvalid 는 그 스트림의 컷오프가 장부에 없는 행을 가리킨다는 뜻이다(e1 — fail-closed). 그 스트림은
 // 삭제를 멈추고 다른 스트림은 계속한다(e3).
 var ErrCutoffInvalid = errors.New("index: 무효 컷오프 — 이 스트림의 만료 삭제를 멈춘다")
@@ -64,13 +76,19 @@ func (q ExpiryQuery) args() []any {
 const expiryRangeFilter = `t.stream_id = $1 AND t.start_wall_utc < $3::timestamptz
    AND ($2::timestamptz IS NULL OR t.start_wall_utc >= $2::timestamptz)`
 
-// markExpiredSQL 은 0단계다 — 범위에 닿은 세션에 expired_at 을 쓴다(이미 있으면 그대로). 이후 상태 읽기는 그
-// 회차를 Unknown 으로 본다(계약 5-2 2단계 조회 제외).
+// markExpiredSQL 은 0단계다 — 범위에 닿은 ended 세션에 expired_at 을 쓴다(이미 있으면 그대로). 이후 상태 읽기는 그
+// 회차를 Unknown 으로 본다(계약 5-2 2단계 조회 제외). $4 는 보존 기간 − 여유(초)다 — 상한을 LEAST($3, now() − $4)
+// 로 다시 건다(ExpiryCeiling 과 같은 값 · 만료 루프의 거부와 이중 방어 — 보안 H1). ended 가 아닌 세션은 발행
+// 중이라 표시하지 않는다.
 const markExpiredSQL = `
 UPDATE stream_sessions s SET expired_at = pg_catalog.now()
- WHERE s.stream_id = $1 AND s.expired_at IS NULL
+ WHERE s.stream_id = $1 AND s.expired_at IS NULL AND s.state = 'ended'
    AND s.session_id IN (SELECT t.session_id FROM stream_segments t
-                         WHERE ` + expiryRangeFilter + ` AND t.session_id IS NOT NULL)`
+                         WHERE ` + expiryRangeFilter + ` AND t.session_id IS NOT NULL
+                           AND t.start_wall_utc < pg_catalog.now() - pg_catalog.make_interval(secs => $4::double precision))`
+
+// expiryMinAge 는 markExpiredSQL $4 다 — 지울 수 있는 조각의 최소 나이(ExpiryCeiling 과 같은 원천).
+const expiryMinAge = ExpiryRetention - ExpiryUntilSlack
 
 // MarkExpired 는 범위에 닿은 세션의 expired_at 을 한 트랜잭션(한 문장)으로 쓰고 새로 쓴 세션 수를 돌려준다.
 // 부른 쪽은 커밋 뒤 PlaybackChanged(스트림)를 부른다 — 뒤 단계가 실패해도 조회 제외는 남는다(D16).
@@ -78,7 +96,7 @@ func MarkExpired(ctx context.Context, pool *pgxpool.Pool, q ExpiryQuery) (int64,
 	if err := q.validate(); err != nil {
 		return 0, err
 	}
-	tag, err := pool.Exec(ctx, markExpiredSQL, q.args()...)
+	tag, err := pool.Exec(ctx, markExpiredSQL, append(q.args(), expiryMinAge.Seconds())...)
 	if err != nil {
 		return 0, fmt.Errorf("만료 조회 제외 표시 실패 stream_id=%q: %w", q.StreamID, err)
 	}
@@ -186,21 +204,23 @@ type ExpiryDocument struct {
 
 // expiryDocumentsSQL ($1 · $2 · $3 범위) — 문서를 종류 · 세션 순으로 고른다.
 //
-// 사슬은 범위에 닿은 세션에서 계승 간선(inherits_session)을 앞 · 뒤로 따라간다. 재귀 항이 사슬을 한 번만 읽도록
-// 잇는 행(cs)을 붙인다. UNION 이 중복을 지우므로 끝난다. 문서는 ended 세션 것만 고른다 — 열린 세션의 문서는
-// 발행 중이다.
+// 사슬은 범위에 닿은 세션에서 계승 간선을 앞(자식 → 부모) · 뒤(부모 → 자식)로 따라간다. 간선은 chainEdgeSQL 한
+// 벌이다(사슬 닫힘 · 후속 판정과 같은 규칙) — 늦은 회차 분리가 만든 회차를 가로지르는 간선은 잇지 않는다. 재귀 항은
+// 간선 표(edge)를 한 번 읽고 어느 끝이 사슬 안이든 반대 끝을 더한다. UNION 이 중복을 지우므로 끝난다. 문서는 ended
+// 세션 것만 고른다 — 열린 세션의 문서는 발행 중이다.
 const expiryDocumentsSQL = `
 WITH RECURSIVE touched AS (
     SELECT DISTINCT t.session_id FROM stream_segments t
      WHERE ` + expiryRangeFilter + ` AND t.session_id IS NOT NULL
+), edge(child, parent) AS (
+    SELECT c.session_id, p.session_id
+      FROM stream_sessions c JOIN stream_sessions p ON ` + chainEdgeSQL + `
+     WHERE c.stream_id = $1
 ), chain(session_id) AS (
     SELECT session_id FROM touched
     UNION
-    SELECT n.session_id
-      FROM chain c
-      JOIN stream_sessions cs ON cs.session_id = c.session_id
-      JOIN stream_sessions n  ON n.stream_id = $1
-                             AND (n.inherits_session = c.session_id OR n.session_id = cs.inherits_session)
+    SELECT CASE WHEN e.child = k.session_id THEN e.parent ELSE e.child END
+      FROM chain k JOIN edge e ON k.session_id IN (e.child, e.parent)
 )
 SELECT d.kind, d.session_id, d.key FROM (
     SELECT 1 AS kind, s.session_id, s.dvr_s3_key AS key
