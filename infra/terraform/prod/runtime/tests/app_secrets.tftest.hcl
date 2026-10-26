@@ -84,9 +84,9 @@ run "maps_services_to_secret_env_names" {
 
   assert {
     condition = toset(keys(output.app_secret_arns["chat-collector"])) == toset([
-      "INTERNAL_API_TOKEN", "CHZZK_CLIENT_SECRET",
+      "INTERNAL_API_TOKEN", "CHZZK_CLIENT_SECRET", "SOOP_CLIENT_SECRET",
     ])
-    error_message = "chat-collector 의 env 이름 집합이 INTERNAL_API_TOKEN · CHZZK_CLIENT_SECRET 과 다르다."
+    error_message = "chat-collector 의 env 이름 집합이 INTERNAL_API_TOKEN · CHZZK_CLIENT_SECRET · SOOP_CLIENT_SECRET 과 다르다."
   }
 
   assert {
@@ -160,6 +160,17 @@ run "points_each_env_name_at_its_shell" {
       STREAM_KEY_RESOLVE_TOKEN   = module.secret_shells.secret_arns["pokeclip/prod/stream-key-resolve-token"]
     }
     error_message = "auth 의 env 이름이 같은 용도의 그릇 ARN 을 가리키지 않는다."
+  }
+
+  # chat-collector 의 SOOP 앱 비밀은 auth 와 같은 그릇이다(POK-306 — SOOP 채팅
+  # SDK 가 생성자에서 ID · 비밀을 함께 받는다).
+  assert {
+    condition = output.app_secret_arns["chat-collector"] == {
+      INTERNAL_API_TOKEN  = module.secret_shells.secret_arns["pokeclip/prod/internal-api-token"]
+      CHZZK_CLIENT_SECRET = module.secret_shells.secret_arns["pokeclip/prod/chzzk-client-secret"]
+      SOOP_CLIENT_SECRET  = module.secret_shells.secret_arns["pokeclip/prod/soop-client-secret"]
+    }
+    error_message = "chat-collector 의 env 이름이 같은 용도의 그릇 ARN 을 가리키지 않는다."
   }
 
   # 같은 env 이름은 서비스가 달라도 같은 그릇(같은 ARN)이다. auth 가 아홉을

@@ -83,6 +83,9 @@ type Config struct {
 	// 오면 새 회차가 직전 회차를 물려받는다(ADR-044 결정 3 · kty ⑷). 설계값이라 env 가 없고 값의 집은
 	// 여기 하나다. 판정은 session 레지스트리가 한다(조립점이 옮겨 담는다).
 	ReconnectWindow time.Duration
+
+	// Control 은 되감기 제어면 서버의 설정이다(CONTROL_* — 설계 M5 3.4 · 3.7).
+	Control ControlOptions
 }
 
 // 관측 축 기본값(설계 5.4.1·6.5.2). 판정 주체(indexer·session)는 이 값을 설정으로 받으며
@@ -321,6 +324,11 @@ func Load(env func(string) string) (Config, error) {
 			mtx.PollInterval, obsFresh)
 	}
 
+	control, err := loadControl(env)
+	if err != nil {
+		return Config{}, err
+	}
+
 	return Config{
 		PG:               pg,
 		SegmentRoot:      watch.Root,
@@ -344,6 +352,7 @@ func Load(env func(string) string) (Config, error) {
 		RewindWatchEvery: 30 * time.Second,
 		// S3_BUCKET 이 비면 읽지 않아 빈 값이다(계획 B-9).
 		RewindPublicBaseURL: rewindBaseURL,
+		Control:             control,
 	}, nil
 }
 

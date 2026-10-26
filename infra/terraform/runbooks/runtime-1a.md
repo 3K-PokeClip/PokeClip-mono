@@ -58,6 +58,10 @@ prod/network(O7a) 뒤, platform(O7d) · media(O7e) 앞입니다. platform · med
 의 platform plan 에 `module.clip.aws_ecs_service.this` 의 `desired_count`
 0 → 1 이 보이면 그 apply 는 거부합니다(「1단-다 되돌리기 — O7d 뒤」).
 
+1단-가를 이미 적용한 RDS 에 M6 장부 스키마(POK-196)를 더하는 것은 아래
+「M6 스키마 재실행」 절입니다 — 1단-나 ①을 끝낸 뒤 이 표의 4–7 을 다시
+돕니다.
+
 ## 1. 직전 점검
 
 [단계 직전 점검](stage-precheck.md)의 「순서」 를 묶음 · 단계
@@ -85,8 +89,12 @@ bash infra/terraform/scripts/precheck/events.sh --since <비교 기준 판정 �
     `approvals.tsv` 에 「진행」 을 적어야 다음으로 갑니다.
 *   ② 에서 `prod-instance`(prod EC2 인스턴스 — 실행기가 꺼져 있고 다른 prod
     인스턴스도 없음) · `rds-master-secret`(관리형 마스터 비밀 — apply 전이라
-    입력 파일 없음)의 `TARGET_NONE` 은 이 걸음에서 정상입니다. 「진행」 의
-    이유로 그렇게 적습니다.
+    입력 파일 없음)의 `TARGET_NONE` 은 이 걸음에서 정상입니다.
+    `prod-roles`(경로 `/pokeclip/prod/` 의 역할)의 `TARGET_NONE` 은
+    O7d(platform apply) 전에만 정상입니다 — runtime 의 역할은 실행기
+    역할뿐이라 켤 때만 생깁니다. 「진행」 의 이유로 그렇게 적습니다. O7d
+    뒤에는 platform 역할이 늘 있어야 하므로 `prod-roles` 의 `TARGET_NONE` 은
+    멈춤입니다.
 *   ① 이 종료 0 이 아니거나(승인 뒤에도 DENIED 등) ② 가 종료 0 도, 「진행」
     이 적힌 종료 3 도 아니면 2 로 가지 않습니다.
 
@@ -215,6 +223,8 @@ bash infra/terraform/scripts/precheck/principal-check.sh runtime-1a
     종료 2 면(입력 파일을 읽지 못함 · 꼴 밖 · 응답 ARN 다름) 원인을 고친 뒤
     다시 돌립니다.
     `prod-instance` 의 `TARGET_NONE` 은 실행기가 꺼져 있어 정상입니다.
+    `prod-roles` 의 `TARGET_NONE` 은 O7d 전이면 정상, O7d 뒤면
+    멈춤입니다(1 의 ②).
 
 ## 4. 실행기 켬
 
@@ -227,6 +237,8 @@ bash infra/terraform/scripts/precheck/principal-check.sh runtime-1a
     *   `rds-master-secret` 행이 `TARGET_NONE` 이거나 `ALLOWED` 임(3-1).
 
     `prod-instance` 의 `TARGET_NONE` 은 실행기가 아직 꺼져 있어 정상입니다.
+    `prod-roles` 의 `TARGET_NONE` 은 O7d 전이면 정상, O7d 뒤면
+    멈춤입니다(1 의 ②).
 1.  **plan**: 실행기만 켜는 plan 입니다.
 
     ```shell
@@ -240,9 +252,8 @@ bash infra/terraform/scripts/precheck/principal-check.sh runtime-1a
     둘 · `rds_from_sql_runner` · 인스턴스)입니다. 다르면 apply 하지 않습니다.
 1.  **apply**: `terraform apply runner-on.tfplan && rm runner-on.tfplan`.
 1.  **켠 시각 기록**: `date '+%Y-%m-%d %H:%M'` 를 적습니다(8). **이 시각부터
-    120분 안에 7(끔)을 시작합니다.** 준비 단계(5-3)가 상자에 120분 뒤 자동
-    종료(`shutdown -h +120`)를 걸어 두지만, 상자가 멈춰도 자원 · 역할은
-    남으므로 7 은 그대로 합니다.
+    120분 안에 7(끔)을 시작합니다.** 상자가 멈춰도 자원 · 역할은 남으므로
+    7 은 그대로 합니다.
 1.  **SSM 등록**: 아래가 `Online` 이 될 때까지 기다립니다(보통 몇 분).
 
     ```shell
@@ -271,6 +282,8 @@ bash infra/terraform/scripts/precheck/principal-check.sh runtime-1a
         명령 · 세션 · 연결 권한이 있음.
     *   `prod-instance` 행이 `TARGET_NONE` — 켰는데 태그로 풀리지 않음(한계
         A14). 판정하지 못했으니 보내지 않습니다.
+    *   `prod-roles` 행이 `TARGET_NONE` — 켰는데 실행기 역할이 경로
+        `/pokeclip/prod/` 로 풀리지 않음. 판정하지 못했으니 보내지 않습니다.
     *   `report.txt` 에 「자원 없음」 줄 · `rds-master-secret` 의
         `TARGET_NONE` 또는 `ALLOWED`(4 의 첫 걸음과 같음).
 
@@ -320,9 +333,7 @@ names = ["00_preflight.sql", "10_roles.sql", "stream_schema.sql",
          "50_advisory_probe.sql"]
 box = "/root/rt1a"
 sums = []
-# 자동 종료를 맨 앞에 건다 — 뒤 명령이 실패해도 상자는 120분 뒤 멈춘다.
-prepare = ["set -eu", "umask 077", "shutdown -h +120",
-           f"mkdir -p {box}/sql", f"cd {box}/sql"]
+prepare = ["set -eu", "umask 077", f"mkdir -p {box}/sql", f"cd {box}/sql"]
 for n in names:
     raw = subprocess.run(["git", "show", f"{sha}:{src}/{n}"],
                          check=True, capture_output=True).stdout
@@ -476,7 +487,7 @@ send_step() {
     psql 패키지 `postgresql17` 이 AL2023 에 있는지는 미확인이라 없으면
     16 을 깝니다(이 SQL 에는 16 클라이언트로 충분). CA 번들 주소는 RDS
     문서의 지역 번들 꼴이고 원문 대조는 미확인입니다 — 받지 못하면 준비가
-    실패합니다. 준비는 맨 앞에서 상자에 120분 뒤 자동 종료를 겁니다.
+    실패합니다.
 1.  **적용**(승인 뒤): `send_step apply`. 통과는 상태 `Success` 이고 표준
     출력에 `PREFLIGHT OK` · `VERIFY OK` 가 있는 것입니다. 실패하면 「실패 ·
     시간 초과」 로 갑니다.
@@ -636,17 +647,24 @@ send-command 상태가 `Success` 가 아니거나(`Failed` · `TimedOut` ·
 
 **손 SQL 규칙.** 이 규칙은 실패 · 시간 초과 뒤 원인을 고치는 교정용 손
 SQL 에만 씁니다 — 해체 SQL 은 「되돌리기 · 해체」 를 따릅니다(지운 뒤라
-`40_verify.sql` 이 반드시 실패합니다). 손 SQL 은 새 페이로드이고 kty 승인을
-새로 받습니다 — 같은 흐름 안에서 임의로 다시 보내거나 덧붙여 보내지
-않습니다. 페이로드는 5-1 의 `conn` 명령 뒤에 그 SQL 을
-`psql -X -1 -v ON_ERROR_STOP=1` 로 돌리고 이어서 `40_verify.sql` 을 돌리는
-JSON 입니다. 보내기 전에 SQL 원문을 kty 에게
+`40_verify.sql` 이 반드시 실패합니다). 예외는 아래 「M6 읽기 질의」 입니다 —
+교정이 아니라 읽기 전용(`SET TRANSACTION READ ONLY`) 판정 질의라 같은 흐름에
+이어 보내지만, 보내는 꼴(새 페이로드 · SQL 원문을 보이고 새 승인)은
+같습니다. 손 SQL 은 새 페이로드이고 kty 승인을 새로 받습니다 — 같은 흐름
+안에서 임의로 다시 보내거나 덧붙여 보내지 않습니다. 페이로드는 5-1 의
+`conn` 명령 뒤에 그 SQL 을 `psql -X -1 -v ON_ERROR_STOP=1` 로 돌리고 이어서
+`40_verify.sql` 을 돌리는 JSON 입니다. 보내기 전에 SQL 원문을 kty 에게
 보이고 승인을 받습니다. 판정은 5 와 같습니다(상태 `Success` · `VERIFY OK`).
 실패하면 이 절의 1부터 다시 따릅니다.
 
 ## 되돌리기 · 해체
 
-*   **SQL**: 파일마다 트랜잭션이라 실패한 파일은 남지 않습니다. 적용을 통째로
+*   **SQL**: 파일마다 트랜잭션이라 실패한 파일은 남지 않습니다. 아래 해체
+    SQL 은 M6 운영 SQL 적용 뒤 서비스 되돌리기 용도로 쓰지 않습니다(해체
+    전용) — M6 결함은 앞으로 고칩니다([Media 교체 런북](media-swap.md) 「M6
+    운영 SQL 경계 · 롤백 하한」). M6 장부 객체(새 표 · 열 · 트리거 · 함수)가
+    있는 DB 에서는 아래 SQL 을 돌려 본 적이 없습니다 — 아래에 적은 확인은
+    모두 M6-0 앞 판 SQL(10 · 20 · 30 · 40)에서 한 것입니다. 적용을 통째로
     되돌릴 때는 실행기를 켜고 마스터로 아래를 `psql -1` 로 돌립니다 — 표 ·
     함수(media_owner 소유 전부) → 앱 스키마 → DB 권한 → 앱 사용자 → 두
     계정 → media_owner 순서입니다. 앱 스키마 · 앱 사용자 줄은 앱 서버가
@@ -705,9 +723,9 @@ JSON 입니다. 보내기 전에 SQL 원문을 kty 에게
     `ssm:CreateAssociation` — 4 의 켬 뒤), 마스터 비밀을 읽을 수
     있는지(3-1)를 묻지만, 판정은 그 시점 한
     번씩입니다. 실행기가 켜진 동안 그 권한이 생기면 dev 주체가 마스터 비밀을
-    읽을 수 있습니다. 그래서 SQL 직후 끕니다. 120분 뒤 자동 종료는 준비
-    단계(5-3)가 건 뒤에만 있고, 4(켬)에서 5-3 사이에는 시한이 없습니다. 그
-    사이 멈추면 바로 7(끔)을 합니다.
+    읽을 수 있습니다. 그래서 SQL 직후 끕니다. 상자에 자동 종료는 없어
+    7(끔)이 실행기를 닫는 유일한 길입니다. 절차가 어디서 멈추든 바로
+    7(끔)을 합니다.
 *   명령 질문은 인스턴스 ARN 만 묻고 문서(`AWS-RunShellScript`) 쪽 허용은
     묻지 않습니다. dev 배포 주체 둘은 그 문서 허용이 양성 대조라 갈리는
     쪽이 인스턴스이기 때문입니다. dev 정책이 인스턴스를 태그 조건으로 열면
@@ -715,13 +733,244 @@ JSON 입니다. 보내기 전에 SQL 원문을 kty 에게
 *   자동화(`ssm:StartAutomationExecution`)로 켜진 상자에 명령을 보내는 길은
     묻지 않습니다. 이 동작은 인스턴스 자원 유형을 받지 않아(자동화 문서 ·
     실행만 — [서비스 승인 참조](https://docs.aws.amazon.com/service-authorization/latest/reference/list_ssm.html))
-    인스턴스 ARN 으로 물을 수 없습니다. 실행기가 켜진 동안(5-3 뒤로는 최대
-    120분)만 열린 길이라 위의 짧게 켜 두기가 이 한계도 좁힙니다.
+    인스턴스 ARN 으로 물을 수 없습니다. 실행기가 켜진 동안(4(켬)부터
+    7(끔)까지)만 열린 길이라 위의 짧게 켜 두기가 이 한계도 좁힙니다.
 *   SQL 실적용 시험(CI)은 Go 메타 명령 처리기로 돌고 psql 자체가 아니며,
     대역은 `rds_superuser` 가 아닙니다. TLS · `rds.force_ssl` 은 CI 가 재지
     못합니다.
 *   연결 상한 20 · `statement_timeout` 60s 는 측정값이 아닙니다(O7e 에서
     다시 봅니다).
+
+## M6 스키마 재실행
+
+M6-0(POK-196 장부 스키마)이 고친 운영 SQL(`stream_schema.sql` ·
+`20_schema.sql` · `30_grants.sql` · `40_verify.sql`)을, 1단-가 · 1단-나 ①을 적용한
+RDS 에 다시 적용하는 절차입니다. 새 실행기는 없습니다 — 이 런북의 4–7 을
+재실행 SHA 하나로 그대로 돕니다. 실행자 · 승인 규칙은 이 런북 머리와
+같습니다.
+
+용어:
+
+*   **하한**(`stream_seq_floors`): 스트림마다 다음에 쓸 수 있는 가장 작은
+    seq 입니다. 조각 행이 지워지면 트리거가 하한을 올리고, 하한보다 작은
+    seq 의 INSERT 를 `seq_below_floor`(SQLSTATE 23514)로 거부합니다 — 지워진
+    seq 를 다시 쓰지 못하게 합니다(seq 재사용 금지).
+*   **하한 이상 이미지**: M6-0 머지 커밋을 조상으로 둔 커밋으로 빌드한 사이드카
+    이미지입니다. 하한을 읽는 `LoadCursor`(M6-0 c2)와 기동 스키마
+    확인(M6-0 c3)이 들어 있습니다. 경계 규칙은 [Media 교체 런북](media-swap.md)
+    「M6 운영 SQL 경계 · 롤백 하한」 입니다.
+*   **재실행 SHA**: 이 절을 도는 커밋입니다. 처음은 M6-0 머지 커밋이고, 그
+    뒤 M6 운영 SQL 을 고친 전진 SQL PR 이 머지되면 그 머지 커밋입니다. 8 에
+    기록된 SQL 적용 SHA(1단-가 · 1단-나 ① · 이 절의 재실행) 가운데 최신 것
+    이상(그 SHA 를 조상으로 둔 커밋)이어야 합니다 — 아래 「다시 돌려도
+    안전합니다」 의 함수 교체, 그리고 옛 판 10 이 앱 넷에 `public` CREATE 를
+    다시 주기 때문입니다.
+
+### M6 스키마 재실행 순서
+
+기본 절차는 O7e(Media 처음 기동) **전에** 이 SQL 까지 끝내는 것입니다(kty
+2026-10-26 확정). 그러면 하한 아래 사이드카가 트리거 있는 DB 에서 돈 적이
+없어 교체 창이 없습니다.
+
+| # | 하는 일 | 자리 |
+|---|---|---|
+| 1 | M6-0 · M6-6a 머지 | — |
+| 2 | 이 절의 재실행(4–7 · 재실행 SHA = M6-0 머지 커밋) | 아래 「재실행 걸음」 |
+| 3 | 사이드카 재푸시 · 기록 갱신 | [prod 산출물 런북](prod-artifacts.md) 「사이드카 재푸시(M6-0 뒤)」 |
+| 4 | `prod/media` tfvars 의 `image_digests.sidecar` 를 3 의 다이제스트로 교체 | — |
+| 5 | O7e | [Media 교체 런북](media-swap.md) 「O7e — 처음 기동」 |
+
+O7e 가 이미 끝났으면(하한 아래 사이드카가 이미 prod 에서 돎) 이 순서
+대신 Media 교체 런북 「한 창 절차」 를 따릅니다. 아직 O7e 전이면 이 순서를
+건너뛰지 않습니다(kty 가 명시해 승인한 경우만 예외). 그 절차의 3 이 이 절의
+재실행입니다.
+
+*   M6-0 머지본 이후 사이드카는 기동 때 새 열 · 표 · 트리거를 확인하고,
+    없으면 `schema_not_ready` 를 남기고 종료 코드 1 로 끝납니다. 그래서 2 를
+    건너뛰고 3 의 이미지로 O7e 를 하면 사이드카가 뜨지 않습니다.
+*   M6 재실행 뒤에는 「1단-나 ① 되돌리기」 의 스키마 권한 걸음(1단-가 머지
+    커밋 SHA 로 5 를 돎)을 쓰지 않습니다. 그 SHA 는 위 용어의 재실행 SHA
+    규칙에 어긋나고, 그 판 30 은 M6 권한(`media_indexer` 의 DELETE 등)을
+    거두지 않아 그 판 40 의 `privilege:<역할>:<표>:<권한>` 단언이 남은
+    권한으로 실패합니다(그 판 `40_verify.sql` 머리 주석 판독 · 돌려 보지는
+    않음). M6 재실행 뒤 1단-나 ①을 되돌려야 하면 kty 에게 회부합니다.
+*   다시 돌려도 안전합니다. M6 문장은 카탈로그 확인 DO 블록(열은
+    `information_schema.columns` · 트리거는 `pg_trigger` 를 확인한 뒤
+    만듦)과 `IF NOT EXISTS` 꼴이라 표 · 열 · 인덱스 · 트리거는 있으면
+    건너뛰고 없는 것만 만듭니다(M6-0 이 `ddl.go` 와 같은 문장으로 두고
+    `prod_sql_contract_test` 가 바이트를 대조). 함수는 다릅니다 — `CREATE OR
+    REPLACE FUNCTION` 이라 그 SHA 의 본문으로 교체됩니다(트리거 함수 ·
+    `SECURITY DEFINER` 함수 포함). 그래서 재실행 SHA 는 위 용어의 규칙대로
+    8 에 기록된 최신 SHA 이상이어야 합니다 — 옛 SHA 로 돌리면 함수가 옛
+    본문으로 돌아갑니다. 정의자 함수의 EXECUTE 회수(`REVOKE`)도 다시
+    돌지만 멱등입니다. 10(1단-나 ① 판) · 20 · 30 도 다시 돌리면 같은
+    상태로 수렴합니다(5-3 끝).
+
+### 재실행 걸음
+
+1.  **선행**: 재실행 SHA 가 `origin/develop` 에 있습니다. 5-1 의
+    `make_payload` 가 조상인지 확인하고, 아니면 「멈춤」 을 냅니다.
+1.  **선행(1단-나 ①)**: 8 의 기록(볼트 raw · Jira 코멘트)에 둘 중 하나가
+    있습니다 — POK-428 코멘트의 「1단-나 ①」 절 통과, 또는 1단-가 첫 적용을
+    그 절 걸음 1 경로(1–8 을 `a962a00f` 를 조상으로 둔 SHA 로 처음부터)로 한
+    기록(POK-304 코멘트). 둘 다 없으면 이 절을 돌지 않고 그 절부터 끝냅니다 —
+    재실행 SHA 의 10 은 1단-나 ① 판이라, 이 절을 먼저 돌면 그 절 걸음
+    3(10 앞에 `public` 의 앱 계정 소유 객체가 0행인지 확인)을 건너뛰고 10
+    이 적용됩니다. 그 절이 걸음 3 에서 멈추면 이 재실행도 멈추고 kty 에게
+    회부합니다.
+1.  **4(켬)**: 그대로 합니다 — 직전 점검 다시 · 실행기만 켜는 plan ·
+    켠 시각 기록 · SSM 등록 · 켬 뒤 2-3 판정. 켠 시각부터 120분 안에 7 을
+    시작합니다.
+1.  **5-1(페이로드)**: `make_payload "<재실행 SHA>"`. M6-0 은 SQL 파일을
+    더하지 않으므로 `names` 는 그대로입니다(전진 SQL PR 이 파일을 더했으면
+    그 PR 이 `names` 도 고칩니다) — 이름이 다르면 `git show` 가 실패해
+    「멈춤」 이 납니다.
+1.  **잠금 대기 상한 넣기**: 적용 페이로드에 `lock_timeout` 을 겁니다.
+    아래는 `apply.json` 의 마지막 명령(00 → 40 반복) 바로 앞에 한 줄을
+    끼웁니다.
+
+    ```shell
+    jq '.commands |= (.[:-1] + ["export PGOPTIONS=\"-c lock_timeout=3s\""] + .[-1:])' \
+      "${payload}/apply.json" >"${payload}/apply.json.new" &&
+      mv "${payload}/apply.json.new" "${payload}/apply.json"
+    jq -r '.commands[-2]' "${payload}/apply.json"   # export PGOPTIONS="-c lock_timeout=3s"
+    ```
+
+    `PGOPTIONS` 는 psql(libpq)이 접속할 때 서버에 넘기는 세션 설정이고,
+    `lock_timeout` 은 잠금 하나를 기다리는 시간의 상한입니다 — 넘으면 그
+    문장이 실패합니다. 파일 전체의 상한은 아닙니다. 한 파일(`psql -1` 의 한
+    트랜잭션)이 잠금 여럿을 차례로 기다리면 대기가 쌓여 3초를 넘을 수 있고,
+    잡은 잠금을 들고 있는 시간도 이 값이 제한하지 않습니다(prod 크기에서의
+    보유 시간은 미확인). ALTER TABLE · CREATE TRIGGER 는 표에 강한 잠금을
+    기다리는 동안 뒤에 오는 사이드카 · 앱 서버 질의를 줄 세웁니다. 3초는
+    사이드카 핫 경로 트랜잭션 상한 `TxnDeadline`
+    10초(`media/internal/index/store.go:147`)보다 짧게 고른 값입니다 — 잠금
+    하나를 두고는 사이드카가 이 줄에 서서 시한에 걸리기 전에 SQL 쪽이 먼저
+    물러납니다. 마지막 줄이 주석의 값과 다르면 보내지 않고 7 로 갑니다.
+1.  **5-2 · 5-3(준비 · 적용)**: 그대로 합니다. 통과는 상태 `Success` 와
+    표준 출력의 `PREFLIGHT OK` · `VERIFY OK` 입니다 — M6-0 판 `40_verify.sql`
+    은 열 넷 · 표 둘 · 인덱스 · 트리거 둘 · M6 권한까지 봅니다.
+    *   표준 오류에 `lock timeout` 줄이 있으면 잠금 상한에 걸린 것입니다.
+        그 파일만 롤백됩니다(`psql -1`). 「실패 · 시간 초과」 대로 끄고
+        다음 흐름을 4 부터 다시 합니다 — 같은 SHA 로 다시 돌리면 수렴합니다.
+    *   「한 창 절차」 3 으로 온 흐름이면 끄기 전에 아래 「M6 읽기 질의」 의
+        하한 질의를 같은 흐름에서 보냅니다(그 절차의 4).
+1.  **6(advisory)**: 그대로 합니다. 뒤따르는 40 이 한 번 더 `VERIFY OK`
+    인지가 무변경 확인입니다.
+1.  **7(끔)**: 그대로 합니다 — 잔여 0 까지.
+1.  **기록**: 8 의 항목에 재실행 SHA · `lock_timeout` 값 · sha256 일곱
+    줄 · `apply` 결과를 더합니다. Jira POK-196 코멘트에 통과 시각과 SHA 를
+    남깁니다. 이 기록이 사이드카 재푸시(위 순서 3)의 선행 조건입니다.
+
+### M6 읽기 질의
+
+M6 운영에서 DB 를 읽어 판정해야 하는 자리가 둘 있습니다. 둘 다 실행기를
+켠 흐름 안에서 「실패 · 시간 초과」 의 손 SQL 규칙대로 보냅니다 — 새
+페이로드 · SQL 원문을 kty 에게 보이고 승인 · 뒤이어 `40_verify.sql` ·
+판정은 상태 `Success` 와 `VERIFY OK`. 질의는 읽기만 하고, 표 주인
+`media_owner` 로 바꿔 읽습니다(마스터는 SET ROLE 만 가짐 — `10_roles.sql`).
+표 주인은 쓰기 권한도 가지므로 질의 파일의 첫 줄은 언제나
+`SET TRANSACTION READ ONLY;` 입니다 — `psql -1` 이 연 트랜잭션 안에서 SET
+ROLE 앞에 둬, 질의에 쓰기 문장이 섞여도 서버가 거부합니다(SQLSTATE 25006).
+아래 `make_read` 가 첫 줄을 확인하고 다르면 멈춥니다.
+
+| 질의 | 쓰는 자리 | 통과 |
+|---|---|---|
+| 하한 질의(`floor.sql`) | 「한 창 절차」 4 · 6, 롤백 하한 사고 확인 | `(0 rows)` |
+| 업로드 적체(`backlog.sql`) | 「한 창 절차」 7′ 앞 조건 · 정상 교체 8 의 회수 조건 | 세 행 모두 `pending` 0 · `failed` 0 |
+
+**흐름.** 「M6 스키마 재실행」 과 같은 흐름이면 적용 뒤 이어서 보냅니다. 따로
+읽을 때는 4(켬) → 5-1(기록된 최신 재실행 SHA) → 5-2 → 5-3 의 준비만 → 아래 읽기
+→ 7(끔)입니다. 상자는 켤 때마다 새로 만들어지므로 준비를 건너뛰지 않습니다.
+
+질의 원문을 페이로드 디렉터리에 씁니다. 하한 질의는 설계 M6 10절의 확인
+질의입니다 — 남은 조각의 최댓값 + 1 이 하한보다 작은(꼬리 조각이 지워져
+하한이 앞선) 스트림을 냅니다. 하한 아래 판이 그 스트림을 다시 색인하면
+트리거가 거부하고 그 스트림 색인이 멈춥니다.
+
+```shell
+cat >"${payload}/floor.sql" <<'SQL'
+SET TRANSACTION READ ONLY;
+SET ROLE media_owner;
+SELECT f.stream_id, f.next_seq, m.max_seq
+  FROM stream_seq_floors f
+  LEFT JOIN LATERAL (SELECT pg_catalog.max(seq) AS max_seq FROM stream_segments s WHERE s.stream_id = f.stream_id) m ON true
+ WHERE m.max_seq IS NULL OR m.max_seq + 1 < f.next_seq;
+RESET ROLE;
+SQL
+```
+
+업로드 적체는 사이드카 업로더가 세는 세 축 문장
+(`media/internal/index/upload_store.go` 의 `countArchiveBacklogSQL` ·
+`countPlaybackBacklogSQL` · `countInitBacklogSQL`)에 축 이름만 붙인
+것입니다. 값은 차례로 대기 · 실패 · 크기 없음(앞 둘의 부분집합)입니다.
+
+```shell
+cat >"${payload}/backlog.sql" <<'SQL'
+SET TRANSACTION READ ONLY;
+SET ROLE media_owner;
+SELECT 'archive' AS axis, *
+  FROM (SELECT pg_catalog.count(*) FILTER (WHERE upload_state = 'pending') AS pending,
+               pg_catalog.count(*) FILTER (WHERE upload_state = 'failed') AS failed,
+               pg_catalog.count(*) FILTER (WHERE upload_state IN ('pending','failed') AND bytes IS NULL) AS bytes_null
+          FROM stream_segments WHERE local_path IS NOT NULL) a
+UNION ALL
+SELECT 'playback', *
+  FROM (SELECT pg_catalog.count(*) FILTER (WHERE t.playback_upload_state = 'pending'),
+               pg_catalog.count(*) FILTER (WHERE t.playback_upload_state = 'failed'),
+               pg_catalog.count(*) FILTER (WHERE t.playback_upload_state IN ('pending','failed') AND t.bytes IS NULL)
+          FROM stream_segments t
+          JOIN stream_cutoffs  cut  ON cut.stream_id   = t.stream_id
+         WHERE t.local_path IS NOT NULL AND t.session_id IS NOT NULL
+           AND t.seq >= cut.cutoff_seq) p
+UNION ALL
+SELECT 'init', *
+  FROM (SELECT pg_catalog.count(*), 0::bigint,
+               pg_catalog.count(*) FILTER (WHERE NOT EXISTS (
+                   SELECT 1 FROM stream_segments g
+                    WHERE g.stream_id = s.stream_id AND g.session_id = s.session_id
+                      AND g.local_path IS NOT NULL AND g.bytes IS NOT NULL))
+          FROM stream_sessions s
+         WHERE s.init_uploaded_at IS NULL AND s.state <> 'ended') i;
+RESET ROLE;
+SQL
+```
+
+읽기 페이로드는 적용 페이로드의 접속 명령(`apply.json` 에서 마지막 명령을
+뺀 것)에 그 질의와 `40_verify.sql` 을 잇습니다. 질의 원문은 base64 로 실어
+상자에서 풉니다.
+
+```shell
+make_read() {  # make_read <걸음 이름> <SQL 파일>
+  [ "$(head -n 1 "$2")" = 'SET TRANSACTION READ ONLY;' ] ||
+    { echo "멈춤: $2 의 첫 줄이 SET TRANSACTION READ ONLY; 가 아님" >&2; return 1; }
+  jq --rawfile sql "$2" '
+    .commands = .commands[:-1] + [
+      "printf %s " + ($sql | @base64 | @sh) + " | base64 -d >/root/rt1a/read.sql",
+      "echo == read",
+      "psql -X -1 -v ON_ERROR_STOP=1 -f /root/rt1a/read.sql",
+      "echo == 40_verify.sql",
+      "psql -X -1 -v ON_ERROR_STOP=1 -f 40_verify.sql"
+    ]
+    | .executionTimeout = ["300"]' \
+    "${payload}/apply.json" >"${payload}/$1.json"
+}
+make_read floor "${payload}/floor.sql" && send_step floor
+make_read backlog "${payload}/backlog.sql" && send_step backlog
+```
+
+*   표준 출력의 `== read` 뒤가 질의 결과이고, 그 뒤 `VERIFY OK` 가 있어야
+    합니다. 기록에 옮기는 것은 `== read` 뒤 결과 줄만입니다(하한 질의는
+    아래대로 행 수만). 표준 오류는 계정 ID · ARN · RDS 끝점 · 사설 IP ·
+    인스턴스 id 를 가린 뒤에만 옮깁니다([Media 교체 런북](media-swap.md) 「O7e 뒤 측정 · 기록」 의 가림
+    목록).
+*   하한 질의 결과는 psql 끝 줄의 행 수(`(0 rows)` · `(1 row)` 꼴)만
+    기록합니다 — `stream_id` 목록은 볼트 raw · Jira 에 옮기지
+    않습니다(kty 2026-10-26). 창 동안 탈퇴 정리된 스트림 목록이라 탈퇴자와
+    이어질 수 있습니다.
+*   하한 질의에 행이 나오면 그 스트림이 하한 아래 판에서 걸리는 스트림입니다.
+    「한 창 절차」 에서는 그 자리의 갈래를 따르고, 사고 확인이면 Media 교체
+    런북 「M6 운영 SQL 경계 · 롤백 하한」 의 복구로 갑니다.
 
 ## 1단-다 — 일 큐 · 새 버킷 · auth 설정 · 값 넣기
 
@@ -759,8 +1008,8 @@ AccessDenied(접근 거부 · SCP 거부)가 나면 다시 시도하지 않고 �
     `--accept` 하고 다시 판정해 종료 0 을 봅니다. 주석만 바뀐 묶음은
     CHANGED 가 아닐 수 있습니다.
 *   2-3 판정: 새 일 큐 · DLQ 여섯은 이 단계가 첫 단계라 「자원 없음」 을
-    정책 없이 판정합니다. clips · 프로필 사진 버킷과 그 객체 행은 O7d
-    부터라 묻지 않습니다. 종료 3 이면 kty 가 `approvals.tsv` 에 「진행」 을
+    정책 없이 판정합니다. clips · 프로필 사진 · 채팅 원본 버킷과 그 객체
+    행은 O7d 부터라 묻지 않습니다. 종료 3 이면 kty 가 `approvals.tsv` 에 「진행」 을
     적어야 다음으로 갑니다.
 *   진행 조건은 1 의 마지막 항목과 같습니다.
 
@@ -801,6 +1050,13 @@ AccessDenied(접근 거부 · SCP 거부)가 나면 다시 시도하지 않고 �
         `Condition` 없음은 그대로입니다(「2. 본 apply」 의 주제 정책 항목과
         같은 꼴). 1단-가와 함께면 처음부터 읽기 하나 정책으로 생겨 수가
         그대로입니다.
+    *   채팅 원본 버킷(POK-306)이 들어간 판으로 1단-다를 **처음** 적용하면
+        (새 환경 · 되돌린 뒤 다시 적용) 위의 모든 add 수에 `5` 를 더합니다
+        — `26` · `27` · `55` · `56 to add`. 더해지는 다섯은 아래
+        「POK-306 runtime apply 2」 의 주소 다섯과 같습니다. 출력에는 새
+        출력 둘과 chat-collector 의 키 넷이 함께 나옵니다(같은 절). 1단-다를
+        이미 적용한 환경(지금 prod)은 이 절이 아니라 「POK-306 runtime
+        apply」 를 따릅니다.
     *   바뀐 출력이 `app_env` · `app_secret_arns` ·
         `app_task_resource_arns` 입니다. `app_env.auth` 에
         `STREAM_KEY_SECRET_REF_PREFIX` 가 없습니다(platform 이 넣음).
@@ -829,7 +1085,8 @@ for name in render thumbnail upload render-dlq thumbnail-dlq upload-dlq; do
     --output text |
     grep -oE '"maxReceiveCount":"?[0-9]+"?|pokeclip-prod-jobs-[a-z]+-dlq'
 done
-for bucket in pokeclip-prod-clips-apne2 pokeclip-prod-profile-photos-apne2; do
+for bucket in pokeclip-prod-clips-apne2 pokeclip-prod-profile-photos-apne2 \
+  pokeclip-prod-chat-archive-apne2; do
   printf '%s\n' "${bucket}"
   aws s3api get-public-access-block --bucket "${bucket}" \
     --query 'PublicAccessBlockConfiguration' --output text
@@ -855,6 +1112,22 @@ done
     `expire-after-60-days Enabled 60` 과
     `abort-incomplete-multipart-upload Enabled … 7`, 프로필 사진은
     `abort-incomplete-multipart-upload` 하나입니다.
+*   채팅 원본 버킷: 공개 차단 넷이 `True` 이고
+    `expire-chat-after-60-days Enabled 60` 과
+    `abort-incomplete-multipart-upload Enabled … 7` 입니다. 만료는 `chat/`
+    접두만 대상이라 아래 명령이 `chat/` 한 줄을 냅니다. 이 버킷은
+    POK-306(PR-1) 머지본으로 1단-다를 처음 적용하면 이 apply 에서 함께
+    생기고, 1단-다를 이미 적용한 환경이면 「POK-306 runtime apply」 가
+    만듭니다. 그 apply 전의 판으로 돌리면 이 버킷 줄만 `NoSuchBucket`
+    오류이고 나머지 줄은 그대로 봅니다.
+
+    ```shell
+    aws s3api get-bucket-lifecycle-configuration \
+      --bucket pokeclip-prod-chat-archive-apne2 \
+      --query 'Rules[?ID==`expire-chat-after-60-days`].Filter.Prefix' \
+      --output text
+    ```
+
 *   rewind 버킷 CORS: 아래 명령이 `GET HEAD https://app.pokeclip.com`
     (`app_origin` 을 바꿨으면 그 값) 한 줄만 냅니다.
 
@@ -893,7 +1166,8 @@ awk -F '\t' '$1 == "secrets" &&
     사람이 봅니다) · `secrets` 행이 `TARGET_NONE` · `rds-master-secret` 행이
     `TARGET_NONE` 이거나 `ALLOWED` · 위 셈이 1 이 아님(새 그릇이 태그로
     풀리지 않음). 어느 행이든 `ALLOWED` 면 값을 넣지 않고 kty 에게
-    보고합니다. `prod-instance` 의 `TARGET_NONE` 은 실행기가 꺼져 있어
+    보고합니다. `prod-instance` 의 `TARGET_NONE` 은 실행기가 꺼져 있어,
+    `prod-roles` 의 것은 이 절이 O7d 앞이라(platform 역할이 아직 없음)
     정상입니다.
 *   SCP 판정은 1 의 것을 씁니다 — 같은 날 · 같은 묶음 · 그 뒤 SCP 변화
     이벤트 0(`events.sh` 로 확인). 날이 바뀌었으면 1 을 다시 합니다.
@@ -1320,7 +1594,9 @@ kty 가 세션 밖에서 caller identity 를 본 뒤 1 의 세 명령을 그 순
     `--accept` 하고 다시 판정해 종료 0 이어야 다음입니다. 종료 1(DENIED) ·
     2(검사 불가)면 2 로 가지 않습니다.
 *   ② 는 1단-가 apply 뒤 기준입니다(4 의 첫 걸음 — 1 의 「apply 전이라
-    정상」 은 맞지 않음). 정상인 `TARGET_NONE` 은 `prod-instance` 하나뿐입니다.
+    정상」 은 맞지 않음). 늘 정상인 `TARGET_NONE` 은 `prod-instance`
+    하나입니다. `prod-roles` 는 O7d 전이면 정상이고(실행기가 꺼져 있고
+    platform 역할이 아직 없음), O7d 뒤에 돌면 `TARGET_NONE` 이 멈춤입니다.
     `rds-master-secret` 이 `TARGET_NONE` 이거나 `ALLOWED` 이면 멈춤,
     `report.txt` 에 「자원 없음(첫 단계 — 정책 없이 판정)」 줄이 있으면
     멈춤입니다. 입력 파일 `~/.pokeclip-precheck/input-rds-master.txt` 가 없거나
@@ -1829,6 +2105,84 @@ auth 롤링 동안 옛 태스크 · 새 태스크가 섞여, 어느 토큰이든
 *   **prod/media apply 뒤**: 정책을 되돌리면 응답기가 다음 기동에서 그릇을
     못 읽어 기동이 막힙니다(fail-closed). 되돌리기는 응답기 렌더 → media
     정책 → runtime 출력 한 방향으로만 합니다.
+
+## POK-306 runtime apply — 채팅 원본 버킷 · chat-collector 값
+
+1단-다를 이미 적용한 환경(지금 prod)에서 POK-306 의 런타임 몫(PR-1)을
+적용하는 절차입니다. 채팅 원본 버킷 하나(자원 다섯)를 만들고, chat-collector
+몫 출력(앱 ID 둘 · SOOP 비밀 · `S3_BUCKET`)을 냅니다. 1단-다를 처음
+적용하는 경우는 이 절이 아니라 「1단-다 2」 의 `+5` 기준을 봅니다. 머리의
+실행 규칙(kty 로컬 터미널 · 쓰기마다 직전 승인 · 출력을 세션에 붙이지
+않음)이 그대로 걸립니다. AccessDenied 가 나오면 그 자리에서 멈추고 kty
+에게 보고합니다.
+
+*   **언제**: PR-1 머지 뒤, POK-306 의 platform apply(O7d 묶음) 앞입니다.
+    platform 은 이 루트의 `chat_archive_bucket_arn` 과 chat-collector 의
+    `app_env` 를 읽으므로 런타임이 먼저입니다.
+*   **값 넣기 없음**: 새 그릇이 없습니다. chat-collector 가 받는
+    `SOOP_CLIENT_SECRET` 은 auth 와 같은 그릇이고, 값은 「1단-다 5」 에서
+    이미 넣었습니다.
+
+### POK-306 runtime apply 순서
+
+| 걸음 | 하는 일 | 승인 지점 |
+|---|---|---|
+| 1 | 직전 점검(`runtime-1a`) | ⑤ 보고 |
+| 2 | runtime plan · apply | plan 승인 |
+| 3 | 운영 확인 — 채팅 원본 버킷 | — |
+| 4 | O7d 묶음 직전 점검 → platform apply | O7d 규칙 |
+
+### POK-306 runtime apply 1. 직전 점검
+
+1 의 세 명령(`scp-recheck.sh runtime-1a` · `principal-check.sh runtime-1a`
+· `events.sh`)을 그 순서로 돌리고 ⑤ 보고를 합니다.
+
+*   ① PR-1 은 `runtime-1a` 묶음을 바꾸지 않습니다 — 종료 0 이 기대값입니다.
+    CHANGED(3)면 다른 PR 의 묶음 변경이니 ⑤ 보고와 함께 묻고, 답을 들은
+    뒤에만 `--accept` 합니다.
+*   ② 판정 · 멈춤 조건은 「1단-나 ② 1」 의 ② 와 같습니다(1단-가 apply 뒤
+    기준). 채팅 원본 버킷 · 객체 행은 O7d 부터라 여기서 묻지 않습니다.
+*   ③ 종료 2 면 시작하지 않습니다.
+
+### POK-306 runtime apply 2. plan · apply
+
+2 의 plan · 확인 · apply · 적용 확인 꼴로 합니다. tfvars 는 그대로입니다
+(새 변수 `chat_archive_bucket_name` 은 기본값). 기대 변화는 아래뿐입니다 —
+그 밖의 변화(다른 주소 · change · destroy)가 있으면 apply 하지 않습니다.
+
+*   `Plan: 5 to add, 0 to change, 0 to destroy`.
+*   추가 주소 다섯:
+    *   `aws_s3_bucket.chat_archive`
+    *   `aws_s3_bucket_public_access_block.chat_archive`
+    *   `aws_s3_bucket_ownership_controls.chat_archive`
+    *   `aws_s3_bucket_server_side_encryption_configuration.chat_archive`
+    *   `aws_s3_bucket_lifecycle_configuration.chat_archive`
+*   출력 변경:
+    *   새 출력 `chat_archive_bucket_name` · `chat_archive_bucket_arn`.
+    *   `app_env["chat-collector"]` 에 `CHZZK_CLIENT_ID` · `SOOP_CLIENT_ID` ·
+        `S3_BUCKET` 이 더해집니다.
+    *   `app_secret_arns["chat-collector"]` 에 `SOOP_CLIENT_SECRET` 이
+        더해집니다.
+    *   다른 서비스(auth · clip · chat-detector · 일꾼)의 출력은 그대로입니다.
+*   `aws_s3_bucket_policy` · `aws_s3_bucket_versioning` ·
+    `aws_s3_bucket_cors_configuration` 이 생기지 않습니다.
+
+kty 승인을 받은 뒤 apply 합니다. 새 자원의 첫 판정 단계가 O7d 라 apply 뒤
+`runtime-1a` 2-3 재판정은 하지 않습니다 — 4 의 O7d 점검이 묻습니다.
+
+### POK-306 runtime apply 3. 운영 확인
+
+「1단-다 3」 의 버킷 반복(세 버킷)과 채팅 원본 접두 확인 명령을 돌립니다.
+기대 출력은 그 절의 「채팅 원본 버킷」 항목입니다. 결과 줄은 볼트 raw 로
+옮깁니다(계정 ID · ARN 가림).
+
+### POK-306 runtime apply 4. O7d 로 넘김
+
+[단계 직전 점검](stage-precheck.md) 의 O7d 묶음 점검을 돌린 뒤 POK-306 의
+platform apply 로 갑니다. 이때 2-3 판정이 처음으로 채팅 원본 버킷 · 객체
+행을 묻습니다 — 버킷이 있으므로 정책 읽기가 「정책 없음」 이어야 합니다.
+platform 의 plan · 확인은 [prod/platform](../prod/platform/README.md) 을
+따릅니다.
 
 ## See also
 

@@ -209,6 +209,8 @@ func run() error {
 			return index.EndLive(ctx, pool, streamID)
 		},
 	}
+	// 제어면 상태 몫(Board · 받은편지함 · 재기동 적재)은 발행 조립 앞이다 — 꺼짐 · 강등 · 정상 모두 받은편지함이 있다(M5 3.3).
+	board := assembleStatus(ctx, cfg, rewind, nil)
 	if pubPool := assemblePublishing(ctx, cfg, dbConfig.Copy(), up, rewind); pubPool != nil {
 		// ★ 등록 순서가 계약이다(위 up.Shutdown 주석과 같은 원리). 발행자 풀은 up.Shutdown 보다 먼저 닫히고 아래
 		//   rewind.stop(fence 반납)보다 늦게 닫힌다 — 반납 문장이 이 풀로 나간다(체크리스트 474 A-3 3).
@@ -243,6 +245,11 @@ func run() error {
 	// 루프는 신호를 **채널로만** 받고, 그 신호원을 누가 소유하는지는 모른다.
 	holdTicker := time.NewTicker(cfg.Indexer.HoldTick)
 	defer holdTicker.Stop()
+
+	// 되감기 제어면 서버(M5 3.7). ★ 위 rewind.stop · 풀 Close · up.Shutdown 보다 뒤에 등록해 먼저 멈춘다(LIFO) — 처리 중
+	// 요청이 끝난 뒤에 풀이 닫힌다. 회차 조회(round)는 M6 가 채운다.
+	stopControl := startControl(cfg, board, log, nil)
+	defer stopControl()
 
 	// --- 5. 메인 루프 ---
 	//
@@ -538,7 +545,8 @@ func loop(ctx context.Context, d loopDeps) error {
 			d.ix.SetAdopter(r.w)
 			d.watcherDegraded = false
 			d.log.Info("watcher_recovered", "note", "재장착 완료 — 되돌림(H4·H5)이 실제 워처로 복귀한다")
-			d.log.Info("watcher_degraded", "value", 0)
+			// 내림은 세움(run 의 value=1)과 같은 ERROR 다 — LOG_LEVEL=error 로 걸러도 해소가 보인다(set/clear 대칭).
+			d.log.Error("watcher_degraded", "value", 0)
 
 		// 수집 워커의 결과가 도착했다. 처리(스트림 루프)는 여기 — 즉 loop 고루틴에서 돈다(D10).
 		case res := <-d.ix.CollectDone():

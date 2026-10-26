@@ -84,9 +84,11 @@ ec2:CreateTags	ap-northeast-2	*
 # 재실행)가 다시 읽는다.
 # provider 6.68.0 은 SG 규칙을 Read 에서 DescribeSecurityGroupRules 로
 # 읽는다(internal/service/ec2 의 vpc_security_group_ingress_rule.go Read →
-# find.go findSecurityGroupRuleByID — egress 규칙도 같은 Read). 첫 apply 는
-# 부르지 않고 재apply 의 refresh 가 부른다 — 거부되면 plan 에서 멈춘다(부분
-# apply 아님). 결정 65 예외 · 리뷰가 찾은 누락(POK-479).
+# find.go findSecurityGroupRuleByID — egress 규칙도 같은 Read). 규칙을 만드는
+# apply 는 부르지 않고(Create 는 AuthorizeSecurityGroupIngress · Egress 만 —
+# ingress · egress 규칙 파일 대조 2026-10-26) 재apply 의 refresh 가 부른다 —
+# 거부되면 plan 에서 멈춘다(부분 apply 아님). 결정 65 예외 · 리뷰가 찾은
+# 누락(POK-479).
 ec2:DescribeSecurityGroupRules	ap-northeast-2	*
 
 # 상태 버킷(계획 3절 백엔드 · use_lockfile — 읽기 · 쓰기 · 잠금 파일)

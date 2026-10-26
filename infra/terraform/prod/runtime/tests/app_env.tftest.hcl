@@ -88,8 +88,9 @@ run "lists_env_names_per_service" {
   assert {
     condition = toset(keys(output.app_env["chat-collector"])) == toset([
       "DB_HOST", "DB_PORT", "POSTGRES_DB", "BROADCAST_QUEUE_URL",
+      "CHZZK_CLIENT_ID", "SOOP_CLIENT_ID", "S3_BUCKET",
     ])
-    error_message = "chat-collector 의 env 이름 집합이 DB_HOST · DB_PORT · POSTGRES_DB · BROADCAST_QUEUE_URL 과 다르다."
+    error_message = "chat-collector 의 env 이름 집합이 DB 셋 · BROADCAST_QUEUE_URL · CHZZK_CLIENT_ID · SOOP_CLIENT_ID · S3_BUCKET 과 다르다(REDIRECT_URI 는 auth 만)."
   }
 
   assert {
@@ -212,6 +213,30 @@ run "allows_resolve_from_media_private_subnet_only" {
   assert {
     condition     = can(cidrhost(output.app_env["auth"]["STREAM_KEY_RESOLVE_ALLOWED_CIDRS"], 0)) && can(regex("^[0-9]+[.][0-9]+[.][0-9]+[.][0-9]+/[0-9]+$", output.app_env["auth"]["STREAM_KEY_RESOLVE_ALLOWED_CIDRS"]))
     error_message = "auth 의 STREAM_KEY_RESOLVE_ALLOWED_CIDRS 가 IPv4 CIDR 하나가 아니다."
+  }
+}
+
+# chat-collector 는 auth 와 같은 치지직 · SOOP 앱으로 방송 정보 목록(치지직)과
+# SOOP 채팅 SDK 를 연다(POK-306 · 앱 비밀은 app_secret_arns). 값은 auth 와 같은
+# 변수 auth_oauth_apps 에서 온다 — 따로 두면 한쪽만 바꾼 배포가 생긴다. auth 의
+# 값도 그대로인지 함께 본다.
+run "gives_chat_collector_the_auth_app_ids" {
+  command = plan
+
+  assert {
+    condition = (
+      output.app_env["chat-collector"]["CHZZK_CLIENT_ID"] == var.auth_oauth_apps.chzzk.client_id &&
+      output.app_env["chat-collector"]["SOOP_CLIENT_ID"] == var.auth_oauth_apps.soop.client_id
+    )
+    error_message = "chat-collector 의 CHZZK_CLIENT_ID · SOOP_CLIENT_ID 가 auth_oauth_apps 의 chzzk · soop client_id 가 아니다."
+  }
+
+  assert {
+    condition = (
+      output.app_env["auth"]["CHZZK_CLIENT_ID"] == var.auth_oauth_apps.chzzk.client_id &&
+      output.app_env["auth"]["SOOP_CLIENT_ID"] == var.auth_oauth_apps.soop.client_id
+    )
+    error_message = "auth 의 CHZZK_CLIENT_ID · SOOP_CLIENT_ID 가 auth_oauth_apps 의 chzzk · soop client_id 가 아니다."
   }
 }
 

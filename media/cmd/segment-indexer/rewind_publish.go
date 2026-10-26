@@ -324,7 +324,8 @@ func (r *rewindLoop) watchDone(ctx context.Context, out publish.WatchOutcome, no
 
 // forgetIdle 은 오래 쉰 스트림의 뷰나 부정 표식을 버린다(계획 4.5 A3 결정 5 · 뮤테이션 87 · 판단 J71 ⑵ · J72) — 캐시가 든 스트림마다
 // (부정 표식 포함) 마지막 행 끝 = 인덱서 커서 꼬리 끝, 커서가 없으면 적재 완료 시각이고 창은 ReconnectWindow 다. 버린 스트림의
-// 루프 칸도 지운다. 차선이 돌거나 미룬 적재가 있는 스트림은 건너뛴다 — 그 결과를 받을 칸이 남아야 한다.
+// 루프 칸도 지운다. 차선이 돌거나 미룬 적재가 있는 스트림은 건너뛴다 — 그 결과를 받을 칸이 남아야 한다. 소유 회차를 든 채
+// 버린 스트림에는 잠정 Ending 을 넣는다(provisionalEnding).
 func (r *rewindLoop) forgetIdle(now time.Time) {
 	for _, s := range r.cache.Streams() {
 		rec := r.streams[s]
@@ -335,8 +336,12 @@ func (r *rewindLoop) forgetIdle(now time.Time) {
 		if !ok && rec != nil {
 			lastEnd = rec.loadedAt
 		}
+		owner, owned := r.cache.Owner(s) // Forget 뒤에는 읽을 수 없다 — 잠정 Ending 의 회차(설계 M5 3.3)
 		if r.cache.Forget(s, lastEnd, now, r.reconnectWindow) {
 			delete(r.streams, s)
+			if owned {
+				r.provisionalEnding(s, owner.SessionID)
+			}
 		}
 	}
 }

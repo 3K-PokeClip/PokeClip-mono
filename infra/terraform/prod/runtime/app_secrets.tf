@@ -38,11 +38,15 @@ locals {
       "SOOP_CLIENT_SECRET",
       "STREAM_KEY_RESOLVE_TOKEN",
     ]
-    clip             = ["JWT_SECRET", "INTERNAL_API_TOKEN"]
-    "chat-collector" = ["INTERNAL_API_TOKEN", "CHZZK_CLIENT_SECRET"]
-    "chat-detector"  = ["INTERNAL_API_TOKEN"]
-    render           = ["INTERNAL_API_TOKEN"]
-    upload           = ["INTERNAL_API_TOKEN"]
+    clip = ["JWT_SECRET", "INTERNAL_API_TOKEN"]
+    "chat-collector" = [
+      "INTERNAL_API_TOKEN",
+      "CHZZK_CLIENT_SECRET",
+      "SOOP_CLIENT_SECRET",
+    ]
+    "chat-detector" = ["INTERNAL_API_TOKEN"]
+    render          = ["INTERNAL_API_TOKEN"]
+    upload          = ["INTERNAL_API_TOKEN"]
   }
 
   # 서비스 → env 이름 → 그릇 이름.

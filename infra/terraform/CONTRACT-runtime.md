@@ -240,6 +240,8 @@ clip 의 큐 수신 스위치 `BROADCAST_INTAKE_ENABLED` 는 이 목록에 없�
 | clip | `THUMBNAIL_ENABLED` · `THUMBNAIL_QUEUE_URL` | `app_env` | `false` · 빈 값 | 켜면 URL 필수 |
 | clip | `RENDER_RECONCILE_INTERVAL` · `UPLOAD_RECONCILE_INTERVAL` · `THUMBNAIL_INTERVAL` · `PLAYBACK_ACCESS_TTL` | `app_env`(선택) | `PT1M` · `PT1M` · `PT1M` · `PT60M` | |
 | clip | `COLLECTOR_BASE_URL` | platform | 빈 값 | 값 = auth 와 같은 `http://chat-collector.pokeclip.internal:8083`. 비어도 부팅하지만 채팅 문 셋이 503 이다 |
+| chat-collector | `S3_BUCKET` | `app_env` | 빈 값 | 채팅 원본 버킷 이름(`chat_archive_bucket_name` 과 같은 것). 비면 원본 보관이 통째로 꺼진다(`ArchiveProperties`). 원본은 `chat/` 아래에 쌓이고 수명 규칙이 60일 뒤 지운다(처리방침 3절) |
+| chat-collector | `CHZZK_CLIENT_ID` · `SOOP_CLIENT_ID` | `app_env` | 빈 값 | auth 와 같은 앱(런타임 변수 `auth_oauth_apps`). 비밀 `CHZZK_CLIENT_SECRET` · `SOOP_CLIENT_SECRET` 은 `app_secret_arns`(auth 와 같은 그릇). 치지직 둘은 방송 정보(`BROADCAST_INFO_ENABLED`), SOOP 둘은 SOOP 채팅(`SOOP_CHAT_ENABLED`)이 쓴다 — 켜졌는데 비면 부팅 거부(`services/chat-collector` 의 `application.yml`) |
 | auth · clip | `AWS_REGION` | 넣지 않아도 됨 | `ap-northeast-2` | 기본값이 prod 리전과 같다 |
 | auth · clip | `*_ENDPOINT` · `PROFILE_PHOTO_S3_FORCE_PATH_STYLE` | 넣지 않음 | 빈 값 · `false` | 로컬 호환 스토리지 전용. 비면 실제 AWS |
 | render | `RENDER_QUEUE_URL` · `THUMBNAIL_QUEUE_URL` · `RENDER_VISIBILITY_TIMEOUT` · `THUMBNAIL_VISIBILITY_TIMEOUT` | `app_env`(배치 루트가 읽음) | 빈 값 · 빈 값 · `600s` · `120s` | 숨김은 큐의 숨김 시간과 같은 상수에서 만든다(`job_queues.tf` — 한쪽만 바꾸면 깨짐). DB 키는 없다 |
@@ -349,6 +351,7 @@ prod 루트와 같은 규약을 씁니다(계획 3절 「한 계정 규약」). 
 | RDS(인스턴스 · 서브넷 그룹 · 파라미터 그룹) · RDS SG | 접두 `pokeclip-prod-` | `pokeclip-prod-db`(인스턴스 · 서브넷 그룹) · `pokeclip-prod-pg17`(파라미터 그룹) · `pokeclip-prod-rds`(SG) |
 | rewind 버킷 | 접두 `pokeclip-prod-`(버킷 이름은 전역) | `pokeclip-prod-rewind-apne2`(변수 `rewind_bucket_name` 기본값) |
 | clips · 프로필 사진 버킷 | 접두 `pokeclip-prod-`(버킷 이름은 전역) | `pokeclip-prod-clips-apne2` · `pokeclip-prod-profile-photos-apne2`(변수 `clips_bucket_name` · `profile_photo_bucket_name` 기본값) |
+| 채팅 원본 버킷 | 접두 `pokeclip-prod-`(버킷 이름은 전역) | `pokeclip-prod-chat-archive-apne2`(변수 `chat_archive_bucket_name` 기본값) |
 | 일 큐 · DLQ | 접두 `pokeclip-prod-` | `pokeclip-prod-jobs-{render,thumbnail,upload}`(표준 큐) · `pokeclip-prod-jobs-{render,thumbnail,upload}-dlq` |
 | SNS 주제 · SQS 큐 | 접두 `pokeclip-prod-` | `pokeclip-prod-broadcast-lifecycle.fifo`(주제) · `pokeclip-prod-broadcast-lifecycle-{clip,chat}.fifo`(큐) · `pokeclip-prod-broadcast-lifecycle-{clip,chat}-dlq.fifo`(DLQ) |
 | 앱 비밀 | `pokeclip/prod/<용도>` | `pokeclip/prod/{jwt-secret,secret-store-key,internal-api-token,google-client-secret,youtube-client-secret,chzzk-client-secret,profile-photo-token-secret,soop-client-secret,stream-key-resolve-token}` |

@@ -243,7 +243,8 @@ func (l *Latch) Reset(root string, timeout time.Duration) bool {
 		l.log.Error("fs_op_stalled", "op", "stat", "site", "latch_reset_probe", "path", root)
 		return false
 	}
-	l.log.Info("fs_degraded", "value", 0, "path", l.path, "site", l.site)
+	// 내림은 세움(Trip)과 같은 ERROR 다 — LOG_LEVEL=error 로 걸러도 해소가 보인다(set/clear 대칭).
+	l.log.Error("fs_degraded", "value", 0, "path", l.path, "site", l.site)
 	l.tripped, l.path, l.site = false, "", ""
 	return true
 }

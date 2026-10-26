@@ -21,6 +21,10 @@
 #   38 검증 이름 해석의 거부: 레코드 이름이 없는 검증 옵션(None) · 정규화 꼴
 #      밖 이름 · 다른 리전 인증서 ARN 은 종료 2, 자리표시자가 존 행 밖이거나
 #      값 일부면 데이터 꼴로 종료 2 다.
+#   39 객체 키 해석의 거부: 태그로 푼 줄이 버킷 ARN 이 아니면 응답 꼴, 객체
+#      꼴 밖 해석 방법은 데이터 꼴로 종료 2 다.
+#   40 남은 자리표시자: 검증 레코드 이름 없이 묻게 되면 자리표시자를 그대로
+#      묻지 않고 종료 2 다(POK-484 후속).
 #
 # 고정 입력 · 사본 트리 · 공용 단언(사례 22 유출 — 모든 사례가 끝에
 # 본다)은 principal_testlib.sh 에 있다.
@@ -462,6 +466,81 @@ expect_validation_rejected() {
     "종료 2(그 원인 문구) · 유출 0"
 }
 
+#######################################
+# 사본 트리에 apex 객체 행(tag:s3:bucket/index.html 꼴, 첫 단계 O7a)을
+# 덧붙인다.
+# Arguments:
+#   사례 디렉터리, 해석 방법.
+#######################################
+add_object_row() {
+  add_row "$1" prod-apex-object O7a "$2" object ap-northeast-2 \
+    s3:PutObject s3 -
+}
+
+#######################################
+# 사례 39: 객체 키 해석의 거부 — 태그로 푼 줄이 버킷 ARN 이 아니면(객체
+# ARN · 다른 서비스) 응답 꼴로 종료 2, 객체 꼴 밖 해석 방법(빈 키 · 「*」 ·
+# 빈 마디 · s3 버킷 밖 유형)은 데이터 꼴로 종료 2 다(유출 0).
+#######################################
+expect_object_key_rejected() {
+  local case_dir spec answer want
+  for spec in object-arn other-service empty-key star empty-segment \
+    other-type; do
+    case_dir="$(new_tree_case)" || {
+      testlib::fail "object-rejected: 시험 준비 실패"
+      return
+    }
+    want='해석 방법 · 동작 · 정책 읽기 꼴이 틀림'
+    case "${spec}" in
+      object-arn | other-service)
+        answer="arn:aws:s3:::${MARK_BUCKET}-apex/old.html"
+        [[ "${spec}" == object-arn ]] || answer="${INSTANCE_ARN}"
+        add_object_row "${case_dir}" tag:s3:bucket/index.html &&
+          prepend "${case_dir}/in/reads.tsv" \
+            "$(testlib::tsv get-resources s3:bucket@ap-northeast-2 \
+              "${answer}")" || return
+        want='읽기 응답의 꼴이 다름'
+        ;;
+      empty-key) add_object_row "${case_dir}" tag:s3:bucket/ ;;
+      star) add_object_row "${case_dir}" 'tag:s3:bucket/*' ;;
+      empty-segment) add_object_row "${case_dir}" tag:s3:bucket/a//b ;;
+      *) add_object_row "${case_dir}" tag:ec2:instance/index.html ;;
+    esac || return
+    run_check "${case_dir}" "object-${spec}" O7a
+    expect_unverifiable "object-${spec}" || return
+    testlib::expect_stderr_count "object-${spec}" "${want}" 1 || return
+    expect_no_leak "object-${spec}" "${case_dir}" || return
+  done
+  testlib::ok "39 object-rejected → 태그로 푼 객체 ARN · 다른 서비스 ARN 은" \
+    "응답 꼴, 빈 키 · * · 빈 마디 · s3 버킷 밖 유형은 데이터 꼴로 종료 2 ·" \
+    "유출 0"
+}
+
+#######################################
+# 사례 40: 검증 레코드 이름을 못 받은 채 묻게 되면(해석이 이름을 넘기지
+# 않게 사본 트리를 바꿈) 자리표시자를 그대로 묻지 않고 종료 2 다.
+#######################################
+expect_placeholder_left() {
+  local case_dir
+  case_dir="$(new_tree_case)" || {
+    testlib::fail "placeholder-left: 시험 준비 실패"
+    return
+  }
+  add_validation_rows "${case_dir}" || return
+  set_certs "${case_dir}" "${VALIDATION_NAME}." "${VALIDATION_NAME}." ||
+    return
+  # shellcheck disable=SC2016 # sed 식의 글자 그대로다.
+  edit_lib "${case_dir}" principal_resolve.sh \
+    's/tr_names\[t\]="\${validation_names}"/tr_names[t]=""/' || return
+  run_check "${case_dir}" placeholder-left O7a
+  expect_unverifiable placeholder-left || return
+  testlib::expect_stderr_count placeholder-left '풀지 않은 자리표시자' 1 ||
+    return
+  expect_no_leak placeholder-left "${case_dir}" || return
+  testlib::ok "40 placeholder-left → 이름 없이 묻게 되면 자리표시자가 남아" \
+    "종료 2 · 유출 0"
+}
+
 main() {
   testlib::init principal_check_late_test
   expect_instance_row
@@ -471,6 +550,8 @@ main() {
   expect_validation_row
   expect_validation_names
   expect_validation_rejected
+  expect_object_key_rejected
+  expect_placeholder_left
   testlib::finish principal_check_late_test
 }
 

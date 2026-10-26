@@ -139,6 +139,17 @@ MediaMTX가 이벤트마다 컨테이너 안의 작은 명령을 실행하고(`m
 
 확인 절차는 [`docs/dev-environment.md`](../docs/dev-environment.md)의 "훅 채널 확인"에 있다.
 
+### 강등 게이지 — 워처 · 파일 시스템
+
+두 게이지는 세움(value 1)과 내림(value 0)이 둘 다 ERROR 다. 내림 뒤에는 다시 쓰지
+않으므로 `LOG_LEVEL=error` 로 걸러도 해소가 보여야 한다(정정 2026-10-26 — 그 전에는
+내림이 INFO 라 error 운영에서 게이지가 1 에 굳었다).
+
+| 게이지 | 세움 | 내림 | 등급 |
+|---|---|---|---|
+| `watcher_degraded` | 기동 때 워처 조립 · 기동 실패(훅 · 스캔 유입은 계속) | 재스캔 주기의 재장착 성공(`watcher_recovered` 와 함께) | ERROR / ERROR |
+| `fs_degraded` | 파일 작업 시간 초과로 FS 래치 트립(`path` · `site`) | 주기 머리 root 프로브가 응답해 래치 해제(트립 때 좌표를 싣는다) | ERROR / ERROR |
+
 ## segment-indexer 사이드카가 인식하는 환경변수
 
 `cmd/segment-indexer`가 읽는 값 전부다. 코드를 읽지 않고도 무엇을 켤 수 있는지 알 수 있게
@@ -290,6 +301,9 @@ M4 ⓒ 이관 기록」의 알려진 한계 「관측 끔」). 인덱싱·업로
 | `SEGMENT_UPLOAD_CIRCUIT_MAX` | `3` | 연속 실패가 이 값에 닿으면 브레이커가 열려 PUT을 멈추고 다음 회차 탐침으로 복구를 살핀다. `0`이면 브레이커 없음 |
 | `SEGMENT_UPLOAD_TAIL_HOLD` | `5s` | 꼬리(마지막) 조각을 이만큼 보류해 교정 창과의 충돌을 피한다. 꼬리 유예(2m)보다 짧고 `SEGMENT_SETTLE_WAIT` 이상이어야 기동한다. **예외: 이 값만은 버킷이 비어 있어도 항상 읽고 검증한다** — 보류 시계는 업로더가 아니라 인덱서 소유라 비활성에서도 돈다. 잘못된 값이면 버킷과 무관하게 기동이 거부된다 |
 | `REWIND_PUBLIC_BASE_URL` | (빈값) | 되감기 목록(M4 ⓒ)의 조각 · MAP URI 앞머리 — 목록 줄은 앞머리 + `/` + S3 키다. **`S3_BUCKET` 이 있으면 필수다 — 비거나 틀리면 기동을 거부해 인덱싱 · 업로드도 함께 멈춘다**(종료 코드 1). 버킷이 비면 읽지 않는다. https 만 받고 http 는 호스트가 루프백 IP 리터럴(127.0.0.0/8 · `::1`)일 때만 받는다(`localhost` 는 예외가 아니다). 호스트가 있어야 하고 userinfo · query · fragment · 공백 · 제어 문자 · 따옴표 · 역슬래시 · 비ASCII · 범위 밖 포트(1–65535 아님) · 경로의 dot 세그먼트(`.` · `..` · `%2e` 꼴)를 거부한다(역슬래시 · 범위 밖 포트 · dot 세그먼트 셋은 PR ⓒ 종결 라운드에서 더한 것 — 이런 값을 두고 있던 사본은 다음 기동에서 거부된다). 거부 문구는 URL 원문 · userinfo · query 를 싣지 않는다(위반 종류와 포트 숫자 · scheme · 금지 바이트의 위치와 값만 싣는다). 끝 `/` 하나는 떼고 둘 이상이면 거부한다. 다른 env 와 달리 앞뒤 공백을 떼지 않는다. 켜짐 로그 `rewind_publish_started` 의 `base_url` 로 확인한다. live 목록이 있는 동안에는 바꾸지 않는다(아래 「되감기 M4 ⓒ 이관 기록」) |
+| `CONTROL_LISTEN` | (빈값) | 되감기 상태 제어면(M5)의 듣기 주소 `host:port`. **빈 값이면 서버를 띄우지 않는다** = 롤백 스위치(`HOOK_SPOOL_PATH` 와 같은 꼴). 로컬 compose 는 `0.0.0.0:8086`(호스트 게시 `127.0.0.1:8086`) · prod 는 `127.0.0.1:8086`. 포트 0 · 범위 밖 포트는 기동 거부다. 듣기에 실패하면(점유 포트) 기동은 잇고 ERROR `control_server_failed stage=bind` 한 줄이다 — 아래 「되감기 상태 제어면」 |
+| `CONTROL_CORS_ORIGIN` | (빈값) | 제어면 응답에 CORS 를 여는 Origin 하나(`http(s)://호스트[:포트]` — 경로 · 끝 `/` · 질의 없음 · 글자 그대로 비교). 로컬 전용이다(compose 는 `http://localhost:3000`). prod 는 엣지 응답 머리 정책이 덮어 비워 둔다. 빈 값이면 CORS 머리를 싣지 않는다 |
+| `CONTROL_STREAM_RPS` | `10` | 스트림 하나에 초당 답하는 상태 요청 수. 스트림 경로와 회차 경로가 한 칸을 나눠 센다 — 넘으면 503 · `Retry-After: 1` · `control_rate_limited` 게이지. 양의 정수만 받는다 |
 
 자격증명은 SDK 기본 체인(env 3종 → 공유 프로필)을 쓴다. 로컬에서는
 `eval "$(aws configure export-credentials --format env)"` 후
@@ -297,7 +311,7 @@ M4 ⓒ 이관 기록」의 알려진 한계 「관측 끔」). 인덱싱·업로
 `AWS_PROFILE`은 `~/.aws` 마운트 폴백을 켤 때만 함께 넣는다 — 마운트 없이 넣으면
 SDK가 존재하지 않는 프로필을 요구해 기동이 죽는다(2026-08-04 실측).
 
-위 표가 `internal/config/config.go`가 읽는 전부다(`TZ` 제외 46개 — `POSTGRES_*` · DB 몫 `AWS_REGION` 은
+위 표가 `internal/config/config.go`가 읽는 전부다(`TZ` 제외 49개 — `POSTGRES_*` · DB 몫 `AWS_REGION` 은
 `internal/pgconf` 가 janitor 와 같은 규칙으로 읽는다). 잘못된 값(숫자 자리에 문자,
 음수, 파싱 불가한 기간)은 조용히 기본값으로 넘어가지 않고 기동에 실패한다.
 `SEGMENT_SUSPECT_BELOW_MS`가 `SEGMENT_EXPECTED_DURATION_MS`보다 크면 기동 단계에서 거부한다.
@@ -362,6 +376,55 @@ INFO `db_connected` 한 줄을 남긴다. 실패하면 이 줄 없이 기동이 
   `AWS_SHARED_CREDENTIALS_FILE` 이 FIFO 나 멈춘 네트워크 파일 시스템을
   가리키면 기동이 상한 뒤에도 멈춰 있다. 운영에서는 이 변수를 두지 않거나
   일반 파일을 가리킨다.
+
+## 되감기 상태 제어면 (POK-200 M5)
+
+사이드카가 띄우는 작은 HTTP 서버다. 웹이 「지금 되감기를 볼 수 있나 · 어느 목록을 보나」를
+묻는다. 답은 루프가 1초 holdTick 마다 만드는 불변 스냅숏(Board)에서 나온다 — 요청마다
+DB · S3 · 캐시를 보지 않는다. 회차 경로만 Board 가 모르는 회차를 DB 에서 한 번 읽을 수
+있고, 그 길은 M6 가 채운다(지금은 미등록).
+
+| 경로 | 지금 | 답 |
+|---|---|---|
+| `GET /api/streams/{streamId}/rewind` | 켜짐 | 그 스트림 키의 지금 국면 |
+| `GET /api/streams/{streamId}/rounds/{roundId}/rewind` | **미등록(404)** — M6 가 회차 조회를 채우면 등록 | 그 회차의 종국 |
+
+본문은 키 다섯이다 — `{"ready":bool,"mode":"live"|"ending"|"vod"|"ended"|null,"url":…,"firstPdt":…,"headPdt":…}`
+(값이 없으면 `null` · 계약3 7-2절). 미준비도 200 본문으로 낸다(엣지 오류 캐시에 기대지 않게).
+
+| 상태 | 언제 |
+|---|---|
+| 200 | 캐시나 종료 항목이 그 스트림을 안다 — `ready:true` 는 소유 회차가 live · init 확정 · 발행 판이 있을 때뿐이라 url 은 늘 S3 에 있다 |
+| 404 `{"error":"not_found"}` | 캐시 · 종료 항목 둘 다 모른다(부팅 감시 뒤) · 발행 꺼짐(`S3_BUCKET` 빈 값 — 모든 스트림) · id 가 `[A-Za-z0-9._-]{1,128}` 밖 · 퍼센트 인코딩한 경로(`%61bc` 처럼 `RawPath` 가 생기는 요청 — 풀린 글자가 규칙 안이어도) |
+| 503 `{"error":"unavailable"}` · `Retry-After: 1` | 첫 스냅숏 전 · 부팅 감시 전의 모르는 스트림 · 스냅숏이 30초 넘게 낡음 · 스트림별 한도 초과 |
+
+머리는 상태와 무관하게 `Cache-Control: public, max-age=1` · `Content-Type: application/json` 이다.
+`CONTROL_CORS_ORIGIN` 이 설정돼 있으면 `Vary: Origin` 을 Origin 과 무관하게 늘 싣고, 요청
+`Origin` 이 그 값과 글자 그대로 같을 때만 `Access-Control-Allow-Origin` 을 싣는다.
+서버 한도는 머리 5초 · 읽기 5초 · 쓰기 5초 · 유휴 60초 · 머리 8KiB 이고, 종료 때 처리 중 요청을
+3초까지 기다린다(그 뒤 풀이 닫힌다).
+
+*   **발행 강등(버킷은 있는데 발행자 조립 실패):** 서버는 정상이다. 캐시가 없어 live 행이 없고
+    M6 가 보낸 종료 항목만 답한다. 같은 키로 새 방송이 시작돼도 지난 방송의 `vod` · `ended` 가
+    남는다(한계 — 계약3 7-2 단서).
+*   **M5 단독의 종료 국면:** 끝난 스트림은 뷰를 버릴 때(Forget · 300초) 잠정 `ending` 이 되고,
+    재기동하면 사라진다(재기동 적재는 M6 가 채운다 — 지금은 `rewind_final_seeded count=0`).
+*   **로그:** `control_server_started` · `_disabled` · `_failed`(bind · serve) · `_stopped` ·
+    `control_status_stale` · `control_rate_limited` · `rewind_ready_delayed`(송출 중인데 60초 넘게
+    준비 안 됨 · `reason` 하나) · `rewind_status_range_missing` · `rewind_final_applied` ·
+    `rewind_final_invalid` · `rewind_final_seeded` · `_seed_failed` ·
+    `control_round_lookup_failed`(회차 lookup 실패 · `reason` 은 `error` · `timeout`
+    · `panic` · 사유마다 10초에 한 줄로 묶고 `count` 로 센다 — M6 가 회차 경로를
+    등록하기 전에는 나오지 않는다). 요청마다의 접근 로그는 없다.
+    게이지(`control_status_stale` · `control_rate_limited` · `control_round_shed` ·
+    `rewind_ready_delayed`)는 세움(value 1)과 내림(value 0)이 둘 다 WARN 이다.
+    내림 뒤에는 다시 쓰지 않으므로 `LOG_LEVEL=warn` 으로 걸러도 해소가 보여야
+    한다.
+*   **되돌리기:** `CONTROL_LISTEN` 을 비우고 사이드카만 재기동한다. 인덱싱 · 업로드 · 발행은
+    영향이 없다.
+*   **로컬에서 바이트까지 보기:** 기본 compose 는 발행이 꺼져 있어 모든 스트림이 404 다.
+    [`infra/compose/rewind-minio/`](../infra/compose/rewind-minio/README.md) 를 덧붙이면 MinIO 로
+    발행하고 `ready:false` → `true` 전이와 url 200 을 볼 수 있다.
 
 ## 사이드카 DB 계정 media_indexer 권한
 
@@ -1786,7 +1849,7 @@ docker compose up -d --build segment-indexer
 
 | 넘긴 것 | 어디로 | 까닭 · 자리 |
 |---|---|---|
-| 시청 경로 — 되감기 URL 서빙 · CDN · 제어면의 라이브 전환 | M5 | M4 는 S3 발행까지다(부기 34 의 전제) |
+| 시청 경로 — 되감기 URL 서빙 · CDN · 제어면의 라이브 전환 | M5 | M4 는 S3 발행까지다(부기 34 의 전제) 〔추기 2026-10-26 — M5 ②a 가 제어면 서버 · 상태 스냅숏을 넣었다(위 「되감기 상태 제어면」). CDN · 웹 전환은 M5 의 다른 PR 몫이다.〕 |
 | `ended` 전이 · ENDLIST 봉인 호출 · 동결 · VOD 전환 · 만료 | M6 | 종결 축이다(부기 34). `rewind.SealEndlist` 는 있지만 운영 코드에서 부르는 곳이 없다 |
 | L3(연속 GAP 셋 → ending) · 정산 창 만료 포기 · L2′ | M6 | 부기 10 |
 | G8-F · G8-E | M6 | 부기 7 |
@@ -1794,7 +1857,7 @@ docker compose up -d --build segment-indexer
 | 검문 빈틈 셋(코덱 지문 · 게이트 공백 · 일시 오류) | M6 에서 다시 본다 | kty 결정(2026-09-30 — 코드 그대로). 아래 한계 표 |
 | init 잔량 영구 잔존의 보정 | M6 | kty K3 — 한계 유지(위 ⓐ 절 알려진 한계 여섯째 행) |
 | ③ 잔량의 `ended` 동기 · M6 만료 뒤 컷오프 재주조 | M6 | ⓒ 에는 `ended` 가 없다 |
-| 첫 목록 지연 경보(`rewind_ready_delayed`) | M5 | 재기동 ② 뒤 비계승 회차의 무경보(아래 한계 표) |
+| 첫 목록 지연 경보(`rewind_ready_delayed`) | M5 | 재기동 ② 뒤 비계승 회차의 무경보(아래 한계 표) 〔추기 2026-10-26 — M5 ②a 에서 닫혔다: 송출 중(4.1 종료 판정과 같은 술어)인데 60초 넘게 준비 안 되면 WARN 이다.〕 |
 | 목록 객체의 Content-Type 값 | M5 회부 | 계획 7절 13 · 위 실측 기록 |
 | 이름 부채 개명(`SeedResult` · `MarkPlaybackFailed`) | M5 | 부기 16 · 23 |
 | 계승 사슬(두 단계 이상)과 1시간 상계 | M5/M6 | 위 ⓑ 절 알려진 한계 |

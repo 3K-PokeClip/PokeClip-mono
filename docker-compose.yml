@@ -98,6 +98,13 @@ services:
       # 자격(MTX_API_USER · MTX_API_PASS_FILE)은 두지 않는다 — dev MediaMTX 의 셋째 항목이
       # `user: any` 라 무인증으로 붙는다(media/README.md).
       MTX_API_URL: http://media:9997
+      # 되감기 상태 제어면(POK-200 M5). **빈 값이면 서버를 띄우지 않는다** = 롤백 스위치. 웹(localhost:3000)이
+      # 호스트 127.0.0.1:8086 으로 부르고 CORS 는 그 Origin 하나만 연다. 발행은 기본 꺼짐이라(S3_BUCKET 없음) 모든
+      # 스트림이 404 다 — 바이트까지 보려면 infra/compose/rewind-minio 를 덧붙인다. 자세히는 media/README.md 제어면 절.
+      CONTROL_LISTEN: 0.0.0.0:8086
+      CONTROL_CORS_ORIGIN: http://localhost:3000
+    ports:
+      - "127.0.0.1:8086:8086" # 되감기 상태 제어면 — 루프백만
 
   # 정적 세그먼트 스텁 (M1 1-2) — 2번 플레이어 개발용. 먼저 infra/compose/stub/gen-segments.sh 1회 실행.
   media-stub:

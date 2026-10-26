@@ -1,0 +1,39 @@
+# 전용 실험 프로젝트(pcbench-<ID>) 덧붙임 예 — 팀 스택과 호스트 포트 · 라벨을 가른다(POK-200).
+#
+# 이 폴더의 compose.yml 위에 한 겹 더 덧붙인다. 팀 프로젝트(pokeclip)가 떠 있어도 포트가 부딪히지 않고,
+# 실험 컨테이너에 라벨이 붙어 정리 명령이 그것만 겨눈다. 쓰는 법 · 정리는 같은 폴더 README.md 「실험」 절이다.
+# <ID> 는 복사본에서 실험 이름으로 바꾼다(라벨 값 · -p 이름 둘 다).
+#
+# 포트는 설계 M5 9.4.2 게이트 실험 대역(28xxx)이다 — LL-HLS 28888 · SRT 28890/udp · 제어면 28086 ·
+# dvr-edge 28480. PG 는 호스트에 게시하지 않는다. dvr-edge 28480 은 compose.yml 값 그대로라, 팀 프로젝트도
+# 이 폴더를 덧붙여 띄운 동안에는 부딪힌다 — 그때는 아래 dvr-edge 줄을 다른 포트로 바꾸고 사이드카의
+# REWIND_PUBLIC_BASE_URL 도 같은 포트로 맞춘다. `ports: !override` 는 compose 2.24 이상이 받는다.
+
+x-bench: &bench
+  labels:
+    com.pokeclip.bench: <ID>
+
+services:
+  postgres:
+    <<: *bench
+    ports: !override []
+  redis:
+    profiles: [off] # 사이드카 · 제어면 실험에 쓰지 않는다
+  media-stub:
+    profiles: [off]
+  janitor:
+    profiles: [off]
+  media:
+    <<: *bench
+    ports: !override
+      - "127.0.0.1:28890:8890/udp"
+      - "127.0.0.1:28888:8888"
+  segment-indexer:
+    <<: *bench
+    ports: !override
+      - "127.0.0.1:28086:8086"
+  minio-certs: *bench
+  minio: *bench
+  minio-init: *bench
+  dvr-edge: *bench
+  minio-check: *bench
