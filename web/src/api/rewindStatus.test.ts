@@ -177,3 +177,44 @@ describe('fetchRewindStatus — 결과 합집합(설계 5.1절 결과 해석)', 
     await expect(fetchRewindStatus('u', BASE, controller.signal)).rejects.toThrow('aborted');
   });
 });
+
+describe('fetchRewindStatus — 버린 답의 관측(cc M2)', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  /** 사유별 「한 번」은 모듈에 남으므로 시험마다 새로 읽는다 */
+  async function freshModule() {
+    vi.resetModules();
+    return import('./rewindStatus');
+  }
+
+  it('형식 오류 · 출처 불일치는 사유마다 한 번만 console.warn 으로 남긴다', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { fetchRewindStatus: fetchOnce } = await freshModule();
+    stubFetch(() => jsonResponse(200, { ...READY_LIVE, mode: 'paused' }));
+    await fetchOnce('u', BASE);
+    await fetchOnce('u', BASE);
+    stubFetch(() => new Response('<html>', { status: 200 }));
+    await fetchOnce('u', BASE);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[0]).toContain('형식 오류');
+    stubFetch(() => jsonResponse(200, { ...READY_LIVE, url: 'https://evil.test/a/index.m3u8' }));
+    await fetchOnce('u', BASE);
+    await fetchOnce('u', BASE);
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(warn.mock.calls[1]?.[0]).toContain('출처 불일치');
+    warn.mockRestore();
+  });
+
+  it('503 · 그 밖 상태 · 정상 답은 남기지 않는다', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { fetchRewindStatus: fetchOnce } = await freshModule();
+    for (const status of [503, 500, 404]) {
+      stubFetch(() => jsonResponse(status, { error: 'x' }));
+      await fetchOnce('u', BASE);
+    }
+    stubFetch(() => jsonResponse(200, READY_LIVE));
+    await fetchOnce('u', BASE);
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+});

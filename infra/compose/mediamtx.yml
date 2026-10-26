@@ -1,5 +1,6 @@
 # MediaMTX 설정 — PokeClip 로컬 개발용 (docker-compose의 media 서비스가 /mediamtx.yml로 마운트)
-# 값 근거: ADR-020(세그먼트 4s·part 0.5s) + 2026-07-25 스파이크 검증(hlsDirectory 디스크 오프로드) · 라이브 창 7조각 28초(ADR-102) · 되감기 1h 는 사이드카가 쌓는 /dvr 별도 URL
+# 값 근거: ADR-020(세그먼트 4s·part 0.5s) + 2026-07-25 스파이크 검증(hlsDirectory 디스크 오프로드)
+#   · 라이브 창 7조각 28초(ADR-102) · 되감기 1h 는 사이드카가 발행하는 별도 URL(엣지의 /dvr/{키}/{회차}/)
 # 송출 규약: MPEG-TS · H.264 · AAC · 인코더 GOP 2초 고정(30fps -g 60 / 60fps -g 120) — 플러그인이 강제(ADR-020)
 
 # 인제스트
@@ -83,7 +84,8 @@ hlsAddress: :8888
 hlsVariant: lowLatency
 hlsSegmentDuration: 4s
 hlsPartDuration: 500ms
-hlsSegmentCount: 7 # 라이브 창 28초 = 4s × 7(ADR-102) — 1시간 되감기는 /dvr 별도 URL(사이드카)
+hlsSegmentCount: 7 # 라이브 창 28초 = 4s × 7(ADR-102) — 1시간 되감기는 사이드카가 발행하는 별도 URL
+# 아래 /dvr 은 이 컨테이너 안 디스크 자리다 — 위 되감기 URL 의 /dvr 경로(엣지)와 이름만 같다
 hlsDirectory: /dvr # 세그먼트 디스크 오프로드 (메모리 상주 방지, 07-25 검증 방식)
 hlsAllowOrigins: ["*"] # 로컬 개발 전용 — 프로덕션은 CloudFront/Signed Cookie 경로라 이 값 안 씀
 

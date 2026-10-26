@@ -141,7 +141,9 @@ vi.mock('@/features/player/GlassPlayer', async (importOriginal) => {
 });
 
 // 라이브 재생기(hls.js) 흉내(POK-326): 목록의 조각 하나가 영상 0초(지금 1시간 전, MEDIA_ZERO)부터 지금까지를 덮고, 재생기는 그
-// 조각의 시각 표시(PDT)로 실제 시각을 센다. 영상 주소가 없는 시험(대부분)은 라이브 재생기가 서지 않아 이 흉내를 타지 않는다
+// 조각의 시각 표시(PDT)로 실제 시각을 센다. 영상 주소가 없는 시험(대부분)은 라이브 재생기가 서지 않아 이 흉내를 타지 않는다.
+// 1시간은 세션 없는 채팅 따라가기 시험의 입력일 뿐이다 — 시각 셈은 창 길이와 무관하다. 운영 라이브 목록은 7조각 28초이고
+// 1시간은 따로 받는 되감기 목록이다(ADR-102)
 const hlsFake = vi.hoisted(() => ({
   /** 라이브 영상 목록을 부른 횟수(POK-317) */
   loads: 0,
@@ -153,8 +155,8 @@ const hlsFake = vi.hoisted(() => ({
    */
   readyState: 4,
   /**
-   * 목록이 MediaMTX처럼 4초 조각 900개(1시간)이고 조각이 생길 때마다 맨 앞 조각을 버린다. 아니면 조각 하나가 영상 0초부터 지금까지를
-   * 덮는다
+   * 목록이 로컬 MediaMTX 라이브처럼 4초 조각 7개(28초)이고 조각이 생길 때마다 맨 앞 조각을 버린다. 아니면 조각 하나가 영상
+   * 0초부터 지금까지를 덮는다
    */
   sliding: false,
   /** 재생기가 서는 라이브 끝(영상 초)을 이 값으로 둔다. 없으면 liveSyncSeconds */
@@ -189,6 +191,11 @@ vi.mock('hls.js', () => {
       LEVEL_UPDATED: 'hlsLevelUpdated',
     };
     static ErrorTypes = { NETWORK_ERROR: 'networkError', MEDIA_ERROR: 'mediaError' };
+    static ErrorDetails = {
+      MANIFEST_LOAD_ERROR: 'manifestLoadError',
+      LEVEL_LOAD_ERROR: 'levelLoadError',
+      AUDIO_TRACK_LOAD_ERROR: 'audioTrackLoadError',
+    };
     private readonly handlers = new Map<string, () => void>();
     on(event: string, handler: () => void) {
       this.handlers.set(event, handler);
@@ -211,7 +218,7 @@ vi.mock('hls.js', () => {
       if (hlsFake.sliding) {
         const last = Math.floor((Date.now() - MEDIA_ZERO) / 4_000) * 4;
         const fragments = [];
-        for (let start = Math.max(0, last - 3_600); start < last; start += 4)
+        for (let start = Math.max(0, last - 28); start < last; start += 4)
           fragments.push({
             start,
             duration: 4,
@@ -235,7 +242,7 @@ vi.mock('hls.js', () => {
 
 const STREAM_ID = 'live-1';
 const NOW = Date.parse('2026-09-26T12:00:00Z');
-/** 라이브 영상 0초의 실제 시각(POK-326): 되감기 창 1시간의 처음이다 */
+/** 라이브 영상 0초의 실제 시각(POK-326): 시험이 seekable 로 두는 1시간 창의 처음이다(운영 라이브 창은 28초) */
 const MEDIA_ZERO = NOW - 3_600_000;
 /** 방송 경과 1:24:03 */
 const STARTED_AT = NOW - 5043_000;
@@ -5515,9 +5522,9 @@ describe('LiveScreen: 라이브 되감기 채팅(POK-326)', () => {
     for (const ask of replayAsks()) expect(ask.to).toBeLessThanOrEqual(ask.at - 5_000);
   });
 
-  it('1시간 창이 밀려 맨 앞 조각이 목록에서 빠져도 Home으로 되감은 채팅은 영상 시각을 따른다: 멈춰 있어도 최신으로 튀지 않는다', async () => {
-    // 1시간 창은 4초 조각이 생길 때마다 맨 앞 조각을 버린다. 맨 앞을 보던 재생 위치는 목록 밖으로 밀려도 버퍼에 남아 그 자리를
-    // 튼다: 목록의 첫 조각에서 거꾸로 센다. 모른다고 하면 영상은 1시간 전인데 채팅이 최신으로 튀었다(리뷰 2라운드)
+  it('창이 밀려 맨 앞 조각이 목록에서 빠져도 Home으로 되감은 채팅은 영상 시각을 따른다: 멈춰 있어도 최신으로 튀지 않는다', async () => {
+    // 라이브 목록(7조각 28초)은 4초 조각이 생길 때마다 맨 앞 조각을 버린다. 목록 밖 재생 위치는 버퍼에 남아 그 자리를
+    // 튼다: 목록의 첫 조각에서 거꾸로 센다. 모른다고 하면 영상은 창 처음인데 채팅이 최신으로 튀었다(리뷰 2라운드)
     hlsFake.sliding = true;
     const { container } = await openLive();
     fireEvent.keyDown(seekBar(), { key: 'Home' });
@@ -5548,8 +5555,8 @@ describe('LiveScreen: 라이브 되감기 채팅(POK-326)', () => {
     expect(within(chatPanel()).queryByText('라이브 1975초')).toBeNull();
   });
 
-  it('라이브를 열 때 첫 조각이 붙기 전(재생 위치 0초)에는 채팅이 따라가지 않는다: 1시간 되감은 것처럼 읽지 않는다', async () => {
-    // 첫 조각 전에도 되감기 창은 1시간이고 재생 위치는 0초다. 그때 시차를 재면 1시간 되감은 것으로 보였다
+  it('라이브를 열 때 첫 조각이 붙기 전(재생 위치 0초)에는 채팅이 따라가지 않는다: 창 처음까지 되감은 것처럼 읽지 않는다', async () => {
+    // 첫 조각 전에도 seekable 창(시험 입력 1시간)은 있고 재생 위치는 0초다. 그때 시차를 재면 창 처음까지 되감은 것으로 보였다
     hlsFake.readyState = 1;
     stubLiveVideo();
     const { container } = await renderLive();
@@ -5747,6 +5754,10 @@ describe('LiveScreen: 라이브 되감기 채팅(POK-326)', () => {
 describe('LiveScreen: 재생 세션(POK-200 M5 · 설계 5.5절)', () => {
   const DVR_A = `http://control.test/dvr/${STREAM_ID}/a1/index.m3u8`;
   const DVR_B = `http://control.test/dvr/${STREAM_ID}/b1/index.m3u8`;
+  /** 운영 · 로컬 라이브 창 = 4초 × 7조각(ADR-102) */
+  const LIVE_WINDOW_SECONDS = 28;
+  /** 라이브 영상의 끝(영상 초) = 지금 */
+  const liveEndSeconds = () => (Date.now() - MEDIA_ZERO) / 1000;
   function readyLive(url: string, firstMs: number, headMs: number) {
     return {
       ready: true,
@@ -5759,13 +5770,13 @@ describe('LiveScreen: 재생 세션(POK-200 M5 · 설계 5.5절)', () => {
 
   beforeEach(() => {
     stubMediaElement();
-    // 라이브 재생기의 되감기 창(seekable)은 영상 0초(1시간 전)부터 지금까지 · 재생 위치에 영상이 있다
+    // 라이브 재생기의 창(seekable)은 운영처럼 마지막 28초(7조각)다 · 1시간은 되감기 목록이 맡는다 · 재생 위치에 영상이 있다
     vi.spyOn(HTMLMediaElement.prototype, 'seekable', 'get').mockImplementation(
       () =>
         ({
           length: 1,
-          start: () => 0,
-          end: () => (Date.now() - MEDIA_ZERO) / 1000,
+          start: () => liveEndSeconds() - LIVE_WINDOW_SECONDS,
+          end: () => liveEndSeconds(),
         }) as unknown as TimeRanges,
     );
     vi.spyOn(HTMLMediaElement.prototype, 'readyState', 'get').mockImplementation(() => 4);
@@ -5773,12 +5784,15 @@ describe('LiveScreen: 재생 세션(POK-200 M5 · 설계 5.5절)', () => {
     vi.stubEnv('NEXT_PUBLIC_MEDIA_CONTROL_BASE_URL', 'http://control.test');
   });
 
-  /** 라이브 재생기가 목록(영상 0초 = 1시간 전부터 지금까지)을 받았다 — observedEndMs = 지금 */
+  /** 라이브 재생기가 목록(마지막 28초)을 받았다 — observedEndMs = 지금 */
   async function liveListLoaded() {
+    const start = liveEndSeconds() - LIVE_WINDOW_SECONDS;
     await act(async () => {
       hlsFake.levelUpdated?.('hlsLevelUpdated', {
         details: {
-          fragments: [{ start: 0, duration: 3_600, programDateTime: MEDIA_ZERO }],
+          fragments: [
+            { start, duration: LIVE_WINDOW_SECONDS, programDateTime: MEDIA_ZERO + start * 1000 },
+          ],
           targetduration: 4,
           live: true,
         },
@@ -5794,7 +5808,12 @@ describe('LiveScreen: 재생 세션(POK-200 M5 · 설계 5.5절)', () => {
   /** 라이브 목록이 치명 404 로 닫혔다 — 끝 도달로 친다(끝남 대기 · 덮개) */
   async function liveClosed() {
     await act(async () => {
-      hlsFake.error?.('hlsError', { fatal: true, type: 'networkError', response: { code: 404 } });
+      hlsFake.error?.('hlsError', {
+        fatal: true,
+        type: 'networkError',
+        details: 'levelLoadError',
+        response: { code: 404 },
+      });
     });
     await settle();
   }

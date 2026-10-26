@@ -77,7 +77,8 @@ export function edgeWords(replay: boolean): (typeof EDGE_WORDS)[keyof typeof EDG
 /**
  * 라이브 엣지 대비 시차 표기 — 계약3 4절: `-01:23` 형태(분 2자리), 1시간부터 `-1:00:00`.
  * 시안 프로토타입의 `-1:23` 표기 대신 티켓·계약 표기를 따른다.
- * 라이브는 창이 1시간이라 `-1:00:00`을 넘지 않고, 1시간 넘는 녹화 다시보기는 `-1:23:45`까지 간다(POK-253).
+ * 라이브 재생기는 창이 28초(로컬 7조각)이고 되감기 재생기는 창이 1시간이라 `-1:00:00`을 넘지 않는다. 1시간 넘는 녹화
+ * 다시보기는 `-1:23:45`까지 간다(POK-253).
  */
 export function formatBehind(seconds: number): string {
   const s = Math.max(0, Math.round(seconds));

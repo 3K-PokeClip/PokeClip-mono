@@ -4,7 +4,8 @@ import type { PlaybackSource } from './rewindSwitch';
 import { useHlsPlayback, type PlaybackHooks } from './useHlsPlayback';
 
 // 재생기 교체 · 사건 올림 · 창 가장자리(설계 5.3.1 · 5.4절 — R15 · R17 · R23 · R47). hls.js 와 <video> 를 흉내 낸다:
-// 흉내 hls.js 는 시험이 사건(LEVEL_LOADED · LEVEL_UPDATED · FRAG_BUFFERED · ERROR)을 쏘고, <video> 는 currentTime · seekable · paused 를 시험이 쥔다.
+// 흉내 hls.js 는 시험이 사건(LEVEL_LOADED · LEVEL_UPDATED · FRAG_BUFFERED · ERROR)을 쏘고, <video> 는
+// currentTime · seekable · paused 를 시험이 쥔다.
 
 interface FakeHlsLike {
   config: Record<string, unknown>;
@@ -46,6 +47,13 @@ vi.mock('hls.js', () => {
       FRAG_BUFFERED: 'hlsFragBuffered',
     };
     static ErrorTypes = { NETWORK_ERROR: 'networkError', MEDIA_ERROR: 'mediaError' };
+    // hls.js 1.7.3 의 값 그대로(errors.ts)
+    static ErrorDetails = {
+      MANIFEST_LOAD_ERROR: 'manifestLoadError',
+      LEVEL_LOAD_ERROR: 'levelLoadError',
+      AUDIO_TRACK_LOAD_ERROR: 'audioTrackLoadError',
+      FRAG_LOAD_ERROR: 'fragLoadError',
+    };
     readonly handlers = new Map<string, ((event: string, data: unknown) => void)[]>();
     startLoads: (number | undefined)[] = [];
     loaded: string[] = [];
@@ -74,10 +82,10 @@ vi.mock('hls.js', () => {
     startLoad(pos?: number) {
       this.startLoads.push(pos);
     }
-    // hls.js 1.7.3 의 복구(hls.ts 699-712): 재생점을 먼저 잡고 뗀다. 떼기의 첫 처리기는 buffer-controller(먼저 등록 ·
-    // buffer-controller.ts 186)라 src 를 지우고 load() 해 재생점을 0 으로 만든다(575-579) — 앱의 MEDIA_DETACHING 처리기는
-    // 늘 0 을 본다. 다시 붙여 기동 전으로 돌아가고(stream-controller.ts 532), 잡아 둔 재생점에서 startLoad 한다(0 이면
-    // 자동 시작이 아닐 때만 인자 없이). 시험은 기동한 뒤에만 부른다(hls.started)
+    // hls.js 1.7.3 의 복구(hls.ts 699-712): 재생점을 먼저 잡고 뗀다. 떼기의 첫 처리기는 buffer-controller
+    // (먼저 등록 · buffer-controller.ts 186)라 src 를 지우고 load() 해 재생점을 0 으로 만든다(575-579) — 앱의
+    // MEDIA_DETACHING 처리기는 늘 0 을 본다. 다시 붙여 기동 전으로 돌아가고(stream-controller.ts 532), 잡아 둔
+    // 재생점에서 startLoad 한다(0 이면 자동 시작이 아닐 때만 인자 없이). 시험은 기동한 뒤에만 부른다(hls.started)
     recoverMediaError() {
       const time = this.media?.currentTime ?? 0;
       if (this.media) this.media.currentTime = 0;
@@ -274,12 +282,51 @@ describe('사건 올림 — ENDLIST 와 끝 도달을 따로(cx H1)', () => {
     const onLive400 = vi.fn();
     mount(src(), { onLiveClosed, onLive400 });
     await settle();
-    const fatal = (code: number) => ({ fatal: true, type: 'networkError', response: { code } });
+    const fatal = (code: number) => ({
+      fatal: true,
+      type: 'networkError',
+      details: 'levelLoadError',
+      response: { code },
+    });
     act(() => lastHls().trigger('hlsError', fatal(400)));
     expect(onLive400).toHaveBeenCalledTimes(1);
     act(() => lastHls().trigger('hlsError', fatal(404)));
     expect(onLiveClosed).toHaveBeenCalledTimes(1);
   });
+
+  it.each(['manifestLoadError', 'audioTrackLoadError'])(
+    '목록 받기 오류(%s)의 치명 404 도 라이브 닫힘이다',
+    async (details) => {
+      const onLiveClosed = vi.fn();
+      mount(src(), { onLiveClosed });
+      await settle();
+      const fatal = { fatal: true, type: 'networkError', details, response: { code: 404 } };
+      act(() => lastHls().trigger('hlsError', fatal));
+      expect(onLiveClosed).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each([404, 400])(
+    '조각 받기의 치명 %i 는 라이브 닫힘 · 다시 세움이 아니다 — 재생기를 두고 한 번 다시 받는다(cx H1)',
+    async (code) => {
+      const onLiveClosed = vi.fn();
+      const onLive400 = vi.fn();
+      mount(src(), { onLiveClosed, onLive400 });
+      await settle();
+      const hls = lastHls();
+      const fatal = {
+        fatal: true,
+        type: 'networkError',
+        details: 'fragLoadError',
+        response: { code },
+      };
+      act(() => hls.trigger('hlsError', fatal));
+      expect(onLiveClosed).not.toHaveBeenCalled();
+      expect(onLive400).not.toHaveBeenCalled();
+      expect(hls.destroyed).toBe(false);
+      expect(hls.startLoads).toEqual([undefined]);
+    },
+  );
 });
 
 describe('멎음 알림(POK-337)', () => {
@@ -544,6 +591,20 @@ describe('되감기 창 하한을 LEVEL_UPDATED 에서 먼저 지키기(설계 5
     },
   );
 
+  it('옮길 때마다 한 줄 남긴다 — 알림은 조용한 구간에 묶여도 기록은 빠지지 않는다(cc L5)', async () => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    await rewindAt(15);
+    slide(3);
+    video.el!.currentTime = 17;
+    slide(4);
+    expect(info).toHaveBeenCalledTimes(2);
+    expect(info).toHaveBeenLastCalledWith(
+      '[player] 되감기 재생점을 창 하한으로 옮겼어요:',
+      'seek',
+      28,
+    );
+  });
+
   it('첫 조각 + 1 TD 이상이면 두고 알리지 않는다', async () => {
     const { onNotice } = await rewindAt(16);
     slide(3);
@@ -703,6 +764,22 @@ describe('되감기 창 하한을 LEVEL_UPDATED 에서 먼저 지키기(설계 5
       slide(3);
       expect(hls.startLoads).toEqual([40, 13, 24]);
       expect(onNotice).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each([
+    ['앱이 치명 MEDIA_ERROR 를 복구', fatalMediaError],
+    ['hls.js 가 스스로 복구(MEDIA_SOURCE_REQUIRES_RESET)', internalRecovery],
+  ])(
+    '시크 중(seeked 전)에 %s 하면 시크 목표에서 다시 받는다 — 앞서 적은 재생점으로 되돌리지 않는다(cx M1)',
+    async (_name, recover) => {
+      const { hls, onNotice } = await rewindStarted(40, 13);
+      video.el!.currentTime = 40;
+      act(() => video.el!.dispatchEvent(new Event('seeking')));
+      recover(hls);
+      slide(3);
+      expect(hls.startLoads).toEqual([40, 40]);
+      expect(onNotice).not.toHaveBeenCalled();
     },
   );
 
