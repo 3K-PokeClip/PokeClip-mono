@@ -32,6 +32,10 @@ package index
 //	rewind_read.go
 //	  rewindCutoffSQL · rewindFloorSQL · rewindRowsSQL · rewindSessionsSQL  LoadRewindLedger(읽기 전용 RR)  cutoffs · segments · gaps · sessions SELECT
 //	  rewindWatchSQL                          LoadRewindWatch                      sessions · cutoffs · segments · gaps SELECT
+//	round_playback.go(M6-3a — 역할 시험은 round_playback_role_pg_test.go TestRoundPlaybackReadsRunUnderMediaIndexerRole)
+//	  lookupRoundPlaybackSQL                  LookupRoundPlayback                  sessions · segments SELECT
+//	  loadStreamPlaybackSQL                   LoadStreamPlayback                   sessions · segments SELECT
+//	  loadPlaybackStatesSQL                   LoadPlaybackStates                   sessions · segments SELECT
 //
 //	expiry_store.go(M6-4 — 역할 시험은 expiry_store_pg_test.go TestExpiryStatementsRunUnderMediaIndexerRole)
 //	  markExpiredSQL                          MarkExpired                          sessions UPDATE(+ segments SELECT)
