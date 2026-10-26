@@ -20,9 +20,9 @@ import (
 
 // ledgerRow 는 회차 칸까지 심는 세션 픽스처다. 빈 문자열 · 영값은 NULL 이다.
 type ledgerRow struct {
-	id, streamID, state, endReason, vodState, roundID string
-	startedAt, stopMarkedAt, roundClosedAt            time.Time
-	targetDuration                                    int32
+	id, streamID, state, endReason, vodState, roundID, inherits string
+	startedAt, stopMarkedAt, roundClosedAt                      time.Time
+	targetDuration                                              int32
 }
 
 func nullText(s string) any {
@@ -54,10 +54,10 @@ func seedLedger(t *testing.T, pool *pgxpool.Pool, r ledgerRow) {
 	if _, err := pool.Exec(context.Background(), `
 INSERT INTO stream_sessions
     (session_id, stream_id, started_at, state, end_reason, ending_at, vod_state, round_id, round_closed_at,
-     stop_marked_at, target_duration)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+     stop_marked_at, target_duration, inherits_session)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
 		r.id, r.streamID, r.startedAt, r.state, nullText(r.endReason), endingAt, r.vodState, nullText(r.roundID),
-		nullTime(r.roundClosedAt), nullTime(r.stopMarkedAt), r.targetDuration); err != nil {
+		nullTime(r.roundClosedAt), nullTime(r.stopMarkedAt), r.targetDuration, nullText(r.inherits)); err != nil {
 		t.Fatalf("세션 픽스처 실패 %s: %v", r.id, err)
 	}
 }

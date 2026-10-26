@@ -105,3 +105,35 @@ func sessionOpOf(op index.SessionOp) (session.Op, error) {
 	}
 	return 0, fmt.Errorf("세션 결정 연산이 지정되지 않았다(%d)", op)
 }
+
+// intentShortConn 은 4D 의 짧은 연결 문턱이다(K8 확정 4초) — 이보다 짧은 연결의 신호는 적용하지 않는다(short_conn).
+const intentShortConn = 4 * time.Second
+
+// newIntentOptions 는 4D 적용(session.ApplyIntentionalEnd)의 수치와 함수 칸을 묶는다(설계 M6 10절 · 계획 4.12 커밋 ②).
+//
+// 칸이 nil 이면 무동작 + WARN intentional_round_close_unwired 기본값을 끼운다 — 그래서 M6-3a 만 들어간 판에서도
+// 4D 적용이 돈다. 그 판에서 upgraded 는 사유 · 표식만 쓰고 회차 닫힘은 M6-3b 의 회차 스캔이 거두며(사유 intentional 이
+// 닫힘 조건이다), round_split 은 R 닫힘 · round_id 를 직접 쓰고 완결 평가만 건너뛴다. 계약9 outbox 는 M6-8 전까지
+// Gate 꺼짐과 같아 건너뛴 started 가 이벤트 누락이 되지 않는다(D45). M6-3b 가 closeRound 를, M6-8 이 enqueueStarted
+// 를 채운다. POK-472 수신부는 이 조립을 부르기만 한다.
+func newIntentOptions(log *slog.Logger,
+	closeRound func(ctx context.Context, tx pgx.Tx, round string) error,
+	enqueueStarted func(ctx context.Context, tx pgx.Tx, round, ingestStreamID string, at time.Time) error,
+) session.IntentOptions {
+	if closeRound == nil {
+		closeRound = func(_ context.Context, _ pgx.Tx, round string) error {
+			log.Warn("intentional_round_close_unwired", "slot", "close_round", "round", round)
+			return nil
+		}
+	}
+	if enqueueStarted == nil {
+		enqueueStarted = func(_ context.Context, _ pgx.Tx, round, ingestStreamID string, _ time.Time) error {
+			log.Warn("intentional_round_close_unwired", "slot", "enqueue_started", "round", round, "stream_id", ingestStreamID)
+			return nil
+		}
+	}
+	return session.IntentOptions{
+		ShortConn: intentShortConn, Slack: intentStopSlack,
+		CloseRound: closeRound, EnqueueStarted: enqueueStarted, Log: log,
+	}
+}
