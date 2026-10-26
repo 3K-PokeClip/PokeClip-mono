@@ -42,6 +42,12 @@ type IntentionalResult struct {
 	RevokeSession string
 }
 
+// Retryable 은 같은 신호를 다시 보내면 결과가 달라질 수 있는 미적용인가다 — contended(잠금 경합 · 시한 · 교착)만
+// 참이다. 수신부는 이것으로 503(플러그인 재시도)을 고른다. 나머지 미적용(bad_time 등)은 다시 보내도 같은 답이다.
+func (r IntentionalResult) Retryable() bool {
+	return r.Skip == skipContended
+}
+
 // IntentOptions 는 수치와 함수 칸이다. session 은 index · broadcast 를 임포트하지 않으므로 회차 닫힘 · 완결 평가와
 // started outbox 는 cmd 가 묶어 끼운다. 비어 있으면 적용 전에 오류다 — 조립(cmd)이 무동작 + WARN 기본값을 끼운다.
 type IntentOptions struct {
@@ -83,7 +89,8 @@ var errMembershipContended = errors.New("session: 소속 행이 재확인 상한
 
 // ApplyIntentionalEnd 는 판정과 효과를 한 트랜잭션에서 한다(3.4). 돌아오면 커밋된 뒤다. 부른 쪽은 Effect 가 비지
 // 않으면 PlaybackChanged(e.StreamID) 를, RevokeSession 이 비지 않으면 intents.Post(e.StreamID, RevokeSession) 를
-// 부른다. 캐시는 만지지 않는다. 미적용(잠금 경합 · 시한의 contended 포함)은 오류가 아니라 Skip 이다.
+// 부른다. 캐시는 만지지 않는다. 미적용(잠금 경합 · 시한의 contended 포함)은 오류가 아니라 Skip 이다. contended 는
+// 커밋 전에 접히고 Retryable 이 참이다.
 func ApplyIntentionalEnd(ctx context.Context, pool *pgxpool.Pool, e IntentionalEnd, o IntentOptions) (IntentionalResult, error) {
 	if err := o.validate(e); err != nil {
 		return IntentionalResult{}, err

@@ -103,3 +103,22 @@ func TestIsContention(t *testing.T) {
 		}
 	}
 }
+
+// 재시도 가능 판정 — contended 만 참이다. 수신부가 이것으로 503(플러그인 재시도)을 고른다. bad_time 등 나머지 미적용은
+// 다시 보내도 같은 답이라 거짓이고, 효과가 있으면 거짓이다. 변이 = 판정을 Skip != "" 로 → bad_time 갈래 FAIL.
+func TestIntentionalResultRetryable(t *testing.T) {
+	for _, c := range []struct {
+		res  IntentionalResult
+		want bool
+	}{
+		{IntentionalResult{Skip: skipContended}, true},
+		{IntentionalResult{Skip: skipBadTime}, false},
+		{IntentionalResult{Skip: skipNoSession}, false},
+		{IntentionalResult{Skip: skipRoundSplitBlocked}, false},
+		{IntentionalResult{Effect: effectMarked}, false},
+	} {
+		if got := c.res.Retryable(); got != c.want {
+			t.Errorf("%+v.Retryable() = %v, want %v", c.res, got, c.want)
+		}
+	}
+}
