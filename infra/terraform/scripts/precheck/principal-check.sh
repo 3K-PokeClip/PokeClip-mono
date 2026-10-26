@@ -374,7 +374,8 @@ row_arns() {
 #######################################
 # (5) 실제 질문 하나를 묻고 행 판정을 기록한다(머리 주석의 순서). 검증
 # 레코드 이름이 있으면 추가 문맥의 자리표시자를 그 이름으로 바꾸고, 결과의
-# 자원 칸에 「ARN 이름」 으로 남긴다.
+# 자원 칸에 「ARN 이름」 으로 남긴다. 바꾼 뒤에도 「$」 가 남으면 자리표시자를
+# 그대로 묻게 되므로 종료 2 다.
 # Globals:
 #   u_*, t_*, pol_state, pol_file, pol_escaped, found_policy, branch,
 #   context_json, sim_class, sim_decision, result, n_judged,
@@ -393,6 +394,7 @@ judge_question() {
   fi
   [[ -z "${name}" ]] ||
     context="${context//${VALIDATION_PLACEHOLDER}/${name}}"
+  [[ "${context}" != *'$'* ]] || die "추가 문맥에 풀지 않은 자리표시자가 남음"
   principal::context_entries "${context}" || die "추가 문맥 꼴이 틀림"
   principal::ask "${u_arn[j]}" "${action}" "${arn}" "${t_region[t]}" \
     "${context_json}" "${file}"
