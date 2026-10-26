@@ -4,12 +4,11 @@ import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
-import org.springframework.http.HttpStatus;
-import org.springframework.web.filter.OncePerRequestFilter;
-
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.filter.OncePerRequestFilter;
 
 /**
  * Media(Go)가 토큰 헤더로 자기를 증명하는 수단. auth 공용 체인은 X-Internal-Token을 보고,
@@ -30,31 +29,32 @@ import java.security.MessageDigest;
  */
 public class InternalTokenFilter extends OncePerRequestFilter {
 
-    static final String HEADER = "X-Internal-Token";
+  static final String HEADER = "X-Internal-Token";
 
-    private final byte[] expected;
-    private final String headerName;
+  private final byte[] expected;
+  private final String headerName;
 
-    public InternalTokenFilter(String token) {
-        this(token, HEADER);
+  public InternalTokenFilter(String token) {
+    this(token, HEADER);
+  }
+
+  /** 토큰을 {@code headerName} 헤더에서 받는다. 위 생성자는 {@value #HEADER}를 본다. */
+  public InternalTokenFilter(String token, String headerName) {
+    this.expected = token.getBytes(StandardCharsets.UTF_8);
+    this.headerName = headerName;
+  }
+
+  @Override
+  protected void doFilterInternal(
+      HttpServletRequest request, HttpServletResponse response, FilterChain chain)
+      throws ServletException, IOException {
+    String presented = request.getHeader(headerName);
+
+    if (presented == null
+        || !MessageDigest.isEqual(presented.getBytes(StandardCharsets.UTF_8), expected)) {
+      response.setStatus(HttpStatus.UNAUTHORIZED.value());
+      return;
     }
-
-    /** 토큰을 {@code headerName} 헤더에서 받는다. 위 생성자는 {@value #HEADER}를 본다. */
-    public InternalTokenFilter(String token, String headerName) {
-        this.expected = token.getBytes(StandardCharsets.UTF_8);
-        this.headerName = headerName;
-    }
-
-    @Override
-    protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
-                                    FilterChain chain) throws ServletException, IOException {
-        String presented = request.getHeader(headerName);
-
-        if (presented == null
-                || !MessageDigest.isEqual(presented.getBytes(StandardCharsets.UTF_8), expected)) {
-            response.setStatus(HttpStatus.UNAUTHORIZED.value());
-            return;
-        }
-        chain.doFilter(request, response);
-    }
+    chain.doFilter(request, response);
+  }
 }

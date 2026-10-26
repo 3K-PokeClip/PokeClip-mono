@@ -29,7 +29,11 @@ public final class ForwardedHeaderMarkValve extends ValveBase {
 
   private static final List<String> HEADERS =
       List.of(
-          "Forwarded", "X-Forwarded-For", "X-Forwarded-Proto", "X-Forwarded-Host", "X-Forwarded-Port");
+          "Forwarded",
+          "X-Forwarded-For",
+          "X-Forwarded-Proto",
+          "X-Forwarded-Host",
+          "X-Forwarded-Port");
 
   public ForwardedHeaderMarkValve() {
     // 비동기 요청도 지나간다(RemoteIpValve 와 같다). false 면 그 요청에서 비동기 처리가 꺼진다.
