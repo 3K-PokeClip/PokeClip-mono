@@ -99,8 +99,33 @@ func TestEnsureSchemaPropagatesLedgerSchemaToOldDB(t *testing.T) {
 	if len(first) != ledgerSchemaObjectCount {
 		t.Fatalf("1회차 뒤 M6 객체 = %q (%d개), want %d개", first, len(first), ledgerSchemaObjectCount)
 	}
+	if missing, err := MissingLedgerSchema(ctx, pool); err != nil || len(missing) != 0 {
+		t.Errorf("1회차 뒤 기동 스키마 확인 = (%q, %v), want (빈 목록, nil)", missing, err)
+	}
 	if !slices.Equal(first, second) {
 		t.Errorf("2회차가 객체를 바꿨다:\n1회차 %q\n2회차 %q", first, second)
+	}
+}
+
+// 열 넷 가운데 하나만 빠진 DB(손으로 지운 열 · 중간에 멈춘 적용)도 EnsureSchema 한 번이면 기동 스키마 확인을
+// 통과한다 — 열마다 따로 확인하므로 남은 열이 빠진 열의 추가를 막지 않는다.
+func TestEnsureSchemaRestoresSingleMissingLedgerColumn(t *testing.T) {
+	pool := pgtest.Pool(t, "ledgerschema", EnsureSchema, resetTables)
+	ctx := context.Background()
+	if _, err := pool.Exec(ctx, "ALTER TABLE stream_sessions DROP COLUMN stop_marked_at"); err != nil {
+		t.Fatalf("열 지우기 실패: %v", err)
+	}
+	t.Cleanup(func() { // 풀보다 늦게 등록 — 풀이 닫히기 전에 돈다
+		if err := EnsureSchema(context.Background(), pool); err != nil {
+			t.Errorf("스키마 되돌리기 실패: %v", err)
+		}
+	})
+
+	err := EnsureSchema(ctx, pool)
+	missing, missErr := MissingLedgerSchema(ctx, pool)
+
+	if err != nil || missErr != nil || len(missing) != 0 {
+		t.Errorf("열 하나 빠진 DB 의 EnsureSchema = %v · 기동 확인 = (%q, %v), want nil · (빈 목록, nil)", err, missing, missErr)
 	}
 }
 
@@ -295,4 +320,36 @@ func TestLoadCursorStartsAtSeqFloor(t *testing.T) {
 			t.Errorf("%s LoadCursor = (다음 %d · 꼬리 %d), want (%d · %d)", tt.stream, cur.NextSeq, tail, tt.wantNext, tt.wantTail)
 		}
 	}
+}
+
+// D50 스키마 몫 — 기동 스키마 확인은 M6 장부 객체 가운데 없는 것만 이름으로 돌려준다. 사이드카 계정
+// (media_indexer)으로 카탈로그를 읽고, 앱 사용자가 public 에 심은 덫을 부르지 않는다.
+func TestMissingLedgerSchemaNamesAbsentObjects(t *testing.T) {
+	admin := pgtest.Pool(t, "ledgercheck", EnsureSchema, resetTables)
+	ctx := context.Background()
+	traps := pgtest.PlantSearchPathTraps(t, admin)
+	role := pgtest.NewMediaIndexerRole(t, admin)
+
+	full, fullErr := MissingLedgerSchema(ctx, role.Pool)
+	if _, err := admin.Exec(ctx, `
+		DROP TRIGGER stream_segments_seq_floor_guard ON stream_segments;
+		DROP TABLE broadcast_lifecycle_outbox;
+		ALTER TABLE stream_sessions DROP COLUMN stop_marked_at`); err != nil {
+		t.Fatalf("객체 지우기 실패: %v", err)
+	}
+	t.Cleanup(func() { // 풀보다 늦게 등록 — 풀이 닫히기 전에 돈다
+		if err := EnsureSchema(context.Background(), admin); err != nil {
+			t.Errorf("스키마 되돌리기 실패: %v", err)
+		}
+	})
+	partial, partialErr := MissingLedgerSchema(ctx, role.Pool)
+
+	if fullErr != nil || len(full) != 0 {
+		t.Errorf("다 있는 DB 의 MissingLedgerSchema = (%q, %v), want (빈 목록, nil)", full, fullErr)
+	}
+	want := []string{"broadcast_lifecycle_outbox", "stream_segments_seq_floor_guard", "stream_sessions.stop_marked_at"}
+	if partialErr != nil || !slices.Equal(partial, want) {
+		t.Errorf("지운 DB 의 MissingLedgerSchema = (%q, %v), want (%q, nil)", partial, partialErr, want)
+	}
+	traps.RequireNotCalled(t)
 }
