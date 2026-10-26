@@ -213,3 +213,46 @@ func TestPassphraseMarshalsWithoutRaw(t *testing.T) {
 		}
 	}
 }
+
+// ParseStreamID 는 계약4 2절 정규형(#!::r=<토큰>,m=publish) 하나만 받는다. auth StreamId.parse 는 필드 순서를
+// 허용하고 r 이 둘이면 마지막 값을 읽으므로, 정규형이 아닌 값은 모두 여기서 거부해야 auth 가 다른 r 을 읽는 길이
+// 닫힌다(POK-472 설계 7절 P11).
+func TestParseStreamID(t *testing.T) {
+	const token = "01ARZ3NDEKTSV4RRFFQ69G5FAV"
+	const other = "0123456789ABCDEFGHJKMNPQRS"
+	tests := []struct {
+		name      string
+		s         string
+		wantToken string
+		wantOK    bool
+	}{
+		{name: "정규형", s: "#!::r=" + token + ",m=publish", wantToken: token, wantOK: true},
+		{name: "정규형_다른_토큰", s: "#!::r=" + other + ",m=publish", wantToken: other, wantOK: true},
+
+		{name: "빈_값", s: ""},
+		{name: "토큰만", s: token},
+		{name: "m_없음", s: "#!::r=" + token},
+		{name: "m_request", s: "#!::r=" + token + ",m=request"},
+		{name: "필드_순서_뒤바뀜", s: "#!::m=publish,r=" + token},
+		{name: "r_둘", s: "#!::r=" + other + ",r=" + token + ",m=publish"},
+		{name: "r_둘_뒤에", s: "#!::r=" + token + ",m=publish,r=" + other},
+		{name: "추가_필드", s: "#!::r=" + token + ",m=publish,s=x"},
+		{name: "앞_공백", s: " #!::r=" + token + ",m=publish"},
+		{name: "뒤_공백", s: "#!::r=" + token + ",m=publish "},
+		{name: "끝_줄바꿈", s: "#!::r=" + token + ",m=publish\n"},
+		{name: "토큰_소문자", s: "#!::r=01arz3ndektsv4rrffq69g5fav,m=publish"},
+		{name: "토큰_25자", s: "#!::r=01ARZ3NDEKTSV4RRFFQ69G5FA,m=publish"},
+		{name: "토큰_27자", s: "#!::r=01ARZ3NDEKTSV4RRFFQ69G5FAVX,m=publish"},
+		{name: "토큰_금지_글자", s: "#!::r=01ARZ3NDEKTSV4RRFFQ69G5FAI,m=publish"},
+		{name: "접두_대문자_R", s: "#!::R=" + token + ",m=publish"},
+		{name: "접두_없음", s: "r=" + token + ",m=publish"},
+		{name: "m_대문자", s: "#!::r=" + token + ",m=PUBLISH"},
+		{name: "쉼표_뒤_공백", s: "#!::r=" + token + ", m=publish"},
+	}
+	for _, tc := range tests {
+		gotToken, gotOK := ParseStreamID(tc.s)
+		if gotToken != tc.wantToken || gotOK != tc.wantOK {
+			t.Errorf("%s: ParseStreamID(%q) = (%q, %v), want (%q, %v)", tc.name, tc.s, gotToken, gotOK, tc.wantToken, tc.wantOK)
+		}
+	}
+}
