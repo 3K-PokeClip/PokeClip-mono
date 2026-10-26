@@ -24,6 +24,12 @@ const headerLine = "#EXTM3U\n"
 // 아주 짧아 줄이 많아지면 넘는다 — 0.79초 조각으로 1시간을 채우면 이 크기에 닿는다.
 const MaxBodyBytes = 512 << 10
 
+// MaxVODBodyBytes 는 VOD 목록(KindVOD) 본문의 크기 상한이다 — M6 설계 9절 D29. VOD 는 사슬 전체를 한
+// 문서에 싣는다(K1). 8시간 방송이 4초 조각 7,200개로 약 830KB 라 MaxBodyBytes 를 함께 쓰면 VOD 가 영구히
+// 발행 중단된다. 4MiB 는 4초 조각으로 약 36,000개(약 40시간)이고, 넘는 사슬은 한계로 둔다(문서를 쪼개면 「사슬
+// 하나에 문서 하나」와 어긋난다 — 설계 3.1 phase 3 비귀속 행 절).
+const MaxVODBodyBytes = 4 << 20
+
 // pdtSlack 은 PDT 엄격 단조 검사(S7)가 이웃한 두 조각의 겹침으로 봐주는 폭이다 — 설계 4.5.5 S7 의
 // PDT_SLACK(1ms). S7 은 발행되는 PDT 줄(ms)로 재므로 이 폭은 발행 해상도의 한 칸이다.
 //
@@ -44,6 +50,11 @@ var ErrRevokeInheritance = errors.New("rewind: 계승 취소")
 // errors.Is(err, ErrHaltPublication) 도 참이다. 발행 층이 이 갈래를 MSN 후퇴와 가려 로그 사유를 따로
 // 적는다(계획 4.5 A2 결정 4).
 var ErrDiscontinuitySequenceDecreased = fmt.Errorf("%w: DISC-SEQ 감소", ErrHaltPublication)
+
+// ErrBodyTooLarge 는 S5 의 크기 상한 조항 위반이다 — 발행 중단의 한 갈래라 errors.Is(err, ErrHaltPublication)
+// 도 참이다. 발행 층이 VOD 동결의 freeze_failed reason=too_large 를 다른 S5 위반과 가려 적는다(M6 설계 3.1
+// phase 3 비귀속 행 절).
+var ErrBodyTooLarge = fmt.Errorf("%w: 본문 크기 상한 초과", ErrHaltPublication)
 
 // Violation 은 발행 전 검사 하나에 걸린 것이다. 처치는 검사가 정하고(설계 4.5.5 표의 처치 열)
 // 호출자는 errors.Is 로 가른다 — S4 는 ErrRevokeInheritance, 나머지 여섯은 ErrHaltPublication 이다.
@@ -408,7 +419,7 @@ func totalMS(rows []boundary.Row) int64 {
 
 // checkBody 는 S5 본문 형식·상한이다 — 이 바이트를 그대로 올려도 되는가.
 //
-//	첫 줄 #EXTM3U(RFC 8216bis-22 4.4.1.1) · 크기 ≤ MaxBodyBytes · #PC- 로 시작하는 줄 0개(우리 용도의
+//	첫 줄 #EXTM3U(RFC 8216bis-22 4.4.1.1) · 크기 ≤ 종류의 상한(bodyLimit) · #PC- 로 시작하는 줄 0개(우리 용도의
 //	줄 — 세대 정보는 본문 밖 메타데이터로 간다, 설계 4.4.2)
 //	TARGETDURATION ≥ 모든 조각의 반올림 길이(4.4.3.1) — TD 는 소유 회차 값, 조각 길이는 행의 duration_ms
 //	다. 본문의 TD 줄이 그 값 한 줄뿐이고 EXTINF 줄이 그 길이라는 것은 checkBodyMatchesRows 가 확인했다
@@ -425,8 +436,12 @@ func checkBody(p Playlist, body []byte, lines []string, segs []segmentLines) err
 	switch {
 	case !bytes.HasPrefix(body, []byte(headerLine)):
 		return violation("S5", "첫 줄이 #EXTM3U 가 아니다")
-	case len(body) > MaxBodyBytes:
-		return violation("S5", "본문 %d바이트가 상한 %d바이트를 넘는다", len(body), MaxBodyBytes)
+	case len(body) > p.bodyLimit():
+		return &Violation{
+			Check:  "S5",
+			Reason: fmt.Sprintf("본문 %d바이트가 상한 %d바이트를 넘는다", len(body), p.bodyLimit()),
+			cause:  ErrBodyTooLarge,
+		}
 	}
 	for _, line := range lines {
 		if strings.HasPrefix(line, "#PC-") {
@@ -454,6 +469,14 @@ func checkBody(p Playlist, body []byte, lines []string, segs []segmentLines) err
 		}
 	}
 	return nil
+}
+
+// bodyLimit 은 목록 종류의 본문 크기 상한이다 — VOD 는 MaxVODBodyBytes, 되감기 목록은 MaxBodyBytes 다.
+func (p Playlist) bodyLimit() int {
+	if p.Kind == KindVOD {
+		return MaxVODBodyBytes
+	}
+	return MaxBodyBytes
 }
 
 // segmentProblem 은 행 r 을 조각 줄로 낼 수 없는 까닭이다("" = 낼 수 있다) — 길이가 0 이하이거나, 조각 키가 ③ 키
