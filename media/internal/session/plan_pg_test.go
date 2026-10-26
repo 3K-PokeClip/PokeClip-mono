@@ -45,9 +45,10 @@ func TestSessionQueriesReachTheirIndexes(t *testing.T) {
 		indexes []string
 	}{
 		{"현_live_조회", currentLiveSQL, []string{"stream_sessions_one_live_uq"}},
+		{"소속_잠금_live", lockLiveSQL, []string{"stream_sessions_one_live_uq"}},
 		// 직전 회차 행은 세션 색인으로, 그 회차의 첫 · 마지막 조각은 조각 색인(stream_id, session_id, seq)의
 		// 앞 · 뒤 끝으로 간다(계획 2.3 registry 행 ⑴ 「재확인」 — basePDTSQL 과 같은 정렬).
-		{"직전_세션_조회", previousSessionSQL, []string{"stream_sessions_stream_idx", "stream_segments_session_idx"}},
+		{"직전_세션_소속_잠금", lockPreviousSQL, []string{"stream_sessions_stream_idx", "stream_segments_session_idx"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Logf("비용 플랜(기록용):\n%s", explainPlan(t, pool, false, c.sql, stream))

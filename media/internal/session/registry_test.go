@@ -492,7 +492,7 @@ func TestInheritableJudgesReconnectWindowBoundaries(t *testing.T) {
 	const window = 300 * time.Second
 	end := wall // 직전 회차 마지막 조각 끝
 	prev := func(state, reason string) previousSession {
-		return previousSession{id: "S-prev", state: state, endReason: reason, lastEnd: end}
+		return previousSession{id: "S-prev", state: state, endReason: reason, vodState: "none", lastEnd: end}
 	}
 	tests := []struct {
 		name   string
@@ -506,12 +506,15 @@ func TestInheritableJudgesReconnectWindowBoundaries(t *testing.T) {
 		{"300초_1ms_초과", prev("ending", "offline"), end.Add(300*time.Second + time.Millisecond), window, false},
 		{"공백_0", prev("ending", "offline"), end, window, true},
 		{"음수_공백", prev("ending", "offline"), end.Add(-time.Millisecond), window, false},
-		{"ended_회차", prev("ended", "offline"), end.Add(time.Second), window, true},
+		{"ended_회차는_합류만", prev("ended", "offline"), end.Add(time.Second), window, false},
+		{"intentional_로_끝난_회차", prev("ending", endReasonIntentional), end.Add(time.Second), window, false},
 		{"TD_분할로_끝난_회차", prev("ending", "td_exceeded"), end.Add(time.Second), window, true},
 		{"init_불일치로_끝난_회차", prev("ending", "init_mismatch"), end.Add(time.Second), window, false},
 		{"live_회차", prev("live", ""), end.Add(time.Second), window, false},
 		{"조각_없는_회차", previousSession{id: "S-prev", state: "ended", endReason: "offline"}, end.Add(time.Second), window, false},
 		{"창_영값", prev("ending", "offline"), end, 0, false},
+		{"닫힌_사슬", previousSession{id: "S-prev", state: "ending", endReason: "offline", vodState: "freezing", lastEnd: end}, end.Add(time.Second), window, false},
+		{"닫힌_회차", previousSession{id: "S-prev", state: "ending", endReason: "offline", vodState: "none", roundClosed: true, lastEnd: end}, end.Add(time.Second), window, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

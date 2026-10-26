@@ -6,8 +6,9 @@ package session
 //
 //	문장                 메서드 · 갈래                              표 · 동작
 //	currentLiveSQL       Decide                                    sessions SELECT
-//	previousSessionSQL   Decide 개시 갈래(현 live 없음)             sessions SELECT · segments SELECT(첫 · 마지막 조각)
-//	endSessionSQL        Open TD 분할 갈래                          sessions UPDATE
+//	lockLiveSQL          Decide 개시 갈래(소속 잠금 — live)         sessions SELECT · FOR NO KEY UPDATE(UPDATE 권한)
+//	lockPreviousSQL      Decide 개시 갈래(소속 잠금 — live 없음)    sessions SELECT · FOR NO KEY UPDATE · segments SELECT
+//	endSessionSQL        Open TD · 표식 분할 갈래                   sessions UPDATE
 //	openSessionSQL       Open                                      sessions INSERT
 //
 // 레지스트리는 트랜잭션을 받기만 한다 — 시험은 역할 풀로 연 트랜잭션을 준다(운영의 index.Insert 와 같은 꼴).
@@ -105,7 +106,7 @@ func TestMediaIndexerRoleDecidesAndOpensSessions(t *testing.T) {
 		t.Errorf("회차 %s = %s, want live", id3, state)
 	}
 	role.RequireSent(t, map[string]string{
-		"currentLiveSQL": currentLiveSQL, "previousSessionSQL": previousSessionSQL,
+		"currentLiveSQL": currentLiveSQL, "lockLiveSQL": lockLiveSQL, "lockPreviousSQL": lockPreviousSQL,
 		"endSessionSQL": endSessionSQL, "openSessionSQL": openSessionSQL,
 	})
 	traps.RequireNotCalled(t)
@@ -121,9 +122,10 @@ func TestMediaIndexerRoleSessionWithoutEachGrantIsDenied(t *testing.T) {
 		in      Input
 	}{
 		{"SELECT", "stream_sessions", currentLiveSQL, nil, roleInput("role-sd", 1, 4000)},
-		{"UPDATE", "stream_sessions", endSessionSQL, nil, roleInput("role-sd", 1, 7000)},
+		// 소속 잠금(FOR NO KEY UPDATE)이 UPDATE 권한을 요구해 TD 분할의 끝내는 UPDATE 보다 먼저 막힌다.
+		{"UPDATE", "stream_sessions", lockLiveSQL, nil, roleInput("role-sd", 1, 7000)},
 		{"INSERT", "stream_sessions", openSessionSQL, nil, roleInput("role-sd-new", 0, 4000)},
-		{"SELECT", "stream_segments", previousSessionSQL, func(t *testing.T, _ *pgtest.Role, admin *pgxpool.Pool) {
+		{"SELECT", "stream_segments", lockPreviousSQL, func(t *testing.T, _ *pgtest.Role, admin *pgxpool.Pool) {
 			if _, err := admin.Exec(context.Background(), `UPDATE stream_sessions SET state = 'ending'`); err != nil {
 				t.Fatalf("픽스처(회차 종료) 실패: %v", err)
 			}
