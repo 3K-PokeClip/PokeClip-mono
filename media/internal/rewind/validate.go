@@ -63,8 +63,8 @@ type Violation struct {
 	Check string
 	// Reason 은 무엇이 어긋났는지다 — 사람이 읽는 진단이다.
 	Reason string
-	// cause 는 처치를 한 갈래로 좁힌 센티널이다. 비면 검사 이름이 처치를 정한다(S2 의 DISC-SEQ 조항만
-	// ErrDiscontinuitySequenceDecreased 를 싣는다).
+	// cause 는 처치를 한 갈래로 좁힌 센티널이다. 비면 검사 이름이 처치를 정한다(S2 의 DISC-SEQ 조항은
+	// ErrDiscontinuitySequenceDecreased 를, S5 의 크기 상한 조항은 ErrBodyTooLarge 를 싣는다).
 	cause error
 }
 
@@ -232,8 +232,12 @@ func (p Playlist) headerMismatch(body []byte, lines []string, first segmentLines
 	if p.Kind == KindVOD {
 		wantType = []string{playlistType + ":VOD"}
 	}
-	if got := linesWithPrefix(lines, playlistType+":"); !slices.Equal(got, wantType) || (wantType != nil && !slices.Contains(first.tags, wantType[0])) {
-		return fmt.Sprintf("%s 줄 %q — 종류 %d 의 목록은 첫 조각 앞 %q 여야 한다", playlistType, got, p.Kind, wantType)
+	got := linesWithPrefix(lines, playlistType+":")
+	if !slices.Equal(got, wantType) {
+		return fmt.Sprintf("%s 줄 %q — 종류 %d 의 목록은 %q 여야 한다", playlistType, got, p.Kind, wantType)
+	}
+	if wantType != nil && !slices.Contains(first.tags, wantType[0]) {
+		return fmt.Sprintf("%s 줄 %q 가 첫 조각 앞에 없다", playlistType, wantType[0])
 	}
 	if ended := hasEndlist(body); ended != p.Ended {
 		return fmt.Sprintf("본문의 ENDLIST 줄 있음 = %t — 목록 값 Ended 는 %t 다", ended, p.Ended)
