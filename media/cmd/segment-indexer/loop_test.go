@@ -104,9 +104,14 @@ type logCapture struct {
 	records []slog.Record
 	// warnOnly 가 참이면 WARN 미만을 받지 않는다 — 운영의 LOG_LEVEL=warn 과 같은 걸러냄이다.
 	warnOnly atomic.Bool
+	// errorOnly 가 참이면 ERROR 미만을 받지 않는다 — 운영의 LOG_LEVEL=error 와 같은 걸러냄이다.
+	errorOnly atomic.Bool
 }
 
 func (c *logCapture) Enabled(_ context.Context, level slog.Level) bool {
+	if c.errorOnly.Load() && level < slog.LevelError {
+		return false
+	}
 	return !c.warnOnly.Load() || level >= slog.LevelWarn
 }
 
