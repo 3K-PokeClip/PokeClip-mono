@@ -579,6 +579,34 @@ run "public_services_unchanged_by_chat" {
   }
 }
 
+# --- 배포 비율 ---
+
+# chat-detector 의 사건 묶음(SpikeEpisodes)은 프로세스 메모리에 산다. 재배포 때
+# 옛 태스크와 새 태스크가 겹치면 인접 창을 둘이 나눠 잡아 사건이 갈라지고, 시작
+# 시각이 다른 카드가 두 장 나갈 수 있다. 그래서 detector 만 최소 0 · 최대 100(옛
+# 태스크를 먼저 내림)으로 둔다. 나머지 넷은 비율을 넘기지 않는다(ECS 기본 최소
+# 100 · 최대 200 그대로 — plan 변화 0).
+run "chat_detector_deploys_without_overlap" {
+  command = plan
+
+  assert {
+    condition = (
+      module.chat_detector.deployment_minimum_healthy_percent == 0 &&
+      module.chat_detector.deployment_maximum_percent == 100
+    )
+    error_message = "chat-detector 배포 비율이 최소 0 · 최대 100 이 아니다(재배포 때 두 태스크가 겹친다)."
+  }
+
+  assert {
+    condition = alltrue([
+      for service in [module.next, module.auth, module.clip, module.chat_collector] :
+      service.deployment_minimum_healthy_percent == null &&
+      service.deployment_maximum_percent == null
+    ])
+    error_message = "next · auth · clip · chat-collector 에 배포 비율이 들어갔다(지정하지 않아야 plan 이 그대로다)."
+  }
+}
+
 # --- 작업 역할(코드가 부르는 동작만) ---
 
 # collector 는 자기 방송 편지 큐 하나만 받는다 — SqsIntakeRunner.java 152

@@ -185,6 +185,10 @@ resource "aws_ecs_service" "this" {
   launch_type     = "FARGATE"
   desired_count   = 1
 
+  # null 이면 넘기지 않는다 — ECS 기본(최소 100 · 최대 200)이 그대로 산다.
+  deployment_minimum_healthy_percent = var.deployment_minimum_healthy_percent
+  deployment_maximum_percent         = var.deployment_maximum_percent
+
   # ECS API 는 대상 그룹 없이 유예를 받지 않는다.
   health_check_grace_period_seconds = length(var.target_group_arns) > 0 ? var.health_check_grace : null
 

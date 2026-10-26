@@ -245,6 +245,48 @@ run "runs_single_private_fargate_service" {
   }
 }
 
+# 배포 비율을 주지 않으면 서비스에 넘기지 않는다(ECS 기본 최소 100 · 최대 200
+# 그대로 — 이 입력이 생기기 전 서비스의 plan 이 바뀌지 않는다).
+run "leaves_deployment_percents_unset_by_default" {
+  command = plan
+
+  assert {
+    condition = (
+      aws_ecs_service.this.deployment_minimum_healthy_percent == null &&
+      aws_ecs_service.this.deployment_maximum_percent == null &&
+      output.deployment_minimum_healthy_percent == null &&
+      output.deployment_maximum_percent == null
+    )
+    error_message = "배포 비율을 주지 않았는데 서비스에 값이 있다."
+  }
+}
+
+# 최소 0 · 최대 100 = 옛 태스크를 먼저 내리고 새 태스크를 띄운다(겹침 0).
+run "passes_deployment_percents_to_service" {
+  command = plan
+
+  variables {
+    deployment_minimum_healthy_percent = 0
+    deployment_maximum_percent         = 100
+  }
+
+  assert {
+    condition = (
+      aws_ecs_service.this.deployment_minimum_healthy_percent == 0 &&
+      aws_ecs_service.this.deployment_maximum_percent == 100
+    )
+    error_message = "서비스 배포 비율이 입력 최소 0 · 최대 100 이 아니다."
+  }
+
+  assert {
+    condition = (
+      output.deployment_minimum_healthy_percent == 0 &&
+      output.deployment_maximum_percent == 100
+    )
+    error_message = "배포 비율 출력이 서비스 값(최소 0 · 최대 100)이 아니다."
+  }
+}
+
 run "attaches_every_target_group" {
   command = plan
 
@@ -651,4 +693,54 @@ run "rejects_unsupported_log_retention" {
   }
 
   expect_failures = [var.log_retention_days]
+}
+
+run "rejects_deployment_minimum_above_100" {
+  command = plan
+
+  variables {
+    deployment_minimum_healthy_percent = 101
+  }
+
+  expect_failures = [var.deployment_minimum_healthy_percent]
+}
+
+run "rejects_negative_deployment_minimum" {
+  command = plan
+
+  variables {
+    deployment_minimum_healthy_percent = -1
+  }
+
+  expect_failures = [var.deployment_minimum_healthy_percent]
+}
+
+run "rejects_deployment_maximum_below_100" {
+  command = plan
+
+  variables {
+    deployment_maximum_percent = 99
+  }
+
+  expect_failures = [var.deployment_maximum_percent]
+}
+
+run "rejects_deployment_maximum_above_200" {
+  command = plan
+
+  variables {
+    deployment_maximum_percent = 201
+  }
+
+  expect_failures = [var.deployment_maximum_percent]
+}
+
+run "rejects_fractional_deployment_percent" {
+  command = plan
+
+  variables {
+    deployment_minimum_healthy_percent = 50.5
+  }
+
+  expect_failures = [var.deployment_minimum_healthy_percent]
 }

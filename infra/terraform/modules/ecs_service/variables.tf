@@ -98,6 +98,36 @@ variable "health_check_grace" {
   }
 }
 
+variable "deployment_minimum_healthy_percent" {
+  description = "재배포 때 살아 있어야 할 태스크 비율(%, 0 부터 100). null 이면 넘기지 않는다(ECS 기본 100)."
+  type        = number
+  default     = null
+
+  validation {
+    condition = var.deployment_minimum_healthy_percent == null ? true : (
+      var.deployment_minimum_healthy_percent >= 0 &&
+      var.deployment_minimum_healthy_percent <= 100 &&
+      floor(var.deployment_minimum_healthy_percent) == var.deployment_minimum_healthy_percent
+    )
+    error_message = "deployment_minimum_healthy_percent 는 null 이거나 0 부터 100 까지의 정수여야 한다."
+  }
+}
+
+variable "deployment_maximum_percent" {
+  description = "재배포 때 띄울 수 있는 태스크 비율 상한(%, 100 부터 200). 100 이면 옛 태스크를 내린 뒤 새 태스크를 띄운다. null 이면 넘기지 않는다(ECS 기본 200)."
+  type        = number
+  default     = null
+
+  validation {
+    condition = var.deployment_maximum_percent == null ? true : (
+      var.deployment_maximum_percent >= 100 &&
+      var.deployment_maximum_percent <= 200 &&
+      floor(var.deployment_maximum_percent) == var.deployment_maximum_percent
+    )
+    error_message = "deployment_maximum_percent 는 null 이거나 100 부터 200 까지의 정수여야 한다."
+  }
+}
+
 variable "log_retention_days" {
   description = "CloudWatch Logs 그룹 보존 일수(CloudWatch 가 받는 값 — 0(영구)은 받지 않는다)."
   type        = number

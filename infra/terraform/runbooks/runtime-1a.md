@@ -1923,7 +1923,9 @@ plan 이 역할을 새로 만드는지 고치는지로 드러나고, 어느 쪽�
         재배포는 수집 중인 방송을 잠시 끊습니다 — 재부착(platform
         `chat_collector_features.reattach`, 기본 켬)이 다시 붙기 전까지의
         채팅은 받지 못하므로 되도록 방송이 없는 시간에 합니다(platform
-        README 「chat 서비스」).
+        README 「chat 서비스」). chat-detector 는 옛 태스크를 먼저
+        내립니다(겹침 대신 공백) — 새 태스크가 뜰 때까지 판정이 멈추고
+        메모리에 열려 있던 사건의 카드를 잃습니다(같은 절).
     *   `None`(서비스 없음 — 응답의 `failures` 에 들어감) → 다음에 뜨는
         태스크가 새 값을 받습니다. 키와 함께 기록합니다. platform 은
         next · auth · clip · chat-collector · chat-detector 를 두므로(O7d
