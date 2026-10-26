@@ -36,6 +36,7 @@ type IntentionalResult struct {
 	//   round_split T 뒤 합류한 세션부터 새 회차 · R 닫힘
 	Effect string
 	// Skip: no_session · conn_mismatch · short_conn · ambiguous · round_closed · round_split_noop · round_split_blocked · contended
+	// · bad_time(연결 시작이 멈춘 시각보다 늦음 또는 멈춘 시각이 PG 시계 + Slack 보다 미래 — 수신부 범위 검사의 겹 방어)
 	Skip string
 	// RevokeSession 은 계승 해제를 루프에 요청할 세션이다(round_split ∧ 새 회차 첫 세션이 계승 중일 때만).
 	RevokeSession string
@@ -68,6 +69,7 @@ const (
 	skipRoundSplitNoop    = "round_split_noop"
 	skipRoundSplitBlocked = "round_split_blocked"
 	skipContended         = "contended"
+	skipBadTime           = "bad_time"
 )
 
 // intentTxnDeadline 은 적용 트랜잭션 하나의 ctx 시한이다(index.TxnDeadline 과 같은 10초 — 문장 상한과 같은 길이).
@@ -81,7 +83,7 @@ var errMembershipContended = errors.New("session: 소속 행이 재확인 상한
 
 // ApplyIntentionalEnd 는 판정과 효과를 한 트랜잭션에서 한다(3.4). 돌아오면 커밋된 뒤다. 부른 쪽은 Effect 가 비지
 // 않으면 PlaybackChanged(e.StreamID) 를, RevokeSession 이 비지 않으면 intents.Post(e.StreamID, RevokeSession) 를
-// 부른다. 캐시는 만지지 않는다. 미적용(lock_timeout 의 contended 포함)은 오류가 아니라 Skip 이다.
+// 부른다. 캐시는 만지지 않는다. 미적용(잠금 경합 · 시한의 contended 포함)은 오류가 아니라 Skip 이다.
 func ApplyIntentionalEnd(ctx context.Context, pool *pgxpool.Pool, e IntentionalEnd, o IntentOptions) (IntentionalResult, error) {
 	if err := o.validate(e); err != nil {
 		return IntentionalResult{}, err
@@ -100,7 +102,7 @@ func ApplyIntentionalEnd(ctx context.Context, pool *pgxpool.Pool, e IntentionalE
 	}()
 
 	res, err := applyIntent(tctx, tx, e, o)
-	if isLockTimeout(err) || errors.Is(err, errMembershipContended) {
+	if isContention(err) {
 		res.Effect, res.Skip, res.RevokeSession = "", skipContended, ""
 		o.logResult(e, res)
 		return res, nil
@@ -132,11 +134,15 @@ func (o IntentOptions) validate(e IntentionalEnd) error {
 	return nil
 }
 
-// applyIntent 는 트랜잭션 안의 판정 · 효과다. 잠금 순서(3.3): ⓪ 상한 설정 → ① 위상 잠금 → ② 소속 잠금 → (판정) →
-// ③ 회차 행. 후보 · 효과 판정은 소속 잠금 뒤 새 문장으로 한다.
+// applyIntent 는 트랜잭션 안의 판정 · 효과다. 잠금 순서(3.3): ⓪ 상한 설정(PG 시계로 시각 검사) → ① 위상 잠금 →
+// ② 소속 잠금 → (판정) → ③ 회차 행. 후보 · 효과 판정은 소속 잠금 뒤 새 문장으로 한다.
 func applyIntent(ctx context.Context, tx pgx.Tx, e IntentionalEnd, o IntentOptions) (IntentionalResult, error) {
-	if _, err := tx.Exec(ctx, txnLimitsSQL); err != nil {
+	var now time.Time
+	if err := tx.QueryRow(ctx, txnLimitsSQL).Scan(&now); err != nil {
 		return IntentionalResult{}, fmt.Errorf("4D 상한 설정 실패 stream_id=%q: %w", e.StreamID, err)
+	}
+	if implausibleTimes(e, now, o.Slack) {
+		return IntentionalResult{Skip: skipBadTime}, nil
 	}
 	if _, err := tx.Exec(ctx, topologyLockSQL, e.StreamID); err != nil {
 		return IntentionalResult{}, fmt.Errorf("4D 위상 잠금 실패 stream_id=%q: %w", e.StreamID, err)
@@ -217,10 +223,28 @@ func lockMembership(ctx context.Context, tx pgx.Tx, streamID string) (string, er
 	return "", errMembershipContended
 }
 
-// isLockTimeout 은 err 가 55P03(lock_timeout)인가다.
-func isLockTimeout(err error) bool {
+// implausibleTimes 는 4D 시각이 말이 안 되는가다 — 연결 시작이 멈춘 시각보다 늦거나, 멈춘 시각이 PG 시계 now 에
+// 대조 여유를 더한 것보다 미래다. 수신부 범위 검사(POK-472 P10)의 겹 방어다. 미래 표식은 markSQL 의 COALESCE 로 첫
+// 표식에 고착되어 그 뒤 조각을 모두 옛 세션에 붙이므로 쓰기 전에 거부한다.
+func implausibleTimes(e IntentionalEnd, now time.Time, slack time.Duration) bool {
+	return e.ConnStartedAt.After(e.StoppedAt) || e.StoppedAt.After(now.Add(slack))
+}
+
+// isContention 은 err 가 잠금 상한(55P03) · 문장 시한(57014) · 교착 희생(40P01) · ctx 시한 · 소속 재확인 초과로 끊긴
+// 실패인가다 — 모두 contended 로 접는다(index.isContention 과 같은 집합).
+func isContention(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, errMembershipContended) {
+		return true
+	}
 	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == "55P03"
+	if !errors.As(err, &pgErr) {
+		return false
+	}
+	switch pgErr.Code {
+	case "55P03", "57014", "40P01":
+		return true
+	}
+	return false
 }
 
 // logResult 는 결과 신호다 — 효과는 INFO, 미적용은 WARN(설계 11절 「로그」).
@@ -235,5 +259,5 @@ func (o IntentOptions) logResult(e IntentionalEnd, res IntentionalResult) {
 		return
 	}
 	log.Warn("intentional_end", "stream_id", e.StreamID, "skip", res.Skip,
-		"round", res.RoundID, "session", res.SessionID)
+		"round", res.RoundID, "session", res.SessionID, "stopped_at", e.StoppedAt, "conn_started_at", e.ConnStartedAt)
 }
