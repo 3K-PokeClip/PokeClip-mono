@@ -62,7 +62,7 @@ aws ecr get-login-password --region ap-northeast-2 \
 | `auth` · `clip` | 3번 Dockerfile · 빌드 방법 | 3번의 준비(I3-8) |
 | `media-nginx` | nginx 공식 이미지 — **빌드하지 않습니다** | M2 머지본의 핀 다이제스트 |
 | `media-mediamtx` | `media/Dockerfile.mtxhook`(1번 빌드 · 컨텍스트 `media/`) | 아래 「MediaMTX 확인」 |
-| `media-sidecar` | `media/Dockerfile`(1번 빌드 · 컨텍스트 `media/`) | I1-1(IAM 인증 · `POSTGRES_AUTH` 전환 · CA 번들) 머지본 · 1단-가(3K-PokeClip/PokeClip-mono#365) 머지본 이후 — 사이드카 SQL 의 내장 함수 `pg_catalog` 한정(앱 사용자 `public` CREATE 가로채기 차단). 그 앞 커밋으로 빌드한 사이드카는 가로채기에 열린다 |
+| `media-sidecar` | `media/Dockerfile`(1번 빌드 · 컨텍스트 `media/`) | I1-1(IAM 인증 · `POSTGRES_AUTH` 전환 · CA 번들) 머지본 · 1단-가(3K-PokeClip/PokeClip-mono#365) 머지본 이후 — 사이드카 SQL 의 내장 함수 `pg_catalog` 한정(앱 사용자 `public` CREATE 가로채기 차단). 그 앞 커밋으로 빌드한 사이드카는 가로채기에 열린다 · **롤백 하한(POK-196)** — M6-0 머지본 이후 커밋은 M6 운영 SQL(런타임 1단-가 런북 「M6 스키마 재실행」) 적용 뒤에만 기동하고, 적용 뒤에는 그 앞 커밋 이미지로 되돌리지 않는다(아래 「사이드카 재푸시(M6-0 뒤)」 · [Media 교체 런북](media-swap.md) 「M6 운영 SQL 경계 · 롤백 하한」) |
 | `media-ingest-auth` | `media/Dockerfile.ingest-auth`(1번 빌드 · 컨텍스트 `media/`) | 응답기 코드가 준비됐을 때만 |
 | `render` | `workers/render/Dockerfile`(3번 빌드 · 컨텍스트 `workers/render/`) | 3번의 준비 · 이 이미지를 돌릴 ECS 태스크 정의가 생겼을 때만 |
 | `upload` | `workers/upload/Dockerfile`(3번 빌드 · 컨텍스트 `workers/upload/`) | 3번의 준비 · 이 이미지를 돌릴 ECS 태스크 정의가 생겼을 때만 |
@@ -137,6 +137,39 @@ docker export "${cid}" | tar -t | grep -x 'hooks-bin/mtxhookwrite'
 docker rm "${cid}"
 ```
 
+### 사이드카 재푸시(M6-0 뒤)
+
+M6-0(POK-196 장부 스키마) 머지 뒤 O7e 전에 사이드카를 하한 이상 이미지로 다시
+올리는 걸음입니다(런타임 1단-가 런북 「M6 스키마 재실행 순서」 의 3). 첫 O7c
+에서 올린 사이드카가 M6-0 앞 커밋이면 O7e 에 그대로 쓰지 않습니다.
+
+1.  **선행**: 런타임 1단-가 런북 「M6 스키마 재실행」 의 통과 기록(재실행
+    SHA · `VERIFY OK`)이 있습니다. 이 이미지는 M6 운영 SQL 없는 DB 에서
+    기동 스키마 확인(`schema_not_ready`)으로 멈추므로, 기본 절차에서는 그
+    기록 뒤에 빌드합니다.
+1.  **빌드 커밋**: M6-0 머지 커밋을 조상으로 둔 develop 커밋을 고르고, 그
+    커밋을 체크아웃한 깨끗한 트리에서 빌드합니다.
+
+    ```shell
+    git fetch origin
+    git merge-base --is-ancestor <M6-0 머지 커밋 SHA> <빌드 커밋 SHA> \
+      && echo '하한 이상' || echo '하한 아래'   # 하한 이상
+    git rev-parse HEAD                          # <빌드 커밋 SHA>
+    git status --porcelain -- media             # 빈 출력이어야 함
+    ```
+
+1.  **빌드 · 확인 · 푸시**: 위 「이미지」 의 `media-sidecar` 행과 아키텍처
+    규칙(`linux/arm64` 한 변형 · 푸시 전 로컬 기동 확인) 그대로입니다. 태그는
+    빌드 커밋 SHA 의 짧은 꼴이라 첫 O7c 의 태그와 다릅니다.
+1.  **기록**: 아래 「기록」 의 항목에 M6-0 머지 SHA 와 「하한 이상」 판정을
+    더합니다. 그 다이제스트를 `prod/media` tfvars 의 `image_digests.sidecar`
+    에 넣은 뒤 O7e 로 갑니다.
+
+O7e 가 이미 끝났으면(하한 아래 사이드카가 prod 에서 도는 중) Media 교체
+런북 「한 창 절차」 를 따릅니다. 그 절차에서는 1 에서 이 걸음으로 미리
+올리고(선행 기록 없이 — 아직 띄우지 않으므로), 그 다이제스트의 상자는 3 의
+SQL 적용 뒤에만 띄웁니다.
+
 ### 설치 묶음 · 루프백 송출기
 
 M9 에서 `prod/registry` 에 더한 저장소 둘입니다. 둘 다 `prod/media` apply
@@ -210,7 +243,9 @@ docker push --platform linux/arm64 \
 ## 기록
 
 푸시한 이미지마다 저장소 · 태그 · 다이제스트 · 빌드한 커밋 SHA(next 는 mono
-develop 커밋)를 적습니다. 다이제스트는 푸시 출력의 `digest:` 이거나 아래
+develop 커밋)를 적습니다. 사이드카는 롤백 하한 판정(「하한 이상」 · 「하한
+아래」)과 그 판정에 쓴 M6-0 머지 SHA 도 적습니다 — 되돌릴 다이제스트를 고를
+때 이 칸을 봅니다. 다이제스트는 푸시 출력의 `digest:` 이거나 아래
 명령의 값입니다.
 
 ```shell
