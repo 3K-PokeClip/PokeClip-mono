@@ -980,3 +980,32 @@ func TestLoadAppliesRewindWatchPeriod(t *testing.T) {
 		t.Errorf("RewindWatchEvery = %v, want 30s", cfg.RewindWatchEvery)
 	}
 }
+
+// L3(연속 GAP 셋 → ending · 사유 gap_run)의 스위치는 기본 끔이다(kty K5 — F-7 · S3 장애 실측과 kty 승인 뒤에만 켠다). 명시
+// true 만 켜고, 읽을 수 없는 값은 기동 거부다(조용히 끔으로 때우지 않는다).
+func TestLoadGapRunEndSwitchDefaultsOff(t *testing.T) {
+	tests := []struct {
+		raw     string
+		want    bool
+		wantErr bool
+	}{
+		{"", false, false},
+		{"false", false, false},
+		{"true", true, false},
+		{"켜", false, true},
+	}
+	for _, tt := range tests {
+		env := minimalEnv()
+		if tt.raw != "" {
+			env["REWIND_GAP_RUN_END"] = tt.raw
+		}
+		cfg, err := Load(envOf(env))
+		if (err != nil) != tt.wantErr {
+			t.Errorf("REWIND_GAP_RUN_END=%q: 오류 %v, want 오류 %v", tt.raw, err, tt.wantErr)
+			continue
+		}
+		if err == nil && cfg.RewindGapRunEnd != tt.want {
+			t.Errorf("REWIND_GAP_RUN_END=%q: RewindGapRunEnd = %v, want %v", tt.raw, cfg.RewindGapRunEnd, tt.want)
+		}
+	}
+}

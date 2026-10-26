@@ -57,6 +57,17 @@ func (a finalizeAssembly) endLive(pool *pgxpool.Pool) func(ctx context.Context, 
 	}
 }
 
+// gapRunEnd 는 L3 종료 손잡이다(rewindLoop.endGapRun) — 스위치(REWIND_GAP_RUN_END)가 꺼져 있으면 nil 이라 루프가 끝내지
+// 않는다(kty K5 — 기본 끔). 표식이 있으면 EndLive 와 같이 사유 intentional 로 끝내며 회차를 닫는다.
+func (a finalizeAssembly) gapRunEnd(on bool, pool *pgxpool.Pool) func(ctx context.Context, streamID, sessionID string) (string, error) {
+	if !on {
+		return nil
+	}
+	return func(ctx context.Context, streamID, sessionID string) (string, error) {
+		return index.EndGapRun(ctx, pool, streamID, sessionID, a.close, a.enqueue)
+	}
+}
+
 // closeRound 는 4D 적용의 회차 닫힘 칸이다(session.IntentOptions.CloseRound — 설계 10절 「M6-3b 가 CloseRound 칸을 채운다」).
 // upgraded 는 그 트랜잭션에서 회차를 닫고 완결을 평가하고, round_split 은 R 을 직접 닫은 뒤라 완결만 평가된다.
 func (a finalizeAssembly) closeRound() func(ctx context.Context, tx pgx.Tx, round string) error {

@@ -85,6 +85,9 @@ type rewindLoop struct {
 	rangeWarned map[string]string
 	alarms      map[string]*readyAlarm
 
+	// endGapRun 은 L3 종료 손잡이다(gap_run.go — 운영은 index.EndGapRun). nil 이면 스위치 끔이라 셈만 하고 끝내지 않는다.
+	endGapRun func(ctx context.Context, streamID, sessionID string) (string, error)
+
 	// fin 은 정산 몫이다(M6-3b — rewind_finalize.go). run 이 조립 밖에서 채워 발행 꺼짐 · 강등에서도 돈다. nil 이면 정산 ·
 	// 상태 전달 · 계승 해제를 하지 않는다(4.1 전이 · 발행 몫만 보는 시험).
 	fin *finalizer
@@ -112,6 +115,8 @@ type rewindStream struct {
 	ladder publish.LadderState
 	// unstoodGap 은 결과가 돌아왔는데 서지 않은 직전 GAP 틱의 후보다(사다리 UnstoodGapSeq — ⓐ).
 	unstoodGap *int64
+	// gapRun 은 L3 셈이다 — GAP 이 선 결과만 센다(settleGap · gap_run.go).
+	gapRun gapRun
 	// prevTail 은 다음 boundary.Compute 의 prevTail 이다 — 평시 틱은 계산한 틱의 꼬리, GAP 틱은 GAP 이 선 뒤에만 겹침 꼬리다(J26).
 	prevTail int64
 	// running 은 이 스트림 차선에서 도는 작업이다(nil = 차선이 비었다 — 판단 J80 ⑷ 의 in-flight 표). pendingLoad 는 차선이 돌아
@@ -160,11 +165,12 @@ const (
 // 발행 몫은 발행 몫이 있을 때만 돌며, 끝에서 Board 를 새로 만든다(publishStatus — 강등에서도 돈다 · 꺼짐 제외). 그래서 그 틱
 // 스냅숏은 그 틱의 Drain · 개시 삭제를 본다.
 //
-// 정산 몫(M6 3.2 holdTick 순서의 정본)은 4.1 전이와 M5 Drain 사이다: endOfflineSessions → 받은편지함 비우기(계승 해제 ·
-// 상태 표지 → 차선 발사) → finalizeTick(빠른 길 · 스캔 주기) → M5 Drain → 발행 몫. 조기 반환 앞이라 발행 꺼짐 · 강등에서도
-// 돈다(D56). 표식 EndLive 가 남긴 표지는 같은 틱의 받은편지함 비우기에서 읽힌다.
+// 정산 몫(M6 3.2 holdTick 순서의 정본)은 4.1 전이와 M5 Drain 사이다: endOfflineSessions → endGapRuns(L3 — 스위치 켬일 때만)
+// → 받은편지함 비우기(계승 해제 · 상태 표지 → 차선 발사) → finalizeTick(빠른 길 · 스캔 주기) → M5 Drain → 발행 몫. 조기 반환
+// 앞이라 발행 꺼짐 · 강등에서도 돈다(D56). 표식 EndLive · L3 가 남긴 표지는 같은 틱의 받은편지함 비우기에서 읽힌다.
 func (r *rewindLoop) holdTick(ctx context.Context, now time.Time) {
 	r.endOfflineSessions(ctx, now)
+	r.endGapRuns(ctx, now)
 	r.drainInboxes(ctx)
 	r.finalizeTick(ctx, now)
 	r.drainFinals()
