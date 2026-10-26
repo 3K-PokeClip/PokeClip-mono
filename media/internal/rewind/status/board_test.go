@@ -36,6 +36,19 @@ func TestNewBoardCopiesEntries(t *testing.T) {
 	}
 }
 
+// R2 포인터 경로: Entry.Round 는 포인터라 map 만 복사하면 루프가 entries[s].Round.Status 를 고칠 때 게시한 Board 의
+// 회차 응답이 함께 바뀌고 HTTP 조회와 경쟁한다. NewBoard 는 회차 항목도 값으로 복사한다.
+func TestNewBoardCopiesRoundEntry(t *testing.T) {
+	r := &status.RoundEntry{RoundID: "R1", Status: vodEntry("R1").Stream}
+	b := status.NewBoard(built, true, map[string]status.Entry{"s": {Stream: r.Status, Round: r}})
+	r.RoundID = "R2"
+	r.Status = status.Status{Mode: status.ModeLive}
+
+	if got, answer, hit := b.FindRound("s", "R1", built, stale); !hit || answer != status.Found || got.Mode != status.ModeVOD {
+		t.Errorf("FindRound(s, R1) = (%+v, %v, %v), want vod Found hit — 게시 뒤 원본 Round 갱신이 스냅숏에 닿았다", got, answer, hit)
+	}
+}
+
 func TestFindAnswers(t *testing.T) {
 	entries := map[string]status.Entry{"s": vodEntry("R1")}
 	for _, c := range []struct {

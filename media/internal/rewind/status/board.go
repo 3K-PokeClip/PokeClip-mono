@@ -1,7 +1,6 @@
 package status
 
 import (
-	"maps"
 	"sync/atomic"
 	"time"
 )
@@ -30,10 +29,18 @@ type Board struct {
 	entries  map[string]Entry
 }
 
-// NewBoard 는 builtAt 에 만든 스냅숏이다. entries 를 복사한다 — 루프가 다음 틱에 같은 map 을 고쳐도 이 스냅숏은
-// 그대로다(R2).
+// NewBoard 는 builtAt 에 만든 스냅숏이다. entries 와 각 항목의 회차 사본을 값으로 복사한다 — 루프가 다음 틱에 같은
+// map 이나 entries[s].Round 를 고쳐도 이 스냅숏은 그대로이고 HTTP 조회와 경쟁하지 않는다(R2 · M5 불변 계약).
 func NewBoard(builtAt time.Time, warm bool, entries map[string]Entry) *Board {
-	return &Board{builtAt: builtAt, warm: warm, entries: maps.Clone(entries)}
+	copied := make(map[string]Entry, len(entries))
+	for s, e := range entries {
+		if e.Round != nil {
+			r := *e.Round
+			e.Round = &r
+		}
+		copied[s] = e
+	}
+	return &Board{builtAt: builtAt, warm: warm, entries: copied}
 }
 
 // DisabledBoard 는 발행 꺼짐(S3_BUCKET 빈 값)의 Board 다 — 모든 조회가 404 다. 조립이 한 번 넣고 갱신하지 않는다.
@@ -60,8 +67,9 @@ func (b *Board) Find(streamID string, now time.Time, staleAfter time.Duration) (
 // FindRound 는 회차별 조회의 첫 단계다(경계 확정 4 조회 순서 · 보완 2 ㉡ · cc L8). hit 는 Board 가 그 회차를 들어
 // 답했는가다.
 //
-//	첫 스냅숏 전 · 낡음              → Unavailable
-//	발행 꺼짐                      → NotFound
+//	첫 스냅숏 전                   → Unavailable
+//	발행 꺼짐                      → NotFound — 낡음보다 먼저 본다(3.3절 정정: 꺼짐 Board 는 갱신되지 않는다)
+//	낡음                          → Unavailable
 //	항목의 회차 = roundID(부팅 전 포함) → (회차 사본, Found, hit)
 //	부팅 감시 전 ∧ hit 아님          → Unavailable — Find 와 같은 꼴(모르는 것만)
 //	그 밖(Board 밖 스트림 포함)        → Miss — 처리기가 lookup 으로 간다
