@@ -82,7 +82,22 @@
 #                           조직 판정 칸은 True · False · None(칸 없음) ·
 #                           그 밖(불리언 아님). 빈 칸은 「-」 로 적는다(자원별
 #                           판정이 「-」 면 최상위 판정과 같음). 맞는 줄이 없으면
-#                           implicitDeny · None · 누락 없음.
+#                           implicitDeny · None · 누락 없음. 키 뒤 칸이
+#                           「!코드」 면 읽기 표처럼 그 오류 코드로 실패한다.
+#   FAKE_AWS_SIM_DELAY      2-3 판정 시뮬레이터 호출마다 답하기 전에 기다릴 초
+#                           (소수 가능 — /bin/sleep 으로 잰다. 시험이 PATH 에
+#                           둔 가짜 sleep 을 부르지 않게).
+#   FAKE_AWS_INFLIGHT_DIR   2-3 판정 시뮬레이터 호출의 동시 수를 잴 디렉터리.
+#                           호출마다 그 안에 inflight.<pid> 를 두고(끝날 때
+#                           지움), 들어설 때 본 inflight.* 수를 counts 에 한 줄씩
+#                           덧붙인다 — 시험은 counts 의 최고값을 본다.
+#   FAKE_AWS_THROTTLE       「<키 글롭>=<횟수>」. 키가 글롭에 맞는 요청은 요청
+#                           파일마다 처음 <횟수> 번을 FAKE_AWS_THROTTLE_CODE
+#                           (기본 Throttling) 오류로 실패한다. 키는 시뮬레이터면
+#                           FAKE_AWS_SIM_TABLE 의 키, 읽기면 「호출@이름」(이름 =
+#                           위 괄호의 요청 칸 값)이다. 횟수는 FAKE_AWS_LOG 옆
+#                           <로그>.throttle/ 에 센다. 메시지에는 일부러 호출
+#                           주체 ARN 을 넣는다(유출 시험).
 #   FAKE_AWS_READS          읽기 호출 응답 표 파일. 줄마다 「호출<탭>이름<탭>답」
 #                           (호출 = 위 목록의 동작 이름 예 get-user, 이름 = 위
 #                           괄호의 요청 칸 값). 답은 printf %b 로 펼친다(「\t」 ·
@@ -347,16 +362,61 @@ table_lookup() {
 }
 
 #######################################
+# 2-3 판정 시뮬레이터 호출 하나가 진행 중임을 표시하고, 들어설 때의 동시 수를
+# 덧붙인다(FAKE_AWS_INFLIGHT_DIR). 표시는 이 프로세스가 끝날 때 지운다.
+# Globals:
+#   FAKE_AWS_INFLIGHT_DIR
+#######################################
+enter_flight() {
+  local dir="${FAKE_AWS_INFLIGHT_DIR:-}"
+  local -a now
+  [[ -n "${dir}" ]] || return 0
+  : >"${dir}/inflight.$$" || exit 252
+  trap 'rm -f -- "${FAKE_AWS_INFLIGHT_DIR}/inflight.$$"' EXIT
+  now=("${dir}"/inflight.*)
+  printf '%s\n' "${#now[@]}" >>"${dir}/counts" || exit 252
+}
+
+#######################################
+# 키가 FAKE_AWS_THROTTLE 의 글롭에 맞고 그 요청 파일의 실패 횟수가 남았으면
+# 속도 제한 오류로 끝낸다(머리 주석).
+# Globals:
+#   FAKE_AWS_THROTTLE, FAKE_AWS_THROTTLE_CODE, FAKE_AWS_LOG, USER_ARN
+# Arguments:
+#   키, API 이름, 요청 파일 경로.
+#######################################
+maybe_throttle() {
+  local spec="${FAKE_AWS_THROTTLE:-}" glob count dir file used=0
+  [[ -n "${spec}" ]] || return 0
+  glob="${spec%=*}"
+  count="${spec##*=}"
+  # shellcheck disable=SC2053 # 오른쪽은 일부러 글롭이다.
+  [[ "$1" == ${glob} ]] || return 0
+  dir="${FAKE_AWS_LOG}.throttle"
+  mkdir -p -- "${dir}" || exit 252
+  file="${dir}/${3//\//_}"
+  if [[ -f "${file}" ]]; then
+    used="$(cat -- "${file}")" || exit 252
+  fi
+  [[ "${used}" -lt "${count}" ]] || return 0
+  printf '%s\n' "$((used + 1))" >"${file}" || exit 252
+  printf 'An error occurred (%s) when calling the %s operation (reached max' \
+    "${FAKE_AWS_THROTTLE_CODE:-Throttling}" "$2" >&2
+  printf ' retries: 2): Rate exceeded for %s\n' "${USER_ARN}" >&2
+  exit 254
+}
+
+#######################################
 # 2-3 판정 시뮬레이터 요청(SCP 제외)을 검사하고 FAKE_AWS_SIM_TABLE 에서 고른
 # 답을 낸다. 옛 CLI 모드는 PolicyExclusionList 를 입력 오류로 거부한다.
 # Globals:
-#   FAKE_AWS_CLI, FAKE_AWS_SIM, FAKE_AWS_SIM_TABLE, ACCOUNT,
-#   REGION_CONTEXT_PATTERN
+#   FAKE_AWS_CLI, FAKE_AWS_SIM, FAKE_AWS_SIM_TABLE, FAKE_AWS_SIM_DELAY,
+#   ACCOUNT, REGION_CONTEXT_PATTERN
 # Arguments:
 #   요청 JSON, 받은 argv 전체.
 #######################################
 principal_simulate() {
-  local request="$1" source action resource region policy=- rest key names
+  local request="$1" source action resource region policy=- rest key names path
   local top orgs top_missing resource_decisions resource_missing
   shift
   if [[ "${FAKE_AWS_CLI:-new}" == old ]]; then
@@ -397,8 +457,18 @@ principal_simulate() {
   if names="$(json_capture "${request}" "${RECORD_CONTEXT_PATTERN}")"; then
     key+="@${names//\"/}"
   fi
+  enter_flight
+  if [[ -n "${FAKE_AWS_SIM_DELAY:-}" ]]; then
+    /bin/sleep "${FAKE_AWS_SIM_DELAY}" || exit 252
+  fi
+  path="$(option_value --cli-input-json "$@")"
+  maybe_throttle "${key}" SimulatePrincipalPolicy "${path#file://}"
   rest="$(table_lookup "${FAKE_AWS_SIM_TABLE:-}" "${key}" glob)" ||
     rest=$'implicitDeny\tNone\t-\t-\t-'
+  if [[ "${rest}" == '!'* ]]; then
+    rest="${rest%%$'\t'*}"
+    read_failed "${rest#!}" SimulatePrincipalPolicy "${resource}"
+  fi
   top="${rest%%$'\t'*}"
   rest="${rest#*$'\t'}"
   orgs="${rest%%$'\t'*}"
@@ -583,6 +653,7 @@ table_read() {
     [[ "$(option_value --query "$@")" == "${ACM_QUERY}" ]] ||
       invalid_request "--query 가 검증 이름 응답 꼴 계약(ACM_QUERY)과 다름"
   fi
+  maybe_throttle "${call}@${name}" "${api}" "${path}"
   if ! answer="$(table_lookup "${FAKE_AWS_READS:-}" \
     "${call}"$'\t'"${name}" exact)"; then
     case "${call}" in
