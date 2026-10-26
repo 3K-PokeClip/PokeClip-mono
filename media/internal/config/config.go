@@ -47,6 +47,10 @@ type Config struct {
 	// RewindWatchEvery 는 되감기 30초 감시(설계 4.1 (a) (c))의 주기다 — 발행 루프가 이 값 ÷ 보류 틱(Indexer.HoldTick)
 	// 마다 감시 작업을 낸다(판단 J85 ⑴). 설계값이라 env 가 없고 값의 집은 여기 하나다(ReconnectWindow 와 같은 규칙).
 	RewindWatchEvery time.Duration
+	// RewindGapRunEnd 는 L3 스위치다(REWIND_GAP_RUN_END — POK-196 M6 6절 · kty K5). 켜면 소유 회차에서 L2 GAP 이 seq 로
+	// 이어서 셋 서면 그 회차를 ending(사유 gap_run)으로 보낸다. 기본 끔이고 기동 때만 읽는다 — 켜는 조건은 F-7 실측과 S3
+	// 짧은 장애 주입 실측이 둘 다 참이고 kty 가 승인한 뒤다(M6 10절).
+	RewindGapRunEnd bool
 
 	// HookSpoolPath 는 MediaMTX 훅이 한 줄씩 덧붙이는 공유 파일이다.
 	//
@@ -265,6 +269,10 @@ func Load(env func(string) string) (Config, error) {
 	if idx.SeedEnabled, err = boolean(env, "REWIND_SEED_ENABLED", true); err != nil {
 		return Config{}, err
 	}
+	gapRunEnd, err := boolean(env, "REWIND_GAP_RUN_END", false)
+	if err != nil {
+		return Config{}, err
+	}
 	if idx.ScanCollectBudget, err = duration(env, "SCAN_COLLECT_BUDGET", idx.ScanCollectBudget); err != nil {
 		return Config{}, err
 	}
@@ -365,6 +373,7 @@ func Load(env func(string) string) (Config, error) {
 		ReconnectWindow: 300 * time.Second,
 		// 설계값(계획 5절 「30 tick 감시」 · 판단 J85 ⑴)이라 같은 규칙으로 여기 한 자리에 적는다.
 		RewindWatchEvery: 30 * time.Second,
+		RewindGapRunEnd:  gapRunEnd,
 		// S3_BUCKET 이 비면 읽지 않아 빈 값이다(계획 B-9).
 		RewindPublicBaseURL: rewindBaseURL,
 		Control:             control,

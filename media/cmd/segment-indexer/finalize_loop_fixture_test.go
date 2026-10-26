@@ -193,6 +193,11 @@ func (f *finalLoop) streamBusy() bool {
 	return false
 }
 
+// laneResultWait 는 차선 결과 하나를 기다리는 상한이다. 실 장부 몸체(newFinalizeWork)의 걸음은 잠금 대기 · 되돌림을 합쳐
+// 2 × TxnDeadline 까지 정당하게 걸린다(index.EndLive 규약과 같다) — 그보다 짧게 기다리면 부하가 큰 기계에서 시험이 흔들린다
+// (커밋 ④ 전체 실행 · 부하 평균 100 에서 5초 대기가 한 번 끊겼다).
+const laneResultWait = 2*index.TxnDeadline + 5*time.Second
+
 // next 는 결과 하나를 받아 반영하고 그 종류를 돌려준다.
 func (f *finalLoop) next(now time.Time) publish.Kind {
 	f.t.Helper()
@@ -200,8 +205,8 @@ func (f *finalLoop) next(now time.Time) publish.Kind {
 	case res := <-f.rewind.done():
 		f.rewind.complete(f.t.Context(), res, now)
 		return res.Kind
-	case <-time.After(5 * time.Second):
-		f.t.Fatal("차선 결과가 5초 안에 오지 않았다")
+	case <-time.After(laneResultWait):
+		f.t.Fatalf("차선 결과가 %v 안에 오지 않았다", laneResultWait)
 		return 0
 	}
 }

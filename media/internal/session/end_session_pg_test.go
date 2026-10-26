@@ -1,12 +1,13 @@
 package session
 
-// 세션 종료 문장 세 벌의 대조(POK-195 M4 — 계획 부기 21).
+// 세션 종료 문장 네 벌의 대조(POK-195 M4 — 계획 부기 21 · POK-196 M6-3b 커밋 ④ 가 L3 를 더함).
 //
-// 세션을 ending 으로 보내는 문장이 두 패키지에 셋 있다: TD 분할의 endSessionSQL 은 여기에,
+// 세션을 ending 으로 보내는 문장이 두 패키지에 넷 있다: TD 분할의 endSessionSQL 은 여기에,
 // init 불일치의 종료 절은 index 의 결속 CTE(SettlePlaybackFailure) 안에, 4.1 오프라인 전이는 index.EndLive
-// (스트림 단위 — 사유 'offline')에 있다. index 는 session 을 임포트하지 않으므로(index/session.go 경계)
-// 술어(state='live')와 사유 어휘를 공유할 집이 없다. 이 파일이 세 문장을 같은 출발 상태에 돌려 효과를
-// 대조한다 — 한쪽만 바뀌면 여기서 갈린다.
+// (스트림 단위 — 사유 'offline')에, L3 는 index.EndGapRun(스트림 · 회차 — 사유 'gap_run')에 있다. index 는
+// session 을 임포트하지 않으므로(index/session.go 경계) 술어(state='live')와 사유 어휘를 공유할 집이 없다. 이
+// 파일이 네 문장을 같은 출발 상태에 돌려 효과를 대조한다 — 한쪽만 바뀌면 여기서 갈린다. 4D 의 표식 · 사유
+// 승격은 종료 문장이 아니라 여기에 없다.
 
 import (
 	"context"
@@ -101,12 +102,17 @@ func TestEndSessionStatementsAgreeWithIndexInitMismatchEnding(t *testing.T) {
 			seedEndingFixture(t, pool, "S-reg", "regstream", c.state, c.reason)
 			seedEndingFixture(t, pool, "S-idx", "idxstream", c.state, c.reason)
 			seedEndingFixture(t, pool, "S-end", "endstream", c.state, c.reason)
+			seedEndingFixture(t, pool, "S-gap", "gapstream", c.state, c.reason)
 
 			// EndLive 를 먼저 부른다 — 다른 두 스트림의 회차가 아직 출발 상태일 때 불러야 스트림 단위
 			// 술어(stream_id)가 드러난다. 그 술어를 잃으면 남의 live 회차까지 offline 으로 닫는다.
 			ended, err := index.EndLive(ctx, pool, "endstream", crossClose, noEnqueue)
 			if err != nil {
 				t.Fatalf("EndLive 실패: %v", err)
+			}
+			gapped, err := index.EndGapRun(ctx, pool, "gapstream", "S-gap", crossClose, noEnqueue)
+			if err != nil {
+				t.Fatalf("EndGapRun 실패: %v", err)
 			}
 			withTx(t, pool, func(tx pgx.Tx) {
 				if _, err := tx.Exec(ctx, endSessionSQL, "S-reg", index.ReasonInitMismatch); err != nil {
@@ -119,12 +125,16 @@ func TestEndSessionStatementsAgreeWithIndexInitMismatchEnding(t *testing.T) {
 			}
 
 			reg, idx, end := endShapeOf(t, pool, "S-reg"), endShapeOf(t, pool, "S-idx"), endShapeOf(t, pool, "S-end")
+			gap := endShapeOf(t, pool, "S-gap")
 			if c.state == "live" {
 				if reg.state != "ending" || reg.reason() != "init_mismatch" || reg.endingAt == nil || reg.endedAt != nil {
 					t.Errorf("endSessionSQL 결과 = %v, want {ending, init_mismatch, ending_at 있음, ended_at nil}", reg)
 				}
 				if ended != "S-end" || end.state != "ending" || end.reason() != "offline" || end.endingAt == nil || end.endedAt != nil {
 					t.Errorf("EndLive = %q · 회차 %v, want S-end · {ending, offline, ending_at 있음, ended_at nil}", ended, end)
+				}
+				if gapped != "S-gap" || gap.state != "ending" || gap.reason() != "gap_run" || gap.endingAt == nil || gap.endedAt != nil {
+					t.Errorf("EndGapRun = %q · 회차 %v, want S-gap · {ending, gap_run, ending_at 있음, ended_at nil}", gapped, gap)
 				}
 			} else {
 				if reg.state != c.state || reg.reason() != c.reason ||
@@ -136,6 +146,11 @@ func TestEndSessionStatementsAgreeWithIndexInitMismatchEnding(t *testing.T) {
 					t.Errorf("EndLive = %q · 회차 %v, want \"\"(0행) · 출발 상태 그대로(%s, %s) — live 가 아닌 회차를 덮었다",
 						ended, end, c.state, c.reason)
 				}
+				if gapped != "" || gap.state != c.state || gap.reason() != c.reason ||
+					gap.endingAt == nil || !gap.endingAt.Equal(endedAtFixture) {
+					t.Errorf("EndGapRun = %q · 회차 %v, want \"\"(0행) · 출발 상태 그대로(%s, %s) — live 가 아닌 회차를 덮었다",
+						gapped, gap, c.state, c.reason)
+				}
 			}
 			if reg.state != idx.state || reg.reason() != idx.reason() ||
 				(reg.endingAt == nil) != (idx.endingAt == nil) || (reg.endedAt == nil) != (idx.endedAt == nil) {
@@ -145,7 +160,10 @@ func TestEndSessionStatementsAgreeWithIndexInitMismatchEnding(t *testing.T) {
 			if end.state != reg.state || (end.endingAt == nil) != (reg.endingAt == nil) || (end.endedAt == nil) != (reg.endedAt == nil) {
 				t.Errorf("EndLive 와 endSessionSQL 의 효과가 다르다: EndLive = %v, session = %v", end, reg)
 			}
-			for _, s := range []endShape{reg, idx, end} {
+			if gap.state != reg.state || (gap.endingAt == nil) != (reg.endingAt == nil) || (gap.endedAt == nil) != (reg.endedAt == nil) {
+				t.Errorf("EndGapRun 과 endSessionSQL 의 효과가 다르다: EndGapRun = %v, session = %v", gap, reg)
+			}
+			for _, s := range []endShape{reg, idx, end, gap} {
 				if s.dvrState != "open" {
 					t.Errorf("종료 뒤 회차 %v, want dvr_state open — 종료 문장은 동결 축을 쓰지 않는다(M6)", s)
 				}

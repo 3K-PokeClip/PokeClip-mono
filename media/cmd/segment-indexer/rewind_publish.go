@@ -233,12 +233,13 @@ func (r *rewindLoop) reflectOutcome(s, session string, out publish.Outcome) {
 // settleGap 은 GAP 틱 job 의 결과 out 으로 사다리 사실을 갈아 끼운다(363 ⓐ · J26 · kty 결정 2026-09-29 — 「L2 가 서지
 // 못함」은 루프가 싣는 사실이다) — GAP 이 섰으면 겹침 창의 꼬리를 다음 계산의 prevTail 로 쓰고, DB 가 후보를 이미
 // uploaded 로 봤으면 비우며, 둘 다 없으면(서지 않음 — 준비 단계에서 끝난 틱도 든다 · 판단 J82) 그 후보를 다음 평가의
-// UnstoodGapSeq 로 싣는다.
+// UnstoodGapSeq 로 싣는다. GAP 이 선 결과는 L3 셈에도 넣는다(gap_run.go).
 func (r *rewindLoop) settleGap(rec *rewindStream, job *laneJob, out publish.Outcome) {
 	rec.unstoodGap = nil
 	switch {
 	case out.GapSeq != nil:
 		rec.prevTail = job.window.TailSeq
+		rec.gapRun = rec.gapRun.after(job.session, *out.GapSeq)
 	case out.UploadedSeq == nil:
 		k := *job.gap
 		rec.unstoodGap = &k
