@@ -22,7 +22,7 @@ export function useLiveRewindPlayback(
   afterForbidden = false,
   broadcastId?: string,
 ): PlayerSimulation & { livePosition: LivePosition | null } {
-  const { state, dispatch, liveButton, bindPlayer, notice } = session;
+  const { state, view, dispatch, liveButton, bindPlayer, notice } = session;
   // 되감기 노출은 최신 폴링의 ready 로만 — 재료(entry)가 남아도 ready:false 면 시크바를 넓히지 않는다(계약3 7-2)
   const axisLowerMs = rewindAxisLowerMs(state);
   const hooks = useMemo<PlaybackHooks>(
@@ -37,8 +37,10 @@ export function useLiveRewindPlayback(
       onLiveButton: liveButton,
       onNotice: notice,
       axisLowerMs,
+      // 끝에 닿아 덮개가 선 동안 재생 단추를 막는다(끝난 목록이 처음부터 돌지 않게)
+      holdPlay: view.cover !== null,
     }),
-    [dispatch, liveButton, notice, axisLowerMs],
+    [dispatch, liveButton, notice, axisLowerMs, view.cover],
   );
   const sim = useHlsPlayback(
     videoRef,

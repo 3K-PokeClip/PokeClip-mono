@@ -71,6 +71,33 @@ export function unpinnedX(latest: string | null): XAnswer {
   return latest === null ? { kind: 'unknown' } : { kind: 'known', id: latest };
 }
 
+/**
+ * 고정 화면의 지금 방송 번호 묻기 — 10초 안의 폴링은 같은 방송|영상 키의 마지막 답을 다시 쓴다. 기억에는 가장 늦게 시작한 물음의
+ * 답만 쓴다: 늦게 온 옛 물음(A)이 새 답(B)을 덮으면 다음 폴링이 A 를 다시 써 다른 방송 띠가 굳는다(cx H3). `query` 의 답이 null 이면 모름
+ */
+export function createPinnedXResolver(
+  query: () => Promise<string | null>,
+): (fresh: boolean, key: string | null) => Promise<XAnswer> {
+  let memory: { at: number; key: string | null; answer: XAnswer } | null = null;
+  let latestAsk = 0;
+  return async (fresh, key) => {
+    if (
+      !fresh &&
+      memory !== null &&
+      memory.key === key &&
+      Date.now() - memory.at < PINNED_X_REUSE_MS
+    ) {
+      return memory.answer;
+    }
+    latestAsk += 1;
+    const ask = latestAsk;
+    const id = await query();
+    const answer: XAnswer = id === null ? { kind: 'unknown' } : { kind: 'known', id };
+    if (ask === latestAsk) memory = { at: Date.now(), key, answer };
+    return answer;
+  };
+}
+
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | null> {
   return new Promise((resolve) => {
     const timer = window.setTimeout(() => resolve(null), ms);
@@ -100,20 +127,19 @@ export function useLiveSession(input: LiveSessionInput): LiveSession {
 
   const latestRef = useRef(input.reselect.latest);
   latestRef.current = input.reselect.latest;
-  const pinnedX = useRef<{ at: number; answer: XAnswer } | null>(null);
+  const accessKeyRef = useRef(accessKey);
+  accessKeyRef.current = accessKey;
+  const pinnedX = useMemo(
+    () =>
+      createPinnedXResolver(() => withTimeout(resolveLiveStreamId(streamerId, true), X_TIMEOUT_MS)),
+    [streamerId],
+  );
   const resolveX = useCallback(
     async (fresh: boolean): Promise<XAnswer> => {
       if (!fresh && !pinned) return unpinnedX(latestRef.current);
-      const reuse = pinnedX.current;
-      if (!fresh && reuse !== null && Date.now() - reuse.at < PINNED_X_REUSE_MS) {
-        return reuse.answer;
-      }
-      const id = await withTimeout(resolveLiveStreamId(streamerId, true), X_TIMEOUT_MS);
-      const answer: XAnswer = id === null ? { kind: 'unknown' } : { kind: 'known', id };
-      pinnedX.current = { at: Date.now(), answer };
-      return answer;
+      return pinnedX(fresh, accessKeyRef.current);
     },
-    [pinned, streamerId],
+    [pinned, pinnedX],
   );
 
   const onClose = useCallback(

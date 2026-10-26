@@ -282,4 +282,73 @@ describe('세션 수명 — 앞 세션의 늦은 답(cx H3)', () => {
     expect(onClose).not.toHaveBeenCalled();
     expect(result.current?.state.roundId).toBe('r-B');
   });
+
+  it('화면을 떠난 뒤 온 LIVE 의 X 답은 닫기 콜백을 부르지 않는다(cx H2 — 언마운트가 순번을 올린다)', async () => {
+    let releaseX!: (x: XAnswer) => void;
+    const resolveX = vi.fn(
+      () =>
+        new Promise<XAnswer>((resolve) => {
+          releaseX = resolve;
+        }),
+    );
+    const onClose = vi.fn();
+    answer = (url) =>
+      url === STREAM ? jsonResponse(200, readyBody(A1, NOW - 3_600_000, NOW)) : jsonResponse(404);
+    const { result, unmount } = renderHook(() =>
+      usePlaybackSession(options({ resolveX, onClose })),
+    );
+    await flush();
+    act(() =>
+      result.current?.dispatch({
+        type: 'seek',
+        targetMs: NOW - 600_000,
+        view: { lowerMs: NOW - 16_000, endMs: NOW },
+      }),
+    );
+    act(() => result.current?.liveButton());
+    unmount();
+    await act(async () => {
+      releaseX({ kind: 'known', id: 'r-B' });
+      await Promise.resolve();
+    });
+    await flush();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('지금 방송 번호 재조회는 예약 때의 세션에 묶인다 — 같은 키로 다시 연 세션의 되감기를 LIVE 로 돌리지 않는다(cx M)', async () => {
+    let asked = 0;
+    // 첫 물음(LIVE)은 모름 → 2초 뒤 재조회 예약. 재조회는 보던 방송이라 답한다
+    const resolveX = vi.fn(() => {
+      asked += 1;
+      return Promise.resolve<XAnswer>(
+        asked === 1 ? { kind: 'unknown' } : { kind: 'known', id: 'r-A' },
+      );
+    });
+    answer = (url) =>
+      url === STREAM ? jsonResponse(200, readyBody(A1, NOW - 3_600_000, NOW)) : jsonResponse(404);
+    const { result } = renderHook(() => usePlaybackSession(options({ resolveX })));
+    await flush();
+    const rewindTo = () =>
+      act(() =>
+        result.current?.dispatch({
+          type: 'seek',
+          targetMs: NOW - 600_000,
+          view: { lowerMs: NOW - 16_000, endMs: NOW },
+        }),
+      );
+    rewindTo();
+    act(() => result.current?.liveButton());
+    await flush();
+    expect(result.current?.state.liveChecking).toBe(true);
+    // 재조회 전에 세션이 녹화 보기로 닫히고 같은 방송|영상 키로 새로 열린다
+    act(() => result.current?.dispatch({ type: 'end-reached' }));
+    act(() => result.current?.dispatch({ type: 'button', which: 'record' }));
+    await flush();
+    expect(result.current?.state.phase).toEqual({ kind: 'live' });
+    rewindTo();
+    expect(result.current?.state.phase.kind).toBe('rewind');
+    await act(async () => vi.advanceTimersByTime(2_000));
+    await flush();
+    expect(result.current?.state.phase.kind).toBe('rewind');
+  });
 });

@@ -636,6 +636,26 @@ describe('GlassPlayer: 재생 세션(POK-200 M5)', () => {
     expect(screen.queryByRole('slider', { name: '라이브 탐색' })).toBeNull();
   });
 
+  it('끝에 닿아 덮개가 선 동안 재생 단추는 재생하지 않는다 — 덮개가 없으면 재생한다(cc 확인 패스)', async () => {
+    const play = vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
+    vi.spyOn(HTMLMediaElement.prototype, 'paused', 'get').mockReturnValue(true);
+    try {
+      const covered = renderWith({
+        session: fakeSession({ cover: 'checking', actions: ['record'] }),
+      });
+      play.mockClear();
+      await userEvent.click(screen.getByRole('button', { name: '재생' }));
+      expect(play).not.toHaveBeenCalled();
+      covered.unmount();
+      renderWith({ session: fakeSession() });
+      play.mockClear();
+      await userEvent.click(screen.getByRole('button', { name: '재생' }));
+      expect(play).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
   it('세션이 없으면 지금 순서(src)다', () => {
     renderWith({ src: 'https://m/live/key-1/index.m3u8' });
     expect(screen.getByRole('slider', { name: '라이브 탐색' })).toBeInTheDocument();
