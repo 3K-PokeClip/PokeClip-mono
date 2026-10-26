@@ -572,3 +572,325 @@ run "public_services_unchanged_by_chat" {
   }
 }
 
+# --- 작업 역할(코드가 부르는 동작만) ---
+
+# collector 는 자기 방송 편지 큐 하나만 받는다 — SqsIntakeRunner.java 152
+# (GetQueueAttributes — 부팅 때 가시성 시한 관측) · 254(ReceiveMessage) ·
+# 457(DeleteMessage). 채팅 원본 보관 창고는 chat/ 아래만 쓰고 지운다 —
+# S3ArchiveUploader.java 22(PutObject) · S3ArchivePurge.java 50(ListObjectsV2 —
+# s3:ListBucket) · 84(DeleteObjects — 객체마다 s3:DeleteObject).
+run "chat_task_roles_allow_intake_and_own_db_user" {
+  command = plan
+
+  assert {
+    condition = jsonencode(local.task_role_statements["chat-collector"]) == jsonencode([
+      {
+        sid       = "ChatBroadcastIntake"
+        actions   = ["sqs:DeleteMessage", "sqs:GetQueueAttributes", "sqs:ReceiveMessage"]
+        resources = ["arn:aws:sqs:ap-northeast-2:111122223333:pokeclip-prod-broadcast-lifecycle-chat.fifo"]
+      },
+      {
+        sid       = "ChatArchiveObjects"
+        actions   = ["s3:DeleteObject", "s3:PutObject"]
+        resources = ["arn:aws:s3:::pokeclip-prod-chat-archive-example/chat/*"]
+      },
+      {
+        sid       = "ChatArchiveList"
+        actions   = ["s3:ListBucket"]
+        resources = ["arn:aws:s3:::pokeclip-prod-chat-archive-example"]
+      },
+      {
+        sid       = "DbConnect"
+        actions   = ["rds-db:connect"]
+        resources = ["arn:aws:rds-db:ap-northeast-2:111122223333:dbuser:db-ABCDEFGHIJKLMNOPQRSTUVWXYZ/app_chat_collector"]
+      },
+    ])
+    error_message = "chat-collector 작업 역할이 chat 큐 받기(Receive · Delete · GetQueueAttributes) · 보관 창고 chat/ 쓰기 · 지우기 · 목록 · 자기 DB 사용자 접속이 아니다."
+  }
+
+  assert {
+    condition = jsonencode(local.task_role_statements["chat-detector"]) == jsonencode([
+      {
+        sid       = "DbConnect"
+        actions   = ["rds-db:connect"]
+        resources = ["arn:aws:rds-db:ap-northeast-2:111122223333:dbuser:db-ABCDEFGHIJKLMNOPQRSTUVWXYZ/app_chat_detector"]
+      },
+    ])
+    error_message = "chat-detector 작업 역할이 자기 DB 사용자 접속 하나가 아니다."
+  }
+}
+
+run "password_db_auth_drops_chat_rds_db_connect" {
+  command = plan
+
+  variables {
+    app_db_auth = "password"
+  }
+
+  assert {
+    condition = (
+      toset([for statement in local.task_role_statements["chat-collector"] : statement.sid]) == toset(["ChatBroadcastIntake", "ChatArchiveObjects", "ChatArchiveList"]) &&
+      length(local.task_role_statements["chat-detector"]) == 0 &&
+      alltrue([
+        for service in ["chat-collector", "chat-detector"] :
+        !contains(keys(local.service_env[service]), "POSTGRES_AUTH")
+      ])
+    )
+    error_message = "password 인데 chat 에 rds-db:connect 문장이나 POSTGRES_AUTH env 가 남았다."
+  }
+}
+
+# --- SG 규칙 — SG id 가 계산 속성이라 apply ---
+
+run "chat_security_group_pairs" {
+  command = apply
+
+  # 이그레스: 공통(AWS API · S3) + RDS + 부르는 상대만.
+  assert {
+    condition = (
+      toset(keys(local.egress_targets["chat-collector"])) == toset(["aws_api", "s3", "rds", "auth", "clip"]) &&
+      toset(keys(local.egress_targets["chat-detector"])) == toset(["aws_api", "s3", "rds", "clip", "chat-collector"]) &&
+      toset(keys(local.egress_targets.auth)) == toset(["aws_api", "s3", "rds", "clip", "chat-collector"]) &&
+      toset(keys(local.egress_targets.clip)) == toset(["aws_api", "s3", "rds", "auth", "chat-collector"]) &&
+      alltrue([
+        for service in ["chat-collector", "chat-detector"] :
+        local.egress_targets[service].rds.port == 5432 && local.egress_targets[service].rds.security_group_id == "sg-0rds"
+      ])
+    )
+    error_message = "chat · auth · clip 이그레스 키가 공통 + RDS + 부르는 상대가 아니다."
+  }
+
+  # 짝 여섯: 이그레스(부르는 쪽) · 인그레스(받는 쪽)가 같은 포트 · 상대 SG.
+  # auth → collector(탈퇴 정리) · clip → collector(채팅 문 셋) · detector →
+  # collector(채팅 읽기) · collector → auth(열쇠 조회) · collector → clip(재부착 ·
+  # 중계 · 방송 정보) · detector → clip(카드).
+  assert {
+    condition = (
+      local.egress_targets.auth["chat-collector"].port == 8083 &&
+      local.egress_targets.auth["chat-collector"].security_group_id == module.chat_collector.sg_id &&
+      local.egress_targets.clip["chat-collector"].port == 8083 &&
+      local.egress_targets.clip["chat-collector"].security_group_id == module.chat_collector.sg_id &&
+      local.egress_targets["chat-detector"]["chat-collector"].port == 8083 &&
+      local.egress_targets["chat-detector"]["chat-collector"].security_group_id == module.chat_collector.sg_id &&
+      toset(keys(aws_vpc_security_group_ingress_rule.chat_collector_from_service)) == toset(["auth", "clip", "chat-detector"]) &&
+      alltrue([
+        for rule in aws_vpc_security_group_ingress_rule.chat_collector_from_service :
+        rule.security_group_id == module.chat_collector.sg_id && rule.from_port == 8083 && rule.to_port == 8083 && rule.ip_protocol == "tcp"
+      ]) &&
+      aws_vpc_security_group_ingress_rule.chat_collector_from_service["auth"].referenced_security_group_id == module.auth.sg_id &&
+      aws_vpc_security_group_ingress_rule.chat_collector_from_service["clip"].referenced_security_group_id == module.clip.sg_id &&
+      aws_vpc_security_group_ingress_rule.chat_collector_from_service["chat-detector"].referenced_security_group_id == module.chat_detector.sg_id
+    )
+    error_message = "chat-collector 8083 ← auth · clip · chat-detector 이그레스 · 인그레스 짝이 다르다."
+  }
+
+  assert {
+    condition = (
+      local.egress_targets["chat-collector"].auth.port == 8082 &&
+      local.egress_targets["chat-collector"].auth.security_group_id == module.auth.sg_id &&
+      aws_vpc_security_group_ingress_rule.auth_from_chat_collector.security_group_id == module.auth.sg_id &&
+      aws_vpc_security_group_ingress_rule.auth_from_chat_collector.referenced_security_group_id == module.chat_collector.sg_id &&
+      aws_vpc_security_group_ingress_rule.auth_from_chat_collector.from_port == 8082 &&
+      aws_vpc_security_group_ingress_rule.auth_from_chat_collector.to_port == 8082
+    )
+    error_message = "chat-collector → auth 8082 이그레스 · auth 인그레스 ← chat-collector 짝이 없다."
+  }
+
+  assert {
+    condition = (
+      local.egress_targets["chat-collector"].clip.port == 8081 &&
+      local.egress_targets["chat-collector"].clip.security_group_id == module.clip.sg_id &&
+      local.egress_targets["chat-detector"].clip.port == 8081 &&
+      local.egress_targets["chat-detector"].clip.security_group_id == module.clip.sg_id &&
+      toset(keys(aws_vpc_security_group_ingress_rule.clip_from_chat)) == toset(["chat-collector", "chat-detector"]) &&
+      alltrue([
+        for rule in aws_vpc_security_group_ingress_rule.clip_from_chat :
+        rule.security_group_id == module.clip.sg_id && rule.from_port == 8081 && rule.to_port == 8081
+      ]) &&
+      aws_vpc_security_group_ingress_rule.clip_from_chat["chat-collector"].referenced_security_group_id == module.chat_collector.sg_id &&
+      aws_vpc_security_group_ingress_rule.clip_from_chat["chat-detector"].referenced_security_group_id == module.chat_detector.sg_id
+    )
+    error_message = "chat-collector · chat-detector → clip 8081 이그레스 · clip 인그레스 짝이 다르다."
+  }
+
+  # RDS ← 넷 5432(기존 auth · clip 키는 그대로).
+  assert {
+    condition = (
+      toset(keys(aws_vpc_security_group_ingress_rule.rds_from_service)) == toset(["auth", "clip", "chat-collector", "chat-detector"]) &&
+      alltrue([
+        for rule in aws_vpc_security_group_ingress_rule.rds_from_service :
+        rule.security_group_id == "sg-0rds" && rule.from_port == 5432 && rule.to_port == 5432
+      ]) &&
+      aws_vpc_security_group_ingress_rule.rds_from_service["auth"].referenced_security_group_id == module.auth.sg_id &&
+      aws_vpc_security_group_ingress_rule.rds_from_service["clip"].referenced_security_group_id == module.clip.sg_id &&
+      aws_vpc_security_group_ingress_rule.rds_from_service["chat-collector"].referenced_security_group_id == module.chat_collector.sg_id &&
+      aws_vpc_security_group_ingress_rule.rds_from_service["chat-detector"].referenced_security_group_id == module.chat_detector.sg_id
+    )
+    error_message = "RDS SG 인그레스가 auth · clip · chat-collector · chat-detector 넷 5432 가 아니다."
+  }
+
+  # 공개 ALB 는 chat 을 모른다. Cloud Map 이름은 모듈의 name 이다.
+  assert {
+    condition = (
+      !anytrue([
+        for rule in aws_vpc_security_group_egress_rule.public_alb_to_service :
+        contains([module.chat_collector.sg_id, module.chat_detector.sg_id], rule.referenced_security_group_id)
+      ]) &&
+      module.chat_collector.discovery_name == "chat-collector" &&
+      module.chat_detector.discovery_name == "chat-detector"
+    )
+    error_message = "공개 ALB 가 chat SG 로 나가거나 chat Cloud Map 이름이 chat-collector · chat-detector 가 아니다."
+  }
+}
+
+# --- 런타임 계약 검사 ---
+
+run "runtime_contract_rejects_wildcard_chat_db_user" {
+  command = plan
+
+  override_data {
+    target = data.terraform_remote_state.runtime
+    values = {
+      outputs = {
+        rds_sg_id               = "sg-0rds"
+        rds_resource_id         = "db-ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        rewind_bucket_arn       = "arn:aws:s3:::pokeclip-prod-rewind-example"
+        app_db_users            = { auth = "app_auth", clip = "app_clip", "chat-collector" = "app_chat_collector", "chat-detector" = "app_*" }
+        app_env                 = { auth = {}, clip = {}, "chat-collector" = { S3_BUCKET = "pokeclip-prod-chat-archive-example" } }
+        app_secret_arns         = { auth = {}, clip = {} }
+        app_task_resource_arns  = { auth = {}, clip = {} }
+        broadcast_queue_arns    = { clip = "arn:aws:sqs:ap-northeast-2:111122223333:pokeclip-prod-broadcast-lifecycle-clip.fifo", chat = "arn:aws:sqs:ap-northeast-2:111122223333:pokeclip-prod-broadcast-lifecycle-chat.fifo" }
+        chat_archive_bucket_arn = "arn:aws:s3:::pokeclip-prod-chat-archive-example"
+      }
+    }
+  }
+
+  expect_failures = [terraform_data.runtime_contract]
+}
+
+run "runtime_contract_rejects_wildcard_chat_queue_arn" {
+  command = plan
+
+  override_data {
+    target = data.terraform_remote_state.runtime
+    values = {
+      outputs = {
+        rds_sg_id               = "sg-0rds"
+        rds_resource_id         = "db-ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        rewind_bucket_arn       = "arn:aws:s3:::pokeclip-prod-rewind-example"
+        app_db_users            = { auth = "app_auth", clip = "app_clip", "chat-collector" = "app_chat_collector", "chat-detector" = "app_chat_detector" }
+        app_env                 = { auth = {}, clip = {}, "chat-collector" = { S3_BUCKET = "pokeclip-prod-chat-archive-example" } }
+        app_secret_arns         = { auth = {}, clip = {} }
+        app_task_resource_arns  = { auth = {}, clip = {} }
+        broadcast_queue_arns    = { clip = "arn:aws:sqs:ap-northeast-2:111122223333:pokeclip-prod-broadcast-lifecycle-clip.fifo", chat = "arn:aws:sqs:ap-northeast-2:111122223333:pokeclip-prod-*.fifo" }
+        chat_archive_bucket_arn = "arn:aws:s3:::pokeclip-prod-chat-archive-example"
+      }
+    }
+  }
+
+  expect_failures = [terraform_data.runtime_contract]
+}
+
+# 계약9 큐는 FIFO 다 — .fifo 가 없는 ARN 은 다른 큐다.
+run "runtime_contract_rejects_non_fifo_chat_queue_arn" {
+  command = plan
+
+  override_data {
+    target = data.terraform_remote_state.runtime
+    values = {
+      outputs = {
+        rds_sg_id               = "sg-0rds"
+        rds_resource_id         = "db-ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        rewind_bucket_arn       = "arn:aws:s3:::pokeclip-prod-rewind-example"
+        app_db_users            = { auth = "app_auth", clip = "app_clip", "chat-collector" = "app_chat_collector", "chat-detector" = "app_chat_detector" }
+        app_env                 = { auth = {}, clip = {}, "chat-collector" = { S3_BUCKET = "pokeclip-prod-chat-archive-example" } }
+        app_secret_arns         = { auth = {}, clip = {} }
+        app_task_resource_arns  = { auth = {}, clip = {} }
+        broadcast_queue_arns    = { clip = "arn:aws:sqs:ap-northeast-2:111122223333:pokeclip-prod-broadcast-lifecycle-clip.fifo", chat = "arn:aws:sqs:ap-northeast-2:111122223333:pokeclip-prod-broadcast-lifecycle-chat" }
+        chat_archive_bucket_arn = "arn:aws:s3:::pokeclip-prod-chat-archive-example"
+      }
+    }
+  }
+
+  expect_failures = [terraform_data.runtime_contract]
+}
+
+# iam 에서 POSTGRES_PASSWORD 가 있으면 chat 두 서버도 부팅을 거부한다(같은
+# db-support DataSourceLoginConfiguration).
+run "runtime_contract_rejects_postgres_password_for_chat" {
+  command = plan
+
+  override_data {
+    target = data.terraform_remote_state.runtime
+    values = {
+      outputs = {
+        rds_sg_id         = "sg-0rds"
+        rds_resource_id   = "db-ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        rewind_bucket_arn = "arn:aws:s3:::pokeclip-prod-rewind-example"
+        app_db_users      = { auth = "app_auth", clip = "app_clip", "chat-collector" = "app_chat_collector", "chat-detector" = "app_chat_detector" }
+        app_env           = { auth = {}, clip = {}, "chat-collector" = { S3_BUCKET = "pokeclip-prod-chat-archive-example" } }
+        app_secret_arns = {
+          auth            = {}
+          clip            = {}
+          "chat-detector" = { POSTGRES_PASSWORD = "arn:aws:secretsmanager:ap-northeast-2:111122223333:secret:pokeclip/prod/db-password-AbCdEf" }
+        }
+        app_task_resource_arns  = { auth = {}, clip = {} }
+        broadcast_queue_arns    = { clip = "arn:aws:sqs:ap-northeast-2:111122223333:pokeclip-prod-broadcast-lifecycle-clip.fifo", chat = "arn:aws:sqs:ap-northeast-2:111122223333:pokeclip-prod-broadcast-lifecycle-chat.fifo" }
+        chat_archive_bucket_arn = "arn:aws:s3:::pokeclip-prod-chat-archive-example"
+      }
+    }
+  }
+
+  expect_failures = [terraform_data.runtime_contract]
+}
+
+# 채팅 원본 보관 창고(PR-1 출력 chat_archive_bucket_arn)는 와일드카드 없는 버킷
+# ARN 이어야 한다 — 정책 Resource 에 그대로 들어간다.
+run "runtime_contract_rejects_wildcard_chat_archive_bucket" {
+  command = plan
+
+  override_data {
+    target = data.terraform_remote_state.runtime
+    values = {
+      outputs = {
+        rds_sg_id               = "sg-0rds"
+        rds_resource_id         = "db-ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        rewind_bucket_arn       = "arn:aws:s3:::pokeclip-prod-rewind-example"
+        app_db_users            = { auth = "app_auth", clip = "app_clip", "chat-collector" = "app_chat_collector", "chat-detector" = "app_chat_detector" }
+        app_env                 = { auth = {}, clip = {}, "chat-collector" = { S3_BUCKET = "pokeclip-prod-chat-archive-example" } }
+        app_secret_arns         = { auth = {}, clip = {} }
+        app_task_resource_arns  = { auth = {}, clip = {} }
+        broadcast_queue_arns    = { clip = "arn:aws:sqs:ap-northeast-2:111122223333:pokeclip-prod-broadcast-lifecycle-clip.fifo", chat = "arn:aws:sqs:ap-northeast-2:111122223333:pokeclip-prod-broadcast-lifecycle-chat.fifo" }
+        chat_archive_bucket_arn = "arn:aws:s3:::*"
+      }
+    }
+  }
+
+  expect_failures = [terraform_data.runtime_contract]
+}
+
+# collector 가 쓰는 창고 이름(app_env S3_BUCKET)과 작업 역할의 창고가 같아야
+# 한다 — 다르면 올리기가 권한 거부로 실패하고, 이름이 비면 아카이브가 말없이
+# 꺼진다.
+run "runtime_contract_rejects_chat_archive_bucket_name_mismatch" {
+  command = plan
+
+  override_data {
+    target = data.terraform_remote_state.runtime
+    values = {
+      outputs = {
+        rds_sg_id               = "sg-0rds"
+        rds_resource_id         = "db-ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        rewind_bucket_arn       = "arn:aws:s3:::pokeclip-prod-rewind-example"
+        app_db_users            = { auth = "app_auth", clip = "app_clip", "chat-collector" = "app_chat_collector", "chat-detector" = "app_chat_detector" }
+        app_env                 = { auth = {}, clip = {}, "chat-collector" = { S3_BUCKET = "pokeclip-prod-other" } }
+        app_secret_arns         = { auth = {}, clip = {} }
+        app_task_resource_arns  = { auth = {}, clip = {} }
+        broadcast_queue_arns    = { clip = "arn:aws:sqs:ap-northeast-2:111122223333:pokeclip-prod-broadcast-lifecycle-clip.fifo", chat = "arn:aws:sqs:ap-northeast-2:111122223333:pokeclip-prod-broadcast-lifecycle-chat.fifo" }
+        chat_archive_bucket_arn = "arn:aws:s3:::pokeclip-prod-chat-archive-example"
+      }
+    }
+  }
+
+  expect_failures = [terraform_data.runtime_contract]
+}

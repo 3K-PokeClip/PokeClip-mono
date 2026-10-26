@@ -2,7 +2,8 @@
 # SG 인그레스 · RDS 인그레스 ← auth · clip(설계 3-1 의 ⑧ · 5-5).
 #
 # chat 두 서버(chat-collector · chat-detector — POK-306)도 같은 모듈로 둔다. 공개
-# 노출이 없어 대상 그룹 없이 Cloud Map 이름으로만 받는다.
+# 노출이 없어 대상 그룹 없이 Cloud Map 이름으로만 받는다. chat ↔ auth · clip
+# SG 짝 · RDS ← chat 도 이 루트가 갖는다(계약 개정 — 옛 「런타임 2단 몫」).
 #
 # Next 는 rewrite 목적지를 빌드 때 굳힌다(web README 「컨테이너 이미지」) —
 # 이미지 빌드 인자 AUTH_API_URL · CLIP_API_URL 은 아래 Cloud Map 이름
@@ -16,7 +17,8 @@ locals {
 
   auth_base_url      = "http://auth.${local.discovery_domain}:${var.services.auth.port}"
   clip_base_url      = "http://clip.${local.discovery_domain}:${var.services.clip.port}"
-  collector_base_url = "http://chat-collector.${local.discovery_domain}:${var.chat_services["chat-collector"].port}"
+  collector_port     = var.chat_services["chat-collector"].port
+  collector_base_url = "http://chat-collector.${local.discovery_domain}:${local.collector_port}"
 
   account_id = data.aws_caller_identity.current.account_id
   region     = data.aws_region.current.region
@@ -35,10 +37,19 @@ locals {
     clip = [local.routed_target_group_arns["clip"], local.routed_target_group_arns["clip-sse"]]
   }
 
+  # 공개 ALB 뒤 서비스 셋 — 출력 service_sg_ids(소비 루트 계약)와 같다. chat
+  # SG 는 모듈 출력을 바로 쓴다.
   service_sg_ids = {
     next = module.next.sg_id
     auth = module.auth.sg_id
     clip = module.clip.sg_id
+  }
+
+  db_client_sg_ids = {
+    auth             = module.auth.sg_id
+    clip             = module.clip.sg_id
+    "chat-collector" = module.chat_collector.sg_id
+    "chat-detector"  = module.chat_detector.sg_id
   }
 
   # DB 를 쓰는 서비스 — 런타임 app_db_users 의 키(계약)와 같다.
@@ -148,15 +159,28 @@ locals {
       clip = { port = var.services.clip.port, security_group_id = module.clip.sg_id, description = "Next rewrite to clip" }
     })
     auth = merge(local.common_egress, {
-      rds  = { port = 5432, security_group_id = local.runtime.rds_sg_id, description = "RDS" }
-      clip = { port = var.services.clip.port, security_group_id = module.clip.sg_id, description = "auth to clip purge" }
+      rds              = { port = 5432, security_group_id = local.runtime.rds_sg_id, description = "RDS" }
+      clip             = { port = var.services.clip.port, security_group_id = module.clip.sg_id, description = "auth to clip purge" }
+      "chat-collector" = { port = local.collector_port, security_group_id = module.chat_collector.sg_id, description = "auth to chat-collector purge" }
     })
     clip = merge(local.common_egress, {
-      rds  = { port = 5432, security_group_id = local.runtime.rds_sg_id, description = "RDS" }
-      auth = { port = var.services.auth.port, security_group_id = module.auth.sg_id, description = "clip to auth resolve" }
+      rds              = { port = 5432, security_group_id = local.runtime.rds_sg_id, description = "RDS" }
+      auth             = { port = var.services.auth.port, security_group_id = module.auth.sg_id, description = "clip to auth resolve" }
+      "chat-collector" = { port = local.collector_port, security_group_id = module.chat_collector.sg_id, description = "clip to chat-collector" }
     })
-    "chat-collector" = local.common_egress
-    "chat-detector"  = local.common_egress
+    # collector → auth(열쇠 조회 · 링크) · clip(재부착 · 중계 · 방송 정보).
+    # 치지직 · SOOP API · 채팅 소켓 · SQS 는 aws_api(443 → NAT)로 나간다.
+    "chat-collector" = merge(local.common_egress, {
+      rds  = { port = 5432, security_group_id = local.runtime.rds_sg_id, description = "RDS" }
+      auth = { port = var.services.auth.port, security_group_id = module.auth.sg_id, description = "chat-collector to auth" }
+      clip = { port = var.services.clip.port, security_group_id = module.clip.sg_id, description = "chat-collector to clip" }
+    })
+    # detector → clip(카드) · collector(채팅 읽기).
+    "chat-detector" = merge(local.common_egress, {
+      rds              = { port = 5432, security_group_id = local.runtime.rds_sg_id, description = "RDS" }
+      clip             = { port = var.services.clip.port, security_group_id = module.clip.sg_id, description = "chat-detector to clip" }
+      "chat-collector" = { port = local.collector_port, security_group_id = module.chat_collector.sg_id, description = "chat-detector to chat-collector" }
+    })
   }
 }
 
@@ -343,8 +367,7 @@ resource "aws_vpc_security_group_ingress_rule" "auth_from_clip" {
   referenced_security_group_id = module.clip.sg_id
 }
 
-# auth → clip 탈퇴 정리(WithdrawalPurge)의 짝. auth → chat-collector 는 런타임
-# 2단(POK-306) 몫이다.
+# auth → clip 탈퇴 정리(WithdrawalPurge)의 짝.
 resource "aws_vpc_security_group_ingress_rule" "clip_from_auth" {
   security_group_id            = module.clip.sg_id
   description                  = "auth to clip purge"
@@ -354,17 +377,60 @@ resource "aws_vpc_security_group_ingress_rule" "clip_from_auth" {
   referenced_security_group_id = module.auth.sg_id
 }
 
-# RDS SG 는 런타임 1단이 만들고, auth · clip SG 를 아는 이 루트가 규칙을
-# 갖는다(설계 3-1). Media ↔ RDS 는 media 루트 몫이다.
+# chat-collector 8083 ← auth(탈퇴 정리 — COLLECTOR_BASE_URL) · clip(채팅 문 셋) ·
+# chat-detector(채팅 읽기)의 짝. 상대 이그레스는 egress_targets 에 있다.
+resource "aws_vpc_security_group_ingress_rule" "chat_collector_from_service" {
+  for_each = {
+    auth            = module.auth.sg_id
+    clip            = module.clip.sg_id
+    "chat-detector" = module.chat_detector.sg_id
+  }
+
+  security_group_id            = module.chat_collector.sg_id
+  description                  = "${each.key} to chat-collector"
+  ip_protocol                  = "tcp"
+  from_port                    = local.collector_port
+  to_port                      = local.collector_port
+  referenced_security_group_id = each.value
+}
+
+# chat-collector → auth(방송 편지의 열쇠 조회 · 링크 — AUTH_BASE_URL)의 짝.
+resource "aws_vpc_security_group_ingress_rule" "auth_from_chat_collector" {
+  security_group_id            = module.auth.sg_id
+  description                  = "chat-collector to auth"
+  ip_protocol                  = "tcp"
+  from_port                    = var.services.auth.port
+  to_port                      = var.services.auth.port
+  referenced_security_group_id = module.chat_collector.sg_id
+}
+
+# chat-collector(재부착 · 중계 · 방송 정보) · chat-detector(카드) → clip 의 짝.
+resource "aws_vpc_security_group_ingress_rule" "clip_from_chat" {
+  for_each = {
+    "chat-collector" = module.chat_collector.sg_id
+    "chat-detector"  = module.chat_detector.sg_id
+  }
+
+  security_group_id            = module.clip.sg_id
+  description                  = "${each.key} to clip"
+  ip_protocol                  = "tcp"
+  from_port                    = var.services.clip.port
+  to_port                      = var.services.clip.port
+  referenced_security_group_id = each.value
+}
+
+# RDS SG 는 런타임 1단이 만들고, 서비스 SG 를 아는 이 루트가 규칙을 갖는다
+# (설계 3-1). Media ↔ RDS 는 media 루트 몫이다. 키는 DB 를 쓰는 서비스 넷
+# (chat 두 키를 더해도 auth · clip 규칙은 그대로다).
 resource "aws_vpc_security_group_ingress_rule" "rds_from_service" {
-  for_each = toset(["auth", "clip"])
+  for_each = local.db_client_sg_ids
 
   security_group_id            = local.runtime.rds_sg_id
   description                  = "${each.key} to RDS"
   ip_protocol                  = "tcp"
   from_port                    = 5432
   to_port                      = 5432
-  referenced_security_group_id = local.service_sg_ids[each.key]
+  referenced_security_group_id = each.value
 
   depends_on = [terraform_data.runtime_contract]
 }

@@ -624,10 +624,11 @@ run "task_role_omits_resources_runtime_does_not_expose" {
 run "security_group_rules_pair_services_lb_and_rds" {
   command = apply
 
-  # RDS ← auth · clip 5432 만(Media ↔ RDS 는 media 루트 몫 — M9).
+  # RDS ← DB 를 쓰는 서비스 5432 만(Media ↔ RDS 는 media 루트 몫 — M9). chat
+  # 두 키는 chat_services.tftest.hcl 이 본다.
   assert {
     condition = (
-      toset(keys(aws_vpc_security_group_ingress_rule.rds_from_service)) == toset(["auth", "clip"]) &&
+      toset(keys(aws_vpc_security_group_ingress_rule.rds_from_service)) == toset(["auth", "clip", "chat-collector", "chat-detector"]) &&
       alltrue([
         for key, rule in aws_vpc_security_group_ingress_rule.rds_from_service :
         rule.security_group_id == "sg-0rds" && rule.from_port == 5432 && rule.to_port == 5432 && rule.ip_protocol == "tcp"
@@ -635,7 +636,7 @@ run "security_group_rules_pair_services_lb_and_rds" {
       aws_vpc_security_group_ingress_rule.rds_from_service["auth"].referenced_security_group_id == module.auth.sg_id &&
       aws_vpc_security_group_ingress_rule.rds_from_service["clip"].referenced_security_group_id == module.clip.sg_id
     )
-    error_message = "RDS SG 인그레스가 auth · clip SG 5432 두 개가 아니다."
+    error_message = "RDS SG 인그레스에 auth · clip SG 5432 가 없거나 DB 를 쓰는 서비스 밖의 키가 있다."
   }
 
   assert {
@@ -658,7 +659,8 @@ run "security_group_rules_pair_services_lb_and_rds" {
     error_message = "clip → auth 8082 이그레스 · auth 인그레스 ← clip 짝이 없다."
   }
 
-  # auth → clip 8081 짝(탈퇴 정리). auth → chat-collector 는 런타임 2단 몫.
+  # auth → clip 8081 짝(탈퇴 정리). auth → chat-collector 짝은
+  # chat_services.tftest.hcl 이 본다.
   assert {
     condition = (
       local.egress_targets.auth.clip.port == 8081 &&

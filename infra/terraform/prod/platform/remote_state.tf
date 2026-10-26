@@ -89,10 +89,29 @@ resource "terraform_data" "runtime_contract" {
 
     precondition {
       condition = alltrue([
-        for service in ["auth", "clip"] :
+        for service in local.db_services :
         can(regex("^[a-z_][a-z0-9_]{0,62}$", local.runtime.app_db_users[service]))
       ])
-      error_message = "런타임 출력 app_db_users 의 auth · clip 이 없거나 DB 사용자 이름(소문자 · 숫자 · _, 와일드카드 없음)이 아니다."
+      error_message = "런타임 출력 app_db_users 의 auth · clip · chat-collector · chat-detector 가 없거나 DB 사용자 이름(소문자 · 숫자 · _, 와일드카드 없음)이 아니다."
+    }
+
+    # 채팅 원본 보관 창고 — collector 작업 역할 Resource 에 그대로 들어가고,
+    # collector 가 올리는 창고(app_env S3_BUCKET)와 같아야 한다. 다르면 올리기가
+    # 권한 거부로 실패하고, 이름이 비면 아카이브가 말없이 꺼진다.
+    precondition {
+      condition     = can(regex("^arn:aws:s3:::[a-z0-9][a-z0-9.-]+$", local.chat_archive_bucket_arn))
+      error_message = "런타임 출력 chat_archive_bucket_arn 이 없거나 와일드카드 없는 S3 버킷 ARN 이 아니다."
+    }
+
+    precondition {
+      condition     = try(local.runtime.app_env["chat-collector"].S3_BUCKET, "") == trimprefix(local.chat_archive_bucket_arn, "arn:aws:s3:::")
+      error_message = "런타임 출력 app_env 의 chat-collector S3_BUCKET 이 chat_archive_bucket_arn 의 버킷 이름과 다르거나 비었다."
+    }
+
+    # chat-collector 수신 정책 대상. 계약9 큐는 FIFO 라 .fifo 로 끝난다.
+    precondition {
+      condition     = can(regex("^arn:aws:sqs:[a-z0-9-]+:[0-9]{12}:[A-Za-z0-9_-]+\\.fifo$", local.runtime.broadcast_queue_arns.chat))
+      error_message = "런타임 출력 broadcast_queue_arns.chat 이 없거나 와일드카드 없는 SQS FIFO 큐 ARN(.fifo)이 아니다."
     }
 
     precondition {
@@ -120,15 +139,15 @@ resource "terraform_data" "runtime_contract" {
       error_message = "런타임 출력 app_task_resource_arns 의 값이 와일드카드 없는 S3 버킷 · SQS 큐 ARN 이 아니다."
     }
 
-    # iam 에서 POSTGRES_PASSWORD 가 비어 있지 않으면 auth · clip 이 부팅을
+    # iam 에서 POSTGRES_PASSWORD 가 비어 있지 않으면 DB 를 쓰는 서버 넷이 부팅을
     # 거부한다(db-support DataSourceLoginConfiguration.rejectLeftoverPassword).
     # env 든 secrets 든 같은 이름이면 앱이 읽는다.
     precondition {
       condition = var.app_db_auth != "iam" || alltrue([
-        for service in ["auth", "clip"] :
+        for service in local.db_services :
         !contains(concat(keys(local.service_env[service]), keys(local.service_secrets[service])), "POSTGRES_PASSWORD")
       ])
-      error_message = "app_db_auth = iam 인데 런타임 출력이 auth · clip 에 POSTGRES_PASSWORD 를 준다 — 앱이 부팅을 거부한다. 런타임 app_secret_arns · app_env 에서 지운다."
+      error_message = "app_db_auth = iam 인데 런타임 출력이 auth · clip · chat-collector · chat-detector 중 하나에 POSTGRES_PASSWORD 를 준다 — 앱이 부팅을 거부한다. 런타임 app_secret_arns · app_env 에서 지운다."
     }
 
     # auth 는 resolve 전용 토큰이 있으면 허용 대역이 빌 때 부팅을 거부한다
