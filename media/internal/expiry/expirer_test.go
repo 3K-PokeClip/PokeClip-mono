@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -532,6 +533,39 @@ func TestSweepRejectsPageThatCannotAdvance(t *testing.T) {
 			}
 			if r.e.cursor == nil || *r.e.cursor != "c1" {
 				t.Fatal("다 처리한 첫 장의 표시가 남아야 한다")
+			}
+		})
+	}
+}
+
+// 계획 4.14 · D20 — 기본 한도 그대로(시한 10초 · 본문 1MiB) 지연 11초 · 본문 2MiB 응답을 그 회차 실패로 끝낸다. 위의
+// 축소 한도 시험은 갈래만 보고, 이 시험은 운영 수치를 본다. 지연 사례는 11초가 걸려 평소에는 건너뛰고 실주행
+// 게이트(REQUIRE_PG=1 인 CI)에서만 돈다.
+func TestSweepDefaultLimitsRejectElevenSecondsAndTwoMiB(t *testing.T) {
+	cases := []struct {
+		name, status string
+		slow         bool
+		set          func(c *fakeClip)
+	}{
+		{"본문 2MiB", "body", false, func(c *fakeClip) {
+			c.body = []byte(`{"broadcasts":[],"pad":"` + strings.Repeat("x", 2<<20) + `"}`)
+		}},
+		{"지연 11초", "timeout", true, func(c *fakeClip) { c.delay = 11 * time.Second }},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if c.slow && os.Getenv("REQUIRE_PG") != "1" {
+				t.Skip("11초 시험 — REQUIRE_PG=1 실주행 게이트에서만 돈다")
+			}
+			r := newRig(t, nil)
+			r.clip.set(c.set)
+			r.sweep(t)
+			polls := r.log.all("expiry_poll")
+			if len(polls) != 1 || polls[0].attrs["status"] != c.status {
+				t.Fatalf("expiry_poll %v (status=%s 기대)", polls, c.status)
+			}
+			if r.e.cursor != nil {
+				t.Fatal("실패 회차에 표시가 생겼다")
 			}
 		})
 	}
