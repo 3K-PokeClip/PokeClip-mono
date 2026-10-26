@@ -187,7 +187,7 @@ describe('fetchRewindStatus — 버린 답의 관측(cc M2)', () => {
     return import('./rewindStatus');
   }
 
-  it('형식 오류 · 출처 불일치는 사유마다 한 번만 console.warn 으로 남긴다', async () => {
+  it('형식 오류 · 목록 주소 거부는 사유마다 한 번만 console.warn 으로 남긴다', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const { fetchRewindStatus: fetchOnce } = await freshModule();
     stubFetch(() => jsonResponse(200, { ...READY_LIVE, mode: 'paused' }));
@@ -200,8 +200,11 @@ describe('fetchRewindStatus — 버린 답의 관측(cc M2)', () => {
     stubFetch(() => jsonResponse(200, { ...READY_LIVE, url: 'https://evil.test/a/index.m3u8' }));
     await fetchOnce('u', BASE);
     await fetchOnce('u', BASE);
+    // 같은 출처라도 m3u8 이 아닌 주소는 출처 불일치가 아니다 — 같은 「목록 주소 거부」 사유로 묶인다(cx L)
+    stubFetch(() => jsonResponse(200, { ...READY_LIVE, url: `${BASE}/a/index.json` }));
+    await fetchOnce('u', BASE);
     expect(warn).toHaveBeenCalledTimes(2);
-    expect(warn.mock.calls[1]?.[0]).toContain('출처 불일치');
+    expect(warn.mock.calls[1]?.[0]).toContain('목록 주소 거부');
     warn.mockRestore();
   });
 
