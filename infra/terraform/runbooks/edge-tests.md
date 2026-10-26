@@ -45,7 +45,7 @@ prod 엣지(CloudFront · 공개 ALB · NLB)를 운영 이름 그대로 시험�
 | 1 | edge apply | [prod/edge](../prod/edge/README.md) 「적용 순서(O7f)」 |
 | 2 | T6b(KVS 값 입력 전) | 「시험표」 · 「판정 문구」 |
 | 3 | KVS 값 입력(멈춤 자리 ②) | 「KVS 값 입력」 |
-| 4 | 엣지만 시험 — T0 · T8e 해석 · T11 404 · T2b 기본 거절 · T2b 경로 우회 | 「엣지만 시험」 · 「경로 우회 시험」 |
+| 4 | 엣지만 시험 — T0 · T8e 해석 · T11 404 · T2b 기본 거절 · T2b 경로 우회 · T12 ⓐ | 「엣지만 시험」 · 「경로 우회 시험」 |
 | 5 | 랜딩 업로드(kty 로컬) | [prod 산출물 런북](prod-artifacts.md) 「랜딩 업로드(O7f 의 5)」 |
 | 6 | 런타임 트랙 2단 | [런타임 트랙 계약](../CONTRACT-runtime.md) |
 | 7 | auth · clip · next 정상 기동 확인 | 계획 M10 O7f 7 |
@@ -53,7 +53,7 @@ prod 엣지(CloudFront · 공개 ALB · NLB)를 운영 이름 그대로 시험�
 | 9 | 루프백 헬스 · `secret-count` | 계획 M10 O7f 9 |
 | 10 | clip 쿠키 발급 1회 200 | 계획 M10 O7f 10 |
 | 11 | 7-R(2 에서 403 이었을 때만) | [엣지 비밀 런북](edge-secrets.md) 「T6b 대체 절차」 |
-| 12 | 런타임 뒤 시험(T1–T5 · T7 · T8 · T10 · T11 202) | 「시험표」 · 「런타임 뒤 시험의 추가 항목」 |
+| 12 | 런타임 뒤 시험(T1–T5 · T7 · T8 · T10 · T11 202 · T12 ⓑ) | 「시험표」 · 「런타임 뒤 시험의 추가 항목」 |
 
 **T6a · T9b 는 prod 에서 하지 않습니다**(kty 20차 · 설계 5-6). 근거는
 [엣지 비밀 런북](edge-secrets.md) 「prod 에서 하지 않는 시험(T6a · T9b)」
@@ -72,6 +72,9 @@ prod 엣지(CloudFront · 공개 ALB · NLB)를 운영 이름 그대로 시험�
     T10 · T11 202. `/live` 재생 시험(T1 · T2 의 `/live` 사례 · T3 · T4 · T5 ·
     T7 · T8a–T8d) · 7-R · 8단계는 값 입력 뒤입니다. 대안은 설계하지
     않습니다(34차 Q2 — 막히면 kty 회부).
+*   **T12**: ⓐ 는 Media 상자의 nginx 가 응답을 내므로 A1 이면 Media 가
+    뜬 뒤이고, A2 에서는 엣지만 시험과 함께 합니다. ⓑ 는 KVS 값과 무관해
+    A2 에서도 합니다(회차 라우트 배포 뒤).
 *   **A1 · A2 가 함께면** Media 가 필요한 동작을 먼저 빼고, 남은 것에서 KVS
     값 동작과 `/live` 재생 시험을 뺍니다.
 *   **재개**는 번호 순서로 아직 하지 않은 것 전부입니다(건너뛴 것 · 끝내지
@@ -168,14 +171,14 @@ SNI · Host 를 `media.pokeclip.com` · `api.pokeclip.com` ·
 | T8c | 교체 창 중 신규 송출 시도 | 한계 관찰 · 결과 기록(차단 기대 없음) | 런타임 뒤 |
 | T8d | 부분 실패(B 등록 전 실패 포함) | 회복 · force 였다면 런북으로 기존 방송 복구 확인 | 런타임 뒤 |
 | T10 | 재생 API | 아래 「T10」 | 런타임 뒤(2번 · 3번 배포 전이면 보류) |
-| T12 | 회차별 되감기 경로 | ⓐ **원본 도달**(엣지 시험 — `control_upstream` 반영 전에도 가능): media 이름으로 쿠키 없이 `GET /api/streams/<표식>/rounds/<표식>/rewind` → nginx 제어면 접근 로그에 같은 경로 원문 1건 · 상류 호출 0 · 응답이 CloudFront 기본 동작(dvr 쿠키 · 403)이 아님. ⓑ **200 JSON**(M6 회차 라우트 배포 뒤 · 실재 시험 회차로): 200 · `application/json` · 7-2 다섯 키. 실패 = 엣지가 404(원본 로그 0건) · 403 · 5xx · JSON 아닌 200 → 엣지 패턴 수정은 묶음 C | ⓐ 는 지금 · ⓑ 는 M6 회차 라우트 배포 뒤 |
+| T12 | 회차별 되감기 경로 | ⓐ **원본 도달**: media 이름으로 쿠키 없이 `GET /api/streams/<표식>/rounds/<표식>/rewind`. 원본 로그 = nginx 제어면 접근 로그의 같은 경로 원문 줄. `control_upstream` 반영 전 = 원본 로그 1건 · 상류 호출 0 · nginx 404 / 반영 뒤 · 회차 라우트 등록 전 = 원본 로그 1건 · 상류 도달 · 제어면 ServeMux 404 / 둘 다 응답이 CloudFront 기본 동작(dvr 쿠키 · 403)이 아님. ⓑ **200 JSON**(회차 라우트 — 제어면 서버의 이 경로 처리기 — 배포 뒤 · 실재 시험 회차로): 200 · `application/json` · 제어면 응답 계약(계약3 7-2절)의 키 다섯(`ready` · `mode` · `url` · `firstPdt` · `headPdt`). 실패 = 엣지가 404(원본 로그 0건) · 403 · 5xx · JSON 아닌 200 → 엣지 경로 패턴을 맡은 후속 작업에서 고침 | ⓐ 는 엣지만 · ⓑ 는 런타임 뒤(회차 라우트 배포 뒤) |
 
 런타임 뒤 시험에서 시험 계정 방송은 계약9 이벤트를 내보내지 않거나 시험
 표식으로 거릅니다(설계 5-3 조건).
 
 ## 엣지만 시험
 
-O7f 의 2(T6b)와 4(T0 · T8e 해석 · T11 404 · T2b)입니다. 아래 명령은
+O7f 의 2(T6b)와 4(T0 · T8e 해석 · T11 404 · T2b · T12 ⓐ)입니다. 아래 명령은
 「접속법」 의 `edge_ip` · `alb_ip` 를 씁니다. `<id>` 는 시험에 쓰는
 `ingestStreamId` 꼴의 아무 값입니다(방송이 없어도 됨).
 
@@ -233,6 +236,50 @@ O7f 의 2(T6b)와 4(T0 · T8e 해석 · T11 404 · T2b)입니다. 아래 명령�
         | grep -Ei '^(HTTP/|x-cache:)'
     done | tee "${evidence}/t11-404.txt"
     ```
+
+*   **T12 ⓐ 원본 도달**(A1 이면 하지 않음): 엣지가 회차별 되감기 경로를
+    원본까지 넘기는지만 봅니다. 응답이 404 여도 원본에 닿았으면 통과입니다.
+    *   `control_upstream` 반영 전: nginx 가 직접 낸 404 · 원본 로그 1건 ·
+        상류 호출 0 입니다.
+    *   반영 뒤 · 회차 라우트 등록 전: 제어면 서버의 ServeMux 기본 404 · 원본
+        로그 1건 · 상류 도달입니다. 응답 머리가 스트림 경로의 404 와 달라도
+        정상입니다(기본 404).
+    *   어느 단계든 `server: CloudFront` 응답(dvr 쿠키 403 · deny-default
+        404)이나 원본 로그 0건이면 엣지가 막은 것이라 실패입니다.
+
+    ```shell
+    probe="pcrw$(date -u +%H%M%S)"
+    printf '%s\n' "${probe}" > "${evidence}/t12a-probe.txt"
+    date -u '+%Y-%m-%d %H:%M:%S UTC' > "${evidence}/t12a-since.txt"
+    curl --resolve "media.pokeclip.com:443:${edge_ip}" -sS -o /dev/null -D - \
+      -w 't12a %{http_code}\n' \
+      "https://media.pokeclip.com/api/streams/${probe}/rounds/${probe}/rewind" |
+      grep -iE '^server:|^x-cache:|^t12a ' | tee "${evidence}/t12a.txt"
+    ```
+
+    판정 줄은 Media 상자에서 SSM 으로 받습니다(건수만 · 실행 직전 승인).
+    `since` · `probe` 에 위 두 파일의 값을 넣습니다. 꼴은
+    [media-host README](/infra/media-host/README.md) 「시작 · 정지」 의 건수
+    꼴입니다 — 원문은 내지 않고, 조회 실패는 0건이 아니라 종료 2 입니다.
+    nginx 접근 로그의 끝에서 둘째 칸이 상류 주소(`$upstream_addr`)이고,
+    nginx 가 직접 답했으면 `-` 입니다.
+
+    ```shell
+    fail() { echo "T12A COUNT FAIL $1"; exit 2; }
+    since='<t12a-since.txt 의 값>'
+    probe='<t12a-probe.txt 의 값>'
+    log="$(journalctl -q -u pokeclip-media --since "${since}" -o cat --no-pager)" \
+      || fail journal
+    printf '%s\n' "${log}" |
+      awk -v p=" /api/streams/${probe}/rounds/${probe}/rewind " \
+        'index($0, p) { n++; if ($(NF - 1) != "-") u++ }
+         END { printf "T12A COUNT %d UPSTREAM %d\n", n, u }' || fail count
+    ```
+
+    `T12A COUNT 1 UPSTREAM 0` 이면 반영 전 통과, `T12A COUNT 1 UPSTREAM 1`
+    이면 반영 뒤 · 회차 라우트 등록 전 통과입니다(둘 다 응답 404 · `server`
+    가 CloudFront 아님). `COUNT 0` 이면 실패이고 kty 에게 보고합니다 — 엣지
+    경로 패턴은 그 패턴을 맡은 후속 작업에서 고칩니다.
 
 ### T2b 기본 거절
 
@@ -592,11 +639,14 @@ T11 404 에서 판정합니다([prod/edge](../prod/edge/README.md) 「VPC origin
     *   표준 로그 · nginx 로그에 Authorization 0건(아래 「비밀 · 쿠키 0건 확인」).
     *   내부 ALB → Media HTTP 는 계약4 개정본(팀 위키 PR 171) 기준으로
         정상입니다.
-*   **T12**: ⓐ 는 엣지가 이 경로를 원본까지 넘기는지만 본다 — `control_upstream` 반영 전 nginx 404(원본
-    로그 1건 · 상류 0)도 PASS. M6 라우트 등록 전 제어면 서버의 ServeMux 404 도 원본 도달이면 PASS(머리는 스트림
-    경로와 달라도 정상 — 기본 404). ⓑ 200 JSON 판정은 그때까지 「보류」. **ⓑ PASS 가 M6 개통 조건이다**(설계
-    M5 14절 4 · R46). 웹 쪽 영향: 엣지 404 → 「아직 모름」 → 360초 뒤 녹화(VOD 제안 없음) / JSON 아닌
-    200 · 403 · 5xx → `unavailable` → 20분 시한 뒤 녹화.
+*   **T12 ⓑ**(ⓐ 는 위 「엣지만 시험」):
+    *   회차 라우트 배포 뒤 실재 시험 회차의 경로로 200 ·
+        `application/json` · 키 다섯을 봅니다. 배포 전이면 「보류」 로
+        기록합니다.
+    *   **ⓑ 통과가 회차 라우트를 여는 조건입니다.**
+    *   실패 때 웹이 하는 일: 엣지 404 → 「아직 모름」 → 360초 뒤 녹화(VOD
+        제안 없음) · JSON 아닌 200 · 403 · 5xx → `unavailable` → 20분 시한
+        뒤 녹화입니다.
 
 ## WAF 속도 제한
 
