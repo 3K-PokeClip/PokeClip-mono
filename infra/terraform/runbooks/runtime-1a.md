@@ -49,6 +49,9 @@ prod/network(O7a) 뒤, platform(O7d) · media(O7e) 앞입니다. platform · med
 4 부터 6 까지 어느 걸음이든 실패하거나 시간이 넘으면 곧바로 7 로 갑니다(아래
 「실패 · 시간 초과」).
 
+1단-가를 이미 적용한 RDS 에 M6 장부 스키마(POK-196)를 더하는 것은 아래
+「M6 스키마 재실행」 절입니다 — 이 표의 4–7 을 다시 돕니다.
+
 1단-다(일 큐 · 새 버킷 · auth 설정 · 값 넣기)는 아래 「1단-다」 절의 순서를
 따릅니다. O7d 뒤 1단-다를 되돌리는 동안(clip 0개부터 다시 올리기까지 —
 회부로 보류된 동안 포함) platform apply 는 다시 올리기 하나뿐입니다. 다른 PR
@@ -704,6 +707,192 @@ JSON 입니다. 보내기 전에 SQL 원문을 kty 에게
     못합니다.
 *   연결 상한 20 · `statement_timeout` 60s 는 측정값이 아닙니다(O7e 에서
     다시 봅니다).
+
+## M6 스키마 재실행
+
+M6-0(POK-196 장부 스키마)이 고친 운영 SQL(`stream_schema.sql` ·
+`20_schema.sql` · `30_grants.sql` · `40_verify.sql`)을, 1단-가를 이미 적용한
+RDS 에 다시 적용하는 절차입니다. 새 실행기는 없습니다 — 이 런북의 4–7 을
+M6-0 머지 커밋 SHA 하나로 그대로 돕니다. 실행자 · 승인 규칙은 이 런북 머리와
+같습니다.
+
+용어:
+
+*   **하한**(`stream_seq_floors`): 스트림마다 다음에 쓸 수 있는 가장 작은
+    seq 입니다. 조각 행이 지워지면 트리거가 하한을 올리고, 하한보다 작은
+    seq 의 INSERT 를 `seq_below_floor`(SQLSTATE 23514)로 거부합니다 — 지워진
+    seq 를 다시 쓰지 못하게 합니다(seq 재사용 금지).
+*   **하한 이상 이미지**: M6-0 머지 커밋을 조상으로 둔 커밋으로 빌드한 사이드카
+    이미지입니다. 하한을 읽는 `LoadCursor`(M6-0 c2)와 기동 스키마
+    확인(M6-0 c3)이 들어 있습니다. 경계 규칙은 [Media 교체 런북](media-swap.md)
+    「M6 운영 SQL 경계 · 롤백 하한」 입니다.
+
+### M6 스키마 재실행 순서
+
+기본 절차는 O7e(Media 처음 기동) **전에** 이 SQL 까지 끝내는 것입니다(kty
+2026-10-26 확정). 그러면 하한 아래 사이드카가 트리거 있는 DB 에서 돈 적이
+없어 교체 창이 없습니다.
+
+| # | 하는 일 | 자리 |
+|---|---|---|
+| 1 | M6-0 · M6-6a 머지 | — |
+| 2 | 이 절의 재실행(4–7 · SHA = M6-0 머지 커밋) | 아래 「재실행 걸음」 |
+| 3 | 사이드카 재푸시 · 기록 갱신 | [prod 산출물 런북](prod-artifacts.md) 「사이드카 재푸시(M6-0 뒤)」 |
+| 4 | `prod/media` tfvars 의 `image_digests.sidecar` 를 3 의 다이제스트로 교체 | — |
+| 5 | O7e | [Media 교체 런북](media-swap.md) 「O7e — 처음 기동」 |
+
+O7e 가 먼저 와 버렸으면(하한 아래 사이드카가 이미 prod 에서 돎) 이 순서
+대신 Media 교체 런북 「한 창 절차」 를 따릅니다. 그 절차의 3 이 이 절의
+재실행입니다.
+
+*   M6-0 머지본 이후 사이드카는 기동 때 새 열 · 표 · 트리거를 확인하고,
+    없으면 `schema_not_ready` 를 남기고 종료 코드 1 로 끝납니다. 그래서 2 를
+    건너뛰고 3 의 이미지로 O7e 를 하면 사이드카가 뜨지 않습니다.
+*   다시 돌려도 안전합니다. M6 문장은 카탈로그 확인 DO 블록(열은
+    `information_schema.columns` · 트리거는 `pg_trigger` 를 확인한 뒤
+    만듦)과 `IF NOT EXISTS` 꼴이라 있는 객체는 건드리지 않고 없는 것만
+    만듭니다(M6-0 이 `ddl.go` 와 같은 문장으로 두고
+    `prod_sql_contract_test` 가 바이트를 대조). 1단-가의 10 · 20 · 30 도 다시
+    돌리면 같은 상태로 수렴합니다(5-3 끝).
+
+### 재실행 걸음
+
+1.  **선행**: M6-0 머지 커밋이 `origin/develop` 에 있습니다. 5-1 의
+    `make_payload` 가 조상인지 확인하고, 아니면 「멈춤」 을 냅니다.
+1.  **4(켬)**: 그대로 합니다 — 직전 점검 다시 · 실행기만 켜는 plan ·
+    켠 시각 기록 · SSM 등록 · 켬 뒤 2-3 판정. 켠 시각부터 120분 안에 7 을
+    시작합니다.
+1.  **5-1(페이로드)**: `make_payload "<M6-0 머지 커밋 SHA>"`. M6-0 은 SQL
+    파일을 더하지 않으므로 `names` 는 그대로입니다 — 이름이 다르면
+    `git show` 가 실패해 「멈춤」 이 납니다.
+1.  **잠금 대기 상한 넣기**: 적용 페이로드에 `lock_timeout` 을 겁니다.
+    아래는 `apply.json` 의 마지막 명령(00 → 40 반복) 바로 앞에 한 줄을
+    끼웁니다.
+
+    ```shell
+    jq '.commands |= (.[:-1] + ["export PGOPTIONS=\"-c lock_timeout=3s\""] + .[-1:])' \
+      "${payload}/apply.json" >"${payload}/apply.json.new" &&
+      mv "${payload}/apply.json.new" "${payload}/apply.json"
+    jq -r '.commands[-2]' "${payload}/apply.json"   # export PGOPTIONS="-c lock_timeout=3s"
+    ```
+
+    `PGOPTIONS` 는 psql(libpq)이 접속할 때 서버에 넘기는 세션 설정이고,
+    `lock_timeout` 은 잠금을 그 시간 안에 못 잡으면 그 문장을 실패시키는
+    값입니다. ALTER TABLE · CREATE TRIGGER 는 표에 강한 잠금을 기다리는 동안
+    뒤에 오는 사이드카 · 앱 서버 질의를 줄 세웁니다. 3초는 사이드카 핫 경로
+    트랜잭션 상한 `TxnDeadline` 10초(`media/internal/index/store.go:147`)보다
+    짧게 고른 값입니다 — 사이드카가 이 줄에 서서 시한에 걸리기 전에 SQL 쪽이
+    먼저 물러납니다. 마지막 줄이 주석의 값과 다르면 보내지 않고 7 로 갑니다.
+1.  **5-2 · 5-3(준비 · 적용)**: 그대로 합니다. 통과는 상태 `Success` 와
+    표준 출력의 `PREFLIGHT OK` · `VERIFY OK` 입니다 — M6-0 판 `40_verify.sql`
+    은 열 넷 · 표 둘 · 인덱스 · 트리거 둘 · M6 권한까지 봅니다.
+    *   표준 오류에 `lock timeout` 줄이 있으면 잠금 상한에 걸린 것입니다.
+        그 파일만 롤백됩니다(`psql -1`). 「실패 · 시간 초과」 대로 끄고
+        다음 흐름을 4 부터 다시 합니다 — 같은 SHA 로 다시 돌리면 수렴합니다.
+    *   「한 창 절차」 3 으로 온 흐름이면 끄기 전에 아래 「M6 읽기 질의」 의
+        하한 질의를 같은 흐름에서 보냅니다(그 절차의 4).
+1.  **6(advisory)**: 그대로 합니다. 뒤따르는 40 이 한 번 더 `VERIFY OK`
+    인지가 무변경 확인입니다.
+1.  **7(끔)**: 그대로 합니다 — 잔여 0 까지.
+1.  **기록**: 8 의 항목에 M6-0 머지 SHA · `lock_timeout` 값 · sha256 일곱
+    줄 · `apply` 결과를 더합니다. Jira POK-196 코멘트에 통과 시각과 SHA 를
+    남깁니다. 이 기록이 사이드카 재푸시(위 순서 3)의 선행 조건입니다.
+
+### M6 읽기 질의
+
+M6 운영에서 DB 를 읽어 판정해야 하는 자리가 둘 있습니다. 둘 다 실행기를
+켠 흐름 안에서 「실패 · 시간 초과」 의 손 SQL 규칙대로 보냅니다 — 새
+페이로드 · SQL 원문을 kty 에게 보이고 승인 · 뒤이어 `40_verify.sql` ·
+판정은 상태 `Success` 와 `VERIFY OK`. 질의는 읽기만 하고, 표 주인
+`media_owner` 로 바꿔 읽습니다(마스터는 SET ROLE 만 가짐 — `10_roles.sql`).
+
+| 질의 | 쓰는 자리 | 통과 |
+|---|---|---|
+| 하한 질의(`floor.sql`) | 「한 창 절차」 4 · 6, 롤백 하한 사고 확인 | `(0 rows)` |
+| 업로드 적체(`backlog.sql`) | 「한 창 절차」 7′ 앞 조건 | 세 행 모두 `pending` 0 · `failed` 0 |
+
+**흐름.** 「M6 스키마 재실행」 과 같은 흐름이면 적용 뒤 이어서 보냅니다. 따로
+읽을 때는 4(켬) → 5-1(같은 M6-0 머지 SHA) → 5-2 → 5-3 의 준비만 → 아래 읽기
+→ 7(끔)입니다. 상자는 켤 때마다 새로 만들어지므로 준비를 건너뛰지 않습니다.
+
+질의 원문을 페이로드 디렉터리에 씁니다. 하한 질의는 설계 M6 10절의 확인
+질의입니다 — 남은 조각의 최댓값 + 1 이 하한보다 작은(꼬리 조각이 지워져
+하한이 앞선) 스트림을 냅니다. 하한 아래 판이 그 스트림을 다시 색인하면
+트리거가 거부하고 그 스트림 색인이 멈춥니다.
+
+```shell
+cat >"${payload}/floor.sql" <<'SQL'
+SET ROLE media_owner;
+SELECT f.stream_id, f.next_seq, m.max_seq
+  FROM stream_seq_floors f
+  LEFT JOIN LATERAL (SELECT pg_catalog.max(seq) AS max_seq FROM stream_segments s WHERE s.stream_id = f.stream_id) m ON true
+ WHERE m.max_seq IS NULL OR m.max_seq + 1 < f.next_seq;
+RESET ROLE;
+SQL
+```
+
+업로드 적체는 사이드카 업로더가 세는 세 축 문장
+(`media/internal/index/upload_store.go` 의 `countArchiveBacklogSQL` ·
+`countPlaybackBacklogSQL` · `countInitBacklogSQL`)에 축 이름만 붙인
+것입니다. 값은 차례로 대기 · 실패 · 크기 없음(앞 둘의 부분집합)입니다.
+
+```shell
+cat >"${payload}/backlog.sql" <<'SQL'
+SET ROLE media_owner;
+SELECT 'archive' AS axis, *
+  FROM (SELECT pg_catalog.count(*) FILTER (WHERE upload_state = 'pending') AS pending,
+               pg_catalog.count(*) FILTER (WHERE upload_state = 'failed') AS failed,
+               pg_catalog.count(*) FILTER (WHERE upload_state IN ('pending','failed') AND bytes IS NULL) AS bytes_null
+          FROM stream_segments WHERE local_path IS NOT NULL) a
+UNION ALL
+SELECT 'playback', *
+  FROM (SELECT pg_catalog.count(*) FILTER (WHERE t.playback_upload_state = 'pending'),
+               pg_catalog.count(*) FILTER (WHERE t.playback_upload_state = 'failed'),
+               pg_catalog.count(*) FILTER (WHERE t.playback_upload_state IN ('pending','failed') AND t.bytes IS NULL)
+          FROM stream_segments t
+          JOIN stream_cutoffs  cut  ON cut.stream_id   = t.stream_id
+         WHERE t.local_path IS NOT NULL AND t.session_id IS NOT NULL
+           AND t.seq >= cut.cutoff_seq) p
+UNION ALL
+SELECT 'init', *
+  FROM (SELECT pg_catalog.count(*), 0::bigint,
+               pg_catalog.count(*) FILTER (WHERE NOT EXISTS (
+                   SELECT 1 FROM stream_segments g
+                    WHERE g.stream_id = s.stream_id AND g.session_id = s.session_id
+                      AND g.local_path IS NOT NULL AND g.bytes IS NOT NULL))
+          FROM stream_sessions s
+         WHERE s.init_uploaded_at IS NULL AND s.state <> 'ended') i;
+RESET ROLE;
+SQL
+```
+
+읽기 페이로드는 적용 페이로드의 접속 명령(`apply.json` 에서 마지막 명령을
+뺀 것)에 그 질의와 `40_verify.sql` 을 잇습니다. 질의 원문은 base64 로 실어
+상자에서 풉니다.
+
+```shell
+make_read() {  # make_read <걸음 이름> <SQL 파일>
+  jq --rawfile sql "$2" '
+    .commands = .commands[:-1] + [
+      "printf %s " + ($sql | @base64 | @sh) + " | base64 -d >/root/rt1a/read.sql",
+      "echo == read",
+      "psql -X -1 -v ON_ERROR_STOP=1 -f /root/rt1a/read.sql",
+      "echo == 40_verify.sql",
+      "psql -X -1 -v ON_ERROR_STOP=1 -f 40_verify.sql"
+    ]
+    | .executionTimeout = ["300"]' \
+    "${payload}/apply.json" >"${payload}/$1.json"
+}
+make_read floor "${payload}/floor.sql" && send_step floor
+make_read backlog "${payload}/backlog.sql" && send_step backlog
+```
+
+*   표준 출력의 `== read` 뒤가 질의 결과이고, 그 뒤 `VERIFY OK` 가 있어야
+    합니다. 결과 줄에는 계정 ID 가 없어 기록에 옮길 수 있습니다(스트림
+    식별자는 공개 식별자).
+*   하한 질의에 행이 나오면 그 스트림이 하한 아래 판에서 걸리는 스트림입니다.
+    「한 창 절차」 에서는 그 자리의 갈래를 따르고, 사고 확인이면 Media 교체
+    런북 「M6 운영 SQL 경계 · 롤백 하한」 의 복구로 갑니다.
 
 ## 1단-다 — 일 큐 · 새 버킷 · auth 설정 · 값 넣기
 
