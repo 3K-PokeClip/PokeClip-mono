@@ -543,6 +543,27 @@ func TestExpiryD58RemovalWindowNextSegmentSeeds(t *testing.T) {
 	}
 }
 
+// 계약 6-2 「끝 < 시작(겹침) → 빈 구간(from = until, 안 지움)」 — 빈 구간은 오류가 아니라 아무것도 고르지 않는다.
+func TestExpiryEmptyRangeSelectsNothing(t *testing.T) {
+	pool := newTestPool(t)
+	ctx := context.Background()
+	stream := "exptest-empty"
+	expPutSession(t, pool, expSessionRow{id: "em-a", stream: stream, dvrKey: "dvr/em"})
+	expPutSeg(t, pool, expSegRow{stream: stream, seq: 0, session: "em-a"})
+	at := expAt(0)
+	for _, q := range []ExpiryQuery{expRange(stream, &at, at), expRange(stream, &at, at.Add(-time.Minute))} {
+		if n, err := MarkExpired(ctx, pool, q); err != nil || n != 0 {
+			t.Fatalf("MarkExpired(%v) = %d err=%v (0 · 오류 없음 기대)", q, n, err)
+		}
+		if rows, err := ExpiryRows(ctx, pool, q); err != nil || len(rows) != 0 {
+			t.Fatalf("ExpiryRows(%v) = %v err=%v", q, rows, err)
+		}
+		if docs, err := ExpiryDocuments(ctx, pool, q); err != nil || len(docs) != 0 {
+			t.Fatalf("ExpiryDocuments(%v) = %v err=%v", q, docs, err)
+		}
+	}
+}
+
 // 한 트랜잭션 상한(500행)을 넘는 묶음은 거부하고, 빈 묶음은 문장 없이 끝난다.
 func TestDeleteExpiredBatchBounds(t *testing.T) {
 	pool := newTestPool(t)
