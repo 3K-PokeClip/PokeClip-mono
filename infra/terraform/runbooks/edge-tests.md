@@ -237,7 +237,7 @@ O7f 의 2(T6b)와 4(T0 · T8e 해석 · T11 404 · T2b · T12 ⓐ)입니다. 아
     done | tee "${evidence}/t11-404.txt"
     ```
 
-*   **T12 ⓐ 원본 도달**(A1 이면 하지 않음): 엣지가 회차별 되감기 경로를
+*   **T12 ⓐ 원본 도달**(A1 이면 Media 가 뜬 뒤): 엣지가 회차별 되감기 경로를
     원본까지 넘기는지만 봅니다. 응답이 404 여도 원본에 닿았으면 통과입니다.
     *   `control_upstream` 반영 전: nginx 가 직접 낸 404 · 원본 로그 1건 ·
         상류 호출 0 입니다.
@@ -250,12 +250,17 @@ O7f 의 2(T6b)와 4(T0 · T8e 해석 · T11 404 · T2b · T12 ⓐ)입니다. 아
     ```shell
     probe="pcrw$(date -u +%H%M%S)"
     printf '%s\n' "${probe}" > "${evidence}/t12a-probe.txt"
-    date -u '+%Y-%m-%d %H:%M:%S UTC' > "${evidence}/t12a-since.txt"
+    printf '@%s\n' "$(( $(date -u +%s) - 60 ))" > "${evidence}/t12a-since.txt"
     curl --resolve "media.pokeclip.com:443:${edge_ip}" -sS -o /dev/null -D - \
       -w 't12a %{http_code}\n' \
       "https://media.pokeclip.com/api/streams/${probe}/rounds/${probe}/rewind" |
       grep -iE '^server:|^x-cache:|^t12a ' | tee "${evidence}/t12a.txt"
     ```
+
+    `since` 는 요청 1분 전 시각입니다. 노트북 시계가 상자 시계보다 조금
+    빨라도 요청 줄이 빠져 `COUNT 0` 으로 잘못 나오지 않게 합니다. `probe` 는
+    이 요청에만 쓰는 표식이라, 앞당긴 1분 동안의 다른 줄은 세지 않습니다.
+    `@` 뒤 숫자(1970년부터 센 초)는 `journalctl --since` 가 그대로 읽습니다.
 
     판정 줄은 Media 상자에서 SSM 으로 받습니다(건수만 · 실행 직전 승인).
     `since` · `probe` 에 위 두 파일의 값을 넣습니다. 꼴은
@@ -279,7 +284,10 @@ O7f 의 2(T6b)와 4(T0 · T8e 해석 · T11 404 · T2b · T12 ⓐ)입니다. 아
     `T12A COUNT 1 UPSTREAM 0` 이면 반영 전 통과, `T12A COUNT 1 UPSTREAM 1`
     이면 반영 뒤 · 회차 라우트 등록 전 통과입니다(둘 다 응답 404 · `server`
     가 CloudFront 아님). `COUNT 0` 이면 실패이고 kty 에게 보고합니다 — 엣지
-    경로 패턴은 그 패턴을 맡은 후속 작업에서 고칩니다.
+    경로 패턴은 그 패턴을 맡은 후속 작업에서 고칩니다. `COUNT` 가 2 이상이면
+    엣지가 같은 요청을 원본에 다시 보낸 것입니다. `UPSTREAM` 이 0 이거나
+    `COUNT` 와 같으면 위와 같은 단계의 통과로 보고 비고에 건수를 적습니다.
+    그 사이 값이면 보류로 두고 kty 에게 보고합니다.
 
 ### T2b 기본 거절
 
@@ -740,6 +748,7 @@ Budgets 경보가 오면 kty 가 원천을 찾습니다. 표준 로그 급증이
 | T11 404 | | | | |
 | T2b | | | | |
 | 경로 우회(T2b) | | | | |
+| T12 ⓐ 원본 도달 | | | | |
 | T1 | | | | |
 | T2 | | | | |
 | 경로 우회(T2) | | | | |
@@ -749,7 +758,6 @@ Budgets 경보가 오면 kty 가 원천을 찾습니다. 표준 로그 급증이
 | T7 | | | | |
 | T8a–T8d | | | | |
 | T10 | | | | |
-| T12 ⓐ 원본 도달 | | | | |
 | T12 ⓑ 200 JSON | | | | |
 | T11 202 | | | | |
 | T6a · T9b | — | 하지 않음(kty 20차) | 「O7f 순서」 끝 문단 | |
