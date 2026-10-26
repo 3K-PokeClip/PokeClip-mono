@@ -977,8 +977,8 @@ class SecretLeakTest extends IntegrationTestSupport {
     @Test
     void 시크릿을_받는_DTO에는_NotBlank_말고는_걸지_않는다() throws Exception {
         assertThat(constraintsOn(GoogleLoginRequest.class, "code")).containsExactly(NotBlank.class);
-        // 과도기에는 선택값이라 제약이 없다(POK-483 1단계). 형식은 레코드 생성자가 값 없이 거른다.
-        assertThat(constraintsOn(GoogleLoginRequest.class, "codeVerifier")).isEmpty();
+        assertThat(constraintsOn(GoogleLoginRequest.class, "codeVerifier"))
+                .containsExactly(NotBlank.class);
         assertThat(constraintsOn(RefreshRequest.class, "refreshToken")).containsExactly(NotBlank.class);
         assertThat(constraintsOn(ExchangeRequest.class, "code")).containsExactly(NotBlank.class);
         assertThat(constraintsOn(ResolveRequest.class, "streamid")).containsExactly(NotBlank.class);
