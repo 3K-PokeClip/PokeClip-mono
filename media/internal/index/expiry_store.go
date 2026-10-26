@@ -35,7 +35,7 @@ type ExpiryQuery struct {
 	StreamID string
 	// From 은 segmentsFrom 이다. nil 이면 하한이 없다(그 물리 키에서 이 방송보다 앞선 조각 전부 — 6-2).
 	From *time.Time
-	// Until 은 segmentsUntil(배타)이다. 영값이면 거부한다.
+	// Until 은 segmentsUntil(배타)이다. 영값이면 거부한다. From 이 Until 이상이면 빈 구간이다(안 지움 — 6-2).
 	Until time.Time
 }
 
@@ -46,9 +46,8 @@ func (q ExpiryQuery) validate() error {
 	if q.Until.IsZero() {
 		return fmt.Errorf("만료 범위 stream_id=%q 의 상한이 비었다", q.StreamID)
 	}
-	if q.From != nil && !q.From.Before(q.Until) {
-		return fmt.Errorf("만료 범위 stream_id=%q 의 하한 %v 이 상한 %v 보다 앞서지 않는다", q.StreamID, *q.From, q.Until)
-	}
+	// From ≥ Until 은 오류가 아니다 — 계약 6-2 의 빈 구간(겹친 방송 · from = until)이고 범위 조건이 아무 행도
+	// 고르지 않는다.
 	return nil
 }
 
