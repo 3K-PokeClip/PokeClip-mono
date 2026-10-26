@@ -140,3 +140,10 @@ long 값을 글자로 붙이고, 기준값 `LOCK_MAGIC_NUM = 77431708279161` 이
     (`GrantedRoleDatabase` · `SearchPathTraps` · `DevSchemaMove`).
 *   문서 `services/README.md` 「서버별 DB 계정과 권한」 · 「dev 앱별 스키마 이전과
     되돌리기」 · `media/README.md` search_path 가로채기 절.
+
+## 추기 2026-10-26 — dev 이전 장치를 지웠다(POK-487)
+
+dev 이전이 2026-10-26 에 끝나 후속 PR 에서 장치를 지웠다 — 위의
+`services/scripts/dev-move-*` · `DevSchemaMove` 와 README 「dev 앱별 스키마 이전과
+되돌리기」 는 3K-PokeClip/PokeClip-mono#423 에만 있고, README 절은 「dev 앱별
+스키마 이전」 한 문단이 됐다.
