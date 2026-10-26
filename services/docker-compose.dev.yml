@@ -281,6 +281,17 @@ services:
       # 🔴 비밀. auth와 같은 치지직 앱 값. 방송 정보가 꺼져 있으면 비어도 된다.
       CHZZK_CLIENT_ID: ${CHZZK_CLIENT_ID:-}
       CHZZK_CLIENT_SECRET: ${CHZZK_CLIENT_SECRET:-}
+      # SOOP 방송 지켜보기(POK-397). 기본 꺼짐. 켜면 INTERNAL_API_TOKEN · AUTH_BASE_URL · CLIP_BASE_URL 이 필요하다.
+      SOOP_WATCH_ENABLED: ${SOOP_WATCH_ENABLED:-false}
+      SOOP_DIAGNOSE_RESPONSE: ${SOOP_DIAGNOSE_RESPONSE:-false}
+      SOOP_API_BASE_URI: ${SOOP_API_BASE_URI:-https://openapi.sooplive.com}
+      # SOOP 채팅 받기(POK-397 PR4). 기본 꺼짐. 지켜보기가 꺼진 채 이것만 켜면 부팅이 거부된다.
+      SOOP_CHAT_ENABLED: ${SOOP_CHAT_ENABLED:-false}
+      # 🔴 비밀. auth 와 같은 SOOP 앱 값(같은 .env 이름). 채팅이 꺼져 있으면 비어도 된다 —
+      # auth 블록은 :? 로 요구하지만 여기는 앱 기본값(빈 값)과 맞춰 :- 다.
+      SOOP_CLIENT_ID: ${SOOP_CLIENT_ID:-}
+      SOOP_CLIENT_SECRET: ${SOOP_CLIENT_SECRET:-}
+      SOOP_CHAT_SDK_URL: ${SOOP_CHAT_SDK_URL:-https://static.sooplive.com/asset/app/chat-sdk/sooplive-chat-sdk.js}
       # 채팅 버퍼를 1만 건까지 들고 있어 넷 중 가장 많이 쓴다.
       JAVA_TOOL_OPTIONS: -Xmx320m
 
