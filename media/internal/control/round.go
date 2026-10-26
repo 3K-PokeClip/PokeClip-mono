@@ -63,8 +63,8 @@ type flight struct {
 	reply roundReply
 }
 
-// failBatch 는 lookup 실패 줄을 묶는 칸이다 — 처음 줄을 쓰고, lookupFailedBatch 안의 실패는 세었다가 그 뒤 첫 실패에
-// 합쳐 쓴다.
+// failBatch 는 lookup 실패 줄을 묶는 칸이다 — 처음 줄을 쓰고, lookupFailedBatch 안의 실패는 세었다가 그 뒤 첫 실패나
+// 청소(sweep)가 합쳐 쓴다.
 type failBatch struct {
 	loggedAt time.Time
 	pending  int
@@ -306,12 +306,26 @@ func (rh *roundHandler) noteFailure(reason string, now time.Time) {
 		b.pending++
 		return
 	}
-	rh.opt.Log.Warn("control_round_lookup_failed", "reason", reason, "count", b.pending+1)
+	rh.logFailures(reason, b, b.pending+1, now)
+}
+
+// flushFailures 는 묶음 시간이 지난 사유의 센 실패를 한 줄로 쓴다 — 다음 실패가 오지 않아도 꼬리가 남지 않게(rh.mu 아래).
+func (rh *roundHandler) flushFailures(now time.Time) {
+	for reason, b := range rh.fails {
+		if b.pending > 0 && now.Sub(b.loggedAt) >= lookupFailedBatch {
+			rh.logFailures(reason, b, b.pending, now)
+		}
+	}
+}
+
+// logFailures 는 실패 count 건을 한 줄로 쓰고 묶음을 now 부터 다시 연다(rh.mu 아래).
+func (rh *roundHandler) logFailures(reason string, b *failBatch, count int, now time.Time) {
+	rh.opt.Log.Warn("control_round_lookup_failed", "reason", reason, "count", count)
 	b.loggedAt, b.pending = now, 0
 }
 
-// sweep 은 now 기준으로 1초 지난 캐시 칸을 지우고, 60초 거부가 없으면 control_round_shed 를 내린다(서버의 청소
-// 고루틴이 부른다).
+// sweep 은 now 기준으로 1초 지난 캐시 칸을 지우고, 묶음 시간이 지난 실패 꼬리를 쓰고, 60초 거부가 없으면
+// control_round_shed 를 내린다(서버의 청소 고루틴이 부른다).
 func (rh *roundHandler) sweep(now time.Time) {
 	rh.mu.Lock()
 	defer rh.mu.Unlock()
@@ -323,6 +337,7 @@ func (rh *roundHandler) sweep(now time.Time) {
 		}
 		e = prev
 	}
+	rh.flushFailures(now)
 	if rh.shedSet && now.Sub(rh.shedAt) >= roundShedClear {
 		rh.shedSet = false
 		rh.opt.Log.Warn("control_round_shed", "value", 0)

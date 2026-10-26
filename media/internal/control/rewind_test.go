@@ -104,7 +104,7 @@ func TestRewindRouteMethods(t *testing.T) {
 	f := newFixture(10)
 	f.store(true, map[string]status.Entry{"vod": vodEntry("R1")})
 	base := f.start(t, RewindRoute(f.holder, f.opt))
-	head, err := http.Head(streamURL(base, "vod"))
+	head, err := testClient.Head(streamURL(base, "vod"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +112,7 @@ func TestRewindRouteMethods(t *testing.T) {
 	if head.StatusCode != 200 {
 		t.Errorf("HEAD = %d, want 200", head.StatusCode)
 	}
-	post, err := http.Post(streamURL(base, "vod"), "application/json", nil)
+	post, err := testClient.Post(streamURL(base, "vod"), "application/json", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
