@@ -58,7 +58,7 @@ type Expirer struct {
 
 	cursor   *string              // 다 처리한 마지막 장의 nextCursor
 	lastFull time.Time            // 마지막 처음부터 훑기를 시작한 시각(영값 = 아직 — 부팅 회차)
-	retry    map[string]Broadcast // 실패한 방송(ingestStreamId → 마지막으로 받은 줄)
+	retry    map[string]Broadcast // 실패한 방송(방송 식별자 streamId → 마지막으로 받은 줄)
 	fails    int                  // 연속 폴링 실패 수
 	stalled  bool                 // expiry_stalled 게이지
 	invalid  map[string]bool      // cutoff_invalid axis=expiry 게이지(켜진 스트림)
@@ -162,7 +162,7 @@ func (e *Expirer) retryFailed(ctx context.Context) {
 	}
 	for _, b := range batch {
 		if ctx.Err() != nil {
-			e.retry[b.IngestStreamID] = b // 종료 신호 — 집합에 되돌린다
+			e.retry[b.StreamID] = b // 종료 신호 — 집합에 되돌린다
 			continue
 		}
 		e.process(ctx, b)

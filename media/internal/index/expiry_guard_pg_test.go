@@ -172,3 +172,33 @@ func planScanNodes(t *testing.T, raw []byte) []string {
 	walk(doc[0].Plan)
 	return out
 }
+
+// orphanOutboxSeedSessions 는 고아 outbox 삭제 계획 시험이 넣는 세션 행 수다(작은 표는 계획기가 순차 훑기를 고른다).
+const orphanOutboxSeedSessions = 200_000
+
+// db m68 M3 — 만료의 고아 outbox 삭제가 세션 표를 스트림 인덱스로 본다. 닫힌 회차에는 round_id 부분 인덱스
+// (round_closed_at IS NULL)를 쓸 수 없어, 스트림 조건이 없으면 만료 트랜잭션이 잠금을 쥔 채 세션 표 전체를 훑는다.
+func TestExpiryOrphanOutboxDeleteUsesStreamIndex(t *testing.T) {
+	pool := newTestPool(t)
+	ctx := context.Background()
+	if _, err := pool.Exec(ctx, `
+INSERT INTO stream_sessions (session_id, stream_id, started_at, state, ended_at, round_id, round_closed_at)
+SELECT 'ob-' || g, 'exptest-ob-' || (g % 5000), now() - interval '70 days', 'ended', now() - interval '70 days',
+       'ob-' || g, now() - interval '70 days'
+  FROM pg_catalog.generate_series(0, $1::bigint - 1) g`, orphanOutboxSeedSessions); err != nil {
+		t.Fatalf("세션 시드 실패: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `ANALYZE stream_sessions`); err != nil {
+		t.Fatalf("ANALYZE 실패: %v", err)
+	}
+	var plan []byte
+	err := pool.QueryRow(ctx, `EXPLAIN (FORMAT JSON) `+expiryDeleteOutboxSQL,
+		[]string{"ob-gone-1", "ob-gone-2"}).Scan(&plan)
+	if err != nil {
+		t.Fatalf("EXPLAIN 실패: %v", err)
+	}
+	nodes := planScanNodes(t, plan)
+	if !slices.Contains(nodes, "stream_sessions_stream_idx") {
+		t.Fatalf("고아 outbox 삭제가 stream_sessions_stream_idx 를 타지 않는다 — 계획 노드 %v", nodes)
+	}
+}

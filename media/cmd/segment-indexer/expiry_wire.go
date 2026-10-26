@@ -59,7 +59,9 @@ func startExpiry(ctx context.Context, cfg config.Config, pool *pgxpool.Pool, pub
 		log.Info("expiry_disabled", "reason", reason)
 		return off
 	}
-	missing, err := index.MissingExpiryPrivileges(ctx, pool)
+	cctx, cancel := context.WithTimeout(ctx, dbStepTimeout) // 기동 DB 단계 하나 — 답하지 않는 DB 에 기동이 걸리지 않는다
+	missing, err := index.MissingExpiryPrivileges(cctx, pool)
+	cancel()
 	if err != nil {
 		log.Error("expiry_disabled", "reason", "privilege_check", "err", err)
 		return off

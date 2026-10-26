@@ -352,7 +352,7 @@ func TestSweepRowStageCutoffInvalid(t *testing.T) {
 	if alarms := r.log.all("cutoff_invalid"); len(alarms) != 1 {
 		t.Fatalf("cutoff_invalid %v", alarms)
 	}
-	if _, ok := r.e.retry["r"]; !ok {
+	if _, ok := r.e.retry["S-r"]; !ok {
 		t.Fatal("재시도 집합에 없다")
 	}
 }
@@ -411,5 +411,128 @@ func TestRunReturnsOnCancel(t *testing.T) {
 	}
 	if len(r.clip.reqs()) == 0 {
 		t.Fatal("첫 회차가 돌지 않았다")
+	}
+}
+
+// D22 — 같은 물리 키의 두 방송이 같이 실패해도 재시도 집합에 둘 다 남는다(방송 식별자가 키다). 다음 회차에 둘 다 다시
+// 본다 — 하루 한 번 처음부터 훑기까지 기다리지 않는다.
+func TestSweepRetryKeepsEveryBroadcastOfOneIngestKey(t *testing.T) {
+	r := newRig(t, nil)
+	r.ledger.put("k", 1)
+	first, second := item("k"), item("k")
+	first.StreamID, second.StreamID = "S-k-1", "S-k-2"
+	second.SegmentsFrom = ptr(first.SegmentsFrom.Add(-2 * time.Hour))
+	r.objects.fail = func(string) bool { return true }
+	r.clip.pages[""] = clipPage{items: []clipItem{first, second}, next: ptr("c1")}
+	r.clip.pages["c1"] = clipPage{next: ptr("c1")}
+	r.sweep(t)
+	if len(r.e.retry) != 2 {
+		t.Fatalf("재시도 집합 %d 건 (2 기대 — 뒤 방송이 앞 방송을 덮었다)", len(r.e.retry))
+	}
+	r.objects.fail = nil
+	r.now = r.now.Add(10 * time.Minute)
+	r.sweep(t)
+	marks := 0
+	for _, c := range r.ledger.callLog() {
+		if c == "k:mark" {
+			marks++
+		}
+	}
+	if marks != 4 || len(r.e.retry) != 0 {
+		t.Fatalf("표시 %d 회 · 남은 재시도 %d (4 · 0 기대 — 두 방송 모두 다시 본다)", marks, len(r.e.retry))
+	}
+}
+
+// 설계 7절 단계 3 — 문서는 종류마다 따로 지운다(dvr → vod → init). 앞 종류가 하나라도 실패하면 뒤 종류를 지우지
+// 않는다 — 남은 재생 목록이 지워진 init 을 가리키지 않는다(MAP 404).
+func TestSweepDocumentKindsDeleteInOrderAndStopOnFailure(t *testing.T) {
+	docs := []index.ExpiryDocument{
+		{Kind: index.ExpiryDocDVR, SessionID: "x-s", Key: "dvr/x"},
+		{Kind: index.ExpiryDocVOD, SessionID: "x-s", Key: "vod/x"},
+		{Kind: index.ExpiryDocInit, SessionID: "x-s", Key: "init/x"},
+	}
+	for _, tt := range []struct {
+		name, fail string
+		want       []string
+	}{
+		{"모두 성공", "", []string{"dvr/x", "vod/x", "init/x"}},
+		{"dvr 실패", "dvr/x", nil},
+		{"vod 실패", "vod/x", []string{"dvr/x"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			r := newRig(t, nil)
+			r.ledger.docs["x"] = slices.Clone(docs)
+			r.objects.fail = func(k string) bool { return k == tt.fail }
+			r.clip.pages[""] = clipPage{items: []clipItem{item("x")}}
+			r.sweep(t)
+			if got := r.objects.deletedKeys(); !slices.Equal(got, tt.want) {
+				t.Fatalf("지운 키 %v, want %v", got, tt.want)
+			}
+			if tt.fail == "" && !slices.Equal(r.objects.batches, []int{1, 1, 1}) {
+				t.Fatalf("요청 %v (종류마다 한 요청 — [1 1 1] 기대)", r.objects.batches)
+			}
+		})
+	}
+}
+
+// cc r1 — 무효 컷오프는 게이지(cutoff_invalid set · clear)만 ERROR 로 낸다. 재시도 회차마다 expiry_delete_failed
+// stage=cutoff 를 다시 내지 않는다(10분마다 같은 ERROR).
+func TestSweepInvalidCutoffDoesNotRepeatDeleteFailed(t *testing.T) {
+	r := newRig(t, nil)
+	r.ledger.put("bad", 1)
+	r.ledger.invalid["bad"] = true
+	r.clip.pages[""] = clipPage{items: []clipItem{item("bad")}, next: ptr("c1")}
+	r.clip.pages["c1"] = clipPage{next: ptr("c1")}
+	for range 3 {
+		r.sweep(t)
+		r.now = r.now.Add(10 * time.Minute)
+	}
+	if fails := r.log.all("expiry_delete_failed"); len(fails) != 0 {
+		t.Fatalf("expiry_delete_failed %v (0 기대 — 경보는 cutoff_invalid 한 줄)", fails)
+	}
+	if alarms := r.log.all("cutoff_invalid"); len(alarms) != 1 {
+		t.Fatalf("cutoff_invalid %v (1 기대)", alarms)
+	}
+	if _, ok := r.e.retry["S-bad"]; !ok {
+		t.Fatal("재시도 집합에 없다 — 유효해지면 다시 봐야 한다")
+	}
+}
+
+// cc r1 — hasMore 인데 빈 장이거나 표시가 그대로면 창구 응답 이상이다. 그 회차를 status=body 실패로 끝낸다 — 같은
+// 장을 끝없이 다시 부르지 않는다.
+func TestSweepRejectsPageThatCannotAdvance(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		page clipPage
+	}{
+		{"빈 장", clipPage{next: ptr("c1"), more: true}},
+		{"표시 없음", clipPage{items: []clipItem{item("b")}, more: true}},
+		{"표시 정지", clipPage{items: []clipItem{item("b")}, next: ptr("c1"), more: true}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			r := newRig(t, nil)
+			r.clip.pages[""] = clipPage{items: []clipItem{item("a")}, next: ptr("c1"), more: true}
+			r.clip.pages["c1"] = tt.page
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				r.sweep(t)
+			}()
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("회차가 끝나지 않는다 — 같은 장을 다시 부른다")
+			}
+			if n := len(r.clip.reqs()); n != 2 {
+				t.Fatalf("요청 %d (2 기대)", n)
+			}
+			polls := r.log.all("expiry_poll")
+			if len(polls) != 1 || polls[0].attrs["status"] != "body" {
+				t.Fatalf("expiry_poll %v (status=body 한 줄 기대)", polls)
+			}
+			if r.e.cursor == nil || *r.e.cursor != "c1" {
+				t.Fatal("다 처리한 첫 장의 표시가 남아야 한다")
+			}
+		})
 	}
 }

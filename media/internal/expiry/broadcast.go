@@ -36,13 +36,18 @@ func (e *Expirer) process(ctx context.Context, b Broadcast) {
 			"note", "구간 상한이 보존 기간 안이다 — clip 응답을 믿고 지우지 않는다(fail-closed)")
 		return
 	}
-	if stage, err := e.deleteBroadcast(ctx, b); err != nil {
-		e.retry[b.IngestStreamID] = b
-		if ctx.Err() != nil {
-			return // 종료 신호 — 다음 기동의 처음부터 훑기가 다시 한다(D24)
-		}
-		e.log.Error("expiry_delete_failed", "stage", stage, "stream_id", b.IngestStreamID, "broadcast", b.StreamID, "err", err)
+	stage, err := e.deleteBroadcast(ctx, b)
+	if err == nil {
+		return
 	}
+	e.retry[b.StreamID] = b // 방송 식별자가 키다 — 같은 물리 키의 다른 방송을 덮지 않는다(D22)
+	if ctx.Err() != nil {
+		return // 종료 신호 — 다음 기동의 처음부터 훑기가 다시 한다(D24)
+	}
+	if errors.Is(err, errCutoffInvalid) || errors.Is(err, index.ErrCutoffInvalid) {
+		return // 경보는 cutoff_invalid 게이지가 켜질 때 · 꺼질 때 한 줄씩 냈다 — 회차마다 되풀이하지 않는다
+	}
+	e.log.Error("expiry_delete_failed", "stage", stage, "stream_id", b.IngestStreamID, "broadcast", b.StreamID, "err", err)
 }
 
 // errCutoffInvalid 는 1단계에서 멈췄다는 표지다(경보는 이미 냈다).
@@ -72,8 +77,8 @@ func (e *Expirer) deleteBroadcast(ctx context.Context, b Broadcast) (string, err
 	if err != nil {
 		return "documents", err
 	}
-	if failed, err := e.deleteKeys(ctx, documentKeys(docs)); err != nil || len(failed) > 0 {
-		return "documents", failedErr(err, failed)
+	if err := e.deleteDocuments(ctx, docs); err != nil {
+		return "documents", err
 	}
 	seqs, keyErr := e.deleteSegmentKeys(ctx, targets)
 	if ctx.Err() != nil {
@@ -120,12 +125,24 @@ func (e *Expirer) targets(stream string, rows []index.ExpiryRow) []index.ExpiryR
 	return out
 }
 
-func documentKeys(docs []index.ExpiryDocument) []string {
-	keys := make([]string, 0, len(docs))
-	for _, d := range docs {
-		keys = append(keys, d.Key)
+// deleteDocuments 는 문서를 종류마다 따로 지운다(docs 는 지우는 순서 — dvr → vod → init). 한 종류에서 하나라도
+// 실패하면 뒤 종류는 지우지 않는다 — 남은 재생 목록이 지워진 init 을 가리키면 MAP 404 다(설계 7절 단계 3).
+func (e *Expirer) deleteDocuments(ctx context.Context, docs []index.ExpiryDocument) error {
+	for start := 0; start < len(docs); {
+		end := start + 1
+		for end < len(docs) && docs[end].Kind == docs[start].Kind {
+			end++
+		}
+		keys := make([]string, 0, end-start)
+		for _, d := range docs[start:end] {
+			keys = append(keys, d.Key)
+		}
+		if failed, err := e.deleteKeys(ctx, keys); err != nil || len(failed) > 0 {
+			return failedErr(err, failed)
+		}
+		start = end
 	}
-	return keys
+	return nil
 }
 
 // deleteSegmentKeys 는 대상 행의 두 키(s3_key · playback_s3_key)를 지우고, 두 키가 다 지워진 행의 seq 를 돌려준다.

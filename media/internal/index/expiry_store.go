@@ -385,13 +385,15 @@ DELETE FROM stream_cutoffs c
 )
 
 // 빈 세션 정리 — 후속 계승을 끊고(FK) 세션을 지운 뒤, 세션이 하나도 남지 않은 회차의 outbox 행을 지운다(D51).
+// outbox 의 남은 세션 확인은 스트림 조건으로 stream_sessions_stream_idx 를 탄다 — 닫힌 회차에는 round_id 부분
+// 인덱스를 쓸 수 없다(db m68 M3). 회차는 한 스트림 안에만 있다(insertEndedSQL 의 members 조인과 같은 전제).
 const (
 	expiryUnlinkSuccessorsSQL = `UPDATE stream_sessions SET inherits_session = NULL WHERE inherits_session = ANY ($1::text[])`
 	expiryDeleteSessionsSQL   = `DELETE FROM stream_sessions WHERE session_id = ANY ($1::text[]) RETURNING round_id`
 	expiryDeleteOutboxSQL     = `
 DELETE FROM broadcast_lifecycle_outbox o
  WHERE o.round_id = ANY ($1::text[])
-   AND NOT EXISTS (SELECT 1 FROM stream_sessions s WHERE s.round_id = o.round_id)`
+   AND NOT EXISTS (SELECT 1 FROM stream_sessions s WHERE s.stream_id = o.ingest_stream_id AND s.round_id = o.round_id)`
 )
 
 // DeleteExpired 는 5단계다 — 한 트랜잭션(lock_timeout 5초)에서 다음을 한다.
