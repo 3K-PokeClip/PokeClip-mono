@@ -1,6 +1,6 @@
 package publish
 
-// 동결 감사(AuditFrozen · D17 4.1(b))와 G8-E(봉인 경로의 두 writer)의 PG 통합 시험이다(POK-196 M6-2 커밋 ③).
+// 동결 감사(FrozenAuditor · D17 4.1(b))와 G8-E(봉인 경로의 두 writer)의 PG 통합 시험이다(POK-196 M6-2 커밋 ③).
 
 import (
 	"bytes"
@@ -33,7 +33,7 @@ func TestAuditFrozenPassesUntouchedDocument(t *testing.T) {
 	l, store, logs := auditSetup(t)
 	gets := len(store.getKeys())
 
-	out := l.pub.AuditFrozen(t.Context())
+	out := NewFrozenAuditor(l.pub).Audit(t.Context())
 
 	if out.Checked != 1 || out.Failed != 0 || out.Err != nil {
 		t.Errorf("감사 = %+v, want 1건 확인 · 실패 0", out)
@@ -48,21 +48,21 @@ func TestAuditFrozenFallsBackToBodyHash(t *testing.T) {
 	l, store, logs := auditSetup(t)
 	exec(t, l.pub.pool, `UPDATE stream_sessions SET dvr_etag = '"다른-etag"' WHERE session_id = 'S'`)
 
-	out := l.pub.AuditFrozen(t.Context())
+	out := NewFrozenAuditor(l.pub).Audit(t.Context())
 
 	if out.Failed != 0 || len(store.getKeys()) == 0 || len(auditFailures(logs)) != 0 {
 		t.Errorf("감사 = %+v · Get %d번 · ERROR %v, want 본문 대조로 통과", out, len(store.getKeys()), auditFailures(logs))
 	}
 }
 
-// 동결 문서가 바뀌었거나 없으면 ERROR 다(사람 몫 — 자동으로 다시 쓰지 않는다).
+// 동결 문서가 바뀌었거나 없으면 ERROR 다(앞부분 갈래가 아니면 사람 몫 — 자동으로 다시 쓰지 않는다).
 func TestAuditFrozenReportsTamperedOrMissingDocument(t *testing.T) {
 	t.Run("바뀜", func(t *testing.T) {
 		l, store, logs := auditSetup(t)
 		plant(store, putCall{key: soloKey, body: []byte("#EXTM3U\n#바뀐 본문\n")})
 		puts := len(store.putCalls())
 
-		if out := l.pub.AuditFrozen(t.Context()); out.Failed != 1 {
+		if out := NewFrozenAuditor(l.pub).Audit(t.Context()); out.Failed != 1 {
 			t.Errorf("감사 = %+v, want 실패 1", out)
 		}
 		if got := auditFailures(logs); len(got) != 1 || got[0] != "mismatch" || len(store.putCalls()) != puts {
@@ -73,7 +73,7 @@ func TestAuditFrozenReportsTamperedOrMissingDocument(t *testing.T) {
 		l, store, logs := auditSetup(t)
 		remove(store, soloKey)
 
-		l.pub.AuditFrozen(t.Context())
+		NewFrozenAuditor(l.pub).Audit(t.Context())
 
 		if got := auditFailures(logs); len(got) != 1 || got[0] != "missing" {
 			t.Errorf("감사 ERROR %v, want [missing]", got)
@@ -87,7 +87,7 @@ func TestAuditFrozenSkipsOldFreezes(t *testing.T) {
 	exec(t, l.pub.pool, `UPDATE stream_sessions SET dvr_frozen_at = now() - interval '31 minutes' WHERE session_id = 'S'`)
 	heads := len(store.headKeys())
 
-	if out := l.pub.AuditFrozen(t.Context()); out.Checked != 0 || len(store.headKeys()) != heads {
+	if out := NewFrozenAuditor(l.pub).Audit(t.Context()); out.Checked != 0 || len(store.headKeys()) != heads {
 		t.Errorf("감사 = %+v · Head %d번, want 0건", out, len(store.headKeys())-heads)
 	}
 }
@@ -99,7 +99,7 @@ func TestAuditFrozenChecksVODOncePerDocument(t *testing.T) {
 	exec(t, p.pool, `UPDATE stream_sessions SET dvr_frozen_at = now() WHERE session_id IN ('P', 'S')`)
 	plant(store, putCall{key: vodChainKey, body: []byte("#EXTM3U\n#바뀐 본문\n")})
 
-	out := p.AuditFrozen(t.Context())
+	out := NewFrozenAuditor(p).Audit(t.Context())
 
 	if out.Checked != 1 || out.Failed != 1 {
 		t.Errorf("감사 = %+v, want VOD 문서 1건 · 실패 1", out)
