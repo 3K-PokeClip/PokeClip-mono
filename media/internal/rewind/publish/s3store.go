@@ -16,9 +16,13 @@ import (
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/rewind"
 )
 
-// 되감기 목록 객체의 머리다(M5 설계 4.5 표). Store 에 쓰는 객체는 목록 하나뿐이라 구현이 상수로 고정한다 —
-// 호출자가 넘길 값이 아니다. Cache-Control 은 엣지 · 브라우저가 목록을 1초만 들고 있게 한다(매 조각마다 판이
-// 바뀐다). 이 머리가 없으면 S3 가 application/octet-stream 을 돌려주고 캐시 지시가 없다.
+// Store 가 쓰는 객체의 머리다 — 되감기 목록(/dvr · M5 설계 4.5 표)과 VOD 문서(/vod · M6 FreezeVOD) 둘이 같은 값을
+// 받는다. 구현이 상수로 고정한다 — 호출자가 넘길 값이 아니다. 이 머리가 없으면 S3 가 application/octet-stream 을
+// 돌려주고 캐시 지시가 없다.
+//
+// Cache-Control 1초는 되감기 목록의 값이다 — 매 조각마다 판이 바뀌어 엣지 · 브라우저가 1초만 들고 있게 한다. VOD 문서는
+// 한 번 쓰고 바뀌지 않아 더 길게 둘 수 있지만 그 값은 설계가 정하지 않았다(계획 4.11 착수 체크리스트 — 회부 중). 정할
+// 때까지 VOD 도 1초를 받는다(엣지 요청이 늘 뿐 틀린 판을 내지는 않는다).
 const (
 	manifestContentType  = "application/vnd.apple.mpegurl"
 	manifestCacheControl = "public, max-age=1"

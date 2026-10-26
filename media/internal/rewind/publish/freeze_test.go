@@ -1,9 +1,11 @@
 package publish
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/rewind"
 )
 
 // ledgerRow 는 픽스처 행 fxRow 의 장부 값이다(session "" 면 비귀속 — 회차 · PDT · ③ 키가 NULL).
@@ -42,5 +44,30 @@ func TestLedgerPlaylistNeverGoesBelowPrevMSN(t *testing.T) {
 
 	if !ok || len(pl.Rows) == 0 || pl.Rows[0].Seq != 11 || pl.Rows[len(pl.Rows)-1].Seq != 20 {
 		t.Fatalf("목록 = %v(ok %t), want seq 11..20", seqsOf(pl.Rows), ok)
+	}
+}
+
+// VOD 본문이 상한을 넘으면 사유는 too_large 다(설계 3.1 크기 — 한계 표 행). 다른 검사 위반은 validate 다.
+func TestVODValidateReason(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want string
+	}{
+		{fmt.Errorf("감쌈: %w", rewind.ErrBodyTooLarge), vodTooLarge},
+		{rewind.ErrHaltPublication, freezeValidate},
+	} {
+		if got := vodValidateReason(tc.err); got != tc.want {
+			t.Errorf("vodValidateReason(%v) = %q, want %q", tc.err, got, tc.want)
+		}
+	}
+}
+
+// VOD 키는 vod/{stream}/{머리 세션}/index.m3u8 이고 성분 검사는 목록 키와 같다(K1).
+func TestVODKey(t *testing.T) {
+	if got, err := vodKey("str", "S-1"); err != nil || got != "vod/str/S-1/index.m3u8" {
+		t.Errorf("vodKey = %q · %v", got, err)
+	}
+	if _, err := vodKey("str", ".."); err == nil {
+		t.Error("vodKey(..) 가 통과했다")
 	}
 }
