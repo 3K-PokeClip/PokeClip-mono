@@ -199,7 +199,7 @@ for pool in indexer publisher; do
     '"msg":"pg_pool_conn_discarded"' "\"pool\":\"${pool}\"" '"value":0' \
     '"reason":"startup"')" 1
 done
-judge SCHEMA_NOT_READY "$(count "${sidecar_log}" 'schema_not_ready')" 0
+judge SCHEMA_NOT_READY "$(count "${sidecar_log}" '"msg":"schema_not_ready')" 0
 case ",$1," in
   *,janitor,*)
     judge LOG_JANITOR "$(log_of janitor)" 'journald pokeclip-media-janitor'
@@ -230,7 +230,7 @@ SH
 | `SERVICES` | 인자와 같음 | 떠 있는 컨테이너 집합 |
 | `SIDECAR_DB` | 1 이상 | 사이드카 DB 연결 — IAM · `verify-full` · 실제 TLS(`media/README.md` 「DB 연결 성공 줄」) |
 | `SIDECAR_POOL_indexer` · `_publisher` | 1 이상 | 풀마다 관측 시작 줄(`pg_pool_conn_discarded` · value 0 · `reason=startup`) |
-| `SCHEMA_NOT_READY` | 0 | 사이드카가 기동 스키마 확인에서 멈추지 않음 — 하한 이상 이미지가 M6 운영 SQL 없는 DB 에 붙으면 이 줄을 남기고 끝난다(아래 「M6 운영 SQL 경계 · 롤백 하한」). M6-0 앞 이미지는 이 줄을 내지 않아 늘 0 |
+| `SCHEMA_NOT_READY` | 0 | 사이드카가 기동 스키마 확인에서 멈추지 않음 — 하한 이상 이미지가 M6 운영 SQL 없는 DB 에 붙으면 `"msg":"schema_not_ready` 로 시작하는 줄을 남기고 끝난다(아래 「M6 운영 SQL 경계 · 롤백 하한」). M6-0 앞 이미지는 이 줄을 내지 않아 늘 0 |
 | `JANITOR_DB` · `JANITOR_STARTED` · `JANITOR_POOL` | 1 이상 | janitor 를 켰을 때만 — DB 연결(pool=janitor) · 기동 · 풀 관측 시작 |
 
 *   사이드카 · janitor 의 줄은 JSON 한 줄이라 메시지와 필드를 함께 봅니다
@@ -242,6 +242,12 @@ SH
 *   `SIDECAR_DB` 가 1 이상이어도 스키마가 없을 수 있습니다 — 스키마 확인은
     DB 에 붙은 뒤에 하므로 연결 줄이 먼저 남습니다. 그래서 `SCHEMA_NOT_READY`
     를 따로 셉니다. 0 이 아니면 그 상자를 서비스에 넣지 않습니다.
+*   `SCHEMA_NOT_READY` 가 세는 줄은 설계 M6 의 ERROR
+    `schema_not_ready missing=…`(종료 코드 1)입니다. JSON 의 메시지가
+    `"msg":"schema_not_ready` 로 시작하는 줄을 셉니다 — 빠진 객체 목록이
+    메시지에 붙든 필드로 따로 나오든 셉니다. M6-0 c3 시험이 이 문자열을
+    고정합니다(두 PR 사이 계약). 문자열이 다르면 이 줄은 늘 0 이라 거짓
+    통과가 됩니다.
 *   `SIDECAR_DB` 가 1 이상이라는 것이 태그 저널이 살아 있다는 증거입니다.
     그래서 아래 관찰의 「종료 줄 0」 을 그대로 믿을 수 있습니다.
 *   `MAINPID` · `WATCH FROM` 은 관찰 판정의 인자입니다.
@@ -340,11 +346,19 @@ SH
     스토리 티켓 코멘트에 있습니다([CONTRACT-runtime.md](/infra/terraform/CONTRACT-runtime.md)
     「DB 접속」). janitor 를 켜므로(기본) RDS PostgreSQL 17 이상과
     `media_janitor` 권한도 확인합니다(media-host README 「후속」 janitor 행).
-1.  **M6 경계**: tfvars 의 사이드카 다이제스트가 하한 이상 이미지면 런타임
-    1단-가 런북 「M6 스키마 재실행」 의 통과 기록(M6-0 머지 SHA ·
-    `VERIFY OK`)이 있습니다. 하한 아래 이미지면 M6 운영 SQL 이 아직 적용되지
-    않은 DB 입니다 — 뒤에 SQL 을 적용할 때 「한 창 절차」 가 필요합니다.
-    판정은 아래 「M6 운영 SQL 경계 · 롤백 하한」 입니다.
+1.  **M6 경계**: DB 에 M6 운영 SQL 이 들어갔는지는 이미지로 미루어 짐작하지
+    않고, 런타임 1단-가 런북 「M6 스키마 재실행」 의 통과 기록(M6-0 머지
+    SHA · `VERIFY OK` · Jira POK-196 코멘트)으로 가립니다. 기본 순서는
+    M6-0 · M6-6a 머지 → 재실행 → 사이드카 재푸시 · 기록 갱신 → tfvars
+    다이제스트 교체 → O7e 입니다(그 런북 「M6 스키마 재실행 순서」). 하한
+    이상 · 아래 판정은 아래 「M6 운영 SQL 경계 · 롤백 하한」 의 명령입니다.
+
+    | M6-0 | 재실행 통과 기록 | tfvars 사이드카 | 갈래 |
+    |---|---|---|---|
+    | 머지됨 | 있음 | 하한 이상 | 진행 |
+    | 머지됨 | 있음 | 하한 아래 | 멈춤 — 재푸시 · tfvars 교체(순서 3 · 4)부터 합니다. 트리거 있는 DB 에 하한 아래 이미지를 띄우지 않습니다 |
+    | 머지됨 | 없음 | 무엇이든 | 멈춤 — 재실행(순서 2)부터 합니다 |
+    | 머지 전 | — | 하한 아래 | 진행 — 뒤에 M6 운영 SQL 을 적용할 때 「한 창 절차」 를 씁니다(예약) |
 
 ### O7e 1 — media apply
 
@@ -556,7 +570,8 @@ media_ids | jq -r '.b'
 하루 관찰한 뒤 `instances` 에서 A 를 뺍니다. plan 범위 = A 인스턴스 삭제 한
 줄 → apply(승인). 그 전에는 A 를 「부분 실패 복구」 의 되돌릴 곳으로 둡니다.
 예외: 「한 창 절차」 를 도는 중이면 A 는 하한 아래 이미지라, 그 절의 「A 를
-다시 띄울 때」 조건을 지킨 뒤에만 A 로 되돌립니다.
+다시 띄울 때」 조건을 지킨 뒤에만 A 로 되돌립니다. 그때 A 회수는 「한 창
+절차 7′ — A 정지」 끝의 회수 조건(업로드 적체 0)을 만족할 때만 합니다.
 A 로 되돌릴 때 A 가 옛 모드면 위 「언제 쓰나」 의 옛 모드 단서(README
 「되돌리기 순서」 1 먼저 · 되돌린 뒤 3 확인)를 따릅니다.
 
@@ -730,8 +745,13 @@ git merge-base --is-ancestor <M6-0 머지 커밋 SHA> <이미지의 빌드 커�
     다이제스트로 바꿉니다. 위 판정이 「하한 아래」 면 그 다이제스트로 되돌리지
     않습니다.
 *   **트리거를 지워 옛 이미지를 살리는 길은 두지 않습니다.** 그 길이 seq 재사용을
-    엽니다(인덱스 불변식 4). 운영 SQL 도 되돌리지 않습니다 — 고치는 쪽은 늘
-    이미지입니다(fix-forward).
+    엽니다(인덱스 불변식 4). 하지 않는 것은 셋입니다 — 트리거 DROP ·
+    DISABLE, 하한 행(`stream_seq_floors`) DELETE · 값 낮춤, 하한 아래
+    이미지로 되돌림. 고치는 길은 앞으로만 갑니다(fix-forward). 이미지
+    결함이면 새 하한 이상 이미지로 설정 반영 교체를 하고, 운영 SQL 결함이면
+    고친 문장을 더하는 전진 SQL PR 을 머지한 뒤 런타임 1단-가 런북 「M6
+    스키마 재실행」 을 그 머지 SHA 로 다시 돕니다. 그 런북의 「되돌리기 ·
+    해체」 SQL 은 이 용도로 쓰지 않습니다(해체 전용).
 *   기능만 끄고 싶으면 이미지가 아니라 스위치로 끕니다. prod 의 되감기 제어면
     스위치는 `prod/media` tfvars 의 `control_upstream` 이고(비우면 nginx 가
     제어면 경로를 404 로 답함) 설정 반영 교체로 들어갑니다. 사이드카 env
@@ -744,7 +764,7 @@ git merge-base --is-ancestor <M6-0 머지 커밋 SHA> <이미지의 빌드 커�
     질의입니다. 나온 스트림이 색인이 멈췄거나 멈출 스트림입니다.
 1.  하한 이상 이미지로 「설정 반영 교체」 를 합니다. 새 사이드카의
     `LoadCursor` 가 하한부터 이어 갑니다.
-1.  SQL · 트리거는 그대로 둡니다.
+1.  SQL · 트리거 · 하한 행은 그대로 둡니다(위의 하지 않는 것 셋).
 
 ## 한 창 절차
 
@@ -768,9 +788,9 @@ kty 가 승인합니다.
 | 4 | **교체 직전 단언** — 3 과 같은 실행기 흐름에서 하한 질의(「M6 읽기 질의」) | `(0 rows)` — 창 동안 꼬리 삭제가 없었음 |
 | 5 | 「설정 반영 교체」 → 「정상 교체」 1–7. B 기동 판정 인자는 그 구성의 서비스 집합 | 정상 교체 각 걸음의 통과 · B 의 `SCHEMA_NOT_READY 0` · `SIDECAR_DB` 1 이상 · `MEDIA WATCH OK` |
 | 6 | (규칙) 창 동안 A 를 다시 띄우거나 7′ 뒤 A 로 되돌려야 하면 아래 「한 창 절차 — A 를 다시 띄울 때」 | — |
-| 7 | **창 닫기 조건** — B 판정 둘(5 의 기동 판정 · 관찰 판정)과 정상 교체 7 의 일관성이 모두 통과. 그러면 곧바로 7′ 로 갑니다. 정상 교체 8(A 회수)은 이 창과 별개로 런북 일정(하루 관찰 뒤)대로 합니다 | 둘 다 통과 |
-| 7′ | A 정지 — 아래 「한 창 절차 7′ — A 정지」. 정지를 확인하면 창을 닫고 3번에게 탈퇴 정리 재개를 알립니다 | `UNIT inactive` |
-| 8 | (규칙) 어느 걸음이 실패해도 SQL 은 되돌리지 않습니다 — 트리거를 지우지 않고 B 를 고쳐 전진합니다 | — |
+| 7 | **창 닫기 조건** — B 판정 둘(5 의 기동 판정 · 관찰 판정)과 정상 교체 7 의 일관성이 모두 통과. 그러면 곧바로 7′ 로 갑니다. 정상 교체 8(A 회수)은 이 창과 별개로 런북 일정(하루 관찰 뒤)대로 하되, 아래 7′ 의 업로드 적체 0 을 회수 조건으로 겁니다 | 셋 다 통과 |
+| 7′ | A 정지 — 아래 「한 창 절차 7′ — A 정지」. 정지를 확인하면 창을 닫고 3번에게 탈퇴 정리 재개를 알립니다 | `MEDIA STOPPED OK` |
+| 8 | (규칙) 어느 걸음이 실패해도 위 「M6 운영 SQL 경계 · 롤백 하한」 의 하지 않는 것 셋(트리거 DROP · DISABLE · 하한 행 DELETE · 낮춤 · 하한 아래 이미지)은 하지 않습니다. B 를 새 이미지로 고치거나, 전진 SQL PR + 「M6 스키마 재실행」 으로 앞으로 갑니다 | — |
 
 *   `docker inspect` · `/run/pokeclip-media` 내용은 SSM 출력에 내지 않습니다
     (이 런북 머리의 운영 규칙). 아래 판정 스크립트도 판정 줄만 냅니다.
@@ -788,22 +808,28 @@ kty 가 승인합니다.
 질의를 봅니다.
 
 *   세 행 모두 `pending` 0 · `failed` 0 이면 통과입니다. 방송이 없는 창이고
-    정상 교체 4 에서 A 의 방송 경로가 0 이었으므로, DB 전체의 대기 수가 0 이면
-    A 몫도 0 입니다.
+    정상 교체 4 에서 A 의 방송 경로가 0 이었으므로(정지 직전에 아래에서 다시
+    확인), DB 전체의 대기 수가 0 이면 A 몫도 0 입니다.
 *   0 이 아니면(B 에서 방송이 시작됨 · 실패 행이 남음) 기다렸다 다시 잽니다.
     창 시간 안에 0 이 되지 않으면 7′ 를 미루고 아래 「7′ 를 못 하면」 으로
     갑니다.
 
 **정지.** A 의 사이드카를 멈추는 수단은 **A 유닛 정지**입니다(실행 직전 승인).
-「force」 3 과 같은 명령입니다.
+「force」 3 과 같은 명령입니다. 정지 명령 직전에 정상 교체 4 의 `paths.sh` 를
+A 에 다시 돌려 `PATHS 0` 인지 봅니다. 0 이 아니거나 `PATHS FAIL` 이면 정지하지
+않고 kty 에게 보고합니다 — 정상 교체 7 뒤라 A 에 방송 경로가 있으면 예상
+밖입니다.
 
 ```shell
+media_ssm <A> "${work}/paths.sh"   # PATHS 0 일 때만 아래로
 printf 'systemctl stop pokeclip-media\n' > "${work}/stop.sh"
 media_ssm <A> "${work}/stop.sh"
 cat > "${work}/stopped-check.sh" <<'SH'
 state="$(systemctl show -P ActiveState pokeclip-media)" || state=unknown
-running="$(docker ps -q --filter label=com.docker.compose.project=pokeclip-media \
-  | wc -l | tr -d ' ')"
+# 조회가 실패하면 컨테이너 0 으로 세지 않고 판정을 실패시킨다.
+ids="$(docker ps -q --filter label=com.docker.compose.project=pokeclip-media)" \
+  || { echo "MEDIA STOPPED CHECK FAIL docker"; exit 2; }
+running="$(printf '%s\n' "${ids}" | awk 'NF { n++ } END { print n + 0 }')"
 echo "UNIT ${state}"
 echo "RUNNING ${running}"
 if [ "${state}" = inactive ] && [ "${running}" = 0 ]; then
@@ -816,18 +842,30 @@ media_ssm <A> "${work}/stopped-check.sh"
 ```
 
 *   통과 = `MEDIA STOPPED OK`(유닛 `inactive` · 프로젝트 컨테이너 0).
-*   사이드카 컨테이너만 멈추지 않는 이유: A 의 mediamtx · nginx 가 끝나면
-    유닛(`Restart=always`)이 compose 전체를 `--force-recreate` 로 다시 띄워
-    사이드카가 되살아납니다(`start-media.sh` 머리 8). 유닛 정지는 ExecStop 이
-    compose 를 내리고, `Restart=always` 여도 정지를 유지합니다(유닛 머리
-    주석). 정상 교체 7 뒤라 A 는 어느 대상 그룹에도 등록돼 있지 않습니다.
+    `MEDIA STOPPED CHECK FAIL docker`(종료 2)는 컨테이너 조회 실패라 0 이
+    아닙니다 — 창을 닫지 않고 다시 봅니다.
+*   유닛으로 멈추는 근거는 media-host README 운영 규칙 ①(재기동 · 정지는 이
+    유닛으로만 — 「시작 · 정지」)입니다. 사이드카 컨테이너만 멈추면 A 의
+    mediamtx · nginx 가 끝날 때 유닛(`Restart=always`)이 compose 전체를
+    `--force-recreate` 로 다시 띄워 사이드카가 되살아납니다(`start-media.sh`
+    머리 8). 유닛 정지는 ExecStop 이 compose 를 내리고, `Restart=always`
+    여도 정지를 유지합니다(유닛 머리 주석). 정상 교체 7 뒤라 A 는 어느 대상
+    그룹에도 등록돼 있지 않습니다.
 *   유닛은 enable 돼 있어 **A 가 재부팅되면 다시 뜹니다.** 8(A 회수) 전에 A 가
     다시 떴으면(유지보수 재부팅 등) 곧바로 이 정지를 다시 하고 하한 질의를
     봅니다.
 
 **7′ 를 못 하면**(적체가 빠지지 않음 · 정지 명령이 승인되지 않음 등) 창은
 정상 교체 8(하루 관찰 뒤 A 회수)까지 이어지고, 탈퇴 정리 정지가 24시간을
-넘습니다. 3번에게 그 연장을 알리고, 8 직전에 하한 질의를 한 번 더 봅니다.
+넘습니다. 3번에게 그 연장을 알립니다. 탈퇴 정리 정지의 상한(며칠까지
+늘릴 수 있는지)은 kty 결정 대기입니다.
+
+**정상 교체 8 의 회수 조건.** 「한 창 절차」 를 돈 A 는 8 직전에 하한 질의와
+업로드 적체 질의를 함께 봅니다. 적체가 세 축 모두 `pending` 0 · `failed` 0
+이 아니면 **회수를 보류합니다** — A 디스크에만 있는 미업로드 조각을 지우면
+어디서도 서빙할 수 없습니다(인덱스 불변식 2 — 미업로드 삭제 금지). 0 이면
+아직 A 가 떠 있을 때 위 정지(7′)부터 하고 `MEDIA STOPPED OK` 를 본 뒤 회수
+합니다.
 
 ### 한 창 절차 — A 를 다시 띄울 때
 
@@ -866,7 +904,7 @@ O7e 5 를 통과한 뒤 잽니다. 값은 후속 PR 에서 모듈 · 템플릿�
     ID · 사설 IP · 인스턴스 id 가 들어 있어 저장소 · 볼트에 그대로 올리지
     않습니다.
 *   볼트로 옮기는 것은 kty 가 「저장해」 할 때만이고, 가린 요약만 옮깁니다
-    (비밀 값 훑기 · 계정 ID · ARN · IP · 인스턴스 id 가림).
+    (비밀 값 훑기 · 계정 ID · ARN · RDS 끝점 · IP · 인스턴스 id 가림).
 
 ```shell
 umask 077
