@@ -35,6 +35,7 @@ type expSessionRow struct {
 	dvrKey     string // 빈 값 = NULL
 	vodKey     string // 빈 값 = NULL
 	initKey    string // 빈 값 = NULL
+	at         int    // started_at = expBase + at 분 — 사슬 간선은 자식이 나중이어야 잇는다(chainEdgeSQL)
 }
 
 func expNullable(s string) any {
@@ -58,7 +59,7 @@ func expPutSession(t *testing.T, pool *pgxpool.Pool, s expSessionRow) {
 INSERT INTO stream_sessions (session_id, stream_id, started_at, state, ended_at, inherits_session, round_id,
                              dvr_s3_key, vod_s3_key, init_s3_key)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-		s.id, s.stream, expBase, state, endedAt, expNullable(s.inherits), expNullable(s.round),
+		s.id, s.stream, expBase.Add(time.Duration(s.at)*time.Minute), state, endedAt, expNullable(s.inherits), expNullable(s.round),
 		expNullable(s.dvrKey), expNullable(s.vodKey), expNullable(s.initKey))
 	if err != nil {
 		t.Fatalf("세션 픽스처 삽입 실패 %s: %v", s.id, err)
@@ -229,8 +230,8 @@ func TestExpiryDocumentsOrderAndSelection(t *testing.T) {
 	ctx := context.Background()
 	stream := "exptest-docs"
 	expPutSession(t, pool, expSessionRow{id: "dc-a", stream: stream, dvrKey: "dvr/a", initKey: "init/a"})
-	expPutSession(t, pool, expSessionRow{id: "dc-b", stream: stream, inherits: "dc-a", dvrKey: "dvr/b", initKey: "init/b"})
-	expPutSession(t, pool, expSessionRow{id: "dc-c", stream: stream, inherits: "dc-b", vodKey: "vod/c", dvrKey: "dvr/c"})
+	expPutSession(t, pool, expSessionRow{id: "dc-b", stream: stream, inherits: "dc-a", dvrKey: "dvr/b", initKey: "init/b", at: 1})
+	expPutSession(t, pool, expSessionRow{id: "dc-c", stream: stream, inherits: "dc-b", vodKey: "vod/c", dvrKey: "dvr/c", at: 2})
 	expPutSession(t, pool, expSessionRow{id: "dc-live", stream: stream, state: "live", dvrKey: "dvr/live", initKey: "init/live"})
 	expPutSession(t, pool, expSessionRow{id: "dc-other", stream: stream, vodKey: "vod/other"})
 	expPutSeg(t, pool,

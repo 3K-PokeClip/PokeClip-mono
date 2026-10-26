@@ -29,7 +29,7 @@ type Options struct {
 	FullScanEvery  time.Duration // 표시 없이 처음부터 훑는 주기(하루 — 부팅 회차도 처음부터)
 	RequestTimeout time.Duration // 창구 요청 시한(10초)
 	BodyLimit      int64         // 창구 응답 본문 상한(1MiB)
-	RunCap         int           // 한 회차에 처리하는 방송 수 상한(2000)
+	RunCap         int           // 한 회차에 처리하는 새 방송 수 상한(2000) — 재시도도 따로 같은 상한
 
 	// Now 는 시계다(시험 주입). nil 이면 time.Now.
 	Now func() time.Time
@@ -111,14 +111,17 @@ func (e *Expirer) Run(ctx context.Context) error {
 	}
 }
 
-// sweep 은 한 회차다 — 재시도 집합을 먼저 비우고, 표시에서 이어(또는 처음부터) 장을 받아 처리한다.
+// sweep 은 한 회차다 — 재시도 집합을 먼저 다시 보고, 표시에서 이어(또는 처음부터) 장을 받아 처리한다. 처음부터
+// 훑는 회차는 재시도 집합을 비운다.
 func (e *Expirer) sweep(ctx context.Context) {
 	now := e.now()
 	if e.lastFull.IsZero() || now.Sub(e.lastFull) >= e.opt.FullScanEvery {
 		e.cursor, e.lastFull = nil, now
+		clear(e.retry) // 처음부터 훑기가 그 방송을 다시 받는다 — 영구 실패가 하루를 넘겨 쌓이지 않는다
 		e.log.Info("expiry_full_scan", "note", "표시 없이 처음부터 훑는다(부팅 · 하루 한 번)")
 	}
-	done := e.retryFailed(ctx)
+	e.retryFailed(ctx)
+	done := 0
 	cursor := e.cursor
 	for done < e.opt.RunCap && ctx.Err() == nil {
 		page, err := e.clip.list(ctx, now, cursor)
@@ -145,18 +148,25 @@ func (e *Expirer) sweep(ctx context.Context) {
 	}
 }
 
-// retryFailed 는 재시도 집합의 방송을 다시 처리하고 처리한 수를 돌려준다.
-func (e *Expirer) retryFailed(ctx context.Context) int {
-	n := 0
+// retryFailed 는 재시도 집합의 방송을 RunCap 개까지 꺼내 다시 처리한다. 처리 수는 새 방송의 RunCap 에 세지 않는다
+// — 영구 실패가 쌓여도 새 방송은 매 회차 진행된다(D22). 꺼내지 않은 재시도는 다음 회차에 본다. 먼저 꺼내 두므로
+// 이번에 다시 실패해 들어간 방송을 같은 회차에 또 보지 않는다.
+func (e *Expirer) retryFailed(ctx context.Context) {
+	batch := make([]Broadcast, 0, min(len(e.retry), e.opt.RunCap))
 	for key, b := range e.retry {
-		if ctx.Err() != nil {
-			return n
+		if len(batch) == e.opt.RunCap {
+			break
 		}
+		batch = append(batch, b)
 		delete(e.retry, key)
-		e.process(ctx, b)
-		n++
 	}
-	return n
+	for _, b := range batch {
+		if ctx.Err() != nil {
+			e.retry[b.IngestStreamID] = b // 종료 신호 — 집합에 되돌린다
+			continue
+		}
+		e.process(ctx, b)
+	}
 }
 
 // pollFailed 는 창구 요청 실패다 — ERROR 한 줄 · 연속 실패가 stalledAfter 에 닿으면 게이지를 켠다. 종료 신호로
