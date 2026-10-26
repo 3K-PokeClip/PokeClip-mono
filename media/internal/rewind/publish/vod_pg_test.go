@@ -195,22 +195,44 @@ func TestFreezeVODWaitsForSettlementUnlessAbandoned(t *testing.T) {
 	})
 }
 
-// DVR 의 GAP 원장 행 가운데 지금도 미착지인 것은 VOD 가 버린 조각이라 vod_abandoned 로 바꾼다(설계 3.1 phase 3). 착지한
-// GAP 행은 그대로다. GAP 원장 우선이라 둘 다 VOD 에서도 GAP 줄이다.
-func TestFreezeVODAbandonsUnlandedDVRGaps(t *testing.T) {
+// DVR 의 GAP 원장 행이 있어도 ③ 이 미착지인 행은 정산 전이다(설계 3.1 phase 2 「③ 미착지 0 ∨ 정산 창 만료」). 정산 창
+// 안이면 재시도다 — 원장도 VOD 도 건드리지 않아, 창 안에 ③ 이 닿으면 그 조각이 VOD 에 실린다. 포기(창 만료)면 지금도
+// 미착지인 GAP 원장 행만 vod_abandoned 로 바꾼다(VOD 가 버린 조각). 착지한 GAP 행은 그대로다. GAP 원장 우선이라 둘 다
+// VOD 에서도 GAP 줄이다.
+func TestFreezeVODUnlandedDVRGapsWaitUnlessAbandoned(t *testing.T) {
 	rows := chainRows()
 	rows[6].state = "pending"
-	p, store, chain := newVODChain(t, rows)
-	insertGap(t, p.pool, fxStream, 6, "put_confirmed")
-	insertGap(t, p.pool, fxStream, 8, "recorded") // 8 은 착지했다
-
-	wantOutcome(t, p.FreezeVOD(t.Context(), chain, false), AxisVOD, ResultFrozenWithGaps, false)
-
-	wantGapLedger(t, p, map[int64]string{6: "S/upload_stall/vod_abandoned", 8: "S/upload_stall/recorded"})
-	body, _ := stored(store, vodChainKey)
-	if lines := vodLines(body); !strings.HasPrefix(lines[6], "#EXT-X-GAP ") || !strings.HasPrefix(lines[8], "#EXT-X-GAP ") {
-		t.Errorf("seq 6 · 8 줄 = %q · %q, want 둘 다 GAP", lines[6], lines[8])
+	setup := func(t *testing.T) (*Publisher, *fakeStore, index.Chain) {
+		p, store, chain := newVODChain(t, rows)
+		insertGap(t, p.pool, fxStream, 6, "put_confirmed")
+		insertGap(t, p.pool, fxStream, 8, "recorded") // 8 은 착지했다
+		return p, store, chain
 	}
+	t.Run("정산_중", func(t *testing.T) {
+		p, store, chain := setup(t)
+
+		out := p.FreezeVOD(t.Context(), chain, false)
+
+		wantOutcome(t, out, AxisVOD, ResultRetry, true)
+		if out.Reason != "unsettled" || len(store.putCalls()) != 0 {
+			t.Errorf("사유 %q · PUT %d번, want unsettled · 0", out.Reason, len(store.putCalls()))
+		}
+		wantGapLedger(t, p, map[int64]string{6: "S/upload_stall/put_confirmed", 8: "S/upload_stall/recorded"})
+		if v := readVOD(t, p, "S"); v.state != "freezing" {
+			t.Errorf("회차 S VOD 상태 %q, want freezing", v.state)
+		}
+	})
+	t.Run("포기", func(t *testing.T) {
+		p, store, chain := setup(t)
+
+		wantOutcome(t, p.FreezeVOD(t.Context(), chain, true), AxisVOD, ResultFrozenWithGaps, false)
+
+		wantGapLedger(t, p, map[int64]string{6: "S/upload_stall/vod_abandoned", 8: "S/upload_stall/recorded"})
+		body, _ := stored(store, vodChainKey)
+		if lines := vodLines(body); !strings.HasPrefix(lines[6], "#EXT-X-GAP ") || !strings.HasPrefix(lines[8], "#EXT-X-GAP ") {
+			t.Errorf("seq 6 · 8 줄 = %q · %q, want 둘 다 GAP", lines[6], lines[8])
+		}
+	})
 }
 
 // 사슬 세션에 행이 없으면 문서 없이 빈 동결이다.
