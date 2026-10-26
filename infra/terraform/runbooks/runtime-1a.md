@@ -759,8 +759,8 @@ AccessDenied(접근 거부 · SCP 거부)가 나면 다시 시도하지 않고 �
     `--accept` 하고 다시 판정해 종료 0 을 봅니다. 주석만 바뀐 묶음은
     CHANGED 가 아닐 수 있습니다.
 *   2-3 판정: 새 일 큐 · DLQ 여섯은 이 단계가 첫 단계라 「자원 없음」 을
-    정책 없이 판정합니다. clips · 프로필 사진 버킷과 그 객체 행은 O7d
-    부터라 묻지 않습니다. 종료 3 이면 kty 가 `approvals.tsv` 에 「진행」 을
+    정책 없이 판정합니다. clips · 프로필 사진 · 채팅 원본 버킷과 그 객체
+    행은 O7d 부터라 묻지 않습니다. 종료 3 이면 kty 가 `approvals.tsv` 에 「진행」 을
     적어야 다음으로 갑니다.
 *   진행 조건은 1 의 마지막 항목과 같습니다.
 
@@ -801,6 +801,13 @@ AccessDenied(접근 거부 · SCP 거부)가 나면 다시 시도하지 않고 �
         `Condition` 없음은 그대로입니다(「2. 본 apply」 의 주제 정책 항목과
         같은 꼴). 1단-가와 함께면 처음부터 읽기 하나 정책으로 생겨 수가
         그대로입니다.
+    *   채팅 원본 버킷(POK-306)이 들어간 판으로 1단-다를 **처음** 적용하면
+        (새 환경 · 되돌린 뒤 다시 적용) 위의 모든 add 수에 `5` 를 더합니다
+        — `26` · `27` · `55` · `56 to add`. 더해지는 다섯은 아래
+        「POK-306 runtime apply 2」 의 주소 다섯과 같습니다. 출력에는 새
+        출력 둘과 chat-collector 의 키 넷이 함께 나옵니다(같은 절). 1단-다를
+        이미 적용한 환경(지금 prod)은 이 절이 아니라 「POK-306 runtime
+        apply」 를 따릅니다.
     *   바뀐 출력이 `app_env` · `app_secret_arns` ·
         `app_task_resource_arns` 입니다. `app_env.auth` 에
         `STREAM_KEY_SECRET_REF_PREFIX` 가 없습니다(platform 이 넣음).
@@ -859,9 +866,11 @@ done
 *   채팅 원본 버킷: 공개 차단 넷이 `True` 이고
     `expire-chat-after-60-days Enabled 60` 과
     `abort-incomplete-multipart-upload Enabled … 7` 입니다. 만료는 `chat/`
-    접두만 대상이라 아래 명령이 `chat/` 한 줄을 냅니다. 이 버킷은 1단-다가
-    아니라 그 뒤 POK-306 의 runtime apply 가 만듭니다 — 그 전에 돌리면 이
-    버킷 줄만 `NoSuchBucket` 오류이고 나머지 줄은 그대로 봅니다.
+    접두만 대상이라 아래 명령이 `chat/` 한 줄을 냅니다. 이 버킷은
+    POK-306(PR-1) 머지본으로 1단-다를 처음 적용하면 이 apply 에서 함께
+    생기고, 1단-다를 이미 적용한 환경이면 「POK-306 runtime apply」 가
+    만듭니다. 그 apply 전의 판으로 돌리면 이 버킷 줄만 `NoSuchBucket`
+    오류이고 나머지 줄은 그대로 봅니다.
 
     ```shell
     aws s3api get-bucket-lifecycle-configuration \
@@ -1836,6 +1845,84 @@ auth 롤링 동안 옛 태스크 · 새 태스크가 섞여, 어느 토큰이든
 *   **prod/media apply 뒤**: 정책을 되돌리면 응답기가 다음 기동에서 그릇을
     못 읽어 기동이 막힙니다(fail-closed). 되돌리기는 응답기 렌더 → media
     정책 → runtime 출력 한 방향으로만 합니다.
+
+## POK-306 runtime apply — 채팅 원본 버킷 · chat-collector 값
+
+1단-다를 이미 적용한 환경(지금 prod)에서 POK-306 의 런타임 몫(PR-1)을
+적용하는 절차입니다. 채팅 원본 버킷 하나(자원 다섯)를 만들고, chat-collector
+몫 출력(앱 ID 둘 · SOOP 비밀 · `S3_BUCKET`)을 냅니다. 1단-다를 처음
+적용하는 경우는 이 절이 아니라 「1단-다 2」 의 `+5` 기준을 봅니다. 머리의
+실행 규칙(kty 로컬 터미널 · 쓰기마다 직전 승인 · 출력을 세션에 붙이지
+않음)이 그대로 걸립니다. AccessDenied 가 나오면 그 자리에서 멈추고 kty
+에게 보고합니다.
+
+*   **언제**: PR-1 머지 뒤, POK-306 의 platform apply(O7d 묶음) 앞입니다.
+    platform 은 이 루트의 `chat_archive_bucket_arn` 과 chat-collector 의
+    `app_env` 를 읽으므로 런타임이 먼저입니다.
+*   **값 넣기 없음**: 새 그릇이 없습니다. chat-collector 가 받는
+    `SOOP_CLIENT_SECRET` 은 auth 와 같은 그릇이고, 값은 「1단-다 5」 에서
+    이미 넣었습니다.
+
+### POK-306 runtime apply 순서
+
+| 걸음 | 하는 일 | 승인 지점 |
+|---|---|---|
+| 1 | 직전 점검(`runtime-1a`) | ⑤ 보고 |
+| 2 | runtime plan · apply | plan 승인 |
+| 3 | 운영 확인 — 채팅 원본 버킷 | — |
+| 4 | O7d 묶음 직전 점검 → platform apply | O7d 규칙 |
+
+### POK-306 runtime apply 1. 직전 점검
+
+1 의 세 명령(`scp-recheck.sh runtime-1a` · `principal-check.sh runtime-1a`
+· `events.sh`)을 그 순서로 돌리고 ⑤ 보고를 합니다.
+
+*   ① PR-1 은 `runtime-1a` 묶음을 바꾸지 않습니다 — 종료 0 이 기대값입니다.
+    CHANGED(3)면 다른 PR 의 묶음 변경이니 ⑤ 보고와 함께 묻고, 답을 들은
+    뒤에만 `--accept` 합니다.
+*   ② 판정 · 멈춤 조건은 「1단-나 ② 1」 의 ② 와 같습니다(1단-가 apply 뒤
+    기준). 채팅 원본 버킷 · 객체 행은 O7d 부터라 여기서 묻지 않습니다.
+*   ③ 종료 2 면 시작하지 않습니다.
+
+### POK-306 runtime apply 2. plan · apply
+
+2 의 plan · 확인 · apply · 적용 확인 꼴로 합니다. tfvars 는 그대로입니다
+(새 변수 `chat_archive_bucket_name` 은 기본값). 기대 변화는 아래뿐입니다 —
+그 밖의 변화(다른 주소 · change · destroy)가 있으면 apply 하지 않습니다.
+
+*   `Plan: 5 to add, 0 to change, 0 to destroy`.
+*   추가 주소 다섯:
+    *   `aws_s3_bucket.chat_archive`
+    *   `aws_s3_bucket_public_access_block.chat_archive`
+    *   `aws_s3_bucket_ownership_controls.chat_archive`
+    *   `aws_s3_bucket_server_side_encryption_configuration.chat_archive`
+    *   `aws_s3_bucket_lifecycle_configuration.chat_archive`
+*   출력 변경:
+    *   새 출력 `chat_archive_bucket_name` · `chat_archive_bucket_arn`.
+    *   `app_env["chat-collector"]` 에 `CHZZK_CLIENT_ID` · `SOOP_CLIENT_ID` ·
+        `S3_BUCKET` 이 더해집니다.
+    *   `app_secret_arns["chat-collector"]` 에 `SOOP_CLIENT_SECRET` 이
+        더해집니다.
+    *   다른 서비스(auth · clip · chat-detector · 일꾼)의 출력은 그대로입니다.
+*   `aws_s3_bucket_policy` · `aws_s3_bucket_versioning` ·
+    `aws_s3_bucket_cors_configuration` 이 생기지 않습니다.
+
+kty 승인을 받은 뒤 apply 합니다. 새 자원의 첫 판정 단계가 O7d 라 apply 뒤
+`runtime-1a` 2-3 재판정은 하지 않습니다 — 4 의 O7d 점검이 묻습니다.
+
+### POK-306 runtime apply 3. 운영 확인
+
+「1단-다 3」 의 버킷 반복(세 버킷)과 채팅 원본 접두 확인 명령을 돌립니다.
+기대 출력은 그 절의 「채팅 원본 버킷」 항목입니다. 결과 줄은 볼트 raw 로
+옮깁니다(계정 ID · ARN 가림).
+
+### POK-306 runtime apply 4. O7d 로 넘김
+
+[단계 직전 점검](stage-precheck.md) 의 O7d 묶음 점검을 돌린 뒤 POK-306 의
+platform apply 로 갑니다. 이때 2-3 판정이 처음으로 채팅 원본 버킷 · 객체
+행을 묻습니다 — 버킷이 있으므로 정책 읽기가 「정책 없음」 이어야 합니다.
+platform 의 plan · 확인은 [prod/platform](../prod/platform/README.md) 을
+따릅니다.
 
 ## See also
 

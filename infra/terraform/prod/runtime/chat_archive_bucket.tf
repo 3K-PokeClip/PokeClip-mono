@@ -92,6 +92,6 @@ output "chat_archive_bucket_name" {
 }
 
 output "chat_archive_bucket_arn" {
-  description = "채팅 원본 버킷 ARN — platform 의 chat-collector 작업 역할 정책(PutObject · DeleteObject 는 /*, ListBucket 은 버킷)."
+  description = "채팅 원본 버킷 ARN — platform 의 chat-collector 작업 역할 정책(PutObject · DeleteObject 는 chat/*, ListBucket 은 버킷)."
   value       = aws_s3_bucket.chat_archive.arn
 }

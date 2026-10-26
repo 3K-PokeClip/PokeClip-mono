@@ -77,7 +77,7 @@ default_tags 가 붙는지는 미확인이고, 런북 「운영 확인」 에서
 | `rds_db_name` | media · `app_env` 의 `POSTGRES_DB` |
 | `rds_resource_id` | media — 인스턴스 역할 `rds-db:connect` 의 대상 |
 | `rewind_bucket_name` · `rewind_bucket_arn` · `rewind_bucket_regional_domain_name` | edge — `rewind-s3` 오리진 · media — 업로드 정책 · 런타임 2단 — 버킷 정책 |
-| `chat_archive_bucket_name` · `chat_archive_bucket_arn` | platform(POK-306) — chat-collector 작업 역할 정책(`s3:PutObject` · `DeleteObject` 는 `<버킷>/*`, `s3:ListBucket` 은 버킷 — 탈퇴 정리가 채널 접두를 훑고 지운다). 이름은 `app_env` 의 chat-collector `S3_BUCKET` 과 같다 |
+| `chat_archive_bucket_name` · `chat_archive_bucket_arn` | platform(POK-306) — chat-collector 작업 역할 정책(`s3:PutObject` · `DeleteObject` 는 `chat/*`, `s3:ListBucket` 은 버킷 — 탈퇴 정리가 채널 접두를 훑고 지운다). 이름은 `app_env` 의 chat-collector `S3_BUCKET` 과 같다 |
 | `app_secret_arns`(서비스 → env 이름 → 전체 ARN) | platform — `ecs_service.secrets` · 실행 역할 읽기 정책. auth 아홉(`SOOP_CLIENT_SECRET` · resolve 전용 토큰 `STREAM_KEY_RESOLVE_TOKEN` 포함) · clip 둘(`JWT_SECRET` · `INTERNAL_API_TOKEN`) · chat-collector 셋(`INTERNAL_API_TOKEN` · `CHZZK_CLIENT_SECRET` · `SOOP_CLIENT_SECRET` — 앱 비밀 둘은 auth 와 같은 그릇) · chat-detector 하나(`INTERNAL_API_TOKEN`). 일꾼 render · upload 하나씩(`INTERNAL_API_TOKEN` — 앱과 같은 그릇)은 배치 루트가 읽는다 |
 | `media_secret_arns`(비밀 전체 ARN 목록 — `list(string)`) | media — 인스턴스 역할 읽기 정책(media_host 변수 `media_secret_arns` 와 같은 꼴). 원소는 resolve 전용 토큰 그릇 하나(auth 의 `STREAM_KEY_RESOLVE_TOKEN` 과 같은 그릇) — 공용 `INTERNAL_API_TOKEN` 은 없다(POK-429) |
 | `ingest_auth_resolve_token_secret_arn`(전체 ARN — string) | media — 응답기 `media.env` 의 `STREAM_KEY_RESOLVE_TOKEN_SECRET_ARN`(키 정의 · 읽기 = M15, 렌더 = M9(user_data)). `media_secret_arns` 의 원소와 같은 값이고, 목록의 순서에 기대지 않으려는 이름 있는 출력이다 |
