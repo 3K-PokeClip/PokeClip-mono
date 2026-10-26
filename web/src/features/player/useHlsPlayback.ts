@@ -29,7 +29,7 @@ import {
 } from './playbackEdge';
 import { nextLivePosition, type LivePosition } from './livePosition';
 import { trackPlaybackStartOnce } from './playbackStarts';
-import { guardRewindFloor } from './rewindFloor';
+import { guardRewindFloor, isBeforeStart } from './rewindFloor';
 import { SESSION_NOTICES, type PlaybackSource, type SeekView } from './rewindSwitch';
 import { useControlsAutoHide } from './useControlsAutoHide';
 import {
@@ -401,7 +401,8 @@ export function useHlsPlayback(
     let lastGrowAt = Date.now();
     let endSent = false;
     let waiting = false;
-    // 되감기 창 하한 지키기(5.3.1절)의 상태: 기동 전 받기 위치(startLoad 에 준 자리 · 기동 전 시크 자리) · 옮겨 알린 때
+    // 되감기 창 하한 지키기(5.3.1절)의 상태: 기동 전 받기 위치(startLoad 에 준 자리 · 기동 전 시크 자리 · 복구 직전 재생점 —
+    // 기동이 끝나면 버린다) · 옮겨 알린 때
     let loadFrom: number | null = null;
     let floorNoticeAt: number | null = null;
     const reachEnd = () => {
@@ -479,8 +480,17 @@ export function useHlsPlayback(
       // 기동 전 시크는 받기 위치를 그 자리로 옮긴다 — hls.js 의 seeking 처리(base-stream-controller 472-476)와 같게
       if (hlsRef.current?.hasEnoughToStart === false) loadFrom = video.currentTime;
     };
+    // hls.js 가 다시 기동 전으로 돌아가며(복구의 떼고 붙이기 · 다시 받기) 받기 시작할 자리를 받기 위치로 적는다. hls.js 는
+    // 재생점이 0 이 아니면 그 자리에서(hls.ts 708-709 · stream-controller.ts 168-180), 0 이면 제 자리를 골라 받는다 — 그때는
+    // 앞서 적은 것을 두고(기동 뒤라 버렸으면 null 이라 옮기지 않는다) 낡은 시작 자리로 되돌리지 않는다(cc H1)
+    const rememberPlayhead = () => {
+      const time = video.currentTime;
+      if (Number.isFinite(time) && time > 0) loadFrom = time;
+    };
     // 되감기 재생점이 창 밖으로 떨어지기 전에 옮긴다 — LEVEL_UPDATED 처리기 안에서 동기로(hls.js 가 옮기기 전, 5.3.1절)
     const keepRewindFloor = (hls: Hls, details: LevelDetails) => {
+      // 기동이 끝났다 — 시작 때 받기 위치는 낡는다(뒤의 시크로 갱신되지 않는다). hls.js 가 다시 기동 전으로 돌아가면 그때 적는다
+      if (!isBeforeStart(hls, video)) loadFrom = null;
       const moved = guardRewindFloor({ hls, video, details, loadFrom });
       if (moved === null) return;
       if (moved.kind === 'reload') loadFrom = moved.to;
@@ -647,6 +657,7 @@ export function useHlsPlayback(
           // 최소 복구: 각 1회만 시도, 재발 시 정리하고 영상 위에 알린다
           if (data.type === HlsCtor.ErrorTypes.NETWORK_ERROR && !recoveredNetwork) {
             recoveredNetwork = true;
+            rememberPlayhead();
             hls.startLoad();
             return;
           }
@@ -661,6 +672,9 @@ export function useHlsPlayback(
           hls.destroy();
           hlsRef.current = null;
         });
+        // 앱의 복구와 hls.js 가 스스로 부르는 복구(error-controller.ts 498-500) 모두 떼기 전에 여기를 지난다 — 재생점이 아직
+        // 그대로다(hls.ts 703-704 · 514-516)
+        hls.on(HlsCtor.Events.MEDIA_DETACHING, rememberPlayhead);
         hls.on(HlsCtor.Events.FRAG_LOADED, onHealed);
         hls.on(HlsCtor.Events.MANIFEST_PARSED, () => {
           // 멈춘 채 갈아 끼운 재생기는 스스로 틀지 않는다(5.3.1절 3번)

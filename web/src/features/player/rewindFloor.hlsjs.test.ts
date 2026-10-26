@@ -150,6 +150,21 @@ describe('hls.js 1.7.3 의 목록 갱신 순서(진단 재현 9 · 10)', () => {
     expect(sc.nextLoadPosition).toBe(24);
   });
 
+  it('복구 뒤 기동 전에 받기 위치를 모르면(loadFrom null) 옮기지 않고, 창 안 받기 위치는 hls.js 도 그대로 둔다(cc H1)', () => {
+    // recoverMediaError 가 재생점(30초)에서 startLoad 한 뒤의 상태 — 떼고 붙이기는 MediaSource 가 없어 흉내 내지 않는다
+    const { media, writes } = fakeMedia(30, 0);
+    const { hls, sc, slide } = started(media, false);
+    sc.nextLoadPosition = 30;
+    const moves: unknown[] = [];
+    hls.on(Events.LEVEL_UPDATED, (_event, data) =>
+      moves.push(guardRewindFloor({ hls, video: media, details: data.details, loadFrom: null })),
+    );
+    slide();
+    expect(moves).toEqual([null]);
+    expect(writes).toEqual([]);
+    expect(sc.nextLoadPosition).toBe(30);
+  });
+
   it('기동 전에 앱 처리기가 없으면 hls.js 가 받기 위치만 조용히 라이브 끝으로 바꾼다 — 고칠 대상', () => {
     const { media, writes } = fakeMedia(0, 0);
     const { sc, slide } = started(media, false);
