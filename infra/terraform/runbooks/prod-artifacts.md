@@ -23,11 +23,11 @@ prod 이미지를 ECR 에 올리고 apex 랜딩을 S3 에 올리는 절차입니
 
 | 단계 | 하는 일 | 선행 |
 |---|---|---|
-| O7c | 이미지 6종(응답기 · 워커 · 채팅 이미지를 하면 그만큼 더 — 최대 11종) 푸시 · 다이제스트 기록 | M2 머지 · `prod/registry` 적용(O7b) · 이미지별 선행(아래 표) |
+| O7c | 이미지 8종(응답기 · 워커 이미지를 하면 그만큼 더 — 최대 11종) 푸시 · 다이제스트 기록 | M2 머지 · `prod/registry` 적용(O7b) · 이미지별 선행(아래 표) |
 | O7f 의 5 | apex 랜딩 업로드 · 무효화 | `prod/edge` 적용 · 2번의 업로드 제외 경로 확인(I2-8) |
 
-O7c 는 O7d(next · auth · clip 태스크 정의가 다이제스트를 씀)와 O7e(Media
-셋)보다 먼저 끝냅니다.
+O7c 는 O7d(next · auth · clip · chat-collector · chat-detector 태스크 정의가
+다이제스트를 씀)와 O7e(Media 셋)보다 먼저 끝냅니다.
 
 ## 시작 전
 
@@ -66,15 +66,16 @@ aws ecr get-login-password --region ap-northeast-2 \
 | `media-ingest-auth` | `media/Dockerfile.ingest-auth`(1번 빌드 · 컨텍스트 `media/`) | 응답기 코드가 준비됐을 때만 |
 | `render` | `workers/render/Dockerfile`(3번 빌드 · 컨텍스트 `workers/render/`) | 3번의 준비 · 이 이미지를 돌릴 ECS 태스크 정의가 생겼을 때만 |
 | `upload` | `workers/upload/Dockerfile`(3번 빌드 · 컨텍스트 `workers/upload/`) | 3번의 준비 · 이 이미지를 돌릴 ECS 태스크 정의가 생겼을 때만 |
-| `chat-collector` | `services/chat-collector/Dockerfile`(3번 빌드 · 컨텍스트 `services/`) | 3번의 준비 · 이 이미지를 돌릴 ECS 태스크 정의가 생겼을 때만 |
-| `chat-detector` | `services/chat-detector/Dockerfile`(3번 빌드 · 컨텍스트 `services/`) | 3번의 준비 · 이 이미지를 돌릴 ECS 태스크 정의가 생겼을 때만 |
+| `chat-collector` | `services/chat-collector/Dockerfile`(3번 빌드 · 컨텍스트 `services/`) | 3번의 준비(I3-8) — platform `image_digests` 의 키라 O7d 전에 필수(POK-306) |
+| `chat-detector` | `services/chat-detector/Dockerfile`(3번 빌드 · 컨텍스트 `services/`) | 3번의 준비(I3-8) — platform `image_digests` 의 키라 O7d 전에 필수(POK-306) |
 
-*   next · auth · clip 의 준비가 안 됐으면 O7d 를 시작하지 않습니다.
+*   next · auth · clip · chat-collector · chat-detector 의 준비가 안 됐으면
+    O7d 를 시작하지 않습니다.
 *   응답기가 준비되지 않았으면 건너뛰고, tfvars 의 응답기 다이제스트를 비워
     둡니다(compose 렌더에서 빠짐). M15 · O8a 에서 다시 합니다.
-*   워커 · 채팅 이미지 4종(`render` · `upload` · `chat-collector` ·
-    `chat-detector`)은 ECS 로 돌릴 이미지입니다. 돌릴 태스크 정의가 아직
-    없으면 건너뜁니다 — O7c 의 조건이 아닙니다.
+*   워커 이미지 둘(`render` · `upload`)은 ECS 로 돌릴 이미지입니다. 돌릴
+    태스크 정의가 아직 없으면 건너뜁니다 — O7c 의 조건이 아닙니다. 채팅
+    이미지 둘은 platform 이 돌리므로 위 표대로 O7d 전에 푸시합니다.
 *   제어면 서버(I1-6)는 O7c 의 조건이 아닙니다. 없으면 nginx 가 404 를
     냅니다.
 *   **태그 = 빌드한 커밋 SHA 의 짧은 꼴**입니다. 저장소가 태그 불변이라 같은
@@ -142,7 +143,7 @@ docker rm "${cid}"
 M9 에서 `prod/registry` 에 더한 저장소 둘입니다. 둘 다 `prod/media` apply
 (O7e)의 입력이라 O7e 전에 올립니다. 먼저 `prod/registry` 재적용(저장소 둘
 생성)이 끝나야 합니다([prod/registry](../prod/registry/README.md) 「적용」).
-위 「언제」 · 아래 「기록」 의 6종에 이 둘을 더해 셉니다.
+위 「언제」 · 아래 「기록」 의 8종에 이 둘을 더해 셉니다.
 
 | 저장소 키 | 원천 | 선행 |
 |---|---|---|
@@ -220,7 +221,7 @@ aws ecr describe-images --region ap-northeast-2 \
 ```
 
 다이제스트는 `prod/platform` · `prod/media` 의 tfvars(추적하지 않음)에
-넣습니다. O7c 의 통과 조건은 푸시한 6종(응답기 · 워커 · 채팅 이미지를 했으면
+넣습니다. O7c 의 통과 조건은 푸시한 8종(응답기 · 워커 이미지를 했으면
 그것까지)의 다이제스트가 모두 기록 · 기입된 것입니다.
 
 푸시가 다 끝나면 로그아웃합니다. `docker login` 은 토큰(12시간)을 Docker

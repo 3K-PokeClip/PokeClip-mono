@@ -191,7 +191,8 @@ readonly LATE_TARGETS
 # 의 ARN 끝(ID)은 생성 때 정해져 표본 ID 로 묻는다(cf-kvs 와 같은 방식 —
 # 근거는 prod_targets.tsv 의 platform 덩어리 주석). 끝 덩어리
 # (platform-listener-rule 부터)는 POK-479 가 더한 보안 리뷰 M 다섯과
-# CloudFront 함수 로그 그룹 셋이다.
+# CloudFront 함수 로그 그룹 셋이다. ECS 서비스 로그 그룹은 다섯이다(chat
+# 둘은 POK-306).
 readonly STATE_OBJECT='arn:arn:aws:s3:::pokeclip-tfstate-prod-apne2/prod'
 # 상태 객체 행의 ARN 끝(루트 이름 뒤)과 반드시 묻는 동작.
 STATE_TAIL='terraform.tfstate s3:GetObject,s3:PutObject,s3:DeleteObject'
@@ -242,6 +243,10 @@ FOLLOWUP_TARGETS=(
 'log-group:pokeclip-prod-auth logs:DeleteLogGroup'
   'ecs-log-group-clip O7d arn:arn:aws:logs:ap-northeast-2:${ACCOUNT}:'\
 'log-group:pokeclip-prod-clip logs:DeleteLogGroup'
+  'ecs-log-group-chat-collector O7d arn:arn:aws:logs:ap-northeast-2:'\
+'${ACCOUNT}:log-group:pokeclip-prod-chat-collector logs:DeleteLogGroup'
+  'ecs-log-group-chat-detector O7d arn:arn:aws:logs:ap-northeast-2:'\
+'${ACCOUNT}:log-group:pokeclip-prod-chat-detector logs:DeleteLogGroup'
   'cf-distribution O7f tag:cloudfront:distribution '\
 'cloudfront:AllowVendedLogDeliveryForResource'
   'edge-media-delivery-source O7f arn:arn:aws:logs:us-east-1:${ACCOUNT}:'\

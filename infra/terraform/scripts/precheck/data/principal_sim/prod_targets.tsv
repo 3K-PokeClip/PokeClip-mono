@@ -218,7 +218,7 @@ profile-photo-object	O7d	arn:arn:aws:s3:::pokeclip-prod-profile-photos-apne2/pro
 # POK-479)은 이름이 고정이라 구체 ARN 이다(rds-log-group 과 같은 꼴 · 같은
 # 동작 · 두 꼴로 묻는다 — 머리 주석). ECS 서비스 로그 그룹 이름은 모듈
 # ecs_service 의 <name_prefix>-<name>(prod/platform services.tf 의 next ·
-# auth · clip)이다.
+# auth · clip · chat-collector · chat-detector — chat 둘은 POK-306)이다.
 platform-load-balancer	O7d	tag:elasticloadbalancing:loadbalancer	loadbalancer/app/,loadbalancer/net/	ap-northeast-2	elasticloadbalancing:DeleteLoadBalancer,elasticloadbalancing:ModifyLoadBalancerAttributes,elasticloadbalancing:SetSecurityGroups,elasticloadbalancing:SetSubnets,elasticloadbalancing:CreateListener,elasticloadbalancing:AddTags,elasticloadbalancing:RemoveTags	none	-
 platform-target-group	O7d	tag:elasticloadbalancing:targetgroup	targetgroup	ap-northeast-2	elasticloadbalancing:RegisterTargets,elasticloadbalancing:DeregisterTargets,elasticloadbalancing:ModifyTargetGroup,elasticloadbalancing:ModifyTargetGroupAttributes,elasticloadbalancing:DeleteTargetGroup,elasticloadbalancing:AddTags,elasticloadbalancing:RemoveTags	none	-
 platform-listener	O7d	tag:elasticloadbalancing:listener	listener/app,listener/net	ap-northeast-2	elasticloadbalancing:ModifyListener,elasticloadbalancing:DeleteListener,elasticloadbalancing:CreateRule,elasticloadbalancing:AddTags,elasticloadbalancing:RemoveTags	none	-
@@ -243,6 +243,8 @@ waf-regional-log-group	O7d	arn:arn:aws:logs:ap-northeast-2:${ACCOUNT}:log-group:
 ecs-log-group-next	O7d	arn:arn:aws:logs:ap-northeast-2:${ACCOUNT}:log-group:pokeclip-prod-next	log-group	ap-northeast-2	logs:DeleteLogGroup,logs:PutRetentionPolicy,logs:DeleteRetentionPolicy	none	-
 ecs-log-group-auth	O7d	arn:arn:aws:logs:ap-northeast-2:${ACCOUNT}:log-group:pokeclip-prod-auth	log-group	ap-northeast-2	logs:DeleteLogGroup,logs:PutRetentionPolicy,logs:DeleteRetentionPolicy	none	-
 ecs-log-group-clip	O7d	arn:arn:aws:logs:ap-northeast-2:${ACCOUNT}:log-group:pokeclip-prod-clip	log-group	ap-northeast-2	logs:DeleteLogGroup,logs:PutRetentionPolicy,logs:DeleteRetentionPolicy	none	-
+ecs-log-group-chat-collector	O7d	arn:arn:aws:logs:ap-northeast-2:${ACCOUNT}:log-group:pokeclip-prod-chat-collector	log-group	ap-northeast-2	logs:DeleteLogGroup,logs:PutRetentionPolicy,logs:DeleteRetentionPolicy	none	-
+ecs-log-group-chat-detector	O7d	arn:arn:aws:logs:ap-northeast-2:${ACCOUNT}:log-group:pokeclip-prod-chat-detector	log-group	ap-northeast-2	logs:DeleteLogGroup,logs:PutRetentionPolicy,logs:DeleteRetentionPolicy	none	-
 
 # prod/media(POK-460) — media 상자 역할 · 인스턴스 프로필(modules/media_host
 # 의 이름 · 경로). sql-runner 행과 같은 꼴이다 — 역할 넘기기는 EC2 로 넘기는

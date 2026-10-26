@@ -1212,9 +1212,13 @@ PUBLIC 에서 거두고 CONNECT 만 계정 여섯에 줍니다(결정 정본
     이상입니다 — 무엇이 있는지 확인하고 kty 에게 회부합니다.
 1.  **걸음 5 —** 이 런북 6 의 50 은 K7 (가)라 갈래와 무관하게 회수하지
     않습니다. 출력은 볼트 raw 와 POK-428 코멘트에 기록합니다.
-1.  **걸음 7 —** 서버가 처음 뜨는 순서는 auth · clip(O7d) → 수집
-    서버(POK-306) → 판별 서버입니다. 수집 서버의 Flyway(`V316`)가 판별
-    계정에 `chat_messages` SELECT 를 주므로 판별 서버는 그 뒤에 뜹니다.
+1.  **걸음 7 —** 서버 넷(auth · clip · 수집 서버 · 판별 서버)은 platform
+    apply(O7d) 한 번에 생깁니다(POK-306). 수집 서버의 Flyway(`V316`)가 판별
+    계정에 `chat_messages` SELECT 를 주는데, platform 은 두 chat 서버 사이에
+    순서를 두지 않습니다(platform `services.tf` 의 `module "chat_detector"`
+    주석). 판별 서버가 그 권한보다 먼저 떠도 되는지는 3번 답(POK-306 Q5)
+    전까지 모릅니다 — 판별 서버 태스크가 실패 · 재시작하면 수집 서버의 Flyway
+    줄을 본 뒤 판별 서버가 다시 떠 steady 인지 확인합니다.
 
 ### 1단-나 ① 기동 뒤 확인
 
@@ -1623,11 +1627,15 @@ plan 이 역할을 새로 만드는지 고치는지로 드러나고, 어느 쪽�
     *   `ACTIVE` → 강제 재배포(쓰기 — **kty 승인**):
         `aws ecs update-service --region ap-northeast-2 --cluster
         pokeclip-prod --service pokeclip-prod-<키> --force-new-deployment
-        --query service.serviceName --output text`.
+        --query service.serviceName --output text`. chat-collector 의
+        재배포는 수집 중인 방송을 잠시 끊습니다 — 재부착(platform
+        `chat_collector_features.reattach`, 기본 켬)이 다시 붙기 전까지의
+        채팅은 받지 못하므로 되도록 방송이 없는 시간에 합니다(platform
+        README 「chat 서비스」).
     *   `None`(서비스 없음 — 응답의 `failures` 에 들어감) → 다음에 뜨는
-        태스크가 새 값을 받습니다. 키와 함께 기록합니다. 지금 platform 은
-        next · auth · clip 셋만 두므로 chat-collector · chat-detector 와
-        일꾼(render · upload)이 이 갈래입니다.
+        태스크가 새 값을 받습니다. 키와 함께 기록합니다. platform 은
+        next · auth · clip · chat-collector · chat-detector 를 두므로(O7d
+        뒤) 일꾼(render · upload)이 이 갈래입니다.
     *   그 밖의 값(`DRAINING` · `INACTIVE` 등) → 멈춤 · kty 회부.
     *   규칙의 전제: ECS 서비스 · 클러스터 자원은 `modules/ecs_service` 와
         platform 의 클러스터 하나뿐입니다. 다른 클러스터 · 배치 루트가
