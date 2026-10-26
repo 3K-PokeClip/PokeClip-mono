@@ -2,7 +2,7 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
 import { describe, expect, it, vi } from 'vitest';
-import type { SessionView } from './rewindSwitch';
+import type { SessionView } from './sessionView';
 import { PlayerSessionOverlay } from './PlayerSessionOverlay';
 
 // 끝남 대기 덮개 · 띠(설계 5.3 · 5.5절 — 버튼 넷의 문구는 2번 통지 범위다)

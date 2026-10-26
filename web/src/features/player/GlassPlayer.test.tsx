@@ -6,7 +6,8 @@ import { ToastProvider } from '@/ui';
 import { GlassPlayer, type GlassPlayerController } from '@/features/player/GlassPlayer';
 import type { PlayerSimulationOptions } from '@/features/player/usePlayerSimulation';
 import { recordingTimeline } from '@/features/player/recordingTimeline';
-import { openSession, sessionView, type SessionView } from '@/features/player/rewindSwitch';
+import { openSession } from '@/features/player/rewindSwitch';
+import { sessionView, type SessionView } from '@/features/player/sessionView';
 import type { PlaybackSession } from '@/features/player/usePlaybackSession';
 
 type PanelProps = Pick<
@@ -654,6 +655,15 @@ describe('GlassPlayer: 재생 세션(POK-200 M5)', () => {
     } finally {
       vi.restoreAllMocks();
     }
+  });
+
+  it('끝난 방송의 다시보기(liveHidden)는 LIVE 버튼을 숨긴다 — 눌러도 세션이 무시하는 죽은 버튼이 남지 않게(cx M)', () => {
+    const shown = renderWith({ session: fakeSession() });
+    expect(screen.getByRole('button', { name: '실시간으로 이동' })).toBeInTheDocument();
+    shown.unmount();
+    renderWith({ session: fakeSession({ liveHidden: true }) });
+    expect(screen.queryByRole('button', { name: '실시간으로 이동' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '녹화 끝으로 이동' })).toBeNull();
   });
 
   it('세션이 없으면 지금 순서(src)다', () => {

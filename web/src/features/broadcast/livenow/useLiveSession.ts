@@ -206,8 +206,16 @@ export function useLiveSession(input: LiveSessionInput): LiveSession {
     return pastOnly ? { fromMs, untilMs: endedAt } : null;
   }, [recordedReq, accessKey, pastOnly, fromMs, endedAt]);
 
+  // 세션 덮개가 다른 방송 띠를 세웠으면 화면 띠는 세우지 않는다 — 같은 뜻의 띠가 둘 서지 않게(cc L)
+  const coverBanner = session?.view.banner ?? null;
   const band =
-    holding && deferred !== null && deferred !== '' && deferred !== liveStreamId ? deferred : null;
+    holding &&
+    coverBanner === null &&
+    deferred !== null &&
+    deferred !== '' &&
+    deferred !== liveStreamId
+      ? deferred
+      : null;
   const onBand = useCallback(() => {
     setReleasedFor(accessKey);
     dispatch?.({ type: 'leave' });

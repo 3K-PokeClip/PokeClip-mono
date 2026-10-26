@@ -54,13 +54,16 @@ export function useLiveStreamSelection(): LiveStreamSelection {
   holdRef.current = playbackHold;
   const selectionRef = useRef(selection);
   selectionRef.current = selection;
-  /** 다시 고른 답을 넣는다. 보유 중이고 보유가 지금 선택이면 선택에 넣지 않고 deferred 로 낸다 */
-  const apply = (id: string | null) => {
+  /**
+   * 다시 고른 답을 넣는다. 보유 중이고 보유가 지금 선택이면 선택에 넣지 않고 deferred 로 낸다. byUser = 사람이 주소 · 채널을 옮긴
+   * 뒤의 첫 물음 — 보유는 자동 다시 고르기만 막는다(사람이 고른 이동은 보던 재생보다 앞선다)
+   */
+  const apply = (id: string | null, byUser = false) => {
     setLatest(id);
     if (id === null) return;
     const prev = selectionRef.current;
     const hold = holdRef.current;
-    if (hold !== null && prev.resolved && hold === prev.streamId) {
+    if (!byUser && hold !== null && prev.resolved && hold === prev.streamId) {
       setDeferred(id === prev.streamId ? null : id);
       return;
     }
@@ -80,13 +83,14 @@ export function useLiveStreamSelection(): LiveStreamSelection {
       return;
     }
     let alive = true;
-    const resolve = (fresh: boolean) =>
+    const resolve = (fresh: boolean, byUser = false) =>
       void resolveLiveStreamId(streamerId, fresh).then((id) => {
         // 모르면(오류) 지금 보던 것을 그대로 둔다 — 꺼짐으로 바꾸지 않는다. 마지막 답은 「모름」이 된다
         if (!alive) return;
-        applyRef.current(id);
+        applyRef.current(id, byUser);
       });
-    resolve(false);
+    // 이 효과는 주소(pinned) · 채널이 바뀔 때만 다시 돈다 — 그 뒤 첫 답은 사람이 고른 이동이라 보유를 넘는다(cx M)
+    resolve(false, true);
     const t = window.setInterval(() => resolve(true), LIVE_RESELECT_MS);
     return () => {
       alive = false;

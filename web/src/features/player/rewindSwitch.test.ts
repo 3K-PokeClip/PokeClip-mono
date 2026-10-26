@@ -6,13 +6,13 @@ import {
   openSession,
   pollTargets,
   rewindAxisLowerMs,
-  sessionView,
   transition,
   type PlaybackSessionState,
   type SessionEffect,
   type SessionEvent,
   type XAnswer,
 } from './rewindSwitch';
+import { sessionView } from './sessionView';
 
 // 재생 세션 상태기계 표 시험(설계 5.3절 종결 판 — R5 · R16 · R21 · R28 · R32 · R43 · R44 · R46 · R47 · R53 · R55–R58).
 // 시각은 모두 epoch ms 다. 방송 A(회차 r-A)를 보던 세션이 기준이다.
@@ -423,8 +423,9 @@ describe('ending-wait 국면', () => {
     for (const gapMs of [13_000, 60_000, 290_000]) {
       const start = endingFromLiveClosed();
       const steps: [SessionEvent, number][] = [];
-      for (let t = 10_000; t < gapMs; t += 10_000)
+      for (let t = 10_000; t < gapMs; t += 10_000) {
         steps.push([{ type: 'round-poll', result: NONE }, NOW + t]);
+      }
       steps.push([
         { type: 'stream-poll', result: liveReady(A2, T0, NOW + gapMs), x: X_A },
         NOW + gapMs,
@@ -598,6 +599,28 @@ describe('ending-wait 국면', () => {
     ]);
   });
 
+  it('다른 방송 띠가 선 채 끝남 대기로 가도 띠의 「새 방송 보기」는 그 방송으로 닫는다 — 죽은 단추가 아니다(cc L)', () => {
+    const bound = run(rewindAt(T0 + 20 * MIN), [
+      [{ type: 'live-button', x: X_UNKNOWN, attempt: 3 }],
+      [{ type: 'stream-poll', result: liveReady(B1, NOW, NOW + MIN), x: X_B }],
+      [{ type: 'live-closed' }],
+    ]).state;
+    expect(bound.phase.kind).toBe('ending-wait');
+    expect(sessionView(bound, NOW).banner).toEqual({ goTo: 'r-B' });
+    expect(run(bound, [[{ type: 'button', which: 'new-broadcast' }]]).effects).toEqual([
+      { kind: 'close', reason: 'left', goTo: 'r-B' },
+    ]);
+  });
+
+  it('회차 종국이 이미 선 뒤의 시한 검사는 상태를 새로 만들지 않는다(같은 객체 — cc L)', () => {
+    const waiting = run(rewindAt(T0 + 20 * MIN), [[{ type: 'endlist' }]]).state;
+    const record = run(waiting, [
+      [{ type: 'round-poll', result: status({ mode: 'ended' }) }],
+    ]).state;
+    expect(record.phase).toMatchObject({ recordOnEnd: true, atEnd: false });
+    expect(transition(record, { type: 'tick' }, NOW + ENDING_WAIT_MS).state).toBe(record);
+  });
+
   it('덮개 문구: 재접속 대기 동안 「이어지는지 확인」, 뒤에는 「준비 중」 · 녹화 보기는 늘 있다', () => {
     const atEnd = endingFromLiveClosed();
     expect(sessionView(atEnd, NOW + RESUME_WAIT_MS - 1).cover).toBe('checking');
@@ -761,10 +784,11 @@ describe('아무 국면', () => {
 
   it('끝남 대기 중 다른 회차 B 의 폴링 headPdt 는 observedEndMs 에 들지 않는다(R42)', () => {
     let s = run(rewindAt(T0 + 20 * MIN), [[{ type: 'end-reached' }]]).state;
-    for (let i = 0; i < 10; i += 1)
+    for (let i = 0; i < 10; i += 1) {
       s = run(s, [
         [{ type: 'stream-poll', result: liveReady(B1, NOW + 30 * MIN, NOW + 30 * MIN), x: X_B }],
       ]).state;
+    }
     expect(s.observedEndMs).toBe(NOW);
   });
 

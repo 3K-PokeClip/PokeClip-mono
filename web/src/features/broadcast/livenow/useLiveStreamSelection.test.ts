@@ -129,6 +129,22 @@ describe('useLiveStreamSelection: 재생 보유(POK-200 M5 · 설계 5.5절)', (
     expect(result.current).toMatchObject({ streamId: 'live-2', resolved: true, deferred: null });
   });
 
+  it('사람이 주소를 옮기면(고정 화면 → 라이브 대시보드) 보유를 넘어 지금 방송 중인 것을 고른다(cx M)', async () => {
+    nav.search = '?stream=live-1';
+    try {
+      const { result, rerender } = renderHook(() => useLiveStreamSelection());
+      await flush();
+      act(() => publishLiveData({ playbackHold: 'live-1' }));
+      live = 'live-2';
+      nav.search = '';
+      rerender();
+      await flush();
+      expect(result.current).toMatchObject({ streamId: 'live-2', deferred: null });
+    } finally {
+      nav.search = '';
+    }
+  });
+
   it('보유가 없으면 지금 동작이다 — 빈 답이면 꺼짐(빈 선택)', async () => {
     const { result } = renderHook(() => useLiveStreamSelection());
     await flush();

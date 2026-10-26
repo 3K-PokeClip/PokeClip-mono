@@ -257,6 +257,22 @@ describe('사건 올림 — ENDLIST 와 끝 도달을 따로(cx H1)', () => {
   });
 });
 
+describe('멎음 알림(POK-337)', () => {
+  it('복구를 포기해 멎은 뒤 같은 주소로 새로 선 재생기가 재생에 성공하면 알림을 내린다(cx M · stopped 잔존)', async () => {
+    const view = mount(src());
+    await settle();
+    const fatal = { fatal: true, type: 'mediaError', details: 'bufferStalledError' };
+    act(() => lastHls().trigger('hlsError', fatal));
+    act(() => lastHls().trigger('hlsError', fatal));
+    expect(view.result.current.playbackError).toBe('영상이 끊겼어요. 새로고침하면 다시 연결해요');
+    view.rerender({ s: src({ generation: 1 }), h: {} });
+    await settle();
+    expect(view.result.current.playbackError).not.toBeNull();
+    act(() => video.el!.dispatchEvent(new Event('playing')));
+    expect(view.result.current.playbackError).toBeNull();
+  });
+});
+
 describe('창 가장자리를 hls.js 보다 먼저 지키기(5.3.1절 · R23)', () => {
   const live = () => mount(src(), {}).result;
 
@@ -306,9 +322,9 @@ describe('창 가장자리를 hls.js 보다 먼저 지키기(5.3.1절 · R23)', 
     expect(onSeekRequest).toHaveBeenLastCalledWith(PDT0 + 14_000, expect.anything());
   });
 
-  it('멈춘 자리가 창 하한에 닿으면 멈춘 채로 세션에 넘긴다(1초 보조 틱)', async () => {
+  it('되감기가 준비된 라이브는 멈춘 자리가 창 하한에 닿으면 멈춘 채로 세션에 넘긴다(1초 보조 틱)', async () => {
     const onSeekRequest = vi.fn();
-    const view = await sessionLive({ onSeekRequest });
+    const view = await sessionLive({ onSeekRequest, axisLowerMs: PDT0 });
     act(() => view.result.current.seekToMs(PDT0 + 13_000));
     act(() => {
       video.paused = true;
@@ -319,6 +335,27 @@ describe('창 가장자리를 hls.js 보다 먼저 지키기(5.3.1절 · R23)', 
     expect(onSeekRequest).toHaveBeenCalledWith(PDT0 + 13_000, expect.anything());
     await act(async () => vi.advanceTimersByTime(3_000));
     expect(onSeekRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it('되감기가 준비되지 않은 라이브는 멈춘 동안 넘기지 않고 재개 때 넘긴다 — 창이 밀릴 때마다 알리지 않게(5.3.1절 3번 · cc M2)', async () => {
+    const onSeekRequest = vi.fn();
+    const view = await sessionLive({ onSeekRequest });
+    act(() => view.result.current.seekToMs(PDT0 + 13_000));
+    act(() => {
+      video.paused = true;
+      video.el!.dispatchEvent(new Event('pause'));
+    });
+    act(() => lastHls().trigger('hlsLevelUpdated', { details: details(frags(10, 1)) }));
+    await act(async () => vi.advanceTimersByTime(1_000));
+    act(() => lastHls().trigger('hlsLevelUpdated', { details: details(frags(10, 2)) }));
+    await act(async () => vi.advanceTimersByTime(4_000));
+    expect(onSeekRequest).not.toHaveBeenCalled();
+    act(() => {
+      video.paused = false;
+      video.el!.dispatchEvent(new Event('play'));
+    });
+    expect(onSeekRequest).toHaveBeenCalledTimes(1);
+    expect(onSeekRequest).toHaveBeenCalledWith(PDT0 + 13_000, expect.anything());
   });
 
   it('LIVE(실시간으로) 는 세션 모드면 세션에 넘긴다', async () => {
@@ -517,7 +554,7 @@ describe('창 가장자리를 hls.js 보다 먼저 지키기(5.3.1절 · R23)', 
 
   it('멈춘 채 넘겼다가 사용자가 다시 틀면 다음 재생기의 자동 재생을 막지 않는다(keepPaused 잔존 — cx M)', async () => {
     const onSeekRequest = vi.fn();
-    const view = await sessionLive({ onSeekRequest });
+    const view = await sessionLive({ onSeekRequest, axisLowerMs: PDT0 });
     act(() => view.result.current.seekToMs(PDT0 + 13_000));
     act(() => {
       video.paused = true;
@@ -531,7 +568,7 @@ describe('창 가장자리를 hls.js 보다 먼저 지키기(5.3.1절 · R23)', 
       video.paused = false;
       video.el!.dispatchEvent(new Event('play'));
     });
-    view.rerender({ s: src({ generation: 1 }), h: { onSeekRequest } });
+    view.rerender({ s: src({ generation: 1 }), h: { onSeekRequest, axisLowerMs: PDT0 } });
     await settle();
     const play = vi.mocked(HTMLMediaElement.prototype.play);
     play.mockClear();

@@ -20,6 +20,7 @@ import type { PlayerSimulation } from './usePlayerSimulation';
 // 하단 버튼줄 — 재생·볼륨·LIVE 복귀(계약3 4절) / 클립·(채팅)·미니·설정·전체 화면.
 export function PlayerControls({
   sim,
+  liveHidden = false,
   chatToggle,
   fullscreenButtonRef,
   onClip,
@@ -28,6 +29,8 @@ export function PlayerControls({
   onSettingsOpenChange,
 }: {
   sim: PlayerSimulation;
+  /** LIVE 복귀 버튼을 숨긴다(재생 세션의 끝난 방송 다시보기) */
+  liveHidden?: boolean;
   /**
    * 플레이어 안 채팅 오버레이 토글 — 없으면 버튼을 그리지 않는다.
    * GlassPlayer는 전체 화면일 때만 넘긴다: 기본 상태에선 옆 채팅 패널이 채팅을 맡아 중복이고,
@@ -81,15 +84,21 @@ export function PlayerControls({
           />
         </div>
         {/* 명시적 LIVE 복귀 버튼 — 계약3 4절: 시차는 -MM:SS, 상한 1:00:00 */}
-        <button
-          type="button"
-          className={styles.livePillBtn}
-          aria-label={edge.goToLabel}
-          onClick={sim.returnToLive}
-        >
-          <span className={styles.livePillDot} data-at-edge={sim.atEdge || undefined} aria-hidden />
-          {sim.atEdge ? edge.atEdge : `${formatBehind(sim.behindSeconds)} · ${edge.goTo}`}
-        </button>
+        {liveHidden ? null : (
+          <button
+            type="button"
+            className={styles.livePillBtn}
+            aria-label={edge.goToLabel}
+            onClick={sim.returnToLive}
+          >
+            <span
+              className={styles.livePillDot}
+              data-at-edge={sim.atEdge || undefined}
+              aria-hidden
+            />
+            {sim.atEdge ? edge.atEdge : `${formatBehind(sim.behindSeconds)} · ${edge.goTo}`}
+          </button>
+        )}
       </div>
       <div className={styles.buttonGroup}>
         <button type="button" className={styles.glassBtn} aria-label="클립 만들기" onClick={onClip}>
