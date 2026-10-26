@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
@@ -16,17 +17,30 @@ import (
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/rewind"
 )
 
-// Store 가 쓰는 객체의 머리다 — 되감기 목록(/dvr · M5 설계 4.5 표)과 VOD 문서(/vod · M6 FreezeVOD) 둘이 같은 값을
-// 받는다. 구현이 상수로 고정한다 — 호출자가 넘길 값이 아니다. 이 머리가 없으면 S3 가 application/octet-stream 을
-// 돌려주고 캐시 지시가 없다.
+// Store 가 쓰는 객체의 머리다 — 되감기 목록(/dvr · M5 설계 4.5 표)과 VOD 문서(/vod · M6 FreezeVOD)가 받는다. 구현이
+// 상수로 고정한다 — 호출자가 넘길 값이 아니다. 이 머리가 없으면 S3 가 application/octet-stream 을 돌려주고 캐시
+// 지시가 없다. Content-Type 은 둘이 같고 Cache-Control 은 키 축으로 갈린다(cacheControl).
 //
-// Cache-Control 1초는 되감기 목록의 값이다 — 매 조각마다 판이 바뀌어 엣지 · 브라우저가 1초만 들고 있게 한다. VOD 문서는
-// 한 번 쓰고 바뀌지 않아 더 길게 둘 수 있지만 그 값은 설계가 정하지 않았다(계획 4.11 착수 체크리스트 — 회부 중). 정할
-// 때까지 VOD 도 1초를 받는다(엣지 요청이 늘 뿐 틀린 판을 내지는 않는다).
+// Cache-Control 1초는 되감기 목록의 값이다 — 매 조각마다 판이 바뀌어 엣지 · 브라우저가 1초만 들고 있게 한다. 동결된
+// DVR 도 같은 키라 1초다(감사 복구가 같은 키를 다시 쓴다). VOD 문서는 1시간이다(kty A1 2026-10-27) — IfAbsent 로 한
+// 번만 쓰고 덮어쓰지 않는다(설계 「VOD 불변」 · RFC 8216 4.3.3.5). 감사는 VOD 를 다시 쓰지 않는다.
 const (
 	manifestContentType  = "application/vnd.apple.mpegurl"
 	manifestCacheControl = "public, max-age=1"
+	vodCacheControl      = "public, max-age=3600"
+
+	// vodKeyPrefix 는 VOD 문서 키의 접두다 — vodKey 가 만드는 키(vod/{streamID}/{head}/index.m3u8)의 첫 성분이다.
+	vodKeyPrefix = "vod/"
 )
+
+// cacheControl 은 key 에 쓰는 객체의 Cache-Control 이다 — VOD 문서 키면 vodCacheControl, 그 밖(되감기 목록)은
+// manifestCacheControl 이다.
+func cacheControl(key string) string {
+	if strings.HasPrefix(key, vodKeyPrefix) {
+		return vodCacheControl
+	}
+	return manifestCacheControl
+}
 
 // S3Store 는 Store 의 S3 구현이다 — 버킷 하나에 쓰고 읽는다. upload.Putter(세그먼트 PUT — 조건 · 메타
 // 없음)와는 다른 경계다.
@@ -42,7 +56,7 @@ func NewS3Store(client *s3.Client, bucket string) *S3Store {
 }
 
 // Put 은 Store.Put 이다 — cond 를 조건 헤더 하나(If-None-Match: * 또는 If-Match)로, meta 를
-// x-amz-meta-* 헤더로, 목록 머리(manifestContentType · manifestCacheControl)를 같은 요청에 싣는다. 200 인데
+// x-amz-meta-* 헤더로, 목록 머리(manifestContentType · cacheControl(key))를 같은 요청에 싣는다. 200 인데
 // ETag 가 없으면 성공으로 보고하지 않는다 — 다음 IfMatch 를 만들 수 없다. 그 오류는 센티널이 아니다: 쓰기는
 // 적용됐으나 새 판의 ETag 를 모르므로 호출자는 결과 모름과 같이 Head 로 확인한다.
 func (s *S3Store) Put(ctx context.Context, key string, cond Precondition, body []byte, meta map[string]string) (string, error) {
@@ -55,7 +69,7 @@ func (s *S3Store) Put(ctx context.Context, key string, cond Precondition, body [
 		Body:         bytes.NewReader(body),
 		Metadata:     meta,
 		ContentType:  aws.String(manifestContentType),
-		CacheControl: aws.String(manifestCacheControl),
+		CacheControl: aws.String(cacheControl(key)),
 	}
 	if cond.ifMatch {
 		in.IfMatch = aws.String(cond.etag)
