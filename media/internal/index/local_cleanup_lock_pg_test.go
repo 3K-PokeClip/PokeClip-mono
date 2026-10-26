@@ -338,10 +338,10 @@ func lcNonBlockingOps() []lcOp {
 			}
 			return err
 		}},
-		{"(f) MarkPlaybackFailed(init_mismatch, U)", both, func(ctx context.Context, t *testing.T, pool *pgxpool.Pool, fix lcLockFix) error {
-			ok, err := NewUploadStore(pool).MarkPlaybackFailed(ctx, fix.stream, lcSeqU, fix.session, ReasonInitMismatch)
+		{"(f) SettlePlaybackFailure(init_mismatch, U)", both, func(ctx context.Context, t *testing.T, pool *pgxpool.Pool, fix lcLockFix) error {
+			ok, err := NewUploadStore(pool).SettlePlaybackFailure(ctx, fix.stream, lcSeqU, fix.session, ReasonInitMismatch)
 			if err == nil && !ok {
-				t.Error("MarkPlaybackFailed marked = false, want true")
+				t.Error("SettlePlaybackFailure marked = false, want true")
 			}
 			return err
 		}},

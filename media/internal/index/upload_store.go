@@ -48,7 +48,7 @@ type UploadTarget struct {
 	ExpectedInitSHA []byte
 
 	// 아래 둘은 init 축의 계승 호환 게이트 입력이다(계획 4.5 B #3 · #19 — ADR-044 stsd 지문). 실시간 작업은 개시 행의
-	// SeedResult 가, 스위퍼 작업은 init 조회가 싣는다. 다른 축에서는 비어 있다.
+	// InsertCommit 이, 스위퍼 작업은 init 조회가 싣는다. 다른 축에서는 비어 있다.
 
 	// InheritsSession 은 그 회차가 계승 후보면 물려받은 직전 회차다. 게이트의 판별은 이 칸 하나다(B #3) — 빈 값이면
 	// 계승 후보가 아닌 것으로 읽어 워커가 지문을 뜨지 않고 비호환 거짓을 넘긴다. 실시간 작업은 개시 행을 못 본 회차(재기동
@@ -115,7 +115,7 @@ type UploadStore interface {
 	// 장부에 미리 적힌 값이 아니라 방금 만든 산출물의 길이다. ② 처럼 WHERE 에 두면
 	// 그 CAS 는 영원히 0행이다.
 	MarkPlaybackUploaded(ctx context.Context, streamID string, seq int64, bytes int64) (marked bool, err error)
-	// MarkPlaybackFailed 는 ③ 축의 실패 CAS 이며, **사유가 ReasonInitMismatch 일 때만**
+	// SettlePlaybackFailure 는 ③ 축의 실패 CAS 이며, **사유가 ReasonInitMismatch 일 때만**
 	// 같은 트랜잭션에서 그 조각의 세션을 ending(init_mismatch)으로 전이시킨다(설계 5.3ⓒ).
 	//
 	// 사유를 인자로 받는 이유(메서드를 나누지 않는 이유): 두 갈래가 같은 조각 CAS 를 쓰고
@@ -125,7 +125,7 @@ type UploadStore interface {
 	// sessionID 는 결속 갈래의 앵커다 — 조각이 그 세션의 것일 때만 조각과 세션을 함께 바꾸며,
 	// 비어 있으면 오류다. 일시 실패 갈래는 설계 5.5.5 둘째 문장 그대로라 쓰지 않는다.
 	// marked 는 조각 CAS 가 1행을 바꿨는가다(세션이 이미 live 가 아니면 세션은 그대로 둔다).
-	MarkPlaybackFailed(ctx context.Context, streamID string, seq int64, sessionID, reason string) (marked bool, err error)
+	SettlePlaybackFailure(ctx context.Context, streamID string, seq int64, sessionID, reason string) (marked bool, err error)
 	// MarkInitUploaded 는 세션 init(MAP)의 **첫 업로드 CAS** 다(설계 5.5.5 · 5.3ⓑ·ⓓ).
 	//
 	// 세 조건이 전부 맞을 때만 4열(키·해시·크기·확정 시각)을 쓴다: 그 세션이 있고, 아직
@@ -215,7 +215,7 @@ WITH seg AS (
 )
 SELECT (SELECT pg_catalog.count(*) FROM seg)`
 
-// ReasonInitMismatch 는 MarkPlaybackFailed 의 사유 중 세션을 끝내는 유일한 값이며, 그대로
+// ReasonInitMismatch 는 SettlePlaybackFailure 의 사유 중 세션을 끝내는 유일한 값이며, 그대로
 // stream_sessions.end_reason 에 적힌다(계획 5절 새 어휘 2 중 하나). M3 의 'td_exceeded' 와
 // 같은 층의 값이고 DDL CHECK 는 없다(ddl.go 의 end_reason text).
 const ReasonInitMismatch = "init_mismatch"
@@ -479,8 +479,8 @@ func (s *pgUploadStore) MarkPlaybackUploaded(ctx context.Context, streamID strin
 	return tag.RowsAffected() == 1, nil
 }
 
-// MarkPlaybackFailed 는 사유에 따라 문장이 갈린다 — 갈래는 여기 하나뿐이다.
-func (s *pgUploadStore) MarkPlaybackFailed(ctx context.Context, streamID string, seq int64, sessionID, reason string) (bool, error) {
+// SettlePlaybackFailure 는 사유에 따라 문장이 갈린다 — 갈래는 여기 하나뿐이다.
+func (s *pgUploadStore) SettlePlaybackFailure(ctx context.Context, streamID string, seq int64, sessionID, reason string) (bool, error) {
 	if reason != ReasonInitMismatch {
 		tag, err := s.pool.Exec(ctx, markPlaybackFailedSQL, streamID, seq)
 		if err != nil {

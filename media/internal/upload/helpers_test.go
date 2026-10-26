@@ -204,7 +204,7 @@ func (f *fakeUploadStore) MarkPlaybackUploaded(_ context.Context, streamID strin
 	return true, nil
 }
 
-func (f *fakeUploadStore) MarkPlaybackFailed(_ context.Context, streamID string, seq int64, sessionID, reason string) (bool, error) {
+func (f *fakeUploadStore) SettlePlaybackFailure(_ context.Context, streamID string, seq int64, sessionID, reason string) (bool, error) {
 	f.mu.Lock()
 	f.playbackFailed = append(f.playbackFailed, playbackFailCall{streamID, seq, sessionID, reason})
 	hook := f.onPlaybackFailed

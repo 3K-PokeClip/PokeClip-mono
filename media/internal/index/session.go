@@ -92,7 +92,7 @@ type SessionInput struct {
 type SessionPlan interface{}
 
 // SessionDecision 은 갈래와 세션 ID 들이다 — Store 가 carrier 와 기저 행 조회에 쓰고, 개시 갈래면 두 non-key
-// 칸(EndingSessionID · PrevFirstLocalPath)을 개시 결과(SeedResult)로 옮긴다.
+// 칸(EndingSessionID · PrevFirstLocalPath)을 개시 결과(InsertCommit)로 옮긴다.
 type SessionDecision struct {
 	// Opens 가 참이면 Open 을 불러야 한다(새 세션 개시 · TD 분할).
 	Opens bool

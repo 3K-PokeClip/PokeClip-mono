@@ -1,8 +1,8 @@
 package index
 
-// SeedResult 의 세션 개시 통로(POK-195 M4 — 계획 2.1 · 3절 형상 결정 2).
+// InsertCommit 의 세션 개시 통로(POK-195 M4 — 계획 2.1 · 3절 형상 결정 2).
 //
-// Insert 가 돌려주는 SeedResult 는 이 트랜잭션이 **커밋한** 값의 사본이다. 루프가 DB 를
+// Insert 가 돌려주는 InsertCommit 은 이 트랜잭션이 **커밋한** 값의 사본이다. 루프가 DB 를
 // 다시 묻지 않고 방금 쓴 행과 새로 연 세션을 아는 통로가 이것 하나라, 결과가 장부와
 // 다르면 그 차이가 그대로 캐시의 어긋남이 된다. 그래서 결과를 장부 실물과 대조한다.
 
@@ -152,7 +152,7 @@ func TestInsertReportsTargetDurationWrittenAtOpening(t *testing.T) {
 			split.SessionOpened, split.SessionID != opened.SessionID, split.TargetDuration)
 	}
 	for _, s := range sessionsOf(t, pool, stream) {
-		for _, res := range []SeedResult{opened, split} {
+		for _, res := range []InsertCommit{opened, split} {
 			if s.ID == res.SessionID && s.TargetDuration != res.TargetDuration {
 				t.Errorf("장부의 회차 %s TD = %d, 결과 = %d — 결과가 장부와 다르다", s.ID, s.TargetDuration, res.TargetDuration)
 			}
@@ -180,7 +180,7 @@ func (d inheritingDecider) Open(ctx context.Context, tx pgx.Tx, dec SessionDecis
 }
 
 func TestInsertReportsInheritsSessionWrittenAtOpening(t *testing.T) {
-	// 계획 뮤테이션 36(SeedResult.InheritsSession 미대입)의 생산 측 — 계승이 실리지 않으면 캐시가
+	// 계획 뮤테이션 36(InsertCommit.InheritsSession 미대입)의 생산 측 — 계승이 실리지 않으면 캐시가
 	// 개시 시점에 계승 접두를 세우지 못해 DISC-SEQ 만 승계되고 접두가 빠진 목록이 나간다.
 	pool := newTestPool(t)
 	stream := sessionStream("carrier-inherits")
@@ -352,7 +352,7 @@ func TestInsertDoesNotReportEndingSessionOfRolledBackSplit(t *testing.T) {
 	if out != InsertDuplicatePath {
 		t.Fatalf("outcome = %v, want %v", out, InsertDuplicatePath)
 	}
-	if res != (SeedResult{}) {
+	if res != (InsertCommit{}) {
 		t.Errorf("결과 = %+v, want 영값 — 롤백된 분할을 보고했다", res)
 	}
 	if got := statesOf(sessionsOf(t, pool, stream)); len(got) != 1 || got[0] != "live" {

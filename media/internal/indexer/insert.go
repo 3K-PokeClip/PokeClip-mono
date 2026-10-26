@@ -97,7 +97,7 @@ func sqlStateClass(code string) string {
 //
 // poisoned 가 true 면 이 세그먼트 하나만 버리고 프로세스는 계속 간다.
 // 에러·poison 반환의 outcome 값은 무의미한 채움이다 — 호출부는 err·poisoned 를 먼저 본다.
-func (ix *Indexer) insertWithRetry(ctx context.Context, rec index.Record, seed index.Seed, src index.SessionSource) (outcome index.InsertOutcome, seedRes index.SeedResult, poisoned bool, err error) {
+func (ix *Indexer) insertWithRetry(ctx context.Context, rec index.Record, seed index.Seed, src index.SessionSource) (outcome index.InsertOutcome, insertCommit index.InsertCommit, poisoned bool, err error) {
 	var lastErr error
 	backoff := ix.opt.InsertRetryBase
 
@@ -138,12 +138,12 @@ func (ix *Indexer) insertWithRetry(ctx context.Context, rec index.Record, seed i
 					// 시간축으로 두 문제를 갈라내는 지점이 여기다.
 					ix.log.Error("poison_streak_exceeded",
 						"stream_id", rec.StreamID, "streak", streak, "limit", ix.opt.PoisonStreakMax)
-					return index.InsertInserted, index.SeedResult{}, false, fmt.Errorf(
+					return index.InsertInserted, index.InsertCommit{}, false, fmt.Errorf(
 						"연속 poison INSERT %d회 stream_id=%q: %w", streak, rec.StreamID, insertErr)
 				}
-				return index.InsertInserted, index.SeedResult{}, true, nil
+				return index.InsertInserted, index.InsertCommit{}, true, nil
 			case fateFatal:
-				return index.InsertInserted, index.SeedResult{}, false, fmt.Errorf(
+				return index.InsertInserted, index.InsertCommit{}, false, fmt.Errorf(
 					"복구 불가한 INSERT 오류 stream_id=%q seq=%d: %w", rec.StreamID, rec.Seq, insertErr)
 			}
 
@@ -155,10 +155,10 @@ func (ix *Indexer) insertWithRetry(ctx context.Context, rec index.Record, seed i
 			break
 		}
 		if !sleepCtx(ctx, backoff) {
-			return index.InsertInserted, index.SeedResult{}, false, ctx.Err()
+			return index.InsertInserted, index.InsertCommit{}, false, ctx.Err()
 		}
 		backoff *= 2
 	}
-	return index.InsertInserted, index.SeedResult{}, false, fmt.Errorf("INSERT 재시도 상한 소진 stream_id=%q seq=%d: %w",
+	return index.InsertInserted, index.InsertCommit{}, false, fmt.Errorf("INSERT 재시도 상한 소진 stream_id=%q seq=%d: %w",
 		rec.StreamID, rec.Seq, lastErr)
 }

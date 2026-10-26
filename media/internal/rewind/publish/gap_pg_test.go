@@ -481,7 +481,7 @@ func TestUnstoodGapTickKeepsNextWindowValid(t *testing.T) {
 }
 
 // 잠금 순서(판단 J24) — GAP 트랜잭션은 P0 으로 소유 회차 행을 쥔 채 k 를 잠그지 않고 읽는다. init 불일치 확정 문장
-// (index.MarkPlaybackFailed 의 init_mismatch 갈래 — 조각 행 → 회차 행 순으로 잠근다)이 k 를 잠그고 회차 행을 기다리는
+// (index.SettlePlaybackFailure 의 init_mismatch 갈래 — 조각 행 → 회차 행 순으로 잠근다)이 k 를 잠그고 회차 행을 기다리는
 // 동안 적격 재확인이 돌아도 교착이 없다 — GAP 트랜잭션이 끝나고, 기다리던 문장이 뒤이어 선다.
 func TestGapTickLockOrderWithInitMismatch(t *testing.T) {
 	l, _, _ := newGapLoop(t, 20, 6, "pending")
@@ -495,7 +495,7 @@ func TestGapTickLockOrderWithInitMismatch(t *testing.T) {
 		started = true
 		go func() {
 			var err error
-			marked, err = index.NewUploadStore(base).MarkPlaybackFailed(context.Background(), fxStream, 6, "S", index.ReasonInitMismatch)
+			marked, err = index.NewUploadStore(base).SettlePlaybackFailure(context.Background(), fxStream, 6, "S", index.ReasonInitMismatch)
 			done <- err
 		}()
 		waitLockWait(t, base)

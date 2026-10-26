@@ -25,7 +25,7 @@ type Store interface {
 	//
 	// **Record 의 carrier 3열은 입력이 아니라 이 트랜잭션의 산출이다** — 실어 보낸 값은
 	// 쓰이지 않는다. 값을 정하는 자리가 둘이면 어느 쪽이 이겼는지 장부만 보고 알 수 없다.
-	Insert(ctx context.Context, r Record, seed Seed, src SessionSource) (InsertOutcome, SeedResult, error)
+	Insert(ctx context.Context, r Record, seed Seed, src SessionSource) (InsertOutcome, InsertCommit, error)
 	// UpdateTail 은 duration_ms 와 bytes 를 사후 정정한다. 계약상 쓰기 주체가 1번이므로 허용된다.
 	// upload_state 는 건드리지 않는다.
 	UpdateTail(ctx context.Context, streamID string, seq int64, durationMS int32, bytes int64) (updated bool, err error)
@@ -209,7 +209,7 @@ SELECT pg_catalog.clock_timestamp()
 
 const cutoffExistsSQL = `SELECT EXISTS (SELECT 1 FROM stream_cutoffs WHERE stream_id = $1)`
 
-func (s *pgStore) Insert(ctx context.Context, r Record, seed Seed, src SessionSource) (InsertOutcome, SeedResult, error) {
+func (s *pgStore) Insert(ctx context.Context, r Record, seed Seed, src SessionSource) (InsertOutcome, InsertCommit, error) {
 	out, res, err := s.insertOnce(ctx, r, seed, src)
 	if err != nil && isLockTimeout(err) {
 		// 55P03 → 즉시 1회 재시도(설계 6.5.5 · m1b). 재시도도 락이면 ErrLockContended 로
@@ -225,13 +225,13 @@ func (s *pgStore) Insert(ctx context.Context, r Record, seed Seed, src SessionSo
 // insertOnce 는 실패한 트랜잭션의 ROLLBACK 에도 되돌리는 순간부터 부른 쪽 취소와 무관하게
 // TxnDeadline 을 따로 씌운다 — 실패한 트랜잭션 하나는 최악 TxnDeadline 의 두 배가 걸린다(커밋하지
 // 않는 경로라 커밋 상한과 무관).
-func (s *pgStore) insertOnce(ctx context.Context, r Record, seed Seed, src SessionSource) (InsertOutcome, SeedResult, error) {
+func (s *pgStore) insertOnce(ctx context.Context, r Record, seed Seed, src SessionSource) (InsertOutcome, InsertCommit, error) {
 	txctx, cancel := context.WithTimeout(ctx, TxnDeadline)
 	defer cancel()
 
 	tx, err := s.pool.Begin(txctx)
 	if err != nil {
-		return InsertInserted, SeedResult{}, fmt.Errorf("주조 트랜잭션 시작 실패 stream_id=%q seq=%d: %w", r.StreamID, r.Seq, err)
+		return InsertInserted, InsertCommit{}, fmt.Errorf("주조 트랜잭션 시작 실패 stream_id=%q seq=%d: %w", r.StreamID, r.Seq, err)
 	}
 	// 되돌림 ctx 는 되돌리는 순간에 만든다 — 부른 쪽 ctx 에서 취소와 시한을 떼고
 	// TxnDeadline 을 새로 씌운다. 끝난 ctx 로 부르면 pgx 는 ROLLBACK 을 보내지 못하고
@@ -248,7 +248,7 @@ func (s *pgStore) insertOnce(ctx context.Context, r Record, seed Seed, src Sessi
 	// 곧 판정 시각이고, 적격 INSERT 는 대기가 끝난 뒤로 갱신된다.
 	var now time.Time
 	if err := tx.QueryRow(txctx, setTxnLimitsSQL).Scan(&now); err != nil {
-		return InsertInserted, SeedResult{}, fmt.Errorf("트랜잭션 상한 설정 실패 stream_id=%q seq=%d: %w", r.StreamID, r.Seq, err)
+		return InsertInserted, InsertCommit{}, fmt.Errorf("트랜잭션 상한 설정 실패 stream_id=%q seq=%d: %w", r.StreamID, r.Seq, err)
 	}
 
 	// ⑴ 주조 시도끼리는 스트림 스코프 advisory 락으로 **시간 판정보다 앞에서** 직렬화한다.
@@ -262,7 +262,7 @@ func (s *pgStore) insertOnce(ctx context.Context, r Record, seed Seed, src Sessi
 	// 대기 앞에서 굳히면 3초 대기 뒤 32초짜리 관측으로 세션이 열린다.
 	if seed.Eligible {
 		if err := tx.QueryRow(txctx, lockCutoffStreamSQL, r.StreamID).Scan(&now); err != nil {
-			return InsertInserted, SeedResult{}, fmt.Errorf("주조 직렬화 락 실패 stream_id=%q seq=%d: %w", r.StreamID, r.Seq, err)
+			return InsertInserted, InsertCommit{}, fmt.Errorf("주조 직렬화 락 실패 stream_id=%q seq=%d: %w", r.StreamID, r.Seq, err)
 		}
 	}
 
@@ -270,7 +270,7 @@ func (s *pgStore) insertOnce(ctx context.Context, r Record, seed Seed, src Sessi
 	var opening sessionOpening
 	r, opening, err = s.settleCarrier(txctx, tx, r, src, now.UTC())
 	if err != nil {
-		return InsertInserted, SeedResult{}, err
+		return InsertInserted, InsertCommit{}, err
 	}
 
 	// ⓐ 가 거짓이어도 $14~$18 은 유효한 값으로 내려간다 — seed 의 WHERE 가 막으므로
@@ -289,27 +289,27 @@ func (s *pgStore) insertOnce(ctx context.Context, r Record, seed Seed, src Sessi
 		if name, ok := uniqueViolation(err); ok {
 			// 롤백(defer)으로 컷오프도, 방금 연 세션도 남지 않는다(d4).
 			if name == localPathUniqueName {
-				return InsertDuplicatePath, SeedResult{}, nil
+				return InsertDuplicatePath, InsertCommit{}, nil
 			}
-			return InsertSeqConflict, SeedResult{}, nil
+			return InsertSeqConflict, InsertCommit{}, nil
 		}
-		return InsertInserted, SeedResult{}, fmt.Errorf("행 삽입 실패 stream_id=%q seq=%d: %w", r.StreamID, r.Seq, err)
+		return InsertInserted, InsertCommit{}, fmt.Errorf("행 삽입 실패 stream_id=%q seq=%d: %w", r.StreamID, r.Seq, err)
 	}
 	if err := tx.Commit(txctx); err != nil {
-		return InsertInserted, SeedResult{}, fmt.Errorf("주조 트랜잭션 커밋 실패 stream_id=%q seq=%d: %w", r.StreamID, r.Seq, err)
+		return InsertInserted, InsertCommit{}, fmt.Errorf("주조 트랜잭션 커밋 실패 stream_id=%q seq=%d: %w", r.StreamID, r.Seq, err)
 	}
 
 	// 여기서부터는 삽입이 **이미 커밋됐다** — 귀속 진단의 실패를 Insert 의 에러로 올리면
 	// 성공한 삽입이 실패로 오보고돼 재시도 → 23505 → (진단 실패 지속 시) 크래시루프가
-	// 된다(cc 리뷰 차단 2, 라이브 재현). 진단 실패는 SeedResult.DiagErr 로만 나른다.
+	// 된다(cc 리뷰 차단 2, 라이브 재현). 진단 실패는 InsertCommit.DiagErr 로만 나른다.
 	return InsertInserted, withCommitted(s.resolveSeed(ctx, r, seed, seeded), r, opening), nil
 }
 
 // withCommitted 는 커밋된 carrier 와 세션 개시 결과를 주조 결과에 얹는다.
 //
 // 커밋 뒤 이 한 자리에서만 부른다 — 롤백된 트랜잭션의 개시가 결과로 새어 나가지 않게
-// 하는 구조가 이것이다(앞선 반환은 전부 영값 SeedResult 다).
-func withCommitted(res SeedResult, r Record, o sessionOpening) SeedResult {
+// 하는 구조가 이것이다(앞선 반환은 전부 영값 InsertCommit 이다).
+func withCommitted(res InsertCommit, r Record, o sessionOpening) InsertCommit {
 	res.SessionOpened = o.opened
 	res.DiscontinuityBase = o.discontinuityBase
 	res.TargetDuration = o.targetDuration
@@ -350,7 +350,7 @@ var ErrSessionContended = errors.New("index: 세션 개시 경합(one_live_uq) �
 // 비귀속·비개시(정책 거부 또는 CurrentOnly 인데 현 세션 부재)면 ⑷⑸ 를 건너뛰고 셋 다
 // nil 로 남는다 — ⓒ 가 주조를 막아 not_settleable 로 귀속된다(설계 6.5.2 · M2 와 결과 동일).
 //
-// 개시 갈래면 둘째 반환값이 새 세션 행에 쓰인 값을 싣는다(SeedResult 의 개시 통로).
+// 개시 갈래면 둘째 반환값이 새 세션 행에 쓰인 값을 싣는다(InsertCommit 의 개시 통로).
 func (s *pgStore) settleCarrier(ctx context.Context, tx pgx.Tx, r Record, src SessionSource, now time.Time) (Record, sessionOpening, error) {
 	r.SessionID, r.PlaybackPDT, r.PlaybackS3Key = nil, nil, nil
 
@@ -489,15 +489,15 @@ func (s *pgStore) playbackPDT(ctx context.Context, tx pgx.Tx, r Record, baseSess
 
 // resolveSeed 는 Decline 귀속(설계 6.5.5)이다. 커밋 뒤에만 부르며, 어떤 실패도
 // 에러로 반환하지 않는다 — 귀속은 관측 신호이지 결과가 아니다.
-func (s *pgStore) resolveSeed(ctx context.Context, r Record, seed Seed, seeded int) SeedResult {
+func (s *pgStore) resolveSeed(ctx context.Context, r Record, seed Seed, seeded int) InsertCommit {
 	if seeded == 1 {
-		return SeedResult{Seeded: true}
+		return InsertCommit{Seeded: true}
 	}
 	if !seed.Eligible {
-		return SeedResult{Decline: DeclineNoCorroboration}
+		return InsertCommit{Decline: DeclineNoCorroboration}
 	}
 	if r.SessionID == nil || r.PlaybackPDT == nil || r.PlaybackS3Key == nil {
-		return SeedResult{Decline: DeclineNotSettleable}
+		return InsertCommit{Decline: DeclineNotSettleable}
 	}
 	// 자격 전부 참인데 seeded=0 — 기존 컷오프 승계(정상)인지 시간 항 탈락인지 가른다.
 	// 진단은 관측용이라 서비스 수명 ctx 로 매달리면 안 된다 — 짧은 상한을 준다.
@@ -505,15 +505,15 @@ func (s *pgStore) resolveSeed(ctx context.Context, r Record, seed Seed, seeded i
 	defer cancel()
 	var exists bool
 	if err := s.pool.QueryRow(dctx, cutoffExistsSQL, r.StreamID).Scan(&exists); err != nil {
-		return SeedResult{
+		return InsertCommit{
 			Decline: DeclineStaleCorroboration,
 			DiagErr: fmt.Errorf("컷오프 존재 확인 실패 stream_id=%q: %w", r.StreamID, err),
 		}
 	}
 	if exists {
-		return SeedResult{Decline: DeclineSkipped}
+		return InsertCommit{Decline: DeclineSkipped}
 	}
-	return SeedResult{Decline: DeclineStaleCorroboration}
+	return InsertCommit{Decline: DeclineStaleCorroboration}
 }
 
 // seedArgs 는 비적격 seed 의 제로값을 드라이버에 흘리지 않는 보정이다.

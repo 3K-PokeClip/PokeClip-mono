@@ -423,7 +423,7 @@ type lostReplyStore struct {
 	afterCommit func(rec index.Record)
 }
 
-func (s *lostReplyStore) Insert(ctx context.Context, r index.Record, seed index.Seed, src index.SessionSource) (index.InsertOutcome, index.SeedResult, error) {
+func (s *lostReplyStore) Insert(ctx context.Context, r index.Record, seed index.Seed, src index.SessionSource) (index.InsertOutcome, index.InsertCommit, error) {
 	out, res, err := s.Store.Insert(ctx, r, seed, src)
 	s.mu.Lock()
 	fire := s.armed && err == nil && out == index.InsertInserted
@@ -437,7 +437,7 @@ func (s *lostReplyStore) Insert(ctx context.Context, r index.Record, seed index.
 	if s.afterCommit != nil {
 		s.afterCommit(r)
 	}
-	return index.InsertInserted, index.SeedResult{}, errLostReply
+	return index.InsertInserted, index.InsertCommit{}, errLostReply
 }
 
 // raceRetryRun 은 동일 Record 재시도 한 번의 관측이다.
