@@ -24,6 +24,9 @@ import static org.mockito.BDDMockito.willThrow;
  */
 class AuthFailureReasonTest extends IntegrationTestSupport {
 
+    /** PKCE 원문. 형식 검사는 요청 DTO(GoogleLoginRequest) 몫이라 이 층에는 아무 값이나 된다. */
+    private static final String CODE_VERIFIER = "code-verifier-1";
+
     private final AuthService authService;
     private final TokenService tokenService;
     private final UserRepository userRepository;
@@ -49,7 +52,7 @@ class AuthFailureReasonTest extends IntegrationTestSupport {
         refreshTokenRepository.deleteAll();
         userRepository.deleteAll();
 
-        given(googleTokenClient.exchangeCodeForIdToken("code-1")).willReturn("id-1");
+        given(googleTokenClient.exchangeCodeForIdToken("code-1", CODE_VERIFIER)).willReturn("id-1");
         given(googleIdTokenVerifier.verify("id-1"))
                 .willReturn(new GoogleUser("sub-1", "a@example.com", "김태현", null));
     }
@@ -74,7 +77,7 @@ class AuthFailureReasonTest extends IntegrationTestSupport {
     /** 유예 창 안이라 정상 동작이다. 이 값이 틀리면 정상 트래픽이 WARN을 채운다. */
     @Test
     void 유예_창_안의_중복_회전은_REFRESH_TOKEN_ALREADY_ROTATED다() {
-        TokenPair issued = authService.loginWithGoogle("code-1");
+        TokenPair issued = authService.loginWithGoogle("code-1", CODE_VERIFIER);
         tokenService.rotate(issued.refreshToken());
 
         assertThatThrownBy(() -> tokenService.rotate(issued.refreshToken()))
@@ -86,7 +89,7 @@ class AuthFailureReasonTest extends IntegrationTestSupport {
     /** 유예 창을 넘긴 재사용만 탈취로 다룬다. */
     @Test
     void 유예_창을_넘긴_재사용은_REFRESH_TOKEN_REUSED다() {
-        TokenPair issued = authService.loginWithGoogle("code-1");
+        TokenPair issued = authService.loginWithGoogle("code-1", CODE_VERIFIER);
         tokenService.rotate(issued.refreshToken());
         ageRevokedTokens();
 
@@ -99,9 +102,9 @@ class AuthFailureReasonTest extends IntegrationTestSupport {
     @Test
     void 구글_토큰_교환_실패는_GOOGLE_TOKEN_EXCHANGE_FAILED다() {
         willThrow(new AuthException(AuthFailure.GOOGLE_TOKEN_EXCHANGE_FAILED, "구글 토큰 교환 실패"))
-                .given(googleTokenClient).exchangeCodeForIdToken("bad-code");
+                .given(googleTokenClient).exchangeCodeForIdToken("bad-code", CODE_VERIFIER);
 
-        assertThatThrownBy(() -> authService.loginWithGoogle("bad-code"))
+        assertThatThrownBy(() -> authService.loginWithGoogle("bad-code", CODE_VERIFIER))
                 .isInstanceOf(AuthException.class)
                 .extracting(e -> ((AuthException) e).failure())
                 .isEqualTo(AuthFailure.GOOGLE_TOKEN_EXCHANGE_FAILED);

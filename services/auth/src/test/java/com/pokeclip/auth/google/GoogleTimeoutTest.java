@@ -28,6 +28,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  */
 class GoogleTimeoutTest extends IntegrationTestSupport {
 
+    /** PKCE 원문. 형식 검사는 요청 DTO(GoogleLoginRequest) 몫이라 이 층에는 아무 값이나 된다. */
+    private static final String CODE_VERIFIER = "code-verifier-1";
+
     private static final Duration RESPONSE_DELAY = Duration.ofSeconds(4);
 
     /**
@@ -85,7 +88,8 @@ class GoogleTimeoutTest extends IntegrationTestSupport {
     void 구글_토큰_교환이_읽기_타임아웃에_끊긴다() {
         long startedAt = System.nanoTime();
 
-        assertThatThrownBy(() -> googleTokenClient.exchangeCodeForIdToken("any-code"))
+        assertThatThrownBy(
+                () -> googleTokenClient.exchangeCodeForIdToken("any-code", CODE_VERIFIER))
                 .isInstanceOf(AuthException.class);
 
         assertThat(Duration.ofNanos(System.nanoTime() - startedAt))

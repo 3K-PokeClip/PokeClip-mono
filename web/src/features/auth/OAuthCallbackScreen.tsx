@@ -62,7 +62,8 @@ export function OAuthCallbackScreen() {
     // 실패 안내로 이 화면에 머물러도 주소창에 1회용 값을 남기지 않는다. params는 이미 읽은 사본이다 (POK-482).
     stripOAuthParamsFromUrl();
 
-    const stored = consumeOAuthState(); // 검증 결과와 무관하게 즉시 소모 — 재사용 방지
+    // 검증 결과와 무관하게 즉시 소모 — 재사용 방지. PKCE verifier도 같은 항목이라 여기서 함께 사라진다 (POK-483).
+    const stored = consumeOAuthState();
 
     if (params.get('error') !== null) {
       // access_denied 등 — 구글이 사유를 실어 주지만 사용자에겐 취소로 뭉뚱그리는 편이 정확하다.
@@ -86,7 +87,7 @@ export function OAuthCallbackScreen() {
       return;
     }
 
-    loginWithGoogle(code)
+    loginWithGoogle(code, stored.codeVerifier)
       .then((pair) => {
         // 자동 로그아웃(401→clearTokens)은 캐시를 못 비운다 — 공용 PC에서 이전 계정의
         // me 캐시가 새 로그인에 새지 않도록, 토큰을 심기 전에 여기서 비운다. (리뷰 #72)

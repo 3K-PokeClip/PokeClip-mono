@@ -100,6 +100,9 @@ class SecretLeakTest extends IntegrationTestSupport {
 
     private static final String GOOGLE_CODE = needle("google-code");
 
+    /** PKCE 원문(POK-483). 바늘 꼴(62자 · 영숫자와 -)이 RFC 7636 형식을 통과해 실제 교환까지 간다. */
+    private static final String GOOGLE_CODE_VERIFIER = needle("google-code-verifier");
+
     /** application-test.yml 대신 아래 @DynamicPropertySource로 주입한다. */
     private static final String CLIENT_SECRET = needle("google-client-secret");
 
@@ -114,7 +117,8 @@ class SecretLeakTest extends IntegrationTestSupport {
      */
     private static final String INTERNAL_TOKEN = "test-only-internal-token-32bytes-long!!";
 
-    private static final List<String> SECRETS = List.of(GOOGLE_CODE, CLIENT_SECRET, JWT_SECRET);
+    private static final List<String> SECRETS =
+            List.of(GOOGLE_CODE, GOOGLE_CODE_VERIFIER, CLIENT_SECRET, JWT_SECRET);
 
     /** 치지직 바늘. 토큰 둘·채널은 가짜 서버가 돌려주고, code는 요청에, 시크릿은 설정(@DynamicPropertySource)에서 온다. */
     private static final String CHZZK_ACCESS = needle("chzzk-access");
@@ -150,10 +154,12 @@ class SecretLeakTest extends IntegrationTestSupport {
     private static final String RESOLVE_ALLOWED_SOURCE = "198.51.100.7";
 
     /**
-     * DEBUG에서 실제로 새는 것. 요청·응답 본문에 실려 다니는 둘뿐이다.
+     * DEBUG에서 실제로 새는 것. 요청·응답 본문에 실려 다니는 셋뿐이다 — PKCE 원문도
+     * 나가는 폼 본문에 실린다(POK-483).
      * JWT 서명키는 본문에 실리지 않아 DEBUG에서도 안 샌다 — 그래서 여기 없다.
      */
-    private static final List<String> LEAKS_AT_DEBUG = List.of(GOOGLE_CODE, CLIENT_SECRET);
+    private static final List<String> LEAKS_AT_DEBUG =
+            List.of(GOOGLE_CODE, GOOGLE_CODE_VERIFIER, CLIENT_SECRET);
 
     /**
      * 400 본문에 code와 client_secret을 일부러 싣는다. RestClientResponseException의
@@ -283,7 +289,7 @@ class SecretLeakTest extends IntegrationTestSupport {
         try (LogCaptor captor = new LogCaptor()) {
             String body = mockMvc.perform(post("/api/auth/google")
                             .contentType(MediaType.APPLICATION_JSON)
-                            .content("{\"code\":\"" + GOOGLE_CODE + "\"}"))
+                            .content(googleLoginBody(GOOGLE_CODE_VERIFIER)))
                     .andExpect(status().isUnauthorized())
                     .andReturn().getResponse().getContentAsString();
 
@@ -925,12 +931,22 @@ class SecretLeakTest extends IntegrationTestSupport {
     @Test
     void 깨진_JSON과_본문_검증_실패에도_원문이_남지_않는다() throws Exception {
         String broken = needle("broken-json-code");
+        // unreserved가 아닌 + 하나로 형식만 깨뜨린다. 나머지는 실제 verifier와 같은 꼴이다.
+        String brokenVerifier = needle("malformed-verifier") + "+";
 
         try (LogCaptor captor = new LogCaptor()) {
             // 닫히지 않은 JSON.
             String parseFailure = mockMvc.perform(post("/api/auth/google")
                             .contentType(MediaType.APPLICATION_JSON)
                             .content("{\"code\":\"" + broken + "\""))
+                    .andExpect(status().isBadRequest())
+                    .andReturn().getResponse().getContentAsString();
+
+            // PKCE 원문 형식 위반(POK-483). 레코드 생성자가 값 없이 거부한다 — @Pattern이면
+            // 바인딩 실패 리포트가 거부된 원문을 찍는다.
+            String malformedVerifier = mockMvc.perform(post("/api/auth/google")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(googleLoginBody(brokenVerifier)))
                     .andExpect(status().isBadRequest())
                     .andReturn().getResponse().getContentAsString();
 
@@ -945,8 +961,9 @@ class SecretLeakTest extends IntegrationTestSupport {
             assertThat(captor.messages())
                     .as("400을 인증 실패로 집계하면 미인증 트래픽이 알람을 만든다")
                     .noneMatch(m -> m.startsWith("auth.failed"));
-            assertNoSecretsIn(captor, List.of(broken));
+            assertNoSecretsIn(captor, List.of(broken, brokenVerifier));
             assertNoSecretsIn(parseFailure, List.of(broken));
+            assertNoSecretsIn(malformedVerifier, List.of(brokenVerifier));
             assertNoSecretsIn(validationFailure, List.of(broken));
         }
     }
@@ -960,6 +977,8 @@ class SecretLeakTest extends IntegrationTestSupport {
     @Test
     void 시크릿을_받는_DTO에는_NotBlank_말고는_걸지_않는다() throws Exception {
         assertThat(constraintsOn(GoogleLoginRequest.class, "code")).containsExactly(NotBlank.class);
+        // 과도기에는 선택값이라 제약이 없다(POK-483 1단계). 형식은 레코드 생성자가 값 없이 거른다.
+        assertThat(constraintsOn(GoogleLoginRequest.class, "codeVerifier")).isEmpty();
         assertThat(constraintsOn(RefreshRequest.class, "refreshToken")).containsExactly(NotBlank.class);
         assertThat(constraintsOn(ExchangeRequest.class, "code")).containsExactly(NotBlank.class);
         assertThat(constraintsOn(ResolveRequest.class, "streamid")).containsExactly(NotBlank.class);
@@ -1039,7 +1058,7 @@ class SecretLeakTest extends IntegrationTestSupport {
             try {
                 mockMvc.perform(post("/api/auth/google")
                                 .contentType(MediaType.APPLICATION_JSON)
-                                .content("{\"code\":\"" + GOOGLE_CODE + "\"}"))
+                                .content(googleLoginBody(GOOGLE_CODE_VERIFIER)))
                         .andExpect(status().isUnauthorized());
             } finally {
                 setLevel(SPRING_WEB_LOGGER, levelBefore);
@@ -1278,6 +1297,10 @@ class SecretLeakTest extends IntegrationTestSupport {
      * 바늘은 매 실행 무작위다. code-1·sub-1 같은 짧은 상수는 다른 로그와 우연히
      * 겹쳐 "안 샜다"가 아니라 "겹친 것을 못 봤다"로 통과할 수 있다.
      */
+    private static String googleLoginBody(String codeVerifier) {
+        return "{\"code\":\"" + GOOGLE_CODE + "\",\"codeVerifier\":\"" + codeVerifier + "\"}";
+    }
+
     private static String needle(String label) {
         return "LEAK-" + label + "-" + UUID.randomUUID();
     }

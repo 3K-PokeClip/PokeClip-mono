@@ -31,8 +31,8 @@ public class AuthService {
     private final UserRepository userRepository;
     private final TokenService tokenService;
 
-    public TokenPair loginWithGoogle(String code) {
-        String idToken = googleTokenClient.exchangeCodeForIdToken(code);
+    public TokenPair loginWithGoogle(String code, String codeVerifier) {
+        String idToken = googleTokenClient.exchangeCodeForIdToken(code, codeVerifier);
         GoogleUser googleUser = googleIdTokenVerifier.verify(idToken);
 
         User user = userService.findOrCreate(

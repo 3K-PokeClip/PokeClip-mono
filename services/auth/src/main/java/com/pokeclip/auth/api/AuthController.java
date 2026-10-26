@@ -37,7 +37,8 @@ public class AuthController {
 
     @PostMapping("/google")
     public TokenResponse loginWithGoogle(@Valid @RequestBody GoogleLoginRequest request) {
-        return TokenResponse.from(authService.loginWithGoogle(request.code()));
+        return TokenResponse.from(
+                authService.loginWithGoogle(request.code(), request.codeVerifier()));
     }
 
     @GetMapping("/me")

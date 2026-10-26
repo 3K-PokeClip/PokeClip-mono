@@ -20,12 +20,15 @@ export interface Me {
   profileImageUrl: string | null;
 }
 
-/** 구글 동의 화면에서 받은 authorization code를 우리 토큰 한 쌍으로 바꾼다. 처음 온 사용자는 자동 가입. */
-export async function loginWithGoogle(code: string): Promise<TokenPair> {
+/**
+ * 구글 동의 화면에서 받은 authorization code를 우리 토큰 한 쌍으로 바꾼다. 처음 온 사용자는 자동 가입.
+ * codeVerifier는 동의 URL에 challenge로 실었던 PKCE 원문이다 — 구글이 challenge와 대조한다 (POK-483).
+ */
+export async function loginWithGoogle(code: string, codeVerifier: string): Promise<TokenPair> {
   const res = await fetch('/api/auth/google', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ code }),
+    body: JSON.stringify({ code, codeVerifier }),
   });
   if (!res.ok) {
     // 401은 사유를 알려주지 않는 계약 — 문구를 일반화한다.

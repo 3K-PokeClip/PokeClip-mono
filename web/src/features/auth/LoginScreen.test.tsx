@@ -63,6 +63,18 @@ describe('LoginScreen', () => {
     expect(window.sessionStorage.getItem('pc-auth-return')).toBe('/settings/plugin');
   });
 
+  it('비동기로 실패해도(PKCE challenge 계산 등) 오류를 표면화하고 복원 경로를 되돌린다', async () => {
+    window.sessionStorage.setItem('pc-auth-return', '/settings/plugin');
+    startGoogleLogin.mockRejectedValue(new Error('crypto.subtle을 쓸 수 없다'));
+    render(<LoginScreen />);
+
+    fireEvent.click(screen.getByRole('button', { name: /Google로 시작하기/ }));
+
+    // 진입이 비동기라(POK-483) 거부는 다음 틱에 온다 — 그래도 「안 눌리는 버튼」이 되면 안 된다
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
+    expect(window.sessionStorage.getItem('pc-auth-return')).toBe('/settings/plugin');
+  });
+
   it('이미 세션이 있으면 /home으로 되돌린다 (역가드)', async () => {
     window.localStorage.setItem('pc-auth', JSON.stringify({ v: 1, refreshToken: 'refresh-1' }));
 
