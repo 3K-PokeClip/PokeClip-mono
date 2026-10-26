@@ -80,6 +80,15 @@ func (b *Board) FindRound(streamID, roundID string, now time.Time, staleAfter ti
 	return Status{}, Miss, false
 }
 
+// Age 는 스냅숏이 만든 뒤 now 까지 지난 시간이다 — 낡음 게이지(control_status_stale)의 재료다. 첫 스냅숏 전 · 꺼짐
+// Board 는 거짓이다(갱신되지 않는 것이 정상이라 낡음을 말하지 않는다). 답은 Find · FindRound 가 정한다.
+func (b *Board) Age(now time.Time) (time.Duration, bool) {
+	if b == nil || b.disabled {
+		return 0, false
+	}
+	return now.Sub(b.builtAt), true
+}
+
 // closed 는 항목을 보기 전에 끝나는 답이다 — 첫 스냅숏 전 · 꺼짐 · 낡음.
 func (b *Board) closed(now time.Time, staleAfter time.Duration) (Answer, bool) {
 	switch {
