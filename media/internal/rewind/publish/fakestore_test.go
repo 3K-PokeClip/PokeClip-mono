@@ -142,7 +142,8 @@ func (f *fakeStore) Head(ctx context.Context, key string) (Stat, error) {
 	return Stat{Exists: true, ETag: obj.etag, Meta: maps.Clone(obj.meta)}, nil
 }
 
-// Get 은 Store.Get 이다 — 본문과 그 판의 ETag 를 같은 잠금 아래에서 읽는다(한 응답).
+// Get 은 Store.Get 이다 — 본문과 그 판의 ETag 를 같은 잠금 아래에서 읽는다(한 응답). 본문 상한은 S3Store 와 같다
+// (checkBodyLimit).
 func (f *fakeStore) Get(ctx context.Context, key string) ([]byte, string, error) {
 	f.mu.Lock()
 	f.gets = append(f.gets, key)
@@ -159,6 +160,9 @@ func (f *fakeStore) Get(ctx context.Context, key string) ([]byte, string, error)
 	obj, ok := f.objects[key]
 	if !ok {
 		return nil, "", fmt.Errorf("%w: GET key=%q", ErrNotFound, key)
+	}
+	if err := checkBodyLimit(key, obj.body); err != nil {
+		return nil, "", err
 	}
 	return bytes.Clone(obj.body), obj.etag, nil
 }

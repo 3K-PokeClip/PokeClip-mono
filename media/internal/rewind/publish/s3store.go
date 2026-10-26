@@ -42,6 +42,15 @@ func cacheControl(key string) string {
 	return manifestCacheControl
 }
 
+// getBodyLimit 은 key 에서 읽는 본문의 크기 상한이다 — VOD 문서 키면 rewind.MaxVODBodyBytes(설계 D29), 그 밖(되감기
+// 목록)은 rewind.MaxBodyBytes 다. 발행 전 검사 S5 가 종류마다 거는 상한과 같다.
+func getBodyLimit(key string) int {
+	if strings.HasPrefix(key, vodKeyPrefix) {
+		return rewind.MaxVODBodyBytes
+	}
+	return rewind.MaxBodyBytes
+}
+
 // S3Store 는 Store 의 S3 구현이다 — 버킷 하나에 쓰고 읽는다. upload.Putter(세그먼트 PUT — 조건 · 메타
 // 없음)와는 다른 경계다.
 type S3Store struct {
@@ -112,9 +121,9 @@ func (s *S3Store) Head(ctx context.Context, key string) (Stat, error) {
 // Get 은 Store.Get 이다 — ETag 는 본문과 같은 GET 응답의 ETag 머리다. 200 인데 ETag 가 없으면 성공으로 보고하지
 // 않는다 — 읽은 본문에 조건을 걸 수 없다.
 //
-// 본문은 rewind.MaxBodyBytes(발행 전 검사 S5 의 목록 본문 상한)까지만 읽는다 — 발행한 목록은 S5 를 통과했으므로
-// 그보다 큰 본문은 우리가 쓴 판이 아니고, 상한이 없으면 저장소가 보내는 만큼 메모리를 잡는다. 넘으면 센티널이
-// 아닌 오류다.
+// 본문은 그 키 축의 상한(getBodyLimit — 발행 전 검사 S5 의 종류별 상한)까지만 읽는다 — 발행한 문서는 S5 를
+// 통과했으므로 그보다 큰 본문은 우리가 쓴 판이 아니고, 상한이 없으면 저장소가 보내는 만큼 메모리를 잡는다. 넘으면
+// errBodyOverLimit 를 감싼 오류다(감사가 바뀐 문서로 가른다).
 func (s *S3Store) Get(ctx context.Context, key string) ([]byte, string, error) {
 	out, err := s.client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(s.bucket),
@@ -129,14 +138,24 @@ func (s *S3Store) Get(ctx context.Context, key string) ([]byte, string, error) {
 		return nil, "", fmt.Errorf("publish: GET key=%q: 응답에 ETag 가 없다", key)
 	}
 	// 한 바이트 더 읽어야 상한 크기와 초과를 가른다.
-	body, err := io.ReadAll(io.LimitReader(out.Body, rewind.MaxBodyBytes+1))
+	limit := getBodyLimit(key)
+	body, err := io.ReadAll(io.LimitReader(out.Body, int64(limit)+1))
 	if err != nil {
 		return nil, "", fmt.Errorf("publish: GET key=%q: 본문 읽기: %w", key, err)
 	}
-	if len(body) > rewind.MaxBodyBytes {
-		return nil, "", fmt.Errorf("publish: GET key=%q: 본문이 상한 %d바이트를 넘는다", key, rewind.MaxBodyBytes)
+	if err := checkBodyLimit(key, body); err != nil {
+		return nil, "", err
 	}
 	return body, etag, nil
+}
+
+// checkBodyLimit 은 key 에서 읽은 body 가 그 축의 상한(getBodyLimit) 안인가다 — 넘으면 errBodyOverLimit 를 감싼
+// 오류다.
+func checkBodyLimit(key string, body []byte) error {
+	if limit := getBodyLimit(key); len(body) > limit {
+		return fmt.Errorf("%w: GET key=%q: 상한 %d바이트", errBodyOverLimit, key, limit)
+	}
+	return nil
 }
 
 // requestOptions 는 S3Store 의 모든 요청에 붙이는 SDK 설정이다. client 를 어떻게 만들었든 두 가지를

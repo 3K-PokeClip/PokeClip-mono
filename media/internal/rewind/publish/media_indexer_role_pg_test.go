@@ -6,19 +6,35 @@ package publish
 // 따로 만든 풀(cmd/segment-indexer/rewind_assembly.go)로 붙지만 계정은 같은 media_indexer 다. 이 패키지의
 // 비시험 SQL 전수:
 //
-//	문장              메서드 · 갈래                              표 · 동작
-//	fenceAcquireSQL   Tick 첫 걸음(fence 획득)                   sessions UPDATE
-//	fenceRenewSQL     RenewFence(lazy 갱신)                      sessions UPDATE
-//	fenceReleaseSQL   Release(shutdown 반납)                     sessions UPDATE
-//	p0ReserveSQL      Tick P0 · GAP 트랜잭션 첫 문장             sessions UPDATE … RETURNING
-//	p2RevokeSQL       Tick P2′(첫 PUT 전 계승 취소)              sessions UPDATE … RETURNING
-//	p4ConfirmSQL      Tick P4                                    sessions UPDATE · gaps UPDATE(recorded → put_confirmed)
-//	r3ReconcileSQL    화해 R3(객체 있음)                         sessions UPDATE … RETURNING
-//	r4ClearETagSQL    화해 R4(객체 없음)                         sessions UPDATE … RETURNING
-//	gapRecordSQL      GAP 트랜잭션(원장 INSERT)                  sessions · segments · cutoffs · gaps SELECT · gaps INSERT(ON CONFLICT DO NOTHING)
+//	문장                메서드 · 갈래                                       표 · 동작
+//	fenceAcquireSQL     Tick 첫 걸음(fence 획득)                            sessions UPDATE
+//	fenceRenewSQL       RenewFence(lazy 갱신)                               sessions UPDATE
+//	fenceReleaseSQL     Release(shutdown 반납)                              sessions UPDATE
+//	p0ReserveSQL        Tick P0 · GAP 트랜잭션 첫 문장                      sessions UPDATE … RETURNING
+//	p2RevokeSQL         Tick P2′ · RevokeInheritance(계승 취소)             sessions UPDATE … RETURNING
+//	p4ConfirmSQL        Tick P4                                             sessions UPDATE · gaps UPDATE(recorded → put_confirmed)
+//	r3ReconcileSQL      화해 R3(객체 있음)                                  sessions UPDATE … RETURNING
+//	r4ClearETagSQL      화해 R4(객체 없음) · 동결 준비 · RevokeInheritance  sessions UPDATE … RETURNING
+//	gapRecordSQL        GAP 트랜잭션(원장 INSERT)                           sessions · segments · cutoffs · gaps SELECT · gaps INSERT(ON CONFLICT DO NOTHING)
+//	reserveTerminalSQL  FreezeDVR · Endlist F0 · E0(terminal 예약)          sessions UPDATE … RETURNING
+//	dvrStateSQL         예약 · FailDVR 0행의 까닭                           sessions SELECT
+//	confirmFrozenSQL    FreezeDVR · Endlist F4 · E5(동결 확정)              sessions UPDATE · gaps UPDATE(recorded → put_confirmed)
+//	confirmEmptySQL     빈 동결 확정                                        sessions UPDATE
+//	failDVRSQL          RecoverOrphan · FailDVR(freeze_failed)              sessions UPDATE … RETURNING
+//	vodTxnLimitsSQL     FreezeVOD 등재 트랜잭션 첫 문장(지역 상한)          set_config 만(표 없음)
+//	vodLockTailSQL      FreezeVOD 등재(꼬리 행 잠금)                        sessions SELECT FOR UPDATE
+//	vodMarkGapSQL       FreezeVOD 등재(GAP 원장)                            gaps INSERT(ON CONFLICT DO NOTHING)
+//	vodAbandonGapsSQL   FreezeVOD 등재(미착지 GAP 포기)                     gaps UPDATE · segments SELECT
+//	vodLockChainSQL     FreezeVOD 확정 첫 문장(사슬 행 잠금)                sessions SELECT FOR NO KEY UPDATE
+//	vodConfirmSQL       FreezeVOD 확정                                      sessions UPDATE
+//	vodStateSQL         FreezeVOD 확정 0행의 까닭                           sessions SELECT
+//	frozenDocsSQL       FrozenAuditor.Audit(감사 대상)                      sessions SELECT
+//	repairClaimSQL      감사 복구 장부 CAS                                  sessions UPDATE … RETURNING
+//	repairConfirmSQL    감사 복구 ETag 확정                                 sessions UPDATE
 //
-// 장부 적재 · 감시(LoadLedger · Watch)는 index.LoadRewindLedger · index.LoadRewindWatch 를 부른다 — 그 문장은 index
-// 역할 시험이 잰다.
+// 장부 적재 · 감시(LoadLedger · Watch)는 index.LoadRewindLedger · index.LoadRewindWatch 를, 동결 · 감사 재렌더는
+// index.LoadSessionLedger 를, VOD 는 index.LoadChainLedger 를 부른다 — 그 문장은 index 역할 시험이 잰다. 이 시험이
+// 역할로 실제 보내는 문장은 위 표 앞 아홉이다(RequireSent) — 동결 · VOD · 감사 문장은 표에만 있다.
 
 import (
 	"testing"

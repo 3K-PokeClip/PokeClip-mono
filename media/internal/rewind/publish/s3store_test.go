@@ -461,6 +461,49 @@ func TestS3StoreGetStopsReadingPastLimit(t *testing.T) {
 	}
 }
 
+// Get 의 본문 상한은 키 축으로 갈린다 — VOD 문서 키는 rewind.MaxVODBodyBytes(설계 D29), 그 밖(되감기 목록)은
+// rewind.MaxBodyBytes 다. 상한 초과는 errBodyOverLimit 다 — 우리가 쓴 판일 수 없어 감사가 mismatch 로 가른다
+// (보안 M-1). 목록 상한을 VOD 에 쓰면 512KiB 넘는 VOD 의 변조가 읽기 실패로 묻힌다.
+func TestS3StoreGetLimitByAxis(t *testing.T) {
+	dvr, err := manifestKey("demo", "sess-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	vod, err := vodKey("demo", "sess-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name    string
+		key     string
+		size    int
+		wantErr bool
+	}{
+		{name: "DVR_상한", key: dvr, size: rewind.MaxBodyBytes},
+		{name: "DVR_초과", key: dvr, size: rewind.MaxBodyBytes + 1, wantErr: true},
+		{name: "VOD_목록_상한_초과", key: vod, size: rewind.MaxBodyBytes + 1},
+		{name: "VOD_상한", key: vod, size: rewind.MaxVODBodyBytes},
+		{name: "VOD_초과", key: vod, size: rewind.MaxVODBodyBytes + 1, wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store, _ := newStubbedStore(t, respondObject(`"e1"`, nil, bytes.Repeat([]byte{'x'}, tc.size)))
+
+			body, _, err := store.Get(context.Background(), tc.key)
+
+			if tc.wantErr {
+				if !errors.Is(err, errBodyOverLimit) {
+					t.Errorf("Get(%q) %d바이트 오류 = %v, want errBodyOverLimit", tc.key, tc.size, err)
+				}
+				return
+			}
+			if err != nil || len(body) != tc.size {
+				t.Errorf("Get(%q) = %d바이트 · %v, want %d바이트 · nil", tc.key, len(body), err, tc.size)
+			}
+		})
+	}
+}
+
 // hugeChunk 는 거대 오류 본문 흉내 서버가 되풀이해 쓰는 32KiB 조각이다 — 한 번만 할당한다.
 var hugeChunk = bytes.Repeat([]byte{'x'}, 32<<10)
 

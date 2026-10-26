@@ -5,8 +5,12 @@ package publish
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"log/slog"
+	"slices"
 	"testing"
+
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/rewind"
 )
 
 // auditSetup 은 회차 S 의 DVR 을 닫고(창 [0, 5] 발행 뒤 동결) 사슬 P ← S 와 무관한 픽스처다 — 감사 대상은 DVR 하나다.
@@ -103,6 +107,105 @@ func TestAuditFrozenChecksVODOncePerDocument(t *testing.T) {
 
 	if out.Checked != 1 || out.Failed != 1 {
 		t.Errorf("감사 = %+v, want VOD 문서 1건 · 실패 1", out)
+	}
+}
+
+// 축의 본문 상한을 넘는 동결 문서는 우리가 쓴 판일 수 없다 — 읽기 실패(WARN)가 아니라 ERROR mismatch 다(보안 M-1).
+// DVR 은 앞부분 갈래를 따지지 않고 PUT 하지 않는다.
+func TestAuditFrozenReportsOversizedDocumentAsMismatch(t *testing.T) {
+	t.Run("VOD", func(t *testing.T) {
+		p, store, chain := newVODChain(t, chainRows())
+		wantOutcome(t, p.FreezeVOD(t.Context(), chain, false), AxisVOD, ResultFrozen, false)
+		exec(t, p.pool, `UPDATE stream_sessions SET dvr_frozen_at = now() WHERE session_id IN ('P', 'S')`)
+		plant(store, putCall{key: vodChainKey, body: bytes.Repeat([]byte{'x'}, rewind.MaxVODBodyBytes+1)})
+		logs := &logRecorder{}
+		p.log = slog.New(logs)
+
+		out := NewFrozenAuditor(p).Audit(t.Context())
+
+		if out.Failed != 1 {
+			t.Errorf("감사 = %+v, want 실패 1", out)
+		}
+		if got := auditFailures(logs); len(got) != 1 || got[0] != auditMismatch {
+			t.Errorf("감사 ERROR %v, want [mismatch]", got)
+		}
+	})
+	t.Run("DVR", func(t *testing.T) {
+		l, store, logs := auditSetup(t)
+		plant(store, putCall{key: soloKey, body: bytes.Repeat([]byte{'x'}, rewind.MaxBodyBytes+1)})
+		puts := len(store.putCalls())
+
+		out := NewFrozenAuditor(l.pub).Audit(t.Context())
+
+		if out.Failed != 1 || len(store.putCalls()) != puts {
+			t.Errorf("감사 = %+v · PUT %d번, want 실패 1 · PUT 0", out, len(store.putCalls())-puts)
+		}
+		if got := auditFailures(logs); len(got) != 1 || got[0] != auditMismatch {
+			t.Errorf("감사 ERROR %v, want [mismatch]", got)
+		}
+	})
+}
+
+// plantFrozenDVRs 는 손대지 않은 DVR 동결 문서 n 개(키 사전순 = 만든 순)를 장부와 저장소에 둔다. 키 목록을 돌려준다.
+func plantFrozenDVRs(t *testing.T, p *Publisher, store *fakeStore, n int) []string {
+	t.Helper()
+	keys := make([]string, n)
+	for i := range keys {
+		id := fmt.Sprintf("F%03d", i)
+		keys[i] = "dvr/" + fxStream + "/" + id + "/index.m3u8"
+		body := []byte("#EXTM3U\n#" + id + "\n")
+		plant(store, putCall{key: keys[i], body: body})
+		sum := sha256Of(body)
+		exec(t, p.pool, `
+			INSERT INTO stream_sessions (session_id, stream_id, started_at, ended_at, state, dvr_state, dvr_s3_key, dvr_etag, dvr_sha256)
+			VALUES ($1, $2, now(), now(), 'ended', 'frozen', $3, $4, $5)`, id, fxStream, keys[i], bodyETag(body), sum[:])
+	}
+	return keys
+}
+
+// firstKey 는 keys 의 첫 키다. 비었으면 "" 다.
+func firstKey(keys []string) string {
+	if len(keys) == 0 {
+		return ""
+	}
+	return keys[0]
+}
+
+// 한 번에 보는 문서 수 상한(100)을 넘으면 다음 감사가 마지막으로 본 키 다음부터 본다 — 사전순 앞 100개만 되풀이해
+// 보고 나머지가 창 밖으로 빠지지 않게(cx r1 설계 M · 보안 L-3). 끝까지 보면 처음으로 돌아간다. 상한에 닿은 감사는
+// WARN limit_reached 를 한 줄 남긴다.
+func TestAuditFrozenAdvancesPastLimit(t *testing.T) {
+	pool, store, logs := newPool(t), newFakeStore(t), &logRecorder{}
+	p := newPublisher(t, pool, store, "w-me", logs)
+	keys := plantFrozenDVRs(t, p, store, frozenAuditLimit+5)
+	a := NewFrozenAuditor(p)
+	audit := func() ([]string, AuditOutcome) {
+		heads := len(store.headKeys())
+		out := a.Audit(t.Context())
+		return store.headKeys()[heads:], out
+	}
+
+	first, out1 := audit()
+	second, out2 := audit()
+	third, _ := audit()
+
+	if out1.Checked != frozenAuditLimit || !slices.Equal(first, keys[:frozenAuditLimit]) {
+		t.Errorf("첫 감사 %d건 · 처음 %q, want 앞 %d건", out1.Checked, firstKey(first), frozenAuditLimit)
+	}
+	if out2.Checked != 5 || !slices.Equal(second, keys[frozenAuditLimit:]) {
+		t.Errorf("둘째 감사 %d건 · Head %d개(처음 %q), want 상한 뒤 5건 %q", out2.Checked, len(second), firstKey(second), keys[frozenAuditLimit:])
+	}
+	if !slices.Equal(third, keys[:frozenAuditLimit]) {
+		t.Errorf("셋째 감사 %d건, want 처음부터 앞 %d건", len(third), frozenAuditLimit)
+	}
+	var warns []string
+	for _, r := range logs.records(freezeAuditLog) {
+		if r.level == slog.LevelWarn {
+			warns = append(warns, r.attrs["reason"])
+		}
+	}
+	if !slices.Equal(warns, []string{auditLimitReached, auditLimitReached}) {
+		t.Errorf("감사 WARN %v, want 상한에 닿은 감사(첫 · 셋째)마다 %s", warns, auditLimitReached)
 	}
 }
 

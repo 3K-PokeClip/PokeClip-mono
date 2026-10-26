@@ -68,8 +68,17 @@ UPDATE stream_published_gaps g
  WHERE g.stream_id = $1 AND g.seq BETWEEN $2 AND $3 AND g.published_state <> 'vod_abandoned'
    AND s.stream_id = g.stream_id AND s.seq = g.seq AND s.playback_upload_state <> 'uploaded'`
 
+// vodLockChainSQL 은 확정 전 사슬 행 잠금이다 — 회차 잠금(session lockRoundRowsSQL)과 같은 순서(started_at, session_id)
+// · 같은 세기(FOR NO KEY UPDATE)로 잡는다. 확정 UPDATE 가 제 방문 순서(키 · 물리 순)로 여러 행을 잠그면 회차 잠금과
+// 서로 기다려 교착(40P01)이 된다(db L2). 40P01 은 그래도 재시도(freezeDB)다.
+const vodLockChainSQL = `
+SELECT 1 FROM stream_sessions
+ WHERE stream_id = $1 AND session_id = ANY($2)
+ ORDER BY started_at, session_id
+   FOR NO KEY UPDATE`
+
 // vodConfirmSQL 은 VOD 확정이다 — 사슬 세션 $2 가운데 아직 freezing 인 행에 VOD 열을 쓴다. 바꾼 행 수가 사슬 수와 다르면
-// 부르는 쪽이 되돌린다(트랜잭션).
+// 부르는 쪽이 되돌린다(트랜잭션). 행은 vodLockChainSQL 이 먼저 잠근다.
 const vodConfirmSQL = `
 WITH upd AS (
     UPDATE stream_sessions
@@ -365,6 +374,9 @@ func (v *vodJob) confirm(ctx context.Context, result string, plan *vodPlan, etag
 	defer cancel()
 	var n int64
 	err := pgx.BeginFunc(dctx, v.p.pool, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(dctx, vodLockChainSQL, v.chain.StreamID, v.chain.SessionIDs); err != nil {
+			return err
+		}
 		if err := tx.QueryRow(dctx, vodConfirmSQL, v.chain.StreamID, v.chain.SessionIDs, state, key, etagArg, sha, first, last).Scan(&n); err != nil {
 			return err
 		}

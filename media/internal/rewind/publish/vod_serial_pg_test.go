@@ -120,3 +120,42 @@ func TestFreezeVODTailLockTimeoutRetries(t *testing.T) {
 		t.Errorf("사유 %q · PUT %d번, want contended · 0", out.Reason, len(store.putCalls()))
 	}
 }
+
+// vod_confirm_locks_in_round_order(db L2) — VOD 확정은 사슬 행을 회차 잠금(session lockRoundRows)과 같은 순서(started_at,
+// session_id)로 먼저 잠근다. 확정 UPDATE 가 제 방문 순서(키 · 물리 순 — 여기서 P 다음 S)로 잠그면, 그 순서로 S 를 쥔
+// 회차 잠금 쪽과 서로 기다려 교착(40P01)이 된다. 픽스처는 S 의 시작을 P 앞으로 옮겨 두 순서를 어긋나게 한다.
+func TestFreezeVODConfirmLocksChainInRoundOrder(t *testing.T) {
+	p, _, chain := newVODChain(t, chainRows())
+	exec(t, p.pool, `UPDATE stream_sessions SET started_at = now() - interval '1 hour' WHERE session_id = 'S'`)
+	ctx := context.Background()
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("회차 잠금 트랜잭션 시작 실패: %v", err)
+	}
+	defer tx.Rollback(ctx)
+	const lockSQL = `SELECT 1 FROM stream_sessions WHERE session_id = $1 FOR NO KEY UPDATE`
+	if _, err := tx.Exec(ctx, `SET LOCAL lock_timeout = '3s'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, lockSQL, "S"); err != nil {
+		t.Fatalf("회차 순서 첫 행 S 잠금 실패: %v", err)
+	}
+	v := &vodJob{p: p, chain: chain, key: vodChainKey}
+	done := make(chan FreezeOutcome, 1)
+	go func() { done <- v.confirm(ctx, ResultEmpty, nil, "", nil) }()
+	waitLockWait(t, p.pool)
+
+	_, err = tx.Exec(ctx, lockSQL, "P")
+	if err != nil {
+		t.Errorf("회차 순서 둘째 행 P 잠금 = %v, want 확정이 아무 행도 쥐지 않고 기다림(교착 없음)", err)
+	}
+	if err := tx.Rollback(ctx); err != nil {
+		t.Errorf("회차 잠금 트랜잭션 되돌리기 실패: %v", err)
+	}
+
+	out := <-done
+	wantOutcome(t, out, AxisVOD, ResultEmpty, false)
+	if out.Err != nil {
+		t.Errorf("확정 오류 = %v, want 없음", out.Err)
+	}
+}
