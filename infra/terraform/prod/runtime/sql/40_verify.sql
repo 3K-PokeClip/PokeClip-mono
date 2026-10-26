@@ -35,13 +35,14 @@
 --   ledger_column:<표>.<열>         M6 장부 열(stream_sessions 의 round_id · round_closed_at · expired_at ·
 --                                   stop_marked_at)이 있다
 --   index:<인덱스>                  stream_sessions_round_open_idx 가 stream_sessions 의 인덱스로 있고, 쓸 수 있으며
---                                   (indisvalid · indisready) 부분 인덱스 술어가 ddl.go 와 같다
+--                                   (indisvalid · indisready) 정의(열 · 정렬 · 부분 인덱스 술어)가 ddl.go 와 같다
 --   trigger:<트리거>                stream_segments 의 seq 하한 트리거 둘이 일반 연결에서 켜진 채('O' · 'A' — 'R' 은
 --                                   replica 에서만 돈다) 제 함수 · 시점(tgtype — 갱신은 AFTER DELETE 문장 단위 ·
 --                                   검사는 BEFORE INSERT 행 단위) · 전이 표 이름(갱신만 deleted_rows)에 묶여 있다 —
 --                                   지워지거나 돌지 않으면 하한 없이 seq 를 다시 쓸 수 있다(불변식 4)
---   function_execute:<함수>         하한 갱신 정의자 함수의 EXECUTE 가 PUBLIC 에 없다 — 있으면 앱 사용자가 자기 표에
---                                   트리거로 붙여 media_owner 신분으로 남의 하한을 올린다
+--   function_execute:<함수>         하한 갱신 정의자 함수의 EXECUTE 가 소유자(media_owner) 밖에 없다(PUBLIC · 특정
+--                                   계정 모두) — 있으면 그 계정이 자기 표에 트리거로 붙여 media_owner 신분으로 남의
+--                                   하한을 올린다
 --   function:<함수>                 하한 함수의 SECURITY DEFINER 여부가 기대와 같고(갱신 함수만 정의자) search_path 가
 --                                   pg_catalog, pg_temp 로 고정돼 있다 — 정의자 함수가 부른 쪽 search_path 로 돌면
 --                                   public 의 덫을 media_owner 신분으로 부른다
@@ -288,8 +289,10 @@ BEGIN
                         WHERE indexrelid = pg_catalog.to_regclass('public.stream_sessions_round_open_idx')::oid
                           AND indrelid = pg_catalog.to_regclass('public.stream_sessions')::oid
                           AND indisvalid AND indisready
-                          AND pg_catalog.pg_get_expr(indpred, indrelid)
-                              = '((round_closed_at IS NULL) AND (round_id IS NOT NULL))'::text)
+                          AND pg_catalog.pg_get_indexdef(indexrelid)
+                              = 'CREATE INDEX stream_sessions_round_open_idx ON public.stream_sessions USING btree '
+                                '(round_id, started_at DESC) '
+                                'WHERE ((round_closed_at IS NULL) AND (round_id IS NOT NULL))'::text)
         UNION ALL
         SELECT 'trigger:' || tg,
                EXISTS (SELECT 1 FROM pg_trigger
@@ -300,9 +303,17 @@ BEGIN
                           AND tgoldtable IS NOT DISTINCT FROM oldtable::name)
           FROM floor_triggers
         UNION ALL
+        -- 권한 목록(proacl)을 펼쳐 소유자 밖의 EXECUTE 를 센다 — PUBLIC 만 보면 특정 계정에 준 GRANT 를 놓친다.
+        -- proacl 이 NULL 이면 기본값(PUBLIC EXECUTE 포함)이다.
         SELECT 'function_execute:stream_segments_raise_seq_floor',
-               NOT pg_catalog.has_function_privilege(
-                   'public', pg_catalog.to_regprocedure('public.stream_segments_raise_seq_floor()')::oid, 'EXECUTE')
+               EXISTS (SELECT 1 FROM pg_proc
+                        WHERE oid = pg_catalog.to_regprocedure('public.stream_segments_raise_seq_floor()')::oid)
+               AND NOT EXISTS (
+                   SELECT 1
+                     FROM pg_proc p,
+                          pg_catalog.aclexplode(coalesce(p.proacl, pg_catalog.acldefault('f', p.proowner))) e
+                    WHERE p.oid = pg_catalog.to_regprocedure('public.stream_segments_raise_seq_floor()')::oid
+                      AND e.privilege_type = 'EXECUTE' AND e.grantee <> p.proowner)
         UNION ALL
         SELECT 'function:' || fn,
                EXISTS (SELECT 1 FROM pg_proc

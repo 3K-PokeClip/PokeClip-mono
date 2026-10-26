@@ -26,8 +26,15 @@ CREATE TABLE IF NOT EXISTS stream_segments (
     PRIMARY KEY (stream_id, seq)
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS stream_segments_local_path_uq
-    ON stream_segments (stream_id, local_path);
+-- 인덱스는 이름이 없을 때만 만든다. CREATE INDEX IF NOT EXISTS 는 이름을 확인하기 전에 표를 SHARE 로 잠가, 이미
+-- 수렴한 DB 에 다시 돌려도(기동마다 · 운영 한 창 재실행) 표 잠금을 잡고 그 사이 사이드카 쓰기와 교착할 수 있다.
+-- 아래 인덱스는 모두 이 이디엄이다 — 수렴한 재실행은 장부 표를 잠그지 않는다.
+DO $do$
+BEGIN
+    IF pg_catalog.to_regclass('stream_segments_local_path_uq') IS NULL THEN
+        CREATE UNIQUE INDEX stream_segments_local_path_uq ON stream_segments (stream_id, local_path);
+    END IF;
+END $do$;
 
 -- 조각당 키 2개 (계약-세그먼트인덱스 5-5절, 3번 승인 2026-08-31 · ADR-057).
 -- 위 CREATE TABLE 은 IF NOT EXISTS 라 "이미 존재하는" 표에는 컬럼을 붙이지 않는다.
@@ -44,7 +51,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS stream_segments_local_path_uq
 DO $do$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns
-                   WHERE table_name::name = 'stream_segments'
+                   WHERE table_schema::name = pg_catalog.current_schema()
+                     AND table_name::name = 'stream_segments'
                      AND column_name::name = 'playback_s3_key') THEN
         ALTER TABLE stream_segments
             ADD COLUMN playback_s3_key        text,
@@ -115,22 +123,31 @@ CREATE TABLE IF NOT EXISTS stream_sessions (
     CONSTRAINT stream_sessions_dvr_state_chk CHECK (dvr_state IN ('open','freezing','frozen','freeze_failed')),
     CONSTRAINT stream_sessions_vod_state_chk CHECK (vod_state IN ('none','freezing','frozen','frozen_with_gaps','freeze_failed'))
 );
-CREATE INDEX IF NOT EXISTS stream_sessions_stream_idx ON stream_sessions (stream_id, started_at DESC);
 -- state='live' 만 보는 이유: state <> 'ended' 로 두면 ending 세션이 새 세션 INSERT 를 막아
 -- 방송 중 되감기를 새로 못 연다(설계 6.2).
-CREATE UNIQUE INDEX IF NOT EXISTS stream_sessions_one_live_uq
-  ON stream_sessions (stream_id) WHERE state = 'live';
-CREATE INDEX IF NOT EXISTS stream_sessions_ending_idx
-  ON stream_sessions (stream_id, ending_at) WHERE state = 'ending';
-CREATE INDEX IF NOT EXISTS stream_sessions_freezing_idx
-  ON stream_sessions (dvr_freezing_at) WHERE dvr_state = 'freezing';
+DO $do$
+BEGIN
+    IF pg_catalog.to_regclass('stream_sessions_stream_idx') IS NULL THEN
+        CREATE INDEX stream_sessions_stream_idx ON stream_sessions (stream_id, started_at DESC);
+    END IF;
+    IF pg_catalog.to_regclass('stream_sessions_one_live_uq') IS NULL THEN
+        CREATE UNIQUE INDEX stream_sessions_one_live_uq ON stream_sessions (stream_id) WHERE state = 'live';
+    END IF;
+    IF pg_catalog.to_regclass('stream_sessions_ending_idx') IS NULL THEN
+        CREATE INDEX stream_sessions_ending_idx ON stream_sessions (stream_id, ending_at) WHERE state = 'ending';
+    END IF;
+    IF pg_catalog.to_regclass('stream_sessions_freezing_idx') IS NULL THEN
+        CREATE INDEX stream_sessions_freezing_idx ON stream_sessions (dvr_freezing_at) WHERE dvr_state = 'freezing';
+    END IF;
+END $do$;
 
 -- 6-1 (a) 컬럼 2 — 되감기 목록의 단조 PDT 원천(playback_pdt)과 세션 귀속(session_id).
 -- 위 playback_* 블록과 같은 이디엄: 카탈로그 선확인으로 ACCESS EXCLUSIVE 큐잉을 피한다.
 DO $do$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns
-                   WHERE table_name::name  = 'stream_segments'
+                   WHERE table_schema::name = pg_catalog.current_schema()
+                     AND table_name::name  = 'stream_segments'
                      AND column_name::name = 'session_id') THEN
         ALTER TABLE stream_segments
             ADD COLUMN session_id   text,
@@ -139,11 +156,16 @@ BEGIN
 END $do$;
 
 -- 6-1 (b) 인덱스 2 (승인 표면 아님 — 통보에 병기).
-CREATE INDEX IF NOT EXISTS stream_segments_session_idx
-  ON stream_segments (stream_id, session_id, seq);
 -- rewind_cutoff_absent 감시가 max(start_wall_utc) 를 쓴다 — created_at 을 요청하지 않은 이유.
-CREATE INDEX IF NOT EXISTS stream_segments_wall_idx
-  ON stream_segments (stream_id, start_wall_utc DESC);
+DO $do$
+BEGIN
+    IF pg_catalog.to_regclass('stream_segments_session_idx') IS NULL THEN
+        CREATE INDEX stream_segments_session_idx ON stream_segments (stream_id, session_id, seq);
+    END IF;
+    IF pg_catalog.to_regclass('stream_segments_wall_idx') IS NULL THEN
+        CREATE INDEX stream_segments_wall_idx ON stream_segments (stream_id, start_wall_utc DESC);
+    END IF;
+END $do$;
 
 -- 6-1 (c) FK — NOT VALID 로 추가(기존 행 검증 생략). 새 행에는 강제되므로 session_id 에
 -- '' 를 넣으면 23503 이다 — 세션 미확정은 반드시 SQL NULL(carrier 규약 5.4.2 · 게이트 n1c).
@@ -230,7 +252,8 @@ BEGIN
                                      ('expired_at', 'timestamptz'), ('stop_marked_at', 'timestamptz')) AS c(name, type)
     LOOP
         IF NOT EXISTS (SELECT 1 FROM information_schema.columns
-                       WHERE table_name::name  = 'stream_sessions'
+                       WHERE table_schema::name = pg_catalog.current_schema()
+                         AND table_name::name  = 'stream_sessions'
                          AND column_name::name = col.name::name) THEN
             EXECUTE pg_catalog.format('ALTER TABLE stream_sessions ADD COLUMN %I %s', col.name, col.type);
         END IF;
@@ -238,9 +261,13 @@ BEGIN
 END $do$;
 
 -- 열린 회차의 최신 세션을 고르는 회차 스캔(ListClosableRounds)의 부분 인덱스.
-CREATE INDEX IF NOT EXISTS stream_sessions_round_open_idx
-  ON stream_sessions (round_id, started_at DESC)
-  WHERE round_closed_at IS NULL AND round_id IS NOT NULL;
+DO $do$
+BEGIN
+    IF pg_catalog.to_regclass('stream_sessions_round_open_idx') IS NULL THEN
+        CREATE INDEX stream_sessions_round_open_idx ON stream_sessions (round_id, started_at DESC)
+            WHERE round_closed_at IS NULL AND round_id IS NOT NULL;
+    END IF;
+END $do$;
 
 -- seq 하한 — 스트림별로 다음 seq 가 내려가면 안 되는 값(불변식 4). 행을 지우면 아래 트리거가 올린다.
 -- 사이드카는 읽기만 한다(LoadCursor 가 max(seq)+1 과 GREATEST).
@@ -269,12 +296,17 @@ CREATE TABLE IF NOT EXISTS broadcast_lifecycle_outbox (
     CONSTRAINT broadcast_lifecycle_outbox_state_chk CHECK (state IN ('pending','published','abandoned')),
     UNIQUE (round_id, sequence)
 );
-CREATE INDEX IF NOT EXISTS broadcast_lifecycle_outbox_due_idx
-  ON broadcast_lifecycle_outbox (next_at) WHERE state = 'pending';
+DO $do$
+BEGIN
+    IF pg_catalog.to_regclass('broadcast_lifecycle_outbox_due_idx') IS NULL THEN
+        CREATE INDEX broadcast_lifecycle_outbox_due_idx ON broadcast_lifecycle_outbox (next_at) WHERE state = 'pending';
+    END IF;
+END $do$;
 
 -- 하한 갱신 — 지워진 행의 스트림별 max(seq)+1 로 올린다(내리지 않는다). 지우는 쪽이 누구든(만료 · clip 탈퇴 정리 ·
 -- 수동) 같은 트랜잭션에서 돈다. 실패하면 그 DELETE 도 롤백된다. 하한 행을 잠그므로 같은 스트림의 동시 DELETE 는
--- 서로 직렬화되고, 스트림 순으로 잠가 여러 스트림을 지우는 두 DELETE 가 교착하지 않는다.
+-- 서로 직렬화된다. 한 문장 안에서는 스트림 순으로 잠가 여러 스트림을 지우는 두 DELETE 문장이 교착하지 않는다 —
+-- 여러 DELETE 문장을 한 트랜잭션에 엮어 스트림을 서로 다른 순서로 지우면 교착할 수 있다.
 -- SECURITY DEFINER — 지우는 계정(app_clip 등)은 하한 표 권한이 없다. 정의자 함수는 부른 쪽의 search_path 로 돌면
 -- public 에 심은 덫을 정의자 신분으로 부르므로 pg_catalog · pg_temp 로 고정하고 표 이름은 public 으로 한정한다.
 -- 다른 표에 붙으면 멈춘다 — 그 표의 (아무 스트림, 아주 큰 seq) 행을 지워 남의 하한을 올리는 길이다. 새 부착은 아래
@@ -302,7 +334,8 @@ REVOKE EXECUTE ON FUNCTION stream_segments_raise_seq_floor() FROM PUBLIC;
 -- 하한 검사 — 하한 아래 seq 의 INSERT 를 거부한다(23514 seq_below_floor). 하한을 모르는 옛 판 사이드카가 seq 를
 -- 다시 쓰면 같은 영구 URL 에 다른 조각이 실리므로, 그 스트림 색인을 멈추는 쪽으로 닫는다(fail-closed). 새 판은
 -- LoadCursor 가 하한 아래를 내지 않아 여기 걸리지 않는다 — 걸리면 결함이다. 넣는 계정(media_indexer)은 하한 표
--- SELECT 를 가지므로 부른 쪽 권한으로 돈다.
+-- SELECT 를 가지므로 부른 쪽 권한으로 돈다. 하한 행은 잠그지 않고 읽는다 — 하한을 올리는 DELETE 와 겹친 INSERT 는
+-- 커밋 전 하한을 못 볼 수 있지만, 사이드카는 LoadCursor 가 정한 하한 위 seq 만 내므로 그 경합의 실경로는 없다.
 CREATE OR REPLACE FUNCTION stream_segments_check_seq_floor() RETURNS trigger
     LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $fn$
 DECLARE

@@ -23,16 +23,16 @@ import (
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/pgtest"
 )
 
-// lcDDLThroughUniqueIndex 는 EnsureSchema 의 앞부분 — 표 생성부터 local_path 고유 인덱스까지다.
+// lcDDLThroughUniqueIndex 는 EnsureSchema 의 앞부분 — 표 생성부터 local_path 고유 인덱스(를 감싼 DO 블록)까지다.
 func lcDDLThroughUniqueIndex(t *testing.T) string {
 	t.Helper()
-	const mark = "CREATE UNIQUE INDEX IF NOT EXISTS stream_segments_local_path_uq"
+	const mark, blockEnd = "CREATE UNIQUE INDEX stream_segments_local_path_uq", "END $do$;"
 	at := strings.Index(schemaDDL, mark)
 	if at < 0 {
 		t.Fatal("schemaDDL 에 local_path 고유 인덱스 문장이 없다")
 	}
-	end := strings.Index(schemaDDL[at:], ";")
-	return schemaDDL[:at+end+1]
+	end := strings.Index(schemaDDL[at:], blockEnd)
+	return schemaDDL[:at+end+len(blockEnd)]
 }
 
 // 4-6 (k) ① 정방향 · W13 — janitor 가 L 을 쥔 동안 EnsureSchema 는 ≤ 8s + 1s 안에 끝난다.
@@ -62,12 +62,12 @@ func TestRowLockEnsureSchemaWaitIsBounded(t *testing.T) {
 	}
 }
 
-// 4-6 (k) ② 역방향 · W13 — EnsureSchema 의 CREATE UNIQUE INDEX IF NOT EXISTS 가 표 SHARE 를 쥔
+// 4-6 (k) ② 역방향 · W13 — 이행 기동의 EnsureSchema 가 local_path 고유 인덱스를 만들며 표 SHARE 를 쥔
 // 트랜잭션이 열려 있으면, janitor 의 UPDATE(ROW EXCLUSIVE)는 lock_timeout 2s 에 55P03 이다.
 // 파일은 이미 지웠으므로 StageCommit · Acted · Cleared(T2 가 부채 deleted 로 받는다). 회수
 // ClearLocalPath 는 보유가 끝난 뒤 성공한다.
 func TestRowLockUpdateTimesOutBehindSchemaIndexShareLock(t *testing.T) {
-	pool := newTestPool(t)
+	pool := lcMigratingPool(t)
 	ctx := context.Background()
 	lcPut(t, pool, lcRow{stream: "lc-lock-k2", seq: 0})
 	holder, err := pool.Begin(ctx)
@@ -79,9 +79,9 @@ func TestRowLockUpdateTimesOutBehindSchemaIndexShareLock(t *testing.T) {
 		t.Fatalf("EnsureSchema 앞부분 실행 실패: %v", err)
 	}
 	modes := lcHeldTableLocks(t, holder)
-	t.Logf("기록: CREATE UNIQUE INDEX IF NOT EXISTS 뒤 보유 표 잠금 = %v", modes)
+	t.Logf("기록: CREATE UNIQUE INDEX 뒤 보유 표 잠금 = %v", modes)
 	if !slices.Contains(modes, "ShareLock") {
-		t.Fatalf("보유 표 잠금 = %v, want ShareLock 포함 — CREATE INDEX IF NOT EXISTS 가 SHARE 를 잡지 않는다면 W13 역방향 판정을 다시 하라", modes)
+		t.Fatalf("보유 표 잠금 = %v, want ShareLock 포함 — CREATE INDEX 가 SHARE 를 잡지 않는다면 W13 역방향 판정을 다시 하라", modes)
 	}
 	file := lcFileFixture(t)
 	store := NewLocalCleanupStore(lcJanitorPool(t, pool, lcJanitorOpts{}))
@@ -124,13 +124,14 @@ SELECT mode FROM pg_locks
 	return modes
 }
 
-// lcMigratingPool 은 이행 기동 국면을 만든 전용 DB 다. CHECK 하나를 지워 두면 다음 EnsureSchema 가
-// ALTER TABLE … ADD CONSTRAINT(ACCESS EXCLUSIVE)를 실제로 돈다. 정리 때 EnsureSchema 로 되돌린다.
+// lcMigratingPool 은 이행 기동 국면을 만든 전용 DB 다. local_path 고유 인덱스와 CHECK 하나를 지워 두면 다음
+// EnsureSchema 가 그 인덱스를 만들며 표 SHARE 를 쥐고, 이어 ALTER TABLE … ADD CONSTRAINT(ACCESS EXCLUSIVE)를 실제로
+// 돈다. 인덱스가 이미 있으면 이름만 확인하고 표를 잠그지 않으므로 함께 지운다. 정리 때 EnsureSchema 로 되돌린다.
 func lcMigratingPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	pool := pgtest.Pool(t, "lcmigrate", EnsureSchema, resetTables)
-	if _, err := pool.Exec(context.Background(),
-		`ALTER TABLE stream_segments DROP CONSTRAINT IF EXISTS stream_segments_upload_state_chk`); err != nil {
+	if _, err := pool.Exec(context.Background(), `DROP INDEX IF EXISTS stream_segments_local_path_uq;
+		ALTER TABLE stream_segments DROP CONSTRAINT IF EXISTS stream_segments_upload_state_chk`); err != nil {
 		t.Fatalf("이행 국면 만들기 실패: %v", err)
 	}
 	t.Cleanup(func() { // 풀보다 늦게 등록 — 풀이 닫히기 전에 돈다
