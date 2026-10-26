@@ -10,6 +10,11 @@ package session
 //	lockPreviousSQL      Decide 개시 갈래(소속 잠금 — live 없음)    sessions SELECT · FOR NO KEY UPDATE · segments SELECT
 //	endSessionSQL        Open TD · 표식 분할 갈래                   sessions UPDATE
 //	openSessionSQL       Open                                      sessions INSERT
+//	txnLimitsSQL · topologyLockSQL  ApplyIntentionalEnd ⓪ ①          set_config · advisory 잠금(권한 불요)
+//	membershipSQL · lockSessionSQL  ApplyIntentionalEnd ②            sessions SELECT · FOR NO KEY UPDATE
+//	intentCandidateSQL · ambiguousSQL  후보 · 모호 판정               sessions · segments SELECT
+//	markSQL · upgradeSQL            marked · upgraded               sessions UPDATE
+//	lockRoundRowsSQL · moveRoundSQL · closeRemainSQL  round_split   sessions SELECT FOR NO KEY UPDATE · UPDATE
 //
 // 레지스트리는 트랜잭션을 받기만 한다 — 시험은 역할 풀로 연 트랜잭션을 준다(운영의 index.Insert 와 같은 꼴).
 
@@ -18,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/pgtest"
@@ -151,4 +157,36 @@ func TestMediaIndexerRoleSessionWithoutEachGrantIsDenied(t *testing.T) {
 			role.RequireDenied(t, c.table+" "+c.privilege, c.sql)
 		})
 	}
+}
+
+// 4D 적용 경로 — marked · upgraded · round_split 세 효과가 media_indexer 권한만으로 돌고, 검색 경로 함정을 부르지 않는다.
+func TestMediaIndexerRoleAppliesIntentionalEnd(t *testing.T) {
+	admin := newTestPool(t)
+	traps := pgtest.PlantSearchPathTraps(t, admin)
+	role := pgtest.NewMediaIndexerRole(t, admin)
+	t.Cleanup(func() { role.RequireNoneDenied(t) })
+	o := (&intentSlots{}).options()
+	o.CloseRound = func(context.Context, pgx.Tx, string) error { return nil }
+
+	seedLedger(t, admin, ledgerRow{id: "S-L", streamID: "r-mark", state: "live", roundID: "S-L", startedAt: stopAt.Add(-time.Hour)})
+	seedSegment(t, admin, "r-mark", "S-L", 1, stopAt.Add(-5*time.Second))
+	seedLedger(t, admin, ledgerRow{id: "S-U", streamID: "r-up", state: "ending", endReason: "offline", roundID: "S-U", startedAt: stopAt.Add(-time.Hour)})
+	seedSegment(t, admin, "r-up", "S-U", 1, stopAt.Add(-5*time.Second))
+	seedLedger(t, admin, ledgerRow{id: "S-T", streamID: "r-split", state: "ending", endReason: "offline", roundID: "S-R", startedAt: stopAt.Add(-time.Hour)})
+	seedSegment(t, admin, "r-split", "S-T", 1, stopAt.Add(-5*time.Second))
+	seedLedger(t, admin, ledgerRow{id: "S-B", streamID: "r-split", state: "live", roundID: "S-R", startedAt: stopAt.Add(20 * time.Second)})
+
+	for stream, want := range map[string]string{"r-mark": effectMarked, "r-up": effectUpgraded, "r-split": effectRoundSplit} {
+		res, err := ApplyIntentionalEnd(context.Background(), role.Pool, endAt(stream), o)
+		if err != nil || res.Effect != want {
+			t.Errorf("%s = (%+v, %v), want %s", stream, res, err, want)
+		}
+	}
+	role.RequireSent(t, map[string]string{
+		"txnLimitsSQL": txnLimitsSQL, "topologyLockSQL": topologyLockSQL, "membershipSQL": membershipSQL,
+		"lockSessionSQL": lockSessionSQL, "intentCandidateSQL": intentCandidateSQL, "ambiguousSQL": ambiguousSQL,
+		"markSQL": markSQL, "upgradeSQL": upgradeSQL, "lockRoundRowsSQL": lockRoundRowsSQL,
+		"moveRoundSQL": moveRoundSQL, "closeRemainSQL": closeRemainSQL,
+	})
+	traps.RequireNotCalled(t)
 }
