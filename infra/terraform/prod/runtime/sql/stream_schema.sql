@@ -277,9 +277,15 @@ CREATE INDEX IF NOT EXISTS broadcast_lifecycle_outbox_due_idx
 -- 서로 직렬화되고, 스트림 순으로 잠가 여러 스트림을 지우는 두 DELETE 가 교착하지 않는다.
 -- SECURITY DEFINER — 지우는 계정(app_clip 등)은 하한 표 권한이 없다. 정의자 함수는 부른 쪽의 search_path 로 돌면
 -- public 에 심은 덫을 정의자 신분으로 부르므로 pg_catalog · pg_temp 로 고정하고 표 이름은 public 으로 한정한다.
+-- 다른 표에 붙으면 멈춘다 — 그 표의 (아무 스트림, 아주 큰 seq) 행을 지워 남의 하한을 올리는 길이다. 새 부착은 아래
+-- EXECUTE 회수가 막고(CREATE TRIGGER 가 EXECUTE 를 본다), 이 검사는 이미 붙은 것을 막는 겹 방어다.
 CREATE OR REPLACE FUNCTION stream_segments_raise_seq_floor() RETURNS trigger
     LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $fn$
 BEGIN
+    IF TG_RELID <> 'public.stream_segments'::regclass::oid THEN
+        RAISE EXCEPTION 'seq_floor_raise_foreign_table %.%', TG_TABLE_SCHEMA, TG_TABLE_NAME
+            USING ERRCODE = 'insufficient_privilege';
+    END IF;
     INSERT INTO public.stream_seq_floors AS f (stream_id, next_seq)
     SELECT d.stream_id, pg_catalog.max(d.seq) + 1::bigint
       FROM deleted_rows d
@@ -290,6 +296,8 @@ BEGIN
      WHERE f.next_seq < EXCLUDED.next_seq;
     RETURN NULL;
 END $fn$;
+-- 트리거 발화는 EXECUTE 를 보지 않으므로 지우는 계정(app_clip 등)은 그대로 하한을 올린다. 다시 돌려도 같다(멱등).
+REVOKE EXECUTE ON FUNCTION stream_segments_raise_seq_floor() FROM PUBLIC;
 
 -- 하한 검사 — 하한 아래 seq 의 INSERT 를 거부한다(23514 seq_below_floor). 하한을 모르는 옛 판 사이드카가 seq 를
 -- 다시 쓰면 같은 영구 URL 에 다른 조각이 실리므로, 그 스트림 색인을 멈추는 쪽으로 닫는다(fail-closed). 새 판은

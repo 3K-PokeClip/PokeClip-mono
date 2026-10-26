@@ -353,3 +353,213 @@ func TestMissingLedgerSchemaNamesAbsentObjects(t *testing.T) {
 	}
 	traps.RequireNotCalled(t)
 }
+
+// raiseFloorFunc 는 하한 갱신 정의자 함수의 서명이다(has_function_privilege · CREATE TRIGGER 인자).
+const raiseFloorFunc = "public.stream_segments_raise_seq_floor()"
+
+// 하한 표 권한이 없는 로그인 역할은 자기 임시 표에 하한 갱신 함수를 트리거로 붙이지 못한다(42501). 붙일 수 있으면
+// 그 표에서 (아무 스트림, 아주 큰 seq) 행을 지워 정의자(표 소유자) 신분으로 남의 하한을 올린다 — 색인 정지.
+// CREATE TRIGGER 는 함수 EXECUTE 를 보므로 PUBLIC 에서 회수한 것이 이 거부의 근거다.
+func TestFloorRaiseFunctionCannotBeAttachedByOtherRole(t *testing.T) {
+	admin := newTestPool(t)
+	ctx := context.Background()
+	role := pgtest.NewLoginRole(t, admin)
+	cfg := admin.Config()
+	cfg.ConnConfig.User, cfg.ConnConfig.Password = role.Name, role.Password
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		t.Fatalf("시험 역할 풀 생성 실패: %v", err)
+	}
+	t.Cleanup(pool.Close)
+
+	// 문장 여럿을 한 번에 보내 같은 연결(임시 표의 수명)에서 돈다.
+	_, err = pool.Exec(ctx, `
+		CREATE TEMP TABLE floor_decoy (stream_id text, seq bigint);
+		CREATE TRIGGER floor_decoy_raise AFTER DELETE ON floor_decoy
+			REFERENCING OLD TABLE AS deleted_rows
+			FOR EACH STATEMENT EXECUTE FUNCTION `+raiseFloorFunc)
+
+	if !pgtest.IsInsufficientPrivilege(err) {
+		t.Errorf("다른 역할의 하한 갱신 트리거 부착 오류 = %v, want 42501", err)
+	}
+}
+
+// 회수 전에 붙은 트리거(또는 superuser 가 붙인 것)가 남아 있어도 함수가 stream_segments 밖에서는 멈춘다 — 하한은
+// 그대로다. 겹 방어다: EXECUTE 회수는 새 부착만 막는다.
+func TestFloorRaiseFunctionRefusesForeignTable(t *testing.T) {
+	admin := newTestPool(t)
+	ctx := context.Background()
+	const s = "floor-decoy"
+	if _, err := admin.Exec(ctx, `
+		CREATE TABLE seq_floor_decoy (stream_id text, seq bigint);
+		CREATE TRIGGER seq_floor_decoy_raise AFTER DELETE ON seq_floor_decoy
+			REFERENCING OLD TABLE AS deleted_rows
+			FOR EACH STATEMENT EXECUTE FUNCTION `+raiseFloorFunc+`;
+		INSERT INTO seq_floor_decoy VALUES ('`+s+`', 9223372036854775000)`); err != nil {
+		t.Fatalf("미끼 표 만들기 실패: %v", err)
+	}
+	t.Cleanup(func() {
+		if _, err := admin.Exec(context.Background(), "DROP TABLE IF EXISTS seq_floor_decoy"); err != nil {
+			t.Errorf("미끼 표 지우기 실패: %v", err)
+		}
+	})
+
+	_, err := admin.Exec(ctx, "DELETE FROM seq_floor_decoy")
+
+	var pgErr *pgconn.PgError
+	const wantMsg = "seq_floor_raise_foreign_table public.seq_floor_decoy"
+	if !errors.As(err, &pgErr) || pgErr.Code != "42501" || pgErr.Message != wantMsg {
+		t.Errorf("미끼 표 DELETE 오류 = %v, want 42501 %q", err, wantMsg)
+	}
+	if got := floorOf(t, admin, s); got != -1 {
+		t.Errorf("미끼 표 DELETE 뒤 하한 = %d, want -1(행 없음)", got)
+	}
+}
+
+// 회귀 방지 — 트리거 발화는 함수 EXECUTE 를 보지 않는다. EXECUTE 가 없는 삭제 계정(app_clip 권한 역할)이
+// stream_segments 를 지워도 하한이 오른다.
+func TestFloorRaiseFiresForDeleterWithoutExecute(t *testing.T) {
+	admin := newTestPool(t)
+	ctx := context.Background()
+	const s = "floor-noexec"
+	for seq := range int64(3) {
+		lcPut(t, admin, lcRow{stream: s, seq: seq})
+	}
+	clip := clipRolePool(t, admin)
+	var canExecute bool
+	if err := clip.QueryRow(ctx, `SELECT pg_catalog.has_function_privilege($1, 'EXECUTE')`, raiseFloorFunc).Scan(&canExecute); err != nil {
+		t.Fatalf("EXECUTE 조회 실패: %v", err)
+	}
+
+	n, err := lcClipPurge(ctx, clip, s, 2)
+
+	if canExecute {
+		t.Errorf("삭제 계정의 하한 갱신 함수 EXECUTE = true, want false(PUBLIC 회수)")
+	}
+	if err != nil || n != 1 {
+		t.Fatalf("seq 2 정리 = (%d, %v), want (1, nil)", n, err)
+	}
+	if got := floorOf(t, admin, s); got != 3 {
+		t.Errorf("정리 뒤 하한 = %d, want 3", got)
+	}
+}
+
+// 음성 대조(M6-0 c4) — 하한 트리거 · 회차 인덱스가 「있지만 일하지 않는」 상태를 40 이 그 단언으로만 잡는다.
+// replica 전용('R') 트리거는 일반 연결의 DELETE 에서 돌지 않아 하한이 빠진다. 끈 트리거 · 다른 시점 · 다른 전이
+// 표 이름 · 무효 인덱스 · 술어가 다른 인덱스 · PUBLIC EXECUTE 도 같다.
+func TestProdSQLVerifyCatchesIdleLedgerObjects(t *testing.T) {
+	env := newProdSQLEnv(t)
+	env.mustApplyAll(t)
+	const (
+		raise = "stream_segments_seq_floor_raise"
+		guard = "stream_segments_seq_floor_guard"
+		idx   = "stream_sessions_round_open_idx"
+	)
+	tests := []struct {
+		name   string
+		tamper string
+		want   string
+	}{
+		{"raise disabled", "ALTER TABLE stream_segments DISABLE TRIGGER " + raise, "trigger:" + raise},
+		{"guard disabled", "ALTER TABLE stream_segments DISABLE TRIGGER " + guard, "trigger:" + guard},
+		{"raise replica only", "ALTER TABLE stream_segments ENABLE REPLICA TRIGGER " + raise, "trigger:" + raise},
+		{"guard replica only", "ALTER TABLE stream_segments ENABLE REPLICA TRIGGER " + guard, "trigger:" + guard},
+		{
+			name: "raise per row",
+			tamper: "DROP TRIGGER " + raise + " ON stream_segments; CREATE TRIGGER " + raise +
+				" AFTER DELETE ON stream_segments REFERENCING OLD TABLE AS deleted_rows FOR EACH ROW" +
+				" EXECUTE FUNCTION stream_segments_raise_seq_floor()",
+			want: "trigger:" + raise,
+		},
+		{
+			name: "raise other transition table",
+			tamper: "DROP TRIGGER " + raise + " ON stream_segments; CREATE TRIGGER " + raise +
+				" AFTER DELETE ON stream_segments REFERENCING OLD TABLE AS gone_rows FOR EACH STATEMENT" +
+				" EXECUTE FUNCTION stream_segments_raise_seq_floor()",
+			want: "trigger:" + raise,
+		},
+		{
+			name: "guard after insert",
+			tamper: "DROP TRIGGER " + guard + " ON stream_segments; CREATE TRIGGER " + guard +
+				" AFTER INSERT ON stream_segments FOR EACH ROW EXECUTE FUNCTION stream_segments_check_seq_floor()",
+			want: "trigger:" + guard,
+		},
+		{
+			name:   "raise function executable by public",
+			tamper: "GRANT EXECUTE ON FUNCTION stream_segments_raise_seq_floor() TO PUBLIC",
+			want:   "function_execute:stream_segments_raise_seq_floor",
+		},
+		{
+			name:   "round index invalid",
+			tamper: "UPDATE pg_index SET indisvalid = false WHERE indexrelid = '" + idx + "'::regclass",
+			want:   "index:" + idx,
+		},
+		{
+			name:   "round index not ready",
+			tamper: "UPDATE pg_index SET indisready = false WHERE indexrelid = '" + idx + "'::regclass",
+			want:   "index:" + idx,
+		},
+		{
+			name: "round index other predicate",
+			tamper: "DROP INDEX " + idx + "; CREATE INDEX " + idx +
+				" ON stream_sessions (round_id, started_at DESC) WHERE round_closed_at IS NULL",
+			want: "index:" + idx,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := env.verifyFailuresAfter(t, tt.tamper); !slices.Equal(got, []string{tt.want}) {
+				t.Errorf("%s 뒤 40_verify.sql 실패 단언 = %q, want [%s]", tt.tamper, got, tt.want)
+			}
+		})
+	}
+}
+
+// 양성 대조 — 'A'(언제나 켜짐)는 일반 연결에서도 도므로 40 이 통과시킨다. 'O' 만 허용하면 이 상태를 고장으로 읽는다.
+func TestProdSQLVerifyAcceptsAlwaysEnabledFloorTrigger(t *testing.T) {
+	env := newProdSQLEnv(t)
+	env.mustApplyAll(t)
+	script := "BEGIN;\nALTER TABLE stream_segments ENABLE ALWAYS TRIGGER stream_segments_seq_floor_raise;\n" +
+		"SET ROLE " + env.masterName + ";\n" + expandProdSQL(t, "40_verify.sql") + "\nROLLBACK;"
+
+	results, err := execScript(t, env.super, script)
+
+	if err != nil || !hasRow(results, verifyOK) {
+		t.Errorf("ENABLE ALWAYS 뒤 40_verify.sql = (VERIFY OK 행 %t, %v), want (true, nil)", hasRow(results, verifyOK), err)
+	}
+}
+
+// 한 창 재실행의 교착 방지 — 20 을 다시 돌리는 트랜잭션은 시작하자마자 stream_sessions 를 ACCESS EXCLUSIVE,
+// stream_segments 를 SHARE ROW EXCLUSIVE 로 쥔다. 사이드카 insertOnce 가 sessions → segments 순으로 잠그므로 같은
+// 순서로 먼저 다 잡아야 한다 — 없으면 재실행은 segments(SHARE) → sessions 순으로 잡아 교착한다(db 검수 실측).
+func TestProdSQLSchemaRerunLocksSessionsThenSegments(t *testing.T) {
+	env := newProdSQLEnv(t)
+	env.mustApplyAll(t)
+	script := "BEGIN;\n" + expandProdSQL(t, "20_schema.sql") + `
+SELECT pg_catalog.string_agg(c.relname || '=' || l.mode, ',' ORDER BY c.relname, l.mode)
+  FROM pg_locks l JOIN pg_class c ON c.oid = l.relation
+ WHERE l.pid = pg_catalog.pg_backend_pid() AND l.granted
+   AND c.relname IN ('stream_sessions', 'stream_segments')
+   AND l.mode IN ('AccessExclusiveLock', 'ShareRowExclusiveLock');
+ROLLBACK;`
+
+	results, err := execScript(t, env.master, script)
+
+	const want = "stream_segments=ShareRowExclusiveLock,stream_sessions=AccessExclusiveLock"
+	if err != nil || !hasRow(results, want) {
+		t.Errorf("20 재실행 중 쥔 강한 잠금 = (%v, %v), want 행 %q", firstColumns(results), err, want)
+	}
+}
+
+// firstColumns 는 결과 전체의 행마다 첫 열이다(실패 문구용).
+func firstColumns(results []*pgconn.Result) []string {
+	var out []string
+	for _, r := range results {
+		for _, row := range r.Rows {
+			if len(row) > 0 {
+				out = append(out, string(row[0]))
+			}
+		}
+	}
+	return out
+}

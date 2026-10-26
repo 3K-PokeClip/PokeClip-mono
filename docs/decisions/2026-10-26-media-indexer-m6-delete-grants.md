@@ -82,3 +82,8 @@ M6 가 이 전제를 바꾼다.
     *   하한 갱신 함수는 정의자 권한으로 돈다. search_path 를
         `pg_catalog, pg_temp` 로 고정하고 표 이름을 `public` 으로 한정해 덫을
         피한다. `40_verify.sql` 이 정의자 여부 · search_path 를 단언한다.
+        EXECUTE 는 PUBLIC 에서 회수하고 함수 첫머리가 `stream_segments` 밖에
+        붙으면 멈춘다(TG_RELID 검사) — 앱 사용자가 자기 표에 트리거로 붙여
+        남의 하한을 올리는 길을 막는다. 트리거 발화는 EXECUTE 를 보지 않아
+        지우는 계정(app_clip 등)은 그대로 하한을 올린다. `40_verify.sql` 이
+        PUBLIC EXECUTE 없음도 단언한다(2026-10-26 M6-0 c4).

@@ -439,7 +439,8 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON broadcast_lifecycle_outbox TO media_inde
   42501 로 막힌다.
 - **그 밖에 이 계정에 따로 주는 권한은 없다 — 대신 PUBLIC(모든 계정)
   기본 권한에 기댄다.** 시퀀스는 없고(DDL 에 `SERIAL` · `IDENTITY` 0),
-  트리거 함수 · advisory 잠금 · `set_config` 는 PUBLIC 기본 권한으로 돈다.
+  트리거 함수 · advisory 잠금 · `set_config` 는 PUBLIC 기본 권한으로 돈다(하한
+  갱신 함수만 PUBLIC EXECUTE 를 회수했다 — 트리거 발화는 EXECUTE 를 보지 않는다).
   DB `CONNECT` · `public` 스키마 `USAGE` 도 PUBLIC 기본값에 기댄다 — 이것을
   거둔 DB 라면 따로 준다. 반대로 PUBLIC 기본값이 이 목록보다 넓은 DB 가
   있으므로 아래 사전 확인을 한다.
@@ -504,6 +505,10 @@ SELECT has_schema_privilege('media_indexer', 'public', 'CREATE');  -- false 여�
   세션 · GAP · outbox 행과 컷오프를 지울 수 있다. 하한 트리거는 지운 뒤의
   seq 재사용만 막고(불변식 4), 지운 행 자체는 되살리지 못한다 — 복구는 백업
   뿐이다. 만료 전용 계정으로 나누는 안은 기각했다(ADR-0006 개정).
+- **하한 갱신 함수는 정의자(`media_owner`) 권한으로 돈다.** 다른 표에 붙이면
+  그 표의 행으로 남의 하한을 올릴 수 있으므로, EXECUTE 를 PUBLIC 에서 회수해
+  새 부착을 막고(42501) 함수가 `stream_segments` 밖에서는 멈춘다(TG_RELID
+  검사). `40_verify.sql` 이 PUBLIC EXECUTE 없음을 단언한다.
 - **`stream_cutoffs` 가 오염되면 DBA 가 손으로 고친다.** 사이드카의 UPDATE
   · DELETE 는 만료 문장(장부 값으로만 전진)용이고, 잘못 들어간 컷오프를
   고치는 경로는 아니다.

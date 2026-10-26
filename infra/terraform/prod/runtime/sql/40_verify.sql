@@ -25,9 +25,14 @@
 --   owner:<표 · 함수>               소유자가 media_owner 다(없으면 이것이 실패한다)
 --   ledger_column:<표>.<열>         M6 장부 열(stream_sessions 의 round_id · round_closed_at · expired_at ·
 --                                   stop_marked_at)이 있다
---   index:<인덱스>                  stream_sessions_round_open_idx 가 stream_sessions 의 인덱스로 있다
---   trigger:<트리거>                stream_segments 의 seq 하한 트리거 둘이 켜진 채 제 함수에 묶여 있다 — 지워지면
---                                   하한 없이 seq 를 다시 쓸 수 있다(불변식 4)
+--   index:<인덱스>                  stream_sessions_round_open_idx 가 stream_sessions 의 인덱스로 있고, 쓸 수 있으며
+--                                   (indisvalid · indisready) 부분 인덱스 술어가 ddl.go 와 같다
+--   trigger:<트리거>                stream_segments 의 seq 하한 트리거 둘이 일반 연결에서 켜진 채('O' · 'A' — 'R' 은
+--                                   replica 에서만 돈다) 제 함수 · 시점(tgtype — 갱신은 AFTER DELETE 문장 단위 ·
+--                                   검사는 BEFORE INSERT 행 단위) · 전이 표 이름(갱신만 deleted_rows)에 묶여 있다 —
+--                                   지워지거나 돌지 않으면 하한 없이 seq 를 다시 쓸 수 있다(불변식 4)
+--   function_execute:<함수>         하한 갱신 정의자 함수의 EXECUTE 가 PUBLIC 에 없다 — 있으면 앱 사용자가 자기 표에
+--                                   트리거로 붙여 media_owner 신분으로 남의 하한을 올린다
 --   function:<함수>                 하한 함수의 SECURITY DEFINER 여부가 기대와 같고(갱신 함수만 정의자) search_path 가
 --                                   pg_catalog, pg_temp 로 고정돼 있다 — 정의자 함수가 부른 쪽 search_path 로 돌면
 --                                   public 의 덫을 media_owner 신분으로 부른다
@@ -82,10 +87,12 @@ BEGIN
         VALUES ('stream_sessions', 'round_id'), ('stream_sessions', 'round_closed_at'),
                ('stream_sessions', 'expired_at'), ('stream_sessions', 'stop_marked_at')
     ),
-    -- seq 하한 트리거와 그 함수 · 정의자 여부(trigger:<트리거> · function:<함수>).
-    floor_triggers(tg, fn, definer) AS (
-        VALUES ('stream_segments_seq_floor_raise', 'stream_segments_raise_seq_floor', true),
-               ('stream_segments_seq_floor_guard', 'stream_segments_check_seq_floor', false)
+    -- seq 하한 트리거와 그 함수 · 정의자 여부 · tgtype · 이전 전이 표(trigger:<트리거> · function:<함수>).
+    -- tgtype 비트: 1 = 행 단위 · 2 = BEFORE · 4 = INSERT · 8 = DELETE. 갱신 8 = AFTER DELETE 문장 단위 · 검사 7 =
+    -- BEFORE INSERT 행 단위.
+    floor_triggers(tg, fn, definer, tgtype, oldtable) AS (
+        VALUES ('stream_segments_seq_floor_raise', 'stream_segments_raise_seq_floor', true, 8, 'deleted_rows'),
+               ('stream_segments_seq_floor_guard', 'stream_segments_check_seq_floor', false, 7, NULL)
     ),
     granted(r, t, p) AS (
         VALUES ('media_indexer', 'stream_segments', 'SELECT'),
@@ -220,14 +227,23 @@ BEGIN
         SELECT 'index:stream_sessions_round_open_idx',
                EXISTS (SELECT 1 FROM pg_index
                         WHERE indexrelid = pg_catalog.to_regclass('public.stream_sessions_round_open_idx')::oid
-                          AND indrelid = pg_catalog.to_regclass('public.stream_sessions')::oid)
+                          AND indrelid = pg_catalog.to_regclass('public.stream_sessions')::oid
+                          AND indisvalid AND indisready
+                          AND pg_catalog.pg_get_expr(indpred, indrelid)
+                              = '((round_closed_at IS NULL) AND (round_id IS NOT NULL))'::text)
         UNION ALL
         SELECT 'trigger:' || tg,
                EXISTS (SELECT 1 FROM pg_trigger
                         WHERE tgrelid = pg_catalog.to_regclass('public.stream_segments')::oid
-                          AND tgname = tg::name AND tgenabled <> 'D'::"char"
-                          AND tgfoid = pg_catalog.to_regprocedure('public.' || fn || '()')::oid)
+                          AND tgname = tg::name AND tgenabled IN ('O'::"char", 'A'::"char")
+                          AND tgfoid = pg_catalog.to_regprocedure('public.' || fn || '()')::oid
+                          AND pg_trigger.tgtype = floor_triggers.tgtype::int2
+                          AND tgoldtable IS NOT DISTINCT FROM oldtable::name)
           FROM floor_triggers
+        UNION ALL
+        SELECT 'function_execute:stream_segments_raise_seq_floor',
+               NOT pg_catalog.has_function_privilege(
+                   'public', pg_catalog.to_regprocedure('public.stream_segments_raise_seq_floor()')::oid, 'EXECUTE')
         UNION ALL
         SELECT 'function:' || fn,
                EXISTS (SELECT 1 FROM pg_proc
