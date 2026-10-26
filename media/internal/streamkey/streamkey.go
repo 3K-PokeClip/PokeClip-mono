@@ -65,7 +65,8 @@ func NewPassphrase(raw string) (Passphrase, error) {
 	return Passphrase{raw: &raw}, nil
 }
 
-// Reveal 은 원문을 돌려준다. 인증 응답 본문을 조립할 때만 부른다. 영값이면 빈 문자열이다.
+// Reveal 은 원문을 돌려준다. 부르는 곳은 둘뿐이다 — 인증 응답 본문 조립(ingestauth)과 4D Bearer 파생 값의 HMAC 키
+// (endsignal). 영값이면 빈 문자열이다.
 func (p Passphrase) Reveal() string {
 	if p.raw == nil {
 		return ""

@@ -46,11 +46,13 @@ type Options struct {
 	Now        func() time.Time                                                                       // 수신 시각(Media 시계) — StoppedAt 계산
 	Log        *slog.Logger
 
-	BodyTimeout    time.Duration    // 1s — 처리기 진입부터 본문 끝까지(ResponseController.SetReadDeadline)
-	ResolveTimeout time.Duration    // 1s
-	ApplyTimeout   time.Duration    // 1.5s — 셋의 합 3.5s < control 서버 WriteTimeout 5s
-	PerKey         *control.Limiter // NewLimiter(1, 4096, now, log) — 키당 초당 1(인증 뒤에만 깎는다)
-	Global         *control.Limiter // NewLimiter(10, 1, now, log) — 전체 초당 10(고정 키 하나)
+	BodyTimeout    time.Duration // 1s — 처리기 진입부터 본문 끝까지(ResponseController.SetReadDeadline)
+	ResolveTimeout time.Duration // 1s
+	ApplyTimeout   time.Duration // 1.5s — 셋의 합 3.5s < control 서버 WriteTimeout 5s
+	// 두 계수기의 로거는 nil 이다 — control_rate_limited 게이지를 세우면 내리는 쪽이 없다. 키당 초과는 end_signal
+	// reason=rate_key, 전체 초과는 end_signal_shed reason=rate_global 묶음 줄이 센다(cmd/segment-indexer newEndSignalReceiver).
+	PerKey *control.Limiter // NewLimiter(1, DefaultLimiterCells, Now, nil) — 키당 초당 1(인증 뒤에만 깎는다)
+	Global *control.Limiter // NewLimiter(10, 1, Now, nil) — 전체 초당 10(고정 키 하나)
 }
 
 // validate 는 빈 함수 칸 · 0 이하 시한 · nil 계수기 · nil 로거를 거부한다.
