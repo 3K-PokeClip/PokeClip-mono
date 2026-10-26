@@ -10,7 +10,8 @@ package publish
 //
 // fence 를 쓰지 않는다. 쓰기는 새 키의 IfAbsent 하나와 vod_state='freezing' 조건의 확정 CAS 뿐이라 두 writer 가 겹쳐도
 // 한 판만 남고 장부는 그 판으로만 확정된다. 다만 같은 본문을 내려면 두 writer 가 같은 장부를 봐야 한다 — 그래서 GAP 등재
-// 트랜잭션이 사슬 꼬리 행을 잠그고 장부를 다시 읽어 그 값으로 plan · 렌더한다(잠금 → 재독 → 등재 → 커밋 → PUT · kty ⑧).
+// 트랜잭션이 사슬 꼬리 행을 잠그고 같은 트랜잭션에서 장부를 다시 읽어 그 값으로 plan · 렌더한다(잠금 → 재독 → 등재 →
+// 커밋 → PUT · kty ⑧).
 // 옛 스냅숏의 writer 는 앞 writer 의 커밋 뒤 장부를 읽으므로, 앞 writer 가 GAP 없이 쓴 판에 GAP 을 등재하지 않고 앞
 // writer 가 적은 GAP 원장(원장 우선)을 그대로 싣는다(cx r1 H1). 잠금은 꼬리 행 하나다 — 설계 3.3 순서의 ② 자리이고
 // 위상 잠금(①)은 잡지 않는다.
@@ -47,13 +48,23 @@ const (
 // 판정부(M6-3b)가 이 사유를 장애 재시도와 갈라 센다.
 const ReasonUnsettled = vodUnsettled
 
+// vodMinRowBytes 는 VOD 본문에서 조각 하나가 차지하는 바이트의 하한이다 — PDT 줄(태그 25 · UTC 밀리초 시각 24 · 줄바꿈
+// 1) 50 · EXTINF 줄(가장 짧은 「#EXTINF:0.001,」 · 줄바꿈) 15 · URI 줄(BaseURL 한 글자 이상 · 「/」 · 키 한 글자 이상 ·
+// 줄바꿈) 4 다. DISCONTINUITY · MAP · GAP 줄은 더하기만 한다.
+const vodMinRowBytes = 69
+
+// vodMaxRows 는 렌더 전 적재 상한이다(보안 sec-m61-c4 M1) — 이보다 많은 행은 렌더해도 반드시 MaxVODBodyBytes 를 넘으므로
+// 렌더 · 등재 전에 too_large 로 끝낸다. 적재(index.LoadChainLedger) 자체의 상한은 아니다.
+const vodMaxRows = rewind.MaxVODBodyBytes / vodMinRowBytes
+
 // vodTxnLimitsSQL 은 등재 트랜잭션의 지역 상한이다(index.setTxnLimitsSQL 과 같은 값) — lock_timeout 5초가 꼬리 잠금
 // 대기 하나의 상한이고 넘기면 55P03 → 재시도(contended)다.
 const vodTxnLimitsSQL = `
 SELECT pg_catalog.set_config('lock_timeout','5s',true), pg_catalog.set_config('statement_timeout','10s',true)`
 
-// vodLockTailSQL 은 사슬 꼬리 행 잠금이다(설계 3.3 순서의 ② — CloseChain 이 잡는 행과 같다).
-const vodLockTailSQL = `SELECT 1 FROM stream_sessions WHERE session_id = $1 AND stream_id = $2 FOR UPDATE`
+// vodLockTailSQL 은 사슬 꼬리 행 잠금이다(설계 3.3 순서의 ② — CloseChain 이 잡는 행과 같다). 직렬화만 하면 되므로
+// FOR NO KEY UPDATE 다 — 그 회차의 늦은 조각 INSERT 가 FK 검사로 거는 FOR KEY SHARE 를 막지 않는다(D71).
+const vodLockTailSQL = `SELECT 1 FROM stream_sessions WHERE session_id = $1 AND stream_id = $2 FOR NO KEY UPDATE`
 
 // vodMarkGapSQL 은 렌더 전 GAP 원장 적기다 — 행 하나를 GAP 으로 넣는다(이미 있으면 그대로 — 원장 우선). $4 사유는
 // mixed_boundary(비귀속 행 · 회차는 앞 사슬 세션) · settle_deadline(정산 창 만료 미착지 행)이고 발행 상태는
@@ -159,6 +170,8 @@ type vodMark struct {
 //	사슬 세션 행 · 미착지 · 포기          GAP(settle_deadline)
 //	비귀속 행(세션 NULL)         GAP(mixed_boundary) — 회차는 앞 사슬 세션 · PDT 는 앞 행 PDT + 길이 · URI 는 ③ 키 이름
 //	사슬 밖 회차 행              실패(foreign_session)
+//
+// 실을 행이 vodMaxRows 를 넘으면 렌더 전에 too_large 실패다.
 func (v *vodJob) plan(l index.ChainLedger, abandon bool) (vodPlan, FreezeOutcome, bool) {
 	members := map[string]bool{}
 	for _, id := range l.Chain.SessionIDs {
@@ -190,6 +203,9 @@ func (v *vodJob) plan(l index.ChainLedger, abandon bool) (vodPlan, FreezeOutcome
 		}
 		plan.rows = append(plan.rows, r)
 	}
+	if len(plan.rows) > vodMaxRows {
+		return vodPlan{}, vodFailed(vodTooLarge, fmt.Errorf("publish: VOD 행 %d 개가 적재 상한 %d 개를 넘는다", len(plan.rows), vodMaxRows)), false
+	}
 	return plan, FreezeOutcome{}, true
 }
 
@@ -213,8 +229,11 @@ func (v *vodJob) fillGap(r, prev boundary.Row) boundary.Row {
 // 행을 넣고 포기면 범위의 미착지 GAP 원장 행을 vod_abandoned 로 바꾼다. 돌려준 장부 · plan 이 렌더 입력이다(잠금 밖의
 // 첫 읽기는 재시도 · 실패를 일찍 가르는 데만 쓴다).
 //
-// 다시 읽기는 잠금을 쥔 뒤에 여는 별도 스냅숏이다(index.LoadChainLedger — 잠금 앞에 커밋된 다른 writer 의 등재를 다
-// 본다). 그래서 이 함수는 풀 연결 둘을 함께 쥔다. 꼬리 행을 쥔 트랜잭션이 있으면 lock_timeout 5초 뒤 재시도다.
+// 다시 읽기는 같은 트랜잭션 · 같은 연결이다(index.ReadChainLedger — 잠금을 쥔 채 풀에서 연결을 더 받지 않는다). 등재
+// 트랜잭션은 READ COMMITTED 라 문장마다 잠금 뒤의 새 스냅숏이고 다섯 문장이 한 스냅숏은 아니다. 다른 VOD writer · 사슬
+// 닫힘은 꼬리 잠금으로 직렬이라 원장 · 사슬은 그대로이고, 문장 사이에 끼어드는 것은 ③ 착지와 꼬리 잠금이 막지 않는 늦은
+// 조각 INSERT 뿐이다 — 행 범위는 범위 문장이 정하고 뒤 문장은 더 늦은 착지를 볼 뿐이다. 꼬리 행을 쥔 트랜잭션이 있으면
+// lock_timeout 5초 뒤 재시도다.
 func (v *vodJob) markGaps(ctx context.Context, abandon bool) (index.ChainLedger, vodPlan, FreezeOutcome, bool) {
 	dctx, cancel := v.p.stmtCtx(ctx)
 	defer cancel()
@@ -231,12 +250,15 @@ func (v *vodJob) markGaps(ctx context.Context, abandon bool) (index.ChainLedger,
 		if _, err := tx.Exec(dctx, vodLockTailSQL, v.chain.Tail, v.chain.StreamID); err != nil {
 			return err
 		}
-		if l, plan, out, ok = v.load(dctx, abandon); !ok || len(plan.rows) == 0 {
-			return nil // 적을 것이 없다 — 커밋이 잠금만 푼다
+		reread, err := index.ReadChainLedger(dctx, tx, v.chain)
+		if l, plan, out, ok = v.judge(reread, err, abandon); !ok || len(plan.rows) == 0 {
+			return nil // 적을 것이 없다 — 커밋이 잠금만 푼다(재독 오류로 깨진 트랜잭션이면 되돌린다)
 		}
 		return v.insertMarks(dctx, tx, plan)
 	})
 	switch {
+	case !ok && out.Result != "": // 재독이 갈랐다 — 쓴 것이 없어 커밋 오류는 더할 것이 없다
+		return index.ChainLedger{}, vodPlan{}, out, false
 	case index.IsLockTimeout(err):
 		return index.ChainLedger{}, vodPlan{}, vodRetry(vodContended, err), false
 	case err != nil:
@@ -245,9 +267,14 @@ func (v *vodJob) markGaps(ctx context.Context, abandon bool) (index.ChainLedger,
 	return l, plan, out, ok
 }
 
-// load 는 사슬 장부를 읽어 plan 을 세운다 — 장부의 사슬이 v.chain 과 다르거나 꼬리가 없으면 실패다.
+// load 는 사슬 장부를 풀의 읽기 전용 스냅숏으로 읽어 plan 을 세운다(judge).
 func (v *vodJob) load(ctx context.Context, abandon bool) (index.ChainLedger, vodPlan, FreezeOutcome, bool) {
 	l, err := index.LoadChainLedger(ctx, v.p.pool, v.chain)
+	return v.judge(l, err, abandon)
+}
+
+// judge 는 읽은 장부 l(읽기 오류 err)로 plan 을 세운다 — 장부의 사슬이 v.chain 과 다르거나 꼬리가 없으면 실패다.
+func (v *vodJob) judge(l index.ChainLedger, err error, abandon bool) (index.ChainLedger, vodPlan, FreezeOutcome, bool) {
 	switch {
 	case errors.Is(err, index.ErrChainChanged), errors.Is(err, index.ErrChainNotFound):
 		return l, vodPlan{}, vodFailed(vodChainChanged, err), false

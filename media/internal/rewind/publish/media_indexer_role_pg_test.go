@@ -22,7 +22,7 @@ package publish
 //	confirmEmptySQL     빈 동결 확정                                        sessions UPDATE
 //	failDVRSQL          RecoverOrphan · FailDVR(freeze_failed)              sessions UPDATE … RETURNING
 //	vodTxnLimitsSQL     FreezeVOD 등재 트랜잭션 첫 문장(지역 상한)          set_config 만(표 없음)
-//	vodLockTailSQL      FreezeVOD 등재(꼬리 행 잠금)                        sessions SELECT FOR UPDATE
+//	vodLockTailSQL      FreezeVOD 등재(꼬리 행 잠금)                        sessions SELECT FOR NO KEY UPDATE
 //	vodMarkGapSQL       FreezeVOD 등재(GAP 원장)                            gaps INSERT(ON CONFLICT DO NOTHING)
 //	vodAbandonGapsSQL   FreezeVOD 등재(미착지 GAP 포기)                     gaps UPDATE · segments SELECT
 //	vodLockChainSQL     FreezeVOD 확정 첫 문장(사슬 행 잠금)                sessions SELECT FOR NO KEY UPDATE
@@ -33,8 +33,9 @@ package publish
 //	repairConfirmSQL    감사 복구 ETag 확정                                 sessions UPDATE
 //
 // 장부 적재 · 감시(LoadLedger · Watch)는 index.LoadRewindLedger · index.LoadRewindWatch 를, 동결 · 감사 재렌더는
-// index.LoadSessionLedger 를, VOD 는 index.LoadChainLedger 를 부른다 — 그 문장은 index 역할 시험이 잰다. 이 시험이
-// 역할로 실제 보내는 문장은 위 표 앞 아홉이다(RequireSent) — 동결 · VOD · 감사 문장은 표에만 있다.
+// index.LoadSessionLedger 를, VOD 는 index.LoadChainLedger(첫 읽기) · index.ReadChainLedger(등재 트랜잭션 안 재독 — 같은
+// 문장)를 부른다 — 그 문장은 index 역할 시험이 잰다. 이 시험이 역할로 실제 보내는 문장은 위 표 앞 아홉이다
+// (RequireSent) — 동결 · VOD · 감사 문장은 표에만 있다.
 
 import (
 	"testing"
