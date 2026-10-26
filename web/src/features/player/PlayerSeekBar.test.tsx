@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { PlayerSeekBar } from './PlayerSeekBar';
-import { LIVE_WINDOW_SECONDS } from './playerMath';
+import { REWIND_UI_MAX_SECONDS } from './playerMath';
 
 // 드래그가 놓을 때 딱 한 번만 커밋되는지를 재는 테스트 (계약3 4절 2번 · POK-32).
 // jsdom엔 레이아웃이 없어 rect가 전부 0이므로 트랙 폭만 국소 스텁한다 — 좌표 환산 자체는
@@ -23,7 +23,7 @@ function stubTrackWidth(el: HTMLElement, left: number, width: number) {
 function renderSeekBar(overrides: Partial<Parameters<typeof PlayerSeekBar>[0]> = {}) {
   const props = {
     behindSeconds: 0,
-    windowSeconds: LIVE_WINDOW_SECONDS,
+    windowSeconds: REWIND_UI_MAX_SECONDS,
     clipMarked: false,
     onSeekToFraction: vi.fn(),
     onSeekBy: vi.fn(),

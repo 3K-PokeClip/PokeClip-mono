@@ -6,6 +6,9 @@ import { ToastProvider } from '@/ui';
 import { GlassPlayer, type GlassPlayerController } from '@/features/player/GlassPlayer';
 import type { PlayerSimulationOptions } from '@/features/player/usePlayerSimulation';
 import { recordingTimeline } from '@/features/player/recordingTimeline';
+import { openSession } from '@/features/player/rewindSwitch';
+import { sessionView, type SessionView } from '@/features/player/sessionView';
+import type { PlaybackSession } from '@/features/player/usePlaybackSession';
 
 type PanelProps = Pick<
   ComponentProps<typeof GlassPlayer>,
@@ -575,5 +578,96 @@ describe('GlassPlayer: 바깥 이동 명령의 결과', () => {
       moved = controllerRef.current?.seekToUptime(10);
     });
     expect(moved).toBe(true);
+  });
+});
+
+describe('GlassPlayer: 재생 세션(POK-200 M5)', () => {
+  function fakeSession(view: Partial<SessionView> = {}): PlaybackSession {
+    const state = openSession({
+      roundId: 'r-A',
+      accessKey: 'r-A|key-1',
+      liveUrl: 'https://m/live/key-1/index.m3u8',
+    });
+    return {
+      state,
+      view: { ...sessionView(state, Date.now()), ...view },
+      dispatch: vi.fn(),
+      liveButton: vi.fn(),
+      bindPlayer: vi.fn(),
+      notice: vi.fn(),
+    };
+  }
+
+  function renderWith(props: Partial<ComponentProps<typeof GlassPlayer>>) {
+    return render(
+      <ToastProvider>
+        <GlassPlayer channelName="게임하는너구리" viewersNote="1,842명 시청 중" embed {...props} />
+      </ToastProvider>,
+    );
+  }
+
+  it('고르는 순서는 세션이 먼저다 — 녹화 · src 가 있어도 세션 재생기가 서고 재생기를 세션에 묶는다', () => {
+    const session = fakeSession({ cover: 'checking', actions: ['record'] });
+    renderWith({
+      session,
+      src: 'https://m/live/other/index.m3u8',
+      recorded: {
+        streamId: 'x',
+        ...recordingTimeline([{ startMs: 0, durationSeconds: 60 }], 0, null)!,
+        originAxis: true,
+      },
+    });
+    expect(screen.getByRole('status')).toHaveTextContent('방송이 이어지는지 확인하고 있어요');
+    expect(session.bindPlayer).toHaveBeenCalledWith(
+      expect.objectContaining({ seekToMs: expect.any(Function) }),
+    );
+  });
+
+  it('덮개의 「녹화 보기」는 세션에 버튼 사건으로 올린다', async () => {
+    const session = fakeSession({ cover: 'checking', actions: ['record'] });
+    renderWith({ session });
+    await userEvent.click(screen.getByRole('button', { name: '녹화 보기' }));
+    expect(session.dispatch).toHaveBeenCalledWith({ type: 'button', which: 'record' });
+  });
+
+  it('live 기원 덮개에서는 시크바를 숨긴다 — 받을 목록이 없다', () => {
+    renderWith({
+      session: fakeSession({ cover: 'checking', actions: ['record'], seekHidden: true }),
+    });
+    expect(screen.queryByRole('slider', { name: '라이브 탐색' })).toBeNull();
+  });
+
+  it('끝에 닿아 덮개가 선 동안 재생 단추는 재생하지 않는다 — 덮개가 없으면 재생한다(cc 확인 패스)', async () => {
+    const play = vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
+    vi.spyOn(HTMLMediaElement.prototype, 'paused', 'get').mockReturnValue(true);
+    try {
+      const covered = renderWith({
+        session: fakeSession({ cover: 'checking', actions: ['record'] }),
+      });
+      play.mockClear();
+      await userEvent.click(screen.getByRole('button', { name: '재생' }));
+      expect(play).not.toHaveBeenCalled();
+      covered.unmount();
+      renderWith({ session: fakeSession() });
+      play.mockClear();
+      await userEvent.click(screen.getByRole('button', { name: '재생' }));
+      expect(play).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('끝난 방송의 다시보기(liveHidden)는 LIVE 버튼을 숨긴다 — 눌러도 세션이 무시하는 죽은 버튼이 남지 않게(cx M)', () => {
+    const shown = renderWith({ session: fakeSession() });
+    expect(screen.getByRole('button', { name: '실시간으로 이동' })).toBeInTheDocument();
+    shown.unmount();
+    renderWith({ session: fakeSession({ liveHidden: true }) });
+    expect(screen.queryByRole('button', { name: '실시간으로 이동' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '녹화 끝으로 이동' })).toBeNull();
+  });
+
+  it('세션이 없으면 지금 순서(src)다', () => {
+    renderWith({ src: 'https://m/live/key-1/index.m3u8' });
+    expect(screen.getByRole('slider', { name: '라이브 탐색' })).toBeInTheDocument();
   });
 });

@@ -1,4 +1,4 @@
-import { LIVE_EDGE_BACKOFF_SECONDS, LIVE_WINDOW_SECONDS } from './playerMath';
+import { LIVE_EDGE_BACKOFF_SECONDS, REWIND_UI_MAX_SECONDS } from './playerMath';
 
 // video.seekable 기반 DVR 창 계산 — infra/dev-media/player.html의 dvrRange 이식.
 // jsdom에 미디어 구현이 없어 TimeRanges 대신 구조 타입을 받아 plain object로
@@ -22,7 +22,7 @@ export interface DvrRange {
  */
 export function dvrRange(
   seekable: SeekableLike,
-  windowSeconds: number = LIVE_WINDOW_SECONDS,
+  windowSeconds: number = REWIND_UI_MAX_SECONDS,
 ): DvrRange | null {
   if (seekable.length === 0) return null;
   const end = seekable.end(seekable.length - 1);
@@ -67,7 +67,7 @@ export function behindFromCurrentTime(
   syncPosition: number | null,
 ): number {
   const behind = Math.round(liveEdgePosition(range, syncPosition) - currentTime);
-  return Math.min(LIVE_WINDOW_SECONDS, Math.max(0, behind));
+  return Math.min(REWIND_UI_MAX_SECONDS, Math.max(0, behind));
 }
 
 /**
@@ -79,7 +79,7 @@ export function behindFromCurrentTime(
  */
 export function rewindWindowSeconds(range: DvrRange, syncPosition: number | null): number {
   const width = liveEdgePosition(range, syncPosition) - range.start;
-  return Math.min(LIVE_WINDOW_SECONDS, Math.max(0, width));
+  return Math.min(REWIND_UI_MAX_SECONDS, Math.max(0, width));
 }
 
 /** 영상 목록의 조각 하나. 구조 타입이라 hls.js의 Fragment를 그대로 넘긴다 */
@@ -94,11 +94,12 @@ export interface DatedFragment {
 /**
  * 영상 시각 t(초)의 실제 시각(epoch ms). 계약3: 「재생 위치 ↔ PDT 환산은 조각마다 그 조각의 PDT를 기준으로 한다」. t를 품은
  * 조각의 시각에 조각 안 거리를 더하고, 마지막 조각 뒤(LL-HLS의 만드는 중인 조각은 아직 목록에 조각으로 없다)는 마지막 조각에서
- * 이어 센다. 첫 조각보다 앞이면 첫 조각에서 거꾸로 센다: 1시간 창은 조각이 생길 때마다 맨 앞 조각을 버려, 맨 앞을 보던 재생
- * 위치가 목록 밖으로 밀린다(그 조각은 버퍼에 남아 계속 튼다). 모른다고 하면 영상은 1시간 전인데 채팅이 최신으로 튀었다(POK-326
- * 리뷰 2라운드). 첫 조각을 받기 전의 0초는 부르는 쪽이 거른다(재생 위치에 영상이 없다). 조각이 없거나 시각 표시가 없으면
- * 모른다(null). hls.js playingDate를 쓰지 않는다: 그것은 재생 위치가 0이면 「값 없음」으로 보고 직전 자리의 시각을 줘, 시작
- * 직후·맨 앞으로 옮긴 직후에 시차와 다른 자리를 가리켰다(POK-326 리뷰 1라운드)
+ * 이어 센다. 첫 조각보다 앞이면 첫 조각에서 거꾸로 센다: 미닫이 목록(라이브 28초 · 되감기 1시간 — 길이와 무관)은 조각이 생길
+ * 때마다 맨 앞 조각을 버려, 맨 앞을 보던 재생 위치가 목록 밖으로 밀린다(그 조각은 버퍼에 남아 계속 튼다). 모른다고 하면 영상은
+ * 창 처음인데 채팅이 최신으로 튀었다(POK-326 리뷰 2라운드). 첫 조각을 받기 전의 0초는 부르는 쪽이 거른다(재생 위치에
+ * 영상이 없다). 조각이 없거나 시각 표시가 없으면 모른다(null). hls.js playingDate를 쓰지 않는다: 그것은
+ * 재생 위치가 0이면 「값 없음」으로 보고 직전 자리의 시각을 줘, 시작 직후·맨 앞으로 옮긴 직후에 시차와 다른
+ * 자리를 가리켰다(POK-326 리뷰 1라운드)
  */
 export function programDateAt(fragments: readonly DatedFragment[], t: number): number | null {
   for (let i = fragments.length - 1; i >= 0; i -= 1) {

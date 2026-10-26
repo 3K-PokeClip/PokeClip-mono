@@ -442,6 +442,7 @@ ERROR  Failed to proxy http://localhost:8082/api/auth/me AggregateError
 
 ## 설계 근거 포인터
 
-- 파라미터(4s/0.5s/900개): ADR-020 · 재생 규약: 계약3 (플레이어는 **catch-up 끄기** 필수)
+- 파라미터(4s/0.5s): ADR-020 · 라이브 창 7조각 28초: ADR-102(1시간 되감기는
+  사이드카 /dvr 별도 URL) · 재생 규약: 계약3 (플레이어는 **catch-up 끄기** 필수)
 - 이 환경은 로컬 전용 — AWS 배포(프라이빗+NLB, ADR-021)는 별도 IaC로 진행
 - 멘토 데모용 AWS 임시 서버는 `infra/dev-media/`(유지 확정 — ADR-040 2026-08-30 추기, 팀 공용 아님)

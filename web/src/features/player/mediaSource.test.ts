@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { buildMediaSourceUrl } from './mediaSource';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { buildMediaSourceUrl, mediaControlBaseUrl } from './mediaSource';
 
 const env = {
   stubUrl: 'http://stub.test/live/stub/index.m3u8',
@@ -34,5 +34,21 @@ describe('buildMediaSourceUrl', () => {
   it('env가 모두 비면 null — 시뮬레이션 폴백 신호', () => {
     expect(buildMediaSourceUrl(null, {})).toBeNull();
     expect(buildMediaSourceUrl('test', {})).toBeNull();
+  });
+});
+
+describe('mediaControlBaseUrl — 되감기 제어면 주소(POK-200)', () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it('값의 끝 / 를 떼어 돌려준다', () => {
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_CONTROL_BASE_URL', 'https://media.pokeclip.com/');
+    expect(mediaControlBaseUrl()).toBe('https://media.pokeclip.com');
+  });
+
+  it('비었거나 없으면 null — 되감기 세션을 열지 않고 지금 동작이다', () => {
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_CONTROL_BASE_URL', '');
+    expect(mediaControlBaseUrl()).toBeNull();
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_CONTROL_BASE_URL', undefined);
+    expect(mediaControlBaseUrl()).toBeNull();
   });
 });
