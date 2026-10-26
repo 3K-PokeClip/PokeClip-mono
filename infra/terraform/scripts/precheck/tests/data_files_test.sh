@@ -125,7 +125,9 @@ RUNTIME_TARGETS=('rds-instance runtime-1a rds:DeleteDBInstance'
   'clips-bucket O7d s3:PutBucketPolicy,s3:PutBucketCORS'
   'clips-object O7d s3:GetObject,s3:PutObject'
   'profile-photo-bucket O7d s3:PutBucketPolicy,s3:PutBucketCORS'
-  'profile-photo-object O7d s3:GetObject,s3:PutObject')
+  'profile-photo-object O7d s3:GetObject,s3:PutObject'
+  'chat-archive-bucket O7d s3:PutBucketPolicy,s3:PutBucketCORS'
+  'chat-archive-object O7d s3:GetObject,s3:PutObject')
 readonly RUNTIME_TARGETS
 RUNTIME_ARN_TAILS=(':db:pokeclip-prod-db' ':pg:pokeclip-prod-pg17'
   ':subgrp:pokeclip-prod-db'
@@ -144,7 +146,9 @@ RUNTIME_ARN_TAILS=(':db:pokeclip-prod-db' ':pg:pokeclip-prod-pg17'
   ':::pokeclip-prod-rewind-apne2/?*'
   ':::pokeclip-prod-clips-apne2' ':::pokeclip-prod-clips-apne2/?*'
   ':::pokeclip-prod-profile-photos-apne2'
-  ':::pokeclip-prod-profile-photos-apne2/?*')
+  ':::pokeclip-prod-profile-photos-apne2/?*'
+  ':::pokeclip-prod-chat-archive-apne2'
+  ':::pokeclip-prod-chat-archive-apne2/?*')
 readonly RUNTIME_ARN_TAILS
 # 값 넣기(put-secret-from-file.sh — 1단-다)의 직전 점검이 쓰는 runtime-1a
 # 묶음 행(동작 · 리전 · 자원 패턴 — 5 묶음의 같은 행과 같은 꼴).

@@ -88,9 +88,9 @@ run "lists_env_names_per_service" {
   assert {
     condition = toset(keys(output.app_env["chat-collector"])) == toset([
       "DB_HOST", "DB_PORT", "POSTGRES_DB", "BROADCAST_QUEUE_URL",
-      "CHZZK_CLIENT_ID", "SOOP_CLIENT_ID",
+      "CHZZK_CLIENT_ID", "SOOP_CLIENT_ID", "S3_BUCKET",
     ])
-    error_message = "chat-collector 의 env 이름 집합이 DB 셋 · BROADCAST_QUEUE_URL · CHZZK_CLIENT_ID · SOOP_CLIENT_ID 와 다르다(REDIRECT_URI 는 auth 만)."
+    error_message = "chat-collector 의 env 이름 집합이 DB 셋 · BROADCAST_QUEUE_URL · CHZZK_CLIENT_ID · SOOP_CLIENT_ID · S3_BUCKET 과 다르다(REDIRECT_URI 는 auth 만)."
   }
 
   assert {

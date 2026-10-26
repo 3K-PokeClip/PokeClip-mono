@@ -829,7 +829,8 @@ for name in render thumbnail upload render-dlq thumbnail-dlq upload-dlq; do
     --output text |
     grep -oE '"maxReceiveCount":"?[0-9]+"?|pokeclip-prod-jobs-[a-z]+-dlq'
 done
-for bucket in pokeclip-prod-clips-apne2 pokeclip-prod-profile-photos-apne2; do
+for bucket in pokeclip-prod-clips-apne2 pokeclip-prod-profile-photos-apne2 \
+  pokeclip-prod-chat-archive-apne2; do
   printf '%s\n' "${bucket}"
   aws s3api get-public-access-block --bucket "${bucket}" \
     --query 'PublicAccessBlockConfiguration' --output text
@@ -855,6 +856,20 @@ done
     `expire-after-60-days Enabled 60` 과
     `abort-incomplete-multipart-upload Enabled … 7`, 프로필 사진은
     `abort-incomplete-multipart-upload` 하나입니다.
+*   채팅 원본 버킷: 공개 차단 넷이 `True` 이고
+    `expire-chat-after-60-days Enabled 60` 과
+    `abort-incomplete-multipart-upload Enabled … 7` 입니다. 만료는 `chat/`
+    접두만 대상이라 아래 명령이 `chat/` 한 줄을 냅니다. 이 버킷은 1단-다가
+    아니라 그 뒤 POK-306 의 runtime apply 가 만듭니다 — 그 전에 돌리면 이
+    버킷 줄만 `NoSuchBucket` 오류이고 나머지 줄은 그대로 봅니다.
+
+    ```shell
+    aws s3api get-bucket-lifecycle-configuration \
+      --bucket pokeclip-prod-chat-archive-apne2 \
+      --query 'Rules[?ID==`expire-chat-after-60-days`].Filter.Prefix' \
+      --output text
+    ```
+
 *   rewind 버킷 CORS: 아래 명령이 `GET HEAD https://app.pokeclip.com`
     (`app_origin` 을 바꿨으면 그 값) 한 줄만 냅니다.
 

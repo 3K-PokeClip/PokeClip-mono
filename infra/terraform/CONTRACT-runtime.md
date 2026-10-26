@@ -31,6 +31,7 @@
 | 런타임 1단 → platform | `app_db_users`(서비스 → DB 사용자 이름 — `auth` `app_auth` · `clip` `app_clip` · `chat-collector` `app_chat_collector` · `chat-detector` `app_chat_detector`, 3번 POK-407 확정) | 태스크 env `POSTGRES_USER` · `rds-db:connect` 의 사용자 자리(서비스마다 하나, 와일드카드 없음). platform 은 auth · clip 만 읽고 모르는 키를 거부하지 않는다 — chat 두 키는 배치(POK-306)가 읽는다. 런타임 1단-가가 낸다(이름은 `prod/runtime/sql/10_roles.sql` 에서 읽음 · kty 2026-10-24) | DB 사용자 · `rds_iam` · GRANT = 런타임(Terraform 이 아니라 `prod/runtime/sql/` 과 [runtime-1a 런북](runbooks/runtime-1a.md)). 사용자마다 자기 스키마(이름 = 사용자 · 소유 = 마스터) · `public` CREATE 없음 · DB CONNECT 명시 부여(PUBLIC 회수 — 1단-나 ①, POK-428) |
 | 런타임 1단 → platform · 배치 루트 | `app_task_resource_arns`(서비스 → 키 → ARN — 아래 「작업 역할 대상」 · 「일꾼 작업 역할 대상」) | auth · clip 작업 역할 정책 Resource(platform). 키가 없으면(기능 꺼짐) 그 문장을 만들지 않는다. 일꾼 render · upload 키는 일꾼을 배치하는 루트가 읽는다(POK-408 배치 PR) | 자원 = 런타임, 작업 역할 정책 = platform · 배치 루트 |
 | 런타임 1단 → platform | `broadcast_queue_arns`(소비자 clip · chat → 계약9 SQS FIFO 큐 ARN) | chat-collector(POK-306)의 수신 정책 대상(큐 URL 은 `app_env` 의 `BROADCAST_QUEUE_URL`). clip 은 `app_task_resource_arns` 의 `broadcast_queue_arn` 을 쓴다 | 큐 = 런타임, 수신 정책 = platform |
+| 런타임 1단 → platform | `chat_archive_bucket_name` · `chat_archive_bucket_arn`(채팅 원본 버킷 — POK-306) | chat-collector 작업 역할 정책(POK-306): `s3:PutObject` · `s3:DeleteObject`(`<버킷>/*` — 1분 창 원본 올리기 · 탈퇴 정리의 DeleteObjects) · `s3:ListBucket`(버킷 — 탈퇴 정리가 채널 접두 `chat/…` 를 훑는다). 이름은 `app_env` 의 chat-collector `S3_BUCKET` 과 같다 | 버킷 · 수명 규칙(`chat/` 60일) = 런타임, 작업 역할 정책 = platform |
 | platform → 런타임 · 일꾼 · chat | `ecs_cluster_arn` · `discovery_namespace_id` · `service_sg_ids`(auth · clip · next) | 같은 클러스터 · Cloud Map 네임스페이스(`pokeclip.internal`)에 서비스를 두고, 상대 SG 규칙을 만든다(POK-408 일꾼 · POK-306 chat) | 클러스터 · 네임스페이스 · 서비스 SG = platform, 새 서비스 · 그 규칙 = 그 PR |
 | platform → media | `media_proxy_ports`(live · control · playback · health) · `media_health_path` | Media 상자 nginx 포트 · 헬스 경로 — platform 대상 그룹과 같은 값(정본 = platform) | platform |
 | platform → media | `service_sg_ids.auth` · `service_ports.auth` | Media 이그레스 → auth · auth 인그레스 ← Media(응답기의 4C resolve) 한 쌍 — kty 결정 2026-10-25 (나) | 서비스 SG · 포트 = platform, SG 규칙 = media |
@@ -229,6 +230,7 @@ clip 의 큐 수신 스위치 `BROADCAST_INTAKE_ENABLED` 는 이 목록에 없�
 | clip | `THUMBNAIL_ENABLED` · `THUMBNAIL_QUEUE_URL` | `app_env` | `false` · 빈 값 | 켜면 URL 필수 |
 | clip | `RENDER_RECONCILE_INTERVAL` · `UPLOAD_RECONCILE_INTERVAL` · `THUMBNAIL_INTERVAL` · `PLAYBACK_ACCESS_TTL` | `app_env`(선택) | `PT1M` · `PT1M` · `PT1M` · `PT60M` | |
 | clip | `COLLECTOR_BASE_URL` | platform | 빈 값 | 값 = auth 와 같은 `http://chat-collector.pokeclip.internal:8083`. 비어도 부팅하지만 채팅 문 셋이 503 이다 |
+| chat-collector | `S3_BUCKET` | `app_env` | 빈 값 | 채팅 원본 버킷 이름(`chat_archive_bucket_name` 과 같은 것). 비면 원본 보관이 통째로 꺼진다(`ArchiveProperties`). 원본은 `chat/` 아래에 쌓이고 수명 규칙이 60일 뒤 지운다(처리방침 3절) |
 | chat-collector | `CHZZK_CLIENT_ID` · `SOOP_CLIENT_ID` | `app_env` | 빈 값 | auth 와 같은 앱(런타임 변수 `auth_oauth_apps`). 비밀 `CHZZK_CLIENT_SECRET` · `SOOP_CLIENT_SECRET` 은 `app_secret_arns`(auth 와 같은 그릇). 치지직 둘은 방송 정보(`BROADCAST_INFO_ENABLED`), SOOP 둘은 SOOP 채팅(`SOOP_CHAT_ENABLED`)이 쓴다 — 켜졌는데 비면 부팅 거부(`services/chat-collector` 의 `application.yml`) |
 | auth · clip | `AWS_REGION` | 넣지 않아도 됨 | `ap-northeast-2` | 기본값이 prod 리전과 같다 |
 | auth · clip | `*_ENDPOINT` · `PROFILE_PHOTO_S3_FORCE_PATH_STYLE` | 넣지 않음 | 빈 값 · `false` | 로컬 호환 스토리지 전용. 비면 실제 AWS |
@@ -339,6 +341,7 @@ prod 루트와 같은 규약을 씁니다(계획 3절 「한 계정 규약」). 
 | RDS(인스턴스 · 서브넷 그룹 · 파라미터 그룹) · RDS SG | 접두 `pokeclip-prod-` | `pokeclip-prod-db`(인스턴스 · 서브넷 그룹) · `pokeclip-prod-pg17`(파라미터 그룹) · `pokeclip-prod-rds`(SG) |
 | rewind 버킷 | 접두 `pokeclip-prod-`(버킷 이름은 전역) | `pokeclip-prod-rewind-apne2`(변수 `rewind_bucket_name` 기본값) |
 | clips · 프로필 사진 버킷 | 접두 `pokeclip-prod-`(버킷 이름은 전역) | `pokeclip-prod-clips-apne2` · `pokeclip-prod-profile-photos-apne2`(변수 `clips_bucket_name` · `profile_photo_bucket_name` 기본값) |
+| 채팅 원본 버킷 | 접두 `pokeclip-prod-`(버킷 이름은 전역) | `pokeclip-prod-chat-archive-apne2`(변수 `chat_archive_bucket_name` 기본값) |
 | 일 큐 · DLQ | 접두 `pokeclip-prod-` | `pokeclip-prod-jobs-{render,thumbnail,upload}`(표준 큐) · `pokeclip-prod-jobs-{render,thumbnail,upload}-dlq` |
 | SNS 주제 · SQS 큐 | 접두 `pokeclip-prod-` | `pokeclip-prod-broadcast-lifecycle.fifo`(주제) · `pokeclip-prod-broadcast-lifecycle-{clip,chat}.fifo`(큐) · `pokeclip-prod-broadcast-lifecycle-{clip,chat}-dlq.fifo`(DLQ) |
 | 앱 비밀 | `pokeclip/prod/<용도>` | `pokeclip/prod/{jwt-secret,secret-store-key,internal-api-token,google-client-secret,youtube-client-secret,chzzk-client-secret,profile-photo-token-secret,soop-client-secret,stream-key-resolve-token}` |

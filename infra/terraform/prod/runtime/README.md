@@ -3,9 +3,9 @@
 prod 런타임 1단(설계 3-1 의 ⑤)을 만드는 루트입니다 — RDS PostgreSQL 17 ·
 앱 비밀 그릇 아홉 · 계약9 SNS FIFO 주제와 SQS FIFO 큐 · rewind 버킷 · SQL
 실행기 스위치(1단-가), 일 큐 셋과 DLQ · clips · 프로필 사진 버킷 · auth 설정
-(OAuth · 사진 주소) · clip 일 스위치(1단-다). platform · media · edge · 일꾼
-배치 루트는 이 루트의 상태(키 `prod/runtime/terraform.tfstate`)를
-`terraform_remote_state` 로 읽습니다.
+(OAuth · 사진 주소) · clip 일 스위치(1단-다), 채팅 원본 버킷(POK-306).
+platform · media · edge · 일꾼 배치 루트는 이 루트의 상태(키
+`prod/runtime/terraform.tfstate`)를 `terraform_remote_state` 로 읽습니다.
 
 출력 이름과 소유 경계의 정본은
 [런타임 트랙 인터페이스 계약](../../CONTRACT-runtime.md)입니다. 이 루트가
@@ -42,6 +42,7 @@ prod 런타임 1단(설계 3-1 의 ⑤)을 만드는 루트입니다 — RDS Pos
 | `job_queues.tf` | 일 큐 셋(render · thumbnail · upload — 표준 SQS)과 DLQ · redrive | POK-408 |
 | `clips_bucket.tf` | clips 버킷(공개 차단 · SSE-S3 · 만료 60일 · 미완료 업로드 정리) | POK-408 |
 | `profile_photo_bucket.tf` | 프로필 사진 버킷(공개 차단 · SSE-S3 · 미완료 업로드 정리 · 만료 없음) | POK-427 |
+| `chat_archive_bucket.tf` | 채팅 원본 버킷(공개 차단 · SSE-S3 · `chat/` 만료 60일 · 미완료 업로드 정리)과 출력 둘 | POK-306 |
 | `auth_settings.tf` | auth 설정 변수 `auth_oauth_apps` · `profile_photo_base_url`(검증 = 앱 부팅 검사) | POK-427 |
 | `app_task_resources.tf` | 작업 역할 대상 출력 `app_task_resource_arns` | POK-408 |
 | `app_db_users.tf` | 앱 서버 DB 사용자 이름 출력(`sql/10_roles.sql` 에서 읽음) | POK-407 |
@@ -76,10 +77,11 @@ default_tags 가 붙는지는 미확인이고, 런북 「운영 확인」 에서
 | `rds_db_name` | media · `app_env` 의 `POSTGRES_DB` |
 | `rds_resource_id` | media — 인스턴스 역할 `rds-db:connect` 의 대상 |
 | `rewind_bucket_name` · `rewind_bucket_arn` · `rewind_bucket_regional_domain_name` | edge — `rewind-s3` 오리진 · media — 업로드 정책 · 런타임 2단 — 버킷 정책 |
+| `chat_archive_bucket_name` · `chat_archive_bucket_arn` | platform(POK-306) — chat-collector 작업 역할 정책(`s3:PutObject` · `DeleteObject` 는 `<버킷>/*`, `s3:ListBucket` 은 버킷 — 탈퇴 정리가 채널 접두를 훑고 지운다). 이름은 `app_env` 의 chat-collector `S3_BUCKET` 과 같다 |
 | `app_secret_arns`(서비스 → env 이름 → 전체 ARN) | platform — `ecs_service.secrets` · 실행 역할 읽기 정책. auth 아홉(`SOOP_CLIENT_SECRET` · resolve 전용 토큰 `STREAM_KEY_RESOLVE_TOKEN` 포함) · clip 둘(`JWT_SECRET` · `INTERNAL_API_TOKEN`) · chat-collector 셋(`INTERNAL_API_TOKEN` · `CHZZK_CLIENT_SECRET` · `SOOP_CLIENT_SECRET` — 앱 비밀 둘은 auth 와 같은 그릇) · chat-detector 하나(`INTERNAL_API_TOKEN`). 일꾼 render · upload 하나씩(`INTERNAL_API_TOKEN` — 앱과 같은 그릇)은 배치 루트가 읽는다 |
 | `media_secret_arns`(비밀 전체 ARN 목록 — `list(string)`) | media — 인스턴스 역할 읽기 정책(media_host 변수 `media_secret_arns` 와 같은 꼴). 원소는 resolve 전용 토큰 그릇 하나(auth 의 `STREAM_KEY_RESOLVE_TOKEN` 과 같은 그릇) — 공용 `INTERNAL_API_TOKEN` 은 없다(POK-429) |
 | `ingest_auth_resolve_token_secret_arn`(전체 ARN — string) | media — 응답기 `media.env` 의 `STREAM_KEY_RESOLVE_TOKEN_SECRET_ARN`(키 정의 · 읽기 = M15, 렌더 = M9(user_data)). `media_secret_arns` 의 원소와 같은 값이고, 목록의 순서에 기대지 않으려는 이름 있는 출력이다 |
-| `app_env`(서비스 → env 이름 → 값) | platform — `ecs_service.environment`. 네 서버 모두 `DB_HOST` · `DB_PORT` · `POSTGRES_DB`, auth 는 OAuth 네 덩어리의 `*_CLIENT_ID` · `*_REDIRECT_URI` 와 `PROFILE_PHOTO_S3_BUCKET` · `PROFILE_PHOTO_BASE_URL` · resolve 전용 창구의 허용 대역 `STREAM_KEY_RESOLVE_ALLOWED_CIDRS`(Media 프라이빗 서브넷 CIDR)(스트림 키 접두 `STREAM_KEY_SECRET_REF_PREFIX` 는 platform 이 넣는다), clip · chat-collector 는 자기 큐의 `BROADCAST_QUEUE_URL`, chat-collector 는 auth 와 같은 앱 ID `CHZZK_CLIENT_ID` · `SOOP_CLIENT_ID`(`auth_oauth_apps` — 방송 정보 목록 · SOOP 채팅 SDK 용), clip 은 수신 스위치 `BROADCAST_INTAKE_ENABLED = "true"`(문자열 — 빠지면 큐를 읽지 않아 편지가 보관 기간 뒤 사라진다) · 일 스위치 셋(`clip_job_features`) · 일 큐 주소 다섯 · `CLIPS_BUCKET` · `SEGMENT_BUCKET`(= rewind). `AUTH_BASE_URL` 은 platform 이 넣는다. chat-collector 의 스위치는 배치(POK-306)가 `AUTH_BASE_URL` · `INTERNAL_API_TOKEN` 과 함께 정한다. 일꾼 render · upload 의 큐 주소 · 숨김 env 는 배치 루트가 읽는다 |
+| `app_env`(서비스 → env 이름 → 값) | platform — `ecs_service.environment`. 네 서버 모두 `DB_HOST` · `DB_PORT` · `POSTGRES_DB`, auth 는 OAuth 네 덩어리의 `*_CLIENT_ID` · `*_REDIRECT_URI` 와 `PROFILE_PHOTO_S3_BUCKET` · `PROFILE_PHOTO_BASE_URL` · resolve 전용 창구의 허용 대역 `STREAM_KEY_RESOLVE_ALLOWED_CIDRS`(Media 프라이빗 서브넷 CIDR)(스트림 키 접두 `STREAM_KEY_SECRET_REF_PREFIX` 는 platform 이 넣는다), clip · chat-collector 는 자기 큐의 `BROADCAST_QUEUE_URL`, chat-collector 는 auth 와 같은 앱 ID `CHZZK_CLIENT_ID` · `SOOP_CLIENT_ID`(`auth_oauth_apps` — 방송 정보 목록 · SOOP 채팅 SDK 용)와 채팅 원본 버킷 이름 `S3_BUCKET`(비면 원본 보관이 꺼진다), clip 은 수신 스위치 `BROADCAST_INTAKE_ENABLED = "true"`(문자열 — 빠지면 큐를 읽지 않아 편지가 보관 기간 뒤 사라진다) · 일 스위치 셋(`clip_job_features`) · 일 큐 주소 다섯 · `CLIPS_BUCKET` · `SEGMENT_BUCKET`(= rewind). `AUTH_BASE_URL` 은 platform 이 넣는다. chat-collector 의 스위치는 배치(POK-306)가 `AUTH_BASE_URL` · `INTERNAL_API_TOKEN` 과 함께 정한다. 일꾼 render · upload 의 큐 주소 · 숨김 env 는 배치 루트가 읽는다 |
 | `broadcast_topic_arn` | media — 사이드카 역할의 `sns:Publish` 대상(신원 정책 — 주제 정책은 계정 루트만 주체로 둔다) |
 | `broadcast_queue_arns`(소비자 clip · chat → 큐 ARN) | chat-collector(POK-306)의 수신 정책 대상. clip 은 `app_task_resource_arns` 를 쓴다 |
 | `app_db_users`(서비스 → DB 사용자 이름) | platform — 태스크 env `POSTGRES_USER` · `rds-db:connect` 의 사용자 자리(auth · clip). `auth` `app_auth` · `clip` `app_clip` · `chat-collector` `app_chat_collector` · `chat-detector` `app_chat_detector` — chat 두 키는 배치(POK-306)가 읽는다. 사용자 · `rds_iam` · GRANT 는 `sql/` 이 만든다 |
@@ -116,7 +118,7 @@ SQL 을 적용한 뒤 곧바로 끕니다. 켜진 동안 `iam:PassRole` 을 가�
 | 마스터 비밀을 고객 관리 키(CMK)로 암호화 | 키 정책 · 비용 · 삭제 대기라는 표면이 늘고, 실행기 역할에 kms 권한을 따로 줘야 한다. AWS 관리 키 `aws/secretsmanager` 로 충분하다 |
 | `engine_version` 을 부판까지 고정(`17.x`) | AWS 가 부판을 강제로 올리면(보안 · 지원 종료) 다음 apply 가 옛 부판으로 되돌리려다 실패한다. 메이저 `17` 만 고정하면 provider 가 점 경계 접두를 같은 판으로 본다 |
 | `lifecycle { ignore_changes = [engine_version] }` | 코드가 실제 판에 대해 거짓말을 하게 되고, 의도한 메이저 업그레이드 때 lifecycle 을 다시 풀어야 한다 |
-| 버킷 공용 모듈(rewind · clips · 프로필 사진) | 버킷마다 설정이 갈리고(만료 60일 · 없음) 셋은 아직 작다(제0원칙 — 과설계 금지). 넷째가 생기면 다시 본다 |
+| 버킷 공용 모듈(rewind · clips · 프로필 사진 · 채팅 원본) | 버킷마다 설정이 갈린다(버킷 전체 만료 60일 · `chat/` 만 만료 60일 · 없음 · CORS). 넷째(채팅 원본 — POK-306)는 clips 꼴을 복사했다. 공용 모듈로 묶을지는 따로 정한다 |
 | 일 큐 숨김 시간을 변수로 | 일꾼 yml 기본값과 한쪽만 바뀌는 길을 연다 — 상수(`job_queues.tf`)와 그 상수에서 만든 일꾼 env 로 묶는다 |
 
 메이저만 고정한 대가로, 생성 때 부판은 AWS 의 17 기본 부판이라 최신이 아닐
@@ -226,8 +228,8 @@ Jira POK-304 코멘트와 같은 목록). 1 · 2 · 7 은 1단-나 ①(POK-428)�
     일(지우기 `streams/*` · `dvr/*/init/*` · `dvr/*/seg/*`, 읽기
     `streams/*`)은 platform 후속이고, 런타임 2단 버킷 정책이 작업 역할을 막지
     않게 둡니다.
-*   새 버킷 둘(clips · 프로필 사진)에 TLS 거부 버킷 정책이 없습니다 — rewind
-    와 함께 런타임 2단에서 둡니다(K8).
+*   새 버킷 셋(clips · 프로필 사진 · 채팅 원본)에 TLS 거부 버킷 정책이
+    없습니다 — rewind 와 함께 런타임 2단에서 둡니다(K8).
 *   `clip_job_features` 의 거부 규칙(render · upload 둘 다 끔)은 런타임 변수
     값만 막습니다. 코드 되돌리기로 env 가 빠져 yml 기본값(둘 다 false)으로
     도는 길은 [runtime-1a 런북](../../runbooks/runtime-1a.md) 「1단-다 —
