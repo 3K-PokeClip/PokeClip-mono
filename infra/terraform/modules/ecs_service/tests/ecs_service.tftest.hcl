@@ -336,6 +336,12 @@ run "registers_service_in_cloud_map" {
     )
     error_message = "Cloud Map DNS 레코드가 A 하나가 아니다."
   }
+
+  # 빈 블록은 provider 가 AWS 로 보내지 않아(실물 null) plan 마다 교체가 뜬다.
+  assert {
+    condition     = length(aws_service_discovery_service.this.health_check_custom_config) == 0
+    error_message = "Cloud Map 서비스에 health_check_custom_config 블록이 있다 — 실물과 달라 영구 교체 diff 가 난다."
+  }
 }
 
 # 「O7d 선행 0 · prod 역할 경로 단언」 — 이 경로가 2-3 판정의 prod 주체 식별
