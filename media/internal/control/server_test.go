@@ -124,7 +124,7 @@ func TestServeFailureIsLogged(t *testing.T) {
 		t.Fatal(err)
 	}
 	srv.ln.Close()
-	<-srv.served
+	waitFor(t, srv.served, "Serve 반환")
 	srv.Shutdown()
 	if failed := f.logs.events("control_server_failed"); len(failed) != 1 || failed[0]["stage"] != "serve" || failed[0]["level"] != "ERROR" {
 		t.Errorf("control_server_failed = %v, want stage=serve ERROR 한 줄", failed)
@@ -150,7 +150,7 @@ func TestShutdownWaitsForRunningSweep(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	<-entered
+	waitFor(t, entered, "청소 진입")
 	done := make(chan struct{})
 	go func() {
 		srv.Shutdown()
@@ -162,5 +162,5 @@ func TestShutdownWaitsForRunningSweep(t *testing.T) {
 	case <-time.After(200 * time.Millisecond):
 	}
 	close(release)
-	<-done
+	waitFor(t, done, "청소를 푼 뒤 Shutdown 반환")
 }

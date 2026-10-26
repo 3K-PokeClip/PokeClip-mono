@@ -42,12 +42,16 @@ type readyAlarm struct {
 //	NotFound(Unknown)              final[s] 삭제
 //	Found                          final[s] 를 조건 없이 덮음(Forget 잠정 항목도 덮인다)
 //
-// 같은 스트림 · 같은 값의 WARN 은 한 번만이다.
+// 같은 스트림 · 같은 값의 WARN 은 한 번만이다. 꺼짐(statusOff)에서는 받은편지함만 비우고 반영하지 않는다 — Board 가
+// 늘 404 라 쓸 데가 없고, 반영하면 끝난 스트림마다 종료 값이 루프 메모리에 쌓인다(3.3절 「꺼짐과 강등」).
 func (r *rewindLoop) drainFinals() {
 	if r.finals == nil {
 		return
 	}
 	in := r.finals.Drain()
+	if r.statusOff {
+		return
+	}
 	for _, s := range slices.Sorted(maps.Keys(in)) {
 		r.applyFinal(s, in[s])
 	}

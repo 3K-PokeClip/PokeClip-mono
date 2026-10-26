@@ -127,6 +127,23 @@ func (f *fixture) start(t *testing.T, routes ...Route) string {
 	return "http://" + srv.Addr().String()
 }
 
+// testClient 는 요청마다 시한이 있는 클라이언트다 — 처리기가 멈추는 회귀가 패키지 시한(10분)까지 붙잡지 않고 그 요청의
+// 실패로 끝나게(cx c2 M2 · 결함 예방 스킬의 시험별 유한 상한).
+var testClient = &http.Client{Timeout: testWait}
+
+// testWait 는 시험이 한 사건(요청 하나 · 고루틴 신호 하나)을 기다리는 상한이다.
+const testWait = 10 * time.Second
+
+// waitFor 는 ch 가 닫히거나 값을 낼 때까지 testWait 만큼 기다린다. 넘으면 what 을 적고 시험을 멈춘다.
+func waitFor[T any](t *testing.T, ch <-chan T, what string) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(testWait):
+		t.Fatalf("%s 를 %v 안에 보지 못했다", what, testWait)
+	}
+}
+
 type reply struct {
 	code   int
 	header http.Header
@@ -142,7 +159,7 @@ func get(t *testing.T, url string, header ...string) reply {
 	for i := 0; i+1 < len(header); i += 2 {
 		req.Header.Set(header[i], header[i+1])
 	}
-	res, err := http.DefaultClient.Do(req)
+	res, err := testClient.Do(req)
 	if err != nil {
 		t.Fatalf("GET %s = %v", url, err)
 	}

@@ -8,7 +8,8 @@ import (
 )
 
 // Limiter 는 스트림별 1초 고정 창 계수기다. startControl 안에서 하나 만들어 두 처리기가 나눠 쓴다(보완 2 ㉠).
-// 세는 것은 「답한 요청」뿐이다 — 스트림 경로의 Found 답 · 회차 경로의 Board hit · 1초 캐시 적중(보완 3).
+// 세는 것은 「답한 요청」뿐이다 — 스트림 경로의 Found 답 · 회차 경로의 Board hit · 1초 캐시 200 적중(보완 3 — 404
+// 적중은 세지 않아 칸을 열지 않는다).
 // 칸 상한 maxCells — 넘으면 가장 오래 쓰지 않은 칸을 축출한다(그 칸이 세움 상태였으면 control_rate_limited 내림 줄을
 // 쓴다). 60초마다 쓰지 않은 칸을 청소하는 고루틴은 Start 가 띄우고 Server.Shutdown 이 멈춘다. 여러 고루틴이 함께 부른다.
 type Limiter struct {

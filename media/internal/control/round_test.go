@@ -86,6 +86,32 @@ func TestRoundRouteMissLooksUpOnceThenCaches(t *testing.T) {
 	}
 }
 
+// cx c2 M1 · cc c2 L1: 1초 캐시는 lookup 이 끝난 시각부터 센다 — 1.2초 걸린 lookup 의 답도 바로 다음 요청에 적중한다.
+// 시작 시각으로 세면 저장 직후 이미 만료돼 다음 요청이 DB 를 다시 부른다.
+func TestRoundRouteCacheCountsFromLookupEnd(t *testing.T) {
+	f := newFixture(10)
+	f.store(true, nil)
+	l := &fakeLookup{answer: func(s, r string) (status.Status, status.Answer, error) {
+		f.clock.Advance(1200 * time.Millisecond)
+		return vodSt, status.Found, nil
+	}}
+	base := f.start(t, RoundRoute(f.holder, f.opt, l.fn))
+	for range 2 {
+		if got := get(t, roundURL(base, "x", "R9")); got.code != 200 {
+			t.Errorf("miss = %d, want 200", got.code)
+		}
+	}
+	if c := l.calls.Load(); c != 1 {
+		t.Errorf("느린 lookup 바로 뒤 같은 요청의 lookup = %d, want 1(캐시 적중)", c)
+	}
+	f.clock.Advance(time.Second)
+	f.store(true, nil)
+	get(t, roundURL(base, "x", "R9"))
+	if c := l.calls.Load(); c != 2 {
+		t.Errorf("끝난 시각 1초 뒤 lookup = %d, want 2", c)
+	}
+}
+
 // lookup 의 답 갈래: NotFound → 404(캐시) · Unavailable · 오류 → 503(캐시 안 함) · Live → 200 live url null(M5 보충).
 func TestRoundRouteLookupAnswers(t *testing.T) {
 	f := newFixture(10)
@@ -255,6 +281,27 @@ func TestRoundRouteCacheHitCountsSharedCell(t *testing.T) {
 	}
 }
 
+// 보안 L2 · cc c2 L3: 1초 캐시의 404 적중은 공유 칸을 열지 않는다 — 무작위 (s, r) 의 404 가 Board 밖 스트림 칸을 만들지
+// 않게. 404 는 답이 없는 요청이라 「답한 요청만 센다」에도 들지 않는다.
+func TestRoundRouteCachedNotFoundOpensNoCell(t *testing.T) {
+	f := newFixture(10)
+	f.store(true, nil)
+	l := &fakeLookup{answer: func(s, r string) (status.Status, status.Answer, error) {
+		return status.Status{}, status.NotFound, nil
+	}}
+	base := f.start(t, RoundRoute(f.holder, f.opt, l.fn))
+	for i := range 15 {
+		for range 2 { // 둘째는 캐시 적중
+			if got := get(t, roundURL(base, "g"+strconv.Itoa(i), "R1")); got.code != 404 {
+				t.Fatalf("g%d = %d, want 404", i, got.code)
+			}
+		}
+	}
+	if c, n := l.calls.Load(), cellCount(f.opt.Limiter); c != 15 || n != 0 {
+		t.Errorf("lookup %d · 칸 %d, want 15 · 0", c, n)
+	}
+}
+
 // R54 ⓑ: 칸 상한 64 를 주입하면 hit 200 스트림 · miss 200 쌍 뒤에도 Limiter 칸 · 캐시 칸이 64 이하다. 세움 상태로
 // 축출된 칸마다 내림 줄이 하나다.
 func TestRoundRouteCellCaps(t *testing.T) {
@@ -320,6 +367,78 @@ func TestRoundRouteRejectsBadIDs(t *testing.T) {
 	}
 	if l.calls.Load() != 0 {
 		t.Errorf("lookup = %d, want 0", l.calls.Load())
+	}
+}
+
+// 보안 c3 M1: 두 id 가운데 하나라도 퍼센트 인코딩이면 lookup · 칸 없이 404 다.
+func TestRoundRoutePercentEncodedPathIsNotFound(t *testing.T) {
+	f := newFixture(10)
+	f.store(true, map[string]status.Entry{"abc": vodEntry("R1")})
+	l := &fakeLookup{}
+	base := f.start(t, RoundRoute(f.holder, f.opt, l.fn))
+	for _, c := range [][2]string{{"%61bc", "R1"}, {"abc", "%52%31"}, {"x", "%61"}} {
+		if got := get(t, roundURL(base, c[0], c[1])); got.code != 404 {
+			t.Errorf("%v = %d, want 404", c, got.code)
+		}
+	}
+	if l.calls.Load() != 0 || cellCount(f.opt.Limiter) != 0 {
+		t.Errorf("lookup %d · 칸 %d, want 0 · 0", l.calls.Load(), cellCount(f.opt.Limiter))
+	}
+}
+
+// 보안 c2 M2: lookup 이 패닉해도 그 요청은 503 이고, 같은 키를 기다리던 요청도 503 으로 풀리며, 전역 예산 · flight 칸이
+// 돌아온다 — 패닉 둘(동시 상한)에 회차 경로 전체가 재기동까지 503 으로 굳지 않는다. 다음 키는 200 이다.
+func TestRoundRouteLookupPanicReleasesBudget(t *testing.T) {
+	f := newFixture(10)
+	f.store(true, nil)
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	l := &fakeLookup{answer: func(s, r string) (status.Status, status.Answer, error) {
+		if r == "ok" {
+			return vodSt, status.Found, nil
+		}
+		if r == "wait" {
+			once.Do(func() { close(entered) })
+			<-release
+		}
+		panic("lookup 결함")
+	}}
+	rr := RoundRoute(f.holder, f.opt, l.fn)
+	base := f.start(t, rr)
+	waiter := make(chan reply, 2)
+	go func() { waiter <- get(t, roundURL(base, "x", "wait")) }()
+	waitFor(t, entered, "패닉 키 lookup 진입")
+	go func() { waiter <- get(t, roundURL(base, "x", "wait")) }()
+	time.Sleep(50 * time.Millisecond) // 둘째 요청이 flight 를 기다리게 — 늦게 닿아도 같은 키 lookup 이 다시 패닉해 503 이다
+	close(release)
+	for range 2 {
+		var got reply
+		select {
+		case got = <-waiter:
+		case <-time.After(testWait):
+			t.Fatal("패닉 키 요청이 풀리지 않았다")
+		}
+		if got.code != 503 {
+			t.Errorf("패닉 키(첫 요청 · 기다린 요청) = %d, want 503", got.code)
+		}
+	}
+	for _, r := range []string{"p1", "p2", "p3"} {
+		if got := get(t, roundURL(base, "x", r)); got.code != 503 {
+			t.Errorf("패닉 %s = %d, want 503", r, got.code)
+		}
+	}
+	if got := get(t, roundURL(base, "x", "ok")); got.code != 200 {
+		t.Errorf("패닉 넷 뒤 다음 키 = %d, want 200", got.code)
+	}
+	h := rr.Handler.(*roundHandler)
+	h.mu.Lock()
+	inFlight, flights := h.inFlight, len(h.flights)
+	h.mu.Unlock()
+	if inFlight != 0 || flights != 0 {
+		t.Errorf("패닉 뒤 inFlight %d · flight 칸 %d, want 0 · 0", inFlight, flights)
+	}
+	if fails := f.logs.events("control_round_lookup_failed"); len(fails) == 0 || fails[0]["reason"] != "panic" {
+		t.Errorf("control_round_lookup_failed = %v, want reason=panic", fails)
 	}
 }
 
