@@ -78,42 +78,63 @@ func NewPGStore(pool *pgxpool.Pool, decider SessionDecider, playbackKey Playback
 	return &pgStore{pool: pool, decider: decider, playbackKey: playbackKey}
 }
 
-// s3_key 는 ddl.go 에서 NOT NULL 이므로 포인터로 받지 않고 곧바로 스캔한다.
-// SELECT 목록 순서와 아래 Scan 인자 순서는 반드시 같아야 한다 — s3_key 와 local_path 는
-// 둘 다 text 라 순서를 바꿔도 컴파일·실행이 통과한다. store_test.go 의 값 대조가 그 방어선이다.
+// loadCursorSQL 은 다음 seq 와 꼬리 행을 한 문장으로 읽는다. 다음 seq = GREATEST(하한, max(seq)+1) — GREATEST 는
+// NULL 을 건너뛰므로 둘 중 있는 값, 둘 다 없으면 NULL(첫 세그먼트)이다. 하한(stream_seq_floors)은 행을 지울 때
+// 트리거가 올린 값이라, 만료가 마지막 행까지 지운 스트림도 seq 를 다시 쓰지 않는다(불변식 4).
+// 바깥 한 행(one)에 두 LATERAL 을 붙여 행이 없어도 결과는 늘 한 행이다.
+//
+// 꼬리 열은 행이 없으면 NULL 이라 포인터로 받는다. SELECT 목록 순서와 아래 Scan 인자 순서는 반드시 같아야 한다 —
+// s3_key 와 local_path 는 둘 다 text 라 순서를 바꿔도 컴파일·실행이 통과한다. store_test.go 의 값 대조가 그 방어선이다.
 const loadCursorSQL = `
-SELECT seq, start_pts_ms, start_wall_utc, duration_ms, bytes, local_path, upload_state, s3_key
-  FROM stream_segments WHERE stream_id = $1 ORDER BY seq DESC LIMIT 1`
+SELECT GREATEST(f.next_seq, t.seq + 1::bigint),
+       t.seq, t.start_pts_ms, t.start_wall_utc, t.duration_ms, t.bytes, t.local_path, t.upload_state, t.s3_key
+  FROM (SELECT 1) one
+  LEFT JOIN LATERAL (SELECT next_seq FROM stream_seq_floors WHERE stream_id = $1) f ON true
+  LEFT JOIN LATERAL (SELECT seq, start_pts_ms, start_wall_utc, duration_ms, bytes, local_path, upload_state, s3_key
+                       FROM stream_segments WHERE stream_id = $1 ORDER BY seq DESC LIMIT 1) t ON true`
+
+// cursorRow 는 loadCursorSQL 한 행이다 — 꼬리 열은 행이 없으면 NULL 이다.
+type cursorRow struct {
+	nextSeq, seq, startPTSMS, bytes *int64
+	startWallUTC                    *time.Time
+	durationMS                      *int32
+	localPath, s3Key                *string
+	uploadState                     *UploadState
+}
 
 func (s *pgStore) LoadCursor(ctx context.Context, streamID string) (Cursor, error) {
-	var (
-		tail      TailRow
-		bytes     *int64
-		localPath *string
-	)
+	var r cursorRow
 	err := s.pool.QueryRow(ctx, loadCursorSQL, streamID).Scan(
-		&tail.Seq, &tail.StartPTSMS, &tail.StartWallUTC, &tail.DurationMS,
-		&bytes, &localPath, &tail.UploadState, &tail.S3Key,
+		&r.nextSeq, &r.seq, &r.startPTSMS, &r.startWallUTC, &r.durationMS,
+		&r.bytes, &r.localPath, &r.uploadState, &r.s3Key,
 	)
-	// 행이 없다 = 이 스트림의 첫 세그먼트다. 에러가 아니라 정상 상태다.
-	if errors.Is(err, pgx.ErrNoRows) {
-		return Cursor{}, nil
-	}
 	if err != nil {
 		return Cursor{}, fmt.Errorf("커서 적재 실패 stream_id=%q: %w", streamID, err)
 	}
-
-	// bytes 와 local_path 는 NULL 을 허용하는 컬럼이라 포인터로 받아 영값으로 편다.
-	if bytes != nil {
-		tail.Bytes = *bytes
+	// 하한도 행도 없다 = 이 스트림의 첫 세그먼트다. 에러가 아니라 정상 상태다.
+	if r.nextSeq == nil {
+		return Cursor{}, nil
 	}
-	if localPath != nil {
-		tail.LocalPath = *localPath
+	cur := Cursor{NextSeq: *r.nextSeq}
+	// 행이 없고 하한만 있다 = 만료가 꼬리까지 지운 스트림이다. 꼬리 없이 하한부터 쓴다.
+	if r.seq == nil {
+		return cur, nil
 	}
-	// 저장은 UTC 강제지만 드라이버가 로컬 위치로 실어 올 수 있어 여기서 한 번 못 박는다(D6).
-	tail.StartWallUTC = tail.StartWallUTC.UTC()
-
-	return Cursor{NextSeq: tail.Seq + 1, Tail: &tail}, nil
+	tail := TailRow{
+		Seq: *r.seq, StartPTSMS: *r.startPTSMS, DurationMS: *r.durationMS,
+		UploadState: *r.uploadState, S3Key: *r.s3Key,
+		// 저장은 UTC 강제지만 드라이버가 로컬 위치로 실어 올 수 있어 여기서 한 번 못 박는다(D6).
+		StartWallUTC: r.startWallUTC.UTC(),
+	}
+	// bytes 와 local_path 는 NULL 을 허용하는 컬럼이라 영값으로 편다.
+	if r.bytes != nil {
+		tail.Bytes = *r.bytes
+	}
+	if r.localPath != nil {
+		tail.LocalPath = *r.localPath
+	}
+	cur.Tail = &tail
+	return cur, nil
 }
 
 const existingPathsSQL = `
