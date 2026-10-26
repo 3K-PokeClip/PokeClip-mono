@@ -95,9 +95,11 @@ variable "services" {
 }
 
 # chat 두 서버(POK-306)는 공개 ALB 를 쓰지 않아 services(공개 ALB 대상 그룹 ·
-# 규칙의 원천)에 넣지 않는다. 포트는 두 서버 application.yml 의 server.port 다.
+# 규칙의 원천)에 넣지 않는다. 포트는 두 서버 application.yml 의 server.port
+# 맨값(자리 표시자 없음)이라 여기서 바꿀 수 없다 — 바꾸면 SG · 주소 · 컨테이너
+# 포트만 따라가고 앱은 옛 포트에서 듣는다.
 variable "chat_services" {
-  description = "chat ECS 서비스(chat-collector · chat-detector)의 포트 · 크기 — 대상 그룹 없이 Cloud Map 이름으로만 받는다."
+  description = "chat ECS 서비스(chat-collector · chat-detector)의 포트(앱 고정값 8083 · 8084) · 크기 — 대상 그룹 없이 Cloud Map 이름으로만 받는다."
   type = map(object({
     port   = number
     cpu    = number
@@ -111,6 +113,11 @@ variable "chat_services" {
   validation {
     condition     = toset(keys(var.chat_services)) == toset(["chat-collector", "chat-detector"])
     error_message = "chat_services 의 키는 chat-collector · chat-detector 여야 한다."
+  }
+
+  validation {
+    condition     = try(var.chat_services["chat-collector"].port == 8083 && var.chat_services["chat-detector"].port == 8084, false)
+    error_message = "chat_services 의 port 는 chat-collector 8083 · chat-detector 8084 여야 한다(앱 application.yml 의 server.port — 바꾸려면 앱부터 고친다)."
   }
 }
 

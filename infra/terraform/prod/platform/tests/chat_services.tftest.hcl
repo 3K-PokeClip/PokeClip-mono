@@ -353,9 +353,9 @@ run "chat_detector_env_and_secrets" {
   }
 }
 
-# collector 주소의 포트는 chat_services 에서 온다 — auth · clip · detector 가
-# 같은 값을 부른다.
-run "collector_base_url_follows_chat_services_port" {
+# 포트는 두 서버 application.yml 의 server.port 맨값(자리 표시자 없음)이다 —
+# 여기서 바꾸면 SG · 주소 · 컨테이너 포트만 따라가고 앱은 옛 포트에서 듣는다.
+run "rejects_chat_collector_port_other_than_app_port" {
   command = plan
 
   variables {
@@ -365,13 +365,20 @@ run "collector_base_url_follows_chat_services_port" {
     }
   }
 
-  assert {
-    condition = alltrue([
-      for service in ["auth", "clip", "chat-detector"] :
-      local.service_env[service]["COLLECTOR_BASE_URL"] == "http://chat-collector.pokeclip.internal:18083"
-    ])
-    error_message = "COLLECTOR_BASE_URL 의 포트가 chat_services 의 chat-collector 포트를 따르지 않는다."
+  expect_failures = [var.chat_services]
+}
+
+run "rejects_chat_detector_port_other_than_app_port" {
+  command = plan
+
+  variables {
+    chat_services = {
+      chat-collector = { port = 8083, cpu = 1024, memory = 2048 }
+      chat-detector  = { port = 18084, cpu = 512, memory = 1024 }
+    }
   }
+
+  expect_failures = [var.chat_services]
 }
 
 # 이 루트가 정하는 env 가 런타임 app_env 의 같은 이름을 이긴다.

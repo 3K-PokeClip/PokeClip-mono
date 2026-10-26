@@ -193,7 +193,7 @@ auth · clip 과 같은 `ecs_service` 모듈로 둡니다(POK-306). 바깥에서
 | auth | `STREAM_KEY_SECRET_REF_PREFIX` | `stream_key_secret_prefix`(작업 역할 정책과 같은 값) |
 | clip | `CLOUDFRONT_KEY_PAIR_ID` | secrets `public_key_id` |
 | clip | `MEDIA_BASE_URL` · `PLAYBACK_COOKIE_DOMAIN` | `https://media.pokeclip.com` · `.pokeclip.com` |
-| auth | `CLIP_BASE_URL` · `COLLECTOR_BASE_URL` | `http://clip.pokeclip.internal:8081` · `http://chat-collector.pokeclip.internal:<chat_services 포트>`(탈퇴 정리 — 비면 부팅 거부) |
+| auth | `CLIP_BASE_URL` · `COLLECTOR_BASE_URL` | `http://clip.pokeclip.internal:8081` · `http://chat-collector.pokeclip.internal:8083`(탈퇴 정리 — 비면 부팅 거부) |
 | auth · clip | `CORS_ALLOWED_ORIGINS` | `cors_allowed_origins`(기본 `https://app.pokeclip.com` — 위 「공개 ALB 규칙」) |
 | clip | `AUTH_BASE_URL` | `http://auth.pokeclip.internal:8082`(clip → auth 자격 판정) |
 | clip | `COLLECTOR_BASE_URL` | auth 와 같은 값(비어도 부팅은 되지만 채팅 문 셋이 503) |
@@ -282,7 +282,7 @@ auth · clip 과 같은 `ecs_service` 모듈로 둡니다(POK-306). 바깥에서
 | `waf_managed_rule_groups` | KnownBadInputs · AmazonIpReputationList | CommonRuleSet 은 본문 8KB 규칙이 프로필 사진(최대 2MB) 업로드를 막아 뺌 |
 | `waf_rate_limit` | 2000 | IP 하나당 5분 요청 수 |
 | `services` | next 3000 `/api/ping` 512/1024 · 60초, auth 8082 · clip 8081 `/actuator/health` 1024/2048 · 180초 | 포트 · 헬스 경로 · CPU · 메모리(MiB) · 기동 유예(Flyway). 공개 ALB 대상 그룹 · 규칙의 원천이라 키는 이 셋뿐 |
-| `chat_services` | chat-collector 8083 · 1024/2048, chat-detector 8084 · 512/1024 | 포트(서버 `server.port`) · CPU · 메모리(MiB). 키는 이 둘뿐 |
+| `chat_services` | chat-collector 8083 · 1024/2048, chat-detector 8084 · 512/1024 | 포트 · CPU · 메모리(MiB). 키는 이 둘뿐. 포트는 앱 `application.yml` 의 `server.port` 맨값이라 8083 · 8084 고정(다른 값은 plan 이 막음) — 바꾸려면 앱부터 고친다 |
 | `chat_collector_features` | 위 「chat 기능 스위치」 | chat-collector 기능 스위치 여섯 |
 | `app_db_auth` | `iam` | `password` 면 `rds-db:connect` · `POSTGRES_AUTH` 없음 |
 | `postgres_sslrootcert` | `/etc/pokeclip/rds-ca/global-bundle.pem` | 서버 이미지의 RDS CA 번들 경로(POK-407 코멘트 10715 · 커밋 2975805e) — iam 에서만 넣음 |
