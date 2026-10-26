@@ -1,8 +1,10 @@
 # segment-indexer 사이드카 · janitor(로컬 ② 정리기) — 멀티스테이지 빌드. 한 이미지에 두 명령이 들고,
 # 기본 ENTRYPOINT 는 사이드카다(janitor 는 compose 의 entrypoint 로 고른다).
 # 빌드 스테이지의 Go 버전은 media/go.mod 의 go 지시자와 같은 1.27 로 유지한다.
+# 패치 판까지 고정한다 — 떠다니는 1.27 태그는 빌드 기계에 캐시된 옛 패치 판으로 빌드된다.
+# 1.27.3 = GO-2026-6809(crypto/x509) 수정판. 올릴 때는 셋(Dockerfile · .ingest-auth · .mtxhook)을 함께 고친다.
 
-FROM golang:1.27-alpine AS build
+FROM golang:1.27.3-alpine AS build
 WORKDIR /src
 
 # 의존만 먼저 받아 두면 소스만 바뀐 재빌드가 빨라진다.
