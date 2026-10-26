@@ -565,6 +565,26 @@ func (v *view) owner() (Session, bool) {
 	return o, found
 }
 
+// PDTRange 는 streamID 의 seq [from, to] 행의 첫 PDT(from 행의 PlaybackPDT)와 머리 끝(to 행의 PlaybackPDT +
+// 그 행의 DurationMS)이다 — 제어면 상태의 firstPdt · headPdt 재료다(설계 M5 4.3). 읽기만 한다. 범위의 행이 뷰에
+// 다 있지 않거나(from > to 포함) 양끝 행의 PDT 가 NULL 이면 거짓이다. 뷰가 없거나 적재 중이어도 거짓이다(적재 중
+// 읽기는 「모른다」).
+func (c *Cache) PDTRange(streamID string, from, to int64) (first, head time.Time, ok bool) {
+	v := c.readable(streamID)
+	if v == nil || from > to {
+		return time.Time{}, time.Time{}, false
+	}
+	rows := v.rowsIn(from, to)
+	if int64(len(rows)) != to-from+1 {
+		return time.Time{}, time.Time{}, false
+	}
+	lo, hi := rows[0], rows[len(rows)-1]
+	if lo.PlaybackPDT.IsZero() || hi.PlaybackPDT.IsZero() {
+		return time.Time{}, time.Time{}, false
+	}
+	return lo.PlaybackPDT, hi.PlaybackPDT.Add(time.Duration(hi.DurationMS) * time.Millisecond), true
+}
+
 // Streams 는 캐시가 상태를 든 스트림 전부다(스트림 순) — 뷰가 있는 스트림 · 부정 표식 스트림 · 적재 중인 스트림(판단 J71
 // ⑵). 루프는 이것으로 스트림을 돌며 버리기(Forget)를 판정한다 — 부정 표식 스트림도 버려야 하므로 뷰만 내주는 DriftProbes 로는
 // 모자란다. 셋의 구분은 Loading(적재 중) · Snapshot 의 컷오프(뷰) · Owner 가 한다.
