@@ -9,7 +9,7 @@ import {
   type XAnswer,
 } from './rewindSwitch';
 import { REWIND_POLL_MS, REWIND_RETRY_MS } from './useRewindStatus';
-import { pos, resetEventKit, streamPoll } from './handoffTestKit';
+import { pos, resetEventKit, startRun, streamPoll } from './handoffTestKit';
 
 // 넘김 문 시험(POK-200 c13d — 설계 r9 1절 넘김 문 · 4절 D 표 · R9 · R10 · 11절 T3 · T4 · T14 · T16 · T21 · T27).
 // 문 = 넘김 근거 응답 하나 {url, 받은 시각}. 넘김 자체는 c13h 몫이라 여기서는 문 칸과 doorOpen 만 본다.
@@ -49,6 +49,7 @@ function run(start: PlaybackSessionState, events: SessionEvent[], at = R): Playb
 
 /** A1 을 P 에서 트는 되감기 세션(목록 끝 E = NOW) */
 function rewindAt(): PlaybackSessionState {
+  startRun();
   const fresh = openSession({ roundId: 'r-A', accessKey: 'r-A|key-1', liveUrl: LIVE_URL });
   return run(fresh, [
     streamPoll(liveReady(A1, T0, NOW)),

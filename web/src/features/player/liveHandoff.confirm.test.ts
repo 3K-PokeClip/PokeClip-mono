@@ -8,7 +8,7 @@ import {
   type SessionEffect,
   type SessionEvent,
 } from './rewindSwitch';
-import { handedOff, pos, resetEventKit, streamPoll } from './handoffTestKit';
+import { handedOff, pos, resetEventKit, startRun, streamPoll } from './handoffTestKit';
 
 // 넘김 확인 시험(POK-200 c13e — 설계 r9 4절 H0–H7 · A2 · A4 · 11절 T10 · T11 · T17 · T19 · T23).
 // 넘김 행(P1)은 c13h 몫이라 시작 상태는 handedOff 가 P1 결과 모양으로 만든다. E = NOW · TD 6초 · P = E − 6000.
@@ -45,6 +45,7 @@ function run(start: PlaybackSessionState, events: SessionEvent[], now = NOW + 1_
 
 /** A1 을 P 에서 보다가 NOW 에 라이브로 넘긴 확인 중 세션 */
 function confirming(): PlaybackSessionState {
+  startRun();
   const fresh = openSession({ roundId: 'r-A', accessKey: 'r-A|key-1', liveUrl: LIVE_URL });
   const watching = run(fresh, [
     streamPoll(liveReady(A1, T0, NOW)),

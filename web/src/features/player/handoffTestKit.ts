@@ -12,8 +12,16 @@ let streamSeq = 0;
 
 /** 시험마다 처음부터 센다(beforeEach) — 앞 시험의 위치 · 순번이 넘어오지 않게 */
 export function resetEventKit(): void {
-  lastPosition = null;
+  startRun();
   streamSeq = 0;
+}
+
+/**
+ * 새 재생 구간을 연다 — 다음 pos 의 runMs 는 0 부터 센다. 한 시험 안에서 세션을 새로 열 때마다 부른다(앞 세션의 위치에서
+ * 이어 세면 연속 검사가 엉뚱한 길이를 읽는다). 넘김(handedOff)도 새 재생기라 스스로 부른다
+ */
+export function startRun(): void {
+  lastPosition = null;
 }
 
 /**
@@ -60,6 +68,7 @@ export function handedOff(s: PlaybackSessionState, now: number): PlaybackSession
   const atMs = s.lastAtMs!;
   const generation = s.source.generation + 1;
   const deadlineMs = now + (list.endMs - atMs) + 2 * list.tdMs;
+  startRun();
   return {
     ...s,
     phase: { kind: 'live' },

@@ -12,7 +12,7 @@ import {
   type SessionEvent,
   type XAnswer,
 } from './rewindSwitch';
-import { pos, resetEventKit, streamPoll } from './handoffTestKit';
+import { pos, resetEventKit, startRun, streamPoll } from './handoffTestKit';
 import { sessionView } from './sessionView';
 
 // 재생 세션 상태기계 표 시험(설계 5.3절 종결 판 — R5 · R16 · R21 · R28 · R32 · R43 · R44 · R46 · R47 · R53 ·
@@ -68,6 +68,7 @@ function kinds(effects: SessionEffect[]): string[] {
 }
 
 function fresh(): PlaybackSessionState {
+  startRun();
   return openSession({ roundId: 'r-A', accessKey: 'r-A|key-1', liveUrl: LIVE_URL });
 }
 

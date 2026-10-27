@@ -9,7 +9,7 @@ import {
   type SessionEvent,
   type XAnswer,
 } from './rewindSwitch';
-import { pos, resetEventKit, streamPoll } from './handoffTestKit';
+import { pos, resetEventKit, startRun, streamPoll } from './handoffTestKit';
 import { sessionView } from './sessionView';
 
 // 꼬리 넘김이 들어와도 현행 그대로여야 하는 행의 시험(POK-200 c13 — 설계 r9 11절 T12 등).
@@ -39,6 +39,7 @@ function run(start: PlaybackSessionState, events: SessionEvent[]): PlaybackSessi
 /** 봉인된 끝 — A1 을 E(= NOW) 까지 보고 ENDLIST · 끝 도달로 끝남 대기(되감기 기원 · atEnd)에 들었다. 재생 중 · 띠 안 */
 function sealedEnd(): PlaybackSessionState {
   const p = NOW - 6_000;
+  startRun();
   const fresh = openSession({ roundId: 'r-A', accessKey: 'r-A|key-1', liveUrl: LIVE_URL });
   return run(fresh, [
     streamPoll(liveReady(A1, T0, NOW)),
@@ -62,6 +63,7 @@ beforeEach(resetEventKit);
 describe('끝남 대기의 이음 지점(현행 보존)', () => {
   it('T12: 다음 url 로 이은(R16) 직후의 끝 도달은 마지막 위치에서 셋째 url 로 잇는다', () => {
     const p = T0 + 20 * MIN;
+    startRun();
     const fresh = openSession({ roundId: 'r-A', accessKey: 'r-A|key-1', liveUrl: LIVE_URL });
     const joined = run(fresh, [
       streamPoll(liveReady(A1, T0, NOW)),
@@ -86,6 +88,7 @@ describe('봉인된 끝 — 넘김 0 · 현행 제안 경로(T27)', () => {
     const waiting = sealedEnd();
     expect(waiting.phase).toMatchObject({ kind: 'ending-wait', origin: 'rewind', atEnd: true });
     expect(step(waiting, streamPoll(liveReady(A1, T0, NOW), X_A)).kinds).toEqual([]);
+    startRun();
     const fresh = openSession({ roundId: 'r-A', accessKey: 'r-A|key-1', liveUrl: LIVE_URL });
     const p = NOW - 6_000;
     const sealedRewind = run(fresh, [
