@@ -1,5 +1,5 @@
 import type { RewindStatusResult } from '@/api/rewindStatus';
-import { movedDoor, withNextDoor } from './liveHandoff';
+import { movedDoor, requestProbe, withNextDoor } from './liveHandoff';
 import {
   ENDING_WAIT_MS,
   RESUME_WAIT_MS,
@@ -35,7 +35,7 @@ export function onEnding(
   switch (event.type) {
     case 'stream-poll': {
       const doored = phase.origin === 'rewind' ? withNextDoor(session, event) : session;
-      return phase.recordOnEnd ? stateOnly(doored) : onEndingStreamPoll(doored, phase, event);
+      return phase.recordOnEnd ? stateOnly(doored) : onEndingStreamPoll(doored, phase, event, now);
     }
     case 'round-poll':
       return phase.recordOnEnd
@@ -74,7 +74,11 @@ function onEndingStreamPoll(
   session: PlaybackSessionState,
   phase: EndingPhase,
   event: StreamPollEvent,
+  now: number,
 ): Transition {
+  // E1 — 이미 본 url 을 거르기 전에 본다. 문이 열렸고 넘김 조건이면 탐침을 청한다(넘김은 탐침 결과가 한다)
+  const probing = requestProbe(session, now);
+  if (probing !== null) return probing;
   const currentX = event.x;
   const live = readyLive(event.result);
   if (live === null || session.roundRewindUrls.has(live.url)) return stateOnly(session);

@@ -1,4 +1,5 @@
 import type { RewindStatusResult } from '@/api/rewindStatus';
+import type { LiveProbeResult } from './liveWindowProbe';
 import type {
   PlaybackSessionState,
   SessionEvent,
@@ -10,8 +11,14 @@ import type {
 // 되감기 → 라이브 꼬리 넘김의 칸과 행 몸통(POK-200 c13 · 설계 r9 2절 · 4절). rewindSwitch 는 여기 함수를 한 줄로 부르고,
 // 여기는 rewindSwitch 의 타입만 읽는다.
 
+/** 넘길 때의 안내(문구 확정은 설계 16절 2 · PR 머지 조건) */
+export const HANDOFF_NOTICE = '라이브로 이어서 볼게요';
 /** 무잘림 게이트가 닫혔을 때의 안내 — url 하나에 한 번(문구 확정은 설계 16절 2 · PR 머지 조건) */
 export const HANDOFF_SKIP_NOTICE = '라이브로 가려면 LIVE 를 눌러 주세요';
+/** 띠 = 목록 끝 E 앞 이 값 × TD_되감기 — 이 안의 재생 위치만 넘김을 청한다 */
+export const HANDOFF_BAND_TD = 1;
+/** 확인 시한의 여유 = 이 값 × TD_되감기(넘긴 시각 + (E − P) + 여유) */
+export const HANDOFF_CONFIRM_SLACK_TD = 2;
 /** 연속 시작이 P 보다 늦어도 되는 폭 = hls.js 시작 맞춤 폭 max(maxBufferHole 0.1, maxFragLookUpTolerance 0.25) 기본값 */
 export const HANDOFF_RUN_TOL_MS = 250;
 
@@ -196,6 +203,103 @@ export function withHandoffRules(
   return state === next.state ? next : { state, effects: next.effects };
 }
 
+/** 띠 안인가 — 마지막 위치가 지금 목록 끝 E 앞 1 × TD_되감기 안이다 */
+export function inHandoffBand(s: PlaybackSessionState): boolean {
+  const { list, lastAtMs } = s;
+  return list !== null && lastAtMs !== null && lastAtMs >= list.endMs - HANDOFF_BAND_TD * list.tdMs;
+}
+
+/** 넘김 조건 가운데 국면과 무관한 몫 — 봉인 전 목록 · 재생 중 · 띠 안 · 문 열림 · 막히지 않은 url */
+function tailOpen(s: PlaybackSessionState, now: number): boolean {
+  if (s.list === null || s.list.sealed || !s.playing || !inHandoffBand(s)) return false;
+  return doorOpen(s, now) && s.handoffBlock?.url !== s.source.url;
+}
+
+/** R6 · R11 의 넘김 조건 — rewind ∧ 다음 url 대기(pendingNext) 없음 ∧ 공통 몫 */
+export function canHandOffFromRewind(s: PlaybackSessionState, now: number): boolean {
+  return s.phase.kind === 'rewind' && s.phase.pendingNext === null && tailOpen(s, now);
+}
+
+/** E1 의 넘김 조건 — 되감기로 끝에 닿은 끝남 대기(녹화로 가기로 정하기 전) ∧ 공통 몫. 이번 응답 대신 문을 본다 */
+export function canHandOffFromEnding(s: PlaybackSessionState, now: number): boolean {
+  const { phase } = s;
+  if (phase.kind !== 'ending-wait' || s.source.kind !== 'rewind') return false;
+  return phase.origin === 'rewind' && phase.atEnd && !phase.recordOnEnd && tailOpen(s, now);
+}
+
+/** C_tail — 국면이 rewind 면 R6 의, 끝남 대기면 E1 의 넘김 조건 */
+function canHandOff(s: PlaybackSessionState, now: number): boolean {
+  return canHandOffFromRewind(s, now) || canHandOffFromEnding(s, now);
+}
+
+/**
+ * R6 · R11 · E1 — 넘김 조건이 참이고 나가 있는 탐침이 없으면 라이브 창 탐침을 청한다. 넘김은 탐침 결과(P1)가 한다. 청하지 않으면
+ * null 이다(R6′ · R7 · R8 은 상태 그대로)
+ */
+export function requestProbe(s: PlaybackSessionState, now: number): Transition | null {
+  if (s.list === null || s.handoffProbe !== null || !canHandOff(s, now)) return null;
+  const seq = s.probeSeq + 1;
+  const handoffProbe = { seq, fromUrl: s.source.url, endMs: s.list.endMs };
+  return {
+    state: { ...s, probeSeq: seq, handoffProbe },
+    effects: [{ kind: 'probe-live', seq, url: s.liveUrl }],
+  };
+}
+
+/** P1 — P 에서 라이브로 넘긴다. 시작이 잘리면 틀지 않는 소스이고, 확인 시한은 (E − P) + 2 × TD 뒤다 */
+function handOffToLive(
+  s: PlaybackSessionState,
+  list: SourceList,
+  atMs: number,
+  now: number,
+): Transition {
+  const generation = s.source.generation + 1;
+  const deadlineMs = now + (list.endMs - atMs) + HANDOFF_CONFIRM_SLACK_TD * list.tdMs;
+  return {
+    state: {
+      ...s,
+      phase: { kind: 'live' },
+      source: { kind: 'live', url: s.liveUrl, startAtMs: atMs, generation, strictStart: true },
+      boundLive: true,
+      foreignLive: null,
+      liveChecking: false,
+      offer: null,
+      handoff: { fromUrl: s.source.url, endMs: list.endMs, atMs, deadlineMs, seenAtMs: null },
+      handoffDoor: null,
+      handoffProbe: null,
+    },
+    effects: [{ kind: 'notice', text: HANDOFF_NOTICE }, { kind: 'refresh' }],
+  };
+}
+
+/**
+ * 탐침 결과(P0–P4) — 결과가 온 그 순간의 문 · 국면 · 위치로 넘김 조건을 다시 본다. 순번이 나가 있는 탐침과 다르면 버리고(P0),
+ * 조건이 거짓이면 탐침만 비운다(P4). 하한이 P 이하면 넘기고(P1), P 뒤면 잘림이라 막고 안내하며(P2), 잴 수 없으면 막는다(P3)
+ */
+export function onLiveProbe(
+  s: PlaybackSessionState,
+  seq: number,
+  result: LiveProbeResult,
+  now: number,
+): Transition {
+  if (seq !== s.handoffProbe?.seq) return { state: s, effects: [] };
+  const cleared = { ...s, handoffProbe: null };
+  const { list, lastAtMs: atMs } = cleared;
+  if (list === null || atMs === null || !canHandOff(cleared, now)) {
+    return { state: cleared, effects: [] };
+  }
+  const url = s.source.url;
+  if (result.kind === 'unavailable') {
+    const handoffBlock = { url, endMs: list.endMs, reason: 'unknown' as const };
+    return { state: { ...cleared, handoffBlock }, effects: [] };
+  }
+  if (result.floorMs <= atMs) return handOffToLive(cleared, list, atMs, now);
+  const dMs = result.endMs - list.endMs;
+  console.info('[player] handoff_skipped_truncated', { dMs, truncatedMs: result.floorMs - atMs });
+  const handoffBlock = { url, endMs: list.endMs, reason: 'truncated' as const };
+  return hintLiveOnce({ ...cleared, handoffBlock }, url);
+}
+
 /** 확인이 깨졌을 때 이어 볼 자리 = 넘긴 P 와 연속 검사를 통과한 마지막 위치 가운데 늦은 쪽 */
 export function handoffResumeMs(handoff: Handoff): number {
   return Math.max(handoff.atMs, handoff.seenAtMs ?? handoff.atMs);
@@ -245,15 +349,21 @@ export function revertEndedHandoff(
   };
 }
 
+/** 잘림 안내(P2 · H2t) — 그 url 로 아직 안 했으면 LIVE 안내를 한 번 하고 적어 둔다 */
+function hintLiveOnce(state: PlaybackSessionState, url: string): Transition {
+  if (state.liveHintUrl === url) return { state, effects: [] };
+  return {
+    state: { ...state, liveHintUrl: url },
+    effects: [{ kind: 'notice', text: HANDOFF_SKIP_NOTICE }],
+  };
+}
+
 /** H2t — 라이브 첫 목록이 잘렸다. 되돌리고, 그 url 로 아직 안 했으면 LIVE 안내를 한 번 한다 */
 function revertTruncated(s: PlaybackSessionState, handoff: Handoff): Transition {
   const reverted = revertToRewind(s, handoff, 'truncated');
-  console.info('[player] handoff_skipped_truncated', handoff.fromUrl);
-  if (s.liveHintUrl === handoff.fromUrl) return reverted;
-  return {
-    state: { ...reverted.state, liveHintUrl: handoff.fromUrl },
-    effects: [{ kind: 'notice', text: HANDOFF_SKIP_NOTICE }],
-  };
+  // url 은 싣지 않는다 — 경로에 스트림 키 · 세션 값이 든다(P2 로그와 같은 규칙)
+  console.info('[player] handoff_skipped_truncated', { stage: 'start' });
+  return hintLiveOnce(reverted.state, handoff.fromUrl);
 }
 
 /** H1a · H1 · H1c — 위치 하나로 연속 검사를 한다(A1 을 반영한 상태로) */
