@@ -19,6 +19,7 @@ import {
 import { HLS_LIVE_CONFIG, HLS_REWIND_CONFIG } from './hlsConfig';
 import { isPlaylistLoadError } from './hlsErrors';
 import { loadHls } from './hlsLoader';
+import { armLiveStart, decideLiveStart } from './hlsStart';
 import { behindFromSeekFraction, isAtEdge } from './playerMath';
 import {
   endStalled,
@@ -75,6 +76,8 @@ export interface LoadedPlaylist extends LoadedList {
 export interface PlaybackHooks {
   /** LEVEL_UPDATED 의 live:false — 「이 목록에 조각이 더 붙지 않는다」일 뿐 재생 완료가 아니다(RFC 8216 4.3.3.4) */
   onEndlist?: () => void;
+  /** strictStart 재생기의 첫 목록이 시작을 잘라 재생기를 내렸다(POK-200 c13) */
+  onStartTruncated?: () => void;
   /** <video> ended 또는 목록 끝 정체(D9) */
   onEndReached?: () => void;
   /** 라이브 목록 치명 404 */
@@ -124,6 +127,8 @@ export function useHlsPlayback(
   seekToMs: (atMs: number) => void;
   /** 라이브 끝으로 옮긴다(세션의 라이브 국면 LIVE) */
   seekToLiveEdge: () => void;
+  /** 다음에 갈아 끼울 재생기를 스스로 틀지 않게 한다(세션의 멈춘 채 되돌림) */
+  keepPausedOnSwap: () => void;
 } {
   // playing은 video 이벤트로만 바꾼다 — 자동재생이 거부되면 false로 남아 재생 버튼이 노출된다
   const [playing, setPlaying] = useState(false);
@@ -327,6 +332,10 @@ export function useHlsPlayback(
     [videoRef, readAxis, onSeek],
   );
 
+  const keepPausedOnSwap = useCallback(() => {
+    keepPausedRef.current = true;
+  }, []);
+
   const seekToLiveEdge = useCallback(() => {
     const video = videoRef.current;
     if (!video) return;
@@ -391,7 +400,7 @@ export function useHlsPlayback(
     const video = videoRef.current;
     if (!video) return;
     // 세대가 오를 때 다시 서는 재생기 하나의 소스(종류 · 시작 시각). 효과는 종류 · 주소 · 세대에만 걸린다(설계 5.4절)
-    const { kind, startAtMs } = sourceRef.current;
+    const { kind, startAtMs, strictStart } = sourceRef.current;
 
     // StrictMode 이중 이펙트·동적 import 경합 방어 — 클린업 후 도착한 인스턴스를 버린다
     let disposed = false;
@@ -627,11 +636,22 @@ export function useHlsPlayback(
 
       if (HlsCtor.isSupported()) {
         const base = kind === 'live' ? HLS_LIVE_CONFIG : HLS_REWIND_CONFIG;
-        // 시작 시각이 있으면 자동 시작을 끄고 첫 목록에서 그 자리를 한 번만 정한다(RC-7 · R15)
+        // 시작 시각이 있으면 자동 시작을 끄고 첫 목록에서 그 자리를 한 번만 정한다(RC-7 · R15). 라이브는 기동 문지기가
+        // 정하고, 잘린 시작은 틀지 않고 내린 뒤 세션에 알린다(POK-200 c13)
         const hls = new HlsCtor(startAtMs === null ? base : { ...base, autoStartLoad: false });
         hlsRef.current = hls;
+        if (startAtMs !== null && kind === 'live') {
+          const decide = (details: LevelDetails) =>
+            decideLiveStart(details, startAtMs, strictStart);
+          armLiveStart(hls, HlsCtor.Events, decide, () => {
+            if (disposed) return;
+            hls.destroy();
+            hlsRef.current = null;
+            hooksRef.current.onStartTruncated?.();
+          });
+        }
         hls.on(HlsCtor.Events.LEVEL_LOADED, (_event, data) => {
-          if (startAtMs === null || startPlaced) return;
+          if (startAtMs === null || kind === 'live' || startPlaced) return;
           startPlaced = true;
           const { fragments, targetduration } = data.details;
           const position = startLoadPosition(fragments, startAtMs, kind, targetduration);
@@ -801,6 +821,7 @@ export function useHlsPlayback(
     returnToLive,
     seekToMs,
     seekToLiveEdge,
+    keepPausedOnSwap,
     // 화질은 표시용: 렌디션이 하나라 고를 것이 없어 메뉴를 안 보인다(POK-253)
     settingsMenu: false,
     replay: false,
