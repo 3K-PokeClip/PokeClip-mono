@@ -87,6 +87,11 @@ type rewindLoop struct {
 
 	// endGapRun 은 L3 종료 손잡이다(gap_run.go — 운영은 index.EndGapRun). nil 이면 스위치 끔이라 셈만 하고 끝내지 않는다.
 	endGapRun func(ctx context.Context, streamID, sessionID string) (string, error)
+	// endStallSeal 은 L2′ 종료 손잡이다(stall_seal.go — 운영은 index.EndStallSeal). nil 이면 스위치 끔이라 봉인도 내지 않는다.
+	endStallSeal func(ctx context.Context, streamID, sessionID string) (string, error)
+	// liveEndRetryAt 은 L3 · L2′ 종료 문장이 실패한 뒤 다시 부를 시각이다(영값 = 바로). 스트림 · 회차를 가리지 않는다 — DB 가
+	// 멈추면 한 틱에 스트림마다 시한이 쌓이지 않게 루프 전체가 쉰다(오프라인 전이의 쉼과 같은 처분 · live_end.go).
+	liveEndRetryAt time.Time
 
 	// fin 은 정산 몫이다(M6-3b — rewind_finalize.go). run 이 조립 밖에서 채워 발행 꺼짐 · 강등에서도 돈다. nil 이면 정산 ·
 	// 상태 전달 · 계승 해제를 하지 않는다(4.1 전이 · 발행 몫만 보는 시험).
@@ -100,6 +105,8 @@ type laneWork struct {
 	renew func(ctx context.Context, st publish.State, sessionID string) publish.Outcome
 	load  func(ctx context.Context, in publish.LoadInput) publish.LoadOutcome
 	watch func(ctx context.Context, probes []index.WatchProbe) publish.WatchOutcome
+	// seal 은 L2′ 의 봉인이다(운영은 Publisher.Endlist — stall_seal.go).
+	seal func(ctx context.Context, streamID, sessionID string) publish.FreezeOutcome
 }
 
 // rewindStream 은 루프가 스트림 하나에 드는 발행 몫의 상태다(판단 J89).
@@ -117,6 +124,8 @@ type rewindStream struct {
 	unstoodGap *int64
 	// gapRun 은 L3 셈이다 — GAP 이 선 결과만 센다(settleGap · gap_run.go).
 	gapRun gapRun
+	// stallSeal 은 L2′ 의 봉인 · 종료 대기다(stall_seal.go).
+	stallSeal stallSeal
 	// prevTail 은 다음 boundary.Compute 의 prevTail 이다 — 평시 틱은 계산한 틱의 꼬리, GAP 틱은 GAP 이 선 뒤에만 겹침 꼬리다(J26).
 	prevTail int64
 	// running 은 이 스트림 차선에서 도는 작업이다(nil = 차선이 비었다 — 판단 J80 ⑷ 의 in-flight 표). pendingLoad 는 차선이 돌아
@@ -154,6 +163,7 @@ const (
 	jobRenew                         // lazy 갱신(RenewFence)
 	jobLoad                          // 캐시 적재(LoadLedger)
 	jobRevoke                        // 4D round_split 의 계승 해제(RevokeInheritance — M6-3b)
+	jobSeal                          // L2′ 봉인(Endlist — M6-3b 커밋 ④b)
 )
 
 // holdTick 은 holdTicks case 의 되감기 몫이다 — 그 case 의 현재 시각 now 로 4.1 종료 전이를 돌리고, 발행 몫이 있으면 차례대로
@@ -165,12 +175,14 @@ const (
 // 발행 몫은 발행 몫이 있을 때만 돌며, 끝에서 Board 를 새로 만든다(publishStatus — 강등에서도 돈다 · 꺼짐 제외). 그래서 그 틱
 // 스냅숏은 그 틱의 Drain · 개시 삭제를 본다.
 //
-// 정산 몫(M6 3.2 holdTick 순서의 정본)은 4.1 전이와 M5 Drain 사이다: endOfflineSessions → endGapRuns(L3 — 스위치 켬일 때만)
-// → 받은편지함 비우기(계승 해제 · 상태 표지 → 차선 발사) → finalizeTick(빠른 길 · 스캔 주기) → M5 Drain → 발행 몫. 조기 반환
-// 앞이라 발행 꺼짐 · 강등에서도 돈다(D56). 표식 EndLive · L3 가 남긴 표지는 같은 틱의 받은편지함 비우기에서 읽힌다.
+// 정산 몫(M6 3.2 holdTick 순서의 정본)은 4.1 전이와 M5 Drain 사이다: endOfflineSessions → endGapRuns(L3) → endStallSeals(L2′ —
+// 둘 다 스위치 켬일 때만) → 받은편지함 비우기(계승 해제 · 상태 표지 → 차선 발사) → finalizeTick(빠른 길 · 스캔 주기) → M5
+// Drain → 발행 몫. 조기 반환 앞이라 발행 꺼짐 · 강등에서도 돈다(D56). 표식 EndLive · L3 · L2′ 가 남긴 표지는 같은 틱의
+// 받은편지함 비우기에서 읽힌다. L2′ 의 봉인은 발행 몫의 사다리가 스트림 차선에 낸다(stall_seal.go).
 func (r *rewindLoop) holdTick(ctx context.Context, now time.Time) {
 	r.endOfflineSessions(ctx, now)
 	r.endGapRuns(ctx, now)
+	r.endStallSeals(ctx, now)
 	r.drainInboxes(ctx)
 	r.finalizeTick(ctx, now)
 	r.drainFinals()
@@ -228,6 +240,8 @@ func (r *rewindLoop) complete(ctx context.Context, res publish.Result, now time.
 		r.playbackDone(ctx, res, rerun)
 	case publish.KindRevoke:
 		r.revokeDone(ctx, res, rerun, now)
+	case publish.KindSeal:
+		r.sealDone(ctx, res, now)
 	}
 }
 
@@ -277,9 +291,7 @@ func (r *rewindLoop) endOfflineSessions(ctx context.Context, now time.Time) {
 			return
 		}
 		if sessionID != "" {
-			r.cache.ApplySessionEnding(streamID, sessionID)
-			r.forgetUploaderSession(sessionID)
-			r.queueEnded(streamID, sessionID, now)
+			r.liveEnded(streamID, sessionID, now)
 		}
 		r.ix.OfflineTried(streamID, true, now)
 	}
@@ -307,9 +319,7 @@ func (r *rewindLoop) offlineFailed(ctx context.Context, streamID string, err err
 		return
 	}
 	r.log.Error("session_offline", "stream_id", streamID, "result", "failed", "err", err)
-	if _, hasView := r.cache.Snapshot(streamID).Cutoff(); hasView || r.cache.Loading(streamID) {
-		r.cache.DemandLoad(streamID, nil)
-	}
+	r.demandAfterUnknown(streamID)
 	r.ix.OfflineTried(streamID, false, now)
 }
 
@@ -367,7 +377,7 @@ func (r *rewindLoop) reflectDirty(events []upload.DirtyEvent) map[string]bool {
 // evaluateLadders 는 소유 회차가 있는 스트림마다 정체 사다리를 한 번 평가해 돌려준 상태로 갈아 끼운다(체크리스트 474 A-4 3 ·
 // 계획 4.5 A0 결정 6 · 판단 J29 · J34) — 소유 회차가 live 가 아니어도 평가한다(C3 WARN 이 거기서 남는다 — ⓘ). 입력의 창은 겹침이
 // 아닌 캐시 스냅숏으로 잰다(ⓑ). L1 이면 그 행의 ③ 백오프를 당기고, L2 면 그 행을 GAP 후보로 돌려준다 — 틱 발사가 그 스트림에
-// 평시 틱 대신 GAP 틱을 낸다(판단 J80 ⑵).
+// 평시 틱 대신 GAP 틱을 낸다(판단 J80 ⑵). L2′ 면 그 스트림 차선에 봉인을 낸다(startSeal).
 func (r *rewindLoop) evaluateLadders(ctx context.Context, now time.Time) map[string]int64 {
 	gaps := map[string]int64{}
 	for _, s := range r.cache.Streams() {
@@ -389,6 +399,9 @@ func (r *rewindLoop) evaluateLadders(ctx context.Context, now time.Time) map[str
 		}
 		if step.Gap {
 			gaps[s] = step.Seq
+		}
+		if step.Seal {
+			r.startSeal(ctx, s, owner.SessionID, now)
 		}
 	}
 	return gaps

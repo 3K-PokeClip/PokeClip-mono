@@ -104,6 +104,10 @@ type Options struct {
 	// EdgeDelay 는 설계의 T_edge — 엣지가 새 목록을 보이기까지의 시간이다(1.5초 = TTL 1.0 + 전파 0.5). L4 는 stallAge
 	// 가 RefreshObligation − EdgeDelay 에 닿으면 뜬다.
 	EdgeDelay time.Duration
+	// StallSealAfter 는 L2′(정체 마감)의 문턱이다 — stallAge 가 이 값에 닿았는데 L2 가 설 수 없으면 사다리가 봉인을 낸다(M4
+	// r17 4.6.3 · POK-196 M6 K5). 0 이면 꺼짐이다(기본 — REWIND_STALL_SEAL 이 켜질 때만 조립이 DAct 로 채운다). 음수는 check
+	// 가 거부한다.
+	StallSealAfter time.Duration
 
 	// 30초 감시 (c) 컷오프 부재의 설계값 둘이다(설계 4.1 (c) · 계획 5절 설계값 목록 · 판단 J43 — 감시 작업과 (c) 판정의
 	// 자리). check 가 둘 다 양수인지 본다.
@@ -119,6 +123,10 @@ type Options struct {
 	// 같은 패키지의 시험만 바꾼다: 루프 ctx 는 살아 있고 문장만 시한을 넘는 국면을 10초 기다리지 않고 만든다.
 	statementTimeout time.Duration
 }
+
+// DAct 는 설계의 D_act 다 — 갱신 의무 − T_edge − T_pub(9.0 − 1.5 − 2.0 = 5.5초 · M4 r17 4.6.5 역산). L2′ 는 stallAge 가 이 값에
+// 닿으면 봉인한다 — 봉인 PUT 이 T_pub 안에 서고 엣지가 T_edge 안에 보이면 갱신 의무 안에 ENDLIST 가 닿는다.
+func (o Options) DAct() time.Duration { return o.RefreshObligation - o.EdgeDelay - o.PublishTimeout }
 
 // DefaultOptions 는 설계값을 채운 설정이다.
 func DefaultOptions(writer, baseURL string) Options {
@@ -162,6 +170,8 @@ func (o Options) check() error {
 			o.E2EBudget, o.ExpediteAfter, o.GapHold, o.RefreshObligation, o.EdgeDelay)
 	case o.ExpediteAfter > o.GapHold:
 		return fmt.Errorf("publish: L1 문턱 %v 가 GAP_HOLD %v 보다 길다", o.ExpediteAfter, o.GapHold)
+	case o.StallSealAfter < 0:
+		return fmt.Errorf("publish: L2′ 문턱 %v 가 음수다", o.StallSealAfter)
 	case o.EdgeDelay >= o.RefreshObligation:
 		return fmt.Errorf("publish: T_edge %v 가 갱신 의무 %v 보다 짧아야 한다", o.EdgeDelay, o.RefreshObligation)
 	case o.SeedAlarmAfter <= 0 || o.SeedAlarmErrorTicks <= 0:
@@ -512,6 +522,8 @@ const (
 	KindPlayback
 	// KindRevoke 는 계승 해제(RevokeInheritance)다 — 스트림 차선.
 	KindRevoke
+	// KindSeal 은 정체 마감(L2′)의 봉인(Endlist)이다 — 스트림 차선(POK-196 M6-3b 커밋 ④b).
+	KindSeal
 )
 
 // Job 은 차선에서 도는 작업 하나다. ctx 가 끝나면 서둘러 돌아와야 한다 — 워커 고루틴은 작업이 돌아와야
@@ -529,7 +541,7 @@ type Result struct {
 	Load LoadOutcome
 	// Watch 는 감시 작업(KindWatch)의 결과다(판단 J40).
 	Watch WatchOutcome
-	// Value 는 발행 밖 작업(KindFinalizeScan · KindFinalizeLoad · KindFinalize · KindPlayback · KindRevoke)의 결과다 — 형은
+	// Value 는 발행 밖 작업(KindFinalizeScan · KindFinalizeLoad · KindFinalize · KindPlayback · KindRevoke · KindSeal)의 결과다 — 형은
 	// 작업을 낸 쪽이 정하고 받는 쪽이 단언한다.
 	Value any
 

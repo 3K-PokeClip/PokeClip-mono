@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"time"
 
@@ -43,11 +44,7 @@ func assemblePublishing(ctx context.Context, cfg config.Config, db *pgxpool.Conf
 		r.log.Info("rewind_publish_disabled", "note", "S3_BUCKET 미설정 — 되감기 목록을 발행하지 않는다. 4.1 종료 전이는 그대로 돈다")
 		return nil
 	}
-	opt := publish.DefaultOptions(newWriterToken(), cfg.RewindPublicBaseURL)
-	opt.Log = r.log
-	// SEED_ALARM_AFTER 는 재스캔 주기의 두 배 이상이어야 한다(점멸 방지 — 판단 J85 ⑵ · ArmFallback 산식 선례). 재스캔 주기는 env 로
-	// 바뀌고 설계값(10분)은 기본 재스캔 5분의 두 배다.
-	opt.SeedAlarmAfter = max(opt.SeedAlarmAfter, 2*cfg.Watcher.RescanEvery)
+	opt := publishOptions(cfg, r.log)
 	pub, pool, endpoint, err := newPublisher(ctx, cfg, db, opt)
 	if err != nil {
 		r.log.Error("rewind_publish_degraded", "bucket", cfg.S3.Bucket, "region", cfg.S3.Region,
@@ -60,12 +57,26 @@ func assemblePublishing(ctx context.Context, cfg config.Config, db *pgxpool.Conf
 	up.AttachDirty()
 	dirty := up.Dirty()
 	r.cache, r.pub = c, pub // 차선은 run 이 조립 밖에서 채운다(M6 3.2 — 꺼짐 · 강등에서도 정산 차선이 돈다)
-	r.work = laneWork{tick: pub.Tick, renew: pub.RenewFence, load: pub.LoadLedger, watch: pub.Watch}
+	r.work = laneWork{tick: pub.Tick, renew: pub.RenewFence, load: pub.LoadLedger, watch: pub.Watch, seal: pub.Endlist}
 	r.peekDirty, r.ackDirty = dirty.Peek, dirty.Ack
 	r.expedite, r.forgetSession = up.Expedite, up.ForgetSession
 	r.reconnectWindow, r.watchEvery, r.holdEvery = cfg.ReconnectWindow, cfg.RewindWatchEvery, cfg.Indexer.HoldTick
 	r.lazyRenewAfter = opt.LazyRenewAfter
 	return pool
+}
+
+// publishOptions 는 발행자 설정이다 — 설계값(publish.DefaultOptions)에 설정에서 오는 것을 얹는다.
+func publishOptions(cfg config.Config, log *slog.Logger) publish.Options {
+	opt := publish.DefaultOptions(newWriterToken(), cfg.RewindPublicBaseURL)
+	opt.Log = log
+	// SEED_ALARM_AFTER 는 재스캔 주기의 두 배 이상이어야 한다(점멸 방지 — 판단 J85 ⑵ · ArmFallback 산식 선례). 재스캔 주기는 env 로
+	// 바뀌고 설계값(10분)은 기본 재스캔 5분의 두 배다.
+	opt.SeedAlarmAfter = max(opt.SeedAlarmAfter, 2*cfg.Watcher.RescanEvery)
+	// L2′ 봉인 문턱은 스위치가 켜질 때만 D_act 다(REWIND_STALL_SEAL — kty K5 기본 끔). 0 이면 사다리가 봉인을 내지 않는다.
+	if cfg.RewindStallSeal {
+		opt.StallSealAfter = opt.DAct()
+	}
+	return opt
 }
 
 // newPublisher 는 opt 로 도는 발행자와 그 풀을 만든다(판단 J76 · J77) — S3 클라이언트(업로더와 따로) → https 검사(실효

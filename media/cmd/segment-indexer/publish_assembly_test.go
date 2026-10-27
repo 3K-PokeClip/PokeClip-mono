@@ -403,7 +403,7 @@ func TestAssemblePublishingWiresPublishingShare(t *testing.T) {
 		t.Fatalf("발행 몫 = 캐시 %v · 발행 몫 %v · 완료 채널 %v · Dirty %v, want 모두 있음",
 			r.cache != nil, r.publishing(), r.done() != nil, a.up.Dirty() != nil)
 	}
-	if w := r.work; w.tick == nil || w.renew == nil || w.load == nil || w.watch == nil {
+	if w := r.work; w.tick == nil || w.renew == nil || w.load == nil || w.watch == nil || w.seal == nil {
 		t.Error("작업 몸체에 빈 칸이 있다 — 차선 고루틴이 패닉한다")
 	}
 	if r.peekDirty == nil || r.ackDirty == nil || r.expedite == nil || r.forgetSession == nil {

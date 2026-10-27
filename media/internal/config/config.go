@@ -51,6 +51,10 @@ type Config struct {
 	// 이어서 셋 서면 그 회차를 ending(사유 gap_run)으로 보낸다. 기본 끔이고 기동 때만 읽는다 — 켜는 조건은 F-7 실측과 S3
 	// 짧은 장애 주입 실측이 둘 다 참이고 kty 가 승인한 뒤다(M6 10절).
 	RewindGapRunEnd bool
+	// RewindStallSeal 은 L2′ 스위치다(REWIND_STALL_SEAL — POK-196 M6 6절 · kty K5 · 2026-10-27 결정 (나)). 켜면 live 소유
+	// 회차의 stallAge 가 D_act 에 닿았는데 L2 가 설 수 없을 때 목록을 봉인하고 그 회차를 ending(사유 stall_seal)으로 보낸다.
+	// 기본 끔이고 기동 때만 읽는다 — 켜는 조건은 L3 와 같다(M6 10절).
+	RewindStallSeal bool
 
 	// HookSpoolPath 는 MediaMTX 훅이 한 줄씩 덧붙이는 공유 파일이다.
 	//
@@ -273,6 +277,10 @@ func Load(env func(string) string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	stallSeal, err := boolean(env, "REWIND_STALL_SEAL", false)
+	if err != nil {
+		return Config{}, err
+	}
 	if idx.ScanCollectBudget, err = duration(env, "SCAN_COLLECT_BUDGET", idx.ScanCollectBudget); err != nil {
 		return Config{}, err
 	}
@@ -374,6 +382,7 @@ func Load(env func(string) string) (Config, error) {
 		// 설계값(계획 5절 「30 tick 감시」 · 판단 J85 ⑴)이라 같은 규칙으로 여기 한 자리에 적는다.
 		RewindWatchEvery: 30 * time.Second,
 		RewindGapRunEnd:  gapRunEnd,
+		RewindStallSeal:  stallSeal,
 		// S3_BUCKET 이 비면 읽지 않아 빈 값이다(계획 B-9).
 		RewindPublicBaseURL: rewindBaseURL,
 		Control:             control,

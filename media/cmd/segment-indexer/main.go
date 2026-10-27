@@ -221,6 +221,9 @@ func run() error {
 	rewind := &rewindLoop{ix: ix, root: cfg.SegmentRoot, log: log, endLive: fa.endLive(pool), lanes: publish.NewLanes()}
 	// L3(연속 GAP 셋 → ending)는 스위치가 켜졌을 때만 손잡이를 끼운다 — 기본 끔(kty K5 · REWIND_GAP_RUN_END).
 	rewind.endGapRun = fa.gapRunEnd(cfg.RewindGapRunEnd, pool)
+	// L2′(정체 마감 → 봉인 → ending)도 같다 — 기본 끔(kty K5 · REWIND_STALL_SEAL). 발행자의 봉인 문턱은 publishOptions 가 같은
+	// 스위치로 정한다.
+	rewind.endStallSeal = fa.stallSealEnd(cfg.RewindStallSeal, pool)
 	// 제어면 상태 몫(Board · 받은편지함 · 재기동 적재)은 발행 조립 앞이다 — 꺼짐 · 강등 · 정상 모두 받은편지함이 있다(M5 3.3).
 	board := assembleStatus(ctx, cfg, rewind, newPlaybackSeed(pool))
 	// 상태 표지 받은편지함은 기동 때 하나다 — 만료(아래)와 4D 수신부가 Changed 로 넣고, M6-3b 가 Drain 을 루프에 넘긴다(계획 5절).

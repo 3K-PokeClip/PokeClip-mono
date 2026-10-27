@@ -1,12 +1,13 @@
 package session
 
-// 세션 종료 문장 네 벌의 대조(POK-195 M4 — 계획 부기 21 · POK-196 M6-3b 커밋 ④ 가 L3 를 더함).
+// 세션 종료 문장 다섯 벌의 대조(POK-195 M4 — 계획 부기 21 · POK-196 M6-3b 커밋 ④ 가 L3 를, ④b 가 L2′ 를 더함).
 //
-// 세션을 ending 으로 보내는 문장이 두 패키지에 넷 있다: TD 분할의 endSessionSQL 은 여기에,
+// 세션을 ending 으로 보내는 문장이 두 패키지에 다섯 있다: TD 분할의 endSessionSQL 은 여기에,
 // init 불일치의 종료 절은 index 의 결속 CTE(SettlePlaybackFailure) 안에, 4.1 오프라인 전이는 index.EndLive
-// (스트림 단위 — 사유 'offline')에, L3 는 index.EndGapRun(스트림 · 회차 — 사유 'gap_run')에 있다. index 는
+// (스트림 단위 — 사유 'offline')에, L3 는 index.EndGapRun(스트림 · 회차 — 사유 'gap_run')에, L2′ 는
+// index.EndStallSeal(스트림 · 회차 — 사유 'stall_seal')에 있다. index 는
 // session 을 임포트하지 않으므로(index/session.go 경계) 술어(state='live')와 사유 어휘를 공유할 집이 없다. 이
-// 파일이 네 문장을 같은 출발 상태에 돌려 효과를 대조한다 — 한쪽만 바뀌면 여기서 갈린다. 4D 의 표식 · 사유
+// 파일이 다섯 문장을 같은 출발 상태에 돌려 효과를 대조한다 — 한쪽만 바뀌면 여기서 갈린다. 4D 의 표식 · 사유
 // 승격은 종료 문장이 아니라 여기에 없다.
 
 import (
@@ -103,6 +104,7 @@ func TestEndSessionStatementsAgreeWithIndexInitMismatchEnding(t *testing.T) {
 			seedEndingFixture(t, pool, "S-idx", "idxstream", c.state, c.reason)
 			seedEndingFixture(t, pool, "S-end", "endstream", c.state, c.reason)
 			seedEndingFixture(t, pool, "S-gap", "gapstream", c.state, c.reason)
+			seedEndingFixture(t, pool, "S-seal", "sealstream", c.state, c.reason)
 
 			// EndLive 를 먼저 부른다 — 다른 두 스트림의 회차가 아직 출발 상태일 때 불러야 스트림 단위
 			// 술어(stream_id)가 드러난다. 그 술어를 잃으면 남의 live 회차까지 offline 으로 닫는다.
@@ -113,6 +115,10 @@ func TestEndSessionStatementsAgreeWithIndexInitMismatchEnding(t *testing.T) {
 			gapped, err := index.EndGapRun(ctx, pool, "gapstream", "S-gap", crossClose, noEnqueue)
 			if err != nil {
 				t.Fatalf("EndGapRun 실패: %v", err)
+			}
+			sealed, err := index.EndStallSeal(ctx, pool, "sealstream", "S-seal", crossClose, noEnqueue)
+			if err != nil {
+				t.Fatalf("EndStallSeal 실패: %v", err)
 			}
 			withTx(t, pool, func(tx pgx.Tx) {
 				if _, err := tx.Exec(ctx, endSessionSQL, "S-reg", index.ReasonInitMismatch); err != nil {
@@ -125,7 +131,7 @@ func TestEndSessionStatementsAgreeWithIndexInitMismatchEnding(t *testing.T) {
 			}
 
 			reg, idx, end := endShapeOf(t, pool, "S-reg"), endShapeOf(t, pool, "S-idx"), endShapeOf(t, pool, "S-end")
-			gap := endShapeOf(t, pool, "S-gap")
+			gap, seal := endShapeOf(t, pool, "S-gap"), endShapeOf(t, pool, "S-seal")
 			if c.state == "live" {
 				if reg.state != "ending" || reg.reason() != "init_mismatch" || reg.endingAt == nil || reg.endedAt != nil {
 					t.Errorf("endSessionSQL 결과 = %v, want {ending, init_mismatch, ending_at 있음, ended_at nil}", reg)
@@ -135,6 +141,9 @@ func TestEndSessionStatementsAgreeWithIndexInitMismatchEnding(t *testing.T) {
 				}
 				if gapped != "S-gap" || gap.state != "ending" || gap.reason() != "gap_run" || gap.endingAt == nil || gap.endedAt != nil {
 					t.Errorf("EndGapRun = %q · 회차 %v, want S-gap · {ending, gap_run, ending_at 있음, ended_at nil}", gapped, gap)
+				}
+				if sealed != "S-seal" || seal.state != "ending" || seal.reason() != "stall_seal" || seal.endingAt == nil || seal.endedAt != nil {
+					t.Errorf("EndStallSeal = %q · 회차 %v, want S-seal · {ending, stall_seal, ending_at 있음, ended_at nil}", sealed, seal)
 				}
 			} else {
 				if reg.state != c.state || reg.reason() != c.reason ||
@@ -151,6 +160,11 @@ func TestEndSessionStatementsAgreeWithIndexInitMismatchEnding(t *testing.T) {
 					t.Errorf("EndGapRun = %q · 회차 %v, want \"\"(0행) · 출발 상태 그대로(%s, %s) — live 가 아닌 회차를 덮었다",
 						gapped, gap, c.state, c.reason)
 				}
+				if sealed != "" || seal.state != c.state || seal.reason() != c.reason ||
+					seal.endingAt == nil || !seal.endingAt.Equal(endedAtFixture) {
+					t.Errorf("EndStallSeal = %q · 회차 %v, want \"\"(0행) · 출발 상태 그대로(%s, %s) — live 가 아닌 회차를 덮었다",
+						sealed, seal, c.state, c.reason)
+				}
 			}
 			if reg.state != idx.state || reg.reason() != idx.reason() ||
 				(reg.endingAt == nil) != (idx.endingAt == nil) || (reg.endedAt == nil) != (idx.endedAt == nil) {
@@ -163,7 +177,10 @@ func TestEndSessionStatementsAgreeWithIndexInitMismatchEnding(t *testing.T) {
 			if gap.state != reg.state || (gap.endingAt == nil) != (reg.endingAt == nil) || (gap.endedAt == nil) != (reg.endedAt == nil) {
 				t.Errorf("EndGapRun 과 endSessionSQL 의 효과가 다르다: EndGapRun = %v, session = %v", gap, reg)
 			}
-			for _, s := range []endShape{reg, idx, end, gap} {
+			if seal.state != reg.state || (seal.endingAt == nil) != (reg.endingAt == nil) || (seal.endedAt == nil) != (reg.endedAt == nil) {
+				t.Errorf("EndStallSeal 과 endSessionSQL 의 효과가 다르다: EndStallSeal = %v, session = %v", seal, reg)
+			}
+			for _, s := range []endShape{reg, idx, end, gap, seal} {
 				if s.dvrState != "open" {
 					t.Errorf("종료 뒤 회차 %v, want dvr_state open — 종료 문장은 동결 축을 쓰지 않는다(M6)", s)
 				}
