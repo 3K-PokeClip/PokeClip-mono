@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 import type { DatedFragment } from './dvrWindow';
 import {
   endStalled,
+  liveStartFloorMs,
   sessionAxis,
   loadedList,
+  startIsTruncated,
   startLoadPosition,
   windowLowerMs,
   type LoadedList,
@@ -64,6 +66,33 @@ describe('startLoadPosition — 첫 목록에서 시작 위치(영상 초)를 �
     expect(
       startLoadPosition([{ start: 0, duration: 4, programDateTime: null }], PDT0, 'vod', 4),
     ).toBeNull();
+  });
+});
+
+describe('liveStartFloorMs · startIsTruncated — 라이브 시작 하한 S_live(POK-200 c13 · S10)', () => {
+  const NO_PDT: DatedFragment[] = [{ start: 0, duration: 4, programDateTime: null }];
+
+  it('하한 = 첫 조각 + 3 × TD 의 실제 시각 — 창 하한(windowLowerMs)과 같은 식이다', () => {
+    expect(liveStartFloorMs(FRAGS, 4)).toBe(PDT0 + 12_000);
+    expect(liveStartFloorMs(FRAGS, 6)).toBe(PDT0 + 18_000);
+  });
+
+  it('시각 표시가 없으면 하한을 모른다(null)', () => {
+    expect(liveStartFloorMs(NO_PDT, 4)).toBeNull();
+  });
+
+  it('시작이 하한 이상이면 잘리지 않고 하한보다 1ms 라도 앞이면 잘린다', () => {
+    expect(startIsTruncated(FRAGS, PDT0 + 12_000, 'live', 4)).toBe(false);
+    expect(startIsTruncated(FRAGS, PDT0 + 11_999, 'live', 4)).toBe(true);
+    expect(startIsTruncated(FRAGS, PDT0 + 17_999, 'live', 6)).toBe(true);
+  });
+
+  it('vod 는 여유가 없어 첫 조각부터 잘리지 않는다', () => {
+    expect(startIsTruncated(FRAGS, PDT0, 'vod', 4)).toBe(false);
+  });
+
+  it('시각 표시가 없으면 판정할 수 없어 잘림으로 보지 않는다 — startLoadPosition 도 null 이다', () => {
+    expect(startIsTruncated(NO_PDT, PDT0, 'live', 4)).toBe(false);
   });
 });
 

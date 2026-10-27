@@ -5000,7 +5000,13 @@ describe('LiveScreen: 정보 바의 그 시점 카테고리 사진 (POK-467)', (
 
     act(() =>
       publishLiveData({
-        liveRewind: { atMs: NOW - 8 * 60_000, edgeAtMs: NOW, behindSeconds: 480 },
+        liveRewind: {
+          atMs: NOW - 8 * 60_000,
+          edgeAtMs: NOW,
+          behindSeconds: 480,
+          playing: true,
+          runMs: 0,
+        },
       }),
     );
     expect(categoryImg()).toHaveAttribute('src', JUST);
@@ -5020,7 +5026,13 @@ describe('LiveScreen: 정보 바의 그 시점 카테고리 사진 (POK-467)', (
 
     act(() =>
       publishLiveData({
-        liveRewind: { atMs: NOW - 8 * 60_000, edgeAtMs: NOW, behindSeconds: 480 },
+        liveRewind: {
+          atMs: NOW - 8 * 60_000,
+          edgeAtMs: NOW,
+          behindSeconds: 480,
+          playing: true,
+          runMs: 0,
+        },
       }),
     );
     expect(screen.getByRole('heading', { name: '그때 제목' })).toBeInTheDocument();
@@ -5128,7 +5140,13 @@ describe('LiveScreen: 정보 바의 그 시점 카테고리 사진 (POK-467)', (
 
     act(() =>
       publishLiveData({
-        liveRewind: { atMs: NOW - 8 * 60_000, edgeAtMs: NOW, behindSeconds: 480 },
+        liveRewind: {
+          atMs: NOW - 8 * 60_000,
+          edgeAtMs: NOW,
+          behindSeconds: 480,
+          playing: true,
+          runMs: 0,
+        },
       }),
     );
     expect(categoryImg()).toHaveAttribute('src', JUST);

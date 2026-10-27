@@ -1230,15 +1230,26 @@ describe('nextLiveFollow: 라이브 채팅이 되감은 영상을 따르나(POK-
 
 describe('liveSettledUpTo: 라이브 채팅이 표에 다 들어온 자리(POK-326)', () => {
   it('실시간 끝의 시각에서 보정과 적재 여유 3초를 뺀다', () => {
-    expect(liveSettledUpTo({ atMs: T0, edgeAtMs: T0 + 60_000, behindSeconds: 60 }, OFFSET)).toBe(
-      T0 + 60_000 - OFFSET - 3_000,
-    );
+    expect(
+      liveSettledUpTo(
+        { atMs: T0, edgeAtMs: T0 + 60_000, behindSeconds: 60, playing: true, runMs: 0 },
+        OFFSET,
+      ),
+    ).toBe(T0 + 60_000 - OFFSET - 3_000);
   });
 
   it('되감은 자리·시차와 무관하다: 실시간 끝이 같으면 같은 자리라 시크·시차 반올림으로 흔들리지 않는다', () => {
     expect(
-      liveSettledUpTo({ atMs: T0 + 50_000, edgeAtMs: T0 + 60_000, behindSeconds: 11 }, OFFSET),
-    ).toBe(liveSettledUpTo({ atMs: T0, edgeAtMs: T0 + 60_000, behindSeconds: 60 }, OFFSET));
+      liveSettledUpTo(
+        { atMs: T0 + 50_000, edgeAtMs: T0 + 60_000, behindSeconds: 11, playing: true, runMs: 0 },
+        OFFSET,
+      ),
+    ).toBe(
+      liveSettledUpTo(
+        { atMs: T0, edgeAtMs: T0 + 60_000, behindSeconds: 60, playing: true, runMs: 0 },
+        OFFSET,
+      ),
+    );
   });
 });
 
@@ -1421,7 +1432,10 @@ describe('ChatReplayLoader: 라이브 되감기는 위 끝이 움직인다(POK-3
     // 실시간에서 10초 뒤를 튼다(보정 3.9초): 위 끝은 영상 시각 3.1초 뒤라 보이는 자리는 위 끝 5초 앞에서 자른다
     const at = (s: number) => T0 + s * 1000;
     const upper = (s: number) =>
-      liveSettledUpTo({ atMs: at(s), edgeAtMs: at(s) + 10_000, behindSeconds: 10 }, OFFSET);
+      liveSettledUpTo(
+        { atMs: at(s), edgeAtMs: at(s) + 10_000, behindSeconds: 10, playing: true, runMs: 0 },
+        OFFSET,
+      );
     const shown = (s: number) => liveShownUpTo(at(s), upper(s), T0);
     loader.want(shown(100), at(40), { upperMs: upper(100) });
     await settle();
