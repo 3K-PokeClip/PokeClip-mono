@@ -36,7 +36,7 @@
 --                                   stop_marked_at)이 있다
 --   index:<인덱스>                  stream_sessions_round_open_idx 가 stream_sessions 의 인덱스로 있고, 쓸 수 있으며
 --                                   (indisvalid · indisready) 정의(열 · 정렬 · 부분 인덱스 술어)가 ddl.go 와 같다
---                                   M6-4 FK 인덱스 셋(stream_segments_session_id_idx · stream_published_gaps_session_idx ·
+--   index:<FK 인덱스>               M6-4 FK 인덱스 셋(stream_segments_session_id_idx · stream_published_gaps_session_idx ·
 --                                   stream_sessions_inherits_idx)은 제 표에 그 이름으로 있는지만 본다 — 정의 문자열
 --                                   비교는 PG 판이 바뀌면 깨진다
 --   trigger:<트리거>                stream_segments 의 seq 하한 트리거 둘이 일반 연결에서 켜진 채('O' · 'A' — 'R' 은
