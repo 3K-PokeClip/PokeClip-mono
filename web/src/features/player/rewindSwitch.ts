@@ -1,8 +1,11 @@
 import type { RewindStatus, RewindStatusResult } from '@/api/rewindStatus';
 import {
+  endConfirm,
   loadedList,
   movedDoor,
+  onHandoffConfirming,
   openHandoffFields,
+  releaseBlock,
   withHandoffRules,
   withNextDoor,
   type HandoffFields,
@@ -147,6 +150,8 @@ export type SessionEvent =
   /** playing = 재생 중인가 · runMs = 지금 위치를 담은 played 범위의 길이(연속 시작 = atMs − runMs) */
   | { type: 'position'; atMs: number; playing: boolean; runMs: number }
   | { type: 'remount' }
+  /** strictStart 재생기의 첫 목록 재검사가 시작 잘림을 봤다 */
+  | { type: 'live-start-truncated' }
   | { type: 'leave' };
 
 export type SessionEffect =
@@ -376,11 +381,13 @@ export function liveFromAway(
 // ── 국면별 표 ──
 
 function onLive(session: PlaybackSessionState, event: SessionEvent, now: number): Transition {
+  const confirming = onHandoffConfirming(session, event, now);
+  if (confirming !== null) return confirming;
   switch (event.type) {
     case 'seek':
-      return seekLive(session, event.targetMs, event.view);
+      return endConfirm(seekLive(session, event.targetMs, event.view));
     case 'live-button':
-      return { state: session, effects: [{ kind: 'seek-live-edge' }] };
+      return endConfirm({ state: session, effects: [{ kind: 'seek-live-edge' }] });
     case 'playing':
       return session.endingSince === null
         ? stateOnly(session)
@@ -394,6 +401,14 @@ function onLive(session: PlaybackSessionState, event: SessionEvent, now: number)
       return enterEnding(session, true, now);
     case 'live-400':
       return stateOnly({ ...session, source: replace(session, 'live', session.liveUrl, null) });
+    case 'live-start-truncated': {
+      // H7 — 확인 밖의 잘림(늦은 재생기)은 같은 라이브를 현행 clamp 시작으로 다시 세운다
+      const generation = session.source.generation + 1;
+      return stateOnly({
+        ...session,
+        source: { ...session.source, strictStart: false, generation },
+      });
+    }
     case 'roster-ended':
       return { state: session, effects: [{ kind: 'refresh' }] };
     case 'button':
@@ -568,7 +583,11 @@ function onVod(session: PlaybackSessionState, event: SessionEvent): Transition {
 
 // ── 아무 국면 ──
 
-function onAnyPhase(session: PlaybackSessionState, event: SessionEvent): Transition | null {
+function onAnyPhase(
+  session: PlaybackSessionState,
+  event: SessionEvent,
+  now: number,
+): Transition | null {
   switch (event.type) {
     case 'list-loaded': {
       const own = event.url === session.source.url;
@@ -583,21 +602,26 @@ function onAnyPhase(session: PlaybackSessionState, event: SessionEvent): Transit
           ? session.observedEndMs
           : maxOrSelf(session.observedEndMs, event.lastEndMs),
         list: own ? loadedList(session, event) : session.list,
+        handoffBlock: releaseBlock(session, event.url, event.lastEndMs),
         edgeMarginMs:
           event.targetDurationS > 0
             ? EDGE_MARGIN_TD * event.targetDurationS * 1000
             : session.edgeMarginMs,
       });
     }
-    case 'position':
-      return stateOnly({
+    case 'position': {
+      const moved = {
         ...session,
         lastAtMs: event.atMs,
         playing: event.playing,
         watchedFromMs:
           session.watchedFromMs === null ? event.atMs : Math.min(session.watchedFromMs, event.atMs),
-      });
+      };
+      return onHandoffConfirming(moved, event, now) ?? stateOnly(moved);
+    }
     case 'remount': {
+      const confirming = onHandoffConfirming(session, event, now);
+      if (confirming !== null) return confirming;
       const startAtMs = session.source.kind === 'live' ? null : session.lastAtMs;
       return stateOnly({
         ...session,
@@ -626,7 +650,7 @@ function phaseTransition(
   event: SessionEvent,
   now: number,
 ): Transition {
-  const any = onAnyPhase(session, event);
+  const any = onAnyPhase(session, event, now);
   if (any !== null) return any;
   const phase = session.phase;
   switch (phase.kind) {

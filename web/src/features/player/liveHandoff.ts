@@ -10,6 +10,11 @@ import type {
 // 되감기 → 라이브 꼬리 넘김의 칸과 행 몸통(POK-200 c13 · 설계 r9 2절 · 4절). rewindSwitch 는 여기 함수를 한 줄로 부르고,
 // 여기는 rewindSwitch 의 타입만 읽는다.
 
+/** 무잘림 게이트가 닫혔을 때의 안내 — url 하나에 한 번(문구 확정은 설계 16절 2 · PR 머지 조건) */
+export const HANDOFF_SKIP_NOTICE = '라이브로 가려면 LIVE 를 눌러 주세요';
+/** 연속 시작이 P 보다 늦어도 되는 폭 = hls.js 시작 맞춤 폭 max(maxBufferHole 0.1, maxFragLookUpTolerance 0.25) 기본값 */
+export const HANDOFF_RUN_TOL_MS = 250;
+
 /** 문이 열려 있는 폭 = REWIND_POLL_MS + REWIND_RETRY_MS — 폴링 한 번이 재시도로 늦어도 닫히지 않는다(T14 가 대조한다) */
 export const HANDOFF_DOOR_FRESH_MS = 12_000;
 
@@ -189,4 +194,129 @@ export function withHandoffRules(
   const next = step(ready);
   const state = settleHandoffFields(s, next.state);
   return state === next.state ? next : { state, effects: next.effects };
+}
+
+/** 확인이 깨졌을 때 이어 볼 자리 = 넘긴 P 와 연속 검사를 통과한 마지막 위치 가운데 늦은 쪽 */
+export function handoffResumeMs(handoff: Handoff): number {
+  return Math.max(handoff.atMs, handoff.seenAtMs ?? handoff.atMs);
+}
+
+/** 넘기기 전 되감기로 돌아가는 source 와 막음 — H0 · H1a · H2 · H2t 공통. handoff 는 국면이 live 를 떠나 A6(H5)가 비운다 */
+function revertedState(
+  s: PlaybackSessionState,
+  handoff: Handoff,
+  reason: HandoffBlock['reason'],
+): PlaybackSessionState {
+  const url = handoff.fromUrl;
+  const startAtMs = handoffResumeMs(handoff);
+  const generation = s.source.generation + 1;
+  const source = { kind: 'rewind' as const, url, startAtMs, generation, strictStart: false };
+  const handoffBlock = { url, endMs: handoff.endMs, reason };
+  return { ...s, source, handoffBlock, handoffDoor: null, boundLive: false, foreignLive: null };
+}
+
+/** H0 · H1a · H2t — 라이브는 살아 있다. 마지막 검증 위치에서 rewind 로 돌아간다 */
+export function revertToRewind(
+  s: PlaybackSessionState,
+  handoff: Handoff,
+  reason: 'start' | 'jump' | 'deadline' | 'truncated',
+): Transition {
+  console.info('[player] handoff_confirm_failed', reason);
+  const block = reason === 'truncated' ? 'truncated' : 'reverted';
+  const state = revertedState(s, handoff, block);
+  return { state: { ...state, phase: { kind: 'rewind', pendingNext: null } }, effects: [] };
+}
+
+/** H2 — 라이브가 끝났다는 증거(라이브 404 · ENDLIST · 끝 도달). 되감기 기원 끝남 대기로 간다 */
+export function revertEndedHandoff(
+  s: PlaybackSessionState,
+  handoff: Handoff,
+  now: number,
+): Transition {
+  const state = revertedState(s, handoff, 'reverted');
+  return {
+    state: {
+      ...state,
+      phase: { kind: 'ending-wait', origin: 'rewind', atEnd: false, recordOnEnd: false },
+      endingSince: s.endingSince ?? now,
+      offer: null,
+    },
+    effects: [{ kind: 'refresh', retryWhileUrl: handoff.fromUrl }],
+  };
+}
+
+/** H2t — 라이브 첫 목록이 잘렸다. 되돌리고, 그 url 로 아직 안 했으면 LIVE 안내를 한 번 한다 */
+function revertTruncated(s: PlaybackSessionState, handoff: Handoff): Transition {
+  const reverted = revertToRewind(s, handoff, 'truncated');
+  console.info('[player] handoff_skipped_truncated', handoff.fromUrl);
+  if (s.liveHintUrl === handoff.fromUrl) return reverted;
+  return {
+    state: { ...reverted.state, liveHintUrl: handoff.fromUrl },
+    effects: [{ kind: 'notice', text: HANDOFF_SKIP_NOTICE }],
+  };
+}
+
+/** H1a · H1 · H1c — 위치 하나로 연속 검사를 한다(A1 을 반영한 상태로) */
+function confirmPosition(
+  s: PlaybackSessionState,
+  handoff: Handoff,
+  event: Extract<SessionEvent, { type: 'position' }>,
+): Transition {
+  if (event.atMs - event.runMs > handoff.atMs + HANDOFF_RUN_TOL_MS) {
+    return revertToRewind(s, handoff, handoffResumeMs(handoff) > handoff.atMs ? 'jump' : 'start');
+  }
+  if (event.atMs >= handoff.endMs) return { state: { ...s, handoff: null }, effects: [] };
+  return { state: { ...s, handoff: { ...handoff, seenAtMs: event.atMs } }, effects: [] };
+}
+
+/**
+ * live 국면 ∧ handoff ≠ null 일 때의 확인 행(H0 · H1a · H1 · H1c · H2 · H2t · H3 · H4). 해당 없으면 null 이고 현행 live 행이
+ * 받는다(H1′ playing · H6 시크 · LIVE 포함)
+ */
+export function onHandoffConfirming(
+  s: PlaybackSessionState,
+  event: SessionEvent,
+  now: number,
+): Transition | null {
+  const handoff = s.handoff;
+  if (s.phase.kind !== 'live' || handoff === null) return null;
+  if (now >= handoff.deadlineMs) return revertToRewind(s, handoff, 'deadline');
+  switch (event.type) {
+    case 'position':
+      return confirmPosition(s, handoff, event);
+    case 'live-closed':
+    case 'endlist':
+    case 'end-reached':
+      return revertEndedHandoff(s, handoff, now);
+    case 'live-start-truncated':
+      return revertTruncated(s, handoff);
+    case 'remount':
+    case 'live-400': {
+      // H3 · H4 — 새 재생기도 첫 목록을 다시 본다. 연속 검사는 이어 볼 자리부터 새로 센다(시한은 그대로)
+      const resume = handoffResumeMs(handoff);
+      const generation = s.source.generation + 1;
+      const source = { ...s.source, startAtMs: resume, strictStart: true, generation };
+      const next = { ...handoff, atMs: resume, seenAtMs: null };
+      return { state: { ...s, source, handoff: next }, effects: [] };
+    }
+    default:
+      return null;
+  }
+}
+
+/** H6 — 사람의 시크 · LIVE 는 확인을 그만둔다. live 에 머문 전이만 비운다(떠난 전이는 A6 의 H5 가 비운다) */
+export function endConfirm(t: Transition): Transition {
+  const { state } = t;
+  if (state.phase.kind !== 'live' || state.handoff === null) return t;
+  return { ...t, state: { ...state, handoff: null } };
+}
+
+/** A2 — 막은 url 의 목록이 막을 때의 끝보다 자랐으면 막음을 푼다 */
+export function releaseBlock(
+  s: PlaybackSessionState,
+  url: string,
+  lastEndMs: number,
+): HandoffBlock | null {
+  const block = s.handoffBlock;
+  return block !== null && block.url === url && lastEndMs > block.endMs ? null : block;
 }
