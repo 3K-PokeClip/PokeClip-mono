@@ -4,7 +4,7 @@ package publish
 //
 // 자동으로 다시 쓰는 갈래는 하나뿐이다 — S3 의 DVR 본문이 장부로 다시 렌더한 본문의 앞부분(꼬리 조각 · ENDLIST 만
 // 빠짐)이고, 재렌더 sha 가 장부의 sha 와 같고, 장부 CAS 가 이 감사기를 고르고, 이 문서를 창 30분 안에 고친 적이
-// 없을 때다. 조건은 Head 로 본 ETag 의 If-Match 다. 그 밖은 모두 ERROR 만 남긴다.
+// 없을 때다. 조건은 Get 이 본문과 같은 응답에서 받은 ETag 의 If-Match 다. 그 밖은 모두 ERROR 만 남긴다.
 
 import (
 	"bytes"

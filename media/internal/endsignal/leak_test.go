@@ -140,9 +140,21 @@ func TestNoSecretsInLogsAcrossLimitBranchesP6(t *testing.T) {
 				defer close(done)
 				f.post(body, auth)
 			}()
-			<-f.entered
+			// 두 대기에 상한을 둔다 — 앞단 회귀로 요청이 Apply 전에 끝나거나 Close 뒤에도 끝나지 않으면 패키지 시한까지
+			// 매달리지 않고 이 자리에서 실패한다.
+			select {
+			case <-f.entered:
+			case <-done:
+				t.Fatalf("closing_apply: 요청이 Apply 에 들어가기 전에 끝났다")
+			case <-time.After(3 * time.Second):
+				t.Fatalf("closing_apply: 3초 안에 Apply 에 들어가지 않았다")
+			}
 			closeNow(t, f)
-			<-done
+			select {
+			case <-done:
+			case <-time.After(3 * time.Second):
+				t.Fatalf("closing_apply: Close 뒤 3초 안에 요청이 끝나지 않았다")
+			}
 		}},
 	}
 	var logs strings.Builder

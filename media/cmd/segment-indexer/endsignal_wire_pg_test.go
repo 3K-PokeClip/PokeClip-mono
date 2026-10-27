@@ -107,6 +107,12 @@ func TestEndSignalPoolExhaustedIs503WithinApplyTimeoutPG(t *testing.T) {
 	}
 	t.Cleanup(small.Close)
 	var held []*pgxpool.Conn
+	release := sync.OnceFunc(func() {
+		for _, c := range held {
+			c.Release()
+		}
+	})
+	t.Cleanup(release) // 획득 전에 반환을 건다 — 둘째 획득이나 조립이 실패해도 small.Close 가 먼저 빌린 연결을 기다리다 멈추지 않는다
 	for range cfg.MaxConns {
 		c, err := small.Acquire(t.Context())
 		if err != nil {
@@ -114,11 +120,6 @@ func TestEndSignalPoolExhaustedIs503WithinApplyTimeoutPG(t *testing.T) {
 		}
 		held = append(held, c)
 	}
-	release := sync.OnceFunc(func() {
-		for _, c := range held {
-			c.Release()
-		}
-	})
 
 	logs, log := newLockedLogger()
 	recv, err := newEndSignalReceiver(endSignalDeps{
