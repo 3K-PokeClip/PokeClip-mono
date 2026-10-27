@@ -635,6 +635,11 @@ func TestProdSQLVerifyCatchesLedgerSchemaDrift(t *testing.T) {
 			want:   []string{"index:stream_sessions_inherits_idx"},
 		},
 		{
+			name:   "uploaded trace index dropped",
+			tamper: "DROP INDEX stream_segments_uploaded_session_idx",
+			want:   []string{"index:stream_segments_uploaded_session_idx"},
+		},
+		{
 			name:   "M6 expiry privilege revoked",
 			tamper: "REVOKE DELETE ON stream_segments FROM media_indexer",
 			want:   []string{"privilege:media_indexer:stream_segments:DELETE"},

@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 
 	"github.com/jackc/pgx/v5"
@@ -249,15 +250,42 @@ UPDATE stream_sessions s
                     WHERE g.stream_id = s.stream_id AND g.session_id = s.session_id
                       AND g.playback_upload_state = 'uploaded')`
 
-// FreezeEmptyDVR 는 꺼짐 갈래의 DVR 빈 동결이다. 닫았으면 참이다 — 흔적이 있거나 이미 닫혔으면 쓰지 않고 거짓이다.
-func FreezeEmptyDVR(ctx context.Context, pool *pgxpool.Pool, sessionID string) (bool, error) {
-	qctx, cancel := context.WithTimeout(ctx, TxnDeadline)
-	defer cancel()
-	tag, err := pool.Exec(qctx, freezeEmptyDVRSQL, sessionID)
+// FreezeEmptyDVR 는 꺼짐 갈래의 DVR 빈 동결이다. 닫았으면 참이다 — 흔적이 있거나 이미 닫혔으면 쓰지 않고 거짓이다. 잠금
+// 상한 · 경합 접기는 limitedTx 다(op freeze_empty_dvr).
+func FreezeEmptyDVR(ctx context.Context, pool *pgxpool.Pool, sessionID string, o CloseOptions) (bool, error) {
+	var n int64
+	err := limitedTx(ctx, pool, "freeze_empty_dvr", sessionID, o.Log, func(ctx context.Context, tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, freezeEmptyDVRSQL, sessionID)
+		n = tag.RowsAffected()
+		return err
+	})
 	if err != nil {
 		return false, fmt.Errorf("꺼짐 DVR 빈 동결 실패 session_id=%q: %w", sessionID, err)
 	}
-	return tag.RowsAffected() == 1, nil
+	return n == 1, nil
+}
+
+// limitedTx 는 정산 보조 문장 body 를 한 트랜잭션에서 트랜잭션 지역 상한(setTxnLimitsSQL — lock_timeout 5초 ·
+// statement_timeout 10초) 아래 돌린다(c3 db M2). 상한이 없으면 행 잠금 대기가 ctx 시한(TxnDeadline)까지 연결을 쥔다.
+// 잠금 경합 · 시한으로 끊기면 WARN topology_lock_timeout op 를 남기고 ErrTopologyContended 로 감싼다 — 부르는 쪽(정산
+// 걸음)이 inTopologyTx 의 경합과 같이 다룬다. 위상 잠금은 잡지 않는다 — 셋 다 회차 · 사슬의 상태 칸만 쓰고 소속을
+// 바꾸지 않는다.
+func limitedTx(ctx context.Context, pool *pgxpool.Pool, op, id string, log *slog.Logger, body func(ctx context.Context, tx pgx.Tx) error) error {
+	qctx, cancel := context.WithTimeout(ctx, TxnDeadline)
+	defer cancel()
+	err := pgx.BeginFunc(qctx, pool, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(qctx, setTxnLimitsSQL); err != nil {
+			return err
+		}
+		return body(qctx, tx)
+	})
+	if err != nil && isContention(err) {
+		logger(log).Warn("topology_lock_timeout", "op", op, "id", id, "err", err)
+		if !errors.Is(err, ErrTopologyContended) {
+			err = fmt.Errorf("%w: %w", ErrTopologyContended, err)
+		}
+	}
+	return err
 }
 
 // freezeEmptyVODSQL 은 꺼짐 VOD 빈 동결이다 — 사슬 어느 구성원에도 ③ uploaded 가 없을 때만 사슬 전원을 frozen(문서 없음)
@@ -274,8 +302,8 @@ SELECT pg_catalog.count(*) FROM upd`
 
 // FreezeEmptyVOD 는 꺼짐 갈래의 VOD 빈 동결이다. 사슬 전원을 닫았으면 참이다 — ③ 흔적이 있거나 이미 종국이면 쓰지 않고
 // 거짓이다(사슬 일부만 freezing 이면 되돌린다).
-func FreezeEmptyVOD(ctx context.Context, pool *pgxpool.Pool, c Chain) (bool, error) {
-	return settleChainVOD(ctx, pool, freezeEmptyVODSQL, "꺼짐 VOD 빈 동결", c)
+func FreezeEmptyVOD(ctx context.Context, pool *pgxpool.Pool, c Chain, o CloseOptions) (bool, error) {
+	return settleChainVOD(ctx, pool, freezeEmptyVODSQL, "freeze_empty_vod", "꺼짐 VOD 빈 동결", c, o)
 }
 
 // failChainVODSQL 은 VOD 실패 확정이다 — 4초 × 3 실패(또는 같은 입력으로 다시 해도 서지 않는 실패) 뒤 freezing 사슬
@@ -289,23 +317,22 @@ WITH upd AS (
 SELECT pg_catalog.count(*) FROM upd`
 
 // FailChainVOD 는 사슬 VOD 를 freeze_failed 로 확정한다. 사슬 전원을 썼으면 참이다.
-func FailChainVOD(ctx context.Context, pool *pgxpool.Pool, c Chain) (bool, error) {
-	return settleChainVOD(ctx, pool, failChainVODSQL, "VOD 실패 확정", c)
+func FailChainVOD(ctx context.Context, pool *pgxpool.Pool, c Chain, o CloseOptions) (bool, error) {
+	return settleChainVOD(ctx, pool, failChainVODSQL, "fail_chain_vod", "VOD 실패 확정", c, o)
 }
 
 // errPartialChainVOD 는 사슬 일부만 freezing 이라 VOD 확정을 되돌렸다는 뜻이다.
 var errPartialChainVOD = errors.New("index: 사슬 일부만 VOD freezing 이다")
 
-// settleChainVOD 는 사슬 VOD 종국 문장 하나를 한 트랜잭션에서 보낸다 — 바꾼 행 수가 0 도 사슬 수도 아니면 되돌린다.
-func settleChainVOD(ctx context.Context, pool *pgxpool.Pool, sql, what string, c Chain) (bool, error) {
+// settleChainVOD 는 사슬 VOD 종국 문장 하나를 한 트랜잭션에서 보낸다 — 바꾼 행 수가 0 도 사슬 수도 아니면 되돌린다. 잠금
+// 상한 · 경합 접기는 limitedTx 다(op).
+func settleChainVOD(ctx context.Context, pool *pgxpool.Pool, sql, op, what string, c Chain, o CloseOptions) (bool, error) {
 	if len(c.SessionIDs) == 0 {
 		return false, fmt.Errorf("index: %s 사슬 세션 목록이 비었다 tail=%q", what, c.Tail)
 	}
-	qctx, cancel := context.WithTimeout(ctx, TxnDeadline)
-	defer cancel()
 	var n int64
-	err := pgx.BeginFunc(qctx, pool, func(tx pgx.Tx) error {
-		if err := tx.QueryRow(qctx, sql, c.StreamID, c.SessionIDs).Scan(&n); err != nil {
+	err := limitedTx(ctx, pool, op, c.Tail, o.Log, func(ctx context.Context, tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx, sql, c.StreamID, c.SessionIDs).Scan(&n); err != nil {
 			return err
 		}
 		if n != 0 && n != int64(len(c.SessionIDs)) {

@@ -141,7 +141,7 @@ func runFinalStep(ctx context.Context, deps finalDeps, s index.EndingSession, d 
 	case finalize.StepFreezeDVR, finalize.StepSealDVR, finalize.StepFailDVR, finalize.StepRecoverOrphan:
 		return runDVRStep(ctx, deps, res)
 	case finalize.StepEmptyFreezeDVR:
-		ok, err := index.FreezeEmptyDVR(ctx, deps.pool, s.SessionID)
+		ok, err := index.FreezeEmptyDVR(ctx, deps.pool, s.SessionID, deps.close)
 		return res.ledger(ok, err)
 	case finalize.StepCloseChain:
 		_, ok, err := index.CloseChain(ctx, deps.pool, s.SessionID, deps.close)
@@ -162,13 +162,13 @@ func runFinalStep(ctx context.Context, deps finalDeps, s index.EndingSession, d 
 		res.progressed = res.out == finalize.OutcomeDone || res.out == finalize.OutcomeFailed
 		return res
 	case finalize.StepEmptyFreezeVOD:
-		ok, err := index.FreezeEmptyVOD(ctx, deps.pool, c)
+		ok, err := index.FreezeEmptyVOD(ctx, deps.pool, c, deps.close)
 		if err == nil && !ok {
 			res.hold = finalize.HoldPublishOffWithTrace // 사슬 구성원에 ③ 흔적이 있다
 		}
 		return res.ledger(ok, err)
 	case finalize.StepFailVOD:
-		ok, err := index.FailChainVOD(ctx, deps.pool, c)
+		ok, err := index.FailChainVOD(ctx, deps.pool, c, deps.close)
 		return res.ledger(ok, err)
 	case finalize.StepMarkEnded:
 		n, err := index.MarkChainEnded(ctx, deps.pool, c, deps.close, deps.enqueue)

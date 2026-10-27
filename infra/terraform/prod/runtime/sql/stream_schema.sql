@@ -319,6 +319,17 @@ BEGIN
     END IF;
 END $do$;
 
+-- 정산 스캔의 발행 흔적 판독 인덱스(M6-3b). 스캔은 30초마다 ending 세션마다 그 세션 조각에 ③ uploaded 가 하나라도 있는지
+-- 본다. (stream_id, session_id, seq) 인덱스로는 uploaded 가 없는 세션의 조각을 모두 읽는다 — uploaded 행만 담는 부분
+-- 인덱스로 탐색 한 번이 된다.
+DO $do$
+BEGIN
+    IF pg_catalog.to_regclass('stream_segments_uploaded_session_idx') IS NULL THEN
+        CREATE INDEX stream_segments_uploaded_session_idx ON stream_segments (stream_id, session_id)
+            WHERE playback_upload_state = 'uploaded';
+    END IF;
+END $do$;
+
 -- 하한 갱신 — 지워진 행의 스트림별 max(seq)+1 로 올린다(내리지 않는다). 지우는 쪽이 누구든(만료 · clip 탈퇴 정리 ·
 -- 수동) 같은 트랜잭션에서 돈다. 실패하면 그 DELETE 도 롤백된다. 하한 행을 잠그므로 같은 스트림의 동시 DELETE 는
 -- 서로 직렬화된다. 한 문장 안에서는 스트림 순으로 잠가 여러 스트림을 지우는 두 DELETE 문장이 교착하지 않는다 —

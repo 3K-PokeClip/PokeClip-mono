@@ -104,7 +104,7 @@ VALUES ('slot', 1, 0, $1, 4000, 'k1', 'uploaded', 'U')`, stop.Add(-5*time.Second
 }
 
 // D25 종단 — 옛 ending 300건(그 가운데 round_id NULL 인 옛 계승 사슬 20개 · 각 셋)이 한꺼번에 있어도 정산 루프가 모두
-// ended 로 거두고, 동시에 도는 정산 걸음은 동시 상한(4)을 넘지 않는다. 쪽 50 · 커서 순회 · 빠른 길이 함께 나아간다.
+// ended 로 거두고, 동시에 도는 정산 걸음은 동시 상한(전체 2)을 넘지 않는다. 쪽 50 · 커서 순회 · 빠른 길이 함께 나아간다.
 // 변이 = 동시 상한 제거 → 동시 걸음 최댓값 단언 FAIL.
 func TestFinalizeBacklogOf300ReachesEndedWithinLimitsD25(t *testing.T) {
 	pool := newWireTestPool(t)

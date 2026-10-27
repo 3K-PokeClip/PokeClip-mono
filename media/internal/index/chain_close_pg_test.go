@@ -355,7 +355,7 @@ func TestFreezeEmptyDVRRequiresNoPublishTrace(t *testing.T) {
 	putSeg(t, pool, s, "pb", 1, old, true)
 
 	for id, want := range map[string]bool{"bare": true, "etag": false, "pb": false} {
-		got, err := FreezeEmptyDVR(ctx, pool, id)
+		got, err := FreezeEmptyDVR(ctx, pool, id, testClose)
 		if err != nil || got != want {
 			t.Errorf("FreezeEmptyDVR(%s) = %v err %v, want %v", id, got, err, want)
 		}
@@ -383,14 +383,14 @@ func TestFreezeEmptyVODAndFailChainVOD(t *testing.T) {
 	putSeg(t, pool, s, "C", 1, old, true)
 
 	ab := Chain{StreamID: s, RoundID: "R", Head: "A", Tail: "B", SessionIDs: []string{"A", "B"}}
-	if ok, err := FreezeEmptyVOD(ctx, pool, ab); err != nil || !ok {
+	if ok, err := FreezeEmptyVOD(ctx, pool, ab, testClose); err != nil || !ok {
 		t.Fatalf("FreezeEmptyVOD(AB) = %v err %v, want 닫힘", ok, err)
 	}
 	cc := Chain{StreamID: s, RoundID: "R2", Head: "C", Tail: "C", SessionIDs: []string{"C"}}
-	if ok, err := FreezeEmptyVOD(ctx, pool, cc); err != nil || ok {
+	if ok, err := FreezeEmptyVOD(ctx, pool, cc, testClose); err != nil || ok {
 		t.Fatalf("FreezeEmptyVOD(C) = %v err %v, want 흔적 있어 닫지 않음", ok, err)
 	}
-	if ok, err := FailChainVOD(ctx, pool, cc); err != nil || !ok {
+	if ok, err := FailChainVOD(ctx, pool, cc, testClose); err != nil || !ok {
 		t.Fatalf("FailChainVOD(C) = %v err %v", ok, err)
 	}
 	for id, want := range map[string]string{"A": "frozen", "B": "frozen", "C": "freeze_failed"} {
@@ -464,7 +464,7 @@ func driveOffline(t *testing.T, pool *pgxpool.Pool, r EndingSession) {
 	ctx := context.Background()
 	switch {
 	case r.DVRState == "open":
-		if _, err := FreezeEmptyDVR(ctx, pool, r.SessionID); err != nil {
+		if _, err := FreezeEmptyDVR(ctx, pool, r.SessionID, testClose); err != nil {
 			t.Fatal(err)
 		}
 	case r.VODState == "none":
@@ -476,7 +476,7 @@ func driveOffline(t *testing.T, pool *pgxpool.Pool, r EndingSession) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := FreezeEmptyVOD(ctx, pool, c); err != nil {
+		if _, err := FreezeEmptyVOD(ctx, pool, c, testClose); err != nil {
 			t.Fatal(err)
 		}
 	default:
