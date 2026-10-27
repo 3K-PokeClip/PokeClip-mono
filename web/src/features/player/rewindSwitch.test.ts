@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import type { RewindStatus, RewindStatusResult } from '@/api/rewindStatus';
 import {
   ENDING_WAIT_MS,
@@ -12,6 +12,7 @@ import {
   type SessionEvent,
   type XAnswer,
 } from './rewindSwitch';
+import { pos, resetEventKit, streamPoll } from './handoffTestKit';
 import { sessionView } from './sessionView';
 
 // 재생 세션 상태기계 표 시험(설계 5.3절 종결 판 — R5 · R16 · R21 · R28 · R32 · R43 · R44 · R46 · R47 · R53 ·
@@ -45,6 +46,8 @@ const X_B: XAnswer = { kind: 'known', id: 'r-B' };
 const X_EMPTY: XAnswer = { kind: 'known', id: '' };
 const X_UNKNOWN: XAnswer = { kind: 'unknown' };
 
+beforeEach(resetEventKit);
+
 /** 사건을 차례로 먹이고 마지막 상태와 모든 효과를 돌려준다 */
 function run(
   start: PlaybackSessionState,
@@ -70,7 +73,7 @@ function fresh(): PlaybackSessionState {
 
 /** live 세션이 되감기 재료(A1 · 범위 T0 부터 NOW 까지)를 받은 상태 */
 function liveWithEntry(): PlaybackSessionState {
-  return run(fresh(), [[{ type: 'stream-poll', result: liveReady(A1, T0, NOW) }]]).state;
+  return run(fresh(), [[streamPoll(liveReady(A1, T0, NOW))]]).state;
 }
 
 /** A1 을 T 에서 트는 되감기 세션. 목록을 로드했고(E = NOW) 위치는 T 다. 라이브 창은 T 바로 뒤에서 시작한다고 둔다 */
@@ -78,7 +81,7 @@ function rewindAt(t: number): PlaybackSessionState {
   return run(liveWithEntry(), [
     [{ type: 'seek', targetMs: t, view: { lowerMs: t + 1, endMs: NOW + 28_000 } }],
     [{ type: 'list-loaded', url: A1, firstMs: T0, lastEndMs: NOW, targetDurationS: 4 }],
-    [{ type: 'position', atMs: t }],
+    [pos(t)],
   ]).state;
 }
 
@@ -94,7 +97,7 @@ function endingFromLiveClosed(at = NOW): PlaybackSessionState {
         targetDurationS: 4,
       },
     ],
-    [{ type: 'position', atMs: NOW }],
+    [pos(NOW)],
     [{ type: 'live-closed' }, at],
   ]).state;
 }
@@ -103,7 +106,13 @@ describe('세션 열기와 폴링 켜기(설계 5.1절 표)', () => {
   it('열면 live 국면 · 라이브 소스 · 스트림 경로만 켠다', () => {
     const s = fresh();
     expect(s.phase).toEqual({ kind: 'live' });
-    expect(s.source).toEqual({ kind: 'live', url: LIVE_URL, startAtMs: null, generation: 0 });
+    expect(s.source).toEqual({
+      kind: 'live',
+      url: LIVE_URL,
+      startAtMs: null,
+      generation: 0,
+      strictStart: false,
+    });
     expect(pollTargets(s)).toEqual({ stream: true, round: false });
   });
 
@@ -135,7 +144,13 @@ describe('live 국면', () => {
       [{ type: 'seek', targetMs: t, view: { lowerMs: NOW - 16_000, endMs: NOW } }],
     ]);
     expect(state.phase).toEqual({ kind: 'rewind', pendingNext: null });
-    expect(state.source).toEqual({ kind: 'rewind', url: A1, startAtMs: t, generation: 1 });
+    expect(state.source).toEqual({
+      kind: 'rewind',
+      url: A1,
+      startAtMs: t,
+      generation: 1,
+      strictStart: false,
+    });
   });
 
   it('firstPdt 보다 이른 시크는 firstPdt 로 잘라 들어가며 알린다', () => {
@@ -148,7 +163,7 @@ describe('live 국면', () => {
 
   it('headPdt 와 라이브 창 사이(끊긴 공백) 시크는 headPdt 로 붙여 들어간다', () => {
     const s = run(fresh(), [
-      [{ type: 'stream-poll', result: liveReady(A1, T0, NOW - 60_000) }],
+      [streamPoll(liveReady(A1, T0, NOW - 60_000))],
       [{ type: 'seek', targetMs: NOW - 30_000, view: { lowerMs: NOW - 16_000, endMs: NOW } }],
     ]);
     expect(s.state.source).toMatchObject({ kind: 'rewind', startAtMs: NOW - 60_000 });
@@ -175,7 +190,7 @@ describe('live 국면', () => {
       UNAVAILABLE,
     ];
     for (const result of results) {
-      const { state, effects } = run(start, [[{ type: 'stream-poll', result }]]);
+      const { state, effects } = run(start, [[streamPoll(result)]]);
       expect(state.phase).toEqual(start.phase);
       expect(state.source).toEqual(start.source);
       expect(state.entry).toEqual(start.entry);
@@ -187,8 +202,8 @@ describe('live 국면', () => {
   it('ready 가 깜박이면 진입 재료는 남기고 되감기 노출만 닫는다 — 다시 ready 면 든다(R5 · 계약3 7-2)', () => {
     const view = { lowerMs: NOW - 16_000, endMs: NOW };
     const blinked = run(liveWithEntry(), [
-      [{ type: 'stream-poll', result: status({ mode: 'live' }) }],
-      [{ type: 'stream-poll', result: status({}) }],
+      [streamPoll(status({ mode: 'live' }))],
+      [streamPoll(status({}))],
     ]).state;
     expect(blinked.entry).toMatchObject({ url: A1 });
     expect(rewindAxisLowerMs(blinked)).toBeNull();
@@ -196,7 +211,7 @@ describe('live 국면', () => {
     expect(closed.state.source.kind).toBe('live');
     expect(closed.effects).toContainEqual({ kind: 'seek-within', atMs: NOW - 16_000 });
     const reopened = run(blinked, [
-      [{ type: 'stream-poll', result: liveReady(A1, T0, NOW) }],
+      [streamPoll(liveReady(A1, T0, NOW))],
       [{ type: 'seek', targetMs: T0 + MIN, view }],
     ]).state;
     expect(rewindAxisLowerMs(reopened)).toBe(T0);
@@ -204,7 +219,7 @@ describe('live 국면', () => {
   });
 
   it('잠시 불가(503)는 되감기 노출을 바꾸지 않는다 — 직전 상태 유지', () => {
-    const state = run(liveWithEntry(), [[{ type: 'stream-poll', result: UNAVAILABLE }]]).state;
+    const state = run(liveWithEntry(), [[streamPoll(UNAVAILABLE)]]).state;
     expect(rewindAxisLowerMs(state)).toBe(T0);
   });
 
@@ -237,7 +252,13 @@ describe('live 국면', () => {
 
   it('목록 치명 400 은 세대를 올려 라이브를 다시 세운다(R17)', () => {
     const { state } = run(fresh(), [[{ type: 'live-400' }]]);
-    expect(state.source).toEqual({ kind: 'live', url: LIVE_URL, startAtMs: null, generation: 1 });
+    expect(state.source).toEqual({
+      kind: 'live',
+      url: LIVE_URL,
+      startAtMs: null,
+      generation: 1,
+      strictStart: false,
+    });
   });
 
   it('명부 ended 는 재조회만 한다 — 끝 증거가 아니다', () => {
@@ -271,17 +292,13 @@ describe('rewind 국면', () => {
   });
 
   it('새 url ∧ P 가 새 범위 안이면 같은 P 로 갈아 끼운다(계승) · ② 에 넣는다', () => {
-    const { state } = run(rewindAt(T), [
-      [{ type: 'stream-poll', result: liveReady(A2, T0, NOW + 10_000) }],
-    ]);
+    const { state } = run(rewindAt(T), [[streamPoll(liveReady(A2, T0, NOW + 10_000))]]);
     expect(state.source).toMatchObject({ kind: 'rewind', url: A2, startAtMs: T, generation: 2 });
     expect(state.roundRewindUrls.has(A2)).toBe(true);
   });
 
   it('새 url 인데 P 가 범위 밖이면 pendingNext 로만 적는다 · roundRewindUrls 에 넣지 않는다', () => {
-    const { state } = run(rewindAt(T), [
-      [{ type: 'stream-poll', result: liveReady(B1, NOW + MIN, NOW + 2 * MIN) }],
-    ]);
+    const { state } = run(rewindAt(T), [[streamPoll(liveReady(B1, NOW + MIN, NOW + 2 * MIN))]]);
     expect(state.phase).toEqual({
       kind: 'rewind',
       pendingNext: { url: B1, firstPdtMs: NOW + MIN, headPdtMs: NOW + 2 * MIN },
@@ -293,16 +310,14 @@ describe('rewind 국면', () => {
   it('ready 깜박임(false · null · 503 · 404)은 도는 되감기를 끊지 않는다(W3 · R5)', () => {
     const start = rewindAt(T);
     for (const result of [status({ mode: 'live' }), status({}), UNAVAILABLE, NONE]) {
-      const { state, effects } = run(start, [[{ type: 'stream-poll', result }]]);
+      const { state, effects } = run(start, [[streamPoll(result)]]);
       expect(state).toEqual(start);
       expect(effects).toEqual([]);
     }
   });
 
   it('같은 url 폴링은 범위 · observedEndMs 만 갱신한다', () => {
-    const { state, effects } = run(rewindAt(T), [
-      [{ type: 'stream-poll', result: liveReady(A1, T0, NOW + 8_000) }],
-    ]);
+    const { state, effects } = run(rewindAt(T), [[streamPoll(liveReady(A1, T0, NOW + 8_000))]]);
     expect(effects).toEqual([]);
     expect(state.observedEndMs).toBe(NOW + 8_000);
   });
@@ -315,7 +330,7 @@ describe('rewind 국면', () => {
 
   it('ENDLIST ∧ pendingNext 면 재조회 한 번 · 국면 그대로', () => {
     const { state, effects } = run(rewindAt(T), [
-      [{ type: 'stream-poll', result: liveReady(B1, NOW + MIN, NOW + 2 * MIN) }],
+      [streamPoll(liveReady(B1, NOW + MIN, NOW + 2 * MIN))],
       [{ type: 'endlist' }],
     ]);
     expect(state.phase.kind).toBe('rewind');
@@ -323,9 +338,7 @@ describe('rewind 국면', () => {
   });
 
   it('끝 도달에 pendingNext 가 E 를 덮으면 E 에서 잇는다(계승)', () => {
-    const { state } = run(rewindAt(T), [
-      [{ type: 'stream-poll', result: liveReady(A2, NOW - 10_000, NOW + MIN) }],
-    ]);
+    const { state } = run(rewindAt(T), [[streamPoll(liveReady(A2, NOW - 10_000, NOW + MIN))]]);
     // P(T) 가 A2 범위 밖이라 보류
     expect(state.phase).toMatchObject({ kind: 'rewind', pendingNext: { url: A2 } });
     const after = run(state, [[{ type: 'end-reached' }]]).state;
@@ -335,7 +348,7 @@ describe('rewind 국면', () => {
 
   it('끝 도달에 pendingNext 가 E 를 덮지 않으면(다른 방송) 교체 없이 끝남 대기 · 덮개', () => {
     const { state, effects } = run(rewindAt(T), [
-      [{ type: 'stream-poll', result: liveReady(B1, NOW + MIN, NOW + 2 * MIN) }],
+      [streamPoll(liveReady(B1, NOW + MIN, NOW + 2 * MIN))],
       [{ type: 'end-reached' }],
     ]);
     expect(state.source.url).toBe(A1);
@@ -369,7 +382,7 @@ describe('rewind 국면', () => {
     const live = run(rewindAt(T), [[{ type: 'live-button', x: X_UNKNOWN, attempt: 3 }]]).state;
     const before = live.observedEndMs;
     const { state } = run(live, [
-      [{ type: 'stream-poll', result: liveReady(B1, NOW, NOW + MIN), x: X_B }],
+      [streamPoll(liveReady(B1, NOW, NOW + MIN), X_B)],
       [
         {
           type: 'list-loaded',
@@ -389,9 +402,7 @@ describe('rewind 국면', () => {
   it('세션에 묶인 live 가 X 를 모르는 폴링은 건너뛴다 — 새 방송 B 가 A 세션 재료에 섞이지 않는다(R58 · cx H2 = cc H1)', () => {
     const live = run(rewindAt(T), [[{ type: 'live-button', x: X_UNKNOWN, attempt: 3 }]]).state;
     for (const x of [X_UNKNOWN, undefined]) {
-      const { state, effects } = run(live, [
-        [{ type: 'stream-poll', result: liveReady(B1, NOW, NOW + MIN), x }],
-      ]);
+      const { state, effects } = run(live, [[streamPoll(liveReady(B1, NOW, NOW + MIN), x)]]);
       expect(state.roundRewindUrls.has(B1)).toBe(false);
       expect(state.entry).toEqual(live.entry);
       expect(state.roundId).toBe('r-A');
@@ -399,9 +410,9 @@ describe('rewind 국면', () => {
     }
     // 뒤에 X = B 가 확인되면 띠 · 반영 중지이고, 그 뒤 X 를 모르는 폴링도 띠를 풀지 않는다
     const flagged = run(live, [
-      [{ type: 'stream-poll', result: liveReady(B1, NOW, NOW + MIN), x: X_UNKNOWN }],
-      [{ type: 'stream-poll', result: liveReady(B1, NOW, NOW + MIN), x: X_B }],
-      [{ type: 'stream-poll', result: liveReady(B1, NOW, NOW + MIN), x: X_UNKNOWN }],
+      [streamPoll(liveReady(B1, NOW, NOW + MIN), X_UNKNOWN)],
+      [streamPoll(liveReady(B1, NOW, NOW + MIN), X_B)],
+      [streamPoll(liveReady(B1, NOW, NOW + MIN), X_UNKNOWN)],
     ]).state;
     expect(flagged.foreignLive).toBe('r-B');
     expect(flagged.roundRewindUrls.has(B1)).toBe(false);
@@ -427,10 +438,7 @@ describe('ending-wait 국면', () => {
       for (let t = 10_000; t < gapMs; t += 10_000) {
         steps.push([{ type: 'round-poll', result: NONE }, NOW + t]);
       }
-      steps.push([
-        { type: 'stream-poll', result: liveReady(A2, T0, NOW + gapMs), x: X_A },
-        NOW + gapMs,
-      ]);
+      steps.push([streamPoll(liveReady(A2, T0, NOW + gapMs), X_A), NOW + gapMs]);
       const { state, effects } = run(start, steps);
       expect(state.phase).toEqual({ kind: 'live' });
       expect(state.source).toMatchObject({ kind: 'live', generation: start.source.generation + 1 });
@@ -442,18 +450,14 @@ describe('ending-wait 국면', () => {
 
   it('rewind 기원의 이어짐은 이음 지점(atEnd 면 E)에서 새 url 로 잇는다', () => {
     const atEnd = run(rewindAt(NOW - 5_000), [[{ type: 'end-reached' }]]).state;
-    const { state } = run(atEnd, [
-      [{ type: 'stream-poll', result: liveReady(A2, T0, NOW + 30_000) }, NOW + 30_000],
-    ]);
+    const { state } = run(atEnd, [[streamPoll(liveReady(A2, T0, NOW + 30_000)), NOW + 30_000]]);
     expect(state.source).toMatchObject({ kind: 'rewind', url: A2, startAtMs: NOW });
     expect(state.phase).toEqual({ kind: 'rewind', pendingNext: null });
   });
 
   it('라이브 닫힘 직후 낡은 A url(③) 은 이어짐이 아니다 — 교체 0(R43)', () => {
     const start = endingFromLiveClosed();
-    const { state, effects } = run(start, [
-      [{ type: 'stream-poll', result: liveReady(A1, T0, NOW) }, NOW + 2_000],
-    ]);
+    const { state, effects } = run(start, [[streamPoll(liveReady(A1, T0, NOW)), NOW + 2_000]]);
     expect(state.phase.kind).toBe('ending-wait');
     expect(state.source).toEqual(start.source);
     expect(effects).toEqual([]);
@@ -507,9 +511,9 @@ describe('ending-wait 국면', () => {
       firstPdtMs: T0,
       headPdtMs: NOW,
     });
-    expect(run(start, [[{ type: 'stream-poll', result: streamVod }]]).state).toEqual(start);
+    expect(run(start, [[streamPoll(streamVod)]]).state).toEqual(start);
     // 스트림 경로의 ended 도 종국이 아니다(같은 키 다른 회차일 수 있다)
-    const streamEnded = run(start, [[{ type: 'stream-poll', result: status({ mode: 'ended' }) }]]);
+    const streamEnded = run(start, [[streamPoll(status({ mode: 'ended' }))]]);
     expect(streamEnded.state).toEqual(start);
     expect(streamEnded.effects).toEqual([]);
     const otherRound = status({
@@ -573,13 +577,13 @@ describe('ending-wait 국면', () => {
   it('버튼 규칙 — 이음 지점을 덮지 않는 새 url: X 로 「라이브 보기」 · 「새 방송 보기」 · 없음을 가른다(R56)', () => {
     const start = endingFromLiveClosed();
     const other = liveReady(B1, NOW + MIN, NOW + 2 * MIN);
-    const goLive = run(start, [[{ type: 'stream-poll', result: other, x: X_A }]]).state;
+    const goLive = run(start, [[streamPoll(other, X_A)]]).state;
     expect(sessionView(goLive, NOW).actions).toEqual(['record', 'go-live']);
     expect(goLive.phase.kind).toBe('ending-wait');
-    const newOne = run(start, [[{ type: 'stream-poll', result: other, x: X_B }]]).state;
+    const newOne = run(start, [[streamPoll(other, X_B)]]).state;
     expect(sessionView(newOne, NOW).actions).toEqual(['record', 'new-broadcast']);
     for (const x of [X_EMPTY, X_UNKNOWN]) {
-      const none = run(start, [[{ type: 'stream-poll', result: other, x }]]).state;
+      const none = run(start, [[streamPoll(other, x)]]).state;
       expect(sessionView(none, NOW).actions).toEqual(['record']);
     }
   });
@@ -590,11 +594,11 @@ describe('ending-wait 국면', () => {
     expect(run(start, [[{ type: 'button', which: 'record' }]]).effects).toEqual([
       { kind: 'close', reason: 'recorded' },
     ]);
-    const a = run(start, [[{ type: 'stream-poll', result: other, x: X_A }]]).state;
+    const a = run(start, [[streamPoll(other, X_A)]]).state;
     expect(run(a, [[{ type: 'button', which: 'go-live' }]]).effects).toEqual([
       { kind: 'close', reason: 'go-live' },
     ]);
-    const b = run(start, [[{ type: 'stream-poll', result: other, x: X_B }]]).state;
+    const b = run(start, [[streamPoll(other, X_B)]]).state;
     expect(run(b, [[{ type: 'button', which: 'new-broadcast' }]]).effects).toEqual([
       { kind: 'close', reason: 'left', goTo: 'r-B' },
     ]);
@@ -603,7 +607,7 @@ describe('ending-wait 국면', () => {
   it('다른 방송 띠가 선 채 끝남 대기로 가도 띠의 「새 방송 보기」는 그 방송으로 닫는다 — 죽은 단추가 아니다(cc L)', () => {
     const bound = run(rewindAt(T0 + 20 * MIN), [
       [{ type: 'live-button', x: X_UNKNOWN, attempt: 3 }],
-      [{ type: 'stream-poll', result: liveReady(B1, NOW, NOW + MIN), x: X_B }],
+      [streamPoll(liveReady(B1, NOW, NOW + MIN), X_B)],
       [{ type: 'live-closed' }],
     ]).state;
     expect(bound.phase.kind).toBe('ending-wait');
@@ -727,7 +731,7 @@ describe('vod-offered · vod 국면', () => {
           targetDurationS: 4,
         },
       ],
-      [{ type: 'position', atMs: NOW - 5_000 }],
+      [pos(NOW - 5_000)],
       [{ type: 'endlist' }],
       [{ type: 'round-poll', result: VOD_RANGE }],
     ]).state;
@@ -778,7 +782,7 @@ describe('아무 국면', () => {
     const s = rewindAt(T0 + 20 * MIN);
     expect(s.roundRewindUrls.has(A1)).toBe(true);
     expect(s.observedEndMs).toBe(NOW);
-    const later = run(s, [[{ type: 'position', atMs: T0 + 30 * MIN }]]).state;
+    const later = run(s, [[pos(T0 + 30 * MIN)]]).state;
     expect(later.watchedFromMs).toBe(T0 + 20 * MIN);
     expect(later.lastAtMs).toBe(T0 + 30 * MIN);
   });
@@ -786,9 +790,7 @@ describe('아무 국면', () => {
   it('끝남 대기 중 다른 회차 B 의 폴링 headPdt 는 observedEndMs 에 들지 않는다(R42)', () => {
     let s = run(rewindAt(T0 + 20 * MIN), [[{ type: 'end-reached' }]]).state;
     for (let i = 0; i < 10; i += 1) {
-      s = run(s, [
-        [{ type: 'stream-poll', result: liveReady(B1, NOW + 30 * MIN, NOW + 30 * MIN), x: X_B }],
-      ]).state;
+      s = run(s, [[streamPoll(liveReady(B1, NOW + 30 * MIN, NOW + 30 * MIN), X_B)]]).state;
     }
     expect(s.observedEndMs).toBe(NOW);
   });
@@ -801,8 +803,9 @@ describe('아무 국면', () => {
       url: A1,
       startAtMs: T0 + 20 * MIN,
       generation: s.source.generation + 1,
+      strictStart: false,
     });
-    const live = run(fresh(), [[{ type: 'position', atMs: NOW }], [{ type: 'remount' }]]).state;
+    const live = run(fresh(), [[pos(NOW)], [{ type: 'remount' }]]).state;
     expect(live.source).toMatchObject({ kind: 'live', startAtMs: null, generation: 1 });
   });
 
