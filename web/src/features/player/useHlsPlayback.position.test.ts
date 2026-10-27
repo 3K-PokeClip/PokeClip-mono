@@ -143,4 +143,19 @@ describe.each([
     expect(view.result.current.livePosition).not.toBe(playingPosition);
     expect(view.result.current.livePosition).toMatchObject({ playing: false });
   });
+
+  it('멈춘 표본은 그 순간의 재생 여부를 지닌다 — 반영 전에 다시 틀어도 일시정지 표본이 남는다', async () => {
+    const view = await mountLive(hooks);
+    video.played = [[30, 36]];
+    timeupdate();
+    act(() => {
+      video.paused = true;
+      video.played = [[30, 36.2]];
+      video.el!.currentTime = 36.2;
+      video.el!.dispatchEvent(new Event('timeupdate'));
+      // 같은 작업 안에서 React 가 표본을 반영하기 전에 다시 튼다
+      video.paused = false;
+    });
+    expect(view.result.current.livePosition).toMatchObject({ playing: false, runMs: 6_200 });
+  });
 });
