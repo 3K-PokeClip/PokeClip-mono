@@ -133,8 +133,10 @@ func TestLocalCleanupAbandonedUnderJanitorRole(t *testing.T) {
 const retainedSeedRows = 300_000
 
 // db m64 M1 — 잔존 집계(janitor 주기마다)는 조각 표를 훑지 않는다. 계획기는 포기 등재(GAP)를 모아 조각 행을 기본
-// 키로 찾는다. 시드는 로컬 파일이 하나도 안 지워진 꼴(정리가 멈춘 때 — 이 신호가 쓸모 있는 때)이다. 포기 등재가
-// 조각의 10% 쯤이면 계획기가 해시 조인(조각 표 훑기)으로 바꾼다 — 그 비율은 등재가 드물다는 전제 밖이다.
+// 키로 찾는다. 시드는 로컬 파일이 하나도 안 지워진 꼴(정리가 멈춘 때 — 이 신호가 쓸모 있는 때)이다. 조각 열에
+// 하나는 pending, 하나는 failed(집계 대상 — ② 미완료)라 계획기가 대상 행이 있는 분포로 계획을 세운다. 등재 열
+// (seq 0–9)도 같은 분포라 집계는 2다. 포기 등재가 조각의 10% 쯤이면 계획기가 해시 조인(조각 표 훑기)으로
+// 바꾼다 — 그 비율은 등재가 드물다는 전제 밖이다.
 func TestAbandonedLocalRetainedUsesSegmentKey(t *testing.T) {
 	pool := newTestPool(t)
 	ctx := context.Background()
@@ -147,7 +149,7 @@ VALUES ('rt-s', 'lctest-rt', now() - interval '3 days', 'ended', now() - interva
 INSERT INTO stream_segments (stream_id, seq, start_pts_ms, start_wall_utc, duration_ms, s3_key, session_id, upload_state,
                              local_path)
 SELECT 'lctest-rt', g, g * 4000, now() - interval '3 days' + g * interval '4 seconds', 4000, 'k/' || g, 'rt-s',
-       'uploaded', 'l/' || g
+       CASE g % 10 WHEN 0 THEN 'pending' WHEN 1 THEN 'failed' ELSE 'uploaded' END, 'l/' || g
   FROM pg_catalog.generate_series(0, $1::bigint - 1) g`, retainedSeedRows); err != nil {
 		t.Fatalf("조각 시드 실패: %v", err)
 	}
@@ -166,5 +168,8 @@ SELECT 'lctest-rt', g, 'rt-s', 'upload_stall', 'vod_abandoned' FROM pg_catalog.g
 	}
 	if nodes := planScanNodes(t, plan); !slices.Contains(nodes, "stream_segments_pkey") {
 		t.Fatalf("잔존 집계가 조각 표를 기본 키로 찾지 않는다 — 계획 노드 %v", nodes)
+	}
+	if n, err := NewLocalCleanupStore(pool).AbandonedLocalRetained(ctx); err != nil || n != 2 {
+		t.Fatalf("AbandonedLocalRetained = %d err=%v (등재 열 중 ② 미완료 2 기대)", n, err)
 	}
 }
