@@ -387,6 +387,21 @@ describe('물음 순번 — 스트림 폴링 응답마다 순번과 수신 시�
     ]);
   });
 
+  it('rewind 국면 폴링도 지금 방송 번호를 묻고(재사용 허용) 그 답을 싣는다', async () => {
+    const resolveX = vi.fn(() => Promise.resolve<XAnswer>({ kind: 'known', id: 'r-A' }));
+    answer = (url) =>
+      url === STREAM ? jsonResponse(200, readyBody(A1, NOW - 3_600_000, NOW)) : jsonResponse(404);
+    const { result } = renderHook(() => usePlaybackSession(options({ resolveX })));
+    await flush();
+    const view = { lowerMs: NOW - 16_000, endMs: NOW };
+    act(() => result.current?.dispatch({ type: 'seek', targetMs: NOW - 600_000, view }));
+    await act(async () => vi.advanceTimersByTime(10_000));
+    await flush();
+    expect(result.current?.state.phase.kind).toBe('rewind');
+    expect(resolveX).toHaveBeenCalledWith(false);
+    expect(streamPolls().at(-1)?.x).toEqual({ kind: 'known', id: 'r-A' });
+  });
+
   it('지금 방송 번호를 기다리는 응답도 받은 즉시 찍은 시각을 싣는다', async () => {
     let releaseX!: (x: XAnswer) => void;
     const resolveX = vi.fn(

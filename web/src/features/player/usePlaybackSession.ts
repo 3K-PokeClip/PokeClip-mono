@@ -69,9 +69,10 @@ export interface PlaybackSession {
   notice: (text: string) => void;
 }
 
-/** 이 국면의 스트림 폴링 답에 지금 방송 번호가 필요한가(세션에 묶인 live · 끝남 대기 버튼 규칙) */
+/** 이 국면의 스트림 폴링 답에 지금 방송 번호가 필요한가(세션에 묶인 live · 끝남 대기 버튼 규칙 · rewind 의 넘김 문) */
 function needsX(s: PlaybackSessionState): boolean {
-  return (s.phase.kind === 'live' && s.boundLive) || s.phase.kind === 'ending-wait';
+  const { kind } = s.phase;
+  return (kind === 'live' && s.boundLive) || kind === 'ending-wait' || kind === 'rewind';
 }
 
 function canStart(o: SessionOptions): boolean {

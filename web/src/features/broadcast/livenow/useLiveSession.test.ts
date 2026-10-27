@@ -82,6 +82,17 @@ describe('createPinnedXResolver', () => {
     expect(query).toHaveBeenCalledTimes(2);
   });
 
+  it('합류: 먼저 시작한 물음은 늦게 시작한 물음의 답을 돌려준다 — 옛 답이 새 답을 덮지 않게(설계 r4)', async () => {
+    const { query, pending } = queue();
+    const resolveX = createPinnedXResolver(query);
+    const older = resolveX(true, 'r-A|k');
+    const newer = resolveX(true, 'r-A|k');
+    pending[1]!('r-B');
+    await expect(newer).resolves.toEqual({ kind: 'known', id: 'r-B' });
+    pending[0]!('r-A');
+    await expect(older).resolves.toEqual({ kind: 'known', id: 'r-B' });
+  });
+
   it('조회가 답하지 못하면(null) 모름이다', async () => {
     const { query, pending } = queue();
     const resolveX = createPinnedXResolver(query);

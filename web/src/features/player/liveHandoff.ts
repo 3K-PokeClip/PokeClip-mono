@@ -1,8 +1,19 @@
 import type { RewindStatusResult } from '@/api/rewindStatus';
-import type { PlaybackSessionState, SessionEvent, StreamAsk, Transition } from './rewindSwitch';
+import type {
+  PlaybackSessionState,
+  SessionEvent,
+  StreamAsk,
+  Transition,
+  XAnswer,
+} from './rewindSwitch';
 
 // 되감기 → 라이브 꼬리 넘김의 칸과 행 몸통(POK-200 c13 · 설계 r9 2절 · 4절). rewindSwitch 는 여기 함수를 한 줄로 부르고,
 // 여기는 rewindSwitch 의 타입만 읽는다.
+
+/** 문이 열려 있는 폭 = REWIND_POLL_MS + REWIND_RETRY_MS — 폴링 한 번이 재시도로 늦어도 닫히지 않는다(T14 가 대조한다) */
+export const HANDOFF_DOOR_FRESH_MS = 12_000;
+
+type StreamPollEvent = Extract<SessionEvent, { type: 'stream-poll' }>;
 
 /** 지금 소스 목록 — endMs = 마지막 조각 끝(E) · tdMs = 목표 길이 · sealed = ENDLIST 를 봤다 */
 export interface SourceList {
@@ -81,6 +92,48 @@ export function nextStreamAsk(
 ): number | null {
   if (ask.seq <= s.streamAsk) return null;
   return result.kind === 'unavailable' ? s.streamAsk : ask.seq;
+}
+
+/** 문이 열렸나 — 지금 소스 url 의 문이고, 받은 시각부터 12초 안이다 */
+export function doorOpen(s: PlaybackSessionState, now: number): boolean {
+  const door = s.handoffDoor;
+  return door !== null && door.url === s.source.url && now - door.atMs <= HANDOFF_DOOR_FRESH_MS;
+}
+
+/**
+ * D 표 — 이번 응답 뒤의 문. 지금 url 의 live ∧ ready 가 근거다. x 가 보던 방송이면 받은 시각으로 세우고(D1) · 모르면 그대로(D3) ·
+ * 잠시 불가도 그대로(D5) · 그 밖의 응답(ending · vod · ended · ready:false · 다른 url · 404 · 다른 방송)은 지운다(D4)
+ */
+export function nextDoor(s: PlaybackSessionState, event: StreamPollEvent): HandoffDoor | null {
+  const { result, x, ask } = event;
+  if (result.kind === 'unavailable') return s.handoffDoor;
+  const status = result.kind === 'ok' ? result.status : null;
+  if (status?.mode !== 'live' || !status.ready || status.url !== s.source.url) return null;
+  if (x === undefined || x.kind === 'unknown') return s.handoffDoor;
+  return x.id === s.roundId ? { url: s.source.url, atMs: ask.receivedAtMs } : null;
+}
+
+/** D 표를 상태에 적는다 — 문이 그대로면 같은 객체 */
+export function withNextDoor(
+  s: PlaybackSessionState,
+  event: StreamPollEvent,
+): PlaybackSessionState {
+  const handoffDoor = nextDoor(s, event);
+  return handoffDoor === s.handoffDoor ? s : { ...s, handoffDoor };
+}
+
+/**
+ * R9 · 끝남 대기 이어짐 — 새 url 로 갈아 끼울 때의 문. x 가 보던 방송이면 새 url 의 문을 세우고, 다른 방송이면 비우고, 모르면
+ * s 의 문 그대로다(R9 는 응답 앞의 문을 넘긴다)
+ */
+export function movedDoor(
+  s: PlaybackSessionState,
+  url: string,
+  x: XAnswer | undefined,
+  ask: StreamAsk,
+): HandoffDoor | null {
+  if (x === undefined || x.kind === 'unknown') return s.handoffDoor;
+  return x.id === s.roundId ? { url, atMs: ask.receivedAtMs } : null;
 }
 
 /** 지금 url 의 목록 로드가 고친 list. 같은 url 의 봉인은 내리지 않는다(복구 startLoad 뒤 다시 와도) */
