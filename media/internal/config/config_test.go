@@ -1009,3 +1009,32 @@ func TestLoadGapRunEndSwitchDefaultsOff(t *testing.T) {
 		}
 	}
 }
+
+// L2′(정체 마감 — 봉인 뒤 회차를 ending · 사유 stall_seal)의 스위치는 기본 끔이다(kty K5 · 2026-10-27 결정 (나)). L3 와 같이
+// 명시 true 만 켜고, 읽을 수 없는 값은 기동 거부다.
+func TestLoadStallSealSwitchDefaultsOff(t *testing.T) {
+	tests := []struct {
+		raw     string
+		want    bool
+		wantErr bool
+	}{
+		{"", false, false},
+		{"false", false, false},
+		{"true", true, false},
+		{"켜", false, true},
+	}
+	for _, tt := range tests {
+		env := minimalEnv()
+		if tt.raw != "" {
+			env["REWIND_STALL_SEAL"] = tt.raw
+		}
+		cfg, err := Load(envOf(env))
+		if (err != nil) != tt.wantErr {
+			t.Errorf("REWIND_STALL_SEAL=%q: 오류 %v, want 오류 %v", tt.raw, err, tt.wantErr)
+			continue
+		}
+		if err == nil && cfg.RewindStallSeal != tt.want {
+			t.Errorf("REWIND_STALL_SEAL=%q: RewindStallSeal = %v, want %v", tt.raw, cfg.RewindStallSeal, tt.want)
+		}
+	}
+}

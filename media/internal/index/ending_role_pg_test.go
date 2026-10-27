@@ -1,7 +1,7 @@
 package index
 
 // 종료 문장의 media_indexer 권한 시험(POK-196 M6-3b 커밋 ①) — 정산 스캔 · 빠른 길 · 사슬 닫힘 · phase 4 · 꺼짐 빈 동결 ·
-// VOD 실패 확정 · 회차 스캔 · 회차 닫힘 · L3 종료(커밋 ④)가 사이드카 계정 권한(stream_sessions SELECT · UPDATE · stream_segments SELECT ·
+// VOD 실패 확정 · 회차 스캔 · 회차 닫힘 · L3 종료(커밋 ④) · L2′ 종료(커밋 ④b)가 사이드카 계정 권한(stream_sessions SELECT · UPDATE · stream_segments SELECT ·
 // advisory 잠금)만으로 돌고 search_path 덫을 부르지 않는다. 문장마다 역할 풀로 보냈는지 추적기로 확인한다.
 
 import (
@@ -24,6 +24,7 @@ func TestMediaIndexerRoleRunsEndingStatements(t *testing.T) {
 	putEnd(t, admin, endRow{id: "E2", stream: "role-fail", dvr: "frozen", vod: "freezing", round: "R2", roundClosedAt: old, initUploaded: true, startedAt: old})
 	putEnd(t, admin, endRow{id: "E3", stream: "role-round", state: "ended", dvr: "frozen", vod: "frozen", endReason: "offline", round: "R3", startedAt: old})
 	putEnd(t, admin, endRow{id: "G1", stream: "role-gap", state: "live", round: "RG", startedAt: old})
+	putEnd(t, admin, endRow{id: "Z1", stream: "role-seal", state: "live", round: "RZ", dvr: "frozen", startedAt: old})
 
 	rows, _, err := ListEndingSessions(ctx, role.Pool, ScanCursor{}, 50, testClose)
 	if err != nil || len(rows) != 2 {
@@ -63,6 +64,9 @@ func TestMediaIndexerRoleRunsEndingStatements(t *testing.T) {
 	if ended, err := EndGapRun(ctx, role.Pool, "role-gap", "G1", testClose, rec.fn); err != nil || ended != "G1" {
 		t.Fatalf("EndGapRun(G1) = %q %v", ended, err)
 	}
+	if ended, err := EndStallSeal(ctx, role.Pool, "role-seal", "Z1", testClose, rec.fn); err != nil || ended != "Z1" {
+		t.Fatalf("EndStallSeal(Z1) = %q %v", ended, err)
+	}
 	role.RequireSent(t, map[string]string{
 		"listEndingSessionsSQL": listEndingSessionsSQL, "loadEndingSessionSQL": loadEndingSessionSQL,
 		"freezeEmptyDVRSQL": freezeEmptyDVRSQL, "sessionStreamSQL": sessionStreamSQL, "setTxnLimitsSQL": setTxnLimitsSQL,
@@ -71,7 +75,7 @@ func TestMediaIndexerRoleRunsEndingStatements(t *testing.T) {
 		"freezeEmptyVODSQL": freezeEmptyVODSQL, "membershipSQL": membershipSQL, "chainStatesSQL": chainStatesSQL,
 		"markEndedSQL": markEndedSQL, "roundStreamSQL": roundStreamSQL, "closableRoundsSQL": closableRoundsSQL,
 		"lockRoundRowsSQL": lockRoundRowsSQL, "closeRoundSQL": closeRoundSQL, "failChainVODSQL": failChainVODSQL,
-		"endGapRunSQL": endGapRunSQL,
+		"endGapRunSQL": endGapRunSQL, "endStallSealSQL": endStallSealSQL,
 	})
 	traps.RequireNotCalled(t)
 }

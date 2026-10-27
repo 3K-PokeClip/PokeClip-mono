@@ -53,6 +53,9 @@ func newGapRunLoop(t *testing.T) (*finalLoop, *gapRunCalls) {
 func TestGapRunEndsSessionAfterThreeConsecutiveGapsL3(t *testing.T) {
 	f, g := newGapRunLoop(t)
 	f.work.rows["S1"] = endingRow("S1", nil)
+	f.view("demo", "S1", "live")
+	var forgot []string
+	f.rewind.forgetSession = func(id string) { forgot = append(forgot, id) }
 	stoodGap(f.rewind, "demo", "S1", 10)
 	stoodGap(f.rewind, "demo", "S1", 11)
 	f.hold(loopBase)
@@ -73,6 +76,13 @@ func TestGapRunEndsSessionAfterThreeConsecutiveGapsL3(t *testing.T) {
 	}
 	if rec := f.logs.last("session_gap_run_end"); rec == nil || rec.level != slog.LevelInfo || rec.attrs["session_id"] != "S1" {
 		t.Fatalf("session_gap_run_end = %+v, want INFO session_id=S1", rec)
+	}
+	// 끝낸 뒤처리(liveEnded — 오프라인 전이 · L2′ 와 같은 함수 · cc M1): 캐시 ending · 업로더 회차 메모리 치움.
+	if got := f.sessionState("demo", "S1"); got != "ending" {
+		t.Errorf("캐시 S1 = %q, want ending", got)
+	}
+	if !slices.Equal(forgot, []string{"S1"}) {
+		t.Errorf("업로더 회차 메모리 치움 = %v, want [S1]", forgot)
 	}
 }
 
@@ -111,7 +121,8 @@ func TestGapRunCountsOnlyContiguousGapsOfOneSessionL3(t *testing.T) {
 }
 
 // 종료 문장이 실패하면(결과 모름 — 커밋했을 수 있다) ERROR 한 줄 뒤 30초 동안 다시 부르지 않는다 — 문장은 회차 술어라
-// 다시 불러도 안전하지만, 한 번에 루프를 최대 약 20초 세우므로 매 틱 되풀이하지 않는다. 변이 = 재시도 간격 제거 → FAIL.
+// 다시 불러도 안전하지만, 한 번에 루프를 최대 약 20초 세우므로 매 틱 되풀이하지 않는다. 쉼은 루프 하나에 하나다(스트림 ·
+// 회차를 가리지 않는다 — live_end_test.go). 변이 = 재시도 간격 제거 → FAIL.
 func TestGapRunEndFailureRetriesAfterBackoffL3(t *testing.T) {
 	f, g := newGapRunLoop(t)
 	g.errs = []error{errors.New("lock_timeout")}
