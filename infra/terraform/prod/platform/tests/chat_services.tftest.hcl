@@ -680,10 +680,11 @@ run "password_db_auth_drops_chat_rds_db_connect" {
 run "chat_security_group_pairs" {
   command = apply
 
-  # 이그레스: 공통(AWS API · S3) + RDS + 부르는 상대만.
+  # 이그레스: 공통(AWS API · S3) + RDS + 부르는 상대만(collector 는 SOOP 채팅
+  # 소켓 둘을 더 둔다).
   assert {
     condition = (
-      toset(keys(local.egress_targets["chat-collector"])) == toset(["aws_api", "s3", "rds", "auth", "clip"]) &&
+      toset(keys(local.egress_targets["chat-collector"])) == toset(["aws_api", "s3", "rds", "auth", "clip", "soop_chat_8041", "soop_chat_9001"]) &&
       toset(keys(local.egress_targets["chat-detector"])) == toset(["aws_api", "s3", "rds", "clip", "chat-collector"]) &&
       toset(keys(local.egress_targets.auth)) == toset(["aws_api", "s3", "rds", "clip", "chat-collector"]) &&
       toset(keys(local.egress_targets.clip)) == toset(["aws_api", "s3", "rds", "auth", "chat-collector"]) &&
@@ -693,6 +694,25 @@ run "chat_security_group_pairs" {
       ])
     )
     error_message = "chat · auth · clip 이그레스 키가 공통 + RDS + 부르는 상대가 아니다."
+  }
+
+  # SOOP 채팅 소켓(chat_port + 1 — 표본의 8040 · 9000 에서 8041 · 9001)은
+  # collector 만 연다. 다른 서비스에는 그 포트가 어느 상대로도 없다.
+  assert {
+    condition = (
+      try(
+        local.egress_targets["chat-collector"].soop_chat_8041.port == 8041 &&
+        local.egress_targets["chat-collector"].soop_chat_8041.cidr_ipv4 == "0.0.0.0/0" &&
+        local.egress_targets["chat-collector"].soop_chat_9001.port == 9001 &&
+        local.egress_targets["chat-collector"].soop_chat_9001.cidr_ipv4 == "0.0.0.0/0",
+        false,
+      ) &&
+      alltrue([
+        for service in ["chat-detector", "auth", "clip", "next"] :
+        alltrue([for target in values(local.egress_targets[service]) : !contains([8041, 9001], target.port)])
+      ])
+    )
+    error_message = "SOOP 채팅 소켓 이그레스(tcp 8041 · 9001 → 0.0.0.0/0)가 collector 에 없거나 다른 서비스에 있다."
   }
 
   # 짝 여섯: 이그레스(부르는 쪽) · 인그레스(받는 쪽)가 같은 포트 · 상대 SG.

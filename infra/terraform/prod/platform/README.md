@@ -15,7 +15,9 @@ prod 의 요청 입구와 앱 서비스를 만드는 루트입니다(설계 3-1 
     그룹 없이 Cloud Map 이름으로만 받습니다(아래 「chat 서비스」).
 *   **SG 규칙**: 공개 ALB 인그레스 · 이그레스, 서비스 인그레스(clip ↔ auth
     두 방향 · chat ↔ auth · clip 포함), RDS 인그레스 ← auth · clip ·
-    chat-collector · chat-detector(설계 5-5).
+    chat-collector · chat-detector(설계 5-5). 서비스 이그레스는 공통(443 →
+    NAT · S3)과 부르는 상대뿐이고, chat-collector 만 SOOP 채팅 소켓 TCP
+    8041 · 9001 → 0.0.0.0/0 을 더 둡니다(아래 「chat 서비스」).
 
 두 ALB 리스너(HTTPS 443 · 서울 인증서)의 기본 동작은 고정 404 입니다. 규칙에
 걸린 요청만 대상에 닿습니다 — api 호스트의 규칙 밖 경로와 모르는 Host 는
@@ -132,10 +134,11 @@ auth · clip 처럼 두지 않습니다. 배포 비율은 chat-collector 가 ECS
 | chat-collector → clip | 8081 | 재부착 · 중계 · 방송 정보(`CLIP_BASE_URL`) |
 | chat-detector → clip | 8081 | 하이라이트 카드(`CLIP_BASE_URL`) |
 | chat 둘 → RDS | 5432 | 자기 스키마(IAM DB 인증 · verify-full) |
+| chat-collector → SOOP 채팅 서버(0.0.0.0/0 · NAT) | 8041 · 9001 | SOOP 채팅 소켓(아래 「chat 서비스의 한계」) |
 
 치지직 Open API · 채팅 소켓 · SOOP API · SDK · SQS · 채팅 원본 보관 창고(S3)는
 공통 이그레스(443 → NAT · S3 게이트웨이 엔드포인트)로 나갑니다. SOOP 채팅
-소켓은 443 밖일 수 있습니다(아래 「chat 서비스의 한계」).
+소켓만 443 밖이라 위 표의 두 포트로 나갑니다.
 
 **chat 재배포는 수집 중인 방송을 잠시 끊습니다.** 시작 편지는 일회용이라 새
 태스크는 재부착(`chat_collector_features.reattach` — 기본 켬)으로 진행 중
@@ -175,12 +178,18 @@ auth · clip 처럼 두지 않습니다. 배포 비율은 chat-collector 가 ECS
 
 ### chat 서비스의 한계
 
-*   **SOOP 채팅 소켓은 443 밖일 수 있습니다.** 공식 Chat SDK 를 정적으로
-    읽으면 WebSocket 주소가 `chat-<hex>.sooplive.com:<채팅 포트 + 1>` 꼴입니다.
-    collector 이그레스는 443(과 내부 짝)뿐이라 prod 에서 SOOP 채팅만 붙지
-    못할 수 있습니다. 배포 뒤 VPC 흐름 로그로 목적지 포트를 실측한 뒤
-    이그레스를 더합니다(kty 2026-10-26 · POK-306 Q8). 치지직 · SOOP 지켜보기 ·
-    방송 정보는 443 이라 영향이 없습니다.
+*   **SOOP 채팅 소켓은 표본에서 본 포트 둘만 열었습니다.** 배포된 Chat
+    SDK 는 WebSocket 주소를
+    `wss://chat-<chat_ip 16진>.sooplive.com:<chat_port + 1>/Websocket/<방송인 ID>`
+    로 만듭니다. SOOP 공개 플레이어 API 표본(생방송 130 중 `CHPT` 8040 이
+    117 · 9000 이 7)으로 포트는 8041 · 9001 이고, 채팅 호스트의 443 은 닫혀
+    있습니다. 그래서 collector 이그레스에 TCP 8041 · 9001 → 0.0.0.0/0 을
+    더했습니다(kty 2026-10-27 · POK-306). 포트는 방송마다 SOOP 이 주는
+    값이라 표본 밖 포트를 받은 방송은 `soop.chat.ready` 가 찍히지 않고 다시
+    붙기(`soop.chat.error` 등)만 되풀이됩니다. 그때 VPC 흐름 로그로 목적지
+    포트를 실측해 더합니다. 남은 실측은 첫 실제 SOOP 방송에서 `soop.chat.ready` 가
+    찍히는지 확인하는 것입니다. 치지직 · SOOP 지켜보기 · 방송 정보는 443
+    이라 영향이 없습니다.
 *   판별 서버가 수집 서버의 Flyway(판별 계정에 `chat_messages` 읽기 권한을
     줌)보다 먼저 떠도 되는지는 3번 답(POK-306 Q5) 전까지 모릅니다. 이 루트는
     두 모듈 사이에 순서를 두지 않습니다(`services.tf` 의 `module
