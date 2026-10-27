@@ -127,7 +127,7 @@ export function useHlsPlayback(
   seekToMs: (atMs: number) => void;
   /** 라이브 끝으로 옮긴다(세션의 라이브 국면 LIVE) */
   seekToLiveEdge: () => void;
-  /** 다음에 갈아 끼울 재생기를 스스로 틀지 않게 한다(세션의 멈춘 채 되돌림) */
+  /** 사람이 멈춰 있으면 다음에 갈아 끼울 재생기를 스스로 틀지 않게 한다(세션의 넘김 되돌림) */
   keepPausedOnSwap: () => void;
 } {
   // playing은 video 이벤트로만 바꾼다 — 자동재생이 거부되면 false로 남아 재생 버튼이 노출된다
@@ -168,8 +168,10 @@ export function useHlsPlayback(
   const pausedAtMsRef = useRef<number | null>(null);
   /** 멈춘 자리가 창 하한에 닿아 세션에 넘겼다(멈춤 하나에 한 번) */
   const pausedHandledRef = useRef(false);
-  /** 멈춘 채 갈아 끼운 재생기는 스스로 틀지 않는다 */
-  const keepPausedRef = useRef(false);
+  /** 사람이 멈췄다 — pause · play 사건으로만 바꾼다. 해체의 media.load() 는 pause 사건 없이 video.paused 를 돌린다 */
+  const userPausedRef = useRef(false);
+  /** 멈춘 채 갈아 끼운 재생기는 스스로 틀지 않는다. 값은 건 때의 세대 — 그보다 새 재생기만 먹는다(옛 재생기가 먼저 먹지 않게) */
+  const keepPausedFromRef = useRef<number | null>(null);
   /**
    * 세션 모드인가 — 세션 고리가 있고 hls.js 재생기가 섰다. hls.js 가 없는 브라우저(네이티브 HLS)는 조각 목록 · 시각 축이 없어
    * 세션 고리가 있어도 지금처럼 라이브 창 안에서 시크한다(seekable 축)
@@ -333,7 +335,7 @@ export function useHlsPlayback(
   );
 
   const keepPausedOnSwap = useCallback(() => {
-    keepPausedRef.current = true;
+    if (userPausedRef.current) keepPausedFromRef.current = sourceRef.current.generation;
   }, []);
 
   const seekToLiveEdge = useCallback(() => {
@@ -400,7 +402,7 @@ export function useHlsPlayback(
     const video = videoRef.current;
     if (!video) return;
     // 세대가 오를 때 다시 서는 재생기 하나의 소스(종류 · 시작 시각). 효과는 종류 · 주소 · 세대에만 걸린다(설계 5.4절)
-    const { kind, startAtMs, strictStart } = sourceRef.current;
+    const { kind, startAtMs, strictStart, generation } = sourceRef.current;
 
     // StrictMode 이중 이펙트·동적 import 경합 방어 — 클린업 후 도착한 인스턴스를 버린다
     let disposed = false;
@@ -460,7 +462,8 @@ export function useHlsPlayback(
       const pausedAtMs = pausedAtMsRef.current;
       pausedAtMsRef.current = null;
       // 사용자가 다시 틀었다 — 멈춘 채 넘긴 것이 교체로 이어지지 않았어도 다음 재생기의 자동 재생을 막지 않는다
-      keepPausedRef.current = false;
+      keepPausedFromRef.current = null;
+      userPausedRef.current = false;
       const axis = sessionActive() ? readAxis() : null;
       if (pausedAtMs !== null && axis !== null && pausedAtMs < axis.view.lowerMs) {
         hooksRef.current.onSeekRequest?.(pausedAtMs, axis.view);
@@ -478,6 +481,7 @@ export function useHlsPlayback(
       hooksRef.current.onPlaying?.();
     };
     const onPause = () => {
+      userPausedRef.current = true;
       setPlaying(false);
       if (!sessionActive()) return;
       pausedAtMsRef.current = readAxis()?.atMs ?? null;
@@ -558,7 +562,7 @@ export function useHlsPlayback(
         pausedAtMs < axis.view.lowerMs
       ) {
         pausedHandledRef.current = true;
-        keepPausedRef.current = true;
+        keepPausedFromRef.current = generation;
         hooksRef.current.onSeekRequest?.(pausedAtMs, axis.view);
       }
       if (video.readyState < HAVE_CURRENT_DATA || axis.atMs === null) return;
@@ -736,9 +740,10 @@ export function useHlsPlayback(
         hls.on(HlsCtor.Events.FRAG_BUFFERED, () => dropStartPosition(hls));
         hls.on(HlsCtor.Events.FRAG_LOADED, onHealed);
         hls.on(HlsCtor.Events.MANIFEST_PARSED, () => {
-          // 멈춘 채 갈아 끼운 재생기는 스스로 틀지 않는다(5.3.1절 3번)
-          if (keepPausedRef.current) {
-            keepPausedRef.current = false;
+          // 멈춘 채 갈아 끼운 재생기는 스스로 틀지 않는다(5.3.1절 3번). 표는 건 뒤 세대의 재생기만 지운다
+          const keepFrom = keepPausedFromRef.current;
+          if (keepFrom !== null) {
+            if (generation > keepFrom) keepPausedFromRef.current = null;
             return;
           }
           // 자동재생 거부는 reject로 온다 — playing=false로 남아 재생 버튼이 노출된다

@@ -70,7 +70,7 @@ function details(n: number): Details {
   return { fragments, fragmentStart: 0, targetduration: 4, live: true };
 }
 
-const media = { readyState: 4 };
+const media = { readyState: 4, paused: false };
 
 function lastHls(): FakeHls {
   const h = fake.instances[fake.instances.length - 1];
@@ -115,8 +115,9 @@ beforeEach(() => {
   vi.useFakeTimers({ now: PDT0 + 30_000 });
   fake.instances.length = 0;
   media.readyState = 4;
+  media.paused = false;
   vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
-  vi.spyOn(HTMLMediaElement.prototype, 'paused', 'get').mockReturnValue(false);
+  vi.spyOn(HTMLMediaElement.prototype, 'paused', 'get').mockImplementation(() => media.paused);
   vi.spyOn(HTMLMediaElement.prototype, 'readyState', 'get').mockImplementation(
     () => media.readyState,
   );
@@ -205,25 +206,58 @@ describe.each([
   });
 });
 
-describe('멈춘 채 갈아 끼우기 — 세션이 멈춤 유지를 건 재생기(설계 16절 6 · kty 결정)', () => {
-  async function swapToRewind(holdPaused: boolean) {
+describe('멈춘 채 갈아 끼우기 — 세션이 멈춤 유지를 건 재생기(설계 16절 6 · kty 결정 · c13f cx H1)', () => {
+  interface Swap {
+    /** 멈춤 유지를 걸기 전에 <video> 에 내는 사람의 사건 */
+    events?: ('pause' | 'play')[];
+    hold?: boolean;
+    /** 건 뒤 · 갈아 끼우기 전에 내려갈 옛 재생기가 목록을 늦게 읽는다 */
+    lateOld?: boolean;
+  }
+
+  /** 라이브 재생기를 세워 사건을 내고 되감기로 갈아 끼운다. 옛 · 새 재생기가 목록을 읽은 뒤 스스로 튼 횟수 */
+  async function swapToRewind({ events = [], hold = false, lateOld = false }: Swap) {
     const view = await mount(source({}));
-    if (holdPaused) act(() => view.result.current.keepPausedOnSwap());
+    const old = lastHls();
+    for (const type of events) act(() => view.el.dispatchEvent(new Event(type)));
+    if (hold) act(() => view.result.current.keepPausedOnSwap());
+    const play = vi.mocked(HTMLMediaElement.prototype.play);
+    play.mockClear();
+    if (lateOld) old.trigger(FakeHls.Events.MANIFEST_PARSED, {});
+    const oldPlays = play.mock.calls.length;
     view.rerender(source({ kind: 'rewind', url: 'https://m/dvr/k/a1/index.m3u8', generation: 1 }));
     await act(async () => {
       await vi.dynamicImportSettled();
     });
-    const play = vi.mocked(HTMLMediaElement.prototype.play);
     play.mockClear();
     lastHls().trigger(FakeHls.Events.MANIFEST_PARSED, {});
-    return play;
+    return { oldPlays, newPlays: play.mock.calls.length };
   }
 
-  it('멈춤 유지를 건 뒤 갈아 끼운 되감기 재생기는 스스로 틀지 않는다', async () => {
-    expect(await swapToRewind(true)).not.toHaveBeenCalled();
+  it('영상이 붙기 전에 사람이 멈췄으면 멈춤 유지를 건 뒤 갈아 끼운 재생기는 스스로 틀지 않는다', async () => {
+    media.readyState = 1;
+    expect(await swapToRewind({ events: ['pause'], hold: true })).toMatchObject({ newPlays: 0 });
+  });
+
+  it('사람이 멈추지 않았으면 걸어도 튼다 — 해체가 video.paused 를 true 로 돌려도 사건이 없으면 재생 중이다', async () => {
+    media.paused = true;
+    expect(await swapToRewind({ hold: true })).toMatchObject({ newPlays: 1 });
+  });
+
+  it('멈췄다 다시 틀었으면 걸어도 튼다', async () => {
+    expect(await swapToRewind({ events: ['pause', 'play'], hold: true })).toMatchObject({
+      newPlays: 1,
+    });
   });
 
   it('걸지 않았으면 현행대로 갈아 끼운 재생기가 스스로 튼다', async () => {
-    expect(await swapToRewind(false)).toHaveBeenCalledTimes(1);
+    expect(await swapToRewind({ events: ['pause'] })).toMatchObject({ newPlays: 1 });
+  });
+
+  it('건 뒤 내려갈 옛 재생기가 목록을 늦게 읽어도 표를 먹지 않고 틀지도 않는다(cc L1)', async () => {
+    expect(await swapToRewind({ events: ['pause'], hold: true, lateOld: true })).toEqual({
+      oldPlays: 0,
+      newPlays: 0,
+    });
   });
 });
