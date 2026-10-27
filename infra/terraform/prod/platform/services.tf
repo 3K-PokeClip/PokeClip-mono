@@ -169,11 +169,19 @@ locals {
       "chat-collector" = { port = local.collector_port, security_group_id = module.chat_collector.sg_id, description = "clip to chat-collector" }
     })
     # collector → auth(열쇠 조회 · 링크) · clip(재부착 · 중계 · 방송 정보).
-    # 치지직 · SOOP API · 채팅 소켓 · SQS 는 aws_api(443 → NAT)로 나간다.
+    # 치지직 API · 채팅 소켓 · SOOP API · SQS 는 aws_api(443 → NAT)로 나간다.
+    # SOOP 채팅 소켓만 443 밖이다 — SDK 가 주소를 wss://chat-<chat_ip 16진>
+    # .sooplive.com:<chat_port + 1> 로 만든다. 공개 플레이어 API 표본(생방송
+    # 130 중 chat_port 8040 이 117 · 9000 이 7)을 따라 8041 · 9001 을 연다.
+    # 포트는 방송마다 SOOP 이 주는 값이라 표본 밖 포트면 soop.chat.ready 없이
+    # 다시 붙기(soop.chat.error 등)만 되풀이된다 — 그때 VPC 흐름 로그로 목적지
+    # 포트를 실측해 더한다.
     "chat-collector" = merge(local.common_egress, {
-      rds  = { port = 5432, security_group_id = local.runtime.rds_sg_id, description = "RDS" }
-      auth = { port = var.services.auth.port, security_group_id = module.auth.sg_id, description = "chat-collector to auth" }
-      clip = { port = var.services.clip.port, security_group_id = module.clip.sg_id, description = "chat-collector to clip" }
+      rds            = { port = 5432, security_group_id = local.runtime.rds_sg_id, description = "RDS" }
+      auth           = { port = var.services.auth.port, security_group_id = module.auth.sg_id, description = "chat-collector to auth" }
+      clip           = { port = var.services.clip.port, security_group_id = module.clip.sg_id, description = "chat-collector to clip" }
+      soop_chat_8041 = { port = 8041, cidr_ipv4 = "0.0.0.0/0", description = "SOOP chat WebSocket via NAT" }
+      soop_chat_9001 = { port = 9001, cidr_ipv4 = "0.0.0.0/0", description = "SOOP chat WebSocket via NAT" }
     })
     # detector → clip(카드) · collector(채팅 읽기).
     "chat-detector" = merge(local.common_egress, {
