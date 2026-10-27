@@ -184,30 +184,34 @@ func TestUnsettledRetriesNeverReachFailVOD(t *testing.T) {
 	}
 }
 
-// 동시 상한(D25 · cc m62 c5 M1) — 정산 걸음은 전체 4 개까지, 그 가운데 VOD 동결은 1 개까지다. VOD 동결 하나는 연결 둘
-// (꼬리 잠금 트랜잭션 · 재독)을 쥐므로 발행자 풀(pgx 기본 max(4, CPU))에 여유를 남긴다. 장부만 쓰는 걸음은 VOD 칸을 쓰지
-// 않는다.
+// 동시 상한(D25 · cc m62 c5 M1 · kty 2026-10-27 결정 (가)) — 정산 걸음은 전체 2 개 · 같은 스트림 1 개까지, 그 가운데 VOD
+// 동결은 1 개까지다. 걸음은 인덱서 풀(상한 6 · 산식 밖)에서 연결을 쥐고, VOD 동결 하나는 연결 둘(꼬리 잠금 트랜잭션 ·
+// 재독)을 쥔다. 장부만 쓰는 걸음은 VOD 칸을 쓰지 않는다.
 func TestLimitsAdmit(t *testing.T) {
 	l := DefaultLimits
 	tests := []struct {
-		name          string
-		inFlight, vod int
-		step          Step
-		want          bool
+		name                  string
+		inFlight, vod, stream int
+		step                  Step
+		want                  bool
 	}{
-		{"빈 차선", 0, 0, StepFreezeVOD, true},
-		{"VOD 하나 도는 중 VOD", 1, 1, StepFreezeVOD, false},
-		{"VOD 하나 도는 중 사슬 닫힘", 1, 1, StepCloseChain, true},
-		{"전체 4 개 · DVR", 4, 0, StepFreezeDVR, false},
-		{"전체 3 개 · DVR", 3, 1, StepFreezeDVR, true},
-		{"전체 4 개 · phase 4", 4, 1, StepMarkEnded, false},
+		{"빈 차선", 0, 0, 0, StepFreezeVOD, true},
+		{"VOD 하나 도는 중 VOD", 1, 1, 0, StepFreezeVOD, false},
+		{"VOD 하나 도는 중 다른 스트림 사슬 닫힘", 1, 1, 0, StepCloseChain, true},
+		{"같은 스트림 하나 도는 중", 1, 0, 1, StepCloseChain, false},
+		{"전체 2 개 · DVR", 2, 0, 0, StepFreezeDVR, false},
+		{"전체 1 개 · 다른 스트림 DVR", 1, 0, 0, StepFreezeDVR, true},
+		{"전체 2 개 · phase 4", 2, 1, 0, StepMarkEnded, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := l.Admit(tt.inFlight, tt.vod, tt.step); got != tt.want {
-				t.Fatalf("Admit(%d, %d, %v) = %v, want %v", tt.inFlight, tt.vod, tt.step, got, tt.want)
+			if got := l.Admit(tt.inFlight, tt.vod, tt.stream, tt.step); got != tt.want {
+				t.Fatalf("Admit(%d, %d, %d, %v) = %v, want %v", tt.inFlight, tt.vod, tt.stream, tt.step, got, tt.want)
 			}
 		})
+	}
+	if l != (Limits{Total: 2, VOD: 1, PerStream: 1}) {
+		t.Fatalf("DefaultLimits = %+v, want 전체 2 · VOD 1 · 같은 스트림 1(kty 결정 (가))", l)
 	}
 }
 

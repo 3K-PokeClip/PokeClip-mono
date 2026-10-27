@@ -69,6 +69,7 @@ type finalizer struct {
 	running  map[string]finalize.Step // 도는 걸음
 	loading  map[string]bool          // 도는 행 읽기
 	vod      int                      // 도는 VOD 동결
+	streamOf map[string]string        // 도는 걸음 · 행 읽기의 회차 → 스트림(같은 스트림 상한이 센다)
 	held     map[string]string        // 보류 회차 → 사유
 	gauge    map[string]int           // 사유 → 마지막으로 낸 게이지 값
 	reading  map[string]bool          // 도는 상태 읽기(스트림)
@@ -88,7 +89,8 @@ func newFinalizer(o finalizerOptions) *finalizer {
 		opt:    finalize.Options{Mode: o.Mode, CloseAfter: o.CloseAfter, MaxAttempts: 3},
 		limits: finalize.DefaultLimits, every: o.Every, work: o.Work, inbox: o.Inbox, intents: o.Intents, sink: o.Sink,
 		attempts: map[string]finalize.Attempts{}, retryAt: map[string]time.Time{}, fast: map[string]fastEntry{},
-		running: map[string]finalize.Step{}, loading: map[string]bool{}, held: map[string]string{}, gauge: map[string]int{},
+		running: map[string]finalize.Step{}, loading: map[string]bool{}, streamOf: map[string]string{},
+		held: map[string]string{}, gauge: map[string]int{},
 		reading: map[string]bool{}, revokes: map[session.RevokeIntent]bool{}, seen: map[string]bool{},
 	}
 }
@@ -113,6 +115,17 @@ func (f *finalizer) forget(id string) {
 
 // inFlight 는 도는 정산 작업 수다(행 읽기 포함 — 동시 상한이 센다).
 func (f *finalizer) inFlight() int { return len(f.running) + len(f.loading) }
+
+// streamInFlight 는 스트림 stream 에서 도는 정산 작업 수다(행 읽기 포함 — 같은 스트림 상한이 센다).
+func (f *finalizer) streamInFlight(stream string) int {
+	n := 0
+	for _, s := range f.streamOf {
+		if s == stream {
+			n++
+		}
+	}
+	return n
+}
 
 // drainInboxes 는 holdTick 의 받은편지함 비우기 걸음이다(3.2 순서 — endOfflineSessions 다음). 계승 해제 요청은 그 스트림
 // 차선에, 상태 표지는 스트림마다 "playback:" 차선에 낸다.
@@ -146,7 +159,7 @@ func (r *rewindLoop) finalizeTick(ctx context.Context, now time.Time) {
 	}
 }
 
-// dispatchFast 는 빠른 길 대기 가운데 때가 된 회차의 행 읽기를 낸다 — 동시 상한 안에서만.
+// dispatchFast 는 빠른 길 대기 가운데 때가 된 회차의 행 읽기를 낸다 — 동시 상한 안에서만(그 스트림이 차 있으면 다음 회차를 본다).
 func (r *rewindLoop) dispatchFast(ctx context.Context, now time.Time) {
 	f := r.fin
 	for _, id := range slices.Sorted(maps.Keys(f.fast)) {
@@ -160,8 +173,8 @@ func (r *rewindLoop) dispatchFast(ctx context.Context, now time.Time) {
 		if now.Before(e.deadline) && !r.tailSettled(e.stream, id) {
 			continue
 		}
-		if !f.limits.Admit(f.inFlight(), f.vod, finalize.StepWait) {
-			return
+		if !f.limits.Admit(f.inFlight(), f.vod, f.streamInFlight(e.stream), finalize.StepWait) {
+			continue
 		}
 		load := f.work.load
 		if !r.lanes.Start(ctx, finalLanePrefix+id, func(ctx context.Context) publish.Result {
@@ -170,7 +183,7 @@ func (r *rewindLoop) dispatchFast(ctx context.Context, now time.Time) {
 			continue
 		}
 		delete(f.fast, id)
-		f.loading[id] = true
+		f.loading[id], f.streamOf[id] = true, e.stream
 	}
 }
 
@@ -289,7 +302,7 @@ func (r *rewindLoop) dispatchStep(ctx context.Context, row index.EndingSession, 
 		return
 	}
 	delete(f.held, id)
-	if !f.limits.Admit(f.inFlight(), f.vod, d.Step) {
+	if !f.limits.Admit(f.inFlight(), f.vod, f.streamInFlight(row.StreamID), d.Step) {
 		f.queueFast(row.StreamID, id, now)
 		return
 	}
@@ -299,7 +312,7 @@ func (r *rewindLoop) dispatchStep(ctx context.Context, row index.EndingSession, 
 	}) {
 		return
 	}
-	f.running[id] = d.Step
+	f.running[id], f.streamOf[id] = d.Step, row.StreamID
 	if d.Step == finalize.StepFreezeVOD {
 		f.vod++
 	}
@@ -309,6 +322,7 @@ func (r *rewindLoop) dispatchStep(ctx context.Context, row index.EndingSession, 
 func (r *rewindLoop) finalLoadDone(ctx context.Context, res publish.Result, now time.Time) {
 	out, _ := res.Value.(finalLoad)
 	delete(r.fin.loading, out.sessionID)
+	delete(r.fin.streamOf, out.sessionID)
 	switch {
 	case out.err != nil:
 		r.log.Warn("finalize_load_failed", "session_id", out.sessionID, "err", out.err)
@@ -326,6 +340,7 @@ func (r *rewindLoop) finalStepDone(ctx context.Context, res publish.Result, now 
 	out, _ := res.Value.(finalStep)
 	id := out.row.SessionID
 	delete(f.running, id)
+	delete(f.streamOf, id)
 	if out.d.Step == finalize.StepFreezeVOD {
 		f.vod--
 	}

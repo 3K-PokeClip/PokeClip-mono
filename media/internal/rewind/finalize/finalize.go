@@ -131,15 +131,20 @@ func (a Attempts) After(step Step, out Outcome, limit int) Attempts {
 type Limits struct {
 	Total int // 동시에 도는 정산 걸음 전체
 	VOD   int // 그 가운데 VOD 동결 — 하나가 연결 둘(꼬리 잠금 트랜잭션 · 장부 재독)을 쥔다(cc m62 c5 M1)
+	// PerStream 은 한 스트림에서 동시에 도는 정산 걸음이다 — 같은 스트림 회차의 걸음은 같은 행 · 위상 잠금을 다투고, 진
+	// 쪽은 풀 연결을 쥔 채 기다린다(db c3 M3 — 6연결 풀 바닥 · 핫 INSERT 4.71초 대기 실측).
+	PerStream int
 }
 
-// DefaultLimits 는 운영 값이다 — 전체 4 · VOD 1. 발행자 풀(pgx 기본 max(4, CPU))에서 VOD 동결 하나가 연결 둘을 쥐어도
-// 라이브 틱이 쓸 연결이 남는다.
-var DefaultLimits = Limits{Total: 4, VOD: 1}
+// DefaultLimits 는 운영 값이다 — 전체 2 · 같은 스트림 1 · VOD 1(kty 2026-10-27 결정 (가)). 걸음은 인덱서 풀(상한 6)에서
+// 연결을 쥐고 그 풀의 산식(핫 경로 3 · 회차 조회 2 · 4D 1) 밖이다. 전체 2 면 VOD 동결(연결 둘)과 다른 걸음 하나가 겹쳐도
+// 연결 셋이다(cmd/segment-indexer indexerPoolMaxConns 주석).
+var DefaultLimits = Limits{Total: 2, VOD: 1, PerStream: 1}
 
-// Admit 은 지금 도는 걸음 수(inFlight · 그 가운데 VOD vodInFlight)에서 걸음 s 를 하나 더 낼 수 있는가다.
-func (l Limits) Admit(inFlight, vodInFlight int, s Step) bool {
-	if inFlight >= l.Total {
+// Admit 은 지금 도는 걸음 수(inFlight · 그 가운데 VOD vodInFlight · 그 스트림 streamInFlight)에서 걸음 s 를 하나 더 낼 수
+// 있는가다.
+func (l Limits) Admit(inFlight, vodInFlight, streamInFlight int, s Step) bool {
+	if inFlight >= l.Total || streamInFlight >= l.PerStream {
 		return false
 	}
 	return s != StepFreezeVOD || vodInFlight < l.VOD

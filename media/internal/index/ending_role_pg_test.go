@@ -33,14 +33,14 @@ func TestMediaIndexerRoleRunsEndingStatements(t *testing.T) {
 	if _, found, err := LoadEndingSession(ctx, role.Pool, "E1"); err != nil || !found {
 		t.Fatalf("LoadEndingSession(E1) = %v %v", found, err)
 	}
-	if ok, err := FreezeEmptyDVR(ctx, role.Pool, "E1"); err != nil || !ok {
+	if ok, err := FreezeEmptyDVR(ctx, role.Pool, "E1", testClose); err != nil || !ok {
 		t.Fatalf("FreezeEmptyDVR(E1) = %v %v", ok, err)
 	}
 	c, ok, err := CloseChain(ctx, role.Pool, "E1", testClose)
 	if err != nil || !ok {
 		t.Fatalf("CloseChain(E1) = %v %v", ok, err)
 	}
-	if ok, err := FreezeEmptyVOD(ctx, role.Pool, c); err != nil || !ok {
+	if ok, err := FreezeEmptyVOD(ctx, role.Pool, c, testClose); err != nil || !ok {
 		t.Fatalf("FreezeEmptyVOD = %v %v", ok, err)
 	}
 	var rec recordEnqueue
@@ -51,7 +51,7 @@ func TestMediaIndexerRoleRunsEndingStatements(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ok, err := FailChainVOD(ctx, role.Pool, c2); err != nil || !ok {
+	if ok, err := FailChainVOD(ctx, role.Pool, c2, testClose); err != nil || !ok {
 		t.Fatalf("FailChainVOD = %v %v", ok, err)
 	}
 	rounds, err := ListClosableRounds(ctx, role.Pool, 50, testClose)

@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"slices"
 	"sync/atomic"
@@ -84,13 +85,14 @@ func TestFinalizeModeFromConfig(t *testing.T) {
 	}
 }
 
-// D25 — 옛 ending 수백 건이 한꺼번에 와도 정산 걸음은 동시 4 개 · VOD 동결은 1 개까지다. 나머지는 다음 스캔 · 빠른 길이
-// 이어 간다. 변이 = 동시 상한 제거 → 최대 동시 수 단언 FAIL.
+// D25 — 옛 ending 수백 건이 한꺼번에 와도 정산 걸음은 동시 2 개 · VOD 동결은 1 개까지다(스트림이 모두 다른 경우 — 같은 스트림
+// 1 개는 아래 시험). 나머지는 다음 스캔 · 빠른 길이 이어 간다. 변이 = 동시 상한 제거 → 최대 동시 수 단언 FAIL.
 func TestFinalizeStepsRespectConcurrencyLimitsD25(t *testing.T) {
 	f := newFinalLoop(t, finalize.ModePublishing)
 	for i := range 10 {
 		id := string(rune('a' + i))
 		f.work.scanRows = append(f.work.scanRows, endingRow(id, func(s *index.EndingSession) {
+			s.StreamID = "d25-" + id
 			if i%2 == 0 {
 				s.DVRState, s.VODState = "frozen", "freezing"
 			}
@@ -383,5 +385,46 @@ func waitStepInFlight(t *testing.T, w *fakeFinalWork) {
 			t.Fatal("걸음이 5초 안에 시작하지 않았다")
 		}
 		time.Sleep(time.Millisecond)
+	}
+}
+
+// kty 2026-10-27 결정 (가) — 인덱서 풀 상한 6 을 두고 정산 차선의 동시 걸음을 같은 스트림 1 · 전체 2 로 묶는다(db c3 M3 —
+// 잠금 대기자가 풀 연결을 쥔 채 기다려 핫 경로가 굶었다). 같은 스트림 세 회차는 하나씩, 다른 스트림 셋은 둘씩 돈다. 변이 =
+// 같은 스트림 상한 제거 · 전체 상한 4 로 → 각각 FAIL.
+func TestFinalizeStepsOnePerStreamTwoTotal(t *testing.T) {
+	tests := []struct {
+		name    string
+		streams []string
+		want    int
+	}{
+		{"같은_스트림_셋", []string{"one", "one", "one"}, 1},
+		{"다른_스트림_셋", []string{"x", "y", "z"}, 2},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newFinalLoop(t, finalize.ModePublishing)
+			for i, s := range tt.streams {
+				id := fmt.Sprintf("%s-%d", s, i)
+				row := endingRow(id, func(r *index.EndingSession) { r.StreamID = s })
+				f.work.scanRows, f.work.rows[id] = append(f.work.scanRows, row), row
+			}
+			f.work.gate = make(chan struct{})
+			f.hold(loopBase)
+			f.next(loopBase) // 스캔 결과
+			time.Sleep(50 * time.Millisecond)
+			close(f.work.gate)
+			for d := time.Duration(0); d < 5*time.Second; d += time.Second {
+				f.hold(loopBase.Add(d))
+				f.settle(loopBase.Add(d))
+			}
+			f.work.mu.Lock()
+			defer f.work.mu.Unlock()
+			if f.work.maxFly != tt.want {
+				t.Fatalf("동시 걸음 최대 %d, want %d", f.work.maxFly, tt.want)
+			}
+			if len(f.work.steps) < len(tt.streams) {
+				t.Fatalf("걸음 %v, want 세 회차 모두 한 번 이상(밀린 회차는 빠른 길이 이어 간다)", f.work.steps)
+			}
+		})
 	}
 }

@@ -18,15 +18,17 @@ const dbStepTimeout = 20 * time.Second
 
 // indexerPoolMaxConns 는 인덱서 풀의 연결 상한이다(kty 결정 ⑤). 산식 = 핫 경로 3 + 회차 조회 동시 2(제어면) + 4D 1(종료
 // 신호 적용 — 설계 4절). 핫 경로 3 은 연결을 쥐는 고루틴 셋이다 — 메인 루프 1(조각 INSERT · 틱 장부 · 회차 종료 전이
-// endLive · endGapRun 을 차례로), 업로드 워커 1(업로드 확정 — index.NewUploadStore), 스위퍼 1(PendingUploads ·
-// CountBacklog). pgx 기본값은 max(4, CPU 수)라 상자 크기에 따라 달라지므로 못 박는다.
+// endLive · endGapRun · endStallSeal 을 차례로), 업로드 워커 1(업로드 확정 — index.NewUploadStore), 스위퍼 1
+// (PendingUploads · CountBacklog). pgx 기본값은 max(4, CPU 수)라 상자 크기에 따라 달라지므로 못 박는다.
 //
 // 산식은 몫별 예약이 아니라 합의 상한이다. 산식 밖에서도 이 풀을 쓰는 쪽이 있다.
 //
 //   - 60일 만료(M6-4) — 장부 걸음(MarkExpired · ExpiryRows · ExpiryDocuments · ExpiryCutoffValid · DeleteExpired)을 차례로
 //     돌아 동시 1 이다.
-//   - 정산 차선(M6-3b) — 정산 스캔 1, 회차 정산 걸음(finalize.DefaultLimits 전체 4), 상태 전달 읽기(스트림마다 하나)가
-//     차선 고루틴에서 돈다.
+//   - 정산 차선(M6-3b) — 정산 스캔 1, 회차 정산 걸음(finalize.DefaultLimits — 전체 2 · 같은 스트림 1 · VOD 동결 1), 상태
+//     전달 읽기(스트림마다 하나)가 차선 고루틴에서 돈다. 정산 걸음 전체 2 는 kty 2026-10-27 결정 (가)다 — 상한 6 을 두고
+//     걸음 쪽을 줄였다. 같은 스트림 걸음끼리 잠금을 다투면 진 쪽이 연결을 쥔 채 기다려 핫 경로가 굶었다(M6-3b c3 db M3
+//     실측 — 핫 INSERT 4.71초 대기). VOD 동결 하나가 연결 둘을 쥐므로 정산 걸음의 연결은 많아야 셋이다.
 //   - 기동 걸음 — 스키마 보장 · 확인(EnsureSchema · requireLedgerSchema · MissingExpiryPrivileges)과 상태판 적재
 //     (newPlaybackSeed)는 업로더 · 만료 · 제어면이 뜨기 전에 동기로 끝나 수요가 겹치지 않는다.
 //

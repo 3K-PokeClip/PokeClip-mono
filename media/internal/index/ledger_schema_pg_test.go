@@ -33,15 +33,16 @@ SELECT kind || ':' || name || ':' || oid::text FROM (
     SELECT 'table', c.relname::text, c.oid FROM pg_class c
      WHERE c.relname::text = ANY (ARRAY['stream_seq_floors', 'broadcast_lifecycle_outbox', 'stream_sessions_round_open_idx',
                                         'broadcast_lifecycle_outbox_due_idx', 'stream_segments_session_id_idx',
-                                        'stream_published_gaps_session_idx', 'stream_sessions_inherits_idx'])
+                                        'stream_published_gaps_session_idx', 'stream_sessions_inherits_idx',
+                                        'stream_segments_uploaded_session_idx'])
     UNION ALL
     SELECT 'trigger', t.tgname::text, t.oid FROM pg_trigger t
      WHERE t.tgrelid = 'stream_segments'::regclass::oid
        AND t.tgname::text = ANY (ARRAY['stream_segments_seq_floor_raise', 'stream_segments_seq_floor_guard'])
 ) o ORDER BY 1`
 
-// ledgerSchemaObjectCount 는 위 그림의 객체 수다 — 열 넷 · 표 둘 · 인덱스 다섯 · 트리거 둘.
-const ledgerSchemaObjectCount = 13
+// ledgerSchemaObjectCount 는 위 그림의 객체 수다 — 열 넷 · 표 둘 · 인덱스 여섯 · 트리거 둘.
+const ledgerSchemaObjectCount = 14
 
 // dropLedgerSchemaSQL 은 M6-0 앞 판(develop) 스키마로 되돌린다 — 그 판의 DB 에는 이 객체가 하나도 없다.
 const dropLedgerSchemaSQL = `
@@ -51,7 +52,7 @@ DROP FUNCTION IF EXISTS stream_segments_raise_seq_floor();
 DROP FUNCTION IF EXISTS stream_segments_check_seq_floor();
 DROP TABLE IF EXISTS stream_seq_floors, broadcast_lifecycle_outbox;
 DROP INDEX IF EXISTS stream_sessions_round_open_idx, stream_segments_session_id_idx, stream_published_gaps_session_idx,
-    stream_sessions_inherits_idx;
+    stream_sessions_inherits_idx, stream_segments_uploaded_session_idx;
 ALTER TABLE stream_sessions
     DROP COLUMN IF EXISTS round_id, DROP COLUMN IF EXISTS round_closed_at,
     DROP COLUMN IF EXISTS expired_at, DROP COLUMN IF EXISTS stop_marked_at`

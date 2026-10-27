@@ -37,8 +37,9 @@
 --   index:<인덱스>                  stream_sessions_round_open_idx 가 stream_sessions 의 인덱스로 있고, 쓸 수 있으며
 --                                   (indisvalid · indisready) 정의(열 · 정렬 · 부분 인덱스 술어)가 ddl.go 와 같다
 --   index:<FK 인덱스>               M6-4 FK 인덱스 셋(stream_segments_session_id_idx · stream_published_gaps_session_idx ·
---                                   stream_sessions_inherits_idx)은 제 표에 그 이름으로 있는지만 본다 — 정의 문자열
---                                   비교는 PG 판이 바뀌면 깨진다
+--                                   stream_sessions_inherits_idx)과 M6-3b 발행 흔적 인덱스
+--                                   (stream_segments_uploaded_session_idx)는 제 표에 그 이름으로 있는지만 본다 — 정의
+--                                   문자열 비교는 PG 판이 바뀌면 깨진다
 --   trigger:<트리거>                stream_segments 의 seq 하한 트리거 둘이 일반 연결에서 켜진 채('O' · 'A' — 'R' 은
 --                                   replica 에서만 돈다) 제 함수 · 시점(tgtype — 갱신은 AFTER DELETE 문장 단위 ·
 --                                   검사는 BEFORE INSERT 행 단위) · 전이 표 이름(갱신만 deleted_rows)에 묶여 있다 —
@@ -150,11 +151,12 @@ BEGIN
         VALUES ('stream_sessions', 'round_id'), ('stream_sessions', 'round_closed_at'),
                ('stream_sessions', 'expired_at'), ('stream_sessions', 'stop_marked_at')
     ),
-    -- M6-4 FK 인덱스(index:<인덱스> — 이름 존재만).
+    -- M6-4 FK 인덱스 · M6-3b 발행 흔적 인덱스(index:<인덱스> — 이름 존재만).
     fk_indexes(t, i) AS (
         VALUES ('stream_segments', 'stream_segments_session_id_idx'),
                ('stream_published_gaps', 'stream_published_gaps_session_idx'),
-               ('stream_sessions', 'stream_sessions_inherits_idx')
+               ('stream_sessions', 'stream_sessions_inherits_idx'),
+               ('stream_segments', 'stream_segments_uploaded_session_idx')
     ),
     -- seq 하한 트리거와 그 함수 · 정의자 여부 · tgtype · 이전 전이 표(trigger:<트리거> · function:<함수>).
     -- tgtype 비트: 1 = 행 단위 · 2 = BEFORE · 4 = INSERT · 8 = DELETE. 갱신 8 = AFTER DELETE 문장 단위 · 검사 7 =
