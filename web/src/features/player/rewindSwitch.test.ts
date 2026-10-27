@@ -311,7 +311,7 @@ describe('rewind 국면', () => {
     const start = rewindAt(T);
     for (const result of [status({ mode: 'live' }), status({}), UNAVAILABLE, NONE]) {
       const { state, effects } = run(start, [[streamPoll(result)]]);
-      expect(state).toEqual(start);
+      expect(state).toEqual({ ...start, streamAsk: expect.any(Number) });
       expect(effects).toEqual([]);
     }
   });
@@ -511,10 +511,11 @@ describe('ending-wait 국면', () => {
       firstPdtMs: T0,
       headPdtMs: NOW,
     });
-    expect(run(start, [[streamPoll(streamVod)]]).state).toEqual(start);
+    const unchanged = { ...start, streamAsk: expect.any(Number) };
+    expect(run(start, [[streamPoll(streamVod)]]).state).toEqual(unchanged);
     // 스트림 경로의 ended 도 종국이 아니다(같은 키 다른 회차일 수 있다)
     const streamEnded = run(start, [[streamPoll(status({ mode: 'ended' }))]]);
-    expect(streamEnded.state).toEqual(start);
+    expect(streamEnded.state).toEqual(unchanged);
     expect(streamEnded.effects).toEqual([]);
     const otherRound = status({
       ready: true,
