@@ -7,23 +7,52 @@ package publish
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
 
-// blockOnce 는 sql 을 처음 보낼 때 그 자리에서 멈추는 추적기다. reached 가 닫히면 멈췄고, release 를 닫으면 보낸다.
-func blockOnce(sql string) (hook stmtHook, reached, release chan struct{}) {
-	reached, release = make(chan struct{}), make(chan struct{})
+// blockLimit 는 멈춤 자리의 상한이다. 시험 본문이 어디서 서서 release 를 부르지 못해도 멈춘 writer 가 연결을 쥔 채
+// 남지 않게 한다 — 풀 정리는 반환되지 않은 연결을 기다린다(hookedPool). 발행자의 문장 시한(index.TxnDeadline
+// 10초)보다 짧게 둔다 — 멈춤이 그 시한으로 조용히 풀리기 전에 시험이 이 자리를 실패로 적는다.
+const blockLimit = 5 * time.Second
+
+// blockOnce 는 sql 을 처음 보낼 때 그 자리에서 멈추는 추적기다. reached 가 닫히면 멈췄고, release 를 부르면 보낸다
+// (여러 번 불러도 된다). 문장의 ctx 가 끝나거나 blockLimit 이 지나도 멈춤이 풀린다 — 그때 그 문장은 끝난 ctx 로
+// 서버에 닿지 않고, 상한이면 시험이 실패한다.
+func blockOnce(t *testing.T, sql string) (hook stmtHook, reached chan struct{}, release func()) {
+	reached, unblock := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	release = func() { once.Do(func() { close(unblock) }) }
 	first := true
 	hook = stmtHook{sql: sql, before: func(ctx context.Context, _ []any) context.Context {
-		if first {
-			first = false
-			close(reached)
-			<-release
+		if !first {
+			return ctx
+		}
+		first = false
+		close(reached)
+		select {
+		case <-unblock:
+		case <-ctx.Done():
+		case <-time.After(blockLimit):
+			t.Errorf("멈춤 자리가 %v 안에 풀리지 않았다 — 그 문장을 끝난 ctx 로 보낸다", blockLimit)
+			canceled, cancel := context.WithCancel(ctx)
+			cancel()
+			return canceled
 		}
 		return ctx
 	}}
 	return hook, reached, release
+}
+
+// blockedWriter 는 sql 을 처음 보낼 때 멈추는 writer 「w-a」 다(blockOnce). 멈춤 풀기를 추적 풀보다 늦게 등록한다 —
+// 정리는 등록의 역순이라, 본문이 중간 단언으로 끝나도 풀 정리가 멈춘 연결을 기다리기 전에 멈춤이 풀린다.
+func blockedWriter(t *testing.T, p *Publisher, store *fakeStore, sql string) (a *Publisher, reached chan struct{}, release func()) {
+	t.Helper()
+	hook, reached, release := blockOnce(t, sql)
+	a = newPublisher(t, hookedPool(t, p.pool, hook), store, "w-a", &logRecorder{})
+	t.Cleanup(release)
+	return a, reached, release
 }
 
 // waitReached 는 멈춤 자리에 닿기를 5초까지 기다린다.
@@ -60,16 +89,15 @@ func TestFreezeVODRereadsLedgerUnderTailLock(t *testing.T) {
 	rows := chainRows()
 	rows[7].state = "pending"
 	p, store, chain := newVODChain(t, rows)
-	hook, reached, release := blockOnce(vodLockTailSQL)
-	a := newPublisher(t, hookedPool(t, p.pool, hook), store, "w-a", &logRecorder{})
+	a, reached, release := blockedWriter(t, p, store, vodLockTailSQL)
 	done := make(chan FreezeOutcome, 1)
-	go func() { done <- a.FreezeVOD(context.Background(), chain, true) }()
+	go func() { done <- a.FreezeVOD(t.Context(), chain, true) }()
 	waitReached(t, reached, "꼬리 잠금 문장")
 
 	landSeg7(t, p)
 	putThenLose(store)
 	wantOutcome(t, p.FreezeVOD(t.Context(), chain, true), AxisVOD, ResultRetry, true)
-	close(release)
+	release()
 
 	wantOutcome(t, <-done, AxisVOD, ResultFrozen, false)
 	wantGapLedger(t, p, map[int64]string{})
@@ -90,16 +118,15 @@ func TestFreezeVODTailLockOrdersWriters(t *testing.T) {
 	rows := chainRows()
 	rows[7].state = "pending"
 	p, store, chain := newVODChain(t, rows)
-	hook, reached, release := blockOnce(vodMarkGapSQL)
-	a := newPublisher(t, hookedPool(t, p.pool, hook), store, "w-a", &logRecorder{})
+	a, reached, release := blockedWriter(t, p, store, vodMarkGapSQL)
 	aDone, bDone := make(chan FreezeOutcome, 1), make(chan FreezeOutcome, 1)
-	go func() { aDone <- a.FreezeVOD(context.Background(), chain, true) }()
+	go func() { aDone <- a.FreezeVOD(t.Context(), chain, true) }()
 	waitReached(t, reached, "GAP 등재 문장")
 
 	landSeg7(t, p)
-	go func() { bDone <- p.FreezeVOD(context.Background(), chain, true) }()
+	go func() { bDone <- p.FreezeVOD(t.Context(), chain, true) }()
 	waitLockWait(t, p.pool)
-	close(release)
+	release()
 
 	wantOutcome(t, <-aDone, AxisVOD, ResultFrozenWithGaps, false)
 	wantOutcome(t, <-bDone, AxisVOD, ResultFrozenWithGaps, false)
