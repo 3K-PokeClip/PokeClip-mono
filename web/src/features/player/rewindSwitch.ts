@@ -1,5 +1,12 @@
 import type { RewindStatus, RewindStatusResult } from '@/api/rewindStatus';
-import { loadedList, openHandoffFields, withHandoffRules, type HandoffFields } from './liveHandoff';
+import {
+  loadedList,
+  movedDoor,
+  openHandoffFields,
+  withHandoffRules,
+  withNextDoor,
+  type HandoffFields,
+} from './liveHandoff';
 import { EDGE_MARGIN_TD } from './playbackEdge';
 
 // 재생 세션 상태기계(설계 5.3절 종결 판, POK-200 M5) — 라이브 · 되감기 · 끝남 대기 · 다시보기 사이의 전환을 정하는 순수 함수다.
@@ -110,6 +117,8 @@ export interface SeekView {
   lowerMs: number;
   endMs: number;
 }
+
+type StreamPollEvent = Extract<SessionEvent, { type: 'stream-poll' }>;
 
 export type SessionEvent =
   | { type: 'seek'; targetMs: number; view: SeekView }
@@ -422,7 +431,7 @@ function onRewind(
     case 'live-button':
       return liveFromAway(session, event.x, event.attempt);
     case 'stream-poll':
-      return onRewindStreamPoll(session, event.result);
+      return onRewindStreamPoll(session, event);
     case 'endlist':
       return phase.pendingNext !== null
         ? { state: session, effects: [{ kind: 'refresh', retryWhileUrl: session.source.url }] }
@@ -447,8 +456,10 @@ function onRewind(
   }
 }
 
-function onRewindStreamPoll(session: PlaybackSessionState, result: RewindStatusResult): Transition {
-  const live = readyLive(result);
+/** 문은 D 표를 먼저 탄다(R11 · R12 · R13 · R10 은 그 결과) — R9 만 응답 앞의 문을 새 url 로 넘긴다 */
+function onRewindStreamPoll(before: PlaybackSessionState, event: StreamPollEvent): Transition {
+  const session = withNextDoor(before, event);
+  const live = readyLive(event.result);
   if (live === null) return stateOnly(session);
   const range = { url: live.url, firstPdtMs: live.firstPdtMs, headPdtMs: live.headPdtMs };
   if (live.url === session.source.url) {
@@ -467,6 +478,7 @@ function onRewindStreamPoll(session: PlaybackSessionState, result: RewindStatusR
       phase: { kind: 'rewind', pendingNext: null },
       source: replace(session, 'rewind', live.url, session.lastAtMs),
       roundRewindUrls: withUrl(session.roundRewindUrls, live.url),
+      handoffDoor: movedDoor(before, live.url, event.x, event.ask),
     });
   }
   return stateOnly({ ...session, phase: { kind: 'rewind', pendingNext: range } });
@@ -481,10 +493,10 @@ function onEnding(
   now: number,
 ): Transition {
   switch (event.type) {
-    case 'stream-poll':
-      return phase.recordOnEnd
-        ? stateOnly(session)
-        : onEndingStreamPoll(session, phase, event.result, event.x);
+    case 'stream-poll': {
+      const doored = phase.origin === 'rewind' ? withNextDoor(session, event) : session;
+      return phase.recordOnEnd ? stateOnly(doored) : onEndingStreamPoll(doored, phase, event);
+    }
     case 'round-poll':
       return phase.recordOnEnd
         ? stateOnly(session)
@@ -521,10 +533,10 @@ function joinPoint(session: PlaybackSessionState, phase: EndingPhase): number | 
 function onEndingStreamPoll(
   session: PlaybackSessionState,
   phase: EndingPhase,
-  result: RewindStatusResult,
-  currentX: XAnswer | undefined,
+  event: StreamPollEvent,
 ): Transition {
-  const live = readyLive(result);
+  const currentX = event.x;
+  const live = readyLive(event.result);
   if (live === null || session.roundRewindUrls.has(live.url)) return stateOnly(session);
   const join = joinPoint(session, phase);
   if (within(join, live.firstPdtMs, live.headPdtMs)) {
@@ -541,6 +553,7 @@ function onEndingStreamPoll(
         ...resumed,
         phase: { kind: 'rewind', pendingNext: null },
         source: replace(session, 'rewind', live.url, join),
+        handoffDoor: movedDoor(session, live.url, currentX, event.ask),
       });
     }
     return stateOnly({
