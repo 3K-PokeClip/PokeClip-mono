@@ -1291,6 +1291,74 @@ describe('StudioScreen: 영상 만들기 + 유튜브 올리기(POK-291)', () => 
     expect(bodiesOf('POST', `/api/clip/broadcasts/${STREAM_ID}/recipes`)).toHaveLength(1);
   });
 
+  it('「다시 올리기」 전에 떠난 상태 확인의 늦은 답은 새 업로드를 덮지 않는다(PR #454 1차 리뷰)', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    try {
+      // 상태 확인 답을 손으로 준다: 업로드 5번이 status 상태인 영상 #77
+      const answers: ((status: string) => void)[] = [];
+      server.clipPoll = (clipId) =>
+        new Promise((resolve) => {
+          answers.push((status) =>
+            resolve(
+              jsonResponse(200, {
+                id: clipId,
+                streamId: STREAM_ID,
+                recipeId: 31,
+                recipeVersion: 1,
+                requestedBy: '9',
+                status: 'rendered',
+                progress: null,
+                outputs: null,
+                error: null,
+                createdAt: '2026-09-20T11:00:00Z',
+                updatedAt: '2026-09-20T11:00:00Z',
+                upload: {
+                  id: 5,
+                  clipId,
+                  status,
+                  error: status === 'failed' ? { code: 'QUOTA_EXCEEDED', message: null } : null,
+                },
+              }),
+            ),
+          );
+        });
+      server.render = {
+        status: 200,
+        clip: { status: 'rendered', upload: { id: 5, clipId: 77, status: 'uploading' } },
+      };
+      const user = userEvent.setup();
+      await openFrom('recipe=31');
+      await orderVideo(user);
+      await screen.findByRole('button', { name: '영상 상태: 유튜브에 올리는 중. 자세히 보기' });
+
+      // 응답이 느려 상태 확인이 둘 겹쳤다
+      vi.advanceTimersByTime(5_000);
+      vi.advanceTimersByTime(5_000);
+      await waitFor(() => expect(answers).toHaveLength(2));
+
+      // 앞 확인이 실패를 알린다 → 작은 창의 「다시 올리기」 → 새 업로드가 대기열에 선다
+      answers[0]!('failed');
+      await user.click(
+        await screen.findByRole('button', { name: '영상 상태: 업로드 실패. 자세히 보기' }),
+      );
+      await user.click(
+        within(screen.getByRole('dialog', { name: '영상 상태' })).getByRole('button', {
+          name: '다시 올리기',
+        }),
+      );
+      await screen.findByRole('button', { name: '영상 상태: 유튜브에 올리는 중. 자세히 보기' });
+
+      // 다시 올리기 전에 떠난 뒤 확인이 옛 실패로 늦게 도착한다 — 얹히면 알약이 「업로드 실패」로 돌아가고 확인이 멈춘다
+      answers[1]!('failed');
+      await new Promise((r) => setTimeout(r, 50));
+      expect(
+        screen.getByRole('button', { name: '영상 상태: 유튜브에 올리는 중. 자세히 보기' }),
+      ).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('옛 영상을 묻던 늦은 답은 새 주문의 영상을 덮지 않는다', async () => {
     // 5초 묻기만 손으로 돌린다(다른 시계는 그대로)
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });

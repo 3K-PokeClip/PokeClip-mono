@@ -991,14 +991,19 @@ function WiredStudio({
   // clips·업로드 표를 바꾼다.
   const clipId = save.clip?.id ?? null;
   const clipDone = save.clip === null || clipSettled(save.clip);
+  // 「다시 올리기」가 올리는 세대. 그 전에 떠난 상태 확인의 답은 버린다 — 응답이 느려 확인이 겹쳤을 때 늦게 온 옛 답(실패)이 새
+  // 업로드를 덮고, 끝남으로 보여 상태 확인까지 멈췄다(PR #454 1차 리뷰)
+  const pollEra = useRef(0);
   useEffect(() => {
     if (clipId === null || clipDone) return undefined;
     const t = globalThis.setInterval(() => {
+      const era = pollEra.current;
       fetchClip(streamId, clipId)
-        .then((clip) =>
+        .then((clip) => {
+          if (era !== pollEra.current) return;
           // 묻는 사이 새 주문이 다른 영상을 받았으면 이 답은 옛 영상 것이다. 얹으면 새 영상을 옛 것으로 덮는다
-          setSave((s) => (s.clip?.id === clip.id ? { ...s, clip } : s)),
-        )
+          setSave((s) => (s.clip?.id === clip.id ? { ...s, clip } : s));
+        })
         .catch(() => {
           /* 다음 틱에 다시 */
         });
@@ -1013,10 +1018,13 @@ function WiredStudio({
     const clip = saveRef.current.clip;
     if (clip === null) return;
     setRetrying(true);
+    // 보내는 순간과 답을 얹는 순간 둘 다 세대를 넘긴다: 그 사이에 떠난 확인도 서버가 새 업로드를 만들기 전의 답일 수 있다
+    pollEra.current += 1;
     retryUpload(streamId, clip.id)
-      .then(({ upload }) =>
-        setSave((s) => (s.clip?.id === clip.id ? { ...s, clip: { ...s.clip, upload } } : s)),
-      )
+      .then(({ upload }) => {
+        pollEra.current += 1;
+        setSave((s) => (s.clip?.id === clip.id ? { ...s, clip: { ...s.clip, upload } } : s));
+      })
       .catch((e: unknown) => {
         toast({ tone: 'error', title: '다시 올리지 못했어요', description: messageOf(e) });
       })
