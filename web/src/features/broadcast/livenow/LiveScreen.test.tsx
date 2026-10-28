@@ -3218,6 +3218,18 @@ describe('LiveScreen — 방송 채널 연동이 없을 때', () => {
     expect(screen.getByText('제목 연동 필요')).toBeInTheDocument();
   });
 
+  it('하이라이트 카드는 잠그지 않고 자동 감지가 꺼졌다고 말한다: 수동 마킹은 채팅 없이 된다', async () => {
+    server.chzzkLink = { linked: false };
+    server.cards = 'none';
+    await renderLive();
+
+    const panel = screen.getByRole('region', { name: '하이라이트 카드' });
+    expect(within(panel).getByText('자동 감지 꺼짐 · 카드 클릭 = 시점 이동')).toBeInTheDocument();
+    expect(within(panel).getByText('자동 감지가 꺼져 있어요')).toBeInTheDocument();
+    expect(within(panel).queryByText('아직 감지된 하이라이트가 없어요')).toBeNull();
+    expect(screen.getByRole('button', { name: /수동 마킹/ })).toBeEnabled();
+  });
+
   it('SOOP 하나만 연동돼 있어도 잠그지 않는다', async () => {
     server.chzzkLink = { linked: false };
     server.soopNickname = '숲너구리';
