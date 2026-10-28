@@ -425,11 +425,11 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
   const pastRoute = vodRouteId !== null;
   // 방송 채널 연동이 없으면 채팅 · 통계는 올 곳이 없다: 두 패널을 잠그고 채널 연동 화면으로 가는 길을 준다(linkLock). 제목 · 카테고리 ·
   // 태그 · 시청자 수도 수집기가 걷는 값이라 오지 않는다: 그 빈칸은 「수집 전」 대신 「연동 필요」이고, 받아 오는 중 막대도 세우지 않는다.
-  // 자동 하이라이트도 채팅으로 찾으니 「자동 감지 중」이라 하지 않는다
+  // 자동 하이라이트도 채팅으로 찾으니 「자동 감지 중」이라 하지 않는다. 방송 정보 훅보다 먼저 판정한다: 잠긴 동안 그 훅이 차트를 읽지 않는다
   const linkLock = useLinkLock();
   const lockWord = linkLock === null ? null : LINK_LOCK_WORD[linkLock];
   const { stream, highlights, hiddenHighlights, cardsStatus, chatWarning, mergeCard } =
-    useLiveMockState(pastRoute);
+    useLiveMockState(pastRoute, linkLock !== null);
   const { streamMeta, cardVisuals } = useLiveDetailsMockState();
   const liveData = useLiveData();
   const { streamId, info } = liveData;

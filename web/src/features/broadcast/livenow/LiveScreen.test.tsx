@@ -3249,11 +3249,12 @@ describe('LiveScreen — 방송 채널 연동이 없을 때', () => {
     return result;
   }
 
-  it('다른 탭 · 다른 기기에서 연동하고 돌아오면 잠긴 동안 다시 물어 잠금이 풀리고 채팅을 다시 읽는다(PR #453 리뷰)', async () => {
+  it('다른 탭 · 다른 기기에서 연동하고 돌아오면 잠긴 동안 다시 물어 잠금이 풀리고 채팅 · 차트를 다시 읽는다(PR #453 리뷰)', async () => {
     server.chzzkLink = { linked: false };
     await renderLiveProdCache();
     expect(screen.getAllByRole('link', { name: '채널 연동하기' })).toHaveLength(2);
     const chatBefore = liveChatReads();
+    const chartBefore = reads(`/api/clip/broadcasts/${STREAM_ID}/chat-chart`);
 
     // 이 탭의 캐시는 모른 채 다른 곳에서 연동을 마쳤다. 탭에 머물러 있다(포커스 · 화면 이동 없음)
     server.chzzkLink = { linked: true, channelName: '게임하는너구리', status: 'ACTIVE' };
@@ -3266,6 +3267,19 @@ describe('LiveScreen — 방송 채널 연동이 없을 때', () => {
     expect(screen.getByText('도네초코 · 치즈 5,000')).toBeInTheDocument();
     expect(screen.getByText(/^방송 중 채팅 [\d,]+개$/)).toBeInTheDocument();
     expect(liveChatReads()).toBeGreaterThan(chatBefore);
+    expect(reads(`/api/clip/broadcasts/${STREAM_ID}/chat-chart`)).toBeGreaterThan(chartBefore);
+  });
+
+  it('잠긴 동안에는 차트를 읽지 않는다: 그리는 곳도 쓰는 곳도 없다(PR #453 리뷰)', async () => {
+    server.chzzkLink = { linked: false };
+    await renderLive();
+    const before = reads(`/api/clip/broadcasts/${STREAM_ID}/chat-chart`);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    await settle();
+    expect(reads(`/api/clip/broadcasts/${STREAM_ID}/chat-chart`)).toBe(before);
   });
 
   it('연동돼 있으면 연동을 주기로 다시 묻지 않는다: 주기는 잠긴 동안만이다', async () => {

@@ -291,7 +291,7 @@ function parseSseBlock(block: string): { event: string; data: string } | null {
  *   최근 창으로 읽지 않는다(리뷰 3라운드). 방송 정보는 기다리지 않는다: 제목·카테고리는 창과 무관하고, 시청자 기록은 읽은 창을
  *   같이 둬서 끝난 방송이 최근 창의 기록을 믿지 않게 한다(리뷰 4라운드)
  */
-export function useLiveMockState(pastRoute: boolean): LiveMockState {
+export function useLiveMockState(pastRoute: boolean, chartPaused = false): LiveMockState {
   const [cards, setCards] = useState<Record<number, Snapshot>>({});
   const [cardsStatus, setCardsStatus] = useState<CardListStatus>('loading');
   const [now, setNow] = useState(() => Date.now());
@@ -321,6 +321,13 @@ export function useLiveMockState(pastRoute: boolean): LiveMockState {
   useEffect(() => {
     reloadRangeRef.current?.();
   }, [live.status, live.startedAt, live.endedAt]);
+  // 채팅 · 통계를 잠근 동안(방송 채널 연동 없음, linkLock)은 차트를 읽지 않는다: 그리는 곳(통계 패널)도 쓰는 곳(채팅의 보정값)도
+  // 내려가 있어 10초마다 아무도 안 그리는 요청이 나갔다(PR #453 리뷰). 풀리면 다음 주기를 기다리지 않고 바로 읽는다
+  const chartPausedRef = useRef(chartPaused);
+  chartPausedRef.current = chartPaused;
+  useEffect(() => {
+    if (!chartPaused) reloadRangeRef.current?.();
+  }, [chartPaused]);
 
   useEffect(() => {
     if (!streamId) return;
@@ -401,6 +408,7 @@ export function useLiveMockState(pastRoute: boolean): LiveMockState {
       );
     const loadChart = async () => {
       try {
+        if (chartPausedRef.current) return;
         const rg = rangeRef.current;
         if (waitForRange(rg)) return;
         if (endedKey(rg) !== null && endedKey(rg) === chartDoneFor) return;

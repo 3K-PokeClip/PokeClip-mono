@@ -1,5 +1,6 @@
 'use client';
 
+import { memo } from 'react';
 import Link from 'next/link';
 import { Lock, MessageSquare, PanelRightClose } from 'lucide-react';
 import { Badge, IconButton, LinkButton } from '@/ui';
@@ -95,8 +96,11 @@ function LockNotice({ reason, title, text }: { reason: LockReason; title: string
   );
 }
 
-/** 잠근 실시간 채팅. 머리줄(이름 · 배지 · 접기)은 실제 패널과 같다: 접으면 플레이어의 「채팅 열기」로 되살린다 */
-export function LockedChatPanel({
+/**
+ * 잠근 실시간 채팅. 머리줄(이름 · 배지 · 접기)은 실제 패널과 같다: 접으면 플레이어의 「채팅 열기」로 되살린다. memo인 까닭은 실제
+ * 패널과 같다: 화면이 경과 표기 때문에 매초 다시 그려지는데, 받는 값(까닭 · 안정된 접기)은 거의 안 바뀐다
+ */
+export const LockedChatPanel = memo(function LockedChatPanel({
   reason,
   onCollapse,
 }: {
@@ -134,10 +138,10 @@ export function LockedChatPanel({
       </div>
     </aside>
   );
-}
+});
 
-/** 잠근 실시간 통계. 방송 중에만 잠그므로 제목은 늘 「실시간 통계」다 */
-export function LockedStatsPanel({ reason }: { reason: LockReason }) {
+/** 잠근 실시간 통계. 방송 중에만 잠그므로 제목은 늘 「실시간 통계」다. memo인 까닭은 잠근 채팅과 같다 */
+export const LockedStatsPanel = memo(function LockedStatsPanel({ reason }: { reason: LockReason }) {
   return (
     <section className={statsStyles.panel} aria-label="실시간 통계">
       <div className={statsStyles.head}>
@@ -178,4 +182,4 @@ export function LockedStatsPanel({ reason }: { reason: LockReason }) {
       </div>
     </section>
   );
-}
+});
