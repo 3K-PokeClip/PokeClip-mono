@@ -1,5 +1,6 @@
 import type Hls from 'hls.js';
 import type { Events, LevelDetails } from 'hls.js';
+import { startIsTruncated, startLoadPosition } from './playbackEdge';
 
 // 라이브 기동 문지기(POK-200 c13 · 설계 r9 2절 기동 · 6절 다변 목록 표). 다변 목록(index.m3u8)은 매체 목록을 받기 전에는
 // 어느 자리에서 시작할지 정할 수 없다. 그래서 autoStartLoad:false 재생기에 처리기를 달아 MANIFEST_PARSED 에서 목록 받기만
@@ -9,6 +10,23 @@ import type { Events, LevelDetails } from 'hls.js';
 
 /** 첫 목록을 본 결정 — 그 자리(미디어 시각 초)에서 받기를 시작하거나, 못 본 녹화가 잘리니 시작하지 않는다 */
 export type LiveStart = { kind: 'load'; position: number } | { kind: 'truncated' };
+
+/**
+ * 라이브 첫 목록에서 startAtMs 자리를 정한다. strictStart 면 그 자리가 라이브 시작 하한보다 앞일 때(startIsTruncated) 잘림이다.
+ * 아니면 startLoadPosition 이 하한으로 자른 자리이고, 시각 표시가 없어 모르면 -1(hls.js 가 고른다)이다
+ */
+export function decideLiveStart(
+  details: LevelDetails,
+  startAtMs: number,
+  strictStart: boolean,
+): LiveStart {
+  const { fragments, targetduration } = details;
+  if (strictStart && startIsTruncated(fragments, startAtMs, 'live', targetduration)) {
+    return { kind: 'truncated' };
+  }
+  const position = startLoadPosition(fragments, startAtMs, 'live', targetduration);
+  return { kind: 'load', position: position ?? -1 };
+}
 
 /**
  * autoStartLoad:false 인 hls 에 기동 처리기를 단다. 첫 LEVEL_UPDATED 에서 decide(details) 를 한 번 부른다. 잘림이면

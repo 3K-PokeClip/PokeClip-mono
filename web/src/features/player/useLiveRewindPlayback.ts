@@ -29,6 +29,7 @@ export function useLiveRewindPlayback(
     () => ({
       onEndlist: () => dispatch({ type: 'endlist' }),
       onEndReached: () => dispatch({ type: 'end-reached' }),
+      onStartTruncated: () => dispatch({ type: 'live-start-truncated' }),
       onLiveClosed: () => dispatch({ type: 'live-closed' }),
       onLive400: () => dispatch({ type: 'live-400' }),
       onListLoaded: (list) => dispatch({ type: 'list-loaded', ...list }),
@@ -60,6 +61,7 @@ export function useLiveRewindPlayback(
     bindPlayer({
       seekToMs: (atMs) => simRef.current.seekToMs(atMs),
       seekToLiveEdge: () => simRef.current.seekToLiveEdge(),
+      keepPausedOnSwap: () => simRef.current.keepPausedOnSwap(),
     });
     return () => bindPlayer(null);
   }, [bindPlayer]);

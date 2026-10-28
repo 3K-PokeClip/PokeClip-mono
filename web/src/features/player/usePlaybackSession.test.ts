@@ -1,6 +1,7 @@
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
+import { handedOff } from './handoffTestKit';
 import { transition, type SessionEvent, type XAnswer } from './rewindSwitch';
 import { usePlaybackSession, type SessionPlayer, type SessionOptions } from './usePlaybackSession';
 
@@ -69,7 +70,12 @@ function options(patch: Partial<SessionOptions> = {}): SessionOptions {
 
 function fakePlayer(): SessionPlayer & { seeks: number[] } {
   const seeks: number[] = [];
-  return { seeks, seekToMs: (ms) => seeks.push(ms), seekToLiveEdge: () => seeks.push(-1) };
+  return {
+    seeks,
+    seekToMs: (ms) => seeks.push(ms),
+    seekToLiveEdge: () => seeks.push(-1),
+    keepPausedOnSwap: vi.fn(),
+  };
 }
 
 describe('여는 조건 · 폴링', () => {
@@ -422,5 +428,110 @@ describe('물음 순번 — 스트림 폴링 응답마다 순번과 수신 시�
     });
     await flush();
     expect(streamPolls().at(-1)?.ask?.receivedAtMs).toBe(receivedAt);
+  });
+});
+
+describe('넘김 확인 — 시한 tick · 멈춘 채 되돌림(설계 r9 11절 · 16절 6)', () => {
+  const P = NOW - 6_000;
+  const E = NOW - 2_000;
+  /** 꼬리 넘김 직후 — P · E 로 확인을 시작한다. 시한 = 넘긴 때 + (E − P) + 2 × TD = 넘긴 때 + 12초 */
+  const DEADLINE_AFTER_MS = 12_000;
+
+  function ticks(): number {
+    return vi.mocked(transition).mock.calls.filter(([, event]) => event.type === 'tick').length;
+  }
+
+  beforeEach(async () => {
+    const actual = await vi.importActual<typeof import('./rewindSwitch')>('./rewindSwitch');
+    vi.mocked(transition).mockReset().mockImplementation(actual.transition);
+    answer = (url) =>
+      url === STREAM ? jsonResponse(200, readyBody(A1, NOW - 3_600_000, E)) : jsonResponse(404);
+  });
+
+  /** 되감기에서 P 를 보다가 라이브로 넘긴 세션. 넘김 행(c13h)이 들기 전이라 결과 모양만 끼운다 */
+  async function handedOffSession() {
+    const view = renderHook(() => usePlaybackSession(options()));
+    await flush();
+    const player = fakePlayer();
+    act(() => view.result.current?.bindPlayer(player));
+    // 라이브 창 하한(NOW − 5초)보다 앞인 P 로 옮겨 되감기에 든다
+    const seek = { lowerMs: NOW - 5_000, endMs: NOW };
+    act(() => view.result.current?.dispatch({ type: 'seek', targetMs: P, view: seek }));
+    const list = { url: A1, firstMs: NOW - 3_600_000, lastEndMs: E, targetDurationS: 4 };
+    act(() => view.result.current?.dispatch({ type: 'list-loaded', ...list }));
+    act(() =>
+      view.result.current?.dispatch({ type: 'position', atMs: P, playing: true, runMs: 0 }),
+    );
+    vi.mocked(transition).mockImplementationOnce((s, _event, now) => ({
+      state: handedOff(s, now),
+      effects: [],
+    }));
+    act(() => view.result.current?.dispatch({ type: 'playing' }));
+    expect(view.result.current?.state.handoff).not.toBeNull();
+    return { ...view, player };
+  }
+
+  function pause(view: Awaited<ReturnType<typeof handedOffSession>>) {
+    act(() =>
+      view.result.current?.dispatch({ type: 'position', atMs: P, playing: false, runMs: 0 }),
+    );
+  }
+
+  it('확인 중이면 시한에 tick 하나를 쏘고 시한 전에는 쏘지 않는다', async () => {
+    const view = await handedOffSession();
+    await act(async () => vi.advanceTimersByTime(DEADLINE_AFTER_MS - 1));
+    expect(ticks()).toBe(0);
+    await act(async () => vi.advanceTimersByTime(1));
+    expect(ticks()).toBe(1);
+    expect(view.result.current?.state.source.kind).toBe('rewind');
+  });
+
+  it('확인이 끝나면 그 시한의 타이머를 지우고 다음 확인의 시한에만 쏜다', async () => {
+    const view = await handedOffSession();
+    // H6 — 창 안의 시크가 확인을 끝낸다
+    const seek = { lowerMs: NOW - 16_000, endMs: NOW };
+    act(() => view.result.current?.dispatch({ type: 'seek', targetMs: NOW - 4_000, view: seek }));
+    expect(view.result.current?.state.handoff).toBeNull();
+    await act(async () => vi.advanceTimersByTime(6_000));
+    vi.mocked(transition).mockImplementationOnce((s, _event, now) => ({
+      state: handedOff({ ...s, lastAtMs: P, list: { endMs: E, tdMs: 4_000, sealed: false } }, now),
+      effects: [],
+    }));
+    act(() => view.result.current?.dispatch({ type: 'playing' }));
+    await act(async () => vi.advanceTimersByTime(DEADLINE_AFTER_MS - 1));
+    expect(ticks()).toBe(0);
+    await act(async () => vi.advanceTimersByTime(1));
+    expect(ticks()).toBe(1);
+  });
+
+  it('멈춘 채 확인 시한(H0)이 되감기로 되돌리면 재생기에 멈춤 유지를 건다', async () => {
+    const view = await handedOffSession();
+    pause(view);
+    await act(async () => vi.advanceTimersByTime(DEADLINE_AFTER_MS));
+    expect(view.result.current?.state.source.kind).toBe('rewind');
+    expect(view.player.keepPausedOnSwap).toHaveBeenCalledTimes(1);
+  });
+
+  it('멈춘 채 라이브가 닫혀(H2 · 라이브 404) 되감기로 되돌리면 재생기에 멈춤 유지를 건다', async () => {
+    const view = await handedOffSession();
+    pause(view);
+    act(() => view.result.current?.dispatch({ type: 'live-closed' }));
+    expect(view.result.current?.state.source.kind).toBe('rewind');
+    expect(view.player.keepPausedOnSwap).toHaveBeenCalledTimes(1);
+  });
+
+  it('재생 중 되돌림과 멈춘 채 사람이 창 밖으로 옮긴 시크(H6)는 멈춤 유지를 걸지 않는다(현행)', async () => {
+    const playing = await handedOffSession();
+    act(() => playing.result.current?.dispatch({ type: 'live-closed' }));
+    expect(playing.result.current?.state.source.kind).toBe('rewind');
+    const seeking = await handedOffSession();
+    pause(seeking);
+    const seek = { lowerMs: NOW - 16_000, endMs: NOW };
+    act(() =>
+      seeking.result.current?.dispatch({ type: 'seek', targetMs: NOW - 600_000, view: seek }),
+    );
+    expect(seeking.result.current?.state.source.kind).toBe('rewind');
+    expect(playing.player.keepPausedOnSwap).not.toHaveBeenCalled();
+    expect(seeking.player.keepPausedOnSwap).not.toHaveBeenCalled();
   });
 });

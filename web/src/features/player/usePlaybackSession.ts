@@ -28,6 +28,8 @@ const X_RECHECK_MS = 2_000;
 export interface SessionPlayer {
   seekToMs: (atMs: number) => void;
   seekToLiveEdge: () => void;
+  /** 다음에 갈아 끼울 재생기를 스스로 틀지 않게 한다 */
+  keepPausedOnSwap: () => void;
 }
 
 export interface SessionClosed {
@@ -73,6 +75,25 @@ export interface PlaybackSession {
 function needsX(s: PlaybackSessionState): boolean {
   const { kind } = s.phase;
   return (kind === 'live' && s.boundLive) || kind === 'ending-wait' || kind === 'rewind';
+}
+
+/**
+ * 시청자가 멈춘 채 넘김 확인이 깨져 rewind 로 되돌렸나(H0 · H1a · H2 · H2t). 사람의 시크(H6)는 현행대로 둔다 — 멈춘 채 창
+ * 밖으로 옮겨도 되감기 재생기가 스스로 튼다
+ */
+function revertedWhilePaused(
+  before: PlaybackSessionState,
+  after: PlaybackSessionState,
+  event: SessionEvent,
+): boolean {
+  return (
+    before.phase.kind === 'live' &&
+    before.handoff !== null &&
+    event.type !== 'seek' &&
+    after.source.kind === 'rewind' &&
+    after.source.generation !== before.source.generation &&
+    !after.playing
+  );
 }
 
 function canStart(o: SessionOptions): boolean {
@@ -184,6 +205,7 @@ export function usePlaybackSession(options: SessionOptions): PlaybackSession | n
       const current = stateRef.current;
       if (current === null) return;
       const next = transition(current, event, Date.now());
+      if (revertedWhilePaused(current, next.state, event)) playerRef.current?.keepPausedOnSwap();
       if (next.state !== current) commit(next.state);
       applyEffects(next.effects, next.state);
     },
@@ -281,6 +303,17 @@ export function usePlaybackSession(options: SessionOptions): PlaybackSession | n
     );
     return () => timers.forEach((t) => window.clearTimeout(t));
   }, [endingSince]);
+
+  // 넘김 확인 시한(H0) — 확인 중이면 시한에 깨운다. 확인이 끝나면(handoff 해제) 지운다. H3 · H4 는 시한을 그대로 둔다
+  const confirmDeadlineMs = state?.handoff?.deadlineMs ?? null;
+  useEffect(() => {
+    if (confirmDeadlineMs === null) return undefined;
+    const timer = window.setTimeout(
+      () => dispatchRef.current({ type: 'tick' }),
+      Math.max(0, confirmDeadlineMs - Date.now()),
+    );
+    return () => window.clearTimeout(timer);
+  }, [confirmDeadlineMs]);
 
   // 화면을 떠나면 순번을 올린다 — 늦게 온 답이 떠난 화면에서 닫기(router.push)를 부르지 않게(cx H2)
   useEffect(
