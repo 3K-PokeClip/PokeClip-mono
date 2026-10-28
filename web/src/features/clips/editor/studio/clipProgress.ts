@@ -115,10 +115,10 @@ export function clipStatusView(clip: ClipSnapshot, now: Date = new Date()): Clip
   const progress = clipProgressBar(clip);
   const base = { progress, youtubeUrl: null };
   const waiting = clip.uploadRequest ? '다 만들면 유튜브에 올려요.' : '';
-  // 요청한 때 = 영상 줄이 생긴 때. 완성한 때 = 업로드 줄이 생긴 때(clip은 완성과 업로드 줄을 한 트랜잭션에서 만든다),
-  // 업로드 줄이 없으면 영상 줄의 마지막 변경
+  // 요청한 때 = 영상 줄이 생긴 때. 완성한 때 = 영상 줄의 마지막 변경(clip은 영상 줄을 만드는 중 · 완성 · 실패로 바꿀 때만 고친다).
+  // 업로드 줄이 생긴 때로 잡으면 「다시 올리기」로 새 줄이 생길 때마다 완성 시각이 다시 올린 시각으로 바뀌었다(PR #454 1차 리뷰)
   const requested = stepClock(clip.createdAt, now);
-  const renderedAt = stepClock(clip.upload?.createdAt ?? clip.updatedAt, now);
+  const renderedAt = stepClock(clip.updatedAt, now);
   switch (clip.status) {
     case 'queued':
       return {

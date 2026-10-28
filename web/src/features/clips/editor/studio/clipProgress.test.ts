@@ -155,6 +155,18 @@ describe('clipStatusView: 영상 상태 알약과 작은 창(POK-492)', () => {
     expect(view(clip({ status: 'failed', updatedAt: '' })).steps[1].note).toBe('실패');
   });
 
+  it('「다시 올리기」로 새 업로드 줄이 생겨도 「영상 만들기」 완성 시각은 그대로다(PR #454 1차 리뷰)', () => {
+    // 20:02 완성 → 20:30에 다시 올림: 새 업로드 줄의 생성 시각이 완성 시각을 덮지 않는다
+    const v = view(
+      clip({
+        updatedAt: '2026-09-20T11:02:00Z',
+        upload: { ...upload('uploading'), createdAt: '2026-09-20T11:30:00Z' },
+      }),
+    );
+    expect(v.steps[1].note).toBe('20:02');
+    expect(v.steps[2].note).toBe('20:30부터');
+  });
+
   it('화면 말에 「주문」이 없다(사용자가 못 알아듣는다, 2026-10-28)', () => {
     const all = [
       clip({ status: 'queued', uploadRequest: intent }),
