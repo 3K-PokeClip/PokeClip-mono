@@ -190,8 +190,8 @@ describe('넘김 0 끝단 — 탐침을 청하지 않는 자리(T4 b–e · T6 �
     const negatives = [
       () => doorPoll(X_B),
       laterPoll,
-      () => streamPoll(status({ mode: 'live', url: A1 }), X_A),
-      () => streamPoll(NONE, X_A),
+      () => streamPoll(status({ ready: false }), X_A, R),
+      () => streamPoll(NONE, X_A, R),
     ];
     for (const negative of negatives) {
       const s = rewindNear();
@@ -225,12 +225,12 @@ describe('넘김 0 끝단 — 탐침을 청하지 않는 자리(T4 b–e · T6 �
 
 describe('넘김 0 끝단 — 탐침 사이의 최신 부정 응답(T21 a · b · e · f)', () => {
   const negatives = [
-    () => streamPoll(status({ mode: 'live', url: A1 }), X_A),
-    () => streamPoll(NONE, X_A),
+    () => streamPoll(status({ ready: false }), X_A, R),
+    () => streamPoll(NONE, X_A, R),
     () => doorPoll(X_B),
     laterPoll,
-    () => streamPoll(status({ mode: 'ending' }), X_A),
-    () => streamPoll(status({ mode: 'ending', url: A1 }), X_A),
+    () => streamPoll(status({ mode: 'ending' }), X_A, R),
+    () => streamPoll(status({ mode: 'ending', url: A1 }), X_A, R),
   ];
 
   it('T21a · b · e: 끝남 대기에서 탐침 뒤 문을 지우는 응답이 오면 결과가 무잘림이어도 넘기지 않는다', () => {

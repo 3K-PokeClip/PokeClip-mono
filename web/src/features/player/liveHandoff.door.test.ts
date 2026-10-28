@@ -106,8 +106,12 @@ describe('문 세움과 열림(D1 · D3 · T4 · T14)', () => {
   });
 
   it('T4e: x 를 모르면 문을 세우지 않고, 선 문은 그대로 둔다', () => {
+    // 순번이 세션의 앞 폴링보다 뒤여야 A0 가 버리지 않는다 — 세션을 만든 뒤에 사건을 만든다
+    const doorless = rewindAt();
     const unknown = streamPoll(liveReady(A1, T0, NOW), X_UNKNOWN, R);
-    expect(run(rewindAt(), [unknown]).handoffDoor).toBeNull();
+    const polled = run(doorless, [unknown]);
+    const { streamAsk, handoffDoor } = polled;
+    expect([streamAsk, handoffDoor]).toEqual([unknown.ask.seq, null]);
     const s = doored();
     expect(run(s, [streamPoll(liveReady(A1, T0, NOW), X_UNKNOWN, R + 5_000)]).handoffDoor).toBe(
       s.handoffDoor,

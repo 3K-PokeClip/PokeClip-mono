@@ -200,6 +200,16 @@ describe('끝남 대기의 탐침과 넘김(E1 · T6 · T21 · T27)', () => {
     expect(late.effects).toEqual([]);
   });
 
+  it('A1 음성: 끝남 대기의 위치 사건은 넘김 조건이어도 탐침을 청하지 않는다 — E1 은 폴링만', () => {
+    // 멈춘 채 결과가 와 P4 가 탐침을 비운 끝남 대기 — 문 · 띠 · 끝 도달은 그대로다
+    const paused = pos(E, { playing: false });
+    const asked = feed(endingAt(), [doorPoll(), paused]).state;
+    const cleared = feed(asked, [settleProbe(asked)]).state;
+    expect(cleared.phase.kind).toBe('ending-wait');
+    expect(cleared.handoffProbe).toBeNull();
+    expect(probes(feed(cleared, [pos(E)]).effects)).toBe(0);
+  });
+
   it('T27a 재확인: 봉인된 목록(ENDLIST → 끝 도달)은 문이 서도 탐침을 청하지 않는다', () => {
     const sealed = feed(rewindNear(), [pos(P), ENDLIST, pos(E), END_REACHED]);
     expect(sealed.state.list?.sealed).toBe(true);
@@ -237,7 +247,9 @@ describe('무잘림 게이트(P0–P4 · T18)', () => {
     settleAt(E - 5_000);
     const skipped = info.mock.calls.filter(([tag]) => tag === '[player] handoff_skipped_truncated');
     expect(skipped).toHaveLength(2);
-    expect(JSON.stringify(skipped)).not.toMatch(/https?:/);
+    // 주소 전체만이 아니라 스트림 키 · 세션 값 · 경로 조각 하나도 싣지 않는다
+    const leaks = /https?:|key-1|session=|\/dvr\/|\/live\//;
+    expect(JSON.stringify(skipped)).not.toMatch(leaks);
   });
 
   it('d: 막은 url 은 목록이 자라기 전에는 0, 자란 뒤 다시 잘리면 안내 없이 다시 막는다', () => {

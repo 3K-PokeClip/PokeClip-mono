@@ -311,8 +311,11 @@ describe('rewind 국면', () => {
   it('ready 깜박임(false · null · 503 · 404)은 도는 되감기를 끊지 않는다(W3 · R5)', () => {
     const start = rewindAt(T);
     for (const result of [status({ mode: 'live' }), status({}), UNAVAILABLE, NONE]) {
-      const { state, effects } = run(start, [[streamPoll(result)]]);
-      expect(state).toEqual({ ...start, streamAsk: expect.any(Number) });
+      const poll = streamPoll(result);
+      const { state, effects } = run(start, [[poll]]);
+      // 근거 응답(ok · none)은 물음 순번을 적고, 잠시 불가는 적지 않는다(A0′)
+      const streamAsk = result === UNAVAILABLE ? start.streamAsk : poll.ask.seq;
+      expect(state).toEqual({ ...start, streamAsk });
       expect(effects).toEqual([]);
     }
   });
@@ -512,11 +515,14 @@ describe('ending-wait 국면', () => {
       firstPdtMs: T0,
       headPdtMs: NOW,
     });
-    const unchanged = { ...start, streamAsk: expect.any(Number) };
-    expect(run(start, [[streamPoll(streamVod)]]).state).toEqual(unchanged);
+    const vodPoll = streamPoll(streamVod);
+    const vodState = run(start, [[vodPoll]]).state;
+    expect(vodState).toEqual({ ...start, streamAsk: vodPoll.ask.seq });
     // 스트림 경로의 ended 도 종국이 아니다(같은 키 다른 회차일 수 있다)
-    const streamEnded = run(start, [[streamPoll(status({ mode: 'ended' }))]]);
-    expect(streamEnded.state).toEqual(unchanged);
+    const endedPoll = streamPoll(status({ mode: 'ended' }));
+    const streamEnded = run(start, [[endedPoll]]);
+    const endedAsk = endedPoll.ask.seq;
+    expect(streamEnded.state).toEqual({ ...start, streamAsk: endedAsk });
     expect(streamEnded.effects).toEqual([]);
     const otherRound = status({
       ready: true,
