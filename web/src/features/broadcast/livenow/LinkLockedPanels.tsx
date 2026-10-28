@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { Lock, MessageSquare, PanelRightClose } from 'lucide-react';
 import { Badge, IconButton, LinkButton } from '@/ui';
-import type { LinkLock } from './linkLock';
+import { LINK_LOCK_WORD, type LinkLock } from './linkLock';
 import liveStyles from './LiveScreen.module.css';
 import statsStyles from './LiveStatsPanel.module.css';
 import styles from './LinkLockedPanels.module.css';
@@ -109,7 +109,7 @@ export function LockedChatPanel({
         <MessageSquare size={15} aria-hidden className={liveStyles.chatHeaderIcon} />
         <span className={liveStyles.chatHeading}>실시간 채팅</span>
         <Badge tone={reason === 'broken' ? 'warning' : 'neutral'} variant="soft" size="sm">
-          {reason === 'broken' ? '연동 끊김' : '연동 필요'}
+          {LINK_LOCK_WORD[reason]}
         </Badge>
         <IconButton
           variant="ghost"

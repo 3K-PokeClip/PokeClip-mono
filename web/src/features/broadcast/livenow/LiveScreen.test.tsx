@@ -3175,7 +3175,10 @@ describe('LiveScreen — 방송 채널 연동이 없을 때', () => {
 
   it('연동이 끊겼으면(BROKEN) 다시 연결하라고 말한다', async () => {
     server.chzzkLink = { linked: false, channelName: '게임하는너구리', status: 'BROKEN' };
+    server.infoNoLatest = true;
     await renderLive();
+
+    expect(screen.getByText('제목 연동 끊김')).toBeInTheDocument();
 
     const chat = screen.getByRole('complementary', { name: '실시간 채팅' });
     expect(within(chat).getByText('연동 끊김')).toBeInTheDocument();
@@ -3184,6 +3187,35 @@ describe('LiveScreen — 방송 채널 연동이 없을 때', () => {
     const stats = screen.getByRole('region', { name: '실시간 통계' });
     expect(within(stats).getByText('방송 채널 연동이 끊겼어요')).toBeInTheDocument();
     expect(within(stats).getByRole('link', { name: '다시 연결하기' })).toBeInTheDocument();
+  });
+
+  it('제목 · 카테고리 · 시청자 수 빈칸은 「수집 전」이 아니라 「연동 필요」다: 기다려도 오지 않는다', async () => {
+    // 연동이 없으면 수집기가 방송 정보를 하나도 남기지 않는다
+    server.chzzkLink = { linked: false };
+    server.infoNoLatest = true;
+    server.infoNoViewers = true;
+    await renderLive();
+
+    const bar = screen.getByRole('region', { name: '방송 정보' });
+    expect(within(bar).getByText('제목 연동 필요')).toBeInTheDocument();
+    expect(within(bar).getByText('방송 정보 연동 필요')).toBeInTheDocument();
+    expect(within(bar).getByText('시청자 수 연동 필요')).toBeInTheDocument();
+    // 영상 위 표시도 같은 말이다
+    expect(screen.getAllByText('시청자 수 연동 필요').length).toBeGreaterThan(1);
+    expect(screen.queryByText(/수집 전$/)).toBeNull();
+  });
+
+  it('방금 시작한 방송이어도 받아 오는 중 막대를 세우지 않는다', async () => {
+    server.chzzkLink = { linked: false };
+    server.liveJustStarted = true;
+    server.infoNoLatest = true;
+    server.infoNoViewers = true;
+    await renderLive();
+
+    expect(screen.queryByTestId('info-title-pending')).toBeNull();
+    expect(screen.queryByTestId('info-meta-pending')).toBeNull();
+    expect(screen.queryByTestId('info-viewers-pending')).toBeNull();
+    expect(screen.getByText('제목 연동 필요')).toBeInTheDocument();
   });
 
   it('SOOP 하나만 연동돼 있어도 잠그지 않는다', async () => {

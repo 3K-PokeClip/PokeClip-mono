@@ -14,6 +14,15 @@ import type { BroadcastStatus } from './useBroadcastClock';
 export type LinkLock = 'unlinked' | 'broken' | null;
 
 /**
+ * 잠금이 빈칸에 쓰는 말. 채팅 배지와 정보 바 · 영상 위의 빈칸(「제목 연동 필요」)이 같은 말을 쓴다: 연동이 없으면 제목 · 카테고리 ·
+ * 태그 · 시청자 수도 수집기가 걷는 값이라 오지 않는다. 「수집 전」이라 하면 기다리면 올 것처럼 읽힌다
+ */
+export const LINK_LOCK_WORD: Record<Exclude<LinkLock, null>, string> = {
+  unlinked: '연동 필요',
+  broken: '연동 끊김',
+};
+
+/**
  * 채팅 · 통계를 잠글지 고른다. 모르면 잠그지 않는다: 멀쩡히 걷히는 방송을 가리는 쪽이 빈 패널보다 나쁘다.
  * - 방송 중일 때만이다. 끝난 방송은 그때 걷힌 기록이 남아 있을 수 있다(그 뒤에 해제했어도)
  * - 내 방송일 때만이다. 연동 조회(/api/chzzk-link · /api/soop-link)는 보는 사람 자신의 연동을 답한다. 위임받은 방송의 스트리머
