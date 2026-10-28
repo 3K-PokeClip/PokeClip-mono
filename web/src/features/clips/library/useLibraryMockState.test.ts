@@ -385,7 +385,7 @@ describe('useLibraryMockState — 유튜브 업로드·내려받기 (POK-111)', 
     await vi.waitFor(() => expect(result.current.clips[0]?.entry?.status).toBe('uploaded'));
 
     expect(result.current.clips[0]?.title).toBe('먼저 올린 제목');
-    expect(document.body.textContent).toContain('이미 주문된 업로드가 있어요');
+    expect(document.body.textContent).toContain('이미 올리고 있는 업로드가 있어요');
     expect(document.body.textContent).not.toContain('유튜브 업로드를 시작했어요');
     expect(tracked('video_upload_requested')).toEqual([]); // 먼저 들어온 주문은 새 주문이 아니다
   });
@@ -720,7 +720,7 @@ describe('useLibraryMockState: 렌더 재시도 (POK-443)', () => {
     );
     await vi.waitFor(() => expect(result.current.sendingIds.size).toBe(0));
     expect(result.current.clips[0]?.status).toBe('rendering');
-    expect(result.current.clips[0]?.progressLabel).toBe('영상 주문됨 · 차례 기다리는 중');
+    expect(result.current.clips[0]?.progressLabel).toBe('영상 만들 차례 기다리는 중');
     expect(posts(spy)).toHaveLength(1);
   });
 
@@ -878,7 +878,9 @@ describe('useLibraryMockState: 업로드 다시 시도 (POK-291)', () => {
       const { result } = await mount();
 
       act(() => result.current.retryRender('12'));
-      await vi.waitFor(() => expect(document.body.textContent).toContain('다시 주문됨'));
+      await vi.waitFor(() =>
+        expect(document.body.textContent).toContain('다시 만들기를 시작했어요'),
+      );
 
       expect(tracked('video_render_retried')).toEqual(expected);
     },
