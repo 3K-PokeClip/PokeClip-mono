@@ -7,8 +7,8 @@ import type { PlaybackHooks } from './useHlsPlayback';
 import type { PlaybackSession, SessionPlayer } from './usePlaybackSession';
 import { useLiveRewindPlayback } from './useLiveRewindPlayback';
 
-// 재생 세션 + 실재생 훅의 위치 사건(POK-200 c13 · 설계 r9 2절). 재생기 자리의 재생 여부 · 연속 길이를 position 사건에
-// 싣는다. 재생기(useHlsPlayback)는 자리만 시험이 쥐는 흉내로 바꾼다.
+// 재생 세션 + 실재생 훅의 위치 사건(POK-200 c13 · 설계 r9 2절). 재생기 자리의 재생 여부 · 연속 길이를 position
+// 사건에 싣는다. 재생기(useHlsPlayback)는 자리만 시험이 쥐는 흉내로 바꾼다.
 
 const player = vi.hoisted(() => ({
   livePosition: null as LivePosition | null,

@@ -462,7 +462,7 @@ describe('넘김 확인 — 시한 tick · 멈춘 채 되돌림(설계 r9 11절 
     act(() =>
       view.result.current?.dispatch({ type: 'position', atMs: P, playing: true, runMs: 0 }),
     );
-    vi.mocked(transition).mockImplementationOnce((s, _event, now) => ({
+    vi.mocked(transition).mockImplementationOnce((...[s, , now]) => ({
       state: handedOff(s, now),
       effects: [],
     }));
@@ -508,7 +508,7 @@ describe('넘김 확인 — 시한 tick · 멈춘 채 되돌림(설계 r9 11절 
     act(() => view.result.current?.dispatch({ type: 'seek', targetMs: NOW - 4_000, view: seek }));
     expect(view.result.current?.state.handoff).toBeNull();
     await act(async () => vi.advanceTimersByTime(6_000));
-    vi.mocked(transition).mockImplementationOnce((s, _event, now) => ({
+    vi.mocked(transition).mockImplementationOnce((...[s, , now]) => ({
       state: handedOff({ ...s, lastAtMs: P, list: { endMs: E, tdMs: 4_000, sealed: false } }, now),
       effects: [],
     }));
@@ -562,7 +562,7 @@ describe('라이브 창 탐침 — probe-live 효과(설계 r9 2절 · c13g 휴�
     '#EXTM3U',
     '#EXT-X-TARGETDURATION:4',
     `#EXT-X-PROGRAM-DATE-TIME:${new Date(PDT0).toISOString()}`,
-    ...Array.from({ length: 7 }, (_, i) => `#EXTINF:4.000,\nseg${i}.mp4`),
+    ...[...Array(7).keys()].map((i) => `#EXTINF:4.000,\nseg${i}.mp4`),
   ].join('\n');
   type LiveProbeEvent = Extract<SessionEvent, { type: 'live-probe' }>;
   /** 라이브 목록은 liveMedia 로 · 스트림 경로는 되감기 진입을 연다 */
@@ -591,7 +591,9 @@ describe('라이브 창 탐침 — probe-live 효과(설계 r9 2절 · c13g 휴�
     vi.mocked(transition).mockReset().mockImplementation(actual.transition);
   });
 
-  /** 되감기 중인 세션에 probe-live 효과 하나를 끼운다 — 탐침을 청하는 행(R6 · E1)은 c13h 라 결과 모양만 넣는다 */
+  /**
+   * 되감기 중인 세션에 probe-live 효과 하나를 끼운다 — 탐침을 청하는 행(R6 · E1)은 c13h 라 결과 모양만 넣는다
+   */
   async function probingSession() {
     const view = renderHook((o: SessionOptions) => usePlaybackSession(o), {
       initialProps: options(),

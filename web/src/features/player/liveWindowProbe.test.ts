@@ -11,8 +11,8 @@ import {
 
 const LIVE_URL = 'https://media.example/live/key-1/index.m3u8';
 /**
- * MediaMTX 는 쿠키가 없으면 index.m3u8 을 `?cookieCheck=1` 로 302 한다(2026-10-27 로컬 실측). 여기서는 디렉터리도 바꿔
- * 상대 URI 를 요청 주소가 아니라 따라간 뒤의 주소로 푸는지 가른다
+ * MediaMTX 는 쿠키가 없으면 index.m3u8 을 `?cookieCheck=1` 로 302 한다(2026-10-27 로컬 실측).
+ * 여기서는 디렉터리도 바꿔 상대 URI 를 요청 주소가 아니라 따라간 뒤의 주소로 푸는지 가른다
  */
 const REDIRECTED_URL = 'https://origin.example/hls/key-1/index.m3u8?cookieCheck=1';
 const PDT0 = Date.parse('2026-10-27T02:20:00.000Z');
@@ -247,8 +247,8 @@ describe('probeLiveWindow — 하한 S_live 와 라이브 목록 끝', () => {
     vi.useFakeTimers();
     const signals: AbortSignal[] = [];
     stubFetch(
-      (_url, init) =>
-        new Promise<Response>((_resolve, reject) => {
+      (...[, init]) =>
+        new Promise<Response>((...[, reject]) => {
           const signal = init?.signal as AbortSignal;
           signals.push(signal);
           signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
@@ -266,8 +266,8 @@ describe('probeLiveWindow — 하한 S_live 와 라이브 목록 끝', () => {
 
   it('부르는 쪽이 끊으면 결과 없이 AbortError 를 던진다 — 세션이 바뀐 탐침은 버린다', async () => {
     stubFetch(
-      (_url, init) =>
-        new Promise<Response>((_resolve, reject) => {
+      (...[, init]) =>
+        new Promise<Response>((...[, reject]) => {
           (init?.signal as AbortSignal).addEventListener('abort', () =>
             reject(new DOMException('aborted', 'AbortError')),
           );

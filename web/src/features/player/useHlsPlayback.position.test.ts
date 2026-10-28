@@ -3,12 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PlaybackSource } from './rewindSwitch';
 import { useHlsPlayback, type PlaybackHooks } from './useHlsPlayback';
 
-// 재생기 자리의 재생 여부 · 연속 구간(POK-200 c13 · 설계 r9 2절). 위치를 잴 때 같은 순간의 `!video.paused` 와
-// playedRunMs(video.played, currentTime) 를 싣는다. hls.js 는 이 시험에 드는 만큼만 흉내 낸다(사건 처리기 · 목록 ·
-// 라이브 끝) — 기동 · 오류 · 복구 흉내는 useHlsPlayback.test.ts 몫이다.
+// 재생기 자리의 재생 여부 · 연속 구간(POK-200 c13 · 설계 r9 2절). 위치를 잴 때 같은 순간의 `!video.paused`
+// 와 playedRunMs(video.played, currentTime) 를 싣는다. hls.js 는 이 시험에 드는 만큼만 흉내
+// 낸다(사건 처리기 · 목록 · 라이브 끝) — 기동 · 오류 · 복구 흉내는 useHlsPlayback.test.ts 몫이다.
 
 interface Details {
-  fragments: { start: number; duration: number; programDateTime: number }[];
+  fragments: Array<{ start: number; duration: number; programDateTime: number }>;
   fragmentStart: number;
   targetduration: number;
   live: boolean;
@@ -44,7 +44,7 @@ class FakeHls {
 const PDT0 = Date.parse('2026-10-25T05:00:00.000Z');
 /** 영상 0초부터 4초 조각 n 개(PDT0 부터) */
 function details(n: number): Details {
-  const fragments = Array.from({ length: n }, (_, i) => ({
+  const fragments = [...Array(n).keys()].map((i) => ({
     start: i * 4,
     duration: 4,
     programDateTime: PDT0 + i * 4_000,
@@ -117,7 +117,7 @@ afterEach(() => {
 describe.each([
   ['세션 모드(paintSession)', { onSeekRequest: () => {} }],
   ['세션 밖(라이브 창 축)', {}],
-] as const)('재생기 자리의 재생 여부 · 연속 구간 — %s', (_name, hooks) => {
+] as const)('재생기 자리의 재생 여부 · 연속 구간 — %s', (...[, hooks]) => {
   it('위치를 잴 때 같은 순간의 played 연속 길이와 재생 여부를 싣는다', async () => {
     const view = await mountLive(hooks);
     video.played = [
