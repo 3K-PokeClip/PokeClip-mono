@@ -486,6 +486,21 @@ describe('넘김 확인 — 시한 tick · 멈춘 채 되돌림(설계 r9 11절 
     expect(view.result.current?.state.source.kind).toBe('rewind');
   });
 
+  it('시한 타이머가 시한보다 일찍 깨면 남은 만큼 다시 걸어 시한에 되돌린다', async () => {
+    const view = await handedOffSession();
+    // 브라우저 타이머는 시계 단위만큼 일찍 깰 수 있다 — 깬 순간의 지금을 시한 1ms 앞으로 둔다
+    const fakeNow = Date.now;
+    const early = vi.spyOn(Date, 'now').mockImplementation(() => fakeNow() - 1);
+    await act(async () => vi.advanceTimersByTime(DEADLINE_AFTER_MS));
+    expect(view.result.current?.state.source.kind).toBe('live');
+    early.mockRestore();
+
+    await act(async () => vi.advanceTimersByTime(1));
+
+    expect(view.result.current?.state.source.kind).toBe('rewind');
+    expect(ticks()).toBe(1);
+  });
+
   it('확인이 끝나면 그 시한의 타이머를 지우고 다음 확인의 시한에만 쏜다', async () => {
     const view = await handedOffSession();
     // H6 — 창 안의 시크가 확인을 끝낸다
