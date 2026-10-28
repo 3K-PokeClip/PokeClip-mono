@@ -222,10 +222,39 @@
   color: var(--status-fg);
 }
 
-/* 도는 표시(스피너)는 동그라미보다 커서 줄인다 */
-.statusStepMark > * {
-  max-width: calc(12 * var(--pc-u));
-  max-height: calc(12 * var(--pc-u));
+/* 지금 도는 단계: 동그라미 테두리가 그대로 도는 고리다. 옅은 고리(트랙) 위로 상태색 호 하나가 돌고, 가운데는 상태색 점.
+   DS 스피너를 안에 넣으면 스피너 제 테두리 원과 동그라미 원이 두 겹으로 겹쳐 어긋나 보였다(2026-10-29 사용자 지적) */
+.statusStep[data-state='now'] > .statusStepMark {
+  border-color: var(--status-line);
+}
+
+.statusStep[data-state='now'] > .statusStepMark::before {
+  content: '';
+  position: absolute;
+  inset: -1.5px;
+  border-radius: inherit;
+  border: 1.5px solid transparent;
+  border-top-color: var(--status-fg);
+  animation: status-step-spin 0.9s linear infinite;
+}
+
+.statusStepDot {
+  width: calc(6 * var(--pc-u));
+  height: calc(6 * var(--pc-u));
+  border-radius: var(--pc-radius-circle);
+  background: var(--status-fg);
+}
+
+@keyframes status-step-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .statusStep[data-state='now'] > .statusStepMark::before {
+    animation-duration: 2.4s;
+  }
 }
 
 .statusStepBody {

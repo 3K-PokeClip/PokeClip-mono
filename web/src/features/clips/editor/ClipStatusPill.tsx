@@ -45,7 +45,8 @@ function StepMark({ state }: { state: ClipStepState }) {
     case 'done':
       return <Check size={11} strokeWidth={3} aria-hidden />;
     case 'now':
-      return <Spinner size="sm" aria-hidden />;
+      // 도는 고리는 동그라미 테두리가 맡는다(CSS) — 안에 스피너를 또 넣으면 원이 두 겹으로 겹쳐 보였다
+      return <span className={styles.statusStepDot} aria-hidden />;
     case 'danger':
       return <AlertTriangle size={11} strokeWidth={2.5} aria-hidden />;
     case 'warning':
