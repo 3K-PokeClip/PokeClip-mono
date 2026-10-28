@@ -1,0 +1,158 @@
+/* 잠근 채팅 · 통계(LinkLockedPanels.tsx) — 흐린 미리보기 위 가운데에 안내를 얹는다. 미리보기는 꾸밈이라 글자 없이 막대만 있고
+   색은 토큰(통계는 패널의 --sp-* 그래프 색)만 쓴다: 두 테마에서 같은 무게로 흐려진다.
+   안내 둘레는 패널 바탕색으로 엷게 덮어(가운데가 진하고 가장자리로 빠진다) 흐린 막대 위에서도 글자가 읽힌다. */
+
+.chatBody,
+.statsBody {
+  position: relative;
+  overflow: hidden;
+}
+
+/* 채팅 패널은 화면 높이에 붙는 세로 상자다 — 머리줄 아래 남은 칸을 다 채운다 */
+.chatBody {
+  flex: 1;
+  min-height: 0;
+}
+
+.chatPreview,
+.statsPreview {
+  filter: blur(calc(3 * var(--pc-u)));
+  opacity: 0.55;
+  pointer-events: none;
+  user-select: none;
+}
+
+/* 실제 채팅처럼 바닥부터 쌓는다 — 넘치는 위쪽 줄은 잘린다 */
+.chatPreview {
+  list-style: none;
+  margin: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: calc(13 * var(--pc-u));
+  padding: calc(14 * var(--pc-u));
+  overflow: hidden;
+}
+
+.chatPreview > li {
+  display: flex;
+  align-items: center;
+  gap: calc(8 * var(--pc-u));
+}
+
+.previewName,
+.previewText,
+.previewValue {
+  display: block;
+  flex: none;
+  border-radius: calc(4 * var(--pc-u));
+}
+
+.previewName {
+  height: calc(9 * var(--pc-u));
+  background: var(--pc-color-accent);
+  opacity: 0.6;
+}
+
+.previewText {
+  flex: 0 1 auto;
+  height: calc(9 * var(--pc-u));
+  background: var(--pc-color-border-strong);
+}
+
+.previewValue {
+  width: 56%;
+  height: calc(18 * var(--pc-u));
+  margin-top: calc(7 * var(--pc-u));
+  background: var(--pc-color-bg-inset);
+}
+
+/* 실제 그래프와 같은 자리: 핀 줄(30) 아래 시청자 층(112) · 사이(14) · 채팅 층(78), 오른쪽 눈금 칸(52)은 비운다 */
+.chartPreview {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: calc(14 * var(--pc-u));
+  height: calc(234 * var(--pc-u));
+  padding: calc(30 * var(--pc-u)) calc(52 * var(--pc-u)) 0 0;
+}
+
+.viewerLine {
+  display: block;
+  width: 100%;
+  height: calc(112 * var(--pc-u));
+  overflow: visible;
+}
+
+.viewerLine polyline {
+  fill: none;
+  stroke: var(--sp-viewer);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.chatBars {
+  display: flex;
+  align-items: flex-end;
+  gap: calc(4 * var(--pc-u));
+  height: calc(78 * var(--pc-u));
+}
+
+.chatBars > span {
+  flex: 1;
+  border-radius: 2px 2px 0 0;
+  background: var(--sp-chat);
+}
+
+/* ---------- 안내 ---------- */
+
+.notice {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: calc(8 * var(--pc-u));
+  padding: calc(20 * var(--pc-u));
+  text-align: center;
+  background: radial-gradient(
+    closest-side,
+    color-mix(in srgb, var(--pc-color-bg-surface) 88%, transparent),
+    color-mix(in srgb, var(--pc-color-bg-surface) 30%, transparent)
+  );
+}
+
+.icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: calc(46 * var(--pc-u));
+  height: calc(46 * var(--pc-u));
+  margin-bottom: calc(4 * var(--pc-u));
+  border-radius: 50%;
+  background: var(--pc-color-bg-surface);
+  color: var(--pc-color-text-secondary);
+  box-shadow: var(--pc-shadow-lg);
+}
+
+.icon svg {
+  width: calc(20 * var(--pc-u));
+  height: calc(20 * var(--pc-u));
+}
+
+.title {
+  margin: 0;
+  font-size: calc(14 * var(--pc-u));
+  font-weight: 750;
+  text-wrap: balance;
+}
+
+.text {
+  margin: 0 0 calc(6 * var(--pc-u));
+  font-size: calc(12 * var(--pc-u));
+  color: var(--pc-color-text-secondary);
+  text-wrap: balance;
+}

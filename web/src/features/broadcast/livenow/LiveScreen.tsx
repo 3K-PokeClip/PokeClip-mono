@@ -17,6 +17,7 @@ import { useMediaSource } from '@/features/player/mediaSource';
 import { formatUptime, parseClockLabel } from '@/features/player/playerMath';
 import { ChatPanel } from './ChatPanel';
 import { HighlightCardPanel } from './HighlightCardPanel';
+import { LinkLockAnnouncer, LockedChatPanel, LockedStatsPanel } from './LinkLockedPanels';
 import { LiveOfflineScreen } from './LiveOfflineScreen';
 import { NewBroadcastBand } from './NewBroadcastBand';
 import { LiveScreenSkeleton } from './LiveScreenSkeleton';
@@ -47,6 +48,7 @@ import { useLiveStatsMockState } from './useLiveStatsMockState';
 import { useLiveStatusMockState } from './useLiveStatusMockState';
 import { useLiveStreamSelection, type Reselect } from './useLiveStreamSelection';
 import { useLiveSession } from './useLiveSession';
+import { LINK_LOCK_WORD, useLinkLock } from './linkLock';
 import { useManualMarking } from './useManualMarking';
 import { infoWaitOver } from '../infoWait';
 
@@ -421,8 +423,13 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
   // 주소는 usePathname으로 읽는다: 넘어온 직후 첫 그리기의 window.location은 옛 주소다
   const vodRouteId = vodStreamIdFromPathname(usePathname() ?? '');
   const pastRoute = vodRouteId !== null;
+  // 방송 채널 연동이 없으면 채팅 · 통계는 올 곳이 없다: 두 패널을 잠그고 채널 연동 화면으로 가는 길을 준다(linkLock). 제목 · 카테고리 ·
+  // 태그 · 시청자 수도 수집기가 걷는 값이라 오지 않는다: 그 빈칸은 「수집 전」 대신 「연동 필요」이고, 받아 오는 중 막대도 세우지 않는다.
+  // 자동 하이라이트도 채팅으로 찾으니 「자동 감지 중」이라 하지 않는다. 방송 정보 훅보다 먼저 판정한다: 잠긴 동안 그 훅이 차트를 읽지 않는다
+  const linkLock = useLinkLock();
+  const lockWord = linkLock === null ? null : LINK_LOCK_WORD[linkLock];
   const { stream, highlights, hiddenHighlights, cardsStatus, chatWarning, mergeCard } =
-    useLiveMockState(pastRoute);
+    useLiveMockState(pastRoute, linkLock !== null);
   const { streamMeta, cardVisuals } = useLiveDetailsMockState();
   const liveData = useLiveData();
   const { streamId, info } = liveData;
@@ -504,8 +511,12 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
     publishLiveData({ playheadMs: null });
   }, [recordingLookup]);
   // 수집이 끊겼으면 새 채팅도 멈춘다 — 「수집 끊김」이라면서 메시지가 계속 쌓이면
-  // 화면이 스스로 모순된다(ADR-011: 끊기면 자동 탐지를 정직하게 비활성화한다).
-  const chat = useChatPanelMockState(chatPanelOpen && !chatWarning, ended, awaitPlayhead);
+  // 화면이 스스로 모순된다(ADR-011: 끊기면 자동 탐지를 정직하게 비활성화한다). 잠근 채팅도 묻지 않는다
+  const chat = useChatPanelMockState(
+    chatPanelOpen && !chatWarning && linkLock === null,
+    ended,
+    awaitPlayhead,
+  );
   const stats = useLiveStatsMockState(viewStatus);
 
   // 시청자 수는 broadcast-info의 series에서 마지막으로 잰 값이다(수집기 PR-C 전에는 없다). 수집기는 목록에서 채널을 못 찾은
@@ -523,13 +534,14 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
   const [firstSeen, setFirstSeen] = useState(() => ({ streamId, at: Date.now() }));
   if (firstSeen.streamId !== streamId) setFirstSeen({ streamId, at: Date.now() });
   const infoPending =
+    lockWord === null &&
     (viewStatus === 'live' || viewStatus === 'unknown') &&
     !infoWaitOver(clock.startedAt ?? firstSeen.at, Date.now());
   const viewersLabel =
     v === null
       ? infoPending
         ? ''
-        : `시청자 수 ${stats.noViewers}`
+        : `시청자 수 ${lockWord ?? stats.noViewers}`
       : ended
         ? `끝날 때 ${v.toLocaleString('ko-KR')}명 시청`
         : `${v.toLocaleString('ko-KR')}명 시청 중`;
@@ -708,6 +720,11 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
 
   return (
     <main className={styles.container}>
+      {/* 잠금이 걸리고 풀리는 것을 듣는 사람에게도 알린다 — 패널은 통째로 바뀌어 낭독되지 않는다 */}
+      <LinkLockAnnouncer
+        lock={linkLock}
+        liveOwner={liveData.status === 'live' && liveData.relation === 'OWNER'}
+      />
       <div className={clsx(styles.grid, !chatPanelOpen && styles.gridSolo)}>
         <div className={styles.mainCol}>
           <div className={styles.playerFrame}>
@@ -743,10 +760,10 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
             meta={streamMeta}
             viewersLabel={viewersLabel}
             infoPending={infoPending}
-            titleNote={`제목 ${missingWord(viewStatus, info !== null)}`}
+            titleNote={`제목 ${lockWord ?? missingWord(viewStatus, info !== null)}`}
             uptimeLabel={uptimeLabel}
             uptimeNote={UPTIME_NOTE[viewStatus]}
-            metaNote={`방송 정보 ${missingWord(viewStatus, info !== null)}`}
+            metaNote={`방송 정보 ${lockWord ?? missingWord(viewStatus, info !== null)}`}
             pendingLabel={marking.pendingLabel}
             markMode={ended ? 'past' : 'live'}
             markDisabled={markMode === 'unknown' || (markMode === 'past' && !pastMarkable)}
@@ -759,6 +776,7 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
             visuals={cardVisuals}
             pendingLabel={marking.pendingLabel}
             detectionPaused={chatWarning}
+            detectionLocked={linkLock !== null}
             ended={ended}
             listStatus={cardsStatus}
             onSeek={handleCardSeek}
@@ -769,32 +787,40 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
             접으면 칸째 빠진다(.gridSolo가 트랙도 걷는다). */}
         {chatPanelOpen ? (
           <div className={styles.chatCol}>
-            <ChatPanel
-              surges={chat.surges}
-              messages={chat.messages}
-              ratePerMinute={chat.ratePerMinute}
-              mode={viewStatus}
-              replayClock={chat.replayClock}
-              replayWaiting={chat.replayWaiting}
-              statusNote={chat.statusNote}
-              followJump={chatJump}
-              collectionWarning={chatWarning}
-              onCollapse={toggleChatPanel}
-            />
+            {linkLock !== null ? (
+              <LockedChatPanel reason={linkLock} onCollapse={toggleChatPanel} />
+            ) : (
+              <ChatPanel
+                surges={chat.surges}
+                messages={chat.messages}
+                ratePerMinute={chat.ratePerMinute}
+                mode={viewStatus}
+                replayClock={chat.replayClock}
+                replayWaiting={chat.replayWaiting}
+                statusNote={chat.statusNote}
+                followJump={chatJump}
+                collectionWarning={chatWarning}
+                onCollapse={toggleChatPanel}
+              />
+            )}
           </div>
         ) : null}
       </div>
       {/* 전폭 — 스크롤로 내려와 만나는 자리다 */}
       {/* 방송이 바뀌면 처음부터 다시 그린다 — 스크롤 위치·끝 따라가기를 앞 방송에서 이어받지 않는다 */}
-      <LiveStatsPanel
-        key={streamId}
-        stats={stats}
-        cards={timelineCards}
-        highlightSummary={highlightSummary}
-        live={viewStatus === 'live'}
-        ended={ended}
-        onSeekCard={handlePinSeek}
-      />
+      {linkLock !== null ? (
+        <LockedStatsPanel reason={linkLock} />
+      ) : (
+        <LiveStatsPanel
+          key={streamId}
+          stats={stats}
+          cards={timelineCards}
+          highlightSummary={highlightSummary}
+          live={viewStatus === 'live'}
+          ended={ended}
+          onSeekCard={handlePinSeek}
+        />
+      )}
     </main>
   );
 }

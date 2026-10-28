@@ -39,6 +39,7 @@ export const HighlightCardPanel = memo(function HighlightCardPanel({
   visuals,
   pendingLabel,
   detectionPaused,
+  detectionLocked = false,
   ended = false,
   listStatus,
   onSeek,
@@ -54,6 +55,11 @@ export const HighlightCardPanel = memo(function HighlightCardPanel({
   pendingLabel: string | null;
   /** 수집이 끊겨 자동 탐지가 멈춘 상태 — 감지 중이라고 말하면 거짓이 된다 */
   detectionPaused: boolean;
+  /**
+   * 방송 채널 연동이 없어 채팅이 오지 않는다(linkLock) — 자동 탐지가 처음부터 꺼져 있다. 「수집이 끊겨」는 까닭이 다르고, 사람이 할 일
+   * (채널 연동)도 다르다. 수동 마킹은 채팅 없이 되므로 패널은 잠그지 않는다
+   */
+  detectionLocked?: boolean;
   /** 끝난 방송: 감지는 방송 중에 끝났다. 「자동 감지 중」이라고 하면 지금 감지하는 것처럼 읽힌다(QA 2026-10-11) */
   ended?: boolean;
   onSeek: (timestamp: string) => void;
@@ -81,7 +87,7 @@ export const HighlightCardPanel = memo(function HighlightCardPanel({
           {ended
             ? '카드 클릭 = 시점 이동'
             : // 멈췄을 때 「핫키로 직접 남길 수 있어요」라고 했지만 그 길은 아직 없다(POK-119·257, QA 2026-10-11)
-              `${detectionPaused ? '자동 감지 멈춤' : '자동 감지 중'} · 카드 클릭 = 시점 이동`}
+              `${detectionLocked ? '자동 감지 꺼짐' : detectionPaused ? '자동 감지 멈춤' : '자동 감지 중'} · 카드 클릭 = 시점 이동`}
         </span>
         <div className={styles.filterGroup} role="group" aria-label="하이라이트 필터">
           {FILTERS.map(({ value, label }) => (
@@ -110,6 +116,7 @@ export const HighlightCardPanel = memo(function HighlightCardPanel({
           hiddenCount={hiddenHighlights.length}
           ended={ended}
           detectionPaused={detectionPaused}
+          detectionLocked={detectionLocked}
         />
       ) : (
         /* 가로 스크롤 영역은 키보드로도 훑을 수 있어야 한다 (axe scrollable-region-focusable) */
@@ -150,6 +157,7 @@ function EmptyTrack({
   hiddenCount,
   ended,
   detectionPaused,
+  detectionLocked,
 }: {
   filter: Filter;
   listStatus: CardListStatus;
@@ -157,6 +165,7 @@ function EmptyTrack({
   hiddenCount: number;
   ended: boolean;
   detectionPaused: boolean;
+  detectionLocked: boolean;
 }) {
   const note = (text: string, busy = false) => (
     <p className={styles.cardEmptyNote} role="status">
@@ -175,6 +184,22 @@ function EmptyTrack({
   if (visibleCount > 0) return note('자동 감지한 카드가 없어요.');
   // 다 가렸는데 「감지된 하이라이트가 없어요」라고 하면 거짓이다
   if (hiddenCount > 0) return note('보이는 카드가 없어요. 가린 카드는 「숨김」에서 볼 수 있어요.');
+  // 연동이 없으면 기다려도 자동 카드는 안 생긴다 — 「아직」이라 하지 않는다
+  if (detectionLocked && !ended)
+    return (
+      <EmptyState
+        className={styles.cardEmpty}
+        icon={<Zap size={21} />}
+        title="자동 감지가 꺼져 있어요"
+        description={
+          <>
+            방송 채널을 연동해야 채팅 반응으로 카드를 만들어요.
+            <br />
+            수동 마킹은 그대로 쓸 수 있어요.
+          </>
+        }
+      />
+    );
   return (
     <EmptyState
       className={styles.cardEmpty}

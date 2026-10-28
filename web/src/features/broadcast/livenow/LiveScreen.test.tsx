@@ -8,12 +8,13 @@ import {
 } from 'react';
 import { fireEvent, screen, within } from '@testing-library/react';
 import { axe } from 'jest-axe';
-import { QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { reportPlaybackForbidden, resetPlaybackAccessForTests } from '@/api/playbackAccess';
 import { LiveScreen } from '@/features/broadcast/livenow/LiveScreen';
 import { ChatReplayLoader } from '@/features/broadcast/livenow/chatReplay';
 import { CHAT_PAGE_MAX, LIVE_REREAD_MS } from '@/features/broadcast/livenow/chatCollector';
+import { LINK_RECHECK_MS } from '@/features/broadcast/livenow/linkLock';
 import {
   publishLiveData,
   resetLiveData,
@@ -565,6 +566,8 @@ const server = vi.hoisted(() => ({
   infoSoop: false,
   /** SOOP 연동 닉네임. null이면 미연동 */
   soopNickname: null as string | null,
+  /** 치지직 연동 조회의 답. null이면 기본(연동 ACTIVE · 게임하는너구리)이다 */
+  chzzkLink: null as Record<string, unknown> | null,
   /** 방송 목록 줄의 스트리머 채널 이름(POK-430). undefined면 이 칸을 모르는 옛 서버다 */
   channelNames: undefined as { CHZZK: string | null; SOOP: string | null } | undefined,
   /** 라이브 줄의 시각 기준점(카드 0초). 서버 기준점은 첫 조각의 PDT − pts라 ms 자리가 있다. 없으면 싣지 않는다 */
@@ -977,7 +980,10 @@ function handle(url: string, init?: RequestInit): Response | Promise<Response> {
     return jsonResponse(503, { error: 'playback_signing_unavailable' });
   }
   if (path === '/api/chzzk-link')
-    return jsonResponse(200, { linked: true, channelName: '게임하는너구리', status: 'ACTIVE' });
+    return jsonResponse(
+      200,
+      server.chzzkLink ?? { linked: true, channelName: '게임하는너구리', status: 'ACTIVE' },
+    );
   if (path === '/api/soop-link')
     return jsonResponse(
       200,
@@ -1052,6 +1058,7 @@ beforeEach(() => {
   server.timeline = null;
   server.infoSoop = false;
   server.soopNickname = null;
+  server.chzzkLink = null;
   server.channelNames = undefined;
   server.liveOffsetMs = 0;
   server.liveOriginMs = null;
@@ -3125,6 +3132,291 @@ describe('LiveScreen — 실시간 통계', () => {
 
     expect(sseReads(), '통로에 다시 안 붙었다: 이 갈래는 아무것도 안 잰다').toBeGreaterThan(before);
     expect(screen.getByTitle(/^발로란트 · /)).toBeInTheDocument();
+  });
+});
+
+describe('LiveScreen — 방송 채널 연동이 없을 때', () => {
+  /** 이 방송의 채팅 폴링 요청 수 */
+  const liveChatReads = () =>
+    fetchSpy.mock.calls
+      .map(([url]) => new URL(String(url), 'http://localhost'))
+      .filter((u) => u.pathname === `/api/clip/broadcasts/${STREAM_ID}/chat-messages`).length;
+
+  it('내 방송이 방송 중인데 치지직 · SOOP 둘 다 연동이 없으면 채팅 · 통계를 잠그고 채널 연동 화면으로 가는 길을 준다', async () => {
+    server.chzzkLink = { linked: false };
+    await renderLive();
+
+    const chat = screen.getByRole('complementary', { name: '실시간 채팅' });
+    expect(within(chat).getByText('방송 채널을 연동해야 채팅이 보여요')).toBeInTheDocument();
+    expect(within(chat).getByText('연동 필요')).toBeInTheDocument();
+    expect(within(chat).getByRole('link', { name: '채널 연동하기' })).toHaveAttribute(
+      'href',
+      '/settings/channels',
+    );
+    // 받은 채팅 줄 · 수집 중 배지를 그리지 않는다
+    expect(within(chat).queryByText('도네초코 · 치즈 5,000')).toBeNull();
+    expect(within(chat).queryByText('수집 중')).toBeNull();
+
+    const stats = screen.getByRole('region', { name: '실시간 통계' });
+    expect(within(stats).getByText('방송 채널을 연동해야 통계가 보여요')).toBeInTheDocument();
+    expect(within(stats).getByRole('link', { name: '채널 연동하기' })).toHaveAttribute(
+      'href',
+      '/settings/channels',
+    );
+    expect(within(stats).queryByText(/^방송 중 채팅 [\d,]+개$/)).toBeNull();
+
+    // 잠근 채팅은 묻지 않는다(연동 답 전에 나간 첫 읽기는 어쩔 수 없다)
+    const before = liveChatReads();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    await settle();
+    expect(liveChatReads()).toBe(before);
+  });
+
+  it('연동이 끊겼으면(BROKEN) 다시 연결하라고 말한다', async () => {
+    server.chzzkLink = { linked: false, channelName: '게임하는너구리', status: 'BROKEN' };
+    server.infoNoLatest = true;
+    await renderLive();
+
+    expect(screen.getByText('제목 연동 끊김')).toBeInTheDocument();
+
+    const chat = screen.getByRole('complementary', { name: '실시간 채팅' });
+    expect(within(chat).getByText('연동 끊김')).toBeInTheDocument();
+    expect(within(chat).getByText('방송 채널 연동이 끊겼어요')).toBeInTheDocument();
+    expect(within(chat).getByRole('link', { name: '다시 연결하기' })).toBeInTheDocument();
+    const stats = screen.getByRole('region', { name: '실시간 통계' });
+    expect(within(stats).getByText('방송 채널 연동이 끊겼어요')).toBeInTheDocument();
+    expect(within(stats).getByRole('link', { name: '다시 연결하기' })).toBeInTheDocument();
+  });
+
+  it('제목 · 카테고리 · 시청자 수 빈칸은 「수집 전」이 아니라 「연동 필요」다: 기다려도 오지 않는다', async () => {
+    // 연동이 없으면 수집기가 방송 정보를 하나도 남기지 않는다
+    server.chzzkLink = { linked: false };
+    server.infoNoLatest = true;
+    server.infoNoViewers = true;
+    await renderLive();
+
+    const bar = screen.getByRole('region', { name: '방송 정보' });
+    expect(within(bar).getByText('제목 연동 필요')).toBeInTheDocument();
+    expect(within(bar).getByText('방송 정보 연동 필요')).toBeInTheDocument();
+    expect(within(bar).getByText('시청자 수 연동 필요')).toBeInTheDocument();
+    // 영상 위 표시도 같은 말이다
+    expect(screen.getAllByText('시청자 수 연동 필요').length).toBeGreaterThan(1);
+    expect(screen.queryByText(/수집 전$/)).toBeNull();
+  });
+
+  it('방금 시작한 방송이어도 받아 오는 중 막대를 세우지 않는다', async () => {
+    server.chzzkLink = { linked: false };
+    server.liveJustStarted = true;
+    server.infoNoLatest = true;
+    server.infoNoViewers = true;
+    await renderLive();
+
+    expect(screen.queryByTestId('info-title-pending')).toBeNull();
+    expect(screen.queryByTestId('info-meta-pending')).toBeNull();
+    expect(screen.queryByTestId('info-viewers-pending')).toBeNull();
+    expect(screen.getByText('제목 연동 필요')).toBeInTheDocument();
+  });
+
+  it('하이라이트 카드는 잠그지 않고 자동 감지가 꺼졌다고 말한다: 수동 마킹은 채팅 없이 된다', async () => {
+    server.chzzkLink = { linked: false };
+    server.cards = 'none';
+    await renderLive();
+
+    const panel = screen.getByRole('region', { name: '하이라이트 카드' });
+    expect(within(panel).getByText('자동 감지 꺼짐 · 카드 클릭 = 시점 이동')).toBeInTheDocument();
+    expect(within(panel).getByText('자동 감지가 꺼져 있어요')).toBeInTheDocument();
+    expect(within(panel).queryByText('아직 감지된 하이라이트가 없어요')).toBeNull();
+    expect(screen.getByRole('button', { name: /수동 마킹/ })).toBeEnabled();
+  });
+
+  /** 이 경로에 나간 요청 수 */
+  const reads = (path: string) =>
+    fetchSpy.mock.calls.filter(
+      ([url]) => new URL(String(url), 'http://localhost').pathname === path,
+    ).length;
+  /**
+   * 운영과 같은 staleTime(60초)으로 그린다. 시험 기본 클라이언트는 0이라 「탭에 머무는 동안 다시 묻지 않아 잠긴 채」라는 결함이
+   * 드러나지 않는다(testProviders 주석)
+   */
+  async function renderLiveProdCache() {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: 60_000 } },
+    });
+    const result = renderWithProviders(<LiveScreen />, client);
+    await settle();
+    return result;
+  }
+
+  it('다른 탭 · 다른 기기에서 연동하고 돌아오면 잠긴 동안 다시 물어 잠금이 풀리고 채팅 · 차트를 다시 읽는다(PR #453 리뷰)', async () => {
+    server.chzzkLink = { linked: false };
+    await renderLiveProdCache();
+    expect(screen.getAllByRole('link', { name: '채널 연동하기' })).toHaveLength(2);
+    const chatBefore = liveChatReads();
+    const chartBefore = reads(`/api/clip/broadcasts/${STREAM_ID}/chat-chart`);
+
+    // 이 탭의 캐시는 모른 채 다른 곳에서 연동을 마쳤다. 탭에 머물러 있다(포커스 · 화면 이동 없음)
+    server.chzzkLink = { linked: true, channelName: '게임하는너구리', status: 'ACTIVE' };
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(LINK_RECHECK_MS + 1_000);
+    });
+    await settle();
+
+    expect(screen.queryByRole('link', { name: '채널 연동하기' })).toBeNull();
+    expect(screen.getByText('도네초코 · 치즈 5,000')).toBeInTheDocument();
+    expect(screen.getByText(/^방송 중 채팅 [\d,]+개$/)).toBeInTheDocument();
+    expect(liveChatReads()).toBeGreaterThan(chatBefore);
+    expect(reads(`/api/clip/broadcasts/${STREAM_ID}/chat-chart`)).toBeGreaterThan(chartBefore);
+    // 듣는 사람에게도 풀린 것을 알린다
+    expect(screen.getByText('방송 채널이 연동돼 채팅과 통계를 다시 보여요')).toBeInTheDocument();
+  });
+
+  it('잠긴 동안에는 차트를 읽지 않는다: 그리는 곳도 쓰는 곳도 없다(PR #453 리뷰)', async () => {
+    server.chzzkLink = { linked: false };
+    await renderLive();
+    const before = reads(`/api/clip/broadcasts/${STREAM_ID}/chat-chart`);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    await settle();
+    expect(reads(`/api/clip/broadcasts/${STREAM_ID}/chat-chart`)).toBe(before);
+  });
+
+  it('연동돼 있으면 연동을 주기로 다시 묻지 않는다: 주기는 잠긴 동안만이다', async () => {
+    await renderLiveProdCache();
+    const before = reads('/api/chzzk-link') + reads('/api/soop-link');
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(LINK_RECHECK_MS * 3);
+    });
+    await settle();
+    expect(reads('/api/chzzk-link') + reads('/api/soop-link')).toBe(before);
+  });
+
+  it('방송 중에 연동이 사라진 것을 다시 물어 알면 그때 잠그고 채팅 읽기를 멈춘다', async () => {
+    await renderLiveProdCache();
+    expect(screen.getByText('도네초코 · 치즈 5,000')).toBeInTheDocument();
+
+    // 다른 탭에서 해제했다. 60초가 지나 탭으로 돌아오면(포커스) 다시 묻는다
+    server.chzzkLink = { linked: false };
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(61_000);
+    });
+    await act(async () => {
+      window.dispatchEvent(new Event('visibilitychange'));
+    });
+    await settle();
+
+    const chat = screen.getByRole('complementary', { name: '실시간 채팅' });
+    expect(within(chat).getByText('방송 채널을 연동해야 채팅이 보여요')).toBeInTheDocument();
+    expect(screen.getByText('방송 채널 연동이 없어 채팅과 통계를 잠갔어요')).toBeInTheDocument();
+    const before = liveChatReads();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    await settle();
+    expect(liveChatReads()).toBe(before);
+  });
+
+  /** 고정한 라이브 화면(?stream=)을 잠긴 채로 열고, 방송을 끝낸다. 명부는 30초마다 묻는다: 그 바로 앞까지 먼저 돌린다 */
+  async function endLockedPinnedLive() {
+    server.chzzkLink = { linked: false };
+    nav.search = `?stream=${STREAM_ID}`;
+    window.history.pushState({}, '', `/broadcast/livenow?stream=${STREAM_ID}`);
+    await renderLive();
+    expect(screen.getAllByRole('link', { name: '채널 연동하기' })).toHaveLength(2);
+    server.liveEnded = true;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(29_000);
+    });
+    await settle();
+  }
+  /** 이 방송 차트에 물은 주소(창 · 칸까지) */
+  const chartUrls = () =>
+    fetchSpy.mock.calls
+      .map(([url]) => String(url))
+      .filter(
+        (url) =>
+          new URL(url, 'http://localhost').pathname ===
+          `/api/clip/broadcasts/${STREAM_ID}/chat-chart`,
+      );
+
+  it('잠긴 방송이 끝나 풀릴 때는 「연동돼」라고 알리지 않는다: 연동한 것이 아니다(PR #453 2차 리뷰)', async () => {
+    await endLockedPinnedLive();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    await settle();
+
+    // 끝난 방송은 잠그지 않는다
+    expect(screen.queryByRole('link', { name: '채널 연동하기' })).toBeNull();
+    expect(screen.getByRole('region', { name: '방송 통계' })).toBeInTheDocument();
+    expect(screen.queryByText('방송 채널이 연동돼 채팅과 통계를 다시 보여요')).toBeNull();
+  });
+
+  it('잠긴 방송이 끝나면 차트의 같은 창을 한 번만 읽는다: 상태와 잠금이 함께 바뀌어도 두 벌 읽지 않는다(PR #453 2차 리뷰)', async () => {
+    await endLockedPinnedLive();
+    const before = chartUrls().length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    await settle();
+
+    const asked = chartUrls().slice(before);
+    expect(
+      asked.length,
+      '끝난 방송의 차트를 읽지 않았다: 이 시험은 아무것도 안 잰다',
+    ).toBeGreaterThan(0);
+    expect(new Set(asked).size).toBe(asked.length);
+  });
+
+  it('SOOP 하나만 연동돼 있어도 잠그지 않는다', async () => {
+    server.chzzkLink = { linked: false };
+    server.soopNickname = '숲너구리';
+    await renderLive();
+
+    expect(screen.queryByRole('link', { name: '채널 연동하기' })).toBeNull();
+    expect(screen.getByText('도네초코 · 치즈 5,000')).toBeInTheDocument();
+    expect(screen.getByText(/^방송 중 채팅 [\d,]+개$/)).toBeInTheDocument();
+  });
+
+  it('위임받은 방송은 잠그지 않는다: 연동 조회는 보는 사람(편집자) 자신의 연동이다', async () => {
+    server.relation = 'EDITOR';
+    server.chzzkLink = { linked: false };
+    await renderLive();
+
+    expect(screen.queryByRole('link', { name: '채널 연동하기' })).toBeNull();
+    expect(screen.getByText('도네초코 · 치즈 5,000')).toBeInTheDocument();
+  });
+
+  it('지난 방송은 잠그지 않는다: 그때 걷힌 기록이 있을 수 있다', async () => {
+    server.chzzkLink = { linked: false };
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    await renderLive();
+
+    expect(screen.getByRole('complementary', { name: '채팅 기록' })).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: '방송 통계' })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: '채널 연동하기' })).toBeNull();
+  });
+
+  it('잠근 채팅도 접을 수 있다', async () => {
+    server.chzzkLink = { linked: false };
+    await renderLive();
+
+    fireEvent.click(screen.getByRole('button', { name: '채팅 패널 접기' }));
+    await settle();
+    expect(screen.queryByRole('complementary', { name: '실시간 채팅' })).toBeNull();
+  });
+
+  it('잠근 화면에 접근성 위반이 없다', async () => {
+    server.chzzkLink = { linked: false };
+    const { container } = await renderLive();
+    vi.useRealTimers();
+    await act(async () => {
+      expect(await axe(container)).toHaveNoViolations();
+    });
   });
 });
 

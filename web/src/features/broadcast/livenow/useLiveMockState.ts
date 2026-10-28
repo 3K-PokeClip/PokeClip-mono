@@ -291,7 +291,7 @@ function parseSseBlock(block: string): { event: string; data: string } | null {
  *   최근 창으로 읽지 않는다(리뷰 3라운드). 방송 정보는 기다리지 않는다: 제목·카테고리는 창과 무관하고, 시청자 기록은 읽은 창을
  *   같이 둬서 끝난 방송이 최근 창의 기록을 믿지 않게 한다(리뷰 4라운드)
  */
-export function useLiveMockState(pastRoute: boolean): LiveMockState {
+export function useLiveMockState(pastRoute: boolean, chartPaused = false): LiveMockState {
   const [cards, setCards] = useState<Record<number, Snapshot>>({});
   const [cardsStatus, setCardsStatus] = useState<CardListStatus>('loading');
   const [now, setNow] = useState(() => Date.now());
@@ -317,10 +317,17 @@ export function useLiveMockState(pastRoute: boolean): LiveMockState {
   }, []);
   // 방송 상태(라이브→종료, 시작·종료 시각 도착)가 바뀌면 차트 범위와 시청자 기록의 시작이 바뀐다 — 그 둘만 다시 읽는다.
   // 🔴 아래 큰 효과(카드·통로·방송 정보)를 다시 돌리면 카드가 비고 통로가 끊겨 그 사이 중계 채팅을 잃는다(POK-251 리뷰 2라운드)
+  // 채팅 · 통계를 잠근 동안(방송 채널 연동 없음, linkLock)은 차트를 읽지 않는다: 그리는 곳(통계 패널)도 쓰는 곳(채팅의 보정값)도
+  // 내려가 있어 10초마다 아무도 안 그리는 요청이 나갔다(PR #453 리뷰). 풀리면 다음 주기를 기다리지 않고 바로 읽는다.
+  // 방송 상태가 바뀔 때와 한 효과로 둔다: 잠긴 라이브가 끝나면 상태와 잠금이 한 그리기에 함께 바뀌어, 따로 두면 같은 창을 두 벌
+  // 읽었다(PR #453 2차 리뷰). 잠긴 동안 상태가 바뀌면 건너뛴다(방송 정보는 정기 읽기가 잇고, 차트는 풀릴 때 읽는다)
   const reloadRangeRef = useRef<(() => void) | null>(null);
+  const chartPausedRef = useRef(chartPaused);
+  chartPausedRef.current = chartPaused;
   useEffect(() => {
+    if (chartPaused) return;
     reloadRangeRef.current?.();
-  }, [live.status, live.startedAt, live.endedAt]);
+  }, [live.status, live.startedAt, live.endedAt, chartPaused]);
 
   useEffect(() => {
     if (!streamId) return;
@@ -401,6 +408,7 @@ export function useLiveMockState(pastRoute: boolean): LiveMockState {
       );
     const loadChart = async () => {
       try {
+        if (chartPausedRef.current) return;
         const rg = rangeRef.current;
         if (waitForRange(rg)) return;
         if (endedKey(rg) !== null && endedKey(rg) === chartDoneFor) return;
