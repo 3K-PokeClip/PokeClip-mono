@@ -15,8 +15,9 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// endReasonIntentional 은 의도적 종료(4D)로 끝난 세션의 사유다 — 표식 분할 · 오프라인 전이(표식 있음) · 4D 승격이
-// 쓰는 글자다(M6 3.4). 회차 닫힘 조건이고, 계승 · 합류를 막는다.
+// endReasonIntentional 은 의도적 종료(4D)로 끝난 세션의 사유다 — 표식 분할 · 4D 승격이 쓰는 글자다(M6 3.4).
+// 오프라인 전이(표식 있음)가 이 글자를 쓰는 것은 PR ②(M6-3b)에서 더해진다 — 이 판의 오프라인 전이는 늘 offline 이다.
+// 회차 닫힘 조건이고, 계승 · 합류를 막는다.
 const endReasonIntentional = "intentional"
 
 // inherit_declined 신호의 사유 둘(D9) — 시간 창 안의 끝난 회차를 닫힘 때문에 물려받지 않았다.

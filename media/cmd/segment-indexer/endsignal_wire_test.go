@@ -244,7 +244,16 @@ func TestEndSignalClosesBeforeControlServerR9(t *testing.T) {
 	f := newControlFixture(t, true, func(ctx context.Context) { <-ctx.Done() })
 	got := make(chan int, 1)
 	go func() { got <- f.post(t) }()
-	<-f.entered
+	// 진입 대기에 상한을 둔다 — 앞단 회귀로 요청이 Apply 전에 끝나면 패키지 시한까지 매달리지 않고 이 자리에서 실패한다.
+	select {
+	case <-f.entered:
+	case code := <-got:
+		f.stop()
+		t.Fatalf("요청이 Apply 에 들어가기 전에 끝났다(상태 %d)", code)
+	case <-time.After(3 * time.Second):
+		f.stop()
+		t.Fatalf("3초 안에 Apply 에 들어가지 않았다")
+	}
 	f.stop()
 	if code := <-got; code != http.StatusServiceUnavailable {
 		t.Fatalf("진행 중 요청 = %d, want 503", code)
@@ -266,7 +275,15 @@ func TestEndSignalCloseDeadlineStartsAtStop(t *testing.T) {
 	time.Sleep(2 * time.Second)
 	got := make(chan int, 1)
 	go func() { got <- f.post(t) }()
-	<-f.entered
+	select {
+	case <-f.entered:
+	case code := <-got:
+		f.stop()
+		t.Fatalf("요청이 Apply 에 들어가기 전에 끝났다(상태 %d)", code)
+	case <-time.After(3 * time.Second):
+		f.stop()
+		t.Fatalf("3초 안에 Apply 에 들어가지 않았다")
+	}
 	f.stop()
 	<-got
 	msgs := f.logs.msgs(t)

@@ -55,7 +55,16 @@ func TestConcurrentSignalsBoundedToOneP2(t *testing.T) {
 	}
 	first := make(chan response, 1)
 	go func() { first <- f.postOK(testToken) }()
-	<-entered
+	// 진입 대기에 상한을 둔다 — 앞단 회귀로 요청이 Apply 전에 끝나면 패키지 시한까지 매달리지 않고 이 자리에서 실패한다.
+	select {
+	case <-entered:
+	case r := <-first:
+		close(release)
+		t.Fatalf("첫째 요청이 Apply 에 들어가기 전에 끝났다(상태 %d)", r.status)
+	case <-time.After(3 * time.Second):
+		close(release)
+		t.Fatalf("첫째 요청이 3초 안에 Apply 에 들어가지 않았다")
+	}
 	second := make(chan response, 1)
 	go func() { second <- f.postOK(testTokenB) }()
 	var got response
@@ -152,7 +161,15 @@ func TestCloseWaitsForInflightHandlerP5(t *testing.T) {
 	}
 	got := make(chan response, 1)
 	go func() { got <- f.postOK(testToken) }()
-	<-entered
+	select {
+	case <-entered:
+	case r := <-got:
+		close(release)
+		t.Fatalf("요청이 Apply 에 들어가기 전에 끝났다(상태 %d)", r.status)
+	case <-time.After(3 * time.Second):
+		close(release)
+		t.Fatalf("3초 안에 Apply 에 들어가지 않았다")
+	}
 	closed := make(chan error, 1)
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
@@ -193,8 +210,15 @@ func TestCloseCancelsInflightApplyP5(t *testing.T) {
 		}
 		return session.IntentionalResult{Effect: "marked"}, nil
 	}
-	go f.postOK(testToken)
-	<-entered
+	done := make(chan response, 1)
+	go func() { done <- f.postOK(testToken) }()
+	select {
+	case <-entered:
+	case r := <-done:
+		t.Fatalf("요청이 Apply 에 들어가기 전에 끝났다(상태 %d)", r.status)
+	case <-time.After(3 * time.Second):
+		t.Fatalf("3초 안에 Apply 에 들어가지 않았다")
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
 	defer cancel()
 	start := time.Now()
