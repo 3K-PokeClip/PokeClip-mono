@@ -2,9 +2,10 @@ import { mediaCredentials } from '@/api/mediaPlayback';
 import type { DatedFragment } from './dvrWindow';
 import { liveStartFloorMs } from './playbackEdge';
 
-// 라이브 창 탐침(설계 r9 2절, POK-200 c13). 되감기에서 라이브로 넘기기 전에 라이브 목록을 한 번 받아 시작 하한 S_live 를 잰다.
-// 하한이 넘길 위치 P 보다 뒤면 못 본 녹화가 잘리므로 넘기지 않는다. 하한은 재생기의 첫 목록 재검사와 같은 정의(liveStartFloorMs)다.
-// 탐침도 CloudFront 를 거쳐 만료 사본을 받을 수 있다. 그때의 안전은 넘김 확인의 H2 · H0 이 진다.
+// 라이브 창 탐침(설계 r9 2절, POK-200 c13). 되감기에서 라이브로 넘기기 전에 라이브 목록을 한 번 받아 시작 하한
+// S_live 를 잰다. 하한이 넘길 위치 P 보다 뒤면 못 본 녹화가 잘리므로 넘기지 않는다. 하한은 재생기의 첫 목록 재검사와 같은
+// 정의(liveStartFloorMs)다. 탐침도 CloudFront 를 거쳐 만료 사본을 받을 수 있다. 그때의 안전은 넘김 확인의 H2
+// · H0 이 진다.
 
 /** 탐침 결과. floorMs = S_live, endMs = 라이브 목록 끝(로그의 d 몫) */
 export type LiveProbeResult =
@@ -29,8 +30,9 @@ export function firstVariantUri(text: string): string | null {
 }
 
 /**
- * 매체 목록 → 완성 조각(EXTINF 누적 · PDT) · TARGETDURATION · ENDLIST. EXT-X-PART · PRELOAD-HINT 는 세지 않는다(hls.js 의
- * fragments 도 완성 조각만이다). EXT-X-GAP 조각은 센다. 형식 오류는 null
+ * 매체 목록 → 완성 조각(EXTINF 누적 · PDT) · TARGETDURATION · ENDLIST. EXT-X-PART ·
+ * PRELOAD-HINT 는 세지 않는다(hls.js 의 fragments 도 완성 조각만이다). EXT-X-GAP 조각은 센다. 형식
+ * 오류는 null
  */
 export function parseMediaPlaylist(text: string): MediaPlaylist | null {
   const lines = text.split(/\r?\n/);
@@ -78,8 +80,8 @@ function nextFragment(
 }
 
 /**
- * 첫 PDT 앞의 조각은 거꾸로 길이를 빼 채운다(hls.js backfillProgramDateTimes 와 같다). MediaMTX LL-HLS 는 끝 두 조각에만 PDT 를
- * 단다(2026-10-27 로컬 실측) — 채우지 않으면 첫 조각의 시각이 없어 하한을 못 잰다
+ * 첫 PDT 앞의 조각은 거꾸로 길이를 빼 채운다(hls.js backfillProgramDateTimes 와 같다). MediaMTX
+ * LL-HLS 는 끝 두 조각에만 PDT 를 단다(2026-10-27 로컬 실측) — 채우지 않으면 첫 조각의 시각이 없어 하한을 못 잰다
  */
 function backfillProgramDateTimes(fragments: readonly DatedFragment[]): DatedFragment[] {
   const firstDated = fragments.findIndex((f) => f.programDateTime !== null);
@@ -110,7 +112,8 @@ async function measure(liveUrl: string, signal: AbortSignal): Promise<LiveProbeR
   const top = await fetchPlaylist(liveUrl, signal);
   if (top === null) return unavailable;
   const variant = firstVariantUri(top.text);
-  // index.m3u8 의 302(세션 파라미터)는 fetch 가 따라간다 — 상대 URI 는 따라간 뒤의 주소로 푼다(useHlsPlayback 과 같은 전제)
+  // index.m3u8 의 302(세션 파라미터)는 fetch 가 따라간다 — 상대 URI 는 따라간 뒤의 주소로
+  // 푼다(useHlsPlayback 과 같은 전제)
   const media =
     variant === null ? top : await fetchPlaylist(new URL(variant, top.url).href, signal);
   if (media === null) return unavailable;

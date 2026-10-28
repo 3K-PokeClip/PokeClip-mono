@@ -69,11 +69,14 @@ export interface LoadedPlaylist extends LoadedList {
 }
 
 /**
- * 재생 세션(POK-200 M5)이 재생기에 거는 고리. 없으면 지금 동작이다(라이브 창 안 시크만). onSeekRequest 가 있으면 「세션
+ * 재생 세션(POK-200 M5)이 재생기에 거는 고리. 없으면 현행이다(라이브 창 안 시크만). onSeekRequest 가 있으면 「세션
  * 모드」다: 사람이 옮긴 목표를 재생기가 스스로 쓰지 않고 세션에 넘긴다 — 창 밖이면 세션이 되감기로 갈아 끼운다(설계 5.3.1절)
  */
 export interface PlaybackHooks {
-  /** LEVEL_UPDATED 의 live:false — 「이 목록에 조각이 더 붙지 않는다」일 뿐 재생 완료가 아니다(RFC 8216 4.3.3.4) */
+  /**
+   * LEVEL_UPDATED 의 live:false — 「이 목록에 조각이 더 붙지 않는다」일 뿐 재생 완료가 아니다(RFC 8216
+   * 4.3.3.4)
+   */
   onEndlist?: () => void;
   /** strictStart 재생기의 첫 목록이 시작을 잘라 재생기를 내렸다(POK-200 c13) */
   onStartTruncated?: () => void;
@@ -108,7 +111,7 @@ export type { LivePosition } from './livePosition';
  * @param afterForbidden 이 재생기는 403으로 출입증을 다시 받은 뒤 새로 섰다. 영상 조각을 하나도 못 받은 채 또 403이면 더 받지 않고
  *   멈춘다(계약3 재시도 정책: 재호출 1회 뒤에도 403이면 접근 불가, POK-419). 한 번이라도 받았으면 회복한 것이라 다음 403은 다시 받는다
  * @param broadcastId 방송 번호(회차) — 사용 통계 「방송마다 한 번」의 기억 키(playbackStarts.ts). 없으면 세지 않는다
- * @param source 재생할 목록(종류 · 주소 · 시작 시각 · 세대). 세대가 오르면 같은 주소여도 재생기를 새로 세운다(설계 5.4절)
+ * @param source 재생할 목록(종류 · 주소 · 시작 시각 · 세대). 세대가 오르면 같은 주소여도 재생기를 새로 세운다(5.4절)
  * @param hooks 재생 세션의 고리(PlaybackHooks). 없으면 지금 동작이다
  */
 export function useHlsPlayback(
@@ -170,8 +173,8 @@ export function useHlsPlayback(
   /** 멈춘 채 갈아 끼우기 표(hlsStart) — 재생기를 갈아 끼워도 남는다 */
   const [swap] = useState(createSwapPause);
   /**
-   * 세션 모드인가 — 세션 고리가 있고 hls.js 재생기가 섰다. hls.js 가 없는 브라우저(네이티브 HLS)는 조각 목록 · 시각 축이 없어
-   * 세션 고리가 있어도 지금처럼 라이브 창 안에서 시크한다(seekable 축)
+   * 세션 모드인가 — 세션 고리가 있고 hls.js 재생기가 섰다. hls.js 가 없는 브라우저(네이티브 HLS)는 조각 목록 · 시각
+   * 축이 없어 세션 고리가 있어도 지금처럼 라이브 창 안에서 시크한다(seekable 축)
    */
   const sessionActive = useCallback(
     () => hooksRef.current.onSeekRequest !== undefined && hlsRef.current !== null,
@@ -234,7 +237,7 @@ export function useHlsPlayback(
   );
 
   // 유일한 시크 경로 (계약3 4절 2번) — 마우스·키보드·LIVE 복귀가 전부 이 함수를 탄다.
-  // 라이브 재동기화를 호출하지 않는다. 세션 모드면 목표 시각을 세션에 넘긴다(currentTime 을 쓰기 전에 판정 — 5.3.1절 1번)
+  // 라이브 재동기화를 호출하지 않는다. 세션 모드면 목표 시각을 세션에 준다(currentTime 을 쓰기 전 판정 — 5.3.1절 1번)
   const seekToBehind = useCallback(
     (behind: number) => {
       const video = videoRef.current;
@@ -418,9 +421,9 @@ export function useHlsPlayback(
       endSent = true;
       hooksRef.current.onEndReached?.();
     };
-    // 끝에서 물러난 시크는 폭과 무관하게 끝 도달 판정을 다시 연다 — 끝 → 뒤로 → 다시 끝이면 두 번째도 올린다(cx H1 · R55).
-    // 「끝 1초 안」은 정체 판정 폭이지 시크 예외가 아니다. 같은 끝을 두 번 올리지 않는 것은 시크 앞의 waiting 을 버려서 한다:
-    // 정체는 시크 뒤 새 waiting 을 봐야 다시 선다(ended 는 브라우저가 다시 끝에 닿아야 난다)
+    // 끝에서 물러난 시크는 폭과 무관하게 끝 도달 판정을 다시 연다 — 끝 → 뒤로 → 다시 끝이면 두 번째도 올린다(cx H1 ·
+    // R55). 「끝 1초 안」은 정체 판정 폭이지 시크 예외가 아니다. 같은 끝을 두 번 올리지 않는 것은 시크 앞의 waiting 을
+    // 버려서 한다: 정체는 시크 뒤 새 waiting 을 봐야 다시 선다(ended 는 브라우저가 다시 끝에 닿아야 난다)
     const rearmEnd = () => {
       const details = hlsRef.current?.latestLevelDetails;
       if (!endSent || !details || lastEndMs === null) return;
@@ -488,7 +491,8 @@ export function useHlsPlayback(
       rearmEnd();
       load.noteSeeking(hlsRef.current?.hasEnoughToStart === false);
     };
-    // 되감기 재생점이 창 밖으로 떨어지기 전에 옮긴다 — LEVEL_UPDATED 처리기 안에서 동기로(hls.js 가 옮기기 전, 5.3.1절)
+    // 되감기 재생점이 창 밖으로 떨어지기 전에 옮긴다 — LEVEL_UPDATED 처리기 안에서 동기로(hls.js 가 옮기기 전,
+    // 5.3.1절)
     const keepRewindFloor = (hls: Hls, details: LevelDetails) => {
       const moved = guardRewindFloor({ hls, video, details, loadFrom: load.current() });
       if (moved === null) return;
@@ -509,7 +513,8 @@ export function useHlsPlayback(
       setMuted(video.muted);
       setVolumeState(Math.round(video.volume * 100));
     };
-    // 세션 모드의 그리기: 세 재생기가 같은 실제 시각 축(설계 5.2절). 끝 정체(D9)와 라이브의 멈춘 자리(5.3.1절)도 여기서 본다
+    // 세션 모드의 그리기: 세 재생기가 같은 실제 시각 축(설계 5.2절). 끝 정체(D9)와 라이브의 멈춘 자리(5.3.1절)도 여기서
+    // 본다
     const paintSession = () => {
       const axis = readAxis();
       if (axis === null) return;
@@ -537,7 +542,8 @@ export function useHlsPlayback(
       const playing = !video.paused;
       setLivePosition((prev) => nextLivePosition(prev, atMs, edgeMs, behind, playing, run));
     };
-    // 목록 끝 정체(D9) — ENDLIST 없는 목록의 회차 경계를 맡는 「끝 도달」이다. 재생기 하나에 한 번(목록이 자라면 다시 센다)
+    // 목록 끝 정체(D9) — ENDLIST 없는 목록의 회차 경계를 맡는 「끝 도달」이다. 재생기 하나에 한 번(목록이 자라면 다시
+    // 센다)
     const checkStall = () => {
       const details = hlsRef.current?.latestLevelDetails;
       if (endSent || !hooksRef.current.onEndReached || !details) return;
@@ -565,7 +571,8 @@ export function useHlsPlayback(
       // 그때의 재생 위치(첫 조각 전엔 0초)는 보고 있는 화면이 아니라, 라이브를 여는 순간 1시간 되감은 것처럼 채팅이 따라갔다
       // (POK-326 리뷰 1라운드)
       if (video.readyState < HAVE_CURRENT_DATA) return;
-      // 시각은 조각 목록으로 센다(programDateAt) — 같은 초 · 같은 시차면 앞 값을 둔다(nextLivePosition)
+      // 시각은 조각 목록으로 센다(programDateAt) — 같은 초 · 같은 시차 · 같은 재생 여부면
+      // 앞 값을 둔다(nextLivePosition)
       const fragments = hlsRef.current?.latestLevelDetails?.fragments ?? [];
       const at = programDateAt(fragments, video.currentTime);
       const edge = programDateAt(fragments, liveEdgePosition(range, sync));
@@ -591,8 +598,8 @@ export function useHlsPlayback(
     const paintTimer = window.setInterval(paint, 1000);
 
     void (async () => {
-      // hls.js는 클라이언트 전용(월드 오브젝트 참조) — 동적 import로 번들 분리까지 겸한다. 읽기가 실패하면 영상 위에 알리고
-      // 원인을 남긴다(다음 재생기는 다시 읽는다 — hlsLoader)
+      // hls.js는 클라이언트 전용(월드 오브젝트 참조) — 동적 import로 번들 분리까지 겸한다. 읽기가 실패하면 영상 위에
+      // 알리고 원인을 남긴다(다음 재생기는 다시 읽는다 — hlsLoader)
       let HlsCtor: typeof import('hls.js').default;
       try {
         ({ default: HlsCtor } = await loadHls());
@@ -615,7 +622,7 @@ export function useHlsPlayback(
           hlsRef.current = null;
           hooksRef.current.onStartTruncated?.();
         });
-        hls.on(HlsCtor.Events.LEVEL_UPDATED, (_event, data) => {
+        hls.on(HlsCtor.Events.LEVEL_UPDATED, (...[, data]) => {
           if (kind === 'rewind') keepRewindFloor(hls, data.details);
           const list = loadedList(data.details.fragments, data.details.targetduration);
           if (list !== null) {
@@ -653,9 +660,9 @@ export function useHlsPlayback(
             return;
           }
           // 라이브 목록 404 = 라이브 닫힘(끝 도달로 친다) · 400 = 송출 재시작 뒤 옛 _HLS_msn
-          // (bluenviron/mediamtx#4320) — 세션이 재생기를 새로 세운다. hls.js 는 4xx 를 다시 해 보지 않는다(RC-16).
-          // 목록 오류만 본다: 조각 404 도 hls.js 재시도를 다 쓰면 치명으로 오지만 목록은 살아 있을 수 있어 아래의 한 번
-          // 다시 받기로 보낸다(cx H1)
+          // (bluenviron/mediamtx#4320) — 세션이 재생기를 새로 세운다. hls.js 는 4xx 를 다시 해
+          // 보지 않는다(RC-16). 목록 오류만 본다: 조각 404 도 hls.js 재시도를 다 쓰면 치명으로 오지만 목록은 살아
+          // 있을 수 있어 아래의 한 번 다시 받기로 보낸다(cx H1)
           const code = data.response?.code;
           const { onLiveClosed, onLive400 } = hooksRef.current;
           const liveGone = code === 404 ? onLiveClosed : code === 400 ? onLive400 : undefined;

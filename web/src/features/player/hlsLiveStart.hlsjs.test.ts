@@ -8,14 +8,15 @@ import Hls, {
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { HLS_LIVE_CONFIG } from './hlsConfig';
 
-// 진짜 hls.js 1.7.3(dist)의 라이브 기동 순서를 고정한다(설계 r3 9절 · r9 11절). 이 파일은 hls.js 와 hlsConfig 만 읽어, 제품
-// 코드를 되돌린 트리에서도 돈다. 기동 문지기(hlsStart.ts)가 기대는 hls.js 동작이다: 창 하한 + 1 초에서 시작하면 목록이
-// 밀려도 시작 위치를 두고 재생점을 옮기지 않는다 · startLoad(-1) 은 라이브 시작(liveSync) · 창 시작보다 앞 자리는 -1 로
-// 바뀐다(base-stream-controller setStartPosition). hls.js 판을 올려 이 순서가 바뀌면 여기서 먼저 깨진다.
-// jsdom 에는 MediaSource 가 없다. 매체 없는 재생기는 조각을 청하지 않으므로(doTickIdle) 흉내 <video> 를 streamController
-// 에만 붙인다(rewindFloor.hlsjs.test.ts 와 같은 틀).
+// 진짜 hls.js 1.7.3(dist)의 라이브 기동 순서를 고정한다(설계 r3 9절 · r9 11절). 이 파일은 hls.js 와
+// hlsConfig 만 읽어, 제품 코드를 되돌린 트리에서도 돈다. 기동 문지기(hlsStart.ts)가 기대는 hls.js 동작이다: 창
+// 하한 + 1 초에서 시작하면 목록이 밀려도 시작 위치를 두고 재생점을 옮기지 않는다 · startLoad(-1) 은 라이브
+// 시작(liveSync) · 창 시작보다 앞 자리는 -1 로 바뀐다(base-stream-controller
+// setStartPosition). hls.js 판을 올려 이 순서가 바뀌면 여기서 먼저 깨진다. jsdom 에는 MediaSource 가
+// 없다. 매체 없는 재생기는 조각을 청하지 않으므로(doTickIdle) 흉내 <video> 를 streamController 에만
+// 붙인다(rewindFloor.hlsjs.test.ts 와 같은 틀).
 
-const URL = 'https://m/live/k/video1_stream.m3u8';
+const VIDEO_URL = 'https://m/live/k/video1_stream.m3u8';
 const PDT0 = Date.parse('2026-10-27T05:00:00.000Z');
 const TD = 4;
 const FIRST_SN = 100;
@@ -36,9 +37,15 @@ function mediaPlaylist(slide: number): string {
 const quiet = () => {};
 const SILENT = { trace: quiet, debug: quiet, log: quiet, warn: quiet, info: quiet, error: quiet };
 
-type StreamController = { media: unknown; startPosition: number; nextLoadPosition: number };
+interface StreamController {
+  media: unknown;
+  startPosition: number;
+  nextLoadPosition: number;
+}
 
-const players: { hls: Hls; sc: StreamController }[] = [];
+const players: Array<{ hls: Hls; sc: StreamController }> = [];
+/** 가짜 loader 의 load 인자 — 설정(가운데)은 쓰지 않는다 */
+type LoadArgs = [LoaderContext, unknown, LoaderCallbacks<LoaderContext>];
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
 });
@@ -51,7 +58,10 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-/** 재생점이 playhead 에 선(그 자리에서 재생이 시작된) 흉내 <video> 를 streamController 에만 단다 — currentTime 쓰기를 센다 */
+/**
+ * 재생점이 playhead 에 선(그 자리에서 재생이 시작된) 흉내 <video> 를 streamController 에만 단다 —
+ * currentTime 쓰기를 센다
+ */
 function attachFakeMedia(sc: StreamController, playhead: number): number[] {
   const writes: number[] = [];
   let time = playhead;
@@ -72,20 +82,23 @@ function attachFakeMedia(sc: StreamController, playhead: number): number[] {
   return writes;
 }
 
-/** 목록을 받을 때마다 한 조각씩 밀어 주는 가짜 loader 를 단 재생기 · 재생점은 시작 자리 · MANIFEST_PARSED 에서 startLoad(position) */
+/**
+ * 목록을 받을 때마다 한 조각씩 밀어 주는 가짜 loader 를 단 재생기 · 재생점은 시작 자리 · MANIFEST_PARSED 에서
+ * startLoad(position)
+ */
 function player(position: number) {
   let slide = 0;
   class FakeLoader {
     stats = new LoadStats();
-    load(context: LoaderContext, _config: unknown, callbacks: LoaderCallbacks<LoaderContext>) {
+    load(...[context, , callbacks]: LoadArgs) {
       // 조각에는 답하지 않는다 — 요청 자체만 본다
-      if (context.url !== URL) return;
+      if (context.url !== VIDEO_URL) return;
       const data = mediaPlaylist(slide++);
       queueMicrotask(() => {
         // 받은 시각을 찍는다 — 0 으로 두면 다음 받기 예약이 늘 과거라 hls.js 가 목록을 쉬지 않고 다시 받는다
         const now = performance.now();
         this.stats.loading = { start: now, first: now, end: now };
-        callbacks.onSuccess({ url: URL, data }, this.stats, context, null);
+        callbacks.onSuccess({ url: VIDEO_URL, data }, this.stats, context, null);
       });
     }
     abort() {}
@@ -100,14 +113,14 @@ function player(position: number) {
   const sc = (hls as unknown as { streamController: StreamController }).streamController;
   players.push({ hls, sc });
   const frags: number[] = [];
-  hls.on(Events.FRAG_LOADING, (_event, data) => {
+  hls.on(Events.FRAG_LOADING, (...[, data]) => {
     if (typeof data.frag.sn === 'number') frags.push(data.frag.sn);
   });
   let updates = 0;
   hls.on(Events.LEVEL_UPDATED, () => updates++);
   hls.on(Events.MANIFEST_PARSED, () => hls.startLoad(position));
   const writes = attachFakeMedia(sc, Math.max(position, 0));
-  hls.loadSource(URL);
+  hls.loadSource(VIDEO_URL);
   return { hls, sc, frags, writes, updates: () => updates };
 }
 

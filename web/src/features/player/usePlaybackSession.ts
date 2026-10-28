@@ -18,9 +18,10 @@ import { probeLiveWindow } from './liveWindowProbe';
 import { sessionView, type SessionView } from './sessionView';
 import { useRewindStatus } from './useRewindStatus';
 
-// 재생 세션의 수명 소유자(설계 5.5절, POK-200 M5). LiveScreen 층 — GlassPlayer 의 key 바깥 — 에 산다: 출입증 회복 · 시계 key 로
-// 재생기가 다시 마운트돼도 세션은 남아 같은 자리에서 잇는다(R36). 명부 상태 · 재생기 마운트 · 자동 방송 선택과 따로 산다.
-// 상태기계(rewindSwitch)에 사건을 먹이고, 나온 효과를 건다: 재조회 · 재생기 시크 · 알림 · 닫기 · 지금 방송 번호 다시 묻기.
+// 재생 세션의 수명 소유자(설계 5.5절, POK-200 M5). LiveScreen 층 — GlassPlayer 의 key 바깥 — 에
+// 산다: 출입증 회복 · 시계 key 로 재생기가 다시 마운트돼도 세션은 남아 같은 자리에서 잇는다(R36). 명부 상태 · 재생기 마운트
+// · 자동 방송 선택과 따로 산다. 상태기계(rewindSwitch)에 사건을 먹이고, 나온 효과를 건다: 재조회 · 재생기 시크 · 알림
+// · 닫기 · 지금 방송 번호 다시 묻기.
 
 /** LIVE 의 「지금 방송 번호」 다시 묻기 간격(설계 5.3절) */
 const X_RECHECK_MS = 2_000;
@@ -43,7 +44,10 @@ export interface SessionClosed {
 }
 
 export interface SessionOptions {
-  /** 여는 조건(명부 live ∧ 출입증 준비 ∧ recorded 로 닫힌 적 없음 — LiveScreen 이 정한다). 열린 뒤에는 닫는 조건이 아니다 */
+  /**
+   * 여는 조건(명부 live ∧ 출입증 준비 ∧ recorded 로 닫힌 적 없음 — LiveScreen 이 정한다). 열린 뒤에는 닫는
+   * 조건이 아니다
+   */
   canOpen: boolean;
   /** 방송 번호(= 회차 ID) */
   roundId: string | null;
@@ -79,8 +83,9 @@ function needsX(s: PlaybackSessionState): boolean {
 }
 
 /**
- * 넘김 확인이 깨져 rewind 로 되돌렸나(H0 · H1a · H2 · H2t). 멈췄는지는 재생기가 사람의 pause · play 사건으로 가린다 — 영상이
- * 붙기 전에는 위치 사건이 막혀 세션 칸이 멈춤을 모른다. 사람의 시크(H6)는 현행대로 둔다(멈춘 채 옮겨도 되감기가 스스로 튼다)
+ * 넘김 확인이 깨져 rewind 로 되돌렸나(H0 · H1a · H2 · H2t). 멈췄는지는 재생기가 사람의 pause · play
+ * 사건으로 가린다 — 영상이 붙기 전에는 위치 사건이 막혀 세션 칸이 멈춤을 모른다. 사람의 시크(H6)는 현행대로 둔다(멈춘 채 옮겨도
+ * 되감기가 스스로 튼다)
  */
 function revertedHandoff(
   before: PlaybackSessionState,
@@ -119,8 +124,8 @@ export function usePlaybackSession(options: SessionOptions): PlaybackSession | n
   const [now, setNow] = useState(() => Date.now());
 
   /**
-   * 세션 순번 — 세션을 열거나 비울 때 · 화면을 떠날 때 오른다. 비동기 작업(지금 방송 번호 묻기 · 재조회 타이머)은 시작(예약) 때의 순번을 들고 가서,
-   * 그사이 세션이 바뀌었으면 답을 버린다 — A 의 늦은 답이 B 세션에 들지 않게(cx H3)
+   * 세션 순번 — 세션을 열거나 비울 때 · 화면을 떠날 때 오른다. 비동기 작업(지금 방송 번호 묻기 · 재조회 타이머)은 시작(예약)
+   * 때의 순번을 들고 가서, 그사이 세션이 바뀌었으면 답을 버린다 — A 의 늦은 답이 B 세션에 들지 않게(cx H3)
    */
   const sessionIdRef = useRef(0);
   /** 스트림 폴링 응답의 물음 순번 — 응답마다 1씩 오른다(세션 표가 늦은 응답을 버리는 기준) */
@@ -322,7 +327,8 @@ export function usePlaybackSession(options: SessionOptions): PlaybackSession | n
     return () => timers.forEach((t) => window.clearTimeout(t));
   }, [endingSince]);
 
-  // 넘김 확인 시한(H0) — 확인 중이면 시한에 깨운다. 확인이 끝나면(handoff 해제) 지운다. H3 · H4 는 시한을 그대로 둔다
+  // 넘김 확인 시한(H0) — 확인 중이면 시한에 깨운다. 확인이 끝나면(handoff 해제) 지운다. H3 · H4 는 시한을 그대로
+  // 둔다
   const confirmDeadlineMs = state?.handoff?.deadlineMs ?? null;
   useEffect(() => {
     if (confirmDeadlineMs === null) return undefined;

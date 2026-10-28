@@ -11,10 +11,11 @@ import { HLS_LIVE_CONFIG } from './hlsConfig';
 import { armLiveStart, type LiveStart } from './hlsStart';
 import { startLoadPosition } from './playbackEdge';
 
-// 진짜 hls.js 1.7.3(dist)로 다변 목록(index.m3u8 → 매체 목록) 라이브 기동을 끝까지 돌린다(R81 · 설계 r9 11절). 목록은 가짜
-// loader 가 주고, 조각 요청은 답하지 않고 FRAG_LOADING 으로만 센다. jsdom 에는 MediaSource 가 없고, 매체 없는 재생기는
-// 조각을 아예 청하지 않아(doTickIdle) 「라이브 시작 조각 0」 이 저절로 참이 된다. 그래서 흉내 <video> 를 streamController 에만
-// 붙인다(rewindFloor.hlsjs.test.ts 와 같은 틀). 맨 앞 양성 대조가 이 틀에서 조각 요청이 보인다는 것을 먼저 못 박는다.
+// 진짜 hls.js 1.7.3(dist)로 다변 목록(index.m3u8 → 매체 목록) 라이브 기동을 끝까지 돌린다(R81 · 설계 r9
+// 11절). 목록은 가짜 loader 가 주고, 조각 요청은 답하지 않고 FRAG_LOADING 으로만 센다. jsdom 에는
+// MediaSource 가 없고, 매체 없는 재생기는 조각을 아예 청하지 않아(doTickIdle) 「라이브 시작 조각 0」 이 저절로 참이
+// 된다. 그래서 흉내 <video> 를 streamController 에만 붙인다(rewindFloor.hlsjs.test.ts 와 같은
+// 틀). 맨 앞 양성 대조가 이 틀에서 조각 요청이 보인다는 것을 먼저 못 박는다.
 
 const BASE = 'https://m/live/k';
 const MASTER = `${BASE}/index.m3u8`;
@@ -72,9 +73,13 @@ const fakeMedia = () => ({
   buffered: { length: 0, start: () => 0, end: () => 0 },
 });
 
-type StreamControllerInternals = { media: unknown };
+interface StreamControllerInternals {
+  media: unknown;
+}
 
-const players: { hls: Hls; sc: StreamControllerInternals }[] = [];
+const players: Array<{ hls: Hls; sc: StreamControllerInternals }> = [];
+/** 가짜 loader 의 load 인자 — 설정(가운데)은 쓰지 않는다 */
+type LoadArgs = [LoaderContext, unknown, LoaderCallbacks<LoaderContext>];
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
 });
@@ -100,7 +105,7 @@ function player(withAudio: boolean) {
   };
   class FakeLoader {
     stats = new LoadStats();
-    load(context: LoaderContext, _config: unknown, callbacks: LoaderCallbacks<LoaderContext>) {
+    load(...[context, , callbacks]: LoadArgs) {
       const url = context.url.split('?')[0] ?? context.url;
       requests.push(url);
       const body = respond(url);
@@ -125,11 +130,11 @@ function player(withAudio: boolean) {
   sc.media = fakeMedia();
   players.push({ hls, sc });
   const frags: number[] = [];
-  hls.on(Events.FRAG_LOADING, (_event, data) => {
+  hls.on(Events.FRAG_LOADING, (...[, data]) => {
     if (data.frag.type === 'main' && typeof data.frag.sn === 'number') frags.push(data.frag.sn);
   });
   const updates: number[] = [];
-  hls.on(Events.LEVEL_UPDATED, (_event, data) => updates.push(data.details.startSN));
+  hls.on(Events.LEVEL_UPDATED, (...[, data]) => updates.push(data.details.startSN));
   // 원래 구현을 그대로 부르며 호출만 센다
   const startLoad = vi.spyOn(hls, 'startLoad');
   const stopLoad = vi.spyOn(hls, 'stopLoad');
@@ -158,7 +163,7 @@ describe('양성 대조 — 이 틀에서 hls.js 의 라이브 기동 조각 요
 describe.each([
   ['단변 목록', false],
   ['EXT-X-MEDIA 음성 트랙 목록', true],
-])('armLiveStart — 진짜 hls.js 다변 목록 기동(R81 후보 1 · %s)', (_name, withAudio) => {
+])('armLiveStart — 진짜 hls.js 다변 목록 기동(R81 후보 1 · %s)', (...[, withAudio]) => {
   it('첫 LEVEL_UPDATED 에서 정한 자리의 조각을 먼저 · 한 번만 청하고, 라이브 시작 조각은 청하지 않는다', async () => {
     const { hls, frags } = player(withAudio);
     armLiveStart(hls, Events, startAt(insideSn(FIRST_SN + 3, 1.5)), noop);

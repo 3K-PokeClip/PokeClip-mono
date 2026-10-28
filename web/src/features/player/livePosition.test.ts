@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import type { SeekableLike } from './dvrWindow';
 import { nextLivePosition, playedRunMs, type LivePosition } from './livePosition';
 
-// 재생기 자리의 다음 값(POK-326) — 같은 실제 초 · 같은 시차면 앞 값(같은 객체)을 둬 리렌더를 건너뛴다
+// 재생기 자리의 다음 값(POK-326) — 같은 실제 초 · 같은 시차 · 같은 재생 여부면 앞 값
+// (같은 객체)을 둬 리렌더를 건너뛴다
 
 describe('nextLivePosition', () => {
   const prev: LivePosition = {

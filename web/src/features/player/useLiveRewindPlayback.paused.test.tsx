@@ -11,8 +11,9 @@ import {
   type SessionOptions,
 } from './usePlaybackSession';
 
-// 멈춘 채 넘김 확인이 깨질 때(설계 16절 6 · kty 결정) — 세션 · 재생기 · hls.js 흉내를 한 화면에 묶어 끝단을 잰다. 영상이
-// 아직 붙지 않아(readyState 1) 위치 사건이 막힌 동안 멈춰도, 되돌린 되감기 재생기가 스스로 틀지 않아야 한다(c13f cx H1).
+// 멈춘 채 넘김 확인이 깨질 때(설계 16절 6 · kty 결정) — 세션 · 재생기 · hls.js 흉내를 한 화면에 묶어 끝단을 잰다.
+// 영상이 아직 붙지 않아(readyState 1) 위치 사건이 막힌 동안 멈춰도, 되돌린 되감기 재생기가 스스로 틀지 않아야 한다(c13f
+// cx H1).
 
 vi.mock('./rewindSwitch', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./rewindSwitch')>();
@@ -117,7 +118,7 @@ async function handedOffScreen() {
   const list = { url: A1, firstMs: NOW - 3_600_000, lastEndMs: E, targetDurationS: 4 };
   act(() => session?.dispatch({ type: 'list-loaded', ...list }));
   act(() => session?.dispatch({ type: 'position', atMs: P, playing: true, runMs: 0 }));
-  vi.mocked(transition).mockImplementationOnce((s, _event, now) => ({
+  vi.mocked(transition).mockImplementationOnce((...[s, , now]) => ({
     state: handedOff(s, now),
     effects: [],
   }));

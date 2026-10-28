@@ -3,13 +3,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PlaybackSource } from './rewindSwitch';
 import { useHlsPlayback, type PlaybackHooks } from './useHlsPlayback';
 
-// 재생기 기동(POK-200 c13 · 설계 r9 11절 훅 시험). 시작 시각이 있는 라이브는 첫 목록에서 자리를 정하고, strictStart 면
-// 못 본 녹화가 잘리는 시작을 거절한다. 되감기 기동 · strictStart 가 꺼진 라이브는 현행 그대로다. 기동에 드는 사건 셋
-// (MANIFEST_PARSED · LEVEL_LOADED · LEVEL_UPDATED)을 hls.js 순서대로 쏜다 — 진짜 hls.js 순서는 hlsStart.hlsjs.test.ts 몫이다.
-// 이 파일은 useHlsPlayback 만 읽는다: 제품 파일을 되돌린 트리(음성 대조)에서도 현행 보존 단언이 돈다.
+// 재생기 기동(POK-200 c13 · 설계 r9 11절 훅 시험). 시작 시각이 있는 라이브는 첫 목록에서 자리를 정하고,
+// strictStart 면 못 본 녹화가 잘리는 시작을 거절한다. 되감기 기동 · strictStart 가 꺼진 라이브는 현행 그대로다.
+// 기동에 드는 사건 셋 (MANIFEST_PARSED · LEVEL_LOADED · LEVEL_UPDATED)을 hls.js 순서대로 쏜다
+// — 진짜 hls.js 순서는 hlsStart.hlsjs.test.ts 몫이다. 이 파일은 useHlsPlayback 만 읽는다: 제품
+// 파일을 되돌린 트리(음성 대조)에서도 현행 보존 단언이 돈다.
 
 interface Details {
-  fragments: { start: number; duration: number; programDateTime: number }[];
+  fragments: Array<{ start: number; duration: number; programDateTime: number }>;
   fragmentStart: number;
   targetduration: number;
   live: boolean;
@@ -60,9 +61,11 @@ class FakeHls {
 }
 
 const PDT0 = Date.parse('2026-10-25T05:00:00.000Z');
-/** 영상 0초부터 4초 조각 n 개(PDT0 부터). 라이브 시작 하한 = 첫 조각 + 3 × TD = PDT0 + 12초(영상 12초) */
+/**
+ * 영상 0초부터 4초 조각 n 개(PDT0 부터). 라이브 시작 하한 = 첫 조각 + 3 × TD = PDT0 + 12초(영상 12초)
+ */
 function details(n: number): Details {
-  const fragments = Array.from({ length: n }, (_, i) => ({
+  const fragments = [...Array(n).keys()].map((i) => ({
     start: i * 4,
     duration: 4,
     programDateTime: PDT0 + i * 4_000,
@@ -190,7 +193,7 @@ describe('라이브 기동 — 첫 목록에서 시작 자리를 정한다(설�
 describe.each([
   ['세션 모드(paintSession)', { onSeekRequest: () => {} }],
   ['세션 밖(라이브 창 축)', {}],
-] as const)('위치 가드 — 재생 위치에 영상이 없으면 자리를 알리지 않는다 · %s', (_name, hooks) => {
+] as const)('위치 가드 — 재생 위치에 영상이 없으면 자리를 알리지 않는다 · %s', (...[, hooks]) => {
   it('readyState 가 HAVE_CURRENT_DATA 아래인 동안 위치는 null 이고 영상이 붙으면 처음 알린다', async () => {
     const { result, el } = await mount(source({}), hooks);
     const hls = lastHls();
