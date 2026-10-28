@@ -1,4 +1,4 @@
-import type { RewindStatus, RewindStatusResult } from '@/api/rewindStatus';
+import type { RewindStatusResult } from '@/api/rewindStatus';
 import {
   endConfirm,
   loadedList,
@@ -15,6 +15,21 @@ import {
 import { onEnding } from './endingWait';
 import type { LiveProbeResult } from './liveWindowProbe';
 import { EDGE_MARGIN_TD } from './playbackEdge';
+import {
+  SESSION_NOTICES,
+  close,
+  liveFromAway,
+  readyLive,
+  replace,
+  seekInList,
+  seekLive,
+  stateOnly,
+  within,
+  withUrl,
+  type RewindRange,
+} from './sessionShared';
+
+export { ENDING_WAIT_MS, RESUME_WAIT_MS, SESSION_NOTICES } from './sessionShared';
 
 // 재생 세션 상태기계(설계 5.3절 종결 판, POK-200 M5) — 라이브 · 되감기 · 끝남 대기 · 다시보기 사이의 전환을 정하는 순수 함수다.
 // 사건 하나를 받아 다음 상태와 효과(재조회 · 안에서 시크 · 알림 · 닫기)를 돌려준다. 시각은 모두 실제 시각(epoch ms)이다.
@@ -24,14 +39,8 @@ import { EDGE_MARGIN_TD } from './playbackEdge';
 // 닫힘)로만 들어간다. 🔴 ENDLIST 는 「이 목록에 조각이 더 붙지 않는다」이지 재생 완료가 아니다(RFC 8216 4.3.3.4) — atEnd 를
 // 참으로 만드는 것은 끝 도달 사건뿐이다.
 
-/** 재접속 대기 = 재접속 창 300초 + 판정 여유 60초(M6 회차 닫힘 조건과 같다). 이 동안 회차별 404 는 「아직 모름」이다 */
-export const RESUME_WAIT_MS = 360_000;
-/** 끝남 대기 시한(20분). 끝에 닿은 시청자는 녹화로, 아직 보는 시청자는 묻기를 멈추고 끝까지 본 뒤 녹화로 간다 */
-export const ENDING_WAIT_MS = 1_200_000;
 /** 창 하한 여유를 아직 모를 때(목록 전) 쓰는 값 — TD 4초 기준(설계 5.3.1절) */
 const DEFAULT_EDGE_MARGIN_MS = EDGE_MARGIN_TD * 4_000;
-/** LIVE 버튼의 「지금 방송 번호」 다시 묻기 상한(2초 간격) */
-const X_RECHECK_LIMIT = 3;
 
 export interface PlaybackSource {
   kind: 'live' | 'rewind' | 'vod';
@@ -46,12 +55,6 @@ export interface PlaybackSource {
 export interface StreamAsk {
   seq: number;
   receivedAtMs: number;
-}
-
-interface RewindRange {
-  url: string;
-  firstPdtMs: number;
-  headPdtMs: number;
 }
 
 /** 재생 세션의 국면 — 명부 상태(broadcastStatus)와 따로 움직인다 */
@@ -177,12 +180,6 @@ export interface Transition {
   effects: SessionEffect[];
 }
 
-export const SESSION_NOTICES = {
-  oldest: '가장 오래된 지점으로 옮겼어요',
-  gap: '방송이 끊긴 구간이라 이어지는 자리로 옮겼어요',
-  vodStart: '다시보기는 이 시각부터 볼 수 있어요',
-} as const;
-
 export function openSession(init: {
   roundId: string;
   accessKey: string;
@@ -231,48 +228,10 @@ export function pollTargets(session: PlaybackSessionState): { stream: boolean; r
   }
 }
 
-// ── 작은 도구(끝남 대기 표 endingWait.ts 와 나눠 쓴다 — 세션 표 밖에서는 쓰지 않는다) ──
-
-/** 효과 없는 전이 — 상태를 그대로 두거나 바꾼 상태만 돌려준다 */
-export const stateOnly = (state: PlaybackSessionState): Transition => ({ state, effects: [] });
-
-export function withUrl(set: ReadonlySet<string>, url: string): ReadonlySet<string> {
-  return set.has(url) ? set : new Set([...set, url]);
-}
+// ── 작은 도구 ──
 
 function maxOrSelf(a: number | null, b: number): number {
   return a === null ? b : Math.max(a, b);
-}
-
-export function readyLive(result: RewindStatusResult): (RewindStatus & RewindRange) | null {
-  if (result.kind !== 'ok') return null;
-  const { status } = result;
-  if (status.mode !== 'live' || !status.ready) return null;
-  if (status.url === null || status.firstPdtMs === null || status.headPdtMs === null) return null;
-  return { ...status, url: status.url, firstPdtMs: status.firstPdtMs, headPdtMs: status.headPdtMs };
-}
-
-export function within(atMs: number | null, first: number, head: number): atMs is number {
-  return atMs !== null && first <= atMs && atMs <= head;
-}
-
-export function replace(
-  session: PlaybackSessionState,
-  kind: PlaybackSource['kind'],
-  url: string,
-  startAtMs: number | null,
-): PlaybackSource {
-  return { kind, url, startAtMs, generation: session.source.generation + 1, strictStart: false };
-}
-
-export function close(
-  session: PlaybackSessionState,
-  reason: SessionClose,
-  goTo?: string,
-): Transition {
-  const effect: SessionEffect =
-    goTo === undefined ? { kind: 'close', reason } : { kind: 'close', reason, goTo };
-  return { state: { ...session, closed: reason }, effects: [effect] };
 }
 
 function enterEnding(session: PlaybackSessionState, atEnd: boolean, now: number): Transition {
@@ -286,102 +245,6 @@ function enterEnding(session: PlaybackSessionState, atEnd: boolean, now: number)
       offer: null,
     },
     effects: [{ kind: 'refresh', ...retry }],
-  };
-}
-
-// ── 시크 ──
-
-export function seekLive(
-  session: PlaybackSessionState,
-  targetMs: number,
-  view: SeekView,
-): Transition {
-  if (targetMs >= view.lowerMs) {
-    return {
-      state: session,
-      effects: [{ kind: 'seek-within', atMs: Math.min(targetMs, view.endMs) }],
-    };
-  }
-  const entry = session.rewindOpen ? session.entry : null;
-  if (entry === null) {
-    return {
-      state: session,
-      effects: [
-        { kind: 'seek-within', atMs: view.lowerMs },
-        { kind: 'notice', text: SESSION_NOTICES.oldest },
-      ],
-    };
-  }
-  let start = targetMs;
-  const effects: SessionEffect[] = [];
-  if (targetMs < entry.firstPdtMs) {
-    start = entry.firstPdtMs;
-    effects.push({ kind: 'notice', text: SESSION_NOTICES.oldest });
-  } else if (targetMs > entry.headPdtMs) {
-    start = entry.headPdtMs;
-    effects.push({ kind: 'notice', text: SESSION_NOTICES.gap });
-  }
-  return {
-    state: {
-      ...session,
-      phase: { kind: 'rewind', pendingNext: null },
-      source: replace(session, 'rewind', entry.url, start),
-      boundLive: false,
-      foreignLive: null,
-      liveChecking: false,
-    },
-    effects,
-  };
-}
-
-/** 로드한 목록 안 시크(되감기 · vod) — 하한 앞은 하한으로 알림, 끝 뒤는 끝으로 */
-export function seekInList(
-  session: PlaybackSessionState,
-  targetMs: number,
-  view: SeekView,
-): Transition {
-  if (targetMs < view.lowerMs) {
-    return {
-      state: session,
-      effects: [
-        { kind: 'seek-within', atMs: view.lowerMs },
-        { kind: 'notice', text: SESSION_NOTICES.oldest },
-      ],
-    };
-  }
-  return {
-    state: session,
-    effects: [{ kind: 'seek-within', atMs: Math.min(targetMs, view.endMs) }],
-  };
-}
-
-// ── LIVE 버튼 ──
-
-/** rewind · 끝남 대기(atEnd:false) · vod-offered(atEnd:false) 의 LIVE — X 로 가른다(R58) */
-export function liveFromAway(
-  session: PlaybackSessionState,
-  currentX: XAnswer,
-  attempt: number,
-): Transition {
-  if (currentX.kind === 'known' && currentX.id !== '' && currentX.id !== session.roundId) {
-    return close(session, 'left', currentX.id);
-  }
-  if (currentX.kind === 'unknown' && attempt < X_RECHECK_LIMIT) {
-    return {
-      state: { ...session, liveChecking: true },
-      effects: [{ kind: 'recheck-x', attempt: attempt + 1 }],
-    };
-  }
-  return {
-    state: {
-      ...session,
-      phase: { kind: 'live' },
-      source: replace(session, 'live', session.liveUrl, null),
-      liveChecking: false,
-      boundLive: true,
-      offer: null,
-    },
-    effects: [],
   };
 }
 
