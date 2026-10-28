@@ -9,10 +9,10 @@ import {
   type SessionEvent,
   type XAnswer,
 } from './rewindSwitch';
-import { pos, resetEventKit, startRun, streamPoll } from './handoffTestKit';
+import { pos, resetEventKit, settleProbe, startRun, streamPoll } from './handoffTestKit';
 import { sessionView } from './sessionView';
 
-// 꼬리 넘김이 들어와도 현행 그대로여야 하는 행의 시험(POK-200 c13 — 설계 r9 11절 T12 등).
+// 꼬리 넘김이 들어와도 현행 그대로여야 하는 행의 시험(POK-200 c13 — 설계 r9 11절 T12 · T27 · 넘김 0 끝단 T4 · T6 · T21).
 // 기존 모듈과 시험 도우미만 읽는다 — 제품 파일을 되돌린 트리(음성 대조)에서도 이 파일이 로드되게.
 
 const MIN = 60_000;
@@ -133,5 +133,121 @@ describe('봉인된 끝 — 넘김 0 · 현행 제안 경로(T27)', () => {
     expect([polled.state.offer, polled.kinds]).toEqual([null, []]);
     const live = transition(offered, { type: 'live-button', x: X_A, attempt: 0 }, NOW);
     expect(live).toEqual({ state: offered, effects: [] });
+  });
+});
+
+const R = NOW + 1_000; // 근거 응답을 받은 시각
+const P = NOW - 6_000;
+const NONE: RewindStatusResult = { kind: 'none' };
+
+/** A1 의 live ∧ ready 응답에서 칸 몇을 바꾼 응답 */
+function status(patch: Partial<RewindStatus>): RewindStatusResult {
+  const ready = liveReady(A1, T0, NOW);
+  return ready.kind === 'ok' ? { kind: 'ok', status: { ...ready.status, ...patch } } : ready;
+}
+
+const doorPoll = (x: XAnswer = X_A) => streamPoll(liveReady(A1, T0, NOW), x, R);
+const laterPoll = () => streamPoll(liveReady(A2, NOW + MIN, NOW + 2 * MIN), X_A);
+
+/** A1 을 P 에서 트는 되감기 세션(목록 끝 E = NOW · 문 없음 · 위치 사건 전) */
+function rewindNear(): PlaybackSessionState {
+  startRun();
+  const fresh = openSession({ roundId: 'r-A', accessKey: 'r-A|key-1', liveUrl: LIVE_URL });
+  return run(fresh, [
+    streamPoll(liveReady(A1, T0, NOW)),
+    { type: 'seek', targetMs: P, view: { lowerMs: P + 1, endMs: NOW + 28_000 } },
+    { type: 'list-loaded', url: A1, firstMs: T0, lastEndMs: NOW, targetDurationS: 6 },
+  ]);
+}
+
+/** 끝에 닿은 끝남 대기(되감기 기원 · atEnd) · 띠 안 · 문 없음 */
+const endingAtEnd = (last = pos(NOW)) => run(rewindNear(), [pos(P), last, { type: 'end-reached' }]);
+
+/**
+ * 사건들을 먹이고 나가 있는 탐침을 무잘림 결과로 끝낸 뒤의 상태와 효과 종류 전부. 넘김 행이 없는 트리에서는 탐침 결과를
+ * 받는 행이 없어 그대로다
+ */
+function settled(start: PlaybackSessionState, events: SessionEvent[]) {
+  let state = start;
+  const kinds: string[] = [];
+  for (const event of [...events, null]) {
+    const next = transition(state, event ?? settleProbe(state), R);
+    state = next.state;
+    kinds.push(...next.effects.map((e: SessionEffect) => e.kind));
+  }
+  return { state, kinds };
+}
+
+/** 넘기지 않았다 — 되감기 A1 그대로 · 탐침 0 · 알림 0 */
+function expectNoProbe(start: PlaybackSessionState, events: SessionEvent[]) {
+  const { state, kinds } = settled(start, events);
+  expect([state.source.kind, state.source.url]).toEqual(['rewind', A1]);
+  expect(kinds.filter((k) => k === 'probe-live' || k === 'notice')).toEqual([]);
+}
+
+describe('넘김 0 끝단 — 탐침을 청하지 않는 자리(T4 b–e · T6 음성)', () => {
+  it('T4b–e: 문 뒤의 x B · P 를 덮지 않는 다음 url · ready:false · 404, 그리고 x 모름만 받은 뒤의 띠 안 위치', () => {
+    const negatives = [
+      () => doorPoll(X_B),
+      laterPoll,
+      () => streamPoll(status({ mode: 'live', url: A1 }), X_A),
+      () => streamPoll(NONE, X_A),
+    ];
+    for (const negative of negatives) {
+      const s = rewindNear();
+      expectNoProbe(s, [doorPoll(), negative(), pos(P)]);
+    }
+    const unknownOnly = rewindNear();
+    expectNoProbe(unknownOnly, [doorPoll(X_UNKNOWN), pos(P)]);
+  });
+
+  it('T6 음성: 끝남 대기의 문이 열려도 E1 의 조건 하나가 거짓이면 탐침 0', () => {
+    const ending = endingAtEnd();
+    const waitWith = (origin: 'live' | 'rewind', atEnd: boolean, recordOnEnd: boolean) => ({
+      ...ending,
+      phase: { kind: 'ending-wait' as const, origin, atEnd, recordOnEnd },
+    });
+    const waits: PlaybackSessionState[] = [
+      waitWith('rewind', false, false),
+      waitWith('rewind', true, true),
+      waitWith('live', true, false),
+      { ...ending, handoffBlock: { url: A1, endMs: NOW, reason: 'reverted' } },
+      endingAtEnd(pos(NOW, { playing: false })),
+      sealedEnd(),
+    ];
+    for (const s of waits) expectNoProbe(s, [doorPoll()]);
+    for (const poll of [laterPoll, () => doorPoll(X_B), () => doorPoll(X_UNKNOWN)]) {
+      const s = endingAtEnd();
+      expectNoProbe(s, [poll()]);
+    }
+  });
+});
+
+describe('넘김 0 끝단 — 탐침 사이의 최신 부정 응답(T21 a · b · e · f)', () => {
+  const negatives = [
+    () => streamPoll(status({ mode: 'live', url: A1 }), X_A),
+    () => streamPoll(NONE, X_A),
+    () => doorPoll(X_B),
+    laterPoll,
+    () => streamPoll(status({ mode: 'ending' }), X_A),
+    () => streamPoll(status({ mode: 'ending', url: A1 }), X_A),
+  ];
+
+  it('T21a · b · e: 끝남 대기에서 탐침 뒤 문을 지우는 응답이 오면 결과가 무잘림이어도 넘기지 않는다', () => {
+    for (const negative of negatives) {
+      const s = endingAtEnd();
+      const { state, kinds } = settled(s, [doorPoll(), negative()]);
+      expect(state).toMatchObject({ phase: { kind: 'ending-wait' }, handoffProbe: null });
+      expect([state.source.url, kinds.includes('notice')]).toEqual([A1, false]);
+    }
+  });
+
+  it('T21f: rewind 에서도 같다 — 탐침 뒤 문을 지우는 응답(R12)이 오면 넘기지 않는다', () => {
+    for (const negative of negatives) {
+      const s = rewindNear();
+      const { state, kinds } = settled(s, [doorPoll(), pos(P), negative()]);
+      expect(state).toMatchObject({ phase: { kind: 'rewind' }, handoffProbe: null });
+      expect([state.source.url, kinds.includes('notice')]).toEqual([A1, false]);
+    }
   });
 });

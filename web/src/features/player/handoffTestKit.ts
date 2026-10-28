@@ -6,6 +6,10 @@ import type { PlaybackSessionState, SessionEvent, XAnswer } from './rewindSwitch
 
 type PositionEvent = Extract<SessionEvent, { type: 'position' }>;
 type StreamPollEvent = Extract<SessionEvent, { type: 'stream-poll' }>;
+type LiveProbeEvent = Extract<SessionEvent, { type: 'live-probe' }>;
+
+/** 라이브 창 28초(4초 × 7) 가운데 하한(첫 조각 + 3 × TD) 뒤의 폭 — 탐침 결과의 라이브 끝 = 하한 + 이 값 */
+const LIVE_END_AFTER_FLOOR_MS = 16_000;
 
 let lastPosition: PositionEvent | null = null;
 let streamSeq = 0;
@@ -57,6 +61,19 @@ export function streamPoll(
   return x === undefined
     ? { type: 'stream-poll', result, ask }
     : { type: 'stream-poll', result, x, ask };
+}
+
+/**
+ * 나가 있는 탐침의 결과 사건 — 라이브 창 하한이 floorMs 다. 기본은 P − 2000(무잘림)이다. 나가 있는 탐침이 없으면 마지막
+ * 순번을 싣는다(넘김 행이 없는 트리에서는 아무 행도 받지 않는다)
+ */
+export function settleProbe(
+  s: PlaybackSessionState,
+  floorMs = (s.lastAtMs ?? 0) - 2_000,
+): LiveProbeEvent {
+  const seq = s.handoffProbe?.seq ?? s.probeSeq;
+  const endMs = floorMs + LIVE_END_AFTER_FLOOR_MS;
+  return { type: 'live-probe', seq, result: { kind: 'ok', floorMs, endMs } };
 }
 
 /**
