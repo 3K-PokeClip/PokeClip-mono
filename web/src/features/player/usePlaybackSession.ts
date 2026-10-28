@@ -101,6 +101,8 @@ export function usePlaybackSession(options: SessionOptions): PlaybackSession | n
    * 그사이 세션이 바뀌었으면 답을 버린다 — A 의 늦은 답이 B 세션에 들지 않게(cx H3)
    */
   const sessionIdRef = useRef(0);
+  /** 스트림 폴링 응답의 물음 순번 — 응답마다 1씩 오른다(세션 표가 늦은 응답을 버리는 기준) */
+  const streamAskRef = useRef(0);
   const commit = useCallback((next: PlaybackSessionState | null) => {
     stateRef.current = next;
     setState(next);
@@ -228,13 +230,16 @@ export function usePlaybackSession(options: SessionOptions): PlaybackSession | n
     (result: RewindStatusResult) => {
       const current = stateRef.current;
       if (current === null) return;
+      // 받은 즉시 찍는다 — 지금 방송 번호를 기다리는 동안 흐른 시간이 응답의 신선도에 들지 않게
+      streamAskRef.current += 1;
+      const ask = { seq: streamAskRef.current, receivedAtMs: Date.now() };
       if (!needsX(current)) {
-        dispatch({ type: 'stream-poll', result });
+        dispatch({ type: 'stream-poll', result, ask });
         return;
       }
       const id = sessionIdRef.current;
       void optionsRef.current.resolveX(false).then((x) => {
-        if (id === sessionIdRef.current) dispatch({ type: 'stream-poll', result, x });
+        if (id === sessionIdRef.current) dispatch({ type: 'stream-poll', result, x, ask });
       });
     },
     [dispatch],

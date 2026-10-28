@@ -1,8 +1,14 @@
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
-import type { XAnswer } from './rewindSwitch';
+import { transition, type SessionEvent, type XAnswer } from './rewindSwitch';
 import { usePlaybackSession, type SessionPlayer, type SessionOptions } from './usePlaybackSession';
+
+// 세션에 들어간 사건을 보려고 상태기계를 감싼다 — 동작은 원본 그대로다
+vi.mock('./rewindSwitch', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./rewindSwitch')>();
+  return { ...actual, transition: vi.fn(actual.transition) };
+});
 
 // 재생 세션의 수명 소유자(설계 5.5절) — 여는 조건 · 폴링 켜기 · 효과 적용 · 리마운트 잇기(R36)
 
@@ -183,7 +189,9 @@ describe('리마운트 잇기(R36 — 세션은 GlassPlayer key 바깥에 산다
         view: { lowerMs: NOW - 16_000, endMs: NOW },
       }),
     );
-    act(() => result.current?.dispatch({ type: 'position', atMs: t + 5_000 }));
+    act(() =>
+      result.current?.dispatch({ type: 'position', atMs: t + 5_000, playing: true, runMs: 5_000 }),
+    );
     const before = result.current!.state.source;
     act(() => result.current?.bindPlayer(null));
     act(() => result.current?.bindPlayer(fakePlayer()));
@@ -192,6 +200,7 @@ describe('리마운트 잇기(R36 — 세션은 GlassPlayer key 바깥에 산다
       url: A1,
       startAtMs: t + 5_000,
       generation: before.generation + 1,
+      strictStart: false,
     });
   });
 
@@ -350,5 +359,53 @@ describe('세션 수명 — 앞 세션의 늦은 답(cx H3)', () => {
     await act(async () => vi.advanceTimersByTime(2_000));
     await flush();
     expect(result.current?.state.phase.kind).toBe('rewind');
+  });
+});
+
+describe('물음 순번 — 스트림 폴링 응답마다 순번과 수신 시각(설계 r9 2절)', () => {
+  function streamPolls(): Extract<SessionEvent, { type: 'stream-poll' }>[] {
+    return vi
+      .mocked(transition)
+      .mock.calls.map(([, event]) => event)
+      .filter((e): e is Extract<SessionEvent, { type: 'stream-poll' }> => e.type === 'stream-poll');
+  }
+
+  // 앞 시험의 사건을 지우고 원본 상태기계를 단다 — 이 묶음은 사건 기록과 원본 동작을 둘 다 처음부터 쥔다
+  beforeEach(async () => {
+    const actual = await vi.importActual<typeof import('./rewindSwitch')>('./rewindSwitch');
+    vi.mocked(transition).mockReset().mockImplementation(actual.transition);
+  });
+
+  it('응답마다 순번이 1씩 오르고 수신 시각을 싣는다', async () => {
+    renderHook(() => usePlaybackSession(options()));
+    await flush();
+    await act(async () => vi.advanceTimersByTime(10_000));
+    await flush();
+    expect(streamPolls().map((e) => e.ask)).toEqual([
+      { seq: 1, receivedAtMs: NOW },
+      { seq: 2, receivedAtMs: NOW + 10_000 },
+    ]);
+  });
+
+  it('지금 방송 번호를 기다리는 응답도 받은 즉시 찍은 시각을 싣는다', async () => {
+    let releaseX!: (x: XAnswer) => void;
+    const resolveX = vi.fn(
+      () =>
+        new Promise<XAnswer>((resolve) => {
+          releaseX = resolve;
+        }),
+    );
+    const { result } = renderHook(() => usePlaybackSession(options({ resolveX })));
+    await flush();
+    act(() => result.current?.dispatch({ type: 'live-closed' }));
+    await flush();
+    const receivedAt = Date.now();
+    await act(async () => vi.advanceTimersByTime(2_000));
+    await act(async () => {
+      releaseX({ kind: 'known', id: 'r-A' });
+      await Promise.resolve();
+    });
+    await flush();
+    expect(streamPolls().at(-1)?.ask?.receivedAtMs).toBe(receivedAt);
   });
 });

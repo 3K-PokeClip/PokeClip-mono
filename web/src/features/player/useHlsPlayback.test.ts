@@ -134,6 +134,7 @@ function src(patch: Partial<PlaybackSource> = {}): PlaybackSource {
     url: 'https://m/live/k/index.m3u8',
     startAtMs: null,
     generation: 0,
+    strictStart: false,
     ...patch,
   };
 }

@@ -65,10 +65,13 @@ export function useLiveRewindPlayback(
   }, [bindPlayer]);
 
   // 마지막으로 본 자리(P) — 리마운트 잇기 · 계승 판정 · 이음 지점의 재료
+  // 재생 여부 · 연속 길이도 싣는다 — 같은 자리여도 일시정지만 하면 사건이 한 번 난다(POK-200 c13)
   const atMs = sim.livePosition?.atMs ?? null;
+  const playing = sim.livePosition?.playing ?? false;
+  const runMs = sim.livePosition?.runMs ?? 0;
   useEffect(() => {
-    if (atMs !== null) dispatch({ type: 'position', atMs });
-  }, [atMs, dispatch]);
+    if (atMs !== null) dispatch({ type: 'position', atMs, playing, runMs });
+  }, [atMs, playing, runMs, dispatch]);
 
   // 다시보기(VOD)는 끝난 방송이라 오른쪽 끝이 「실시간」이 아니라 녹화 끝이다(시크바 문구 · LIVE 숨김)
   return { ...sim, replay: state.source.kind === 'vod' };

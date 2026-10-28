@@ -65,6 +65,7 @@ const SOURCE: PlaybackSource = {
   url: 'https://m/live/k/index.m3u8',
   startAtMs: null,
   generation: 0,
+  strictStart: false,
 };
 
 /** 라이브 재생기를 세우고 목록 10조각 · 라이브 끝 38초 · 재생 위치 36초에 둔다 */

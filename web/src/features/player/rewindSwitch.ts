@@ -23,6 +23,14 @@ export interface PlaybackSource {
   url: string;
   startAtMs: number | null;
   generation: number;
+  /** 시작이 잘리면(startIsTruncated) 틀지 말라는 계약(POK-200 c13). 꼬리 넘김만 세우고 그 밖의 소스는 false 다 */
+  strictStart: boolean;
+}
+
+/** 스트림 폴링 응답 하나의 물음 순번과 수신 시각 — 받은 즉시 훅이 찍는다(늦은 응답 버림의 정본) */
+export interface StreamAsk {
+  seq: number;
+  receivedAtMs: number;
 }
 
 interface RewindRange {
@@ -110,7 +118,7 @@ export type SessionEvent =
   | { type: 'live-button'; x: XAnswer; attempt: number }
   | { type: 'playing' }
   /** x = 이번 폴링과 함께 물은 지금 방송 번호(세션에 묶인 live · 끝남 대기 버튼 규칙). 없으면 모름 */
-  | { type: 'stream-poll'; result: RewindStatusResult; x?: XAnswer }
+  | { type: 'stream-poll'; result: RewindStatusResult; x?: XAnswer; ask: StreamAsk }
   | { type: 'round-poll'; result: RewindStatusResult }
   | { type: 'endlist' }
   | { type: 'end-reached' }
@@ -127,7 +135,8 @@ export type SessionEvent =
       lastEndMs: number;
       targetDurationS: number;
     }
-  | { type: 'position'; atMs: number }
+  /** playing = 재생 중인가 · runMs = 지금 위치를 담은 played 범위의 길이(연속 시작 = atMs − runMs) */
+  | { type: 'position'; atMs: number; playing: boolean; runMs: number }
   | { type: 'remount' }
   | { type: 'leave' };
 
@@ -161,7 +170,7 @@ export function openSession(init: {
   return {
     ...init,
     phase: { kind: 'live' },
-    source: { kind: 'live', url: init.liveUrl, startAtMs: null, generation: 0 },
+    source: { kind: 'live', url: init.liveUrl, startAtMs: null, generation: 0, strictStart: false },
     lastAtMs: null,
     watchedFromMs: null,
     observedEndMs: null,
@@ -232,7 +241,7 @@ function replace(
   url: string,
   startAtMs: number | null,
 ): PlaybackSource {
-  return { kind, url, startAtMs, generation: session.source.generation + 1 };
+  return { kind, url, startAtMs, generation: session.source.generation + 1, strictStart: false };
 }
 
 function close(session: PlaybackSessionState, reason: SessionClose, goTo?: string): Transition {
