@@ -24,7 +24,8 @@ import {
   withUrl,
 } from './sessionShared';
 
-// 재생 세션 상태기계의 끝남 대기 표(rewindSwitch.ts 에서 옮김 · POK-200 c13m — 줄 수 800 처분). 동작은 옮기기 전과 같다.
+// 재생 세션 상태기계의 끝남 대기 표(rewindSwitch.ts 에서 옮김 · POK-200 c13m — 줄 수
+// 800 처분). 동작은 옮기기 전과 같다.
 
 type EndingPhase = Extract<SessionPhase, { kind: 'ending-wait' }>;
 
@@ -36,8 +37,10 @@ export function onEnding(
 ): Transition {
   switch (event.type) {
     case 'stream-poll': {
-      const doored = phase.origin === 'rewind' ? withNextDoor(session, event) : session;
-      return phase.recordOnEnd ? stateOnly(doored) : onEndingStreamPoll(doored, phase, event, now);
+      const fromRewind = phase.origin === 'rewind';
+      const doored = fromRewind ? withNextDoor(session, event) : session;
+      if (phase.recordOnEnd) return stateOnly(doored);
+      return onEndingStreamPoll(doored, phase, event, now);
     }
     case 'round-poll':
       return phase.recordOnEnd
@@ -66,10 +69,13 @@ export function onEnding(
   }
 }
 
-/** 이음 지점 — rewind 기원이면 atEnd ? E : P, live 기원이면 lastAtMs. url 이 바뀌어 list 가 비었으면 E 대신 lastAtMs(T12) */
+/**
+ * 이음 지점 — rewind 기원이면 atEnd ? E : P, live 기원이면 lastAtMs. url 이 바뀌어
+ * list 가 비었으면 E 대신 lastAtMs(T12)
+ */
 function joinPoint(session: PlaybackSessionState, phase: EndingPhase): number | null {
-  if (phase.origin === 'rewind' && phase.atEnd) return session.list?.endMs ?? session.lastAtMs;
-  return session.lastAtMs;
+  if (phase.origin !== 'rewind' || !phase.atEnd) return session.lastAtMs;
+  return session.list?.endMs ?? session.lastAtMs;
 }
 
 function onEndingStreamPoll(
