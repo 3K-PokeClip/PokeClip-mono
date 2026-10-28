@@ -8,12 +8,13 @@ import {
 } from 'react';
 import { fireEvent, screen, within } from '@testing-library/react';
 import { axe } from 'jest-axe';
-import { QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { reportPlaybackForbidden, resetPlaybackAccessForTests } from '@/api/playbackAccess';
 import { LiveScreen } from '@/features/broadcast/livenow/LiveScreen';
 import { ChatReplayLoader } from '@/features/broadcast/livenow/chatReplay';
 import { CHAT_PAGE_MAX, LIVE_REREAD_MS } from '@/features/broadcast/livenow/chatCollector';
+import { LINK_RECHECK_MS } from '@/features/broadcast/livenow/linkLock';
 import {
   publishLiveData,
   resetLiveData,
@@ -3228,6 +3229,78 @@ describe('LiveScreen — 방송 채널 연동이 없을 때', () => {
     expect(within(panel).getByText('자동 감지가 꺼져 있어요')).toBeInTheDocument();
     expect(within(panel).queryByText('아직 감지된 하이라이트가 없어요')).toBeNull();
     expect(screen.getByRole('button', { name: /수동 마킹/ })).toBeEnabled();
+  });
+
+  /** 이 경로에 나간 요청 수 */
+  const reads = (path: string) =>
+    fetchSpy.mock.calls.filter(
+      ([url]) => new URL(String(url), 'http://localhost').pathname === path,
+    ).length;
+  /**
+   * 운영과 같은 staleTime(60초)으로 그린다. 시험 기본 클라이언트는 0이라 「탭에 머무는 동안 다시 묻지 않아 잠긴 채」라는 결함이
+   * 드러나지 않는다(testProviders 주석)
+   */
+  async function renderLiveProdCache() {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: 60_000 } },
+    });
+    const result = renderWithProviders(<LiveScreen />, client);
+    await settle();
+    return result;
+  }
+
+  it('다른 탭 · 다른 기기에서 연동하고 돌아오면 잠긴 동안 다시 물어 잠금이 풀리고 채팅을 다시 읽는다(PR #453 리뷰)', async () => {
+    server.chzzkLink = { linked: false };
+    await renderLiveProdCache();
+    expect(screen.getAllByRole('link', { name: '채널 연동하기' })).toHaveLength(2);
+    const chatBefore = liveChatReads();
+
+    // 이 탭의 캐시는 모른 채 다른 곳에서 연동을 마쳤다. 탭에 머물러 있다(포커스 · 화면 이동 없음)
+    server.chzzkLink = { linked: true, channelName: '게임하는너구리', status: 'ACTIVE' };
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(LINK_RECHECK_MS + 1_000);
+    });
+    await settle();
+
+    expect(screen.queryByRole('link', { name: '채널 연동하기' })).toBeNull();
+    expect(screen.getByText('도네초코 · 치즈 5,000')).toBeInTheDocument();
+    expect(screen.getByText(/^방송 중 채팅 [\d,]+개$/)).toBeInTheDocument();
+    expect(liveChatReads()).toBeGreaterThan(chatBefore);
+  });
+
+  it('연동돼 있으면 연동을 주기로 다시 묻지 않는다: 주기는 잠긴 동안만이다', async () => {
+    await renderLiveProdCache();
+    const before = reads('/api/chzzk-link') + reads('/api/soop-link');
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(LINK_RECHECK_MS * 3);
+    });
+    await settle();
+    expect(reads('/api/chzzk-link') + reads('/api/soop-link')).toBe(before);
+  });
+
+  it('방송 중에 연동이 사라진 것을 다시 물어 알면 그때 잠그고 채팅 읽기를 멈춘다', async () => {
+    await renderLiveProdCache();
+    expect(screen.getByText('도네초코 · 치즈 5,000')).toBeInTheDocument();
+
+    // 다른 탭에서 해제했다. 60초가 지나 탭으로 돌아오면(포커스) 다시 묻는다
+    server.chzzkLink = { linked: false };
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(61_000);
+    });
+    await act(async () => {
+      window.dispatchEvent(new Event('visibilitychange'));
+    });
+    await settle();
+
+    const chat = screen.getByRole('complementary', { name: '실시간 채팅' });
+    expect(within(chat).getByText('방송 채널을 연동해야 채팅이 보여요')).toBeInTheDocument();
+    const before = liveChatReads();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    await settle();
+    expect(liveChatReads()).toBe(before);
   });
 
   it('SOOP 하나만 연동돼 있어도 잠그지 않는다', async () => {

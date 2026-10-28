@@ -1,6 +1,6 @@
 'use client';
 
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { chzzkLinkQueryOptions, type ChzzkLinkState } from '@/api/chzzkLink';
 import { soopLinkQueryOptions, type SoopLinkState } from '@/api/soopLink';
 import { useLiveData } from './liveDataStore';
@@ -47,10 +47,32 @@ export function linkLockOf({
   return chzzk.status === 'BROKEN' || soop.status === 'BROKEN' ? 'broken' : 'unlinked';
 }
 
-/** 지금 보는 방송의 채팅 · 통계 잠금. 연동 조회는 방송 정보(useLiveMockState)와 같은 쿼리라 요청이 늘지 않는다 */
-export function useLinkLock(status: BroadcastStatus): LinkLock {
-  const { relation } = useLiveData();
-  const { data: chzzk } = useQuery(chzzkLinkQueryOptions);
-  const { data: soop } = useQuery(soopLinkQueryOptions);
+/**
+ * 잠긴 동안 두 연동을 다시 묻는 간격. 다른 탭 · 다른 기기에서 연동하고 돌아오면 이 탭의 캐시는 그대로다: 연동 콜백이 쿼리를 지우는
+ * 것은 그 탭의 캐시뿐이고, 전역 staleTime(60초)만으로는 탭에 머무는 동안 다시 묻지 않아 연동했는데도 잠긴 채였다(PR #453 리뷰).
+ * 편집자 목록 자동 갱신(POK-481)과 같은 간격이다. 숨은 탭에서는 묻지 않는다(refetchIntervalInBackground 기본값)
+ */
+export const LINK_RECHECK_MS = 20_000;
+
+/**
+ * 지금 보는 방송의 채팅 · 통계 잠금. 방송 상태 · 관계는 저장소의 것이다(방송 시계가 올린다): 방송 정보를 읽는 훅(useLiveMockState)도
+ * 같은 판정으로 차트 읽기를 멈추므로 화면의 시계 값을 따로 넘기지 않는다. 연동 조회는 그 훅과 같은 쿼리라 요청이 늘지 않는다
+ */
+export function useLinkLock(): LinkLock {
+  const { status, relation } = useLiveData();
+  const queryClient = useQueryClient();
+  // 주기는 두 연동을 같이 보고 정한다: 한 쿼리의 주기를 그 쿼리 값만으로 정하면 다른 쪽이 연동돼 잠금이 풀린 뒤에도 미연동 쪽을
+  // 계속 묻는다. 옵션은 그릴 때마다 다시 넘어가므로 다른 쪽 답이 오면 다음 그리기에서 주기가 맞춰진다
+  const recheck = () =>
+    linkLockOf({
+      status,
+      relation,
+      chzzk: queryClient.getQueryData<ChzzkLinkState>(chzzkLinkQueryOptions.queryKey),
+      soop: queryClient.getQueryData<SoopLinkState>(soopLinkQueryOptions.queryKey),
+    }) === null
+      ? false
+      : LINK_RECHECK_MS;
+  const { data: chzzk } = useQuery({ ...chzzkLinkQueryOptions, refetchInterval: recheck });
+  const { data: soop } = useQuery({ ...soopLinkQueryOptions, refetchInterval: recheck });
   return linkLockOf({ status, relation, chzzk, soop });
 }

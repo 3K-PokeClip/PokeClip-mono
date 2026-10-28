@@ -423,6 +423,11 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
   // 주소는 usePathname으로 읽는다: 넘어온 직후 첫 그리기의 window.location은 옛 주소다
   const vodRouteId = vodStreamIdFromPathname(usePathname() ?? '');
   const pastRoute = vodRouteId !== null;
+  // 방송 채널 연동이 없으면 채팅 · 통계는 올 곳이 없다: 두 패널을 잠그고 채널 연동 화면으로 가는 길을 준다(linkLock). 제목 · 카테고리 ·
+  // 태그 · 시청자 수도 수집기가 걷는 값이라 오지 않는다: 그 빈칸은 「수집 전」 대신 「연동 필요」이고, 받아 오는 중 막대도 세우지 않는다.
+  // 자동 하이라이트도 채팅으로 찾으니 「자동 감지 중」이라 하지 않는다
+  const linkLock = useLinkLock();
+  const lockWord = linkLock === null ? null : LINK_LOCK_WORD[linkLock];
   const { stream, highlights, hiddenHighlights, cardsStatus, chatWarning, mergeCard } =
     useLiveMockState(pastRoute);
   const { streamMeta, cardVisuals } = useLiveDetailsMockState();
@@ -505,11 +510,6 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
     playheadFromRecording.current = false;
     publishLiveData({ playheadMs: null });
   }, [recordingLookup]);
-  // 방송 채널 연동이 없으면 채팅 · 통계는 올 곳이 없다: 두 패널을 잠그고 채널 연동 화면으로 가는 길을 준다(linkLock). 제목 · 카테고리 ·
-  // 태그 · 시청자 수도 수집기가 걷는 값이라 오지 않는다: 그 빈칸은 「수집 전」 대신 「연동 필요」이고, 받아 오는 중 막대도 세우지 않는다.
-  // 자동 하이라이트도 채팅으로 찾으니 「자동 감지 중」이라 하지 않는다
-  const linkLock = useLinkLock(viewStatus);
-  const lockWord = linkLock === null ? null : LINK_LOCK_WORD[linkLock];
   // 수집이 끊겼으면 새 채팅도 멈춘다 — 「수집 끊김」이라면서 메시지가 계속 쌓이면
   // 화면이 스스로 모순된다(ADR-011: 끊기면 자동 탐지를 정직하게 비활성화한다). 잠근 채팅도 묻지 않는다
   const chat = useChatPanelMockState(
