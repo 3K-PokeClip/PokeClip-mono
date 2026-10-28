@@ -9,8 +9,9 @@ import type {
   XAnswer,
 } from './rewindSwitch';
 
-// 재생 세션 상태기계(rewindSwitch.ts)와 끝남 대기 표(endingWait.ts)가 나눠 쓰는 값과 도구(POK-200 c13).
-// 두 표가 서로의 값을 읽지 않도록 여기에 둔다 — 여기는 rewindSwitch 의 타입만 읽는다.
+// 재생 세션 상태기계(rewindSwitch.ts)와 끝남 대기 표(endingWait.ts)가 나눠 쓰는 값과
+// 도구(POK-200 c13). 두 표가 서로의 값을 읽지 않도록 여기에 둔다 — 여기는
+// rewindSwitch 의 타입만 읽는다.
 
 /** 재접속 대기 = 재접속 창 300초 + 판정 여유 60초(M6 회차 닫힘 조건과 같다). 이 동안 회차별 404 는 「아직 모름」이다 */
 export const RESUME_WAIT_MS = 360_000;
@@ -35,7 +36,9 @@ export const SESSION_NOTICES = {
 // ── 작은 도구 ──
 
 /** 효과 없는 전이 — 상태를 그대로 두거나 바꾼 상태만 돌려준다 */
-export const stateOnly = (state: PlaybackSessionState): Transition => ({ state, effects: [] });
+export function stateOnly(state: PlaybackSessionState): Transition {
+  return { state, effects: [] };
+}
 
 export function withUrl(set: ReadonlySet<string>, url: string): ReadonlySet<string> {
   return set.has(url) ? set : new Set([...set, url]);

@@ -175,7 +175,10 @@ export type SessionEffect =
   | { kind: 'recheck-x'; attempt: number }
   /** goTo = 「새 방송 보기」의 방송 번호 */
   | { kind: 'close'; reason: SessionClose; goTo?: string }
-  /** 라이브 목록 url 의 창 하한을 잰다(liveWindowProbe) — 결과는 같은 seq 의 live-probe 사건으로 돌아온다 */
+  /**
+   * 라이브 목록 url 의 창 하한을 잰다(liveWindowProbe) — 결과는 같은 seq 의
+   * live-probe 사건으로 돌아온다
+   */
   | { kind: 'probe-live'; seq: number; url: string };
 
 export interface Transition {
@@ -259,8 +262,10 @@ function onLive(session: PlaybackSessionState, event: SessionEvent, now: number)
   switch (event.type) {
     case 'seek':
       return endConfirm(seekLive(session, event.targetMs, event.view));
-    case 'live-button':
-      return endConfirm({ state: session, effects: [{ kind: 'seek-live-edge' }] });
+    case 'live-button': {
+      const edge: SessionEffect = { kind: 'seek-live-edge' };
+      return endConfirm({ state: session, effects: [edge] });
+    }
     case 'playing':
       return session.endingSince === null
         ? stateOnly(session)
@@ -358,8 +363,8 @@ function onRewind(
 }
 
 /**
- * 문은 D 표를 먼저 탄다(R11 · R12 · R13 · R10 은 그 결과) — R9 만 응답 앞의 문을 새 url 로 넘긴다. R11 은 갱신한 뒤 넘김 조건이면
- * 탐침을 청한다
+ * 문은 D 표를 먼저 탄다(R11 · R12 · R13 · R10 은 그 결과) — R9 만 응답 앞의
+ * 문을 새 url 로 넘긴다. R11 은 갱신한 뒤 넘김 조건이면 탐침을 청한다
  */
 function onRewindStreamPoll(
   before: PlaybackSessionState,
@@ -499,8 +504,10 @@ function onAnyPhase(
           session.watchedFromMs === null ? event.atMs : Math.min(session.watchedFromMs, event.atMs),
       };
       // A1 — 확인 중인 live 는 H 행, rewind 는 R6(넘김 조건이면 탐침)
-      const probed = moved.phase.kind === 'rewind' ? requestProbe(moved, now) : null;
-      return onHandoffConfirming(moved, event, now) ?? probed ?? stateOnly(moved);
+      const rewinding = moved.phase.kind === 'rewind';
+      const probed = rewinding ? requestProbe(moved, now) : null;
+      const confirming = onHandoffConfirming(moved, event, now);
+      return confirming ?? probed ?? stateOnly(moved);
     }
     case 'live-probe':
       return onLiveProbe(session, event.seq, event.result, now);
