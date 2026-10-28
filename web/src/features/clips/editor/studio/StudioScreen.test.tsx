@@ -271,6 +271,31 @@ describe('StudioScreen', () => {
     expect(screen.getByText('5초 미만, 3분 초과로는 핸들이 움직이지 않아요')).toBeInTheDocument();
   });
 
+  it('「반복」을 마우스로 눌러 켠 뒤 Space는 재생이다: 반복이 다시 꺼지지 않는다(POK-490)', async () => {
+    // 칩이 포커스를 쥐면 편집기가 Space를 그 칩에 양보해, 재생 대신 반복이 꺼지고 포커스 테두리로 켜진 것처럼 보였다(로컬 실측)
+    const user = userEvent.setup();
+    renderStudio();
+    const loop = screen.getByRole('button', { name: '구간 반복' });
+    await user.click(loop); // 끔
+    await user.click(loop); // 다시 켬
+    expect(loop).toHaveAttribute('aria-pressed', 'true');
+    expect(loop).not.toHaveFocus();
+
+    await user.keyboard(' ');
+    expect(loop).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: '일시정지' })).toBeInTheDocument();
+  });
+
+  it('Tab으로 「반복」에 온 키보드 사용자는 Space로 켜고 끈다', async () => {
+    const user = userEvent.setup();
+    renderStudio();
+    const loop = screen.getByRole('button', { name: '구간 반복' });
+    loop.focus();
+    await user.keyboard(' ');
+    expect(loop).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('button', { name: '재생' })).toBeInTheDocument();
+  });
+
   it('재생 조작은 미리보기 아래 막대에 있다: 되감기·감기·재생·쇼츠 안 시각 · 반복·배속·썸네일 칩', async () => {
     const user = userEvent.setup();
     renderStudio();
