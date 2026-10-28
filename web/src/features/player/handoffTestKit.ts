@@ -1,5 +1,5 @@
 import type { RewindStatusResult } from '@/api/rewindStatus';
-import type { SessionEvent, XAnswer } from './rewindSwitch';
+import type { PlaybackSessionState, SessionEvent, XAnswer } from './rewindSwitch';
 
 // 세션 표 시험의 사건 도우미(POK-200 c13). 위치 사건은 재생 여부 · 연속 길이를, 스트림 폴링 사건은 물음 순번을 싣는다.
 // 제품 모듈은 타입만 읽는다 — 제품 파일을 되돌린 트리(음성 대조)에서도 이 파일이 로드되게.
@@ -49,4 +49,27 @@ export function streamPoll(
   return x === undefined
     ? { type: 'stream-poll', result, ask }
     : { type: 'stream-poll', result, x, ask };
+}
+
+/**
+ * 꼬리 넘김(P1) 직후의 세션 — 넘긴 순간의 P(lastAtMs) · E(list.endMs) 로 확인을 시작하고, 시한은 now + (E − P) + 2 × TD 다.
+ * 넘김 행(c13h)이 들기 전에 확인 행을 시험하려고 결과 모양만 만든다
+ */
+export function handedOff(s: PlaybackSessionState, now: number): PlaybackSessionState {
+  const list = s.list!;
+  const atMs = s.lastAtMs!;
+  const generation = s.source.generation + 1;
+  const deadlineMs = now + (list.endMs - atMs) + 2 * list.tdMs;
+  return {
+    ...s,
+    phase: { kind: 'live' },
+    source: { kind: 'live', url: s.liveUrl, startAtMs: atMs, generation, strictStart: true },
+    boundLive: true,
+    foreignLive: null,
+    liveChecking: false,
+    offer: null,
+    handoff: { fromUrl: s.source.url, endMs: list.endMs, atMs, deadlineMs, seenAtMs: null },
+    handoffDoor: null,
+    handoffProbe: null,
+  };
 }
