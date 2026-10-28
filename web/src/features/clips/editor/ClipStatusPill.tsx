@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import {
   AlertCircle,
@@ -75,6 +75,18 @@ export function ClipStatusPill({
 }) {
   const [open, setOpen] = useState(false);
   const settledAll = !view.steps.some((step) => isCurrent(step.state));
+
+  // 할 일이 바뀌거나(다시 올리기 성공) 다시 올리기 단추가 돌기 시작하면 포커스를 쥔 단추가 사라지거나 꺼져 포커스가 body로
+  // 떨어졌다 — 창으로 되돌려 키보드·스크린리더가 창 문맥을 잃지 않게 한다(PR #454 1차 리뷰)
+  const panelRef = useRef<HTMLDivElement>(null);
+  const actionsKey = `${view.actions.join(',')}|${retrying}`;
+  const lastActionsKey = useRef(actionsKey);
+  useEffect(() => {
+    if (lastActionsKey.current === actionsKey) return;
+    lastActionsKey.current = actionsKey;
+    const panel = panelRef.current;
+    if (open && panel !== null && !panel.contains(document.activeElement)) panel.focus();
+  }, [open, actionsKey]);
 
   /** 왼쪽(첫째)이 주 버튼(테두리), 나머지는 글자 버튼. 둘이면 같은 크기로 가로에 나란히, 하나면 폭을 채운다 */
   const actionButton = (action: ClipStatusAction, index: number) => {
@@ -158,14 +170,16 @@ export function ClipStatusPill({
           </span>
           <span>{view.title}</span>
           {view.progress !== null ? (
-            <span className={styles.statusPillBar}>
+            // 버튼 안의 막대는 버튼의 표현용 자식이라 보조기기에 안 드러나고, 창을 열면 같은 이름 막대가 둘이 된다 — 숨긴다.
+            // 퍼센트는 버튼 이름(제목)에 이미 있다(PR #454 1차 리뷰)
+            <span className={styles.statusPillBar} aria-hidden>
               <Progress size="sm" value={view.progress.value} label="영상 진행" />
             </span>
           ) : null}
           <ChevronDown size={13} aria-hidden className={styles.statusPillChevron} />
         </button>
       </Popover.Trigger>
-      <Popover.Content aria-label="영상 상태">
+      <Popover.Content ref={panelRef} tabIndex={-1} aria-label="영상 상태">
         <div className={styles.statusPopover} data-tone={view.tone}>
           <div className={styles.statusHead}>
             <span className={styles.statusTitle}>{view.title}</span>

@@ -1545,8 +1545,8 @@ describe('StudioScreen: 로딩 표시(POK-444)', () => {
 
     await orderVideo(user);
     await screen.findByRole('button', { name: '영상 상태: 차례 기다리는 중. 자세히 보기' });
-    expect(screen.getByRole('progressbar', { name: '영상 진행' })).not.toHaveAttribute(
-      'aria-valuenow',
-    );
+    expect(
+      screen.getByRole('progressbar', { name: '영상 진행', hidden: true }),
+    ).not.toHaveAttribute('aria-valuenow');
   });
 });

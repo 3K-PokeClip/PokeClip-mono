@@ -1211,7 +1211,7 @@ describe('StudioScreen — 로딩 표시(POK-444)', () => {
     expect(
       screen.getByRole('button', { name: '영상 상태: 영상 만드는 중 42%. 자세히 보기' }),
     ).toBeInTheDocument();
-    expect(screen.getByRole('progressbar', { name: '영상 진행' })).toHaveAttribute(
+    expect(screen.getByRole('progressbar', { name: '영상 진행', hidden: true })).toHaveAttribute(
       'aria-valuenow',
       '42',
     );
@@ -1220,9 +1220,9 @@ describe('StudioScreen — 로딩 표시(POK-444)', () => {
     renderStudio({
       clipStatus: clipStatus({ title: '영상 만드는 중', progress: { value: null } }),
     });
-    expect(screen.getByRole('progressbar', { name: '영상 진행' })).not.toHaveAttribute(
-      'aria-valuenow',
-    );
+    expect(
+      screen.getByRole('progressbar', { name: '영상 진행', hidden: true }),
+    ).not.toHaveAttribute('aria-valuenow');
   });
 
   it('기다릴 영상이 없으면 알약도 진행 막대도 없다', () => {
