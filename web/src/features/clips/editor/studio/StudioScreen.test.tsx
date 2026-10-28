@@ -7,6 +7,7 @@ import { renderWithProviders } from '@/test/testProviders';
 import { Dialog, RadioGroup } from '@/ui';
 import { StudioEditor } from './StudioScreen';
 import type { ClipEditorOptions } from '../useClipEditorMockState';
+import type { ClipStatusView } from './clipProgress';
 
 function renderStudio(options?: ClipEditorOptions) {
   return renderWithProviders(<StudioEditor {...options} />);
@@ -1139,23 +1140,103 @@ describe('StudioScreen — 로딩 표시(POK-444)', () => {
     }
   });
 
-  it('헤더 문구 아래 영상 진행 막대: 퍼센트가 있으면 그 값, 없으면 불확정이다(0%로 지어내지 않는다)', () => {
-    const { unmount } = renderStudio({ clipProgress: { value: 42 } });
+  /** 컨테이너가 넘기는 영상 상태(POK-492) — 판정은 clipStatusView 표 테스트가 맡는다 */
+  function clipStatus(view: Partial<ClipStatusView> = {}, onRetryUpload = vi.fn()) {
+    return {
+      view: {
+        tone: 'progress',
+        title: '영상 만드는 중 42%',
+        detail: '영상을 만들고 있어요.',
+        stage: 1,
+        progress: { value: 42 },
+        actions: ['library'],
+        youtubeUrl: null,
+        ...view,
+      } satisfies ClipStatusView,
+      versionLabel: '편집본 v3로 만든 영상',
+      retrying: false,
+      onRetryUpload,
+    };
+  }
+
+  it('「영상 만들기」 옆 상태 알약 안 진행 막대: 퍼센트가 있으면 그 값, 없으면 불확정이다(0%로 지어내지 않는다)', () => {
+    const { unmount } = renderStudio({ clipStatus: clipStatus() });
+    expect(
+      screen.getByRole('button', { name: '영상 상태: 영상 만드는 중 42%. 자세히 보기' }),
+    ).toBeInTheDocument();
     expect(screen.getByRole('progressbar', { name: '영상 진행' })).toHaveAttribute(
       'aria-valuenow',
       '42',
     );
     unmount();
 
-    renderStudio({ clipProgress: { value: null } });
+    renderStudio({
+      clipStatus: clipStatus({ title: '영상 만드는 중', progress: { value: null } }),
+    });
     expect(screen.getByRole('progressbar', { name: '영상 진행' })).not.toHaveAttribute(
       'aria-valuenow',
     );
   });
 
-  it('기다릴 영상이 없으면 진행 막대가 없다', () => {
+  it('기다릴 영상이 없으면 알약도 진행 막대도 없다', () => {
     renderStudio();
+    expect(screen.queryByRole('button', { name: /^영상 상태/ })).not.toBeInTheDocument();
     expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
+  });
+
+  it('알약을 누르면 작은 창에 단계·설명·할 일이 펼쳐진다: 실패면 다시 올리기, 올라갔으면 유튜브에서 보기', async () => {
+    const user = userEvent.setup();
+    const onRetryUpload = vi.fn();
+    const { unmount } = renderStudio({
+      clipStatus: clipStatus(
+        {
+          tone: 'danger',
+          title: '업로드 실패',
+          detail: '오늘 유튜브 업로드 한도를 다 써서 올리지 못했어요.',
+          stage: 2,
+          progress: null,
+          actions: ['retryUpload', 'library'],
+        },
+        onRetryUpload,
+      ),
+    });
+    await user.click(screen.getByRole('button', { name: '영상 상태: 업로드 실패. 자세히 보기' }));
+    const panel = screen.getByRole('dialog', { name: '영상 상태' });
+    expect(
+      within(panel).getByText('오늘 유튜브 업로드 한도를 다 써서 올리지 못했어요.'),
+    ).toBeVisible();
+    expect(within(panel).getByText('편집본 v3로 만든 영상')).toBeVisible();
+    // 지금 단계(유튜브 올리기)가 표시된다
+    expect(within(panel).getByText('유튜브 올리기').closest('li')).toHaveAttribute(
+      'aria-current',
+      'step',
+    );
+    expect(within(panel).getByRole('link', { name: '보관함에서 보기' })).toHaveAttribute(
+      'href',
+      '/clips/library',
+    );
+    await user.click(within(panel).getByRole('button', { name: '다시 올리기' }));
+    expect(onRetryUpload).toHaveBeenCalledTimes(1);
+    unmount();
+
+    renderStudio({
+      clipStatus: clipStatus({
+        tone: 'success',
+        title: '유튜브에 올라갔어요',
+        stage: 3,
+        progress: null,
+        actions: ['youtube', 'library'],
+        youtubeUrl: 'https://youtu.be/abc123',
+      }),
+    });
+    await user.click(
+      screen.getByRole('button', { name: '영상 상태: 유튜브에 올라갔어요. 자세히 보기' }),
+    );
+    const youtube = within(screen.getByRole('dialog', { name: '영상 상태' })).getByRole('link', {
+      name: '유튜브에서 보기',
+    });
+    expect(youtube).toHaveAttribute('href', 'https://youtu.be/abc123');
+    expect(youtube).toHaveAttribute('target', '_blank');
   });
 
   it('트랙 소리를 받는 중이면 소리 줄마다 줄 높이 스켈레톤이고, 못 불렀으면 빈 줄과 안내 그대로다', () => {

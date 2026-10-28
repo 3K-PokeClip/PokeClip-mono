@@ -217,6 +217,12 @@ function handle(url: string, init?: RequestInit) {
   }
   const polled = path.match(new RegExp(`^/api/clip/broadcasts/${STREAM_ID}/clips/(\\d+)$`));
   if (polled && method === 'GET' && server.clipPoll) return server.clipPoll(Number(polled[1]));
+  // 상태 창의 「다시 올리기」(POK-492): 새 업로드 줄이 대기열에 선다
+  const retried = path.match(
+    new RegExp(`^/api/clip/broadcasts/${STREAM_ID}/clips/(\\d+)/uploads/retry$`),
+  );
+  if (retried && method === 'POST')
+    return jsonResponse(201, { id: 6, clipId: Number(retried[1]), status: 'queued' });
   if (path === `/api/clip/broadcasts/${STREAM_ID}/playback-access` && method === 'POST')
     return server.playbackAccess === 'grant'
       ? jsonResponse(200, {
@@ -564,8 +570,10 @@ describe('StudioScreen — 카드로 연 실제 편집기', () => {
     const renderAt = order.indexOf(`POST /api/clip/broadcasts/${STREAM_ID}/recipes/31/renders`);
     expect(saveAt).toBeGreaterThanOrEqual(0);
     expect(saveAt).toBeLessThan(renderAt);
-    // 헤더 상태 문구와 토스트 둘 다 말한다
-    expect((await screen.findAllByText(/영상 #77 주문됨/)).length).toBeGreaterThan(0);
+    // 「영상 만들기」 옆 알약이 상태를 말한다(POK-492)
+    expect(
+      await screen.findByRole('button', { name: '영상 상태: 차례 기다리는 중. 자세히 보기' }),
+    ).toBeInTheDocument();
     // 사용 통계 — 진입은 한 번(첫 저장으로 주소가 ?recipe= 로 바뀌어도 다시 세지 않는다), 주문은 서버가 받은 뒤
     // 한 번이고 열거형 속성만 싣는다(제목·설명·태그 없음)
     expect(tracked('clip_editor_opened')).toEqual([{ source: 'card' }]);
@@ -1071,9 +1079,62 @@ describe('StudioScreen: 영상 만들기 + 유튜브 올리기(POK-291)', () => 
       expect(screen.queryByRole('dialog', { name: '유튜브에 올리기' })).not.toBeInTheDocument(),
     );
 
-    expect(await screen.findByText('영상을 만들고 유튜브에 올릴게요')).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: '보관함 보기' }));
-    expect(nav.pushed).toEqual(['/clips/library']);
+    // 받았다는 토스트 대신 「영상 만들기」 옆 알약이 상태를 말하고, 누르면 할 일이 펼쳐진다(POK-492)
+    const pill = await screen.findByRole('button', {
+      name: '영상 상태: 차례 기다리는 중. 자세히 보기',
+    });
+    expect(screen.queryByText('영상을 만들고 유튜브에 올릴게요')).not.toBeInTheDocument();
+    // 헤더 문구는 저장 상태로 돌아간다 — 「주문」이라는 말이 화면에 없다
+    expect(screen.getByText(/편집본 #31 v1 저장됨/)).toBeInTheDocument();
+    expect(screen.queryByText(/주문/)).not.toBeInTheDocument();
+    await user.click(pill);
+    const panel = screen.getByRole('dialog', { name: '영상 상태' });
+    expect(within(panel).getByText('영상을 만들 차례를 기다리고 있어요.')).toBeInTheDocument();
+    expect(within(panel).getByRole('link', { name: '보관함에서 보기' })).toHaveAttribute(
+      'href',
+      '/clips/library',
+    );
+  });
+
+  it('업로드가 실패한 영상은 작은 창의 「다시 올리기」로 다시 올리고, 알약이 올리는 중으로 바뀐다(POK-492)', async () => {
+    server.render = {
+      status: 200,
+      clip: {
+        status: 'rendered',
+        upload: {
+          id: 5,
+          clipId: 77,
+          status: 'failed',
+          error: { code: 'QUOTA_EXCEEDED', message: null },
+        },
+      },
+    };
+    const user = userEvent.setup();
+    await openFrom('recipe=31');
+    await orderVideo(user);
+
+    await user.click(
+      await screen.findByRole('button', { name: '영상 상태: 업로드 실패. 자세히 보기' }),
+    );
+    const panel = screen.getByRole('dialog', { name: '영상 상태' });
+    // 보관함과 같은 사유
+    expect(
+      within(panel).getByText(
+        '오늘 유튜브 업로드 한도를 다 써서 올리지 못했어요. 내일 다시 올려 주세요.',
+      ),
+    ).toBeInTheDocument();
+    await user.click(within(panel).getByRole('button', { name: '다시 올리기' }));
+
+    expect(
+      await screen.findByRole('button', { name: '영상 상태: 유튜브에 올리는 중. 자세히 보기' }),
+    ).toBeInTheDocument();
+    expect(
+      fetchSpy.mock.calls.filter(
+        ([url, init]) =>
+          String(url) === `/api/clip/broadcasts/${STREAM_ID}/clips/77/uploads/retry` &&
+          init?.method === 'POST',
+      ),
+    ).toHaveLength(1);
   });
 
   it('이미지를 고르면 thumbnail 파트에 그 파일이 실린다', async () => {
@@ -1095,19 +1156,23 @@ describe('StudioScreen: 영상 만들기 + 유튜브 올리기(POK-291)', () => 
     expect((thumbnail as File).name).toBe('cover.png');
   });
 
-  it('200은 새 주문이라 말하지 않는다: 만드는 중이면 끝나고, 이미 만들어졌으면 바로 올린다', async () => {
+  it('200(같은 판이 만드는 중이거나 이미 완성)이면 알약이 지금 상태를 그대로 말한다: 처음부터 만든다고 하지 않는다', async () => {
     server.render = { status: 200, clip: { status: 'rendering' } };
     const user = userEvent.setup();
     await openFrom('recipe=31');
     await orderVideo(user);
     expect(
-      await screen.findByText('이 판은 이미 만드는 중이에요. 다 만들어지면 고른 정보로 올려요'),
+      await screen.findByRole('button', { name: '영상 상태: 영상 만드는 중. 자세히 보기' }),
     ).toBeInTheDocument();
-    expect(screen.queryByText('영상을 만들고 유튜브에 올릴게요')).not.toBeInTheDocument();
 
-    server.render = { status: 200, clip: { status: 'rendered' } };
+    server.render = {
+      status: 200,
+      clip: { status: 'rendered', upload: { id: 5, clipId: 77, status: 'queued' } },
+    };
     await orderVideo(user);
-    expect(await screen.findByText('만들어 둔 영상을 바로 유튜브에 올릴게요')).toBeInTheDocument();
+    expect(
+      await screen.findByRole('button', { name: '영상 상태: 유튜브에 올리는 중. 자세히 보기' }),
+    ).toBeInTheDocument();
     expect(screen.queryByText('영상을 만들고 유튜브에 올릴게요')).not.toBeInTheDocument();
   });
 
@@ -1253,22 +1318,23 @@ describe('StudioScreen: 영상 만들기 + 유튜브 올리기(POK-291)', () => 
       const user = userEvent.setup();
       await openFrom('recipe=31');
       await orderVideo(user);
-      await screen.findAllByText(/편집본 #31 v\d · 영상 #77 주문됨$/);
+      const waiting = { name: '영상 상태: 차례 기다리는 중. 자세히 보기' };
+      await screen.findByRole('button', waiting);
 
       // 영상 #77을 묻는 요청이 떠났는데 답이 아직 안 왔다
       vi.advanceTimersByTime(5_000);
       await waitFor(() => expect(answerOld).not.toBeNull());
 
-      // 그 사이 새 주문이 영상 #78을 받는다
+      // 그 사이 새 요청이 영상 #78을 받는다(대기열)
       server.render = { status: 201, clip: { id: 78 } };
       await orderVideo(user, '다시 만든 것');
-      await screen.findAllByText(/편집본 #31 v\d · 영상 #78 주문됨$/);
+      await screen.findByRole('button', waiting);
 
       answerOld!();
-      // 늦은 답이 얹히면 헤더가 「영상 #77 만드는 중 40%」로 돌아간다
+      // 늦은 답이 얹히면 알약이 #77의 「영상 만드는 중 40%」로 돌아간다
       await new Promise((r) => setTimeout(r, 50));
-      expect(screen.getAllByText(/편집본 #31 v\d · 영상 #78 주문됨$/).length).toBeGreaterThan(0);
-      expect(screen.queryAllByText(/편집본 #31 v\d · 영상 #77/)).toHaveLength(0);
+      expect(screen.getByRole('button', waiting)).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /만드는 중 40%/ })).not.toBeInTheDocument();
     } finally {
       vi.useRealTimers();
     }
@@ -1404,13 +1470,13 @@ describe('StudioScreen: 로딩 표시(POK-444)', () => {
     expect(bodiesOf('PUT', `/api/clip/broadcasts/${STREAM_ID}/recipes/31`)).toHaveLength(1);
   });
 
-  it('주문한 영상이 대기열에 있으면 문구 아래 불확정 막대가 선다: 퍼센트를 지어내지 않는다', async () => {
+  it('요청한 영상이 대기열에 있으면 알약 안에 불확정 막대가 선다: 퍼센트를 지어내지 않는다', async () => {
     const user = userEvent.setup();
     await openFrom('recipe=31');
     expect(screen.queryByRole('progressbar', { name: '영상 진행' })).not.toBeInTheDocument();
 
     await orderVideo(user);
-    await screen.findAllByText(/영상 #77 주문됨$/);
+    await screen.findByRole('button', { name: '영상 상태: 차례 기다리는 중. 자세히 보기' });
     expect(screen.getByRole('progressbar', { name: '영상 진행' })).not.toHaveAttribute(
       'aria-valuenow',
     );

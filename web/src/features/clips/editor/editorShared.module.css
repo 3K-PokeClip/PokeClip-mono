@@ -66,15 +66,160 @@
   gap: calc(8 * var(--pc-u));
 }
 
-/* 영상 진행 막대(POK-444): 문구 바로 아래, 헤더 아래 여백(12u) 안에 겹쳐 선다 — 흐름에 넣으면 섰다 사라질 때마다
-   헤더가 6u씩 커졌다 줄어 아래 편집 화면이 밀린다. 폭은 문구 폭을 따르되 너무 길어지지 않게.
-   DS Progress의 자리(position: relative)를 이겨야 해서 부모를 붙여 쓴다(아래 다시 읽기 막대도 같다) */
-.headerTitleBlock > .headerProgress {
-  position: absolute;
-  left: 0;
-  top: calc(100% + 3 * var(--pc-u));
-  width: 100%;
-  max-width: calc(240 * var(--pc-u));
+/* ---------- 영상 상태 알약 · 작은 창(POK-492 시안 A) ---------- */
+
+/* 상태색 하나(카드당 하나) — 기다리는 중은 강조색, 끝은 성공, 실패는 위험, 사람이 봐야 하면 경고.
+   글자는 -text(라이트에서 진한 쪽), 바탕은 -subtle이다 */
+.statusPill[data-tone='progress'],
+.statusPopover[data-tone='progress'] {
+  --status-fg: var(--pc-color-accent-text);
+  --status-bg: var(--pc-color-accent-subtle);
+  --status-line: color-mix(in srgb, var(--pc-color-accent) 45%, transparent);
+}
+
+.statusPill[data-tone='success'],
+.statusPopover[data-tone='success'] {
+  --status-fg: var(--pc-color-success-text);
+  --status-bg: var(--pc-color-success-subtle);
+  --status-line: color-mix(in srgb, var(--pc-color-success) 45%, transparent);
+}
+
+.statusPill[data-tone='danger'],
+.statusPopover[data-tone='danger'] {
+  --status-fg: var(--pc-color-danger-text);
+  --status-bg: var(--pc-color-danger-subtle);
+  --status-line: color-mix(in srgb, var(--pc-color-danger) 45%, transparent);
+}
+
+.statusPill[data-tone='warning'],
+.statusPopover[data-tone='warning'] {
+  --status-fg: var(--pc-color-warning-text);
+  --status-bg: var(--pc-color-warning-subtle);
+  --status-line: color-mix(in srgb, var(--pc-color-warning) 55%, transparent);
+}
+
+/* 알약: 헤더 버튼(sm)과 같은 높이에 맞춘다. 막대는 알약 안에 들어 있어 섰다 사라져도 헤더가 밀리지 않는다 */
+.statusPill {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(7 * var(--pc-u));
+  height: calc(30 * var(--pc-u));
+  padding: 0 calc(10 * var(--pc-u)) 0 calc(9 * var(--pc-u));
+  margin-right: calc(4 * var(--pc-u));
+  border: 1px solid var(--status-line);
+  border-radius: var(--pc-radius-pill);
+  background: var(--status-bg);
+  color: var(--status-fg);
+  font: inherit;
+  font-size: calc(12.5 * var(--pc-u));
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.statusPill:focus-visible {
+  outline: 2px solid var(--pc-color-focus-ring);
+  outline-offset: 2px;
+}
+
+.statusPillIcon {
+  display: inline-flex;
+}
+
+.statusPillBar {
+  width: calc(56 * var(--pc-u));
+}
+
+.statusPillChevron {
+  opacity: 0.8;
+}
+
+.statusPopover {
+  width: calc(300 * var(--pc-u));
+  font-size: calc(12 * var(--pc-u));
+}
+
+.statusPopoverTitle {
+  display: flex;
+  align-items: center;
+  gap: calc(7 * var(--pc-u));
+  font-size: calc(13 * var(--pc-u));
+  font-weight: 750;
+}
+
+.statusPopoverIcon {
+  display: inline-flex;
+  color: var(--status-fg);
+}
+
+.statusSteps {
+  display: flex;
+  gap: calc(4 * var(--pc-u));
+  margin: calc(12 * var(--pc-u)) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.statusStep {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: calc(5 * var(--pc-u));
+  font-size: calc(11 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}
+
+.statusStepBar {
+  height: calc(4 * var(--pc-u));
+  border-radius: var(--pc-radius-pill);
+  background: var(--pc-color-bg-inset);
+}
+
+.statusStep[data-state='done'] {
+  color: var(--pc-color-text-secondary);
+}
+
+.statusStep[data-state='done'] > .statusStepBar {
+  background: var(--pc-color-success);
+}
+
+/* 지금 단계는 알약과 같은 상태색이다 */
+.statusStep:is([data-state='progress'], [data-state='danger'], [data-state='warning']) {
+  color: var(--status-fg);
+  font-weight: 700;
+}
+
+.statusStep[data-state='progress'] > .statusStepBar {
+  background: var(--pc-color-accent);
+}
+
+.statusStep[data-state='danger'] > .statusStepBar {
+  background: var(--pc-color-danger);
+}
+
+.statusStep[data-state='warning'] > .statusStepBar {
+  background: var(--pc-color-warning);
+}
+
+.statusDetail {
+  margin: calc(10 * var(--pc-u)) 0 0;
+  line-height: 1.5;
+  color: var(--pc-color-text-secondary);
+}
+
+.statusVersion {
+  margin: calc(4 * var(--pc-u)) 0 calc(12 * var(--pc-u));
+  font-size: calc(11 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}
+
+/* 할 일 버튼은 같은 크기로 폭을 나눠 채운다 */
+.statusActions {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: calc(6 * var(--pc-u));
 }
 
 /* 다시 읽기 막대(POK-444): 헤더 아래 가장자리 한 줄. 화면 폭 끝까지 가므로 둥근 끝을 뺀다 */

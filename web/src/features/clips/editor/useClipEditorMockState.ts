@@ -54,6 +54,7 @@ import {
   type PipBox,
 } from './editorLayout';
 import { playbackErrorMessage, type EditorPlayback } from './editorPlayback';
+import type { ClipStatusView } from './studio/clipProgress';
 import type { FilmstripSource } from './studio/VideoFilmstrip';
 import type { TrackLevels } from './trackAudio/trackLevels';
 import type { TrackPreview, TrackPreviewStatus } from './trackAudio/useTrackPreview';
@@ -364,6 +365,16 @@ export interface EditorSource {
   range: ClipRange;
 }
 
+/** 헤더의 영상 상태 알약(POK-492) — 상태 판정과 다시 올리기는 컨테이너가 서버 응답으로 채운다 */
+export interface EditorClipStatus {
+  view: ClipStatusView;
+  /** 이 영상을 만든 판(「v3로 만든 영상」) */
+  versionLabel: string;
+  /** 다시 올리기를 보내는 중 */
+  retrying: boolean;
+  onRetryUpload: () => void;
+}
+
 /** 저장·주문을 실제 서버에 잇는 자리 */
 export interface EditorActions {
   saveDraft?: (recipe: EditorRecipe) => void;
@@ -407,8 +418,8 @@ export interface ClipEditorOptions {
    * 없으면(목업) 둘 다 바로 누를 수 있다
    */
   busyAction?: 'save' | 'render' | null;
-  /** 헤더 문구 아래 영상 진행 막대(POK-444). value가 null이면 불확정이다. 없으면 막대를 세우지 않는다 */
-  clipProgress?: { value: number | null } | null;
+  /** 「영상 만들기」 옆 영상 상태 알약(POK-492). 요청한 영상이 없거나 보내는 중이면 없다 */
+  clipStatus?: EditorClipStatus | null;
   /**
    * 주소가 바뀌어 다른 편집 대상을 읽는 중이다(POK-444). 화면은 그대로 두되 만질 수 없게 하고 헤더 아래에 막대 한 줄만
    * 띄운다 — 다 읽으면 컨테이너가 이 화면을 새 것으로 갈아 끼우므로, 그 사이 고친 것은 남지 않는다
@@ -448,8 +459,8 @@ export interface ClipEditorMockState {
   uploadLabel: string;
   /** 보내는 중인 헤더 동작(POK-444). ClipEditorOptions.busyAction 참고 */
   busyAction: 'save' | 'render' | null;
-  /** 헤더 문구 아래 영상 진행 막대(POK-444). 없으면 null */
-  clipProgress: { value: number | null } | null;
+  /** 영상 상태 알약(POK-492). 없으면 null */
+  clipStatus: EditorClipStatus | null;
   /** 다른 편집 대상을 읽는 중이라 이 화면을 만질 수 없다(POK-444) */
   reloading: boolean;
   previewVideo: HTMLVideoElement | null;
@@ -956,7 +967,7 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     autosaveLabel: options.autosaveLabel ?? (real ? '저장 전' : MOCK_SOURCE.autosaveLabel),
     uploadLabel: options.uploadLabel ?? '업로드',
     busyAction: options.busyAction ?? null,
-    clipProgress: options.clipProgress ?? null,
+    clipStatus: options.clipStatus ?? null,
     reloading: options.reloading ?? false,
     previewVideo: options.previewVideo ?? null,
     trackPreviewStatus: options.trackPreview?.status ?? null,

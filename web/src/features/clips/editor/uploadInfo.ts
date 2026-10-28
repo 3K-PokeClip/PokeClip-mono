@@ -1,4 +1,4 @@
-import type { PrivacyStatus } from '@/api/clipEditor';
+import type { PrivacyStatus, UploadSnapshot } from '@/api/clipEditor';
 import type { YoutubeCategoryId } from '@/lib/analytics';
 
 // 업로드 정보 창(POK-291)의 규칙: 렌더와 떼어 순수 함수로 둔다. clip 렌더 주문 문이 같은 규칙으로 400을 주지만,
@@ -293,4 +293,36 @@ export function thumbnailFileProblem(file: Blob): string | null {
   if (file.type !== 'image/jpeg' && file.type !== 'image/png') return 'JPG나 PNG만 올릴 수 있어요';
   if (file.size > THUMBNAIL_MAX_BYTES) return '이미지는 10MB까지 올릴 수 있어요';
   return null;
+}
+
+// ---------- 실패한 업로드 ----------
+
+/**
+ * 연동 문제로 끝난 업로드 코드(업로드 일꾼이 `YOUTUBE_` + auth 사유로 적는다). 일시 실패(REFRESH_UNAVAILABLE)는
+ * 일꾼이 다시 시도해 실패로 남지 않는다.
+ */
+const LINK_FAILURES = new Set(['YOUTUBE_NOT_LINKED', 'YOUTUBE_UNLINKED', 'YOUTUBE_BROKEN']);
+
+/**
+ * 실패한 업로드의 사유를 사람 말로 — 보관함 상세와 편집기 영상 상태 창(POK-492)이 같은 말을 쓴다.
+ * @param fixHint 유튜브가 영상을 거절했을 때 제목·태그를 고칠 곳. 보관함과 편집기에서 가는 길이 다르다
+ */
+export function uploadFailureReason(error: UploadSnapshot['error'], fixHint: string): string {
+  const code = error?.code ?? 'UNKNOWN';
+  if (LINK_FAILURES.has(code)) {
+    return '스트리머의 유튜브 채널 연동이 없거나 끊겨 올리지 못했어요. 스트리머가 설정 › 채널 연동에서 다시 연결한 뒤 올려 주세요.';
+  }
+  if (code === 'SWEPT') {
+    // 주문줄에서 거듭 실패해 닫혔다. 이 실패는 주소를 받기 전에만 생긴다(주소가 있으면 SWEPT_AFTER_SESSION 확인 필요): 영상은 없다
+    return '올리는 중에 문제가 거듭 생겨 유튜브에 올리지 못했어요. 영상은 올라가지 않았으니 다시 올려 주세요.';
+  }
+  if (code === 'QUOTA_EXCEEDED') {
+    return '오늘 유튜브 업로드 한도를 다 써서 올리지 못했어요. 내일 다시 올려 주세요.';
+  }
+  if (code === 'YOUTUBE_REJECTED') {
+    const why = error?.message ? `(${error.message})` : '';
+    // 「다시 시도」는 실패한 줄의 제목·설명·태그를 그대로 다시 보낸다. 고칠 곳은 영상 만들기 창이다
+    return `유튜브가 영상을 받지 않았어요${why}. 같은 정보로 다시 시도하면 또 거절될 수 있어요. ${fixHint}`;
+  }
+  return `유튜브에 올리지 못했어요(${code}). 다시 올려 주세요.`;
 }

@@ -1,5 +1,6 @@
 import { Redo2, Undo2 } from 'lucide-react';
 import { Button, IconButton, Progress } from '@/ui';
+import { ClipStatusPill } from './ClipStatusPill';
 import { EditorBackLink } from './EditorBackLink';
 import styles from './editorShared.module.css';
 import type { ClipEditorMockState } from './useClipEditorMockState';
@@ -19,15 +20,6 @@ export function EditorHeader({ state }: { state: ClipEditorMockState }) {
         <div className={styles.headerMeta}>
           {state.sourceLabel} · {state.autosaveLabel}
         </div>
-        {/* 문구 아래 막대는 머리 아래 여백에 겹쳐 그린다: 섰다 사라질 때 헤더 높이가 바뀌어 편집 화면이 밀리지 않게(POK-444) */}
-        {state.clipProgress !== null && !reloading ? (
-          <Progress
-            className={styles.headerProgress}
-            size="sm"
-            value={state.clipProgress.value}
-            label="영상 진행"
-          />
-        ) : null}
       </div>
       <div className={styles.headerHistory}>
         <IconButton
@@ -50,6 +42,15 @@ export function EditorHeader({ state }: { state: ClipEditorMockState }) {
         </IconButton>
       </div>
       <div className={styles.headerActions}>
+        {/* 요청한 영상의 상태는 누른 버튼 바로 옆에 둔다(POK-492). 다른 편집 대상을 읽는 중이면 곧 사라질 화면의 것이라 뺀다 */}
+        {state.clipStatus !== null && !reloading ? (
+          <ClipStatusPill
+            view={state.clipStatus.view}
+            versionLabel={state.clipStatus.versionLabel}
+            retrying={state.clipStatus.retrying}
+            onRetryUpload={state.clipStatus.onRetryUpload}
+          />
+        ) : null}
         {/* 도는 동안 라벨은 자리만 지켜 폭이 튀지 않는다(.busyButton). 라벨이 시각으로 숨으므로 이름은 aria-label이 댄다 */}
         <Button
           variant="soft"
