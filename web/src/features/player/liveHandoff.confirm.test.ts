@@ -163,6 +163,24 @@ describe('다시 세움 · 이탈 · 잘림(T11 · T17 · T19 · T23)', () => {
     expect(run(done, [{ type: 'remount' }]).state.source).toMatchObject({ startAtMs: null });
   });
 
+  it('T11 H4: 목록 400 은 지금 소스 url 이 아니라 세션의 라이브 주소로 새 라이브 재생기를 세운다', () => {
+    // 확인 중에는 두 url 이 같다(실영향 0). 설계 r9 4절 H4 문언
+    // `{live, liveUrl, …}` 을 고정하려고 일부러 어긋낸다
+    const stale = 'https://media.pokeclip.com/live/key-1/stale.m3u8';
+    const base = run(confirming(), [at(P + 2_000, 2_000)]).state;
+    const s = { ...base, source: { ...base.source, url: stale } };
+    const { state } = run(s, [{ type: 'live-400' }]);
+    const generation = s.source.generation + 1;
+    const source = {
+      kind: 'live',
+      url: LIVE_URL,
+      startAtMs: P + 2_000,
+      generation,
+      strictStart: true,
+    };
+    expect(state.source).toEqual(source);
+  });
+
   it('T17: 확인 중 창 밖 시크로 되감기에 다시 들면 확인이 사라지고, 그 뒤 ENDLIST 는 되돌림이 아니다(H5)', () => {
     const entry = { url: A1, firstPdtMs: T0, headPdtMs: E };
     const s = { ...confirming(), entry, rewindOpen: true };

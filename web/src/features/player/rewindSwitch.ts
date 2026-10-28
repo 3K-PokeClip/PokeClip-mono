@@ -47,7 +47,10 @@ export interface PlaybackSource {
   url: string;
   startAtMs: number | null;
   generation: number;
-  /** 시작이 잘리면(startIsTruncated) 틀지 말라는 계약(POK-200 c13). 꼬리 넘김만 세우고 그 밖의 소스는 false 다 */
+  /**
+   * 시작이 잘리면(startIsTruncated) 틀지 말라는 계약(POK-200 c13). 꼬리 넘김(P1)과
+   * 확인 중 다시 세움(H3 · H4)만 세우고 그 밖의 소스는 false 다
+   */
   strictStart: boolean;
 }
 

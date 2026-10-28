@@ -7,6 +7,7 @@ import type {
   Transition,
   XAnswer,
 } from './rewindSwitch';
+import { replace } from './sessionShared';
 
 // 되감기 → 라이브 꼬리 넘김의 칸과 행 몸통(POK-200 c13 · 설계 r9 2절 · 4절). rewindSwitch 는 여기 함수를 한 줄로 부르고,
 // 여기는 rewindSwitch 의 타입만 읽는다.
@@ -402,10 +403,14 @@ export function onHandoffConfirming(
       return revertTruncated(s, handoff);
     case 'remount':
     case 'live-400': {
-      // H3 · H4 — 새 재생기도 첫 목록을 다시 본다. 연속 검사는 이어 볼 자리부터 새로 센다(시한은 그대로)
+      // H3 · H4 — 새 재생기도 첫 목록을 다시 본다. 연속 검사는 이어 볼 자리부터
+      // 새로 센다(시한은 그대로). H4(목록 400)는 세션의 라이브 주소로 새 소스를 세운다
       const resume = handoffResumeMs(handoff);
       const generation = s.source.generation + 1;
-      const source = { ...s.source, startAtMs: resume, strictStart: true, generation };
+      const source =
+        event.type === 'live-400'
+          ? { ...replace(s, 'live', s.liveUrl, resume), strictStart: true }
+          : { ...s.source, startAtMs: resume, strictStart: true, generation };
       const next = { ...handoff, atMs: resume, seenAtMs: null };
       return { state: { ...s, source, handoff: next }, effects: [] };
     }
