@@ -209,6 +209,33 @@ describe('probeLiveWindow — 하한 S_live 와 라이브 목록 끝', () => {
     }
   });
 
+  it('하한이 유한하지 않으면 unavailable — 첫 조각 길이가 터무니없어 뒤로 채운 시각이 -∞', async () => {
+    const huge = mediaPlaylist({ pdtFrom: 1 }).replace('#EXTINF:4.000,', '#EXTINF:1e308,');
+    const parsed = parseMediaPlaylist(huge);
+    expect(parsed?.fragments[0]?.programDateTime).toBe(Number.NEGATIVE_INFINITY);
+    stubLive(huge);
+    await expect(probe()).resolves.toEqual({ kind: 'unavailable' });
+  });
+
+  it('목록 끝이 유한하지 않으면 unavailable — 끝 조각 길이가 터무니없다', async () => {
+    const text = mediaPlaylist({ n: 7 });
+    const at = text.lastIndexOf('#EXTINF:4.000,');
+    const huge = `${text.slice(0, at)}#EXTINF:1e308,${text.slice(at + '#EXTINF:4.000,'.length)}`;
+    stubLive(huge);
+    await expect(probe()).resolves.toEqual({ kind: 'unavailable' });
+  });
+
+  it('이미 끊긴 signal 이면 받지 않고 unavailable', async () => {
+    const spy = stubLive(mediaPlaylist());
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(probeLiveWindow(LIVE_URL, controller.signal)).resolves.toEqual({
+      kind: 'unavailable',
+    });
+    expect(spy).not.toHaveBeenCalled();
+  });
+
   it('받기 실패(망 오류)는 unavailable', async () => {
     stubFetch(() => {
       throw new TypeError('Failed to fetch');

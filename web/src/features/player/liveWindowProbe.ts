@@ -119,18 +119,24 @@ async function measure(liveUrl: string, signal: AbortSignal): Promise<LiveProbeR
   const floorMs = liveStartFloorMs(parsed.fragments, parsed.targetDurationS);
   const last = parsed.fragments[parsed.fragments.length - 1];
   if (floorMs === null || last?.programDateTime == null) return unavailable;
-  return { kind: 'ok', floorMs, endMs: last.programDateTime + last.duration * 1000 };
+  const endMs = last.programDateTime + last.duration * 1000;
+  // 터무니없는 EXTINF(1e308 등)는 시각을 ±∞ · NaN 으로 만든다 — 넘김 판정에 넣지 않는다
+  if (!Number.isFinite(floorMs) || !Number.isFinite(endMs)) return unavailable;
+  return { kind: 'ok', floorMs, endMs };
 }
 
 /**
- * 라이브 목록의 시작 하한을 잰다. 받기는 hls.js 와 같은 자격 규칙(mediaCredentials)을 쓴다. 시한 PROBE_TIMEOUT_MS · 403 ·
- * 404 · 그 밖의 비 200 · 망 오류 · ENDLIST · PDT 없음 · 형식 오류는 unavailable 이다. 부르는 쪽이 signal 로 끊으면 결과 없이
- * AbortError 를 던진다 — 세션이 바뀐 탐침은 부르는 쪽이 버린다
+ * 라이브 목록의 시작 하한을 잰다. 받기는 hls.js 와 같은 자격 규칙(mediaCredentials)을
+ * 쓴다. 시한 PROBE_TIMEOUT_MS · 403 · 404 · 그 밖의 비 200 · 망 오류 · ENDLIST · PDT 없음 ·
+ * 형식 오류 · 유한하지 않은 시각은 unavailable 이다. 이미 끊긴 signal 이면 받지 않고
+ * unavailable 이다. 받는 사이 부르는 쪽이 signal 로 끊으면 결과 없이 AbortError 를
+ * 던진다 — 세션이 바뀐 탐침은 부르는 쪽이 버린다
  */
 export async function probeLiveWindow(
   liveUrl: string,
   signal: AbortSignal,
 ): Promise<LiveProbeResult> {
+  if (signal.aborted) return { kind: 'unavailable' };
   const timeout = new AbortController();
   const timer = setTimeout(() => timeout.abort(), PROBE_TIMEOUT_MS);
   const onAbort = () => timeout.abort();
