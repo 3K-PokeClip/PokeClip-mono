@@ -1,41 +1,33 @@
-import { useEffect } from 'react';
-import { usePathname } from 'next/navigation';
-
-// 「이전 화면으로」가 브라우저 뒤로 가기를 써도 되는지(POK-491). 이 탭에서 앱 안으로 지나온 화면(pathname)을 쌓아 둔다.
-// 모듈 값이라 새로고침·새 탭·주소 직접 열기면 비어 있다 — 그때 뒤로 가면 앱 밖(또는 아무 데도 아닌 곳)으로 나가므로
-// 부르는 쪽이 정한 화면으로 간다.
+// 「이전 화면으로」가 브라우저 뒤로 가기를 써도 되는지(POK-491). 브라우저의 실제 기록 항목으로 판단한다 — Navigation API는
+// 지금 항목과 같은 오리진으로 이어진 항목만 보여 준다: 구글 로그인처럼 다른 오리진을 지나 온 항목은 그 앞이 안 보이고,
+// router.replace로 바뀐 항목은 하나로 친다. 앞서 경로(pathname)가 바뀔 때마다 앞 화면으로 쌓았더니 OAuth 콜백 → returnTo 같은
+// replace도 앞 화면으로 세어, 로그인 뒤 편집기의 「이전」이 앱 밖(구글 동의 화면)으로 나갔다(PR #454 1차 리뷰).
 //
-// 브라우저 뒤로 가기로 바로 앞 화면에 돌아오면 한 칸 뺀다: 새 탭으로 연 편집기 → 보관함 → (브라우저 뒤로) 편집기에서
-// 「이전」이 다시 뒤로 가면 앱 밖으로 나간다. 같은 화면 안 주소 값만 바뀌는 이동(?recipe= 교체 등)은 세지 않는다.
+// 앞 항목이 로그인 흐름(/login · /auth · /oauth)이면 뒤로 가지 않는다. Navigation API가 없는 브라우저는 앞 화면이 없는 것으로
+// 본다 — 앱 밖으로 나가는 것보다 정해 둔 화면(보관함)이 낫다.
 
-/** 오래 쓴 탭에서 끝없이 자라지 않게 — 「앞 화면이 있나」만 보므로 깊이는 의미가 없다 */
-const MAX_TRAIL = 50;
+/** 뒤로 돌아가면 안 되는 앞 항목 — 로그인·연동 콜백은 다시 밟으면 오류다 */
+const AUTH_FLOW = /^\/(login|auth|oauth)(\/|$)/;
 
-const trail: string[] = [];
-
-export function recordPathname(pathname: string): void {
-  if (trail[trail.length - 1] === pathname) return;
-  if (trail.length >= 2 && trail[trail.length - 2] === pathname) {
-    trail.pop();
-    return;
-  }
-  trail.push(pathname);
-  if (trail.length > MAX_TRAIL) trail.shift();
+/** Navigation API에서 쓰는 만큼만(타입 정의가 없는 TS lib에서도 읽히게) */
+interface HistoryEntryLike {
+  index: number;
+  url: string | null;
 }
 
-/** 이 탭에서 앱 안 앞 화면이 있다 — 뒤로 가도 앱 안에 남는다 */
+interface NavigationLike {
+  currentEntry: HistoryEntryLike | null;
+  entries(): HistoryEntryLike[];
+}
+
+/** 이 탭에서 바로 앞 항목이 앱 안 화면이다 — 뒤로 가도 앱 안에 남는다 */
 export function hasInAppHistory(): boolean {
-  return trail.length > 1;
-}
-
-/** 앱 루트가 한 번 부른다. 화면을 옮길 때마다 지금 경로를 기록한다 */
-export function useInAppHistoryTracker(): void {
-  const pathname = usePathname();
-  useEffect(() => {
-    recordPathname(pathname);
-  }, [pathname]);
-}
-
-export function resetInAppHistoryForTests(): void {
-  trail.length = 0;
+  if (typeof window === 'undefined') return false;
+  const navigation = (window as Window & { navigation?: NavigationLike }).navigation;
+  const current = navigation?.currentEntry;
+  if (navigation === undefined || current == null || current.index <= 0) return false;
+  const previous = navigation.entries()[current.index - 1];
+  if (previous?.url == null) return false;
+  const url = new URL(previous.url);
+  return url.origin === window.location.origin && !AUTH_FLOW.test(url.pathname);
 }

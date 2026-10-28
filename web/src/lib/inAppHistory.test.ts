@@ -1,44 +1,58 @@
-import { beforeEach, describe, expect, it } from 'vitest';
-import { hasInAppHistory, recordPathname, resetInAppHistoryForTests } from './inAppHistory';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { hasInAppHistory } from './inAppHistory';
 
-describe('inAppHistory', () => {
-  beforeEach(() => resetInAppHistoryForTests());
+/**
+ * 이 탭의 기록 항목을 Navigation API 꼴로 심는다 — 브라우저는 지금 항목과 같은 오리진으로 이어진 항목만 준다.
+ * 경로는 이 앱 오리진 기준, `https://…`는 그대로. current는 지금 항목의 자리(기본은 마지막).
+ */
+function stubHistory(urls: (string | null)[], current = urls.length - 1) {
+  const entries = urls.map((url, index) => ({
+    index,
+    url: url === null ? null : new URL(url, window.location.origin).href,
+  }));
+  vi.stubGlobal('navigation', { currentEntry: entries[current], entries: () => entries });
+}
 
-  it('처음 연 화면만 있으면 앞 화면이 없다(새 탭·주소 직접·새로고침)', () => {
-    recordPathname('/clips/editor/studio');
+describe('hasInAppHistory — 「이전 화면으로」가 뒤로 가도 되는가(POK-491)', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('앱 안 화면에서 들어왔으면 뒤로 간다', () => {
+    stubHistory(['/broadcast/vod/s1', '/clips/editor/studio']);
+    expect(hasInAppHistory()).toBe(true);
+  });
+
+  it('지금 항목이 첫 항목이면(새 탭 · 주소 직접 · 다른 오리진을 지나 옴) 뒤로 가지 않는다', () => {
+    stubHistory(['/clips/editor/studio']);
     expect(hasInAppHistory()).toBe(false);
   });
 
-  it('앱 안에서 옮겨 오면 앞 화면이 있다', () => {
-    recordPathname('/broadcast/livenow');
-    recordPathname('/clips/editor/studio');
-    expect(hasInAppHistory()).toBe(true);
+  it('로그인 흐름 뒤(OAuth 콜백이 편집기로 replace)엔 뒤로 가지 않는다 — 앞서 경로를 쌓던 판은 앱 밖으로 나갔다', () => {
+    // 구글을 지나 새로 연 콜백 문서가 router.replace로 편집기가 됐다: 브라우저 기록은 항목 하나다
+    stubHistory(['/clips/editor/studio']);
+    expect(hasInAppHistory()).toBe(false);
+    // 같은 오리진의 앞 항목이 로그인 흐름이어도 다시 밟지 않는다
+    for (const auth of ['/login', '/auth/callback', '/oauth/soop/callback']) {
+      stubHistory([auth, '/clips/editor/studio']);
+      expect(hasInAppHistory()).toBe(false);
+    }
   });
 
-  it('같은 화면 안 주소 값만 바뀌면 세지 않는다', () => {
-    recordPathname('/clips/editor/studio');
-    recordPathname('/clips/editor/studio');
+  it('브라우저 뒤로 가기로 가운데 항목에 서 있어도 바로 앞 항목을 본다', () => {
+    stubHistory(['/clips/library', '/clips/editor/studio', '/home'], 1);
+    expect(hasInAppHistory()).toBe(true);
+    stubHistory(['/clips/editor/studio', '/clips/library'], 0);
     expect(hasInAppHistory()).toBe(false);
   });
 
-  it('바로 앞 화면으로 돌아오면 한 칸 뺀다: 새 탭 편집기 → 보관함 → 뒤로 = 앞 화면 없음', () => {
-    recordPathname('/clips/editor/studio');
-    recordPathname('/clips/library');
-    expect(hasInAppHistory()).toBe(true);
-    recordPathname('/clips/editor/studio');
+  it('앞 항목이 다른 오리진이거나 주소를 모르면 뒤로 가지 않는다', () => {
+    stubHistory(['https://accounts.google.com/o/oauth2/auth', '/clips/editor/studio']);
+    expect(hasInAppHistory()).toBe(false);
+    stubHistory([null, '/clips/editor/studio']);
     expect(hasInAppHistory()).toBe(false);
   });
 
-  it('뒤로 간 뒤 다시 들어가면 다시 앞 화면이 있다', () => {
-    recordPathname('/clips/library');
-    recordPathname('/clips/editor/studio');
-    recordPathname('/clips/library');
-    recordPathname('/clips/editor/studio');
-    expect(hasInAppHistory()).toBe(true);
-  });
-
-  it('오래 써도 기록이 끝없이 자라지 않고 앞 화면은 남는다', () => {
-    for (let i = 0; i < 200; i += 1) recordPathname(`/screen/${i}`);
-    expect(hasInAppHistory()).toBe(true);
+  it('Navigation API가 없는 브라우저는 앞 화면이 없는 것으로 본다 — 앱 밖으로 나가는 것보다 보관함이 낫다', () => {
+    vi.stubGlobal('navigation', undefined);
+    expect(hasInAppHistory()).toBe(false);
   });
 });
