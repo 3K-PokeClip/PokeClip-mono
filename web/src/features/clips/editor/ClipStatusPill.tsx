@@ -3,6 +3,7 @@ import Link from 'next/link';
 import {
   AlertCircle,
   AlertTriangle,
+  Check,
   CheckCircle2,
   ChevronDown,
   ExternalLink,
@@ -10,12 +11,21 @@ import {
   RotateCw,
 } from 'lucide-react';
 import { Button, LinkButton, Popover, Progress, Spinner } from '@/ui';
-import { CLIP_STEPS, type ClipStatusTone, type ClipStatusView } from './studio/clipProgress';
+import type {
+  ClipStatusAction,
+  ClipStatusTone,
+  ClipStatusView,
+  ClipStepState,
+} from './studio/clipProgress';
 import styles from './editorShared.module.css';
 
 // 「영상 만들기」 옆 영상 상태 알약(POK-492 시안 A, 2026-10-28 사용자 선택) — 회색 글 끝에 붙던 상태가 안 보이고 할 일이
-// 없었다. 알약은 상태색 하나와 짧은 말·진행 막대만, 누르면 작은 창에 단계·설명·할 일(유튜브에서 보기 · 다시 올리기 ·
-// 보관함에서 보기)이 펼쳐진다. 상태가 화면에 늘 있으니 요청 직후 토스트는 띄우지 않는다(같은 말을 두 번 하지 않게).
+// 없었다. 알약은 상태색 하나와 짧은 말·진행 막대만, 누르면 작은 창이 펼쳐진다. 상태가 화면에 늘 있으니 요청 직후 토스트는
+// 띄우지 않는다(같은 말을 두 번 하지 않게).
+//
+// 작은 창은 세로 단계 기록형(2026-10-29 사용자 선택, 시안 페이지 2차): 머리 한 줄(상태 · 판) → 동그라미를 줄로 이은 단계
+// 셋(단계마다 시각, 지금 단계 아래에 진행 막대와 설명) → 버튼 가로 둘(같은 크기). 색은 지금 상태 하나뿐이고 지난 단계와
+// 버튼은 무채색이다(카드당 상태색 하나 — 사용자 취향).
 
 function ToneIcon({ tone }: { tone: ClipStatusTone }) {
   switch (tone) {
@@ -30,26 +40,109 @@ function ToneIcon({ tone }: { tone: ClipStatusTone }) {
   }
 }
 
-/** 단계 하나의 모양: 지난 단계 · 지금(상태색) · 남은 단계 */
-function stepState(view: ClipStatusView, index: number): string {
-  if (view.stage === 3 || index < view.stage) return 'done';
-  if (index > view.stage) return 'todo';
-  return view.tone;
+function StepMark({ state }: { state: ClipStepState }) {
+  switch (state) {
+    case 'done':
+      return <Check size={11} strokeWidth={3} aria-hidden />;
+    case 'now':
+      return <Spinner size="sm" aria-hidden />;
+    case 'danger':
+      return <AlertTriangle size={11} strokeWidth={2.5} aria-hidden />;
+    case 'warning':
+      return <AlertCircle size={11} strokeWidth={2.5} aria-hidden />;
+    case 'todo':
+      return null;
+  }
 }
+
+const isCurrent = (state: ClipStepState) => state !== 'done' && state !== 'todo';
 
 export function ClipStatusPill({
   view,
   versionLabel,
   retrying,
   onRetryUpload,
+  onRemake,
 }: {
   view: ClipStatusView;
-  /** 이 영상을 만든 판(「v3로 만든 영상」). 지금 화면이 더 새 판일 수 있다 */
+  /** 이 영상을 만든 판(「편집본 v3」). 지금 화면이 더 새 판일 수 있다 */
   versionLabel: string;
   retrying: boolean;
   onRetryUpload: () => void;
+  /** 영상 만들기 실패 뒤 「다시 만들기」 — 영상 만들기 창을 연다 */
+  onRemake: () => void;
 }) {
   const [open, setOpen] = useState(false);
+  const settledAll = !view.steps.some((step) => isCurrent(step.state));
+
+  /** 왼쪽(첫째)이 주 버튼(테두리), 나머지는 글자 버튼. 둘이면 같은 크기로 가로에 나란히, 하나면 폭을 채운다 */
+  const actionButton = (action: ClipStatusAction, index: number) => {
+    const variant = index === 0 ? 'outline' : 'ghost';
+    switch (action) {
+      case 'youtube':
+        return view.youtubeUrl ? (
+          <LinkButton
+            key={action}
+            href={view.youtubeUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            variant={variant}
+            size="sm"
+            fullWidth
+            iconStart={<ExternalLink size={13} aria-hidden />}
+          >
+            유튜브에서 보기
+          </LinkButton>
+        ) : null;
+      case 'retryUpload':
+        return (
+          <Button
+            key={action}
+            variant={variant}
+            size="sm"
+            fullWidth
+            loading={retrying}
+            iconStart={<RotateCw size={13} aria-hidden />}
+            onClick={onRetryUpload}
+          >
+            다시 올리기
+          </Button>
+        );
+      case 'remake':
+        return (
+          <Button
+            key={action}
+            variant={variant}
+            size="sm"
+            fullWidth
+            iconStart={<RotateCw size={13} aria-hidden />}
+            onClick={() => {
+              // 영상 만들기 창(모달)이 이 작은 창 위에 뜨므로 먼저 닫는다
+              setOpen(false);
+              onRemake();
+            }}
+          >
+            다시 만들기
+          </Button>
+        );
+      case 'library':
+      case 'libraryCheck':
+        return (
+          <LinkButton
+            key={action}
+            as={Link}
+            href="/clips/library"
+            variant={variant}
+            size="sm"
+            fullWidth
+            iconStart={<FolderOpen size={13} aria-hidden />}
+          >
+            {action === 'library' ? '보관함에서 보기' : '보관함에서 확인'}
+          </LinkButton>
+        );
+    }
+  };
+
   return (
     <Popover open={open} onOpenChange={setOpen} side="bottom" align="end" offset={6}>
       <Popover.Trigger>
@@ -73,79 +166,55 @@ export function ClipStatusPill({
       </Popover.Trigger>
       <Popover.Content aria-label="영상 상태">
         <div className={styles.statusPopover} data-tone={view.tone}>
-          <div className={styles.statusPopoverTitle}>
-            <span className={styles.statusPopoverIcon}>
-              <ToneIcon tone={view.tone} />
-            </span>
-            {view.title}
+          <div className={styles.statusHead}>
+            <span className={styles.statusTitle}>{view.title}</span>
+            <span className={styles.statusVersion}>{versionLabel}</span>
           </div>
           <ol className={styles.statusSteps} aria-label="진행 단계">
-            {CLIP_STEPS.map((label, i) => {
-              const state = stepState(view, i);
+            {view.steps.map((step, i) => {
+              const current = isCurrent(step.state);
               return (
                 <li
-                  key={label}
+                  key={step.label}
                   className={styles.statusStep}
-                  data-state={state}
-                  aria-current={state !== 'done' && state !== 'todo' ? 'step' : undefined}
+                  data-state={step.state}
+                  aria-current={current ? 'step' : undefined}
                 >
-                  <span className={styles.statusStepBar} aria-hidden />
-                  {label}
+                  <span className={styles.statusStepMark}>
+                    <StepMark state={step.state} />
+                  </span>
+                  {i < view.steps.length - 1 ? (
+                    <span className={styles.statusStepLine} aria-hidden />
+                  ) : null}
+                  <div className={styles.statusStepBody}>
+                    <div className={styles.statusStepRow}>
+                      <span className={styles.statusStepLabel}>{step.label}</span>
+                      {step.note !== null ? (
+                        <span className={styles.statusStepNote}>{step.note}</span>
+                      ) : null}
+                    </div>
+                    {current ? (
+                      <>
+                        {view.progress !== null && step.state === 'now' ? (
+                          <div className={styles.statusStepBar}>
+                            <Progress size="sm" value={view.progress.value} label="영상 진행" />
+                          </div>
+                        ) : null}
+                        <p className={styles.statusDetail}>{view.detail}</p>
+                      </>
+                    ) : null}
+                  </div>
                 </li>
               );
             })}
           </ol>
-          <p className={styles.statusDetail}>{view.detail}</p>
-          <p className={styles.statusVersion}>{versionLabel}</p>
-          <div className={styles.statusActions}>
-            {view.actions.map((action) => {
-              switch (action) {
-                case 'youtube':
-                  return view.youtubeUrl ? (
-                    <LinkButton
-                      key={action}
-                      href={view.youtubeUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      variant="soft"
-                      size="sm"
-                      fullWidth
-                      iconStart={<ExternalLink size={13} aria-hidden />}
-                    >
-                      유튜브에서 보기
-                    </LinkButton>
-                  ) : null;
-                case 'retryUpload':
-                  return (
-                    <Button
-                      key={action}
-                      variant="soft"
-                      size="sm"
-                      fullWidth
-                      loading={retrying}
-                      iconStart={<RotateCw size={13} aria-hidden />}
-                      onClick={onRetryUpload}
-                    >
-                      다시 올리기
-                    </Button>
-                  );
-                case 'library':
-                  return (
-                    <LinkButton
-                      key={action}
-                      as={Link}
-                      href="/clips/library"
-                      variant="ghost"
-                      size="sm"
-                      fullWidth
-                      iconStart={<FolderOpen size={13} aria-hidden />}
-                    >
-                      보관함에서 보기
-                    </LinkButton>
-                  );
-              }
-            })}
-          </div>
+          {/* 지금 단계가 없으면(다 끝남 · 안 올림) 설명은 단계 아래에 따로 둔다 */}
+          {settledAll ? (
+            <p className={styles.statusDetail} data-standalone="">
+              {view.detail}
+            </p>
+          ) : null}
+          <div className={styles.statusActions}>{view.actions.map(actionButton)}</div>
         </div>
       </Popover.Content>
     </Popover>

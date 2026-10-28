@@ -368,7 +368,7 @@ export interface EditorSource {
 /** 헤더의 영상 상태 알약(POK-492) — 상태 판정과 다시 올리기는 컨테이너가 서버 응답으로 채운다 */
 export interface EditorClipStatus {
   view: ClipStatusView;
-  /** 이 영상을 만든 판(「v3로 만든 영상」) */
+  /** 이 영상을 만든 판(「편집본 v3」) */
   versionLabel: string;
   /** 다시 올리기를 보내는 중 */
   retrying: boolean;

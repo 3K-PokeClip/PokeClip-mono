@@ -135,91 +135,160 @@
   opacity: 0.8;
 }
 
+/* 작은 창(시안 A, 2026-10-29): 머리 한 줄 → 이은 세로 단계 → 버튼 가로 둘. 색은 지금 상태 하나 — 지난 단계 · 버튼은 무채색 */
 .statusPopover {
   width: calc(300 * var(--pc-u));
   font-size: calc(12 * var(--pc-u));
 }
 
-.statusPopoverTitle {
+/* 머리 한 줄: 왼쪽 상태(상태색) · 오른쪽 판 */
+.statusHead {
   display: flex;
-  align-items: center;
-  gap: calc(7 * var(--pc-u));
-  font-size: calc(13 * var(--pc-u));
-  font-weight: 750;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: calc(8 * var(--pc-u));
+  padding-bottom: calc(10 * var(--pc-u));
+  margin-bottom: calc(12 * var(--pc-u));
+  border-bottom: 1px solid var(--pc-color-border-subtle);
 }
 
-.statusPopoverIcon {
-  display: inline-flex;
+.statusTitle {
+  font-size: calc(14 * var(--pc-u));
+  font-weight: 750;
   color: var(--status-fg);
+  white-space: nowrap;
+}
+
+.statusVersion {
+  font-size: calc(11 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+  white-space: nowrap;
 }
 
 .statusSteps {
-  display: flex;
-  gap: calc(4 * var(--pc-u));
-  margin: calc(12 * var(--pc-u)) 0 0;
+  margin: 0;
   padding: 0;
   list-style: none;
 }
 
+/* 단계 한 줄: 왼쪽 동그라미 칸(20u) · 오른쪽 이름과 시각(지금 단계면 그 아래 막대와 설명) */
 .statusStep {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: calc(5 * var(--pc-u));
-  font-size: calc(11 * var(--pc-u));
+  position: relative;
+  display: grid;
+  grid-template-columns: calc(20 * var(--pc-u)) 1fr;
+  column-gap: calc(10 * var(--pc-u));
+  padding-bottom: calc(12 * var(--pc-u));
+}
+
+.statusStepMark {
+  position: relative;
+  z-index: 1;
+  width: calc(20 * var(--pc-u));
+  height: calc(20 * var(--pc-u));
+  border-radius: var(--pc-radius-circle);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1.5px solid var(--pc-color-border-default);
+  background: var(--pc-color-bg-surface-raised);
   color: var(--pc-color-text-muted);
 }
 
-.statusStepBar {
-  height: calc(4 * var(--pc-u));
-  border-radius: var(--pc-radius-pill);
-  background: var(--pc-color-bg-inset);
+/* 동그라미를 잇는 세로 줄 — 이 동그라미 아래 끝부터 다음 단계 동그라미까지 */
+.statusStepLine {
+  position: absolute;
+  left: calc(10 * var(--pc-u) - 0.75px);
+  top: calc(20 * var(--pc-u));
+  bottom: 0;
+  width: 1.5px;
+  background: var(--pc-color-border-default);
 }
 
-.statusStep[data-state='done'] {
+.statusStep[data-state='done'] > .statusStepMark {
+  border-color: var(--pc-color-border-strong);
+  background: var(--pc-color-bg-surface-hover);
   color: var(--pc-color-text-secondary);
 }
 
-.statusStep[data-state='done'] > .statusStepBar {
-  background: var(--pc-color-success);
+.statusStep[data-state='done'] > .statusStepLine {
+  background: var(--pc-color-border-strong);
 }
 
 /* 지금 단계는 알약과 같은 상태색이다 */
-.statusStep:is([data-state='progress'], [data-state='danger'], [data-state='warning']) {
+.statusStep:is([data-state='now'], [data-state='danger'], [data-state='warning'])
+  > .statusStepMark {
+  border-color: var(--status-fg);
+  background: var(--status-bg);
   color: var(--status-fg);
+}
+
+/* 도는 표시(스피너)는 동그라미보다 커서 줄인다 */
+.statusStepMark > * {
+  max-width: calc(12 * var(--pc-u));
+  max-height: calc(12 * var(--pc-u));
+}
+
+.statusStepBody {
+  min-width: 0;
+  padding-top: calc(2 * var(--pc-u));
+}
+
+.statusStepRow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: calc(8 * var(--pc-u));
+}
+
+.statusStepLabel {
+  font-weight: 600;
+  color: var(--pc-color-text-secondary);
+}
+
+.statusStep[data-state='todo'] .statusStepLabel {
+  font-weight: 500;
+  color: var(--pc-color-text-muted);
+}
+
+.statusStep:is([data-state='now'], [data-state='danger'], [data-state='warning']) .statusStepLabel {
   font-weight: 700;
+  color: var(--pc-color-text-primary);
 }
 
-.statusStep[data-state='progress'] > .statusStepBar {
-  background: var(--pc-color-accent);
+.statusStepNote {
+  font-size: calc(11 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
-.statusStep[data-state='danger'] > .statusStepBar {
-  background: var(--pc-color-danger);
+.statusStep:is([data-state='now'], [data-state='danger'], [data-state='warning']) .statusStepNote {
+  font-weight: 600;
+  color: var(--status-fg);
 }
 
-.statusStep[data-state='warning'] > .statusStepBar {
-  background: var(--pc-color-warning);
+.statusStepBar {
+  margin-top: calc(7 * var(--pc-u));
 }
 
 .statusDetail {
-  margin: calc(10 * var(--pc-u)) 0 0;
+  margin: calc(6 * var(--pc-u)) 0 0;
   line-height: 1.5;
   color: var(--pc-color-text-secondary);
 }
 
-.statusVersion {
-  margin: calc(4 * var(--pc-u)) 0 calc(12 * var(--pc-u));
-  font-size: calc(11 * var(--pc-u));
-  color: var(--pc-color-text-muted);
+/* 다 끝나 지금 단계가 없을 때의 설명: 단계 아래 버튼 위 */
+.statusDetail[data-standalone] {
+  margin: 0 0 calc(12 * var(--pc-u));
 }
 
-/* 할 일 버튼은 같은 크기로 폭을 나눠 채운다 */
+/* 버튼 가로 둘 — 같은 크기로 폭을 나눠 채운다(하나면 꽉 찬다) */
 .statusActions {
   display: grid;
   grid-auto-flow: column;
   grid-auto-columns: 1fr;
   gap: calc(6 * var(--pc-u));
+  margin-top: calc(2 * var(--pc-u));
 }
 
 /* 다시 읽기 막대(POK-444): 헤더 아래 가장자리 한 줄. 화면 폭 끝까지 가므로 둥근 끝을 뺀다 */

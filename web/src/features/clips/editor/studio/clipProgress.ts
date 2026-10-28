@@ -40,20 +40,32 @@ export function clipProgressBar(clip: ClipSnapshot): { value: number | null } | 
 /** 상태색 하나 — 기다리는 중은 강조색, 끝은 성공, 실패는 위험, 사람이 봐야 하면 경고 */
 export type ClipStatusTone = 'progress' | 'success' | 'danger' | 'warning';
 
-/** 작은 창에서 할 수 있는 일 */
-export type ClipStatusAction = 'youtube' | 'retryUpload' | 'library';
+/**
+ * 작은 창에서 할 수 있는 일. 앞의 것이 주 버튼이다. 확인 필요는 푸는 곳이 보관함이라 「보관함에서 확인」이고,
+ * 영상 만들기 실패는 영상 만들기 창을 다시 연다(같은 판이면 저장 없이 다시 요청한다)
+ */
+export type ClipStatusAction = 'youtube' | 'retryUpload' | 'remake' | 'library' | 'libraryCheck';
 
-/** 작은 창의 단계 막대: 대기 → 영상 만들기 → 유튜브 올리기 */
+/** 작은 창의 세로 단계(POK-492 시안 A): 대기 → 영상 만들기 → 유튜브 올리기 */
 export const CLIP_STEPS = ['대기', '영상 만들기', '유튜브 올리기'] as const;
+
+/** 지난 단계 · 지금(진행) · 지금(실패) · 지금(사람이 봐야 함) · 아직 */
+export type ClipStepState = 'done' | 'now' | 'danger' | 'warning' | 'todo';
+
+export interface ClipStep {
+  label: (typeof CLIP_STEPS)[number];
+  state: ClipStepState;
+  /** 단계 오른쪽의 시각·진행(「10:21」 · 「10:23부터」 · 「42%」 · 「10:24 실패」). 모르면 null */
+  note: string | null;
+}
 
 export interface ClipStatusView {
   tone: ClipStatusTone;
-  /** 알약 글(짧게) */
+  /** 알약 글이자 작은 창 제목(짧게) */
   title: string;
-  /** 작은 창의 설명 한두 줄 */
+  /** 작은 창의 설명 한두 줄 — 지금 단계 아래에 붙는다 */
   detail: string;
-  /** 지금 단계(CLIP_STEPS 자리). 3이면 다 끝났다 */
-  stage: 0 | 1 | 2 | 3;
+  steps: [ClipStep, ClipStep, ClipStep];
   progress: { value: number | null } | null;
   actions: ClipStatusAction[];
   /** 올라간 영상 주소. youtube 행동이 있을 때만 */
@@ -69,11 +81,44 @@ function uploadedDetail(privacy: PrivacyStatus | undefined, publishAt: string | 
   return `${PRIVACY_LABEL[privacy ?? 'private']}로 올라갔어요.`;
 }
 
-/** 영상 하나의 상태를 알약·작은 창 모양으로(POK-492) */
-export function clipStatusView(clip: ClipSnapshot): ClipStatusView {
+/**
+ * 단계 옆 시각. 오늘이면 시:분, 아니면 월/일 시:분이다 — 편집기를 다음 날 다시 열면 어제의 시각이 보인다.
+ * 서버 값이 없거나 못 읽으면 null(지어내지 않는다).
+ */
+export function stepClock(iso: string | null | undefined, now: Date): string | null {
+  if (!iso) return null;
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return null;
+  const hm = `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`;
+  return at.toDateString() === now.toDateString()
+    ? hm
+    : `${at.getMonth() + 1}/${at.getDate()} ${hm}`;
+}
+
+const since = (clock: string | null) => (clock === null ? null : `${clock}부터`);
+const failedAt = (clock: string | null) => (clock === null ? '실패' : `${clock} 실패`);
+
+function steps(
+  wait: [ClipStepState, string | null],
+  render: [ClipStepState, string | null],
+  upload: [ClipStepState, string | null],
+): [ClipStep, ClipStep, ClipStep] {
+  return [
+    { label: CLIP_STEPS[0], state: wait[0], note: wait[1] },
+    { label: CLIP_STEPS[1], state: render[0], note: render[1] },
+    { label: CLIP_STEPS[2], state: upload[0], note: upload[1] },
+  ];
+}
+
+/** 영상 하나의 상태를 알약·작은 창 모양으로(POK-492). now는 단계 시각의 날짜 비교에만 쓴다 */
+export function clipStatusView(clip: ClipSnapshot, now: Date = new Date()): ClipStatusView {
   const progress = clipProgressBar(clip);
   const base = { progress, youtubeUrl: null };
   const waiting = clip.uploadRequest ? '다 만들면 유튜브에 올려요.' : '';
+  // 요청한 때 = 영상 줄이 생긴 때. 완성한 때 = 업로드 줄이 생긴 때(clip은 완성과 업로드 줄을 한 트랜잭션에서 만든다),
+  // 업로드 줄이 없으면 영상 줄의 마지막 변경
+  const requested = stepClock(clip.createdAt, now);
+  const renderedAt = stepClock(clip.upload?.createdAt ?? clip.updatedAt, now);
   switch (clip.status) {
     case 'queued':
       return {
@@ -81,7 +126,7 @@ export function clipStatusView(clip: ClipSnapshot): ClipStatusView {
         tone: 'progress',
         title: '차례 기다리는 중',
         detail: `영상을 만들 차례를 기다리고 있어요. ${waiting}`.trim(),
-        stage: 0,
+        steps: steps(['now', since(requested)], ['todo', null], ['todo', null]),
         actions: ['library'],
       };
     case 'rendering': {
@@ -91,7 +136,11 @@ export function clipStatusView(clip: ClipSnapshot): ClipStatusView {
         tone: 'progress',
         title: `영상 만드는 중${percent === null ? '' : ` ${percent}%`}`,
         detail: `영상을 만들고 있어요. ${waiting}`.trim(),
-        stage: 1,
+        steps: steps(
+          ['done', requested],
+          ['now', percent === null ? null : `${percent}%`],
+          ['todo', null],
+        ),
         actions: ['library'],
       };
     }
@@ -100,12 +149,20 @@ export function clipStatusView(clip: ClipSnapshot): ClipStatusView {
         ...base,
         tone: 'danger',
         title: '영상 만들기 실패',
-        detail: `영상을 만들지 못했어요(${clip.error?.code ?? '?'}). 「영상 만들기」를 다시 눌러 주세요.`,
-        stage: 1,
-        actions: ['library'],
+        detail: `영상을 만들지 못했어요(${clip.error?.code ?? '?'}). 다시 만들어 주세요.`,
+        steps: steps(
+          ['done', requested],
+          ['danger', failedAt(stepClock(clip.updatedAt, now))],
+          ['todo', null],
+        ),
+        actions: ['remake', 'library'],
       };
     case 'rendered': {
       const upload = clip.upload;
+      const uploadStart = stepClock(upload?.createdAt, now);
+      const uploadEnd = stepClock(upload?.updatedAt, now);
+      const made = (state: ClipStepState, note: string | null) =>
+        steps(['done', requested], ['done', renderedAt], [state, note]);
       switch (upload?.status) {
         case undefined:
           // clip은 완성과 업로드 줄을 한 트랜잭션에서 만든다. 정보가 있는데 줄이 없으면 자동 업로드를 건너뛴 것이다
@@ -116,7 +173,7 @@ export function clipStatusView(clip: ClipSnapshot): ClipStatusView {
                 tone: 'warning',
                 title: '업로드 안 됨',
                 detail: '영상은 다 만들었는데 유튜브 업로드가 시작되지 않았어요. 다시 올려 주세요.',
-                stage: 2,
+                steps: made('warning', '시작 안 됨'),
                 actions: ['retryUpload', 'library'],
               }
             : {
@@ -124,7 +181,7 @@ export function clipStatusView(clip: ClipSnapshot): ClipStatusView {
                 tone: 'success',
                 title: '영상 완성',
                 detail: '영상을 다 만들었어요. 유튜브에는 올리지 않았어요.',
-                stage: 3,
+                steps: made('todo', '안 올림'),
                 actions: ['library'],
               };
         case 'uploaded':
@@ -133,7 +190,7 @@ export function clipStatusView(clip: ClipSnapshot): ClipStatusView {
             tone: 'success',
             title: '유튜브에 올라갔어요',
             detail: uploadedDetail(upload.privacyStatus, upload.publishAt),
-            stage: 3,
+            steps: made('done', uploadEnd),
             actions: upload.videoId ? ['youtube', 'library'] : ['library'],
             youtubeUrl: upload.videoId ? `https://youtu.be/${upload.videoId}` : null,
           };
@@ -143,7 +200,7 @@ export function clipStatusView(clip: ClipSnapshot): ClipStatusView {
             tone: 'danger',
             title: '업로드 실패',
             detail: uploadFailureReason(upload.error, EDITOR_FIX_HINT),
-            stage: 2,
+            steps: made('danger', failedAt(uploadEnd)),
             actions: ['retryUpload', 'library'],
           };
         case 'checking':
@@ -154,8 +211,8 @@ export function clipStatusView(clip: ClipSnapshot): ClipStatusView {
             title: '확인 필요',
             detail:
               '유튜브에 올라갔는지 알 수 없어요. 보관함에서 채널을 확인하고 결과를 알려 주세요.',
-            stage: 2,
-            actions: ['library'],
+            steps: made('warning', '확인 필요'),
+            actions: ['libraryCheck'],
           };
         default:
           return {
@@ -163,7 +220,7 @@ export function clipStatusView(clip: ClipSnapshot): ClipStatusView {
             tone: 'progress',
             title: '유튜브에 올리는 중',
             detail: '영상을 다 만들었어요. 스트리머 채널에 올리고 있어요.',
-            stage: 2,
+            steps: made('now', since(uploadStart)),
             actions: ['library'],
           };
       }

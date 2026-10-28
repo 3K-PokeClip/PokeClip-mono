@@ -1172,13 +1172,17 @@ describe('StudioScreen — 로딩 표시(POK-444)', () => {
         tone: 'progress',
         title: '영상 만드는 중 42%',
         detail: '영상을 만들고 있어요.',
-        stage: 1,
+        steps: [
+          { label: '대기', state: 'done', note: '20:00' },
+          { label: '영상 만들기', state: 'now', note: '42%' },
+          { label: '유튜브 올리기', state: 'todo', note: null },
+        ],
         progress: { value: 42 },
         actions: ['library'],
         youtubeUrl: null,
         ...view,
       } satisfies ClipStatusView,
-      versionLabel: '편집본 v3로 만든 영상',
+      versionLabel: '편집본 v3',
       retrying: false,
       onRetryUpload,
     };
@@ -1218,7 +1222,11 @@ describe('StudioScreen — 로딩 표시(POK-444)', () => {
           tone: 'danger',
           title: '업로드 실패',
           detail: '오늘 유튜브 업로드 한도를 다 써서 올리지 못했어요.',
-          stage: 2,
+          steps: [
+            { label: '대기', state: 'done', note: '20:00' },
+            { label: '영상 만들기', state: 'done', note: '20:02' },
+            { label: '유튜브 올리기', state: 'danger', note: '20:03 실패' },
+          ],
           progress: null,
           actions: ['retryUpload', 'library'],
         },
@@ -1230,12 +1238,14 @@ describe('StudioScreen — 로딩 표시(POK-444)', () => {
     expect(
       within(panel).getByText('오늘 유튜브 업로드 한도를 다 써서 올리지 못했어요.'),
     ).toBeVisible();
-    expect(within(panel).getByText('편집본 v3로 만든 영상')).toBeVisible();
-    // 지금 단계(유튜브 올리기)가 표시된다
+    expect(within(panel).getByText('편집본 v3')).toBeVisible();
+    // 지금 단계(유튜브 올리기)가 표시되고, 단계마다 시각이 붙는다
     expect(within(panel).getByText('유튜브 올리기').closest('li')).toHaveAttribute(
       'aria-current',
       'step',
     );
+    expect(within(panel).getByText('20:03 실패')).toBeVisible();
+    expect(within(panel).getByText('20:02')).toBeVisible();
     expect(within(panel).getByRole('link', { name: '보관함에서 보기' })).toHaveAttribute(
       'href',
       '/clips/library',
@@ -1248,7 +1258,11 @@ describe('StudioScreen — 로딩 표시(POK-444)', () => {
       clipStatus: clipStatus({
         tone: 'success',
         title: '유튜브에 올라갔어요',
-        stage: 3,
+        steps: [
+          { label: '대기', state: 'done', note: '20:00' },
+          { label: '영상 만들기', state: 'done', note: '20:02' },
+          { label: '유튜브 올리기', state: 'done', note: '20:04' },
+        ],
         progress: null,
         actions: ['youtube', 'library'],
         youtubeUrl: 'https://youtu.be/abc123',
@@ -1262,6 +1276,36 @@ describe('StudioScreen — 로딩 표시(POK-444)', () => {
     });
     expect(youtube).toHaveAttribute('href', 'https://youtu.be/abc123');
     expect(youtube).toHaveAttribute('target', '_blank');
+  });
+
+  it('영상 만들기 실패의 「다시 만들기」는 작은 창을 닫고 영상 만들기 창을 연다', async () => {
+    const user = userEvent.setup();
+    const requestUpload = vi.fn();
+    renderStudio({
+      actions: { saveDraft: vi.fn(), requestUpload },
+      clipStatus: clipStatus({
+        tone: 'danger',
+        title: '영상 만들기 실패',
+        detail: '영상을 만들지 못했어요(FFMPEG_FAILED). 다시 만들어 주세요.',
+        steps: [
+          { label: '대기', state: 'done', note: '20:00' },
+          { label: '영상 만들기', state: 'danger', note: '20:01 실패' },
+          { label: '유튜브 올리기', state: 'todo', note: null },
+        ],
+        progress: null,
+        actions: ['remake', 'library'],
+      }),
+    });
+    await user.click(
+      screen.getByRole('button', { name: '영상 상태: 영상 만들기 실패. 자세히 보기' }),
+    );
+    await user.click(
+      within(screen.getByRole('dialog', { name: '영상 상태' })).getByRole('button', {
+        name: '다시 만들기',
+      }),
+    );
+    expect(requestUpload).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('dialog', { name: '영상 상태' })).not.toBeInTheDocument();
   });
 
   it('트랙 소리를 받는 중이면 소리 줄마다 줄 높이 스켈레톤이고, 못 불렀으면 빈 줄과 안내 그대로다', () => {

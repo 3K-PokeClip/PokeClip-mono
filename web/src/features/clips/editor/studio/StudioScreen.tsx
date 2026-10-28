@@ -1082,7 +1082,7 @@ function WiredStudio({
         ? null
         : {
             view: clipStatusView(latest),
-            versionLabel: `편집본 v${latest.recipeVersion}로 만든 영상`,
+            versionLabel: `편집본 v${latest.recipeVersion}`,
             retrying,
             onRetryUpload: retryClipUpload,
           },
