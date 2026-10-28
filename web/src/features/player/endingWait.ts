@@ -1,5 +1,15 @@
 import type { RewindStatusResult } from '@/api/rewindStatus';
 import { movedDoor, requestProbe, withNextDoor } from './liveHandoff';
+import type {
+  Offer,
+  PlaybackSessionState,
+  SeekView,
+  SessionButton,
+  SessionEvent,
+  SessionPhase,
+  StreamPollEvent,
+  Transition,
+} from './rewindSwitch';
 import {
   ENDING_WAIT_MS,
   RESUME_WAIT_MS,
@@ -12,15 +22,7 @@ import {
   stateOnly,
   within,
   withUrl,
-  type Offer,
-  type PlaybackSessionState,
-  type SeekView,
-  type SessionButton,
-  type SessionEvent,
-  type SessionPhase,
-  type StreamPollEvent,
-  type Transition,
-} from './rewindSwitch';
+} from './sessionShared';
 
 // 재생 세션 상태기계의 끝남 대기 표(rewindSwitch.ts 에서 옮김 · POK-200 c13m — 줄 수 800 처분). 동작은 옮기기 전과 같다.
 
