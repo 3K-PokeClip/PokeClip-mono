@@ -179,7 +179,12 @@ export type SessionEffect =
    * 라이브 목록 url 의 창 하한을 잰다(liveWindowProbe) — 결과는 같은 seq 의
    * live-probe 사건으로 돌아온다
    */
-  | { kind: 'probe-live'; seq: number; url: string };
+  | { kind: 'probe-live'; seq: number; url: string }
+  /**
+   * 넘김 확인이 깨져 되감기로 되돌렸다(H0 · H1a · H2 · H2t) — 사람이 멈춰 있었으면
+   * 새 재생기를 멈춘 채 세운다. 멈췄는지는 재생기가 사람의 pause · play 로 안다
+   */
+  | { kind: 'keep-paused-on-swap' };
 
 export interface Transition {
   state: PlaybackSessionState;

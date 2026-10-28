@@ -22,6 +22,8 @@ const P = E - 6_000;
 const DEADLINE = NOW + 6_000 + 12_000; // 넘긴 시각 + (E − P) + 2 × TD
 const LIVE_URL = 'https://media.pokeclip.com/live/key-1/index.m3u8';
 const A1 = 'https://media.pokeclip.com/dvr/key-1/a1/index.m3u8';
+/** 되돌림이 재생기에 거는 멈춤 유지(사람이 멈춰 있었으면 멈춘 채 갈아 끼운다) */
+const KEEP_PAUSED: SessionEffect = { kind: 'keep-paused-on-swap' };
 
 function liveReady(url: string, firstPdtMs: number, headPdtMs: number): RewindStatusResult {
   const status: RewindStatus = { ready: true, mode: 'live', url, firstPdtMs, headPdtMs };
@@ -77,7 +79,7 @@ describe('끝 증거 · 연속 검사 · 시한(T10)', () => {
     expect(state.source).toEqual(rewindSource(s, E - 5_500));
     expect(state.handoffBlock).toEqual({ url: A1, endMs: E, reason: 'reverted' });
     expect([state.handoff, state.boundLive]).toEqual([null, false]);
-    expect(effects).toEqual([{ kind: 'refresh', retryWhileUrl: A1 }]);
+    expect(effects).toEqual([KEEP_PAUSED, { kind: 'refresh', retryWhileUrl: A1 }]);
   });
 
   it('b · d: 위치 없이 끝 증거(라이브 닫힘 · ENDLIST · 끝 도달)가 오면 P 로 되돌린다', () => {
@@ -151,6 +153,36 @@ describe('끝 증거 · 연속 검사 · 시한(T10)', () => {
   });
 });
 
+describe('되돌림의 멈춤 유지(c13f cc M1 — 효과로 건다)', () => {
+  const keeps = (effects: SessionEffect[]) =>
+    effects.filter((e) => e.kind === 'keep-paused-on-swap').length;
+
+  it('되돌림 넷(H0 시한 · H1a · H2 · H2t)은 멈춤 유지 효과를 한 번 낸다', () => {
+    const reverts: [SessionEvent, number][] = [
+      [{ type: 'tick' }, DEADLINE],
+      [at(E + 3_000, 0), NOW + 1_000],
+      [{ type: 'live-closed' }, NOW + 1_000],
+      [{ type: 'live-start-truncated' }, NOW + 1_000],
+    ];
+    for (const [event, now] of reverts) {
+      expect(keeps(run(confirming(), [event], now).effects)).toBe(1);
+    }
+  });
+
+  it('사람의 시크(H6) · 확인 끝 · 다시 세움(H3 · H4)은 멈춤 유지를 걸지 않는다', () => {
+    const view = { lowerMs: E - 16_000, endMs: E + 20_000 };
+    const entry = { url: A1, firstPdtMs: T0, headPdtMs: E };
+    const s = { ...confirming(), entry, rewindOpen: true };
+    const others: SessionEvent[] = [
+      { type: 'seek', targetMs: T0 + 10 * MIN, view },
+      at(E, 6_000),
+      { type: 'remount' },
+      { type: 'live-400' },
+    ];
+    for (const event of others) expect(keeps(run(s, [event]).effects)).toBe(0);
+  });
+});
+
 describe('다시 세움 · 이탈 · 잘림(T11 · T17 · T19 · T23)', () => {
   it('T11: 확인 중 리마운트 · 목록 400 은 이어 볼 자리에서 strictStart 로 다시 세우고 연속 검사를 새로 센다', () => {
     for (const event of [{ type: 'remount' }, { type: 'live-400' }] as const) {
@@ -198,9 +230,9 @@ describe('다시 세움 · 이탈 · 잘림(T11 · T17 · T19 · T23)', () => {
     const first = run(s, [{ type: 'live-start-truncated' }]);
     expect(first.state.source).toEqual(rewindSource(s, P));
     expect(first.state.handoffBlock).toEqual({ url: A1, endMs: E, reason: 'truncated' });
-    expect(first.effects).toEqual([{ kind: 'notice', text: HANDOFF_SKIP_NOTICE }]);
+    expect(first.effects).toEqual([KEEP_PAUSED, { kind: 'notice', text: HANDOFF_SKIP_NOTICE }]);
     const again = run({ ...confirming(), liveHintUrl: A1 }, [{ type: 'live-start-truncated' }]);
-    expect(again.effects).toEqual([]);
+    expect(again.effects).toEqual([KEEP_PAUSED]);
   });
 
   it('T23: 확인이 없을 때의 잘림은 같은 라이브를 strictStart 없이 다시 세운다(H7)', () => {
