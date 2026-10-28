@@ -216,10 +216,24 @@ describe('멈춘 채 갈아 끼우기 — 세션이 멈춤 유지를 건 재생�
     hold?: boolean;
     /** 건 뒤 · 갈아 끼우기 전에 내려갈 옛 재생기가 목록을 늦게 읽는다 */
     lateOld?: boolean;
+    /** 갈아 끼운 뒤 사람의 사건 없이 한 번 더 갈아 끼운다(멈춘 채 창 밖 시크 H6) */
+    again?: boolean;
+  }
+
+  /** 소스를 바꿔 새 재생기를 세우고, 그 재생기가 목록을 읽은 뒤 스스로 튼 횟수 */
+  async function playsAfterSwap(swap: () => void): Promise<number> {
+    swap();
+    await act(async () => {
+      await vi.dynamicImportSettled();
+    });
+    const play = vi.mocked(HTMLMediaElement.prototype.play);
+    play.mockClear();
+    lastHls().trigger(FakeHls.Events.MANIFEST_PARSED, {});
+    return play.mock.calls.length;
   }
 
   /** 라이브 재생기를 세워 사건을 내고 되감기로 갈아 끼운다. 옛 · 새 재생기가 목록을 읽은 뒤 스스로 튼 횟수 */
-  async function swapToRewind({ events = [], hold = false, lateOld = false }: Swap) {
+  async function swapToRewind({ events = [], hold = false, lateOld = false, again = false }: Swap) {
     const view = await mount(source({}));
     const old = lastHls();
     for (const type of events) act(() => view.el.dispatchEvent(new Event(type)));
@@ -228,13 +242,11 @@ describe('멈춘 채 갈아 끼우기 — 세션이 멈춤 유지를 건 재생�
     play.mockClear();
     if (lateOld) old.trigger(FakeHls.Events.MANIFEST_PARSED, {});
     const oldPlays = play.mock.calls.length;
-    view.rerender(source({ kind: 'rewind', url: 'https://m/dvr/k/a1/index.m3u8', generation: 1 }));
-    await act(async () => {
-      await vi.dynamicImportSettled();
-    });
-    play.mockClear();
-    lastHls().trigger(FakeHls.Events.MANIFEST_PARSED, {});
-    return { oldPlays, newPlays: play.mock.calls.length };
+    const rewind = (generation: number) =>
+      source({ kind: 'rewind', url: 'https://m/dvr/k/a1/index.m3u8', generation });
+    const newPlays = await playsAfterSwap(() => view.rerender(rewind(1)));
+    if (!again) return { oldPlays, newPlays };
+    return { oldPlays, newPlays, nextPlays: await playsAfterSwap(() => view.rerender(rewind(2))) };
   }
 
   it('영상이 붙기 전에 사람이 멈췄으면 멈춤 유지를 건 뒤 갈아 끼운 재생기는 스스로 틀지 않는다', async () => {
@@ -255,6 +267,14 @@ describe('멈춘 채 갈아 끼우기 — 세션이 멈춤 유지를 건 재생�
 
   it('걸지 않았으면 현행대로 갈아 끼운 재생기가 스스로 튼다', async () => {
     expect(await swapToRewind({ events: ['pause'] })).toMatchObject({ newPlays: 1 });
+  });
+
+  it('표를 먹은 새 재생기 다음에 사람 사건 없이 갈아 끼운 재생기는 현행대로 튼다(H6 · cc L1)', async () => {
+    expect(await swapToRewind({ events: ['pause'], hold: true, again: true })).toEqual({
+      oldPlays: 0,
+      newPlays: 0,
+      nextPlays: 1,
+    });
   });
 
   it('건 뒤 내려갈 옛 재생기가 목록을 늦게 읽어도 표를 먹지 않고 틀지도 않는다(cc L1)', async () => {
