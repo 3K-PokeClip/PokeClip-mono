@@ -31,7 +31,7 @@ function readyBody(url: string, first: number, head: number) {
 }
 
 let calls: string[];
-let answer: (url: string) => Response;
+let answer: (url: string) => Response | Promise<Response>;
 
 beforeEach(() => {
   vi.useFakeTimers({ now: NOW });
@@ -533,5 +533,102 @@ describe('넘김 확인 — 시한 tick · 멈춘 채 되돌림(설계 r9 11절 
     expect(seeking.result.current?.state.source.kind).toBe('rewind');
     expect(playing.player.keepPausedOnSwap).not.toHaveBeenCalled();
     expect(seeking.player.keepPausedOnSwap).not.toHaveBeenCalled();
+  });
+});
+
+describe('라이브 창 탐침 — probe-live 효과(설계 r9 2절 · c13g 휴면)', () => {
+  const LIVE = `${BASE}/live/key-1/index.m3u8`;
+  const PDT0 = NOW - 28_000;
+  /** 4초 조각 일곱(첫 조각에만 PDT) — 하한 = 첫 PDT + 3 × TD · 끝 = 첫 PDT + 28초 */
+  const LIVE_MEDIA = [
+    '#EXTM3U',
+    '#EXT-X-TARGETDURATION:4',
+    `#EXT-X-PROGRAM-DATE-TIME:${new Date(PDT0).toISOString()}`,
+    ...Array.from({ length: 7 }, (_, i) => `#EXTINF:4.000,\nseg${i}.mp4`),
+  ].join('\n');
+  type LiveProbeEvent = Extract<SessionEvent, { type: 'live-probe' }>;
+  /** 라이브 목록은 liveMedia 로 · 스트림 경로는 되감기 진입을 연다 */
+  function liveAnswer(liveMedia: () => Response | Promise<Response>) {
+    return (url: string) => {
+      if (url === LIVE) return liveMedia();
+      if (url === STREAM) return jsonResponse(200, readyBody(A1, NOW - 3_600_000, NOW));
+      return jsonResponse(404);
+    };
+  }
+
+  function probeEvents(): LiveProbeEvent[] {
+    return vi
+      .mocked(transition)
+      .mock.calls.map(([, event]) => event)
+      .filter((e): e is LiveProbeEvent => e.type === 'live-probe');
+  }
+
+  /** 받기가 끝날 때까지 마이크로태스크를 넉넉히 돌린다(본문 읽기가 몇 단 더 걸린다) */
+  async function settle() {
+    for (let i = 0; i < 4; i += 1) await flush();
+  }
+
+  beforeEach(async () => {
+    const actual = await vi.importActual<typeof import('./rewindSwitch')>('./rewindSwitch');
+    vi.mocked(transition).mockReset().mockImplementation(actual.transition);
+  });
+
+  /** 되감기 중인 세션에 probe-live 효과 하나를 끼운다 — 탐침을 청하는 행(R6 · E1)은 c13h 라 결과 모양만 넣는다 */
+  async function probingSession() {
+    const view = renderHook((o: SessionOptions) => usePlaybackSession(o), {
+      initialProps: options(),
+    });
+    await flush();
+    const seek = { lowerMs: NOW - 16_000, endMs: NOW };
+    act(() => view.result.current?.dispatch({ type: 'seek', targetMs: NOW - 600_000, view: seek }));
+    expect(view.result.current?.state.phase.kind).toBe('rewind');
+    vi.mocked(transition).mockImplementationOnce((s) => ({
+      state: s,
+      effects: [{ kind: 'probe-live', seq: 1, url: LIVE }],
+    }));
+    act(() => view.result.current?.dispatch({ type: 'playing' }));
+    return view;
+  }
+
+  it('효과 하나에 라이브 목록 받기 1 · live-probe 1 — 순번과 하한 · 끝을 싣는다', async () => {
+    answer = liveAnswer(() => new Response(LIVE_MEDIA));
+    await probingSession();
+    await settle();
+    expect(calls.filter((url) => url === LIVE)).toHaveLength(1);
+    expect(probeEvents()).toEqual([
+      { type: 'live-probe', seq: 1, result: { kind: 'ok', floorMs: PDT0 + 12_000, endMs: NOW } },
+    ]);
+  });
+
+  it('휴면 — live-probe 는 아직 상태도 효과도 바꾸지 않는다(결과 행 onLiveProbe 는 c13h)', async () => {
+    answer = liveAnswer(() => new Response(LIVE_MEDIA));
+    const view = await probingSession();
+    await settle();
+    const calls = vi.mocked(transition).mock.calls;
+    const at = calls.findIndex(([, event]) => event.type === 'live-probe');
+    expect(at).toBeGreaterThanOrEqual(0);
+    const out = vi.mocked(transition).mock.results[at]?.value;
+    expect(out?.state).toBe(calls[at]![0]);
+    expect(out?.effects).toEqual([]);
+    expect(view.result.current?.state.phase.kind).toBe('rewind');
+  });
+
+  it('받는 사이 세션이 바뀌면(다른 방송) 결과를 버린다', async () => {
+    let release!: () => void;
+    answer = liveAnswer(
+      () =>
+        new Promise<Response>((resolve) => {
+          release = () => resolve(new Response(LIVE_MEDIA));
+        }),
+    );
+    const view = await probingSession();
+    await flush();
+    expect(calls.filter((url) => url === LIVE)).toHaveLength(1);
+    view.rerender(options({ roundId: 'r-B', accessKey: 'r-B|key-1' }));
+    await flush();
+    expect(view.result.current?.state.roundId).toBe('r-B');
+    release();
+    await settle();
+    expect(probeEvents()).toEqual([]);
   });
 });

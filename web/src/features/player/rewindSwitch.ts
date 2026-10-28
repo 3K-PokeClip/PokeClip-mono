@@ -11,6 +11,7 @@ import {
   type HandoffFields,
 } from './liveHandoff';
 import { onEnding } from './endingWait';
+import type { LiveProbeResult } from './liveWindowProbe';
 import { EDGE_MARGIN_TD } from './playbackEdge';
 
 // 재생 세션 상태기계(설계 5.3절 종결 판, POK-200 M5) — 라이브 · 되감기 · 끝남 대기 · 다시보기 사이의 전환을 정하는 순수 함수다.
@@ -152,6 +153,8 @@ export type SessionEvent =
   | { type: 'remount' }
   /** strictStart 재생기의 첫 목록 재검사가 시작 잘림을 봤다 */
   | { type: 'live-start-truncated' }
+  /** 라이브 창 탐침의 결과 — seq 는 probe-live 효과의 순번 */
+  | { type: 'live-probe'; seq: number; result: LiveProbeResult }
   | { type: 'leave' };
 
 export type SessionEffect =
@@ -163,7 +166,9 @@ export type SessionEffect =
   /** LIVE 의 X 를 2초 뒤 다시 묻는다 */
   | { kind: 'recheck-x'; attempt: number }
   /** goTo = 「새 방송 보기」의 방송 번호 */
-  | { kind: 'close'; reason: SessionClose; goTo?: string };
+  | { kind: 'close'; reason: SessionClose; goTo?: string }
+  /** 라이브 목록 url 의 창 하한을 잰다(liveWindowProbe) — 결과는 같은 seq 의 live-probe 사건으로 돌아온다 */
+  | { kind: 'probe-live'; seq: number; url: string };
 
 export interface Transition {
   state: PlaybackSessionState;

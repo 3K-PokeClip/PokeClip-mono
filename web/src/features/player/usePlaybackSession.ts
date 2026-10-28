@@ -14,6 +14,7 @@ import {
   type SessionEvent,
   type XAnswer,
 } from './rewindSwitch';
+import { probeLiveWindow } from './liveWindowProbe';
 import { sessionView, type SessionView } from './sessionView';
 import { useRewindStatus } from './useRewindStatus';
 
@@ -155,6 +156,8 @@ export function usePlaybackSession(options: SessionOptions): PlaybackSession | n
     round: () => {},
   });
   const recheckTimer = useRef<number | undefined>(undefined);
+  /** 나가 있는 라이브 창 탐침 — 다음 탐침 · 화면 이탈이 끊는다 */
+  const probeAbort = useRef<AbortController | null>(null);
 
   const dispatchRef = useRef<(event: SessionEvent) => void>(() => {});
   const applyEffects = useCallback((effects: SessionEffect[], session: PlaybackSessionState) => {
@@ -185,6 +188,22 @@ export function usePlaybackSession(options: SessionOptions): PlaybackSession | n
               }
             });
           }, X_RECHECK_MS);
+          break;
+        }
+        case 'probe-live': {
+          // 순번은 보낼 때 잡는다 — 받는 사이 세션이 바뀌면 결과를 버린다(앞 세션의 탐침이 새 세션에 들지 않게)
+          const id = sessionIdRef.current;
+          probeAbort.current?.abort();
+          const controller = new AbortController();
+          probeAbort.current = controller;
+          probeLiveWindow(effect.url, controller.signal).then(
+            (result) => {
+              if (id !== sessionIdRef.current) return;
+              dispatchRef.current({ type: 'live-probe', seq: effect.seq, result });
+            },
+            // 끊긴 탐침만 여기로 온다(그 밖의 실패는 unavailable 로 돌아온다) — 끊은 쪽이 결과를 바라지 않는다
+            () => {},
+          );
           break;
         }
         case 'close':
@@ -320,6 +339,7 @@ export function usePlaybackSession(options: SessionOptions): PlaybackSession | n
     () => () => {
       sessionIdRef.current += 1;
       window.clearTimeout(recheckTimer.current);
+      probeAbort.current?.abort();
     },
     [],
   );
