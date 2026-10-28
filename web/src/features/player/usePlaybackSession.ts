@@ -326,10 +326,17 @@ export function usePlaybackSession(options: SessionOptions): PlaybackSession | n
   const confirmDeadlineMs = state?.handoff?.deadlineMs ?? null;
   useEffect(() => {
     if (confirmDeadlineMs === null) return undefined;
-    const timer = window.setTimeout(
-      () => dispatchRef.current({ type: 'tick' }),
-      Math.max(0, confirmDeadlineMs - Date.now()),
-    );
+    let timer: number | undefined;
+    // 타이머는 시계 단위만큼 일찍 깰 수 있다 — 시한 전이면 tick 하지 않고 남은 만큼 다시 건다
+    const wake = () => {
+      const left = confirmDeadlineMs - Date.now();
+      if (left > 0) {
+        timer = window.setTimeout(wake, left);
+        return;
+      }
+      dispatchRef.current({ type: 'tick' });
+    };
+    timer = window.setTimeout(wake, Math.max(0, confirmDeadlineMs - Date.now()));
     return () => window.clearTimeout(timer);
   }, [confirmDeadlineMs]);
 
