@@ -10,8 +10,9 @@ import {
 } from './rewindSwitch';
 import { handedOff, pos, resetEventKit, startRun, streamPoll } from './handoffTestKit';
 
-// 넘김 확인 시험(POK-200 c13e — 설계 r9 4절 H0–H7 · A2 · A4 · 11절 T10 · T11 · T17 · T19 · T23).
-// 넘김 행(P1)은 c13h 몫이라 시작 상태는 handedOff 가 P1 결과 모양으로 만든다. E = NOW · TD 6초 · P = E − 6000.
+// 넘김 확인 시험(POK-200 c13e — 설계 r9 4절 H0–H7 · A2 · A4 · 11절 T10 · T11 · T17 ·
+// T19 · T23). 넘김 행(P1)은 c13h 몫이라 시작 상태는 handedOff 가 P1 결과 모양으로
+// 만든다. E = NOW · TD 6초 · P = E − 6000.
 
 const MIN = 60_000;
 const T0 = Date.parse('2026-10-25T05:00:00.000Z');

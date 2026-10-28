@@ -12,7 +12,8 @@ import {
 import { pos, resetEventKit, settleProbe, startRun, streamPoll } from './handoffTestKit';
 import { sessionView } from './sessionView';
 
-// 꼬리 넘김이 들어와도 현행 그대로여야 하는 행의 시험(POK-200 c13 — 설계 r9 11절 T12 · T27 · 넘김 0 끝단 T4 · T6 · T21).
+// 꼬리 넘김이 들어와도 현행 그대로여야 하는 행의 시험(POK-200 c13 — 설계 r9 11절
+// T12 · T27 · 넘김 0 끝단 T4 · T6 · T21).
 // 기존 모듈과 시험 도우미만 읽는다 — 제품 파일을 되돌린 트리(음성 대조)에서도 이 파일이 로드되게.
 
 const MIN = 60_000;
@@ -36,7 +37,10 @@ function run(start: PlaybackSessionState, events: SessionEvent[]): PlaybackSessi
   return events.reduce((state, event) => transition(state, event, NOW).state, start);
 }
 
-/** 봉인된 끝 — A1 을 E(= NOW) 까지 보고 ENDLIST · 끝 도달로 끝남 대기(되감기 기원 · atEnd)에 들었다. 재생 중 · 띠 안 */
+/**
+ * 봉인된 끝 — A1 을 E(= NOW) 까지 보고 ENDLIST · 끝 도달로 끝남 대기(되감기 기원 ·
+ * atEnd)에 들었다. 재생 중 · 띠 안
+ */
 function sealedEnd(): PlaybackSessionState {
   const p = NOW - 6_000;
   startRun();
@@ -143,7 +147,8 @@ const NONE: RewindStatusResult = { kind: 'none' };
 /** A1 의 live ∧ ready 응답에서 칸 몇을 바꾼 응답 */
 function status(patch: Partial<RewindStatus>): RewindStatusResult {
   const ready = liveReady(A1, T0, NOW);
-  return ready.kind === 'ok' ? { kind: 'ok', status: { ...ready.status, ...patch } } : ready;
+  if (ready.kind !== 'ok') return ready;
+  return { kind: 'ok', status: { ...ready.status, ...patch } };
 }
 
 const doorPoll = (x: XAnswer = X_A) => streamPoll(liveReady(A1, T0, NOW), x, R);

@@ -11,8 +11,9 @@ import {
 } from './rewindSwitch';
 import { pos, resetEventKit, settleProbe, startRun, streamPoll } from './handoffTestKit';
 
-// 꼬리 넘김 시험(POK-200 c13h — 설계 r9 4절 R3 · R6 · R6′ · R7 · R11 · P0–P4 · E1 · 11절 T1–T9 · T18 · T21 · T27).
-// 「→ 1」 = 탐침 요청 1 → 무잘림 결과 → 넘김 1 · 「→ 0」 = 탐침 요청 0. E = NOW · TD 6초 · 문은 R 에 받은 응답이다.
+// 꼬리 넘김 시험(POK-200 c13h — 설계 r9 4절 R3 · R6 · R6′ · R7 · R11 · P0–P4 · E1 ·
+// 11절 T1–T9 · T18 · T21 · T27). 「→ 1」 = 탐침 요청 1 → 무잘림 결과 → 넘김 1 ·
+// 「→ 0」 = 탐침 요청 0. E = NOW · TD 6초 · 문은 R 에 받은 응답이다.
 
 const MIN = 60_000;
 const T0 = Date.parse('2026-10-25T05:00:00.000Z');
