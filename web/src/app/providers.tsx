@@ -2,6 +2,7 @@
 
 import { useEffect, useState, type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { useInAppHistoryTracker } from '@/lib/inAppHistory';
 import { onCrossTabSessionChange } from '@/stores/auth';
 import { ThemeProvider, ToastProvider } from '@/ui';
 
@@ -25,6 +26,9 @@ export function Providers({ children }: { children: ReactNode }) {
   // 공용 PC에서 이전 계정의 me·스트림키가 다음 세션 화면에 새면 안 된다. 같은 세션의 회전에는
   // 불리지 않는다 — 비우면 헤더 없는 me 401 → 재회전의 탭 간 핑퐁이 된다. (리뷰 #72 · POK-211)
   useEffect(() => onCrossTabSessionChange(() => queryClient.clear()), [queryClient]);
+
+  // 편집기 「이전 화면으로」가 뒤로 가도 앱 안에 남는지 알 수 있게 지나온 화면을 적는다(POK-491)
+  useInAppHistoryTracker();
 
   return (
     <QueryClientProvider client={queryClient}>

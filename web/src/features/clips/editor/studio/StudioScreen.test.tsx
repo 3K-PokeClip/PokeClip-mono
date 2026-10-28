@@ -34,7 +34,7 @@ describe('StudioScreen', () => {
 
     expect(screen.getByRole('heading', { name: '승급전 마지막 한타 역전' })).toBeInTheDocument();
     expect(screen.getByText('라이브 카드 1:24:03 · 방금 자동 저장됨')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: '보관함으로' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: '이전 화면으로' })).toHaveAttribute(
       'href',
       '/clips/library',
     );
@@ -1190,7 +1190,7 @@ describe('StudioScreen — 로딩 표시(POK-444)', () => {
     expect(idle.container.querySelectorAll('[data-wave-loading]')).toHaveLength(0);
   });
 
-  it('다른 편집 대상을 읽는 동안 옛 화면은 보이기만 한다: 헤더 아래 불확정 막대 한 줄, 보관함으로는 나갈 수 있다', async () => {
+  it('다른 편집 대상을 읽는 동안 옛 화면은 보이기만 한다: 헤더 아래 불확정 막대 한 줄, 이전 화면으로는 나갈 수 있다', async () => {
     const user = userEvent.setup();
     const { container } = renderStudio({ reloading: true });
 
@@ -1201,7 +1201,7 @@ describe('StudioScreen — 로딩 표시(POK-444)', () => {
     for (const name of ['편집본 저장', '업로드', '작업 이전으로', '작업 앞으로']) {
       expect(screen.getByRole('button', { name })).toBeDisabled();
     }
-    expect(screen.getByRole('link', { name: '보관함으로' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: '이전 화면으로' })).toHaveAttribute(
       'href',
       '/clips/library',
     );

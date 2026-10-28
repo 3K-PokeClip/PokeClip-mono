@@ -1,9 +1,8 @@
 'use client';
 
-import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { ChevronLeft, Scissors } from 'lucide-react';
+import { Scissors } from 'lucide-react';
 import { EmptyState, useToast } from '@/ui';
 import {
   ClipApiError,
@@ -28,6 +27,7 @@ import {
   type UploadRequestSummary,
 } from '@/api/clipEditor';
 import { ensurePlaybackAccess, isPlaybackExpired } from '@/api/playbackAccess';
+import { EditorBackLink } from '../EditorBackLink';
 import { EditorHeader } from '../EditorHeader';
 import { PreviewCanvas } from '../PreviewCanvas';
 import { TransportBar } from '../TransportBar';
@@ -575,9 +575,7 @@ export function StudioScreen() {
   return (
     <div className={styles.screen}>
       <header className={shared.header}>
-        <Link href="/clips/library" className={shared.backLink} aria-label="보관함으로">
-          <ChevronLeft size={17} aria-hidden />
-        </Link>
+        <EditorBackLink />
         <div className={shared.headerTitleBlock}>
           <h1 className={shared.headerTitle}>클립 편집</h1>
           <div className={shared.headerMeta}>

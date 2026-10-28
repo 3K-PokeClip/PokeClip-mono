@@ -1335,7 +1335,7 @@ describe('StudioScreen: 로딩 표시(POK-444)', () => {
     return () => release();
   }
 
-  it('첫 읽기에는 글자 한 줄 대신 편집기 모양의 스켈레톤이다: status 한 줄, 보관함으로는 나가고 고치는 버튼은 꺼져 있다', async () => {
+  it('첫 읽기에는 글자 한 줄 대신 편집기 모양의 스켈레톤이다: status 한 줄, 이전 화면으로는 나가고 고치는 버튼은 꺼져 있다', async () => {
     // 답이 오지 않는 서버: 첫 읽기가 끝나지 않는다
     stubFetch(() => new Promise<Response>(() => {}));
     nav.search = `stream=${STREAM_ID}&card=5`;
@@ -1346,7 +1346,7 @@ describe('StudioScreen: 로딩 표시(POK-444)', () => {
     expect(screen.getByRole('status')).toHaveTextContent('편집기를 불러오는 중');
     expect(screen.queryByText(/카드·방송을 불러오는 중/)).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { name: '클립 편집' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: '보관함으로' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: '이전 화면으로' })).toHaveAttribute(
       'href',
       '/clips/library',
     );
@@ -1367,7 +1367,7 @@ describe('StudioScreen: 로딩 표시(POK-444)', () => {
     const release = holdPath('/api/clip/library/31');
     act(() => window.history.replaceState(null, '', '?recipe=31'));
 
-    // 옛 화면이 그대로 있고 만질 수 없다. 보관함으로는 나갈 수 있다
+    // 옛 화면이 그대로 있고 만질 수 없다. 이전 화면으로는 나갈 수 있다
     expect(
       await screen.findByRole('progressbar', { name: '편집 대상을 다시 불러오는 중' }),
     ).not.toHaveAttribute('aria-valuenow');
@@ -1375,7 +1375,7 @@ describe('StudioScreen: 로딩 표시(POK-444)', () => {
     expect(screen.queryByText('편집기를 불러오는 중')).not.toBeInTheDocument();
     expect(document.querySelector('main')).toHaveAttribute('inert');
     expect(screen.getByRole('button', { name: '편집본 저장' })).toBeDisabled();
-    expect(screen.getByRole('link', { name: '보관함으로' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: '이전 화면으로' })).toBeInTheDocument();
 
     release();
     expect(await screen.findByRole('heading', { name: '편집본 #31' })).toBeInTheDocument();

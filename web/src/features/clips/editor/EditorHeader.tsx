@@ -1,6 +1,6 @@
-import Link from 'next/link';
-import { ChevronLeft, Redo2, Undo2 } from 'lucide-react';
+import { Redo2, Undo2 } from 'lucide-react';
 import { Button, IconButton, Progress } from '@/ui';
+import { EditorBackLink } from './EditorBackLink';
 import styles from './editorShared.module.css';
 import type { ClipEditorMockState } from './useClipEditorMockState';
 
@@ -9,14 +9,11 @@ import type { ClipEditorMockState } from './useClipEditorMockState';
 export function EditorHeader({ state }: { state: ClipEditorMockState }) {
   const { busyAction, reloading } = state;
   // 보내는 동안 컨테이너는 저장·주문을 둘 다 받지 않는다(같은 요청을 두 번 보내지 않게): 누른 버튼만 돌고 다른 쪽은 끈다.
-  // 다른 편집 대상을 읽는 중이면 이 화면은 곧 갈아 끼워지므로 고치는 버튼을 모두 끈다 — 보관함으로는 나갈 수 있다(POK-444)
+  // 다른 편집 대상을 읽는 중이면 이 화면은 곧 갈아 끼워지므로 고치는 버튼을 모두 끈다 — 이전 화면으로는 나갈 수 있다(POK-444)
   const locked = busyAction !== null || reloading;
   return (
     <header className={styles.header}>
-      {/* 보관함 화면을 바로 가리킨다 — /clips는 리다이렉트라 한 홉을 더 탄다(POK-235) */}
-      <Link href="/clips/library" className={styles.backLink} aria-label="보관함으로">
-        <ChevronLeft size={17} aria-hidden />
-      </Link>
+      <EditorBackLink />
       <div className={styles.headerTitleBlock}>
         <h1 className={styles.headerTitle}>{state.clipTitle}</h1>
         <div className={styles.headerMeta}>
