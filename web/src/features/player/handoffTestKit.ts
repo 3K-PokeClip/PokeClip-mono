@@ -89,6 +89,7 @@ export function settleProbe(
  * 시험하려고 결과 모양만 만든다
  */
 export function handedOff(session: PlaybackSessionState, now: number): PlaybackSessionState {
+  // 꼬리 넘김은 목록을 받고 위치가 선 되감기에서만 난다 — 부르는 시험이 list · lastAtMs 를 갖춰 둔다
   const list = session.list!;
   const atMs = session.lastAtMs!;
   const generation = session.source.generation + 1;
