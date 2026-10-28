@@ -520,10 +520,14 @@ describe('넘김 확인 — 시한 tick · 멈춘 채 되돌림(설계 r9 11절 
     expect(view.player.keepPausedOnSwap).toHaveBeenCalledTimes(1);
   });
 
-  it('재생 중 되돌림과 멈춘 채 사람이 창 밖으로 옮긴 시크(H6)는 멈춤 유지를 걸지 않는다(현행)', async () => {
-    const playing = await handedOffSession();
-    act(() => playing.result.current?.dispatch({ type: 'live-closed' }));
-    expect(playing.result.current?.state.source.kind).toBe('rewind');
+  it('세션 칸이 재생 중이어도 되돌림이면 건다 — 멈췄는지는 재생기가 사람의 사건으로 가린다(c13f cx H1)', async () => {
+    const view = await handedOffSession();
+    act(() => view.result.current?.dispatch({ type: 'live-closed' }));
+    expect(view.result.current?.state.playing).toBe(true);
+    expect(view.player.keepPausedOnSwap).toHaveBeenCalledTimes(1);
+  });
+
+  it('멈춘 채 사람이 창 밖으로 옮긴 시크(H6)는 멈춤 유지를 걸지 않는다(현행)', async () => {
     const seeking = await handedOffSession();
     pause(seeking);
     const seek = { lowerMs: NOW - 16_000, endMs: NOW };
@@ -531,7 +535,6 @@ describe('넘김 확인 — 시한 tick · 멈춘 채 되돌림(설계 r9 11절 
       seeking.result.current?.dispatch({ type: 'seek', targetMs: NOW - 600_000, view: seek }),
     );
     expect(seeking.result.current?.state.source.kind).toBe('rewind');
-    expect(playing.player.keepPausedOnSwap).not.toHaveBeenCalled();
     expect(seeking.player.keepPausedOnSwap).not.toHaveBeenCalled();
   });
 });

@@ -29,7 +29,7 @@ const X_RECHECK_MS = 2_000;
 export interface SessionPlayer {
   seekToMs: (atMs: number) => void;
   seekToLiveEdge: () => void;
-  /** 다음에 갈아 끼울 재생기를 스스로 틀지 않게 한다 */
+  /** 사람이 멈춰 있으면 다음에 갈아 끼울 재생기를 스스로 틀지 않게 한다 */
   keepPausedOnSwap: () => void;
 }
 
@@ -79,10 +79,10 @@ function needsX(s: PlaybackSessionState): boolean {
 }
 
 /**
- * 시청자가 멈춘 채 넘김 확인이 깨져 rewind 로 되돌렸나(H0 · H1a · H2 · H2t). 사람의 시크(H6)는 현행대로 둔다 — 멈춘 채 창
- * 밖으로 옮겨도 되감기 재생기가 스스로 튼다
+ * 넘김 확인이 깨져 rewind 로 되돌렸나(H0 · H1a · H2 · H2t). 멈췄는지는 재생기가 사람의 pause · play 사건으로 가린다 — 영상이
+ * 붙기 전에는 위치 사건이 막혀 세션 칸이 멈춤을 모른다. 사람의 시크(H6)는 현행대로 둔다(멈춘 채 옮겨도 되감기가 스스로 튼다)
  */
-function revertedWhilePaused(
+function revertedHandoff(
   before: PlaybackSessionState,
   after: PlaybackSessionState,
   event: SessionEvent,
@@ -92,8 +92,7 @@ function revertedWhilePaused(
     before.handoff !== null &&
     event.type !== 'seek' &&
     after.source.kind === 'rewind' &&
-    after.source.generation !== before.source.generation &&
-    !after.playing
+    after.source.generation !== before.source.generation
   );
 }
 
@@ -224,7 +223,7 @@ export function usePlaybackSession(options: SessionOptions): PlaybackSession | n
       const current = stateRef.current;
       if (current === null) return;
       const next = transition(current, event, Date.now());
-      if (revertedWhilePaused(current, next.state, event)) playerRef.current?.keepPausedOnSwap();
+      if (revertedHandoff(current, next.state, event)) playerRef.current?.keepPausedOnSwap();
       if (next.state !== current) commit(next.state);
       applyEffects(next.effects, next.state);
     },
