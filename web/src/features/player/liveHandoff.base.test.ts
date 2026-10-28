@@ -8,7 +8,7 @@ import {
   type SessionEvent,
   type XAnswer,
 } from './rewindSwitch';
-import { pos, resetEventKit, streamPoll } from './handoffTestKit';
+import { handedOff, pos, resetEventKit, startRun, streamPoll } from './handoffTestKit';
 
 // 꼬리 넘김의 바탕 칸 시험(POK-200 c13c2 — 설계 r9 4절 A0 · A1 · A3 · A6 · 11절 T13 · T15).
 // 시각은 epoch ms 다. 방송 A(회차 r-A)를 보던 세션이 기준이다.
@@ -39,6 +39,7 @@ function listLoaded(url: string, lastEndMs: number): SessionEvent {
 
 /** A1 을 P 에서 트는 되감기 세션. 목록 끝 E = NOW */
 function rewindAt(p: number): PlaybackSessionState {
+  startRun();
   const fresh = openSession({ roundId: 'r-A', accessKey: 'r-A|key-1', liveUrl: LIVE_URL });
   return run(fresh, [
     streamPoll(liveReady(A1, T0, NOW)),
@@ -102,6 +103,7 @@ describe('목록 칸 list(A3 · A6 · 목록 로드)', () => {
   });
 
   it('A3: list 가 없으면 ENDLIST 는 list 를 세우지 않는다', () => {
+    startRun();
     const fresh = openSession({ roundId: 'r-A', accessKey: 'r-A|key-1', liveUrl: LIVE_URL });
     expect(run(fresh, [{ type: 'endlist' }]).list).toBeNull();
   });
@@ -148,5 +150,16 @@ describe('재생 여부(A1)와 넘김 칸 후처리(A6)', () => {
     expect(settleHandoffFields(rewind, rewind)).toBe(rewind);
     const moved = { ...rewind, source: { ...rewind.source, url: A2 } };
     expect(settleHandoffFields(rewind, moved).handoffProbe).toBeNull();
+  });
+});
+
+describe('시험 도우미 — 연속 길이 구간', () => {
+  it('pos 의 runMs 는 한 재생 구간에서만 이어 세고, 새 세션(startRun) · 넘김(handedOff) 뒤에는 0 부터 센다', () => {
+    pos(T0);
+    expect(pos(T0 + 1_000).runMs).toBe(1_000);
+    startRun();
+    expect(pos(T0 + 2_000).runMs).toBe(0);
+    handedOff(rewindAt(T0 + 20 * MIN), NOW);
+    expect(pos(T0 + 20 * MIN + 1_000).runMs).toBe(0);
   });
 });
